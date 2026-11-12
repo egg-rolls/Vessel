@@ -19,6 +19,7 @@ import { dirname } from 'node:path';
 import { createInterface } from 'node:readline';
 import {
   buildRecords,
+  daysCutoff,
   type LeaderboardResult,
   type LogsParams,
   type LogsResult,
@@ -117,23 +118,43 @@ function parseStatus(value: unknown): 'ok' | 'failed' | undefined {
   throw invalid("status must be 'ok' or 'failed'");
 }
 
-async function loadSnapshot(): Promise<{ records: UsageRecord[]; source: SourceCoverage }> {
+/**
+ * Read the trace and fold it into records.
+ *
+ * `cutoff` is the range the caller asked for (`daysCutoff`); it goes into the
+ * *reader* so the disk window follows the selected range instead of the read
+ * budget alone. `undefined` = no range (whole directory, budget-bounded), which
+ * is what "All time" and the Logs page ask for.
+ */
+async function loadSnapshot(cutoff?: number): Promise<{
+  records: UsageRecord[];
+  source: SourceCoverage;
+}> {
   if (dataDir === undefined) throw new RpcError(-32000, 'plugin is not activated');
-  const loaded = await store.loadEvents(dataDir);
+  const loaded = await store.loadEvents(dataDir, cutoff === undefined ? {} : { cutoff });
   return {
     records: buildRecords(loaded.events, settings),
     source: {
       truncated: loaded.truncated,
+      files_truncated: loaded.files_truncated,
+      partial_files: loaded.partial_files,
       files_read: loaded.files_covered,
+      files_in_window: loaded.files_in_window,
       files_total: loaded.files_total,
     },
   };
 }
 
+/** `days` -> the instant the reader windows on; `undefined` for "all time". */
+function cutoffFor(now: number, days: number | undefined): number | undefined {
+  return days === undefined ? undefined : daysCutoff(now, days);
+}
+
 async function handleSummary(params: Record<string, unknown>): Promise<SummaryResult> {
   const days = parseOptionalDays(params.days);
-  const snapshot = await loadSnapshot();
-  return { ...summarize(snapshot.records, Date.now(), days), source: snapshot.source };
+  const now = Date.now();
+  const snapshot = await loadSnapshot(cutoffFor(now, days));
+  return { ...summarize(snapshot.records, now, days), source: snapshot.source };
 }
 
 async function handleLogs(params: Record<string, unknown>): Promise<LogsResult> {
@@ -159,8 +180,9 @@ async function handleLogs(params: Record<string, unknown>): Promise<LogsResult> 
 
 async function handleLeaderboard(params: Record<string, unknown>): Promise<LeaderboardResult> {
   const days = parseOptionalDays(params.days);
-  const snapshot = await loadSnapshot();
-  return { ...leaderboard(snapshot.records, Date.now(), days), source: snapshot.source };
+  const now = Date.now();
+  const snapshot = await loadSnapshot(cutoffFor(now, days));
+  return { ...leaderboard(snapshot.records, now, days), source: snapshot.source };
 }
 
 async function handleRpc(params: unknown): Promise<unknown> {

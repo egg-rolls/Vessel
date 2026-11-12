@@ -21,10 +21,10 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
-import { buildRecords } from '../src/aggregate.js';
+import { buildRecords, daysCutoff } from '../src/aggregate.js';
 import type { RawEvent, Settings } from '../src/store.js';
 import { DEFAULT_LIMITS, EventStore, USAGE_EVENT_TYPES } from '../src/store.js';
-import { translator } from '../web-src/i18n';
+import { I18N, translator } from '../web-src/i18n';
 
 const pluginRoot = resolve(import.meta.dir, '..');
 const webDir = join(pluginRoot, 'web');
@@ -207,6 +207,10 @@ check(
   'tables use the TableFrame',
   usageSource.includes('TableFrame') && logsSource.includes('TableFrame'),
 );
+check(
+  'logs view renders both truncation notices',
+  logsSource.includes('logs.truncated.files') && logsSource.includes('logs.truncated.partial'),
+);
 
 const en = translator('en');
 const zh = translator('zh-CN');
@@ -224,6 +228,22 @@ check(
   en('usage.title') === 'Usage' && zh('usage.title') === '用量',
 );
 check('unknown languages fall back to English', translator('fr')('usage.title') === 'Usage');
+
+// The reader reports two kinds of incompleteness; the page has a sentence for
+// each, and both must name the real coverage instead of reading like a total.
+check(
+  'run-file truncation copy states the real coverage',
+  en('logs.truncated.files', { files: 47, total: 175 }).includes('47 of 175') &&
+    zh('logs.truncated.files', { files: 47, total: 175 }).includes('47/175'),
+  en('logs.truncated.files', { files: 47, total: 175 }),
+);
+check(
+  'partial-read copy counts the affected run files',
+  en('logs.truncated.partial', { files: 2 }).includes('2 run file') &&
+    zh('logs.truncated.partial', { files: 2 }).includes('2 个运行文件'),
+  en('logs.truncated.partial', { files: 2 }),
+);
+check('the old single truncation copy is gone', !Object.keys(I18N.en).includes('logs.truncated'));
 
 const cjkPattern = /[一-鿿]/;
 const componentTexts = await Promise.all(tsxSources.map(async (path) => readFile(path, 'utf8')));
@@ -573,6 +593,307 @@ function idsOf(events: RawEvent[]): string[] {
     grown.bytes_read === Buffer.byteLength(appended) &&
       grown.events.length === tail.events.length + 1,
     `${grown.bytes_read} vs ${Buffer.byteLength(appended)}, ${tail.events.length} -> ${grown.events.length}`,
+  );
+}
+
+// ── day window: the read window follows `days` ──────────────────────────────
+
+/**
+ * A trace file's mtime is its last append, i.e. the end of the run, so the
+ * reader can answer "is this file inside the selected range" from `stat` alone
+ * and only then confirm per event with `ts >= cutoff`. These fixtures pin both
+ * numbers: mtime a known distance from "today", events inside that span, so a
+ * fixture is only in the window when it is *meant* to be.
+ */
+const NOW = Date.now();
+
+/** Local midnight, `offsetDays` away from today (walks DST the same way `daysCutoff`). */
+function dayStart(offsetDays: number): number {
+  const date = new Date(NOW);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + offsetDays);
+  return date.getTime();
+}
+
+/** One trace line with an explicit `ts` (`traceLine` owns its own clock). */
+function lineAt(type: string, runId: string, ts: number, pad = 0): string {
+  const data: Record<string, unknown> = { run_id: runId, session_id: 'sess-1' };
+  if (type === 'llm.request') data.model = MODEL;
+  else data.usage = { prompt_tokens: 1_000, completion_tokens: 100 };
+  if (pad > 0) data.pad = 'x'.repeat(pad);
+  return `${JSON.stringify({ type, ts, run_id: runId, data })}\n`;
+}
+
+async function writeTrace(dir: string, name: string, text: string, mtime: number): Promise<number> {
+  const path = join(dir, 'events', `${name}.jsonl`);
+  await writeFile(path, text);
+  await utimes(path, new Date(mtime), new Date(mtime));
+  return Buffer.byteLength(text);
+}
+
+/** `loadEvents` with the same cutoff `index.ts` passes for a `days` value. */
+function loadDays(store: EventStore, dir: string, days?: number) {
+  return store.loadEvents(dir, days === undefined ? {} : { cutoff: daysCutoff(NOW, days) });
+}
+
+function runIds(events: RawEvent[]): string[] {
+  return [...new Set(events.map((event) => event.run_id))].sort();
+}
+
+// 8. Only in-window files are opened, and only in-window events come back.
+{
+  const dir = await traceDir('day-window');
+  const oldTs = dayStart(-10) + 3_600_000;
+  const midTs = dayStart(-3) + 3_600_000;
+  const newTs = dayStart(0) + 60_000;
+  await writeTrace(
+    dir,
+    'run-old',
+    lineAt('llm.request', 'run-old', oldTs) + lineAt('llm.response', 'run-old', oldTs + 1_400),
+    oldTs + 2_000,
+  );
+  await writeTrace(
+    dir,
+    'run-mid',
+    lineAt('llm.request', 'run-mid', midTs) + lineAt('llm.response', 'run-mid', midTs + 1_400),
+    midTs + 2_000,
+  );
+  const todayBody =
+    lineAt('llm.request', 'run-today', newTs) +
+    lineAt('llm.response', 'run-today', newTs + 1_400);
+  await writeTrace(dir, 'run-today', todayBody, newTs + 2_000);
+
+  const store = new EventStore();
+  const day1 = await loadDays(store, dir, 1);
+  check(
+    'days=1 opens only the trace files of today',
+    day1.files_in_window === 1 && day1.files_covered === 1,
+    `in window ${day1.files_in_window}, covered ${day1.files_covered}`,
+  );
+  check(
+    'days=1 still reports the whole directory as files_total',
+    day1.files_total === 3,
+    String(day1.files_total),
+  );
+  check(
+    'days=1 returns only today\'s events',
+    day1.events.length === 2 && day1.events.every((event) => event.ts >= dayStart(0)),
+    `${day1.events.length} events: ${runIds(day1.events).join(',')}`,
+  );
+  check(
+    'a file outside the range is not reported as truncation',
+    day1.files_truncated === false && day1.partial_files === 0 && day1.truncated === false,
+    `files_truncated=${day1.files_truncated}, partial=${day1.partial_files}`,
+  );
+
+  const day7 = await loadDays(store, dir, 7);
+  check(
+    'days=7 widens the window to the last week',
+    day7.files_in_window === 2 && day7.files_covered === 2,
+    `in window ${day7.files_in_window}, covered ${day7.files_covered}`,
+  );
+  check(
+    'days=7 events are all inside the window',
+    day7.events.every((event) => event.ts >= dayStart(-6)) &&
+      runIds(day7.events).join(',') === 'run-mid,run-today',
+    runIds(day7.events).join(','),
+  );
+
+  const day30 = await loadDays(store, dir, 30);
+  check(
+    'days=30 covers every run of the fixture',
+    day30.files_in_window === 3 && day30.files_covered === 3 && day30.events.length === 6,
+    `in window ${day30.files_in_window}, events ${day30.events.length}`,
+  );
+
+  const allTime = await store.loadEvents(dir);
+  check(
+    'no days means the whole directory (files_in_window = files_total)',
+    allTime.files_total === 3 &&
+      allTime.files_in_window === 3 &&
+      allTime.files_covered === 3 &&
+      allTime.truncated === false,
+    `window ${allTime.files_in_window}, covered ${allTime.files_covered}`,
+  );
+}
+
+// 9. Switching days must not re-read the files that stay cached.
+{
+  const dir = await traceDir('day-switch');
+  const oldTs = dayStart(-20) + 3_600_000;
+  const midTs = dayStart(-3) + 3_600_000;
+  const newTs = dayStart(0) + 60_000;
+  const oldBytes = await writeTrace(
+    dir,
+    'run-old',
+    lineAt('llm.request', 'run-old', oldTs) + lineAt('llm.response', 'run-old', oldTs + 1_400),
+    oldTs + 2_000,
+  );
+  await writeTrace(
+    dir,
+    'run-mid',
+    lineAt('llm.request', 'run-mid', midTs) + lineAt('llm.response', 'run-mid', midTs + 1_400),
+    midTs + 2_000,
+  );
+  await writeTrace(
+    dir,
+    'run-today',
+    lineAt('llm.request', 'run-today', newTs) + lineAt('llm.response', 'run-today', newTs + 1_400),
+    newTs + 2_000,
+  );
+
+  const store = new EventStore();
+  const seven = await loadDays(store, dir, 7);
+  check('a days=7 read is a real read', seven.bytes_read > 0 && seven.files_covered === 2);
+
+  const thirty = await loadDays(store, dir, 30);
+  check(
+    '7 -> 30 reads only the file that newly entered the window',
+    thirty.bytes_read === oldBytes && thirty.files_covered === 3,
+    `${thirty.bytes_read} vs ${oldBytes}`,
+  );
+
+  const back = await loadDays(store, dir, 7);
+  check(
+    '30 -> 7 re-reads zero bytes',
+    back.bytes_read === 0,
+    String(back.bytes_read),
+  );
+  check(
+    'switching days back is idempotent',
+    JSON.stringify(back.events) === JSON.stringify(seven.events) &&
+      back.files_covered === seven.files_covered &&
+      back.files_in_window === seven.files_in_window,
+    `events ${back.events.length} vs ${seven.events.length}`,
+  );
+
+  const fresh = new EventStore();
+  const firstRead = await loadDays(fresh, dir, 7);
+  check(
+    'a days=7 read after switching equals a first read at days=7',
+    JSON.stringify(firstRead.events) === JSON.stringify(seven.events) &&
+      firstRead.files_covered === seven.files_covered &&
+      firstRead.files_in_window === seven.files_in_window,
+  );
+}
+
+// 10. Cross-day run: an in-window answer keeps its pre-window request (model +
+//     duration), while a run that ends before the window contributes nothing.
+{
+  const dir = await traceDir('cross-day');
+  const requestTs = dayStart(-1) + 3_600_000;
+  const responseTs = dayStart(0) + 600_000;
+  const doneTs = dayStart(-2) + 3_600_000;
+  // A second run: its pre-window request is still unanswered when the run is
+  // resumed inside the window, so it must *not* be carried (the newer request
+  // owns the answer).
+  const staleTs = dayStart(-1) + 7_200_000;
+  const freshTs = dayStart(0) + 900_000;
+  await writeTrace(
+    dir,
+    'run-cross',
+    lineAt('llm.request', 'run-cross', requestTs) +
+      lineAt('llm.response', 'run-cross', responseTs) +
+      lineAt('llm.request', 'run-before', doneTs) +
+      lineAt('llm.response', 'run-before', doneTs + 1_400) +
+      lineAt('llm.request', 'run-restart', staleTs) +
+      lineAt('llm.request', 'run-restart', freshTs) +
+      lineAt('llm.response', 'run-restart', freshTs + 1_400),
+    responseTs + 2_000,
+  );
+
+  const store = new EventStore();
+  const cutoff = daysCutoff(NOW, 1);
+  const windowed = await loadDays(store, dir, 1);
+  const early = windowed.events.filter((event) => event.ts < cutoff);
+  check(
+    'events before the window are dropped',
+    !windowed.events.some((event) => event.run_id === 'run-before'),
+    runIds(windowed.events).join(','),
+  );
+  check(
+    'the only pre-window event kept is the pending request of an in-window answer',
+    early.length === 1 && early[0]?.type === 'llm.request' && early[0]?.run_id === 'run-cross',
+    early.map((event) => `${event.run_id}:${event.type}`).join(','),
+  );
+
+  const records = buildRecords(windowed.events, NO_PRICES);
+  const cross = records.find((record) => record.run_id === 'run-cross');
+  const restart = records.find((record) => record.run_id === 'run-restart');
+  check(
+    'the cross-day run keeps its model and duration',
+    records.length === 2 && cross?.model === MODEL && cross?.duration_ms === responseTs - requestTs,
+    JSON.stringify(records.map((record) => [record.run_id, record.model, record.duration_ms])),
+  );
+  check(
+    'a superseded pre-window request is not carried into the window',
+    restart?.model === MODEL && restart?.duration_ms === 1_400,
+    JSON.stringify([restart?.model, restart?.duration_ms]),
+  );
+  check(
+    'every record produced is inside the window',
+    records.every((record) => record.ts >= cutoff),
+  );
+}
+
+// 11. A day window that does not fit the byte budget is still a real truncation.
+{
+  const dir = await traceDir('window-budget');
+  let fileBytes = 0;
+  for (const [index, name] of ['run-w1', 'run-w2', 'run-w3'].entries()) {
+    const ts = dayStart(0) + 60_000 + index * 1_000;
+    const body =
+      lineAt('llm.response', name, ts, 120) + lineAt('llm.response', name, ts + 500, 120);
+    fileBytes = await writeTrace(dir, name, body, ts + 1_000);
+  }
+
+  const store = new EventStore({
+    ...DEFAULT_LIMITS,
+    maxBytesPerCall: Math.floor(fileBytes * 2.5),
+    maxBytesPerFile: fileBytes + 16,
+  });
+  const over = await loadDays(store, dir, 1);
+  check(
+    'an over-budget day window sets files_truncated',
+    over.files_truncated === true && over.truncated === true && over.files_in_window === 3,
+    `files_truncated=${over.files_truncated}, in window ${over.files_in_window}`,
+  );
+  check(
+    'an over-budget day window keeps the newest runs only',
+    over.files_covered === 2 &&
+      over.events.length === 4 &&
+      over.events.every((event) => event.run_id !== 'run-w1'),
+    `covered ${over.files_covered}: ${runIds(over.events).join(',')}`,
+  );
+  check(
+    'an over-budget day window is not a partial read',
+    over.partial_files === 0,
+    String(over.partial_files),
+  );
+}
+
+// 12. An oversized in-window file is reported through partial_files, not
+//     files_truncated: the run is counted, its oldest requests are not.
+{
+  const dir = await traceDir('window-partial');
+  const lines: string[] = [];
+  for (let index = 0; index < 40; index += 1) {
+    lines.push(lineAt('llm.response', 'run-big', dayStart(0) + 60_000 + index * 1_000, 200));
+  }
+  const ts = dayStart(0) + 120_000;
+  await writeTrace(dir, 'run-big', lines.join(''), ts);
+
+  const store = new EventStore({ ...DEFAULT_LIMITS, maxBytesPerFile: 1_024 });
+  const tail = await loadDays(store, dir, 1);
+  check(
+    'an oversized in-window file counts as a partial file',
+    tail.partial_files === 1 && tail.files_truncated === false && tail.truncated === true,
+    `partial=${tail.partial_files}, files_truncated=${tail.files_truncated}`,
+  );
+  check(
+    'a partially read file still yields its newest in-window events',
+    tail.events.length > 0 && tail.events.every((event) => event.ts >= daysCutoff(NOW, 1)),
+    String(tail.events.length),
   );
 }
 
