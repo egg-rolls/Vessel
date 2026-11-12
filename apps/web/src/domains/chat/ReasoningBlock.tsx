@@ -15,7 +15,8 @@
  * - 流式期间默认展开，结束后自动折叠；用户手动开合后不再被自动开合打断；
  * - 历史态 streaming=false → **默认折叠**，点标题展开，没有别的东西会改写这个状态；
  * - 内容按纯文本渲染，不进入正文 Markdown；
- * - `startedAt` / `endedAt` 齐全时标题显示耗时（历史消息没有这两项，就不显示）；
+ * - **卡头不显示时间 / 耗时**：时间只属于正文内容块（`MessageActions` 的 `meta`），
+ *   思考卡的卡头只有标题 + 流式时的「正在思考」小字；
  * - 动画（`styles/motion.css` 是唯一来源，本组件只挂 class）：
  *   入场 = `.motion-appear`（`entering`，只动透明度，只播挂载那一次），
  *   展开 / 收起 = `.motion-disclosure`（`<details>` 的尺寸过渡，原生可访问性不变）。
@@ -25,9 +26,9 @@
  * 卡外还有一样东西：
  * - `speaker`：「助手」发言人名（这一段的第一块是思考卡时才要，与历史态同一个组件）。
  *
- * 卡片自己只有一个动作：卡头（`<summary>`）右侧的**「复制思考」小按钮**，复制的是
- * 本卡的思考原文（不是整条消息）。**卡上不挂消息工具栏**（复制正文 / 重试 / 时间那一组
- * 在正文下方一行，见 chat.css 的工具栏说明）—— 用户明确要求「去掉思考过程加的那个
+ * 卡片自己只有一个动作：卡头（`<summary>`）**左侧**、紧跟标题文字的**「复制思考」小按钮**，
+ * 复制的是本卡的思考原文（不是整条消息）。**卡上不挂消息工具栏**（复制正文 / 重试 / 时间
+ * 那一组在正文下方一行，见 chat.css 的工具栏说明）—— 用户明确要求「去掉思考过程加的那个
  * 工具栏」，所以这个按钮不是工具栏，只是卡自己的一个小控件，常显、可键盘聚焦。
  *
  * 点击细节：它在 `<summary>` 里，而点 summary 默认会开合卡片 —— 复制按钮必须
@@ -76,15 +77,11 @@ export function hasReasoningCard(text: string | undefined): text is string {
 export function ReasoningBlock({
   text,
   streaming,
-  startedAt,
-  endedAt,
   entering = false,
   speaker = false,
 }: {
   text: string;
   streaming: boolean;
-  startedAt?: number;
-  endedAt?: number;
   /**
    * 本块是事件流里**新追加**的一项（不是历史回填）：首次挂载时淡入一次。
    * 判据在调用方（会话页首屏那批不算追加）；历史消息不传。
@@ -108,10 +105,6 @@ export function ReasoningBlock({
   const lines = text.split('\n');
   const clamped = lines.slice(0, PREVIEW_LINES).join('\n');
   const clampedVisible = !showAll && lines.length > PREVIEW_LINES;
-  const seconds =
-    startedAt !== undefined && endedAt !== undefined && endedAt > startedAt
-      ? Math.max(1, Math.round((endedAt - startedAt) / 1000))
-      : undefined;
   const copyable = hasReasoningCard(text);
 
   return (
@@ -130,20 +123,23 @@ export function ReasoningBlock({
           setOpen(next);
         }}
       >
+        {/* 卡头**不显示时间**（用户要求：时间只属于正文内容块，见 MessageActions 的 meta）。
+            因此这里没有耗时秒数，也没有 `<time>`。 */}
         <summary className="cursor-pointer select-none px-2.5 py-1.5 text-sm text-faint hover:text-muted">
           {t('chat.reasoning.summary')}
-          {seconds !== undefined ? ` · ${seconds}s` : ''}
           {streaming ? (
             // 同一个事实只有一个词：流式中的思考过程就是「正在思考」，与页面顶部
             // 0 内容时那行提示（`ThinkingHint`）共用同一个 i18n key。
             <span className="reasoning-live text-info"> · {t('chat.reasoning.thinking')}</span>
           ) : null}
-          {/* 卡头右侧的「复制思考」：常显（不是 hover-only）、可键盘聚焦、带 aria-label +
-              tooltip（IconButton 三样都给）。`float-right` 让它在 summary 这一行里贴右，
-              且**不改变** summary 的块布局 —— 原生展开三角还在（不改成 flex summary）。 */}
+          {/* 「复制思考」：卡头**左侧**、跟在标题文字（流式时含「正在思考」小字）之后 ——
+              用户要它跟标题同一行左起，不贴右、也不浮动。`IconButton` 本身就是
+              inline-flex，放进 summary 的行内流即可，**summary 保持原生 list-item**
+              （展开三角还在，不拆成 flex / 不额外包壳）。`align-middle` 让它与标题文字
+              垂直居中，`ml-1` 是它与文字的间距。 */}
           {copyable && (
             <IconButton
-              className="float-right size-5"
+              className="ml-1 size-5 align-middle"
               label={t('chat.reasoning.copy')}
               onClick={(event) => {
                 // 卡头是 `<summary>`：点击默认会开合卡片。复制必须自己吃掉这次点击，

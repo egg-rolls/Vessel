@@ -161,10 +161,10 @@ function TranscriptMessage({
       onSelect: () => onRetry(previousUser.index, previousUser.text),
     });
   }
-  // 消息工具栏（复制 / 重试 / 时间）：位置只有一处 —— **正文下方一行、右对齐**。
+  // 消息工具栏（复制 / 重试 / 时间）：位置只有一处 —— **正文下方一行、左对齐**。
   // 思考卡上不挂工具栏（用户明确去掉）；卡头只有一个独立的「复制思考」小按钮
   // （见 `ReasoningBlock.tsx`）。显隐（hover / focus-within / 触屏常显）在
-  // `MessageActions` 自己身上，这里只给 `mt-1 ml-auto`（间距 + 右对齐）。
+  // `MessageActions` 自己身上，这里只给 `mt-1`（`MessageActions` 是 `w-fit`，左起）。
   return (
     <div className="msg-assistant group max-w-full">
       {groupStart && <AssistantSpeaker />}
@@ -173,7 +173,7 @@ function TranscriptMessage({
       {/* 助手正文无底色气泡包裹 ⇒ 不折（与 live 的 `AssistantText` 同一口径）。 */}
       {message.content && <Markdown className="msg-text" text={message.content} />}
       {hasMeta || actions.length > 0 ? (
-        <MessageActions className="mt-1 ml-auto" actions={actions} meta={meta} />
+        <MessageActions className="mt-1" actions={actions} meta={meta} />
       ) : null}
     </div>
   );

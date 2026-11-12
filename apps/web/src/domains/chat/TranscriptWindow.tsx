@@ -391,8 +391,8 @@ export function TranscriptWindow({
         // `speaker`：这一项是该 run 的第一块内容 ⇒ 上方补「助手」发言人名
         // （run 运行期也要看得见，历史消息那条走 Transcript 的 groupStart）。
         //
-        // `actions`：这一段的工具栏（复制正文），落在正文**下方一行、右对齐**
-        // （`mt-1 ml-auto`）；显隐（hover / focus-within / 触屏常显）由
+        // `actions`：这一段的工具栏（复制正文），落在正文**下方一行、左对齐**
+        // （`mt-1`）；显隐（hover / focus-within / 触屏常显）由
         // `MessageActions` 自己负责，这里不写。思考卡上不挂工具栏。
         return (
           <AssistantText
@@ -403,7 +403,7 @@ export function TranscriptWindow({
             actions={
               item.text.trim().length > 0 ? (
                 <MessageActions
-                  className="mt-1 ml-auto"
+                  className="mt-1"
                   actions={[
                     {
                       id: 'copy',
@@ -426,8 +426,6 @@ export function TranscriptWindow({
           <ReasoningBlock
             text={item.text}
             streaming={item.streaming}
-            startedAt={item.startedAt}
-            endedAt={item.endedAt}
             entering={isEntering(item.key)}
             speaker={speakerKeys.has(item.key)}
           />
