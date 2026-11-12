@@ -1,9 +1,10 @@
 /**
  * 助手正文（chat/StreamItems 的 AssistantText）：Markdown 正文 + 正文下方左对齐的复制按钮。
  */
-import { AssistantText } from '../../../chat/StreamItems';
+
 import { MessageActions, useMessageCopy } from '../../../../components/ui';
 import { t } from '../../../../i18n';
+import { AssistantText } from '../../../chat/StreamItems';
 import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {

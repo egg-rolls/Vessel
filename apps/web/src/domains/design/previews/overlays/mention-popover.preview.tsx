@@ -6,8 +6,8 @@
 import { useState } from 'react';
 import type { TeamMember } from '../../../../gateway/types';
 import { t } from '../../../../i18n';
-import type { MentionCandidate } from '../../../team/mention';
 import { MentionPopover } from '../../../team/MentionPopover';
+import type { MentionCandidate } from '../../../team/mention';
 import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {

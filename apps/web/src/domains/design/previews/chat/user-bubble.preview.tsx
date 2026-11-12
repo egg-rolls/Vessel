@@ -1,8 +1,9 @@
 /**
  * 用户气泡（chat/StreamItems 的 UserBubble）：气泡 + 附件 chip + hover 时间。
  */
-import { UserBubble } from '../../../chat/StreamItems';
+
 import type { MessageRef } from '../../../../gateway/types';
+import { UserBubble } from '../../../chat/StreamItems';
 import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {

@@ -24,7 +24,11 @@ export default function AgentMessageCardPreview() {
         ts={TS}
         defaultOpen
       />
-      <AgentMessageCard sender="planner" content="排期已更新：先做 token 自动枚举，再做组件自动发现。" ts={TS} />
+      <AgentMessageCard
+        sender="planner"
+        content="排期已更新：先做 token 自动枚举，再做组件自动发现。"
+        ts={TS}
+      />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 /**
- * 菜单按钮（app/NavGroup + app/NavItem）：分组头 + 六种状态点（四档语义 + 网关的 ok / warn）
+ * 菜单按钮（app/NavGroup + app/NavItem）：分组头 + 四档语义各一例（accent / amber / danger / muted）+ 折叠态与无状态项
  * + 折叠态（只有图标，靠 Tooltip 带出文案）。
  *
  * 状态文案全部来自 NavStatusMeta.labelKey，颜色由 NavItem 自己的 data-tone 决定 ——
@@ -66,7 +66,7 @@ const ITEMS: readonly NavItemModel[] = [
     icon: 'gateway',
     route: GATEWAY,
     active: false,
-    status: { tone: 'ok', labelKey: 'nav.status.online', version: '0.50.0' },
+    status: { tone: 'accent', labelKey: 'nav.status.online', version: '0.50.0' },
   },
   {
     id: 'demo:gateway-connecting',
@@ -74,7 +74,7 @@ const ITEMS: readonly NavItemModel[] = [
     icon: 'gateway',
     route: GATEWAY,
     active: false,
-    status: { tone: 'warn', labelKey: 'nav.status.connecting' },
+    status: { tone: 'amber', labelKey: 'nav.status.connecting' },
   },
 ];
 

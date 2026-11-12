@@ -3,7 +3,7 @@
  * 具体样例 —— 加一个 *.preview.tsx 就自动出现在这里（连标题、说明、分组都是文件自己
  * 声明的）。所有样例都是只读静态数据，不发任何 RPC。
  */
-import { Badge, Section, SearchInput } from '@vessel-agent/plugin-ui';
+import { Badge, SearchInput, Section } from '@vessel-agent/plugin-ui';
 import { Component, type ReactNode, useState } from 'react';
 import { ErrorState } from '../../components/States';
 import { t } from '../../i18n';

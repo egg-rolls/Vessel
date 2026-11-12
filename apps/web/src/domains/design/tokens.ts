@@ -264,7 +264,7 @@ function readSnapshot(): TokenSnapshot {
 /** 快照签名：值没变就不重渲染（主题无关的 DOM 变动也会触发 observer）。 */
 function snapshotKey(snapshot: TokenSnapshot): string {
   let key = snapshot.names.join(',');
-  for (const name of snapshot.names) key += '|' + (snapshot.values[name] ?? '');
+  for (const name of snapshot.names) key += `|${snapshot.values[name] ?? ''}`;
   return key;
 }
 
