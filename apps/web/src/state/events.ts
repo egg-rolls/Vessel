@@ -372,6 +372,41 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
   return group;
 }
 
+/*
+ * ── 「这条事件在时间线上有没有产物」的唯一判据 ──────────────────────────────
+ *
+ * `EventStore` 用它做两件事：不产产物的流式增量**不进缓冲**，以及裁剪时**先丢**
+ * 不产产物的条目（`oldestEvictableIndex` 的两档）。所以它必须与上面 `buildGroup`
+ * 的分支表**同源**：这里不维护任何独立的事件名名单，只把那个 switch 的分支归属
+ * 表达出来；改 `buildGroup` 的分支就要改这里（相距不到 40 行，语义由
+ * `check-transcript-items` 的 fixtures 与 `buildLiveItems` 守着）。
+ */
+
+/**
+ * 事件在时间线分组里有没有产物。
+ *
+ * - `true`：`buildGroup` 会为它 push 一条 item（text / reasoning / notice / event），
+ *   或写一个**被渲染**的分组态字段 —— `run.started` / `user.message` 的 `input`
+ *   （`run-input` 气泡）、终态事件的 `status` / `output` / `error`（终态与失败卡）。
+ * - `false`：什么都不留。`buildGroup` 的 `case 'llm.stream.chunk'` 只认
+ *   `text_delta` / `reasoning_delta`（累积成正文/思考段）；`tool_call_delta` 落进
+ *   该分支的兜底什么都不做，`finish` 只 `flush()` 收口边界、自己不产 item，
+ *   载荷缺失 / 未识别的 chunk 子类型同样什么都不做。
+ *
+ * **不看可见性档位**：`internal` / `observe` 档在 `buildGroup` 里照样产 item
+ * （原始事件行 / typed notice），档位过滤发生在更外层的 `isVisibleForGrouping`。
+ * **也不判「别的视图读不读它」**：`agent.*` / `subagent.*` 是成员树与子 agent 面板的
+ * 输入（`state/agents.ts#reduceAgents`），所以它们在这里恒为 true —— 这个函数只回答
+ * 「时间线上有没有东西」，不能据此认为一条事件可以丢。
+ */
+export function producesTimelineItem(event: { type: string; data?: unknown }): boolean {
+  if (event.type !== 'llm.stream.chunk') return true;
+  const chunk = (event.data as { chunk?: { type?: unknown; delta?: unknown } } | undefined)?.chunk;
+  // 与 `buildGroup` 的两条累积分支逐字对应：必须同 kind 且有非空 delta。
+  if (chunk?.type !== 'text_delta' && chunk?.type !== 'reasoning_delta') return false;
+  return typeof chunk.delta === 'string' && chunk.delta.length > 0;
+}
+
 /**
  * 事件里的引用快照（宽松解析）：只认 `{kind, path}`，坏条目逐条丢。
  *
