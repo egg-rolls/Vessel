@@ -86,9 +86,7 @@ export function sameSourcePrefix(a: PendingStripEntry, b: PendingStripEntry): bo
 }
 
 /** 排序后的条目 → 相邻同源重复并组（连续同类会继续并进同一组）。 */
-export function groupPendingEntries(
-  ordered: readonly PendingStripEntry[],
-): PendingStripGroup[] {
+export function groupPendingEntries(ordered: readonly PendingStripEntry[]): PendingStripGroup[] {
   const groups: PendingStripGroup[] = [];
   let current: PendingStripGroup | undefined;
   let last: PendingStripEntry | undefined;

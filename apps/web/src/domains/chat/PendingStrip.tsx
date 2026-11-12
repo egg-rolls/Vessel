@@ -25,7 +25,7 @@
  */
 import { useMemo, useState } from 'react';
 import { t } from '../../i18n';
-import { pendingStripView, type PendingStripEntry, type PendingStripGroup } from './pending-strip';
+import { type PendingStripEntry, type PendingStripGroup, pendingStripView } from './pending-strip';
 import { QueuedNotice, type QueuedSubmission } from './StreamItems';
 
 /**
