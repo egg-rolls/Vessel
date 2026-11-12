@@ -226,13 +226,19 @@ export interface AgentMessage {
   /**
    * 这条投递在会话里应写成的 `Message.name`（内存内元数据，不落 snapshot）。
    *
-   * 只给**运行时合成输入**用：idle 唤醒（`INBOX_WAKE_INPUT`）不是谁说的话，而是运行时
-   * 上下文，标成 `vessel:notice` 后 Web 时间线按环境信息卡渲染、TUI 的人类可读投影跳过它，
-   * 两边都不再把它画成「用户说的话」。A2A 投递不走这里（`agent:<alias>` 由 `source` +
-   * `from_name` 推导，见 `runtime.ts` 的 `agentInputName`）。
+   * 只给**运行时合成输入**与**交接嘱托**用，两者都不是「谁说的话」而是同一件事的
+   * 两个面：`vessel:notice`（idle 唤醒）是运行时上下文，Web 时间线按环境信息卡渲染、
+   * TUI 的人类可读投影跳过它；`rotate:handoff:<epoch>`（rotate 交接）是**发起 rotate
+   * 的 agent 写的交接书**（通常是上一具身体；`service.ts` 的
+   * `ROTATE_HANDOFF_INPUT_NAME`），Web 渲成交接卡、TUI 渲成可读标题，两边都不再把它
+   * 画成「坐在键盘前的人打的字」。
+   * A2A 投递不走这里（`agent:<alias>` 由 `source` + `from_name` 推导，见
+   * `runtime.ts` 的 `agentInputName`）。
    *
-   * **不能用 `source: 'system'` 统一推导**：`startup_prompt` 同样来自 system principal，
-   * 而那是调用方（人）写的正文，必须继续按正文渲染。
+   * **不能用 `source: 'system'` 统一推导**：`startup_prompt` 同样来自 system
+   * principal，但只有 rotate 路径那一条是 agent 写的；create / restart / activate 的
+   * `startup_prompt` 是调用方（人）写的开场白，必须继续按正文渲染。谁写的这句话
+   * 只能由生产者声明，不能从来源推断。
    */
   input_name?: string;
   /**

@@ -13,7 +13,7 @@ import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
 import { MessageRefs } from './MessageRefs';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
-import type { TranscriptItem } from './transcript-items';
+import { isCardInputMessage, type TranscriptItem } from './transcript-items';
 
 /**
  * 这条历史消息自己要显示的思考文本（thinking 模式的 reasoning_content）。
@@ -37,9 +37,13 @@ function historyReasoning(message: Message): string | undefined {
 }
 
 /**
- * 该助手消息之前最近的一条真实用户输入（重试要用它的绝对下标）。
+ * 该助手消息之前最近的一条**人打的字**（重试要用它的绝对下标）。
  *
- *  运行时上下文不算用户输入；找不到就返回 undefined（不给重试）。
+ * 三类不算用户输入：运行时上下文（`vessel:*`）、A2A 投递（`agent:<alias>` → agent 卡）、
+ * rotate 交接嘱托（`rotate:handoff[:<epoch>]` → 交接卡）。后两类是**卡片**：把它们的正文
+ * 当 retry / edit 的锚点，等于让 agent 的话（或一段交接书）被人改写后再作为「真实发生过
+ * 的用户输入」重发 —— 身份判定与建 item 共用 `transcript-items.ts` 的 `isCardInputMessage`。
+ * 找不到就返回 undefined（不给重试）。
  */
 function previousUserMessage(
   message: Message,
@@ -54,6 +58,7 @@ function previousUserMessage(
     const candidate = allMessages[cursor];
     if (candidate?.role !== 'user') continue;
     if (runtimeMessageKind(candidate) !== undefined) continue;
+    if (isCardInputMessage(candidate)) continue;
     return { text: candidate.content, index: cursor + indexOffset };
   }
   return undefined;

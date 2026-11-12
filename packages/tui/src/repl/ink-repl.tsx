@@ -98,6 +98,8 @@ function shouldPageItem(item: UiItem): boolean {
       return item.text.split('\n').length > 1 || item.text.length > 200;
     case 'assistant':
     case 'reasoning':
+    // rotate 交接嘱托的正文是新身体唯一的指令：长文可进 Ctrl+O pager 读全文。
+    case 'handoff':
       return item.text.split('\n').length > 3 || item.text.length > 240;
     case 'notice':
       return item.detail !== undefined || item.text.length > 240;

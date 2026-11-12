@@ -229,6 +229,37 @@ function UserBlock({ text }: { text: string }) {
   );
 }
 
+/**
+ * rotate 交接嘱托：一行可读标题（`⟳ rotate 交接 · epoch N`）+ 来源说明 + **完整正文**。
+ *
+ * 正文不做行数截断（`limitUiItems` 的截断分支刻意不覆盖这个 kind）：这是新身体这一轮
+ * 唯一的指令，裁掉就等于让人抄不到活。终端换行由 Ink 负责，这里只按行渲染。
+ */
+function HandoffBlock({ item }: { item: Extract<UiItem, { kind: 'handoff' }> }) {
+  const title = t('item.handoff.title');
+  const epochLabel =
+    item.epoch !== undefined ? t('item.handoff.epoch', { epoch: item.epoch }) : undefined;
+  const header = epochLabel !== undefined ? `${title} · ${epochLabel}` : title;
+  const lines = sanitizeTerminalText(item.text).split('\n');
+  return (
+    <Box flexDirection="column">
+      <Text color={theme.info} wrap="truncate-end">
+        {header}
+      </Text>
+      <Text color={theme.faint} wrap="truncate-end">
+        {'  '}
+        {t('item.handoff.source')}
+      </Text>
+      {lines.map((line, index) => (
+        <Text key={lineKey(index)}>
+          {'  '}
+          {line}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
 function PermissionLine({ item }: { item: Extract<UiItem, { kind: 'permission' }> }) {
   const at = clockTime(item.at);
   return (
@@ -365,6 +396,8 @@ export function UiItemView({ item, columns, expanded }: UiItemViewProps) {
   switch (item.kind) {
     case 'user':
       return <UserBlock text={item.text} />;
+    case 'handoff':
+      return <HandoffBlock item={item} />;
     case 'assistant':
       return (
         <Box flexDirection="column">

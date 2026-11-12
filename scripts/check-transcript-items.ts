@@ -12,14 +12,17 @@
 
 import { ASK_ANSWER_MESSAGE_NAME } from '../apps/web/src/domains/chat/ask-answer';
 import { pendingStripView } from '../apps/web/src/domains/chat/pending-strip';
+import { ROTATE_HANDOFF_MESSAGE_NAME } from '../apps/web/src/domains/chat/rotate-handoff';
 import {
   buildTranscriptItems,
+  isCardInputMessage,
   type TranscriptItem,
 } from '../apps/web/src/domains/chat/transcript-items';
 import type { RunEvent } from '../apps/web/src/gateway/types';
 import type { Message } from '../apps/web/src/gateway/types/sessions';
 import type { RunGroup, TimelineItem } from '../apps/web/src/state/events';
 import { ASK_ANSWER_INPUT_NAME } from '../packages/agent/src/runtime';
+import { ROTATE_HANDOFF_INPUT_NAME } from '../packages/agent/src/service';
 
 function msg(role: Message['role'], content: string, extra: Partial<Message> = {}): Message {
   return { role, content, ...extra };
@@ -1356,6 +1359,94 @@ const FIXTURES: readonly Fixture[] = [
     name: 'F24 待批答复的字面量对账：Web 身份名与 agent 侧 Message.name 必须一致',
     why: '两侧各写一个字面量（web 不能 import packages/agent），漂移会让卡片静默退回用户气泡 —— 没有报错，只有观感错',
     check: () => ASK_ANSWER_MESSAGE_NAME === ASK_ANSWER_INPUT_NAME,
+  },
+  // --- rotate 交接卡（rotate-handoff） ---
+  {
+    name: 'F25 rotate 交接身份：历史名 rotate:handoff:<epoch> → 一张交接卡；运行态同名输入被认领后让位；名字不合形状回退普通消息',
+    why: '交接嘱托是发起 rotate 的 agent 写的（不是坐在键盘前的人打的字），渲成用户气泡会让人以为是自己刚发的；epoch 只能随 name 持久化，读不懂就不写（不猜）；live 与 history 必须是同一个逻辑对象（不许一卡一气泡），名字不合形状时必须回退（宁可少一张卡，不能吞正文）',
+    check: () => {
+      const brief = '你是 rotate 后的第三具身体：先读交接书，再把扫尾做完。';
+      const named = `${ROTATE_HANDOFF_MESSAGE_NAME}:3`;
+      // (a) 历史侧：名字 + epoch ⇒ 一张交接卡（不再出用户消息 item）。
+      const history = buildTranscriptItems({
+        messages: [msg('user', brief, { name: named, timestamp: 2000 })],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      });
+      const card = history.find((item) => item.kind === 'rotate-handoff');
+      // (b) 运行态与历史同一对象：run 分组的 input_name 同名 ⇒ live 那条被认领让位。
+      const live = buildTranscriptItems({
+        messages: [msg('user', brief, { name: named, timestamp: 2000 })],
+        messageIndexOffset: 0,
+        liveGroups: [group({ runId: 'r-rot', input: brief, inputName: named, startedAt: 1990 })],
+      });
+      // (c) 名字没带 epoch（旧数据 / 直接 `rotate:handoff`）⇒ 卡片在，epoch 缺省。
+      const bare = buildTranscriptItems({
+        messages: [msg('user', brief, { name: ROTATE_HANDOFF_MESSAGE_NAME, timestamp: 2000 })],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      });
+      const bareCard = bare.find((item) => item.kind === 'rotate-handoff');
+      // (d) 名字不合形状（第三段不是数字 / 前缀后缀粘连）⇒ 退回普通消息，正文不许被吞。
+      const fallback = buildTranscriptItems({
+        messages: [
+          msg('user', brief, { name: `${ROTATE_HANDOFF_MESSAGE_NAME}x`, timestamp: 2000 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      });
+      const fallbackMessage = fallback.find((item) => item.kind === 'message');
+      return (
+        card !== undefined &&
+        card.kind === 'rotate-handoff' &&
+        card.epoch === 3 &&
+        card.text === brief &&
+        history.every((item) => item.kind !== 'message' || item.message.role !== 'user') &&
+        keys(live).join(',') === 'msg:0' &&
+        live.filter((item) => item.kind === 'rotate-handoff').length === 1 &&
+        bareCard !== undefined &&
+        bareCard.kind === 'rotate-handoff' &&
+        bareCard.epoch === undefined &&
+        fallbackMessage !== undefined &&
+        fallbackMessage.kind === 'message' &&
+        fallbackMessage.message.content === brief
+      );
+    },
+  },
+  {
+    name: 'F26 rotate 交接的字面量对账：Web 身份前缀与 agent 侧 ROTATE_HANDOFF_INPUT_NAME 必须一致',
+    why: '两侧各写一个字面量（web 不能 import packages/agent），漂移会让交接卡静默退回用户气泡 —— 没有报错，只有观感错',
+    check: () => ROTATE_HANDOFF_MESSAGE_NAME === ROTATE_HANDOFF_INPUT_NAME,
+  },
+  {
+    name: 'F27 卡片输入不是「前一条用户输入」：A2A / rotate 交接不做 edit-retry 锚点；回退成普通消息的名字仍算人输入',
+    why: '交接卡不是人打的字：能被编辑成别的内容或被重发，等于把伪造的改写伪装成一段真实发生的交接。判定必须与建 item 同一组函数（否则出现「渲成卡、却仍当人的话重发」）；名字不合形状时它本来就渲成气泡，操作也该跟气泡一致',
+    check: () => {
+      const brief = '你是 rotate 后的第三具身体：先读交接书，再把扫尾做完。';
+      const a2a = msg('user', 'agent 说的话', { name: 'agent:helper' });
+      const handoff = msg('user', brief, { name: `${ROTATE_HANDOFF_MESSAGE_NAME}:3` });
+      const human = msg('user', '人打的字');
+      const fallbackName = msg('user', brief, { name: `${ROTATE_HANDOFF_MESSAGE_NAME}x` });
+      // 反向断言：判定与渲成什么一致（交接卡 ↔ 卡；普通消息 ↔ 人输入）。
+      const handoffKinds = buildTranscriptItems({
+        messages: [handoff],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      }).map((item) => item.kind);
+      const humanKinds = buildTranscriptItems({
+        messages: [human],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      }).map((item) => item.kind);
+      return (
+        isCardInputMessage(a2a) &&
+        isCardInputMessage(handoff) &&
+        !isCardInputMessage(human) &&
+        !isCardInputMessage(fallbackName) &&
+        handoffKinds.join(',') === 'rotate-handoff' &&
+        humanKinds.join(',') === 'message'
+      );
+    },
   },
 ];
 
