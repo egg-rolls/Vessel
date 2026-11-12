@@ -1515,7 +1515,7 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     if ((item.kind === 'run-text' || item.kind === 'run-reasoning') && isYielded(decision, item)) {
       continue;
     }
-    const claimedUser = claimedUserByRun.get(runId);
+    const claimedUser = runId === undefined ? undefined : claimedUserByRun.get(runId);
     const claimedUserTs =
       claimedUser === undefined ? undefined : history.messageByIndex.get(claimedUser)?.timestamp;
     // 强下限（认领到的用户消息）总是生效：run.started 比用户消息落盘早几毫秒。

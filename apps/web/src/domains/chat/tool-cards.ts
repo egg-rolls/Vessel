@@ -18,6 +18,13 @@ export interface ToolCardView {
   durationMs?: number;
   truncated?: boolean;
   startedAt: number;
+  /**
+   * 该卡解析到的事件锚点（`tool.call.started` 的 seq）。
+   *
+   * 只用于诊断与门禁对拍（交棒记录 / 守恒断言要按锚点对账）；渲染不读它。
+   * 工具卡**不走交棒**（历史侧不复现执行态耗时与截断标记），所以它允许缺省。
+   */
+  anchorSeq?: number;
 }
 
 export type ChatRenderItem =
