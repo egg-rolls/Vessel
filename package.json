@@ -52,7 +52,8 @@
     "check:chat-visibility": "bun run scripts/check-chat-visibility.ts",
     "check:event-visibility": "bun run scripts/check-event-visibility.ts",
     "check:history-tools": "bun run scripts/check-history-tools.ts",
-    "check:transcript-items": "bun run scripts/check-transcript-items.ts"
+    "check:transcript-items": "bun run scripts/check-transcript-items.ts",
+    "check:replay-budget": "bun run scripts/check-replay-budget.ts"
   },
   "workspaces": [
     "packages/*",
