@@ -1042,7 +1042,8 @@ export interface ClaimDecision {
   /**
    * 可以移出 live 内存的 item（按 run 分组，`HandoverRequest` 直接就是 store 的入参）。
    *
-   * 只有「有历史替身」的段 / 工具卡会进来；`notice` / `ev-` / 失败卡永远不在。
+   * 只有「已经让位的正文段 / 思考段」会进来；`notice` / `ev-` / 失败卡与工具卡永远不在
+   * （前两者没有历史替身；工具卡的执行态历史侧不复现，见 `computeHandover` 的说明）。
    */
   handover: ReadonlyMap<string, HandoverRequest>;
   /** 累计计数（同一次判定内不变；见 `ClaimStats`）。 */
@@ -1207,21 +1208,23 @@ function computeClaimCore(
  * 3. 失败卡例外：`failed` 的 run 只有当**会话快照能提供同一张卡**
  *    （`sessionFailure.runId === run.runId`，key 相同 `run:<id>:failure`，故不重挂）
  *    时才允许交棒 —— 否则这一轮永远留在 live 侧（一张卡的内存换「失败永远可见」）；
- * 4. item 自己**确实有替身**：
- *    - 正文段 / 思考段：已经让位（`yieldedAnchors`，历史那份正在渲染它）；
- *    - 工具卡：历史里有同一个 key（`tool:<callId>`，合并后不重挂），且执行态不会被改动
- *      （`status === 'done'` 且没有 `error` —— 否则交棒会**丢掉错误标记**）；
- *    - `notice` / `ev-` / `unknown-`：没有替身，永远不交棒。
+ * 4. item 自己**确实有替身**：正文段 / 思考段已经让位（`yieldedAnchors`，历史那份
+ *    正在渲染同一段正文）。
+ *
+ * **为什么只有正文 / 思考段**：交棒的硬要求是「屏幕上零变化」。一段正文让位之后 live
+ * 这份**根本不在渲染**，删它按定义零变化；而工具卡的执行态（`status` / `durationMs` /
+ * `truncated`）历史侧不复现（历史只有「调用 + 结果」两条消息，耗时是时间戳推算的），
+ * 删掉 live 那份会让卡上的耗时 / 截断标记变样 —— 那不是零变化，所以这一档**不放开**
+ * （要等服务端给出 run/段锚点，让历史侧能携带执行态；DESIGN.md 裁决 3 的触发条件 a）。
+ * `notice` / `ev-` / `unknown-` 是运行过程，没有替身，永远不交棒。
  */
 function computeHandover(
-  history: HistoryIndex,
   facts: readonly ClaimRunFacts[],
   yieldedAnchors: ReadonlySet<number>,
   input: ClaimDecideInput,
 ): Map<string, HandoverRequest> {
   const handover = new Map<string, HandoverRequest>();
   if (!input.detailReady) return handover;
-  const historyKeys = new Set(history.items.map((item) => item.key));
   for (const fact of facts) {
     if (fact.status === 'running') continue;
     if (fact.status === 'failed' && input.failureRunId !== fact.runId) continue;
@@ -1230,20 +1233,9 @@ function computeHandover(
       if (segment.anchorSeq === undefined) continue;
       if (yieldedAnchors.has(segment.anchorSeq)) segments.push(segment.anchorSeq);
     }
-    const callIds: string[] = [];
-    for (const callId of fact.callIds) {
-      // 历史侧同一张卡：key 完全相同（`tool:<callId>`），合并后位置 / 内容都由历史说了算。
-      if (!historyKeys.has(toolKeyOf(callId))) continue;
-      callIds.push(callId);
-    }
-    if (segments.length > 0 || callIds.length > 0) handover.set(fact.runId, { segments, callIds });
+    if (segments.length > 0) handover.set(fact.runId, { segments });
   }
   return handover;
-}
-
-/** 工具卡的 key（历史与 live 共用；与 `buildLiveItems` / `buildHistoryIndex` 同源）。 */
-function toolKeyOf(callId: string): string {
-  return `tool:${callId}`;
 }
 
 /**
@@ -1304,7 +1296,7 @@ export class ClaimLedger {
     if (!rerun && this.decision !== null) return this.decision;
     this.counters.decisions += 1;
     const core = computeClaimCore(input.history, input.facts, this.counters);
-    const handover = computeHandover(input.history, input.facts, core.yieldedAnchors, input);
+    const handover = computeHandover(input.facts, core.yieldedAnchors, input);
     const fresh: ClaimDecision = { ...core, handover, stats: this.counters };
     // 身份没变（只是新 run / 终态 / 输入到达）：与上一次结论**取并集**，绝不撤销。
     this.decision =
@@ -1354,7 +1346,6 @@ function unionClaimDecisions(previous: ClaimDecision, fresh: ClaimDecision): Cla
     const before = handover.get(runId);
     handover.set(runId, {
       segments: [...new Set([...(before?.segments ?? []), ...request.segments])],
-      callIds: [...new Set([...(before?.callIds ?? []), ...request.callIds])],
     });
   }
   return {

@@ -430,7 +430,10 @@ export function useChatTranscript({
   const ledgerRef = useRef<ClaimLedger | null>(null);
   ledgerRef.current ??= new ClaimLedger();
   const claimLedger = ledgerRef.current;
-  const claimFacts = useMemo(() => claimRunFactsOf(renderedGroups), [renderedGroups]);
+  // 事实取**整个会话**的 run（`visibleGroups`），不是只渲最近 200 轮的那一份
+  // （`renderedGroups`）：交棒要能覆盖「已经滚出渲染窗口」的旧轮次，否则长会话里它们
+  // 的 item 永远不会被释放，内存仍然随轮数增长（§8.1 的目的就落空了）。
+  const claimFacts = useMemo(() => claimRunFactsOf(visibleGroups), [visibleGroups]);
   const claimIdentity = useMemo<ClaimIdentity>(
     () => ({
       sessionId: selectedId,

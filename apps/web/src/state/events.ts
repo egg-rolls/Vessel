@@ -190,13 +190,13 @@ export interface RunFold {
    * 交棒：把「已经有历史替身」的 item 移出本 fold（DESIGN.md §8.1）。
    *
    * 判据由装配面的认领账本给出（它证明历史那份**确实会渲染**），这里只按段锚点
-   * （`anchorSeq`）与 callId 精确删除：正文段 / 思考段 / 工具卡是唯一有历史替身的三种
-   * item；`notice:<key>` / `ev-<seq>` / `unknown-<seq>` 是「运行过程」，永远没有替身，
-   * 也就不可能被这里删掉（判据里根本没有它们的分支）。
+   * （`anchorSeq`）精确删除正文段 / 思考段 —— 它们是唯一「历史那份正在渲染同一段正文」
+   * 的 item；`notice:<key>` / `ev-<seq>` / `unknown-<seq>` 是「运行过程」，工具卡的执行态
+   * 历史侧不复现（删了卡上的耗时 / 截断标记就变样），都不在这里。
    *
-   * 返回真正删掉的条数（幂等：重复交棒同一批 key 返回 0）。
+   * 返回真正删掉的条数（幂等：重复交棒同一批锚点返回 0）。
    */
-  drop(anchors: ReadonlySet<number>, callIds: ReadonlySet<string>): number;
+  drop(anchors: ReadonlySet<number>): number;
 }
 
 /** `trim()` 的结果：折掉了几条、覆盖的 seq 区间（折叠卡的 anchor 用 `fromSeq`）。 */
@@ -636,23 +636,22 @@ export function createFold(runId: string): RunFold {
   };
 
   /**
-   * 交棒：按段锚点 / callId 精确删 item（见 `RunFold.drop`）。
+   * 交棒：按段锚点精确删正文段 / 思考段（见 `RunFold.drop`）。
    *
-   * 与 `trim` 的区别：`trim` 只动队首（下标整体平移），这里动的是**任意位置**，所以
-   * `toolCards` / `pendingTools` 的下标必须逐项重映射 —— 否则「删了前面的卡片之后，
-   * 迟到的一条 `tool.call.completed` 会更新到别的卡片上」（比丢内容更糟的串卡）。
+   * 为什么还要重映射 `toolCards` / `pendingTools` 的下标：`trim` 只动队首（下标整体平移），
+   * 这里动的是**任意位置** —— 不重映射的话，删掉前面的段之后，迟到的一条
+   * `tool.call.completed` 会更新到**别的卡片**上（比丢内容更糟的串卡）。
    */
-  const drop = (anchors: ReadonlySet<number>, callIds: ReadonlySet<string>): number => {
-    if (anchors.size === 0 && callIds.size === 0) return 0;
+  const drop = (anchors: ReadonlySet<number>): number => {
+    if (anchors.size === 0) return 0;
     const kept: typeof group.items = [];
     /** 旧下标 → 新下标（只含留下来的）。 */
     const moved = new Map<number, number>();
     group.items.forEach((item, index) => {
       const hit =
-        ((item.kind === 'text' || item.kind === 'reasoning') &&
-          item.anchorSeq !== undefined &&
-          anchors.has(item.anchorSeq)) ||
-        (item.kind === 'tool' && item.callId !== undefined && callIds.has(item.callId));
+        (item.kind === 'text' || item.kind === 'reasoning') &&
+        item.anchorSeq !== undefined &&
+        anchors.has(item.anchorSeq);
       if (hit) return;
       moved.set(index, kept.length);
       kept.push(item);

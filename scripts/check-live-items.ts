@@ -188,14 +188,14 @@ function decideClaims(
   return { history, decision, ledger };
 }
 
-/** 屏幕上的 key 序列（带认领结论；等价于装配面那一帧的最终列表）。 */
-function screenKeys(
+/** 屏幕上那一帧的最终列表（带认领结论；等价于装配面 give 给渲染的 item 流）。 */
+function screenItems(
   groups: readonly RunGroup[],
   messages: readonly Message[],
   history: ReturnType<typeof buildHistoryIndex>,
   decision: ClaimDecision,
   sessionFailure?: Parameters<typeof buildTranscriptItems>[0]['sessionFailure'],
-): string[] {
+): TranscriptItem[] {
   return buildTranscriptItems({
     messages,
     messageIndexOffset: 0,
@@ -203,7 +203,18 @@ function screenKeys(
     queued: [],
     historyIndex: { ...history, claims: decision },
     ...(sessionFailure !== undefined ? { sessionFailure } : {}),
-  }).map((item) => item.key);
+  });
+}
+
+/** 屏幕上的 key 序列（同上，只要 key）。 */
+function screenKeys(
+  groups: readonly RunGroup[],
+  messages: readonly Message[],
+  history: ReturnType<typeof buildHistoryIndex>,
+  decision: ClaimDecision,
+  sessionFailure?: Parameters<typeof buildTranscriptItems>[0]['sessionFailure'],
+): string[] {
+  return screenItems(groups, messages, history, decision, sessionFailure).map((item) => item.key);
 }
 
 /** 物化面里还剩多少条 item（交棒释放的可观测面：`fold.itemCount` 之和）。 */
@@ -211,7 +222,18 @@ function liveItemCount(groups: readonly RunGroup[]): number {
   return groups.reduce((total, group) => total + group.items.length, 0);
 }
 
-/** 物化面里还剩多少条**内容**项（正文 / 思考 / 工具卡 —— 有历史替身的那三类）。 */
+/** 物化面里还剩多少条**正文 / 思考段**（交棒唯一能删的那一类 item）。 */
+function segmentItemCount(groups: readonly RunGroup[]): number {
+  let total = 0;
+  for (const group of groups) {
+    for (const item of group.items) {
+      if (item.kind === 'text' || item.kind === 'reasoning') total += 1;
+    }
+  }
+  return total;
+}
+
+/** 物化面里还剩多少条**内容**项（正文 / 思考 / 工具卡）。 */
 function contentItemCount(groups: readonly RunGroup[]): number {
   let total = 0;
   for (const group of groups) {
@@ -781,19 +803,24 @@ const FIXTURES: readonly Fixture[] = [
       const request = decision.handover.get('r-l');
       if (request === undefined) return '终态且历史完全覆盖的 run 没有进交棒清单';
       if (request.segments.length === 0) return '正文段没有交棒（它已经让位给历史了）';
-      if (!request.callIds.includes('c1')) return '工具卡没有交棒（历史里有同 key 的那张卡）';
-      const keysBefore = screenKeys(before, messages, history, decision);
+      // 屏幕（整条 item，不只 key）：交棒前后必须逐字相等。
+      const itemsBefore = screenItems(before, messages, history, decision);
       const liveBefore = liveItemCount(before);
       store.items.release(decision.handover);
       const snapshot = itemSnapshotOf(store);
       const after = [...snapshot.groups];
-      const keysAfter = screenKeys(after, messages, history, decision);
+      const itemsAfter = screenItems(after, messages, history, decision);
       if (snapshot.stats.released === 0) return '交棒没有移出任何 item（内存没动）';
       if (liveItemCount(after) >= liveBefore) {
         return `交棒后 item 数没减少：${liveBefore} → ${liveItemCount(after)}`;
       }
-      const mismatch = sameJson('交棒前后的屏幕 key 序列', keysAfter, keysBefore);
+      // 零变化的强判据：**整个 item 的 JSON 逐字相等**（ts / 字段 / 顺序都不许变）。
+      const mismatch = sameJson('交棒前后的屏幕 item 流', itemsAfter, itemsBefore);
       if (mismatch !== null) return mismatch;
+      // 工具卡没有替身（执行态历史侧不复现）→ 它必须还在 live 里，且**一个字段都没变**。
+      if (!itemsAfter.some((item) => item.kind === 'tool' && item.key === 'tool:c1')) {
+        return '工具卡从屏幕上消失了（它不该被交棒）';
+      }
       // 交棒记录是持久的：再交一次同样的清单必须幂等（不多删、不多计）。
       store.items.release(decision.handover);
       const again = [...itemSnapshotOf(store).groups];
@@ -802,9 +829,9 @@ const FIXTURES: readonly Fixture[] = [
         return '重复交棒重复计数（stats.released 不是幂等的）';
       }
       return sameJson(
-        '幂等交棒后的 key 序列',
-        screenKeys(again, messages, history, decision),
-        keysBefore,
+        '幂等交棒后的 item 流',
+        screenItems(again, messages, history, decision),
+        itemsBefore,
       );
     },
   },
@@ -875,26 +902,31 @@ const FIXTURES: readonly Fixture[] = [
   },
   {
     name: 'G-L3 内存不随轮数线性增长（N 轮之后 live item 的数量上界）',
-    why: '交棒的意义就是「已落盘的内容交给历史」：跑过的轮数越多，live 里剩的越只有运行过程行，而不是线性累加内容',
+    why: '交棒的意义就是「已落盘的内容交给历史」：跑过的轮数越多，live 里剩的越只有「无替身行 + 执行态卡片」，而不是线性累加正文',
     check: () => {
       const ROUNDS = 6;
       const store = new EventStore(0);
       const messages: Message[] = [];
+      const allEvents: StoredEvent[] = [];
       let seq = 0;
       const push = (runId: string, type: string, data: Record<string, unknown>): void => {
         seq += 1;
-        store.push({ type, run_id: runId, data, ts: 900 + seq } as never, { seq });
+        const event: RunEvent = { type, run_id: runId, ts: 900 + seq, data };
+        allEvents.push({ seq, event });
+        store.push(event, { seq });
       };
-      let contentEverHeld = 0;
+      let segmentsEverHeld = 0;
       for (let round = 0; round < ROUNDS; round += 1) {
         const runId = `r-n${round}`;
-        const input = `q${round}`;
-        const answer = `回复${round}`;
         const callId = `c${round}`;
-        push(runId, 'run.started', { run_id: runId, session_id: 's1', input });
+        // 每轮两段正文（中间夹一次工具调用 → 两段）：段数随轮数线性增长，正是要交棒的东西。
+        // 正文要够长（>= 8 字符）：认领的强证据是「run 输出包含这条消息正文」。
+        const first = `先答第一段正文内容第${round}轮`;
+        const second = `再答第二段正文内容第${round}轮`;
+        push(runId, 'run.started', { run_id: runId, session_id: 's1', input: `q${round}` });
         push(runId, 'llm.stream.chunk', {
           run_id: runId,
-          chunk: { type: 'text_delta', delta: answer },
+          chunk: { type: 'text_delta', delta: first },
         });
         push(runId, 'tool.call.started', {
           run_id: runId,
@@ -909,39 +941,54 @@ const FIXTURES: readonly Fixture[] = [
           result: 'ok',
           duration_ms: 1,
         });
+        push(runId, 'llm.stream.chunk', {
+          run_id: runId,
+          chunk: { type: 'text_delta', delta: second },
+        });
         push(runId, 'agent.limit.warning', { run_id: runId, round });
-        push(runId, 'run.completed', { run_id: runId, output: answer });
-        messages.push(msg('user', input, { timestamp: 1000 + round * 10 }));
+        push(runId, 'run.completed', { run_id: runId, output: first + second });
+        const base = 1000 + round * 10;
         messages.push(
-          msg('assistant', answer, {
-            timestamp: 1001 + round * 10,
+          msg('user', `q${round}`, { timestamp: base }),
+          msg('assistant', first, { timestamp: base + 1 }),
+          msg('assistant', '', {
+            timestamp: base + 2,
             tool_calls: [
               { id: callId, type: 'function', function: { name: 'bash', arguments: '{}' } },
             ],
           }),
-          msg('tool', 'ok', { tool_call_id: callId, timestamp: 1002 + round * 10 }),
+          msg('tool', 'ok', { tool_call_id: callId, timestamp: base + 3 }),
+          msg('assistant', second, { timestamp: base + 4 }),
         );
         const groups = groupsFromStore(store);
-        contentEverHeld += contentItemCount(groups);
+        segmentsEverHeld += segmentItemCount(groups);
         const { decision } = decideClaims(groups, messages);
         store.items.release(decision.handover);
       }
       const snapshot = itemSnapshotOf(store);
       const groups = [...snapshot.groups];
-      // ① 内容项全部交棒（不是丢掉：它们仍在历史里，屏幕上一条不少）。
-      if (contentItemCount(groups) !== 0) {
-        return `还有 ${contentItemCount(groups)} 条内容项留在 live 里（应全部交给历史）`;
+      // ① 正文 / 思考段一条不剩（不是丢掉：它们仍在历史里）。
+      if (segmentItemCount(groups) !== 0) {
+        return `还有 ${segmentItemCount(groups)} 条正文/思考段留在 live 里（应全部交给历史）`;
       }
-      // ② live 里只剩「运行过程行」：每轮 1 条 notice，与内容量无关。
-      if (liveItemCount(groups) !== ROUNDS) {
-        return `live item 数 ${liveItemCount(groups)} != 轮数 ${ROUNDS}（上界 = Σ 无替身行，不随内容增长）`;
+      // ② live 里只剩「每轮恒定的两张」：无替身的 notice + 带执行态的工具卡。
+      //    与轮数线性相关的是这两张的**每轮固定开销**，不是正文内容量。
+      if (liveItemCount(groups) !== ROUNDS * 2) {
+        return `live item 数 ${liveItemCount(groups)} != ${ROUNDS * 2}（上界 = Σ 每轮无替身行 + 执行态卡）`;
       }
-      // ③ 释放是「转移」不是「丢」：累计交棒条数 = 曾经持有的内容项总数。
-      if (snapshot.stats.released !== contentEverHeld) {
-        return `stats.released(${snapshot.stats.released}) != 曾持有的内容项(${contentEverHeld})`;
+      // ③ 释放是「转移」不是「丢」：累计交棒条数 = 曾经持有的段数。
+      if (snapshot.stats.released !== segmentsEverHeld) {
+        return `stats.released(${snapshot.stats.released}) != 曾持有的段数(${segmentsEverHeld})`;
       }
-      if (snapshot.stats.releasedRuns !== ROUNDS)
+      if (snapshot.stats.releasedRuns !== ROUNDS) {
         return `stats.releasedRuns(${snapshot.stats.releasedRuns}) != ${ROUNDS}`;
+      }
+      // ④ 守恒：屏幕上的条数 == 从全量事件重建出来的条数（少一条都是丢内容）。
+      const history = buildHistoryIndex(messages, 0);
+      const { decision } = decideClaims(groups, messages);
+      const screen = screenItems(groups, messages, history, decision).length;
+      const full = itemsOf(rebuild(allEvents)).length;
+      if (screen !== full) return `屏幕 ${screen} 条 != 全量 ${full} 条`;
       return null;
     },
   },

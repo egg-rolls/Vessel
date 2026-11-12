@@ -87,15 +87,18 @@ export interface ItemSink {
  *
  * 只表达「按身份删哪几个 item」，不表达「这个 run 整个不要了」：
  * - `segments`：正文 / 思考段的 `anchorSeq`（段在 wire 上的坐标，重折叠后仍不变，
- *   所以交棒结论在同一次判定之后是持久的）；
- * - `callIds`：工具调用的 callId（历史侧同一张卡 key 相同 `tool:<callId>`，不重挂）。
+ *   所以交棒结论在同一次判定之后是持久的）。
+ *
+ * **没有工具卡**：工具卡的执行态（`status` / `durationMs` / `truncated`）历史侧不复现
+ * （历史只有「调用 + 结果」两条消息），删掉 live 那份就会让卡上的耗时 / 截断标记变样 ——
+ * 那不是「零变化」。它要等历史侧携带执行态（或服务端给 run/段锚点）之后再放开
+ * （DESIGN.md 裁决 3 的触发条件 a）。
  *
  * `notice:<key>` / `ev-<seq>` / `unknown-<seq>` **永远不在**这里 —— 它们是「运行过程」，
  * 没有任何历史替身，删了就是吞内容（I8 / I9）。
  */
 export interface HandoverRequest {
   segments: readonly number[];
-  callIds: readonly string[];
 }
 
 export interface ItemStoreStats {
@@ -253,20 +256,13 @@ function isCondensedKey(runId: string, key: string): boolean {
 /**
  * 这条 item 是不是「已经交给历史」的那一份（`RunFold.drop` 的同一判据）。
  *
- * 与 fold 内的删除逻辑必须同源：能删的只有正文段 / 思考段（按段锚点）与工具卡
- * （按 callId）—— `notice` / `ev-` / `unknown-` 没有历史替身，永远不在这里。
+ * 与 fold 内的删除逻辑必须同源：能删的只有**正文段 / 思考段**（按段锚点）——
+ * `notice` / `ev-` / `unknown-` 没有历史替身；工具卡的执行态历史侧不复现（删了卡上的
+ * 耗时 / 截断标记就变样），所以也不在这里。
  */
-function isReleased(
-  released: { anchors: ReadonlySet<number>; callIds: ReadonlySet<string> },
-  item: TimelineItem,
-): boolean {
-  if (item.kind === 'text' || item.kind === 'reasoning') {
-    return item.anchorSeq !== undefined && released.anchors.has(item.anchorSeq);
-  }
-  if (item.kind === 'tool') {
-    return item.callId !== undefined && released.callIds.has(item.callId);
-  }
-  return false;
+function isReleased(released: { anchors: ReadonlySet<number> }, item: TimelineItem): boolean {
+  if (item.kind !== 'text' && item.kind !== 'reasoning') return false;
+  return item.anchorSeq !== undefined && released.anchors.has(item.anchorSeq);
 }
 
 export class LiveItemStore implements ItemSink {
@@ -278,7 +274,7 @@ export class LiveItemStore implements ItemSink {
   private readonly bases = new Map<string, RunGroup>();
   private readonly condensed = new Map<string, CondensedSummary>();
   /**
-   * 已交棒移出内存的 item 身份（run → 段锚点 / callId）。
+   * 已交棒移出内存的 item 身份（run → 段锚点）。
    *
    * 为什么留一份「删过什么」而不是直接忘了：重折叠（回填 `resume` / 可见性切换）会用
    * **环里的全量事件**把该 run 重建一遍，被交棒的段会原样回来 —— 那时屏上就会出现
@@ -286,7 +282,7 @@ export class LiveItemStore implements ItemSink {
    * 的唯一凭据，`materialize` 据此再过滤一次。run 被 `dropSession` / `clear` 语义删除时
    * 一起清掉（rewind 之后历史不再提供那段内容，交棒结论必须作废）。
    */
-  private readonly released = new Map<string, { anchors: Set<number>; callIds: Set<string> }>();
+  private readonly released = new Map<string, { anchors: Set<number> }>();
   /** 发生过交棒的 run（上限策略档 3 的输入：这些 run 的残留最该被折掉）。 */
   private readonly releasedRuns = new Set<string>();
   private readonly dirty = new Set<string>();
@@ -399,13 +395,13 @@ export class LiveItemStore implements ItemSink {
    *
    * 触发者是装配面的 post-commit effect（`useChatTranscript`）：它先用 `ClaimLedger`
    * 证明「历史那份确实会渲染」（`handover` 只包含有替身的段 / 卡），这里才真删。
-   * 于是**屏幕上零变化**：被删的要么已经让位（历史负责渲染），要么与历史同 key
-   * 合并（工具卡）。
+   * 于是**屏幕上零变化**：被删的那些已经让位（历史那份正在渲染同一段正文 / 思考）。
    *
    * 三条硬约束：
-   * - **只删有替身的三种 item**（正文段 / 思考段 / 工具卡，判据在 `RunFold.drop`）；
-   *   `notice` / `ev-` / `unknown-` 与失败卡永远留着 —— 失败卡不在 `items` 里（由
-   *   `group.status` / `group.error` 派生），它根本删不掉，因此「失败永远可见」不依赖这里。
+   * - **只删正文段 / 思考段**（判据在 `RunFold.drop`：按段锚点）；`notice` / `ev-` /
+   *   `unknown-`、**工具卡**与失败卡永远留着 —— 失败卡不在 `items` 里（由
+   *   `group.status` / `group.error` 派生），工具卡的执行态历史侧不复现（见
+   *   `HandoverRequest` 的说明），所以「失败永远可见、卡片不变样」不依赖这里的运气。
    * - **幂等**：重复交棒同一批 key 不产生第二次删除，也不多计一次 stats。
    * - **可作废**：`dropSession` / `clear` 会连同「交棒记录」一起清掉 —— rewind 之后
    *   历史不再提供那段内容，交棒结论必须失效，否则就是吞内容（宁可重新长出来）。
@@ -413,19 +409,15 @@ export class LiveItemStore implements ItemSink {
   release(requests: ReadonlyMap<string, HandoverRequest>): void {
     let removed = 0;
     for (const [runId, request] of requests) {
-      const state = this.released.get(runId) ?? {
-        anchors: new Set<number>(),
-        callIds: new Set<string>(),
-      };
+      const state = this.released.get(runId) ?? { anchors: new Set<number>() };
       for (const anchor of request.segments) state.anchors.add(anchor);
-      for (const callId of request.callIds) state.callIds.add(callId);
       this.released.set(runId, state);
-      if (state.anchors.size === 0 && state.callIds.size === 0) continue;
+      if (state.anchors.size === 0) continue;
       this.releasedRuns.add(runId);
       const fold = this.folds.get(runId);
       // 用**累计**集合删（而不是只删这一批）：重折叠把更早交棒的段又长回来时，
       // 这一次调用顺手把它们再删一次。
-      if (fold !== undefined) removed += fold.drop(state.anchors, state.callIds);
+      if (fold !== undefined) removed += fold.drop(state.anchors);
       this.dirty.add(runId);
     }
     this.stats.released += removed;
