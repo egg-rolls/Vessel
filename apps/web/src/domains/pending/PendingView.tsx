@@ -13,7 +13,10 @@ import { useMemo, useState } from 'react';
 import { EmptyState } from '../../components/States';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
+import { resourceData } from '../../state/useResource';
+import { useAgentStore } from '../../stores/agentStore';
 import { PageFrame } from '../settings/PageFrame';
+import { rosterAttributionIndex } from './attribution';
 import { asksForSession, groupPendingAsks } from './cluster';
 import { PendingClusterCard } from './PendingClusterCard';
 
@@ -24,18 +27,26 @@ export function PendingView({ sessionId }: { sessionId?: string }) {
   useLocale();
   const { asks } = useConnection();
   const [override, setOverride] = useState<string | null>(null);
+  // 归属兑底要 roster：`parent_session_id` 里装着 agent id 的历史记录，只有 roster
+  // 能认出「这是 agent」并上溯到它当前的 primary body。index 为空 = 兑底不可用
+  // （旧 gateway / 还没加载），此时聚类退化为旧行为，绝不因此少显示一张卡。
+  const rosterState = useAgentStore((state) => state.roster);
+  const rosters = useMemo(() => resourceData(rosterState) ?? [], [rosterState]);
+  const attribution = useMemo(() => rosterAttributionIndex(rosters), [rosters]);
 
-  const clusters = useMemo(() => groupPendingAsks(asks), [asks]);
+  const clusters = useMemo(() => groupPendingAsks(asks, attribution), [asks, attribution]);
 
   // 从某个会话的「待批」入口进来时，默认展开那一簇；不做过滤（待批显示总的）。
   const focusKey = useMemo(() => {
     if (sessionId === undefined || sessionId === '') return null;
     const hit = clusters.find(
       (cluster) =>
-        cluster.sessionId === sessionId || asksForSession(cluster.requests, sessionId).length > 0,
+        cluster.homeSessionId === sessionId ||
+        cluster.sessionId === sessionId ||
+        asksForSession(cluster.requests, sessionId, attribution).length > 0,
     );
     return hit?.key ?? null;
-  }, [clusters, sessionId]);
+  }, [clusters, sessionId, attribution]);
 
   const expandedKey = override ?? focusKey;
 

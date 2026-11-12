@@ -14,7 +14,9 @@ import type { AskUserAnswer, PermissionScope } from '../../gateway/types';
 import { t } from '../../i18n';
 import { useRuntimeVisibility } from '../../state/runtime-visibility';
 import { sessionTitle } from '../../state/sessions';
+import { resourceData } from '../../state/useResource';
 import { useAgentStore } from '../../stores/agentStore';
+import { rosterAttributionIndex } from '../pending/attribution';
 import { asksForSession } from '../pending/cluster';
 import { PluginPanels } from '../plugins/PluginPanels';
 import { ChatHeader } from './ChatHeader';
@@ -104,10 +106,17 @@ export function ChatView({
 
   const selectedId = route.sessionId && route.sessionId !== 'new' ? route.sessionId : null;
   const draftActive = route.sessionId === 'new';
-  // 会话分区的「待批」计数：只数本会话（含成员 bridge 的父会话归属）的 ask。
+  // 会话分区的「待批」计数：数「归到本会话」的 ask（含成员 bridge 的父会话归属，
+  // 历史脏数据靠 roster 上溯兑底）。注意它数的是「去待批页能看到几条」，与会话页
+  // Composer 槽位「只渲自己 run 的 ask」那条守卫不是同一个判据。
+  const rosterState = useAgentStore((state) => state.roster);
+  const attribution = useMemo(
+    () => rosterAttributionIndex(resourceData(rosterState) ?? []),
+    [rosterState],
+  );
   const sessionAskCount = useMemo(
-    () => asksForSession(asks, selectedId).length,
-    [asks, selectedId],
+    () => asksForSession(asks, selectedId, attribution).length,
+    [asks, selectedId, attribution],
   );
 
   // 草稿态不再本地造 session id：首次发送由 `runs.start` 解析 main primary body。

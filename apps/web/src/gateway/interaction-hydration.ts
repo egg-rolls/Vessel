@@ -23,6 +23,8 @@ export interface ListedInteraction {
   team_id?: string;
   session_id?: string;
   parent_session_id?: string;
+  /** 成员 bridge 请求的父 agent id（0.51 additive；旧 gateway 不返回）。 */
+  parent_agent_id?: string;
   tool_call_id?: string;
   tool?: string;
   input?: unknown;
@@ -126,6 +128,7 @@ export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnap
         requestedAt: item.created_at,
         ...(sessionId !== undefined ? { sessionId } : {}),
         ...(item.parent_session_id ? { parentSessionId: item.parent_session_id } : {}),
+        ...(item.parent_agent_id ? { parentAgentId: item.parent_agent_id } : {}),
         ...(item.tool_call_id !== undefined && item.tool_call_id.length > 0
           ? { toolCallId: item.tool_call_id }
           : {}),
@@ -143,6 +146,7 @@ export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnap
       requestedAt: item.created_at,
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(item.parent_session_id ? { parentSessionId: item.parent_session_id } : {}),
+      ...(item.parent_agent_id ? { parentAgentId: item.parent_agent_id } : {}),
       // 待批页按 agent 聚类：服务端已经给了 agent_id / team_id，这里不要丢掉，
       // 否则刷新 / 重连后补回的卡片只能退化成按会话聚类。
       ...(item.agent_id !== undefined && item.agent_id.length > 0

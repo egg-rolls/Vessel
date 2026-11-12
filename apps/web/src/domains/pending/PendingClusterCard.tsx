@@ -319,6 +319,15 @@ export function PendingClusterCard({
       : cluster.scope === 'session'
         ? t('pending.cluster.session', { id: shortId(cluster.sessionId ?? '') })
         : t('pending.cluster.run', { id: shortId(cluster.requests[0]?.runId ?? '') });
+  /**
+   * 归属会话（0.51）：成员 bridge 的请求「发起会话」是成员自己的，真正算谁的是父会话。
+   * 只在两者不同（且确实解析出了父会话）时多标一行，避免普通会话的卡片上多一句废话。
+   */
+  const homeSessionId = cluster.homeSessionId;
+  const homeLabel =
+    homeSessionId !== undefined && homeSessionId.length > 0 && homeSessionId !== cluster.sessionId
+      ? shortId(homeSessionId)
+      : undefined;
 
   return (
     <Section
@@ -332,6 +341,11 @@ export function PendingClusterCard({
           <Badge tone={cluster.source === 'team' ? 'info' : 'neutral'}>
             {cluster.source === 'team' ? t('pending.source.team') : t('pending.source.session')}
           </Badge>
+          {homeLabel !== undefined && (
+            <span className="font-mono text-2xs text-faint">
+              {t('pending.cluster.home', { id: homeLabel })}
+            </span>
+          )}
         </span>
       }
       description={formatTimestamp(cluster.latestAt)}

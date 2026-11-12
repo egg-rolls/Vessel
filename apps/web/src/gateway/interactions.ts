@@ -47,6 +47,7 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
     input?: unknown;
     session_id?: unknown;
     parent_session_id?: unknown;
+    parent_agent_id?: unknown;
     tool_call_id?: unknown;
     source?: unknown;
   };
@@ -63,6 +64,9 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
       : {}),
     ...(typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
       ? { parentSessionId: data.parent_session_id }
+      : {}),
+    ...(typeof data.parent_agent_id === 'string' && data.parent_agent_id.length > 0
+      ? { parentAgentId: data.parent_agent_id }
       : {}),
     ...(typeof data.tool_call_id === 'string' && data.tool_call_id.length > 0
       ? { toolCallId: data.tool_call_id }
@@ -89,6 +93,7 @@ export function askFromEvent(event: RunEvent, now = Date.now()): AskUserRequest 
     questions?: unknown;
     session_id?: unknown;
     parent_session_id?: unknown;
+    parent_agent_id?: unknown;
     team_id?: unknown;
     mode?: unknown;
   };
@@ -113,6 +118,9 @@ export function askFromEvent(event: RunEvent, now = Date.now()): AskUserRequest 
       : {}),
     ...(typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
       ? { parentSessionId: data.parent_session_id }
+      : {}),
+    ...(typeof data.parent_agent_id === 'string' && data.parent_agent_id.length > 0
+      ? { parentAgentId: data.parent_agent_id }
       : {}),
     ...(typeof data.team_id === 'string' && data.team_id.length > 0
       ? { teamId: data.team_id }
