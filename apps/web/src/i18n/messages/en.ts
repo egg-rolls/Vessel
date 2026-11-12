@@ -1731,6 +1731,19 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.preview.button.desc':
     'Every variant: plain, primary, danger, dangerGhost, link and chip.',
   'designLab.preview.button.title': 'Button',
+  'designLab.preview.chipTones.desc':
+    'One chip per tone in CHIP_TONES: muted, info, warn, ok, danger and band. A chip tone is still derived from the status, so each one shows the first status that uses it; band is the onBand variant (opaque ground, ink text).',
+  'designLab.preview.chipTones.note':
+    'The glyph never changes between tones — only the ground and the text color do, so color is never the only carrier of meaning.',
+  'designLab.preview.chipTones.onBandTitle': 'band on a colored band',
+  'designLab.preview.chipTones.title': 'StatusChip tones',
+  'designLab.preview.composerIcon.desc':
+    'One shape layer (32px circle, sunken ground, strong border) with both tone slots: primary borrows the accent, quiet stays muted and turns ink on hover; disabled keeps the circle and only greys the icon.',
+  'designLab.preview.composerIcon.disabled': 'disabled',
+  'designLab.preview.composerIcon.note':
+    'Left to right: send plane (16px), paperclip (14px, same ink area), disabled send. Hover the enabled ones to see the hover tone — the box never changes, only the icon color.',
+  'designLab.preview.composerIcon.sampleLabel': 'Sample {tone} icon button',
+  'designLab.preview.composerIcon.title': 'Composer icon button',
   'designLab.preview.confirm.body': 'Sample copy: confirming only closes the dialog.',
   'designLab.preview.confirm.dangerBody':
     'Sample copy: a danger primary button that needs an explicit confirmation.',
@@ -1747,6 +1760,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.preview.dataTable.desc':
     'A 1px gap between rows lets the page background through; the table keeps a small outer radius.',
   'designLab.preview.dataTable.title': 'DataTable',
+  'designLab.preview.entityHeader.desc':
+    'Both size steps side by side: page = 22px serif (the one h1 per screen), panel = 16px sans (a panel heading). Size only changes type, never color; ancestors always stay smaller and dimmer.',
+  'designLab.preview.entityHeader.sampleAction': 'Back',
+  'designLab.preview.entityHeader.sampleDetails': 'Details',
+  'designLab.preview.entityHeader.sampleNode': 'Sample node',
+  'designLab.preview.entityHeader.sampleStatus': 'Archived',
+  'designLab.preview.entityHeader.sampleTitle': 'Sample team',
+  'designLab.preview.entityHeader.title': 'EntityHeader',
   'designLab.preview.env.desc':
     'Environment card: the header carries the scope label (plus a danger note when not applied) and the line count; expand for the raw context lines.',
   'designLab.preview.failure.desc':

@@ -29,13 +29,24 @@ export interface EntityScopeItem {
   onOpen?: () => void;
 }
 
+/**
+ * 尺寸档名：**运行时数组 = 唯一事实源**（类型由它派生）。
+ *
+ * 设计实验室 / 文档 / 示例直接 `map` 这个数组，不再各自手抄一份清单；加一档尺寸 =
+ * 往这里加一个值 + 给下面的 `HEADING_SIZE_CLASS` 加同名键，只加一边编译器立刻报错
+ * （见该常量的 `satisfies`）。
+ */
+export const ENTITY_HEADER_SIZES = ['page', 'panel'] as const;
+
+export type EntityHeaderSize = (typeof ENTITY_HEADER_SIZES)[number];
+
 export interface EntityHeaderProps {
   /** Identity：唯一的名字。禁止传 description / workspace / 错误消息。 */
   title: string;
   /** 页面唯一 h1（默认）/ 面板 h2 / 列表分组 h3。 */
   titleAs?: 'h1' | 'h2' | 'h3';
-  /** page = font-serif text-title(22)；panel = font-sans text-lg(16)。 */
-  size?: 'page' | 'panel';
+  /** page = font-serif text-title(22)；panel = font-sans text-lg(16)。见 `ENTITY_HEADER_SIZES`。 */
+  size?: EntityHeaderSize;
   /** Scope：≤2 项，近→远。空数组 = 顶层实体（node）。 */
   scope?: readonly EntityScopeItem[];
   /** 最近祖先就是「当前节点」→ 渲染降级的「当前」（纯文本，永不用 accent）。 */
@@ -55,12 +66,19 @@ const wrapper = cva(
   'flex min-w-0 items-start justify-between gap-4 max-compact:flex-col max-compact:items-start',
 );
 
+/**
+ * 尺寸档 → class。`satisfies Record<EntityHeaderSize, string>` 把「运行时数组」与
+ * 「cva 的 `size` 键集合」**双向钉住**：数组里有、这里漏写 → 缺属性报错；这里写了、
+ * 数组里没有（往 cva 加了键却忘了进数组）→ 多余属性报错。清单因此不可能静默漂移。
+ */
+const HEADING_SIZE_CLASS = {
+  page: 'font-serif text-title',
+  panel: 'font-sans text-lg',
+} satisfies Record<EntityHeaderSize, string>;
+
 const heading = cva('break-words font-semibold leading-tight tracking-wide text-ink', {
   variants: {
-    size: {
-      page: 'font-serif text-title',
-      panel: 'font-sans text-lg',
-    },
+    size: HEADING_SIZE_CLASS,
   },
   defaultVariants: { size: 'page' },
 });
