@@ -74,6 +74,13 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   'run.cancelled': { tier: 'content', live: true, 承接: 'card', teamLog: 'system' },
   'run.finalize.failed': { tier: 'content', live: true, 承接: 'notice' },
   'user.message': { tier: 'content', live: true, 承接: 'card' },
+  // 「模型这一轮看到的系统消息」（基底 system prompt + Self Card 原文）。
+  // 宗旨：**模型能看到的内容，用户也要能看到** —— 但它不能是常驻正文，所以是
+  // 默认可见 + **默认折叠的一张卡**（`PromptContextCard`，展开是两段原文）。
+  // 登记为 `content` 而不是 `internal` 的理由：它不是「run 内部状态同步」，而是
+  // 「模型这一轮被喂了什么」这一条事实本身；藏进开关后面等于把洞留着。
+  // 体积：同一份系统消息只发一次（hash 去重），每会话通常 1–3 条、单条 1–2 KB。
+  'prompt.system_context': { tier: 'content', live: true, 承接: 'card' },
   'llm.stream.chunk': { tier: 'content', live: true, 承接: 'card' },
   'tool.call.started': { tier: 'content', live: true, 承接: 'card' },
   'tool.call.completed': { tier: 'content', live: true, 承接: 'card' },

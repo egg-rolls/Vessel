@@ -149,6 +149,52 @@ export interface LlmStreamSummaryPayload extends BaseEventPayload {
   ttft_ms?: number;
 }
 
+/**
+ * 系统消息事件 payload（`prompt.system_context`）。
+ *
+ * **存在的理由（宗旨）**：「让模型可以看到的内容，用户也一样应该看到」，只不过用各种
+ * 方法去让其简化（UX、可收缩）。基底 system prompt + Self Card 以前只在
+ * `composeRunSystemPrompt()` 里拼进请求，既不落成消息也不发事件 —— 模型被喂了什么系统
+ * 消息，用户完全看不到。这条事件把那段原文（**模型真正看到的那一份**）落盘并透出。
+ *
+ * 三条口径：
+ * - **不是 `llm.request` 的一部分**：`llm.request` 的落盘副本只留元信息（正文一律裁掉，
+ *   见 `LlmRequestPayload` 与 `run-journal.ts` 的写盘裁剪）。把 prompt 塞回那里等于复活
+ *   55MB/run 的老问题；本事件**每会话只发几次**（hash 去重），单条约 1–2 KB。
+ * - **`hash` 去重**：`sha256(system_prompt + '\0' + self_card)` 的前 16 位。同一份系统
+ *   消息只发一次；工具 / 权限 / limits / 预算 / 模型任一变化都会换 hash ⇒ 再发一条。
+ *   rotate 之后的新 body 是新实例 ⇒ 会重发一次（那本来就是一份新上下文）。
+ * - **正文可派生**：模型看到的 system 消息 = `system_prompt`（有则取）+
+ *   `'\n\n'` + `self_card`（有则取），与 `composeRunSystemPrompt()` 逐字一致。
+ *   两个字段分开存是为了让读侧能分段展示（用户要「系统提示」与「Self Card」两段原文），
+ *   而不是把同一段正文存两遍。
+ *
+ * 它不是内容权威：任何重建 messages 的路径都不读它（system 消息由
+ * `runSystemPrompt` / 会话快照负责），去掉这条事件不影响模型行为。
+ */
+export interface PromptSystemContextPayload extends BaseEventPayload {
+  run_id: string;
+  session_id?: string;
+  /** `system_prompt + self_card` 的稳定摘要（sha256 前 16 位）；同 hash 只发一次。 */
+  hash: string;
+  /** 基底 system prompt 原文（缺省 = 这一层没有基底 system）。 */
+  system_prompt?: string;
+  /** Self Card 原文（≤400 tokens；缺省 = 未注入 Self Card）。 */
+  self_card?: string;
+  /** 这一轮使用的模型 id（读侧折叠态摘要的一格）。 */
+  model?: string;
+  /** 本次请求的消息条数（含 system；与同轮 `llm.request.message_count` 同值）。 */
+  message_count?: number;
+  /** 本次请求的**工具**个数（与同轮 `llm.request.tools_count` 同值）。 */
+  tools_count?: number;
+  /** 上下文窗口的 token 估算（与同轮 `llm.request.estimated_tokens` 同值）。 */
+  estimated_tokens?: number;
+  /** 上下文窗口上限的运行时真值（与同轮 `llm.request.context_max` 同值）。 */
+  context_max?: number;
+  /** 发出时刻（= 事件 `ts`；读侧排序 / 展示用）。 */
+  at: number;
+}
+
 /** 工具调用开始事件 payload */
 export interface ToolCallStartedPayload extends BaseEventPayload {
   run_id: string;
@@ -225,6 +271,7 @@ export type EventPayload =
   | LlmStreamChunkPayload
   | LlmRetryPayload
   | LlmStreamSummaryPayload
+  | PromptSystemContextPayload
   | ToolCallStartedPayload
   | ToolCallCompletedPayload
   | ToolCallFailedPayload

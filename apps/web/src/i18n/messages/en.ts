@@ -1190,6 +1190,18 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.count': '{count} items',
   'chat.env.notApplied': 'not applied',
   'chat.env.moreLines': '{count} more lines not shown',
+  // "Model context" card (prompt.system_context): the system message the model actually
+  // saw this turn. Tenet: what the model can see, the user can see too — just folded
+  // (collapsed by default, expanded shows the raw text).
+  'chat.modelContext.title': 'Model context',
+  'chat.modelContext.aria': 'Model context (the system message this turn saw)',
+  'chat.modelContext.system': 'System prompt',
+  'chat.modelContext.selfCard': 'Self Card',
+  'chat.modelContext.messages': '{count} messages',
+  'chat.modelContext.tools': '{count} tools',
+  'chat.modelContext.tokens': '{count} tokens',
+  'chat.modelContext.hash': 'context {hash}',
+  'chat.modelContext.contextMax': 'window {count}',
   // agent-to-agent message card (the user message an A2A delivery becomes)
   'chat.askAnswer.title': 'Approval answer',
   'chat.askAnswer.aria': 'Answer to a deferred question',

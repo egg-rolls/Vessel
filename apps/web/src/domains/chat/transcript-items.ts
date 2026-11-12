@@ -187,6 +187,89 @@ export interface NoticeItem extends ItemMeta {
   event: RunEvent;
 }
 
+/**
+ * 「模型上下文」卡的数据：`prompt.system_context` 事件的解析结果（**模型真正看到的那份
+ * 系统消息**）。
+ *
+ * 宗旨：**让模型可以看到的内容，用户也一样应该看到**，只不过用各种方法去让其简化
+ * （UX、可收缩）。基底 system prompt + Self Card 以前只在请求组装时拼进 system
+ * prompt，用户完全看不到；这条事件把原文落盘，这张卡把它折叠着摆到时间线上。
+ *
+ * 为什么是独立 item kind 而不是普通 notice 行：用户要的是「默认可见、但默认折叠的一张
+ * 卡」，展开体是**两段原文**（不是 markdown，也不是原始 JSON 载荷）。notice 行承载不了
+ * 这种层级（它的展开体是原始载荷）。
+ *
+ * 历史侧（刷新后）没有对应 message：它是事件，不是消息（`sessions.get.messages` 里
+ * 永远不会有它）。刷新后仍能看到它，靠的是**事件回放时投影出同一个 item** —— 见
+ * `buildLiveItems` 里 `prompt.system_context` 的分支。
+ */
+export interface PromptContextData {
+  /** 系统消息的稳定摘要（sha256 前 16 位）：卡头短号 + 同 hash 去重的依据。 */
+  hash: string;
+  /** 基底 system prompt 原文（缺省 = 这一层没有基底 system）。 */
+  systemPrompt?: string;
+  /** Self Card 原文（≤400 tokens；缺省 = 未注入 Self Card）。 */
+  selfCard?: string;
+  /** 这一轮使用的模型 id。 */
+  model?: string;
+  /** 本次请求的消息条数（含 system）。 */
+  messageCount?: number;
+  /** 本次请求的工具个数。 */
+  toolsCount?: number;
+  /** 上下文窗口的 token 估算。 */
+  estimatedTokens?: number;
+  /** 上下文窗口上限（运行时真值）。 */
+  contextMax?: number;
+}
+
+/** 「模型上下文」卡 item：`prompt:<事件 key>`（key 稳定锚在事件 seq 上）。 */
+export interface PromptContextItem extends ItemMeta, PromptContextData {
+  kind: 'prompt-context';
+  /** live 侧来自哪个 run（这张卡按 run 归属；历史没有它，因为它不是消息）。 */
+  runId: string;
+}
+
+/**
+ * `prompt.system_context` → 卡片数据（**宽松解析**）。
+ *
+ * 载荷不成形（旧日志 / 第三方改写 / 缺 hash、或两段原文都没有）时返回 `undefined`，
+ * 调用方退回普通 notice 行 —— 宁可少一张卡，也不吞掉这条事件、更不猜内容。
+ * 不在这里做长度截断：原文就是模型看到的原文，截断等于改事实（渲染侧负责滚动）。
+ */
+export function promptContextOfEvent(event: RunEvent): PromptContextData | undefined {
+  if (event.type !== 'prompt.system_context') return undefined;
+  const data = event.data as Record<string, unknown> | null | undefined;
+  if (data === null || typeof data !== 'object') return undefined;
+  const hash = data.hash;
+  if (typeof hash !== 'string' || hash.length === 0) return undefined;
+  const rawSystem = data.system_prompt;
+  const rawCard = data.self_card;
+  const systemPrompt =
+    typeof rawSystem === 'string' && rawSystem.length > 0 ? rawSystem : undefined;
+  const selfCard = typeof rawCard === 'string' && rawCard.length > 0 ? rawCard : undefined;
+  // 两段原文都没有 = 没有可展示的内容（只有 hash 的卡是空壳，不给用户看）。
+  if (systemPrompt === undefined && selfCard === undefined) return undefined;
+  const num = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? Math.floor(value)
+      : undefined;
+  const model = data.model;
+  const messageCount = num(data.message_count);
+  const toolsCount = num(data.tools_count);
+  const estimatedTokens = num(data.estimated_tokens);
+  const contextMax = num(data.context_max);
+  return {
+    hash,
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    ...(selfCard !== undefined ? { selfCard } : {}),
+    ...(typeof model === 'string' && model.length > 0 ? { model } : {}),
+    ...(messageCount !== undefined ? { messageCount } : {}),
+    ...(toolsCount !== undefined ? { toolsCount } : {}),
+    ...(estimatedTokens !== undefined ? { estimatedTokens } : {}),
+    ...(contextMax !== undefined ? { contextMax } : {}),
+  };
+}
+
 /** 失败卡的数据来源：事件流（`run.failed` 还在缓冲里）或会话记录快照（`sessions.get`）。 */
 export type RunFailureSource = 'event' | 'session';
 
@@ -229,6 +312,7 @@ export type TranscriptItem =
   | RunReasoningItem
   | ToolItem
   | NoticeItem
+  | PromptContextItem
   | RunFailureItem;
 
 /**
@@ -819,6 +903,27 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           ...seqMeta,
         });
         continue;
+      }
+      // `prompt.system_context`：「模型这一轮看到了什么系统消息」的专用卡（默认折叠）。
+      // 这是**唯一**把该事件变成一张卡的地方 —— live 与回放（含刷新后的订阅回填）都走
+      // 这条 `buildLiveItems`，所以两路出的是同一个 item、同一个 key。
+      // 载荷不成形（旧日志 / 第三方改写）时退回普通 notice 行：宁可少一张卡，不吞事件。
+      if (item.event.type === 'prompt.system_context') {
+        const prompt = promptContextOfEvent(item.event);
+        if (prompt !== undefined) {
+          const promptTs = itemTs(item.event.ts);
+          items.push({
+            kind: 'prompt-context',
+            // key 锚事件 seq（`item.key` = `ev-<seq>` / `notice-<seq>`）：回放重放同一事件
+            // 不会换 key，卡片不重挂、动画不重播。
+            key: `prompt:${item.key}`,
+            runId: group.runId,
+            ...prompt,
+            ...(promptTs !== undefined ? { ts: promptTs } : {}),
+            ...seqMeta,
+          });
+          continue;
+        }
       }
       // notice / 原始事件：逐条一个 item，不参与分组。
       items.push({

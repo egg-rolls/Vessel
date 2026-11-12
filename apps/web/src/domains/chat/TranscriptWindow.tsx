@@ -16,7 +16,13 @@ import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
-import { AssistantText, RunFailureCard, ThinkingHint, UserBubble } from './StreamItems';
+import {
+  AssistantText,
+  PromptContextCard,
+  RunFailureCard,
+  ThinkingHint,
+  UserBubble,
+} from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
 import { ToolCard } from './ToolCard';
 import { Transcript } from './Transcript';
@@ -448,6 +454,17 @@ export function TranscriptWindow({
         );
       case 'notice':
         return <NoticeRow event={item.event} defaultOpen={cardsDefaultOpen} />;
+      case 'prompt-context':
+        // 「模型上下文」卡：模型这一轮真正看到的系统消息（基底 system prompt + Self Card）。
+        // 默认折叠（用户口径：默认可见但折叠），展开是两段原文；卡语言与 EnvCard 一致
+        // （见 StreamItems.tsx 的 PromptContextCard 头注释）。
+        return (
+          <PromptContextCard
+            context={item}
+            defaultOpen={cardsDefaultOpen}
+            entering={isEntering(item.key)}
+          />
+        );
       case 'run-failure':
         // 失败卡：文案 / 数据在 RunFailureCard（与子 agent transcript 共用同一组件）。
         return <RunFailureCard failure={item} defaultOpen={cardsDefaultOpen} />;

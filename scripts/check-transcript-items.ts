@@ -891,6 +891,87 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
+    name: 'F-P1 prompt.system_context → 一张 prompt-context 卡（不是原始 notice 行）',
+    why: '「模型这一轮看到了什么系统消息」必须是可折叠的专用卡：退回 notice 行等于把原文塞进原始载荷里',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'r1',
+            items: [
+              {
+                kind: 'event',
+                key: 'ev-7',
+                anchorSeq: 7,
+                event: {
+                  type: 'prompt.system_context',
+                  run_id: 'r1',
+                  ts: 1500,
+                  data: {
+                    hash: 'deadbeefdeadbeef',
+                    system_prompt: 'BASE SYSTEM',
+                    self_card: '[Self Card]\nrole: r1',
+                    model: 'test-model',
+                    message_count: 3,
+                    tools_count: 2,
+                    estimated_tokens: 1200,
+                  },
+                },
+              },
+            ],
+          }),
+        ],
+      });
+      const cards = items.filter((item) => item.kind === 'prompt-context');
+      const card = cards[0];
+      return (
+        cards.length === 1 &&
+        card !== undefined &&
+        // key 锚事件 seq（回放重放同一事件不换 key，卡片不重挂）。
+        card.key === 'prompt:ev-7' &&
+        card.runId === 'r1' &&
+        card.hash === 'deadbeefdeadbeef' &&
+        card.systemPrompt === 'BASE SYSTEM' &&
+        card.selfCard?.includes('Self Card') === true &&
+        card.messageCount === 3 &&
+        card.toolsCount === 2 &&
+        card.estimatedTokens === 1200 &&
+        // 不得同时落一条普通 notice 行（同一事件两条就是双出）。
+        count(items, 'notice') === 0
+      );
+    },
+  },
+  {
+    name: 'F-P2 prompt.system_context 载荷不成形 → 退回 notice 行（不吞事件）',
+    why: '旧日志 / 第三方改写的载荷没有 hash 或没有原文：宁可少一张卡，也不吞掉事件、更不猜内容',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [],
+        messageIndexOffset: 0,
+        liveGroups: [
+          group({
+            runId: 'r1',
+            items: [
+              {
+                kind: 'event',
+                key: 'ev-8',
+                event: {
+                  type: 'prompt.system_context',
+                  run_id: 'r1',
+                  ts: 1600,
+                  data: { run_id: 'r1' },
+                },
+              },
+            ],
+          }),
+        ],
+      });
+      return count(items, 'prompt-context') === 0 && count(items, 'notice') === 1;
+    },
+  },
+  {
     name: 'F11b 用户自己发的 [inbox] 开头的文本仍是普通消息',
     why: '按正文前缀猜会吞掉用户输入：这是刻意不做文本启发式的反向保护',
     check: () => {

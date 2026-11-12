@@ -3,7 +3,7 @@
  * @module @vessel-agent/core/runtime
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { estimateTokens } from '../context/index.js';
 import {
   evaluateLimitWarnings,
@@ -342,6 +342,31 @@ function formatSelfCard(card: SelfCardOptions): string {
 }
 
 /**
+ * 系统消息的稳定摘要（`prompt.system_context.hash`）：sha256 前 16 位。
+ *
+ * 覆盖两段原文（`system_prompt` + `self_card`），用 `\u0000` 分隔避免拼接歧义
+ * （`a` + `bc` 与 `ab` + `c` 必须是两个 hash）。16 位十六进制＝64 bit：会话级去重足够，
+ * 且短到能当卡头上的短号显示。
+ */
+function systemContextHash(system: string, selfCard: string): string {
+  return createHash('sha256').update(`${system}\u0000${selfCard}`).digest('hex').slice(0, 16);
+}
+
+/**
+ * `prompt.system_context` 需要的、只在这一刻才知道的请求侧事实。
+ *
+ * 不复用 `LlmRequestPayload`：那个形状的落盘副本是「刚才发了什么元信息」，
+ * 这里要的是「这份系统消息对应的是哪次请求」（条数 / 工具 / 估算 token / 窗口上限），
+ * 读侧拿它拼折叠态摘要。
+ */
+interface SystemContextRequestFacts {
+  messageCount: number;
+  toolsCount: number;
+  estimatedTokens?: number;
+  contextMax?: number;
+}
+
+/**
  * Execution Unit
  * 核心运行时，实现 tool-calling loop。
  * 协调 provider/context/events/limits/termination/session + 三个编排器（权限/guardrail/hook），
@@ -367,6 +392,13 @@ export class ExecutionUnit {
   private contextPressureHint?: string;
   /** 0.15 E9：本次 run 的 systemPrompt（含 Self Card）；run 结束后清空 */
   private runSystemPrompt?: string;
+  /**
+   * 上一份发出去的 `prompt.system_context`（hash 去重）。
+   *
+   * 按 `sessionId` 记：同一个 EU 可能给多个会话干活（session_switch），换会话就是另一份
+   * 落盘；只有「同一会话、同一份系统消息」才不再重发。首个 run 必发（初始 undefined）。
+   */
+  private lastSystemContext?: { sessionId: string; hash: string };
   /** 0.15 E2：本 run 已预警的 limit key（每个 key 只发一次） */
   private readonly warnedLimitKeys = new Set<string>();
   /** 0.16 E5：本 run 已注入的消息稳定键 / 对象引用（BeforeLlm 去重） */
@@ -1698,6 +1730,17 @@ export class ExecutionUnit {
           ? Math.floor(rawContextMax)
           : undefined;
 
+      // 「模型这一轮看到的系统消息」（基底 system prompt + Self Card）紧贴着请求落一条
+      // 独立事件：`composeRunSystemPrompt()` 已在 run 开始时拼好，这里有 `messages` /
+      // `tools` 的最终条数，正是折叠态摘要要的那几个数。同 hash 只发一次（见
+      // `publishSystemContext`），绝不把 prompt 塞进 `llm.request`。
+      this.publishSystemContext(execution, {
+        messageCount: messages.length,
+        toolsCount: args.tools.length,
+        estimatedTokens: execution.workingContext.tokenCount,
+        ...(contextMax !== undefined ? { contextMax } : {}),
+      });
+
       // 发布 LLM 请求事件（事件里剔除 reasoning_content，避免思维链泄漏到 TUI/观测）。
       //
       // 落盘副本（`persistData`）只留元信息：`messages` / `tools` 正文永远不落。
@@ -2221,8 +2264,69 @@ export class ExecutionUnit {
   /** 0.15 E9：本次 run 的 systemPrompt（含 Self Card）；缺省与 this.systemPrompt 相同 */
   private composeRunSystemPrompt(): string | undefined {
     if (!this.selfCard) return this.systemPrompt;
-    const card = formatSelfCard(this.selfCard);
-    return this.systemPrompt ? `${this.systemPrompt}\n\n${card}` : card;
+    const { system, selfCard } = this.systemParts();
+    return system.length > 0 ? `${system}\n\n${selfCard}` : selfCard;
+  }
+
+  /**
+   * 系统消息的两段原文：基底 system prompt + Self Card。
+   *
+   * `composeRunSystemPrompt()` 与 `prompt.system_context` 事件共用这一份口径，所以
+   * 「模型看到的那段 system」与「事件里落的那两段」永远同源：模型看到的就是
+   * `system` + `'\n\n'` + `selfCard`（有哪段拼哪段）。
+   */
+  private systemParts(): { system: string; selfCard: string } {
+    return {
+      system: this.systemPrompt ?? '',
+      selfCard: this.selfCard ? formatSelfCard(this.selfCard) : '',
+    };
+  }
+
+  /**
+   * 把「模型这一轮看到的系统消息」落成一条事件（`prompt.system_context`）。
+   *
+   * **宗旨**：让模型可以看到的内容，用户也一样应该看到，只不过用各种方法去让其简化
+   * （UX、可收缩）。基底 system prompt + Self Card 以前只在 `composeRunSystemPrompt()`
+   * 里拼进请求 —— 不落消息、不发事件，用户永远看不到模型被喂了什么系统消息。这条事件
+   * 补的就是这个洞。
+   *
+   * 口径：
+   * - **同 hash 只发一次**，在 `composeRunSystemPrompt()` 之后、`llm.request` 之前发；
+   *   hash 覆盖两段原文（工具 / 权限 / limits / 预算 / 模型任一变化都会换 hash）。
+   *   去重键带 `sessionId`：同一个 EU 可能给多个会话干活（session_switch），换会话就是
+   *   另一份落盘（不换会话的连续多轮才去重）。
+   * - **独立事件**，绝不塞进 `llm.request`（那里的落盘副本只留元信息，塞回去就是复活
+   *   55MB/run 的老问题）。每会话通常只发 1–3 次，单条约 1–2 KB。
+   * - 没有任何系统消息（无基底 system 也无 Self Card）时不发：没有内容可给用户看。
+   */
+  private publishSystemContext(execution: Run, request: SystemContextRequestFacts): void {
+    const { system, selfCard } = this.systemParts();
+    if (system.length === 0 && selfCard.length === 0) return;
+    const hash = systemContextHash(system, selfCard);
+    const last = this.lastSystemContext;
+    if (last !== undefined && last.sessionId === execution.sessionId && last.hash === hash) return;
+    this.lastSystemContext = { sessionId: execution.sessionId, hash };
+    const at = Date.now();
+    this.publishEvent({
+      type: 'prompt.system_context',
+      run_id: execution.runId,
+      data: {
+        run_id: execution.runId,
+        session_id: execution.sessionId,
+        hash,
+        ...(system.length > 0 ? { system_prompt: system } : {}),
+        ...(selfCard.length > 0 ? { self_card: selfCard } : {}),
+        model: this.model,
+        message_count: request.messageCount,
+        tools_count: request.toolsCount,
+        ...(request.estimatedTokens !== undefined
+          ? { estimated_tokens: request.estimatedTokens }
+          : {}),
+        ...(request.contextMax !== undefined ? { context_max: request.contextMax } : {}),
+        at,
+      },
+      ts: at,
+    });
   }
 
   /**
