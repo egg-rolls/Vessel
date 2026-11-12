@@ -262,6 +262,20 @@ const FIXTURES: readonly Fixture[] = [
       const events = eventsOf(
         [
           ['run.started', { input: '帮我跑一下 tsc' }],
+          // 「模型上下文」卡（`prompt.system_context`）：增量折叠与全量重建都必须出同一个
+          // item、同一个 key（key 锚事件 seq）—— 刷新后的回放靠这条路径。
+          [
+            'prompt.system_context',
+            {
+              hash: '0123456789abcdef',
+              system_prompt: 'BASE SYSTEM',
+              self_card: '[Self Card]\nrole: r-a',
+              model: 'test-model',
+              message_count: 2,
+              tools_count: 1,
+              estimated_tokens: 1200,
+            },
+          ],
           text('第一段'),
           text('继续'),
           reasoning('先看类型'),

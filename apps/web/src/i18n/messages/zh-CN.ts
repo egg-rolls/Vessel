@@ -1143,6 +1143,17 @@ export const messages = {
   'chat.env.count': '{count} 条',
   'chat.env.notApplied': '未生效',
   'chat.env.moreLines': '还有 {count} 行未显示',
+  // 「模型上下文」卡（prompt.system_context）：模型这一轮真正看到的系统消息。
+  // 宗旨：模型能看到的内容，用户也要能看到 —— 只是折叠起来（默认折叠，展开是原文）。
+  'chat.modelContext.title': '模型上下文',
+  'chat.modelContext.aria': '模型上下文（模型这一轮看到的系统消息）',
+  'chat.modelContext.system': 'System prompt',
+  'chat.modelContext.selfCard': 'Self Card',
+  'chat.modelContext.messages': '{count} 条消息',
+  'chat.modelContext.tools': '{count} 个工具',
+  'chat.modelContext.tokens': '{count} tokens',
+  'chat.modelContext.hash': '上下文 {hash}',
+  'chat.modelContext.contextMax': '窗口 {count}',
   // agent→agent 消息卡（A2A 投递进来的那条 user 消息）
   'chat.askAnswer.title': '待批答复',
   'chat.askAnswer.aria': '待批答复（异步提问的回答）',

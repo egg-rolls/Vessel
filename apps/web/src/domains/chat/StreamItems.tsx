@@ -26,7 +26,7 @@ import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
 import { ToolCard } from './ToolCard';
 import { foldToolItems } from './tool-cards';
-import { type RunFailure, runFailureOfGroup } from './transcript-items';
+import { type PromptContextItem, type RunFailure, runFailureOfGroup } from './transcript-items';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -290,6 +290,116 @@ export function RunFailureCard({
       {body}
     </StreamCard>
   );
+}
+
+/**
+ * 「模型上下文」卡（`prompt.system_context`）：**模型这一轮真正看到的系统消息**。
+ *
+ * 宗旨（设计出发点）：**让模型可以看到的内容，用户也一样应该看到**，只不过用各种方法
+ * 去让其简化（UX、可收缩）。以前基底 system prompt + Self Card 只在请求组装时拼进
+ * system prompt，用户一点都看不到；现在它落成一条事件，这张卡把原文摆到时间线上 ——
+ * **默认折叠**，展开是原文。
+ *
+ * 与 `EnvCard` / 失败卡同一张卡（`StreamCard`）、同一套卡语言，不自造卡头：
+ * - 卡头 title 槽 = 一个 mono / text-2xs / tracking-wider / text-accent 的 scope 标签
+ *   （与 `EnvCard` 的 scope 标签、agent 卡的「来自 agent X」逐字同一组 class）；
+ * - 卡头 meta 槽 = **hash 短号**（`#a1b2c3d4`，hover 给完整 16 位；与失败卡的 run id
+ *   同一个位置、同一种 mono/tabular 小字）；
+ * - 折叠态 summary = 单行 ellipsis 的摘要：模型 · 消息数 · 工具数 · 估算 token
+ *   （`.event-block-preview` 负责截断，长模型名不会把卡头撑宽）；
+ * - 展开体 = **两段原文**（system prompt / Self Card），各用一个 `<pre>`：不渲染
+ *   markdown（原文就是事实），自带最大高度与滚动（复用失败卡的原文块 `.run-error-body`
+ *   —— 本单不动 `styles/**`，不新造 class）；
+ * - 可展开性只由「有没有展开体」决定（`StreamCard` 的口径）：两段原文都在时才有 children，
+ *   键盘可达（原生 `<details>` + summary，Enter / Space）。
+ *
+ * 数据来源只有一个：事件流（live + 回放投影，见 `transcript-items.ts` 的
+ * `promptContextOfEvent`）。它不是 message，所以刷新后的可见性靠事件回放而不是
+ * `sessions.get.messages`。
+ */
+export function PromptContextCard({
+  context,
+  defaultOpen = false,
+  entering = false,
+}: {
+  /** `transcript-items.ts` 解析出的卡片数据（含两段原文）。 */
+  context: PromptContextItem;
+  /** 默认展开（ui.expandCards || verbosity === 'debug'）；用户手动开合优先。 */
+  defaultOpen?: boolean;
+  /** 本帧才追加进来的项：入场只播一次（判定见 `TranscriptWindow.tsx`）。 */
+  entering?: boolean;
+}) {
+  const clock = formatClock(context.ts);
+  const parts = [
+    context.model,
+    context.messageCount !== undefined
+      ? t('chat.modelContext.messages', { count: context.messageCount })
+      : undefined,
+    context.toolsCount !== undefined
+      ? t('chat.modelContext.tools', { count: context.toolsCount })
+      : undefined,
+    context.estimatedTokens !== undefined
+      ? t('chat.modelContext.tokens', { count: compactTokens(context.estimatedTokens) })
+      : undefined,
+  ].filter((part): part is string => part !== undefined && part.length > 0);
+  return (
+    <StreamCard
+      className="prompt-context-card w-full min-w-0 max-w-full"
+      ariaLabel={t('chat.modelContext.aria')}
+      defaultOpen={defaultOpen}
+      entering={entering}
+      title={
+        // 与 EnvCard 的 scope 标签逐字同一组 class（mono / 2xs / tracking / accent）。
+        <span className="max-w-56 truncate font-mono text-2xs tracking-wider text-accent">
+          {t('chat.modelContext.title')}
+        </span>
+      }
+      meta={<span title={context.hash}>{`#${context.hash.slice(0, 8)}`}</span>}
+      summary={parts.join(' · ')}
+    >
+      <div className="mb-1 flex flex-wrap items-baseline gap-x-2 font-mono text-2xs text-faint">
+        {clock !== '' && (
+          <time
+            className="shrink-0 tabular-nums"
+            dateTime={new Date(context.ts ?? 0).toISOString()}
+          >
+            {clock}
+          </time>
+        )}
+        {/* hash 全文放在展开体里：折叠态的短号只够认「还是不是同一份」。 */}
+        <span className="shrink-0 tabular-nums" title={context.hash}>
+          {t('chat.modelContext.hash', { hash: context.hash })}
+        </span>
+        {context.contextMax !== undefined && (
+          <span className="shrink-0 tabular-nums">
+            {t('chat.modelContext.contextMax', { count: compactTokens(context.contextMax) })}
+          </span>
+        )}
+      </div>
+      {context.systemPrompt !== undefined && (
+        <>
+          <div className="event-raw-label">{t('chat.modelContext.system')}</div>
+          <pre className="run-error-body">{context.systemPrompt}</pre>
+        </>
+      )}
+      {context.selfCard !== undefined && (
+        <>
+          <div className="event-raw-label">{t('chat.modelContext.selfCard')}</div>
+          <pre className="run-error-body">{context.selfCard}</pre>
+        </>
+      )}
+    </StreamCard>
+  );
+}
+
+/**
+ * token 数的紧凑写法（`1.2k` / `850`）：折叠态摘要只有一行，五位以上的整数会把
+ * 模型名和工具数挤出去。不引入新的 format 模块：整个 web 只有这一处需要它。
+ */
+function compactTokens(value: number): string {
+  if (value < 1000) return String(Math.round(value));
+  const thousands = value / 1000;
+  return `${thousands >= 100 ? Math.round(thousands) : Math.round(thousands * 10) / 10}k`;
 }
 
 /**

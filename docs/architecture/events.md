@@ -40,6 +40,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `guardrail.error` | `{ run_id, guardrail_name, stage, error }` | guardrail-runner（0.8：`check()` 抛错，随后按 `guardrail_error` blocked） |
 | `hook.failed` / `hook.error` | `{ hook_name, hook_type, run_id, duration_ms, error }` | hook-runner（0.8：单 hook 抛错后继续后续 hook） |
 | `context.changed` | `{ run_id, message, message_count, token_count }` | execution-unit |
+| `prompt.system_context` | `PromptSystemContextPayload`（模型这一轮看到的系统消息原文；同 hash 只发一次） | execution-unit |
 | `run.completed` | `RunCompletedPayload` | execution-unit |
 | `run.failed` | `RunFailedPayload` | execution-unit |
 | `run.cancelled` | `RunCancelledPayload` | execution-unit（0.5：仅显式用户取消；Host 中断仍发 `run.failed`） |
@@ -108,6 +109,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `run.cancelled` | content | card | system | live |
 | `run.finalize.failed` | content | notice | none | live |
 | `user.message` | content | card | none | live |
+| `prompt.system_context` | content | card | none | live |
 | `llm.stream.chunk` | content | card | none | live |
 | `tool.call.started` | content | card | none | live |
 | `tool.call.completed` | content | card | none | live |
