@@ -1387,10 +1387,14 @@ export class MemberExecutionHost implements MemberExecutionPort {
    *
    * 两条路径，都是真实注册路径的结果：
    * - **live**（有活身体）：直接读那具 body 自己的 `MemoryPluginHost`。工具热刷新、
-   *   `disableInbox`、`inboxState` 之类只在运行期发生的事都会被如实反映 —— **实取值**。
-   * - **derived**（当前没有活身体）：调 `buildSurface` —— 与 `spawn` 里注册进新宿主
-   *   的是**同一个函数**，所以返回的就是「一具新身体此刻会拿到什么」。不 spawn、不占
-   *   单 body 名额、不留任何副作用 —— **推导值**。
+   *   `disableInbox`、`inboxState` 之类只在运行期发生的事都会被如实反映 —— 这是**实取值**，
+   *   不是按配置重新算一遍。
+   * - **derived**（当前没有活身体）：**推导值** —— 调用 `buildSurface`，也就是 `spawn`
+   *   注册进新宿主用的**同一个函数**（同一个 `effectivePermissionMode` 判定、同一份
+   *   `selectTools(mode)` + `restrictPermissions`、同一个 inbox 工具判定）。所以它答出
+   *   的就是「一具新身体此刻会拿到什么」；唯一差别是这里不建 body —— 不 spawn、不占
+   *   `maxLiveBodies` 名额、不留任何副作用。想让推导值与实取值保持一致，唯一的办法就是
+   *   两边共用 `buildSurface`：谁都不许另写一份工具清单/筛选规则。
    *
    * 调用方（serve）把 `surface` 字段原样透出；不传 `agent_id` 的节点口径不受影响。
    */
@@ -1422,8 +1426,12 @@ export class MemberExecutionHost implements MemberExecutionPort {
    * 成员应有的工具面（**唯一一份规格**）。
    *
    * spawn、工具热刷新、`tools.list{agent_id}` 的推导路径都调这里：谁都不许再写一份
-   * 「成员有哪些工具」。`injected` 是其中不来自父宿主的名字（当前只有 `inbox`），
-   * 用来给 wire 条目标 `source`，不靠工具名去猜。
+   * 「成员有哪些工具」——推导值（无身体）之所以能代表「新身体会拿到的」，靠的就是
+   * 这里与 spawn 是同一个函数，不是两段长得像的代码。
+   *
+   * 内容 = `effectivePermissionMode`（或调用方钉死的 mode）+ `selectTools(mode)` +
+   * `restrictPermissions` + inbox 工具判定；`injected` 记录其中不来自父宿主的名字
+   * （当前只有 `inbox`），用来给 wire 条目标 `source`，不靠工具名去猜。
    *
    * `injectInbox` 缺省按「这台内核此刻是否 attach 了收件箱」；工具热刷新要沿用**该 body
    * 建成时**的判定（`entry.inboxState`），所以可以显式覆盖。

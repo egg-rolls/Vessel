@@ -95,8 +95,9 @@ export interface ConfigMethodsDeps {
   pluginHost(): PluginHost | undefined;
   /**
    * 0.51（additive）：成员工具面的解析口（app 注入 `AgentControlLike`）。
-   * 缺省 / 适配器没实现 `toolSurface` ⇒ `tools.list{agent_id}` 回 `not_supported`，
-   * 不传 `agent_id` 的节点口径完全不受影响。
+   * 缺省 / 适配器没实现 `toolSurface` ⇒ `tools.list{agent_id}` **退化成今天的节点插件面**
+   * （响应没有 `surface` / `source`，客户端据此不当成员快照）；不传 `agent_id` 的口径
+   * 在任何情况下都不受影响。
    */
   agent?: AgentControlLike;
   /** health.get 的实时状态。 */
@@ -414,12 +415,13 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
         if (agentId === undefined) return toolsPayload();
         // 数据只有一个来源：执行内核的真实注册路径（经 `opts.agent` 透传）。serve
         // 不自己拼工具清单，否则就成了第二份会腐烂的规格。
-        const resolve = deps.agent?.toolSurface;
-        if (resolve === undefined) {
-          throw new RpcError('not_supported', 'Member tool surface is not available');
-        }
-        const surface = await resolve.call(deps.agent, agentId);
-        // 未知成员 / 老执行内核答不出工具面：not_found，绝不静默返回空列表。
+        const agent = deps.agent;
+        const resolve = agent?.toolSurface;
+        // 没有这个透传（老装配 / agent 关闭）⇒ **退化成今天的节点口径**：响应里没有
+        // `surface` / `source`，客户端据此知道「这不是成员快照」，既不 500，也不假装答得出。
+        if (agent === undefined || resolve === undefined) return toolsPayload();
+        const surface = await resolve.call(agent, agentId);
+        // 有透传但这个 id 答不出工具面（未知成员 / 老执行内核）：not_found，绝不静默返回空列表。
         if (surface === undefined) {
           throw new RpcError('not_found', `Agent not found: ${agentId}`, { agent_id: agentId });
         }

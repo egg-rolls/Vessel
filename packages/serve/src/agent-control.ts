@@ -367,10 +367,12 @@ export interface AgentControlLike {
    */
   recall?(input: AgentRecallLikeInput): AgentRecallLikeResult | Promise<AgentRecallLikeResult>;
   /**
-   * 0.51：该成员的**真实**工具面（`tools.list{agent_id}` 的唯一数据源）。
+   * 0.51（可选）：该成员的**真实**工具面（`tools.list{agent_id}` 的唯一数据源）。
    *
-   * 可选：老适配器 / 老注入没有它时，`tools.list{agent_id}` 退化成 `not_supported`，
-   * 不传 `agent_id` 的节点口径不受任何影响。未知成员返回 `undefined`（RPC 报 `not_found`）。
+   * **可选**是硬口径：老适配器 / 老注入没有它时，`tools.list{agent_id}` 退化成今天的
+   * 节点插件面（响应没有 `surface` / `source`），谁都不会因此炸；不传 `agent_id` 的口径
+   * 在任何情况下不受影响。有透传但答不出（未知成员 / 老执行内核）返回 `undefined`
+   * ⇒ RPC 报 `not_found`，不静默给空列表。
    * 数据来自执行内核的真实注册路径 —— 这里只透传，不自己拼工具清单。
    */
   toolSurface?(
