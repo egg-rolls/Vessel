@@ -5,7 +5,8 @@
  * - roster 由 Agent 记录派生（`team_id` + `membership`），不单独持久化；
  * - 只追加团队日志；无 `@` 的 post 绝不 dispatch（结构性保证零 run）；
  * - `@` 使用结构化 agent id，先写日志再并行 dispatch，逐条返回结果；
- * - 订阅 `agent.spawned/rejoined/closed/rotated` 写系统消息（只写日志）；
+ * - 订阅 `agent.spawned/rejoined/closed/forked` 写系统消息（只写日志）；
+ *   0.51 起不再订阅 `agent.rotated`（该事件从未发出，`rotate` 系统行因此从未写过）。
  * - 0.27：另从可注入的 `EventStream` 订阅 `run.*` 终态写 reply / 失败日志。
  *
  * 依赖边界：只依赖 `AgentService` 与 `TeamStore` 接口，不 import team-store.ts。
@@ -77,7 +78,6 @@ const SYSTEM_CONTENT: Record<TeamSystemEvent, string> = {
   join: 'agent joined team',
   leave: 'agent left team',
   archive: 'agent archived',
-  rotate: 'agent rotated body',
   budget_override: 'budget limit overridden',
   create: 'agent created',
   // 旧日志只读；新代码不再写 `system_event:'fork'`。
@@ -1618,8 +1618,6 @@ export class DefaultTeamService implements AgentTeamService {
         return 'join';
       case 'agent.closed':
         return this.archiveInFlight.has(event.agent_id) ? 'archive' : 'leave';
-      case 'agent.rotated':
-        return 'rotate';
       // 旧日志只读；新代码不再写 `agent.forked`。
       case 'agent.forked':
         return 'fork';

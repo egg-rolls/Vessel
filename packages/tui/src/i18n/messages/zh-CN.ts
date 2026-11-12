@@ -164,8 +164,6 @@ export const zhCN = {
   'item.budgetUnlimited': '不限',
   'item.compacted': '上下文压缩 · 移除 {removed} · 剩余 {remaining} · {reason}',
   'item.contextPressure': '上下文水位 {percent}% · {used}/{max}',
-  'item.rotating': '上下文切换中 · {from} → {to}',
-  'item.rotated': '上下文已切换 · {from} → {to} · epoch {epoch}',
   'item.restarting': '上下文重启中 · {session} · epoch {from} → {epoch}',
   'item.restarted': '上下文已重启 · {session} · epoch {from} → {epoch}',
   'item.compactForked': '上下文已压缩分叉 · {from} → {to} · epoch {epoch}',

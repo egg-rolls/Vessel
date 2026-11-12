@@ -569,8 +569,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.system.join': '{name} joined the Team',
   'team.system.leave': '{name} left the Team',
   'team.system.archive': 'The Team was archived',
-  'team.system.rotate': '{name} started a new session',
-  'team.system.rotateFailed': '{name} failed to start a new session',
   'team.system.create': '{name} created a new session',
   // Legacy log only: 0.39 writes `create`, never `fork`.
   'team.system.fork': 'agent forked (legacy record)',
@@ -1160,8 +1158,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.notice.contextCompacted':
     'context compacted · removed {removed} · remaining {remaining} · {reason}',
   'chat.notice.limitWarning': 'limit warning · {key} {current}/{max}',
-  'chat.notice.rotating': 'context rotating · {from} → {to}',
-  'chat.notice.rotated': 'context rotated · {from} → {to} · epoch {epoch}',
   'chat.notice.restarting': 'context restarting · {session} · epoch {from} → {epoch}',
   'chat.notice.restarted': 'context restarted · {session} · epoch {from} → {epoch}',
   'chat.notice.compactForked': 'context compact-forked · {from} → {to} · epoch {epoch}',

@@ -10,7 +10,6 @@ import { t } from '../../i18n';
 import {
   applyTeamEvent,
   createTeamEventState,
-  latestRotateFailure,
   mergeEarlierTeamPage,
   mergeMessages,
   sortMessages,
@@ -362,9 +361,6 @@ export function useTeamChat({
     return member ? memberDisplayName(member) : shortAgentId(agentId);
   };
 
-  // rotate 失败不写 Team 日志；用事件派生一条错误灰条，成功后自动消失。
-  const rotateFailure = useMemo(() => latestRotateFailure(events, teamId), [events, teamId]);
-
   const rows = useMemo(() => buildTeamRows(messages, sends, teamId), [messages, sends, teamId]);
 
   const memberTotal = team?.member_count ?? members.length;
@@ -560,7 +556,6 @@ export function useTeamChat({
     detail,
     error,
     firstLoading,
-    rotateFailure,
     rows,
     resolveMember,
     agentLabel,

@@ -79,9 +79,10 @@ export interface TeamMessage {
   kind: 'post' | 'mention' | 'system' | 'reply';
   /**
    * 0.38：`retract` 为 append-only tombstone，目标是 `retracted_message_id`。
-   * 0.39：新写 `create`；旧日志的 `fork` / `rotate` 只读渲染。
+   * 0.39：新写 `create`；旧日志的 `fork` 只读渲染。
+   * 0.51：删掉 `rotate` —— 对应的 `agent.rotated` 从未发出过，这个值一行都没被写过。
    */
-  system_event?: 'join' | 'leave' | 'rotate' | 'archive' | 'create' | 'fork' | 'retract';
+  system_event?: 'join' | 'leave' | 'archive' | 'create' | 'fork' | 'retract';
   /** 0.38 additive：tombstone 指向被撤回的消息；仅 `system_event: 'retract'` 时出现。 */
   retracted_message_id?: string;
   /** 0.21 additive：federation 入站日志的回信地址；本地日志缺失。 */

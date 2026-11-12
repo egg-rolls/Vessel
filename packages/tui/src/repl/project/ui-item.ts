@@ -789,24 +789,6 @@ export function reduceUiProjection(
       };
     }
 
-    case 'agent.rotating':
-    case 'agent.rotated': {
-      const { id, seq } = nextId(state, 'notice');
-      const data = event.data;
-      const from = shortSessionId(readString(data, 'from_session_id') ?? '', 12);
-      const to = shortSessionId(readString(data, 'to_session_id') ?? '', 12);
-      const epoch = readNumber(data, 'epoch');
-      const text =
-        event.type === 'agent.rotating'
-          ? t('item.rotating', { from: from || '?', to: to || '?' })
-          : t('item.rotated', { from: from || '?', to: to || '?', epoch: epoch ?? '?' });
-      return {
-        ...state,
-        seq,
-        items: [...state.items, { kind: 'notice', id, level: 'info', text }],
-      };
-    }
-
     case 'agent.restarting':
     case 'agent.restarted': {
       const { id, seq } = nextId(state, 'notice');

@@ -1511,7 +1511,6 @@ export interface TeamDeclaration {
 export type TeamSystemEvent =
   | 'join'
   | 'leave'
-  | 'rotate'
   | 'archive'
   | 'budget_override'
   | 'create'

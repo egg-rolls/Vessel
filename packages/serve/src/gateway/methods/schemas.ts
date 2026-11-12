@@ -570,7 +570,6 @@ export const teamMessageSchema = {
       enum: [
         'join',
         'leave',
-        'rotate',
         'archive',
         'budget_override',
         // CREATE-0.39：新写为 create；`fork` 只作旧日志只读值。

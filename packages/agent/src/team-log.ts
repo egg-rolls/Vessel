@@ -117,11 +117,13 @@ function parseEntry(line: string): TeamLogEntry | null {
     if (typeof parsed.conversation_id === 'string' && parsed.conversation_id !== '') {
       entry.conversation_id = parsed.conversation_id;
     }
+    // 已知值的白名单；不在名单里的一律当未知值丢掉（**不报错**，也不让整行变坏）。
+    // 0.51：`'rotate'` 已从名单删除 —— `agent.rotated` 从未发出过，这个系统值一行
+    // 都没被写过；真读到它（手工编辑 / 跨版本）按未知值忽略，渲染回退原始 content。
     const systemEvent = parsed.system_event;
     if (
       systemEvent === 'join' ||
       systemEvent === 'leave' ||
-      systemEvent === 'rotate' ||
       systemEvent === 'archive' ||
       systemEvent === 'budget_override' ||
       systemEvent === 'create' ||

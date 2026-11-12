@@ -175,13 +175,6 @@
   border-color: var(--danger);
 }
 
-/* 测试断言依赖的类名；视觉由 utilities 提供。 */
-.team-notice-danger {
-  border-left-color: var(--danger);
-  background: var(--danger-soft);
-  color: var(--ink);
-}
-
 .team-delivery-queued {
   align-self: flex-start;
   font-family: var(--font-mono);

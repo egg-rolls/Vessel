@@ -146,18 +146,9 @@ export function applyTeamEvent(
   if (!belongsToTeam(event, activeTeamId, memberSessionIds)) return next;
 
   switch (event.type) {
-    case 'agent.rotated': {
-      const agentId = asString(event.data.agent_id);
-      const sessionId = asString(event.data.from_session_id);
-      if (!agentId || !sessionId) return next;
-      const history = appendObserved(next.fallbackBodyHistory, agentId, {
-        session_id: sessionId,
-        epoch: asNumber(event.data.epoch) ?? 0,
-        observed_at: event.ts,
-      });
-      if (history === next.fallbackBodyHistory) return next;
-      return { ...next, fallbackBodyHistory: history };
-    }
+    // 0.51：旧 `agent.rotated` 分支已删（死类型，从未发出）。Body 历史的事件观察值
+    // 只来自 `agent.retired` —— rotate 的退役在工具内就发，早于新 body 的
+    // `agent.session.activated`，所以它才是「换过身体」的唯一事件来源。
     case 'agent.retired': {
       const agentId = asString(event.data.agent_id);
       const bodyId = asString(event.data.body_id);
@@ -221,48 +212,3 @@ export function preferBodyHistory(
   return { source: 'observed', server: [], observed: [...observed] };
 }
 
-export interface RotateFailureView {
-  seq: number;
-  agent_id?: string;
-  code?: string;
-  reason?: string;
-}
-
-/**
- * 最近一次尚未被成功 rotate 覆盖的失败。
- *
- * rotate 本身不写 Team 日志；S6 用事件派生一条错误灰条。成功后清掉旧失败，
- * 避免“已经换成功还一直显示失败”。
- */
-export function latestRotateFailure(
-  events: readonly { seq: number; event: TeamEventLike }[],
-  activeTeamId: string,
-): RotateFailureView | null {
-  const lastRotatedByAgent = new Map<string, number>();
-  let lastRotatedAny = 0;
-  let failure: RotateFailureView | null = null;
-  for (const entry of events) {
-    if (entry.event.data.team_id !== activeTeamId) continue;
-    const agentId = asString(entry.event.data.agent_id);
-    if (entry.event.type === 'agent.rotated') {
-      if (agentId) lastRotatedByAgent.set(agentId, entry.seq);
-      else lastRotatedAny = entry.seq;
-      continue;
-    }
-    if (entry.event.type !== 'agent.rotate.failed') continue;
-    const code = asString(entry.event.data.code);
-    const reason = asString(entry.event.data.reason);
-    failure = {
-      seq: entry.seq,
-      ...(agentId ? { agent_id: agentId } : {}),
-      ...(code ? { code } : {}),
-      ...(reason ? { reason } : {}),
-    };
-  }
-  if (!failure) return null;
-  // 只让同一 Agent 的成功 rotate 清掉该失败；别的成员 rotate 成功不应影响它。
-  const lastRotated = failure.agent_id
-    ? (lastRotatedByAgent.get(failure.agent_id) ?? 0)
-    : lastRotatedAny;
-  return failure.seq > lastRotated ? failure : null;
-}

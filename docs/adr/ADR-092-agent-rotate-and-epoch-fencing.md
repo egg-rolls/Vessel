@@ -95,3 +95,26 @@ tags: [agent, body, rotate, epoch, fencing, snapshot, session, permission, cli]
 - epoch fencing 目标落在 `BindingRecord`。
 - 两级 lease 为 `BindingLease`（binding_id）→ `SessionLease`（session_id），顺序 binding→session、逆序释放。
 - EU 持有并续租，Run 不访问 LeaseService。
+
+## Errata（0.51 三个 rotate 事件从未实现，不改原结论）
+
+> 2026-11-12，只追加。上文正文（尤其决策 18 与验收段的顺序）保留当时结论；
+> 以下为当前事实。0.51 已把这三条死类型从代码、事件可见性表与文档里删除。
+
+- **`agent.rotating` / `agent.rotated` / `agent.rotate.failed` 从未实现**：决策 18 要求过它们，
+  但实现自 S2 起就没有生产者 —— rotate 换身体的唯一信号是 `agent.session.activated`。
+  因此 Web 的 notice 分支、`event-visibility` 表项、Team 日志的 `rotate` 系统行、
+  TUI 的事件联合成员与文案都是**永远走不到**的路径（团队日志 `rotate` 行因此历史上
+  从未被写过一条）。
+- **实际发的事件**：审批侧 `agent.rotate.approved` / `agent.rotate.denied`
+  （`agent` 工具的人类确认，见 0.31）；切换本身 **只有两条**：旧 body 的
+  `agent.retired`（payload `{ body_id, epoch, reason }`，`reason: rotation`）与新 primary 的
+  `agent.session.activated`（payload 带 `from` / `to` / `previous_session_id` / `epoch`）。
+- **时序以实现为准**：`agent.retired` **在 rotate 工具内部就发**，此时旧 run 可能还没结束
+  （旧 engine 不 dispose，交给轮末分支收口）；随后才 `rotation = stable`、
+  `agent.session.activated`，启动嘱托最后才 admit。所以「`agent.rotating` → `agent.rotated`
+  →（旧轮结束或立即）`agent.retired`」这条顺序**不成立**，实际是 `agent.retired` 在前、
+  `agent.session.activated` 在后。
+- **迟到旧轮的正文**仍由 `agent.reply.stale` 解释（该事件是活的，未改动）：旧 Binding 的
+  `run.*` 终态在团队日志里被显式抑制，`agent.reply.stale` 是「那一轮回复为何没出现」的
+  唯一解释。

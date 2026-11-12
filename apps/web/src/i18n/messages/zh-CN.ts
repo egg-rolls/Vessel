@@ -552,8 +552,6 @@ export const messages = {
   'team.system.join': '{name} 加入了 Team',
   'team.system.leave': '{name} 离开了 Team',
   'team.system.archive': 'Team 已归档',
-  'team.system.rotate': '{name} 开始了新会话',
-  'team.system.rotateFailed': '{name} 开始新会话失败',
   'team.system.create': '{name} 创建了新会话',
   // 旧日志只读：0.39 起新写 `create`，不再写 `fork`。
   'team.system.fork': 'agent 已 fork（旧记录）',
@@ -1116,8 +1114,6 @@ export const messages = {
   'chat.notice.contextPressure': '上下文水位 {percent}% · {used}/{max}',
   'chat.notice.contextCompacted': '上下文压缩 · 移除 {removed} · 剩余 {remaining} · {reason}',
   'chat.notice.limitWarning': '限额预警 · {key} {current}/{max}',
-  'chat.notice.rotating': '上下文切换中 · {from} → {to}',
-  'chat.notice.rotated': '上下文已切换 · {from} → {to} · epoch {epoch}',
   'chat.notice.restarting': '上下文重启中 · {session} · epoch {from} → {epoch}',
   'chat.notice.restarted': '上下文已重启 · {session} · epoch {from} → {epoch}',
   'chat.notice.compactForked': '上下文已压缩分叉 · {from} → {to} · epoch {epoch}',

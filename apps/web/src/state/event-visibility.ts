@@ -173,14 +173,14 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   'agent.queue.entered': { tier: 'observe', live: true },
   'agent.queue.left': { tier: 'observe', live: true },
   // 生命周期诊断里有 typed notice 的几条：notice 在 `EventRow.noticeView`，归 internal。
-  'agent.rotating': { tier: 'internal', live: false, 承接: 'notice' },
-  'agent.rotated': { tier: 'internal', live: false, 承接: 'notice', teamLog: 'system' },
+  // 0.51：`agent.rotating` / `agent.rotated` / `agent.rotate.failed` 三条是**死类型**
+  // （ADR-092 第 18 条要求过，实现从未发出），从表里删掉；rotate 实际发的是
+  // `agent.session.activated` + 旧 body 的 `agent.retired`，见 ADR-092 的 Errata。
   'agent.compact_forked': { tier: 'internal', live: false, 承接: 'notice' },
   'agent.restarting': { tier: 'internal', live: true, 承接: 'notice' },
   'agent.restarted': { tier: 'internal', live: true, 承接: 'notice' },
   // 失败类一律 internal（失败永不进静默档）：create 失败只做审计，但它是失败。
   'agent.create.failed': { tier: 'internal', live: true },
-  'agent.rotate.failed': { tier: 'internal', live: false },
   // 旧 fork 事件只读（0.39 起 create 走 sessions.create），且团队日志有 `fork` 行承接：
   // 归 `observe`（与今天「永不进聊天」等价，不额外放宽）。
   'agent.forked': { tier: 'observe', live: false, 承接: 'team-log', teamLog: 'system' },
