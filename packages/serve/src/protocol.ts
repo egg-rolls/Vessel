@@ -199,12 +199,20 @@ export interface RunStatus {
   details?: Record<string, unknown>;
 }
 
+/** 工具来源（0.51 additive）：`plugin` = 节点插件面；`member` = 成员运行期注入（`inbox`）。 */
+export type ToolSource = 'plugin' | 'member';
+
 /** 工具公开信息（不含 handler） */
 export interface ToolInfo {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
   has_permission_check: boolean;
+  /**
+   * 只在 `tools.list{agent_id}` 的响应里出现（节点口径不带该字段，旧响应逐字段不变）：
+   * 让前端能说清「这条工具是成员内置、不在节点插件面里」。
+   */
+  source?: ToolSource;
 }
 
 // 0.2 team/transport 类型已迁移：

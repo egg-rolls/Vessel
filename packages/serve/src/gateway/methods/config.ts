@@ -6,6 +6,7 @@
 
 import { redactConfig, redactSourcePaths, type VesselConfig } from '@vessel-agent/config';
 import type { PluginHost } from '@vessel-agent/core';
+import type { AgentControlLike } from '../../agent-control.js';
 import type { PluginCatalogItem } from '../../plugin-host/catalog.js';
 import type {
   PluginListMetadata,
@@ -20,7 +21,7 @@ import {
   type RpcMethodTable,
 } from '../../rpc.js';
 import type { ConfigGatewayOptionsLike } from '../../tenant.js';
-import { stringParam } from './common.js';
+import { optionalStringParam, stringParam } from './common.js';
 import { runtimeSnapshotSchema, stringListSchema } from './schemas.js';
 
 /** `config.set` 可写键（与 CLI `vessel config set` 的白名单一致）。 */
@@ -92,6 +93,12 @@ export interface ConfigMethodsDeps {
   /** 0.43 E3：rescan / diff / manager.reload 由 assembly 注入；缺省 not_supported。 */
   pluginsReload?: () => Promise<PluginReloadResult>;
   pluginHost(): PluginHost | undefined;
+  /**
+   * 0.51（additive）：成员工具面的解析口（app 注入 `AgentControlLike`）。
+   * 缺省 / 适配器没实现 `toolSurface` ⇒ `tools.list{agent_id}` 回 `not_supported`，
+   * 不传 `agent_id` 的节点口径完全不受影响。
+   */
+  agent?: AgentControlLike;
   /** health.get 的实时状态。 */
   clientCount(): number;
   latestSeq(): number;
@@ -351,6 +358,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
 export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[] {
   const { pluginHost } = deps;
 
+  /** 节点口径：节点插件宿主注册了什么（不传 `agent_id` 的旧行为，字段一个不动）。 */
   function toolsPayload(): { tools: ToolInfo[] } {
     const tools = pluginHost()?.listTools() ?? [];
     return {
@@ -367,7 +375,13 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
     {
       name: 'tools.list',
       permission: 'read',
-      params_schema: { type: 'object' },
+      params_schema: {
+        type: 'object',
+        properties: {
+          // additive 0.51：给了就答「这个成员的身体实际注册了什么」，不传完全是旧行为。
+          agent_id: { type: 'string', minLength: 1 },
+        },
+      },
       result_schema: {
         type: 'object',
         required: ['tools'],
@@ -382,12 +396,35 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
                 description: { type: 'string' },
                 input_schema: { type: 'object' },
                 has_permission_check: { type: 'boolean' },
+                // 只在 `agent_id` 分支出现：`plugin` = 节点插件面，`member` = 成员运行期注入
+                // （`inbox`）。节点口径不带它，旧响应逐字段不变。
+                source: { type: 'string', enum: ['plugin', 'member'] },
               },
             },
           },
+          // 以下两个字段同样只在 `agent_id` 分支出现。
+          agent_id: { type: 'string' },
+          // `live` = 该成员活身体宿主里实取；`derived` = 当前没有活身体，
+          // 按「一具新身体会拿到什么」推导（同一套 selectTools + inbox 判定，不 spawn）。
+          surface: { type: 'string', enum: ['live', 'derived'] },
         },
       },
-      handler: () => toolsPayload(),
+      handler: async (params) => {
+        const agentId = optionalStringParam(params, 'agent_id');
+        if (agentId === undefined) return toolsPayload();
+        // 数据只有一个来源：执行内核的真实注册路径（经 `opts.agent` 透传）。serve
+        // 不自己拼工具清单，否则就成了第二份会腐烂的规格。
+        const resolve = deps.agent?.toolSurface;
+        if (resolve === undefined) {
+          throw new RpcError('not_supported', 'Member tool surface is not available');
+        }
+        const surface = await resolve.call(deps.agent, agentId);
+        // 未知成员 / 老执行内核答不出工具面：not_found，绝不静默返回空列表。
+        if (surface === undefined) {
+          throw new RpcError('not_found', `Agent not found: ${agentId}`, { agent_id: agentId });
+        }
+        return { agent_id: agentId, surface: surface.surface, tools: surface.tools };
+      },
     },
   ];
 }

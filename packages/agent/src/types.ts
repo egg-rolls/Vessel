@@ -398,6 +398,41 @@ export interface MemberExecutionPort {
   enableInbox?(sessionId: string): void;
   /** 0.32（additive，可选）：丢弃该成员尚未 spawn / 未开跑时暂存的 notice。 */
   clearPendingNotices?(memberId: string): void;
+  /**
+   * 0.51（additive，可选）：该成员**真实**的工具面（canonical `tools.list{agent_id}` 的数据源）。
+   *
+   * 判据必须来自真实注册路径：有活身体就读那具 body 自己的宿主（实取值），
+   * 没有就按 spawn 的同一套判定推导（推导值）——实现里不许另写一份工具清单。
+   * 未实现的 port 由 AgentService 按「这里没有工具面」处理。
+   */
+  toolSurface?(member: MemberExecutionMember): MemberToolSurface;
+}
+
+/** 成员工具面条目的来源：`plugin` = 父宿主（节点插件面），`member` = 成员运行期注入。 */
+export type MemberToolSource = 'plugin' | 'member';
+
+/**
+ * 成员工具面单项（`tools.list{agent_id}` 的 `tools[]`）。
+ *
+ * 与 serve 的 `ToolInfo` 同形状，只多一个 `source`：前端要能说清「这是成员内置、
+ * 不在节点插件面里」（`inbox` 就是唯一的那一个）。
+ */
+export interface MemberToolSurfaceEntry {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  has_permission_check: boolean;
+  source: MemberToolSource;
+}
+
+/** 成员工具面快照 */
+export interface MemberToolSurface {
+  /**
+   * `live` = 从活身体的宿主实取；`derived` = 当前没有活身体，按「一具新身体会拿到什么」推导。
+   * 两者都是真实注册路径的结果，区别只在**有没有身体可读**。
+   */
+  surface: 'live' | 'derived';
+  tools: MemberToolSurfaceEntry[];
 }
 
 /** `AgentService.drain` 结果：无在跑轮 / 已中断收口 / 超时 */
@@ -1301,6 +1336,14 @@ export interface AgentService {
       text?: string;
     }[];
   };
+  /**
+   * 0.51：该成员的工具面（canonical `tools.list{agent_id}` 的唯一数据源）。
+   *
+   * 未知成员返回 `undefined`（RPC 层翻成 `not_found`，不返回空列表）；已知成员则交给
+   * 执行内核的真实注册路径（`MemberExecutionPort.toolSurface`）——活身体实取、
+   * 无身体按 spawn 同一套规则推导，判据只在 `packages/agent/src/runtime.ts` 一处。
+   */
+  toolSurface(agentId: string): MemberToolSurface | undefined;
   /**
    * 撤回待处理输入（`agents.recall`，0.53）：把消息从「将执行」集合里拿走。
    *

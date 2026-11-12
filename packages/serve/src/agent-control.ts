@@ -367,6 +367,16 @@ export interface AgentControlLike {
    */
   recall?(input: AgentRecallLikeInput): AgentRecallLikeResult | Promise<AgentRecallLikeResult>;
   /**
+   * 0.51：该成员的**真实**工具面（`tools.list{agent_id}` 的唯一数据源）。
+   *
+   * 可选：老适配器 / 老注入没有它时，`tools.list{agent_id}` 退化成 `not_supported`，
+   * 不传 `agent_id` 的节点口径不受任何影响。未知成员返回 `undefined`（RPC 报 `not_found`）。
+   * 数据来自执行内核的真实注册路径 —— 这里只透传，不自己拼工具清单。
+   */
+  toolSurface?(
+    agentId: string,
+  ): AgentToolSurfaceLike | undefined | Promise<AgentToolSurfaceLike | undefined>;
+  /**
    * `sessions.create`（CREATE-0.39）：同 agent 新 session，成为唯一 primary。
    * 失败以 AgentError 形状（`code` + `message`）reject，RPC 层统一映射。
    */
@@ -380,6 +390,26 @@ export interface AgentControlLike {
    * 前执行；未注入 = git restore 不可用。
    */
   restoreFiles?(input: SessionRestoreFilesLikeInput): Promise<SessionRestoreFilesLikeResult>;
+}
+
+/**
+ * 成员工具面条目（`tools.list{agent_id}` 的 `tools[]`）：与节点口径同形状，多一个来源。
+ *
+ * - `plugin`：来自父宿主（节点插件面，即不传 `agent_id` 时看到的那一层）；
+ * - `member`：成员运行期注入、**不在节点插件面里**（当前只有 `inbox`）。
+ */
+export interface AgentToolSurfaceEntryLike {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  has_permission_check: boolean;
+  source: 'plugin' | 'member';
+}
+
+/** 成员工具面快照：`live` = 活身体实取，`derived` = 无身体时按 spawn 规则推导。 */
+export interface AgentToolSurfaceLike {
+  surface: 'live' | 'derived';
+  tools: AgentToolSurfaceEntryLike[];
 }
 
 /** `agents.inbox` 入参（只读）。 */

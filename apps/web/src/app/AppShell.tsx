@@ -51,7 +51,6 @@ export function AppShell() {
     stale,
     permissions,
     asks,
-    client,
     epoch,
     retry,
     dismissError,
@@ -370,10 +369,6 @@ export function AppShell() {
               chatSessionsOpen={chatSessionsOpen}
               onCloseSessions={closeSessions}
               panes={panes}
-              client={client}
-              hasToken={hasToken}
-              connectionState={connectionState}
-              epoch={epoch}
             />
           </main>
         </div>

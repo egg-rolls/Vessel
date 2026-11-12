@@ -1,6 +1,5 @@
 import { AgentsView } from '../domains/agents/AgentsView';
 import { ChatView } from '../domains/chat/ChatView';
-import { ToolCatalogProvider } from '../domains/chat/tool-catalog';
 import { DesignLabView } from '../domains/design/DesignLabView';
 import { GatewayView } from '../domains/gateway/GatewayView';
 import { HubView } from '../domains/hub/HubView';
@@ -14,7 +13,6 @@ import { RunsView } from '../domains/runs/RunsView';
 import { CapabilitiesPage, VisualPage } from '../domains/settings/NavPages';
 import { SettingsView } from '../domains/settings/SettingsView';
 import { TeamsView } from '../domains/teams/TeamsView';
-import type { ConnectionState, GatewayClient } from '../gateway/client';
 import type { Route } from './router';
 import type { PaneResizeApi } from './usePaneResize';
 
@@ -25,37 +23,23 @@ export function ShellRouteView({
   chatSessionsOpen,
   onCloseSessions,
   panes,
-  client,
-  hasToken,
-  connectionState,
-  epoch,
 }: {
   route: Route;
   navigate: (route: Route) => void;
   chatSessionsOpen: boolean;
   onCloseSessions: () => void;
   panes: PaneResizeApi;
-  client: GatewayClient;
-  hasToken: boolean;
-  connectionState: ConnectionState;
-  epoch: number;
 }) {
   return (
     <>
       {route.domain === 'chat' && (
-        <ToolCatalogProvider
-          client={client}
-          enabled={hasToken && connectionState === 'open'}
-          epoch={epoch}
-        >
-          <ChatView
-            route={route}
-            navigate={navigate}
-            sessionsOpen={chatSessionsOpen}
-            onCloseSessions={onCloseSessions}
-            panes={panes}
-          />
-        </ToolCatalogProvider>
+        <ChatView
+          route={route}
+          navigate={navigate}
+          sessionsOpen={chatSessionsOpen}
+          onCloseSessions={onCloseSessions}
+          panes={panes}
+        />
       )}
       {route.domain === 'hub' && <HubView />}
       {route.domain === 'pending' && (
