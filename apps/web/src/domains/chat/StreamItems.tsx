@@ -99,10 +99,10 @@ const NO_ACTIONS: readonly MessageAction[] = [];
  * 容器里另有两样东西：
  * - `speaker`：「助手」发言人名，与历史态同一个组件（`AssistantSpeaker`）；
  * - `actions`：这一段的工具栏（复制），由调用方给成 `MessageActions`，落在正文
- *   **下方一行、右对齐**（`mt-1 ml-auto` 在调用方那侧，见 `RunItems` 与
- *   `TranscriptWindow`）。这里只把它摆在正文之后，不包任何定位壳子：没有覆盖层，
- *   所以 hover / focus-within 出现时不会遮住正文（高度会变，这是旧形态的既定取舍，
- *   见 styles/domains/chat.css 的工具栏说明）。
+ *   **下方一行、左对齐**（`mt-1` 在调用方那侧，见 `RunItems` 与 `TranscriptWindow`）。
+ *   这里只把它摆在正文之后，不包任何定位壳子：没有覆盖层，所以 hover / focus-within
+ *   出现时不会遮住正文（高度会变，这是旧形态的既定取舍，见 styles/domains/chat.css
+ *   的工具栏说明）。
  */
 export function AssistantText({
   text,
@@ -116,7 +116,7 @@ export function AssistantText({
   streaming?: boolean;
   /**
    * 这一段的工具栏（复制）。调用方负责给 `MessageActions`（自带 hover / focus-within /
-   * 触屏常显的显隐规则）与 `mt-1 ml-auto` 定位。
+   * 触屏常显的显隐规则）与 `mt-1` 间距。
    */
   actions?: ReactNode;
   /** 本帧才追加进来的项：入场只播一次（判定见 `TranscriptWindow.tsx` 的 `useEnteringItems`）。 */
@@ -409,8 +409,6 @@ export const RunItems = memo(function RunItems({
               key={item.key}
               text={item.text}
               streaming={group.status === 'running' && item.key === lastReasoningKey}
-              startedAt={item.startedAt}
-              endedAt={item.endedAt}
               speaker={item.key === speakerKey}
             />
           );
@@ -422,12 +420,12 @@ export const RunItems = memo(function RunItems({
               text={item.text}
               streaming={streamingText}
               speaker={item.key === speakerKey}
-              // 工具栏在正文**下方一行、右对齐**（`mt-1 ml-auto`）：没有覆盖层，
-              // 不遮正文（显隐规则在 MessageActions 自己身上）。
+              // 工具栏在正文**下方一行、左对齐**（`mt-1`）：没有覆盖层，不遮正文
+              // （显隐规则在 MessageActions 自己身上）。
               actions={
                 showActions && item.text.trim().length > 0 ? (
                   <MessageActions
-                    className="mt-1 ml-auto"
+                    className="mt-1"
                     actions={[
                       {
                         id: 'copy',
@@ -482,7 +480,7 @@ export const RunItems = memo(function RunItems({
           speaker={!speakerTaken}
           actions={
             <MessageActions
-              className="mt-1 ml-auto"
+              className="mt-1"
               actions={[
                 {
                   id: 'copy',
