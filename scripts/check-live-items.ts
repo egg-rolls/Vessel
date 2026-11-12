@@ -1046,6 +1046,54 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
+    name: 'G-M 段序身份（0.51）：段序来自 fold 的计数器，交棒删掉前一段后后面那段仍是第 1 段',
+    why: '身份认领拿「本 run 内第几段正文」去对落盘消息的 run_segment。若段序从 items 下标反推，交棒 / 折叠删掉第 0 段后，第 1 段会变成 0 号 ⇒ 认领会拿它去对另一条落盘正文，把 live 这一段永久藏起来（唯一不可恢复的方向）',
+    check: () => {
+      const events = eventsOf(
+        [
+          ['run.started', { input: 'q1' }],
+          text('第一段'),
+          // 工具事件把第一段 flush 成 item，第二段才有自己的段号。
+          toolStarted('c1'),
+          toolCompleted('c1'),
+          text('第二段'),
+          ['run.completed', { output: '第一段第二段' }],
+        ],
+        'r-m',
+      );
+      const store = new EventStore(0);
+      feed(store, events);
+      const before = buildLiveItems(groupsFromStore(store)).filter(
+        (item) => item.kind === 'run-text',
+      );
+      const indexes = before.map((item) => (item.kind === 'run-text' ? item.segmentIndex : -1));
+      if (indexes.join(',') !== '0,1') return `段序 ${indexes.join(',')}（应为 0,1）`;
+      // 交棒删掉第 0 段（模拟「这一段已经由历史负责」），第 1 段的身份必须不变。
+      const firstAnchor = before[0]?.anchorSeq;
+      if (firstAnchor === undefined) return '第一段没有段锚点（无法交棒）';
+      store.items.release(new Map([['r-m', { segments: [firstAnchor] }]]));
+      const after = buildLiveItems(groupsFromStore(store)).filter(
+        (item) => item.kind === 'run-text',
+      );
+      if (after.length !== 1) return `交棒后正文段 ${after.length} 条（应为 1）`;
+      const remaining = after[0];
+      if (remaining === undefined || remaining.kind !== 'run-text') return '剩余段不是正文段';
+      if (remaining.text !== '第二段') return `剩余段正文是「${remaining.text}」（应为第二段）`;
+      if (remaining.segmentIndex !== 1) {
+        return `交棒后段序 ${String(remaining.segmentIndex)}（应仍为 1：段序由计数器给，不看 items 下标）`;
+      }
+      // 未 flush 的尾巴也带段序：它的段号 = flush 之后会拿到的那个号。
+      const partialStore = new EventStore(0);
+      feed(partialStore, eventsOf([['run.started', { input: 'q2' }], text('尾巴')], 'r-m2'));
+      const tailGroup = groupsFromStore(partialStore)[0];
+      if (tailGroup === undefined) return '尾巴分组缺失';
+      if (tailGroup.liveTextSegmentIndex !== 0) {
+        return `尾巴段序 ${String(tailGroup.liveTextSegmentIndex)}（应为 0）`;
+      }
+      return null;
+    },
+  },
+  {
     name: 'F16（迁入）长 run（数千 delta、3 段思考、多轮工具）→ 所有 reasoning 段都在且有序',
     why: 'per-run 上限按 delta 计数会把最早的 thinking 段整段挤出（真实 run 177 轮 / 70k tokens）：迁入后由 I4（环裁剪不动 item）守，且与「从全量事件重建」逐字对拍',
     check: () => {

@@ -107,6 +107,7 @@ export {
 export {
   AtomicWriteError,
   type AtomicWriteOptions,
+  assignMessageIdentities,
   atomicWrite,
   compareSessionInfo,
   type DeleteSessionDataOptions,

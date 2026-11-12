@@ -60,6 +60,30 @@ export interface Message {
    */
   compaction_summary?: boolean;
   /**
+   * 消息身份（additive，可缺省）：这条消息属于哪个 run。
+   *
+   * 为什么需要：跨来源去重（Web 时间线的「认领」）过去只能拿**正文内容**当代理键，
+   * 而 Output 阶段 guardrail 会在落盘前改写正文（PII 打码），于是同一条消息在实时流
+   * 与落盘历史里内容不等、被当成两个对象渲染两遍。身份是结构化事实，不改内容就能认人。
+   *
+   * 语义边界：表示「写入上下文这一侧」的归属，`run_id` 就是写入时的那次 run；
+   * 用户消息归属它开启的那次 run（注入消息归属被注入的那次 run）。
+   * 缺失 = 旧数据 / 旧 gateway —— 消费端退回内容比较，不做回填。
+   * Provider 适配层逐字段挑（`providers.ts` 的两处 message map），该字段不进请求体。
+   */
+  run_id?: string;
+  /**
+   * 消息身份（additive，可缺省）：同一次 run 内**第几段正文**（0 起）。
+   *
+   * 只对 assistant 正文消息有意义，且只数「正文非空的 assistant 消息」—— 与 Web 侧
+   * 流式段序（`createFold` 的 `textIndex`，一次请求一段正文）同口径，所以刷新前后
+   * 能对上同一个段。只有 tool_calls、没有正文的那一轮不占号（它不产生正文段）。
+   *
+   * 由落盘侧统一盖章（`assignMessageIdentities`，run_journal 的 saveSessionState），
+   * 不在这里维护计数器：幂等、可重算、resume 之后接着往后编，不会让身份漂移。
+   */
+  run_segment?: number;
+  /**
    * 附件引用（additive，可缺省）：只有路径与元信息，**不存正文 / base64**。
    *
    * 旧 session / 旧 gateway 没有这个字段，消费者一律按「无引用」降级；

@@ -39,6 +39,15 @@ export type TimelineItem =
        * 认领错位）。`buildLiveItems` 用它派生 `run:<runId>:text:<anchorSeq>`。
        */
       anchorSeq?: number;
+      /**
+       * 该段在**本 run 内**的正文段序（0 起，只数正文段）—— 与落盘消息的
+       * `run_segment` 同一把尺子（0.51 消息身份）。
+       *
+       * 取自 fold 自己的计数器（只由流式事件推进），**不是**「items 里的下标」：
+       * 交棒会把已让位的段删出 items、折叠会砍掉最旧的项，按下标数会整体前移，
+       * 于是身份指到别的段上去（那是把内容藏起来的唯一危险方向）。
+       */
+      segmentIndex?: number;
     }
   | {
       kind: 'reasoning';
@@ -150,6 +159,13 @@ export interface RunGroup {
   liveReasoning?: string;
   /** 尾部未闭合正文段的首个 text_delta seq（段身份见 `TimelineItem.anchorSeq`）。 */
   liveTextAnchorSeq?: number;
+  /**
+   * 尾部未闭合正文段 flush 后会得到的段序（= fold 的 `textIndex`）。
+   *
+   * 完整性需要它：`items` 里可能已经没有任何正文 item（交棒删光 / 折叠砍掉），
+   * 从 items 反推「下一段是第几段」会算错；身份必须来自 fold 的计数器。
+   */
+  liveTextSegmentIndex?: number;
   /** 尾部未闭合思考段的首个 reasoning_delta seq。 */
   liveReasoningAnchorSeq?: number;
   items: TimelineItem[];
@@ -224,7 +240,9 @@ export function createFold(runId: string): RunFold {
       group.items.push({
         kind: 'text',
         text: buf,
-        key: `text-${runId}-${textIndex++}`,
+        key: `text-${runId}-${textIndex}`,
+        // 段序用**赋值后**自增的号：它就是本段的身份（见 `TimelineItem.segmentIndex`）。
+        segmentIndex: textIndex++,
         ...(textStartedAt !== undefined ? { startedAt: textStartedAt } : {}),
         ...(textEndedAt !== undefined ? { endedAt: textEndedAt } : {}),
         ...(textAnchor !== undefined ? { anchorSeq: textAnchor } : {}),
@@ -604,6 +622,9 @@ export function createFold(runId: string): RunFold {
     if (buf) {
       snapshot.liveText = buf;
       if (textAnchor !== undefined) snapshot.liveTextAnchorSeq = textAnchor;
+      // 尾巴 flush 后会拿到 `textIndex` 这个号（`flushText` 用的是自增前的值），
+      // 所以它的段序现在就确定，等 flush 不会换号。
+      snapshot.liveTextSegmentIndex = textIndex;
     }
     return snapshot;
   };

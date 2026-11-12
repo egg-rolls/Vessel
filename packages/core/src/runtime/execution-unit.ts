@@ -14,7 +14,12 @@ import {
 } from '../limits/index.js';
 import { createStderrLogger, noopLogger } from '../logging.js';
 // D2：跨模块只允许从 barrel 导入（不得直接引用 session 的内部文件）。
-import { deriveSessionMeta, mergeHistoryProjection, projectMessages } from '../session/index.js';
+import {
+  deriveSessionMeta,
+  mergeHistoryProjection,
+  projectMessages,
+  withRunIdentity,
+} from '../session/index.js';
 import {
   type ContextCompactedReason,
   DEFAULT_COMPACT_THRESHOLD,
@@ -2716,8 +2721,12 @@ export class ExecutionUnit {
       });
       return;
     }
+    // 消息身份（additive `run_id`）：这里是仓里**唯一**同时看见「消息」与「runId」的写入点。
+    // 不在这里盖章，落盘后的消息就永远没有归属；而段序（`run_segment`）不在这里数
+    // —— 计数器必须只有一份，见 `assignMessageIdentities`（落盘漏斗统一补）。
+    const identified = withRunIdentity(stamped, runId);
     const workingContext = execution.workingContext;
-    workingContext.add(stamped);
+    workingContext.add(identified);
     this.publishUntrackedCompaction(execution);
     this.publishEvent({
       type: 'context.changed',
@@ -2726,7 +2735,7 @@ export class ExecutionUnit {
         run_id: runId,
         session_id: execution.sessionId,
         // 持久化保留 reasoning_content；事件里剔除，避免思维链泄漏到 TUI/观测
-        message: this.stripReasoningFromMessage(stamped),
+        message: this.stripReasoningFromMessage(identified),
         message_count: workingContext.messages.length,
         token_count: workingContext.tokenCount,
       },
