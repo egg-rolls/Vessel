@@ -1556,6 +1556,21 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * 记录换 / 绑 Team 后重算成员 cwd 快照（0.51）。
+   *
+   * 为什么必须跟着 `team_id` 走：cwd 与 `team_id` 是同一份身份的两种表达。Team 变了而快照
+   * 不跟着变，这具 body 会一直在旧 Team 的目录里跑，且**下一具 body 也照样错**（快照是
+   * spawn 的输入）。锚点 Team / unbound ⇒ 清空，工具退回 `agent.cwd` / `process.cwd()`。
+   */
+  private syncMemberCwd(record: MemberRecord, teamId: string | undefined): void {
+    const cwd = this.createMemberCwd(
+      teamId === undefined ? undefined : this.teamBinder?.get(teamId),
+    );
+    if (cwd === undefined) delete record.cwd;
+    else record.cwd = cwd;
+  }
+
+  /**
    * 同 Team present 成员里叫这个名字的那个（unbound 时 tenant 全扫）。
    * 名字是职能标签，重名即「这个职能已有人做」——create / hire 复用它而不是新建。
    */
@@ -5399,6 +5414,8 @@ export class AgentServiceImpl implements AgentService {
       if (conversion.parentId === undefined) delete target.parentId;
       else target.parentId = conversion.parentId;
       this.registry.setTeamId(target.id, conversion.teamId);
+      // 0.51：换 Team ⇒ 重算成员 cwd 快照（否则会一直在旧 Team 的目录里跑）
+      this.syncMemberCwd(target, conversion.teamId);
       target.visibility = conversion.visibility;
 
       this.emit('agent.role.changed', target, {
@@ -5629,6 +5646,8 @@ export class AgentServiceImpl implements AgentService {
       }
     }
 
+    // 0.51：绑定 / 换 Team 后重算成员 cwd 快照（锚点 Team 不写入）
+    this.syncMemberCwd(target, teamId);
     this.emit('agent.rejoined', target, { state: target.state, presence: target.presence });
     this.scheduleSnapshot();
     return this.statusFor(target);

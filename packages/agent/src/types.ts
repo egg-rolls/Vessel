@@ -277,8 +277,8 @@ export interface MemberExecutionMember {
   model?: string;
   system_prompt?: string;
   /**
-   * 0.51：成员 cwd（工具默认工作目录）。由 spawn 解析后写进 EU 的
-   * `overrides`/`Request.cwd`，最终成为 `ToolContext.cwd`。
+   * 0.51：成员 cwd（工具默认工作目录）。由 spawn 解析后随
+   * `ExecutionUnitRequest.cwd` 传进 EU，最终成为 `ToolContext.cwd`。
    *
    * 与 `system_prompt` 一样属于「spawn 时的快照」语义：改它要等下一具 body。
    */
