@@ -1761,7 +1761,7 @@ export const messages = {
   'designLab.preview.pageScaffold.sampleTitle': '样例页面',
   'designLab.preview.pageScaffold.title': 'PageScaffold',
   'designLab.preview.queued.desc':
-    '排队卡：琥珀语义带 +「等待中」胶囊；两颗圆形图标键（收回编辑 / 取消排队）常显，折叠时也能点；agent 源那张一颗键都不给。',
+    '排队卡：琥珀语义带 +「等待中」胶囊；圆形图标键（收回编辑 / 取消排队）在正文下面一行、纯白 10% 半透明底；agent 源那张一颗键都不给。',
   'designLab.preview.reasoning.desc':
     '思考卡：卡头是「思考过程」+ 左侧复制按钮 + 最右时刻；超过 12 行可展开，收字结束自动折叠。',
   'designLab.preview.section.desc': '带标题、说明与可选动作的抬升面板。',

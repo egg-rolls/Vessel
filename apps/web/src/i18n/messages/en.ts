@@ -1841,7 +1841,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.preview.pageScaffold.sampleTitle': 'Sample page',
   'designLab.preview.pageScaffold.title': 'PageScaffold',
   'designLab.preview.queued.desc':
-    'Queued card: amber band with a waiting chip and two round icon keys (take back to edit, cancel) that stay visible when collapsed; an agent-source card has no keys at all.',
+    'Queued card: amber band with a waiting chip; the round icon keys (take back to edit, cancel) sit on the line below the message text, on a translucent white 10% fill; an agent-source card has no keys at all.',
   'designLab.preview.reasoning.desc':
     'Reasoning card: title, a copy button on its left, and the time at the far right; more than 12 lines expand, and it collapses when streaming ends.',
   'designLab.preview.section.desc': 'Raised panel with a title, description and optional actions.',
