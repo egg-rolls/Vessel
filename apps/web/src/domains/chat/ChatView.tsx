@@ -39,18 +39,6 @@ interface CreateTarget {
 }
 
 /**
- * 会让「待处理条带」重取的事件：收件箱投递（`agent.message.*`）与 `run.started`。
- * 投递只有一条事件（`agent.message.queued` + `delivery`）；`agent.message.notified` 是
- * 合并前的旧名，留着只为历史日志的计数口径不变。
- */
-const STRIP_REFRESH_EVENT_TYPES: ReadonlySet<string> = new Set([
-  'agent.message.queued',
-  'agent.message.notified',
-  'agent.message.sent',
-  'run.started',
-]);
-
-/**
  * 聊天域容器：连接各域 hook 与子视图，负责路由导航与焦点交接。
  * 会话状态、实时内容、提交 / 排队分别见 useChatSessions / useChatTranscript /
  * useChatSubmit；渲染拆到 SessionRail / ChatHeader / TranscriptWindow / ComposerSlot。
@@ -225,26 +213,6 @@ export function ChatView({
         title: sessionsApi.selectedSession ? sessionTitle(sessionsApi.selectedSession) : selectedId,
       })
     : t('chat.target.new');
-
-  // 待处理条带按 agent 维度取 inbox：用会话里最小的 depth 节点（与上下文用量同口径）。
-  const stripAgentId = useMemo(() => {
-    if (!selectedId) return null;
-    const nodes = transcriptApi.sessionAgents;
-    const main = [...nodes].sort((a, b) => a.depth - b.depth)[0];
-    return main?.id ?? selectedId;
-  }, [selectedId, transcriptApi.sessionAgents]);
-
-  // 事件驱动失效：agent.message.* / run.started 出现次数变化时重取（不加轮询）。
-  // 一次投递现在只落一条 `agent.message.queued`（旧日志里的 `agent.message.notified`
-  // 仍计入，历史会话的计数不会因为少一类行而漂移）。
-  const stripRefreshKey = useMemo(
-    () =>
-      snapshot.entries.reduce(
-        (count, entry) => (STRIP_REFRESH_EVENT_TYPES.has(entry.event.type) ? count + 1 : count),
-        0,
-      ),
-    [snapshot.entries],
-  );
 
   const runningGroup = transcriptApi.runningGroup;
   const stopHandler =
@@ -441,14 +409,15 @@ export function ChatView({
             onEditMessage={handleEditMessage}
             onRetryMessage={handleRetryMessage}
           />
-        </div>
 
-        <PendingStrip
-          client={client}
-          agentId={stripAgentId}
-          enabled={connected && selectedId !== null}
-          refreshKey={stripRefreshKey}
-        />
+          {/* 待处理条带与转录区**同一个容器**（`.content-stage`），但不在滚动区里：
+              条带只负责「还有几条在等」，跟着输入区一起常驻。宽度 / 内边距由它自己
+              对齐消息列（见 PendingStrip.tsx）。 */}
+          <PendingStrip
+            queued={transcriptApi.visibleQueued}
+            onCancel={(runId) => void submitApi.handleCancelQueued(runId)}
+          />
+        </div>
 
         <ComposerSlot
           pendingItem={transcriptApi.pendingItem}
