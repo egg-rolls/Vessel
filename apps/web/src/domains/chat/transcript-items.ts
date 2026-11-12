@@ -1252,7 +1252,10 @@ function toolKeyOf(callId: string): string {
  * 与账本走**同一段**判据，只是不粘住（每次调用都重新算）。它是纯函数，所以「增量 ==
  * 重建」的对拍仍然成立。
  */
-export function oneShotClaims(history: HistoryIndex, facts: readonly ClaimRunFacts[]): ClaimDecision {
+export function oneShotClaims(
+  history: HistoryIndex,
+  facts: readonly ClaimRunFacts[],
+): ClaimDecision {
   const stats = emptyClaimStats();
   stats.decisions = 1;
   const core = computeClaimCore(history, facts, stats);
@@ -1460,9 +1463,7 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
   // `historyIndex.claims` 上（见 `HistoryIndex.claims` 的说明）；没有账本的一次性路径
   // （门禁 / 子 agent 详情）现算一遍同一段判据 —— 两条路径只有「粘不粘」的区别。
   const decision =
-    input.claims ??
-    history.claims ??
-    oneShotClaims(history, claimRunFactsOf(input.liveGroups));
+    input.claims ?? history.claims ?? oneShotClaims(history, claimRunFactsOf(input.liveGroups));
   const { claimedUserByRun } = decision;
   /** run → 是否仍在跑（弱下限的 ts 夹取用；内容项本身不再参与认领计算）。 */
   const runState = new Map<string, { running: boolean }>();
@@ -1520,10 +1521,7 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     //
     // 判据是**账本里的让位集合**（按段锚点），不是「这一帧的内容相等」：正文继续增长
     // 不会让已成立的让位失效（DESIGN.md §4.2 规则 1，消除抖动型重复）。
-    if (
-      (item.kind === 'run-text' || item.kind === 'run-reasoning') &&
-      isYielded(decision, item)
-    ) {
+    if ((item.kind === 'run-text' || item.kind === 'run-reasoning') && isYielded(decision, item)) {
       continue;
     }
     const claimedUser = claimedUserByRun.get(runId);

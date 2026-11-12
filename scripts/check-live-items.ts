@@ -51,9 +51,9 @@ import {
   buildHistoryIndex,
   buildLiveItems,
   buildTranscriptItems,
+  type ClaimDecision,
   ClaimLedger,
   claimRunFactsOf,
-  type ClaimDecision,
   type TranscriptItem,
 } from '../apps/web/src/domains/chat/transcript-items';
 import type { RunEvent } from '../apps/web/src/gateway/types';
@@ -670,11 +670,7 @@ const FIXTURES: readonly Fixture[] = [
     why: '每帧按内容重算认领会抖动（改写后内容不等 → 认领失败 → 两份）；账本一次判定后粘住，只随历史窗口 / 新 run 失效',
     check: () => {
       const events = eventsOf(
-        [
-          ['run.started', { input: 'q1' }],
-          text('回复'),
-          ['run.completed', { output: '回复' }],
-        ],
+        [['run.started', { input: 'q1' }], text('回复'), ['run.completed', { output: '回复' }]],
         'r-f2',
       );
       const store = new EventStore(0);
@@ -805,7 +801,11 @@ const FIXTURES: readonly Fixture[] = [
       if (itemSnapshotOf(store).stats.released !== snapshot.stats.released) {
         return '重复交棒重复计数（stats.released 不是幂等的）';
       }
-      return sameJson('幂等交棒后的 key 序列', screenKeys(again, messages, history, decision), keysBefore);
+      return sameJson(
+        '幂等交棒后的 key 序列',
+        screenKeys(again, messages, history, decision),
+        keysBefore,
+      );
     },
   },
   {
@@ -825,7 +825,10 @@ const FIXTURES: readonly Fixture[] = [
       const storeA = new EventStore(0);
       feed(storeA, noticeEvents);
       const groupsA = groupsFromStore(storeA);
-      const messagesA = [msg('user', 'q1', { timestamp: 1000 }), msg('assistant', '回复', { timestamp: 1100 })];
+      const messagesA = [
+        msg('user', 'q1', { timestamp: 1000 }),
+        msg('assistant', '回复', { timestamp: 1100 }),
+      ];
       const a = decideClaims(groupsA, messagesA);
       const reviewA = a.decision.handover.get('r-l2a');
       if (reviewA === undefined) return 'notice run 没有进交棒清单';
@@ -889,7 +892,10 @@ const FIXTURES: readonly Fixture[] = [
         const answer = `回复${round}`;
         const callId = `c${round}`;
         push(runId, 'run.started', { run_id: runId, session_id: 's1', input });
-        push(runId, 'llm.stream.chunk', { run_id: runId, chunk: { type: 'text_delta', delta: answer } });
+        push(runId, 'llm.stream.chunk', {
+          run_id: runId,
+          chunk: { type: 'text_delta', delta: answer },
+        });
         push(runId, 'tool.call.started', {
           run_id: runId,
           tool_call_id: callId,
@@ -934,7 +940,8 @@ const FIXTURES: readonly Fixture[] = [
       if (snapshot.stats.released !== contentEverHeld) {
         return `stats.released(${snapshot.stats.released}) != 曾持有的内容项(${contentEverHeld})`;
       }
-      if (snapshot.stats.releasedRuns !== ROUNDS) return `stats.releasedRuns(${snapshot.stats.releasedRuns}) != ${ROUNDS}`;
+      if (snapshot.stats.releasedRuns !== ROUNDS)
+        return `stats.releasedRuns(${snapshot.stats.releasedRuns}) != ${ROUNDS}`;
       return null;
     },
   },
@@ -1001,10 +1008,12 @@ const FIXTURES: readonly Fixture[] = [
       const tools = items.filter((item) => item.kind === 'tool');
       if (reasoningItems.length !== 3) return `思考段 ${reasoningItems.length} 条（应为 3）`;
       if (tools.length !== 3) return `工具卡 ${tools.length} 张（应为 3）`;
-      const anchors = reasoningItems.map((item) => item.anchorSeq ?? -1);
-      if (!(anchors[0]! < anchors[1]! && anchors[1]! < anchors[2]!)) {
-        return `思考段顺序不对：${anchors.join(',')}`;
-      }
+      const anchors: number[] = reasoningItems.map((item) => item.anchorSeq ?? -1);
+      const ascending = anchors.every((anchor, index) => {
+        const previous = anchors[index - 1];
+        return previous === undefined || previous < anchor;
+      });
+      if (!ascending) return `思考段顺序不对：${anchors.join(',')}`;
       return sameJson('长 run 的 item 流（增量 vs 重建）', groups, rebuild(events));
     },
   },
@@ -1153,7 +1162,9 @@ const FIXTURES: readonly Fixture[] = [
       // I1-a'：`EventGroupCache` 已删除（设计 §6：它只会变成「第二次投影」）。
       // 这条断言的意义：把文件误 git checkout 回来 / 有人又加一层缓存包装时，门禁先红。
       if (existsSync(join(webSrc, 'state', 'group-cache.ts'))) {
-        problems.push('state/group-cache.ts: 已删除的缓存包装又回来了（渲染侧必须读 LiveItemStore）');
+        problems.push(
+          'state/group-cache.ts: 已删除的缓存包装又回来了（渲染侧必须读 LiveItemStore）',
+        );
       }
       for (const file of walk(webSrc)) {
         if (!file.endsWith('.ts') && !file.endsWith('.tsx')) continue;

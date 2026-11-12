@@ -12,7 +12,10 @@
 
 import { ASK_ANSWER_MESSAGE_NAME } from '../apps/web/src/domains/chat/ask-answer';
 import { pendingStripView } from '../apps/web/src/domains/chat/pending-strip';
-import { buildTranscriptItems, type TranscriptItem } from '../apps/web/src/domains/chat/transcript-items';
+import {
+  buildTranscriptItems,
+  type TranscriptItem,
+} from '../apps/web/src/domains/chat/transcript-items';
 import type { Message } from '../apps/web/src/gateway/types/sessions';
 import type { RunGroup, TimelineItem } from '../apps/web/src/state/events';
 import { ASK_ANSWER_INPUT_NAME } from '../packages/agent/src/runtime';
