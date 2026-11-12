@@ -26,9 +26,10 @@ export function ToolCatalogProvider({
   /**
    * 当前会话的成员 id（已知时带 `agent_id` 拉一次）。
    *
-   * 为什么按成员拉：`inbox` 这类工具只注册在成员身体自己的宿主里，节点插件面永远
-   * 看不到它们 —— 不带 `agent_id` 时这些卡片只能显示“描述不可用”。拿不到 id
-   * （无选中会话 / 旧 gateway）就保持原行为，不猜、不另建 RPC。
+   * 这**不是**另一份工具面：`agent_id` 只决定按哪具身体去读同一份清单。唯一的实际差别是
+   * `inbox` 这类工具注册在成员身体自己的宿主里、节点面暂时看不到（待 inbox 插件化后自然
+   * 归位），不带 `agent_id` 时这些卡片只能显示“描述不可用”。拿不到 id（无选中会话 /
+   * 旧 gateway）就保持原行为，不猜、不另建 RPC。
    */
   agentId?: string;
   children: ReactNode;
@@ -39,11 +40,7 @@ export function ToolCatalogProvider({
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    void (
-      agentId !== undefined
-        ? client.listToolsForAgent(agentId).then((body) => body.tools ?? [])
-        : client.listTools()
-    )
+    void (agentId !== undefined ? client.listToolsForAgent(agentId) : client.listTools())
       .then((tools) => {
         if (cancelled) return;
         setDescriptions(

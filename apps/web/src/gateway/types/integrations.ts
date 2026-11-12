@@ -1,52 +1,24 @@
-/** 工具来源（0.51 additive）：`plugin` = 节点插件面；`member` = 成员运行期注入（`inbox`）。 */
-export type ToolSource = 'plugin' | 'member';
-
-/** 工具公开信息（/v1/tools） */
+/**
+ * 工具公开信息（`tools.list` 的单一条目）。
+ *
+ * 只有这一种条目形状：节点与成员看到的是同一份清单，所以既没有 `source`（来源），
+ * 也没有「谁拿不到 + 为什么」之类第二层字段 —— 那种区分已按用户裁定删掉。
+ */
 export interface ToolInfo {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
   has_permission_check: boolean;
-  /** 只在按成员查询时出现：旧 gateway 不带 ⇒ 未知来源（按节点口径展示）。 */
-  source?: ToolSource;
 }
 
 /**
- * 成员工具面的来源档位（`tools.list{agent_id}`）。
+ * `tools.list` 响应：无论传不传 `agent_id` 都只有 `tools`。
  *
- * `live` = 该成员活身体宿主里实取；`derived` = 当前没有活身体，服务端按「一具新身体
- * 会拿到什么」推导。两者都是真实注册路径，区别只在有没有身体可读。
+ * `agent_id`（可选，deprecated）只决定「按哪具成员身体去读」，不改变资源形状；
+ * 成员用的就是节点那一份工具面。
  */
-export type ToolSurface = 'live' | 'derived';
-
-/**
- * 节点有、这个成员拿不到的工具的**原因**（服务端算好，界面只负责显示）。
- *
- * - `parent_answered`：需要父级转发人类应答（`ask`），这具身体没有 bridge；
- * - `readonly_mode`：该成员是 deny（只读）档，只留 `read` / `media` / `subscribe`；
- * - `unknown`：规则放行了，但这具活身体上确实没有（多半是新工具还没热刷新过来）。
- */
-export type ToolUnavailableReason = 'parent_answered' | 'readonly_mode' | 'unknown';
-
-/** 被挡在成员工具面外的一条工具（只有名字与原因，没有 schema / 描述）。 */
-export interface ToolUnavailable {
-  name: string;
-  reason: ToolUnavailableReason;
-}
-
-/** `tools.list` 响应：不带 `agent_id` 时只有 `tools`（旧形状）。 */
 export interface ToolListResponse {
   tools?: ToolInfo[];
-  /** 只在按成员查询时出现 */
-  surface?: ToolSurface;
-  /** 只在按成员查询时出现 */
-  agent_id?: string;
-  /**
-   * 只在按成员查询时出现：节点有、这个成员拿不到的工具 + 原因。
-   *
-   * 旧 gateway 没有这个字段（也不会有 `surface`）⇒ 按「不知道」处理，不推出「没有工具被挡」。
-   */
-  unavailable?: ToolUnavailable[];
 }
 
 /**

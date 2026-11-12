@@ -36,24 +36,19 @@ export abstract class IntegrationsClient extends TeamsClient {
   }
 
   /**
-   * 0.51：某个成员的**真实**工具面（`tools.list{agent_id}`，含 `inbox` 这类成员内置工具）。
+   * 同一份工具清单，只是按某具成员身体去读（`tools.list{agent_id}`）。
    *
-   * 旧 gateway 会忽略不认识的参数、照旧回节点插件面（响应里没有 `surface`），
-   * 所以调用方按「有没有 `surface`」判断这次是不是真拿到了成员口径 —— 这里不猜、不报错。
+   * 0.51 起 `agent_id` 只是定位用的诊断参数：响应形状与不传时逐字段相同 —— 成员用的
+   * 就是节点那一份工具面，所以没有 `surface` / `source` / `unavailable` 之类第二层字段。
+   * 传它的唯一用处是拿到那具身体上运行期注入的 `inbox`（只注册在成员自己的宿主里，
+   * 待 inbox 插件化后自然归位到节点面）。
    */
-  async listToolsForAgent(agentId: string): Promise<ToolListResponse> {
+  async listToolsForAgent(agentId: string): Promise<ToolInfo[]> {
     const body = await this.listToolsRaw({ agent_id: agentId });
-    return {
-      tools: body.tools ?? [],
-      ...(body.surface !== undefined ? { surface: body.surface } : {}),
-      ...(body.agent_id !== undefined ? { agent_id: body.agent_id } : {}),
-      // 0.51 additive：节点有但该成员拿不到的工具 + 原因。旧 gateway 不返回 ⇒ 保持缺省
-      // （界面按「不知道有没有被挡」展示，而不是假装一个都没被挡）。
-      ...(body.unavailable !== undefined ? { unavailable: body.unavailable } : {}),
-    };
+    return body.tools ?? [];
   }
 
-  /** 两种口径共用一条传输：参数为 undefined = 节点插件面（与 0.50 的请求逐字节一致）。 */
+  /** 唯一的传输路径：`params` 缺省 = 节点口径（与不传 `agent_id` 的请求逐字节一致）。 */
   private async listToolsRaw(params?: { agent_id: string }): Promise<ToolListResponse> {
     try {
       return await this.rpc<ToolListResponse>('tools.list', params);

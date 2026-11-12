@@ -399,67 +399,26 @@ export interface MemberExecutionPort {
   /** 0.32（additive，可选）：丢弃该成员尚未 spawn / 未开跑时暂存的 notice。 */
   clearPendingNotices?(memberId: string): void;
   /**
-   * 0.51（additive，可选）：该成员**真实**的工具面（canonical `tools.list{agent_id}` 的数据源）。
+   * 0.51（可选）：该成员的**真实**工具清单（canonical `tools.list{agent_id}` 的数据源）。
    *
-   * 判据必须来自真实注册路径：有活身体就读那具 body 自己的宿主（实取值），
-   * 没有就按 spawn 的同一套判定推导（推导值）——实现里不许另写一份工具清单。
-   * 未实现的 port 由 AgentService 按「这里没有工具面」处理。
+   * 判据必须来自真实注册路径：有活身体就读那具 body 自己的宿主，没有就按 spawn 的同一套
+   * 判定推导（推导值）——实现里不许另写一份工具清单。这不是「第二份工具面」：成员用的
+   * 就是节点那一份，只是按这具身体读一次。未实现的 port 由 AgentService 按「答不出」处理。
    */
-  toolSurface?(member: MemberExecutionMember): MemberToolSurface;
-}
-
-/** 成员工具面条目的来源：`plugin` = 父宿主（节点插件面），`member` = 成员运行期注入。 */
-export type MemberToolSource = 'plugin' | 'member';
-
-/**
- * 节点有、但这具成员身体没有的工具，为什么没有（`tools.list{agent_id}.unavailable[].reason`）。
- *
- * 三种都来自执行内核的同一套判据（`toolBlockReason`），不是按工具名猜的：
- * - `parent_answered`：需要父级转发人类应答（`ask`）而这具身体没有 bridge，放进来只会
- *   让 run 永久等待；
- * - `readonly_mode`：该身体是 deny（只读）档，只留下 `read` / `media` / `subscribe`；
- * - `unknown`：静态规则放行了，但这具活身体上确实没有 —— 工具热刷新只在轮边界应用，
- *   所以多半是「新工具还没刷过来」。宁可用兜底值也不编一条假原因。
- */
-export type MemberToolUnavailableReason = 'parent_answered' | 'readonly_mode' | 'unknown';
-
-/** 被挡在成员工具面外的一条工具（只给名字与原因，键面与 `tools[]` 不同）。 */
-export interface MemberToolUnavailableEntry {
-  name: string;
-  reason: MemberToolUnavailableReason;
+  toolSurface?(member: MemberExecutionMember): MemberToolEntry[];
 }
 
 /**
- * 成员工具面单项（`tools.list{agent_id}` 的 `tools[]`）。
+ * 工具条目（`tools.list` 的 `tools[]`，节点与成员同形状）。
  *
- * 与 serve 的 `ToolInfo` 同形状，只多一个 `source`：前端要能说清「这是成员内置、
- * 不在节点插件面里」（`inbox` 就是唯一的那一个）。
+ * 没有 `source`：0.51 用户裁定「成员用的就是节点有的那一份，不要区分成员工具面和节点
+ * 工具面」，来源标记与「节点有、这具身体拿不到」的解释层一起删掉了。
  */
-export interface MemberToolSurfaceEntry {
+export interface MemberToolEntry {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
   has_permission_check: boolean;
-  source: MemberToolSource;
-}
-
-/** 成员工具面快照 */
-export interface MemberToolSurface {
-  /**
-   * `live` = 从活身体的宿主实取；`derived` = 当前没有活身体，按「一具新身体会拿到什么」推导。
-   * 两者都是真实注册路径的结果，区别只在**有没有身体可读**。
-   */
-  surface: 'live' | 'derived';
-  tools: MemberToolSurfaceEntry[];
-  /**
-   * 父宿主有、这具成员身体拿不到的工具 + 原因。
-   *
-   * 存在的意义是「看起来不是一个漏了，而是被一条规则挡的」：成员工具面 = 节点全量
-   * （0.51），剩下能挡的只有两条规则，所以这份清单只在真有内容时非空（有 `ask` 而
-   * 这具身体没 bridge、或该身体在 deny 档），节点上没有这类工具时它就是空的，不为了
-   * 好看凑数。由执行内核算（只有它知道判据），serve 只透传。
-   */
-  unavailable: MemberToolUnavailableEntry[];
 }
 
 /** `AgentService.drain` 结果：无在跑轮 / 已中断收口 / 超时 */
@@ -1364,13 +1323,14 @@ export interface AgentService {
     }[];
   };
   /**
-   * 0.51：该成员的工具面（canonical `tools.list{agent_id}` 的唯一数据源）。
+   * 0.51：该成员的工具清单（canonical `tools.list{agent_id}` 的唯一数据源）。
    *
+   * 这不是「另一份工具面」：成员用的就是节点那一份，`agent_id` 只决定按哪具身体读。
    * 未知成员返回 `undefined`（RPC 层翻成 `not_found`，不返回空列表）；已知成员则交给
-   * 执行内核的真实注册路径（`MemberExecutionPort.toolSurface`）——活身体实取、
+   * 执行内核的真实注册路径（`MemberExecutionPort.toolSurface`）——活身体实读、
    * 无身体按 spawn 同一套规则推导，判据只在 `packages/agent/src/runtime.ts` 一处。
    */
-  toolSurface(agentId: string): MemberToolSurface | undefined;
+  toolSurface(agentId: string): MemberToolEntry[] | undefined;
   /**
    * 撤回待处理输入（`agents.recall`，0.53）：把消息从「将执行」集合里拿走。
    *
