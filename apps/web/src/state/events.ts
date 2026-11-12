@@ -489,9 +489,7 @@ export function createFold(runId: string): RunFold {
             status: completed ? 'done' : 'error',
             ...(previous.callId === undefined && callId !== undefined ? { callId } : {}),
             ...(completed ? { result: ev.data.result } : {}),
-            ...(completed
-              ? {}
-              : { error: errorOf(ev.data), errorMeta: errorMetaOf(ev.data) }),
+            ...(completed ? {} : { error: errorOf(ev.data), errorMeta: errorMetaOf(ev.data) }),
             ...(durationMs !== undefined ? { durationMs } : {}),
             ...(truncated ? { truncated: true } : {}),
           };

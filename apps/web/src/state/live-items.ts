@@ -408,11 +408,7 @@ export class LiveItemStore implements ItemSink {
     }
   }
 
-  private refoldRun(
-    runId: string,
-    entries: readonly StoredEvent[],
-    keepSurvivors: boolean,
-  ): void {
+  private refoldRun(runId: string, entries: readonly StoredEvent[], keepSurvivors: boolean): void {
     const previous = this.groups.get(runId);
     if (previous !== undefined) this.bases.set(runId, previous);
     const fold = createFold(runId);

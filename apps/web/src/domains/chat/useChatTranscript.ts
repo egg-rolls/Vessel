@@ -1,13 +1,6 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react';
-import type { GatewayClient } from '../../gateway/client';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useConnection } from '../../gateway/ConnectionProvider';
+import type { GatewayClient } from '../../gateway/client';
 import type {
   AskUserRequest,
   Message,
@@ -277,9 +270,7 @@ export function useChatTranscript({
   // 真正的提示行需要新 i18n 文案与样式（本单不动 `i18n/**`），留给阶段 4；在那之前
   // 至少不留一个「算了不用」的假变量。
   const renderedGroups: readonly RunGroup[] =
-    visibleGroups.length > MAX_LIVE_GROUPS
-      ? visibleGroups.slice(-MAX_LIVE_GROUPS)
-      : visibleGroups;
+    visibleGroups.length > MAX_LIVE_GROUPS ? visibleGroups.slice(-MAX_LIVE_GROUPS) : visibleGroups;
 
   // 0.18：停止入口固定在底部 Composer 区域，只对当前会话仍在跑的 run 出现。
   // `hasRunEvent` 排除成员事件聚合出的“永不终态”分组：它们的 runId 是成员 id，

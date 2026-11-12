@@ -35,7 +35,7 @@
  * 退出码：0 = 全过；1 = 有 FAIL（失败打印两路差异，便于定位）。
  */
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { buildLiveItems, type TranscriptItem } from '../apps/web/src/domains/chat/transcript-items';
 import type { RunEvent } from '../apps/web/src/gateway/types';
@@ -507,7 +507,9 @@ const FIXTURES: readonly Fixture[] = [
         if (code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) return;
         const window = transcriptHook.slice(Math.max(0, index - 2), index + 1).join('\n');
         if (!window.includes('transport-consumer')) {
-          problems.push(`useChatTranscript.ts:${index + 1}: 读了 .entries 却没有 transport-consumer 标注`);
+          problems.push(
+            `useChatTranscript.ts:${index + 1}: 读了 .entries 却没有 transport-consumer 标注`,
+          );
         }
       });
       return problems.length > 0 ? problems.join('\n    ') : null;

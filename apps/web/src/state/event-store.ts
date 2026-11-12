@@ -28,7 +28,7 @@
 import type { RunEvent } from '../gateway/types';
 import type { ErrorVisibility } from './error-visibility';
 import { producesTimelineItem, type StoredEvent } from './events';
-import { LiveItemStore, type ItemSink } from './live-items';
+import { type ItemSink, LiveItemStore } from './live-items';
 
 /**
  * 每个 run 在客户端缓冲里保留的条目上限。
