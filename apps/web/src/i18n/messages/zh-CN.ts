@@ -252,6 +252,10 @@ export const messages = {
   'chat.reasoning.thinking': '正在思考',
   'chat.reasoning.expand': '展开全文',
   'chat.reasoning.collapse': '收起',
+  // 思考卡自己的复制动作：复制的是**思考原文**，不是整条消息 ——
+  // 与「复制消息」（chat.message.copy）是两件事、两个 key，不要合并。
+  'chat.reasoning.copy': '复制思考',
+  'chat.reasoning.copied': '已复制思考',
   'chat.tool.input': '输入',
   'chat.tool.output': '输出',
   'chat.tool.diff': '变更',

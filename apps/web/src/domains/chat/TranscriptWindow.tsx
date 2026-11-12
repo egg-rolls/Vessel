@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
-import { Button } from '../../components/ui';
+import { Button, type MessageAction, MessageActions, useMessageCopy } from '../../components/ui';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { AgentNode } from '../../state/agents';
@@ -13,7 +13,7 @@ import { AskAnswerCard } from './AskAnswerCard';
 import { ChatWelcome } from './ChatWelcome';
 import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
-import { ReasoningBlock } from './ReasoningBlock';
+import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
 import {
   AssistantText,
@@ -330,6 +330,33 @@ export function TranscriptWindow({
     return named;
   }, [items]);
 
+  // 工具栏挂点（**一个 run 只挂一处**，判据与历史侧同一个 `hasReasoningCard`）：
+  // - 该 run 有思考卡 ⇒ 挂在那张卡右上角（卡自己渲染「复制思考」，见 ReasoningBlock）。
+  //   正文这一侧**不挂**：以前 live 的 `run-text` / `run-reasoning` 是两个独立 item、
+  //   互相看不见，工具栏只可能落在正文上，于是「有思考卡的一轮」让人看到正文右上角的
+  //   工具条 —— 现在按 run 汇总，卡在屏幕上就由卡接管。
+  // - 该 run 没有思考卡 ⇒ 挂在该 run **第一段正文**上（`.msg-actions`，行为不变）。
+  //
+  // 只看 item 流，不看 group 的原始字段：verbosity 把思考项过滤掉（minimal）时这里
+  // 也自然认为「没有卡」，工具栏回到正文 —— 屏幕上没有卡就不该把工具条挂在看不见的地方。
+  const bodyToolbarKeys = useMemo(() => {
+    const withCard = new Set<string>();
+    const firstText = new Map<string, string>();
+    for (const item of items) {
+      if (item.kind === 'run-reasoning') {
+        if (hasReasoningCard(item.text)) withCard.add(item.runId);
+        continue;
+      }
+      if (item.kind !== 'run-text' || item.text.trim().length === 0) continue;
+      if (!firstText.has(item.runId)) firstText.set(item.runId, item.key);
+    }
+    const anchors = new Set<string>();
+    for (const [runId, key] of firstText) {
+      if (!withCard.has(runId)) anchors.add(key);
+    }
+    return anchors;
+  }, [items]);
+
   // 「正在思考」：run 已经在跑、但这一轮**还没有任何可见内容**（正文 / 思考 / 工具卡）
   // 时的那一行状态。主会话页以前完全没有这句话 —— 只有子 agent transcript 里有，
   // 于是「发出去还没吐字」的那几秒页面上什么都没有，只能看输入框有没有「停止」。
@@ -353,6 +380,9 @@ export function TranscriptWindow({
       return false;
     });
   }, [activeAgent, items, renderedGroups, verbosity]);
+
+  // 正文 / 思考 item 的复制入口（`chat.message.copy` 那套），与历史消息同一个 hook。
+  const copy = useMessageCopy();
 
   const renderItem = (item: TranscriptItem): ReactNode => {
     switch (item.kind) {
@@ -379,7 +409,7 @@ export function TranscriptWindow({
       case 'ask-answer':
         // 「待批答复」：数据仍是那条 user 消息，呈现是一张卡（人是在待批页回答的）。
         return <AskAnswerCard card={item.card} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
-      case 'run-text':
+      case 'run-text': {
         // 正文只有一个形态：流式（`streaming`）与落盘都走 AssistantText → Markdown，
         // 外层 class / 内层块结构完全相同；run 结束时只是 streaming 翻成 false
         // （key 在 flush 前后不变，见 check-transcript-items 的 F2），DOM 原地复用。
@@ -387,17 +417,38 @@ export function TranscriptWindow({
         // 容器在 streaming 翻转前后不变，所以 `.msg-enter` 只播挂载那一次）。
         // `speaker`：这一项是该 run 的第一块内容 ⇒ 上方补「助手」发言人名
         // （run 运行期也要看得见，历史消息那条走 Transcript 的 groupStart）。
+        //
+        // `actions`：工具栏**只在这个 run 没有思考卡时**才落在正文上（判据见上面的
+        // `bodyToolbarKeys`）。有思考卡的一轮由卡接管（`ReasoningBlock` 自己渲染
+        // 「复制思考」+ 调用方给的这一段消息工具栏），正文右上角保持干净。
+        // 不跟 `streaming` 开关显隐：窄屏（≤1023px）这一行是常备行，等到落定才出现
+        // 会让正文在 run 结束那一帧长高一截；行在，高度就恒定。
+        const textActions: MessageAction[] = bodyToolbarKeys.has(item.key)
+          ? [
+              {
+                id: 'copy',
+                label: t('chat.message.copy'),
+                onSelect: () => copy(item.text),
+              },
+            ]
+          : [];
+        const textToolbar =
+          textActions.length > 0 ? <MessageActions actions={textActions} /> : undefined;
         return (
           <AssistantText
             text={item.text}
             streaming={item.streaming}
             entering={isEntering(item.key)}
             speaker={speakerKeys.has(item.key)}
+            actions={textToolbar}
           />
         );
+      }
       case 'run-reasoning':
         // 思考卡：首次出现走 `.motion-appear`（只动透明度），展开 / 收起由
         // ReasoningBlock 内部的 `.motion-disclosure` 负责（见 styles/motion.css）。
+        // 工具栏（含「复制思考」）由卡自己贴在右上角，这里不传 `actions`：live 的
+        // 思考卡就是这一轮的唯一挂点（判据同 `bodyToolbarKeys`）。
         return (
           <ReasoningBlock
             text={item.text}

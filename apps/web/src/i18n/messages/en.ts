@@ -255,6 +255,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.reasoning.thinking': 'Thinking…',
   'chat.reasoning.expand': 'Show all',
   'chat.reasoning.collapse': 'Collapse',
+  // The reasoning card's own copy action: it copies the *thinking* text, not the whole
+  // message — a separate fact from `chat.message.copy`, hence a separate key.
+  'chat.reasoning.copy': 'Copy thinking',
+  'chat.reasoning.copied': 'Thinking copied',
   'chat.tool.input': 'Input',
   'chat.tool.output': 'Output',
   'chat.tool.diff': 'Changes',
