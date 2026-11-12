@@ -49,7 +49,9 @@ paths: [packages/core/src/runtime/run-journal.ts, packages/core/src/runtime/exec
 **`llm.request`（元信息版）** —— 日志副本只有：
 
 `content_omitted: true` + `model` / `message_count` / `tools_count` / `estimated_tokens`
-（= `WorkingContext.tokenCount` 增量缓存值，不重扫历史）/ `attempt`（overflow 重试链第几次，1 起）
+（= `WorkingContext.tokenCount` 增量缓存值，不重扫历史）/ `context_max`（= `workingContext.maxTokens`
+运行时真值，2026-11 起随事件落盘，让历史会话的「上下文窗口」自足、不必回推配置；`maxTokens`
+未知时不写该字段）/ `attempt`（overflow 重试链第几次，1 起）
 / `stream`（+ 显式开启时的 `include_reasoning`）。`messages` / `tools` 正文由写盘侧
 `stripRequestContent` 兜底裁掉，所以即使 producer 误传完整 payload 也写不进 `events.ndjson`。
 

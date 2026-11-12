@@ -122,7 +122,7 @@ export interface SessionDetail {
     used: number;
     max?: number;
     at?: number;
-    source?: 'pressure' | 'changed' | 'estimated' | 'prompt';
+    source?: 'pressure' | 'changed' | 'estimated' | 'prompt' | 'request';
   };
 }
 
