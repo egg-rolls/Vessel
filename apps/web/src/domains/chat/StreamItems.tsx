@@ -505,6 +505,19 @@ export const RunItems = memo(function RunItems({
 /**
  * 排队：与运行态工具卡同一张 StreamCard（单行摘要折叠，长输入不撑高）。
  *
+ * 卡面走 **notice 家族**（`notice-block`：圆角 + 弱底色 + 统一内衬，与失败卡 / 运行时
+ * 提示卡同一套），而不是以前那条 `.stream-notice` —— 那是「一行 notice」的行 flex
+ * （`display: flex; flex-wrap: wrap`），套在卡上会让卡头、取消、展开体各自贴着内容宽度：
+ * 短输入是一小截、长输入才撑开，卡片看起来「随内容变宽」（用户报过）。块级卡面下三者
+ * 都按列宽排，短输入与多行输入卡宽一致。
+ *
+ * `notice-block` 走 `className` 而不是 `tone`：`tone` 的 neutral 档刻意不带家族类
+ * （工具卡 / 环境卡 / agent 卡是裸行，不该被套上 notice 卡面），排队卡需要的是「中性
+ * 卡面」，所以自己点家族类，不去改 tone 的语义。
+ *
+ * 卡头左侧只留**一个**状态标记：`StatusChip` 的字形（○ 排队 / – 已取消）已经表达了状态，
+ * notice 家族的身份圆点不再叠一个（见 chat.css 的 `.stream-card-queued`）。
+ *
  * 「取消排队」是**可操作控件**：放在 actions 插槽（始终可见），不进 summary，
  * 这样折叠状态下也能取消，且 summary 里没有可点元素。
  */
@@ -525,8 +538,8 @@ export function QueuedNotice({
       : t('chat.run.queuedUnknown');
   return (
     <StreamCard
-      // 宽度跟内容列一致：长输入不再把卡片撑出可见列（w-full + min-w-0 + max-w-full）。
-      className="stream-notice w-full min-w-0 max-w-full"
+      // 卡宽跟列一致（w-full + min-w-0 + max-w-full）：短输入不缩水、长输入不撑宽。
+      className="notice-block stream-card-queued w-full min-w-0 max-w-full"
       defaultOpen={defaultOpen}
       title={
         <StatusChip status={status} label={item.cancelled ? t('chat.run.cancelled') : position} />
@@ -535,19 +548,15 @@ export function QueuedNotice({
       actions={
         !item.cancelled ? (
           <div className="px-2.5 pb-1">
-            <Button
-              variant="link"
-              className="stream-notice-action"
-              onClick={() => onCancel(item.runId)}
-              disabled={item.cancelling}
-            >
+            <Button variant="link" onClick={() => onCancel(item.runId)} disabled={item.cancelling}>
               {item.cancelling ? t('chat.run.cancelling') : t('chat.run.cancelQueue')}
             </Button>
           </div>
         ) : undefined
       }
     >
-      <p className="m-0 min-w-0 px-2.5 pb-2 break-words whitespace-pre-wrap wrap-anywhere text-sm text-muted">
+      {/* 正文内衬由 `.notice-block > .event-block-body` 给，这里不再补 px。 */}
+      <p className="m-0 min-w-0 break-words whitespace-pre-wrap wrap-anywhere text-sm text-muted">
         {item.input}
       </p>
     </StreamCard>
