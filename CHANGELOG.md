@@ -14,6 +14,33 @@
 > 开发线已开启（2026-11-12）。条目随实现累积；0.50.0 的完整变更见
 > [docs/versions/0.50.0.md](docs/versions/0.50.0.md)。
 
+### Added
+
+- **`vessel prune`**：归档的东西开始有出口。默认 dry-run（一条不删），必须 `--yes` 才真删；
+  真删先取 `data-lock` exclusive，拿不到就拒绝（零删除，不重试、不降级）。三类桶互斥 ——
+  trace（复用 `pruneTenantTrace` 的留存策略）/ 终态 runs（`completed|failed|cancelled` 且
+  早于阈值）/ 老且非活跃 sessions（锁、租约、可 resume 的 run 任一成立即保留），dry-run 与
+  真删同序同集合。`--older-than <n><ms|s|m|h|d>`（裸数字按天，缺省 30d，与
+  `trace.retentionDays` 同口径）；`--json` 出 `PruneReport`（按类别汇总条数与体积）。
+  会话桶级联删会话壳 / 事件目录 / run 记录，并顺手清历史 `<sessionId>.jsonl` 会话 trace
+  （它不是 run trace，trace 策略永远不收 ⇒ 否则永久残留）。
+  `--archived` / `sessions.archive` 本单不做：sessions 至今没有归档概念
+  （`SessionState` 只有 `created_at` / `updated_at`），`--archived` 在这份数据上定义不出
+  「该删哪些」，不落半语义。
+- **设计实验室补齐两处缺口**：`CHIP_TONES` / `COMPOSER_ICON_TONES` 补样例（都从运行时数组
+  派生，加一档只改组件一处）；`EntityHeader` 的 `size: page|panel` 提进运行时表
+  （`ENTITY_HEADER_SIZES` + `HEADING_SIZE_CLASS`，用 `satisfies Record<...>` 把数组与
+  cva 键集合双向钉住 —— 漏写/多写都编译报错）。
+
+### Changed
+
+- **`[refs]` 尾注的 action 列表**改从宿主真实工具面读：`readMediaSurface(host.listTools())`
+  找 `media` 工具并读 schema 里 `action` 的 enum，尾注按真实动作与真实顺序拼
+  （没装 tesseract 就只有 `read|describe`）。三档语义不变 —— 工具在且读到动作用「点名真
+  动作」，没有工具说明怎么启用，读不到就退中性档（不点名动作，也不谎称工具不可用）；
+  探针抛错同样退中性档，绝不让一轮 LLM 请求失败。写死全集与当年写死 `media.read` 是同一
+  类错：让模型去填一个 schema 里不存在的值。
+
 ## [0.32.0] - 2026-10-31
 
 > 0.32.0（基于 0.31.0，未发布）：上下文管理系统。完整记录见

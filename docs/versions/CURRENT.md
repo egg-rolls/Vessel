@@ -11,6 +11,17 @@
 
 ## 已合入（现态）
 
+- **0.51 已合入（三项）**：
+  - **`vessel prune`**：默认 dry-run、`--yes` 才真删、真删走 `data-lock` exclusive（锁被占
+    即拒绝，零删除）。三类桶互斥（trace / 终态 runs / 老且非活跃 sessions —— 锁、租约、
+    可 resume 的 run 任一成立即保留），dry-run 与真删同序同集合；
+    `--older-than <n><ms|s|m|h|d>`（裸数字按天，缺省 30d）；`--json` 出 `PruneReport`。
+    `--archived` / `sessions.archive` 未做（sessions 没有归档概念）。
+  - **`[refs]` 尾注 action 收窄**：从 `host.listTools()` 里 `media` 工具 schema 的 `action`
+    enum 读真实动作（`readMediaSurface`），三档语义不变（有真动作 / 无工具 / 读不到⇒中性）。
+  - **设计实验室两缺口**：`CHIP_TONES` / `COMPOSER_ICON_TONES` 补 preview；`EntityHeader`
+    尺寸档进运行时表（`ENTITY_HEADER_SIZES` + `satisfies Record<...>` 双向钉住）。
+
 - **Platform Gateway / Node API 已拆分**：Gateway 8642（平台入口、UI 宿主、`platform.*`
   只读 RPC），Node API 8644（公司 runtime/数据）；平台 token 与 per-node token 分离；
   `vessel gateway` / `vessel node` CLI。
@@ -89,10 +100,12 @@
 
 ## 未实现 / 下一步
 
-- **0.51 待办**：`vessel prune`（默认 dry-run、`--yes`、走 data-lock exclusive、有 running
-  run 拒绝）；TUI 答 async ask；设计实验室两个缺口（`CHIP_TONES` / `COMPOSER_ICON_TONES` 的
-  preview、`EntityHeader` 运行时表）；工具卡交棒（需 `duration_ms`）；位置认领；
-  `sessions.search` 读侧投影缓存；`[refs]` 尾注 action 收窄；用量 43% unpriced。
+- **0.51 待办**：TUI 答 async ask；工具卡交棒（需历史侧 `duration_ms`）；位置认领；
+  `sessions.search` 读侧投影缓存；用量 43% unpriced。
+- **rotate 交棒缺口（0.51 进行中）**：self-rotate 的那一轮被当成「迟到的旧轮」做 epoch
+  fencing（正文落盘但不记账、notice 只带消息 id）⇒ 交接卡 + notice 改造 + 下一单在收口侧
+  解耦（`retiredDuringRunId` 判据，交棒轮正常记账；空正文也不静默）。报告：
+  `docs/dev/reports/0.51/rotate-stale.md`。
 - **G4 分布式 Node / G5 清理**未排期；`gateway reload` 不重载 registry。
 - **Workspace 插件独立包未实现**；Workspace = 公司数据目录仍是 target；当前 workspace 仍是 Team 目录键。
 - **T5 残留 71 行**（`tenant_id`=60 / text=11；keep=34 / defer-2=15 / defer-3=22），
