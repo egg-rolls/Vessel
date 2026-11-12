@@ -1662,6 +1662,19 @@ export const messages = {
   'designLab.preview.badge.title': 'Badge',
   'designLab.preview.button.desc': '全部变体：plain、primary、danger、dangerGhost、link、chip。',
   'designLab.preview.button.title': 'Button',
+  'designLab.preview.chipTones.desc':
+    'CHIP_TONES 一档一颗胶囊：muted、info、warn、ok、danger、band。胶囊的 tone 仍由状态派生，所以每颗出图用「该档的第一颗状态」；band 是 onBand 变体（不透明底 + ink 文字）。',
+  'designLab.preview.chipTones.note':
+    '字形不随档变化，只有底与文字色变 —— 颜色始终不是唯一的含义载体。',
+  'designLab.preview.chipTones.onBandTitle': 'band 档落在有色卡带上',
+  'designLab.preview.chipTones.title': 'StatusChip 色档',
+  'designLab.preview.composerIcon.desc':
+    '一个形状层（32px 正圆 + 凹陷底 + 强描边）配两档色调：primary 借主题色，quiet 静止灰、hover 转 ink；禁用态保留圆形，只把图标转灰。',
+  'designLab.preview.composerIcon.disabled': '禁用',
+  'designLab.preview.composerIcon.note':
+    '左起：发送纸飞机（16px）、回形针（14px，墨迹与纸飞机同占地）、禁用态发送键。把鼠标停在可用的两颗上看 hover 档 —— 盒子不变，只有图标颜色变。',
+  'designLab.preview.composerIcon.sampleLabel': '样例 {tone} 图标按钮',
+  'designLab.preview.composerIcon.title': 'Composer 图标按钮',
   'designLab.preview.confirm.body': '样例文案：确认后只关掉弹窗，不发起任何请求。',
   'designLab.preview.confirm.dangerBody': '样例文案：危险色主按钮，需要用户明确确认。',
   'designLab.preview.confirm.dangerConfirm': '删除',
@@ -1676,6 +1689,14 @@ export const messages = {
   'designLab.preview.dataTable.desc':
     '行间 1px 间隙透出页面底色，整体小圆角；表头与末行的外角跟随圆角。',
   'designLab.preview.dataTable.title': 'DataTable',
+  'designLab.preview.entityHeader.desc':
+    '两个尺寸档并排：page = 22px 衬线（一屏唯一的 h1），panel = 16px 无衬线（面板标题）。改尺寸只碰字号与字族、不碰颜色；祖先永远更小更暗。',
+  'designLab.preview.entityHeader.sampleAction': '返回',
+  'designLab.preview.entityHeader.sampleDetails': '详情',
+  'designLab.preview.entityHeader.sampleNode': '样例节点',
+  'designLab.preview.entityHeader.sampleStatus': '已归档',
+  'designLab.preview.entityHeader.sampleTitle': '样例 Team',
+  'designLab.preview.entityHeader.title': 'EntityHeader',
   'designLab.preview.env.desc':
     '环境信息卡：卡头是 scope 标签（未生效时加 danger 文案）与条数，展开看上下文原文。',
   'designLab.preview.failure.desc':

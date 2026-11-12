@@ -13,8 +13,10 @@ export {
   type DataTableProps,
 } from './DataTable';
 export {
+  ENTITY_HEADER_SIZES,
   EntityHeader,
   type EntityHeaderProps,
+  type EntityHeaderSize,
   type EntityScopeItem,
 } from './EntityHeader';
 export {
