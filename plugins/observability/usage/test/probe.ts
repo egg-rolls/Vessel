@@ -190,6 +190,7 @@ check('web-src uses tokens, not raw colors', offenders.length === 0, offenders.j
 const appSource = await readFile(join(srcDir, 'App.tsx'), 'utf8');
 const usageSource = await readFile(join(srcDir, 'UsageView.tsx'), 'utf8');
 const logsSource = await readFile(join(srcDir, 'LogsView.tsx'), 'utf8');
+const sharedSource = await readFile(join(srcDir, 'shared.tsx'), 'utf8');
 check('App renders no cross-page tab nav', !/\bPAGES\b|<nav\b/.test(appSource));
 check('leaderboard view removed', !(await exists(join(srcDir, 'LeaderboardView.tsx'))));
 check(
@@ -208,8 +209,20 @@ check(
   usageSource.includes('TableFrame') && logsSource.includes('TableFrame'),
 );
 check(
-  'logs view renders both truncation notices',
-  logsSource.includes('logs.truncated.files') && logsSource.includes('logs.truncated.partial'),
+  'both views render the one shared coverage notice',
+  sharedSource.includes('export function CoverageNotice') &&
+    sharedSource.includes('logs.truncated.files') &&
+    sharedSource.includes('logs.truncated.partial') &&
+    usageSource.includes('CoverageNotice') &&
+    logsSource.includes('CoverageNotice'),
+);
+check(
+  'no view keeps a private copy of the truncation copy',
+  !usageSource.includes('logs.truncated') && !logsSource.includes('logs.truncated'),
+);
+check(
+  'the usage page shows coverage for the selected range',
+  usageSource.includes('summary.source'),
 );
 
 const en = translator('en');
@@ -844,7 +857,10 @@ function runIds(events: RawEvent[]): string[] {
 
   const store = new EventStore({
     ...DEFAULT_LIMITS,
+    // Both budgets are tightened: this test is about running out *inside* a
+    // selected range, where `maxBytesPerWindowCall` would otherwise win.
     maxBytesPerCall: Math.floor(fileBytes * 2.5),
+    maxBytesPerWindowCall: Math.floor(fileBytes * 2.5),
     maxBytesPerFile: fileBytes + 16,
   });
   const over = await loadDays(store, dir, 1);
@@ -889,6 +905,105 @@ function runIds(events: RawEvent[]): string[] {
     'a partially read file still yields its newest in-window events',
     tail.events.length > 0 && tail.events.every((event) => event.ts >= daysCutoff(NOW, 1)),
     String(tail.events.length),
+  );
+}
+
+// 13. A selected range gets the larger window budget; "all time" keeps the small
+//     one. `same directory, same limits` — only the presence of a window differs.
+{
+  const dir = await traceDir('window-budget-scale');
+  let fileBytes = 0;
+  for (const [index, name] of ['run-b1', 'run-b2', 'run-b3'].entries()) {
+    const ts = dayStart(0) + 60_000 + index * 1_000;
+    const body =
+      lineAt('llm.response', name, ts, 120) + lineAt('llm.response', name, ts + 500, 120);
+    fileBytes = await writeTrace(dir, name, body, ts + 1_000);
+  }
+
+  const store = new EventStore({
+    ...DEFAULT_LIMITS,
+    // One file per call when no window is selected...
+    maxBytesPerCall: fileBytes + 8,
+    // ...and the whole three-file range when one is.
+    maxBytesPerWindowCall: fileBytes * 3 + 32,
+    maxBytesPerFile: fileBytes + 16,
+  });
+
+  const allTime = await store.loadEvents(dir);
+  check(
+    'without days the small per-call budget still applies',
+    allTime.files_covered === 1 && allTime.files_truncated === true,
+    `covered ${allTime.files_covered}, files_truncated=${allTime.files_truncated}`,
+  );
+
+  const windowed = await loadDays(store, dir, 1);
+  check(
+    'a selected range uses the larger window budget',
+    windowed.files_covered === 3 &&
+      windowed.files_in_window === 3 &&
+      windowed.files_truncated === false,
+    `covered ${windowed.files_covered}/${windowed.files_in_window}, files_truncated=${windowed.files_truncated}`,
+  );
+  check(
+    'the window budget is actually spent, not sampled',
+    windowed.events.length === 6,
+    String(windowed.events.length),
+  );
+}
+
+// 14. Retention must clear the read budget: reading a window completely and then
+//     evicting half of it would make "complete" an illusion (the next render
+//     re-reads, or the numbers come out short).
+{
+  const dir = await traceDir('window-retention');
+  let fileBytes = 0;
+  let windowBytes = 0;
+  for (const [index, name] of ['run-r1', 'run-r2', 'run-r3', 'run-r4'].entries()) {
+    const ts = dayStart(0) + 60_000 + index * 1_000;
+    const body =
+      lineAt('llm.response', name, ts, 400) + lineAt('llm.response', name, ts + 500, 400);
+    fileBytes = await writeTrace(dir, name, body, ts + 1_000);
+    windowBytes += fileBytes;
+  }
+
+  const base = {
+    ...DEFAULT_LIMITS,
+    maxBytesPerCall: windowBytes,
+    maxBytesPerWindowCall: windowBytes,
+    maxBytesPerFile: fileBytes + 16,
+    maxRetainedBytesPerFile: fileBytes * 2,
+    maxCachedFiles: 64,
+  };
+
+  const roomy = new EventStore({ ...base, maxRetainedBytesTotal: windowBytes + 32 });
+  const complete = await loadDays(roomy, dir, 1);
+  check(
+    'retention above the window keeps the range complete',
+    complete.files_truncated === false &&
+      complete.partial_files === 0 &&
+      complete.events.length === 8,
+    `files_truncated=${complete.files_truncated}, partial=${complete.partial_files}, events=${complete.events.length}`,
+  );
+
+  const tight = new EventStore({ ...base, maxRetainedBytesTotal: Math.floor(windowBytes / 2) });
+  const squeezed = await loadDays(tight, dir, 1);
+  check(
+    'retention below the window loses part of the range',
+    squeezed.files_truncated === true ||
+      squeezed.partial_files > 0 ||
+      squeezed.events.length < complete.events.length,
+    `files_truncated=${squeezed.files_truncated}, partial=${squeezed.partial_files}, events=${squeezed.events.length}`,
+  );
+
+  check(
+    'the shipped retention clears the shipped window budget',
+    DEFAULT_LIMITS.maxRetainedBytesTotal >= DEFAULT_LIMITS.maxBytesPerWindowCall,
+    `${DEFAULT_LIMITS.maxRetainedBytesTotal} vs ${DEFAULT_LIMITS.maxBytesPerWindowCall}`,
+  );
+  check(
+    'the shipped budgets are 96 MiB in a window, 16 MiB for all time',
+    DEFAULT_LIMITS.maxBytesPerWindowCall === 96 * 1024 * 1024 &&
+      DEFAULT_LIMITS.maxBytesPerCall === 16 * 1024 * 1024,
   );
 }
 

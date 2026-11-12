@@ -11,6 +11,7 @@ import { costHint, fmtCost, fmtInt, fmtPct, ratioHint } from './format';
 import type { Translator } from './i18n';
 import { ModelTable } from './ModelTable';
 import {
+  CoverageNotice,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -183,6 +184,12 @@ export function UsageView({ client, refreshKey, t }: ViewProps) {
       <TableToolbar label={t('usage.toolbar')}>
         <RangeTabs value={range} onChange={setRange} t={t} />
       </TableToolbar>
+      {/* The totals below are only as complete as the reader's coverage of the
+          selected range; say so instead of presenting a partial sum as the
+          total. Same component (and copy) as the Logs page. */}
+      {state.status === 'ready' ? (
+        <CoverageNotice source={state.data.summary.source} t={t} />
+      ) : null}
       {state.status === 'loading' ? <LoadingState label={t('common.loading')} /> : null}
       {state.status === 'error' ? (
         <ErrorState

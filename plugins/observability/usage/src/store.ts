@@ -149,34 +149,67 @@ export const USAGE_EVENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * One call may read this much from disk **when a day window is selected**.
+ *
+ * A selected range means "the real total for these N days", so the budget must
+ * be large enough to hold that range instead of silently shrinking the numbers
+ * (a total that quietly covers 43 of 176 runs of the last day is a lie the user
+ * cannot see). The reference directory's last day is 180 files / 75 MiB on disk,
+ * which bills 65.1 MiB at the 2 MiB per-file cap and reads complete in 270 ms —
+ * a first estimate of 64 MiB was 1 MiB short of that, so the budget is the same
+ * 96 MiB as the retention cap (`maxRetainedBytesTotal`): read at most 96 MiB,
+ * retain at most 96 MiB, one number for both.
+ *
+ * The cap is still a cap: a range that does not fit (7 days there is 1093 MiB,
+ * and a *today* window is open-ended — it grows until midnight) stays an honest
+ * truncation, `files_truncated` is set, and the UI says "the newest N of M run
+ * files in this range".
+ *
+ * The no-window path (`days` absent = "all time") keeps `maxBytesPerCall`
+ * (16 MiB) instead: that is the whole history, which is unbounded by nature and
+ * is expected to be a newest-first sample.
+ */
+export const WINDOW_BUDGET_BYTES = 96 * 1024 * 1024;
+
+/**
  * Read budget and retention caps.
  *
- * `maxBytesPerCall` (16 MiB) is the whole I/O a single RPC may do. The reference
- * directory is ~1.09 GiB / 210k lines; reading it whole measured 6.3 s (and
- * 14.9 s once the file cache was cold), while a 16 MiB first call measured
- * ~0.37 s and covered 49 of 614 run files (1.7k events). 16 MiB is the top of
- * the 8–16 MiB range because trace lines are large in practice — `llm.request`
- * averages ~7.7 KB and one `context.changed` can be 180 KB — so a smaller cap
- * would cover only a handful of runs while saving a fraction of that time.
+ * `maxBytesPerCall` (16 MiB) is the whole I/O a single RPC may do when no day
+ * window is selected ("all time", and the Logs page). The reference directory is
+ * ~1.09 GiB / 210k lines; reading it whole measured 6.3 s (and 14.9 s once the
+ * file cache was cold), while a 16 MiB first call measured ~0.37 s and covered
+ * 49 of 614 run files (1.7k events). 16 MiB is the top of the 8–16 MiB range
+ * because trace lines are large in practice — `llm.request` averages ~7.7 KB and
+ * one `context.changed` can be 180 KB.
+ *
+ * `maxBytesPerWindowCall` (`WINDOW_BUDGET_BYTES`, 96 MiB) replaces it when a day
+ * window is selected; see that constant for why.
  *
  * `maxBytesPerFile` (2 MiB) is what a single trace file may contribute per
  * call, so one outsized run cannot eat the whole window; a bigger file is read
  * from its newest 2 MiB (head dropped, flagged as partial). Subsequent appends
- * to it are still read incrementally, so only pre-existing history is lost.
+ * to it are still read incrementally, so only pre-existing history is lost. On
+ * the reference directory 11 of last day's 180 run files exceeded 2 MiB and are
+ * reported through `partial_files`.
  *
  * `maxFilesPerCall` (256) bounds per-call `stat`/parse bookkeeping for
  * directories made of thousands of tiny traces.
  *
- * `maxRetainedBytesPerFile` (4 MiB) and `maxRetainedBytesTotal` (32 MiB) bound
- * memory. A window is billed at most 16 MiB of file bytes, so in steady state
- * the cache holds ~that much; 32 MiB leaves room for the appended growth of a
- * long-running trace before whole files are evicted LRU-style. Retained bytes
- * are raw trace bytes (the parsed objects are roughly 2–3× that), so the cache
- * is estimable instead of growing with the number of runs on disk. Non-usage
- * event types are not retained at all (see `USAGE_EVENT_TYPES`).
+ * `maxRetainedBytesPerFile` (4 MiB) and `maxRetainedBytesTotal` (96 MiB) bound
+ * memory, and they must clear the read budget or "complete" would be an
+ * illusion: reading 96 MiB and retaining only 32 MiB would evict part of the
+ * very window that was just read, and the next render would re-read it (or
+ * report fewer runs). Retained bytes are *usage* trace bytes only (non-usage
+ * types are never retained — see `USAGE_EVENT_TYPES`), so a full window retains
+ * appreciably less than it reads: last day's 65.1 MiB read retained 29.9 MiB
+ * across 180 files and cost +50 MiB of heap. Worst case heap is ~0.2–0.3 GiB
+ * (parsed objects are roughly 2–3× the retained bytes), bounded by the total cap
+ * rather than by the number of runs on disk; before the window work it was
+ * ~64–96 MiB with a 32 MiB cap.
  */
 export interface ReadLimits {
   maxBytesPerCall: number;
+  maxBytesPerWindowCall: number;
   maxBytesPerFile: number;
   maxFilesPerCall: number;
   maxRetainedBytesPerFile: number;
@@ -186,10 +219,11 @@ export interface ReadLimits {
 
 export const DEFAULT_LIMITS: ReadLimits = {
   maxBytesPerCall: 16 * 1024 * 1024,
+  maxBytesPerWindowCall: WINDOW_BUDGET_BYTES,
   maxBytesPerFile: 2 * 1024 * 1024,
   maxFilesPerCall: 256,
   maxRetainedBytesPerFile: 4 * 1024 * 1024,
-  maxRetainedBytesTotal: 32 * 1024 * 1024,
+  maxRetainedBytesTotal: 96 * 1024 * 1024,
   maxCachedFiles: 256,
 };
 
@@ -483,6 +517,14 @@ export class EventStore {
         ? files
         : files.filter((file) => file.mtimeMs >= cutoff - MTIME_SLACK_MS);
 
+    // A selected range means "the real total for these N days": it gets the
+    // larger window budget so the range fits instead of being silently sampled.
+    // Without a window ("all time") the small per-call budget still applies.
+    const budget =
+      cutoff === undefined
+        ? this.limits.maxBytesPerCall
+        : Math.max(this.limits.maxBytesPerCall, this.limits.maxBytesPerWindowCall);
+
     // Inside the window, newest first: the budget must land on the runs the user
     // is looking at. In-window files are normally far smaller than the budget,
     // so this loop is the exception (a busy last N days) rather than the rule. A
@@ -495,7 +537,7 @@ export class EventStore {
     for (const file of inWindow) {
       if (window.length >= this.limits.maxFilesPerCall) break;
       const cost = Math.min(file.size, this.limits.maxBytesPerFile);
-      if (billed + cost > this.limits.maxBytesPerCall) break;
+      if (billed + cost > budget) break;
       window.push(file);
       billed += cost;
     }
@@ -514,9 +556,9 @@ export class EventStore {
     // must not become an unbounded read.
     let bytesRead = 0;
     for (const file of window) {
-      const budget = this.limits.maxBytesPerCall - bytesRead;
-      if (budget <= 0) break;
-      bytesRead += await this.refresh(file, budget);
+      const remaining = budget - bytesRead;
+      if (remaining <= 0) break;
+      bytesRead += await this.refresh(file, remaining);
     }
 
     this.evict();
