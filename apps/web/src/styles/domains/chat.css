@@ -742,6 +742,17 @@
   align-items: center;
 }
 
+/* 失败卡（`RunFailureCard`）折叠态只剩「语义圆点 + 错误摘要」：状态 chip 与 run id 都在
+   展开体里，卡头的 title 槽按 StreamCard 的必填契约留空（`title={null}` ⇒ 一个空 span）。
+   空 span 本身没有宽高，但它是卡头 flex 行（`gap: 10px`）里的一个 item —— 留着就是圆点与
+   摘要之间多插一段间距。`title` 是必填 prop 又不能不给，所以在这里把空槽的盒子收掉；
+   将来若这张卡真有标题文本，`:empty` 不匹配，排布回到原样。作用域只到失败卡。 */
+
+.run-failure-card > summary > .stream-card-title:empty,
+.run-failure-card > .event-block-summary > .stream-card-title:empty {
+  display: none;
+}
+
 .notice-block.warn {
   background: var(--warn-soft);
   color: var(--warn);
