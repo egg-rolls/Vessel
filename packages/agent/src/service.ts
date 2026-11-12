@@ -73,6 +73,9 @@ import {
   type AgentEvent,
   type AgentEventListener,
   type AgentMessage,
+  type AgentRecallInput,
+  type AgentRecallResult,
+  type AgentRecallSkip,
   type AgentRole,
   type AgentService,
   type AgentServiceOptions,
@@ -2658,6 +2661,133 @@ export class AgentServiceImpl implements AgentService {
       });
     // `unread` / `pending` 保持 **agent 维度**（过滤前），它们是收件箱口径，不是会话口径。
     return { agent_id: agentId, unread: listed.unread, pending: listed.pending, entries };
+  }
+
+  /**
+   * 撤回待处理输入（`agents.recall`，0.53）：把消息从「将执行」集合里拿走。
+   *
+   * 分档只有一条判据：**消息的 source**（inbox 条目里的 `source` 就是发送者 principal）。
+   * - `human`：用户说「这条不发了」⇒ `inbox.discard` 真删（不留墓碑）。
+   * - 其它（agent / system）：取消 = 这次不执行，但消息**留档** ⇒ `inbox.unhold`
+   *   （回到可读 unread，模型仍能 `inbox read`）。这与 0.32 `interrupt` 分支「不丢正文」
+   *   的口径一致。
+   *
+   * 条目没有也不该有 run id：要取消的 queued run 只能通过 `runMessageIds` 反查（同一条
+   * 消息至多对应一个进行中的 run）。正在执行的那条不能撤回（`active`），已消费的也不能
+   * （`consumed`）—— 撤回是「还没发出去」的操作。
+   */
+  async recall(input: AgentRecallInput): Promise<AgentRecallResult> {
+    await this.ready;
+    const agentId = input.agent_id;
+    const ids = [...new Set(input.message_ids)];
+    const deleted: string[] = [];
+    const skipped: AgentRecallSkip[] = [];
+    if (ids.length === 0) return { deleted, skipped };
+    const store = this.inbox;
+    const known = new Map(
+      (store === undefined ? [] : store.findByIds(agentId, ids)).map((entry) => [entry.id, entry]),
+    );
+    for (const messageId of ids) {
+      const entry = known.get(messageId);
+      if (entry === undefined) {
+        skipped.push({ message_id: messageId, reason: 'not_found' });
+        continue;
+      }
+      if (entry.status === 'consumed') {
+        skipped.push({ message_id: messageId, reason: 'consumed' });
+        continue;
+      }
+      const holder =
+        entry.session_id !== undefined ? this.findEntry(agentId, entry.session_id) : undefined;
+      if (holder?.active?.messageId === messageId) {
+        skipped.push({ message_id: messageId, reason: 'active' });
+        continue;
+      }
+      this.cancelQueuedRunsFor(holder, messageId, 'recall');
+      // 分档收口：human ⇒ 真删；其它 ⇒ 留档（unhold 回 unread）。
+      this.closeWithdrawnMessage(agentId, holder, messageId, entry.source);
+      deleted.push(messageId);
+    }
+    return { deleted, skipped };
+  }
+
+  /**
+   * 外部取消 queued run 的收口（D-a）：`runs.cancel` 只动 scheduler，不经过 executor，
+   * 所以 `entry.queuedRuns` / `entry.pending` / inbox 的 held 全都留在原地。不在这里收口，
+   * 这个 agent 就再也不会被 wake（`canScheduleWake` 恒 false）、peer 停止通知与 TTL 回收
+   * 失效（`memberStillBusy` 恒 true），而那条消息永远 pending + held。
+   *
+   * 只处理 **queued** run：active run 的消息早已出队并 consumed，取消由 runtime 负责；
+   * resume run 没有 `runMessageIds`，`queuedRuns` 里也没有它的记账（见 `submitResumeRun`）。
+   */
+  releaseCancelledRun(runId: string, _reason?: string): void {
+    const messageId = this.runMessageIds.get(runId);
+    for (const [agentId, map] of this.executionUnitRegistry) {
+      for (const entry of map.values()) {
+        // active run 不在这里收口：消息早已出队并 consumed，取消由 runtime / `settleHandle`
+        // 负责（那边还要按 `runMessageIds` 清 urgent 记账，提前删会漏清理）。
+        if (entry.active?.runId === runId) return;
+        if (!entry.queuedRuns.has(runId)) continue;
+        entry.queuedRuns.delete(runId);
+        this.runMessageIds.delete(runId);
+        this.interruptReasons.delete(runId);
+        if (messageId === undefined) return;
+        const source = this.inbox?.findByIds(agentId, [messageId])[0]?.source;
+        this.closeWithdrawnMessage(agentId, entry, messageId, source);
+        return;
+      }
+    }
+    // 找不到持有者（entry 已回收 / resume run 没有消息映射）：只清 run 记账，不动 inbox ——
+    // 消息按「未消费」留在库里，重启恢复或用户再次投递都会重新接管它。
+    this.runMessageIds.delete(runId);
+    this.interruptReasons.delete(runId);
+  }
+
+  /**
+   * 取消「这条消息对应的」queued run（同 run 记账一起清）。
+   *
+   * 用 `runMessageIds` 反查而不是给条目加 run id：run 是执行侧的一次尝试，重启后无意义，
+   * 写进消息会把「消息」与「执行」变成两份互相指向的真相源。
+   */
+  private cancelQueuedRunsFor(
+    entry: ExecutionUnitEntry | undefined,
+    messageId: string,
+    reason: string,
+  ): void {
+    const pendingRunIds = [...this.runMessageIds].filter(([, id]) => id === messageId);
+    for (const [runId] of pendingRunIds) {
+      if (entry?.queuedRuns.has(runId)) {
+        // 只有真的在队列里才动 scheduler：已在跑的去 cancel 会把这次执行打断（撤回不是打断）。
+        this.scheduler.cancel(runId, reason);
+        entry.queuedRuns.delete(runId);
+      }
+      this.runMessageIds.delete(runId);
+      this.interruptReasons.delete(runId);
+    }
+  }
+
+  /**
+   * 收口一条「已离开将执行集合」的消息：出队 + 清 urgent 记账 + 按 source 决定 inbox 出口。
+   *
+   * `recall` 与 `releaseCancelledRun` 共用这一段，避免两条路各写一遍（口径一散就会
+   * 出现「cancel 走 discard、recall 走 unhold」这类不一致）。
+   */
+  private closeWithdrawnMessage(
+    agentId: string,
+    entry: ExecutionUnitEntry | undefined,
+    messageId: string,
+    source: string | undefined,
+  ): void {
+    if (entry !== undefined) {
+      const index = entry.pending.findIndex((message) => message.id === messageId);
+      if (index >= 0) entry.pending.splice(index, 1);
+    }
+    this.urgentMessageIds.delete(messageId);
+    this.urgentMessages.delete(messageId);
+    const store = this.inbox;
+    if (store === undefined) return;
+    if (source === HUMAN_PRINCIPAL) store.discard(agentId, [messageId]);
+    else store.unhold(agentId, [messageId]);
   }
 
   async resumeRun(runId: string, opts?: RunOptions): Promise<string> {

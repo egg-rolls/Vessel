@@ -69,6 +69,9 @@ export interface AgentMethodsDeps {
  */
 const ADMIN_VIEWER = '*';
 
+/** `agents.recall` 一次最多撤回的条数（条带一次撤一条；批量只是便利，不放开成无界写）。 */
+const RECALL_MAX_IDS = 20;
+
 /**
  * 人类管理面 principal：静态 gateway token / admin token。合成 owner 传输带
  * `agent_id`，属于 agent 身份，不算人类管理面。
@@ -757,6 +760,76 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
         });
         // `agent_id` 回显在结果里：条带拿到它才能调 `agents.recall`。
         return { ...snapshot, agent_id: agentId };
+      },
+    },
+    {
+      /**
+       * `agents.recall`（0.53，write）：撤回一条待处理输入（= 取消「这条还没发出去」）。
+       *
+       * 为什么不是 `runs.cancel`：待处理的 inbox 条目**没有也不该有** run id —— run 是执行
+       * 侧的一次尝试（重启后无意义），把 run id 写进消息会让「消息」与「执行」互为真相源。
+       * 服务端按 message id 反查那条消息对应的 queued run 并一并取消。
+       *
+       * 分档只有一条：`source === human` ⇒ **真删**（用户说这条不发了）；其它源 ⇒
+       * **unhold 留档**（这次不执行，消息回到可读 unread，模型仍能 read）。
+       * `skipped` 说明没撤成的原因：未知 / 已消费 / 正在执行（撤回不是打断）。
+       */
+      name: 'agents.recall',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['agent_id', 'message_ids'],
+        properties: {
+          agent_id: { type: 'string', minLength: 1 },
+          message_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['deleted'],
+        properties: {
+          deleted: stringListSchema,
+          skipped: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['message_id', 'reason'],
+              properties: {
+                message_id: { type: 'string' },
+                reason: { type: 'string', enum: ['not_found', 'consumed', 'active'] },
+              },
+            },
+          },
+        },
+      },
+      handler: async (params, ctx) => {
+        const agentId = stringParam(params, 'agent_id');
+        const ids = Array.isArray(params.message_ids)
+          ? params.message_ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
+          : [];
+        if (ids.length === 0) {
+          throw new RpcError('invalid_params', 'agents.recall requires non-empty message_ids');
+        }
+        // 一次最多 20 条：条带一次只撤一条，批量是给人 / 脚本的便利，不放开成无界写。
+        if (ids.length > RECALL_MAX_IDS) {
+          throw new RpcError(
+            'invalid_params',
+            `message_ids accepts at most ${RECALL_MAX_IDS} ids`,
+            {
+              count: ids.length,
+            },
+          );
+        }
+        // 可见性口径与 agents.list / agents.get / agents.inbox 完全一致。
+        const agents = await visibleAgents(deps, ctx);
+        if (!agents.some((entry) => entry.id === agentId)) {
+          throw new RpcError('not_found', `agent not found: ${agentId}`, { agent_id: agentId });
+        }
+        const control = requireAgentControl(deps.agent);
+        if (control.recall === undefined) {
+          throw new RpcError('not_supported', 'agent control does not expose recall');
+        }
+        return await control.recall({ agent_id: agentId, message_ids: ids });
       },
     },
     {

@@ -359,6 +359,14 @@ export interface AgentControlLike {
     options?: AgentInboxLikeOptions,
   ): AgentInboxLikeResult | Promise<AgentInboxLikeResult>;
   /**
+   * 撤回待处理输入（`agents.recall`，0.53）：把消息从「将执行」集合里拿走。
+   *
+   * human 源 = 真删（inbox discard）；agent 源 = unhold 留档。未实现（缺省）时 RPC 回
+   * `not_supported`。**不给条目加 run id**：取消只按 message id 反查，run 是执行侧的一次
+   * 尝试，不该写进消息。
+   */
+  recall?(input: AgentRecallLikeInput): AgentRecallLikeResult | Promise<AgentRecallLikeResult>;
+  /**
    * `sessions.create`（CREATE-0.39）：同 agent 新 session，成为唯一 primary。
    * 失败以 AgentError 形状（`code` + `message`）reject，RPC 层统一映射。
    */
@@ -407,4 +415,22 @@ export interface AgentInboxLikeResult {
   unread: number;
   pending: number;
   entries: AgentInboxLikeEntry[];
+}
+
+/** `agents.recall` 入参（0.53）：按 message id 撤回待处理输入。 */
+export interface AgentRecallLikeInput {
+  agent_id: string;
+  message_ids: readonly string[];
+}
+
+/** `agents.recall` 的单条跳过原因。 */
+export interface AgentRecallLikeSkip {
+  message_id: string;
+  reason: 'not_found' | 'consumed' | 'active';
+}
+
+/** `agents.recall` 结果（与 inbox 的 discard 口径同形，前端可直接用）。 */
+export interface AgentRecallLikeResult {
+  deleted: string[];
+  skipped: AgentRecallLikeSkip[];
 }

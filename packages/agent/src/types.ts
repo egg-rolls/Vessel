@@ -717,9 +717,29 @@ export interface AdmitInput {
   origin?: 'ask_answer';
 }
 
+/** `agents.recall` 的单条跳过原因（与 inbox 的 discard 口径同族）。 */
+export interface AgentRecallSkip {
+  message_id: string;
+  reason: 'not_found' | 'consumed' | 'active';
+}
+
+/** `agents.recall` 入参：把待处理输入从「将执行」集合里拿走。 */
+export interface AgentRecallInput {
+  agent_id: string;
+  message_ids: string[];
+}
+
+/**
+ * `agents.recall` 结果：`deleted` = 已从待处理集合拿走（human 源真删 / agent 源留档），
+ * `skipped` 说明为什么没拿（未知 / 已消费 / 正在跑）。
+ */
+export interface AgentRecallResult {
+  deleted: string[];
+  skipped: AgentRecallSkip[];
+}
+
 /** 统一准入结果；`session_id` 是 body id */
-export interface AdmitResult {
-  run_id: string;
+export interface AdmitResult {  run_id: string;
   agent_id: string;
   session_id: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -1253,6 +1273,24 @@ export interface AgentService {
       text?: string;
     }[];
   };
+  /**
+   * 撤回待处理输入（`agents.recall`，0.53）：把消息从「将执行」集合里拿走。
+   *
+   * 语义按 source 分两档：**human 源 = 真删**（用户说「这条不发了」，inbox discard，
+   * 不留墓碑）；**agent 源 = unhold 留档**（这次不执行，消息回到可读 unread，模型仍能
+   * read）。同时取消它对应的 queued run、清 `queuedRuns` 记账、从 body mailbox 出队。
+   * 正在执行的那条不能撤回（`skipped: active`），已消费的也不能（`skipped: consumed`）。
+   */
+  recall(input: AgentRecallInput): Promise<AgentRecallResult>;
+  /**
+   * 外部取消一个 **queued** run 后的收口（`runs.cancel` → `RunControlLike.cancel` → 这里）。
+   *
+   * 不调它就会留下永久僵尸（D-a）：`entry.queuedRuns` 里的 runId 永不清除 ⇒
+   * `canScheduleWake` 恒 false（该 agent 再也不会被 wake）、`memberStillBusy` 恒 true
+   * （peer 停止通知与 TTL 回收失效）、消息永远停在 `entry.pending` + inbox held。
+   * 与 `recall` 共用同一段收口（清记账 / 出队 / 按 source 分档）。
+   */
+  releaseCancelledRun(runId: string, reason?: string): void;
   /**
    * 更新名字 / model / systemPrompt；名字立即生效且保持同 Team（unbound 为 tenant）
    * 内 present 成员唯一。model / systemPrompt 只影响下一次 spawn 的 ExecutionUnit。

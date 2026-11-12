@@ -27,6 +27,8 @@ import {
   type AgentLifecycleFailLike,
   type AgentLifecycleItemLike,
   type AgentListLikeInput,
+  type AgentRecallLikeInput,
+  type AgentRecallLikeResult,
   type AgentSendBatchResultLike,
   type AgentSendLikeInput,
   type AgentStatusLike,
@@ -292,6 +294,10 @@ export function createAgentControl(
     inbox(agentId: string, options?: AgentInboxLikeOptions): AgentInboxLikeResult {
       // 只读：直接转发 service 的只读快照（不消费、不改状态）。
       return service.inboxSnapshot(agentId, options ?? {});
+    },
+    recall(input: AgentRecallLikeInput): Promise<AgentRecallLikeResult> {
+      // 撤回 = 取消那一条待处理输入的「将执行」意图（human 真删 / agent 留档）。
+      return service.recall({ agent_id: input.agent_id, message_ids: [...input.message_ids] });
     },
     async dispatch(inputs: AgentDispatchLikeInput[]): Promise<AgentDispatchBatchResultLike> {
       const settledResults = await Promise.allSettled(

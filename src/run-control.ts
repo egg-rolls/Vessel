@@ -111,7 +111,12 @@ export function createRunControl(
       return mapped;
     },
     cancel(runId: string, reason?: string): boolean {
-      return scheduler.cancel(runId, reason);
+      const cancelled = scheduler.cancel(runId, reason);
+      // D-a：scheduler 摘掉队列项就结束了 —— service 的 queuedRuns / pending /
+      // inbox 的 held 只有 service 自己知道。不回调这一段，被取消的 queued run 会留下
+      // 永久僵尸：该 agent 再也不会被 wake，消息永远 pending + held。
+      if (cancelled) service.releaseCancelledRun(runId, reason);
+      return cancelled;
     },
     snapshot(): RunControlSnapshotLike {
       return snapshotOf(scheduler);

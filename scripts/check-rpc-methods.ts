@@ -65,6 +65,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'agents.send': 'write',
   // 0.52：Web 待处理条带只读 inbox 视图（peek 正文不改状态）。
   'agents.inbox': 'read',
+  // 0.53：撤回一条待处理输入（human 源真删 / agent 源留档）；不是 runs.cancel。
+  'agents.recall': 'write',
   // 0.52：节点侧只读目录浏览（单层 / 无内容；结果里折稳定码，不抛 500）。
   'attachments.list': 'read',
   'agents.dispatch': 'write',
