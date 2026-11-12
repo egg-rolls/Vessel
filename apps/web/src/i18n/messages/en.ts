@@ -1063,6 +1063,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.pending.sameSource': '{count} items',
   'chat.pending.more': '{count} more not shown',
   'chat.pending.waiting': 'Waiting',
+  'chat.pending.edit': 'Take back to edit',
+  'chat.pending.editTaken': 'Taken back into the input box',
+  'chat.pending.editPeekFailed': 'Could not read the full text of that item; nothing was changed',
+  'chat.pending.editRecallRejected':
+    'Put back into the input box, but the queue entry stayed: it may have started running',
+  'chat.pending.editRecallFailed':
+    'Put back into the input box, but removing the entry failed: {detail}',
   'chat.toast.queued': 'Queued',
   'chat.toast.cancelRequested': 'Requested cancellation of the run',
   'chat.toast.queueCancelled': 'Removed from the queue',
@@ -1819,7 +1826,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.preview.pageScaffold.sampleTitle': 'Sample page',
   'designLab.preview.pageScaffold.title': 'PageScaffold',
   'designLab.preview.queued.desc':
-    'Queued card: amber band with a waiting chip; cancel stays visible even when the card is collapsed.',
+    'Queued card: amber band with a waiting chip and two round icon keys (take back to edit, cancel) that stay visible when collapsed; an agent-source card has no keys at all.',
   'designLab.preview.reasoning.desc':
     'Reasoning card: title, a copy button on its left, and the time at the far right; more than 12 lines expand, and it collapses when streaming ends.',
   'designLab.preview.section.desc': 'Raised panel with a title, description and optional actions.',
