@@ -1636,7 +1636,7 @@ export interface TeamPostInput {
   federation?: TeamLogFederation;
   /**
    * 附件引用（0.52，additive）：只有路径与种类，随 @ 投递写成成员侧的 core
-   * `Message.refs`（成员靠 `[refs]` 环境信息行知道该用 `media.read` 读）。
+   * `Message.refs`（成员靠 `[refs]` 环境信息行知道该用 `media` 工具按需读）。
    *
    * 同时**写进 Team 日志**（`TeamLogEntry.refs`）并原样回显在 `TeamPostResult.refs`，
    * 时间线据此显示引用 chip；系统行（seed / retract / join 等）不带。
