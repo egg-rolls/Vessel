@@ -74,6 +74,10 @@ button:disabled {
   --ok-soft: rgba(11, 127, 102, 0.1);
   --warn: #4a4a4e;
   --warn-soft: rgba(74, 74, 78, 0.1);
+  /* 琥珀语义色：与宿主 tokens.css 的 --amber 同值同义（「未发送/排队中」「正在连接」「用量接近上限」）*/
+  --amber: #8a5a00;
+  --amber-soft: #fcf2d4;
+  --amber-ink: #6b4400;
   --danger: #c0362c;
   --danger-soft: rgba(192, 54, 44, 0.09);
   --info: #5c5c60;
@@ -216,6 +220,9 @@ button:disabled {
     --ok-soft: rgba(30, 255, 199, 0.12);
     --warn: #d6d6da;
     --warn-soft: rgba(214, 214, 218, 0.1);
+    --amber: #f0b354;
+    --amber-soft: #2b2216;
+    --amber-ink: #f7d9a0;
     --danger: #ff6e6e;
     --danger-soft: rgba(255, 110, 110, 0.12);
     --info: #a1a1a6;
@@ -252,6 +259,9 @@ button:disabled {
   --ok-soft: rgba(30, 255, 199, 0.12);
   --warn: #d6d6da;
   --warn-soft: rgba(214, 214, 218, 0.1);
+  --amber: #f0b354;
+  --amber-soft: #2b2216;
+  --amber-ink: #f7d9a0;
   --danger: #ff6e6e;
   --danger-soft: rgba(255, 110, 110, 0.12);
   --info: #a1a1a6;
@@ -298,6 +308,7 @@ button:disabled {
   --color-success: var(--ok);
   --color-success-soft: var(--ok-soft);
   --color-warn: var(--warn);
+  --color-amber: var(--amber);
   --color-warn-soft: var(--warn-soft);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
