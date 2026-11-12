@@ -105,6 +105,41 @@ export default defineConfig({
     ],
   },
   plugins: [react(), tailwindcss(), writeBuildStamp()],
+  build: {
+    // 500 kB 是给「公网 CDN 上的多页应用」定的阈值：首屏之外的 chunk 可以慢慢拉，
+    // 单块太大才值得拆。这个站不是那个形状 —— 单页应用、dist 由本地 gateway
+    // **同源**托管（`vessel gateway start` 起的进程直接读盘发文件）、离线首屏一次性
+    // 加载，没有「多页共享缓存」可以摊薄首块成本。
+    //
+    // 实测量级（vite 输出，见下面 manualChunks 拆完的样子）：主 chunk 764 kB，
+    // gzip 后约 216 kB；加上 react-vendor / plugin-ui / CSS，整站首屏传输约 308 kB，
+    // 本地回环一次读完。也就是说这条警告惩罚的是「源码行数」，不是「用户等多久」。
+    //
+    // 所以把阈值调到 800 kB：留约 5% 余量，让这条警告重新变成**新增依赖失控**的
+    // 信号（谁再塞进一个几百 kB 的库照样报），而不是每次构建都在背景里刷。
+    // 真正的降本手段是按路由动态 import（要改 `apps/web/src/**`），不在本轮范围。
+    chunkSizeWarningLimit: 800,
+    rollupOptions: {
+      output: {
+        // 拆分只按**依赖的包边界**切，不动应用源码：`apps/web/src/**` 的分层
+        // （`src/gateway/**` 等）由 check-deps 看守，按目录硬切 chunk 极易造出
+        // chunk 环（A→B→A）。三方包之间没有反向依赖，插件 UI 包也只被 app
+        // 单向依赖，切开天然无环。
+        //
+        // react / react-dom / scheduler 是最大的一块且**几乎不变**：独立成 chunk
+        // 后改应用代码只有应用自己的 chunk 变哈希，这块可以长期缓存。
+        manualChunks(id: string): string | undefined {
+          // 共享 UI 包按源码消费（见上面 alias），但它同样只被 app 单向依赖。
+          if (/[\\/]packages[\\/]plugin-ui[\\/]src[\\/]/.test(id)) return 'plugin-ui';
+          if (!id.includes('node_modules')) return undefined;
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) {
+            return 'react-vendor';
+          }
+          return undefined;
+        },
+      },
+    },
+  },
   define: {
     // 页面把「我是哪一次构建」编进 bundle，运行时与 `dist/build.json` 比对，
     // 不一致就提示刷新 —— 后台重建完成后用户能立刻知道。
