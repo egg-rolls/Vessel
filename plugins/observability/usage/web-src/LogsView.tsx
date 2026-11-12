@@ -206,7 +206,7 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
         <Button onClick={reload}>{t('common.refresh')}</Button>
       </TableToolbar>
 
-      {source !== null && source.truncated ? (
+      {source?.truncated === true ? (
         <p className="text-sm text-muted">
           {t('logs.truncated', { files: source.files_read, total: source.files_total })}
         </p>
