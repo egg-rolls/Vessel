@@ -109,7 +109,11 @@ await writeSessionFile(root, 's2', { messages: 2, updatedAt: 2000 });
 await writeSessionFile(root, 's3', { messages: 1, updatedAt: 1000 });
 
 const first = await main.store.listRich();
-check('G1 首次三个会话各解析一次', main.counter.parses === 3, 'parses=' + String(main.counter.parses));
+check(
+  'G1 首次三个会话各解析一次',
+  main.counter.parses === 3,
+  'parses=' + String(main.counter.parses),
+);
 const afterFirst = main.counter.parses;
 const second = await main.store.listRich();
 check(
