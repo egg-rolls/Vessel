@@ -4,7 +4,7 @@
  * 清单来自组件自己的运行时数组 `BUTTON_VARIANTS` / `BUTTON_SIZES` ——
  * 加一种变体只改 `Button.tsx` 一处，这里**不用动**，设计实验室自动多一颗按钮。
  */
-import { Button, BUTTON_SIZES, BUTTON_VARIANTS } from '@vessel-agent/plugin-ui';
+import { BUTTON_SIZES, BUTTON_VARIANTS, Button } from '@vessel-agent/plugin-ui';
 import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {

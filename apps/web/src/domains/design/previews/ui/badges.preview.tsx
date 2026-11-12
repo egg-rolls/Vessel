@@ -4,7 +4,7 @@
  * 清单来自组件自己的运行时数组 `BADGE_TONES` / `COUNT_BADGE_TONES` ——
  * 加一档 tone 只改组件一处，这里**不用动**。
  */
-import { Badge, BADGE_TONES, CountBadge, COUNT_BADGE_TONES } from '@vessel-agent/plugin-ui';
+import { BADGE_TONES, Badge, COUNT_BADGE_TONES, CountBadge } from '@vessel-agent/plugin-ui';
 import type { PreviewMeta } from '../../preview-registry';
 
 export const preview: PreviewMeta = {
