@@ -19,12 +19,14 @@ import { dirname } from 'node:path';
 import { createInterface } from 'node:readline';
 import {
   buildRecords,
-  daysCutoff,
+  cutoffFor,
   type LeaderboardResult,
   type LogsParams,
+  type LogsRangeInput,
   type LogsResult,
   leaderboard,
   listLogs,
+  resolveLogsRange,
   type SourceCoverage,
   type SummaryResult,
   summarize,
@@ -121,17 +123,21 @@ function parseStatus(value: unknown): 'ok' | 'failed' | undefined {
 /**
  * Read the trace and fold it into records.
  *
- * `cutoff` is the range the caller asked for (`daysCutoff`); it goes into the
- * *reader* so the disk window follows the selected range instead of the read
- * budget alone. `undefined` = no range (whole directory, budget-bounded), which
- * is what "All time" and the Logs page ask for.
+ * `range.cutoff` is the lower bound of the selected range (`cutoffFor`); it goes
+ * into the *reader* so the disk window follows the selected range instead of the
+ * read budget alone. `range.until` is only an ordering hint for the reader (the
+ * per-record `[since, until)` filter lives in `listLogs`). `undefined` = no
+ * range (whole directory, budget-bounded), which is what "All time" asks for.
  */
-async function loadSnapshot(cutoff?: number): Promise<{
+async function loadSnapshot(range: {
+  cutoff?: number;
+  until?: number;
+} = {}): Promise<{
   records: UsageRecord[];
   source: SourceCoverage;
 }> {
   if (dataDir === undefined) throw new RpcError(-32000, 'plugin is not activated');
-  const loaded = await store.loadEvents(dataDir, cutoff === undefined ? {} : { cutoff });
+  const loaded = await store.loadEvents(dataDir, range);
   return {
     records: buildRecords(loaded.events, settings),
     source: {
@@ -145,16 +151,19 @@ async function loadSnapshot(cutoff?: number): Promise<{
   };
 }
 
-/** `days` -> the instant the reader windows on; `undefined` for "all time". */
-function cutoffFor(now: number, days: number | undefined): number | undefined {
-  return days === undefined ? undefined : daysCutoff(now, days);
-}
-
 async function handleSummary(params: Record<string, unknown>): Promise<SummaryResult> {
   const days = parseOptionalDays(params.days);
   const now = Date.now();
-  const snapshot = await loadSnapshot(cutoffFor(now, days));
+  const snapshot = await loadSnapshot({ cutoff: cutoffFor(now, days) });
   return { ...summarize(snapshot.records, now, days), source: snapshot.source };
+}
+
+function parseOptionalEpoch(value: unknown, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw invalid(`${name} must be a number (ms since epoch)`);
+  }
+  return value;
 }
 
 async function handleLogs(params: Record<string, unknown>): Promise<LogsResult> {
@@ -166,6 +175,20 @@ async function handleLogs(params: Record<string, unknown>): Promise<LogsResult> 
   const sessionId = parseOptionalString(params.session_id, 'session_id');
   const model = parseOptionalString(params.model, 'model');
   const status = parseStatus(params.status);
+  const days = parseOptionalDays(params.days);
+  const since = parseOptionalEpoch(params.since, 'since');
+  const until = parseOptionalEpoch(params.until, 'until');
+
+  // Same resolver (and therefore the same `cutoffFor`) as summary/leaderboard:
+  // `days` is one range syntax, `since`/`until` the other, never both.
+  const rangeInput: LogsRangeInput = {
+    ...(days !== undefined ? { days } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+  };
+  const range = resolveLogsRange(rangeInput, Date.now());
+  if (!range.ok) throw invalid(range.message);
+
   const logsParams: LogsParams = {
     limit: parseLimit(params.limit),
     ...(cursorTs !== undefined ? { before_ts: cursorTs } : {}),
@@ -173,15 +196,17 @@ async function handleLogs(params: Record<string, unknown>): Promise<LogsResult> 
     ...(sessionId !== undefined ? { session_id: sessionId } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(status !== undefined ? { status } : {}),
+    ...(range.since !== undefined ? { since: range.since } : {}),
+    ...(range.until !== undefined ? { until: range.until } : {}),
   };
-  const snapshot = await loadSnapshot();
+  const snapshot = await loadSnapshot({ cutoff: range.cutoff, until: range.until });
   return { ...listLogs(snapshot.records, logsParams), source: snapshot.source };
 }
 
 async function handleLeaderboard(params: Record<string, unknown>): Promise<LeaderboardResult> {
   const days = parseOptionalDays(params.days);
   const now = Date.now();
-  const snapshot = await loadSnapshot(cutoffFor(now, days));
+  const snapshot = await loadSnapshot({ cutoff: cutoffFor(now, days) });
   return { ...leaderboard(snapshot.records, now, days), source: snapshot.source };
 }
 

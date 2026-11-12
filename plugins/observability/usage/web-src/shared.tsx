@@ -56,10 +56,11 @@ export function CoverageNotice({
   );
 }
 
-export type RangeValue = '7' | '30' | '90' | '0';
+export type RangeValue = '1' | '7' | '30' | '90' | '0';
 
 function rangeTabs(t: Translator): readonly TabOption<RangeValue>[] {
   return [
+    { id: '1', label: t('range.1') },
     { id: '7', label: t('range.7') },
     { id: '30', label: t('range.30') },
     { id: '90', label: t('range.90') },

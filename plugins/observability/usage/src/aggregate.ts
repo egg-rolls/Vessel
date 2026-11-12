@@ -138,6 +138,13 @@ export interface LogsParams {
   session_id?: string;
   model?: string;
   status?: 'ok' | 'failed';
+  /**
+   * Range bounds on `record.ts`, half-open `[since, until)`. `since` is
+   * inclusive so consecutive ranges partition without overlap or gap — a record
+   * at exactly `until` belongs to the next range, not to both.
+   */
+  since?: number;
+  until?: number;
 }
 
 export interface LogsResult {
@@ -336,10 +343,84 @@ export function daysCutoff(now: number, days: number): number {
   return start.getTime();
 }
 
+/**
+ * `days` -> the instant a reader windows on; `undefined` means "no lower bound"
+ * ("all time"). The one place that mapping exists: `summary`, `leaderboard` and
+ * `logs` all resolve their range through `cutoffFor` (`resolveLogsRange` calls it
+ * for the `days` branch), so the same `days` value can never mean two different
+ * instants on two pages.
+ */
+export function cutoffFor(now: number, days: number | undefined): number | undefined {
+  return days === undefined ? undefined : daysCutoff(now, days);
+}
+
 export function filterByDays(records: UsageRecord[], now: number, days?: number): UsageRecord[] {
   if (days === undefined) return records;
   const cutoff = daysCutoff(now, days);
   return records.filter((record) => record.ts >= cutoff);
+}
+
+/** The three range parameters `logs` accepts, already type-checked by the RPC layer. */
+export interface LogsRangeInput {
+  days?: number;
+  since?: number;
+  until?: number;
+}
+
+export type LogsRangeError = 'range_conflict' | 'range_inverted';
+
+/**
+ * Where a `logs` request looks, or why it cannot be answered.
+ *
+ * `days` and `since`/`until` are **mutually exclusive**. They are two different
+ * ways to name one range, and `days` is relative to `now`: combining them would
+ * produce two lower bounds (`daysCutoff(now, days)` and `since`), and then the
+ * coverage the reader reports (`files_in_window`, "N of M run files in this
+ * range") could not be attributed to one of them. Rejecting the request is
+ * clearer than silently preferring one.
+ *
+ * `since` (or `days`) also becomes the reader's `cutoff`, so the *file* window
+ * follows the request; `until` cannot prune files (see `LoadOptions` in
+ * `store.ts`) and is applied per record in `listLogs`.
+ */
+export type LogsRange =
+  | {
+      ok: true;
+      /** Lower bound handed to the reader; `undefined` = no lower bound. */
+      cutoff?: number;
+      /** Record-level bounds, half-open `[since, until)`. */
+      since?: number;
+      until?: number;
+    }
+  | { ok: false; code: LogsRangeError; message: string };
+
+export function resolveLogsRange(input: LogsRangeInput, now: number): LogsRange {
+  const { days, since, until } = input;
+  if (days !== undefined && (since !== undefined || until !== undefined)) {
+    return {
+      ok: false,
+      code: 'range_conflict',
+      message: 'days cannot be combined with since/until; send one or the other',
+    };
+  }
+  if (since !== undefined && until !== undefined && since >= until) {
+    return {
+      ok: false,
+      code: 'range_inverted',
+      message: 'since must be before until',
+    };
+  }
+  if (days !== undefined) {
+    const cutoff = cutoffFor(now, days);
+    // `days` is always defined here, so the cutoff exists; keep the compiler
+    // honest without a non-null assertion.
+    return cutoff === undefined ? { ok: true } : { ok: true, cutoff, since: cutoff };
+  }
+  return {
+    ok: true,
+    ...(since !== undefined ? { cutoff: since, since } : {}),
+    ...(until !== undefined ? { until } : {}),
+  };
 }
 
 interface Counter {
@@ -603,6 +684,10 @@ export function listLogs(records: UsageRecord[], params: LogsParams): LogsResult
     if (params.status !== undefined && record.status !== params.status) return false;
     if (params.session_id !== undefined && record.session_id !== params.session_id) return false;
     if (params.model !== undefined && record.model !== params.model) return false;
+    // Range first, then the cursor: a page is always a window of the selected
+    // range, so "load more" can never step outside it or repeat a row.
+    if (params.since !== undefined && record.ts < params.since) return false;
+    if (params.until !== undefined && record.ts >= params.until) return false;
     return afterCursor(record, params.before_ts, params.before_id);
   });
   matched.sort(compareDesc);

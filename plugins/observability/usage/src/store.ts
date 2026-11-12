@@ -87,15 +87,25 @@ export interface RawEvent {
 /**
  * Which slice of the trace a call should look at.
  *
- * `cutoff` is the start of the day window (`daysCutoff(now, days)` in
- * `aggregate.ts`). Files older than it are not opened, and events older than it
- * are not returned, so "the last N days" is enforced on event time rather than
- * on the read budget. Omitted means "the whole directory", which keeps the
- * pre-window behaviour: the budget alone decides coverage, and the numbers can
- * be partial — `files_truncated` says so.
+ * `cutoff` is the start of the selected range (`daysCutoff(now, days)`, or an
+ * explicit `since`). Files older than it are not opened, and events older than it
+ * are not returned, so the lower bound is enforced on event time rather than on
+ * the read budget. Omitted means "no lower bound".
+ *
+ * `until` is the (exclusive) end of an explicit range. It cannot prune files —
+ * a trace file's mtime is after all of its events, so a file written after
+ * `until` may still hold earlier events — so it is only an **ordering hint**:
+ * candidate files are visited from the one nearest `until` outwards, so the
+ * budget lands on the runs around the end of the requested interval instead of
+ * on whatever happens to be newest. The record-level `[since, until)` filter
+ * lives in `listLogs` (`aggregate.ts`).
+ *
+ * Either bound makes the call "range-bounded", which is what selects the larger
+ * window budget (see `WINDOW_BUDGET_BYTES`).
  */
 export interface LoadOptions {
   cutoff?: number;
+  until?: number;
 }
 
 /**
@@ -116,7 +126,10 @@ export interface LoadOptions {
  * a truncation — the user asked for that range.
  */
 export interface LoadResult {
-  /** Parsed usage events, newest file first. */
+  /**
+   * Parsed usage events, grouped by file in visit order: newest file first, or —
+   * when an `until` bound was given — from the file nearest that bound outwards.
+   */
   events: RawEvent[];
   /** The events do not cover every trace file in the window (compat shorthand). */
   truncated: boolean;
@@ -233,6 +246,24 @@ interface FileInfo {
   name: string;
   size: number;
   mtimeMs: number;
+}
+
+/**
+ * Files ordered by how close their mtime is to `until`, closest first.
+ *
+ * Only the visit order changes, never the content: a file written after `until`
+ * can still hold events before it, so no candidate can be dropped, but the byte
+ * budget is finite — spending it on the runs around the requested end bound is
+ * what makes a historical interval ("yesterday 10:00-12:00") return rows at all.
+ * Ties go newest-first, then by name so the order is stable across calls.
+ */
+function nearestFirst(files: FileInfo[], until: number): FileInfo[] {
+  return [...files].sort(
+    (a, b) =>
+      Math.abs(a.mtimeMs - until) - Math.abs(b.mtimeMs - until) ||
+      b.mtimeMs - a.mtimeMs ||
+      a.name.localeCompare(b.name),
+  );
 }
 
 /** A retained event plus the trace bytes it was parsed from (memory accounting). */
@@ -495,12 +526,16 @@ export class EventStore {
   /**
    * Load events from the root `<dataDir>/events/*.jsonl` files (read-only).
    *
-   * `options.cutoff` narrows the view to one day window; see `LoadOptions`,
-   * `LoadResult` and the module docs for how the window, the budgets and the
-   * per-file cache interact.
+   * `options.cutoff` / `options.until` narrow the view to one range; see
+   * `LoadOptions`, `LoadResult` and the module docs for how the window, the
+   * budgets and the per-file cache interact.
    */
   async loadEvents(dataDir: string, options: LoadOptions = {}): Promise<LoadResult> {
     const cutoff = options.cutoff;
+    const until = options.until;
+    // Either bound means the caller asked for a *range*, which is what selects
+    // the larger window budget (a range is a "real total", not a sample).
+    const bounded = cutoff !== undefined || until !== undefined;
     const dir = resolveSingleTenantPaths(dataDir).events_dir;
     const files = await this.list(dir);
     if (files.length === 0) {
@@ -508,10 +543,11 @@ export class EventStore {
       return emptyResult();
     }
 
-    // Day window. A trace file's mtime is its last append, so it is at or after
-    // every event `ts` inside it: a file older than the cut-off cannot hold an
-    // in-window event (modulo `MTIME_SLACK_MS`). Without a cutoff the whole
-    // directory is the window — the pre-window behaviour.
+    // Range window. A trace file's mtime is its last append, so it is at or after
+    // every event `ts` inside it: a file older than the lower bound cannot hold
+    // an in-range event (modulo `MTIME_SLACK_MS`). There is no such trick for the
+    // upper bound — a file written after `until` can still hold earlier events —
+    // so `until` only reorders the candidates (below).
     const inWindow =
       cutoff === undefined
         ? files
@@ -519,22 +555,25 @@ export class EventStore {
 
     // A selected range means "the real total for these N days": it gets the
     // larger window budget so the range fits instead of being silently sampled.
-    // Without a window ("all time") the small per-call budget still applies.
-    const budget =
-      cutoff === undefined
-        ? this.limits.maxBytesPerCall
-        : Math.max(this.limits.maxBytesPerCall, this.limits.maxBytesPerWindowCall);
+    // Without a range ("all time") the small per-call budget still applies.
+    const budget = bounded
+      ? Math.max(this.limits.maxBytesPerCall, this.limits.maxBytesPerWindowCall)
+      : this.limits.maxBytesPerCall;
 
-    // Inside the window, newest first: the budget must land on the runs the user
-    // is looking at. In-window files are normally far smaller than the budget,
-    // so this loop is the exception (a busy last N days) rather than the rule. A
-    // file is billed by `min(size, maxBytesPerFile)` — the part of it any call
-    // can ever read — so the window is a function of what is on disk rather than
-    // of what happens to be cached. That keeps two calls on an unchanged
-    // directory identical instead of each one silently widening the window.
+    // Visit order decides which runs fit the budget; it never changes an
+    // aggregate (they are summed per `ts`). Normally newest first, so the budget
+    // lands on the runs the user is looking at. With an explicit `until` the
+    // interesting runs are the ones *around* that end bound, so candidates are
+    // visited from the file nearest `until` outwards — otherwise "yesterday
+    // 10:00-12:00" would spend the whole budget on today's files and return
+    // nothing. A file is billed by `min(size, maxBytesPerFile)` — the part of it
+    // any call can ever read — so the window is a function of what is on disk
+    // rather than of what happens to be cached. That keeps two calls on an
+    // unchanged directory identical instead of each one silently widening it.
+    const candidates = until === undefined ? inWindow : nearestFirst(inWindow, until);
     const window: FileInfo[] = [];
     let billed = 0;
-    for (const file of inWindow) {
+    for (const file of candidates) {
       if (window.length >= this.limits.maxFilesPerCall) break;
       const cost = Math.min(file.size, this.limits.maxBytesPerFile);
       if (billed + cost > budget) break;
@@ -542,10 +581,11 @@ export class EventStore {
       billed += cost;
     }
 
-    // Cache retention follows the *directory*, not the window: switching the day
-    // range must not throw away bytes that are still on disk, or 7d -> 30d -> 7d
-    // would re-read the same files twice more. Only a file that vanished (trace
-    // pruning) drops its entry; `evict()` bounds the rest by LRU.
+    // Cache retention follows the *directory*, not the range: switching the day
+    // range (or narrowing to a custom interval) must not throw away bytes that
+    // are still on disk, or 7d -> 30d -> 7d would re-read the same files twice
+    // more. Only a file that vanished (trace pruning) drops its entry; `evict()`
+    // bounds the rest by LRU.
     const onDisk = new Set(files.map((file) => file.path));
     for (const path of [...this.cache.keys()]) {
       if (!onDisk.has(path)) this.cache.delete(path);

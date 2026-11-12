@@ -19,10 +19,17 @@ const EN = {
   'common.status.failed': 'failed',
 
   'range.label': 'Time range',
+  'range.1': 'Today',
   'range.7': '7 days',
   'range.30': '30 days',
   'range.90': '90 days',
   'range.0': 'All time',
+  'range.custom': 'Custom range',
+  'range.from': 'From',
+  'range.to': 'To',
+  'range.apply': 'Apply range',
+  'range.clear': 'Back to presets',
+  'range.invalid': 'Pick a start before the end.',
 
   'usage.title': 'Usage',
   'usage.description': 'Token usage, cache hits and cost.',
@@ -86,6 +93,12 @@ const EN = {
   'logs.empty.title': 'No request logs yet',
   'logs.empty.filtered': 'No matching requests',
   'logs.empty.description': 'Logs are read from the persisted tenant event files.',
+  'logs.state.range': 'Range: {range}',
+  'logs.state.custom': 'Range: {from} to {to}',
+  'logs.state.loaded': '{n} loaded',
+  'logs.state.more': 'more available',
+  'logs.state.end': 'no more rows',
+  'logs.state.conditions': 'Filters: {conditions}',
   'logs.truncated.files':
     'Read cap reached: only the newest {files} of {total} run files in this range were counted. Older runs in the same range are missing, so this is a partial count, not the total.',
   'logs.truncated.partial':
@@ -115,10 +128,17 @@ const ZH: Record<MessageKey, string> = {
   'common.status.failed': '失败',
 
   'range.label': '时间范围',
+  'range.1': '今天',
   'range.7': '7 天',
   'range.30': '30 天',
   'range.90': '90 天',
   'range.0': '全部时间',
+  'range.custom': '自定义区间',
+  'range.from': '开始',
+  'range.to': '结束',
+  'range.apply': '应用区间',
+  'range.clear': '回到预设范围',
+  'range.invalid': '开始时间必须早于结束时间。',
 
   'usage.title': '用量',
   'usage.description': 'Token 用量、缓存命中与成本概览。',
@@ -182,6 +202,12 @@ const ZH: Record<MessageKey, string> = {
   'logs.empty.title': '暂无请求日志',
   'logs.empty.filtered': '没有匹配的请求',
   'logs.empty.description': '日志来自已持久化的租户事件文件。',
+  'logs.state.range': '范围：{range}',
+  'logs.state.custom': '范围：{from} 至 {to}',
+  'logs.state.loaded': '已加载 {n} 条',
+  'logs.state.more': '还有更多',
+  'logs.state.end': '已到底',
+  'logs.state.conditions': '筛选：{conditions}',
   'logs.truncated.files':
     '已触及读取上限：该范围内只统计了最新的 {files}/{total} 个运行文件，同一范围内更早的运行没有被计入 —— 这是真实截断后的部分合计，不是总量。',
   'logs.truncated.partial':
