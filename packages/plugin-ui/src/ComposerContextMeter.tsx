@@ -52,8 +52,8 @@ function contextFraction(used: number, max?: number): number | undefined {
 /**
  * 用量比例（0–100 的整数百分比，超出上限截到 100）。
  *
- * `max` 未知 / 非法时返回 `undefined` —— 不猜比例。色阶（70 / 90）与圆环粗细都
- * 读这个整数百分比。
+ * `max` 未知 / 非法时返回 `undefined` —— 不猜比例。降级色阶（60 / 90）与圆环粗细
+ * 读这个整数百分比；连续色阶读的是取整前的真实比例（见 {@link ringStroke}）。
  */
 export function contextPercent(used: number, max?: number): number | undefined {
   const fraction = contextFraction(used, max);
@@ -73,23 +73,79 @@ export function contextPercentText(used: number, max?: number): string | undefin
   return (Math.round(Math.min(1, fraction) * 1000) / 10).toFixed(1);
 }
 
-/** 70% 起提醒、90% 起危险：与其它用量提示同一口径。 */
+/**
+ * 三个端点色：全部是既有 L1 token，不新增颜色、不写裸值。
+ *
+ * - `--muted`：默认色，与 `text-muted` 同一个 token（所以 0–60% 的观感和改版前一致）。
+ * - `--amber`：真琥珀（本仓的 `--warn` 是中性灰，不黄）。
+ * - `--danger`：危险色。
+ *
+ * `--amber` 带一个 `var()` 兜底：`packages/plugin-ui/src/styles.css`（本包独立发布
+ * 用的 token 表）目前还没有 amber 一档，缺 token 时纯 `var(--amber)` 会让整条
+ * `stroke` 变成无效值而失效；退到同样存在的 `--warn`（中性灰）至少是合法颜色，
+ * 60–90 段退化成不变色，行为和旧版接近，圆环不会消失。
+ */
+const TONE_BASE = 'var(--muted)';
+const TONE_AMBER = 'var(--amber, var(--warn))';
+const TONE_DANGER = 'var(--danger)';
+
+/**
+ * 两色线性插值：`weight` 是 `from` 的占比（0–100），交给原生 `color-mix` 在 oklab
+ * 里混（感知均匀，中间不会像 sRGB 那样发灰）。占比保留一位小数，DOM 里不出现
+ * `12.3456789%` 这种噪声。
+ */
+function mixColor(from: string, weight: number, to: string): string {
+  const share = Math.round(weight * 10) / 10;
+  return `color-mix(in oklab, ${from} ${share}%, ${to})`;
+}
+
+/**
+ * 圆环描边色：**四段连续**色阶。`pos` 是真实用量百分比（0–100，取整前）。
+ *
+ * | pos | 颜色 |
+ * |---|---|
+ * | 0–60 | 默认色（`--muted`），与改版前同色 |
+ * | 60–80 | 默认色 → 琥珀：`t = (pos - 60) / 20`，琥珀占 `t × 100%`，其余默认色 |
+ * | 80–90 | 琥珀 → 危险：`u = (pos - 80) / 10`，危险占 `u × 100%`，其余琥珀 |
+ * | ≥90 | 危险色 |
+ *
+ * 接缝连续（左右极限相等，不跳色）：`pos = 60` 时琥珀 0% = 纯默认色；`pos = 80`
+ * 时第一段给出纯琥珀、第二段危险 0% = 同一个琥珀；`pos = 90` 时第二段给出纯危险色。
+ *
+ * **降级**：`color-mix` / `in oklab` 不被支持时这条内联声明整条作废，`stroke` 继承
+ * 外层 `<svg>` 的 `stroke-current`，颜色退回 {@link toneOf} 的**离散三档**
+ * （<60 默认 / 60–89 琥珀 / ≥90 危险），形状与 ≥90 的加粗描边都不受影响。
+ */
+function ringStroke(pos: number): string {
+  if (pos >= 90) return TONE_DANGER;
+  if (pos > 80) return mixColor(TONE_DANGER, ((pos - 80) / 10) * 100, TONE_AMBER);
+  if (pos > 60) return mixColor(TONE_AMBER, ((pos - 60) / 20) * 100, TONE_BASE);
+  return TONE_BASE;
+}
+
+/**
+ * 离散语义档（0–100 的**整数**百分比）：既是无混色能力时的降级色，也是圆环外层的
+ * `currentColor`。四段渐进的红黄区段见 {@link ringStroke}；这里保留三档粗粒度。
+ */
 function toneOf(percent: number | undefined): string {
   if (percent === undefined) return 'text-faint';
   if (percent >= 90) return 'text-danger';
-  if (percent >= 70) return 'text-warn';
+  if (percent >= 60) return 'text-amber';
   return 'text-muted';
 }
 
 /**
- * 比例圆环：底环 + 按比例截断的弧。颜色靠 `currentColor`（外层 {@link toneOf}
- * 的语义色 token），底环用 `line-strong`；≥90% 时描边再加粗一档，色觉差异之外
- * 还有形状差异。
+ * 比例圆环：底环 + 按比例截断的弧。弧色是 {@link ringStroke} 的连续色阶（内联
+ * `stroke`）；`<svg>` 上的 `stroke-current` 只是降级载体 —— 内联值不可用时这里
+ * 继承外层 {@link toneOf} 的语义色 token，仍能读出三档。底环用 `line-strong`；
+ * ≥90% 时描边再加粗一档，色觉差异之外还有形状差异。
  */
 function ContextRing({ ratio, percent }: { ratio: number; percent: number }) {
   const strokeWidth = percent >= 90 ? 3 : 2.5;
   // 只保留两位小数：DOM 里不出现 30.159289474462004 这种噪声。
   const dash = Math.round(RING_CIRCUMFERENCE * ratio * 100) / 100;
+  // 色阶读**取整前**的比例：60% 附近不会因为取整先跳一格再变色。
+  const stroke = ringStroke(ratio * 100);
   return (
     <svg
       width={RING_SIZE}
@@ -98,7 +154,7 @@ function ContextRing({ ratio, percent }: { ratio: number; percent: number }) {
       fill="none"
       aria-hidden="true"
       focusable="false"
-      className="block shrink-0"
+      className="block shrink-0 stroke-current"
     >
       <circle
         cx={10}
@@ -115,7 +171,7 @@ function ContextRing({ ratio, percent }: { ratio: number; percent: number }) {
           strokeWidth={strokeWidth}
           strokeDasharray={`${dash} ${RING_CIRCUMFERENCE}`}
           transform="rotate(-90 10 10)"
-          className="stroke-current"
+          style={{ stroke }}
         />
       )}
     </svg>
