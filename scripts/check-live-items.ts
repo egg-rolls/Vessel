@@ -26,17 +26,22 @@
  *   G-D 回放边界落在段内部（正文逐字相等；R2 的最小形态）
  *   G-E 乱序回填（freeze → 按 run 重折叠 → 锚点合并 Rule R）
  *   G-G run.completed 撤回失败卡（增量化最容易漏的一条）
+ *   G-I 可见性切换重折叠幂等（重折叠必须等于「一开始就是这个口径」）
  *   G-J 一次工具调用恰好一张 tool:<callId>（不再出 ev-<seq> 原始事件行）
+ *   G-K 超上限不许有 item 凭空消失（折叠覆盖数守恒 + overBudget 不静默）
+ *   T1  渲染侧不读 EventStore.entries（I1 的文件级 tripwire）
  *
  * 用法：bun run scripts/check-live-items.ts
  * 退出码：0 = 全过；1 = 有 FAIL（失败打印两路差异，便于定位）。
  */
 
+import { readFileSync, readdirSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import { buildLiveItems, type TranscriptItem } from '../apps/web/src/domains/chat/transcript-items';
 import type { RunEvent } from '../apps/web/src/gateway/types';
 import { EventStore } from '../apps/web/src/state/event-store';
 import { groupEvents, type RunGroup, type StoredEvent } from '../apps/web/src/state/events';
-import { EventGroupCache } from '../apps/web/src/state/group-cache';
+import type { ItemStoreSnapshot } from '../apps/web/src/state/live-items';
 
 type EvSpec = readonly [type: string, data?: Record<string, unknown>];
 
@@ -82,23 +87,24 @@ function feed(store: EventStore, events: readonly StoredEvent[]): void {
 }
 
 /**
- * 路径 L：EventStore 是传输面的唯一入口（`push`）；这里取渲染侧的输入。
- *
- * 阶段 2 之前渲染读的是「环里的 entries → 按 run 分组」，阶段 2 之后换成
- * 物化的 item 流（`store.items.getSnapshot().groups`）。fixture 的断言不变 ——
- * 「换输入源不改输出」正是本次重构的验收标准。
+ * 路径 L：EventStore 是传输面的唯一入口（`push`）；这里取渲染侧的输入 ——
+ * **物化之后的 item 流**（`store.items`），不再是环里的 entries。
  */
 function groupsFromStore(store: EventStore): RunGroup[] {
   store.flush();
-  const snapshot = store.getSnapshot();
-  const cache = new EventGroupCache();
-  return cache.group(snapshot.entries, false, 'user', snapshot.truncatedSince);
+  return [...store.items.getSnapshot().groups];
 }
 
 function live(events: readonly StoredEvent[]): RunGroup[] {
   const store = new EventStore(0);
   feed(store, events);
   return groupsFromStore(store);
+}
+
+/** 物化面快照（先 flush 到同一节拍再取）。 */
+function itemSnapshotOf(store: EventStore): ItemStoreSnapshot {
+  store.flush();
+  return store.items.getSnapshot();
 }
 
 function itemsOf(groups: readonly RunGroup[]): TranscriptItem[] {
@@ -293,6 +299,34 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
+    name: 'G-E2 回填时环已淘汰更早的事件 → 保留项仍在（Rule R 的「保留」）',
+    why: '环只覆盖尾部时重折叠复现不出更早的 notice / 段：它们必须由旧 item 保住（宁可重复，绝不吞内容）',
+    check: () => {
+      const specs: EvSpec[] = [['run.started', { input: 'go' }]];
+      for (let index = 0; index < 12; index += 1) {
+        specs.push(['agent.limit.warning', { round: index }]);
+      }
+      specs.push(text('尾巴'), ['run.completed', { output: 'done' }]);
+      const events = eventsOf(specs, 'r-e2');
+      const store = new EventStore(0, { maxEventsPerRun: 8 });
+      // 环里只剩尾部（锚点保留），item 侧这时是完整的。
+      feed(store, events);
+      const before = itemsOf(groupsFromStore(store)).map((item) => item.key);
+      const rebuiltKeys = itemsOf(rebuild(events)).map((item) => item.key);
+      // 被迫重折叠（回填结束）：环里已经取不到更早的 notice，它们只能来自 Rule R 的保留。
+      store.beginBackfill(store.currentSeq);
+      store.endBackfill();
+      const after = itemsOf(groupsFromStore(store)).map((item) => item.key);
+      const lost = before.filter((key) => !after.includes(key));
+      if (lost.length > 0) return `回填丢失了已经上屏的 item：${lost.join(',')}`;
+      const lostRebuilt = rebuiltKeys.filter((key) => !after.includes(key));
+      if (lostRebuilt.length > 0) {
+        return `回填丢失了重建路径有的 item（Rule R 保留失效）：${lostRebuilt.join(',')}`;
+      }
+      return null;
+    },
+  },
+  {
     name: 'G-G run.completed 撤回失败卡',
     why: '同一 run 可能先收到误判的 run.failed（session-liveness），随后正常 completed：增量化若忘了撤回就留一张幽灵失败卡',
     check: () => {
@@ -355,7 +389,159 @@ const FIXTURES: readonly Fixture[] = [
       return null;
     },
   },
+  {
+    name: 'G-I 可见性切换重折叠幂等（showInternal false → true）',
+    why: 'internal / observe 档事件在 fold 之前就被过滤，等于「不构成段边界」：口径一变段边界就变，重折叠必须等于「一开始就是这个口径」',
+    check: () => {
+      const events = eventsOf(
+        [
+          ['run.started', { input: 'go' }],
+          text('a'),
+          ['context.pressure', { percent: 0.8 }],
+          text('b'),
+          ['hook.started', { hook_name: 'guard' }],
+          ['hook.completed', { hook_name: 'guard', duration_ms: 2 }],
+          ['guardrail.error', { error: 'boom' }],
+          ['run.completed', { output: 'ab' }],
+        ],
+        'r-i',
+      );
+      const store = new EventStore(0);
+      feed(store, events);
+      // 默认档（隐藏 internal）先落一版，并与「一开始就隐藏」逐字相等。
+      const hiddenMismatch = sameJson(
+        '默认档的 item 流',
+        groupsFromStore(store),
+        groupEvents(events, false, 'user'),
+      );
+      if (hiddenMismatch !== null) return hiddenMismatch;
+      // 展开内部事件：store 必须重折叠（不是增量的近似）。
+      store.setItemVisibility(true, 'user');
+      return sameJson(
+        'showInternal 切换后的 item 流',
+        groupsFromStore(store),
+        groupEvents(events, true, 'user'),
+      );
+    },
+  },
+  {
+    name: 'G-K 超上限不许有 item 凭空消失（折叠覆盖数守恒）',
+    why: '上限只能把「更旧的」折成一张带条数的折叠卡（可点进运行详情），不允许静默丢（I9）',
+    check: () => {
+      const specs: EvSpec[] = [['run.started', { input: 'go' }]];
+      for (let index = 0; index < 60; index += 1) {
+        specs.push(['agent.limit.warning', { round: index }]);
+      }
+      specs.push(['run.completed', { output: 'done' }]);
+      const events = eventsOf(specs, 'r-k');
+      // 基准：不触发上限时 item 总数（含 run 输入那一项）。
+      const plain = itemsOf(rebuild(events)).length;
+      // ① 每 run 上限极小：折成一张卡，条数必须守恒（现存 + 覆盖 == 全量）。
+      const capped = new EventStore(0, { maxItemsPerRun: 8, maxItemsTotal: 1000 });
+      feed(capped, events);
+      const cappedSnapshot = itemSnapshotOf(capped);
+      const cappedItems = itemsOf(cappedSnapshot.groups);
+      const cards = cappedItems.filter(
+        (item) => item.kind === 'notice' && item.event.type === 'vessel.ui.condensed',
+      );
+      if (cards.length !== 1) return `折叠卡数量 ${cards.length}（同一 run 只该有一张）`;
+      const covered = coveredCount(cards);
+      const restored = cappedItems.length - 1 + covered;
+      if (restored !== plain) {
+        return `折叠覆盖数不守恒：现存 ${cappedItems.length} - 折叠卡 1 + 覆盖 ${covered} = ${restored} != 全量 ${plain}`;
+      }
+      if (cappedSnapshot.overBudget) return '预算内不该置 overBudget（那会让提示钩子常亮）';
+      if (cappedSnapshot.stats.condensed !== covered) {
+        return `stats.condensed(${cappedSnapshot.stats.condensed}) != 折叠卡覆盖数(${covered})`;
+      }
+      // ② 预算不可能满足（总量上限 4）：必须置 overBudget，但**仍然**不许凭空丢 item。
+      const tight = new EventStore(0, { maxItemsPerRun: 8, maxItemsTotal: 4 });
+      feed(tight, events);
+      const tightSnapshot = itemSnapshotOf(tight);
+      const tightItems = itemsOf(tightSnapshot.groups);
+      const tightCards = tightItems.filter(
+        (item) => item.kind === 'notice' && item.event.type === 'vessel.ui.condensed',
+      );
+      const tightRestored = tightItems.length - tightCards.length + coveredCount(tightCards);
+      if (tightRestored !== plain) {
+        return `收紧预算后 item 消失了：现存 ${tightItems.length} + 覆盖 ${coveredCount(tightCards)} != 全量 ${plain}`;
+      }
+      if (!tightSnapshot.overBudget) return '预算无法满足时必须置 overBudget（不许静默）';
+      return null;
+    },
+  },
+  {
+    name: 'T1 渲染侧不读 EventStore.entries（I1 tripwire）',
+    why: '时间线只读物化后的 item 流：`domains/chat/**` 不许再按 entries 批量分组，也不许再 import 已弃用的 group-cache；`snapshot.entries` 的每处用法必须标注为传输面消费者',
+    check: () => {
+      const webSrc = join(import.meta.dir, '..', 'apps', 'web', 'src');
+      const chatDir = join('domains', 'chat');
+      const allowBatchGroup = new Set(['SubagentTranscript.tsx']);
+      const problems: string[] = [];
+      for (const file of walk(webSrc)) {
+        if (!file.endsWith('.ts') && !file.endsWith('.tsx')) continue;
+        const path = relative(webSrc, file);
+        const source = readFileSync(file, 'utf8');
+        // I1-a：生产代码不许再引用按 entries 分组的旧缓存。
+        if (path !== join('state', 'group-cache.ts') && source.includes('group-cache')) {
+          problems.push(`${path}: 仍引用 group-cache（渲染侧必须读 LiveItemStore）`);
+        }
+        // I1-b：会话域不许再「从事件批量分组」。
+        if (
+          path.startsWith(chatDir + sep) &&
+          !allowBatchGroup.has(basenameOf(path)) &&
+          (source.includes('groupEvents(') || source.includes('buildGroup('))
+        ) {
+          problems.push(`${path}: 仍从事件批量分组（groupEvents / buildGroup）`);
+        }
+      }
+      // I1-c：`snapshot.entries` 的每一处用法都要显式标注传输面消费者。
+      const transcriptHook = readFileSync(
+        join(webSrc, 'domains', 'chat', 'useChatTranscript.ts'),
+        'utf8',
+      ).split('\n');
+      transcriptHook.forEach((line, index) => {
+        if (!line.includes('.entries')) return;
+        // 注释里提到 `snapshot.entries` 不算用法（这里只查真实代码行）。
+        const code = line.trim();
+        if (code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) return;
+        const window = transcriptHook.slice(Math.max(0, index - 2), index + 1).join('\n');
+        if (!window.includes('transport-consumer')) {
+          problems.push(`useChatTranscript.ts:${index + 1}: 读了 .entries 却没有 transport-consumer 标注`);
+        }
+      });
+      return problems.length > 0 ? problems.join('\n    ') : null;
+    },
+  },
 ];
+
+/** 折叠卡覆盖的 item 条数之和（`vessel.ui.condensed` 的 `data.count`）。 */
+function coveredCount(items: readonly TranscriptItem[]): number {
+  let total = 0;
+  for (const item of items) {
+    if (item.kind !== 'notice') continue;
+    if (item.event.type !== 'vessel.ui.condensed') continue;
+    const count = item.event.data.count;
+    if (typeof count === 'number') total += count;
+  }
+  return total;
+}
+
+function basenameOf(path: string): string {
+  const parts = path.split(sep);
+  return parts[parts.length - 1] ?? path;
+}
+
+/** 递归列出目录下的文件（门禁级的 tripwire 用，不引第三方）。 */
+function walk(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walk(full));
+    else if (entry.isFile()) out.push(full);
+  }
+  return out;
+}
 
 const failures: { name: string; why: string; detail: string }[] = [];
 for (const fixture of FIXTURES) {

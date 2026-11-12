@@ -4,6 +4,12 @@
  * `?agent=` 深链时显示：默认只给摘要（状态 / task / 当前工具 / usage），
  * 下方用 `buildGroup` 把 child run 的 `subagent.*` 事件归一成普通 run 事件，
  * 复用 `RunItems` 的文本 / tool card / 思考块渲染。
+ *
+ * **过渡例外（登记）**：它是 `domains/chat/**` 里唯一仍从 `entries` 批量分组的文件
+ * （`check-live-items` 的 T1 tripwire 白名单）。子 agent 面板是**传输面**消费者：
+ * 它读的是「缓冲里还留着的 child run 事件」，因此**仍受环裁剪影响**（早期子 agent 事件
+ * 被淘汰后这块会缺行）—— 这是既有缺陷，与主时间线（`LiveItemStore` 物化）无关，
+ * 待子 agent 的 item 也物化后一起修。本单不动的理由见 DESIGN.md §11.9。
  */
 import { useMemo } from 'react';
 import { StatusChip } from '../../components/StatusChip';

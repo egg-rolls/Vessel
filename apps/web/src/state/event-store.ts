@@ -26,7 +26,9 @@
  *   约 14 次工具调用就把 2000 条额度填满，随后真正产卡的条目被逐条挤出去。
  */
 import type { RunEvent } from '../gateway/types';
+import type { ErrorVisibility } from './error-visibility';
 import { producesTimelineItem, type StoredEvent } from './events';
+import { LiveItemStore, type ItemSink } from './live-items';
 
 /**
  * 每个 run 在客户端缓冲里保留的条目上限。
@@ -118,6 +120,10 @@ export interface EventStoreOptions {
   maxEventsPerRun?: number;
   /** 总条目上限（默认 `MAX_EVENTS_TOTAL`）。 */
   maxEventsTotal?: number;
+  /** item 侧每 run 上限（默认 `MAX_ITEMS_PER_RUN`，见 `live-items.ts`）。 */
+  maxItemsPerRun?: number;
+  /** item 侧总量上限（默认 `MAX_ITEMS_TOTAL`）。 */
+  maxItemsTotal?: number;
 }
 
 /** 事件自报的 session 归属：优先顶层字段，其次 `data.session_id`；缺失时 undefined。 */
@@ -192,6 +198,14 @@ export class EventStore {
   private readonly maxEventsPerRun: number;
   /** 总条目上限（默认 `MAX_EVENTS_TOTAL`）。 */
   private readonly maxEventsTotal: number;
+  /**
+   * 物化面（事件 → item）。**渲染侧只读它的快照**（`getSnapshot().groups`）。
+   *
+   * 它是 `push()` 的唯一下游：事件进了环就立刻转发一条给 `ingest`，因此「缓冲裁剪
+   * 不影响屏上内容」（I4）与「增量 == 全量重建」（同一段 fold）都是结构性的。
+   * `entries` 退化为纯传输窗口：订阅接缝 / 重连回放 / 回填暂存 / 运行详情 / 成员树。
+   */
+  readonly items: LiveItemStore;
 
   constructor(
     private readonly notifyDelayMs = NOTIFY_INTERVAL_MS,
@@ -199,6 +213,15 @@ export class EventStore {
   ) {
     this.maxEventsPerRun = options.maxEventsPerRun ?? MAX_EVENTS_PER_RUN;
     this.maxEventsTotal = options.maxEventsTotal ?? MAX_EVENTS_TOTAL;
+    this.items = new LiveItemStore({
+      ...(options.maxItemsPerRun !== undefined ? { maxItemsPerRun: options.maxItemsPerRun } : {}),
+      ...(options.maxItemsTotal !== undefined ? { maxItemsTotal: options.maxItemsTotal } : {}),
+    });
+  }
+
+  /** 物化面的写入接缝（`push` / 回填 / 语义删除会转发；换实现时用它旁路）。 */
+  private get sink(): ItemSink {
+    return this.items;
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -279,12 +302,15 @@ export class EventStore {
     // 作用域兜的是「有界回放把 run.started 挡在窗口外」的增量：流式 delta 与工具事件
     // 本身没有 session_id，只能靠订阅范围归属。
     const owner = this.runSessions.get(runId) ?? this.scopeSession;
-    this.entries.push({
+    const entry: StoredEvent = {
       event,
       seq: meta.seq,
       ...(owner !== undefined ? { sessionId: owner } : {}),
       ...(meta.jobId ? { jobId: meta.jobId } : {}),
-    });
+    };
+    this.entries.push(entry);
+    // 唯一 item 写入点：事件进环之后立刻折叠（裁剪与 item 正交，见 I4）。
+    this.sink.ingest(entry);
     const count = (this.runCounts.get(runId) ?? 0) + 1;
     this.runCounts.set(runId, count);
 
@@ -338,7 +364,14 @@ export class EventStore {
         return !(owner === sessionId || (owner === undefined && runIds.has(item.event.run_id)));
       });
     }
-    if (runIds.size === 0) return heldBefore - this.held.length;
+    // 语义删除首先转给物化面：即使该 run 的条目已经被环裁光（`runIds` 为空），
+    // item 侧仍可能留着它的卡片 —— 按 `sessionId` 兜住那种情况。
+    this.sink.dropSession(sessionId, [...runIds]);
+    if (runIds.size === 0) {
+      // 条目侧没有删除动作，但 item 侧可能刚被删：把变化立刻发出去。
+      this.sink.flush();
+      return heldBefore - this.held.length;
+    }
 
     const before = this.entries.length;
     const removedRunIds = new Set<string>();
@@ -349,7 +382,10 @@ export class EventStore {
       return !remove;
     });
     const removed = before - this.entries.length;
-    if (removed === 0) return 0;
+    if (removed === 0) {
+      this.sink.flush();
+      return 0;
+    }
 
     this.runCounts.clear();
     for (const entry of this.entries) {
@@ -390,6 +426,11 @@ export class EventStore {
    */
   truncateAfter(nextSeq: number): number {
     if (this.holdFloor !== null) return 0;
+    // 游标退化到「什么都没有」之前（`from_seq <= 1`：服务端重启后 seq 从 1 重新编号 /
+    // 陈旧 epoch）：item 的 seq 身份与新事件**不可比**，必须整体作废重来，否则水位会把
+    // 新事件全部当重放丢掉、时间线从此定格。正常 hello 的 `from_seq - 1` 落在已有窗口
+    // 之内，item 不动（I6）；回填期间 `beginBackfill` 已先冻结，这里不会误伤。
+    if (nextSeq === 0) this.sink.reset();
     // entries 按 seq 升序：二分出第一条 seq > nextSeq。
     let low = 0;
     let high = this.entries.length;
@@ -437,23 +478,42 @@ export class EventStore {
    * 期间 `truncateAfter` 是空操作：游标只由本方法与 `endBackfill` 推进。
    */
   beginBackfill(floorSeq: number): void {
-    this.truncateAfter(floorSeq);
     this.held = [];
+    // 先冻结物化面：随后 `truncateAfter(floor)` 的游标回退**不该**动屏上 item（§5.2 ①）。
+    this.sink.freeze();
+    this.truncateAfter(floorSeq);
     this.holdFloor = floorSeq;
   }
 
   /**
    * 结束回填暂存：把攒下的帧按 seq 升序经 `push()` 并入（重复 seq 自然被忽略），
    * 时间线从地板一路接到最新，中间不留空洞。
+   *
+   * 然后解除冻结并**按 run 重折叠**（`sink.resume`）：环里出现的每个 run 都用「现在
+   * 环里有的全部事件」重建一遍，再与屏上已有的 item 做锚点合并（Rule R）。回填页是
+   * 新→旧到达的，逐帧往尾部插更早的 delta 一定错，整 run 重折叠是唯一正确的做法。
    */
   endBackfill(): void {
     if (this.holdFloor === null) return;
     this.holdFloor = null;
     const held = this.held;
     this.held = [];
-    if (held.length === 0) return;
-    held.sort((a, b) => a.meta.seq - b.meta.seq);
-    for (const item of held) this.push(item.event, item.meta);
+    if (held.length > 0) {
+      held.sort((a, b) => a.meta.seq - b.meta.seq);
+      for (const item of held) this.push(item.event, item.meta);
+    }
+    this.sink.resume(this.entries);
+  }
+
+  /**
+   * 把渲染侧的可见性口径交给物化面。
+   *
+   * `isVisibleForGrouping` 决定「哪些事件参与段边界」，所以它必须参与**折叠**而不是渲染时
+   * 过滤；口径变化时只能按环里的全部事件重折叠（这是唯一合法的整表重算，人工、低频）。
+   * 环里已经取不到的那一段会跟着丢（既有缺陷，见 DESIGN.md §5.4）。
+   */
+  setItemVisibility(showInternal: boolean, errorLevel: ErrorVisibility): void {
+    this.sink.setVisibility(showInternal, errorLevel, this.entries);
   }
 
   /** 是否正处于回填暂存（分段拉取）期间。 */
@@ -518,6 +578,8 @@ export class EventStore {
     this.truncated.clear();
     this.truncatedSince.clear();
     this.lastSeq = nextSeq;
+    // 作用域真变了：传输窗口清了，物化面必须一起清（否则串台 / 幽灵卡片）。
+    this.sink.clear();
     this.version += 1;
     this.snapshot = {
       entries: [],
@@ -533,6 +595,9 @@ export class EventStore {
   /** 立即发布待处理事件（测试与路由切换前使用）。 */
   flush(): void {
     this.cancelTimer();
+    // 物化面同一节拍发布（它自己判脏）：两条快照的版本号不必一致，但节拍必须一致，
+    // 否则「运行详情」与「时间线」会各走一半。
+    this.sink.flush();
     this.version += 1;
     this.snapshot = {
       // 复制数组：entries 在 push 中原地追加，复用引用会让 memo 消费者永远看到旧视图。
