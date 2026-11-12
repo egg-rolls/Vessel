@@ -10,7 +10,7 @@
  * @module @vessel-agent/core/session
  */
 
-import { mkdir, readFile, unlink } from 'node:fs/promises';
+import { mkdir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Message } from '../types/provider.js';
 import type { RunUsage } from '../types/run-record-store.js';
@@ -60,6 +60,41 @@ function isNotFound(error: unknown): boolean {
 
 /** 单个文件的读取结果；ENOENT 之外的可读/解析错误直接抛 SessionCorruptError */
 type ReadStateResult = { found: true; state: SessionState } | { found: false };
+
+/**
+ * `listRich()` 摘要缓存用的文件戳。
+ * - `present`：缓存键的原料（size + mtimeMs）；
+ * - `missing`：ENOENT（回退 legacy 路径 / 没有会话）；
+ * - `unknown`：其它 stat 错误（权限等）—— 不猜，交给原读取路径按「损坏」口径处理。
+ */
+type FileStamp =
+  | { kind: 'present'; size: number; mtimeMs: number }
+  | { kind: 'missing' }
+  | { kind: 'unknown' };
+
+/**
+ * `listRich()` 摘要缓存上限（LRU）。
+ * 512 条 `SessionInfo`（全是原始类型，单条 < 1 KiB）≈ 常数级内存，覆盖真实租户的
+ * 二三十个会话几十倍；超出后按「最久未使用」淘汰，缓存大小与目录里文件数无关。
+ * 会话数**超过**上限时最坏退化：按目录顺序循环扫描 + LRU 必然互相踢掉，每轮都 miss
+ * —— 等价于没有缓存（不会比改造前更差，只是白记一份）。
+ */
+const LIST_RICH_CACHE_LIMIT = 512;
+
+/** `FileSessionStore` 构造选项（additive；不传时行为与无参构造完全一致） */
+export interface FileSessionStoreOptions {
+  /**
+   * `listRich()` 摘要缓存条数上限（LRU，缺省 {@link LIST_RICH_CACHE_LIMIT}）；0 = 关闭缓存。
+   *
+   * 只影响加速，不改变数据来源：条目按 `(path, size, mtimeMs)` 校验，文件一变就重新解析。
+   */
+  listRichCacheLimit?: number;
+  /**
+   * `JSON.parse` 的注入点（缺省全局 `JSON.parse`）。**只给门禁 / 测试用**：
+   * `scripts/check-listrich-cache.ts` 用它数「这一趟到底 parse 了几个文件」。
+   */
+  parseJson?: (text: string) => unknown;
+}
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
@@ -113,6 +148,23 @@ function toSessionState(value: unknown): SessionState {
 
 export class FileSessionStore implements SessionStore {
   private readonly basePath: string;
+  private readonly parseJson: (text: string) => unknown;
+  private readonly listRichCacheLimit: number;
+  /**
+   * `listRich()` 摘要缓存：键 = `path\0mtimeMs\0size`，值 = 该文件当时的 `SessionInfo`。
+   *
+   * 失效条件就是键本身（mtime + size）：内容变了 ⇒ 键变了 ⇒ miss 重解析，旧条目
+   * 自然被 LRU 挤掉。**语义零变化**——缓存只是省掉 `readFile + JSON.parse(整份
+   * 10MB)`，同一份文件内容仍然映射到同一份 `SessionInfo`；`load()` / `save()` /
+   * `delete()` 都不读也不写它（写侧走 temp+rename 原子写，mtime/size 必变）。
+   *
+   * 极端竞态：同一毫秒内两次写入且字节数完全相同（mtimeMs 与 size 都没变）时，
+   * 这一次扫描可能拿到上一版摘要 —— 后果是「列表里一条会话的 title/updated_at
+   * 晚一个轮询周期」，下一次 ws 推送或任意一次内容长度变化即修正；不涉及读侧
+   * 正确性（`load()` 永远读盘）。ext4/NTFS 的 mtimeMs 有亚毫秒精度，这个窗口
+   * 需要「同长度改写 + 同 mtime 刻度」同时成立，比缓存省下的 parse 便宜得多。
+   */
+  private readonly infoCache = new Map<string, SessionInfo>();
   /** 目录创建只做一次（失败后可重试） */
   private dirReady?: Promise<void>;
   /** 同一 session 的写入串行化；值为永不 reject 的 tail */
@@ -121,8 +173,11 @@ export class FileSessionStore implements SessionStore {
   /**
    * @param basePath 会话文件存储目录，默认 `.vessel/sessions`
    */
-  constructor(basePath = '.vessel/sessions') {
+  constructor(basePath = '.vessel/sessions', options: FileSessionStoreOptions = {}) {
     this.basePath = basePath;
+    this.parseJson = options.parseJson ?? ((text: string) => JSON.parse(text) as unknown);
+    const limit = options.listRichCacheLimit ?? LIST_RICH_CACHE_LIMIT;
+    this.listRichCacheLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
   }
 
   /**
@@ -202,10 +257,106 @@ export class FileSessionStore implements SessionStore {
     }
 
     try {
-      return { found: true, state: toSessionState(JSON.parse(content)) };
+      return { found: true, state: toSessionState(this.parseJson(content)) };
     } catch (error) {
       throw new SessionCorruptError(path, error);
     }
+  }
+
+  /** `stat` 一个候选状态文件；ENOENT → missing，其它错误 → unknown（不覆盖原损坏口径） */
+  private async statForCache(path: string): Promise<FileStamp> {
+    try {
+      const info = await stat(path);
+      return { kind: 'present', size: info.size, mtimeMs: info.mtimeMs };
+    } catch (error) {
+      if (isNotFound(error)) return { kind: 'missing' };
+      return { kind: 'unknown' };
+    }
+  }
+
+  /** LRU 读：命中即移到队尾（Map 的迭代顺序 = 插入顺序）并返回新浅拷贝 */
+  private infoCacheGet(key: string): SessionInfo | undefined {
+    const hit = this.infoCache.get(key);
+    if (hit === undefined) return undefined;
+    this.infoCache.delete(key);
+    this.infoCache.set(key, hit);
+    return hit;
+  }
+
+  /** LRU 写：超出上限时从队首淘汰最久未使用的条目 */
+  private infoCacheSet(key: string, info: SessionInfo): void {
+    if (this.listRichCacheLimit <= 0) return;
+    this.infoCache.delete(key);
+    this.infoCache.set(key, info);
+    while (this.infoCache.size > this.listRichCacheLimit) {
+      const oldest = this.infoCache.keys().next();
+      if (oldest.done === true) return;
+      this.infoCache.delete(oldest.value);
+    }
+  }
+
+  /**
+   * 单个状态文件 → `listRich()` 需要的摘要（带缓存）。
+   *
+   * 命中只花一次 `stat`；未命中才 `readFile + JSON.parse(整份文件)`。返回值：
+   * - `SessionInfo`：会话非空，进列表；
+   * - `null`：文件在 stat 之后消失，或会话没有消息（空会话不进列表，**不缓存**——
+   *   空文件很小，缓存收益不值得为它放宽「值 = SessionInfo」的口径）；
+   * - 损坏：抛 `SessionCorruptError`（与 `load()` 同一口径，调用方按单文件跳过处理；
+   *   异常路径**不写缓存**，坏文件不会污染缓存）。
+   */
+  private async infoForPath(
+    path: string,
+    stamp: { size: number; mtimeMs: number },
+  ): Promise<SessionInfo | null> {
+    const key = `${path}\u0000${stamp.mtimeMs}\u0000${stamp.size}`;
+    const cached = this.infoCacheGet(key);
+    // 给调用方新鲜对象（旧实现每次都是新解析出来的对象），调用方改字段也污染不到缓存。
+    // `SessionInfo` 全是原始类型，浅拷贝即完整拷贝。
+    if (cached !== undefined) return { ...cached };
+
+    const state = await this.readStateFile(path);
+    if (!state.found) return null;
+    if ((state.state.messages?.length ?? 0) === 0) return null;
+    const info = toSessionInfo(state.state);
+
+    // 读与 stat 之间文件可能被原子写替换：这份内容不能挂在旧键下（否则下一次
+    // 同一 (path,size,mtime) 会命中内容不一致的条目）。戳不一致就放弃缓存这一条。
+    const confirm = await this.statForCache(path);
+    if (
+      confirm.kind === 'present' &&
+      confirm.size === stamp.size &&
+      confirm.mtimeMs === stamp.mtimeMs
+    ) {
+      this.infoCacheSet(key, info);
+    }
+    return info;
+  }
+
+  /** 无缓存路径（stat 报 unknown / 刚被替换）：与改造前的 `load()` 同一口径 */
+  private async infoWithoutCache(path: string): Promise<SessionInfo | null> {
+    const state = await this.readStateFile(path);
+    if (!state.found) return null;
+    return (state.state.messages?.length ?? 0) > 0 ? toSessionInfo(state.state) : null;
+  }
+
+  /**
+   * 单个会话的 `listRich()` 摘要（主路径 → legacy 顺序与 `load()` 一致）。
+   * 只有 `stat` 成功才可能走缓存；stat 报其它错误时退回原读取口径（损坏照旧抛）。
+   */
+  private async listRichInfo(sessionId: string): Promise<SessionInfo | null> {
+    const primaryPath = this.filePath(sessionId);
+    const primary = await this.statForCache(primaryPath);
+    if (primary.kind === 'present') return this.infoForPath(primaryPath, primary);
+    if (primary.kind === 'unknown') return this.infoWithoutCache(primaryPath);
+
+    // 主路径 ENOENT 才回退 legacy（与 `load()` 同一顺序；主路径损坏不回退）。
+    const legacyPath = this.legacyFilePath(sessionId);
+    if (legacyPath === undefined || legacyPath === primaryPath) return null;
+    const legacy = await this.statForCache(legacyPath);
+    if (legacy.kind === 'present') return this.infoForPath(legacyPath, legacy);
+    if (legacy.kind === 'unknown') return this.infoWithoutCache(legacyPath);
+    return null;
   }
 
   /**
@@ -331,7 +482,15 @@ export class FileSessionStore implements SessionStore {
    * 列出会话摘要（含 title/preview/updated_at/message_count）
    *
    * 过滤空会话（message_count > 0），按 updated_at 倒序。
-   * 每个文件独立加载——文件数量通常很小（几十到几百），无需批量优化。
+   *
+   * **有界缓存（LRU 512，键 = `path + mtimeMs + size`）**：每次仍 `stat` 一遍目录里
+   * 的文件，但文件没变（size 与 mtimeMs 都相同）就直接返回上次的摘要，不再
+   * `readFile + JSON.parse` 整份 JSON。审计实测 32 会话 / 10.1MB 时 `listRich()`
+   * **33.5ms/次**（全部花在解析），命中后只剩 32 次 `stat`（亚毫秒），而
+   * `sessions.list` 是 15s 轮询、TUI / liveness sweep / resume 也各自调它 —— 缓存
+   * 命中的是「稳态下反复问同一批没变的文件」。语义不变：同一份文件内容 ⇒ 同一份
+   * `SessionInfo`；写侧是 temp+rename 原子写，内容一变 mtime/size 必变（极端
+   * 「同长度 + 同 mtime 刻度」的竞态见 `infoCache` 注释）。
    *
    * 0.8.1：列表降级——单个文件损坏（`SessionCorruptError`）只跳过该项，
    * 不让整张列表失败；直接 `load()` 仍抛错，保证损坏文件不被覆盖。
@@ -341,15 +500,12 @@ export class FileSessionStore implements SessionStore {
     const results: SessionInfo[] = [];
 
     for (const id of ids) {
-      let state: SessionState | null;
       try {
-        state = await this.load(id);
+        const info = await this.listRichInfo(id);
+        if (info !== null) results.push(info);
       } catch (error) {
         if (error instanceof SessionCorruptError) continue;
         throw error;
-      }
-      if (state && (state.messages?.length ?? 0) > 0) {
-        results.push(toSessionInfo(state));
       }
     }
 

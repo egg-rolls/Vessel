@@ -54,7 +54,8 @@
     "check:history-tools": "bun run scripts/check-history-tools.ts",
     "check:live-items": "bun run scripts/check-live-items.ts",
     "check:transcript-items": "bun run scripts/check-transcript-items.ts",
-    "check:replay-budget": "bun run scripts/check-replay-budget.ts"
+    "check:replay-budget": "bun run scripts/check-replay-budget.ts",
+    "check:listrich-cache": "bun run scripts/check-listrich-cache.ts"
   },
   "workspaces": [
     "packages/*",
