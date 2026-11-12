@@ -1602,20 +1602,24 @@ export const messages = {
   'designLab.tokens.filterPlaceholder': '按名称或值过滤，如 amber',
   'designLab.tokens.fonts': '字体',
   'designLab.tokens.layers': '层级',
-  'designLab.tokens.legend': '颜色色块：左 = 当前主题，右 = 强制暗色的采样值。',
+  'designLab.tokens.legend':
+    '颜色固定两列：左 = 亮色主题的值，右 = 暗色主题的值 —— 两者都与当前主题无关。',
   'designLab.tokens.motion': '动效',
   'designLab.tokens.other': '其它',
   'designLab.tokens.radii': '圆角',
   'designLab.tokens.runtimeNote':
-    '数值由 getComputedStyle(document.documentElement) 在当前主题下读取；切换浅色/深色后自动更新。',
+    '非颜色 token 的数值由 getComputedStyle(document.documentElement) 在当前主题下读取；颜色的亮 / 暗两列直接取自 tokens.css 的 :root 与 :root[data-theme="dark"] 声明，与当前主题无关。',
   'designLab.tokens.shadows': '阴影',
   'designLab.tokens.sizes': '尺寸',
   'designLab.tokens.spacing': '间距',
   'designLab.tokens.subtitle':
     '全部自定义属性都来自当前主题，按前缀分成颜色、字号、间距、圆角、阴影、字体、动效、尺寸与层级。',
+  'designLab.tokens.themeDark': '暗',
+  'designLab.tokens.themeLight': '亮',
   'designLab.tokens.title': '设计令牌',
   'designLab.tokens.typeSample': '字体 Aa 123',
   'designLab.tokens.typography': '字号',
+  'designLab.tokens.undefined': '未定义',
   'designLab.gallery.autoNote':
     '页面自动收集 apps/web/src 下所有 *.preview.tsx（import.meta.glob 懒加载）；新增一个文件即出现在对应分组（preview.group，缺省取目录名）。',
   'designLab.gallery.count': '{count} 个',

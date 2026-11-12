@@ -1,8 +1,12 @@
 /**
  * Token 展区：**全部条目由 tokens.ts 自动枚举**驱动，本文件不认识任何具体 token 名。
  *
- * 颜色类并排给两个色块（左 = 当前主题，右 = 强制暗色采样），其余按种类给对应的
- * 可视化（圆角 / 阴影 / 间距 / 字号 / 字体 / 动效 / 尺寸 / 层级）。
+ * 颜色 token 固定显示**两列**：左 = 亮色主题的值、右 = 暗色主题的值。两列都来自
+ * tokens.ts 从样式表对象模型读到的作者声明，所以与用户当前在哪个主题**无关** ——
+ * 在暗色主题下打开，左列依旧是亮色值。某一侧没有定义时显示「未定义」，不编值。
+ *
+ * 非颜色 token（间距 / 字号 / 圆角 / 阴影 / 动效 / 尺寸 / 层级）保持**单值**，
+ * 值 = 当前主题下的 computed（阴影这类值本来就会随主题变）。
  */
 import { Badge, SearchInput } from '@vessel-agent/plugin-ui';
 import { useMemo, useState } from 'react';
@@ -15,40 +19,59 @@ import {
   type TokenValues,
 } from './tokens';
 
-const CARD = 'flex w-44 min-w-0 flex-col gap-1.5 rounded-sm bg-sunken p-2';
+const CARD = 'flex w-56 min-w-0 flex-col gap-1.5 rounded-sm bg-sunken p-2';
 const CARD_WIDE = 'flex min-w-0 flex-col gap-1.5 rounded-sm bg-sunken p-2';
 const NAME = 'truncate font-mono text-xs text-ink';
 const VALUE = 'truncate font-mono text-2xs text-faint';
+const COLUMN_LABEL = 'text-2xs text-faint';
 
-function swatchBackground(value: string): string | undefined {
-  return value === '—' ? undefined : value;
+function swatchBackground(value: string | undefined): string | undefined {
+  return value === undefined || value === '' ? undefined : value;
 }
 
-/** 颜色：左当前主题 / 右强制暗色。 */
-function ColorCard({ name, value, dark }: { name: string; value: string; dark: string }) {
+/** 颜色：**固定**两列 —— 左亮右暗，与当前主题无关。 */
+function ColorCard({
+  name,
+  light,
+  dark,
+  undefinedLabel,
+}: {
+  name: string;
+  light: string | undefined;
+  dark: string | undefined;
+  undefinedLabel: string;
+}) {
+  const lightText = light === undefined || light === '' ? undefinedLabel : light;
+  const darkText = dark === undefined || dark === '' ? undefinedLabel : dark;
   return (
     <div className={CARD}>
-      <div className="flex gap-1.5">
-        <span
-          aria-hidden="true"
-          className="h-8 min-w-0 flex-1 rounded-xs shadow-elev-inset"
-          style={{ background: swatchBackground(value) }}
-        />
-        <span
-          aria-hidden="true"
-          className="h-8 min-w-0 flex-1 rounded-xs border border-line shadow-elev-inset"
-          style={{ background: swatchBackground(dark) }}
-        />
-      </div>
       <span className={NAME} title={name}>
         {name}
       </span>
-      <span className={VALUE} title={value}>
-        {value}
-      </span>
-      <span className={VALUE} title={dark}>
-        {dark}
-      </span>
+      <div className="flex gap-1.5">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className={COLUMN_LABEL}>{t('designLab.tokens.themeLight')}</span>
+          <span
+            aria-hidden="true"
+            className="h-8 rounded-xs shadow-elev-inset"
+            style={{ background: swatchBackground(light) }}
+          />
+          <span className={VALUE} title={lightText}>
+            {lightText}
+          </span>
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className={COLUMN_LABEL}>{t('designLab.tokens.themeDark')}</span>
+          <span
+            aria-hidden="true"
+            className="h-8 rounded-xs border border-line shadow-elev-inset"
+            style={{ background: swatchBackground(dark) }}
+          />
+          <span className={VALUE} title={darkText}>
+            {darkText}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -57,14 +80,25 @@ function TokenCard({
   kind,
   name,
   value,
+  light,
   dark,
 }: {
   kind: TokenKind;
   name: string;
   value: string;
-  dark: string;
+  light: string | undefined;
+  dark: string | undefined;
 }) {
-  if (kind === 'color') return <ColorCard name={name} value={value} dark={dark} />;
+  if (kind === 'color') {
+    return (
+      <ColorCard
+        name={name}
+        light={light}
+        dark={dark}
+        undefinedLabel={t('designLab.tokens.undefined')}
+      />
+    );
+  }
 
   if (kind === 'radius' || kind === 'shadow') {
     return (
@@ -141,28 +175,34 @@ function TokenCard({
 
 function matchesNeedle(
   name: string,
-  values: TokenValues,
+  current: TokenValues,
+  lightValues: TokenValues,
   darkValues: TokenValues,
   needle: string,
 ): boolean {
   if (needle === '') return true;
   if (name.toLowerCase().includes(needle)) return true;
-  if ((values[name] ?? '').toLowerCase().includes(needle)) return true;
-  return (darkValues[name] ?? '').toLowerCase().includes(needle);
+  return [current[name], lightValues[name], darkValues[name]].some(
+    (value) => value !== undefined && value.toLowerCase().includes(needle),
+  );
 }
 
 function TokenGroupBlock({
   group,
   values,
+  lightValues,
   darkValues,
   needle,
 }: {
   group: TokenGroup;
   values: TokenValues;
+  lightValues: TokenValues;
   darkValues: TokenValues;
   needle: string;
 }) {
-  const tokens = group.tokens.filter((name) => matchesNeedle(name, values, darkValues, needle));
+  const tokens = group.tokens.filter((name) =>
+    matchesNeedle(name, values, lightValues, darkValues, needle),
+  );
   if (tokens.length === 0) return null;
   const stacked = group.kind !== 'color' && group.kind !== 'radius' && group.kind !== 'shadow';
   return (
@@ -180,7 +220,8 @@ function TokenGroupBlock({
             kind={group.kind}
             name={name}
             value={formatTokenValue(group.kind, values[name])}
-            dark={formatTokenValue(group.kind, darkValues[name])}
+            light={lightValues[name]}
+            dark={darkValues[name]}
           />
         ))}
       </div>
@@ -199,7 +240,7 @@ export function TokenSection({ catalog }: { catalog: TokenCatalog }) {
         .map((group) => ({
           group,
           visible: group.tokens.some((name) =>
-            matchesNeedle(name, catalog.values, catalog.darkValues, needle),
+            matchesNeedle(name, catalog.values, catalog.lightValues, catalog.darkValues, needle),
           ),
         }))
         .filter((entry) => entry.visible)
@@ -248,6 +289,7 @@ export function TokenSection({ catalog }: { catalog: TokenCatalog }) {
             key={group.id}
             group={group}
             values={catalog.values}
+            lightValues={catalog.lightValues}
             darkValues={catalog.darkValues}
             needle={needle}
           />
