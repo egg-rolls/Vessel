@@ -1,8 +1,9 @@
 /**
  * 有界事件缓冲（ring buffer）+ 订阅。
  *
- * - 每个 run 最多 5000 条，总数最多 20000 条；超出丢弃最旧并标记 truncated
- *   （口径与依据见下面两个常量的注释：条目数 ≈ 工具调用数 × 5~6，不是 token 数）。
+ * - 每个 run 最多 5000 条，总数最多 20000 条；超出丢弃最旧（口径与依据见下面两个常量
+ *   的注释：条目数 ≈ 工具调用数 × 5~6，不是 token 数）。裁剪只是传输面的事，**不影响
+ *   屏上的 item**（`LiveItemStore` 已经物化，见 DESIGN.md I4）。
  * - 按 seq 去重（重连回放不会产生重复卡片）。
  * - 通知节流到 ~50ms，避免每个 token 重渲染整棵树。
  * - 快照对象在通知时整体替换，`entries` 也必须是新数组：消费者（ChatView / RunDetail）
@@ -99,16 +100,6 @@ interface HeldEvent {
 
 export interface EventStoreSnapshot {
   entries: readonly StoredEvent[];
-  /** 累计被裁剪过的 run（自首次 flush 起）。 */
-  truncatedRuns: ReadonlySet<string>;
-  /**
-   * 自上一次快照以来被裁剪过的 run。
-   *
-   * @deprecated 渲染侧的 `EventGroupCache` 已不再是输入源（改为 `LiveItemStore` 物化 item），
-   * 裁剪**不再**需要通知渲染重算（I4 / I6）。字段暂留：`check-transcript-items` 的旧
-   * fixture 仍按它签名对拍，等它们整体迁到 `check-live-items` 后一起删。
-   */
-  truncatedSince: ReadonlySet<string>;
   /** 最近一次通知时的 seq；重连/hello 判断用。 */
   lastSeq: number;
   version: number;
@@ -137,8 +128,6 @@ function eventSessionId(event: RunEvent): string | undefined {
 function emptySnapshot(): EventStoreSnapshot {
   return {
     entries: [],
-    truncatedRuns: new Set(),
-    truncatedSince: new Set(),
     lastSeq: 0,
     version: 0,
   };
@@ -177,16 +166,14 @@ export class EventStore {
   private held: HeldEvent[] = [];
   /** 回填游标地板；非 null = 正在回填。 */
   private holdFloor: number | null = null;
-  private truncated = new Set<string>();
-  /** 待发布到下一份快照的裁剪增量；flush 后清空。 */
-  private truncatedSince = new Set<string>();
   /**
    * 累计被当作「传输噪声」丢掉的流式增量条数（判据 `events.ts#producesTimelineItem`
    * 为 false 的那些）。只为可观测：提示卡那一单要显示「本轮有 N 条事件未在实时视图
    * 里出现」，先只暴露 getter，**不在 UI 里渲染**。
    *
-   * **不参与** `truncated*` 语义（那两个是已弃用的渲染信号，见 `EventStoreSnapshot`）；
-   * 这里丢的东西不产 item，不该触发「本轮被裁剪」的提示。
+   * 这里丢的东西不产 item，不属于「裁剪」：缓冲裁剪本身已经与渲染无关（I4 / I6），
+   * 所以裁剪不再需要任何「通知渲染重算」的信号（旧的 truncatedSince / truncatedRuns
+   * 已随 `EventGroupCache` 一起删除，见 `check-live-items` 的 T1）。
    */
   private droppedNoiseCount = 0;
   private lastSeq = 0;
@@ -320,8 +307,6 @@ export class EventStore {
       const index = this.oldestEvictableIndex(runId);
       if (index >= 0) this.entries.splice(index, 1);
       this.runCounts.set(runId, count - 1);
-      this.truncated.add(runId);
-      this.truncatedSince.add(runId);
     }
 
     // 总上限：从最旧开始丢。
@@ -332,8 +317,6 @@ export class EventStore {
       const remaining = (this.runCounts.get(removedRun) ?? 1) - 1;
       if (remaining <= 0) this.runCounts.delete(removedRun);
       else this.runCounts.set(removedRun, remaining);
-      this.truncated.add(removedRun);
-      this.truncatedSince.add(removedRun);
     }
 
     this.scheduleNotify();
@@ -346,9 +329,8 @@ export class EventStore {
    * 归属判定：事件顶层 / `data.session_id` 等于目标会话的 run 记为目标的 run；该 run
    * 中未带 session_id 的条目一并删除。先按 session 判定而不是直接按 run_id，
    * 避免 `session.rewound` 共用 `run_id: 'manual'` 时误删其它会话的条目。
-   * 删除后重建 run 计数，并把受影响的 run 写进 `truncatedSince`（已弃用的渲染信号，
-   * 见 `EventStoreSnapshot`），同时把「语义删除」转发给物化面：rewind 之后历史真的
-   * 不存在了，item 必须跟着删（这与缓冲裁剪不同 —— 裁剪删的是传输窗口，I4/I6）。
+   * 删除后重建 run 计数，并把「语义删除」转发给物化面：rewind 之后历史真的不存在了，
+   * item 必须跟着删（这与缓冲裁剪不同 —— 裁剪删的是传输窗口，不影响 item，I4/I6）。
    * 立即发布快照。返回删除的条目数。
    */
   dropSession(sessionId: string): number {
@@ -393,13 +375,8 @@ export class EventStore {
       this.runCounts.set(runId, (this.runCounts.get(runId) ?? 0) + 1);
     }
     for (const runId of removedRunIds) {
-      // 局部重建信号：bucket 里可能还留着被删条目的旧副本。
-      this.truncatedSince.add(runId);
-      // 已没有条目的 run 不再需要累计“被裁剪”标记。
-      if (!this.runCounts.has(runId)) {
-        this.truncated.delete(runId);
-        this.runSessions.delete(runId);
-      }
+      // 已没有条目的 run 不再需要 run→session 映射（留着会让新事件串到旧归属）。
+      if (!this.runCounts.has(runId)) this.runSessions.delete(runId);
     }
     this.flush();
     return removed;
@@ -416,7 +393,7 @@ export class EventStore {
    * 必须用 `clear()`，否则旧范围的条目会留在屏上串台。
    *
    * 同步维护派生状态：条目变了就重建 `runCounts` / `runSessions`（不能留下已无条目
-   * 的 run 的过期映射），并把被丢弃条目的 run 记进 `truncatedSince`（已弃用的渲染信号）。
+   * 的 run 的过期映射）。
    * **这是传输面操作，不动 item**（I6）：回放靠 `push` 的 seq 去重 + 物化面的水位幂等，
    * 所以这里既不需要、也**不许**触发整表重算。
    * `scopeSession` 不变（同一作用域不变量）。
@@ -458,9 +435,8 @@ export class EventStore {
     }
     for (const entry of dropped) {
       const runId = entry.event.run_id;
-      this.truncatedSince.add(runId);
-      // 整个 run 的条目都没了：不再需要累计「被裁剪」标记。
-      if (!this.runCounts.has(runId)) this.truncated.delete(runId);
+      // 整个 run 的条目都没了：忘掉它的 run→session 映射。
+      if (!this.runCounts.has(runId)) this.runSessions.delete(runId);
     }
     this.flush();
     return dropped.length;
@@ -575,16 +551,12 @@ export class EventStore {
     this.holdFloor = null;
     this.runCounts.clear();
     this.runSessions.clear();
-    this.truncated.clear();
-    this.truncatedSince.clear();
     this.lastSeq = nextSeq;
     // 作用域真变了：传输窗口清了，物化面必须一起清（否则串台 / 幽灵卡片）。
     this.sink.clear();
     this.version += 1;
     this.snapshot = {
       entries: [],
-      truncatedRuns: new Set(),
-      truncatedSince: new Set(),
       lastSeq: nextSeq,
       version: this.version,
     };
@@ -602,13 +574,10 @@ export class EventStore {
     this.snapshot = {
       // 复制数组：entries 在 push 中原地追加，复用引用会让 memo 消费者永远看到旧视图。
       entries: [...this.entries],
-      truncatedRuns: new Set(this.truncated),
-      truncatedSince: new Set(this.truncatedSince),
       lastSeq: this.lastSeq,
       version: this.version,
     };
-    // 增量只对下一份快照有效；消费后即使没有新事件也不重复报告。
-    this.truncatedSince.clear();
+    // 快照是整体替换的：没有「增量字段」需要在消费后清空（旧的 truncatedSince 已删）。
     this.notify();
   }
 

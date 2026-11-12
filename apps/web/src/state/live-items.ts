@@ -413,7 +413,10 @@ export class LiveItemStore implements ItemSink {
   release(requests: ReadonlyMap<string, HandoverRequest>): void {
     let removed = 0;
     for (const [runId, request] of requests) {
-      const state = this.released.get(runId) ?? { anchors: new Set<number>(), callIds: new Set() };
+      const state = this.released.get(runId) ?? {
+        anchors: new Set<number>(),
+        callIds: new Set<string>(),
+      };
       for (const anchor of request.segments) state.anchors.add(anchor);
       for (const callId of request.callIds) state.callIds.add(callId);
       this.released.set(runId, state);

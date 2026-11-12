@@ -45,7 +45,7 @@
  * 退出码：0 = 全过；1 = 有 FAIL（失败打印两路差异，便于定位）。
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import {
   buildHistoryIndex,
@@ -220,6 +220,11 @@ function contentItemCount(groups: readonly RunGroup[]): number {
     }
   }
   return total;
+}
+
+/** 布尔断言 → fixture 的 `string | null` 约定（迁入的 F 组 fixture 用，措辞保持原样）。 */
+function expect(label: string, ok: boolean): string | null {
+  return ok ? null : `${label}：断言不成立`;
 }
 
 interface Fixture {
@@ -977,20 +982,191 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
+    name: 'F16（迁入）长 run（数千 delta、3 段思考、多轮工具）→ 所有 reasoning 段都在且有序',
+    why: 'per-run 上限按 delta 计数会把最早的 thinking 段整段挤出（真实 run 177 轮 / 70k tokens）：迁入后由 I4（环裁剪不动 item）守，且与「从全量事件重建」逐字对拍',
+    check: () => {
+      const specs: EvSpec[] = [['run.started', { input: 'go' }]];
+      for (let round = 0; round < 3; round += 1) {
+        // 每段思考 1200 个 delta：旧上限（2000/run）下第二段起就会挤掉前面的段。
+        for (let index = 0; index < 1200; index += 1) specs.push(reasoning('x'));
+        specs.push(toolStarted(`c${round}`), toolCompleted(`c${round}`));
+      }
+      const events = eventsOf(specs, 'r-long');
+      // 真实路径：delta 洪水把该 run 的环额度（2000 条）吃满、锚点之外的条目逐条被裁。
+      const store = new EventStore(0);
+      feed(store, events);
+      const groups = groupsFromStore(store);
+      const items = buildLiveItems(groups);
+      const reasoningItems = items.filter((item) => item.kind === 'run-reasoning');
+      const tools = items.filter((item) => item.kind === 'tool');
+      if (reasoningItems.length !== 3) return `思考段 ${reasoningItems.length} 条（应为 3）`;
+      if (tools.length !== 3) return `工具卡 ${tools.length} 张（应为 3）`;
+      const anchors = reasoningItems.map((item) => item.anchorSeq ?? -1);
+      if (!(anchors[0]! < anchors[1]! && anchors[1]! < anchors[2]!)) {
+        return `思考段顺序不对：${anchors.join(',')}`;
+      }
+      return sameJson('长 run 的 item 流（增量 vs 重建）', groups, rebuild(events));
+    },
+  },
+  {
+    name: 'F21（迁入）失败卡落位：run 有正文/工具后 run.failed → run:<runId>:failure 是该 run 最后一个 item',
+    why: '失败此前只活在 RunItems（子 agent 面板）里；位置若缺 ts 或取错时刻，卡会沉到会话底部或排到本轮正文之上',
+    check: () => {
+      const events = eventsOf(
+        [
+          ['run.started', { input: 'go' }],
+          text('half answer'),
+          toolStarted('c1'),
+          toolCompleted('c1'),
+          // run.failed 是第 5 条 → ts = 1005（本 fixture 断言的就是这个终态时刻）。
+          [
+            'run.failed',
+            {
+              error: 'provider 429: rate limited',
+              error_code: 'rate_limited',
+              category: 'provider',
+              phase: 'llm',
+              retryable: true,
+              duration_ms: 2500,
+            },
+          ],
+        ],
+        'r-fail',
+      );
+      const store = new EventStore(0);
+      feed(store, events);
+      const items = buildTranscriptItems({
+        messages: [],
+        messageIndexOffset: 0,
+        liveGroups: groupsFromStore(store),
+        queued: [],
+      });
+      const cards = items.filter((item) => item.kind === 'run-failure');
+      const card = cards[0];
+      return expect(
+        '失败卡落位',
+        cards.length === 1 &&
+          card !== undefined &&
+          card.kind === 'run-failure' &&
+          card.key === 'run:r-fail:failure' &&
+          card.source === 'event' &&
+          card.error === 'provider 429: rate limited' &&
+          card.errorMeta?.code === 'rate_limited' &&
+          card.errorMeta?.retryable === true &&
+          // 终态时刻（run.failed 的 ts），不是 undefined —— 后者会被规则「缺 ts 排最后」沉底。
+          card.ts === 1005 &&
+          // 该 run 的最后一个 item：输入 → 正文 → 工具卡 → 失败卡。
+          items.map((item) => item.key).join(',') ===
+            'run:r-fail:input,run:r-fail:text:2,tool:c1,run:r-fail:failure',
+      );
+    },
+  },
+  {
+    name: 'F22（迁入）快照来源与去重：只有会话快照也出卡；同 run 只一张；failed 后 completed 不出卡',
+    why: '历史消息不带失败信息、事件缓冲有界（刷新 / 切会话后 run.failed 可能已不在回放窗口）；两个来源共用 run:<runId>:failure，不许出两张卡',
+    check: () => {
+      const snapshot = {
+        runId: 'r-old',
+        sessionId: 's1',
+        error: 'boom',
+        completedAt: 2000,
+        source: 'session' as const,
+      };
+      // (a) 只有会话快照：缓冲里没有这个 run 的任何分组。
+      const onlySnapshot = buildTranscriptItems({
+        messages: [
+          msg('user', 'q1', { timestamp: 1000 }),
+          msg('assistant', 'a1', { timestamp: 1500 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+        queued: [],
+        sessionFailure: snapshot,
+      });
+      // (b) 事件流里已有同 runId 的分组 → 事件流优先，只出一张。
+      const both = buildTranscriptItems({
+        messages: [],
+        messageIndexOffset: 0,
+        liveGroups: [
+          {
+            runId: 'r-old',
+            status: 'failed',
+            hasRunEvent: true,
+            items: [],
+            startedAt: 1000,
+            completedAt: 2000,
+            error: 'live error',
+          },
+        ],
+        queued: [],
+        sessionFailure: snapshot,
+      });
+      // (c) failed 之后又 completed（session-liveness 误判）：终态以最后一次为准，不出卡。
+      const store = new EventStore(0);
+      feed(
+        store,
+        eventsOf(
+          [
+            ['run.started', { input: 'go' }],
+            ['run.failed', { error: 'run lost' }],
+            ['run.completed', { output: 'ok' }],
+          ],
+          'r-flap',
+        ),
+      );
+      const flapped = buildLiveItems(groupsFromStore(store));
+
+      const cards = onlySnapshot.filter((item) => item.kind === 'run-failure');
+      const a = cards[0];
+      const bothCards = both.filter((item) => item.kind === 'run-failure');
+      const b = bothCards[0];
+      return expect(
+        '快照来源与去重',
+        // (a) 快照卡：ts 取 completed_at，落在该轮消息之后。
+        cards.length === 1 &&
+          a !== undefined &&
+          a.kind === 'run-failure' &&
+          a.key === 'run:r-old:failure' &&
+          a.source === 'session' &&
+          a.ts === 2000 &&
+          onlySnapshot.map((item) => item.key).join(',') === 'msg:0,msg:1,run:r-old:failure' &&
+          // (b) 同 run 恰好一张，且是事件流那条。
+          bothCards.length === 1 &&
+          b !== undefined &&
+          b.kind === 'run-failure' &&
+          b.key === 'run:r-old:failure' &&
+          b.source === 'event' &&
+          b.error === 'live error' &&
+          // (c) failed → completed 不留假失败卡。
+          flapped.every((item) => item.kind !== 'run-failure'),
+      );
+    },
+  },
+  {
     name: 'T1 渲染侧不读 EventStore.entries（I1 tripwire）',
-    why: '时间线只读物化后的 item 流：`domains/chat/**` 不许再按 entries 批量分组，也不许再 import 已弃用的 group-cache；`snapshot.entries` 的每处用法必须标注为传输面消费者',
+    why: '时间线只读物化后的 item 流：`domains/chat/**` 不许再按 entries 批量分组，也不许再引用已删除的 group-cache；`snapshot.entries` 的每处用法必须标注为传输面消费者',
     check: () => {
       const webSrc = join(import.meta.dir, '..', 'apps', 'web', 'src');
       const chatDir = join('domains', 'chat');
       const allowBatchGroup = new Set(['SubagentTranscript.tsx']);
       const problems: string[] = [];
+      // I1-a'：`EventGroupCache` 已删除（设计 §6：它只会变成「第二次投影」）。
+      // 这条断言的意义：把文件误 git checkout 回来 / 有人又加一层缓存包装时，门禁先红。
+      if (existsSync(join(webSrc, 'state', 'group-cache.ts'))) {
+        problems.push('state/group-cache.ts: 已删除的缓存包装又回来了（渲染侧必须读 LiveItemStore）');
+      }
       for (const file of walk(webSrc)) {
         if (!file.endsWith('.ts') && !file.endsWith('.tsx')) continue;
         const path = relative(webSrc, file);
         const source = readFileSync(file, 'utf8');
-        // I1-a：生产代码不许再引用按 entries 分组的旧缓存。
-        if (path !== join('state', 'group-cache.ts') && source.includes('group-cache')) {
-          problems.push(`${path}: 仍引用 group-cache（渲染侧必须读 LiveItemStore）`);
+        // I1-a：生产代码不许再引用按 entries 分组的旧缓存（文件已删，**代码行**里的提及
+        // 一律是错的；注释里提到历史实现不算 —— 那种「谁曾经用它」的说明留着有用）。
+        for (const line of source.split('\n')) {
+          const code = line.trim();
+          if (code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) continue;
+          if (!code.includes('group-cache') && !code.includes('EventGroupCache')) continue;
+          problems.push(`${path}: 仍引用已删除的 group-cache（渲染侧必须读 LiveItemStore）`);
+          break;
         }
         // I1-b：会话域不许再「从事件批量分组」。
         if (
