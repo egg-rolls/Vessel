@@ -265,6 +265,12 @@ export function createFold(runId: string): RunFold {
    * 再退到同名配对（只在 callId 缺失时）。两处解析同一份 wire 载荷，改口径要一起改。
    */
   const pendingTools: { index: number; callId?: string; name: string }[] = [];
+  /**
+   * callId → 卡片在 `items` 里的下标。**一次调用恒为一张卡**：即使 completed / failed
+   * 迟到（pending 已经消费掉，例如 server 发了重复的终态），也**只更新**既有卡片，
+   * 不再新开一张（否则时间线上同一调用出现两张卡，G-J 守）。
+   */
+  const toolCards = new Map<string, number>();
 
   const apply = (entry: StoredEvent): void => {
     const ev = entry.event;
@@ -470,6 +476,7 @@ export function createFold(runId: string): RunFold {
           anchorSeq: entry.seq,
         });
         pendingTools.push({ index: group.items.length - 1, callId, name: callName });
+        if (callId !== undefined) toolCards.set(callId, group.items.length - 1);
         return;
       }
       case 'tool.call.completed':
@@ -480,7 +487,11 @@ export function createFold(runId: string): RunFold {
         const name = toolNameOf(ev.data);
         const durationMs = durationMsOf(ev.data);
         const truncated = ev.data.truncated === true;
-        const index = takePendingTool(pendingTools, callId, name);
+        // 先按 pending 配对（正常时序），再按 callId 找**既有卡片**（终态迟到 / 重复）：
+        // 「一次调用恒为一张卡」是硬不变量，绝不因为一条迟到的 completed 新开一张。
+        const paired = takePendingTool(pendingTools, callId, name);
+        const existing = callId !== undefined ? (toolCards.get(callId) ?? -1) : -1;
+        const index = paired >= 0 ? paired : existing;
         const previous = index >= 0 ? group.items[index] : undefined;
         if (previous !== undefined && previous.kind === 'tool') {
           // 就地更新：状态 running → done / error，内容（args / startedAt）不动。
@@ -489,7 +500,9 @@ export function createFold(runId: string): RunFold {
             status: completed ? 'done' : 'error',
             ...(previous.callId === undefined && callId !== undefined ? { callId } : {}),
             ...(completed ? { result: ev.data.result } : {}),
-            ...(completed ? {} : { error: errorOf(ev.data), errorMeta: errorMetaOf(ev.data) }),
+            ...(completed
+              ? {}
+              : { error: errorOf(ev.data), errorMeta: errorMetaOf(ev.data) }),
             ...(durationMs !== undefined ? { durationMs } : {}),
             ...(truncated ? { truncated: true } : {}),
           };
@@ -509,6 +522,7 @@ export function createFold(runId: string): RunFold {
           startedAt: ev.ts,
           anchorSeq: entry.seq,
         });
+        if (callId !== undefined) toolCards.set(callId, group.items.length - 1);
         return;
       }
       case 'llm.stream.chunk': {
@@ -591,11 +605,16 @@ export function createFold(runId: string): RunFold {
   const trim = (keep: number): FoldTrim => {
     const removed = group.items.splice(0, Math.max(0, group.items.length - Math.max(1, keep)));
     if (removed.length === 0) return { removed: 0 };
-    // 待配对工具卡的下标整体前移；被折掉的那些丢弃（它们的 completed 会落成孤儿卡，
-    // 仍是可见的卡片，不会静默消失）。
+    // 工具卡下标整体前移；被折掉的那些丢弃 —— 它们的 completed / failed 后续会落成
+    // 「孤儿卡」（仍是一张可见的卡，不静默消失），这是折叠与配对正交的代价，可接受。
     for (const pending of pendingTools) pending.index -= removed.length;
     for (let index = pendingTools.length - 1; index >= 0; index -= 1) {
       if ((pendingTools[index]?.index ?? -1) < 0) pendingTools.splice(index, 1);
+    }
+    for (const [callId, index] of [...toolCards]) {
+      const next = index - removed.length;
+      if (next < 0) toolCards.delete(callId);
+      else toolCards.set(callId, next);
     }
     const first = removed[0]?.anchorSeq;
     const last = removed[removed.length - 1]?.anchorSeq;

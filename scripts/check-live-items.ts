@@ -20,22 +20,25 @@
  * - 改 fixture 必须与改实现**同一个 commit**（fixture 跟着实现一起漂 = 门禁坏了）。
  *
  * 覆盖（§9.2 里与阶段 1/2 相关的部分）：
- *   G-A 增量 == 重建（基本流：分段正文 / 思考 / 工具 / notice / hook 对 / 终态）
- *   G-B **缓冲裁剪不得让 item 消失**（用户诉求 #1；改动前红灯 R1）
- *   G-C 回放幂等（hello 重放整段；改动前红灯 R2：结尾正文重复）
- *   G-D 回放边界落在段内部（正文逐字相等；R2 的最小形态）
- *   G-E 乱序回填（freeze → 按 run 重折叠 → 锚点合并 Rule R）
- *   G-G run.completed 撤回失败卡（增量化最容易漏的一条）
- *   G-I 可见性切换重折叠幂等（重折叠必须等于「一开始就是这个口径」）
- *   G-J 一次工具调用恰好一张 tool:<callId>（不再出 ev-<seq> 原始事件行）
- *   G-K 超上限不许有 item 凭空消失（折叠覆盖数守恒 + overBudget 不静默）
- *   T1  渲染侧不读 EventStore.entries（I1 的文件级 tripwire）
+ *   G-A  增量 == 重建（基本流：分段正文 / 思考 / 工具 / notice / hook 对 / 终态）
+ *   G-B  增量 == 重建（长 run + per-run 上限裁剪；用户诉求 #1，改动前红灯 R1）
+ *   G-B2 环被 truncateAfter 裁剪（游标回退）同样不得减 item
+ *   G-C  回放幂等（hello 重放整段；改动前红灯 R2：结尾正文重复）
+ *   G-D  回放边界落在段内部（正文逐字相等；R2 的最小形态）
+ *   G-E  乱序回填（freeze → 按 run 重折叠 → 锚点合并 Rule R）
+ *   G-E2 回填时环已淘汰更早的事件 → Rule R 的「保留」仍在
+ *   G-G  run.completed 撤回失败卡（增量化最容易漏的一条）
+ *   G-H  每 run 上限折叠可见（折叠卡条数 == 被折条数，最近 10 项仍在）
+ *   G-I  可见性切换重折叠幂等（重折叠必须等于「一开始就是这个口径」）
+ *   G-J  一次工具调用恰好一张 tool:<callId>（running → done → error 就地更新，不出 ev- 行）
+ *   G-K  总量硬上界不删内容（四档折不动时只置 stats.overBudget，不许静默）
+ *   T1   渲染侧不读 EventStore.entries（I1 的文件级 tripwire）
  *
  * 用法：bun run scripts/check-live-items.ts
  * 退出码：0 = 全过；1 = 有 FAIL（失败打印两路差异，便于定位）。
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { buildLiveItems, type TranscriptItem } from '../apps/web/src/domains/chat/transcript-items';
 import type { RunEvent } from '../apps/web/src/gateway/types';
@@ -171,39 +174,17 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
-    name: 'G-B 缓冲裁剪不得让 item 消失（改动前红灯 R1）',
-    why: '用户诉求 #1：环裁剪只是传输面的事，屏幕上已经显示的卡片不该跟着删（I4）',
+    name: 'G-B 增量 == 重建（长 run + per-run 上限裁剪，R1 转绿）',
+    why: '用户诉求 #1：环裁剪只是传输面的事，屏上已显示的 item 一条都不该少（I4）',
     check: () => {
       const specs: EvSpec[] = [['run.started', { input: 'go' }]];
-      for (let index = 0; index < 30; index += 1) {
-        specs.push(['agent.limit.warning', { round: index }]);
+      for (let index = 0; index < 40; index += 1) {
+        specs.push(text(`段${index}`), ['agent.limit.warning', { round: index }]);
       }
       specs.push(['run.completed', { output: 'done' }]);
       const events = eventsOf(specs, 'r-b');
-      const store = new EventStore(0);
-      feed(store, events);
-      const before = itemsOf(groupsFromStore(store)).length;
-      // 模拟环形缓冲把头部裁掉（真实路径是按 per-run 上限逐条丢，见 G-B2）。
-      store.truncateAfter(11);
-      const after = itemsOf(groupsFromStore(store));
-      const rebuilt = itemsOf(rebuild(events));
-      if (after.length !== rebuilt.length) {
-        return `裁剪让 item 消失了：裁剪前 ${before} 项 / 裁剪后 ${after.length} 项 / 重建 ${rebuilt.length} 项`;
-      }
-      return sameJson('裁剪后的 item 流', groupsFromStore(store), rebuild(events));
-    },
-  },
-  {
-    name: 'G-B2 按 per-run 上限裁剪同样不得减 item（R1 的真实路径）',
-    why: '真实触发是 delta 洪水把该 run 的额度吃满后逐条丢最旧的非锚点条目（不是 truncateAfter）',
-    check: () => {
-      const specs: EvSpec[] = [['run.started', { input: 'go' }]];
-      for (let index = 0; index < 30; index += 1) {
-        specs.push(['agent.limit.warning', { round: index }]);
-      }
-      specs.push(['run.completed', { output: 'done' }]);
-      const events = eventsOf(specs, 'r-b2');
-      const store = new EventStore(0, { maxEventsPerRun: 12 });
+      // 真实路径：delta 洪水把该 run 的额度吃满后逐条丢最旧的非锚点条目。
+      const store = new EventStore(0, { maxEventsPerRun: 20 });
       feed(store, events);
       const items = itemsOf(groupsFromStore(store));
       const rebuilt = itemsOf(rebuild(events));
@@ -211,6 +192,28 @@ const FIXTURES: readonly Fixture[] = [
         return `per-run 上限裁剪让 item 变少：${items.length} 项 / 重建 ${rebuilt.length} 项`;
       }
       return sameJson('per-run 上限裁剪后的 item 流', groupsFromStore(store), rebuild(events));
+    },
+  },
+  {
+    name: 'G-B2 环被 truncateAfter 裁剪同样不得减 item',
+    why: 'per-run 上限之外的另一条裁剪路径（hello / gap 的游标回退）也不许动 item（I6）',
+    check: () => {
+      const specs: EvSpec[] = [['run.started', { input: 'go' }]];
+      for (let index = 0; index < 30; index += 1) {
+        specs.push(['agent.limit.warning', { round: index }]);
+      }
+      specs.push(['run.completed', { output: 'done' }]);
+      const events = eventsOf(specs, 'r-b2');
+      const store = new EventStore(0);
+      feed(store, events);
+      const before = itemsOf(groupsFromStore(store)).length;
+      store.truncateAfter(11);
+      const after = itemsOf(groupsFromStore(store));
+      const rebuilt = itemsOf(rebuild(events));
+      if (after.length !== rebuilt.length) {
+        return `truncateAfter 让 item 消失了：裁剪前 ${before} 项 / 裁剪后 ${after.length} 项 / 重建 ${rebuilt.length} 项`;
+      }
+      return sameJson('游标回退后的 item 流', groupsFromStore(store), rebuild(events));
     },
   },
   {
@@ -361,31 +364,86 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
-    name: 'G-J 一次工具调用恰好一张 tool:<callId>（不出 ev-<seq> 原始事件行）',
-    why: 'tool.call.* 在 fold 里就地配对（started 建卡、completed / failed 改状态）；原始事件行归 Observe / 运行详情，不许再进时间线',
+    name: 'G-J 工具调用只出一张卡、不出原始事件行（running → done → error 就地更新）',
+    why: 'tool.call.* 配对下沉进 fold：一次调用恰好 1 个 tool:<callId> item；原始事件行归 Observe / 运行详情',
     check: () => {
       const events = eventsOf(
         [
           ['run.started', { input: 'go' }],
           toolStarted('c1'),
-          text('中间正文'),
           toolCompleted('c1'),
-          toolStarted('c2'),
-          ['tool.call.failed', { tool_call_id: 'c2', tool_name: 'bash', error: 'boom' }],
+          // 同一 callId 再来一条终态（重复 / 迟到）：只许更新既有那张卡，不许新开一张。
+          ['tool.call.failed', { tool_call_id: 'c1', tool_name: 'bash', error: 'boom' }],
           ['run.completed', { output: 'ok' }],
         ],
         'r-j',
       );
-      const items = itemsOf(rebuild(events));
-      const cards = items.filter((item) => item.kind === 'tool');
-      if (cards.length !== 2) return `工具卡数量 ${cards.length} != 2 次调用（配对必须一对一）`;
-      if (!cards.every((item) => item.key === 'tool:c1' || item.key === 'tool:c2')) {
-        return `工具卡身份不是 tool:<callId>：${cards.map((item) => item.key).join(',')}`;
+      const store = new EventStore(0);
+      const steps: string[] = [];
+      for (const entry of events) {
+        store.push(entry.event, { seq: entry.seq });
+        store.flush();
+        const items = itemsOf(store.items.getSnapshot().groups);
+        const cards = items.filter((item) => item.kind === 'tool');
+        if (cards.length > 1) {
+          return `第 ${entry.seq} 步出现了 ${cards.length} 张工具卡（一次调用只许一张）`;
+        }
+        const card = cards[0];
+        steps.push(`${cards.length}:${card?.key ?? '-'}:${card?.status ?? '-'}`);
       }
-      const rawRows = items.filter((item) => item.key.includes('ev-'));
+      const expected = [
+        '0:-:-',
+        '1:tool:c1:running',
+        '1:tool:c1:done',
+        '1:tool:c1:error',
+        '1:tool:c1:error',
+      ];
+      if (steps.join(' | ') !== expected.join(' | ')) {
+        return `工具卡状态序列不对\n    expected = ${expected.join(' | ')}\n    actual   = ${steps.join(' | ')}`;
+      }
+      const finalItems = itemsOf(store.items.getSnapshot().groups);
+      const rawRows = finalItems.filter((item) => item.key.includes('ev-'));
       if (rawRows.length > 0) {
         return `时间线上出现了原始事件行：${rawRows.map((item) => item.key).join(',')}`;
       }
+      return sameJson('工具卡 item 流', store.items.getSnapshot().groups, rebuild(events));
+    },
+  },
+  {
+    name: 'G-H 每 run 上限折叠可见（maxItemsPerRun: 10 + 40 notice）',
+    why: '超过上限只能折成一张带条数的折叠卡（保留最近 10 项）：条数必须等于被折条数，最近项仍在（I9）',
+    check: () => {
+      const specs: EvSpec[] = [['run.started', { input: 'go' }]];
+      for (let index = 0; index < 40; index += 1) {
+        specs.push(['agent.limit.warning', { round: index }]);
+      }
+      specs.push(['run.completed', { output: 'done' }]);
+      const events = eventsOf(specs, 'r-h');
+      const store = new EventStore(0, { maxItemsPerRun: 10 });
+      feed(store, events);
+      const snapshot = itemSnapshotOf(store);
+      const items = itemsOf(snapshot.groups);
+      const cards = items.filter(
+        (item) => item.kind === 'notice' && item.event.type === 'vessel.ui.condensed',
+      );
+      if (cards.length !== 1) return `折叠卡数量 ${cards.length}（同一 run 只该有一张）`;
+      const notices = items.filter(
+        (item) => item.kind === 'notice' && item.event.type === 'agent.limit.warning',
+      );
+      if (notices.length !== 10) return `保留的最近项数 ${notices.length} != 10`;
+      const covered = coveredCount(cards);
+      if (covered !== 40 - notices.length) {
+        return `折叠卡条数 ${covered} != 被折条数 ${40 - notices.length}`;
+      }
+      // 最近 10 项仍在：notice 的 seq 是 2..41，最后 10 个必须是 32..41。
+      const keys = new Set(items.map((item) => item.key));
+      for (let seq = 32; seq <= 41; seq += 1) {
+        if (!keys.has(`notice:notice-${seq}`)) return `最近项 notice-${seq} 不见了（最近 10 项必须保留）`;
+      }
+      if (snapshot.stats.condensed !== covered) {
+        return `stats.condensed(${snapshot.stats.condensed}) != 折叠卡覆盖数(${covered})`;
+      }
+      if (snapshot.stats.overBudget) return '每 run 上限内不该置 overBudget';
       return null;
     },
   },
@@ -425,48 +483,53 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
-    name: 'G-K 超上限不许有 item 凭空消失（折叠覆盖数守恒）',
-    why: '上限只能把「更旧的」折成一张带条数的折叠卡（可点进运行详情），不允许静默丢（I9）',
+    name: 'G-K 总量硬上界不删内容（stats.overBudget 不许静默）',
+    why: '四档触发顺序的最后两档：折无可折时只能置 overBudget，任何 item 都不许凭空消失（I9）',
     check: () => {
-      const specs: EvSpec[] = [['run.started', { input: 'go' }]];
-      for (let index = 0; index < 60; index += 1) {
-        specs.push(['agent.limit.warning', { round: index }]);
-      }
-      specs.push(['run.completed', { output: 'done' }]);
-      const events = eventsOf(specs, 'r-k');
-      // 基准：不触发上限时 item 总数（含 run 输入那一项）。
-      const plain = itemsOf(rebuild(events)).length;
-      // ① 每 run 上限极小：折成一张卡，条数必须守恒（现存 + 覆盖 == 全量）。
-      const capped = new EventStore(0, { maxItemsPerRun: 8, maxItemsTotal: 1000 });
-      feed(capped, events);
-      const cappedSnapshot = itemSnapshotOf(capped);
-      const cappedItems = itemsOf(cappedSnapshot.groups);
-      const cards = cappedItems.filter(
-        (item) => item.kind === 'notice' && item.event.type === 'vessel.ui.condensed',
-      );
-      if (cards.length !== 1) return `折叠卡数量 ${cards.length}（同一 run 只该有一张）`;
-      const covered = coveredCount(cards);
-      const restored = cappedItems.length - 1 + covered;
-      if (restored !== plain) {
-        return `折叠覆盖数不守恒：现存 ${cappedItems.length} - 折叠卡 1 + 覆盖 ${covered} = ${restored} != 全量 ${plain}`;
-      }
-      if (cappedSnapshot.overBudget) return '预算内不该置 overBudget（那会让提示钩子常亮）';
-      if (cappedSnapshot.stats.condensed !== covered) {
-        return `stats.condensed(${cappedSnapshot.stats.condensed}) != 折叠卡覆盖数(${covered})`;
-      }
-      // ② 预算不可能满足（总量上限 4）：必须置 overBudget，但**仍然**不许凭空丢 item。
-      const tight = new EventStore(0, { maxItemsPerRun: 8, maxItemsTotal: 4 });
-      feed(tight, events);
+      const makeEvents = (runId: string, count: number): StoredEvent[] => {
+        const specs: EvSpec[] = [['run.started', { input: 'go' }]];
+        for (let index = 0; index < count; index += 1) {
+          specs.push(['agent.limit.warning', { round: index }]);
+        }
+        specs.push(['run.completed', { output: 'done' }]);
+        return eventsOf(specs, runId);
+      };
+      // ① 12 个 notice、总量上限 5（设计 §9.2 的造法）：折无可折 → 只置 overBudget，
+      //    内容一条不少（全部保留）。
+      const small = makeEvents('r-k1', 12);
+      const plainSmall = itemsOf(rebuild(small)).length;
+      const tight = new EventStore(0, { maxItemsTotal: 5 });
+      feed(tight, small);
       const tightSnapshot = itemSnapshotOf(tight);
       const tightItems = itemsOf(tightSnapshot.groups);
       const tightCards = tightItems.filter(
         (item) => item.kind === 'notice' && item.event.type === 'vessel.ui.condensed',
       );
       const tightRestored = tightItems.length - tightCards.length + coveredCount(tightCards);
-      if (tightRestored !== plain) {
-        return `收紧预算后 item 消失了：现存 ${tightItems.length} + 覆盖 ${coveredCount(tightCards)} != 全量 ${plain}`;
+      if (tightRestored !== plainSmall) {
+        return `总量超限后 item 消失了：现存 ${tightItems.length} + 覆盖 ${coveredCount(tightCards)} != 全量 ${plainSmall}`;
       }
-      if (!tightSnapshot.overBudget) return '预算无法满足时必须置 overBudget（不许静默）';
+      if (!tightSnapshot.stats.overBudget) return '折无可折时必须置 stats.overBudget（不许静默）';
+      // ② 30 个 notice、总量上限 5：第 1 档（最旧的已终态 run）先加大折叠到 20 项，
+      //    仍超 → overBudget；现存 + 折叠卡覆盖数仍然守恒。
+      const big = makeEvents('r-k2', 30);
+      const plainBig = itemsOf(rebuild(big)).length;
+      const capped = new EventStore(0, { maxItemsTotal: 5 });
+      feed(capped, big);
+      const cappedSnapshot = itemSnapshotOf(capped);
+      const cappedItems = itemsOf(cappedSnapshot.groups);
+      const cards = cappedItems.filter(
+        (item) => item.kind === 'notice' && item.event.type === 'vessel.ui.condensed',
+      );
+      const restored = cappedItems.length - cards.length + coveredCount(cards);
+      if (restored !== plainBig) {
+        return `总量折叠后 item 消失了：现存 ${cappedItems.length} + 覆盖 ${coveredCount(cards)} != 全量 ${plainBig}`;
+      }
+      if (coveredCount(cards) === 0) return '终态 run 该先加大折叠（第 1 档），这里一条都没折';
+      if (cappedSnapshot.stats.condensed !== coveredCount(cards)) {
+        return `stats.condensed(${cappedSnapshot.stats.condensed}) != 折叠卡覆盖数(${coveredCount(cards)})`;
+      }
+      if (!cappedSnapshot.stats.overBudget) return '折完仍超限时必须置 stats.overBudget';
       return null;
     },
   },
@@ -507,9 +570,7 @@ const FIXTURES: readonly Fixture[] = [
         if (code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) return;
         const window = transcriptHook.slice(Math.max(0, index - 2), index + 1).join('\n');
         if (!window.includes('transport-consumer')) {
-          problems.push(
-            `useChatTranscript.ts:${index + 1}: 读了 .entries 却没有 transport-consumer 标注`,
-          );
+          problems.push(`useChatTranscript.ts:${index + 1}: 读了 .entries 却没有 transport-consumer 标注`);
         }
       });
       return problems.length > 0 ? problems.join('\n    ') : null;

@@ -81,19 +81,21 @@ export interface ItemStoreStats {
   replaySkipped: number;
   /** 被折成折叠卡的 item 条数（不是「丢掉的」——条数记在折叠卡上）。 */
   condensed: number;
+  /**
+   * 总量上限已经折无可折（DESIGN.md §8.2 第 4 档）。
+   *
+   * 数据层钩子：**不许**只置一个标志就算完 —— 只要它是 true，就必然存在可见的折叠卡
+   * （`condensed > 0`）或全部内容都被保留（`condensed === 0` 但一条没丢），
+   * 否则就是静默丢内容（I9，G-K 守）。UI 顶部提示行属阶段 4（要 i18n 文案）。
+   */
+  overBudget: boolean;
 }
 
 export interface ItemStoreSnapshot {
   /** 按 run 起始时间升序，与 `groupEvents` 的输出同构。 */
   groups: readonly RunGroup[];
   version: number;
-  /**
-   * 总量超限且已经没有可折叠的对象。
-   *
-   * 数据层钩子：**不许**只置一个标志就算完 —— 只要它是 true，`stats.condensed > 0`
-   * 就必然成立（有可见的折叠卡），否则就是静默丢内容（I9，G-K 守）。
-   */
-  overBudget: boolean;
+  /** 见 `ItemStoreStats.overBudget`（诊断 / 将来顶部提示行的输入）。 */
   stats: ItemStoreStats;
 }
 
@@ -115,8 +117,7 @@ function emptySnapshot(): ItemStoreSnapshot {
   return {
     groups: [],
     version: 0,
-    overBudget: false,
-    stats: { refolds: 0, replaySkipped: 0, condensed: 0 },
+    stats: { refolds: 0, replaySkipped: 0, condensed: 0, overBudget: false },
   };
 }
 
@@ -408,7 +409,11 @@ export class LiveItemStore implements ItemSink {
     }
   }
 
-  private refoldRun(runId: string, entries: readonly StoredEvent[], keepSurvivors: boolean): void {
+  private refoldRun(
+    runId: string,
+    entries: readonly StoredEvent[],
+    keepSurvivors: boolean,
+  ): void {
     const previous = this.groups.get(runId);
     if (previous !== undefined) this.bases.set(runId, previous);
     const fold = createFold(runId);
@@ -456,9 +461,18 @@ export class LiveItemStore implements ItemSink {
   /**
    * item 侧上限（DESIGN.md §8.2 / 裁决 4）：**只折叠，不删除**。
    *
-   * ① 每 run 超过 `MAX_ITEMS_PER_RUN` → 折掉最旧的、保留最近 200 项；
-   * ② 总量超过 `MAX_ITEMS_TOTAL` → 按「终态 run → running run」加强折叠（保留 20 项）；
-   * ③ 仍然超限 → 只置 `overBudget`（**不是静默丢**：折叠卡的条数就是可见产物）。
+   * 触发顺序（四档，每一档都有可见产物，都不静默）：
+   * 0. 每 run 超过 `MAX_ITEMS_PER_RUN`（2000）→ 折掉最旧的、保留最近 200 项；
+   * 1. 总量超过 `MAX_ITEMS_TOTAL`（20000）→ **最旧的已终态 run** 加大折叠（保留 20 项）；
+   * 2. 仍超 → **最旧的 running run** 同样加大折叠（极端：单个 run 就超总量一半）；
+   * 3. 仍超 → 把**已交棒 run 的残留**（notice / ev 行）也折成该 run 仅剩的一项：这一档
+   *    要等阶段 3 的 `release` / 交棒账本落地才有数据（今天 `kept` 为空，属空操作）；
+   * 4. 仍超（病态：一条 run 的 2000 项都在跑）→ **放弃删除**，只置 `stats.overBudget`；
+   *    UI 顶部提示行属阶段 4（要 i18n 文案），但「多占内存 + 一行提示」远好于
+   *    「静默删掉用户正在看的内容」（I9 / G-K）。
+   *
+   * 折叠**不会**吞掉失败卡：失败卡由 `group.status / error` 派生，不在 `items` 里。
+   * 顺序按 `folds` 的插入序（= 各 run 首次出现的时间序），即「最旧的先折」。
    */
   private enforceBudget(): void {
     for (const runId of [...this.folds.keys()]) {
@@ -512,8 +526,7 @@ export class LiveItemStore implements ItemSink {
     this.snapshot = {
       groups,
       version: this.version,
-      overBudget: this.overBudget,
-      stats: { ...this.stats },
+      stats: { ...this.stats, overBudget: this.overBudget },
     };
     for (const listener of [...this.listeners]) listener();
   }
