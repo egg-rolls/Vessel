@@ -906,9 +906,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'agents.edit.title': 'Edit agent',
   'agents.back': 'Back to Agents',
   'agents.form.model': 'Model',
-  'agents.form.modelHint': 'Applies from the next session; leave blank to keep unchanged.',
+  'agents.form.modelHint':
+    'Takes effect in the next body (after rotate or a restart); the current body keeps the old value and only gets an environment notice. Leave blank to keep unchanged.',
   'agents.form.systemPrompt': 'System prompt',
-  'agents.form.systemPromptHint': 'Applies from the next session; leave blank to keep unchanged.',
+  'agents.form.systemPromptHint':
+    'Takes effect in the next body (after rotate or a restart); the current body keeps the old value and only gets an environment notice. Leave blank to keep unchanged.',
   'agents.form.kind': 'Type',
   'agents.form.kindPeer': 'Member (requires Team)',
   'agents.form.kindContractor': 'Temporary (Team optional)',
@@ -1195,6 +1197,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.scope.mcp': 'MCP',
   'chat.env.scope.update': 'Update',
   'chat.env.scope.peer': 'Peer',
+  // 0.52: Self Card delta notices (base info changed while the card stays a spawn-time
+  // snapshot — see packages/agent/src/self-card-delta.ts).
+  'chat.env.scope.selfcard': 'Base info',
   'chat.env.scope.context': 'Context',
   'chat.env.count': '{count} items',
   'chat.env.notApplied': 'not applied',

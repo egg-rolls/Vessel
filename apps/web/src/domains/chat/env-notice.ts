@@ -27,8 +27,10 @@
 
 /**
  * 「环境信息」的作用域词表：与 `RuntimeNoticeScope`（`src/runtime-notice.ts`）同源，
- * 外加 `peer`（成员 / 协作通知，随后端一起到）。scope 只决定卡头标签与折叠分组，
- * 不决定可见性：解析不出 scope 的行落到 `context`（inbox 提示、身份变更提示等无 scope 的上下文）。
+ * 外加 `peer`（成员 / 协作通知，随后端一起到）与 `selfcard`（0.52：Self Card 增量告知，
+ * 见 `packages/agent/src/self-card-delta.ts`）。
+ * scope 只决定卡头标签与折叠分组，不决定可见性：解析不出 scope 的行落到 `context`
+ * （inbox 提示等无 scope 的上下文）。
  */
 export const ENV_NOTICE_SCOPES = [
   'config',
@@ -37,6 +39,7 @@ export const ENV_NOTICE_SCOPES = [
   'mcp',
   'update',
   'peer',
+  'selfcard',
 ] as const;
 
 export type EnvNoticeScope = (typeof ENV_NOTICE_SCOPES)[number] | 'context';
@@ -95,8 +98,13 @@ const NOT_APPLIED = /^\(not applied\)\s*/i;
  * 恒为兜底 `context`，卡头仍取首行 summary 的 scope（`envNoticeCard` 的 `first.scope`）。
  */
 const DETAIL_MARK = /^·\s*/;
-/** 行首 scope 词：`config:` / `permission: ...` / `update ...`（不剥正文，只取 scope）。 */
-const SCOPE_TOKEN = /^(config|permission|tools|mcp|update|peer)\b/i;
+/**
+ * 行首 scope 词：`config:` / `permission: ...` / `update ...`（不剥正文，只取 scope）。
+ *
+ * 由 `ENV_NOTICE_SCOPES` 生成而不是另写一份字面量：加 scope 时唯一的改动点就在那份数组，
+ * 漏改这里会让新 scope 静默退化成 `context`（卡头标签变错，正文却看着正常，最难发现）。
+ */
+const SCOPE_TOKEN = new RegExp(`^(${ENV_NOTICE_SCOPES.join('|')})\\b`, 'i');
 
 /** 一行上下文文本 → 解析结果（空行由调用方跳过）。 */
 export function parseEnvNoticeLine(raw: string): EnvNoticeLine | undefined {
