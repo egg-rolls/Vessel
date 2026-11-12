@@ -765,7 +765,11 @@
    家族的身份圆点再点一个就是并排两个圆点（用户报过「圆点重复」）。作用域只到这张卡
    （`.stream-card-queued`），失败卡 / 环境卡 / 运行时提示卡的圆点数量与位置都不变。
 
-   宽度不在这里写：卡是块级卡面（`.notice-block`），卡头 / 取消 / 展开体天生按列宽排，
+   色调不在这里写：排队中 tone=warn ⇒ `.notice-block.warn`（`--warn-soft` 底 + `--warn`
+   文字），已取消 tone=neutral ⇒ `.notice-block` 的中性档（sunken 底）—— 一条是「还没真正
+   发出去」，一条是「已经不用等了」，都用全站既有语义 token，不新造色值。
+
+   宽度也不在这里写：卡是块级卡面（`.notice-block`），卡头 / 取消 / 展开体天生按列宽排，
    短输入与多行输入卡宽一致。别再给这张卡挂 `.stream-notice` —— 那是「一行 notice」的行
    flex，套在卡上会让卡头和展开体各自贴着内容宽度，看着就是「卡宽随内容变」。原来给那条
    行 flex 定位的 `.stream-notice-input` / `.stream-notice-action` 随之删除（没有使用点的
