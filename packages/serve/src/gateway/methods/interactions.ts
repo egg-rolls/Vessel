@@ -98,14 +98,12 @@ export interface ListedInteraction {
   agent_id?: string;
   team_id?: string;
   session_id?: string;
-  /** 成员 bridge 请求的父会话（additive，缺失时不输出该 key）。 */
-  parent_session_id?: string;
   /**
-   * 成员 bridge 请求的父 **agent** id（0.51 additive）。
+   * 成员 bridge 请求的父 **agent** id（0.51 additive；ask 链路的唯一归属维度）。
    *
-   * 与 `parent_session_id` 分开发：0.19 起的旧记录把 agent id 装在
-   * `parent_session_id` 里，客户端只有拿到「父 agent 是谁」才能甄别那种脏值
-   * （见 `apps/web/src/domains/pending/attribution.ts`）。
+   * 客户端据此上溯出「算谁的父会话」（`apps/web/src/domains/pending/attribution.ts`）。
+   * 这里刻意**不再发** `parent_session_id`：ask 链路已不生产它，旧快照里的那一位
+   * 只作为落盘兼容保留在 `StoredInteraction`（legacy 只读），不往外发。
    */
   parent_agent_id?: string;
   tool_call_id?: string;
@@ -141,7 +139,6 @@ const interactionItemSchema = {
     agent_id: { type: 'string' },
     team_id: { type: 'string' },
     session_id: { type: 'string' },
-    parent_session_id: { type: 'string' },
     parent_agent_id: { type: 'string' },
     tool_call_id: { type: 'string' },
     tool: { type: 'string' },
@@ -185,9 +182,6 @@ function collectInteractions(sources: InteractionSources): ListedInteraction[] {
       ...(record.agent_id !== undefined ? { agent_id: record.agent_id } : {}),
       ...(record.team_id !== undefined ? { team_id: record.team_id } : {}),
       ...(record.session_id !== undefined ? { session_id: record.session_id } : {}),
-      ...(record.parent_session_id !== undefined
-        ? { parent_session_id: record.parent_session_id }
-        : {}),
       ...(record.parent_agent_id !== undefined ? { parent_agent_id: record.parent_agent_id } : {}),
       ...(record.tool_call_id !== undefined ? { tool_call_id: record.tool_call_id } : {}),
       tool: record.tool,
@@ -205,9 +199,6 @@ function collectInteractions(sources: InteractionSources): ListedInteraction[] {
       request_id: requestId,
       run_id: pending.run_id,
       ...(pending.session_id !== undefined ? { session_id: pending.session_id } : {}),
-      ...(pending.parent_session_id !== undefined
-        ? { parent_session_id: pending.parent_session_id }
-        : {}),
       ...(pending.parent_agent_id !== undefined
         ? { parent_agent_id: pending.parent_agent_id }
         : {}),
@@ -225,7 +216,6 @@ function collectInteractions(sources: InteractionSources): ListedInteraction[] {
       request_id: requestId,
       run_id: ask.run_id,
       ...(ask.session_id !== undefined ? { session_id: ask.session_id } : {}),
-      ...(ask.parent_session_id !== undefined ? { parent_session_id: ask.parent_session_id } : {}),
       ...(ask.parent_agent_id !== undefined ? { parent_agent_id: ask.parent_agent_id } : {}),
       ...(ask.questions !== undefined ? { questions: ask.questions } : {}),
       created_at: ask.ts,

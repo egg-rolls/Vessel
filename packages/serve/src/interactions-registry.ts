@@ -32,14 +32,10 @@ export interface PendingPermission {
   /** 事件携带的 deadline_at（兼容保留）；不再作为过期依据。 */
   deadline_at?: number;
   session_id?: string;
-  /** bridge 请求的父会话（事件携带时记录，additive）。 */
-  parent_session_id?: string;
   /**
-   * bridge 请求的父 **agent**（0.51 additive；事件 `parent_agent_id`）。
-   *
-   * 与 `parent_session_id` 分开记：0.19 起 `parent_session_id` 里装的是 agent id，
-   * 同一条老记录的两种语义只能靠 agent id 甄别，所以新写的记录两个键都给全
-   * （会话给归属，agent 给「谁是父」），读侧不必再猜。
+   * bridge 请求的父 **agent**（0.51 additive；事件 `parent_agent_id`）—— ask 链路的
+   * **唯一**归属维度。父会话由读侧从它 + roster 上溯出来（`apps/web/src/domains/pending/
+   * attribution.ts`），本层不再记父会话 id：那是展示信息，多存一处就是第二个事实源。
    */
   parent_agent_id?: string;
   tool_call_id?: string;
@@ -91,8 +87,7 @@ export interface PendingAsk {
   run_id: string;
   ts: number;
   session_id?: string;
-  parent_session_id?: string;
-  /** 父 agent id（0.51 additive；与 `parent_session_id` 分开，语义不同）。 */
+  /** 父 agent id（0.51 additive；ask 链路的唯一归属维度）。 */
   parent_agent_id?: string;
   /** 原始 questions；只用于 `interactions.list` 展示，不持久化。 */
   questions?: unknown;
@@ -391,7 +386,6 @@ export function createInteractionsRegistry(
         const tool = typeof data.tool === 'string' ? data.tool : 'tool';
         const sessionId = nonEmptyString(data.session_id);
         const toolCallId = nonEmptyString(data.tool_call_id);
-        const parentSessionId = nonEmptyString(data.parent_session_id);
         const parentAgentId = nonEmptyString(data.parent_agent_id);
         const agentId = nonEmptyString(data.agent_id);
         const teamId = nonEmptyString(data.team_id);
@@ -408,7 +402,6 @@ export function createInteractionsRegistry(
           ts: requestTs,
           ...(deadlineAt !== undefined ? { deadline_at: deadlineAt } : {}),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
-          ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
           ...(parentAgentId !== undefined ? { parent_agent_id: parentAgentId } : {}),
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           ...(typeof data.source === 'string' && data.source.length > 0
@@ -422,7 +415,6 @@ export function createInteractionsRegistry(
           ...(agentId !== undefined ? { agent_id: agentId } : {}),
           ...(teamId !== undefined ? { team_id: teamId } : {}),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
-          ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
           ...(parentAgentId !== undefined ? { parent_agent_id: parentAgentId } : {}),
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           tool,
@@ -439,7 +431,6 @@ export function createInteractionsRegistry(
       const requestId = nonEmptyString(data.requestId);
       if (requestId !== undefined) {
         const sessionId = nonEmptyString(data.session_id);
-        const parentSessionId = nonEmptyString(data.parent_session_id);
         const parentAgentId = nonEmptyString(data.parent_agent_id);
         const agentId = nonEmptyString(data.agent_id);
         const teamId = nonEmptyString(data.team_id);
@@ -451,7 +442,6 @@ export function createInteractionsRegistry(
           ...(agentId !== undefined ? { agent_id: agentId } : {}),
           ...(teamId !== undefined ? { team_id: teamId } : {}),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
-          ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
           ...(parentAgentId !== undefined ? { parent_agent_id: parentAgentId } : {}),
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           // 0.52：投递语义跟着请求走；缺省不写该键 = sync（旧事件逐字节不变）。
@@ -769,9 +759,6 @@ export function createInteractionsRegistry(
         run_id: record.run_id,
         ts: record.created_at,
         ...(record.session_id !== undefined ? { session_id: record.session_id } : {}),
-        ...(record.parent_session_id !== undefined
-          ? { parent_session_id: record.parent_session_id }
-          : {}),
         ...(record.parent_agent_id !== undefined
           ? { parent_agent_id: record.parent_agent_id }
           : {}),

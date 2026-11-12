@@ -524,7 +524,8 @@ function bridgeRequestData(
   // 归属只需要 agent 这一个维度：会话维度已经由成员自己的 `session_id` 表达了，
   // 而「父会话是谁」是读侧从 `parent_agent_id` + roster 上溯出来的**展示**信息
   // （agent id 与会话 id 只在某具 body 上偶然相等，一旦写进事件就是第二个会漂移的
-  // 事实源）。所以这里**刻意不写** `parent_session_id`，也不再加回来。
+  // 事实源）。所以这里**刻意不写父会话 id**，也不加回来（`scripts/check-ask-attribution.ts`
+  // 的 C1 反向检查盯着这一条）。
   if (typeof data.parent_agent_id !== 'string' && member.parent_id !== undefined) {
     data.parent_agent_id = member.parent_id;
   }
