@@ -23,7 +23,10 @@ import { resolveSingleTenantPaths } from '@vessel-agent/core';
 export interface Settings {
   /** Model id -> USD per 1M tokens. */
   prices: Record<string, Price>;
-  /** Overrides the model parsed from the Self Card when set. */
+  /**
+   * 兜底模型名：只在事件本身没带 `model` 时使用（旧 trace / 极少数手工构造的事件）。
+   * 事件里带的才是请求**实际用的**模型，优先级高于这里 —— 配了本字段不会掩盖真实模型。
+   */
   default_model?: string;
 }
 
