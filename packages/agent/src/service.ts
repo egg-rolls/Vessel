@@ -1324,12 +1324,22 @@ export class AgentServiceImpl implements AgentService {
   /**
    * 把种子写进新 session 的事件日志：message.injected × N → vessel:created → session.created。
    *
-   * 两点取舍：
-   * - **整批非 durable + 末尾一次 fsync**：逐条 fsync 是 1.52ms/条，1814 条消息的
-   *   种子 ≈ 2.8s 全串行在 create RPC 里；改为整批写完后 `sync()` 一次。
-   *   对调用方的保证不变（返回前必已落盘），只有「写的过程中崩溃」的落盘粒度变粗。
+   * 三点取舍：
+   * - **整批单次 write + 单次 fsync**（`SessionEventLog.appendMany`）：逐条 append 的
+   *   成本是 1.52ms/条（durable：每条一次 stat + 一次 write + 一次 fsync），1814 条
+   *   消息的种子 ≈ 2.8s 全串行卡在 create RPC 里；只关掉逐条 fsync 也还有
+   *   0.58ms/条 ≈ 1.05s（每条仍是 stat + write）。整批拼一个 buffer 后这一项从
+   *   「按条数线性」变成「按批一次」≈1ms。
+   * - **崩溃安全没有变弱，反而更强**：逐条 fsync 并**不**给种子任何原子性——它只保证
+   *   「已经返回的那次 append 已落盘」，写到一半崩溃同样会留下「消息只写了一截」的
+   *   会话；而这里 `session.created` 排在最后，最坏情况是「消息前缀 + 没有
+   *   session.created」（该事件当前没有读取方，缺失即视为「不存在的会话」）。
+   *   改成整批写之后，崩溃只会让整批停在某个前缀，**不会**出现逐条 fsync 才可能
+   *   出现的空洞（后面的条目已落盘、前面的没有）；返回前的最后一次 fsync 则保证
+   *   调用方拿到新 session 时整批都已在盘上。换句话说：崩溃时的可能性集合是
+   *   「前缀 + 无 created」，比「逐条已落盘、彼此之间可缺」更小。
    * - **`session.created` 最后写**：崩溃时新会话要么不存在、要么完整，不再留下
-   *   「已创建、消息只写了一截」的半成品（该事件当前没有读取方）。
+   *   「已创建、消息只写了一截」的半成品。
    */
   private async writeSeedEvents(
     meta: {
@@ -1359,35 +1369,46 @@ export class AgentServiceImpl implements AgentService {
       copied_messages: meta.copiedMessages,
       ...(meta.mode !== undefined ? { mode: meta.mode } : {}),
     };
-    // 实现没有 `sync` 时不能省 fsync，否则「整批落盘」的补偿动作不存在。
-    const deferred = typeof eventLog.sync === 'function' ? { durable: false } : {};
-    for (const message of seedResult.messages) {
-      await eventLog.append({
-        session_id: meta.sessionId,
-        run_id: meta.sessionId,
-        type: 'message.injected',
-        ts: this.now(),
-        data: { message },
-        ...deferred,
-      });
-    }
-    await eventLog.append({
+    // 事件输入类型直接由端口函数取，种子路径不需要新增 core 的公开类型导出。
+    type SeedEventInput = Parameters<SessionEventLogPort['append']>[0];
+    const events: SeedEventInput[] = seedResult.messages.map((message) => ({
+      session_id: meta.sessionId,
+      run_id: meta.sessionId,
+      type: 'message.injected',
+      ts: this.now(),
+      data: { message },
+    }));
+    events.push({
       session_id: meta.sessionId,
       run_id: meta.sessionId,
       type: 'message.injected',
       ts: this.now(),
       data: { message: createdNotice(meta) },
-      ...deferred,
     });
-    await eventLog.append({
+    events.push({
       session_id: meta.sessionId,
       run_id: meta.sessionId,
       type: 'session.created',
       ts: this.now(),
       data: baseData,
-      ...deferred,
     });
-    // 返回前恢复「已落盘」保证：整批只 fsync 这一次。
+
+    // 批量端口（`SessionEventLog.appendMany`）：整批一次 write、一次 fsync。
+    type BatchAppender = {
+      appendMany?: (inputs: readonly SeedEventInput[]) => Promise<unknown>;
+    };
+    const appendMany = (eventLog as SessionEventLogPort & BatchAppender).appendMany;
+    if (typeof appendMany === 'function') {
+      await appendMany.call(eventLog, events);
+      return;
+    }
+
+    // 退化路径（端口实现没有 appendMany）：整批非 durable + 末尾一次 sync()。
+    // 实现没有 `sync` 时不能省 fsync，否则「整批落盘」的补偿动作不存在。
+    const deferred = typeof eventLog.sync === 'function' ? { durable: false } : {};
+    for (const event of events) {
+      await eventLog.append({ ...event, ...deferred });
+    }
     await eventLog.sync?.(meta.sessionId);
   }
 

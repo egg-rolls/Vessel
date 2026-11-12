@@ -3,7 +3,7 @@
  *
  * 布局（additive，不改旧 session 文件）：
  *   <sessions_dir>/<encodeURIComponent(session_id)>/
- *     events.ndjson   追加写、0600、每条 fsync
+ *     events.ndjson   追加写、0600、每条 fsync（批量路径 `appendMany` 是整批一次）
  *     index.json      元数据（title/preview/status/timestamps/event_count/derived_upto_seq）
  *
  * 单条记录 v1：`{v:1, session_id, run_id, seq, ts, type, data}`。
@@ -472,6 +472,110 @@ export class SessionEventLog {
       state.persistedCount += 1;
       state.expectedSize += written.bytesWritten;
       return record;
+    });
+    state.queue = task.then(
+      () => {},
+      () => {},
+    );
+    return task;
+  }
+
+  /**
+   * 批量追加**同一个 session** 的若干事件：**单次 write + 单次 fsync**。
+   *
+   * 为什么不是 `for (const e of events) await append(e)`：单条 append 的成本大头是
+   * 每条的 `stat`（对齐文件尾）+ 一次 `write` + 一次 `handle.sync()`；审计实测
+   * durable **1.52ms/条**、非 durable **0.58ms/条**，1814 条的种子消息光这一项就
+   * 是 2.8s / 1.05s，全串行卡在 create RPC 里。本方法把整批拼成一个 buffer，
+   * 只 `write` 一次、`fsync` 一次：同一批的条数与磁盘字节数无关地摊薄到 ~1ms。
+   *
+   * **语义与逐条 append 完全一致**（唯一改动是落盘的系统调用次数）：
+   * - `seq` 仍是本 session 的单调序列，按入参顺序逐条 +1 分配 —— 同一事件序列走
+   *   `append` 与走 `appendMany` 得到**同一个 seq 序列**；
+   * - 每行仍是 `JSON.stringify(record) + "\n"`，拼起来的字节与逐条写**逐字节相同**；
+   * - fencing 逐条校验（任一旧 token 在写之前就整批拒绝），口径同 `append`；
+   * - `durable` 仍是「缺省跟随实例」：批内只要有一条没显式 `durable:false`，
+   *   整批最后 fsync 一次（比逐条 fsync 弱的地方只有「写到一半崩溃」的落盘粒度，
+   *   而这恰好是调用方要的：崩溃时整批要么都在、要么只剩前缀，不会出现
+   *   「顺序靠后的事件已落盘、靠前的没落盘」）。
+   *
+   * 与磁盘的对齐（`syncWithFile`）只在**批首**做一次：整批在同一个串行队列里，
+   * 同进程内没有别的写者能插进来；跨进程仍按类注释的约定由上层写锁串行化。
+   *
+   * @returns 与入参顺序一一对应的记录（含已分配的 seq）
+   */
+  appendMany(inputs: readonly SessionEventInput[]): Promise<SessionEventRecord[]> {
+    if (this.closed) {
+      return Promise.reject(new Error('session_event_log_closed'));
+    }
+    if (inputs.length === 0) return Promise.resolve([]);
+    const sessionId = inputs[0]?.session_id;
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      return Promise.reject(new Error('invalid_session_id: session_id must be non-empty'));
+    }
+    // `seq` 是 per-session 序列：一个批次只能写一个 session，否则整批拒绝（不做静默分组）。
+    for (const input of inputs) {
+      if (input.session_id !== sessionId) {
+        return Promise.reject(
+          new Error('invalid_session_id: appendMany requires a single session_id'),
+        );
+      }
+    }
+
+    const batch = inputs.slice();
+    const state = this.getOrCreateWriter(sessionId);
+    const task = state.queue.then(async () => {
+      await state.ready;
+      // ADR-098 C2：逐条校验 fence（在分配 seq / 写入之前整批判定）。
+      if (this.fenceOf !== undefined) {
+        const fenceOf = this.fenceOf;
+        for (const input of batch) {
+          if (input.fencing_token === undefined) continue;
+          const current = await fenceOf('session', sessionId);
+          if (input.fencing_token < current) {
+            throw new LeaseExpiredError('stale_fence', sessionId);
+          }
+        }
+      }
+      await this.syncWithFile(state);
+      state.lastUsed = Date.now();
+      const handle = state.handle;
+      if (!handle) throw new Error('session_event_log_unavailable');
+
+      const records: SessionEventRecord[] = [];
+      let payload = '';
+      let lastSeq = state.persistedSeq;
+      for (const input of batch) {
+        const seq = state.assignedSeq + 1;
+        state.assignedSeq = seq;
+        const record: SessionEventRecord = {
+          v: 1,
+          session_id: input.session_id,
+          run_id: input.run_id,
+          seq,
+          ts: input.ts,
+          type: input.type,
+          data: input.data,
+          ...(input.fencing_token !== undefined ? { fencing_token: input.fencing_token } : {}),
+        };
+        records.push(record);
+        payload += `${JSON.stringify(record)}\n`;
+        lastSeq = seq;
+      }
+
+      const buffer = Buffer.from(payload, 'utf8');
+      let offset = 0;
+      while (offset < buffer.length) {
+        const { bytesWritten } = await handle.write(buffer, offset, buffer.length - offset);
+        if (bytesWritten <= 0) throw new Error('session_event_log_write_failed');
+        offset += bytesWritten;
+      }
+      state.persistedSeq = lastSeq;
+      state.persistedCount += records.length;
+      state.expectedSize += buffer.length;
+      // 与单条 append 同口径：只要有条目要求 durable（缺省跟随实例）就落一次盘。
+      if (this.durable && batch.some((input) => input.durable !== false)) await handle.sync();
+      return records;
     });
     state.queue = task.then(
       () => {},
