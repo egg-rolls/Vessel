@@ -86,6 +86,8 @@ const EN = {
   'logs.empty.title': 'No request logs yet',
   'logs.empty.filtered': 'No matching requests',
   'logs.empty.description': 'Logs are read from the persisted tenant event files.',
+  'logs.truncated':
+    'Counted {files} of {total} run files, newest first; older runs are outside the read window.',
 
   'leaderboard.th.model': 'Model',
   'leaderboard.th.requests': 'Requests',
@@ -178,6 +180,7 @@ const ZH: Record<MessageKey, string> = {
   'logs.empty.title': '暂无请求日志',
   'logs.empty.filtered': '没有匹配的请求',
   'logs.empty.description': '日志来自已持久化的租户事件文件。',
+  'logs.truncated': '按最新优先只统计了 {files}/{total} 个运行文件，更早的运行在读取窗口之外。',
 
   'leaderboard.th.model': '模型',
   'leaderboard.th.requests': '请求数',

@@ -10,7 +10,7 @@ import {
   TableToolbar,
 } from '@vessel-agent/plugin-ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { LogItem, LogsResult } from '../src/aggregate.js';
+import type { LogItem, LogsResult, SourceCoverage } from '../src/aggregate.js';
 import { fmtCost, fmtDuration, fmtInt, fmtTime, fmtTimeFull, MISSING } from './format';
 import type { Translator } from './i18n';
 import {
@@ -98,6 +98,8 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
   const [pageKey, setPageKey] = useState(0);
   const [items, setItems] = useState<LogItem[]>([]);
   const [cursor, setCursor] = useState<LogsResult['next_cursor']>(null);
+  /** Which run files the backend actually read; null until the first page lands. */
+  const [source, setSource] = useState<SourceCoverage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const generation = useRef(0);
@@ -110,6 +112,7 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
     setError(null);
     setItems([]);
     setCursor(null);
+    setSource(null);
 
     void client
       .call<LogsResult>('logs', logsParams(applied))
@@ -117,6 +120,7 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
         if (generation.current !== current) return;
         setItems(data.items);
         setCursor(data.next_cursor);
+        setSource(data.source ?? null);
         setLoading(false);
       })
       .catch((reason: unknown) => {
@@ -201,6 +205,12 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
         </Button>
         <Button onClick={reload}>{t('common.refresh')}</Button>
       </TableToolbar>
+
+      {source !== null && source.truncated ? (
+        <p className="text-sm text-muted">
+          {t('logs.truncated', { files: source.files_read, total: source.files_total })}
+        </p>
+      ) : null}
 
       {loading && items.length === 0 ? <LoadingState label={t('common.loading')} /> : null}
       {error !== null && items.length === 0 ? (

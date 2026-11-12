@@ -14,6 +14,23 @@ import { isRecord, type RawEvent, type Settings } from './store.js';
 
 const COST_DIVISOR = 1_000_000;
 
+/**
+ * How much of the trace a result actually covers.
+ *
+ * The reader is byte-budgeted (see `store.ts`), so a result can be built from
+ * only the newest run files. `truncated` is the honest flag: the numbers are a
+ * partial view, and the UI must say so instead of presenting them as the whole
+ * history. Absent when a caller has no reader behind it (the probe's pure
+ * fixtures).
+ */
+export interface SourceCoverage {
+  truncated: boolean;
+  /** Trace files counted. */
+  files_read: number;
+  /** Trace files present in `<dataDir>/events`. */
+  files_total: number;
+}
+
 /** One request (or failed run) as shown in Logs. */
 export interface UsageRecord {
   id: string;
@@ -81,6 +98,8 @@ export interface SummaryResult {
   cost?: number;
   /** Rows excluded from `cost` because their model has no price. */
   unpriced_requests: number;
+  /** Trace coverage behind these numbers; see `SourceCoverage`. */
+  source?: SourceCoverage;
 }
 
 export interface LogItem {
@@ -110,10 +129,14 @@ export interface LogsParams {
 export interface LogsResult {
   items: LogItem[];
   next_cursor: { before_ts: number; before_id: string } | null;
+  /** Trace coverage behind this page; see `SourceCoverage`. */
+  source?: SourceCoverage;
 }
 
 export interface LeaderboardResult {
   items: ModelBucket[];
+  /** Trace coverage behind these rows; see `SourceCoverage`. */
+  source?: SourceCoverage;
 }
 
 function optionalNumber(value: unknown): number | undefined {

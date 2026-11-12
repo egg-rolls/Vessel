@@ -24,11 +24,12 @@ import {
   type LogsResult,
   leaderboard,
   listLogs,
+  type SourceCoverage,
   type SummaryResult,
   summarize,
   type UsageRecord,
 } from './aggregate.js';
-import { EventStore, isRecord, parseSettings, type RawEvent, type Settings } from './store.js';
+import { EventStore, isRecord, parseSettings, type Settings } from './store.js';
 
 const PROTOCOL_VERSION = 1;
 const DEFAULT_LOG_LIMIT = 50;
@@ -116,15 +117,23 @@ function parseStatus(value: unknown): 'ok' | 'failed' | undefined {
   throw invalid("status must be 'ok' or 'failed'");
 }
 
-async function loadRecords(): Promise<UsageRecord[]> {
+async function loadSnapshot(): Promise<{ records: UsageRecord[]; source: SourceCoverage }> {
   if (dataDir === undefined) throw new RpcError(-32000, 'plugin is not activated');
-  const events: RawEvent[] = await store.loadEvents(dataDir);
-  return buildRecords(events, settings);
+  const loaded = await store.loadEvents(dataDir);
+  return {
+    records: buildRecords(loaded.events, settings),
+    source: {
+      truncated: loaded.truncated,
+      files_read: loaded.files_covered,
+      files_total: loaded.files_total,
+    },
+  };
 }
 
 async function handleSummary(params: Record<string, unknown>): Promise<SummaryResult> {
   const days = parseOptionalDays(params.days);
-  return summarize(await loadRecords(), Date.now(), days);
+  const snapshot = await loadSnapshot();
+  return { ...summarize(snapshot.records, Date.now(), days), source: snapshot.source };
 }
 
 async function handleLogs(params: Record<string, unknown>): Promise<LogsResult> {
@@ -144,12 +153,14 @@ async function handleLogs(params: Record<string, unknown>): Promise<LogsResult> 
     ...(model !== undefined ? { model } : {}),
     ...(status !== undefined ? { status } : {}),
   };
-  return listLogs(await loadRecords(), logsParams);
+  const snapshot = await loadSnapshot();
+  return { ...listLogs(snapshot.records, logsParams), source: snapshot.source };
 }
 
 async function handleLeaderboard(params: Record<string, unknown>): Promise<LeaderboardResult> {
   const days = parseOptionalDays(params.days);
-  return leaderboard(await loadRecords(), Date.now(), days);
+  const snapshot = await loadSnapshot();
+  return { ...leaderboard(snapshot.records, Date.now(), days), source: snapshot.source };
 }
 
 async function handleRpc(params: unknown): Promise<unknown> {

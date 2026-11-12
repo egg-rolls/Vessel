@@ -8,10 +8,22 @@
  *      (or `bun run probe` inside the plugin directory)
  */
 
-import { readdir, readFile, stat } from 'node:fs/promises';
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { buildRecords } from '../src/aggregate.js';
 import type { RawEvent, Settings } from '../src/store.js';
+import { DEFAULT_LIMITS, EventStore, USAGE_EVENT_TYPES } from '../src/store.js';
 import { translator } from '../web-src/i18n';
 
 const pluginRoot = resolve(import.meta.dir, '..');
@@ -313,6 +325,258 @@ const smuggled = modelOf(
   }),
 );
 check('readable Self Card is no longer parsed', smuggled === 'unknown', smuggled);
+
+// ── incremental reader ──────────────────────────────────────────────────────
+
+/**
+ * The reader keeps one byte cursor per trace file and only reads what was
+ * appended past the last complete line. These fixtures drive every branch of
+ * that cursor: append, half-written line, truncate, delete, byte budget, and
+ * repeated calls. Limits are injected so the budget paths stay cheap.
+ */
+
+const scratch = await mkdtemp(join(tmpdir(), 'usage-tailread-'));
+const FIXTURE_MTIME = Date.UTC(2026, 0, 15, 9, 0, 0);
+
+let fixtureTs = BASE_TS;
+
+/** One trace line; `pad` inflates it so the byte budgets can be exercised. */
+function traceLine(type: string, runId: string, pad = 0): string {
+  fixtureTs += 1_000;
+  const data: Record<string, unknown> = { run_id: runId, session_id: 'sess-1' };
+  if (pad > 0) data.pad = 'x'.repeat(pad);
+  return `${JSON.stringify({ type, ts: fixtureTs, run_id: runId, data })}\n`;
+}
+
+async function traceDir(name: string): Promise<string> {
+  const root = join(scratch, name);
+  await mkdir(join(root, 'events'), { recursive: true });
+  return root;
+}
+
+function idsOf(events: RawEvent[]): string[] {
+  return events.map((event) => `${event.run_id}:${event.seq ?? event.line}`);
+}
+
+// 1. Append: one new line adds one event, and nothing is parsed twice.
+{
+  const dir = await traceDir('append');
+  const file = join(dir, 'events', 'run-a.jsonl');
+  const head = traceLine('llm.request', 'run-a') + traceLine('llm.response', 'run-a');
+  await writeFile(file, head);
+
+  const store = new EventStore();
+  const cold = await store.loadEvents(dir);
+  check(
+    'cold read parses every line in the file',
+    cold.events.length === 2,
+    String(cold.events.length),
+  );
+  check(
+    'cold read bills the whole file',
+    cold.bytes_read === Buffer.byteLength(head),
+    `${cold.bytes_read} vs ${Buffer.byteLength(head)}`,
+  );
+
+  const warm = await store.loadEvents(dir);
+  check('an unchanged file re-reads zero bytes', warm.bytes_read === 0, String(warm.bytes_read));
+
+  const appended = traceLine('llm.response', 'run-a');
+  await appendFile(file, appended);
+  const tail = await store.loadEvents(dir);
+  check(
+    'an appended line adds exactly one event',
+    tail.events.length === 3,
+    String(tail.events.length),
+  );
+  check(
+    'an appended line costs only its own bytes',
+    tail.bytes_read === Buffer.byteLength(appended),
+    `${tail.bytes_read} vs ${Buffer.byteLength(appended)}`,
+  );
+  const ids = idsOf(tail.events);
+  check('no line is parsed twice', new Set(ids).size === ids.length, ids.join(','));
+}
+
+// 2. Half-written line: not parsed, not lost.
+{
+  const dir = await traceDir('partial');
+  const file = join(dir, 'events', 'run-b.jsonl');
+  const complete = traceLine('llm.response', 'run-b');
+  const torn = traceLine('llm.response', 'run-b');
+  const cut = Math.floor(torn.length / 2);
+  await writeFile(file, complete + torn.slice(0, cut));
+
+  const store = new EventStore();
+  const half = await store.loadEvents(dir);
+  check('a half-written line is not parsed', half.events.length === 1, String(half.events.length));
+  check('a half-written line is not truncation', half.truncated === false);
+
+  await appendFile(file, torn.slice(cut));
+  const healed = await store.loadEvents(dir);
+  check(
+    'the completed line is parsed once',
+    healed.events.length === 2,
+    String(healed.events.length),
+  );
+  check(
+    'the completed line keeps its line number',
+    healed.events[1]?.line === 2,
+    String(healed.events[1]?.line),
+  );
+}
+
+// 3. Truncate/rotate: the offset is dropped and the file is read from the top.
+{
+  const dir = await traceDir('truncate');
+  const file = join(dir, 'events', 'run-c.jsonl');
+  await writeFile(
+    file,
+    traceLine('llm.response', 'run-c') +
+      traceLine('llm.response', 'run-c') +
+      traceLine('llm.response', 'run-c'),
+  );
+  const store = new EventStore();
+  const before = await store.loadEvents(dir);
+
+  const replaced = traceLine('llm.response', 'run-c');
+  await writeFile(file, replaced);
+  const after = await store.loadEvents(dir);
+  check(
+    'a shrunk file is re-read from scratch',
+    before.events.length === 3 && after.events.length === 1,
+    `${before.events.length} -> ${after.events.length}`,
+  );
+  check(
+    'the re-read bills the replacement size',
+    after.bytes_read === Buffer.byteLength(replaced),
+    `${after.bytes_read} vs ${Buffer.byteLength(replaced)}`,
+  );
+}
+
+// 4. Deleted file (trace pruning): cache entry dropped, no error.
+{
+  const dir = await traceDir('delete');
+  const file = join(dir, 'events', 'run-d.jsonl');
+  await writeFile(file, traceLine('llm.response', 'run-d'));
+  const store = new EventStore();
+  const before = await store.loadEvents(dir);
+
+  await rm(file);
+  const after = await store.loadEvents(dir);
+  check(
+    'a pruned trace file disappears from the result',
+    before.events.length === 1 && after.events.length === 0 && after.files_total === 0,
+    `${before.events.length} -> ${after.events.length}, total ${after.files_total}`,
+  );
+  check('a pruned trace file is not an error', after.truncated === false && after.bytes_read === 0);
+}
+
+// 5. Byte budget: newest files only, unchanged cached files cost nothing.
+{
+  const dir = await traceDir('budget');
+  const eventsDir = join(dir, 'events');
+  const names = ['run-1', 'run-2', 'run-3', 'run-4', 'run-5'];
+  let fileBytes = 0;
+  for (const [index, name] of names.entries()) {
+    const body = traceLine('llm.response', name, 120) + traceLine('llm.response', name, 120);
+    fileBytes = Buffer.byteLength(body);
+    const path = join(eventsDir, `${name}.jsonl`);
+    await writeFile(path, body);
+    // Distinct mtimes so "newest first" is deterministic (run-5 is newest).
+    await utimes(path, new Date(FIXTURE_MTIME), new Date(FIXTURE_MTIME + index * 1_000));
+  }
+
+  const store = new EventStore({
+    ...DEFAULT_LIMITS,
+    maxBytesPerCall: Math.floor(fileBytes * 2.5),
+    maxBytesPerFile: fileBytes + 16,
+  });
+  const first = await store.loadEvents(dir);
+  check(
+    'the byte budget stops the call and flags truncation',
+    first.truncated === true && first.files_covered === 2,
+    `covered ${first.files_covered}/${first.files_total}, truncated=${first.truncated}`,
+  );
+  check(
+    'the budget is spent on the newest files',
+    first.events.length === 4 && first.events.every((event) => event.run_id >= 'run-4'),
+    first.events.map((event) => event.run_id).join(','),
+  );
+
+  const second = await store.loadEvents(dir);
+  check(
+    'cached unchanged files cost no bytes on the next call',
+    second.bytes_read === 0 && second.events.length === first.events.length,
+    `bytes ${second.bytes_read}, events ${second.events.length}`,
+  );
+}
+
+// 6. Idempotency, plus non-usage event types staying out of the cache.
+{
+  const dir = await traceDir('idempotent');
+  const file = join(dir, 'events', 'run-f.jsonl');
+  await writeFile(file, traceLine('llm.request', 'run-f') + traceLine('llm.response', 'run-f', 64));
+  await appendFile(file, traceLine('llm.response', 'run-f'));
+  await utimes(
+    join(dir, 'events', 'run-f.jsonl'),
+    new Date(FIXTURE_MTIME),
+    new Date(FIXTURE_MTIME),
+  );
+
+  const store = new EventStore();
+  const first = await store.loadEvents(dir);
+  const second = await store.loadEvents(dir);
+  const same =
+    JSON.stringify(first.events) === JSON.stringify(second.events) &&
+    first.truncated === second.truncated &&
+    first.files_covered === second.files_covered &&
+    first.files_total === second.files_total;
+  check('two calls on an unchanged directory agree', same);
+  check('the second call reads zero bytes', second.bytes_read === 0, String(second.bytes_read));
+
+  await appendFile(file, traceLine('context.changed', 'run-f', 2_000));
+  const filtered = await store.loadEvents(dir);
+  check(
+    'non-usage event types add bytes but no events',
+    filtered.bytes_read > 0 &&
+      filtered.events.length === first.events.length &&
+      filtered.events.every((event) => USAGE_EVENT_TYPES.has(event.type)),
+    `${filtered.bytes_read} bytes, ${filtered.events.length} events`,
+  );
+}
+
+// 7. Oversized file: only its newest bytes are read, and appends stay incremental.
+{
+  const dir = await traceDir('oversized');
+  const file = join(dir, 'events', 'run-g.jsonl');
+  const body: string[] = [];
+  for (let index = 0; index < 40; index += 1) body.push(traceLine('llm.response', 'run-g', 200));
+  const text = body.join('');
+  await writeFile(file, text);
+  const size = Buffer.byteLength(text);
+
+  const store = new EventStore({ ...DEFAULT_LIMITS, maxBytesPerFile: 1_024 });
+  const tail = await store.loadEvents(dir);
+  check(
+    'an oversized file is read from its newest bytes only',
+    tail.bytes_read <= 1_025 && tail.bytes_read < size,
+    `${tail.bytes_read} of ${size}`,
+  );
+  check('an oversized file is reported as truncated', tail.truncated === true);
+
+  const appended = traceLine('llm.response', 'run-g');
+  await appendFile(file, appended);
+  const grown = await store.loadEvents(dir);
+  check(
+    'appends to an oversized file stay incremental',
+    grown.bytes_read === Buffer.byteLength(appended) &&
+      grown.events.length === tail.events.length + 1,
+    `${grown.bytes_read} vs ${Buffer.byteLength(appended)}, ${tail.events.length} -> ${grown.events.length}`,
+  );
+}
+
+await rm(scratch, { recursive: true, force: true });
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exitCode = 1;
