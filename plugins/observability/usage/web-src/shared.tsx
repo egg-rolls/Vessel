@@ -6,6 +6,7 @@ import {
   type TabOption,
 } from '@vessel-agent/plugin-ui';
 import type { ReactNode } from 'react';
+import type { SourceCoverage } from '../src/aggregate.js';
 import type { Translator } from './i18n';
 
 export interface ViewProps {
@@ -13,6 +14,46 @@ export interface ViewProps {
   /** Bumped by `vessel.plugin.refresh`; views refetch when it changes. */
   refreshKey: number;
   t: Translator;
+}
+
+/**
+ * "How much of the trace is behind these numbers" — shared by Usage and Logs.
+ *
+ * Both pages are built from the same reader, so both can be looking at a partial
+ * view; the two pages differ only in what they render, never in how coverage is
+ * judged. Hence one component (and one pair of copy keys, `logs.truncated.*`:
+ * usage records come from run files too, so "run files in this range" reads
+ * correctly on both) instead of a copy per view.
+ *
+ * Two notices, because the reader reports two kinds of incompleteness and only
+ * one of them hides *runs*: `files_truncated` means some run files inside the
+ * range were never read (read-budget / file-count cap), `partial_files` means
+ * counted files whose oldest lines were dropped. A count that silently covers 43
+ * of 176 runs of the selected range must never look like the total.
+ */
+export function CoverageNotice({
+  source,
+  t,
+}: {
+  source: SourceCoverage | null | undefined;
+  t: Translator;
+}) {
+  if (source === null || source === undefined) return null;
+  // A payload from before the split only carried `truncated`; read it as "some
+  // run files were not counted".
+  const legacy = source.files_truncated === undefined && source.partial_files === undefined;
+  const filesTruncated = source.files_truncated ?? (legacy ? source.truncated : false);
+  const partial = source.partial_files ?? 0;
+  if (!filesTruncated && partial === 0) return null;
+  const total = source.files_in_window ?? source.files_total;
+  return (
+    <div className="flex flex-col gap-1 text-sm text-muted">
+      {filesTruncated ? (
+        <p>{t('logs.truncated.files', { files: source.files_read, total })}</p>
+      ) : null}
+      {partial > 0 ? <p>{t('logs.truncated.partial', { files: partial })}</p> : null}
+    </div>
+  );
 }
 
 export type RangeValue = '7' | '30' | '90' | '0';
