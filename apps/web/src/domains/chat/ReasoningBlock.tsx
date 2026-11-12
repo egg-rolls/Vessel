@@ -127,7 +127,7 @@ export function ReasoningBlock({
             （`pointer-coarse`）。过渡时长在 chat.css 用 `--motion-fast` 给。
             间距：容器 `ml-1` 与标题隔开，容器内 `gap-1` 隔开复制与时间。 */}
         {(copyable || clock !== '') && (
-          <span className="reasoning-actions ml-1 inline-flex items-center gap-1 align-middle opacity-0 group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
+          <span className="reasoning-actions ml-1 inline-flex items-center gap-1 align-middle opacity-0 group-hover:opacity-100 group-has-[button:focus-visible]:opacity-100 pointer-coarse:opacity-100">
             {copyable && (
               <IconButton
                 className="size-5"
