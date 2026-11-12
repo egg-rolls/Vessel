@@ -5,6 +5,7 @@
 
 import type { Guardrail } from './guardrail.js';
 import type { Hook } from './hook.js';
+import type { MemberBodyContribution, PluginPortName } from './member-port.js';
 import type { ProviderFactory } from './provider.js';
 import type { RunJournalFactory } from './run-journal.js';
 import type { ToolDefinition } from './tool.js';
@@ -66,6 +67,22 @@ export interface PluginHost {
    * 不支持回滚的自定义宿主可以不实现。
    */
   beginPluginInstall?(pluginName: string): PluginInstallScope;
+  /**
+   * 可选（0.51）：登记一个成员身体贡献 —— 插件申请宿主端口 / 给成员 body 供工具与 hook。
+   *
+   * 可选而不是必选，与 `unregisterTool?` / `beginPluginInstall?` 同口径：老的自定义宿主
+   * 不实现就退化成「没有成员面」（成员 body 拿到的工具面与 0.50 完全一致），不炸。
+   *
+   * 只有 `MemberExecutionHost.spawn` 消费它；节点侧永不读（端口只属于成员身体）。
+   * 实现方须按 `name` 去重，并把这次登记记进当前 `beginPluginInstall` 的 scope ——
+   * 安装失败回滚要能把它一起摘掉，否则一次失败的安装会留下半个成员面。
+   */
+  registerMemberBodyContribution?(contribution: MemberBodyContribution<PluginPortName>): void;
+  /**
+   * 可选（0.51）：本宿主上已登记的成员身体贡献，按登记顺序。
+   * 未实现 / 没有贡献时调用方按空数组处理。
+   */
+  getMemberBodyContributions?(): readonly MemberBodyContribution<PluginPortName>[];
 }
 
 /** 默认权限策略（ADR-029：未声明 checkPermission 的工具用此默认判定） */

@@ -37,6 +37,12 @@ export {
   type StoredInboxMessage,
 } from './inbox.js';
 export {
+  bindMemberInboxPort,
+  buildMemberBodyPorts,
+  createInboxMemberBodyContribution,
+  INBOX_MEMBER_CONTRIBUTION_NAME,
+} from './member-ports.js';
+export {
   canTransition,
   type MemberRecord,
   MemberRegistry,

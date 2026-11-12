@@ -20,6 +20,9 @@ import {
   type ExecutionUnitOptions,
   type LeaseGrant,
   type Logger,
+  type MemberBodyContribution,
+  type MemberBodyNoticeEvent,
+  type MemberBodyPort,
   MemoryEventStream,
   MemoryPluginHost,
   MemoryWorkingContext,
@@ -43,6 +46,7 @@ import {
   type WorkingContext,
 } from '@vessel-agent/core';
 import { type AgentInboxPort, createInboxNoticeHook, createInboxTool } from './inbox.js';
+import { buildMemberBodyPorts } from './member-ports.js';
 import { HUMAN_PRINCIPAL, SYSTEM_PRINCIPAL } from './team-address.js';
 import type {
   AgentMessage,
@@ -422,6 +426,12 @@ interface MemberExecutionEntry {
   /** 成员 id（entries 按 ExecutionUnit session 建键，notice 按成员 id 寻址） */
   memberId: string;
   /**
+   * 这具 body 的会话 id（= entries 的键）。
+   * 0.51：成员面端口要它 —— 端口是「一具 body 的端口」，`MemberBodyPort.sessionId` 与
+   * `read` 的消费归属（`consumed_by_session`）都得说清是哪一具，不能靠调用方另传。
+   */
+  sessionId: string;
+  /**
    * per-body 上下文策略（可变）：每次 Run 新建 `RoleAwareContext` 时读取；
    * `applyContextPolicy` 只改这里，下一次 Run 自然生效（Stage 4 per-Run context）。
    */
@@ -455,7 +465,7 @@ interface MemberExecutionEntry {
    */
   inboxState?: { enabled: boolean };
   /**
-   * 0.51：这具 body 上「不来自父宿主」的工具名（当前只有运行期注入的 `inbox`）。
+   * 0.51：这具 body 上「不来自父宿主」的工具名（运行期注入的 `inbox` + 成员面贡献的工具）。
    * 工具热刷新会重建整个宿主，名字集合随注册来源记录在 entry 上，`tools.list{agent_id}`
    * 才能给每条工具标 `source`，而不是靠工具名去猜。
    */
@@ -840,6 +850,18 @@ function describeToolSurface(
   }));
 }
 
+/**
+ * 推导路径（没有活身体，或只是问「新身体会拿到什么」）用的端口载体：`isActive` 恒 true、
+ * `publish` 是 noop —— 那是 `tools()` 的纯度要求，不是「假装活着」。真 body 的实例在 spawn 里建。
+ */
+const DERIVED_BODY: {
+  isActive: () => boolean;
+  publish: (event: MemberBodyNoticeEvent) => void;
+} = {
+  isActive: () => true,
+  publish: () => {},
+};
+
 /** 进程内成员执行内核 */
 export class MemberExecutionHost implements MemberExecutionPort {
   private readonly model?: string;
@@ -962,6 +984,9 @@ export class MemberExecutionHost implements MemberExecutionPort {
         }),
       );
     }
+    // 0.51：成员面贡献的 hook —— 一具 body 只在这里建一次（`hooks()` 的契约）；工具不在这里，
+    // 它们在 `buildSurface` 里按同一份贡献产出，好让「推导值 = 新身体会拿到的」继续成立。
+    this.registerContributionHooks(pluginHost, member, inboxState, events);
     // 0.28 D6/D7：temporary 不主动压缩（一具 body 的生命周期由调用方的会话决定，
     // 压缩会把调用方还在看的历史摘要掉）；到线只提示。core 只收到裸参数，不认 role。
     // 两道硬兜底仍然生效：消息条数上限（`RoleAwareContext` 内层，与开关无关）
@@ -1020,6 +1045,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
     const entry: MemberExecutionEntry = {
       runtime,
       memberId: member.id,
+      sessionId: member.session_id,
       started: false,
       events,
       unsubscribers: [],
@@ -1478,14 +1504,15 @@ export class MemberExecutionHost implements MemberExecutionPort {
    * 这里与 spawn 是同一个函数，不是两段长得像的代码。
    *
    * 内容 = `effectivePermissionMode`（或调用方钉死的 mode）+ `selectTools(mode)` +
-   * `restrictPermissions` + inbox 工具判定；`injected` 记录其中不来自父宿主的名字
-   * （当前只有 `inbox`），用来给 wire 条目标 `source`，不靠工具名去猜。
+   * `restrictPermissions` + inbox 工具判定 + 成员面贡献的工具；`injected` 记录其中不来自
+   * 父宿主的名字（运行期注入的 `inbox` 与插件贡献的工具），用来给 wire 条目标 `source`，
+   * 不靠工具名去猜。
    *
    * `injectInbox` 缺省按「这台内核此刻是否 attach 了收件箱」；工具热刷新要沿用**该 body
    * 建成时**的判定（`entry.inboxState`），所以可以显式覆盖。
    */
   private buildSurface(
-    member: Pick<MemberExecutionMember, 'id'> & { team_id?: string },
+    member: Pick<MemberExecutionMember, 'id' | 'session_id'> & { team_id?: string },
     options: {
       mode?: MemberExecutionPermissionMode;
       /** 显式工具来源快照；缺省读父宿主当前工具面 */
@@ -1500,12 +1527,26 @@ export class MemberExecutionHost implements MemberExecutionPort {
       (options.injectInbox ?? this.inbox !== undefined)
         ? this.inboxTool(member.id, mode)
         : undefined;
+    // 0.51：成员面贡献（插件申请端口后给这具 body 的工具）。与 inbox 工具同在
+    // `selectTools` 交集之后追加 —— 只注册在成员身体、不是工作区能力，deny 模式也给。
+    const contributed = this.contributionTools(
+      member,
+      new Set([
+        ...tools.map((tool) => tool.name),
+        ...(inboxTool === undefined ? [] : [inboxTool.name]),
+      ]),
+    );
     // inbox 工具只读本地队列，不是工作区能力：deny 模式也注册；顺序恒定在父宿主工具之后，
-    // 与 spawn 注册进宿主、`--tools` / 卡片展示的顺序一致。
+    // 与 spawn 注册进宿主、`--tools` / 卡片展示的顺序一致。贡献工具排在它后面（0.51 期 0
+    // 的空壳贡献不产出工具，输出因此与 0.50 逐字相同）。
+    const injected = [
+      ...(inboxTool === undefined ? [] : [inboxTool.name]),
+      ...contributed.map((tool) => tool.name),
+    ];
     return {
       mode,
-      tools: inboxTool === undefined ? tools : [...tools, inboxTool],
-      injected: new Set(inboxTool === undefined ? [] : [inboxTool.name]),
+      tools: [...tools, ...(inboxTool === undefined ? [] : [inboxTool]), ...contributed],
+      injected: new Set(injected),
       unavailable,
     };
   }
@@ -1518,6 +1559,93 @@ export class MemberExecutionHost implements MemberExecutionPort {
     const inbox = this.inbox;
     if (inbox === undefined) return undefined;
     return this.restrictPermissions(createInboxTool({ inbox, agentId: memberId }), memberId, mode);
+  }
+
+  /** 本内核能拿到的成员面贡献。老宿主 / 纯内存构造没实现这两个可选方法 ⇒ 空数组。 */
+  private memberBodyContributions(): readonly MemberBodyContribution[] {
+    return this.pluginHost?.getMemberBodyContributions?.() ?? [];
+  }
+
+  /**
+   * 一具 body 由成员面贡献产出的工具（纯函数，可重复调用）。
+   *
+   * 这里给的端口是**推导值**：`isActive()` 恒 true、`publish` 是 noop。理由：`tools()` 的
+   * 契约是纯函数，不该看 rotate 开关、也不该发事件；推导路径（`tools.list{agent_id}` 没有
+   * 活身体时、工具热刷新）就在这类调用里。真 body 的端口在 spawn 里另建一次（只有 hooks 用它）。
+   *
+   * @param taken 已经占用的工具名（父宿主 + inbox 注入的）：同名冲突以既有定义为谁，
+   *   贡献顶不掉宿主工具，也不能让 `registerTool` 在 spawn 时抛错把整具 body 建失败
+   */
+  private contributionTools(
+    member: { id: string; session_id: string },
+    taken: ReadonlySet<string>,
+  ): ToolDefinition[] {
+    const contributed: ToolDefinition[] = [];
+    const used = new Set(taken);
+    for (const contribution of this.memberBodyContributions()) {
+      const port = this.memberBodyPort(contribution, member, DERIVED_BODY);
+      if (port === undefined) continue;
+      for (const tool of contribution.tools(port)) {
+        if (used.has(tool.name)) continue;
+        used.add(tool.name);
+        contributed.push(tool);
+      }
+    }
+    return contributed;
+  }
+
+  /**
+   * 一具 body 的端口载体（含端口表）。
+   *
+   * 端口表缺任何一项 ⇒ 返回 undefined，这条贡献在这具 body 上**整条不生效**（fail-closed）。
+   * 典型来源：内核没 attach 收件箱（未配置 dataDir），端口无从谈起 —— 给它一个方法全抛错的
+   * 壳只会把「没有这个能力」变成更晚、更难查的运行期惊喜。
+   */
+  private memberBodyPort(
+    contribution: MemberBodyContribution,
+    member: { id: string; session_id: string },
+    body: { isActive: () => boolean; publish: (event: MemberBodyNoticeEvent) => void },
+  ): MemberBodyPort | undefined {
+    const ports = buildMemberBodyPorts({
+      requested: contribution.ports,
+      inbox: this.inbox,
+      agentId: member.id,
+      sessionId: member.session_id,
+    });
+    if (ports === undefined) return undefined;
+    return {
+      pluginId: contribution.name,
+      agentId: member.id,
+      sessionId: member.session_id,
+      ports,
+      isActive: body.isActive,
+      publish: body.publish,
+    };
+  }
+
+  /**
+   * spawn 里一次性登记成员面贡献的 hook。
+   *
+   * 与 `contributionTools` 分开的**唯一**原因：`hooks()` 一具 body 只许调一次（它内部持有
+   * per-body 状态）。若让它也在推导路径跑，rotate 期间就会多出一批不该存在的 hook。
+   */
+  private registerContributionHooks(
+    bodyHost: MemoryPluginHost,
+    member: MemberExecutionMember,
+    inboxState: { enabled: boolean } | undefined,
+    events: MemoryEventStream,
+  ): void {
+    for (const contribution of this.memberBodyContributions()) {
+      const port = this.memberBodyPort(contribution, member, {
+        // 与 0.32 的 `disableInbox` 一一对应：rotate / retire 后旧 body 的 `enabled` 翻 false。
+        // 没 attach 收件箱时没有这层开关，恒 true（这具 body 就是它身份的唯一持有者）。
+        isActive: () => inboxState?.enabled ?? true,
+        // notice 必须写进**这具 body** 的事件流：写父流会让 rotate 期间新旧 body 的提示串台。
+        publish: (event) => events.publish(event),
+      });
+      if (port === undefined) continue;
+      for (const hook of contribution.hooks?.(port) ?? []) bodyHost.registerHook(hook);
+    }
   }
 
   /**
@@ -1534,7 +1662,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
     // 与 spawn 同一套判定（`buildSurface`）；只有「来源快照 / 该 body 的 mode /
     // 它建成时是否已 attach 收件箱」这三项按 entry 走。
     const surface = this.buildSurface(
-      { id: entry.memberId },
+      { id: entry.memberId, session_id: entry.sessionId },
       {
         mode: entry.mode,
         source,

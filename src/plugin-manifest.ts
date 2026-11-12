@@ -16,6 +16,7 @@
  */
 
 import * as path from 'node:path';
+import type { PluginPortName, PluginScope } from '../packages/core/src/index';
 import { readPackageVersion } from './version';
 
 /** 清单 id：`[a-z0-9][a-z0-9-]{1,63}` */
@@ -232,6 +233,13 @@ export interface PluginPermissions {
   secrets: boolean;
   events: string[];
   rpc: string[];
+  /**
+   * 0.51：申请的宿主端口名（闭集，见 core 的 `PluginPortName`）。
+   *
+   * 放在 `permissions` 而不是新开 `requires` 段：端口是能力，与 fs / net / events 同类，
+   * 于是自动复用安装提示、`plugin list` 展示与 fail-closed 校验，不需要第二套授权语义。
+   */
+  ports: PluginPortName[];
 }
 
 export interface PluginDependency {
@@ -247,6 +255,18 @@ export interface PluginManifest {
   engines: { vessel: string };
   description?: string;
   side: PluginSide;
+  /**
+   * 0.51：宿主作用域，缺省 `'node'`。
+   *
+   * `'member'` 只对 in-process（能力插件）合法：child 没有 body 宿主，给它端口等于开一条
+   * 反向 RPC 通道（报告 §2.7）。注意与 `plugins.catalog` 的 `scope`（发现来源
+   * builtin/user/project/node_modules）**不是同一件事**，两者不要互相赋值。
+   */
+  scope: PluginScope;
+  /**
+   * 入口（相对包根）。child 模式必填；in-process 模式为空串 —— 那里的入口由
+   * `package.json` 的 `exports` / `main` 解析，清单不重复声明。
+   */
   entry: string;
   ui?: { dir: string };
   activationEvents: string[];
@@ -317,6 +337,17 @@ export interface PluginManifestOptions {
    * 不提供时只做结构校验（CLI 后续传入）。
    */
   reservedCliNames?: Iterable<string>;
+  /**
+   * 0.51：清单所属执行形态。缺省 `'child'`。
+   *
+   * - `'child'`：体验插件 —— `entry` 必填（宿主 spawn 要用），`scope: 'member'` 非法；
+   * - `'in-process'`：能力插件 —— 入口由 `package.json` 的 exports/main 解析，
+   *   `entry` 可缺省（缺省为空串），成员面（`scope` / `permissions.ports`）只在这条分支合法。
+   *
+   * 分开的理由不是「两种清单」，而是 entry 的必填性与 scope 的合法性本就由执行形态决定；
+   * 让校验器知道形态，比在调用方各写一遍 if 更不容易漏（0.51 期 0.5 补的就是这个洞）。
+   */
+  mode?: 'child' | 'in-process';
 }
 
 export type PluginManifestValidation =
@@ -491,9 +522,42 @@ function globMatches(pattern: string, value: string): boolean {
 
 // ── 权限 / 贡献点 ───────────────────────────────────────────────────────────
 
+/**
+ * 可申请的宿主端口名（闭集）。**加一个名字 = 改契约**（ADR-099 §2），
+ * 与 core 的 `PluginPortName` 必须同步 —— 两份不一致时以这里为准拒绝，
+ * 绝不「先放过、装上了再说」。
+ */
+const PLUGIN_PORT_NAMES: readonly PluginPortName[] = ['inbox'];
+
+function readPorts(raw: unknown): PluginPortName[] {
+  if (raw === undefined) return [];
+  const names = stringArray(raw, 'permissions.ports');
+  const seen = new Set<PluginPortName>();
+  for (const name of names) {
+    if (!(PLUGIN_PORT_NAMES as readonly string[]).includes(name)) {
+      fail(
+        'plugin_manifest_invalid',
+        `permissions.ports "${name}" is not a known port (${PLUGIN_PORT_NAMES.join(', ')})`,
+      );
+    }
+    // 重复声明不算错（不新增失败面），但收窄成一份：下游按集合语义用（贡献必须 ⊆ 声明）。
+    seen.add(name as PluginPortName);
+  }
+  return [...seen];
+}
+
+/** `vessel.scope`：缺省 `'node'`（0.51 之前的全部插件都是这个） */
+function readScope(raw: unknown): PluginScope {
+  if (raw === undefined) return 'node';
+  if (raw !== 'node' && raw !== 'member') {
+    fail('plugin_manifest_invalid', 'scope must be node | member');
+  }
+  return raw;
+}
+
 function readPermissions(raw: unknown): PluginPermissions {
   if (raw === undefined) {
-    return { fs: [], net: [], process: false, secrets: false, events: [], rpc: [] };
+    return { fs: [], net: [], process: false, secrets: false, events: [], rpc: [], ports: [] };
   }
   if (!isRecord(raw)) fail('plugin_manifest_invalid', 'permissions must be an object');
 
@@ -501,13 +565,14 @@ function readPermissions(raw: unknown): PluginPermissions {
   const net = raw.net === undefined ? [] : stringArray(raw.net, 'permissions.net');
   const events = raw.events === undefined ? [] : stringArray(raw.events, 'permissions.events');
   const rpc = raw.rpc === undefined ? [] : stringArray(raw.rpc, 'permissions.rpc');
+  const ports = readPorts(raw.ports);
 
   const process =
     raw.process === undefined ? false : readBoolean(raw.process, 'permissions.process');
   const secrets =
     raw.secrets === undefined ? false : readBoolean(raw.secrets, 'permissions.secrets');
 
-  return { fs, net, process, secrets, events, rpc };
+  return { fs, net, process, secrets, events, rpc, ports };
 }
 
 function readBoolean(value: unknown, field: string): boolean {
@@ -1347,6 +1412,27 @@ function readDependencies(raw: unknown): PluginDependency {
 
 // ── 入口 ────────────────────────────────────────────────────────────────────
 
+/**
+ * `entry` 的必填性由执行形态决定：child 必须声明（spawn 要用），in-process 由
+ * `package.json` 的 `exports` / `main` 解析，清单里不重复写（写了也照样做越界检查）。
+ */
+function readManifestEntry(raw: unknown, options: PluginManifestOptions): string {
+  if (options.mode === 'in-process') {
+    if (raw === undefined) return '';
+    if (raw === '') return '';
+    const entry = requireString(raw, 'entry');
+    if (!isContainedPath(options.baseDir, entry)) {
+      fail('plugin_manifest_invalid', 'entry must stay inside the plugin directory');
+    }
+    return entry;
+  }
+  const entry = requireString(raw, 'entry');
+  if (!isContainedPath(options.baseDir, entry)) {
+    fail('plugin_manifest_invalid', 'entry must stay inside the plugin directory');
+  }
+  return entry;
+}
+
 /** 解析并校验清单；失败抛 {@link PluginManifestValidationError} */
 export function parsePluginManifest(raw: unknown, options: PluginManifestOptions): PluginManifest {
   if (!isRecord(raw)) fail('plugin_manifest_invalid', 'vessel manifest must be an object');
@@ -1384,10 +1470,7 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
     );
   }
 
-  const entry = requireString(raw.entry, 'entry');
-  if (!isContainedPath(options.baseDir, entry)) {
-    fail('plugin_manifest_invalid', 'entry must stay inside the plugin directory');
-  }
+  const entry = readManifestEntry(raw.entry, options);
 
   let side: PluginSide = 'both';
   if (raw.side !== undefined) {
@@ -1421,6 +1504,25 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
   const contributes = readContributions(raw.contributes, permissions, id, options);
   const dependencies = readDependencies(raw.dependencies);
 
+  // 0.51：宿主作用域与端口。三条交叉校验都是 fail-closed，失败即不加载代码。
+  const scope = readScope(raw.scope);
+  if (options.mode !== 'in-process' && scope === 'member') {
+    // child 没有 body 宿主：给它端口等于开一条反向 RPC 通道（报告 §2.7）。
+    // 这条同时挡掉「有 vessel.entry 的包声明 scope: 'member'」。
+    fail(
+      'plugin_manifest_invalid',
+      "scope 'member' requires an in-process plugin (child plugins run in a separate process and have no member body)",
+    );
+  }
+  if (permissions.ports.length > 0 && scope !== 'member') {
+    // 端口只属于成员身体：node 作用域的插件拿不到 body，申请端口是没有对象的请求，
+    // 静默忽略会让「声明过才给」变成空话 —— 直接拒绝。
+    fail(
+      'plugin_manifest_invalid',
+      "permissions.ports is only allowed with scope 'member' (ports are bound to a member body)",
+    );
+  }
+
   if (raw.override !== undefined && typeof raw.override !== 'boolean') {
     fail('plugin_manifest_invalid', 'override must be a boolean');
   }
@@ -1444,6 +1546,7 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
     engines: { vessel: vesselRange },
     ...(description !== undefined ? { description } : {}),
     side,
+    scope,
     entry,
     ...(ui !== undefined ? { ui } : {}),
     activationEvents,

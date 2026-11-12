@@ -16,6 +16,12 @@
 
 ### Changed
 
+- **in-process 插件也走清单校验（0.51 期 0.5）**：`package.json.vessel` 里声明了清单字段的
+  in-process 包此前**完全不校验**（`readPlugin` 只在 `vessel.entry` 非空时调
+  `validatePluginManifest`），于是 `scope` / `permissions` 这类「声明过才给」的字段在校验层面
+  根本不存在，声明错的能力插件照样装进来。现在它们走同一套 fail-closed 校验（同一份清单契约；
+  `entry` 由 `exports` / `main` 解析因而可缺省）；只写 `vessel.override` 的旧形态不受影响 ——
+  那是覆盖标记，不是清单。
 - **rotate 的模型侧文案改说真话**：工具结果不再写 `finish the current turn`（实测这句是假指令
   —— 交棒轮的收尾正文会被 epoch fencing 掉，不记账也不回传父级）。现在说明「新身体已开跑、
   本轮剩余输出按旧 epoch 被 fence，`startup_prompt` 是唯一交接通道」，工具描述与
@@ -42,6 +48,19 @@
 
 ### Added
 
+- **插件端口面（0.51 期 0）**：插件可以声明「装在成员身体上」并申请宿主端口。清单 additive
+  两处：`vessel.scope: 'node' | 'member'`（缺省 `node`）与 `permissions.ports`（闭集，当前只有
+  `inbox`）；端口**只对 `scope: 'member'` 的 in-process 能力插件开放**，`ports` 非空而 scope
+  不是 member、或 child 插件声明 `member` 一律 `plugin_manifest_invalid`（child 没有 body 宿主，
+  给它端口等于开一条反向 RPC 通道 —— 本期边界，不是遗漏）。契约在 core
+  `types/member-port.ts`（纯类型）：`MemberInboxPort` / `MemberBodyPort<P>` /
+  `MemberBodyContribution<P>`，集合类型 `MemberBodyPorts<P> = Pick<…, P>`；agentId 绑死在端口
+  上（方法没有 agentId 参数）、hold / releaseHeldFor / markConsumed 留在宿主、未申请的端口在
+  类型上不存在。装配面只加 `PluginHost.registerMemberBodyContribution?` /
+  `getMemberBodyContributions?` 两个可选方法，只有 `MemberExecutionHost.spawn` 消费（它握的就是
+  tenant 宿主，零新增透传）。内置 `inbox` 贡献本期是**空壳**：`tools()` 返回空数组，`listTools()`
+  / `tools.list{agent_id}`（live 与 derived 两条）/ hook 面 / 事件流与 0.50 逐字相同，门禁
+  `bun run check:plugin-ports` 钉住这一点。
 - **rotate 交接卡**：`agent` 工具的 rotate 把上一具身体写的 `startup_prompt` 投给新身体时，
   那条消息带 `Message.name = 'rotate:handoff:<epoch>'`（不是 `vessel:` 前缀 —— 那是模型侧
   上下文，而它确实是该轮的真实用户输入），Web 渲成默认展开的「⟳ rotate 交接 · epoch N」卡
