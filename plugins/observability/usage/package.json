@@ -127,7 +127,7 @@
         "llm.response",
         "llm.request",
         "run.failed"
-      ]
+      , "run.completed"]
     },
     "permissions": {
       "fs": [
@@ -140,7 +140,7 @@
         "llm.response",
         "llm.request",
         "run.failed"
-      ]
+      , "run.completed"]
     },
     "dependencies": {
       "plugins": [],

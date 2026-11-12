@@ -26,8 +26,8 @@ import {
   type SourceCoverage,
   type SummaryResult,
 } from './aggregate.js';
-import { isRecord, parseSettings, type Settings } from './store.js';
 import type { UsageQuery, UsageResult } from './query.js';
+import { isRecord, parseSettings, type Settings } from './store.js';
 import { WorkerQueryClient } from './worker-client.js';
 
 const PROTOCOL_VERSION = 1;

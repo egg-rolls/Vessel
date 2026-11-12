@@ -55,7 +55,8 @@
  * @module @vessel-agent/plugin-usage
  */
 
-import { type Dirent, mkdir, open, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { mkdir, open, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { resolveSingleTenantPaths } from '@vessel-agent/core';
 
@@ -233,7 +234,6 @@ const EVENT_DATA_FIELDS: Record<string, readonly string[]> = {
   'run.completed': ['run_id', 'session_id', 'usage', 'duration_ms', 'iterations'],
   'run.failed': ['run_id', 'session_id', 'error', 'error_code', 'duration_ms'],
 };
-
 
 /**
  * Read budget and retention caps.
@@ -478,7 +478,6 @@ const NEWLINE = 0x0a;
 
 /** The per-session log file inside `<dataDir>/sessions/<sessionId>/`. */
 const SESSION_LOG = 'events.ndjson';
-
 
 /** How many bytes of a file's top are read to find its first event. */
 const FIRST_LINE_BYTES = 8 * 1024;
@@ -735,7 +734,7 @@ export class EventStore {
     // billing above when files grew since the previous call, and that growth
     // must not become an unbounded read.
     let bytesRead = 0;
-    let peeks = this.peeks;
+    const peeks = this.peeks;
     for (const file of window) {
       const remaining = budget - bytesRead;
       if (remaining <= 0) break;

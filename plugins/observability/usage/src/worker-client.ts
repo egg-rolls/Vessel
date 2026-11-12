@@ -177,7 +177,7 @@ export class WorkerQueryClient {
       });
       worker.on('exit', (code: number) => {
         if (this.worker === worker) this.startFailures += 1;
-        this.onWorkerGone(new Error('usage worker exited with code ' + code));
+        this.onWorkerGone(new Error(`usage worker exited with code ${code}`));
       });
       // A handshake proves the module actually loaded (a bad path or a runtime
       // without worker support fails here, not on the first real query).

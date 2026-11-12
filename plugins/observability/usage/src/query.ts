@@ -21,11 +21,10 @@
 import {
   buildRecords,
   buildRunSummaries,
-  cutoffFor,
   type LeaderboardResult,
-  leaderboardRuns,
   type LogsParams,
   type LogsResult,
+  leaderboardRuns,
   listLogs,
   repriceRuns,
   type SourceCoverage,
@@ -34,9 +33,9 @@ import {
 } from './aggregate.js';
 import {
   EventStore,
+  type RunSummary,
   readSessionSources,
   readUsageIndex,
-  type RunSummary,
   type Settings,
   sourceSignature,
   writeUsageIndex,
@@ -222,7 +221,7 @@ export class QueryRuntime {
         if (!this.indexWarningLogged) {
           this.indexWarningLogged = true;
           const reason = error instanceof Error ? error.message : String(error);
-          process.stderr.write('[usage] usage index not written: ' + reason + '\n');
+          process.stderr.write(`[usage] usage index not written: ${reason}\n`);
         }
       }
     }

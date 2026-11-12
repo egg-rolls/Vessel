@@ -876,10 +876,6 @@ export function listLogs(records: UsageRecord[], params: LogsParams): LogsResult
 }
 
 /** Leaderboard page DTO: same run summaries, grouped by model. */
-export function leaderboardRuns(
-  runs: RunSummary[],
-  now: number,
-  days?: number,
-): LeaderboardResult {
+export function leaderboardRuns(runs: RunSummary[], now: number, days?: number): LeaderboardResult {
   return { items: runBuckets(filterRunsByDays(runs, now, days)) };
 }

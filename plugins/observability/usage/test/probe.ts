@@ -498,7 +498,6 @@ function idsOf(events: RawEvent[]): string[] {
 // 3. Truncate/rotate: the offset is dropped and the file is read from the top.
 {
   const dir = await traceDir('truncate');
-  const file = sessionFile(dir, 'session-c');
   await writeSession(
     dir,
     'session-c',
@@ -590,11 +589,7 @@ function idsOf(events: RawEvent[]): string[] {
     traceLine('llm.request', 'run-f') + traceLine('llm.response', 'run-f', 64),
   );
   await appendFile(file, traceLine('llm.response', 'run-f'));
-  await utimes(
-    file,
-    new Date(FIXTURE_MTIME),
-    new Date(FIXTURE_MTIME),
-  );
+  await utimes(file, new Date(FIXTURE_MTIME), new Date(FIXTURE_MTIME));
 
   const store = new EventStore();
   const first = await store.loadEvents(dir);
@@ -1074,11 +1069,7 @@ const TODAY_TS = dayStart(0) + 60_000;
 const YDAY_TS = dayStart(-1) + 60_000;
 const OLD_TS = dayStart(-9) + 60_000;
 const rangeRecords = buildRecords(
-  [
-    ...pairAt('run-today', TODAY_TS),
-    ...pairAt('run-yday', YDAY_TS),
-    ...pairAt('run-old', OLD_TS),
-  ],
+  [...pairAt('run-today', TODAY_TS), ...pairAt('run-yday', YDAY_TS), ...pairAt('run-old', OLD_TS)],
   NO_PRICES,
 );
 
@@ -1094,7 +1085,7 @@ const rangeRecords = buildRecords(
   );
   const day1 = listLogs(rangeRecords, { limit: 50, since: cutoff });
   check(
-    'days=1 shows only today\'s records',
+    "days=1 shows only today's records",
     day1.items.length === 1 && day1.items[0]?.run_id === 'run-today',
     day1.items.map((item) => item.run_id).join(','),
   );
@@ -1242,8 +1233,7 @@ const rangeRecords = buildRecords(
   const fiveBytes = await writeTrace(
     dir,
     'run-5d',
-    lineAt('llm.request', 'run-5d', fiveDays) +
-      lineAt('llm.response', 'run-5d', fiveDays + 1_400),
+    lineAt('llm.request', 'run-5d', fiveDays) + lineAt('llm.response', 'run-5d', fiveDays + 1_400),
     fiveDays + 2_000,
   );
   await writeTrace(
@@ -1398,8 +1388,7 @@ const rangeRecords = buildRecords(
   await writeTrace(
     dir,
     'run-straddle',
-    lineAt('llm.request', 'run-straddle', starts) +
-      lineAt('llm.response', 'run-straddle', ends),
+    lineAt('llm.request', 'run-straddle', starts) + lineAt('llm.response', 'run-straddle', ends),
     ends + 2_000,
   );
 
@@ -1430,7 +1419,11 @@ const rangeRecords = buildRecords(
 
   // First line is not JSON.
   const torn = sessionFile(dir, 'sess-torn');
-  await writeSession(dir, 'sess-torn', `not json at all\n${lineAt('llm.response', 'run-torn', after)}`);
+  await writeSession(
+    dir,
+    'sess-torn',
+    `not json at all\n${lineAt('llm.response', 'run-torn', after)}`,
+  );
   await utimes(torn, new Date(after), new Date(after));
 
   // First line carries no usable ts.
@@ -1520,10 +1513,7 @@ const rangeRecords = buildRecords(
     'the peek is documented as an authoritative read, not a heuristic',
     storeSource.includes('**not** a heuristic') && storeSource.includes('dropAfterUntil'),
   );
-  check(
-    'the peek reads the head of the file only',
-    storeSource.includes('FIRST_LINE_BYTES'),
-  );
+  check('the peek reads the head of the file only', storeSource.includes('FIRST_LINE_BYTES'));
 }
 
 // 25. The first-line cache is not tied to the event-cache file cap: sizing it by
@@ -1588,7 +1578,9 @@ const USAGE_1 = { prompt_tokens: 1_000, completion_tokens: 100, cache_read_input
 
 // 26. Two attempts in one run: the pairing counts both, `run.completed` nothing.
 {
-  const usage = { usage: { prompt_tokens: 1_000, completion_tokens: 100, cache_read_input_tokens: 400 } };
+  const usage = {
+    usage: { prompt_tokens: 1_000, completion_tokens: 100, cache_read_input_tokens: 400 },
+  };
   const events = buildRecords(
     [
       // attempt 1 (paired)
@@ -1628,7 +1620,11 @@ const USAGE_1 = { prompt_tokens: 1_000, completion_tokens: 100, cache_read_input
     runs[0]?.prompt_tokens === reference?.prompt_tokens &&
       runs[0]?.completion_tokens === reference?.completion_tokens &&
       runs[0]?.cache_read_input_tokens === reference?.cache_read_input_tokens,
-    JSON.stringify([runs[0]?.prompt_tokens, runs[0]?.completion_tokens, runs[0]?.cache_read_input_tokens]),
+    JSON.stringify([
+      runs[0]?.prompt_tokens,
+      runs[0]?.completion_tokens,
+      runs[0]?.cache_read_input_tokens,
+    ]),
   );
 }
 
@@ -1733,7 +1729,8 @@ function sourceSignatureOf(sources: IndexSources | undefined): string {
   );
   check(
     'a stored index is only trusted when the session fingerprint matches',
-    sourceSignatureOf(readBack?.header.sources) === sourceSignatureOf(await readSessionSources(dir)),
+    sourceSignatureOf(readBack?.header.sources) ===
+      sourceSignatureOf(await readSessionSources(dir)),
     `${sourceSignatureOf(readBack?.header.sources)} vs ${sourceSignatureOf(await readSessionSources(dir))}`,
   );
 
@@ -1881,7 +1878,8 @@ function sourceSignatureOf(sources: IndexSources | undefined): string {
   );
   check(
     'the answer carries the metrics the page needs',
-    typeof first.outcome.source.duration_ms === 'number' && first.outcome.source.worker === undefined,
+    typeof first.outcome.source.duration_ms === 'number' &&
+      first.outcome.source.worker === undefined,
     JSON.stringify(first.outcome.source),
   );
   check('usingWorker reports the live thread', client.usingWorker === true);
@@ -1898,10 +1896,7 @@ function sourceSignatureOf(sources: IndexSources | undefined): string {
   const cutoff3 = base + 30_000;
   const [all, recent, window] = await Promise.all([
     client.query({ kind: 'logs', params: { limit: 10 } }, init),
-    client.query(
-      { kind: 'logs', params: { limit: 10, since: cutoff3 }, cutoff: cutoff3 },
-      init,
-    ),
+    client.query({ kind: 'logs', params: { limit: 10, since: cutoff3 }, cutoff: cutoff3 }, init),
     client.query(
       {
         kind: 'logs',

@@ -22,8 +22,8 @@
  * Any failure answers { id, ok: false, error } so the caller can fall back.
  */
 import { parentPort } from 'node:worker_threads';
-import type { Settings } from './store.js';
 import { type QueryOutcome, QueryRuntime, type UsageQuery } from './query.js';
+import type { Settings } from './store.js';
 
 interface InitMessage {
   id: number;
