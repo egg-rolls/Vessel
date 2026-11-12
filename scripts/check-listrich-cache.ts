@@ -37,7 +37,7 @@ interface FixtureSpec {
 }
 
 function sessionPath(root: string, id: string): string {
-  return join(root, encodeURIComponent(id) + '.json');
+  return join(root, `${encodeURIComponent(id)}.json`);
 }
 
 async function writeSessionFile(root: string, id: string, spec: FixtureSpec = {}): Promise<void> {
@@ -49,12 +49,12 @@ async function writeSessionFile(root: string, id: string, spec: FixtureSpec = {}
   const count = spec.messages ?? 1;
   const messages = Array.from({ length: count }, (_, index) => ({
     role: 'user',
-    content: 'message ' + String(index) + ' of ' + id,
+    content: `message ${String(index)} of ${id}`,
   }));
   const disk = {
     session_id: id,
-    title: spec.title ?? 'title-' + id,
-    preview: 'preview-' + id,
+    title: spec.title ?? `title-${id}`,
+    preview: `preview-${id}`,
     created_at: 1700000000000,
     updated_at: spec.updatedAt ?? 1700000000000,
     started_at: 1700000000000,
@@ -112,21 +112,21 @@ const first = await main.store.listRich();
 check(
   'G1 首次三个会话各解析一次',
   main.counter.parses === 3,
-  'parses=' + String(main.counter.parses),
+  `parses=${String(main.counter.parses)}`,
 );
 const afterFirst = main.counter.parses;
 const second = await main.store.listRich();
 check(
   'G1 第二次命中缓存：0 次 JSON.parse',
   main.counter.parses === afterFirst,
-  'parses=' + String(main.counter.parses) + '（首次后未变）',
+  `parses=${String(main.counter.parses)}（首次后未变）`,
 );
 check(
   'G1 两次结果逐字相同',
   JSON.stringify(first) === JSON.stringify(second),
-  'sessions=' + ids(second),
+  `sessions=${ids(second)}`,
 );
-check('G1 顺序仍按 updated_at 倒序', ids(first) === 's1,s2,s3', 'sessions=' + ids(first));
+check('G1 顺序仍按 updated_at 倒序', ids(first) === 's1,s2,s3', `sessions=${ids(first)}`);
 
 // ── G2：失效（size 变 / 只 mtime 变）────────────────────────────────────────
 await writeSessionFile(root, 's2', { messages: 5, updatedAt: 4000, title: 'rewritten' });
@@ -136,7 +136,7 @@ const afterSizeChange = await main.store.listRich();
 check(
   'G2 改写（size 变）只重解析 1 个文件',
   main.counter.parses - beforeSizeChange === 1,
-  'delta=' + String(main.counter.parses - beforeSizeChange),
+  `delta=${String(main.counter.parses - beforeSizeChange)}`,
 );
 const rewritten = afterSizeChange[0];
 check(
@@ -145,7 +145,7 @@ check(
     rewritten.session_id === 's2' &&
     rewritten.title === 'rewritten' &&
     rewritten.message_count === 5,
-  'first=' + JSON.stringify(rewritten),
+  `first=${JSON.stringify(rewritten)}`,
 );
 
 // 同字节长度、只改 title：size 不变，靠 mtime 区分。
@@ -156,10 +156,10 @@ const afterMtimeChange = await main.store.listRich();
 check(
   'G2 只 mtime 变（size 相同）也会重解析',
   main.counter.parses - beforeMtimeChange === 1,
-  'delta=' + String(main.counter.parses - beforeMtimeChange),
+  `delta=${String(main.counter.parses - beforeMtimeChange)}`,
 );
 const touched = afterMtimeChange.find((info) => info.session_id === 's3');
-check('G2 只 mtime 变时内容正确', touched?.title === 'title-X3', 'title=' + String(touched?.title));
+check('G2 只 mtime 变时内容正确', touched?.title === 'title-X3', `title=${String(touched?.title)}`);
 
 // 只 touch 不改内容：宁可多解析一次，也不猜内容。
 await setMtime(sessionPath(root, 's1'), 13);
@@ -168,13 +168,13 @@ const afterTouch = await main.store.listRich();
 check(
   'G2 只 touch 不改内容也会重解析（不猜）',
   main.counter.parses - beforeTouch === 1,
-  'delta=' + String(main.counter.parses - beforeTouch),
+  `delta=${String(main.counter.parses - beforeTouch)}`,
 );
 check(
   'G2 只 touch 后结果仍然正确',
   JSON.stringify(afterTouch.find((info) => info.session_id === 's1')) ===
     JSON.stringify(second.find((info) => info.session_id === 's1')),
-  's1=' + JSON.stringify(afterTouch.find((info) => info.session_id === 's1')),
+  `s1=${JSON.stringify(afterTouch.find((info) => info.session_id === 's1'))}`,
 );
 
 // ── G3：损坏文件 ────────────────────────────────────────────────────────────
@@ -185,12 +185,12 @@ const withCorrupt = await main.store.listRich();
 check(
   'G3 损坏文件不阻断列表（单文件跳过）',
   ids(withCorrupt) === 's2,s1,s3',
-  'sessions=' + ids(withCorrupt),
+  `sessions=${ids(withCorrupt)}`,
 );
 check(
   'G3 损坏文件不被缓存（每轮仍尝试解析）',
   main.counter.parses - beforeCorrupt === 1,
-  'delta=' + String(main.counter.parses - beforeCorrupt),
+  `delta=${String(main.counter.parses - beforeCorrupt)}`,
 );
 
 let corruptThrew = false;
@@ -207,14 +207,14 @@ const repaired = await main.store.listRich();
 check(
   'G3 修好后同一路径回到列表（失败的那次没污染缓存）',
   repaired[0]?.session_id === 'bad' && repaired[0]?.title === 'fixed',
-  'sessions=' + ids(repaired),
+  `sessions=${ids(repaired)}`,
 );
 const beforeHitAgain = main.counter.parses;
 await main.store.listRich();
 check(
   'G3 修好后这一条也能命中缓存',
   main.counter.parses === beforeHitAgain,
-  'delta=' + String(main.counter.parses - beforeHitAgain),
+  `delta=${String(main.counter.parses - beforeHitAgain)}`,
 );
 
 // ── G4：LRU 上限 ────────────────────────────────────────────────────────────
@@ -228,15 +228,15 @@ const roomyFirst = await roomy.store.listRich();
 check(
   'G4 上限 3（= 会话数）：首轮 3 次解析',
   roomy.counter.parses === 3,
-  'parses=' + String(roomy.counter.parses),
+  `parses=${String(roomy.counter.parses)}`,
 );
-check('G4 上限 3：列表完整', ids(roomyFirst) === 'a,b,c', 'sessions=' + ids(roomyFirst));
+check('G4 上限 3：列表完整', ids(roomyFirst) === 'a,b,c', `sessions=${ids(roomyFirst)}`);
 const beforeRoomy = roomy.counter.parses;
 await roomy.store.listRich();
 check(
   'G4 上限 3：第二轮 0 次解析',
   roomy.counter.parses === beforeRoomy,
-  'delta=' + String(roomy.counter.parses - beforeRoomy),
+  `delta=${String(roomy.counter.parses - beforeRoomy)}`,
 );
 
 // 上限 1 + 2 个会话：LRU 装不下工作集，稳态必然每轮全 miss。
@@ -252,7 +252,7 @@ await tight.store.listRich();
 check(
   'G4 上限 1：稳态每轮 2 次解析（上限真的在淘汰）',
   tight.counter.parses - beforeTight === 2,
-  'delta=' + String(tight.counter.parses - beforeTight),
+  `delta=${String(tight.counter.parses - beforeTight)}`,
 );
 
 const offRoot = await mkdtemp(join(tmpdir(), 'listrich-cache-off-'));
@@ -266,7 +266,7 @@ await off.store.listRich();
 check(
   'G4 上限 0 = 关闭缓存（每轮全解析）',
   off.counter.parses - beforeOff === 2,
-  'delta=' + String(off.counter.parses - beforeOff),
+  `delta=${String(off.counter.parses - beforeOff)}`,
 );
 
 // ── G5：返回值是新鲜对象 ────────────────────────────────────────────────────
@@ -280,7 +280,7 @@ const afterMutation = await main.store.listRich();
 check(
   'G5 调用方改返回值不污染缓存',
   afterMutation[0]?.title !== 'HACKED' && afterMutation[0]?.message_count !== 999,
-  'first=' + JSON.stringify(afterMutation[0]),
+  `first=${JSON.stringify(afterMutation[0])}`,
 );
 
 // ── G6：空会话口径不变 ──────────────────────────────────────────────────────
@@ -289,21 +289,21 @@ const withEmpty = await main.store.listRich();
 check(
   'G6 空会话不进列表（过滤口径不变）',
   !withEmpty.some((info) => info.session_id === 'empty'),
-  'sessions=' + ids(withEmpty),
+  `sessions=${ids(withEmpty)}`,
 );
 
 // ── 汇总 ────────────────────────────────────────────────────────────────────
 let failed = 0;
 for (const item of checks) {
   if (!item.ok) failed += 1;
-  const detail = item.detail === '' ? '' : '  (' + item.detail + ')';
-  console.log((item.ok ? 'PASS' : 'FAIL') + '  ' + item.name + detail);
+  const detail = item.detail === '' ? '' : `  (${item.detail})`;
+  console.log(`${item.ok ? 'PASS' : 'FAIL'}  ${item.name}${detail}`);
 }
 for (const dir of roots) await rm(dir, { recursive: true, force: true });
 console.log('');
 console.log(
   failed === 0
-    ? 'listRich 缓存门禁全部通过（' + String(checks.length) + ' 项）'
-    : String(failed) + ' / ' + String(checks.length) + ' 项失败',
+    ? `listRich 缓存门禁全部通过（${String(checks.length)} 项）`
+    : `${String(failed)} / ${String(checks.length)} 项失败`,
 );
 process.exit(failed === 0 ? 0 : 1);
