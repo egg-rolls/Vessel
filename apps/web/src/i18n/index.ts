@@ -80,7 +80,15 @@ export function setLocale(next: Locale): void {
     // 隐私模式 / 配额满：语言仍在本会话内生效。
   }
   try {
-    if (typeof document !== 'undefined') document.documentElement.lang = next;
+    // 不依赖 DOM lib：根 tsconfig 的 typecheck 也会编译本文件（门禁脚本 import 了
+    // `state/event-visibility`），那里没有 DOM 全局类型 —— 用结构化的最小形状收敛，
+    // 顺便保留 SSR / 测试环境的 no-op 语义。
+    const doc = (
+      globalThis as {
+        document?: { documentElement?: { setAttribute?: (name: string, value: string) => void } };
+      }
+    ).document;
+    doc?.documentElement?.setAttribute?.('lang', next);
   } catch {
     // 非浏览器环境（SSR / 测试）忽略。
   }
