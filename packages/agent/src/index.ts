@@ -68,7 +68,8 @@ export {
   type MemberExecutionPermissionMode,
   type MemberRunnableAgent,
 } from './runtime.js';
-export { AgentServiceImpl, createAgentService } from './service.js';export {
+export { AgentServiceImpl, createAgentService } from './service.js';
+export {
   AGENT_SNAPSHOT_VERSION,
   type AgentSnapshotFile,
   AgentSnapshotStore,
