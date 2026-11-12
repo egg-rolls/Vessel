@@ -1741,6 +1741,95 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.demo.states.loading': 'Loading samples…',
   'designLab.demo.states.error': 'Request failed; check the gateway connection.',
 
+  // Design Lab auto-discovery (0.51): tokens grouped by prefix + *.preview.tsx samples
+  'designLab.tokens.autoNote':
+    'The list is enumerated from the custom properties that actually exist on :root and grouped by prefix, so a new token needs no change here.',
+  'designLab.tokens.motion': 'Motion',
+  'designLab.tokens.sizes': 'Sizes',
+  'designLab.tokens.layers': 'Layers',
+  'designLab.tokens.other': 'Other',
+  'designLab.tokens.count': '{count} tokens',
+  'designLab.tokens.filter': 'Filter tokens',
+  'designLab.tokens.filterPlaceholder': 'Filter by name or value, e.g. amber',
+  'designLab.tokens.filterEmpty': 'No token matches.',
+  'designLab.tokens.legend': 'Swatches: left = active theme, right = sampled forced-dark value.',
+  'designLab.components.autoNote':
+    'Every *.preview.tsx under apps/web/src is collected automatically (lazy import.meta.glob); drop in a file and it shows up in its group.',
+  'designLab.components.count': '{count} samples',
+  'designLab.components.filter': 'Filter samples',
+  'designLab.components.filterPlaceholder': 'Filter by title, description or source path',
+  'designLab.components.empty': 'No sample matches.',
+  'designLab.components.loading': 'Loading samples…',
+  'designLab.components.none': 'No *.preview.tsx sample files were found.',
+  'designLab.components.sourcePath': 'source',
+  'designLab.components.renderError': 'This sample failed to render; the others are unaffected.',
+  'designLab.groups.chat': 'Chat stream cards',
+  'designLab.groups.nav': 'Navigation and status',
+  'designLab.groups.overlays': 'Dialogs and overlays',
+  'designLab.groups.ui': 'Primitives',
+  'designLab.preview.queued.desc':
+    'Queued card: amber band plus a waiting chip; cancel stays available while collapsed.',
+  'designLab.preview.userBubble.desc':
+    'User bubble: bubble plus attachment chips, with the timestamp in the hover meta slot.',
+  'designLab.preview.assistant.desc':
+    'Assistant body: Markdown plus a left-aligned copy action under the text.',
+  'designLab.preview.reasoning.desc':
+    'Reasoning card: title, copy button and the time at the far right; more than 12 lines expand.',
+  'designLab.preview.tool.desc':
+    'Tool card: the header holds only the tool name and duration; expand for description, input and output.',
+  'designLab.preview.env.desc':
+    'Environment card: scope label plus line count; expand for the raw context lines.',
+  'designLab.preview.agentMessage.desc':
+    'Agent delivery card: header says which agent sent it; the expanded body starts with the source address.',
+  'designLab.preview.failure.desc':
+    'Failure cards: collapsed shows only the red dot and one-line error, expanded shows status and the raw error (both states shown).',
+  'designLab.preview.navItem.desc':
+    'Menu buttons: group header, six status dots (the four-tone scale plus gateway ok/warn) and the collapsed form.',
+  'designLab.preview.navItem.collapsed':
+    'Collapsed shows only the icon; hover for 300 ms to see the tooltip (title, status, count, version).',
+  'designLab.preview.navItem.plain':
+    'An item with no status signal: no dot, and no placeholder version.',
+  'designLab.preview.navStatus.desc':
+    'Four-tone scale against color tokens: labels come from nav-status.ts and the dots are rendered by NavItem.',
+  'designLab.preview.navStatus.colStatus': 'Status',
+  'designLab.preview.navStatus.colValue': 'Value in the active theme',
+  'designLab.preview.navStatus.note':
+    'Unconfigured and unknown fall back to muted (--faint, the default NavItem dot); gateway status still emits only ok / warn / danger / muted.',
+  'designLab.preview.confirm.desc':
+    'Confirm dialog: initial focus sits on Cancel so Enter cannot trigger the dangerous action.',
+  'designLab.preview.confirm.openPlain': 'Open confirm dialog',
+  'designLab.preview.confirm.openDanger': 'Open danger confirm',
+  'designLab.preview.confirm.title': 'Save these changes?',
+  'designLab.preview.confirm.body': 'Sample copy: confirming only closes the dialog.',
+  'designLab.preview.confirm.dangerTitle': 'Delete this session?',
+  'designLab.preview.confirm.dangerBody':
+    'Sample copy: a danger primary button that needs an explicit confirmation.',
+  'designLab.preview.confirm.dangerConfirm': 'Delete',
+  'designLab.preview.modal.desc':
+    'Dialog shell: scrim, centered panel, Esc to close and a focus ring; sm / md / lg widths.',
+  'designLab.preview.modal.hint': 'Pick a width, then open it.',
+  'designLab.preview.modal.open': 'Open dialog',
+  'designLab.preview.modal.title': 'Dialog title',
+  'designLab.preview.modal.body':
+    'Sample body: the panel scrolls on its own and the scrim also closes it.',
+  'designLab.preview.tooltip.desc':
+    'Tooltip: shows after 300 ms of hover or focus, closes on Esc and flips below when space runs out.',
+  'designLab.preview.tooltip.label': 'Tooltip placed above',
+  'designLab.preview.tooltip.trigger': 'Hover for the tooltip',
+  'designLab.preview.tooltip.bottom': 'Tooltip placed below',
+  'designLab.preview.tooltip.bottomTrigger': 'Hover for the one below',
+  'designLab.preview.tooltip.icon': 'Icon button tooltip',
+  'designLab.preview.actionMenu.desc':
+    'Row action menu: arrow keys / Home / End / Esc; clicking outside closes it and restores focus.',
+  'designLab.preview.actionMenu.rename': 'Rename',
+  'designLab.preview.actionMenu.duplicate': 'Duplicate',
+  'designLab.preview.actionMenu.archive': 'Archive (unavailable)',
+  'designLab.preview.actionMenu.delete': 'Delete',
+  'designLab.preview.mention.desc':
+    'Mention list: the listbox half of the combobox; arrow keys move aria-activedescendant.',
+  'designLab.preview.mention.hint':
+    'Sample members: hover highlights; picking only moves the highlight and sends nothing.',
+
   // 0.46 top-level page subtitles (the header holds only title and subtitle)
   'gateway.subtitle':
     'The gateway this browser is connected to: endpoint, node identity, version, and uptime.',
