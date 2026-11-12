@@ -47,6 +47,7 @@ import {
 } from '@vessel-agent/core';
 import { type AgentInboxPort, createInboxNoticeHook, createInboxTool } from './inbox.js';
 import { buildMemberBodyPorts } from './member-ports.js';
+import { createSelfCardDeltaHook, selfCardIdentityOf } from './self-card-delta.js';
 import { HUMAN_PRINCIPAL, SYSTEM_PRINCIPAL } from './team-address.js';
 import type {
   AgentMessage,
@@ -461,6 +462,12 @@ interface MemberExecutionEntry {
    * hook 在 spawn 时注册、之后才建 entry，故开关由这个可变对象承载。
    */
   inboxState?: { enabled: boolean };
+  /**
+   * 0.52：这具 body 的「基础信息真值」（spawn 快照起步，之后由 `noteSelfCardIdentity`
+   * 推进）。Self Card 本身仍是构造期只读快照；变化经这个盒子在下一轮 BeforeLlm 变成一条
+   * 环境信息（`self-card-delta` hook），不重建 body、不改 system 前缀。
+   */
+  selfCardIdentity: { member: MemberExecutionMember };
 }
 
 /** `buildSurface` 的结果：成员应有的工具（spawn / 热刷新 / 推导共用这一份规格）。 */
@@ -941,6 +948,23 @@ export class MemberExecutionHost implements MemberExecutionPort {
     for (const tool of surface.tools) pluginHost.registerTool(tool);
 
     const selfCard = this.buildSelfCard(member, model, surface.tools);
+    // 0.52：Self Card 是构造期只读快照 —— 基础信息改了不能热替换它（那是 system 前缀，
+    // 变一次就让整段历史缓存失效）。改成「增量告知」：这具 body 自带一个真值盒（此刻 =
+    // 这张卡），`AgentService.update` 时推进；hook 每轮 diff「模型相信的值」与它，变了就
+    // 注入一条环境信息。每个 hook 实例 = 一具 body，rotate 换身体时状态自然重置。
+    const selfCardIdentity = { member };
+    pluginHost.registerHook(
+      createSelfCardDeltaHook({
+        baseline: selfCardIdentityOf(member, mode),
+        // 权限档每轮现算：Team 成员在 `forceBridgeForTeams` 下会被强制 bridge，是「进队 /
+        // 转正」直接改出来的身份变化，不能只报 team 那一行。
+        current: () =>
+          selfCardIdentityOf(
+            selfCardIdentity.member,
+            this.effectivePermissionMode(selfCardIdentity.member),
+          ),
+      }),
+    );
     const events = new MemoryEventStream();
     if (inbox !== undefined && inboxState !== undefined) {
       pluginHost.registerHook(
@@ -1038,6 +1062,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
       mode,
       running: false,
       toolsRefreshPending: false,
+      // 与注册给 hook 的是**同一个对象**：`noteSelfCardIdentity` 写这里，hook 下一轮就读到。
+      selfCardIdentity,
       ...(inboxState !== undefined ? { inboxState } : {}),
     };
     this.entries.set(member.session_id, entry);
@@ -1662,6 +1688,23 @@ export class MemberExecutionHost implements MemberExecutionPort {
       }
     }
     return applied;
+  }
+
+  /**
+   * 0.52：基础信息变更的真值同步（**不**重建 body、**不**碰 Self Card）。
+   *
+   * `member` 是变更后的完整身份（`AgentService` 从 registry 记录现算）。这里只把它写进该
+   * body 的真值盒：下一轮 BeforeLlm 由 `self-card-delta` hook 与「模型相信的值」diff，变了
+   * 就注入一条环境信息，没变就什么都不发（同一变更因此只报一次）。
+   *
+   * 返回命中的 body 数（与 `applyContextPolicy` 同口径）。0 = 没有活体：此时下一次 spawn
+   * 直接用新记录建卡，本来就不需要告知。
+   */
+  noteSelfCardIdentity(member: MemberExecutionMember): number {
+    const entry = this.entries.get(member.session_id);
+    if (entry === undefined || entry.memberId !== member.id) return 0;
+    entry.selfCardIdentity.member = member;
+    return 1;
   }
 
   /**

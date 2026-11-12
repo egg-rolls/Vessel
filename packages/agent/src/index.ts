@@ -58,6 +58,20 @@ export {
   type MemberExecutionPermissionMode,
   type MemberRunnableAgent,
 } from './runtime.js';
+export {
+  createSelfCardDeltaHook,
+  diffSelfCardIdentity,
+  formatSelfCardDelta,
+  SELF_CARD_DELTA_DETAIL_MARK,
+  SELF_CARD_DELTA_HOOK,
+  SELF_CARD_DELTA_MESSAGE_NAME,
+  SELF_CARD_FIELDS,
+  type SelfCardChange,
+  type SelfCardDeltaHookOptions,
+  type SelfCardField,
+  type SelfCardIdentity,
+  selfCardIdentityOf,
+} from './self-card-delta.js';
 export { AgentServiceImpl, createAgentService } from './service.js';
 export {
   AGENT_SNAPSHOT_VERSION,
