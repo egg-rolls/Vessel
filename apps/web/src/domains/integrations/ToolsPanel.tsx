@@ -12,7 +12,14 @@ import {
 } from '../../components/States';
 import { Badge, Button, SearchInput, Select } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
-import type { AgentSummary, ToolInfo, ToolListResponse, ToolSurface } from '../../gateway/types';
+import type {
+  AgentSummary,
+  ToolInfo,
+  ToolListResponse,
+  ToolSurface,
+  ToolUnavailable,
+  ToolUnavailableReason,
+} from '../../gateway/types';
 import { t } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
@@ -75,6 +82,52 @@ function SurfaceBadge({ surface }: { surface: ToolSurface | undefined }) {
   );
 }
 
+/**
+ * 「节点有、这个成员拿不到」的原因文案。
+ *
+ * 用 switch 而不是拼 key 字符串：这样每个 key 都是以字面量出现在 `t()` 实参位置，
+ * `check-i18n` 的 I2 / I5 才看得见（helper 里拼出来的 key 会被判成孤儿）。
+ */
+function unavailableReasonLabel(reason: ToolUnavailableReason): string {
+  switch (reason) {
+    case 'parent_answered':
+      return t('integrations.tools.unavailableParentAnswered');
+    case 'readonly_mode':
+      return t('integrations.tools.unavailableReadonlyMode');
+    default:
+      return t('integrations.tools.unavailableUnknown');
+  }
+}
+
+/**
+ * 被规则挡住的工具清单（成员口径才渲染）。
+ *
+ * 为什么要在工具列表之外单列这一段：成员工具面是「节点全量」，所以「节点里搜得到、
+ * 这里搜不到」这件事总有原因。不解释原因，人只会以为面板漏了；把名字 + 规则并排列出来，
+ * 才看得出是被一条规则挡的，而不是一次故障。
+ */
+function UnavailableTools({ agent, entries }: { agent: string; entries: ToolUnavailable[] }) {
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="m-0 flex flex-wrap items-center gap-2 text-sm font-medium text-ink">
+        {t('integrations.tools.unavailableTitle', { agent })}
+        <Badge tone="neutral">{entries.length}</Badge>
+      </h3>
+      <p className="m-0 text-sm text-muted">{t('integrations.tools.unavailableHint')}</p>
+      <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+        {entries.map((entry) => (
+          <li className="flex flex-wrap items-center gap-2" key={entry.name}>
+            <span className="min-w-0 break-words font-mono text-sm text-muted">{entry.name}</span>
+            <Badge tone={entry.reason === 'unknown' ? 'warn' : 'neutral'}>
+              {unavailableReasonLabel(entry.reason)}
+            </Badge>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function ToolsPanel() {
   const { client, connectionState, hasToken, epoch } = useConnection();
   const connected = hasToken && connectionState === 'open';
@@ -114,6 +167,16 @@ export function ToolsPanel() {
    * 旧 gateway 忽略了 `agent_id`（照旧回了插件面）—— 界面按「未知」展示，不假装是实取。
    */
   const surface = agentId === '' ? undefined : catalog?.surface;
+  /**
+   * 被规则挡在成员面外的工具（节点有这个工具、这个成员没有）。
+   *
+   * 节点口径恒为空；旧 gateway 不返回这个字段 ⇒ 空（不渲染那一段），因为「不知道」不能
+   * 说成「一个都没挡」。
+   */
+  const unavailable = useMemo<ToolUnavailable[]>(
+    () => (agentId === '' ? [] : (catalog?.unavailable ?? [])),
+    [agentId, catalog],
+  );
   const selectedMember = members.find((member) => memberIdOf(member) === agentId);
   const config = resourceData(configState);
   const permissionLists = useMemo(() => readPermissionLists(config?.config), [config]);
@@ -286,6 +349,7 @@ export function ToolsPanel() {
           })}
         </div>
       )}
+      {unavailable.length > 0 && <UnavailableTools agent={agentLabel} entries={unavailable} />}
       {detail && (
         <ModalShell
           label={t('integrations.tools.dialogLabel', { name: detail.name })}

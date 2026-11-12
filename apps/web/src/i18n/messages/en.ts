@@ -1408,6 +1408,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'integrations.tools.surfaceUnavailable': 'Surface unknown',
   'integrations.tools.sourceMember': 'Member built-in',
   'integrations.tools.emptyMember': '{agent} has no tools right now.',
+  'integrations.tools.unavailableTitle': 'Node tools {agent} cannot use:',
+  'integrations.tools.unavailableHint':
+    'A member can use every node tool; these are blocked by a rule (not missing from the node, and not a gap in this panel).',
+  'integrations.tools.unavailableParentAnswered': 'Needs a human reply: no bridge on this body',
+  'integrations.tools.unavailableReadonlyMode': 'Dropped in read-only mode',
+  'integrations.tools.unavailableUnknown': 'Not on this body yet (pending tool refresh)',
   'integrations.mcp.globalDesc': 'The MCP control plane is gateway-global.',
   'integrations.mcp.counts': '{total} servers · {failed} failed',
   'integrations.mcp.reconnectAll': 'Reconnect all failed ({count})',

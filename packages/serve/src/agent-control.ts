@@ -412,6 +412,19 @@ export interface AgentToolSurfaceEntryLike {
 export interface AgentToolSurfaceLike {
   surface: 'live' | 'derived';
   tools: AgentToolSurfaceEntryLike[];
+  /**
+   * 节点有、这具成员身体拿不到的工具 + 原因（0.51 additive）。
+   *
+   * 判据由执行内核算（只有它知道「为什么没给」），serve 只透传，不在这一层重新解释。
+   * reason 的含义见 `MemberToolUnavailableReason`。
+   */
+  unavailable: AgentToolSurfaceUnavailableLike[];
+}
+
+/** 被挡在成员工具面外的一条工具：只给名字与原因（键面与 `tools[]` 不同）。 */
+export interface AgentToolSurfaceUnavailableLike {
+  name: string;
+  reason: 'parent_answered' | 'readonly_mode' | 'unknown';
 }
 
 /** `agents.inbox` 入参（只读）。 */

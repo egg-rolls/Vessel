@@ -1349,6 +1349,12 @@ export const messages = {
   'integrations.tools.surfaceUnavailable': '工具面未知',
   'integrations.tools.sourceMember': '成员内置',
   'integrations.tools.emptyMember': '{agent} 当前没有任何工具。',
+  'integrations.tools.unavailableTitle': '节点有、{agent} 拿不到的工具：',
+  'integrations.tools.unavailableHint':
+    '成员能用节点上的全部工具，这几条是被规则挡住的（不是节点上没有、也不是面板漏了）。',
+  'integrations.tools.unavailableParentAnswered': '需人类应答：这具身体没有 bridge',
+  'integrations.tools.unavailableReadonlyMode': '只读档收掉',
+  'integrations.tools.unavailableUnknown': '这具身体还没拿到（等工具热刷新）',
   'integrations.mcp.globalDesc': 'MCP 控制面为 gateway 全局状态。',
   'integrations.mcp.counts': '{total} 个服务 · {failed} 个失败',
   'integrations.mcp.reconnectAll': '重连全部失败（{count}）',

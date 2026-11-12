@@ -155,6 +155,8 @@ export {
   type MemberToolSource,
   type MemberToolSurface,
   type MemberToolSurfaceEntry,
+  type MemberToolUnavailableEntry,
+  type MemberToolUnavailableReason,
   type MemberTurnResult,
   type MemberVisibility,
   type PeerStopChange,

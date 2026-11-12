@@ -408,6 +408,21 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
           // `live` = 该成员活身体宿主里实取；`derived` = 当前没有活身体，
           // 按「一具新身体会拿到什么」推导（同一套 selectTools + inbox 判定，不 spawn）。
           surface: { type: 'string', enum: ['live', 'derived'] },
+          // 节点有、这具成员身体拿不到的工具 + 原因（0.51 additive，执行内核算，serve
+          // 只透传）。成员工具面 = 节点全量，剩下能挡的只有 deny 只读档与「要人类应答
+          // 但没 bridge」两条，所以这条清单是口径的一部分，不是调试信息：界面要能说清
+          // 「不是漏了，是被规则挡的」。
+          unavailable: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['name', 'reason'],
+              properties: {
+                name: { type: 'string' },
+                reason: { type: 'string', enum: ['parent_answered', 'readonly_mode', 'unknown'] },
+              },
+            },
+          },
         },
       },
       handler: async (params) => {
@@ -418,14 +433,20 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
         const agent = deps.agent;
         const resolve = agent?.toolSurface;
         // 没有这个透传（老装配 / agent 关闭）⇒ **退化成今天的节点口径**：响应里没有
-        // `surface` / `source`，客户端据此知道「这不是成员快照」，既不 500，也不假装答得出。
+        // `surface` / `source` / `unavailable`，客户端据此知道「这不是成员快照」，
+        // 既不 500，也不假装答得出。
         if (agent === undefined || resolve === undefined) return toolsPayload();
         const surface = await resolve.call(agent, agentId);
         // 有透传但这个 id 答不出工具面（未知成员 / 老执行内核）：not_found，绝不静默返回空列表。
         if (surface === undefined) {
           throw new RpcError('not_found', `Agent not found: ${agentId}`, { agent_id: agentId });
         }
-        return { agent_id: agentId, surface: surface.surface, tools: surface.tools };
+        return {
+          agent_id: agentId,
+          surface: surface.surface,
+          tools: surface.tools,
+          unavailable: surface.unavailable,
+        };
       },
     },
   ];

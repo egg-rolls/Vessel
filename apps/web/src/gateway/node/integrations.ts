@@ -47,6 +47,9 @@ export abstract class IntegrationsClient extends TeamsClient {
       tools: body.tools ?? [],
       ...(body.surface !== undefined ? { surface: body.surface } : {}),
       ...(body.agent_id !== undefined ? { agent_id: body.agent_id } : {}),
+      // 0.51 additive：节点有但该成员拿不到的工具 + 原因。旧 gateway 不返回 ⇒ 保持缺省
+      // （界面按「不知道有没有被挡」展示，而不是假装一个都没被挡）。
+      ...(body.unavailable !== undefined ? { unavailable: body.unavailable } : {}),
     };
   }
 
