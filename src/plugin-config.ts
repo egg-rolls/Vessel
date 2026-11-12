@@ -150,6 +150,11 @@ export function declarativePluginEntries(config: VesselConfig): PluginConfig[] {
  * 0.11.1（DECISION-022 §2.4）：`agentCwd` 是全局默认工作目录，只作为
  * `basic-tools` 安装配置的 `cwd` 兜底；显式/声明式插件配置里的 `cwd` 始终优先。
  *
+ * 0.51：这份 `cwd` 是**全 tenant 一份的全局默认**，不是「成员 cwd」。工具调用期的完整
+ * 优先级是 参数 cwd > 这里的 `agent.cwd` > 成员 cwd（`ToolContext.cwd`，Team 基础路径）
+ * > `process.cwd()`（见 `plugins/tools/basic-tools/src/index.ts` 的 `resolveCallCwd`）。
+ * 也就是说：只要用户显式配了 `agent.cwd`，它就压过 Team 基础路径 —— 这是用户口径。
+ *
  * 0.52：合并完再补一次 `media` 的路径边界回落（`allowed_roots` / `deny_paths` 优先取
  * media 自己的，缺了才用 basic-tools 的），见 `applyPathBoundaryFallback`。
  */

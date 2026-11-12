@@ -41,6 +41,10 @@ function resolveFromCwd(input: string): string {
  * 解析默认工作目录（0.11.1，DECISION-022 §2.4）。
  * 支持 `~`；相对路径按进程 cwd 解析为绝对路径。未配置/空串返回 undefined。
  * 只做路径解析，不检查目录是否存在（存在性由工具/插件在调用时处理）。
+ *
+ * 0.51：它是**全局默认**，不是「成员 cwd」。工具侧的完整优先级是
+ * 参数 cwd > `agent.cwd`（本函数）> 成员 cwd（Team 基础路径快照）> `process.cwd()`；
+ * 成员 cwd 由 `packages/agent` 注入 `ToolContext.cwd`，与本函数互不影响。
  */
 export function resolveAgentCwd(config: VesselConfig): string | undefined {
   const raw = config.agent?.cwd;

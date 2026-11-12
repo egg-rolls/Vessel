@@ -274,6 +274,9 @@ function parseMember(value: unknown, version: number): PersistedAgentRecord | un
   if (model !== undefined) record.model = model;
   const systemPrompt = optionalString(value.system_prompt);
   if (systemPrompt !== undefined) record.system_prompt = systemPrompt;
+  // 0.51：成员 cwd 快照（additive；旧快照没有这个键 = 没有成员 cwd）
+  const cwd = optionalString(value.cwd);
+  if (cwd !== undefined) record.cwd = cwd;
   const currentBinding = parseBindingPointer(value.current_body);
   if (currentBinding !== undefined) record.current_body = currentBinding;
   const bindingHistory = parseBindingHistory(value.body_history);

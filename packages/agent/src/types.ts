@@ -160,6 +160,13 @@ export interface PersistedAgentRecord {
   team_id?: string;
   model?: string;
   system_prompt?: string;
+  /**
+   * 0.51：成员 cwd 快照（create 时显式选中 Team 的基础路径；additive，旧快照忽略未知键）。
+   *
+   * 落盘而不是每次从 Team 重算：Team.workspace 创建后不可改，快照与重算等价，但它能
+   * 在 Team 文件丢失 / 迁移时保住「这具 body 当初在哪跑」这个事实。
+   */
+  cwd?: string;
   /** 兼容视图：primary binding 指针（v4 以 `bodies[]` 为真相） */
   current_body?: BindingPointer;
   /** 已退役 Binding 的历史（只追加，最多 20 条；当前 Binding 不在其中） */
@@ -269,6 +276,13 @@ export interface MemberExecutionMember {
   team_id?: string;
   model?: string;
   system_prompt?: string;
+  /**
+   * 0.51：成员 cwd（工具默认工作目录）。由 spawn 解析后写进 EU 的
+   * `overrides`/`Request.cwd`，最终成为 `ToolContext.cwd`。
+   *
+   * 与 `system_prompt` 一样属于「spawn 时的快照」语义：改它要等下一具 body。
+   */
+  cwd?: string;
   /**
    * Stage 3：ControlPlane 为该 binding 获取的 BindingLease 凭据。
    * agent 层只透传；ExecutionUnit 侧消费（续租 / fencing / dispose 释放）。
@@ -1267,6 +1281,14 @@ export interface AgentServiceOptions {
   defaultWorkspace?: string;
   /** 0.19 S3：Team 绑定端口；缺失时 `create` 永远 unbound */
   teamBinder?: TeamBinder;
+  /**
+   * 0.51：系统锚点 workspace（`<dataDir>/default` / `<dataDir>/headless`）。
+   *
+   * 只用于**排除**：锚点 Team 的 workspace 不是用户为这个成员选的位置，目录还可能不存在，
+   * 所以不烧进 `MemberRecord.cwd`（见 `packages/agent/src/member-cwd.ts` 的铁律 1）。
+   * 缺省（纯内存 / 测试）= 没有锚点，任何显式选中的 Team 都参与。
+   */
+  anchorWorkspaces?: readonly string[];
   /** 0.19 S4：按 team_id 读取解析后的 policy；缺失 = 无 team policy */
   teamPolicy?: (teamId: string) => TeamPolicy | undefined;
   /** 0.19 S4：conversation 预算端口；缺失 = 不执行预算（测试 / 纯内存） */

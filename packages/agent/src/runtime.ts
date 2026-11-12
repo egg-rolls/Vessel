@@ -46,6 +46,7 @@ import {
   type WorkingContext,
 } from '@vessel-agent/core';
 import { type AgentInboxPort, createInboxNoticeHook, createInboxTool } from './inbox.js';
+import { resolveMemberCwd } from './member-cwd.js';
 import { buildMemberBodyPorts } from './member-ports.js';
 import { HUMAN_PRINCIPAL, SYSTEM_PRINCIPAL } from './team-address.js';
 import type {
@@ -392,6 +393,14 @@ export interface MemberExecutionHostOptions {
    * 缺省时回落到 `summarizer`。
    */
   summarizerForSession?: (sessionId: string) => ContextSummarizer;
+  /**
+   * 0.51：按成员解析 Team 基础路径（运行期兜底，`MemberRecord.cwd` 缺失时才用）。
+   *
+   * 为什么还要这一条：记录里的 cwd 是 create 那一刻的快照，老快照 / 手工写的记录没有它；
+   * 而 `team_id` 是持久化的，装配层拿 `teamStore.get(teamId)?.workspace` 就能重算。
+   * 实现方**必须自己排除锚点 Team**（装配层传 `anchorWorkspaces` 给 AgentService 的那份）。
+   */
+  cwdFor?: (member: MemberExecutionMember) => string | undefined;
   /** 成员深度（Self Card） */
   depth?: number;
   logger?: Logger;
@@ -870,6 +879,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
   private readonly summarizer: ContextSummarizer | undefined;
   private readonly summarizerForSession: ((sessionId: string) => ContextSummarizer) | undefined;
   private readonly depth: number;
+  /** 0.51：记录里没有 cwd 时的运行期兜底（装配层按 team_id 查 Team 基础路径） */
+  private readonly cwdFor: ((member: MemberExecutionMember) => string | undefined) | undefined;
   private readonly logger: Logger;
   private readonly tenantId?: string;
   private readonly nodeId?: string;
@@ -903,6 +914,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
     this.summarizer = options.summarizer;
     this.summarizerForSession = options.summarizerForSession;
     this.depth = options.depth ?? 1;
+    this.cwdFor = options.cwdFor;
     this.logger = options.logger ?? noopLogger;
     this.tenantId = options.tenantId;
     this.nodeId = options.nodeId;
@@ -981,6 +993,10 @@ export class MemberExecutionHost implements MemberExecutionPort {
     // per-body 可变策略：每次 Run 的 `contextFactory` 读取同一对象，
     // `applyContextPolicy` 只改这里，下一次 Run 自然生效。
     const contextPolicy = { autoCompact: policy.autoCompact };
+    // 0.51 Bug 1：成员 cwd 在 spawn 时定一次（与 selfCard / systemPrompt 同一档快照语义）。
+    // 拿不到有效目录就**降级**：warn 一次，然后不注入 —— 工具会退回 agent.cwd / process.cwd()。
+    // 绝不让「Team 目录不在」把 bash / read / edit 变成硬错（`main` 的工具面同理）。
+    const memberCwd = this.memberCwdFor(member);
     const runtime = await this.runtime.getOrCreateExecutionUnit({
       tenantId: this.tenantId ?? 'default',
       sessionId: member.session_id,
@@ -992,6 +1008,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
       ...(this.leaseService !== undefined ? { leaseService: this.leaseService } : {}),
       // Stage 3：ControlPlane 获取的 BindingLease 凭据随 spawn 透传给 EU（EU 只续租/释放）。
       ...(member.binding_lease !== undefined ? { bindingLease: member.binding_lease } : {}),
+      // 0.51 Bug 1：成员 cwd 的唯一注入点 —— EU 每次工具调用把它放进 `ToolContext.cwd`。
+      ...(memberCwd !== undefined ? { cwd: memberCwd } : {}),
       pluginHost,
       // 成员宿主已自带工具面；不让 tenant profile 的插件再次安装进来。
       plugins: [],
@@ -1934,6 +1952,36 @@ export class MemberExecutionHost implements MemberExecutionPort {
       );
     }
     return 'This is a non-interactive run; state blockers in your final text.';
+  }
+
+  /**
+   * 解析本具 body 的 cwd（0.51 Bug 1）。
+   *
+   * 顺序：记录快照（`member.cwd`，create 时烧进去的显式 Team 基础路径）> 装配层的
+   * `cwdFor`（按 `team_id` 重查 Team）。两级都不可用 → 返回 `undefined`，工具退回
+   * `agent.cwd` / `process.cwd()`。
+   *
+   * 为什么在这里做 fs 校验并 warn：这是**唯一**知道「这个值是从哪一级来的」的地方，
+   * 也是第一个有 logger 的地方。工具侧还会再判一次（目录可能在 body 活着的过程中消失），
+   * 那次只能静默降级 —— 所以「降级发生过」这件事只能在这里说清楚。
+   */
+  private memberCwdFor(member: MemberExecutionMember): string | undefined {
+    const teamCwd = member.cwd === undefined ? this.cwdFor?.(member) : undefined;
+    const picked = resolveMemberCwd({
+      ...(member.cwd !== undefined ? { recordCwd: member.cwd } : {}),
+      ...(teamCwd !== undefined ? { teamCwd } : {}),
+    });
+    if (picked.cwd !== undefined) return picked.cwd;
+    if (picked.degraded === 'not_a_directory') {
+      this.logger.warn('agent.member.cwd_degraded', {
+        member_id: member.id,
+        session_id: member.session_id,
+        ...(member.team_id !== undefined ? { team_id: member.team_id } : {}),
+        rejected: picked.rejected,
+        fallback: 'agent.cwd / process.cwd()',
+      });
+    }
+    return undefined;
   }
 
   private buildSelfCard(

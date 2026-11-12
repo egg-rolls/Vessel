@@ -37,6 +37,16 @@ export {
   type StoredInboxMessage,
 } from './inbox.js';
 export {
+  isAnchorWorkspace,
+  isUsableDirectory,
+  MEMBER_CWD_SOURCES,
+  memberCwdFromTeam,
+  type MemberCwdPick,
+  type MemberCwdSource,
+  type ResolveMemberCwdInput,
+  resolveMemberCwd,
+} from './member-cwd.js';
+export {
   bindMemberInboxPort,
   buildMemberBodyPorts,
   createInboxMemberBodyContribution,
@@ -58,8 +68,7 @@ export {
   type MemberExecutionPermissionMode,
   type MemberRunnableAgent,
 } from './runtime.js';
-export { AgentServiceImpl, createAgentService } from './service.js';
-export {
+export { AgentServiceImpl, createAgentService } from './service.js';export {
   AGENT_SNAPSHOT_VERSION,
   type AgentSnapshotFile,
   AgentSnapshotStore,

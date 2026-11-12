@@ -23,6 +23,7 @@ import {
   DEFAULT_OWNER,
   type FederationSendPort,
   FileTeamStore,
+  memberCwdFromTeam,
   type MemberExecutionHostOptions,
   type MemberExecutionPermissionMode,
   type MemberPermissionState,
@@ -197,6 +198,11 @@ export function buildMemberExecutionOptions(
   onPermissionState?: (memberId: string, sessionId: string, state: MemberPermissionState) => void,
   onMemberEvent?: (memberId: string, sessionId: string, event: RunEvent) => void,
   teamPolicy?: MemberExecutionHostOptions['permissionPolicy'],
+  /**
+   * 0.51：成员 cwd 的运行期兜底（记录里没有 cwd 时按 `team_id` 重查 Team）。
+   * 由 `createAgentServiceWiring` 用 `teamStore` 构造；纯选项构造场景可缺省。
+   */
+  cwdFor?: MemberExecutionHostOptions['cwdFor'],
 ): MemberExecutionHostOptions {
   // 成员 ExecutionUnit 只能通过 `agent` 工具 rotate 自己（tool handler 收紧），
   // 因此 member runtime 免确认该工具；owner 侧权限不变。
@@ -237,6 +243,7 @@ export function buildMemberExecutionOptions(
     ...(options.session !== undefined ? { session: options.session } : {}),
     ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
     ...(options.leaseService !== undefined ? { leaseService: options.leaseService } : {}),
+    ...(cwdFor !== undefined ? { cwdFor } : {}),
     tenantId: options.tenantId,
     // 来源行的 node 段：与 federation 端口同源（bootstrap 的 nodeIdentity），
     // 只在装配期传一次，执行内核不自己解析。
@@ -338,6 +345,27 @@ export async function createAgentServiceWiring(
   // 锚点不需要目录存在 —— `ensureForWorkspace` 只按路径算身份，不建目录。
   const headlessTeamWorkspace = path.join(options.dataDir, 'headless');
 
+  /**
+   * 0.51 Bug 1：系统锚点 workspace。两者都**只按路径算身份**（目录可能不存在），
+   * 所以绝不能当 cwd —— 那会让 `main` 的 bash / read / edit 直接报「目录不存在」。
+   * 与 `bootstrap` 的 `resolveDefaultTeamAnchor` 同一条口径（`<dataDir>/default`）。
+   */
+  const anchorWorkspaces = [path.resolve(options.dataDir, 'default'), headlessTeamWorkspace];
+
+  /**
+   * 成员 cwd 的运行期兜底：记录里没有 cwd 时，按持久化的 `team_id` 重查 Team 基础路径。
+   *
+   * 为什么不在 create 时就算完：老快照 / 手工记录没有 `MemberRecord.cwd`，而 `team_id`
+   * 一定在；`Team.workspace` 创建后不可改，所以重查与快照等价。
+   */
+  const memberCwdFor: MemberExecutionHostOptions['cwdFor'] = (member) => {
+    const teamId = member.team_id;
+    if (teamId === undefined) return undefined;
+    const team = teamStore.get(teamId);
+    if (team === undefined) return undefined;
+    return memberCwdFromTeam(team.workspace, anchorWorkspaces);
+  };
+
   // 成员 bridge 进入/离开权限等待时回调 AgentService；service 在 runtime 之后构造，
   // 用晚绑定避免循环依赖。
   let serviceRef: AgentService | undefined;
@@ -347,6 +375,7 @@ export async function createAgentServiceWiring(
       (memberId, sessionId, state) => serviceRef?.notePermissionState(memberId, sessionId, state),
       (memberId, sessionId, event) => serviceRef?.noteMemberEvent(memberId, sessionId, event),
       (teamId) => (teamId === undefined ? undefined : teamStore.policy(teamId)?.permission),
+      memberCwdFor,
     ),
   );
   // 0.27：body lease 取代 per-run session 写锁；`main` 也不再走特殊执行路径。
@@ -386,6 +415,8 @@ export async function createAgentServiceWiring(
       : {}),
     teamBinder: teamStore,
     teamPolicy: (teamId) => teamStore.policy(teamId),
+    // 0.51 Bug 1：锚点 workspace 不进成员 cwd（判据见 packages/agent/src/member-cwd.ts）
+    anchorWorkspaces,
     ...(budget !== undefined ? { budget } : {}),
     ...(options.temporaryTtlHours !== undefined
       ? { temporaryTtlHours: options.temporaryTtlHours }
