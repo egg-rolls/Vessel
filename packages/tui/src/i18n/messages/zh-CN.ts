@@ -168,6 +168,10 @@ export const zhCN = {
   'item.restarted': '上下文已重启 · {session} · epoch {from} → {epoch}',
   'item.compactForked': '上下文已压缩分叉 · {from} → {to} · epoch {epoch}',
   'item.ask': 'ask · {count} 个问题',
+  // rotate 交接嘱托（新身体收到的第一条启动指令，由发起 rotate 的 agent 写）
+  'item.handoff.title': '⟳ rotate 交接',
+  'item.handoff.epoch': 'epoch {epoch}',
+  'item.handoff.source': '发起 rotate 的 agent 写的交接嘱托 · 不是人打的字',
   'item.errorUnknown': '运行失败。',
   'item.run.completed': '完成',
   'item.run.failed': '失败',

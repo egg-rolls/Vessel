@@ -9,6 +9,7 @@
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { t } from '../i18n/index.js';
+import { rotateHandoffOfName } from '../repl/project/ui-item.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import type { CommandEntry, CommandResult, ReplState } from './commands.js';
@@ -88,14 +89,24 @@ export function formatSessionMarkdown(
   for (const message of messages) {
     // 热应用/来源标注的上下文消息只给模型看，不进入人类可读导出。
     if (message.name?.startsWith('vessel:')) continue;
+    // rotate 交接嘱托是发起 rotate 的 agent 写的（`rotate:handoff[:<epoch>]`）：
+    // 导出的标题必须说清这一点，否则 Markdown 里它长得像一句人打的 `## User`。
+    const handoff =
+      message.role === 'user' && message.name !== undefined
+        ? rotateHandoffOfName(message.name)
+        : undefined;
     const heading =
-      message.role === 'assistant'
-        ? 'Assistant'
-        : message.role === 'user'
-          ? 'User'
-          : message.role === 'tool'
-            ? `Tool${message.name ? ` (${message.name})` : ''}`
-            : message.role;
+      handoff !== undefined
+        ? handoff.epoch !== undefined
+          ? `Rotate handoff (epoch ${handoff.epoch})`
+          : 'Rotate handoff'
+        : message.role === 'assistant'
+          ? 'Assistant'
+          : message.role === 'user'
+            ? 'User'
+            : message.role === 'tool'
+              ? `Tool${message.name ? ` (${message.name})` : ''}`
+              : message.role;
     lines.push(`## ${heading}`, '');
     if (options.reasoning && message.reasoning_content) {
       lines.push(

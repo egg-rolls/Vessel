@@ -14,7 +14,9 @@
  * - tool:orphan:<绝对下标>     只有结果、没有调用的历史 tool 消息
  * - notice:<item.key>         上下文 / 原始事件行
  * - run:<runId>:input         run 的输入：人的输入（气泡）/ agent 投递（agent 卡）/
- *                             运行时上下文输入（`vessel:*` → 环境信息卡，落盘后让位给历史）
+ *                             运行时上下文输入（`vessel:*` → 环境信息卡）/
+ *                             rotate 交接嘱托（`rotate:handoff[:<epoch>]` → 交接卡）；
+ *                             落盘后一律让位给历史那份
  * - run:<runId>:failure       一次 run 的失败卡（事件流优先，会话记录快照兜底）
  *
  * 段 key 为什么锚 seq 而不是段序（`text:<n>`）：段序是「第几个段」，回填把更早的一段插进来
@@ -44,6 +46,7 @@ import {
   mergeEnvNoticeCards,
 } from './env-notice';
 import { buildHistoryToolItems } from './history-tools';
+import { type RotateHandoff, rotateHandoffOf } from './rotate-handoff';
 import { compareTimelineEntries } from './timeline-order';
 import { type ChatRenderItem, foldToolItems, type ToolCardStatus } from './tool-cards';
 
@@ -140,6 +143,26 @@ export interface AskAnswerItem extends ItemMeta {
   /** 这条消息的完整正文（回退展示 / 复制用，与用户气泡同一份数据）。 */
   text: string;
   card: AskAnswerData;
+}
+
+/**
+ * 「rotate 交接」item：新身体的第一条启动嘱托。
+ *
+ * 身份来自 `Message.name` 的 `rotate:handoff[:<epoch>]` 前缀（历史侧）与
+ * `run.started.input_name`（运行态），解析见 `rotate-handoff.ts`。这条消息仍然是
+ * **正常落盘的 user 消息**：它是该轮真实输入，正文就是新身体这一轮唯一的工作指令。
+ * 本 item 只换表示层（交接卡而不是用户气泡），不复制、不改写正文。
+ *
+ * 有 `runId` 是为了参与「run 的用户输入被历史消息认领后让位」那条规则：同一个逻辑
+ * 对象在 live 与历史里必须是同一个 item（同 ask-answer 的口径）。`epoch` 缺省 =
+ * 消息名没带 / 读不懂，渲染层不写 epoch（不猜）。
+ */
+export interface RotateHandoffItem extends ItemMeta, RotateHandoff {
+  kind: 'rotate-handoff';
+  /** 运行态来自 run 分组；历史消息没有 runId。 */
+  runId?: string;
+  /** 这条消息的完整正文（与 `Message.content` 一字不差）。 */
+  text: string;
 }
 
 export interface RunTextItem extends ItemMeta {
@@ -313,6 +336,7 @@ export type TranscriptItem =
   | RuntimeNoticeItem
   | RunInputItem
   | AskAnswerItem
+  | RotateHandoffItem
   | RunTextItem
   | RunReasoningItem
   | ToolItem
@@ -582,6 +606,25 @@ function isAgentNamed(message: Message): boolean {
   return agentSenderOfName(message.name) !== undefined;
 }
 
+/**
+ * 这条 user 消息是不是**一张卡**而不是人打的字：A2A 投递（`agent:<alias>` → agent 卡）
+ * 与 rotate 交接嘱托（`rotate:handoff[:<epoch>]` → 交接卡）。
+ *
+ * 身份判定复用**建 item 的同一组函数**（`agent-sender.ts` / `rotate-handoff.ts`），
+ * 不在这里另写一份前缀匹配：名字判错就等于把卡当成人说的话，或者反过来。
+ *
+ * 给的第二处读点是 `Transcript.tsx` 的 `previousUserMessage`：这类消息不能当「前一条
+ * 用户输入」（edit / retry 的锚点）—— 交接卡不是人打的字，能被编辑成别的内容或被重发，
+ * 等于把伪造的改写伪装成一段真实发生的交接。**回退成普通消息的名字（例如
+ * `rotate:handoffx`）不算卡**，与人打的字同等对待：它渲成气泡，也就该有气泡的操作。
+ *
+ * `vessel:*` 不在这里（它是运行时上下文，由 `runtimeMessageKind` / 可见性开关管）。
+ */
+export function isCardInputMessage(message: Message): boolean {
+  if (agentSenderOfName(message.name) !== undefined) return true;
+  return rotateHandoffOf(message.name) !== undefined;
+}
+
 /** 历史窗口 → item + 反查表（只依赖 messages 与 offset，调用侧可安全 memo）。 */
 export function buildHistoryIndex(
   messages: readonly Message[],
@@ -719,6 +762,21 @@ export function buildHistoryIndex(
     if (!hasContent && message.role !== 'user' && !isAgentMessage && !hasReasoning) return;
 
     const sourceText = foldedSourceByAgent.get(absIndex);
+    // 「rotate 交接」：新身体的第一条启动嘱托是**发起 rotate 的 agent** 写的
+    // 交接书（内置 rotate 工具 → `input_name = rotate:handoff:<epoch>`），不是人打的字。
+    // 数据照旧（那条 user 消息、正文一字不改），呈现换成交接卡；名字不合形状时退回
+    // 普通消息（绝不吞正文）。
+    const handoff = rotateHandoffOf(message.name);
+    if (handoff !== undefined) {
+      items.push({
+        kind: 'rotate-handoff',
+        key: `msg:${absIndex}`,
+        text: message.content,
+        ...handoff,
+        ...(messageTs !== undefined ? { ts: messageTs } : {}),
+      });
+      return;
+    }
     // 「待批答复」（0.52）：async ask 的答案是一条真正的 user 消息，但人是在待批页
     // 回答的 —— 数据照旧、呈现换成卡。解析不出来就当普通用户气泡（绝不吞正文）。
     const askAnswer = isAskAnswerMessage(message) ? askAnswerCard(message.content) : undefined;
@@ -861,11 +919,15 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
     // run 的输入：历史里还没落盘时由它显示气泡；被历史消息认领后由 assemble 丢掉。
     // 身份随首个事件一起到（`run.started.input_name`）：agent 投递 = `agent:<alias>`
     // → agent 卡；运行时合成输入 = `vessel:*` → 运行时提示卡（环境信息），绝不画成
-    // 用户气泡；两者都不是 = 人自己说的话 → 气泡。
+    // 用户气泡；rotate 交接嘱托 = `rotate:handoff[:<epoch>]` → 交接卡；
+    // 都不是 = 人自己说的话 → 气泡。
     if (trimText(group.input).length > 0) {
       const text = group.input as string;
       const ts = itemTs(undefined);
       const tsPart = ts !== undefined ? { ts } : {};
+      // rotate 交接嘱托在运行态就已知道身份（input_name = rotate:handoff:<epoch>），
+      // 首帧就渲成交接卡，不会先闪一帧用户气泡。
+      const handoff = rotateHandoffOf(group.inputName);
       // 0.52：async ask 的答案在运行态就已知道身份（input_name = ask:answer），
       // 首帧就渲成「待批答复」卡，不会先闪一帧用户气泡。
       const askAnswer =
@@ -873,7 +935,17 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
       // 运行时合成输入（idle 唤醒等）带 vessel:* 身份：渲成运行时提示卡（环境信息卡），
       // 绝不画成用户气泡。
       const noticeKind = runtimeContextKindOfName(group.inputName);
-      if (askAnswer !== undefined) {
+      if (handoff !== undefined) {
+        items.push({
+          kind: 'rotate-handoff',
+          key: `run:${group.runId}:input`,
+          runId: group.runId,
+          text,
+          ...handoff,
+          ...tsPart,
+          ...seqMeta,
+        });
+      } else if (askAnswer !== undefined) {
         items.push({
           kind: 'ask-answer',
           key: `run:${group.runId}:input`,
@@ -1652,12 +1724,14 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
   for (const item of live) {
     const runId = 'runId' in item ? item.runId : undefined;
     // 输入已被历史消息认领：历史那条负责渲染，run 侧那份丢弃（绝不两个气泡 / 两张卡）。
-    // 三种输入共用这条规则：人的输入（run-input）、async ask 的答案（ask-answer）、
-    // 运行时上下文输入（runtime-notice 带 runId，如 idle 唤醒的 vessel:notice）。
+    // 四种输入共用这条规则：人的输入（run-input）、async ask 的答案（ask-answer）、
+    // rotate 交接嘱托（rotate-handoff）、运行时上下文输入（runtime-notice 带 runId，
+    // 如 idle 唤醒的 vessel:notice）。
     if (runId !== undefined && claimedUserByRun.has(runId)) {
       if (item.kind === 'run-input') continue;
       if (item.kind === 'runtime-notice') continue;
       if (item.kind === 'ask-answer') continue;
+      if (item.kind === 'rotate-handoff') continue;
     }
     const state = runId === undefined ? undefined : runState.get(runId);
     if (state === undefined) {

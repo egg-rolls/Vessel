@@ -59,6 +59,23 @@ export interface RunUsage {
 /** TUI history 的唯一类型（PLAN §4.3 字段冻结） */
 export type UiItem =
   | { kind: 'user'; id: string; text: string; at: number }
+  | {
+      /**
+       * rotate 交接嘱托：新身体的启动嘱托，由发起 rotate 的 agent 写
+       * （`Message.name = 'rotate:handoff[:<epoch>]'`，见 `rotateHandoffOfName`）。
+       *
+       * 独立 kind 而不是 `user`：这句话不是在键盘前的人打的，画成 `› 用户行` 会让人
+       * 以为是自己刚发的。**也不许跳过**（它不是 `vessel:*` 上下文，而是该轮真实输入，
+       * 是新身体唯一的指令）：渲染成一行可读标题 + **完整正文**，正文不做行数截断
+       * （`limitUiItems` 的截断分支不覆盖这个 kind，理由同左）。
+       */
+      kind: 'handoff';
+      id: string;
+      text: string;
+      /** 新身体的 epoch（消息名第三段）；缺省 = 名字没带 / 读不懂，标题少写一段。 */
+      epoch?: number;
+      at: number;
+    }
   | { kind: 'assistant'; id: string; text: string; at: number; streaming?: boolean }
   | { kind: 'reasoning'; id: string; text: string; ms?: number }
   | { kind: 'tool'; id: string; view: ToolCallView }
@@ -100,6 +117,33 @@ export type UiItem =
 
 /** 工具结果默认展示行数；超出时渲染折叠提示，Ctrl+O 取回全文 */
 export const TOOL_RESULT_PREVIEW_LINES = 3;
+
+/**
+ * rotate 交接嘱托的消息名前缀（与 `packages/agent/src/service.ts` 的
+ * `ROTATE_HANDOFF_INPUT_NAME`、Web 的 `domains/chat/rotate-handoff.ts` 同一字面量）。
+ *
+ * 本模块是纯投影，不 import agent / web 包，所以字面量各写一份；判定只有这一处，
+ * 别在别处再写一份 `startsWith('rotate:')`。
+ */
+const ROTATE_HANDOFF_NAME_PREFIX = 'rotate:handoff';
+
+/**
+ * 消息名 → 交接元数据（`epoch` 可能缺失）；不是 rotate 交接返回 undefined。
+ *
+ * `rotate:handoff` 与 `rotate:handoff:3` 都认（第三段 = 新身体的 epoch）；
+ * `rotate:handoffx` / `rotate:handoff:abc` 不认 —— 那不是我们生产的名字，
+ * 当作普通消息渲染（宁可少一个标题，也不猜）。
+ */
+export function rotateHandoffOfName(name: string): { epoch?: number } | undefined {
+  if (!name.startsWith(ROTATE_HANDOFF_NAME_PREFIX)) return undefined;
+  const rest = name.slice(ROTATE_HANDOFF_NAME_PREFIX.length);
+  if (rest.length === 0) return {};
+  if (!rest.startsWith(':')) return undefined;
+  const raw = rest.slice(1);
+  if (!/^\d+$/.test(raw)) return undefined;
+  const epoch = Number(raw);
+  return Number.isSafeInteger(epoch) ? { epoch } : {};
+}
 
 /** 投影折叠状态（纯数据；`reduceUiProjection` 不可变推进） */
 export interface UiProjectionState {
@@ -432,6 +476,18 @@ export function reduceUiProjection(
       if (!text) return state;
       let next = closeReasoning(state, event.ts);
       next = closeAssistant(next);
+      // rotate 交接嘱托（`rotate:handoff[:<epoch>]`）：新身体的第一条指令是发起 rotate
+      // 的 agent 写的交接书 —— 渲染成可读标题 + 正文，不当成「用户的输入」那一行。
+      const handoff =
+        typeof message.name === 'string' ? rotateHandoffOfName(message.name) : undefined;
+      if (handoff !== undefined) {
+        const { id, seq } = nextId(next, 'handoff');
+        return {
+          ...next,
+          seq,
+          items: [...next.items, { kind: 'handoff', id, text, ...handoff, at: event.ts }],
+        };
+      }
       const { id, seq } = nextId(next, 'user');
       return {
         ...next,
@@ -1096,12 +1152,25 @@ export function projectMessagesToUiItems(
       continue;
     }
     if (message.role === 'user') {
-      items.push({
-        kind: 'user',
-        id: next('user'),
-        text: sanitizeTerminalText(message.content),
-        at: 0,
-      });
+      // rotate 交接嘱托（`rotate:handoff[:<epoch>]`）：新身体的启动嘱托是发起 rotate 的
+      // agent 写的，渲染成标题 + 完整正文（不当成用户行，也不跳过）。
+      const handoff = rotateHandoffOfName(message.name ?? '');
+      items.push(
+        handoff === undefined
+          ? {
+              kind: 'user',
+              id: next('user'),
+              text: sanitizeTerminalText(message.content),
+              at: 0,
+            }
+          : {
+              kind: 'handoff',
+              id: next('handoff'),
+              text: sanitizeTerminalText(message.content),
+              ...handoff,
+              at: 0,
+            },
+      );
       continue;
     }
 
@@ -1175,6 +1244,7 @@ export function fullTextOfItem(item: UiItem): string | undefined {
     case 'user':
     case 'assistant':
     case 'reasoning':
+    case 'handoff':
     case 'notice':
       return [item.text, item.kind === 'notice' ? item.detail : undefined]
         .filter((part): part is string => part !== undefined && part.length > 0)

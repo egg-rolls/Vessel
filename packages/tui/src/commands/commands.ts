@@ -635,6 +635,20 @@ export function formatUiItemsAsText(items: UiItem[]): string[] {
       case 'user':
         pushHistoryBlock(lines, 'you ', item.text);
         break;
+      case 'handoff': {
+        // rotate 交接嘱托：标题行 + 完整正文（simple mode / 非 TTY 也要看得出这不是
+        // 人打的字，而不是一行 `you …`）。
+        const title = t('item.handoff.title');
+        pushHistoryBlock(
+          lines,
+          'hand',
+          item.epoch !== undefined
+            ? `${title} · ${t('item.handoff.epoch', { epoch: item.epoch })}`
+            : title,
+        );
+        pushHistoryBlock(lines, '    ', item.text);
+        break;
+      }
       case 'assistant':
         pushHistoryBlock(lines, 'ai  ', item.text);
         break;

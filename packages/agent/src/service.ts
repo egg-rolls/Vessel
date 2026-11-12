@@ -175,6 +175,37 @@ const INBOX_WAKE_INPUT =
 const INBOX_WAKE_NAME = 'vessel:notice';
 
 /**
+ * rotate 交接嘱托在会话里的身份（`AgentMessage.input_name` → `Message.name`）。
+ *
+ * 内置 `agent` 工具的 rotate 动作把上一具身体写好的 `startup_prompt` 投给新身体
+ * （`tool.ts` → `createSession({ allowActiveRun: true })`）。那是 **agent 写的交接书**，
+ * 不是人坐在键盘前打的字；`input_name` 留空时它和人类消息长得一模一样（`runtime.ts`
+ * 的 `inputNameOf` 返回 undefined ⇒ 那条 user 消息不带 `name`）。标上身份后 Web 渲染成
+ * 「rotate 交接」卡、TUI 渲成可读标题，两边都不再把它画成用户气泡。
+ *
+ * 只能用 `rotate:` 前缀，**不能用 `vessel:`**：`isRuntimeSeedMessage()` 把 `vessel:*`
+ * 当运行时种子消息（早期历史投影会受影响），TUI 的人类可读投影也整体跳过 `vessel:*`
+ * —— 那样这张卡在 TUI 里就看不见了。这条消息仍然是该轮真实的用户输入（turn 锚点），
+ * 与 `vessel:*` 的「模型侧上下文」不是一回事。
+ *
+ * 字面量与 `apps/web/src/domains/chat/rotate-handoff.ts` 必须一致
+ * （`check-transcript-items` 守）。
+ */
+export const ROTATE_HANDOFF_INPUT_NAME = 'rotate:handoff';
+
+/**
+ * rotate 交接嘱托的完整 `Message.name`：`种类:参数`，与 `agent:<alias>` 同一形状。
+ *
+ * 第三段是新身体的 epoch：`Message` 只有 role / content / name / timestamp，
+ * **name 是唯一能随消息持久化的身份位**，正文不能为此改动一个字。卡片据此在刷新后
+ * 仍能显示「epoch N」（不靠数历史里的交接次数去猜）。读不懂第三段时（旧数据 / 手改）
+ * 卡片退回不带 epoch 的卡头 —— 宁可少写，不编造。
+ */
+function rotateHandoffInputName(epoch: number): string {
+  return `${ROTATE_HANDOFF_INPUT_NAME}:${epoch}`;
+}
+
+/**
  * 成员名合法形状：1-64 位字母 / 数字 / `_` / `-`。
  *
  * **与 `src/federation-address.ts` 的 `FEDERATION_PRINCIPAL_RE` 同源同义**（那边是
@@ -2099,10 +2130,14 @@ export class AgentServiceImpl implements AgentService {
    *
    * `internal.startup` 只由 rotate 使用：启动嘱托直接作为 run input，不进 inbox，
    * 也不受 rotate 窗口守卫影响（否则新 body 的首轮会被当成旧队列）。
+   * `internal.inputName` 是内部调用方**声明**的会话身份（标 `Message.name`）：只有
+   * rotate 交接嘱托用它（见 `ROTATE_HANDOFF_INPUT_NAME`）。不走 `AdmitInput` 是因为
+   * 那是投递侧（含 RPC）的公共形状，谁说的这句话只能由生产者说清楚，不能开成一个
+   * 可以被外部填的字段。
    */
   private async admitInternal(
     input: AdmitInput,
-    internal?: { startup?: boolean; recovery?: boolean },
+    internal?: { startup?: boolean; recovery?: boolean; inputName?: string },
   ): Promise<AdmitOutcome> {
     await this.ready;
     // 0.28：不再在 admit 里顺带 sweep —— 那会回收调用方正要投递的目标（竞态）。
@@ -2233,6 +2268,9 @@ export class AgentServiceImpl implements AgentService {
       // 名字随消息带上：执行内核不持有 registry，渲染时无处可查。
       ...(senderName !== undefined ? { from_name: senderName } : {}),
       ...(fromAskAnswer ? { origin: 'ask_answer' as const } : {}),
+      // 会话身份（`Message.name`）：目前只有 rotate 交接嘱托声明（见
+      // `ROTATE_HANDOFF_INPUT_NAME`）。缺省不写 —— 人类正文的载荷与今天逐字节一致。
+      ...(internal?.inputName !== undefined ? { input_name: internal.inputName } : {}),
       // 附件引用：只有路径，随消息进执行内核 → core Message.refs（不落 inbox 副本）。
       ...(refs.length > 0 ? { refs } : {}),
     };
@@ -4527,6 +4565,11 @@ export class AgentServiceImpl implements AgentService {
     const startupPrompt =
       raw.startup_prompt === undefined ? undefined : readContent(raw, 'startup_prompt');
     if (startupPrompt !== undefined) {
+      // 唯一的来源判定点：`allowActiveRun` 只由内置 `agent` 工具的 rotate 动作传入
+      // （工具在调用者自身 active run 内换体）。人经 RPC 发起 create / restart /
+      // activate 时 startup_prompt 是**人写的开场白**，一个字节都不标 —— 那份裁定
+      // （按正文渲染）继续成立，只是不再覆盖 agent 写的交接书。
+      const handoffName = allowActiveRun ? rotateHandoffInputName(epoch) : undefined;
       try {
         await this.admitInternal(
           {
@@ -4538,7 +4581,10 @@ export class AgentServiceImpl implements AgentService {
             conversation_id: generateConversationId(this.newId),
             strict: false,
           },
-          { startup: true },
+          {
+            startup: true,
+            ...(handoffName !== undefined ? { inputName: handoffName } : {}),
+          },
         );
       } catch (error) {
         this.logger.warn('agent.session_create.startup_failed', {

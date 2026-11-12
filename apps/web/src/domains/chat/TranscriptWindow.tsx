@@ -15,6 +15,7 @@ import { ChatWelcome } from './ChatWelcome';
 import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
+import { RotateHandoffCard } from './RotateHandoffCard';
 import { StreamCard } from './StreamCard';
 import {
   AssistantText,
@@ -387,6 +388,19 @@ export function TranscriptWindow({
       case 'ask-answer':
         // 「待批答复」：数据仍是那条 user 消息，呈现是一张卡（人是在待批页回答的）。
         return <AskAnswerCard card={item.card} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
+      case 'rotate-handoff':
+        // 「rotate 交接」：新身体的第一条启动嘱托是发起 rotate 的 agent 写的交接书。
+        // **默认展开**（不是 cardsDefaultOpen）：正文就是新身体这一轮唯一的工作指令，
+        // 默认折起等于让人看不到新身体在干什么。
+        return (
+          <RotateHandoffCard
+            handoff={item}
+            content={item.text}
+            ts={item.ts}
+            defaultOpen
+            entering={isEntering(item.key)}
+          />
+        );
       case 'run-text': {
         // 正文只有一个形态：流式（`streaming`）与落盘都走 AssistantText → Markdown，
         // 外层 class / 内层块结构完全相同；run 结束时只是 streaming 翻成 false

@@ -1202,6 +1202,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.askAnswer.title': 'Approval answer',
   'chat.askAnswer.aria': 'Answer to a deferred question',
   'chat.askAnswer.source': 'from approvals',
+  // rotate handoff card (the first startup prompt a rotated body receives; written by an
+  // agent, not typed by a human)
+  'chat.rotateHandoff.title': '⟳ rotate handoff',
+  'chat.rotateHandoff.aria': 'rotate handoff · epoch {epoch}',
+  'chat.rotateHandoff.epoch': 'epoch {epoch}',
+  'chat.rotateHandoff.source': 'handover brief written by the agent that started the rotate',
   'chat.agentMessage.from': 'from agent {name}',
   'chat.agentMessage.group': 'Message from agent {name}',
   // 0.36: message bubble action group

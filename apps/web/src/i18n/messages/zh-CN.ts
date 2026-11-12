@@ -1154,6 +1154,11 @@ export const messages = {
   'chat.askAnswer.title': '待批答复',
   'chat.askAnswer.aria': '待批答复（异步提问的回答）',
   'chat.askAnswer.source': '来自待批页',
+  // rotate 交接卡（新身体收到的第一条启动嘱托：agent 写的交接书，不是人打的字）
+  'chat.rotateHandoff.title': '⟳ rotate 交接',
+  'chat.rotateHandoff.aria': 'rotate 交接 · epoch {epoch}',
+  'chat.rotateHandoff.epoch': 'epoch {epoch}',
+  'chat.rotateHandoff.source': '发起 rotate 的 agent 写的交接嘱托 · 不是人在这里打的字',
   'chat.agentMessage.from': '来自 agent {name}',
   'chat.agentMessage.group': '来自 agent {name} 的消息',
   // 0.36: 消息气泡操作组

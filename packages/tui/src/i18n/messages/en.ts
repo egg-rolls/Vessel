@@ -170,6 +170,10 @@ export const en: Record<MessageKey, string> = {
   'item.restarted': 'context restarted · {session} · epoch {from} → {epoch}',
   'item.compactForked': 'context compact-forked · {from} → {to} · epoch {epoch}',
   'item.ask': 'ask · {count} questions',
+  // rotate 交接嘱托（新身体收到的第一条启动指令，由发起 rotate 的 agent 写）
+  'item.handoff.title': '⟳ rotate handoff',
+  'item.handoff.epoch': 'epoch {epoch}',
+  'item.handoff.source': 'handover brief written by the agent that started the rotate',
   'item.errorUnknown': 'Run failed.',
   'item.run.completed': 'done',
   'item.run.failed': 'failed',
