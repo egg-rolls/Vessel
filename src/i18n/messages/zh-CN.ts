@@ -479,6 +479,27 @@ export const zhCN = {
   'dev.reset.notEmpty': '清空后 {path} 仍非空（剩余 {count} 项）。',
   'dev.reset.removed': '已清空 {path}（删除 {count} 个顶层条目，{bytes}）。',
 
+  // ── prune（0.51）──
+  'help.cmd.prune':
+    '数据清理：trace / 终态 runs / 老且非活跃 sessions（缺省 dry-run，需 --yes 才删）',
+  'flag.olderThan': '只清理更早的条目（如 30d / 12h；裸数字按天，缺省 30d）',
+  'prune.head.dryRun': 'dry-run：未删除任何内容（确认后加 --yes 重试）',
+  'prune.head.applied': '已清理',
+  'prune.scope': '数据目录：{path} · tenant：{tenant} · 阈值：早于 {age}',
+  'prune.bucket.trace': '  trace:    {count} 个文件，{bytes}',
+  'prune.bucket.runs': '  runs:     {count} 条终态记录，{bytes}',
+  'prune.bucket.sessions':
+    '  sessions: {count} 个会话，{bytes}（级联 {runs} 条 run、{events} 个会话 trace）',
+  'prune.skipped.active': '  保留：{count} 个会话仍活跃（锁 / 租约 / 可 resume 的 run）',
+  'prune.skipped.refused': '  拒绝：{count} 个会话被删除守卫挡下（活跃 run 或数据不可读）',
+  'prune.totals': 'total: {count} 项，{bytes}',
+  'prune.note.sessionsBackendNotReadonly':
+    '提示：dry-run 跳过 sessions（session.backend=sqlite 无法只读枚举）；加 --yes 可真删。',
+  'prune.note.durableDisabled':
+    '提示：durable run 已关闭（durable.enabled=false），没有 run 记录可清。',
+  'prune.locked':
+    '未删除任何内容；请先停掉 gateway / node（`vessel gateway stop`），再加 --yes 重试。',
+
   // ── completion（0.18）──
   'completion.usage': '用法：vessel completion <bash|zsh|fish|powershell>',
   'completion.unknownShell': '未知 shell "{shell}"。',

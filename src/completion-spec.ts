@@ -224,6 +224,11 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [{ name: 'prune', flags: ['--dry-run', '--json'] }],
   },
   {
+    token: 'prune',
+    registryName: 'prune',
+    flags: ['--yes', '--dry-run', '--json', '--older-than'],
+  },
+  {
     token: 'plugin',
     registryName: 'plugin',
     subcommands: [

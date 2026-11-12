@@ -31,6 +31,7 @@ import { logsCommand } from '../logs-command';
 import { migrateCommand } from '../migrate-command';
 import { isForegroundNodeCommand, runNodeCommand } from '../node-command';
 import { runPluginCommand } from '../plugin-command';
+import { pruneCommand } from '../prune-command';
 import { runResumeList } from '../resume-command';
 import { statusCommand } from '../status-command';
 import { runTeamCommand } from '../team-command';
@@ -195,6 +196,22 @@ export const cliCommands: readonly CliCommand[] = [
         await tracePruneCommand({
           dryRun: command.dryRun,
           json: command.json,
+        }),
+      );
+    },
+  },
+  {
+    name: 'prune',
+    match: (args) => args.prune !== null,
+    run: async (args) => {
+      const command = args.prune;
+      if (command === null) return 1;
+      return printCommandResult(
+        await pruneCommand({
+          yes: command.yes,
+          dryRun: command.dryRun,
+          json: command.json,
+          ...(command.olderThanMs !== undefined ? { olderThanMs: command.olderThanMs } : {}),
         }),
       );
     },

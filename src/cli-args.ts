@@ -125,6 +125,15 @@ export type TraceCommandArgs = {
   json: boolean;
 };
 
+/** `prune` 子命令（0.51）：缺省 dry-run，`--yes` 才真删 */
+export interface PruneCommandArgs {
+  yes: boolean;
+  dryRun: boolean;
+  json: boolean;
+  /** `--older-than` 解析出的毫秒数；缺省由命令层给默认值 */
+  olderThanMs?: number;
+}
+
 /** `plugin` 子命令（0.6.1；仅本地目录，不做市场） */
 export type PluginCommandArgs =
   | { kind: 'list'; json: boolean }
@@ -414,6 +423,8 @@ export interface CliArgs {
   attentionCommand: AttentionCommandArgs | null;
   /** 0.49：`vessel dev reset [--yes] [--dry-run] [--json]` */
   devCommand: DevCommandArgs | null;
+  /** 0.51：`vessel prune [--yes] [--dry-run] [--json] [--older-than <dur>]` */
+  prune: PruneCommandArgs | null;
 }
 
 export type ParseResult = { ok: true; args: CliArgs } | { ok: false; error: string };
@@ -477,6 +488,7 @@ export function parseArgs(argv: string[]): ParseResult {
     completionCommand: null,
     attentionCommand: null,
     devCommand: null,
+    prune: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -546,6 +558,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'dev' && i === 0) {
       return parseDevArgs(argv.slice(1), args);
+    }
+    if (a === 'prune' && i === 0) {
+      return parsePruneArgs(argv.slice(1), args);
     }
 
     switch (a) {
@@ -1396,6 +1411,95 @@ function parseDevArgs(rest: string[], args: CliArgs): ParseResult {
     return { ok: false, error: `Unknown argument for dev reset: ${a}` };
   }
   args.devCommand = { kind: 'reset', yes, dryRun, json };
+  return { ok: true, args };
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * `--older-than`：`<n><ms|s|m|h|d>`（裸数字按天）；非法返回 null。
+ *
+ * 单位写法照 `--timeout <dur>` 的既有形态（`parseTimeoutMs`）；但**不复用**它：
+ * 它的上限是 24h，表达不了「30 天」，而且裸数字按秒 —— 这里裸数字按**天**，
+ * 对齐 RPC `trace.prune` 的 `older_than_days` 与 `trace.retention_days` 的口径
+ * （也偏保守：阈值更大 ⇒ 删得更少）。
+ */
+export function parseOlderThanMs(raw: string): number | null {
+  const match = /^(\d+)(ms|s|m|h|d)?$/.exec(raw.trim());
+  if (!match) return null;
+  const amount = Number.parseInt(match[1] ?? '', 10);
+  // 0 = 删光全部（不是「不限」）：这种取值太容易误伤，一律当非法。
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const unit = match[2] ?? 'd';
+  const factor =
+    unit === 'ms'
+      ? 1
+      : unit === 's'
+        ? 1000
+        : unit === 'm'
+          ? 60_000
+          : unit === 'h'
+            ? 3_600_000
+            : DAY_MS;
+  return amount * factor;
+}
+
+/** `prune [--older-than <dur>] [--dry-run] [--json] [--yes] [--data-dir <path>]` */
+function parsePruneArgs(rest: string[], args: CliArgs): ParseResult {
+  let yes = false;
+  let dryRun = false;
+  let json = false;
+  let olderThanMs: number | undefined;
+
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--yes' || a === '-y') {
+      yes = true;
+      continue;
+    }
+    if (a === '--dry-run') {
+      dryRun = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--older-than') {
+      const value = rest[i + 1];
+      if (value === undefined || value.startsWith('-') || value.trim() === '') {
+        return { ok: false, error: 'Missing value for --older-than' };
+      }
+      const parsed = parseOlderThanMs(value);
+      if (parsed === null) return { ok: false, error: `Invalid value for --older-than: ${value}` };
+      olderThanMs = parsed;
+      i++;
+      continue;
+    }
+    if (a === '--data-dir') {
+      const value = rest[i + 1];
+      if (value === undefined || value.startsWith('-') || value.trim() === '') {
+        return { ok: false, error: 'Missing value for --data-dir' };
+      }
+      args.dataDirArg = value;
+      i++;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for prune: ${a}` };
+  }
+
+  if (args.help) return { ok: true, args };
+
+  args.prune = {
+    yes,
+    dryRun,
+    json,
+    ...(olderThanMs !== undefined ? { olderThanMs } : {}),
+  };
   return { ok: true, args };
 }
 
