@@ -18,8 +18,14 @@
  *   成功后那条从条带上消失（没有「已取消」残留态）。
  *
  * 视觉零改动：卡片仍是 `QueuedNotice`（amber / 满宽 / 单圆点 / actions 槽位 / `onBand`
- * 胶囊），卡头文案换成「等待中」（`chat.pending.waiting`）—— 条目没有 run，落盘后也没有
+ * 胶囊），卡头文案是「等待中」（`chat.pending.waiting`）—— 条目没有 run，落盘后也没有
  * 权威队列顺序，所以不编序号。
+ *
+ * **身份在卡内、等待中的后面**（用户裁决）：卡头读作「等待中　human: 说的话」。以前身份是
+ * 卡外左侧一个 `human` 标签，卡片只是「条带上的一行」；现在身份是卡头的轻量标记
+ * （`QueuedNotice` 的 `identity` → StreamCard 的 `meta` 槽，等宽小字 + 弱化色），卡外
+ * 那条外层 flex 随之消失（一行就是一张满宽的卡）。看谁给的 vs 说了什么：
+ * `identityOf` 只负责「谁」，正文仍是摘要。
  *
  * **没有置顶，也别加回来**：原先的「置顶并打断当前运行」按钮、确认框、
  * `agents.send{message_id, interrupt}` 复用与 footer「优先级仅在本次运行期有效」都已删除
@@ -39,11 +45,30 @@ import { type PendingStripEntry, type PendingStripGroup, pendingStripView } from
 import { QueuedNotice, type QueuedSubmission } from './StreamItems';
 
 /**
- * 条带里唯一的来源标识。条带只收人发的待处理输入（agent 源属于另一个切片：需要
- * `from_name` 与「谁的收件箱」语义，本轮不做），所以固定是「人」；文案走 i18n
- * （`chat.pending.identity.human`），不在 JSX 里硬编码。
+ * 条带里的来源标识 + 过滤口径。条带**只收人发的待处理输入**（agent 源属于另一个切片：
+ * 需要「谁的收件箱」语义与名字来源，本轮不做 —— 见 `identityOf` 的退化策略），所以过滤
+ * 仍固定是「人」；展示文案走 i18n（`chat.pending.identity.human`），不在 JSX 里硬编码。
  */
 const HUMAN_SOURCE = 'human';
+
+/**
+ * 身份显示在哪：**卡内、卡头「等待中」胶囊之后**（`QueuedNotice` 的 `identity` → 卡头
+ * `meta` 槽）。以前是卡外左侧一个标签，用户裁决要「身份放在卡片内部、等待中的后面」。
+ *
+ * `from` → 卡头显示的身份名：
+ * - `human` ⇒ i18n 的 `chat.pending.identity.human`（值就是 `human`）；
+ * - 其它（agent 源的 agent id）⇒ **原始 id**。`agents.inbox` 只给 `from`（id），要展示名
+ *   得另读 `agents.list` / roster（每条带子多一路 RPC 与依赖）；当前过滤口径又只收 human，
+ *   所以先退化成 id，等 agent 源真正接进来再决定名字来源（别为了死代码加一次 RPC）。
+ * - 空串（理论上不会发生）⇒ 不给身份，卡头回到「胶囊 + 摘要」两段。
+ *
+ * 冒号由 `QueuedNotice` 补（卡面统一 `<身份>: <说的话>`），这里只给纯名字。
+ */
+function identityOf(from: string): string | undefined {
+  if (from === HUMAN_SOURCE) return t('chat.pending.identity.human');
+  const trimmed = from.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
 
 /** 取数前的去抖：`agent.message.queued` 先于 run 开跑到达，空闲会话里那条毫秒级就被消费。 */
 const DEBOUNCE_MS = 250;
@@ -70,40 +95,40 @@ function toEntry(entry: AgentInboxEntry): PendingStripEntry {
 }
 
 /**
- * 一行待处理项：身份前缀（`human`）+ 时间线同款排队卡（现在只在条带里用）。
+ * 一行待处理项：时间线同款排队卡（现在只在条带里用）+ 可选的「N 条」折叠按钮。
  *
- * 卡片本身由 `QueuedNotice` 提供（含「取消」控件），这里只负责布局与身份前缀：
- * 不复制样式、不在卡外再拼一层卡片。同源折叠组只有**组头**带 `fold`（「N 条」开合），
- * 展开后的每一条都各自是一张完整的卡 —— 折叠只影响展示。
+ * **身份在卡内**：`QueuedNotice` 的 `identity` → 卡头 `meta` 槽（「等待中」胶囊之后），
+ * 卡外不再有 `human` 标签，所以这里也没有「标签 + 卡」那一层横向 flex —— 一行就是一张
+ * 满宽的卡。卡片样式不在这里复制：圆点 / amber 带 / 胶囊 / 取消控件全在 `QueuedNotice`
+ * 里。同源折叠组只有**组头**带 `fold`（「N 条」开合），展开后的每一条都各自是一张完整
+ * 的卡 —— 折叠只影响展示。
  */
 function PendingRow({
   item,
+  identity,
   onCancel,
   fold,
 }: {
   item: QueuedSubmission;
+  /** 卡头身份（`human` / agent 名或 id）；`undefined` = 不渲染身份槽。 */
+  identity?: string;
   onCancel: (id: string) => void;
   /** 组头才传：组内条数、开合状态与切换。 */
   fold?: { count: number; open: boolean; onToggle: () => void };
 }) {
   return (
-    <div className="flex min-w-0 items-start gap-2">
-      <span className="flex-none pt-1.5 font-mono text-2xs tracking-wide text-faint">
-        {t('chat.pending.identity.human')}
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <QueuedNotice item={item} onCancel={onCancel} />
-        {fold && (
-          <button
-            type="button"
-            className="self-start font-mono text-2xs text-faint hover:text-ink"
-            onClick={fold.onToggle}
-            aria-expanded={fold.open}
-          >
-            {t('chat.pending.sameSource', { count: fold.count })}
-          </button>
-        )}
-      </div>
+    <div className="flex min-w-0 flex-col gap-1">
+      <QueuedNotice item={item} identity={identity} onCancel={onCancel} />
+      {fold && (
+        <button
+          type="button"
+          className="self-start font-mono text-2xs text-faint hover:text-ink"
+          onClick={fold.onToggle}
+          aria-expanded={fold.open}
+        >
+          {t('chat.pending.sameSource', { count: fold.count })}
+        </button>
+      )}
     </div>
   );
 }
@@ -293,6 +318,7 @@ export function PendingStrip({
                 <li key={group.key} className="flex flex-col gap-1.5">
                   <PendingRow
                     item={head.item}
+                    identity={identityOf(head.entry.from)}
                     onCancel={(id) => void handleCancel(id)}
                     fold={fold}
                   />
@@ -301,7 +327,11 @@ export function PendingStrip({
                     <ul className="m-0 flex list-none flex-col gap-1.5 border-l border-line pl-2">
                       {rest.map((row) => (
                         <li key={row.entry.message_id}>
-                          <PendingRow item={row.item} onCancel={(id) => void handleCancel(id)} />
+                          <PendingRow
+                            item={row.item}
+                            identity={identityOf(row.entry.from)}
+                            onCancel={(id) => void handleCancel(id)}
+                          />
                         </li>
                       ))}
                     </ul>

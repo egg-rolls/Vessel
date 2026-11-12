@@ -628,11 +628,22 @@ export const RunItems = memo(function RunItems({
  *
  * 「取消排队」是**可操作控件**：放在 actions 插槽（始终可见），不进 summary，
  * 这样折叠状态下也能取消，且 summary 里没有可点元素。
+ *
+ * **身份在卡内**：卡头 `meta` 槽写「这条是谁给的」（`human:` / `<agent 名>:`），
+ * 正文 `summary` 仍只放那句话 —— 读起来是「等待中　human: 说的话」。以前身份是卡外左侧
+ * 一个标签，卡片只是「条带里的一行」；现在身份是卡头的轻量标记，卡片自己就说得清是谁。
+ * 顺序天然由 StreamCard 的卡头给出（`title` → `meta` → `summary`），所以身份一定落在
+ * 「等待中」胶囊之后、正文之前，不需要在这里补间距（卡头是 `gap: 10px` 的 flex 行）。
+ *
+ * 不把身份拼进 `summary` 的理由：`summary` 是单行 ellipsis 的正文位，拼进去身份会跟着
+ * 长文本一起被截掉，也失去「等宽小字 + 弱化色」的层次；`meta` 槽天生就是「标题后的
+ * 轻量标记」（`font-mono text-2xs`）。
  */
 export function QueuedNotice({
   item,
   onCancel,
   label,
+  identity,
   defaultOpen = false,
 }: {
   item: QueuedSubmission;
@@ -645,6 +656,14 @@ export function QueuedNotice({
    * `queue_position` 是调度器口径、对没有 run 的条目无意义。
    */
   label?: string;
+  /**
+   * 身份（这条待处理输入是谁给的）：卡头 `meta` 槽，落在「等待中」胶囊之后。
+   *
+   * 由调用方给**纯名字**（条带：`human` 走 i18n，agent 源给名 / id），冒号在这里补 ——
+   * 卡面统一是 `<身份>: <说的话>`，不指望上游记得带分隔符。缺省 = 不渲染身份槽
+   * （卡头回到「胶囊 + 摘要」两段，与没有身份的排队项一致）。
+   */
+  identity?: string;
   /** 默认展开（ui.expandCards || verbosity === 'debug'）；排队卡是纯信息卡。 */
   defaultOpen?: boolean;
 }) {
@@ -665,6 +684,11 @@ export function QueuedNotice({
         />
       }
       summary={item.input}
+      // 身份：`human:` / `<agent 名>:` —— 卡头 flex 顺序是 title → meta → summary，
+      // 所以它一定落在「等待中」胶囊之后、正文之前。颜色用这条带的前景色 `--amber`
+      //（tokens.css 里 amber 档的「前景 / 图标」角色，展开 chevron 同色）：meta 槽默认的
+      // `text-faint` 压在 `--amber-soft` 上只有约 3.8:1，2xs 小字读不清。
+      meta={identity === undefined ? undefined : <span className="text-amber">{identity}:</span>}
       actions={
         <div className="px-2.5 pb-1">
           <Button variant="link" onClick={() => onCancel(item.id)} disabled={item.cancelling}>
