@@ -760,7 +760,8 @@ export interface AgentRecallResult {
 }
 
 /** 统一准入结果；`session_id` 是 body id */
-export interface AdmitResult {  run_id: string;
+export interface AdmitResult {
+  run_id: string;
   agent_id: string;
   session_id: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';

@@ -182,8 +182,8 @@ function matchesNeedle(
 ): boolean {
   if (needle === '') return true;
   if (name.toLowerCase().includes(needle)) return true;
-  return [current[name], lightValues[name], darkValues[name]].some(
-    (value) => value !== undefined && value.toLowerCase().includes(needle),
+  return [current[name], lightValues[name], darkValues[name]].some((value) =>
+    value?.toLowerCase().includes(needle),
   );
 }
 

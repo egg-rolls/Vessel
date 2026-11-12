@@ -433,8 +433,8 @@ function readSnapshot(): TokenSnapshot {
 function snapshotKey(snapshot: TokenSnapshot): string {
   let key = snapshot.names.join(',');
   const append = (label: string, values: TokenValues): void => {
-    key += '#' + label;
-    for (const name of snapshot.names) key += '|' + (values[name] ?? '');
+    key += `#${label}`;
+    for (const name of snapshot.names) key += `|${values[name] ?? ''}`;
   };
   append('current', snapshot.values);
   append('light', snapshot.lightValues);
