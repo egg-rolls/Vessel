@@ -321,6 +321,20 @@ if (
 ) {
   const { applyCommandLocale } = await import('./commands/registry');
   await applyCommandLocale();
+  // 启动诊断（0.50）：拆分路径**也**托管 dist（静态资源由平台 gateway 同源下发），
+  // 所以产物缺失/过期时要就地自修复，而不是把「缺失 + 命令教学」丢给用户。
+  //
+  // 两种等待语义（见 `ensureWebDist` 的 `waitWhenMissing`）：过期但产物还在 →
+  // 后台重建、立刻开始服务（静态资源每请求读盘，建好自然生效）；**完全缺失** →
+  // 等它建完，因为本函数下面的 gateway 在 `index.html` 缺失时直接失败退出
+  // （`runPlatformGatewayForeground` 的 fail-fast），没有「先起来再修」这条路。
+  //
+  // 只在仓库内默认目录生效：`VESSEL_STATIC_DIR` 指向的外部产物不归我们管；
+  // `VESSEL_NO_WEB_AUTOBUILD=1` 关掉自修复；构建失败只告警、不改退出码。
+  await ensureWebDist({
+    warn: (line) => console.error(ui.warn(line)),
+    waitWhenMissing: true,
+  });
   const { runPlatformGatewayForeground } = await import('./gateway-command');
   process.exit(
     await runPlatformGatewayForeground({
@@ -421,10 +435,18 @@ if (foregroundGateway && args.gateway !== null) {
   foregroundGatewayInstance = prepared.instance;
   process.once('exit', () => foregroundGatewayLock?.releaseSync());
 }
-// legacy `--serve` 启动诊断：静态产物缺失/过期时自动重建（`VESSEL_NO_WEB_AUTOBUILD=1`
-// 关闭）。0.49 拆分路径（gateway start / node start）不做阻塞式自动构建。
+// legacy `--serve` 启动诊断：静态产物缺失/过期时自修复（`VESSEL_NO_WEB_AUTOBUILD=1`
+// 关闭）。语义和平台 gateway 分支一致：过期但产物还在 → 后台重建（不拖慢启动；
+// 静态资源每请求读盘，建好即生效）；**完全缺失** → 等它建完，否则本进程的
+// `resolveStaticDir()` 解析不到 dist，整个生命周期都不托管 Web 控制台。
+// 0.50 起拆分路径（`gateway start` / `node start`）也在启动诊断里自修复；`node start`
+// 本身不宿 WebUI（staticDir 只在 Gateway 解析）。
 if (args.servePort !== null && !nodeOnlyMode) {
-  const status = await ensureWebDist({ warn: (line) => console.error(ui.warn(line)) });
+  const status = await ensureWebDist({
+    warn: (line) => console.error(ui.warn(line)),
+    waitWhenMissing: true,
+  });
+  // 自修复能接管时 webDistWarning 返回 null（进度行已经说过），只留真正修不了的情况。
   const warning = webDistWarning(status);
   if (warning) console.error(ui.warn(warning));
 }
