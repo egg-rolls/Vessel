@@ -23,12 +23,12 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import * as path from 'node:path';
-import type { ToolContext, ToolDefinition } from '../packages/core/src/index';
 import {
   isAnchorWorkspace,
   memberCwdFromTeam,
   resolveMemberCwd,
 } from '../packages/agent/src/member-cwd';
+import type { ToolContext, ToolDefinition } from '../packages/core/src/index';
 import { createBasicTools } from '../plugins/tools/basic-tools/src/index';
 
 let passed = 0;
@@ -80,10 +80,7 @@ async function main(): Promise<void> {
   check('成员 cwd 生效（read）', memberRead.includes('from-member'), memberRead);
 
   const bareBash = toolNamed(bare, 'bash');
-  const memberBash = await bareBash.handler(
-    { command: 'cat marker.txt' },
-    ctxFor(memberDir),
-  );
+  const memberBash = await bareBash.handler({ command: 'cat marker.txt' }, ctxFor(memberDir));
   check('成员 cwd 生效（bash）', memberBash.includes('from-member'), memberBash);
 
   // 没有成员 cwd ⇒ 旧行为（进程 cwd）。这里只用「相对路径仍可解析」断言，不写死目录。
@@ -111,7 +108,11 @@ async function main(): Promise<void> {
   check('降级不产生错误文本', !degradedRead.startsWith('错误'), degradedRead.slice(0, 40));
 
   const degradedBash = await bareBash.handler({ command: 'pwd' }, ctxFor(missingDir));
-  check('成员 cwd 不存在时 bash 仍可跑', !degradedBash.startsWith('错误'), degradedBash.slice(0, 40));
+  check(
+    '成员 cwd 不存在时 bash 仍可跑',
+    !degradedBash.startsWith('错误'),
+    degradedBash.slice(0, 40),
+  );
 
   // 3b. 显式配出来的 agent.cwd 不存在 ⇒ 保持原有硬错（不静默回退，掩盖配置错误）
   const brokenConfig = createBasicTools({ cwd: missingDir });
@@ -186,7 +187,11 @@ async function main(): Promise<void> {
     JSON.stringify(bothBroken),
   );
   const none = resolveMemberCwd({});
-  check('没有候选 ⇒ none', none.cwd === undefined && none.degraded === 'none', JSON.stringify(none));
+  check(
+    '没有候选 ⇒ none',
+    none.cwd === undefined && none.degraded === 'none',
+    JSON.stringify(none),
+  );
 
   const total = passed + failures.length;
   if (failures.length === 0) {

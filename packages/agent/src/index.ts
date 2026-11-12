@@ -40,9 +40,9 @@ export {
   isAnchorWorkspace,
   isUsableDirectory,
   MEMBER_CWD_SOURCES,
-  memberCwdFromTeam,
   type MemberCwdPick,
   type MemberCwdSource,
+  memberCwdFromTeam,
   type ResolveMemberCwdInput,
   resolveMemberCwd,
 } from './member-cwd.js';

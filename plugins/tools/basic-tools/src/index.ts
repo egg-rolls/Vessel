@@ -790,8 +790,7 @@ function createBashTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
       // 统一由 core PermissionPolicy 发一次请求；autoApprove / neverAutoApprove / always 在那里生效
       return 'ask';
     },
-    handler: async (args, ctx) =>
-      runBash(args, ctx, boundary, resolveCallCwd(config, ctx.cwd)),
+    handler: async (args, ctx) => runBash(args, ctx, boundary, resolveCallCwd(config, ctx.cwd)),
   };
 }
 
