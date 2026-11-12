@@ -3,46 +3,48 @@
  *
  * - 折叠时只显示摘要与计数（列表态）；
  * - 展开后逐条显示问题正文（文本 / 同源图片 / 链接）、选项与自由输入；
- * - 勾选的条目「一起提交」→ 一次用户动作，每条 ask 一次应答（见 usePendingBatch）；
+ * - **每题独立**（用户裁决）：勾选框挂在**每个问题**上，不再把整条 ask 绑成一次
+ *   「一起提交」—— 可以只回复第 2 题，也可以勾全部一次回复；
+ * - 勾选只决定「这次回复带上哪些答案」，**不**决定能不能作答：任何一题随时可答，
+ *   作答即自动纳入本次回复（不勾也能回答）；
+ * - 提交仍是一次用户动作 → 同批带一个 `batch_id` 的多次 `ask.respond`（见
+ *   usePendingBatch）。服务端本来就允许 `answers` 是任意长度的数组
+ *   （`ask.respond` 只校验它是 Array，见 packages/serve 的 interactions 方法），
+ *   且答案行自带原问题（`formatAnswersForModel`），所以「部分提交」不需要新协议；
+ * - 代价（服务端语义，本页改不了）：一条 ask 一经应答就整体落定
+ *   （pending → answered），未勾选的题随该请求一起收口 —— 回复行旁明写这一点；
  * - 提交中、或该 requestId 已在途时禁用输入，避免重复投递。
  */
 import { useMemo, useState } from 'react';
 import { Badge, Button, CountBadge, cn, Input, Section } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
-import type { AskUserAnswer, AskUserQuestion, AskUserRequest } from '../../gateway/types';
+import type { AskUserAnswer, AskUserQuestion } from '../../gateway/types';
 import { t } from '../../i18n';
 import { buildAnswer } from '../chat/AskCard';
 import type { PendingCluster } from './cluster';
 import { questionBlocks } from './question-blocks';
 import { usePendingBatch } from './usePendingBatch';
 
-/** 单条 ask 的草稿：勾选状态 + 逐题选项 / 自定义输入。 */
-interface ItemDraft {
-  included: boolean;
-  selected: string[][];
-  custom: string[];
+/** 单题草稿：是否纳入本次回复 + 已选选项 + 自定义输入。 */
+interface QuestionDraft {
+  /** 是否纳入本次回复（默认不勾；作答会自动勾上）。 */
+  include: boolean;
+  selected: string[];
+  custom: string;
 }
 
-function initialDraft(request: AskUserRequest): ItemDraft {
-  return {
-    included: true,
-    selected: request.questions.map(() => []),
-    custom: request.questions.map(() => ''),
-  };
+function emptyQuestionDraft(): QuestionDraft {
+  return { include: false, selected: [], custom: '' };
 }
 
-function answersFor(request: AskUserRequest, draft: ItemDraft): AskUserAnswer[] {
-  return request.questions.map((question, index) =>
-    buildAnswer(question, {
-      selected: draft.selected[index] ?? [],
-      custom: draft.custom[index] ?? '',
-    }),
-  );
+/** 草稿键：requestId + 题号（题号在同一条请求内稳定）。 */
+function draftKey(requestId: string, index: number): string {
+  return `${requestId}:${index}`;
 }
 
-function isComplete(answers: readonly AskUserAnswer[]): boolean {
-  return answers.every((answer) => answer.answer.length > 0);
+function isAnswered(draft: { selected: readonly string[]; custom: string }): boolean {
+  return draft.selected.length > 0 || draft.custom.trim().length > 0;
 }
 
 function shortId(value: string): string {
@@ -110,22 +112,49 @@ function QuestionField({
   question,
   groupId,
   index,
+  include,
   draft,
   disabled,
+  onToggleInclude,
   onChange,
 }: {
   question: AskUserQuestion;
   /** radio 分组名：同一 requestId + 题号，避免跨条同题互相顶掉。 */
   groupId: string;
   index: number;
+  /** 这一题是否纳入本次回复（勾选只影响提交内容，不影响能否作答）。 */
+  include: boolean;
   draft: { selected: string[]; custom: string };
   disabled: boolean;
+  onToggleInclude: () => void;
   onChange: (next: { selected: string[]; custom: string }) => void;
 }) {
   return (
-    <div className="flex flex-col gap-2 rounded-md bg-sunken p-3.5">
-      <div className="font-mono text-2xs font-semibold uppercase tracking-widest text-accent-ink">
-        {question.header}
+    <div
+      className={cn(
+        'flex flex-col gap-2 rounded-md bg-sunken p-3.5',
+        include && 'outline-2 outline-offset-2 outline-accent-soft',
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="font-mono text-2xs font-semibold uppercase tracking-widest text-accent-ink">
+          {question.header}
+        </div>
+        <label
+          className={cn(
+            'inline-flex cursor-pointer items-center gap-1.5 text-sm',
+            include ? 'text-ink' : 'text-muted',
+          )}
+        >
+          <input
+            className="accent-accent"
+            type="checkbox"
+            checked={include}
+            disabled={disabled}
+            onChange={onToggleInclude}
+          />
+          {t('pending.item.include')}
+        </label>
       </div>
       <QuestionBody text={question.question} />
       {question.options && question.options.length > 0 && (
@@ -188,27 +217,100 @@ export function PendingClusterCard({
   const { respondAsk, responding } = useConnection();
   const { busyKey, submit } = usePendingBatch(respondAsk);
   const busy = busyKey === cluster.key;
-  const [drafts, setDrafts] = useState<Record<string, ItemDraft>>({});
+  const [drafts, setDrafts] = useState<Record<string, QuestionDraft>>({});
 
-  const items = useMemo(
+  /** 全部问题的扁平视图：勾选、计数、投递计划都按「题」算，不按 request 绑死。 */
+  const rows = useMemo(
     () =>
-      cluster.requests.map((request) => {
-        const draft = drafts[request.requestId] ?? initialDraft(request);
-        const answers = answersFor(request, draft);
-        return { request, draft, answers, complete: isComplete(answers) };
-      }),
+      cluster.requests.flatMap((request) =>
+        request.questions.map((question, index) => {
+          const draft = drafts[draftKey(request.requestId, index)] ?? emptyQuestionDraft();
+          return { request, question, index, draft, answered: isAnswered(draft) };
+        }),
+      ),
     [cluster.requests, drafts],
   );
 
-  const included = items.filter((item) => item.draft.included);
-  const ready = included.filter((item) => item.complete);
-  const canSubmit = included.length > 0 && ready.length === included.length && !busy;
+  /** 本次回复的投递计划：按 request 分组（同一请求的几题合成一次 `ask.respond`）。 */
+  const plan = useMemo(() => {
+    const byRequest = new Map<string, { requestId: string; answers: AskUserAnswer[] }>();
+    for (const row of rows) {
+      if (!row.draft.include || !row.answered) continue;
+      const entry = byRequest.get(row.request.requestId) ?? {
+        requestId: row.request.requestId,
+        answers: [],
+      };
+      entry.answers.push(buildAnswer(row.question, row.draft));
+      byRequest.set(row.request.requestId, entry);
+    }
+    return [...byRequest.values()];
+  }, [rows]);
 
-  const patch = (request: AskUserRequest, updater: (draft: ItemDraft) => ItemDraft) => {
-    setDrafts((previous) => ({
-      ...previous,
-      [request.requestId]: updater(previous[request.requestId] ?? initialDraft(request)),
-    }));
+  const answeredRows = rows.filter((row) => row.answered);
+  const includedCount = rows.filter((row) => row.draft.include && row.answered).length;
+  const allIncluded = answeredRows.length > 0 && answeredRows.every((row) => row.draft.include);
+  /** 勾了但没答：回复时会被跳过，所以给一句提示（不阻塞提交）。 */
+  const hasSkipped = rows.some((row) => row.draft.include && !row.answered);
+  const canSubmit = plan.length > 0 && !busy;
+
+  const patchDraft = (
+    requestId: string,
+    index: number,
+    updater: (draft: QuestionDraft) => QuestionDraft,
+  ) => {
+    setDrafts((previous) => {
+      const key = draftKey(requestId, index);
+      return { ...previous, [key]: updater(previous[key] ?? emptyQuestionDraft()) };
+    });
+  };
+
+  /**
+   * 改答案：作答即自动纳入本次回复，清空即自动移出。
+   *
+   * 只在「已答 / 未答」真的翻转时才动 `include`，所以用户手动勾选 / 取消勾选
+   * 不会被后续的文字编辑反复覆盖。
+   */
+  const setAnswer = (
+    requestId: string,
+    index: number,
+    next: { selected: string[]; custom: string },
+  ) => {
+    patchDraft(requestId, index, (draft) => {
+      const flipped = isAnswered(draft) !== isAnswered(next);
+      return { ...draft, ...next, ...(flipped ? { include: isAnswered(next) } : {}) };
+    });
+  };
+
+  const toggleInclude = (requestId: string, index: number) => {
+    patchDraft(requestId, index, (draft) => ({ ...draft, include: !draft.include }));
+  };
+
+  /** 全选 / 取消全选：只作用于已作答的题，未答的题不制造空勾选。 */
+  const toggleAll = () => {
+    const target = !allIncluded;
+    setDrafts((previous) => {
+      const next = { ...previous };
+      for (const row of answeredRows) {
+        const key = draftKey(row.request.requestId, row.index);
+        next[key] = { ...(next[key] ?? emptyQuestionDraft()), include: target };
+      }
+      return next;
+    });
+  };
+
+  const handleSubmit = () => {
+    if (!canSubmit) return;
+    const requestIds = plan.map((item) => item.requestId);
+    void submit(cluster.key, plan).then(() => {
+      // 提交后清掉这批的勾选与草稿（请求通常也会随即从 pending 列表里消失）。
+      setDrafts((previous) =>
+        Object.fromEntries(
+          Object.entries(previous).filter(
+            ([key]) => !requestIds.some((requestId) => key.startsWith(`${requestId}:`)),
+          ),
+        ),
+      );
+    });
   };
 
   const clusterLabel =
@@ -234,26 +336,30 @@ export function PendingClusterCard({
       }
       description={formatTimestamp(cluster.latestAt)}
       actions={
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           <Button size="small" onClick={onToggle} aria-expanded={expanded}>
             {expanded ? t('pending.cluster.collapse') : t('pending.cluster.expand')}
           </Button>
           {expanded && (
-            <Button
-              variant="primary"
-              size="small"
-              disabled={!canSubmit}
-              onClick={() => {
-                void submit(
-                  cluster.key,
-                  ready.map((item) => ({
-                    requestId: item.request.requestId,
-                    answers: item.answers,
-                  })),
-                );
-              }}
-            >
-              {busy ? t('pending.submit.busy') : t('pending.submit', { count: ready.length })}
+            <label className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-muted">
+              <input
+                className="accent-accent"
+                type="checkbox"
+                checked={allIncluded}
+                disabled={busy || answeredRows.length === 0}
+                onChange={toggleAll}
+              />
+              {t('pending.item.includeAll')}
+            </label>
+          )}
+          {expanded && includedCount > 0 && (
+            <span className="text-sm text-muted tabular-nums">
+              {t('pending.submit.count', { count: includedCount })}
+            </span>
+          )}
+          {expanded && (
+            <Button variant="primary" size="small" disabled={!canSubmit} onClick={handleSubmit}>
+              {busy ? t('pending.submit.busy') : t('pending.submit')}
             </Button>
           )}
         </div>
@@ -261,70 +367,50 @@ export function PendingClusterCard({
     >
       {expanded ? (
         <div className="flex flex-col gap-3">
-          {items.map((item) => {
-            const pendingRespond = responding.has(item.request.requestId);
-            const disabled = busy || pendingRespond;
+          {cluster.requests.map((request) => {
+            const pendingRespond = responding.has(request.requestId);
+            const requestDisabled = busy || pendingRespond;
             return (
               <div
-                key={item.request.requestId}
+                key={request.requestId}
                 className="flex flex-col gap-2 rounded-md bg-raised p-3 shadow-elev-1"
               >
                 <div className="flex flex-wrap items-center gap-2 text-2xs text-faint">
-                  <label className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-muted">
-                    <input
-                      className="accent-accent"
-                      type="checkbox"
-                      checked={item.draft.included}
-                      disabled={disabled}
-                      onChange={() =>
-                        patch(item.request, (draft) => ({
-                          ...draft,
-                          included: !draft.included,
-                        }))
-                      }
-                    />
-                    {t('pending.item.include')}
-                  </label>
-                  <span className="font-mono tabular-nums">run {shortId(item.request.runId)}</span>
-                  {item.request.mode === 'async' && (
+                  <span className="font-mono tabular-nums">run {shortId(request.runId)}</span>
+                  {request.mode === 'async' && (
                     <span className="font-mono text-accent">{t('ask.asyncBadge')}</span>
                   )}
-                  <span className="tabular-nums">{formatTimestamp(item.request.requestedAt)}</span>
+                  <span className="tabular-nums">{formatTimestamp(request.requestedAt)}</span>
                   {pendingRespond && <span>{t('pending.item.responding')}</span>}
                 </div>
-                {item.request.questions.map((question, index) => (
-                  <QuestionField
-                    // key 用问题自身的 header+正文：ask 的题目在同一请求内不会重复，
-                    // 用下标当 key 会在勾选状态变化时错位（biome noArrayIndexKey）。
-                    key={`${item.request.requestId}:${question.header}:${question.question}`}
-                    question={question}
-                    groupId={item.request.requestId}
-                    index={index}
-                    draft={{
-                      selected: item.draft.selected[index] ?? [],
-                      custom: item.draft.custom[index] ?? '',
-                    }}
-                    disabled={disabled || !item.draft.included}
-                    onChange={(next) =>
-                      patch(item.request, (draft) => {
-                        const selected = draft.selected.map((picks, position) =>
-                          position === index ? next.selected : picks,
-                        );
-                        const custom = draft.custom.map((value, position) =>
-                          position === index ? next.custom : value,
-                        );
-                        return { ...draft, selected, custom };
-                      })
-                    }
-                  />
-                ))}
+                {request.questions.map((question, index) => {
+                  const draft = drafts[draftKey(request.requestId, index)] ?? emptyQuestionDraft();
+                  return (
+                    <QuestionField
+                      // key 用问题自身的 header+正文：ask 的题目在同一请求内不会重复，
+                      // 用下标当 key 会在勾选状态变化时错位（biome noArrayIndexKey）。
+                      key={`${request.requestId}:${question.header}:${question.question}`}
+                      question={question}
+                      groupId={request.requestId}
+                      index={index}
+                      include={draft.include}
+                      draft={{ selected: draft.selected, custom: draft.custom }}
+                      disabled={requestDisabled}
+                      onToggleInclude={() => toggleInclude(request.requestId, index)}
+                      onChange={(next) => setAnswer(request.requestId, index, next)}
+                    />
+                  );
+                })}
               </div>
             );
           })}
-          {included.length > 0 && ready.length < included.length && (
+          {hasSkipped && (
             <p className="text-sm text-muted" role="status">
               {t('pending.answerRequired')}
             </p>
+          )}
+          {answeredRows.length > 0 && (
+            <p className="text-sm text-muted">{t('pending.submit.note')}</p>
           )}
         </div>
       ) : (
