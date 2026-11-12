@@ -1192,7 +1192,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.askAnswer.source': 'from approvals',
   'chat.agentMessage.from': 'from agent {name}',
   'chat.agentMessage.group': 'Message from agent {name}',
-  'chat.role.assistant': 'Assistant',
   // 0.36: message bubble action group
   'chat.message.actions': 'Message actions',
   // long-message fold (same toggle component on the chat and team pages)

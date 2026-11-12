@@ -1,6 +1,7 @@
 import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { Button, MessageActions, useMessageCopy } from '../../components/ui';
+import { formatClock } from '../../format';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { AgentNode } from '../../state/agents';
@@ -13,7 +14,7 @@ import { AskAnswerCard } from './AskAnswerCard';
 import { ChatWelcome } from './ChatWelcome';
 import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
-import { ReasoningBlock } from './ReasoningBlock';
+import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
 import {
   AssistantText,
@@ -315,19 +316,19 @@ export function TranscriptWindow({
   // 历史消息（Transcript 里的 `message` item）不进门 —— 历史加载是回填，不是追加。
   const isEntering = useEnteringItems(items, resetKey);
 
-  // 「助手」发言人名：挂在该 run **第一个**正文 / 思考项上（一个 run 只出现一次）。
-  // 与历史态的 groupStart 是同一口径：连续同发言人不重复。签名换成「这一项带头」的
-  // key 集合，渲染时 O(1) 判定，不用在 renderItem 里回头找前一项。
-  const speakerKeys = useMemo(() => {
-    const named = new Set<string>();
-    const claimed = new Set<string>();
+  // 「这个 run 有没有思考卡」：**按 run 汇总**判定，不看某条消息自己的渲染。
+  // live 的思考是**独立 item**（`run-reasoning`），判据门槛与历史态同一个
+  // `hasReasoningCard`（非空白文本才算一张卡），只是这边要先把 item 归到 run 上。
+  // 用途只有一件：这一轮**有**思考卡 ⇒ 时间已经上移到卡头，正文下方的
+  // `MessageActions` 不再重复渲染时间；没有卡的那一轮才把时间放回工具栏。
+  const reasoningRuns = useMemo(() => {
+    const runs = new Set<string>();
     for (const item of items) {
-      if (item.kind !== 'run-text' && item.kind !== 'run-reasoning') continue;
-      if (claimed.has(item.runId)) continue;
-      claimed.add(item.runId);
-      named.add(item.key);
+      if (item.kind !== 'run-reasoning') continue;
+      if (!hasReasoningCard(item.text)) continue;
+      runs.add(item.runId);
     }
-    return named;
+    return runs;
   }, [items]);
 
   // 「正在思考」：run 已经在跑、但这一轮**还没有任何可见内容**（正文 / 思考 / 工具卡）
@@ -388,18 +389,19 @@ export function TranscriptWindow({
         // （key 在 flush 前后不变，见 check-transcript-items 的 F2），DOM 原地复用。
         // 折叠与入场也收在 AssistantText 里（`entering` = 事件流追加的新 item；
         // 容器在 streaming 翻转前后不变，所以 `.msg-enter` 只播挂载那一次）。
-        // `speaker`：这一项是该 run 的第一块内容 ⇒ 上方补「助手」发言人名
-        // （run 运行期也要看得见，历史消息那条走 Transcript 的 groupStart）。
         //
         // `actions`：这一段的工具栏（复制正文），落在正文**下方一行、左对齐**
         // （`mt-1`）；显隐（hover / focus-within / 触屏常显）由
         // `MessageActions` 自己负责，这里不写。思考卡上不挂工具栏。
+        //
+        // 时间：这一轮**有**思考卡 ⇒ 时间只在卡头（见 `reasoningRuns`），正文下方
+        // 不重复；没有思考卡的那一轮才把时间放回工具栏的 meta。
+        const clock = reasoningRuns.has(item.runId) ? '' : formatClock(item.ts);
         return (
           <AssistantText
             text={item.text}
             streaming={item.streaming}
             entering={isEntering(item.key)}
-            speaker={speakerKeys.has(item.key)}
             actions={
               item.text.trim().length > 0 ? (
                 <MessageActions
@@ -411,6 +413,11 @@ export function TranscriptWindow({
                       onSelect: () => copy(item.text),
                     },
                   ]}
+                  meta={
+                    clock === '' ? undefined : (
+                      <time dateTime={new Date(item.ts ?? 0).toISOString()}>{clock}</time>
+                    )
+                  }
                 />
               ) : undefined
             }
@@ -422,12 +429,13 @@ export function TranscriptWindow({
         // ReasoningBlock 内部的 `.motion-disclosure` 负责（见 styles/motion.css）。
         // 卡上没有消息工具栏（用户要的），只有一个卡头自带的「复制思考」小按钮，
         // 由组件自己渲染 —— 这里不需要传任何 actions。
+        // `time`：这一段自己的时刻（`startedAt`，也是排序依据，只读），渲染在卡头最右。
         return (
           <ReasoningBlock
             text={item.text}
             streaming={item.streaming}
             entering={isEntering(item.key)}
-            speaker={speakerKeys.has(item.key)}
+            {...(item.startedAt !== undefined ? { time: item.startedAt } : {})}
           />
         );
       case 'tool':
