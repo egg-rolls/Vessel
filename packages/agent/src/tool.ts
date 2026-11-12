@@ -288,6 +288,8 @@ export function createAgentTool(
 
   return {
     name: 'agent',
+    // 不变量必须写在描述里：交接只有 startup_prompt 一条通道，新 body 一提交就开跑、
+    // 不继承本轮对话，所以「必填」不足以让模型写出下一个身体真正需要的信息。
     description:
       'Long-lived member lifecycle tool. ' +
       'create: peer member(s) in the caller team (root owner: use hire). ' +
@@ -302,6 +304,8 @@ export function createAgentTool(
       'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first, ' +
       'plus an optional title that AI naming will not overwrite; ' +
       'a body may only rotate itself. ' +
+      'startup_prompt is the only handoff: the new body starts at once and does not inherit ' +
+      'this conversation, so it must carry everything the next body needs to know. ' +
       'Bodies may use create, hire, close, rotate, send, list and read. ' +
       'Closing a peer needs human approval; closing your own contractor or yourself does not. ' +
       'Cross-node: reply to a federated from by sending to that address; from is runtime-filled ' +
@@ -370,7 +374,11 @@ export function createAgentTool(
         member: { type: 'string', description: 'close: member id or session id' },
         startup_prompt: {
           type: 'string',
-          description: 'rotate: required first message for the new body',
+          // 成员侧 schema 沿用这一份（runtime 的 MEMBER_AGENT_PROPERTIES 只做 fallback），
+          // 所以「唯一交接通道」这句话写在这里对两侧同时生效。
+          description:
+            'rotate: required; the new body first message and the only handoff channel — ' +
+            'it does not inherit this conversation, so write everything the next body needs',
         },
         title: {
           type: 'string',
@@ -577,7 +585,17 @@ export function createAgentTool(
             epoch: created?.epoch,
             ...(result.title !== undefined ? { title: result.title } : {}),
           };
-          return `${JSON.stringify(rotated)}\nrotation committed; finish the current turn`;
+          // 文案必须是真的：旧 body 收口时会被 epoch fencing（service 侧
+          // `agent.reply.stale`），本轮正文既不记账也不回传父级，所以原来的
+          // 「finish the current turn」是假指令 —— 模型会照着它把交接信息说给空气听。
+          // B′（交棒轮正常记账）落地后，只需把中间那句改回「本轮正常采用」。
+          return (
+            `${JSON.stringify(rotated)}\n` +
+            'rotation committed; the new body is already running and this conversation is ' +
+            'no longer yours. Remaining output of this turn is fenced as the old epoch (not ' +
+            'recorded, not delivered), so startup_prompt is the only handoff — everything ' +
+            'the next body must know goes there.'
+          );
         }
 
         if (!isOwnerCaller && !BODY_ACTIONS.includes(action as string)) {
