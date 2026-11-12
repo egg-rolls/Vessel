@@ -765,10 +765,6 @@
    家族的身份圆点再点一个就是并排两个圆点（用户报过「圆点重复」）。作用域只到这张卡
    （`.stream-card-queued`），失败卡 / 环境卡 / 运行时提示卡的圆点数量与位置都不变。
 
-   色调不在这里写：排队中 tone=warn ⇒ `.notice-block.warn`（`--warn-soft` 底 + `--warn`
-   文字），已取消 tone=neutral ⇒ `.notice-block` 的中性档（sunken 底）—— 一条是「还没真正
-   发出去」，一条是「已经不用等了」，都用全站既有语义 token，不新造色值。
-
    宽度也不在这里写：卡是块级卡面（`.notice-block`），卡头 / 取消 / 展开体天生按列宽排，
    短输入与多行输入卡宽一致。别再给这张卡挂 `.stream-notice` —— 那是「一行 notice」的行
    flex，套在卡上会让卡头和展开体各自贴着内容宽度，看着就是「卡宽随内容变」。原来给那条
@@ -778,6 +774,21 @@
 .notice-block.stream-card-queued > summary::before,
 .notice-block.stream-card-queued > .event-block-summary::before {
   content: none;
+}
+
+/* 排队中（还没真正发出去的那条）：琥珀带。全站只有这一处用 `--amber-*` 表达这种状态
+   （token 与「不是通用 warn」的理由见 tokens.css）。已取消那档不带这个修饰类，留在
+   `.notice-block` 的中性档（`--surface-sunken` + muted），不再警示 —— 取消不是「黄色警报」。 */
+
+.notice-block.stream-card-queued-waiting {
+  background: var(--amber-soft);
+  color: var(--amber-ink);
+}
+
+/* 展开 / 收起 chevron 跟着卡的身份色走（`--amber` 的角色就是前景 / 图标）。 */
+
+.stream-card-queued-waiting .event-block-toggle {
+  color: var(--amber);
 }
 
 /* ask_user：与 permission-card 一样渲染在 Composer 槽位。 */

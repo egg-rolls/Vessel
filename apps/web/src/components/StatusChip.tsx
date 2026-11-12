@@ -74,6 +74,8 @@ const chip = cva(
         warn: 'bg-warn-soft text-warn',
         ok: 'bg-success-soft text-success',
         danger: 'bg-danger-soft text-danger',
+        /** 有色卡带上的胶囊（见 `StatusChip` 的 `variant`）：不透明底 + 正文色文字。 */
+        band: 'bg-raised text-ink',
       },
     },
     defaultVariants: { tone: 'muted' },
@@ -150,18 +152,29 @@ export function StatusChip({
   status,
   label,
   title,
+  variant = 'default',
 }: {
   status: string | undefined;
   /** 覆盖文本（例如 `queued · 第 2 位`）。字形仍由 status 决定。 */
   label?: string;
   title?: string;
+  /**
+   * 胶囊落在**有色卡带**上时（会话流的排队卡 = `--amber-soft` 底）用 `onBand`：
+   * 底换成不透明的 `bg-raised`、文字提到 `text-ink`，于是文字对卡带和对自己那块底都
+   * 是正文级对比（实测 14:1 以上），不再是 `bg-sunken + text-faint` 那种「淡底淡字」。
+   * `default` 档的 class 逐字不变 —— 默认调用点的外观零变化。
+   */
+  variant?: 'default' | 'onBand';
 }) {
   const kind = normalizeStatus(status);
   const meta = STATUS_META[kind];
   const text = label ?? statusLabel(status);
+  // onBand 只换色板（`band` 档），不叠第二组 bg/text 类：同一属性两条 utility 谁赢
+  // 取决于生成顺序，那种「看起来生效了」最容易在别的主题下翻车。
+  const tone = variant === 'onBand' ? 'band' : meta.tone;
   return (
     <Tooltip label={title ?? statusLabel(status)}>
-      <span className={chip({ tone: meta.tone })} data-status={kind}>
+      <span className={chip({ tone })} data-status={kind}>
         <span className={cn('text-2xs', kind === 'running' && 'pulse-soft')} aria-hidden="true">
           {meta.glyph}
         </span>

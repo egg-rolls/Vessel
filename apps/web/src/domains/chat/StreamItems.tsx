@@ -511,13 +511,18 @@ export const RunItems = memo(function RunItems({
  * 短输入是一小截、长输入才撑开，卡片看起来「随内容变宽」（用户报过）。块级卡面下三者
  * 都按列宽排，短输入与多行输入卡宽一致。
  *
- * **色调就是这个组件要表达的东西**（用户裁决）：排队中的那条还没真正发出去，用 warn
- * 档（`.notice-block.warn`：`--warn-soft` 底 + `--warn` 文字，与全站 warn 语义同源，
- * 不新造色值）把它和正式消息区分开；已取消的那条已经不是「等待中」了，退回中性档
- * （`notice-block` 不带色调 ⇒ `--surface-sunken` 底），不再警示。
+ * **色调就是这个组件要表达的东西**（用户裁决）：排队中的那条还没真正发出去，卡面用
+ * 琥珀档（`--amber-soft` 底 + `--amber-ink` 文字，见 tokens.css：amber 是「未发送 / 排队中」
+ * 专用语义色，不是通用 warn），把「未发送」与「正式消息」一眼分开；已取消的那条已经不是
+ * 「等待中」了，退回 notice 家族的中性档（`--surface-sunken` + muted），不再警示。
  *
- * 已取消这一档要自己补 `notice-block`：`tone` 的 neutral 档刻意不带家族类（工具卡 /
- * 环境卡 / agent 卡是裸行，不该被套上 notice 卡面），不补就既没底色也没内衬。
+ * 卡面两档都挂 `notice-block`：`tone` 的 neutral 档刻意不带家族类（工具卡 / 环境卡 /
+ * agent 卡是裸行，不该被套上 notice 卡面），所以这里自己点家族类拿圆角 / 内衬；颜色由
+ * 排队态那个修饰类（`stream-card-queued-waiting`，见 chat.css）覆盖成 amber。`tone` 保持
+ * 默认 neutral —— StreamCard 的词表里没有 amber，也不该为一张卡去改卡原语。
+ *
+ * 卡头那颗胶囊落在琥珀底上，所以显式传 `StatusChip` 的 `onBand` 变体（不透明底 + ink
+ * 文字），不再用「淡底淡字」的默认档；已取消那档在 sunken 底上，仍用默认档。
  *
  * 卡头左侧只留**一个**状态标记：`StatusChip` 的字形（○ 排队 / – 已取消）已经表达了状态，
  * notice 家族的身份圆点不再叠一个（见 chat.css 的 `.stream-card-queued`）。
@@ -536,21 +541,24 @@ export function QueuedNotice({
   defaultOpen?: boolean;
 }) {
   const status = item.cancelled ? 'cancelled' : 'queued';
-  // 已取消那档要自己补 notice 家族类：tone=neutral 刻意不带它（见函数头注释）。
-  const faceClass = item.cancelled ? 'notice-block' : '';
+  // 排队中（还在等）才上琥珀带；已取消不加这个类，留在 notice 家族的中性档（不再警示）。
+  const stateClass = item.cancelled ? '' : 'stream-card-queued-waiting';
   const position =
     item.queuePosition != null
       ? t('chat.run.queuedPosition', { position: item.queuePosition })
       : t('chat.run.queuedUnknown');
   return (
     <StreamCard
-      // 色调：排队中 warn（提醒色，还没真正发出去）/ 已取消 neutral（不再警示）。
-      tone={item.cancelled ? 'neutral' : 'warn'}
       // 卡宽跟列一致（w-full + min-w-0 + max-w-full）：短输入不缩水、长输入不撑宽。
-      className={`stream-card-queued w-full min-w-0 max-w-full ${faceClass}`.trim()}
+      className={`notice-block stream-card-queued w-full min-w-0 max-w-full ${stateClass}`.trim()}
       defaultOpen={defaultOpen}
       title={
-        <StatusChip status={status} label={item.cancelled ? t('chat.run.cancelled') : position} />
+        <StatusChip
+          status={status}
+          label={item.cancelled ? t('chat.run.cancelled') : position}
+          // 排队中的胶囊在琥珀底上 ⇒ onBand；已取消在 sunken 底上 ⇒ 默认档。
+          variant={item.cancelled ? 'default' : 'onBand'}
+        />
       }
       summary={item.input}
       actions={
@@ -563,7 +571,7 @@ export function QueuedNotice({
         ) : undefined
       }
     >
-      {/* 正文是用户自己写的那条消息，压在 warn 底上也要读得清：用 ink，不用 muted。
+      {/* 正文是用户自己写的那条消息，压在琥珀底上也要读得清：用 ink，不用 muted。
           内衬由 `.notice-block > .event-block-body` 给，这里不再补 px。 */}
       <p className="m-0 min-w-0 break-words whitespace-pre-wrap wrap-anywhere text-sm text-ink">
         {item.input}

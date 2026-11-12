@@ -26,6 +26,16 @@
   --ok-soft: rgba(11, 127, 102, 0.1);
   --warn: #4a4a4e;
   --warn-soft: rgba(74, 74, 78, 0.1);
+  /* amber 是**「未发送 / 排队中」专用语义色**（会话流里那张排队卡），不是通用提醒色：
+     通用 warn 仍是上面那组中性灰，语义没变。单独一支的理由：灰罩只有 10%，压在 --bg
+     上几乎看不出来，而「还没真正发出去的那条消息」必须一眼能和正式消息分开。
+     - --amber       前景 / 图标 / 边框
+     - --amber-soft  卡带底色（**不透明**值：这条带要落在 bg / surface / 滚动区上都还是
+                     同一块琥珀，用 rgba 罩色会被底下那层底色带偏）
+     - --amber-ink   压在 --amber-soft 上的文字（正文级，对比 ≥ 7:1：那是用户自己写的输入） */
+  --amber: #8a5a00;
+  --amber-soft: #fcf2d4;
+  --amber-ink: #6b4400;
   --danger: #c0362c;
   --danger-soft: rgba(192, 54, 44, 0.09);
   --info: #5c5c60;
@@ -186,6 +196,10 @@
     --ok-soft: rgba(30, 255, 199, 0.12);
     --warn: #d6d6da;
     --warn-soft: rgba(214, 214, 218, 0.1);
+    /* amber（排队专用语义色，见 :root 的注释）：暗色档 —— 底色是暖暗而不是亮黄。 */
+    --amber: #f0b354;
+    --amber-soft: #2b2216;
+    --amber-ink: #f7d9a0;
     --danger: #ff6e6e;
     --danger-soft: rgba(255, 110, 110, 0.12);
     --info: #a1a1a6;
@@ -222,6 +236,10 @@
   --ok-soft: rgba(30, 255, 199, 0.12);
   --warn: #d6d6da;
   --warn-soft: rgba(214, 214, 218, 0.1);
+  /* amber（排队专用语义色，见 :root 的注释）：显式暗色档，与上面 media 档同值。 */
+  --amber: #f0b354;
+  --amber-soft: #2b2216;
+  --amber-ink: #f7d9a0;
   --danger: #ff6e6e;
   --danger-soft: rgba(255, 110, 110, 0.12);
   --info: #a1a1a6;
