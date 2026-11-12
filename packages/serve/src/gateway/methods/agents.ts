@@ -887,13 +887,9 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           throw new RpcError('invalid_params', 'agents.claim requires non-empty message_ids');
         }
         if (ids.length > CLAIM_MAX_IDS) {
-          throw new RpcError(
-            'invalid_params',
-            `message_ids accepts at most ${CLAIM_MAX_IDS} ids`,
-            {
-              count: ids.length,
-            },
-          );
+          throw new RpcError('invalid_params', `message_ids accepts at most ${CLAIM_MAX_IDS} ids`, {
+            count: ids.length,
+          });
         }
         // 可见性口径与 agents.list / agents.get / agents.inbox / agents.recall 完全一致。
         const agents = await visibleAgents(deps, ctx);
