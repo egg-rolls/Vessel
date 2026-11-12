@@ -126,6 +126,11 @@ import {
   type ServerFrame,
 } from './protocol.js';
 import {
+  REPLAY_BUDGET_TUNING,
+  type ReplayBudgetSelection,
+  selectReplayBudgetWindow,
+} from './replay-budget.js';
+import {
   type CapabilityManifest,
   createRpcDispatcher,
   defineMethods,
@@ -438,21 +443,41 @@ const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 const WS_BACKPRESSURE_HIGH = 2 * 1024 * 1024;
 const WS_BACKPRESSURE_LOW = 512 * 1024;
 /**
- * 单次回放的字节预算：只回放最近这段历史，更早的区间用 gap 跳过。
+ * 单次回放仍然是**有界**的：只回放最近这段历史，更早的区间用 gap 跳过。
  *
  * 环形缓冲最多 10000 条，单条 `tool.call.completed` 可达 MB 级；长驻 gateway
  * 一次 `since=0` 全量回放可能是数百 MB。慢客户端必然触发背压丢帧 → gap →
- * 重连 → 再全量回放，形成永远追不上最新事件的循环。从最新往回取到预算为止，
- * 既保证「最新消息先到」，也把单次回放压到高水位以下。
+ * 重连 → 再全量回放，形成永远追不上最新事件的循环。
  *
+ * 预算本身不再固定：`replay-budget.ts` 按「结构优先 + 尾部正文」动态推导
+ * （`clamp(最新一轮地板 × 1.5, 1 MiB, 4 MiB)`），保证最新一轮的 `run.started`
+ * 必在窗口内（客户端 `hasNewestRunStart()` 的既有依赖），同时保留 4 MiB 硬上限。
  * 预算之外更早的区间不再「不可恢复」：客户端带 `until_seq` 逐页回退（能力位
  * `events.replay-range`），每页同样受这里的预算约束 —— 分段，而不是把预算调大。
  */
-const REPLAY_BUDGET_BYTES = 1024 * 1024;
-/** 回放条数兜底：小事件很多时按条数收口。 */
-const REPLAY_MAX_EVENTS = 2_000;
 /** `run_id → session_id` 归属映射上限（LRU）。 */
 const RUN_SESSION_MAP_LIMIT = 5_000;
+
+/**
+ * 地板（最新一轮尾部）自身超过回放硬上限：进程内只提示一次。
+ *
+ * 这是**极端情形**（一轮内就写了几 MB 工具结果 + 正文），此时硬上限优先、退化为
+ * 「有界连续后缀」，客户端靠 `until_seq` 分页回填把 `run.started` 找回来。留一条
+ * warn 是让运维看得见「预算被这一轮吃掉了」，而不是静默降级。
+ */
+let replayFloorTruncatedWarned = false;
+
+function consoleNoteReplayBudget(selection: ReplayBudgetSelection): void {
+  if (!selection.floorTruncated || replayFloorTruncatedWarned) return;
+  replayFloorTruncatedWarned = true;
+  console.warn(
+    `[vessel] replay budget: newest run tail ${selection.floorBytes}B${
+      selection.floorBytesIsLowerBound ? '+' : ''
+    } exceeds hard cap ` +
+      `${selection.budgetBytes}B; replaying a bounded suffix of ${selection.keptEvents} events / ` +
+      `${selection.keptBytes}B (clients backfill via until_seq).`,
+  );
+}
 
 /** 事件自带的 `session_id`；没有时返回 undefined。 */
 function eventSessionId(event: RunEvent): string | undefined {
@@ -1203,39 +1228,60 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   /**
-   * 有界回放窗口：从最新事件往回取，直到字节预算或条数预算用完。
+   * 有界回放窗口：**结构优先 + 动态预算**（见 `replay-budget.ts`）。
    *
    * 输入必须是**过滤后**的事件（session_id / run_id / types 先过滤），这样
    * 窄订阅不会因为无关事件占满预算而拿不到自己的尾部。`encode` 的结果既用于
    * 计算字节数也用于发送。返回被跳过的最后一条 seq（`skippedTo`），调用方把它
    * 和环形缓冲自身的缺口合并成一个 gap。
+   *
+   * 与旧实现的差别只在**预算来源**：固定 1 MiB / 2000 条 → 由「最新一个
+   * `run.started`（或 `user.message`）起的地板字节数 × 安全系数」动态推导
+   * （clamp 到 1–4 MiB）。保留区仍是源的**连续后缀**、仍按 seq 升序、无重复，
+   * `skippedTo` 口径不变。
+   *
+   * `encode` 惰性：`bytesAt` 只在真正需要算预算时才序列化一条事件 —— 找锚点只看
+   * 类型，不会为了算窗口把整圈缓冲（可能数十 MB）编码一遍。
    */
   function tailReplayWindow(
     items: readonly SeqEvent[],
     encode: (item: SeqEvent) => string,
-  ): { frames: ReplayFrame[]; skippedTo?: number } {
-    const kept: ReplayFrame[] = [];
-    let bytes = 0;
-    for (let i = items.length - 1; i >= 0; i--) {
+  ): { frames: ReplayFrame[]; skippedTo?: number; budget: ReplayBudgetSelection } {
+    const count = items.length;
+    const encoded: (string | undefined)[] = new Array(count);
+    const sizes: number[] = new Array(count).fill(-1);
+    const sizeAt = (index: number): number => {
+      const cached = sizes[index];
+      if (cached !== undefined && cached >= 0) return cached;
+      const item = items[index];
+      if (item === undefined) return 0;
+      const text = encode(item);
+      encoded[index] = text;
+      const bytes = Buffer.byteLength(text, 'utf8');
+      sizes[index] = bytes;
+      return bytes;
+    };
+    const budget = selectReplayBudgetWindow(
+      {
+        count,
+        typeAt: (index) => items[index]?.event.type ?? '',
+        bytesAt: sizeAt,
+      },
+      REPLAY_BUDGET_TUNING,
+    );
+    if (budget.startIndex < 0) return { frames: [], budget };
+    const frames: ReplayFrame[] = [];
+    for (let i = budget.startIndex; i < count; i += 1) {
       const item = items[i];
       if (item === undefined) continue;
-      const encoded = encode(item);
-      const size = Buffer.byteLength(encoded, 'utf8');
-      if (
-        kept.length > 0 &&
-        (bytes + size > REPLAY_BUDGET_BYTES || kept.length >= REPLAY_MAX_EVENTS)
-      ) {
-        break;
-      }
-      bytes += size;
-      kept.push({ item, encoded });
+      frames.push({ item, encoded: encoded[i] ?? encode(item) });
     }
-    kept.reverse();
-    const first = kept[0];
-    if (first === undefined) return { frames: [] };
+    consoleNoteReplayBudget(budget);
+    const first = frames[0];
+    if (first === undefined) return { frames: [], budget };
     const oldest = items[0]?.seq;
-    if (oldest === undefined || first.item.seq <= oldest) return { frames: kept };
-    return { frames: kept, skippedTo: first.item.seq - 1 };
+    if (oldest === undefined || first.item.seq <= oldest) return { frames, budget };
+    return { frames, skippedTo: first.item.seq - 1, budget };
   }
 
   interface ReplayPlan {
@@ -1246,6 +1292,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
     /** 本次 epoch 实际会发送的第一条 seq */
     fromSeq: number;
     replaySessions: Map<string, string>;
+    /**
+     * 本次预算分配的诊断（结构地板 / 动态预算 / 最大的那条事件）。
+     *
+     * 目前只落在计划对象上供内部排查：往 wire 上暴露需要协议字段（客户端在
+     * `live-item-store` 那单里一起改），不在这一轮的范围内。
+     */
+    budget: ReplayBudgetSelection;
   }
 
   /**
@@ -1271,8 +1324,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   function planReplay(ws: Ws): ReplayPlan {
     // 分段回放（additive `until_seq`）：把回放源裁成 `since < seq <= until`。
-    // 窗口仍是有界的（从 until 往回取 1 MiB / 2000 条），所以一页 = 一段更早的
-    // 历史；缺省 undefined 时与旧语义逐字节等价。
+    // 窗口仍然有界：预算由「最新一个 run.started 起的地板」动态推导并 clamp 到
+    // 1–4 MiB，所以一页 = 一段更早的历史。回填页（`until` 有值）同样走这条路径，
+    // 因此每页都是「结构优先 + 尾部正文」，不会退回到固定 1 MiB 的老口径。
+    // 缺省 undefined 时与小会话的旧语义逐字节等价（预算不会低于旧下限 1 MiB）。
     const until = ws.data.until;
     const all = hub.since(ws.data.since);
     const source = until === undefined ? all : all.filter((item) => item.seq <= until);
@@ -2994,6 +3049,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
               // 先算窗口再写 hello：hello.from_seq 必须是本次实际会发送的第一条。
               // 分段回放（additive `until_seq`）：窗口终点裁到 until，窗口之后仍由
               // pull 一路拉到最新（SSE 本来就是前向分批回放，不是「尾部窗口之后就丢」）。
+              // 窗口预算与 WS 侧同一份实现（`replay-budget.ts`）：结构优先 + 动态预算，
+              // 两处调用点不允许各自维护一套口径。
               const source = hub.since(since);
               const bounded =
                 until === undefined ? source : source.filter((item) => item.seq <= until);
