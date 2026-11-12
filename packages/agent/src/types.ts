@@ -786,6 +786,35 @@ export interface AgentRecallResult {
   skipped: AgentRecallSkip[];
 }
 
+/**
+ * `claim`（0.51）的单条跳过原因：`not_found` = 库里没这条（含收件箱损坏）；
+ * `consumed` = 早就被拿走了（run 已经开始 / 上次已 claim 过）。
+ *
+ * 没有 `active` 这个档：一条正在跑的消息在开跑那一刻就已 consumed，落进来的判据与
+ * 「已经拿走过」完全一样 —— 多一档只会让调用方多写一个死分支。
+ */
+export interface AgentClaimSkip {
+  message_id: string;
+  reason: 'not_found' | 'consumed';
+}
+
+/** `claim` 入参：把**已经看到正文**的待处理输入从队列里拿走（不可逆）。 */
+export interface AgentClaimInput {
+  agent_id: string;
+  message_ids: string[];
+}
+
+/**
+ * `claim` 结果：`claimed` 是真被拿走（→ consumed）的那些 id；`skipped` 说明没拿成的。
+ *
+ * 与工具层的 `inbox{action:'claim'}` 同一套语义，只是这里不带正文（Web 侧不需要）——
+ * 正文只有模型侧需要，走工具层那条路。
+ */
+export interface AgentClaimResult {
+  claimed: string[];
+  skipped: AgentClaimSkip[];
+}
+
 /** 统一准入结果；`session_id` 是 body id */
 export interface AdmitResult {
   run_id: string;
@@ -1340,6 +1369,18 @@ export interface AgentService {
    * 正在执行的那条不能撤回（`skipped: active`），已消费的也不能（`skipped: consumed`）。
    */
   recall(input: AgentRecallInput): Promise<AgentRecallResult>;
+  /**
+   * 认领待处理输入（`agents.claim`，0.51）：**「这条我已经拿到了，别再投给我」**。
+   *
+   * 与 `recall` 的区别是「拿走之后留什么」：recall 要么真删（human 源）要么留档
+   * （agent 源 unhold），`claim` 一律走**消费**（inbox `consumed` + 解 hold）—— 消息不再
+   * 投递、不再出现在 list / read 里，下一次 append 裁剪时清掉。**不可逆**，没有 unclaim。
+   *
+   * 与 recall 同一条前置收口：先取消该消息对应的 **queued run** 并从 body mailbox 出队，
+   * 再消费。少了这一步，`claim` 一条 held（已排进队列）的条目之后它仍会被那次已排程的
+   * run 投一遍 —— 这个动作就成了假承诺。
+   */
+  claim(input: AgentClaimInput): Promise<AgentClaimResult>;
   /**
    * 外部取消一个 **queued** run 后的收口（`runs.cancel` → `RunControlLike.cancel` → 这里）。
    *

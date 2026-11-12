@@ -67,6 +67,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'agents.inbox': 'read',
   // 0.53：撤回一条待处理输入（human 源真删 / agent 源留档）；不是 runs.cancel。
   'agents.recall': 'write',
+  // 0.51：认领待处理输入（已看到正文 ⇒ 拿走不再投递；不可逆，与 recall 同一入口不同出口）。
+  'agents.claim': 'write',
   // 0.52：节点侧只读目录浏览（单层 / 无内容；结果里折稳定码，不抛 500）。
   'attachments.list': 'read',
   'agents.dispatch': 'write',

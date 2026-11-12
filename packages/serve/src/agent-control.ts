@@ -367,7 +367,20 @@ export interface AgentControlLike {
    */
   recall?(input: AgentRecallLikeInput): AgentRecallLikeResult | Promise<AgentRecallLikeResult>;
   /**
+<<<<<<< HEAD
    * 0.51（可选）：按某具成员身体读那一份工具清单（`tools.list{agent_id}` 的唯一数据源）。
+=======
+   * 认领待处理输入（`agents.claim`，0.51）：**「这条我已经拿到了，别再投给我」**。
+   *
+   * 与 `recall` 的区别只在「拿走之后留什么」：recall 真删（human 源）/ 留档（agent 源），
+   * claim 一律**消费**（标 consumed + 解 hold）—— 条目不再投递、不再出现在 `agents.inbox`
+   * 里，下一次 append 裁剪时清掉。**不可逆**（没有 unclaim），所以前端只把它放在
+   * 「已经看到正文」的入口上。未实现（缺省）时 RPC 回 `not_supported`。
+   */
+  claim?(input: AgentClaimLikeInput): AgentClaimLikeResult | Promise<AgentClaimLikeResult>;
+  /**
+   * 0.51（可选）：该成员的**真实**工具面（`tools.list{agent_id}` 的唯一数据源）。
+>>>>>>> 0.51-inbox-claim
    *
    * **可选**是硬口径：老适配器 / 老注入没有它时，`tools.list{agent_id}` 退化成节点口径
    * （同一个 `{ tools }` 形状），谁都不会因此炸；不传 `agent_id` 的口径在任何情况下不受
@@ -457,4 +470,32 @@ export interface AgentRecallLikeSkip {
 export interface AgentRecallLikeResult {
   deleted: string[];
   skipped: AgentRecallLikeSkip[];
+}
+
+/** `agents.claim` 入参（0.51）：按 message id 认领「已经看到正文」的待处理输入。 */
+export interface AgentClaimLikeInput {
+  agent_id: string;
+  message_ids: readonly string[];
+}
+
+/**
+ * `agents.claim` 的单条跳过原因。
+ *
+ * 没有 `active` 这一档（recall 有）：一条正在跑的消息在开跑那一刻就已 consumed，落进来
+ * 的判据与「已经拿走过」完全相同。
+ */
+export interface AgentClaimLikeSkip {
+  message_id: string;
+  reason: 'not_found' | 'consumed';
+}
+
+/**
+ * `agents.claim` 结果：`claimed` = 真的被拿走（→ consumed）的 id，`skipped` = 没拿成的。
+ *
+ * 与 `agents.recall` 的 `{deleted, skipped}` 同形（条带对两个动作写同一套「本地减法 +
+ * 如实报失败」）；差别是出口不可逆：claim 之后这些条目不再投递、不再出现在 `agents.inbox`。
+ */
+export interface AgentClaimLikeResult {
+  claimed: string[];
+  skipped: AgentClaimLikeSkip[];
 }

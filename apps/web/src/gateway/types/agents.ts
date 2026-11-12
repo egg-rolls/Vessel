@@ -156,6 +156,23 @@ export interface AgentRecallResponse {
   skipped?: AgentRecallSkip[];
 }
 
+/** `agents.claim` 的单条跳过原因（0.51；没有 `active` —— 正在跑的那条开跑即 consumed）。 */
+export interface AgentClaimSkip {
+  message_id: string;
+  reason: 'not_found' | 'consumed';
+}
+
+/**
+ * `agents.claim` 结果（0.51）：`claimed` = 真的被拿走（→ consumed）的条目。
+ *
+ * 与 `AgentRecallResponse` 同形，条带对两个动作写同一套「本地减法 + 如实报失败」；
+ * 差别是**不可逆**：拿走的条目不再投递、不再出现在 `agents.inbox`。
+ */
+export interface AgentClaimResponse {
+  claimed: string[];
+  skipped?: AgentClaimSkip[];
+}
+
 /** `agents.send` 的单条结果（置顶复用 message_id + interrupt）。 */
 export interface AgentSendEntry {
   ok: boolean;

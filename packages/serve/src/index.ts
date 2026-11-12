@@ -7,6 +7,9 @@
  */
 
 export type {
+  AgentClaimLikeInput,
+  AgentClaimLikeResult,
+  AgentClaimLikeSkip,
   AgentCloseBatchResultLike,
   AgentCloseItemLike,
   AgentCloseOkLike,

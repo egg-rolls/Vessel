@@ -17,10 +17,13 @@
  * - 条带只做「还有几条在等」，写入口按来源分档（见下）。
  *
  * **来源分档（0.51）**：条带展示**两个来源**，但写操作只给 `human`：
- * - human 源（人打的字）：两颗图标键 —— 「收回来编辑」（peek 正文 → 回填草稿 → recall）
- *   与「取消排队」（recall 真删），成功后那条从条带上消失；
+ * - human 源（人打的字）：三颗图标键 —— 「收回来编辑」（peek 正文 → 回填草稿 → recall）、
+ *   「取消排队」（recall 真删）与「我已处理」（claim：标 consumed，拿走这次投递），
+ *   成功后那条从条带上消失；
  * - agent 源（父 agent 发给本会话的消息）：**只展示，一颗写键都不给**。它的 recall 语义是
- *   unhold 留档（消息回到可读 unread，模型仍能 read），画成「撤掉」就是伪装成删除。
+ *   unhold 留档（消息回到可读 unread，模型仍能 read），画成「撤掉」就是伪装成删除；claim
+ *   在它身上等于「人替这具 body 处理掉别人给它的输入」，更没有立场。所以这里 —— 与
+ *   取消 / 收回编辑不同 —— `agents.claim` 在前端也**只对 human 源开放**。
  *
  * 这就是 0.53 那条 `from === 'human'` 等值过滤的去向：它当时兼任两件事 ——「别串台」
  * 和「只收人的字」。「别串台」的真判据是 `session_id`（保留，见 `ownedBySession`），
@@ -49,7 +52,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useToast } from '../../components/ToastProvider';
 import type { GatewayClient } from '../../gateway/client';
-import type { AgentInboxEntry, AgentInboxResponse, AgentRecallResponse } from '../../gateway/types';
+import type {
+  AgentClaimResponse,
+  AgentInboxEntry,
+  AgentInboxResponse,
+  AgentRecallResponse,
+} from '../../gateway/types';
 import { t } from '../../i18n';
 import { errorMessage } from './errors';
 import {
@@ -120,7 +128,7 @@ function toEntry(entry: AgentInboxEntry): PendingStripEntry {
  * 里。同源折叠组只有**组头**带 `fold`（「N 条」开合），展开后的每一条都各自是一张完整
  * 的卡 —— 折叠只影响展示。
  *
- * **写操作只给 human 源**（`human` 这一个开关决定两颗键给不给）：agent 源的条目照常展示，
+ * **写操作只给 human 源**（`human` 这一个开关决定三颗键给不给）：agent 源的条目照常展示，
  * 但它的 recall 只是 unhold 留档，按钮放在那里就是假承诺。判定留在这一个地方，展开后的
  * 每一条与组头走同一条路径，不会出现「组头能撤、组内不能」这种分裂。
  */
@@ -130,6 +138,7 @@ function PendingRow({
   human,
   onCancel,
   onEdit,
+  onClaim,
   fold,
 }: {
   item: QueuedSubmission;
@@ -140,6 +149,8 @@ function PendingRow({
   onCancel: (id: string) => void;
   /** 缺省 = 这个宿主没有草稿槽可写（「收回编辑」不放一个点了没反应的键）。 */
   onEdit?: (id: string) => void;
+  /** 缺省 = 不给「我已处理」（不可逆，只给 human 源）。 */
+  onClaim?: (id: string) => void;
   /** 组头才传：组内条数、开合状态与切换。 */
   fold?: { count: number; open: boolean; onToggle: () => void };
 }) {
@@ -152,6 +163,7 @@ function PendingRow({
         identity={identity}
         onCancel={human ? onCancel : undefined}
         onEdit={human ? onEdit : undefined}
+        onClaim={human ? onClaim : undefined}
       />
       {fold && (
         <button
@@ -204,9 +216,9 @@ export function PendingStrip({
   const toast = useToast();
   /** 服务端最近一次读数；带归属会话，切会话时旧响应不会串到新会话上。 */
   const [pending, setPending] = useState<PendingInbox | null>(null);
-  /** 在途的写操作（取消 / 收回编辑）：同一条消息同时只允许一次，按钮禁用。 */
+  /** 在途的写操作（取消 / 收回编辑 / 我已处理）：同一条消息同时只允许一次，三颗键一起禁用。 */
   const [cancelling, setCancelling] = useState<ReadonlySet<string>>(new Set());
-  /** 本地重读（取消被拒 / 出错后与服务端对齐）。 */
+  /** 本地重读（写操作被拒 / 出错后与服务端对齐）。 */
   const [reloadTick, setReloadTick] = useState(0);
   /** 同源折叠组的展开状态（只影响展示：组内条目各自仍是真实的待处理条目）。 */
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set());
@@ -429,15 +441,73 @@ export function PendingStrip({
     [client, current?.agentId, current?.sessionId, onRefillDraft, toast],
   );
 
+  /**
+   * 「我已处理」= `agents.claim`：把这条从队列里拿走，**不可逆**。
+   *
+   * 与取消（`agents.recall`）/ 收回编辑的差别只在「拿走之后留什么」：那两条一个真删、一个
+   * 回填草稿，这条只要求「别再送进模型」（服务端标 consumed，条目从此不再投递、不再出现
+   * 在 `agents.inbox` 里）。所以这里不需要 peek 正文 —— 条带上的摘要就是人自己写的那句话，
+   * 他点的是「我处理过了」，不是「把字还给我」。
+   *
+   * 失败要如实：`skipped` 的 `not_found` / `consumed` 说明这条早就走了（别人 / run 已经
+   * 拿走了它），此时不本地假装成功 —— 重读一次与服务端对齐，并把原因说出来。条带之后
+   * 自己也会因为这一条不在读数里而消失，但那是「重读的结果」，不是我们猜的。
+   */
+  const handleClaim = useCallback(
+    async (messageId: string) => {
+      const agentId = current?.agentId;
+      if (agentId === undefined) return;
+      setCancelling((prev) => new Set(prev).add(messageId));
+      try {
+        const result = await client.rpc<AgentClaimResponse>('agents.claim', {
+          agent_id: agentId,
+          message_ids: [messageId],
+        });
+        const claimed = Array.isArray(result?.claimed) ? result.claimed : [];
+        if (claimed.includes(messageId)) {
+          setPending((prev) =>
+            prev === null
+              ? prev
+              : {
+                  ...prev,
+                  entries: prev.entries.filter((entry) => entry.message_id !== messageId),
+                },
+          );
+          toast.success(t('chat.pending.claimTaken'));
+        } else {
+          // 没拿成就别猜「为什么」：reason 由服务端给，翻成人话再说。
+          const skip = (result?.skipped ?? []).find((entry) => entry.message_id === messageId);
+          const why =
+            skip?.reason === 'consumed'
+              ? t('chat.pending.claimSkipped.consumed')
+              : t('chat.pending.claimSkipped.notFound');
+          toast.error(t('chat.pending.claimSkipped', { reason: why }));
+          setReloadTick((value) => value + 1);
+        }
+      } catch (error) {
+        toast.error(errorMessage(error));
+        setReloadTick((value) => value + 1);
+      } finally {
+        setCancelling((prev) => {
+          const next = new Set(prev);
+          next.delete(messageId);
+          return next;
+        });
+      }
+    },
+    [client, current?.agentId, toast],
+  );
+
   // 空列表整块不渲染（不占高度、不留空壳）。
   if (view.total === 0) return null;
 
   const label = t('chat.pending.title', { count: view.total });
-  // 两个写操作只在这里接一次：组头 / 组内 / 展开后的每条都走同一对回调。
+  // 三个写操作只在这里接一次：组头 / 组内 / 展开后的每条都走同一组回调。
   // 「收回编辑」额外要宿主给草稿槽，没有就不给这颗键（点了没反应比没有更糟）。
   const cancelRow = (id: string) => void handleCancel(id);
   const takeBackRow = (id: string) => void handleTakeBack(id);
   const editRow = onRefillDraft === undefined ? undefined : takeBackRow;
+  const claimRow = (id: string) => void handleClaim(id);
 
   return (
     <section className="flex-none pb-2" aria-label={label}>
@@ -465,6 +535,7 @@ export function PendingStrip({
                     human={head.entry.from === HUMAN_SOURCE}
                     onCancel={cancelRow}
                     onEdit={editRow}
+                    onClaim={claimRow}
                     fold={fold}
                   />
                   {/* 展开后逐条列出：仍是那些待处理条目，写操作按各自的条目 id 与来源判定。 */}
@@ -478,6 +549,7 @@ export function PendingStrip({
                             human={row.entry.from === HUMAN_SOURCE}
                             onCancel={cancelRow}
                             onEdit={editRow}
+                            onClaim={claimRow}
                           />
                         </li>
                       ))}
