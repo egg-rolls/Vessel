@@ -16,6 +16,7 @@ import { useRuntimeVisibility } from '../../state/runtime-visibility';
 import { sessionTitle } from '../../state/sessions';
 import { resourceData } from '../../state/useResource';
 import { useAgentStore } from '../../stores/agentStore';
+import { useAskCursorPrune } from '../pending/ask-cursor-store';
 import { useAskDraftPrune } from '../pending/ask-draft-store';
 import { rosterAttributionIndex } from '../pending/attribution';
 import { asksForSession } from '../pending/cluster';
@@ -128,6 +129,8 @@ export function ChatView({
   // 它的草稿一起清 —— 否则这份 sessionStorage 副本会跟着标签页活到关掉为止。
   const pendingAskIds = useMemo(() => asks.map((item) => item.requestId), [asks]);
   useAskDraftPrune(pendingAskIds, connected);
+  // 浏览位同理：请求消失后那条「上次停在第 3 题」也不该留着（还占 sessionStorage 配额）。
+  useAskCursorPrune(pendingAskIds, connected);
 
   // 草稿态不再本地造 session id：首次发送由 `runs.start` 解析 main primary body。
   const pendingNewSessions = useRef(new Set<string>());

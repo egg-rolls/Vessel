@@ -1,6 +1,6 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef } from 'react';
 import { Button } from '../../components/ui';
-import { buildAskAnswer } from '../../gateway/ask-answers';
+import { askQuestionId, buildAskAnswer } from '../../gateway/ask-answers';
 import type {
   AskUserAnswer,
   AskUserRequest,
@@ -8,6 +8,7 @@ import type {
   PermissionScope,
 } from '../../gateway/types';
 import { t } from '../../i18n';
+import { useAskCursorIndex } from '../pending/ask-cursor-store';
 import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
 import { type AskDraftValue, askDraftOf } from '../pending/ask-drafts';
 import { AskQuestionCard } from './AskCard';
@@ -174,16 +175,20 @@ export function AskPrompt({
   onSubmit: (answers: AskUserAnswer[]) => void;
   onCancel: () => void;
 }) {
-  const [questionIndex, setQuestionIndex] = useState(0);
+  const questionIds = useMemo(
+    () => request.questions.map((item, index) => askQuestionId(item, index)),
+    [request.questions],
+  );
+  // 浏览位跨刷新保留（记的是题号，不是下标）：刷新 / 切页 / 重连后回到上次那一题。
+  const [questionIndex, setQuestionIndex] = useAskCursorIndex(request.requestId, questionIds);
   const drafts = useAskDrafts();
   const setDraft = useSetAskDraft();
   const submittedRef = useRef(false);
 
-  // 切 requestId 时把浏览位与提交守卫复位（ChatView 的 key 也会重挂载，双保险）。
-  // 草稿**不**在这里清：它按 requestId 寻址，另一条请求的草稿与本条无关。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 仅 requestId 变化时重置
+  // 切 requestId 时把提交守卫复位（浏览位由 useAskCursorIndex 按存储重算，ChatView 的 key
+  // 也会重挂载，双保险）。草稿**不**在这里清：它按 requestId 寻址，另一条请求的草稿与本条无关。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 只为 requestId 变化重置守卫
   useEffect(() => {
-    setQuestionIndex(0);
     submittedRef.current = false;
   }, [request.requestId]);
 
@@ -229,7 +234,7 @@ export function AskPrompt({
       return;
     }
     if (!currentAnswered) return;
-    setQuestionIndex((index) => Math.min(index + 1, request.questions.length - 1));
+    setQuestionIndex(questionIndex + 1);
   };
 
   return (
@@ -253,7 +258,7 @@ export function AskPrompt({
         isLast={isLast}
         onToggle={toggle}
         onCustom={(value) => updateDraft(questionIndex, (draft) => ({ ...draft, custom: value }))}
-        onPrev={questionIndex > 0 ? () => setQuestionIndex((index) => index - 1) : undefined}
+        onPrev={questionIndex > 0 ? () => setQuestionIndex(questionIndex - 1) : undefined}
         onNext={handleNext}
         onCancel={onCancel}
       />

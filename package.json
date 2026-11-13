@@ -57,7 +57,7 @@
     "check:run-reconcile": "bun run scripts/check-run-reconcile.ts",
     "check:transcript-items": "bun run scripts/check-transcript-items.ts",
     "check:replay-budget": "bun run scripts/check-replay-budget.ts",
-    "gates": "bunx @biomejs/biome ci . && bun run typecheck && bun run build && cd apps/web && bun run build && cd ../.. && bun run scripts/check-deps.ts && bun run scripts/check-docs.ts && bun run scripts/check-i18n.ts && bun run scripts/check-rpc-methods.ts && bun run scripts/smoke-subpaths.ts && bun run scripts/check-config-sources.ts && bun run scripts/check-trace.ts && bun run check:prompt-prefix && bun run check:web-styles && bun run check:chat-visibility && bun run check:event-visibility && bun run check:history-tools && bun run check:live-items && bun run check:transcript-items && bun run check:replay-budget && bun run check:listrich-cache && bun run check:plugin-ports && bun run check:ask-attribution && bun run check:append-only-context && bun run check:conflict-markers && bun run check:archived-visibility && bun run check:ask-drafts && bun run check:ask-dedupe && bun run check:context-anchor && bun run check:context-ratio && bun run check:agent-tool-list && bun run check:session-agent-label && bun run check:env-card-layout && bun run check:run-reconcile && bun run check:theme-apply",
+    "gates": "bunx @biomejs/biome ci . && bun run typecheck && bun run build && cd apps/web && bun run build && cd ../.. && bun run scripts/check-deps.ts && bun run scripts/check-docs.ts && bun run scripts/check-i18n.ts && bun run scripts/check-rpc-methods.ts && bun run scripts/smoke-subpaths.ts && bun run scripts/check-config-sources.ts && bun run scripts/check-trace.ts && bun run check:prompt-prefix && bun run check:web-styles && bun run check:chat-visibility && bun run check:event-visibility && bun run check:history-tools && bun run check:live-items && bun run check:transcript-items && bun run check:replay-budget && bun run check:listrich-cache && bun run check:plugin-ports && bun run check:ask-attribution && bun run check:append-only-context && bun run check:conflict-markers && bun run check:archived-visibility && bun run check:ask-drafts && bun run check:ask-dedupe && bun run check:context-anchor && bun run check:context-ratio && bun run check:agent-tool-list && bun run check:session-agent-label && bun run check:env-card-layout && bun run check:run-reconcile && bun run check:theme-apply && bun run check:ask-cursor",
     "check:listrich-cache": "bun run scripts/check-listrich-cache.ts",
     "check:conflict-markers": "bun run scripts/check-conflict-markers.ts",
     "check:plugin-ports": "bun run scripts/check-plugin-ports.ts",
@@ -70,7 +70,8 @@
     "check:agent-tool-list": "bun run scripts/check-agent-tool-list.ts",
     "check:session-agent-label": "bun run scripts/check-session-agent-label.ts",
     "check:env-card-layout": "bun run scripts/check-env-card-layout.ts",
-    "check:theme-apply": "bun run scripts/check-theme-apply.ts"
+    "check:theme-apply": "bun run scripts/check-theme-apply.ts",
+    "check:ask-cursor": "bun run scripts/check-ask-cursor.ts"
   },
   "workspaces": [
     "packages/*",
