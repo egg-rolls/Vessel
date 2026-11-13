@@ -3,11 +3,7 @@ import { askQuestionSettled } from '../../gateway/ask-answers';
 import type { AskUserAnswer, AskUserRequest } from '../../gateway/types';
 import { t } from '../../i18n';
 import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
-import {
-  askPendingAnswers,
-  askPlanRows,
-  askRowsComplete,
-} from '../pending/ask-submit-plan';
+import { askPendingAnswers, askPlanRows, askRowsComplete } from '../pending/ask-submit-plan';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;

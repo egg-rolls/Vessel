@@ -40,10 +40,7 @@ export interface AskPlanRow {
 }
 
 /** 把若干请求展开成行（题序即题号，与 askQuestionId 同一条规则）。 */
-export function askPlanRows(
-  requests: readonly AskPlanRequest[],
-  drafts: AskDrafts,
-): AskPlanRow[] {
+export function askPlanRows(requests: readonly AskPlanRequest[], drafts: AskDrafts): AskPlanRow[] {
   const rows: AskPlanRow[] = [];
   for (const request of requests) {
     const questions = request.questions ?? [];

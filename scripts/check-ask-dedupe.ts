@@ -30,6 +30,8 @@
 
 import { mock } from 'bun:test';
 
+import type { AskUserQuestion } from '../apps/web/src/gateway/types/sessions';
+
 let passed = 0;
 const failures: string[] = [];
 
@@ -142,7 +144,7 @@ type FakeStream = ReturnType<typeof memoryStream>;
  * 两题、**都不带显式 id**：题号只能由位置推导（q1 / q2），与真实 ask 的形状一致 ——
  * 这也正是「缺 question_id 必须能按正文 / 位置归一」的前提。
  */
-function twoQuestions(): AnyRecord[] {
+function twoQuestions(): AskUserQuestion[] {
   return [
     { header: 'Deploy', question: 'Deploy now?', options: ['yes', 'no'] },
     { header: 'Restart', question: 'How should I restart?' },
@@ -151,7 +153,7 @@ function twoQuestions(): AnyRecord[] {
 
 /** 旧客户端（0.51 及之前的 buildAnswer）：有正文、**没有 question_id**。 */
 function legacyAnswer(index: number, text: string): AnyRecord {
-  const question = twoQuestions()[index] ?? {};
+  const question = twoQuestions()[index] ?? { header: '', question: '' };
   return { header: question.header, question: question.question, answer: text };
 }
 
@@ -235,7 +237,11 @@ function batchAnswersOf(payload: AnyRecord | undefined): AnyRecord[] {
   check('A 第一批：只写下 q1', same(first.answered_questions, ['q1']), show(first));
   check('A 第一批：q2 仍在等', same(first.remaining_questions, ['q2']), show(first));
   const afterFirst = answersOf(h.record(requestId));
-  check('A 第一批：答案带上题号 q1（不许落成空题号）', afterFirst[0]?.question_id === 'q1', show(afterFirst));
+  check(
+    'A 第一批：答案带上题号 q1（不许落成空题号）',
+    afterFirst[0]?.question_id === 'q1',
+    show(afterFirst),
+  );
 
   // 现场里第二批就是这样：旧客户端把 q1 那一行又发了一遍，然后才是新答的 q2。
   const second = (await h.registry.respondAsk(requestId, [
@@ -270,7 +276,11 @@ function batchAnswersOf(payload: AnyRecord | undefined): AnyRecord[] {
 
   const batchAnswers = batchAnswersOf(h.deliveries[0]);
   check('B 第二批的 batch_answers 只有 1 条', batchAnswers.length === 1, show(batchAnswers));
-  check('B 第二批的 batch_answers 就是 q2', batchAnswers[0]?.question_id === 'q2', show(batchAnswers));
+  check(
+    'B 第二批的 batch_answers 就是 q2',
+    batchAnswers[0]?.question_id === 'q2',
+    show(batchAnswers),
+  );
 
   // D：投递正文（inbox 那条）不许把第一批的 q1 再列一遍。
   await delivery(h.deliveries[0] as never);

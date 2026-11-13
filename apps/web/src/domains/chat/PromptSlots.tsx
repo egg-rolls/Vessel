@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Button } from '../../components/ui';
+import { buildAskAnswer } from '../../gateway/ask-answers';
 import type {
   AskUserAnswer,
   AskUserRequest,
@@ -7,7 +8,6 @@ import type {
   PermissionScope,
 } from '../../gateway/types';
 import { t } from '../../i18n';
-import { buildAskAnswer } from '../../gateway/ask-answers';
 import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
 import { type AskDraftValue, askDraftOf } from '../pending/ask-drafts';
 import { AskQuestionCard } from './AskCard';
