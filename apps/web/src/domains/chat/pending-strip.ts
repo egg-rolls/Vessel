@@ -18,6 +18,11 @@
  *   时并成一组（组头显示一条摘要 + 「N 条」，可展开看全部）。这是**纯展示**折叠：
  *   `ordered` 仍是逐条的真实条目，数据不删。
  *
+ * - **身份（0.51）**：卡头那格「谁」由 {@link pendingIdentityOf} 决定 —— 人类走 i18n 文案、
+ *   有 `from_name` 走 `agent:<name>`、没有就退成短 id（{@link shortSenderId}）。
+ *   折叠组的显示名用 {@link groupSenderName} 取（组头优先、组内兜底）：组里明明有同一个
+ *   发送者的名字时，组头不该因为「恰好排第一的是老条目」就退回短 id。
+ *
  * `status` 仍按 `held | unread` 两档描述「已排进队列 / 未读」：条带只做排序与折叠，
  * 不关心条目来自哪里；这套排序口径同时被 `scripts/check-transcript-items.ts`（F15）钉着。
  */
@@ -51,6 +56,102 @@ export interface PendingStripEntry {
   summary: string;
   status: 'unread' | 'held';
   ts: number;
+  /**
+   * 发送者显示名（additive，0.51）：折叠与排序不看它，只用来**显示身份**。
+   *
+   * 缺省 = 老条目 / 发送方没有本机成员名 ⇒ 身份行退化成短 id（见
+   * {@link pendingIdentityOf}）；折叠判据仍是 `from`，不要求显示名相同。
+   */
+  from_name?: string;
+}
+
+/**
+ * human 源的值（服务端 inbox 条目的 `from` / `source` 就是发送者 principal）。
+ *
+ * 只用于**能不能写**的判定（`agents.recall` 对 human 才是真删，其它源是 unhold 留档），
+ * 以及身份行：`human` ⇒ i18n 的「你/人类」，其余 ⇒ agent 身份。
+ */
+export const HUMAN_SOURCE = 'human';
+
+/** agent 身份前缀：与 A2A 卡片（`agent-sender.ts` / `AgentMessageCard`）同一形状。 */
+export const AGENT_IDENTITY_PREFIX = 'agent:';
+
+/**
+ * 没有显示名时身份位保留的字符数：UUID 是 36 位，卡头那格放不下也读不出来。
+ *
+ * 8 位够把「这一批几条各自来自谁」区分开（UUIDv4 的前 8 位），又短到能和正文并排。
+ */
+export const SHORT_SENDER_ID_LENGTH = 8;
+
+/** 显示名归一：空串 / 纯空白 = 没有名字（与 `inbox.ts` 的 `senderNameOf` 同口径）。 */
+function nameOf(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+/**
+ * 短 id：前 8 位 + `…`；本来就不长于 8 位时原样（不补一个没有省略的省略号）。
+ *
+ * 这是「没有显示名」时的**唯一**降级形态：宁可显示一个要对着 roster 才能认出的短串，
+ * 也不把 36 位 UUID 铺到卡头上 —— 那样卡头那格既读不出来，还会把摘要挤到换行。
+ */
+export function shortSenderId(from: string): string {
+  const trimmed = from.trim();
+  return trimmed.length <= SHORT_SENDER_ID_LENGTH
+    ? trimmed
+    : `${trimmed.slice(0, SHORT_SENDER_ID_LENGTH)}…`;
+}
+
+/**
+ * 条带卡头身份（纯函数）：`等待中　<身份>: <说的话>` 里那格「谁」。
+ *
+ * 三种身份（用户口径，0.51）：
+ * - `from === HUMAN_SOURCE` ⇒ `humanLabel`（i18n 的「你/人类」；字面由 UI 层注入，
+ *   本模块保持无 i18n 依赖，门禁探针才能直接断言字符串）；
+ * - 有显示名 ⇒ `agent:<name>`（与 AgentMessageCard / A2A 卡片同形，用户一眼能对上）；
+ * - 没有显示名 ⇒ 短 id（{@link shortSenderId}），**绝不显示完整 UUID**；
+ * - 空 `from` ⇒ `undefined`（不渲染身份槽，卡头回到「胶囊 + 摘要」两段）。
+ *
+ * `agentLabel` 同理由 UI 层注入 i18n 模板（`chat.pending.identity.agent`），缺省就是
+ * `agent:<name>` —— 本模块自己不查词典，探针断言的是「传什么模板就出什么串」。
+ *
+ * `fallbackName` 是**同源折叠组的兜底显示名**：组头那条可能是加字段之前落盘的老条目，
+ * 而组里其它条目有名字 —— 同一个发送者，组头不该因为「恰好排在第一」就退回短 id。
+ * 人类源不看它（人类的身份是那个文案，不是名字）。
+ */
+export function pendingIdentityOf(
+  entry: { from: string; from_name?: string },
+  options: {
+    humanLabel: string;
+    /** agent 身份的字面：拿名字换一串可显示文本（缺省 `agent:<name>`）。 */
+    agentLabel?: (name: string) => string;
+    fallbackName?: string;
+  },
+): string | undefined {
+  const from = typeof entry.from === 'string' ? entry.from.trim() : '';
+  if (from === '') return undefined;
+  if (from === HUMAN_SOURCE) return options.humanLabel;
+  const name = nameOf(entry.from_name) ?? nameOf(options.fallbackName);
+  if (name === undefined) return shortSenderId(from);
+  return (options.agentLabel ?? defaultAgentLabel)(name);
+}
+
+/** 缺省的 agent 身份字面：与 `agent-sender.ts` 的 `agent:<alias>` 同一形状。 */
+function defaultAgentLabel(name: string): string {
+  return `${AGENT_IDENTITY_PREFIX}${name}`;
+}
+
+/**
+ * 一组同源条目的显示名：组头优先，组内其它条目兜底（见 `pendingIdentityOf` 的
+ * `fallbackName`）。整个组都没有名字时返回 `undefined`，由身份函数退成短 id。
+ */
+export function groupSenderName(group: PendingStripGroup): string | undefined {
+  for (const entry of group.entries) {
+    const name = nameOf(entry.from_name);
+    if (name !== undefined) return name;
+  }
+  return undefined;
 }
 
 /** 条带里默认展示的摘要条数（其余折叠）。 */
@@ -82,7 +183,7 @@ export interface PendingStripView {
 export interface PendingStripGroup {
   /** 组稳定 key：首条 message_id（=`ordered` 里同一位置）。 */
   key: string;
-  /** 组头（摘要 / from / status 都从它取）。 */
+  /** 组头（摘要 / from / status 都从它取；身份另见 `groupSenderName`）。 */
   head: PendingStripEntry;
   /** 组内条目，顺序与 `ordered` 一致；长度 >= 1。 */
   entries: PendingStripEntry[];

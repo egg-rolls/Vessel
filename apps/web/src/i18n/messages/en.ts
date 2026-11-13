@@ -1070,6 +1070,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.toBottom': 'Back to bottom ↓',
   'chat.pending.title': 'Pending · {count}',
   'chat.pending.identity.human': 'human',
+  // agent 源的身份形状与 A2A 卡片（`chat.agentMessage.from`）一致：用户一眼能对上「谁发给我的」。
+  'chat.pending.identity.agent': 'agent:{name}',
   'chat.pending.sameSource': '{count} items',
   'chat.pending.more': '{count} more not shown',
   'chat.pending.waiting': 'Waiting',
