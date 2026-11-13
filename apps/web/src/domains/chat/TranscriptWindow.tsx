@@ -11,6 +11,7 @@ import type { Verbosity } from '../../state/visibility';
 import { SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE } from '../../stores/sessionStore';
 import { AgentMessageCard } from './AgentMessageCard';
 import { AskAnswerCard } from './AskAnswerCard';
+import type { AnsweredAsk } from './ask-answered';
 import { ChatWelcome } from './ChatWelcome';
 import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
@@ -148,6 +149,7 @@ export function TranscriptWindow({
   messageIndexOffset,
   sessionFailure,
   sessionSystemContext,
+  answeredAsks,
   detailNotice,
   onDismissDetailNotice,
   earlierError,
@@ -166,7 +168,6 @@ export function TranscriptWindow({
   onGoChat,
   onEditMessage,
   onRetryMessage,
-  afterItems,
 }: {
   hasToken: boolean;
   selectedId: string | null;
@@ -205,6 +206,13 @@ export function TranscriptWindow({
    * 与 `sessionFailure` 同一取舍：粒度是最近一条，更早轮次不回补。
    */
   sessionSystemContext?: SessionPromptContext;
+  /**
+   * 本会话的服务端已答记录（`useAnsweredAsks` 读回、`answeredAsks` 映射，按回答时间升序）。
+   *
+   * 它们是**时间线内部的普通一员**（item kind `ask-answered`），位置由 `answered_at`
+   * 与消息 item 一起排序决定；不是滚动区末尾的额外一段（0.51 用户裁决）。
+   */
+  answeredAsks?: readonly AnsweredAsk[];
   /** 历史前缀被改写的一次性提示（i18n key）；null = 无。 */
   detailNotice: string | null;
   onDismissDetailNotice: () => void;
@@ -227,15 +235,6 @@ export function TranscriptWindow({
   onGoChat: () => void;
   onEditMessage: (keepMessages: number, text: string) => void;
   onRetryMessage: (keepMessages: number, text: string) => void;
-  /**
-   * 时间线之后、仍在滚动区里的尾巴（会话页的「已答」记录用它）。
-   *
-   * 为什么挂在滚动区里而不是像待处理条带那样常驻：它属于**历史**（已经答完的那些），
-   * 不是「还压着几条输入」；常驻块会一直占掉输入区上方的空间。为什么不做成时间线 item：
-   * 那要新开一套「非消息来源的 item 排序」规则，得碰绝对下标 / 认领体系（见
-   * docs/dev/reports/0.51/ask-interaction-design.md 1.4 候选 ①A 的 (b)）。
-   */
-  afterItems?: ReactNode;
 }) {
   // 打开 / 切换会话的 reset key：detail 到达（hydrate）会再触发一次稳定贴底；
   // 加载更早历史不改变这两个字段，因此不会跳底。
@@ -309,9 +308,9 @@ export function TranscriptWindow({
         historyIndex,
         isHidden: isHiddenMessage,
         noticeKindOf,
-        // 子 agent 详情占位时（liveGroups 被清空）不补主会话的失败卡 / 系统消息卡：
-        // 那一屏讲的是另一个 run。两路补的都按自己的身份去重（见 transcript-items.ts）。
-        ...(activeAgent ? {} : { sessionFailure, sessionSystemContext }),
+        // 子 agent 详情占位时（liveGroups 被清空）不补主会话的失败卡 / 系统消息卡 / 已答提问：
+        // 那一屏讲的是另一个 run。几路补的都按自己的身份去重（见 transcript-items.ts）。
+        ...(activeAgent ? {} : { sessionFailure, sessionSystemContext, answeredAsks }),
       }),
     [
       transcriptMessages,
@@ -324,6 +323,7 @@ export function TranscriptWindow({
       noticeKindOf,
       sessionFailure,
       sessionSystemContext,
+      answeredAsks,
     ],
   );
 
@@ -398,6 +398,23 @@ export function TranscriptWindow({
       case 'ask-answer':
         // 「待批答复」：数据仍是那条 user 消息，呈现是一张卡（人是在待批页回答的）。
         return <AskAnswerCard card={item.card} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
+      case 'ask-answered':
+        // 「提问答复」：sync 提问答完之后的服务端记录（不是消息，没有绝对下标）。
+        // 卡与 async 那条共用 AskAnswerCard，只覆写卡头 / 来源文案 —— 数据来源不同
+        // （服务端 answered 记录 vs 那条 ask:answer 消息），所以别让人误以为是从待批页提交的。
+        //
+        // 默认展开交给 cardsDefaultOpen：它现在只是时间线上的普通一员，没有「最新那条」
+        // 这个特殊位置（旧的底部区块里最新一条被强制展开，那是那个形态的产物）。
+        return (
+          <AskAnswerCard
+            card={item.card}
+            ts={item.ts}
+            defaultOpen={cardsDefaultOpen}
+            titleLabel={t('chat.askAnswered.title')}
+            sourceLabel={t('chat.askAnswered.source')}
+            ariaLabel={t('chat.askAnswered.aria')}
+          />
+        );
       case 'rotate-handoff':
         // 「rotate 交接」：新身体的第一条启动嘱托是发起 rotate 的 agent 写的交接书。
         // **默认展开**（不是 cardsDefaultOpen）：正文就是新身体这一轮唯一的工作指令，
@@ -634,9 +651,6 @@ export function TranscriptWindow({
               verbosity={verbosity}
             />
           )}
-
-          {/* 时间线之后的尾巴：已答记录（数据来自服务端 answered 记录，刷新靠它重建）。 */}
-          {afterItems}
         </>
       ) : draftActive ? (
         <ChatWelcome />

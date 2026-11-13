@@ -1277,9 +1277,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.askAnswered.title': 'Question answer',
   'chat.askAnswered.aria': 'Answered questions (server record, survives refresh)',
   'chat.askAnswered.source': 'recorded answer on the server',
-  'chat.askAnswered.label': 'Answered · {count}',
-  'chat.askAnswered.more': 'show {count} earlier',
-  'chat.askAnswered.less': 'show latest only',
   // rotate handoff card (the first startup prompt a rotated body receives; written by an
   // agent, not typed by a human)
   'chat.rotateHandoff.title': '⟳ rotate handoff',

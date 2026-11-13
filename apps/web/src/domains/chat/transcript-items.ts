@@ -13,6 +13,7 @@
  * - tool:<callId>             工具调用（live 与 history 共用；无 callId 时 tool:run:<runId>:<key>）
  * - tool:orphan:<绝对下标>     只有结果、没有调用的历史 tool 消息
  * - notice:<item.key>         上下文 / 原始事件行
+ * - ask-answered:<requestId>  已答提问的答复卡（服务端 answered 记录；不是消息，没有绝对下标）
  * - run:<runId>:input         run 的输入：人的输入（气泡）/ agent 投递（agent 卡）/
  *                             运行时上下文输入（`vessel:*` → 环境信息卡）/
  *                             rotate 交接嘱托（`rotate:handoff[:<epoch>]` → 交接卡）；
@@ -42,6 +43,7 @@ import {
   askAnswerCard,
   isAskAnswerMessage,
 } from './ask-answer';
+import type { AnsweredAsk } from './ask-answered';
 import {
   type EnvNoticeCard,
   envNoticeCard,
@@ -166,6 +168,26 @@ export interface RotateHandoffItem extends ItemMeta, RotateHandoff {
   runId?: string;
   /** 这条消息的完整正文（与 `Message.content` 一字不差）。 */
   text: string;
+}
+
+/**
+ * 「已答提问」item：sync ask 答完之后的那张可读答复卡（0.51 用户裁决）。
+ *
+ * 数据来源是**服务端 answered 记录**（`interactions.list{status:'answered'}`，见
+ * `ask-answered.ts`），不是任何一条消息 —— 所以它没有 `absIndex`：`state.messages` 里
+ * 没有哪一条是它，为它编一个绝对下标会让撤回 / 重试 / 认领这些按 messages 下标工作的
+ * 逻辑把它当成一条真实存在的消息，那是往 0.50 收口的核心不变量里塞脏数据。
+ *
+ * 落位只靠 ts（= `answered_at`）：与消息 item 走同一个 `compareTimelineEntries`，
+ * 同 `prompt-context` / `run-failure` 这两张同为「非消息来源」的卡一条规则。
+ *
+ * 身份 = `ask-answered:<requestId>`：requestId 是服务端落盘时盖的，重建（刷新 / 重连 /
+ * 换端）读回同一条记录就是同一个 key，卡片不重挂、动画不重播。
+ */
+export interface AskAnsweredItem extends ItemMeta {
+  kind: 'ask-answered';
+  requestId: string;
+  card: AskAnswerData;
 }
 
 export interface RunTextItem extends ItemMeta {
@@ -380,6 +402,7 @@ export type TranscriptItem =
   | RuntimeNoticeItem
   | RunInputItem
   | AskAnswerItem
+  | AskAnsweredItem
   | RotateHandoffItem
   | RunTextItem
   | RunReasoningItem
@@ -541,6 +564,17 @@ export interface TranscriptBuildInput {
    * 服务端只回最近一条 ⇒ 更早轮次的卡不回补（已知限制）。
    */
   sessionSystemContext?: SessionPromptContext;
+  /**
+   * 服务端 answered 记录（`ask-answered.ts` 的映射结果，按 `answeredAt` 升序）。
+   *
+   * 为什么要走这条输入而不是像以前那样由会话页在时间线之后另画一段：已答提问是**历史上
+   * 真发生过的一件事**，它的位置就是 `answered_at` 那个时刻 —— 堆在会话末尾等于把
+   * 「几小时前答的一问」摆到最新消息之后（用户裁决：不接受这个额外段落）。
+   *
+   * 纯输入、不改任何既有判据：这里只多一种**没有 absIndex** 的 item kind，认领 /
+   * 下标 / `hideInput` 的逻辑一行不碰（见 `AskAnsweredItem` 的说明）。
+   */
+  answeredAsks?: readonly AnsweredAsk[];
   /**
    * 认领结论（见 `HistoryIndex.claims`；两者给一个即可，`claims` 优先）。
    *
@@ -2034,6 +2068,41 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
       // 那时它本来就是「最近一轮」的系统消息，落在末尾是正确的。
       ...(at !== undefined ? { ts: at } : {}),
     });
+  }
+
+  // 服务端 answered 记录（已答提问）→ `ask-answered` item，按 `answered_at` 与消息 item
+  // 一起排序（同一个 `compareTimelineEntries`）。以前这段是会话滚动区末尾的额外一段，
+  // 现在它只是时间线上的普通一员 —— 没有 absIndex，也不参与认领 / 交棒。
+  //
+  // 两道去重：
+  // - `answeredAsks` 已经丢掉 `mode === 'async'` 的记录（它的答案就是那条 `ask:answer`
+  //   消息，画两张一样的卡没有意义）；
+  // - 这里再按 requestId 断一次：旧 gateway 不返回 `mode`，那条 async 记录会漏过第一道，
+  //   而屏上已经有同 requestId 的 `ask-answer` 卡 —— 以消息卡为准（同一份数据，消息卡还
+  //   带着该轮的输入身份）。合并成一条的批量答案消息只对得上首个 requestId，其余记录
+  //   仍然落位（宁可多一张可见的卡，也不吞掉一条已答记录）。
+  const answeredAsksInput = input.answeredAsks;
+  if (answeredAsksInput !== undefined && answeredAsksInput.length > 0) {
+    const represented = new Set<string>();
+    for (const item of items) {
+      if (item.kind !== 'ask-answer') continue;
+      if (item.card.requestId !== undefined) represented.add(item.card.requestId);
+    }
+    for (const record of answeredAsksInput) {
+      if (represented.has(record.requestId)) continue;
+      items.push({
+        kind: 'ask-answered',
+        key: `ask-answered:${record.requestId}`,
+        requestId: record.requestId,
+        card: record.card,
+        // 排序 ts = 服务端记录的回答时刻（缺 answered_at 时映射层已回退 created_at，
+        // 两者都没有的记录根本不会到这里，见 ask-answered.ts）。
+        // 同一毫秒的定序：插入序 = 「补充区在历史 / live 之后入列」，因此它落在那些消息
+        // item 之后；而其中并列的几条记录由 `answeredAsks` 的稳定升序定死 ——
+        // 重建两次的顺序完全一致（刷新不跳位）。
+        ts: record.answeredAt,
+      });
+    }
   }
 
   const historyKeys = new Set(history.items.map((item) => item.key));

@@ -14,6 +14,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ASK_ANSWER_MESSAGE_NAME } from '../apps/web/src/domains/chat/ask-answer';
+import { answeredAsks } from '../apps/web/src/domains/chat/ask-answered';
 import {
   groupSenderName,
   ownedBySession,
@@ -30,6 +31,7 @@ import {
   oneShotClaims,
   type TranscriptItem,
 } from '../apps/web/src/domains/chat/transcript-items';
+import type { ListedInteraction } from '../apps/web/src/gateway/interaction-hydration';
 import type { RunEvent } from '../apps/web/src/gateway/types';
 import type { Message } from '../apps/web/src/gateway/types/sessions';
 import { t } from '../apps/web/src/i18n';
@@ -105,6 +107,40 @@ function keys(items: readonly TranscriptItem[]): string[] {
 
 function count(items: readonly TranscriptItem[], kind: TranscriptItem['kind']): number {
   return items.filter((item) => item.kind === kind).length;
+}
+
+/** 服务端 answered 记录（`interactions.list` 的形状）；只写用例关心的那几个字段。 */
+function answeredRecord({
+  request_id,
+  answeredAt,
+  createdAt = 1000,
+  mode = 'sync',
+  status = 'answered',
+}: {
+  request_id: string;
+  /** `answer.answered_at`；NaN = 旧记录缺这个字段（真实载荷里可能没有）。 */
+  answeredAt: number;
+  /** `created_at`；NaN = 连「问出来的时刻」都没有。 */
+  createdAt?: number;
+  mode?: 'sync' | 'async';
+  status?: ListedInteraction['status'];
+}): ListedInteraction {
+  return {
+    kind: 'ask',
+    request_id,
+    run_id: 'r1',
+    session_id: 's1',
+    created_at: createdAt,
+    status,
+    mode,
+    questions: [{ header: 'env', question: '部署到哪个环境？' }],
+    answer: {
+      decision: 'allow',
+      scope: 'once',
+      answered_at: answeredAt,
+      answers: [{ header: 'env', question: '部署到哪个环境？', answer: 'prod' }],
+    },
+  };
 }
 
 interface Fixture {
@@ -1774,6 +1810,182 @@ const FIXTURES: readonly Fixture[] = [
         legacyEntry?.summary === '旧条目' &&
         legacyEntry.from_name === undefined &&
         legacyEntry.id === 'old'
+      );
+    },
+  },
+  {
+    name: 'F34 已答 ask 按 answered_at 插进两条消息之间（不是排在会话末尾）',
+    why: '已答提问是历史上真发生过的一件事，位置就是 answered_at 那个时刻；堆在时间线之后等于把几小时前答的一问摆到最新消息下面（0.51 用户裁决），而它的落位只能靠与消息 item 共用的 ts 排序，不能靠插入顺序',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', '先跑一遍门禁', { timestamp: 1000 }),
+          msg('assistant', '门禁过了', { timestamp: 3000 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+        answeredAsks: answeredAsks([answeredRecord({ request_id: 'req-mid', answeredAt: 2000 })]),
+      });
+      const card = items.find((item) => item.kind === 'ask-answered');
+      return (
+        keys(items).join(',') === 'msg:0,ask-answered:req-mid,msg:1' &&
+        card !== undefined &&
+        // 非消息 item 没有绝对下标：编一个会让撤回 / 重试 / 认领把它当成一条真实消息。
+        !('absIndex' in card) &&
+        card.ts === 2000 &&
+        card.card.rows[0]?.text === 'prod'
+      );
+    },
+  },
+  {
+    name: 'F35 同 answered_at 的多条记录定序稳定（重建两次不跳位）',
+    why: '同一毫秒答完两问完全可能；顺序要是靠不确定的遍历 / 抖动，刷新一次卡就换个位置。规则只有一条：映射层的稳定升序 + 时间线自己的插入序兜底',
+    check: () => {
+      // 落盘顺序故意与 requestId 反序：同 ts 时保留映射层的稳定顺序（b 在 a 前）。
+      const records = answeredAsks([
+        answeredRecord({ request_id: 'req-b', answeredAt: 2000 }),
+        answeredRecord({ request_id: 'req-a', answeredAt: 2000 }),
+      ]);
+      const build = (): string =>
+        keys(
+          buildTranscriptItems({
+            messages: [msg('user', '同一毫秒里说的话', { timestamp: 2000 })],
+            messageIndexOffset: 0,
+            liveGroups: [],
+            answeredAsks: records,
+          }),
+        ).join(',');
+      const once = build();
+      return (
+        // 消息先占位、卡随其后（同一瞬间的定序），并列的两张按映射层的稳定顺序。
+        once === 'msg:0,ask-answered:req-b,ask-answered:req-a' &&
+        once === build()
+      );
+    },
+  },
+  {
+    name: 'F36 async 不重复出卡（一张 ask:answer 消息卡就够）',
+    why: 'async 的答案本来就是时间线上那条 ask:answer 消息；再画一张 ask-answered 就是同一份数据两张卡。旧 gateway 不返回 mode 时映射层的第一道闸会漏，所以 item 侧还要按 requestId 再断一次',
+    check: () => {
+      // ① 映射层：mode === async 的记录直接丢掉。
+      const mapped = answeredAsks([
+        answeredRecord({ request_id: 'req-async', mode: 'async', answeredAt: 2000 }),
+      ]);
+      // ② item 侧：屏上已经有同 requestId 的 ask-answer 卡时不再补（模拟旧 gateway 无 mode）。
+      const items = buildTranscriptItems({
+        messages: [
+          msg(
+            'user',
+            '[ask answer req-async] Answers from the human\n1. env（部署到哪个环境？）: prod',
+            { name: ASK_ANSWER_MESSAGE_NAME, timestamp: 2000 },
+          ),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+        answeredAsks: [
+          {
+            requestId: 'req-async',
+            answeredAt: 2000,
+            card: {
+              requestId: 'req-async',
+              summary: 'env',
+              rows: [{ label: 'env', text: 'prod' }],
+            },
+          },
+        ],
+      });
+      return (
+        mapped.length === 0 &&
+        count(items, 'ask-answer') === 1 &&
+        count(items, 'ask-answered') === 0 &&
+        keys(items).join(',') === 'msg:0'
+      );
+    },
+  },
+  {
+    name: 'F37 缺 answered_at 的记录回退 created_at；两者都取不到就不插',
+    why: '位置必须可信：answered_at 是「答的那一瞬」，缺了退到 created_at（问出来的时刻，仍是这条记录的真实时间），比排到会话末尾准；连 created_at 都不可用时宁可不画 —— 一条没有 ts 的卡会被「缺 ts 排最后」摆到最新消息之后，位置错了比少一张卡更误导',
+    check: () => {
+      const noAnsweredAt = answeredAsks([
+        answeredRecord({ request_id: 'req-created', answeredAt: Number.NaN, createdAt: 1500 }),
+      ]);
+      const noTime = answeredAsks([
+        answeredRecord({
+          request_id: 'req-notime',
+          answeredAt: Number.NaN,
+          createdAt: Number.NaN,
+        }),
+      ]);
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', '问', { timestamp: 1000 }),
+          msg('assistant', '答', { timestamp: 2000 }),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+        answeredAsks: [...noAnsweredAt, ...noTime],
+      });
+      return (
+        noAnsweredAt.length === 1 &&
+        noAnsweredAt[0]?.answeredAt === 1500 &&
+        noTime.length === 0 &&
+        keys(items).join(',') === 'msg:0,ask-answered:req-created,msg:1'
+      );
+    },
+  },
+  {
+    name: 'F38 已答卡上线不动待批 / 未读那套呈现路径',
+    why: '这一单只新增一种「非消息 item」，待批条带 / AskCard / 消息气泡的形态必须一字不改：传不传 answeredAsks，除新增的 ask-answered 之外，其余 item 的 key 序列必须完全相同',
+    check: () => {
+      const messages = [
+        msg('user', '跑一遍门禁', { timestamp: 1000 }),
+        assistantCall('c1', 'bash'),
+        toolMsg('c1', 'ok'),
+        msg('assistant', '过了', { timestamp: 3000 }),
+      ];
+      const without = keys(
+        buildTranscriptItems({ messages, messageIndexOffset: 0, liveGroups: [] }),
+      );
+      const with_ = keys(
+        buildTranscriptItems({
+          messages,
+          messageIndexOffset: 0,
+          liveGroups: [],
+          answeredAsks: answeredAsks([
+            answeredRecord({ request_id: 'req-x', answeredAt: 2000 }),
+            answeredRecord({ request_id: 'req-y', answeredAt: 2500 }),
+          ]),
+        }),
+      );
+      // 待批条带的视图对同一份 inbox 输入仍然稳定（这条输入根本不吃 answeredAsks）。
+      const inboxEntries = [
+        {
+          message_id: 'p1',
+          from: 'human',
+          summary: '还压着的一条',
+          status: 'held' as const,
+          ts: 100,
+        },
+        {
+          message_id: 'p2',
+          from: 'human',
+          summary: '还压着的第二条',
+          status: 'held' as const,
+          ts: 200,
+        },
+      ];
+      const strip = pendingStripView(inboxEntries);
+      const stripAgain = pendingStripView(inboxEntries);
+      return (
+        without.join(',') ===
+          with_
+            .filter((key) => !key.startsWith('ask-answered:'))
+            .join(',') &&
+        with_.length === without.length + 2 &&
+        strip.total === stripAgain.total &&
+        strip.total === 2 &&
+        strip.preview.map((group) => group.entries.length).join(',') ===
+          stripAgain.preview.map((group) => group.entries.length).join(',')
       );
     },
   },

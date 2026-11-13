@@ -13,11 +13,16 @@
  * - 产出形状直接复用 `ask-answer.ts` 的 `AskAnswerCard`（async 那条 user 消息解析出来的
  *   也是它），所以渲染能用同一张卡，不新造样式。
  *
- * 两条刻意不显示：
+ * 三条刻意不显示：
  * - `mode === 'async'`：它的答案**已经**是时间线上那条 `ask:answer` 消息（同一张卡），
  *   这里再画一张就是两张一样的卡；
  * - `answers` 为空（人点了取消 / 被 policy 收口）：没有「答了什么」，画出来只会让
- *   「我问了什么、我答了什么」里的后半句是空的。
+ *   「我问了什么、我答了什么」里的后半句是空的；
+ * - 连时间都取不到（见 `answeredAsk` 的 `answeredAt`）：落位不可信，宁可不画。
+ *
+ * 位置（0.51 用户裁决）：这些记录**按 `answered_at` 落进时间线内部**（item kind
+ * `ask-answered`，与消息 item 共用同一套 ts 排序），不再是会话滚动区末尾的额外一段。
+ * 所以本模块不提供「只画最近几条」的裁剪 —— 那是「底部区块」的产物，时间线自己会滚。
  */
 import type { ListedInteraction } from '../../gateway/interaction-hydration';
 import type { AskAnswerCard, AskAnswerRow } from './ask-answer';
@@ -25,7 +30,13 @@ import type { AskAnswerCard, AskAnswerRow } from './ask-answer';
 /** 一条已答记录 → 一张答复卡。 */
 export interface AnsweredAsk {
   requestId: string;
-  /** 服务端记录的回答时间（Unix ms）；缺 `answered_at` 时回退 `created_at`。 */
+  /**
+   * 服务端记录的回答时间（Unix ms）：**排序 ts**，决定这张卡插在时间线的哪个点。
+   *
+   * 取值口径（缺字段时的取舍写在 `answeredAsk` 里）：有 `answer.answered_at` 就用它
+   * （「答的那一瞬」才是这一问在历史上真正的位置），否则回退 `created_at`
+   * （问出来的时刻 —— 比正确答案早一点，但仍然是这条记录的真实时刻，比「排到最后」准）。
+   */
   answeredAt: number;
   card: AskAnswerCard;
 }
@@ -39,6 +50,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+/**
+ * 可用的时间戳（Unix ms）；非数字 / NaN / Infinity 一律当「没有这个时间」。
+ *
+ * 为什么不用 `Number.isFinite` 直接判：它不收窄类型，调用侧要写 `as number` 把宽松的
+ * 载荷强行断言成数字 —— 旧 gateway / 旧记录里那个字段完全可能就是 undefined / 字符串。
+ */
+function finiteOf(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 /**
@@ -90,10 +111,13 @@ export function answeredAsk(item: ListedInteraction): AnsweredAsk | undefined {
   if (first === undefined) return undefined;
   const label = first.label.trim();
   const summary = label.length > SUMMARY_MAX ? `${label.slice(0, SUMMARY_MAX)}…` : label;
-  const answeredAt =
-    item.answer !== undefined && Number.isFinite(item.answer.answered_at)
-      ? item.answer.answered_at
-      : item.created_at;
+  // 排序 ts：`answered_at` 权威（答的那一瞬），其次 `created_at`（问出来的时刻）。
+  // 两个都取不到（NaN / 非有限 / 旧格式）⇒ **不画**：时间线 item 没有 ts 就只剩
+  // 「沉到会话末尾」这一种落位，那会把一条几小时前的问答摆到最新消息之后 —— 位置错了
+  // 比少一张卡更误导（同 `ask-answer.ts` 的「宁可少一张卡，也不吞正文」取舍的反面：
+  // 这里吞的不是正文，正文本来就没有别的入口，但位置必须可信）。
+  const answeredAt = finiteOf(item.answer?.answered_at) ?? finiteOf(item.created_at);
+  if (answeredAt === undefined) return undefined;
 
   return {
     requestId,
@@ -108,6 +132,9 @@ export function answeredAsk(item: ListedInteraction): AnsweredAsk | undefined {
  * `sessionId` 给了就再按会话断一次（服务端 `session_id` 过滤之外的第二道）：旧 gateway
  * 可能忽略未识别参数，把别的会话的已答记录一起返回 —— 那是本单最不能出的错（串台）。
  * 没有 `session_id` 的记录同样不显示：归属不明的东西宁可不画。
+ *
+ * 排序在这里做完（而不是交给调用方）：时间线只负责把 `answeredAt` 当 ts 用，同一毫秒的
+ * 多条记录靠**这个升序 + 稳定排序**定序 —— 重建两次的顺序必须一模一样，否则刷新会跳。
  */
 export function answeredAsks(
   items: readonly ListedInteraction[],
@@ -124,16 +151,4 @@ export function answeredAsks(
   }
   cards.sort((a, b) => (a.answeredAt === b.answeredAt ? 0 : a.answeredAt - b.answeredAt));
   return cards;
-}
-
-/** 默认只画最近几条：会话页底部不是「回答历史」页面，长会话不该被它占满。 */
-export const ANSWERED_ASKS_VISIBLE = 3;
-
-/** 取末尾若干条给默认视图，返回被折叠的条数（调用方决定要不要给「展开」入口）。 */
-export function recentAnsweredAsks(
-  cards: readonly AnsweredAsk[],
-  visible = ANSWERED_ASKS_VISIBLE,
-): { shown: readonly AnsweredAsk[]; hidden: number } {
-  if (cards.length <= visible) return { shown: cards, hidden: 0 };
-  return { shown: cards.slice(cards.length - visible), hidden: cards.length - visible };
 }
