@@ -37,7 +37,8 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 | `runtime.notice` | 热应用 / 版本通知 / 成员停下（scope `peer`，定向父 session） | `runtime-notice-hook` → `vessel:notice` | 尾部 | 是 |
 | 基础信息变更（`agents.update` / `reinstate`） | `selfcard: N fields changed …` + 每字段一行（name / parent / team / model / system prompt / permission mode）；model / system prompt 明确写「本具 body 仍用旧值，下一具才用新值」 | `self-card-delta`（BeforeLlm，**每具 body 一个实例**）→ `vessel:notice`（Web scope `selfcard`） | 尾部 | 是（同一变更只注入一次；Self Card 本身仍是构造期快照，不热替换） |
 | 附件引用（`Message.refs`） | `[refs] N attachments: kind path, …`（只有路径与种类；>3 条折 `+N more`；尾注按 media 工具是否可用分三档：`(use media: action=…)` / 未启用时说明需启用插件 / 纯 file 批次不加尾注） | `refs-notice-hook`（BeforeLlm，读 `ctx.refs`）→ `vessel:notice` | 尾部 | 是（同一批引用只注入一次，变化才再注入） |
-| 文档订阅 | `<subscription-notice>` 短通知 | doc-subscription → `vessel:subscription` | 尾部 | 是 |
+| 文档订阅 | `files: N changed …` + 每条文件名一行 | doc-subscription → `vessel:notice`（Web scope `files`，默认可见） | 尾部 | 是（同一路径去重；**不再**用 `vessel:subscription` 这个第二套通道） |
+| 工具面变更（`applyToolsToEntry` 热刷新） | `tools: 2 added; …` + `· + ask` | `tool-surface-delta`（BeforeLlm，每具 body 一个实例）→ `vessel:notice`（scope `tools`） | 尾部 | 是（同一变更只注入一次；回滚照样报） |
 | 90% 预算预警（`limits.*` / `termination.*`） | `[runtime] input_tokens_limit: 900k/1M ...` | core `publishLimitWarnings` → `vessel:limit` | 尾部 | 是 |
 | 90%–`compactThreshold` 上下文压力（默认 0.85 且自动压缩开启时不出现） | `[runtime] context_window: 900k/1M ...` 推荐 rotate | core `publishContextPressureWarning` → `vessel:limit` | 尾部 | 是 |
 | 旧 `additionalContext` | 任意 hook | 自动转 `vessel:hook` | 尾部 | 是 |
@@ -46,6 +47,9 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 | 压缩 | 摘要 | `compactAsync` / `autoCompactAsync` / `compactContext` | system 之后 | 是（事件日志 + session cache） |
 
 **不注入**：Team 日志不会自动进上下文；只有 `teams.post` 里被 `@` 的成员会收到一条普通 user 消息。权限请求 / ask 事件不进上下文，只有工具结果会。
+
+**一次请求的完整清单**（唯一口径；新增注入通道必须在本表落一行，否则就是第二套真相源 —— `vessel:subscription` 当初就是这么漏出去的）：`messages[]` = 上表各注入点 + 历史正文（user / assistant / **tool 结果**）+ 压缩摘要（`role: system` + `compaction_summary`，顶掉历史的那一份）+ 请求级工具结果占位（`context_trim`：只替换出网那份，落盘仍是原文）+ 回传的 `reasoning_content`；
+`tools[]` = `pluginHost.listTools()` 的 schema（**工具面的唯一来源**，Self Card 的 `tools:` 行只是展示）；provider 参数 = `model` / `max_tokens` / 温度等 / abort signal；**明确不进请求**：`Message.refs`（只有路径，正文靠 `[refs]` 让模型自己读）、事件流本身、`prompt.system_context`（审计事件）。
 
 **Self Card 是构造期快照（0.52）**：`agents.update` 只改 registry 记录，模型看到的 `[Self Card]` 仍是 spawn 时那张（`selfCard` / `systemPrompt` / `model` 在 `ExecutionUnit` 构造期赋值、之后只读）。因此**不热替换**那张卡，而是把变化说成环境信息：`AgentService` 把新身份推进该 body 的「真值盒」，`self-card-delta` hook 每轮 diff「模型相信的值」与它，变了才注入一条 `vessel:notice`（同一变更只报一次；字段没变 / 没变更都不注入；回滚照样报）。改名 / team / parent 立即生效、只补一句说明，model / system prompt 如实写成「本具 body 仍是旧值，下一具 body 才用新的」。
 
