@@ -1155,9 +1155,12 @@ export const messages = {
   'chat.env.scope.mcp': 'MCP',
   'chat.env.scope.update': '更新',
   'chat.env.scope.peer': '成员',
-  // 0.52：Self Card 增量告知（基础信息改了，但那张卡是构造期快照 —— 见
-  // packages/agent/src/self-card-delta.ts）。标签用「基础信息」：与编辑表单的说法对齐，
-  // 一眼能看出「我刚才改的东西生效了」。
+  // 0.52：所有「环境信息」同一通道、同一张卡，scope 只决定卡头标签（词表的生产侧真相是
+  // packages/agent/src/env-info-scope.ts）。`selfcard` 保留为旧词，历史消息的卡头不掉。
+  'chat.env.scope.restart': '重启',
+  'chat.env.scope.identity': '身份',
+  'chat.env.scope.fields': '字段',
+  'chat.env.scope.model': '模型',
   'chat.env.scope.selfcard': '基础信息',
   'chat.env.scope.context': '上下文',
   'chat.env.count': '{count} 条',

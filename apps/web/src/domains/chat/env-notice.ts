@@ -26,11 +26,18 @@
  */
 
 /**
- * 「环境信息」的作用域词表：与 `RuntimeNoticeScope`（`src/runtime-notice.ts`）同源，
- * 外加 `peer`（成员 / 协作通知，随后端一起到）与 `selfcard`（0.52：Self Card 增量告知，
- * 见 `packages/agent/src/self-card-delta.ts`）。
- * scope 只决定卡头标签与折叠分组，不决定可见性：解析不出 scope 的行落到 `context`
- * （inbox 提示等无 scope 的上下文）。
+ * 「环境信息」的作用域词表。
+ *
+ * 用户裁定（0.52）：模型上下文里只有**一类卡** —— 环境信息（首行的 scope 词只决定卡头标签
+ * 与折叠分组）。词表的生产侧真相是 `packages/agent/src/env-info-scope.ts`（`ENV_INFO_SCOPES`），
+ * 这里额外保留三类：
+ * - `config` / `permission` / `mcp` / `update` / `peer`：`runtime-notice-hook` 老词，历史消息里
+ *   全都在用；
+ * - `selfcard`：0.52 之前 `self-card-delta` 的首词（改名 / 换 model / 换 prompt 都叫它），
+ *   落盘消息里有存量 —— 删掉它等于让老消息的卡头静默退化成「上下文」；
+ * - `context`：兜底（解析不出 scope 的行）现在也是一个**正式**种类（系统提示词 / 自卡变更）。
+ *
+ * 生产者加了词而这里没加，`scripts/check-append-only-context.ts` 的 C3 会直接红。
  */
 export const ENV_NOTICE_SCOPES = [
   'config',
@@ -39,6 +46,11 @@ export const ENV_NOTICE_SCOPES = [
   'mcp',
   'update',
   'peer',
+  'restart',
+  'model',
+  'identity',
+  'fields',
+  'context',
   'selfcard',
 ] as const;
 

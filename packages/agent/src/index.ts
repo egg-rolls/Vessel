@@ -71,7 +71,7 @@ export {
 export {
   createSelfCardDeltaHook,
   diffSelfCardIdentity,
-  formatSelfCardDelta,
+  formatSelfCardDeltas,
   SELF_CARD_DELTA_DETAIL_MARK,
   SELF_CARD_DELTA_HOOK,
   SELF_CARD_DELTA_MESSAGE_NAME,
@@ -82,6 +82,26 @@ export {
   type SelfCardIdentity,
   selfCardIdentityOf,
 } from './self-card-delta.js';
+export {
+  ENV_INFO_DETAIL_MARK,
+  ENV_INFO_DETAILS_MAX,
+  ENV_INFO_MESSAGE_NAME,
+  ENV_INFO_SCOPES,
+  type EnvInfoOptions,
+  type EnvInfoScope,
+  formatEnvInfo,
+  sortedNames,
+} from './env-info-scope.js';
+export {
+  createToolSurfaceDeltaHook,
+  diffToolSurface,
+  formatToolSurfaceDelta,
+  isEmptyToolSurfaceChange,
+  TOOL_SURFACE_DELTA_HOOK,
+  TOOL_SURFACE_DELTA_MESSAGE_NAME,
+  type ToolSurfaceChange,
+  type ToolSurfaceDeltaHookOptions,
+} from './tool-surface-delta.js';
 export { AgentServiceImpl, createAgentService } from './service.js';
 export {
   AGENT_SNAPSHOT_VERSION,

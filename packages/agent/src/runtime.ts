@@ -49,6 +49,7 @@ import { type AgentInboxPort, createInboxNoticeHook, createInboxTool } from './i
 import { resolveMemberCwd } from './member-cwd.js';
 import { buildMemberBodyPorts } from './member-ports.js';
 import { createSelfCardDeltaHook, selfCardIdentityOf } from './self-card-delta.js';
+import { createToolSurfaceDeltaHook } from './tool-surface-delta.js';
 import { HUMAN_PRINCIPAL, SYSTEM_PRINCIPAL } from './team-address.js';
 import type {
   AgentMessage,
@@ -990,6 +991,16 @@ export class MemberExecutionHost implements MemberExecutionPort {
             selfCardIdentity.member,
             this.effectivePermissionMode(selfCardIdentity.member),
           ),
+      }),
+    );
+    // 0.52：工具面变更同样只追加一条环境信息（scope `tools`），不重建 body、不动 system。
+    // 基线 = 这具 body spawn 时注册进宿主的清单（模型第一次请求看到的就是它）；真值每轮从
+    // **同一个** `pluginHost` 现读 —— `applyToolsToEntry` 在轮边界原地替换的就是它，
+    // 所以热刷新、权限档切换、inbox 开关变化都会被如实 diff 出来。
+    pluginHost.registerHook(
+      createToolSurfaceDeltaHook({
+        baseline: surface.tools.map((tool) => tool.name),
+        current: () => pluginHost.listTools().map((tool) => tool.name),
       }),
     );
     const events = new MemoryEventStream();

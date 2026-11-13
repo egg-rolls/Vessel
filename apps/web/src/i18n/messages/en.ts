@@ -1205,8 +1205,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.scope.mcp': 'MCP',
   'chat.env.scope.update': 'Update',
   'chat.env.scope.peer': 'Peer',
-  // 0.52: Self Card delta notices (base info changed while the card stays a spawn-time
-  // snapshot — see packages/agent/src/self-card-delta.ts).
+  // 0.52: every environment change (identity / tools / model / fields / restart) is one
+  // notice on the same channel; scope only picks the card label. The producer-side word
+  // list is packages/agent/src/env-info-scope.ts; `selfcard` stays as a legacy alias so
+  // already-persisted messages keep their label.
+  'chat.env.scope.restart': 'Restart',
+  'chat.env.scope.identity': 'Identity',
+  'chat.env.scope.fields': 'Fields',
+  'chat.env.scope.model': 'Model',
   'chat.env.scope.selfcard': 'Base info',
   'chat.env.scope.context': 'Context',
   'chat.env.count': '{count} items',
