@@ -243,11 +243,7 @@ const syncHarness = makeHarness();
 const syncId = syncHarness.request();
 const syncFirst = await syncHarness.registry.respondAsk(syncId, [answerFor(0, '3', ['3'])]);
 
-check(
-  '① sync 第一批：本批写入 q1',
-  same(syncFirst.answered_questions, ['q1']),
-  show(syncFirst),
-);
+check('① sync 第一批：本批写入 q1', same(syncFirst.answered_questions, ['q1']), show(syncFirst));
 check(
   '① sync 第一批：剩余只有 q2（另一题还在等人）',
   same(syncFirst.remaining_questions, ['q2']),
@@ -334,11 +330,7 @@ check(
 const asyncHarness = makeHarness();
 const asyncId = asyncHarness.request({ mode: 'async' });
 const asyncFirst = await asyncHarness.registry.respondAsk(asyncId, [answerFor(0, '3', ['3'])]);
-check(
-  '③ async 第一批：也只剩 q2',
-  same(asyncFirst.remaining_questions, ['q2']),
-  show(asyncFirst),
-);
+check('③ async 第一批：也只剩 q2', same(asyncFirst.remaining_questions, ['q2']), show(asyncFirst));
 check('③ async 第一批：final = false', asyncFirst.final === false, show(asyncFirst.final));
 {
   const asyncRecord = asyncHarness.record(asyncId);
@@ -404,11 +396,7 @@ check(
   check('④ pending 时重复提交 ⇒ duplicate', again.duplicate === true, show(again));
   check('④ 明说跳过了 q1', same(again.skipped_questions, ['q1']), show(again));
   check('④ 本批没有写入任何题', same(again.answered_questions, []), show(again.answered_questions));
-  check(
-    '④ 仍未收口（另一题还在等人）',
-    again.final === false,
-    show(again.final),
-  );
+  check('④ 仍未收口（另一题还在等人）', again.final === false, show(again.final));
   check(
     '④ 记录一字未改（答案 / 逐题进度都没被重复提交改写）',
     show(h.record(requestId)) === before,
@@ -456,7 +444,8 @@ check(
 
     const h = makeHarness({ dir });
     const loaded = h.record('dirty-1');
-    check('⑤ 脏记录原样加载（不迁移、不猜 answered_questions）',
+    check(
+      '⑤ 脏记录原样加载（不迁移、不猜 answered_questions）',
       loaded?.status === 'answered' && loaded?.answered_questions === undefined,
       show({ status: loaded?.status, answered_questions: loaded?.answered_questions }),
     );
@@ -467,11 +456,16 @@ check(
     );
     // 容忍 = 可预期：重复提交同一题仍是幂等的 duplicate，不是 conflict。
     const replay = await h.registry.respondAsk('dirty-1', [answerFor(0, '3', ['3'])]);
-    check('⑤ 脏记录上重复提交同一题 ⇒ duplicate（不是 conflict）',
+    check(
+      '⑤ 脏记录上重复提交同一题 ⇒ duplicate（不是 conflict）',
       replay.duplicate === true,
       show(replay),
     );
-    check('⑤ 脏记录没有被这次重复提交改动', show(h.record('dirty-1')) === show(loaded), show(h.record('dirty-1')));
+    check(
+      '⑤ 脏记录没有被这次重复提交改动',
+      show(h.record('dirty-1')) === show(loaded),
+      show(h.record('dirty-1')),
+    );
     // 历史请求已收口：未答的那题不再可答（明确 conflict，而不是假装还能答）。
     let conflict: unknown;
     try {
@@ -523,7 +517,11 @@ check(
       show(reloaded.interactionRecords.get(requestId)?.status),
     );
     const finish = reloaded.respondAsk(requestId, [answerFor(1, '不会')]);
-    check('⑥ 重启后补答剩余那题仍可收口', (finish as AskRespondResult).final === true, show(finish));
+    check(
+      '⑥ 重启后补答剩余那题仍可收口',
+      (finish as AskRespondResult).final === true,
+      show(finish),
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
