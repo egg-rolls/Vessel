@@ -25,8 +25,11 @@
  *    runtime 的 `agentInputName`（`packages/agent/src/runtime.ts`）就是拿这两项拼
  *    `agent:<alias>`，Web 据此渲成 agent 卡片而不是环境信息。
  *
- * 外加一条 store 级用例：**quiet 留档条目永远不会成为直投的队头**（模型自述 / 投递失败
- * 留档的语义就是「不要执行」），并验证这个位真的落盘、新实例（= 重启后）读得回来。
+ * 外加两条：
+ * - **直投投不进去 ⇒ 退回摘要唤醒**，而且被拒的那条仍以 unread 留在队列（不 discard、
+ *   不自旋）：这是 `INBOX_WAKE_INPUT` 今天唯一还活着的用法；
+ * - store 级：**quiet 留档条目永远不会成为直投的队头**（模型自述 / 投递失败留档的语义
+ *   就是「不要执行」），并验证这个位真的落盘、新实例（= 重启后）读得回来。
  */
 
 import { mock } from 'bun:test';
