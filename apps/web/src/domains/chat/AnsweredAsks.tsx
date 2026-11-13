@@ -73,7 +73,7 @@ export function AnsweredAsks({
       client
         .listInteractions({ session_id: sessionId, status: 'answered', limit: FETCH_LIMIT })
         .then((items) => {
-          if (!cancelled) setState({ sessionId, cards: answeredAsks(items) });
+          if (!cancelled) setState({ sessionId, cards: answeredAsks(items, sessionId) });
         })
         .catch(() => {
           // 旧 gateway / 断线：当成「没有记录」，不弹错、不挡住会话页。

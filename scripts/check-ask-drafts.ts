@@ -355,6 +355,25 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
+    name: 'D6 别的会话的已答记录不串到本会话',
+    why: '旧 gateway 可能忽略未识别的 session_id 过滤而返回全部已答记录；显示层必须自己再断一次，否则别人的问答会挂在当前会话里',
+    check: () => {
+      const mine = answeredRecord({ request_id: 'req-mine' });
+      const other = answeredRecord({
+        request_id: 'req-other',
+        session_id: 'session-2',
+        answer: {
+          decision: 'allow',
+          answers: [{ header: '别人的题', question: '别人的问题？', answer: '别人的答案' }],
+          answered_at: NOW + 1,
+        },
+      });
+      const noSession = answeredRecord({ request_id: 'req-nobody', session_id: undefined });
+      const cards = answeredAsks([mine, other, noSession], 'session-1');
+      return cards.length === 1 && cards[0]?.requestId === 'req-mine';
+    },
+  },
+  {
     name: 'D5 只画最近几条（长会话不被占满）',
     why: '会话底部不是回答历史页面；默认只给最近 ANSWERED_ASKS_VISIBLE 条，更早的收在展开里',
     check: () => {
@@ -412,9 +431,10 @@ const WIRING: readonly { path: string; must: readonly string[] }[] = [
     must: ['useAskDraftPrune(askIds, connected)'],
   },
   {
-    // 已答卡的数据来源只能是服务端 answered 记录（落盘真相），不是前端内存。
+    // 已答卡的数据来源只能是服务端 answered 记录（落盘真相），不是前端内存；
+    // 会话归属还要在客户端再过一遍（旧 gateway 可能忽略 session_id 过滤）。
     path: 'apps/web/src/domains/chat/AnsweredAsks.tsx',
-    must: ["status: 'answered'", 'session_id: sessionId', 'AskAnswerCard'],
+    must: ["status: 'answered'", 'session_id: sessionId', 'answeredAsks(items, sessionId)'],
   },
   {
     path: 'apps/web/src/domains/chat/AskCard.tsx',

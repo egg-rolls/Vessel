@@ -102,11 +102,21 @@ export function answeredAsk(item: ListedInteraction): AnsweredAsk | undefined {
   };
 }
 
-/** 一批记录 → 已答卡（去重、按回答时间升序：先发生的先出现，最新的一条在最后）。 */
-export function answeredAsks(items: readonly ListedInteraction[]): AnsweredAsk[] {
+/**
+ * 一批记录 → 已答卡（去重、按回答时间升序：先发生的先出现，最新的一条在最后）。
+ *
+ * `sessionId` 给了就再按会话断一次（服务端 `session_id` 过滤之外的第二道）：旧 gateway
+ * 可能忽略未识别参数，把别的会话的已答记录一起返回 —— 那是本单最不能出的错（串台）。
+ * 没有 `session_id` 的记录同样不显示：归属不明的东西宁可不画。
+ */
+export function answeredAsks(
+  items: readonly ListedInteraction[],
+  sessionId?: string,
+): AnsweredAsk[] {
   const seen = new Set<string>();
   const cards: AnsweredAsk[] = [];
   for (const item of items) {
+    if (sessionId !== undefined && item.session_id !== sessionId) continue;
     const record = answeredAsk(item);
     if (record === undefined || seen.has(record.requestId)) continue;
     seen.add(record.requestId);
