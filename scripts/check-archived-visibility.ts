@@ -17,12 +17,60 @@
  */
 
 import { filterAgentsByQuery } from '../apps/web/src/domains/agents/agent-search';
-import { closedAgentSessionIds } from '../apps/web/src/domains/chat/SessionList';
 import { filterTeamResults } from '../apps/web/src/domains/teams/team-search';
-import type { NodeView } from '../apps/web/src/gateway/NodeProvider';
-import type { NodeRoster, RosterAgent } from '../apps/web/src/gateway/team-roster';
-import type { TeamMember, TeamSummary } from '../apps/web/src/gateway/types';
+
+/**
+ * roster / team 的形状在这里**按结构镜像**声明，而不是 import 那些模块。
+ *
+ * 为什么：`gateway/NodeProvider` 与 `gateway/team-roster` 会牵出 React 与浏览器全局
+ * （`window.location` / `setTimeout` 等），而门禁是在 Node 里跑、根 tsconfig 也没有 DOM
+ * lib —— 一 import 就会把「apps/web 的浏览器代码」拉进根 typecheck，报一堆与改动无关的错
+ * （0.51 真踩过三次）。镜像只保留判据用到的字段，与 `packages/serve` 的 plugin-host 契约
+ * 镜像同一套路。
+ */
+interface NodeViewLike {
+  current: boolean;
+  id?: string;
+  name?: string;
+}
+
+/** Team 成员（`TeamMember` 的判据子集）。 */
+interface TeamMemberLike {
+  agent_id: string;
+  membership?: string;
+  presence?: string;
+  visibility?: string;
+  name?: string;
+  session_id?: string;
+  state?: string;
+  status?: { kind?: string };
+  archived_at?: string | number | null;
+}
+
+/** 一条 roster 成员行（`RosterAgent` 的判据子集）。 */
+interface RosterAgentLike {
+  node: NodeViewLike;
+  member: TeamMemberLike;
+}
+
+interface NodeRosterLike {
+  node: NodeViewLike;
+  ok: boolean;
+  teams?: readonly TeamSummaryLike[];
+  partialErrors?: number;
+  stale?: boolean;
+  rosters: { team?: TeamSummaryLike; members: readonly TeamMemberLike[] }[];
+}
+
+/** Team 摘要（`TeamSummary` 的判据子集）。 */
+interface TeamSummaryLike {
+  team_id: string;
+  name: string;
+  archived_at?: number;
+}
+
 import {
+  closedAgentSessionIds,
   countArchivedTeams,
   countClosedAgents,
   countClosedMembers,
@@ -49,16 +97,16 @@ interface Fixture {
   check: () => boolean;
 }
 
-function team(id: string, archived?: boolean): TeamSummary {
+function team(id: string, archived?: boolean): TeamSummaryLike {
   return {
     team_id: id,
     name: id,
     member_count: 1,
     ...(archived ? { archived_at: 1_700_000_000 } : {}),
-  } as TeamSummary;
+  } as TeamSummaryLike;
 }
 
-function member(id: string, state: string, sessionId?: string): TeamMember {
+function member(id: string, state: string, sessionId?: string): TeamMemberLike {
   return {
     agent_id: id,
     name: id,
@@ -70,14 +118,14 @@ function member(id: string, state: string, sessionId?: string): TeamMember {
   };
 }
 
-function rosterAgent(node: NodeView, m: TeamMember): RosterAgent {
+function rosterAgent(node: NodeViewLike, m: TeamMemberLike): RosterAgentLike {
   return { node, member: m };
 }
 
-const currentNode = { id: 'local', name: 'local', current: true } as unknown as NodeView;
-const otherNode = { id: 'peer', name: 'peer', current: false } as unknown as NodeView;
+const currentNode = { id: 'local', name: 'local', current: true } as unknown as NodeViewLike;
+const otherNode = { id: 'peer', name: 'peer', current: false } as unknown as NodeViewLike;
 
-function nodeRoster(node: NodeView, members: readonly TeamMember[]): NodeRoster {
+function nodeRoster(node: NodeViewLike, members: readonly TeamMemberLike[]): NodeRosterLike {
   return {
     node,
     ok: true,

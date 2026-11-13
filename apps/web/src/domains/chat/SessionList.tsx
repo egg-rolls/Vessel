@@ -8,8 +8,12 @@ import { Badge, Button, CountBadge, Input, SearchInput, SidebarShell } from '../
 import type { NodeRoster } from '../../gateway/team-roster';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
-import { isClosedAgent, pendingRemovalBadgeKey } from '../../state/archive-visibility';
+import { closedAgentSessionIds, pendingRemovalBadgeKey } from '../../state/archive-visibility';
 import { groupSessionsByDay, normalizeSessionTitle, sessionTitle } from '../../state/sessions';
+
+// 会话列表的「已停用 · 待移除」徽标集合：实现在零依赖模块里（门禁探针也要用），
+// 这里只做转发，保持原有 import 路径对消费方不变。
+export { closedAgentSessionIds };
 
 /**
  * 会话 → agent 地址 `name@node:team`。
@@ -44,20 +48,6 @@ export function sessionAgentAddresses(rosters: readonly NodeRoster[]): ReadonlyM
  *
  * 会话本身永不隐藏（0.51 裁决）：agent 没了但历史还在，隐藏等于把找回入口弄丢。
  */
-export function closedAgentSessionIds(rosters: readonly NodeRoster[]): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const roster of rosters) {
-    if (!roster.node.current) continue;
-    for (const entry of roster.rosters) {
-      for (const member of entry.members) {
-        if (!member.session_id) continue;
-        if (!isClosedAgent(member)) continue;
-        ids.add(member.session_id);
-      }
-    }
-  }
-  return ids;
-}
 
 export function SessionList({
   sessions,

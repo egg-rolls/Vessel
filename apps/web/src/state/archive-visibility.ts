@@ -137,3 +137,36 @@ export function pendingRemovalNoticeKey(
   if (!pending) return undefined;
   return kind === 'team' ? 'archive.notice.team' : 'archive.notice.agent';
 }
+
+/**
+ * 归属到「已停用 agent」的会话 id 集合（会话列表打「已停用 · 待移除」徽标用）。
+ *
+ * 为什么放在这个零依赖模块里：它同时被三个消费方用到 —— 会话列表（React）、
+ * 门禁探针 archived visibility: 16 fixtures passed（Node）。放进
+ * 会把 React 拉进门禁的 import 图，进而让根 typecheck 编到浏览器代码（那里没有 DOM lib）。
+ * 规则：**反查不到就不标**（别的节点 / roster 截断 / 老 gateway / 成员行没有 session_id）。
+ */
+/**
+ * roster 的形状在这里按结构声明，**不 import** `gateway/team-roster`：那个模块会牵出
+ * `NodeProvider` / React，进而把浏览器代码拉进门禁的 import 图（根 tsconfig 没有 DOM lib，
+ * 0.51 因此红过两次）。只声明判据用到的字段，口径与 `NodeRoster` 一致。
+ */
+interface ClosedRosterSource {
+  node: { current: boolean };
+  rosters: readonly { members: readonly { session_id?: string; state?: string }[] }[];
+}
+
+export function closedAgentSessionIds(rosters: readonly ClosedRosterSource[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const roster of rosters) {
+    if (!roster.node.current) continue;
+    for (const entry of roster.rosters) {
+      for (const member of entry.members) {
+        if (!member.session_id) continue;
+        if (!isClosedAgent(member)) continue;
+        ids.add(member.session_id);
+      }
+    }
+  }
+  return ids;
+}
