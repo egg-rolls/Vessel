@@ -13,11 +13,16 @@
  *
  * A. `承接: 'card'` ⇒ 必须在本脚本的 `CARD_CONSUMERS` 里登记消费点；登记的文件必须
  *    真的存在、且真的提到这个事件名（防「登记了但早已改名 / 删掉」）。
- * B. 取数字段对齐：`parent_agent_id` / `parent_session_id` 必须同时出现在生产（bridge）、
- *    记录、list DTO、客户端两条读路径（实时事件 / hydrate）与归属解析模块里 ——
- *    缺任何一层，卡片就是「有字段名、没有值」。
- * C. 反混用：`bridge` 不许再把父 **agent** id 写进 `parent_session_id`（旧那一行
- *    `data.parent_session_id = member.parent_id` 是本次回归的根）。
+ * B. 取数字段对齐：ask 归属**只有 agent 一个维度**（`parent_agent_id`），它必须同时
+ *    出现在生产（bridge）、执行身份、记录、list DTO、客户端两条读路径（实时事件 /
+ *    hydrate）与归属解析模块里 —— 缺任何一层，卡片就是「有字段名、没有值」。
+ * C. 反向检查（两条）：
+ *    C1. ask 链路里不得再出现父会话 id —— bridge 不写、记录不收、DTO 不发。落盘层
+ *        只保留旧快照的**只读**兼容（必须标 `legacy：只读、不再生产`）。这一条防的
+ *        是「0.19 那种混用又被加回来」。
+ *    C2. 成员停止报告（`PeerStopChange.parent_session_id`）必须仍在 —— 它是父会话
+ *        维度的真功能落点，与本单删掉的 ask 用途不是一回事；C1 变红时最容易连它一起
+ *        误删，所以这里正向钉住它。
  * D. 会话页守卫：`pendingForSession` 必须走 `pendingOwnedBySession`，且这两处的判定
  *    都不许再引用父级归属 —— 用户裁定 contractor 的 ask 不在父会话页渲染。
  *
@@ -62,18 +67,11 @@ async function expectContains(path: string, needle: string, why: string): Promis
 /** 断言某文件里**不出现**某个字符串（防混用 / 防守卫被放回去）。 */
 async function expectAbsent(path: string, needle: string, why: string): Promise<void> {
   const text = await source(path);
-  if (text.includes(needle)) fail(path, `[C 反混用] 不该出现 ${needle} —— ${why}`);
+  if (text.includes(needle)) fail(path, `[C 反向] 不该出现 ${needle} —— ${why}`);
 }
 
-/** 取一个函数的函数体文本（从 `function name(` / `function name<` 到配对的 `}`）；取不到返回 ''。 */
-async function functionBody(path: string, name: string): Promise<string> {
-  const text = await source(path);
-  const match = new RegExp(`function ${name}\\s*[<(]`).exec(text);
-  if (match === null) {
-    fail(path, `[D 守卫] 找不到函数 ${name}（改名了？门禁要跟着改）`);
-    return '';
-  }
-  const start = match.index;
+/** 从花括号起点切出配对的函数体；括号不成对时返回 ''。 */
+function sliceBody(text: string, start: number): string {
   const open = text.indexOf('{', text.indexOf(')', text.indexOf('(', start)));
   if (open === -1) return '';
   let depth = 0;
@@ -86,6 +84,34 @@ async function functionBody(path: string, name: string): Promise<string> {
     }
   }
   return '';
+}
+
+/** 取一个**具名函数声明**的函数体（`function name(` / `function name<`）；取不到返回 ''。 */
+async function functionBody(path: string, name: string): Promise<string> {
+  const text = await source(path);
+  const match = new RegExp(`function ${name}\\s*[<(]`).exec(text);
+  if (match === null) {
+    fail(path, `[D 守卫] 找不到函数 ${name}（改名了？门禁要跟着改）`);
+    return '';
+  }
+  return sliceBody(text, match.index);
+}
+
+/**
+ * 取一个**类方法**的函数体（`private name(` / `name(`，允许 `async`）。
+ *
+ * 与 `functionBody` 分开：类方法没有 `function` 关键字，而 `name(` 这种裸形状也会
+ * 匹配到调用点，所以这里要求它出现在行首（带可选修饰符）。
+ */
+async function methodBody(path: string, name: string): Promise<string> {
+  const text = await source(path);
+  const match = new RegExp(`^\\s*(?:(?:private|protected|public)\\s+)?(?:async\\s+)?${name}\\(`, 'm')
+    .exec(text);
+  if (match === null) {
+    fail(path, `[D 守卫] 找不到方法 ${name}（改名了？门禁要跟着改）`);
+    return '';
+  }
+  return sliceBody(text, match.index);
 }
 
 /** 扫描根（与 check-event-visibility 同口径：只看 web 源码，跳过构建产物）。 */
@@ -222,8 +248,9 @@ const CARD_CONSUMERS: Readonly<Record<string, CardConsumer>> = {
 /**
  * B：取数字段链（每一层给出**该层实际写法**的 needle）。
  *
- * 只列**跨层**的归属字段：`session_id` / `questions` 这类自古就在的字段不重复登记，
- * 这一单坏掉的正是归属，所以把两个归属字段钉死，缺任何一层就是「字段名在、值不到」。
+ * ask 归属只有**一个**维度：父 **agent** id。父会话是读侧从它上溯出来的展示信息，
+ * 不作为字段穿过这条链（旧字段的去留见 C1）。每一层都必须真的出现这个键，缺任何
+ * 一层就是「字段名在、值不到」。
  */
 const FIELD_CHAIN: readonly {
   field: string;
@@ -239,8 +266,8 @@ const FIELD_CHAIN: readonly {
       },
       {
         file: 'packages/agent/src/types.ts',
-        needle: 'parent_session_id?: string',
-        why: '执行身份里有父会话字段（父 agent 复用既有的 parent_id）',
+        needle: 'parent_id?: string',
+        why: '执行身份里的父 **agent** id（唯一归属维度；父会话字段已删，见 C1）',
       },
       {
         file: 'packages/serve/src/interactions-store.ts',
@@ -275,64 +302,26 @@ const FIELD_CHAIN: readonly {
       {
         file: 'apps/web/src/domains/pending/attribution.ts',
         needle: 'item.parentAgentId',
-        why: '归属解析读它（决定父会话）',
-      },
-    ],
-  },
-  {
-    field: 'parent_session_id',
-    layers: [
-      {
-        file: 'packages/agent/src/runtime.ts',
-        needle: 'member.parent_session_id',
-        why: '生产：bridge 只拿成员记录里的父**会话** id 填这个键',
-      },
-      {
-        file: 'packages/agent/src/types.ts',
-        needle: 'parent_session_id?: string',
-        why: '执行身份字段声明（父会话）',
-      },
-      {
-        file: 'packages/serve/src/interactions-store.ts',
-        needle: 'parent_session_id?: string',
-        why: '落盘',
-      },
-      {
-        file: 'packages/serve/src/interactions-registry.ts',
-        needle: 'parent_session_id?: string',
-        why: '记录',
-      },
-      {
-        file: 'packages/serve/src/gateway/methods/interactions.ts',
-        needle: "parent_session_id: { type: 'string' }",
-        why: 'list DTO 的校验 schema',
-      },
-      {
-        file: 'apps/web/src/gateway/interactions.ts',
-        needle: 'parentSessionId: data.parent_session_id',
-        why: '客户端实时事件映射',
-      },
-      {
-        file: 'apps/web/src/gateway/interaction-hydration.ts',
-        needle: 'parentSessionId: item.parent_session_id',
-        why: '客户端 hydrate 映射',
-      },
-      {
-        file: 'apps/web/src/gateway/types/sessions.ts',
-        needle: 'parentSessionId?: string',
-        why: '客户端卡片模型的字段声明',
-      },
-      {
-        file: 'apps/web/src/domains/pending/attribution.ts',
-        needle: 'item.parentSessionId',
-        why: '归属解析读它（含历史脏数据甄别 / 上溯）',
+        why: '归属解析的主判据（父会话由它上溯出来）',
       },
     ],
   },
 ];
 
-/** 缺失的父会话归属只能不写 —— 这两个键在 bridge 里的分工是本单的核心。 */
+/**
+ * ask 链路的三个生产点：bridge（写事件）、记录（事件 → 记录）、DTO（记录 → 客户端）。
+ * 落盘层的旧快照兼容不在此列（它只读，见 checkNoAskParentSessionId 的第二段）。
+ */
+const ASK_CHAIN_FILES = [
+  'packages/agent/src/runtime.ts',
+  'packages/serve/src/interactions-registry.ts',
+] as const;
+
 const BRIDGE_FILE = 'packages/agent/src/runtime.ts';
+const PEER_STOP_FILE = 'packages/agent/src/service.ts';
+const PEER_STOP_TYPES_FILE = 'packages/agent/src/types.ts';
+const STORE_FILE = 'packages/serve/src/interactions-store.ts';
+const LIST_DTO_FILE = 'packages/serve/src/gateway/methods/interactions.ts';
 
 async function checkCardConsumers(): Promise<void> {
   const carded = Object.entries(EVENT_TIERS).filter(([, spec]) => spec.承接 === 'card');
@@ -381,18 +370,57 @@ async function checkFieldChain(): Promise<void> {
   }
 }
 
-async function checkNoAgentIdAsSession(): Promise<void> {
-  // 旧那一行：`data.parent_session_id = member.parent_id;`（agent id 冒充会话 id）
+/**
+ * C1（反向）：ask 链路里不得再出现父会话 id。
+ *
+ * 这一条是「以后又被加回来」的护栏：0.19 把父 agent id 写进 `parent_session_id`，
+ * 0.51 把它改成真会话 id，最后由用户裁定**整条链路不再带父会话** —— 父会话只剩
+ * 展示用途，读侧从 `parent_agent_id` + roster 上溯即可。只要有人把字段加回生产 /
+ * 记录 / DTO 任一层，这里就红。
+ *
+ * 落盘层是唯一例外：旧快照里可能真有这个键，读它不报错、重写不丢，但必须标
+ * `legacy：只读、不再生产`（下面正向钉住这个标注，防止「兼容」变成「重新生产」）。
+ */
+async function checkNoAskParentSessionId(): Promise<void> {
+  for (const file of ASK_CHAIN_FILES) {
+    await expectAbsent(
+      file,
+      'parent_session_id',
+      'ask 链路不再带父会话 id（归属只有 parent_agent_id；PeerStop 那条另算）',
+    );
+  }
+  // DTO：不再往外发这个键（schema / collect 两处都不许有生产形状）
   await expectAbsent(
-    BRIDGE_FILE,
-    'data.parent_session_id = member.parent_id',
-    'agent id 不是会话 id；父会话取不到就不写，让读侧走 roster 上溯',
+    LIST_DTO_FILE,
+    'parent_session_id: { type:',
+    'list DTO 不再输出父会话 id（客户端只从 parent_agent_id 上溯）',
   );
-  // 生产侧必须真的从 member 的父会话字段取值
+  await expectAbsent(
+    LIST_DTO_FILE,
+    '{ parent_session_id:',
+    'collectInteractions 不再把父会话 id 塞进结果',
+  );
+  // 装配侧：专为 ask 取父会话的那张缓存 / 那个函数不许回来
+  await expectAbsent(
+    PEER_STOP_FILE,
+    'parentSessions',
+    'bridge 不再从进程内缓存取父会话（成员身份只带 parent_id）',
+  );
+  await expectAbsent(
+    PEER_STOP_FILE,
+    'parentSessionFor',
+    'ask 装配不再解析父会话（PeerStop 用自己的 currentBindingSession）',
+  );
+  // 落盘层：旧快照键保留，但必须显式标成只读 legacy
   await expectContains(
-    BRIDGE_FILE,
-    'member.parent_session_id',
-    'bridge 只能拿成员记录里的父会话 id 填 parent_session_id',
+    STORE_FILE,
+    'parent_session_id?: string',
+    '旧快照里的父会话 id 仍要能读（不迁移、不丢数据）',
+  );
+  await expectContains(
+    STORE_FILE,
+    'legacy：只读、不再生产',
+    '保留旧键必须说明「只读、不再生产」，否则下一个人会以为它是活字段',
   );
   // 读侧旧口径：`parentSessionId ?? sessionId`（把父 chat 当唯一归属）
   await expectAbsent(
@@ -400,6 +428,30 @@ async function checkNoAgentIdAsSession(): Promise<void> {
     'parentSessionId ?? ',
     '归属必须走 attribution.ts（含历史脏数据甄别），不能就地二选一',
   );
+}
+
+/**
+ * C2（反向的反面）：成员停止报告必须还在。
+ *
+ * `PeerStopChange.parent_session_id` 是父会话维度的**真功能落点**（notice 注入到父
+ * 会话），与本单删掉的 ask 用途无关。C1 变严时最容易把它一起扫掉，所以这里正向钉住：
+ * 事件形状、取数口径、以及「它真的还在报告路径的那个函数里」。
+ */
+async function checkPeerStopKept(): Promise<void> {
+  await expectContains(
+    PEER_STOP_TYPES_FILE,
+    'parent_session_id: string',
+    'PeerStopChange 仍要带父会话 id（成员停止通知的注入目标）',
+  );
+  const stopBody = await methodBody(PEER_STOP_FILE, 'peerStopChangeFor');
+  if (stopBody === '') return;
+  if (!stopBody.includes('parent_session_id: currentBindingSession(parent)')) {
+    fail(
+      PEER_STOP_FILE,
+      '[C2 PeerStop] peerStopChangeFor 不再用父成员当前 primary body 填 parent_session_id' +
+        ' —— 那一份取数不是 ask 链路，不能跟着删',
+    );
+  }
 }
 
 async function checkSessionGuard(): Promise<void> {
@@ -443,7 +495,8 @@ async function checkSessionGuard(): Promise<void> {
 async function main(): Promise<void> {
   await checkCardConsumers();
   await checkFieldChain();
-  await checkNoAgentIdAsSession();
+  await checkNoAskParentSessionId();
+  await checkPeerStopKept();
   await checkSessionGuard();
 
   if (failures.length > 0) {
