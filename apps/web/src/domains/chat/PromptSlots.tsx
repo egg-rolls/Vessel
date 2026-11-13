@@ -7,17 +7,15 @@ import type {
   PermissionScope,
 } from '../../gateway/types';
 import { t } from '../../i18n';
-import { type AskDraft, AskQuestionCard, buildAnswer } from './AskCard';
+import { type AskDraftValue, askDraftOf } from '../pending/ask-drafts';
+import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
+import { AskQuestionCard, buildAnswer } from './AskCard';
 import { PermissionCard } from './PermissionCard';
 
 /** 队列摘要 chip：由 ChatView 从 `pendingQueue` 生成。 */
 export interface PromptQueueChip {
   key: string;
   label: string;
-}
-
-function emptyDraft(): AskDraft {
-  return { selected: [], custom: '' };
 }
 
 /**
@@ -146,8 +144,12 @@ export function PermissionPrompt({
 /**
  * ask：替换输入框（0.18 S2/S3）。
  *
- * 同一 request 的多题拆成多张单卡：只渲染当前 `questionIndex`，草稿本地累计；
+ * 同一 request 的多题拆成多张单卡：只渲染当前 `questionIndex`，草稿按
+ * `<requestId>#<题号>` 存进 `ask-draft-store`（**不**是组件 state）；
  * “下一题”推进，“上一题”回看；最后一题所有答案非空时才调用一次 `onSubmit(answers)`。
+ *
+ * 0.51：草稿离开组件，切页 / 刷新 / 重连回来还在（用户实测「正在勾选但还没提交的选项
+ * 没了」就是这里丢的）。`questionIndex` 仍是本地的浏览位 —— 回到第 1 题看，但答案还在。
  */
 export function AskPrompt({
   request,
@@ -172,14 +174,15 @@ export function AskPrompt({
   onCancel: () => void;
 }) {
   const [questionIndex, setQuestionIndex] = useState(0);
-  const [drafts, setDrafts] = useState<AskDraft[]>(() => request.questions.map(() => emptyDraft()));
+  const drafts = useAskDrafts();
+  const setDraft = useSetAskDraft();
   const submittedRef = useRef(false);
 
-  // 切换 requestId 时重置进度与草稿（ChatView 的 key 也会重挂载，双保险）。
+  // 切 requestId 时把浏览位与提交守卫复位（ChatView 的 key 也会重挂载，双保险）。
+  // 草稿**不**在这里清：它按 requestId 寻址，另一条请求的草稿与本条无关。
   // biome-ignore lint/correctness/useExhaustiveDependencies: 仅 requestId 变化时重置
   useEffect(() => {
     setQuestionIndex(0);
-    setDrafts(request.questions.map(() => emptyDraft()));
     submittedRef.current = false;
   }, [request.requestId]);
 
@@ -188,10 +191,10 @@ export function AskPrompt({
     if (!busy) submittedRef.current = false;
   }, [busy]);
 
-  const current = drafts[questionIndex] ?? emptyDraft();
+  const current = askDraftOf(drafts, request.requestId, questionIndex);
   const question = request.questions[questionIndex];
   const answers = request.questions.map((item, index) =>
-    buildAnswer(item, drafts[index] ?? emptyDraft()),
+    buildAnswer(item, askDraftOf(drafts, request.requestId, index)),
   );
   const currentAnswered = question
     ? current.selected.length > 0 || current.custom.trim().length > 0
@@ -201,15 +204,8 @@ export function AskPrompt({
   const isLast = questionIndex >= request.questions.length - 1;
   const remainingQuestions = Math.max(0, request.questions.length - questionIndex - 1);
 
-  const updateDraft = (index: number, update: (draft: AskDraft) => AskDraft) => {
-    setDrafts((prev) => {
-      const next = prev.map((item) => ({
-        selected: [...item.selected],
-        custom: item.custom,
-      }));
-      next[index] = update(next[index] ?? emptyDraft());
-      return next;
-    });
+  const updateDraft = (index: number, update: (draft: AskDraftValue) => AskDraftValue) => {
+    setDraft(request.requestId, index, update);
   };
 
   const toggle = (option: string) => {

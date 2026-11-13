@@ -16,6 +16,7 @@ import { t, useLocale } from '../../i18n';
 import { resourceData } from '../../state/useResource';
 import { useAgentStore } from '../../stores/agentStore';
 import { PageFrame } from '../settings/PageFrame';
+import { useAskDraftPrune } from './ask-draft-store';
 import { rosterAttributionIndex } from './attribution';
 import { asksForSession, groupPendingAsks } from './cluster';
 import { PendingClusterCard } from './PendingClusterCard';
@@ -25,7 +26,11 @@ const COLLAPSED = '';
 
 export function PendingView({ sessionId }: { sessionId?: string }) {
   useLocale();
-  const { asks } = useConnection();
+  const { asks, connected } = useConnection();
+  // 请求一旦落定（本端或别的端答的）就从 pending 集合里消失 ⇒ 它的草稿一起清，
+  // 否则草稿会跟着这个标签页一直留在 sessionStorage 里。
+  const askIds = useMemo(() => asks.map((item) => item.requestId), [asks]);
+  useAskDraftPrune(askIds, connected);
   const [override, setOverride] = useState<string | null>(null);
   // 归属兑底要 roster：`parent_session_id` 里装着 agent id 的历史记录，只有 roster
   // 能认出「这是 agent」并上溯到它当前的 primary body。index 为空 = 兑底不可用
