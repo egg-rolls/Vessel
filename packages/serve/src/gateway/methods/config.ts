@@ -28,6 +28,8 @@ import { runtimeSnapshotSchema, stringListSchema } from './schemas.js';
 const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
   'ui.showReasoning',
   'ui.showInternalEvents',
+  // 0.51：Web「可见性」分组的开关，与 ui.showInternalEvents 同一写路径。
+  'ui.showArchived',
   'ui.askUser',
   'ui.expandCards',
   'observability.showProcessErrors',

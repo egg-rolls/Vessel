@@ -172,6 +172,7 @@ export type SettableConfigKey =
   | 'ui.statusBars'
   | 'ui.verbosity'
   | 'ui.showInternalEvents'
+  | 'ui.showArchived'
   | 'ui.errorLevel'
   | 'ui.askUser'
   | 'ui.expandCards'
@@ -191,6 +192,7 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
   'ui.statusBars': { block: 'ui', yamlKey: 'status_bars' },
   'ui.verbosity': { block: 'ui', yamlKey: 'verbosity' },
   'ui.showInternalEvents': { block: 'ui', yamlKey: 'show_internal_events' },
+  'ui.showArchived': { block: 'ui', yamlKey: 'show_archived' },
   'ui.errorLevel': { block: 'ui', yamlKey: 'error_level' },
   'ui.askUser': { block: 'ui', yamlKey: 'ask_user' },
   'ui.expandCards': { block: 'ui', yamlKey: 'expand_cards' },
@@ -220,7 +222,10 @@ export async function setUserConfigValue(
     throw new Error(`invalid_language: ${JSON.stringify(value)}`);
   }
   if (
-    (key === 'ui.showReasoning' || key === 'ui.askUser' || key === 'ui.expandCards') &&
+    (key === 'ui.showReasoning' ||
+      key === 'ui.askUser' ||
+      key === 'ui.expandCards' ||
+      key === 'ui.showArchived') &&
     typeof value !== 'boolean'
   ) {
     throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);

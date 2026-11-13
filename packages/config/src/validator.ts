@@ -720,6 +720,13 @@ function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]
       value: ui.showInternalEvents,
     });
   }
+  if (ui.showArchived !== undefined && typeof ui.showArchived !== 'boolean') {
+    errors.push({
+      path: 'ui.showArchived',
+      message: 'ui.showArchived must be a boolean',
+      value: ui.showArchived,
+    });
+  }
   if (
     ui.errorLevel !== undefined &&
     (typeof ui.errorLevel !== 'string' || !UI_ERROR_LEVELS.has(ui.errorLevel))
@@ -2698,6 +2705,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'statusBars',
     'verbosity',
     'showInternalEvents',
+    'showArchived',
     'errorLevel',
     'askUser',
     'expandCards',
