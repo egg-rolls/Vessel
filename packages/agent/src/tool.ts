@@ -110,6 +110,25 @@ function batchErrorText(error: unknown): string {
   return errorText(error);
 }
 
+/**
+ * list 的工具输出剥掉 `body_history`（0.52）。
+ *
+ * `body_history` 是每具退役 body 的完整档案（session id / 绑定 / retired_at），给**人**排查
+ * rotate 用的；Agent 侧几乎用不到，却让每次 `list` 凭空多出 N 条噪声、把真正有用的
+ * `id` / `session_id` / `state` 挤到后面。所以只在工具序列化这一层剥掉，
+ * **不删 DTO 字段**：`agents.list` RPC 与 Web 成员详情照旧完整（那里正是给人看的）。
+ * 现存 body 用 `bodies` 表达，不受影响。
+ */
+function withoutBodyHistory<T extends { body_history?: unknown }>(
+  entries: readonly T[],
+): Record<string, unknown>[] {
+  return entries.map((entry) => {
+    const copy = { ...entry } as Record<string, unknown>;
+    delete copy.body_history;
+    return copy;
+  });
+}
+
 /** dispatch / team.send / SendResult 的逐条结果映射到既有 batch 形状 */
 type SendOutcome = DispatchResult | TeamAgentSendResult | SendResult;
 
@@ -809,7 +828,7 @@ export function createAgentTool(
             if (state !== undefined) {
               roster = roster.filter((entry) => entry.state === state);
             }
-            return JSON.stringify(roster);
+            return JSON.stringify(withoutBodyHistory(roster));
           }
 
           // private 成员只有 owner 可见；工具调用者就是 owner
@@ -822,7 +841,7 @@ export function createAgentTool(
             }
             filter.parentId = record.parent_id;
           }
-          return JSON.stringify(await service.list(filter));
+          return JSON.stringify(withoutBodyHistory(await service.list(filter)));
         }
 
         if (action === 'read') {
