@@ -23,7 +23,9 @@ import {
 } from '../../gateway/team-roster';
 import type { TeamSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
+import { countClosedAgents, filterClosedAgents } from '../../state/archive-visibility';
 import { resourceData } from '../../state/useResource';
+import { useShowArchived } from '../../state/useShowArchived';
 import { useAgentStore } from '../../stores/agentStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 import { useNodeNames } from '../nodes/useNodeNames';
@@ -129,10 +131,21 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
     [rosters],
   );
   const agents = useMemo(() => flattenRoster(rosters), [rosters]);
-  const options = useMemo(() => agentFilterOptions(agents), [agents]);
+  /**
+   * 已停用 agent 默认不进列表与搜索（0.51）：只在这里裁一次，下面的筛选下拉、
+   * 搜索、计数都基于裁过的集合，所以「默认搜不到 / 打开开关后搜得到」是同一开关的
+   * 自然结果。详情路由**不**经过这里：直接链接 / 收藏照样打开停用 agent（带提示）。
+   */
+  const showArchived = useShowArchived();
+  const visibleAgents = useMemo(
+    () => filterClosedAgents(agents, showArchived),
+    [agents, showArchived],
+  );
+  const hiddenClosedAgents = useMemo(() => countClosedAgents(agents), [agents]);
+  const options = useMemo(() => agentFilterOptions(visibleAgents), [visibleAgents]);
   const filtered = useMemo(
-    () => filterAgentsByQuery(filterRosterAgents(agents, route), query),
-    [agents, route, query],
+    () => filterAgentsByQuery(filterRosterAgents(visibleAgents, route), query),
+    [visibleAgents, route, query],
   );
   const failed = rosters.filter((roster) => !roster.ok);
   const allFailed = rosters.length > 0 && failed.length === rosters.length;
@@ -291,6 +304,14 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
     body = null;
   } else if (agents.length === 0) {
     body = <EmptyState title={t('agents.empty')} />;
+  } else if (visibleAgents.length === 0 && !hasFilters) {
+    // 剩下的全是已停用（默认开关下被裁掉）：说明数量与去处，别读成「一个都不剩」。
+    body = (
+      <EmptyState
+        title={t('archive.empty.agents')}
+        description={t('archive.hidden.agents', { count: hiddenClosedAgents })}
+      />
+    );
   } else if (filtered.length === 0) {
     body = (
       <EmptyState
@@ -378,7 +399,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
           </Select>
           <div className="ml-auto flex items-center gap-2">
             <span className="text-sm tabular-nums text-muted">
-              {t('agents.count', { shown: filtered.length, total: agents.length })}
+              {t('agents.count', { shown: filtered.length, total: visibleAgents.length })}
             </span>
             {hasFilters && (
               <Button size="small" onClick={clearFilters}>
@@ -395,7 +416,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
           </div>
         </TableToolbar>
 
-        {(failed.length > 0 || partialErrors > 0) && (
+        {(failed.length > 0 || partialErrors > 0 || hiddenClosedAgents > 0) && (
           <div className="flex flex-col gap-2">
             {failed.map((roster) => (
               <p
@@ -418,6 +439,15 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
                 role="status"
               >
                 {t('agents.partialErrors', { count: partialErrors })}
+              </p>
+            )}
+            {hiddenClosedAgents > 0 && (
+              // 提示而不是静默：隐藏只是默认视图的选择，用户要能知道人还在、去哪打开。
+              <p
+                className="m-0 rounded-sm border border-line-strong bg-sunken px-3 py-2 text-sm text-muted"
+                role="status"
+              >
+                {t('archive.hidden.agents', { count: hiddenClosedAgents })}
               </p>
             )}
           </div>

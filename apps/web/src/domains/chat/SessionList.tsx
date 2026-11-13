@@ -4,10 +4,11 @@ import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../compone
 import { StatusGlyph } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { IconButton, Tooltip } from '../../components/Tooltip';
-import { Button, CountBadge, Input, SearchInput, SidebarShell } from '../../components/ui';
+import { Badge, Button, CountBadge, Input, SearchInput, SidebarShell } from '../../components/ui';
 import type { NodeRoster } from '../../gateway/team-roster';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
+import { isClosedAgent, pendingRemovalBadgeKey } from '../../state/archive-visibility';
 import { groupSessionsByDay, normalizeSessionTitle, sessionTitle } from '../../state/sessions';
 
 /**
@@ -33,6 +34,31 @@ export function sessionAgentAddresses(rosters: readonly NodeRoster[]): ReadonlyM
   return addresses;
 }
 
+/**
+ * 会话 → 「所属 agent 已停用」。
+ *
+ * 为什么按 roster 反查：`SessionInfo` 不带 agent 归属，只有 `teams.get` 的成员行握着
+ * `session_id`。反查口径与 `sessionAgentAddresses` 一致（只认当前节点），并且
+ * **反查不到就不标**——会话可能在别的节点、可能被 roster 窗口截断、旧 gateway 也可能
+ * 没有这条记录，漏标只是少一个徽标，误标却会让人以为自己的会话要没了。
+ *
+ * 会话本身永不隐藏（0.51 裁决）：agent 没了但历史还在，隐藏等于把找回入口弄丢。
+ */
+export function closedAgentSessionIds(rosters: readonly NodeRoster[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const roster of rosters) {
+    if (!roster.node.current) continue;
+    for (const entry of roster.rosters) {
+      for (const member of entry.members) {
+        if (!member.session_id) continue;
+        if (!isClosedAgent(member)) continue;
+        ids.add(member.session_id);
+      }
+    }
+  }
+  return ids;
+}
+
 export function SessionList({
   sessions,
   hiddenCount,
@@ -42,6 +68,7 @@ export function SessionList({
   pendingAskCount,
   onOpenPending,
   agentAddresses,
+  closedAgentSessions,
   defaultSession,
   primarySessionIds,
   query,
@@ -75,6 +102,11 @@ export function SessionList({
   onOpenPending?: () => void;
   /** session_id → `name@node:team`；只包含显式 member 的当前节点 roster。 */
   agentAddresses?: ReadonlyMap<string, string>;
+  /**
+   * 归属到「已停用 agent」的会话 id（roster 反查；查不到 = 不在集合里 = 不标）。
+   * 只影响标记，不影响可见性：会话永远列出来。
+   */
+  closedAgentSessions?: ReadonlySet<string>;
   /**
    * 0.27 默认会话入口（`main` 的 primary body）：只在它还没出现在列表行里时补一行，
    * 让空态也有明确的“默认会话”可点。`bodyCount` 用于提示同 agent 还有别的 body。
@@ -287,6 +319,7 @@ export function SessionList({
                 const title = sessionTitle(session);
                 const pendingCount = pendingBySession?.get(session.session_id) ?? 0;
                 const agentAddress = agentAddresses?.get(session.session_id);
+                const agentClosed = closedAgentSessions?.has(session.session_id) === true;
                 const snippet = query.trim() ? searchSnippets?.get(session.session_id) : undefined;
                 const preview =
                   snippet ??
@@ -367,6 +400,16 @@ export function SessionList({
                             <span className="session-agent session-agent-address">
                               {agentAddress}
                             </span>
+                          )}
+                          {agentClosed && (
+                            // 会话**永远**列出来（用户自己的历史不能被我们弄丢）；
+                            // 只在归属 agent 已停用且尚未被移除时补一枚「待移除」标记，
+                            // 并用 tooltip 说清「会话保留，历史仍可看」。
+                            <Tooltip label={t('archive.session.agentClosedHint')}>
+                              <Badge tone="warn" className="flex-none">
+                                {t(pendingRemovalBadgeKey('agent'))}
+                              </Badge>
+                            </Tooltip>
                           )}
                           {!agentAddress && primarySessionIds?.has(session.session_id) && (
                             <span className="session-agent session-agent-primary">

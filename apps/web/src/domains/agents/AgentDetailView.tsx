@@ -16,6 +16,7 @@ import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import type { RosterAgent } from '../../gateway/team-roster';
 import { t, useLocale } from '../../i18n';
+import { isClosedAgent, pendingRemovalNoticeKey } from '../../state/archive-visibility';
 import { useNodeNames } from '../nodes/useNodeNames';
 import { MemberDetail } from '../team/MemberDetail';
 import { memberStatus } from '../team/member-status';
@@ -53,6 +54,9 @@ export function AgentDetailView({
   const displayName = agentDisplayName(member);
   const alreadyLeft = member.membership === 'left';
   const status = memberStatus(member);
+  // 停用 agent 默认已从列表里隐藏，但直接链接仍能到达这里 —— 必须说清它待移除，
+  // 否则详情页看起来和活着的 agent 一模一样。
+  const closedNoticeKey = pendingRemovalNoticeKey('agent', isClosedAgent(member));
 
   const confirmClose = async () => {
     setClosing(true);
@@ -95,6 +99,14 @@ export function AgentDetailView({
           </>
         }
       />
+      {closedNoticeKey && (
+        <p
+          className="mt-3 mb-0 rounded-sm border border-line-strong bg-warn-soft px-3 py-2 text-sm text-warn"
+          role="status"
+        >
+          {t(closedNoticeKey)}
+        </p>
+      )}
       <TableToolbar label={t('agents.detailActions')} className="mt-3">
         <Button onClick={onEdit} disabled={alreadyLeft}>
           {t('common.edit')}

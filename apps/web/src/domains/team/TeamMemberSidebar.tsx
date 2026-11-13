@@ -13,6 +13,7 @@ import { iconButtonClass } from '../../components/Tooltip';
 import { Badge } from '../../components/ui';
 import type { AskUserRequest, PermissionRequest, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
+import { pendingRemovalBadgeKey } from '../../state/archive-visibility';
 import { memberStatus } from './member-status';
 import { shortAgentId } from './mention';
 import { groupMembersByRole, roleLabelKey, roleOf } from './role';
@@ -121,6 +122,13 @@ export function TeamMemberSidebar({
                     label={t(status.labelKey)}
                     title={status.titleKey ? t(status.titleKey) : undefined}
                   />
+                  {/* 状态 chip 只说「已停用」；待移除是处置语义，用 Badge 补，且只在
+                      开关打开后才看得到这行（默认已被侧栏裁掉）。 */}
+                  {status.kind === 'closed' && (
+                    <Badge tone="warn" className="flex-none">
+                      {t(pendingRemovalBadgeKey('agent'))}
+                    </Badge>
+                  )}
                 </span>
               </button>
               {attention > 0 && sessionId && (
