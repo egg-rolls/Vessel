@@ -20,7 +20,7 @@ import { useAskDraftPrune } from '../pending/ask-draft-store';
 import { rosterAttributionIndex } from '../pending/attribution';
 import { asksForSession } from '../pending/cluster';
 import { PluginPanels } from '../plugins/PluginPanels';
-import { AnsweredAsks } from './AnsweredAsks';
+import type { AnsweredAsk } from './ask-answered';
 import { ChatHeader } from './ChatHeader';
 import { ComposerSlot } from './ComposerSlot';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
@@ -29,11 +29,15 @@ import { PendingStrip } from './PendingStrip';
 import { SessionRail } from './SessionRail';
 import { TranscriptWindow } from './TranscriptWindow';
 import { ToolCatalogProvider } from './tool-catalog';
+import { useAnsweredAsks } from './useAnsweredAsks';
 import { useChatSessions } from './useChatSessions';
 import { useChatSubmit } from './useChatSubmit';
 import { useChatTranscript } from './useChatTranscript';
 
 type ChatRoute = Extract<Route, { domain: 'chat' }>;
+
+/** 子 agent 详情态不给已答卡：空数组用固定引用，避免每帧换一个数组让时间线 memo 失效。 */
+const EMPTY_ANSWERED_ASKS: readonly AnsweredAsk[] = [];
 
 /**
  * 当前会话 body 的成员 id（工具描述目录按它拉 `tools.list{agent_id}`）。
@@ -208,6 +212,16 @@ export function ChatView({
     refreshSessions: sessionsApi.refreshSessions,
     permissions,
     asks,
+  });
+
+  // 已答提问的取数：数据来自服务端 answered 记录（落盘的真相），刷新 / 重连靠它重建。
+  // 子 agent 详情态不读（那一屏讲的是另一个 run），草稿态没有会话 id 也不读。
+  const answeredAsks = useAnsweredAsks({
+    sessionId: transcriptApi.activeAgent ? null : selectedId,
+    client,
+    epoch,
+    connected,
+    refreshKey: submitApi.sendTick + transcriptApi.visibleGroups.length + asks.length,
   });
 
   // 槽位从待处理切回输入框时把焦点还给 Composer。
@@ -478,23 +492,10 @@ export function ChatView({
               onGoChat={() => navigate({ domain: 'chat' })}
               onEditMessage={handleEditMessage}
               onRetryMessage={handleRetryMessage}
-              // 已答记录：sync 提问答完之后的那张可读答复卡（数据来自服务端 answered 记录，
-              // 刷新后靠它重建）。子 agent 详情页讲的是另一个 run，那里不画。
-              afterItems={
-                transcriptApi.activeAgent ? undefined : (
-                  <AnsweredAsks
-                    key={selectedId ?? 'none'}
-                    sessionId={selectedId}
-                    client={client}
-                    epoch={epoch}
-                    connected={connected}
-                    refreshKey={
-                      submitApi.sendTick + transcriptApi.visibleGroups.length + asks.length
-                    }
-                    defaultOpen={transcriptApi.cardsDefaultOpen}
-                  />
-                )
-              }
+              // 已答提问：服务端 answered 记录按 answered_at 落进时间线（item kind
+              // ask-answered），不再是滚动区末尾的额外一段。子 agent 详情页讲的是另一个
+              // run，那里不画（TranscriptWindow 按 activeAgent 自己断，同失败卡的口径）。
+              answeredAsks={transcriptApi.activeAgent ? EMPTY_ANSWERED_ASKS : answeredAsks}
             />
 
             {/* 待处理条带与转录区**同一个容器**（`.content-stage`），但不在滚动区里：

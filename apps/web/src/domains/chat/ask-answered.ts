@@ -152,15 +152,3 @@ export function answeredAsks(
   cards.sort((a, b) => (a.answeredAt === b.answeredAt ? 0 : a.answeredAt - b.answeredAt));
   return cards;
 }
-
-/** 默认只画最近几条：会话页底部不是「回答历史」页面，长会话不该被它占满。 */
-export const ANSWERED_ASKS_VISIBLE = 3;
-
-/** 取末尾若干条给默认视图，返回被折叠的条数（调用方决定要不要给「展开」入口）。 */
-export function recentAnsweredAsks(
-  cards: readonly AnsweredAsk[],
-  visible = ANSWERED_ASKS_VISIBLE,
-): { shown: readonly AnsweredAsk[]; hidden: number } {
-  if (cards.length <= visible) return { shown: cards, hidden: 0 };
-  return { shown: cards.slice(cards.length - visible), hidden: cards.length - visible };
-}

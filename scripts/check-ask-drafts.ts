@@ -13,8 +13,12 @@
  *   那条判据会把刚恢复的草稿剃掉）；
  * - C 不串台：两条请求的同一题号是两个槽，互不覆盖；键能反解出 requestId（requestId 里
  *   允许带分隔符，反解按最后一个分隔符切）；
- * - D 已答记录能重建出一张可读的答复卡（原问题 + 答案），且不再重复画 async 那张卡；
- * - E 静态接线：组件真的接上了 store / 插槽 / answered 查询，i18n 两侧都有文案
+ * - D 已答记录能重建出一张可读的答复卡（原问题 + 答案），且不再重复画 async 那张卡、
+ *   也不为「时间不可知」的记录编位置；一批记录的顺序只由 answered_at 决定（不再折叠成
+ *   「只显示最近几条」—— 已答卡 0.51 起按回答时间落进时间线，见
+ *   domains/chat/transcript-items.ts 的 ask-answered）；
+ * - E 静态接线：组件真的接上了 store / 插槽 / answered 查询（取数在 useAnsweredAsks，
+ *   落位在 TranscriptWindow 的 ask-answered 分支），i18n 两侧都有文案
  *   （这两层是「改了代码但没接上」的典型漏点，fixture 测不到）。
  *
  * 用法：bun run scripts/check-ask-drafts.ts（退出码 0 = 全过，1 = 有 FAIL）
@@ -22,12 +26,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import {
-  ANSWERED_ASKS_VISIBLE,
-  answeredAsk,
-  answeredAsks,
-  recentAnsweredAsks,
-} from '../apps/web/src/domains/chat/ask-answered';
+import { answeredAsk, answeredAsks } from '../apps/web/src/domains/chat/ask-answered';
 import {
   ASK_DRAFT_STORAGE_VERSION,
   type AskDrafts,
@@ -379,29 +378,28 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
-    name: 'D5 只画最近几条（长会话不被占满）',
-    why: '会话底部不是回答历史页面；默认只给最近 ANSWERED_ASKS_VISIBLE 条，更早的收在展开里',
+    name: 'D5 已答记录不再折叠：一批记录按 answered_at 升序全部返回',
+    why: '已答卡 0.51 起按回答时间落进时间线，位置本身已经把它摆在该在的地方；再收成「只显示最近三条 + 展开」等于把早先答过的问答从时间线上抽走（旧底部区块的产物）',
     check: () => {
-      const items = Array.from({ length: ANSWERED_ASKS_VISIBLE + 2 }, (_, index) =>
+      const items = Array.from({ length: 5 }, (_, index) =>
         answeredRecord({
-          request_id: `req-${String(index)}`,
+          // 故意把落盘顺序与回答时间打乱：结果只许由 answered_at 决定。
+          request_id: `req-${String(4 - index)}`,
           answer: {
             decision: 'allow',
             scope: 'once',
             answers: [{ header: `H${String(index)}`, question: `Q${String(index)}`, answer: 'a' }],
-            answered_at: NOW + index,
+            answered_at: NOW + (4 - index),
           },
         }),
       );
       const cards = answeredAsks(items);
-      const folded = recentAnsweredAsks(cards);
-      const lastId = `req-${String(ANSWERED_ASKS_VISIBLE + 1)}`;
-      const last = folded.shown[folded.shown.length - 1];
+      const ids = cards.map((item) => item.requestId).join(',');
+      const times = cards.map((item) => item.answeredAt).join(',');
       return (
-        cards.length === ANSWERED_ASKS_VISIBLE + 2 &&
-        folded.shown.length === ANSWERED_ASKS_VISIBLE &&
-        folded.hidden === 2 &&
-        last?.requestId === lastId
+        cards.length === 5 &&
+        ids === 'req-0,req-1,req-2,req-3,req-4' &&
+        times === [NOW, NOW + 1, NOW + 2, NOW + 3, NOW + 4].join(',')
       );
     },
   },
@@ -428,9 +426,9 @@ const WIRING: readonly { path: string; must: readonly string[] }[] = [
     must: ['sessionStorage', 'vessel.askDraft', 'PERSIST_DEBOUNCE_MS', 'useAskDraftPrune'],
   },
   {
-    // 「请求消失 ⇒ 草稿清理」必须真的被会话页 / 待批页接上。
+    // 「请求消失 ⇒ 草稿清理」必须真的被会话页 / 待批页接上；已答提问的取数也挂在会话页上。
     path: 'apps/web/src/domains/chat/ChatView.tsx',
-    must: ['useAskDraftPrune(pendingAskIds, connected)', 'AnsweredAsks'],
+    must: ['useAskDraftPrune(pendingAskIds, connected)', 'useAnsweredAsks({'],
   },
   {
     path: 'apps/web/src/domains/pending/PendingView.tsx',
@@ -439,7 +437,7 @@ const WIRING: readonly { path: string; must: readonly string[] }[] = [
   {
     // 已答卡的数据来源只能是服务端 answered 记录（落盘真相），不是前端内存；
     // 会话归属还要在客户端再过一遍（旧 gateway 可能忽略 session_id 过滤）。
-    path: 'apps/web/src/domains/chat/AnsweredAsks.tsx',
+    path: 'apps/web/src/domains/chat/useAnsweredAsks.ts',
     must: ["status: 'answered'", 'session_id: sessionId', 'answeredAsks(items, sessionId)'],
   },
   {
@@ -447,9 +445,10 @@ const WIRING: readonly { path: string; must: readonly string[] }[] = [
     must: ['useAskDrafts()', 'askDraftOf(drafts'],
   },
   {
-    // 时间线之后的插槽：已答卡要在滚动区里（不是常驻块）。
+    // 已答卡必须在时间线里（ask-answered item），不再是滚动区末尾的额外一段；
+    // 段落插槽一旦回潮，问答就又排到最新消息之后了。
     path: 'apps/web/src/domains/chat/TranscriptWindow.tsx',
-    must: ['afterItems'],
+    must: ["case 'ask-answered'", 'answeredAsks'],
   },
 ];
 
@@ -464,13 +463,11 @@ for (const wiring of WIRING) {
 }
 
 // i18n 两侧都要有：缺 key 时 t() 静默回退成裸键，界面直接露出 chat.askAnswered.xxx。
+// （原来的 label / more / less 是「底部区块」那套的标题 + 展开/收起，区块删了它们也删了。）
 const I18N_KEYS = [
   'chat.askAnswered.title',
   'chat.askAnswered.aria',
   'chat.askAnswered.source',
-  'chat.askAnswered.label',
-  'chat.askAnswered.more',
-  'chat.askAnswered.less',
 ];
 
 for (const file of ['apps/web/src/i18n/messages/zh-CN.ts', 'apps/web/src/i18n/messages/en.ts']) {
