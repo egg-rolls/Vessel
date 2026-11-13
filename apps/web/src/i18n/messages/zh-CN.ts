@@ -1052,6 +1052,7 @@ export const messages = {
   'chat.toBottom': '回到底部 ↓',
   'chat.pending.title': '待处理 · {count}',
   'chat.pending.identity.human': 'human',
+  'chat.pending.identity.ask': 'ask 答复',
   // agent 源的身份形状与 A2A 卡片一致（`agent:<名字>`）：agent 是产品术语，中文不译。
   'chat.pending.identity.agent': 'agent:{name}',
   'chat.pending.sameSource': '{count} 条',

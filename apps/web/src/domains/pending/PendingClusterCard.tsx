@@ -22,10 +22,10 @@
 import { useMemo } from 'react';
 import { Badge, Button, CountBadge, cn, Input, Section } from '../../components/ui';
 import { formatTimestamp } from '../../format';
+import { buildAskAnswer } from '../../gateway/ask-answers';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { AskUserAnswer, AskUserQuestion } from '../../gateway/types';
 import { t } from '../../i18n';
-import { buildAnswer } from '../chat/AskCard';
 import { useAskDrafts, useDropAskDrafts, useSetAskDraft } from './ask-draft-store';
 import { type AskDraftValue, askDraftOf, isAskDraftAnswered } from './ask-drafts';
 import type { PendingCluster } from './cluster';
@@ -228,7 +228,9 @@ export function PendingClusterCard({
         requestId: row.request.requestId,
         answers: [],
       };
-      entry.answers.push(buildAnswer(row.question, row.draft));
+      // 逐题结构化：question_id 让服务端把答案挂到「题」上（未答的题不随本次提交
+      // 被带走），selected 保住多选结构；行内 index 就是该请求内的稳定题号。
+      entry.answers.push(buildAskAnswer(row.question, row.draft, row.index));
       byRequest.set(row.request.requestId, entry);
     }
     return [...byRequest.values()];

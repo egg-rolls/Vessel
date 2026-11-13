@@ -73,6 +73,13 @@ export interface PendingStripEntry {
  */
 export const HUMAN_SOURCE = 'human';
 
+/**
+ * 「ask 答复」的 inbox 来源（0.51）：人回答问题后投给 agent 的那条消息，`from` 是 `ask`
+ * 而不是 `human` —— 它**不是**人随口说的一句话，而是对某个待批问题的结构化答复。
+ * 身份行必须说人话（那个人就是他本人，名字叫不出来，所以不给短 id）。
+ */
+export const ASK_SOURCE = 'ask';
+
 /** agent 身份前缀：与 A2A 卡片（`agent-sender.ts` / `AgentMessageCard`）同一形状。 */
 export const AGENT_IDENTITY_PREFIX = 'agent:';
 
@@ -124,6 +131,8 @@ export function pendingIdentityOf(
   entry: { from: string; from_name?: string },
   options: {
     humanLabel: string;
+    /** ask 答复的身份字面（缺省退回短 id，但生产调用点必须传）。 */
+    askLabel?: string;
     /** agent 身份的字面：拿名字换一串可显示文本（缺省 `agent:<name>`）。 */
     agentLabel?: (name: string) => string;
     fallbackName?: string;
@@ -132,6 +141,7 @@ export function pendingIdentityOf(
   const from = typeof entry.from === 'string' ? entry.from.trim() : '';
   if (from === '') return undefined;
   if (from === HUMAN_SOURCE) return options.humanLabel;
+  if (from === ASK_SOURCE) return options.askLabel ?? shortSenderId(from);
   const name = nameOf(entry.from_name) ?? nameOf(options.fallbackName);
   if (name === undefined) return shortSenderId(from);
   return (options.agentLabel ?? defaultAgentLabel)(name);

@@ -1,4 +1,5 @@
 import { Button, Input } from '../../components/ui';
+import { buildAskAnswer } from '../../gateway/ask-answers';
 import type { AskUserAnswer, AskUserQuestion, AskUserRequest } from '../../gateway/types';
 import { t } from '../../i18n';
 import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
@@ -66,7 +67,9 @@ export function AskCard({
   };
 
   const answers: AskUserAnswer[] = request.questions.map((question, index) =>
-    buildAnswer(question, askDraftOf(drafts, request.requestId, index)),
+    // 同一套逐题结构化（见 ）：单题卡也要带 ，
+    // 否则这张卡提交时服务端只能靠正文回退，多选也压回字符串。
+    buildAskAnswer(question, askDraftOf(drafts, request.requestId, index), index),
   );
   const complete = answers.every((answer) => answer.answer.length > 0);
 

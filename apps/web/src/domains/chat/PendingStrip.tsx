@@ -89,6 +89,7 @@ import { QueuedNotice, type QueuedSubmission } from './StreamItems';
 function identityOf(entry: PendingStripEntry, fallbackName?: string): string | undefined {
   return pendingIdentityOf(entry, {
     humanLabel: t('chat.pending.identity.human'),
+    askLabel: t('chat.pending.identity.ask'),
     agentLabel: (name) => t('chat.pending.identity.agent', { name }),
     ...(fallbackName !== undefined ? { fallbackName } : {}),
   });
