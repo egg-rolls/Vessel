@@ -602,7 +602,8 @@ export class LiveItemStore implements ItemSink {
     const at = typeof entry.event.ts === 'number' ? entry.event.ts : undefined;
     if (at === undefined) return undefined;
     const known = this.sessionClosed.get(raw);
-    if (known === undefined || at > known.at) this.sessionClosed.set(raw, { at, via: 'agent-closed' });
+    if (known === undefined || at > known.at)
+      this.sessionClosed.set(raw, { at, via: 'agent-closed' });
     return { sessionId: raw, at };
   }
 

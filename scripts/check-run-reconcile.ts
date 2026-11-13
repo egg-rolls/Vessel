@@ -40,7 +40,12 @@ const T0 = 1_794_560_000_000;
 const T_CALL_CLOSED = T0 + 600_000;
 
 /** 一条 wire 条目：`seq` 是客户端水位，`ts` 在**事件**上（`StoredEvent` 没有自己的 ts）。 */
-function ev(seq: number, type: string, data: Record<string, unknown>, ts = T0 + seq * 1000): StoredEvent {
+function ev(
+  seq: number,
+  type: string,
+  data: Record<string, unknown>,
+  ts = T0 + seq * 1000,
+): StoredEvent {
   const event: RunEvent = {
     type,
     run_id: String(data.run_id ?? RUN),
@@ -65,8 +70,8 @@ function reasoning(seq: number, delta: string, ts = T0 + seq * 1000): StoredEven
   return runEv(seq, 'llm.stream.chunk', { chunk: { type: 'reasoning_delta', delta } }, RUN, ts);
 }
 
-function text(seq: number, delta: string): StoredEvent {
-  return runEv(seq, 'llm.stream.chunk', { chunk: { type: 'text_delta', delta } });
+function text(seq: number, delta: string, ts = T0 + seq * 1000): StoredEvent {
+  return runEv(seq, 'llm.stream.chunk', { chunk: { type: 'text_delta', delta } }, RUN, ts);
 }
 
 /**
@@ -135,9 +140,12 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
       if (running.length !== 0) {
         return `停止按钮还在：${running.map((g) => `${g.runId}=${g.status}`).join(',')}`;
       }
-      if (group.status !== 'cancelled') return `收口状态错了：${group.status}（不许冒充 completed）`;
-      if (group.reconciled !== 'agent-closed') return `没有留下对账痕迹：reconciled=${group.reconciled}`;
-      if (group.liveReasoning !== undefined) return `「正在思考」还在：liveReasoning=${group.liveReasoning}`;
+      if (group.status !== 'cancelled')
+        return `收口状态错了：${group.status}（不许冒充 completed）`;
+      if (group.reconciled !== 'agent-closed')
+        return `没有留下对账痕迹：reconciled=${group.reconciled}`;
+      if (group.liveReasoning !== undefined)
+        return `「正在思考」还在：liveReasoning=${group.liveReasoning}`;
       if (group.liveText !== undefined) return `尾部正文还挂在 live 上：liveText=${group.liveText}`;
       const reasoningItems = itemsOf(group).filter((item) => item.kind === 'reasoning');
       if (reasoningItems.length !== 1) return `思考没有落地成 1 条 item：${reasoningItems.length}`;
@@ -146,7 +154,8 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
       if (textItems.length !== 1 || textItems[0]!.text !== '结论是一半') {
         return `尾部正文没落地：${JSON.stringify(textItems.map((item) => item.text))}`;
       }
-      if (group.completedAt !== T_CALL_CLOSED) return `completedAt 不是收口时刻：${group.completedAt}`;
+      if (group.completedAt !== T_CALL_CLOSED)
+        return `completedAt 不是收口时刻：${group.completedAt}`;
       return null;
     },
   },
@@ -182,14 +191,19 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
       // 重复对账：agent.closed 来两次 + 快照再来一次。
       feed(store, [agentClosed(6)]);
       feed(store, [agentClosed(7, SESSION, T_CALL_CLOSED + 60_000)]);
-      store.items.closeRuns(SESSION, { status: 'cancelled', at: T_CALL_CLOSED + 60_000, via: 'agent-closed' });
+      store.items.closeRuns(SESSION, {
+        status: 'cancelled',
+        at: T_CALL_CLOSED + 60_000,
+        via: 'agent-closed',
+      });
       store.items.flush();
       const group = groups(store)[0]!;
       if (itemsOf(group).length !== before) {
         return `重复收口写了新 item：${before} → ${itemsOf(group).length}`;
       }
       if (group.status !== 'completed') return `重复收口改了状态：${group.status}`;
-      if (group.completedAt !== completedAt) return `重复收口改了完成时刻：${completedAt} → ${group.completedAt}`;
+      if (group.completedAt !== completedAt)
+        return `重复收口改了完成时刻：${completedAt} → ${group.completedAt}`;
       if (group.reconciled !== undefined) return `重复收口留了对账痕迹：${group.reconciled}`;
       if (group.liveReasoning !== undefined) return '重复收口之后又出现 live 尾巴';
       return null;
@@ -235,7 +249,11 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
         updated_at: T0 + 5000,
         item_count: 3,
       } as unknown as SessionDetail;
-      const completed = sessionTerminalOfDetail({ ...base, status: 'completed', completed_at: T0 + 5000 });
+      const completed = sessionTerminalOfDetail({
+        ...base,
+        status: 'completed',
+        completed_at: T0 + 5000,
+      });
       if (completed === undefined) return 'completed 快照没有被认成终态';
       if (completed.status !== 'completed' || completed.runId !== RUN) {
         return `快照解析错了：${JSON.stringify(completed)}`;
@@ -252,8 +270,12 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
       if (failed === undefined || failed.status !== 'failed' || failed.error !== 'body 退役') {
         return `failed 快照丢了 error：${JSON.stringify(failed)}`;
       }
-      const cancelled = sessionTerminalOfDetail({ ...base, status: 'cancelled' } as unknown as SessionDetail);
-      if (cancelled === undefined || cancelled.status !== 'cancelled') return 'cancelled 快照没被认成终态';
+      const cancelled = sessionTerminalOfDetail({
+        ...base,
+        status: 'cancelled',
+      } as unknown as SessionDetail);
+      if (cancelled === undefined || cancelled.status !== 'cancelled')
+        return 'cancelled 快照没被认成终态';
       if (sessionTerminalOfDetail(undefined) !== undefined) return 'undefined 快照被认成终态';
       return null;
     },
@@ -391,10 +413,14 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
       feed(store, [...stuckEntries(), agentClosed(5)]);
       if (groups(store)[0]!.status !== 'cancelled') return '前提不成立：没收口';
       // 乱序 / 重放：收口之后仍可能补进来一段 delta（回放合并、慢帧）。
-      feed(store, [reasoning(6, '晚到的思考', T_CALL_CLOSED + 1000), text(7, '晚到的正文', T_CALL_CLOSED + 1100)]);
+      feed(store, [
+        reasoning(6, '晚到的思考', T_CALL_CLOSED + 1000),
+        text(7, '晚到的正文', T_CALL_CLOSED + 1100),
+      ]);
       const group = groups(store)[0]!;
       if (group.status !== 'cancelled') return `晚到的 delta 改了状态：${group.status}`;
-      if (group.liveReasoning !== undefined) return `晚到的 delta 让「正在思考」复活：${group.liveReasoning}`;
+      if (group.liveReasoning !== undefined)
+        return `晚到的 delta 让「正在思考」复活：${group.liveReasoning}`;
       if (group.liveText !== undefined) return `晚到的 delta 让 live 正文复活：${group.liveText}`;
       if (runningGroups(groups(store)).length !== 0) return '晚到的 delta 让停止按钮复活';
       return null;
@@ -407,7 +433,13 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
       feed(store, [...stuckEntries(), agentClosed(5)]);
       if (groups(store)[0]!.reconciled !== 'agent-closed') return '前提不成立：没有对账痕迹';
       feed(store, [
-        runEv(6, 'run.completed', { output: '其实跑完了', duration_ms: 1234 }, RUN, T_CALL_CLOSED + 2000),
+        runEv(
+          6,
+          'run.completed',
+          { output: '其实跑完了', duration_ms: 1234 },
+          RUN,
+          T_CALL_CLOSED + 2000,
+        ),
       ]);
       const group = groups(store)[0]!;
       if (group.status !== 'completed') return `真终态没赢：${group.status}`;
@@ -442,4 +474,3 @@ if (failures.length > 0) {
 }
 
 console.log(`run reconcile: ${FIXTURES.length} fixtures passed`);
-
