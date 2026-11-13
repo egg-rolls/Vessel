@@ -63,6 +63,7 @@
     "check:ask-attribution": "bun run scripts/check-ask-attribution.ts",
     "check:append-only-context": "bun run scripts/check-append-only-context.ts",
     "check:context-anchor": "bun run scripts/check-context-anchor.ts",
+    "check:context-ratio": "bun run scripts/check-context-ratio.ts",
     "check:ask-drafts": "bun run scripts/check-ask-drafts.ts"
   },
   "workspaces": [
