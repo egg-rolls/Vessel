@@ -7,9 +7,10 @@ import type {
   PermissionScope,
 } from '../../gateway/types';
 import { t } from '../../i18n';
+import { buildAskAnswer } from '../../gateway/ask-answers';
 import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
 import { type AskDraftValue, askDraftOf } from '../pending/ask-drafts';
-import { AskQuestionCard, buildAnswer } from './AskCard';
+import { AskQuestionCard } from './AskCard';
 import { PermissionCard } from './PermissionCard';
 
 /** 队列摘要 chip：由 ChatView 从 `pendingQueue` 生成。 */
@@ -194,7 +195,7 @@ export function AskPrompt({
   const current = askDraftOf(drafts, request.requestId, questionIndex);
   const question = request.questions[questionIndex];
   const answers = request.questions.map((item, index) =>
-    buildAnswer(item, askDraftOf(drafts, request.requestId, index)),
+    buildAskAnswer(item, askDraftOf(drafts, request.requestId, index), index),
   );
   const currentAnswered = question
     ? current.selected.length > 0 || current.custom.trim().length > 0
