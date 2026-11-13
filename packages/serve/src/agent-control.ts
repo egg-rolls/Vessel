@@ -367,9 +367,6 @@ export interface AgentControlLike {
    */
   recall?(input: AgentRecallLikeInput): AgentRecallLikeResult | Promise<AgentRecallLikeResult>;
   /**
-<<<<<<< HEAD
-   * 0.51（可选）：按某具成员身体读那一份工具清单（`tools.list{agent_id}` 的唯一数据源）。
-=======
    * 认领待处理输入（`agents.claim`，0.51）：**「这条我已经拿到了，别再投给我」**。
    *
    * 与 `recall` 的区别只在「拿走之后留什么」：recall 真删（human 源）/ 留档（agent 源），
@@ -380,7 +377,6 @@ export interface AgentControlLike {
   claim?(input: AgentClaimLikeInput): AgentClaimLikeResult | Promise<AgentClaimLikeResult>;
   /**
    * 0.51（可选）：该成员的**真实**工具面（`tools.list{agent_id}` 的唯一数据源）。
->>>>>>> 0.51-inbox-claim
    *
    * **可选**是硬口径：老适配器 / 老注入没有它时，`tools.list{agent_id}` 退化成节点口径
    * （同一个 `{ tools }` 形状），谁都不会因此炸；不传 `agent_id` 的口径在任何情况下不受
@@ -441,6 +437,11 @@ export interface AgentInboxLikeEntry {
   ts: number;
   /** 归属会话（0.53 additive）；缺省 = 老条目 / 非 input 投递 ⇒ 归属未知。 */
   session_id?: string;
+  /**
+   * 发送方显示名（0.51 additive）：入队时就存下的 `agent:<name>` 的 name 段。
+   * 缺省 = 老条目 / 联邦 / 无本机名 ⇒ 前端退化成短 id（**绝不显示裸 UUID**）。
+   */
+  from_name?: string;
   /** 仅当请求带 `messageIds` 且命中时存在。 */
   text?: string;
 }
