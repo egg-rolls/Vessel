@@ -51,7 +51,13 @@ export function answeredAsksForRun(
   runId: string,
 ): StoredInteraction[] {
   return loadTenantRecords(dir, tenantId).filter(
-    (record) => record.kind === 'ask' && record.run_id === runId && record.status === 'answered',
+    (record) =>
+      record.kind === 'ask' &&
+      record.run_id === runId &&
+      // 分批：部分已答（仍是 pending）的 ask 也要注入 —— 挂起后被人类答了 2/3 题，
+      // 续跑的 run 不能连这 2 题都看不见。后面几批会以一条 inbox 消息补到。
+      (record.status === 'answered' ||
+        (record.status === 'pending' && (record.answered_questions?.length ?? 0) > 0)),
   );
 }
 
@@ -115,6 +121,8 @@ export async function orphanPendingAsksForRun(options: {
     if (record.status !== 'pending') return record;
     // 0.52：async ask 的 run 在工具返回后就收口了，请求本身仍然待批 —— 不许孤儿化。
     if (record.mode === 'async') return record;
+    // 分批：部分已答的 ask 同理（提问的 run 已拿着首批答案继续跑，剩下几题还在等人）。
+    if ((record.answered_questions?.length ?? 0) > 0) return record;
     changed += 1;
     return { ...record, status: 'orphaned' as const };
   });
@@ -148,6 +156,10 @@ export function askQuestionSummary(text: string): string {
  * 没有 header 就用问题本身）。async ask 的答案可能隔几个小时才回到模型面前，
  * 只写 header 模型无从知道答的是哪一问。
  *
+ * `N` 是**题号**（来自答案自带的 `question_id`，即 `q3` → 3），不是「第几行」——
+ * 分批提交后一次可能只到第 3 题，按行号编会让模型把「第 3 题」读成「第 1 题」。
+ * 旧答案没有 `question_id`，退回行号，文本与分批之前一字不差。
+ *
  * `requestCount`：同一次提交里**合并**了几个 request（>1 时首行用复数 + 计数）；
  * 缺省 = 一次一个 request（旧文本一字不改）。
  */
@@ -163,8 +175,7 @@ export function formatAnswersForModel(
     if (isRecord(answer)) {
       const header = nonEmptyString(answer.header);
       const question = nonEmptyString(answer.question);
-      const value =
-        typeof answer.answer === 'string' ? answer.answer : JSON.stringify(answer.answer ?? '');
+      const value = answerTextOf(answer);
       const summary = question === undefined ? undefined : askQuestionSummary(question);
       // header 缺失就用问题本身；两者都没有才退化成序号标签。
       const label =
@@ -173,7 +184,8 @@ export function formatAnswersForModel(
           : summary === undefined || summary === header
             ? header
             : `${header}（${summary}）`;
-      return `${index + 1}. ${label}: ${value}`;
+      const position = questionPositionOf(answer.question_id) ?? index + 1;
+      return `${position}. ${label}: ${value}`;
     }
     return `${index + 1}. ${JSON.stringify(answer)}`;
   });
@@ -183,6 +195,31 @@ export function formatAnswersForModel(
       ? `Answers from the human to your ${requestCount} pending ask requests:`
       : 'Answers from the human to your pending ask request:';
   return [intro, ...lines].join('\n');
+}
+
+/**
+ * 一行的答案值：`answer` 是写侧渲染好的文本（旧记录只有它）。
+ *
+ * 缺 `answer` 但有多选结构 `selected` 时（理论上不会同时缺，容错用）拼成 `, ` ——
+ * 分隔符只在这里定义一次，不给模型造第二套读法。
+ */
+function answerTextOf(answer: Record<string, unknown>): string {
+  if (typeof answer.answer === 'string') return answer.answer;
+  const selected = Array.isArray(answer.selected)
+    ? answer.selected.filter((item): item is string => typeof item === 'string')
+    : [];
+  if (selected.length > 0) return selected.join(', ');
+  return JSON.stringify(answer.answer ?? '');
+}
+
+/** `q3` → 3；不是这个形状（旧答案 / 手写值）→ undefined（调用方退回行号）。 */
+function questionPositionOf(value: unknown): number | undefined {
+  const id = nonEmptyString(value);
+  if (id === undefined) return undefined;
+  const match = /^q(\d+)$/.exec(id);
+  if (match === null) return undefined;
+  const parsed = Number(match[1]);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 /**

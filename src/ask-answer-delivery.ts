@@ -95,6 +95,17 @@ function batchKey(record: StoredInteraction, batchId: string): string | undefine
 }
 
 /**
+ * 这条记录**本批**要投出去的答案。
+ *
+ * 分批之后 `answer.answers` 是这条请求累计的全部答案（事实源），而一次投递只该带
+ * 这一批 —— 否则人第二次只答第 3 题，模型会再读一遍第 1、2 题。`batch_answers` 就是
+ * 那批增量（registry 写的），旧记录没有它，退回 `answers`（逐字节同旧行为）。
+ */
+function answerBatchOf(record: StoredInteraction): unknown[] {
+  return record.answer?.batch_answers ?? record.answer?.answers ?? [];
+}
+
+/**
  * 构造注入网关的投放实现。
  *
  * 失败（成员已关闭 / 准入被拒 / 调度拒绝）一律返回 false、只写 stderr：
@@ -116,11 +127,11 @@ export function createAskAnswerDelivery(service: AgentService): AskAnswerDeliver
     try {
       const content =
         records.length === 1
-          ? formatAskAnswerContent(first.answer?.answers ?? [], first.requestId)
+          ? formatAskAnswerContent(answerBatchOf(first), first.requestId)
           : formatAskAnswerBatchContent(
               records.map((record) => ({
                 requestId: record.requestId,
-                answers: record.answer?.answers ?? [],
+                answers: answerBatchOf(record),
               })),
             );
       await service.admit({
@@ -165,7 +176,7 @@ export function createAskAnswerDelivery(service: AgentService): AskAnswerDeliver
   return async (record: StoredInteraction, context?: { batchId?: string }): Promise<boolean> => {
     const batchId = context?.batchId;
     // 拒绝回答（answers 为空）是「人类不答」，跟别的答案混一条会把拒绝稀释成正常答案。
-    const isolated = (record.answer?.answers ?? []).length === 0;
+    const isolated = answerBatchOf(record).length === 0;
     const key =
       batchId === undefined || batchId === '' || isolated ? undefined : batchKey(record, batchId);
     if (key === undefined) return deliver([record]);
