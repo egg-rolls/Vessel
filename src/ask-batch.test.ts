@@ -244,17 +244,13 @@ function makeDelivery() {
   const result = (await h.registry.respondAsk(requestId, [
     answerFor('q1', 'yes'),
     answerFor('q3', 'lint, test', { selected: ['lint', 'test'] }),
-  ])) as AnyRecord;
+  ])) as unknown as AnyRecord;
 
   const record = h.record(requestId);
   check('① 本批写入 q1/q3', same(result.answered_questions, ['q1', 'q3']), show(result));
   check('① 第 2 题仍在等（remaining）', same(result.remaining_questions, ['q2']), show(result));
   check('① final = false', result.final === false, show(result.final));
-  check(
-    '① 记录仍 pending（未答的题没被带走）',
-    record?.status === 'pending',
-    show(record?.status),
-  );
+  check('① 记录仍 pending（未答的题没被带走）', record?.status === 'pending', show(record?.status));
   check(
     '① 记录只记已答的两题',
     same(record?.answered_questions, ['q1', 'q3']),
@@ -288,7 +284,11 @@ function makeDelivery() {
     answerFor('q3', 'lint, test', { selected: ['lint', 'test'] }),
   ]);
 
-  check('② async 首批：一次提交只通知一次投递', h.deliveries.length === 1, show(h.deliveries.length));
+  check(
+    '② async 首批：一次提交只通知一次投递',
+    h.deliveries.length === 1,
+    show(h.deliveries.length),
+  );
   const batch = h.deliveries[0] ?? {};
   const batchAnswers = ((batch.answer ?? {}) as AnyRecord).batch_answers as AnyRecord[];
   check('② 投递载荷只带本批 2 条', batchAnswers?.length === 2, show(batchAnswers?.length));
@@ -332,11 +332,7 @@ function makeDelivery() {
   const second = h.deliveries[1] ?? {};
   const secondAnswers = ((second.answer ?? {}) as AnyRecord).batch_answers as AnyRecord[];
   check('③ 第二批载荷只有第 2 题', secondAnswers?.length === 1, show(secondAnswers?.length));
-  check(
-    '③ 第二批载荷就是 q2',
-    secondAnswers?.[0]?.question_id === 'q2',
-    show(secondAnswers?.[0]),
-  );
+  check('③ 第二批载荷就是 q2', secondAnswers?.[0]?.question_id === 'q2', show(secondAnswers?.[0]));
   const record = h.record(requestId);
   check('③ 全部答完 ⇒ answered', record?.status === 'answered', show(record?.status));
   const all = ((record?.answer ?? {}) as AnyRecord).answers as AnyRecord[];
@@ -373,7 +369,9 @@ function makeDelivery() {
   await h.registry.respondAsk(requestId, [answerFor('q1', 'yes')]);
   const before = show(h.record(requestId)?.answer);
 
-  const again = (await h.registry.respondAsk(requestId, [answerFor('q1', 'yes')])) as AnyRecord;
+  const again = (await h.registry.respondAsk(requestId, [
+    answerFor('q1', 'yes'),
+  ])) as unknown as AnyRecord;
   check('④ 重复提交 ⇒ duplicate', again.duplicate === true, show(again));
   check('④ 明确说跳过了哪一题', same(again.skipped_questions, ['q1']), show(again));
   check('④ 本批没有写入任何题', same(again.answered_questions, []), show(again.answered_questions));
@@ -384,7 +382,7 @@ function makeDelivery() {
   await h.registry.respondAsk(requestId, [answerFor('q2', 'main'), answerFor('q3', 'lint')]);
   const afterAnswered = (await h.registry.respondAsk(requestId, [
     answerFor('q1', 'yes'),
-  ])) as AnyRecord;
+  ])) as unknown as AnyRecord;
   check('④ 收口后的重复提交也是 duplicate', afterAnswered.duplicate === true, show(afterAnswered));
   check('④ 收口后 final = true', afterAnswered.final === true, show(afterAnswered.final));
 }
@@ -396,7 +394,7 @@ function makeDelivery() {
   const { admits, delivery } = makeDelivery();
   const requestId = h.request({ mode: 'async' });
   await h.registry.respondAsk(requestId, [answerFor('q1', 'yes')]);
-  const declined = (await h.registry.respondAsk(requestId, [])) as AnyRecord;
+  const declined = (await h.registry.respondAsk(requestId, [])) as unknown as AnyRecord;
 
   check('⑤ 拒答 ⇒ final = true', declined.final === true, show(declined));
   check('⑤ 拒答 ⇒ 没有剩余题', same(declined.remaining_questions, []), show(declined));
@@ -467,10 +465,11 @@ function makeDelivery() {
 {
   const stream = memoryStream();
   const tool = createAskUserTool();
-  const pending = tool.handler(
-    { questions: threeQuestions() },
-    { events: stream, run_id: 'run-1', session_id: 'session-1' } as never,
-  ) as Promise<string>;
+  const pending = tool.handler({ questions: threeQuestions() }, {
+    events: stream,
+    run_id: 'run-1',
+    session_id: 'session-1',
+  } as never) as Promise<string>;
 
   // 让 handler 先把请求事件发出去，再模拟「人只答了 3 题里的 2 题」。
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -636,9 +635,9 @@ function makeDelivery() {
 
     const inbox = service.inboxSnapshot(member.id);
     check('⑦ inbox 里只有一条', inbox.entries.length === 1, show(inbox.entries.length));
-    const entry = inbox.entries[0] ?? {};
+    const entry = (inbox.entries[0] ?? {}) as { from?: string; message_id?: string };
     check('⑦ 条目来源是 ask（不是 human）', entry.from === 'ask', show(entry.from));
-    const text = await service.inboxSnapshot(member.id, { messageIds: [entry.message_id] });
+    const text = await service.inboxSnapshot(member.id, { messageIds: [entry.message_id ?? ''] });
     const body = String(text.entries[0]?.text ?? '');
     check('⑦ 正文是 ask 答复卡格式', body.startsWith('[ask answer '), body.slice(0, 60));
     check('⑦ 正文含两题（不多不少）', body.includes('Deploy') && body.includes('Checks'), body);

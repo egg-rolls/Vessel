@@ -276,10 +276,7 @@ function matchQuestionId(
  * 与 {@link matchQuestionId} 分开的理由：判断「这行是不是重复」时不能有位置兜底 ——
  * 一份重复提交的三行答案会被位置兜底全部认成第 1 题，于是 skipped 里出现三个 `q1`。
  */
-function identifyQuestion(
-  answer: unknown,
-  slots: readonly AskQuestionSlot[],
-): string | undefined {
+function identifyQuestion(answer: unknown, slots: readonly AskQuestionSlot[]): string | undefined {
   const record = isRecord(answer) ? answer : {};
   const explicit = nonEmptyString(record.question_id);
   if (explicit !== undefined && slots.some((slot) => slot.id === explicit)) return explicit;
@@ -987,9 +984,7 @@ export function createInteractionsRegistry(
       // 返回体描述的是**这次提交**写成了什么（不是上面那次空转）：题号来自本批的规划，
       // 其余字段以落定后的记录为准。客户端据此决定「卡片还能不能收」。
       const answeredBefore = new Set(record.answered_questions ?? []);
-      const writtenNow = declined
-        ? []
-        : plan.answered.filter((id) => !answeredBefore.has(id));
+      const writtenNow = declined ? [] : plan.answered.filter((id) => !answeredBefore.has(id));
       return {
         ok: true,
         answered_by: attribution.answered_by,
