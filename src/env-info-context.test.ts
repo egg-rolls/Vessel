@@ -90,7 +90,7 @@ async function main(): Promise<void> {
     name: 'probe_tool',
     description: 'probe',
     inputSchema: { type: 'object', properties: {} },
-    handler: async () => ({ content: 'ok' }),
+    handler: async () => 'ok',
   });
   await eu.run('again', 's1');
   check('环境变了要再发一份', seen.length === 2, String(seen.length));
