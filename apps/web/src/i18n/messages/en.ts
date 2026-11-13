@@ -1199,6 +1199,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // Environment card (the default shape of vessel:notice): coexists with raw system
   // events, but this is the human-facing mode.
   'chat.env.aria': 'Environment',
+  'chat.env.title': 'Environment',
   'chat.env.scope.config': 'Config',
   'chat.env.scope.permission': 'Permission',
   'chat.env.scope.tools': 'Tools',

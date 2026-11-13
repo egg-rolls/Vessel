@@ -1149,6 +1149,7 @@ export const messages = {
   'chat.notice.unknownEvent': '未知事件类型 · 已折叠 · {type}',
   // 环境信息卡（vessel:notice 的默认形态）：与底层系统信息并存，但这是给人看的那种。
   'chat.env.aria': '环境信息',
+  'chat.env.title': '环境信息',
   'chat.env.scope.config': '配置',
   'chat.env.scope.permission': '权限',
   'chat.env.scope.tools': '工具',

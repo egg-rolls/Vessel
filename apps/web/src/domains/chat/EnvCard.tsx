@@ -65,6 +65,11 @@ export function EnvCard({
       {...(entering !== undefined ? { entering } : {})}
       title={
         <>
+          {/* 用户裁定（0.52）：这类卡叫「环境信息」，scope 只是卡头标签 —— 以前卡头只有
+              scope，于是「上下文卡」「文件卡」看起来像几种卡，正是要收敛掉的分叉。 */}
+          <span className="shrink-0 font-mono text-2xs tracking-wider text-faint">
+            {t('chat.env.title')}
+          </span>
           {/* 与 agent 卡的「来自 agent X」逐字同一组 class（mono / 2xs / tracking / accent）。 */}
           <span className="max-w-56 truncate font-mono text-2xs tracking-wider text-accent">
             {t(`chat.env.scope.${env.scope}`)}
@@ -105,7 +110,7 @@ export function EnvCard({
         )}
       </ul>
       {/* 原文块：全量快照（不渲染 markdown —— 原文就是事实），自带最大高度与滚动。 */}
-      {blocks?.map((block) => (
+      {(blocks ?? env.blocks)?.map((block) => (
         <div className="min-w-0" key={block.labelKey}>
           <div className="event-raw-label">{t(block.labelKey as never)}</div>
           <pre className="run-error-body">{block.text}</pre>
