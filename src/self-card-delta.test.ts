@@ -23,7 +23,7 @@ import { envNoticeCard, mergeEnvNoticeCards } from '../apps/web/src/domains/chat
 import {
   createSelfCardDeltaHook,
   diffSelfCardIdentity,
-  formatSelfCardDelta,
+  formatSelfCardDeltas,
   SELF_CARD_DELTA_DETAIL_MARK,
   SELF_CARD_DELTA_MESSAGE_NAME,
   type SelfCardIdentity,
@@ -41,6 +41,16 @@ function check(name: string, ok: boolean, got?: string): void {
     return;
   }
   failures.push(got === undefined ? name : `${name} | got: ${got}`);
+}
+
+/** 一批变更 → 正文（多条按落盘顺序用空行拼起来，断言「说了什么」时够用）。 */
+function textOf(changes: Parameters<typeof formatSelfCardDeltas>[0]): string {
+  return formatSelfCardDeltas(changes).join('\n\n');
+}
+
+/** 一批变更的第一条正文（单种类变更时就是唯一那条）。 */
+function firstOf(changes: Parameters<typeof formatSelfCardDeltas>[0]): string {
+  return formatSelfCardDeltas(changes)[0] ?? '';
 }
 
 /** 成员快照（只给 Self Card 相关的几个字段；其余字段与结论无关）。 */
@@ -68,16 +78,10 @@ function detailLines(content: string): string[] {
 
 async function main(): Promise<void> {
   // ---- 1. 文案形状：首行带 scope 词，明细一行一条，顺序稳定 ----
-  const one = formatSelfCardDelta(
-    diffSelfCardIdentity(identity(), identity({ name: 'Minelog-main' })),
-  );
+  const one = firstOf(diffSelfCardIdentity(identity(), identity({ name: 'Minelog-main' })));
   const oneLines = one.split('\n');
   check('单字段一条明细', oneLines.length === 2, String(oneLines.length));
-  check(
-    '首行 scope 词',
-    oneLines[0]?.startsWith('selfcard: 1 field changed') === true,
-    oneLines[0],
-  );
+  check('首行 scope 词是 identity', oneLines[0]?.startsWith('identity: ') === true, oneLines[0]);
   check('明细行带线格式标记', oneLines[1]?.startsWith(SELF_CARD_DELTA_DETAIL_MARK) === true);
   check(
     '改名行有旧值与新值',
@@ -86,38 +90,40 @@ async function main(): Promise<void> {
   );
   check('改名说是立即生效', oneLines[1]?.includes('rename is already effective') === true);
 
-  const two = formatSelfCardDelta(
+  // 一批变更跨种类 ⇒ 按 scope 拆成多条（一条消息只表达一种种类，否则卡头标签必然撒谎）
+  const two = formatSelfCardDeltas(
     diffSelfCardIdentity(identity(), identity({ name: 'Minelog-main', model: 'other-model' })),
   );
-  const twoLines = two.split('\n');
-  check('两字段两条明细', twoLines.length === 3, String(twoLines.length));
-  check('首行复数', twoLines[0]?.includes('2 fields changed') === true, twoLines[0]);
-  // 顺序固定（name 在 model 之前），否则同一批变更会拼出两种字符串、去重就不可靠了
-  check('顺序按 SELF_CARD_FIELDS', twoLines[1]?.includes('name: ') === true, twoLines[1]);
-  check('model 在后', twoLines[2]?.includes('model: ') === true, twoLines[2]);
-  check('model 说下一具 body 才生效', twoLines[2]?.includes('next body uses the new one') === true);
+  check('跨种类拆成两条', two.length === 2, String(two.length));
+  const twoHead = two.map((text) => text.split('\n')[0]);
+  // 顺序按词表（identity 在 model 之前）：同一批变更必须永远拼出同一个序列
+  check('第一张卡是 identity', twoHead[0]?.startsWith('identity: ') === true, twoHead[0]);
+  check('第二张卡是 model', twoHead[1]?.startsWith('model: ') === true, twoHead[1]);
+  check(
+    'model 明细说下一具 body 才生效',
+    two[1]?.includes('next body uses the new one') === true,
+    two[1]?.split('\n')[1],
+  );
+  check('每条各自一条明细', two.every((text) => text.split('\n').length === 2));
 
   // ---- 2. system prompt：只说「加了 / 换了 / 去了」，绝不贴正文 ----
   const longPrompt = 'S'.repeat(4000);
-  const replaced = formatSelfCardDelta(
+  const replaced = textOf(
     diffSelfCardIdentity(
       identity({ system_prompt: 'old prompt' }),
       identity({ system_prompt: longPrompt }),
     ),
   );
   check('system prompt 换掉', replaced.includes('system prompt: replaced') === true, replaced);
+  check('scope 是 context', replaced.startsWith('context: ') === true, replaced.split('\n')[0]);
   check('不贴 prompt 正文', !replaced.includes(longPrompt.slice(0, 80)), replaced.slice(0, 120));
-  const added = formatSelfCardDelta(
-    diffSelfCardIdentity(identity(), identity({ system_prompt: 'x' })),
-  );
+  const added = textOf(diffSelfCardIdentity(identity(), identity({ system_prompt: 'x' })));
   check('system prompt 新加', added.includes('system prompt: added') === true, added);
-  const removed = formatSelfCardDelta(
-    diffSelfCardIdentity(identity({ system_prompt: 'x' }), identity()),
-  );
+  const removed = textOf(diffSelfCardIdentity(identity({ system_prompt: 'x' }), identity()));
   check('system prompt 去掉', removed.includes('system prompt: removed') === true, removed);
 
   // ---- 3. 权限档也是一行（Team 成员被强制 bridge 就是这种变化）----
-  const modeChange = formatSelfCardDelta(
+  const modeChange = textOf(
     diffSelfCardIdentity(
       identity({ permission_mode: 'allow' }),
       identity({ permission_mode: 'bridge' }),
@@ -125,6 +131,8 @@ async function main(): Promise<void> {
   );
   check('权限档出现', modeChange.includes('permission mode: allow → bridge') === true, modeChange);
   check('权限档说明生效点', modeChange.includes('next body applies the new mode') === true);
+  // 权限档改的是可用工具面 ⇒ scope 是 tools（不是 identity：那是「谁」的问题）
+  check('权限档归 tools', modeChange.startsWith('tools: ') === true, modeChange.split('\n')[0]);
 
   // ---- 4. 归一化：空串 / 空白不算变更（否则每次 update 都会凭空报一条）----
   // 走生产入口 `selfCardIdentityOf`（归一化就在那里），而不是手搓快照。
@@ -148,9 +156,7 @@ async function main(): Promise<void> {
   check('字段被清空算变更', droppedName.length === 1, String(droppedName.length));
 
   // ---- 5. 长值裁断（防脏数据把卡片撑爆）----
-  const longName = formatSelfCardDelta(
-    diffSelfCardIdentity(identity(), identity({ name: 'n'.repeat(200) })),
-  );
+  const longName = textOf(diffSelfCardIdentity(identity(), identity({ name: 'n'.repeat(200) })));
   check('长值裁断', longName.includes('…') === true, longName.slice(0, 160));
 
   // ---- 6. 明细标记必须与 Web 解析的那份逐字相同 ----
@@ -179,7 +185,7 @@ async function main(): Promise<void> {
     renamed[0]?.name,
   );
   check('通道是 user 消息', renamed[0]?.role === 'user', renamed[0]?.role);
-  check('注入的是环境信息卡形状', renamed[0]?.content.startsWith('selfcard: ') === true);
+  check('注入的是环境信息卡形状', renamed[0]?.content.startsWith('identity: ') === true);
   check('不写 system', !('systemPrompt' in (renamed[0] ?? {})));
 
   // ---- 9. hook：同一变更不重复注入（同一 run 的后续 LLM 请求也一样）----
@@ -204,23 +210,28 @@ async function main(): Promise<void> {
     rolledBack[0]?.content.split('\n')[1],
   );
 
-  // ---- 12. hook：多字段一次性变更合并成一条消息（不是 N 条）----
+  // ---- 12. hook：多字段一次性变更 → 按 scope 合并（同种类不拆，跨种类才拆）----
   let multi = identity();
   const hook3 = createSelfCardDeltaHook({ baseline: identity(), current: () => multi });
   multi = identity({ name: 'Minelog-main', team_id: 'minelog', model: 'm2' });
   const merged = await runRound(hook3);
-  check('多字段只注入一条', merged.length === 1, String(merged.length));
+  // name + team 都是 identity（合成一条），model 是另一条 ⇒ 2 条
+  check('跨种类拆成两条', merged.length === 2, String(merged.length));
   check(
-    '多字段明细齐全',
-    detailLines(merged[0]?.content ?? '').length === 3,
-    String(detailLines(merged[0]?.content ?? '').length),
+    'identity 那条明细齐全',
+    detailLines(merged.find((m) => m.content.startsWith('identity: '))?.content ?? '').length === 2,
+    String(detailLines(merged.find((m) => m.content.startsWith('identity: '))?.content ?? '').length),
+  );
+  check(
+    'model 那条一条明细',
+    detailLines(merged.find((m) => m.content.startsWith('model: '))?.content ?? '').length === 1,
   );
 
   // ---- 13. hook：每具 body 各自去重（同一次变更换具 body 要重新报）----
   const bodyA = createSelfCardDeltaHook({ baseline: identity(), current: () => multi });
   const bodyB = createSelfCardDeltaHook({ baseline: identity(), current: () => multi });
-  check('body A 报', (await runRound(bodyA)).length === 1);
-  check('body B 独立报', (await runRound(bodyB)).length === 1);
+  check('body A 报', (await runRound(bodyA)).length === 2);
+  check('body B 独立报', (await runRound(bodyB)).length === 2);
 
   // ---- 14. hook：探针抛错不冒泡、也不注入（一条提示不许拖垮一轮请求）----
   const boom = createSelfCardDeltaHook({
@@ -249,21 +260,26 @@ async function main(): Promise<void> {
   check('权限档进快照', snapshot.permission_mode === 'bridge', snapshot.permission_mode);
 
   // ---- 16. Web 承接：同一段文本必须解析成一张能折叠的环境信息卡 ----
-  const card = envNoticeCard(merged[0]?.content ?? '');
+  const identityText = merged.find((m) => m.content.startsWith('identity: '))?.content ?? '';
+  const card = envNoticeCard(identityText);
   check('Web 解析出卡片', card !== undefined);
-  check('卡片 scope = selfcard', card?.scope === 'selfcard', card?.scope);
+  check('卡片 scope = identity', card?.scope === 'identity', card?.scope);
   check(
     '卡片首行是摘要',
-    card?.lines[0]?.text.startsWith('selfcard: ') === true,
+    card?.lines[0]?.text.startsWith('identity: ') === true,
     card?.lines[0]?.text,
   );
-  check('卡片明细逐行', card?.lines.length === 4, String(card?.lines.length));
+  check('卡片明细逐行', card?.lines.length === 3, String(card?.lines.length));
   check('明细不再带 · 标记', card?.lines[1]?.text.startsWith('·') !== true, card?.lines[1]?.text);
   check('明细不被误认成别的 scope', card?.lines[1]?.scope === 'context', card?.lines[1]?.scope);
   check('卡片全部生效', card?.ok === true);
   const folded = card === undefined ? undefined : mergeEnvNoticeCards(card, card);
   check('同 scope 折叠成一张（2 条）', folded?.count === 2, String(folded?.count));
-  check('折叠后仍是 selfcard', folded?.scope === 'selfcard', folded?.scope);
+  check('折叠后仍是 identity', folded?.scope === 'identity', folded?.scope);
+
+  // 旧词兼容：0.51 落盘消息里首词还是 `selfcard:`，Web 必须继续认得（否则卡头静默退化）
+  const legacy = envNoticeCard('selfcard: 1 field changed; the Self Card is out of date');
+  check('旧词 selfcard 仍被认出', legacy?.scope === 'selfcard', legacy?.scope);
 
   const total = passed + failures.length;
   if (failures.length === 0) {
