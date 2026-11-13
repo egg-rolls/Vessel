@@ -174,6 +174,13 @@ export interface SessionDetail {
 
 /** ask 单个问题 */
 export interface AskUserQuestion {
+  /**
+   * 题目标识（additive）：`q1` / `q2` / …，由工具按题序写进请求事件。
+   *
+   * 旧事件没有该字段 ⇒ 读侧按「下标 + 1」推出同一个值（`questionIdOf`），所以
+   * 「这题答了没有」对老数据同样判定得出来。
+   */
+  id?: string;
   header: string;
   question: string;
   options?: string[];
@@ -182,9 +189,13 @@ export interface AskUserQuestion {
 
 /** ask 单个回答 */
 export interface AskUserAnswer {
+  /** 这一行挂在哪道题上（additive；不传时服务端按正文 / header / 位置回退）。 */
+  question_id?: string;
   header: string;
   question: string;
   answer: string;
+  /** 多选的结构化选中项（additive）：答复卡据此渲染 chips，也能判定「选了几项」。 */
+  selected?: string[];
 }
 
 /** ask 请求（ask.user.requested） */
@@ -221,6 +232,13 @@ export interface AskUserRequest {
    * 缺省 = sync（阻塞型：应答者就在原地等）。
    */
   mode?: 'sync' | 'async';
+  /**
+   * 已经答完的题 id（additive，`interactions.list` 的 `answered_questions`）。
+   *
+   * 分批提交后一条请求可以只答了一部分：剩下的题仍是 pending，卡片要留着，而已经答过的
+   * 那几题不该再让人填一遍。旧服务端 / 旧记录没有这个字段 ⇒ 当作「一道都没答」。
+   */
+  answeredQuestionIds?: string[];
 }
 
 /** 权限应答范围（DECISION-024 §2.1）。 */

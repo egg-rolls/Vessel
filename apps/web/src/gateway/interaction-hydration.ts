@@ -7,11 +7,17 @@
  */
 import type { AskUserQuestion, AskUserRequest, PermissionRequest, PermissionScope } from './types';
 
-/** 镜像 serve `ListedInteraction`（packages/serve/src/gateway/methods/interactions.ts）。 */
+/** 镜像 serve `ListedInteraction` 的 answer（packages/serve/src/gateway/methods/interactions.ts）。 */
 export interface ListedInteractionAnswer {
-  decision: 'allow' | 'deny';
-  scope: PermissionScope;
+  decision?: 'allow' | 'deny';
+  scope?: PermissionScope;
   answered_at: number;
+  /** ask 专用：至今累计的全部答案（分批提交会多批累加）。 */
+  answers?: unknown[];
+  /** ask 专用：**本批**新增的答案（投放正文只取这一批）。 */
+  batch_answers?: unknown[];
+  batch_id?: string;
+  delivered_at?: number;
 }
 
 export interface ListedInteraction {
@@ -33,6 +39,8 @@ export interface ListedInteraction {
   status: 'pending' | 'answered' | 'orphaned';
   /** 0.52：`async` = 工具早已返回、请求仍然有效（回答会起新 run）。 */
   mode?: 'sync' | 'async';
+  /** 已经答完的题 id（additive；只在 pending 时有意义，旧 gateway 不返回）。 */
+  answered_questions?: string[];
   answer?: ListedInteractionAnswer;
 }
 
@@ -154,6 +162,10 @@ export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnap
         : {}),
       ...(item.team_id !== undefined && item.team_id.length > 0 ? { teamId: item.team_id } : {}),
       ...(item.mode === 'async' ? { mode: 'async' as const } : {}),
+      // 分批：已答的题随卡片一起补回 —— 刷新 / 重连后「哪几题答过了」不丢。
+      ...(item.answered_questions !== undefined && item.answered_questions.length > 0
+        ? { answeredQuestionIds: item.answered_questions }
+        : {}),
     });
   }
 
@@ -206,6 +218,18 @@ function hasId(state: InteractionState, requestId: string): boolean {
     state.permissions.some((item) => item.requestId === requestId) ||
     state.asks.some((item) => item.requestId === requestId)
   );
+}
+
+/** 两个「已答的题 id」列表是否等价（顺序无关；都缺省也算相同）。 */
+function sameIds(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  const a = left ?? [];
+  const b = right ?? [];
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((id) => set.has(id));
 }
 
 /** 事件增量、应答移除、run 终态、hydration 合并共用；终态优先、settled 不复活。 */
@@ -284,7 +308,21 @@ export function interactionReducer(
         nextAsks.push(request);
       }
 
-      return { permissions: nextPermissions, asks: nextAsks };
+      // 分批：卡片已经在 store 里时，**逐题进度**仍要以服务端为准 —— 本端刚答了 2/3 题、
+      // 别的端答了 1 题，都只体现在 `interactions.list` 的 `answered_questions` 上。
+      // 只刷新这一个 additive 字段：身份 / 归属 / 请求正文仍是「先到者优先」，不把
+      // 一张卡片的排队位置或归属悄悄换掉。
+      const progress = new Map(
+        action.snapshot.asks.map((request) => [request.requestId, request.answeredQuestionIds]),
+      );
+      const withProgress = nextAsks.map((request) => {
+        const next = progress.get(request.requestId);
+        if (next === undefined) return request;
+        if (sameIds(request.answeredQuestionIds, next)) return request;
+        return { ...request, answeredQuestionIds: next };
+      });
+
+      return { permissions: nextPermissions, asks: withProgress };
     }
     default:
       return state;

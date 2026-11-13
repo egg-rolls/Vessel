@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import type { ToastApi } from '../components/ToastProvider';
 import { useInteractionStore } from '../stores/interactionStore';
+import { askRespondKeepsPending } from './ask-answers';
 import type { GatewayClient } from './client';
 import { errorMessage } from './connection-utils';
 import {
@@ -87,7 +88,14 @@ export function useInteractionResponses({
       if (!submitGuard.current.begin(requestId)) return;
       updateResponding(requestId, true);
       try {
-        await client.respondAsk(requestId, answers, batchId);
+        const outcome = await client.respondAsk(requestId, answers, batchId);
+        // 分批提交：只要还有题没答，这条请求就仍是 pending —— 卡片留在待批页，
+        // 本端**不能**当它结算了（否则人再也打不开那几道没答的题）。
+        if (askRespondKeepsPending(outcome)) {
+          // 已答的题由服务端权威状态补回（刷新 / 别的端答的也一样收敛）。
+          void hydrateInteractions();
+          return;
+        }
         recordSettled(requestId);
         useInteractionStore.getState().dispatch({ type: 'settle', requestId });
       } catch (error) {
