@@ -32,6 +32,7 @@ import { join } from 'node:path';
 import {
   CONTEXT_ANCHOR_RATIO_MAX,
   CONTEXT_ANCHOR_RATIO_MIN,
+  type ContextAnchor,
   createRunJournalFactory,
   ExecutionUnit,
   estimateMessagesTokens,
@@ -96,7 +97,7 @@ function bareEstimate(): number {
   return ctx.tokenCount;
 }
 
-function anchorOf(ratio: number, model = MODEL): SessionState['context_anchor'] {
+function anchorOf(ratio: number, model = MODEL): ContextAnchor {
   return {
     ratio,
     prompt_tokens: Math.round(1000 * ratio),
@@ -387,7 +388,7 @@ async function c2(): Promise<void> {
   }
   const rebuilt = new MemoryWorkingContext({ maxTokens: 200000 });
   rebuilt.setSessionId('s-real-anchor');
-  for (const message of persisted.messages) rebuilt.add(message);
+  for (const message of persisted.messages ?? []) rebuilt.add(message);
   const bareAfterRestart = rebuilt.tokenCount;
   rebuilt.setContextAnchor(anchor, MODEL);
   expect(
@@ -403,7 +404,7 @@ async function c2(): Promise<void> {
   // 换模型重开同一会话 ⇒ 退回裸估算（tokenizer 不同，宁可不校正）
   const switched = new MemoryWorkingContext({ maxTokens: 200000 });
   switched.setSessionId('s-real-anchor');
-  for (const message of persisted.messages) switched.add(message);
+  for (const message of persisted.messages ?? []) switched.add(message);
   switched.setContextAnchor(anchor, 'probe-model-b');
   expect('C2.5 换模型重启 = 裸估算', switched.tokenCount, bareAfterRestart);
 
@@ -547,7 +548,7 @@ function baseState(sessionId: string): SessionState {
     status: 'completed',
     usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     derived_upto_seq: 3,
-  } as SessionState;
+  } as unknown as SessionState;
 }
 
 async function c3(): Promise<void> {
