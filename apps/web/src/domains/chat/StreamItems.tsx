@@ -23,6 +23,7 @@ import { agentSenderOfName } from './agent-sender';
 import { filterTimelineItems, reasoningVisible, runningToolHint } from './chat-visibility';
 import { composerIconControlClass, composerQuietIconTone } from './composer-controls';
 import { EventRow, NoticeRow } from './EventRow';
+import { type ContextChangeEntry, contextChangeEntries } from './env-notice';
 import { MessageRefs } from './MessageRefs';
 import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
@@ -298,29 +299,33 @@ export function RunFailureCard({
 }
 
 /**
- * 「模型上下文」卡（`prompt.system_context`）：**模型这一轮真正看到的系统消息**。
+ * 「环境信息 · 上下文」卡（`prompt.system_context`）：**模型这一轮看到的系统消息**。
+ *
+ * 用户裁定（0.52）：不再有「模型上下文」这种卡 —— 它就是**环境信息**的一种（scope
+ * `context`，见 `env-notice.ts` 与 `packages/agent/src/env-info-scope.ts`）。同一张卡、
+ * 同一套卡语言，scope 只决定标签。
  *
  * 宗旨（设计出发点）：**让模型可以看到的内容，用户也一样应该看到**，只不过用各种方法
  * 去让其简化（UX、可收缩）。以前基底 system prompt + Self Card 只在请求组装时拼进
  * system prompt，用户一点都看不到；现在它落成一条事件，这张卡把原文摆到时间线上 ——
  * **默认折叠**，展开是原文。
  *
+ * 两种形态（同一张卡，数据决定形状）：
+ * - **有 `changed`（增量）**：摘要只列「这次变了什么」（`模型: A → B`、`工具: 12 → 14`），
+ *   展开仍是**全量快照** —— 用户要能一眼看出变化，也要能核对模型到底看到了什么；
+ * - **没有 `changed`**（首次 / 旧日志 = 不知道）：退回全量摘要（模型 · 消息数 · 工具数 ·
+ *   token）。**绝不**渲成「0 项变更」：那是编造结论。
+ *
  * 与 `EnvCard` / 失败卡同一张卡（`StreamCard`）、同一套卡语言，不自造卡头：
- * - 卡头 title 槽 = 一个 mono / text-2xs / tracking-wider / text-accent 的 scope 标签
- *   （与 `EnvCard` 的 scope 标签、agent 卡的「来自 agent X」逐字同一组 class）；
- * - 卡头 meta 槽 = **hash 短号**（`#a1b2c3d4`，hover 给完整 16 位；与失败卡的 run id
- *   同一个位置、同一种 mono/tabular 小字）；
- * - 折叠态 summary = 单行 ellipsis 的摘要：模型 · 消息数 · 工具数 · 估算 token
- *   （`.event-block-preview` 负责截断，长模型名不会把卡头撑宽）；
- * - 展开体 = **两段原文**（system prompt / Self Card），各用一个 `<pre>`：不渲染
- *   markdown（原文就是事实），自带最大高度与滚动（复用失败卡的原文块 `.run-error-body`
- *   —— 本单不动 `styles/**`，不新造 class）；
- * - 可展开性只由「有没有展开体」决定（`StreamCard` 的口径）：两段原文都在时才有 children，
- *   键盘可达（原生 `<details>` + summary，Enter / Space）。
+ * - 卡头 title 槽 = 「环境信息」+ scope 标签（与 `EnvCard` 的标签逐字同一组 class）；
+ * - 卡头 meta 槽 = **hash 短号**（`#a1b2c3d4`，hover 给完整 16 位；有增量时换成「N 项变更」）；
+ * - 折叠态 summary = 单行 ellipsis 的摘要（`.event-block-preview` 负责截断）；
+ * - 展开体 = 全量快照的两段原文（system prompt / Self Card），各一个 `<pre>`；
+ * - 可展开性只由「有没有展开体」决定（`StreamCard` 的口径），键盘可达。
  *
  * 数据来源只有一个：事件流（live + 回放投影，见 `transcript-items.ts` 的
- * `promptContextOfEvent`）。它不是 message，所以刷新后的可见性靠事件回放而不是
- * `sessions.get.messages`。
+ * `promptContextOfEvent`）。它不是 message，所以刷新后的可见性靠事件回放或
+ * `sessions.get.system_context` 的派生快照。
  */
 export function PromptContextCard({
   context,
@@ -335,31 +340,46 @@ export function PromptContextCard({
   entering?: boolean;
 }) {
   const clock = formatClock(context.ts);
-  const parts = [
-    context.model,
-    context.messageCount !== undefined
-      ? t('chat.modelContext.messages', { count: context.messageCount })
-      : undefined,
-    context.toolsCount !== undefined
-      ? t('chat.modelContext.tools', { count: context.toolsCount })
-      : undefined,
-    context.estimatedTokens !== undefined
-      ? t('chat.modelContext.tokens', { count: compactTokens(context.estimatedTokens) })
-      : undefined,
-  ].filter((part): part is string => part !== undefined && part.length > 0);
+  const changes = contextChangeEntries(context.changed ?? []);
+  const hasChanges = changes.length > 0;
+  // 增量形态的摘要 = 只列变了的项；否则退回全量摘要（首次 / 不知道）。
+  const parts = hasChanges
+    ? changes.map((entry) => changeLineText(entry))
+    : [
+        context.model,
+        context.messageCount !== undefined
+          ? t('chat.modelContext.messages', { count: context.messageCount })
+          : undefined,
+        context.toolsCount !== undefined
+          ? t('chat.modelContext.tools', { count: context.toolsCount })
+          : undefined,
+        context.estimatedTokens !== undefined
+          ? t('chat.modelContext.tokens', { count: compactTokens(context.estimatedTokens) })
+          : undefined,
+      ].filter((part): part is string => part !== undefined && part.length > 0);
   return (
     <StreamCard
       className="prompt-context-card w-full min-w-0 max-w-full"
-      ariaLabel={t('chat.modelContext.aria')}
+      ariaLabel={t('chat.env.aria')}
       defaultOpen={defaultOpen}
       entering={entering}
       title={
-        // 与 EnvCard 的 scope 标签逐字同一组 class（mono / 2xs / tracking / accent）。
-        <span className="max-w-56 truncate font-mono text-2xs tracking-wider text-accent">
-          {t('chat.modelContext.title')}
-        </span>
+        <>
+          {/* 「环境信息」是这一类卡的统称；scope 标签说明是哪一种（这里恒为「上下文」）。 */}
+          <span className="shrink-0 text-2xs text-muted">{t('chat.env.aria')}</span>
+          {/* 与 EnvCard 的 scope 标签逐字同一组 class（mono / 2xs / tracking / accent）。 */}
+          <span className="max-w-56 truncate font-mono text-2xs tracking-wider text-accent">
+            {t('chat.env.scope.context')}
+          </span>
+        </>
       }
-      meta={<span title={context.hash}>{`#${context.hash.slice(0, 8)}`}</span>}
+      meta={
+        hasChanges ? (
+          <span>{t('chat.env.changed.count', { count: changes.length })}</span>
+        ) : (
+          <span title={context.hash}>{`#${context.hash.slice(0, 8)}`}</span>
+        )
+      }
       summary={parts.join(' · ')}
     >
       <div className="mb-1 flex flex-wrap items-baseline gap-x-2 font-mono text-2xs text-faint">
@@ -375,12 +395,33 @@ export function PromptContextCard({
         <span className="shrink-0 tabular-nums" title={context.hash}>
           {t('chat.modelContext.hash', { hash: context.hash })}
         </span>
+        {context.previousHash !== undefined && (
+          <span className="shrink-0 tabular-nums" title={context.previousHash}>
+            {t('chat.env.changed.from', { hash: context.previousHash })}
+          </span>
+        )}
         {context.contextMax !== undefined && (
           <span className="shrink-0 tabular-nums">
             {t('chat.modelContext.contextMax', { count: compactTokens(context.contextMax) })}
           </span>
         )}
       </div>
+      {/* 展开区的第一段是增量清单（有则显示）：卡头是 ellipsis 单行，长清单读不全。 */}
+      {hasChanges && (
+        <>
+          <div className="event-raw-label">{t('chat.env.changed.title')}</div>
+          <ul className="m-0 flex min-w-0 list-none flex-col gap-1 p-0">
+            {changes.map((entry) => (
+              <li
+                className="min-w-0 break-words whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink"
+                key={entry.id}
+              >
+                {changeLineText(entry)}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       {context.systemPrompt !== undefined && (
         <>
           <div className="event-raw-label">{t('chat.modelContext.system')}</div>
@@ -395,6 +436,31 @@ export function PromptContextCard({
       )}
     </StreamCard>
   );
+}
+
+/** `changed` 词表 → 本地化标签的键（认不出的键原样显示，不吞掉这条变更）。 */
+const CHANGED_LABELS: Readonly<Record<string, string>> = {
+  system_prompt: 'chat.env.changed.systemPrompt',
+  self_card: 'chat.env.changed.selfCard',
+  model: 'chat.env.changed.model',
+  tools: 'chat.env.changed.tools',
+};
+
+/** `added` / `removed` / `replaced` 这类值词要本地化；`A → B`、数字原样显示。 */
+const CHANGED_VALUE_WORDS: Readonly<Record<string, string>> = {
+  added: 'chat.env.changed.added',
+  removed: 'chat.env.changed.removed',
+  replaced: 'chat.env.changed.replaced',
+};
+
+/** 一条增量 → 一行文本（`模型: A → B`）。标签与值词本地化，值本身是事实、不翻译。 */
+function changeLineText(entry: ContextChangeEntry): string {
+  const labelKey = CHANGED_LABELS[entry.key];
+  const label = labelKey !== undefined ? t(labelKey as never) : entry.key;
+  if (entry.value === undefined) return label;
+  const valueKey = CHANGED_VALUE_WORDS[entry.value];
+  const value = valueKey !== undefined ? t(valueKey as never) : entry.value;
+  return `${label}: ${value}`;
 }
 
 /**

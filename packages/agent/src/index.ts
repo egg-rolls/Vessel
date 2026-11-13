@@ -21,6 +21,16 @@ export {
   type StoredConversation,
 } from './conversation-store.js';
 export {
+  ENV_INFO_DETAIL_MARK,
+  ENV_INFO_DETAILS_MAX,
+  ENV_INFO_MESSAGE_NAME,
+  ENV_INFO_SCOPES,
+  type EnvInfoOptions,
+  type EnvInfoScope,
+  formatEnvInfo,
+  sortedNames,
+} from './env-info-scope.js';
+export {
   AGENT_INBOX_VERSION,
   type AgentInboxDelivery,
   type AgentInboxEntryInput,
@@ -71,7 +81,7 @@ export {
 export {
   createSelfCardDeltaHook,
   diffSelfCardIdentity,
-  formatSelfCardDelta,
+  formatSelfCardDeltas,
   SELF_CARD_DELTA_DETAIL_MARK,
   SELF_CARD_DELTA_HOOK,
   SELF_CARD_DELTA_MESSAGE_NAME,
@@ -116,6 +126,16 @@ export {
   teamsDirPath,
 } from './team-store.js';
 export { type AgentToolOptions, createAgentTool } from './tool.js';
+export {
+  createToolSurfaceDeltaHook,
+  diffToolSurface,
+  formatToolSurfaceDelta,
+  isEmptyToolSurfaceChange,
+  TOOL_SURFACE_DELTA_HOOK,
+  TOOL_SURFACE_DELTA_MESSAGE_NAME,
+  type ToolSurfaceChange,
+  type ToolSurfaceDeltaHookOptions,
+} from './tool-surface-delta.js';
 export {
   type AdmitInput,
   type AdmitResult,

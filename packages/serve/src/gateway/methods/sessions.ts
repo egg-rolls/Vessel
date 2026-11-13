@@ -88,6 +88,14 @@ export interface SessionSystemContext {
   at?: number;
   /** 那条事件所属的 run：客户端据此把卡落回那一轮。 */
   run_id?: string;
+  /**
+   * 「与上一份快照差在哪」（additive，0.52）：只列变了的项（`system_prompt: replaced` /
+   * `model: A → B` / `tools: 12 → 14`）。**缺省 = 不知道**（首次快照 / 旧日志），
+   * 客户端退回全量快照卡，不渲成「0 项变更」。
+   */
+  changed?: string[];
+  /** 上一份快照的 hash（additive；缺省同上）。 */
+  previous_hash?: string;
 }
 
 /**

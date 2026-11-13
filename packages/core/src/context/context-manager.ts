@@ -189,14 +189,16 @@ function retainedToolResultCount(messages: readonly Message[], maxTokens: number
 }
 
 /**
- * 清空旧工具结果内容（就地修改传入消息对象），返回本次被清空的 tool_call_id。
+ * 本次窗口里「会被换成占位」的旧工具结果（纯函数，**不改任何消息**）。
  *
- * 保留最近结果按 token 预算自适应（R5）。清空而不是删除：tool 消息与
- * assistant 的 tool_calls 按 tool_call_id 配对，删除任一侧都会让 provider
- * 拒绝请求；只替换 content 既缩短输入，又完整保留 role / tool_call_id /
- * name 与 assistant.tool_calls。调用方负责传入可安全修改的副本。
+ * 保留最近结果按 token 预算自适应（R5）：清空而不是删除 —— tool 消息与 assistant 的
+ * `tool_calls` 按 `tool_call_id` 配对，删除任一侧都会让 provider 拒绝请求。
+ *
+ * 0.52 起它只负责**算**：真正替换发生在请求构建层（`withClearedToolResults`）。
+ * 分开的理由是不变量「落盘的 message 只能 pop 或 append」：在压缩里就地改正文等于
+ * 在磁盘上重写历史，用户回看旧消息时看到的就不是当时那份了。
  */
-function clearOldToolResultsIn(messages: readonly Message[], maxTokens: number): string[] {
+export function planClearedToolResults(messages: readonly Message[], maxTokens: number): string[] {
   const keep = retainedToolResultCount(messages, maxTokens);
   let skipped = 0;
   const cleared: string[] = [];
@@ -209,14 +211,49 @@ function clearOldToolResultsIn(messages: readonly Message[], maxTokens: number):
     }
     // 空内容本来就无需回收；已是占位文本则保持幂等。
     if (!message.content || isClearedToolResult(message.content)) continue;
-    message.content = formatClearedToolResult(
-      messages,
-      message.tool_call_id ?? '',
-      message.content,
-    );
     if (message.tool_call_id !== undefined) cleared.push(message.tool_call_id);
   }
   return cleared.reverse();
+}
+
+/**
+ * 请求级视图：把超出保留预算的旧工具结果换成占位文本，**返回新数组**。
+ *
+ * 只有被替换的那几条消息是新对象（`{...message, content}`），其余原样透传 ——
+ * 调用方（`ExecutionUnit.buildRequestMessages`）据此做到「发给 provider 的请求省 token，
+ * 落盘的历史一个字不改」。这是本不变量在 core 里唯一允许的「视图层改写」。
+ */
+export function withClearedToolResults(messages: readonly Message[], maxTokens: number): Message[] {
+  const cleared = planClearedToolResults(messages, maxTokens);
+  if (cleared.length === 0) return [...messages];
+  const ids = new Set(cleared);
+  return messages.map((message) =>
+    message.role === 'tool' &&
+    typeof message.tool_call_id === 'string' &&
+    ids.has(message.tool_call_id)
+      ? {
+          ...message,
+          content: formatClearedToolResult(messages, message.tool_call_id, message.content),
+        }
+      : message,
+  );
+}
+
+/**
+ * 就地清空（**只给私有副本用**：fork 的 seed 会在自己那份拷贝上压缩）。
+ *
+ * 历史消息一律走 `withClearedToolResults`；这条路径之所以还能就地改，是因为它操作的
+ * `copy` 从没落过盘 —— 改的是「新会话的出生内容」，不是已落盘历史。
+ */
+function clearOldToolResultsIn(messages: readonly Message[], maxTokens: number): string[] {
+  const cleared = planClearedToolResults(messages, maxTokens);
+  const ids = new Set(cleared);
+  for (const message of messages) {
+    if (message.role !== 'tool' || typeof message.tool_call_id !== 'string') continue;
+    if (!ids.has(message.tool_call_id)) continue;
+    message.content = formatClearedToolResult(messages, message.tool_call_id, message.content);
+  }
+  return cleared;
 }
 
 /**
@@ -417,8 +454,9 @@ export class MemoryWorkingContext implements WorkingContext {
     const plan = this.planCompaction(force);
     if (!plan) return 0;
 
-    // 先按原始内容决定压缩边界，再清空旧工具输出：阈值与 0.3 保留预算不变。
-    const cleared = this.clearOldToolResults(plan.sessionId);
+    // 先按原始内容决定压缩边界（阈值与 0.3 保留预算不变），再记「请求里会清空哪些」。
+    // 注意：这里**不改**任何一个工具结果的正文 —— 占位发生在请求构建层。
+    const cleared = this.plannedClearedToolResults(plan.sessionId);
     this.applyCompaction(plan, placeholderSummary(plan.toSummarize.length));
     this.realTokens = 0;
     this.recordCompaction(plan.toSummarize.length, cleared, true);
@@ -437,13 +475,13 @@ export class MemoryWorkingContext implements WorkingContext {
     const plan = this.planCompaction(force);
     if (!plan) return 0;
 
-    // 摘要输入按原始内容计量：清空旧工具结果之前取旧摘要与移除量。
+    // 摘要输入按原始内容计量：压缩边界与移除量都按原文取（占位不参与）。
     // 旧摘要取计划所属会话的当前窗口（await 期间可能切换会话）。
     const previousSummary = lastSummaryContent(this.sessionMessages.get(plan.sessionId) ?? []);
     const removedTokens = estimateMessagesTokens(plan.toSummarize);
 
-    // summarizer 之前清空：它看到的旧工具结果已是占位文本，配对结构不变。
-    const cleared = this.clearOldToolResults(plan.sessionId);
+    // 只记「请求里会清空哪些」，不动正文：落盘的历史消息必须是原文。
+    const cleared = this.plannedClearedToolResults(plan.sessionId);
 
     const removed = plan.toSummarize.length;
     const task = (async () => {
@@ -527,30 +565,22 @@ export class MemoryWorkingContext implements WorkingContext {
   }
 
   /**
-   * 压缩前清空旧工具结果的内容，保留最近结果按 `maxTokens × 5%` 自适应（R5）。
+   * 算一遍「哪些旧工具结果会在**请求里**被换成占位」，**不改任何消息**。
    *
-   * - 为什么清空而不删除：tool 消息是 assistant.tool_calls 的结果配对，删除会让
-   *   provider 看到孤立的 tool_calls / tool 结果而拒绝请求；只替换 content 即可
-   *   回收 token，同时保住 role、tool_call_id、name 与 assistant.tool_calls。
-   * - 为什么保留最近若干条：这些结果通常仍被当前轮的模型直接引用，清空会丢失
-   *   工作集；更早的输出由摘要覆盖即可。
-   * - 为什么 system 原样保留：system 是会话级基底与摘要载体，任何压缩都不得改动
-   *   或删除；本方法只匹配 role === 'tool'。
-   * - 调用时机必须在 planCompaction 之后，让触发阈值与 0.3 保留预算按原始内容
-   *   计算，不改变既有边界逻辑。
-   * @returns 本次被替换为占位的 tool_call_id（按消息顺序）
+   * 0.52 起这里只负责算：占位替换搬到请求构建层（`withClearedToolResults`），
+   * `SessionState.messages` / 落盘 / `sessions.get` 读回来的永远是原文。原因是不变量
+   * 「落盘的 message 只能 pop 或 append」—— 就地改内容等于在磁盘上重写历史。
+   *
+   * 算出来的集合仍写进 `message.compaction.cleared_tool_call_ids`：审计要知道「这一次
+   * 之后，模型看到的是哪些工具结果的占位」。
+   *
+   * @returns 会被替换为占位的 tool_call_id（按消息顺序）
    */
-  private clearOldToolResults(sessionId: string): string[] {
-    const cleared = clearOldToolResultsIn(
+  private plannedClearedToolResults(sessionId: string): string[] {
+    return planClearedToolResults(
       this.sessionMessages.get(sessionId) ?? [],
       this.config.maxTokens ?? 1_000_000,
     );
-    // 内容被原地替换，增量缓存失效；这里重算一次，压缩是低频路径。
-    this.estimatedTokens.set(
-      sessionId,
-      estimateMessagesTokens(this.sessionMessages.get(sessionId) ?? []),
-    );
-    return cleared;
   }
 
   /** 记录一次成功压缩（C2）：单调 id 供 runtime 判重，不持久化。 */

@@ -11,5 +11,7 @@ export {
   estimateMessageTokens,
   estimateTokens,
   MemoryWorkingContext,
+  planClearedToolResults,
+  withClearedToolResults,
 } from './context-manager.js';
 export { createSessionBreaker } from './session-breaker.js';

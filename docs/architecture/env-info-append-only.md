@@ -1,0 +1,69 @@
+---
+title: 环境信息与 append-only 上下文
+kind: current
+triggers: [append-only, context, message, notice, env info, environment, self card, tool surface, model change, scope, prompt.system_context, changed, compaction, cleared tool result]
+paths: [packages/core/src/runtime/execution-unit.ts, packages/core/src/context/context-manager.ts, packages/agent/src/env-info-scope.ts, packages/agent/src/self-card-delta.ts, packages/agent/src/tool-surface-delta.ts, apps/web/src/domains/chat/env-notice.ts, scripts/check-append-only-context.ts]
+---
+
+# 环境信息与 append-only 上下文
+
+## 不变量
+
+同一会话的 `SessionState.messages` 落盘序列是 **append-only**：后一份的前 N 条必须与前一份
+前 N 条**逐字相同**，尾部只许变长。唯一的「pop」是压缩：整段被摘要替换，且必须能在
+`(prev.derived_upto_seq, next.derived_upto_seq]` 里找到 `context.compacted` / `message.compaction`。
+鉴于此，**身份 / 工具 / 模型 / 提示词 / 重启**这些变更一律以「追加一条环境信息」表达，
+不得改写已落盘消息。
+
+判据与挂接点：`scripts/check-append-only-context.ts`（挂进 `bun run gates`）。三层：
+C0 判据自检（证伪用）、C1 真 core 端到端（抓每一次 `SessionState` 落盘逐对比）、
+C2 静态钉住（生产者只许尾部追加）、C3 scope 词表对拍。通过时打印跑过的路径。
+
+## 环境信息（唯一一类卡）
+
+一条 `role: 'user'` + `name: 'vessel:notice'` 的尾消息 = 一条环境信息。**不新造事件**，Web 由
+`apps/web/src/domains/chat/env-notice.ts` 解析成卡（`EnvCard`），首行的 scope 词决定卡头标签：
+
+| scope | 含义 | 生产者 |
+|---|---|---|
+| `restart` | 系统 / body 重启 | （词表已留位） |
+| `identity` | 改名 / Team / parent | `self-card-delta` |
+| `fields` | 其它基础字段 | `self-card-delta` |
+| `model` | 模型变更 | `self-card-delta` |
+| `tools` | 工具面变更（含权限档） | `tool-surface-delta`、`self-card-delta` |
+| `context` | 系统提示词 / 自卡本身变了 | `self-card-delta`、`prompt.system_context` 的增量视图 |
+
+词表唯一真相是 `packages/agent/src/env-info-scope.ts`（`ENV_INFO_SCOPES`）；Web 侧
+`ENV_NOTICE_SCOPES` 必须认得出每一个词，另留老词 `config` / `permission` / `mcp` / `update` /
+`peer` / `selfcard`（历史消息里都在用）。C3 做对拍：生产者加了词而 Web 没加，门禁红。
+
+去重口径（三条通道同族）：记住「模型现在相信的值」，注入一次就推进到当前值；下一轮 diff
+为空就不再注入。所以同一变更只报一次，而回滚（A→B→A）因为与「相信的值」不同、照样会报。
+
+## 增量视图（不在落盘上做手脚）
+
+`prompt.system_context` 仍把**全量**快照落盘（审计用的真相），additive 加两个字段：
+`changed: string[]`（与上一份发布过的快照差在哪，`model: A → B` / `tools: 12 → 14`；
+首次与换会话没有可比对象 ⇒ 缺省）与 `previous_hash`。去重键是**整份环境快照**
+（两段原文 + 模型 + 工具个数），否则模型 / 工具的变化永远不会被发布。
+
+客户端拿到 `changed` ⇒ 卡头「N 项变更」、摘要只列变了的项、展开仍是全量快照；
+**缺省 = 不知道**（首次 / 旧日志），退回全量快照卡，绝不渲成「0 项变更」。
+
+## 旧工具结果的占位（曾经是唯一的例外）
+
+`planClearedToolResults` 只**算**哪些旧工具结果超出保留预算；真正的占位替换发生在
+`ExecutionUnit.buildRequestMessages` 的**请求级视图**（`withClearedToolResults` 返回新数组，
+被替换的几条是新对象）。因此：发给 provider 的请求照旧省 token，
+`SessionState.messages` / 落盘 / `sessions.get` 读回来的**永远是原文**。
+审计仍是 `message.compaction.cleared_tool_call_ids`（点名集合），但凭据不是改写许可证 ——
+落盘序列上任何幸存消息的内容变化都算重写。
+
+占位改变了请求消息序列 ⇒ `buildRequestMessages` 记一次显式 `context_trim`，
+`PromptPrefixGuard` 据此有据可依（不报「莫名前缀变化」）。
+
+## 边界
+
+- 不重建 body、不改 system 消息、不新增事件类型；
+- `packages/agent/**` 只许往 `ctx.messages` 尾部追加（C2 静态钉住）；
+- `state.messages` 的唯一写口是 `RunJournal.saveSessionState`（EU 不直连 `SessionStore`）。

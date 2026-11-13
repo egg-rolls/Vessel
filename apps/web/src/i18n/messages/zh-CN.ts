@@ -1155,18 +1155,32 @@ export const messages = {
   'chat.env.scope.mcp': 'MCP',
   'chat.env.scope.update': '更新',
   'chat.env.scope.peer': '成员',
-  // 0.52：Self Card 增量告知（基础信息改了，但那张卡是构造期快照 —— 见
-  // packages/agent/src/self-card-delta.ts）。标签用「基础信息」：与编辑表单的说法对齐，
-  // 一眼能看出「我刚才改的东西生效了」。
+  // 0.52：所有「环境信息」同一通道、同一张卡，scope 只决定卡头标签（词表的生产侧真相是
+  // packages/agent/src/env-info-scope.ts）。`selfcard` 保留为旧词，历史消息的卡头不掉。
+  'chat.env.scope.restart': '重启',
+  'chat.env.scope.identity': '身份',
+  'chat.env.scope.fields': '字段',
+  'chat.env.scope.model': '模型',
   'chat.env.scope.selfcard': '基础信息',
   'chat.env.scope.context': '上下文',
   'chat.env.count': '{count} 条',
   'chat.env.notApplied': '未生效',
   'chat.env.moreLines': '还有 {count} 行未显示',
-  // 「模型上下文」卡（prompt.system_context）：模型这一轮真正看到的系统消息。
+  // 环境快照的增量视图（prompt.system_context.changed）：卡片只列变了的项，展开仍是全量快照。
+  // 键是 core 里的固定词表（system_prompt / self_card / model / tools）；值是事实
+  // （模型 id、条数），除了这三个词以外不翻译。
+  'chat.env.changed.count': '{count} 项变更',
+  'chat.env.changed.title': '变更',
+  'chat.env.changed.from': '来自 #{hash}',
+  'chat.env.changed.systemPrompt': '系统提示词',
+  'chat.env.changed.selfCard': '自卡',
+  'chat.env.changed.model': '模型',
+  'chat.env.changed.tools': '工具',
+  'chat.env.changed.added': '新增',
+  'chat.env.changed.removed': '移除',
+  'chat.env.changed.replaced': '已替换',
+  // 环境快照卡（prompt.system_context）：它是环境信息的一种（scope context），不是另一张卡。
   // 宗旨：模型能看到的内容，用户也要能看到 —— 只是折叠起来（默认折叠，展开是原文）。
-  'chat.modelContext.title': '模型上下文',
-  'chat.modelContext.aria': '模型上下文（模型这一轮看到的系统消息）',
   'chat.modelContext.system': 'System prompt',
   'chat.modelContext.selfCard': 'Self Card',
   'chat.modelContext.messages': '{count} 条消息',

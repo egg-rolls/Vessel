@@ -180,6 +180,9 @@ export const systemContextSchema = {
     context_max: { type: 'integer', minimum: 0 },
     at: { type: 'number' },
     run_id: { type: 'string' },
+    // Additive（0.52）：与上一份快照差在哪。缺省 = 不知道（首次 / 旧日志），不是「0 项」。
+    changed: { type: 'array', items: { type: 'string' } },
+    previous_hash: { type: 'string' },
   },
 };
 

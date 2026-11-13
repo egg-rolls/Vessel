@@ -13,7 +13,9 @@
  *
  * 不新造事件、不新造通道：这条尾消息与 `runtime-notice-hook` / `refs-notice-hook` 是
  * 同一条（`role: 'user'` + `name: 'vessel:notice'`），Web 由 `env-notice.ts` 渲成环境
- * 信息卡（scope `selfcard`）。不写 system、不新增事件类型、不进 `RunOptions.messages`。
+ * 信息卡。scope 按**变更种类**分（`identity` / `model` / `context` / `tools`，词表见
+ * `env-info-scope.ts`），一批变更跨种类时拆成多条消息 —— 一条消息只表达一种种类，否则卡头
+ * 标签必然撒谎。不写 system、不新增事件类型、不进 `RunOptions.messages`。
  *
  * 去重口径（与 `refs-notice-hook` 同一族）：记住「模型现在相信的值」，注入一次就把它推进
  * 到当前值；下一轮 diff 为空 ⇒ 不再注入。所以**同一变更只报一次**，而回滚（A→B→A）因为
@@ -26,6 +28,13 @@
  */
 
 import type { Hook, HookType, Message } from '@vessel-agent/core';
+import {
+  ENV_INFO_DETAIL_MARK,
+  ENV_INFO_MESSAGE_NAME,
+  ENV_INFO_SCOPES,
+  type EnvInfoScope,
+  formatEnvInfo,
+} from './env-info-scope.js';
 import type { MemberExecutionPermissionMode } from './runtime.js';
 import type { MemberExecutionMember } from './types.js';
 
@@ -44,16 +53,14 @@ const BEFORE_LLM = 'before_llm' as HookType;
 export const SELF_CARD_DELTA_HOOK = 'self-card-delta';
 
 /** 注入消息的 `name`：与其它环境信息同一条通道（Web 按它认 `notice`）。 */
-export const SELF_CARD_DELTA_MESSAGE_NAME = 'vessel:notice';
+export const SELF_CARD_DELTA_MESSAGE_NAME = ENV_INFO_MESSAGE_NAME;
 
 /**
- * details 行的线格式前缀：两个空格 + `·`，**必须**与 `src/runtime-notice-hook.ts` 的
- * `NOTICE_DETAIL_MARK` 逐字相同 —— Web 的 `env-notice.ts` 按这个标记认「明细行」，标记
- * 对不上时整条消息会被读成一整行（明细挤进卡头的 single-line ellipsis，展开区空着）。
- * 两边分属 packages 与应用层，`packages/agent` 不能反向依赖 `src/`，所以这里重写一份；
- * `src/self-card-delta.test.ts` 断言两者相等，防止哪天单边改动。
+ * details 行的线格式前缀：两个空格 + `·`。词表与线格式的唯一真相是
+ * `env-info-scope.ts`（三条环境信息通道共用一份，否则 Web 的解析器会对不上其中一条）。
+ * 这里保留别名是为了既有调用点与测试不必改名。
  */
-export const SELF_CARD_DELTA_DETAIL_MARK = '  · ';
+export const SELF_CARD_DELTA_DETAIL_MARK = ENV_INFO_DETAIL_MARK;
 
 /** 单个值在环境信息里的最大长度（名字 / model / team id 都很短，防脏数据把行撑爆）。 */
 const VALUE_MAX = 60;
@@ -233,24 +240,67 @@ function changeLineOf(change: SelfCardChange): string {
 }
 
 /**
- * 一批变更 → 一条环境信息正文（首行 summary + 每字段一行 details）。
+ * 字段 → scope（词表见 `env-info-scope.ts`）。
  *
- * 真实形状（`\n` 是换行）：
+ * 为什么字段要分 scope 而不是一律 `selfcard`：用户裁定「用 scope 区分种类」——改名、换模型、
+ * 换系统提示词对模型的意义完全不同（前者立即生效、后两者要等下一具 body），一种是同一张卡，
+ * 另一种是把三件事糊成一句「基础信息变了」。`permission` 归 `tools`：它真正改变的是可用工具面。
+ */
+const FIELD_SCOPE: Readonly<Record<SelfCardField, EnvInfoScope>> = {
+  name: 'identity',
+  parent: 'identity',
+  team: 'identity',
+  model: 'model',
+  system_prompt: 'context',
+  permission: 'tools',
+};
+
+/** scope → 摘要（只说「哪一类变了」，具体每条在明细里）。 */
+const SCOPE_SUMMARY: Readonly<Record<string, string>> = {
+  identity: 'identity changed; the Self Card in your system prompt is out of date',
+  model: 'model changed; this body keeps the old model',
+  context: 'system prompt changed; this body keeps the old prompt',
+  tools: 'tool surface setting changed; this body keeps the old tool surface',
+};
+
+/**
+ * 一批变更 → 环境信息正文（**按 scope 分组，一组一条**）。
+ *
+ * 真实形状（`\n` 是换行；这里演示一批里同时有身份与模型变更 → 两条消息）：
  * ```
- * selfcard: 2 fields changed; the Self Card in your system prompt is out of date
+ * identity: identity changed; the Self Card in your system prompt is out of date
  *   · name: human-2 → Minelog-main (rename is already effective, but the `role:` line of your Self Card still shows the old name)
+ * ```
+ * ```
+ * model: model changed; this body keeps the old model
  *   · model: volcengine/deepseek-flash → volcengine/deepseek-pro (this body keeps the old model; the next body uses the new one)
  * ```
- * 首行必须带 `selfcard` 这个 scope 词：Web 的 `env-notice.ts` 按**行首 token** 认 scope，
- * 认不出就落到兜底 `context`（内容照样能读，但卡头标签会变成「上下文」）。
+ * 首行必须带 scope 词：Web 的 `env-notice.ts` 按**行首 token** 认 scope，认不出就落到兜底
+ * `context`（内容照样能读，但卡头标签会变成「上下文」）。返回数组而不是单串：一条环境信息
+ * 只表达**一种种类**，混在一张卡里＝卡头标签必然撒谎。
  */
-export function formatSelfCardDelta(changes: readonly SelfCardChange[]): string {
-  const count = changes.length;
-  const head =
-    `selfcard: ${String(count)} field${count === 1 ? '' : 's'} changed; ` +
-    'the Self Card in your system prompt is out of date';
-  const details = changes.map((change) => `${SELF_CARD_DELTA_DETAIL_MARK}${changeLineOf(change)}`);
-  return [head, ...details].join('\n');
+export function formatSelfCardDeltas(changes: readonly SelfCardChange[]): string[] {
+  const groups = new Map<EnvInfoScope, string[]>();
+  for (const change of changes) {
+    const scope = FIELD_SCOPE[change.field];
+    const lines = groups.get(scope) ?? [];
+    lines.push(changeLineOf(change));
+    groups.set(scope, lines);
+  }
+  const texts: string[] = [];
+  // 顺序固定按词表（`ENV_INFO_SCOPES`）：同一批变更永远拼出同一个序列，测试与去重才可靠。
+  for (const scope of ENV_INFO_SCOPES) {
+    const details = groups.get(scope);
+    if (details === undefined) continue;
+    texts.push(
+      formatEnvInfo({
+        scope,
+        summary: SCOPE_SUMMARY[scope] ?? 'a field the model should know about has changed',
+        details,
+      }),
+    );
+  }
+  return texts;
 }
 
 export interface SelfCardDeltaHookOptions {
@@ -295,13 +345,15 @@ export function createSelfCardDeltaHook(options: SelfCardDeltaHookOptions): Hook
       // 先推进再注入：同一批变更在**同一 run 的后续 LLM 请求**里（tool-calling loop 每轮都
       // 跑一次 BeforeLlm）也会被 diff 挡掉，不需要另存一份「已报签名」。
       reported = current;
-      const message: Message = {
+      // 一条变更种类 = 一条消息（scope 决定卡头标签，混着写就等于标签撒谎）。
+      const timestamp = Date.now();
+      const injected: Message[] = formatSelfCardDeltas(changes).map((content) => ({
         role: 'user',
         name: SELF_CARD_DELTA_MESSAGE_NAME,
-        content: formatSelfCardDelta(changes),
-        timestamp: Date.now(),
-      };
-      ctx.messages = [...(ctx.messages ?? []), message];
+        content,
+        timestamp,
+      }));
+      ctx.messages = [...(ctx.messages ?? []), ...injected];
     },
   };
 }

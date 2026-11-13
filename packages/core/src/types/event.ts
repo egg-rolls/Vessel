@@ -191,6 +191,19 @@ export interface PromptSystemContextPayload extends BaseEventPayload {
   estimated_tokens?: number;
   /** 上下文窗口上限的运行时真值（与同轮 `llm.request.context_max` 同值）。 */
   context_max?: number;
+  /**
+   * 「这一份快照与**上一份发布过的**快照差在哪」（additive，0.52）。
+   *
+   * 每条一个 `键: 值` 的短句（`system_prompt: replaced` / `self_card: added` /
+   * `model: A → B` / `tools: 12 → 14`）；键取自固定词表，读侧据此本地化。
+   * **首次没有这个字段**（同会话第一份快照没有可比对象），客户端按「首次 = 渲全量卡」处理。
+   *
+   * 存在理由：要展示的是「环境变了什么」，而不是每次把整段系统消息重画一遍。快照本身仍然
+   * 全量落盘（审计用的真相），`changed` 只是给增量视图用的索引。
+   */
+  changed?: string[];
+  /** 上一份发布过的快照的 hash（additive；首次缺省）。 */
+  previous_hash?: string;
   /** 发出时刻（= 事件 `ts`；读侧排序 / 展示用）。 */
   at: number;
 }

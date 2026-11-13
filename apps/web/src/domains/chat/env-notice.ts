@@ -26,11 +26,18 @@
  */
 
 /**
- * 「环境信息」的作用域词表：与 `RuntimeNoticeScope`（`src/runtime-notice.ts`）同源，
- * 外加 `peer`（成员 / 协作通知，随后端一起到）与 `selfcard`（0.52：Self Card 增量告知，
- * 见 `packages/agent/src/self-card-delta.ts`）。
- * scope 只决定卡头标签与折叠分组，不决定可见性：解析不出 scope 的行落到 `context`
- * （inbox 提示等无 scope 的上下文）。
+ * 「环境信息」的作用域词表。
+ *
+ * 用户裁定（0.52）：模型上下文里只有**一类卡** —— 环境信息（首行的 scope 词只决定卡头标签
+ * 与折叠分组）。词表的生产侧真相是 `packages/agent/src/env-info-scope.ts`（`ENV_INFO_SCOPES`），
+ * 这里额外保留三类：
+ * - `config` / `permission` / `mcp` / `update` / `peer`：`runtime-notice-hook` 老词，历史消息里
+ *   全都在用；
+ * - `selfcard`：0.52 之前 `self-card-delta` 的首词（改名 / 换 model / 换 prompt 都叫它），
+ *   落盘消息里有存量 —— 删掉它等于让老消息的卡头静默退化成「上下文」；
+ * - `context`：兜底（解析不出 scope 的行）现在也是一个**正式**种类（系统提示词 / 自卡变更）。
+ *
+ * 生产者加了词而这里没加，`scripts/check-append-only-context.ts` 的 C3 会直接红。
  */
 export const ENV_NOTICE_SCOPES = [
   'config',
@@ -39,6 +46,11 @@ export const ENV_NOTICE_SCOPES = [
   'mcp',
   'update',
   'peer',
+  'restart',
+  'model',
+  'identity',
+  'fields',
+  'context',
   'selfcard',
 ] as const;
 
@@ -112,7 +124,12 @@ export function parseEnvNoticeLine(raw: string): EnvNoticeLine | undefined {
   if (text.length === 0) return undefined;
   text = text.replace(RUNTIME_TAG, '');
   // details 行（`  · name: completed`）：剥掉线格式标记，正文照原样保留。
-  // scope 落到兜底 `context` —— 一条 detail 是首行摘要的解释，没有自己的作用域。
+  // scope 恒为兜底 `context` —— 一条 detail 是首行摘要的解释，没有自己的作用域。
+  //
+  // 为什么要**先**判标记再判 scope 词：明细正文可能正好以 scope 词开头（`model: a → b`、
+  // `tools: 12 → 14`）。先剥标记再判词，这类明细就会被读成自己的 scope，卡头标签跟着变，
+  // 与「卡的作用域只看首行」这条口径直接冲突。
+  const isDetail = DETAIL_MARK.test(text);
   text = text.replace(DETAIL_MARK, '');
   let ok = true;
   if (NOT_APPLIED.test(text)) {
@@ -123,7 +140,7 @@ export function parseEnvNoticeLine(raw: string): EnvNoticeLine | undefined {
   if (text.length === 0) return undefined;
   // id 先给占位值：卡片构建（envNoticeCard / mergeEnvNoticeCards）时按卡内序号重编，
   // 保证折叠后同一张卡里的 id 仍唯一。
-  return { id: '', scope: scopeOf(text), ok, text };
+  return { id: '', scope: isDetail ? 'context' : scopeOf(text), ok, text };
 }
 
 function scopeOf(text: string): EnvNoticeScope {
@@ -180,4 +197,48 @@ export function mergeEnvNoticeCards(head: EnvNoticeCard, next: EnvNoticeCard): E
     count: head.count + next.count,
     ...(dropped > 0 ? { droppedLines: dropped } : {}),
   };
+}
+
+/**
+ * `prompt.system_context.changed` 的一条：键 + 原始值。
+ *
+ * 线上是 `键: 值` 的短句（`model: A → B`、`tools: 12 → 14`、`system_prompt: replaced`）。
+ * 只拆成「键 / 值」两段、**不在这里翻译**：键用固定词表映射成本地化标签（`chat.env.changed.*`），
+ * 值原样显示（模型 id、数字、`A → B` 都是事实，翻译只会丢信息）。
+ *
+ * 认不出来的键不丢：原样当键显示（服务端加了新种类而前端还没跟上时，宁可显示一个生词，
+ * 也不要把这条变更静默吞掉）。
+ */
+export interface ContextChangeEntry {
+  /** 行身份（React key；同一张卡内唯一）。 */
+  id: string;
+  /** 键（`system_prompt` / `self_card` / `model` / `tools` / 未知词的原文）。 */
+  key: string;
+  /** 值（缺省 = 这条只有键，例如 `self_card: added` 之外的兜底形状）。 */
+  value?: string;
+}
+
+/** 一条 `changed` 短句 → 键 / 值。冒号只在第一个处切（值里可能还有冒号）。 */
+export function parseContextChange(raw: string, index: number): ContextChangeEntry | undefined {
+  const text = raw.trim();
+  if (text.length === 0) return undefined;
+  const colon = text.indexOf(':');
+  const key = (colon < 0 ? text : text.slice(0, colon)).trim();
+  if (key.length === 0) return undefined;
+  const value = colon < 0 ? undefined : text.slice(colon + 1).trim();
+  return {
+    id: String(index),
+    key,
+    ...(value !== undefined && value.length > 0 ? { value } : {}),
+  };
+}
+
+/** 一批 `changed` → 可渲染的条目（保持服务端顺序：那是稳定的，不重排）。 */
+export function contextChangeEntries(changed: readonly string[]): ContextChangeEntry[] {
+  const entries: ContextChangeEntry[] = [];
+  for (const [index, raw] of changed.entries()) {
+    const entry = parseContextChange(raw, index);
+    if (entry !== undefined) entries.push(entry);
+  }
+  return entries;
 }

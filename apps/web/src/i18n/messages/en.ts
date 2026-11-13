@@ -1205,18 +1205,36 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.scope.mcp': 'MCP',
   'chat.env.scope.update': 'Update',
   'chat.env.scope.peer': 'Peer',
-  // 0.52: Self Card delta notices (base info changed while the card stays a spawn-time
-  // snapshot — see packages/agent/src/self-card-delta.ts).
+  // 0.52: every environment change (identity / tools / model / fields / restart) is one
+  // notice on the same channel; scope only picks the card label. The producer-side word
+  // list is packages/agent/src/env-info-scope.ts; `selfcard` stays as a legacy alias so
+  // already-persisted messages keep their label.
+  'chat.env.scope.restart': 'Restart',
+  'chat.env.scope.identity': 'Identity',
+  'chat.env.scope.fields': 'Fields',
+  'chat.env.scope.model': 'Model',
   'chat.env.scope.selfcard': 'Base info',
   'chat.env.scope.context': 'Context',
   'chat.env.count': '{count} items',
   'chat.env.notApplied': 'not applied',
   'chat.env.moreLines': '{count} more lines not shown',
-  // "Model context" card (prompt.system_context): the system message the model actually
-  // saw this turn. Tenet: what the model can see, the user can see too — just folded
-  // (collapsed by default, expanded shows the raw text).
-  'chat.modelContext.title': 'Model context',
-  'chat.modelContext.aria': 'Model context (the system message this turn saw)',
+  // Incremental view of an environment snapshot (prompt.system_context.changed): the card
+  // lists only what changed and keeps the full snapshot in the expandable body. Keys are
+  // the fixed vocabulary from packages/core (system_prompt / self_card / model / tools);
+  // values are facts (model ids, counts) and stay untranslated except these three words.
+  'chat.env.changed.count': '{count} items changed',
+  'chat.env.changed.title': 'Changed',
+  'chat.env.changed.from': 'from #{hash}',
+  'chat.env.changed.systemPrompt': 'System prompt',
+  'chat.env.changed.selfCard': 'Self Card',
+  'chat.env.changed.model': 'Model',
+  'chat.env.changed.tools': 'Tools',
+  'chat.env.changed.added': 'added',
+  'chat.env.changed.removed': 'removed',
+  'chat.env.changed.replaced': 'replaced',
+  // Environment snapshot card (prompt.system_context) — one kind of environment info
+  // (scope `context`), not a card of its own. Tenet: what the model can see, the user can
+  // see too — just folded (collapsed by default, expanded shows the raw text).
   'chat.modelContext.system': 'System prompt',
   'chat.modelContext.selfCard': 'Self Card',
   'chat.modelContext.messages': '{count} messages',
