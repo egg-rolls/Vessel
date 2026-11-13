@@ -16,7 +16,9 @@
  * - 去重：同一变更只注入一次、字段没变不注入、没变更完全不注入、回滚（A→B→A）仍然报；
  * - 真话：model / system prompt 明确说「本具 body 用旧值、下一具才用新值」，且**不**把
  *   system prompt 正文（可能上千字）塞进上下文；
- * - Web 承接：`env-notice.ts` 能把这条消息解析成 scope `selfcard` 的卡片（能折叠、不是裸 JSON）。
+ * - Web 承接：`env-notice.ts` 能把这条消息解析成**环境信息卡**，scope 按变更种类取
+ *   `identity` / `model` / `tools` / `context`（能折叠、不是裸 JSON）；旧词 `selfcard`
+ *   仍被认出（历史消息里还有）。
  */
 
 import { envNoticeCard, mergeEnvNoticeCards } from '../apps/web/src/domains/chat/env-notice';
