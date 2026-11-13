@@ -65,7 +65,8 @@
     "check:context-anchor": "bun run scripts/check-context-anchor.ts",
     "check:ask-drafts": "bun run scripts/check-ask-drafts.ts",
     "check:ask-dedupe": "bun run scripts/check-ask-dedupe.ts",
-    "check:context-ratio": "bun run scripts/check-context-ratio.ts"
+    "check:context-ratio": "bun run scripts/check-context-ratio.ts",
+    "check:session-agent-label": "bun run scripts/check-session-agent-label.ts"
   },
   "workspaces": [
     "packages/*",
