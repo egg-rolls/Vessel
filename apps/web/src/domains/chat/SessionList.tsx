@@ -4,11 +4,11 @@ import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../compone
 import { StatusGlyph } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { IconButton, Tooltip } from '../../components/Tooltip';
-import { Badge, Button, CountBadge, Input, SearchInput, SidebarShell } from '../../components/ui';
+import { Button, CountBadge, Input, SearchInput, SidebarShell } from '../../components/ui';
 import type { NodeRoster } from '../../gateway/team-roster';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
-import { closedAgentSessionIds, pendingRemovalBadgeKey } from '../../state/archive-visibility';
+import { closedAgentSessionIds } from '../../state/archive-visibility';
 import { groupSessionsByDay, normalizeSessionTitle, sessionTitle } from '../../state/sessions';
 
 // 会话列表的「已停用 · 待移除」徽标集合：实现在零依赖模块里（门禁探针也要用），
@@ -59,7 +59,7 @@ export function SessionList({
   onOpenPending,
   agentAddresses,
   agentLabels,
-  closedAgentSessions,
+  agentRetiredLabels,
   defaultSession,
   primarySessionIds,
   query,
@@ -98,11 +98,8 @@ export function SessionList({
    * agent）的 primary body 会话。只在拿不到节点地址时顶上，团队成员一个都没有。
    */
   agentLabels?: ReadonlyMap<string, string>;
-  /**
-   * 归属到「已停用 agent」的会话 id（roster 反查；查不到 = 不在集合里 = 不标）。
-   * 只影响标记，不影响可见性：会话永远列出来。
-   */
-  closedAgentSessions?: ReadonlySet<string>;
+  /** 已退役 body 的会话：'名字（旧身体）'，灰色（0.52）。 */
+  agentRetiredLabels?: ReadonlyMap<string, string>;
   /**
    * 0.27 默认会话入口（`main` 的 primary body）：只在它还没出现在列表行里时补一行，
    * 让空态也有明确的“默认会话”可点。`bodyCount` 用于提示同 agent 还有别的 body。
@@ -315,14 +312,20 @@ export function SessionList({
                 const title = sessionTitle(session);
                 const pendingCount = pendingBySession?.get(session.session_id) ?? 0;
                 const agentAddress = agentAddresses?.get(session.session_id);
-                // 三级第二行：节点地址 > `名字@primary` > 原 `primary` 徽标。地址优先，
-                // 团队成员的显示一个字都不变（标签对它们根本不产出）。
+                // 四级第二行：节点地址 > `名字@primary`（live）> `名字（旧身体）`（已退役）> 原 primary 徽标。
+                // 地址优先，团队成员的显示一个字都不变（标签对它们根本不产出）。
+                // 颜色规则（用户 0.52 裁定）：现役用主题色、已退役用 primary 徽标的灰 ——
+                // 「还活着」和「只剩历史」不该长得一样。
                 const agentLabel = agentAddress ? undefined : agentLabels?.get(session.session_id);
+                const agentRetiredLabel =
+                  agentAddress || agentLabel
+                    ? undefined
+                    : agentRetiredLabels?.get(session.session_id);
                 const agentPrimaryBadge =
                   !agentAddress &&
                   !agentLabel &&
+                  !agentRetiredLabel &&
                   primarySessionIds?.has(session.session_id) === true;
-                const agentClosed = closedAgentSessions?.has(session.session_id) === true;
                 const snippet = query.trim() ? searchSnippets?.get(session.session_id) : undefined;
                 const preview =
                   snippet ??
@@ -404,22 +407,20 @@ export function SessionList({
                               {agentAddress}
                             </span>
                           )}
-                          {agentClosed && (
-                            // 会话**永远**列出来（用户自己的历史不能被我们弄丢）；
-                            // 只在归属 agent 已停用且尚未被移除时补一枚「待移除」标记，
-                            // 并用 tooltip 说清「会话保留，历史仍可看」。
-                            <Tooltip label={t('archive.session.agentClosedHint')}>
-                              <Badge tone="warn" className="flex-none">
-                                {t(pendingRemovalBadgeKey('agent'))}
-                              </Badge>
-                            </Tooltip>
-                          )}
                           {agentLabel && (
                             // 非 team 成员（临时成员 / 未加入 Team / 不在本 team 的 agent）：
                             // 拿不到节点地址，但用户得看得出卡片是谁的 —— primary 一词仍复用
                             // t('team.member.primaryBadge')，不新增 i18n key。
-                            <span className="session-agent session-agent-primary">
+                            // 现役 ⇒ 主题色（与节点地址同一抹），表达「还活着、可派活」。
+                            <span className="session-agent session-agent-address">
                               {agentLabel}
+                            </span>
+                          )}
+                          {agentRetiredLabel && (
+                            // 已退役 body 的会话：rotate 之前的旧身体。灰色，与 primary 徽标同档 ——
+                            // 它只说明「这具身体当时是谁」，不再代表一个能派活的对象。
+                            <span className="session-agent session-agent-primary">
+                              {agentRetiredLabel}
                             </span>
                           )}
                           {agentPrimaryBadge && (

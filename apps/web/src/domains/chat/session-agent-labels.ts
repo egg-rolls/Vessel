@@ -28,6 +28,8 @@ export interface LabelAgent {
   team_id?: string | null;
   session_id?: string | null;
   bodies?: readonly LabelBody[] | null;
+  /** 已退役 body（0.52：`agents.list` / `TeamMember` 都带，rotate 之前的旧身体）。 */
+  body_history?: readonly { session_id?: string | null }[] | null;
 }
 
 /** NodeRoster 的最小结构（与 gateway/team-roster.ts 同一形状）。 */
@@ -105,6 +107,62 @@ function listedAgentIsTeamMember(agent: LabelAgent): boolean {
  * - primaryWord 由调用方传 t('team.member.primaryBadge')（en / zh-CN 都是 primary），这里
  *   缺省成同一个词，纯函数不碰 i18n，也不新增任何 i18n key。
  */
+/**
+ * 已退役 body 的会话 -> 名字标签（0.52）。
+ *
+ * rotate 换身体之后，旧 body 的 session 仍在会话列表里，但 `bodies[]` 只列 live body、
+ * `primaryBodySessions` 也只认 primary ⇒ 这类会话的第二行**一片空白**（用户报的「子标题为空」
+ * 最常见的一种）。归属信息就在 `body_history[]` 里，只是没人读。
+ *
+ * `formatName` 由调用方给（`{{name}}（旧身体）` 这种带 locale 的写法），纯函数不碰 i18n。
+ * 已经作为 live body 出现的 session 不会被标成旧身体 —— 迟到的 `body_history` 不许覆盖现状。
+ */
+export function sessionAgentRetiredLabels(
+  rosters: readonly LabelRoster[],
+  sessions: readonly LabelSession[] | undefined,
+  formatName: (name: string) => string,
+): ReadonlyMap<string, string> {
+  const listed = sessions
+    ? new Set(
+        sessions
+          .map((session) => trimId(session.session_id))
+          .filter((id): id is string => id !== undefined),
+      )
+    : undefined;
+
+  const live = new Set<string>();
+  const labels = new Map<string, string>();
+  const entries: LabelAgent[] = [];
+  for (const roster of rosters) {
+    for (const agent of roster.agents ?? []) entries.push(agent);
+    for (const team of roster.rosters ?? []) {
+      for (const member of team.members ?? []) entries.push(member);
+    }
+  }
+  for (const entry of entries) {
+    for (const body of entry.bodies ?? []) {
+      const sessionId = bodySessionId(body);
+      if (sessionId) live.add(sessionId);
+    }
+    const primary = primaryBodySessionId(entry);
+    if (primary) live.add(primary);
+  }
+
+  for (const entry of entries) {
+    const name = trimId(entry.name);
+    if (!name) continue;
+    for (const body of entry.body_history ?? []) {
+      const sessionId = trimId(body.session_id);
+      if (sessionId === undefined) continue;
+      if (live.has(sessionId)) continue;
+      if (listed && !listed.has(sessionId)) continue;
+      if (labels.has(sessionId)) continue;
+      labels.set(sessionId, formatName(name));
+    }
+  }
+  return labels;
+}
+
 export function sessionAgentLabels(
   rosters: readonly LabelRoster[],
   sessions?: readonly LabelSession[],

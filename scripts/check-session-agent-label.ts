@@ -21,6 +21,7 @@ import {
   type LabelRoster,
   type LabelSession,
   sessionAgentLabels,
+  sessionAgentRetiredLabels,
 } from '../apps/web/src/domains/chat/session-agent-labels';
 
 const CHAT_DIR = join(import.meta.dir, '..', 'apps', 'web', 'src', 'domains', 'chat');
@@ -39,6 +40,9 @@ const SESSIONS: readonly LabelSession[] = [
   { session_id: 'sess-multi-primary' },
   { session_id: 'sess-multi-secondary' },
   { session_id: 'sess-unbound' },
+  // 0.52：rotate 之前的旧身体会话，也在列表里（只是此前第二行是空的）。
+  { session_id: 'sess-temp-old' },
+  { session_id: 'sess-closed-old' },
 ];
 
 /**
@@ -75,6 +79,54 @@ const ROSTER: LabelRoster = {
 const ROSTER_NO_ADDRESS: LabelRoster = { ...ROSTER, node: { current: false } };
 
 const LABELS = sessionAgentLabels([ROSTER], SESSIONS, 'primary');
+
+/** 旧身体标签的后缀（这里直接写死，避免探针依赖 i18n 运行时）。 */
+const OLD_BODY_SUFFIX = '（旧身体）';
+
+/** rotate 过的 agent： 里是退役 body；外加一个已注销 agent 的旧 body。 */
+const RETIRED_ROSTER: LabelRoster = {
+  node: { current: true, name: 'node-a' },
+  agents: [
+    {
+      name: 'rotator',
+      role: 'temporary',
+      owner: 'main',
+      session_id: 'sess-multi-primary',
+      bodies: [{ body_id: 'sess-multi-primary', session_id: 'sess-multi-primary', primary: true }],
+      body_history: [
+        { session_id: 'sess-multi-secondary' },
+        { session_id: 'sess-never-listed' },
+        { session_id: 'sess-multi-primary' },
+      ],
+    },
+    {
+      name: 'builder',
+      role: 'temporary',
+      owner: 'main',
+      session_id: 'sess-temp',
+      body_history: [{ session_id: 'sess-temp-old' }, { session_id: 'sess-temp' }],
+    },
+    {
+      name: 'gone',
+      role: 'temporary',
+      owner: 'main',
+      body_history: [{ session_id: 'sess-closed-old' }],
+    },
+    { name: 'reviewer', role: 'member', team_id: 'team-1', session_id: 'sess-member' },
+  ],
+  rosters: [
+    {
+      team: { team_id: 'team-1' },
+      members: [{ name: 'reviewer', role: 'member', session_id: 'sess-member' }],
+    },
+  ],
+};
+
+const RETIRED_LABELS = sessionAgentRetiredLabels(
+  [RETIRED_ROSTER],
+  SESSIONS,
+  (name) => name + OLD_BODY_SUFFIX,
+);
 
 interface Fixture {
   name: string;
@@ -137,6 +189,53 @@ const FIXTURES: readonly Fixture[] = [
     check: () =>
       readChatSource('SessionRail.tsx').includes('agentLabels={agentLabels}') &&
       readChatSource('SessionRail.tsx').includes('agentLabels: ReadonlyMap<string, string>'),
+  },
+  {
+    name: 'F12 已退役 body 的会话 -> 名字（旧身体）',
+    why: 'rotate 之前那具身体的会话既不在 bodies[] 也不在 primary 里，之前整行是空的（用户报的空白）',
+    check: () =>
+      RETIRED_LABELS.get('sess-multi-secondary') === 'rotator（旧身体）' &&
+      RETIRED_LABELS.get('sess-temp-old') === 'builder（旧身体）',
+  },
+  {
+    name: 'F13 现役 body 不会被标成旧身体',
+    why: '迟到的 body_history 不许覆盖现状（否则活着的会话被打成历史）',
+    check: () =>
+      !RETIRED_LABELS.has('sess-temp') &&
+      !RETIRED_LABELS.has('sess-multi-primary') &&
+      !RETIRED_LABELS.has('sess-member'),
+  },
+  {
+    name: 'F14 不在会话列表里的旧 body 不产出',
+    why: '没被列出的会话不需要标签；产出来只占内存、还可能被误用',
+    check: () => !RETIRED_LABELS.has('sess-never-listed'),
+  },
+  {
+    name: 'F15 已注销 agent 的 body 也能标（名字还在 body_history 里）',
+    why: 'agent 注销后成员条目仍在 roster，会话历史仍要能看出是谁的',
+    check: () => RETIRED_LABELS.get('sess-closed-old') === 'gone（旧身体）',
+  },
+  {
+    name: 'F16 接线：useChatSessions 派生 agentRetiredLabels + 三处透传',
+    why: '算对了没透传，用户看到的仍是空白第二行',
+    check: () =>
+      readChatSource('useChatSessions.ts').includes(
+        'sessionAgentRetiredLabels(rosters, sessions',
+      ) &&
+      readChatSource('ChatView.tsx').includes(
+        'agentRetiredLabels={sessionsApi.agentRetiredLabels}',
+      ) &&
+      readChatSource('SessionRail.tsx').includes('agentRetiredLabels={agentRetiredLabels}'),
+  },
+  {
+    name: 'F17 接线：SessionList 四级回退 + 已退役用灰色 class',
+    why: '现役用主题色、已退役用 primary 灰；四级顺序一破，地址/名字会被旧身体标签顶掉',
+    check: () =>
+      readChatSource('SessionList.tsx').includes('agentRetiredLabels?.get(session.session_id)') &&
+      readChatSource('SessionList.tsx').includes(
+        'className="session-agent session-agent-primary"',
+      ) &&
+      readChatSource('SessionList.tsx').includes('className="session-agent session-agent-address"'),
   },
   {
     name: 'F11 接线：SessionList 三级第二行 + 地址优先',

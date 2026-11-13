@@ -17,6 +17,7 @@ import {
   takeSessions,
 } from '../../state/sessions';
 import { resourceData } from '../../state/useResource';
+import { useShowArchived } from '../../state/useShowArchived';
 import { useAgentStore } from '../../stores/agentStore';
 import { adoptNewChatDraft } from '../../stores/composerDraftStore';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -24,7 +25,7 @@ import { usePolledAction } from '../../stores/usePolledAction';
 import { errorMessage } from './errors';
 import { findMainSession, type MainSession, primaryBodySessions } from './main-session';
 import { closedAgentSessionIds, sessionAgentAddresses } from './SessionList';
-import { sessionAgentLabels } from './session-agent-labels';
+import { sessionAgentLabels, sessionAgentRetiredLabels } from './session-agent-labels';
 import {
   browserSessionStorage,
   clearLastSession,
@@ -123,6 +124,8 @@ export function useChatSessions({
   // 归属到已停用 agent 的会话只做标记、不做过滤：会话是用户自己的历史，隐藏等于
   // 把找回入口弄丢（0.51 裁决）。反查不到（别的节点 / 窗口截断 / 旧 gateway）→ 不标。
   const closedAgentSessions = useMemo(() => closedAgentSessionIds(rosters), [rosters]);
+  // 「显示归档」与 Agents 域 / Team 成员栏同一个开关（0.52 起也决定「已停用 agent 的会话」是否列出）。
+  const showArchived = useShowArchived();
   // 默认会话 = `main` 的 primary body（0.27）；roster 拿不到 main 时为 null，
   // 此时保持旧行为（草稿态发送不带 session_id，由服务端解析）。
   const mainSession = useMemo<MainSession | null>(() => {
@@ -139,6 +142,18 @@ export function useChatSessions({
   const agentLabels = useMemo(
     () => sessionAgentLabels(rosters, sessions, t('team.member.primaryBadge')),
     [rosters, sessions],
+  );
+  // 已退役 body（rotate 之前的旧身体）的会话第二行：`名字（旧身体）`，灰色。
+  // 这类会话既不在 `bodies[]`、也不在 primary 里，之前整行是空的（用户报的「子标题为空」
+  // 最常见的一种）；归属信息一直都在 `body_history[]` 里，只是没人读。
+  // 带 t：标签里含 locale 括号（'名字（旧身体）' vs '名字 (old body)'），切语言要重算。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: t 必须进依赖
+  const agentRetiredLabels = useMemo(
+    () =>
+      sessionAgentRetiredLabels(rosters, sessions, (name) =>
+        t('chat.sessionList.oldBody', { name }),
+      ),
+    [rosters, sessions, t],
   );
   /** 默认会话入口：只在 main primary body 还没出现在**完整**列表里时提供（不受窗口化影响）。 */
   const defaultSessionEntry = useMemo(() => {
@@ -363,11 +378,16 @@ export function useChatSessions({
   const activeServerSearch = serverSearch?.query === searchQuery ? serverSearch : null;
   const filteredSessions = useMemo(() => {
     // 服务端命中的会话可能只在消息正文里匹配，不能再叠加本地 title/preview 过滤。
-    if (activeServerSearch) {
-      return sortedSessions.filter((session) => activeServerSearch.ids.has(session.session_id));
-    }
-    return filterSessions(sortedSessions, { query: debouncedQuery });
-  }, [activeServerSearch, sortedSessions, debouncedQuery]);
+    const matched = activeServerSearch
+      ? sortedSessions.filter((session) => activeServerSearch.ids.has(session.session_id))
+      : filterSessions(sortedSessions, { query: debouncedQuery });
+    // 归属到已停用 agent 的会话默认不列（0.52 用户裁决，改掉 0.51「只标不过滤」）：
+    // 它们多数是 rotate / 注销后没被 prune 的残留，混在正常会话里只会让人以为还活着。
+    // 打开「显示归档」后原样列回来、且**不**加任何徽标 —— 归档态本身已经由开关表达，
+    // 再挂一个「已注销」标签属于重复表达。反查到不的（别的节点 / 旧 gateway）不动。
+    if (showArchived) return matched;
+    return matched.filter((session) => !closedAgentSessions.has(session.session_id));
+  }, [activeServerSearch, sortedSessions, debouncedQuery, showArchived, closedAgentSessions]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 查询变化时回到第一页
   useEffect(() => {
@@ -444,6 +464,7 @@ export function useChatSessions({
     activeServerSearch,
     agentAddresses,
     agentLabels,
+    agentRetiredLabels,
     closedAgentSessions,
     defaultSessionEntry,
     primarySessionIds,

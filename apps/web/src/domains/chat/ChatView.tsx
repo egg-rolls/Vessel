@@ -382,7 +382,7 @@ export function ChatView({
           }
           agentAddresses={sessionsApi.agentAddresses}
           agentLabels={sessionsApi.agentLabels}
-          closedAgentSessions={sessionsApi.closedAgentSessions}
+          agentRetiredLabels={sessionsApi.agentRetiredLabels}
           defaultSession={sessionsApi.defaultSessionEntry}
           primarySessionIds={sessionsApi.primarySessionIds}
           query={sessionsApi.query}

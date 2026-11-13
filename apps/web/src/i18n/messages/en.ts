@@ -1073,6 +1073,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.sessionList.rename': 'Rename',
   'chat.sessionList.viewRuns': 'View runs',
   'chat.sessionList.delete': 'Delete session',
+  'chat.sessionList.oldBody': '{name} (old body)',
   'chat.sessionList.showMore': 'Show more ({count} remaining)',
   'chat.palette.rename': 'Rename session “{title}”',
   'chat.palette.delete': 'Delete session “{title}” (confirm)',

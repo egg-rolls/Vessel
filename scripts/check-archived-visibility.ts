@@ -10,11 +10,16 @@
  *   - 三处列表（Team 列表 / Agent 列表 / 成员侧栏）的筛选函数在两种开关值下的行为；
  *   - 搜索口径：默认搜不到归档对象，打开开关后搜得到；
  *   - 直接打开归档 / 停用对象仍可达（detail 层不走筛选，且一定有「待移除」提示）；
- *   - 会话永不隐藏；「归属到已停用 agent」的标记是 roster 反查，**查不到就不标**。
+ *   - 会话：0.51 是「永不隐藏、只补一枚待移除标记」；**0.52 用户改了口径** —— 归属到已停用
+ *     agent 的会话默认不列（多数是 rotate / 注销后没 prune 的残留），打开「显示归档」原样列回、
+ *     且**不**再挂任何徽标（归档态已由开关表达）。反查不到（别的节点 / 旧 gateway）一律不动。
  *
  * 用法：`bun run scripts/check-archived-visibility.ts`
  * 退出码：0 = 全过；1 = 有 FAIL。
  */
+
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { filterAgentsByQuery } from '../apps/web/src/domains/agents/agent-search';
 import { filterTeamResults } from '../apps/web/src/domains/teams/team-search';
@@ -28,6 +33,13 @@ import { filterTeamResults } from '../apps/web/src/domains/teams/team-search';
  * （0.51 真踩过三次）。镜像只保留判据用到的字段，与 `packages/serve` 的 plugin-host 契约
  * 镜像同一套路。
  */
+const APP_ROOT = join(import.meta.dir, '..', 'apps', 'web', 'src');
+
+/** 读 apps/web 源码做接线断言（0.52：可见性口径只有源码级能钉，列表是 React）。 */
+function readAppSource(rel: string): string {
+  return readFileSync(join(APP_ROOT, rel), 'utf8');
+}
+
 interface NodeViewLike {
   current: boolean;
   id?: string;
@@ -304,6 +316,22 @@ const FIXTURES: readonly Fixture[] = [
         nodeRoster(otherNode, [member('a-closed', 'closed', 's-closed')]),
       ]);
       return ids.size === 0;
+    },
+  },
+  {
+    name: 'F15 归属到停用 agent 的会话默认不列，开「显示归档」才列（而且要原样、无徽标）',
+    why: '0.52 改口径：残留会话混在正常列表里会让人以为 agent 还活着；但一旦开关打开就必须看得见，不能变成「删掉」',
+    check: () => {
+      const chat = readAppSource('domains/chat/useChatSessions.ts');
+      const list = readAppSource('domains/chat/SessionList.tsx');
+      return (
+        chat.includes('useShowArchived()') &&
+        chat.includes('if (showArchived) return matched;') &&
+        chat.includes('!closedAgentSessions.has(session.session_id)') &&
+        // 徽标必须消失：归档态只由开关表达，再挂「待移除」属于重复表达
+        !list.includes('archive.session.agentClosedHint') &&
+        !list.includes('pendingRemovalBadgeKey')
+      );
     },
   },
   {
