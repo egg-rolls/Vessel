@@ -124,7 +124,12 @@ export function parseEnvNoticeLine(raw: string): EnvNoticeLine | undefined {
   if (text.length === 0) return undefined;
   text = text.replace(RUNTIME_TAG, '');
   // details 行（`  · name: completed`）：剥掉线格式标记，正文照原样保留。
-  // scope 落到兜底 `context` —— 一条 detail 是首行摘要的解释，没有自己的作用域。
+  // scope 恒为兜底 `context` —— 一条 detail 是首行摘要的解释，没有自己的作用域。
+  //
+  // 为什么要**先**判标记再判 scope 词：明细正文可能正好以 scope 词开头（`model: a → b`、
+  // `tools: 12 → 14`）。先剥标记再判词，这类明细就会被读成自己的 scope，卡头标签跟着变，
+  // 与「卡的作用域只看首行」这条口径直接冲突。
+  const isDetail = DETAIL_MARK.test(text);
   text = text.replace(DETAIL_MARK, '');
   let ok = true;
   if (NOT_APPLIED.test(text)) {
@@ -135,7 +140,7 @@ export function parseEnvNoticeLine(raw: string): EnvNoticeLine | undefined {
   if (text.length === 0) return undefined;
   // id 先给占位值：卡片构建（envNoticeCard / mergeEnvNoticeCards）时按卡内序号重编，
   // 保证折叠后同一张卡里的 id 仍唯一。
-  return { id: '', scope: scopeOf(text), ok, text };
+  return { id: '', scope: isDetail ? 'context' : scopeOf(text), ok, text };
 }
 
 function scopeOf(text: string): EnvNoticeScope {
