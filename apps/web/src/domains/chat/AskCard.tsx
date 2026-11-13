@@ -2,8 +2,10 @@ import { Badge, Button, cn, Input } from '../../components/ui';
 import { askQuestionId, askQuestionSettled } from '../../gateway/ask-answers';
 import type { AskUserAnswer, AskUserRequest } from '../../gateway/types';
 import { t } from '../../i18n';
+import { AskOptionChips } from '../pending/AskOptionChips';
 import { askAnsweredMarksOf, markAskAnswered } from '../pending/ask-answered-marks';
 import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
+import { toggleAskOption } from '../pending/ask-selection';
 import { askPendingAnswers, askPlanRows, askRowsComplete } from '../pending/ask-submit-plan';
 
 function truncate(value: string, length: number): string {
@@ -47,14 +49,12 @@ export function AskCard({
   const setDraft = useSetAskDraft();
   const titleId = `ask-card-${request.requestId}`;
 
+  // 单选再点一次即取消（回到未答）—— 语义在 `toggleAskOption`，三处调用点共用这一份。
   const toggle = (index: number, option: string, multi: boolean) => {
-    setDraft(request.requestId, index, (draft) => {
-      if (!multi) return { ...draft, selected: [option] };
-      const picked = new Set(draft.selected);
-      if (picked.has(option)) picked.delete(option);
-      else picked.add(option);
-      return { ...draft, selected: [...picked] };
-    });
+    setDraft(request.requestId, index, (draft) => ({
+      ...draft,
+      selected: toggleAskOption(draft.selected, option, multi),
+    }));
   };
 
   // 逐题规划交给 ask-submit-plan（同一份判定待批页 / Composer 也用）：已落定的题不再
@@ -99,35 +99,14 @@ export function AskCard({
             <div className="leading-relaxed whitespace-pre-wrap wrap-anywhere">
               {row.question.question}
             </div>
-            {row.question.options && row.question.options.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {row.question.options.map((option) => {
-                  const picked = row.draft.selected.includes(option);
-                  return (
-                    <label
-                      className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-md pointer-coarse:min-h-touch ${
-                        picked
-                          ? 'bg-accent-soft text-accent-ink'
-                          : 'bg-raised text-ink hover:bg-hover'
-                      }`}
-                      key={option}
-                    >
-                      <input
-                        className="accent-accent"
-                        type={row.question.multi_select ? 'checkbox' : 'radio'}
-                        name={`ask-${request.requestId}-${row.index}`}
-                        checked={picked}
-                        disabled={busy || row.settled}
-                        onChange={() =>
-                          toggle(row.index, option, row.question.multi_select === true)
-                        }
-                      />
-                      <span>{option}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
+            <AskOptionChips
+              options={row.question.options ?? []}
+              selected={row.draft.selected}
+              multi={row.question.multi_select === true}
+              disabled={busy || row.settled}
+              name={`ask-${request.requestId}-${row.index}`}
+              onToggle={(option) => toggle(row.index, option, row.question.multi_select === true)}
+            />
             <Input
               value={row.draft.custom}
               disabled={busy || row.settled}
@@ -253,33 +232,14 @@ export function AskQuestionCard({
             <div className="leading-relaxed whitespace-pre-wrap wrap-anywhere">
               {question.question}
             </div>
-            {question.options && question.options.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {question.options.map((option) => {
-                  const picked = selected.includes(option);
-                  return (
-                    <label
-                      className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-md pointer-coarse:min-h-touch ${
-                        picked
-                          ? 'bg-accent-soft text-accent-ink'
-                          : 'bg-raised text-ink hover:bg-hover'
-                      }`}
-                      key={option}
-                    >
-                      <input
-                        className="accent-accent"
-                        type={question.multi_select ? 'checkbox' : 'radio'}
-                        name={`${request.requestId}-${questionIndex}`}
-                        checked={picked}
-                        disabled={disabled}
-                        onChange={() => onToggle(option)}
-                      />
-                      <span>{option}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
+            <AskOptionChips
+              options={question.options ?? []}
+              selected={selected}
+              multi={question.multi_select === true}
+              disabled={disabled}
+              name={`${request.requestId}-${questionIndex}`}
+              onToggle={onToggle}
+            />
             <Input
               value={custom}
               disabled={disabled}

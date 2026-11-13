@@ -81,7 +81,7 @@ const ROSTER_NO_ADDRESS: LabelRoster = { ...ROSTER, node: { current: false } };
 const LABELS = sessionAgentLabels([ROSTER], SESSIONS, 'primary');
 
 /** 旧身体标签的后缀（这里直接写死，避免探针依赖 i18n 运行时）。 */
-const OLD_BODY_SUFFIX = '（旧身体）';
+const RETIRED_SUFFIX = '@primary';
 
 /** rotate 过的 agent： 里是退役 body；外加一个已注销 agent 的旧 body。 */
 const RETIRED_ROSTER: LabelRoster = {
@@ -125,7 +125,7 @@ const RETIRED_ROSTER: LabelRoster = {
 const RETIRED_LABELS = sessionAgentRetiredLabels(
   [RETIRED_ROSTER],
   SESSIONS,
-  (name) => name + OLD_BODY_SUFFIX,
+  (name) => name + RETIRED_SUFFIX,
 );
 
 interface Fixture {
@@ -191,11 +191,11 @@ const FIXTURES: readonly Fixture[] = [
       readChatSource('SessionRail.tsx').includes('agentLabels: ReadonlyMap<string, string>'),
   },
   {
-    name: 'F12 已退役 body 的会话 -> 名字（旧身体）',
+    name: 'F12 已退役 body 的会话 -> 与现役同一文本（名字@primary）',
     why: 'rotate 之前那具身体的会话既不在 bodies[] 也不在 primary 里，之前整行是空的（用户报的空白）',
     check: () =>
-      RETIRED_LABELS.get('sess-multi-secondary') === 'rotator（旧身体）' &&
-      RETIRED_LABELS.get('sess-temp-old') === 'builder（旧身体）',
+      RETIRED_LABELS.get('sess-multi-secondary') === 'rotator@primary' &&
+      RETIRED_LABELS.get('sess-temp-old') === 'builder@primary',
   },
   {
     name: 'F13 现役 body 不会被标成旧身体',
@@ -213,14 +213,14 @@ const FIXTURES: readonly Fixture[] = [
   {
     name: 'F15 已注销 agent 的 body 也能标（名字还在 body_history 里）',
     why: 'agent 注销后成员条目仍在 roster，会话历史仍要能看出是谁的',
-    check: () => RETIRED_LABELS.get('sess-closed-old') === 'gone（旧身体）',
+    check: () => RETIRED_LABELS.get('sess-closed-old') === 'gone@primary',
   },
   {
     name: 'F16 接线：useChatSessions 派生 agentRetiredLabels + 三处透传',
     why: '算对了没透传，用户看到的仍是空白第二行',
     check: () =>
-      readChatSource('useChatSessions.ts').includes(
-        'sessionAgentRetiredLabels(rosters, sessions',
+      /sessionAgentRetiredLabels\(\s*rosters,\s*sessions/u.test(
+        readChatSource('useChatSessions.ts'),
       ) &&
       readChatSource('ChatView.tsx').includes(
         'agentRetiredLabels={sessionsApi.agentRetiredLabels}',
@@ -248,7 +248,9 @@ const FIXTURES: readonly Fixture[] = [
         list.indexOf('const agentLabel =') > index &&
         list.indexOf('const agentRetiredLabel =') > index &&
         list.indexOf('const agentPrimaryBadge =') > index &&
-        list.includes("t('chat.sessionList.oldBody', { name: ownAgentName })") &&
+        // 用户 2026-11-13 否掉「名字（旧身体）」：文本必须与现役一致，状态只由颜色表达
+        list.includes("@${t('team.member.primaryBadge')}") &&
+        !list.includes('oldBody') &&
         // 现役主题色 / 已退役灰：颜色由 primary 决定，不许只靠 class 猜
         list.includes('ownAgentLive')
       );

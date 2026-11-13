@@ -146,12 +146,14 @@ export function useChatSessions({
   // 已退役 body（rotate 之前的旧身体）的会话第二行：`名字（旧身体）`，灰色。
   // 这类会话既不在 `bodies[]`、也不在 primary 里，之前整行是空的（用户报的「子标题为空」
   // 最常见的一种）；归属信息一直都在 `body_history[]` 里，只是没人读。
-  // 带 t：标签里含 locale 括号（'名字（旧身体）' vs '名字 (old body)'），切语言要重算。
+  // 带 t：标签文本与现役一致（`名字@primary`），但 `primary` 一词来自 i18n，切语言要重算。
   // biome-ignore lint/correctness/useExhaustiveDependencies: t 必须进依赖
   const agentRetiredLabels = useMemo(
     () =>
-      sessionAgentRetiredLabels(rosters, sessions, (name) =>
-        t('chat.sessionList.oldBody', { name }),
+      sessionAgentRetiredLabels(
+        rosters,
+        sessions,
+        (name) => `${name}@${t('team.member.primaryBadge')}`,
       ),
     [rosters, sessions, t],
   );

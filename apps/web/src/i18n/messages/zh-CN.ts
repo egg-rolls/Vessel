@@ -1035,7 +1035,6 @@ export const messages = {
   'chat.sessionList.rename': '重命名',
   'chat.sessionList.viewRuns': '查看运行',
   'chat.sessionList.delete': '删除会话',
-  'chat.sessionList.oldBody': '{name}（旧身体）',
   'chat.sessionList.showMore': '显示更多（还有 {count} 个）',
   'chat.palette.rename': '重命名会话“{title}”',
   'chat.palette.delete': '删除会话“{title}”（需确认）',

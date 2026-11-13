@@ -28,8 +28,10 @@ import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { AskUserQuestion } from '../../gateway/types';
 import { t } from '../../i18n';
+import { AskOptionChips } from './AskOptionChips';
 import { useAskDrafts, useDropAskDrafts, useSetAskDraft } from './ask-draft-store';
 import { type AskDraftValue, isAskDraftAnswered } from './ask-drafts';
+import { toggleAskOption } from './ask-selection';
 import { askIncludedAnswers, askPlanRows } from './ask-submit-plan';
 import type { PendingCluster } from './cluster';
 import { questionBlocks } from './question-blocks';
@@ -44,14 +46,6 @@ function collapsedPreview(cluster: PendingCluster): string {
   const first = cluster.requests[0]?.questions[0];
   if (first === undefined) return '';
   return `${first.header}: ${first.question}`;
-}
-
-function toggleOption(picks: readonly string[], option: string, multi: boolean): string[] {
-  if (!multi) return [option];
-  const next = new Set(picks);
-  if (next.has(option)) next.delete(option);
-  else next.add(option);
-  return [...next];
 }
 
 /** 问题正文：文本 + 同源图片 + 链接（远程图片由 CSP 拦截，统一降级成链接）。 */
@@ -157,41 +151,19 @@ function QuestionField({
         )}
       </div>
       <QuestionBody text={question.question} />
-      {question.options && question.options.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {question.options.map((option) => {
-            const picked = draft.selected.includes(option);
-            return (
-              <label
-                key={option}
-                className={cn(
-                  'inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-md pointer-coarse:min-h-touch',
-                  picked ? 'bg-accent-soft text-accent-ink' : 'bg-raised text-ink hover:bg-hover',
-                )}
-              >
-                <input
-                  className="accent-accent"
-                  type={question.multi_select ? 'checkbox' : 'radio'}
-                  name={`${groupId}-${index}`}
-                  checked={picked}
-                  disabled={locked}
-                  onChange={() =>
-                    onChange({
-                      ...draft,
-                      selected: toggleOption(
-                        draft.selected,
-                        option,
-                        question.multi_select === true,
-                      ),
-                    })
-                  }
-                />
-                <span>{option}</span>
-              </label>
-            );
-          })}
-        </div>
-      )}
+      <AskOptionChips
+        options={question.options ?? []}
+        selected={draft.selected}
+        multi={question.multi_select === true}
+        disabled={locked}
+        name={`${groupId}-${index}`}
+        onToggle={(option) => {
+          onChange({
+            ...draft,
+            selected: toggleAskOption(draft.selected, option, question.multi_select === true),
+          });
+        }}
+      />
       <Input
         value={draft.custom}
         disabled={locked}

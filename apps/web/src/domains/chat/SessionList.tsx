@@ -315,7 +315,8 @@ export function SessionList({
                 // 四级第二行（0.52）：
                 // 1) 节点地址（只有 roster 有 `node:team`，团队成员的显示一个字都不变）；
                 // 2) **会话自带归属**（`session.agent`，additive）：现役 ⇒ `名字@primary` 主题色，
-                //    已退役 body ⇒ `名字（旧身体）` 灰色。这是唯一不依赖反查的一档 ——
+                //    已退役 body ⇒ 同样文本、灰色（颜色承载状态，不另造一套读法）。
+                //    这是唯一不依赖反查的一档 ——
                 //    rotate 之前的旧身体会话、跨节点会话、agent 已从 roster 消失的会话都靠它；
                 // 3) 老 gateway 没下发归属 ⇒ 回落到 roster 反查（`agentLabels` / `agentRetiredLabels`）；
                 // 4) 都查不到 ⇒ 原来的 primary 徽标。
@@ -323,12 +324,12 @@ export function SessionList({
                 const ownAgentName = ownAgent?.name?.trim();
                 const agentLabel =
                   agentAddress || ownAgentName ? undefined : agentLabels?.get(session.session_id);
+                // 文本对现役与旧身体**一致**（`名字@primary`）：用户 2026-11-13 否掉「名字（旧身体）」——
+                // 第二行讲归属，不讲状态；状态交给颜色（现役主题色 / 旧身体 primary 灰）。
                 const ownAgentTitle =
                   agentAddress || ownAgentName === undefined
                     ? undefined
-                    : ownAgent?.primary === true
-                      ? `${ownAgentName}@${t('team.member.primaryBadge')}`
-                      : t('chat.sessionList.oldBody', { name: ownAgentName });
+                    : `${ownAgentName}@${t('team.member.primaryBadge')}`;
                 const ownAgentLive = ownAgent?.primary === true;
                 const agentRetiredLabel =
                   agentAddress || ownAgentTitle || agentLabel
