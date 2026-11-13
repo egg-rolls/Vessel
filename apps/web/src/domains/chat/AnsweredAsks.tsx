@@ -111,7 +111,9 @@ export function AnsweredAsks({
           key={item.requestId}
           card={item.card}
           ts={item.answeredAt}
-          defaultOpen={defaultOpen}
+          // 最新那条直接展开：sync 答完的东西没有别的表示形式，折起来等于只给一个
+          // 摘要（用户要看的正是「我问了什么、我答了什么」）。更早的按设置折叠。
+          defaultOpen={defaultOpen || item.requestId === shown[shown.length - 1]?.requestId}
           titleLabel={t('chat.askAnswered.title')}
           sourceLabel={t('chat.askAnswered.source')}
           ariaLabel={t('chat.askAnswered.aria')}
