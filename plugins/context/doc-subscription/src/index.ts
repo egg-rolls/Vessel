@@ -6,8 +6,8 @@
  * - `subscribe` 工具：显式 add / remove / list / inspect 具体文件（无 glob、无自动订阅）。
  * - `BeforeLlm` hook：每个 run 第一次 LLM 请求前检查订阅文件，向 `ctx.messages`
  *   追加一条只含 path / id / rev / bytes 的持久化尾部消息
- *   （`role: user` + `name: 'vessel:subscription'`，不改写 system）；
- *   正文只在模型显式 `inspect` 时返回。
+ *   （`role: user` + `name: 'vessel:notice'` + 首行 `files: …`，不改写 system）；
+ *   正文只在模型显式 `inspect` 时返回。线格式见 `./notice.ts`。
  *
  * 不新增 core 模型 / 事件；订阅状态按 session 存在 `stateDir` 下。
  */
@@ -23,6 +23,13 @@ export type { DocSubscriptionConfig } from './config.js';
 export { parseDocSubscriptionConfig } from './config.js';
 export { type UnifiedDiffOptions, type UnifiedDiffResult, unifiedDiff } from './diff.js';
 export { type BeforeLlmHookDeps, createBeforeLlmHook, MAX_FILE_BYTES } from './hook.js';
+export {
+  formatSubscriptionNotice,
+  SUBSCRIPTION_NOTICE_DETAIL_MARK,
+  SUBSCRIPTION_NOTICE_DETAILS_MAX,
+  SUBSCRIPTION_NOTICE_MESSAGE_NAME,
+  SUBSCRIPTION_NOTICE_SCOPE,
+} from './notice.js';
 export {
   emptyState,
   type SessionSubscriptionState,

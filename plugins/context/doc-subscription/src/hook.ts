@@ -3,8 +3,15 @@
  * @module @vessel-agent/doc-subscription/hook
  *
  * 每个 run 的第一次 BeforeLlm 检查一次订阅文件，向 `ctx.messages` 追加一条
- * **只含元数据**的持久化尾部消息（`role: user` + `name: 'vessel:subscription'`），
- * 不改写 system、不再经 `HookResult.additionalContext` 注入。
+ * **只含元数据**的持久化尾部消息（`role: user` + `name: 'vessel:notice'`，正文首行
+ * `files: …`，明细行 `  · …`），不改写 system、不再经 `HookResult.additionalContext` 注入。
+ *
+ * 为什么走 `vessel:notice` 而不是自造一个 kind（0.51 及以前是 `vessel:subscription`）：
+ * 「模型需要知道的改变」只有一类东西 —— 环境信息（同一通道、同一张 Web 卡，scope 决定
+ * 卡头标签）。文件变更就是其中一个 scope（`files`），自造 kind 等于在模型上下文里开第二种
+ * 卡片形态。代价是**可见性变了**：以前订阅通知跟随 `ui.showInternalEvents`（默认隐藏），
+ * 现在默认可见、渲染成「文件变更」环境卡 —— 这是有意的（订阅是用户自己开的）。老会话里的
+ * `vessel:subscription` 消息不做特判，走「未登记 kind」的兜底渲染，仍是可读卡。
  *
  * - 通知不含正文 / diff，只列 path、id、rev、bytes；
  * - 通知写入后推进 `notified_rev`，同一 rev 不再重复通知；
@@ -19,6 +26,11 @@ import { evaluatePath, type PathBoundary } from '@vessel-agent/basic-tools';
 import type { Hook, HookContext, HookResult } from '@vessel-agent/core';
 import { HookType } from '@vessel-agent/core';
 import type { DocSubscriptionConfig } from './config.js';
+import {
+  formatSubscriptionNotice,
+  SUBSCRIPTION_NOTICE_DETAILS_MAX,
+  SUBSCRIPTION_NOTICE_MESSAGE_NAME,
+} from './notice.js';
 import type { SessionSubscriptionState, SubscriptionEntry, SubscriptionStore } from './store.js';
 
 /** 与 read 工具同口径的单文件上限 */
@@ -27,8 +39,8 @@ export const MAX_FILE_BYTES = 8 * 1024 * 1024;
 /** 单 run 处理的 run_id 上限；超过即清空（只影响“每 run 一次”的去重精度） */
 const MAX_TRACKED_RUNS = 1000;
 
-/** 单条通知最多列出的文件数；其余用 and N more 概括 */
-const MAX_NOTICE_ENTRIES = 20;
+/** 单条通知最多列出的文件数；其余用 and N more 概括（口径见 notice.ts） */
+const MAX_NOTICE_ENTRIES = SUBSCRIPTION_NOTICE_DETAILS_MAX;
 
 /** hook 依赖 */
 export interface BeforeLlmHookDeps {
@@ -82,16 +94,15 @@ function noticeLine(entry: SubscriptionEntry, observation: Observation): string 
   return `<file ${attrs.join(' ')} />`;
 }
 
-/** 组装短通知（不含任何文件正文 / diff） */
+/**
+ * 组装短通知（不含任何文件正文 / diff）。
+ *
+ * 「报哪几条」是本 hook 的事（边界 / 大小 / 二进制判定都在这边）；线格式交给 `notice.ts`：
+ * 首行 `files: …` + 明细行 `  · …`，与 `tools:` / `identity:` 同形，Web 才认得出这是
+ * 「文件变更」环境卡。
+ */
 function buildNotice(lines: string[], total: number): string {
-  return [
-    '<subscription-notice>',
-    `Subscribed files changed: ${total}`,
-    ...lines,
-    ...(total > lines.length ? [`... and ${total - lines.length} more`] : []),
-    'Call subscribe with action "inspect" and the id or path to view the diff.',
-    '</subscription-notice>',
-  ].join('\n');
+  return formatSubscriptionNotice(lines, total);
 }
 
 /**
@@ -230,7 +241,7 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       if (changedCount === 0) return;
       const message = {
         role: 'user' as const,
-        name: 'vessel:subscription',
+        name: SUBSCRIPTION_NOTICE_MESSAGE_NAME,
         content: buildNotice(lines, changedCount),
         timestamp: now,
       };

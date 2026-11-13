@@ -13,6 +13,9 @@
  * - Web 侧（`apps/web/src/domains/chat/env-notice.ts`）必须认得这里的每一个词。两边分属
  *   packages 与应用层，不能互相 import，所以 `scripts/check-append-only-context.ts` 的 C3
  *   做词表对拍：生产者加了词而 Web 没加，门禁直接红。
+ * - 还有一类生产者在**插件包**里（`plugins/context/doc-subscription`）：插件依赖 core、
+ *   不依赖本包（依赖方向反了），因此它的首词只能是**字面量副本**
+ *   （`plugins/context/doc-subscription/src/notice.ts`）。C3 对拍那份副本，不靠人记。
  *
  * 词义（决定卡头标签，不决定可见性）：
  * - `restart`：系统 / body 重启（换了一具 body，之前的上下文不再是「现在」）；
@@ -20,6 +23,7 @@
  * - `model`：模型变更；
  * - `identity`：身份变更（改名 / Team / parent）；
  * - `fields`：其它基础字段变更；
+ * - `files`：文件变更（doc-subscription 的订阅文件被改动，只报元数据、不报正文）；
  * - `context`：系统提示词 / Self Card 本身变了（可展开看完整快照）。
  *
  * @module @vessel-agent/agent
@@ -32,7 +36,7 @@
  * - 同轮多条环境信息的**落盘顺序**（一批变更跨种类时按它依次注入）；
  * - 一条消息里明细行的分组顺序（`formatSelfCardDeltas`）。
  *
- * 排列按「模型最该先知道」而非字母序：重启 → 身份 → 其它字段 → 模型 → 工具 → 上下文。
+ * 排列按「模型最该先知道」而非字母序：重启 → 身份 → 其它字段 → 模型 → 工具 → 文件 → 上下文。
  */
 export const ENV_INFO_SCOPES = [
   'restart',
@@ -40,6 +44,7 @@ export const ENV_INFO_SCOPES = [
   'fields',
   'model',
   'tools',
+  'files',
   'context',
 ] as const;
 

@@ -37,7 +37,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 | `runtime.notice` | 热应用 / 版本通知 / 成员停下（scope `peer`，定向父 session） | `runtime-notice-hook` → `vessel:notice` | 尾部 | 是 |
 | 基础信息变更（`agents.update` / `reinstate`） | `selfcard: N fields changed …` + 每字段一行（name / parent / team / model / system prompt / permission mode）；model / system prompt 明确写「本具 body 仍用旧值，下一具才用新值」 | `self-card-delta`（BeforeLlm，**每具 body 一个实例**）→ `vessel:notice`（Web scope `selfcard`） | 尾部 | 是（同一变更只注入一次；Self Card 本身仍是构造期快照，不热替换） |
 | 附件引用（`Message.refs`） | `[refs] N attachments: kind path, …`（只有路径与种类；>3 条折 `+N more`；尾注按 media 工具是否可用分三档：`(use media: action=…)` / 未启用时说明需启用插件 / 纯 file 批次不加尾注） | `refs-notice-hook`（BeforeLlm，读 `ctx.refs`）→ `vessel:notice` | 尾部 | 是（同一批引用只注入一次，变化才再注入） |
-| 文档订阅 | `files: N changed …` + 每条文件名一行 | doc-subscription → `vessel:notice`（Web scope `files`，默认可见） | 尾部 | 是（同一路径去重；**不再**用 `vessel:subscription` 这个第二套通道） |
+| 文档订阅 | `files: N changed …` + 每文件一行 `  · <file path id rev bytes />`（只有元数据，无正文） | doc-subscription → `vessel:notice`（Web scope `files`，默认可见） | 尾部 | 是（同一路径去重；**不再**用 `vessel:subscription` 这个第二套通道） |
 | 工具面变更（`applyToolsToEntry` 热刷新） | `tools: 2 added; …` + `· + ask` | `tool-surface-delta`（BeforeLlm，每具 body 一个实例）→ `vessel:notice`（scope `tools`） | 尾部 | 是（同一变更只注入一次；回滚照样报） |
 | 90% 预算预警（`limits.*` / `termination.*`） | `[runtime] input_tokens_limit: 900k/1M ...` | core `publishLimitWarnings` → `vessel:limit` | 尾部 | 是 |
 | 90%–`compactThreshold` 上下文压力（默认 0.85 且自动压缩开启时不出现） | `[runtime] context_window: 900k/1M ...` 推荐 rotate | core `publishContextPressureWarning` → `vessel:limit` | 尾部 | 是 |
@@ -105,6 +105,6 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 
 core：system / Self Card、历史、用户、assistant/tool、压缩、PrefixGuard；`packages/agent`：`vessel:source`、成员/owner 队列、Team 派发。
 asm (`src/`)：owner 队列注入、runtime notice、配置热应用通知、summarizer、版本通知。
-plugins：doc-subscription `vessel:subscription`、hook-logging（只观测）、MCP 工具结果。
+plugins：doc-subscription `vessel:notice`（scope `files`）、hook-logging（只观测）、MCP 工具结果。
 TUI / Web：`@path` 引用、用户输入、`vessel:*` 可见性过滤。
 相关：[runtime-loop](runtime-loop.md)、[runtime-api](runtime-api.md)、[guardrails-hooks](guardrails-hooks.md)、[member-team](member-team.md)。

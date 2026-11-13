@@ -226,18 +226,27 @@ export interface CreateAskUserToolOptions {
  *
  * handler 通过事件流交互：发布 `ask.user.requested` → 等 `ask.user.answered` →
  * 返回回答。默认一直等待，由应答 / abort（run 取消）/ run 终态收口。
+ *
+ * 描述里那条硬口径（0.52）只改文案、不改机制：ask 仍是能阻塞等答案的工具，但**默认通道
+ * 是向父 agent 汇报（`agent send`）**——只有「只有人能决定 / 缺信息完全卡住」才轮到人。
  */
 export function createAskUserTool(opts: CreateAskUserToolOptions = {}): ToolDefinition {
   return {
     // 0.52：工具名 `ask`（原名 ask_user）。注册侧 / 生产侧只用新名。
     name: 'ask',
-    description: `Ask the human when only they can decide or supply the missing fact: confirmation,
-a choice between options, missing information, authorization, or intent you cannot
-safely infer. Anything that needs a human to say one line belongs here.
+    description: `Ask the human — the last resort, not a default channel. Use it only when only
+the human can decide (authorization, a hard-to-reverse or ambiguous choice, a missing
+fact nobody else holds) or when the missing answer means you are completely stuck.
 
-Ask everything you need in one call — put multiple questions in the same request
-instead of a multi-turn back-and-forth. Prefer asking over guessing: one question is
-cheaper than redoing the work.
+Everything else you handle yourself: a confirmation you can settle from the task or from
+what the code says, a choice with an obvious default — decide it, and say what you
+decided. If your parent agent needs to know, or is the one who can answer, report it with
+agent send (the default way up) instead of putting the question in the human's lap.
+Asking the human costs a person's attention; the parent channel costs nothing.
+
+When you do ask, ask everything you need in one call — put multiple questions in the same
+request instead of a multi-turn back-and-forth. One question is cheaper than redoing the
+work.
 
 If nothing blocks you, keep working and let the human answer when they can; if the
 answer decides the next step, wait for it.`,

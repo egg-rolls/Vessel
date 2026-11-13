@@ -909,7 +909,8 @@ export function buildHistoryIndex(
     const noticeKind = noticeKindOf?.(message);
     if (noticeKind !== undefined) {
       // 环境信息（vessel:notice）：解析成卡片数据（scope 标签 / 缩略 / 展开行）。
-      // 解析失败（空正文 / 纯空白）时 env 缺省，渲染回退成整段文本的 notice 卡。
+      // 解析失败（空正文 / 纯空白）时 env 缺省，渲染回退成整段文本的 notice 卡；
+      // 老通道 `vessel:subscription`（0.52 起不再生产）走的正是这条兜底，仍是可读卡。
       const env = isEnvNoticeKind(noticeKind) ? envNoticeCard(message.content) : undefined;
       items.push({
         kind: 'runtime-notice',

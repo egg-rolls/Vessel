@@ -296,7 +296,10 @@ export function createAgentTool(
       'hire: contractor owned by the caller (any member may hire), bound to the caller team if it ' +
       'has one. ' +
       'send: dispatch a message (live queue now, gone resume first, rotating queue for the new ' +
-      'body); returns immediately. Add interrupt:true for urgent (cancel + front of queue) or ' +
+      'body); returns immediately. This is the default channel for reporting to your parent: ' +
+      'progress, blockers, a decision you made, or a question you cannot settle alone goes here ' +
+      'instead of to the human (ask is the last resort). ' +
+      'Add interrupt:true for urgent (cancel + front of queue) or ' +
       'notify:true to append to the inbox + summary wake without running. ' +
       'close: release member(s), idempotent. list: return the roster. ' +
       'read: read the last messages of a member session (read-only; role + truncated text), so ' +

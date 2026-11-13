@@ -1212,6 +1212,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.scope.restart': 'Restart',
   'chat.env.scope.identity': 'Identity',
   'chat.env.scope.fields': 'Fields',
+  'chat.env.scope.files': 'File changes',
   'chat.env.scope.model': 'Model',
   'chat.env.scope.selfcard': 'Base info',
   'chat.env.scope.context': 'Context',

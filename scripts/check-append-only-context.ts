@@ -19,7 +19,9 @@
  *   「以后有人在别处加一条重写」。
  * - **C3 词表对拍**：环境信息的 scope 词表以 `packages/agent/src/env-info-scope.ts` 为唯一
  *   真相，Web 的 `ENV_NOTICE_SCOPES` 必须认得出每一个词（漏一个 = 那条卡静默退化成
- *   「上下文」，最难发现的那种坏）。
+ *   「上下文」，最难发现的那种坏）。同一层还管三件「抄了副本」的事：插件包
+ *   （`doc-subscription`）的 scope / 明细标记副本、每个词在中英两侧都有卡头标签、
+ *   订阅通知不再发旧的 `vessel:subscription` 通道名。
  *
  * 用法：bun run scripts/check-append-only-context.ts（退出码 0 = 全过，1 = 有 FAIL）
  */
@@ -27,7 +29,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ENV_NOTICE_SCOPES } from '../apps/web/src/domains/chat/env-notice';
-import { ENV_INFO_SCOPES } from '../packages/agent/src/env-info-scope';
+import { ENV_INFO_DETAIL_MARK, ENV_INFO_SCOPES } from '../packages/agent/src/env-info-scope';
 import {
   createRunJournalFactory,
   ExecutionUnit,
@@ -719,6 +721,61 @@ async function runStaticChecks(): Promise<void> {
  */
 const LEGACY_SCOPES = ['selfcard'] as const;
 
+/**
+ * 插件侧的词表副本。
+ *
+ * `plugins/context/doc-subscription` 只依赖 core、不依赖 `packages/agent`（依赖方向反了），
+ * 所以它的首词（`files`）与明细标记只能抄一份字面量。抄了就必须对拍：单边改词时卡头标签
+ * 会静默掉回「上下文」—— 正文看着正常、标签是错的，靠人复查抓不住。
+ */
+const PLUGIN_NOTICE = 'plugins/context/doc-subscription/src/notice.ts';
+
+/** 插件通知的 scope 词 / 明细标记必须与生产侧真相逐字一致。 */
+async function runPluginVocabularyChecks(): Promise<void> {
+  const text = await source(PLUGIN_NOTICE);
+  if (text.length === 0) return;
+  const scope = /SUBSCRIPTION_NOTICE_SCOPE = '([^']+)'/.exec(text)?.[1];
+  if (scope === undefined) {
+    fail(`C3 ${PLUGIN_NOTICE}`, '读不到 SUBSCRIPTION_NOTICE_SCOPE 字面量（对拍没抓手了）');
+  } else if (!(ENV_INFO_SCOPES as readonly string[]).includes(scope)) {
+    fail(`C3 ${PLUGIN_NOTICE}`, `scope 字面量「${scope}」不在 ENV_INFO_SCOPES 里`);
+  } else {
+    ok(`C3 插件通知 scope「${scope}」在词表里`);
+  }
+  const mark = /SUBSCRIPTION_NOTICE_DETAIL_MARK = '([^']*)'/.exec(text)?.[1];
+  if (mark !== ENV_INFO_DETAIL_MARK) {
+    fail(
+      `C3 ${PLUGIN_NOTICE}`,
+      `明细标记「${mark ?? '读不到'}」≠ ENV_INFO_DETAIL_MARK「${ENV_INFO_DETAIL_MARK}」` +
+        '（对不上时整条通知会被 Web 读成一整行，明细永远展开不出来）',
+    );
+  } else {
+    ok('C3 插件通知明细标记与 ENV_INFO_DETAIL_MARK 逐字相同');
+  }
+}
+
+/**
+ * 标签侧对拍：每个生产词都得有本地化标签（`chat.env.scope.<scope>`），中英两侧都要有。
+ *
+ * 词加了、标签没加时，卡头会把 i18n key 原样渲染给用户看（或者回退成生词）—— 这类缺口
+ * 词表对拍看不见（词是有的），只有对着 i18n 文件点 key 才看得见。
+ */
+async function runScopeLabelChecks(): Promise<void> {
+  const missing: string[] = [];
+  for (const locale of ['en', 'zh-CN'] as const) {
+    const text = await source(`apps/web/src/i18n/messages/${locale}.ts`);
+    if (text.length === 0) continue;
+    for (const scope of ENV_INFO_SCOPES) {
+      if (!text.includes(`'chat.env.scope.${scope}':`)) missing.push(`${locale}:${scope}`);
+    }
+  }
+  if (missing.length > 0) {
+    fail('C3 标签', `这些 scope 没有卡头标签：${missing.join(' / ')}`);
+    return;
+  }
+  ok(`C3 scope 卡头标签（${ENV_INFO_SCOPES.length} 个词 × 2 语言）`);
+}
+
 async function runVocabularyChecks(): Promise<void> {
   const web = new Set<string>(ENV_NOTICE_SCOPES);
   for (const scope of ENV_INFO_SCOPES) {
@@ -739,6 +796,16 @@ async function runVocabularyChecks(): Promise<void> {
   } else {
     ok('C3 生产者不再发旧词');
   }
+  // 插件侧：`vessel:subscription` 不得再当生产侧的通道名（历史消息不做特判，走未登记
+  // kind 的兜底）。只看字符串字面量：注释里提到这个老名是必要的（说明它为什么不在了）。
+  const hook = await source('plugins/context/doc-subscription/src/hook.ts');
+  if (/['"]vessel:subscription['"]/.test(hook)) {
+    fail('plugins/context/doc-subscription/src/hook.ts', '仍在发旧通道 vessel:subscription');
+  } else {
+    ok('C3 订阅通知只发 vessel:notice');
+  }
+  await runPluginVocabularyChecks();
+  await runScopeLabelChecks();
 }
 
 // ───────────────────────── 主流程 ─────────────────────────
