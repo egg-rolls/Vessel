@@ -23,7 +23,9 @@
  *
  * 客户端（真的 ask-submit-plan / buildAskAnswer，不是另写一份逻辑）：
  * - F 载荷只含**还没落定**的题（服务端逐题进度 answeredQuestionIds），草稿留着展示但
- *   不进载荷，且每条答案都带 question_id —— 客户端漏题号，服务端就只能靠正文猜题。
+ *   不进载荷，且每条答案都带 question_id —— 客户端漏题号，服务端就只能靠正文猜题；
+ * - I 用户手快连点：提交动作一发出就本地记「这几题已答」，第二次**不可提交**（载荷为
+ *   空），服务端那边同一批真发两次也只当 skipped；标记带 TTL，失败时自愈解锁。
  *
  * 用法：bun run scripts/check-ask-dedupe.ts（退出码 0 = 全过，1 = 有 FAIL）
  */
@@ -105,8 +107,10 @@ const { createInteractionsRegistry } = await import('../packages/serve/src/inter
 const { createAskAnswerDelivery } = await import('../src/ask-answer-delivery');
 const { buildAskAnswer } = await import('../apps/web/src/gateway/ask-answers');
 const { askDraftKey } = await import('../apps/web/src/domains/pending/ask-drafts');
-const { askIncludedAnswers, askPendingAnswers, askPlanRows, askRowsComplete } = await import(
-  '../apps/web/src/domains/pending/ask-submit-plan'
+const { askIncludedAnswers, askOpenRows, askPendingAnswers, askPlanRows, askRowsComplete } =
+  await import('../apps/web/src/domains/pending/ask-submit-plan');
+const { askAnsweredMarksOf, clearAskAnsweredMarks, markAskAnswered } = await import(
+  '../apps/web/src/domains/pending/ask-answered-marks'
 );
 
 /** 最小事件流：注册表只需要 publish / subscribe / waitFor 三条语义。 */
@@ -340,6 +344,7 @@ function batchAnswersOf(payload: AnyRecord | undefined): AnyRecord[] {
 // ── F：客户端载荷（真的 ask-submit-plan）──────────────────
 
 {
+  clearAskAnsweredMarks();
   const questions = twoQuestions();
   const requestId = 'req-plan';
   const drafts = {
@@ -410,7 +415,13 @@ function batchAnswersOf(payload: AnyRecord | undefined): AnyRecord[] {
     {
       // 共用规划自己必须真的走「按题号取草稿 + 已答判定 + 带题号建答案」。
       path: 'apps/web/src/domains/pending/ask-submit-plan.ts',
-      needles: ['askDraftOf(', 'askQuestionSettled(', 'buildAskAnswer(', 'row.settled'],
+      needles: [
+        'askDraftOf(',
+        'askQuestionSettled(',
+        'buildAskAnswer(',
+        'askAnsweredMarksOf(',
+        'reconcileAskAnsweredMarks(',
+      ],
     },
     {
       // 待批页：载荷只从共用规划来，已答的行不再能勾。
@@ -421,6 +432,11 @@ function batchAnswersOf(payload: AnyRecord | undefined): AnyRecord[] {
       // 单题卡 / Composer：同一个载荷出口，已答的题锁输入。
       path: 'apps/web/src/domains/chat/AskCard.tsx',
       needles: ['askPendingAnswers(rows)', 'askPlanRows([request], drafts)', 'settled'],
+    },
+    {
+      // 提交入口：发出前先本地记「已答」，手快连点也无门。
+      path: 'apps/web/src/domains/pending/usePendingBatch.ts',
+      needles: ['markAskAnswered('],
     },
     {
       // Composer 单题卡：答案构造必须带题号（0.52 漂移的第一推动力就是这里漏了题号）。
@@ -443,6 +459,55 @@ function batchAnswersOf(payload: AnyRecord | undefined): AnyRecord[] {
   );
   const promptSlots = await source('apps/web/src/domains/chat/PromptSlots.tsx');
   check('H 接线：PromptSlots 不再调用旧构造器 buildAnswer', !promptSlots.includes('buildAnswer('));
+}
+
+// ── I：用户手快连点提交（UI 层不可再提交 + 服务端仍然幂等）────
+
+{
+  clearAskAnsweredMarks();
+  const questions = twoQuestions();
+  const requestId = 'req-click';
+  const drafts = {
+    [askDraftKey(requestId, 0)]: { selected: ['yes'], custom: '', include: true },
+    [askDraftKey(requestId, 1)]: { selected: [], custom: 'restart softly', include: true },
+  };
+
+  const before = askPlanRows([{ requestId, questions }], drafts);
+  check(
+    'I 首次可提交两条',
+    askIncludedAnswers(before).length === 2,
+    show(askIncludedAnswers(before)),
+  );
+
+  // 第一下点击：本地立刻记「这几题已答」（服务端逐题进度要等一次 hydrate 才回来）。
+  markAskAnswered(requestId, ['q1', 'q2']);
+  const after = askPlanRows([{ requestId, questions }], drafts);
+  check(
+    'I 提交后这几行原地变成已答',
+    after.every((row) => row.settled),
+    show(after.map((row) => row.settled)),
+  );
+  check('I 第二次不可提交：待批页载荷为空', same(askIncludedAnswers(after), []));
+  check('I 第二次不可提交：单题卡载荷为空', same(askPendingAnswers(after), []));
+  check('I 没有还开着的行（卡片判定为收口）', askOpenRows(after).length === 0);
+
+  // 自愈：提交失败（服务端进度永远不覆盖）时标记会自己过期，不会把题永久锁死。
+  clearAskAnsweredMarks();
+  markAskAnswered(requestId, ['q1'], 5);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  check('I 标记过期后这道题重新可答（失败自愈）', askAnsweredMarksOf(requestId).length === 0);
+
+  // 服务端最后一道闸：同一批真的发两次也只当 skipped，答案条数不变、不出空题号。
+  const h = makeHarness();
+  const serverRequestId = h.request();
+  await h.registry.respondAsk(serverRequestId, [legacyAnswer(0, 'yes')]);
+  const twice = (await h.registry.respondAsk(serverRequestId, [
+    legacyAnswer(0, 'yes'),
+  ])) as AnyRecord;
+  const finalAnswers = answersOf(h.record(serverRequestId));
+  check('I 服务端：连提两次后答案仍恰好 1 条', finalAnswers.length === 1, show(finalAnswers));
+  check('I 服务端：第二次 duplicate', twice.duplicate === true, show(twice));
+  check('I 服务端：没有写出空题号的脏答案', finalAnswers[0]?.question_id === 'q1', show(finalAnswers));
 }
 
 // ── G：没有可枚举的题 ⇒ 旧语义（回归保护）────────────────
@@ -471,5 +536,5 @@ if (failures.length > 0) {
 console.log(
   'check-ask-dedupe: OK（' +
     String(passed) +
-    ' 项：归一 / 归一之后去重 / 位置回退 / 投递不重复 / 双击幂等 / 客户端载荷 / 旧语义退路）',
+    ' 项：归一 / 之后去重 / 位置回退 / 投递不重复 / 双击幂等 / 连点不可提交 / 载荷 / 旧语义）',
 );
