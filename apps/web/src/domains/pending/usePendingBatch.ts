@@ -15,6 +15,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import type { AskUserAnswer } from '../../gateway/types';
+import { markAskAnswered } from './ask-answered-marks';
 
 /** 一条 ask 的应答计划。 */
 export interface PendingBatchItem {
@@ -50,6 +51,15 @@ export function usePendingBatch(
       if (inFlight.current.has(clusterKey)) return;
       inFlight.current.add(clusterKey);
       setBusyKey(clusterKey);
+      // 提交动作一发出就先把这几题在本地记成「已答」：服务端的逐题进度要等一次
+      // hydrate 才回来，中间那段窗口用户手快还能再点一次（用户实测的重复提交）。
+      // 标记带 TTL 自愈，真失败也不会把题永久锁死。
+      for (const item of items) {
+        markAskAnswered(
+          item.requestId,
+          item.answers.map((answer) => answer.question_id ?? '').filter((id) => id.length > 0),
+        );
+      }
       try {
         // 同一批带同一个 batch_id，且**并发**发出：gateway 的合并窗口是 250ms，
         // 串行 await 会把「最后一条什么时候到」交给前一条的 RTT（慢网下就被拆成多条）。
