@@ -26,9 +26,11 @@ const COLLAPSED = '';
 
 export function PendingView({ sessionId }: { sessionId?: string }) {
   useLocale();
-  const { asks, connected } = useConnection();
+  const { asks, connectionState, hasToken } = useConnection();
   // 请求一旦落定（本端或别的端答的）就从 pending 集合里消失 ⇒ 它的草稿一起清，
   // 否则草稿会跟着这个标签页一直留在 sessionStorage 里。
+  // 断线期间不算「消失」（reset 会清空集合，重连后 hydration 还没回来时也是空的）。
+  const connected = connectionState === 'open' && hasToken;
   const askIds = useMemo(() => asks.map((item) => item.requestId), [asks]);
   useAskDraftPrune(askIds, connected);
   const [override, setOverride] = useState<string | null>(null);
