@@ -6041,9 +6041,19 @@ export class AgentServiceImpl implements AgentService {
     return;
   }
 
-  /** 0.31：body 上下文水位；交给 runtime 的只读视图，不落盘。 */
+  /**
+   * 0.31：body 上下文水位（0–1），不落盘。
+   * 0.52：取数链只有一条 —— 装配层的端口实现直接返回**界面那一份**读数
+   * （`context.changed.token_count` = `ContextManager.tokenCount` / 窗口上限），见
+   * `src/context-ratio-source.ts`。这里不再有任何二次估算：两处各算一次，就是「界面 51%、
+   * 提示 unknown」这种不一致的来源。
+   *
+   * 残留的 undefined 只有一种：这具 body 既没收到过该会话的上下文事件、宿主也没有它的
+   * 历史读数（即本进程里根本没有这个会话的水位）—— 不是「算不出来」，是「没这个会话」。
+   */
   contextRatio(sessionId: string): number | undefined {
-    return this.runtime.contextRatio?.(sessionId);
+    const ratio = this.runtime.contextRatio?.(sessionId);
+    return ratio === undefined || !Number.isFinite(ratio) ? undefined : ratio;
   }
 
   /** 0.31：该 body 的交互请求是否有 bridge 到达人类；无 bridge 时 fail-closed。 */

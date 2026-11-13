@@ -49,6 +49,7 @@ import type {
   ToolDefinition,
   UsageLimits,
 } from '@vessel-agent/core';
+import { createContextRatioSource, withLiveContextRatio } from './context-ratio-source';
 
 export interface AgentServiceWiringOptions {
   /**
@@ -378,6 +379,18 @@ export async function createAgentServiceWiring(
       memberCwdFor,
     ),
   );
+
+  // 0.52：上下文占用只有一个真相源（界面那一份）。
+  // 宿主自带的 `contextRatio` 读的是 run 结束时才写下的旧值，run 进行中（rotate 工具正是
+  // 此时调用）要么没有、要么过时，于是提示说 unknown 而界面同时在报百分比。这里订阅父流
+  // —— 所有 body 的 `context.changed` 都并入这条流，与 TUI / web 订阅的是同一条 —— 把
+  // `token_count` 原值记下来喂给端口，口径见 `context-ratio-source.ts`。
+  const contextRatioSource = createContextRatioSource(
+    options.contextMaxTokens === undefined ? {} : { fallbackMaxTokens: options.contextMaxTokens },
+  );
+  options.parentEvents?.subscribe((event) => contextRatioSource.observe(event));
+  const bodyRuntime = withLiveContextRatio(innerRuntime, contextRatioSource);
+
   // 0.27：body lease 取代 per-run session 写锁；`main` 也不再走特殊执行路径。
 
   // 0.19 S4：有 dataDir 才落 conversation 预算；否则保持纯内存。
@@ -401,7 +414,8 @@ export async function createAgentServiceWiring(
   const service = createAgentService({
     tenantId: options.tenantId,
     dataDir: options.dataDir,
-    runtime: innerRuntime,
+    // 0.52：端口上多一层 `contextRatio` 实时读数（实时值 → 宿主旧值），其余方法原样委托。
+    runtime: bodyRuntime,
     // 0.27（spec §5.1）：执行只经 tenant scheduler 的 executor，不再有第二套队列。
     scheduler: options.scheduler,
     ...(options.runStore !== undefined ? { runStore: options.runStore } : {}),
