@@ -480,7 +480,8 @@ export function TranscriptWindow({
       case 'notice':
         return <NoticeRow event={item.event} defaultOpen={cardsDefaultOpen} />;
       case 'prompt-context':
-        // 「模型上下文」卡：模型这一轮真正看到的系统消息（基底 system prompt + Self Card）。
+        // 环境快照卡（环境信息 · 上下文）：模型这一轮真正看到的系统消息
+        // （基底 system prompt + Self Card）。
         // 默认折叠（用户口径：默认可见但折叠），展开是两段原文；卡语言与 EnvCard 一致
         // （见 StreamItems.tsx 的 PromptContextCard 头注释）。
         return (

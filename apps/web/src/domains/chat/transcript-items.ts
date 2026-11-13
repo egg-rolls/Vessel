@@ -222,8 +222,8 @@ export interface NoticeItem extends ItemMeta {
 }
 
 /**
- * 「模型上下文」卡的数据：`prompt.system_context` 事件的解析结果（**模型真正看到的那份
- * 系统消息**）。
+ * 环境快照卡（**环境信息的一种，scope `context`**）的数据：`prompt.system_context` 事件的
+ * 解析结果（**模型真正看到的那份系统消息**）。0.52 起它不再是「另一种卡」。
  *
  * 宗旨：**让模型可以看到的内容，用户也一样应该看到**，只不过用各种方法去让其简化
  * （UX、可收缩）。基底 system prompt + Self Card 以前只在请求组装时拼进 system
@@ -266,7 +266,7 @@ export interface PromptContextData {
   previousHash?: string;
 }
 
-/** 「模型上下文」卡 item：`prompt:<事件 key>`（key 稳定锚在事件 seq 上）。 */
+/** 环境快照卡 item：`prompt:<事件 key>`（key 稳定锚在事件 seq 上）。 */
 export interface PromptContextItem extends ItemMeta, PromptContextData {
   kind: 'prompt-context';
   /**
