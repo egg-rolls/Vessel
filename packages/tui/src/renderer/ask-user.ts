@@ -38,15 +38,48 @@ export interface AskUserRequestedData {
 /** ask.user.answered 事件载荷（TUI 发布回答；answers 为空 = 用户取消） */
 export interface AskUserAnsweredData {
   requestId: string;
+  /**
+   * 本次带来答案的那些题（additive：分批后一次只带一批，不再是「整条请求的全部答案」）。
+   *
+   * 旧事件的 `answers` 就是整条请求的答案，读侧不必区分；缺 `final` 时按「整条收口」理解。
+   */
   answers: AskUserAnswer[];
   /** 发起提问的会话 ID */
   session_id?: string;
+  /**
+   * 这条请求是不是**全部题目**都答完了（additive，缺省 = true）。
+   *
+   * `false` = 只是其中几题的答案到了，其余仍挂在待批队列，稍后会来下一批。
+   * 旧事件的语义正好就是「一次答完」，所以缺省值必须是 true。
+   */
+  final?: boolean;
+  /**
+   * 仍未答的题 id（additive，只在 `final === false` 时有意义）。
+   *
+   * 工具靠它告诉模型「你还有几题没被答」，不靠它决定要不要继续等 —— 首批答案一到就返回。
+   */
+  remaining?: string[];
+  /**
+   * 这次答案属于待批页的哪一次提交（additive，`ask.respond` 的 `batch_id` 回传）。
+   *
+   * 仅用于排查：一次提交的多个 answer 事件带着同一个标记。
+   */
+  batch_id?: string;
 }
 
 // ── 类型 ──────────────────────────────────────────
 
 /** 单个问题 */
 export interface AskUserQuestion {
+  /**
+   * 题目标识（additive）：同一请求内稳定、可判定。
+   *
+   * 由 `normalizeQuestions` 按题序写成 `q1` / `q2` / …，模型不需要（也不该）自己给：
+   * 答案要能对上「这是第几题的答复」，而 `header`（≤12 字、可重复）与 `question`
+   * （正文可能很长或被改写）都不适合当键。旧事件里的题目没有这个字段，读侧一律
+   * 按「下标 + 1」推导出同一个值（{@link questionIdOfIndex}）。
+   */
+  id?: string;
   /** 短标签（≤12 字符），用于 tab 显示 */
   header: string;
   /** 完整问题 */
@@ -70,9 +103,25 @@ export interface AskUserInput {
 
 /** 单个问题的回答 */
 export interface AskUserAnswer {
+  /**
+   * 这次回答的是哪一题（additive；旧客户端 / 旧历史没有这个字段）。
+   *
+   * 服务端按它把答案挂到「题」上（未答的题不随一次提交被带走）。读侧缺省时按
+   * `question` 正文 → `header` → 位置依次回退，因此旧记录一字不改也能读。
+   */
+  question_id?: string;
   header: string;
   question: string;
+  /** 给模型读的渲染结果（多选用分隔符拼好）；结构化选项见 `selected` */
   answer: string;
+  /**
+   * 多选的结构化选中项（additive）。
+   *
+   * `answer` 是把选项拼成的一段文本，分不出「选了三项」还是「一项名叫 A, B」；
+   * 有了它，答复卡能渲染成 chips、也能判定「选了几项」。旧记录只有 `answer`，
+   * 读侧不回填（不猜分隔符）。
+   */
+  selected?: string[];
 }
 
 // ── 校验与格式化 ──────────────────────────────────
@@ -106,6 +155,8 @@ function normalizeQuestions(input: AskUserInput): AskUserQuestion[] | string {
   }
 
   return input.questions.map((q, i) => ({
+    // 题 id 一律按题序重写：模型给的（如果有）不可信，重复 / 乱序会让答案挂错题。
+    id: questionIdOfIndex(i),
     header: q.header?.trim()
       ? q.header.trim().slice(0, 12)
       : t('ask.questionHeader', { number: i + 1 }),
@@ -115,9 +166,54 @@ function normalizeQuestions(input: AskUserInput): AskUserQuestion[] | string {
   }));
 }
 
-/** 把回答格式化为给 LLM 的多行文本 */
-function formatAnswers(answers: AskUserAnswer[]): string {
-  return answers.map((a, i) => `${i + 1}. ${a.header}: ${a.answer}`).join('\n');
+/**
+ * 第 `index` 题的 id（0 基下标 → `q1` / `q2` / …）。
+ *
+ * 唯一一处定义「题 id 怎么来」：写侧（`normalizeQuestions`）与所有读侧（服务端从
+ * `input` 推导、Web 从 `questions[]` 推导）都必须算成同一个值，否则「未答的题」与
+ * 「已答的题」会对不上。
+ */
+export function questionIdOfIndex(index: number): string {
+  return `q${index + 1}`;
+}
+
+/**
+ * 把一批回答格式化为给 LLM 的多行文本。
+ *
+ * 行号按**题序**编，不按「本次提交的第几条」编：分批之后一次可能只到第 3 题，
+ * 按提交序编会让模型把「第 3 题」读成「第 1 题」。题序从 `question_id`（`q3`）取，
+ * 旧答案没有该字段时退回「本批第几条」（旧行为一字不差）。
+ */
+function formatAnswers(
+  answers: AskUserAnswer[],
+  options?: { remaining?: readonly string[] },
+): string {
+  const lines = answers.map((answer, index) => {
+    const position = questionIndexOf(answer.question_id) ?? index + 1;
+    const label = answer.header.trim() === '' ? `question ${position}` : answer.header;
+    return `${position}. ${label}: ${answer.answer}`;
+  });
+  const remaining = options?.remaining ?? [];
+  if (remaining.length > 0) {
+    // 未答的题必须显式说出来：模型拿到 1/3 的答案时最容易误以为「我问的都答了」，
+    // 或者以为这批提问已经作废而再问一遍。
+    const total = answers.length + remaining.length;
+    lines.push(
+      `(${remaining.length} of ${total} questions still unanswered: ${remaining.join(', ')}. ` +
+        'They stay in the human pending queue and the rest will arrive later as a separate ' +
+        'message — do not wait for them, do not ask those questions again.)',
+    );
+  }
+  return lines.join('\n');
+}
+
+/** `q3` → 3；不是这个形状（旧答案 / 手写值）→ undefined。 */
+function questionIndexOf(questionId: string | undefined): number | undefined {
+  if (questionId === undefined) return undefined;
+  const match = /^q(\d+)$/.exec(questionId);
+  if (match === null) return undefined;
+  const parsed = Number(match[1]);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 /**
@@ -174,6 +270,7 @@ function deliverAsync(
   return [
     `ask accepted (async): ${count} delivered to the human for approval (request ${requestId}).`,
     'No answer yet — do not wait for one. The answer will arrive as a new user message and start a new run.',
+    'The questions are answered independently: each submit of the human arrives as one message, and it may cover only some of them.',
   ].join('\n');
 }
 
@@ -195,6 +292,8 @@ async function promptFromEvents(
   const requestId = publishAskRequest(events, runId, questions, sessionId);
 
   try {
+    // 只等**一条**事件：分批提交时首批答案到就返回，不等其余题（用户裁决）。
+    // 未答的题留在人类待批队列，后续批次以一条 inbox 消息补投，不卡住本轮。
     const data = (await events.waitFor('ask.user.answered', {
       requestId,
       ...(wait.timeout !== undefined ? { timeout: wait.timeout } : {}),
@@ -204,7 +303,7 @@ async function promptFromEvents(
     if (answers.length === 0) {
       return 'Error: ask was cancelled or received no answers.';
     }
-    return formatAnswers(answers);
+    return formatAnswers(answers, { remaining: data?.remaining ?? [] });
   } catch (error) {
     // run 被取消 / abort：明确说明，不要伪装成超时（ADR-079 语义）。
     if (wait.signal?.aborted === true || (error instanceof Error && error.name === 'AbortError')) {
@@ -227,6 +326,10 @@ export interface CreateAskUserToolOptions {
  * handler 通过事件流交互：发布 `ask.user.requested` → 等 `ask.user.answered` →
  * 返回回答。默认一直等待，由应答 / abort（run 取消）/ run 终态收口。
  *
+ * **首批即返回**：一次提问里的每道题都是独立问题，人可以一次答完，也可以分批答；
+ * 第一条 `ask.user.answered` 到达就带着「这次答了哪几题 + 还剩哪几题」返回，不阻塞
+ * 等其余题（未答的留在人类待批队列，后续批次以一条 inbox 消息补投）。
+ *
  * 描述里那条硬口径（0.52）只改文案、不改机制：ask 仍是能阻塞等答案的工具，但**默认通道
  * 是向父 agent 汇报（`agent send`）**——只有「只有人能决定 / 缺信息完全卡住」才轮到人。
  */
@@ -247,6 +350,12 @@ Asking the human costs a person's attention; the parent channel costs nothing.
 When you do ask, ask everything you need in one call — put multiple questions in the same
 request instead of a multi-turn back-and-forth. One question is cheaper than redoing the
 work.
+
+Each question in that request is an independent question: the human may answer some of
+them now and the rest later, or never. You get the answers as soon as the first one
+arrives — unanswered questions stay in the human's pending queue (the answer text tells
+you which ones), and the remaining answers come back later as a separate message. Do not
+wait for all of them and do not ask those questions again.
 
 If nothing blocks you, keep working and let the human answer when they can; if the
 answer decides the next step, wait for it.`,
@@ -283,12 +392,12 @@ answer decides the next step, wait for it.`,
                 maxItems: 4,
                 items: { type: 'string' },
                 description:
-                  'Give 2-4 options to ask a multiple-choice question; omit them to ask for free-form text. An "input your own answer" option is always appended automatically.',
+                  'Give 2-4 options to ask a multiple-choice question; omit them to ask for free-form text. An "input your own answer" option is always appended automatically. Set "multi_select": true when more than one of these options may be true at the same time (for example "which of these apply?").',
               },
               multi_select: {
                 type: 'boolean',
                 description:
-                  'Allow selecting multiple options. Default: false. Only applies when options are given.',
+                  'Allow the human to pick several options instead of one (default: false). Only applies when options are given. Prefer true whenever the options are not mutually exclusive — asking "which ones" with multi_select false silently forces a single answer.',
                 default: false,
               },
             },
