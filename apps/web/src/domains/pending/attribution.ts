@@ -6,8 +6,8 @@
  * | 字段 | 是什么 | 谁写 |
  * |---|---|---|
  * | `sessionId` | 发起请求的那个 **run 所在会话**（成员 bridge 里是成员自己的会话） | 生产侧 |
- * | `parentSessionId` | 父**会话**（0.51 起才是真会话 id；旧记录可能是父 agent id） | 成员 bridge |
- * | `parentAgentId` | 父 **agent** id（0.51 新增） | 成员 bridge |
+ * | `parentAgentId` | 父 **agent** id —— **唯一**归属维度 | 成员 bridge |
+ * | `parentSessionId` | legacy：只读。0.19 起装的是父 agent id，0.51 起装过真会话 id | 旧事件 / 旧快照 |
  *
  * 两条硬约束（用户裁定，别在这里「优化」掉）：
  *
@@ -15,12 +15,11 @@
  *    `parent*` 一概不参与（见 `pendingOwnedBySession`）。contractor 的 ask 属于待批页，
  *    不允许在父 agent 的会话页里冒出来；归属字段修正的是「算谁的 / 跳到哪」，
  *    不是「在哪儿渲染」。
- * 2. **历史脏数据靠 roster 上溯兑底，不做数据迁移**：旧记录里 `parentSessionId`
- *    装的是父 agent id。能靠 roster 认出「这是个 agent id」时，沿 `parent_id` 链上溯到
- *    该 agent 的当前 primary body，得到真正的归属会话。
- *
- * 上溯的前提是 0.28 的不变量「一个 agent 恰一具 live body」，所以「agent → 它的会话」
- * 是单值的（roster 缺 `session_id` 时继续往上走一级，见 `ascendToSession`）。
+ * 2. **父会话不是事实，是算出来的**：生产侧只发父 agent id，父会话由本模块沿 roster
+ *    的 `parent_id` 链上溯到那具 primary body（0.28 的不变量让「agent → 它的会话」
+ *    是单值的）。历史记录里的 `parentSessionId`（装的是 agent id）作为**兜底输入**：
+ *    能靠 roster 认出「这是个 agent id」就照样上溯，认不出才当会话 id 原样用。
+ *    不迁移数据，读侧向后兼容即可。
  *
  * 本模块**不 import 任何东西**（纯结构类型）：它同时被会话页、待批页、顶部条与
  * `src/ask-attribution.test.ts` 消费，多一条依赖就多一处跑不起来的可能。

@@ -57,13 +57,19 @@ export interface StoredInteraction {
   agent_id?: string;
   team_id?: string;
   session_id?: string;
-  /** 成员 bridge 请求的父会话（additive；旧文件缺失时继续可读）。 */
+  /**
+   * legacy：只读、不再生产。
+   *
+   * 0.19 起的旧文件里这个键可能装的是**父 agent id**（脏值）；0.51 一度改成真会话 id，
+   * 随后裁定 ask 链路不再带父会话（归属只需 `parent_agent_id`）。这个声明只剩一个理由：
+   * 读到旧快照时把那一位原样认下来、再落盘时不要假装它不存在 —— 新记录**不会**写它。
+   */
   parent_session_id?: string;
   /**
-   * 成员 bridge 请求的父 **agent** id（0.51 additive）。
+   * 成员 bridge 请求的父 **agent** id（0.51 additive；ask 链路的唯一归属维度）。
    *
-   * 与 `parent_session_id` 是两个键：旧文件里 `parent_session_id` 可能装的是 agent id
-   * （0.19 的混用），新记录把「父 agent」写在这里，读侧才好甄别旧脏数据。
+   * 与 legacy 的 `parent_session_id` 是两个键：后者可能装的是 agent id（0.19 的混用），
+   * 读侧只能猜；新记录把「父 agent」写在这里，读侧不必再猜。
    */
   parent_agent_id?: string;
   tool_call_id?: string;
@@ -168,6 +174,7 @@ function parseRecord(value: unknown): StoredInteraction | null {
   const agentId = nonEmptyString(agent_id);
   const teamId = nonEmptyString(team_id);
   const sessionId = nonEmptyString(session_id);
+  // legacy：只读、不再生产 —— 旧快照里的那一位原样保留，重写文件时不丢。
   const parentSessionId = nonEmptyString(parent_session_id);
   const parentAgentId = nonEmptyString(parent_agent_id);
   const toolCallId = nonEmptyString(tool_call_id);
