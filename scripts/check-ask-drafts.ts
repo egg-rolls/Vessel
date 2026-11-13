@@ -464,11 +464,7 @@ for (const wiring of WIRING) {
 
 // i18n 两侧都要有：缺 key 时 t() 静默回退成裸键，界面直接露出 chat.askAnswered.xxx。
 // （原来的 label / more / less 是「底部区块」那套的标题 + 展开/收起，区块删了它们也删了。）
-const I18N_KEYS = [
-  'chat.askAnswered.title',
-  'chat.askAnswered.aria',
-  'chat.askAnswered.source',
-];
+const I18N_KEYS = ['chat.askAnswered.title', 'chat.askAnswered.aria', 'chat.askAnswered.source'];
 
 for (const file of ['apps/web/src/i18n/messages/zh-CN.ts', 'apps/web/src/i18n/messages/en.ts']) {
   const text = await source(file);

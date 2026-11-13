@@ -1858,8 +1858,7 @@ const FIXTURES: readonly Fixture[] = [
       const once = build();
       return (
         // 消息先占位、卡随其后（同一瞬间的定序），并列的两张按映射层的稳定顺序。
-        once === 'msg:0,ask-answered:req-b,ask-answered:req-a' &&
-        once === build()
+        once === 'msg:0,ask-answered:req-b,ask-answered:req-a' && once === build()
       );
     },
   },
@@ -1977,10 +1976,7 @@ const FIXTURES: readonly Fixture[] = [
       const strip = pendingStripView(inboxEntries);
       const stripAgain = pendingStripView(inboxEntries);
       return (
-        without.join(',') ===
-          with_
-            .filter((key) => !key.startsWith('ask-answered:'))
-            .join(',') &&
+        without.join(',') === with_.filter((key) => !key.startsWith('ask-answered:')).join(',') &&
         with_.length === without.length + 2 &&
         strip.total === stripAgain.total &&
         strip.total === 2 &&
