@@ -251,7 +251,7 @@ pricing:
 ### 2.10 写意图锁、数据根与交互记录（0.15 / 0.49，ADR-086）
 
 - **单公司 data-dir 写意图锁**（`src/data-lock.ts`）：`exclusive` 为 `<dataDir>/.lock`，`shared` 为 `<dataDir>/.members/<pid>-<nonce>.json`；锁文件 `{ pid, started_at, host }`。冲突返回 `data_locked`。stale 规则：死 pid、不可解析超过 5s、跨主机超过 24h 自动回收；回收持 `<lock>.reclaim` 守卫（守卫超过 10s 可清理）。
-- **谁取锁**：只有写意图命令（`migrate --apply`、`trace prune`、`eval`、bootstrap 的 trace prune / session 删除）获取。`--run` / REPL / gateway 启动**不取**写者锁；同一 dataDir 的第二进程仍可启动（0.49 R7=B 已知限制）。
+- **谁取锁**：只有写意图命令（`migrate --apply`、`trace prune`、`prune --yes`、`eval`、bootstrap 的 trace prune / session 删除）获取。`--run` / REPL / gateway 启动**不取**写者锁；同一 dataDir 的第二进程仍可启动（0.49 R7=B 已知限制）。
 - **session / run 写锁**：`<dataDir>/.locks/sessions/<sha16(session_id)>.lock` 与 `.locks/runs/<sha16(run_id)>.lock`（`0600`，内容含 `pid` / `started_at` / `host`）。同一 session 的第二个写者得到 `conflict`，消息前缀 `session_locked:`；run resume 冲突前缀 `run_locked:`。同进程重复获取用引用计数消化。
 - **根布局**：数据直接位于 `<dataDir>/sessions/`、`runs/`、`events/`、`agents/`、`conversations/`、`teams/`；没有 `tenants/<id>` 层。非空 `<dataDir>/tenants/**` 或 `.t2-migrating-*` → 启动 fail-fast `non_root_layout`（错误含路径 / 条目数 / 字节数；不移动、不删除数据）。
 - **持久化单 id**：`<dataDir>/tenant.json` 的 `tenant_id` 是唯一持久来源（缺省 `default`，匹配 `^[a-z0-9][a-z0-9_-]{0,63}$`）；fresh dataDir 不落盘。损坏 / 非法 id → fail-fast，不静默回退。
@@ -481,15 +481,22 @@ vessel prune [--older-than <dur>] [--dry-run] [--json] [--yes]
 - `vessel --data-dir <path> ...`（全局）覆盖 `data_dir`；同样适用于一次性命令。
 - `vessel doctor --deep`：在原有本地检查之外，只读查询本地 gateway 的 `health.get` / `mcp.list`，报告 attach / runtime / MCP 实际状态；不启动 gateway、不改配置。没有本地 gateway 时记为 info，不算失败。
 - `vessel logs tail`：只读 `<dataDir>/logs/gateway.log`（default）与 `gateway-<instance>.log`（命名实例），默认 50 行，`--lines` 上限 10,000；不跟随、不轮转，日志不存在时退出 1。
-- `vessel prune`：按类别清理 data 目录，三类且互斥 —— `trace`（`events/*.jsonl`，按
-  `trace.retention_days` / `max_runs` / `max_bytes` 的既有留存策略）、`runs`（`status` 已是
-  终态 `completed|failed|cancelled` 且 `updated_at` 早于阈值的 run 记录）、`sessions`
-  （`updated_at` 早于阈值、且没有活着写者 —— 会话写锁 / 会话租约 live、或还有 `running` /
-  `interrupted` 可 resume 的 run —— 的会话，连带删掉它的会话壳、`sessions/<id>/` 事件日志
-  与 run 记录）。**缺省 dry-run**，只报告条数与体积，一条都不删；必须 `--yes` 才真删，且真删
-  先取 `data-dir` 写意图锁（gateway / node 在跑时直接拒绝，不重试、不降级、不做部分删除）。
-  `--older-than` 取 `<n><ms|s|m|h|d>`（裸数字按天），缺省 `30d`（与 trace 缺省 30 天同口径）。
-  `--archived` 这一维本版不做：sessions 目前没有归档标记，定义不出「该删哪些」。
+- `vessel prune`：判据是**状态**，不是时间。目标集合 = 已归档 team（`team.json` 的
+  `archived_at` 非空）下的所有 agent ∪ 已停用（快照 `state == 'closed'`）agent。对每个目标 agent
+  删它的全部会话（级联：会话壳、`sessions/<id>/` 事件目录、该会话的 run 记录与 `<run>.jsonl`、
+  历史 `<sessionId>.jsonl`）、`inbox/<id>.json` 与快照里那条记录；归档 team 在它的 agent
+  **全部清完**后 `teams/<tenant>/<team_id>/` 整个目录一并删掉（不删会留下空壳）。
+  **没有归档、没有停用的一律不删** —— 它们的会话、runs、记录都不动。
+  输出按五类汇总（team / agent / session / run / trace），`--json` 给同一份结构。
+  **缺省 dry-run**：只报告条数与体积，一条都不删；必须 `--yes` 才真删，且真删先取 `data-dir`
+  写意图锁（gateway / node 在跑时直接拒绝，不重试、不降级、不做部分删除）。dry-run 与真删读
+  同一份计划、按同一顺序执行，因此预算的数字就是会删的数字。
+  `--older-than <n><ms|s|m|h|d>`（裸数字按天）是**可选叠加**：不传就完全不看时间；传了只清
+  「归档 / 停用时刻早于阈值」的对象（不是会话最后活动时间），查不到归档 / 停用时刻的默认不清。
+  会话仍有活写者（写锁 / 租约 live 或不可解析）或还有 `running` / `interrupted` 可 resume 的 run
+  时，该会话不删，连带着它的 agent 记录也留（记录与数据不拆散）。
+  `trace` 一类是容量策略（`trace.retention_days` / `max_runs` / `max_bytes`），不看状态，与状态
+  判据正交；随会话级联删掉的 trace 文件单独记在 `cascade_files`。
 
 - `config path`：打印用户配置、项目配置与 `data_dir` 的实际路径和是否存在。
 - `config init`：把内嵌模板写到用户配置；默认不覆盖已有文件，`--force` 才覆盖。

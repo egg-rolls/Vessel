@@ -481,24 +481,35 @@ export const zhCN = {
   'dev.reset.notEmpty': '清空后 {path} 仍非空（剩余 {count} 项）。',
   'dev.reset.removed': '已清空 {path}（删除 {count} 个顶层条目，{bytes}）。',
 
-  // ── prune（0.51）──
+  // ── prune（0.51；判据是状态，不是时间）──
   'help.cmd.prune':
-    '数据清理：trace / 终态 runs / 老且非活跃 sessions（缺省 dry-run，需 --yes 才删）',
-  'flag.olderThan': '只清理更早的条目（如 30d / 12h；裸数字按天，缺省 30d）',
+    '数据清理：已归档 team / 已停用 agent 及其会话与记录（缺省 dry-run，需 --yes 才删）',
+  'flag.olderThan':
+    '可选叠加：只清归档 / 停用时刻早于该值的对象（如 30d / 12h；裸数字按天；不传就不看时间）',
   'prune.head.dryRun': 'dry-run：未删除任何内容（确认后加 --yes 重试）',
   'prune.head.applied': '已清理',
-  'prune.scope': '数据目录：{path} · tenant：{tenant} · 阈值：早于 {age}',
+  'prune.scope': '数据目录：{path} · tenant：{tenant} · 阈值：归档 / 停用早于 {age}',
+  'prune.scope.all': '数据目录：{path} · tenant：{tenant} · 判据：状态（未叠加时间阈值）',
+  'prune.bucket.teams': '  teams:    {count} 个归档 team 记录，{bytes}',
+  'prune.bucket.agents': '  agents:   {count} 个 agent 记录，{bytes}',
+  'prune.bucket.sessions': '  sessions: {count} 个会话，{bytes}',
+  'prune.bucket.runs': '  runs:     {count} 条 run 记录，{bytes}',
   'prune.bucket.trace': '  trace:    {count} 个文件，{bytes}',
-  'prune.bucket.runs': '  runs:     {count} 条终态记录，{bytes}',
-  'prune.bucket.sessions':
-    '  sessions: {count} 个会话，{bytes}（级联 {runs} 条 run、{events} 个会话 trace）',
-  'prune.skipped.active': '  保留：{count} 个会话仍活跃（锁 / 租约 / 可 resume 的 run）',
-  'prune.skipped.refused': '  拒绝：{count} 个会话被删除守卫挡下（活跃 run 或数据不可读）',
+  'prune.skipped.active': '  保留：{count} 个会话仍有活写者 / 可 resume 的 run',
+  'prune.skipped.refused': '  拒绝：{count} 个会话被删除守卫挡下（状态冲突或数据不可读）',
+  'prune.skipped.keptAgents': '  保留：{count} 个目标 agent 没清干净（记录与数据一起留）',
+  'prune.skipped.keptTeams': '  保留：{count} 个归档 team 还有 agent 没清掉',
+  'prune.skipped.unknownTime':
+    '  保留：{count} 个对象查不到归档 / 停用时刻（--older-than 下宁可留）',
   'prune.totals': 'total: {count} 项，{bytes}',
   'prune.note.sessionsBackendNotReadonly':
-    '提示：dry-run 跳过 sessions（session.backend=sqlite 无法只读枚举）；加 --yes 可真删。',
+    '提示：dry-run 枚举不了会话（session.backend=sqlite 无法只读枚举），agent 记录这次也不删；加 --yes 才看得全。',
   'prune.note.durableDisabled':
     '提示：durable run 已关闭（durable.enabled=false），没有 run 记录可清。',
+  'prune.note.agentsSnapshotUnreadable':
+    '拒绝：agent 快照读不出来（损坏 / 格式不符），本次一个 agent / team 记录都没删。',
+  'prune.note.agentsSnapshotWriteFailed':
+    '提示：agent 快照写失败，记录保留（名下会话已清）；修好写权限后重跑即可收尾。',
   'prune.locked':
     '未删除任何内容；请先停掉 gateway / node（`vessel gateway stop`），再加 --yes 重试。',
 
