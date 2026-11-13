@@ -2111,6 +2111,11 @@ export class AgentServiceImpl implements AgentService {
     // 旧队列（含 hold）转为可注入；pendingNotices 不得串到新 body。
     // D2/I4：只放**这具 body** 的持有，多 live body 时不得顺手放出别人的在途队列。
     this.inbox?.releaseHeldFor(record.id, entry.bindingId);
+    // 刚被放出来的那批，原本是「这具 body 的下一轮输入」——它们自己的 queued run 刚刚被
+    // 取消（上面那一圈 cancel），此刻没有 run 会去消费它们。记一次 dirty，让这台 agent
+    // 下一次跑完一轮（新 body / 别的 body）时按队头把它们投回去；不记的话它们只能等
+    // 模型自己 read，正是 0.51 之前「N 条堆在一起」的样子。
+    this.noticeDirty.add(record.id);
     this.runtime.clearPendingNotices?.(record.id);
     // `retireBinding` 自己记 `body_history`；这里不再重复 push，否则同一 session
     // 会在 DTO 的 body_history 里出现两次。
