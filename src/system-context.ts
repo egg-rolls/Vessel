@@ -13,8 +13,11 @@
  * ## 取哪一个事件的哪几个字段
  * 只认 `prompt.system_context`（载荷形状见 core 的 `PromptSystemContextPayload`）：
  * `hash` / `system_prompt` / `self_card` / `model` / `message_count` / `tools_count` /
- * `estimated_tokens` / `context_max` / `run_id` / `at`。**只返回尾窗内最近一条**：
+ * `estimated_tokens` / `context_max` / `run_id` / `at`，以及 0.52 的增量索引
+ * `changed` / `previous_hash`。**只返回尾窗内最近一条**：
  *
+ * - 增量索引原样透传，**缺省 = 不知道**（该会话首份快照 / 0.52 之前落盘的旧日志）：
+ *   客户端据此退回全量快照卡，而不是渲成「0 项变更」—— 那是编造一个不存在的结论；
  * - 粒度与失败卡（`sessions.get` 的最近一次 run 快照）对齐 —— 客户端拿到的就是
  *   「这个会话最近一轮模型看到了什么系统消息」；
  * - 代价（**已知限制，不是 bug**）：更早轮次的卡在刷新 / 进程重启之后不会回来。要恢复
