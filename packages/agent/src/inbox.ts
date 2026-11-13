@@ -56,21 +56,18 @@
  * **`refs`（附件引用，additive）**：只有路径与元信息，随 `input` 投递一并落盘，恢复重投
  * 时带上，附件不丢。旧文件缺该字段照常加载（按「无引用」降级）。
  *
-<<<<<<< HEAD
  * **`quiet` / `conversation_id`（0.51 队头直投，additive）**：idle 直投要从队列里把**队头
  * 那条的正文**原样当下一轮 run input 送，所以队列本身得记住两件此前只存在于内存投递侧的
  * 事实 —— 「这条是不是留档（quiet，永不当 run input）」与「它属于哪个 conversation」。
  * 不记的话，直投要么把 quiet 自述当成用户输入再执行一遍，要么丢掉会话归属（预算 /
  * 事件回放对不上）。两者都只在**首次 append** 时写：`quiet` 由该次投递模式派生，
  * `conversation_id` 由调用方传；后续升级成 input 投递不改写它们（模式不属于消息本体）。
-=======
  * **`from_name`（发送者显示名，additive）**：入队那一刻发送方的名字是已知的
  * （`AgentMessage.from_name`，由 `AgentService.admit` 从 registry 取），存下来是因为
  * **读者在渲染时需要「谁」**：待处理条带的身份行只有 `from`（地址）时只能显示一串
  * UUID，读不出来。它只用于展示，不参与任何投递 / 权限 / 归属判定 —— 所以缺字段照常
  * 加载（旧条目按「没有名字」退化），也不回填、不做迁移：没有名字是**可接受的状态**，
  * 不是需要修复的损坏。
->>>>>>> 0.51-pending-sender
  *
  * @module @vessel-agent/agent
  */
@@ -141,7 +138,6 @@ export interface StoredInboxMessage {
   /** 附件引用：只有路径 + 元信息，恢复重投时原样带回（不丢附件）。 */
   refs?: MessageRef[];
   /**
-<<<<<<< HEAD
    * true：这条是 **quiet 投递**（只留档，永不当 run input）。0.51 起随条目落盘，因为
    * idle 直投要按队列取正文 —— 没有这个位，模型 `insert` 的自述 / 投递失败的留档
    * 会被当成用户输入再执行一遍（quiet 的语义正是「不要执行」）。
@@ -152,14 +148,13 @@ export interface StoredInboxMessage {
    * 都会新开一个 conversation（预算记账与事件回放对不上）。
    */
   conversation_id?: string;
-=======
+  /**
    * 发送者显示名（additive，0.51）：入队时已知的 `AgentMessage.from_name`。
    *
    * 只给展示用（条带身份行），不参与投递判定。缺省 = 老条目 / 发送方没有本机成员名
    * （人类 / 系统 / 联邦地址）⇒ 渲染侧退化成短 id。
    */
   from_name?: string;
->>>>>>> 0.51-pending-sender
 }
 
 export interface AgentInboxEntryInput {
@@ -171,10 +166,8 @@ export interface AgentInboxEntryInput {
   session_id?: string;
   /** 附件引用（可缺省）；写入前按 `normalizeRefs` 再归一一次。 */
   refs?: MessageRef[];
-<<<<<<< HEAD
   /** 会话归属（conversation_id）；idle 直投据此把这条送进它原本的会话。 */
   conversation_id?: string;
-=======
   /**
    * 发送者显示名（可缺省，additive 0.51）：入队时发送方已知的 `from_name`。
    *
@@ -182,7 +175,6 @@ export interface AgentInboxEntryInput {
    * 没有名字（人类 / 系统 / 联邦地址 / 老调用方），条带渲染时退化成短 id。
    */
   from_name?: string;
->>>>>>> 0.51-pending-sender
 }
 
 export interface AgentInboxListEntry {
@@ -484,16 +476,13 @@ function isStoredInboxMessage(value: unknown): value is StoredInboxMessage {
   }
   // additive：缺省合法，存在则必须是 string（与其它字段同口径：类型不符按损坏处理）。
   if (value.session_id !== undefined && typeof value.session_id !== 'string') return false;
-<<<<<<< HEAD
   if (value.conversation_id !== undefined && typeof value.conversation_id !== 'string') {
     return false;
   }
   // `quiet` 只有 true 一种写值（缺省 = 不是留档条目）；写成 false 属于手改跑偏。
   if (value.quiet !== undefined && value.quiet !== true) return false;
-=======
   // 显示名同理 additive：老文件没有它照常加载，有它就必须是字符串（不猜类型）。
   if (value.from_name !== undefined && typeof value.from_name !== 'string') return false;
->>>>>>> 0.51-pending-sender
   // refs 只校验「是数组」，条目形状在 cloneMessage 里过 `normalizeRefs`（逐条丢弃坏条目，
   // 不因为一条坏引用把整个收件箱判成损坏）。
   if (value.refs !== undefined && !Array.isArray(value.refs)) return false;
@@ -525,12 +514,9 @@ function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
       ? { consumed_by_session: message.consumed_by_session }
       : {}),
     ...(message.session_id !== undefined ? { session_id: message.session_id } : {}),
-<<<<<<< HEAD
     ...(message.conversation_id !== undefined ? { conversation_id: message.conversation_id } : {}),
     ...(message.quiet === true ? { quiet: true as const } : {}),
-=======
     ...(fromName !== undefined ? { from_name: fromName } : {}),
->>>>>>> 0.51-pending-sender
     ...(refs.length > 0 ? { refs } : {}),
   };
 }
@@ -611,16 +597,13 @@ export class AgentInboxStore implements AgentInboxPort {
       text: message.text,
       status: 'unread',
       ...(sessionId !== undefined ? { session_id: sessionId } : {}),
-<<<<<<< HEAD
       ...(message.conversation_id !== undefined
         ? { conversation_id: message.conversation_id }
         : {}),
       // quiet 由**本次投递模式**派生（不另开参数）：它落盘后只有一个含义
       // 「这条永不作为 run input」，idle 直投据此跳过它。
       ...(delivery === 'quiet' ? { quiet: true as const } : {}),
-=======
       ...(fromName !== undefined ? { from_name: fromName } : {}),
->>>>>>> 0.51-pending-sender
       ...(refs.length > 0 ? { refs } : {}),
     });
     this.prune(state);
