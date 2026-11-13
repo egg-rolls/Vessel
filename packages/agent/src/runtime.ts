@@ -836,8 +836,10 @@ function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
       'starts at once and does not inherit this conversation, so it must carry everything ' +
       'the next body needs to know), ' +
       'post (append to your team log only; nobody is notified), ' +
-      'send (dispatch a message to a member; interrupt:true for urgent, notify:true to ' +
-      'append to the target inbox plus a summary wake), ' +
+      'send (dispatch a message to a member; this is the default channel for reporting to ' +
+      'your parent — progress, blockers, a decision you made, a question you cannot settle ' +
+      'alone; interrupt:true for urgent, notify:true to append to the target inbox plus a ' +
+      'summary wake), ' +
       'list (list the caller-visible roster), ' +
       'read (read the last messages of a member session; read-only, role + truncated text).',
     inputSchema: {
