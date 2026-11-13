@@ -78,7 +78,7 @@ interface ToolDefinition {
 
 **同批应答合并成一次 run**：待批页一次「回复」是一次人类动作 —— 那批 `ask.respond` 带同一个 `batch_id`，装配层按 `(agent, session, batch_id)` 做 250ms 短窗口合并，整批答案成为**一条** user 消息（前缀里逗号分隔多个 requestId）并只起**一次** run。没有 `batch_id` 的应答（单条应答 / `vessel attention respond` / policy）保持一次一条。答案文本每题一行 `N. header（原问题摘要）: 答案`（问题截断 120 字符），所以隔几小时回来也知道回的是哪一问。
 
-**逐题可勾选，但 settle 是整条请求**：待批页允许只回答同一请求里的某几题（`ask.respond` 的 `answers` 数组**没有长度校验**，只带勾选且已作答的那些）；但一条 ask **一经应答即整体落定**（`settleAnswer`：`pending → answered`），未勾选的题随该请求一起收口，不能事后再补答 —— 前端因此必须在提交前把这件事写明白（`pending.submit.note`），不要让人以为「剩下几题待会儿还能答」。
+**逐题可勾选、可分批补答（0.52）**：待批页允许只回答同一请求里的某几题（`ask.respond` 的 `answers` 数组**没有长度校验**，只带勾选且已作答的那些）。**没有「一经应答即整体落定」**：`settleAnswer` 只在**所有题都有答案**时才把 `pending → answered`，否则记录仍是 `pending`、只累加 `answered_questions`，剩下的题下次还能补答。题号是去重的唯一凭据，服务端**先归一再去重**（`planAskAnswers`）：`question_id` → 正文匹配 → header → 该答案在数组里的题序位置；归一之后已答过的题一律进 `skipped`（不覆盖、不重复投递），归不到任何题的行直接丢弃 —— 记录里不会存在没有题号的答案；分批投递只带本批新增（`batch_answers`），否则第二批会把第一批重发一遍。前端因此必须：已答的题标「已回答」并锁住输入（`pending.item.answered`）；提交载荷只收**未落定**的行、每条必带 `question_id`（`ask-submit-plan` 一处判定，不带题号的旧构造器已删除）；提交成功后按服务端逐题进度刷新，重复点击走幂等（同一批重复提交 = `skipped` + `duplicate`，条数不变）。
 
 回答入口：Web 待批页 / `vessel attention respond`（卡片带「异步」标记）。TUI 的答辩弹窗沿用既有规则——run 收口即关闭，所以 async 请求在 TUI 里答不了（用待批页）。
 
