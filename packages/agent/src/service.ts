@@ -333,6 +333,16 @@ interface ExecutionUnitEntry {
   createdAt: number;
   lastActiveAt: number;
   retired: boolean;
+  /**
+   * 「退役发生在本轮 run 内」的现场记录（run id + 退役原因）。
+   *
+   * 为什么必须记在这里：收口处只有一个 `retired` 布尔，分不出「自己交棒的那一轮」
+   * （合法收尾，该正常记账）与「真迟到的旧轮」（该 epoch fencing）。退役那一刻
+   * `entry.active` 就是「被退役时正在跑的那一轮」，只有在那里才拿得到这个 id ——
+   * 到收口时它已经被清空，再判就只能靠猜（0.51 报告 §1 的事故正是被混判的一轮）。
+   * 判据本身在 `classifyRetiredTurn`。
+   */
+  retirement?: { runId: string; reason: string };
   runtimeMember: MemberExecutionMember;
   /** 预算 block 留在 mailbox 的消息；正常消息 submit 后即移出 */
   pending: AgentMessage[];
@@ -358,6 +368,38 @@ interface ExecutionUnitEntry {
 /** 事件 extra 允许预算字段（开放字符串事件，不在 AgentEvent 里加常量） */
 type AgentEventExtra = Omit<Partial<AgentEvent>, 'type' | 'agent_id' | 'session_id' | 'ts'> &
   Record<string, unknown>;
+
+/**
+ * 被退役的 body 交出来的这一轮，属于哪一类。
+ *
+ * - `handoff`：**自己交棒的那一轮**——模型在本轮 run 里调 rotate，工具内的退役把
+ *   自己这具 body 标成 retired，然后这一轮照常跑完（`tool.ts` 明确要求它收尾）。
+ *   它是合法的收尾，按正常轮记账（ADR-092 非目标写的就是「旧 Body 跑完当前轮再退役」）。
+ * - `late`：**真迟到的旧轮**——退役来自外部（TTL 回收 / close / delete / RPC rotate），
+ *   这一轮的产出来得太晚，继续按 epoch fencing 丢弃（ADR-092 第 8 条）。
+ */
+export type RetiredTurnKind = 'handoff' | 'late';
+
+/**
+ * 收口判据：这一轮是「自己交棒的那一轮」还是「真迟到的旧轮」。
+ *
+ * 三个条件缺一不可 —— **故意不写成「`retired` 就交棒」**：那会把所有被 fence 的轮
+ * 一并算成正常收尾，迟到正文又会被记进 agent 状态、又不会留下任何解释。
+ *
+ * 1. `retired`：没被退役的体不谈这两类（走正常收口）；
+ * 2. `retirement.runId === runId`：退役发生在**这一轮**的 run 内。空闲时被别人退役、
+ *    然后才起的那一轮不是交棒，是迟到；
+ * 3. `retirement.reason === 'rotation'`：退役原因是 rotate。TTL 回收 / close / delete
+ *    即使真的赶在 run 内退役，那一轮也该按迟到处理（它的产出对谁都不算交接）。
+ */
+export function classifyRetiredTurn(
+  entry: { retired: boolean; retirement?: { runId: string; reason: string } },
+  runId: string,
+): RetiredTurnKind {
+  const retirement = entry.retirement;
+  if (!entry.retired || retirement === undefined) return 'late';
+  return retirement.runId === runId && retirement.reason === 'rotation' ? 'handoff' : 'late';
+}
 
 /** 预算拒绝结果的窄类型 */
 type BudgetBlockedCheck = Extract<BudgetCheckResult, { ok: false }>;
@@ -2092,6 +2134,12 @@ export class AgentServiceImpl implements AgentService {
     // 0.32：先关旧 body 的 inbox hook，再放 hold —— 顺序反了旧 body 仍可能消费。
     this.runtime.disableInbox?.(entry.bindingId);
     const wasPrimary = entry.primary || record.binding?.bindingId === entry.bindingId;
+    // 交棒判据的唯一写入点（见 `classifyRetiredTurn`）：此刻 `entry.active` 就是
+    // 「被退役时正在跑的那一轮」。只有 rotate 会在 run 内走到这里（RPC rotate /
+    // restart / delete 都先要求 idle，TTL 回收跳过有活轮的 agent），所以这条记录
+    // 等价于「本轮的模型自己提交了 rotate」。
+    entry.retirement =
+      entry.active === undefined ? undefined : { runId: entry.active.runId, reason };
     entry.retired = true;
     entry.state = 'closed';
     entry.primary = false;
@@ -2744,8 +2792,36 @@ export class AgentServiceImpl implements AgentService {
         ? 'failed'
         : (result?.outcome ?? 'completed');
 
-    // 旧 body（rotate / TTL 已退役）：epoch fencing，不写 agent 状态、不投父队列
+    // 旧 body（rotate / TTL / close 已退役，或 agent 已关）：先分清这一轮是
+    // 「自己交棒的那一轮」还是「真迟到的旧轮」（判据 `classifyRetiredTurn`）。
     if (entry.retired || !current || current.state === 'closed') {
+      if (classifyRetiredTurn(entry, handle.id) === 'handoff') {
+        // 交棒轮是合法收尾（模型在本轮 run 里提交了 rotate，随后按工具要求把话说完）：
+        // 走正常记账 —— 写 agent 终态、正文随 `settleHandle` 采用、父级通知照常发，
+        // **不发 `agent.reply.stale`**（它不是迟到结果，没有「未被采用」这回事）。
+        //
+        // 唯一要显式说的例外：这一轮 failed / cancelled / 正文为空。此时没有收尾正文
+        // 可交，parent 只会看到状态变化 —— 与 0.51 之前「什么都不发」一样是静默，所以
+        // 复用 `agent.reply.stale` 的 reason 字段新增一个值来发明确 notice。
+        // 为什么复用这个类型而不是新事件 / 环境信息：它是既有 `content` 档 + typed
+        // notice 的唯一「这一轮为什么没产出正文」通道，新增类型要动三档表、门禁与事件
+        // 文档；正文不进事件流（ADR-092 第 18 条）时，reason 就是唯一需要区分的字段。
+        if (outcome !== 'completed' || !nonEmpty(result?.content)) {
+          this.emitForSession('agent.reply.stale', record, entry.bindingId, {
+            body_id: entry.bindingId,
+            epoch: entry.epoch,
+            message_id: message.id,
+            reason: 'handoff_no_reply',
+            outcome,
+          });
+        }
+        this.updateAgentState(record.id, outcome);
+        this.scheduleSnapshot();
+        await this.disposeEntry(entry);
+        this.settleHandle(handle, outcome, failure, result?.content);
+        return;
+      }
+      // 真迟到的旧轮：epoch fencing，不写 agent 状态、不投父队列
       if (outcome === 'completed' && nonEmpty(result?.content)) {
         this.emitForSession('agent.reply.stale', record, entry.bindingId, {
           body_id: entry.bindingId,
@@ -3533,6 +3609,16 @@ export class AgentServiceImpl implements AgentService {
         (record.state === 'completed' || record.state === 'failed' || record.state === 'cancelled')
       ) {
         this.registry.setState(agentId, 'idle');
+      } else if (
+        (target === 'completed' || target === 'failed' || target === 'cancelled') &&
+        record.state === 'idle'
+      ) {
+        // 交棒轮（0.52 B′）：rotate 的 `createSession` 在**本轮 run 内**就把状态归到 idle
+        // （旧 body 一退役就不再算 live，新 body 还没来得及起跑），于是轮末写终态会撞上
+        // idle → completed 这条不存在的跳，终态被状态机静默丢掉（只留一条 warn）。
+        // 终态描述的是「刚跑完的那一轮」，不是新工作，所以先按「这一轮还在跑」落一次
+        // 再转移 —— 与上面那条（终态 → idle → running）对称。
+        this.registry.setState(agentId, 'running');
       }
       this.registry.setState(agentId, target);
     } catch (error) {
@@ -5847,6 +5933,9 @@ export class AgentServiceImpl implements AgentService {
       for (const entry of this.executionUnitRegistry.get(target.id)?.values() ?? []) {
         entry.closing = false;
         entry.retired = false;
+        // 复活是原地 unretire：退役现场记录必须一起清，否则这具 body 下一轮收口
+        // 会拿旧的 run id 去比对（`classifyRetiredTurn`）。
+        entry.retirement = undefined;
         entry.state = 'idle';
         entry.lastActiveAt = revivedAt;
       }
