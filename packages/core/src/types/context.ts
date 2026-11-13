@@ -59,6 +59,28 @@ export interface CompactionReport {
  */
 export const DEFAULT_COMPACT_THRESHOLD = 0.85;
 
+/**
+ * 上下文真实用量锚点（0.52 C，additive）。
+ *
+ * `ratio = prompt_tokens / request_estimate`：某一轮 provider 响应上报的真实
+ * prompt 用量 ÷ **同一请求**的本地估算（未校正）。`realTokens` 只对某一次
+ * provider 请求有效，重启 / 新进程第一轮 / 压缩后都会归零；归零期间 `tokenCount`
+ * 用这个比值把本地估算校正到 provider 的口径，否则长会话会莫名从 80% 掉回 51%
+ * （本地估算对 CJK / reasoning / 工具参数偏乐观）。
+ */
+export interface ContextAnchor {
+  /** prompt_tokens ÷ 同一请求的本地估算；记录时已 clamp 到 [0.5, 3] */
+  ratio: number;
+  /** provider 上报的真实 prompt 用量（分子，便于回溯偏差来源） */
+  prompt_tokens: number;
+  /** 同一请求的本地估算（分母，未校正） */
+  request_estimate: number;
+  /** 记录时的模型；换模型 tokenizer 就不同，读方只在同一 model 下才应用 */
+  model?: string;
+  /** 记录时刻（epoch ms） */
+  at: number;
+}
+
 /** 一次 Run 的上下文窗口（per Run，从 SessionEventLog 重建，不落库） */
 export interface WorkingContext {
   add(msg: Message): void;
@@ -98,6 +120,23 @@ export interface WorkingContext {
   getSessionId(): string;
   /** 用 LLM 响应的真实 token 数替代估算（Auto Compact 使用） */
   updateRealTokens(total: number): void;
+  /**
+   * 0.52 C：注入按会话落盘的真实锚点（重启后 `realTokens` 为 0 时生效）。
+   * `model` 是当前生效模型：与锚点记录的模型不同则不校正 —— tokenizer 不同，
+   * 硬套比值比不校正更糟。实现可选。
+   */
+  setContextAnchor?(anchor: ContextAnchor | undefined, model?: string): void;
+  /**
+   * 0.52 C：把一次 provider 上报的 prompt 用量换算成锚点并生效。
+   * 实现内部用**未校正的本地估算**做分母（不能用 `tokenCount`：它有真实值后
+   * 已经等于真实口径，比值会塌成 1.0 而失去校正意义）。实现可选。
+   */
+  recordRealPromptTokens?(input: {
+    promptTokens: number;
+    model?: string;
+  }): ContextAnchor | undefined;
+  /** 0.52 C：当前生效的锚点；runtime 保存 SessionState 时取它落盘。实现可选。 */
+  readonly contextAnchor?: ContextAnchor;
 }
 
 /** 上下文配置 */

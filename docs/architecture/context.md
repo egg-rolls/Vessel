@@ -48,8 +48,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 
 **不注入**：Team 日志不会自动进上下文；只有 `teams.post` 里被 `@` 的成员会收到一条普通 user 消息。权限请求 / ask 事件不进上下文，只有工具结果会。
 
-**一次请求的完整清单**（唯一口径；新增注入通道必须在本表落一行，否则就是第二套真相源 —— `vessel:subscription` 当初就是这么漏出去的）：`messages[]` = 上表各注入点 + 历史正文（user / assistant / **tool 结果**）+ 压缩摘要（`role: system` + `compaction_summary`，顶掉历史的那一份）+ 请求级工具结果占位（`context_trim`：只替换出网那份，落盘仍是原文）+ 回传的 `reasoning_content`；
-`tools[]` = `pluginHost.listTools()` 的 schema（**工具面的唯一来源**，Self Card 的 `tools:` 行只是展示）；provider 参数 = `model` / `max_tokens` / 温度等 / abort signal；**明确不进请求**：`Message.refs`（只有路径，正文靠 `[refs]` 让模型自己读）、事件流本身、`prompt.system_context`（审计事件）。
+**一次请求的完整清单**（唯一口径；新增注入通道必须在本表落一行，否则就是第二套真相源 —— `vessel:subscription` 当初就是这么漏出去的）：`messages[]` = 上表各注入点 + 历史正文（user / assistant / **tool 结果**）+ 压缩摘要（`role: system` + `compaction_summary`，顶掉历史的那一份）+ 请求级工具结果占位（`context_trim`：只替换出网那份，落盘仍是原文）+ 回传的 `reasoning_content`；`tools[]` = `pluginHost.listTools()` 的 schema（**工具面的唯一来源**，Self Card 的 `tools:` 行只是展示）；provider 参数 = `model` / `max_tokens` / 温度等 / abort signal；**明确不进请求**：`Message.refs`（只有路径，正文靠 `[refs]` 让模型自己读）、事件流本身、`prompt.system_context`（审计事件）。
 
 **Self Card 是构造期快照（0.52）**：`agents.update` 只改 registry 记录，模型看到的 `[Self Card]` 仍是 spawn 时那张（`selfCard` / `systemPrompt` / `model` 在 `ExecutionUnit` 构造期赋值、之后只读）。因此**不热替换**那张卡，而是把变化说成环境信息：`AgentService` 把新身份推进该 body 的「真值盒」，`self-card-delta` hook 每轮 diff「模型相信的值」与它，变了才注入一条 `vessel:notice`（同一变更只报一次；字段没变 / 没变更都不注入；回滚照样报）。改名 / team / parent 立即生效、只补一句说明，model / system prompt 如实写成「本具 body 仍是旧值，下一具 body 才用新的」。
 
@@ -73,6 +72,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 - `loadStoredHistory`：有 cache 且知道 `derived_upto_seq` → 只读事件日志增量；否则全量 `projectMessages`，按尾部重叠去重。**增量中出现任一 `message.compaction` 时强制全量重投影**——压缩是替换语义，缓存 + 增量无法表达“删掉旧历史”；投影先按 `cleared_tool_call_ids` 写回确定性占位，再按 `kept` 裁剪。两次 Run 的窗口对象不同，但播种出的消息数据等价。
 - **可观察面 parity**：同一 session 且日志尾未前进时静默播种（不发 `context.changed`），并沿用上一 Run 的真实 token 数；只有 baseline 也会播种的场景才发重建事件。
 - 事件 → 消息：`user.message` / `message.injected` / `llm.response` / `tool.call.completed|failed` / `message.compaction`。
+- **真实 token 锚点**（`SessionState.context_anchor`，0.52 C）：`ratio = prompt_tokens ÷ 同一请求的本地估算`，在 `chatWithOverflowRetry` 拿到 usage 那一刻记下，由 `RunJournal.saveSessionState` 随投影落盘；`realTokens` 为 0（重启 / 新进程第一轮 / 压缩后）时 `tokenCount` = `round(估算 × ratio)`，clamp 0.5–3、非有限值丢弃、`model` 不同不校正。**副作用（期望）**：校正后估算变大 ⇒ `compactThreshold` 提前触发 —— 那是校准到真实口径（CJK / reasoning / 工具参数），不是回退。
 - durable 模式额外有 checkpoint；resume 先校验事件游标。详见 [state](state.md)、[events](events.md)。
 
 ## 压缩
