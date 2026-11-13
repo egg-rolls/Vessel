@@ -358,6 +358,66 @@ function systemContextHash(system: string, selfCard: string): string {
 }
 
 /**
+ * 上一份发布过的系统消息快照里、`changed` 要对比的那几格。
+ *
+ * 只收「模型与环境有关的身份事实」：两段原文、模型 id、工具个数。**不收** message_count /
+ * estimated_tokens / context_max —— 它们每轮都在动，写进 `changed` 等于把一张「环境变了」
+ * 的卡变成计数器（而这些字段本来就不发事件，除非 hash 变）。
+ */
+interface SystemContextSnapshot {
+  sessionId: string;
+  hash: string;
+  system: string;
+  selfCard: string;
+  model: string;
+  toolsCount: number;
+}
+
+/**
+ * 两份快照 → 「差在哪」（`changed` 词表）。
+ *
+ * 值都压在短句里（`model: A → B`），读侧按**键**本地化、值原样显示：这样两端不必共享
+ * 一份 sentence 模板，也不会因为改了措辞就把历史卡读成不同意思。
+ */
+function systemContextChanges(
+  previous: SystemContextSnapshot | undefined,
+  current: SystemContextSnapshot,
+): string[] {
+  if (previous === undefined || previous.sessionId !== current.sessionId) return [];
+  const changes: string[] = [];
+  const presence = (value: string): string => (value.length > 0 ? 'added' : 'removed');
+  if (previous.system !== current.system) {
+    changes.push(
+      `system_prompt: ${
+        previous.system.length === 0
+          ? presence(current.system)
+          : current.system.length === 0
+            ? 'removed'
+            : 'replaced'
+      }`,
+    );
+  }
+  if (previous.selfCard !== current.selfCard) {
+    changes.push(
+      `self_card: ${
+        previous.selfCard.length === 0
+          ? presence(current.selfCard)
+          : current.selfCard.length === 0
+            ? 'removed'
+            : 'replaced'
+      }`,
+    );
+  }
+  if (previous.model !== current.model) {
+    changes.push(`model: ${previous.model} → ${current.model}`);
+  }
+  if (previous.toolsCount !== current.toolsCount) {
+    changes.push(`tools: ${String(previous.toolsCount)} → ${String(current.toolsCount)}`);
+  }
+  return changes;
+}
+
+/**
  * `prompt.system_context` 需要的、只在这一刻才知道的请求侧事实。
  *
  * 不复用 `LlmRequestPayload`：那个形状的落盘副本是「刚才发了什么元信息」，
@@ -405,12 +465,13 @@ export class ExecutionUnit {
   /** 0.15 E9：本次 run 的 systemPrompt（含 Self Card）；run 结束后清空 */
   private runSystemPrompt?: string;
   /**
-   * 上一份发出去的 `prompt.system_context`（hash 去重）。
+   * 上一份发出去的 `prompt.system_context`（hash 去重 + `changed` 对比）。
    *
    * 按 `sessionId` 记：同一个 EU 可能给多个会话干活（session_switch），换会话就是另一份
-   * 落盘；只有「同一会话、同一份系统消息」才不再重发。首个 run 必发（初始 undefined）。
+   * 落盘；只有「同一会话、同一份系统消息」才不再重发。首个 run 必发（初始 undefined，
+   * 因此首份快照没有 `changed` / `previous_hash`）。
    */
-  private lastSystemContext?: { sessionId: string; hash: string };
+  private lastSystemContext?: SystemContextSnapshot;
   /** 0.15 E2：本 run 已预警的 limit key（每个 key 只发一次） */
   private readonly warnedLimitKeys = new Set<string>();
   /** 0.16 E5：本 run 已注入的消息稳定键 / 对象引用（BeforeLlm 去重） */
@@ -2317,8 +2378,31 @@ export class ExecutionUnit {
     if (system.length === 0 && selfCard.length === 0) return;
     const hash = systemContextHash(system, selfCard);
     const last = this.lastSystemContext;
-    if (last !== undefined && last.sessionId === execution.sessionId && last.hash === hash) return;
-    this.lastSystemContext = { sessionId: execution.sessionId, hash };
+    // 去重键是**整份环境快照**（两段原文 + 模型 + 工具个数），不只是 hash：`changed` 要报的是
+    // 「模型 / 工具变了」，而它们不在 hash 里 —— 只按 hash 去重的话这两类变化永远不会被发布，
+    // 增量视图就成了只看得到系统提示词变化的半张卡。
+    if (
+      last !== undefined &&
+      last.sessionId === execution.sessionId &&
+      last.hash === hash &&
+      last.model === this.model &&
+      last.toolsCount === request.toolsCount
+    ) {
+      return;
+    }
+    const snapshot: SystemContextSnapshot = {
+      sessionId: execution.sessionId,
+      hash,
+      system,
+      selfCard,
+      model: this.model,
+      toolsCount: request.toolsCount,
+    };
+    // 先算 diff 再推进快照：`changed` 说的是「与上一份**发布过**的差在哪」，不是与上一轮请求。
+    const changed = systemContextChanges(last, snapshot);
+    const previousHash =
+      last !== undefined && last.sessionId === execution.sessionId ? last.hash : undefined;
+    this.lastSystemContext = snapshot;
     const at = Date.now();
     this.publishEvent({
       type: 'prompt.system_context',
@@ -2336,6 +2420,10 @@ export class ExecutionUnit {
           ? { estimated_tokens: request.estimatedTokens }
           : {}),
         ...(request.contextMax !== undefined ? { context_max: request.contextMax } : {}),
+        // additive（0.52）：增量视图只列变了的项；首次 / 换会话没有可比对象 ⇒ 两个字段都不写，
+        // 客户端按「首次 = 渲全量卡」处理（payload 本身仍是全量，不动前缀、不动请求体）。
+        ...(changed.length > 0 ? { changed } : {}),
+        ...(previousHash !== undefined ? { previous_hash: previousHash } : {}),
         at,
       },
       ts: at,
