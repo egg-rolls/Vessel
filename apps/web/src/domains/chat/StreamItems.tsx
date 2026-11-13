@@ -338,6 +338,8 @@ export function PromptContextCard({
   const changes = contextChangeEntries(context.changed ?? []);
   const hasChanges = changes.length > 0;
   // 增量形态的摘要 = 只列变了的项；否则退回全量摘要（首次 / 不知道）。
+  // 全量摘要这几条**只进折叠态那一行**（facts），不进展开体：展开体给的是证据
+  // （原文块 / hash / 窗口上限），不把摘要再抄一遍（用户 0.52 裁定）。
   const summaryParts = hasChanges
     ? changes.map((entry) => changeLineText(entry))
     : [
@@ -354,7 +356,7 @@ export function PromptContextCard({
       ].filter((part): part is string => part !== undefined && part.length > 0);
   return (
     <EnvCard
-      env={envCardOfPromptContext(summaryParts, [
+      env={envCardOfPromptContext(hasChanges ? summaryParts : [], [
         ...(context.systemPrompt !== undefined
           ? [{ labelKey: 'chat.modelContext.system', text: context.systemPrompt }]
           : []),
@@ -367,6 +369,8 @@ export function PromptContextCard({
       entering={entering}
       // 卡头 meta：有增量时「N 项变更」（全量摘要时留空 —— EnvCard 的「N 条」在这里恒为 1）。
       meta={hasChanges ? t('chat.env.changed.count', { count: changes.length }) : undefined}
+      // 折叠态那一行：模型 / 条数 / 工具数 / 估算 tokens —— 一眼要看的事实。
+      facts={hasChanges ? undefined : summaryParts}
       // 展开区首行：hash / 上一份 hash / 窗口上限，与其它卡同一处等宽小字。
       footnote={
         <>

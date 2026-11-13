@@ -9,12 +9,16 @@
  * 与「来自 agent X」卡（`AgentMessageCard`）是同一张卡（`StreamCard`），同一套样式与
  * 同一套展开机制 —— 用户裁决：上下文卡复用 agent 卡的样式，别再给环境信息单独换肤。
  * 对齐的具体口径：
- * - 卡头 title 槽 = scope 标签（配置 / 身份 / 工具 / 上下文 …），class 与 agent 卡的
- *   「来自 agent X」逐字相同（mono / text-2xs / tracking-wider / text-accent）；
- *   「未生效」是同一标签里的 danger 文案，不是另一种卡；
+ * - 卡头 title 槽 = 「环境信息」字样，**主题色**（`text-accent`）：用户 0.52 裁定，这张卡的身份
+ *   字样才该被着色；
+ * - 卡头 scope 槽（配置 / 身份 / 工具 / 上下文 …）= **白色 / 正文色**（`text-ink`），不再用 accent：
+ *   一句话里「是什么卡」用强调色、「哪一类」用正文色，两者抢同一抹颜色会看不出主次；
  * - 卡头 meta 槽 = 折叠条数（「N 条」，与失败卡的 run id 同一个位置）；调用方可覆盖
  *   （`meta`：增量视图的「N 项变更」）；
- * - summary 单行 ellipsis（`.event-block-preview`）= 首行原文，与 agent 卡同一截断规则；
+ * - summary 单行 ellipsis（`.event-block-preview`）= 一眼要看的事实。调用方可用 `facts`
+ *   直接给这行（`模型 · N 条消息 · N 个工具 · 1.2k tokens` 这种），此时**展开体里不再重复**
+ *   这些事实 —— 展开体是证据（原文块 / hash / 窗口上限），不是把摘要再抄一遍；
+ *   缺省仍是首行原文，与 agent 卡同一截断规则；
  * - 展开体 = **全部**行的原文（含首行）+ 未生效标记 + 超出上限的省略提示 + 原文块
  *   （`blocks`：全量快照，不渲染 markdown —— 原文就是事实）；
  *   时间（与 agent 卡的来源地址 / 时间同位置）在展开体首行的 mono 小字里，`footnote`
@@ -39,6 +43,7 @@ export function EnvCard({
   entering,
   meta,
   footnote,
+  facts,
   blocks,
 }: {
   /** `env-notice.ts` 解析 / 折叠后的卡片数据。 */
@@ -53,6 +58,14 @@ export function EnvCard({
   meta?: ReactNode;
   /** 展开区首行（时间之后）的补充事实：hash / 上一份 hash / 窗口上限。 */
   footnote?: ReactNode;
+  /**
+   * 折叠态那一行要给的事实（`模型 · N 条消息 · N 个工具 · 1.2k tokens`）。
+   *
+   * 传了它，`summary` 就由它拼成，**调用方应同时把这些事实从 `env.lines` 里拿掉** ——
+   * 展开体是证据，不是把摘要抄第二遍（用户 0.52 裁定：一眼要看的事实放缩略卡，
+   * 展开里只留原文块 / hash / 窗口上限）。
+   */
+  facts?: readonly string[];
   /** 展开区的原文块（0.52，additive：`prompt.system_context` 的全量快照）。 */
   blocks?: readonly EnvNoticeBlock[];
 }) {
@@ -67,11 +80,11 @@ export function EnvCard({
         <>
           {/* 用户裁定（0.52）：这类卡叫「环境信息」，scope 只是卡头标签 —— 以前卡头只有
               scope，于是「上下文卡」「文件卡」看起来像几种卡，正是要收敛掉的分叉。 */}
-          <span className="shrink-0 font-mono text-2xs tracking-wider text-faint">
+          <span className="shrink-0 font-mono text-2xs tracking-wider text-accent">
             {t('chat.env.title')}
           </span>
-          {/* 与 agent 卡的「来自 agent X」逐字同一组 class（mono / 2xs / tracking / accent）。 */}
-          <span className="max-w-56 truncate font-mono text-2xs tracking-wider text-accent">
+          {/* scope 只是「哪一类」，用正文色；强调色留给上一格的「环境信息」。 */}
+          <span className="max-w-56 truncate font-mono text-2xs tracking-wider text-ink">
             {t(`chat.env.scope.${env.scope}`)}
           </span>
           {/* 未生效是同一标签里的 danger 文案（在截断 span 之外，永远不被省略）。 */}
@@ -81,7 +94,7 @@ export function EnvCard({
         </>
       }
       meta={meta ?? (env.count > 1 ? t('chat.env.count', { count: env.count }) : undefined)}
-      summary={env.lines[0]?.text}
+      summary={facts && facts.length > 0 ? facts.join(' · ') : env.lines[0]?.text}
     >
       {clock !== '' && (
         // 与 agent 卡同一个位置：展开体首行，等宽 / 淡色 / 可选中。

@@ -278,7 +278,9 @@ export function envCardOfPromptContext(
   summaryParts: readonly string[],
   blocks: readonly EnvNoticeBlock[],
 ): EnvNoticeCard {
-  const texts = summaryParts.length > 0 ? [...summaryParts] : [''];
+  // 0.52：调用方可以把摘要整段拿去做折叠态那一行（EnvCard 的 `facts`），此时
+  // `summaryParts` 传空 ⇒ 展开体里不重复这些事实（只剩原文块 / hash / 窗口上限）。
+  const texts = [...summaryParts];
   const kept = texts.slice(0, ENV_NOTICE_DETAILS_MAX);
   return {
     scope: 'context',
