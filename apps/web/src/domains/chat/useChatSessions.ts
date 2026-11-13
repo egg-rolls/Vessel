@@ -24,6 +24,7 @@ import { usePolledAction } from '../../stores/usePolledAction';
 import { errorMessage } from './errors';
 import { findMainSession, type MainSession, primaryBodySessions } from './main-session';
 import { closedAgentSessionIds, sessionAgentAddresses } from './SessionList';
+import { sessionAgentLabels } from './session-agent-labels';
 import {
   browserSessionStorage,
   clearLastSession,
@@ -131,6 +132,14 @@ export function useChatSessions({
   }, [rosters]);
   // 会话行 body 归属：`bodies` 缺省时为空集合，列表完全退化为现状。
   const primarySessionIds = useMemo(() => primaryBodySessions(rosters), [rosters]);
+  // 会话行第二行的 `名字@primary`（0.52）：只补「拿不到节点地址的非 team 成员 primary
+  // 会话」——临时成员 / 未加入 Team 的 agent。team 成员的会话这里一个都不产出，第二行
+  // 仍走 `agentAddresses`。跟地址走同一条链路（派生在这里，ChatView / SessionRail 透传），
+  // 不在渲染里现算；`primary` 一词复用 `t('team.member.primaryBadge')`，不新增 i18n key。
+  const agentLabels = useMemo(
+    () => sessionAgentLabels(rosters, sessions, t('team.member.primaryBadge')),
+    [rosters, sessions],
+  );
   /** 默认会话入口：只在 main primary body 还没出现在**完整**列表里时提供（不受窗口化影响）。 */
   const defaultSessionEntry = useMemo(() => {
     if (!mainSession) return undefined;
@@ -434,6 +443,7 @@ export function useChatSessions({
     debouncedQuery,
     activeServerSearch,
     agentAddresses,
+    agentLabels,
     closedAgentSessions,
     defaultSessionEntry,
     primarySessionIds,

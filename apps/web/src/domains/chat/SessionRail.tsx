@@ -18,6 +18,7 @@ export function SessionRail({
   pendingAskCount,
   onOpenPending,
   agentAddresses,
+  agentLabels,
   closedAgentSessions,
   defaultSession,
   primarySessionIds,
@@ -52,6 +53,8 @@ export function SessionRail({
   pendingAskCount?: number;
   onOpenPending?: () => void;
   agentAddresses: ReadonlyMap<string, string>;
+  /** 非 team 成员 primary 会话的第二行：`名字@primary`（拿不到节点地址时才有值）。 */
+  agentLabels: ReadonlyMap<string, string>;
   /** 归属到已停用 agent 的会话 id：只用来加「待移除」标记，不参与过滤。 */
   closedAgentSessions?: ReadonlySet<string>;
   defaultSession?: { sessionId: string; label: string; bodyCount: number };
@@ -100,6 +103,7 @@ export function SessionRail({
           {...(pendingAskCount !== undefined ? { pendingAskCount } : {})}
           {...(onOpenPending !== undefined ? { onOpenPending } : {})}
           agentAddresses={agentAddresses}
+          agentLabels={agentLabels}
           {...(closedAgentSessions !== undefined ? { closedAgentSessions } : {})}
           defaultSession={defaultSession}
           primarySessionIds={primarySessionIds}
