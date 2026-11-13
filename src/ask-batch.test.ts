@@ -94,6 +94,10 @@ mock.module('@vessel-agent/config', () => ({
   redactSourcePaths: (config: unknown) => config,
   DEFAULT_PLUGIN_HTTP_LIMITS: { body_bytes: 0, timeout_ms: 0 },
   DEFAULT_LEASE_OPTIONS: {},
+  // 传输层在 import 期就会用到它（`agent-owner-server` 的 loopback 判定）；mock 少了它
+  // 会在**加载模块**这一步炸「Export named … not found」，而不是某个断言失败 —— 补桩即可。
+  isLoopbackHostname: (host: string) =>
+    host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '',
 }));
 
 const { createInteractionsRegistry } = await import('../packages/serve/src/interactions-registry');
