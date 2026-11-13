@@ -134,6 +134,22 @@ function checkIdentity(): void {
   // A6：undefined 只剩一种触发条件 —— 本进程没见过该会话的任何上下文事件。
   check(live.ratio('never-seen') === undefined, 'A6', '没见过的会话才允许 undefined');
   check(live.percent('never-seen') === undefined, 'A6', 'percent 与 ratio 同生共死');
+
+  // A7：取整只能发生在**上层**。`contextRatio` 必须返回原值，才能反推出整数 token：
+  // 若它自己先四舍五入（例如 0.517 或 0.5173），`round(ratio * max)` 就回不到 103456。
+  if (ratioA !== undefined) {
+    const recovered = Math.round(ratioA * 200_000);
+    check(
+      recovered === 103_456,
+      'A7',
+      `ratio * max 必须能反推回整数 token_count（反推到 ${recovered}，应为 103456）`,
+    );
+  }
+  check(
+    (live.percent('s1') ?? 0) === Math.round((live.ratio('s1') ?? 0) * 100),
+    'A7',
+    '取整只在 percent 这一层，ratio 保持原值',
+  );
 }
 
 /* ── B. 取整口径：round，不是 floor ───────────────────────────────────── */
@@ -213,6 +229,16 @@ async function checkWiring(): Promise<void> {
   );
 
   const service = await source('packages/agent/src/service.ts');
+  const reader = await source('src/context-ratio-source.ts');
+  // D0：读数源只能搬运事件里的数，不许自己估（`ctx-anchor` 之后 tokenCount 已是锚点
+  // 校正值，再估一次就会与界面分叉），也不许 import 任何包 —— 它必须是可单跑的纯模块。
+  check(
+    !reader.includes('estimateToken') &&
+      !reader.includes('realTokens') &&
+      !reader.includes("from '"),
+    'src/context-ratio-source.ts',
+    '[D0] 读数源不许自己估算 token / 不许引依赖（只搬运 context.changed 送来的 token_count）',
+  );
   check(
     service.includes('this.runtime.contextRatio?.(sessionId)'),
     'packages/agent/src/service.ts',
