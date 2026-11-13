@@ -1179,10 +1179,8 @@ export const messages = {
   'chat.env.changed.added': '新增',
   'chat.env.changed.removed': '移除',
   'chat.env.changed.replaced': '已替换',
-  // 「模型上下文」卡（prompt.system_context）：模型这一轮真正看到的系统消息。
+  // 环境快照卡（prompt.system_context）：它是环境信息的一种（scope context），不是另一张卡。
   // 宗旨：模型能看到的内容，用户也要能看到 —— 只是折叠起来（默认折叠，展开是原文）。
-  'chat.modelContext.title': '模型上下文',
-  'chat.modelContext.aria': '模型上下文（模型这一轮看到的系统消息）',
   'chat.modelContext.system': 'System prompt',
   'chat.modelContext.selfCard': 'Self Card',
   'chat.modelContext.messages': '{count} 条消息',

@@ -1232,11 +1232,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.changed.added': 'added',
   'chat.env.changed.removed': 'removed',
   'chat.env.changed.replaced': 'replaced',
-  // "Model context" card (prompt.system_context): the system message the model actually
-  // saw this turn. Tenet: what the model can see, the user can see too — just folded
-  // (collapsed by default, expanded shows the raw text).
-  'chat.modelContext.title': 'Model context',
-  'chat.modelContext.aria': 'Model context (the system message this turn saw)',
+  // Environment snapshot card (prompt.system_context) — one kind of environment info
+  // (scope `context`), not a card of its own. Tenet: what the model can see, the user can
+  // see too — just folded (collapsed by default, expanded shows the raw text).
   'chat.modelContext.system': 'System prompt',
   'chat.modelContext.selfCard': 'Self Card',
   'chat.modelContext.messages': '{count} messages',
