@@ -3,7 +3,13 @@
  * @module @vessel-agent/core/context
  */
 
-export type { ContextConfig, WorkingContext } from '../types/context.js';
+export type { ContextAnchor, ContextConfig, WorkingContext } from '../types/context.js';
+export {
+  CONTEXT_ANCHOR_RATIO_MAX,
+  CONTEXT_ANCHOR_RATIO_MIN,
+  clampAnchorRatio,
+  normalizeContextAnchor,
+} from './anchor.js';
 export { formatClearedToolResult, isClearedToolResult } from './cleared-tool-result.js';
 export {
   compactMessagesForSeed,

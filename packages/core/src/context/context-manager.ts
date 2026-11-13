@@ -11,12 +11,14 @@
 
 import {
   type CompactionReport,
+  type ContextAnchor,
   type ContextConfig,
   type ContextSummarizer,
   DEFAULT_COMPACT_THRESHOLD,
   type WorkingContext,
 } from '../types/context.js';
 import type { Message } from '../types/provider.js';
+import { clampAnchorRatio, normalizeContextAnchor } from './anchor.js';
 import { formatClearedToolResult, isClearedToolResult } from './cleared-tool-result.js';
 
 /** 无 summarizer 时的占位摘要（保持 0.4/0.5 的可见行为） */
@@ -331,6 +333,11 @@ export class MemoryWorkingContext implements WorkingContext {
   private currentSessionId = 'default';
   private config: ContextConfig;
   private realTokens = 0;
+  /**
+   * 真实用量锚点（0.52 C）：`realTokens` 归零期间用它校正本地估算。
+   * 由 runtime 从 `SessionState.context_anchor` 注入、并在拿到 provider 用量时刷新。
+   */
+  private anchor?: ContextAnchor;
   /** 异步压缩去重：同一会话同一时刻只跑一次 summarizer */
   private compaction?: { sessionId: string; promise: Promise<number> };
   /** 压缩报告序号：单调递增，runtime 据此发现这期间发生了压缩（C2） */
@@ -353,8 +360,10 @@ export class MemoryWorkingContext implements WorkingContext {
   setSessionId(sessionId: string): void {
     // 跨会话切换时丢弃上一会话的真实锚点：realTokens 属于某个 provider 请求的
     // 历史，另一个会话不能复用；同值重复设置不重置（runtime 每轮会调用一次）。
+    // context_anchor 同理按会话落盘，切会话后由 runtime 重新注入。
     if (sessionId !== this.currentSessionId) {
       this.realTokens = 0;
+      this.anchor = undefined;
     }
     this.currentSessionId = sessionId;
     if (!this.sessionMessages.has(sessionId)) {
@@ -412,8 +421,16 @@ export class MemoryWorkingContext implements WorkingContext {
   }
 
   /**
-   * Token 数：优先用真实锚点（上一次 provider 响应 + 其后新增消息的估算增量），
-   * 没有任何真实值时才用统一估算重扫全部消息（content / tool_calls / reasoning）。
+   * Token 数：真实用量 > 锚点校正后的估算 > 裸估算。
+   *
+   * 1. `realTokens > 0`（本进程拿过 provider 的 usage）：直接用真实值，锚点不抢。
+   * 2. 否则（重启 / 新进程第一轮 / 压缩后）用 `context_anchor.ratio` 把本地估算
+   *    校正到 provider 口径 —— 本地估算对 CJK / reasoning / 工具参数偏乐观，
+   *    不校正会让同一份上下文显示从 80% 掉回 51%。
+   * 3. 没有可用锚点（旧会话 / 脏数据 / 换模型）：裸估算，行为与 0.51 一致。
+   *
+   * **副作用（期望，不是回退）**：校正后估算变大 ⇒ `shouldCompact()` 会更早
+   * 越过 `compactThreshold`，压缩因此提前触发。那才是真实占用，别把它当 bug 修掉。
    *
    * 无真实锚点时读 `estimatedTokens` 增量缓存：历史播种 / 逐条重放会对每条
    * 消息取一次 `tokenCount`，重扫整段历史会退化成 O(n²) 并阻塞事件循环
@@ -421,7 +438,10 @@ export class MemoryWorkingContext implements WorkingContext {
    */
   get tokenCount(): number {
     if (this.realTokens > 0) return this.realTokens;
-    return this.estimatedTokens.get(this.currentSessionId) ?? 0;
+    const estimate = this.estimatedTokens.get(this.currentSessionId) ?? 0;
+    const anchor = this.anchor;
+    if (anchor === undefined || estimate <= 0) return estimate;
+    return Math.round(estimate * anchor.ratio);
   }
 
   /** 0.15：上下文 token 预算上限（快照 context_max 使用） */
@@ -443,6 +463,57 @@ export class MemoryWorkingContext implements WorkingContext {
    */
   updateRealTokens(total: number): void {
     this.realTokens = total;
+  }
+
+  /** 0.52 C：当前生效的锚点（runtime 保存 SessionState 时取它落盘）。 */
+  get contextAnchor(): ContextAnchor | undefined {
+    return this.anchor;
+  }
+
+  /**
+   * 0.52 C：注入按会话落盘的锚点。
+   *
+   * `model` 是当前生效的模型：锚点记了模型且与之不同就不用 —— 换模型的 tokenizer
+   * 不同，硬套别人的比值比不校正更糟（「宁可不校正」）。
+   */
+  setContextAnchor(anchor: ContextAnchor | undefined, model?: string): void {
+    const normalized = normalizeContextAnchor(anchor);
+    if (normalized === undefined) {
+      this.anchor = undefined;
+      return;
+    }
+    if (normalized.model !== undefined && model !== undefined && normalized.model !== model) {
+      this.anchor = undefined;
+      return;
+    }
+    this.anchor = normalized;
+  }
+
+  /**
+   * 0.52 C：拿到 provider 上报的 `prompt_tokens` 那一刻记下校正比。
+   *
+   * 分母必须是**未校正的本地估算**（`estimatedTokens` 缓存），不能是 `tokenCount`：
+   * 后者在第一次响应之后已经等于真实口径，比值会塌成 1.0，重启后就起不到校正作用。
+   *
+   * 注意分母是「窗口里全部消息」的估算，而请求里的旧工具结果会被占位压缩，
+   * 所以比值是略偏保守的下界 —— 对 1.48 这类系统性偏差够用。
+   */
+  recordRealPromptTokens(input: {
+    promptTokens: number;
+    model?: string;
+  }): ContextAnchor | undefined {
+    const requestEstimate = this.estimatedTokens.get(this.currentSessionId) ?? 0;
+    if (!(input.promptTokens > 0) || !(requestEstimate > 0)) return this.anchor;
+    const ratio = clampAnchorRatio(input.promptTokens / requestEstimate);
+    if (ratio === undefined) return this.anchor;
+    this.anchor = {
+      ratio,
+      prompt_tokens: input.promptTokens,
+      request_estimate: requestEstimate,
+      ...(input.model !== undefined && input.model.length > 0 ? { model: input.model } : {}),
+      at: Date.now(),
+    };
+    return this.anchor;
   }
 
   /**
