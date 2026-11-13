@@ -321,7 +321,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'pending.submit.busy': 'Replying…',
   'pending.submit.count': '{count} selected',
   'pending.submit.note':
-    'Unchecked questions are not submitted; a request counts as answered once you reply.',
+    'Only the questions you answered are submitted; the rest stay in the pending queue for later.',
   'pending.answerRequired': 'Checked questions without an answer are skipped in this reply.',
   // 0.14: subagent tree / child transcript
   'chat.subagents.title': 'Subagents',

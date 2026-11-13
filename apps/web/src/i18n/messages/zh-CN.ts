@@ -315,7 +315,7 @@ export const messages = {
   'pending.submit': '回复',
   'pending.submit.busy': '回复中…',
   'pending.submit.count': '已选 {count} 题',
-  'pending.submit.note': '未勾选的题不会提交；这条提问一经回复即视为已答复。',
+  'pending.submit.note': '只提交答了的题；没答的题继续留在待批，可以稍后再答。',
   'pending.answerRequired': '勾了还没作答的题，回复时会被跳过',
   // 0.14: subagent tree / child transcript
   'chat.subagents.title': '子 agent',
