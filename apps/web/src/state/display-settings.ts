@@ -16,6 +16,9 @@ export interface DisplaySettingDef {
 export const DISPLAY_SETTINGS: readonly DisplaySettingDef[] = [
   { id: 'verbosity', key: 'ui.verbosity', type: 'enum', options: ['minimal', 'normal', 'debug'] },
   { id: 'showInternalEvents', key: 'ui.showInternalEvents', type: 'boolean' },
+  // 0.51：已归档 Team / 已停用 agent 的默认隐藏开关。与 showInternalEvents 同一层
+  // （同一个 ui 块、同一条 config.set 写路径），入口也在同一个「显示与可见性」分组。
+  { id: 'showArchived', key: 'ui.showArchived', type: 'boolean' },
   { id: 'errorLevel', key: 'ui.errorLevel', type: 'enum', options: ['user', 'all'] },
   { id: 'showProcessErrors', key: 'observability.showProcessErrors', type: 'boolean' },
   { id: 'askUser', key: 'ui.askUser', type: 'boolean' },

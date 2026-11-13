@@ -20,6 +20,12 @@ import { EmptyState, LoadingState } from '../../components/States';
 import { SearchInput } from '../../components/ui';
 import type { AskUserRequest, PermissionRequest, TeamMember } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
+import {
+  filterClosedMembers,
+  hiddenPendingRemovalCount,
+  isClosedAgent,
+} from '../../state/archive-visibility';
+import { useShowArchived } from '../../state/useShowArchived';
 import { shortAgentId } from './mention';
 import { roleLabelKey, roleOf } from './role';
 import { TeamMemberSidebar } from './TeamMemberSidebar';
@@ -76,9 +82,17 @@ export function TeamChatMembersAside({
   useLocale();
   const [query, setQuery] = useState('');
   const normalized = query.trim().toLowerCase();
+  /**
+   * 已停用成员默认不进侧栏（0.51）：只在这里裁一次，搜索也在裁过的集合里做。
+   * 成员详情 / 会话入口不经过这里 —— 直接链接仍能打开停用成员（详情页给待移除提示），
+   * 侧栏只负责「默认视图要不要列出来」。
+   */
+  const showArchived = useShowArchived();
+  const visibleMembers = filterClosedMembers(members, showArchived);
+  const hiddenClosed = hiddenPendingRemovalCount(members, showArchived, isClosedAgent);
   const filtered = normalized
-    ? members.filter((member) => matchesMember(member, normalized))
-    : members;
+    ? visibleMembers.filter((member) => matchesMember(member, normalized))
+    : visibleMembers;
 
   return (
     <>
@@ -103,13 +117,26 @@ export function TeamChatMembersAside({
           // 「匹配 / 已加载」：loaded 取当前 roster 窗口长度，不去比 team.member_count，
           // 被 capped 时另有 team.chat.membersCapped 提示。
           <p className="mx-2 mt-0 mb-2 font-mono text-2xs text-faint" role="status">
-            {t('team.members.matches', { matched: filtered.length, total: members.length })}
+            {t('team.members.matches', { matched: filtered.length, total: visibleMembers.length })}
+          </p>
+        )}
+        {hiddenClosed > 0 && (
+          // 提示而不是静默：默认隐藏只是视图选择，被隐藏的成员仍可在开关打开后看到。
+          <p className="mx-2 mt-0 mb-2 text-xs text-muted" role="status">
+            {t('archive.hidden.members', { count: hiddenClosed })}
           </p>
         )}
         {loading ? (
           <LoadingState rows={4} />
         ) : filtered.length === 0 ? (
-          <EmptyState title={t('team.members.empty')} />
+          hiddenClosed > 0 && normalized === '' ? (
+            <EmptyState
+              title={t('archive.empty.members')}
+              description={t('archive.hidden.members', { count: hiddenClosed })}
+            />
+          ) : (
+            <EmptyState title={t('team.members.empty')} />
+          )
         ) : (
           // 包一层 flex-1：侧栏本体用 h-full，需要确定的父高度才能让列表内部滚动
           // （SearchInput 占据上方空间后，直接 h-full 会溢出列高）。

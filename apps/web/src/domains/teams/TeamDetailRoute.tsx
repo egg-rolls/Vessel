@@ -11,7 +11,8 @@ import type { PaneResizeApi } from '../../app/usePaneResize';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
-import { useLocale } from '../../i18n';
+import { t, useLocale } from '../../i18n';
+import { isArchivedTeam, pendingRemovalNoticeKey } from '../../state/archive-visibility';
 import { resourceData } from '../../state/useResource';
 import { teamDetailKey, useTeamStore } from '../../stores/teamStore';
 import { usePolledAction } from '../../stores/usePolledAction';
@@ -76,6 +77,9 @@ export function TeamDetailRoute({
     { enabled: hasToken, deps: [epoch, nodeKey, route.teamId] },
   );
   const summary = resourceData(summaryState)?.team;
+  // 归档 Team 默认已从列表里隐藏，但直接 URL / 收藏链接仍能到这里 —— 打开时必须说清
+  // 它是「待移除」的对象（只读），否则详情页看起来和活着的 Team 一模一样。
+  const archivedNoticeKey = pendingRemovalNoticeKey('team', isArchivedTeam(summary));
 
   useEffect(() => {
     const sync = () =>
@@ -125,6 +129,14 @@ export function TeamDetailRoute({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      {archivedNoticeKey && (
+        <p
+          className="m-0 rounded-sm border border-line-strong bg-warn-soft px-3 py-2 text-sm text-warn"
+          role="status"
+        >
+          {t(archivedNoticeKey)}
+        </p>
+      )}
       {/* 不挂 `key={route.teamId}`：切 Team 时整棵群聊重挂会销毁滚动位置、已加载的
            更早页与成员窗口，表现为整页闪烁；本地状态由 `useTeamChat` 的身份重置负责。 */}
       <TeamChat

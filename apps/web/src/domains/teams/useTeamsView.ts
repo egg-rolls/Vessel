@@ -18,6 +18,12 @@ import { nodeKeyOf } from '../../gateway/nodes';
 import type { NodeTeams } from '../../gateway/team-roster';
 import type { TeamSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
+import {
+  filterArchivedTeams,
+  hiddenPendingRemovalCount,
+  isArchivedTeam,
+} from '../../state/archive-visibility';
+import { useShowArchived } from '../../state/useShowArchived';
 import { useAgentStore } from '../../stores/agentStore';
 import { teamDetailKey, teamListData, useTeamStore } from '../../stores/teamStore';
 import { usePolledAction } from '../../stores/usePolledAction';
@@ -176,6 +182,36 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
   const loaded = nodes.length > 0 && data.length === nodes.length;
 
   /**
+   * 已归档 Team 默认不出现在列表里（0.51）：只在这里裁一次，搜索 / 节点过滤都基于
+   * 裁过的 `visibleData`，所以「默认搜索搜不到归档对象」是同一个开关的自然结果，
+   * 打开开关后它们又回到可搜集合。
+   *
+   * 为什么不在 detail 层裁：直接 URL / 收藏链接必须仍能打开归档 Team（详情页给
+   * 待移除提示），隐藏只发生在「列表 + 搜索」这条展示路径上。
+   */
+  const showArchived = useShowArchived();
+  const visibleData = useMemo(
+    () =>
+      data.map((item) =>
+        item.ok ? { ...item, teams: filterArchivedTeams(item.teams, showArchived) } : item,
+      ),
+    [data, showArchived],
+  );
+  /**
+   * 被开关挡掉的归档 Team 数（开关打开时恒 0）：提示语与「全都归档了」空态都读它，
+   * 否则打开开关后界面会一边列出卡片、一边宣称「已隐藏 N 个」。
+   */
+  const hiddenArchivedTeams = useMemo(
+    () =>
+      hiddenPendingRemovalCount(
+        data.flatMap((item) => (item.ok ? item.teams : [])),
+        showArchived,
+        isArchivedTeam,
+      ),
+    [data, showArchived],
+  );
+
+  /**
    * 已加载 Team 的身份集合（`nodeKey:teamId`）；null = 还不能判断记录是否失效
    * （列表还没到，或有节点拉列表失败）：这时**绝不**清记录，等下一次进入重试。
    */
@@ -225,12 +261,13 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
     }
   }, [data.length, detailTeamId, knownTeamKeys, navigate, nodes.length]);
 
-  const searched = useMemo(() => filterTeamResults(data, query), [data, query]);
+  const searched = useMemo(() => filterTeamResults(visibleData, query), [visibleData, query]);
   const visible = useMemo(
     () => (nodeFilter ? searched.filter((item) => nodeKeyOf(item.node) === nodeFilter) : searched),
     [searched, nodeFilter],
   );
-  const allTeams = data.reduce((sum, item) => sum + item.teams.length, 0);
+  // 计数口径统一用「过掉开关之后的列表」：卡片数与「已隐藏 N 个」提示因此不会互相打架。
+  const allTeams = visibleData.reduce((sum, item) => sum + item.teams.length, 0);
   const visibleTeams = visible.reduce((sum, item) => sum + item.teams.length, 0);
   const failed = data.filter((item) => !item.ok);
   const allFailed = data.length > 0 && failed.length === data.length;
@@ -443,6 +480,8 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
     allFailed,
     allTeams,
     visibleTeams,
+    hiddenArchivedTeams,
+    showArchived,
     partial,
     hasSearchOrFilter,
     refreshCurrent,

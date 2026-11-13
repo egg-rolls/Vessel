@@ -9,6 +9,7 @@ import { Badge } from '../../components/ui';
 import { CARD_SURFACE_CLASS } from '../../components/ui/card-surface';
 import type { RosterAgent } from '../../gateway/team-roster';
 import { t } from '../../i18n';
+import { isClosedAgent, pendingRemovalBadgeKey } from '../../state/archive-visibility';
 import { roleLabelKey, roleOf } from '../team/role';
 import { agentDisplayName } from './agent-search';
 
@@ -25,6 +26,9 @@ export function AgentListRow({
   const name = agentDisplayName(member);
   const presence =
     member.presence === 'live' ? t('agents.presence.live') : t('agents.presence.gone');
+  // 停用 agent 只在开关打开时出现，因此必须一眼看出「待移除」：状态 chip 只说
+  // 「已停用」，这枚 Badge 补上「· 待移除」的处置语义（tone 走既有 warn）。
+  const closed = isClosedAgent(member);
   return (
     <li className="min-w-0">
       <button type="button" className={CARD_SURFACE_CLASS} onClick={onOpen}>
@@ -32,6 +36,11 @@ export function AgentListRow({
           <span className="flex min-w-0 flex-wrap items-center gap-2 wrap-anywhere text-md font-semibold text-ink">
             {name}
             <Badge>{t(roleLabelKey(roleOf(member)))}</Badge>
+            {closed && (
+              <Badge tone="warn" className="flex-none">
+                {t(pendingRemovalBadgeKey('agent'))}
+              </Badge>
+            )}
           </span>
           <StatusChip status={member.state} />
         </span>

@@ -10,6 +10,7 @@ import { Badge } from '../../components/ui';
 import type { NodeView } from '../../gateway/NodeProvider';
 import type { TeamSummary } from '../../gateway/types';
 import { t } from '../../i18n';
+import { isArchivedTeam, pendingRemovalBadgeKey } from '../../state/archive-visibility';
 
 interface TeamCardProps {
   node: NodeView;
@@ -21,10 +22,13 @@ interface TeamCardProps {
 }
 
 export function TeamCard({ node, team, active, menuItems, onOpen }: TeamCardProps) {
+  // 归档 Team 只在开关打开时出现（默认被列表裁掉），所以它必须与正常卡片**一眼可分**：
+  // 降透明度 + 「已归档 · 待移除」标记，而不是和活着的 Team 长得一模一样。
+  const archived = isArchivedTeam(team);
   return (
     // 选中态与会话侧 `.session-row.active` 同一套信号（accent-soft），
     // 类与 aria 只加在既有节点上，DOM 结构不动。
-    <li className={`teams-card ${active ? 'active' : ''}`.trim()}>
+    <li className={`teams-card ${active ? 'active' : ''} ${archived ? 'opacity-70' : ''}`.trim()}>
       <button
         type="button"
         className="teams-card-open"
@@ -34,7 +38,11 @@ export function TeamCard({ node, team, active, menuItems, onOpen }: TeamCardProp
       >
         <span className="flex items-center justify-between gap-2">
           <span className="min-w-0 truncate font-semibold">{team.name || team.team_id}</span>
-          {team.archived_at !== undefined && <Badge tone="warn">{t('teams.card.archived')}</Badge>}
+          {archived && (
+            <Badge tone="warn" className="flex-none">
+              {t(pendingRemovalBadgeKey('team'))}
+            </Badge>
+          )}
         </span>
         <span className="flex flex-wrap gap-3 text-sm text-muted">
           <span>{t('teams.card.members', { members: team.member_count })}</span>

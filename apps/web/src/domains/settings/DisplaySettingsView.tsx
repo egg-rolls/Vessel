@@ -84,6 +84,11 @@ export function DisplaySettingsFields({
                 {t('settings.display.field.showInternalEvents.hint')}
               </div>
             )}
+            {setting.id === 'showArchived' && (
+              <div className="mt-0.5 text-sm text-muted">
+                {t('settings.display.field.showArchived.hint')}
+              </div>
+            )}
             {setting.type === 'boolean' ? (
               <label className="mt-2.5 flex items-center gap-2 text-md">
                 <input

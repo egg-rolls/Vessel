@@ -46,6 +46,7 @@ export function TeamsListColumn({ state, panes }: TeamsListColumnProps) {
     data,
     allTeams,
     visibleTeams,
+    hiddenArchivedTeams,
     hasSearchOrFilter,
     clearSearch,
     partial,
@@ -81,7 +82,7 @@ export function TeamsListColumn({ state, panes }: TeamsListColumnProps) {
         hint={t('team.error.notEnabledHint')}
       />
     );
-  } else if (!allFailed && allTeams === 0) {
+  } else if (!allFailed && allTeams === 0 && hiddenArchivedTeams === 0) {
     body = (
       <EmptyState
         title={t('teams.empty')}
@@ -93,6 +94,15 @@ export function TeamsListColumn({ state, panes }: TeamsListColumnProps) {
       <EmptyState
         title={t('teams.empty')}
         action={<Button onClick={clearSearch}>{t('team.list.clearSearch')}</Button>}
+      />
+    );
+  } else if (!allFailed && visibleTeams === 0) {
+    // 剩下的 Team 全是已归档（默认开关下被裁掉）：这不是「还没有 Team」，
+    // 说清数量与去处，别让用户以为团队没了。
+    body = (
+      <EmptyState
+        title={t('archive.empty.teams')}
+        description={t('archive.hidden.teams', { count: hiddenArchivedTeams })}
       />
     );
   } else {
@@ -203,6 +213,15 @@ export function TeamsListColumn({ state, panes }: TeamsListColumnProps) {
             : undefined
         }
       >
+        {hiddenArchivedTeams > 0 && (
+          // 提示而不是静默：隐藏是「默认视图的选择」，用户必须能知道东西还在、去哪打开。
+          <p
+            className="m-0 rounded-sm border border-line-strong bg-sunken px-3 py-2 text-sm text-muted"
+            role="status"
+          >
+            {t('archive.hidden.teams', { count: hiddenArchivedTeams })}
+          </p>
+        )}
         {body}
       </SidebarShell>
       {!compact && !panes.disabled('teamList') && (

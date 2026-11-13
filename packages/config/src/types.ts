@@ -635,6 +635,14 @@ export interface UiConfig {
    */
   showInternalEvents?: boolean;
   /**
+   * 列表里是否展示「已归档 Team / 已停用 agent」（0.51；默认 false = 隐藏）。
+   *
+   * 为什么默认隐藏：这两类对象都是「等待被 prune 移除」的残留物，默认视图里列出来
+   * 只会拉长扫描路径。隐藏**不是**删除：直接 URL 仍可打开（打开时带待移除提示），
+   * 打开这个开关后它们回到列表并带「已归档 · 待移除 / 已停用 · 待移除」标记。
+   */
+  showArchived?: boolean;
+  /**
    * 错误展示层级（0.14；默认 user：只展示 run/tool/permission 级错误）。
    * all = 同时展示 internal / process 级错误。
    */

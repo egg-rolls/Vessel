@@ -487,6 +487,9 @@ export const messages = {
   'settings.display.field.showInternalEvents.hint':
     '关闭时只保留正文、工具调用、错误与权限/ask 卡片；打开后额外显示运行提示、hook / LLM 上下文等系统消息（会话里的 vessel:* 上下文消息同受此键控制）；verbosity=debug 也会显示这些系统消息。',
   'settings.display.field.errorLevel': '错误层级',
+  'settings.display.field.showArchived': '显示已归档 / 已停用（待移除）',
+  'settings.display.field.showArchived.hint':
+    '默认隐藏已归档 Team 与已停用 agent（它们都在等待被清理）；打开后它们回到 Team 列表、Agent 列表与成员侧栏，并带「已归档 · 待移除 / 已停用 · 待移除」标记。直接链接不受此开关影响，始终可打开。',
   'settings.display.field.showProcessErrors': '显示 process 错误',
   'settings.display.field.askUser': '允许 ask',
   'settings.display.field.askUser.hint': '注册类设置：保存后需新连接或重启 gateway 才生效。',
@@ -578,7 +581,7 @@ export const messages = {
   'team.state.completed': '已完成',
   'team.state.failed': '失败',
   'team.state.cancelled': '已取消',
-  'team.state.closed': '已关闭',
+  'team.state.closed': '已停用',
   'team.state.unknown': '未知',
 
   'team.presence.live': '在线',
@@ -794,12 +797,28 @@ export const messages = {
   'team.form.forbidden': '当前 token 没有创建 / 更新 Team 的权限。',
   'team.form.archivedReadonly': '已归档 Team 只读。',
 
+  // 归档 / 停用（「等待被移除」对象；默认隐藏，开关是 ui.showArchived）
+  'archive.hidden.teams':
+    '默认隐藏了 {count} 个已归档 Team：在 设置 → 显示与可见性 里打开 ui.showArchived 即可显示。',
+  'archive.empty.teams': '这里的 Team 都已归档（默认隐藏）',
+  'archive.empty.agents': '这里的 Agent 都已停用（默认隐藏）',
+  'archive.empty.members': '这里的成员都已停用（默认隐藏）',
+  'archive.hidden.agents':
+    '默认隐藏了 {count} 个已停用 agent：在 设置 → 显示与可见性 里打开 ui.showArchived 即可显示。',
+  'archive.hidden.members':
+    '默认隐藏了 {count} 个已停用成员：在 设置 → 显示与可见性 里打开 ui.showArchived 即可显示。',
+  'archive.notice.team':
+    '这个 Team 已归档 · 等待被移除：日志只读、默认列表里不再显示；直接链接仍可随时打开，直到它被清理。',
+  'archive.notice.agent':
+    '这个 agent 已停用 · 等待被移除：默认列表里不再显示；直接链接仍可随时打开，直到它被清理。',
+  'archive.session.agentClosedHint': '所属 agent 已停用 · 等待被移除；会话保留，历史仍可查看。',
+
   // Teams（跨节点）
   'teams.title': '团队',
   'teams.empty': '还没有 Team',
   'teams.filter.node': '节点',
   'teams.filter.all': '全部节点',
-  'teams.card.archived': '已归档',
+  'teams.card.archived': '已归档 · 待移除',
   'teams.card.copyId': '复制团队 ID',
   'teams.card.members': '{members} 成员',
   'teams.card.online': '{online} 在线',
@@ -810,7 +829,7 @@ export const messages = {
   'teams.partialError': '部分节点的 Team 读取失败',
   'teams.error.forbidden': '当前 token 无权读取该节点的 Team',
   'teams.error.notEnabled': '该节点没有提供 teams.*',
-  'teams.chat.archived': '已归档',
+  'teams.chat.archived': '已归档 · 待移除',
   'teams.freeze': '冻结创建成员',
   'teams.unfreeze': '解冻创建成员',
   'teams.frozen': '已冻结',
@@ -827,6 +846,7 @@ export const messages = {
   'agents.filter.presence': '在线状态',
   'agents.filter.clear': '清除过滤',
   'agents.count': '显示 {shown} / {total}',
+  'agents.card.closed': '已停用 · 待移除',
   'agents.presence.live': '在线',
   'agents.presence.gone': '离线',
   'agents.partialErrors': '{count} 个 Team 详情读取失败',

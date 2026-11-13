@@ -23,7 +23,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 import { errorMessage } from './errors';
 import { findMainSession, type MainSession, primaryBodySessions } from './main-session';
-import { sessionAgentAddresses } from './SessionList';
+import { closedAgentSessionIds, sessionAgentAddresses } from './SessionList';
 import {
   browserSessionStorage,
   clearLastSession,
@@ -119,6 +119,9 @@ export function useChatSessions({
   const rosterState = useAgentStore((state) => state.roster);
   const rosters = useMemo(() => resourceData(rosterState) ?? [], [rosterState]);
   const agentAddresses = useMemo(() => sessionAgentAddresses(rosters), [rosters]);
+  // 归属到已停用 agent 的会话只做标记、不做过滤：会话是用户自己的历史，隐藏等于
+  // 把找回入口弄丢（0.51 裁决）。反查不到（别的节点 / 窗口截断 / 旧 gateway）→ 不标。
+  const closedAgentSessions = useMemo(() => closedAgentSessionIds(rosters), [rosters]);
   // 默认会话 = `main` 的 primary body（0.27）；roster 拿不到 main 时为 null，
   // 此时保持旧行为（草稿态发送不带 session_id，由服务端解析）。
   const mainSession = useMemo<MainSession | null>(() => {
@@ -431,6 +434,7 @@ export function useChatSessions({
     debouncedQuery,
     activeServerSearch,
     agentAddresses,
+    closedAgentSessions,
     defaultSessionEntry,
     primarySessionIds,
     pendingBySession,
