@@ -1,16 +1,17 @@
-import { useState } from 'react';
 import { Button, Input } from '../../components/ui';
 import type { AskUserAnswer, AskUserQuestion, AskUserRequest } from '../../gateway/types';
 import { t } from '../../i18n';
+import { askDraftOf } from '../pending/ask-drafts';
+import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
 }
 
-/** 单题草稿：已选选项 + 自定义文本。 */
+/** 单题草稿：已选选项 + 自定义文本（草稿的持久化在 `domains/pending/ask-drafts.ts`）。 */
 export interface AskDraft {
-  selected: string[];
-  custom: string;
+  readonly selected: readonly string[];
+  readonly custom: string;
 }
 
 /** 单题答案：已选选项 + 自定义文本用 ` · ` 连接（两组件共用，避免逻辑漂移）。 */
@@ -33,7 +34,9 @@ function isAnswered(draft: AskDraft): boolean {
  * - 提交中禁用全部按钮，防止双击；
  * - 其他端应答 / run 终态由 ConnectionProvider 移除请求，卡片随之收起；
  * - 0.18 起提问没有自动超时（不再显示倒计时），提交按钮常驻；
- * - 提交走现有 `ask.respond`，不新增 RPC。
+ * - 提交走现有 `ask.respond`，不新增 RPC；
+ * - 0.51：草稿按 `requestId + 题号` 走 `ask-draft-store`（团队待处理条也用这张卡），
+ *   切页 / 刷新回来勾选与自定义答复都还在 —— 与 Composer 槽位 / 待批页同一份草稿。
  */
 export function AskCard({
   request,
@@ -48,30 +51,22 @@ export function AskCard({
   onSubmit: (answers: AskUserAnswer[]) => void;
   onCancel: () => void;
 }) {
-  const [custom, setCustom] = useState<string[]>(() => request.questions.map(() => ''));
-  const [selected, setSelected] = useState<string[][]>(() => request.questions.map(() => []));
+  const drafts = useAskDrafts();
+  const setDraft = useSetAskDraft();
   const titleId = `ask-card-${request.requestId}`;
 
   const toggle = (index: number, option: string, multi: boolean) => {
-    setSelected((prev) => {
-      const next = prev.map((item) => [...item]);
-      if (!multi) {
-        next[index] = [option];
-        return next;
-      }
-      const set = new Set(next[index] ?? []);
-      if (set.has(option)) set.delete(option);
-      else set.add(option);
-      next[index] = [...set];
-      return next;
+    setDraft(request.requestId, index, (draft) => {
+      if (!multi) return { ...draft, selected: [option] };
+      const picked = new Set(draft.selected);
+      if (picked.has(option)) picked.delete(option);
+      else picked.add(option);
+      return { ...draft, selected: [...picked] };
     });
   };
 
   const answers: AskUserAnswer[] = request.questions.map((question, index) =>
-    buildAnswer(question, {
-      selected: selected[index] ?? [],
-      custom: custom[index] ?? '',
-    }),
+    buildAnswer(question, askDraftOf(drafts, request.requestId, index)),
   );
   const complete = answers.every((answer) => answer.answer.length > 0);
 
@@ -107,7 +102,9 @@ export function AskCard({
             {question.options && question.options.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {question.options.map((option) => {
-                  const picked = (selected[index] ?? []).includes(option);
+                  const picked = askDraftOf(drafts, request.requestId, index).selected.includes(
+                    option,
+                  );
                   return (
                     <label
                       className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-md pointer-coarse:min-h-touch ${
@@ -132,15 +129,12 @@ export function AskCard({
               </div>
             )}
             <Input
-              value={custom[index] ?? ''}
+              value={askDraftOf(drafts, request.requestId, index).custom}
               disabled={busy}
-              onChange={(event) =>
-                setCustom((prev) => {
-                  const next = [...prev];
-                  next[index] = event.target.value;
-                  return next;
-                })
-              }
+              onChange={(event) => {
+                const value = event.target.value;
+                setDraft(request.requestId, index, (draft) => ({ ...draft, custom: value }));
+              }}
               placeholder={
                 question.options
                   ? t('ask.customPlaceholder.options')

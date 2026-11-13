@@ -1216,6 +1216,13 @@ export const messages = {
   'chat.askAnswer.title': '待批答复',
   'chat.askAnswer.aria': '待批答复（异步提问的回答）',
   'chat.askAnswer.source': '来自待批页',
+  // 已答记录（sync ask 答完后服务端落盘的那条 answered 记录；刷新后靠它重建）
+  'chat.askAnswered.title': '提问答复',
+  'chat.askAnswered.aria': '已答提问（服务端记录，刷新后仍在）',
+  'chat.askAnswered.source': '服务端已答记录',
+  'chat.askAnswered.label': '回答记录 · {count} 条',
+  'chat.askAnswered.more': '展开更早的 {count} 条',
+  'chat.askAnswered.less': '只显示最近几条',
   // rotate 交接卡（新身体收到的第一条启动嘱托：agent 写的交接书，不是人打的字）
   'chat.rotateHandoff.title': '⟳ rotate 交接',
   'chat.rotateHandoff.aria': 'rotate 交接 · epoch {epoch}',

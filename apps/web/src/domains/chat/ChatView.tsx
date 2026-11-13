@@ -16,9 +16,11 @@ import { useRuntimeVisibility } from '../../state/runtime-visibility';
 import { sessionTitle } from '../../state/sessions';
 import { resourceData } from '../../state/useResource';
 import { useAgentStore } from '../../stores/agentStore';
+import { useAskDraftPrune } from '../pending/ask-draft-store';
 import { rosterAttributionIndex } from '../pending/attribution';
 import { asksForSession } from '../pending/cluster';
 import { PluginPanels } from '../plugins/PluginPanels';
+import { AnsweredAsks } from './AnsweredAsks';
 import { ChatHeader } from './ChatHeader';
 import { ComposerSlot } from './ComposerSlot';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
@@ -118,6 +120,10 @@ export function ChatView({
     () => asksForSession(asks, selectedId, attribution).length,
     [asks, selectedId, attribution],
   );
+  // ask 草稿的清理钩子：请求一旦从 pending 集合里消失（本端或别的端答的），
+  // 它的草稿一起清 —— 否则这份 sessionStorage 副本会跟着标签页活到关掉为止。
+  const pendingAskIds = useMemo(() => asks.map((item) => item.requestId), [asks]);
+  useAskDraftPrune(pendingAskIds, connected);
 
   // 草稿态不再本地造 session id：首次发送由 `runs.start` 解析 main primary body。
   const pendingNewSessions = useRef(new Set<string>());
@@ -472,6 +478,23 @@ export function ChatView({
               onGoChat={() => navigate({ domain: 'chat' })}
               onEditMessage={handleEditMessage}
               onRetryMessage={handleRetryMessage}
+              // 已答记录：sync 提问答完之后的那张可读答复卡（数据来自服务端 answered 记录，
+              // 刷新后靠它重建）。子 agent 详情页讲的是另一个 run，那里不画。
+              afterItems={
+                transcriptApi.activeAgent ? undefined : (
+                  <AnsweredAsks
+                    key={selectedId ?? 'none'}
+                    sessionId={selectedId}
+                    client={client}
+                    epoch={epoch}
+                    connected={connected}
+                    refreshKey={
+                      submitApi.sendTick + transcriptApi.visibleGroups.length + asks.length
+                    }
+                    defaultOpen={transcriptApi.cardsDefaultOpen}
+                  />
+                )
+              }
             />
 
             {/* 待处理条带与转录区**同一个容器**（`.content-stage`），但不在滚动区里：

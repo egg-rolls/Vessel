@@ -14,38 +14,23 @@
  * - 代价（服务端语义，本页改不了）：一条 ask 一经应答就整体落定
  *   （pending → answered），未勾选的题随该请求一起收口 —— 回复行旁明写这一点；
  * - 提交中、或该 requestId 已在途时禁用输入，避免重复投递。
+ *
+ * 0.51：草稿（勾选 / 自定义输入 / 纳入勾选）不再是组件 state，而是按
+ * `requestId + 题号` 存进 `ask-draft-store`（sessionStorage 镜像）——
+ * 切页 / 刷新 / 重连回来，正在勾的选项与打了一半的答复都还在。
  */
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Badge, Button, CountBadge, cn, Input, Section } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { AskUserAnswer, AskUserQuestion } from '../../gateway/types';
 import { t } from '../../i18n';
 import { buildAnswer } from '../chat/AskCard';
+import { type AskDraftValue, askDraftOf, isAskDraftAnswered } from './ask-drafts';
+import { useAskDrafts, useDropAskDrafts, useSetAskDraft } from './ask-draft-store';
 import type { PendingCluster } from './cluster';
 import { questionBlocks } from './question-blocks';
 import { usePendingBatch } from './usePendingBatch';
-
-/** 单题草稿：是否纳入本次回复 + 已选选项 + 自定义输入。 */
-interface QuestionDraft {
-  /** 是否纳入本次回复（默认不勾；作答会自动勾上）。 */
-  include: boolean;
-  selected: string[];
-  custom: string;
-}
-
-function emptyQuestionDraft(): QuestionDraft {
-  return { include: false, selected: [], custom: '' };
-}
-
-/** 草稿键：requestId + 题号（题号在同一条请求内稳定）。 */
-function draftKey(requestId: string, index: number): string {
-  return `${requestId}:${index}`;
-}
-
-function isAnswered(draft: { selected: readonly string[]; custom: string }): boolean {
-  return draft.selected.length > 0 || draft.custom.trim().length > 0;
-}
 
 function shortId(value: string): string {
   return value.length > 16 ? `${value.slice(0, 16)}…` : value;
@@ -124,10 +109,10 @@ function QuestionField({
   index: number;
   /** 这一题是否纳入本次回复（勾选只影响提交内容，不影响能否作答）。 */
   include: boolean;
-  draft: { selected: string[]; custom: string };
+  draft: { selected: readonly string[]; custom: string };
   disabled: boolean;
   onToggleInclude: () => void;
-  onChange: (next: { selected: string[]; custom: string }) => void;
+  onChange: (next: { selected: readonly string[]; custom: string }) => void;
 }) {
   return (
     <div
@@ -217,15 +202,18 @@ export function PendingClusterCard({
   const { respondAsk, responding } = useConnection();
   const { busyKey, submit } = usePendingBatch(respondAsk);
   const busy = busyKey === cluster.key;
-  const [drafts, setDrafts] = useState<Record<string, QuestionDraft>>({});
+  // 草稿不再是组件 state：切页 / 刷新回来还在（见 ask-draft-store 头注释）。
+  const drafts = useAskDrafts();
+  const setDraft = useSetAskDraft();
+  const dropDrafts = useDropAskDrafts();
 
   /** 全部问题的扁平视图：勾选、计数、投递计划都按「题」算，不按 request 绑死。 */
   const rows = useMemo(
     () =>
       cluster.requests.flatMap((request) =>
         request.questions.map((question, index) => {
-          const draft = drafts[draftKey(request.requestId, index)] ?? emptyQuestionDraft();
-          return { request, question, index, draft, answered: isAnswered(draft) };
+          const draft = askDraftOf(drafts, request.requestId, index);
+          return { request, question, index, draft, answered: isAskDraftAnswered(draft) };
         }),
       ),
     [cluster.requests, drafts],
@@ -256,12 +244,9 @@ export function PendingClusterCard({
   const patchDraft = (
     requestId: string,
     index: number,
-    updater: (draft: QuestionDraft) => QuestionDraft,
+    updater: (draft: AskDraftValue) => AskDraftValue,
   ) => {
-    setDrafts((previous) => {
-      const key = draftKey(requestId, index);
-      return { ...previous, [key]: updater(previous[key] ?? emptyQuestionDraft()) };
-    });
+    setDraft(requestId, index, updater);
   };
 
   /**
@@ -273,11 +258,11 @@ export function PendingClusterCard({
   const setAnswer = (
     requestId: string,
     index: number,
-    next: { selected: string[]; custom: string },
+    next: { selected: readonly string[]; custom: string },
   ) => {
     patchDraft(requestId, index, (draft) => {
-      const flipped = isAnswered(draft) !== isAnswered(next);
-      return { ...draft, ...next, ...(flipped ? { include: isAnswered(next) } : {}) };
+      const flipped = isAskDraftAnswered(draft) !== isAskDraftAnswered(next);
+      return { ...draft, ...next, ...(flipped ? { include: isAskDraftAnswered(next) } : {}) };
     });
   };
 
@@ -288,28 +273,18 @@ export function PendingClusterCard({
   /** 全选 / 取消全选：只作用于已作答的题，未答的题不制造空勾选。 */
   const toggleAll = () => {
     const target = !allIncluded;
-    setDrafts((previous) => {
-      const next = { ...previous };
-      for (const row of answeredRows) {
-        const key = draftKey(row.request.requestId, row.index);
-        next[key] = { ...(next[key] ?? emptyQuestionDraft()), include: target };
-      }
-      return next;
-    });
+    for (const row of answeredRows) {
+      patchDraft(row.request.requestId, row.index, (draft) => ({ ...draft, include: target }));
+    }
   };
 
   const handleSubmit = () => {
     if (!canSubmit) return;
     const requestIds = plan.map((item) => item.requestId);
     void submit(cluster.key, plan).then(() => {
-      // 提交后清掉这批的勾选与草稿（请求通常也会随即从 pending 列表里消失）。
-      setDrafts((previous) =>
-        Object.fromEntries(
-          Object.entries(previous).filter(
-            ([key]) => !requestIds.some((requestId) => key.startsWith(`${requestId}:`)),
-          ),
-        ),
-      );
+      // 提交后清掉这批的草稿（请求通常也会随即从 pending 列表里消失；
+      // 请求消失但没提交过的那部分由 useAskDraftPrune 兜）。
+      dropDrafts(requestIds);
     });
   };
 
@@ -398,7 +373,7 @@ export function PendingClusterCard({
                   {pendingRespond && <span>{t('pending.item.responding')}</span>}
                 </div>
                 {request.questions.map((question, index) => {
-                  const draft = drafts[draftKey(request.requestId, index)] ?? emptyQuestionDraft();
+                  const draft = askDraftOf(drafts, request.requestId, index);
                   return (
                     <QuestionField
                       // key 用问题自身的 header+正文：ask 的题目在同一请求内不会重复，

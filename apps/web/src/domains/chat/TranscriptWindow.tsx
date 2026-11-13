@@ -166,6 +166,7 @@ export function TranscriptWindow({
   onGoChat,
   onEditMessage,
   onRetryMessage,
+  afterItems,
 }: {
   hasToken: boolean;
   selectedId: string | null;
@@ -226,6 +227,15 @@ export function TranscriptWindow({
   onGoChat: () => void;
   onEditMessage: (keepMessages: number, text: string) => void;
   onRetryMessage: (keepMessages: number, text: string) => void;
+  /**
+   * 时间线之后、仍在滚动区里的尾巴（会话页的「已答」记录用它）。
+   *
+   * 为什么挂在滚动区里而不是像待处理条带那样常驻：它属于**历史**（已经答完的那些），
+   * 不是「还压着几条输入」；常驻块会一直占掉输入区上方的空间。为什么不做成时间线 item：
+   * 那要新开一套「非消息来源的 item 排序」规则，得碰绝对下标 / 认领体系（见
+   * docs/dev/reports/0.51/ask-interaction-design.md 1.4 候选 ①A 的 (b)）。
+   */
+  afterItems?: ReactNode;
 }) {
   // 打开 / 切换会话的 reset key：detail 到达（hydrate）会再触发一次稳定贴底；
   // 加载更早历史不改变这两个字段，因此不会跳底。
@@ -624,6 +634,9 @@ export function TranscriptWindow({
               verbosity={verbosity}
             />
           )}
+
+          {/* 时间线之后的尾巴：已答记录（数据来自服务端 answered 记录，刷新靠它重建）。 */}
+          {afterItems}
         </>
       ) : draftActive ? (
         <ChatWelcome />

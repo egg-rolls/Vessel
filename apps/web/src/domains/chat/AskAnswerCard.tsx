@@ -29,6 +29,9 @@ export function AskAnswerCard({
   card,
   ts,
   defaultOpen = false,
+  titleLabel,
+  sourceLabel,
+  ariaLabel,
 }: {
   /** `ask-answer.ts` 解析后的卡片数据。 */
   card: AskAnswerData;
@@ -36,17 +39,25 @@ export function AskAnswerCard({
   ts?: number;
   /** 默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
   defaultOpen?: boolean;
+  /**
+   * 卡头文案覆写：`sync` 的已答记录不是「待批答复」（答案从会话槽或待批页提交，
+   * 且数据来自服务端 answered 记录），复用的这张卡只换文案，不复制一套样式。
+   */
+  titleLabel?: string;
+  /** 展开体首行的来源文案（默认「来自待批页」）。 */
+  sourceLabel?: string;
+  ariaLabel?: string;
 }) {
   const clock = formatClock(ts);
   return (
     <StreamCard
       className="ask-answer-card w-full min-w-0 max-w-full"
-      ariaLabel={t('chat.askAnswer.aria')}
+      ariaLabel={ariaLabel ?? t('chat.askAnswer.aria')}
       defaultOpen={defaultOpen}
       title={
         <>
           <span className="font-mono text-2xs tracking-wider text-accent">
-            {t('chat.askAnswer.title')}
+            {titleLabel ?? t('chat.askAnswer.title')}
           </span>
           <span className="max-w-56 truncate text-sm text-ink">{card.summary}</span>
         </>
@@ -57,7 +68,7 @@ export function AskAnswerCard({
       {(clock !== '' || card.requestId !== undefined) && (
         // 与 agent 卡 / 环境卡同一个位置：展开体首行，等宽 / 淡色 / 可选中。
         <div className="mb-1 flex flex-wrap items-baseline gap-x-2 font-mono text-2xs text-faint">
-          <span className="shrink-0">{t('chat.askAnswer.source')}</span>
+          <span className="shrink-0">{sourceLabel ?? t('chat.askAnswer.source')}</span>
           {card.requestId !== undefined && (
             <span className="break-all select-all">{card.requestId}</span>
           )}
