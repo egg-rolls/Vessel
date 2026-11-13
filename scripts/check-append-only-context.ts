@@ -403,22 +403,32 @@ async function runRealPaths(): Promise<void> {
 }
 
 /**
- * 端到端版：把「带工具结果的历史」塞进**真 EU** 的落盘序列，再手动压缩。
+ * 端到端版：把「带工具结果的历史」塞进**真 EU**，同时盯住**发出去的请求**与**落盘**两侧。
  *
  * C1g 量的是 `MemoryWorkingContext`（落盘数据就是从它来的），但装配层还有 seed / 投影 /
- * journal 三段；这里用 `RunOptions.messages` 注入 assistant(tool_calls) + tool 结果，让真
- * EU 自己把它们落盘，然后压缩，再用同一判据比较**落盘快照**。
+ * journal 三段。这里用 `RunOptions.messages` 注入 assistant(tool_calls) + tool 结果，让真
+ * EU 自己把它们落盘，并给 provider 包一层把每一次请求的消息抓下来 —— 于是能在同一时刻
+ * 同时验「请求里是占位 / 落盘里是原文」，那正是这一单要钉住的分界：
  *
- * 结论同样只允许两种：幸存消息逐字不变，或有变的必须是凭据点名的工具结果。
+ * ① 落盘（`SessionState.messages`，`sessions.get` 读的就是它）里的旧工具结果是**原文**；
+ * ② 同一轮发出去的请求里它们是**占位**（省 token 的效果没丢）；
+ * ③ 压缩时审计字段 `cleared_tool_call_ids` 点名了这些工具结果。
  */
 async function runToolHistoryProbe(): Promise<void> {
   const provider = new MemoryLLMProvider();
+  /** 每一次请求实际发出去的消息（深拷贝；用来和落盘逐条对照）。 */
+  const requests: Message[][] = [];
   const events = new MemoryEventStream();
   const log = new MemoryEventLog();
   const store = new RecordingSessionStore();
-  // 小预算：让压缩只保留最后几条，逼出「清空后的工具结果还能幸存」的重叠区。
+  // 小预算：让「保留最近 5% 预算」的清空口径真的生效，逼出请求里必须有占位的那一刻。
   const eu = await ExecutionUnit.create({
-    provider,
+    provider: {
+      chat: async (request) => {
+        requests.push(structuredClone(request.messages));
+        return provider.chat(request);
+      },
+    },
     model: 'probe-model',
     contextFactory: () => new MemoryWorkingContext({ maxTokens: 2_000 }),
     events,
@@ -450,12 +460,61 @@ async function runToolHistoryProbe(): Promise<void> {
       ],
     });
   }
+
+  // ①/②：同一时刻对照「请求里」与「落盘里」的同一批工具结果。
+  const lastRequest = requests[requests.length - 1] ?? [];
+  const clearedInRequest = lastRequest.filter(
+    (message) => message.role === 'tool' && message.content.startsWith('[cleared'),
+  );
+  if (clearedInRequest.length === 0) {
+    fail('C1h', '发出去的请求里没有出现占位（省 token 的效果丢了）');
+  } else {
+    const persisted = await store.load(sessionId);
+    const persistedById = new Map<string, string>();
+    for (const message of persisted?.messages ?? []) {
+      if (message.role === 'tool' && typeof message.tool_call_id === 'string') {
+        persistedById.set(message.tool_call_id, message.content);
+      }
+    }
+    const rewritten = clearedInRequest.filter((message) => {
+      const raw = persistedById.get(message.tool_call_id ?? '');
+      return raw?.startsWith('[cleared') === true;
+    });
+    if (rewritten.length > 0) {
+      fail(
+        'C1h',
+        `落盘里也有 ${String(rewritten.length)} 条工具结果是占位（应当只有请求里是占位）`,
+      );
+    } else {
+      ok(
+        `C1h 请求里 ${String(clearedInRequest.length)} 条占位 / 落盘同一条仍是原文` +
+          `（请求共 ${String(requests.length)} 次）`,
+      );
+    }
+  }
+
   const beforeCompact = store.saves.length;
   const result = await eu.compactContext(sessionId);
   if (result.removed === 0) {
     fail('C1h', '带工具结果的历史没有被压缩（探针没覆盖这条路径）');
     await eu.dispose();
     return;
+  }
+  if (!log.records(sessionId).some((record) => record.type === 'message.compaction')) {
+    fail('C1h', '压缩没有落 message.compaction（缺 ③ 的审计凭据）');
+  } else {
+    // ③ 审计：压缩事件必须点名「哪些工具结果在请求里会被换成占位」，否则事后无从追查。
+    const compaction = log
+      .records(sessionId)
+      .find((record) => record.type === 'message.compaction');
+    const audited = (compaction?.data as { cleared_tool_call_ids?: unknown } | undefined)
+      ?.cleared_tool_call_ids;
+    const auditedCount = Array.isArray(audited) ? audited.length : 0;
+    if (auditedCount === 0) {
+      fail('C1h', '压缩事件没有点名 cleared_tool_call_ids（审计缺口）');
+    } else {
+      ok(`C1h 压缩事件点名 ${String(auditedCount)} 条占位工具结果（审计）`);
+    }
   }
   const saves = store.saves;
   const prev = saves[beforeCompact - 1];

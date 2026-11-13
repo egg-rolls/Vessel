@@ -79,6 +79,20 @@ export interface EnvNoticeCard {
   count: number;
   /** 因为超过 `ENV_NOTICE_DETAILS_MAX` 而没有渲染的行数（> 0 时卡片末尾提示）。 */
   droppedLines?: number;
+  /**
+   * 展开区的**原文块**（additive，0.52）：`labelKey` + 原样文本。
+   *
+   * 给「可展开看完整快照」那一类环境信息用：快照原文（system prompt / Self Card）是事实，
+   * 不能按行拆、也不该被 `ENV_NOTICE_DETAILS_MAX` 截断 —— 它与「行」是两种粒度，各放一处。
+   * 现在只有 scope `context` 会带；渲染仍由 `EnvCard` 一处负责。
+   */
+  blocks?: EnvNoticeBlock[];
+}
+
+/** 展开区里的一块原文（`labelKey` 由渲染侧本地化）。 */
+export interface EnvNoticeBlock {
+  labelKey: string;
+  text: string;
 }
 
 /**
@@ -241,4 +255,35 @@ export function contextChangeEntries(changed: readonly string[]): ContextChangeE
     if (entry !== undefined) entries.push(entry);
   }
   return entries;
+}
+
+/**
+ * 一条**已算好的**摘要行 + 原文块 → 一张环境信息卡（scope `context`）。
+ *
+ * 为什么由调用方给摘要文本（`summaryParts`）而不是这里拼：摘要要本地化
+ * （模型 · 消息数 · 工具数），而本模块是纯函数、不碰 i18n。本函数只做「装配」：
+ * 首行 = 摘要，明细 = 每一行摘要各自的条目（展开区能读全），原文块 = 全量快照。
+ *
+ * 形态是「一张环境信息卡」而不是「另一种卡」：`EnvCard` 是唯一渲染入口，`prompt.system_context`
+ * 只是它的一个数据来源（事件而不是 `vessel:notice` 消息）。
+ */
+export function envCardOfPromptContext(
+  summaryParts: readonly string[],
+  blocks: readonly EnvNoticeBlock[],
+): EnvNoticeCard {
+  const texts = summaryParts.length > 0 ? [...summaryParts] : [''];
+  const kept = texts.slice(0, ENV_NOTICE_DETAILS_MAX);
+  return {
+    scope: 'context',
+    ok: true,
+    lines: kept.map((text, index) => ({
+      id: String(index),
+      scope: 'context' as const,
+      ok: true,
+      text,
+    })),
+    count: 1,
+    ...(texts.length > kept.length ? { droppedLines: texts.length - kept.length } : {}),
+    ...(blocks.length > 0 ? { blocks: [...blocks] } : {}),
+  };
 }

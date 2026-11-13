@@ -1,16 +1,24 @@
 /**
- * 「环境信息」卡：模型上下文里 `vessel:notice` 那一行行文本的**唯一**渲染点。
+ * 「环境信息」卡：模型上下文里所有「模型需要知道的改变」的**唯一**渲染点。
+ *
+ * 用户裁定（0.52）：只有这一类卡 —— 身份 / 工具 / 模型 / 字段 / 重启 / 上下文快照都是它的
+ * scope，标题就叫「环境信息」，scope 只决定卡头标签。数据有两条来源，渲染只有这一处：
+ * - `vessel:notice` 消息（`env-notice.ts` 解析出的行）；
+ * - `prompt.system_context` 事件（`envCardOfPromptContext` 装配的行 + 全量快照原文块）。
  *
  * 与「来自 agent X」卡（`AgentMessageCard`）是同一张卡（`StreamCard`），同一套样式与
  * 同一套展开机制 —— 用户裁决：上下文卡复用 agent 卡的样式，别再给环境信息单独换肤。
  * 对齐的具体口径：
- * - 卡头 title 槽 = scope 标签（配置 / 权限 / 成员 …），class 与 agent 卡的
+ * - 卡头 title 槽 = scope 标签（配置 / 身份 / 工具 / 上下文 …），class 与 agent 卡的
  *   「来自 agent X」逐字相同（mono / text-2xs / tracking-wider / text-accent）；
  *   「未生效」是同一标签里的 danger 文案，不是另一种卡；
- * - 卡头 meta 槽 = 折叠条数（「N 条」，与失败卡的 run id 同一个位置）；
+ * - 卡头 meta 槽 = 折叠条数（「N 条」，与失败卡的 run id 同一个位置）；调用方可覆盖
+ *   （`meta`：增量视图的「N 项变更」）；
  * - summary 单行 ellipsis（`.event-block-preview`）= 首行原文，与 agent 卡同一截断规则；
- * - 展开体 = **全部**行的原文（含首行）+ 未生效标记 + 超出上限的省略提示；
- *   时间（与 agent 卡的来源地址 / 时间同位置）在展开体首行的 mono 小字里；
+ * - 展开体 = **全部**行的原文（含首行）+ 未生效标记 + 超出上限的省略提示 + 原文块
+ *   （`blocks`：全量快照，不渲染 markdown —— 原文就是事实）；
+ *   时间（与 agent 卡的来源地址 / 时间同位置）在展开体首行的 mono 小字里，`footnote`
+ *   同一行补 hash 之类的事实；
  * - 单行 / 多行同一套交互：有展开体就可展开（chevron + 点击整行 + `<details>` 原生可访问），
  *   单行也不例外 —— 单行的展开体就是那一行的完整原文。理由：summary 是 ellipsis 单行，
  *   长首行的全文只能靠展开读到（以前多行卡的首行永远读不全）；「单行不显示 chevron」
@@ -18,15 +26,20 @@
  *
  * scope 与行切分仍归 `env-notice.ts`（解析 / 折叠规则不动），这里只做展示。
  */
+import type { ReactNode } from 'react';
 import { formatClock } from '../../format';
 import { t } from '../../i18n';
-import type { EnvNoticeCard } from './env-notice';
+import type { EnvNoticeBlock, EnvNoticeCard } from './env-notice';
 import { StreamCard } from './StreamCard';
 
 export function EnvCard({
   env,
   ts,
   defaultOpen = false,
+  entering,
+  meta,
+  footnote,
+  blocks,
 }: {
   /** `env-notice.ts` 解析 / 折叠后的卡片数据。 */
   env: EnvNoticeCard;
@@ -34,6 +47,14 @@ export function EnvCard({
   ts?: number;
   /** 默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
   defaultOpen?: boolean;
+  /** 本帧才追加进来的项：入场只播一次（与其它卡同一判定）。 */
+  entering?: boolean;
+  /** 卡头 meta 槽的覆盖文案（缺省 = 折叠条数「N 条」）。 */
+  meta?: ReactNode;
+  /** 展开区首行（时间之后）的补充事实：hash / 上一份 hash / 窗口上限。 */
+  footnote?: ReactNode;
+  /** 展开区的原文块（0.52，additive：`prompt.system_context` 的全量快照）。 */
+  blocks?: readonly EnvNoticeBlock[];
 }) {
   const clock = formatClock(ts);
   return (
@@ -41,6 +62,7 @@ export function EnvCard({
       className="env-notice-card w-full min-w-0 max-w-full"
       ariaLabel={t('chat.env.aria')}
       defaultOpen={defaultOpen}
+      {...(entering !== undefined ? { entering } : {})}
       title={
         <>
           {/* 与 agent 卡的「来自 agent X」逐字同一组 class（mono / 2xs / tracking / accent）。 */}
@@ -53,7 +75,7 @@ export function EnvCard({
           )}
         </>
       }
-      meta={env.count > 1 ? t('chat.env.count', { count: env.count }) : undefined}
+      meta={meta ?? (env.count > 1 ? t('chat.env.count', { count: env.count }) : undefined)}
       summary={env.lines[0]?.text}
     >
       {clock !== '' && (
@@ -62,6 +84,7 @@ export function EnvCard({
           <time className="shrink-0 tabular-nums" dateTime={new Date(ts ?? 0).toISOString()}>
             {clock}
           </time>
+          {footnote}
         </div>
       )}
       <ul className="m-0 flex min-w-0 list-none flex-col gap-1 p-0">
@@ -81,6 +104,13 @@ export function EnvCard({
           </li>
         )}
       </ul>
+      {/* 原文块：全量快照（不渲染 markdown —— 原文就是事实），自带最大高度与滚动。 */}
+      {blocks?.map((block) => (
+        <div className="min-w-0" key={block.labelKey}>
+          <div className="event-raw-label">{t(block.labelKey as never)}</div>
+          <pre className="run-error-body">{block.text}</pre>
+        </div>
+      ))}
     </StreamCard>
   );
 }
