@@ -77,11 +77,7 @@ function checkIdentity(): void {
     `ratio * max 必须等于 token_count（${ratioA} × 200000 ≠ 103456）`,
   );
   if (ratioA !== undefined) {
-    check(
-      near(ratioA, 103_456 / 200_000),
-      'A1',
-      'ratio 必须就是 token_count / max，不许另算一份',
-    );
+    check(near(ratioA, 103_456 / 200_000), 'A1', 'ratio 必须就是 token_count / max，不许另算一份');
   }
 
   // A2：成对真值（`context.pressure`）必须覆盖掉更早的窗口上限，而不是相加/取平均。
@@ -129,7 +125,11 @@ function checkIdentity(): void {
     data: { session_id: 's5', context_max: 200_000 },
   });
   const ratioA5 = prefer.ratio('s5');
-  check(ratioA5 !== undefined && near(ratioA5 * 200_000, 90_000), 'A5', '窗口上限真值必须优先于装配兜底');
+  check(
+    ratioA5 !== undefined && near(ratioA5 * 200_000, 90_000),
+    'A5',
+    '窗口上限真值必须优先于装配兜底',
+  );
 
   // A6：undefined 只剩一种触发条件 —— 本进程没见过该会话的任何上下文事件。
   check(live.ratio('never-seen') === undefined, 'A6', '没见过的会话才允许 undefined');
@@ -158,7 +158,11 @@ function checkRounding(): void {
     data: { session_id: 'r2', context_max: 1_000 },
   });
   check(reading.percent('r2') === 90, 'B2', '89.5% 必须与界面一致显示 90%（floor 会显示 89%）');
-  check(Math.floor((reading.ratio('r2') ?? 0) * 100) === 89, 'B2', '这条样本必须真的能区分 round 与 floor');
+  check(
+    Math.floor((reading.ratio('r2') ?? 0) * 100) === 89,
+    'B2',
+    '这条样本必须真的能区分 round 与 floor',
+  );
 }
 
 async function checkRoundingInSources(): Promise<void> {
@@ -268,9 +272,17 @@ function checkWrapper(): void {
   const wrapped = withLiveContextRatio(host, live);
 
   check(wrapped instanceof FakeHost, 'E1', '包装必须仍是原宿主（原型链，不是复制）');
-  check(wrapped.canConfirm() === true, 'E2', '宿主方法在包装对象上调用时必须仍能读到自己的状态（this 绑定）');
+  check(
+    wrapped.canConfirm() === true,
+    'E2',
+    '宿主方法在包装对象上调用时必须仍能读到自己的状态（this 绑定）',
+  );
   check(near(wrapped.contextRatio('hot') ?? 0, 90_000 / 200_000), 'E3', '实时读数必须压过宿主旧值');
-  check(wrapped.contextRatio('known') === 0.25, 'E4', '实时读数缺席时回落到宿主旧值（至少比 unknown 准）');
+  check(
+    wrapped.contextRatio('known') === 0.25,
+    'E4',
+    '实时读数缺席时回落到宿主旧值（至少比 unknown 准）',
+  );
   check(wrapped.contextRatio('nowhere') === undefined, 'E5', '两边都没有才 undefined');
 }
 
