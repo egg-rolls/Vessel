@@ -22,7 +22,8 @@ C2 静态钉住（生产者只许尾部追加）、C3 scope 词表对拍。通�
 ## 环境信息（唯一一类卡）
 
 一条 `role: 'user'` + `name: 'vessel:notice'` 的尾消息 = 一条环境信息。**不新造事件**，Web 由
-`apps/web/src/domains/chat/env-notice.ts` 解析成卡（`EnvCard`），首行的 scope 词决定卡头标签：
+`apps/web/src/domains/chat/env-notice.ts` 解析成卡，**唯一渲染入口是 `EnvCard`**（标题「环境信息」），
+首行的 scope 词决定卡头标签：
 
 | scope | 含义 | 生产者 |
 |---|---|---|
@@ -61,6 +62,19 @@ C2 静态钉住（生产者只许尾部追加）、C3 scope 词表对拍。通�
 
 占位改变了请求消息序列 ⇒ `buildRequestMessages` 记一次显式 `context_trim`，
 `PromptPrefixGuard` 据此有据可依（不报「莫名前缀变化」）。
+
+## 两张数据源、一处渲染
+
+`EnvCard` 是环境信息的唯一渲染入口，数据来源有两条，形状都归一到 `EnvNoticeCard`：
+
+| 来源 | 形态 | 谁装配 |
+|---|---|---|
+| `vessel:notice` 消息 | 文本行（首行摘要 + `  · ` 明细） | `envNoticeCard`（解析） |
+| `prompt.system_context` 事件 | 行（摘要 / 增量）+ 原文块（全量快照） | `envCardOfPromptContext` |
+
+原文块是 `EnvNoticeCard` 的 additive 槽（`blocks`）：快照原文按行拆会失真、按行数上限
+截断会丢事实，所以它与「行」是两种粒度、各放一处；卡头 meta / 展开区 footnote 同样是
+additive 显示槽（增量视图的「N 项变更」、hash / 上一份 hash）。
 
 ## 边界
 
