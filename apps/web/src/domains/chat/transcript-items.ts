@@ -460,6 +460,51 @@ export function sessionFailureOfDetail(
 }
 
 /**
+ * 会话详情（`sessions.get`）→ **终态对账**结果（`undefined` = 服务端说这一 run 还没完）。
+ *
+ * 为什么需要：chat 的 live 状态（停止按钮 / 「正在思考」/ running 段）只吃事件流，而事件
+ * 流是尽力而为的 —— 背压丢帧、回放窗口淘汰（`EventStore` 的 per-run 条目上限 + 总量上限）、
+ * hub 重启换 seq 纪元、body 被关停之后再没人发终态帧。任一条成立，run 的终态帧就永远
+ * 到不了，屏幕上的「还在跑」没有任何人收口。
+ *
+ * 会话投影里 `status` / `run_id` / `completed_at` / `error` 是**落盘的**，因此这是同一个
+ * 页面里唯一「可核对」的终态来源（与失败卡同一条路径，不新增 RPC）。
+ *
+ * 只认真正的终态：`interrupted`（挂起 / Host 中断）可恢复，不能收口 —— 续跑入口在运行
+ * 详情页（`runs.resume`）；`running` / 未知状态同理不动。
+ */
+export function sessionTerminalOfDetail(
+  detail: SessionDetail | null | undefined,
+): SessionTerminal | undefined {
+  if (detail === null || detail === undefined) return undefined;
+  const status = detail.status;
+  if (status !== 'completed' && status !== 'failed' && status !== 'cancelled') return undefined;
+  const at = detail.completed_at ?? detail.updated_at;
+  if (typeof at !== 'number' || !Number.isFinite(at)) return undefined;
+  const runId = detail.run_id;
+  const error = detail.error;
+  return {
+    sessionId: detail.session_id,
+    ...(typeof runId === 'string' && runId.length > 0 ? { runId } : {}),
+    status,
+    at,
+    ...(typeof error === 'string' && error.length > 0 ? { error } : {}),
+  };
+}
+
+/**
+ * 会话快照给的终态（`sessionTerminalOfDetail` 的产物）。`runId` 缺省时按「该会话所有
+ * 仍 open 的 run」收口 —— 快照说这一会话已经完了，本地残留不许推翻它。
+ */
+export interface SessionTerminal {
+  sessionId: string;
+  runId?: string;
+  status: 'completed' | 'failed' | 'cancelled';
+  at: number;
+  error?: string;
+}
+
+/**
  * 会话详情里的系统消息（`sessions.get.system_context`）→ 卡片数据。
  *
  * 比 `PromptContextData` 多两件只在 detail 路径上出现的东西：
