@@ -249,32 +249,38 @@ function askQuestionSlots(input: unknown): AskQuestionSlot[] {
 }
 
 /**
- * 一条答案对应哪道题。
+ * 答案归一：把一条答案绑到具体题上（认不出来才返回 undefined）。
  *
- * 顺序（每步都只看**还没被本次占用**的题，避免两条答案抢同一题）：
+ * 顺序：
  * 1. `question_id`（新客户端 / 新历史，唯一可靠的一步）；
  * 2. `question` 正文全等（旧客户端带了正文，最常见）；
  * 3. `header` 全等（正文被 UI 改写时的兜底）；
- * 4. 第一道没被占用的题（旧客户端一次答完 N 题、按题序发来 —— 位置就是答案）；
- * 5. 都没有 ⇒ undefined（对不上题的答案原样收下，不参与逐题状态）。
+ * 4. 同一位置上那道题（旧客户端把 N 题按题序一次发来，第 i 条就是第 i 题）。
+ *
+ * 两处刻意与旧实现不同，都是为了「归一」与「去重」分成两步：
+ * - 认出了题、但那题已经答过时**照样返回题号**，不再折叠成 undefined —— 折叠之后
+ *   调用方无从区分「重复」与「认不出来」，重复行会被当成一条没有题号的新答案写进
+ *   记录（0.52 落盘里那条 question_id 为 null 的答案就是这么来的）；
+ * - 位置兜底只认「答案自己的序号」，不再用「第一道没被占用的题」：分批之后一次提交
+ *   里的第 i 条与题序不再一一对齐（可能只带后面几题），空位兜底会把重投的旧答案
+ *   硬塞给还没答的题。
  */
-function matchQuestionId(
+function questionIdForAnswer(
   answer: unknown,
   slots: readonly AskQuestionSlot[],
-  taken: ReadonlySet<string>,
+  index: number,
 ): string | undefined {
   const identified = identifyQuestion(answer, slots);
-  if (identified !== undefined) return taken.has(identified) ? undefined : identified;
-  const free = slots.filter((slot) => !taken.has(slot.id));
-  // 位置兜底：旧客户端一次答完 N 题、按题序发来，位置就是答案。
-  return free[0]?.id;
+  if (identified !== undefined) return identified;
+  // 位置兜底：旧客户端把 N 题按题序一次发来，第 i 条就是第 i 题。
+  return slots[index]?.id;
 }
 
 /**
  * 只按答案自带的身份键认题（不看位置）：`question_id` → `question` 正文 → `header`。
  *
- * 与 {@link matchQuestionId} 分开的理由：判断「这行是不是重复」时不能有位置兜底 ——
- * 一份重复提交的三行答案会被位置兜底全部认成第 1 题，于是 skipped 里出现三个 `q1`。
+ * 与 {@link questionIdForAnswer} 分开的理由：判断「这行是不是重复」时不能有位置兜底 ——
+ * 一份重复提交的三行答案会被位置兜底认成同一题，于是 skipped 里出现三个 `q1`。
  */
 function identifyQuestion(answer: unknown, slots: readonly AskQuestionSlot[]): string | undefined {
   const record = isRecord(answer) ? answer : {};
@@ -310,9 +316,12 @@ export interface AskAnswerPlan {
 /**
  * 把一批答案规划到「题」上。
  *
- * 三条不变量：
+ * 四条不变量：
  * - **未答的题不会因为别人被答而被带走**：`answered` 只加不减，`remaining` 只减不增；
  * - **同一题不得被答两次**：已答过的题进 `skipped`，不覆盖、不重投；
+ * - **先归一，再去重**：每条答案先绑到具体题上（缺 question_id 的旧客户端按正文 /
+ *   自己的题序位置回退），绑不上题的行不落笔 —— 记录里不允许出现没有题号的答案，
+ *   否则重复提交会变成一条独立的新答案（这就是分批提交导致数据漂移的入口）；
  * - **没有可枚举的题**（`input` 不是数组 / 空数组）时退回旧语义：本批答案全部算数，
  *   整条请求当场收口 —— 历史记录与异常形状都走这条，行为与分批之前一致。
  */
@@ -326,9 +335,14 @@ export function planAskAnswers(
   const fresh: unknown[] = [];
   const skipped: string[] = [];
 
-  for (const answer of answers) {
+  // 没有可枚举的题时只能整批收下，但**已经记过的同一份答案不能再记一遍**：这条路径
+  // 同时被 RPC 和流上回声调用（echo 先落盘、RPC 兜底再来一次），不判等就是一份答案
+  // 记两次 —— 空题号版本的数据漂移在旧形状的 ask 上是同一个病。
+  const recorded = (record.answer?.answers ?? []) as readonly unknown[];
+
+  for (const [index, answer] of answers.entries()) {
     if (slots.length === 0) {
-      fresh.push(answer);
+      if (!recorded.some((previous) => jsonEqual(previous, answer))) fresh.push(answer);
       continue;
     }
     const explicit = isRecord(answer) ? nonEmptyString(answer.question_id) : undefined;
@@ -344,9 +358,13 @@ export function planAskAnswers(
       if (id !== undefined) skipped.push(id);
       continue;
     }
-    const questionId = matchQuestionId(answer, slots, taken);
-    if (questionId === undefined) {
-      fresh.push(answer);
+    // 先归一（补上题号）再按题号去重，顺序不能反：先判重就得先知道「这是哪题」，
+    // 而缺 question_id 的旧客户端只能靠正文 / 位置归一。旧的实现把「认出了但已答过」
+    // 也折成「认不出来」，于是重投的旧答案被原样追加成一条没有题号的新答案。
+    const questionId = questionIdForAnswer(answer, slots, index);
+    if (questionId === undefined) continue;
+    if (taken.has(questionId)) {
+      skipped.push(questionId);
       continue;
     }
     taken.add(questionId);
