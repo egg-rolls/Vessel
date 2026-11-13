@@ -6,6 +6,7 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { normalizeContextAnchor } from '../context/index.js';
 import type { Message } from '../types/provider.js';
 import type { RunUsage } from '../types/run-record-store.js';
 import type {
@@ -35,6 +36,8 @@ interface SessionRow {
   tenant_id: string | null;
   /** 0.18：messages 投影缓存覆盖到的事件 seq */
   derived_upto_seq: number | null;
+  /** 0.52 C：真实用量锚点（JSON；NULL = 旧行 / 没拿到过 provider 用量） */
+  context_anchor: string | null;
 }
 
 /** listRich 查询行形状（含派生列 message_count） */
@@ -49,6 +52,21 @@ interface SessionListRow {
   branch: string | null;
   tenant_id: string | null;
   title_source: string | null;
+}
+
+/**
+ * 解析可为 NULL 的 JSON 列；脏数据返回 undefined。
+ *
+ * 会话库是本地文件，可能被手改 / 版本回滚写坏；解析失败不该让整个会话加载失败
+ * （调用方都按「没有这个字段」处理）。
+ */
+function parseJsonColumn(value: string | null): unknown {
+  if (value === null || value === '') return undefined;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 旧行顶层 run 字段 -> SessionState.legacy_run（一版兼容） */
@@ -115,7 +133,8 @@ export class SQLiteSessionStore implements SessionStore {
         updated_at INTEGER,
         branch TEXT,
         tenant_id TEXT,
-        derived_upto_seq INTEGER
+        derived_upto_seq INTEGER,
+        context_anchor TEXT
       )
     `);
     // ALTER TABLE 无 IF NOT EXISTS，逐列 try/catch（已存在则静默）
@@ -128,6 +147,8 @@ export class SQLiteSessionStore implements SessionStore {
     this.ensureColumn('tenant_id', 'TEXT');
     // 0.18：旧库补列；NULL 表示该行没有派生游标（resume 走全量投影去重回退）
     this.ensureColumn('derived_upto_seq', 'INTEGER');
+    // 0.52 C：旧库补列；NULL 表示没有真实锚点（tokenCount 退回裸估算 = 0.51 行为）
+    this.ensureColumn('context_anchor', 'TEXT');
   }
 
   /** 为旧库补列（列已存在时静默忽略） */
@@ -168,6 +189,8 @@ export class SQLiteSessionStore implements SessionStore {
       status: row.status,
       last_run_id: row.run_id || undefined,
       legacy_run: toLegacyRun(row.completed_at, row.usage, row.error),
+      // 0.52 C：旧行 NULL / 脏 JSON ⇒ undefined ⇒ 行为与 0.51 一致。
+      context_anchor: normalizeContextAnchor(parseJsonColumn(row.context_anchor)),
     };
   }
 
@@ -186,8 +209,8 @@ export class SQLiteSessionStore implements SessionStore {
 
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO sessions
-        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, title_source, preview, updated_at, branch, tenant_id, derived_upto_seq)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, title_source, preview, updated_at, branch, tenant_id, derived_upto_seq, context_anchor)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -206,6 +229,8 @@ export class SQLiteSessionStore implements SessionStore {
       state.created_on_branch ?? null,
       null,
       typeof state.derived_upto_seq === 'number' ? state.derived_upto_seq : null,
+      // 0.52 C：真实锚点整体存 JSON —— 形状会随实现演进，列不再拆字段。
+      state.context_anchor !== undefined ? JSON.stringify(state.context_anchor) : null,
     );
   }
 

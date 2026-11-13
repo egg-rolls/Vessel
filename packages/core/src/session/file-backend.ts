@@ -12,6 +12,7 @@
 
 import { mkdir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { normalizeContextAnchor } from '../context/index.js';
 import type { Message } from '../types/provider.js';
 import type { RunUsage } from '../types/run-record-store.js';
 import type {
@@ -143,6 +144,8 @@ function toSessionState(value: unknown): SessionState {
     status: raw.status as SessionStatus | undefined,
     last_run_id: optionalString(raw.last_run_id) ?? optionalString(raw.run_id),
     legacy_run: toLegacyRun(raw),
+    // 0.52 C：旧快照没有这个键 ⇒ undefined ⇒ 行为与 0.51 一致（裸估算）。
+    context_anchor: normalizeContextAnchor(raw.context_anchor),
   };
 }
 
@@ -413,6 +416,8 @@ export class FileSessionStore implements SessionStore {
       run_id: state.last_run_id,
       messages,
       derived_upto_seq: state.derived_upto_seq,
+      // 0.52 C：真实用量锚点。旧文件没有这个键 ⇒ 读取时为 undefined ⇒ 裸估算（0.51 行为）。
+      ...(state.context_anchor !== undefined ? { context_anchor: state.context_anchor } : {}),
     };
 
     await atomicWrite(this.filePath(sessionId), JSON.stringify(disk, null, 2));

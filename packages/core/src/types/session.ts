@@ -3,6 +3,7 @@
  * @module @vessel-agent/core/session
  */
 
+import type { ContextAnchor } from './context.js';
 import type { Message } from './provider.js';
 import type { RunUsage } from './run-record-store.js';
 
@@ -54,6 +55,13 @@ export interface SessionState {
   last_run_id?: string;
   /** @internal one-release legacy compatibility snapshot (dual-write/read). */
   legacy_run?: LegacyRunSnapshot;
+  /**
+   * 真实 token 锚点（additive，0.52 C）。
+   *
+   * 缺省 = 旧会话 / 还没拿到过 provider 的 `prompt_tokens`，行为与 0.51 一致（裸估算）。
+   * 它只校正**估算**（展示与阈值判断）；provider 的真实用量到达后仍然真实值优先。
+   */
+  context_anchor?: ContextAnchor;
 }
 
 /** 会话摘要（listRich 返回，照搬 Hermes list_sessions_rich 的字段集，简化） */
