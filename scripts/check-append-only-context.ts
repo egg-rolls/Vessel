@@ -26,6 +26,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { ENV_NOTICE_SCOPES } from '../apps/web/src/domains/chat/env-notice';
 import { ENV_INFO_SCOPES } from '../packages/agent/src/env-info-scope';
 import {
   createRunJournalFactory,
@@ -34,14 +35,13 @@ import {
   MemoryLLMProvider,
   MemorySessionStore,
   MemoryWorkingContext,
-  withClearedToolResults,
   type Message,
   type SessionEventInput,
   type SessionEventLogPort,
   type SessionEventRecord,
   type SessionState,
+  withClearedToolResults,
 } from '../packages/core/src/index';
-import { ENV_NOTICE_SCOPES } from '../apps/web/src/domains/chat/env-notice';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -194,9 +194,7 @@ function compareSnapshots(prev: Snapshot, next: Snapshot, evidence: Evidence): V
   }
 
   // 幸存尾部必须逐字不变：压缩只能「删掉被摘要的那一段」，不能顺手改留下的内容。
-  const kept = next.messages
-    .slice(summaryIndex + 1)
-    .filter((message) => message.role !== 'system');
+  const kept = next.messages.slice(summaryIndex + 1).filter((message) => message.role !== 'system');
   const before = prev.messages.filter(
     (message) => message.role !== 'system' && !isSummary(message),
   );
@@ -232,9 +230,7 @@ class MemoryEventLog implements SessionEventLogPort {
 
   /** 事件记录（按 seq 升序）落在 (from, to] 区间里的那一段。 */
   eventsBetween(sessionId: string, from: number, to: number): SessionEventRecord[] {
-    return this.records(sessionId).filter(
-      (record) => record.seq > from && record.seq <= to,
-    );
+    return this.records(sessionId).filter((record) => record.seq > from && record.seq <= to);
   }
 
   async append(input: SessionEventInput): Promise<SessionEventRecord> {
@@ -531,10 +527,18 @@ async function runClearingProbe(): Promise<void> {
       role: 'assistant',
       content: '',
       tool_calls: [
-        { id: `call-${String(turn)}`, type: 'function', function: { name: 'probe', arguments: '{}' } },
+        {
+          id: `call-${String(turn)}`,
+          type: 'function',
+          function: { name: 'probe', arguments: '{}' },
+        },
       ],
     });
-    before.push({ role: 'tool', content: `output ${String(turn)} ${'x'.repeat(200)}`, tool_call_id: `call-${String(turn)}` });
+    before.push({
+      role: 'tool',
+      content: `output ${String(turn)} ${'x'.repeat(200)}`,
+      tool_call_id: `call-${String(turn)}`,
+    });
   }
   for (const message of before) context.add(message);
   const removed = context.compact(true);
@@ -728,9 +732,7 @@ async function main(): Promise<void> {
   ) {
     fail('C0', '无压缩凭据的改写没有被判违规');
   }
-  if (
-    compareSnapshots(base, { cursor: 12, messages: [] }, NO_EVIDENCE).kind !== 'violation'
-  ) {
+  if (compareSnapshots(base, { cursor: 12, messages: [] }, NO_EVIDENCE).kind !== 'violation') {
     fail('C0', '无压缩凭据的删除没有被判违规');
   }
   const allowed = compareSnapshots(base, compacted, {

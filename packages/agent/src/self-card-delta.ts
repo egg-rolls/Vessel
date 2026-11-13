@@ -29,11 +29,11 @@
 
 import type { Hook, HookType, Message } from '@vessel-agent/core';
 import {
-  formatEnvInfo,
   ENV_INFO_DETAIL_MARK,
   ENV_INFO_MESSAGE_NAME,
   ENV_INFO_SCOPES,
   type EnvInfoScope,
+  formatEnvInfo,
 } from './env-info-scope.js';
 import type { MemberExecutionPermissionMode } from './runtime.js';
 import type { MemberExecutionMember } from './types.js';
@@ -295,8 +295,7 @@ export function formatSelfCardDeltas(changes: readonly SelfCardChange[]): string
     texts.push(
       formatEnvInfo({
         scope,
-        summary:
-          SCOPE_SUMMARY[scope] ?? 'a field the model should know about has changed',
+        summary: SCOPE_SUMMARY[scope] ?? 'a field the model should know about has changed',
         details,
       }),
     );

@@ -11,10 +11,7 @@
  * 退出码不可信）。
  */
 
-import {
-  contextChangeEntries,
-  parseContextChange,
-} from '../apps/web/src/domains/chat/env-notice';
+import { contextChangeEntries, parseContextChange } from '../apps/web/src/domains/chat/env-notice';
 import {
   promptContextOfEvent,
   sessionSystemContextOfDetail,
@@ -112,7 +109,9 @@ async function main(): Promise<void> {
 
   // ---- 2. 客户端：有 changed ⇒ 增量卡；缺省 ⇒ 全量卡（不是「0 项变更」）----
   const incremental = promptContextOfEvent(
-    eventOf(payload({ changed: ['model: m1 → m2', 'tools: 3 → 4'], previous_hash: 'bbbbbbbbbbbbbbbb' })),
+    eventOf(
+      payload({ changed: ['model: m1 → m2', 'tools: 3 → 4'], previous_hash: 'bbbbbbbbbbbbbbbb' }),
+    ),
   );
   check('解析出 changed', incremental?.changed?.length === 2, String(incremental?.changed?.length));
   check('解析出 previousHash', incremental?.previousHash === 'bbbbbbbbbbbbbbbb');

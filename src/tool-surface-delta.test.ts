@@ -19,8 +19,7 @@
  * - 长清单收口：超过明细上限时折成「and N more」，不让卡片静默吞掉。
  */
 
-import { envNoticeCard } from '../apps/web/src/domains/chat/env-notice';
-import { ENV_NOTICE_SCOPES } from '../apps/web/src/domains/chat/env-notice';
+import { ENV_NOTICE_SCOPES, envNoticeCard } from '../apps/web/src/domains/chat/env-notice';
 import {
   ENV_INFO_DETAIL_MARK,
   ENV_INFO_DETAILS_MAX,

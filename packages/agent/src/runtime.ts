@@ -49,8 +49,8 @@ import { type AgentInboxPort, createInboxNoticeHook, createInboxTool } from './i
 import { resolveMemberCwd } from './member-cwd.js';
 import { buildMemberBodyPorts } from './member-ports.js';
 import { createSelfCardDeltaHook, selfCardIdentityOf } from './self-card-delta.js';
-import { createToolSurfaceDeltaHook } from './tool-surface-delta.js';
 import { HUMAN_PRINCIPAL, SYSTEM_PRINCIPAL } from './team-address.js';
+import { createToolSurfaceDeltaHook } from './tool-surface-delta.js';
 import type {
   AgentMessage,
   AgentRole,

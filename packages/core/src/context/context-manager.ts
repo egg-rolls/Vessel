@@ -198,10 +198,7 @@ function retainedToolResultCount(messages: readonly Message[], maxTokens: number
  * 分开的理由是不变量「落盘的 message 只能 pop 或 append」：在压缩里就地改正文等于
  * 在磁盘上重写历史，用户回看旧消息时看到的就不是当时那份了。
  */
-export function planClearedToolResults(
-  messages: readonly Message[],
-  maxTokens: number,
-): string[] {
+export function planClearedToolResults(messages: readonly Message[], maxTokens: number): string[] {
   const keep = retainedToolResultCount(messages, maxTokens);
   let skipped = 0;
   const cleared: string[] = [];
@@ -226,10 +223,7 @@ export function planClearedToolResults(
  * 调用方（`ExecutionUnit.buildRequestMessages`）据此做到「发给 provider 的请求省 token，
  * 落盘的历史一个字不改」。这是本不变量在 core 里唯一允许的「视图层改写」。
  */
-export function withClearedToolResults(
-  messages: readonly Message[],
-  maxTokens: number,
-): Message[] {
+export function withClearedToolResults(messages: readonly Message[], maxTokens: number): Message[] {
   const cleared = planClearedToolResults(messages, maxTokens);
   if (cleared.length === 0) return [...messages];
   const ids = new Set(cleared);

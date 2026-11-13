@@ -106,7 +106,10 @@ async function main(): Promise<void> {
     two[1]?.includes('next body uses the new one') === true,
     two[1]?.split('\n')[1],
   );
-  check('每条各自一条明细', two.every((text) => text.split('\n').length === 2));
+  check(
+    '每条各自一条明细',
+    two.every((text) => text.split('\n').length === 2),
+  );
 
   // ---- 2. system prompt：只说「加了 / 换了 / 去了」，绝不贴正文 ----
   const longPrompt = 'S'.repeat(4000);
@@ -222,7 +225,9 @@ async function main(): Promise<void> {
   check(
     'identity 那条明细齐全',
     detailLines(merged.find((m) => m.content.startsWith('identity: '))?.content ?? '').length === 2,
-    String(detailLines(merged.find((m) => m.content.startsWith('identity: '))?.content ?? '').length),
+    String(
+      detailLines(merged.find((m) => m.content.startsWith('identity: '))?.content ?? '').length,
+    ),
   );
   check(
     'model 那条一条明细',

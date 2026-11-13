@@ -21,11 +21,7 @@
  */
 
 import type { Hook, HookType, Message } from '@vessel-agent/core';
-import {
-  formatEnvInfo,
-  ENV_INFO_MESSAGE_NAME,
-  sortedNames,
-} from './env-info-scope.js';
+import { ENV_INFO_MESSAGE_NAME, formatEnvInfo, sortedNames } from './env-info-scope.js';
 
 /**
  * `HookType.BeforeLlm` 的字面值（`packages/core/src/types/hook.ts`）。
@@ -86,8 +82,7 @@ export function formatToolSurfaceDelta(change: ToolSurfaceChange): string {
   if (added > 0) parts.push(`${String(added)} added`);
   if (removed > 0) parts.push(`${String(removed)} removed`);
   const summary =
-    `${parts.join(', ')}; ` +
-    'the tool list sent in earlier requests of this body is out of date';
+    `${parts.join(', ')}; ` + 'the tool list sent in earlier requests of this body is out of date';
   return formatEnvInfo({
     scope: 'tools',
     summary,
