@@ -1160,6 +1160,7 @@ export const messages = {
   'chat.env.scope.restart': '重启',
   'chat.env.scope.identity': '身份',
   'chat.env.scope.fields': '字段',
+  'chat.env.scope.files': '文件变更',
   'chat.env.scope.model': '模型',
   'chat.env.scope.selfcard': '基础信息',
   'chat.env.scope.context': '上下文',

@@ -50,6 +50,7 @@ export const ENV_NOTICE_SCOPES = [
   'model',
   'identity',
   'fields',
+  'files',
   'context',
   'selfcard',
 ] as const;
@@ -93,7 +94,13 @@ export const ENV_NOTICE_DETAILS_MAX = 11;
 /** `runtimeMessageKind` 给出的种类；环境信息只看这一个 kind（vessel:notice）。 */
 export const ENV_NOTICE_KIND = 'notice';
 
-/** 这个 kind 的消息是不是环境信息（`source` / `subscription` / `limit` 均不是）。 */
+/**
+ * 这个 kind 的消息是不是环境信息（`source` / `limit` 均不是）。
+ *
+ * 0.52 起 doc-subscription 也写 `vessel:notice`（scope `files`），所以老通道
+ * `vessel:subscription` 不再有生产者，也**不**在这里特判：那些老消息落到「未登记的
+ * `vessel:*` kind」兜底路径（整段 notice 呈现），既不会崩，也不会变成裸 JSON。
+ */
 export function isEnvNoticeKind(kind: string | undefined): boolean {
   return kind === ENV_NOTICE_KIND;
 }
