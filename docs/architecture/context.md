@@ -7,7 +7,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 
 # 上下文与消息注入
 
-`WorkingContext` 是**每次 Run 一份**的内存消息窗口（Stage 4）；`ExecutionUnit` 只持 `contextFactory`，不持跨 Run 实例。`Run` 是唯一写者（`RunJournal`），事件日志是恢复的真相源，**compaction 是唯一允许重写历史的地方**。
+`WorkingContext` 是**每次 Run 一份**的内存消息窗口（Stage 4）；`ExecutionUnit` 只持 `contextFactory`，不持跨 Run 实例。`Run` 是唯一写者（`RunJournal`），事件日志是恢复的真相源，**落盘消息只能 append**（唯一的 pop 是 compression 整段替换，见 [env-info-append-only](env-info-append-only.md)）。
 
 - **生命周期**：Run 开始由 `contextFactory` 新建，从 SessionState 快照 + 事件日志增量播种（无快照则全量投影）；Run 结束用它写投影后随 Run 释放，下一次 Run 重新 new（只复用消息数据，不复用对象）。
 - **手动 `/compact`**：有 live EU 走 `ExecutionUnit.compactContext`；idle session 走等价瞬态路径（不启动 Run、不注入用户消息）；connect 走 `sessions.compact` RPC。两条本地路径都写 `message.compaction` + SessionState 并 flush，成功后 TUI mirror 用压缩后窗口刷新；connect 只拿到 `{removed, remaining}` 时本地视图显式标记 stale，下一次 run 刷新。`appendNotice` / `contextRatio` 行为不变。
