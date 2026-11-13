@@ -5,13 +5,32 @@
 
 ## 版本
 
-**0.51 开发线（2026-11-12，进行中）** — 基线 `main @ 8f9940ee`；manifest `0.51.0`；
-未 tag、未 publish（tag 等 1.0.0）；版本号以根 `package.json` 为唯一来源。**0.50.0 已收口**，
-变更见 [0.50.0](0.50.0.md)。
+**0.52 开发线（2026-11-13，进行中）** — 基线 `main @ b394b7a0`；manifest `0.52.0`；
+未 tag、未 publish（tag 等 1.0.0）；版本号以根 `package.json` 为唯一来源。**0.51.0 已收口**，
+完整变更见 [0.51.0](0.51.0.md)。
 
 ## 已合入（现态）
 
-- **0.51 已合入（七项）**：
+- **0.51 已收口**（完整变更见 [0.51.0](0.51.0.md)）：
+  - **归档 / 停用就是「等待被移除」**：`vessel prune` 判据从「时间」改成**状态**（归档 team 下的
+    agent ∪ 停用 agent，连记录本身一并删；**未归档一律不删**）；`--older-than` 只作可选叠加
+    （判归档/停用时刻）；Web 默认隐藏归档/停用对象 + `ui.showArchived` 开关（detail 层仍可达）；
+    `vessel team show|mine`。
+  - **工具面只有一份**：成员用的就是节点那一份（删掉白名单、`source`/`surface`/`unavailable`
+    二层区分与死名 `delegate_task`/`team_*`）；成员工具面 = 节点全量 − 父级应答闸；deny 档 =
+    `read`/`media`/`subscribe`。
+  - **成员 cwd 层**：`agent.cwd` > 显式 Team.workspace > `process.cwd()`（锚点 Team 排除），
+    basic-tools 改调用期解析；目录安全闸不动。
+  - **ask 交互重做**：每题独立 + **可分批提交**（未答的留队列）+ 一次提交一条 inbox 消息、
+    来源 `ask`；多选升级成 `selected: string[]`；草稿持久化（sessionStorage）；已答记录**按时间
+    落进时间线**（不再堆在末尾）。
+  - **落盘 append-only 是硬门禁**：`check:append-only-context` 实测抓出「压缩就地改写幸存工具
+    结果」，修法是把占位替换搬到请求级视图（落盘仍是原文）；身份/模型/工具变更一律走
+    「环境信息」增量（`env-info-scope.ts` 七个 scope），Self Card 构造期只读、不热替换。
+  - **插件端口面期 0**：`MemberInboxPort`（agentId 绑死、不给 hold/markConsumed）+ 空壳贡献
+    + in-process 清单校验 + `check:plugin-ports`。
+  - **四条新门禁**：`check:conflict-markers`（冲突标记落在 JSDoc/接口时 tsc+biome 都不红）、
+    `check:archived-visibility`、`check:ask-drafts`、`check:append-only-context`（并入既有链）。
   - **rotate 交接卡 + rotate 文案说真话**：`startup_prompt` 带
     `Message.name = 'rotate:handoff:<epoch>'` ⇒ Web 渲成默认展开的「⟳ rotate 交接」卡、TUI 渲成
     可读块（不再伪装成人类气泡）；工具结果不再写假的 `finish the current turn`，改为说明
@@ -118,10 +137,12 @@
 
 ## 未实现 / 下一步
 
-- **0.51 待办**：TUI 答 async ask；工具卡交棒（需历史侧 `duration_ms`）；位置认领（前置已具备：
-  消息身份 `run_id` + `run_segment` 已落盘）；`sessions.search` 读侧投影缓存；用量 43% unpriced；
-  条带 agent 源的「unhold 留档」按钮；
-  `claimStats.rewrittenSegments` 接 diagnosics。
+- **0.52 待办（0.51 未做完的）**：**B′ rotate 收口解耦**（下一单首选，见下）；TUI 答 async ask；
+  工具卡交棒（需历史侧 `duration_ms`）；位置认领（前置已具备：消息身份 `run_id` + `run_segment`
+  已落盘）；`sessions.search` 读侧投影缓存；用量 43% unpriced；`guardrail PII 误伤`（13 位时间戳
+  被当手机号打码，且在改写落盘正文）；条带 agent 源的「unhold 留档」按钮；
+  `claimStats.rewrittenSegments` 接 diagnostics；未覆盖的历史会话 → 工具卡描述需
+  `sessions.get` 透出 `agent_id`；`restart` 类环境信息在词表里留位但**仍无生产者**。
 - **rotate 交棒缺口（C 已做，B′ 待排）**：self-rotate 那一轮被当成「迟到的旧轮」做 epoch
   fencing（正文落盘但不记账、notice 只带消息 id）。C 已落地（交接卡 + 文案说真话）；B′ 只做两件
   小事 —— 收口侧 `retiredDuringRunId` 判据让交棒轮正常记账，以及**空正文不静默**（rotate 后旧轮

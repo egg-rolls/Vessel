@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/plugin-usage",
-  "version": "0.51.0",
+  "version": "0.52.0",
   "description": "Usage, logs and model leaderboard for Vessel",
   "type": "module",
   "exports": {
@@ -25,8 +25,8 @@
     "probe": "bun run test/probe.ts"
   },
   "dependencies": {
-    "@vessel-agent/core": "0.51.0",
-    "@vessel-agent/plugin-ui": "0.51.0",
+    "@vessel-agent/core": "0.52.0",
+    "@vessel-agent/plugin-ui": "0.52.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

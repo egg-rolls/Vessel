@@ -9,103 +9,10 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
-## [0.51.0] - unreleased
+## [0.52.0] - unreleased
 
-> 开发线已开启（2026-11-12）。条目随实现累积；0.50.0 的完整变更见
-> [docs/versions/0.50.0.md](docs/versions/0.50.0.md)。
-
-### Changed
-
-- **in-process 插件也走清单校验（0.51 期 0.5）**：`package.json.vessel` 里声明了清单字段的
-  in-process 包此前**完全不校验**（`readPlugin` 只在 `vessel.entry` 非空时调
-  `validatePluginManifest`），于是 `scope` / `permissions` 这类「声明过才给」的字段在校验层面
-  根本不存在，声明错的能力插件照样装进来。现在它们走同一套 fail-closed 校验（同一份清单契约；
-  `entry` 由 `exports` / `main` 解析因而可缺省）；只写 `vessel.override` 的旧形态不受影响 ——
-  那是覆盖标记，不是清单。
-- **rotate 的模型侧文案改说真话**：工具结果不再写 `finish the current turn`（实测这句是假指令
-  —— 交棒轮的收尾正文会被 epoch fencing 掉，不记账也不回传父级）。现在说明「新身体已开跑、
-  本轮剩余输出按旧 epoch 被 fence，`startup_prompt` 是唯一交接通道」，工具描述与
-  `startup_prompt` 参数说明同步补上这条不变量（owner / 成员两侧逐字一致）。
-- **删掉 rotate 的三条死类型**：`agent.rotating` / `agent.rotated` / `agent.rotate.failed`
-  是 ADR-092 第 18 条要求过、实现从未发出的类型（Web notice 分支、`event-visibility` 表项、
-  Team 日志 `rotate` 行、TUI 联合成员与文案、`SYSTEM_CONTENT.rotate`、serve enum 全是走不到
-  的路径）。全链路删除，事件表 112 条（15 content + 48 internal + 49 observe）；ADR-092 走
-  **Errata** 记录差异、原文不动，`member-team.md` / `events.md` 按实现事实改正（含把
-  `rotate_failed` 这个从未存在的失败码改成实际抛的 `spawn_failed`）。
-
-### Fixed
-
-- **结尾正文重复（根因）**：时间线的跨来源去重一直拿**正文内容**当代理键，而 Output 阶段
-  guardrail 会在落盘前改写正文（PII 打码：`1794482135404` → `179*******404`），于是实时流
-  （原文）与落盘（打码后）内容不等 ⇒ 认不出是同一段 ⇒ 历史与 live 各渲一份；刷新后只剩一份
-  （chunk 不落盘）。本机 652 个可比 run 中 7 个（1.07%）命中，全是 PII 改写，所以是「有概率」。
-  修法是给消息补**结构化身份**：`Message.run_id`（写入上下文时盖章）+ `run_segment`（落盘漏斗
-  `RunJournal.saveSessionState` 与事件投影 `projectMessages` 共用同一个幂等、续编的盖章函数），
-  认领改为「身份优先、内容兜底」—— 命中同身份时 live 让位、**内容不同也照让**（屏上以落盘
-  打码版为准），差异记进 `ClaimStats.rewrittenSegments` 而不吞；旧数据无身份则退回内容比较
-  （路径保留）。不改事件流、不持久化认领账本。设计笔记：
-  `docs/dev/reports/0.51/claim-identity-design.md`。
-
-### Added
-
-- **插件端口面（0.51 期 0）**：插件可以声明「装在成员身体上」并申请宿主端口。清单 additive
-  两处：`vessel.scope: 'node' | 'member'`（缺省 `node`）与 `permissions.ports`（闭集，当前只有
-  `inbox`）；端口**只对 `scope: 'member'` 的 in-process 能力插件开放**，`ports` 非空而 scope
-  不是 member、或 child 插件声明 `member` 一律 `plugin_manifest_invalid`（child 没有 body 宿主，
-  给它端口等于开一条反向 RPC 通道 —— 本期边界，不是遗漏）。契约在 core
-  `types/member-port.ts`（纯类型）：`MemberInboxPort` / `MemberBodyPort<P>` /
-  `MemberBodyContribution<P>`，集合类型 `MemberBodyPorts<P> = Pick<…, P>`；agentId 绑死在端口
-  上（方法没有 agentId 参数）、hold / releaseHeldFor / markConsumed 留在宿主、未申请的端口在
-  类型上不存在。装配面只加 `PluginHost.registerMemberBodyContribution?` /
-  `getMemberBodyContributions?` 两个可选方法，只有 `MemberExecutionHost.spawn` 消费（它握的就是
-  tenant 宿主，零新增透传）。内置 `inbox` 贡献本期是**空壳**：`tools()` 返回空数组，`listTools()`
-  / `tools.list{agent_id}`（live 与 derived 两条）/ hook 面 / 事件流与 0.50 逐字相同，门禁
-  `bun run check:plugin-ports` 钉住这一点。
-- **rotate 交接卡**：`agent` 工具的 rotate 把上一具身体写的 `startup_prompt` 投给新身体时，
-  那条消息带 `Message.name = 'rotate:handoff:<epoch>'`（不是 `vessel:` 前缀 —— 那是模型侧
-  上下文，而它确实是该轮的真实用户输入），Web 渲成默认展开的「⟳ rotate 交接 · epoch N」卡
-  （正文全文不截断），TUI 渲成可读块 + simple-mode 导出，不再伪装成人类气泡。交接卡与 A2A 卡
-  都不再是「前一条用户输入」，所以之后的助手回复不再提供 edit/retry 锚点（避免把 agent 写的
-  正文当人的话重发）。
-- **`tools.list`（0.51）只有一份清单**：用户裁定「不要区分成员工具面和节点工具面，插件也是，
-  成员就是用的节点有的」，所以响应回归单一形状 `{ tools }` —— 没有 `surface` / `source` /
-  `unavailable`。可选 `agent_id` 降级为**仅诊断**：只决定按哪具成员身体读同一份清单，形状不变
-  （唯一实际差别是 `inbox` 仍是成员运行期注入、节点面上暂时没有它，待 inbox 插件化后归位）。
-  数据唯一来源仍是 `MemberExecutionHost.toolSurface()`：`spawn` / 工具热刷新 / 按身体读三条路径
-  共用同一份 `buildSurface`。未知 agent ⇒ `not_found`；适配器没实现透传 ⇒ 退化成节点口径（同一个
-  形状，`AgentControlLike.toolSurface?` 是**可选**，旧注入不炸）。`selectTools` 的两条真闸（deny
-  只读档、`ask` 要 bridge）与 `agent` 换成员版 schema 行为不变，只是不再对外解释原因。
-- **待处理条带**：放开 **agent 源**（agent 维度 inbox 是全量的，串台防线早已从「来源过滤」
-  换成**归属等值** `session_id`，缺归属的老条目仍一律不显示），agent 源只展示、**不给写操作**
-  （它的「取消」语义是 unhold 留档，不能伪装成删除）。human 源的操作改成两颗圆形图标键：
-  「取消排队」（`retract`，复用 Team 域撤回图形的语义）与新增的「**收回来编辑**」（`edit`）——
-  后者严格三步：`agents.inbox{message_ids}` **peek 全文** → 写回输入框草稿 → 再 `agents.recall`
-  真删（顺序反了就 peek 不到正文）；peek 失败什么都不动，recall 被拒则**草稿保留**并如实说明。
-- **`vessel prune`**：归档的东西开始有出口。默认 dry-run（一条不删），必须 `--yes` 才真删；
-
-  真删先取 `data-lock` exclusive，拿不到就拒绝（零删除，不重试、不降级）。三类桶互斥 ——
-  trace（复用 `pruneTenantTrace` 的留存策略）/ 终态 runs（`completed|failed|cancelled` 且
-  早于阈值）/ 老且非活跃 sessions（锁、租约、可 resume 的 run 任一成立即保留），dry-run 与
-  真删同序同集合。`--older-than <n><ms|s|m|h|d>`（裸数字按天，缺省 30d，与
-  `trace.retentionDays` 同口径）；`--json` 出 `PruneReport`（按类别汇总条数与体积）。
-  会话桶级联删会话壳 / 事件目录 / run 记录，并顺手清历史 `<sessionId>.jsonl` 会话 trace
-  （它不是 run trace，trace 策略永远不收 ⇒ 否则永久残留）。
-  `--archived` / `sessions.archive` 本单不做：sessions 至今没有归档概念
-  （`SessionState` 只有 `created_at` / `updated_at`），`--archived` 在这份数据上定义不出
-  「该删哪些」，不落半语义。
-- **设计实验室补齐两处缺口**：`CHIP_TONES` / `COMPOSER_ICON_TONES` 补样例（都从运行时数组
-  派生，加一档只改组件一处）；`EntityHeader` 的 `size: page|panel` 提进运行时表
-  （`ENTITY_HEADER_SIZES` + `HEADING_SIZE_CLASS`，用 `satisfies Record<...>` 把数组与
-  cva 键集合双向钉住 —— 漏写/多写都编译报错）。
-
-### Changed
-
-- **`[refs]` 尾注的 action 列表**改从宿主真实工具面读：`readMediaSurface(host.listTools())`
-  找 `media` 工具并读 schema 里 `action` 的 enum，尾注按真实动作与真实顺序拼
-  （没装 tesseract 就只有 `read|describe`）。三档语义不变 —— 工具在且读到动作用「点名真
-  动作」，没有工具说明怎么启用，读不到就退中性档（不点名动作，也不谎称工具不可用）；
-  探针抛错同样退中性档，绝不让一轮 LLM 请求失败。写死全集与当年写死 `media.read` 是同一
-  类错：让模型去填一个 schema 里不存在的值。
+> 开发线已开启（2026-11-13）。0.51.0 的完整变更见
+> [docs/versions/0.51.0.md](docs/versions/0.51.0.md)。
 
 ## [0.32.0] - 2026-10-31
 
