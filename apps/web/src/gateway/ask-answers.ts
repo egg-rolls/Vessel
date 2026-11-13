@@ -59,6 +59,23 @@ export function buildAskAnswer(
 }
 
 /**
+ * 这一题是否已经在服务端落定（逐题进度来自 `interactions.list` 的 answered_questions）。
+ *
+ * 为什么要单独一层判定：请求一旦分批提交，pending 里就同时躺着**已经答过**的题和还没
+ * 答的题。卡片若照旧把「有草稿的行」全塞进载荷，重投的那几行只能靠题号在服务端被挡
+ * 回来 —— 而缺 question_id 的旧写法会被当成一条独立的新答案，落盘就多出一条空题号。
+ * 所以「哪些题不该再出现在载荷里」必须是可测的纯判定，不是每张卡各写一遍 if。
+ */
+export function askQuestionSettled(
+  answeredQuestionIds: readonly string[] | undefined,
+  question: AskUserQuestion,
+  index: number,
+): boolean {
+  if (answeredQuestionIds === undefined || answeredQuestionIds.length === 0) return false;
+  return answeredQuestionIds.includes(askQuestionId(question, index));
+}
+
+/**
  * `ask.respond` 的返回体里我们关心的那部分（服务端 additive；旧 gateway 不返回）。
  *
  * 只声明用得到的键：这是**读**侧契约，多声明一个字段就等于替服务端许下一个承诺。

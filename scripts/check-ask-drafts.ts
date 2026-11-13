@@ -441,8 +441,11 @@ const WIRING: readonly { path: string; must: readonly string[] }[] = [
     must: ["status: 'answered'", 'session_id: sessionId', 'answeredAsks(items, sessionId)'],
   },
   {
+    // 草稿必须来自 store，并且按题号取（不能回退成组件 state）。0.52 ask-dedupe 起
+    // 「按题号取草稿 + 已答的题不进载荷」收进共用规划（ask-submit-plan，内部就是
+    // askDraftOf），单题卡只认那条接线；那层的接线由 check-ask-dedupe 追。
     path: 'apps/web/src/domains/chat/AskCard.tsx',
-    must: ['useAskDrafts()', 'askDraftOf(drafts'],
+    must: ['useAskDrafts()', 'askPlanRows([request], drafts)', 'askPendingAnswers(rows)'],
   },
   {
     // 已答卡必须在时间线里（ask-answered item），不再是滚动区末尾的额外一段；

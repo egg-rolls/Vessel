@@ -310,6 +310,7 @@ export const messages = {
   'pending.source.session': '会话',
   'pending.source.team': '团队',
   'pending.item.include': '回复这题',
+  'pending.item.answered': '已答',
   'pending.item.includeAll': '全选',
   'pending.item.responding': '回复中…',
   'pending.submit': '回复',
