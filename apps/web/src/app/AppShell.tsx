@@ -12,9 +12,10 @@ import { useConnection } from '../gateway/ConnectionProvider';
 import { useNodes } from '../gateway/NodeProvider';
 import { t, useLocale } from '../i18n';
 import type { PaletteItem } from '../state/palette';
-import { applyTheme, useTheme } from '../state/theme';
+import { applyTheme, readStoredTheme, THEME_KEY, useTheme } from '../state/theme';
 import { resourceData } from '../state/useResource';
 import { useAgentStore } from '../stores/agentStore';
+import { useUiStore } from '../stores/uiStore';
 import { AppBar } from './AppBar';
 import { BottomNav } from './BottomNav';
 import { DomainNav } from './DomainNav';
@@ -212,6 +213,35 @@ export function AppShell() {
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
+
+  // **主题以存储为准的自愈。** `data-theme` 不是只有这里会写：视觉设置页的 token 表
+  // 在退化路径下会临时把 `<html data-theme="dark">`（`domains/design/tokens.ts`），
+  // 插件宿主也可能按自己的上下文改它。一旦被改脏而没有还原，界面上没有任何东西会纠正，
+  // 用户只能靠「再进一次视觉设置页」触发 AppearanceView 挂载时的那次重放 ——
+  // 这正是「切亮色 → 刷新/切页后变回暗色」表现出来的形状。
+  // 所以这里在「回到前台 / 从往返缓存恢复 / 其它标签页改了偏好」时，按存储值重放一次
+  // （幂等，纯读一次 localStorage，代价可忽略）。
+  useEffect(() => {
+    const reapply = () => {
+      const stored = readStoredTheme(localStorage);
+      if (useUiStore.getState().theme !== stored) useUiStore.setState({ theme: stored });
+      applyTheme(stored);
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === THEME_KEY) reapply();
+    };
+    const onVisibility = () => {
+      if (!document.hidden) reapply();
+    };
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('pageshow', reapply);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('pageshow', reapply);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
 
   // Hub 状态点：打开 WebUI 就探一次（有已存 URL / 回环默认 Hub 才真发请求），之后只随
   // gateway 会话重建（epoch 变化）再探一次 —— 不轮询，失败也不自己重试。Hub 页自己会连

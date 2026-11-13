@@ -27,10 +27,16 @@ export function resolvedTheme(theme: Theme, systemDark: boolean): 'light' | 'dar
   return theme === 'system' ? (systemDark ? 'dark' : 'light') : theme;
 }
 
+/** 能挂 `data-theme` 的宿主：`document.documentElement`，或测试里的假根（不依赖 DOM lib）。 */
+export type ThemeRoot = {
+  dataset: Record<string, string>;
+  removeAttribute: (name: string) => void;
+};
+
 /** 应用主题；幂等，可在模块加载时调用。 */
 export function applyTheme(
   theme: Theme,
-  root: Pick<HTMLElement, 'dataset' | 'removeAttribute'> = document.documentElement,
+  root: ThemeRoot = document.documentElement as unknown as ThemeRoot,
 ): void {
   const attribute = themeAttribute(theme);
   if (attribute === null) root.removeAttribute('data-theme');

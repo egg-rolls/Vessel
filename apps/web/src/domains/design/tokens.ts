@@ -387,12 +387,19 @@ function sampleDarkValues(names: readonly string[]): TokenValues {
   const root = document.documentElement;
   const previous = root.getAttribute('data-theme');
   root.setAttribute('data-theme', 'dark');
-  const values = readValues(names, getComputedStyle(root));
-  if (previous === null) root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', previous);
-  darkSample = values;
-  darkSampleKey = key;
-  return values;
+  // **必须 try/finally**：这段代码是唯一会往主文档硬写 `data-theme="dark"` 的地方，
+  // 一旦读值中途抛异常而没有还原，整页会永久停在暗色，而且除了「重新进一次视觉设置页
+  // （AppearanceView 挂载时按存储重放主题）」没有任何人会纠正它 —— 这与用户报的
+  // 「切亮色后刷新变回暗色、只有进视觉设置页才恢复」是同一个形状。
+  try {
+    const values = readValues(names, getComputedStyle(root));
+    darkSample = values;
+    darkSampleKey = key;
+    return values;
+  } finally {
+    if (previous === null) root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', previous);
+  }
 }
 
 interface TokenSnapshot {
