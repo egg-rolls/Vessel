@@ -501,6 +501,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.display.field.showInternalEvents': 'Show system info (internal events)',
   'settings.display.field.showInternalEvents.hint':
     'Off keeps only replies, tool calls, errors and permission/ask cards. On adds runtime notices, hook / LLM context and other system messages; the vessel:* transcript messages follow this key too, and verbosity=debug shows them as well.',
+  'settings.display.field.showArchived': 'Show archived / closed (pending removal)',
+  'settings.display.field.showArchived.hint':
+    'Archived Teams and closed agents are hidden by default (both are waiting to be pruned). On brings them back to the Team list, Agent list and member sidebar with an "archived / closed · pending removal" badge. Direct links are unaffected and always open.',
   'settings.display.field.errorLevel': 'Error level',
   'settings.display.field.showProcessErrors': 'Show process errors',
   'settings.display.field.askUser': 'Allow ask',
@@ -824,12 +827,29 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.form.forbidden': 'This token cannot create / update Teams.',
   'team.form.archivedReadonly': 'Archived Teams are read-only.',
 
+  // Archived / closed ("pending removal" objects; hidden by default via ui.showArchived)
+  'archive.hidden.teams':
+    '{count} archived Team(s) hidden by default: turn on ui.showArchived in Settings → Display & visibility to show them.',
+  'archive.empty.teams': 'Every Team here is archived (hidden by default)',
+  'archive.empty.agents': 'Every agent here is closed (hidden by default)',
+  'archive.empty.members': 'Every member here is closed (hidden by default)',
+  'archive.hidden.agents':
+    '{count} closed agent(s) hidden by default: turn on ui.showArchived in Settings → Display & visibility to show them.',
+  'archive.hidden.members':
+    '{count} closed member(s) hidden by default: turn on ui.showArchived in Settings → Display & visibility to show them.',
+  'archive.notice.team':
+    'This Team is archived · pending removal: its log is read-only and it no longer shows in the default list. Direct links keep working until it is pruned.',
+  'archive.notice.agent':
+    'This agent is closed · pending removal: it no longer shows in the default list. Direct links keep working until it is pruned.',
+  'archive.session.agentClosedHint':
+    'Its agent is closed · pending removal; the session is kept and its history stays readable.',
+
   // Teams (cross-node)
   'teams.title': 'Teams',
   'teams.empty': 'No Team yet',
   'teams.filter.node': 'Node',
   'teams.filter.all': 'All nodes',
-  'teams.card.archived': 'Archived',
+  'teams.card.archived': 'Archived · pending removal',
   'teams.card.copyId': 'Copy team ID',
   'teams.card.members': '{members} members',
   'teams.card.online': '{online} online',
@@ -840,7 +860,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'teams.partialError': 'Some nodes failed to list Teams',
   'teams.error.forbidden': 'This token cannot read Teams on that node',
   'teams.error.notEnabled': 'That node does not expose teams.*',
-  'teams.chat.archived': 'Archived',
+  'teams.chat.archived': 'Archived · pending removal',
   'teams.freeze': 'Freeze spawning',
   'teams.unfreeze': 'Unfreeze spawning',
   'teams.frozen': 'Frozen',
@@ -857,6 +877,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'agents.filter.presence': 'Presence',
   'agents.filter.clear': 'Clear filters',
   'agents.count': 'Showing {shown} / {total}',
+  'agents.card.closed': 'Closed · pending removal',
   'agents.presence.live': 'live',
   'agents.presence.gone': 'gone',
   'agents.partialErrors': '{count} Team details failed to load',
