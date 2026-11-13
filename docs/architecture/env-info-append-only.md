@@ -1,8 +1,8 @@
 ---
 title: 环境信息与 append-only 上下文
 kind: current
-triggers: [append-only, context, message, notice, env info, environment, self card, tool surface, model change, scope, prompt.system_context, changed, compaction, cleared tool result]
-paths: [packages/core/src/runtime/execution-unit.ts, packages/core/src/context/context-manager.ts, packages/agent/src/env-info-scope.ts, packages/agent/src/self-card-delta.ts, packages/agent/src/tool-surface-delta.ts, apps/web/src/domains/chat/env-notice.ts, scripts/check-append-only-context.ts]
+triggers: [append-only, context, message, notice, env info, environment, self card, tool surface, model change, scope, files, doc-subscription, prompt.system_context, changed, compaction, cleared tool result]
+paths: [packages/core/src/runtime/execution-unit.ts, packages/core/src/context/context-manager.ts, packages/agent/src/env-info-scope.ts, packages/agent/src/self-card-delta.ts, packages/agent/src/tool-surface-delta.ts, plugins/context/doc-subscription/src/notice.ts, apps/web/src/domains/chat/env-notice.ts, scripts/check-append-only-context.ts]
 ---
 
 # 环境信息与 append-only 上下文
@@ -31,11 +31,20 @@ C2 静态钉住（生产者只许尾部追加）、C3 scope 词表对拍。通�
 | `fields` | 其它基础字段 | `self-card-delta` |
 | `model` | 模型变更 | `self-card-delta` |
 | `tools` | 工具面变更（含权限档） | `tool-surface-delta`、`self-card-delta` |
+| `files` | 文件变更（订阅文件改了；只报 path/id/rev/bytes，不报正文） | `doc-subscription`（插件包） |
 | `context` | 系统提示词 / 自卡本身变了 | `self-card-delta`、`prompt.system_context` 的增量视图 |
 
 词表唯一真相是 `packages/agent/src/env-info-scope.ts`（`ENV_INFO_SCOPES`）；Web 侧
 `ENV_NOTICE_SCOPES` 必须认得出每一个词，另留老词 `config` / `permission` / `mcp` / `update` /
-`peer` / `selfcard`（历史消息里都在用）。C3 做对拍：生产者加了词而 Web 没加，门禁红。
+`peer` / `selfcard`（历史消息里都在用）。C3 做对拍：生产者加了词而 Web 没加，门禁红；
+插件包里那份**字面量副本**（`plugins/context/doc-subscription/src/notice.ts` 的
+`SUBSCRIPTION_NOTICE_SCOPE` / `SUBSCRIPTION_NOTICE_DETAIL_MARK`，插件不依赖本包）以及
+每个词的中英卡头标签也一并点对点校验。
+
+`doc-subscription` 以前自己开了一条通道（`vessel:subscription`，只有打开「显示系统信息」才
+可见）。并进本表后它**默认可见**、渲染成「文件变更」卡：订阅是用户自己开的，看不到「自己订阅
+的文件变了」比多一张卡更坏。历史里那批 `vessel:subscription` 消息不做特判，按未登记
+`vessel:*` kind 的兜底渲染成整段 notice（可读、不崩、不是裸 JSON）。
 
 去重口径（三条通道同族）：记住「模型现在相信的值」，注入一次就推进到当前值；下一轮 diff
 为空就不再注入。所以同一变更只报一次，而回滚（A→B→A）因为与「相信的值」不同、照样会报。
