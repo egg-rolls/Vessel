@@ -1427,7 +1427,7 @@ export interface AgentService {
    * 外部取消一个 **queued** run 后的收口（`runs.cancel` → `RunControlLike.cancel` → 这里）。
    *
    * 不调它就会留下永久僵尸（D-a）：`entry.queuedRuns` 里的 runId 永不清除 ⇒
-   * `canScheduleWake` 恒 false（该 agent 再也不会被 wake）、`memberStillBusy` 恒 true
+   * `canDispatchInbox` 恒 false（该 agent 再也不会被投递）、`memberStillBusy` 恒 true
    * （peer 停止通知与 TTL 回收失效）、消息永远停在 `entry.pending` + inbox held。
    * 与 `recall` 共用同一段收口（清记账 / 出队 / 按 source 分档）。
    */

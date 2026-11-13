@@ -156,8 +156,13 @@ const TEAM_MEMBER_LIMIT = 20;
 const DEFAULT_MESSAGE_SENDER = HUMAN_PRINCIPAL;
 
 /**
- * 0.41：idle 摘要唤醒的固定输入。**不带数字**：未读条数只由 BeforeLlm 的 notice
- * hook 计算，避免两处来源分叉。
+ * synthetic 摘要唤醒的固定输入 —— **不再是默认路径**（0.51 回归修复）。
+ *
+ * idle 时队列里有可直投的正文，service 会把**队头那条的正文**直接投成下一轮 run input
+ * （见 `AgentService.dispatchInbox`）；只有投不进去时才退回这条摘要：「去 inbox 读」，
+ * 正文由模型自己拉。判据与理由写在 `dispatchInbox` 的注释里。
+ *
+ * **不带数字**：未读条数只由 BeforeLlm 的 notice hook 计算，避免两处来源分叉。
  */
 const INBOX_WAKE_INPUT =
   '[inbox] unread notifications; use the inbox tool (action="list") and read what you need. ' +
@@ -649,9 +654,19 @@ export class AgentServiceImpl implements AgentService {
   private readonly interruptCancelledRunIds = new Set<string>();
   /** 0.41：synthetic inbox 摘要唤醒 run（内存；不产生父级可见的成员停下通知）。 */
   private readonly syntheticRunIds = new Set<string>();
-  /** 0.41：已排 / 在跑 wake 的 agent id（同一目标最多一个 pending wake）。 */
-  private readonly wakePending = new Set<string>();
-  /** 0.41：run 期间有新 wake 投递的 agent id；settle 后补检一次。 */
+  /**
+   * 0.41：一次 inbox 投递（队头直投 or synthetic 摘要唤醒）在途的 agent id。
+   *
+   * 同一目标同时只允许一步投递：否则两次 settle / 一次 notify 撞上一次 settle 会把
+   * 同一条队头投两遍。忙时不入这个集合（根本没开始投）。
+   */
+  private readonly inboxPending = new Set<string>();
+  /**
+   * 0.41：队列里「还有没投出去的东西」的 agent id；settle 后补检一次。
+   *
+   * 点亮 = 落盘了一次 wake 投递、或直投没成功；只在 `inputHead` 拿不到可直投条目时清掉。
+   * 直投成功时**保持点亮**，这样下一轮收口会继续抽队头（多条消息一条一条变成 run）。
+   */
   private readonly noticeDirty = new Set<string>();
   /** 成员停下通知端口（装配层注入；缺省不报）。 */
   private readonly peerStops: AgentServiceOptions['peerStops'];
@@ -2070,11 +2085,11 @@ export class AgentServiceImpl implements AgentService {
     for (const runId of entry.queuedRuns) {
       this.scheduler.cancel(runId, `body retired: ${reason}`);
       // 被取消的 synthetic wake 不会 settle；立刻清掉它的 run / wake 标记，
-      // 否则 rotate 后同一 agent 的 wake 投递会被 wakePending 永远挡住。
+      // 否则 rotate 后同一 agent 的 inbox 投递会被 `inboxPending` 永远挡住。
       this.syntheticRunIds.delete(runId);
     }
     entry.queuedRuns.clear();
-    this.wakePending.delete(entry.agentId);
+    this.inboxPending.delete(entry.agentId);
     // 仍有 active run 时（典型是 rotate 在自己的 run 里执行）不要清 noticeDirty：
     // 该 run 结束时 settle 还要据此补排一次 wake；提前清掉会吞掉本 run 内到达的 wake 投递。
     if (entry.active === undefined) this.noticeDirty.delete(entry.agentId);
@@ -2096,6 +2111,11 @@ export class AgentServiceImpl implements AgentService {
     // 旧队列（含 hold）转为可注入；pendingNotices 不得串到新 body。
     // D2/I4：只放**这具 body** 的持有，多 live body 时不得顺手放出别人的在途队列。
     this.inbox?.releaseHeldFor(record.id, entry.bindingId);
+    // 刚被放出来的那批，原本是「这具 body 的下一轮输入」——它们自己的 queued run 刚刚被
+    // 取消（上面那一圈 cancel），此刻没有 run 会去消费它们。记一次 dirty，让这台 agent
+    // 下一次跑完一轮（新 body / 别的 body）时按队头把它们投回去；不记的话它们只能等
+    // 模型自己 read，正是 0.51 之前「N 条堆在一起」的样子。
+    this.noticeDirty.add(record.id);
     this.runtime.clearPendingNotices?.(record.id);
     // `retireBinding` 自己记 `body_history`；这里不再重复 push，否则同一 session
     // 会在 DTO 的 body_history 里出现两次。
@@ -2136,7 +2156,7 @@ export class AgentServiceImpl implements AgentService {
         this.syntheticRunIds.delete(runId);
       }
       entry.queuedRuns.clear();
-      this.wakePending.delete(entry.agentId);
+      this.inboxPending.delete(entry.agentId);
       this.noticeDirty.delete(entry.agentId);
       if (entry.active !== undefined) {
         try {
@@ -2198,10 +2218,19 @@ export class AgentServiceImpl implements AgentService {
    * rotate 交接嘱托用它（见 `ROTATE_HANDOFF_INPUT_NAME`）。不走 `AdmitInput` 是因为
    * 那是投递侧（含 RPC）的公共形状，谁说的这句话只能由生产者说清楚，不能开成一个
    * 可以被外部填的字段。
+   *
+   * `internal.recovery` / `internal.redelivery` 都只改**失败出口**：投递没提交成功时
+   * 消息留在队列（unhold 回 unread）而不是 discard —— 启动恢复与队头直投投的都是
+   * 「已经在库里的正文」，丢掉它就是丢掉用户的消息。
    */
   private async admitInternal(
     input: AdmitInput,
-    internal?: { startup?: boolean; recovery?: boolean; inputName?: string },
+    internal?: {
+      startup?: boolean;
+      recovery?: boolean;
+      redelivery?: boolean;
+      inputName?: string;
+    },
   ): Promise<AdmitOutcome> {
     await this.ready;
     // 0.28：不再在 admit 里顺带 sweep —— 那会回收调用方正要投递的目标（竞态）。
@@ -2352,6 +2381,7 @@ export class AgentServiceImpl implements AgentService {
             ts: message.ts,
             source: from,
             text: content,
+            ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
           },
           { delivery: 'quiet' },
         );
@@ -2393,7 +2423,15 @@ export class AgentServiceImpl implements AgentService {
       submitted = await this.submitMessage(record, entry, message, resume);
     } catch (error) {
       if (inboxed) {
-        if (entry.retired || entry.closing || this.draining || internal?.recovery === true) {
+        if (
+          entry.retired ||
+          entry.closing ||
+          this.draining ||
+          internal?.recovery === true ||
+          // 队头直投是「把已经在队列里的条目再投一次」：scheduler 拒绝时消息必须留在
+          // 队列（unhold 回 unread），discard 等于把这条正文从用户手里删掉。
+          internal?.redelivery === true
+        ) {
           // 恢复路径的失败也要保留未读（用户没取消那条消息，下次启动再试）。
           // rotate / close 竞争：投递还没提交，body 已收口。保留未读，交给新 body 注入。
           this.inbox?.unhold(record.id, [message.id]);
@@ -2486,6 +2524,11 @@ export class AgentServiceImpl implements AgentService {
         text: message.content,
         // 归属会话 = 接管这条消息的 body（`entry.bindingId`）。
         session_id: bodyId,
+        // 会话血缘随条目落盘：队头直投（以及重启恢复）要把这条送回它原本的
+        // conversation，否则每条重投都会新开一个会话。
+        ...(message.conversation_id !== undefined
+          ? { conversation_id: message.conversation_id }
+          : {}),
         // 附件引用随条目落盘：重启恢复重投时带上，附件不丢。
         ...(message.refs !== undefined ? { refs: message.refs } : {}),
       },
@@ -2908,7 +2951,7 @@ export class AgentServiceImpl implements AgentService {
   /**
    * 外部取消 queued run 的收口（D-a）：`runs.cancel` 只动 scheduler，不经过 executor，
    * 所以 `entry.queuedRuns` / `entry.pending` / inbox 的 held 全都留在原地。不在这里收口，
-   * 这个 agent 就再也不会被 wake（`canScheduleWake` 恒 false）、peer 停止通知与 TTL 回收
+   * 这个 agent 就再也不会被投递（`canDispatchInbox` 恒 false）、peer 停止通知与 TTL 回收
    * 失效（`memberStillBusy` 恒 true），而那条消息永远 pending + held。
    *
    * 只处理 **queued** run：active run 的消息早已出队并 consumed，取消由 runtime 负责；
@@ -3317,7 +3360,7 @@ export class AgentServiceImpl implements AgentService {
     this.runCycleEdges.delete(handle.id);
     // synthetic wake 结束：清 wake 标记（唤醒不是真实报告，不发成员停下通知）。
     const synthetic = this.syntheticRunIds.delete(handle.id);
-    if (synthetic) this.wakePending.delete(handle.agentId);
+    if (synthetic) this.inboxPending.delete(handle.agentId);
     // 被后续 urgent 抢占的 run 不清理 urgent id：它的消息会（或已经）重投。
     if (!this.interruptCancelledRunIds.delete(handle.id)) {
       const messageId = this.runMessageIds.get(handle.id);
@@ -3331,10 +3374,11 @@ export class AgentServiceImpl implements AgentService {
     else handle.complete(content ?? '');
     // 成员真停了才报父级（窗口内又拿到工作就丢弃）：synthetic 唤醒不算报告。
     if (!synthetic) this.schedulePeerStop(handle.agentId, outcome, failure);
-    // run 结束、目标空闲且 run 期间有 wake 投递：无条件补检一次（0 unread 由 executor 跳过）。
-
+    // run 结束、目标空闲且 run 期间有新 inbox 落盘：补一步投递 —— 队头直投成下一轮，
+    // 投不进去才发摘要唤醒（判据见 `dispatchInbox`）。这就是「多条 ⇒ 每轮抽一条队头」
+    // 的链条：直投成功时 `noticeDirty` 保持点亮，下一轮收口再来一次，直到队列空。
     if (this.noticeDirty.has(handle.agentId)) {
-      void this.scheduleInboxWake(handle.agentId).catch(() => {});
+      void this.dispatchInbox(handle.agentId).catch(() => {});
     }
   }
 
@@ -4024,7 +4068,8 @@ export class AgentServiceImpl implements AgentService {
     // I3：这里是「重新落为 unread」的合法出口 —— 先 discard（连 consumed 一并删），
     // 再 append 同 id（未 hold）。不要改成 unhold：unhold 恢复不了 consumed。
     // 投递模式 quiet：这条投递已经收口（scheduler 拒绝了它），不让它再被当成待送达输入；
-    // 正文留在 inbox 里，由下一轮 notice 提示、模型自己 read。
+    // 正文留在 inbox 里，由下一轮 notice 提示、模型自己 read。`quiet` 会随条目落盘，
+    // 所以队头直投也不会把它当成 run input（唯一的例外出口是 notice 提示后模型自己读）。
     this.inbox?.discard(agentId, [message.id]);
     this.inbox?.append(
       agentId,
@@ -4033,6 +4078,9 @@ export class AgentServiceImpl implements AgentService {
         ts: message.ts,
         source: message.from,
         text: message.content,
+        ...(message.conversation_id !== undefined
+          ? { conversation_id: message.conversation_id }
+          : {}),
       },
       { delivery: 'quiet' },
     );
@@ -4041,8 +4089,10 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * wake 投递模式的内核：只追加 inbox unread（`delivery: 'wake'`），不 hold / submit /
-   * consume；必要时再排一次 synthetic 摘要唤醒（唤醒失败也不影响已落盘的消息）。
+   * wake 投递模式的内核：先追加 inbox（`delivery: 'wake'`，不 hold / submit / consume），
+   * 再让 `dispatchInbox` 决定这一步能不能把**队头正文直投**出去 —— 目标忙时它什么都不做
+   * （这一轮继续跑完），空下来后由队头直投接上；真的投不进去才退回 synthetic 摘要唤醒。
+   * 唤醒失败也不影响已落盘的消息。
    * 预算走 wake 口径：不 ensure 新 conversation、只认 cycle blocked、跳过 hop /
    * wall-clock / turns / tokens，每批最多 bump 1 次 edge。
    */
@@ -4069,7 +4119,6 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('invalid_input', 'inbox_unavailable');
     }
     const live = this.liveEntries(target.id).length > 0;
-    const canWake = this.canScheduleWake(target.id);
     const conversationId = this.resolveConversationForDelivery(
       input.conversationId,
       input.originSessionId,
@@ -4077,7 +4126,7 @@ export class AgentServiceImpl implements AgentService {
     );
     const teamId = input.originTeamId ?? this.resolveOriginTeam(input.from, target);
     const originExplicit = input.originTeamId !== undefined;
-    // 第一遍只做只读检查（不 bump）：append / wake 失败时就不该留下边计数。
+    // 第一遍只做只读检查（不 bump）：append / 投递失败时就不该留下边计数。
     const check = this.checkDelivery(target, input.from, conversationId, teamId, originExplicit, {
       mode: 'wake',
       edge: 'check',
@@ -4096,9 +4145,16 @@ export class AgentServiceImpl implements AgentService {
     }
     const messageId = this.newId();
     // 投递模式交给 inbox 自己：wake 不裁 unread（见 append 的模式缺省），失败即 inbox_full。
+    // `conversation_id` 随条目落盘：队头直投时要把这条送回它原本的会话。
     const appended = this.inbox.append(
       target.id,
-      { id: messageId, ts: this.now(), source: input.from, text: input.content },
+      {
+        id: messageId,
+        ts: this.now(),
+        source: input.from,
+        text: input.content,
+        conversation_id: conversationId,
+      },
       { delivery: 'wake' },
     );
     if (!appended.accepted) {
@@ -4108,8 +4164,10 @@ export class AgentServiceImpl implements AgentService {
       );
     }
     this.noticeDirty.add(target.id);
-    const wake = canWake ? await this.scheduleInboxWake(target.id) : false;
-    // 只有“真的排了 wake”的投递才计边；每批最多 1 次。第二遍结果忽略：
+    // `wake` 字段的语义（wire 上仍是这个名字）= 「这一步有没有让目标真的动起来」：
+    // 队头直投成功或退回摘要唤醒都算，目标忙 / 没有可直投条目则什么都不做。
+    const wake = await this.dispatchInbox(target.id);
+    // 只有“真的投递了”的投递才计边；每批最多 1 次。第二遍结果忽略：
     // 消息已经 append，cycle 失败也不撤销（它只影响后续投递的环检测）。
     if (wake && this.claimWakeEdge(input.batchKey, input.from, target.id)) {
       this.checkDelivery(target, input.from, conversationId, teamId, originExplicit, {
@@ -4141,10 +4199,16 @@ export class AgentServiceImpl implements AgentService {
     };
   }
 
-  /** idle 摘要唤醒的前置条件（先查 liveEntries，绝不 ensure / spawn）。 */
-  private canScheduleWake(agentId: string): boolean {
+  /**
+   * 这一刻能不能把队列里的东西交给目标（直投或唤醒）—— 判据只有「有没有活着的、空闲的
+   * body」，先查 `liveEntries`，**绝不 ensure / spawn**：投递不该有起 body 的副作用。
+   *
+   * 忙（active / queuedRuns / pending / running / waiting_permission）时一律返回 false：
+   * 用户裁定「忙时只留通知」—— 不打断当前这轮，也不把正文灌进正在跑的那轮。
+   */
+  private canDispatchInbox(agentId: string): boolean {
     if (this.inbox === undefined) return false;
-    if (this.wakePending.has(agentId)) return false;
+    if (this.inboxPending.has(agentId)) return false;
     if (this.rotations.has(agentId)) return false;
     const entries = this.liveEntries(agentId);
     if (entries.length === 0) return false;
@@ -4158,23 +4222,101 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * 排一次 synthetic 摘要唤醒。`wakePending` 在 await 前同步加入；无 live body /
-   * rotate / 已有 pending wake 时返回 false（不 spawn）。
+   * 队列 → 目标的一步投递：**队头直投**为主，synthetic 摘要唤醒为兜底。
+   *
+   * 为什么不再一律发唤醒：唤醒的 run input 只是一句「去 inbox 读」，正文要模型自己拉 ——
+   * 实测连发 4 条后模型一次把剩下的全读出来，用户看到「4 条堆在一起」，而每条消息本该
+   * 各自是一轮。直投走 `admitInternal`（就是 `agents.send` 的 input 投递那条路），所以
+   * markConsumed / refs / conversation_id / from_name（⇒ runtime 推出 `agent:<alias>`）
+   * 与 input 逐项一致，没有第二套语义。
+   *
+   * 每轮只取**一条**（队头）：其余留在队列，本轮跑完 `settleHandle` 再来一次。
+   *
+   * 什么时候**不能**直投、只能留队列或退回唤醒（判据与理由）：
+   * - 目标忙 / rotate 窗口 / draining / 没有 live body（`canDispatchInbox` 为 false）：
+   *   没有能接活的执行单元。硬投要么打断这轮，要么为了投递去 spawn 一具身体 ——
+   *   两件都不是一次投递该干的。留队列 + `noticeDirty`，空下来再投。
+   * - 队头没有可直投条目（`inputHead` 为 undefined：全是 quiet 留档 / 空正文）：
+   *   quiet 的语义就是「不要执行」（模型自述、投递失败的留档），唤醒模型去读也读不出
+   *   一轮 run，只会白烧一次 turn。所以什么都不做。
+   * - 直投本身被拒（预算 cycle 冷却 / member_closed / scheduler 拒绝）：重试会撞同一个
+   *   闸，退回摘要唤醒 —— 至少让模型知道有东西要读，读哪些由它自己决定。
+   *
+   * 返回 true = 这一步真的让目标动了起来（直投或唤醒），用于交付事件与预算计边。
+   */
+  private async dispatchInbox(agentId: string): Promise<boolean> {
+    const inbox = this.inbox;
+    if (inbox === undefined) return false;
+    if (this.inboxPending.has(agentId)) return false;
+    // 先取队头再判能不能投：队列空 / 全留档时不占在途标记，也顺手清掉 dirty。
+    const head = inbox.inputHead(agentId);
+    if (head === undefined) {
+      this.noticeDirty.delete(agentId);
+      return false;
+    }
+    if (!this.canDispatchInbox(agentId)) {
+      // 忙：留队列。run 结束后 settleHandle 会带着这个标记再来一次。
+      this.noticeDirty.add(agentId);
+      return false;
+    }
+    const record = this.registry.get(agentId);
+    const entries = this.liveEntries(agentId);
+    const entry = entries.find((candidate) => candidate.primary) ?? entries[0];
+    if (record === undefined || entry === undefined) return false;
+    this.inboxPending.add(agentId);
+    let delivered = false;
+    try {
+      await this.admitInternal(
+        {
+          content: head.text,
+          agent_id: record.id,
+          session_id: entry.bindingId,
+          from: head.source,
+          channel: 'direct',
+          ...(head.refs !== undefined ? { refs: head.refs } : {}),
+          ...(head.conversation_id !== undefined ? { conversation_id: head.conversation_id } : {}),
+          // 复用条目自己的 id：append 幂等、markConsumed 天然指向同一条，
+          // 这条消息不会因为「先落盘、后被直投」而在磁盘上变成两条。
+          reuse_message_id: head.id,
+        },
+        // 直投失败要**留在队列**（unhold），不能 discard —— 丢掉的是用户的正文。
+        { redelivery: true },
+      );
+      delivered = true;
+    } catch (error) {
+      this.logger.warn('agent.inbox.deliver_failed', {
+        agent_id: agentId,
+        session_id: entry.bindingId,
+        message_id: head.id,
+        error: errorText(error),
+      });
+    } finally {
+      this.inboxPending.delete(agentId);
+    }
+    if (delivered) return true;
+    // 直投被拒：兜底用摘要唤醒（唤醒失败也只留队列，不丢消息）。
+    this.noticeDirty.add(agentId);
+    return this.scheduleInboxWake(agentId);
+  }
+
+  /**
+   * 排一次 synthetic 摘要唤醒（`dispatchInbox` 的兜底，不再是默认路径）。
+   * `inboxPending` 在 await 前同步加入；无 live body / rotate / 已有在途投递时返回 false。
    */
   private async scheduleInboxWake(agentId: string): Promise<boolean> {
-    if (!this.canScheduleWake(agentId)) return false;
+    if (!this.canDispatchInbox(agentId)) return false;
     const record = this.registry.get(agentId);
     if (record === undefined) return false;
     const entries = this.liveEntries(agentId);
     const entry = entries.find((candidate) => candidate.primary) ?? entries[0];
     if (entry === undefined) return false;
-    this.wakePending.add(agentId);
+    this.inboxPending.add(agentId);
     this.noticeDirty.delete(agentId);
     try {
       await this.submitWakeMessage(record, entry);
       return true;
     } catch (error) {
-      this.wakePending.delete(agentId);
+      this.inboxPending.delete(agentId);
       this.noticeDirty.add(agentId);
       this.logger.warn('agent.inbox.wake_failed', {
         agent_id: agentId,
@@ -4218,7 +4360,7 @@ export class AgentServiceImpl implements AgentService {
         const readable = this.inbox?.list(record.id).unread ?? 0;
         if (readable === 0) {
           this.syntheticRunIds.delete(scheduledRunId);
-          this.wakePending.delete(record.id);
+          this.inboxPending.delete(record.id);
           const handle = new ExecutionUnitRunHandle(scheduledRunId, record.id, entry.bindingId);
           handle.complete('');
           return handle;

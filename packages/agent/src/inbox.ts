@@ -39,7 +39,8 @@
  * 与本层同一个 `consume` 落状态。`agents.claim` RPC 与 web 条带都走 service 那条路。
  *
  * **投递模式**（`AgentInboxDelivery`，模式属于 inbox 自己，不是入口开关）：
- * `input` = 本体作为下一轮 run input 送达；`wake` = 只唤醒 agent 自己去 read；
+ * `input` = 本体作为下一轮 run input 送达；`wake` = 到达时只落 inbox（目标忙时不打断、
+ * 不灌内容），等它空下来由 service 从**队头**把正文直投成下一轮 run input；
  * `quiet` = 只落 inbox，不唤醒也不进 run。状态机（I1–I4）只描述 `input` 那条路。
  *
  * **归属字段 `session_id`（0.53，additive）**：一句话 —— 「这条消息是哪个会话的下一轮
@@ -54,6 +55,13 @@
  *
  * **`refs`（附件引用，additive）**：只有路径与元信息，随 `input` 投递一并落盘，恢复重投
  * 时带上，附件不丢。旧文件缺该字段照常加载（按「无引用」降级）。
+ *
+ * **`quiet` / `conversation_id`（0.51 队头直投，additive）**：idle 直投要从队列里把**队头
+ * 那条的正文**原样当下一轮 run input 送，所以队列本身得记住两件此前只存在于内存投递侧的
+ * 事实 —— 「这条是不是留档（quiet，永不当 run input）」与「它属于哪个 conversation」。
+ * 不记的话，直投要么把 quiet 自述当成用户输入再执行一遍，要么丢掉会话归属（预算 /
+ * 事件回放对不上）。两者都只在**首次 append** 时写：`quiet` 由该次投递模式派生，
+ * `conversation_id` 由调用方传；后续升级成 input 投递不改写它们（模式不属于消息本体）。
  *
  * @module @vessel-agent/agent
  */
@@ -86,7 +94,8 @@ const INBOX_SUMMARY_MAX = 160;
  * inbox 的投递模式（一等概念，0.50 切片）：模式属于 **inbox**，不是某个入口的开关。
  *
  * - `input`（缺省）：消息进 inbox，且**其本体**作为下一轮 run input 送达（同时可被 read）；
- * - `wake`：消息进 inbox，只唤醒 agent 自己去 read —— run input 是固定摘要串，不带正文；
+ * - `wake`：消息进 inbox；目标正忙时**只落盘不打断**（这一轮继续跑），等它空下来 service
+ *   再把**队头**那条的正文直投成新一轮输入；只有投不进去时才发一条摘要唤醒；
  * - `quiet`：只进 inbox：不唤醒、不作为 run input，等模型自己 read
  *   （自述 `insert` / rotate 窗口 / 投递失败后的恢复）。
  *
@@ -122,6 +131,17 @@ export interface StoredInboxMessage {
   session_id?: string;
   /** 附件引用：只有路径 + 元信息，恢复重投时原样带回（不丢附件）。 */
   refs?: MessageRef[];
+  /**
+   * true：这条是 **quiet 投递**（只留档，永不当 run input）。0.51 起随条目落盘，因为
+   * idle 直投要按队列取正文 —— 没有这个位，模型 `insert` 的自述 / 投递失败的留档
+   * 会被当成用户输入再执行一遍（quiet 的语义正是「不要执行」）。
+   */
+  quiet?: true;
+  /**
+   * 会话归属（conversation_id）：idle 直投据此把消息送进它原本的会话，否则每条直投
+   * 都会新开一个 conversation（预算记账与事件回放对不上）。
+   */
+  conversation_id?: string;
 }
 
 export interface AgentInboxEntryInput {
@@ -133,6 +153,8 @@ export interface AgentInboxEntryInput {
   session_id?: string;
   /** 附件引用（可缺省）；写入前按 `normalizeRefs` 再归一一次。 */
   refs?: MessageRef[];
+  /** 会话归属（conversation_id）；idle 直投据此把这条送进它原本的会话。 */
+  conversation_id?: string;
 }
 
 export interface AgentInboxListEntry {
@@ -326,6 +348,18 @@ export interface AgentInboxPort {
     ids: readonly string[],
     options?: AgentInboxDiscardOptions,
   ): AgentInboxDiscardResult;
+  /**
+   * **队头**：队列里第一条能当 run input 送的未读条目（正文 + 引用 + 会话归属），只读，
+   * 不 hold / 不 consume；没有可直投的条目时返回 undefined。
+   *
+   * 顺序只来自**队列本身**（`messages` 的入队序），不做任何排序 —— 尤其**不按 `ts`**：
+   * 插队 / 优先级 / interrupt 之后队列序不再等于时间序，`ts` 只是写入时刻的旁证，
+   * 不是队列语义的代理。后续加优先级时改的是入队位置，这条方法不用改。
+   *
+   * 跳过（不是「没有队头」）：`quiet` 留档条目（模型自述 / 投递失败留档 —— 语义就是
+   * 「不要执行」）与空正文条目（不可能成为 run input，`admit` 会按 invalid_input 拒绝）。
+   */
+  inputHead(agentId: string): StoredInboxMessage | undefined;
   /** 未消费且未被持有的条数（= `counts().unread`）。 */
   unreadCount(agentId: string): number;
   flush(): Promise<void>;
@@ -401,6 +435,11 @@ function isStoredInboxMessage(value: unknown): value is StoredInboxMessage {
   }
   // additive：缺省合法，存在则必须是 string（与其它字段同口径：类型不符按损坏处理）。
   if (value.session_id !== undefined && typeof value.session_id !== 'string') return false;
+  if (value.conversation_id !== undefined && typeof value.conversation_id !== 'string') {
+    return false;
+  }
+  // `quiet` 只有 true 一种写值（缺省 = 不是留档条目）；写成 false 属于手改跑偏。
+  if (value.quiet !== undefined && value.quiet !== true) return false;
   // refs 只校验「是数组」，条目形状在 cloneMessage 里过 `normalizeRefs`（逐条丢弃坏条目，
   // 不因为一条坏引用把整个收件箱判成损坏）。
   if (value.refs !== undefined && !Array.isArray(value.refs)) return false;
@@ -430,6 +469,8 @@ function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
       ? { consumed_by_session: message.consumed_by_session }
       : {}),
     ...(message.session_id !== undefined ? { session_id: message.session_id } : {}),
+    ...(message.conversation_id !== undefined ? { conversation_id: message.conversation_id } : {}),
+    ...(message.quiet === true ? { quiet: true as const } : {}),
     ...(refs.length > 0 ? { refs } : {}),
   };
 }
@@ -507,6 +548,12 @@ export class AgentInboxStore implements AgentInboxPort {
       text: message.text,
       status: 'unread',
       ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+      ...(message.conversation_id !== undefined
+        ? { conversation_id: message.conversation_id }
+        : {}),
+      // quiet 由**本次投递模式**派生（不另开参数）：它落盘后只有一个含义
+      // 「这条永不作为 run input」，idle 直投据此跳过它。
+      ...(delivery === 'quiet' ? { quiet: true as const } : {}),
       ...(refs.length > 0 ? { refs } : {}),
     });
     this.prune(state);
@@ -657,6 +704,17 @@ export class AgentInboxStore implements AgentInboxPort {
       if (message !== undefined) found.push(cloneMessage(message));
     }
     return found;
+  }
+
+  inputHead(agentId: string): StoredInboxMessage | undefined {
+    const state = this.stateFor(agentId);
+    if (!state.available) return undefined;
+    // `readable()` 已经是「unread 且未被持有」的**入队序**数组（它只做 filter，不排序）。
+    // 这里再跳过留档 / 空正文：它们的语义不是「等一轮 run」，直投只会把它们执行一遍。
+    const head = this.readable(state).find(
+      (message) => message.quiet !== true && message.text.trim() !== '',
+    );
+    return head === undefined ? undefined : cloneMessage(head);
   }
 
   discard(
