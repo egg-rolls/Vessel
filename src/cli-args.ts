@@ -42,10 +42,26 @@ export type GatewayCommand =
       host?: string;
       log?: string;
     }
-  | ({ kind: 'stop'; timeoutMs: number } & GatewaySelector)
+  | ({
+      kind: 'stop';
+      timeoutMs: number;
+      /**
+       * handoff（0.52）：显式 `--keep-nodes` = 只停平台层，node/hub 保留待 adopt。
+       * 缺省 undefined = 真停（连 node/hub 一起停），保持 0.51 语义。
+       */
+      keepNodes?: boolean;
+    } & GatewaySelector)
   | ({ kind: 'status'; json: boolean; rpc?: boolean } & GatewaySelector)
   | { kind: 'list'; json: boolean }
-  | ({ kind: 'restart'; daemon: boolean } & GatewaySelector)
+  | ({
+      kind: 'restart';
+      daemon: boolean;
+      /**
+       * handoff（0.52）：缺省 undefined = **保留** node/hub（新平台 adopt 接管）；
+       * `--no-keep-nodes` 置 false = 回到「连 node 一起停」的冷重启。
+       */
+      keepNodes?: boolean;
+    } & GatewaySelector)
   | ({ kind: 'reload'; scopes?: string[] } & GatewaySelector)
   | { kind: 'install-service'; target?: GatewayInstallTarget }
   | { kind: 'uninstall-service' };
@@ -1696,14 +1712,20 @@ function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `gateway stop [--timeout 10s] [--instance N|--port N|--all]` */
+/** `gateway stop [--timeout 10s] [--instance N|--port N|--all] [--keep-nodes]` */
 function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
   let timeoutMs = DEFAULT_STOP_TIMEOUT_MS;
+  let keepNodes: boolean | undefined;
   const selector: GatewaySelector = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
     if (a === '--help' || a === '-h') {
       args.help = true;
+      continue;
+    }
+    if (a === '--keep-nodes') {
+      // handoff：只停平台层，保留 node/hub（缺省是真停，见 GatewayCommand.stop）。
+      keepNodes = true;
       continue;
     }
     if (a === '--timeout') {
@@ -1728,7 +1750,12 @@ function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
   if (args.help) return { ok: true, args };
   const selectorError = gatewaySelectorError(selector, 'stop');
   if (selectorError !== null) return { ok: false, error: selectorError };
-  args.gateway = { kind: 'stop', timeoutMs, ...selector };
+  args.gateway = {
+    kind: 'stop',
+    timeoutMs,
+    ...(keepNodes === true ? { keepNodes: true } : {}),
+    ...selector,
+  };
   return { ok: true, args };
 }
 
@@ -1785,9 +1812,10 @@ function parseGatewayList(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `gateway restart [--daemon] [--instance N|--port N|--all]` */
+/** `gateway restart [--daemon] [--instance N|--port N|--all] [--no-keep-nodes]` */
 function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
   let daemon = false;
+  let keepNodes: boolean | undefined;
   const selector: GatewaySelector = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
@@ -1797,6 +1825,16 @@ function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
     }
     if (a === '--daemon') {
       daemon = true;
+      continue;
+    }
+    if (a === '--keep-nodes') {
+      // 缺省已经是 handoff；显式写出来是让脚本自证意图。
+      keepNodes = undefined;
+      continue;
+    }
+    if (a === '--no-keep-nodes') {
+      // 冷重启：连 node/hub 一起停（0.51 语义）。
+      keepNodes = false;
       continue;
     }
     const selected = parseGatewaySelectorArg(rest, i, selector, 'restart');
@@ -1813,7 +1851,12 @@ function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
   if (selector.all === true && !daemon) {
     return { ok: false, error: 'gateway restart --all requires --daemon' };
   }
-  args.gateway = { kind: 'restart', daemon, ...selector };
+  args.gateway = {
+    kind: 'restart',
+    daemon,
+    ...(keepNodes === false ? { keepNodes: false } : {}),
+    ...selector,
+  };
   return { ok: true, args };
 }
 

@@ -26,6 +26,8 @@ import type { MessageKey } from './i18n';
 export const CLI_FLAG_VALUE = {
   '--json': null,
   '--daemon': null,
+  '--keep-nodes': null,
+  '--no-keep-nodes': null,
   '--force': null,
   '--yes': null,
   '--check': null,
@@ -109,6 +111,8 @@ export type CliFlag = keyof typeof CLI_FLAG_VALUE;
 export const CLI_FLAG_HELP: Readonly<Record<CliFlag, MessageKey>> = {
   '--json': 'flag.json',
   '--daemon': 'flag.daemon',
+  '--keep-nodes': 'flag.keepNodes',
+  '--no-keep-nodes': 'flag.noKeepNodes',
   '--force': 'flag.force',
   '--yes': 'flag.yes',
   '--check': 'flag.check',
@@ -373,7 +377,7 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   {
     path: ['gateway', 'restart'],
     summary: 'help.cmd.gatewayRestart',
-    flags: ['--daemon', '--instance', '--port', '--all'],
+    flags: ['--daemon', '--instance', '--port', '--all', '--no-keep-nodes'],
   },
   {
     path: ['gateway', 'reload'],
@@ -383,7 +387,7 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   {
     path: ['gateway', 'stop'],
     summary: 'help.cmd.gatewayStop',
-    flags: ['--timeout', '--instance', '--port', '--all'],
+    flags: ['--timeout', '--instance', '--port', '--all', '--keep-nodes'],
   },
   {
     path: ['gateway', 'install-service'],

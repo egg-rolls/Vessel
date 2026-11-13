@@ -30,6 +30,7 @@ import { formatConfigErrors } from './config-error-format';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
 import { expandHome, resolveDataDir } from './data-paths';
 import { gatewayLogPath, startGatewayDaemon } from './gateway/daemon';
+import { clearHandoffMarker, consumeHandoffMarker, writeHandoffMarker } from './gateway/handoff';
 import {
   acquireGatewayInstanceLock,
   type GatewayInstanceLock,
@@ -305,6 +306,9 @@ export interface LocalNodeStatusView {
   status: 'up' | 'down' | 'unknown';
   auto_start: boolean;
 }
+// 0.52 handoff：`gateway status --json` 属契约面，**不**加 adopted 字段；「这个 node 是
+// 新平台 adopt 来的（不是它 spawn 的）」只在启动输出/日志里以 `(adopted)` 表达，
+// 数据源就是 supervisor 既有的 `spawned` / `state === 'external'`。
 
 /** 从 registry（或隐式单节点）解析本地节点的地址与健康；不读 token。 */
 async function localNodeStatusViews(
@@ -638,6 +642,12 @@ export async function stopGateway(
     selector?: GatewaySelector;
     /** 已收集的状态（restart 停前快照）；缺省自行 collect。 */
     entries?: GatewayStateEntry[];
+    /**
+     * handoff（0.52）：停平台时**保留**本 Gateway spawn 的 node/hub，留给下一次
+     * `gateway start` 按既有 adopt 判据接管。`gateway restart` 缺省开启；
+     * `gateway stop` 需显式 `--keep-nodes`。见 `src/gateway/handoff.ts`。
+     */
+    keepNodes?: boolean;
   } = {},
 ): Promise<number> {
   const context = await resolveContext(options);
@@ -661,10 +671,15 @@ export async function stopGateway(
   }
 
   let failed = false;
+  const stateKind = gatewayStateKind(options, context.env);
+  const keepForHandoff = options.keepNodes === true && stateKind === 'platform';
+  let keptNodes = 0;
+  let keptHubs = 0;
 
   // 0.49 G3b（CONTRACT §4.3）：只终止本 Gateway spawn 的子进程。
   // 子进程先停，再停平台；adopt/external 不在 manifest 中，天然不受影响。
-  if (gatewayStateKind(options, context.env) === 'platform') {
+  // 0.52 handoff（`keepNodes`）：**一个都不终止**，只清点并保留，交给新平台 adopt。
+  if (stateKind === 'platform') {
     const selectorSpecified =
       selector.instance !== undefined || selector.port !== undefined || selector.all === true;
     const instances =
@@ -683,12 +698,21 @@ export async function stopGateway(
           ? { allInstances: true }
           : { instance }),
         platform: context.platform,
+        ...(keepForHandoff ? { keep: true } : {}),
         ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
         ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       });
       if (result.failed > 0) failed = true;
+      keptNodes += result.kept?.nodes ?? 0;
+      keptHubs += result.kept?.hubs ?? 0;
     }
+  }
+
+  if (keepForHandoff) {
+    // 一行可见性日志：node 之后是「孤儿在跑、等新平台接管」，不是被漏掉。
+    print(ui.info(t('gateway.stopKeptNodes', { count: keptNodes })));
+    if (keptHubs > 0) print(ui.info(t('gateway.stopKeptHub')));
   }
 
   if (targets.entries.length === 0) {
@@ -773,6 +797,16 @@ export async function stopGateway(
     }
 
     try {
+      // handoff 交接：**先**写 marker 再发终止信号，旧平台在 shutdown 分支消费它
+      // （`supervisor.stop({ keep: true })`）。非 handoff 停止先清掉残留 marker，
+      // 避免一次陈旧 marker 把「真停」变成假停。
+      if (stateKind === 'platform') {
+        if (keepForHandoff) {
+          await writeHandoffMarker(context.dataDir, entry.instance, pid).catch(() => undefined);
+        } else {
+          await clearHandoffMarker(context.dataDir, entry.instance).catch(() => undefined);
+        }
+      }
       terminateProcess(pid, context.platform);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
@@ -1605,7 +1639,14 @@ async function restartDaemonCommand(
     return 1;
   }
 
-  const stopCode = await stopGateway({ ...deps, selector: command, entries });
+  // handoff（0.52）：restart 只重启平台层 —— node/hub 保活，由新平台 adopt 接管，
+  // 因此在跑的 run 不受影响。`--no-keep-nodes` 才回到 0.51 的「连 node 一起停」。
+  const stopCode = await stopGateway({
+    ...deps,
+    selector: command,
+    entries,
+    keepNodes: command.keepNodes !== false,
+  });
   if (stopCode !== 0) return stopCode;
 
   if (command.all === true) {
@@ -1995,6 +2036,8 @@ export async function runPlatformGatewayForeground(
       print,
       printErr,
       timeoutMs: 10_000,
+      // handoff（0.52）：前台 restart 也只重启平台层，node/hub 保活待 adopt。
+      keepNodes: command.keepNodes !== false,
     });
     if (stopCode !== 0) return stopCode;
   }
@@ -2178,6 +2221,9 @@ export async function runPlatformGatewayForeground(
       }
     }
 
+    // handoff（0.52）：命中「保留子进程」时，成功/失败路径都不能把它们停掉。
+    let handoffKept = false;
+
     try {
       await writeForegroundGatewayPid({
         dataDir,
@@ -2202,6 +2248,15 @@ export async function runPlatformGatewayForeground(
     }
 
     const platformUrl = nodeOriginOf(platformHostname, platformGateway.port, false);
+    // 0.52 handoff 可见性：`state: 'external'` = 本平台没有 spawn 它，是 adopt 来的
+    // （`gateway restart` 保活的 node 正是这种；auto_start: false 的 node 不算）。
+    // 不新增字段，复用 supervisor 既有信息。
+    const adoptedNodes = new Set(
+      supervisor
+        .list()
+        .filter((info) => !info.spawned && info.state === 'external')
+        .map((info) => info.nodeId),
+    );
     // 0.50：前台 TTY 输出 Vite 风格摘要；daemon 子进程 stdout 重定向到日志
     // （非 TTY），保持既有逐行日志不变。显式注入 `print` 的嵌入方按交互处理。
     // 0.51：TTY 判定与 box banner 同一入口（`isHumanTerminal`），summary 本身无框线。
@@ -2224,6 +2279,7 @@ export async function runPlatformGatewayForeground(
             name: node.entry.name,
             url: node.apiUrl,
             autoStart: node.entry.auto_start,
+            ...(adoptedNodes.has(node.entry.node_id) ? { adopted: true } : {}),
           })),
           hub,
           readyMs: Math.max(0, Math.round(performance.now() - startupStartedAt)),
@@ -2236,7 +2292,8 @@ export async function runPlatformGatewayForeground(
         print(
           ui.dim(
             `node ${node.entry.name}  ${node.apiUrl}` +
-              (node.entry.auto_start ? '' : '  (auto_start: false)'),
+              (node.entry.auto_start ? '' : '  (auto_start: false)') +
+              (adoptedNodes.has(node.entry.node_id) ? '  (adopted)' : ''),
           ),
         );
       }
@@ -2247,13 +2304,26 @@ export async function runPlatformGatewayForeground(
     }
 
     await (options.waitForStop ?? waitForTerminationSignal)();
-    await supervisor.stop().catch(() => undefined);
+    // handoff（0.52）：停止方在发终止信号**之前**写了 marker ⇒ 这次退出只交出平台层，
+    // 自己 spawn 的 node/hub 原样留着，等新平台按 `gateway.pid` 三元组 / hub lock 接管；
+    // 没有 marker（Ctrl-C、`gateway stop`、外部 SIGTERM）就照旧连子进程一起停。
+    handoffKept = await consumeHandoffMarker(dataDir, instance, process.pid).catch(() => false);
+    if (handoffKept) {
+      const result = await supervisor.stop({ keep: true }).catch(() => undefined);
+      if (result !== undefined) {
+        print(ui.info(t('gateway.stopKeptNodes', { count: result.kept?.nodes ?? 0 })));
+        if ((result.kept?.hubs ?? 0) > 0) print(ui.info(t('gateway.stopKeptHub')));
+      }
+    } else {
+      await supervisor.stop().catch(() => undefined);
+    }
     await platformGateway?.stop().catch(() => undefined);
     platformGateway = undefined;
     return 0;
   } finally {
     // 失败路径也必须释放平台实例锁；PID 只在全部就绪后写入。
-    await supervisor?.stop().catch(() => undefined);
+    // handoff 命中后这里也绝不能回滚子进程（否则前面的 keep 白做）。
+    await supervisor?.stop(handoffKept ? { keep: true } : undefined).catch(() => undefined);
     await platformGateway?.stop().catch(() => undefined);
     await lock.release().catch(() => undefined);
   }
@@ -2276,7 +2346,13 @@ export async function runGatewayCommand(
     case 'restart':
       return restartDaemonCommand(command, deps);
     case 'stop':
-      return stopGateway({ ...deps, timeoutMs: command.timeoutMs, selector: command });
+      return stopGateway({
+        ...deps,
+        timeoutMs: command.timeoutMs,
+        selector: command,
+        // 真停是缺省；`--keep-nodes` 是显式求「只停平台层、保留 node/hub」（handoff）。
+        ...(command.keepNodes === true ? { keepNodes: true } : {}),
+      });
     case 'status':
       return gatewayStatus({ ...deps, json: command.json, rpc: command.rpc, selector: command });
     case 'list':
