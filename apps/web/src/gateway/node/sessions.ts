@@ -4,6 +4,7 @@
  * 从 `client.ts` 拆出（S1）；行为与原单文件一致。
  */
 
+import type { AskRespondOutcome } from '../ask-answers';
 import type { ListedInteraction, ListedInteractionPage } from '../interaction-hydration';
 import { permissionRespondParams } from '../interactions';
 import type {
@@ -179,13 +180,24 @@ export abstract class SessionsClient extends RpcClient {
     });
   }
 
-  /** 回答 ask；answers=[] 表示取消 */
-  async respondAsk(requestId: string, answers: AskUserAnswer[], batchId?: string): Promise<void> {
-    await this.request('ask.respond', {
+  /**
+   * 回答 ask；`answers: []` 表示取消。
+   *
+   * 返回体是服务端 `ask.respond` 的结果（additive）：分批提交时它带 `remaining_questions`
+   * / `final`，调用方据此决定卡片收不收（`askRespondKeepsPending`）。旧 gateway 的返回体
+   * 里没有这些键 —— 调用方一律按「收口」处理，行为与分批之前一致。
+   */
+  async respondAsk(
+    requestId: string,
+    answers: AskUserAnswer[],
+    batchId?: string,
+  ): Promise<AskRespondOutcome> {
+    const body = await this.request<AskRespondOutcome>('ask.respond', {
       request_id: requestId,
       answers,
       // additive（0.52）：待批页一次提交的批次标记 —— 同批答案合成一条消息 + 一次 run。
       ...(batchId !== undefined && batchId !== '' ? { batch_id: batchId } : {}),
     });
+    return body ?? {};
   }
 }

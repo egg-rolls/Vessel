@@ -244,6 +244,19 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 
 **交互暂停的形态**：工具 `publish` 一个请求事件 → `await events.waitFor(回复事件, { requestId, timeout })` → 拿到答案继续。loop 不需要任何暂停/恢复机制——handler 本身就在 await。
 
+**ask 的题是一等公民（0.51，只加字段）**：`ask.user.requested` 的每道题带 `id`（`q1`/`q2`/…，由工具按题序写；旧事件没有该字段时读侧按「下标 + 1」推出同一个值），所以「第 3 题答了没有」在协议里可判定。答案行增 `question_id` 与 `selected?: string[]`（多选的结构化选中项；`answer` 仍是给模型读的那段文本，模型侧零影响）。
+
+`ask.user.answered` 增三个可选键，缺省即旧语义（一条事件 = 整条请求答完）：
+
+| 键 | 含义 |
+|---|---|
+| `answers[].question_id` / `selected` | 这一行挂在哪道题上 / 多选选中项 |
+| `final?: boolean` | 这条请求是否**全部**题都答完了（缺省 `true`） |
+| `remaining?: string[]` | 仍未答的题 id，只在 `final === false` 时有意义 |
+| `batch_id?: string` | 这次答案属于待批页的哪一次提交（与 `ask.respond` 的同名参数一致） |
+
+由此三件事同时成立：**一次提交只落已答的那几题**（未答的题留在 `pending`，靠记录上的 `answered_questions` 记住进度，不新增状态档）；**同一题不得答两次**（重复提交回 `duplicate` + `skipped_questions`）；**首批答案到达即返回**——ask 工具只 `waitFor` 一次，未答的题写进工具结果正文，后续批次由装配层作为**一条** inbox 消息（来源 `ask`）补投给成员并起新 run。`ask.respond` 的返回体相应增 `answered_questions` / `remaining_questions` / `skipped_questions` / `final`（全部可选，旧客户端不看即旧行为），`interactions.list` 的 ask 条目带 `answered_questions`，`answer.batch_answers` 是「本批新增的答案」（投放正文只取这一批，累计全集仍在 `answer.answers`）。
+
 ### 事件回放
 
 `MemoryEventStream` 之外，core 提供 `FileEventStore`（JSONL 一行一事件：`append` / `readRun` / `listRunIds` / `deleteRun`）与 `replayRun(store, runId, eventStream, { delayMs })`。回放经同一个 `publish()` 重新发布历史事件（保留原始 `ts`），订阅者用同一个 `subscribe()` 接收 live 与 replay，靠 `replay.started` / `replay.completed` 区分边界。

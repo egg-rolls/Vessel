@@ -114,9 +114,21 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     useInteractionStore.getState().dispatch({ type: 'ask-request', request });
   };
 
-  /** 其他端应答（ask.user.answered）：静默收起对应卡片。 */
+  /**
+   * 其他端应答（ask.user.answered）：静默收起对应卡片。
+   *
+   * **分批**：`final === false` 的事件只带来其中几题的答案 —— 请求仍是 pending，
+   * 卡片不能收，更不能 `recordSettled`（那个集合会让下一次 hydration 把它当成
+   * 「本端已结算」而不补回，等于未答的题被这条事件永久带走）。缺省（旧事件 /
+   * 旧 gateway 不带这个键）= 整条请求答完，行为与分批之前一字不差。
+   */
   const removeAskByEvent = (event: RunEvent) => {
-    const data = event.data as { requestId?: unknown; request_id?: unknown };
+    const data = event.data as {
+      requestId?: unknown;
+      request_id?: unknown;
+      final?: unknown;
+    };
+    if (data.final === false) return;
     const requestId = data.requestId ?? data.request_id;
     if (typeof requestId !== 'string' || requestId.length === 0) return;
     recordSettled(requestId);
@@ -156,6 +168,8 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
       for (const item of interactions.asks) {
         // 0.52：async ask 不随 run 终态结算（它的 run 早就结束，请求仍然待批）。
         if (item.mode === 'async') continue;
+        // 分批：部分已答的 ask 也不结算 —— 剩下那几题还在等服务端，卡片必须留着。
+        if ((item.answeredQuestionIds?.length ?? 0) > 0) continue;
         if (item.runId === event.run_id) recordSettled(item.requestId);
       }
       interactions.dispatch({ type: 'run-finished', runId: event.run_id });

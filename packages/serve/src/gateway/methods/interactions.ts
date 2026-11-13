@@ -117,6 +117,13 @@ export interface ListedInteraction {
    * 缺省键 = sync（阻塞型），旧客户端不受影响。
    */
   mode?: 'sync' | 'async';
+  /**
+   * 已经答完的题 id（additive）。
+   *
+   * 只在 `status === 'pending'` 时有意义：它就是「这条请求还剩哪几题没答」的那面镜子，
+   * 待批页据此把已答的题标出来、把未答的留着。缺省 = 一道题都还没答（旧记录天然如此）。
+   */
+  answered_questions?: string[];
   answer?: StoredInteractionAnswer;
 }
 
@@ -148,6 +155,8 @@ const interactionItemSchema = {
     created_at: { type: 'number' },
     status: { type: 'string', enum: ['pending', 'answered', 'orphaned'] },
     mode: { type: 'string', enum: ['sync', 'async'] },
+    // 逐题进度（additive）：部分已答的 pending 请求靠它告诉待批页还剩哪几题。
+    answered_questions: { type: 'array', items: { type: 'string' } },
     answer: {
       type: 'object',
       required: ['answered_at'],
@@ -155,6 +164,10 @@ const interactionItemSchema = {
         decision: { type: 'string', enum: ['allow', 'deny'] },
         scope: { type: 'string', enum: ['once', 'session', 'always'] },
         answers: { type: 'array' },
+        // 本批新增的答案（分批投递的正文来源；旧记录缺省）。
+        batch_answers: { type: 'array' },
+        batch_id: { type: 'string' },
+        delivered_at: { type: 'number' },
         answered_at: { type: 'number' },
         answered_by: { type: 'string', enum: ['human', 'policy'] },
         answered_via: { type: 'string', enum: ['tui', 'rpc', 'cli', 'policy'] },
@@ -189,6 +202,9 @@ function collectInteractions(sources: InteractionSources): ListedInteraction[] {
       created_at: record.created_at,
       status: record.status,
       ...(record.mode === 'async' ? { mode: 'async' as const } : {}),
+      ...(record.answered_questions !== undefined && record.answered_questions.length > 0
+        ? { answered_questions: record.answered_questions }
+        : {}),
       ...(record.answer !== undefined ? { answer: record.answer } : {}),
     });
   }
@@ -444,6 +460,12 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           answered_via: { type: 'string', enum: ['tui', 'rpc', 'cli', 'policy'] },
           latency_ms: { type: 'number' },
           team_id: { type: 'string' },
+          // 逐题结果（additive）：本次写进去的题 / 仍没答的题 / 因为已答过被跳过的题。
+          // 客户端据此决定「卡片还能不能收」——未答的题必须留在待批页。
+          answered_questions: { type: 'array', items: { type: 'string' } },
+          remaining_questions: { type: 'array', items: { type: 'string' } },
+          skipped_questions: { type: 'array', items: { type: 'string' } },
+          final: { type: 'boolean' },
           // 只对 headless 挂起的 ask 出现：这个答案是否让那个 run 重新跑起来。
           // 缺省键 = 普通阻塞型 ask（应答者就在原地等，不存在续跑概念）。
           resumed: { type: 'boolean' },
@@ -480,7 +502,9 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           awaitAsyncAskDelivery !== undefined &&
           before !== undefined &&
           isPendingAsk(before) &&
-          before.mode === 'async' &&
+          // 分批：部分已答的同步 ask 也一样 —— 提问的 run 已经拿到首批答案继续跑了，
+          // 之后每一批只能靠 inbox 消息送到成员手上，这里同样要把投放结果报出来。
+          (before.mode === 'async' || (before.answered_questions?.length ?? 0) > 0) &&
           isFreshAnswer(result)
         ) {
           // 0.52 fix：这里**不发起投放**，只等结果。

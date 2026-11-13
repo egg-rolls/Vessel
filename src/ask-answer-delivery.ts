@@ -21,7 +21,7 @@
 
 import type { AgentService } from '@vessel-agent/agent';
 import type { StoredInteraction } from '../packages/serve/src/index';
-import { formatAnswersForModel } from './ask-channel';
+import { formatAnswersForModel, remainingQuestionsOf } from './ask-channel';
 
 /**
  * 答案消息的正文前缀：让模型一眼看出「这是人对我那个待批提问的回答」。
@@ -36,8 +36,15 @@ import { formatAnswersForModel } from './ask-channel';
 export const ASK_ANSWER_TAG_PREFIX = '[ask answer ';
 
 /** 答案正文（模型看到的 user 消息原文）。 */
-export function formatAskAnswerContent(answers: unknown[], requestId: string): string {
-  return `${ASK_ANSWER_TAG_PREFIX}${requestId}] ${formatAnswersForModel(answers)}`;
+export function formatAskAnswerContent(
+  answers: unknown[],
+  requestId: string,
+  remaining?: readonly string[],
+): string {
+  return `${ASK_ANSWER_TAG_PREFIX}${requestId}] ${formatAnswersForModel(
+    answers,
+    remaining !== undefined && remaining.length > 0 ? { remaining } : undefined,
+  )}`;
 }
 
 /**
@@ -95,6 +102,17 @@ function batchKey(record: StoredInteraction, batchId: string): string | undefine
 }
 
 /**
+ * 这条记录**本批**要投出去的答案。
+ *
+ * 分批之后 `answer.answers` 是这条请求累计的全部答案（事实源），而一次投递只该带
+ * 这一批 —— 否则人第二次只答第 3 题，模型会再读一遍第 1、2 题。`batch_answers` 就是
+ * 那批增量（registry 写的），旧记录没有它，退回 `answers`（逐字节同旧行为）。
+ */
+function answerBatchOf(record: StoredInteraction): unknown[] {
+  return record.answer?.batch_answers ?? record.answer?.answers ?? [];
+}
+
+/**
  * 构造注入网关的投放实现。
  *
  * 失败（成员已关闭 / 准入被拒 / 调度拒绝）一律返回 false、只写 stderr：
@@ -116,11 +134,17 @@ export function createAskAnswerDelivery(service: AgentService): AskAnswerDeliver
     try {
       const content =
         records.length === 1
-          ? formatAskAnswerContent(first.answer?.answers ?? [], first.requestId)
+          ? formatAskAnswerContent(
+              answerBatchOf(first),
+              first.requestId,
+              // 分批：这一批没答全时把「还剩哪几题」写进正文（与工具返回同一句话），
+              // 否则模型读到的 2/3 答案里看不出缺口在哪。
+              remainingQuestionsOf(first),
+            )
           : formatAskAnswerBatchContent(
               records.map((record) => ({
                 requestId: record.requestId,
-                answers: record.answer?.answers ?? [],
+                answers: answerBatchOf(record),
               })),
             );
       await service.admit({
@@ -165,7 +189,7 @@ export function createAskAnswerDelivery(service: AgentService): AskAnswerDeliver
   return async (record: StoredInteraction, context?: { batchId?: string }): Promise<boolean> => {
     const batchId = context?.batchId;
     // 拒绝回答（answers 为空）是「人类不答」，跟别的答案混一条会把拒绝稀释成正常答案。
-    const isolated = (record.answer?.answers ?? []).length === 0;
+    const isolated = answerBatchOf(record).length === 0;
     const key =
       batchId === undefined || batchId === '' || isolated ? undefined : batchKey(record, batchId);
     if (key === undefined) return deliver([record]);
