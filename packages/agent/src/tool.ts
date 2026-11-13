@@ -486,19 +486,18 @@ export function createAgentTool(
           // 0.31：模型发起的 rotate 一律先问人类。CLI / 人工 RPC 直接走
           // service.createSession，不经过这里，因此不会被询问。
           const ratio = service.contextRatio(callerSession);
-          // floor：0.895 必须显示 89%（低于 90% 线），不能用 round 显示成 90%
-          // 却同时说“below the 90% line”。
-          const percent = ratio === undefined ? undefined : Math.floor(ratio * 100);
+          // 0.52：取整口径必须与界面一致 —— TUI 状态栏 / 会话列表 / core 的
+          // `context.pressure` 全是 `Math.round(ratio * 100)`；这里若用 floor，就会出现
+          // 「界面 90%、提示 89%」这种比不给数更糟的错觉。
+          // 「高于/低于阈值线」也按同一个整数判，否则 89.6% 会显示成「90%（低于 90% 线）」。
+          const warningLine = Math.round(LIMIT_WARNING_THRESHOLD * 100);
+          const percent = ratio === undefined ? undefined : Math.round(ratio * 100);
           const warning =
-            ratio === undefined
+            ratio === undefined || percent === undefined
               ? 'Context usage is unknown; rotate only with human approval.'
-              : ratio >= LIMIT_WARNING_THRESHOLD
-                ? `Context is at ${percent}% (at or above the ${Math.round(
-                    LIMIT_WARNING_THRESHOLD * 100,
-                  )}% line); rotation is recommended.`
-                : `Context is at ${percent}% (below the ${Math.round(
-                    LIMIT_WARNING_THRESHOLD * 100,
-                  )}% line); rotation is usually unnecessary.`;
+              : percent >= warningLine
+                ? `Context is at ${percent}% (at or above the ${warningLine}% line); rotation is recommended.`
+                : `Context is at ${percent}% (below the ${warningLine}% line); rotation is usually unnecessary.`;
 
           let approved = false;
           let denial = 'no_human_channel';
