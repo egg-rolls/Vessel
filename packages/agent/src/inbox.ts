@@ -356,7 +356,7 @@ export interface AgentInboxPort {
    * 插队 / 优先级 / interrupt 之后队列序不再等于时间序，`ts` 只是写入时刻的旁证，
    * 不是队列语义的代理。后续加优先级时改的是入队位置，这条方法不用改。
    *
-   * 跳过（不是"没有队头"）：`quiet` 留档条目（模型自述 / 投递失败留档 —— 语义就是
+   * 跳过（不是「没有队头」）：`quiet` 留档条目（模型自述 / 投递失败留档 —— 语义就是
    * 「不要执行」）与空正文条目（不可能成为 run input，`admit` 会按 invalid_input 拒绝）。
    */
   inputHead(agentId: string): StoredInboxMessage | undefined;
