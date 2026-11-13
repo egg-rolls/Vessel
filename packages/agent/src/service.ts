@@ -2352,6 +2352,9 @@ export class AgentServiceImpl implements AgentService {
             ts: message.ts,
             source: from,
             text: content,
+            // 显示名同样带进 quiet 条目：rotate 窗口落盘的消息之后也会上条带，
+            // 缺了它卡头一样只剩 UUID（本来就知道的名字，没有理由丢掉）。
+            ...(senderName !== undefined ? { from_name: senderName } : {}),
           },
           { delivery: 'quiet' },
         );
@@ -2488,6 +2491,9 @@ export class AgentServiceImpl implements AgentService {
         session_id: bodyId,
         // 附件引用随条目落盘：重启恢复重投时带上，附件不丢。
         ...(message.refs !== undefined ? { refs: message.refs } : {}),
+        // 显示名随条目落盘（只给条带身份行）：入队这一刻 registry 里还有发送方，
+        // 之后渲染时已经无处可查 —— 不存下来，卡头就只能摆一串 UUID。
+        ...(message.from_name !== undefined ? { from_name: message.from_name } : {}),
       },
       { delivery: 'input' },
     );
@@ -2752,6 +2758,11 @@ export class AgentServiceImpl implements AgentService {
       status: 'unread' | 'held';
       ts: number;
       session_id?: string;
+      /**
+       * 发送者显示名（additive）：条带身份行据此显示 `agent:<name>`。
+       * 缺省 = 老条目 / 发送方没有本机成员名 ⇒ 渲染侧退化成短 id（不显示完整 UUID）。
+       */
+      from_name?: string;
       text?: string;
     }[];
   } {
@@ -2777,6 +2788,8 @@ export class AgentServiceImpl implements AgentService {
           status: entry.held ? ('held' as const) : ('unread' as const),
           ts: entry.ts,
           ...(entry.session_id !== undefined ? { session_id: entry.session_id } : {}),
+          // 显示名只读透传：条带据此把 `agent:<id>` 读成名字，缺省时前端自己退短 id。
+          ...(entry.from_name !== undefined ? { from_name: entry.from_name } : {}),
           ...(text !== undefined ? { text } : {}),
         };
       });
