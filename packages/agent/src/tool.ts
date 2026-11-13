@@ -588,16 +588,17 @@ export function createAgentTool(
             epoch: created?.epoch,
             ...(result.title !== undefined ? { title: result.title } : {}),
           };
-          // 文案必须是真的：旧 body 收口时会被 epoch fencing（service 侧
-          // `agent.reply.stale`），本轮正文既不记账也不回传父级，所以原来的
-          // 「finish the current turn」是假指令 —— 模型会照着它把交接信息说给空气听。
-          // B′（交棒轮正常记账）落地后，只需把中间那句改回「本轮正常采用」。
+          // 文案必须是真的（0.52 B′）：交棒的那一轮**正常记账**——agent 终态、
+          // 父级通知、正文采用都照常走，只有 failed / 正文为空时才补一条 notice。
+          // 所以模型可以放心把这一轮说完；`startup_prompt` 仍然是唯一交接通道，
+          // 因为新 body 不会继承这段对话（它只读 startup_prompt + 旧队列）。
           return (
             `${JSON.stringify(rotated)}\n` +
             'rotation committed; the new body is already running and this conversation is ' +
-            'no longer yours. Remaining output of this turn is fenced as the old epoch (not ' +
-            'recorded, not delivered), so startup_prompt is the only handoff — everything ' +
-            'the next body must know goes there.'
+            'no longer yours. Finish the current turn: its closing reply is recorded normally ' +
+            '(agent state + parent notice), not fenced. startup_prompt remains the only handoff ' +
+            'channel — the new body does not inherit this conversation, so everything it must ' +
+            'know still has to go there.'
           );
         }
 
