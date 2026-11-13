@@ -13,8 +13,9 @@
  * @module web/domains/pending/ask-submit-plan
  */
 
-import { askQuestionSettled, buildAskAnswer } from '../../gateway/ask-answers';
+import { askQuestionId, askQuestionSettled, buildAskAnswer } from '../../gateway/ask-answers';
 import type { AskUserAnswer, AskUserQuestion } from '../../gateway/types';
+import { askAnsweredMarksOf, reconcileAskAnsweredMarks } from './ask-answered-marks';
 import { type AskDrafts, type AskDraftValue, askDraftOf, isAskDraftAnswered } from './ask-drafts';
 
 /**
@@ -31,11 +32,13 @@ export interface AskPlanRequest {
 export interface AskPlanRow {
   readonly requestId: string;
   readonly index: number;
+  /** 协议里的稳定题号（q1 / q2 …）：与答案上的 question_id 是同一个值。 */
+  readonly questionId: string;
   readonly question: AskUserQuestion;
   readonly draft: AskDraftValue;
   /** 本地草稿里已经有答案。 */
   readonly answered: boolean;
-  /** 服务端已落定：不再进载荷，界面上标「已答」。 */
+  /** 已落定（服务端进度 / 本端刚提交过）：不进载荷，标「已答」并上锁。 */
   readonly settled: boolean;
 }
 
@@ -43,16 +46,25 @@ export interface AskPlanRow {
 export function askPlanRows(requests: readonly AskPlanRequest[], drafts: AskDrafts): AskPlanRow[] {
   const rows: AskPlanRow[] = [];
   for (const request of requests) {
+    // 服务端进度已经覆盖的本端标记就地回收，标记不会越攒越多。
+    reconcileAskAnsweredMarks(request.requestId, request.answeredQuestionIds);
+    const marks = askAnsweredMarksOf(request.requestId);
     const questions = request.questions ?? [];
     questions.forEach((question, index) => {
       const draft = askDraftOf(drafts, request.requestId, index);
+      const questionId = askQuestionId(question, index);
+      const fromServer = askQuestionSettled(request.answeredQuestionIds, question, index);
+      // 「刚提交过」也算落定：服务端的逐题进度要等一次 hydrate 才回来，中间那段
+      // 窗口里界面必须已经上锁，否则用户手快就再点一次（用户实测的重复提交）。
+      const justSubmitted = marks.includes(questionId);
       rows.push({
         requestId: request.requestId,
         index,
+        questionId,
         question,
         draft,
         answered: isAskDraftAnswered(draft),
-        settled: askQuestionSettled(request.answeredQuestionIds, question, index),
+        settled: fromServer || justSubmitted,
       });
     });
   }

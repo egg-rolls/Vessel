@@ -1,7 +1,8 @@
 import { Badge, Button, cn, Input } from '../../components/ui';
-import { askQuestionSettled } from '../../gateway/ask-answers';
+import { askQuestionId, askQuestionSettled } from '../../gateway/ask-answers';
 import type { AskUserAnswer, AskUserRequest } from '../../gateway/types';
 import { t } from '../../i18n';
+import { askAnsweredMarksOf, markAskAnswered } from '../pending/ask-answered-marks';
 import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
 import { askPendingAnswers, askPlanRows, askRowsComplete } from '../pending/ask-submit-plan';
 
@@ -148,7 +149,19 @@ export function AskCard({
         <Button variant="dangerGhost" disabled={busy} onClick={onCancel}>
           {t('common.cancel')}
         </Button>
-        <Button variant="primary" disabled={!complete || busy} onClick={() => onSubmit(answers)}>
+        <Button
+          variant="primary"
+          disabled={!complete || busy}
+          onClick={() => {
+            // 先记本地「已提交」再发请求：从这一刻起这几行就上锁，连点也不会再进载荷
+            // （服务端幂等是最后一道闸，但界面不该主动递刀）。
+            markAskAnswered(
+              request.requestId,
+              answers.map((answer) => answer.question_id ?? ''),
+            );
+            onSubmit(answers);
+          }}
+        >
           {busy ? t('permission.busy') : t('ask.submit')}
         </Button>
       </div>
@@ -194,11 +207,13 @@ export function AskQuestionCard({
 }) {
   const titleId = `ask-card-${request.requestId}-${questionIndex}`;
   const question = request.questions[questionIndex];
-  // 已落定的题（分批提交时上一批答过的）由服务端逐题进度判定：标「已答」并锁住输入，
-  // 别让它看起来还能改 —— 用户顺手再答一遍，提交载荷里就多一条只能靠服务端挡回来的行。
+  // 已落定 = 服务端逐题进度 **或** 本端刚提交过（hydrate 回来之前也要先上锁，
+  // 否则用户手快在同一秒里再答一遍，载荷就多一条只能靠服务端挡回来的行）。
+  const marked = askAnsweredMarksOf(request.requestId);
   const settled =
     question !== undefined &&
-    askQuestionSettled(request.answeredQuestionIds, question, questionIndex);
+    (askQuestionSettled(request.answeredQuestionIds, question, questionIndex) ||
+      marked.includes(askQuestionId(question, questionIndex)));
   const disabled = busy || !connected || settled;
   // 已落定的题算答完：草稿在提交后就被清掉了，若还按草稿判「未答」，用户会卡在
   // 这道已经答过的题上翻不过去。
