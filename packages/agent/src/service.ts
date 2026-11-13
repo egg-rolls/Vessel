@@ -156,6 +156,23 @@ const TEAM_MEMBER_LIMIT = 20;
 const DEFAULT_MESSAGE_SENDER = HUMAN_PRINCIPAL;
 
 /**
+ * ask 答复在 inbox 里的来源名（`AgentInboxEntry.source`）。
+ *
+ * 为什么答案不写 `human`：待处理条带 / 时间线都要能指出「这是人对某个提问的答复」，
+ * 而不是人自己随口说的一句。消息本身的 `from` 仍是人类 principal —— 那是权限主体与
+ * 模型侧的来源标注，换掉它会动摇与「谁在说话」无关的判定。
+ *
+ * 副作用（已确认，方向正确）：`agents.recall` 对非 human 源是「unhold 留档」而不是真删，
+ * 于是人对 ask 的答复不会被静默删除。
+ */
+export const ASK_ANSWER_INBOX_SOURCE = 'ask';
+
+/** inbox 条目的来源：只有「人对 ask 的答复」与普通人类消息在这里分家。 */
+function inboxSourceOf(message: AgentMessage): string {
+  return message.origin === 'ask_answer' ? ASK_ANSWER_INBOX_SOURCE : message.from;
+}
+
+/**
  * synthetic 摘要唤醒的固定输入 —— **不再是默认路径**（0.51 回归修复）。
  *
  * idle 时队列里有可直投的正文，service 会把**队头那条的正文**直接投成下一轮 run input
@@ -2379,7 +2396,8 @@ export class AgentServiceImpl implements AgentService {
           {
             id: message.id,
             ts: message.ts,
-            source: from,
+            // 与 `trackInbox` 同一口径：ask 答复的来源不是 human（见 `inboxSourceOf`）。
+            source: inboxSourceOf(message),
             text: content,
             ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
             // 显示名同样带进 quiet 条目：rotate 窗口落盘的消息之后也会上条带，
@@ -2523,7 +2541,7 @@ export class AgentServiceImpl implements AgentService {
       {
         id: message.id,
         ts: message.ts,
-        source: message.from,
+        source: inboxSourceOf(message),
         text: message.content,
         // 归属会话 = 接管这条消息的 body（`entry.bindingId`）。
         session_id: bodyId,

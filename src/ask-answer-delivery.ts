@@ -21,7 +21,7 @@
 
 import type { AgentService } from '@vessel-agent/agent';
 import type { StoredInteraction } from '../packages/serve/src/index';
-import { formatAnswersForModel } from './ask-channel';
+import { formatAnswersForModel, remainingQuestionsOf } from './ask-channel';
 
 /**
  * 答案消息的正文前缀：让模型一眼看出「这是人对我那个待批提问的回答」。
@@ -36,8 +36,15 @@ import { formatAnswersForModel } from './ask-channel';
 export const ASK_ANSWER_TAG_PREFIX = '[ask answer ';
 
 /** 答案正文（模型看到的 user 消息原文）。 */
-export function formatAskAnswerContent(answers: unknown[], requestId: string): string {
-  return `${ASK_ANSWER_TAG_PREFIX}${requestId}] ${formatAnswersForModel(answers)}`;
+export function formatAskAnswerContent(
+  answers: unknown[],
+  requestId: string,
+  remaining?: readonly string[],
+): string {
+  return `${ASK_ANSWER_TAG_PREFIX}${requestId}] ${formatAnswersForModel(
+    answers,
+    remaining !== undefined && remaining.length > 0 ? { remaining } : undefined,
+  )}`;
 }
 
 /**
@@ -127,7 +134,13 @@ export function createAskAnswerDelivery(service: AgentService): AskAnswerDeliver
     try {
       const content =
         records.length === 1
-          ? formatAskAnswerContent(answerBatchOf(first), first.requestId)
+          ? formatAskAnswerContent(
+              answerBatchOf(first),
+              first.requestId,
+              // 分批：这一批没答全时把「还剩哪几题」写进正文（与工具返回同一句话），
+              // 否则模型读到的 2/3 答案里看不出缺口在哪。
+              remainingQuestionsOf(first),
+            )
           : formatAskAnswerBatchContent(
               records.map((record) => ({
                 requestId: record.requestId,

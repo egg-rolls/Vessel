@@ -165,7 +165,7 @@ export function askQuestionSummary(text: string): string {
  */
 export function formatAnswersForModel(
   answers: unknown[],
-  options?: { requestCount?: number },
+  options?: { requestCount?: number; remaining?: readonly string[] },
 ): string {
   if (answers.length === 0) {
     return 'The human declined to answer your pending ask request.';
@@ -189,12 +189,38 @@ export function formatAnswersForModel(
     }
     return `${index + 1}. ${JSON.stringify(answer)}`;
   });
+  const remaining = options?.remaining ?? [];
+  if (remaining.length > 0) {
+    // 分批：这一批没答全时必须明说，否则模型最容易以为「我问的都答了」，
+    // 或者以为这次提问已经作废而把同样的问题再问一遍。
+    lines.push(
+      `(${remaining.length} of ${answers.length + remaining.length} questions still unanswered: ` +
+        `${remaining.join(', ')}. They stay in the human pending queue and the rest will arrive ` +
+        'later as a separate message — do not wait for them, do not ask those questions again.)',
+    );
+  }
   const requestCount = options?.requestCount;
   const intro =
     requestCount !== undefined && requestCount > 1
       ? `Answers from the human to your ${requestCount} pending ask requests:`
       : 'Answers from the human to your pending ask request:';
   return [intro, ...lines].join('\n');
+}
+
+/**
+ * 这条记录里**还剩哪几题没答**（题 id 列表；全部答完 / 旧记录无题可枚举时为空）。
+ *
+ * 与工具写侧同一套题 id 规则（`id` 优先，缺省按题序 `q1/q2/…`）—— 认不出题的记录
+ * （`input` 不是数组）一律当作「没有缺口」，绝不凭空造出未答项。
+ */
+export function remainingQuestionsOf(record: StoredInteraction): string[] {
+  if (!Array.isArray(record.input)) return [];
+  const answered = new Set(record.answered_questions ?? []);
+  const ids = record.input.map((item, index) => {
+    const explicit = isRecord(item) ? nonEmptyString(item.id) : undefined;
+    return explicit ?? `q${index + 1}`;
+  });
+  return ids.filter((id) => !answered.has(id));
 }
 
 /**
