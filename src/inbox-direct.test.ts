@@ -141,6 +141,39 @@ interface HarnessOptions {
   workerVisibility?: 'private' | 'team' | 'tenant';
 }
 
+/**
+ * 预算端口替身：`blockDirect` 为 true 时**只拦直投**（`mode` 不是 `wake` 的投递检查），
+ * wake 口径照旧放行 —— 这样才能构造出「wake 落盘成功、队头直投被预算拒掉」的那一步，
+ * 用来验证兜底唤醒与「消息一条不丢」。
+ */
+function makeBudgetPort() {
+  let blockDirect = false;
+  const ok = { ok: true as const };
+  const blocked = {
+    ok: false as const,
+    dimension: 'wall_clock' as const,
+    reason: 'budget_exceeded' as const,
+    current: 999,
+    max: 1,
+  };
+  return {
+    setBlockDirect: (value: boolean) => {
+      blockDirect = value;
+    },
+    port: {
+      checkDelivery: (input: { mode?: string }) =>
+        blockDirect && input.mode !== 'wake' ? blocked : ok,
+      canStartTurn: () => ok,
+      noteTurnStarted: () => {},
+      noteTurnFinished: () => {},
+      status: () => [],
+      override: () => ({ ok: false as const, reason: 'unsupported' }),
+      release: () => [],
+      flush: async () => {},
+    },
+  };
+}
+
 async function harness(options: HarnessOptions = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'vessel-inbox-direct-'));
   const turns: { message: AnyRecord }[] = [];
@@ -154,6 +187,7 @@ async function harness(options: HarnessOptions = {}) {
     async dispose() {},
   };
   const scheduler = new FakeScheduler();
+  const budget = makeBudgetPort();
   let idSeq = 0;
   let nowValue = 1000;
   const service = createAgentService({
@@ -161,6 +195,7 @@ async function harness(options: HarnessOptions = {}) {
     dataDir,
     runtime: runtime as never,
     scheduler: scheduler as never,
+    budget: budget.port as never,
     now: () => nowValue,
     newId: () => `id-${String(++idSeq)}`,
     logger: quietLogger as never,
@@ -191,6 +226,8 @@ async function harness(options: HarnessOptions = {}) {
     setNow: (value: number) => {
       nowValue = value;
     },
+    /** 只拦直投的预算闸（见 `makeBudgetPort`）。 */
+    setBlockDirect: budget.setBlockDirect,
     /** 模型真正收到的输入正文，按轮序。 */
     inputs: () => turns.map((turn) => turn.message.content as string),
     lastInput: () => turns.at(-1)?.message,
@@ -385,7 +422,44 @@ async function main(): Promise<void> {
     await h.cleanup();
   }
 
-  // ── ⑤ store 级：quiet 留档永不成为直投队头，且这个位随条目落盘 ──────────────
+  // ── ⑤ 直投投不进去 ⇒ 退回摘要唤醒，且消息一条不丢 ──────────────────────────
+  {
+    const h = await harness();
+    await h.service.dispatch({ to: h.workerId, from: 'human', content: 'warmup' });
+    await h.scheduler.drainAll();
+    // 从这里开始预算只拦「非 wake 口径」的投递 = 直投；wake 落盘照旧放行。
+    h.setBlockDirect(true);
+    const sent = notifiedOutcome(
+      await h.service.dispatch({
+        to: h.workerId,
+        from: 'human',
+        content: 'BLOCKED-BODY',
+        notify: true,
+      }),
+      '⑤',
+    );
+    check('⑤ 直投被拒也算「动起来了」（退回唤醒）', sent?.wake === true);
+    check(
+      '⑤ 退回的是摘要唤醒输入，不是被拒的正文',
+      (h.scheduler.nextInput() ?? '').includes(WAKE_MARKER) === true &&
+        h.scheduler.nextInput() !== 'BLOCKED-BODY',
+      String(h.scheduler.nextInput()),
+    );
+    await h.scheduler.drainAll();
+    const persisted = await h.readInbox();
+    check(
+      '⑤ 被拒的那条仍留在队列（unread，没被 discard）',
+      persisted.messages.some(
+        (message) => message.text === 'BLOCKED-BODY' && message.status === 'unread',
+      ),
+      JSON.stringify(persisted.messages.map((message) => [message.text, message.status])),
+    );
+    // 兜底唤醒跑完就停：模型没读，不该自己反复重投 / 反复唤醒。
+    check('⑤ 兜底之后不再自旋', h.scheduler.queue.length === 0, String(h.scheduler.queue.length));
+    await h.cleanup();
+  }
+
+  // ── ⑥ store 级：quiet 留档永不成为直投队头，且这个位随条目落盘 ──────────────
   {
     const dataDir = await mkdtemp(join(tmpdir(), 'vessel-inbox-direct-store-'));
     const store = new AgentInboxStore({ dataDir, tenantId: 't1' });
@@ -397,14 +471,14 @@ async function main(): Promise<void> {
     store.append('w1', { id: 'msg-1', ts: 1000, source: 'human', text: 'real message' });
     await store.flush();
     const head = store.inputHead('w1');
-    check('⑤ 队头跳过 quiet 留档', head?.id === 'msg-1', String(head?.id));
-    check('⑤ 队头带正文（不只是摘要）', head?.text === 'real message');
+    check('⑥ 队头跳过 quiet 留档', head?.id === 'msg-1', String(head?.id));
+    check('⑥ 队头带正文（不只是摘要）', head?.text === 'real message');
     // 新实例 = 进程重启后的视角：quiet 位必须从盘上读得回来。
     const reloaded = new AgentInboxStore({ dataDir, tenantId: 't1' });
     const note = reloaded.findByIds('w1', ['note-1'])[0];
-    check('⑤ quiet 位落盘并可读回', note?.quiet === true, JSON.stringify(note));
+    check('⑥ quiet 位落盘并可读回', note?.quiet === true, JSON.stringify(note));
     const reloadedHead = reloaded.inputHead('w1');
-    check('⑤ 重启后队头仍然跳过留档', reloadedHead?.id === 'msg-1', String(reloadedHead?.id));
+    check('⑥ 重启后队头仍然跳过留档', reloadedHead?.id === 'msg-1', String(reloadedHead?.id));
     await rm(dataDir, { recursive: true, force: true });
   }
 
