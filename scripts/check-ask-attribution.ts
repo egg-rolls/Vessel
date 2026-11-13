@@ -105,8 +105,10 @@ async function functionBody(path: string, name: string): Promise<string> {
  */
 async function methodBody(path: string, name: string): Promise<string> {
   const text = await source(path);
-  const match = new RegExp(`^\\s*(?:(?:private|protected|public)\\s+)?(?:async\\s+)?${name}\\(`, 'm')
-    .exec(text);
+  const match = new RegExp(
+    `^\\s*(?:(?:private|protected|public)\\s+)?(?:async\\s+)?${name}\\(`,
+    'm',
+  ).exec(text);
   if (match === null) {
     fail(path, `[D 守卫] 找不到方法 ${name}（改名了？门禁要跟着改）`);
     return '';
