@@ -14,6 +14,13 @@
 > 开发线已开启（2026-11-13）。0.51.0 的完整变更见
 > [docs/versions/0.51.0.md](docs/versions/0.51.0.md)。
 
+### Changed
+
+- **`gateway restart` 改为平台层重启（handoff）**：旧 Gateway 退出时不再终止自己 spawn 的
+  node（与 hub），新 Gateway 按既有 adopt 判据接管，改平台层 / Web / registry 不打断在跑的 run。
+  `gateway stop` 仍真停（连 node/hub）；`stop --keep-nodes` / `restart --no-keep-nodes` 是显式开关。
+  node 自身重启（marker + resume）不在本次范围。
+
 ## [0.32.0] - 2026-10-31
 
 > 0.32.0（基于 0.31.0，未发布）：上下文管理系统。完整记录见

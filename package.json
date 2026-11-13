@@ -73,7 +73,8 @@
     "check:theme-apply": "bun run scripts/check-theme-apply.ts",
     "check:ask-cursor": "bun run scripts/check-ask-cursor.ts",
     "check:session-agent-binding": "bun run scripts/check-session-agent-binding.ts",
-    "check:ask-selection": "bun run scripts/check-ask-selection.ts"
+    "check:ask-selection": "bun run scripts/check-ask-selection.ts",
+    "check:node-handoff": "bun run scripts/check-node-handoff.ts"
   },
   "workspaces": [
     "packages/*",

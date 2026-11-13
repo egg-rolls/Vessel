@@ -94,6 +94,7 @@ code + 平台 state；Node API = Platform code + Company runtime + Company state
 - **Federation** = 信件投递：节点到节点直接转发，正文不经 Hub；授权权威在节点。
 - Hub 服务多家公司，属于 Platform；公司可独立运行，需要跨公司协作时才接入。
 - 现态：`vessel hub start` 独立前台进程（`src/hub/**`）；gateway 不启动本地 hub；节点只出站拨号 Hub。见 [federation-hub](federation-hub.md)。
+- **重启语义**：`vessel gateway restart` = 只重启平台层（handoff）——旧 Gateway 退出时**不终止**自己 spawn 的 node/hub，新 Gateway 按 `gateway.pid` 三元组 / hub lock adopt 接管，故改平台层 / Web / registry 不打断在跑的 run；`gateway stop` 仍真停（连 node/hub），`--keep-nodes` / `--no-keep-nodes` 是显式开关。node 自身重启不在本语义内（需 marker + resume，待做）。
 
 ## 非目标
 
