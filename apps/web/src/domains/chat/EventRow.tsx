@@ -307,7 +307,19 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
     }
     // 「旧身体这一轮回复产出过、但被 epoch fencing 丢弃」的唯一解释：团队日志对已退役
     // Binding 的 run.completed 是**显式抑制**的，所以这段话为什么没出现，只有这里能说。
+    // 同一个类型还承载 0.52 B′ 的反面情形（`reason: handoff_no_reply`）：交棒轮正常记账，
+    // 但那一轮 failed / cancelled / 正文为空 —— 此刻**没有**「未被采用」这回事，只是一句
+    // 「交棒了，但没有收尾」，所以降到 info 档，别让人当成报错。
     case 'agent.reply.stale': {
+      if (data.reason === 'handoff_no_reply') {
+        return {
+          tone: 'info',
+          text: t('chat.notice.handoffNoReply', {
+            outcome: typeof data.outcome === 'string' ? data.outcome : '?',
+            epoch: numberOf(data.epoch) ?? '?',
+          }),
+        };
+      }
       return {
         tone: 'warn',
         text: t('chat.notice.replyStale', {

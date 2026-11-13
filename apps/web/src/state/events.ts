@@ -446,7 +446,8 @@ export function createFold(runId: string): RunFold {
       // 退役 / 作废回复：**有承接才允许藏**。`agent.retired` 是 `internal` + typed
       // notice（默认档不出卡，`ui.showInternalEvents` / `debug` 时以 notice 出现 ——
       // 它的 `reason` 在服务端 DTO 里没有，藏成「什么都不显示」就丢了「为什么换身体」）；
-      // `agent.reply.stale` 是 `content`（「那一轮回复为何作废」的唯一解释）。
+      // `agent.reply.stale` 是 `content`（「那一轮回复为何作废 / 为何没有收尾」的
+      // 唯一解释，0.52 起含交棒轮的 `handoff_no_reply`）。
       // 两者都必须走 notice，不得落成原始 JSON 卡。
       case 'agent.retired':
       case 'agent.reply.stale': {
