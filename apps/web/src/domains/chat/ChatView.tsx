@@ -381,6 +381,7 @@ export function ChatView({
             navigate({ domain: 'pending', ...(selectedId ? { sessionId: selectedId } : {}) })
           }
           agentAddresses={sessionsApi.agentAddresses}
+          agentAddressesById={sessionsApi.agentAddressesById}
           agentLabels={sessionsApi.agentLabels}
           agentRetiredLabels={sessionsApi.agentRetiredLabels}
           defaultSession={sessionsApi.defaultSessionEntry}

@@ -58,6 +58,7 @@ export function SessionList({
   pendingAskCount,
   onOpenPending,
   agentAddresses,
+  agentAddressesById,
   agentLabels,
   agentRetiredLabels,
   defaultSession,
@@ -93,6 +94,8 @@ export function SessionList({
   onOpenPending?: () => void;
   /** session_id → `name@node:team`；只包含显式 member 的当前节点 roster。 */
   agentAddresses?: ReadonlyMap<string, string>;
+  /** agent id -> { node, team? }：第二行给「地址」而不是  占位（0.52）。 */
+  agentAddressesById?: ReadonlyMap<string, { node: string; team?: string }>;
   /**
    * session_id → `名字@primary`：非 team 成员（临时成员 / 未加入 Team / 不在本 team 的
    * agent）的 primary body 会话。只在拿不到节点地址时顶上，团队成员一个都没有。
@@ -324,12 +327,19 @@ export function SessionList({
                 const ownAgentName = ownAgent?.name?.trim();
                 const agentLabel =
                   agentAddress || ownAgentName ? undefined : agentLabels?.get(session.session_id);
-                // 文本对现役与旧身体**一致**（`名字@primary`）：用户 2026-11-13 否掉「名字（旧身体）」——
-                // 第二行讲归属，不讲状态；状态交给颜色（现役主题色 / 旧身体 primary 灰）。
+                // 地址栏：能查到节点就写 `节点:team`，查不到团队就是 `节点:primary`，
+                // 连节点都不知道才退回裸 `primary`（用户 2026-11-13：旧 body 显示
+                // `main@primary` 是错的，应该是 `main@Soulkiller:vessel`）。
+                const ownAgentAddress =
+                  ownAgent === undefined ? undefined : agentAddressesById?.get(ownAgent.id);
+                const ownAgentScope =
+                  ownAgentAddress === undefined
+                    ? t('team.member.primaryBadge')
+                    : `${ownAgentAddress.node}:${ownAgentAddress.team ?? t('team.member.primaryBadge')}`;
                 const ownAgentTitle =
                   agentAddress || ownAgentName === undefined
                     ? undefined
-                    : `${ownAgentName}@${t('team.member.primaryBadge')}`;
+                    : `${ownAgentName}@${ownAgentScope}`;
                 const ownAgentLive = ownAgent?.primary === true;
                 const agentRetiredLabel =
                   agentAddress || ownAgentTitle || agentLabel

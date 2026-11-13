@@ -25,7 +25,11 @@ import { usePolledAction } from '../../stores/usePolledAction';
 import { errorMessage } from './errors';
 import { findMainSession, type MainSession, primaryBodySessions } from './main-session';
 import { closedAgentSessionIds, sessionAgentAddresses } from './SessionList';
-import { sessionAgentLabels, sessionAgentRetiredLabels } from './session-agent-labels';
+import {
+  agentAddressesById as agentAddressesByIdOf,
+  sessionAgentLabels,
+  sessionAgentRetiredLabels,
+} from './session-agent-labels';
 import {
   browserSessionStorage,
   clearLastSession,
@@ -121,6 +125,9 @@ export function useChatSessions({
   const rosterState = useAgentStore((state) => state.roster);
   const rosters = useMemo(() => resourceData(rosterState) ?? [], [rosterState]);
   const agentAddresses = useMemo(() => sessionAgentAddresses(rosters), [rosters]);
+  // agent id → 节点地址（0.52）：让旧 body / 非 primary 会话也能显示 `名字@节点:team`，
+  // 而不是退化成 `名字@primary`（用户报的 `main@primary` 正是这一条）。
+  const agentAddressesById = useMemo(() => agentAddressesByIdOf(rosters), [rosters]);
   // 归属到已停用 agent 的会话只做标记、不做过滤：会话是用户自己的历史，隐藏等于
   // 把找回入口弄丢（0.51 裁决）。反查不到（别的节点 / 窗口截断 / 旧 gateway）→ 不标。
   const closedAgentSessions = useMemo(() => closedAgentSessionIds(rosters), [rosters]);
@@ -470,6 +477,7 @@ export function useChatSessions({
     debouncedQuery,
     activeServerSearch,
     agentAddresses,
+    agentAddressesById,
     agentLabels,
     agentRetiredLabels,
     closedAgentSessions,

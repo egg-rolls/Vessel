@@ -22,10 +22,12 @@ export interface LabelBody {
 
 /** roster 条目（AgentSummary / TeamMember 的最小结构）。 */
 export interface LabelAgent {
+  id?: string | null;
+  agent_id?: string | null;
+  team_id?: string | null;
   name?: string | null;
   role?: string | null;
   owner?: string | null;
-  team_id?: string | null;
   session_id?: string | null;
   bodies?: readonly LabelBody[] | null;
   /** 已退役 body（0.52：`agents.list` / `TeamMember` 都带，rotate 之前的旧身体）。 */
@@ -42,6 +44,54 @@ export interface LabelRoster {
         members?: readonly LabelAgent[] | null;
       }[]
     | null;
+}
+
+/** roster 里那个 agent 所在的节点与团队（团队可为空 = 不属于任何 Team）。 */
+export interface LabelAddress {
+  node: string;
+  team?: string;
+}
+
+/**
+ * agent id → `{ node, team? }`（0.52）。
+ *
+ * 用户的原话是「旧 body 显示的是 `main@primary`，而不是 `main@Soulkiller:vessel`」——
+ * 归属的第二行应该给出**地址**，而不是一个 `primary` 占位。地址由 roster 决定
+ * （`node.name` + 所属 team），而 roster 里每个 agent 条目都带着自己的 `team_id`，
+ * 所以「不知道团队」只应该是**真的没有团队**（未加入任何 Team / 临时成员），不是「没查」。
+ *
+ * 两个来源都收：`roster.agents`（节点上所有 agent）与 `rosters[].members`（团队成员）。
+ * 后者优先 —— 成员条目带 `role`/`team_id`，比 agents 列表更权威。
+ */
+export function agentAddressesById(
+  rosters: readonly LabelRoster[],
+): ReadonlyMap<string, LabelAddress> {
+  const addresses = new Map<string, LabelAddress>();
+  const put = (id: string | undefined, address: LabelAddress, overwrite: boolean) => {
+    if (id === undefined) return;
+    if (!overwrite && addresses.has(id)) return;
+    addresses.set(id, address);
+  };
+  for (const roster of rosters) {
+    const node = trimId(roster.node?.name);
+    if (!node) continue;
+    for (const agent of roster.agents ?? []) {
+      const team = trimId(agent.team_id);
+      put(trimId(agent.id) ?? trimId(agent.agent_id), team ? { node, team } : { node }, false);
+    }
+    if (!roster.node?.current) continue;
+    for (const team of roster.rosters ?? []) {
+      const teamId = trimId(team.team?.team_id);
+      for (const member of team.members ?? []) {
+        put(
+          trimId(member.id) ?? trimId(member.agent_id),
+          teamId ? { node, team: teamId } : { node },
+          true,
+        );
+      }
+    }
+  }
+  return addresses;
 }
 
 /** 会话列表里用得上的唯一字段。 */

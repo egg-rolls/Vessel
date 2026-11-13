@@ -18,6 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  agentAddressesById,
   type LabelRoster,
   type LabelSession,
   sessionAgentLabels,
@@ -128,6 +129,46 @@ const RETIRED_LABELS = sessionAgentRetiredLabels(
   (name) => name + RETIRED_SUFFIX,
 );
 
+/** 地址解析：团队成员 / 临时成员 / 未入 Team / 非 current 节点四种情形。 */
+const ADDRESS_ROSTER: LabelRoster = {
+  node: { current: true, name: 'node-a' },
+  agents: [
+    { id: 'agent-main', name: 'main', role: 'member', team_id: 'team-1', session_id: 'sess-main' },
+    {
+      id: 'agent-temp',
+      name: 'builder',
+      role: 'temporary',
+      owner: 'main',
+      session_id: 'sess-temp',
+    },
+    // agents 列表里还没有 team_id，成员条目里已经加入了 team-1
+    { id: 'agent-reviewer', name: 'reviewer', role: 'member', session_id: 'sess-member' },
+  ],
+  rosters: [
+    {
+      team: { team_id: 'team-1' },
+      members: [
+        { id: 'agent-main', name: 'main', role: 'member' },
+        { id: 'agent-reviewer', name: 'reviewer', role: 'member' },
+      ],
+    },
+  ],
+};
+
+const ADDRESSES = agentAddressesById([ADDRESS_ROSTER]);
+
+const OTHER_NODE_ADDRESSES = agentAddressesById([
+  {
+    node: { current: false, name: 'node-b' },
+    agents: [
+      { id: 'agent-elsewhere', name: 'remote', role: 'temporary', session_id: 'sess-remote' },
+    ],
+    rosters: [
+      { team: { team_id: 'team-9' }, members: [{ id: 'agent-elsewhere', name: 'remote' }] },
+    ],
+  },
+]);
+
 interface Fixture {
   name: string;
   why: string;
@@ -216,6 +257,35 @@ const FIXTURES: readonly Fixture[] = [
     check: () => RETIRED_LABELS.get('sess-closed-old') === 'gone@primary',
   },
   {
+    name: 'F20 地址解析：团队成员 -> 节点:team，未入 Team -> 只有节点',
+    why: '用户报的 main@primary 就是这一步缺失：只说得出名字、说不出节点和团队',
+    check: () =>
+      ADDRESSES.get('agent-main')?.node === 'node-a' &&
+      ADDRESSES.get('agent-main')?.team === 'team-1' &&
+      ADDRESSES.get('agent-temp')?.node === 'node-a' &&
+      ADDRESSES.get('agent-temp')?.team === undefined,
+  },
+  {
+    name: 'F21 地址解析：成员条目优先于 agents 列表（团队信息更权威）',
+    why: '同一个 agent 两处都有时，agents 列表里的 team_id 可能落后于成员条目',
+    check: () => ADDRESSES.get('agent-reviewer')?.team === 'team-1',
+  },
+  {
+    name: 'F22 地址解析：非 current 节点不给团队地址，agent 仍按节点名可解析',
+    why: '别的节点的 team roster 不可信；但「这台机器上叫什么」仍要能显示',
+    check: () =>
+      OTHER_NODE_ADDRESSES.get('agent-elsewhere')?.team === undefined &&
+      OTHER_NODE_ADDRESSES.get('agent-elsewhere')?.node === 'node-b',
+  },
+  {
+    name: 'F23 接线：SessionList 用 agent id 查地址拼 名字@节点:team',
+    why: '只按 session 查地址会让旧 body 退化成 名字@primary（用户报的 bug）',
+    check: () =>
+      readChatSource('SessionList.tsx').includes('agentAddressesById?.get(ownAgent.id)') &&
+      readChatSource('SessionList.tsx').includes('ownAgentAddress.node') &&
+      readChatSource('SessionList.tsx').includes('ownAgentScope'),
+  },
+  {
     name: 'F16 接线：useChatSessions 派生 agentRetiredLabels + 三处透传',
     why: '算对了没透传，用户看到的仍是空白第二行',
     check: () =>
@@ -248,8 +318,10 @@ const FIXTURES: readonly Fixture[] = [
         list.indexOf('const agentLabel =') > index &&
         list.indexOf('const agentRetiredLabel =') > index &&
         list.indexOf('const agentPrimaryBadge =') > index &&
-        // 用户 2026-11-13 否掉「名字（旧身体）」：文本必须与现役一致，状态只由颜色表达
-        list.includes("@${t('team.member.primaryBadge')}") &&
+        // 用户 2026-11-13 否掉「名字（旧身体）」：文本与现役一致，状态只由颜色表达；
+        // 且地址必须拼出 `名字@节点:team`（或 `@节点:primary`），不许退回裸 `@primary`。
+        list.includes('ownAgentScope') &&
+        list.includes('@${ownAgentScope}') &&
         !list.includes('oldBody') &&
         // 现役主题色 / 已退役灰：颜色由 primary 决定，不许只靠 class 猜
         list.includes('ownAgentLive')

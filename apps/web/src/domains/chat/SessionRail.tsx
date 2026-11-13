@@ -18,6 +18,7 @@ export function SessionRail({
   pendingAskCount,
   onOpenPending,
   agentAddresses,
+  agentAddressesById,
   agentLabels,
   agentRetiredLabels,
   defaultSession,
@@ -53,6 +54,7 @@ export function SessionRail({
   pendingAskCount?: number;
   onOpenPending?: () => void;
   agentAddresses: ReadonlyMap<string, string>;
+  agentAddressesById: ReadonlyMap<string, { node: string; team?: string }>;
   /** 非 team 成员 primary 会话的第二行：`名字@primary`（拿不到节点地址时才有值）。 */
   agentLabels: ReadonlyMap<string, string>;
   agentRetiredLabels: ReadonlyMap<string, string>;
@@ -103,6 +105,7 @@ export function SessionRail({
           {...(pendingAskCount !== undefined ? { pendingAskCount } : {})}
           {...(onOpenPending !== undefined ? { onOpenPending } : {})}
           agentAddresses={agentAddresses}
+          agentAddressesById={agentAddressesById}
           agentLabels={agentLabels}
           agentRetiredLabels={agentRetiredLabels}
           defaultSession={defaultSession}
