@@ -1,7 +1,7 @@
 /**
  * Runtime context messages (role 'user', name 'vessel:*') are model-only
- * context: message sources, runtime notices, subscription notices, budget
- * warnings, compaction markers.
+ * context: message sources, runtime notices, budget warnings, compaction
+ * markers（`vessel:subscription` 是 0.52 起不再生产的老通道，见下）。
  *
  * 0.50：可见性不再是浏览器本地偏好，而是服务端配置 ui.showInternalEvents
  * （默认 false；verbosity: debug 按既有「或」语义一并放开，见 state/visibility.ts）。
