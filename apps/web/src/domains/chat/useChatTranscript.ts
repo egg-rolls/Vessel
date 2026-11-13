@@ -36,6 +36,7 @@ import {
   claimRunFactsOf,
   sessionFailureOfDetail,
   sessionSystemContextOfDetail,
+  sessionTerminalOfDetail,
 } from './transcript-items';
 
 const TRANSCRIPT_WINDOW = 50;
@@ -300,6 +301,37 @@ export function useChatTranscript({
     [renderedGroups, cancelledJobs],
   );
   const stopBusy = runningGroup ? cancelling.has(runningGroup.runId) : false;
+
+  /**
+   * 会话快照的**终态对账**（`sessions.get` 的 `status` / `run_id` / `completed_at`）。
+   *
+   * 为什么需要：`runningGroup`（停止按钮）与「正在思考」都只看事件流折出来的 `status`。
+   * 事件流是尽力而为的（背压丢帧 / 回放窗口淘汰 / hub 重启换 seq 纪元 / body 被关掉之后
+   * 再没人发终态帧），终态帧一旦没到，就**永远**没人收口 —— 成员早就关了，屏上还在跑。
+   * 会话投影里 `status` / `run_id` / `completed_at` / `error` 是落盘的，这是同一个页面里
+   * 唯一「可核对」的第二条源（与失败卡同一条路径，不新增 RPC）。
+   *
+   * 依赖里挂 `runningGroup?.runId`：详情先到、组后到（回填 / 重连把 run 补回来）时也要
+   * 再对一次账，否则「快照早就 terminal」与「组晚一步出现」两边都刚好错开，残留照样留住。
+   * 纪律：只碰仍 `running` 的组（`closeRuns` 内部再挡一次，真终态先到就是 no-op），状态
+   * 照抄快照（`completed` / `failed` / `cancelled`），不把「不知道」写成「成功」。
+   */
+  const runningRunId = runningGroup?.runId ?? null;
+  useEffect(() => {
+    if (!selectedId || sessionDetailId !== selectedId) return;
+    // 没有 running 组就没有可收口的对象；一旦有（含回填 / 重连晚到的），本 effect 会因
+    // `runningRunId` 变化再跑一次 —— 两侧刚好错开的时序才收得住。
+    if (runningRunId === null) return;
+    const terminal = sessionTerminalOfDetail(sessionDetail);
+    if (terminal === undefined || terminal.sessionId !== selectedId) return;
+    itemStore.closeRuns(selectedId, {
+      ...(terminal.runId !== undefined ? { runIds: [terminal.runId] } : {}),
+      status: terminal.status,
+      at: terminal.at,
+      ...(terminal.error !== undefined ? { error: terminal.error } : {}),
+      via: 'session-snapshot',
+    });
+  }, [itemStore, selectedId, sessionDetail, sessionDetailId, runningRunId]);
 
   // 0.18：当前会话的 pending 固定落在 Composer 槽位，不再挂到运行段或页面顶部。
   // 缺 sessionId 的旧流请求按 run 归属补判；run 终态时 ConnectionProvider 会清掉请求。

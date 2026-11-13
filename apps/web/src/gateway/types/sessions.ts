@@ -119,7 +119,9 @@ export interface SessionDetail {
    *
    * 与 `status` / `error` / `completed_at` 一起构成「会话级」终态快照：聊天时间线的
    * 失败卡在事件缓冲里已经没有 `run.failed` 时（刷新 / 切会话 / 环形缓冲淘汰）
-   * 用它兜底，见 `domains/chat/transcript-items.ts#sessionFailureOfDetail`。
+   * 用它兜底，见 `domains/chat/transcript-items.ts#sessionFailureOfDetail`；
+   * **live 状态的收口**（run 组 / 停止按钮 / 「正在思考」）同样靠它兜底，见
+   * `sessionTerminalOfDetail` 与 `ItemSink.closeRuns`。
    */
   run_id?: string;
   /** 该 run 的错误原文（成功 / 运行中 / 旧数据缺失）。 */

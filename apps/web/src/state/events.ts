@@ -129,6 +129,18 @@ export interface RunGroup {
   /** 0.14 additive：run.failed 的结构化错误元数据（缺字段时 undefined）。 */
   errorMeta?: ErrorMeta;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
+  /**
+   * 这条终态是**对账**得来的，不是 run 自己的终态事件（`run.completed` /
+   * `run.failed` / `run.cancelled`）折出来的 —— 即客户端没收到那一帧，改用外部
+   * 真相收的口。`status` 只表达结论，`reconciled` 表达证据强度。
+   *
+   * 两个来源（`RunFold.close` 的 `via`）：
+   * - `agent-closed`：该会话的 agent 已 `closed`（成员被关 / body 退役后再也不会有
+   *   这一 run 的终态帧），run 的真实结局未知 ⇒ 一律 `cancelled`，绝不冒充「正常完成」；
+   * - `session-snapshot`：`sessions.get` 的会话快照（`status` / `run_id` /
+   *   `completed_at` / `error`）说这一 run 已是终态，按快照状态收口。
+   */
+  reconciled?: 'agent-closed' | 'session-snapshot';
   /** 首个事件时间（没有 run.started 时用于排序） */
   firstTs?: number;
   /** 最后一个事件时间：尾部未闭合的正文/思考用它排序（落在自己真实发生的时刻）。 */
@@ -213,6 +225,25 @@ export interface RunFold {
    * 返回真正删掉的条数（幂等：重复交棒同一批锚点返回 0）。
    */
   drop(anchors: ReadonlySet<number>): number;
+  /**
+   * 按**外部终态**收口（对账路径：agent 生命周期 / 会话快照，见 `RunGroup.reconciled`）。
+   *
+   * 与 `run.completed` / `run.failed` / `run.cancelled` 分支唯一的区别是**证据来源**：
+   * 收口动作本身调同一个 `flush()`（尾部思考 / 正文落地成 item，`endedAt` 就是 `ts`），
+   * 所以「正在思考」这类 live 尾巴不会留在屏幕上等一个永远不来的 delta。
+   *
+   * 硬约束：
+   * - **只在 `running` 上生效**，已有真终态时返回 `false` 且**不动任何 item** ——
+   *   重复收口 / 终态先到再对账都不会写出第二条记录（幂等由状态机自己保证）；
+   * - 不设 `output`：对账拿不到产物，宁可显式留空，也不编一段正文出来。
+   */
+  close(status: 'completed' | 'failed' | 'cancelled', ts: number, opts?: FoldCloseOptions): boolean;
+}
+
+/** `close()` 的附带证据：来自快照的错误文本 + 收口来源。 */
+export interface FoldCloseOptions {
+  error?: string;
+  via?: 'agent-closed' | 'session-snapshot';
 }
 
 /** `trim()` 的结果：折掉了几条、覆盖的 seq 区间（折叠卡的 anchor 用 `fromSeq`）。 */
@@ -357,6 +388,9 @@ export function createFold(runId: string): RunFold {
         // 成功的 run 报成失败。终态以最后一次为准：completed 显式清掉前面那份错误。
         group.error = undefined;
         group.errorMeta = undefined;
+        // 同理（0.52 对账）：真终态一到，`reconciled` 那条**推断**的痕迹必须抹掉 ——
+        // 否则事后排查会把一条确实收到过终态的 run 误判成「终态是外面猜的」。
+        delete group.reconciled;
         return;
       }
       case 'run.failed': {
@@ -367,6 +401,7 @@ export function createFold(runId: string): RunFold {
         group.durationMs = d.duration_ms;
         group.status = 'failed';
         group.completedAt = ev.ts;
+        delete group.reconciled;
         return;
       }
       case 'run.cancelled': {
@@ -375,6 +410,7 @@ export function createFold(runId: string): RunFold {
         group.durationMs = d.duration_ms;
         group.status = 'cancelled';
         group.completedAt = ev.ts;
+        delete group.reconciled;
         return;
       }
       case 'user.message': {
@@ -552,6 +588,12 @@ export function createFold(runId: string): RunFold {
         return;
       }
       case 'llm.stream.chunk': {
+        // 已被**对账**收口的 run（`RunGroup.reconciled`）：不会再有真终态帧来给它配对，
+        // 晚到的 delta（乱序回放 / 慢帧）唯一的作用就是把 live 尾巴拼回屏幕上 ——
+        // 半句正文、「正在思考」。直接丢，时间线保持「到这里为止」。
+        // 只挡对账收口的 run：真 `run.failed` 之后仍可能继续（session-liveness 误判
+        // `run lost`），那条路径的 delta 不能丢。
+        if (group.reconciled !== undefined) return;
         const chunk = (ev.data as { chunk?: StreamChunk }).chunk;
         if (chunk?.type === 'text_delta' && chunk.delta) {
           // 正文开始前先落盘已累积的思考段，保持时间顺序。
@@ -691,6 +733,29 @@ export function createFold(runId: string): RunFold {
     return removed;
   };
 
+  /**
+   * 按外部终态收口（对账路径）。**只在 `running` 上生效**：已有真终态时返回 false、
+   * 一条 item 都不动 —— 终态先到再对账 / 重复对账都是同一个 no-op。
+   */
+  const close = (
+    status: 'completed' | 'failed' | 'cancelled',
+    ts: number,
+    opts?: FoldCloseOptions,
+  ): boolean => {
+    if (group.status !== 'running') return false;
+    // 与 run.completed / failed / cancelled 同一个 flush：尾部思考 / 正文落地成 item，
+    // `endedAt` 由每段自己的 reasoningEndedAt / textEndedAt 给出，所以 live 尾巴消失
+    // 与「这一段到此为止」同时发生 —— 不会剩下一条永远在「正在思考」的卡。
+    // （`flush()` 里已经带 `flushPendingHook()`：未配对的 hook 也落成 notice，不会丢。）
+    flush();
+    group.status = status;
+    group.completedAt = ts;
+    if (group.startedAt !== undefined) group.durationMs = Math.max(0, ts - group.startedAt);
+    if (opts?.error !== undefined) group.error = opts.error;
+    if (opts?.via !== undefined) group.reconciled = opts.via;
+    return true;
+  };
+
   return {
     runId,
     get itemCount() {
@@ -700,6 +765,7 @@ export function createFold(runId: string): RunFold {
     toGroup,
     trim,
     drop,
+    close,
   };
 }
 
