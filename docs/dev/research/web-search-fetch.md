@@ -23,8 +23,8 @@
 
 | 场景 | `web_search` | `web_fetch` | 为什么 |
 | --- | --- | --- | --- |
-| **有 key（推荐给个人/团队日常）** | **Tavily**（主）→ Brave（备）→ SearXNG（兜底） | **本地抽取**（Defuddle / Readability + linkedom）为主，**Jina Reader** 作为「JS 渲染页 / PDF / 抽取为空」的兜底 | Tavily 一次调用就给答案+结果+可选正文，省一次抓取；本地抽取零额外密钥、零外发，隐私最好 |
-| **无 key（离线优先 / 内网）** | **SearXNG** 自建实例（`format=json`，需实例开启 JSON 输出）；否则内置 **DuckDuckGo lite/html**（非官方、易被封） | **本地抽取**；无 Jina 兜底（Jina 需外网），失败即 `extract_empty` 并给出可执行的下一步 | 全程不需要第三方 API key，可完全落在自己的网络边界内 |
+| **有 key（推荐给个人/团队日常）** | **Tavily**（主）→ Brave（备）→ SearXNG（兜底） | **两级引擎**：① 纯 HTTP + 本地抽取（Defuddle / Readability + linkedom，默认）；② 可选渲染（Jina Reader，或本地无头 Chrome）用于「JS 壳子 / 抽取为空」 | Tavily 一次调用就给答案+结果+可选正文，省一次抓取；本地抽取零额外密钥、零外发，隐私最好；渲染只是降级路径，不是默认 |
+| **无 key（离线优先 / 内网）** | **SearXNG** 自建实例（`format=json`，需实例开启 JSON 输出）；否则内置 **DuckDuckGo lite/html**（非官方、易被封）；再兜底才是默认关闭的 `headless` 抓搜索页（返回 `degraded: true`） | **本地抽取**；无 Jina 兜底（Jina 需外网），失败即 `extract_empty`；想更狠可开 `renderer="browser"`（本地 Chrome，慢/重/可能被拦） | 全程不需要第三方 API key，可完全落在自己的网络边界内 |
 
 两者差在哪（三句话版）：
 
@@ -35,7 +35,8 @@
 ### 1.2 关键取舍（本方案的主张）
 
 - **两个插件还是同一插件两个工具**：建议**一个插件包 `web-tools` 注册两个工具**（共享 SSRF 检查、HTTP 客户端、缓存、域名策略）。理由：`read`/`edit` 拆开是因为「不可替代且语义不同」，而这两个工具共享 90% 安全面；`docs/architecture/tools.md` 明确「API surface = prompt surface」，两个工具的 description + JSON Schema 每轮都进 prompt，必须紧凑。
-- **不要新增「出网端口」**：in-process 插件可以直接用全局 `fetch`（`plugins/tools/basic-tools` 已直接 `import 'node:fs'`，`plugins/media/media/src/exec.ts`、`plugins/mcp/client` 已直接 `import 'node:child_process'`），网络 I/O 同理。真正需要新增的**不是端口**，是三个**可选安装参数**（见 §8）。
+- **不要新增「出网端口」**：in-process 插件可以直接用全局 `fetch`（`plugins/tools/basic-tools` 已直接 `import 'node:fs'`，`plugins/media/media/src/exec.ts`、`plugins/mcp/client` 已直接 `import 'node:child_process'`），网络 I/O 同理。真正需要新增的**不是端口**，是几个**可选安装参数**（见 §8.1）。无头浏览器的取舍见 §8.0：**允许插件自己 spawn**，但推荐由宿主提供渲染能力。
+- **`web_fetch` 是两级引擎，`web_search` 不是**：一级「纯 HTTP + 正文抽取」是默认；二级「无头浏览器渲染」只在 JS 空壳页/抽取失败时降级启用，且必须标注「慢、重、可能被反爬拦」（§3.4，owner 一手实测）。`web_search` **绝不以「headless 打开搜索引擎」为底座**——ToS、UA 指纹拦截、无 schema、拿不到日期/去重/排名，四条理由排序见 §3.4.1；它只能做默认关闭的最后一档兜底并返回 `degraded: true`。
 - **审批默认值必须小心**：本仓审批是「只有 human 能应答」（ADR-079 + 0.19 addendum），无人端（team 成员 / `--headless`）里 `ask` 会**降级为 deny**。所以 `web_fetch` 若默认 `ask`，会让团队 agent 直接失去联网能力。方案给三档 profile（§5.7），默认 `open`（只做 SSRF 硬拒）。
 
 ---
@@ -118,17 +119,49 @@ fetch(HEAD 先探 Content-Type/Length) → 字节上限保护 → 解码（chars
 - 不建议 v1 本地解析：纯 JS 的 `pdfjs-dist`/`unpdf` 体积大、对扫描件无效（没有 OCR）。🔶 建议：`content_type=application/pdf` 时**默认返回 `unsupported_content_type` + 明示可选项**（配置了 Jina Reader 就走 Jina，它内部用 PDF.js）。
 - 若后续必须本地化：`unpdf`（pdfjs 的 serverless 打包）是当前最省事的 JS 路径（🟡 未实测 Bun 兼容性）。
 
-### 3.4 JS 渲染页面
+### 3.4 两级引擎：纯 HTTP（默认）+ 可选无头浏览器（降级）
 
-- **本仓允许插件起子进程**（✅ 事实：`plugins/media/media/src/exec.ts` 与 `plugins/mcp/client` 都 `import 'node:child_process'`；`scripts/check-plugin-ports.ts` 只校验 manifest 里 `permissions.ports` 的矩阵，不拦 import 也不拦 spawn；manifest 的 `permissions.process` 目前**只被解析、没有执行点**）。
-- 但成本/风险不划算（🔶）：需要用户机器上有 Chromium（下载 100–300MB）、要管理进程生命周期与僵尸进程、要处理无沙箱运行、CI 里不可用。
-- 方案：`renderer: "none" | "jina" | "browser"`（默认 `none`）。`browser` 档要求显式配置 `browser_path`，并在 manifest 里声明 `permissions.process: true`（为将来宿主真正强制做准备）。检测信号：抽取后正文 < 200 字符且原 HTML 里 `<noscript>`/`__NEXT_DATA__`/`id="root"` 明显为空壳 → 判定「疑似 JS 渲染」。
+**结论：`web_fetch` 必须是两级引擎，第二级默认关闭。** 一级「纯 HTTP + 正文抽取」快、可缓存、可加全量护栏；二级「无头浏览器渲染」慢、重、可能被反爬拦、不保证成功，只用于「JS 渲染壳子 / 一级抽取为空」。
+
+**owner 在本机的一手实测**（Windows Chrome 124+，WSL 内调用，统一 `--headless=new --dump-dom --no-proxy-server`；⚠️ 这是第一方实测数据，非公开资料，我照抄不改）：
+
+| 目标 | 结果 | 细节 |
+| --- | --- | --- |
+| `cn.bing.com/search?q=…` | **成功** | 173 KB DOM、标题正确、`li.b_algo` 抓到 10 条，正则即可抽 title+url |
+| `www.baidu.com/s?wd=…` | 默认 UA 被拦，**换普通桌面 UA 后成功** | 拦截点是 **UA 指纹**而不是 headless 本身；成功后 870 KB、标题正确 |
+| `html.duckduckgo.com`、`en.wikipedia.org` | **`ERR_CONNECTION_TIMED_OUT`** | 直连受限 ⇒ 「能抓到什么」取决于**部署机所在网络**，不是代码能力 |
+| 成本 | 每次查询 1–3 s、100–300 MB，且**没有结构化输出** | 一个 Chrome 进程/次；需自己管生命周期 |
+
+三条推论（🔶）：
+
+1. **浏览器不是「更强的 fetch」，是「不同的失败模式」**：它会返回 200 + 完整 DOM，但内容是验证码页/反爬页。所以二级引擎必须做「结果像不像正常页面」的判断（标题黑名单如 `安全验证`/`Just a moment`/`Attention Required`、正文长度、`<noscript>` 提示），不能只看 status。
+2. **UA 是个坑**：默认 UA 被拦说明「伪装桌面浏览器」能提高成功率，但这也是**绕过对方反爬策略**的行为。所以 `browser_user_agent` 必须显式配置、默认不改，并在文档里说明合规边界（§3.6）。
+3. **网络位置决定能力**：DDG/维基都连不上这件事说明「按域名写死 provider 可用性」是错的——必须**运行时探测 + 失败即降级**，而不是安装时假设。
+
+**实现形态（两级，配置见 §5.4）**：
+
+- 一级：`fetch` + 字节/超时/重定向/SSRF 护栏 + HTMLRewriter 清洗 + Defuddle/Readability（§3.2）。这是**唯一**进入缓存的路径（浏览器渲染结果默认不写缓存：贵且不稳定）。
+- 二级判定：一级 `extract_empty`（正文 < 200 字符）且 DOM 具备空壳特征（`<noscript>请启用 JavaScript`、`__NEXT_DATA__`、`<div id="root"></div>`、`<app-root>`）→ 判「疑似 JS 渲染」→ 才允许走二级。
+- 二级执行顺序：`renderer="jina"`（托管，最省事）→ `renderer="browser"`（本地 Chrome）。两者都在返回里标 `renderer_used` 与 `render_ms`。
+- 二级结果的缓存键要含 `renderer` 与 UA 版本（否则「渲染前/渲染后」会互相污染缓存）。
+
+### 3.4.1 顺带一条：`web_search` 的底座**不要**用「headless 打开搜索引擎」
+
+按重要度排的理由（🔶 结论；事实依据来自 §3.4 实测 + 各引擎 ToS 的一般立场）：
+
+1. **ToS**：主流搜索引擎的用户协议禁止自动化查询/抓取结果页（本沙箱不可达，无法引原文，故这是我对一般条款的判断，⚠️ 未核具体条文）。用它做产品功能的底座，是把合规风险写进代码。
+2. **随时会坏**：实测里百度默认 UA 就被拦、DDG/维基直接连不上——同一份代码在不同网络/不同月份行为不同；UA 换一次就复活，说明这是猫鼠游戏，不是接口。
+3. **没有 schema**：DOM 一变就坏，正则抽 title/url 是「脆到极致」的解析层；一次改版等于全挂。
+4. **拿不到稳定能力**：去重、排名稳定性、日期过滤、地区过滤、`totalResults` 都没有契约，`web_search` 的参数（`freshness`/`site`/`count`）无法可靠映射。
+
+**允许的用法**：作为**无 key 的最后一档兜底**，且必须满足：默认关闭（`allow_scraped_search: false`）、显式开启才生效、`provider` 字段返回 `headless-scrape`、**`degraded: true` + `degraded_reason`**、并在 `message` 里写清「结果来自抓取搜索页，可能缺失/过时/随时失效」。绝不把它放进 `auto` 的首选链。
 
 ### 3.5 编码、压缩、重定向
 
 - ✅ `fetch`（Bun/undici）自动解 `gzip`/`br`/`deflate`；要防「压缩炸弹」就必须**边读边计数**而不是先 `await res.text()`。
 - 编码：优先 `Content-Type; charset=`，否则嗅 `<meta charset>`/`<meta http-equiv>`，再退 UTF-8；GBK/GB18030 场景需要 `TextDecoder('gb18030')`（Bun/Node 的 ICU 默认含 gb18030，🔶 需实测）。
 - 重定向：用 `redirect: 'manual'` 自己跟，才能**每一跳都重跑 SSRF 检查**（✅ MCP `fetch` 就是这么做的：「every redirect hop of either」）。
+- 🔶 二级引擎（Chrome）同样受 SSRF 约束：`--proxy-server`/`--host-resolver-rules` 这类旗子**不能用**来「绕过检查」，必须先把 URL 过一遍 §6 的判定再交给浏览器；并且渲染进程要设超时（`browser_timeout_ms` 默认 20s）与内存上限，超时直接 `kill`。
 
 ### 3.6 robots.txt 与 ToS 边界
 
@@ -217,7 +250,7 @@ plugins/tools/web-tools/
       "settings": {
         "type": "object",
         "properties": {
-          "search_provider": { "type": "string", "enum": ["auto", "tavily", "exa", "brave", "searxng", "ddg"], "default": "auto" },
+          "search_provider": { "type": "string", "enum": ["auto", "tavily", "exa", "brave", "searxng", "ddg", "headless"], "default": "auto" },
           "search_api_key": { "type": "string", "description": "Tavily/Exa/Brave 的 key；也可用环境变量" },
           "searxng_url": { "type": "string" },
           "max_tokens": { "type": "integer", "default": 4000 }
@@ -234,6 +267,8 @@ plugins/tools/web-tools/
 
 - ✅ `permissions` 的字段形状（`src/plugin-manifest.ts`）：`fs` / `net`（主机名数组）/ `secrets`（bool）/ `process`（bool）/ `events` / `rpc` / `ports`；`docs/architecture/plugins.md`：外部插件「未声明能力默认拒绝」。所以 **`net` 必须逐个列出**，SearXNG 的自建地址必须由用户配置后再动态加入（🔶 这里需要一个「用户配置的主机自动视为已声明」的约定，见 §8）。
 - 🔶 注意 `net` 目前**只是声明**：核对下来 `scripts/check-plugin-ports.ts` 只校验 `permissions.ports` 的矩阵，`net`/`process` 没有执行点。所以插件必须**自己**做 SSRF 与域名策略，不能指望宿主拦。
+- `permissions.process: true` 只在启用 `renderer="browser"`（插件自己 spawn Chrome）时才需要声明；它今天**没有执行点**（§8.0），声明是为了让安装时的权限展示诚实、也为将来宿主真正强制预留。默认 `renderer="none"` 时不要声明它。
+- `permissions.net` 里要列 API 域名（`api.tavily.com`/`api.exa.ai`/`api.search.brave.com`/`r.jina.ai`）；`web_fetch` 抓的是**任意**目标站点，无法穷举 ⇒ 🔶 建议约定：`web_fetch` 的目标域由 `domain_allowlist`/`denylist` + 审批档控制，`net` 只列「插件主动访问的固定端点」，并在 `plugins.md` 里写清这个区别（否则 `net` 永远无法描述 `web_fetch`）。
 
 ### 5.2 `web_search`
 
@@ -355,7 +390,7 @@ plugins/tools/web-tools/
 
 | 键 | 类型 / 默认 | 作用 |
 | --- | --- | --- |
-| `search_provider` | `"auto"` \| `"tavily"` \| `"exa"` \| `"brave"` \| `"searxng"` \| `"ddg"`，默认 `auto` | `auto` = 按「有 key 的 > 无 key 的」顺序挑 |
+| `search_provider` | `"auto"` \| `"tavily"` \| `"exa"` \| `"brave"` \| `"searxng"` \| `"ddg"` \| `"headless"`，默认 `auto` | `auto` = 按「有 key 的 > 无 key 的」顺序挑；`headless`（抓搜索页）**必须显式选**，且要 `allow_scraped_search: true`，否则 `blocked_by_policy` |
 | `search_api_key` / `search_api_key_env` | string / `"TAVILY_API_KEY"` | 直接给 key，或给环境变量名。**key 绝不进 URL/日志**（Brave 走 `X-Subscription-Token` 头，Tavily 走 `Authorization: Bearer`，Exa 走 `x-api-key`） |
 | `searxng_url` | string，默认空 | 自建实例根地址；设置后 `net` 声明需要包含它 |
 | `provider_fallbacks` | string[]，默认 `["tavily","brave","searxng","ddg"]` | 降级顺序（只对已配置可用的生效） |
@@ -374,9 +409,13 @@ plugins/tools/web-tools/
 | `url_must_be_in_context` | bool，默认 `true` | 只允许抓本次会话里出现过的 URL（抄 `url_not_in_prior_context`） |
 | `approval` | `"open"` \| `"guarded"` \| `"locked"`，默认 `"open"` | 见 §5.7 |
 | `cache_ttl_s` / `cache_max_entries` | integer，默认 `1800` / `256` | 见 §5.6 |
-| `renderer` | `"none"` \| `"jina"` \| `"browser"`，默认 `"none"` | JS 渲染兜底（§3.4） |
+| `renderer` | `"none"` \| `"jina"` \| `"browser"`，默认 `"none"` | 二级引擎（§3.4）。`browser` = 本地无头 Chrome，**慢/重/可能被反爬拦/不保证成功** |
+| `browser_path` | string，默认空 | Chrome/Chromium 可执行文件路径；为空则按平台常见路径探测（探测失败 → `renderer_unavailable`） |
+| `browser_timeout_ms` | integer，默认 `20000`（上限 60000） | 单次渲染总超时，超时立刻 `kill` |
+| `browser_user_agent` | string，默认空（= 不改 UA） | ⚠️ 显式设置才生效；实测「默认 UA 被拦、换桌面 UA 才通」，但这属于绕过对方反爬，需用户自负合规 |
+| `allow_scraped_search` | bool，默认 `false` | 允许 `web_search` 用「抓搜索页」做最后一档兜底（返回 `degraded: true`，§3.4.1） |
 | `jina_api_key` | string，默认空 | `renderer="jina"` 时用（无 key 也能用，限速低） |
-| `user_agent` | string，默认 `"Vessel/<version> (+web-tools)"` | 抓取礼仪 |
+| `user_agent` | string，默认 `"Vessel/<version> (+web-tools)"` | 一级（纯 HTTP）抓取礼仪 |
 
 - 🔶 所有数值上限都在插件里**再夹一次**（`max_bytes` 最多 8 MiB、`timeout_ms` 最多 60s），避免用户配置写错把 agent 卡死。
 
@@ -400,22 +439,34 @@ plugins/tools/web-tools/
 | `provider_auth_failed` | 401/403（key 错/额度尽） | 提示用户检查 key | **是**（跳过该 provider） |
 | `provider_rate_limited` | 429 | 退避 | 是 |
 | `provider_unavailable` | 5xx/网络/超时 | — | 是 |
-| `extract_empty` | 抽取后正文 < 100 字符 | 可能是 JS 渲染页；建议换来源或开 `renderer` | 可选（jina） |
+| `extract_empty` | 抽取后正文 < 100 字符 | 可能是 JS 渲染页；建议换来源或开 `renderer` | 可选（jina / browser） |
+| `renderer_unavailable` | 配了 `renderer="browser"` 但找不到 Chrome | 提示装 Chrome 或改用 `jina` | 否 |
+| `render_failed` | 浏览器启动/渲染超时/`kill` 后无 DOM | 说明「慢且可能被反爬拦」 | 是（换 jina） |
+| `render_blocked` | 渲染成功但命中反爬/验证码特征（标题黑名单、正文过短） | 明确告知被拦，不要重试同一 URL | 否 |
 
 **降级链**（web_search）：
 
 ```
 auto: tavily(key) → exa(key) → brave(key) → searxng(url) → ddg(内置)
       每层：blocked_*/invalid_input 立即终止；auth/rate_limited/unavailable 记 errors[] 后进下一层
+      全失败 且 allow_scraped_search=true → headless-scrape(cn.bing/baidu) 标记 degraded
       全失败 → ok:false, code: "provider_unavailable", message 里列出各层原因
+```
+
+- 🔶 `headless-scrape` 排在**所有结构化 provider 之后**、且默认不启用（§3.4.1）。它的返回必须带：
+
+```json
+{ "provider": "headless-scrape", "degraded": true,
+  "degraded_reason": "结果来自抓取搜索结果页，无官方契约：可能缺条/过时/随时失效",
+  "render_ms": 2140 }
 ```
 
 **降级链**（web_fetch）：
 
 ```
-本地抽取(HTMLRewriter+Defuddle/Readability)
-  → extract_empty 且 renderer="jina" → r.jina.ai 再抽一次（错误码沿用）
-  → renderer="browser" → 子进程渲染（仅显式配置时）
+① 纯 HTTP + 本地抽取(HTMLRewriter+Defuddle/Readability)
+  → extract_empty（且疑似空壳页）→ ② renderer="jina" → r.jina.ai 再抽一次（错误码沿用）
+                                → ② renderer="browser" → 子进程渲染（仅显式配置时；超时/被拦 → render_failed / render_blocked）
   → 全失败 → ok:false, code:"extract_empty"，message 给出「换来源 / 开 renderer / 贴正文」三条可执行建议
 ```
 
@@ -537,6 +588,31 @@ robots:v1:{sha256(scheme://host)}
 
 ## 8. 需要本仓补的端口 / 契约（能不动 core 就不动）
 
+### 8.0 先核一个架构约束：插件能不能 spawn 子进程？
+
+**结论：允许。既不需要新增端口，也没有门禁拦。** 依据（✅ 全部核对过代码）：
+
+| 主张 | 证据 |
+| --- | --- |
+| 端口清单里**没有**「外部进程 / 浏览器」这种端口 | `src/plugin-manifest.ts`：`PLUGIN_PORT_NAMES = ['inbox']`、`type PluginPortName = 'inbox'` —— 全仓只有 `inbox` 一个端口 |
+| `permissions.ports` 只对 `member` 作用域有意义 | `scripts/check-plugin-ports.ts` 的接纳/拒绝矩阵：`node` / `experience` 作用域下声明 `ports` 一律**拒绝**；`member` + `inbox` 才接受（`filesystem` 之类一律拒绝） |
+| 门禁只校验**清单**，不校验 import / spawn | `scripts/check-plugin-ports.ts` 读 `package.json` 的 `vessel` 块做矩阵判定；`package.json` 的 `check:*` 里没有 import 白名单类门禁，`biome.json` 也没有 `noRestrictedImports` |
+| 已有插件在 spawn 子进程 | `plugins/media/media/src/exec.ts`、`plugins/mcp/client` 均 `import 'node:child_process'`（在 `plugins/` 下 grep 到） |
+| `permissions.process` 只是声明 | `src/plugin-manifest.ts` 解析出 `process: boolean`（`ReadPermissionsResult`），但 `src/`、`packages/` 里**没有任何读取它的执行点**（与 `permissions.net` 同） |
+
+所以「无头浏览器渲染」有两条合法落地路径（🔶 我的取舍）：
+
+| 路径 | 形态 | 优点 | 缺点 | 建议 |
+| --- | --- | --- | --- | --- |
+| **A. 插件自己 spawn** | `web-tools` 内 `node:child_process` 起 `chrome --headless=new --dump-dom` | 零 core 改动；可立刻做 | 每个插件各起一份 Chrome；跨平台路径探测、僵尸进程、无沙箱、CI 不可用都要插件自己扛；`permissions.process` 无人执行 ⇒ **声明形同虚设** | **v0.52 先走 A**，默认关（§3.4） |
+| **B. 宿主提供渲染能力** | 新增**可选安装参数**（不新增 port）：`PluginInstallOptions.renderer?: { render(url, opts): Promise<{ status, finalUrl, dom, bytes, ms, blocked?: boolean }> }`，由宿主实现进程池/Chrome 探测/超时；插件**只在有它时**才启用 `renderer="browser"`，否则 `renderer_unavailable` | Chrome 生命周期与平台差异只写一次；能统一加「渲染也要过 SSRF/域名策略」；将来可换 Playwright/CDP 而不动插件 | 要动 core（additive，可选字段） | **中期目标**（0.53+），和 A 不冲突 |
+
+**不要**走「新增 `browser` 端口」这条路（🔶）：`ports` 目前严格绑定 `member` 作用域（`node`/`experience` 声明即被拒），为一个 node-scope 能力去扩 `ports` 的语义边界，会把「端口的接纳/拒绝矩阵」这套门禁搅乱；用**安装参数注入**能达到同样效果且风险小得多。
+
+**一句话**：`web_fetch` 的无头浏览器**可以是插件内实现**（允许，有先例），但**更好的形态是宿主能力注入**；在这个能力出现之前，`web_fetch` 至少要把「一级 HTTP + 二级可选渲染」的分界写死，别让「渲染」成为默认路径。
+
+### 8.1 要补的安装参数（全部 additive、可选）
+
 **结论：不需要新增任何「端口」（plugin port）**。`web-tools` 是 in-process、node-scope 插件，网络 I/O 用全局 `fetch` 即可（`plugins/tools/basic-tools` 直接 `node:fs`、`plugins/media/media` 直接 `node:child_process` 都是先例）。要补的是**几个可选的安装参数**，全部 additive 且缺省不影响老插件。
 
 | # | 位置 | additive 形态 | 为什么需要 | 不做的替代 |
@@ -544,6 +620,7 @@ robots:v1:{sha256(scheme://host)}
 | 1 | `PluginInstallOptions.dataDir?: string`（`packages/core/src/types/plugin.ts`） | 新增**可选**字段；缺省 `undefined`，插件退化为纯内存缓存 | 磁盘缓存/负缓存需要知道数据根目录（✅ 现有 `PluginInstallOptions` 只有 `config`，`PluginHost` 没有 `dataDir`），插件不该自己猜 `~/.vessel` | v1 只做内存缓存（可行，重启后全丢） |
 | 2 | `PluginInstallOptions.logger?: { info/warn/error }` | 可选；缺省插件的 `console` 兜底 | 「每次外发」审计目前无处可写 | stderr + 前缀 |
 | 3 | `PluginInstallOptions.proxyUrl?: string` | 可选；插件也接受自己的 `proxy_url` 配置 | 企业网络/本沙箱这类「必须走代理」的环境（🔶 本仓开发机就踩过「WSL 默认代理导致 502」，产品侧同理） | 插件读 `HTTPS_PROXY` 环境变量 |
+| 3b | `PluginInstallOptions.renderer?: RenderPort` | 可选；见 §8.0 路径 B | 把 Chrome 进程池/平台探测收到宿主（无头渲染是「能力」，不是插件的私事） | 插件自己 spawn（路径 A） |
 | 4 | 权限粒度：`tool.permission.request.data.scope?: string` + `remember` 以 `tool:scope` 为 key | core additive；缺省行为不变（仍按工具名记忆） | 让「永久允许 example.com」可被记住（见 §5.7 的副作用） | 插件自己维护 session 级已批准域名（**推荐先走这条，零 core 改动**） |
 | 5 | `permissions.net` 的执行点 | **暂不动**；若 0.53+ 要强制，形态应为 `PluginInstallOptions.networkPolicy?: { allowedHosts: string[] }` 注入，插件优先用它、同时**保留**自己的 SSRF 检查（纵深防御） | 现在 `net` 只是声明（✅ 核对：`scripts/check-plugin-ports.ts` 只校验 `ports`；`permissions.process` 也无执行点） | 保持声明式 + 插件自律 |
 | 6 | `permissions.net` 无法表达「用户配置的自建 SearXNG」 | 约定：宿主在做声明校验时，把 `plugins[].config` 里的 URL 主机并入该插件的 `net` 集合（小 additive），而不是允许 `"*"` | 自建实例域名安装时未知 | 安装文档里要求用户把实例域名补进 `net` |
@@ -555,7 +632,8 @@ robots:v1:{sha256(scheme://host)}
 1. **M1**：`http.ts`（SSRF + 每跳重查 + 字节/超时）+ `web_fetch` 本地抽取 + 返回形状/错误码。安全评审先过这一关。
 2. **M2**：`web_search` 单 provider（Tavily）+ 缓存 + `detail` 两档预算。
 3. **M3**：provider 降级链（Exa/Brave/SearXNG/DDG）+ 无 key 路径 + `approval` 三档。
-4. **M4**：`renderer="jina"` 兜底 + 小评测集（20 个中英文页面 + 10 条查询，量 `extract_empty` 率、`est_tokens` 误差、注入样本是否被定界块隔离）。
+4. **M4**：二级引擎 —— `renderer="jina"` 兜底 +（可选）`renderer="browser"` 本地渲染（默认关、声明 `permissions.process`、单飞 + 硬超时）+ 小评测集（20 个中英文页面 + 10 条查询，量 `extract_empty` 率、渲染成功率、`est_tokens` 误差、注入样本是否被定界块隔离）。
+5. **M5**（可推迟）：`headless-scrape` 搜索兜底（默认关、`degraded: true`）+ 若 §8.0 路径 B 落地则切到宿主注入的 `renderer`。
 
 ---
 
@@ -569,6 +647,9 @@ robots:v1:{sha256(scheme://host)}
 4. **抽取质量决定体验**：Defuddle/Readability 对 SPA、论坛、中文技术站的效果差异很大；`extract_empty` 率高会让模型频繁降级到 Jina，等于又把隐私送出去。
 5. **`ddg` 路径的可持续性**：非官方端点，反爬/验证码/接口变动都可能让它失效（🟡 本沙箱实测 `duckduckgo.com` 整个域不可达，无法验证当前行为）。
 6. **审批默认值的两难**：默认 `open` 好用但「装了就能连外网」；默认 `guarded` 安全但无人端会变 deny。这是我认为最该由 owner 拍的一个决策（见 §11）。
+7. **无头渲染是「脆弱能力」**（依据 §3.4 一手实测）：同一份代码在不同网络下结果不同（`cn.bing.com` 通、`html.duckduckgo.com`/`en.wikipedia.org` 直接超时）；换 UA 能从被拦变可用（说明拦截是指纹级、猫鼠游戏）。所以它只能当降级路径，**且必须把「失败」当常态设计**（`render_failed`/`render_blocked` 不是异常，是预期分支）。
+8. **资源与并发**：每次渲染 1–3 s / 100–300 MB（实测）。N 个成员并发抓取 = N 个 Chrome。缓解：插件内单飞（同一时刻只跑 1 个渲染进程，排队 + 超时）、`browser_timeout_ms` 硬超时、渲染结果默认不写缓存。
+9. **合规**：`browser_user_agent` 换 UA 提高成功率，本质是绕过对方反爬；`headless-scrape` 搜引擎同理（§3.4.1）。默认全关、文档写清是唯一能接受的处理方式——不要在产品默认值里替用户做这个决定。
 
 ### 9.2 还没查到的点（明确未核实，不要当事实用）
 
@@ -631,6 +712,10 @@ robots:v1:{sha256(scheme://host)}
 - The Instruction Hierarchy：<https://arxiv.org/abs/2404.13208>
 - The lethal trifecta for AI agents：<https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/>
 
+**第一方实测（非公开资料，owner 在本机跑的）**
+
+- 无头浏览器可达性/成本实测：Windows Chrome 124+，WSL 内 `--headless=new --dump-dom --no-proxy-server`；`cn.bing.com/search?q=` 成功（173 KB DOM、`li.b_algo` 10 条）；`www.baidu.com/s?wd=` 默认 UA 被「百度安全验证」拦、换桌面 UA 后成功（870 KB）；`html.duckduckgo.com`、`en.wikipedia.org` 直连 `ERR_CONNECTION_TIMED_OUT`；每次 1–3 s、100–300 MB。⚠️ 一次性观测，未做多网络对照；把它当「方向性事实」而不是 SLA。
+
 **本仓（✅ 已核代码/文档）**
 
 - `docs/architecture/plugins.md`（清单、`permissions`、`contributes.settings`、端口与端口矩阵）
@@ -651,5 +736,7 @@ robots:v1:{sha256(scheme://host)}
 **`web_fetch` 的默认审批档位**：`open`（装了就联网，只做 SSRF 硬拒；好用，但等于默认允许出网）/ `guarded`（非白名单域名首次 ask；安全，但无人端会退化成 deny）/ `locked`（只允许 allowlist）。
 
 我的建议：**默认 `open`，并在 `plugins.md`/README 里明写「装了 web-tools 就等于允许出网」**，把 `guarded` 作为团队/无人端的推荐配置。理由：本仓插件缺省 `enabled: true`，若默认 `guarded`，team 成员类场景会静默失去联网能力（`ask → deny`），这种「装了但不好用」比「能出网」更难排查；而真正的伤害动作（写文件、执行命令）仍被人审卡住。
+
+**次一级的决策（如果 §8.0 的路径 B 要进 0.53）**：无头渲染要不要升格为**宿主能力**（`PluginInstallOptions.renderer?`）。我的建议：**要**——Chrome 探测/进程池/超时/平台差异只该写一次，而插件自己 spawn 会让 `permissions.process` 这类声明长期空转。但这不阻塞 0.52：插件内 spawn 是允许的（§8.0），先把一级 HTTP 路径做扎实。
 
 
