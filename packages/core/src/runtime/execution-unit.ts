@@ -1153,6 +1153,10 @@ export class ExecutionUnit {
       // 不能用 RunRecord 的 usage：那是整轮累计，多请求 run 会线性放大。
       this.seedRealTokensFromLastRequest(execution, history);
     }
+    // 0.52 C：真实用量锚点（按会话落盘）。`realTokens` 归零期间（重启 / 新进程第一轮 /
+    // 压缩后）用它把本地估算校正到 provider 口径；有真实值时锚点不抢（见 tokenCount）。
+    // 必须在 seed 之后注入：播种会 setSessionId，切会话时会把锚点清掉。
+    execution.workingContext.setContextAnchor?.(stored?.context_anchor, this.model);
 
     // system 前缀只允许显式 revision：基底 system / Self Card 只在构造期变化，
     // 若同一 session 的基底确实不同（例如运行时重建），标记为一次 system_revision。
@@ -1910,6 +1914,16 @@ export class ExecutionUnit {
 
       try {
         const response = await this.provider.chat(request);
+        // 0.52 C：真实用量到达的那一刻记下校正比（`prompt_tokens` 与同一请求的本地
+        // 估算都在手边）。存的是「provider 口径 ÷ 本地口径」，与 `realTokens` 无关，
+        // 所以重启后估算仍能被拉回真实量级。
+        const promptTokens = response.usage?.prompt_tokens ?? 0;
+        if (promptTokens > 0) {
+          execution.workingContext.recordRealPromptTokens?.({
+            promptTokens,
+            model: this.model,
+          });
+        }
         // provider 未必发 `finish`；请求正常结束也要收口当前段。
         this.flushStreamSegment(execution, args.sessionId);
         return response;
@@ -3166,6 +3180,9 @@ export class ExecutionUnit {
       created_at: stored?.created_at ?? now,
       updated_at: now,
       ...(createdOnBranch !== undefined ? { created_on_branch: createdOnBranch } : {}),
+      // 0.52 C：锚点原样继承；本轮若拿到过真实用量，saveSessionState 会用窗口里的
+      // 新锚点覆盖它。换模型时留着旧锚点无害 —— 应用侧按 model 过滤。
+      ...(stored?.context_anchor !== undefined ? { context_anchor: stored.context_anchor } : {}),
       status: 'running',
       last_run_id: runId,
     };
@@ -3193,7 +3210,13 @@ export class ExecutionUnit {
   private async saveSessionState(sessionState: SessionState): Promise<void> {
     if (!this.session) return;
     const execution = this.activeRun;
-    if (execution !== undefined) sessionState.messages = execution.workingContext.messages;
+    if (execution !== undefined) {
+      sessionState.messages = execution.workingContext.messages;
+      // 0.52 C：真实锚点跟着这份投影一起落盘（journal 是 SessionState 唯一写口）。
+      // 窗口没有锚点（旧会话 / 本次没拿到 usage）时保留继承来的旧值。
+      const anchor = execution.workingContext.contextAnchor;
+      if (anchor !== undefined) sessionState.context_anchor = anchor;
+    }
     // C4：终态快照保存前重读存储侧 title，保留 run 进行中的人工 rename。
     // 读失败保留快照并继续（不抛），不影响终态落盘。
     if (sessionState.status !== 'running') {
