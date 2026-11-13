@@ -503,25 +503,37 @@ export const en: Record<MessageKey, string> = {
   'dev.reset.notEmpty': '{path} is still not empty after the wipe ({count} entries remain).',
   'dev.reset.removed': 'Wiped {path} (removed {count} top-level entries, {bytes}).',
 
-  // ── prune (0.51) ──
-  'help.cmd.prune': 'data cleanup: trace / terminal runs / stale sessions (dry-run unless --yes)',
+  // ── prune (0.51; the criterion is state, not time) ──
+  'help.cmd.prune':
+    'data cleanup: archived teams / closed agents with their sessions and records (dry-run unless --yes)',
   'flag.olderThan':
-    'only prune items older than this (e.g. 30d / 12h; bare number = days, default 30d)',
+    'optional extra filter: only prune objects archived/closed before this (e.g. 30d / 12h; bare number = days; omit to ignore time)',
   'prune.head.dryRun': 'dry-run: nothing deleted (re-run with --yes to delete)',
   'prune.head.applied': 'pruned',
-  'prune.scope': 'data dir: {path} · tenant: {tenant} · threshold: older than {age}',
+  'prune.scope': 'data dir: {path} · tenant: {tenant} · threshold: archived/closed before {age}',
+  'prune.scope.all': 'data dir: {path} · tenant: {tenant} · criterion: state (no time filter)',
+  'prune.bucket.teams': '  teams:    {count} archived team records, {bytes}',
+  'prune.bucket.agents': '  agents:   {count} agent records, {bytes}',
+  'prune.bucket.sessions': '  sessions: {count} sessions, {bytes}',
+  'prune.bucket.runs': '  runs:     {count} run records, {bytes}',
   'prune.bucket.trace': '  trace:    {count} files, {bytes}',
-  'prune.bucket.runs': '  runs:     {count} terminal records, {bytes}',
-  'prune.bucket.sessions':
-    '  sessions: {count} sessions, {bytes} (cascade: {runs} runs, {events} session traces)',
-  'prune.skipped.active': '  kept: {count} sessions still active (lock / lease / resumable run)',
+  'prune.skipped.active': '  kept: {count} sessions with a live writer / resumable run',
   'prune.skipped.refused':
-    '  refused: {count} sessions blocked by the delete guard (active run or unreadable data)',
+    '  refused: {count} sessions blocked by the delete guard (conflicting state or unreadable data)',
+  'prune.skipped.keptAgents':
+    '  kept: {count} target agents could not be cleared (record and data stay together)',
+  'prune.skipped.keptTeams': '  kept: {count} archived teams still have agents left',
+  'prune.skipped.unknownTime':
+    '  kept: {count} objects have no archive/close timestamp (kept under --older-than)',
   'prune.totals': 'total: {count} items, {bytes}',
   'prune.note.sessionsBackendNotReadonly':
-    'note: dry-run skipped sessions (session.backend=sqlite cannot be enumerated read-only); use --yes to prune them.',
+    'note: dry-run cannot enumerate sessions (session.backend=sqlite has no read-only path), so agent records are kept too; use --yes for the full picture.',
   'prune.note.durableDisabled':
     'note: durable runs are disabled (durable.enabled=false); there are no run records to prune.',
+  'prune.note.agentsSnapshotUnreadable':
+    'refused: the agent snapshot is unreadable (corrupt / unexpected shape); no agent or team record was deleted.',
+  'prune.note.agentsSnapshotWriteFailed':
+    'note: writing the agent snapshot failed, so the records are kept (their sessions are already cleared); fix write permissions and re-run.',
   'prune.locked':
     'Nothing deleted; stop the gateway/node (`vessel gateway stop`), then re-run with --yes.',
 };

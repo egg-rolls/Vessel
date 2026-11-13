@@ -125,12 +125,12 @@ export type TraceCommandArgs = {
   json: boolean;
 };
 
-/** `prune` 子命令（0.51）：缺省 dry-run，`--yes` 才真删 */
+/** `prune` 子命令（0.51）：缺省 dry-run，`--yes` 才真删；判据是状态，`--older-than` 只是可选叠加 */
 export interface PruneCommandArgs {
   yes: boolean;
   dryRun: boolean;
   json: boolean;
-  /** `--older-than` 解析出的毫秒数；缺省由命令层给默认值 */
+  /** `--older-than` 解析出的毫秒数；缺省 = 不叠加时间条件（只看状态） */
   olderThanMs?: number;
 }
 
@@ -1430,6 +1430,9 @@ const DAY_MS = 86_400_000;
  * 它的上限是 24h，表达不了「30 天」，而且裸数字按秒 —— 这里裸数字按**天**，
  * 对齐 RPC `trace.prune` 的 `older_than_days` 与 `trace.retention_days` 的口径
  * （也偏保守：阈值更大 ⇒ 删得更少）。
+ *
+ * 0.51 起这个值只是 `vessel prune` 的**可选叠加**条件（比的是归档 / 停用时刻），
+ * 不传就完全不看时间。
  */
 export function parseOlderThanMs(raw: string): number | null {
   const match = /^(\d+)(ms|s|m|h|d)?$/.exec(raw.trim());

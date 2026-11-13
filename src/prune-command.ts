@@ -1,13 +1,17 @@
 /**
  * `vessel prune [--older-than <dur>] [--dry-run] [--json] [--yes]`（0.51 待办 #1）。
  *
- * - 缺省 dry-run：只报告三类候选（trace / 终态 runs / 老且非活跃 sessions）与体积，
+ * - 判据是**状态**：已归档 team 下的 agent ∪ 已停用（`state === 'closed'`）agent，
+ *   连它们的会话 / runs / 记录一起移除；没有归档、没有停用的内容一条都不删。
+ * - `--older-than` 只是可选叠加：不传就完全不看时间；传了也只清「归档 / 停用时刻早于该值」的
+ *   对象（是归档/停用时刻，不是会话最后活动时间），查不到时刻的默认不清。
+ * - 缺省 dry-run：只报告五类对象（team / agent / session / run / trace）的条数与体积，
  *   一条都不删；必须显式 `--yes` 才真删（`--dry-run` 优先，两个都给也不删）。
  * - 真删走 `data-lock` 的 exclusive 锁（与 `vessel trace prune` / `vessel dev reset` /
  *   migrate 同一条路）：拿不到锁直接拒绝，不重试、不降级、不 partial 删。
  * - 输出按类别汇总；`--json` 给机器可读结构（`PruneReport`）。
  *
- * 候选口径与三个桶的互斥规则见 `src/prune-wiring.ts` 的模块头注释。
+ * 目标集合怎么算、删除顺序与不变量见 `src/prune-wiring.ts` 的模块头注释。
  *
  * @module vessel/prune-command
  */
@@ -17,12 +21,7 @@ import { formatConfigErrors } from './config-error-format';
 import { acquireDataLock, DataLockError } from './data-lock';
 import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
 import { t } from './i18n';
-import {
-  DEFAULT_PRUNE_OLDER_THAN_MS,
-  type PruneNote,
-  type PruneReport,
-  pruneTenantData,
-} from './prune-wiring';
+import { type PruneNote, type PruneReport, pruneTenantData } from './prune-wiring';
 
 type EnvMap = Record<string, string | undefined>;
 
@@ -42,7 +41,10 @@ export interface PruneCommandOptions {
   /** 显式 `--dry-run`；与 `--yes` 同时给出时仍不删 */
   dryRun?: boolean;
   json?: boolean;
-  /** 判老阈值（ms）；缺省 `DEFAULT_PRUNE_OLDER_THAN_MS` */
+  /**
+   * 可选叠加阈值（ms）：只清归档 / 停用时刻早于它的对象。
+   * 缺省 = 不看时间（用户裁定：状态为主，时间只是可选条件）。
+   */
   olderThanMs?: number;
   configPath?: string;
   userConfigPath?: string;
@@ -74,39 +76,55 @@ function formatDuration(ms: number): string {
   return `${Math.round(ms / 1000)}s`;
 }
 
+const NOTE_KEYS: Record<PruneNote, string> = {
+  sessions_backend_not_readonly: 'prune.note.sessionsBackendNotReadonly',
+  durable_disabled: 'prune.note.durableDisabled',
+  agents_snapshot_unreadable: 'prune.note.agentsSnapshotUnreadable',
+  agents_snapshot_write_failed: 'prune.note.agentsSnapshotWriteFailed',
+};
+
 function formatNote(note: PruneNote): string {
-  return note === 'sessions_backend_not_readonly'
-    ? t('prune.note.sessionsBackendNotReadonly')
-    : t('prune.note.durableDisabled');
+  return t(NOTE_KEYS[note]);
 }
 
 function formatReport(report: PruneReport): string {
-  const { trace, runs, sessions } = report.categories;
+  const { teams, agents, sessions, runs, trace } = report.categories;
+  const scope =
+    report.older_than_ms === undefined
+      ? t('prune.scope.all', { path: report.data_dir, tenant: report.tenant_id })
+      : t('prune.scope', {
+          path: report.data_dir,
+          tenant: report.tenant_id,
+          age: formatDuration(report.older_than_ms),
+        });
+  // trace 两个来源相加才对得上实际释放：留存策略桶 + 随会话级联删掉的文件
+  const traceCount = trace.deleted_runs + trace.cascade_files;
+  const traceBytes = trace.deleted_bytes + trace.cascade_bytes;
+
   const lines = [
     report.dry_run ? t('prune.head.dryRun') : t('prune.head.applied'),
-    t('prune.scope', {
-      path: report.data_dir,
-      tenant: report.tenant_id,
-      age: formatDuration(report.older_than_ms),
-    }),
+    scope,
     '',
-    t('prune.bucket.trace', {
-      count: trace.deleted_runs,
-      bytes: formatBytes(trace.deleted_bytes),
-    }),
+    t('prune.bucket.teams', { count: teams.deleted, bytes: formatBytes(teams.bytes) }),
+    t('prune.bucket.agents', { count: agents.deleted, bytes: formatBytes(agents.bytes) }),
+    t('prune.bucket.sessions', { count: sessions.deleted, bytes: formatBytes(sessions.bytes) }),
     t('prune.bucket.runs', { count: runs.deleted, bytes: formatBytes(runs.bytes) }),
-    t('prune.bucket.sessions', {
-      count: sessions.deleted,
-      bytes: formatBytes(sessions.bytes),
-      runs: sessions.runs_deleted,
-      events: sessions.events_deleted,
-    }),
+    t('prune.bucket.trace', { count: traceCount, bytes: formatBytes(traceBytes) }),
   ];
   if (report.skipped.active_sessions > 0) {
     lines.push(t('prune.skipped.active', { count: report.skipped.active_sessions }));
   }
   if (report.skipped.refused_sessions > 0) {
     lines.push(t('prune.skipped.refused', { count: report.skipped.refused_sessions }));
+  }
+  if (report.skipped.kept_agents > 0) {
+    lines.push(t('prune.skipped.keptAgents', { count: report.skipped.kept_agents }));
+  }
+  if (report.skipped.kept_teams > 0) {
+    lines.push(t('prune.skipped.keptTeams', { count: report.skipped.kept_teams }));
+  }
+  if (report.skipped.unknown_time > 0) {
+    lines.push(t('prune.skipped.unknownTime', { count: report.skipped.unknown_time }));
   }
   lines.push(
     t('prune.totals', {
@@ -185,7 +203,8 @@ export async function pruneCommand(options: PruneCommandOptions = {}): Promise<P
         config,
         tenantPaths,
         tenantId,
-        olderThanMs: options.olderThanMs ?? DEFAULT_PRUNE_OLDER_THAN_MS,
+        // 只有显式给出 --older-than 才叠加时间条件；缺省 = 纯状态判据（不传这个键）
+        ...(options.olderThanMs !== undefined ? { olderThanMs: options.olderThanMs } : {}),
         now: (options.now ?? Date.now)(),
         ...(options.hostname ? { hostname: options.hostname } : {}),
         ...(options.pid !== undefined ? { pid: options.pid } : {}),
