@@ -1271,6 +1271,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.askAnswer.title': 'Approval answer',
   'chat.askAnswer.aria': 'Answer to a deferred question',
   'chat.askAnswer.source': 'from approvals',
+  // answered record (the persisted `answered` entry a sync ask leaves behind; this is what
+  // rebuilds the card after a refresh)
+  'chat.askAnswered.title': 'Question answer',
+  'chat.askAnswered.aria': 'Answered questions (server record, survives refresh)',
+  'chat.askAnswered.source': 'recorded answer on the server',
+  'chat.askAnswered.label': 'Answered · {count}',
+  'chat.askAnswered.more': 'show {count} earlier',
+  'chat.askAnswered.less': 'show latest only',
   // rotate handoff card (the first startup prompt a rotated body receives; written by an
   // agent, not typed by a human)
   'chat.rotateHandoff.title': '⟳ rotate handoff',

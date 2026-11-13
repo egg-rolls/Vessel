@@ -12,6 +12,13 @@ export interface ListedInteractionAnswer {
   decision: 'allow' | 'deny';
   scope: PermissionScope;
   answered_at: number;
+  /**
+   * ask 的逐题答案（`AskUserAnswer[]`；服务端 `answer.answers` 的直投，0.51 起 Web 读回）。
+   *
+   * 保持 `unknown`：这一层只做「有 / 没有」，形状由消费方（`domains/chat/ask-answered.ts`）
+   * 逐条宽松校验 —— 历史记录里可能有旧格式（没有 `question`），不能在这里一刀切。
+   */
+  answers?: unknown;
 }
 
 export interface ListedInteraction {
