@@ -56,6 +56,18 @@ export interface SessionSystemContext {
   at?: number;
   /** 该事件所属的 run：客户端可以据此把卡落回那一轮。 */
   run_id?: string;
+  /**
+   * 「与上一份快照差在哪」（additive，0.52；原样透传事件里的 `changed`）。
+   *
+   * **缺省 = 不知道**，有两种成因，读侧不区分：
+   * - 这是该会话的第一份快照（没有可比对象）；
+   * - 旧日志里那条事件根本没有这个字段（0.52 之前落盘的）。
+   * 所以客户端拿到缺省值时**不许**渲染成「0 项变更」，而要退回全量快照卡 ——
+   * 「不知道」与「真的没变」是两件事，混起来等于编造一个空变更。
+   */
+  changed?: string[];
+  /** 上一份发布过的快照的 hash（additive；缺省同上 = 不知道）。 */
+  previous_hash?: string;
 }
 
 /** 取值 + 失效判定用的两个入口（`sessions.get` 的 `systemContext` 端口）。 */
@@ -88,6 +100,24 @@ function numberField(source: unknown, key: string): number | undefined {
 }
 
 /**
+ * 只认「非空字符串数组」；其它（缺失 / 非数组 / 混了非字符串 / 空数组）当没有。
+ *
+ * 空数组特意当「没有」而不是「0 项变更」：两者在 UI 上是完全不同的结论（后者是一句话，
+ * 前者是「不知道」）。要么有具体变更，要么当作没这个字段。
+ */
+function textListField(source: unknown, key: string): string[] | undefined {
+  if (!isRecord(source)) return undefined;
+  const value = source[key];
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const list: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || item.length === 0) return undefined;
+    list.push(item);
+  }
+  return list;
+}
+
+/**
  * 事件记录 → 线上形状（宽松解析）。
  *
  * 坏载荷（旧日志 / 第三方改写 / 缺 hash 或两段原文都空）返回 `undefined` —— 调用方按
@@ -110,6 +140,8 @@ function systemContextOfRecord(record: SessionEventRecord): SessionSystemContext
   const at = typeof record.ts === 'number' && Number.isFinite(record.ts) ? record.ts : undefined;
   const runId =
     typeof record.run_id === 'string' && record.run_id.length > 0 ? record.run_id : undefined;
+  const changed = textListField(data, 'changed');
+  const previousHash = textField(data, 'previous_hash');
   return {
     hash,
     ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
@@ -121,6 +153,9 @@ function systemContextOfRecord(record: SessionEventRecord): SessionSystemContext
     ...(contextMax !== undefined ? { context_max: Math.floor(contextMax) } : {}),
     ...(at !== undefined ? { at } : {}),
     ...(runId !== undefined ? { run_id: runId } : {}),
+    // 增量视图的两个字段原样透传；缺省 = 不知道（首次 / 旧日志），读侧退回全量快照卡。
+    ...(changed !== undefined ? { changed } : {}),
+    ...(previousHash !== undefined ? { previous_hash: previousHash } : {}),
   };
 }
 
