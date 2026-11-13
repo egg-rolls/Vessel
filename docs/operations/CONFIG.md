@@ -497,6 +497,11 @@ vessel prune [--older-than <dur>] [--dry-run] [--json] [--yes]
   时，该会话不删，连带着它的 agent 记录也留（记录与数据不拆散）。
   `trace` 一类是容量策略（`trace.retention_days` / `max_runs` / `max_bytes`），不看状态，与状态
   判据正交；随会话级联删掉的 trace 文件单独记在 `cascade_files`。
+  **这一桶是「未归档一律不删」的唯一例外（用户知情取舍）**：留存策略可能清掉「未归档 team 的
+  活 agent」的旧 run trace —— 保留它是因为日志无限增长本身是更大的问题；要彻底对齐状态判据，
+  需要给 core 的 `pruneTrace` 加会话 allowlist（另一单）。
+  **不清 `conversations` / budget 记录**：它们的维度是 `conversation_id`，不是 agent / team 归属，
+  按 conversation 反推「属于谁」会引入猜测。
 
 - `config path`：打印用户配置、项目配置与 `data_dir` 的实际路径和是否存在。
 - `config init`：把内嵌模板写到用户配置；默认不覆盖已有文件，`--force` 才覆盖。

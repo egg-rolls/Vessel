@@ -1585,7 +1585,9 @@ export interface TeamRecord {
   /** S3 只存不执行 */
   policy: Record<string, unknown>;
   created_at: number;
-  /** S10.3 additive：归档时间（epoch ms）；存在即只读，无删除路径 */
+  /** S10.3 additive：归档时间（epoch ms）；存在即只读。0.51 起 `vessel prune` 会把
+   * 「已归档 team 下的 agent + 该 team 记录」当成可移除对象清掉（用户裁决：归档 = 等待移除），
+   * 所以「无删除路径」不再成立；但除 prune 之外没有任何代码会改它。 */
   archived_at?: number;
   /** 0.27 additive：冻结期间拒绝该 Team 的所有创建 / 自动创建 / reinstate */
   spawn_frozen?: boolean;
