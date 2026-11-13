@@ -411,9 +411,12 @@
   color: var(--muted);
 }
 
+/* 工具卡不铺底色（0.52 用户裁定：与环境信息卡同一底色 = 透明，交给 StreamCard 自己的排版）。
+   注意**没有动 `--surface-sunken`**：它被 notice-block / 输入框凹槽 / palette / json 等 20+
+   处共用（`grep -c surface-sunken apps/web/src --include=*.css` 可复核），不是工具卡专属；
+   按「只有工具卡用才改 token」的条件，这里只摘掉这一条声明。 */
 .tool-card {
   border-radius: var(--radius-md);
-  background: var(--surface-sunken);
 }
 
 .tool-card-glyph {

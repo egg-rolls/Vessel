@@ -11,6 +11,9 @@
  *    原文块 / hash / 窗口上限）—— 若哪天有人把事实又塞回 `lines`，这张卡就会重复一遍。
  * 2. **配色分工**：卡头「环境信息」用主题色（`text-accent`），紧跟的「哪一类」（成员 / 上下文 / …）
  *    用正文色（`text-ink`），后面的值保持灰色。标题与类型抢同一抹强调色就看不出主次。
+ * 3. **卡片底色统一**：工具卡与环境信息卡同底色 ⇒ 环境信息卡是 StreamCard 的 neutral 档（不铺底），
+ *    所以 `.tool-card` 也不再铺 `--surface-sunken`。**注意没有动那个 token**：它被 notice / 输入框凹槽 /
+ *    palette / json 等 20+ 处共用，不是工具卡专属 —— 用户的条件是「只有工具卡用才改 token 值」。
  *
  * 判据都是**源码级 + 纯函数行为**，因为这几个文件是 React、脚本侧点不进去：
  * 但版面回归恰恰是「改一行 class / 少传一个 prop」这类静默退化，机器判得住。
@@ -86,6 +89,33 @@ expect(fullCard.lines.length === 4, 'D: 非空摘要的行数不对');
 expect(
   fullCard.lines.map((line) => line.text).join('|') === 'm|a|b|c',
   'D: 非空摘要的文本/顺序变了',
+);
+
+// E. 卡片底色：工具卡与环境信息卡同底色 = 不铺底（0.52 用户裁定）
+const chatCss = await source('apps/web/src/styles/domains/chat.css');
+const toolCardBlock = /\.tool-card \{([^}]*)\}/u.exec(chatCss)?.[1] ?? '';
+expect(toolCardBlock.length > 0, 'E: 找不到 .tool-card 规则块');
+expect(
+  toolCardBlock.includes('background') === false,
+  'E: .tool-card 又铺了底色（应为透明，与环境信息卡同一底色）',
+);
+expect(
+  /\.tool-card \{([^}]*)\}/u.test(chatCss) && toolCardBlock.includes('border-radius'),
+  'E: .tool-card 连圆角都被一起删了（只该摘掉背景，圆角保留）',
+);
+// 环境信息卡是 StreamCard 的 neutral 档 ⇒ 无底色；一旦有人给 EnvCard 传 tone，
+// 「同底色」的前提就没了（会变成 ok/warn 那层浅底），必须红。
+expect(
+  envCard.includes('tone=') === false,
+  'E: EnvCard 开始传 tone（环境信息卡从无底色变成有底色，工具卡的「同底色」前提失效）',
+);
+// 共享 token 不许被顺手改值：`--surface-sunken` 是凹槽色，被 notice / 输入框 / palette / json 共用。
+// 用户的条件是「只有工具卡用才改 token」，这里把它钉成可复核的事实。
+const sunkenUsers = chatCss.split('var(--surface-sunken)').length - 1;
+const tokensCss = await source('apps/web/src/styles/tokens.css').catch(() => '');
+expect(
+  sunkenUsers + (tokensCss.split('var(--surface-sunken)').length - 1) >= 3,
+  'E: --surface-sunken 已经只剩工具卡在用了？——先复核再谈改 token 值，别把凹槽色一起改掉',
 );
 
 if (failures.length > 0) {
