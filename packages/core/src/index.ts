@@ -15,6 +15,8 @@ export {
   estimateMessageTokens,
   estimateTokens,
   MemoryWorkingContext,
+  planClearedToolResults,
+  withClearedToolResults,
 } from './context/index.js';
 
 // 事件流

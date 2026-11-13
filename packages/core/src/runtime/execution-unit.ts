@@ -4,7 +4,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { estimateTokens } from '../context/index.js';
+import { estimateTokens, withClearedToolResults } from '../context/index.js';
 import {
   evaluateLimitWarnings,
   evaluateTermination,
@@ -2601,14 +2601,27 @@ export class ExecutionUnit {
    * 组装本次请求的消息数组（ADR-018 / C-03）。
    * system 覆盖只来自会话级基底（含 Self Card），不接受每轮 hook 拼接。
    * 1) 先归一化成 Provider 可接受的序列（丢掉孤儿 tool 消息、降级不完整的 tool_calls 轮次）；
-   * 2) 再处理 system：上下文缺 system 时补回基底；有 Self Card 时覆盖持久化的旧 system。
+   * 2) 再把超出保留预算的旧工具结果换成占位文本（**只在这一层**：见下）；
+   * 3) 最后处理 system：上下文缺 system 时补回基底；有 Self Card 时覆盖持久化的旧 system。
    * 注入只影响本次请求，不改动 WorkingContext 持久化的消息。
+   *
+   * 为什么占位替换放在这里而不是压缩里（0.52，用户裁定）：不变量是「落盘的 message 只能
+   * pop 或 append」。以前 `clearOldToolResults` 在压缩时就地改正文，于是**已经落盘、压缩后
+   * 还活着的旧工具结果**被换成了占位 —— 用户回看历史看到的不是当时那份，`sessions.get`
+   * 读回来的也不是。搬到请求构建层之后：发出去的请求照旧省 token，落盘与读回的原文一个字
+   * 不改。占位改变了请求消息序列 ⇒ 记一次显式的 `context_trim`，前缀守卫照旧有据可依。
    */
   private buildRequestMessages(
     systemOverrideInput: unknown,
     workingContext: WorkingContext,
   ): Message[] {
-    const messages = this.normalizeMessages(workingContext.messages);
+    const normalized = this.normalizeMessages(workingContext.messages);
+    const prepared = withClearedToolResults(normalized, workingContext.maxTokens ?? 1_000_000);
+    if (prepared.some((message, index) => message !== normalized[index])) {
+      // 占位替换是真实的（已声明）前缀变化：不标 reason 的话守卫会当成「莫名重写」。
+      this.pendingPrefixReason ??= 'context_trim';
+    }
+    const messages = prepared;
     const systemOverride =
       typeof systemOverrideInput === 'string' && systemOverrideInput
         ? systemOverrideInput
