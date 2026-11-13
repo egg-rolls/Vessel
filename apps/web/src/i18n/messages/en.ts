@@ -315,6 +315,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'pending.source.session': 'Session',
   'pending.source.team': 'Team',
   'pending.item.include': 'Reply to this',
+  'pending.item.answered': 'Already answered',
   'pending.item.includeAll': 'Select all',
   'pending.item.responding': 'Replying…',
   'pending.submit': 'Reply',

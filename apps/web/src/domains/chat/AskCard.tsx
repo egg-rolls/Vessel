@@ -1,9 +1,13 @@
-import { Button, Input } from '../../components/ui';
-import { buildAskAnswer } from '../../gateway/ask-answers';
-import type { AskUserAnswer, AskUserQuestion, AskUserRequest } from '../../gateway/types';
+import { Badge, Button, cn, Input } from '../../components/ui';
+import { askQuestionSettled } from '../../gateway/ask-answers';
+import type { AskUserAnswer, AskUserRequest } from '../../gateway/types';
 import { t } from '../../i18n';
 import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
-import { askDraftOf } from '../pending/ask-drafts';
+import {
+  askPendingAnswers,
+  askPlanRows,
+  askRowsComplete,
+} from '../pending/ask-submit-plan';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -13,16 +17,6 @@ function truncate(value: string, length: number): string {
 export interface AskDraft {
   readonly selected: readonly string[];
   readonly custom: string;
-}
-
-/** 单题答案：已选选项 + 自定义文本用 ` · ` 连接（两组件共用，避免逻辑漂移）。 */
-export function buildAnswer(question: AskUserQuestion, draft: AskDraft): AskUserAnswer {
-  const text = draft.custom.trim();
-  return {
-    header: question.header,
-    question: question.question,
-    answer: [...draft.selected, ...(text ? [text] : [])].join(' · '),
-  };
 }
 
 function isAnswered(draft: AskDraft): boolean {
@@ -66,12 +60,12 @@ export function AskCard({
     });
   };
 
-  const answers: AskUserAnswer[] = request.questions.map((question, index) =>
-    // 同一套逐题结构化（见 ）：单题卡也要带 ，
-    // 否则这张卡提交时服务端只能靠正文回退，多选也压回字符串。
-    buildAskAnswer(question, askDraftOf(drafts, request.requestId, index), index),
-  );
-  const complete = answers.every((answer) => answer.answer.length > 0);
+  // 逐题规划交给 ask-submit-plan（同一份判定待批页 / Composer 也用）：已落定的题不再
+  // 进载荷 —— 分批提交时它会带着第一批的答案再发一遍，而只要那一行缺 question_id，
+  // 服务端就只能把它当成一条独立的新答案写进记录。
+  const rows = askPlanRows([request], drafts);
+  const answers: AskUserAnswer[] = askPendingAnswers(rows);
+  const complete = answers.length > 0 && askRowsComplete(rows);
 
   return (
     <fieldset className="ask-card" aria-labelledby={titleId} data-request-id={request.requestId}>
@@ -91,23 +85,27 @@ export function AskCard({
       </div>
 
       <div className="ask-list flex flex-col gap-3 pr-1">
-        {request.questions.map((question, index) => (
+        {rows.map((row) => (
           <div
-            className="flex flex-col gap-2 rounded-md bg-sunken p-3.5"
-            key={`${request.requestId}-${question.header}-${question.question}`}
+            className={cn(
+              'flex flex-col gap-2 rounded-md bg-sunken p-3.5',
+              row.settled && 'opacity-70',
+            )}
+            key={`${request.requestId}-${row.question.header}-${row.question.question}`}
           >
-            <div className="font-mono text-2xs font-semibold uppercase tracking-widest text-accent-ink">
-              {question.header}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="font-mono text-2xs font-semibold uppercase tracking-widest text-accent-ink">
+                {row.question.header}
+              </div>
+              {row.settled && <Badge tone="neutral">{t('pending.item.answered')}</Badge>}
             </div>
             <div className="leading-relaxed whitespace-pre-wrap wrap-anywhere">
-              {question.question}
+              {row.question.question}
             </div>
-            {question.options && question.options.length > 0 && (
+            {row.question.options && row.question.options.length > 0 && (
               <div className="flex flex-wrap gap-2">
-                {question.options.map((option) => {
-                  const picked = askDraftOf(drafts, request.requestId, index).selected.includes(
-                    option,
-                  );
+                {row.question.options.map((option) => {
+                  const picked = row.draft.selected.includes(option);
                   return (
                     <label
                       className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-md pointer-coarse:min-h-touch ${
@@ -119,11 +117,13 @@ export function AskCard({
                     >
                       <input
                         className="accent-accent"
-                        type={question.multi_select ? 'checkbox' : 'radio'}
-                        name={`ask-${request.requestId}-${index}`}
+                        type={row.question.multi_select ? 'checkbox' : 'radio'}
+                        name={`ask-${request.requestId}-${row.index}`}
                         checked={picked}
-                        disabled={busy}
-                        onChange={() => toggle(index, option, question.multi_select === true)}
+                        disabled={busy || row.settled}
+                        onChange={() =>
+                          toggle(row.index, option, row.question.multi_select === true)
+                        }
                       />
                       <span>{option}</span>
                     </label>
@@ -132,14 +132,14 @@ export function AskCard({
               </div>
             )}
             <Input
-              value={askDraftOf(drafts, request.requestId, index).custom}
-              disabled={busy}
+              value={row.draft.custom}
+              disabled={busy || row.settled}
               onChange={(event) => {
                 const value = event.target.value;
-                setDraft(request.requestId, index, (draft) => ({ ...draft, custom: value }));
+                setDraft(request.requestId, row.index, (draft) => ({ ...draft, custom: value }));
               }}
               placeholder={
-                question.options
+                row.question.options
                   ? t('ask.customPlaceholder.options')
                   : t('ask.customPlaceholder.open')
               }
@@ -198,8 +198,15 @@ export function AskQuestionCard({
 }) {
   const titleId = `ask-card-${request.requestId}-${questionIndex}`;
   const question = request.questions[questionIndex];
-  const disabled = busy || !connected;
-  const answered = question ? isAnswered({ selected: [...selected], custom }) : true;
+  // 已落定的题（分批提交时上一批答过的）由服务端逐题进度判定：标「已答」并锁住输入，
+  // 别让它看起来还能改 —— 用户顺手再答一遍，提交载荷里就多一条只能靠服务端挡回来的行。
+  const settled =
+    question !== undefined &&
+    askQuestionSettled(request.answeredQuestionIds, question, questionIndex);
+  const disabled = busy || !connected || settled;
+  // 已落定的题算答完：草稿在提交后就被清掉了，若还按草稿判「未答」，用户会卡在
+  // 这道已经答过的题上翻不过去。
+  const answered = settled || (question ? isAnswered({ selected: [...selected], custom }) : true);
 
   return (
     <fieldset
@@ -212,7 +219,7 @@ export function AskQuestionCard({
         <span className="ask-card-meta font-mono text-muted tabular-nums">
           run {truncate(request.runId, 16)}
         </span>
-        {request.questions.length > 0 && (
+        {question && (
           <span className="ask-card-meta text-muted tabular-nums">
             {t('ask.progress', {
               current: questionIndex + 1,
@@ -220,6 +227,7 @@ export function AskQuestionCard({
             })}
           </span>
         )}
+        {settled && <Badge tone="neutral">{t('pending.item.answered')}</Badge>}
       </div>
 
       {question && (

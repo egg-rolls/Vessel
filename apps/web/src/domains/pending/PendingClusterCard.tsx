@@ -11,8 +11,11 @@
  *   usePendingBatch）。服务端本来就允许 `answers` 是任意长度的数组
  *   （`ask.respond` 只校验它是 Array，见 packages/serve 的 interactions 方法），
  *   且答案行自带原问题（`formatAnswersForModel`），所以「部分提交」不需要新协议；
- * - 代价（服务端语义，本页改不了）：一条 ask 一经应答就整体落定
- *   （pending → answered），未勾选的题随该请求一起收口 —— 回复行旁明写这一点；
+ * - 服务端语义：一条 ask 要等**它自己的每一题**都被答完才整体落定（pending → answered）；
+ *   0.52 起允许**分批**——一次只答几题，剩下的题仍 pending（逐题进度见
+ *   `answeredQuestionIds`）。已落定的题在界面上标「已答」并锁住输入，草稿保留回看，
+ *   但**不再进载荷** —— 重投的那几行只能靠题号被服务端挡回来，缺 question_id 的
+ *   旧写法还会变成一条独立答案（分批提交漂移的入口，见 ask-submit-plan）；
  * - 提交中、或该 requestId 已在途时禁用输入，避免重复投递。
  *
  * 0.51：草稿（勾选 / 自定义输入 / 纳入勾选）不再是组件 state，而是按
@@ -22,12 +25,12 @@
 import { useMemo } from 'react';
 import { Badge, Button, CountBadge, cn, Input, Section } from '../../components/ui';
 import { formatTimestamp } from '../../format';
-import { buildAskAnswer } from '../../gateway/ask-answers';
 import { useConnection } from '../../gateway/ConnectionProvider';
-import type { AskUserAnswer, AskUserQuestion } from '../../gateway/types';
+import type { AskUserQuestion } from '../../gateway/types';
 import { t } from '../../i18n';
 import { useAskDrafts, useDropAskDrafts, useSetAskDraft } from './ask-draft-store';
-import { type AskDraftValue, askDraftOf, isAskDraftAnswered } from './ask-drafts';
+import { type AskDraftValue, isAskDraftAnswered } from './ask-drafts';
+import { askIncludedAnswers, askPlanRows } from './ask-submit-plan';
 import type { PendingCluster } from './cluster';
 import { questionBlocks } from './question-blocks';
 import { usePendingBatch } from './usePendingBatch';
@@ -98,6 +101,7 @@ function QuestionField({
   groupId,
   index,
   include,
+  settled,
   draft,
   disabled,
   onToggleInclude,
@@ -109,37 +113,48 @@ function QuestionField({
   index: number;
   /** 这一题是否纳入本次回复（勾选只影响提交内容，不影响能否作答）。 */
   include: boolean;
+  /** 服务端已经落定这题：草稿留着回看，输入锁住，勾选换成「已答」标记。 */
+  settled: boolean;
   draft: { selected: readonly string[]; custom: string };
   disabled: boolean;
   onToggleInclude: () => void;
   onChange: (next: { selected: readonly string[]; custom: string }) => void;
 }) {
+  const locked = disabled || settled;
   return (
     <div
       className={cn(
         'flex flex-col gap-2 rounded-md bg-sunken p-3.5',
-        include && 'outline-2 outline-offset-2 outline-accent-soft',
+        include && !settled && 'outline-2 outline-offset-2 outline-accent-soft',
+        settled && 'opacity-70',
       )}
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="font-mono text-2xs font-semibold uppercase tracking-widest text-accent-ink">
           {question.header}
         </div>
-        <label
-          className={cn(
-            'inline-flex cursor-pointer items-center gap-1.5 text-sm',
-            include ? 'text-ink' : 'text-muted',
-          )}
-        >
-          <input
-            className="accent-accent"
-            type="checkbox"
-            checked={include}
-            disabled={disabled}
-            onChange={onToggleInclude}
-          />
-          {t('pending.item.include')}
-        </label>
+        {settled ? (
+          // 已落定的题不给勾选：它不会进载荷，给出可点的勾选框只会让人以为还能改。
+          <span className="inline-flex items-center gap-1.5 text-sm text-muted">
+            <Badge tone="neutral">{t('pending.item.answered')}</Badge>
+          </span>
+        ) : (
+          <label
+            className={cn(
+              'inline-flex cursor-pointer items-center gap-1.5 text-sm',
+              include ? 'text-ink' : 'text-muted',
+            )}
+          >
+            <input
+              className="accent-accent"
+              type="checkbox"
+              checked={include}
+              disabled={disabled}
+              onChange={onToggleInclude}
+            />
+            {t('pending.item.include')}
+          </label>
+        )}
       </div>
       <QuestionBody text={question.question} />
       {question.options && question.options.length > 0 && (
@@ -159,7 +174,7 @@ function QuestionField({
                   type={question.multi_select ? 'checkbox' : 'radio'}
                   name={`${groupId}-${index}`}
                   checked={picked}
-                  disabled={disabled}
+                  disabled={locked}
                   onChange={() =>
                     onChange({
                       ...draft,
@@ -179,7 +194,7 @@ function QuestionField({
       )}
       <Input
         value={draft.custom}
-        disabled={disabled}
+        disabled={locked}
         onChange={(event) => onChange({ ...draft, custom: event.target.value })}
         placeholder={
           question.options ? t('ask.customPlaceholder.options') : t('ask.customPlaceholder.open')
@@ -208,39 +223,36 @@ export function PendingClusterCard({
   const dropDrafts = useDropAskDrafts();
 
   /** 全部问题的扁平视图：勾选、计数、投递计划都按「题」算，不按 request 绑死。 */
-  const rows = useMemo(
-    () =>
-      cluster.requests.flatMap((request) =>
-        request.questions.map((question, index) => {
-          const draft = askDraftOf(drafts, request.requestId, index);
-          return { request, question, index, draft, answered: isAskDraftAnswered(draft) };
-        }),
-      ),
-    [cluster.requests, drafts],
-  );
+  const rows = useMemo(() => askPlanRows(cluster.requests, drafts), [cluster.requests, drafts]);
 
   /** 本次回复的投递计划：按 request 分组（同一请求的几题合成一次 `ask.respond`）。 */
   const plan = useMemo(() => {
-    const byRequest = new Map<string, { requestId: string; answers: AskUserAnswer[] }>();
+    const byRequest = new Map<string, typeof rows>();
     for (const row of rows) {
-      if (!row.draft.include || !row.answered) continue;
-      const entry = byRequest.get(row.request.requestId) ?? {
-        requestId: row.request.requestId,
-        answers: [],
-      };
-      // 逐题结构化：question_id 让服务端把答案挂到「题」上（未答的题不随本次提交
-      // 被带走），selected 保住多选结构；行内 index 就是该请求内的稳定题号。
-      entry.answers.push(buildAskAnswer(row.question, row.draft, row.index));
-      byRequest.set(row.request.requestId, entry);
+      // 已落定的题不进载荷：服务端只会把它当重复挡回来，而缺题号的旧写法还会被当成
+      // 一条独立的新答案写进记录。草稿留着展示，这里只筛不删。
+      if (row.settled || !row.answered || !row.draft.include) continue;
+      const group = byRequest.get(row.requestId);
+      if (group === undefined) byRequest.set(row.requestId, [row]);
+      else group.push(row);
     }
-    return [...byRequest.values()];
+    // 逐题结构化：question_id 让服务端把答案挂到「题」上（未答的题不随本次提交
+    // 被带走），selected 保住多选结构；行内 index 就是该请求内的稳定题号。
+    return [...byRequest.entries()].map(([requestId, group]) => ({
+      requestId,
+      answers: askIncludedAnswers(group),
+    }));
   }, [rows]);
 
-  const answeredRows = rows.filter((row) => row.answered);
-  const includedCount = rows.filter((row) => row.draft.include && row.answered).length;
+  /** 还能勾 / 还能答的题：已落定的题已经有答案了，不再参与勾选与计数。 */
+  const openRows = rows.filter((row) => !row.settled);
+  const answeredRows = openRows.filter((row) => row.answered);
+  const includedCount = rows.filter(
+    (row) => !row.settled && row.answered && row.draft.include,
+  ).length;
   const allIncluded = answeredRows.length > 0 && answeredRows.every((row) => row.draft.include);
   /** 勾了但没答：回复时会被跳过，所以给一句提示（不阻塞提交）。 */
-  const hasSkipped = rows.some((row) => row.draft.include && !row.answered);
+  const hasSkipped = openRows.some((row) => row.draft.include && !row.answered);
   const canSubmit = plan.length > 0 && !busy;
 
   const patchDraft = (
@@ -272,11 +284,11 @@ export function PendingClusterCard({
     patchDraft(requestId, index, (draft) => ({ ...draft, include: !draft.include }));
   };
 
-  /** 全选 / 取消全选：只作用于已作答的题，未答的题不制造空勾选。 */
+  /** 全选 / 取消全选：只作用于已作答且还没落定的题，未答的题不制造空勾选。 */
   const toggleAll = () => {
     const target = !allIncluded;
     for (const row of answeredRows) {
-      patchDraft(row.request.requestId, row.index, (draft) => ({ ...draft, include: target }));
+      patchDraft(row.requestId, row.index, (draft) => ({ ...draft, include: target }));
     }
   };
 
@@ -374,24 +386,24 @@ export function PendingClusterCard({
                   <span className="tabular-nums">{formatTimestamp(request.requestedAt)}</span>
                   {pendingRespond && <span>{t('pending.item.responding')}</span>}
                 </div>
-                {request.questions.map((question, index) => {
-                  const draft = askDraftOf(drafts, request.requestId, index);
-                  return (
+                {rows
+                  .filter((row) => row.requestId === request.requestId)
+                  .map((row) => (
                     <QuestionField
                       // key 用问题自身的 header+正文：ask 的题目在同一请求内不会重复，
                       // 用下标当 key 会在勾选状态变化时错位（biome noArrayIndexKey）。
-                      key={`${request.requestId}:${question.header}:${question.question}`}
-                      question={question}
-                      groupId={request.requestId}
-                      index={index}
-                      include={draft.include}
-                      draft={{ selected: draft.selected, custom: draft.custom }}
+                      key={`${row.requestId}:${row.question.header}:${row.question.question}`}
+                      question={row.question}
+                      groupId={row.requestId}
+                      index={row.index}
+                      include={row.draft.include}
+                      settled={row.settled}
+                      draft={{ selected: row.draft.selected, custom: row.draft.custom }}
                       disabled={requestDisabled}
-                      onToggleInclude={() => toggleInclude(request.requestId, index)}
-                      onChange={(next) => setAnswer(request.requestId, index, next)}
+                      onToggleInclude={() => toggleInclude(row.requestId, row.index)}
+                      onChange={(next) => setAnswer(row.requestId, row.index, next)}
                     />
-                  );
-                })}
+                  ))}
               </div>
             );
           })}
