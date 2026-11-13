@@ -58,6 +58,7 @@ export function SessionList({
   pendingAskCount,
   onOpenPending,
   agentAddresses,
+  agentLabels,
   closedAgentSessions,
   defaultSession,
   primarySessionIds,
@@ -92,6 +93,11 @@ export function SessionList({
   onOpenPending?: () => void;
   /** session_id → `name@node:team`；只包含显式 member 的当前节点 roster。 */
   agentAddresses?: ReadonlyMap<string, string>;
+  /**
+   * session_id → `名字@primary`：非 team 成员（临时成员 / 未加入 Team / 不在本 team 的
+   * agent）的 primary body 会话。只在拿不到节点地址时顶上，团队成员一个都没有。
+   */
+  agentLabels?: ReadonlyMap<string, string>;
   /**
    * 归属到「已停用 agent」的会话 id（roster 反查；查不到 = 不在集合里 = 不标）。
    * 只影响标记，不影响可见性：会话永远列出来。
@@ -309,6 +315,13 @@ export function SessionList({
                 const title = sessionTitle(session);
                 const pendingCount = pendingBySession?.get(session.session_id) ?? 0;
                 const agentAddress = agentAddresses?.get(session.session_id);
+                // 三级第二行：节点地址 > `名字@primary` > 原 `primary` 徽标。地址优先，
+                // 团队成员的显示一个字都不变（标签对它们根本不产出）。
+                const agentLabel = agentAddress ? undefined : agentLabels?.get(session.session_id);
+                const agentPrimaryBadge =
+                  !agentAddress &&
+                  !agentLabel &&
+                  primarySessionIds?.has(session.session_id) === true;
                 const agentClosed = closedAgentSessions?.has(session.session_id) === true;
                 const snippet = query.trim() ? searchSnippets?.get(session.session_id) : undefined;
                 const preview =
@@ -401,7 +414,15 @@ export function SessionList({
                               </Badge>
                             </Tooltip>
                           )}
-                          {!agentAddress && primarySessionIds?.has(session.session_id) && (
+                          {agentLabel && (
+                            // 非 team 成员（临时成员 / 未加入 Team / 不在本 team 的 agent）：
+                            // 拿不到节点地址，但用户得看得出卡片是谁的 —— primary 一词仍复用
+                            // t('team.member.primaryBadge')，不新增 i18n key。
+                            <span className="session-agent session-agent-primary">
+                              {agentLabel}
+                            </span>
+                          )}
+                          {agentPrimaryBadge && (
                             <span className="session-agent session-agent-primary">
                               {t('team.member.primaryBadge')}
                             </span>
