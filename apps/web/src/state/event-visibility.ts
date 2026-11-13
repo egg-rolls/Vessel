@@ -93,6 +93,8 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   // 「旧身体这一轮回复产出过、但被 epoch fencing 丢弃」的唯一解释。团队日志对已退役
   // Binding 的 `run.completed` 是显式抑制的（`team-service.ts` `isRetiredBinding`），
   // 所以它必须默认可见，且以 typed notice 呈现（不得是裸 JSON，也不得静默藏掉）。
+  // 同一类型还承载交棒轮「没有留下收尾」（`reason: handoff_no_reply`，0.52 B′）——
+  // 那不是丢弃，所以文案分档；可见性要求一样：没有它，这一轮就是静默的。
   'agent.reply.stale': { tier: 'content', live: true, 承接: 'notice' },
 
   // ── run / llm / tool 的内部信号（internal）

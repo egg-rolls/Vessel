@@ -223,9 +223,11 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 > 0.51 删掉三条**死类型**：`agent.rotating` / `agent.rotated` / `agent.rotate.failed`。
 > ADR-092 第 18 条要求过它们，实现从未发出（无生产者，Web 的 notice 分支与团队日志
 > `rotate` 行都是永远走不到的路径）。rotate 的实际时序只有两条事件：旧 body 退役的
-> `agent.retired` **在 rotate 工具内就发**（此时旧 run 可能还没结束，迟到轮随后由
-> `agent.reply.stale` 解释），新 primary 的 `agent.session.activated` 在切换 + 快照之后发，
-> 启动嘱托在其后 admit。详见 [ADR-092](../adr/ADR-092-agent-rotate-and-epoch-fencing.md) 文末的 0.51 Errata。
+> `agent.retired` **在 rotate 工具内就发**（此时旧 run 可能还没结束；0.52 起**自己交棒
+> 的那一轮正常记账、不再 fence**，只有外部退役的迟到轮由 `agent.reply.stale{
+> reason: epoch_fenced }` 解释，交棒轮没有收尾时是 `reason: handoff_no_reply`），
+> 新 primary 的 `agent.session.activated` 在切换 + 快照之后发，启动嘱托在其后 admit。
+> 详见 [ADR-092](../adr/ADR-092-agent-rotate-and-epoch-fencing.md) 文末的 0.51 Errata。
 
 **思维链不进入事件流**：`llm.request` 的 messages 与 `context.changed` 的 message 在发布前剔除 `reasoning_content`（ADR-038）；`WorkingContext` 的持久化记录仍保留该字段，供下一轮请求回传。
 

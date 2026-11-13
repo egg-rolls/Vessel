@@ -1166,6 +1166,8 @@ export const messages = {
   'chat.notice.runtime': '系统提示 · {kind}',
   // 退役 / 作废回复 / rotate 被拒：三种「没有 typed notice 就等于丢信息」的事件。
   'chat.notice.replyStale': '这次回复未被采用 · 旧身体已退役 · epoch {epoch} · 消息 {message}',
+  // 交棒轮自己没有收尾（failed / cancelled / 正文为空）：交棒成功，丢的只是这一轮。
+  'chat.notice.handoffNoReply': '已交棒，但这一轮没有留下收尾 · {outcome} · epoch {epoch}',
   'chat.notice.retired': '旧身体已退役 · {reason} · epoch {epoch} · body {body}',
   'chat.notice.rotateDenied': '上下文切换未获批 · {reason} · 水位 {percent}%',
   // 门禁管不到的类型（第三方插件 / 上游事件 / 旧 trace）：一行折叠，绝不落裸 JSON。

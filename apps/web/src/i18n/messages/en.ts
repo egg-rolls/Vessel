@@ -1215,6 +1215,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // Retired body / discarded reply / denied rotate: without a typed notice these three
   // would lose information the moment they are hidden.
   'chat.notice.replyStale': 'reply not used · old body retired · epoch {epoch} · message {message}',
+  // Handoff committed but this turn left no closing reply (failed / cancelled / empty).
+  'chat.notice.handoffNoReply':
+    'handoff committed, but this turn left no closing reply · {outcome} · epoch {epoch}',
   'chat.notice.retired': 'old body retired · {reason} · epoch {epoch} · body {body}',
   'chat.notice.rotateDenied': 'context rotate denied · {reason} · at {percent}%',
   // Types the gate cannot see (third-party plugins / upstream events / old traces):
