@@ -25,13 +25,13 @@ import { useEffect, useState } from 'react';
 import { Button } from '../../components/ui';
 import type { GatewayClient } from '../../gateway/client';
 import { t } from '../../i18n';
+import { AskAnswerCard } from './AskAnswerCard';
 import {
   ANSWERED_ASKS_VISIBLE,
   type AnsweredAsk,
   answeredAsks,
   recentAnsweredAsks,
 } from './ask-answered';
-import { AskAnswerCard } from './AskAnswerCard';
 
 /** 一次读回多少条已答记录：默认视图只看最近几条，留一屏余量给「展开」。 */
 const FETCH_LIMIT = 50;
@@ -66,6 +66,7 @@ export function AnsweredAsks({
   const [state, setState] = useState<AnsweredState | null>(null);
   const [expanded, setExpanded] = useState(false);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: epoch / refreshKey 是**有意的触发器**（重连、新答复落定各读一次盘），不是读盘本身的输入 —— 与 tool-catalog / PendingStrip 同一写法。
   useEffect(() => {
     if (!connected || sessionId === null || sessionId === '') return;
     let cancelled = false;

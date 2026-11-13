@@ -1,8 +1,8 @@
 import { Button, Input } from '../../components/ui';
 import type { AskUserAnswer, AskUserQuestion, AskUserRequest } from '../../gateway/types';
 import { t } from '../../i18n';
-import { askDraftOf } from '../pending/ask-drafts';
 import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
+import { askDraftOf } from '../pending/ask-drafts';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;

@@ -23,18 +23,18 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  ANSWERED_ASKS_VISIBLE,
   answeredAsk,
   answeredAsks,
-  ANSWERED_ASKS_VISIBLE,
   recentAnsweredAsks,
 } from '../apps/web/src/domains/chat/ask-answered';
 import {
+  ASK_DRAFT_STORAGE_VERSION,
+  type AskDrafts,
   askDraftKey,
   askDraftOf,
   askDraftRequestIds,
   askDraftsPrunable,
-  ASK_DRAFT_STORAGE_VERSION,
-  type AskDrafts,
   collectAskSlots,
   dropAskDrafts,
   EMPTY_ASK_DRAFTS,
@@ -322,7 +322,7 @@ const FIXTURES: readonly Fixture[] = [
           created_at: NOW - 1000,
           answer: {
             decision: 'allow',
-      scope: 'once',
+            scope: 'once',
             answers: [{ header: 'B', question: 'B?', answer: 'b' }],
             answered_at: NOW - 500,
           },
@@ -332,7 +332,7 @@ const FIXTURES: readonly Fixture[] = [
           created_at: NOW - 3000,
           answer: {
             decision: 'allow',
-      scope: 'once',
+            scope: 'once',
             answers: [{ header: 'A', question: 'A?', answer: 'a' }],
             answered_at: NOW - 9000,
           },
@@ -342,7 +342,7 @@ const FIXTURES: readonly Fixture[] = [
           created_at: NOW - 3000,
           answer: {
             decision: 'allow',
-      scope: 'once',
+            scope: 'once',
             answers: [{ header: 'A', question: 'A?', answer: 'a' }],
             answered_at: NOW - 9000,
           },
@@ -368,7 +368,7 @@ const FIXTURES: readonly Fixture[] = [
         session_id: 'session-2',
         answer: {
           decision: 'allow',
-      scope: 'once',
+          scope: 'once',
           answers: [{ header: '别人的题', question: '别人的问题？', answer: '别人的答案' }],
           answered_at: NOW + 1,
         },
@@ -387,7 +387,7 @@ const FIXTURES: readonly Fixture[] = [
           request_id: `req-${String(index)}`,
           answer: {
             decision: 'allow',
-      scope: 'once',
+            scope: 'once',
             answers: [{ header: `H${String(index)}`, question: `Q${String(index)}`, answer: 'a' }],
             answered_at: NOW + index,
           },
