@@ -507,7 +507,11 @@ function batchAnswersOf(payload: AnyRecord | undefined): AnyRecord[] {
   const finalAnswers = answersOf(h.record(serverRequestId));
   check('I 服务端：连提两次后答案仍恰好 1 条', finalAnswers.length === 1, show(finalAnswers));
   check('I 服务端：第二次 duplicate', twice.duplicate === true, show(twice));
-  check('I 服务端：没有写出空题号的脏答案', finalAnswers[0]?.question_id === 'q1', show(finalAnswers));
+  check(
+    'I 服务端：没有写出空题号的脏答案',
+    finalAnswers[0]?.question_id === 'q1',
+    show(finalAnswers),
+  );
 }
 
 // ── G：没有可枚举的题 ⇒ 旧语义（回归保护）────────────────
