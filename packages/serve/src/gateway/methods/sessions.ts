@@ -174,6 +174,27 @@ function watermarkCached<T>(args: {
  */
 const DERIVED_CACHE_LIMIT = 256;
 
+/**
+ * 会话的归属（additive `agent`，0.52）。
+ *
+ * 存在理由是 UI 侧的一个洞：`SessionInfo` 里没有任何指向 agent 的字段，会话卡片的第二行
+ * 只能拿 session id 去三份名单反查（team members / `roster.agents` / `body_history`），
+ * 而三份各有门槛 —— 非 primary body 的会话（rotate 之前的旧身体）一份都不在，就读成空行。
+ * 归属数据从一开始就在 registry 里（members 的 `session_id` + `body_history[]`），
+ * 只是没随会话下发。这里补上，让它**双向**。
+ *
+ * 全字段可选：没有适配器 / 查询失败 ⇒ 空映射，字段缺省，`sessions.list` 一字不改地能用。
+ * `primary=false` 表示这是已退役 body 的会话。
+ */
+export interface SessionAgentBinding {
+  id: string;
+  name?: string;
+  /** 成员状态原值（`closed` = 已停用，前端据此默认归档）。 */
+  state: string;
+  presence?: 'live' | 'gone';
+  primary: boolean;
+}
+
 export interface SessionMethodsDeps {
   sessionFor(): SessionStore | undefined;
   /** 最近 RunRecord 的读取面；缺省时 `sessions.get` 只用 `legacy_run` 投影。 */
@@ -669,12 +690,59 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
     return resolved;
   }
 
+  /**
+   * 会话 → 归属映射（additive `agent`）。
+   *
+   * 一次 `agent.list()` 换一张表：现役 body（`session_id`）+ 已退役 body（`body_history[]`）。
+   * **任何失败都退化成空映射**：这个字段是 enhance，不是前置条件 —— 宁可卡片少一行，
+   * 也不能让 `sessions.list` 因为拿不到成员列表而整体报错。
+   */
+  async function sessionAgentBindings(): Promise<Map<string, SessionAgentBinding>> {
+    const bindings = new Map<string, SessionAgentBinding>();
+    if (!agent) return bindings;
+    let members: Awaited<ReturnType<NonNullable<typeof agent>['list']>>;
+    try {
+      members = await agent.list();
+    } catch {
+      return bindings;
+    }
+    for (const member of members ?? []) {
+      if (!member || typeof member.id !== 'string') continue;
+      const name =
+        typeof member.name === 'string' && member.name.trim() !== '' ? member.name : undefined;
+      const presence =
+        member.presence === 'live' || member.presence === 'gone' ? member.presence : undefined;
+      const base = {
+        id: member.id,
+        ...(name === undefined ? {} : { name }),
+        state: String(member.state ?? ''),
+        ...(presence === undefined ? {} : { presence }),
+      } satisfies Omit<SessionAgentBinding, 'primary'>;
+      const live = typeof member.session_id === 'string' ? member.session_id : '';
+      if (live !== '' && !bindings.has(live)) bindings.set(live, { ...base, primary: true });
+      for (const body of member.body_history ?? []) {
+        const retired = typeof body?.session_id === 'string' ? body.session_id : '';
+        // `primary=true` 的那一具永远赢：迟到的 body_history 不许把现役会话标成旧身体。
+        if (retired === '' || retired === live || bindings.has(retired)) continue;
+        bindings.set(retired, { ...base, primary: false });
+      }
+    }
+    return bindings;
+  }
+
   async function listSessions(): Promise<{ sessions: unknown[] }> {
     const backend = sessionFor();
     if (!backend) {
       throw new MethodError('no_session', 'No session backend configured');
     }
-    return { sessions: await backend.listRich() };
+    const [sessions, bindings] = await Promise.all([backend.listRich(), sessionAgentBindings()]);
+    if (bindings.size === 0) return { sessions };
+    return {
+      sessions: sessions.map((session) => {
+        const found = bindings.get(session.session_id);
+        return found === undefined ? session : { ...session, agent: found };
+      }),
+    };
   }
 
   return [
@@ -707,7 +775,12 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
       result_schema: {
         type: 'object',
         required: ['session'],
-        properties: { session: runStateSchema },
+        properties: {
+          session: runStateSchema,
+          // Additive (0.52)：会话归属，与 `sessions.list` 每项的 `agent` 同一个形状。
+          // 老 gateway 不返回 ⇒ 前端回落到反查三份名单（见 `SessionAgentBinding`）。
+          agent: sessionInfoSchema.properties.agent,
+        },
       },
       handler: async (params) => {
         const backend = requireSession();
@@ -760,7 +833,10 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         // 盖上（`RunJournal.saveSessionState`），本方法只读库里的那一份，不派生、不回填。
         // 缺这两个字段 = 旧数据 / 旧 gateway，客户端退回内容比较（见
         // `apps/web/src/gateway/types/sessions.ts` 的 `Message` 注释）。
+        const bindings = await sessionAgentBindings();
+        const owner = bindings.get(state.session_id);
         return {
+          ...(owner === undefined ? {} : { agent: owner }),
           session: {
             ...toSessionView(state, latest),
             ...(contextUsage !== undefined ? { context_usage: contextUsage } : {}),

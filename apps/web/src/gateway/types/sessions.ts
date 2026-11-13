@@ -13,6 +13,19 @@ export interface SessionInfo {
    * `generated` = AI 命名；缺失 = 旧 gateway / 旧数据 / 尚未命名。
    */
   title_source?: 'manual' | 'generated';
+  /**
+   * Additive (0.52)：会话归属。老 gateway 不返回 ⇒ 前端回落到 roster 反查
+   * （`sessionAgentLabels` / `sessionAgentRetiredLabels`）。
+   * `primary: false` 表示这是已退役 body 的会话（rotate 之前那具身体）。
+   */
+  agent?: {
+    id: string;
+    name?: string;
+    /** 成员状态原值；`closed` = 已停用（会话默认归档，由「显示归档」开关决定是否列出）。 */
+    state: string;
+    presence?: 'live' | 'gone';
+    primary: boolean;
+  };
 }
 
 /** 会话消息角色（与 core `Message` 对齐） */

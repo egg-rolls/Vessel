@@ -312,17 +312,31 @@ export function SessionList({
                 const title = sessionTitle(session);
                 const pendingCount = pendingBySession?.get(session.session_id) ?? 0;
                 const agentAddress = agentAddresses?.get(session.session_id);
-                // 四级第二行：节点地址 > `名字@primary`（live）> `名字（旧身体）`（已退役）> 原 primary 徽标。
-                // 地址优先，团队成员的显示一个字都不变（标签对它们根本不产出）。
-                // 颜色规则（用户 0.52 裁定）：现役用主题色、已退役用 primary 徽标的灰 ——
-                // 「还活着」和「只剩历史」不该长得一样。
-                const agentLabel = agentAddress ? undefined : agentLabels?.get(session.session_id);
+                // 四级第二行（0.52）：
+                // 1) 节点地址（只有 roster 有 `node:team`，团队成员的显示一个字都不变）；
+                // 2) **会话自带归属**（`session.agent`，additive）：现役 ⇒ `名字@primary` 主题色，
+                //    已退役 body ⇒ `名字（旧身体）` 灰色。这是唯一不依赖反查的一档 ——
+                //    rotate 之前的旧身体会话、跨节点会话、agent 已从 roster 消失的会话都靠它；
+                // 3) 老 gateway 没下发归属 ⇒ 回落到 roster 反查（`agentLabels` / `agentRetiredLabels`）；
+                // 4) 都查不到 ⇒ 原来的 primary 徽标。
+                const ownAgent = session.agent;
+                const ownAgentName = ownAgent?.name?.trim();
+                const agentLabel =
+                  agentAddress || ownAgentName ? undefined : agentLabels?.get(session.session_id);
+                const ownAgentTitle =
+                  agentAddress || ownAgentName === undefined
+                    ? undefined
+                    : ownAgent?.primary === true
+                      ? `${ownAgentName}@${t('team.member.primaryBadge')}`
+                      : t('chat.sessionList.oldBody', { name: ownAgentName });
+                const ownAgentLive = ownAgent?.primary === true;
                 const agentRetiredLabel =
-                  agentAddress || agentLabel
+                  agentAddress || ownAgentTitle || agentLabel
                     ? undefined
                     : agentRetiredLabels?.get(session.session_id);
                 const agentPrimaryBadge =
                   !agentAddress &&
+                  !ownAgentTitle &&
                   !agentLabel &&
                   !agentRetiredLabel &&
                   primarySessionIds?.has(session.session_id) === true;
@@ -405,6 +419,17 @@ export function SessionList({
                           {agentAddress && (
                             <span className="session-agent session-agent-address">
                               {agentAddress}
+                            </span>
+                          )}
+                          {ownAgentTitle && (
+                            <span
+                              className={
+                                ownAgentLive
+                                  ? 'session-agent session-agent-address'
+                                  : 'session-agent session-agent-primary'
+                              }
+                            >
+                              {ownAgentTitle}
                             </span>
                           )}
                           {agentLabel && (

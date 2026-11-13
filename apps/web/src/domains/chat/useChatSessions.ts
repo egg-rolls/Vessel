@@ -386,7 +386,12 @@ export function useChatSessions({
     // 打开「显示归档」后原样列回来、且**不**加任何徽标 —— 归档态本身已经由开关表达，
     // 再挂一个「已注销」标签属于重复表达。反查到不的（别的节点 / 旧 gateway）不动。
     if (showArchived) return matched;
-    return matched.filter((session) => !closedAgentSessions.has(session.session_id));
+    // 两个来源都要认：会话自带归属（0.52，`session.agent.state === 'closed'`）优先，
+    // roster 反查是旧 gateway / 旧数据的回落。
+    return matched.filter(
+      (session) =>
+        session.agent?.state !== 'closed' && !closedAgentSessions.has(session.session_id),
+    );
   }, [activeServerSearch, sortedSessions, debouncedQuery, showArchived, closedAgentSessions]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 查询变化时回到第一页

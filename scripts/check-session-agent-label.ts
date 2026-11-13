@@ -238,12 +238,35 @@ const FIXTURES: readonly Fixture[] = [
       readChatSource('SessionList.tsx').includes('className="session-agent session-agent-address"'),
   },
   {
+    name: 'F18 会话自带归属优先于 roster 反查（0.52 additive session.agent）',
+    why: '反查覆盖不到「旧身体 / 跨节点 / agent 已从 roster 消失」；会话自带归属是唯一不漏的一档，顺序破了就等于没加',
+    check: () => {
+      const list = readChatSource('SessionList.tsx');
+      const index = list.indexOf('const ownAgent = session.agent;');
+      return (
+        index > 0 &&
+        list.indexOf('const agentLabel =') > index &&
+        list.indexOf('const agentRetiredLabel =') > index &&
+        list.indexOf('const agentPrimaryBadge =') > index &&
+        list.includes("t('chat.sessionList.oldBody', { name: ownAgentName })") &&
+        // 现役主题色 / 已退役灰：颜色由 primary 决定，不许只靠 class 猜
+        list.includes('ownAgentLive')
+      );
+    },
+  },
+  {
+    name: 'F19 停用 agent 的会话按会话自带状态归档（不只靠 roster 反查）',
+    why: '旧 gateway / roster 拉不到时，反查是空的，归档就失效',
+    check: () => readChatSource('useChatSessions.ts').includes("session.agent?.state !== 'closed'"),
+  },
+  {
     name: 'F11 接线：SessionList 三级第二行 + 地址优先',
     why: '地址优先这条一破，team 成员的节点地址就会被名字@primary 顶掉',
     check: () =>
-      readChatSource('SessionList.tsx').includes(
-        'agentAddress ? undefined : agentLabels?.get(session.session_id)',
-      ),
+      // 0.52 起第二行的第一档仍然是节点地址（只有 roster 有 node:team），
+      // 「会话自带归属」和 roster 标签都必须让位给地址。
+      readChatSource('SessionList.tsx').includes('agentAddress || ownAgentName') &&
+      readChatSource('SessionList.tsx').includes('agentAddress || ownAgentTitle || agentLabel'),
   },
 ];
 

@@ -241,6 +241,22 @@ export const sessionInfoSchema = {
     // Additive (title_source): `manual` / `generated`；无标记（旧数据 / 未命名）时
     // 该 key 不出现。封闭联合，故这里能收窄成 enum。
     title_source: { type: 'string', enum: ['manual', 'generated'] },
+    // Additive (0.52, `agent`): 会话的**归属**。让「会话卡片第二行」不再靠前端拿 session id
+    // 去 agents / team members / body_history 三份名单反查 —— 那三份各有门槛（只认 primary
+    // body、只认 member、roster 拉不到就没有），反查不到就是一行空白。字段全部可选：
+    // 老 gateway 不返回 ⇒ 前端自动回落到反查；`primary=false` 表示这是已退役 body 的会话。
+    agent: {
+      type: 'object',
+      required: ['id', 'state', 'primary'],
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        /** 成员状态原值（`closed` = 已停用：会话默认归档，由「显示归档」开关决定是否列出）。 */
+        state: { type: 'string' },
+        presence: { type: 'string', enum: ['live', 'gone'] },
+        primary: { type: 'boolean' },
+      },
+    },
   },
 };
 

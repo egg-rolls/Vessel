@@ -11,6 +11,28 @@
 
 ## 已合入（现态）
 
+- **0.52 本日已合**：
+  - **「数字不该错」三件**：上下文估算接**真实用量锚点**（`ratio = prompt_tokens / 未校正估算`，
+    按会话持久化在 `SessionState.context_anchor`，`realTokens==0` 回 `round(estimate*ratio)`，
+    记录夹紧 0.5–3、越界丢弃、换 model 不校正；副作用是**压缩阈值提前**，已写进 context.md）；
+    上下文占用**单一真相源**（`src/context-ratio-source.ts` 订阅父事件流，分子 `context.changed.token_count`、
+    分母 `context.pressure.max`/`prompt.system_context.context_max`，`withLiveContextRatio` 原型委托只覆盖
+    端口，`percent` 统一 `Math.round`）；ask 答案**先归一再去重**（`planAskAnswers`：题号 → 正文 → header →
+    题序位置，已答一律 `skipped`，归不到的丢弃，记录里不存在没有题号的答案）。
+  - **ask 已答 = 立刻上锁**：提交动作发出即本端记「已答」（4s TTL 自愈）+ 载荷只交未落定行；
+    **浏览位跨刷新保留**（`askCursor.v1`，记题号不记下标）。
+  - **会话 ↔ agent 补成双向**（additive）：`sessions.list` 每项 / `sessions.get` 结果带
+    `agent: { id, name, state, presence, primary }`；`primary=false` = 已退役 body 的会话。
+    前端据此不再反查三份名单（`SessionList` 四级回退：节点地址 > 会话自带归属 > roster 反查 > primary 徽标），
+    旧 body 显示 `名字（旧身体）` 灰色、现役 `名字@primary` 主题色、归属到停用 agent 的会话默认归档。
+    老 gateway 缺字段 ⇒ 自动回落。
+  - **成员停用后 UI 不再假装在干活**：`agent.closed`（**只认它**，`retired`/`stale` 不是终态）与
+    会话快照终态都收口 run（共用 `RunFold.close` 的 flush，live 思考/正文落地成带 `endedAt` 的 item，
+    不冒充 completed；晚到 delta 不复活）。
+  - **卡片排版/配色**：环境信息卡「事实进缩略卡、展开只留证据」，标题主题色 + 类型正文色 + 值灰色；
+    工具卡不铺底色（与环境信息卡同底色，共享 token 未动）；会话卡片非 team 成员补 `名字@primary`。
+  - **主题以存储为准自愈**：视觉设置页采样暗色 token 的临时 `data-theme` 加 try/finally 还原；
+    `pageshow`/`visibilitychange`/`storage` 时按存储重放，`data-theme` 被改脏会自愈。
 - **0.51 已收口**（完整变更见 [0.51.0](0.51.0.md)）：
   - **归档 / 停用就是「等待被移除」**：`vessel prune` 判据从「时间」改成**状态**（归档 team 下的
     agent ∪ 停用 agent，连记录本身一并删；**未归档一律不删**）；`--older-than` 只作可选叠加
