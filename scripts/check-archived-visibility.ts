@@ -29,6 +29,7 @@ import {
   filterArchivedTeams,
   filterClosedAgents,
   filterClosedMembers,
+  hiddenPendingRemovalCount,
   isArchivedTeam,
   isClosedAgent,
   pendingRemovalBadgeKey,
@@ -278,6 +279,15 @@ const FIXTURES: readonly Fixture[] = [
     name: 'F15 归档数量口径：只在提示里说「隐藏了几个」',
     why: '计数必须来自未过滤的原始数据，否则提示永远显示 0',
     check: () => countArchivedTeams([live, archived]) === 1 && countArchivedTeams([live]) === 0,
+  },
+  {
+    name: 'F16 开关打开时「已隐藏 N 个」归零',
+    why: '打开开关后它们就在列表里；此时还报隐藏数就是谎报，而且「全都归档了」的空态会永远盖住列表',
+    check: () =>
+      hiddenPendingRemovalCount([live, archived], false, isArchivedTeam) === 1 &&
+      hiddenPendingRemovalCount([live, archived], true, isArchivedTeam) === 0 &&
+      hiddenPendingRemovalCount([member('m1', 'closed')], true, isClosedAgent) === 0 &&
+      hiddenPendingRemovalCount([member('m1', 'closed')], false, isClosedAgent) === 1,
   },
 ];
 

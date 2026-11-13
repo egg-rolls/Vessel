@@ -23,7 +23,11 @@ import {
 } from '../../gateway/team-roster';
 import type { TeamSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
-import { countClosedAgents, filterClosedAgents } from '../../state/archive-visibility';
+import {
+  filterClosedAgents,
+  hiddenPendingRemovalCount,
+  isClosedAgent,
+} from '../../state/archive-visibility';
 import { resourceData } from '../../state/useResource';
 import { useShowArchived } from '../../state/useShowArchived';
 import { useAgentStore } from '../../stores/agentStore';
@@ -141,7 +145,11 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
     () => filterClosedAgents(agents, showArchived),
     [agents, showArchived],
   );
-  const hiddenClosedAgents = useMemo(() => countClosedAgents(agents), [agents]);
+  // 打开开关时它们都在列表里，此时「已隐藏 N 个」必须归零（提示与空态都读这个值）。
+  const hiddenClosedAgents = useMemo(
+    () => hiddenPendingRemovalCount(agents, showArchived, (agent) => isClosedAgent(agent.member)),
+    [agents, showArchived],
+  );
   const options = useMemo(() => agentFilterOptions(visibleAgents), [visibleAgents]);
   const filtered = useMemo(
     () => filterAgentsByQuery(filterRosterAgents(visibleAgents, route), query),

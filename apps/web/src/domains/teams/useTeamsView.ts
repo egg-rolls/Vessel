@@ -18,7 +18,11 @@ import { nodeKeyOf } from '../../gateway/nodes';
 import type { NodeTeams } from '../../gateway/team-roster';
 import type { TeamSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
-import { countArchivedTeams, filterArchivedTeams } from '../../state/archive-visibility';
+import {
+  filterArchivedTeams,
+  hiddenPendingRemovalCount,
+  isArchivedTeam,
+} from '../../state/archive-visibility';
 import { useShowArchived } from '../../state/useShowArchived';
 import { useAgentStore } from '../../stores/agentStore';
 import { teamDetailKey, teamListData, useTeamStore } from '../../stores/teamStore';
@@ -193,10 +197,18 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
       ),
     [data, showArchived],
   );
-  /** 被开关挡掉的归档 Team 数（只在提示里说「隐藏了几个」，不冒充总数）。 */
+  /**
+   * 被开关挡掉的归档 Team 数（开关打开时恒 0）：提示语与「全都归档了」空态都读它，
+   * 否则打开开关后界面会一边列出卡片、一边宣称「已隐藏 N 个」。
+   */
   const hiddenArchivedTeams = useMemo(
-    () => countArchivedTeams(data.flatMap((item) => (item.ok ? item.teams : []))),
-    [data],
+    () =>
+      hiddenPendingRemovalCount(
+        data.flatMap((item) => (item.ok ? item.teams : [])),
+        showArchived,
+        isArchivedTeam,
+      ),
+    [data, showArchived],
   );
 
   /**

@@ -20,7 +20,11 @@ import { EmptyState, LoadingState } from '../../components/States';
 import { SearchInput } from '../../components/ui';
 import type { AskUserRequest, PermissionRequest, TeamMember } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
-import { countClosedMembers, filterClosedMembers } from '../../state/archive-visibility';
+import {
+  filterClosedMembers,
+  hiddenPendingRemovalCount,
+  isClosedAgent,
+} from '../../state/archive-visibility';
 import { useShowArchived } from '../../state/useShowArchived';
 import { shortAgentId } from './mention';
 import { roleLabelKey, roleOf } from './role';
@@ -85,7 +89,7 @@ export function TeamChatMembersAside({
    */
   const showArchived = useShowArchived();
   const visibleMembers = filterClosedMembers(members, showArchived);
-  const hiddenClosed = countClosedMembers(members);
+  const hiddenClosed = hiddenPendingRemovalCount(members, showArchived, isClosedAgent);
   const filtered = normalized
     ? visibleMembers.filter((member) => matchesMember(member, normalized))
     : visibleMembers;

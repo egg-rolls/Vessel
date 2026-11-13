@@ -64,6 +64,20 @@ export function countPendingRemoval<T>(
   return items.reduce((sum, item) => (isPending(item) ? sum + 1 : sum), 0);
 }
 
+/**
+ * 「被开关挡掉了几条」= 提示语与空态的计数口径。
+ *
+ * 打开开关时恒为 0：那时它们就在列表里，再报「已隐藏 N 个」是谎报，而「全都归档了」
+ * 的空态分支也会因此永远走不到（打开开关还是一片空）。
+ */
+export function hiddenPendingRemovalCount<T>(
+  items: readonly T[],
+  showArchived: boolean,
+  isPending: (item: T) => boolean,
+): number {
+  return showArchived ? 0 : countPendingRemoval(items, isPending);
+}
+
 /** 过滤已归档 Team（`showArchived` 打开时全留）。 */
 export function filterArchivedTeams<T extends { archived_at?: number }>(
   teams: readonly T[],
