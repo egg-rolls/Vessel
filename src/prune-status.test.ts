@@ -534,7 +534,7 @@ async function main(): Promise<void> {
     await broken.dispose();
   }
 
-  // ── 5. 命令口径：缺省 dry-run，data-lock 被占就整体拒绝、零删除 ──
+  // ── 9. 命令口径：缺省 dry-run，data-lock 被占就整体拒绝、零删除 ──
   const cli = await seedWorld();
   try {
     const env = { VESSEL_DATA_DIR: cli.root };
@@ -544,7 +544,7 @@ async function main(): Promise<void> {
       dry.exitCode === 0,
       `${String(dry.exitCode)} ${dry.stderr}`,
     );
-    check('⑤ 首行标明未删除', dry.stdout.includes('dry-run'), dry.stdout.slice(0, 60));
+    check('⑨ 首行标明未删除', dry.stdout.includes('dry-run'), dry.stdout.slice(0, 60));
     check(
       '⑤ 五类汇总都在',
       ['teams:', 'agents:', 'sessions:', 'runs:', 'trace:'].every((label) =>
@@ -552,7 +552,7 @@ async function main(): Promise<void> {
       ),
       dry.stdout,
     );
-    check('⑤ 没给 --yes 就一个都不删', await exists(sessionShell(cli, 's-arch')));
+    check('⑨ 没给 --yes 就一个都不删', await exists(sessionShell(cli, 's-arch')));
     check(
       '⑤ 没给 --yes 记录也没少',
       (await remainingAgents(cli)).length === ALL_AGENTS.length,
@@ -565,14 +565,14 @@ async function main(): Promise<void> {
       `${JSON.stringify({ pid: process.pid, started_at: NOW, host: hostname() })}\n`,
     );
     const blocked = await pruneCommand({ yes: true, env });
-    check('⑤ 锁被占：exit 1', blocked.exitCode === 1, String(blocked.exitCode));
+    check('⑨ 锁被占：exit 1', blocked.exitCode === 1, String(blocked.exitCode));
     check(
       '⑤ 锁被占：报 data_locked',
       blocked.stderr.includes('data_locked'),
       blocked.stderr.slice(0, 120),
     );
-    check('⑤ 锁被占：零删除（会话壳）', await exists(sessionShell(cli, 's-arch')));
-    check('⑤ 锁被占：零删除（team 目录）', await exists(teamDirPath(cli.root, TENANT, 't-arch')));
+    check('⑨ 锁被占：零删除（会话壳）', await exists(sessionShell(cli, 's-arch')));
+    check('⑨ 锁被占：零删除（team 目录）', await exists(teamDirPath(cli.root, TENANT, 't-arch')));
     check(
       '⑤ 锁被占：记录一个没少',
       (await remainingAgents(cli)).length === ALL_AGENTS.length,
