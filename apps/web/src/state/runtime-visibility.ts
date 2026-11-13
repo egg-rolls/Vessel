@@ -12,12 +12,17 @@
  * 与底层系统信息是同一份上下文的两种呈现，不再是「显示 / 隐藏」的二选一：
  * - `notice`：**默认可见**，渲染成环境信息卡（scope 色条 + 一行摘要 + 可展开的
  *   details，见 `domains/chat/env-notice.ts`）。开关不再管它——否则用户永远看不到
- *   模型真实的上下文（配置热应用 / 权限 / 工具 / MCP / 更新 / peer 通知都走这条）。
- * - 其余 kind（`source` 已被 A2A 卡吸收；`subscription` / `limit` / `compaction` /
- *   `other`）：仍跟随 `ui.showInternalEvents`，与改动前一致。理由：`limit` 是
- *   `agent.limit.warning` 的上下文副本（typed notice 已默认可见，再放一张卡就是同一
- *   事实的第二份）；`subscription` 是插件每轮可刷的文档变更摘要，没有 scope 语义；
- *   `compaction` 目前没有生产者（压缩走 `message.compaction` 投影），保持预留。
+ *   模型真实的上下文（配置热应用 / 权限 / 工具 / MCP / 更新 / peer 通知、订阅文件变更
+ *   都走这条）。
+ * - `subscription`：**历史 kind，0.52 起没有生产者**（doc-subscription 改为写
+ *   `vessel:notice` + scope `files`）。可见性**不变**：仍跟随 `ui.showInternalEvents`，
+ *   老消息按 `ENV_NOTICE_KIND` 之外的兜底路径渲成整段 notice —— 不特判成「文件变更」卡，
+ *   也不让它变成裸 JSON。词留着只为让老数据的种类名还可读（调试旧 trace 时仍能看到它
+ *   当初是什么）。
+ * - 其余 kind（`source` 已被 A2A 卡吸收；`limit` / `compaction` / `other`）：仍跟随
+ *   `ui.showInternalEvents`，与改动前一致。理由：`limit` 是 `agent.limit.warning` 的上下文
+ *   副本（typed notice 已默认可见，再放一张卡就是同一事实的第二份）；`compaction` 目前
+ *   没有生产者（压缩走 `message.compaction` 投影），保持预留。
  * - 底层原始事件行（`runtime.notice` 等）归 `internal` 档（`state/event-visibility.ts`
  *   的三档表）：开关打开时它们**额外**出现，身份是「事件」，与消息卡片互不重叠（一条
  *   消息一条卡，一条事件一行 raw），既不互相对打也不重复渲染同一条。
@@ -54,9 +59,10 @@ export function isRuntimeMessageKind(value: string): value is RuntimeMessageKind
  * 「环境信息」种类：默认以**卡片**出现，不跟随 `ui.showInternalEvents`。
  *
  * 词表与 `domains/chat/env-notice.ts` 的 `ENV_NOTICE_KIND` 是同一件事（那边是渲染侧
- * 解析 `vessel:notice` 的权威）。这里只放开一个 kind：`vessel:notice` 是模型上下文里
+ * 解析 `vessel:notice` 的权威）。这里只放开一个：`vessel:notice` 是模型上下文里
  * 唯一「给用户看的环境事实」——热应用结果（config / permission / tools / mcp /
- * update / peer）、inbox 条数提示、成员身份变更提示都写在这条消息里。
+ * update / peer）、inbox 条数提示、成员身份变更、订阅文件变更（scope `files`）都写在这条
+ * 消息里。老通道 `vessel:subscription` **不**在这里（历史消息仍跟随总开关，见头注释）。
  */
 export const ENV_MESSAGE_KINDS: readonly RuntimeMessageKind[] = ['notice'];
 
