@@ -713,6 +713,8 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 ts: { type: 'number' },
                 // 归属会话（0.53 additive）：缺省 = 老条目 / 非 input 投递 ⇒ 未知归属。
                 session_id: { type: 'string' },
+                // 发送者显示名（0.51 additive）：缺省 = 老条目 / 无本机成员名 ⇒ 前端退短 id。
+                from_name: { type: 'string' },
                 text: { type: 'string' },
               },
             },

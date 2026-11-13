@@ -56,12 +56,21 @@
  * **`refs`（附件引用，additive）**：只有路径与元信息，随 `input` 投递一并落盘，恢复重投
  * 时带上，附件不丢。旧文件缺该字段照常加载（按「无引用」降级）。
  *
+<<<<<<< HEAD
  * **`quiet` / `conversation_id`（0.51 队头直投，additive）**：idle 直投要从队列里把**队头
  * 那条的正文**原样当下一轮 run input 送，所以队列本身得记住两件此前只存在于内存投递侧的
  * 事实 —— 「这条是不是留档（quiet，永不当 run input）」与「它属于哪个 conversation」。
  * 不记的话，直投要么把 quiet 自述当成用户输入再执行一遍，要么丢掉会话归属（预算 /
  * 事件回放对不上）。两者都只在**首次 append** 时写：`quiet` 由该次投递模式派生，
  * `conversation_id` 由调用方传；后续升级成 input 投递不改写它们（模式不属于消息本体）。
+=======
+ * **`from_name`（发送者显示名，additive）**：入队那一刻发送方的名字是已知的
+ * （`AgentMessage.from_name`，由 `AgentService.admit` 从 registry 取），存下来是因为
+ * **读者在渲染时需要「谁」**：待处理条带的身份行只有 `from`（地址）时只能显示一串
+ * UUID，读不出来。它只用于展示，不参与任何投递 / 权限 / 归属判定 —— 所以缺字段照常
+ * 加载（旧条目按「没有名字」退化），也不回填、不做迁移：没有名字是**可接受的状态**，
+ * 不是需要修复的损坏。
+>>>>>>> 0.51-pending-sender
  *
  * @module @vessel-agent/agent
  */
@@ -132,6 +141,7 @@ export interface StoredInboxMessage {
   /** 附件引用：只有路径 + 元信息，恢复重投时原样带回（不丢附件）。 */
   refs?: MessageRef[];
   /**
+<<<<<<< HEAD
    * true：这条是 **quiet 投递**（只留档，永不当 run input）。0.51 起随条目落盘，因为
    * idle 直投要按队列取正文 —— 没有这个位，模型 `insert` 的自述 / 投递失败的留档
    * 会被当成用户输入再执行一遍（quiet 的语义正是「不要执行」）。
@@ -142,6 +152,14 @@ export interface StoredInboxMessage {
    * 都会新开一个 conversation（预算记账与事件回放对不上）。
    */
   conversation_id?: string;
+=======
+   * 发送者显示名（additive，0.51）：入队时已知的 `AgentMessage.from_name`。
+   *
+   * 只给展示用（条带身份行），不参与投递判定。缺省 = 老条目 / 发送方没有本机成员名
+   * （人类 / 系统 / 联邦地址）⇒ 渲染侧退化成短 id。
+   */
+  from_name?: string;
+>>>>>>> 0.51-pending-sender
 }
 
 export interface AgentInboxEntryInput {
@@ -153,8 +171,18 @@ export interface AgentInboxEntryInput {
   session_id?: string;
   /** 附件引用（可缺省）；写入前按 `normalizeRefs` 再归一一次。 */
   refs?: MessageRef[];
+<<<<<<< HEAD
   /** 会话归属（conversation_id）；idle 直投据此把这条送进它原本的会话。 */
   conversation_id?: string;
+=======
+  /**
+   * 发送者显示名（可缺省，additive 0.51）：入队时发送方已知的 `from_name`。
+   *
+   * 只有 `admit` 那条路知道它（`AgentService.trackInbox` 从消息原样带过来）；不带 =
+   * 没有名字（人类 / 系统 / 联邦地址 / 老调用方），条带渲染时退化成短 id。
+   */
+  from_name?: string;
+>>>>>>> 0.51-pending-sender
 }
 
 export interface AgentInboxListEntry {
@@ -166,6 +194,13 @@ export interface AgentInboxListEntry {
   held: boolean;
   /** 归属会话（只读视图透传，条带 / 恢复据此按会话定位）；缺省 = 归属未知。 */
   session_id?: string;
+  /**
+   * 发送者显示名（只读透传，additive 0.51）：缺省 = 老条目 / 发送方没有本机成员名。
+   *
+   * 条带的身份行靠它把 `agent:<name>` 读成人能认的名字；缺省时那条带退回短 id
+   * （8 位 + `…`），**绝不把完整 UUID 摆到卡头**。
+   */
+  from_name?: string;
 }
 
 export interface AgentInboxReadSelection {
@@ -266,7 +301,8 @@ export interface AgentInboxPort {
    * `hold` 并提交成 run input；`wake` / `quiet` 只落盘，等被唤醒的 agent 自己 read。
    *
    * `message.session_id` 是**归属会话**，只有 `input` 投递该传（见模块头的分界）；
-   * `message.refs` 是附件引用，随条目落盘以便恢复重投时带上。
+   * `message.refs` 是附件引用，随条目落盘以便恢复重投时带上；`message.from_name` 是
+   * 发送者显示名（只给条带身份行看，缺省 = 没有名字）。
    *
    * 写前日志语义：append 先于 scheduler 接管，所以被接管但尚未成为 run input 的消息
    * 一定在库里；`consumed_by_session` 只在 `markConsumed` 时写。
@@ -414,14 +450,27 @@ function summaryOf(text: string): string {
     : collapsed;
 }
 
+/**
+ * 显示名归一：空串 / 只有空白 / 非字符串一律当「没有名字」（旧条目与手改文件都走这一条）。
+ *
+ * 与 `summary` 的差别：这里**不做截断** —— 名字来自 registry（成员名已在创建时约束），
+ * 截断会让「显示名」与 roster 里的名字对不上，反而更难认。
+ */
+function senderNameOf(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
- * 加载放宽：`summary` 可缺失（从 text 派生）；0.53 新增的 `session_id` / `refs` 也可缺失
- * （缺失 = 归属未知 / 无引用，老文件照常加载）。其余字段严格；任何类型不符都按损坏处理
- * （不覆盖、不做半新半旧的内存）。未知字段（如旧版 `important`）忽略。
+ * 加载放宽：`summary` 可缺失（从 text 派生）；0.53 新增的 `session_id` / `refs` 与 0.51 的
+ * `from_name` 也可缺失（缺失 = 归属未知 / 无引用 / 无显示名，老文件照常加载）。其余字段
+ * 严格；任何类型不符都按损坏处理（不覆盖、不做半新半旧的内存）。未知字段（如旧版
+ * `important`）忽略。
  */
 function isStoredInboxMessage(value: unknown): value is StoredInboxMessage {
   if (!isRecord(value)) return false;
@@ -435,11 +484,16 @@ function isStoredInboxMessage(value: unknown): value is StoredInboxMessage {
   }
   // additive：缺省合法，存在则必须是 string（与其它字段同口径：类型不符按损坏处理）。
   if (value.session_id !== undefined && typeof value.session_id !== 'string') return false;
+<<<<<<< HEAD
   if (value.conversation_id !== undefined && typeof value.conversation_id !== 'string') {
     return false;
   }
   // `quiet` 只有 true 一种写值（缺省 = 不是留档条目）；写成 false 属于手改跑偏。
   if (value.quiet !== undefined && value.quiet !== true) return false;
+=======
+  // 显示名同理 additive：老文件没有它照常加载，有它就必须是字符串（不猜类型）。
+  if (value.from_name !== undefined && typeof value.from_name !== 'string') return false;
+>>>>>>> 0.51-pending-sender
   // refs 只校验「是数组」，条目形状在 cloneMessage 里过 `normalizeRefs`（逐条丢弃坏条目，
   // 不因为一条坏引用把整个收件箱判成损坏）。
   if (value.refs !== undefined && !Array.isArray(value.refs)) return false;
@@ -458,6 +512,8 @@ function isInboxFile(value: unknown): value is InboxFile {
 function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
   // refs 逐条归一（写入侧已经归一过；这层只防手改文件带进半成品形状）。
   const refs = message.refs === undefined ? [] : normalizeRefs(message.refs);
+  // 显示名同样归一一次：手改文件里的空串 / 纯空白不该变成「有名字但是空的」。
+  const fromName = senderNameOf(message.from_name);
   return {
     id: message.id,
     ts: message.ts,
@@ -469,8 +525,12 @@ function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
       ? { consumed_by_session: message.consumed_by_session }
       : {}),
     ...(message.session_id !== undefined ? { session_id: message.session_id } : {}),
+<<<<<<< HEAD
     ...(message.conversation_id !== undefined ? { conversation_id: message.conversation_id } : {}),
     ...(message.quiet === true ? { quiet: true as const } : {}),
+=======
+    ...(fromName !== undefined ? { from_name: fromName } : {}),
+>>>>>>> 0.51-pending-sender
     ...(refs.length > 0 ? { refs } : {}),
   };
 }
@@ -540,6 +600,9 @@ export class AgentInboxStore implements AgentInboxPort {
     }
     const sessionId = message.session_id;
     const refs = message.refs === undefined ? [] : normalizeRefs(message.refs);
+    // 显示名只有展示用途：空串 / 纯空白按「没有名字」落盘（缺字段，不是空字符串），
+    // 这样渲染侧只需要看「有没有」这一个判据。
+    const fromName = senderNameOf(message.from_name);
     state.messages.push({
       id: message.id,
       ts: message.ts,
@@ -548,12 +611,16 @@ export class AgentInboxStore implements AgentInboxPort {
       text: message.text,
       status: 'unread',
       ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+<<<<<<< HEAD
       ...(message.conversation_id !== undefined
         ? { conversation_id: message.conversation_id }
         : {}),
       // quiet 由**本次投递模式**派生（不另开参数）：它落盘后只有一个含义
       // 「这条永不作为 run input」，idle 直投据此跳过它。
       ...(delivery === 'quiet' ? { quiet: true as const } : {}),
+=======
+      ...(fromName !== undefined ? { from_name: fromName } : {}),
+>>>>>>> 0.51-pending-sender
       ...(refs.length > 0 ? { refs } : {}),
     });
     this.prune(state);
@@ -597,6 +664,8 @@ export class AgentInboxStore implements AgentInboxPort {
       held: state.held.has(message.id),
       // 归属只读透传：条带按会话过滤、启动恢复按会话重投都要它。
       ...(message.session_id !== undefined ? { session_id: message.session_id } : {}),
+      // 显示名同属只读透传：条带身份行据此显示 `agent:<name>` 而不是一串 UUID。
+      ...(message.from_name !== undefined ? { from_name: message.from_name } : {}),
     }));
     return { ...this.counts(state), messages };
   }

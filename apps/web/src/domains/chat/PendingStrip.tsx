@@ -61,38 +61,37 @@ import type {
 import { t } from '../../i18n';
 import { errorMessage } from './errors';
 import {
+  groupSenderName,
+  HUMAN_SOURCE,
   ownedBySession,
   type PendingStripEntry,
   type PendingStripGroup,
+  pendingIdentityOf,
   pendingStripView,
 } from './pending-strip';
 import { QueuedNotice, type QueuedSubmission } from './StreamItems';
 
 /**
- * human 源的值（服务端 inbox 条目里 `source` 就是发送者 principal）。
- *
- * 只用于**能不能写**的判定（`agents.recall` 对 human 才是真删，其它源是 unhold 留档）；
- * 展示不再按来源过滤 —— agent 源的条目同样上条带。
- */
-const HUMAN_SOURCE = 'human';
-
-/**
  * 身份显示在哪：**卡内、卡头「等待中」胶囊之后**（`QueuedNotice` 的 `identity` → 卡头
  * `meta` 槽）。以前是卡外左侧一个标签，用户裁决要「身份放在卡片内部、等待中的后面」。
  *
- * `from` → 卡头显示的身份名：
- * - `human` ⇒ i18n 的 `chat.pending.identity.human`（值就是 `human`）；
- * - 其它（agent 源）⇒ **原始 id**（`agent:<alias>` 这类 principal 串，服务端就是这么存的）。
- *   要展示成昵称得另读 `agents.list` / roster（每条带子多一路 RPC 与依赖），本轮不为它
- *   加一次读 —— 原始 id 至少是「谁」的权威答案，不编名字。
- * - 空串（理论上不会发生）⇒ 不给身份，卡头回到「胶囊 + 摘要」两段。
+ * 三种身份由 `pending-strip.ts` 的 `pendingIdentityOf` 定（纯函数，门禁探针直接断言）：
+ * - `human` ⇒ i18n 的 `chat.pending.identity.human`；
+ * - 有 `from_name` ⇒ `agent:<name>`（与 AgentMessageCard / A2A 卡片同形）；
+ * - 没有 `from_name` ⇒ **短 id**（8 位 + `…`）—— 绝不再把完整 UUID 摆到卡头。
+ * - 空 `from` ⇒ 不给身份，卡头回到「胶囊 + 摘要」两段。
  *
- * 冒号由 `QueuedNotice` 补（卡面统一 `<身份>: <说的话>`），这里只给纯名字。
+ * 这里只补两处本层才知道的东西：i18n 的人类文案、以及**同源折叠组的兜底显示名**
+ * （`fallbackName`：组头恰好是没名字的老条目时，用组里同名发送者的名字，不让组头退回短 id）。
+ *
+ * 冒号由 `QueuedNotice` 补（卡面统一 `<身份>: <说的话>`），这里只给纯身份。
  */
-function identityOf(from: string): string | undefined {
-  if (from === HUMAN_SOURCE) return t('chat.pending.identity.human');
-  const trimmed = from.trim();
-  return trimmed.length === 0 ? undefined : trimmed;
+function identityOf(entry: PendingStripEntry, fallbackName?: string): string | undefined {
+  return pendingIdentityOf(entry, {
+    humanLabel: t('chat.pending.identity.human'),
+    agentLabel: (name) => t('chat.pending.identity.agent', { name }),
+    ...(fallbackName !== undefined ? { fallbackName } : {}),
+  });
 }
 
 /** 取数前的去抖：`agent.message.queued` 先于 run 开跑到达，空闲会话里那条毫秒级就被消费。 */
@@ -116,6 +115,8 @@ function toEntry(entry: AgentInboxEntry): PendingStripEntry {
     summary: entry.summary,
     status: entry.status,
     ts: entry.ts,
+    // 身份行要读名字：服务端在入队时存下的发送者显示名，原样带到条带上。
+    ...(entry.from_name !== undefined ? { from_name: entry.from_name } : {}),
   };
 }
 
@@ -527,11 +528,14 @@ export function PendingStrip({
               const fold = folded
                 ? { count: group.entries.length, open, onToggle: () => toggleGroup(group.key) }
                 : undefined;
+              // 组内条目同源（`from` 相同），所以显示名只需算一次：组里任一条有名字，
+              // 组头与展开后的每一条都用它 —— 同一张卡的不同行不该出现两种身份写法。
+              const senderName = groupSenderName(group);
               return (
                 <li key={group.key} className="flex flex-col gap-1.5">
                   <PendingRow
                     item={head.item}
-                    identity={identityOf(head.entry.from)}
+                    identity={identityOf(head.entry, senderName)}
                     human={head.entry.from === HUMAN_SOURCE}
                     onCancel={cancelRow}
                     onEdit={editRow}
@@ -545,7 +549,7 @@ export function PendingStrip({
                         <li key={row.entry.message_id}>
                           <PendingRow
                             item={row.item}
-                            identity={identityOf(row.entry.from)}
+                            identity={identityOf(row.entry, senderName)}
                             human={row.entry.from === HUMAN_SOURCE}
                             onCancel={cancelRow}
                             onEdit={editRow}

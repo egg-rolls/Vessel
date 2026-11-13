@@ -140,6 +140,13 @@ export interface AgentInboxEntry {
    * 缺省 = 归属未知（老条目 / wake·quiet 投递）⇒ 条带一律不显示，宁可隐藏也不串台。
    */
   session_id?: string;
+  /**
+   * 发送者显示名（0.51 additive）：条带身份行据此显示 `agent:<name>`。
+   *
+   * 缺省 = 老条目 / 发送方没有本机成员名（人类 / 系统 / 联邦地址）⇒ 身份行退化成短 id
+   * （8 位 + `…`），**绝不再把完整 UUID 摆到卡头**。
+   */
+  from_name?: string;
   /** 仅当请求带 `message_ids` 且命中时存在（peek 正文，不改状态）。 */
   text?: string;
 }

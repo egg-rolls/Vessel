@@ -10,8 +10,17 @@
  * 退出码：0 = 全过；1 = 有 FAIL。
  */
 
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ASK_ANSWER_MESSAGE_NAME } from '../apps/web/src/domains/chat/ask-answer';
-import { ownedBySession, pendingStripView } from '../apps/web/src/domains/chat/pending-strip';
+import {
+  groupSenderName,
+  ownedBySession,
+  pendingIdentityOf,
+  pendingStripView,
+  shortSenderId,
+} from '../apps/web/src/domains/chat/pending-strip';
 import { ROTATE_HANDOFF_MESSAGE_NAME } from '../apps/web/src/domains/chat/rotate-handoff';
 import {
   buildHistoryIndex,
@@ -23,7 +32,9 @@ import {
 } from '../apps/web/src/domains/chat/transcript-items';
 import type { RunEvent } from '../apps/web/src/gateway/types';
 import type { Message } from '../apps/web/src/gateway/types/sessions';
+import { t } from '../apps/web/src/i18n';
 import type { RunGroup, TimelineItem } from '../apps/web/src/state/events';
+import { AgentInboxStore, inboxPath } from '../packages/agent/src/inbox';
 import { ASK_ANSWER_INPUT_NAME } from '../packages/agent/src/runtime';
 import { ROTATE_HANDOFF_INPUT_NAME } from '../packages/agent/src/service';
 
@@ -99,7 +110,8 @@ function count(items: readonly TranscriptItem[], kind: TranscriptItem['kind']): 
 interface Fixture {
   name: string;
   why: string;
-  check: () => boolean;
+  /** `Promise<boolean>` 只给需要真落盘的用例（inbox 写链是异步的），其余仍是同步布尔。 */
+  check: () => boolean | Promise<boolean>;
 }
 
 const FIXTURES: readonly Fixture[] = [
@@ -1600,17 +1612,182 @@ const FIXTURES: readonly Fixture[] = [
       );
     },
   },
+  {
+    name: 'F30 条带身份三种渲染字符串：human / agent:<name> / 无 from_name 退短 id（空 from 不渲染）',
+    why: 'agent 源以前直接把 from（完整 UUID）摆到卡头，读不出来。身份只能是这三种之一：人类文案、agent:<名字>、短 id —— 完整 UUID 与「什么都不显示」都不允许',
+    check: () => {
+      const uuid = '97aa4618-31f9-4c0a-9f8f-36bb4f48ce2a';
+      const humanLabel = t('chat.pending.identity.human');
+      const options = {
+        humanLabel,
+        agentLabel: (name: string) => t('chat.pending.identity.agent', { name }),
+      };
+      const human = pendingIdentityOf({ from: 'human' }, options);
+      const named = pendingIdentityOf({ from: uuid, from_name: 'main' }, options);
+      const unnamed = pendingIdentityOf({ from: uuid }, options);
+      const blankName = pendingIdentityOf({ from: uuid, from_name: '   ' }, options);
+      const emptyFrom = pendingIdentityOf({ from: '' }, options);
+      // 三种身份就是这三串（另加两个退化分支：空白名字 = 没有名字；空 from = 不给身份）。
+      return (
+        human === 'human' &&
+        named === 'agent:main' &&
+        unnamed === shortSenderId(uuid) &&
+        unnamed === '97aa4618…' &&
+        !unnamed.includes(uuid) &&
+        blankName === unnamed &&
+        emptyFrom === undefined
+      );
+    },
+  },
+  {
+    name: 'F31 同源折叠组的组头身份可读：同一发送者多条仍并成一组，组头不回退成 UUID',
+    why: '组头只取一条的 from / from_name；组头恰好是加字段之前落盘的老条目时，若不用组内同名条目的名字兜底，明明同一个发送者的组头就会退回短 id（旧行为是整串 UUID）',
+    check: () => {
+      const uuid = '97aa4618-31f9-4c0a-9f8f-36bb4f48ce2a';
+      const view = pendingStripView([
+        // 老条目：加 from_name 之前落盘的，排在最前，所以它会成为组头。
+        { message_id: 'a1', from: uuid, summary: '跑一遍门禁', status: 'held', ts: 100 },
+        {
+          message_id: 'a2',
+          from: uuid,
+          from_name: 'main',
+          summary: '跑一遍门禁并贴日志',
+          status: 'held',
+          ts: 200,
+        },
+        {
+          message_id: 'a3',
+          from: uuid,
+          from_name: 'main',
+          summary: '跑一遍门禁并贴日志并等我',
+          status: 'held',
+          ts: 300,
+        },
+      ]);
+      const group = view.preview[0];
+      if (group === undefined) return false;
+      const humanLabel = t('chat.pending.identity.human');
+      const headIdentity = pendingIdentityOf(group.head, {
+        humanLabel,
+        agentLabel: (name: string) => t('chat.pending.identity.agent', { name }),
+        ...(groupSenderName(group) !== undefined
+          ? { fallbackName: groupSenderName(group) as string }
+          : {}),
+      });
+      return (
+        view.total === 3 &&
+        view.preview.length === 1 &&
+        group.entries.length === 3 &&
+        group.head.message_id === 'a1' &&
+        groupSenderName(group) === 'main' &&
+        headIdentity === 'agent:main'
+      );
+    },
+  },
+  {
+    name: 'F32 旧数据（无 from_name）不崩、不变裸 UUID：整组都没有名字时退成短 id',
+    why: '老条目没有显示名字段，绝不能因此抛错、也不能退回「原始 UUID」那条老路；同一来源的组内一条名字都没有时，「同一个可读身份」就是同一个短 id',
+    check: () => {
+      const uuid = '97aa4618-31f9-4c0a-9f8f-36bb4f48ce2a';
+      const view = pendingStripView([
+        { message_id: 'l1', from: uuid, summary: '旧的一条', status: 'unread', ts: 100 },
+        { message_id: 'l2', from: uuid, summary: '旧的一条也要跑', status: 'unread', ts: 200 },
+      ]);
+      const group = view.preview[0];
+      if (group === undefined) return false;
+      const identity = pendingIdentityOf(group.head, {
+        humanLabel: t('chat.pending.identity.human'),
+        ...(groupSenderName(group) !== undefined ? { fallbackName: groupSenderName(group) } : {}),
+      });
+      // 字面钉住：短 id 是 8 位 + `…`，不带 `-`（UUID 的破折号一旦出现就是又退回去了）。
+      return (
+        groupSenderName(group) === undefined &&
+        identity === '97aa4618…' &&
+        identity.length === 9 &&
+        !identity.includes('-') &&
+        !identity.includes(uuid)
+      );
+    },
+  },
+  {
+    name: 'F33 inbox 落盘发送者显示名（additive）：入队带 from_name ⇒ 落盘并被 list 透出；旧文件缺字段照常加载',
+    why: '条带读的是服务端持久真相（agents.inbox），显示名不在入队时落盘就永远读不回来；而旧收件箱文件（没有该字段）必须照常加载，不能因为加了一个展示字段就判成损坏',
+    check: async () => {
+      const uuid = '97aa4618-31f9-4c0a-9f8f-36bb4f48ce2a';
+      const dataDir = mkdtempSync(join(tmpdir(), 'vessel-pending-sender-'));
+      const store = new AgentInboxStore({ dataDir, tenantId: 't1' });
+      store.append(
+        'agent-a',
+        {
+          id: 'm1',
+          ts: 1,
+          source: uuid,
+          text: '跑一遍门禁',
+          session_id: 's1',
+          from_name: 'main',
+        },
+        { delivery: 'input' },
+      );
+      // 空白名字按「没有名字」落盘（缺字段，不是空串）。
+      store.append(
+        'agent-a',
+        {
+          id: 'm2',
+          ts: 2,
+          source: uuid,
+          text: '没有名字的那条',
+          session_id: 's1',
+          from_name: '   ',
+        },
+        { delivery: 'input' },
+      );
+      await store.flush();
+      // 换一个实例从磁盘重读：字段真的写下去了，不是只在内存里。
+      const reread = new AgentInboxStore({ dataDir, tenantId: 't1' }).list('agent-a', {
+        includeHeld: true,
+      });
+      const named = reread.messages.find((entry) => entry.id === 'm1');
+      const blank = reread.messages.find((entry) => entry.id === 'm2');
+      // 旧收件箱文件：手写、没有 from_name（0.51 之前落盘的样子）。
+      const legacyDir = mkdtempSync(join(tmpdir(), 'vessel-pending-sender-legacy-'));
+      const legacyPath = inboxPath(legacyDir, 't1', 'agent-b');
+      mkdirSync(join(legacyDir, 'inbox'), { recursive: true });
+      writeFileSync(
+        legacyPath,
+        JSON.stringify({
+          v: 1,
+          messages: [
+            { id: 'old', ts: 3, source: uuid, summary: '旧条目', text: '旧条目', status: 'unread' },
+          ],
+        }),
+      );
+      const legacy = new AgentInboxStore({ dataDir: legacyDir, tenantId: 't1' }).list('agent-b', {
+        includeHeld: true,
+      }).messages;
+      const legacyEntry = legacy[0];
+      return (
+        named?.from_name === 'main' &&
+        named.source === uuid &&
+        blank !== undefined &&
+        blank.from_name === undefined &&
+        legacy.length === 1 &&
+        legacyEntry?.summary === '旧条目' &&
+        legacyEntry.from_name === undefined &&
+        legacyEntry.id === 'old'
+      );
+    },
+  },
 ];
 
 const failures: { name: string; why: string }[] = [];
 for (const fixture of FIXTURES) {
   let ok = false;
   try {
-    ok = fixture.check();
+    ok = await fixture.check();
   } catch {
     ok = false;
   }
-  if (!ok) failures.push({ name: fixture.name, why: fixture.why });
+  if (!ok) failures.push(fixture);
 }
 
 if (failures.length > 0) {
