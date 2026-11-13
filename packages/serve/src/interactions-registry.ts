@@ -80,6 +80,14 @@ export interface AskRespondResult {
   answered_via?: 'tui' | 'rpc' | 'cli' | 'policy';
   latency_ms?: number;
   team_id?: string;
+  /** 这次真正写进去的题 id（additive：分批提交时只含本批）。 */
+  answered_questions?: string[];
+  /** 仍未答的题 id（additive；空 = 这条请求已收口，卡片该消失了）。 */
+  remaining_questions?: string[];
+  /** 已答过、本次被跳过的题 id（additive；幂等重复提交会全在这里）。 */
+  skipped_questions?: string[];
+  /** 这条请求是不是已经全部答完（additive；缺省 = 不知道 / 旧服务端）。 */
+  final?: boolean;
 }
 
 /** 待答 ask 请求（legacy 只读视图，由 interactionRecords 派生）。 */
@@ -205,6 +213,193 @@ function readAnsweredBy(value: unknown): 'human' | 'policy' | undefined {
   return value === 'human' || value === 'policy' ? value : undefined;
 }
 
+// ── 逐题（问题是一等公民） ────────────────────────────
+
+/** 一条请求里的一道题（题 id + 用来给旧答案兜底匹配的两个文本键）。 */
+interface AskQuestionSlot {
+  id: string;
+  question?: string;
+  header?: string;
+}
+
+/**
+ * 题 id 的**唯一**推导规则：`q1` / `q2` / …（与工具写侧的 `questionIdOfIndex` 同值）。
+ *
+ * 旧请求（事件里的 `questions[]` 没有 id）与会话里既有的历史记录都靠这一条算回来，
+ * 所以「已答 / 未答」对老数据同样成立，不需要迁移。
+ */
+export function questionIdOfIndex(index: number): string {
+  return `q${index + 1}`;
+}
+
+/** 把 `input`（= 事件的 `questions`）摊成题槽；不是数组就当作「没有可枚举的题」。 */
+function askQuestionSlots(input: unknown): AskQuestionSlot[] {
+  if (!Array.isArray(input)) return [];
+  return input.map((item, index) => {
+    const record = isRecord(item) ? item : {};
+    const explicit = nonEmptyString(record.id);
+    const question = nonEmptyString(record.question);
+    const header = nonEmptyString(record.header);
+    return {
+      id: explicit ?? questionIdOfIndex(index),
+      ...(question !== undefined ? { question } : {}),
+      ...(header !== undefined ? { header } : {}),
+    };
+  });
+}
+
+/**
+ * 一条答案对应哪道题。
+ *
+ * 顺序（每步都只看**还没被本次占用**的题，避免两条答案抢同一题）：
+ * 1. `question_id`（新客户端 / 新历史，唯一可靠的一步）；
+ * 2. `question` 正文全等（旧客户端带了正文，最常见）；
+ * 3. `header` 全等（正文被 UI 改写时的兜底）；
+ * 4. 第一道没被占用的题（旧客户端一次答完 N 题、按题序发来 —— 位置就是答案）；
+ * 5. 都没有 ⇒ undefined（对不上题的答案原样收下，不参与逐题状态）。
+ */
+function matchQuestionId(
+  answer: unknown,
+  slots: readonly AskQuestionSlot[],
+  taken: ReadonlySet<string>,
+): string | undefined {
+  const identified = identifyQuestion(answer, slots);
+  if (identified !== undefined) return taken.has(identified) ? undefined : identified;
+  const free = slots.filter((slot) => !taken.has(slot.id));
+  // 位置兜底：旧客户端一次答完 N 题、按题序发来，位置就是答案。
+  return free[0]?.id;
+}
+
+/**
+ * 只按答案自带的身份键认题（不看位置）：`question_id` → `question` 正文 → `header`。
+ *
+ * 与 {@link matchQuestionId} 分开的理由：判断「这行是不是重复」时不能有位置兜底 ——
+ * 一份重复提交的三行答案会被位置兜底全部认成第 1 题，于是 skipped 里出现三个 `q1`。
+ */
+function identifyQuestion(
+  answer: unknown,
+  slots: readonly AskQuestionSlot[],
+): string | undefined {
+  const record = isRecord(answer) ? answer : {};
+  const explicit = nonEmptyString(record.question_id);
+  if (explicit !== undefined && slots.some((slot) => slot.id === explicit)) return explicit;
+  const question = nonEmptyString(record.question);
+  if (question !== undefined) {
+    const hit = slots.find((slot) => slot.question === question);
+    if (hit !== undefined) return hit.id;
+  }
+  const header = nonEmptyString(record.header);
+  if (header !== undefined) {
+    const hit = slots.find((slot) => slot.header === header);
+    if (hit !== undefined) return hit.id;
+  }
+  return undefined;
+}
+
+/** 一批提交的逐题计划（纯函数：不碰记录、不落盘，好被测试直接钉）。 */
+export interface AskAnswerPlan {
+  /** 本批真正新写入的答案（已补上 `question_id`）。 */
+  fresh: unknown[];
+  /** 已答过、本次被跳过的题 id（幂等，不覆盖）。 */
+  skipped: string[];
+  /** 合并后已答的题 id（旧 + 本批）。 */
+  answered: string[];
+  /** 仍未答的题 id。 */
+  remaining: string[];
+  /** 整条请求是否已全部答完。 */
+  final: boolean;
+}
+
+/**
+ * 把一批答案规划到「题」上。
+ *
+ * 三条不变量：
+ * - **未答的题不会因为别人被答而被带走**：`answered` 只加不减，`remaining` 只减不增；
+ * - **同一题不得被答两次**：已答过的题进 `skipped`，不覆盖、不重投；
+ * - **没有可枚举的题**（`input` 不是数组 / 空数组）时退回旧语义：本批答案全部算数，
+ *   整条请求当场收口 —— 历史记录与异常形状都走这条，行为与分批之前一致。
+ */
+export function planAskAnswers(
+  record: StoredInteraction,
+  answers: readonly unknown[],
+): AskAnswerPlan {
+  const slots = askQuestionSlots(record.input);
+  const answeredBefore = record.answered_questions ?? [];
+  const taken = new Set(answeredBefore);
+  const fresh: unknown[] = [];
+  const skipped: string[] = [];
+
+  for (const answer of answers) {
+    if (slots.length === 0) {
+      fresh.push(answer);
+      continue;
+    }
+    const explicit = isRecord(answer) ? nonEmptyString(answer.question_id) : undefined;
+    // 自报题号且这题已答过：这就是重复提交，直接抄进 skipped（不要再猜别的题）。
+    if (explicit !== undefined && taken.has(explicit)) {
+      skipped.push(explicit);
+      continue;
+    }
+    if (slots.every((slot) => taken.has(slot.id))) {
+      // 题已全被答过：任何还来的一行只能是重复（或对不上题的尾巴）。
+      // 绝不追加成「新答案」—— 那会让一次双击把整条请求再投一遍。
+      const id = explicit ?? identifyQuestion(answer, slots);
+      if (id !== undefined) skipped.push(id);
+      continue;
+    }
+    const questionId = matchQuestionId(answer, slots, taken);
+    if (questionId === undefined) {
+      fresh.push(answer);
+      continue;
+    }
+    taken.add(questionId);
+    fresh.push(isRecord(answer) ? { ...answer, question_id: questionId } : answer);
+  }
+
+  const answered = slots.map((slot) => slot.id).filter((id) => taken.has(id));
+  const remaining = slots.map((slot) => slot.id).filter((id) => !taken.has(id));
+  return {
+    fresh,
+    skipped: [...new Set(skipped)],
+    answered,
+    remaining,
+    final: slots.length === 0 ? true : remaining.length === 0,
+  };
+}
+
+/** `q3` → 3（题号）；不是这个形状（旧答案 / 手写值）→ undefined。 */
+function questionIndexOfId(questionId: string | undefined): number | undefined {
+  if (questionId === undefined) return undefined;
+  const match = /^q(\d+)$/.exec(questionId);
+  if (match === null) return undefined;
+  const parsed = Number(match[1]);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * 累计答案按**题序**排：分批到达的答案在记录里保持「第 1、2、3 题」的顺序，
+ * 与到达先后无关（答复卡 / resume 注入 / 模型文本都按这个顺序读）。
+ *
+ * 认不出题号的答案（旧记录 / 手写）排在最后并保持它们自己的相对顺序 —— 绝不重排
+ * 老数据，否则「读旧记录」会和分批之前长得不一样。
+ */
+function sortAnswersByQuestion(answers: readonly unknown[]): unknown[] {
+  const decorated = answers.map((answer, index) => ({
+    answer,
+    index,
+    order: isRecord(answer) ? questionIndexOfId(nonEmptyString(answer.question_id)) : undefined,
+  }));
+  decorated.sort((left, right) => {
+    if (left.order !== undefined && right.order !== undefined && left.order !== right.order) {
+      return left.order - right.order;
+    }
+    if (left.order !== undefined && right.order === undefined) return -1;
+    if (left.order === undefined && right.order !== undefined) return 1;
+    return left.index - right.index;
+  });
+  return decorated.map((item) => item.answer);
+}
+
 /** 创建交互注册表。 */
 export function createInteractionsRegistry(
   options: InteractionsRegistryOptions,
@@ -274,10 +469,15 @@ export function createInteractionsRegistry(
       // 0.33：headless 挂起的 ask（suspended）即使重启后也要保持 pending，
       // 否则人类永远答不了、--resume-run 也拿不到答案。
       // 0.52：async ask 同理 —— 它的 run 早就在工具返回后正常结束了，请求仍然有效。
+      // 分批：**部分已答**的 ask 也一样 —— 已答的题不许随着重启被孤儿化，
+      // 否则「剩下那 1 题」从此再也答不了。
       const keepPending =
         loaded.status === 'pending' &&
         (pendingStatus === 'pending' ||
-          (loaded.kind === 'ask' && (loaded.suspended === true || loaded.mode === 'async')));
+          (loaded.kind === 'ask' &&
+            (loaded.suspended === true ||
+              loaded.mode === 'async' ||
+              (loaded.answered_questions?.length ?? 0) > 0)));
       const record: StoredInteraction =
         loaded.status === 'pending' && !keepPending
           ? { ...loaded, status: 'orphaned' as StoredInteractionStatus }
@@ -299,34 +499,91 @@ export function createInteractionsRegistry(
     return stream;
   }
 
+  /** 这条记录是不是「部分已答」（还有题在等人）。 */
+  function hasPartialAnswers(record: StoredInteraction): boolean {
+    return (record.answered_questions?.length ?? 0) > 0;
+  }
+
+  /** 一批答案（`ask.respond` 或流上的 `ask.user.answered` 都是这一形状）。 */
+  interface AnswerBatch {
+    answers: unknown[];
+    answered_at: number;
+    answered_by: 'human' | 'policy';
+    answered_via?: StoredInteractionAnswer['answered_via'];
+    latency_ms?: number;
+    batch_id?: string;
+  }
+
+  /** 收口结果：本批真的写进去了什么 + 逐题进度。 */
+  interface SettleOutcome extends AskAnswerPlan {
+    /** false = 幂等重放 / 全部重复：一个字节都没改，也没有投递。 */
+    applied: boolean;
+  }
+
   /**
-   * 一次 `pending → answered` 迁移的唯一收口：落记录、清索引，并在这是
-   * **async ask 的第一次答案**时通知调用方投放（0.52）。
+   * 答案写入的唯一收口：**逐题**累积 + 按题幂等 + 只在需要时通知投放。
    *
-   * 两条应答路径（RPC 的 `respondAsk` 与流上的 `ask.user.answered`）都走这里，
-   * 所以这里必须自己判定「这是不是真的那一次迁移」：
+   * 批量语义（用户裁决）：
+   * - 一次提交只写「这次答了的题」，其余题**仍是 `pending`**（这就是「未答的题不能被
+   *   提交带走」的落点：状态机不新增档，pending + `answered_questions` 就够了）；
+   * - 同一题重复提交不覆盖、不重投，进 `skipped`；
+   * - 全部题答完才 `pending → answered`（这时才写 `answer.delivered_at`，
+   *   见 `markAnswerDelivered` —— gateway 那边现成的「终结后不再重投」因此自动成立）。
    *
-   * - 流上应答：`recordStreamResponse` 进来时已经确认过 `status === 'pending'`；
-   * - RPC 应答：`respondAsk` 先把 `ask.user.answered` publish 到流上，原始订阅者
-   *   （hub → gateway → 本注册表）**同步**走一遍这里 —— 这一次才是真迁移；publish
-   *   返回后 `respondAsk` 自己还会再 settle 一次，而它手上的 `record` 是 publish
-   *   之前的快照（状态已过期）。
+   * 投放通知的判据（为什么不是「每次迁移」）：
+   * - **拒绝回答**（`answers: []`）：整条收口，照旧通知（旧行为）；
+   * - `async`：每一批都要通知（提问的 run 早就结束了，没人等着接答案）；
+   * - `sync`：**第一批不通知** —— 它由还在 `waitFor` 的 ask 工具当场取走，再投一次就是
+   *   同一批答案两份（模型读两遍、还多起一次 run）。从第二批起工具已经返回了，
+   *   只能走 inbox 消息，所以通知。
    *
-   * 不判「此刻是否仍 pending」就会对同一次答案通知两次 → 装配层收到两个投放请求
-   * （0.52 的 async 答案双投就是这么来的：单看「都进 settleAnswer」并不等于只触发
-   * 一次）。返回值 = 本次是否真的是那次迁移。
+   * 幂等靠 `planAskAnswers` 的 `fresh`：两条应答路径（RPC 与流上回声）都调这里，第二次
+   * 拿到的 `fresh` 一定是空的 —— 既不会重复投放，也不需要「是否仍 pending」这种和状态
+   * 绑死的判定（分批之后 pending 不再是「还没人答」的意思）。
    */
-  function settleAnswer(record: StoredInteraction, answer: StoredInteractionAnswer): boolean {
-    const current = interactionRecords.get(record.requestId);
-    const first = current === undefined || current.status === 'pending';
-    suspendedAskIds.delete(record.requestId);
-    rememberRecord({ ...record, status: 'answered' as const, answer });
+  function settleAnswer(record: StoredInteraction, batch: AnswerBatch): SettleOutcome {
+    const current = interactionRecords.get(record.requestId) ?? record;
+    const declined = batch.answers.length === 0;
+    const plan = planAskAnswers(current, batch.answers);
+    const applied = plan.fresh.length > 0 || (declined && current.status === 'pending');
+    if (!applied) return { ...plan, applied: false };
+
+    // 拒绝回答（`answers: []`）不清空已记录的答案：人先前答过的那几题是事实，抹掉它
+    // 等于让答复记录变成「什么都没答」。投递层看的是 `batch_answers`（拒绝时为空）→
+    // 模型仍然读到「人类拒绝回答」那句原文。
+    const mergedAnswers = declined
+      ? (current.answer?.answers ?? [])
+      : sortAnswersByQuestion([...(current.answer?.answers ?? []), ...plan.fresh]);
+    const answer: StoredInteractionAnswer = {
+      ...(current.answer ?? {}),
+      answered_at: batch.answered_at,
+      answered_by: batch.answered_by,
+      ...(batch.answered_via !== undefined ? { answered_via: batch.answered_via } : {}),
+      ...(batch.latency_ms !== undefined ? { latency_ms: batch.latency_ms } : {}),
+      ...(batch.batch_id !== undefined ? { batch_id: batch.batch_id } : {}),
+      answers: mergedAnswers,
+      // 本批新增的那些：投放只该带这一批，否则第二批会重发第一批的答案。
+      batch_answers: declined ? [] : plan.fresh,
+    };
+    const final = declined || plan.final;
+    const next: StoredInteraction = {
+      ...current,
+      status: final ? ('answered' as const) : ('pending' as const),
+      answered_questions: plan.answered,
+      answer,
+    };
+    if (final) suspendedAskIds.delete(current.requestId);
+    rememberRecord(next);
     persist();
-    if (!first) return false;
-    if ((record.kind ?? 'permission') === 'ask' && record.mode === 'async') {
-      options.onAsyncAskAnswered?.({ ...record, status: 'answered' as const, answer });
-    }
-    return true;
+
+    const wasAnsweredBefore = hasPartialAnswers(current);
+    const shouldDeliver =
+      declined ||
+      (plan.fresh.length > 0 &&
+        (current.kind ?? 'permission') === 'ask' &&
+        (current.mode === 'async' || wasAnsweredBefore));
+    if (shouldDeliver) options.onAsyncAskAnswered?.(next);
+    return { ...plan, final, applied: true };
   }
 
   /** 直接发布到流上的应答（TUI / policy 定时器）也要落审计；不重新发布。 */
@@ -363,18 +620,41 @@ export function createInteractionsRegistry(
         : undefined;
     const policy =
       data.policy === 'deny_after' || data.policy === 'auto_allow' ? data.policy : undefined;
-    const answer: StoredInteractionAnswer = {
+    const batchId = nonEmptyString(data.batch_id);
+    const latency = Math.max(0, answeredAt - record.created_at);
+    pendingPermissions.delete(requestId);
+    if (!isAsk) {
+      settlePermission(record, {
+        decision: decision as 'allow' | 'deny',
+        scope,
+        answered_at: answeredAt,
+        answered_by: answeredBy,
+        latency_ms: latency,
+        ...(answeredVia !== undefined ? { answered_via: answeredVia } : {}),
+        ...(policy !== undefined ? { policy } : {}),
+      });
+      return;
+    }
+    settleAnswer(record, {
+      answers: answers as unknown[],
       answered_at: answeredAt,
       answered_by: answeredBy,
-      latency_ms: Math.max(0, answeredAt - record.created_at),
+      latency_ms: latency,
       ...(answeredVia !== undefined ? { answered_via: answeredVia } : {}),
-      ...(policy !== undefined ? { policy } : {}),
-      ...(isAsk
-        ? { answers: answers as unknown[] }
-        : { decision: decision as 'allow' | 'deny', scope }),
-    };
-    pendingPermissions.delete(requestId);
-    settleAnswer(record, answer);
+      ...(batchId !== undefined ? { batch_id: batchId } : {}),
+    });
+  }
+
+  /**
+   * 权限应答的收口（`answered` 是唯一终态，没有逐题概念）。
+   *
+   * 与 ask 的 {@link settleAnswer} 分家：权限没有「部分已答」，把两者塞进一个函数
+   * 会让 `planAskAnswers` 的逐题语义渗进只看 `decision` 的权限记录里。
+   */
+  function settlePermission(record: StoredInteraction, answer: StoredInteractionAnswer): void {
+    suspendedAskIds.delete(record.requestId);
+    rememberRecord({ ...record, status: 'answered' as const, answer });
+    persist();
   }
 
   function handleEvent(event: RunEvent): void {
@@ -491,10 +771,15 @@ export function createInteractionsRegistry(
       // 迟到应答返回 run_ended，不再假装可以继续。
       for (const [id, record] of interactionRecords) {
         if (record.status !== 'pending' || record.run_id !== event.run_id) continue;
-        // headless ask 的 run 以 interrupted 收口：请求仍然有效，保留 pending。
-        if ((record.kind ?? 'permission') === 'ask' && suspendedAskIds.has(id)) continue;
-        // 0.52：async ask 的 run 在工具返回后照常收口，请求本身还没被回答 —— 保留 pending。
-        if ((record.kind ?? 'permission') === 'ask' && record.mode === 'async') continue;
+        if ((record.kind ?? 'permission') === 'ask') {
+          // headless ask 的 run 以 interrupted 收口：请求仍然有效，保留 pending。
+          if (suspendedAskIds.has(id)) continue;
+          // 0.52：async ask 的 run 在工具返回后照常收口，请求本身还没被回答 —— 保留 pending。
+          if (record.mode === 'async') continue;
+          // 分批：**部分已答**的 ask 也保留 —— 提问的 run 已经拿到首批答案继续跑了，
+          // 剩下那几题还在等人；孤儿化会让「第 3 题」永远答不了。
+          if (hasPartialAnswers(record)) continue;
+        }
         pendingPermissions.delete(id);
         rememberRecord({ ...record, status: 'orphaned' as StoredInteractionStatus });
       }
@@ -631,22 +916,52 @@ export function createInteractionsRegistry(
     if (record === undefined || (record.kind ?? 'permission') !== 'ask') {
       throw new RpcError('not_found', `Ask request not found: ${requestId}`);
     }
+    const batchId =
+      context?.batch_id !== undefined && context.batch_id !== '' ? context.batch_id : undefined;
     if (record.status === 'pending') {
       const now = Date.now();
       const latency = Math.max(0, now - record.created_at);
+      const declined = answers.length === 0;
+      const plan = planAskAnswers(record, answers);
+      if (!declined && plan.fresh.length === 0) {
+        // 每一题都已经答过：这是幂等重放（双击 / 多端重复提交）。
+        // 不发事件、不落盘、不投放 —— 只把「跳过了哪些题」明确回给调用方，
+        // 免得前端把一次重复提交当成「又答了一遍」。
+        return {
+          ok: true,
+          duplicate: true,
+          answered_by: attribution.answered_by,
+          ...(attribution.answered_via !== undefined
+            ? { answered_via: attribution.answered_via }
+            : {}),
+          latency_ms: Math.max(0, now - (record.answer?.answered_at ?? record.created_at)),
+          ...(record.team_id !== undefined ? { team_id: record.team_id } : {}),
+          answered_questions: [],
+          remaining_questions: plan.remaining,
+          // 旧客户端的三行答案认不出题（没有 question_id 也没有题序可依）时，
+          // 用「已答的题」回答「跳过的题」—— 语义上就是那几题不重复记录。
+          skipped_questions: plan.skipped.length > 0 ? plan.skipped : plan.answered,
+          final: plan.final,
+        };
+      }
       // 直接投递到单运行时流（ask 工具在那里等待）。
       //
-      // 注意（0.52）：这次 publish 是**同步**扇出的 —— 原始订阅者
-      // （hub → gateway → 本注册表）会立刻走 `recordStreamResponse` →
-      // `settleAnswer`，也就是「流上回声」这一次才是真正的 `pending → answered`
-      // 迁移。下面那次 `settleAnswer(record, …)` 用的是 publish 之前的快照，
-      // 因此它被 `settleAnswer` 内部的 pending 判定挡成幂等重放（不再通知投放）。
+      // 注意：这次 publish 是**同步**扇出的 —— 原始订阅者（hub → gateway → 本注册表）
+      // 会立刻走 `recordStreamResponse` → `settleAnswer`，也就是「流上回声」这一次才是
+      // 真正落记录 + 通知投放。下面那次 `settleAnswer` 用的是 publish 之前的快照，
+      // 它被 `fresh` 幂等判定挡成重放（`applied: false`），不会二次投放。
+      //
+      // 事件里只带**本批**答案（`plan.fresh`）：`final: false` 时它就是「先答了这几题」，
+      // 未答的题仍在待批队列；工具拿到这一批就返回，不等其余题。
       answerStream().publish({
         type: 'ask.user.answered',
         run_id: record.run_id,
         data: {
           requestId,
-          answers,
+          answers: declined ? [] : plan.fresh,
+          final: declined || plan.final,
+          ...(declined || plan.final ? {} : { remaining: plan.remaining }),
+          ...(batchId !== undefined ? { batch_id: batchId } : {}),
           ...(record.session_id !== undefined ? { session_id: record.session_id } : {}),
           answered_by: attribution.answered_by,
           ...(attribution.answered_via !== undefined
@@ -657,25 +972,24 @@ export function createInteractionsRegistry(
         },
         ts: now,
       });
-      // publish 之后可能已经被流上回声落定（见上）：只有记录**仍然** pending
-      // 时才需要本地收口（例如装配里没有原始订阅者）。`settleAnswer` 内部还有
-      // 同一道判定做硬保险，这里只是省掉一次重复落盘。
-      const settled = interactionRecords.get(requestId);
-      if (settled === undefined || settled.status === 'pending') {
-        settleAnswer(record, {
-          answers,
-          answered_at: now,
-          answered_by: attribution.answered_by,
-          ...(attribution.answered_via !== undefined
-            ? { answered_via: attribution.answered_via }
-            : {}),
-          latency_ms: latency,
-          // 0.52：待批页一次提交的批次标记；投放实现用它把同批答案合成一条消息。
-          ...(context?.batch_id !== undefined && context.batch_id !== ''
-            ? { batch_id: context.batch_id }
-            : {}),
-        });
-      }
+      // publish 之后的本地兜底：装配里没有原始订阅者时（离线 attention / 测试）要靠
+      // 这一句落记录。`settleAnswer` 自己按 `fresh` 幂等，所以回声已落盘时它是空操作。
+      settleAnswer(record, {
+        answers: declined ? [] : plan.fresh,
+        answered_at: now,
+        answered_by: attribution.answered_by,
+        ...(attribution.answered_via !== undefined
+          ? { answered_via: attribution.answered_via }
+          : {}),
+        latency_ms: latency,
+        ...(batchId !== undefined ? { batch_id: batchId } : {}),
+      });
+      // 返回体描述的是**这次提交**写成了什么（不是上面那次空转）：题号来自本批的规划，
+      // 其余字段以落定后的记录为准。客户端据此决定「卡片还能不能收」。
+      const answeredBefore = new Set(record.answered_questions ?? []);
+      const writtenNow = declined
+        ? []
+        : plan.answered.filter((id) => !answeredBefore.has(id));
       return {
         ok: true,
         answered_by: attribution.answered_by,
@@ -684,21 +998,35 @@ export function createInteractionsRegistry(
           : {}),
         latency_ms: latency,
         ...(record.team_id !== undefined ? { team_id: record.team_id } : {}),
+        answered_questions: writtenNow,
+        remaining_questions: declined ? [] : plan.remaining,
+        ...(plan.skipped.length > 0 ? { skipped_questions: plan.skipped } : {}),
+        final: declined || plan.final,
       };
     }
     if (record.status === 'answered') {
-      if (record.answer !== undefined && jsonEqual(record.answer.answers ?? [], answers)) {
+      // 已收口的请求：同题再来 = 幂等（duplicate + skipped）；不同答案仍是冲突。
+      const plan = planAskAnswers(record, answers);
+      const recordedAnswers = record.answer?.answers ?? [];
+      const sameAnswers = jsonEqual(recordedAnswers, answers);
+      // 逐题幂等：这一批里一题都没新增，且至少认出了一题是「已答过」的。
+      const perQuestionDuplicate = plan.fresh.length === 0 && plan.skipped.length > 0;
+      if (sameAnswers || perQuestionDuplicate) {
         return {
           ok: true,
           duplicate: true,
-          answered_by: record.answer.answered_by ?? 'human',
-          ...(record.answer.answered_via !== undefined
+          answered_by: record.answer?.answered_by ?? 'human',
+          ...(record.answer?.answered_via !== undefined
             ? { answered_via: record.answer.answered_via }
             : {}),
-          ...(record.answer.latency_ms !== undefined
+          ...(record.answer?.latency_ms !== undefined
             ? { latency_ms: record.answer.latency_ms }
             : {}),
           ...(record.team_id !== undefined ? { team_id: record.team_id } : {}),
+          answered_questions: [],
+          remaining_questions: [],
+          ...(plan.skipped.length > 0 ? { skipped_questions: plan.skipped } : {}),
+          final: true,
         };
       }
       throw new RpcError(
@@ -717,7 +1045,11 @@ export function createInteractionsRegistry(
    * 0.52：async 答案投放成功后写幂等标记（`answer.delivered_at`）。
    *
    * 只认已经 answered 的记录；返回 false 表示没有可标记的状态（记录不存在 /
-   * 还没答 / 已被别处投放）。重复应答时调用方据此跳过第二次投放。
+   * 还没答完 / 已被别处投放）。重复应答时调用方据此跳过第二次投放。
+   *
+   * **分批的一部分**：部分已答的记录仍是 `pending`（还有题在等人），这里于是拒写标记 ——
+   * 下一批答案因此还能再投一次。这不是漏洞，正是「每批各投一次」的实现方式：
+   * 整条请求一收口（`answered`）就写标记，终结之后的重复应答不再重投。
    */
   function markAnswerDelivered(requestId: string, deliveredAt: number): boolean {
     const record = interactionRecords.get(requestId);

@@ -41,10 +41,20 @@ export interface StoredInteractionAnswer {
    */
   batch_id?: string;
   /**
+   * **本批**新写入的答案（additive；`answers` 是这条请求累计的全部答案）。
+   *
+   * 分批提交后一条请求会有多批答案：`answers` 必须累积（它是事实源，答复卡 / resume
+   * 注入都读它），但每次投递只该带**这一批**——否则人第二次只答第 3 题，模型却会再收到
+   * 一遍第 1、2 题。缺省（旧记录）= 只有一批，投放实现退回读 `answers`。
+   */
+  batch_answers?: unknown[];
+  /**
    * 0.52：async ask 的答案**已作为 user 消息投进成员 inbox**（并已起新 run）。
    *
    * 只用于幂等：同一 request 的重复应答（或进程重启后的重放）不再第二次投放。
-   * 缺省 = 尚未投放过。
+   * 缺省 = 尚未投放过。**分批addition**：只有「整条请求收口」的那一批才会写它
+   * （部分已答时请求仍是 pending，`markAnswerDelivered` 会拒绝落这个标记），
+   * 因此分批投递的每一批各自投一次、终结后不再重投。
    */
   delivered_at?: number;
 }
@@ -93,6 +103,15 @@ export interface StoredInteraction {
    * 答案到达时要走「投放新 run」而不是「续跑旧 run」。缺省 = sync（阻塞型）。
    */
   mode?: 'sync' | 'async';
+  /**
+   * 已经答完的题 id（additive）。
+   *
+   * 为什么状态机不新增一档：一条请求的「部分已答」不需要一个新的 `status` —— 它就是
+   * `pending`（还有题在等人），逐题进度抄在这里。这样所有「把 pending 当可回答」的既有
+   * 代码（hydrate / run 终态 / 待批页 / interactions.list）一个字都不用改，未答的题自然
+   * 留在队列里。**缺省 = 一道题都还没答**（旧记录天然如此，读侧不用迁移）。
+   */
+  answered_questions?: string[];
   answer?: StoredInteractionAnswer;
 }
 
@@ -132,10 +151,18 @@ function parseAnswer(value: unknown): StoredInteractionAnswer | undefined {
   }
   const batchId = nonEmptyString(value.batch_id);
   if (batchId !== undefined) answer.batch_id = batchId;
+  if (Array.isArray(value.batch_answers)) answer.batch_answers = value.batch_answers;
   if (typeof value.delivered_at === 'number' && Number.isFinite(value.delivered_at)) {
     answer.delivered_at = value.delivered_at;
   }
   return answer;
+}
+
+/** 题 id 数组：只留非空字符串，其余丢弃（脏文件不该让整条记录读不出来）。 */
+function parseQuestionIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const ids = value.filter((item): item is string => typeof item === 'string' && item.length > 0);
+  return ids.length === 0 ? undefined : ids;
 }
 
 function nonEmptyString(value: unknown): string | undefined {
@@ -171,6 +198,7 @@ function parseRecord(value: unknown): StoredInteraction | null {
   }
   if (status !== 'pending' && status !== 'answered' && status !== 'orphaned') return null;
   const parsedAnswer = parseAnswer(value.answer);
+  const answeredQuestions = parseQuestionIds(value.answered_questions);
   const agentId = nonEmptyString(agent_id);
   const teamId = nonEmptyString(team_id);
   const sessionId = nonEmptyString(session_id);
@@ -194,6 +222,7 @@ function parseRecord(value: unknown): StoredInteraction | null {
     status,
     ...(value.suspended === true ? { suspended: true } : {}),
     ...(value.mode === 'async' ? { mode: 'async' as const } : {}),
+    ...(answeredQuestions !== undefined ? { answered_questions: answeredQuestions } : {}),
     ...(parsedAnswer !== undefined ? { answer: parsedAnswer } : {}),
   };
 }
