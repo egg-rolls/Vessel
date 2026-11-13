@@ -111,6 +111,7 @@ function answeredRecord(overrides: Partial<ListedInteraction> = {}): ListedInter
     status: 'answered',
     answer: {
       decision: 'allow',
+      scope: 'once',
       answers: [{ header: '部署目标', question: '这次要部署到哪个环境？', answer: 'prod' }],
       answered_at: NOW,
     },
@@ -300,7 +301,7 @@ const FIXTURES: readonly Fixture[] = [
     why: '人点取消（answers=[]）或被 policy 收口时没有「答了什么」，画出来只会是一张空卡',
     check: () => {
       const cancelled = answeredRecord({
-        answer: { decision: 'allow', answers: [], answered_at: NOW },
+        answer: { decision: 'allow', scope: 'once', answers: [], answered_at: NOW },
       });
       const stillPending = answeredRecord({ status: 'pending', answer: undefined });
       const permission = answeredRecord({ kind: 'permission' });
@@ -321,6 +322,7 @@ const FIXTURES: readonly Fixture[] = [
           created_at: NOW - 1000,
           answer: {
             decision: 'allow',
+      scope: 'once',
             answers: [{ header: 'B', question: 'B?', answer: 'b' }],
             answered_at: NOW - 500,
           },
@@ -330,6 +332,7 @@ const FIXTURES: readonly Fixture[] = [
           created_at: NOW - 3000,
           answer: {
             decision: 'allow',
+      scope: 'once',
             answers: [{ header: 'A', question: 'A?', answer: 'a' }],
             answered_at: NOW - 9000,
           },
@@ -339,6 +342,7 @@ const FIXTURES: readonly Fixture[] = [
           created_at: NOW - 3000,
           answer: {
             decision: 'allow',
+      scope: 'once',
             answers: [{ header: 'A', question: 'A?', answer: 'a' }],
             answered_at: NOW - 9000,
           },
@@ -364,6 +368,7 @@ const FIXTURES: readonly Fixture[] = [
         session_id: 'session-2',
         answer: {
           decision: 'allow',
+      scope: 'once',
           answers: [{ header: '别人的题', question: '别人的问题？', answer: '别人的答案' }],
           answered_at: NOW + 1,
         },
@@ -382,6 +387,7 @@ const FIXTURES: readonly Fixture[] = [
           request_id: `req-${String(index)}`,
           answer: {
             decision: 'allow',
+      scope: 'once',
             answers: [{ header: `H${String(index)}`, question: `Q${String(index)}`, answer: 'a' }],
             answered_at: NOW + index,
           },
