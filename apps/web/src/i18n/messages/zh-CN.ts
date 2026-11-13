@@ -1166,6 +1166,19 @@ export const messages = {
   'chat.env.count': '{count} 条',
   'chat.env.notApplied': '未生效',
   'chat.env.moreLines': '还有 {count} 行未显示',
+  // 环境快照的增量视图（prompt.system_context.changed）：卡片只列变了的项，展开仍是全量快照。
+  // 键是 core 里的固定词表（system_prompt / self_card / model / tools）；值是事实
+  // （模型 id、条数），除了这三个词以外不翻译。
+  'chat.env.changed.count': '{count} 项变更',
+  'chat.env.changed.title': '变更',
+  'chat.env.changed.from': '来自 #{hash}',
+  'chat.env.changed.systemPrompt': '系统提示词',
+  'chat.env.changed.selfCard': '自卡',
+  'chat.env.changed.model': '模型',
+  'chat.env.changed.tools': '工具',
+  'chat.env.changed.added': '新增',
+  'chat.env.changed.removed': '移除',
+  'chat.env.changed.replaced': '已替换',
   // 「模型上下文」卡（prompt.system_context）：模型这一轮真正看到的系统消息。
   // 宗旨：模型能看到的内容，用户也要能看到 —— 只是折叠起来（默认折叠，展开是原文）。
   'chat.modelContext.title': '模型上下文',

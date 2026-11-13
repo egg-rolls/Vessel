@@ -193,3 +193,47 @@ export function mergeEnvNoticeCards(head: EnvNoticeCard, next: EnvNoticeCard): E
     ...(dropped > 0 ? { droppedLines: dropped } : {}),
   };
 }
+
+/**
+ * `prompt.system_context.changed` 的一条：键 + 原始值。
+ *
+ * 线上是 `键: 值` 的短句（`model: A → B`、`tools: 12 → 14`、`system_prompt: replaced`）。
+ * 只拆成「键 / 值」两段、**不在这里翻译**：键用固定词表映射成本地化标签（`chat.env.changed.*`），
+ * 值原样显示（模型 id、数字、`A → B` 都是事实，翻译只会丢信息）。
+ *
+ * 认不出来的键不丢：原样当键显示（服务端加了新种类而前端还没跟上时，宁可显示一个生词，
+ * 也不要把这条变更静默吞掉）。
+ */
+export interface ContextChangeEntry {
+  /** 行身份（React key；同一张卡内唯一）。 */
+  id: string;
+  /** 键（`system_prompt` / `self_card` / `model` / `tools` / 未知词的原文）。 */
+  key: string;
+  /** 值（缺省 = 这条只有键，例如 `self_card: added` 之外的兜底形状）。 */
+  value?: string;
+}
+
+/** 一条 `changed` 短句 → 键 / 值。冒号只在第一个处切（值里可能还有冒号）。 */
+export function parseContextChange(raw: string, index: number): ContextChangeEntry | undefined {
+  const text = raw.trim();
+  if (text.length === 0) return undefined;
+  const colon = text.indexOf(':');
+  const key = (colon < 0 ? text : text.slice(0, colon)).trim();
+  if (key.length === 0) return undefined;
+  const value = colon < 0 ? undefined : text.slice(colon + 1).trim();
+  return {
+    id: String(index),
+    key,
+    ...(value !== undefined && value.length > 0 ? { value } : {}),
+  };
+}
+
+/** 一批 `changed` → 可渲染的条目（保持服务端顺序：那是稳定的，不重排）。 */
+export function contextChangeEntries(changed: readonly string[]): ContextChangeEntry[] {
+  const entries: ContextChangeEntry[] = [];
+  for (const [index, raw] of changed.entries()) {
+    const entry = parseContextChange(raw, index);
+    if (entry !== undefined) entries.push(entry);
+  }
+  return entries;
+}

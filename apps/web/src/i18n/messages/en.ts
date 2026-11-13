@@ -1218,6 +1218,20 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.count': '{count} items',
   'chat.env.notApplied': 'not applied',
   'chat.env.moreLines': '{count} more lines not shown',
+  // Incremental view of an environment snapshot (prompt.system_context.changed): the card
+  // lists only what changed and keeps the full snapshot in the expandable body. Keys are
+  // the fixed vocabulary from packages/core (system_prompt / self_card / model / tools);
+  // values are facts (model ids, counts) and stay untranslated except these three words.
+  'chat.env.changed.count': '{count} items changed',
+  'chat.env.changed.title': 'Changed',
+  'chat.env.changed.from': 'from #{hash}',
+  'chat.env.changed.systemPrompt': 'System prompt',
+  'chat.env.changed.selfCard': 'Self Card',
+  'chat.env.changed.model': 'Model',
+  'chat.env.changed.tools': 'Tools',
+  'chat.env.changed.added': 'added',
+  'chat.env.changed.removed': 'removed',
+  'chat.env.changed.replaced': 'replaced',
   // "Model context" card (prompt.system_context): the system message the model actually
   // saw this turn. Tenet: what the model can see, the user can see too — just folded
   // (collapsed by default, expanded shows the raw text).

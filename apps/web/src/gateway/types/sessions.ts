@@ -163,6 +163,12 @@ export interface SessionDetail {
     context_max?: number;
     at?: number;
     run_id?: string;
+    /**
+     * 与上一份快照差在哪（additive，0.52）。**缺省 = 不知道**（首次快照 / 旧日志），
+     * 不是「0 项变更」—— 前者退回全量快照卡，后者才是一句「没有变化」。
+     */
+    changed?: string[];
+    previous_hash?: string;
   };
 }
 

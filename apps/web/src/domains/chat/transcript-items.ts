@@ -254,6 +254,16 @@ export interface PromptContextData {
   estimatedTokens?: number;
   /** 上下文窗口上限（运行时真值）。 */
   contextMax?: number;
+  /**
+   * 与上一份快照差在哪（additive，0.52）：只列变了的项。
+   *
+   * **缺省 = 不知道**（该会话第一份快照 / 0.52 之前落盘的旧事件），卡片一律退回全量快照；
+   * 只有拿到非空数组时才渲「N 项变更」。空数组在这里等价于缺省 —— 「没有变化」根本不会
+   * 落成一条事件（同快照只发一次），所以「0 项变更」这个结论在线上并不存在。
+   */
+  changed?: string[];
+  /** 上一份快照的 hash（additive；缺省同上 = 不知道）。 */
+  previousHash?: string;
 }
 
 /** 「模型上下文」卡 item：`prompt:<事件 key>`（key 稳定锚在事件 seq 上）。 */
@@ -297,6 +307,11 @@ export function promptContextOfEvent(event: RunEvent): PromptContextData | undef
   const toolsCount = num(data.tools_count);
   const estimatedTokens = num(data.estimated_tokens);
   const contextMax = num(data.context_max);
+  const changed = textListOf(data.changed);
+  const previousHash =
+    typeof data.previous_hash === 'string' && data.previous_hash.length > 0
+      ? data.previous_hash
+      : undefined;
   return {
     hash,
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
@@ -306,7 +321,25 @@ export function promptContextOfEvent(event: RunEvent): PromptContextData | undef
     ...(toolsCount !== undefined ? { toolsCount } : {}),
     ...(estimatedTokens !== undefined ? { estimatedTokens } : {}),
     ...(contextMax !== undefined ? { contextMax } : {}),
+    ...(changed !== undefined ? { changed } : {}),
+    ...(previousHash !== undefined ? { previousHash } : {}),
   };
+}
+
+/**
+ * 只认「非空字符串数组」（`changed` 的宽松解析）；其它一律 `undefined` = 不知道。
+ *
+ * 空数组当「不知道」而不是「0 项变更」：两者给人看到的是完全不同的结论，前者是「没有
+ * 可比对象」，后者是「对比过、没变化」。线上根本不会发「没变化」的事件。
+ */
+export function textListOf(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const list: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || item.length === 0) return undefined;
+    list.push(item);
+  }
+  return list;
 }
 
 /** 失败卡的数据来源：事件流（`run.failed` 还在缓冲里）或会话记录快照（`sessions.get`）。 */
@@ -453,6 +486,12 @@ export function sessionSystemContextOfDetail(
   const estimatedTokens = num(raw.estimated_tokens);
   const contextMax = num(raw.context_max);
   const at = typeof raw.at === 'number' && Number.isFinite(raw.at) ? raw.at : undefined;
+  // 增量视图：缺省 = 不知道（旧数据 / 首次），卡片退回全量快照，不编「0 项变更」。
+  const changed = textListOf(raw.changed);
+  const previousHash =
+    typeof raw.previous_hash === 'string' && raw.previous_hash.length > 0
+      ? raw.previous_hash
+      : undefined;
   return {
     hash: raw.hash,
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
@@ -464,6 +503,8 @@ export function sessionSystemContextOfDetail(
     ...(contextMax !== undefined ? { contextMax } : {}),
     ...(typeof runId === 'string' && runId.length > 0 ? { runId } : {}),
     ...(at !== undefined ? { at } : {}),
+    ...(changed !== undefined ? { changed } : {}),
+    ...(previousHash !== undefined ? { previousHash } : {}),
   };
 }
 
