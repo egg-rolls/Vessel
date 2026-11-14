@@ -45,6 +45,18 @@ export interface PluginInstallScope {
   rollback(): void;
 }
 
+/**
+ * 读侧文本脱敏器（0.52 pii-guard）。
+ *
+ * 只作用于「请求构造层」与「展示投影层」的文本投影：`mask` 收到原文、返回展示 /
+ * 请求用的文本。**它绝不参与落盘**——会话存储里保留的是原文（append-only 硬约束）。
+ */
+export interface ReadSideMasker {
+  /** 去重 / 回滚用的标识（插件名足够） */
+  name: string;
+  mask(text: string): string;
+}
+
 /** PluginHost 接口 */
 export interface PluginHost {
   registerTool(def: ToolDefinition): void;
@@ -83,6 +95,19 @@ export interface PluginHost {
    * 未实现 / 没有贡献时调用方按空数组处理。
    */
   getMemberBodyContributions?(): readonly MemberBodyContribution<PluginPortName>[];
+  /**
+   * 可选（0.52 pii-guard）：登记一个**读侧**文本脱敏器。
+   *
+   * 只作用于「请求构造层」（发给 provider 的 messages）与「展示投影层」，
+   * **绝不作用于落盘路径**：会话存储里的原文一个字都不许改（append-only 硬约束）。
+   * 这正是 0.52 修「PII 打码写坏 transcript」的落点——脱敏从写侧搬到读侧。
+   *
+   * 实现方须按 `name` 去重；同 `registerMemberBodyContribution?` 的口径，
+   * 不实现该方法的自定义宿主退化成「没有读侧脱敏」，不炸。
+   */
+  registerReadSideMasker?(masker: ReadSideMasker): void;
+  /** 可选（0.52）：本宿主上已登记的读侧脱敏器，按登记顺序 */
+  getReadSideMaskers?(): readonly ReadSideMasker[];
 }
 
 /** 默认权限策略（ADR-029：未声明 checkPermission 的工具用此默认判定） */
