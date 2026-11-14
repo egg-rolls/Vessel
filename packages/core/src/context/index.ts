@@ -30,8 +30,16 @@ export {
   estimateMessagesTokens,
   estimateMessageTokens,
   estimateTokens,
+  KEEP_RECENT_MAX,
+  KEEP_RECENT_TOKEN_RATIO,
+  measureRetainedToolResultVolume,
   MemoryWorkingContext,
   planClearedToolResults,
+  shouldCompactForToolResultVolume,
+  TOOL_RESULT_VOLUME_THRESHOLD_RATIO,
+  type ToolResultKeepOptions,
+  type ToolResultVolumeMeasurement,
+  type ToolResultVolumeOptions,
   withClearedToolResults,
 } from './context-manager.js';
 export {

@@ -18,6 +18,10 @@
  * - T5 落盘：`SessionState.cleared_tool_call_ids` 在 File / SQLite 两后端往返一致；
  *   旧快照 / 旧库缺字段照常加载（undefined = 这一段没决策）；旧库打开自动补列；
  *   脏数据不许把会话读崩。
+ * - T6（0.53 主题1②）体积阈值：保留结果原文体积 / 窗口预算 > N% ⇒ 该压缩/开新段。
+ *   钉死常量默认值（5% / 10 条 / 20%）、阈值边界（恰好等于不触发、+1 token 触发）、
+ *   可清 0 条、整个窗口超阈值、默认配置与旧行为逐字节等价，并锁住「体积判据不参与
+ *   清几条的决策」——它只决定还要不要在同一段里继续塞。
  *
  * 用法：bun run scripts/check-tool-result-clear.ts（退出码 0 = 全过，1 = 有 FAIL）
  */
@@ -28,12 +32,17 @@ import { join } from 'node:path';
 import {
   FileSessionStore,
   isClearedToolResult,
+  KEEP_RECENT_MAX,
+  KEEP_RECENT_TOKEN_RATIO,
   type Message,
+  measureRetainedToolResultVolume,
   normalizeClearedToolCallIds,
   planClearedToolResults,
   renderContextTrimNotice,
+  shouldCompactForToolResultVolume,
   type SessionState,
   SQLiteSessionStore,
+  TOOL_RESULT_VOLUME_THRESHOLD_RATIO,
   withClearedToolResults,
 } from '../packages/core/src/index';
 
@@ -369,6 +378,120 @@ function baseState(sessionId: string): SessionState {
     'T5.11 去重 + 丢掉非字符串',
     normalizeClearedToolCallIds(['call_0', 'call_0', 7, '', 'call_1']),
     ['call_0', 'call_1'],
+  );
+}
+
+// ── T6：体积阈值（0.53 主题1②，只增不删） ─────────────────────────────────
+
+section('T6 体积阈值：保留结果原文体积超窗口 N% ⇒ 触发压缩/开新段');
+
+{
+  // T6.0 常量回归锁：把 10 / 5% 抽成命名常量 + 体积阈值，不许顺手改默认值。
+  expect(
+    'T6.0 默认常量冻结（保留 5% / 10 条；体积阈值 20%）',
+    [KEEP_RECENT_TOKEN_RATIO, KEEP_RECENT_MAX, TOOL_RESULT_VOLUME_THRESHOLD_RATIO],
+    [0.05, 10, 0.2],
+  );
+
+  // 估算口径：'x'.repeat(N) ⇒ ceil(N × 0.25)。窗口 1000 ⇒ 20% = 200 tokens。
+  const loneTool = (chars: number): Message[] => [
+    msg('tool', 'x'.repeat(chars), { tool_call_id: 'call_edge' }),
+  ];
+  const boundaryRatio = 0.2;
+
+  // 阈值边界：恰好等于（200/1000 = 0.2）不触发；阈值 +1 token（201/1000）触发。
+  expect(
+    'T6.1 恰好等于阈值：保留 200 tokens / 窗口 1000 = 20% ⇒ 不触发',
+    measureRetainedToolResultVolume(loneTool(800), 1_000, { thresholdRatio: boundaryRatio }),
+    {
+      maxTokens: 1_000,
+      thresholdRatio: boundaryRatio,
+      retainedCount: 1,
+      retainedTokens: 200,
+      ratio: 0.2,
+      exceeds: false,
+    },
+  );
+  expect(
+    'T6.2 阈值 +1 token：201/1000 ⇒ 触发',
+    shouldCompactForToolResultVolume(loneTool(801), 1_000, { thresholdRatio: boundaryRatio }),
+    true,
+  );
+
+  // 可清 0 条：窗口里只有 1 条小结果 ⇒ 没有可清的，体积也远低于阈值。
+  const singleSmall = segmentBase(1);
+  expect(
+    'T6.3 可清 0 条：只有 1 条工具结果',
+    [planClearedToolResults(singleSmall, MAX_TOKENS), shouldCompactForToolResultVolume(singleSmall, MAX_TOKENS)],
+    [[], false],
+  );
+
+  // 整个窗口都超阈值：20 条工具结果、每条自身就吃满窗口 ⇒ 保留下来的那条也超。
+  const flooded: Message[] = [];
+  for (let index = 0; index < 20; index += 1) {
+    flooded.push(msg('tool', 'x'.repeat(4_000), { tool_call_id: 'call_' + String(index) }));
+  }
+  const floodedMeasured = measureRetainedToolResultVolume(flooded, 1_000);
+  expect(
+    'T6.4 整个窗口都被工具结果占满 ⇒ 保留条数仍受「最新 1 条必留」约束',
+    [floodedMeasured.retainedCount, floodedMeasured.retainedTokens, floodedMeasured.exceeds],
+    [1, 1_000, true],
+  );
+
+  // 默认阈值下的不触发 / 触发各一例（正常会话 vs 单条巨型结果）。
+  const normal = segmentBase(6);
+  const normalMeasured = measureRetainedToolResultVolume(normal, MAX_TOKENS);
+  expect(
+    'T6.5 默认阈值不触发：正常段（6 条 × 106 tokens，保留 1 条 = 10.6%）',
+    [normalMeasured.retainedCount, normalMeasured.retainedTokens, normalMeasured.exceeds],
+    [1, 106, false],
+  );
+  const giant = [...segmentBase(1), msg('tool', 'x'.repeat(1_200), { tool_call_id: 'call_giant' })];
+  expect(
+    'T6.6 默认阈值触发：单条 300 tokens 结果 / 窗口 1000 = 30% ⇒ 该开新段',
+    shouldCompactForToolResultVolume(giant, MAX_TOKENS),
+    true,
+  );
+
+  // 回归锁：默认配置与旧行为逐字节等价（不传参 ≡ 传默认值 ≡ 冻结期望集合）。
+  const capBound: Message[] = [msg('system', 's'), msg('user', 'u')];
+  for (let index = 0; index < 12; index += 1) {
+    capBound.push(msg('tool', 'xx', { tool_call_id: 'call_' + String(index) }));
+  }
+  expect(
+    'T6.7 默认配置 ≡ 显式默认值 ≡ 旧行为（5% 预算维度）',
+    [
+      planClearedToolResults(normal, MAX_TOKENS),
+      planClearedToolResults(normal, MAX_TOKENS, {}),
+      planClearedToolResults(normal, MAX_TOKENS, { keepRecentTokenRatio: 0.05, keepRecentMax: 10 }),
+    ],
+    [
+      ['call_0', 'call_1', 'call_2', 'call_3', 'call_4'],
+      ['call_0', 'call_1', 'call_2', 'call_3', 'call_4'],
+      ['call_0', 'call_1', 'call_2', 'call_3', 'call_4'],
+    ],
+  );
+  expect(
+    'T6.8 默认配置 ≡ 显式默认值（10 条上限维度生效）',
+    [
+      planClearedToolResults(capBound, MAX_TOKENS),
+      planClearedToolResults(capBound, MAX_TOKENS, { keepRecentMax: 10 }),
+    ],
+    [
+      ['call_0', 'call_1'],
+      ['call_0', 'call_1'],
+    ],
+  );
+  // 体积判据不许改变清除集合：判据只看保留体积，不参与「清几条」的决策。
+  expect(
+    'T6.9 体积阈值不参与清除集合决策（同一段触发前后清除集合不变）',
+    [planClearedToolResults(giant, MAX_TOKENS), shouldCompactForToolResultVolume(giant, MAX_TOKENS)],
+    [['call_0'], true],
+  );
+  expect(
+    'T6.10 保留条数 + 清除条数 = 窗口内工具结果总条数（不重复计费）',
+    [normalMeasured.retainedCount + planClearedToolResults(normal, MAX_TOKENS).length, 6],
+    [6, 6],
   );
 }
 

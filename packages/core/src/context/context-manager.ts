@@ -31,10 +31,73 @@ function placeholderSummary(removed: number): string {
  *
  * 从尾部累计 tool 结果的估算 token，保留到不超过 `maxTokens × 5%`：
  * 至少保留 1 条（最新结果通常仍被本轮引用），最多 10 条（一次 assistant
- * 轮次的并行调用上限）。属于压缩策略常量，按契约不新增配置键。
+ * 轮次的并行调用上限）。属于压缩策略常量，按契约不新增配置键；
+ * 0.53 主题1② 只是把它抽成可注入参数（`ToolResultKeepOptions`，默认值不变），
+ * 好让门禁把边界钉死 —— 配置层仍然没有这两个键。
  */
-const KEEP_RECENT_TOKEN_RATIO = 0.05;
-const KEEP_RECENT_MAX = 10;
+export const KEEP_RECENT_TOKEN_RATIO = 0.05;
+export const KEEP_RECENT_MAX = 10;
+
+/**
+ * 保留预算的可覆盖项（0.53 主题1②）。
+ *
+ * 默认值与上面两个常量逐字节一致 —— 抽成参数只为让门禁能把边界钉死
+ * （恰好等于预算 / 预算 +1），不改任何默认行为。
+ */
+export interface ToolResultKeepOptions {
+  /** 保留原文的工具结果 token 预算占窗口比例，默认 `KEEP_RECENT_TOKEN_RATIO`。 */
+  readonly keepRecentTokenRatio?: number;
+  /** 保留原文的最近工具结果条数上限，默认 `KEEP_RECENT_MAX`。 */
+  readonly keepRecentMax?: number;
+}
+
+/**
+ * 保留下来的工具结果**原文体积**占窗口预算的比例阈值（0.53 主题1②）。
+ *
+ * 语义（HANDOFF 原话）：「保留下来的工具结果原文体积超过窗口预算的 N% ⇒ 触发压缩/开新段」。
+ * 与 `KEEP_RECENT_TOKEN_RATIO` 不是一回事：那个决定**清几条**，这个决定**还要不要
+ * 在同一段里继续塞**。两者都用同一套 `estimateTokens` 口径，口径不一致会互相打架。
+ *
+ * 为什么默认取 0.20：
+ * - `retainedToolResultCount` 已经把「多条保留」封在窗口的 5% 以内（最多 10 条、
+ *   累计 ≤ `maxTokens × 5%`），所以 20% 只可能被**单条巨型结果**顶到 —— 那正是不该
+ *   继续往窗口里塞的情形（例如一次 read 回 200KB 文件）。
+ * - 20% = 保留预算的 4 倍：正常会话（每轮几条工具结果）不会触发，默认行为与 0.52
+ *   逐字节等价；只有单条结果自己就吃掉 1/5 窗口时才触发。
+ * - 为什么按体积而不是按条数：体积才是 provider 计费与前缀缓存的实际成本，
+ *   条数会漏掉「一条就顶十条」的巨型结果。
+ *
+ * 覆盖方式：`ContextConfig.toolResultVolumeRatio`（配置参数，不用环境变量 ——
+ * core 是库，环境变量会让同一份代码在不同机器上判定不同，也没法在门禁里逐例注入）。
+ */
+export const TOOL_RESULT_VOLUME_THRESHOLD_RATIO = 0.2;
+
+/** 体积阈值的可覆盖项（在保留预算之上多一个阈值）。 */
+export interface ToolResultVolumeOptions extends ToolResultKeepOptions {
+  /** 触发压缩/开新段的体积占比阈值，默认 `TOOL_RESULT_VOLUME_THRESHOLD_RATIO`。 */
+  readonly thresholdRatio?: number;
+}
+
+/**
+ * 保留体积的实测结果（纯数据，判据在 `measureRetainedToolResultVolume`）。
+ *
+ * `ratio` 与压缩判据同口径（`estimateTokens`），因此与 provider 的真实 token 有固定
+ * 比例误差，只能当**相对量**用；`exceeds` 才是判据本体。
+ */
+export interface ToolResultVolumeMeasurement {
+  /** 窗口预算（token）。 */
+  readonly maxTokens: number;
+  /** 本次使用的阈值占比。 */
+  readonly thresholdRatio: number;
+  /** 会保留原文的工具结果条数（与 `planClearedToolResults` 的保留集合一致）。 */
+  readonly retainedCount: number;
+  /** 这些保留结果的原文估算 token 合计。 */
+  readonly retainedTokens: number;
+  /** `retainedTokens / maxTokens`（`maxTokens <= 0` 时为 0）。 */
+  readonly ratio: number;
+  /** `ratio > thresholdRatio` ⇒ 该压缩/开新段了。 */
+  readonly exceeds: boolean;
+}
 
 /**
  * 字符级 token 估算（ASCII 0.25 / CJK 0.5 token 每字符）。
@@ -174,11 +237,17 @@ function applyCompactionToMessages(
  * 清空时保留原文的最近工具结果条数（R5）：从尾部累计估算 token，
  * 保留到累计 ≤ `maxTokens × 5%`，至少 1 条、最多 10 条。
  */
-function retainedToolResultCount(messages: readonly Message[], maxTokens: number): number {
-  const budget = maxTokens * KEEP_RECENT_TOKEN_RATIO;
+function retainedToolResultCount(
+  messages: readonly Message[],
+  maxTokens: number,
+  options?: ToolResultKeepOptions,
+): number {
+  const ratio = options?.keepRecentTokenRatio ?? KEEP_RECENT_TOKEN_RATIO;
+  const maxCount = options?.keepRecentMax ?? KEEP_RECENT_MAX;
+  const budget = maxTokens * ratio;
   let kept = 0;
   let tokens = 0;
-  for (let i = messages.length - 1; i >= 0 && kept < KEEP_RECENT_MAX; i -= 1) {
+  for (let i = messages.length - 1; i >= 0 && kept < maxCount; i -= 1) {
     const message = messages[i];
     if (message?.role !== 'tool') continue;
     const cost = estimateMessageTokens(message);
@@ -200,8 +269,12 @@ function retainedToolResultCount(messages: readonly Message[], maxTokens: number
  * 分开的理由是不变量「落盘的 message 只能 pop 或 append」：在压缩里就地改正文等于
  * 在磁盘上重写历史，用户回看旧消息时看到的就不是当时那份了。
  */
-export function planClearedToolResults(messages: readonly Message[], maxTokens: number): string[] {
-  const keep = retainedToolResultCount(messages, maxTokens);
+export function planClearedToolResults(
+  messages: readonly Message[],
+  maxTokens: number,
+  options?: ToolResultKeepOptions,
+): string[] {
+  const keep = retainedToolResultCount(messages, maxTokens, options);
   let skipped = 0;
   const cleared: string[] = [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -216,6 +289,57 @@ export function planClearedToolResults(messages: readonly Message[], maxTokens: 
     if (message.tool_call_id !== undefined) cleared.push(message.tool_call_id);
   }
   return cleared.reverse();
+}
+
+/**
+ * 量「保留下来的工具结果原文体积」占窗口预算多少（0.53 主题1②，纯函数，不改消息）。
+ *
+ * 用词对齐 HANDOFF：「保留下来的」= `planClearedToolResults` 会保留原文的那几条
+ * （最新结果，累计 ≤ 保留预算）。它们才是每轮请求里真正被重复计费的部分；
+ * 已清空的占位条只有几十个字符，量它们没有意义。
+ *
+ * 注意保留集合含「最新 1 条无论如何保留」这条硬规则，所以单条巨型结果会让
+ * `retainedTokens` 直接越过 5% 保留预算 —— 这正是体积阈值要抓的唯一情形。
+ */
+export function measureRetainedToolResultVolume(
+  messages: readonly Message[],
+  maxTokens: number,
+  options?: ToolResultVolumeOptions,
+): ToolResultVolumeMeasurement {
+  const thresholdRatio = options?.thresholdRatio ?? TOOL_RESULT_VOLUME_THRESHOLD_RATIO;
+  const keep = retainedToolResultCount(messages, maxTokens, options);
+  let kept = 0;
+  let retainedTokens = 0;
+  for (let i = messages.length - 1; i >= 0 && kept < keep; i -= 1) {
+    const message = messages[i];
+    if (message?.role !== 'tool') continue;
+    retainedTokens += estimateMessageTokens(message);
+    kept += 1;
+  }
+  const ratio = maxTokens > 0 ? retainedTokens / maxTokens : 0;
+  return {
+    maxTokens,
+    thresholdRatio,
+    retainedCount: kept,
+    retainedTokens,
+    ratio,
+    // 严格大于：恰好等于阈值算「不触发」，边界写进门禁（T6.1 / T6.2）。
+    exceeds: maxTokens > 0 && ratio > thresholdRatio,
+  };
+}
+
+/**
+ * 体积阈值判据：保留体积超阈值 ⇒ 该压缩/开新段。
+ *
+ * 只回答「该不该」，不决定「怎么压」—— 开新段要动 `SessionState`，落在 runtime 侧；
+ * 这条判据因此保持纯函数，方便门禁逐例钉死边界。
+ */
+export function shouldCompactForToolResultVolume(
+  messages: readonly Message[],
+  maxTokens: number,
+  options?: ToolResultVolumeOptions,
+): boolean {
+  return measureRetainedToolResultVolume(messages, maxTokens, options).exceeds;
 }
 
 /**
@@ -693,7 +817,13 @@ export class MemoryWorkingContext implements WorkingContext {
     const threshold = this.config.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD;
     const max = this.config.maxTokens ?? 1_000_000;
     // 0.10 R1-10：token 预算仍是主阈值（默认 0.85）；条数上限是兜底安全网。
-    return this.tokenCount > max * threshold || this.isOverMessageCap();
+    // 0.53 主题1②：第三个维度 —— 「保留下来的工具结果原文体积超窗口 N%」。
+    // 它只在单条巨型工具结果自己就吃掉窗口一角时才可能触发（多条保留已被
+    // 5% 保留预算封住），正常会话仍是 token 阈值先到。
+    const volumeExceeded = shouldCompactForToolResultVolume(this.messages, max, {
+      thresholdRatio: this.config.toolResultVolumeRatio,
+    });
+    return this.tokenCount > max * threshold || this.isOverMessageCap() || volumeExceeded;
   }
 
   /**

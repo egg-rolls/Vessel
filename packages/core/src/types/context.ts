@@ -161,6 +161,12 @@ export interface ContextConfig {
   maxMessages?: number;
   autoCompact?: boolean;
   compactThreshold?: number;
+  /**
+   * 0.53 主题1②：保住下来的工具结果原文体积占窗口预算的比例阈值。
+   * 超过 ⇒ `shouldCompact()` 判定该压缩/开新段（默认 `TOOL_RESULT_VOLUME_THRESHOLD_RATIO`）。
+   * 只是**多一个触发维度**，不放宽 token 主阈值，也不改清除集合的算法。
+   */
+  toolResultVolumeRatio?: number;
   /** 压缩完成回调（removedCount, remainingCount），供 TUI 显示提示 */
   onCompact?: (removed: number, remaining: number) => void;
   /**
