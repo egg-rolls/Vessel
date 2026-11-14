@@ -2142,6 +2142,66 @@ export async function runPlatformGatewayForeground(
     );
     const singleNodeId = nodes.length === 1 ? nodes[0]?.entry.node_id : undefined;
 
+    supervisor = new NodeSupervisor({
+      gatewayDataDir: dataDir,
+      instance,
+      env,
+      platform,
+      // 0.50：平台始终 http 监听；把页面 Origin 注入本地子 Node 的 CORS 白名单。
+      // 0.52：**必须先 spawn 子进程、再监听 8642**（见下面 startPlatformGateway 的注释）。
+      // 这里用已知的 ，不再依赖 。
+      platformOrigins: platformBrowserOrigins(platformHostname, platformPort),
+      ...(options.spawn !== undefined ? { spawn: options.spawn } : {}),
+      ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
+      ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+      ...(options.readinessTimeoutMs !== undefined
+        ? { readinessTimeoutMs: options.readinessTimeoutMs }
+        : {}),
+      ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
+    });
+    const specs: LocalNodeSpec[] = nodes.map((node) => ({
+      nodeId: node.entry.node_id,
+      name: node.entry.name,
+      dataDir: node.entry.data_dir,
+      apiUrl: node.apiUrl,
+      host: node.listen.host,
+      port: node.listen.port,
+      ...(node.entry.config_path !== undefined ? { configPath: node.entry.config_path } : {}),
+      ...(node.token !== undefined ? { token: node.token } : {}),
+      autoStart: node.entry.auto_start,
+    }));
+    const started = await supervisor.start(specs);
+    if (!started.ok) {
+      printErr(ui.err(`${started.code}: ${started.message}`));
+      await platformGateway?.stop().catch(() => undefined);
+      platformGateway = undefined;
+      return 1;
+    }
+
+    // 0.52（handoff 的硬前置）：**监听必须晚于 spawn 子进程**。
+    //
+    // 事故： 改成 handoff（保留 node/hub）之后，旧 gateway 的 8642 监听 socket
+    // 会被它 spawn 的 detached 子进程继承；父进程退出后 socket 仍以旧 pid 挂在 LISTEN 上，
+    // 新 gateway 永远  —— 实测：pid 已死、netstat 仍显示旧 pid 在监听，
+    // 且杀掉 hub 也不释放（说明句柄在 node 里），只能连 node 一起杀。
+    // 根因是 Windows 的句柄继承：只要 listen 发生在 spawn 之前，子进程就会拿到那个 socket。
+    // 所以这里把「起监听」挪到「spawn 完成」之后；顺带让子进程显式不继承 stdio。
+    // 0.50：本地 Hub 是独立进程；启动失败只 warning，不阻断 gateway。
+    // 手工/外部启动的 Hub 走 adopt，不记 manifest（`gateway stop` 不会杀它）。
+    let hubStarted: { url: string; adopted: boolean } | undefined;
+    if (hubAutoStart) {
+      const hubDataDir =
+        hubConfig?.dataDir !== undefined
+          ? path.resolve(expandHome(hubConfig.dataDir))
+          : path.join(dataDir, 'hub');
+      const hub = await supervisor.startHub({ dataDir: hubDataDir });
+      if (hub.ok) {
+        hubStarted = { url: hub.url, adopted: hub.adopted };
+      } else {
+        printErr(ui.warn(`${hub.code}: ${hub.message}`));
+      }
+    }
+
     try {
       platformGateway = startPlatformGateway({
         port: platformPort,
@@ -2173,57 +2233,12 @@ export async function runPlatformGatewayForeground(
       printErr(ui.err(`Platform gateway failed to start: ${errorMessage(error)}`));
       return 1;
     }
-
-    supervisor = new NodeSupervisor({
-      gatewayDataDir: dataDir,
-      instance,
-      env,
-      platform,
-      // 0.50：平台始终 http 监听；把页面 Origin 注入本地子 Node 的 CORS 白名单。
-      platformOrigins: platformBrowserOrigins(platformHostname, platformGateway.port),
-      ...(options.spawn !== undefined ? { spawn: options.spawn } : {}),
-      ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
-      ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
-      ...(options.readinessTimeoutMs !== undefined
-        ? { readinessTimeoutMs: options.readinessTimeoutMs }
-        : {}),
-      ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
-    });
-    const specs: LocalNodeSpec[] = nodes.map((node) => ({
-      nodeId: node.entry.node_id,
-      name: node.entry.name,
-      dataDir: node.entry.data_dir,
-      apiUrl: node.apiUrl,
-      host: node.listen.host,
-      port: node.listen.port,
-      ...(node.entry.config_path !== undefined ? { configPath: node.entry.config_path } : {}),
-      ...(node.token !== undefined ? { token: node.token } : {}),
-      autoStart: node.entry.auto_start,
-    }));
-    const started = await supervisor.start(specs);
-    if (!started.ok) {
-      printErr(ui.err(`${started.code}: ${started.message}`));
-      await platformGateway?.stop().catch(() => undefined);
-      platformGateway = undefined;
-      return 1;
-    }
-
-    // 0.50：本地 Hub 是独立进程；启动失败只 warning，不阻断 gateway。
-    // 手工/外部启动的 Hub 走 adopt，不记 manifest（`gateway stop` 不会杀它）。
-    let hubStarted: { url: string; adopted: boolean } | undefined;
-    if (hubAutoStart) {
-      const hubDataDir =
-        hubConfig?.dataDir !== undefined
-          ? path.resolve(expandHome(hubConfig.dataDir))
-          : path.join(dataDir, 'hub');
-      const hub = await supervisor.startHub({ dataDir: hubDataDir });
-      if (hub.ok) {
-        hubStarted = { url: hub.url, adopted: hub.adopted };
-      } else {
-        printErr(ui.warn(`${hub.code}: ${hub.message}`));
-      }
-    }
-
+    // 0.52（handoff 的硬前置）：**监听必须晚于 spawn 子进程（含 hub）**。
+    // 事故：gateway restart 改成 handoff 之后，旧 gateway 的 8642 监听 socket 会被它 spawn 的
+    // detached 子进程继承；父进程退出后 socket 仍以旧 pid 挂在 LISTEN 上，新 gateway 永远报
+    // port in use —— 实测 pid 已死、netstat 仍显示旧 pid 在监听，杀 hub 也不释放（句柄在 node 里），
+    // 只能连 node 一起杀。根因是 Windows 句柄继承：listen 早于 spawn，子进程就会拿到那个 socket。
+    // 所以把「起监听」挪到「spawn 完成（node + hub）」之后。
     try {
       await writeForegroundGatewayPid({
         dataDir,

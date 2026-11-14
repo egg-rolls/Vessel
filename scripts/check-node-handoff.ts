@@ -16,15 +16,15 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseArgs } from '../src/cli-args';
 import {
-  HANDOFF_MARKER_TTL_MS,
   consumeHandoffMarker,
+  HANDOFF_MARKER_TTL_MS,
   handoffMarkerPath,
   writeHandoffMarker,
 } from '../src/gateway/handoff';
 import {
-  type SpawnedChildRecord,
   NodeSupervisor,
   readSpawnedChildren,
+  type SpawnedChildRecord,
   spawnedChildrenPath,
   stopSpawnedChildren,
 } from '../src/gateway/node-supervisor';
@@ -91,7 +91,7 @@ async function probeMarker(): Promise<void> {
       'write → 文件落在 <dataDir>/platform-handoff.json',
       (await readFile(handoffMarkerPath(dataDir), 'utf8')).includes('platform_pid'),
     );
-    check('pid 命中且未过期 → true', (await consumeHandoffMarker(dataDir, undefined, process.pid)));
+    check('pid 命中且未过期 → true', await consumeHandoffMarker(dataDir, undefined, process.pid));
     check(
       '消费一次后失效（不会二次生效）',
       !(await consumeHandoffMarker(dataDir, undefined, process.pid)),
@@ -109,7 +109,12 @@ async function probeMarker(): Promise<void> {
         .catch(() => false)),
     );
 
-    await writeHandoffMarker(dataDir, undefined, process.pid, Date.now() - HANDOFF_MARKER_TTL_MS - 1);
+    await writeHandoffMarker(
+      dataDir,
+      undefined,
+      process.pid,
+      Date.now() - HANDOFF_MARKER_TTL_MS - 1,
+    );
     check(
       '过期 marker → false（退化成 0.51 的「连 node 一起停」）',
       !(await consumeHandoffMarker(dataDir, undefined, process.pid)),
@@ -153,7 +158,11 @@ async function probeStopSpawnedChildren(): Promise<void> {
       runCommand: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
       sleep: async () => undefined,
     });
-    check('keep 缺省 = 真停：terminate 被调用一次', terminateCalls === 1, `calls=${terminateCalls}`);
+    check(
+      'keep 缺省 = 真停：terminate 被调用一次',
+      terminateCalls === 1,
+      `calls=${terminateCalls}`,
+    );
     check('真停 stopped = 1', keptResult.stopped === 1, JSON.stringify(keptResult));
     check('真停后 manifest 被清掉', (await readSpawnedChildren(gatewayDataDir)).length === 0);
 
@@ -172,8 +181,10 @@ async function probeStopSpawnedChildren(): Promise<void> {
     check('keep: true → terminate 一次都不调用', terminateCalls === 0, `calls=${terminateCalls}`);
     check('kept.nodes = 1', keepResult.kept?.nodes === 1, JSON.stringify(keepResult.kept));
     check('kept.hubs = 0', keepResult.kept?.hubs === 0, JSON.stringify(keepResult.kept));
-    check('keep 不动 manifest（后续真停还能据此找到它们）',
-      (await readSpawnedChildren(gatewayDataDir)).length === 1);
+    check(
+      'keep 不动 manifest（后续真停还能据此找到它们）',
+      (await readSpawnedChildren(gatewayDataDir)).length === 1,
+    );
   } finally {
     await rm(gatewayDataDir, { recursive: true, force: true });
   }
@@ -212,9 +223,7 @@ async function probeSupervisorStop(): Promise<void> {
         sleep: async () => undefined,
       });
       // 最薄的 fake：直接登记两条子进程记录（private 字段，仅探针内可见）。
-      (
-        supervisor as unknown as { spawned: SpawnedChildRecord[] }
-      ).spawned.push(...entries);
+      (supervisor as unknown as { spawned: SpawnedChildRecord[] }).spawned.push(...entries);
       return supervisor;
     };
 
@@ -234,10 +243,7 @@ async function probeSupervisorStop(): Promise<void> {
     const killCalls: number[] = [];
     await buildSupervisor((pid) => killCalls.push(pid)).stop();
     check('keep 缺省 → 照旧终止两个子进程', killCalls.length === 2, `calls=${killCalls.length}`);
-    check(
-      '真停后 manifest 清空',
-      (await readSpawnedChildren(gatewayDataDir)).length === 0,
-    );
+    check('真停后 manifest 清空', (await readSpawnedChildren(gatewayDataDir)).length === 0);
   } finally {
     await rm(gatewayDataDir, { recursive: true, force: true });
   }
@@ -249,7 +255,9 @@ async function probeWiring(): Promise<void> {
   const restart = parseArgs(['gateway', 'restart']);
   check(
     '`gateway restart` → 缺省 handoff（keepNodes 未显式关闭）',
-    restart.ok && restart.args.gateway?.kind === 'restart' && restart.args.gateway.keepNodes !== false,
+    restart.ok &&
+      restart.args.gateway?.kind === 'restart' &&
+      restart.args.gateway.keepNodes !== false,
     JSON.stringify(restart.ok ? restart.args.gateway : restart),
   );
   const cold = parseArgs(['gateway', 'restart', '--no-keep-nodes']);
@@ -267,11 +275,16 @@ async function probeWiring(): Promise<void> {
   const stopKeep = parseArgs(['gateway', 'stop', '--keep-nodes']);
   check(
     '`gateway stop --keep-nodes` → 显式 keep',
-    stopKeep.ok && stopKeep.args.gateway?.kind === 'stop' && stopKeep.args.gateway.keepNodes === true,
+    stopKeep.ok &&
+      stopKeep.args.gateway?.kind === 'stop' &&
+      stopKeep.args.gateway.keepNodes === true,
     JSON.stringify(stopKeep.ok ? stopKeep.args.gateway : stopKeep),
   );
 
-  const source = await readFile(path.join(import.meta.dir, '..', 'src', 'gateway-command.ts'), 'utf8');
+  const source = await readFile(
+    path.join(import.meta.dir, '..', 'src', 'gateway-command.ts'),
+    'utf8',
+  );
   const countOf = (needle: string): number => source.split(needle).length - 1;
   check(
     '两条 restart 路径都传 keep（daemon + 前台）：keepNodes: command.keepNodes !== false 出现 2 次',
@@ -298,6 +311,22 @@ async function probeWiring(): Promise<void> {
     'handoff 时会打「kept N node(s) alive for handoff」日志',
     source.includes("t('gateway.stopKeptNodes'"),
   );
+  // 0.52 事故回归：handoff 保活子进程之后，旧 gateway 的 8642 监听 socket 会被 detached
+  // 子进程继承，父进程退出后 socket 仍挂在 LISTEN（pid 已死），新 gateway 永远抢不到端口。
+  // 唯一确定的解法是「先 spawn（node + hub）、后 listen」；顺序一旦回去，这个 bug 必复发。
+  const listenIndex = source.indexOf('platformGateway = startPlatformGateway({');
+  const spawnIndex = source.indexOf('supervisor.start(specs)');
+  const hubIndex = source.indexOf('supervisor.startHub(');
+  check(
+    '监听晚于 spawn node（否则 handoff 后 8642 被继承，端口永远占着）',
+    listenIndex > 0 && spawnIndex > 0 && spawnIndex < listenIndex,
+    'spawn=' + String(spawnIndex) + ' listen=' + String(listenIndex),
+  );
+  check(
+    '监听晚于 spawn hub（同上：hub 继承了也照样占着）',
+    listenIndex > 0 && hubIndex > 0 && hubIndex < listenIndex,
+    'hub=' + String(hubIndex) + ' listen=' + String(listenIndex),
+  );
 }
 
 async function main(): Promise<void> {
@@ -316,4 +345,3 @@ async function main(): Promise<void> {
 }
 
 await main();
-
