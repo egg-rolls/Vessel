@@ -752,10 +752,7 @@ async function probeTwoBatches(): Promise<void> {
   await stack.eu.run('PA follow', sessionId);
   eq('第一批失效 ⇒ 一张卡', (await cards()).length, 1);
   const firstCard = (await cards())[0]!;
-  check(
-    '第一张卡列出占位符明细',
-    firstCard.includes('«pii:') && firstCard.split('\n').length >= 3,
-  );
+  check('第一张卡列出占位符明细', firstCard.includes('«pii:') && firstCard.split('\n').length >= 3);
 
   // 第二批：页面 B 的另一个真值；再把时钟推进 > 60s，让两组都死
   stack.provider.setResponse('FB', toolCallResponse('fetch_page_b', {}, 'call-b'));
@@ -765,10 +762,7 @@ async function probeTwoBatches(): Promise<void> {
   await stack.eu.run('PB follow', sessionId);
   const all = await cards();
   eq('换一批失效 ⇒ 追加第二张卡（共两张）', all.length, 2);
-  check(
-    '两张卡内容不同（各自对应自己那一批）',
-    all.length === 2 && all[0] !== all[1],
-  );
+  check('两张卡内容不同（各自对应自己那一批）', all.length === 2 && all[0] !== all[1]);
   check(
     '两张卡都不含真值',
     all.every(
@@ -1036,7 +1030,10 @@ function probeNoRequestRewrite(): void {
 
   // e. 守卫未被绕过：机械解析 `PrefixChangeReason` 联合，词表必须**恰好**是技术性原因。
   //    一旦有人塞进业务枚举（pii_* / secret_* …），前缀不变量就名存实亡 —— 这条断言挡的就是它。
-  const union = guard.slice(guard.indexOf('export type PrefixChangeReason'), guard.indexOf(';', guard.indexOf('export type PrefixChangeReason')));
+  const union = guard.slice(
+    guard.indexOf('export type PrefixChangeReason'),
+    guard.indexOf(';', guard.indexOf('export type PrefixChangeReason')),
+  );
   const members = [...union.matchAll(/'([a-z_]+)'/g)].map((match) => match[1]!);
   const technical = new Set([
     'compaction',

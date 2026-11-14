@@ -321,7 +321,7 @@ const FIXTURES: readonly Fixture[] = [
         // 用户 2026-11-13 否掉「名字（旧身体）」：文本与现役一致，状态只由颜色表达；
         // 且地址必须拼出 `名字@节点:team`（或 `@节点:primary`），不许退回裸 `@primary`。
         list.includes('ownAgentScope') &&
-        list.includes('@${ownAgentScope}') &&
+        /\$\{ownAgentScope\}/u.test(list) &&
         !list.includes('oldBody') &&
         // 现役主题色 / 已退役灰：颜色由 primary 决定，不许只靠 class 猜
         list.includes('ownAgentLive')
