@@ -82,8 +82,9 @@ export function parseIpv6(raw: string): number[] | null {
   if (tailText.includes('.')) {
     const v4 = parseIpv4(tailText);
     if (!v4) return null;
-    const high = ((v4[0] << 8) | v4[1]).toString(16);
-    const low = ((v4[2] << 8) | v4[3]).toString(16);
+    // 解析器保证长度 4；显式取值避免  下的 possibly-undefined。
+    const high = ((v4[0]! << 8) | v4[1]!).toString(16);
+    const low = ((v4[2]! << 8) | v4[3]!).toString(16);
     text = `${text.slice(0, lastColon + 1)}${high}:${low}`;
   }
 

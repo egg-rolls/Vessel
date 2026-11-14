@@ -71,7 +71,16 @@ interface FetchDouble {
 
 function fakeFetch(routes: FakeRoutes): FetchDouble {
   const calls: string[] = [];
-  const impl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  // 根 tsconfig 无 DOM lib ⇒ 没有 RequestInfo；用结构化最小类型即可。
+  const impl = async (
+    input: string | URL | { url: string },
+    init?: {
+      signal?: {
+        aborted?: boolean;
+        addEventListener?: (name: string, fn: () => void, opts?: { once?: boolean }) => void;
+      };
+    },
+  ): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     calls.push(url);
     const route = routes[url];
@@ -86,7 +95,7 @@ function fakeFetch(routes: FakeRoutes): FetchDouble {
           abort();
           return;
         }
-        signal?.addEventListener('abort', abort, { once: true });
+        signal?.addEventListener?.('abort', abort, { once: true });
       });
     }
 
@@ -561,8 +570,8 @@ console.log('\n[manifest] vessel 清单按 in-process 插件解析（不是 chil
     );
     check(
       'manifest: 不声明端口',
-      JSON.stringify(manifest.contributes.ports ?? null) === 'null',
-      JSON.stringify(manifest.contributes.ports ?? null),
+      JSON.stringify((manifest.contributes as { ports?: unknown }).ports ?? null) === 'null',
+      JSON.stringify((manifest.contributes as { ports?: unknown }).ports ?? null),
     );
   }
 }

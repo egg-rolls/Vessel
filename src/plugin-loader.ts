@@ -55,7 +55,14 @@ export const FACTORY_PLUGINS: ReadonlySet<string> = new Set(['mcp-client', 'eval
  * 契约（docs/dev/plans/refs-pipeline.md §4）要求它不进默认插件集：
  * 只在 config.yaml 的 `plugins:` 里出现才加载，避免给所有用户加工具 schema。
  */
-export const OPT_IN_PLUGINS: ReadonlySet<string> = new Set(['media']);
+export const OPT_IN_PLUGINS: ReadonlySet<string> = new Set([
+  'media',
+  // 0.52：（web_fetch）默认 **不加载** —— 它让 agent 能主动对外发起 HTTP，
+  // 而目前的暴露面（提示注入 + 无出站限制）还没配上票据/审批体系。等 P1 鉴权与
+  //  的 guarded/locked 档落地、并在真实站点上验过抽取质量后再转默认。
+  // 启用方式：config.yaml 的  里显式列 。
+  'web-tools',
+]);
 
 /** 插件来源 */
 export type PluginSource = 'repo' | 'user' | 'project' | 'node_modules';

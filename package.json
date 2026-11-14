@@ -80,14 +80,10 @@
     "check:prompt-context-dedup": "bun run scripts/check-prompt-context-dedup.ts",
     "check:prompt-context-e2e": "bun run scripts/check-prompt-context-e2e.ts",
     "check:error-text": "bun run scripts/check-error-text.ts",
-<<<<<<< HEAD
     "check:node-handoff": "bun run scripts/check-node-handoff.ts",
     "check:node-drain": "bun run scripts/check-node-drain.ts",
-    "check:rotate-accounting": "bun run scripts/check-rotate-accounting.ts"
-=======
-    "check:web-fetch": "bun run scripts/check-web-fetch.ts",
-    "check:node-handoff": "bun run scripts/check-node-handoff.ts"
->>>>>>> 0.52-web-fetch
+    "check:rotate-accounting": "bun run scripts/check-rotate-accounting.ts",
+    "check:web-fetch": "bun run scripts/check-web-fetch.ts"
   },
   "workspaces": [
     "packages/*",
