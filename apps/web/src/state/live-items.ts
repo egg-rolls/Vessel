@@ -133,7 +133,12 @@ export interface HandoverRequest {
 export interface SessionCloseRequest {
   /** 要收口的 run（快照路径给 `run_id`）；省略 = 该会话所有仍 `running` 的 run。 */
   runIds?: readonly string[];
-  status: 'completed' | 'failed' | 'cancelled';
+  /**
+   * 收口成什么终态。`interrupted`（S1d）是快照路径专有的：服务端投影说这一 run 被中断
+   * （Host 重启 / 断线后没落终态帧）。它**不冒充**完成 —— 状态照抄快照，已产出的思考与
+   * 正文全部保留，只让「正在思考 / 停止按钮」退出。
+   */
+  status: 'completed' | 'failed' | 'cancelled' | 'interrupted';
   /** 收口时刻（终态帧本该出现的时间）：`completedAt` 与落地段的 `endedAt` 都用它。 */
   at: number;
   error?: string;
@@ -144,7 +149,7 @@ export interface SessionCloseRequest {
 
 /** 一条 run 的对账结论（`LiveItemStore` 的 run 级台账 `closedRuns` 的元素）。 */
 interface ReconciledClose {
-  status: 'completed' | 'failed' | 'cancelled';
+  status: 'completed' | 'failed' | 'cancelled' | 'interrupted';
   at: number;
   error?: string;
   via: 'agent-closed' | 'session-snapshot';

@@ -128,7 +128,13 @@ export interface RunGroup {
   error?: string;
   /** 0.14 additive：run.failed 的结构化错误元数据（缺字段时 undefined）。 */
   errorMeta?: ErrorMeta;
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  /**
+   * `interrupted` 是 0.52/S1d 新增的终态：服务端投影说这一 run 被中断（挂起 / Host
+   * 重启 / 断线后没落终态帧）。它**不是** `completed`，也**不是** `cancelled`（不是用户
+   * 主动停的）—— 收口只为让「正在思考 / 停止按钮」退出，已产出的思考与正文全部保留，
+   * 续跑入口仍在运行详情页（`runs.resume`）。
+   */
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
   /**
    * 这条终态是**对账**得来的，不是 run 自己的终态事件（`run.completed` /
    * `run.failed` / `run.cancelled`）折出来的 —— 即客户端没收到那一帧，改用外部
@@ -237,7 +243,11 @@ export interface RunFold {
    *   重复收口 / 终态先到再对账都不会写出第二条记录（幂等由状态机自己保证）；
    * - 不设 `output`：对账拿不到产物，宁可显式留空，也不编一段正文出来。
    */
-  close(status: 'completed' | 'failed' | 'cancelled', ts: number, opts?: FoldCloseOptions): boolean;
+  close(
+    status: 'completed' | 'failed' | 'cancelled' | 'interrupted',
+    ts: number,
+    opts?: FoldCloseOptions,
+  ): boolean;
 }
 
 /** `close()` 的附带证据：来自快照的错误文本 + 收口来源。 */
@@ -738,7 +748,7 @@ export function createFold(runId: string): RunFold {
    * 一条 item 都不动 —— 终态先到再对账 / 重复对账都是同一个 no-op。
    */
   const close = (
-    status: 'completed' | 'failed' | 'cancelled',
+    status: 'completed' | 'failed' | 'cancelled' | 'interrupted',
     ts: number,
     opts?: FoldCloseOptions,
   ): boolean => {

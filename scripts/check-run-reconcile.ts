@@ -17,9 +17,14 @@
  *   R2  正常 run 不受影响：收到 run.completed 的组不会被对账改写成别的状态
  *   R3  幂等：终态先到再 close ⇒ 一行 item 都不多、stats.reconciled 不涨
  *   R4  重折叠不复活：refold（回填 / 重连）之后仍是终态、仍然没有 live 尾巴
- *   R5  会话快照：completed / failed / cancelled 才收口；running / interrupted 不收口
+ *   R5  会话快照：completed / failed / cancelled / interrupted 才收口；running / idle 不收口
  *   R6  快照收口照抄状态（completed 不许被写成「取消」，failed 要带回 error）
  *   R7  不许杀掉更新的 run：关闭帧早于新 run 的最后一条事件 ⇒ 新 run 原样 running
+ *   R13 快照 interrupted 收口：不冒充完成（不写 output / 不动 completedAt），
+ *       已产出的思考与正文保留且带 endedAt，live 尾巴清空（S1d：堵住重启后的
+ *       「停止按钮 + 正在思考」残留）
+ *   R14 幂等：真终态先到再收口 interrupted ⇒ 一行 item 都不多、状态不被改写；
+ *       反过来 interrupted 已收口再来 completed 快照 ⇒ 仍是 interrupted
  *   R8  `agent.retired` / `agent.stale` 不收口（retired 是 rotate 的旧 body 交棒，
  *       stale 可能恢复 —— 拿它们收口 = 把正常交棒记成取消）
  *
@@ -240,7 +245,7 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
     },
   },
   {
-    name: 'R5 会话快照只认真终态（interrupted / running 不收口）',
+    name: 'R5 会话快照只认「客户端该收手」的状态（running / idle 不收口，interrupted 收口）',
     check: () => {
       const base = {
         session_id: SESSION,
@@ -258,10 +263,21 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
       if (completed.status !== 'completed' || completed.runId !== RUN) {
         return `快照解析错了：${JSON.stringify(completed)}`;
       }
-      for (const status of ['running', 'interrupted', 'idle', '']) {
+      for (const status of ['running', 'idle', '']) {
         const got = sessionTerminalOfDetail({ ...base, status } as unknown as SessionDetail);
-        if (got !== undefined) return `「${status}」不该被当成终态收口（会把可恢复的 run 杀掉）`;
+        if (got !== undefined) return `「${status}」不该被当成终态收口（会把还在跑的 run 杀掉）`;
       }
+      // interrupted（S1d）：服务端投影说这一 run 被中断。必须收口，但语义是「中断」
+      // 而不是「完成」—— 不收口的话客户端会永远挂着停止按钮 + 正在思考。
+      const interrupted = sessionTerminalOfDetail({
+        ...base,
+        status: 'interrupted',
+      } as unknown as SessionDetail);
+      if (interrupted === undefined) return 'interrupted 快照没有被认成终态（残留就是这么来的）';
+      if (interrupted.status !== 'interrupted') {
+        return `interrupted 快照被改写成 ${interrupted.status}（不许冒充完成）`;
+      }
+      if (interrupted.runId !== RUN) return `interrupted 快照丢了 run_id：${interrupted.runId}`;
       const failed = sessionTerminalOfDetail({
         ...base,
         status: 'failed',
@@ -447,6 +463,116 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
       if (group.output !== '其实跑完了') return `产物没写进来：${group.output}`;
       if (store.items.getSnapshot().stats.reconciled !== 1) {
         return `stats.reconciled 计数不对：${store.items.getSnapshot().stats.reconciled}`;
+      }
+      return null;
+    },
+  },
+  {
+    name: 'R13 快照 interrupted 收口：不冒充完成、清掉 live 尾巴、已产出的思考/正文带 endedAt 保留',
+    check: () => {
+      // 症状现场：Host 重启，客户端只有一段 run.started + 未闭合的 delta，终态帧永远不会来。
+      const store = new EventStore(0);
+      feed(store, stuckEntries());
+      if (runningGroups(groups(store)).length !== 1) return '前提不成立：没有 running 组';
+      const AT = T0 + 9000;
+      store.items.closeRuns(SESSION, {
+        runIds: [RUN],
+        status: 'interrupted',
+        at: AT,
+        via: 'session-snapshot',
+      });
+      store.items.flush();
+      const group = groups(store)[0];
+      if (group === undefined) return '收口之后渲染表里没有这一组了';
+      if (group.status !== 'interrupted') return `快照说 interrupted，组却是 ${group.status}`;
+      if (String(group.status) === 'completed') return 'interrupted 被写成了 completed（冒充完成）';
+      if (group.output !== undefined) return `interrupted 却写进了产物：${group.output}`;
+      if (group.completedAt !== AT) {
+        return `中断时刻没落到组上：${group.completedAt}（期望 ${AT}）`;
+      }
+      if (group.reconciled !== 'session-snapshot') return `没有对账痕迹：${group.reconciled}`;
+      // 这条单的原始症状：停止按钮 + 「正在思考」残留。
+      if (group.liveReasoning !== undefined) return `还挂着「正在思考」：${group.liveReasoning}`;
+      if (group.liveText !== undefined) return `还挂着 live 正文：${group.liveText}`;
+      if (runningGroups(groups(store)).length !== 0) return '停止按钮还在';
+      // 但已经产出的内容不许销毁：思考 / 正文落地成带 endedAt 的 item。
+      const groupItems = itemsOf(group);
+      const reasoningItem = groupItems.find((item) => item.kind === 'reasoning');
+      if (reasoningItem === undefined) return '中断收口把已产出的思考丢了';
+      if (reasoningItem.endedAt === undefined)
+        return '思考 item 没有 endedAt（看不清「到这里为止」）';
+      const textItem = groupItems.find((item) => item.kind === 'text');
+      if (textItem === undefined) return '中断收口把已产出的正文丢了';
+      if (textItem.endedAt === undefined) return '正文 item 没有 endedAt';
+      if (store.items.getSnapshot().stats.reconciled !== 1) {
+        return `stats.reconciled 计数不对：${store.items.getSnapshot().stats.reconciled}`;
+      }
+      return null;
+    },
+  },
+  {
+    name: 'R14 幂等：真终态先到再来 interrupted 快照不动；已 interrupted 的组不许被后续快照改写成完成',
+    check: () => {
+      // 方向一：run.completed 先到（真证据），之后快照才说 interrupted ⇒ 一行 item 都不许多。
+      const store = new EventStore(0);
+      feed(store, [
+        ...stuckEntries(),
+        runEv(9, 'run.completed', { output: '真的跑完了', duration_ms: 999 }, RUN, T0 + 8000),
+      ]);
+      const before = groups(store)[0];
+      if (before === undefined) return '前提不成立：没有这一组';
+      if (before.status !== 'completed') return `前提不成立：${before.status}`;
+      const itemCount = before.items.length;
+      const completedAt = before.completedAt;
+      store.items.closeRuns(SESSION, {
+        runIds: [RUN],
+        status: 'interrupted',
+        at: T0 + 9000,
+        via: 'session-snapshot',
+      });
+      store.items.flush();
+      const after = groups(store)[0];
+      if (after === undefined) return '收口之后渲染表里没有这一组了';
+      if (after.status !== 'completed')
+        return `真终态被迟到的 interrupted 快照改写：${after.status}`;
+      if (after.output !== '真的跑完了') return `产物被覆盖：${after.output}`;
+      if (after.completedAt !== completedAt) return '完成时刻被改写';
+      if (after.items.length !== itemCount) {
+        return `重复收口多出了 item：${itemCount} → ${after.items.length}`;
+      }
+      if (after.reconciled !== undefined) return `真终态上留了对账痕迹：${after.reconciled}`;
+      if (store.items.getSnapshot().stats.reconciled !== 0) {
+        return `真终态不该计入 reconciled：${store.items.getSnapshot().stats.reconciled}`;
+      }
+      // 方向二：interrupted 已收口（对账来的），再来一份 completed 快照 ⇒ 仍是 interrupted。
+      const store2 = new EventStore(0);
+      feed(store2, stuckEntries());
+      store2.items.closeRuns(SESSION, {
+        runIds: [RUN],
+        status: 'interrupted',
+        at: T0 + 9000,
+        via: 'session-snapshot',
+      });
+      store2.items.flush();
+      const interruptedGroup = groups(store2)[0];
+      if (interruptedGroup === undefined) return '前提不成立：收口之后没有这一组';
+      const interruptedCount = interruptedGroup.items.length;
+      store2.items.closeRuns(SESSION, {
+        runIds: [RUN],
+        status: 'completed',
+        at: T0 + 9500,
+        via: 'session-snapshot',
+      });
+      store2.items.flush();
+      const stillInterrupted = groups(store2)[0];
+      if (stillInterrupted === undefined) return '收口之后渲染表里没有这一组了';
+      if (stillInterrupted.status !== 'interrupted') {
+        return `已中断的组被后来的 completed 快照改成了 ${stillInterrupted.status}（对账变完成）`;
+      }
+      if (stillInterrupted.items.length !== interruptedCount) return '二次收口又多出了 item';
+      if (stillInterrupted.output !== undefined) return '二次收口把产物写进来了';
+      if (store2.items.getSnapshot().stats.reconciled !== 1) {
+        return `重复收口把 stats.reconciled 涨了：${store2.items.getSnapshot().stats.reconciled}`;
       }
       return null;
     },

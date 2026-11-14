@@ -474,8 +474,12 @@ export const RunItems = memo(function RunItems({
   cardsDefaultOpen?: boolean;
 }) {
   const copy = useMessageCopy();
+  // `interrupted`（S1d：快照说这一 run 被中断）在展示上等同取消态：run 已经不再往下跑，
+  // 不留停止按钮 / 操作行；但组里的 `status` 仍是 `interrupted`，不会被当成完成。
   const status =
-    group.status === 'cancelled' || (cancelled && group.status === 'failed')
+    group.status === 'cancelled' ||
+    group.status === 'interrupted' ||
+    (cancelled && group.status === 'failed')
       ? 'cancelled'
       : group.status;
   // 流式**只表示“还在收字”**，不再决定用哪种渲染：正文一律 Markdown（见 AssistantText）。

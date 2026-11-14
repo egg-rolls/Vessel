@@ -314,7 +314,9 @@ export function useChatTranscript({
    * 依赖里挂 `runningGroup?.runId`：详情先到、组后到（回填 / 重连把 run 补回来）时也要
    * 再对一次账，否则「快照早就 terminal」与「组晚一步出现」两边都刚好错开，残留照样留住。
    * 纪律：只碰仍 `running` 的组（`closeRuns` 内部再挡一次，真终态先到就是 no-op），状态
-   * 照抄快照（`completed` / `failed` / `cancelled`），不把「不知道」写成「成功」。
+   * 照抄快照（`completed` / `failed` / `cancelled` / `interrupted`），不把「不知道」写成
+   * 「成功」。`interrupted`（S1d）是为 Host / node 重启补的：那条路径没有 `agent.closed`，
+   * 快照只给 `interrupted`，不收口就会一直挂着「停止按钮 + 正在思考」。
    */
   const runningRunId = runningGroup?.runId ?? null;
   useEffect(() => {

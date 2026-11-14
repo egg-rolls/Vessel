@@ -470,15 +470,26 @@ export function sessionFailureOfDetail(
  * 会话投影里 `status` / `run_id` / `completed_at` / `error` 是**落盘的**，因此这是同一个
  * 页面里唯一「可核对」的终态来源（与失败卡同一条路径，不新增 RPC）。
  *
- * 只认真正的终态：`interrupted`（挂起 / Host 中断）可恢复，不能收口 —— 续跑入口在运行
- * 详情页（`runs.resume`）；`running` / 未知状态同理不动。
+ * 只认「服务端已经不会再自己往下跑」的状态。原先不收 `interrupted`（挂起 / Host 中断
+ * 可恢复，续跑入口在运行详情页 `runs.resume`），但 Host/node 重启正是走这条路：
+ * 没有 `agent.closed`，快照只有一个 `interrupted`，于是客户端永远停在「正在思考 + 停止
+ * 按钮」。S1d 起把 `interrupted` 也纳入收口，语义仍然是「中断」而不是「完成」：
+ * 已产出的思考 / 正文保留、`endedAt` 落到快照时间、续跑入口不变。
+ * `running` / 未知状态仍然不动。
  */
 export function sessionTerminalOfDetail(
   detail: SessionDetail | null | undefined,
 ): SessionTerminal | undefined {
   if (detail === null || detail === undefined) return undefined;
   const status = detail.status;
-  if (status !== 'completed' && status !== 'failed' && status !== 'cancelled') return undefined;
+  if (
+    status !== 'completed' &&
+    status !== 'failed' &&
+    status !== 'cancelled' &&
+    status !== 'interrupted'
+  ) {
+    return undefined;
+  }
   const at = detail.completed_at ?? detail.updated_at;
   if (typeof at !== 'number' || !Number.isFinite(at)) return undefined;
   const runId = detail.run_id;
@@ -499,7 +510,11 @@ export function sessionTerminalOfDetail(
 export interface SessionTerminal {
   sessionId: string;
   runId?: string;
-  status: 'completed' | 'failed' | 'cancelled';
+  /**
+   * 快照里的终态，照抄（不再做二次解释）。`interrupted`（S1d）表示「被中断」——
+   * 落成 `interrupted`，不冒充 `completed`，也不是 `cancelled`（用户没主动停）。
+   */
+  status: 'completed' | 'failed' | 'cancelled' | 'interrupted';
   at: number;
   error?: string;
 }
