@@ -1,3 +1,10 @@
+---
+title: 发布手册
+kind: current
+triggers: [发布, 发版, 版本号, 语义化版本, tag, 发布流程, 发布前置, 干跑, npm, 子包, 变更日志, 构建, web 控制台]
+paths: [docs/operations/RELEASE.md]
+---
+
 # 发布手册
 
 > 适用版本线：`0.x`。发布由 **tag `v*`** 触发，不由分支名触发。

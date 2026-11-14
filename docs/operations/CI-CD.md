@@ -1,3 +1,10 @@
+---
+title: CI / CD 手册
+kind: current
+triggers: [CI, CD, 持续集成, 持续交付, 发布流水线, 工作流, workflow, release.yml, 质量门禁, 静态断言, lint, typecheck, build, 烟测, 端到端, 干跑, 本地校验]
+paths: [docs/operations/CI-CD.md]
+---
+
 # CI / CD 手册
 
 > 维护者：`gov`。分支模型与发布规则见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
