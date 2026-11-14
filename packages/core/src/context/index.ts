@@ -3,7 +3,12 @@
  * @module @vessel-agent/core/context
  */
 
-export type { ContextAnchor, ContextConfig, WorkingContext } from '../types/context.js';
+export type {
+  ContextAnchor,
+  ContextConfig,
+  PromptContextFingerprint,
+  WorkingContext,
+} from '../types/context.js';
 export {
   CONTEXT_ANCHOR_RATIO_MAX,
   CONTEXT_ANCHOR_RATIO_MIN,
@@ -20,4 +25,9 @@ export {
   planClearedToolResults,
   withClearedToolResults,
 } from './context-manager.js';
+export {
+  normalizePromptContextFingerprint,
+  samePromptContext,
+  shouldPublishSystemContext,
+} from './prompt-context.js';
 export { createSessionBreaker } from './session-breaker.js';

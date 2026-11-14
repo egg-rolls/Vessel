@@ -6,7 +6,7 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { normalizeContextAnchor } from '../context/index.js';
+import { normalizeContextAnchor, normalizePromptContextFingerprint } from '../context/index.js';
 import type { Message } from '../types/provider.js';
 import type { RunUsage } from '../types/run-record-store.js';
 import type {
@@ -38,6 +38,8 @@ interface SessionRow {
   derived_upto_seq: number | null;
   /** 0.52 C：真实用量锚点（JSON；NULL = 旧行 / 没拿到过 provider 用量） */
   context_anchor: string | null;
+  /** 0.52：环境快照发布指纹（JSON；NULL = 旧行 / 还没发布过） */
+  prompt_context: string | null;
 }
 
 /** listRich 查询行形状（含派生列 message_count） */
@@ -134,7 +136,8 @@ export class SQLiteSessionStore implements SessionStore {
         branch TEXT,
         tenant_id TEXT,
         derived_upto_seq INTEGER,
-        context_anchor TEXT
+        context_anchor TEXT,
+        prompt_context TEXT
       )
     `);
     // ALTER TABLE 无 IF NOT EXISTS，逐列 try/catch（已存在则静默）
@@ -149,6 +152,8 @@ export class SQLiteSessionStore implements SessionStore {
     this.ensureColumn('derived_upto_seq', 'INTEGER');
     // 0.52 C：旧库补列；NULL 表示没有真实锚点（tokenCount 退回裸估算 = 0.51 行为）
     this.ensureColumn('context_anchor', 'TEXT');
+    // 0.52：旧库补列；NULL = 没有发布过指纹（首次运行会发一张全量卡，符合预期）
+    this.ensureColumn('prompt_context', 'TEXT');
   }
 
   /** 为旧库补列（列已存在时静默忽略） */
@@ -191,6 +196,8 @@ export class SQLiteSessionStore implements SessionStore {
       legacy_run: toLegacyRun(row.completed_at, row.usage, row.error),
       // 0.52 C：旧行 NULL / 脏 JSON ⇒ undefined ⇒ 行为与 0.51 一致。
       context_anchor: normalizeContextAnchor(parseJsonColumn(row.context_anchor)),
+      // 0.52：旧行 NULL / 脏 JSON ⇒ undefined。
+      prompt_context: normalizePromptContextFingerprint(parseJsonColumn(row.prompt_context)),
     };
   }
 
@@ -209,8 +216,8 @@ export class SQLiteSessionStore implements SessionStore {
 
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO sessions
-        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, title_source, preview, updated_at, branch, tenant_id, derived_upto_seq, context_anchor)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, title_source, preview, updated_at, branch, tenant_id, derived_upto_seq, context_anchor, prompt_context)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -231,6 +238,7 @@ export class SQLiteSessionStore implements SessionStore {
       typeof state.derived_upto_seq === 'number' ? state.derived_upto_seq : null,
       // 0.52 C：真实锚点整体存 JSON —— 形状会随实现演进，列不再拆字段。
       state.context_anchor !== undefined ? JSON.stringify(state.context_anchor) : null,
+      state.prompt_context !== undefined ? JSON.stringify(state.prompt_context) : null,
     );
   }
 

@@ -4,7 +4,11 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { estimateTokens, withClearedToolResults } from '../context/index.js';
+import {
+  estimateTokens,
+  shouldPublishSystemContext,
+  withClearedToolResults,
+} from '../context/index.js';
 import {
   evaluateLimitWarnings,
   evaluateTermination,
@@ -23,6 +27,7 @@ import {
 import {
   type ContextCompactedReason,
   DEFAULT_COMPACT_THRESHOLD,
+  type PromptContextFingerprint,
   type WorkingContext,
 } from '../types/context.js';
 import type { ErrorEnvelope } from '../types/error.js';
@@ -472,6 +477,13 @@ export class ExecutionUnit {
    * 因此首份快照没有 `changed` / `previous_hash`）。
    */
   private lastSystemContext?: SystemContextSnapshot;
+  /**
+   * 0.52：环境快照的**持久指纹**（从  恢复 / 发布后回写）。
+   *
+   *  是纯内存去重，重启就没了 —— 于是每重启一次，下一条消息必然重发
+   * 一张全量「上下文」卡（用户报的问题）。指纹跨进程活着，才能做到「没实质变化就不发」。
+   */
+  private promptContextFingerprint?: PromptContextFingerprint;
   /** 0.15 E2：本 run 已预警的 limit key（每个 key 只发一次） */
   private readonly warnedLimitKeys = new Set<string>();
   /** 0.16 E5：本 run 已注入的消息稳定键 / 对象引用（BeforeLlm 去重） */
@@ -1157,6 +1169,8 @@ export class ExecutionUnit {
     // 压缩后）用它把本地估算校正到 provider 口径；有真实值时锚点不抢（见 tokenCount）。
     // 必须在 seed 之后注入：播种会 setSessionId，切会话时会把锚点清掉。
     execution.workingContext.setContextAnchor?.(stored?.context_anchor, this.model);
+    // 0.52：恢复「上次发布过的环境快照指纹」，让重启后的第一条消息能正确去重。
+    this.promptContextFingerprint = stored?.prompt_context;
 
     // system 前缀只允许显式 revision：基底 system / Self Card 只在构造期变化，
     // 若同一 session 的基底确实不同（例如运行时重建），标记为一次 system_revision。
@@ -2404,6 +2418,23 @@ export class ExecutionUnit {
     ) {
       return;
     }
+    // 0.52：同进程没有上一份快照（= 刚重启 / 新 body）时，用**持久指纹**判断要不要发。
+    // 只有 hash / model / tools 全同才跳过；跨进程拿不到原文差，所以有变化时发全量卡。
+    const nextFingerprint: PromptContextFingerprint = {
+      hash,
+      model: this.model,
+      tools_count: request.toolsCount,
+      at: Date.now(),
+    };
+    if (
+      !shouldPublishSystemContext({
+        live: last !== undefined && last.sessionId === execution.sessionId,
+        restored: this.promptContextFingerprint,
+        next: nextFingerprint,
+      })
+    ) {
+      return;
+    }
     const snapshot: SystemContextSnapshot = {
       sessionId: execution.sessionId,
       hash,
@@ -2417,7 +2448,8 @@ export class ExecutionUnit {
     const previousHash =
       last !== undefined && last.sessionId === execution.sessionId ? last.hash : undefined;
     this.lastSystemContext = snapshot;
-    const at = Date.now();
+    this.promptContextFingerprint = nextFingerprint;
+    const at = nextFingerprint.at;
     this.publishEvent({
       type: 'prompt.system_context',
       run_id: execution.runId,
@@ -3183,6 +3215,8 @@ export class ExecutionUnit {
       // 0.52 C：锚点原样继承；本轮若拿到过真实用量，saveSessionState 会用窗口里的
       // 新锚点覆盖它。换模型时留着旧锚点无害 —— 应用侧按 model 过滤。
       ...(stored?.context_anchor !== undefined ? { context_anchor: stored.context_anchor } : {}),
+      // 0.52：环境快照指纹跨轮继承（发布新卡时由 saveSessionState 覆盖成最新的一份）。
+      ...(stored?.prompt_context !== undefined ? { prompt_context: stored.prompt_context } : {}),
       status: 'running',
       last_run_id: runId,
     };
@@ -3216,6 +3250,11 @@ export class ExecutionUnit {
       // 窗口没有锚点（旧会话 / 本次没拿到 usage）时保留继承来的旧值。
       const anchor = execution.workingContext.contextAnchor;
       if (anchor !== undefined) sessionState.context_anchor = anchor;
+    }
+    // 0.52：环境快照的发布指纹随 session 落盘（跨重启去重用）。
+    // 只在本轮确实发布过卡时存在；没有就不动（保留继承来的旧值）。
+    if (this.promptContextFingerprint !== undefined) {
+      sessionState.prompt_context = this.promptContextFingerprint;
     }
     // C4：终态快照保存前重读存储侧 title，保留 run 进行中的人工 rename。
     // 读失败保留快照并继续（不抛），不影响终态落盘。

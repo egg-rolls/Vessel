@@ -3,7 +3,7 @@
  * @module @vessel-agent/core/session
  */
 
-import type { ContextAnchor } from './context.js';
+import type { ContextAnchor, PromptContextFingerprint } from './context.js';
 import type { Message } from './provider.js';
 import type { RunUsage } from './run-record-store.js';
 
@@ -62,6 +62,14 @@ export interface SessionState {
    * 它只校正**估算**（展示与阈值判断）；provider 的真实用量到达后仍然真实值优先。
    */
   context_anchor?: ContextAnchor;
+  /**
+   * 环境快照（上下文卡）的发布指纹（0.52，additive）。
+   *
+   * 存在的理由：`ExecutionUnit.lastSystemContext` 是纯内存去重，重启就没了 ⇒ 每次重启后
+   * 下一条消息必然重发一张全量「上下文」卡。把指纹随 session 落盘，重启后 seed 恢复，
+   * 才能做到「没有实质变化就不发」（用户 2026-11-13 报的问题）。
+   */
+  prompt_context?: PromptContextFingerprint;
 }
 
 /** 会话摘要（listRich 返回，照搬 Hermes list_sessions_rich 的字段集，简化） */

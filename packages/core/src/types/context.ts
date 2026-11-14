@@ -81,6 +81,18 @@ export interface ContextAnchor {
   at: number;
 }
 
+/** 环境快照（上下文卡）的发布指纹：跨进程重启去重（0.52，additive） */
+export interface PromptContextFingerprint {
+  /** 系统提示词 + 自述卡的全文 hash */
+  hash: string;
+  /** 模型名：换模型必须重发（tokenizer / 窗口都变了） */
+  model: string;
+  /** 工具个数：装/卸插件必须重发 */
+  tools_count: number;
+  /** 最后一次发布的时刻（epoch ms） */
+  at: number;
+}
+
 /** 一次 Run 的上下文窗口（per Run，从 SessionEventLog 重建，不落库） */
 export interface WorkingContext {
   add(msg: Message): void;
