@@ -150,7 +150,7 @@ async function probeStopSpawnedChildren(): Promise<void> {
         terminateCalls += 1;
         return true;
       },
-      runCommand: async () => ({ stdout: '', stderr: '', code: 0 }),
+      runCommand: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
       sleep: async () => undefined,
     });
     check('keep 缺省 = 真停：terminate 被调用一次', terminateCalls === 1, `calls=${terminateCalls}`);
@@ -166,7 +166,7 @@ async function probeStopSpawnedChildren(): Promise<void> {
         terminateCalls += 1;
         return true;
       },
-      runCommand: async () => ({ stdout: '', stderr: '', code: 0 }),
+      runCommand: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
       sleep: async () => undefined,
     });
     check('keep: true → terminate 一次都不调用', terminateCalls === 0, `calls=${terminateCalls}`);

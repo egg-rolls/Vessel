@@ -2096,6 +2096,9 @@ export async function runPlatformGatewayForeground(
 
   let platformGateway: ReturnType<typeof startPlatformGateway> | undefined;
   let supervisor: NodeSupervisor | undefined;
+  // handoff（0.52）：命中「保留子进程」时，成功/失败/退出路径都不能把它们停掉。
+  // 声明必须在 try 之外 —— 下面的 finally 也要读它（否则 keep 会被回滚）。
+  let handoffKept = false;
   try {
     const platformHostname = (
       targetHost ??
@@ -2220,9 +2223,6 @@ export async function runPlatformGatewayForeground(
         printErr(ui.warn(`${hub.code}: ${hub.message}`));
       }
     }
-
-    // handoff（0.52）：命中「保留子进程」时，成功/失败路径都不能把它们停掉。
-    let handoffKept = false;
 
     try {
       await writeForegroundGatewayPid({
