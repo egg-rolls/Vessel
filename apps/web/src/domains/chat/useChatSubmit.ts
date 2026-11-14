@@ -171,6 +171,11 @@ export function useChatSubmit({
       // 其它错误保持原样展示。
       const refsRejection = submittedRefs.length > 0 ? refsErrorText(error) : null;
       toast.error(refsRejection ?? errorMessage(error));
+      // 0.52（F5）：**发不出去就把内容还给输入框**。
+      // 用户 2026-11-13 遇到「消息被吞」：runs.start 失败（当时是 lease_expired），
+      // 界面上既没有回复、输入框也空了 —— 草稿其实还在 store 里，但用户看不到就以为是丢了。
+      // 这里只在「输入框是空的」时把它填回去，绝不覆盖用户在等待期间新写的内容。
+      writeDraft(sourceKey, (current) => (current.trim() === '' ? text : current));
       return false;
     } finally {
       setSubmitting(false);

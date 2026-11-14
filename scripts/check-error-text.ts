@@ -71,6 +71,24 @@ expect(
   'C: debug 判定必须复用「显示系统信息 / verbosity=debug」这一个开关，别另造',
 );
 
+// E. 发送失败必须把内容还给输入框（F5，用户 2026-11-13 的「消息被吞」）
+const submit = await source('apps/web/src/domains/chat/useChatSubmit.ts');
+const catchIndex = submit.indexOf('} catch (error) {');
+const catchBlock = catchIndex < 0 ? '' : submit.slice(catchIndex);
+expect(catchBlock.length > 0, 'E: useChatSubmit 里找不到 catch 分支');
+expect(
+  catchBlock.includes('writeDraft(sourceKey'),
+  'E: 发送失败没有把草稿还回输入框 —— 用户会以为消息被吞了',
+);
+expect(
+  catchBlock.includes("current.trim() === '' ? text : current"),
+  'E: 回填必须「只在输入框为空时」，不许覆盖用户等待期间新写的内容',
+);
+expect(
+  (submit.match(/current\.trim\(\) === text \? '' : current/gu) ?? []).length === 1,
+  'E: 「清空草稿」只应出现在成功路径一次（多一处就可能把失败的消息吞掉）',
+);
+
 // D. i18n 两侧都要有
 const zh = await source('apps/web/src/i18n/messages/zh-CN.ts');
 const en = await source('apps/web/src/i18n/messages/en.ts');
