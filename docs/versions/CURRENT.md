@@ -21,6 +21,10 @@
     题序位置，已答一律 `skipped`，归不到的丢弃，记录里不存在没有题号的答案）。
   - **ask 已答 = 立刻上锁**：提交动作发出即本端记「已答」（4s TTL 自愈）+ 载荷只交未落定行；
     **浏览位跨刷新保留**（`askCursor.v1`，记题号不记下标）。
+  - **「已答」分组（待批页 / 团队页）**：已落定的题不再混在未答里 —— 每请求一个默认折叠的
+    「已答 (n)」分组，未答置顶；分组判据就是载荷剔除用的同一个 `settled`
+    （`askRowGroups` / `askSettledRows`，不另造一套），分组去掉的只是「一眼看到多少」，
+    已答行的输入照旧锁住；`check:ask-groups` 钉住「已答归组 / 未答在前 / 幂等 / 与载荷同口径」。
   - **会话 ↔ agent 补成双向**（additive）：`sessions.list` 每项 / `sessions.get` 结果带
     `agent: { id, name, state, presence, primary }`；`primary=false` = 已退役 body 的会话。
     前端据此不再反查三份名单（`SessionList` 四级回退：节点地址 > 会话自带归属 > roster 反查 > primary 徽标），

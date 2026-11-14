@@ -16,6 +16,8 @@
  *   `answeredQuestionIds`）。已落定的题在界面上标「已答」并锁住输入，草稿保留回看，
  *   但**不再进载荷** —— 重投的那几行只能靠题号被服务端挡回来，缺 question_id 的
  *   旧写法还会变成一条独立答案（分批提交漂移的入口，见 ask-submit-plan）；
+ * - 0.52：「已答」（已落定）的行收进每请求一个**折叠分组**（默认折叠、标题带计数），
+ *   未答置顶 —— 分组判据就是 `askRowGroups` 的 `settled`，与载荷剔除同一个，不另造；
  * - 提交中、或该 requestId 已在途时禁用输入，避免重复投递。
  *
  * 0.51：草稿（勾选 / 自定义输入 / 纳入勾选）不再是组件 state，而是按
@@ -28,11 +30,12 @@ import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { AskUserQuestion } from '../../gateway/types';
 import { t } from '../../i18n';
+import { AnsweredGroup } from './AnsweredGroup';
 import { AskOptionChips } from './AskOptionChips';
 import { useAskDrafts, useDropAskDrafts, useSetAskDraft } from './ask-draft-store';
 import { type AskDraftValue, isAskDraftAnswered } from './ask-drafts';
 import { toggleAskOption } from './ask-selection';
-import { askIncludedAnswers, askPlanRows } from './ask-submit-plan';
+import { askIncludedAnswers, askPlanRows, askRowGroups } from './ask-submit-plan';
 import type { PendingCluster } from './cluster';
 import { questionBlocks } from './question-blocks';
 import { usePendingBatch } from './usePendingBatch';
@@ -197,6 +200,23 @@ export function PendingClusterCard({
   /** 全部问题的扁平视图：勾选、计数、投递计划都按「题」算，不按 request 绑死。 */
   const rows = useMemo(() => askPlanRows(cluster.requests, drafts), [cluster.requests, drafts]);
 
+  /**
+   * 每个请求的「未答 / 已答」两摞（0.52）：未答置顶，已答收进默认折叠的分组。
+   *
+   * 分组用的是 `askRowGroups` —— 和载荷剔除同一个 `settled`，不另造判据；
+   * 已落定的行照样锁输入（`QuestionField` 自己按 `settled` 锁），分组只管收起来。
+   */
+  const rowGroups = useMemo(() => {
+    const byRequest = new Map<string, ReturnType<typeof askRowGroups>>();
+    for (const request of cluster.requests) {
+      byRequest.set(
+        request.requestId,
+        askRowGroups(rows.filter((row) => row.requestId === request.requestId)),
+      );
+    }
+    return byRequest;
+  }, [cluster.requests, rows]);
+
   /** 本次回复的投递计划：按 request 分组（同一请求的几题合成一次 `ask.respond`）。 */
   const plan = useMemo(() => {
     const byRequest = new Map<string, typeof rows>();
@@ -345,6 +365,24 @@ export function PendingClusterCard({
           {cluster.requests.map((request) => {
             const pendingRespond = responding.has(request.requestId);
             const requestDisabled = busy || pendingRespond;
+            const groups = rowGroups.get(request.requestId) ?? { open: [], answered: [] };
+            /** 一行的渲染：未答摞和已答摞共用同一份，避免两处字段漂移。 */
+            const renderRow = (row: (typeof rows)[number]) => (
+              <QuestionField
+                // key 用问题自身的 header+正文：ask 的题目在同一请求内不会重复，
+                // 用下标当 key 会在勾选状态变化时错位（biome noArrayIndexKey）。
+                key={`${row.requestId}:${row.question.header}:${row.question.question}`}
+                question={row.question}
+                groupId={row.requestId}
+                index={row.index}
+                include={row.draft.include}
+                settled={row.settled}
+                draft={{ selected: row.draft.selected, custom: row.draft.custom }}
+                disabled={requestDisabled}
+                onToggleInclude={() => toggleInclude(row.requestId, row.index)}
+                onChange={(next) => setAnswer(row.requestId, row.index, next)}
+              />
+            );
             return (
               <div
                 key={request.requestId}
@@ -358,24 +396,10 @@ export function PendingClusterCard({
                   <span className="tabular-nums">{formatTimestamp(request.requestedAt)}</span>
                   {pendingRespond && <span>{t('pending.item.responding')}</span>}
                 </div>
-                {rows
-                  .filter((row) => row.requestId === request.requestId)
-                  .map((row) => (
-                    <QuestionField
-                      // key 用问题自身的 header+正文：ask 的题目在同一请求内不会重复，
-                      // 用下标当 key 会在勾选状态变化时错位（biome noArrayIndexKey）。
-                      key={`${row.requestId}:${row.question.header}:${row.question.question}`}
-                      question={row.question}
-                      groupId={row.requestId}
-                      index={row.index}
-                      include={row.draft.include}
-                      settled={row.settled}
-                      draft={{ selected: row.draft.selected, custom: row.draft.custom }}
-                      disabled={requestDisabled}
-                      onToggleInclude={() => toggleInclude(row.requestId, row.index)}
-                      onChange={(next) => setAnswer(row.requestId, row.index, next)}
-                    />
-                  ))}
+                {groups.open.map(renderRow)}
+                <AnsweredGroup count={groups.answered.length}>
+                  {groups.answered.map(renderRow)}
+                </AnsweredGroup>
               </div>
             );
           })}

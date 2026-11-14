@@ -315,6 +315,8 @@ export const messages = {
   'pending.source.team': '团队',
   'pending.item.include': '回复这题',
   'pending.item.answered': '已答',
+  'pending.answeredGroup.expand': '已答 {count} 题 · 展开',
+  'pending.answeredGroup.collapse': '已答 {count} 题 · 收起',
   'pending.item.includeAll': '全选',
   'pending.item.responding': '回复中…',
   'pending.submit': '回复',

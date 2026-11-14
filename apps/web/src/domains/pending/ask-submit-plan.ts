@@ -81,6 +81,40 @@ export function askReadyRows(rows: readonly AskPlanRow[]): AskPlanRow[] {
   return rows.filter((row) => !row.settled && row.answered);
 }
 
+/** 已落定的行（服务端已答 / 本端刚提交）：标「已答」、锁住输入、不进载荷。 */
+export function askSettledRows(rows: readonly AskPlanRow[]): AskPlanRow[] {
+  return rows.filter((row) => row.settled);
+}
+
+/**
+ * 一屏的行按「未答 / 已答」分组（0.52：待批页与团队页的「已答」折叠分组）。
+ *
+ * 判据就是 `settled` 本身 —— `askOpenRows` / `askSettledRows` / 载荷剔除用的都是它，
+ * 这里**不另造一套**：界面上怎么分和载荷里怎么剔必须是同一个口径，否则会出现
+ * 「收进折叠分组的行又被提交上去」。
+ *
+ * 纯函数：只按 `settled` 分成两摞，相对顺序原样保留（`filter` 是稳定的），未答在前
+ * （置顶）、已答在后。对同一组行反复分组结果一致（见 `askRowsOfGroups`）。
+ */
+export interface AskRowGroups {
+  /** 还没落定的行（含本地答了但没落定的 —— 它们还在本次回复里）。 */
+  readonly open: readonly AskPlanRow[];
+  /** 已落定的行：默认折叠的那一摞。 */
+  readonly answered: readonly AskPlanRow[];
+}
+
+export function askRowGroups(rows: readonly AskPlanRow[]): AskRowGroups {
+  return { open: askOpenRows(rows), answered: askSettledRows(rows) };
+}
+
+/**
+ * 分组拍平（未答在前）：给「只能一列渲染」的调用方，也是分组幂等的入口 ——
+ * `askRowGroups(askRowsOfGroups(g))` 与 `g` 同形（同序、同成员）。
+ */
+export function askRowsOfGroups(groups: AskRowGroups): AskPlanRow[] {
+  return [...groups.open, ...groups.answered];
+}
+
 /** 单行 → 一条答案；题号必带，缺了服务端就只能靠正文猜题。 */
 export function askAnswerOf(row: AskPlanRow): AskUserAnswer {
   return buildAskAnswer(row.question, row.draft, row.index);
