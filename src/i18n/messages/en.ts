@@ -543,4 +543,20 @@ export const en: Record<MessageKey, string> = {
     'note: writing the agent snapshot failed, so the records are kept (their sessions are already cleared); fix write permissions and re-run.',
   'prune.locked':
     'Nothing deleted; stop the gateway/node (`vessel gateway stop`), then re-run with --yes.',
+
+  // ── restart recovery card (0.52 S1c) ──
+  // One single body for both the user and the model (no UI/model fork).
+  // First line's first token is `restart` (web `env-notice.ts` picks the card scope from it);
+  // detail lines carry run_id + the ISO instant, which double as the boot idempotency key.
+  'resume.card.summary':
+    'the gateway restarted while you were working ({reason}); run {run_id} was interrupted at {time}.',
+  'resume.card.run_line': 'interrupted run: {run_id} (reason: {reason})',
+  'resume.card.interrupted_at': 'interrupted at: {time}',
+  'resume.card.verify_first':
+    'check the current state (files, processes, task progress) before continuing; do not redo work that still exists.',
+  'resume.card.background_stopped':
+    'background processes were stopped by the restart; start them again if you still need them.',
+  'resume.card.pending_inputs':
+    '{count} accepted input(s) are queued and were admitted after this card, oldest first.',
+  'resume.card.no_pending_inputs': 'no accepted input was queued; continue from the current state.',
 };

@@ -3134,6 +3134,49 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * 启动恢复卡（0.52 S1c）：把一条环境信息排进**该会话**的下一次请求。
+   *
+   * 走既有环境信息通道（`MemberRuntime.notice`）：活体已开跑就立刻 `appendNotice`，
+   * 否则按成员暂存到下一轮 `runTurn` —— 那一轮把暂存的 notice 作为**注入消息**
+   * 放在**用户输入之前**（`RunOptions.messages`），所以这张卡既进模型上下文，
+   * 也作为 `vessel:notice` 消息落进会话流（web 渲染成 EnvCard）：
+   * **一张卡，两边同源**（用户裁定：可见性一致，不是隐藏输入）。
+   *
+   * 返回 false = 这个会话现在收不了卡（不在册 / 已 left / 已 closed / 没有可重建的
+   * binding）：调用方（启动恢复）据此记 `skipped`，留给下次启动，不编一条假输入。
+   */
+  async announceEnvironmentCard(sessionId: string, text: string): Promise<boolean> {
+    if (typeof text !== 'string' || text.length === 0) return false;
+    await this.ready;
+    const notice = this.runtime.notice;
+    if (notice === undefined) return false;
+    const record = this.registry.getBySession(sessionId);
+    if (record === undefined) return false;
+    if (record.membership === 'left' || record.state === 'closed') return false;
+    // 与 `recoverPendingInputs` 同一套「可投递」判据：退役 / 未知会话不做声。
+    if (this.registry.isRetiredSession(sessionId)) return false;
+    if (!liveBindings(record).some((body) => body.bindingId === sessionId)) return false;
+    try {
+      // 卡片的 timestamp ＝ 产生时刻（启动），不是注入时刻：
+      // 它必须在被重放的那条输入所在 run 之前（探针 d 的断言口径）。
+      const at = Date.now();
+      notice.call(this.runtime, record.id, text, { timestamp: at });
+      this.logger.info('agent.env_card.announced', {
+        agent_id: record.id,
+        session_id: sessionId,
+      });
+      return true;
+    } catch (error) {
+      this.logger.warn('agent.env_card.announce_failed', {
+        agent_id: record.id,
+        session_id: sessionId,
+        error: errorText(error),
+      });
+      return false;
+    }
+  }
+
+  /**
    * 启动恢复（0.53）：把**进程死亡时还没变成 run input** 的 human 输入重新投递一次。
    *
    * 判据（唯一）：`status === 'unread'` 且**未被 held** 且 `session_id` 存在且

@@ -84,6 +84,7 @@
     "check:error-text": "bun run scripts/check-error-text.ts",
     "check:node-handoff": "bun run scripts/check-node-handoff.ts",
     "check:node-drain": "bun run scripts/check-node-drain.ts",
+    "check:resume-boot": "bun run scripts/check-resume-boot.ts",
     "check:rotate-accounting": "bun run scripts/check-rotate-accounting.ts",
     "check:web-fetch": "bun run scripts/check-web-fetch.ts"
   },

@@ -109,6 +109,19 @@ export {
   createResumeMarkerRegistry,
   type ResumeMarkerRegistryState,
 } from './runtime/resume-markers.js';
+// 0.52 S1c：启动恢复的判定核心（纯函数：幂等键 / 准入判定 / 清标记守卫）
+export {
+  findRestartCardRecord,
+  isRestartCardMessage,
+  RESTART_CARD_SENDER,
+  type RestartCandidate,
+  restartCardAdmitted,
+  type RestartCardKey,
+  restartCardKey,
+  restartCandidates,
+  restartInterruptedIso,
+  sameRestartMarker,
+} from './runtime/resume-recovery.js';
 // Stage 4：Run 写端口（接口 type-only；实现类不导出；装配缝只导出工厂函数）
 export {
   createRunJournalFactory,

@@ -278,13 +278,24 @@ function contextPolicyFor(role: AgentRole): ContextPolicy {
 }
 
 /** 身份变更 notice 的上下文消息形状（与 core appendNotice 一致） */
-function noticeMessage(text: string): Message {
+function noticeMessage(text: string, timestamp?: number): Message {
   return {
     role: 'user',
     name: 'vessel:notice',
     content: text,
-    timestamp: Date.now(),
+    timestamp: timestamp ?? Date.now(),
   };
+}
+
+/**
+ * 待注入 notice。
+ *
+ * `timestamp` 是这段环境信息的**产生时刻**（0.52 S1c：启动恢复卡在启动时就产生，
+ * 要早于它之后被放行的那条输入所在的 run）；缺省就用注入时刻，与既有行为一致。
+ */
+interface PendingNotice {
+  text: string;
+  timestamp?: number;
 }
 
 /** 成员权限模式；bridge 把交互请求转到父事件流，缺省 allow */
@@ -915,8 +926,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
   private readonly leaseService?: ExecutionUnitOptions['leaseService'];
   private readonly runtime: Runtime;
   private readonly entries = new Map<string, MemberExecutionEntry>();
-  /** 未 spawn / 未开跑成员的待注入 notice（member id → 有界文本队列） */
-  private readonly pendingNotices = new Map<string, string[]>();
+  /** 未 spawn / 未开跑成员的待注入 notice（member id → 有界队列） */
+  private readonly pendingNotices = new Map<string, PendingNotice[]>();
   /** 0.32：由装配层挂上的收件箱；spawn 时据此注册 notice hook 与 `inbox` 工具 */
   private inbox?: AgentInboxPort;
 
@@ -1233,7 +1244,10 @@ export class MemberExecutionHost implements MemberExecutionPort {
     try {
       const turnOptions = {
         runId,
-        messages: [...pendingNotices.map(noticeMessage), sourceMessage],
+        messages: [
+          ...pendingNotices.map((notice) => noticeMessage(notice.text, notice.timestamp)),
+          sourceMessage,
+        ],
       };
       const content =
         resume && entry.runtime.resumeSession !== undefined
@@ -1269,7 +1283,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
    * 身份变更 notice：live 且已开跑 → 立即追加到上下文（本轮后续请求可见）；
    * 未 spawn / 未开跑 → 暂存，下一次 runTurn 注入。不启动 turn、不入队。
    */
-  notice(memberId: string, text: string): void {
+  notice(memberId: string, text: string, options?: { timestamp?: number }): void {
     if (text.length === 0) return;
     let delivered = false;
     for (const entry of this.entries.values()) {
@@ -1279,7 +1293,12 @@ export class MemberExecutionHost implements MemberExecutionPort {
         delivered = true;
       }
     }
-    if (!delivered) this.queuePendingNotice(memberId, text);
+    if (!delivered) {
+      this.queuePendingNotice(
+        memberId,
+        options?.timestamp === undefined ? { text } : { text, timestamp: options.timestamp },
+      );
+    }
   }
 
   /**
@@ -1325,10 +1344,10 @@ export class MemberExecutionHost implements MemberExecutionPort {
     this.pendingNotices.delete(memberId);
   }
 
-  private queuePendingNotice(memberId: string, text: string): void {
+  private queuePendingNotice(memberId: string, notice: PendingNotice): void {
     const existing = this.pendingNotices.get(memberId);
     if (existing !== undefined) {
-      existing.push(text);
+      existing.push(notice);
       if (existing.length > MAX_PENDING_NOTICES) {
         existing.splice(0, existing.length - MAX_PENDING_NOTICES);
       }
@@ -1338,10 +1357,10 @@ export class MemberExecutionHost implements MemberExecutionPort {
       const oldest = this.pendingNotices.keys().next().value;
       if (oldest !== undefined) this.pendingNotices.delete(oldest);
     }
-    this.pendingNotices.set(memberId, [text]);
+    this.pendingNotices.set(memberId, [notice]);
   }
 
-  private takePendingNotices(memberId: string): string[] {
+  private takePendingNotices(memberId: string): PendingNotice[] {
     const notices = this.pendingNotices.get(memberId);
     if (notices === undefined) return [];
     this.pendingNotices.delete(memberId);
