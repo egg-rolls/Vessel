@@ -11,6 +11,7 @@ import { t } from '../../i18n';
 import { useAskCursorIndex } from '../pending/ask-cursor-store';
 import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
 import { type AskDraftValue, askDraftOf } from '../pending/ask-drafts';
+import { toggleAskOption } from '../pending/ask-selection';
 import { AskQuestionCard } from './AskCard';
 import { PermissionCard } from './PermissionCard';
 
@@ -214,16 +215,17 @@ export function AskPrompt({
     setDraft(request.requestId, index, update);
   };
 
+  // 单选再点一次即取消（回到未答）—— 判定只在 `toggleAskOption` 里有一份，多选/单选同一入口。
+  // 这里原来自己抄了一遍「单选只写 selected: [option]」，于是 Composer 槽位的卡怎么点都取消不掉
+  // （待批卡 / 团队条用的是共享函数，所以只有会话里这张漏了）。清空后 `currentAnswered` 为假，
+  // 「下一步 / 提交」照旧禁用 —— 必答约束不动，只是选择本身可以撤销。
   const toggle = (option: string) => {
     if (!question) return;
     const multi = question.multi_select === true;
-    updateDraft(questionIndex, (draft) => {
-      if (!multi) return { ...draft, selected: [option] };
-      const set = new Set(draft.selected);
-      if (set.has(option)) set.delete(option);
-      else set.add(option);
-      return { ...draft, selected: [...set] };
-    });
+    updateDraft(questionIndex, (draft) => ({
+      ...draft,
+      selected: toggleAskOption(draft.selected, option, multi),
+    }));
   };
 
   const handleNext = () => {
