@@ -1,5 +1,23 @@
 # AGENTS.md
 
+## 🚨 开工前必须先做：检索设计元信息（否则会违反已定设计）
+
+**任何实现/重构前，先按下面的顺序检索，读完再动手：**
+
+1. `bun run scripts/docs-find.ts --goal "<你的目标>" --paths <你要改的路径>` —— 取 top 3 架构模块；
+2. **必读** [docs/architecture/message-invariants.md](docs/architecture/message-invariants.md)：**两条产品核心不变量**
+   （可见性对等 / 请求 messages append-only），以及**分段模型只有 `new` 与 `pop`**、
+   **系统提示词 / 环境块 / 工具集在会话存续期间不可就地修改**（变化只能用「追加一条环境信息消息」表达；
+   只有换会话、压缩、以及超出硬性上限（上下文长度）才允许开新段）。
+3. 每条架构文档头部都有 **frontmatter 元信息**（`title` / `kind` / `triggers` / `paths`）——
+   这是给 RAG 与 `docs-find` 检索用的**唯一入口**；改文档时必须同步维护它，
+   **新增文档必须带 frontmatter 并登记 `docs/architecture/INDEX.md`**。
+4. 与既有设计冲突时：**以设计文档为准**，代码是待修的一端；若认为设计该改，先改文档 + 说明理由，
+   不要用「实现方便」反过来改设计。
+
+> 这条写在最前面，是因为「不知道规矩的 agent」会静默破坏核心设计：前缀缓存被打掉、模型记忆被改写、
+> 用户看不到 agent 看到的东西 —— 这些都不会报错，只会慢慢烂掉。
+
 > Vessel 仓库的 AI 行为约定。与代码冲突时以代码为准，并顺手改掉本文档。
 > 领域细节按路径读 `docs/agents/`；未命中时以本文件的硬安全规则为准。
 
