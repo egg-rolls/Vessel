@@ -76,6 +76,7 @@
     "check:session-agent-binding": "bun run scripts/check-session-agent-binding.ts",
     "check:ask-selection": "bun run scripts/check-ask-selection.ts",
     "check:ask-groups": "bun run scripts/check-ask-groups.ts",
+    "check:inbox-unhold": "bun run scripts/check-inbox-unhold.ts",
     "check:lease-suspend": "bun run scripts/check-lease-suspend.ts",
     "check:prompt-context-dedup": "bun run scripts/check-prompt-context-dedup.ts",
     "check:error-text": "bun run scripts/check-error-text.ts",

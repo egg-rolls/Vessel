@@ -368,6 +368,10 @@ Hub 这四档与网关连接点分开：新增的 `accent` / `amber` 只给 Hub 
   不为收件箱另建面板。若将来展示摘要，held 必须走 `pending`，不能用 `unread` 代替；
   通知事件只带 `delivery` / `message_id` / `from` / `to` / `conversation_id` / `wake`，
   不带正文。
+- **解除 hold（0.53）**：聊天条带上的 agent 源（非 human 源）held 条目有一颗「取消 hold /
+  留档」（图形是归档盒）。它调**既有** `agents.recall` —— 对非 human 源 recall 不是删除而是
+  `unhold`：消息退回可读 `unread`（模型仍能 read），只是不再 hold 住；因此成功后那条
+  **留在条带上**，前端只就地翻状态（失败按 id 翻回 `held` + toast + 重读对齐），不把卡抹掉。
 
 ## 硬规则
 

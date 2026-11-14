@@ -16,14 +16,16 @@
  *   不在条带上闪一下；
  * - 条带只做「还有几条在等」，写入口按来源分档（见下）。
  *
- * **来源分档（0.51）**：条带展示**两个来源**，但写操作只给 `human`：
+ * **来源分档（0.51，0.53 补了 unhold）**：条带展示**两个来源**，写操作按来源给：
  * - human 源（人打的字）：三颗图标键 —— 「收回来编辑」（peek 正文 → 回填草稿 → recall）、
  *   「取消排队」（recall 真删）与「我已处理」（claim：标 consumed，拿走这次投递），
  *   成功后那条从条带上消失；
- * - agent 源（父 agent 发给本会话的消息）：**只展示，一颗写键都不给**。它的 recall 语义是
- *   unhold 留档（消息回到可读 unread，模型仍能 read），画成「撤掉」就是伪装成删除；claim
- *   在它身上等于「人替这具 body 处理掉别人给它的输入」，更没有立场。所以这里 —— 与
- *   取消 / 收回编辑不同 —— `agents.claim` 在前端也**只对 human 源开放**。
+ * - agent 源（父 agent 发给本会话的消息）：**一颗**「取消 hold / 留档」（`canUnhold`
+ *   判定：非 human 源 + 当前 `held`）。它的 recall 语义是 unhold 留档（消息退回可读
+ *   unread，模型仍能 read），所以那颗键说的是「留档」而不是「撤掉」—— 按下去条目**不会
+ *   从条带上消失**，只是不再被 hold 住、不再随这次投递（这与 `agents.recall` 自己的分档
+ *   同一个判据：`source === 'human'` 才真删）。claim 在它身上仍然没有立场（人不能替这具
+ *   body 处理掉别人给它的输入），所以 `agents.claim` 在前端**只对 human 源开放**。
  *
  * 这就是 0.53 那条 `from === 'human'` 等值过滤的去向：它当时兼任两件事 ——「别串台」
  * 和「只收人的字」。「别串台」的真判据是 `session_id`（保留，见 `ownedBySession`），
@@ -61,6 +63,7 @@ import type {
 import { t } from '../../i18n';
 import { errorMessage } from './errors';
 import {
+  canUnhold,
   groupSenderName,
   HUMAN_SOURCE,
   ownedBySession,
@@ -122,6 +125,20 @@ function toEntry(entry: AgentInboxEntry): PendingStripEntry {
 }
 
 /**
+ * 就地改一条条目的 `status`：乐观更新与回滚共用这一份（不动顺序、不动别的条目）。
+ *
+ * 为什么不整体快照回退：unhold 只来回翻一条 `held ↔ unread`，轮询可能同时在更新别的
+ * 条目 —— 回滚整摞会把别人的更新一起抹掉。
+ */
+function withEntryStatus(
+  entries: readonly AgentInboxEntry[],
+  messageId: string,
+  status: AgentInboxEntry['status'],
+): AgentInboxEntry[] {
+  return entries.map((entry) => (entry.message_id === messageId ? { ...entry, status } : entry));
+}
+
+/**
  * 一行待处理项：时间线同款排队卡（现在只在条带里用）+ 可选的「N 条」折叠按钮。
  *
  * **身份在卡内**：`QueuedNotice` 的 `identity` → 卡头 `meta` 槽（「等待中」胶囊之后），
@@ -130,9 +147,9 @@ function toEntry(entry: AgentInboxEntry): PendingStripEntry {
  * 里。同源折叠组只有**组头**带 `fold`（「N 条」开合），展开后的每一条都各自是一张完整
  * 的卡 —— 折叠只影响展示。
  *
- * **写操作只给 human 源**（`human` 这一个开关决定三颗键给不给）：agent 源的条目照常展示，
- * 但它的 recall 只是 unhold 留档，按钮放在那里就是假承诺。判定留在这一个地方，展开后的
- * 每一条与组头走同一条路径，不会出现「组头能撤、组内不能」这种分裂。
+ * **写操作按来源分档**：human 源三颗（收回编辑 / 取消排队 / 我已处理），非 human 源一颗
+ * 「取消 hold 留档」（`onUnhold`，`canUnhold` 判定：非 human + 当前 held）。判定留在这一个
+ * 地方，展开后的每一条与组头走同一条路径，不会出现「组头能撤、组内不能」这种分裂。
  */
 function PendingRow({
   item,
@@ -141,23 +158,30 @@ function PendingRow({
   onCancel,
   onEdit,
   onClaim,
+  onUnhold,
   fold,
 }: {
   item: QueuedSubmission;
   /** 卡头身份（`human` / agent 名或 id）；`undefined` = 不渲染身份槽。 */
   identity?: string;
-  /** 是不是 human 源（只有它是真删，才有写入口）。 */
+  /** 是不是 human 源（只有它是真删，才有三颗写键）。 */
   human: boolean;
   onCancel: (id: string) => void;
   /** 缺省 = 这个宿主没有草稿槽可写（「收回编辑」不放一个点了没反应的键）。 */
   onEdit?: (id: string) => void;
   /** 缺省 = 不给「我已处理」（不可逆，只给 human 源）。 */
   onClaim?: (id: string) => void;
+  /**
+   * 缺省 = 不给「取消 hold / 留档」（只给「非 human 源 + 当前 held」的条目，见 `canUnhold`：
+   * `unread` 的条目本来就是留档态，再给一颗「取消 hold」是假承诺）。
+   */
+  onUnhold?: (id: string) => void;
   /** 组头才传：组内条数、开合状态与切换。 */
   fold?: { count: number; open: boolean; onToggle: () => void };
 }) {
-  // 写操作只有「human 源」才出现：agent 源的 recall 只是 unhold 留档，画成删除就是骗人。
-  // `undefined` = 没给（`QueuedNotice` 把缺省当成「不给这颗键」，不画空槽）。
+  // 写操作按来源分档：human 源三颗，非 human 源只有 unhold 那一颗（它的 recall 不是删除，
+  // 而是把消息退回可读 unread）。`undefined` = 没给（`QueuedNotice` 把缺省当成「不给这颗
+  // 键」，不画空槽）。
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <QueuedNotice
@@ -166,6 +190,7 @@ function PendingRow({
         onCancel={human ? onCancel : undefined}
         onEdit={human ? onEdit : undefined}
         onClaim={human ? onClaim : undefined}
+        onUnhold={onUnhold}
       />
       {fold && (
         <button
@@ -353,6 +378,64 @@ export function PendingStrip({
   );
 
   /**
+   * 「取消 hold / 留档」：`agents.recall` 对**非 human 源**的那个分支（消息不删，只 unhold）。
+   *
+   * 与取消的差别在**本地怎么改**：取消是从条带上把那条抹掉（条目真的没了），而这里消息
+   * 还在 —— 只是从 `held` 退回 `unread`（模型仍能 read，条带也照样列着它）。所以成功之后
+   * 不能照抄「filter 掉」那一步：那是把一个还在的条目伪装成消失。
+   *
+   * 于是这里做**乐观更新 + 按 id 回滚**：先把这一条就地翻成 `unread`（那颗键随之消失、
+   * 排序把它排到还 held 的后面），RPC 被拒 / 抛错时按 id 翻回 `held` 再重读对齐。只回滚
+   * 自己动过的那一条，不整体快照回退 —— 轮询可能同时在更新别的条目。
+   */
+  const handleUnhold = useCallback(
+    async (messageId: string) => {
+      const agentId = current?.agentId;
+      if (agentId === undefined) return;
+      setCancelling((prev) => new Set(prev).add(messageId));
+      setPending((prev) =>
+        prev === null
+          ? prev
+          : { ...prev, entries: withEntryStatus(prev.entries, messageId, 'unread') },
+      );
+      try {
+        const result = await client.rpc<AgentRecallResponse>('agents.recall', {
+          agent_id: agentId,
+          message_ids: [messageId],
+        });
+        const deleted = Array.isArray(result?.deleted) ? result.deleted : [];
+        if (deleted.includes(messageId)) {
+          toast.success(t('chat.pending.unheld'));
+        } else {
+          // 服务端没受理（条目已经被别处处理掉了）：翻回去，再重读一次对齐。
+          setPending((prev) =>
+            prev === null
+              ? prev
+              : { ...prev, entries: withEntryStatus(prev.entries, messageId, 'held') },
+          );
+          toast.error(t('chat.pending.unholdRejected'));
+          setReloadTick((value) => value + 1);
+        }
+      } catch (error) {
+        setPending((prev) =>
+          prev === null
+            ? prev
+            : { ...prev, entries: withEntryStatus(prev.entries, messageId, 'held') },
+        );
+        toast.error(t('chat.pending.unholdFailed', { detail: errorMessage(error) }));
+        setReloadTick((value) => value + 1);
+      } finally {
+        setCancelling((prev) => {
+          const next = new Set(prev);
+          next.delete(messageId);
+          return next;
+        });
+      }
+    },
+    [client, current?.agentId, toast],
+  );
+
+  /**
    * 收回一条待处理输入来改：**peek 全文 → 回填草稿 → recall 真删**，顺序不能反。
    *
    * 为什么必须是这个次序：recall 对 human 源是**真删**，删完这条消息就没了，`text` 也就再也
@@ -510,6 +593,7 @@ export function PendingStrip({
   const takeBackRow = (id: string) => void handleTakeBack(id);
   const editRow = onRefillDraft === undefined ? undefined : takeBackRow;
   const claimRow = (id: string) => void handleClaim(id);
+  const unholdRow = (id: string) => void handleUnhold(id);
 
   return (
     <section className="flex-none pb-2" aria-label={label}>
@@ -541,6 +625,7 @@ export function PendingStrip({
                     onCancel={cancelRow}
                     onEdit={editRow}
                     onClaim={claimRow}
+                    onUnhold={canUnhold(head.entry) ? unholdRow : undefined}
                     fold={fold}
                   />
                   {/* 展开后逐条列出：仍是那些待处理条目，写操作按各自的条目 id 与来源判定。 */}
@@ -555,6 +640,7 @@ export function PendingStrip({
                             onCancel={cancelRow}
                             onEdit={editRow}
                             onClaim={claimRow}
+                            onUnhold={canUnhold(row.entry) ? unholdRow : undefined}
                           />
                         </li>
                       ))}

@@ -7,8 +7,9 @@
  * 刷新 / 切会话就消失；而 agent 维度的全量 inbox 会把「父 agent 发给子成员的消息」串进
  * 这条带子。换了数据源之后，「串进子成员收件箱」和「切会话残留」两个问题一起消失。
  *
- * 来源**不过滤**（agent 源的条目也上条带）：能不能写（取消 / 收回编辑）由 UI 层按 `from`
- * 判，排序与折叠不关心是谁发的。
+ * 来源**不过滤**（agent 源的条目也上条带）：能不能写由 UI 层按来源分档 —— human 源三颗
+ * （收回编辑 / 取消排队 / 我已处理），其余源一颗「取消 hold 留档」（{@link canUnhold}）。
+ * 排序与折叠不关心是谁发的。
  *
  * 口径（与 main 的裁决一致）：
  * - `held` 在前、按 ts 升序；其余（unread）按 ts 升序 —— 只做「谁在等」的稳定排序，
@@ -79,6 +80,22 @@ export const HUMAN_SOURCE = 'human';
  * 身份行必须说人话（那个人就是他本人，名字叫不出来，所以不给短 id）。
  */
 export const ASK_SOURCE = 'ask';
+
+/**
+ * 要不要给这颗「取消 hold / 留档」键：**非 human 源**且当前是 `held`（0.53 产品裁定）。
+ *
+ * 判据必须与服务端 `agents.recall` 自己的分档一致（`source === 'human'` 才真删，其余源
+ * 一律 unhold 留档）—— 前端照抄同一个 `HUMAN_SOURCE`，才不会出现「画成留档、实际真删」。
+ *
+ * 要求 `held` 的理由：`unread` 的条目本来就是「不占队列、可读」的留档态，再给它一颗
+ * 「取消 hold」是假承诺（按下去什么都不会变）。只有 held 的那一下才是真动作 ——
+ * 消息退回 unread（模型仍能 read），但不再随这次投递。
+ *
+ * 纯函数、只看两个字段：不做 IO，`scripts/check-inbox-unhold.ts` 直接断言。
+ */
+export function canUnhold(entry: Pick<PendingStripEntry, 'from' | 'status'>): boolean {
+  return entry.from !== HUMAN_SOURCE && entry.status === 'held';
+}
 
 /** agent 身份前缀：与 A2A 卡片（`agent-sender.ts` / `AgentMessageCard`）同一形状。 */
 export const AGENT_IDENTITY_PREFIX = 'agent:';

@@ -1119,6 +1119,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.pending.claimSkipped': 'That item could not be claimed ({reason}); the strip was reloaded',
   'chat.pending.claimSkipped.notFound': 'it is no longer in the inbox',
   'chat.pending.claimSkipped.consumed': 'it was already taken',
+  'chat.pending.unhold': 'Archive (release hold)',
+  'chat.pending.unholding': 'Archiving…',
+  'chat.pending.unheld': 'Hold released — the message stays here as unread and can still be read',
+  'chat.pending.unholdRejected':
+    'The server did not release the hold; the strip was reloaded (the item may already be gone)',
+  'chat.pending.unholdFailed': 'Could not release the hold: {detail}',
   'chat.toast.queued': 'Queued',
   'chat.toast.cancelRequested': 'Requested cancellation of the run',
   'chat.toast.queueCancelled': 'Removed from the queue',
