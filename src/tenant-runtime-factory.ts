@@ -37,6 +37,7 @@ import {
   type PluginHost,
   projectMessages,
   type ResumeMarkerRegistryState,
+  type RunJournalFactory,
   type RunnableAgent,
   type RunRecordStore,
   type Runtime,
@@ -184,6 +185,12 @@ export interface TenantRuntimeBundle {
    * 避免 settle 期间被打断 run 的终态保存把标记冲掉。
    */
   resumeMarkers: ResumeMarkerRegistryState;
+  /**
+   * 0.52 S1c：启动恢复要在「卡片被准入」之后清掉 `resume_after_restart`，
+   * 而标记的唯一写口是 RunJournal —— 装配层把工厂一起交出来，
+   * 启动侧只用 `transient({ runId: 'manual' }).saveSessionState()` 这一条。
+   */
+  journalFactory: RunJournalFactory;
   /** 0.18：会话事件日志（唯一真相源）；memory 后端或只读执行面不创建 */
   eventLog?: SessionEventLog;
   trace?: TraceControl;
@@ -1230,6 +1237,7 @@ export async function buildTenantRuntime(
     ...(summarizerForSession !== undefined ? { summarizerForSession } : {}),
     ...(runStore ? { runStore } : {}),
     resumeMarkers,
+    journalFactory,
     ...(eventLog ? { eventLog } : {}),
     ...(trace ? { trace } : {}),
     ...(metrics ? { metrics } : {}),

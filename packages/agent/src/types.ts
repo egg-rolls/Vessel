@@ -354,8 +354,12 @@ export interface MemberExecutionPort {
   /**
    * 身份变更通知（additive，可选）：只向成员上下文追加 `vessel:notice`，
    * 不启动 turn、不入队。live ExecutionUnit 立即追加；未 spawn 的成员暂存到下一次 runTurn。
+   *
+   * `options.timestamp`（0.52 S1c，additive）：这段环境信息的**产生时刻**。
+   * 启动恢复卡在启动时就产生，必须早于它之后被放行的那条输入所在的 run，
+   * 所以由调用点把产生时刻带下来；缺省＝注入时刻（既有行为不变）。
    */
-  notice?(memberId: string, text: string): void;
+  notice?(memberId: string, text: string, options?: { timestamp?: number }): void;
   /**
    * CONTRACT-hot-apply §4（additive，可选）：把规则热应用到所有存活 ExecutionUnit。
    * 返回实际应用的 ExecutionUnit 数量；未实现的 port 由 AgentService 报 0。
@@ -1464,6 +1468,18 @@ export interface AgentService {
    * 一起跑」）。每进程只扫一次。
    */
   recoverPendingInputs(options?: { maxSessions?: number }): Promise<AgentRecoverResult>;
+  /**
+   * 启动恢复卡（0.52 S1c）：把一条环境信息排进**该会话**的下一次请求。
+   *
+   * 走既有环境信息通道（`MemberRuntime.notice`）：活体已开跑就立刻追加，否则暂存到
+   * 该成员下一轮 —— 那一轮会把暂存内容作为**注入消息放在用户输入之前**（`RunOptions.messages`），
+   * 所以同一份文本既进模型上下文、也作为 `vessel:notice` 消息落进会话流（web 渲染成
+   * EnvCard）。用户裁定：重启恢复不该只让模型知道、用户看不见 ⇒ 不造隐藏输入。
+   *
+   * 返回 false = 该会话现在收不了卡（不在册 / 已 left / 已 closed / 无 binding），
+   * 调用方据此记 skipped 并保留标记，等下次启动再判（幂等）。
+   */
+  announceEnvironmentCard(sessionId: string, text: string): Promise<boolean>;
   /**
    * 更新名字 / model / systemPrompt；名字立即生效且保持同 Team（unbound 为 tenant）
    * 内 present 成员唯一。model / systemPrompt 只影响下一次 spawn 的 ExecutionUnit。

@@ -36,6 +36,7 @@ import {
   Runtime,
   readTraceEvents,
   rebuildMetrics,
+  sameRestartMarker,
   sessionEventsFilePath,
   type TenantPaths,
   type TraceRedactor,
@@ -85,6 +86,7 @@ import { createCliLogger } from './logging';
 import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import { createNodeDrainer } from './node-drain';
+import { createNodeResumer } from './node-resume';
 import { resolveNodeIdentity } from './node-identity';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
 import { resolveAgentCwd } from './path-resolution';
@@ -1161,6 +1163,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     metrics,
     runStore,
     eventLog,
+    journalFactory,
     feishu: feishuChannel,
   } = bundle;
 
@@ -1351,14 +1354,74 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // `AgentService.recoverPendingInputs`：unread + 未 held + 有 session_id + human 源）。
     // 放在 `startOwner()` 之后：成员 EU spawn 时快照父宿主工具列表，恢复出来的 run 要用同一批。
     // headless（`--run` / 管道）是一次性进程：不替别的会话恢复队列，退出时会留半截 run。
+    //
+    // 0.52 S1c：顺序改成「先发卡、再重放、准入后清标记」——
+    // 1) 读 `resume_after_restart` 标记（落盘 SessionState 是唯一权威）；
+    // 2) 每个带标记的会话发一张「重启恢复」环境信息卡：一次 `runtime.notice`，
+    //    由环境信息通道在下一次请求的用户输入之前注入 ⇒ 同一份文本既进模型上下文，
+    //    也在聊天流里渲染成 EnvCard（用户裁定：不是隐藏输入，两边可见一致）；
+    // 3) 卡之后才调既有的 `recoverPendingInputs()` 重放**已接受**的输入（最早 ts FIFO）；
+    // 4) 卡片落成消息且随请求进了模型上下文之后才清标记（清标记走 RunJournal 单写口）。
+    // 任何一步失败都不阻断启动：标记与 unread 条目都还在，下次启动再判（幂等）。
     if (!headless) {
       try {
-        const recovered = await wiring.service.recoverPendingInputs();
-        if (recovered.recovered > 0 || recovered.deferred > 0 || recovered.failed > 0) {
-          logger.info('agent.inbox.recover_done', { ...recovered });
+        if (eventLog === undefined) {
+          // memory 后端 / 只读执行面没有事件日志：拿不到「卡发过没、准入没」的证据，
+          // 不另造一套状态 —— 退回 0.53 的队列重放（不发卡）。
+          const recovered = await wiring.service.recoverPendingInputs();
+          if (recovered.recovered > 0 || recovered.deferred > 0 || recovered.failed > 0) {
+            logger.info('agent.inbox.recover_done', { ...recovered });
+          }
+        } else {
+          const restarted = createNodeResumer({
+            session,
+            eventLog,
+            announce: (sessionId, text) => wiring.service.announceEnvironmentCard(sessionId, text),
+            // 清标记：只清「还是同一份标记」的那一个；拷贝里去掉该字段，
+            // 落盘仍走 RunJournal（`saveSessionState` 是 SessionState 的唯一写口）。
+            clearMarker: async (sessionId, marker) => {
+              const state = await session.load(sessionId);
+              if (state === null) return false;
+              if (!sameRestartMarker(state.resume_after_restart, marker)) return false;
+              const { resume_after_restart: _cleared, ...rest } = state;
+              const journal = journalFactory.transient({
+                runId: 'manual',
+                events: runtimeEvents,
+                sessionId,
+              });
+              await journal.saveSessionState(rest);
+              return true;
+            },
+            replay: async () => {
+              const recovered = await wiring.service.recoverPendingInputs();
+              return { recovered: recovered.recovered, sessions: recovered.sessions };
+            },
+            warn: (event, meta) => logger.warn(event, meta),
+          });
+          const report = await restarted.beginResume();
+          if (report.marked > 0 || report.replayed_inputs > 0) {
+            logger.info('agent.resume.recover_done', {
+              marked: report.marked,
+              announced: report.announced,
+              deduped: report.deduped,
+              skipped: report.skipped,
+              replayed_inputs: report.replayed_inputs,
+              replayed_sessions: report.replayed_sessions,
+            });
+          }
+          // 准入是异步的（要等下一轮请求真的发出）：不阻塞启动，只在后台收尾清标记。
+          void restarted.whenSettled().then((final) => {
+            if (final.cleared.length > 0 || final.settle === 'timeout') {
+              logger.info('agent.resume.settle_done', {
+                cleared: final.cleared,
+                settle: final.settle,
+                marked: final.marked,
+              });
+            }
+          });
         }
       } catch (error) {
-        // 恢复失败不阻断启动：条目仍是 unread，下次启动再试。
+        // 恢复失败不阻断启动：条目仍是 unread，标记仍落盘，下次启动再试。
         logger.warn('agent.inbox.recover_failed', {
           error: error instanceof Error ? error.message : String(error),
         });

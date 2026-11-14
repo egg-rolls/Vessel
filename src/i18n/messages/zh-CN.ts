@@ -522,6 +522,18 @@ export const zhCN = {
   // ── completion（0.18）──
   'completion.usage': '用法：vessel completion <bash|zsh|fish|powershell>',
   'completion.unknownShell': '未知 shell "{shell}"。',
+
+  // ── 启动恢复卡（0.52 S1c）──
+  // 这张卡**同时**给用户看、给模型读：所以正文只有这一份，不按 UI/模型分叉。
+  // 首行首 token 固定是 `restart`（web 侧 `env-notice.ts` 用它选卡头 scope），
+  // 明细行里固定带 run_id 与 ISO 时刻 —— 它们也是启动幂等的去重键。
+  'resume.card.summary': '网关在你工作时重启了（{reason}），run {run_id} 于 {time} 被打断。',
+  'resume.card.run_line': '被打断的 run：{run_id}（原因：{reason}）',
+  'resume.card.interrupted_at': '打断时刻：{time}',
+  'resume.card.verify_first': '先核对现状（文件、进程、任务进度）再继续；已经保住的工作不要重做。',
+  'resume.card.background_stopped': '后台进程已被重启停掉；还需要就重新跑起来，别假设它们还在。',
+  'resume.card.pending_inputs': '后面排着 {count} 条已接受的输入，按最早顺序在此卡之后放行。',
+  'resume.card.no_pending_inputs': '没有排着的已接受输入；从当前现状接着做。',
 } as const;
 
 /** CLI catalog 的 key 集合（en 必须一一对应） */
