@@ -1219,6 +1219,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   let noticeBus: RuntimeNoticeBus | undefined;
   /** 成员停下通知的投递面（窗口合并 / 每轮一条 / 定向父 session）。 */
   let peerNotices: PeerNoticeRouter | undefined;
+  /**
+   * 0.53 notice-rotate：成员停下通知要按**投递那一刻**父成员当前的 session 定向，而
+   * router 建在 `createAgentServiceWiring` 之前 —— 同样晚绑定（与 `feishuAgentService`
+   * 同口径），闭包在 flush 时求值；装配前为 undefined 时通知退回报告时刻的 session。
+   */
+  let noticeAgentService: AgentService | undefined;
   if (agentServiceEnabled) {
     // A3c：交互入口成员 ask 经父事件流弹现有权限卡片；headless 直接 allow。
     const memberPermissionMode: MemberPermissionMode = agentPlan.permissionMode;
@@ -1275,6 +1281,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       bus: noticeBus,
       events: runtimeEvents,
       logger,
+      // 0.53 notice-rotate：变更上的 `parent_session_id` 是报告时刻父 body 的 session；
+      // 合并窗口内父若 rotate，新 body 换了 session，这条 notice 就只落到旧 body 上。
+      // 真正投递那一刻用这条链接重解析父成员**当前** primary body 的 session
+      // （`AgentService.peerParentSessionOf` 内部即 `currentBindingSession`）。
+      // 注意入参是**上报变更的成员（子）id**（`PeerStopChange.agent_id`），不是父 id。
+      // 晚绑定：router 建在 wiring 之前，闭包在 flush 时才读。
+      resolveParentSession: (memberId) => noticeAgentService?.peerParentSessionOf(memberId),
     });
     const wiring = await createAgentServiceWiring({
       // 来源行的 node 段与 federation 端口共用 nodeIdentity：federation 关掉时
@@ -1349,6 +1362,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     feishuTeamId = wiring.defaultTeam?.team_id;
     // 0.28：回填渠道执行面（渠道 `start()` 时才读取；此处不提前构造 / 不改变次序）。
     feishuAgentService = wiring.service;
+    // 0.53 notice-rotate：回填通知的重解析口（router 早在上面就建好了，flush 时才读）。
+    noticeAgentService = wiring.service;
     finalPluginHost.registerTool(wiring.tool);
     // 顺序契约：`main` 的 ExecutionUnit 在 spawn 时快照父宿主工具列表，
     // 必须等 `agent` 工具注册完再派生 owner，否则 main 永久缺 `agent`。
@@ -1936,6 +1951,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       // 退订 / 清定时器是 best-effort
     }
     peerNotices = undefined;
+    // 0.53 notice-rotate：重解析口的宿主一并摘掉（router 已停，flush 不会再发生）。
+    noticeAgentService = undefined;
 
     // 0.17：先停 owner 端点，CLI 不再有机会在 teardown 中途入队。
     try {

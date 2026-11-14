@@ -3674,6 +3674,35 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * 成员 → 其父成员**当前** primary body 的 session（peer 通知的「同步链接」目标）。
+   *
+   * 0.53 notice-rotate：变更上落的是**报告时刻**父 session；2s 合并窗口内父若 rotate，
+   * 新 body 是另一个 session，通知就只会落在旧 body 的游标上（新 body 永远拉不到）。
+   * 装配层于是在**真正投递那一刻**调这个方法重新取一次。
+   *
+   * 入参是**上报变更的成员（子）id**（即 `PeerStopChange.agent_id`）：顺着它找父成员，
+   * 再取父成员当前的 session —— 不要当成父成员 id 传。
+   *
+   * 推导只复用 `peerParentIdFor` + `currentBindingSession`，这里不写第二套。找不到
+   * （记录不在 / 自己或父已 left|closed / 没有父级 / 空串）一律 `undefined` = 调用方
+   * 退回报告时刻的 session，绝不抛。
+   */
+  peerParentSessionOf(memberId: string): string | undefined {
+    if (!nonEmpty(memberId)) return undefined;
+    const member = this.registry.get(memberId);
+    if (member === undefined) return undefined;
+    if (member.membership === 'left' || member.state === 'closed') return undefined;
+    const parentId = this.peerParentIdFor(member);
+    if (parentId === undefined) return undefined;
+    const parent = this.registry.get(parentId);
+    if (parent === undefined) return undefined;
+    if (parent.id === member.id) return undefined;
+    if (parent.membership === 'left' || parent.state === 'closed') return undefined;
+    const session = currentBindingSession(parent);
+    return nonEmpty(session) ? session : undefined;
+  }
+
+  /**
    * 成员 → 变更：父 session 取父成员当前 primary body 的 session（notice 的注入目标）。
    *
    * 没有父级（来源不可知的 peer 成员 / main 自身）、父级已 left / closed 时不产生变更：

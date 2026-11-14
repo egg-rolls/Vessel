@@ -500,6 +500,72 @@ async function caseResolvedGoneFallback(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// G 装配契约（0.53）：bootstrap 真的注入了重解析口，且只能经 peerParentSessionOf 取 session
+// ---------------------------------------------------------------------------
+
+/**
+ * ⑥-⑨ 证明 router 会重解析；这里钉住**装配侧**：口真的接上了，而且接的是唯一正确的那条
+ * 推导（`peerParentSessionOf` → `currentBindingSession`），不允许在 bootstrap 里另写一套。
+ */
+async function caseNoticeRotateWiring(): Promise<void> {
+  const routerSource = await source('src/peer-notices.ts');
+  const bootstrapSource = await source('src/bootstrap.ts');
+  const serviceSource = await source('packages/agent/src/service.ts');
+  const typesSource = await source('packages/agent/src/types.ts');
+
+  // 口本身在 router 上（可选，旧装配仍能建 router）。
+  expect(
+    /resolveParentSession\?: \(memberId: string\) => string \| undefined;/u.test(routerSource),
+    '⑩ router 应暴露注入式 resolveParentSession 口（可选，缺省退回旧行为）',
+  );
+  // 口径写死在注释里，避免以后有人把父成员 id 传进来。
+  expect(
+    /上报这条变更的成员/u.test(routerSource) && /PeerStopChange\.agent_id/u.test(routerSource),
+    '⑩ 注释应写清入参是上报变更的成员（子）id，不是父成员 id',
+  );
+  // 重解析发生在**投递那一刻**（flush），且投递目标是重解析结果。
+  expect(
+    /const target = resolveTarget\(sessionId, state\);/u.test(routerSource),
+    '⑩ flush 里才重解析父 session（不在 report 时刻缓存）',
+  );
+  expect(/to: target,/u.test(routerSource), '⑩ 定向发布必须用重解析后的 session');
+
+  // 装配侧：真的注入了，且体里只有 peerParentSessionOf（= currentBindingSession）。
+  expect(
+    /resolveParentSession: \(memberId\) => noticeAgentService\?\.peerParentSessionOf\(memberId\)/u.test(
+      bootstrapSource,
+    ),
+    '⑩ bootstrap 应注入 resolveParentSession，且只经 AgentService.peerParentSessionOf 取 session',
+  );
+  // 拦住「直接摸 registry / 另写一套当前 session 推导」。
+  expect(
+    !/MemberRegistry|bindingHistory|primaryBinding|bySession|registry\./u.test(bootstrapSource),
+    '⑩ bootstrap 不许直接摸 registry 或另写一套「当前 session」推导',
+  );
+
+  // 推导本尊：同步、复用 peerParentIdFor + currentBindingSession，不写第二套。
+  const implMatch =
+    /peerParentSessionOf\(memberId: string\): string \| undefined \{([\s\S]*?)\n {2}\}/u.exec(
+      serviceSource,
+    );
+  expect(implMatch !== null, '⑩ service.ts 里应有同步的 peerParentSessionOf 实现');
+  const impl = implMatch === null ? '' : implMatch[1];
+  expect(/this\.peerParentIdFor\(member\)/u.test(impl), '⑩ 实现必须复用 peerParentIdFor 找父成员');
+  expect(
+    /currentBindingSession\(parent\)/u.test(impl),
+    '⑩ 实现必须用 currentBindingSession 取父成员当前 session',
+  );
+  expect(
+    !/bindingHistory|primaryBinding|bySession/u.test(impl),
+    '⑩ 实现里不许出现第二套「当前 session」推导（registry 内部字段一律不碰）',
+  );
+  expect(
+    /peerParentSessionOf\(memberId: string\): string \| undefined;/u.test(typesSource),
+    '⑩ AgentService 接口应声明 peerParentSessionOf（同步，返回 string | undefined）',
+  );
+}
+
+// ---------------------------------------------------------------------------
 // E 生产端源码契约：peer 成员必须能被报上来，且这条链接不落盘
 // ---------------------------------------------------------------------------
 
@@ -546,6 +612,7 @@ await caseRotateBeforeFlush();
 await caseRotateWhileNewSessionRunning();
 await caseNoResolverFallback();
 await caseResolvedGoneFallback();
+await caseNoticeRotateWiring();
 await caseProducerSource();
 
 if (failures.length === 0) {
