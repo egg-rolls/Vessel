@@ -720,11 +720,15 @@ function runRatios(runs: RunSummary[]): Ratios {
   let writeReported = false;
   let reportingRuns = 0;
   for (const run of withRequests) {
-    // 分子/分母必须同一个总体：只统计上报了缓存字段的 run。缺省意味着「这个
-    // provider 不报缓存」，把它当成 0 命中放进分母，就会得到一个既不是「全部
-    // 流量命中率」（那些 run 的命中率是未知的，不是 0）、也不符合标签
-    // 「所有上报了缓存字段的请求」的数。TUI 的 cache-metrics 同样是先丢弃
-    // 未上报的请求再累加 prompt。
+    // 分子/分母必须同一个总体：只统计**上报了**缓存字段的 run。
+    //
+    // 注意「上报了」判的是字段存在（!== undefined），不是「命中 > 0」：
+    //   - 支持缓存、这次没命中（cache_read_input_tokens: 0）⇒ **必须留在池里**，
+    //     分子加 0、分母照加它的 prompt，这才是正确的命中率；
+    //   - 端点不支持缓存、根本不报这个字段 ⇒ 踢出统计池，指标标 no-cache-fields
+    //     不可用，**不许**当成 0 命中稀释分母（旧 bug 就是把「观测缺失」当成了
+    //     「命中 0」）。
+    // TUI 的 cache-metrics 同样是先丢弃未上报的请求再累加 prompt。
     const reportsCache =
       run.cache_read_input_tokens !== undefined || run.cache_creation_input_tokens !== undefined;
     if (!reportsCache) continue;
