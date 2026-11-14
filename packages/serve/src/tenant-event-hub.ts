@@ -21,7 +21,12 @@ import {
   type TraceRedactor,
   type Unsubscribe,
 } from '@vessel-agent/core';
-import { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
+import {
+  DEFAULT_MAX_HISTORY,
+  type EventGap,
+  type SeqEvent,
+  SeqEventBuffer,
+} from './event-buffer.js';
 import { summarizeBroadcastEvent } from './event-summary.js';
 import { capToolEvent } from './tool-events.js';
 
@@ -67,8 +72,6 @@ export interface TenantEventHub {
   close(): void;
 }
 
-const DEFAULT_MAX_HISTORY = 10_000;
-
 function reportHubError(action: string, error: unknown): void {
   console.error(
     `[vessel] tenant event hub: ${action} failed: ${
@@ -79,6 +82,9 @@ function reportHubError(action: string, error: unknown): void {
 
 /** 创建事件扇入面 */
 export function createTenantEventHub(options: TenantEventHubOptions): TenantEventHub {
+  // 缺省容量 / `maxHistory: 0`（=「不限但按默认」）：0.53 从 10000 抬到 50000，
+  // 直接引用 `event-buffer.ts#DEFAULT_MAX_HISTORY`（同一个常量，避免两处各写一个
+  // 10000 再漂移）。常驻内存代价见那边的注释：环是**全局一份**，不是每会话一份。
   const configuredHistory = options.maxHistory ?? DEFAULT_MAX_HISTORY;
   if (!Number.isSafeInteger(configuredHistory) || configuredHistory < 0) {
     throw new Error('TenantEventHub maxHistory must be a non-negative integer.');

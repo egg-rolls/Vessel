@@ -40,6 +40,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'config.set': 'write',
   'sessions.list': 'read',
   'sessions.get': 'read',
+  // 0.53（磁盘回填 §3 方案 B）：会话事件日志只读分页（游标 + limit，形状同 SSE 回放）。
+  'sessions.events': 'read',
   'sessions.search': 'read',
   'sessions.delete': 'write',
   'sessions.rename': 'write',
