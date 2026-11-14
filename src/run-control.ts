@@ -9,7 +9,7 @@
  * @module vessel/run-control
  */
 
-import { AgentError, type AdmitInput, type AgentService } from '@vessel-agent/agent';
+import { type AdmitInput, AgentError, type AgentService } from '@vessel-agent/agent';
 import type { RunStatus, Scheduler, SchedulerSnapshot, WaitReason } from '@vessel-agent/core';
 import { RpcError } from '../packages/serve/src/index';
 import type {

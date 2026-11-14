@@ -11,7 +11,7 @@ import type { EventStream, RunEvent, SessionEventLogPort } from './event.js';
 import type { LeaseKind } from './lease.js';
 import type { Logger } from './logging.js';
 import type { RunRecord, RunRecordStore } from './run-record-store.js';
-import type { SessionState, SessionStore, ResumeMarkerRegistry } from './session.js';
+import type { ResumeMarkerRegistry, SessionState, SessionStore } from './session.js';
 
 /** 一次 Run 的 journal（begin） */
 export interface RunJournalIdentity {

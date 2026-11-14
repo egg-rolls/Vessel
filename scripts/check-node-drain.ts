@@ -30,11 +30,11 @@ import {
   MemoryEventStream,
   MemorySessionStore,
   MemoryWorkingContext,
-  SQLiteSessionStore,
   type ResumeAfterRestart,
   type RunJournalFactory,
   type SessionState,
   type SessionStore,
+  SQLiteSessionStore,
 } from '../packages/core/src/index';
 import { createNodeDrainer, type NodeDrainUnit } from '../src/node-drain';
 
@@ -163,11 +163,10 @@ async function probeA(): Promise<void> {
 
   const report = await drainer.beginDrain('shutdown');
   expect('a.1 标记条数 = 在跑 run 的会话数', report.marks.length, 2);
-  expect(
-    'a.2 标记会话',
-    report.marks.map((mark) => mark.session_id).sort(),
-    ['s-drain-a1', 's-drain-a2'],
-  );
+  expect('a.2 标记会话', report.marks.map((mark) => mark.session_id).sort(), [
+    's-drain-a1',
+    's-drain-a2',
+  ]);
   expect('a.3 两条都真的落盘', report.marks.filter((mark) => mark.persisted).length, 2);
   expect(
     'a.4 无 run 的会话 0 条',
@@ -199,9 +198,17 @@ async function probeA(): Promise<void> {
     'inbox-1',
     'inbox-2',
   ]);
-  expect('a.11 没有会话的 pending 就是空数组', loadedB?.resume_after_restart?.pending_input_ids, []);
+  expect(
+    'a.11 没有会话的 pending 就是空数组',
+    loadedB?.resume_after_restart?.pending_input_ids,
+    [],
+  );
   expect('a.12 background_stopped = false（S1a 不碰后台）', markerA?.background_stopped, false);
-  expect('a.13 两处标记各自指向自己的 run', report.marks.every((mark) => mark.run_id.length > 0), true);
+  expect(
+    'a.13 两处标记各自指向自己的 run',
+    report.marks.every((mark) => mark.run_id.length > 0),
+    true,
+  );
 
   // 打断是给执行面发出的，不是给会话：三个执行面里只有两个有 active run。
   expect('a.14 只打断在跑的执行面', report.interrupted, 2);
@@ -260,7 +267,11 @@ async function probeCD(): Promise<void> {
   expect('c.5 打断了一次', interrupts, 1);
 
   const loaded = await session.load('s-drain-c1');
-  check('c.6 标记已落盘', loaded?.resume_after_restart?.run_id === report.marks[0]?.run_id, '标记没落');
+  check(
+    'c.6 标记已落盘',
+    loaded?.resume_after_restart?.run_id === report.marks[0]?.run_id,
+    '标记没落',
+  );
 
   // d：重复调用必须原样返回，不重复写标记 / 不重复 interrupt / 开关 fence 只一次。
   const again = await drainer.beginDrain('shutdown');
@@ -338,7 +349,11 @@ async function probeB(): Promise<void> {
   } catch (error) {
     errorCode = error instanceof RpcError ? error.code : 'not-rpc-error';
   }
-  expect('b.1 runs.start 在 draining 期间被拒（gateway_restarting）', errorCode, 'gateway_restarting');
+  expect(
+    'b.1 runs.start 在 draining 期间被拒（gateway_restarting）',
+    errorCode,
+    'gateway_restarting',
+  );
   expect('b.2 拒就是拒：admit 一次都没被调用', admitCalls, 0);
 
   // B3：admit 内部 fence 抢先打开时，同一个错误码（不留 internal）。
@@ -442,11 +457,7 @@ async function probeBDispatch(): Promise<void> {
 
     const snapshot = service.inboxSnapshot('worker');
     expect('b.11 inbox 里真有这三条（durable）', snapshot.entries.length, 3);
-    expect(
-      'b.12 三条都在 unread/held 里（没被消费）',
-      snapshot.unread + snapshot.pending,
-      3,
-    );
+    expect('b.12 三条都在 unread/held 里（没被消费）', snapshot.unread + snapshot.pending, 3);
   } finally {
     try {
       rmSync(dir, { recursive: true, force: true });
@@ -495,17 +506,26 @@ async function probeE(): Promise<void> {
       resumeMarkers: fileRegistry,
     });
     const fileUnit = await makeUnit({ session: fileStore, journalFactory: fileJournalFactory });
-    const fileWritten = await fileUnit.armResumeAfterRestart(fileSession, probeMarker('run-e-file'));
+    const fileWritten = await fileUnit.armResumeAfterRestart(
+      fileSession,
+      probeMarker('run-e-file'),
+    );
     expect('e.1 file 后端标记写入成功', fileWritten, true);
 
     const reopened = new FileSessionStore(join(dir, 'sessions'));
     const fileLoaded = await reopened.load(fileSession);
-    expect('e.2 file 后端换实例读回 run_id', fileLoaded?.resume_after_restart?.run_id, 'run-e-file');
     expect(
-      'e.3 file 后端字段完整',
-      markerFieldsOf(fileLoaded),
-      ['background_stopped', 'interrupted_at', 'pending_input_ids', 'reason', 'run_id'],
+      'e.2 file 后端换实例读回 run_id',
+      fileLoaded?.resume_after_restart?.run_id,
+      'run-e-file',
     );
+    expect('e.3 file 后端字段完整', markerFieldsOf(fileLoaded), [
+      'background_stopped',
+      'interrupted_at',
+      'pending_input_ids',
+      'reason',
+      'run_id',
+    ]);
     expect(
       'e.4 file 后端半截回复也落地了',
       fileLoaded?.messages?.[fileLoaded.messages.length - 1]?.content,
@@ -522,7 +542,10 @@ async function probeE(): Promise<void> {
       session: sqliteStore,
       resumeMarkers: sqliteRegistry,
     });
-    const sqliteUnit = await makeUnit({ session: sqliteStore, journalFactory: sqliteJournalFactory });
+    const sqliteUnit = await makeUnit({
+      session: sqliteStore,
+      journalFactory: sqliteJournalFactory,
+    });
     const sqliteWritten = await sqliteUnit.armResumeAfterRestart(
       sqliteSession,
       probeMarker('run-e-sqlite'),
@@ -555,7 +578,9 @@ async function probeE(): Promise<void> {
     });
     // 模拟 settle 期间「被打断 run 的终态保存」：它自己那份投影里没有标记字段。
     const replayJournal = mergeJournalFactory.transient({
-      runId: 'run-e-merge-late',
+      // transient journal 的 runId 是受限联合（'manual' | 'plugin'），不是任意 run id：
+      // 本用例只要一个「写同 session 的旁路 journal」，用 'manual' 语义正确。
+      runId: 'manual',
       sessionId: mergeSession,
       events: new MemoryEventStream(),
     });

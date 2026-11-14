@@ -34,7 +34,9 @@ export type RpcErrorCode =
   | 'run_ended'
   // 0.34 CONTRACT-0.34-context C7：sessions.compact（与 serve 侧错误码同步）。
   | 'session_not_found'
-  | 'compact_unavailable';
+  | 'compact_unavailable'
+  // 0.52 S1a：node 正在 drain（优雅退出），请求应重试；与 serve 侧同步。
+  | 'gateway_restarting';
 
 /** 成功响应 */
 export interface RpcSuccessResponse {
