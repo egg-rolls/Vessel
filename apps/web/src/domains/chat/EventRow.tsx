@@ -231,6 +231,15 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
         }),
       };
     }
+    case 'context.cleared_tool_result': {
+      return {
+        tone: 'info',
+        text: t('chat.notice.contextTrimmed', {
+          cleared: numberOf(data.cleared) ?? 0,
+          kept: numberOf(data.kept) ?? 0,
+        }),
+      };
+    }
     case 'agent.limit.warning': {
       return {
         tone: 'warn',

@@ -12,7 +12,11 @@
 
 import { mkdir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { normalizeContextAnchor, normalizePromptContextFingerprint } from '../context/index.js';
+import {
+  normalizeClearedToolCallIds,
+  normalizeContextAnchor,
+  normalizePromptContextFingerprint,
+} from '../context/index.js';
 import type { Message } from '../types/provider.js';
 import type { RunUsage } from '../types/run-record-store.js';
 import type {
@@ -151,6 +155,8 @@ function toSessionState(value: unknown): SessionState {
     prompt_context: normalizePromptContextFingerprint(raw.prompt_context),
     // 0.52 S1a：续跑标记（旧文件没有 ⇒ undefined ⇒ 启动不续跑任何东西）。
     resume_after_restart: normalizeResumeAfterRestart(raw.resume_after_restart),
+    // 0.52 V1：本段冻结的占位集合（旧文件没有 ⇒ undefined ⇒ 请求视图不改写）。
+    cleared_tool_call_ids: normalizeClearedToolCallIds(raw.cleared_tool_call_ids),
   };
 }
 
@@ -427,6 +433,10 @@ export class FileSessionStore implements SessionStore {
       // 0.52 S1a：续跑标记。同样只在有值时写，旧文件形状不变。
       ...(state.resume_after_restart !== undefined
         ? { resume_after_restart: state.resume_after_restart }
+        : {}),
+      // 0.52 V1：本段冻结的占位集合。同样只在有值时写。
+      ...(state.cleared_tool_call_ids !== undefined
+        ? { cleared_tool_call_ids: state.cleared_tool_call_ids }
         : {}),
     };
 

@@ -15,7 +15,16 @@ export {
   clampAnchorRatio,
   normalizeContextAnchor,
 } from './anchor.js';
-export { formatClearedToolResult, isClearedToolResult } from './cleared-tool-result.js';
+export {
+  formatClearedToolResult,
+  isClearedToolResult,
+  normalizeClearedToolCallIds,
+  renderContextTrimNotice,
+  TRIM_ENV_DETAIL_MARK,
+  TRIM_ENV_SCOPE,
+  type TrimNoticeInput,
+  type TrimNoticeLocale,
+} from './cleared-tool-result.js';
 export {
   compactMessagesForSeed,
   estimateMessagesTokens,
@@ -25,6 +34,11 @@ export {
   planClearedToolResults,
   withClearedToolResults,
 } from './context-manager.js';
+export {
+  type ContextNoticeLocale,
+  renderContextOverflowNotice,
+  renderSystemRevisionNotice,
+} from './context-notice.js';
 export {
   normalizePromptContextFingerprint,
   samePromptContext,

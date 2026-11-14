@@ -118,9 +118,9 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   'context.changed': { tier: 'internal', live: true },
   'context.pressure': { tier: 'internal', live: true, 承接: 'notice' },
   'context.compacted': { tier: 'internal', live: true, 承接: 'notice' },
-  // 上下文裁剪（工具结果被清）是 run 内部状态同步；用户可行动信号由 `context.compacted`
-  // 与消息投影承担。
-  'context.cleared_tool_result': { tier: 'internal', live: true },
+  // 上下文裁剪（工具结果被清）本身是 run 内部状态同步，但**清理必须可见**：0.52 V1 起
+  // 段起点会追加一张 env 卡（scope `trim`），事件与卡是同一个投影 ⇒ 承接 notice。
+  'context.cleared_tool_result': { tier: 'internal', live: true, 承接: 'notice' },
   'message.injected': { tier: 'internal', live: true },
   'message.compaction': { tier: 'internal', live: true },
   'limit.blocked': { tier: 'internal', live: true },

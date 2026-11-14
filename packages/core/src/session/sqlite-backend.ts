@@ -6,7 +6,11 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { normalizeContextAnchor, normalizePromptContextFingerprint } from '../context/index.js';
+import {
+  normalizeClearedToolCallIds,
+  normalizeContextAnchor,
+  normalizePromptContextFingerprint,
+} from '../context/index.js';
 import type { Message } from '../types/provider.js';
 import type { RunUsage } from '../types/run-record-store.js';
 import type {
@@ -47,6 +51,8 @@ interface SessionRow {
   prompt_context: string | null;
   /** 0.52 S1a：续跑标记（JSON；NULL = 旧行 / 该会话没被进程退出打断过） */
   resume_after_restart: string | null;
+  /** 0.52 V1：本段冻结的工具结果占位集合（JSON；NULL = 旧行 / 这一段还没做过决策） */
+  cleared_tool_call_ids: string | null;
 }
 
 /** listRich 查询行形状（含派生列 message_count） */
@@ -145,7 +151,8 @@ export class SQLiteSessionStore implements SessionStore {
         derived_upto_seq INTEGER,
         context_anchor TEXT,
         prompt_context TEXT,
-        resume_after_restart TEXT
+        resume_after_restart TEXT,
+        cleared_tool_call_ids TEXT
       )
     `);
     // ALTER TABLE 无 IF NOT EXISTS，逐列 try/catch（已存在则静默）
@@ -164,6 +171,8 @@ export class SQLiteSessionStore implements SessionStore {
     this.ensureColumn('prompt_context', 'TEXT');
     // 0.52 S1a：旧库补列；NULL = 没有续跑标记（启动不续跑任何东西 = 0.51 行为）
     this.ensureColumn('resume_after_restart', 'TEXT');
+    // 0.52 V1：旧库补列；NULL = 这一段还没做过占位决策（请求视图与落盘逐字一致）
+    this.ensureColumn('cleared_tool_call_ids', 'TEXT');
   }
 
   /** 为旧库补列（列已存在时静默忽略） */
@@ -210,6 +219,10 @@ export class SQLiteSessionStore implements SessionStore {
       prompt_context: normalizePromptContextFingerprint(parseJsonColumn(row.prompt_context)),
       // 0.52 S1a：旧行 NULL / 脏 JSON / 缺字段 ⇒ undefined（启动不续跑任何东西）。
       resume_after_restart: normalizeResumeAfterRestart(parseJsonColumn(row.resume_after_restart)),
+      // 0.52 V1：旧行 NULL / 脏 JSON / 空数组 ⇒ undefined（请求视图不改写 = 0.51 行为）。
+      cleared_tool_call_ids: normalizeClearedToolCallIds(
+        parseJsonColumn(row.cleared_tool_call_ids),
+      ),
     };
   }
 
@@ -228,8 +241,8 @@ export class SQLiteSessionStore implements SessionStore {
 
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO sessions
-        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, title_source, preview, updated_at, branch, tenant_id, derived_upto_seq, context_anchor, prompt_context, resume_after_restart)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, title_source, preview, updated_at, branch, tenant_id, derived_upto_seq, context_anchor, prompt_context, resume_after_restart, cleared_tool_call_ids)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -253,6 +266,10 @@ export class SQLiteSessionStore implements SessionStore {
       state.prompt_context !== undefined ? JSON.stringify(state.prompt_context) : null,
       // 0.52 S1a：续跑标记整体存 JSON（NULL = 没有标记）。
       state.resume_after_restart !== undefined ? JSON.stringify(state.resume_after_restart) : null,
+      // 0.52 V1：本段冻结的占位集合（NULL = 这一段还没做过决策）。
+      state.cleared_tool_call_ids !== undefined
+        ? JSON.stringify(state.cleared_tool_call_ids)
+        : null,
     );
   }
 

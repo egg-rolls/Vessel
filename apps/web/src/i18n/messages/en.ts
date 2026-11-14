@@ -1219,6 +1219,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.notice.contextPressure': 'context at {percent}% · {used}/{max}',
   'chat.notice.contextCompacted':
     'context compacted · removed {removed} · remaining {remaining} · {reason}',
+  'chat.notice.contextTrimmed':
+    'context trimmed · {cleared} older tool result(s) became placeholders · {kept} kept',
   'chat.notice.limitWarning': 'limit warning · {key} {current}/{max}',
   'chat.notice.restarting': 'context restarting · {session} · epoch {from} → {epoch}',
   'chat.notice.restarted': 'context restarted · {session} · epoch {from} → {epoch}',
@@ -1259,6 +1261,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.scope.model': 'Model',
   'chat.env.scope.selfcard': 'Base info',
   'chat.env.scope.context': 'Context',
+  // 0.52: 工具结果被换占位符（上下文上限）。只报条数与 call id，不含工具输出正文。
+  'chat.env.scope.trim': 'Trimmed',
   // 0.52: PII 句柄整批失效（内存 broker 重启）。逐调用的句柄失败不走卡，只落到那次工具调用。
   'chat.env.scope.pii': 'PII',
   'chat.env.count': '{count} items',

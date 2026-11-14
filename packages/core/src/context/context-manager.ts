@@ -219,15 +219,27 @@ export function planClearedToolResults(messages: readonly Message[], maxTokens: 
 }
 
 /**
- * 请求级视图：把超出保留预算的旧工具结果换成占位文本，**返回新数组**。
+ * 请求级视图：把**本段冻结的**占位集合换成占位文本，**返回新数组**。
  *
  * 只有被替换的那几条消息是新对象（`{...message, content}`），其余原样透传 ——
  * 调用方（`ExecutionUnit.buildRequestMessages`）据此做到「发给 provider 的请求省 token，
  * 落盘的历史一个字不改」。这是本不变量在 core 里唯一允许的「视图层改写」。
+ *
+ * 0.52 V1：集合**不在这里算**。按当前 messages 重算窗口 ⇒ 每多一条工具结果，窗口整体
+ * 右移一条，上一条被清的消息又被「最新 K 条」认领回来，同一段内每轮多清一条：请求前缀
+ * 每轮变一次（prefix cache 全丢，append-only 不变量也破了）。现在集合在**段起点**算一次
+ * （`planClearedToolResults`）并落进 `SessionState.cleared_tool_call_ids`（RunJournal
+ * 单写口），请求期只读；`pop` 之后基准重置，下一个段起点按新基准重算一次。
+ *
+ * @param messages 落盘历史（只读，不就地改）
+ * @param cleared 本段冻结的 tool_call_id 集合；传数字（旧的 token 预算签名）= 这一段还没有
+ *   决策 ⇒ **一条都不清**：没有决策时请求视图必须与落盘逐字一致（append-only 的默认形态）。
  */
-export function withClearedToolResults(messages: readonly Message[], maxTokens: number): Message[] {
-  const cleared = planClearedToolResults(messages, maxTokens);
-  if (cleared.length === 0) return [...messages];
+export function withClearedToolResults(
+  messages: readonly Message[],
+  cleared: readonly string[] | number,
+): Message[] {
+  if (!Array.isArray(cleared) || cleared.length === 0) return [...messages];
   const ids = new Set(cleared);
   return messages.map((message) =>
     message.role === 'tool' &&
@@ -398,17 +410,14 @@ export class MemoryWorkingContext implements WorkingContext {
       this.realTokens += delta;
     }
 
-    // 配置真实 summarizer 时不在 add() 里同步压缩（不能 await）：
-    // 由 runtime 在请求组装前调用 autoCompactAsync() 产生真实摘要。
-    // 未配置时保持同步占位符压缩，向后兼容。
-    // 消息条数安全上限不看 autoCompact：超限必须先摘要再移除，绝不静默截断。
-    const overflow = this.isOverMessageCap();
-    if (
-      !this.config.summarizer &&
-      (overflow || (this.config.autoCompact && this.shouldCompact()))
-    ) {
-      this.compact(false);
-    }
+    // 0.52 V2：`add()` **不再**压缩。压缩 = 删中段 + 插新摘要 = 就地改写历史，只能在
+    // **段边界**发生（run 起点 / 用户显式压缩）：`ContextManager.compact()` 仍可被
+    // runtime 在段起点显式调用（`autoCompactAsync()` / `forceCompact()`），但消息追加
+    // 本身永远是 append-only。旧行为（这里 `compact(false)`）会让一次 run 内的请求前缀
+    // 在某一轮突然改形，append-only 不变量与 prefix cache 同时破掉。
+    // 撑爆上下文时的收尾交给 runtime：run 内不改写，追加「超限」卡并以失败收尾，下一次
+    // run 的段起点压缩后 `new(compaction)` 开新段。
+    // 条数安全上限（`isOverMessageCap`）同样只在段起点判定：绝不静默截断。
   }
 
   get messages(): Message[] {

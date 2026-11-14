@@ -458,6 +458,7 @@ export function createFold(runId: string): RunFold {
       // 由 NoticeRow 按类型渲染，避免默认分支的原始 JSON 卡。
       case 'context.pressure':
       case 'context.compacted':
+      case 'context.cleared_tool_result':
       case 'agent.limit.warning':
       case 'agent.restarting':
       case 'agent.restarted':

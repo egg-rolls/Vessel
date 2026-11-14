@@ -7,6 +7,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   applyReadSideMaskers,
   estimateTokens,
+  planClearedToolResults,
+  renderContextOverflowNotice,
+  renderContextTrimNotice,
+  renderSystemRevisionNotice,
   shouldPublishSystemContext,
   systemContextChangesFromFingerprint,
   withClearedToolResults,
@@ -723,6 +727,112 @@ export class ExecutionUnit {
         session_id: this.lastSessionId,
         error: errorText(error),
       });
+    });
+  }
+
+  /**
+   * 0.52 V2：压缩只在**段边界**发生（run 起点 / 用户显式压缩），run 内绝不改写历史。
+   *
+   * 调用点：`run()` 与 resume 的 seed 之后、本段第一条请求之前。压缩成功 ⇒ 本段的基准
+   * 就是压缩后的 seed 视图（段因 `compaction`，守卫与 UI 都按 `new(compaction)` 记一段），
+   * 段内不再压缩。旧行为是在 tool loop 的**每一轮**请求前压缩：同一段内请求前缀会被反复
+   * 改形（删中段 + 插新摘要），「只有 append 或 pop」与 prefix cache 同时破。
+   */
+  private async compactAtSegmentStart(execution: Run): Promise<void> {
+    const window = execution.workingContext;
+    const autoCompact = window.autoCompactAsync;
+    if (autoCompact === undefined) return;
+    let removed: number;
+    try {
+      removed = await autoCompact.call(window);
+    } catch {
+      // 段起点压缩是尽力而为：摘要失败不该让整个 run 起不来（context-manager 内部已回退
+      // 占位符压缩）。真撑爆时走「超限」卡 + 失败收尾那条路。
+      return;
+    }
+    this.publishCompacted(window, execution.runId, execution.sessionId, removed, 'auto');
+    // 压缩删掉了中段：本段从压缩后的视图开始，必须显式标段因，否则守卫会当成前缀重写。
+    if (removed > 0) this.pendingPrefixReason ??= 'compaction';
+  }
+
+  /**
+   * 0.52 R6：系统提示词 / 工具表 / 模型变了时的环境信息卡（**不开新会话**）。
+   *
+   * 以前这里标 `system_revision`：守卫看到 reason 就直接放行、什么都不发，前缀改写于是
+   * 变成静默的。删掉 reason 之后 `PromptPrefixGuard` 会照旧把这类技术原因当「前缀变了」
+   * 报出来（`prompt.prefix_changed`），卡负责让模型与用户也知道发生了什么。
+   */
+  private appendSystemRevisionNotice(): void {
+    this.appendNotice(renderSystemRevisionNotice());
+  }
+
+  /**
+   * 0.52 V2：run 内撑爆上下文时**不许静默改写历史**。
+   *
+   * 追加一张「超限」env 卡（scope `context`）讲清发生了什么与下一步动作，然后让本次 Run
+   * 以 provider 的原始错误收尾；压缩留到下一个段起点（`new(compaction)` 开新段）。
+   * 旧行为是这里 `forceCompact(execution, 'overflow')` 就地删中段 + 插摘要后重试 —— 一次
+   * run 内因此出现两个不同的历史视图。
+   */
+  private appendContextOverflowNotice(): void {
+    this.appendNotice(renderContextOverflowNotice());
+  }
+
+  /**
+   * 段冻结的工具结果占位集合，按窗口对象索引（0.52 V1）。
+   *
+   * 窗口换了（新 Run / `pop` / 换会话）就自然失效 —— 这正是「`pop` 之后按新段基准重算」的
+   * 实现方式：不需要额外的失效通知，下一个段起点直接覆盖。请求期只读它，**不再**按当前
+   * messages 重算窗口。
+   */
+  private readonly segmentClearPlans = new WeakMap<object, readonly string[]>();
+
+  /**
+   * 0.52 V1：段起点把「清哪些工具结果」一次算完并**冻结**（清理必须一次到位）。
+   *
+   * 旧行为是每次请求按当前 messages 重算窗口（K = min(10, 5% 预算)）⇒ 第 11 条工具结果
+   * 之后每轮多清一条：同一段内每轮请求都比上一轮多差一条（prefix cache 全丢，也不满足
+   * 「分段只有 new / pop」）。现在：
+   *
+   * - 集合在段起点算一次，随 session 落盘（`SessionState.cleared_tool_call_ids`，
+   *   RunJournal 单写口，两 backend 都写）；
+   * - 请求期只读（`buildRequestMessages`），段内一个字都不再改；
+   * - `pop`（回退 / 分支切换）之后基准重置，下一个段起点按新基准重算并覆盖。
+   *
+   * 清理必须可见：新增 call id 时追加一张 env 卡（scope `trim`）+ 一条
+   * `context.cleared_tool_result` 事件；正文只说「清了几条 / 为什么 / 被清的 call id」，
+   * 不含任何工具输出正文，同一批 id 只讲一次（按已落盘的集合去重）。
+   */
+  private freezeSegmentClearedToolResults(execution: Run, stored: SessionState | null): void {
+    const window = execution.workingContext;
+    const messages = window.messages;
+    const ids = planClearedToolResults(messages, window.maxTokens ?? 0);
+    this.segmentClearPlans.set(window, ids);
+    const known = new Set(stored?.cleared_tool_call_ids ?? []);
+    const fresh = ids.filter((id) => !known.has(id));
+    if (fresh.length === 0) return;
+    const cleared = new Set(ids);
+    const kept = messages.filter(
+      (message) =>
+        message.role === 'tool' &&
+        typeof message.tool_call_id === 'string' &&
+        !cleared.has(message.tool_call_id),
+    ).length;
+    const notice = renderContextTrimNotice({ cleared: ids.length, kept, tool_call_ids: fresh });
+    this.appendNotice(notice);
+    this.publishEvent({
+      type: 'context.cleared_tool_result',
+      run_id: execution.runId,
+      ts: Date.now(),
+      data: {
+        // 旧消费者只认 data.summary：占位卡的可见投影，与 env 卡正文逐字一致。
+        summary: notice,
+        cleared: ids.length,
+        kept,
+        // 只报本次新增的 id（同一批只讲一次）；顺序＝段基准里的出现顺序。
+        tool_call_ids: fresh,
+        segment: 'context_trim',
+      },
     });
   }
 
@@ -1470,12 +1580,22 @@ export class ExecutionUnit {
     // 0.52：恢复「上次发布过的环境快照指纹」，让重启后的第一条消息能正确去重。
     this.restorePromptContextFingerprint(stored);
 
+    // 0.52 V2：压缩只在**段边界**发生 —— 这里是本段的起点（seed 之后、第一条请求之前）。
+    // 压缩成功 ⇒ 本段基准 = 压缩后的 seed 视图（`new(compaction)`），段内不再改写历史。
+    await this.compactAtSegmentStart(execution);
+
+    // 0.52 V1：段起点的占位决策只算一次并冻结（落 SessionState.cleared_tool_call_ids）。
+    // 必须在 seed / 压缩之后、本 Run 第一条请求之前：段内不再改，`pop` 之后下一个段起点重算。
+    this.freezeSegmentClearedToolResults(execution, stored);
+
     // system 前缀只允许显式 revision：基底 system / Self Card 只在构造期变化，
-    // 若同一 session 的基底确实不同（例如运行时重建），标记为一次 system_revision。
+    // 0.52 R6：同一 session 的基底确实不同（运行时重建 / 换模型 / 换工具表重新拼装）
+    // **不开新会话**，也不许用「洗白 reason」把前缀改写藏起来 —— 追加一张环境信息卡让
+    // 变化可见，守卫照旧能把这类技术原因当前缀变化报出来（删 reason 只会更严）。
     const requestBaseSystem = this.runSystemPrompt ?? this.systemPrompt ?? '';
     const previousBaseSystem = this.lastRunSystemPrompts.get(sessionId);
     if (previousBaseSystem !== undefined && previousBaseSystem !== requestBaseSystem) {
-      this.pendingPrefixReason ??= 'system_revision';
+      this.appendSystemRevisionNotice();
     }
     this.lastRunSystemPrompts.set(sessionId, requestBaseSystem);
 
@@ -1878,8 +1998,8 @@ export class ExecutionUnit {
       // 旧文件回退。禁止用较旧的 RunRecord 覆盖较新的 session。
       // 0.15 E9：resume 同样在 run 开始时生成一次 Self Card
       this.runSystemPrompt = this.composeRunSystemPrompt();
-      // CONTRACT-prefix-invariant：resume 是显式前缀失效（历史可能已被裁剪）。
-      this.pendingPrefixReason ??= 'resume';
+      // 0.52 R6：resume 是**续段**（追加），不需要前缀失效 reason。删掉 reason 之后守卫
+      // 照旧会对「基底 system 真的变了」报警（`prompt.prefix_changed`），不会静默放过。
       this.lastSessionId = sessionId;
       this.lastRunSystemPrompts.set(sessionId, this.runSystemPrompt ?? this.systemPrompt ?? '');
       const history = await this.loadStoredHistory(sessionId, record);
@@ -1895,6 +2015,10 @@ export class ExecutionUnit {
       execution.workingContext.setContextAnchor?.(history.sessionState?.context_anchor, this.model);
       this.seedWorkingContext(execution, history);
       this.seedRealTokensFromLastRequest(execution, history);
+      // 0.52 V2：resume 也是一个段起点 —— 压缩同样只在这里做一次。
+      await this.compactAtSegmentStart(execution);
+      // 0.52 V1：resume 也是一个段起点 —— 占位决策同样只在这里算一次并冻结。
+      this.freezeSegmentClearedToolResults(execution, history.sessionState ?? null);
 
       const sessionState = this.createSessionState(
         sessionId,
@@ -2076,12 +2200,15 @@ export class ExecutionUnit {
    *   headers/body timeout、429 / 502 / 503 / 504）：指数退避 + 抖动后重发同一请求
    *   （`ProviderRetryPolicy`，默认 4 次、base 500ms、单次封顶 8s）。**只有本次请求
    *   一个增量都没流出过才重试**——已经流出正文 / 思考再重发，父级会看到两段重复文本。
-   * - **context-overflow**（400）：强制压缩一次后重试一次（0.10 R2-17）。
+   * - **context-overflow**（400）：0.52 V2 起**不再**就地压缩重试 —— run 内不许改写历史
+   *   （见 `appendContextOverflowNotice`）：追加一张「超限」卡并原样抛出，下一个段起点压缩。
    *
    * 取消优先：`AbortSignal` 中断（用户取消 / rotate / shutdown）立即抛出，不退避、
    * 不重试；退避期间不改 run 状态、不碰租约。
    *
-   * 每次真实请求都递增 request 计数并发布 `llm.request`（重试请求看到的是压缩后的上下文）。
+   * 每次真实请求都递增 request 计数并发布 `llm.request`。0.52 V2：run 内**不再**压缩 --
+   * 撑爆上下文就追加一张「超限」卡并原样抛出，压缩留给下一个段起点（`new(compaction)`），
+   * 所以这里不再有「重试时看到另一份历史」的路径。
    * 重试用尽后原样抛出，不包装 provider 错误。
    *
    * 两处落盘形态：`llm.request` 的落盘副本只带元信息（`persistData`，正文留在发布
@@ -2094,11 +2221,12 @@ export class ExecutionUnit {
       tools: NonNullable<ChatRequest['tools']>;
       sessionId: string;
       signal?: AbortSignal;
+      /** 重新按当前窗口组装请求；0.52 V2 起 run 内不改写历史，保留位给段起点以后的路径。 */
       rebuildMessages: () => Message[];
     },
   ): Promise<LLMResponse> {
     const { runId, stats } = execution;
-    let messages = args.messages;
+    const messages = args.messages;
     let overflowRetried = false;
     /** 重试链（传输层 / overflow）里的第几次真实请求（1 起；写进落盘元信息） */
     let attempt = 1;
@@ -2302,14 +2430,17 @@ export class ExecutionUnit {
 
         if (overflowRetried || !isContextOverflowError(error)) throw error;
         overflowRetried = true;
-        attempt += 1;
-        const removed = await this.forceCompact(execution, 'overflow');
-        messages = args.rebuildMessages();
-        this.logger.warn('context overflow; compacted and retrying once', {
+        // 0.52 V2：run 内**不许**改写历史（旧行为是 `forceCompact(execution, 'overflow')`
+        // 删中段 + 插新摘要后重试 ⇒ 一次 run 里出现两个历史视图）。现在只追加一张
+        // 「超限」卡并把本次 Run 以原始错误收尾：压缩发生在下一个段起点
+        // （`compactAtSegmentStart`），那里开的是 `new(compaction)` 新段。
+        this.appendContextOverflowNotice();
+        this.logger.warn('context overflow; run ends here, next run starts a new segment', {
           run_id: runId,
-          removed_messages: removed,
+          streamed,
           error: errorText(error),
         });
+        throw error;
       }
     }
   }
@@ -2461,8 +2592,15 @@ export class ExecutionUnit {
     return { removed, remaining, messages };
   }
 
-  /** 强制压缩一次（overflow 重试用）；压缩失败不覆盖 provider 原始错误。 */
-  private async forceCompact(
+  /**
+   * 强制压缩一次（用户显式压缩；压缩失败不覆盖调用方的原始错误）。
+   *
+   * 0.52 V2：**唯一**合法的压缩时机是段边界 —— 用户显式压缩（两次 run 之间）与 run 起点
+   * （`compactAtSegmentStart`）。run 内撑爆上下文走「超限」卡 + 收尾失败，不再走这里。
+   */
+  // 0.52：保留为公开的手动压缩入口（ 侧透传）；run 内不再调用，
+  // 唯一合法时机是段边界 —— 见下方 V2 注释。
+  async forceCompact(
     execution?: Run,
     reason: ContextCompactedReason = 'overflow',
   ): Promise<number> {
@@ -3061,7 +3199,10 @@ export class ExecutionUnit {
     workingContext: WorkingContext,
   ): Message[] {
     const normalized = this.normalizeMessages(workingContext.messages);
-    const prepared = withClearedToolResults(normalized, workingContext.maxTokens ?? 1_000_000);
+    // 0.52 V1：只应用「本段冻结」的集合，**不再**按当前 messages 重算窗口；
+    // 没冻结过（非常规入口）= 一条都不清，请求视图与落盘逐字一致。
+    const frozen = this.segmentClearPlans.get(workingContext) ?? [];
+    const prepared = withClearedToolResults(normalized, frozen);
     if (prepared.some((message, index) => message !== normalized[index])) {
       // 占位替换是真实的（已声明）前缀变化：不标 reason 的话守卫会当成「莫名重写」。
       this.pendingPrefixReason ??= 'context_trim';
@@ -3548,6 +3689,12 @@ export class ExecutionUnit {
       ...(stored?.context_anchor !== undefined ? { context_anchor: stored.context_anchor } : {}),
       // 0.52：环境快照指纹跨轮继承（发布新卡时由 saveSessionState 覆盖成最新的一份）。
       ...(stored?.prompt_context !== undefined ? { prompt_context: stored.prompt_context } : {}),
+      // 0.52 V1：本段冻结的占位集合也**必须**继承 —— 这里是 S1c 踩过的那个坑：
+      // createSessionState 只认自己认识的字段，漏一行的 additive 字段会被整轮洗掉，
+      // 于是「段内只读」变成「每轮重新决策」。saveSessionState 会按窗口里的新决策覆盖它。
+      ...(stored?.cleared_tool_call_ids !== undefined
+        ? { cleared_tool_call_ids: stored.cleared_tool_call_ids }
+        : {}),
       status: 'running',
       last_run_id: runId,
     };
@@ -3581,6 +3728,14 @@ export class ExecutionUnit {
       // 窗口没有锚点（旧会话 / 本次没拿到 usage）时保留继承来的旧值。
       const anchor = execution.workingContext.contextAnchor;
       if (anchor !== undefined) sessionState.context_anchor = anchor;
+      // 0.52 V1：本段冻结的占位集合跟着窗口一起落盘（这一段没有决策就清掉继承来的旧值，
+      // 否则下次段起点会把「已经不在窗口里的 id」当成已讲过的卡而不发）。
+      const frozen = this.segmentClearPlans.get(execution.workingContext);
+      if (frozen !== undefined && frozen.length > 0) {
+        sessionState.cleared_tool_call_ids = [...frozen];
+      } else {
+        delete sessionState.cleared_tool_call_ids;
+      }
     }
     // 0.52：环境快照的发布指纹随 session 落盘（跨重启去重用）。
     // 只在本轮确实发布过卡时存在；没有就不动（保留继承来的旧值）。
