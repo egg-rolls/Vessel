@@ -22,6 +22,9 @@
  *   j. 环境信息卡（unknown / expired 不发卡；整批失效至多发一张；卡面不含逐值信息）
  */
 
+import { readFileSync } from 'node:fs';
+
+import { envNoticeCard } from '../apps/web/src/domains/chat/env-notice.js';
 import { tierOf } from '../apps/web/src/state/event-visibility.js';
 import type {
   Message,
@@ -639,6 +642,25 @@ async function probeDeadReferenceCards(): Promise<void> {
     card.startsWith('pii:'),
   );
   eq('同一批死引用只追加一次卡', cardsAfterThird.length, 1);
+
+  // EnvCard 渲染族认得出这张卡：scope = pii，明细区带 id 与类别，摘要行不含真值
+  const card = envNoticeCard(cardsAfterSecond[0] ?? '');
+  eq('失效通知走 EnvCard：scope = pii', card?.scope, 'pii');
+  check(
+    '失效通知的明细区列出占位符与类别',
+    (card?.lines ?? []).some((line) => line.text.includes(handle) && line.text.includes('(email)')),
+    JSON.stringify(card?.lines ?? []),
+  );
+  check(
+    '失效通知的明细里有下一步（重新获取 / reveal）',
+    (card?.lines ?? []).some((line) => /reveal|重新获取|pii\.reveal/.test(line.text)),
+  );
+  check(
+    '卡片全部行都不含真值',
+    (card?.lines ?? []).every(
+      (line) => !line.text.includes(MARKER_EMAIL) && !line.text.includes(MARKER_PHONE),
+    ),
+  );
 
   // 工具侧仍然硬报错：死句柄不许静默外发
   stack.provider.setResponse('USE', toolCallResponse('echo_args', { q: handle }, 'call-use'));
