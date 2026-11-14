@@ -20,15 +20,14 @@ import {
 } from '../limits/index.js';
 import { createStderrLogger, noopLogger } from '../logging.js';
 import {
+  deadReferenceNote,
   findHandles as findPiiHandleOccurrences,
   getPiiVault,
+  markDeadHandles,
   PII_CAPACITY_NOTICE,
   PII_INVALIDATION_NOTICE,
   PiiHandleUnresolvedError,
-  piiHandleOf,
-  renderDeadReferencesNotice,
   type PiiAuditEntry,
-  type PiiCategory,
   type PiiVault,
 } from '../pii/index.js';
 // D2：跨模块只允许从 barrel 导入（不得直接引用 session 的内部文件）。
@@ -840,16 +839,79 @@ export class ExecutionUnit {
   }
 
   /**
-   * 发请求前扫一遍已经 append 的消息，把**已经解不开**的占位符集合追加成一条 env 卡。
+   * 请求投影里的失效标记（0.52 请求构造层那一趟扫描）。
    *
-   * append-only 决定了「失效」只能以**追加**表达（不能回改成新的标记形状）。
-   * 去重靠 `claimUnannouncedDeadHandles`：同一批 id 只宣告一次，之后每轮不再重复。
-   * 整批失效（broker 重启）与个别失效共用同一张卡的额度（每 session 至多一张）。
+   * 逐个人工解引用：可解析 ⇒ 原样保留（模型只该看到一种形态：占位符）；
+   * 不可解析 ⇒ 原地改写成 `«pii-expired:<id>»`（同一 id，形状可判，跨请求稳定）。
+   * 统计 `dead` 给调用方决定要不要加那一行固定说明（**按请求去重，不按 handle 数量**）。
+   *
+   * 只改本次请求的投影：store / UI 仍是 `«pii:xxxx»`，也不发定时器。
+   */
+  private markDeadHandlesForRequest(
+    messages: Message[],
+    sessionId: string,
+  ): { messages: Message[]; dead: number } {
+    const vault = this.piiVault();
+    if (!vault.isEnabled) return { messages, dead: 0 };
+    let dead = 0;
+    const projectText = (text: string): string => {
+      const marked = markDeadHandles(text, (handleId) => vault.resolve(sessionId, handleId).ok);
+      dead += marked.dead;
+      return marked.text;
+    };
+    const projected = messages.map((message) => {
+      const content = message.content;
+      if (typeof content === 'string') {
+        const next = projectText(content);
+        return next === content ? message : { ...message, content: next };
+      }
+      if (Array.isArray(content)) {
+        let changed = false;
+        const parts = content.map((part) => {
+          if (part !== null && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string') {
+            const original = (part as { text: string }).text;
+            const next = projectText(original);
+            if (next !== original) changed = true;
+            return next === original ? part : { ...part, text: next };
+          }
+          return part;
+        });
+        return changed ? { ...message, content: parts as typeof content } : message;
+      }
+      return message;
+    });
+    // 有 dead 引用 ⇒ 本次请求的前缀**声明式**失效（`pii_handle_expired`），
+    // 让 prompt 前缀守卫按"预期内改动"记账，而不是当成缓存被破坏（严格模式下会抛错）。
+    if (dead > 0) this.pendingPrefixReason ??= 'pii_handle_expired';
+    return { messages: projected, dead };
+  }
+  /**
+   * 发请求前的**系统性**事件检查（0.52 第 3 档）。
+   *
+   * 只处理「面上的」两件事，都**每 session 至多一张卡**：
+   * - broker 重启导致整批句柄失效（`invalidated_handle`）；
+   * - 句柄容量耗尽（后续命中只能直接掩码）。
+   *
+   * 逐调用/逐引用的 `unknown_handle` / `expired_handle` **不发卡**：它们已经由
+   * 「请求投影里的 `«pii-expired:»` 标记 + 一行说明」和「工具侧硬报错」承担，
+   * 再发卡会变成噪音（用户裁定：不做定时通知、不出现 N 条过期卡片风暴）。
    */
   private async appendPiiDeadNotice(sessionId: string): Promise<void> {
     const vault = this.piiVault();
     if (!vault.isEnabled) return;
-    const seen = new Set<string>();
+    // 容量耗尽：一次性、影响本 session 之后所有新命中 ⇒ 面上的卡。
+    if (vault.takeDegradedCount(sessionId) > 0 && vault.claimInvalidationNotice(sessionId)) {
+      await this.appendNotice(PII_CAPACITY_NOTICE.en);
+      this.publishEvent({
+        type: 'pii.handles.capacity',
+        run_id: this.activeRun?.runId ?? 'plugin',
+        ts: Date.now(),
+        data: { session: sessionId },
+      });
+      return;
+    }
+    // broker 整批失效：旧占位符全部不可用 ⇒ 面上的卡（解释「为什么突然都不行了」）。
+    let systemic = 0;
     for (const message of this.activeRun?.workingContext.messages ?? []) {
       const content = message.content;
       const texts =
@@ -865,61 +927,21 @@ export class ExecutionUnit {
                 .filter((text): text is string => text !== undefined)
             : [];
       for (const text of texts) {
-        for (const occurrence of findPiiHandleOccurrences(text)) seen.add(occurrence.id);
+        for (const occurrence of findPiiHandleOccurrences(text)) {
+          const result = vault.resolve(sessionId, occurrence.id);
+          if (!result.ok && result.reason === 'invalidated_handle') systemic += 1;
+        }
       }
     }
-    if (seen.size === 0) {
-      // 没有死引用，也可能有「容量耗尽」这张面上的卡要发（每 session 一张）。
-      if (vault.takeDegradedCount(sessionId) > 0 && vault.claimInvalidationNotice(sessionId)) {
-        await this.appendNotice(PII_CAPACITY_NOTICE.en);
-        this.publishEvent({
-          type: 'pii.handles.capacity',
-          run_id: this.activeRun?.runId ?? 'plugin',
-          ts: Date.now(),
-          data: { session: sessionId },
-        });
-      }
-      return;
-    }
-    const dead: Array<{ id: string; category: PiiCategory | undefined }> = [];
-    let systemic = false;
-    for (const id of seen) {
-      const result = vault.resolve(sessionId, id);
-      if (result.ok) continue;
-      dead.push({ id, category: vault.categoryOfDeadHandle(sessionId, id) });
-      if (result.reason === 'invalidated_handle') systemic = true;
-    }
-    if (dead.length === 0) {
-      if (vault.takeDegradedCount(sessionId) > 0 && vault.claimInvalidationNotice(sessionId)) {
-        await this.appendNotice(PII_CAPACITY_NOTICE.en);
-      }
-      return;
-    }
-    const fresh = vault.claimUnannouncedDeadHandles(
-      sessionId,
-      dead.map((entry) => entry.id),
-    );
-    if (fresh.length === 0) return;
-    const freshSet = new Set(fresh);
-    const references = dead
-      .filter((entry) => freshSet.has(entry.id))
-      .map((entry) => ({
-        handle: piiHandleOf(entry.id),
-        ...(entry.category === undefined ? {} : { category: entry.category }),
-      }));
-    if (systemic && vault.claimInvalidationNotice(sessionId)) {
-      // 整批失效（broker 重启）：一张环境卡就够，不再重复列 id。
-      await this.appendNotice(PII_INVALIDATION_NOTICE.en);
-      this.publishEvent({
-        type: 'pii.handles.invalidated',
-        run_id: this.activeRun?.runId ?? 'plugin',
-        ts: Date.now(),
-        data: { session: sessionId, reason: 'invalidated_handle', handle_count: fresh.length },
-      });
-      return;
-    }
-    // 逐个失效：追加一张 env 卡（持久、UI 与模型都看得见、不含真值）。
-    await this.appendNotice(renderDeadReferencesNotice(references));
+    if (systemic === 0) return;
+    if (!vault.claimInvalidationNotice(sessionId)) return;
+    await this.appendNotice(PII_INVALIDATION_NOTICE.en);
+    this.publishEvent({
+      type: 'pii.handles.invalidated',
+      run_id: this.activeRun?.runId ?? 'plugin',
+      ts: Date.now(),
+      data: { session: sessionId, reason: 'invalidated_handle', handle_count: systemic },
+    });
   }
 
   /**
@@ -3052,14 +3074,26 @@ export class ExecutionUnit {
       // 占位替换是真实的（已声明）前缀变化：不标 reason 的话守卫会当成「莫名重写」。
       this.pendingPrefixReason ??= 'context_trim';
     }
-    // 0.52（用户裁定两条不变量）：脱敏**不在这里**做。
-    // - 可见性对等：UI 渲染的就是 store 里的字节 ⇒ 脱敏必须在 **append 侧**
-    //   （见 `maskForAppend`），请求侧只做组装；
-    // - 请求 messages 只许 append：这里不再改写/投影任何一条历史（前缀缓存不能废）。
-    // 句柄失效同样以**追加一张 env 卡**表达（见 `appendPiiDeadNotice`），不回改历史。
-    const messages = prepared;
+    // 0.52 请求构造层（三处钩子之一）：
+    // - 脱敏**不在这里**做（脱敏在 append 侧，见 `maskForAppend`）；
+    // - 这里只做**失效标记**：把不可解析的 `«pii:xxxx»` 原地改写成 `«pii-expired:xxxx»`
+    //   （同一 id、形状可判、跨请求稳定），并在本次请求里出现过 dead 引用时加**一行**
+    //   固定说明。零额外扫描 —— 出站请求本来就要过一趟；不靠定时器、不等工具报错。
+    // - store 与 UI 仍是 `«pii:xxxx»`；这一份改写只作用于**本次请求**的投影。
+    const projected = this.markDeadHandlesForRequest(prepared, workingContext.getSessionId());
+    const messages = projected.messages;
     // 压缩摘要也是 role=system：它不是基底 system，缺省补回与 hook 改写都不能替换它。
     const isBaseSystem = (m: Message): boolean => m.role === 'system' && !m.compaction_summary;
+    // 同一请求最多一行：按「本次请求有没有 dead」判定，**不按 handle 数量**重复。
+    const deadNote = deadReferenceNote(projected.dead);
+    const withDeadNote = (list: Message[]): Message[] => {
+      if (deadNote === undefined) return list;
+      const baseSystemIndex = list.findIndex(isBaseSystem);
+      if (baseSystemIndex < 0) return [{ role: 'system', content: deadNote }, ...list];
+      const base = list[baseSystemIndex]!;
+      const content = typeof base.content === 'string' ? `${base.content}\n\n${deadNote}` : deadNote;
+      return list.map((message, index) => (index === baseSystemIndex ? { ...message, content } : message));
+    };
     const systemOverride =
       typeof systemOverrideInput === 'string' && systemOverrideInput
         ? systemOverrideInput
@@ -3068,15 +3102,17 @@ export class ExecutionUnit {
 
     // 上下文缺 system（trim / 恢复 / 失败会话）时，补回基底的或 hook 改写后的 system
     if (!hasSystem) {
-      return systemOverride ? [{ role: 'system', content: systemOverride }, ...messages] : messages;
+      return withDeadNote(
+        systemOverride ? [{ role: 'system', content: systemOverride }, ...messages] : messages,
+      );
     }
     // hook 未改写（或改写为空）且无 Self Card 时保持持久化 system 原样；
     // Self Card 必须覆盖持久化的旧 system，且只出现一次。
     const basePrompt = this.runSystemPrompt ?? this.systemPrompt;
     if (!systemOverride || (systemOverride === basePrompt && !this.selfCard)) {
-      return messages;
+      return withDeadNote(messages);
     }
-    return messages.map((m) => (isBaseSystem(m) ? { ...m, content: systemOverride } : m));
+    return withDeadNote(messages.map((m) => (isBaseSystem(m) ? { ...m, content: systemOverride } : m)));
   }
 
   /**

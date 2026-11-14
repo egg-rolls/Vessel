@@ -54,7 +54,6 @@ export {
 export {
   getPiiVault,
   PII_HANDLE_TTL_MS,
-  PII_MAX_ANNOUNCED_HANDLES,
   PII_MAX_HANDLES_PER_SESSION,
   PII_MAX_SESSIONS,
   PII_MAX_TOMBSTONES,
@@ -77,10 +76,14 @@ export {
 } from './reveal.js';
 
 export {
+  deadReferenceNote,
+  markDeadHandles,
   PII_CAPACITY_NOTICE,
-  PII_DEAD_REFERENCE_LIST_LIMIT,
+  PII_DEAD_REFERENCE_NOTE,
+  PII_EXPIRED_PATTERN_SOURCE,
+  PII_EXPIRED_PREFIX,
+  piiExpiredOf,
+  piiExpiredPattern,
   PII_INVALIDATION_NOTICE,
-  renderDeadReferencesNotice,
-  type PiiDeadReference,
   type PiiNoticeLocale,
 } from './notice.js';
