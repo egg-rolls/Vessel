@@ -32,4 +32,3 @@ export function nextReconnectDelay(attempt: number, random: () => number = Math.
   const jitter = RECONNECT_JITTER_MIN + unit * (RECONNECT_JITTER_MAX - RECONNECT_JITTER_MIN);
   return Math.min(RECONNECT_MAX_MS, Math.round(reconnectBaseDelay(attempt) * jitter));
 }
-

@@ -332,9 +332,15 @@ export function renderGlobalHelp(): string {
       t('help.cmd.gatewayNodesAdd'),
     ],
     ['vessel gateway nodes remove <name>', t('help.cmd.gatewayNodesRemove')],
-    ['vessel gateway stop [--instance <name>|--port N|--all] [--keep-nodes]', t('help.cmd.gatewayStop')],
+    [
+      'vessel gateway stop [--instance <name>|--port N|--all] [--keep-nodes]',
+      t('help.cmd.gatewayStop'),
+    ],
     ['vessel gateway status [--json] [--rpc]', t('help.cmd.gatewayStatus')],
-    ['vessel gateway restart [--daemon] [--instance <name>|--all] [--no-keep-nodes]', t('help.cmd.gatewayRestart')],
+    [
+      'vessel gateway restart [--daemon] [--instance <name>|--all] [--no-keep-nodes]',
+      t('help.cmd.gatewayRestart'),
+    ],
     ['vessel gateway reload [--scope config,plugins]', t('help.cmd.gatewayReload')],
     ['vessel gateway install-service', t('help.cmd.gatewayInstall')],
     ['vessel gateway uninstall-service', t('help.cmd.gatewayUninstall')],

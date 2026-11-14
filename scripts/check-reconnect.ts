@@ -27,24 +27,22 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { sessionTerminalOfDetail } from '../apps/web/src/domains/chat/transcript-items';
 import {
+  nextReconnectDelay,
   RECONNECT_BASE_MS,
   RECONNECT_MAX_MS,
-  nextReconnectDelay,
   reconnectBaseDelay,
 } from '../apps/web/src/gateway/backoff';
 import {
-  LINK_GRACE_MS,
   afterConnectionHello,
   createLinkStatusMachine,
   createReconnectDetector,
+  LINK_GRACE_MS,
 } from '../apps/web/src/gateway/link-status';
-import { sessionTerminalOfDetail } from '../apps/web/src/domains/chat/transcript-items';
-import type {
-  ConnectionState,
-} from '../apps/web/src/gateway/node/protocol';
-import type { SessionDetail } from '../apps/web/src/gateway/types/sessions';
+import type { ConnectionState } from '../apps/web/src/gateway/node/protocol';
 import type { RunEvent } from '../apps/web/src/gateway/types/runs';
+import type { SessionDetail } from '../apps/web/src/gateway/types/sessions';
 import { EventStore } from '../apps/web/src/state/event-store';
 import type { RunGroup, StoredEvent } from '../apps/web/src/state/events';
 
@@ -55,7 +53,12 @@ const T0 = 1_794_560_000_000;
 /** 抖动中心：random=0.5 ⇒ 乘性抖动 = 1.0 ⇒ 延迟就是标称值（断言序列用这个）。 */
 const MID = (): number => 0.5;
 
-function ev(seq: number, type: string, data: Record<string, unknown>, ts = T0 + seq * 1000): StoredEvent {
+function ev(
+  seq: number,
+  type: string,
+  data: Record<string, unknown>,
+  ts = T0 + seq * 1000,
+): StoredEvent {
   const event: RunEvent = { type, run_id: String(data.run_id ?? RUN), ts, data };
   return { seq, event };
 }
@@ -98,7 +101,11 @@ function stuckEntries(): StoredEvent[] {
 }
 
 /** 假 clock：探针自己推进时间，不等真实 2 秒。 */
-function fakeClock(start = 0): { now: () => number; set: (at: number) => void; advance: (by: number) => void } {
+function fakeClock(start = 0): {
+  now: () => number;
+  set: (at: number) => void;
+  advance: (by: number) => void;
+} {
   let at = start;
   return {
     now: () => at,
@@ -287,22 +294,26 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
   {
     name: 'C7 重连判定：首次 hello 不算重连，之后每次 hello 恰好一次 hydrate',
     check: () => {
-      const calls: number[] = [];
+      let calls = 0;
+      const bump = () => {
+        calls += 1;
+      };
+      const total = () => calls;
       const detector = createReconnectDetector();
-      const hello = () => afterConnectionHello({ detector, onReconnected: () => calls.push(1) });
+      const hello = () => afterConnectionHello({ detector, onReconnected: bump });
       const first = hello();
       if (first) return '首次连接被当成重连（会白拉一次快照）';
-      if (calls.length !== 0) return `首次连接就 hydrate 了 ${calls.length} 次`;
+      if (total() !== 0) return `首次连接就 hydrate 了 ${total()} 次`;
       const reconnect = hello();
       if (!reconnect) return '第二次 hello 没被认成重连';
-      if (calls.length !== 1) return `重连没有恰好触发一次 hydrate：${calls.length}`;
+      if (total() !== 1) return `重连没有恰好触发一次 hydrate：${total()}`;
       // 一次重连只 hydrate 一次 —— 再点一次同名 hello 才算下一次重连。
       hello();
-      if (calls.length !== 2) return `第二次重连的 hydrate 计数不对：${calls.length}`;
+      if (total() !== 2) return `第二次重连的 hydrate 计数不对：${total()}`;
       detector.reset();
       const afterReset = hello();
       if (afterReset) return 'reset 之后的首个 hello 又被当成重连';
-      if (calls.length !== 2) return 'reset 之后的首个 hello 触发了 hydrate';
+      if (total() !== 2) return 'reset 之后的首个 hello 触发了 hydrate';
       return null;
     },
   },
@@ -399,7 +410,8 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
       }
       const provider = source('apps/web/src/gateway/ConnectionProvider.tsx');
       if (!provider.includes('useLinkStatus(')) return 'ConnectionProvider 没接 useLinkStatus';
-      if (!provider.includes('linkStatus.visible')) return 'stale 没依赖 linkStatus.visible（宽限期白做）';
+      if (!provider.includes('linkStatus.visible'))
+        return 'stale 没依赖 linkStatus.visible（宽限期白做）';
       const hook = source('apps/web/src/gateway/use-link-status.ts');
       if (!hook.includes('createLinkStatusMachine')) return 'hook 没建状态机';
       if (!hook.includes('noticeAt()')) return 'hook 没按 noticeAt 排宽限定时器';
@@ -435,4 +447,3 @@ if (failures.length > 0) {
 }
 
 console.log(`reconnect: ${FIXTURES.length} fixtures passed`);
-

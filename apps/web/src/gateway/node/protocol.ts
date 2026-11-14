@@ -6,6 +6,22 @@
  */
 
 import { t } from '../../i18n';
+
+/**
+ * 当前 origin，**不直接引用 **（0.52）。
+ *
+ * 原因：这个文件被零依赖探针（）间接 import，
+ * 而根 tsconfig 没有 DOM lib ⇒ 任何  都会在根 typecheck 里报
+ * “Property 'x' does not exist on type 'Window'”。这里用  的结构化读取，
+ * 浏览器与 Node 两侧都能编过（Node 侧只是拿不到 origin，回落到默认值）。
+ */
+function currentOrigin(): string {
+  const location = (globalThis as { location?: { origin?: string } }).location;
+  return typeof location?.origin === 'string' && location.origin !== ''
+    ? location.origin
+    : 'http://127.0.0.1';
+}
+
 import type { GapFrame, GatewayErrorBody, HelloInfo, RunEvent, ServerFrame } from '../types';
 import { toWebSocketBase } from '../url';
 
@@ -48,7 +64,12 @@ export abstract class ProtocolClient {
 
   private readonly pending = new Map<
     string,
-    { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: number }
+    {
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      /** DOM 侧是 number，Node 侧是 Timeout ⇒ 用 ReturnType 两种 lib 都能编 */
+      timer: ReturnType<typeof setTimeout>;
+    }
   >();
 
   private connectResolve: (() => void) | null = null;
@@ -103,7 +124,7 @@ export abstract class ProtocolClient {
   }
 
   protected httpBase(): string {
-    return this.baseUrl || window.location.origin;
+    return this.baseUrl || currentOrigin();
   }
 
   private wsUrl(since: number): string {
@@ -117,7 +138,7 @@ export abstract class ProtocolClient {
    */
   async probeHealth(timeoutMs = 5_000): Promise<void> {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(`${this.httpBase()}/health`, {
         method: 'GET',
@@ -144,7 +165,7 @@ export abstract class ProtocolClient {
       }
       throw new GatewayHttpError('network', error instanceof Error ? error.message : String(error));
     } finally {
-      window.clearTimeout(timer);
+      globalThis.clearTimeout(timer);
     }
   }
 
@@ -283,7 +304,7 @@ export abstract class ProtocolClient {
         const pending = this.pending.get(frame.id);
         if (!pending) return;
         this.pending.delete(frame.id);
-        window.clearTimeout(pending.timer);
+        globalThis.clearTimeout(pending.timer);
         if (frame.ok) pending.resolve(frame.result);
         else
           pending.reject(
@@ -309,7 +330,7 @@ export abstract class ProtocolClient {
 
   private rejectPending(error: Error): void {
     for (const [, pending] of this.pending) {
-      window.clearTimeout(pending.timer);
+      globalThis.clearTimeout(pending.timer);
       pending.reject(error);
     }
     this.pending.clear();
@@ -323,7 +344,7 @@ export abstract class ProtocolClient {
     }
     const id = crypto.randomUUID();
     return new Promise<T>((resolve, reject) => {
-      const timer = window.setTimeout(() => {
+      const timer = globalThis.setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(t('gateway.client.requestTimeout', { method })));
       }, timeoutMs);

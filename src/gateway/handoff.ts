@@ -122,4 +122,3 @@ export async function consumeHandoffMarker(
   if (age > HANDOFF_MARKER_TTL_MS) return false;
   return true;
 }
-

@@ -14,7 +14,13 @@
  * 另一件事：重连判定。首次 hello 是「连上」，之后每次 hello 才是「重连」（要强制
  * hydrate、对账本地 live 状态）。判定和接线都放在这里，React 侧只负责调用。
  */
-import type { ConnectionState } from './client';
+/**
+ * 连接状态的字面量集合。**故意定义在这里而不是从  import**：
+ *  →  依赖 DOM（ / ），
+ * 零依赖探针  import 本模块时会被根 tsconfig（无 DOM lib）
+ * 牵连报错。所以类型定义放在纯模块里，client 反向引用它。
+ */
+export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error';
 
 /** 断开宽限期：2s 内的抖动不提示（平台层 0.6s / node 1–2.5s 的折中）。 */
 export const LINK_GRACE_MS = 2000;
@@ -127,4 +133,3 @@ export function afterConnectionHello(options: ReconnectHydrationOptions): boolea
   options.onReconnected();
   return true;
 }
-

@@ -38,10 +38,12 @@ export const zhCN = {
   'help.cmd.errors': '最近 run/tool 错误（errorLevel: all 时含诊断）',
   'help.cmd.gatewayStart': '前台启动 gateway；--daemon 分离到 gateway.log；--instance 命名实例',
   'help.cmd.gatewayList': '列出 gateway 实例与 PID 文件',
-  'help.cmd.gatewayStop': 'SIGTERM 优雅停止（Windows 终止进程）；--keep-nodes 保留 node/hub 供 handoff',
+  'help.cmd.gatewayStop':
+    'SIGTERM 优雅停止（Windows 终止进程）；--keep-nodes 保留 node/hub 供 handoff',
   'help.cmd.gatewayStatus':
     'PID/端口/运行时长/版本/服务状态（--rpc 已弃用，改用 node status --rpc）',
-  'help.cmd.gatewayRestart': '停止后重新启动（沿用 --daemon）；node/hub 保活并由新平台接管（--no-keep-nodes = 冷重启）',
+  'help.cmd.gatewayRestart':
+    '停止后重新启动（沿用 --daemon）；node/hub 保活并由新平台接管（--no-keep-nodes = 冷重启）',
   'help.cmd.gatewayReload': '热重载 config / plugins，不重启进程',
   'help.cmd.gatewayInstall': '注册登录自启（systemd / launchd / schtasks）',
   'help.cmd.gatewayUninstall': '移除系统服务注册',
