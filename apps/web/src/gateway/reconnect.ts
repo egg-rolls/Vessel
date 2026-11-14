@@ -1,11 +1,12 @@
 import { t } from '../i18n';
 import type { GatewayClient } from './client';
 
-/** 1s 起指数退避，上限 30s，带 jitter。 */
-export function nextReconnectDelay(attempt: number): number {
-  const base = Math.min(30_000, 1_000 * 2 ** attempt);
-  return Math.round(base * (0.8 + Math.random() * 0.4));
-}
+/**
+ * 连接层：关码分类 + 建连流程。
+ *
+ * 退避数学在 `./backoff`（纯算术、零依赖），好让探针直接 import 生产实现；
+ * 本文件依赖 `../i18n`，探针不该被它牵着走。
+ */
 
 export type CloseClassification =
   | { kind: 'terminal'; tokenError?: string; lastError?: string }
