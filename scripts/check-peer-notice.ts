@@ -549,7 +549,7 @@ async function caseNoticeRotateWiring(): Promise<void> {
       serviceSource,
     );
   expect(implMatch !== null, '⑩ service.ts 里应有同步的 peerParentSessionOf 实现');
-  const impl = implMatch === null ? '' : implMatch[1];
+  const impl = implMatch === null ? '' : (implMatch[1] ?? '');
   expect(/this\.peerParentIdFor\(member\)/u.test(impl), '⑩ 实现必须复用 peerParentIdFor 找父成员');
   expect(
     /currentBindingSession\(parent\)/u.test(impl),
