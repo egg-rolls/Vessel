@@ -498,39 +498,56 @@ async function probeAppendOnlyAndParity(): Promise<void> {
   check('store 里出现占位符', /«pii:[A-Z2-7]{8}»/.test(storedText));
   check('入站伪造句柄在 append 时被中和', !storedText.includes('«pii:ZZZZ2222»'));
 
-  // ② 可见性对等：请求里的消息与 store 里的消息逐条同字节（system 除外）
-  //    请求是「store 的前缀」：发请求那一刻 store 里还没有最后那条 assistant 回复。
+  // ③ 请求 messages 只许 append：第 N 轮必须是第 N-1 轮的**前缀延伸**
+  //    （长度不减 + 逐条 JSON 完全相同）；任何中间差异都是 FAIL。
+  //    再跑一轮，让「前缀延伸」有两段可比。
+  stack.provider.setResponse('PLAIN', { content: 'noted', finish_reason: 'stop' });
+  await stack.eu.run('PLAIN follow-up', sessionId);
+
+  // ② 可见性对等：请求里的消息与 store 里的消息**逐条逐字**相同（system 除外）。
+  //    UI 与模型都从同一个 store 读，所以「UI 侧消息列表」= store 序列化结果；
+  //    这里比较**完整 JSON**（role/name/content/工具调用字段全算），不只是文本。
+  const latestStored = await storedMessages(stack.store, sessionId);
   const requestMessages = stack.provider.requests[stack.provider.requests.length - 1]?.messages ?? [];
-  const storedNonSystem = stored.filter((message) => message.role !== 'system');
+  const storedNonSystem = latestStored.filter((message) => message.role !== 'system');
   const requestNonSystem = requestMessages.filter((message) => message.role !== 'system');
   eq(
-    '可见性对等：请求与 store 的非 system 消息逐条一致',
-    requestNonSystem.map((message) => `${message.role}:${message.content ?? ''}`),
-    storedNonSystem
-      .slice(0, requestNonSystem.length)
-      .map((message) => `${message.role}:${message.content ?? ''}`),
+    '可见性对等：请求与 store 的非 system 消息逐条逐字一致',
+    requestNonSystem.map((message) => JSON.stringify(message)),
+    storedNonSystem.slice(0, requestNonSystem.length).map((message) => JSON.stringify(message)),
   );
 
-  // ③ 请求 messages 只许 append：第 2 轮请求的前 N 条必须与第 1 轮逐条相同
-  const first = stack.provider.requests[0]?.messages ?? [];
-  const second = stack.provider.requests[1]?.messages ?? [];
-  check('两轮请求都发出了', first.length > 0 && second.length > 0);
-  const prefixSame =
-    first.length <= second.length &&
-    first.every((message, index) => {
-      const other = second[index];
-      return (
-        other !== undefined &&
-        other.role === message.role &&
-        (other.content ?? '') === (message.content ?? '')
-      );
-    });
-  check('请求 messages 前缀只增不改（第 1 轮是第 2 轮的前缀）', prefixSame);
+  // ③ 请求 messages 只许 append：第 N 轮必须是第 N-1 轮的**前缀延伸**
+  //    （长度不减 + 逐条 JSON 完全相同）；任何中间差异都是 FAIL。
+  const rounds = stack.provider.requests.map((request) => request.messages);
+  check('多轮请求都发出了', rounds.length >= 2);
+  let prefixOk = true;
+  let prefixDetail = '';
+  for (let index = 1; index < rounds.length; index += 1) {
+    const previous = rounds[index - 1]!;
+    const current = rounds[index]!;
+    if (current.length < previous.length) {
+      prefixOk = false;
+      prefixDetail = `round ${index} 变短：${previous.length} → ${current.length}`;
+      break;
+    }
+    for (let position = 0; position < previous.length; position += 1) {
+      if (JSON.stringify(previous[position]) !== JSON.stringify(current[position])) {
+        prefixOk = false;
+        prefixDetail = `round ${index} 第 ${position} 条被改写`;
+        break;
+      }
+    }
+    if (!prefixOk) break;
+  }
+  check('append-only：每轮请求都是上一轮的逐条前缀延伸', prefixOk, prefixDetail);
   check(
-    '第 2 轮请求更长（只追加）',
-    second.length > first.length,
-    `first=${first.length} second=${second.length}`,
+    '至少有一轮确实只追加（长度增加）',
+    rounds.some((round, index) => index > 0 && round.length > rounds[index - 1]!.length),
   );
+
+  // ④ 脱敏发生在 append：store 里的内容再过一遍 protect 必须**幂等**（再读/再投影不变）
+  eq('已落盘内容再投影幂等（不会二次改写）', vault.protect(storedText, sessionId).text, storedText);
 }
 
 // ---------------------------------------------------------------------------
@@ -588,10 +605,19 @@ async function probeDeadReferenceCards(): Promise<void> {
   // 旧消息一个字没改（append-only）
   eq(
     '历史消息逐条未改（只追加）',
-    afterSecond.slice(0, beforeSecond.length).map((message) => `${message.role}:${message.content ?? ''}`),
-    beforeSecond.map((message) => `${message.role}:${message.content ?? ''}`),
+    afterSecond.slice(0, beforeSecond.length).map((message) => JSON.stringify(message)),
+    beforeSecond.map((message) => JSON.stringify(message)),
   );
   check('第 2 轮确实追加了新消息', afterSecond.length > beforeSecond.length);
+
+  // durable + 两处可见：卡既在 store 里（UI 读），也出现在随后的请求里（模型读）
+  const requestAfterSecond = messageTexts(stack.provider.requests[stack.provider.requests.length - 1]?.messages ?? []);
+  check(
+    '失效通知 durable 且两处可见（store 与请求都含同一张卡）',
+    cardsAfterSecond[0] !== undefined &&
+      (await noticeCards(stack.store, sessionId)).includes(cardsAfterSecond[0]) &&
+      requestAfterSecond.includes(cardsAfterSecond[0]),
+  );
 
   // 第 3 轮：同一批 id 不再重复追加卡（去重）
   stack.provider.setResponse('PLAIN2', { content: 'again', finish_reason: 'stop' });
