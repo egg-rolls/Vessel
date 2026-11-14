@@ -27,9 +27,9 @@ import {
   MemoryEventStream,
   MemoryPluginHost,
   MemorySessionStore,
-  withReadSideMask,
   type Message,
   type SessionState,
+  withReadSideMask,
 } from '@vessel-agent/core';
 import { GuardrailRunner } from '@vessel-agent/core/policy';
 import {
@@ -38,7 +38,7 @@ import {
   detectPii,
   maskText,
   piiGuardrailPlugin,
-} from '@vessel-agent/guardrail-pii';
+} from '../plugins/security/guardrail-pii/src/index';
 
 let failures = 0;
 let checks = 0;
@@ -89,7 +89,7 @@ const NO_MASK_SAMPLES: ReadonlyArray<string> = [
   '17000000000000000', // 17 位
   '170000000000000001', // 18 位
   '1700000000000000001', // 19 位
-  '{\n  \"at\": 1794482135404,\n  \"note\": \"ok\"\n}',
+  '{\n  "at": 1794482135404,\n  "note": "ok"\n}',
 ];
 
 for (const sample of NO_MASK_SAMPLES) {
@@ -148,7 +148,12 @@ const events = new MemoryEventStream();
 const runner = new GuardrailRunner(host, events);
 
 // 写侧：tool 结果落盘前会经过 ToolResult 阶段的 guardrail
-const toolResultOutcome = await runner.apply(RAW_TOOL_RESULT, GuardrailStage.ToolResult, 'run-1', 'sess-1');
+const toolResultOutcome = await runner.apply(
+  RAW_TOOL_RESULT,
+  GuardrailStage.ToolResult,
+  'run-1',
+  'sess-1',
+);
 check('D 写侧不拦截', toolResultOutcome.allowed, true);
 checkUntouched('D 写侧不改写 tool 结果', RAW_TOOL_RESULT, String(toolResultOutcome.replacement));
 
@@ -176,7 +181,11 @@ const state: SessionState = {
   updated_at: 2,
   messages: [
     { role: 'user', content: '查一下我的号码' },
-    { role: 'tool', content: String(toolResultOutcome.replacement), tool_call_id: 'call-1' } as Message,
+    {
+      role: 'tool',
+      content: String(toolResultOutcome.replacement),
+      tool_call_id: 'call-1',
+    } as Message,
     { role: 'assistant', content: String(outputOutcome.replacement) },
   ],
 };
@@ -184,7 +193,11 @@ await store.save(state);
 const reloaded = await store.load('sess-1');
 check('D 落盘后 messages 仍在', reloaded?.messages?.length, 3);
 checkUntouched('D 落盘 tool 结果是原文', RAW_TOOL_RESULT, String(reloaded?.messages?.[1]?.content));
-checkUntouched('D 落盘 assistant 正文是原文', assistantText, String(reloaded?.messages?.[2]?.content));
+checkUntouched(
+  'D 落盘 assistant 正文是原文',
+  assistantText,
+  String(reloaded?.messages?.[2]?.content),
+);
 check('D 存储里能看见原始手机号', String(reloaded?.messages?.[1]?.content).includes(PHONE), true);
 
 // 请求构造层：读侧 masker 投影（落盘不动，投影才打码）
@@ -196,7 +209,11 @@ checkUntouched('D 投影不改原数组', RAW_TOOL_RESULT, String(reloaded?.mess
 
 // 幂等：同一份落盘原文连续投影两次，结果一致（前缀快照因此稳定）
 const secondPass = withReadSideMask(forRequest, host.getReadSideMaskers?.() ?? []);
-check('D 投影幂等', secondPass.map((m) => m.content), forRequest.map((m) => m.content));
+check(
+  'D 投影幂等',
+  secondPass.map((m) => m.content),
+  forRequest.map((m) => m.content),
+);
 
 // ── E. 反向：开关关闭时两条路径都不打码 ───────────────────────────────────────
 for (const [label, config] of [
@@ -206,7 +223,12 @@ for (const [label, config] of [
   const offHost = new MemoryPluginHost();
   createPiiGuardrailPlugin(config).install(offHost);
   const offRunner = new GuardrailRunner(offHost, new MemoryEventStream());
-  const outcome = await offRunner.apply(RAW_TOOL_RESULT, GuardrailStage.ToolResult, 'run-2', 'sess-2');
+  const outcome = await offRunner.apply(
+    RAW_TOOL_RESULT,
+    GuardrailStage.ToolResult,
+    'run-2',
+    'sess-2',
+  );
   checkUntouched(`E ${label} 写侧不改写`, RAW_TOOL_RESULT, String(outcome.replacement));
   const projected = withReadSideMask(
     [{ role: 'tool', content: RAW_TOOL_RESULT } as Message],
@@ -237,4 +259,3 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log('OK 时间戳不再被当手机号；脱敏只在读侧，落盘原文不变');
-

@@ -17,12 +17,6 @@ export {
 } from './anchor.js';
 export { formatClearedToolResult, isClearedToolResult } from './cleared-tool-result.js';
 export {
-  applyReadSideMaskers,
-  withReadSideMask,
-  type MaskableMessage,
-  type ReadSideMasker,
-} from './read-side-mask.js';
-export {
   compactMessagesForSeed,
   estimateMessagesTokens,
   estimateMessageTokens,
@@ -37,4 +31,10 @@ export {
   shouldPublishSystemContext,
   systemContextChangesFromFingerprint,
 } from './prompt-context.js';
+export {
+  applyReadSideMaskers,
+  type MaskableMessage,
+  type ReadSideMasker,
+  withReadSideMask,
+} from './read-side-mask.js';
 export { createSessionBreaker } from './session-breaker.js';

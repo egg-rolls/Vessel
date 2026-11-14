@@ -28,21 +28,16 @@ import type {
   ReadSideMasker,
 } from '@vessel-agent/core';
 import { GuardrailStage } from '@vessel-agent/core';
-import {
-  detectPii,
-  maskText,
-  type PiiRuleOptions,
-  type PiiDetection,
-} from './rules.js';
+import { detectPii, maskText, type PiiDetection, type PiiRuleOptions } from './rules.js';
 
+export type { PiiDetection, PiiRuleOptions, PiiType } from './rules.js';
 export {
   detectPii,
+  isValidCnIdCard,
   maskText,
   passesLuhn,
-  isValidCnIdCard,
   scanDigitRuns,
 } from './rules.js';
-export type { PiiDetection, PiiRuleOptions, PiiType } from './rules.js';
 
 /** PII 守卫配置 */
 export interface PIIGuardrailConfig {
@@ -137,7 +132,13 @@ export function parsePiiGuardrailConfig(value: unknown): PIIGuardrailConfig {
 /** 默认配置 */
 const DEFAULT_CONFIG: Required<
   Pick<PIIGuardrailConfig, 'enabled' | 'maskOnRead' | 'action' | 'maskingStrategy'>
-> & { detectEmail: boolean; detectPhone: boolean; detectIdCard: boolean; detectSSN: boolean; detectCreditCard: boolean } = {
+> & {
+  detectEmail: boolean;
+  detectPhone: boolean;
+  detectIdCard: boolean;
+  detectSSN: boolean;
+  detectCreditCard: boolean;
+} = {
   enabled: true,
   maskOnRead: true,
   action: 'report',
@@ -248,4 +249,3 @@ export function createPiiGuardrailPlugin(config?: PIIGuardrailConfig): Plugin {
 export const piiGuardrailPlugin: Plugin = createPiiGuardrailPlugin();
 
 export default piiGuardrailPlugin;
-

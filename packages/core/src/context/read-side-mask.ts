@@ -54,4 +54,3 @@ export function withReadSideMask<T extends MaskableMessage>(
     return { ...message, content: masked } as T;
   });
 }
-

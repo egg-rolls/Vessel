@@ -182,7 +182,12 @@ export function detectPii(text: string, options: PiiRuleOptions = {}): PiiDetect
       if (type === 'phone' && options.detectPhone === false) continue;
       if (type === 'credit_card' && options.detectCreditCard === false) continue;
       if (type === 'id_card' && options.detectIdCard === false) continue;
-      detections.push({ type, value: text.slice(run.start, run.end), start: run.start, end: run.end });
+      detections.push({
+        type,
+        value: text.slice(run.start, run.end),
+        start: run.start,
+        end: run.end,
+      });
     }
   }
 
@@ -299,4 +304,3 @@ export function maskWithDetections(
 export function maskText(text: string, options: PiiRuleOptions = {}): string {
   return maskWithDetections(text, detectPii(text, options), options.maskingStrategy);
 }
-
