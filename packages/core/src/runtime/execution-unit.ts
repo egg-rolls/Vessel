@@ -9,6 +9,7 @@ import {
   shouldPublishSystemContext,
   systemContextChangesFromFingerprint,
   withClearedToolResults,
+  withReadSideMask,
 } from '../context/index.js';
 import {
   evaluateLimitWarnings,
@@ -2834,7 +2835,13 @@ export class ExecutionUnit {
       // 占位替换是真实的（已声明）前缀变化：不标 reason 的话守卫会当成「莫名重写」。
       this.pendingPrefixReason ??= 'context_trim';
     }
-    const messages = prepared;
+    // 读侧脱敏（0.52 pii-guard）：**只在这里（请求构造层）打码**，落盘原文一个字不改。
+    // 前缀快照因此仍然稳定：脱敏是确定性的（同一份原文 → 同一份掩码），且幂等
+    // （打过码的文本不再命中规则），连续两次请求的掩码序列一致。
+    const messages = withReadSideMask(
+      prepared,
+      this.pluginHost.getReadSideMaskers?.() ?? [],
+    );
     const systemOverride =
       typeof systemOverrideInput === 'string' && systemOverrideInput
         ? systemOverrideInput

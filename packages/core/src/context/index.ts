@@ -17,6 +17,12 @@ export {
 } from './anchor.js';
 export { formatClearedToolResult, isClearedToolResult } from './cleared-tool-result.js';
 export {
+  applyReadSideMaskers,
+  withReadSideMask,
+  type MaskableMessage,
+  type ReadSideMasker,
+} from './read-side-mask.js';
+export {
   compactMessagesForSeed,
   estimateMessagesTokens,
   estimateMessageTokens,

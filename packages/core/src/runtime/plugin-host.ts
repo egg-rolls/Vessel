@@ -6,7 +6,7 @@
 import type { Guardrail } from '../types/guardrail.js';
 import type { Hook } from '../types/hook.js';
 import type { MemberBodyContribution, PluginPortName } from '../types/member-port.js';
-import type { PluginHost, PluginInstallScope } from '../types/plugin.js';
+import type { PluginHost, PluginInstallScope, ReadSideMasker } from '../types/plugin.js';
 import type { ProviderFactory } from '../types/provider.js';
 import type { ToolDefinition } from '../types/tool.js';
 
@@ -25,7 +25,11 @@ type PluginRegistration =
       name: string;
       value: MemberBodyContribution<PluginPortName>;
       previous?: MemberBodyContribution<PluginPortName>;
-    };
+    }
+  /**
+   * 0.52：读侧脱敏器。按 `name` 去重，`previous` 是要复原的同名旧值。
+   */
+  | { kind: 'readSideMasker'; name: string; value: ReadSideMasker; previous?: ReadSideMasker };
 
 /**
  * 内存 PluginHost 实现
@@ -40,6 +44,11 @@ export class MemoryPluginHost implements PluginHost {
    * = 覆盖，热应用 / 重复装配都要幂等），Map 同时保住登记顺序。
    */
   private memberBodies: Map<string, MemberBodyContribution<PluginPortName>> = new Map();
+  /**
+   * 0.52：读侧脱敏器（name → masker）。同 `memberBodies` 口径：name 是去重键，
+   * 同 Map 保住登记顺序。它们只在请求构建 / 展示投影被调用，落盘路径绝不经过。
+   */
+  private readSideMaskers: Map<string, ReadSideMasker> = new Map();
   /** 安装记录栈：栈顶是当前安装；每个 scope 独立回滚（0.9） */
   private installScopes: PluginRegistration[][] = [];
 
@@ -130,6 +139,29 @@ export class MemoryPluginHost implements PluginHost {
   }
 
   /**
+   * 登记一个读侧脱敏器（0.52 pii-guard）。
+   *
+   * 同一个 `name` 再登记 = 覆盖（保留第一次的位置），并记下被覆盖的那个供回滚复原。
+   * 它**不是** guardrail：不参与任何写侧阶段，只在请求构建 / 展示投影时被调用。
+   * @param masker 脱敏器（name / mask）
+   */
+  registerReadSideMasker(masker: ReadSideMasker): void {
+    const previous = this.readSideMaskers.get(masker.name);
+    this.readSideMaskers.set(masker.name, masker);
+    this.record({
+      kind: 'readSideMasker',
+      name: masker.name,
+      value: masker,
+      ...(previous !== undefined ? { previous } : {}),
+    });
+  }
+
+  /** 本宿主上已登记的读侧脱敏器，按登记顺序（副本：遍历时看不到半途状态） */
+  getReadSideMaskers(): readonly ReadSideMasker[] {
+    return [...this.readSideMaskers.values()];
+  }
+
+  /**
    * 开始记录一次插件安装的注册（0.9）。
    * `commit()` 丢弃记录；`rollback()` 撤销本次安装的条目，保持已存在条目不变。
    * @returns 本次安装的记录 scope
@@ -189,6 +221,13 @@ export class MemoryPluginHost implements PluginHost {
         if (this.memberBodies.get(entry.name) !== entry.value) break;
         if (entry.previous === undefined) this.memberBodies.delete(entry.name);
         else this.memberBodies.set(entry.name, entry.previous);
+        break;
+      }
+      case 'readSideMasker': {
+        // 0.52：同 memberBody 的按身份判定 —— 只撤销「仍是当前值」的那次登记。
+        if (this.readSideMaskers.get(entry.name) !== entry.value) break;
+        if (entry.previous === undefined) this.readSideMaskers.delete(entry.name);
+        else this.readSideMaskers.set(entry.name, entry.previous);
         break;
       }
     }

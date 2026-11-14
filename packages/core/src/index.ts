@@ -9,6 +9,7 @@
 
 // 上下文管理器 + 单一 token 估算（0.10 R1-10）
 export {
+  applyReadSideMaskers,
   CONTEXT_ANCHOR_RATIO_MAX,
   CONTEXT_ANCHOR_RATIO_MIN,
   clampAnchorRatio,
@@ -21,6 +22,7 @@ export {
   normalizeContextAnchor,
   planClearedToolResults,
   withClearedToolResults,
+  withReadSideMask,
 } from './context/index.js';
 
 // 事件流
