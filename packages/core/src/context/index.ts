@@ -18,6 +18,7 @@ export {
 export {
   type ContextNoticeLocale,
   renderContextOverflowNotice,
+  renderSystemRevisionNotice,
 } from './context-notice.js';
 export {
   formatClearedToolResult,

@@ -41,6 +41,7 @@ export {
   projectionProblems,
   renderContextOverflowNotice,
   renderContextTrimNotice,
+  renderSystemRevisionNotice,
   type RequestSequenceDiff,
   type RequestSequenceDiffKind,
   SEGMENT_BOUNDARY_KINDS,

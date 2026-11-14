@@ -10,6 +10,7 @@ import {
   planClearedToolResults,
   renderContextOverflowNotice,
   renderContextTrimNotice,
+  renderSystemRevisionNotice,
   shouldPublishSystemContext,
   systemContextChangesFromFingerprint,
   withClearedToolResults,
@@ -752,6 +753,17 @@ export class ExecutionUnit {
     this.publishCompacted(window, execution.runId, execution.sessionId, removed, 'auto');
     // 压缩删掉了中段：本段从压缩后的视图开始，必须显式标段因，否则守卫会当成前缀重写。
     if (removed > 0) this.pendingPrefixReason ??= 'compaction';
+  }
+
+  /**
+   * 0.52 R6：系统提示词 / 工具表 / 模型变了时的环境信息卡（**不开新会话**）。
+   *
+   * 以前这里标 `system_revision`：守卫看到 reason 就直接放行、什么都不发，前缀改写于是
+   * 变成静默的。删掉 reason 之后 `PromptPrefixGuard` 会照旧把这类技术原因当「前缀变了」
+   * 报出来（`prompt.prefix_changed`），卡负责让模型与用户也知道发生了什么。
+   */
+  private appendSystemRevisionNotice(): void {
+    this.appendNotice(renderSystemRevisionNotice());
   }
 
   /**
@@ -1577,11 +1589,13 @@ export class ExecutionUnit {
     this.freezeSegmentClearedToolResults(execution, stored);
 
     // system 前缀只允许显式 revision：基底 system / Self Card 只在构造期变化，
-    // 若同一 session 的基底确实不同（例如运行时重建），标记为一次 system_revision。
+    // 0.52 R6：同一 session 的基底确实不同（运行时重建 / 换模型 / 换工具表重新拼装）
+    // **不开新会话**，也不许用「洗白 reason」把前缀改写藏起来 —— 追加一张环境信息卡让
+    // 变化可见，守卫照旧能把这类技术原因当前缀变化报出来（删 reason 只会更严）。
     const requestBaseSystem = this.runSystemPrompt ?? this.systemPrompt ?? '';
     const previousBaseSystem = this.lastRunSystemPrompts.get(sessionId);
     if (previousBaseSystem !== undefined && previousBaseSystem !== requestBaseSystem) {
-      this.pendingPrefixReason ??= 'system_revision';
+      this.appendSystemRevisionNotice();
     }
     this.lastRunSystemPrompts.set(sessionId, requestBaseSystem);
 
@@ -1984,8 +1998,8 @@ export class ExecutionUnit {
       // 旧文件回退。禁止用较旧的 RunRecord 覆盖较新的 session。
       // 0.15 E9：resume 同样在 run 开始时生成一次 Self Card
       this.runSystemPrompt = this.composeRunSystemPrompt();
-      // CONTRACT-prefix-invariant：resume 是显式前缀失效（历史可能已被裁剪）。
-      this.pendingPrefixReason ??= 'resume';
+      // 0.52 R6：resume 是**续段**（追加），不需要前缀失效 reason。删掉 reason 之后守卫
+      // 照旧会对「基底 system 真的变了」报警（`prompt.prefix_changed`），不会静默放过。
       this.lastSessionId = sessionId;
       this.lastRunSystemPrompts.set(sessionId, this.runSystemPrompt ?? this.systemPrompt ?? '');
       const history = await this.loadStoredHistory(sessionId, record);

@@ -16,6 +16,28 @@ export type ContextNoticeLocale = 'en' | 'zh-CN';
 const DETAIL_MARK = '  · ';
 
 /**
+ * 系统提示词 / 工具表 / 模型变了时的环境信息卡（0.52 R6）。
+ *
+ * 以前这条路径靠 `PrefixChangeReason` 里的 `system_revision` / `tools_changed` /
+ * `model_changed` 直接放行守卫 —— 于是前缀改写变成静默的（守卫看到 reason 什么都不发）。
+ * 用户裁定这些变化**都不开新会话**，所以这里改成一张卡把变化讲清楚，守卫照旧报警。
+ */
+export function renderSystemRevisionNotice(locale: ContextNoticeLocale = 'en'): string {
+  if (locale === 'zh-CN') {
+    return [
+      'context：这次请求的系统提示词 / 工具集 / 模型变了；会话没有重建',
+      DETAIL_MARK + '本次 run 用新的基底继续，历史消息一条没动',
+      DETAIL_MARK + '这不是你预期的变化时：检查模型 / 工具配置，或另开会话重新开始',
+    ].join('\n');
+  }
+  return [
+    'context: the system prompt / tool set / model behind this request changed; the session was not recreated',
+    DETAIL_MARK + 'this run continues on the new base, no history message was rewritten',
+    DETAIL_MARK + 'if that change is unintended, check the model / tool configuration or start a new session',
+  ].join('\n');
+}
+
+/**
  * run 内上下文撑爆时的「超限」卡。
  *
  * 这张卡存在的意义就是**不许静默改写历史**：run 内不压缩、不删中段、不插摘要，只把

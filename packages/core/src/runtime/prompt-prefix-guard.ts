@@ -3,9 +3,15 @@
  *
  * 每个 session 保存上一次请求的 system / tools / messages 快照；下一次请求的
  * 消息序列必须以上一次为前缀（逐条 JSON 字节相等）。system / tools 变化不算
- * 消息重写，但同样要可见。带 `reason` 的显式失效（compaction / resume / ...）
- * 直接放行；无 reason 时发 `prompt.prefix_changed`，`VESSEL_STRICT_PREFIX=1`
- * 时抛 `PromptPrefixChangedError`（生产默认只告警）。
+ * 消息重写，但同样要可见。带 `reason` 的显式失效（compaction / 会话切换 / 分支 /
+ * 占位裁剪 —— 这四种都是**真的换了分段**）直接放行；无 reason 时发
+ * `prompt.prefix_changed`，`VESSEL_STRICT_PREFIX=1` 时抛 `PromptPrefixChangedError`
+ * （生产默认只告警）。
+ *
+ * 0.52 R6：这里**没有**「技术性洗白」通道了。换模型 / 换工具表 / 系统提示词重新拼装 /
+ * 进程重启接管都不再是 reason —— 用户裁定这些都不开新会话，改用一张环境信息卡把变化
+ * 讲给模型与用户看（`ExecutionUnit.appendSystemRevisionNotice`），守卫则照旧把这类
+ * 前缀变化当「未声明改写」报出来。删 reason 只会让守卫更严，不会更松。
  *
  * @module @vessel-agent/core/runtime
  */
@@ -13,15 +19,11 @@
 import type { EventStream } from '../types/event.js';
 import type { Message } from '../types/provider.js';
 
-/** 允许一次显式前缀失效的原因 */
+/** 允许一次显式前缀失效的原因（**只认真的换了分段**的那几种） */
 export type PrefixChangeReason =
   | 'compaction'
-  | 'system_revision'
-  | 'tools_changed'
-  | 'model_changed'
   | 'session_switch'
   | 'branch'
-  | 'resume'
   | 'context_trim';
 
 /** 一次守卫检查的输入 */
