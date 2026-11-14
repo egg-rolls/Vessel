@@ -117,6 +117,7 @@
 | 100 | 节点即公司：Platform / Workspace / Team / Agent 拓扑 | accepted | 2026-11-06 | topology, company, workspace, platform, team, plugin, hub | [ADR-100-node-company-topology.md](ADR-100-node-company-topology.md) |
 | 101 | Platform Gateway 与 Node API 分离 | accepted | 2026-11-06 | gateway, node, platform, console, webui, tui, auth, cli | [ADR-101-platform-gateway-and-node-api.md](ADR-101-platform-gateway-and-node-api.md) |
 | 102 | 宿主级 UI 挂载（插件贡献受控组件、同 origin 渲染） | proposed | 2026-11-12 | plugin, extension, contribution, trust, ui, web, isolation | [ADR-102-host-level-ui-mount.md](ADR-102-host-level-ui-mount.md) |
+| 103 | Gateway 的职责边界（四组能力 / 明确不做 / 单点预算） | proposed | 2026-11-14 | gateway, platform, node, hub, auth, ticket, tls, operations, single-point | [ADR-103-gateway-responsibilities.md](ADR-103-gateway-responsibilities.md) |
 
 ## 编写约定
 
