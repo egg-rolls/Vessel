@@ -35,7 +35,7 @@
  * 退出码不可信（bun 是 Windows 版），看输出文本。
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** 环容量默认两档：10000 = 现状（`DEFAULT_MAX_HISTORY`），50000 = 用户已批准放大的目标。 */
@@ -280,7 +280,11 @@ function readSegments(events: readonly RawEvent[]): Segment[] {
     const lastSeq = asNumber(d['last_seq']);
     const startedAt = asNumber(d['started_at']) ?? e.ts;
     const endedAt = asNumber(d['ended_at']) ?? e.ts;
-    if ((kind !== 'text' && kind !== 'reasoning') || firstSeq === undefined || lastSeq === undefined) {
+    if (
+      (kind !== 'text' && kind !== 'reasoning') ||
+      firstSeq === undefined ||
+      lastSeq === undefined
+    ) {
       continue;
     }
     out.push({
@@ -369,7 +373,8 @@ function buildTimeline(
 
   // 3) 落盘结构事件（含 llm.stream.summary）：各占 1 槽，ts 是实测值
   for (const e of structural) {
-    if (e.type === 'run.completed' || e.type === 'run.failed' || e.type === 'run.cancelled') continue;
+    if (e.type === 'run.completed' || e.type === 'run.failed' || e.type === 'run.cancelled')
+      continue;
     slots.push({ ts: e.ts, kind: 'structural', type: e.type });
   }
 
@@ -391,8 +396,7 @@ function analyseSession(sessionId: string, events: readonly RawEvent[]): RunAnal
   for (const [runId, list] of byRun) {
     const started = list.find((e) => e.type === 'run.started');
     const terminalEvent = list.find(
-      (e) =>
-        e.type === 'run.completed' || e.type === 'run.failed' || e.type === 'run.cancelled',
+      (e) => e.type === 'run.completed' || e.type === 'run.failed' || e.type === 'run.cancelled',
     );
     const segments = readSegments(list);
     if (segments.length === 0 && started === undefined) continue;
@@ -401,7 +405,9 @@ function analyseSession(sessionId: string, events: readonly RawEvent[]): RunAnal
     const reasoningBytes = segments
       .filter((s) => s.kind === 'reasoning')
       .reduce((s, x) => s + x.bytes, 0);
-    const textChunks = segments.filter((s) => s.kind === 'text').reduce((s, x) => s + x.chunkCount, 0);
+    const textChunks = segments
+      .filter((s) => s.kind === 'text')
+      .reduce((s, x) => s + x.chunkCount, 0);
     const reasoningChunks = segments
       .filter((s) => s.kind === 'reasoning')
       .reduce((s, x) => s + x.chunkCount, 0);
@@ -416,10 +422,10 @@ function analyseSession(sessionId: string, events: readonly RawEvent[]): RunAnal
       responseChars += content.length;
     }
 
-    const startedAt = started?.ts ?? (segments[0]?.startedAt ?? null);
+    const startedAt = started?.ts ?? segments[0]?.startedAt ?? null;
     const endedAt =
       terminalEvent?.ts ??
-      (segments.length > 0 ? segments[segments.length - 1]?.endedAt ?? null : null);
+      (segments.length > 0 ? (segments[segments.length - 1]?.endedAt ?? null) : null);
 
     const midRunSaves = list.filter(
       (e) =>
@@ -708,7 +714,7 @@ function main(): void {
         lpad(String(r.structuralEvents), 9),
         lpad(String(r.slots), 9),
         lpad(rate.toFixed(1), 7),
-        lpad(rate > 0 ? secs((opts.rings[0] ?? 10_000) / rate * 1000) : '—', 8),
+        lpad(rate > 0 ? secs(((opts.rings[0] ?? 10_000) / rate) * 1000) : '—', 8),
         lpad(bytes(r.responseBytes), 10),
       ].join(' '),
     );
@@ -797,7 +803,7 @@ function main(): void {
       totalLostChunks += loss.lostTextChunks;
     }
     pcts.sort((a, b) => a - b);
-    const loserMedian = pcts.length > 0 ? pcts[Math.floor(pcts.length / 2)] ?? 0 : 0;
+    const loserMedian = pcts.length > 0 ? (pcts[Math.floor(pcts.length / 2)] ?? 0) : 0;
     dist.push({
       ring,
       runs: withText.length,
@@ -826,7 +832,9 @@ function main(): void {
   // ── 构造样本：把历史 run 在进度 p 处截断重放（任务要求的口径）──
   console.log('');
   console.log('════════ 构造样本：历史 run 截断到进度 p 处再刷新（重放，标注为构造）════════');
-  console.log('  p = 该 run 已跑时长占比；published(p) = 那一刻已发布的槽数（实测槽数按时间线取前缀）。');
+  console.log(
+    '  p = 该 run 已跑时长占比；published(p) = 那一刻已发布的槽数（实测槽数按时间线取前缀）。',
+  );
   console.log(
     [
       rpad('环容量', 9),
@@ -868,8 +876,16 @@ function main(): void {
         totalLostBytes += loss.lostTextBytesEst;
       }
       pcts.sort((a, b) => a - b);
-      const loserMedian = pcts.length > 0 ? pcts[Math.floor(pcts.length / 2)] ?? 0 : 0;
-      progressRows.push({ ring, p, lostAny, runs: considered, loserMedian, worstPct, totalLostBytes });
+      const loserMedian = pcts.length > 0 ? (pcts[Math.floor(pcts.length / 2)] ?? 0) : 0;
+      progressRows.push({
+        ring,
+        p,
+        lostAny,
+        runs: considered,
+        loserMedian,
+        worstPct,
+        totalLostBytes,
+      });
       console.log(
         [
           rpad(String(ring), 9),
@@ -936,7 +952,7 @@ function main(): void {
         totalLostBytes += loss.lostTextBytesEst;
       }
       pcts.sort((a, b2) => a - b2);
-      const loserMedian = pcts.length > 0 ? pcts[Math.floor(pcts.length / 2)] ?? 0 : 0;
+      const loserMedian = pcts.length > 0 ? (pcts[Math.floor(pcts.length / 2)] ?? 0) : 0;
       console.log(
         [
           rpad(b.label, 9),
@@ -956,7 +972,9 @@ function main(): void {
   console.log('');
   console.log('════════ 只存在于环里的东西：单个请求的在飞窗口（实测）════════');
   console.log('  每个 llm.request 从发出到它自己的 llm.response 落盘之间，正文只以 chunk 存在');
-  console.log('  ⇒ 环只要装得下「一个请求的 chunk 窗口」，在飞正文就不会丢；run 其余部分磁盘已有。');
+  console.log(
+    '  ⇒ 环只要装得下「一个请求的 chunk 窗口」，在飞正文就不会丢；run 其余部分磁盘已有。',
+  );
   const reqSorted = withText
     .map((r) => r.maxChunksPerRequest)
     .filter((n) => n > 0)
@@ -966,7 +984,7 @@ function main(): void {
     .filter((n) => n > 0)
     .sort((a, b) => a - b);
   const q = (list: number[], p: number): number =>
-    list.length === 0 ? 0 : list[Math.min(list.length - 1, Math.floor(list.length * p))] ?? 0;
+    list.length === 0 ? 0 : (list[Math.min(list.length - 1, Math.floor(list.length * p))] ?? 0);
   console.log(
     `  单请求 chunk 峰值：中位 ${q(reqSorted, 0.5)} 条，p90 ${q(reqSorted, 0.9)} 条，最大 ${q(reqSorted, 1)} 条`,
   );
@@ -1030,7 +1048,9 @@ function main(): void {
     console.log(
       `  ⇒ 这些未完成 run 里 ${fullCover}/${coverAll.length} 个的正文已被 \`llm.response\` **全量落盘**`,
     );
-    console.log('     （「落盘副本」列 = llm.response 副本字节 ÷ 流式正文字节，100% 即可由磁盘回填整段正文）');
+    console.log(
+      '     （「落盘副本」列 = llm.response 副本字节 ÷ 流式正文字节，100% 即可由磁盘回填整段正文）',
+    );
   }
 
   // ── 并发：环是 tenant 全局的，别人跑得越多，你的正文被挤得越快 ──
@@ -1083,10 +1103,7 @@ function main(): void {
       responseBytes: r.responseBytes,
       midRunSaves: r.midRunSaves,
       terminal: r.terminal,
-      loss: opts.rings.map((ring) => {
-        const l = lossAt(r, ring, r.timeline.length);
-        return { ring, ...l };
-      }),
+      loss: opts.rings.map((ring) => lossAt(r, ring, r.timeline.length)),
     }));
     console.log('');
     result.distribution = dist;
@@ -1096,4 +1113,3 @@ function main(): void {
 }
 
 main();
-
