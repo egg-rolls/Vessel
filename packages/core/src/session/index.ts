@@ -13,6 +13,8 @@ export type {
 export { RunAlreadyRunningError, RunResumeError } from '../types/run-record-store.js';
 export type {
   LegacyRunSnapshot,
+  ResumeAfterRestart,
+  ResumeMarkerRegistry,
   SessionInfo,
   SessionState,
   SessionStatus,
@@ -55,6 +57,7 @@ export {
   compareSessionInfo,
   deriveSessionMeta,
   MemorySessionStore,
+  normalizeResumeAfterRestart,
   toSessionInfo,
   withTitleSource,
 } from './session-store.js';

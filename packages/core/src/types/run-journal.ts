@@ -11,7 +11,7 @@ import type { EventStream, RunEvent, SessionEventLogPort } from './event.js';
 import type { LeaseKind } from './lease.js';
 import type { Logger } from './logging.js';
 import type { RunRecord, RunRecordStore } from './run-record-store.js';
-import type { SessionState, SessionStore } from './session.js';
+import type { SessionState, SessionStore, ResumeMarkerRegistry } from './session.js';
 
 /** 一次 Run 的 journal（begin） */
 export interface RunJournalIdentity {
@@ -68,4 +68,12 @@ export interface RunJournalFactoryOptions {
   /** ADR-098 C2：fencing 校验回调（不持 LeaseService） */
   fenceOf?: (kind: LeaseKind, key: string) => Promise<number>;
   logger?: Logger;
+  /**
+   * 0.52 S1a：进程退出时「武装」的续跑标记。
+   *
+   * 装了就由 journal 在**每一次** saveSessionState() 里合并回 state：settle 期间
+   * 终态保存会用自己那份投影重建会话状态，可能把 drain 先写下的标记覆盖掉。
+   * 不装（旧装配 / 探针）⇒ 行为与 0.51 完全一致。
+   */
+  resumeMarkers?: ResumeMarkerRegistry;
 }

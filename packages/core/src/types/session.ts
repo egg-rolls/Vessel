@@ -70,6 +70,64 @@ export interface SessionState {
    * 才能做到「没有实质变化就不发」（用户 2026-11-13 报的问题）。
    */
   prompt_context?: PromptContextFingerprint;
+  /**
+   * 「下次启动续跑」标记（0.52 S1a，additive）。
+   *
+   * 缺省 = 没有被优雅打断过 / 旧数据，行为与 0.51 一致（启动不续跑任何东西）。
+   * 只在**该会话此刻有在跑 run**时由 node 退出路径写入；写完何时清空是 S1c 的事。
+   */
+  resume_after_restart?: ResumeAfterRestart;
+}
+
+/**
+ * 「上次是进程优雅退出、下次启动要接着跑」的续跑标记（0.52 S1a，additive）。
+ *
+ * 什么时候写：只有**这条会话此刻确实有在跑 run**时，node 退出路径才写一条；
+ * 没有在跑 run 的会话一条都不写（S1a 不为静止会话预打标记）。
+ *
+ * 谁读：启动侧恢复（S1c）。S1a 只负责把它写进 SessionState 并落盘——走
+ * RunJournal 单写口（SessionState 的硬规则：状态写入只经 journal）。
+ *
+ * reason 是封闭联合：目前只有 shutdown（进程退出）。gateway restart **不写**标记
+ * （handoff 已合：重启保留 node/hub，run 根本不中断）。
+ */
+export interface ResumeAfterRestart {
+  /** 被打断的那次 run（Run.runId，与 RunRecord / 事件日志同一口径）。 */
+  run_id: string;
+  /** 打断时刻（epoch ms）。 */
+  interrupted_at: number;
+  reason: 'shutdown';
+  /**
+   * 该会话名下仍在 durable inbox 里、尚未被消费的条目 id（unread + held）。
+   *
+   * 只是**清单**：S1a 不改动这些条目（不删、不推进），S1c 用它对账
+   * recoverPendingInputs() 找到的输入。取不到时为 []，此时以 inbox 自身为准。
+   */
+  pending_input_ids: string[];
+  /**
+   * 退出时是否**强制停掉**了后台进程（长命令 / 后台任务）。
+   *
+   * S1a **不**做后台清理（退出路径不许 await 它们）⇒ 一律 false。
+   * 留这个字段是为了让 S1c 能区分「标记真的完整」与「后台被砍过」。
+   */
+  background_stopped: boolean;
+}
+
+/**
+ * 进程内「已武装的续跑标记」注册表（0.52 S1a）。
+ *
+ * 存在的理由是一个真实竞态：drain 先写标记，随后被打断的 run 落**终态**会话状态时
+ * 会用自己那份投影重建整份 SessionState（可能读于标记之前），于是标记被覆盖。
+ * 把标记留在这里，任何一次 journal.saveSessionState() 都把它合并回去。
+ *
+ * 进程内、只增：只由退出路径武装，进程随后就没了，不需要（也不该）跨进程持久化。
+ */
+export interface ResumeMarkerRegistry {
+  get(sessionId: string): ResumeAfterRestart | undefined;
+  /** 已武装的会话数（探针 / 日志用）。 */
+  size(): number;
+  /** 已武装的 [session_id, marker] 快照（只读语义）。 */
+  entries(): ReadonlyArray<readonly [string, ResumeAfterRestart]>;
 }
 
 /** 会话摘要（listRich 返回，照搬 Hermes list_sessions_rich 的字段集，简化） */

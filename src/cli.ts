@@ -1432,6 +1432,9 @@ async function runWithConfig(result: BootstrapResult) {
     await hubNodeOutbound?.close();
     hubNodeOutbound = undefined;
     await shutdownServeStack({
+      // 0.52 S1a：fence + 写 resume 标记 + interrupt + ≤2s settle + flush，
+      // 必须早于 gateway.stop()（否则 run 已被打断，标记写不出来）。
+      ...(result.beginDrain ? { beginDrain: result.beginDrain } : {}),
       gateway,
       closeTenants: async () => {
         eventHub?.close();
@@ -1509,6 +1512,8 @@ async function runWithConfig(result: BootstrapResult) {
     await hubNodeOutbound?.close();
     hubNodeOutbound = undefined;
     await shutdownServeStack({
+      // 0.52 S1a：见上（feishu 退出路径同一段）。
+      ...(result.beginDrain ? { beginDrain: result.beginDrain } : {}),
       gateway,
       closeTransport: async () => {},
       ...(beforeClose ? { beforeClose } : {}),

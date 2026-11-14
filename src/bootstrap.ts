@@ -84,6 +84,7 @@ import { createLocalRunAdapter } from './local-run-adapter';
 import { createCliLogger } from './logging';
 import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
+import { createNodeDrainer } from './node-drain';
 import { resolveNodeIdentity } from './node-identity';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
 import { resolveAgentCwd } from './path-resolution';
@@ -311,6 +312,14 @@ export interface BootstrapResult {
    * `drain: false`：调用方已 `await gateway.stop()`，避免重复限时等待。
    */
   shutdown: (options?: { drain?: boolean }) => Promise<void>;
+  /**
+   * 0.52 S1a：node 退出序列第一段（幂等）。
+   *
+   * fence 准入 → 只给有在跑 run 的会话写 resume 标记 → interrupt('shutdown')
+   * → ≤2s settle → flush。**必须在 gateway.stop() 之前调**，否则 run 已被打断，
+   * 快照为空就一条标记都写不出来。没有本地执行面（connect 模式）时不提供。
+   */
+  beginDrain?: () => Promise<void>;
   cleanup: () => void;
 }
 
@@ -1791,12 +1800,59 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     });
   }
 
+  // ── 0.52 S1a：node 退出序列第一段 ───────────────────────────────
+  //   1) fence 准入（runs.start 立刻 gateway_restarting / agents.* 只进 inbox 并返 queued）
+  //   2) 只给「有在跑 run 的会话」写 resume 标记（走 RunJournal 单写口）
+  //   3) interrupt('shutdown')
+  //   4) ≤2s settle
+  //   5) flush 会话状态（半截回复也要落地）
+  // 幂等：SIGTERM 连发 / vessel node stop 与 shutdown() 同时触发都只做一次。
+  // 必须在 gateway.stop() 之前跑（否则 run 已被打断，快照为空 ⇒ 一条标记都写不出来），
+  // 所以它挂在 BootstrapResult.beginDrain 上，由 CLI 的退出路径先调。
+  const nodeDrainer = createNodeDrainer({
+    units: () => executionRuntime.listExecutionUnits(),
+    // 没有 AgentService（agent 关闭 / 极简入口）就没有 agent→agent 投递要排队：
+    // 空 Map + beginFence 返回 false（fence 由 runs.start 闸门之后的调用方兜底判断）。
+    pendingInboxIdsBySession: () => agentControl?.service.pendingInboxIdsBySession() ?? new Map(),
+    // 竞态保护：settle 期间被打断 run 的终态保存会重建会话状态，注册表让它别把标记冲掉。
+    armResumeMarker: (sessionId, marker) => {
+      bundle.resumeMarkers.arm(sessionId, marker);
+    },
+    beginFence: () => agentControl?.service.beginDrain() ?? false,
+    warn: (message, fields) => {
+      logger.warn(message, fields);
+    },
+  });
+
+  /** 0.52 S1a：执行 node 退出序列（幂等，可在任何退出路径上重复调用）。 */
+  const beginDrain = async (): Promise<void> => {
+    try {
+      const report = await nodeDrainer.beginDrain('shutdown');
+      logger.info('node.drain.done', {
+        marks: report.marks.length,
+        persisted: report.marks.filter((mark) => mark.persisted).length,
+        interrupted: report.interrupted,
+        settle: report.settle,
+        duration_ms: report.duration_ms,
+        already_draining: report.already_draining,
+      });
+    } catch (error) {
+      // 退出序列失败不阻断退出：run 本来就要没了，只是少了标记。
+      logger.warn('node.drain.failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
   // ── 关闭 ────────────────────────────────────────
   let shuttingDown = false;
 
   const shutdown = async (shutdownOptions: { drain?: boolean } = {}): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
+    // 0.52 S1a：退出序列第一段（幂等）。serve 壳在 gateway.stop() 之前已经调过一次；
+    // 这里兜住「直接 shutdown() 的路径」——REPL 的 onExit、cleanup、uncaught 收尾。
+    await beginDrain();
 
     try {
       unsubPermissionPersist?.();
@@ -1996,6 +2052,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     metrics,
     resumeRun,
     shutdown,
+    beginDrain,
     cleanup: () => {
       void shutdown();
     },

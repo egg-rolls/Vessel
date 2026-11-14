@@ -963,7 +963,12 @@ export type DispatchResult =
         | 'not_visible'
         | 'budget_exceeded'
         | 'budget_unavailable'
-        | 'conversation_team_mismatch';
+        | 'conversation_team_mismatch'
+        /**
+         * 0.52 S1a：node 正在优雅退出且没有 durable inbox 可排队 ⇒ 明确可重试，
+         * 不要落到 resume_failed（那会让调用方以为 agent 有问题）。
+         */
+        | 'node_draining';
       reason: string;
     };
 
@@ -1339,7 +1344,12 @@ export type AgentErrorCode =
   | 'budget_unavailable'
   | 'conversation_team_mismatch'
   | 'conflict'
-  | 'body_limit';
+  | 'body_limit'
+  /**
+   * 0.52 S1a：node 正在优雅退出，人类来源的写被 fence 拒绝。
+   * 可重试：RPC 侧映射成 gateway_restarting，客户端等 node 回来再发。
+   */
+  | 'node_draining';
 
 /** AgentService 错误；code 稳定，message 供人读 */
 export class AgentError extends Error {
@@ -1548,6 +1558,21 @@ export interface AgentService {
    * 只影响在跑轮：不改 registry 状态 / membership，也不启动队列里的后续消息。
    */
   drain(options?: AgentDrainOptions): Promise<AgentDrainOutcome>;
+  /**
+   * 0.52 S1a：node 优雅退出的**准入 fence**（退出序列第一段）。
+   *
+   * 打开后人类来源的写立刻被拒（node_draining，RPC 侧是可重试的 gateway_restarting），
+   * agent 来源的投递只落 durable inbox 并返回 queued，队列不再起新轮。
+   * 幂等：返回 true 表示**本次**真正打开了 fence。
+   */
+  beginDrain(): boolean;
+  /** 0.52 S1a：fence 是否已打开（退出序列 / runs.start 闸门用）。 */
+  isDraining(): boolean;
+  /**
+   * 0.52 S1a：按会话汇总 durable inbox 里尚未消费的条目 id（只读列举，不 hold/不推进）。
+   * 退出路径把它写进 SessionState.resume_after_restart.pending_input_ids。
+   */
+  pendingInboxIdsBySession(): Map<string, string[]>;
   /** 立即落盘待写快照；无 snapshot 或写入成功返回 true，写入失败返回 false */
   flushSnapshot(): Promise<boolean>;
   /**

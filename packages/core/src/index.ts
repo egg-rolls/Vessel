@@ -102,6 +102,11 @@ export {
   type ToolPipelineStages,
   toErrorEnvelope,
 } from './runtime/index.js';
+// 0.52 S1a：进程退出时武装的续跑标记（纯内存注册表，额度见 graceful-restart）
+export {
+  createResumeMarkerRegistry,
+  type ResumeMarkerRegistryState,
+} from './runtime/resume-markers.js';
 // Stage 4：Run 写端口（接口 type-only；实现类不导出；装配缝只导出工厂函数）
 export {
   createRunJournalFactory,

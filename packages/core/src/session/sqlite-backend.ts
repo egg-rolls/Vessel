@@ -16,7 +16,12 @@ import type {
   SessionStatus,
   SessionStore,
 } from '../types/session.js';
-import { deriveSessionMeta, normalizeTitleSource, withTitleSource } from './session-store.js';
+import {
+  deriveSessionMeta,
+  normalizeResumeAfterRestart,
+  normalizeTitleSource,
+  withTitleSource,
+} from './session-store.js';
 
 /** sessions 表完整行（SELECT * 的形状） */
 interface SessionRow {
@@ -40,6 +45,8 @@ interface SessionRow {
   context_anchor: string | null;
   /** 0.52：环境快照发布指纹（JSON；NULL = 旧行 / 还没发布过） */
   prompt_context: string | null;
+  /** 0.52 S1a：续跑标记（JSON；NULL = 旧行 / 该会话没被进程退出打断过） */
+  resume_after_restart: string | null;
 }
 
 /** listRich 查询行形状（含派生列 message_count） */
@@ -137,7 +144,8 @@ export class SQLiteSessionStore implements SessionStore {
         tenant_id TEXT,
         derived_upto_seq INTEGER,
         context_anchor TEXT,
-        prompt_context TEXT
+        prompt_context TEXT,
+        resume_after_restart TEXT
       )
     `);
     // ALTER TABLE 无 IF NOT EXISTS，逐列 try/catch（已存在则静默）
@@ -154,6 +162,8 @@ export class SQLiteSessionStore implements SessionStore {
     this.ensureColumn('context_anchor', 'TEXT');
     // 0.52：旧库补列；NULL = 没有发布过指纹（首次运行会发一张全量卡，符合预期）
     this.ensureColumn('prompt_context', 'TEXT');
+    // 0.52 S1a：旧库补列；NULL = 没有续跑标记（启动不续跑任何东西 = 0.51 行为）
+    this.ensureColumn('resume_after_restart', 'TEXT');
   }
 
   /** 为旧库补列（列已存在时静默忽略） */
@@ -198,6 +208,8 @@ export class SQLiteSessionStore implements SessionStore {
       context_anchor: normalizeContextAnchor(parseJsonColumn(row.context_anchor)),
       // 0.52：旧行 NULL / 脏 JSON ⇒ undefined。
       prompt_context: normalizePromptContextFingerprint(parseJsonColumn(row.prompt_context)),
+      // 0.52 S1a：旧行 NULL / 脏 JSON / 缺字段 ⇒ undefined（启动不续跑任何东西）。
+      resume_after_restart: normalizeResumeAfterRestart(parseJsonColumn(row.resume_after_restart)),
     };
   }
 
@@ -216,8 +228,8 @@ export class SQLiteSessionStore implements SessionStore {
 
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO sessions
-        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, title_source, preview, updated_at, branch, tenant_id, derived_upto_seq, context_anchor, prompt_context)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, title_source, preview, updated_at, branch, tenant_id, derived_upto_seq, context_anchor, prompt_context, resume_after_restart)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -239,6 +251,8 @@ export class SQLiteSessionStore implements SessionStore {
       // 0.52 C：真实锚点整体存 JSON —— 形状会随实现演进，列不再拆字段。
       state.context_anchor !== undefined ? JSON.stringify(state.context_anchor) : null,
       state.prompt_context !== undefined ? JSON.stringify(state.prompt_context) : null,
+      // 0.52 S1a：续跑标记整体存 JSON（NULL = 没有标记）。
+      state.resume_after_restart !== undefined ? JSON.stringify(state.resume_after_restart) : null,
     );
   }
 

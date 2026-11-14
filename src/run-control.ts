@@ -9,8 +9,9 @@
  * @module vessel/run-control
  */
 
-import type { AdmitInput, AgentService } from '@vessel-agent/agent';
+import { AgentError, type AdmitInput, type AgentService } from '@vessel-agent/agent';
 import type { RunStatus, Scheduler, SchedulerSnapshot, WaitReason } from '@vessel-agent/core';
+import { RpcError } from '../packages/serve/src/index';
 import type {
   LiveRunSnapshotLike,
   RunControlLike,
@@ -22,6 +23,14 @@ import type {
 
 function statusOf(state: RunStatus): RunControlStatus {
   return state;
+}
+
+/**
+ * 0.52 S1a：admit 内部 fence 抛的就是这个（node 正在退出）。
+ * 转成可重试的 gateway_restarting，而不是让 UI 看到一个 internal。
+ */
+function isNodeDrainingError(error: unknown): boolean {
+  return error instanceof AgentError && error.code === 'node_draining';
 }
 
 /**
@@ -90,6 +99,14 @@ export function createRunControl(
   return {
     tenantId,
     async start(input: RunStartLikeInput): Promise<RunStartLikeResult> {
+      // 0.52 S1a：node 正在优雅退出 ⇒ 立刻可重试错误，**不收下**。
+      // 收下再排队等于骗 UI（run_id 回填了、进程随后就没了），所以这里直接拒。
+      if (service.isDraining()) {
+        throw new RpcError(
+          'gateway_restarting',
+          'node is draining for restart; retry the run once it is back',
+        );
+      }
       // run_id 由 admit 生成（与 body / dispatch / team 同一入口，0.27 D4）。
       const admit: AdmitInput = {
         content: input.input,
@@ -99,7 +116,19 @@ export function createRunControl(
         // 0.52：附件引用只透传，不在这里读文件 / 判边界（闸门在 runs.start handler）。
         ...(input.refs !== undefined && input.refs.length > 0 ? { refs: input.refs } : {}),
       };
-      const result = await service.admit(admit);
+      let result: Awaited<ReturnType<AgentService['admit']>>;
+      try {
+        result = await service.admit(admit);
+      } catch (error) {
+        // 0.52 S1a：admit 内部的 fence 与上面的快速判断之间可能正好打开 ⇒ 同一个错误码。
+        if (isNodeDrainingError(error)) {
+          throw new RpcError(
+            'gateway_restarting',
+            'node is draining for restart; retry the run once it is back',
+          );
+        }
+        throw error;
+      }
       const mapped: RunStartResultWithSession = {
         run_id: result.run_id,
         status: statusOf(result.status),
