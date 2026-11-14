@@ -1259,6 +1259,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.scope.model': 'Model',
   'chat.env.scope.selfcard': 'Base info',
   'chat.env.scope.context': 'Context',
+  // 0.52: PII 句柄整批失效（内存 broker 重启）。逐调用的句柄失败不走卡，只落到那次工具调用。
+  'chat.env.scope.pii': 'PII',
   'chat.env.count': '{count} items',
   'chat.env.notApplied': 'not applied',
   'chat.env.moreLines': '{count} more lines not shown',

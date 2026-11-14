@@ -2,7 +2,7 @@
 title: 环境信息与 append-only 上下文
 kind: current
 triggers: [append-only, context, message, notice, env info, environment, self card, tool surface, model change, scope, files, doc-subscription, prompt.system_context, changed, compaction, cleared tool result]
-paths: [packages/core/src/runtime/execution-unit.ts, packages/core/src/context/context-manager.ts, packages/agent/src/env-info-scope.ts, packages/agent/src/self-card-delta.ts, packages/agent/src/tool-surface-delta.ts, plugins/context/doc-subscription/src/notice.ts, apps/web/src/domains/chat/env-notice.ts, scripts/check-append-only-context.ts]
+paths: [packages/core/src/runtime/execution-unit.ts, packages/core/src/context/context-manager.ts, packages/core/src/pii/notice.ts, packages/agent/src/env-info-scope.ts, packages/agent/src/self-card-delta.ts, packages/agent/src/tool-surface-delta.ts, plugins/context/doc-subscription/src/notice.ts, apps/web/src/domains/chat/env-notice.ts, scripts/check-append-only-context.ts]
 ---
 
 # 环境信息与 append-only 上下文
@@ -34,6 +34,7 @@ C2 静态钉住（生产者只许尾部追加）、C3 scope 词表对拍。通�
 | `tools` | 工具面变更（含权限档） | `tool-surface-delta`、`self-card-delta` |
 | `files` | 文件变更（订阅文件改了；只报 path/id/rev/bytes，不报正文） | `doc-subscription`（插件包） |
 | `context` | 系统提示词 / 自卡本身变了 | `self-card-delta`、`prompt.system_context` 的增量视图 |
+| `pii` | PII 句柄失效 / 容量耗尽（只列占位符 id + 类别，不含真值） | `packages/core/src/pii/notice.ts`（core 的 `ExecutionUnit.appendPiiDeadNotice`） |
 
 词表唯一真相是 `packages/agent/src/env-info-scope.ts`（`ENV_INFO_SCOPES`）；Web 侧
 `ENV_NOTICE_SCOPES` 必须认得出每一个词，另留老词 `config` / `permission` / `mcp` / `update` /

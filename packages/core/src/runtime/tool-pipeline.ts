@@ -2,10 +2,12 @@
  * 统一工具执行管道（0.8.2 Wave 2B1）。
  *
  * ExecutionUnit、delegate 子 runtime 共用同一套工具执行语义：
- * ToolCall guardrail → BeforeTool hook → 权限判定（最终工具与参数）
- * → handler（timeout/abort）→ ToolResult guardrail → AfterTool hook。
+ * ToolCall guardrail → BeforeTool hook → **PII 句柄替换（0.52，3.5）**
+ * → 权限判定（最终工具与参数）→ handler（timeout/abort）
+ * → ToolResult guardrail → AfterTool hook。
  *
- * 权限判定必须对 guardrail/hook 改写后的最终工具与参数执行，避免旧工具/旧参数放行。
+ * 权限判定必须对 guardrail/hook 改写后的最终工具与参数执行，避免旧工具/旧参数放行；
+ * PII 句柄替换也必须在权限判定**之前**，否则人批的是占位符而不是真实参数。
  *
  * 管道不发布 `tool.call.*` 事件（调用方负责，避免重复）。
  *
@@ -15,6 +17,7 @@
 import type { EventStream } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
 import { HookType } from '../types/hook.js';
+import { getPiiVault } from '../pii/vault.js';
 import type { PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
 import type { Message } from '../types/provider.js';
 import type { ToolCall, ToolContext, ToolDefinition } from '../types/tool.js';
@@ -32,6 +35,20 @@ export interface ToolPipelineDeps {
   permission: PermissionPolicy;
   guardrails: GuardrailRunner;
   hooks: HookRunner;
+  /**
+   * 0.52 PII 句柄替换（工具参数求值前）。
+   *
+   * 缺省 = 进程级 `getPiiVault()`（与请求构造层 / 入站脱敏同源）。
+   * 传 `false` 关闭；`onHandleFailure` 让上层感知「句柄解不开」这类**动作错误**
+   * （上层据此发系统级提示卡 —— 只有 broker 重启这种面上的事件才发，见 `pii/notice.ts`）。
+   */
+  pii?: false | PiiHandleBoundary;
+}
+
+/** 工具参数边界的句柄替换口。 */
+export interface PiiHandleBoundary {
+  substitute: (args: unknown, sessionId: string) => unknown;
+  onHandleFailure?: (error: unknown, sessionId: string) => void;
 }
 
 /** 可选阶段开关；默认全开。调用方已在外层处理的阶段可关闭，避免重复。 */
@@ -89,6 +106,16 @@ export function isToolCall(value: unknown): value is ToolCall {
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/**
+ * 默认 PII 句柄边界 = 进程级 vault（与请求构造层 / 入站脱敏同源）。
+ *
+ * 上层（ExecutionUnit）注入自己的边界时，可以顺带拿到 `onHandleFailure`
+ * 回调 —— 只有「整批失效」这种面上的事件才会被渲染成一张环境信息卡。
+ */
+const DEFAULT_PII_BOUNDARY: PiiHandleBoundary = {
+  substitute: (args, sessionId) => getPiiVault().substituteDeep(args, sessionId),
+};
 
 /** 调用 handler 并应用 `ToolDefinition.timeout`（ADR-017(2b)）。 */
 async function invokeTool(tool: ToolDefinition, args: unknown, ctx: ToolContext): Promise<string> {
@@ -203,6 +230,19 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
         }
       }
 
+      // 3.5 PII 句柄替换（0.52）：`«pii:…»` → 真值。
+      //     刻意放在权限判定**之前** —— 人批准的必须是真实参数，而不是占位符；
+      //     解不开就整调用失败（宁可失败，也不能把占位符原样发给外部系统）。
+      if (deps.pii !== false) {
+        const boundary = deps.pii ?? DEFAULT_PII_BOUNDARY;
+        try {
+          args = boundary.substitute(args, options.sessionId);
+        } catch (error) {
+          boundary.onHandleFailure?.(error, options.sessionId);
+          return fail(errorText(error));
+        }
+      }
+
       // 4. 权限判定：必须针对 guardrail/hook 改写后的最终工具与参数
       try {
         await permission.authorize(tool, args, ctx);
@@ -260,6 +300,8 @@ export interface ToolPipelineFactoryDeps {
   events: EventStream;
   /** 默认权限策略（未声明 checkPermission 的工具） */
   permission?: RuntimePermissionConfig;
+  /** 0.52：PII 句柄边界（缺省走进程级 vault；传 false 关闭） */
+  pii?: false | PiiHandleBoundary;
 }
 
 /**
@@ -275,5 +317,6 @@ export function createToolPipelineFor(deps: ToolPipelineFactoryDeps): ToolPipeli
     permission: new PermissionPolicy(deps.events, deps.permission),
     guardrails: new GuardrailRunner(deps.pluginHost, deps.events),
     hooks: new HookRunner(deps.pluginHost, deps.events),
+    ...(deps.pii !== undefined ? { pii: deps.pii } : {}),
   });
 }

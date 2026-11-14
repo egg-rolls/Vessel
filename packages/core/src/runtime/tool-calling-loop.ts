@@ -55,6 +55,11 @@ export interface LoopContext {
 export interface MessageWindowPort {
   addMessage(message: Message, runId: string): void;
   buildRequestMessages(systemOverride: unknown): Message[];
+  /**
+   * 0.52：请求 messages 只许 append ⇒ 句柄失效/容量耗尽这种「面上的」事件，
+   * 只能在发请求前**追加一张 env 卡**（不许回改历史）。缺省实现 = 不追加。
+   */
+  appendPiiDeadNotice?(): Promise<void>;
   appendInjectedMessages(runId: string, messages: readonly Message[] | undefined): void;
   updateRealTokens(total: number): void;
   /** 对应 `context.autoCompactAsync?.()`；实现缺省时返回 undefined。 */
@@ -252,6 +257,10 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
     // 0.16 E5：BeforeLlm 注入的消息按返回顺序写入上下文一次（进入本次请求，
     // 后续轮次直接从上下文可见；重复返回同一批消息不重复写入）。
     ctx.window.appendInjectedMessages(runId, hookCtx.messages);
+
+    // 0.52：句柄失效 / 容量耗尽以**追加一张 env 卡**表达（append-only，不回改历史）。
+    // 必须在组装请求**之前**：卡要进本次请求，UI 也读同一份 store（可见性对等）。
+    await ctx.window.appendPiiDeadNotice?.();
 
     // 组装本次请求的消息：system 只来自会话级基底（含 Self Card），
     // 不接受每轮拼接的 additionalContext（CONTRACT-prefix-invariant §2）。
