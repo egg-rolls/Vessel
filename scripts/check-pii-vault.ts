@@ -22,7 +22,14 @@
  *   j. 环境信息卡（unknown / expired 不发卡；整批失效至多发一张；卡面不含逐值信息）
  */
 
-import type { Message, Plugin, PluginHost, ToolContext, ToolDefinition } from '../packages/core/src/index.js';
+import { tierOf } from '../apps/web/src/state/event-visibility.js';
+import type {
+  Message,
+  Plugin,
+  PluginHost,
+  ToolContext,
+  ToolDefinition,
+} from '../packages/core/src/index.js';
 import {
   createPiiRevealTool,
   findApprovalId,
@@ -30,26 +37,25 @@ import {
   MemoryLLMProvider,
   MemorySessionStore,
   MemoryWorkingContext,
-  passesLuhn,
   PII_INVALIDATION_NOTICE,
   PII_REVEAL_AUDIT_EVENT,
   PII_REVEAL_TOOL_NAME,
   PiiHandleUnresolvedError,
   PiiRevealNotApprovedError,
   PiiVault,
+  passesLuhn,
   setPiiVault,
 } from '../packages/core/src/index.js';
 import { detect, mask, neutralize, substitute } from '../packages/core/src/pii/index.js';
-import { tierOf } from '../apps/web/src/state/event-visibility.js';
 import { ExecutionUnit } from '../packages/core/src/runtime/execution-unit.js';
-import type { ChatRequest, LLMResponse } from '../packages/core/src/types/provider.js';
-import type { RunEvent } from '../packages/core/src/types/event.js';
+import { createRunJournalFactory } from '../packages/core/src/runtime/run-journal.js';
 import type {
+  RunEvent,
   SessionEventInput,
   SessionEventLogPort,
   SessionEventRecord,
-} from '../packages/core/src/types/session-event.js';
-import { createRunJournalFactory } from '../packages/core/src/runtime/run-journal.js';
+} from '../packages/core/src/types/event.js';
+import type { ChatRequest, LLMResponse } from '../packages/core/src/types/provider.js';
 
 // ---------------------------------------------------------------------------
 // 断言脚手架
@@ -74,7 +80,11 @@ function check(name: string, condition: boolean, detail = ''): void {
 
 function eq(name: string, actual: unknown, expected: unknown): void {
   const same = JSON.stringify(actual) === JSON.stringify(expected);
-  check(name, same, same ? '' : `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  check(
+    name,
+    same,
+    same ? '' : `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
+  );
 }
 
 function section(title: string): void {
@@ -113,7 +123,9 @@ function probeRules(): void {
   eq('api key AKIA', hitCategories('AKIAIOSFODNN7EXAMPLE'), ['api_key']);
   eq(
     'jwt',
-    hitCategories('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk'),
+    hitCategories(
+      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk',
+    ),
     ['jwt'],
   );
   eq('email', hitCategories(`write to ${MARKER_EMAIL} now`), ['email']);
@@ -126,11 +138,9 @@ function probeRules(): void {
     hitCategories('-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----'),
     ['private_key'],
   );
-  eq(
-    '带密码的连接串',
-    hitCategories('redis://default:hunter2@cache.internal:6379/0'),
-    ['conn_string'],
-  );
+  eq('带密码的连接串', hitCategories('redis://default:hunter2@cache.internal:6379/0'), [
+    'conn_string',
+  ]);
   eq('Authorization 头', hitCategories('Authorization: Bearer abcdef123456'), ['auth_header']);
   eq('Cookie 头', hitCategories('Cookie: sid=abcdef123456'), ['auth_header']);
 
@@ -151,7 +161,11 @@ function probeRules(): void {
     'Luhn 工具本身：4111111111111111 通过 / 1234567890123456 不过',
     passesLuhn('4111111111111111') && !passesLuhn('1234567890123456'),
   );
-  eq('普通 hash 不命中', hitCategories('sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08'), []);
+  eq(
+    '普通 hash 不命中',
+    hitCategories('sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08'),
+    [],
+  );
   eq('普通 diff 行不命中', hitCategories('- return 1234567890123456 + return 42'), []);
   eq('端口号 / 版本号不命中', hitCategories('listen 8080, version 1.2.3'), []);
 
@@ -201,7 +215,10 @@ function probeStability(): void {
   check('未知 id ⇒ unknown_handle', !unknown.ok && unknown.reason === 'unknown_handle');
 
   const invalidated = vault.resolve('session-restarted-elsewhere', DEAD_ID_A);
-  check('未初始化 session ⇒ invalidated_handle', !invalidated.ok && invalidated.reason === 'invalidated_handle');
+  check(
+    '未初始化 session ⇒ invalidated_handle',
+    !invalidated.ok && invalidated.reason === 'invalidated_handle',
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +280,8 @@ function probeSubstitution(): void {
   }
   check(
     '整批失效 ⇒ pii_invalidated_handle',
-    invalidatedError instanceof PiiHandleUnresolvedError && invalidatedError.code === 'pii_invalidated_handle',
+    invalidatedError instanceof PiiHandleUnresolvedError &&
+      invalidatedError.code === 'pii_invalidated_handle',
   );
 
   let pureError: unknown;
@@ -327,7 +345,8 @@ function probeInbound(): void {
   check('伪造的句柄被中和（不再是句柄形状）', !/«pii:ZZZZ2222»/.test(inbound.text));
   check('中和标记可见（«pii:neutralized»）', inbound.text.includes('«pii:neutralized»'));
 
-  const handle = inbound.handles[0] ?? vault.protect(`mail ${MARKER_EMAIL}`, 'session-E').handles[0]!;
+  const handle =
+    inbound.handles[0] ?? vault.protect(`mail ${MARKER_EMAIL}`, 'session-E').handles[0]!;
   const echoed = vault.protect(`the model said ${handle}`, 'session-E');
   eq('入站文本里的真句柄被保留', echoed.text, `the model said ${handle}`);
 
@@ -500,7 +519,8 @@ async function probeAppendOnlyAndParity(): Promise<void> {
 
   // ② 可见性对等：请求里的消息与 store 里的消息逐条同字节（system 除外）
   //    请求是「store 的前缀」：发请求那一刻 store 里还没有最后那条 assistant 回复。
-  const requestMessages = stack.provider.requests[stack.provider.requests.length - 1]?.messages ?? [];
+  const requestMessages =
+    stack.provider.requests[stack.provider.requests.length - 1]?.messages ?? [];
   const storedNonSystem = stored.filter((message) => message.role !== 'system');
   const requestNonSystem = requestMessages.filter((message) => message.role !== 'system');
   eq(
@@ -588,7 +608,9 @@ async function probeDeadReferenceCards(): Promise<void> {
   // 旧消息一个字没改（append-only）
   eq(
     '历史消息逐条未改（只追加）',
-    afterSecond.slice(0, beforeSecond.length).map((message) => `${message.role}:${message.content ?? ''}`),
+    afterSecond
+      .slice(0, beforeSecond.length)
+      .map((message) => `${message.role}:${message.content ?? ''}`),
     beforeSecond.map((message) => `${message.role}:${message.content ?? ''}`),
   );
   check('第 2 轮确实追加了新消息', afterSecond.length > beforeSecond.length);
@@ -673,9 +695,16 @@ async function probeReveal(): Promise<void> {
   eq('审计事件已登记可见性（observe 档，聊天永不出现）', tierOf(PII_REVEAL_AUDIT_EVENT), 'observe');
   eq('句柄审计事件同族', tierOf('pii.vault.audit'), 'observe');
   eq('整批失效事件同族', tierOf('pii.handles.invalidated'), 'observe');
-  eq('审批 id 能从事件流里对上（按 tool_call_id）', findApprovalId(events, 'run-G', 'call-2'), approvalId);
+  eq(
+    '审批 id 能从事件流里对上（按 tool_call_id）',
+    findApprovalId(events, 'run-G', 'call-2'),
+    approvalId,
+  );
 
-  const revealed = await tool.handler({ handle, reason: 'need to write it into .env' }, fakeCtx('call-2'));
+  const revealed = await tool.handler(
+    { handle, reason: 'need to write it into .env' },
+    fakeCtx('call-2'),
+  );
   eq('有审批 ⇒ 返回真值', revealed, MARKER_EMAIL);
 
   const audit = published.filter((event) => event.type === PII_REVEAL_AUDIT_EVENT);
@@ -686,7 +715,8 @@ async function probeReveal(): Promise<void> {
   eq('审计含会话', auditData.session, 'session-G');
   check(
     '审计不含真值',
-    !JSON.stringify(auditData).includes(MARKER_EMAIL) && !JSON.stringify(auditData).includes(MARKER_PHONE),
+    !JSON.stringify(auditData).includes(MARKER_EMAIL) &&
+      !JSON.stringify(auditData).includes(MARKER_PHONE),
   );
 }
 
@@ -702,7 +732,10 @@ async function probeCapacity(): Promise<void> {
   for (let i = 0; i < 6; i += 1) {
     emitted.push(vault.protect(`user${i}@example.com`, 'session-H').text);
   }
-  check('前 3 个得到句柄', /«pii:[A-Z2-7]{8}»/.test(emitted[0]!) && /«pii:[A-Z2-7]{8}»/.test(emitted[2]!));
+  check(
+    '前 3 个得到句柄',
+    /«pii:[A-Z2-7]{8}»/.test(emitted[0]!) && /«pii:[A-Z2-7]{8}»/.test(emitted[2]!),
+  );
   eq('第 4 个起降级为直接掩码', emitted[3], '«pii:mask:email»');
   eq('第 6 个依然是直接掩码（不无限增长）', emitted[5], '«pii:mask:email»');
   eq('降级计数被记下来', vault.degradedCount('session-H'), 3);
@@ -716,14 +749,11 @@ async function probeCapacity(): Promise<void> {
   await stack.eu.run('FETCH the page', sessionId);
   stack.provider.setResponse('PLAIN', { content: 'ok', finish_reason: 'stop' });
   await stack.eu.run('PLAIN again', sessionId);
-  const cards = (await noticeCards(stack.store, sessionId)).filter(
-    (card) => card.includes('handle capacity'),
+  const cards = (await noticeCards(stack.store, sessionId)).filter((card) =>
+    card.includes('handle capacity'),
   );
   eq('容量耗尽 ⇒ 只追加一张卡', cards.length, 1);
-  check(
-    '容量卡不含真值',
-    !cards[0]!.includes(MARKER_EMAIL) && !cards[0]!.includes(MARKER_PHONE),
-  );
+  check('容量卡不含真值', !cards[0]!.includes(MARKER_EMAIL) && !cards[0]!.includes(MARKER_PHONE));
 }
 
 // ---------------------------------------------------------------------------
@@ -738,8 +768,16 @@ function probeIdempotent(): void {
 
   const vault = new PiiVault({ now: () => 13_000, ttlMs: 60_000 });
   const first = vault.protect(PAGE_TEXT, 'session-I');
-  eq('vault.protect 二次投影不变（含中和标记）', vault.protect(first.text, 'session-I').text, first.text);
-  eq('同一原文重复 protect ⇒ 同一份结果（占位符不漂移）', vault.protect(PAGE_TEXT, 'session-I').text, first.text);
+  eq(
+    'vault.protect 二次投影不变（含中和标记）',
+    vault.protect(first.text, 'session-I').text,
+    first.text,
+  );
+  eq(
+    '同一原文重复 protect ⇒ 同一份结果（占位符不漂移）',
+    vault.protect(PAGE_TEXT, 'session-I').text,
+    first.text,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -760,7 +798,9 @@ async function runToolFailureCase(
   return {
     cards: (await noticeCards(stack.store, sessionId)).filter((card) => card.startsWith('pii:')),
     toolFailed: stored.some(
-      (message) => message.role === 'tool' && (message.content ?? '').includes('PII handle cannot be resolved'),
+      (message) =>
+        message.role === 'tool' &&
+        (message.content ?? '').includes('PII handle cannot be resolved'),
     ),
   };
 }
@@ -785,7 +825,12 @@ async function probeEnvCards(): Promise<void> {
   const expiredVault = new PiiVault({ now: () => clock, ttlMs: 1_000 });
   const expiring = expiredVault.protect(`mail ${MARKER_EMAIL}`, 'session-j2').handles[0]!;
   clock += 5_000;
-  const expiredCase = await runToolFailureCase(expiredVault, 'session-j2', { q: expiring }, 'CASE-EXPIRED');
+  const expiredCase = await runToolFailureCase(
+    expiredVault,
+    'session-j2',
+    { q: expiring },
+    'CASE-EXPIRED',
+  );
   check('② expired_handle ⇒ 工具调用失败', expiredCase.toolFailed);
   eq('② expired_handle ⇒ 也不发环境信息卡', expiredCase.cards.length, 0);
 
@@ -809,13 +854,13 @@ async function probeEnvCards(): Promise<void> {
   eq('③ 两次整批失效 ⇒ 至多一张卡', allCards.length, 1);
   eq('③ 卡面就是固定文案', allCards[0], PII_INVALIDATION_NOTICE.en);
   // 卡与工具失败**同时存在**：卡解释「为什么突然都不行了」，工具卡解释「这一次没做成」
-  check('③ 环境卡与逐调用工具失败并存（不互相替代）', firstInvalidated.toolFailed && allCards.length === 1);
+  check(
+    '③ 环境卡与逐调用工具失败并存（不互相替代）',
+    firstInvalidated.toolFailed && allCards.length === 1,
+  );
   // 文案 i18n 两侧都在（模型侧默认 en；zh-CN 供中文环境）
   check('③ 卡面文案有 zh-CN 版本', typeof PII_INVALIDATION_NOTICE['zh-CN'] === 'string');
-  check(
-    '③ 中英两版不是同一串',
-    PII_INVALIDATION_NOTICE['zh-CN'] !== PII_INVALIDATION_NOTICE.en,
-  );
+  check('③ 中英两版不是同一串', PII_INVALIDATION_NOTICE['zh-CN'] !== PII_INVALIDATION_NOTICE.en);
 
   // ④ 卡面只讲状态：不含任何逐值信息
   check(

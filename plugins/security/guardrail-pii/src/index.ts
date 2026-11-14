@@ -31,7 +31,7 @@ import type {
   ReadSideMasker,
   ToolDefinition,
 } from '@vessel-agent/core';
-import { createPiiRevealTool, getPiiVault, GuardrailStage } from '@vessel-agent/core';
+import { createPiiRevealTool, GuardrailStage, getPiiVault } from '@vessel-agent/core';
 import { detectPii, maskText, type PiiDetection, type PiiRuleOptions } from './rules.js';
 
 export type { PiiDetection, PiiRuleOptions, PiiType } from './rules.js';

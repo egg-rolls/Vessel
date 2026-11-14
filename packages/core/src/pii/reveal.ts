@@ -18,9 +18,8 @@
 
 import type { EventStream, RunEvent } from '../types/event.js';
 import type { ToolContext, ToolDefinition } from '../types/tool.js';
-import { PiiHandleUnresolvedError, isHandleId } from './rules.js';
+import { findHandles, isHandleId, PiiHandleUnresolvedError, piiHandlePattern } from './rules.js';
 import { getPiiVault, type PiiVault } from './vault.js';
-import { findHandles, piiHandlePattern } from './rules.js';
 
 /** 工具名（唯一注册入口是 PluginHost，见 `plugins/security/guardrail-pii`）。 */
 export const PII_REVEAL_TOOL_NAME = 'pii.reveal';
@@ -110,11 +109,13 @@ export function createPiiRevealTool(options: { vault?: PiiVault } = {}): ToolDef
       properties: {
         handle: {
           type: 'string',
-          description: 'The placeholder to reveal, e.g. «pii:K3M7QX2A» (the bare 8-character id also works).',
+          description:
+            'The placeholder to reveal, e.g. «pii:K3M7QX2A» (the bare 8-character id also works).',
         },
         reason: {
           type: 'string',
-          description: 'One short sentence: why the real value is needed. Shown to the human approver.',
+          description:
+            'One short sentence: why the real value is needed. Shown to the human approver.',
         },
       },
       required: ['handle'],
@@ -130,7 +131,11 @@ export function createPiiRevealTool(options: { vault?: PiiVault } = {}): ToolDef
       const handleId = readHandleId(args);
       if (handleId === undefined) {
         throw new PiiHandleUnresolvedError(
-          [typeof (args as RevealInput | undefined)?.handle === 'string' ? String((args as RevealInput).handle) : '<missing>'],
+          [
+            typeof (args as RevealInput | undefined)?.handle === 'string'
+              ? String((args as RevealInput).handle)
+              : '<missing>',
+          ],
           'unknown_handle',
           sessionId,
         );
@@ -148,12 +153,9 @@ export function createPiiRevealTool(options: { vault?: PiiVault } = {}): ToolDef
       // 2) 解锁（三档失败原因照原样抛）
       const result = vault.reveal(sessionId, handleId);
       if (!result.ok) {
-        throw new PiiHandleUnresolvedError(
-          [`«pii:${handleId}»`],
-          result.reason,
-          sessionId,
-          [vault.categoryOfDeadHandle(sessionId, handleId)],
-        );
+        throw new PiiHandleUnresolvedError([`«pii:${handleId}»`], result.reason, sessionId, [
+          vault.categoryOfDeadHandle(sessionId, handleId),
+        ]);
       }
 
       // 3) 审计（**无真值**）。事件名用字面量：`check:event-visibility` 只扫字面量生产点，

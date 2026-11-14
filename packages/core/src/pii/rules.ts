@@ -15,15 +15,15 @@
 
 import {
   PII_HANDLE_ERROR_CODES,
-  PII_NEUTRALIZED,
-  piiHandleOf,
-  piiMaskOf,
-  piiHandlePattern,
   PII_HANDLE_ID_LENGTH,
+  PII_NEUTRALIZED,
   type PiiCategory,
   type PiiDetectOptions,
   type PiiHandleFailureReason,
   type PiiHit,
+  piiHandleOf,
+  piiHandlePattern,
+  piiMaskOf,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -145,7 +145,8 @@ const RULES: RuleSpec[] = [
     // Authorization / Cookie / X-Api-Key 头值：**只打值**，保留头名（便于模型理解）
     // 与前置换行（不动行结构）。
     category: 'auth_header',
-    pattern: /(?:^|\n)[ \t]*(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)[ \t]*:[ \t]*[^\n]+/gi,
+    pattern:
+      /(?:^|\n)[ \t]*(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)[ \t]*:[ \t]*[^\n]+/gi,
     validate: (match) => /:[ \t]*\S/.test(match),
     span: (match) => {
       const colon = match.indexOf(':');
@@ -197,14 +198,20 @@ function entropyHits(text: string): PiiHit[] {
     const lineStart = text.lastIndexOf('\n', start - 1) + 1;
     const context = text.slice(Math.max(lineStart, start - PII_ENTROPY_KEYWORD_WINDOW), start);
     if (!ENTROPY_KEYWORD.test(context)) continue;
-    hits.push({ category: 'high_entropy', start, end: start + token.length, text: token, source: 'entropy' });
+    hits.push({
+      category: 'high_entropy',
+      start,
+      end: start + token.length,
+      text: token,
+      source: 'entropy',
+    });
   }
   return hits;
 }
 
 /** 命中排序 + 去重叠：靠前的、更长的优先（例：连接串压住里面的邮箱）。 */
 function resolveOverlaps(hits: PiiHit[]): PiiHit[] {
-  const sorted = [...hits].sort((a, b) => (a.start - b.start) || (b.end - a.end));
+  const sorted = [...hits].sort((a, b) => a.start - b.start || b.end - a.end);
   const out: PiiHit[] = [];
   let cursor = -1;
   for (const hit of sorted) {
@@ -224,7 +231,12 @@ function resolveOverlaps(hits: PiiHit[]): PiiHit[] {
 export function detect(text: string, options: PiiDetectOptions = {}): PiiHit[] {
   if (!text) return [];
   const hits: PiiHit[] = [];
-  const push = (category: PiiCategory, start: number, match: string, source: 'rule' | 'entropy' = 'rule'): void => {
+  const push = (
+    category: PiiCategory,
+    start: number,
+    match: string,
+    source: 'rule' | 'entropy' = 'rule',
+  ): void => {
     hits.push({ category, start, end: start + match.length, text: match, source });
   };
 
@@ -268,7 +280,10 @@ export function detect(text: string, options: PiiDetectOptions = {}): PiiHit[] {
  *
  * 幂等：掩码形状不含任何规则会命中的子串，所以 `mask(mask(x)).text === mask(x).text`。
  */
-export function mask(text: string, options: PiiDetectOptions = {}): { text: string; hits: PiiHit[] } {
+export function mask(
+  text: string,
+  options: PiiDetectOptions = {},
+): { text: string; hits: PiiHit[] } {
   const hits = detect(text, options);
   if (hits.length === 0) return { text, hits };
   let out = '';
@@ -418,7 +433,6 @@ export class PiiHandleUnresolvedError extends Error {
   }
 }
 
-
 /**
  * 占位符替换：把文本里的句柄换成真值。
  *
@@ -457,6 +471,6 @@ export function isHandleId(value: string): boolean {
   return value.length === PII_HANDLE_ID_LENGTH && /^[A-Z2-7]+$/.test(value);
 }
 
-/** 由 id 拼占位符（re-export，省得调用方到处 import types）。 */
-export { piiHandleOf, piiHandlePattern, piiMaskOf, PII_NEUTRALIZED };
 export type { PiiCategory, PiiDetectOptions, PiiHandleFailureReason, PiiHit };
+/** 由 id 拼占位符（re-export，省得调用方到处 import types）。 */
+export { PII_NEUTRALIZED, piiHandleOf, piiHandlePattern, piiMaskOf };

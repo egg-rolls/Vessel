@@ -1198,9 +1198,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ]),
     ],
     // 0.27：配置级保险；用户显式配置时以其值为准（与 autoApprove 语义一致，不合并默认）。
-    neverAutoApprove: (config.permission?.neverAutoApprove ?? ['agent.close']).map(
-      normalizeLegacyAskToolName,
-    ),
+    neverAutoApprove: (
+      config.permission?.neverAutoApprove ?? [
+        'agent.close',
+        // 0.52：PII 真值解锁**永远**要人批。默认放行会让 reveal 因为拿不到审批 id 而永久拒绝，
+        // 反而把「用户明确同意」这条路堵死；显式列入强制审批名单后语义才正确。
+        'pii.reveal',
+      ]
+    ).map(normalizeLegacyAskToolName),
   };
 
   // ── AgentService + REPL owner 端点（0.17 Phase A）──

@@ -66,13 +66,6 @@ export {
   rebuildMetrics,
   type TraceRecorderStats,
 } from './observability/index.js';
-// Provider
-export {
-  AnthropicProvider,
-  MemoryLLMProvider,
-  OpenAICompatibleProvider,
-  ProviderHttpError,
-} from './provider/index.js';
 // Runtime（0.52）：PII / 密钥脱敏 + 内存句柄 vault + 审批解锁
 export {
   createPiiRevealTool,
@@ -84,7 +77,6 @@ export {
   isValidCnIdCard,
   mask as maskPii,
   neutralize as neutralizePiiHandles,
-  passesLuhn,
   PII_CAPACITY_NOTICE,
   PII_DEAD_REFERENCE_LIST_LIMIT,
   PII_ENTROPY_MIN_BITS,
@@ -102,16 +94,6 @@ export {
   PII_REVEAL_AUDIT_EVENT,
   PII_REVEAL_DENIED_CODE,
   PII_REVEAL_TOOL_NAME,
-  piiHandleOf,
-  piiHandlePattern,
-  PiiHandleUnresolvedError,
-  piiMaskOf,
-  PiiRevealNotApprovedError,
-  PiiVault,
-  renderDeadReferencesNotice,
-  setPiiVault,
-  shannonEntropy,
-  substitute as substitutePiiHandles,
   type PiiAuditEntry,
   type PiiCategory,
   type PiiDeadReference,
@@ -119,13 +101,31 @@ export {
   type PiiHandleFailure,
   type PiiHandleFailureReason,
   type PiiHandleOccurrence,
+  PiiHandleUnresolvedError,
   type PiiHit,
   type PiiNoticeLocale,
   type PiiProtectBatchResult,
   type PiiProtectResult,
   type PiiResolveResult,
+  PiiRevealNotApprovedError,
+  PiiVault,
   type PiiVaultOptions,
+  passesLuhn,
+  piiHandleOf,
+  piiHandlePattern,
+  piiMaskOf,
+  renderDeadReferencesNotice,
+  setPiiVault,
+  shannonEntropy,
+  substitute as substitutePiiHandles,
 } from './pii/index.js';
+// Provider
+export {
+  AnthropicProvider,
+  MemoryLLMProvider,
+  OpenAICompatibleProvider,
+  ProviderHttpError,
+} from './provider/index.js';
 // 运行时
 export {
   classifyProviderRetry,

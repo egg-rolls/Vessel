@@ -5,8 +5,8 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import {
-  estimateTokens,
   applyReadSideMaskers,
+  estimateTokens,
   shouldPublishSystemContext,
   systemContextChangesFromFingerprint,
   withClearedToolResults,
@@ -24,12 +24,12 @@ import {
   getPiiVault,
   PII_CAPACITY_NOTICE,
   PII_INVALIDATION_NOTICE,
-  PiiHandleUnresolvedError,
-  piiHandleOf,
-  renderDeadReferencesNotice,
   type PiiAuditEntry,
   type PiiCategory,
+  PiiHandleUnresolvedError,
   type PiiVault,
+  piiHandleOf,
+  renderDeadReferencesNotice,
 } from '../pii/index.js';
 // D2：跨模块只允许从 barrel 导入（不得直接引用 session 的内部文件）。
 import {
@@ -808,7 +808,9 @@ export class ExecutionUnit {
       out = applyReadSideMaskers(out, maskers);
       return out;
     };
-    const content = message.content;
+    // content 声明为 string，但历史/多模态可能是 content-part 数组：
+    // 先按 unknown 收窄，否则 Array.isArray 会把类型窄成 never。
+    const content: unknown = message.content;
     let next: Message = message;
     if (typeof content === 'string') {
       const masked = transform(content);
@@ -816,7 +818,11 @@ export class ExecutionUnit {
     } else if (Array.isArray(content)) {
       let changed = false;
       const parts = content.map((part) => {
-        if (part !== null && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string') {
+        if (
+          part !== null &&
+          typeof part === 'object' &&
+          typeof (part as { text?: unknown }).text === 'string'
+        ) {
           const original = (part as { text: string }).text;
           const masked = transform(original);
           if (masked !== original) changed = true;
@@ -824,7 +830,8 @@ export class ExecutionUnit {
         }
         return part;
       });
-      if (changed) next = { ...message, content: parts as typeof content };
+      // content 的声明类型是 string，但实际允许 content-part 数组（历史兼容）。
+      if (changed) next = { ...message, content: parts as unknown as string };
     }
 
     // 审计只落 {session, category, count, first_seen_at}（无真值）。
@@ -833,7 +840,7 @@ export class ExecutionUnit {
         type: 'pii.vault.audit',
         run_id: this.activeRun?.runId ?? 'plugin',
         ts: Date.now(),
-        data: entry,
+        data: entry as unknown as Record<string, unknown>,
       });
     }
     return next;
@@ -851,14 +858,16 @@ export class ExecutionUnit {
     if (!vault.isEnabled) return;
     const seen = new Set<string>();
     for (const message of this.activeRun?.workingContext.messages ?? []) {
-      const content = message.content;
+      const content: unknown = message.content;
       const texts =
         typeof content === 'string'
           ? [content]
           : Array.isArray(content)
             ? content
                 .map((part) =>
-                  part !== null && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string'
+                  part !== null &&
+                  typeof part === 'object' &&
+                  typeof (part as { text?: unknown }).text === 'string'
                     ? (part as { text: string }).text
                     : undefined,
                 )

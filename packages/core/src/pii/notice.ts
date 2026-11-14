@@ -66,7 +66,9 @@ export function renderDeadReferencesNotice(
   const omitted = references.length - shown.length;
   const listed = shown
     .map((reference) =>
-      reference.category === undefined ? reference.handle : `${reference.handle} (${reference.category})`,
+      reference.category === undefined
+        ? reference.handle
+        : `${reference.handle} (${reference.category})`,
     )
     .join(', ');
   return (

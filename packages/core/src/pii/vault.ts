@@ -20,20 +20,20 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 import {
-  PiiHandleUnresolvedError,
   findHandles,
   mask as maskText,
   neutralize,
   PII_NEUTRALIZED,
+  PiiHandleUnresolvedError,
   piiHandleOf,
 } from './rules.js';
 import {
   PII_HANDLE_ALPHABET,
   PII_HANDLE_ID_LENGTH,
-  piiMaskOf,
   type PiiCategory,
   type PiiHandleFailureReason,
   type PiiHit,
+  piiMaskOf,
 } from './types.js';
 
 /** 句柄 TTL：10 分钟（滑动，命中即续期）。run 结束 / 进程重启都会让它失效。 */
@@ -304,7 +304,10 @@ export class PiiVault {
     const occurrences = findHandles(text);
     if (occurrences.length === 0) return text;
     const resolved: Array<{ handle: string; start: number; end: number; value: string }> = [];
-    const failures = new Map<PiiHandleFailureReason, Array<{ handle: string; category: PiiCategory | undefined }>>();
+    const failures = new Map<
+      PiiHandleFailureReason,
+      Array<{ handle: string; category: PiiCategory | undefined }>
+    >();
     for (const occurrence of occurrences) {
       const result = this.resolve(sessionId, occurrence.id);
       if (result.ok) {
@@ -318,13 +321,20 @@ export class PiiVault {
         const list = failures.get(result.reason) ?? [];
         // 错误白名单只允许「id + 类别 + 原因 + 下一步」：类别能从墓碑里拿到就给，
         // 拿不到（未知 / 整批失效）就不写 —— 绝不猜。
-        list.push({ handle: occurrence.handle, category: this.categoryOfDeadHandle(sessionId, occurrence.id) });
+        list.push({
+          handle: occurrence.handle,
+          category: this.categoryOfDeadHandle(sessionId, occurrence.id),
+        });
         failures.set(result.reason, list);
       }
     }
     if (failures.size > 0) {
       // 同一批里可能混着不同原因；按「最需要人介入」的顺序取第一个（整批失效 > 过期 > 未知）
-      const order: PiiHandleFailureReason[] = ['invalidated_handle', 'expired_handle', 'unknown_handle'];
+      const order: PiiHandleFailureReason[] = [
+        'invalidated_handle',
+        'expired_handle',
+        'unknown_handle',
+      ];
       const reason = order.find((candidate) => failures.has(candidate))!;
       const all = [...failures.values()].flat();
       throw new PiiHandleUnresolvedError(
@@ -419,7 +429,12 @@ export class PiiVault {
       const state = this.sessions.get(key);
       if (state === undefined) continue;
       for (const [category, entry] of state.audit) {
-        out.push({ session: key, category, count: entry.count, first_seen_at: entry.first_seen_at });
+        out.push({
+          session: key,
+          category,
+          count: entry.count,
+          first_seen_at: entry.first_seen_at,
+        });
       }
     }
     return out;
@@ -567,7 +582,11 @@ export class PiiVault {
   }
 
   /** 分配 id；碰撞（不同值算出同一 id）时换 attempt 重算，仍撞则放弃 ⇒ 调用方降级掩码。 */
-  private allocateHandleId(state: SessionState, category: PiiCategory, value: string): string | undefined {
+  private allocateHandleId(
+    state: SessionState,
+    category: PiiCategory,
+    value: string,
+  ): string | undefined {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const id = deriveHandleId(state.salt, category, value, attempt);
       const holder = state.byHandle.get(id);
@@ -589,7 +608,10 @@ export class PiiVault {
     }
   }
 
-  private classifyFailure(state: SessionState | undefined, handleId: string): PiiHandleFailureReason {
+  private classifyFailure(
+    state: SessionState | undefined,
+    handleId: string,
+  ): PiiHandleFailureReason {
     if (state === undefined) {
       // 本进程从没给这个 session 发过任何句柄 ⇒ 大概率是 broker 重启（持久化上下文里
       // 的旧占位符）。与「伪造的句柄」区分开：这一档要发系统级提示卡。

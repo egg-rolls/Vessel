@@ -18,55 +18,13 @@
  */
 
 export {
-  PII_HANDLE_ALPHABET,
-  PII_HANDLE_ID_LENGTH,
-  PII_HANDLE_PATTERN_SOURCE,
-  PII_NEUTRALIZED,
-  piiHandleOf,
-  piiHandlePattern,
-  piiMaskOf,
-  PII_HANDLE_ERROR_CODES,
-  type PiiCategory,
-  type PiiDetectOptions,
-  type PiiHandleFailureReason,
-  type PiiHit,
-} from './types.js';
-
-export {
-  detect,
-  findHandles,
-  isHandleId,
-  isValidCnIdCard,
-  mask,
-  neutralize,
-  passesLuhn,
-  PII_ENTROPY_KEYWORD_WINDOW,
-  PII_ENTROPY_MIN_BITS,
-  PII_ENTROPY_MIN_LENGTH,
-  PII_ERROR_ALLOWED_FIELDS,
-  PiiHandleUnresolvedError,
-  shannonEntropy,
-  substitute,
-  type PiiHandleFailure,
-  type PiiHandleOccurrence,
-} from './rules.js';
-
-export {
-  getPiiVault,
-  PII_HANDLE_TTL_MS,
-  PII_MAX_ANNOUNCED_HANDLES,
-  PII_MAX_HANDLES_PER_SESSION,
-  PII_MAX_SESSIONS,
-  PII_MAX_TOMBSTONES,
-  PiiVault,
-  setPiiVault,
-  type PiiAuditEntry,
-  type PiiProtectBatchResult,
-  type PiiProtectResult,
-  type PiiResolveResult,
-  type PiiVaultOptions,
-} from './vault.js';
-
+  PII_CAPACITY_NOTICE,
+  PII_DEAD_REFERENCE_LIST_LIMIT,
+  PII_INVALIDATION_NOTICE,
+  type PiiDeadReference,
+  type PiiNoticeLocale,
+  renderDeadReferencesNotice,
+} from './notice.js';
 export {
   createPiiRevealTool,
   findApprovalId,
@@ -75,12 +33,50 @@ export {
   PII_REVEAL_TOOL_NAME,
   PiiRevealNotApprovedError,
 } from './reveal.js';
-
 export {
-  PII_CAPACITY_NOTICE,
-  PII_DEAD_REFERENCE_LIST_LIMIT,
-  PII_INVALIDATION_NOTICE,
-  renderDeadReferencesNotice,
-  type PiiDeadReference,
-  type PiiNoticeLocale,
-} from './notice.js';
+  detect,
+  findHandles,
+  isHandleId,
+  isValidCnIdCard,
+  mask,
+  neutralize,
+  PII_ENTROPY_KEYWORD_WINDOW,
+  PII_ENTROPY_MIN_BITS,
+  PII_ENTROPY_MIN_LENGTH,
+  PII_ERROR_ALLOWED_FIELDS,
+  type PiiHandleFailure,
+  type PiiHandleOccurrence,
+  PiiHandleUnresolvedError,
+  passesLuhn,
+  shannonEntropy,
+  substitute,
+} from './rules.js';
+export {
+  PII_HANDLE_ALPHABET,
+  PII_HANDLE_ERROR_CODES,
+  PII_HANDLE_ID_LENGTH,
+  PII_HANDLE_PATTERN_SOURCE,
+  PII_NEUTRALIZED,
+  type PiiCategory,
+  type PiiDetectOptions,
+  type PiiHandleFailureReason,
+  type PiiHit,
+  piiHandleOf,
+  piiHandlePattern,
+  piiMaskOf,
+} from './types.js';
+export {
+  getPiiVault,
+  PII_HANDLE_TTL_MS,
+  PII_MAX_ANNOUNCED_HANDLES,
+  PII_MAX_HANDLES_PER_SESSION,
+  PII_MAX_SESSIONS,
+  PII_MAX_TOMBSTONES,
+  type PiiAuditEntry,
+  type PiiProtectBatchResult,
+  type PiiProtectResult,
+  type PiiResolveResult,
+  PiiVault,
+  type PiiVaultOptions,
+  setPiiVault,
+} from './vault.js';

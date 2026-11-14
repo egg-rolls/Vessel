@@ -14,10 +14,10 @@
  * @module @vessel-agent/core/runtime
  */
 
+import { getPiiVault } from '../pii/vault.js';
 import type { EventStream } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
 import { HookType } from '../types/hook.js';
-import { getPiiVault } from '../pii/vault.js';
 import type { PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
 import type { Message } from '../types/provider.js';
 import type { ToolCall, ToolContext, ToolDefinition } from '../types/tool.js';
