@@ -24,6 +24,7 @@
  *   订阅通知不再发旧的 `vessel:subscription` 通道名。
  *
  * 用法：bun run scripts/check-append-only-context.ts（退出码 0 = 全过，1 = 有 FAIL）
+ *       bun run scripts/check-append-only-context.ts --phase=1（灰度一阶段：见 `PENDING_IN_PHASE_ONE`）
  */
 
 import { readFile } from 'node:fs/promises';
@@ -48,6 +49,15 @@ import {
 const REPO = join(import.meta.dir, '..');
 
 const failures: string[] = [];
+/**
+ * 灰度一阶段（V1 修复单落地之前）要打印但不拦 CI 的行。
+ *
+ * 只给「本次裁定新收紧、而产品侧还没修」的判据用 —— 今天只有 C1g 的
+ * 「占位必须落盘」一条（V1：工具结果滑窗占位）。判据本身不弱化：`--phase=1`
+ * 换的只是「现在要不要因此红」，去掉这个 flag 就恢复硬拦。
+ */
+const pendings: string[] = [];
+const PHASE_ONE = process.argv.includes('--phase=1');
 /** 通过项只计数（门禁输出要能一眼看出跑了多少项，而不是「没输出 = 通过」）。 */
 let passed = 0;
 /** C1 跑过的路径清单（报告里要用：哪些路径实测满足、哪些没有覆盖）。 */
@@ -60,6 +70,13 @@ function ok(label: string): void {
 
 function fail(where: string, message: string): void {
   failures.push(`${where}: ${message}`);
+}
+
+/** 灰度一阶段：现已收紧、但产品侧还没修的判据（`--phase=1` 降级为 PENDING）。 */
+function pending(where: string, message: string): void {
+  const line = `${where}: ${message}`;
+  if (PHASE_ONE) pendings.push(line);
+  else failures.push(line);
 }
 
 // ───────────────────────── C0 判据 ─────────────────────────
@@ -464,35 +481,36 @@ async function runToolHistoryProbe(): Promise<void> {
   }
 
   // ①/②：同一时刻对照「请求里」与「落盘里」的同一批工具结果。
+  //    0.52 裁定：占位必须在**写入侧**就落成占位符本身（存档 = 请求投影 = UI）。
+  //    旧版本这两句断言是反的 ——「发出去的请求里必须有占位」+「落盘里不许有占位
+  //    （应当只有请求里是占位）」一起构成了「请求期改写历史」的背书，已删除。
+  //    现在只问一件事：请求有没有改写落盘正文。落盘里是占位是**期望方向**，不再是错。
   const lastRequest = requests[requests.length - 1] ?? [];
-  const clearedInRequest = lastRequest.filter(
-    (message) => message.role === 'tool' && message.content.startsWith('[cleared'),
-  );
-  if (clearedInRequest.length === 0) {
-    fail('C1h', '发出去的请求里没有出现占位（省 token 的效果丢了）');
+  const persisted = await store.load(sessionId);
+  const persistedById = new Map<string, string>();
+  for (const message of persisted?.messages ?? []) {
+    if (message.role === 'tool' && typeof message.tool_call_id === 'string') {
+      persistedById.set(message.tool_call_id, message.content);
+    }
+  }
+  const clearedOnDisk = [...persistedById.values()].filter((content) =>
+    content.startsWith('[cleared'),
+  ).length;
+  const rewrittenRequests = lastRequest.filter((message) => {
+    if (message.role !== 'tool') return false;
+    const raw = persistedById.get(message.tool_call_id ?? '');
+    return raw !== undefined && raw !== message.content;
+  });
+  if (rewrittenRequests.length > 0) {
+    pending(
+      'C1h',
+      `请求里有 ${String(rewrittenRequests.length)} 条工具结果与落盘正文不同（V1：占位没落盘、` +
+        `请求期改写；落盘占位只有 ${String(clearedOnDisk)} 条）—— 判据见 check-request-append-only 的 R1/R4`,
+    );
   } else {
-    const persisted = await store.load(sessionId);
-    const persistedById = new Map<string, string>();
-    for (const message of persisted?.messages ?? []) {
-      if (message.role === 'tool' && typeof message.tool_call_id === 'string') {
-        persistedById.set(message.tool_call_id, message.content);
-      }
-    }
-    const rewritten = clearedInRequest.filter((message) => {
-      const raw = persistedById.get(message.tool_call_id ?? '');
-      return raw?.startsWith('[cleared') === true;
-    });
-    if (rewritten.length > 0) {
-      fail(
-        'C1h',
-        `落盘里也有 ${String(rewritten.length)} 条工具结果是占位（应当只有请求里是占位）`,
-      );
-    } else {
-      ok(
-        `C1h 请求里 ${String(clearedInRequest.length)} 条占位 / 落盘同一条仍是原文` +
-          `（请求共 ${String(requests.length)} 次）`,
-      );
-    }
+    ok(
+      `C1h 请求与落盘逐字一致（落盘占位 ${String(clearedOnDisk)} 条、请求共 ${String(requests.length)} 次）`,
+    );
   }
 
   const beforeCompact = store.saves.length;
@@ -548,11 +566,14 @@ async function runToolHistoryProbe(): Promise<void> {
       rewritten += 1;
     }
     if (rewritten > 0) {
-      // 硬断言（0.52 裁决）：占位替换已搬到请求构建层，落盘序列上任何幸存正文变化都是重写。
+      // 硬断言（0.52 裁定）：落盘只能 append —— 幸存的工具结果正文不许变。
+      // 占位必须在**写入侧**就落成占位符本身；「请求期把正文换成占位」等于改写历史，
+      // 是 V1（见 docs/dev/research/invariant-audit-appendonly.md 与
+      // scripts/check-request-append-only.ts 的 R1/R4）。
       fail(
         'C1h',
         `真 EU 的压缩改写了 ${String(rewritten)} 条已落盘且幸存的工具结果正文` +
-          '（占位应当只出现在请求视图里）',
+          '（0.52 裁定：占位必须在写入侧落成占位符本身，请求期不得改写存档）',
       );
       await eu.dispose();
       return;
@@ -567,12 +588,18 @@ async function runToolHistoryProbe(): Promise<void> {
 }
 
 /**
- * 旧工具结果的占位替换：**落盘必须是原文、请求视图才是占位**（0.52 用户裁定）。
+ * 旧工具结果的占位替换：**占位必须在 append 侧就落成占位符本身**（0.52 裁定）。
  *
- * 直接驱动与落盘同一个 `MemoryWorkingContext`：造一个旧工具结果多到会被清空的窗口，压缩，
- * 然后三条一起验：
- * ① 压缩后窗口（= 落盘 / `sessions.get` 的来源）里的旧工具结果**仍是原文**；
- * ② 同一轮要发出去的请求视图里它们是占位文本（省 token 的效果没丢）；
+ * 旧版本这段断言写的是反的：要求「落盘必须是原文、请求视图才是占位」，等于把
+ * 「请求期改写历史」当成通过条件 —— 门禁在背书违规（审计见
+ * `docs/dev/research/invariant-audit-appendonly.md`）。0.52 的裁定是：存档 = 请求投影
+ * = UI 三者逐字一致，占位（以及 PII 脱敏）都在**写入侧**做；请求期只剩「》(投影 + 拼装)」。
+ *
+ * 现在三条一起验：
+ * ① 压缩后窗口（= 落盘 / `sessions.get` 的来源）里的旧工具结果**仍是原文**
+ *    —— 这一条今天还成立，因为 V1 还没修（修复单排在后面）；
+ * ② 请求视图必须与窗口**逐字一致**：占位若存在，必须在落盘时就存在（V1 判据，见
+ *    `scripts/check-request-append-only.ts` 的 R4「同一段内占位条数不得增加」）；
  * ③ 审计字段 `cleared_tool_call_ids` 点名了这些工具结果。
  */
 async function runClearingProbe(): Promise<void> {
@@ -624,17 +651,25 @@ async function runClearingProbe(): Promise<void> {
     if (message.content !== raw) rewritten += 1;
   }
   if (rewritten > 0) {
-    fail('C1g', `压缩改写了 ${String(rewritten)} 条落盘工具结果正文（应当只改请求视图）`);
+    fail(
+      'C1g',
+      `压缩改写了 ${String(rewritten)} 条落盘工具结果正文（0.52 裁定：落盘只能 append，` +
+        '唯一允许的 pop 是压缩摘要替换；占位必须在写入侧落成占位符本身）',
+    );
     return;
   }
-  // ② 请求视图：同一份窗口，发出去的那一份必须有占位。
+  // ② 请求视图必须与窗口逐字一致 —— 占位若存在，必须落盘时就已经是占位。
+  //    旧语义「请求视图里必须有占位」已删除：它把「请求期改写历史」写成了通过条件，
+  //    正好是不变量禁止的事。这一条现在由 `scripts/check-request-append-only.ts` 的
+  //    R1/R4（段内前缀延伸 + 同段内占位条数不得增加）承担硬判据，这里只做同名同源的复核。
   const requestView = withClearedToolResults(stored, maxTokens);
-  const clearedInView = requestView.filter(
-    (message, index) => message !== stored[index] && message.role === 'tool',
-  ).length;
-  if (clearedInView === 0) {
-    fail('C1g', '请求视图里没有出现占位（省 token 的效果丢了）');
-    return;
+  const rewrittenInView = requestView.filter((message, index) => message !== stored[index]).length;
+  if (rewrittenInView > 0) {
+    pending(
+      'C1g',
+      `请求视图改写了 ${String(rewrittenInView)} 条落盘消息（V1：占位没落盘、在请求期改写；` +
+        '判据见 check-request-append-only 的 R1/R4 —— 修复单落地后这条不再允许 PENDING）',
+    );
   }
   // ③ 审计：压缩事件点名了这些工具结果。
   const audited = context.lastCompaction?.cleared_tool_call_ids ?? [];
@@ -642,8 +677,12 @@ async function runClearingProbe(): Promise<void> {
     fail('C1g', '压缩事件没有点名 cleared_tool_call_ids（审计缺口）');
     return;
   }
+  // ② 已经记了 pending/fail（请求期改写），就不再报这条 ok —— 否则输出里
+  // 「OK C1g」和「FAIL C1g」会同时出现，读的人第一眼会以为过了。
+  if (rewrittenInView > 0) return;
   ok(
-    `C1g 工具结果：落盘 ${String(survived)} 条仍为原文、请求视图 ${String(clearedInView)} 条占位、` +
+    `C1g 工具结果：落盘 ${String(survived)} 条仍为原文（待 V1 改为占位本身）、` +
+      `请求视图改写 0 条、` +
       `审计点名 ${String(audited.length)} 条（移除 ${String(removed)} 条）`,
   );
 }
@@ -923,6 +962,8 @@ async function main(): Promise<void> {
   // 通过时也把「跑了哪些路径」打出来：门禁的结论要能被人复核，尤其这条不变量是
   // 「我实测到了什么」而不是「我读代码觉得没问题」。
   for (const line of paths) console.log(line);
+  // 灰度行永远打印出来（不因为「没红」而隐身）：`--phase=1` 只是不拦 CI。
+  for (const line of pendings) console.log(`PENDING ${line}`);
   if (failures.length === 0) {
     console.log(`OK append-only-context: passed ${String(passed)} / ${String(total)} checks`);
     return;
