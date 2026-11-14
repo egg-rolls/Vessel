@@ -282,6 +282,34 @@ function probeSubstitution(): void {
     '错误文本不含任何真值',
     messages.every((message) => !message.includes(MARKER_EMAIL) && !message.includes(MARKER_PHONE)),
   );
+  // 白名单：只许 id + 类别 + 原因 + 下一步。真值片段 / 长度 / 命中位置一律不许出现。
+  check(
+    '错误文本不含真值片段（本地部分 / 手机号片段都不许）',
+    messages.every(
+      (message) =>
+        !message.includes('alice.marker') &&
+        !message.includes('example.com') &&
+        !message.includes('1380013') &&
+        !message.includes('8000'),
+    ),
+  );
+  check(
+    '错误文本不含真值长度 / 命中位置线索',
+    messages.every((message) => !/length|位置|offset|index \d|chars?\b/i.test(message)),
+  );
+  check(
+    '错误文本带类别（expired 这档从墓碑里查得到）',
+    expiredError instanceof PiiHandleUnresolvedError &&
+      expiredError.categories[0] === 'email' &&
+      /\(email\)/.test(expiredError.message),
+  );
+  check(
+    '未知 / 整批失效两档没有类别就不写（绝不猜）',
+    unknownError instanceof PiiHandleUnresolvedError &&
+      unknownError.categories[0] === undefined &&
+      invalidatedError instanceof PiiHandleUnresolvedError &&
+      invalidatedError.categories[0] === undefined,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -780,6 +808,14 @@ async function probeEnvCards(): Promise<void> {
   const allCards = [...firstInvalidated.cards, ...secondInvalidated.cards];
   eq('③ 两次整批失效 ⇒ 至多一张卡', allCards.length, 1);
   eq('③ 卡面就是固定文案', allCards[0], PII_INVALIDATION_NOTICE.en);
+  // 卡与工具失败**同时存在**：卡解释「为什么突然都不行了」，工具卡解释「这一次没做成」
+  check('③ 环境卡与逐调用工具失败并存（不互相替代）', firstInvalidated.toolFailed && allCards.length === 1);
+  // 文案 i18n 两侧都在（模型侧默认 en；zh-CN 供中文环境）
+  check('③ 卡面文案有 zh-CN 版本', typeof PII_INVALIDATION_NOTICE['zh-CN'] === 'string');
+  check(
+    '③ 中英两版不是同一串',
+    PII_INVALIDATION_NOTICE['zh-CN'] !== PII_INVALIDATION_NOTICE.en,
+  );
 
   // ④ 卡面只讲状态：不含任何逐值信息
   check(

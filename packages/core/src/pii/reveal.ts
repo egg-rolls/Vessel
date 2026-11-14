@@ -148,7 +148,12 @@ export function createPiiRevealTool(options: { vault?: PiiVault } = {}): ToolDef
       // 2) 解锁（三档失败原因照原样抛）
       const result = vault.reveal(sessionId, handleId);
       if (!result.ok) {
-        throw new PiiHandleUnresolvedError([`«pii:${handleId}»`], result.reason, sessionId);
+        throw new PiiHandleUnresolvedError(
+          [`«pii:${handleId}»`],
+          result.reason,
+          sessionId,
+          [vault.categoryOfDeadHandle(sessionId, handleId)],
+        );
       }
 
       // 3) 审计（**无真值**）。事件名用字面量：`check:event-visibility` 只扫字面量生产点，

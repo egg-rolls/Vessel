@@ -304,14 +304,21 @@ export class PiiVault {
     const occurrences = findHandles(text);
     if (occurrences.length === 0) return text;
     const resolved: Array<{ handle: string; start: number; end: number; value: string }> = [];
-    const failures = new Map<PiiHandleFailureReason, string[]>();
+    const failures = new Map<PiiHandleFailureReason, Array<{ handle: string; category: PiiCategory | undefined }>>();
     for (const occurrence of occurrences) {
       const result = this.resolve(sessionId, occurrence.id);
       if (result.ok) {
-        resolved.push({ handle: occurrence.handle, start: occurrence.start, end: occurrence.end, value: result.value });
+        resolved.push({
+          handle: occurrence.handle,
+          start: occurrence.start,
+          end: occurrence.end,
+          value: result.value,
+        });
       } else {
         const list = failures.get(result.reason) ?? [];
-        list.push(occurrence.handle);
+        // 错误白名单只允许「id + 类别 + 原因 + 下一步」：类别能从墓碑里拿到就给，
+        // 拿不到（未知 / 整批失效）就不写 —— 绝不猜。
+        list.push({ handle: occurrence.handle, category: this.categoryOfDeadHandle(sessionId, occurrence.id) });
         failures.set(result.reason, list);
       }
     }
@@ -320,7 +327,12 @@ export class PiiVault {
       const order: PiiHandleFailureReason[] = ['invalidated_handle', 'expired_handle', 'unknown_handle'];
       const reason = order.find((candidate) => failures.has(candidate))!;
       const all = [...failures.values()].flat();
-      throw new PiiHandleUnresolvedError(all, reason, sessionId);
+      throw new PiiHandleUnresolvedError(
+        all.map((entry) => entry.handle),
+        reason,
+        sessionId,
+        all.map((entry) => entry.category),
+      );
     }
     let out = '';
     let cursor = 0;

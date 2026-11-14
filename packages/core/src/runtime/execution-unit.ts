@@ -742,12 +742,18 @@ export class ExecutionUnit {
   }
 
   /**
-   * 句柄解不开时的上层动作（0.52 裁定）：
+   * 句柄解不开时的上层动作（0.52 裁定，口径：**动作错误 vs 环境变化**）：
    *
+   * 环境卡表达「世界的状态变了」；句柄过期/未知是「这一次动作没做成」。混在一起会同时
+   * 坏三件事：卡片语义被稀释、错误归属不清（哪个 tool、哪次调用）、逐调用错误被伪装成
+   * 全局变化。所以：
    * - `unknown_handle` / `expired_handle`：**只**是那个工具调用的失败
-   *   （`retryable: false` + 下一步），不发环境信息卡 —— 这是动作错误，不是环境变化；
-   * - `invalidated_handle`：broker 重启导致**整批**失效，除工具失败外再发**一张**
-   *   环境信息卡（每 session 至多一张，靠 `claimInvalidationNotice` 去重）。
+   *   （`retryable: false`，下一步写在错误文本里；卡片由工具失败卡承载），
+   *   **不发**环境信息卡 —— 动作错误不是环境变化；
+   * - `invalidated_handle`：broker 重启导致**整批**失效（一次性影响所有在途句柄），
+   *   除工具失败外**再**发一张环境信息卡（每 session 至多一张，靠
+   *   `claimInvalidationNotice` 去重）。两者**并存**：卡解释「为什么突然都不行了」，
+   *   工具卡解释「这一次没做成」。
    */
   private onPiiHandleFailure(error: unknown, sessionId: string): void {
     if (!(error instanceof PiiHandleUnresolvedError)) return;

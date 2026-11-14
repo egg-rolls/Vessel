@@ -356,6 +356,19 @@ const PII_FAILURE_NEXT_STEP: Record<PiiHandleFailureReason, string> = {
     'again after the re-fetch (it needs human approval).',
 };
 
+/**
+ * 句柄错误里**唯一允许出现**的东西（用户 0.52 裁定的白名单）：
+ *
+ * - 占位符 id（`«pii:xxxxxxxx»`，本身是不透明 token）；
+ * - 类别（`email` / `api_key` …；判不出来就不写，绝不猜）；
+ * - 失败原因枚举（`unknown_handle` / `expired_handle` / `invalidated_handle`）；
+ * - 下一步建议。
+ *
+ * **不允许**：真值、真值片段、真值长度、命中位置或任何原文线索 —— 句柄错误是
+ * 「这一次动作没做成」的**动作错误**，不是环境变化，也不该顺手泄漏线索。
+ */
+export const PII_ERROR_ALLOWED_FIELDS = ['handle', 'category', 'reason', 'next_step'] as const;
+
 /** 句柄解不开时抛的错（工具参数边界必须**报错**，不许原样外发）。 */
 export class PiiHandleUnresolvedError extends Error {
   /** 涉及到的占位符（不含真值） */
@@ -363,26 +376,48 @@ export class PiiHandleUnresolvedError extends Error {
   readonly reason: PiiHandleFailureReason;
   /** 稳定错误码：`pii_unknown_handle` / `pii_expired_handle` / `pii_invalidated_handle` */
   readonly code: string;
+  /** 每一档的类别（判不出来就是 undefined；与 `handles` 一一对应） */
+  readonly categories: Array<PiiCategory | undefined>;
   /** 结构化细节（`toErrorEnvelope` 会带到 `details` 里），**不含真值** */
   readonly details: Record<string, unknown>;
 
-  constructor(handles: string[], reason: PiiHandleFailureReason, sessionId?: string) {
+  constructor(
+    handles: string[],
+    reason: PiiHandleFailureReason,
+    sessionId?: string,
+    categories: Array<PiiCategory | undefined> = [],
+  ) {
     super(
-      `PII handle cannot be resolved (${reason}): ${handles.join(', ')}. ` +
+      `PII handle cannot be resolved (${reason}): ${PiiHandleUnresolvedError.describe(handles, categories)}. ` +
         PII_FAILURE_NEXT_STEP[reason],
     );
     this.name = 'PiiHandleUnresolvedError';
     this.handles = handles;
     this.reason = reason;
     this.code = PII_HANDLE_ERROR_CODES[reason];
+    this.categories = handles.map((_, index) => categories[index]);
     this.details = {
       reason,
       handle_count: handles.length,
       handles,
+      ...(this.categories.some((category) => category !== undefined)
+        ? { categories: this.categories }
+        : {}),
       ...(sessionId !== undefined ? { session: sessionId } : {}),
     };
   }
+
+  /** `«pii:x» (email)` —— 只拼 id 与类别，别的什么都不写。 */
+  private static describe(handles: string[], categories: Array<PiiCategory | undefined>): string {
+    return handles
+      .map((handle, index) => {
+        const category = categories[index];
+        return category === undefined ? handle : `${handle} (${category})`;
+      })
+      .join(', ');
+  }
 }
+
 
 /**
  * 占位符替换：把文本里的句柄换成真值。

@@ -43,6 +43,7 @@ export {
   PII_ENTROPY_KEYWORD_WINDOW,
   PII_ENTROPY_MIN_BITS,
   PII_ENTROPY_MIN_LENGTH,
+  PII_ERROR_ALLOWED_FIELDS,
   PiiHandleUnresolvedError,
   shannonEntropy,
   substitute,
