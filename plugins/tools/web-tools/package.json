@@ -1,0 +1,74 @@
+{
+  "name": "@vessel-agent/web-tools",
+  "version": "0.52.0",
+  "description": "web_fetch — SSRF-guarded HTTP fetch with local text extraction",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/egg-rolls/Vessel.git",
+    "directory": "plugins/tools/web-tools"
+  },
+  "engines": {
+    "bun": ">=1.3.9"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "probe": "bun run ../../../scripts/check-web-fetch.ts"
+  },
+  "dependencies": {
+    "@vessel-agent/core": "0.52.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  },
+  "vessel": {
+    "id": "web-tools",
+    "name": "Web Tools",
+    "version": "0.1.0",
+    "engines": {
+      "vessel": ">=0.33.0 <1.0.0"
+    },
+    "description": "web_fetch — SSRF-guarded HTTP fetch with local text extraction",
+    "side": "backend",
+    "contributes": {
+      "settings": {
+        "max_bytes": {
+          "type": "number",
+          "description": "响应体字节上限，默认 5 MiB（clamp 1 KiB ~ 8 MiB）"
+        },
+        "timeout_ms": {
+          "type": "number",
+          "description": "整体抓取超时毫秒数（含所有重定向跳），默认 10000"
+        },
+        "max_chars": {
+          "type": "number",
+          "description": "返回文本的字符预算，超出即截断并置 truncated=true，默认 8000"
+        },
+        "respect_robots": {
+          "type": "boolean",
+          "description": "是否遵守 robots.txt（同源缓存 12h），默认 true"
+        },
+        "approval": {
+          "type": "string",
+          "description": "权限策略：open（默认）/ guarded（同 session 首次访问某主机需确认）/ locked（仅限 domain_allowlist）"
+        },
+        "renderer": {
+          "type": "string",
+          "description": "M1 只支持 none；browser/jina 会返回 renderer_unavailable"
+        }
+      }
+    },
+    "permissions": {
+      "net": []
+    }
+  }
+}

@@ -78,6 +78,7 @@
     "check:lease-suspend": "bun run scripts/check-lease-suspend.ts",
     "check:prompt-context-dedup": "bun run scripts/check-prompt-context-dedup.ts",
     "check:error-text": "bun run scripts/check-error-text.ts",
+    "check:web-fetch": "bun run scripts/check-web-fetch.ts",
     "check:node-handoff": "bun run scripts/check-node-handoff.ts"
   },
   "workspaces": [
