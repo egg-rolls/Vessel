@@ -34,7 +34,10 @@ export type RpcErrorCode =
   | 'run_ended'
   // 0.34 CONTRACT-0.34-context C7：sessions.compact。
   | 'session_not_found'
-  | 'compact_unavailable';
+  | 'compact_unavailable'
+  // 0.52 S1a：node 正在优雅退出（fence 已打开）。**可重试**：等 node 回来再发，
+  // 客户端按「稍后重试」处理，不要当终态错误展示。
+  | 'gateway_restarting';
 
 /** 方法权限（manifest 同名字段） */
 export type MethodPermission = 'read' | 'write' | 'admin';

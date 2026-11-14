@@ -42,7 +42,12 @@ import {
   type Usage,
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
-import { type AgentInboxDelivery, AgentInboxStore, deliveryFromNotify } from './inbox.js';
+import {
+  type AgentInboxDelivery,
+  type AgentInboxListEntry,
+  AgentInboxStore,
+  deliveryFromNotify,
+} from './inbox.js';
 import { memberCwdFromTeam } from './member-cwd.js';
 import { normalizeRefs } from './refs.js';
 import {
@@ -2320,6 +2325,13 @@ export class AgentServiceImpl implements AgentService {
     // 越界 / deny 目录的判定属于写侧闸门（runs.start 的 refs 闸门），这里只做形状归一。
     const refs = normalizeRefs(input.refs);
 
+    // 0.52 S1a：node 退出期间的准入 fence —— 人类来源的写立刻拒绝。
+    // 必须早于任何 inbox / body 副作用：「收下再假装成功」会让 UI 以为 run 真的起来了。
+    // agent 来源的投递不在这里拦：走下面的「只落 durable inbox、返回 queued」（见 fence 段）。
+    if (this.draining && this.isHumanPrincipal(from)) {
+      throw new AgentError('node_draining', 'node_draining: ' + from);
+    }
+
     // 1. session → agent/body 解析（绑定优先；矛盾输入 = invalid_input）
     let record: MemberRecord;
     let requestedBindingId: string | undefined;
@@ -2472,6 +2484,34 @@ export class AgentServiceImpl implements AgentService {
           message,
         };
       }
+    }
+    // 0.52 S1a：node 正在退出 —— agent 来源的投递落 durable inbox 即返回 queued。
+    // 语义就是「排队」：不提交、不入 mailbox、不唤醒（退出路径不许等任何 run）；
+    // 正文留在 inbox 里，下次启动由 S1c 的 recoverPendingInputs / 标记里的
+    // pending_input_ids 接着处理。没有 durable inbox 就没有「排队」这回事，只能明确拒绝。
+    if (this.draining) {
+      if (this.inbox === undefined || internal?.startup === true) {
+        throw new AgentError('node_draining', 'node_draining: ' + record.id);
+      }
+      this.trackInbox(record.id, message, entry.bindingId);
+      const drainedRunId = this.newId();
+      this.runMessageIds.set(drainedRunId, message.id);
+      this.emitMessageQueued(record, entry.bindingId, 'input', {
+        state: record.state,
+        message_id: message.id,
+        from,
+        ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+      });
+      this.scheduleSnapshot();
+      return {
+        result: {
+          run_id: drainedRunId,
+          agent_id: record.id,
+          session_id: entry.bindingId,
+          status: 'queued',
+        },
+        message,
+      };
     }
     // 写前日志：先落 inbox 再进 mailbox / scheduler；held 表示「某个 body 的 mailbox 已接管」。
     const inboxed = this.inbox !== undefined && internal?.startup !== true;
@@ -4726,6 +4766,10 @@ export class AgentServiceImpl implements AgentService {
     if (code === 'invalid_input') {
       return { status: 'rejected', code: 'invalid_input', reason: errorText(error) };
     }
+    // 0.52 S1a：node 正在退出、又没有 durable inbox 可排队 ⇒ 明确可重试，不伪装成 resume_failed。
+    if (code === 'node_draining') {
+      return { status: 'rejected', code: 'node_draining', reason: errorText(error) };
+    }
     if (
       code === 'budget_exceeded' ||
       code === 'budget_unavailable' ||
@@ -6306,7 +6350,7 @@ export class AgentServiceImpl implements AgentService {
    */
   async drain(options: AgentDrainOptions = {}): Promise<AgentDrainOutcome> {
     await this.ready;
-    this.draining = true;
+    this.beginDrain();
     // 关闭窗口里不再发成员停下通知：进程正在收口，父级也读不到。
     for (const agentId of [...this.peerStopTimers.keys()]) this.cancelPeerStopTimer(agentId);
     const active = (): boolean => {
@@ -6347,6 +6391,60 @@ export class AgentServiceImpl implements AgentService {
       return 'timeout';
     }
     return 'interrupted';
+  }
+
+  /**
+   * 0.52 S1a：node 优雅退出的**准入 fence**（退出序列第一段，先于写标记 / interrupt）。
+   *
+   * 打开后：
+   * - 人类来源的写（runs.start / 直接投递）⇒ 立刻抛 node_draining（RPC 侧映射成可重试的
+   *   gateway_restarting），**绝不**收下再假装成功；
+   * - agent 来源的写（agents.dispatch / agents.send）⇒ 只落 durable inbox，返回 queued；
+   * - 队列里不再起新轮（既有 draining 行为，见 submitMessage）。
+   *
+   * 幂等：重复调用只回报当前状态，不重复做任何事（退出期间连收信号是常态）。
+   * 返回 true 表示**本次**真正打开了 fence。
+   */
+  beginDrain(): boolean {
+    if (this.draining) return false;
+    this.draining = true;
+    return true;
+  }
+
+  /** 0.52 S1a：fence 是否已打开（退出序列 / runs.start 闸门用）。 */
+  isDraining(): boolean {
+    return this.draining;
+  }
+
+  /**
+   * 0.52 S1a：按会话汇总 durable inbox 里尚未消费的条目 id（unread + held）。
+   *
+   * 只读列举：不 hold、不推进、不消费、不唤醒任何 body —— 退出路径只有 2s 预算。
+   * 没有 durable inbox ⇒ 空 Map（标记里就是空数组，S1c 以 inbox 自身为准）。
+   */
+  pendingInboxIdsBySession(): Map<string, string[]> {
+    const bySession = new Map<string, string[]>();
+    if (this.inbox === undefined) return bySession;
+    for (const record of this.registry.all()) {
+      let listed: { messages: AgentInboxListEntry[] };
+      try {
+        listed = this.inbox.list(record.id, { includeHeld: true });
+      } catch (error) {
+        this.logger.warn('agent.drain.inbox_list_failed', {
+          agent_id: record.id,
+          error: errorText(error),
+        });
+        continue;
+      }
+      for (const entry of listed.messages) {
+        const sessionId = entry.session_id;
+        if (sessionId === undefined) continue;
+        const bucket = bySession.get(sessionId);
+        if (bucket === undefined) bySession.set(sessionId, [entry.id]);
+        else bucket.push(entry.id);
+      }
+    }
+    return bySession;
   }
 
   async flushSnapshot(): Promise<boolean> {

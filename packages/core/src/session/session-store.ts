@@ -5,6 +5,7 @@
 
 import type { Message } from '../types/provider.js';
 import type {
+  ResumeAfterRestart,
   SessionInfo,
   SessionState,
   SessionStore,
@@ -54,6 +55,35 @@ export function normalizeTitleSource(value: unknown): SessionTitleSource | undef
 export function withTitleSource(info: SessionInfo, raw: unknown): SessionInfo {
   const titleSource = normalizeTitleSource(raw);
   return titleSource === undefined ? info : { ...info, title_source: titleSource };
+}
+
+/**
+ * `resume_after_restart` 的唯一归一化出口（0.52 S1a）。
+ *
+ * 磁盘 / SQL 上的这个字段是「进程被打断过」的**持久事实**，所以读取端一律不信形状、
+ * 只认能完整复述的标记：字段缺一条就整条丢弃（返回 undefined），而不是补默认值——
+ * 半条标记会让 S1c 以为能续跑，比不续跑更糟。
+ *
+ * 唯一实现：file / sqlite 两个后端共用，口径不会分叉。
+ */
+export function normalizeResumeAfterRestart(value: unknown): ResumeAfterRestart | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.run_id !== 'string' || raw.run_id.length === 0) return undefined;
+  if (typeof raw.interrupted_at !== 'number' || !Number.isFinite(raw.interrupted_at)) {
+    return undefined;
+  }
+  if (raw.reason !== 'shutdown') return undefined;
+  const pending = Array.isArray(raw.pending_input_ids)
+    ? raw.pending_input_ids.filter((id): id is string => typeof id === 'string')
+    : [];
+  return {
+    run_id: raw.run_id,
+    interrupted_at: raw.interrupted_at,
+    reason: 'shutdown',
+    pending_input_ids: pending,
+    background_stopped: raw.background_stopped === true,
+  };
 }
 
 /** SessionState -> SessionInfo 摘要（title/preview 优先用已存储值，否则派生） */

@@ -20,6 +20,7 @@ import type {
 } from '../types/run-journal.js';
 import type { RunRecord } from '../types/run-record-store.js';
 import type { SessionState } from '../types/session.js';
+import { applyArmedResumeMarker } from './resume-markers.js';
 
 export type {
   RunJournal,
@@ -182,6 +183,10 @@ export class SessionRunJournal implements RunJournal {
 
   async saveSessionState(state: SessionState): Promise<void> {
     if (!this.deps.session) return;
+    // 0.52 S1a：进程退出时武装的续跑标记跟着**每一次**状态保存一起落地。
+    // 放在这里而不是让退出路径自己写：settle 期间被打断的 run 落终态会话状态时，
+    // 用的是它自己那份（可能读于标记之前的）投影，会重建整份 state 把标记冲掉。
+    applyArmedResumeMarker(state, this.deps.resumeMarkers);
     // 消息身份（additive）：`run_segment` 只在**落盘这一处**盖章 —— 本方法是 SessionState
     // 的唯一写口（初始保存 / checkpoint / 终态 / 手动压缩四路都经过它），一个口径、
     // 幂等（已盖过的不重写）。它必须发生在 save 之前：读侧（`sessions.get`）拿到的

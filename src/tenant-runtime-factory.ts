@@ -20,6 +20,8 @@ import type { ConfigSources, VesselConfig } from '../packages/config/src/index';
 import {
   type ContextSummarizer,
   createDefaultTraceRedactor,
+  createResumeMarkerRegistry,
+  type ResumeMarkerRegistryState,
   createRunJournalFactory,
   createSessionBreaker,
   type EventStream,
@@ -175,6 +177,13 @@ export interface TenantRuntimeBundle {
   /** 0.34 S4 / R7：按 session 取带熔断的摘要器（与 `summarizer` 同分桶） */
   summarizerForSession?: (sessionId: string) => ContextSummarizer;
   runStore?: RunRecordStore;
+  /**
+   * 0.52 S1a：进程退出时武装的续跑标记注册表。
+   *
+   * 退出路径把标记 arm 进来后，RunJournal 每次保存会话状态都会把它合并回去，
+   * 避免 settle 期间被打断 run 的终态保存把标记冲掉。
+   */
+  resumeMarkers: ResumeMarkerRegistryState;
   /** 0.18：会话事件日志（唯一真相源）；memory 后端或只读执行面不创建 */
   eventLog?: SessionEventLog;
   trace?: TraceControl;
@@ -738,6 +747,10 @@ export async function buildTenantRuntime(
 
   // 铁律 1：持久端口只到 Runtime 工厂层；EU 经 journal 写入。
   // 成员 run 与 tenant run 共用同一工厂 → 成员 run 同样写 RunRecord。
+  // 0.52 S1a：进程退出时武装的续跑标记（每 tenant 一份，与工厂同寿命）。
+  // 装进工厂后，**任何一次**会话状态保存都会把标记合并回去（settle 期间终态保存不会
+  // 把 drain 先写下的标记覆盖掉）。
+  const resumeMarkers = createResumeMarkerRegistry();
   const journalFactory = createRunJournalFactory({
     ...(eventLog !== undefined ? { eventLog } : {}),
     session,
@@ -746,6 +759,7 @@ export async function buildTenantRuntime(
       ? { fenceOf: (kind, key) => leaseService.fenceOf(kind, key) }
       : {}),
     logger,
+    resumeMarkers,
   });
 
   options.runtime.registerProfile({
@@ -1215,6 +1229,7 @@ export async function buildTenantRuntime(
     summarizer,
     ...(summarizerForSession !== undefined ? { summarizerForSession } : {}),
     ...(runStore ? { runStore } : {}),
+    resumeMarkers,
     ...(eventLog ? { eventLog } : {}),
     ...(trace ? { trace } : {}),
     ...(metrics ? { metrics } : {}),

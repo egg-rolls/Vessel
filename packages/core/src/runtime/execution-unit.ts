@@ -74,6 +74,7 @@ import {
 } from '../types/run-record-store.js';
 import type {
   LegacyRunSnapshot,
+  ResumeAfterRestart,
   SessionState,
   SessionStatus,
   SessionStore,
@@ -1063,6 +1064,15 @@ export class ExecutionUnit {
     return journal;
   }
 
+  /**
+   * 0.52 S1a：把本执行面在途的会话状态 / 事件写入刷干净（退出序列最后一步用）。
+   *
+   * 只是等本地 journal 队列，不 await run / 模型流 / 后台进程。
+   */
+  async flushStateWrites(): Promise<void> {
+    await this.flushJournalWrites();
+  }
+
   /** 等待 active + transient journal 的所有在途写入。 */
   private async flushJournalWrites(): Promise<void> {
     const journals = [
@@ -1089,6 +1099,62 @@ export class ExecutionUnit {
       reason,
     });
     control.controller.abort(reason);
+  }
+
+  /**
+   * 0.52 S1a：当前在跑 run 的只读快照。
+   *
+   * node 退出路径用它枚举「有在跑 run 的会话」。同步、不触碰任何流：
+   * 无 active run ⇒ undefined ⇒ 该会话**不会**被写续跑标记。
+   */
+  activeRunSnapshot(): { run_id: string; session_id: string } | undefined {
+    const run = this.activeRun;
+    if (run === undefined) return undefined;
+    return { run_id: run.runId, session_id: run.sessionId };
+  }
+
+  /**
+   * 0.52 S1a：写入「下次启动续跑」标记。
+   *
+   * 只做两件事：读一次会话状态，置 resume_after_restart 后交给 RunJournal 单写口
+   * （saveSessionState，与其它状态写入同一条路）。
+   *
+   * 退出路径的预算是 2s，所以这里**不** await run / 模型流 / 长工具 / 后台进程；
+   * 有属于本会话的 active run 时，saveSessionState 的既有行为会顺带把 workingContext
+   * 里的半截回复一起落盘（这正是「半截回复也要落地」要的）。
+   *
+   * 返回是否真的写了（没接 SessionStore / 读不到会话状态 ⇒ false，调用方只记日志）。
+   */
+  async armResumeAfterRestart(sessionId: string, marker: ResumeAfterRestart): Promise<boolean> {
+    if (!this.session) return false;
+    let sessionState: SessionState | null;
+    try {
+      sessionState = await this.session.load(sessionId);
+    } catch (error) {
+      this.logger.warn('resume marker skipped: session load failed', {
+        session_id: sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+    if (sessionState === null) {
+      this.logger.warn('resume marker skipped: no session state', { session_id: sessionId });
+      return false;
+    }
+    sessionState.resume_after_restart = {
+      ...marker,
+      pending_input_ids: [...marker.pending_input_ids],
+    };
+    const active = this.activeRun;
+    if (active !== undefined && active.sessionId !== sessionId) {
+      // active run 属于别的会话：不能走 saveSessionState（它会用那段 workingContext
+      // 重写本会话的 messages），只补标记。
+      await this.flushJournalWrites();
+      await this.transientJournal('manual', sessionId).saveSessionState(sessionState);
+      return true;
+    }
+    await this.saveSessionState(sessionState);
+    return true;
   }
 
   /**

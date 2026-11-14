@@ -33,6 +33,7 @@ export {
   type RunJournalTransientIdentity,
 } from './run-journal.js';
 export { type ExecutionUnitRequest, Runtime, type TenantRuntimeProfile } from './runtime.js';
+export { createResumeMarkerRegistry, type ResumeMarkerRegistryState } from './resume-markers.js';
 export {
   createToolPipeline,
   createToolPipelineFor,

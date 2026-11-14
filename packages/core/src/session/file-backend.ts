@@ -26,6 +26,7 @@ import { atomicWrite } from './atomic-write.js';
 import {
   compareSessionInfo,
   deriveSessionMeta,
+  normalizeResumeAfterRestart,
   normalizeTitleSource,
   toSessionInfo,
 } from './session-store.js';
@@ -148,6 +149,8 @@ function toSessionState(value: unknown): SessionState {
     context_anchor: normalizeContextAnchor(raw.context_anchor),
     // 0.52：环境快照发布指纹（旧文件没有 ⇒ undefined ⇒ 首次运行会发一张全量卡，符合预期）。
     prompt_context: normalizePromptContextFingerprint(raw.prompt_context),
+    // 0.52 S1a：续跑标记（旧文件没有 ⇒ undefined ⇒ 启动不续跑任何东西）。
+    resume_after_restart: normalizeResumeAfterRestart(raw.resume_after_restart),
   };
 }
 
@@ -421,6 +424,10 @@ export class FileSessionStore implements SessionStore {
       // 0.52 C：真实用量锚点。旧文件没有这个键 ⇒ 读取时为 undefined ⇒ 裸估算（0.51 行为）。
       ...(state.context_anchor !== undefined ? { context_anchor: state.context_anchor } : {}),
       ...(state.prompt_context !== undefined ? { prompt_context: state.prompt_context } : {}),
+      // 0.52 S1a：续跑标记。同样只在有值时写，旧文件形状不变。
+      ...(state.resume_after_restart !== undefined
+        ? { resume_after_restart: state.resume_after_restart }
+        : {}),
     };
 
     await atomicWrite(this.filePath(sessionId), JSON.stringify(disk, null, 2));
