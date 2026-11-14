@@ -122,8 +122,10 @@ function expectThrows(
     fail(where, `期望码 ${code}，实际 ${thrown.code}（${thrown.message}）`);
     return;
   }
+  const actualClass = (Object.getPrototypeOf(thrown) as { constructor: { name: string } })
+    .constructor.name;
   if (errorClass !== undefined && !(thrown instanceof errorClass)) {
-    fail(where, `期望错误类 ${errorClass.name}，实际 ${thrown.constructor.name}`);
+    fail(where, `期望错误类 ${errorClass.name}，实际 ${actualClass}`);
     return;
   }
   ok(`${where} ⇒ ${code}`);
