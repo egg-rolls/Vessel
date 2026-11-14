@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   estimateTokens,
   shouldPublishSystemContext,
+  systemContextChangesFromFingerprint,
   withClearedToolResults,
 } from '../context/index.js';
 import {
@@ -1170,7 +1171,7 @@ export class ExecutionUnit {
     // 必须在 seed 之后注入：播种会 setSessionId，切会话时会把锚点清掉。
     execution.workingContext.setContextAnchor?.(stored?.context_anchor, this.model);
     // 0.52：恢复「上次发布过的环境快照指纹」，让重启后的第一条消息能正确去重。
-    this.promptContextFingerprint = stored?.prompt_context;
+    this.restorePromptContextFingerprint(stored);
 
     // system 前缀只允许显式 revision：基底 system / Self Card 只在构造期变化，
     // 若同一 session 的基底确实不同（例如运行时重建），标记为一次 system_revision。
@@ -1588,6 +1589,9 @@ export class ExecutionUnit {
       if (history.messages.length === 0) {
         throw new RunResumeError('run_not_resumable', runId, 'empty checkpoint');
       }
+      // 0.52 C：resume 是「重启后接管被中断 run」的入口，必须与 run() 同一处复原
+      // 「上下文卡」去重指纹；漏了这一步会再发一张全量卡（用户实测的重启后重发）。
+      this.restorePromptContextFingerprint(history.sessionState);
       this.seedWorkingContext(execution, history);
       this.seedRealTokensFromLastRequest(execution, history);
 
@@ -2420,6 +2424,7 @@ export class ExecutionUnit {
     }
     // 0.52：同进程没有上一份快照（= 刚重启 / 新 body）时，用**持久指纹**判断要不要发。
     // 只有 hash / model / tools 全同才跳过；跨进程拿不到原文差，所以有变化时发全量卡。
+    const restoredFingerprint = this.promptContextFingerprint;
     const nextFingerprint: PromptContextFingerprint = {
       hash,
       model: this.model,
@@ -2444,9 +2449,13 @@ export class ExecutionUnit {
       toolsCount: request.toolsCount,
     };
     // 先算 diff 再推进快照：`changed` 说的是「与上一份**发布过**的差在哪」，不是与上一轮请求。
-    const changed = systemContextChanges(last, snapshot);
-    const previousHash =
-      last !== undefined && last.sessionId === execution.sessionId ? last.hash : undefined;
+    const livePrevious =
+      last !== undefined && last.sessionId === execution.sessionId ? last : undefined;
+    const changed =
+      livePrevious !== undefined
+        ? systemContextChanges(livePrevious, snapshot)
+        : systemContextChangesFromFingerprint(restoredFingerprint, nextFingerprint);
+    const previousHash = livePrevious !== undefined ? livePrevious.hash : restoredFingerprint?.hash;
     this.lastSystemContext = snapshot;
     this.promptContextFingerprint = nextFingerprint;
     const at = nextFingerprint.at;
@@ -2974,6 +2983,18 @@ export class ExecutionUnit {
       throw error;
     }
     execution.phase = previousPhase;
+  }
+
+  /**
+   * 0.52 C：复原「上下文卡」跨进程去重指纹。
+   *
+   * executeRun（run 入口）与 resumeRun（重启后接管被中断 run 的入口）必须都调用：
+   * 漏了 resumeRun 就会在恢复时再发一张全量「上下文」卡（只有 message_count /
+   * tokens 变）。stored 为 null/undefined（新会话、store 读不到）时写成 undefined，
+   * 语义是「没有可比指纹 ⇒ 发全量卡」。
+   */
+  private restorePromptContextFingerprint(stored: SessionState | null | undefined): void {
+    this.promptContextFingerprint = stored?.prompt_context;
   }
 
   /**

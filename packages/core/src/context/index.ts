@@ -29,5 +29,6 @@ export {
   normalizePromptContextFingerprint,
   samePromptContext,
   shouldPublishSystemContext,
+  systemContextChangesFromFingerprint,
 } from './prompt-context.js';
 export { createSessionBreaker } from './session-breaker.js';
