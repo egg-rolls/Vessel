@@ -1250,6 +1250,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.scope.mcp': 'MCP',
   'chat.env.scope.update': 'Update',
   'chat.env.scope.peer': 'Peer',
+  'chat.env.scope.inbox': 'Inbox',
   // 0.52: every environment change (identity / tools / model / fields / restart) is one
   // notice on the same channel; scope only picks the card label. The producer-side word
   // list is packages/agent/src/env-info-scope.ts; `selfcard` stays as a legacy alias so

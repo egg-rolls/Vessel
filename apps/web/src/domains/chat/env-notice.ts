@@ -35,9 +35,17 @@
  *   全都在用；
  * - `selfcard`：0.52 之前 `self-card-delta` 的首词（改名 / 换 model / 换 prompt 都叫它），
  *   落盘消息里有存量 —— 删掉它等于让老消息的卡头静默退化成「上下文」；
- * - `context`：兜底（解析不出 scope 的行）现在也是一个**正式**种类（系统提示词 / 自卡变更）。
+ * - `context`：兜底（解析不出 scope 的行）现在也是一个**正式**种类（系统提示词 / 自卡变更）；
+ * - `inbox`：0.53 补的词 —— 收件箱提醒（别人发给这个 agent 的消息）在模型侧是一条
+ *   `[inbox] N unread` 的 `vessel:notice` 尾消息（发点在 `packages/agent/src/inbox.ts` 的
+ *   `noticeContent`，事件侧见 `packages/agent/src/runtime.ts`）。它过去既不在 `ENV_INFO_SCOPES`
+ *   里、也没有卡头标签 ⇒ 只能落进兜底「上下文」，用户在杂项里扫不到。
  *
- * 生产者加了词而这里没加，`scripts/check-append-only-context.ts` 的 C3 会直接红。
+ * 生产者加了词而这里没加，`scripts/check-append-only-context.ts` 的 C3 会直接红——**但只对
+ * `ENV_INFO_SCOPES` 认识的词成立**：C3 比的是「模型侧分节词表 ⊂ Web 词表」，一个生产者若发的是
+ * 分节词表里没有的字面量（0.53 的 `inbox` 就是这样），C3 看不见它，卡头静默退化成「上下文」。
+ * 补这道缝的是 `scripts/check-env-scope-parity.ts`：它扫生产源代码里真实的 scope 字面量，
+ * 断言每一个都在本词表里、都有非空标签、且解析器真的认得出（词表登记了却解析不出来 = 标签是死代码）。
  */
 export const ENV_NOTICE_SCOPES = [
   'config',
@@ -46,6 +54,7 @@ export const ENV_NOTICE_SCOPES = [
   'mcp',
   'update',
   'peer',
+  'inbox',
   'restart',
   'model',
   'identity',
@@ -138,8 +147,13 @@ const DETAIL_MARK = /^·\s*/;
  *
  * 由 `ENV_NOTICE_SCOPES` 生成而不是另写一份字面量：加 scope 时唯一的改动点就在那份数组，
  * 漏改这里会让新 scope 静默退化成 `context`（卡头标签变错，正文却看着正常，最难发现）。
+ *
+ * 两种线格式都要认：裸词（`tools: 12 → 14`）和方括号形式（`[inbox] 3 unread`，即 inbox
+ * 生产者的正文 —— `noticeContent` 写的就是方括号）。方括号只用于**取 scope**，一个字符都不从
+ * 正文里剥（本模块的口径：正文字面保留，用户看到的就是模型上下文里的原文）。
  */
-const SCOPE_TOKEN = new RegExp(`^(${ENV_NOTICE_SCOPES.join('|')})\\b`, 'i');
+const SCOPE_ALTERNATION = ENV_NOTICE_SCOPES.join('|');
+const SCOPE_TOKEN = new RegExp(`^(?:\\[(${SCOPE_ALTERNATION})\\]|(${SCOPE_ALTERNATION})\\b)`, 'i');
 
 /** 一行上下文文本 → 解析结果（空行由调用方跳过）。 */
 export function parseEnvNoticeLine(raw: string): EnvNoticeLine | undefined {
@@ -168,7 +182,8 @@ export function parseEnvNoticeLine(raw: string): EnvNoticeLine | undefined {
 
 function scopeOf(text: string): EnvNoticeScope {
   const match = SCOPE_TOKEN.exec(text);
-  const token = match?.[1];
+  // 两组互为备选：[1] = `[inbox] …` 的方括号形式，[2] = 裸词形式。
+  const token = match?.[1] ?? match?.[2];
   if (token === undefined) return 'context';
   const scope = token.toLowerCase();
   return (ENV_NOTICE_SCOPES as readonly string[]).includes(scope)
