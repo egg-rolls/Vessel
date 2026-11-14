@@ -22,15 +22,7 @@ export type PrefixChangeReason =
   | 'session_switch'
   | 'branch'
   | 'resume'
-  | 'context_trim'
-  /**
-   * 0.52 PII：请求投影里有占位符失效被改写成 `«pii-expired:xxxx»`（+ 一行说明）。
-   *
-   * 这是**声明式**的前缀失效，不是 bug：句柄过期/失效后，旧引用在请求里必须变成
-   * 「已失效」形态，模型才不会浪费一轮去试。用它消费守卫，避免严格模式
-   * （`VESSEL_STRICT_PREFIX=1`）把一次预期内的改写当成缓存破坏而抛错。
-   */
-  | 'pii_handle_expired';
+  | 'context_trim';
 
 /** 一次守卫检查的输入 */
 export interface PromptPrefixCheckInput {

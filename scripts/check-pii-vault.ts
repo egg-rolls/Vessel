@@ -31,7 +31,6 @@ import {
   MemorySessionStore,
   MemoryWorkingContext,
   passesLuhn,
-  PII_DEAD_REFERENCE_NOTE,
   PII_INVALIDATION_NOTICE,
   PII_REVEAL_AUDIT_EVENT,
   PII_REVEAL_TOOL_NAME,
@@ -501,9 +500,6 @@ async function probeAppendOnlyAndParity(): Promise<void> {
 
   // ② 可见性对等：请求里的消息与 store 里的消息逐条同字节（system 除外）
   //    请求是「store 的前缀」：发请求那一刻 store 里还没有最后那条 assistant 回复。
-  //    注意「无 dead 引用」这一前提：一旦某条引用失效，请求里那一条会被改写成
-  //    «pii-expired:…»（用户 0.52 裁定：提前告知 > 省一轮），那是**唯一**允许的差异，
-  //    见 f 段的断言（store 仍是最初那份，改写只发生在请求投影）。
   const requestMessages = stack.provider.requests[stack.provider.requests.length - 1]?.messages ?? [];
   const storedNonSystem = stored.filter((message) => message.role !== 'system');
   const requestNonSystem = requestMessages.filter((message) => message.role !== 'system');
@@ -542,7 +538,7 @@ async function probeAppendOnlyAndParity(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function probeDeadReferenceCards(): Promise<void> {
-  section('f. 死引用：请求内改写 «pii-expired:» + 一行说明（不发定时器 / 不发卡）');
+  section('f. 死引用：追加 env 卡 / 去重 / 工具侧硬报错');
 
   let clock = 1_000;
   const vault = new PiiVault({ now: () => clock, ttlMs: 1_000 });
@@ -554,119 +550,68 @@ async function probeDeadReferenceCards(): Promise<void> {
   await stack.eu.run('FETCH the page', sessionId);
   const afterFirst = messageTexts(await storedMessages(stack.store, sessionId));
   const handles = [...afterFirst.matchAll(/«pii:[A-Z2-7]{8}»/g)].map((match) => match[0]);
-  check('第 1 轮拿到了占位符', handles.length >= 2, handles.join(','));
+  check('第 1 轮拿到了占位符', handles.length >= 1);
+  const handle = handles[0]!;
 
-  // 无 dead 引用的请求：**不该**出现那行说明（不噪音）
-  const cleanRequest = messageTexts(stack.provider.requests[stack.provider.requests.length - 1]?.messages ?? []);
-  eq('b. 无 dead handle 的请求不含说明行', cleanRequest.includes(PII_DEAD_REFERENCE_NOTE.en), false);
-
-  // 让句柄过期，再发一轮请求
+  // 第 2 轮前让句柄过期：只追加一张 env 卡，历史一个字不改
   const beforeSecond = await storedMessages(stack.store, sessionId);
   clock += 5_000;
   stack.provider.setResponse('PLAIN', { content: 'noted', finish_reason: 'stop' });
   await stack.eu.run('PLAIN follow-up', sessionId);
 
-  const secondRequestMessages = stack.provider.requests[stack.provider.requests.length - 1]?.messages ?? [];
-  const secondRequest = messageTexts(secondRequestMessages);
-
-  // a. 含 dead handle：占位符被改写成 «pii-expired:xxxx»，说明行恰好 1 行
-  check('a. 死引用在请求里被改写成 «pii-expired:…»', /«pii-expired:[A-Z2-7]{8}»/.test(secondRequest));
-  const noteLines = secondRequest.split(PII_DEAD_REFERENCE_NOTE.en).length - 1;
-  eq('a. 说明行恰好 1 行', noteLines, 1);
-  eq(
-    'c. 同一次请求里多个 dead handle ⇒ 仍然只有 1 行说明',
-    secondRequestMessages
-      .map((message) => (message.content ?? '').split(PII_DEAD_REFERENCE_NOTE.en).length - 1)
-      .reduce((sum, count) => sum + count, 0),
-    1,
+  const afterSecond = await storedMessages(stack.store, sessionId);
+  const cardsAfterSecond = (await noticeCards(stack.store, sessionId)).filter((card) =>
+    card.startsWith('pii:'),
+  );
+  eq('死引用 ⇒ 追加一张 env 卡', cardsAfterSecond.length, 1);
+  check(
+    '卡面列出句柄 id',
+    cardsAfterSecond[0]?.includes(handle) === true,
+    cardsAfterSecond[0] ?? '(none)',
+  );
+  check('卡面带类别（email）', cardsAfterSecond[0]?.includes('(email)') === true);
+  check(
+    '卡面不含真值',
+    (cardsAfterSecond[0] ?? '').length > 0 &&
+      !cardsAfterSecond[0]!.includes(MARKER_EMAIL) &&
+      !cardsAfterSecond[0]!.includes(MARKER_PHONE),
   );
   check(
-    'c. 两个占位符都被改写（按引用改写、说明行不按数量重复）',
-    handles.slice(0, 2).every((item) => secondRequest.includes('«pii-expired:' + item.slice(5, 13) + '»')),
+    '卡面同时列出两个失效引用（email / phone）',
+    handles.length >= 2 &&
+      handles.slice(0, 2).every((item) => cardsAfterSecond[0]?.includes(item) === true) &&
+      cardsAfterSecond[0]?.includes('(email)') === true &&
+      cardsAfterSecond[0]?.includes('(phone)') === true,
+    cardsAfterSecond[0] ?? '(none)',
   );
 
-  // d. 稳定形态：同一 handle 在后续请求里始终是同一个 «pii-expired:xxxx»
-  stack.provider.setResponse('PLAIN2', { content: 'again', finish_reason: 'stop' });
-  await stack.eu.run('PLAIN2 follow-up', sessionId);
-  const thirdRequest = messageTexts(stack.provider.requests[stack.provider.requests.length - 1]?.messages ?? []);
-  check(
-    'd. 同一个 handle 在后续请求里仍是同一个 pii-expired 标记',
-    handles.slice(0, 2).every((item) => {
-      const id = item.slice(5, 13);
-      return thirdRequest.includes('«pii-expired:' + id + '»') && !thirdRequest.includes('«pii:' + id + '»');
-    }),
-  );
-
-  // store / UI 侧不被打改：落盘仍是 «pii:xxxx»（改写只发生在请求投影）
-  const storedAfter = messageTexts(await storedMessages(stack.store, sessionId));
-  check('store 里仍是 «pii:xxxx»（不改落盘、不动历史）', /«pii:[A-Z2-7]{8}»/.test(storedAfter));
-  check('store 里没有 pii-expired 标记', !storedAfter.includes('pii-expired:'));
+  // 旧消息一个字没改（append-only）
   eq(
     '历史消息逐条未改（只追加）',
-    (await storedMessages(stack.store, sessionId))
-      .slice(0, beforeSecond.length)
-      .map((message) => message.role + ':' + (message.content ?? '')),
-    beforeSecond.map((message) => message.role + ':' + (message.content ?? '')),
+    afterSecond.slice(0, beforeSecond.length).map((message) => `${message.role}:${message.content ?? ''}`),
+    beforeSecond.map((message) => `${message.role}:${message.content ?? ''}`),
   );
+  check('第 2 轮确实追加了新消息', afterSecond.length > beforeSecond.length);
 
-  // 逐引用失效不发环境卡（只有系统性事件才发）
-  eq(
-    '逐引用失效不发环境卡',
-    (await noticeCards(stack.store, sessionId)).filter((card) => card.startsWith('pii:')).length,
-    0,
+  // 第 3 轮：同一批 id 不再重复追加卡（去重）
+  stack.provider.setResponse('PLAIN2', { content: 'again', finish_reason: 'stop' });
+  await stack.eu.run('PLAIN2 follow-up', sessionId);
+  const cardsAfterThird = (await noticeCards(stack.store, sessionId)).filter((card) =>
+    card.startsWith('pii:'),
   );
+  eq('同一批死引用只追加一次卡', cardsAfterThird.length, 1);
 
-  // 声明式前缀失效：改写是「预期内」的，不许把前缀守卫当成缓存被破坏
-  check(
-    'g. 改写被记成声明式前缀失效（不发 prompt.prefix_changed 告警）',
-    !stack.events
-      .getHistory('plugin')
-      .some((event) => event.type === 'prompt.prefix_changed'),
-  );
-
-  // 严格模式（VESSEL_STRICT_PREFIX=1）下同样不许炸：4 轮里既有 dead 改写也有追加
-  const previousStrict = process.env.VESSEL_STRICT_PREFIX;
-  process.env.VESSEL_STRICT_PREFIX = '1';
-  try {
-    stack.provider.setResponse('STRICT', { content: 'ok', finish_reason: 'stop' });
-    let strictError: unknown;
-    try {
-      await stack.eu.run('STRICT check', sessionId);
-    } catch (error) {
-      strictError = error;
-    }
-    check(
-      'h. 严格模式下带 dead 改写的请求不抛 PromptPrefixChangedError',
-      strictError === undefined,
-      strictError instanceof Error ? strictError.name : String(strictError),
-    );
-  } finally {
-    if (previousStrict === undefined) delete process.env.VESSEL_STRICT_PREFIX;
-    else process.env.VESSEL_STRICT_PREFIX = previousStrict;
-  }
-
-  // f. 端口一致性：pii-expired 不被当成正常句柄解引用
-  const passthrough = (() => {
-    try {
-      return vault.substituteDeep({ q: '«pii-expired:' + handles[0]!.slice(5, 13) + '»' }, sessionId);
-    } catch (error) {
-      return { error };
-    }
-  })();
-  eq('f. pii-expired 标记不会被替换回真值（原样透传）', passthrough, {
-    q: '«pii-expired:' + handles[0]!.slice(5, 13) + '»',
-  });
-
-  // e. 兜底路径：工具参数里仍出现 dead handle ⇒ 仍然硬报错
-  stack.provider.setResponse('USE', toolCallResponse('echo_args', { q: handles[0]! }, 'call-use'));
+  // 工具侧仍然硬报错：死句柄不许静默外发
+  stack.provider.setResponse('USE', toolCallResponse('echo_args', { q: handle }, 'call-use'));
   await stack.eu.run('USE the handle', sessionId);
-  const toolResult = (await storedMessages(stack.store, sessionId))
+  const finalStored = await storedMessages(stack.store, sessionId);
+  const toolResult = finalStored
     .filter((message) => message.role === 'tool')
-    .map((message) => (message.content ?? ''))
-    .join(String.fromCharCode(10));
-  check('e. dead 句柄进工具参数 ⇒ 仍然报错（兜底没被废掉）', toolResult.includes('PII handle cannot be resolved'));
-  check('e. 失败原因照旧区分（expired_handle）', toolResult.includes('expired_handle'));
-  check('e. 没有把占位符原样当结果外发', !toolResult.includes('RESOLVED:'));
+    .map((message) => message.content ?? '')
+    .join('\n');
+  check('死句柄进工具参数 ⇒ 工具调用失败', toolResult.includes('PII handle cannot be resolved'));
+  check('工具失败文本区分原因（expired_handle）', toolResult.includes('expired_handle'));
+  check('没有把占位符原样当结果外发', !toolResult.includes('RESOLVED:'));
 }
 
 // ---------------------------------------------------------------------------

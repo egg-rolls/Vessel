@@ -54,6 +54,9 @@ export const PII_MAX_SESSIONS = 512;
 /** 已过期句柄的墓碑上限（只记 id + 类别，用于把「过期」和「未知」分开报错）。 */
 export const PII_MAX_TOMBSTONES = 1024;
 
+/** 已宣告失效的句柄 id 记忆上限（append-only 追加 notice 的去重集合）。 */
+export const PII_MAX_ANNOUNCED_HANDLES = 1024;
+
 /**
  * 句柄解不开的三种原因（渲染成三档不同的下一步，见 `rules.ts` 的错误类与
  * `runtime/error-envelope.ts`）：
@@ -113,6 +116,8 @@ interface SessionState {
   byValue: Map<string, Entry>;
   /** key = 句柄 id：一个占位符只对一个值 */
   byHandle: Map<string, Entry>;
+  /** 已宣告过期/失效的句柄（去重：同一批只追加一条 notice） */
+  announced: Set<string>;
   /** 已过期句柄墓碑：id → 类别（无值） */
   expired: Map<string, PiiCategory>;
   audit: Map<PiiCategory, { count: number; first_seen_at: number }>;
@@ -382,6 +387,30 @@ export class PiiVault {
     return true;
   }
 
+  /**
+   * 领取「这一批失效引用还没宣告过」的句柄 id 集合。
+   *
+   * append-only 下宣告失效**只能追加一条 notice**：所以必须去重 —— 同一批 id 只宣告
+   * 一次，之后每轮请求不会重复追加。返回值就是本次该写进 notice 的 id（无值）。
+   */
+  claimUnannouncedDeadHandles(sessionId: string, handleIds: readonly string[]): string[] {
+    if (handleIds.length === 0) return [];
+    const state = this.ensureSession(sessionId);
+    const fresh: string[] = [];
+    for (const id of handleIds) {
+      if (state.announced.has(id)) continue;
+      state.announced.add(id);
+      fresh.push(id);
+    }
+    // 去重集合也要有上限：否则一个长会话能把它撑大
+    while (state.announced.size > PII_MAX_ANNOUNCED_HANDLES) {
+      const oldest = state.announced.values().next();
+      if (oldest.done === true) break;
+      state.announced.delete(oldest.value);
+    }
+    return fresh;
+  }
+
   /** 审计快照（不含值）。传 sessionId 只取该 session。 */
   audit(sessionId?: string): PiiAuditEntry[] {
     const sessions = sessionId === undefined ? [...this.sessions.keys()] : [sessionId];
@@ -457,6 +486,7 @@ export class PiiVault {
         byValue: new Map(),
         byHandle: new Map(),
         expired: new Map(),
+        announced: new Set(),
         audit: new Map(),
         degraded: 0,
         lastActivityAt: this.now(),
