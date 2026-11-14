@@ -698,8 +698,9 @@ const QUEUED_ICON_VEIL = 'bg-white/10 enabled:hover:bg-white/20';
  * 那一行挤到换行。底色不用形状层的不透明灰，见 `QUEUED_ICON_VEIL`。
  *
  * **谁有写操作由调用方决定**（本组件只负责「给了就画」）：human 源给三颗（收回编辑 +
- * 取消排队 + 我已处理），agent 源一颗都不给 —— 它的回收语义是 unhold 留档（消息回到可读
- * unread，模型仍能 read），把它画成一个「撤掉」的按钮就是在伪装删除。
+ * 取消排队 + 我已处理），agent 源给一颗「取消 hold 留档」（`onUnhold`）—— recall 对它
+ * 不是删除而是 unhold 留档（消息退回可读 unread，模型仍能 read），所以那颗键说的是
+ * 「留档」而不是「撤掉」。
  *
  * **身份在卡内**：卡头 `meta` 槽写「这条是谁给的」（`human:` / `<agent 名>:`），
  * 正文 `summary` 仍只放那句话 —— 读起来是「等待中　human: 说的话」。以前身份是卡外左侧
@@ -716,6 +717,7 @@ export function QueuedNotice({
   onCancel,
   onEdit,
   onClaim,
+  onUnhold,
   label,
   identity,
   defaultOpen = false,
@@ -724,7 +726,7 @@ export function QueuedNotice({
   /**
    * 取消：按**条目 id**（不是 run id —— 待处理条目没有 run）。
    *
-   * 缺省 = 不给「取消排队」（agent 源：recall 对它只是 unhold 留档，画成删除就是骗人）。
+   * 缺省 = 不给「取消排队」（只有 human 源的 recall 是真删，agent 源走 `onUnhold`）。
    */
   onCancel?: (id: string) => void;
   /**
@@ -742,6 +744,16 @@ export function QueuedNotice({
    * 只有 human 源给：agent 源的条目是别人发给这具 body 的输入，人没有「代它处理」的立场。
    */
   onClaim?: (id: string) => void;
+  /**
+   * 取消 hold / 留档：按**条目 id**（`agents.recall` 对非 human 源的那个分支）。
+   *
+   * 缺省 = 不给这颗键。语义与「取消排队」**不是**一回事：消息不会被删，而是从 `held`
+   * 退回 `unread` —— 条带上的卡还在（只是不再被 hold 住、不再随这次投递），模型仍能
+   * read 到它。所以图形用「归档」而不是「撤回」，名字也必须完整说出来。
+   *
+   * 只有 `held` 的条目才该给（见 `canUnhold`）：已经是 unread 的条目本来就是留档态。
+   */
+  onUnhold?: (id: string) => void;
   /**
    * 卡头文案；缺省「等待中」（`chat.pending.waiting`）。
    *
@@ -775,7 +787,12 @@ export function QueuedNotice({
   // 只有**上方**间距（`pt-1.5`）：横向内衬由展开体那条 `.notice-block > .event-block-body`
   // 统一给（10px），这里再补 px 就是双重内衬，键会比正文多缩 10px。
   let controls: ReactNode = null;
-  if (onCancel !== undefined || onEdit !== undefined || onClaim !== undefined) {
+  if (
+    onCancel !== undefined ||
+    onEdit !== undefined ||
+    onClaim !== undefined ||
+    onUnhold !== undefined
+  ) {
     controls = (
       <div className="flex items-center gap-1.5 pt-1.5">
         {onEdit !== undefined && (
@@ -818,6 +835,20 @@ export function QueuedNotice({
                 展开 / 收起，用在这里会被读成「展开」。所以这一颗走专门的 `check`
                 （「已处理」最直接的图形），不是临时找一个近似的。 */}
             <Icon name="check" size={14} />
+          </Button>
+        )}
+        {onUnhold !== undefined && (
+          <Button
+            variant="plain"
+            className={controlClass}
+            // 不是删除：按下去消息退回 unread、留在条带上给模型 read。图标键没有文字态，
+            // 所以这层意思只能由 aria-label / title 说全。
+            aria-label={busy ? t('chat.pending.unholding') : t('chat.pending.unhold')}
+            title={busy ? t('chat.pending.unholding') : t('chat.pending.unhold')}
+            disabled={busy}
+            onClick={() => onUnhold(item.id)}
+          >
+            <Icon name="archive" size={14} />
           </Button>
         )}
       </div>

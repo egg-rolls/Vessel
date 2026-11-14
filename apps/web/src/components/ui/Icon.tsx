@@ -13,7 +13,8 @@ export type IconName =
   | 'retract'
   | 'chevron'
   | 'attach'
-  | 'check';
+  | 'check'
+  | 'archive';
 
 /** 纸飞机：`send`（输入框发送键）与 `resend`（重发消息）共用同一支笔形。 */
 const PLANE = (
@@ -77,6 +78,20 @@ const PATHS: Record<IconName, ReactNode> = {
    * 「我已处理」会被读成「展开」——而这个动作不可逆，图形语义错了代价比多一条 path 高。
    */
   check: <path d="M3 8.5 6.25 11.75 13 4.75" />,
+  /**
+   * 归档盒：「取消 hold / 留档」那一颗（条带上 agent 源的卡）。
+   *
+   * 为什么不复用 `retract`（取消排队那颗）：那个的语义是「撤回来、别发了」，而 recall 对
+   * 非 human 源是 unhold —— 消息不删、退回可读 unread，只是不再 hold 住。图形选「入档」，
+   * 与「撤回」区分开，名字（`chat.pending.unhold`）说的是同一件事。
+   */
+  archive: (
+    <>
+      <rect x="2" y="2.75" width="12" height="3" rx="0.75" />
+      <path d="M3.25 5.75v6.25a1.25 1.25 0 0 0 1.25 1.25h7a1.25 1.25 0 0 0 1.25-1.25V5.75" />
+      <path d="M6.5 8.75h3" />
+    </>
+  ),
 };
 
 export function Icon({

@@ -131,7 +131,10 @@ class 与同一个阈值，不要给某一页复制第二份。
 1. **会话**：Composer 槽位的 `AskCard`（原同步等待语义不变），会话栏头部「待批」按钮带当前会话计数；
 2. **团队**：`TeamPendingBar`（成员会话的请求）；
 3. **本页（`#/pending`，「待批」）**：所有来源的总汇集，按 agent（无则会话、再退 run）聚簇，
-   簇内**每题独立作答、独立勾选**：「回复」= 一次用户动作，只投**已勾选且已作答**的题
+   簇内**每题独立作答、独立勾选**：**已答（已落定）的题按请求收进一个默认折叠的「已答 (n)」
+   分组，未答置顶** —— 分组判据就是载荷剔除用的同一个 `settled`（`askRowGroups`），
+   分组只改变「一眼看到多少未答」，已答行的输入照旧锁住；团队面（`TeamPendingBar` 的
+   `AskCard`）同一条分组规则。「回复」= 一次用户动作，只投**已勾选且已作答**的题
    （作答会自动勾上；勾了没答的题会被跳过并提示）。同一请求里的多题合成一次 `ask.respond`，
    跨请求各自一次但同批带同一个 `batch_id`，gateway 合并成**一条** user 消息 + **一次** run
    （见 `domains/pending/usePendingBatch.ts` 与 `docs/architecture/tools.md`）。
@@ -365,6 +368,10 @@ Hub 这四档与网关连接点分开：新增的 `accent` / `amber` 只给 Hub 
   不为收件箱另建面板。若将来展示摘要，held 必须走 `pending`，不能用 `unread` 代替；
   通知事件只带 `delivery` / `message_id` / `from` / `to` / `conversation_id` / `wake`，
   不带正文。
+- **解除 hold（0.53）**：聊天条带上的 agent 源（非 human 源）held 条目有一颗「取消 hold /
+  留档」（图形是归档盒）。它调**既有** `agents.recall` —— 对非 human 源 recall 不是删除而是
+  `unhold`：消息退回可读 `unread`（模型仍能 read），只是不再 hold 住；因此成功后那条
+  **留在条带上**，前端只就地翻状态（失败按 id 翻回 `held` + toast + 重读对齐），不把卡抹掉。
 
 ## 硬规则
 

@@ -21,6 +21,15 @@
     题序位置，已答一律 `skipped`，归不到的丢弃，记录里不存在没有题号的答案）。
   - **ask 已答 = 立刻上锁**：提交动作发出即本端记「已答」（4s TTL 自愈）+ 载荷只交未落定行；
     **浏览位跨刷新保留**（`askCursor.v1`，记题号不记下标）。
+  - **「已答」分组（待批页 / 团队页）**：已落定的题不再混在未答里 —— 每请求一个默认折叠的
+    「已答 (n)」分组，未答置顶；分组判据就是载荷剔除用的同一个 `settled`
+    （`askRowGroups` / `askSettledRows`，不另造一套），分组去掉的只是「一眼看到多少」，
+    已答行的输入照旧锁住；`check:ask-groups` 钉住「已答归组 / 未答在前 / 幂等 / 与载荷同口径」。
+  - **条带 agent 源的「取消 hold / 留档」**：agent 源被 hold 住的消息原来一个写入口都没有。
+    现在 `canUnhold`（非 human 源 + held，与服务端 recall 的 `source === human` 分档同一判据）
+    给一颗「归档」键，调既有 `agents.recall`（**没加 RPC**）；本地乐观翻成 unread、
+    服务端没受理 / 抛错两条路径都按 id 翻回 held + toast + 重读对齐 —— 成功**不**把卡抹掉
+    （unhold 不是删除）；`check:inbox-unhold` 钉住判据 / RPC 名 / 双分支回滚 / 不伪装删除。
   - **会话 ↔ agent 补成双向**（additive）：`sessions.list` 每项 / `sessions.get` 结果带
     `agent: { id, name, state, presence, primary }`；`primary=false` = 已退役 body 的会话。
     前端据此不再反查三份名单（`SessionList` 四级回退：节点地址 > 会话自带归属 > roster 反查 > primary 徽标），
@@ -63,7 +72,8 @@
     共用一个幂等、续编的盖章函数），认领改成「身份优先、内容兜底」；命中同身份时 live 让位且
     **内容不同也照让**（屏上以落盘为准）。触发源是 Output guardrail 的 PII 打码改写了落盘正文
     （本机 652 run 中 7 个命中 ⇒ 所以是「有概率」）。
-  - **待处理条带**：放开 agent 源（只展示、不给写操作 —— agent 源取消是 unhold 留档）；
+  - **待处理条带**：放开 agent 源（只展示；0.53 起给一颗「取消 hold / 留档」，
+    `canUnhold` = 非 human 源 + held，unhold 不退条带）；
     human 源操作改图标键，新增「收回来编辑」（peek 全文 → 写回草稿 → 再真删）。
   - **`vessel prune`**：默认 dry-run、`--yes` 才真删、真删走 `data-lock` exclusive（锁被占
     即拒绝，零删除）。三类桶互斥（trace / 终态 runs / 老且非活跃 sessions —— 锁、租约、
@@ -162,7 +172,7 @@
 - **0.52 待办（0.51 未做完的）**：**B′ rotate 收口解耦**（下一单首选，见下）；TUI 答 async ask；
   工具卡交棒（需历史侧 `duration_ms`）；位置认领（前置已具备：消息身份 `run_id` + `run_segment`
   已落盘）；`sessions.search` 读侧投影缓存；用量 43% unpriced；`guardrail PII 误伤`（13 位时间戳
-  被当手机号打码，且在改写落盘正文）；条带 agent 源的「unhold 留档」按钮；
+  被当手机号打码，且在改写落盘正文）；
   `claimStats.rewrittenSegments` 接 diagnostics；未覆盖的历史会话 → 工具卡描述需
   `sessions.get` 透出 `agent_id`；`restart` 类环境信息在词表里留位但**仍无生产者**。
 - **rotate 交棒缺口（C 已做，B′ 待排）**：self-rotate 那一轮被当成「迟到的旧轮」做 epoch

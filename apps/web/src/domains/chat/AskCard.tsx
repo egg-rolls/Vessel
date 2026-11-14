@@ -2,11 +2,17 @@ import { Badge, Button, cn, Input } from '../../components/ui';
 import { askQuestionId, askQuestionSettled } from '../../gateway/ask-answers';
 import type { AskUserAnswer, AskUserRequest } from '../../gateway/types';
 import { t } from '../../i18n';
+import { AnsweredGroup } from '../pending/AnsweredGroup';
 import { AskOptionChips } from '../pending/AskOptionChips';
 import { askAnsweredMarksOf, markAskAnswered } from '../pending/ask-answered-marks';
 import { useAskDrafts, useSetAskDraft } from '../pending/ask-draft-store';
 import { toggleAskOption } from '../pending/ask-selection';
-import { askPendingAnswers, askPlanRows, askRowsComplete } from '../pending/ask-submit-plan';
+import {
+  askPendingAnswers,
+  askPlanRows,
+  askRowGroups,
+  askRowsComplete,
+} from '../pending/ask-submit-plan';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -30,7 +36,10 @@ function isAnswered(draft: AskDraft): boolean {
  * - 0.18 起提问没有自动超时（不再显示倒计时），提交按钮常驻；
  * - 提交走现有 `ask.respond`，不新增 RPC；
  * - 0.51：草稿按 `requestId + 题号` 走 `ask-draft-store`（团队待处理条也用这张卡），
- *   切页 / 刷新回来勾选与自定义答复都还在 —— 与 Composer 槽位 / 待批页同一份草稿。
+ *   切页 / 刷新回来勾选与自定义答复都还在 —— 与 Composer 槽位 / 待批页同一份草稿；
+ * - 0.52：已落定的题收进一个默认折叠的「已答」分组（标题带计数），未答置顶；
+ *   分组成员来自 `askRowGroups(...).answered`（与载荷剔除同一个 `settled`），
+ *   分组里的行照旧锁输入。
  */
 export function AskCard({
   request,
@@ -61,8 +70,46 @@ export function AskCard({
   // 进载荷 —— 分批提交时它会带着第一批的答案再发一遍，而只要那一行缺 question_id，
   // 服务端就只能把它当成一条独立的新答案写进记录。
   const rows = askPlanRows([request], drafts);
+  const groups = askRowGroups(rows);
   const answers: AskUserAnswer[] = askPendingAnswers(rows);
   const complete = answers.length > 0 && askRowsComplete(rows);
+
+  /** 一行的渲染：未答摞与已答摞共用同一份（免得两处字段漂移）。 */
+  const renderRow = (row: (typeof rows)[number]) => (
+    <div
+      className={cn('flex flex-col gap-2 rounded-md bg-sunken p-3.5', row.settled && 'opacity-70')}
+      key={`${request.requestId}-${row.question.header}-${row.question.question}`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="font-mono text-2xs font-semibold uppercase tracking-widest text-accent-ink">
+          {row.question.header}
+        </div>
+        {row.settled && <Badge tone="neutral">{t('pending.item.answered')}</Badge>}
+      </div>
+      <div className="leading-relaxed whitespace-pre-wrap wrap-anywhere">{row.question.question}</div>
+      <AskOptionChips
+        options={row.question.options ?? []}
+        selected={row.draft.selected}
+        multi={row.question.multi_select === true}
+        disabled={busy || row.settled}
+        name={`ask-${request.requestId}-${row.index}`}
+        onToggle={(option) => toggle(row.index, option, row.question.multi_select === true)}
+      />
+      <Input
+        value={row.draft.custom}
+        disabled={busy || row.settled}
+        onChange={(event) => {
+          const value = event.target.value;
+          setDraft(request.requestId, row.index, (draft) => ({ ...draft, custom: value }));
+        }}
+        placeholder={
+          row.question.options
+            ? t('ask.customPlaceholder.options')
+            : t('ask.customPlaceholder.open')
+        }
+      />
+    </div>
+  );
 
   return (
     <fieldset className="ask-card" aria-labelledby={titleId} data-request-id={request.requestId}>
@@ -82,46 +129,10 @@ export function AskCard({
       </div>
 
       <div className="ask-list flex flex-col gap-3 pr-1">
-        {rows.map((row) => (
-          <div
-            className={cn(
-              'flex flex-col gap-2 rounded-md bg-sunken p-3.5',
-              row.settled && 'opacity-70',
-            )}
-            key={`${request.requestId}-${row.question.header}-${row.question.question}`}
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="font-mono text-2xs font-semibold uppercase tracking-widest text-accent-ink">
-                {row.question.header}
-              </div>
-              {row.settled && <Badge tone="neutral">{t('pending.item.answered')}</Badge>}
-            </div>
-            <div className="leading-relaxed whitespace-pre-wrap wrap-anywhere">
-              {row.question.question}
-            </div>
-            <AskOptionChips
-              options={row.question.options ?? []}
-              selected={row.draft.selected}
-              multi={row.question.multi_select === true}
-              disabled={busy || row.settled}
-              name={`ask-${request.requestId}-${row.index}`}
-              onToggle={(option) => toggle(row.index, option, row.question.multi_select === true)}
-            />
-            <Input
-              value={row.draft.custom}
-              disabled={busy || row.settled}
-              onChange={(event) => {
-                const value = event.target.value;
-                setDraft(request.requestId, row.index, (draft) => ({ ...draft, custom: value }));
-              }}
-              placeholder={
-                row.question.options
-                  ? t('ask.customPlaceholder.options')
-                  : t('ask.customPlaceholder.open')
-              }
-            />
-          </div>
-        ))}
+        {groups.open.map(renderRow)}
+        <AnsweredGroup count={groups.answered.length}>
+          {groups.answered.map(renderRow)}
+        </AnsweredGroup>
       </div>
 
       <div className="ask-card-actions mt-2 flex justify-end gap-2">
