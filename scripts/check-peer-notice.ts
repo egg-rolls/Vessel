@@ -173,6 +173,11 @@ interface Harness {
 interface HarnessOptions {
   /** 缺省带假事件日志；`eventLog: false` 用来测「端口缺失也不炸」 */
   eventLog?: boolean;
+  /**
+   * 0.53：父 session 重解析口（模拟装配层用 `currentBindingSession` 实现的那条链接）。
+   * 缺省 = 旧装配（没有这个口），用来测向后兼容。
+   */
+  resolveParentSession?: (memberId: string) => string | undefined;
 }
 
 function harness(options: HarnessOptions = {}): Harness {
@@ -184,7 +189,14 @@ function harness(options: HarnessOptions = {}): Harness {
     bus,
     ...(options.eventLog === false ? {} : { eventLog: fakeEventLog(logged) }),
   });
-  const router = createPeerNoticeRouter({ bus, events: stream, timers: clock.timers });
+  const router = createPeerNoticeRouter({
+    bus,
+    events: stream,
+    timers: clock.timers,
+    ...(options.resolveParentSession === undefined
+      ? {}
+      : { resolveParentSession: options.resolveParentSession }),
+  });
   return {
     bus,
     stream,
@@ -200,8 +212,12 @@ function harness(options: HarnessOptions = {}): Harness {
   };
 }
 
-function stopChange(name: string, kind: PeerStopChange['kind']): PeerStopChange {
-  return { parent_session_id: 'sess-parent', agent_id: `agent-${name}`, name, kind };
+function stopChange(
+  name: string,
+  kind: PeerStopChange['kind'],
+  parentSessionId = 'sess-parent',
+): PeerStopChange {
+  return { parent_session_id: parentSessionId, agent_id: `agent-${name}`, name, kind };
 }
 
 function lastText(ctx: HookContext): string {
@@ -382,6 +398,108 @@ async function caseDegrades(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// F rotate 同步链接（0.53）：父在 report 后、flush 前 rotate → 通知要投给新 body
+// ---------------------------------------------------------------------------
+
+/**
+ * ⑥ 窗口内父级 rotate：`parent_session_id` 指向的是旧 body，真正投递那一刻必须重解析到
+ * 新 body 的 session —— 否则新 body 永远拉不到这条 notice（等于丢给旧 body）。
+ */
+async function caseRotateBeforeFlush(): Promise<void> {
+  // 父级当前 session 的假表（装配层那条链接：memberId → 父级现在的 primary body）。
+  const parents = new Map<string, string | undefined>();
+  const h = harness({ resolveParentSession: (memberId) => parents.get(memberId) });
+  parents.set('agent-tr-threshold', 'sess-parent');
+  h.router.report(stopChange('tr-threshold', 'completed'));
+  parents.set('agent-tr-threshold', 'sess-parent-v2'); // 窗口内 rotate：body 换新
+  h.clock.tick(PEER_NOTICE_WINDOW_MS);
+  h.router.stop();
+
+  const oldCtx = await h.inject('sess-parent', 'run-old');
+  expect(lastText(oldCtx) === '', '⑥ rotate 后旧 body 的下一轮不该再拿到这条 notice');
+  const newCtx = await h.inject('sess-parent-v2', 'run-new');
+  expect(lastText(newCtx).includes('tr-threshold'), '⑥ 通知应落在 rotate 后的新 session');
+  const entry = h.logged.at(-1);
+  expect(entry?.session_id === 'sess-parent-v2', '⑥ 事件信封应带新 body 的 session id');
+  expect(entry?.run_id === 'run-new', '⑥ 事件应记在新 body 这一轮上');
+  expect(h.router.pendingCount() === 0, '⑥ 投到新 session 后缓冲区应清空');
+}
+
+/** ⑦ 窗口内 rotate 且新 body 正在跑：判忙必须看**新** session，延后到它收口后的下一轮。 */
+async function caseRotateWhileNewSessionRunning(): Promise<void> {
+  const parents = new Map<string, string | undefined>();
+  const h = harness({ resolveParentSession: (memberId) => parents.get(memberId) });
+  parents.set('agent-docs-tidy', 'sess-parent');
+  h.router.report(stopChange('docs-tidy', 'completed'));
+  parents.set('agent-docs-tidy', 'sess-parent-v2'); // 窗口内 rotate
+  h.stream.runLifecycle('run.started', 'sess-parent-v2'); // 新 body 已经在跑
+  h.clock.tick(PEER_NOTICE_WINDOW_MS * 5);
+
+  // 旧 session 空闲 ≠ 新 body 空闲：按旧 session 判忙就会把 notice 塞进正在跑的这轮。
+  expect(h.router.pendingCount() === 1, '⑦ 新 body 正忙时通知应留在缓冲区（pendingCount=1）');
+  const busyCtx = await h.inject('sess-parent-v2', 'run-busy');
+  expect(busyCtx.messages?.length === 0, '⑦ 新 body 忙的这一轮不该被塞 notice');
+
+  h.stream.runLifecycle('run.completed', 'sess-parent-v2');
+  h.clock.tick(PEER_NOTICE_WINDOW_MS);
+  const nextCtx = await h.inject('sess-parent-v2', 'run-next');
+  expect(lastText(nextCtx).includes('docs-tidy'), '⑦ 新 body 收口后的下一轮应看到 docs-tidy');
+  expect(h.router.pendingCount() === 0, '⑦ 补发后缓冲区应清空（没丢在 rotate 窗口里）');
+  h.router.stop();
+}
+
+/** ⑧ 没有注入解析口（旧装配）：退回报告时刻的 session，行为不变、不丢通知。 */
+async function caseNoResolverFallback(): Promise<void> {
+  const h = harness(); // 旧装配：没有 resolveParentSession
+  h.router.report(stopChange('legacy-stop', 'failed'));
+  h.clock.tick(PEER_NOTICE_WINDOW_MS);
+  h.router.stop();
+
+  const ctx = await h.inject('sess-parent', 'run-1');
+  expect(lastText(ctx).includes('legacy-stop'), '⑧ 没有 resolver 时退回报告时刻的 session（不丢）');
+  expect(h.logged.length === 1, '⑧ 没有 resolver 时仍落一条注入事件');
+  expect(h.logged.at(-1)?.session_id === 'sess-parent', '⑧ 退回时信封仍是报告时刻的 session id');
+}
+
+/** ⑨ 解析不到（成员已关 / 空串 / 抛错）：一律退回旧 session，不丢、不炸。 */
+async function caseResolvedGoneFallback(): Promise<void> {
+  // 成员已关：记录不在，解析口返回 undefined。
+  const closed = harness({ resolveParentSession: () => undefined });
+  closed.router.report(stopChange('gone-peer', 'completed'));
+  closed.clock.tick(PEER_NOTICE_WINDOW_MS);
+  closed.router.stop();
+  const closedCtx = await closed.inject('sess-parent', 'run-1');
+  expect(
+    lastText(closedCtx).includes('gone-peer'),
+    '⑨ resolver 返回 undefined（成员已关）时应退回旧 session，不丢',
+  );
+  expect(closed.logged.length === 1, '⑨ resolver 返回 undefined 时仍落一条注入事件');
+
+  // 空串等价于解析不到（有的装配用空串表示「没有」）。
+  const blank = harness({ resolveParentSession: () => '' });
+  blank.router.report(stopChange('blank-peer', 'completed'));
+  blank.clock.tick(PEER_NOTICE_WINDOW_MS);
+  blank.router.stop();
+  const blankCtx = await blank.inject('sess-parent', 'run-1');
+  expect(
+    lastText(blankCtx).includes('blank-peer'),
+    '⑨ resolver 返回空串时应退回旧 session（不丢）',
+  );
+
+  // 解析口抛错：定时器里的异常不许冒出去，通知也不许丢。
+  const throwing = harness({
+    resolveParentSession: () => {
+      throw new Error('registry gone');
+    },
+  });
+  throwing.router.report(stopChange('boom-peer', 'completed'));
+  throwing.clock.tick(PEER_NOTICE_WINDOW_MS);
+  throwing.router.stop();
+  const boomCtx = await throwing.inject('sess-parent', 'run-1');
+  expect(lastText(boomCtx).includes('boom-peer'), '⑨ resolver 抛错时应退回旧 session，不炸不丢');
+}
+
+// ---------------------------------------------------------------------------
 // E 生产端源码契约：peer 成员必须能被报上来，且这条链接不落盘
 // ---------------------------------------------------------------------------
 
@@ -424,6 +542,10 @@ await caseBusyParentDefers();
 await caseMerged();
 await caseOnePerRound();
 await caseDegrades();
+await caseRotateBeforeFlush();
+await caseRotateWhileNewSessionRunning();
+await caseNoResolverFallback();
+await caseResolvedGoneFallback();
 await caseProducerSource();
 
 if (failures.length === 0) {
