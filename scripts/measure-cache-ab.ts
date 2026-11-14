@@ -33,14 +33,14 @@
  *   bun scripts/measure-cache-ab.ts --pricing='{"input":0.27,"cache_read":0.027,"cache_write":0.3375}'
  *   bun scripts/measure-cache-ab.ts --recall=0.1 --json=out.json
  */
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  estimateMessageTokens,
   estimateMessagesTokens,
+  estimateMessageTokens,
   planClearedToolResults,
   withClearedToolResults,
-} from '../packages/core/src/context/context-manager.ts';
+} from '../packages/core/src/context/context-manager';
 
 /** 每 1M token 单价（计价货币）。 */
 interface PriceTable {
@@ -55,8 +55,14 @@ interface PriceTable {
  * 模型 volcengine/deepseek-flash）。仓库不内置厂商价（src/usage-pricing.ts:59-64 说明
  * 价格来自用户配置），所以这份默认值只能当 **假设**：真机请用 --pricing 换成你的账单。
  */
-const DEFAULT_PRICE: PriceTable = { input: 0.27, cache_read: 0.027, cache_write: 0.3375, output: 1.1 };
-const DEFAULT_PRICE_SOURCE = '假设(docs/operations/CONFIG.md:230-234 示例价 volcengine/deepseek-flash)';
+const DEFAULT_PRICE: PriceTable = {
+  input: 0.27,
+  cache_read: 0.027,
+  cache_write: 0.3375,
+  output: 1.1,
+};
+const DEFAULT_PRICE_SOURCE =
+  '假设(docs/operations/CONFIG.md:230-234 示例价 volcengine/deepseek-flash)';
 
 interface RequestUsage {
   /** 该请求发出的消息条数（实测，llm.request.message_count） */
@@ -186,7 +192,11 @@ function toolFamily(name: string): string {
  *  - 多工具大输出类：shell 家族（bash 等）吃掉 ≥50%
  *  - 混合类：以上都不满足
  */
-function classifySession(familyTokens: Record<string, number>, toolCalls: number, requests: number): string {
+function classifySession(
+  familyTokens: Record<string, number>,
+  toolCalls: number,
+  requests: number,
+): string {
   const total = Object.values(familyTokens).reduce((a, b) => a + b, 0);
   if (total === 0 || toolCalls <= 2 || requests <= 4) return '团队短任务类';
   const share = (family: string): number => (familyTokens[family] ?? 0) / total;
@@ -297,16 +307,21 @@ function validateEstimator(dataDir: string): void {
     }
   }
   ratios.sort((a, b) => a - b);
-  const q = (p: number): number => ratios[Math.min(ratios.length - 1, Math.floor(ratios.length * p))];
+  const q = (p: number): number =>
+    ratios[Math.min(ratios.length - 1, Math.floor(ratios.length * p))] ?? 0;
   const within = ratios.filter((r) => r >= 0.95 && r <= 1.05).length;
   console.log('== 标定校验：运行时估算 token vs 供应商 prompt_tokens（同一 message_count 对齐）==');
   console.log('  事件文件数: ' + files.length + '，可比对请求数: ' + ratios.length);
-  console.log('  比值 p05=' + q(0.05).toFixed(4) + ' p50=' + q(0.5).toFixed(4) + ' p95=' + q(0.95).toFixed(4));
+  console.log(
+    '  比值 p05=' + q(0.05).toFixed(4) + ' p50=' + q(0.5).toFixed(4) + ' p95=' + q(0.95).toFixed(4),
+  );
   console.log('  ±5% 内占比: ' + ((within / Math.max(1, ratios.length)) * 100).toFixed(1) + '%');
   const median = q(0.5);
   console.log(
     '  判定: ' +
-      (median >= 0.95 && median <= 1.05 ? '通过 —— 运行时估算可直接折算成计费 token' : '不通过 —— 必须用供应商值'),
+      (median >= 0.95 && median <= 1.05
+        ? '通过 —— 运行时估算可直接折算成计费 token'
+        : '不通过 —— 必须用供应商值'),
   );
 }
 
@@ -362,10 +377,13 @@ function analyzeSession(
   let prevCleared: string[] = [];
 
   for (let r = 0; r < runList.length; r += 1) {
-    const runId = runList[r].runId;
+    const run = runList[r];
+    if (run === undefined) continue;
+    const runId = run.runId;
     const ann = anns.get(runId);
     if (!ann || ann.requests.length === 0) continue;
     const first = ann.requests[0];
+    if (first === undefined) continue; // noUncheckedIndexedAccess：空数组在上面已挡，这里给类型收窄
     // 段起点 = 第一条请求发出的那批消息（实测 message_count，比时间戳边界更准）
     const boundary = first.messageCount > 0 ? Math.min(first.messageCount, messages.length) : 0;
     const segStart = messages.slice(0, boundary) as any[];
@@ -387,10 +405,12 @@ function analyzeSession(
       indexById.set(String(message?.tool_call_id ?? ''), i);
     }
     for (let i = 0; i < segStart.length; i += 1) {
-      if (segStart[i] === projected[i]) continue;
-      const placeholderTokens = estimateMessageTokens(projected[i]);
+      const orig = segStart[i];
+      const proj = projected[i];
+      if (orig === undefined || proj === undefined || orig === proj) continue;
+      const placeholderTokens = estimateMessageTokens(proj);
       const annotated = delta.get(i + 1);
-      const sizeTokens = annotated === undefined ? estimateMessageTokens(segStart[i]) : annotated;
+      const sizeTokens = annotated === undefined ? estimateMessageTokens(orig) : annotated;
       if (annotated !== undefined) annotatedSizes += 1;
       clearedOrigTokens += sizeTokens;
       deltaTokens += Math.max(0, sizeTokens - placeholderTokens);
@@ -402,7 +422,8 @@ function analyzeSession(
       for (const id of newIds) {
         const index = indexById.get(id);
         if (index === undefined) continue;
-        if (invalidatePosition === null || index + 1 < invalidatePosition) invalidatePosition = index + 1;
+        if (invalidatePosition === null || index + 1 < invalidatePosition)
+          invalidatePosition = index + 1;
       }
     }
 
@@ -416,7 +437,8 @@ function analyzeSession(
       } else {
         // 注记缺失：用该请求的实测 prompt 与本段估算的比例回推（推算）
         const fallbackScale = segEst > 0 ? first.prompt / segEst : 1;
-        prefixTokens = estimateMessagesTokens(segStart.slice(0, invalidatePosition - 1)) * fallbackScale;
+        prefixTokens =
+          estimateMessagesTokens(segStart.slice(0, invalidatePosition - 1)) * fallbackScale;
         prefixSource = 'est';
       }
     }
@@ -574,11 +596,15 @@ function main(): void {
           ? 0
           : Math.max(0, Math.round(item.prompt_first - item.prefix_tokens));
       const suffixRatio =
-        item.invalidate_position === null ? null : Math.min(1, suffixTokens / Math.max(1, item.prompt_first));
+        item.invalidate_position === null
+          ? null
+          : Math.min(1, suffixTokens / Math.max(1, item.prompt_first));
       const benefit = (item.delta_tokens / 1e6) * price.cache_read * item.requests;
       const missMultiplier = perRequestInvalidation ? item.requests : 1;
-      const costMiss = ((suffixTokens * missMultiplier) / 1e6) * Math.max(0, price.input - price.cache_read);
-      const costWrite = ((suffixTokens * missMultiplier) / 1e6) * Math.max(0, price.cache_write - price.cache_read);
+      const costMiss =
+        ((suffixTokens * missMultiplier) / 1e6) * Math.max(0, price.input - price.cache_read);
+      const costWrite =
+        ((suffixTokens * missMultiplier) / 1e6) * Math.max(0, price.cache_write - price.cache_read);
       // 重取敏感性（假设）：被清的原始 token 里 recallRate 比例要重新读一遍工具。
       // 口径 A（下界）：只算一次重取的上行（按 input 价）。
       // 口径 B（更接近现实）：重取回来的结果还会留在本段后面的请求里，按 cache_read 再算一遍。
@@ -587,13 +613,18 @@ function main(): void {
       const costRecallFull =
         costRecall + ((recallTokens * Math.max(0, item.requests - 1)) / 1e6) * price.cache_read;
       const saveTokens = item.delta_tokens * item.requests;
-      const breakEven = saveTokens + suffixTokens > 0 ? suffixTokens / (saveTokens + suffixTokens) : 1;
+      const breakEven =
+        saveTokens + suffixTokens > 0 ? suffixTokens / (saveTokens + suffixTokens) : 1;
       // 注记与实际 prompt 的一致性自检：只在高信息量的段上判定（段起点 ≥20 条消息），
       // 偏差 >35% 视为「供应商侧静默截断」类异常，不进合计。
       const observedRatio =
-        item.view_annotated && item.view_annotated > 0 ? item.prompt_first / item.view_annotated : null;
+        item.view_annotated && item.view_annotated > 0
+          ? item.prompt_first / item.view_annotated
+          : null;
       const anomaly =
-        observedRatio !== null && item.seg_messages >= 20 && (observedRatio < 0.75 || observedRatio > 1.35);
+        observedRatio !== null &&
+        item.seg_messages >= 20 &&
+        (observedRatio < 0.75 || observedRatio > 1.35);
 
       const row: RunRow = {
         ...item,
@@ -634,7 +665,8 @@ function main(): void {
   }
 
   for (const agg of sessions) {
-    agg.suffix_ratio_weighted = agg.miss_tokens > 0 ? agg.suffix_ratio_weighted / agg.miss_tokens : 0;
+    agg.suffix_ratio_weighted =
+      agg.miss_tokens > 0 ? agg.suffix_ratio_weighted / agg.miss_tokens : 0;
   }
 
   // ---------------- 输出 ----------------
@@ -645,12 +677,33 @@ function main(): void {
 
   push('数据源: ' + dataDir + '（sessions/*.json + runs/*.json + events/<run_id>.jsonl）');
   push('单价: ' + DEFAULT_PRICE_SOURCE);
-  push('      input=' + price.input + ' cache_read=' + price.cache_read + ' cache_write=' + price.cache_write + '（每 1M token）');
-  push('保留窗口: keep = min(10 条, maxTokens×5%)，maxTokens=' + maxTokens + '（context-manager.ts retainedToolResultCount）');
-  push('段 = run；段起点 = 冻结占位集合的时刻（execution-unit.ts freezeSegmentClearedToolResults）');
-  push('segment 体积取运行时 context.changed 注记（实测标注），Δ 的每条原文优先取追加时的运行时增量');
+  push(
+    '      input=' +
+      price.input +
+      ' cache_read=' +
+      price.cache_read +
+      ' cache_write=' +
+      price.cache_write +
+      '（每 1M token）',
+  );
+  push(
+    '保留窗口: keep = min(10 条, maxTokens×5%)，maxTokens=' +
+      maxTokens +
+      '（context-manager.ts retainedToolResultCount）',
+  );
+  push(
+    '段 = run；段起点 = 冻结占位集合的时刻（execution-unit.ts freezeSegmentClearedToolResults）',
+  );
+  push(
+    'segment 体积取运行时 context.changed 注记（实测标注），Δ 的每条原文优先取追加时的运行时增量',
+  );
   push('重取敏感性 recallRate=' + recallRate + '（假设项，本机观测不到）');
-  push('失效次数口径: ' + (perRequestInvalidation ? '反事实——每条请求都失效（占位集合不冻结）' : '段起点一次（0.53 V1 冻结集合）'));
+  push(
+    '失效次数口径: ' +
+      (perRequestInvalidation
+        ? '反事实——每条请求都失效（占位集合不冻结）'
+        : '段起点一次（0.53 V1 冻结集合）'),
+  );
   push('');
 
   const header =
@@ -675,7 +728,9 @@ function main(): void {
   push(header);
   push('-'.repeat(header.length));
 
-  const shown = showAllRuns ? rows : rows.filter((row) => row.suffix_tokens > 0 || row.delta_tokens > 0);
+  const shown = showAllRuns
+    ? rows
+    : rows.filter((row) => row.suffix_tokens > 0 || row.delta_tokens > 0);
   for (const row of shown) {
     const hit = row.prompt_sum > 0 ? row.cache_read_sum / row.prompt_sum : null;
     push(
@@ -767,7 +822,8 @@ function main(): void {
       t.missTokens > 0
         ? list.reduce((sum, s) => sum + s.suffix_ratio_weighted * s.miss_tokens, 0) / t.missTokens
         : 0;
-    const rStar = t.saveTokens + t.missTokens > 0 ? t.missTokens / (t.saveTokens + t.missTokens) : 1;
+    const rStar =
+      t.saveTokens + t.missTokens > 0 ? t.missTokens / (t.saveTokens + t.missTokens) : 1;
     classes.push({ type, ...t, avg_suffix_ratio: avgSuffix, break_even_ratio: rStar });
     push(
       padRight(type, 14) +
@@ -786,7 +842,8 @@ function main(): void {
     );
   }
   const all = totalize(sessions);
-  const allRStar = all.saveTokens + all.missTokens > 0 ? all.missTokens / (all.saveTokens + all.missTokens) : 1;
+  const allRStar =
+    all.saveTokens + all.missTokens > 0 ? all.missTokens / (all.saveTokens + all.missTokens) : 1;
   push('-'.repeat(classHeader.length));
   push(
     padRight('合计', 14) +
@@ -796,7 +853,13 @@ function main(): void {
       pad(Math.round(all.delta), 13) +
       pad(Math.round(all.saveTokens), 13) +
       pad(Math.round(all.missTokens), 12) +
-      pad(pct(sessions.reduce((sum, s) => sum + s.suffix_ratio_weighted * s.miss_tokens, 0) / Math.max(1, all.missTokens)), 7) +
+      pad(
+        pct(
+          sessions.reduce((sum, s) => sum + s.suffix_ratio_weighted * s.miss_tokens, 0) /
+            Math.max(1, all.missTokens),
+        ),
+        7,
+      ) +
       pad(money(all.benefit), 11) +
       pad(money(all.costMiss), 11) +
       pad(money(all.netMiss), 11) +
@@ -807,12 +870,27 @@ function main(): void {
   // 价格无关的判据（最稳的结论形状）
   push('');
   push('== 价格无关的判据（只数 token，不依赖单价）==');
-  push('  节省 token（每个请求少上行、本来按 cache_read 计费的 token 累计）: ' + Math.round(all.saveTokens));
-  push('  失效 token（每次集合变动一次性重算的 token 累计）          : ' + Math.round(all.missTokens));
-  push('  临界比值 r* = 失效/(节省+失效) = ' + allRStar.toFixed(4) + '（p_read/p_in 低于它 placeholder 就赚）');
+  push(
+    '  节省 token（每个请求少上行、本来按 cache_read 计费的 token 累计）: ' +
+      Math.round(all.saveTokens),
+  );
+  push(
+    '  失效 token（每次集合变动一次性重算的 token 累计）          : ' + Math.round(all.missTokens),
+  );
+  push(
+    '  临界比值 r* = 失效/(节省+失效) = ' +
+      allRStar.toFixed(4) +
+      '（p_read/p_in 低于它 placeholder 就赚）',
+  );
   for (const ratio of [0.05, 0.1, 0.2, 0.5]) {
     const net = ((all.saveTokens * ratio - all.missTokens * (1 - ratio)) / 1e6) * price.input;
-    push('    p_read/p_in = ' + ratio.toFixed(2) + ' → 净收益 ' + money(net) + '（正 = placeholder 更便宜）');
+    push(
+      '    p_read/p_in = ' +
+        ratio.toFixed(2) +
+        ' → 净收益 ' +
+        money(net) +
+        '（正 = placeholder 更便宜）',
+    );
   }
 
   push('');
@@ -851,14 +929,46 @@ function main(): void {
   push('== 覆盖率与缺口 ==');
   push('- 进账会话数: ' + sessions.length);
   push('- 有会话但无 run 记录（跳过）: ' + sessionsWithoutRuns);
-  push('- 快照已含占位文本 / 已被自动压缩（基线不可逆，跳过）: ' + sessionsWithPlaceholder + ' / ' + sessionsWithAutoCompact);
+  push(
+    '- 快照已含占位文本 / 已被自动压缩（基线不可逆，跳过）: ' +
+      sessionsWithPlaceholder +
+      ' / ' +
+      sessionsWithAutoCompact,
+  );
   push('- 有 run 但无 events 逐请求 usage（未进账的 run）: ' + runsWithoutEvents);
   const anomalyRuns = rows.filter((row) => row.anomaly).length;
-  push('- 进账段数: ' + rows.length + '（其中 ' + anomalyRuns + ' 段判为异常并剔除：实测 prompt 与运行时注记差 >35%）');
+  push(
+    '- 进账段数: ' +
+      rows.length +
+      '（其中 ' +
+      anomalyRuns +
+      ' 段判为异常并剔除：实测 prompt 与运行时注记差 >35%）',
+  );
   push('- 进账请求数: ' + all.requests);
-  push('- 被清工具结果的 token 里走运行时注记的比例: ' + pct(sessions.reduce((s, x) => s + x.annotated_ratio * x.cleared_count, 0) / Math.max(1, sessions.reduce((s, x) => s + x.cleared_count, 0))));
-  push('- 重取率 recallRate=' + recallRate + ' 时总重取成本（假设，口径 A 一次重取 / 口径 B 还跟着跑完本段）: ' + money(all.costRecall) + ' / ' + money(all.costRecallFull));
-  push('- 净收益在扣掉重取成本后（A / B 口径）: ' + money(all.netMiss - all.costRecall) + ' / ' + money(all.netMiss - all.costRecallFull));
+  push(
+    '- 被清工具结果的 token 里走运行时注记的比例: ' +
+      pct(
+        sessions.reduce((s, x) => s + x.annotated_ratio * x.cleared_count, 0) /
+          Math.max(
+            1,
+            sessions.reduce((s, x) => s + x.cleared_count, 0),
+          ),
+      ),
+  );
+  push(
+    '- 重取率 recallRate=' +
+      recallRate +
+      ' 时总重取成本（假设，口径 A 一次重取 / 口径 B 还跟着跑完本段）: ' +
+      money(all.costRecall) +
+      ' / ' +
+      money(all.costRecallFull),
+  );
+  push(
+    '- 净收益在扣掉重取成本后（A / B 口径）: ' +
+      money(all.netMiss - all.costRecall) +
+      ' / ' +
+      money(all.netMiss - all.costRecallFull),
+  );
 
   const text = out.join('\n');
   console.log(text);
@@ -883,4 +993,3 @@ function main(): void {
 }
 
 main();
-
