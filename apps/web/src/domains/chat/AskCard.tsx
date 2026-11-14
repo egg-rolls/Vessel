@@ -86,7 +86,9 @@ export function AskCard({
         </div>
         {row.settled && <Badge tone="neutral">{t('pending.item.answered')}</Badge>}
       </div>
-      <div className="leading-relaxed whitespace-pre-wrap wrap-anywhere">{row.question.question}</div>
+      <div className="leading-relaxed whitespace-pre-wrap wrap-anywhere">
+        {row.question.question}
+      </div>
       <AskOptionChips
         options={row.question.options ?? []}
         selected={row.draft.selected}

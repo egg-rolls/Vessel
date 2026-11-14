@@ -22,8 +22,13 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { askDraftKey, EMPTY_ASK_DRAFTS, type AskDrafts } from '../apps/web/src/domains/pending/ask-drafts';
 import {
+  type AskDrafts,
+  askDraftKey,
+  EMPTY_ASK_DRAFTS,
+} from '../apps/web/src/domains/pending/ask-drafts';
+import {
+  type AskPlanRow,
   askIncludedAnswers,
   askOpenRows,
   askPendingAnswers,
@@ -31,7 +36,6 @@ import {
   askRowGroups,
   askRowsOfGroups,
   askSettledRows,
-  type AskPlanRow,
 } from '../apps/web/src/domains/pending/ask-submit-plan';
 import type { AskUserQuestion } from '../apps/web/src/gateway/types';
 
@@ -67,9 +71,18 @@ expect(ids(rows.filter((row) => row.settled)) === 'q1', 'A: 服务端已答的 q
 const groups = askRowGroups(rows);
 expect(ids(groups.answered) === 'q1', 'A: settled 的行归入「已答」摞');
 expect(ids(groups.open) === 'q2,q3', 'A: 未答摞只剩 q2 / q3');
-expect(groups.open.length + groups.answered.length === rows.length, 'A: 两摞不重不漏（每行恰好落一摞）');
-expect(groups.answered.every((row) => row.settled), 'A: 「已答」摞里没有未落定的行');
-expect(groups.open.every((row) => !row.settled), 'A: 未答摞里没有已落定的行');
+expect(
+  groups.open.length + groups.answered.length === rows.length,
+  'A: 两摞不重不漏（每行恰好落一摞）',
+);
+expect(
+  groups.answered.every((row) => row.settled),
+  'A: 「已答」摞里没有未落定的行',
+);
+expect(
+  groups.open.every((row) => !row.settled),
+  'A: 未答摞里没有已落定的行',
+);
 
 // 分组与既有判定同一把尺子（不另造一套）。
 expect(
@@ -89,10 +102,7 @@ expect(firstAnsweredAt > lastOpenAt, 'A: 未答整体排在已答之前（置顶
 const regrouped = askRowGroups(flattened);
 expect(ids(regrouped.open) === ids(groups.open), 'B: 幂等 —— 未答摞同序');
 expect(ids(regrouped.answered) === ids(groups.answered), 'B: 幂等 —— 已答摞同序');
-expect(
-  ids(askRowsOfGroups(regrouped)) === ids(flattened),
-  'B: 幂等 —— 再拍平与原拍平一致',
-);
+expect(ids(askRowsOfGroups(regrouped)) === ids(flattened), 'B: 幂等 —— 再拍平与原拍平一致');
 expect(
   ids(askRowGroups(rows).open) === ids(groups.open) &&
     ids(askRowGroups(rows).answered) === ids(groups.answered),
@@ -102,10 +112,17 @@ expect(
 // 空输入 / 全未答 / 全已答的边界。
 const empty = askRowGroups([]);
 expect(empty.open.length === 0 && empty.answered.length === 0, 'B: 空输入分出两摞空');
-const allAnswered = askRowGroups(askPlanRows([{ ...request, answeredQuestionIds: ['q1', 'q2', 'q3'] }], EMPTY_ASK_DRAFTS));
+const allAnswered = askRowGroups(
+  askPlanRows([{ ...request, answeredQuestionIds: ['q1', 'q2', 'q3'] }], EMPTY_ASK_DRAFTS),
+);
 expect(allAnswered.open.length === 0 && allAnswered.answered.length === 3, 'B: 全已答时未答摞为空');
-const noneAnswered = askRowGroups(askPlanRows([{ ...request, answeredQuestionIds: [] }], EMPTY_ASK_DRAFTS));
-expect(noneAnswered.answered.length === 0 && noneAnswered.open.length === 3, 'B: 全未答时已答摞为空');
+const noneAnswered = askRowGroups(
+  askPlanRows([{ ...request, answeredQuestionIds: [] }], EMPTY_ASK_DRAFTS),
+);
+expect(
+  noneAnswered.answered.length === 0 && noneAnswered.open.length === 3,
+  'B: 全未答时已答摞为空',
+);
 
 // ── C. 与载荷剔除同口径 + 本地答了没落定的行留在未答摞 ─────────────────────
 // q1 已落定（草稿里还留着旧答案并勾了「带上这题」），q2 本地答了但没落定，q3 空。
@@ -133,7 +150,10 @@ const teamBar = await source('apps/web/src/domains/team/TeamPendingBar.tsx');
 expect(pendingCard.includes('askRowGroups'), 'D: 待批页用共享分组函数 askRowGroups');
 expect(teamCard.includes('askRowGroups'), 'D: 团队页的卡用共享分组函数 askRowGroups');
 expect(teamBar.includes('AskCard'), 'D: 团队页确实渲染这张 ask 卡');
-expect(!/function\s+ask\w*[Gg]roup/u.test(pendingCard + teamCard), 'D: 两页都没有自己的分组实现（只有壳在共用）');
+expect(
+  !/function\s+ask\w*[Gg]roup/u.test(pendingCard + teamCard),
+  'D: 两页都没有自己的分组实现（只有壳在共用）',
+);
 expect(pendingCard.includes('<AnsweredGroup'), 'D: 待批页渲染「已答」分组');
 expect(teamCard.includes('<AnsweredGroup'), 'D: 团队页渲染「已答」分组');
 expect(groupShell.includes('useState(false)'), 'D: 分组默认折叠（useState(false)）');
@@ -154,9 +174,7 @@ for (const key of ['pending.answeredGroup.expand', 'pending.answeredGroup.collap
 }
 
 if (failures.length > 0) {
-  console.error(
-    `check-ask-groups: ${String(failures.length)} 项 FAIL（共 ${String(checked)} 项）`,
-  );
+  console.error(`check-ask-groups: ${String(failures.length)} 项 FAIL（共 ${String(checked)} 项）`);
   for (const failure of failures) console.error(`  - ${failure}`);
   process.exit(1);
 }
