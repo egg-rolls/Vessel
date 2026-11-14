@@ -1202,6 +1202,8 @@ export const messages = {
   'chat.env.scope.model': '模型',
   'chat.env.scope.selfcard': '基础信息',
   'chat.env.scope.context': '上下文',
+  // 0.52：PII 句柄整批失效（内存 broker 重启）。逐调用的句柄失败不走卡，只落到那次工具调用。
+  'chat.env.scope.pii': 'PII 脱敏',
   'chat.env.count': '{count} 条',
   'chat.env.notApplied': '未生效',
   'chat.env.moreLines': '还有 {count} 行未显示',

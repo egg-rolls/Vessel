@@ -2,9 +2,10 @@
  * @vessel-agent/guardrail-pii - PII 守卫插件
  * @module @vessel-agent/guardrail-pii
  *
- * ## 位置纪律（0.52 修 bug 的核心）
+ * ## 位置纪律（0.52 修 bug + 0.52 vault 迁移后的口径）
  *
- * 脱敏**只允许发生在展示 / 请求构造层，落盘原文一个字都不许改**。
+ * 脱敏**只允许发生在 append 侧（写入上下文那一刻）**：落盘即占位符，store / 请求 / UI
+ * 共用同一份字节。**绝不许回改已经落盘 / 已经发出的消息**（append-only + 前缀缓存）。
  *
  * 0.52 之前本插件在 `GuardrailStage.Output` 返回 `replacement`，而 Output / ToolResult
  * 的 replacement 会被写进会话存储 —— append-only 的 transcript 是不可逆数据，于是
@@ -13,10 +14,12 @@
  *
  * 现在分成两半：
  * - `PIIGuardrail.check()` **只检测、只报告**，永不返回 `replacement`（写侧零改写）；
- * - 真正的打码由 `createPiiMasker()` 以**读侧 masker** 登记到 `PluginHost`，只被
- *   请求构造层（`buildRequestMessages`）与展示投影调用。
+ * - 真正的打码由 core 的 `pii-vault` 在 `ExecutionUnit.maskForAppend` 里完成
+ *   （`vault.protect()` 句柄化，超限降级为掩码），本插件登记的 masker 作为**补充**在
+ *   同一处被调用（幂等，给第三方 masker 留扩展点）。
  *
- * 判定口径（数字类 PII 必须整串命中 + 校验位）见 `./rules.js`。
+ * 判定口径（数字类 PII 必须整串命中 + 校验位）见 `./rules.js`；核心规则集与句柄
+ * vault 见 core 的 `pii/`。
  */
 
 import type {
@@ -26,8 +29,9 @@ import type {
   Plugin,
   PluginHost,
   ReadSideMasker,
+  ToolDefinition,
 } from '@vessel-agent/core';
-import { GuardrailStage } from '@vessel-agent/core';
+import { createPiiRevealTool, getPiiVault, GuardrailStage } from '@vessel-agent/core';
 import { detectPii, maskText, type PiiDetection, type PiiRuleOptions } from './rules.js';
 
 export type { PiiDetection, PiiRuleOptions, PiiType } from './rules.js';
@@ -57,7 +61,7 @@ export interface PIIGuardrailConfig {
   customPatterns?: Array<{ name: string; pattern: RegExp }>;
   /** 脱敏策略 */
   maskingStrategy?: 'full' | 'partial' | 'hash';
-  /** 读侧脱敏开关（缺省 true）：关掉后展示/请求两条路径都不打码 */
+  /** 脱敏开关（缺省 true）：关掉后 append 侧也不打码（真值原样落盘） */
   maskOnRead?: boolean;
   /**
    * 命中后怎么办（缺省 `report`）：
@@ -66,6 +70,12 @@ export interface PIIGuardrailConfig {
    * 无论哪个值，写侧都不会拿到 `replacement`。
    */
   action?: 'report' | 'block';
+  /**
+   * 熵启发（缺省 `false`，0.52 句柄层专用开关）：
+   * 阈值保守且要求与「密钥类关键字」同行共现，宁可漏掉可疑随机串，
+   * 也不要把 hash / base64 / diff 全打码。详见 core 的 `pii/rules.ts`。
+   */
+  entropy?: boolean;
 }
 
 /** E1：`install(host, {config})` 的窄类型（core 尚未声明第二参数） */
@@ -90,6 +100,7 @@ export function parsePiiGuardrailConfig(value: unknown): PIIGuardrailConfig {
     'detectSSN',
     'detectCreditCard',
     'maskOnRead',
+    'entropy',
   ] as const) {
     if (typeof value[key] === 'boolean') parsed[key] = value[key];
   }
@@ -164,10 +175,11 @@ function toRuleOptions(config: PIIGuardrailConfig): PiiRuleOptions {
 }
 
 /**
- * 读侧脱敏器（0.52）：**这是唯一打码的位置**。
+ * 补充脱敏器（0.52）：给 core 的 `pii-vault` 打补丁用。
  *
- * 它被登记到 `PluginHost`，只被请求构造层与展示投影调用；落盘路径根本不经过它，
- * 因此历史正文永远是原文。`enabled` / `maskOnRead` 任一为 false 时原样返回。
+ * 它被登记到 `PluginHost`，由 `ExecutionUnit.maskForAppend` 在**写入上下文那一刻**
+ * 调用（句柄化之后，幂等）。核心规则集已是超集，所以正常情况是 no-op；它存在的意义
+ * 是给「插件自定义规则」留扩展点。`enabled` / `maskOnRead` 任一为 false 时原样返回。
  */
 export function createPiiMasker(config: PIIGuardrailConfig = {}): ReadSideMasker {
   const merged: PIIGuardrailConfig = { ...DEFAULT_CONFIG, ...config };
@@ -237,9 +249,20 @@ export function createPiiGuardrailPlugin(config?: PIIGuardrailConfig): Plugin {
         ...parsePiiGuardrailConfig(options?.config),
       };
       host.registerGuardrail(new PIIGuardrail(merged));
-      // 读侧脱敏：真正的打码位置。旧宿主没有这个方法时退化成「只报告」，不炸。
+      // 补充脱敏器：由 core 在 append 侧调用（幂等）。旧宿主没有这个方法时退化成「只报告」，不炸。
       if (typeof host.registerReadSideMasker === 'function') {
         host.registerReadSideMasker(createPiiMasker(merged));
+      }
+      // 0.52 句柄 vault：与 masker 同一个开关（配置关掉就整层直通）。
+      // 句柄是真值的**唯一**内存副本，不落盘；解锁只能走 pii.reveal（人工审批）。
+      const vault = getPiiVault();
+      vault.configure({
+        enabled: merged.enabled !== false && merged.maskOnRead !== false,
+        entropy: merged.entropy === true,
+      });
+      // 审批解锁工具：权限判定复用现有 ask / permission 链（`checkPermission: 'ask'`）。
+      if (typeof host.registerTool === 'function') {
+        host.registerTool(createPiiRevealTool({ vault }) as ToolDefinition);
       }
     },
   };

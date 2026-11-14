@@ -1,17 +1,24 @@
 /**
- * 读侧脱敏端口（0.52 pii-guard）。
+ * 脱敏器端口（0.52 pii-guard → 0.52 pii-vault）。
  * @module @vessel-agent/core/context
  *
- * 位置纪律：**脱敏只许发生在「请求构造层」和「展示投影层」，绝不许改写落盘正文。**
+ * 位置纪律（0.52 用户裁定，见 `docs/architecture/message-invariants.md`）：
+ * **脱敏发生在 append 侧** —— 消息写入上下文那一刻就把真值换成占位符，落盘即占位符。
  *
- * 0.52 之前 guardrail-pii 在 Output / ToolResult 阶段返回 `replacement`，而这两个阶段的
- * replacement 会被写进会话存储（append-only 的 transcript 是不可逆数据），于是 13 位
- * 毫秒时间戳被当成手机号打码后直接污染了历史。现在：
+ * 为什么不再在「请求构造层」打码：两条产品不变量
+ * 1. **可见性对等**：UI 渲染的必须包含 agent 看得到的一切。请求侧打码会让模型看到
+ *    掩码、UI 看到原文 —— 正是这条不变量禁止的两级形态。
+ * 2. **请求 messages 只许 append**：任何一条已发出的消息都不许回改（前缀缓存）。
+ * 请求侧打码虽然不改 store，但会让「模型看到的序列」依赖于投影逻辑而不是存储字节。
  *
- * - guardrail 只做「检测 + 报告」（不返回 replacement，落盘原文一个字不改）；
- * - 需要给模型 / 给用户看的文本，在请求构造与展示投影里过一次这里注册的 masker。
+ * 于是唯一的打码点是 `ExecutionUnit.maskForAppend`：`vault.protect()`（句柄化）
+ * 之后再跑这里注册的插件 masker（幂等，给第三方 masker 留扩展点）。
  *
- * 这里只放「纯函数 + 端口类型」，不认识任何具体规则，规则由插件注册。
+ * 0.52 之前的教训仍然成立：guardrail 的 Output / ToolResult 阶段返回 `replacement`
+ * 会被写进会话存储（append-only transcript 不可逆），13 位毫秒时间戳因此被当成手机号
+ * 永久污染历史 —— 所以 guardrail 只「检测 + 报告」，这里只做「形状替换」。
+ *
+ * 这里只放「纯函数 + 端口类型」，不认识任何具体规则，规则由插件 / core 的 `pii/rules` 提供。
  */
 
 import type { ReadSideMasker } from '../types/plugin.js';

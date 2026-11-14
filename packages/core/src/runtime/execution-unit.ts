@@ -6,10 +6,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   estimateTokens,
+  applyReadSideMaskers,
   shouldPublishSystemContext,
   systemContextChangesFromFingerprint,
   withClearedToolResults,
-  withReadSideMask,
 } from '../context/index.js';
 import {
   evaluateLimitWarnings,
@@ -19,6 +19,18 @@ import {
   MemoryLimitChecker,
 } from '../limits/index.js';
 import { createStderrLogger, noopLogger } from '../logging.js';
+import {
+  findHandles as findPiiHandleOccurrences,
+  getPiiVault,
+  PII_CAPACITY_NOTICE,
+  PII_INVALIDATION_NOTICE,
+  PiiHandleUnresolvedError,
+  piiHandleOf,
+  renderDeadReferencesNotice,
+  type PiiAuditEntry,
+  type PiiCategory,
+  type PiiVault,
+} from '../pii/index.js';
 // D2：跨模块只允许从 barrel 导入（不得直接引用 session 的内部文件）。
 import {
   deriveSessionMeta,
@@ -636,6 +648,12 @@ export class ExecutionUnit {
       permission: this.permissionPolicy,
       guardrails: this.guardrails,
       hooks: this.hooks,
+      // 0.52：工具参数求值前把 `«pii:…»` 换回真值；解不开就整调用失败。
+      // onHandleFailure 只负责「整批失效」这一档的系统级提示卡（每 session 至多一张）。
+      pii: {
+        substitute: (args, sessionId) => this.piiVault().substituteDeep(args, sessionId),
+        onHandleFailure: (error, sessionId) => this.onPiiHandleFailure(error, sessionId),
+      },
     });
   }
 
@@ -708,7 +726,205 @@ export class ExecutionUnit {
     });
   }
 
-  /** 无 active Run 的 notice：best-effort 写 SessionState 投影缓存。 */
+  /** 针对本 ExecutionUnit 覆盖用的 vault（默认进程单例；探针可替换）。 */
+  private piiVaultOverride: PiiVault | undefined;
+
+  /**
+   * 覆盖 PII vault（探针 / 多租户隔离用）。不传则用进程级单例。
+   */
+  setPiiVault(vault: PiiVault | undefined): void {
+    this.piiVaultOverride = vault;
+  }
+
+  /** 三处边界共用的 broker。 */
+  private piiVault(): PiiVault {
+    return this.piiVaultOverride ?? getPiiVault();
+  }
+
+  /**
+   * 句柄解不开时的上层动作（0.52 裁定，口径：**动作错误 vs 环境变化**）：
+   *
+   * 环境卡表达「世界的状态变了」；句柄过期/未知是「这一次动作没做成」。混在一起会同时
+   * 坏三件事：卡片语义被稀释、错误归属不清（哪个 tool、哪次调用）、逐调用错误被伪装成
+   * 全局变化。所以：
+   * - `unknown_handle` / `expired_handle`：**只**是那个工具调用的失败
+   *   （`retryable: false`，下一步写在错误文本里；卡片由工具失败卡承载），
+   *   **不发**环境信息卡 —— 动作错误不是环境变化；
+   * - `invalidated_handle`：broker 重启导致**整批**失效（一次性影响所有在途句柄），
+   *   除工具失败外**再**发一张环境信息卡（每 session 至多一张，靠
+   *   `claimInvalidationNotice` 去重）。两者**并存**：卡解释「为什么突然都不行了」，
+   *   工具卡解释「这一次没做成」。
+   */
+  private onPiiHandleFailure(error: unknown, sessionId: string): void {
+    if (!(error instanceof PiiHandleUnresolvedError)) return;
+    if (error.reason !== 'invalidated_handle') return;
+    const vault = this.piiVault();
+    if (!vault.claimInvalidationNotice(sessionId)) return;
+    // 追加是异步的（journal append）；这里在同步回调里，发出去即可，失败不影响本次工具错误。
+    void this.appendNotice(PII_INVALIDATION_NOTICE.en);
+    this.publishEvent({
+      type: 'pii.handles.invalidated',
+      run_id: this.activeRun?.runId ?? 'plugin',
+      ts: Date.now(),
+      data: {
+        session: sessionId,
+        reason: error.reason,
+        handle_count: error.handles.length,
+      },
+    });
+  }
+
+  /**
+   * append 侧脱敏（0.52 三处边界的落点，**不是**请求侧改写）。
+   *
+   * 为什么在 append：用户 0.52 的硬不变量是
+   * 1. **可见性对等** —— UI 渲染出来的必须包含 agent 看得到的一切；
+   * 2. **请求 messages 只许 append** —— 回改任何一条历史都会让前缀缓存全废。
+   * 两条合起来只有一个解：真值在**写入上下文那一刻**就换成占位符，落盘的字节
+   * 就是 store / 请求 / UI 共用的那一份；真值只活在内存 vault 里。
+   *
+   * 顺序：先 `protect()`（真值 → 句柄，超限降级为直接掩码，同时中和入站伪造的同形
+   * token），再跑插件注册的 read-side masker（幂等；给第三方 masker 留扩展点，
+   * 核心规则已经是超集，所以正常情况下是 no-op）。
+   */
+  private maskForAppend(message: Message, sessionId: string): Message {
+    const vault = this.piiVault();
+    const maskers = this.pluginHost.getReadSideMaskers?.() ?? [];
+    if (!vault.isEnabled && maskers.length === 0) return message;
+    // 运行时自己生成的 env 卡 / 提示（`vessel:notice`）**不脱敏**：
+    // 它只带状态与占位符 id，从不含真值；而它的价值恰恰在于「把已经解不开的 id 原样
+    // 列出来」，过一遍 `protect()` 的入站中和反而会把 id 抹成 «pii:neutralized»。
+    if (message.name === 'vessel:notice') return message;
+    const audit = new Map<string, PiiAuditEntry>();
+    const transform = (text: string): string => {
+      // 1) 句柄化：真值 → 占位符（超限降级为直接掩码；入站伪造的同形 token 一并中和）
+      let out = text;
+      if (vault.isEnabled) {
+        const protectedText = vault.protect(text, sessionId);
+        out = protectedText.text;
+        for (const entry of protectedText.audit) audit.set(entry.category, entry);
+      }
+      // 2) 插件注册的脱敏器（幂等；核心规则已是超集，正常是 no-op）
+      out = applyReadSideMaskers(out, maskers);
+      return out;
+    };
+    const content = message.content;
+    let next: Message = message;
+    if (typeof content === 'string') {
+      const masked = transform(content);
+      if (masked !== content) next = { ...message, content: masked };
+    } else if (Array.isArray(content)) {
+      let changed = false;
+      const parts = content.map((part) => {
+        if (part !== null && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string') {
+          const original = (part as { text: string }).text;
+          const masked = transform(original);
+          if (masked !== original) changed = true;
+          return masked === original ? part : { ...part, text: masked };
+        }
+        return part;
+      });
+      if (changed) next = { ...message, content: parts as typeof content };
+    }
+
+    // 审计只落 {session, category, count, first_seen_at}（无真值）。
+    for (const entry of audit.values()) {
+      this.publishEvent({
+        type: 'pii.vault.audit',
+        run_id: this.activeRun?.runId ?? 'plugin',
+        ts: Date.now(),
+        data: entry,
+      });
+    }
+    return next;
+  }
+
+  /**
+   * 发请求前扫一遍已经 append 的消息，把**已经解不开**的占位符集合追加成一条 env 卡。
+   *
+   * append-only 决定了「失效」只能以**追加**表达（不能回改成新的标记形状）。
+   * 去重靠 `claimUnannouncedDeadHandles`：同一批 id 只宣告一次，之后每轮不再重复。
+   * 整批失效（broker 重启）与个别失效共用同一张卡的额度（每 session 至多一张）。
+   */
+  private async appendPiiDeadNotice(sessionId: string): Promise<void> {
+    const vault = this.piiVault();
+    if (!vault.isEnabled) return;
+    const seen = new Set<string>();
+    for (const message of this.activeRun?.workingContext.messages ?? []) {
+      const content = message.content;
+      const texts =
+        typeof content === 'string'
+          ? [content]
+          : Array.isArray(content)
+            ? content
+                .map((part) =>
+                  part !== null && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string'
+                    ? (part as { text: string }).text
+                    : undefined,
+                )
+                .filter((text): text is string => text !== undefined)
+            : [];
+      for (const text of texts) {
+        for (const occurrence of findPiiHandleOccurrences(text)) seen.add(occurrence.id);
+      }
+    }
+    if (seen.size === 0) {
+      // 没有死引用，也可能有「容量耗尽」这张面上的卡要发（每 session 一张）。
+      if (vault.takeDegradedCount(sessionId) > 0 && vault.claimInvalidationNotice(sessionId)) {
+        await this.appendNotice(PII_CAPACITY_NOTICE.en);
+        this.publishEvent({
+          type: 'pii.handles.capacity',
+          run_id: this.activeRun?.runId ?? 'plugin',
+          ts: Date.now(),
+          data: { session: sessionId },
+        });
+      }
+      return;
+    }
+    const dead: Array<{ id: string; category: PiiCategory | undefined }> = [];
+    let systemic = false;
+    for (const id of seen) {
+      const result = vault.resolve(sessionId, id);
+      if (result.ok) continue;
+      dead.push({ id, category: vault.categoryOfDeadHandle(sessionId, id) });
+      if (result.reason === 'invalidated_handle') systemic = true;
+    }
+    if (dead.length === 0) {
+      if (vault.takeDegradedCount(sessionId) > 0 && vault.claimInvalidationNotice(sessionId)) {
+        await this.appendNotice(PII_CAPACITY_NOTICE.en);
+      }
+      return;
+    }
+    const fresh = vault.claimUnannouncedDeadHandles(
+      sessionId,
+      dead.map((entry) => entry.id),
+    );
+    if (fresh.length === 0) return;
+    const freshSet = new Set(fresh);
+    const references = dead
+      .filter((entry) => freshSet.has(entry.id))
+      .map((entry) => ({
+        handle: piiHandleOf(entry.id),
+        ...(entry.category === undefined ? {} : { category: entry.category }),
+      }));
+    if (systemic && vault.claimInvalidationNotice(sessionId)) {
+      // 整批失效（broker 重启）：一张环境卡就够，不再重复列 id。
+      await this.appendNotice(PII_INVALIDATION_NOTICE.en);
+      this.publishEvent({
+        type: 'pii.handles.invalidated',
+        run_id: this.activeRun?.runId ?? 'plugin',
+        ts: Date.now(),
+        data: { session: sessionId, reason: 'invalidated_handle', handle_count: fresh.length },
+      });
+      return;
+    }
+    // 逐个失效：追加一张 env 卡（持久、UI 与模型都看得见、不含真值）。
+    await this.appendNotice(renderDeadReferencesNotice(references));
+  }
+
+  /**
+   * 无 active Run 的 notice：best-effort 写 SessionState 投影缓存。
+   */
   private async appendNoticeToSnapshot(message: Message): Promise<void> {
     if (!this.session) return;
     const sessionId = this.lastSessionId ?? 'default';
@@ -1764,6 +1980,7 @@ export class ExecutionUnit {
         addMessage: (m, id) => this.addContext(m, id),
         buildRequestMessages: (o) => this.buildRequestMessages(o, execution.workingContext),
         appendInjectedMessages: (id, m) => this.appendInjectedMessages(execution, id, m),
+        appendPiiDeadNotice: () => this.appendPiiDeadNotice(execution.sessionId),
         updateRealTokens: (t) => {
           this.lastRealTokens = t;
           execution.workingContext.updateRealTokens(t);
@@ -2835,16 +3052,18 @@ export class ExecutionUnit {
       // 占位替换是真实的（已声明）前缀变化：不标 reason 的话守卫会当成「莫名重写」。
       this.pendingPrefixReason ??= 'context_trim';
     }
-    // 读侧脱敏（0.52 pii-guard）：**只在这里（请求构造层）打码**，落盘原文一个字不改。
-    // 前缀快照因此仍然稳定：脱敏是确定性的（同一份原文 → 同一份掩码），且幂等
-    // （打过码的文本不再命中规则），连续两次请求的掩码序列一致。
-    const messages = withReadSideMask(prepared, this.pluginHost.getReadSideMaskers?.() ?? []);
+    // 0.52（用户裁定两条不变量）：脱敏**不在这里**做。
+    // - 可见性对等：UI 渲染的就是 store 里的字节 ⇒ 脱敏必须在 **append 侧**
+    //   （见 `maskForAppend`），请求侧只做组装；
+    // - 请求 messages 只许 append：这里不再改写/投影任何一条历史（前缀缓存不能废）。
+    // 句柄失效同样以**追加一张 env 卡**表达（见 `appendPiiDeadNotice`），不回改历史。
+    const messages = prepared;
+    // 压缩摘要也是 role=system：它不是基底 system，缺省补回与 hook 改写都不能替换它。
+    const isBaseSystem = (m: Message): boolean => m.role === 'system' && !m.compaction_summary;
     const systemOverride =
       typeof systemOverrideInput === 'string' && systemOverrideInput
         ? systemOverrideInput
         : undefined;
-    // 压缩摘要也是 role=system：它不是基底 system，缺省补回与 hook 改写都不能替换它。
-    const isBaseSystem = (m: Message): boolean => m.role === 'system' && !m.compaction_summary;
     const hasSystem = messages.some(isBaseSystem);
 
     // 上下文缺 system（trim / 恢复 / 失败会话）时，补回基底的或 hook 改写后的 system
@@ -2976,8 +3195,11 @@ export class ExecutionUnit {
     // 不在这里盖章，落盘后的消息就永远没有归属；而段序（`run_segment`）不在这里数
     // —— 计数器必须只有一份，见 `assignMessageIdentities`（落盘漏斗统一补）。
     const identified = options?.stampIdentity === false ? stamped : withRunIdentity(stamped, runId);
+    // 0.52：脱敏落在 **append 侧** —— 落盘即占位符，store / 请求 / UI 共用同一份字节
+    // （可见性对等），并且请求 messages 天然只增不改（前缀缓存不废）。
+    const masked = this.maskForAppend(identified, execution.sessionId);
     const workingContext = execution.workingContext;
-    workingContext.add(identified);
+    workingContext.add(masked);
     this.publishUntrackedCompaction(execution);
     this.publishEvent({
       type: 'context.changed',

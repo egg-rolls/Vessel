@@ -53,6 +53,7 @@ export const ENV_NOTICE_SCOPES = [
   'files',
   'context',
   'selfcard',
+  'pii',
 ] as const;
 
 export type EnvNoticeScope = (typeof ENV_NOTICE_SCOPES)[number] | 'context';

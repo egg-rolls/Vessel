@@ -24,7 +24,9 @@
  * - `identity`：身份变更（改名 / Team / parent）；
  * - `fields`：其它基础字段变更；
  * - `files`：文件变更（doc-subscription 的订阅文件被改动，只报元数据、不报正文）；
- * - `context`：系统提示词 / Self Card 本身变了（可展开看完整快照）。
+ * - `context`：系统提示词 / Self Card 本身变了（可展开看完整快照）；
+ * - `pii`：PII 句柄整批失效（内存 broker 重启）—— 0.52 起由 core 的 `pii/notice.ts`
+ *   发同一形状的 `pii: …` 尾消息（首词即 scope；逐调用的句柄失败**不**发卡，只落到那次工具调用）。
  *
  * @module @vessel-agent/agent
  */
@@ -46,6 +48,7 @@ export const ENV_INFO_SCOPES = [
   'tools',
   'files',
   'context',
+  'pii',
 ] as const;
 
 export type EnvInfoScope = (typeof ENV_INFO_SCOPES)[number];

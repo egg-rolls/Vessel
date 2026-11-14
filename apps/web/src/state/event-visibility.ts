@@ -252,6 +252,11 @@ export const EVENT_TIER_FAMILIES: readonly { prefix: string; tier: EventTier }[]
   { prefix: 'mcp.', tier: 'observe' },
   { prefix: 'channel.feishu.', tier: 'observe' },
   { prefix: 'eval.run.', tier: 'observe' },
+  // 0.52 PII 脱敏审计面（`pii.vault.audit` / `pii.handles.*` / `pii.reveal.audit`）：
+  // 会话级审计 + 观察面诊断，聊天与团队时间线**永不**出现（与开关无关）。
+  // 用户可见的那张「句柄整批失效 / 容量耗尽」提示走 `vessel:notice` 上下文消息，
+  // 不走事件渲染 —— 所以这里只需要一个家族档位，不占 `EVENT_TIERS` 的词表。
+  { prefix: 'pii.', tier: 'observe' },
 ];
 
 /** 事件类型 → 档位（未登记返回 `undefined`，由调用方按 `internal` 处理）。 */

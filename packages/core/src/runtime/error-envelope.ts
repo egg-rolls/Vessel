@@ -51,6 +51,12 @@ const CODE_META: Readonly<
   atomic_write_failed: { category: 'internal', retryable: true, phase: 'checkpoint' },
   conflict: { category: 'internal', retryable: false, phase: 'input' },
   limit_blocked: { category: 'internal', retryable: false, phase: 'run' },
+  // 0.52 PII 句柄：三档失败原因 + 未审批的 reveal。都是**动作错误**：
+  // 同一个占位符重试必然再失败 ⇒ retryable 一律 false，下一步靠错误文本给。
+  pii_unknown_handle: { category: 'tool', retryable: false, phase: 'tool' },
+  pii_expired_handle: { category: 'tool', retryable: false, phase: 'tool' },
+  pii_invalidated_handle: { category: 'tool', retryable: false, phase: 'tool' },
+  pii_reveal_denied: { category: 'permission', retryable: false, phase: 'permission' },
 };
 
 function errorMessage(error: unknown): string {
