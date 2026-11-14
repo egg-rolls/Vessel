@@ -115,6 +115,154 @@ function scalarArg(args: Record<string, unknown>, keys: readonly string[]): stri
   return undefined;
 }
 
+type ToolArgs = Record<string, unknown>;
+
+/** 结构化入参工具的摘要：`action → 目标/条数`。 */
+type StructuredSummarizer = (args: ToolArgs) => string | undefined;
+
+function isRecord(value: unknown): value is ToolArgs {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 首个非空短文本：压成单行并按 cap 截断（摘要不是正文）。 */
+function shortText(value: unknown, cap: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (text.length === 0) return undefined;
+  return text.length > cap ? `${text.slice(0, cap)}…` : text;
+}
+
+function intValue(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return /^\d+$/.test(trimmed) ? Number(trimmed) : undefined;
+}
+
+/** 数组长度；非数组 → undefined（不猜）。 */
+function listLength(value: unknown): number | undefined {
+  return Array.isArray(value) ? value.length : undefined;
+}
+
+/** 数组里的非空字符串成员（`members` / `paths` / `ids` 用）。 */
+function stringItems(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item === 'string' && item.trim().length > 0) out.push(item.trim());
+  }
+  return out;
+}
+
+/** `<principal>@<node_id>:<team_id>` 只留 principal —— 卡头说的是「发给谁」，不是完整路由。 */
+function principalLabel(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const at = value.indexOf('@');
+  return at > 0 ? value.slice(0, at) : value;
+}
+
+/**
+ * `agent`：`action` + 目标 / 人数 / 条数。
+ *
+ * 入参见 `packages/agent/src/tool.ts:339`（`action` 首位必填，目标散在
+ * `to` / `member` / `members[]` / `name`）：这些都是结构化字段，旧实现只在标量名单里
+ * 找 → 卡片头部只剩工具名。
+ */
+function agentSummary(args: ToolArgs): string | undefined {
+  const action = shortText(args.action, 16);
+  if (action === undefined) return undefined;
+  if (action === 'create' || action === 'hire') {
+    const count = listLength(args.members);
+    const name = shortText(args.name, 48);
+    if (count !== undefined && count > 1) return `${action} → ${count} 名成员`;
+    if (name !== undefined) return `${action} → ${name}`;
+    if (count === 1) return `${action} → 1 名成员`;
+    return action;
+  }
+  const target = principalLabel(
+    shortText(args.to, 64) ??
+      shortText(args.member, 64) ??
+      stringItems(args.members)[0] ??
+      shortText(args.name, 64),
+  );
+  const head = target === undefined ? action : `${action} → ${target}`;
+  // 只报条数：`messages` 的正文不进摘要。
+  const messages = listLength(args.messages);
+  if (messages !== undefined && messages > 0) return `${head}（${messages} 条）`;
+  const closing = action === 'close' ? stringItems(args.members).length : 0;
+  if (closing > 1) return `${head}（共 ${closing} 名）`;
+  return head;
+}
+
+/**
+ * `inbox`：`action` + 条数 / 首个 id / 正文首段。
+ *
+ * 入参见 `packages/agent/src/inbox.ts:1185`（`ids` / `message_ids` / `limit` / `content`）。
+ */
+function inboxSummary(args: ToolArgs): string | undefined {
+  const action = shortText(args.action, 16);
+  if (action === undefined) return undefined;
+  if (action === 'insert') {
+    const content = shortText(args.content, 40);
+    return content === undefined ? action : `${action} → ${content}`;
+  }
+  const ids = [...stringItems(args.ids), ...stringItems(args.message_ids)];
+  const first = ids[0];
+  if (first !== undefined) {
+    return ids.length === 1 ? `${action} → ${first.slice(0, 48)}` : `${action} → ${ids.length} 条`;
+  }
+  const limit = intValue(args.limit);
+  if (limit !== undefined && limit > 0) return `${action} → 最多 ${limit} 条`;
+  return action;
+}
+
+/** `subscribe`：`action` + 文件 / 订阅 id（入参见 `plugins/context/doc-subscription/src/tool.ts:450`）。 */
+function subscribeSummary(args: ToolArgs): string | undefined {
+  const action = shortText(args.action, 16);
+  if (action === undefined) return undefined;
+  if (action === 'list') return action;
+  const single = shortText(args.path, 96);
+  const many = stringItems(args.paths);
+  const paths = single === undefined ? many : [single, ...many];
+  const first = paths[0];
+  if (first === undefined) {
+    const id = shortText(args.id, 48);
+    return id === undefined ? action : `${action} → ${id}`;
+  }
+  return paths.length === 1
+    ? `${action} → ${first}`
+    : `${action} → ${paths.length} 个文件（${first} 等）`;
+}
+
+/** `ask`：首个问题标题（`header`）+ 问题数（入参见 `packages/tui/src/renderer/ask-user.ts:372`）。 */
+function askSummary(args: ToolArgs): string | undefined {
+  const questions = Array.isArray(args.questions) ? args.questions : [];
+  const total = questions.length;
+  if (total === 0) return undefined;
+  const first = questions[0];
+  const label = isRecord(first)
+    ? (shortText(first.header, 24) ?? shortText(first.question, 32))
+    : undefined;
+  if (label === undefined) return `ask → ${total} 个问题`;
+  return total > 1 ? `ask → ${label}（共 ${total} 个问题）` : `ask → ${label}`;
+}
+
+/**
+ * 结构化入参工具的专用摘要（**优先于**下面的标量名单）。
+ *
+ * 这些工具的首个必填参数是 `action`，目标 / 条数是结构化字段（`to` / `members[]` /
+ * `messages[]` / `ids[]` / `paths[]` / `questions[]`），一个都不在 `KNOWN_ARG_NAMES`
+ * 里 —— 旧实现因此让 `agent` / `inbox` 卡片丢掉整段参数摘要。这里只取计数与首个短
+ * 字段，不展开正文，也不回退到 `Object.values` 全盘扫。返回 `undefined` 表示「这个
+ * 工具这一份入参没有结构化摘要」，照旧走下面的标量兜底。
+ */
+const STRUCTURED_ARG_SUMMARIES: Record<string, StructuredSummarizer> = {
+  agent: agentSummary,
+  inbox: inboxSummary,
+  subscribe: subscribeSummary,
+  ask: askSummary,
+};
+
 /** 摘要行允许用于兜底的已知参数名（不含 serve 注入的 preview / truncated）。 */
 const KNOWN_ARG_NAMES: readonly string[] = [
   'command',
@@ -148,6 +296,7 @@ export function toolSummary(name: string, args: unknown, maxLength = 96): string
       search: ['query', 'pattern'],
     };
     value =
+      STRUCTURED_ARG_SUMMARIES[name]?.(parsed) ??
       scalarArg(parsed, byTool[name] ?? []) ??
       scalarArg(parsed, ['command', 'path', 'pattern', 'query', 'task', 'url', 'name']) ??
       // 兜底只在**已知参数名**里找：`Object.values` 会把 serve 截断后塞进来的
