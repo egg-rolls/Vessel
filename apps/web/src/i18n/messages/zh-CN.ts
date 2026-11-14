@@ -1168,6 +1168,7 @@ export const messages = {
   'chat.event.empty': '无载荷',
   'chat.notice.contextPressure': '上下文水位 {percent}% · {used}/{max}',
   'chat.notice.contextCompacted': '上下文压缩 · 移除 {removed} · 剩余 {remaining} · {reason}',
+  'chat.notice.contextTrimmed': '上下文裁剪 · {cleared} 条旧工具结果已换占位符 · 保留 {kept} 条',
   'chat.notice.limitWarning': '限额预警 · {key} {current}/{max}',
   'chat.notice.restarting': '上下文重启中 · {session} · epoch {from} → {epoch}',
   'chat.notice.restarted': '上下文已重启 · {session} · epoch {from} → {epoch}',
@@ -1202,6 +1203,8 @@ export const messages = {
   'chat.env.scope.model': '模型',
   'chat.env.scope.selfcard': '基础信息',
   'chat.env.scope.context': '上下文',
+  // 0.52：工具结果被换占位符（上下文上限）。只报条数与 call id，不含工具输出正文。
+  'chat.env.scope.trim': '已裁剪上下文',
   // 0.52：PII 句柄整批失效（内存 broker 重启）。逐调用的句柄失败不走卡，只落到那次工具调用。
   'chat.env.scope.pii': 'PII 脱敏',
   'chat.env.count': '{count} 条',

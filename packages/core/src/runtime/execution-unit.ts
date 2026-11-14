@@ -7,6 +7,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   applyReadSideMaskers,
   estimateTokens,
+  planClearedToolResults,
+  renderContextTrimNotice,
   shouldPublishSystemContext,
   systemContextChangesFromFingerprint,
   withClearedToolResults,
@@ -723,6 +725,64 @@ export class ExecutionUnit {
         session_id: this.lastSessionId,
         error: errorText(error),
       });
+    });
+  }
+
+  /**
+   * 段冻结的工具结果占位集合，按窗口对象索引（0.52 V1）。
+   *
+   * 窗口换了（新 Run / `pop` / 换会话）就自然失效 —— 这正是「`pop` 之后按新段基准重算」的
+   * 实现方式：不需要额外的失效通知，下一个段起点直接覆盖。请求期只读它，**不再**按当前
+   * messages 重算窗口。
+   */
+  private readonly segmentClearPlans = new WeakMap<object, readonly string[]>();
+
+  /**
+   * 0.52 V1：段起点把「清哪些工具结果」一次算完并**冻结**（清理必须一次到位）。
+   *
+   * 旧行为是每次请求按当前 messages 重算窗口（K = min(10, 5% 预算)）⇒ 第 11 条工具结果
+   * 之后每轮多清一条：同一段内每轮请求都比上一轮多差一条（prefix cache 全丢，也不满足
+   * 「分段只有 new / pop」）。现在：
+   *
+   * - 集合在段起点算一次，随 session 落盘（`SessionState.cleared_tool_call_ids`，
+   *   RunJournal 单写口，两 backend 都写）；
+   * - 请求期只读（`buildRequestMessages`），段内一个字都不再改；
+   * - `pop`（回退 / 分支切换）之后基准重置，下一个段起点按新基准重算并覆盖。
+   *
+   * 清理必须可见：新增 call id 时追加一张 env 卡（scope `trim`）+ 一条
+   * `context.cleared_tool_result` 事件；正文只说「清了几条 / 为什么 / 被清的 call id」，
+   * 不含任何工具输出正文，同一批 id 只讲一次（按已落盘的集合去重）。
+   */
+  private freezeSegmentClearedToolResults(execution: Run, stored: SessionState | null): void {
+    const window = execution.workingContext;
+    const messages = window.messages;
+    const ids = planClearedToolResults(messages, window.maxTokens ?? 0);
+    this.segmentClearPlans.set(window, ids);
+    const known = new Set(stored?.cleared_tool_call_ids ?? []);
+    const fresh = ids.filter((id) => !known.has(id));
+    if (fresh.length === 0) return;
+    const cleared = new Set(ids);
+    const kept = messages.filter(
+      (message) =>
+        message.role === 'tool' &&
+        typeof message.tool_call_id === 'string' &&
+        !cleared.has(message.tool_call_id),
+    ).length;
+    const notice = renderContextTrimNotice({ cleared: ids.length, kept, tool_call_ids: fresh });
+    this.appendNotice(notice);
+    this.publishEvent({
+      type: 'context.cleared_tool_result',
+      run_id: execution.runId,
+      ts: Date.now(),
+      data: {
+        // 旧消费者只认 data.summary：占位卡的可见投影，与 env 卡正文逐字一致。
+        summary: notice,
+        cleared: ids.length,
+        kept,
+        // 只报本次新增的 id（同一批只讲一次）；顺序＝段基准里的出现顺序。
+        tool_call_ids: fresh,
+        segment: 'context_trim',
+      },
     });
   }
 
@@ -1470,6 +1530,10 @@ export class ExecutionUnit {
     // 0.52：恢复「上次发布过的环境快照指纹」，让重启后的第一条消息能正确去重。
     this.restorePromptContextFingerprint(stored);
 
+    // 0.52 V1：段起点的占位决策只算一次并冻结（落 SessionState.cleared_tool_call_ids）。
+    // 必须在 seed / 压缩之后、本 Run 第一条请求之前：段内不再改，`pop` 之后下一个段起点重算。
+    this.freezeSegmentClearedToolResults(execution, stored);
+
     // system 前缀只允许显式 revision：基底 system / Self Card 只在构造期变化，
     // 若同一 session 的基底确实不同（例如运行时重建），标记为一次 system_revision。
     const requestBaseSystem = this.runSystemPrompt ?? this.systemPrompt ?? '';
@@ -1895,6 +1959,8 @@ export class ExecutionUnit {
       execution.workingContext.setContextAnchor?.(history.sessionState?.context_anchor, this.model);
       this.seedWorkingContext(execution, history);
       this.seedRealTokensFromLastRequest(execution, history);
+      // 0.52 V1：resume 也是一个段起点 —— 占位决策同样只在这里算一次并冻结。
+      this.freezeSegmentClearedToolResults(execution, history.sessionState ?? null);
 
       const sessionState = this.createSessionState(
         sessionId,
@@ -3061,7 +3127,10 @@ export class ExecutionUnit {
     workingContext: WorkingContext,
   ): Message[] {
     const normalized = this.normalizeMessages(workingContext.messages);
-    const prepared = withClearedToolResults(normalized, workingContext.maxTokens ?? 1_000_000);
+    // 0.52 V1：只应用「本段冻结」的集合，**不再**按当前 messages 重算窗口；
+    // 没冻结过（非常规入口）= 一条都不清，请求视图与落盘逐字一致。
+    const frozen = this.segmentClearPlans.get(workingContext) ?? [];
+    const prepared = withClearedToolResults(normalized, frozen);
     if (prepared.some((message, index) => message !== normalized[index])) {
       // 占位替换是真实的（已声明）前缀变化：不标 reason 的话守卫会当成「莫名重写」。
       this.pendingPrefixReason ??= 'context_trim';
@@ -3548,6 +3617,12 @@ export class ExecutionUnit {
       ...(stored?.context_anchor !== undefined ? { context_anchor: stored.context_anchor } : {}),
       // 0.52：环境快照指纹跨轮继承（发布新卡时由 saveSessionState 覆盖成最新的一份）。
       ...(stored?.prompt_context !== undefined ? { prompt_context: stored.prompt_context } : {}),
+      // 0.52 V1：本段冻结的占位集合也**必须**继承 —— 这里是 S1c 踩过的那个坑：
+      // createSessionState 只认自己认识的字段，漏一行的 additive 字段会被整轮洗掉，
+      // 于是「段内只读」变成「每轮重新决策」。saveSessionState 会按窗口里的新决策覆盖它。
+      ...(stored?.cleared_tool_call_ids !== undefined
+        ? { cleared_tool_call_ids: stored.cleared_tool_call_ids }
+        : {}),
       status: 'running',
       last_run_id: runId,
     };
@@ -3581,6 +3656,14 @@ export class ExecutionUnit {
       // 窗口没有锚点（旧会话 / 本次没拿到 usage）时保留继承来的旧值。
       const anchor = execution.workingContext.contextAnchor;
       if (anchor !== undefined) sessionState.context_anchor = anchor;
+      // 0.52 V1：本段冻结的占位集合跟着窗口一起落盘（这一段没有决策就清掉继承来的旧值，
+      // 否则下次段起点会把「已经不在窗口里的 id」当成已讲过的卡而不发）。
+      const frozen = this.segmentClearPlans.get(execution.workingContext);
+      if (frozen !== undefined && frozen.length > 0) {
+        sessionState.cleared_tool_call_ids = [...frozen];
+      } else {
+        delete sessionState.cleared_tool_call_ids;
+      }
     }
     // 0.52：环境快照的发布指纹随 session 落盘（跨重启去重用）。
     // 只在本轮确实发布过卡时存在；没有就不动（保留继承来的旧值）。

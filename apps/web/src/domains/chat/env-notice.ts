@@ -52,6 +52,7 @@ export const ENV_NOTICE_SCOPES = [
   'fields',
   'files',
   'context',
+  'trim',
   'selfcard',
   'pii',
 ] as const;

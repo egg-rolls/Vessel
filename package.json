@@ -88,7 +88,8 @@
     "check:resume-boot": "bun run scripts/check-resume-boot.ts",
     "check:rotate-accounting": "bun run scripts/check-rotate-accounting.ts",
     "check:web-fetch": "bun run scripts/check-web-fetch.ts",
-    "check:request-append-only": "bun run scripts/check-request-append-only.ts"
+    "check:request-append-only": "bun run scripts/check-request-append-only.ts",
+    "check:tool-result-clear": "bun run scripts/check-tool-result-clear.ts"
   },
   "workspaces": [
     "packages/*",

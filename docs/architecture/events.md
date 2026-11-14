@@ -134,7 +134,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `context.changed` | internal | — | none | live |
 | `context.pressure` | internal | notice | none | live |
 | `context.compacted` | internal | notice | none | live |
-| `context.cleared_tool_result` | internal | — | none | live |
+| `context.cleared_tool_result` | internal | notice | none | live |
 | `message.injected` | internal | — | none | live |
 | `message.compaction` | internal | — | none | live |
 | `limit.blocked` | internal | — | none | live |

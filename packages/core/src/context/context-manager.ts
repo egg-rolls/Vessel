@@ -219,15 +219,27 @@ export function planClearedToolResults(messages: readonly Message[], maxTokens: 
 }
 
 /**
- * 请求级视图：把超出保留预算的旧工具结果换成占位文本，**返回新数组**。
+ * 请求级视图：把**本段冻结的**占位集合换成占位文本，**返回新数组**。
  *
  * 只有被替换的那几条消息是新对象（`{...message, content}`），其余原样透传 ——
  * 调用方（`ExecutionUnit.buildRequestMessages`）据此做到「发给 provider 的请求省 token，
  * 落盘的历史一个字不改」。这是本不变量在 core 里唯一允许的「视图层改写」。
+ *
+ * 0.52 V1：集合**不在这里算**。按当前 messages 重算窗口 ⇒ 每多一条工具结果，窗口整体
+ * 右移一条，上一条被清的消息又被「最新 K 条」认领回来，同一段内每轮多清一条：请求前缀
+ * 每轮变一次（prefix cache 全丢，append-only 不变量也破了）。现在集合在**段起点**算一次
+ * （`planClearedToolResults`）并落进 `SessionState.cleared_tool_call_ids`（RunJournal
+ * 单写口），请求期只读；`pop` 之后基准重置，下一个段起点按新基准重算一次。
+ *
+ * @param messages 落盘历史（只读，不就地改）
+ * @param cleared 本段冻结的 tool_call_id 集合；传数字（旧的 token 预算签名）= 这一段还没有
+ *   决策 ⇒ **一条都不清**：没有决策时请求视图必须与落盘逐字一致（append-only 的默认形态）。
  */
-export function withClearedToolResults(messages: readonly Message[], maxTokens: number): Message[] {
-  const cleared = planClearedToolResults(messages, maxTokens);
-  if (cleared.length === 0) return [...messages];
+export function withClearedToolResults(
+  messages: readonly Message[],
+  cleared: readonly string[] | number,
+): Message[] {
+  if (!Array.isArray(cleared) || cleared.length === 0) return [...messages];
   const ids = new Set(cleared);
   return messages.map((message) =>
     message.role === 'tool' &&
