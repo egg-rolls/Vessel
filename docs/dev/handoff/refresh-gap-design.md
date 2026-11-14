@@ -18,6 +18,9 @@ triggers:
   - 消息身份 id
   - run_segment
   - 认领 miss
+  - 重放整段历史不许多出第二条
+  - 去重键必须是服务端稳定 id
+  - 消息身份验收口径
 paths:
   - packages/serve/src/event-buffer.ts
   - packages/serve/src/tenant-event-hub.ts
@@ -55,6 +58,7 @@ paths:
 2. **真正原因是缺回填链路**：前端要历史事件只会向进程内的环形缓冲 `until_seq` 逐页回退，环里没有了就「停手」；从头到尾**没有一条路径去读会话事件日志**。窗口太小只是让这个洞高频出现，不是洞本身。
 3. 三个方案里推荐 **B（`sessions.events` 磁盘回填 + `sessions.get` 暴露 `event_cursor`）**；**C（事件持久身份 `session_seq`）** 作为下一版收敛方向；**A（放大窗口）** 只能做缓解，因为它挡不住「进程重启」和「多会话争抢同一个全局环」。
 4. 「已发出的用户消息渲染两遍」与刷新丢事件**是同一根因的两面**（§6）：同一条消息在事件侧和消息侧没有共同身份（chat **没有 message id**，只有 `run_id`，`run_segment` 只给 assistant 盖章）。所以事件侧要么缺席（刷新丢），要么多出来（回来两条）。修法也是同一处：**服务端生成 `input_message_id` 四站同值 + 事件流持久游标**，一个改动同时关掉两个症状 ⇒ 需要拍板。
+5. **验收口径已由用户拍板（硬性，§4 的 H-1/H-2/H-3）**：「同一进程内即使 SSE 重放整段历史，也不允许多出第二条；**去重键必须是服务端稳定 id**」。据此 §6.2 把六站里**没有服务端稳定 id 的站全部标成阻塞项**（B1–B6），并把「先补齐这些 id」写成推荐方案的 **P0 前置步骤**；实现之前**不允许任何客户端 local id / 内容 hash / 位置下标当去重键**。
 
 本轮结论全部由真实代码路径 + 一次确定性复算得出；**未改动任何产品代码**。
 
@@ -234,9 +238,35 @@ never delivered after refresh: seq 1..2200 = 2200 events,
 
 ## 最小可验收标准（怎么证明「刷新不丢」）
 
+> **✅ 用户已拍板的硬性口径（不满足即不通过；不许用调阈值 / 放宽计数 / 换比较口径的方式变绿）**
+> 「必须：**同一进程内即使 SSE 重放整段历史，也不允许多出第二条**（**去重键必须是服务端稳定 id**）。」
+
+### H 组：三条硬断言（先于实现细节，缺一不可）
+
+**H-1 整段重放不增条（重放幂等）**
+- 场景：列表已稳定（≥2 个 run、含工具结果）；把事件游标重置为 0 后**重放整段历史**（等价于 `since: 0` 的重连/重订）。
+- 断言：`items.length` 与 item key 多重集**逐项不变**；任何 `(run_id, kind, key)` 出现次数 ≤ 1。
+- 现状对照：§6.1 的 S3（`ClaimLedger` 的 `fresh` 把「事实为空时的空判定」固化）会让用户气泡 +1 ⇒ **现状红**。这条就是用户口径「重放整段历史不许多出第二条」的直接编码。
+
+**H-2 双源同时到达只渲一条（且键是服务端 id）**
+- 场景：同一条用户消息同时从「落盘消息」（`sessions.get.messages[]`）与「事件」（`run.started` / `user.message` / 磁盘回填帧）到达；必须覆盖两个变体：(a) 同 run 有多条 user 消息（注入 / inbox 投递 / hook 注入）；(b) guardrail 改写（`run.started.input` ≠ 落盘 content）。
+- 断言：该消息渲染条数 === 1，且 `item.key` === `msg:<server_message_id>` —— **显式禁止**用内容 hash、客户端 local id、`absIndex` 位置键当去重键。
+- 现状对照：`run:<runId>:input` 与 `msg:<absIndex>` 不同键 + 认领启发式 ⇒ **现状红**（S2：「同一句话两遍」）。
+
+**H-3 刷新前后条数一致（允许流式中变态重建，不许丢消息/工具结果）**
+- 场景：跑一个含 ≥1 次工具调用 + ≥1 段长输出的 run；在**流式中途**与 **run 结束后**各刷新一次。
+- 断言：
+  - **run 结束后刷新**：`items` 与刷新前**逐项相等**（消息、工具调用、工具结果、`run-failure`、`runtime-notice`、`prompt-context` 都在），条数相同；
+  - **流式中途刷新**：允许「正在流式的正文 / 思考」重建（内容由落盘消息 + `llm.stream.summary` 对账：`segment_index` / `chunk_count` / `bytes`），但**已落盘消息条数与工具结果条数不得减少**（`messages_total` 与工具卡片计数逐一比对）。
+- 现状对照：§1.2 的环淘汰 ⇒ **现状红**。
+
+三条都必须在**两种环境**下各跑一遍：(a) 环被压到 200 条（复用 `replay-budget.ts` 已有的 tuning 注入点）；(b) 重建 hub（`seq` 归零、环清空）后 —— (b) 是「不依赖窗口」的证明。
+
+### 支撑断言（实现细节，用来定位 H 组为什么红）
+
 新增 `scripts/check-refresh-gap.ts`（**新文件，不改既有 `check-*` 的判据与阈值**）：
 
-1. 用可注入 tuning 把环压到 200 条（复用 `replay-budget.ts` 已有的 tuning 注入点），构造 1 个会话、2 个 run、共 1000 条事件（含 `run.started` / `user.message` / `tool.call.*` / `run.failed` / notice / `context.pressure`）。
+1. 构造 1 个会话、2 个 run、共 1000 条事件（含 `run.started` / `user.message` / `tool.call.*` / `run.failed` / notice / `context.pressure`）。
 2. 断言 **a（完整性）**：模拟「刷新」（`since = 0`）走完回填后，`EventStore`（按会话日志 seq）覆盖 `1..latest_seq`，**无洞**。
 3. 断言 **b（等价性 / 不变量①的事件侧扩展）**：`buildTranscriptItems` 的输出与「从未刷新」的参照集合**逐项相等**（含 `run-failure` / `runtime-notice` / `prompt-context`）。
 4. 断言 **c（幂等）**：同一批事件重复投递（live 与回填重叠）后，item 集合不变（`(run_id, kind, key)` 唯一）。
@@ -245,7 +275,7 @@ never delivered after refresh: seq 1..2200 = 2200 events,
 
 边界要写进验收：**运行中的 chunk 正文**仍依赖环（chunk 不落盘）。若要求连这段也不丢，只能走 C/A 之一。
 
-**与 §6 是同一份验收**：§6.5 推荐的 `input_message_id` 要在这条验收里同时被断言（同一条用户消息在 ②③④⑤ 四站同值、UI 只渲一次）。两个症状共用一个前置（消息身份 + 事件游标），建议**一次改动一次验收**，不要拆成两个互不相干的补丁 —— 拆开做很容易出现「重复修好了、丢还在」或反之。
+**与 §6 是同一份验收**：H-1 / H-2 就是 §6 的「回来两条」（去重键必须服务端 id），H-3 就是 §1 的「丢一段」。所以 §6.5 的 `input_message_id` 必须在这三条里被断言（同一条用户消息在 ②③④⑤ 四站同值、UI 只渲一次、刷新前后条数不变），**一次改动一次验收**，不要拆成两个互不相干的补丁 —— 拆开做很容易出现「重复修好了、丢还在」或反之。
 
 # 5. 最小复现
 
@@ -313,18 +343,31 @@ S2 同 run 两条 user + 文本不一致 | user bubbles = 3 [ "message:msg:0", "
 
 ## 6.2 ID 契约表（一条用户消息的身份，逐站回答）
 
-结论：**chat 路径根本没有 message id**，六站有四个不同口径，**不一致、也不健壮**。
+结论：**chat 路径根本没有 message id**，六站有四个不同口径，**不一致、也不健壮**。按用户拍板的去重口径（去重键必须是**服务端稳定 id**），凡是没有服务端稳定 id 的站一律标记为 **🛑 阻塞项**，未补齐前不允许进入实现。
 
-| 站 | 谁生成 | 字段 | 是否同一值 |
-| --- | --- | --- | --- |
-| ① 前端提交 | 客户端**不生成任何 id**：`useChatSubmit.ts:106-140` 只送 `{agent_id, session_id?, input, refs?}`；`runs.start` 参数表 `runs.ts:203-220`，响应表 `runs.ts:221-232` 只有 `run_id / status / queue_position / agent_id / session_id` | **无** | ❌ 无 id（响应里也不回 id） |
-| ② `user.message` 事件 | core：`execution-unit.ts:1662-1670` `publishEvent({ type:'user.message', run_id, data:{ run_id, session_id, message: effectiveUser, refs } })` | `data.run_id`、`data.message`（**整个 Message 对象，无 id**）、`data.refs[].path` | ⚠️ 唯一可用身份是 `run_id`，**它不是消息 id** |
-| ③ 落盘消息 `sessions.get.messages[]` | core：`execution-unit.ts:3352` `addMessage(message, runId)`；`message-identity.ts` 的 `assignMessageIdentities` / `withRunIdentity` | `run_id`（user 也有）、`run_segment`（**只给 assistant**：`occupiesSegment = role==='assistant' && 正文非空`）。`Message` 类型见 `packages/core/src/types/provider.ts:39-75`，**没有 `message_id` 字段** | ⚠️ `run_id` 与 ② 同值；`run_segment` 对 user 恒缺省 |
-| ④ `events.list` 返回的磁盘事件 | 无：事件原样进 run trace | 同 ②；trace 另带 per-run `seq`（`packages/core/src/observability/read-trace.ts`） | ⚠️ 同 ②；per-run seq 当不了会话游标 |
-| ⑤ SSE 回放重推 | gateway：`gateway.ts:1164-1170` `outboundEventFrame` = `{ seq, event }`，`event` 是同一个对象（`withSessionAttribution` 只补 session 归属） | hub `seq`（进程内自增、重启归零）+ 事件体原样 | ⚠️ 事件体一致；**游标与磁盘 seq 无关**（§2.2 第 4 点） |
-| ⑥ team / 子 agent | serve：team 消息 `message_id` 由服务端生成（`team-control.ts` 追加消息处）；agent inbox 消息亦有 `message_id`（`agent-control.ts`） | `message_id` | ❌ **传不进 session**：`execution-unit.ts` 全文 `message_id` 零命中，团队消息变成 session 用户消息时只剩 `run_id` ⇒ 身份链在入 session 处断开 |
+| 站 | 谁生成 | 字段 | 是否同一值 | 服务端稳定 id |
+| --- | --- | --- | --- | --- |
+| ① 前端提交 | 客户端**不生成任何 id**：`useChatSubmit.ts:106-140` 只送 `{agent_id, session_id?, input, refs?}`；`runs.start` 参数表 `runs.ts:203-220`，响应表 `runs.ts:221-232` 只有 `run_id / status / queue_position / agent_id / session_id` | **无** | ❌ 无 id（响应里也不回 id） | 🛑 **阻塞项**：服务端受理时必须生成 id 并经 `runs.start` 响应回传；**客户端不得生成 local id 当去重键** |
+| ② `user.message` 事件 | core：`execution-unit.ts:1662-1670` `publishEvent({ type:'user.message', run_id, data:{ run_id, session_id, message: effectiveUser, refs } })` | `data.run_id`、`data.message`（**整个 Message 对象，无 id**）、`data.refs[].path` | ⚠️ 唯一可用身份是 `run_id`，**它不是消息 id** | 🛑 **阻塞项**：事件 `data.message` 必须携带与 ③ 同值的服务端 id（`run_id` 不满足唯一性） |
+| ③ 落盘消息 `sessions.get.messages[]` | core：`execution-unit.ts:3352` `addMessage(message, runId)`；`message-identity.ts` 的 `assignMessageIdentities` / `withRunIdentity` | `run_id`（user 也有）、`run_segment`（**只给 assistant**：`occupiesSegment = role==='assistant' && 正文非空`）。`Message` 类型见 `packages/core/src/types/provider.ts:39-75`，**没有 `message_id` 字段** | ⚠️ `run_id` 与 ② 同值；`run_segment` 对 user 恒缺省 | 🛑 **阻塞项（根）**：`Message` 必须新增服务端生成的 `message_id` 并落盘；`run_id + run_segment` 组合对 user 消息不唯一，不能当去重键 |
+| ④ `events.list` 返回的磁盘事件 | 无：事件原样进 run trace | 同 ②；trace 另带 per-run `seq`（`packages/core/src/observability/read-trace.ts`） | ⚠️ 同 ②；per-run seq 当不了会话游标 | 🛑 **阻塞项（继承 ②）**：事件体没 id，磁盘回填也就没有 id；② 补齐后自动满足。**per-run seq 不得当去重键**（换 run 就撞号） |
+| ⑤ SSE 回放重推 | gateway：`gateway.ts:1164-1170` `outboundEventFrame` = `{ seq, event }`，`event` 是同一个对象（`withSessionAttribution` 只补 session 归属） | hub `seq`（进程内自增、重启归零）+ 事件体原样 | ⚠️ 事件体一致；**游标与磁盘 seq 无关**（§2.2 第 4 点） | 🛑 **阻塞项（继承 ②）**：重推帧不带服务端消息 id ⇒ 「重放整段历史」时 UI 无法按键幂等（H-1 直接红）。**hub seq 不得当去重键**（重启归零、非会话级） |
+| ⑥ team / 子 agent | serve：team 消息 `message_id` 由服务端生成（`team-control.ts` 追加消息处）；agent inbox 消息亦有 `message_id`（`agent-control.ts`） | `message_id` | ❌ **传不进 session**：`execution-unit.ts` 全文 `message_id` 零命中，团队消息变成 session 用户消息时只剩 `run_id` ⇒ 身份链在入 session 处断开 | 🛑 **阻塞项**：入 session 时必须携带可追溯的服务端 id（session 内 `Message.message_id` + 指向来源的 `source_message_id`，用于排查「同一条团队消息投给多个 agent」）；**不得把 inbox/team 的 id 当作 session 内去重键的唯一来源**（跨会话会撞） |
 
 一句话：`run_id` 是唯一的桥，但它不是消息身份（一次 run 里可以有多条 user 消息）；而 hub seq / 会话日志 seq / `run_segment` / `message_id` 四套编号互不翻译。
+
+**阻塞项清单（按依赖排序，未全部清掉不许进实现）**
+
+| # | 阻塞项 | 补什么 | 哪一侧 | 是否改协议 |
+| --- | --- | --- | --- | --- |
+| B1 | ③ 落盘消息无 id（根） | `Message.message_id`：服务端生成的稳定 id（ULID），随消息一起落盘 | `packages/core`（类型 + 生成 + 落盘读写） | **改落盘 schema**（会话状态文件 + 投影） |
+| B2 | ② 事件无 id | `user.message` / `run.started` 的 `data.message.message_id` 与 B1 同值 | `packages/core`（发布载荷） | **改事件 schema** |
+| B3 | ① 提交侧拿不到 id | `runs.start` 响应新增 `input_message_id`（客户端只读服务端给的，**不生成 local id**） | `packages/serve`（`runs.start` result） | **改 RPC 协议**（加字段，向后兼容） |
+| B4 | ⑤ 重放帧无 id / 跨源无键 | 三个来源（live / 回放 / 磁盘回填）都带 B1 的同一个 id | 随 B2 自动满足（同一事件对象）；磁盘回填需 `sessions.events`（§3 方案 B） | 事件协议已由 B2 覆盖；新 RPC 属 §7 第 1 项 |
+| B5 | ④ 磁盘事件无 id | 同 B4（事件体自带） | `packages/core`（trace / 会话日志写入） | 随 B2 |
+| B6 | ⑥ team / inbox → session 断链 | 入 session 时写入 B1 的 `message_id` + `source_message_id`（来源可追溯） | `packages/serve`（投递路径）+ `packages/core`（消息字段） | 改落盘 schema（同 B1） |
+
+依赖顺序：**B1 → B2/B5 → B4 → B3 → B6**。前端 item 键（`msg:<server_message_id>`）在 B1/B2 落地后才能改，**在此之前不得引入任何「临时 id 当去重键」的过渡实现**（那正是现在这条 bug 的来路）。
 
 ## 6.3 去重点清单（所有把多来源并成列表的函数）
 
@@ -368,31 +411,40 @@ S2 同 run 两条 user + 文本不一致 | user bubbles = 3 [ "message:msg:0", "
 
 两条都必须同时满足：① 不重复渲染；② 刷新不丢消息（与 §4 的最小可验收标准 同一份验收）；③ **不依赖「客户端临时 id 恰好等于服务端 id」这个隐含假设**，要显式化。
 
-**推荐：服务端生成 `input_message_id`，四站同值，前端按 id 配对**
+**推荐：服务端稳定 id 贯穿四站，前端按 id 配对（去重键 = 服务端 id，硬约束）**
 
-- 生成：`runs.start` 受理时生成 `message_id`（ULID），写进 `Message.message_id`（新字段），并在 `runs.start` 响应里显式返回 `{ run_id, input_message_id }` —— **客户端永不生成 id**，只使用服务端给的，假设被消除。
-- 发布：`user.message` 事件 `data.message.message_id` 同值；`run.started` 也带上（只有 `run.started` 落在回放窗口内时也能配对）。
-- 落盘 / 读取：session state 原样写（`file-backend.ts` 不挑字段），`sessions.get.messages[]` 透出。
-- 回填：`sessions.events`（§3 方案 B）返回同一事件 ⇒ live 与磁盘同一 id。
-- 前端：`run-input` 的 key 用 `msg:<input_message_id>`，历史 user item 的 key 也用 `msg:<input_message_id>`（老数据无 id 时退回 `msg:<absIndex>`）⇒ `mergeByKey` 天然幂等，**不再依赖认领**；`ClaimLedger` 降级为老数据兜底。
-- 收益叠加：`input_message_id` 同时是「这条消息在事件流里的锚点」，可作为磁盘回填的水位（配合 §3 的 `event_cursor`），**一个改动同时关掉 §1 的洞和本节的重复**。
+> 用户口径已经把这条钉死：**去重键必须是服务端稳定 id**。所以本方案的**前置步骤**是先把 §6.2 的阻塞项（B1–B6）补齐；在前置步骤完成之前，**不允许用客户端 local id / 内容 hash / 位置下标当去重键**（连「临时过渡」也不行 —— 现在的这条 bug 正是这么来的）。
+
+**P0 前置步骤（必须先做，逐项对应 §6.2 阻塞项，全部在服务端/core，需拍板）**
+
+1. **B1**：`Message` 新增 `message_id`（服务端生成的 ULID），消息落盘时写入、读盘时原样带回（`packages/core/src/types/provider.ts` + 落盘/投影路径）⇒ ③ 有稳定 id。
+2. **B2/B5**：`user.message`（以及能在窗口内单独出现的 `run.started`）的事件载荷带同一个 `message_id` ⇒ ②④⑤ 三站自动同值（同一事件对象进 hub / trace / 会话日志）。
+3. **B3**：`runs.start` 响应新增 `input_message_id`（= B1 的 id）⇒ ① 拿到 id；**客户端仍然不生成任何 id**。
+4. **B6**：team / inbox 投递进 session 时写 `Message.message_id`（B1）+ `source_message_id`（traceability）⇒ ⑥ 不再断链。
+5. **B4**：磁盘回填（`sessions.events`，§3 方案 B）返回同一事件体 ⇒ live / 回放 / 磁盘三源同 id，H-1 才能靠键幂等而非认领。
+
+**P1 前端配对（P0 完成之后）**
+
+- `run-input` 的 key 用 `msg:<server_message_id>`，历史 user item 的 key 也用 `msg:<server_message_id>` ⇒ `mergeByKey` 天然幂等，**不再依赖 `ClaimLedger` 认领**；`ClaimLedger` 降级为「老数据无 id」的兜底，并在 stats 里单独计数（便于观察老数据占比）。
+- 键一旦是服务端 id，§6.4 的两条 miss 路径（唯一性失效 / 空判定固化）就都不影响用户气泡的渲染，H-1/H-2 同时成立。
+- 收益叠加：`message_id` 同时是「这条消息在事件流里的锚点」，可作为磁盘回填水位（配合 §3 的 `event_cursor`），**一个改动同时关掉 §1 的洞和本节的重复**。
 
 **备选：给 user 消息一个段身份（`run_segment = 0` 或 `input_of_run: true`）**
 
 - 只改 `message-identity.ts` 的盖章规则 + `uniqueInputOfRun` 取「本 run 最小 segment 的 user 消息」。
-- 满足 ①，**不满足 ②**（没有可用作回填游标的 id），且仍是「两侧各自算身份」⇒ 只能治重复，治不了 §1 的洞。所以是备选，不能替代推荐方案。
+- **不满足用户拍板口径**：它不是服务端稳定 id，去重仍然是「两侧各自算身份」的启发式；也不满足 ②（没有可用作回填游标的 id）。⇒ 只能作为老数据的兼容补丁，**不能作为达标方案**。
 
 **明确不采纳**：继续加强内容规范化（trim / 去前缀 / 去 refs）。它是启发式，guardrail 改写场景永远补不齐 —— 0.52 给 assistant 加 `run_id` + `run_segment` 就是为了摆脱它（`docs/versions/CURRENT.md` 里记着：本机 652 run 中 7 个命中 Output guardrail 改写，症状正是「结尾正文重复」）。
 
 ## 6.6 回归测试建议（本轮不新增断言）
 
-优先复用已有探针，不新建门禁：
+优先复用已有探针，不新建门禁（目的都是把 §4 的 H-1/H-2/H-3 变成可执行断言）：
 
 - `scripts/check-live-items.ts`：G-F「历史先到不重复」、G-F2「认领粘性」、G-C「回放幂等」已有同类用例，加两个场景（用例就是 §6.1 的 S2 / S3，脚本可直接搬进去）：
-  - 同 run 两条 user 消息（注入）+ 落盘文本与 `run.started.input` 不一致 ⇒ 断言 user 气泡计数 === 1、`userMisses === 0`（现状会红，对应 6.1 的 S2）；
-  - `epoch+1` 且中间一次 `decide` 的事实为空、随后事实补回 ⇒ 断言 `claimedUserByRun` 不被空判定覆盖（对应 S3）。
-- `scripts/check-chat-visibility.ts`（不变量①）：断言「UI 消息集合 ⊇ 存档消息集合」，覆盖「刷新后 live 侧丢失不减少消息」。
-- `scripts/check-refresh-gap.ts`（按 §4 的最小可验收标准新建）：加一条 id 贯通断言 —— 同一条用户消息在 ②③④⑤ 四站的 `message_id` 相同。
+  - 同 run 两条 user 消息（注入）+ 落盘文本与 `run.started.input` 不一致 ⇒ 断言 user 气泡计数 === 1、`userMisses === 0`、`item.key === msg:<server_message_id>`（现状会红，对应 S2 / **H-2**）；
+  - `epoch+1` 且中间一次 `decide` 的事实为空、随后事实补回 ⇒ 断言 `claimedUserByRun` 不被空判定覆盖；再等价于「`since:0` 重放整段历史后 item 条数不变」（对应 S3 / **H-1**）。
+- `scripts/check-chat-visibility.ts`（不变量①）：断言「UI 消息集合 ⊇ 存档消息集合」，覆盖「刷新后 live 侧丢失不减少消息」（对应 **H-3**）。
+- `scripts/check-refresh-gap.ts`（按 §4 的最小可验收标准新建）：H-1/H-2/H-3 三条 + 一条 id 贯通断言（同一条用户消息在 ②③④⑤ 四站的 `message_id` 相同），并在「环压到 200 条」与「重建 hub」两种环境各跑一遍。
 - 现成探针（零代码）：`claimStats`（`useChatTranscript.ts:568`）+ `eventStore.hasNewestRunStart`。
 
 # 7. 需要拍板（拿到批准前不动产品代码）
@@ -400,15 +452,28 @@ S2 同 run 两条 user + 文本不一致 | user bubbles = 3 [ "message:msg:0", "
 1. **新增 RPC `sessions.events`**（读会话事件日志，`since_seq` + `limit` + `types`），并给 `sessions.get` 增加 `event_cursor`。→ 属于「新增 RPC」，需批准；批准后还要在 `scripts/check-rpc-methods.ts` 登记（只登记，不改判据）。
 2. **方案 A 的调参是否同批做**：环 1 万 → 5 万、`MAX_EVENTS`/`MAX_BUDGET_BYTES`/`MAX_BACKFILL_PAGES` 同步。纯调参但会抬高常驻内存，需要你点头。
 3. **是否接受「运行中 chunk 正文仍依赖环」这个边界**：若不可接受，则必须走 C（事件持久身份），那是改事件语义 + 改 core 发布热路径，需单独批准。
-4. **用户消息身份方案（§6.5）**：推荐方案要加 `Message.message_id`（服务端生成，`runs.start` 响应 + `user.message` 事件 + 落盘消息 + `sessions.events` 四站同值）+ 前端 item 键改 `msg:<input_message_id>`。**这是改落盘消息语义 + RPC 响应字段 + UI 契约**，需批准。备选（`run_segment = 0` / `input_of_run`）只治重复不治 §1 的洞，是否接受由你定。
-5. **新门禁脚本 `scripts/check-refresh-gap.ts`** 是否允许与既有 `check-*` 并列（只新增用例，不改任何既有阈值）。
+4. **消息稳定 id（§6.2 阻塞项 B1–B6，推荐方案的前置步骤）** —— 这是唯一能让用户拍板口径（「去重键必须是服务端稳定 id」）达标的东西，改动面按仓拆开列清楚：
 
-> 拍板建议：4 与 1 是同一处改动的两面（消息身份 = 回填游标），建议一次批准、一次验收（§4 末段）。
+   | 阻塞项 | 仓 / 模块 | 改什么 | 是否改协议 |
+   | --- | --- | --- | --- |
+   | B1 落盘消息无 id（**根**） | `packages/core`：`types/provider.ts`、`session/file-backend.ts`、`session/project-messages.ts`、`runtime/execution-unit.ts` | `Message` 增 `message_id`（服务端生成 ULID）+ 生成点 + 落盘/读盘/投影带出 | **改落盘 schema**（会话状态文件、投影），非 RPC |
+   | B2 事件无 id | `packages/core`：`runtime/execution-unit.ts` 发布载荷 | `user.message` / `run.started` 的 `data.message.message_id` 与 B1 同值 | **改事件 schema** |
+   | B5 磁盘事件无 id | `packages/core`：trace / 会话日志写入 | 随 B2 自动满足（同一事件对象） | 随 B2 |
+   | B3 提交侧拿不到 id | `packages/serve`：`gateway/methods/runs.ts` + `schemas.ts` | `runs.start` 响应新增 `input_message_id` | **改 RPC 协议**（加字段，向后兼容） |
+   | B4 三源无共同键 | `packages/serve`（回放/回填）+ `apps/web`（P1 键） | 磁盘回填走 `sessions.events`（第 1 项）后同一事件体；前端 item 键改 `msg:<server_message_id>` | 事件协议随 B2；新 RPC 见第 1 项；前端属 UI 契约 |
+   | B6 team/inbox → session 断链 | `packages/serve`（投递）+ `packages/core` | 入 session 时写 B1 的 `message_id` + `source_message_id` | 改落盘 schema（同 B1） |
+
+   批准边界：**本轮只出设计，不写实现**；批准后按 B1 → B2/B5 → B4 → B3 → B6 → 前端键的顺序落地，且必须在 §4 的 H-1/H-2/H-3 三条硬断言下验收（含「环压到 200 条」与「重建 hub」两种环境）。
+5. **新门禁脚本 `scripts/check-refresh-gap.ts`** 是否允许与既有 `check-*` 并列（只新增用例，不改任何既有阈值）。
+6. **老数据兼容口径**（需拍板）：B1 之前落盘的消息没有 `message_id`，前端只能退回位置键 + 认领兜底。是否接受「老会话仍可能出现一次重复」这个**过渡期例外**？（若不接受，需要在打开会话时做一次「派生补 id」的迁移，那是另一件改动。）
+
+> 拍板建议：第 1 项（`sessions.events` + `event_cursor`）与第 4 项（B1–B6 消息稳定 id）是同一处改动的两面（消息身份 = 回填游标），建议一次批准、一次验收（§4 的 H-1/H-2/H-3）。第 2 项（放大窗口）即使批准，也不列入验收 —— 验收必须在「环压到 200 条」与「重建 hub」两种环境下过。
 
 
 # 附：本轮没做的事
 
 - 没有任何产品代码改动（`apps/web/**`、`packages/serve/**`、`packages/core/**` 全未动）。
 - 没有改 `scripts/check-*.ts`、没有改 `docs/architecture/message-invariants.md`、没有新增断言。
+- 本轮把用户拍板的去重验收口径写成 §4 的 H-1/H-2/H-3（硬），并把 §6.2 的六个站点里**缺服务端稳定 id 的站标成阻塞项 B1–B6**；这些是设计约束，**不是实现**。
 - 复算 / 复现用的临时脚本（环淘汰复算、`ClaimLedger` S2/S3/S4 复现）跑完即删，未入库；输出的原始数值已原样贴进 §1.2 与 §6.1。
 - **没做**：真机端到端复现（需起 gateway + 真实模型跑长会话 / guardrail 场景），见 §5 与 §6.4 的「阻塞说明」与 1 分钟探针方案。
