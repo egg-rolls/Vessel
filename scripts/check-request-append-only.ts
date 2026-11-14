@@ -52,6 +52,7 @@ import {
   SEGMENT_KIND_BY_PREFIX_REASON,
   SEGMENT_NEW_CAUSES,
   SEGMENT_POP_CAUSES,
+  segmentRecordEvents,
   withClearedToolResults,
 } from '../packages/core/src/index';
 import type { Message } from '../packages/core/src/types/provider';
@@ -914,7 +915,7 @@ section('R7 resume（S1c 重启卡）是追加，不是新段');
 
 // ── R5：每个 cause 都必须可见 ──────────────────────────────────────────────
 
-section('R5 每个 cause 都必须有可见记录（tier 表）');
+section('R5 段操作 new / pop（及每个 cause）必须有可见记录（tier 表）');
 
 {
   const visibilitySource = readFileSync(
@@ -922,6 +923,29 @@ section('R5 每个 cause 都必须有可见记录（tier 表）');
     'utf8',
   );
   const table = parseEventTiers(visibilitySource);
+
+  // 第一层（裁定原文）：`new` / `pop` 本身必须可见 —— 任一记录事件不是 internal，
+  // 或带 notice / card 投影，就算这一层过了。
+  let kindUnseen = 0;
+  for (const kind of SEGMENT_BOUNDARY_KINDS) {
+    const events = segmentRecordEvents(kind);
+    const visible = events.filter((event) => {
+      const entry = table.get(event);
+      if (entry === undefined) return false;
+      return entry.tier !== 'internal' || entry.carrier === 'notice' || entry.carrier === 'card';
+    });
+    if (visible.length === 0) {
+      kindUnseen += 1;
+      fail(
+        'R5',
+        `段操作「${kind}」在 tier 表里没有任何可见记录（候选 ${events.join(', ')}）—— 用户看不到「这里断了一次」`,
+      );
+    }
+  }
+  if (kindUnseen === 0) ok('new / pop 各自都有非 internal（或带 notice/card）的记录事件');
+
+  // 第二层（更严，本门禁自己的判断）：**每个 cause** 也要看得见 —— 用户要看到的是
+  // 「因为什么断了」，只看到 new/pop 没有意义。这一层今天唯一红的是 context_trim。
   const causes = [...SEGMENT_NEW_CAUSES, ...SEGMENT_POP_CAUSES];
   let unseen = 0;
   for (const cause of causes) {
