@@ -13,6 +13,11 @@ triggers:
   - 事件序列游标
   - 会话事件日志回填
   - 已发出的消息显示两遍
+  - 回来消息重复
+  - 重连后消息重复
+  - 消息身份 id
+  - run_segment
+  - 认领 miss
 paths:
   - packages/serve/src/event-buffer.ts
   - packages/serve/src/tenant-event-hub.ts
@@ -20,13 +25,28 @@ paths:
   - packages/serve/src/gateway.ts
   - packages/serve/src/gateway/methods/sessions.ts
   - packages/serve/src/gateway/methods/observability.ts
+  - packages/serve/src/gateway/methods/runs.ts
+  - packages/serve/src/gateway/methods/schemas.ts
+  - packages/serve/src/team-control.ts
+  - packages/serve/src/agent-control.ts
   - packages/core/src/session/session-event-log.ts
+  - packages/core/src/session/message-identity.ts
+  - packages/core/src/session/project-messages.ts
   - packages/core/src/runtime/execution-unit.ts
+  - packages/core/src/types/provider.ts
   - apps/web/src/gateway/connection-handlers.ts
   - apps/web/src/gateway/subscription.ts
+  - apps/web/src/gateway/ConnectionProvider.tsx
+  - apps/web/src/gateway/use-connection-controls.ts
   - apps/web/src/state/event-store.ts
+  - apps/web/src/state/live-items.ts
+  - apps/web/src/state/teams.ts
+  - apps/web/src/stores/sessionStore.ts
   - apps/web/src/domains/chat/useChatTranscript.ts
   - apps/web/src/domains/chat/transcript-items.ts
+  - apps/web/src/domains/chat/useChatSubmit.ts
+  - apps/web/src/domains/chat/pending-strip.ts
+  - apps/web/src/state/useResource.ts
 ---
 
 # 0. 结论先行
@@ -34,7 +54,7 @@ paths:
 1. **丢失窗口是「一段连续前缀」**：会话事件日志里 `seq ∈ [1, 环形缓冲最旧 seq − 1]`、且还没有变成消息的那一段。它可精确命名，而且**磁盘上一条不少**（`sessions/<session_id>/events.ndjson`）。
 2. **真正原因是缺回填链路**：前端要历史事件只会向进程内的环形缓冲 `until_seq` 逐页回退，环里没有了就「停手」；从头到尾**没有一条路径去读会话事件日志**。窗口太小只是让这个洞高频出现，不是洞本身。
 3. 三个方案里推荐 **B（`sessions.events` 磁盘回填 + `sessions.get` 暴露 `event_cursor`）**；**C（事件持久身份 `session_seq`）** 作为下一版收敛方向；**A（放大窗口）** 只能做缓解，因为它挡不住「进程重启」和「多会话争抢同一个全局环」。
-4. 附带的「已发出的用户消息渲染两遍」与刷新洞**同源**：事件侧与消息侧没有共同身份，配对靠启发式认领（见 §6）。修它要动落盘消息语义 ⇒ 需要拍板。
+4. 「已发出的用户消息渲染两遍」与刷新丢事件**是同一根因的两面**（§6）：同一条消息在事件侧和消息侧没有共同身份（chat **没有 message id**，只有 `run_id`，`run_segment` 只给 assistant 盖章）。所以事件侧要么缺席（刷新丢），要么多出来（回来两条）。修法也是同一处：**服务端生成 `input_message_id` 四站同值 + 事件流持久游标**，一个改动同时关掉两个症状 ⇒ 需要拍板。
 
 本轮结论全部由真实代码路径 + 一次确定性复算得出；**未改动任何产品代码**。
 
@@ -225,6 +245,8 @@ never delivered after refresh: seq 1..2200 = 2200 events,
 
 边界要写进验收：**运行中的 chunk 正文**仍依赖环（chunk 不落盘）。若要求连这段也不丢，只能走 C/A 之一。
 
+**与 §6 是同一份验收**：§6.5 推荐的 `input_message_id` 要在这条验收里同时被断言（同一条用户消息在 ②③④⑤ 四站同值、UI 只渲一次）。两个症状共用一个前置（消息身份 + 事件游标），建议**一次改动一次验收**，不要拆成两个互不相干的补丁 —— 拆开做很容易出现「重复修好了、丢还在」或反之。
+
 # 5. 最小复现
 
 ## 可控复现（不需要长跑，1 分钟）
@@ -243,43 +265,150 @@ never delivered after refresh: seq 1..2200 = 2200 events,
 - ✅ 跑通：用真实 `SeqEventBuffer(10000)` + `selectReplayBudgetWindow` 复算了 §1.2 的 12 200 条事件场景（输出见上），确定性证明「`run.started` 一被淘汰 ⇒ 回放退化成 2000 条尾巴 ⇒ 客户端补到环起点就停手」。
 - ⛔ 没跑：端到端起 gateway + 真实模型跑长会话（需要 provider 凭据与真实 LLM 调用），本轮按「只出设计、不动产品代码」的边界没有执行。上面第 1–5 步是可执行的手工核对清单。
 
-# 6. 附带：已发出的用户消息渲染两遍（同一根因）
+# 6. 同一根因：事件侧与消息侧没有共同身份（「回来了两条」与「刷新丢一段」）
 
-现象：同一条用户消息在 live 视图里出现两次，**刷新后变成一次**。这说明重复只发生在「事件侧 + 消息侧同时在内存里」的时候。
+> **与 §1 的关系**：§1 的丢失窗口和这里的重复渲染是**同一个洞的两面**。同一条用户消息在「事件」和「消息」两份真相里没有共同身份，于是对着同一份真相，事件侧要么**缺席**（刷新丢事件），要么**多出来**（回来看到两条）。所以本节和 §1 共用一套验收（§4 的最小可验收标准），修法也是同一处：**给消息一个显式的、服务端生成的、四站同值的 id，并给事件流一个持久游标**。
 
-根因（`apps/web/src/domains/chat/transcript-items.ts`）：两侧的 item 键根本不同
+## 6.1 两条症状链（都在模块级复现过）
 
-- 事件侧：`run-input`，键 `run:<runId>:input`（`transcript-items.ts` 里 `run:${group.runId}:input`），文本来自 `run.started.input`（**guardrail 改写前**），并在收到 `user.message` 事件时被覆盖成改写后文本（`state/events.ts`）。
-- 消息侧：`message`，键 `msg:<absIndex>`。
-- 两者靠 `ClaimLedger` / `computeClaimCore` **启发式认领**去重：认领到 user，就 `claimedUserByRun.add(runId)`，装配面据此**删掉 `run-input`**。认领失败 ⇒ 两条都渲染 ⇒ 两遍。
+现状是两个来源：
 
-认领的身份路径有个结构性缺口：
+- **消息侧（权威、落盘）**：`apps/web/src/domains/chat/useChatTranscript.ts:423` 的 `transcriptMessages = sessionDetail?.messages` ← `sessions.get`（`packages/serve/src/gateway/methods/sessions.ts` 的 `toSessionView`）。
+- **事件侧（易失、派生）**：`LiveItemStore` 物化出的 run 分组；`run-input` 气泡由 `apps/web/src/domains/chat/transcript-items.ts:1152-1185` 一带产出，来源 `run.started.input`，收到 `user.message` 时被覆盖成改写后文本（`apps/web/src/state/events.ts:441-444`）。
 
-- `uniqueInputOfRun(runId)` 要求「该 run 恰好一条 user 消息」；但 `packages/core/src/session/message-identity.ts` 的 `occupiesSegment` **只给 assistant 盖章**（`role === 'assistant' && 正文非空`），user 消息只有 `run_id`、没有段身份。
-- 而 `execution-unit.ts` 里每条消息都按「当前 run_id」落盘（`addMessage(message, runId)` / `withRunIdentity`），**注入消息 + 真实输入会共享同一个 `run_id`** ⇒ `inputsByRun.get(runId)` 长度 ≥ 2 ⇒ 身份路径必然失效。
-- 于是退回**内容全等**比较（`history.userByContent` + `trimText`）。任何一处不一致就 miss：guardrail 改写（`run.started.input` 是改写前）、附件/前缀包装、空白差异、`user.message` 事件没收到（另一客户端/另一 tab 发起）。
-- 老数据（`run_id` / `run_segment` 缺失）也走内容比较 —— `sessions.ts` 里就有这条注释：「缺这两个字段 = 旧数据 / 旧 gateway，客户端退回内容比较」。
+两侧 item 的键不同 ⇒ 键合并救不了：
 
-刷新为什么「好了」：事件侧随内存消失，只剩消息侧一份。所以这不是「刷新修复了它」，而是**两条渲染路径里死了一条**。
+| 侧 | item kind | key |
+| --- | --- | --- |
+| 事件 | `run-input` | `run:<runId>:input` |
+| 消息 | `message` | `msg:<absIndex>` |
 
-候选修法（都要拍板，见 §7）：
+`buildTranscriptItems` 只按键合并（`transcript-items.ts` 的 `mergeByKey` / `mergeItem`），所以两边**永远合不上**；去重完全靠 `ClaimLedger` / `computeClaimCore` 的启发式认领，装配面再用 `claimedUserByRun.has(runId)` 决定删不删 `run-input`（`transcript-items.ts:2050-2057`，注释原文：「输入已被历史消息认领：历史那条负责渲染，run 侧那份丢弃（**绝不两个气泡** / 两张卡）…四种输入共用这条规则」）。—— 代码的目标是对的，坏在「认领」这个启发式本身。
 
-- **修法 1（推荐，最小）**：给用户输入一个结构化身份位——落盘时在「本 run 的第一条 user 消息」上盖 `run_segment = -1`（或 `input_of_run: true`）。`inputsByRun` 直接取这一条，不再要求「唯一」，也不再依赖内容全等。
-- **修法 2**：`user.message` 事件携带 `message_id`，live 侧直接用消息身份建键（`msg:` 命名空间），两侧同键即天然幂等。代价：事件要引用一个落盘消息 id（写入顺序耦合）。
-- **修法 3（不推荐）**：继续加强内容规范化（去空白/去前缀）—— 仍是启发式，guardrail 改写场景永远补不齐。
+于是：
 
-诊断探针（复现时先看这个）：`useChatTranscript.ts:568` 已经把 `claimStats` 暴露出来，认领 miss 会累计在 `stats.userMisses`；同时看 `inputsByRun.get(runId).length` 是否 > 1。
+- **「回来」两条**：认领 miss ⇒ 历史 `msg:0` 和 live `run:run_x:input` 同时渲染。
+- **「刷新」一条**：不是修好了，是 live 那条**跟着事件一起丢了** —— `run.started` / `user.message` 不在回放窗口里（§1.2），`fact.input` 为空时 `run-input` 根本不产出（`transcript-items.ts:1142` 的注释：「run 的输入：历史里还没落盘时由它显示气泡；被历史消息认领后由 assemble 丢掉」）。**§1 的丢失窗口在这里帮了倒忙**，让人误以为刷新是解药。
+
+模块级复现（真实 `ClaimLedger` + `buildTranscriptItems`，不依赖浏览器；会话 `s`，run `run_01`，历史里 user 文本 `read the file`、assistant 一条；原样贴输出）：
+
+```
+S3-1 claimed = ["run_01"] userMisses = 0 decisions = 1
+S3-2 claimed = []         userMisses = 0 decisions = 2        ← epoch+1 且事实暂时为空
+S3-3 claimed = []         userMisses = 0 decisions = 2        ← 事实回来了，但不再重判
+S3-4 assemble | user bubbles = 2 [ "message:msg:0", "run-input:run:run_01:input" ]
+```
+
+（`decisions` 从 2 不再增长，说明空判定被固化；装配面于是把同一条话渲了两遍：历史一份 + live 一份。）
+
+反证（同一脚本另一组）：`epoch+1` 但事实齐全时 —— `S4-1 claimed = ["run_01"] -> S4-2 epoch+1 事实齐全 claimed = ["run_01"] decisions = 2`，即**单纯重连不会丢认领**，所以「回来就重复」不成立，重复必须额外满足 6.4 里的条件。
+
+另一组（无 id 的直接后果：同 run 两条 user 消息 + 落盘文本被改写）：
+
+```
+S2 同 run 两条 user + 文本不一致 | user bubbles = 3 [ "message:msg:0", "run-input:run:run_01:input", "message:msg:1" ]
+```
+
+即：`msg:0`（`read the file [redacted]`）与 `run-input`（`read the file`）**同一句话两遍**，另外注入那条 `msg:1` 独立一条。
+
+## 6.2 ID 契约表（一条用户消息的身份，逐站回答）
+
+结论：**chat 路径根本没有 message id**，六站有四个不同口径，**不一致、也不健壮**。
+
+| 站 | 谁生成 | 字段 | 是否同一值 |
+| --- | --- | --- | --- |
+| ① 前端提交 | 客户端**不生成任何 id**：`useChatSubmit.ts:106-140` 只送 `{agent_id, session_id?, input, refs?}`；`runs.start` 参数表 `runs.ts:203-220`，响应表 `runs.ts:221-232` 只有 `run_id / status / queue_position / agent_id / session_id` | **无** | ❌ 无 id（响应里也不回 id） |
+| ② `user.message` 事件 | core：`execution-unit.ts:1662-1670` `publishEvent({ type:'user.message', run_id, data:{ run_id, session_id, message: effectiveUser, refs } })` | `data.run_id`、`data.message`（**整个 Message 对象，无 id**）、`data.refs[].path` | ⚠️ 唯一可用身份是 `run_id`，**它不是消息 id** |
+| ③ 落盘消息 `sessions.get.messages[]` | core：`execution-unit.ts:3352` `addMessage(message, runId)`；`message-identity.ts` 的 `assignMessageIdentities` / `withRunIdentity` | `run_id`（user 也有）、`run_segment`（**只给 assistant**：`occupiesSegment = role==='assistant' && 正文非空`）。`Message` 类型见 `packages/core/src/types/provider.ts:39-75`，**没有 `message_id` 字段** | ⚠️ `run_id` 与 ② 同值；`run_segment` 对 user 恒缺省 |
+| ④ `events.list` 返回的磁盘事件 | 无：事件原样进 run trace | 同 ②；trace 另带 per-run `seq`（`packages/core/src/observability/read-trace.ts`） | ⚠️ 同 ②；per-run seq 当不了会话游标 |
+| ⑤ SSE 回放重推 | gateway：`gateway.ts:1164-1170` `outboundEventFrame` = `{ seq, event }`，`event` 是同一个对象（`withSessionAttribution` 只补 session 归属） | hub `seq`（进程内自增、重启归零）+ 事件体原样 | ⚠️ 事件体一致；**游标与磁盘 seq 无关**（§2.2 第 4 点） |
+| ⑥ team / 子 agent | serve：team 消息 `message_id` 由服务端生成（`team-control.ts` 追加消息处）；agent inbox 消息亦有 `message_id`（`agent-control.ts`） | `message_id` | ❌ **传不进 session**：`execution-unit.ts` 全文 `message_id` 零命中，团队消息变成 session 用户消息时只剩 `run_id` ⇒ 身份链在入 session 处断开 |
+
+一句话：`run_id` 是唯一的桥，但它不是消息身份（一次 run 里可以有多条 user 消息）；而 hub seq / 会话日志 seq / `run_segment` / `message_id` 四套编号互不翻译。
+
+## 6.3 去重点清单（所有把多来源并成列表的函数）
+
+| 位置 | 去重键 | 同一消息从两个源到达会不会双显 |
+| --- | --- | --- |
+| `transcript-items.ts` `mergeByKey` / `mergeItem` | item.key | **会**：`run:<id>:input` vs `msg:<i>` 不同键，合不上 |
+| `transcript-items.ts` `computeClaimCore`（`uniqueInputOfRun`） | ① 该 run **唯一**一条 user 消息 ② `trimText(content)` 全等 | **会**：①同 run 只要有多条 user 消息（注入 / inbox 投递 / hook 注入，`execution-unit.ts:3352` 全按当前 run_id 落盘）即失效；②guardrail 改写、refs 包装、空白差异即失效 |
+| `transcript-items.ts` `ClaimLedger.decide` | 身份 `(sessionId, epoch, history, windowStart, windowEnd)`；`invalidated ⇒ fresh 替换`，否则只并集不撤销 | **会**：`fresh` 会把「事实没到齐时的空判定」固化成权威判定（6.1 的 S3） |
+| `state/live-items.ts` `LiveItemStore`（`mergeGroupScalars:244`、`released` tombstone `:325-350`、`resume`/refold） | `runId` + 段锚点 seq（`release:495-515` 只收 segments） | **不会**（分段/分组幂等）；**但 user 气泡不在 tombstone 覆盖范围**，交棒后重折叠会把它长回来 |
+| `state/event-store.ts` `push:256` / `truncateAfter:404` / `beginBackfill:456` | hub `seq` 单调 | **不会**（同源重复被 seq 守卫吃掉）；**跨源没有键** |
+| `domains/chat/pending-strip.ts:252` | `entry.message_id`（inbox 待处理） | **不会**（与聊天气泡不同源；inbox 自带 id） |
+| `state/teams.ts` `mergeMessages:60` / `mergeEarlierTeamPage:77` | `message_id` | **不会** —— 团队侧早就是按服务端 id 幂等合并，是 chat 的对照物 |
+| `stores/sessionStore.ts` `mergeTailPage:195`（`loadDetail` 调用链） | 窗口起点 + `next_before` offset 裁剪 | 不会（前缀按 offset 裁掉重叠再拼尾页） |
+
+## 6.4 「回来」到底改了什么（触发点 + 行号，含被推翻的假设）
+
+「回来」≠「刷新」，有三条独立触发点：
+
+- `gateway/connection-handlers.ts:203-206`：任何非 `page` 的 hello 都先 `eventStore.truncateAfter(max(0, info.from_seq - 1))`；`subscribe` 型 hello（切会话 / 重订）到此 return，**不动 epoch**。
+- `gateway/connection-handlers.ts:208-219`：**连接级 hello（自动重连）** → `setEpoch(v => v+1)` ⇒ 认领身份失效 ⇒ 下一次 `decide` 走 `fresh` 替换（`transcript-items.ts` 的 `ClaimLedger.decide`）；随后 `afterConnectionHello` → `recovery.onReconnected` → `ConnectionProvider.tsx:337-345` 强制 `sessionStore.refresh(force)` + `invalidateRouteSnapshot`。
+- `state/useResource.ts:175-186`：轮询型资源（`useResource` 默认 `pauseWhenHidden = true`）在 `visibilitychange → visible` 时会立刻 `run()` 一次重新取数 ⇒ 若会话详情走这条路径，`sessions.get` 重取 ⇒ 新 `sessionDetail.messages` ⇒ 新 `historyIndex` ⇒ `claimIdentity.history` 变化 ⇒ 再 `fresh` 重判一次。
+
+**被推翻的假设**：自动重连的 `epoch+1` 本身**不会**丢认领 —— 事实齐全时重判结论相同（6.1 的反证）。所以重复必须额外满足下面之一：
+
+1. 该 run 的认领**本来就 miss**（6.3 第 2 行）：同 run 有多条 user 消息 **且** 文本不一致（guardrail 改写 / refs 包装 / `user.message` 事件没收到）。
+2. `fresh` 重判发生在**事实暂时为空**的时刻（truncate 之后、重放之前）：空判定被固化，且 `needsRunRerun` 因为 `seen / fed / settled` 三个「一次性转换」都已发生过而返回 false ⇒ 不再重判（S3 的 `decisions` 停在 2）。
+
+诚实说明：第 2 条的**具体交错**我在代码里没找到「必然发生」的入口 —— `connection-handlers.ts:204` 的 truncate 只在 `from_seq - 1 < currentSeq` 时才真的截断；`subscribe` 型 hello 会截断但**不升 epoch**（`:206` 提前 return）；连接级 hello 升 epoch 时 `from_seq = since + 1`、`since = currentSeq`（`:260`）⇒ 通常不截断。所以第 2 条是「机制可达、现实触发频率未证」，第 1 条才是可以从线上数据直接验证的（`userMisses`）。
+
+现象与条件的对应（写清避免误导）：
+
+- 「发送后立刻就是两条」⇒ 基本是条件 1（身份/内容 miss），「回来」只是你重新看了一眼。
+- 「离开期间还正常、回来才两条」⇒ 需要在回来时把已有的认领丢掉（条件 2），或者在回来那次 `fresh` 重判时历史恰好不含该消息（`sessions.get` 时序），随后没有第三次重判把它修回来。
+- **我没法凭代码断定用户这次属于哪一支** —— 6.4 末尾的探针（`claimStats`）能把两者区分开，这是下一步唯一需要真机做的事。
+
+**真机复现的阻塞**：两条我都在模块级用真实 `ClaimLedger` / `buildTranscriptItems` 复现了，但**没有真机复现**（需要起 gateway + 真实模型跑一轮会触发 guardrail / 注入的会话）。1 分钟内可判定是哪一条：回来后读 `useChatTranscript.ts:568` 暴露的 `claimStats` ——
+- `stats.userMisses > 0` ⇒ 第 1 条（身份路径失效）；
+- `stats.decisions` 只涨 1 次而 `claimedUserByRun` 为空 ⇒ 第 2 条（空判定固化）。
+
+## 6.5 修复方向（1 推荐 + 1 备选）
+
+两条都必须同时满足：① 不重复渲染；② 刷新不丢消息（与 §4 的最小可验收标准 同一份验收）；③ **不依赖「客户端临时 id 恰好等于服务端 id」这个隐含假设**，要显式化。
+
+**推荐：服务端生成 `input_message_id`，四站同值，前端按 id 配对**
+
+- 生成：`runs.start` 受理时生成 `message_id`（ULID），写进 `Message.message_id`（新字段），并在 `runs.start` 响应里显式返回 `{ run_id, input_message_id }` —— **客户端永不生成 id**，只使用服务端给的，假设被消除。
+- 发布：`user.message` 事件 `data.message.message_id` 同值；`run.started` 也带上（只有 `run.started` 落在回放窗口内时也能配对）。
+- 落盘 / 读取：session state 原样写（`file-backend.ts` 不挑字段），`sessions.get.messages[]` 透出。
+- 回填：`sessions.events`（§3 方案 B）返回同一事件 ⇒ live 与磁盘同一 id。
+- 前端：`run-input` 的 key 用 `msg:<input_message_id>`，历史 user item 的 key 也用 `msg:<input_message_id>`（老数据无 id 时退回 `msg:<absIndex>`）⇒ `mergeByKey` 天然幂等，**不再依赖认领**；`ClaimLedger` 降级为老数据兜底。
+- 收益叠加：`input_message_id` 同时是「这条消息在事件流里的锚点」，可作为磁盘回填的水位（配合 §3 的 `event_cursor`），**一个改动同时关掉 §1 的洞和本节的重复**。
+
+**备选：给 user 消息一个段身份（`run_segment = 0` 或 `input_of_run: true`）**
+
+- 只改 `message-identity.ts` 的盖章规则 + `uniqueInputOfRun` 取「本 run 最小 segment 的 user 消息」。
+- 满足 ①，**不满足 ②**（没有可用作回填游标的 id），且仍是「两侧各自算身份」⇒ 只能治重复，治不了 §1 的洞。所以是备选，不能替代推荐方案。
+
+**明确不采纳**：继续加强内容规范化（trim / 去前缀 / 去 refs）。它是启发式，guardrail 改写场景永远补不齐 —— 0.52 给 assistant 加 `run_id` + `run_segment` 就是为了摆脱它（`docs/versions/CURRENT.md` 里记着：本机 652 run 中 7 个命中 Output guardrail 改写，症状正是「结尾正文重复」）。
+
+## 6.6 回归测试建议（本轮不新增断言）
+
+优先复用已有探针，不新建门禁：
+
+- `scripts/check-live-items.ts`：G-F「历史先到不重复」、G-F2「认领粘性」、G-C「回放幂等」已有同类用例，加两个场景（用例就是 §6.1 的 S2 / S3，脚本可直接搬进去）：
+  - 同 run 两条 user 消息（注入）+ 落盘文本与 `run.started.input` 不一致 ⇒ 断言 user 气泡计数 === 1、`userMisses === 0`（现状会红，对应 6.1 的 S2）；
+  - `epoch+1` 且中间一次 `decide` 的事实为空、随后事实补回 ⇒ 断言 `claimedUserByRun` 不被空判定覆盖（对应 S3）。
+- `scripts/check-chat-visibility.ts`（不变量①）：断言「UI 消息集合 ⊇ 存档消息集合」，覆盖「刷新后 live 侧丢失不减少消息」。
+- `scripts/check-refresh-gap.ts`（按 §4 的最小可验收标准新建）：加一条 id 贯通断言 —— 同一条用户消息在 ②③④⑤ 四站的 `message_id` 相同。
+- 现成探针（零代码）：`claimStats`（`useChatTranscript.ts:568`）+ `eventStore.hasNewestRunStart`。
 
 # 7. 需要拍板（拿到批准前不动产品代码）
 
 1. **新增 RPC `sessions.events`**（读会话事件日志，`since_seq` + `limit` + `types`），并给 `sessions.get` 增加 `event_cursor`。→ 属于「新增 RPC」，需批准；批准后还要在 `scripts/check-rpc-methods.ts` 登记（只登记，不改判据）。
 2. **方案 A 的调参是否同批做**：环 1 万 → 5 万、`MAX_EVENTS`/`MAX_BUDGET_BYTES`/`MAX_BACKFILL_PAGES` 同步。纯调参但会抬高常驻内存，需要你点头。
 3. **是否接受「运行中 chunk 正文仍依赖环」这个边界**：若不可接受，则必须走 C（事件持久身份），那是改事件语义 + 改 core 发布热路径，需单独批准。
-4. **用户消息重复渲染的修法选型**（§6 的修法 1 / 2）：两者都改落盘消息语义（`run_segment = -1` 或事件带 `message_id`），需批准。
+4. **用户消息身份方案（§6.5）**：推荐方案要加 `Message.message_id`（服务端生成，`runs.start` 响应 + `user.message` 事件 + 落盘消息 + `sessions.events` 四站同值）+ 前端 item 键改 `msg:<input_message_id>`。**这是改落盘消息语义 + RPC 响应字段 + UI 契约**，需批准。备选（`run_segment = 0` / `input_of_run`）只治重复不治 §1 的洞，是否接受由你定。
 5. **新门禁脚本 `scripts/check-refresh-gap.ts`** 是否允许与既有 `check-*` 并列（只新增用例，不改任何既有阈值）。
+
+> 拍板建议：4 与 1 是同一处改动的两面（消息身份 = 回填游标），建议一次批准、一次验收（§4 末段）。
+
 
 # 附：本轮没做的事
 
 - 没有任何产品代码改动（`apps/web/**`、`packages/serve/**`、`packages/core/**` 全未动）。
-- 没有改 `scripts/check-*.ts`、没有改 `docs/architecture/message-invariants.md`。
-- 复算用的临时脚本已删除，未入库。
+- 没有改 `scripts/check-*.ts`、没有改 `docs/architecture/message-invariants.md`、没有新增断言。
+- 复算 / 复现用的临时脚本（环淘汰复算、`ClaimLedger` S2/S3/S4 复现）跑完即删，未入库；输出的原始数值已原样贴进 §1.2 与 §6.1。
+- **没做**：真机端到端复现（需起 gateway + 真实模型跑长会话 / guardrail 场景），见 §5 与 §6.4 的「阻塞说明」与 1 分钟探针方案。
