@@ -71,7 +71,7 @@
 
 | 项 | 人日 | 说明 |
 | --- | --- | --- |
-| B1 短时票据 | 2–3 | 8642 签发（HMAC，TTL 60s，`aud=node_id`，单次使用 + 60s 重放缓存，绑定 Origin），8644 校验；`nodes.credentials` 改返回票据 |
+| B1 短时票据 | 2.5–3.5 | 8642 签发（**Ed25519 非对称 + kid 多代**，TTL 60s，aud=node_id，单次使用 + 60s 重放缓存，绑定 Origin），8644 只持公钥校验；nodes.credentials 改返回票据。（口径见 auth-decision-memo.md 的 D2，原 HMAC 记号作废） |
 | B2 反代信任 + Origin 收口 | 1–2 | 显式 `proxy.trusted: true` 才认 `X-Forwarded-For`；否则 bind 非回环时拒绝启动（fail-closed） |
 | C1 健康缓存 + 熔断 | 1.5–2 | 500ms 缓存；连续 3 次失败熔断 30s，半开探测 1 次成功后恢复 |
 | D1 平台指标 | 1 | `GET /platform/metrics`：uptime、nodes_total/up、ticket_issued_total、probe_failures_total |
