@@ -22,13 +22,21 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 - **本轮范围**：只有这份 ADR。不改任何代码、不跑测试、不改 `docs/architecture/message-invariants.md`。
   §6 / §10 的文件清单是给实现轮的施工图，不是本轮改动。
 
-### 0. 先核实的三件事（后面所有条款都建在这上面）
+### 0. 先核实的事实（后面所有条款都建在这上面）
 
 | 事实 | 证据位置（main `7b99b90e`） | 对本 ADR 的后果 |
 | --- | --- | --- |
 | Hook 面**只能追加**，不能重写历史 | `packages/core/src/types/hook.ts`：`HookResult` 只有 `messages?`（追加）与 `block`；`systemPrompt` 写入被忽略并发 `hook.system_prompt_ignored`；hook 拿不到上下文正文 | **这是"现在不开放"的结构性理由**，不是单纯前提：append-only 的插件面在类型上就写不出 `placeholder` / `externalize`（这两种模式的全部内容就是"改写已存在的历史消息"），而给它加重写能力等于把"每轮前缀可变"合法化。结论：机制必须 core；将来即使开放，也只能开放"返回 ids 的决策"，不能开放"返回消息"。 |
 | 现实现的占位是**请求期滤镜**，落盘仍是原文 | `context-manager.ts` 请求构建处注释："至多一处视图层改写……任何没有决策的请求，视图必须与落盘逐字一致"；替换点是 `formatClearedToolResult(...)` | 投射**不是段操作**（既非 `new` 也非 `pop`）。不得借 `context_trim` 解释它 —— `request-sequence.ts` 已写下：`context_trim` 是 pop 原因，"pop 不能解释中段改写"，V1 拿它解释中段改写"当场就红了"。 |
 | C1h（存档 = 请求投影 = UI 列表，逐字一致；任何读侧滤镜都违反）**现在是 PENDING** | `docs/architecture/message-invariants.md`；`check-append-only-context.ts` 20 pass / 1 pending | 本 ADR 不宣称 C1h 变绿。它给出一条**受会话声明约束**的放行路径（D4），放行条件是四真同时成立。 |
+
+**决策粒度的事实（本轮在代码里逐条核过，ADR 早期草案把它写成"段"是错的）：**
+
+| 事实 | 证据位置 | 后果 |
+| --- | --- | --- |
+| 投射的冻结点 = **run 起点**（新 run 与 resume 各一次） | `execution-unit.ts:1589`（run 起点）、`:2021`（resume 起点）调 `freezeSegmentClearedToolResults` | 决策粒度是 run，不是"压缩边界/段" |
+| 冻结表是 `WeakMap<object, ids>`，键是**每次 run 新建**的 `workingContext` | `:788` `segmentClearPlans = new WeakMap<object, readonly string[]>()`；`:1306` `const workingContext = this.contextFactory({ sessionId })` | 每个 run 起点必然重算；run 内所有请求共用同一份集合（一个 run 的工具循环会发很多次 LLM 请求） |
+| 压缩与体积阈值是**另一套机制**：安全阀 + 提前触发压缩 | `context-manager.ts:816 shouldCompact()`（含 `shouldCompactForToolResultVolume`，由 `:823` 调用）；压缩只在 `compactAtSegmentStart`（`execution-unit.ts:741`）与手动压缩处发生 | 它们**不决定投射何时启动**；投射每 run 起点都跑，压缩只是可能在那次 run 起点真的丢东西 |
 
 补充事实（本轮新核实，直接决定 `archive_notice` 的可行性）：
 
@@ -40,7 +48,7 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
   §7 第 1 项（"新增 RPC，需批准 + `check-rpc-methods` 登记"）。当前 `sessions.*` 方法里没有它。
 
 补充实测（`docs/dev/handoff/measure-tool-result-clear.md`，46 次真实会话）：保留体积占比最大 **4.7%**，
-多数会话 0–3%；按段起点冻结后前缀缓存上界从 37.0% 改善到 74.8%。
+多数会话 0–3%；按 **run 起点**冻结后前缀缓存上界从 37.0% 改善到 74.8%。
 
 ### 1. 背景与问题
 
@@ -49,7 +57,7 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 1. 请求构建时，`planClearedToolResults` 选一组要清的工具结果 id：保留最近 `≤10` 条、累计
    `≤ maxTokens × KEEP_RECENT_TOKEN_RATIO (0.05)`，其余进清除集合（`ToolResultKeepOptions` 可覆盖，
    但**配置层没有这两个键**）。
-2. 段起点冻结该集合，段内不再重选 —— 前缀稳定的唯一来源。
+2. **run 起点**冻结该集合（新 run 与 resume 各算一次），run 内不再重选 —— run 内前缀稳定的来源。
 3. 请求视图把被清结果正文换成机械占位（`formatClearedToolResult`），**落盘不动**。
 4. 冻结当轮向历史追加一条 trim 卡（`appendNotice(renderContextTrimNotice(...))`），写
    `context.cleared_tool_result` 事件 + 审计字段 `cleared_tool_call_ids`。
@@ -61,7 +69,16 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 
 - **收益量级错配**：4.7% 是实测上界，多数会话 0–3%。为 0–5% 的收益把"改写历史正文"做成全局强制默认，
   代价是每个会话都背一次 C1h 例外、一次缓存边界、一次"模型看不到原文"。
-- **段边界是硬成本**：占位集合一变，前缀缓存从上一次命中点全部作废（37.0% → 74.8% 的差距就是它）。
+- **缓存代价断在 run 起点，不是"每轮请求"，也不是"段边界"**：
+
+  | 实现 | 断点在哪 | 一个 run 有 20 次工具调用时 |
+  | --- | --- | --- |
+  | 0.51 及以前（每次请求按当前 messages 重算窗口） | 每次请求都可能多清一条 ⇒ 前缀整体右移 | **20 次断裂**（每个请求都比上一个多差一条） |
+  | 0.52 V1（run 起点冻结） | run 起点一次 | **1 次**（run 内 20 次请求前缀逐字节稳定） |
+  | 本 ADR（四模式） | 同 V1：run 起点、且只有"新增了要清的 id"时 | 1 次；`passthrough` / `archive_notice`（substitute=none）下集合不变 ⇒ **0 次** |
+
+  实测口径：冻结后前缀缓存上界 37.0% → 74.8%（未命中上行界 100%）。所以准确说法是
+  「**每个 run 起点可能断一次，run 内所有请求前缀稳定**」——"段边界断一次"是错的（段可以横跨多个 run）。
 - **占位没有摘要 ⇒ 重调用**：占位只说明"这里有过一个结果"，模型拿不到可复用信息，于是重跑同样的工具，
   净 token 反而更高。这是 `placeholder` 的结构性缺陷，不是参数问题；`archive_notice`（§2.3）就是
   针对这一条设计的。
@@ -86,8 +103,8 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 | `context_projection.declaration_id` | ulid | 创建时生成 | 声明幂等键 + 豁免判定凭据 | ❌ `session_id`：复用它无法表达"同段/同会话内声明不可替换"的幂等语义 |
 | `context_projection.source` | `session_created` / `default` / `legacy` | 按建会话路径 | 这条声明是显式给的、缺省填的、还是旧会话补的 | ❌ `explicit: boolean`：`legacy` 与 `default` 都是"非显式"，布尔表不出两种来源 |
 | `context_projection.policy` | `core.context_projection`（固定） | 固定 | 决策由哪个**内建**实现产出 | ❌ `strategy` / `plugin_id`：现阶段没有插件，叫 strategy 会诱导后来的人当扩展点 |
-| `context_projection.params` | 见 §4.2 | `keepRecentTokenRatio 0.05`、`keepRecentMax 10`、`volumeRatio 0.20` | 段起点解析并夹紧后的参数快照 | ❌ 拆成 `keep` / `clear` / `compact` 顶层字段：params 是一组，散落后每加一个都要改落盘 schema |
-| `SessionState.context_projection_audit` | 审计对象（§5.1） | 无（旧会话缺省） | 每段一条的冻结决策与执行记录 | ❌ `projection_stats` / `projection_metrics`：它是重放的**唯一真相**，stats 听起来可丢 |
+| `context_projection.params` | 见 §4.2 | `keepRecentTokenRatio 0.05`、`keepRecentMax 10`、`volumeRatio 0.20` | run 起点解析并夹紧后的参数快照 | ❌ 拆成 `keep` / `clear` / `compact` 顶层字段：params 是一组，散落后每加一个都要改落盘 schema |
+| `SessionState.context_projection_audit` | 审计对象（§5.1） | 无（旧会话缺省） | 每次决策变更的 run 起点一条的冻结决策与执行记录 | ❌ `projection_stats` / `projection_metrics`：它是重放的**唯一真相**，stats 听起来可丢 |
 | `SessionState.cleared_tool_call_ids` | `string[]` | 无 | `placeholder` 模式的审计（**既有，不改名**） | ❌ 改名 `projected_ids`：落盘字段改名让旧会话不可读，换来的只是审美 |
 | `context_projection_audit.mode` vs `.effective_mode` | 同 mode 枚举 | `.effective_mode = mode` | 声明值 vs 真实生效值 | ❌ 只留一个 `mode`：降级时会丢掉"用户声明了什么"，重放与告警都读不出差异 |
 
@@ -104,7 +121,7 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 
 模式不是四个并列分支，而是 `(substitute, announce)` 两维上的四个点 —— 门禁因此可以用两条断言覆盖全部模式。
 
-| mode | 本轮落地 | substitute（替换正文） | announce（段边界追加一条卡） | 是否省 token | C1h |
+| mode | 本轮落地 | substitute（替换正文） | announce（压缩发生的那次 run 起点追加一条卡） | 是否省 token | C1h |
 | --- | --- | --- | --- | --- | --- |
 | `passthrough` | **是** | `none` | `none` | 否（不投射基线） | 逐字一致，**不解禁** |
 | `placeholder` | **是**（现实现） | `placeholder` | trim 卡 | 是（实测 ≤4.7%） | 需会话级豁免 |
@@ -118,20 +135,22 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 
 一句话：**它不省一个字节，只把"被压缩丢掉的那批工具结果"从"无声消失"变成"一条可回读的归档卡"。**
 
-**(a) 触发点：只在段边界，段内不动。** 段边界的两个来源是：压缩达
-`DEFAULT_COMPACT_THRESHOLD = 0.85` 主阈值（真开新段），或体积压力被上层采纳后开新段。注意
-`TOOL_RESULT_VOLUME_THRESHOLD_RATIO = 0.20` 触顶本身**不产生任何动作**（只发
-`context.projection_pressure` 告警，D5）；它只是"该会话宜显式声明 `placeholder`"的信号。
-段内一律不动：段内既不重算归档集合，也不追加第二张卡（R4d）。
+**(a) 触发点：压缩真正丢东西的那一次 run 起点，run 内不动。** 压缩只在 `compactAtSegmentStart`
+（run 起点 / resume）与用户显式压缩处发生（`execution-unit.ts:741`）；run 内撑爆上下文走「超限」卡 +
+失败收尾，**不**压缩。所以归档卡只可能出现在这几种时刻之一。`DEFAULT_COMPACT_THRESHOLD = 0.85` 决定
+"这次 run 起点要不要压缩"；`TOOL_RESULT_VOLUME_THRESHOLD_RATIO = 0.20` 只是让 `shouldCompact()` 更早
+为真（= 提前压缩），**与四模式何时启动无关** —— 投射每 run 起点都跑（D5）。0.20 触顶本身在
+`passthrough` / `archive_notice` 下不产生任何压缩动作，只发 `context.projection_pressure` 告警。
+run 内一律不动：run 内既不重算归档集合，也不追加第二张卡（R4d）。
 
-**(b) 动作：不改写任何工具结果正文。** 本段基座由压缩既有的**最旧优先丢弃**构成：
+**(b) 动作：不改写任何工具结果正文。** 重基座由压缩既有的**最旧优先丢弃**构成（压缩只在 run 起点发生）：
 `toSummarize = nonSystem.slice(0, keepFrom)`，即丢弃最旧的一段**连续前缀**（配对完整性会把边界回退到
 owning assistant）。归档对象 = **被丢弃前缀里的 `role === 'tool'` 消息**。丢与不丢**完全由既有压缩逻辑
 决定**：`archive_notice` 不参与 `keepFrom`、`messageCapFor`、`keepRecent*` 的任何计算，也不会让压缩
 多丢或少丢一条。
 
-**(c) 追加：往历史尾部 append 一条持久化、UI 可见的合成消息（归档卡）。** 走既有 `appendNotice` 路径
-⇒ 与 trim 卡同一类，进 `sessions.*` 投影与 UI 消息列表。卡携带结构化元数据：
+**(c) 追加：在压缩发生的那一次 run 起点，往历史尾部 append 一条持久化、UI 可见的合成消息（归档卡）。**
+走既有 `appendNotice` 路径 ⇒ 与 trim 卡同一类，进 `sessions.*` 投影与 UI 消息列表。卡携带结构化元数据：
 
 | 字段 | 内容 |
 | --- | --- |
@@ -149,7 +168,7 @@ owning assistant）。归档对象 = **被丢弃前缀里的 `role === 'tool'` �
 
 1. **不消费 substitute ⇒ 不消费 C1h 豁免**：卡是落盘消息，请求视图不需要任何滤镜，请求与落盘逐字一致。
    D4 第 1 条把 `archive_notice` 明确排除在豁免之外。
-2. **append-only**：卡只在段边界追加一次，段内不追加第二张（R4d）；重基座由压缩负责（既有 `new`/`pop`
+2. **append-only**：卡只在压缩发生的那次 run 起点追加一次，run 内不追加第二张（R4d）；重基座由压缩负责（既有 `new`/`pop`
    语义），投射层不引入任何新的历史改写。
 3. **可见性对等**：UI 与模型看到**同一条卡**（同一 `message_id`、同一 `text_hash`）；不存在"UI 有、
    模型无"或反过来的旁路（C1h 的另一半语义）。
@@ -164,13 +183,34 @@ owning assistant）。归档对象 = **被丢弃前缀里的 `role === 'tool'` �
 - **模型侧还缺一个读回通道**：现在没有任何面向模型的工具能按 `tool_call_id` 读会话事件 ⇒ 当前卡的
   "怎么拿回来"只对人/编排层成立。这一项列入 §9 未定事项，并与 `sessions.events` 同期解决。
 
+#### 2.4 粒度：决策粒度是 **run**，不是段；模式粒度是 **会话**
+
+三层粒度必须分开写，否则很容易把"每 run 重算"误读成"run 内改集合"：
+
+| 层 | 时间粒度 | 决定什么 | 何时算 |
+| --- | --- | --- | --- |
+| **会话** | 整个 session | `mode`、`params`、`excluded_tools`、`declaration_id` | **会话创建时一次**，会话内不可变 |
+| **run** | 每个 run 起点（新 run 与 resume 各一次） | 这一轮要投射哪些 `tool_call_id`（集合），以及 `plan_hash` | **每个 run 起点重算并冻结**；run 内所有请求共用 |
+| **段** | 由段原因界定（`session_switch` / `compaction` / `context_trim` 的 pop） | 前缀是否被允许改形、缓存从哪重基座 | 压缩只在 run 起点发生；段可以横跨多个 run |
+
+由此得到三条必须分开理解的结论：
+
+1. **模式不可变 ≠ 集合不可变**。`ProjectionModeImmutableError` / `context.projection_rejected` 的触发
+   条件只有一个：**试图在会话内改声明**（改 `mode`、`params`、`excluded_tools` 或写第二条声明）。
+   换模式只能换会话。
+2. **集合每 run 起点重算是正常行为，不是违规**。一个 run 的工具循环会发很多次 LLM 请求，它们共用
+   同一份集合；下一个 run 起点按当时的 messages 重算，集合变大是预期结果（新产生的旧结果是新事实）。
+   违规只有一种：**run 内**（同一次 run 的多次请求之间）集合变了。
+3. **`plan_hash` 的恒定范围是 run**（不是段、不是会话）。下游门禁/告警按 run 作界：run 内两次请求
+   hash 不同 ⇒ 红；跨 run hash 不同 ⇒ 正常。
+
 #### D1：内化为 core —— 决策层与机制层都在 core，只隔一个**内部 seam**
 
 | 职责 | 归属（均在 core 内） | 落点 |
 | --- | --- | --- |
 | 选哪些 `tool_call_id` 进投射集合、豁免哪些工具、参数取值 | **决策层**（core 内建） | `packages/core/src/context/projection-policy.ts` |
 | 占位 / 归档卡 / trim 卡的**文本渲染** | **机制层** | `formatClearedToolResult` / `renderContextTrimNotice` / `renderProjectionArchiveNotice` |
-| 段起点冻结 | 机制层 | 段起点一次性冻结，段内不重选 |
+| run 起点冻结 | 机制层 | run 起点一次性冻结，run 内不重选（`execution-unit.ts:1589` / resume `:2021`） |
 | 审计字段与事件写入 | 机制层 | `cleared_tool_call_ids` / `context_projection_audit` |
 | 请求构建时的替换点 | 机制层 | `buildRequestMessages` 里唯一一处视图层改写 |
 | 门禁判定 | 机制层 | §6（门禁只调 `isProjectionExempt()`，不复制判定逻辑） |
@@ -187,21 +227,24 @@ owning assistant）。归档对象 = **被丢弃前缀里的 `role === 'tool'` �
 #### D2：决策层不产出文本
 
 决策层只产出 **ids + mode + params + excludedTools**（+ 卡的**种类**，不是文本）。理由可判定：
-R4（段内占位/卡条数不增）、C1h（存档=投影）、缓存冻结三条门禁都以"**渲染是输入的纯函数**"为前提。
+R4（**run 内**占位/卡条数不增）、C1h（存档=投影）、缓存冻结三条门禁都以"**渲染是输入的纯函数**"为前提。
 
 条款：内部 seam 的返回类型里**不存在**任何 `content` / `text` / `template` 字段；渲染函数签名只接受
 `(toolCallId, toolName, bytes, 元数据)` 这类结构化数据，**不接受消息正文** —— 决策层在类型上就无法把内容
 塞进占位/卡里。
 
-#### D3：模式是会话属性，创建时声明、随 session 落盘、段内不可变
+#### D3：模式是会话属性（不可变）；集合是 run 属性（每 run 起点重算）
 
-- 会话创建时写入声明（**总是写**，包括 `passthrough`），来源记 `source`。
-  "总是写"是为了让 D4 的豁免判定不需要"字段缺失即通过"这种隐式缺省。
-- 段中点改模式或改参数 ⇒ **拒绝**：抛 `ProjectionModeImmutableError`，落 `context.projection_rejected`。
-  语义等价于"这段已冻结"。
-- 真要换模式 ⇒ **换会话**。因此 R3 的段原因词表**不新增** `mode_changed` 之类 —— 刻意不开"中途换投影"
-  的洗白通道。
-- 参数同理：`params` 在**段起点**解析并冻结进审计，段内请求一律读冻结值。
+这两件事必须分开写（§2.4）：
+
+- **模式 / 参数 / 豁免工具 = 会话级**。会话创建时写入声明（**总是写**，包括 `passthrough`），来源记
+  `source`。"总是写"是为了让 D4 的豁免判定不需要"字段缺失即通过"这种隐式缺省。
+- **要换模式 ⇒ 换会话**。会话内试图改声明（任何时刻，包括 run 起点）⇒ **拒绝**：抛
+  `ProjectionModeImmutableError`，落 `context.projection_rejected`。因此 R3 的段原因词表**不新增**
+  `mode_changed` 之类 —— 刻意不开"中途换投影"的洗白通道。
+- **集合 = run 级**。每个 run 起点（新 run 与 resume）按当时 messages 重算并冻结；run 内所有请求共用。
+  **每 run 重算是正常行为，不是违规**；违规只发生在 run 内集合发生变化。参数在 run 起点解析并夹紧，
+  run 内请求一律读冻结值。
 
 #### D4：C1h 豁免只挂在会话声明上
 
@@ -212,23 +255,32 @@ R4（段内占位/卡条数不增）、C1h（存档=投影）、缓存冻结三�
 2. `context_projection.declaration_id` 存在（声明存在性，不是"字段缺省即通过"）；
 3. 对应审计存在：`cleared_tool_call_ids`（数组，可为空），且审计里的 `declaration_id` **等于**声明里的
    （防"拿 A 会话的声明解 B 会话的锁"）；
-4. 请求视图由 core 从该声明 + 冻结计划纯函数渲染（段内 `plan_hash` 恒定，§6.1 R4a）。
+4. 请求视图由 core 从该声明 + 冻结计划纯函数渲染（**run 内** `plan_hash` 恒定，§6.1 R4a）。
 
 **不许**全局白名单、**不许**按工具名白名单、**不许**环境变量开关。豁免唯一实现落点
 `isProjectionExempt(session, audit)`，运行时与门禁**共用**这一个函数。legacy 会话（无审计记录）**继续红**，
 不开迁移期临时放行。
 
-#### D5：阈值沿用现状；per-mode 阈值是未定事项
+#### D5：两个阈值各管各的；per-mode 阈值是未定事项
 
-- `DEFAULT_COMPACT_THRESHOLD = 0.85`（**代码现值，不改数**）是唯一会让段真正重基座的阈值，任何 mode 下都保留
-  ⇒ 这就是"不会撞上下文溢出"的硬兜底。
-- `TOOL_RESULT_VOLUME_THRESHOLD_RATIO = 0.20` 在 `passthrough` / `archive_notice` 下**只**发
-  `context.projection_pressure`（带 `retained_tokens / max_tokens / ratio / top_result_bytes`），
-  **不**占位、**不**自动压缩、**不**切模式。
+先纠正一个容易混的说法：**体积阈值与"四模式何时启动"无关**。投射在**每个 run 起点**都跑（§2.4），
+阈值只决定"这一次 run 起点要不要压缩"。
+
+| 常量 | 现值 | 作用对象 | 与投射的关系 |
+| --- | --- | --- | --- |
+| `DEFAULT_COMPACT_THRESHOLD` | `0.85`（**代码现值，不改数**） | `shouldCompact()` 的 token 主判据 → 是否在**这次 run 起点**压缩（`compactAtSegmentStart`） | 无关。它只决定段要不要重基座；任何 mode 下都保留 ⇒ 这就是"不会撞上下文溢出"的硬兜底 |
+| `TOOL_RESULT_VOLUME_THRESHOLD_RATIO` | `0.20` | 同一处 `shouldCompact()`（`shouldCompactForToolResultVolume`，`context-manager.ts:823`） | 无关。它让压缩**更早**发生（单条巨型结果触顶），不让投射启动得更早 |
+
+按模式分述：
+
+- `placeholder`：0.20 触顶 ⇒ 压缩可能在那次 run 起点发生（等于"提前压一次"）；集合仍由 run 起点重算决定。
+- `passthrough` / `archive_notice`：0.20 触顶**只发** `context.projection_pressure`（带
+  `retained_tokens / max_tokens / ratio / top_result_bytes`），**不**占位、**不**自动压缩、**不**切模式。
+  注意 0.85 主判据在这两个模式下照旧生效 —— 关掉的只是"体积维度多一个提前触发原因"。
 - provider 返回 `context_length_exceeded` 时仍走既有 `context_trim`（pop，一次到位），且**不得**顺手把
   mode 改成 `placeholder`（改模式只能靠新会话）。
-- **未定事项**：per-mode 阈值（例如 `archive_notice` 是否可以用更低的体积阈值提示开新段）**当前不就绪**，
-  需按模式做 A/B 数据；本 ADR 不预设任何 per-mode 数值（§9.2 第 1 项）。
+- **未定事项**：per-mode 阈值（例如 `archive_notice` 是否该用更低的体积阈值去提示开新段）**当前不就绪**，
+  需要按模式做 A/B 数据；本 ADR 不预设任何 per-mode 数值（§9.2 第 1 项）。
 
 #### D6：不扩 Hook 面、不新增插件注册点
 
@@ -284,7 +336,7 @@ R4（段内占位/卡条数不增）、C1h（存档=投影）、缓存冻结三�
 | F2 | **审计不可旁路** | 全仓唯一写入点（`assertSingleAuditWriter` 式门禁）；缺失/不匹配/被篡改三种构造下 `isProjectionExempt()` 必须 false |
 | F3 | **门禁按 mode 判定已稳定** | §6 的模式矩阵与 `check-projection-modes` 连续两个 minor 全绿、无 flaky、无 skip |
 | F4 | **对外 API 版本化** | 落盘 schema 带 `schema_version` + 向后兼容窗口（旧会话可读、有迁移脚本）；开放注册点需**先**改 ADR 并在 ADR-099 上走"四类 → 五类"修订 |
-| F5 | **引用可见性先落地** | UI/`/context` 能展示"本段被投影/归档了哪些 id、原始字节数、是否可回读"；没有它不开放 |
+| F5 | **引用可见性先落地** | UI/`/context` 能展示"本 run 被投影/归档了哪些 id、原始字节数、是否可回读"；没有它不开放 |
 | F6 | **信任模型成文** | 明确写"同进程插件不是安全边界"，并给出权限模型与失败归责口径 |
 
 F1–F6 是**准入条件**，不是路线图。谁想开放，先交出这六项的验证结果。
@@ -303,28 +355,33 @@ export interface ContextProjectionPolicy {
 
 export interface ContextProjectionInput {
   readonly session_id: string;
-  readonly segment_index: number;           // 段序号，从 1 起
-  readonly segment_kind: 'new' | 'pop';
+  readonly run_index: number;              // run 序号（会话内从 1 起）——**决策粒度就是它**
+  readonly run_kind: 'new' | 'resume';
+  readonly segment_index: number;          // 段序号（压缩/缓存重基座语境，仅作解释）
+  readonly segment_opened_by?: 'session_switch' | 'compaction' | 'context_trim';
   readonly declared_mode: ContextProjectionMode;   // 只读，决策层不得改
   readonly max_tokens: number;
-  readonly used_tokens: number;             // 段起点请求的估算占用
-  /** 段起点可见的工具结果摘要：**不含正文** */
+  readonly used_tokens: number;            // 本次 run 起点请求的估算占用
+  /** run 起点可见的工具结果摘要：**不含正文** */
   readonly tool_results: ReadonlyArray<{
     readonly tool_call_id: string;
     readonly tool_name: string;
     readonly bytes: number;
-    readonly token_estimate: number;        // 与 estimateTokens 同口径
+    readonly token_estimate: number;       // 与 estimateTokens 同口径
     readonly is_error: boolean;
-    readonly turn: number;                  // 相对段起点的轮次
+    readonly turn: number;                 // 相对 run 起点的轮次
   }>;
-  /** 段边界上被压缩丢弃的 tool 消息（archive_notice 的输入，同样不含正文） */
+  /** 本次 run 起点压缩刚丢弃的 tool 消息（archive_notice 的输入，同样不含正文） */
   readonly dropped_tool_results: ReadonlyArray<{ tool_call_id: string; tool_name: string; bytes: number }>;
+  /** 上一 run 的决策结果，用于判断"这次是否变了"（变才写审计/事件） */
+  readonly previous?: { readonly plan_hash: string; readonly tool_call_ids: readonly string[] };
   readonly excluded_tools: readonly string[];
   readonly params: ResolvedProjectionParams;      // 已解析、已夹紧
 }
 ```
 
-调用时机：**段起点一次**。段内每轮读冻结结果，不再调用（缓存与可重放都依赖这一点）。
+调用时机：**每个 run 起点一次**（新 run = `execution-unit.ts:1589`，resume = `:2021`）。
+run 内所有请求读冻结结果，不再调用（run 内缓存与可重放都依赖这一点）。
 `passthrough` 下 core 直接短路，不调用决策层。
 
 #### 4.2 返回值 schema
@@ -357,9 +414,9 @@ export interface ContextProjectionPlan {
 1. 字段白名单 + 单字符串 ≤ 512 字符（D2）；
 2. `mode === declared_mode`，否则 `mode_mismatch`；
 3. **`mode === 'externalize'` ⇒ `projection_mode_unavailable`（拒绝，会话创建失败）** —— 本轮固定行为；
-4. `tool_call_ids ⊆` 段起点可投影集合（每个 id 必须能在段起点消息里找到对应的 `tool_use`），否则
+4. `tool_call_ids ⊆` 该 run 起点可投影集合（每个 id 必须能在该 run 起点消息里找到对应的 `tool_use`），否则
    `ids_not_subset`；
-5. 去重后按段起点顺序重排（core 决定顺序，防"顺序也是一种决策"）；
+5. 去重后按该 run 起点的消息顺序重排（core 决定顺序，防"顺序也是一种决策"）；
 6. `excluded_tools ⊆ 会话声明豁免`，否则 `excluded_escalation`；
 7. `mode === 'archive_notice'` 要求读回路径可用（`sessions.events` 探针），否则
    `readback_unavailable` ⇒ 降级 `passthrough`（§2.3f；**不**报创建失败，因为卡没有副作用）。
@@ -374,7 +431,7 @@ export interface ContextProjectionPlan {
 | 返回非法值（§4.3 任一 code） | `passthrough` | `...{reason:'<code>'}` | 同上 |
 | `archive_notice` 但读回路径不可用 | `passthrough` | `...{reason:'readback_unavailable'}` | `effective_mode: 'passthrough'` |
 
-降级后本段**整段**为 `passthrough`：不占位、不追加卡、不写 `cleared_tool_call_ids` 增量、不改冻结集合。
+降级后本次 run **全 run** 为 `passthrough`：不占位、不追加卡、不写 `cleared_tool_call_ids` 增量、不改冻结集合。
 部分应用被禁止 —— 它会让"这条占位对应哪次决策"无法回答。
 
 #### 4.5 core 渲染器（唯一文本作者）
@@ -411,14 +468,15 @@ export interface ContextProjectionDeclaration {
 | --- | --- | --- |
 | `SessionState` | `context_projection?: ContextProjectionDeclaration` | 已实现（D3） |
 | `SessionState` | `cleared_tool_call_ids?: string[]` | 已实现（`placeholder`，既有） |
-| `SessionState` | `context_projection_audit?: ContextProjectionAudit` | 已实现（每段一条，段起点覆盖写入） |
+| `SessionState` | `context_projection_audit?: ContextProjectionAudit` | 已实现 —— **每次决策变更的 run 起点一条**（首次 run 与 resume 都算），覆盖写入最新一条 |
 | `context_projection_audit` | `externalized` | **`not_implemented`** —— 本轮**不写**该字段；解冻时按附录 A 增补并升 `schema_version` |
 
 ```ts
 export interface ContextProjectionAudit {
   readonly schema_version: 1;
   readonly declaration_id: string;
-  readonly segment_index: number;
+  readonly run_index: number;                     // 这条决策属于哪个 run（决策粒度）
+  readonly segment_index: number;                 // 该 run 起点落在哪个段（压缩/缓存重基座语境）
   readonly mode: ContextProjectionMode;           // 声明值
   readonly effective_mode: ContextProjectionMode; // 生效值（可能因降级为 passthrough）
   readonly policy: { id: 'core.context_projection'; version: number };
@@ -428,54 +486,73 @@ export interface ContextProjectionAudit {
   readonly announced?: { kind: 'trim' | 'archive'; message_id: string; text_hash: string };
   readonly degraded?: { reason: string; detail?: string };
   readonly params_clamped?: string[];
+  readonly previous_plan_hash?: string;           // 上一次变更时的 hash（链式可追溯）
 }
 ```
+
+**为什么不是每个 run 都写一条**：一个会话的 run 数远大于"决策真正变化的次数"。每次 run 起点都写会让
+审计日志被"什么都没变"的记录淹掉（一个长跑会话几十个 run × N 段），也让"哪一次决策变了"更难查。
+写入条件（唯一）：**下列任一发生变化** —— `cleared_tool_call_ids` 集合、`archived` 集合、
+`effective_mode`、`plan_hash`、`degraded`。首次 run 与 resume 若集合未变，也**不**写新记录
+（`previous_plan_hash` 因此天然表示"上一次变更"）。事件与 state 同条件，二者一一对应。
 
 #### 5.2 事件（全部可重放；tier 表登记为 `notice`/`audit`，不得 `internal`）
 
 | 事件 | 何时 | 本轮状态 |
 | --- | --- | --- |
 | `context.projection_declared` | 会话创建 | 已实现 |
-| `context.projection_applied` | 段起点 | 已实现（`cleared / kept / archived / announced`） |
+| `context.projection_applied` | **决策发生变更的那次 run 起点**（条件见 §5.1，不是每个 run） | 已实现（`cleared / kept / archived / announced`） |
 | `context.projection_degraded` | §4.4 | 已实现（含 `readback_unavailable`） |
-| `context.projection_pressure` | 体积触顶（只告警） | 已实现 |
-| `context.projection_rejected` | 段中点改 mode/params | 已实现 |
+| `context.projection_pressure` | 体积触顶（只告警；每个 run 起点最多一条，去重键 = run） | 已实现 |
+| `context.projection_rejected` | **试图改声明**（改 mode/params/豁免工具）；不是"集合每 run 重算" | 已实现 |
 | `context.cleared_tool_result` | `placeholder`（既有，不变） | 已实现 |
 | `context.externalized_tool_result` | `externalize` 落盘 | **`not_implemented`**（附录 A） |
 
-#### 5.3 重建规则（同一段必须拿到同一决策）
+#### 5.3 重建规则（同一个 run 必须拿到同一决策）
 
 1. 恢复会话时**从不重跑决策**。请求视图 = `project(落盘消息, context_projection_audit)`。
-2. `context_projection_audit` 是**唯一真相**；`context.projection_applied` 只是可见镜像（两者不一致时以
-   state 为准，并落 `projection_audit_mismatch` 告警）。
+2. `context_projection_audit` 是**唯一真相**（记的是最近一次变更）；`context.projection_applied` 是它的
+   可见镜像（两者不一致时以 state 为准，并落 `projection_audit_mismatch` 告警）。
 3. 缺 `context_projection_audit` 的旧会话 ⇒ 按 §7.1 兼容路径重建，且**不**声称拿到豁免
    （D4 条件 3 不满足 ⇒ C1h 仍红；这是已裁定口径）。
-4. 同一份 state 连续构建两次请求，前缀必须逐字节相同（探针 P7）。
+4. **run 内**连续构建两次请求，前缀必须逐字节相同（探针 P7）；**跨 run** 前缀变化是正常行为。
+5. resume（`:2021`）会**重新决策**：若集合变了就写一条新审计 + 一条新事件，此时 run 边界上的前缀变化
+   同样是正常行为；若没变则沿用上一条，不得凭空产生新 hash。
 
 #### 5.4 幂等
 
 - `declaration_id`：同一会话写第二条声明 ⇒ 拒绝（D3）。
-- `plan_hash`：段内两轮算出不同 hash ⇒ 红（R4a）。
+- `plan_hash`：**run 内**两次请求算出不同 hash ⇒ 红（R4a）；跨 run 不同 ⇒ 正常。
 - 累加字段（`cleared_tool_call_ids`）按集合并写入，重复事件不重复追加。
+- 审计/事件写入按 §5.1 的变更条件去重：集合与 `effective_mode` 都没变 ⇒ 不写、不发。
 
 ### 6. 门禁改造清单
 
 #### 6.1 R4（`check-request-append-only.ts`）
 
-R4 原文：**同段内占位条数不增**。改成分模式判定（`externalize` 列 = `not_implemented`：该列只断言
-"声明被拒绝、无运行时行为"）：
+R4 原文：**同段内占位条数不增**。**口径澄清（本轮纠正）**：这里的"同一段"在实现里实际是
+"**同一 run 的多次请求**" —— 投射的冻结点是 run 起点（`execution-unit.ts:1589` / resume `:2021`），
+而段可以横跨多个 run（压缩只在 run 起点发生，且一次 run 起点不一定会开新段）。因此：
+
+- **判界 = run**：run 内占位条数不增；**跨 run 增加是正常行为**（新产生的旧结果进集合），不算违规。
+- 若按"段"判，会在"同一段内、跨 run 的自然增长"上误报。这条纠正直接影响 R4/R4a/R4b/R4d 四条断言的
+  取样窗口。
+
+改成分模式判定（`externalize` 列 = `not_implemented`：该列只断言"声明被拒绝、无运行时行为"）：
 
 | 编号 | 断言 | `passthrough` | `placeholder` | `archive_notice` | `externalize` |
 | --- | --- | --- | --- | --- | --- |
-| R4 | 段内占位条数不增 | 占位条数**恒 0** | 保持不变 | 占位条数**恒 0** | `not_implemented` |
-| R4a | 段内 `plan_hash` 恒定 | 适用 | 适用 | 适用 | `not_implemented` |
-| R4b | 段内 `effective_mode === mode`（无未记录降级） | 适用 | 适用 | 适用 | `not_implemented` |
+| R4 | **run 内**占位条数不增（跨 run 不判） | 占位条数**恒 0** | 保持不变 | 占位条数**恒 0** | `not_implemented` |
+| R4a | **run 内** `plan_hash` 恒定（跨 run 可不同） | 适用 | 适用 | 适用 | `not_implemented` |
+| R4b | **run 内** `effective_mode === mode`（无未记录降级） | 适用 | 适用 | 适用 | `not_implemented` |
 | R4c | 占位/卡文本不含正文（对原始 tool 结果做 512 字符子串包含检查） | — | 适用 | 适用（卡里不得出现正文） | `not_implemented` |
-| R4d | archive 卡 ≤ 1 条/段且位于段末（R7 追加语义） | — | — | 适用 | `not_implemented` |
-| R4e | 段原因词表**不新增** `mode_changed` 之类 | 适用 | 适用 | 适用 | `not_implemented` |
+| R4d | archive 卡 ≤ 1 条/**run** 且位于其追加位置（R7 追加语义；跨 run 可各有一条） | — | — | 适用 | `not_implemented` |
+| R4e | 段原因词表**不新增** `mode_changed` 之类（"每 run 重算集合"不进词表） | 适用 | 适用 | 适用 | `not_implemented` |
 | R4f | 声明 `externalize` ⇒ 创建失败 `projection_mode_unavailable`，无 `context_projection_audit` 写入 | — | — | — | **本条即该列全部断言** |
+| R4g | 审计/事件写入去重：集合与 `effective_mode` 未变的 run 起点**不产生**新记录（§5.1） | 适用 | 适用 | 适用 | `not_implemented` |
 
-R3（段操作白名单 new/pop）与 R6（banned prefix reasons）**不改**：投射不是段操作，不进词表。
+R3（段操作白名单 new/pop）与 R6（banned prefix reasons）**不改**：投射不是段操作，不进词表；
+"每 run 起点重算集合"也**不是**段操作（它不改落盘历史，只改请求视图）。
 
 #### 6.2 C1h（`check-append-only-context.ts`，现 20 pass / 1 pending）
 
@@ -489,6 +566,9 @@ R3（段操作白名单 new/pop）与 R6（banned prefix reasons）**不改**：
 新增 1 项断言（C1h-exempt）：`isProjectionExempt()` 在"声明存在但 `declaration_id` 与审计不匹配"、
 "审计字段缺失"（含 legacy 会话）、"模式为 `passthrough` / `archive_notice`"三种构造下**必须**返回 false。
 
+粒度说明：C1h 比较的是"请求视图 vs 落盘"，这一条**与 run/段无关** —— run 内与跨 run 都要求逐字一致
+（`passthrough` / `archive_notice`）。run 判界只影响"条数不增"那类断言（R4 系列），不影响 C1h。
+
 #### 6.3 `check-tool-result-clear`（现 43 项 → 50 项；T6 变更算**破坏性变更**）
 
 保留 T1–T6，其中 **T6 语义改为按 mode 三态**：`passthrough` / `archive_notice` ⇒ 触顶只发
@@ -501,16 +581,20 @@ T6 由"阈值 ⇒ 该压缩"改成"阈值 ⇒ 按 mode 分派"属**破坏性变�
 | T7 | `passthrough`：不占位、不追加卡、`cleared_tool_call_ids` 不增、请求与落盘逐字一致 |
 | T8 | `archive_notice`：占位 0；恰好 1 条 archive 卡；卡含 id/工具名/字节数/读回位置且**不含正文**；连续两轮请求逐字节相同 |
 | T9 | `externalize` 声明 ⇒ 创建失败 `projection_mode_unavailable`；无 `context_projection_audit` 写入；无任何运行时行为（**该模式本轮的全部断言**） |
-| T10 | 决策层抛错/超时/非法返回 ⇒ `effective_mode = passthrough` + `context.projection_degraded` + 该段无任何占位（不部分应用） |
-| T11 | 重放：同一 `SessionState` 构建两次请求前缀逐字节一致，且 `plan()` 调用次数 = 1（不重跑） |
-| T12 | 段中点改 mode/params ⇒ `ProjectionModeImmutableError` + `context.projection_rejected`，冻结集合不变 |
+| T10 | 决策层抛错/超时/非法返回 ⇒ `effective_mode = passthrough` + `context.projection_degraded` + 该 run 无任何占位（不部分应用） |
+| T11 | 重放：同一 `SessionState` 在**同一 run 内**构建两次请求前缀逐字节一致，且 `plan()` 调用次数 = 1（不重跑）；另断言"新 run 起点会重新调用一次 `plan()`"（1 → 2） |
+| T12 | **会话内改声明**（mode/params/豁免工具，任何时刻，含 run 起点）⇒ `ProjectionModeImmutableError` + `context.projection_rejected`，冻结集合不变；**并反向断言"每 run 起点集合重算不报此错"** |
 | T13 | 硬兜底：`used_tokens / max_tokens ≥ 0.85` 在**三个已实现模式**下都触发 compaction，且不切模式 |
+
+（审计去重的断言在 R4g，不重复计数；总数仍为 43 → 50。）
 
 #### 6.4 新探针 `scripts/check-context-projection-modes.ts`（12 项）
 
 P1 声明总是在会话创建时落盘（含 `source:'default'`）；P2 模式闭集（枚举外值 ⇒ 类型 + 运行双红）；
-P3 段内 `plan_hash` 恒定；P4 `ids ⊆ 段起点集合`（构造越界 ⇒ 降级）；P5 `mode_mismatch` 降级；
-P6 `excluded_escalation` 降级；P7 重放确定性（两次构建前缀 hash 相等）；P8 渲染器纯函数性
+P3 **run 内** `plan_hash` 恒定（跨 run 可不同）；P4 `ids ⊆` 该 run 起点可投影集合（构造越界 ⇒ 降级）；
+P5 `mode_mismatch` 降级；
+P6 `excluded_escalation` 降级；P7 重放确定性（同一 run 内两次构建前缀 hash 相等；新 run 起点允许不同）；
+P8 渲染器纯函数性
 （同输入两次渲染逐字节相同；对任意正文的 512 字符子串包含 = false）；P9 体积阈值三态；
 P10 硬兜底（0.85 不受 mode 影响）；P11 `externalize` 拒绝路径唯一（`projection_mode_unavailable`，
 无部分写入）**且** `archive_notice` 在读回探针缺失时降级 `passthrough` + 审计标 `degraded`；
@@ -523,7 +607,7 @@ P12 无全局白名单（删掉声明后 C1h 必须回到红；legacy 会话必�
 
 | 情形 | 默认 mode | 理由 |
 | --- | --- | --- |
-| 0.52 之前已有会话（有 `cleared_tool_call_ids`、无声明） | **`placeholder`**（创建时补一条 `source:'legacy'` 声明） | 这些会话上一轮就是"占位视图"，默认 `passthrough` 会让同一段历史在下一轮"原文又回来"——前缀一次性变化、缓存全废，体验是"上下文抽搐"。注意：补的声明有 `declaration_id`，但这些会话**没有** `context_projection_audit`，D4 条件 3 不满足 ⇒ C1h 对它们**仍然红**（已裁定：不开临时放行）。 |
+| 0.52 之前已有会话（有 `cleared_tool_call_ids`、无声明） | **`placeholder`**（创建时补一条 `source:'legacy'` 声明） | 这些会话上一轮就是"占位视图"，默认 `passthrough` 会让同一批历史在下一轮"原文又回来"——前缀一次性变化、缓存全废，体验是"上下文抽搐"。注意：补的声明有 `declaration_id`，但这些会话**没有** `context_projection_audit`，D4 条件 3 不满足 ⇒ C1h 对它们**仍然红**（已裁定：不开临时放行）。 |
 | 0.53 起新建会话 | **`passthrough`** | 4.7% 上界收益不值得给每个会话背一次历史改写；`passthrough` 是唯一让 C1h 无条件全绿的模式。要压就显式声明 `placeholder` / `archive_notice`。 |
 | 显式声明 `externalize` | **拒绝**（`projection_mode_unavailable`） | 本轮不实现，不静默换成别的模式（§4.3 第 3 条）。 |
 | 显式声明 `archive_notice` 但读回路径不可用 | **降级 `passthrough`** + `projection_degraded{readback_unavailable}` | 卡不能指向不存在的路径（§2.3f）。 |
@@ -547,7 +631,7 @@ P12 无全局白名单（删掉声明后 C1h 必须回到红；legacy 会话必�
 
 #### 7.4 回退
 
-- 任一模式故障 ⇒ 该段降级 `passthrough` + `degraded` 事件（§4.4）；**不删** `context_projection_audit`
+- 任一模式故障 ⇒ 该 run 降级 `passthrough` + `degraded` 事件（§4.4）；**不删** `context_projection_audit`
   （删了重放就不确定）。
 - 全局回退 = 把 `projectionDefaultMode` 改回 `placeholder`：已有会话声明不动，只影响新会话，**无需数据迁移**。
 - 声明合法但行为不对 ⇒ 把 `projection.modes_enabled` 收成 `['placeholder']`：其余模式在创建时被拒绝
@@ -561,7 +645,7 @@ P12 无全局白名单（删掉声明后 C1h 必须回到红；legacy 会话必�
 `placeholder` 更糟（它会诱导模型去读一个读不到的东西）。风险的第二层：事件日志可能被裁剪/损坏
 （`truncatePartialTail`、重启恢复），所以卡只能承诺"日志里若还在则可回读"，不能承诺"一定可回读"。
 
-**(b) `archive_notice` 自己**不**省 token**。省字 100% 来自压缩丢弃；卡本身每段净增几十 token（上限 200）。
+**(b) `archive_notice` 自己**不**省 token**。省字 100% 来自压缩丢弃；卡本身每次压缩净增几十 token（上限 200）。
 任何"用它来压上下文"的预期都是错的；它的收益是**减少重复调用**，只有 A/B 才能证明（与 §9.2 第 1 项同源）。
 
 **(c) 同进程 = 同信任域，不是安全边界。** 现阶段决策在 core 内，这条风险暂时被"不开放"压住：
@@ -570,9 +654,9 @@ P12 无全局白名单（删掉声明后 C1h 必须回到红；legacy 会话必�
 必须是准入条件的原因。审计（ids + 原始字节数 + `plan_hash` + `policy_version`）必须对用户可见，
 否则"为什么模型不知道这件事"无法回答。
 
-**(d) 未解**：`archive_notice` 与 compaction 的交互细节（一个段里先 `placeholder` 后切 `archive_notice`
-不允许 ⇒ 只能靠新会话，这条已定；但"同一会话多段各自不同 mode"不会发生，因为 mode 会话级）；
-卡文本的双语与长度预算；`/context` 是否展示"本段归档了哪些 id"（F5 的实现前置）。
+**(d) 未解**：`archive_notice` 与 compaction 的交互细节（mode 是会话级不可变 ⇒ 不存在"先 `placeholder`
+后切 `archive_notice`"的情形；多 run 各自重算集合是正常行为，已定）；
+卡文本的双语与长度预算；`/context` 是否展示"本 run 归档了哪些 id"（F5 的实现前置）。
 
 ### 9. 已裁定（本轮记录）与剩余未定事项
 
@@ -586,6 +670,7 @@ P12 无全局白名单（删掉声明后 C1h 必须回到红；legacy 会话必�
 | 4 | `params` 是否公开成配置键 | **不公开**（D7） |
 | 5 | T6 语义变更性质 | **破坏性变更** ⇒ 需 minor 版本 + CHANGELOG 条目（§6.3） |
 | 6 | `externalize` | 本轮不实现，只留枚举位与拒绝路径（§2.2、§4.3、附录 A） |
+| 7 | **投射决策粒度** | **run**：每个 run 起点（新 run 与 resume）重算并冻结集合，run 内所有请求共用；"段"只保留给压缩/缓存重基座语境（§2.4）。模式仍是会话级不可变，二者分开 |
 
 **9.2 剩余未定事项（本轮不就绪，不得写成已决）**
 
@@ -621,7 +706,7 @@ P12 无全局白名单（删掉声明后 C1h 必须回到红；legacy 会话必�
 | --- | --- | --- |
 | 类型 | `packages/core/src/types/projection.ts`（新）、`types/session.ts`、`types/hook.ts`（**不动**） | 声明 / 审计 / 内部 seam 类型；`SessionState` 加两个字段 |
 | 决策 | `packages/core/src/context/projection-policy.ts`（新，`@internal`，**不从 index.ts 导出**） | 内建决策（= 现 `planClearedToolResults` 泛化）+ 夹紧 + 校验 + `externalize` 拒绝 |
-| 机制 | `context/cleared-tool-result.ts`、`context-manager.ts`、`runtime/execution-unit.ts`（段起点冻结处 + `buildRequestMessages` + `appendNotice`） | 按模式分派；新增 `renderProjectionArchiveNotice`；`withClearedToolResults` → `applyContextProjection` |
+| 机制 | `context/cleared-tool-result.ts`、`context-manager.ts`、`runtime/execution-unit.ts`（**run 起点冻结处** `:1589` / `:2021` + `buildRequestMessages` + `appendNotice`） | 按模式分派；新增 `renderProjectionArchiveNotice`；`withClearedToolResults` → `applyContextProjection`；冻结表键继续用每 run 新建的 `workingContext` |
 | 存储 | `session/project-messages.ts` | 重建从审计读，不重跑决策（`externalize` 无存储改动） |
 | 配置 | `config.context.projectionDefaultMode`、`projection.modes_enabled` | 三层来源的落点（D7）；`params` 不新增配置键；插件无权 |
 | 门禁 | `check-request-append-only.ts`（R4a–R4f）、`check-append-only-context.ts`（C1h + exempt）、`check-tool-result-clear.ts`（43→50，T6 破坏性）、`check-context-projection-modes.ts`（新 12 项） | §6 |
