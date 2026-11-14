@@ -749,6 +749,10 @@ function runRatios(runs: RunSummary[]): Ratios {
       prefix_health_unavailable: 'no-cache-fields',
     };
   }
+  // 整批缓存通路未生效：字段都上报了、prompt 也有量，但 read+write 全为 0。
+  // 这不是「单次 run 未命中」（那种 run 留在池里、分子加 0 正常算），而是策略/
+  // 开关异常的信号，所以标 zero-denominator 不可用，**不输出 0% 命中率**，
+  // 避免把「缓存通路没生效」掩盖成一个看起来很正常的 0%。
   if (readTotal + writeTotal === 0) {
     return {
       input_share_unavailable: 'zero-denominator',

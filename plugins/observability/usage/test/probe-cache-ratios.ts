@@ -217,6 +217,65 @@ async function main(): Promise<void> {
     );
   }
 
+  // ------------- (d1) 整批缓存通路未生效：prompt>0 但 read+write 全为 0
+  // 用户裁定：这种批必须标 zero-denominator 不可用，**不输出 0% 命中率**，
+  // 以区分「单次 run 未命中」(见 e2，留在池里正常算) 与「整批缓存通路没生效」
+  // （策略/开关异常的信号，不能被一个 0% 抹平）。
+  {
+    const s = summarizeRuns(
+      [
+        run({
+          run_id: 'all-cold',
+          requests: 5,
+          prompt_tokens: 12_000,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        }),
+      ],
+      T0,
+    );
+    check(
+      'd1. 整批 read+write 全为 0 ⇒ zero-denominator 不可用',
+      s.input_share === undefined && s.input_share_unavailable === 'zero-denominator',
+      String(s.input_share_unavailable),
+    );
+    check('d1. 不输出 0% 命中率', s.input_share === undefined);
+    check(
+      'd1. 分母侧仍有 prompt 总量（不是没数据）',
+      s.totals.prompt_tokens === 12_000,
+      String(s.totals.prompt_tokens),
+    );
+  }
+
+  // ------- (d1b) 混批里只要有一条命中，就不再是「整批通路未生效」
+  {
+    const s = summarizeRuns(
+      [
+        run({
+          run_id: 'cold-bulk',
+          requests: 5,
+          prompt_tokens: 12_000,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        }),
+        run({
+          run_id: 'warm-1',
+          requests: 1,
+          prompt_tokens: 1_000,
+          cache_read_input_tokens: 500,
+          cache_creation_input_tokens: 0,
+        }),
+      ],
+      T0,
+    );
+    check(
+      'd1b. 混批有命中 ⇒ 命中率正常给出',
+      close(s.input_share, 500 / 13_000),
+      String(s.input_share),
+    );
+    check('d1b. 混批不再标 zero-denominator', s.input_share_unavailable === undefined);
+  }
+
   // ----------------------- (d2) prompt 不含缓存的 provider 必须被识别出来
   {
     const s = summarizeRuns(
