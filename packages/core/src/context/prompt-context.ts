@@ -9,7 +9,8 @@
  * 指纹按 session 落进 `SessionState`（RunJournal 单写口），重启后 seed 时恢复，于是：
  * - 新会话（无指纹）⇒ 发全量卡（用户要的「新会话开始才发」）；
  * - 重启且 hash / model / tools 全同 ⇒ **不发**；
- * - 有实质变化 ⇒ 发卡（跨进程拿不到原文差，所以只发全量卡 + `previous_hash`）。
+ * - 有实质变化 ⇒ 发卡（跨进程拿不到原文差：全量卡 + previous_hash；能逐项比的 model /
+ *   tools 用持久指纹列进 changed）。
  *
  * 这里只放纯函数与类型判定，落盘路径（file / sqlite backend）与 EU 都复用它。
  */
@@ -56,4 +57,27 @@ export function shouldPublishSystemContext(input: {
   if (input.live) return true;
   if (input.restored === undefined) return true;
   return !samePromptContext(input.restored, input.next);
+}
+
+/**
+ * 用持久指纹算增量清单（跨进程时唯一可得的「上一份发布过的快照」）。
+ *
+ * 指纹只有 hash / model / tools_count：模型与工具个数能逐项列出来，系统消息的
+ * 原文差拿不到，所以**不猜**是 system_prompt 还是 self_card 变了 —— 那种情况只带
+ * previous_hash 发全量卡（客户端按「环境已更新」处理，不误标是哪一段）。
+ * 顺序与 systemContextChanges() 一致（model 在前，tools 在后），读侧词表通用。
+ */
+export function systemContextChangesFromFingerprint(
+  previous: PromptContextFingerprint | undefined,
+  next: PromptContextFingerprint,
+): string[] {
+  if (previous === undefined) return [];
+  const changes: string[] = [];
+  if (previous.model !== next.model) {
+    changes.push('model: ' + previous.model + ' → ' + next.model);
+  }
+  if (previous.tools_count !== next.tools_count) {
+    changes.push('tools: ' + String(previous.tools_count) + ' → ' + String(next.tools_count));
+  }
+  return changes;
 }

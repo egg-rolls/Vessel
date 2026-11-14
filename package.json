@@ -76,6 +76,7 @@
     "check:ask-selection": "bun run scripts/check-ask-selection.ts",
     "check:lease-suspend": "bun run scripts/check-lease-suspend.ts",
     "check:prompt-context-dedup": "bun run scripts/check-prompt-context-dedup.ts",
+    "check:prompt-context-e2e": "bun run scripts/check-prompt-context-e2e.ts",
     "check:error-text": "bun run scripts/check-error-text.ts",
     "check:node-handoff": "bun run scripts/check-node-handoff.ts"
   },
