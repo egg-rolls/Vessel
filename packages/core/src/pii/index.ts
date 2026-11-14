@@ -20,6 +20,7 @@
 export {
   PII_CAPACITY_NOTICE,
   PII_DEAD_REFERENCE_LIST_LIMIT,
+  PII_ENV_DETAIL_MARK,
   PII_INVALIDATION_NOTICE,
   type PiiDeadReference,
   type PiiNoticeLocale,
