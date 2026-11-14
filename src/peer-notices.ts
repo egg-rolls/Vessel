@@ -66,6 +66,21 @@ export interface PeerNoticeRouterOptions {
   /** 父运行时事件流：用来判定「这一轮结束了没有」 */
   events?: EventStream;
   logger?: Logger;
+  /**
+   * 父 session 的**重解析口**（0.53 notice-rotate）。
+   *
+   * 变更上的 `parent_session_id` 是**报告时刻**父成员 primary body 的 session —— 那一刻
+   * 是对的，但 2s 合并窗口内父级若 rotate，新 body 是另一个 session，按旧 session
+   * 定向就只落在旧 body 的游标上（新 body 永远拉不到，等于丢给旧 body）。
+   *
+   * 入参 `memberId` 是上报这条变更的成员（即 `PeerStopChange.agent_id`）：它是通向父级
+   * 的那根链接，装配层据此取父成员当前的 primary body session（见 `currentBindingSession`）。
+   * 真正投递那一刻（`flush`）才调用，不在 report 时刻缓存结果。
+   *
+   * 返回 `undefined` / 空串（成员已关、记录不在）或未注入本口（旧装配）时**退回**报告
+   * 时刻的 session —— 向后兼容，绝不因此丢通知。
+   */
+  resolveParentSession?: (memberId: string) => string | undefined;
   /** 窗口；缺省 `PEER_NOTICE_WINDOW_MS` */
   windowMs?: number;
   /** 测试注入。 */
@@ -91,6 +106,11 @@ interface SessionState {
   timer?: TimerHandle;
   /** 本轮（这次 run 间隔）已经发过一条；缓冲区留到下一轮 */
   sentInRound: boolean;
+  /**
+   * 这个窗口里最后上报的成员 id：`flush` 时用它重解析父级当前的 session
+   * （rotate 的同步链接；见 `resolveParentSession`）。
+   */
+  anchor?: string;
 }
 
 export function createPeerNoticeRouter(options: PeerNoticeRouterOptions): PeerNoticeRouter {
@@ -130,21 +150,73 @@ export function createPeerNoticeRouter(options: PeerNoticeRouterOptions): PeerNo
     return created;
   };
 
+  /**
+   * 报告时刻的 session → **现在该投的** session。
+   *
+   * 只有注入了解析口才动；解析不到（成员已关 / 记录不在 / 抛错 / 空串）一律退回报告
+   * 时刻的 session —— 旧装配和「成员刚好被关」都保持既有行为，不丢通知。
+   */
+  const resolveTarget = (sessionId: string, state: SessionState): string => {
+    const resolve = options.resolveParentSession;
+    if (resolve === undefined) return sessionId;
+    const anchor = state.anchor;
+    if (anchor === undefined) return sessionId;
+    try {
+      const resolved = resolve(anchor);
+      return resolved !== undefined && resolved !== '' ? resolved : sessionId;
+    } catch (error) {
+      logger?.warn('peer_notice.resolve_failed', {
+        session_id: sessionId,
+        member_id: anchor,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return sessionId;
+    }
+  };
+
+  /**
+   * 父级在窗口内 rotate 过：把旧 session 上缓冲的变更挪到新 session 的状态上。
+   *
+   * 必须真的换 key（而不是只把 `to` 改掉）：判忙（`running`）和「一轮最多一条」
+   * 都按 session 记账，留在旧 key 上就永远等不到新 body 的 run 收口事件。
+   */
+  const rekey = (from: string, state: SessionState, to: string): SessionState => {
+    const changes = state.changes;
+    const anchor = state.anchor;
+    state.changes = [];
+    sessions.delete(from);
+    const next = stateFor(to);
+    if (anchor !== undefined) next.anchor = anchor;
+    for (const change of changes) pushChange(next, change);
+    return next;
+  };
+
   const flush = (sessionId: string, state: SessionState): void => {
     state.timer = undefined;
     if (state.changes.length === 0) return;
-    const changes = state.changes;
-    state.changes = [];
+    // 真正投递这一刻才重解析：窗口内父级 rotate 过，就投给新 body（旧 body 的游标
+    // 新 body 拉不到）。
+    const target = resolveTarget(sessionId, state);
+    const live = target === sessionId ? state : rekey(sessionId, state, target);
+    if (live.changes.length === 0) return;
+    // 本轮还在跑：留在缓冲区。状态已经挂在新 session 上，收口事件按新 session 就能找到它。
+    if (running.has(target)) return;
+    // 新 body 这一轮已经发过一条：留到下一轮（「每轮最多一条」跟着 session 走）。
+    if (live.sentInRound) return;
+    // 目标状态自己还压着一个窗口：交给它把这两批一起发，不抢跑。
+    if (live.timer !== undefined) return;
+    const changes = live.changes;
+    live.changes = [];
     try {
       const members = peerNoticeMembers(changes);
       bus.publish(buildPeerNotice(changes), {
-        to: sessionId,
+        to: target,
         ...(members.length > 0 ? { meta: { members } } : {}),
       });
-      state.sentInRound = true;
+      live.sentInRound = true;
     } catch (error) {
       logger?.warn('peer_notice.publish_failed', {
-        session_id: sessionId,
+        session_id: target,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -153,11 +225,11 @@ export function createPeerNoticeRouter(options: PeerNoticeRouterOptions): PeerNo
   const schedule = (sessionId: string, state: SessionState): void => {
     // 一个 session 同时最多一个待发窗口（不叠加定时器）。
     if (state.timer !== undefined) return;
-    // 本轮还在跑：等 run 收口（那一刻父级才是「看完这一轮」的状态）。
-    if (running.has(sessionId)) return;
+    // 本轮还在跑：等 run 收口（那一刻父级才是「看完这一轮」的状态）。判忙用的是
+    // **重解析后**的 session：窗口内 rotate 过的话，忙的是新 body，不是旧的那个。
+    if (running.has(resolveTarget(sessionId, state))) return;
     state.timer = setTimer(() => {
       state.timer = undefined;
-      if (running.has(sessionId)) return; // 窗口内又开跑了：留给收口
       flush(sessionId, state);
     }, windowMs);
   };
@@ -182,6 +254,8 @@ export function createPeerNoticeRouter(options: PeerNoticeRouterOptions): PeerNo
     report(change) {
       if (change.parent_session_id === '' || change.agent_id === '') return;
       const state = stateFor(change.parent_session_id);
+      // 记下这根的链接：flush 时用它重解析父级当前的 session（rotate 同步链接）。
+      state.anchor = change.agent_id;
       pushChange(state, change);
       // 本轮已发过：留到这一轮结束（run 收口）再发，保证「一轮最多一条」。
       if (state.sentInRound) return;

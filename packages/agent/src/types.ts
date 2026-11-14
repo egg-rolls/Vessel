@@ -1547,6 +1547,16 @@ export interface AgentService {
    * 只由 TeamService / agent 工具做调用者身份解析，不向模型暴露。
    */
   identify(sessionId: string): Promise<MemberStatus | undefined>;
+  /**
+   * 0.53 notice-rotate：成员（**子**）→ 其父成员**当前** primary body 的 session。
+   *
+   * 成员停下通知的 `parent_session_id` 是**报告时刻**算的；2s 合并窗口内父若 rotate，
+   * 新 body 是另一个 session，装配层就在真正投递那一刻用这个口重新取（内部只经
+   * `peerParentIdFor` + `currentBindingSession`，不另写推导）。入参是上报变更的成员
+   * （= `PeerStopChange.agent_id`），不是父成员 id。记录不在 / 已 left|closed /
+   * 无父级 / 空串一律 undefined（调用方退回报告时刻的 session），不抛。
+   */
+  peerParentSessionOf(memberId: string): string | undefined;
   /** 执行内核 bridge 上报的权限等待/恢复；只接受当前运行 ExecutionUnit 的回调 */
   notePermissionState(memberId: string, sessionId: string, state: MemberPermissionState): void;
   /** 成员引擎事件回流（装配用）；当前只处理 live ExecutionUnit 的 agent.limit.warning */
