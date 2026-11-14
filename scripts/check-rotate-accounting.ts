@@ -112,7 +112,9 @@ class FakeScheduler {
     next.state = 'running';
     const runId = next.task.runId as string;
     const executor = next.task.executor as (id: string) => Promise<unknown>;
-    const handle = (await executor(runId)) as { status(): string; result: Promise<string> } | undefined;
+    const handle = (await executor(runId)) as
+      | { status(): string; result: Promise<string> }
+      | undefined;
     if (handle !== undefined) this.handles.push({ runId, handle });
     await settleTicks();
     return true;
@@ -326,7 +328,11 @@ async function main(): Promise<void> {
       retired?.retired_during_run_id === handoffRunId,
       String(retired?.retired_during_run_id),
     );
-    check('a. agent.retired reason=rotation', retired?.reason === 'rotation', String(retired?.reason));
+    check(
+      'a. agent.retired reason=rotation',
+      retired?.reason === 'rotation',
+      String(retired?.reason),
+    );
 
     h.pushRunTerminal('run.completed', handoffRunId, HANDOFF_REPLY);
     await settleTicks();
@@ -354,7 +360,11 @@ async function main(): Promise<void> {
 
     // d. 不产生「结束语投递」
     const inputs = h.inputs();
-    check('d. 新 body 首轮输入里有 startup_prompt', inputs.includes(STARTUP_PROMPT), JSON.stringify(inputs));
+    check(
+      'd. 新 body 首轮输入里有 startup_prompt',
+      inputs.includes(STARTUP_PROMPT),
+      JSON.stringify(inputs),
+    );
     check(
       'd. 没有任何一轮输入携带收尾正文（不投递结束语）',
       inputs.every((content) => !content.includes(HANDOFF_REPLY)),
@@ -394,12 +404,20 @@ async function main(): Promise<void> {
     h.pushRunTerminal('run.completed', runId, HANDOFF_REPLY);
     await settleTicks();
 
-    check('b. 真迟到旧轮仍被 fence：Team 日志 0 条', h.store.logs.length === 0, String(h.store.logs.length));
+    check(
+      'b. 真迟到旧轮仍被 fence：Team 日志 0 条',
+      h.store.logs.length === 0,
+      String(h.store.logs.length),
+    );
     check('b. 真迟到旧轮不产生父级通知', h.teamEmits.length === 0, JSON.stringify(h.teamEmits));
 
     h.pushRunTerminal('run.completed', 'run-late-old', HANDOFF_REPLY);
     await settleTicks();
-    check('b. run id 对不上的旧轮仍被 fence', h.store.logs.length === 0, String(h.store.logs.length));
+    check(
+      'b. run id 对不上的旧轮仍被 fence',
+      h.store.logs.length === 0,
+      String(h.store.logs.length),
+    );
     await h.cleanup();
   }
 
@@ -451,7 +469,11 @@ async function main(): Promise<void> {
     h.pushRunTerminal('run.failed', runId, undefined);
     await settleTicks();
 
-    check('c. 交棒轮 failed 在 Team 日志里看得见（1 条）', h.store.logs.length === 1, String(h.store.logs.length));
+    check(
+      'c. 交棒轮 failed 在 Team 日志里看得见（1 条）',
+      h.store.logs.length === 1,
+      String(h.store.logs.length),
+    );
     check(
       'c. 失败日志内容提到 turn failed',
       typeof h.store.logs[0]?.content === 'string' &&
