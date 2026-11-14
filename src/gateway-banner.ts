@@ -94,6 +94,8 @@ export interface PlatformStartupNode {
   name: string;
   url: string;
   autoStart: boolean;
+  /** handoff（0.52）：进程不是本平台 spawn 的，而是 adopt 来的既有 node。 */
+  adopted?: boolean;
 }
 
 /** 本地 Hub 的启动结果：本次 spawn / adopt 已有实例 / 关闭 / 拉起失败。 */
@@ -132,7 +134,8 @@ export function renderPlatformStartup(info: PlatformStartupInfo): string {
     ['Platform', info.platformUrl],
     ...info.nodes.map((node, index): [string, string] => [
       index === 0 ? 'Node' : '',
-      `${node.url} (${node.name})${node.autoStart ? '' : '  (auto_start: false)'}`,
+      `${node.url} (${node.name})${node.autoStart ? '' : '  (auto_start: false)'}` +
+        `${node.adopted === true ? '  (adopted)' : ''}`,
     ]),
     ['Hub', platformHubValue(info.hub)],
     ['Web', info.platformUrl],

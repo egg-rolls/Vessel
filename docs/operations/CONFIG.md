@@ -519,9 +519,9 @@ vessel prune [--older-than <dur>] [--dry-run] [--json] [--yes]
 
 ```bash
 vessel gateway start [--daemon] [--port <n>] [--host <h>] [--log <path>]
-vessel gateway stop [--timeout 10s]
+vessel gateway stop [--timeout 10s] [--keep-nodes]
 vessel gateway status [--json] [--rpc]
-vessel gateway restart [--daemon]
+vessel gateway restart [--daemon] [--no-keep-nodes]
 vessel gateway reload [--scope config,plugins]
 vessel gateway install-service [--systemd|--launchd|--schtasks]
 vessel gateway uninstall-service
@@ -532,6 +532,8 @@ vessel gateway uninstall-service
 - `gateway status --rpc`：经 RPC 只读查询 `health.get` 与由 `runs.list` 派生的队列计数（queued / running），不 attach runtime；`--json` 输出 `{ as_of, rpc: true, instances }`。任一实例查询失败时退出 1。
 - 命名实例的交互记录与 PID / 日志一样按实例隔离（见 §2.10）；`vessel logs tail --instance <name>` 读对应日志。
 - `reload` 只热更新 plugins 扫描缓存与 `serve.allowed_origins`；provider / model / agent / permission / TLS / token / port 的变更会出现在 `requires_restart`，必须重启。未知 scope 或读取失败返回非 0。
+- **`restart` 是平台层重启（handoff，0.52）**：旧 Gateway 退出时**不终止**自己 spawn 的 node（与 hub），新 Gateway 启动时按 `gateway.pid` 三元组 / hub lock adopt 接管，所以在跑的 run 不中断。保留语义经 `<dataDir>/platform-handoff[-<instance>].json`（本进程族运行时状态，TTL 120s，消费即删）传给旧 Gateway；非 handoff 停止会先清掉残留 marker，不会把真停变成假停。
+- `stop` 缺省仍是**真停**（连 node/hub 一起停）；`stop --keep-nodes` 显式表达「只停平台层」。`restart --no-keep-nodes` 是冷重启：升级二进制后想让 node 也换新代码时用它（或 `gateway stop && gateway start`），否则 node 进程还是旧版本。启动输出 / Gateway 日志里 node 行末尾的 `(adopted)` 表示该进程不是本 Gateway spawn 的，而是接管来的（`gateway status --json` 契约不变，不加字段）。
 - `install-service` / `uninstall-service` 只在显式执行时注册当前平台的**用户级**服务（systemd user / LaunchAgent / Windows 登录计划任务），不随启动自动修改本机。
 
 ## 5. 错误与排查

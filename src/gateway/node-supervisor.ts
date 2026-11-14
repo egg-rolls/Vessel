@@ -355,11 +355,24 @@ export interface StopSpawnedChildrenOptions {
   runCommand?: CommandRunner;
   /** 测试 seam：覆盖单进程终止；返回 false 表示未确认停止（manifest 保留）。 */
   terminate?: (pid: number) => Promise<boolean>;
+  /**
+   * handoff：只**清点**活着的子进程，一个都不终止，manifest 也原样留在盘上，
+   * 交给新平台按既有 adopt 判据接管（见 `src/gateway/handoff.ts`）。
+   */
+  keep?: boolean;
+}
+
+/** handoff 保活的子进程计数（按 kind 分开，便于日志说清「保留了谁」）。 */
+export interface KeptChildren {
+  nodes: number;
+  hubs: number;
 }
 
 export interface StopSpawnedChildrenResult {
   stopped: number;
   failed: number;
+  /** 仅在 `keep: true` 时返回：被**有意保留**的子进程。 */
+  kept?: KeptChildren;
 }
 
 /**
@@ -390,12 +403,21 @@ export async function stopSpawnedChildren(
 
   let stopped = 0;
   let failed = 0;
+  let keptNodes = 0;
+  let keptHubs = 0;
   for (const file of files) {
     const children = await readSpawnedChildren(options.gatewayDataDir, file.instance);
     const remaining: SpawnedChildRecord[] = [];
     for (const child of children) {
       // 已确认死亡/不再属于该 node 的条目直接丢弃；活着的才尝试终止。
       if (!(await recordOwnsPid(child))) continue;
+      if (options.keep === true) {
+        // handoff：不终止、不重写 manifest（条目仍准确描述活着的进程，
+        // 后续真停/下一次交接还能据此找到它们）。
+        if (child.kind === 'hub') keptHubs += 1;
+        else keptNodes += 1;
+        continue;
+      }
       const ok =
         options.terminate !== undefined
           ? await options.terminate(child.pid)
@@ -407,6 +429,7 @@ export async function stopSpawnedChildren(
         remaining.push(child);
       }
     }
+    if (options.keep === true) continue;
     if (remaining.length === 0) {
       await removeSpawnedChildren(options.gatewayDataDir, file.instance).catch(() => undefined);
     } else {
@@ -414,6 +437,9 @@ export async function stopSpawnedChildren(
         () => undefined,
       );
     }
+  }
+  if (options.keep === true) {
+    return { stopped, failed, kept: { nodes: keptNodes, hubs: keptHubs } };
   }
   return { stopped, failed };
 }
@@ -796,11 +822,19 @@ export class NodeSupervisor {
     await writeSpawnedChildren(this.options.gatewayDataDir, this.options.instance, this.spawned);
   }
 
-  /** 停止本监督器 spawn 的子进程（rollback / SIGTERM）；adopt/external 不动。 */
-  async stop(): Promise<StopSpawnedChildrenResult> {
+  /**
+   * 停止本监督器 spawn 的子进程（rollback / SIGTERM）；adopt/external 不动。
+   *
+   * `keep: true` = handoff（`gateway restart` 与 `gateway stop --keep-nodes`）：
+   * 一个子进程都不终止，也不动内存/清单，留给新平台按 adopt 判据接管。
+   */
+  async stop(options?: { keep?: boolean }): Promise<StopSpawnedChildrenResult> {
     const timeoutMs = this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS;
+    const keep = options?.keep === true;
     let stopped = 0;
     let failed = 0;
+    let keptNodes = 0;
+    let keptHubs = 0;
     const remaining: SpawnedChildRecord[] = [];
     await Promise.all(
       this.spawned.map(async (child) => {
@@ -809,6 +843,11 @@ export class NodeSupervisor {
         const owns =
           child.started_at === '' ? isProcessAlive(child.pid) : await recordOwnsPid(child);
         if (!owns) return;
+        if (keep) {
+          if (child.kind === 'hub') keptHubs += 1;
+          else keptNodes += 1;
+          return;
+        }
         const ok =
           this.options.terminate !== undefined
             ? await this.options.terminate(child.pid)
@@ -827,6 +866,10 @@ export class NodeSupervisor {
         if (info !== undefined) info.state = ok ? 'down' : info.state;
       }),
     );
+    if (keep) {
+      // 内存与 manifest 都不动：留着的子进程仍然「属于本进程」，盘上条目也仍然准确。
+      return { stopped, failed, kept: { nodes: keptNodes, hubs: keptHubs } };
+    }
     this.spawned = remaining;
     if (remaining.length === 0) {
       await removeSpawnedChildren(this.options.gatewayDataDir, this.options.instance).catch(
