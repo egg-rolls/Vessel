@@ -718,7 +718,17 @@ function runRatios(runs: RunSummary[]): Ratios {
   let writeTotal = 0;
   let readReported = false;
   let writeReported = false;
+  let reportingRuns = 0;
   for (const run of withRequests) {
+    // 分子/分母必须同一个总体：只统计上报了缓存字段的 run。缺省意味着「这个
+    // provider 不报缓存」，把它当成 0 命中放进分母，就会得到一个既不是「全部
+    // 流量命中率」（那些 run 的命中率是未知的，不是 0）、也不符合标签
+    // 「所有上报了缓存字段的请求」的数。TUI 的 cache-metrics 同样是先丢弃
+    // 未上报的请求再累加 prompt。
+    const reportsCache =
+      run.cache_read_input_tokens !== undefined || run.cache_creation_input_tokens !== undefined;
+    if (!reportsCache) continue;
+    reportingRuns += 1;
     promptTotal += run.prompt_tokens;
     if (run.cache_read_input_tokens !== undefined) {
       readReported = true;
@@ -729,7 +739,7 @@ function runRatios(runs: RunSummary[]): Ratios {
       writeTotal += run.cache_creation_input_tokens;
     }
   }
-  if (!readReported && !writeReported) {
+  if (reportingRuns === 0) {
     return {
       input_share_unavailable: 'no-cache-fields',
       prefix_health_unavailable: 'no-cache-fields',
@@ -743,6 +753,9 @@ function runRatios(runs: RunSummary[]): Ratios {
   }
 
   const result: Ratios = {};
+  // input_share = Σ cache_read / Σ prompt_tokens。对 Anthropic 来说 prompt 含
+  // cache_creation，所以它是「缓存读在全部输入里的占比」，比 read/(read+fresh)
+  // 略低（写入量越大差得越多）；OpenAI 兼容端没有写入概念，两者相等。
   if (!readReported) {
     result.input_share_unavailable = 'no-cache-fields';
   } else if (promptTotal <= 0) {
