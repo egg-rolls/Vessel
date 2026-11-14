@@ -142,17 +142,12 @@ export class DefaultTeamService implements AgentTeamService {
   /** members remove 期间的标记：把该次 agent.closed 写成 archive 而不是 leave */
   private readonly archiveInFlight = new Set<string>();
   /**
-   * 0.27：已退役 / 已关闭的 Binding（`agentId\0sessionId`，有界）。
+   * 已退役 / 已关闭的 Binding：`(agent_id, session_id)` → 退役时在途的那一轮 run id。
    *
-   * `run.*` 终态不带 `stale` 字段，无法照抄旧回合事件的 `stale === true` 抑制。
-   * 退役 / 关闭总是先于旧 Binding 的 in-flight 轮收尾（`retireExecutionUnitEntry` 先发
-   * `agent.retired`），所以在 `agent.*` 管道上记账，在 `onRunEvent` 里抑制旧 Binding
-   * 的 reply / 失败（文档：旧 Binding 的终态不写 Team 日志）。超限丢最旧，dispose 清空。
-   *
-   * 反向记账（只记“死掉的”）而不是正向白名单：snapshot 恢复的成员不会再发
-   * `agent.spawned`，白名单会把重启后所有成员的正常回复一起吞掉。
+   * B′（0.52）：值区分两类终态。带 run id（rotate 交棒轮）⇒ 该 run 的终态照常记账；
+   * `undefined`（close / 其它路径）或 run id 对不上 ⇒ 真迟到旧轮，fence 掉。
    */
-  private readonly retiredBodies = new Set<string>();
+  private readonly retiredBodies = new Map<string, string | undefined>();
   private disposed = false;
 
   constructor(options: TeamServiceOptions) {
@@ -1458,7 +1453,8 @@ export class DefaultTeamService implements AgentTeamService {
     switch (event.type) {
       case 'agent.retired':
         if (event.session_id !== undefined && event.session_id.length > 0) {
-          this.markRetiredBinding(event.agent_id, event.session_id);
+          // B′（0.52）：只认「退役时在途的那一轮」，交棒轮因此不被 fence。
+          this.markRetiredBinding(event.agent_id, event.session_id, event.retired_during_run_id);
         }
         return;
       case 'agent.closed':
@@ -1479,13 +1475,22 @@ export class DefaultTeamService implements AgentTeamService {
     }
   }
 
-  /** 记账并维持上限（Set 保持插入顺序，超出丢最旧） */
-  private markRetiredBinding(agentId: string, sessionId: string): void {
+  /**
+   * 记账并维持上限（Map 保持插入顺序，超出丢最旧）。
+   *
+   * `retiredDuringRunId` 是退役时仍在 in-flight 的 run id（只有 rotate 交棒轮会给）；
+   * 传 `undefined` 表示「该 Binding 的终态一律 fence」。
+   */
+  private markRetiredBinding(
+    agentId: string,
+    sessionId: string,
+    retiredDuringRunId?: string,
+  ): void {
     const key = retiredBindingKey(agentId, sessionId);
     this.retiredBodies.delete(key);
-    this.retiredBodies.add(key);
+    this.retiredBodies.set(key, retiredDuringRunId);
     while (this.retiredBodies.size > MAX_RETIRED_BODIES_TRACKED) {
-      const oldest = this.retiredBodies.values().next().value;
+      const oldest = this.retiredBodies.keys().next().value;
       if (oldest === undefined) return;
       this.retiredBodies.delete(oldest);
     }
@@ -1494,17 +1499,34 @@ export class DefaultTeamService implements AgentTeamService {
   /**
    * 该 Binding 是否已退役 / 已关闭。没记账就当活着：`agent.retired` 与 `run.*` 终态
    * 都出自同一进程内的 `AgentService`，退役一定先记账（`retireExecutionUnitEntry` 先 emit）。
+   *
+   * B′（0.52）：判据不是「body 已退役」，而是「这一轮是不是自己交棒的那一轮」——
+   * 交棒轮（`run_id === retiredDuringRunId`）是合法收尾，要照常记账；只有 run id
+   * 对不上的真迟到旧轮才 fence。
    */
-  private isRetiredBinding(agentId: string, sessionId: string | undefined): boolean {
+  private isRetiredBinding(
+    agentId: string,
+    sessionId: string | undefined,
+    runId: string | undefined,
+  ): boolean {
     if (sessionId === undefined) return false;
-    return this.retiredBodies.has(retiredBindingKey(agentId, sessionId));
+    const key = retiredBindingKey(agentId, sessionId);
+    if (!this.retiredBodies.has(key)) return false;
+    const retiredDuringRunId = this.retiredBodies.get(key);
+    if (retiredDuringRunId !== undefined && runId !== undefined && runId === retiredDuringRunId) {
+      return false;
+    }
+    return true;
   }
 
   /**
    * 0.27：run.* 终态写 Team 日志（成员 run 走父事件流，与 agent.* 不同管道）。
    * 归属字段由 runtime 并入 `data`；缺任一字段即放弃（fail-closed），不猜。
-   * 旧 Binding（已退役 / 已关闭）的终态一律不写：与旧回合事件的 `stale` 抑制等价，
+   * 真迟到的旧 Binding 终态不写：与旧回合事件的 `stale` 抑制等价，
    * reply / 失败 / 取消三条分支共用这一次判断。只写日志、不 dispatch。
+   *
+   * B′（0.52）：rotate 交棒轮是合法收尾，不算迟到 —— 它的 `run_id` 等于退役时
+   * 记下的 `retired_during_run_id`，因此照常记账（见 `isRetiredBinding`）。
    */
   private onRunEvent(event: RunEvent): void {
     if (typeof event.data !== 'object' || event.data === null) return;
@@ -1519,8 +1541,8 @@ export class DefaultTeamService implements AgentTeamService {
     if (typeof teamId !== 'string' || teamId.length === 0) return;
     const agentId = data.agent_id;
     if (typeof agentId !== 'string' || agentId.length === 0) return;
-    // 旧 Binding（已退役 / 已关闭）的终态不写 Team 日志。
-    if (this.isRetiredBinding(agentId, sessionId)) return;
+    // 真迟到的旧 Binding 终态不写 Team 日志；rotate 交棒轮（run id 对得上）照常记账。
+    if (this.isRetiredBinding(agentId, sessionId, event.run_id)) return;
 
     if (event.type === 'run.completed') {
       const output = data.output;

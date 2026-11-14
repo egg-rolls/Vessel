@@ -1189,6 +1189,14 @@ export interface AgentEvent {
   body_id?: string;
   /** 旧 ExecutionUnit 轮末终态标记 */
   stale?: boolean;
+  /**
+   * B′（0.52）：退役时仍在 in-flight 的那一轮 run id（rotate 交棒轮）。
+   *
+   * 只在 `reason === 'rotation'` 的 `agent.retired` 上携带：交棒轮是合法收尾，
+   * 消费方（TeamService）据此把「自己交棒的那一轮」与「真迟到的旧轮」区分开，
+   * 只 fence 后者。
+   */
+  retired_during_run_id?: string;
   message_id?: string;
   /** 消息来源（queued 事件） */
   from?: string;
