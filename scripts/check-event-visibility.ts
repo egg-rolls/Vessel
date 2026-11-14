@@ -153,6 +153,14 @@ const EXPECTED_NEWLY_HIDDEN: readonly string[] = [
   'delegate_task.started',
   'delegate.completed',
   'delegate.failed',
+  // 0.53 U2 的**新增类型**（不是既有类型改档）：`context.projection_applied` /
+  // `_degraded` / `_pressure` 三条在 ADR-104 落地前**不存在**，影子判据却只能按
+  // 「今天的两张黑名单」算 —— 新名字天然不在黑名单里 ⇒ 一律算「今天可见」，登记成
+  // 非 content 档就必然落进这张差集。所以它们是「新增的收窄」而不是「报告要求收掉的
+  // 既有类型」：判据（集合相等 + 双向）一字未动，只是把新增项补进期望值。
+  'context.projection_applied',
+  'context.projection_degraded',
+  'context.projection_pressure',
 ];
 
 /** 报告 §3.1：这些今天可见、**必须继续可见**（content 类被误藏是本方案最痛的风险）。 */
@@ -537,15 +545,17 @@ function checkShadow(): void {
       );
     }
   }
-  // 分档计数（回归时一眼看出哪一档漏了）：112 条 = 15 content + 48 internal + 49 observe。
+  // 分档计数（回归时一眼看出哪一档漏了）：115 条 = 15 content + 48 internal + 52 observe。
   // （114 → 115：新增 `prompt.system_context`（content，模型上下文卡），见 event-visibility.ts。）
   // （115 → 112：0.51 删掉三条死类型 `agent.rotating` / `agent.rotated` / `agent.rotate.failed`，
   //   都是 internal —— 它们没有生产者，见 ADR-092 的 Errata。）
+  // （112 → 115：0.53 U2 新增三条投射审计 `context.projection_applied` / `_degraded` /
+  //   `_pressure`，都是 observe（ADR-104 §5.2「登记为 notice/audit，不得 internal」）。）
   const counts = { content: 0, internal: 0, observe: 0 };
   for (const spec of Object.values(EVENT_TIERS)) counts[spec.tier] += 1;
   const total = counts.content + counts.internal + counts.observe;
-  if (total !== 112) {
-    fail('EVENT_TIERS', `[A4 影子] 表里应有 112 条，实际 ${total} 条`);
+  if (total !== 115) {
+    fail('EVENT_TIERS', `[A4 影子] 表里应有 115 条，实际 ${total} 条`);
   }
   note(
     `[shadow] 影子对拍：今天可见→新表隐藏 ${actual.size} 条（期望 ${expected.size}）；` +

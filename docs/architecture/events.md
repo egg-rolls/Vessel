@@ -41,6 +41,9 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `hook.failed` / `hook.error` | `{ hook_name, hook_type, run_id, duration_ms, error }` | hook-runner（0.8：单 hook 抛错后继续后续 hook） |
 | `context.changed` | `{ run_id, message, message_count, token_count }` | execution-unit |
 | `prompt.system_context` | `PromptSystemContextPayload`（模型这一轮看到的系统消息原文；同 hash 只发一次） | execution-unit |
+| `context.projection_applied` | `{ schema_version, mode, effective_mode, declaration_id, plan_hash, ids_count, basis, reason, steps, at }`（**决策变更**的 run 起点一条，落盘审计 `context_projection_audit` 的可见镜像，ADR-104 §5.1/§5.2） | execution-unit |
+| `context.projection_degraded` | `{ schema_version, mode, effective_mode, reason, basis, steps }`（运行期 fail-open 到 `passthrough` 的留痕；`reason` 用 §6.4 冻结码，如 `projection_mode_unavailable` / `projection_declaration_invalid`） | execution-unit |
+| `context.projection_pressure` | `{ used, max, ratio, basis, threshold_ratio, total_count, retained_tokens, max_tokens, retained_ratio, top_result_bytes, effective_mode }`（`passthrough` 下体积触顶**只告警不压缩**；`basis: 'all_tool_results'`） | execution-unit |
 | `run.completed` | `RunCompletedPayload` | execution-unit |
 | `run.failed` | `RunFailedPayload` | execution-unit |
 | `run.cancelled` | `RunCancelledPayload` | execution-unit（0.5：仅显式用户取消；Host 中断仍发 `run.failed`） |
@@ -135,6 +138,9 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `context.pressure` | internal | notice | none | live |
 | `context.compacted` | internal | notice | none | live |
 | `context.cleared_tool_result` | internal | notice | none | live |
+| `context.projection_applied` | observe | — | none | live |
+| `context.projection_degraded` | observe | — | none | live |
+| `context.projection_pressure` | observe | — | none | live |
 | `message.injected` | internal | — | none | live |
 | `message.compaction` | internal | — | none | live |
 | `limit.blocked` | internal | — | none | live |

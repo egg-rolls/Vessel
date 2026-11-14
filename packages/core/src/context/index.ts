@@ -26,7 +26,9 @@ export {
   type TrimNoticeLocale,
 } from './cleared-tool-result.js';
 export {
+  auditChainOf,
   compactMessagesForSeed,
+  decideProjectionRunMode,
   estimateMessagesTokens,
   estimateMessageTokens,
   estimateTokens,
@@ -34,12 +36,20 @@ export {
   KEEP_RECENT_TOKEN_RATIO,
   MemoryWorkingContext,
   measureRetainedToolResultVolume,
+  measureToolResultPressure,
+  PROJECTION_MODE_UNAVAILABLE,
+  type ProjectionRunDecision,
+  type ProjectionRuntimeMode,
   planClearedToolResults,
+  projectionVolumeDimensionApplies,
+  setWindowProjectionMode,
   shouldCompactForToolResultVolume,
   TOOL_RESULT_VOLUME_THRESHOLD_RATIO,
   type ToolResultKeepOptions,
+  type ToolResultPressureReport,
   type ToolResultVolumeMeasurement,
   type ToolResultVolumeOptions,
+  windowProjectionMode,
   withClearedToolResults,
 } from './context-manager.js';
 export {

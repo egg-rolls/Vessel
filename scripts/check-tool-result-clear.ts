@@ -34,15 +34,20 @@ import {
   isClearedToolResult,
   KEEP_RECENT_MAX,
   KEEP_RECENT_TOKEN_RATIO,
+  MemoryWorkingContext,
   type Message,
   measureRetainedToolResultVolume,
+  measureToolResultPressure,
   normalizeClearedToolCallIds,
   planClearedToolResults,
+  projectionVolumeDimensionApplies,
   renderContextTrimNotice,
   type SessionState,
   SQLiteSessionStore,
+  setWindowProjectionMode,
   shouldCompactForToolResultVolume,
   TOOL_RESULT_VOLUME_THRESHOLD_RATIO,
+  windowProjectionMode,
   withClearedToolResults,
 } from '../packages/core/src/index';
 
@@ -500,6 +505,115 @@ section('T6 体积阈值：保留结果原文体积超窗口 N% ⇒ 触发压缩
     [6, 6],
   );
 }
+
+// ── T6-B：体积阈值**按 mode 分层**（0.53 U2，只增不删） ────────────────────
+//
+// 为什么 T6 要分层：0.20 体积维度**只属于 `placeholder`**。`passthrough` 的字面语义是
+// 「与完全没有投射机制时逐字节相同」，而「体积一到就压缩」会改变请求消息序列 ——
+// 在 passthrough 下让它参与判据 = 偷偷开机制。
+//
+// **T6.1~T6.10 一条都没删、也没放宽**：它们量的是纯函数口径（`measureRetainedToolResultVolume`
+// / `shouldCompactForToolResultVolume` / `planClearedToolResults`），这些函数本身与 mode
+// 无关，是判据的**零件**。分层发生在装配处（`ContextManager.shouldCompact()`），所以
+// 新增断言在这里钉装配：同一条超 20% 的窗口，`placeholder` 该压、`passthrough` 不许压；
+// 0.85 主阈值与条数上限对两种 mode 一样生效（硬兜底）。
+
+section('T6-B 体积阈值按 mode 分层：0.20 只对 placeholder 参与判据（U2）');
+
+await (async function checkToolResultVolumeByMode(): Promise<void> {
+  // 夹具 A（**只有**体积维度越线）：单条 1200 字符 ≈ 300 tokens / 窗口 1000 = 30% > 20%。
+  // 4 条非 system：token 合计 ≈ 312 远低于 0.85 主阈值（850），条数上限（100）也够远
+  // ⇒ 两个用例的**唯一**差异就是 mode，能干净地指向「体积维度有没有参与判据」。
+  const giantToolWindow = (): MemoryWorkingContext => {
+    const context = new MemoryWorkingContext({ maxTokens: 1_000, autoCompact: true });
+    context.setSessionId('s-t6b-' + String(Math.random()).slice(2, 8));
+    context.add(msg('user', '读一下这份大文件。'));
+    context.add(
+      msg('assistant', '', {
+        tool_calls: [
+          {
+            id: 'call_giant',
+            type: 'function',
+            function: { name: 'read', arguments: '{"p":"a"}' },
+          },
+        ],
+      }),
+    );
+    context.add(msg('tool', 'x'.repeat(1_200), { tool_call_id: 'call_giant' }));
+    context.add(msg('user', '好。'));
+    return context;
+  };
+
+  expect(
+    'T6-B.1 体积维度只对 placeholder 生效（常量判据）',
+    [
+      projectionVolumeDimensionApplies('placeholder'),
+      projectionVolumeDimensionApplies('passthrough'),
+    ],
+    [true, false],
+  );
+
+  const placeholderWindow = giantToolWindow();
+  // 缺省（没写过槽位）= placeholder：U2 之前的调用方行为一字不变。
+  expect(
+    'T6-B.2 未设置模式时缺省 placeholder（向后兼容）',
+    windowProjectionMode(placeholderWindow),
+    'placeholder',
+  );
+  setWindowProjectionMode(placeholderWindow, 'placeholder');
+  const placeholderRemoved = await placeholderWindow.autoCompactAsync();
+  expect(
+    'T6-B.3 placeholder 下 30% > 20% ⇒ 段起点压缩（`shouldCompact()` 吃体积维度）',
+    placeholderRemoved > 0,
+    true,
+  );
+
+  const passthroughWindow = giantToolWindow();
+  setWindowProjectionMode(passthroughWindow, 'passthrough');
+  const passthroughRemoved = await passthroughWindow.autoCompactAsync();
+  expect('T6-B.4 passthrough 下同一条 30% 窗口 ⇒ 不压缩（0.20 不参与判据）', passthroughRemoved, 0);
+  // 反证：它确实越过了 20% 那条线 —— 否则 T6-B.4 可能只是「没到阈值」的假绿。
+  expect(
+    'T6-B.5 反证：这条窗口真的越过了 20%（pressure 报 exceeded，ratio 30%）',
+    (() => {
+      const pressure = measureToolResultPressure(passthroughWindow.messages, 1_000);
+      return [pressure.exceeded, pressure.ratio, pressure.basis];
+    })(),
+    [true, 0.3, 'all_tool_results'],
+  );
+
+  // 夹具 B（**只有** token 主阈值越线）：窗口 200，token 合计 ≈ 190 > 0.85 × 200 = 170。
+  // 体积维度在这里是 190/200 = 95%（也越线了），但结论必须由 0.85 决定 ——
+  // 这条断言钉的就是「passthrough 不因 0.20 压缩，但硬兜底照压」。
+  const overBudgetWindow = new MemoryWorkingContext({ maxTokens: 200, autoCompact: true });
+  overBudgetWindow.setSessionId('s-t6b-floor');
+  overBudgetWindow.add(msg('user', 'a'.repeat(480)));
+  overBudgetWindow.add(
+    msg('assistant', '', {
+      tool_calls: [
+        { id: 'call_b', type: 'function', function: { name: 'read', arguments: '{"p":"b"}' } },
+      ],
+    }),
+  );
+  overBudgetWindow.add(msg('tool', 'b'.repeat(200), { tool_call_id: 'call_b' }));
+  overBudgetWindow.add(msg('user', 'c'.repeat(80)));
+  setWindowProjectionMode(overBudgetWindow, 'passthrough');
+  const overBudgetRemoved = await overBudgetWindow.autoCompactAsync();
+  expect('T6-B.6 passthrough 下 0.85 主阈值仍是硬兜底（超预算照压）', overBudgetRemoved > 0, true);
+
+  // passthrough 不许产生任何占位：请求视图与落盘历史**逐条同对象**（逐字节相同）。
+  const raw = segmentBase(3);
+  const passthroughView = withClearedToolResults(raw, []);
+  expect(
+    'T6-B.7 passthrough 口径（空集合）不产生任何占位，且视图逐条同对象',
+    [
+      clearedIdsOf(passthroughView),
+      passthroughView.length === raw.length &&
+        passthroughView.every((message, index) => message === raw[index]),
+    ],
+    [[], true],
+  );
+})();
 
 // ── 汇总 ───────────────────────────────────────────────────────────────────
 

@@ -61,7 +61,9 @@ export interface EventSpec {
 
 /**
  * 108 条（审计报告的 §2 全集）+ 6 条门禁扫出来的真实名字（`team.budget.override` /
- * `tool.permission.expired` / `delegate.*` 四条），共 114 条。
+ * `tool.permission.expired` / `delegate.*` 四条）+ `prompt.system_context`（0.50 模型上下文卡）
+ * + 0.53 U2 的三条投射审计（`context.projection_*`），再减去 0.51 删掉的 rotate 三条死类型，
+ * 共 115 条（分档计数由 `scripts/check-event-visibility.ts` 的 A4 影子断言钉死）。
  *
  * 顺序按域分组（run/llm/tool → 上下文 → 会话/进程 → agent → 插件 → 子 agent），
  * 与 `docs/architecture/events.md` 的 marker 表同一顺序（门禁只比键集，顺序是人读的）。
@@ -121,6 +123,19 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   // 上下文裁剪（工具结果被清）本身是 run 内部状态同步，但**清理必须可见**：0.52 V1 起
   // 段起点会追加一张 env 卡（scope `trim`），事件与卡是同一个投影 ⇒ 承接 notice。
   'context.cleared_tool_result': { tier: 'internal', live: true, 承接: 'notice' },
+  // 0.53 U2 会话级投射模式（ADR-104 §5.2）：**决策变更的 run 起点**一条 /
+  // 运行期 fail-open 留痕 / 体积触顶告警。三条都是「模型这一轮看到的上下文被怎么改写过」
+  // 的审计，与 `prompt.system_context`（content）是同一件事的两面，但正文不是用户要读的
+  // 对话内容 —— 所以是 `observe`：
+  // - ADR-104 §5.2 明确要求这张表「登记为 `notice`/`audit`，**不得** `internal`」；
+  //   `internal` 是 run 内部状态同步，默认隐藏、`ui.showInternalEvents` 展开后**会进
+  //   聊天时间线**，而这三条只该在观察面（Observe / Runs）读，聊天与团队时间线**永不**
+  //   出现。投影卡（U3）从 `context.projection_applied` 的 data 取数，不靠聊天渲染。
+  // - 也不靠 `context.` 家族兜底：家族会把 `context.changed` / `context.compacted` /
+  //   `context.cleared_tool_result` 的既有档位一起连坐，所以必须逐条显式登记。
+  'context.projection_applied': { tier: 'observe', live: true },
+  'context.projection_degraded': { tier: 'observe', live: true },
+  'context.projection_pressure': { tier: 'observe', live: true },
   'message.injected': { tier: 'internal', live: true },
   'message.compaction': { tier: 'internal', live: true },
   'limit.blocked': { tier: 'internal', live: true },
