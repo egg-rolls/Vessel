@@ -22,9 +22,14 @@
  * @module vessel/runtime-notice-hook
  */
 
-import type { Hook, Message } from '../packages/core/src/index';
+import type { Hook, HookContext, Message, SessionEventLogPort } from '../packages/core/src/index';
 import { HookType } from '../packages/core/src/index';
-import { NOTICE_DETAILS_MAX, type RuntimeNotice, type RuntimeNoticeBus } from './runtime-notice';
+import {
+  NOTICE_DETAILS_MAX,
+  type RuntimeNotice,
+  type RuntimeNoticeBus,
+  type StoredNotice,
+} from './runtime-notice';
 
 /** 注册名（幂等注册用） */
 export const RUNTIME_NOTICE_HOOK = 'runtime-notice';
@@ -59,7 +64,20 @@ export interface RuntimeNoticeHookOptions {
   bus: RuntimeNoticeBus;
   /** 单轮注入上限；缺省 `NOTICE_INJECT_LIMIT` */
   limit?: number;
+  /**
+   * 会话事件日志端口：**注入那一刻**落一条 `runtime.notice.injected`。
+   *
+   * 为什么必须落：`runtime.notice` 是内存事件流（`MemoryEventStream`）上的广播，
+   * `events.ndjson` 只由 `RunJournal`（run 内、带 session_id）写入 —— run 之外的
+   * notice 从来不进盘。没有这条锚点，事后完全无法区分「没发」「发了没注入」
+   * 「注入了模型没理」，只好去数内存里还剩几条（本项目的实际踩坑）。
+   * 端口缺失（CLI 兜底装配 / 测试）时静默跳过，不阻断注入。
+   */
+  eventLog?: SessionEventLogPort;
 }
+
+/** 注入落盘的事件类型（`runtime.*` 命名风格，与 `runtime.notice` 同族）。 */
+export const NOTICE_INJECTED_EVENT = 'runtime.notice.injected';
 
 /** `formatNoticeLine` 的入参：总线的 `RuntimeNotice`，但只要求这几个字段。 */
 export type FormattableNotice = Pick<RuntimeNotice, 'scope' | 'summary' | 'ok'> & {
@@ -128,9 +146,9 @@ export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook
     name: RUNTIME_NOTICE_HOOK,
     type: HookType.BeforeLlm,
     async run(ctx): Promise<void> {
-      const notices = options.bus.take(ctx.session_id, limit);
-      if (notices.length === 0) return;
-      const text = formatNotices(notices);
+      const stored = options.bus.takeStored(ctx.session_id, limit);
+      if (stored.length === 0) return;
+      const text = formatNotices(stored.map((entry) => entry.notice));
       if (text === '') return;
       const message: Message = {
         role: 'user',
@@ -139,6 +157,43 @@ export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook
         timestamp: Date.now(),
       };
       ctx.messages = [...(ctx.messages ?? []), message];
+      // 顺序固定：先挂消息（模型的输入已经在手），再 best-effort 落事件。
+      await recordInjection(options.eventLog, ctx, stored);
     },
   };
+}
+
+/**
+ * 注入事件：`{scope, count, members, notice_ids}` 进 `data`，`session_id` / `run_id`
+ * 落在事件信封（`events.ndjson` 的顶层字段，与其它事件同口径）。
+ *
+ * `scope` 取本次注入涉及的 scope；多条不同就记 `mixed`（注入正文本来就是多条拼一条）。
+ * 事件日志任何异常都吞掉：诊断信息不该反过来打断用户这一轮。
+ */
+async function recordInjection(
+  eventLog: SessionEventLogPort | undefined,
+  ctx: HookContext,
+  stored: readonly StoredNotice[],
+): Promise<void> {
+  if (eventLog === undefined) return;
+  const sessionId = ctx.session_id;
+  if (sessionId === undefined || sessionId === '') return;
+  const scopes = [...new Set(stored.map((entry) => entry.notice.scope))];
+  const members = stored.flatMap((entry) => entry.meta?.members ?? []);
+  try {
+    await eventLog.append({
+      session_id: sessionId,
+      run_id: ctx.run_id,
+      type: NOTICE_INJECTED_EVENT,
+      ts: Date.now(),
+      data: {
+        scope: scopes.length === 1 ? scopes[0] : 'mixed',
+        count: stored.length,
+        members,
+        notice_ids: stored.map((entry) => entry.id),
+      },
+    });
+  } catch {
+    // best-effort：注入已经生效，落事件失败不该冒泡到这一轮。
+  }
 }

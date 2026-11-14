@@ -17,6 +17,7 @@ import type { VesselConfig } from '../packages/config/src/index';
 import type {
   PluginHost,
   RuntimePermissionConfig,
+  SessionEventLogPort,
   ToolDefinition,
 } from '../packages/core/src/index';
 import { MemoryPluginHost } from '../packages/core/src/index';
@@ -143,10 +144,16 @@ export async function assemblePluginTools(options: {
  * 成员 runtime 会在 spawn 时复制父 `PluginHost.getHooks()`，因此在这里注册一次，
  * owner 与所有成员 turn 都能看到通知；成员各自用自己的 `session_id` 取游标。
  */
-export function registerRuntimeNoticeHook(host: PluginHost, bus: RuntimeNoticeBus): void {
+export function registerRuntimeNoticeHook(
+  host: PluginHost,
+  bus: RuntimeNoticeBus,
+  eventLog?: SessionEventLogPort,
+): void {
   const existing = host.getHooks().some((hook) => hook.name === RUNTIME_NOTICE_HOOK);
   if (existing) return;
-  host.registerHook(createRuntimeNoticeHook({ bus }));
+  host.registerHook(
+    createRuntimeNoticeHook({ bus, ...(eventLog !== undefined ? { eventLog } : {}) }),
+  );
 }
 
 /**

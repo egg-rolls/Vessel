@@ -741,6 +741,17 @@ export class AgentServiceImpl implements AgentService {
    */
   private readonly peerStopTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
+   * peer 成员 → 创建者成员 id（**只在进程内**，不落盘、不进 schema）。
+   *
+   * 为什么需要：peer 成员（`role: 'member'`）按设计**没有 `parentId`**（`createOne` 拒绝
+   * member 带 parentId），创建人只出现在 `agent.spawned` 审计事件里（`spawnedBy`
+   * 按 types.ts 的裁定不持久化）。于是 `peerStopChangeFor` 拿不到「谁该收到停下通知」，
+   * 父级是 `main`、成员是 peer 这种最常见的场景一条通知都发不出去。
+   *
+   * 未命中（进程重启后的老成员、来源不可知）就**静默不报**：绝不伪造父级、也不遍历成员去猜。
+   */
+  private readonly peerOrigins = new Map<string, string>();
+  /**
    * 0.41：run id → 已计过的 cycle 边（同 run 同 from/to 只计一次）；run settle 清理。
    * owner run 由 root runtime 直跑、AgentService 不 settle；按契约 §9 A5b option b
    * 接受进程内小泄漏，重启清空，A5b 探针记录。不做容量淘汰（淘汰会让同 run 的边重计、
@@ -1165,6 +1176,7 @@ export class AgentServiceImpl implements AgentService {
       presence: 'live',
       ...(spawnedBy !== undefined ? { spawned_by: spawnedBy } : {}),
     });
+    this.rememberPeerOrigin(record, spawnedBy);
     // 事件描述实体：冷建也发 `session.created`（不带 source 字段）。best-effort。
     await this.appendSessionEvent(record.id, 'session.created', {
       side: 'new',
@@ -1371,6 +1383,7 @@ export class AgentServiceImpl implements AgentService {
       keep_projected: seedResult.keepProjected,
       copied_messages: seedResult.copiedMessages,
     });
+    this.rememberPeerOrigin(record, spawnedBy);
     return this.statusFor(record);
   }
 
@@ -3639,18 +3652,43 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * 记录 peer 成员的创建者（进程内）：`role: 'member'` 没有 `parentId`，
+   * 创建者只在这一刻可得。只记不可自指、非空的值；不落盘。
+   */
+  private rememberPeerOrigin(record: MemberRecord, spawnedBy: string | undefined): void {
+    if (record.role !== 'member') return;
+    if (!nonEmpty(spawnedBy)) return;
+    if (spawnedBy === record.id) return;
+    this.peerOrigins.set(record.id, spawnedBy);
+  }
+
+  /**
+   * 成员的父成员 id：contractor 用落盘的 `parentId`；peer 成员没有 parentId，
+   * 退回进程内的创建者链接（`peerOrigins`）。两者都没有 → undefined（静默不报，不猜）。
+   */
+  private peerParentIdFor(member: MemberRecord): string | undefined {
+    if (nonEmpty(member.parentId)) return member.parentId;
+    const origin = this.peerOrigins.get(member.id);
+    if (origin === undefined) return undefined;
+    return nonEmpty(origin) ? origin : undefined;
+  }
+
+  /**
    * 成员 → 变更：父 session 取父成员当前 primary body 的 session（notice 的注入目标）。
    *
-   * 没有父级（peer 成员 / main）、父级已 left / closed 时不产生变更：没人会读它。
+   * 没有父级（来源不可知的 peer 成员 / main 自身）、父级已 left / closed 时不产生变更：
+   * 没人会读它。
    */
   private peerStopChangeFor(
     member: MemberRecord,
     kind: PeerStopKind,
     failure: string | undefined,
   ): PeerStopChange | undefined {
-    if (!nonEmpty(member.parentId)) return undefined;
-    const parent = this.registry.get(member.parentId);
+    const parentId = this.peerParentIdFor(member);
+    if (parentId === undefined) return undefined;
+    const parent = this.registry.get(parentId);
     if (parent === undefined) return undefined;
+    if (parent.id === member.id) return undefined;
     if (parent.membership === 'left' || parent.state === 'closed') return undefined;
     return {
       parent_session_id: currentBindingSession(parent),

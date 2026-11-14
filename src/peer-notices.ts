@@ -136,7 +136,11 @@ export function createPeerNoticeRouter(options: PeerNoticeRouterOptions): PeerNo
     const changes = state.changes;
     state.changes = [];
     try {
-      bus.publish(buildPeerNotice(changes), { to: sessionId });
+      const members = peerNoticeMembers(changes);
+      bus.publish(buildPeerNotice(changes), {
+        to: sessionId,
+        ...(members.length > 0 ? { meta: { members } } : {}),
+      });
       state.sentInRound = true;
     } catch (error) {
       logger?.warn('peer_notice.publish_failed', {
@@ -235,16 +239,7 @@ export function buildPeerNotice(changes: readonly PeerStopChange[]): RuntimeNoti
   // `env-notice.ts` 按行首 token 认 scope，认不出就落到 `context`。
   const summary = trimTo(`peer: ${parts.join(', ')}`, NOTICE_SUMMARY_MAX);
 
-  const details: string[] = [];
-  for (const change of changes) {
-    if (details.length >= NOTICE_DETAILS_MAX) break;
-    const who = change.name ?? change.agent_id;
-    const label = change.kind === 'failed' ? errorLabel(change.error) : undefined;
-    const suffix = label === undefined ? '' : ` (${label})`;
-    details.push(trimTo(`${who}: ${change.kind}${suffix}`, NOTICE_SUMMARY_MAX));
-  }
-  const hidden = changes.length - details.length;
-  if (hidden > 0) details[details.length - 1] = `+${hidden} more`;
+  const { details } = peerNoticeLines(changes);
 
   return {
     scope: 'peer',
@@ -253,6 +248,45 @@ export function buildPeerNotice(changes: readonly PeerStopChange[]): RuntimeNoti
     // ok=false 表示「有成员失败」，不是「没生效」；hook 对 peer scope 不加前缀。
     ok: counts.failed === 0,
   };
+}
+
+/** 通知正文的逐行明细，以及与之严格一一对应的结构化名单（供注入事件记录）。 */
+interface PeerNoticeLines {
+  details: string[];
+  members: { name: string; kind: string }[];
+}
+
+/**
+ * 明细行与结构化名单**同源**生成，避免两处漂移：`members` 里的名字一定出现在
+ * `details` 里（被 `+N more` 顶掉的那一行，两边一起丢）。
+ */
+function peerNoticeLines(changes: readonly PeerStopChange[]): PeerNoticeLines {
+  const details: string[] = [];
+  const members: { name: string; kind: string }[] = [];
+  for (const change of changes) {
+    if (details.length >= NOTICE_DETAILS_MAX) break;
+    const who = change.name ?? change.agent_id;
+    const label = change.kind === 'failed' ? errorLabel(change.error) : undefined;
+    const suffix = label === undefined ? '' : ` (${label})`;
+    details.push(trimTo(`${who}: ${change.kind}${suffix}`, NOTICE_SUMMARY_MAX));
+    members.push({ name: trimTo(who, NOTICE_SUMMARY_MAX), kind: change.kind });
+  }
+  const hidden = changes.length - details.length;
+  if (hidden > 0) {
+    details[details.length - 1] = `+${hidden} more`;
+    members.pop();
+  }
+  return { details, members };
+}
+
+/**
+ * 同一次合并涉及的成员（名字 + 结局）：只是给 `runtime.notice.injected` 事件用的
+ * 结构化副本 —— 正文里是拼好的字符串，事后 grep 事件才需要逐个名字。
+ */
+export function peerNoticeMembers(
+  changes: readonly PeerStopChange[],
+): { name: string; kind: string }[] {
+  return peerNoticeLines(changes).members;
 }
 
 /** 错误 → 一行标签：优先稳定 code（`code: message` 的前缀），否则截断人话。 */
