@@ -2195,6 +2195,12 @@ export class AgentServiceImpl implements AgentService {
       body_id: entry.bindingId,
       epoch: entry.epoch,
       reason,
+      // B′（0.52）：rotate 交棒轮不是迟到旧轮。把退役时 in-flight 的 run id 随事件带出去，
+      // 让 TeamService 只 fence「run id 对不上」的旧轮，交棒轮照常记账。
+      // 只有 rotation 才带：close / delete 等路径保持「一律 fence」的旧语义。
+      ...(entry.retirement?.reason === 'rotation'
+        ? { retired_during_run_id: entry.retirement.runId }
+        : {}),
     });
     this.scheduleSnapshot();
     if (entry.active === undefined) await this.disposeEntry(entry);
