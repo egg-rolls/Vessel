@@ -4,7 +4,14 @@
  * @module @vessel-agent/serve
  */
 
-import { projectedKeepCount, type SessionState, type SessionStore } from '@vessel-agent/core';
+import {
+  ProjectionPolicyError,
+  projectedKeepCount,
+  resolveProjection,
+  resolveProjectionMode,
+  type SessionState,
+  type SessionStore,
+} from '@vessel-agent/core';
 import type {
   AgentControlLike,
   AgentCreateSeedLike,
@@ -580,6 +587,27 @@ function readSessionMode(value: unknown): 'conversation' | 'both' | undefined {
   return value;
 }
 
+/**
+ * 0.53 U1（ADR-104 §2.1 / §6.4）：`sessions.create` 的 `projection_mode`。
+ *
+ * 这里只做两件在网关就能判的事：词表 + `externalize` 不可用；拒绝码与 ADR 一致，
+ * 其余（收窄、不可变）都留给 agent 层的声明入口，避免两套口径。
+ */
+function readProjectionMode(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new RpcError('invalid_params', 'projection_mode must be a non-empty string');
+  }
+  try {
+    return resolveProjectionMode(value);
+  } catch (error) {
+    if (error instanceof ProjectionPolicyError) {
+      throw new RpcError('invalid_params', error.code);
+    }
+    throw error;
+  }
+}
+
 function readSessionFiles(value: unknown): { ref: string; paths: string[] } | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new RpcError('invalid_params', 'files must be an object');
@@ -751,6 +779,12 @@ export function toSessionView(state: SessionState, latestRaw: unknown): Record<s
   const usage = latest?.usage ?? legacy?.usage;
   const error = optionalString(latest?.error) ?? legacy?.error;
   const branch = optionalString(latest?.branch) ?? state.created_on_branch;
+  // 0.53 U1（ADR-104 §8.2）：投射模式与「是否已锁」由**服务端**给结论，
+  // 客户端不许自己从别处推断（断言「UI 不能凭历史猜模式」）。
+  // - 有声明 ⇒ 声明里的 mode；旧会话（无字段）⇒ legacy 解析成 placeholder。
+  // - `projection_locked`：会话已存在 ⇒ 模式写定；`sessions.get` 只读已有会话，
+  //   所以恒为 true（要判断「还没创建 ⇒ 可改」的入口是 create，不是 get）。
+  const projection = resolveProjection(state);
 
   return {
     run_id: runId,
@@ -764,6 +798,8 @@ export function toSessionView(state: SessionState, latestRaw: unknown): Record<s
     ...(state.preview !== undefined ? { preview: state.preview } : {}),
     updated_at: updatedAt,
     ...(branch !== undefined ? { branch } : {}),
+    projection_mode: projection.mode,
+    projection_locked: projection.locked,
   };
 }
 
@@ -1376,6 +1412,15 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           /** Additive (title_source): human name for the new session, max 120 chars. */
           title: { type: 'string', minLength: 1, maxLength: 120 },
           mode: { type: 'string', enum: ['conversation', 'both'] },
+          /**
+           * 0.53 U1（ADR-104 §8.3，additive）：新会话的上下文投射模式。
+           *
+           * 不传 = 默认 `placeholder`（用户口径）；`passthrough` 是手动 opt-in 的逃生门。
+           * 词表校验在 agent 层（`declareProjection`）：未知值 ⇒
+           * `projection_declaration_invalid`，`externalize` ⇒ `projection_mode_unavailable`，
+           * 子不能放松父 ⇒ `projection_mode_not_allowed`。
+           */
+          projection_mode: { type: 'string', minLength: 1 },
           files: {
             type: 'object',
             required: ['ref', 'paths'],
@@ -1401,6 +1446,10 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         }
         const mode = readSessionMode(params.mode);
         const files = readSessionFiles(params.files);
+        // 0.53 U1（ADR-104）：投射模式在这里**只做词表校验**（拿到 RPC 就拒，别等到
+        // agent 层才发现）；不可用 / 收窄的判定与拒绝码全部收口在 agent 层的
+        // `declareProjection` + `assertProjectionModeAllowedForChild`。
+        const projectionMode = readProjectionMode(params.projection_mode);
 
         if (fromSessionId === undefined) {
           if (seed !== undefined || keepMessages !== undefined) {
@@ -1479,6 +1528,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           ...(title !== undefined ? { title } : {}),
           ...(mode !== undefined ? { mode } : {}),
           ...(files !== undefined ? { files } : {}),
+          ...(projectionMode !== undefined ? { projection_mode: projectionMode } : {}),
         };
 
         try {

@@ -70,6 +70,27 @@ mock.module('@vessel-agent/core', () => ({
   HookType: { BeforeLlm: 'before_llm', AfterLlm: 'after_llm' },
   MESSAGE_REFS_MAX: 8,
   MESSAGE_REF_PATH_MAX: 4096,
+  // 0.53 U1（ADR-104）：会话投射声明的出口（agent 服务创建路径用）。
+  PROJECTION_MODE_STRICTNESS: {
+    passthrough: 0,
+    placeholder: 1,
+    archive_notice: 1,
+    externalize: Number.POSITIVE_INFINITY,
+  },
+  declareProjection: (input: { mode?: string; source?: string } = {}) => ({
+    mode: input.mode ?? 'placeholder',
+    declaration_id: '01MOCKDECLARATION0000000000',
+    source: input.source ?? 'session_created',
+    policy: 'core.context_projection',
+    policy_version: 1,
+    params: { keepRecentTokenRatio: 0.05, keepRecentMax: 10, volumeRatio: 0.2 },
+    excluded_tools: [],
+    declared_at: 0,
+  }),
+  armProjectionDeclaration: (_sessionId: string, declaration: unknown) => declaration,
+  assertProjectionModeAllowedForChild: () => {},
+  knownProjectionMode: () => undefined,
+  forgetProjectionDeclaration: () => {},
 }));
 
 const { AgentInboxStore, inboxPath } = await import('../packages/agent/src/inbox');

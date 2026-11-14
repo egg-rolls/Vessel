@@ -62,6 +62,29 @@ mock.module('@vessel-agent/core', () => ({
   HookType: { BeforeLlm: 'before_llm', AfterLlm: 'after_llm' },
   MESSAGE_REFS_MAX: 8,
   MESSAGE_REF_PATH_MAX: 4096,
+  // 0.53 U1（ADR-104）：agent 服务在会话创建路径上做投射声明；本探针不声明投射，
+  // 但 export 少一个就会在 import 时炸，所以给最小替身（调用即抛的只有 declareProjection，
+  // 一旦本探针开始传 projection 就会立刻暴露）。
+  PROJECTION_MODE_STRICTNESS: {
+    passthrough: 0,
+    placeholder: 1,
+    archive_notice: 1,
+    externalize: Number.POSITIVE_INFINITY,
+  },
+  declareProjection: (input: { mode?: string; source?: string } = {}) => ({
+    mode: input.mode ?? 'placeholder',
+    declaration_id: '01MOCKDECLARATION0000000000',
+    source: input.source ?? 'session_created',
+    policy: 'core.context_projection',
+    policy_version: 1,
+    params: { keepRecentTokenRatio: 0.05, keepRecentMax: 10, volumeRatio: 0.2 },
+    excluded_tools: [],
+    declared_at: 0,
+  }),
+  armProjectionDeclaration: (_sessionId: string, declaration: unknown) => declaration,
+  assertProjectionModeAllowedForChild: () => {},
+  knownProjectionMode: () => undefined,
+  forgetProjectionDeclaration: () => {},
 }));
 
 const { createAgentService } = await import('../packages/agent/src/service');

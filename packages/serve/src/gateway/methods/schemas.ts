@@ -255,6 +255,15 @@ export const runStateSchema = {
     // Additive（0.53）：事件日志游标，决定要不要 `/sessions.events` 补洞。
     // 缺省 = 该会话还没有事件日志。
     event_cursor: sessionEventCursorSchema,
+    // Additive（0.53 U1，ADR-104 §8.2）：会话级上下文投射模式。由服务端解析给出
+    // （旧会话 / 缺省 ⇒ `placeholder`），**客户端不许自己推断**。
+    projection_mode: {
+      type: 'string',
+      enum: ['passthrough', 'placeholder', 'archive_notice'],
+    },
+    // Additive（0.53 U1，ADR-104 §8.2）：模式是否已写定（`sessions.get` 恒 true；
+    // 「还能不能改」属于 create 入口，不属于 get）。
+    projection_locked: { type: 'boolean' },
   },
 };
 

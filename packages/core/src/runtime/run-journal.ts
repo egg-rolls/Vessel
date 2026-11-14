@@ -8,6 +8,7 @@
  * @module @vessel-agent/core/runtime
  */
 
+import { applyDeclaredProjection } from '../context/index.js';
 import { assignMessageIdentities } from '../session/index.js';
 import type { RunEvent } from '../types/event.js';
 import { LeaseExpiredError } from '../types/lease.js';
@@ -187,6 +188,14 @@ export class SessionRunJournal implements RunJournal {
     // 放在这里而不是让退出路径自己写：settle 期间被打断的 run 落终态会话状态时，
     // 用的是它自己那份（可能读于标记之前的）投影，会重建整份 state 把标记冲掉。
     applyArmedResumeMarker(state, this.deps.resumeMarkers);
+    // 0.53 U1（ADR-104 §4.6）：会话级投射声明同样是「创建时一次写定」的 additive 字段，
+    // 而执行单元重建 state 时不会带走它（本单元不允许改 execution-unit）。所以和续跑
+    // 标记同一处理：**落盘前合并回去**。只补 context_projection，不读它去裁剪窗口
+    // （0.53 U1 不改任何运行时行为），也不碰 context_projection_audit（U2 写入）。
+    await applyDeclaredProjection(
+      state,
+      (sessionId) => this.deps.session?.load(sessionId) ?? Promise.resolve(null),
+    );
     // 消息身份（additive）：`run_segment` 只在**落盘这一处**盖章 —— 本方法是 SessionState
     // 的唯一写口（初始保存 / checkpoint / 终态 / 手动压缩四路都经过它），一个口径、
     // 幂等（已盖过的不重写）。它必须发生在 save 之前：读侧（`sessions.get`）拿到的

@@ -92,6 +92,18 @@ mock.module('@vessel-agent/core', () => ({
   DEFAULT_COMPACT_THRESHOLD: 0.8,
   LIMIT_WARNING_THRESHOLD: 0.9,
   noopLogger: quietLogger,
+  // 0.53 U1（ADR-104）：sessions.get / sessions.create 读投射口径；本探针不碰投射，
+  // 给最小替身（口径与 core 一致：缺省 placeholder + 未知值直接拒）。
+  resolveProjection: () => ({
+    mode: 'placeholder',
+    source: 'legacy',
+    declaration: null,
+    error: null,
+    audit: null,
+    locked: true,
+  }),
+  resolveProjectionMode: (value: unknown) => value as string,
+  ProjectionPolicyError: class extends Error {},
 }));
 
 mock.module('@vessel-agent/config', () => ({

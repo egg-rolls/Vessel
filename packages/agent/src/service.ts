@@ -14,17 +14,26 @@
 import { randomUUID } from 'node:crypto';
 import {
   type AgentHandle,
+  armProjectionDeclaration,
+  assertProjectionModeAllowedForChild,
   assertTenantId,
   type ContextSummarizer,
   // CREATE-0.39 内部改名：与 core 导出同名，不再使用 import alias。
   compactMessagesForSeed,
+  declareProjection,
   type EventStream,
+  forgetProjectionDeclaration,
+  knownProjectionMode,
   LeaseExpiredError,
   type LeaseGrant,
   type LeaseServicePort,
   type Logger,
   type Message,
   noopLogger,
+  PROJECTION_MODE_STRICTNESS,
+  type ProjectionDeclaration,
+  type ProjectionMode,
+  type ProjectionParams,
   projectMessages,
   type RunEvent,
   type RunHandle,
@@ -985,6 +994,78 @@ export class AgentServiceImpl implements AgentService {
     return this.createOne(record);
   }
 
+  /**
+   * 0.53 U1（ADR-104 §4.6 / §7.2 / §8.3）：给「刚创建 / 刚换 body」的会话声明投射模式。
+   *
+   * 这一段**只做声明**：
+   *
+   * - 校验词表与形状（未知 mode / `externalize` 都在这里被拒，见 `declareProjection`）；
+   * - 权限收窄：子不能放松父（父 `placeholder` ⇒ 子不能 `passthrough`；
+   *   父 `passthrough` ⇒ 子可选 `placeholder`；`archive_notice` 与 `placeholder` 同层）；
+   * - 登记到进程内声明表（`armProjectionDeclaration`），由状态写入路径合并落盘。
+   *
+   * 不改任何运行时行为：没有任何路径读它去裁剪窗口，缺省与有值的会话行为一致。
+   *
+   * 调用方没要求（`projection` 缺省）时也要写一条：`placeholder` + `default`。
+   * 这是「`SessionState.context_projection` 会话创建时写入、**总是在**」的来源，
+   * 也让「谁都没声明」和「声明了默认值」在盘上是同一个东西 —— 唯一的区别是后者
+   * 带 `declaration_id`，前者（0.53 之前的旧会话）读侧走 `legacy` 解析。
+   */
+  private declareSessionProjection(options: {
+    sessionId: string;
+    source: 'session_created' | 'rotate';
+    requested: unknown;
+    parentSessionIds: readonly (string | undefined)[];
+  }): ProjectionDeclaration {
+    const requested = options.requested;
+    const explicit = requested !== undefined && requested !== null;
+
+    let mode = 'placeholder';
+    let rawParams: unknown;
+    if (explicit) {
+      let requestedMode: unknown;
+      if (typeof requested === 'string') {
+        requestedMode = requested;
+      } else if (isRecord(requested)) {
+        requestedMode = requested.mode;
+        rawParams = requested.params;
+      } else {
+        throw new AgentError('invalid_input', 'projection must be a mode string or an object');
+      }
+      if (requestedMode === undefined) requestedMode = 'placeholder';
+      if (typeof requestedMode !== 'string') {
+        throw new AgentError('invalid_input', 'projection.mode must be a string');
+      }
+      mode = requestedMode;
+    }
+
+    // 校验 / 收窄失败时抛 `ProjectionPolicyError`：它的 `.code` 就是 ADR-104 §6.4 的
+    // 拒绝码，原样出到 RPC 层（gateway 的 `agentErrorCode()` 读的就是 `.code`），
+    // 不降级成 `invalid_input`。
+    const declaration = declareProjection({
+      mode,
+      source: explicit ? options.source : 'default',
+      params: readProjectionParams(rawParams),
+    });
+    // 子不能放松父：读不到父会话状态时按默认 placeholder 保守裁决。
+    let strictest: ProjectionMode | undefined;
+    for (const parentSessionId of options.parentSessionIds) {
+      if (parentSessionId === undefined) continue;
+      const parentMode = knownProjectionMode(parentSessionId);
+      if (parentMode === undefined) continue;
+      if (
+        strictest === undefined ||
+        PROJECTION_MODE_STRICTNESS[parentMode] > PROJECTION_MODE_STRICTNESS[strictest]
+      ) {
+        strictest = parentMode;
+      }
+    }
+    if (options.parentSessionIds.some((id) => id !== undefined)) {
+      assertProjectionModeAllowedForChild(strictest ?? 'placeholder', declaration.mode);
+    }
+    return armProjectionDeclaration(options.sessionId, declaration);
+  }
+
   private async createOne(input: Record<string, unknown>): Promise<MemberStatus> {
     // CREATE-0.39：有来源走独立的 seeded 分支；公共路径不再受「每源一个派生」限制。
     const fromSessionId =
@@ -1127,7 +1208,23 @@ export class AgentServiceImpl implements AgentService {
     // 场景。冻结同理：冻结禁止新增，不禁止把已有的交回来。
     if (name !== undefined) {
       const existing = this.reusableByName(name, teamId);
-      if (existing !== undefined) return { ...this.statusFor(existing), reused: true };
+      if (existing !== undefined) {
+        // 0.53 U1（ADR-104 §7.2）：复用的是**已经有会话**的成员，它的投射模式早就写定了。
+        // 同 mode 重复请求算幂等成功；不同 mode / 读不到模式一律拒绝 —— 静默丢掉
+        // 调用方写下的 projection 等于骗他「已经照你说的设好了」。
+        if (input.projection !== undefined && input.projection !== null) {
+          const requestedMode = requestedProjectionMode(input.projection);
+          const existingMode = knownProjectionMode(existing.sessionId);
+          if (requestedMode === undefined || existingMode !== requestedMode) {
+            throw new AgentError(
+              'invalid_input',
+              'projection cannot be declared on a reused member; use rotate to give the next ' +
+                `session a projection (existing: ${existingMode ?? 'unknown'})`,
+            );
+          }
+        }
+        return { ...this.statusFor(existing), reused: true };
+      }
     }
     // 冻结 / 上限 / registry.add 之间不得有 await（F7）。
     // `reusableByName` 是同步的（`registry.findByName`），上面那次提前返回不破坏窗口。
@@ -1165,6 +1262,15 @@ export class AgentServiceImpl implements AgentService {
     if (model !== undefined) record.model = model;
     const systemPrompt = optionalString(input.systemPrompt);
     if (systemPrompt !== undefined) record.systemPrompt = systemPrompt;
+
+    // 0.53 U1（ADR-104）：首会话的上下文投射声明。校验 / 收窄都在 spawn 之前，
+    // 声明失败不留半个成员；声明只登记不裁剪窗口（行为与现在完全一致）。
+    this.declareSessionProjection({
+      sessionId: record.sessionId,
+      source: 'session_created',
+      requested: input.projection,
+      parentSessionIds: [parentId, spawnedBy],
+    });
 
     try {
       await this.spawnRecord(record);
@@ -1340,6 +1446,15 @@ export class AgentServiceImpl implements AgentService {
     // 派生成员与源同一个 Team ⇒ 同一个成员 cwd（仍是快照，不重新判定「显式」与否）。
     if (source.cwd !== undefined) record.cwd = source.cwd;
 
+    // 0.53 U1（ADR-104）：派生会话同样在创建时声明投射模式；父 = 源会话。
+    // 校验 / 收窄失败发生在 spawn 之前，不留半个成员。
+    this.declareSessionProjection({
+      sessionId: record.sessionId,
+      source: 'session_created',
+      requested: input.projection,
+      parentSessionIds: [fromSessionId, record.parentId, spawnedBy],
+    });
+
     try {
       await this.spawnRecord(record);
     } catch (error) {
@@ -1414,6 +1529,8 @@ export class AgentServiceImpl implements AgentService {
    * `agent.create_cleanup_failed`，不影响原始失败返回。
    */
   private async cleanupSessionData(sessionId: string, agentId: string): Promise<void> {
+    // 0.53 U1：会话被清掉时同时忘掉进程内的投射声明登记，别让登记表长成泄漏。
+    forgetProjectionDeclaration(sessionId);
     if (this.deleteSessionData === undefined) {
       this.logger.warn('agent.create_cleanup_skipped', {
         agent_id: agentId,
@@ -3871,6 +3988,15 @@ export class AgentServiceImpl implements AgentService {
   async send(input: SendInput | SendBatchInput): Promise<SendResult | BatchResult<SendResult>> {
     await this.ready;
     const record = input as unknown as Record<string, unknown>;
+    // 0.53 U1（ADR-104 §7.2）：投射模式是**会话级、创建时写定**的声明，`agent send`
+    // 不是声明入口 —— 带上这两个参数一律拒绝，不静默忽略（静默忽略等于让调用方
+    // 以为自己改成了 passthrough）。
+    if (record.projection !== undefined || record.projection_mode !== undefined) {
+      throw new AgentError(
+        'invalid_input',
+        'projection is a session-level declaration; set it on create / rotate, not on send',
+      );
+    }
     if ('messages' in record) {
       if (
         record.to !== undefined ||
@@ -4668,6 +4794,14 @@ export class AgentServiceImpl implements AgentService {
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
     await this.ready;
     const raw = input as unknown as Record<string, unknown>;
+    // 0.53 U1（ADR-104 §7.2）：投递入口不声明投射模式（同 `send`）。
+    if (raw.projection !== undefined || raw.projection_mode !== undefined) {
+      return {
+        status: 'rejected',
+        code: 'invalid_input',
+        reason: 'projection is a session-level declaration; set it on create / rotate',
+      };
+    }
     const to = readRequiredString(raw, 'to');
     const from = raw.from === undefined ? DEFAULT_MESSAGE_SENDER : readRequiredString(raw, 'from');
     const interrupt = readOptionalBoolean(raw, 'interrupt');
@@ -5019,6 +5153,16 @@ export class AgentServiceImpl implements AgentService {
     ) {
       throw new AgentError('spawn_failed', 'create_failed: session_id_collision');
     }
+
+    // 0.53 U1（ADR-104）：新 body 的上下文投射声明。校验 / 收窄排在写事件、换 binding
+    // 之前：声明失败不留半个 session，源与旧 primary 都不动。
+    // 父 = 源会话（换 body）或该 agent 当前的 primary（新 body 不得比当前更松）。
+    this.declareSessionProjection({
+      sessionId: newSessionId,
+      source: 'rotate',
+      requested: raw.projection ?? raw.projection_mode,
+      parentSessionIds: [sourceSessionId, primaryBinding(record)?.bindingId],
+    });
 
     // 事件先写（只读源，不动 binding）；写失败时源仍 primary，返回 create_failed。
     try {
@@ -6978,6 +7122,50 @@ function readSessionMode(value: unknown): 'conversation' | 'both' | undefined {
   if (value === undefined) return undefined;
   if (value !== 'conversation' && value !== 'both') {
     throw new AgentError('invalid_input', 'mode must be conversation or both');
+  }
+  return value;
+}
+
+/**
+ * 0.53 U1（ADR-104）：从 `projection` 参数里取出请求的模式（只读，不校验词表 ——
+ * 词表校验在 `declareSessionProjection` 里统一做，这里用于复用分支的幂等判断）。
+ */
+function requestedProjectionMode(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  if (isRecord(value) && typeof value.mode === 'string') return value.mode;
+  return undefined;
+}
+
+/**
+ * 0.53 U1（ADR-104 §4.6）：投射声明的参数覆盖项。
+ *
+ * 只做形状校验（必须是对象、三项都是数字）；取值范围与默认值由
+ * `declareProjection` / `normalizeProjectionParams` 收口，这里不重复一套口径。
+ */
+function readProjectionParams(value: unknown): Partial<ProjectionParams> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new AgentError('invalid_input', 'projection.params must be an object');
+  }
+  const ratio = readProjectionParam(value, 'keepRecentTokenRatio');
+  const max = readProjectionParam(value, 'keepRecentMax');
+  const volume = readProjectionParam(value, 'volumeRatio');
+  return {
+    ...(ratio !== undefined ? { keepRecentTokenRatio: ratio } : {}),
+    ...(max !== undefined ? { keepRecentMax: max } : {}),
+    ...(volume !== undefined ? { volumeRatio: volume } : {}),
+  };
+}
+
+/** 单个投射参数：必须是数字（范围由 core 的 `normalizeProjectionParams` 判）。 */
+function readProjectionParam(
+  record: Record<string, unknown>,
+  key: 'keepRecentTokenRatio' | 'keepRecentMax' | 'volumeRatio',
+): number | undefined {
+  const value = record[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'number') {
+    throw new AgentError('invalid_input', `projection.params.${key} must be a number`);
   }
   return value;
 }

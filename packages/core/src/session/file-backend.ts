@@ -15,6 +15,8 @@ import { join } from 'node:path';
 import {
   normalizeClearedToolCallIds,
   normalizeContextAnchor,
+  normalizeContextProjectionAudit,
+  normalizeProjectionDeclaration,
   normalizePromptContextFingerprint,
 } from '../context/index.js';
 import type { Message } from '../types/provider.js';
@@ -157,6 +159,10 @@ function toSessionState(value: unknown): SessionState {
     resume_after_restart: normalizeResumeAfterRestart(raw.resume_after_restart),
     // 0.52 V1：本段冻结的占位集合（旧文件没有 ⇒ undefined ⇒ 请求视图不改写）。
     cleared_tool_call_ids: normalizeClearedToolCallIds(raw.cleared_tool_call_ids),
+    // 0.53 U1：投射声明（旧文件没有 ⇒ undefined ⇒ resolveProjection 走 legacy ⇒ placeholder）。
+    context_projection: normalizeProjectionDeclaration(raw.context_projection),
+    // 0.53 U1：审计行（U2 才写；旧文件 / 脏数据 ⇒ undefined）。
+    context_projection_audit: normalizeContextProjectionAudit(raw.context_projection_audit),
   };
 }
 
@@ -437,6 +443,14 @@ export class FileSessionStore implements SessionStore {
       // 0.52 V1：本段冻结的占位集合。同样只在有值时写。
       ...(state.cleared_tool_call_ids !== undefined
         ? { cleared_tool_call_ids: state.cleared_tool_call_ids }
+        : {}),
+      // 0.53 U1：会话级投射声明 + 审计行（ADR-104 §5.1）。同样只在有值时写，
+      // 旧文件形状不变；旧文件读回来是 undefined ⇒ 走 legacy 解析（placeholder）。
+      ...(state.context_projection !== undefined
+        ? { context_projection: state.context_projection }
+        : {}),
+      ...(state.context_projection_audit !== undefined && state.context_projection_audit !== null
+        ? { context_projection_audit: state.context_projection_audit }
         : {}),
     };
 

@@ -4,6 +4,7 @@
  */
 
 import type { ContextAnchor, PromptContextFingerprint } from './context.js';
+import type { ContextProjectionAudit, ProjectionDeclaration } from './projection.js';
 import type { Message } from './provider.js';
 import type { RunUsage } from './run-record-store.js';
 
@@ -88,6 +89,24 @@ export interface SessionState {
    * 缺省 = 旧会话 / 这一段还没做过占位决策，行为与 0.51 一致（请求视图与落盘逐字一致）。
    */
   cleared_tool_call_ids?: string[];
+  /**
+   * 会话级上下文投射**声明**（0.53 U1，additive；ADR-104 §4.6）。
+   *
+   * 会话创建时写一次、之后不可变（同一 `mode` 重复声明幂等，不同 `mode` 抛
+   * `projection_mode_immutable`）。缺省 = 旧会话 / 还没声明 ⇒ 读侧按
+   * `{ mode: 'placeholder', source: 'legacy' }` 解析（`resolveProjection`）。
+   *
+   * 0.53 U1 **只声明不改行为**：没有任何运行路径读它去裁剪窗口，所以缺省与有值
+   * 的会话行为完全一致（都是现在的 `placeholder` 行为）。接线是 U2 的事。
+   */
+  context_projection?: ProjectionDeclaration;
+  /**
+   * 最近一次投射决策的审计行（0.53 U1 只声明字段与落盘位置；ADR-104 §5.1）。
+   *
+   * 写入者是 U2 的运行时（每次重新解析 / 降级时覆盖成最新一条）。本单元不产生
+   * 审计行 ⇒ 缺省 = 还没有任何决策记录。
+   */
+  context_projection_audit?: ContextProjectionAudit | null;
 }
 
 /**
