@@ -3,6 +3,7 @@ adr: 104
 title: 会话级上下文投射模式（passthrough / placeholder / externalize / archive_notice）
 status: proposed
 date: 2026-11-14
+updated: 2026-11-15（用户裁定：默认 mode = `placeholder`；子 agent 允许收紧禁止放松；模式可跨会话混用；实现分期 U1/U2/U3）
 related: [085, 099]
 tags: [context, tools, projection, session, audit, gate, cache, compaction, extension-boundary]
 ---
@@ -19,6 +20,17 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
   5. **阈值沿用现状**：`0.85` 主阈值不动，`0.20` 体积压力只告警；per-mode 阈值列为未定事项（§9）。
   6. 其余四项：判别键名 `.mode`；legacy 会话 C1h 继续红、不开临时放行；`params` 不公开成配置键；
      T6 语义变更**算破坏性变更**（需 minor + CHANGELOG）。
+- **2026-11-15 用户裁定（本版修订，四条；改动处均标注「2026-11-15 用户裁定」）**：
+  1. **默认 mode 全部改为 `placeholder`**（原稿为「新会话默认 `passthrough`」）。用户原话：「**先用 placeholder**」。
+     依据是成本账实测（`docs/dev/handoff/cache-ab-cost-model.md`：645 段净赚 36:1、临界缓存折扣
+     `r* = 2.68%`，§8.1 依据行）。`passthrough` 由此重新定位为**手动 opt-in 的逃生门**，不再是默认值；
+     0.52 前旧会话仍为 `placeholder` + `source:'legacy'`（不顺带改，保持原口径）。
+  2. **子 agent 的提权规则改为「允许收紧、禁止放松」**（原稿是「父 `passthrough` ⇒ 子只能 `passthrough`」，
+     即只许同层或放松）；见 §8.3.1。
+  3. **模式可跨会话混用**：不同会话各自声明不同模式（父 `placeholder` + 子 `archive_notice` 合法），
+     同一批量/团队不要求统一；同一会话内仍不可变（§8.2）。用户原话：「之后要用的时候，可以混着用」。
+     见 §2.5。
+  4. **实现按期分三步（U1 → U2 → U3），`externalize` 本轮不实现**：见附录 B。
 - **本轮范围**：只有这份 ADR。不改任何代码、不跑测试、不改 `docs/architecture/message-invariants.md`。
   §6 / §11 的文件清单是给实现轮的施工图，不是本轮改动。
 
@@ -67,8 +79,11 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 
 **1.2 为什么要改**
 
-- **收益量级错配**：4.7% 是实测上界，多数会话 0–3%。为 0–5% 的收益把"改写历史正文"做成全局强制默认，
-  代价是每个会话都背一次 C1h 例外、一次缓存边界、一次"模型看不到原文"。
+- **收益量级错配：问题不是"占位赚不赚"，而是"全局强制唯一取值不可换"**。4.7% 只是**省字**上界，多数会话
+  0–3%；真正的成本账要算缓存（`cache-ab-cost-model.md` 实测：段内冻结后净赚 **36:1**，见 §8.1 依据）。
+  所以 2026-11-15 用户裁定的口径是：**默认仍是 `placeholder`**（"先用 placeholder"），但模式必须变成
+  会话级可声明——否则"长文件阅读类"这类 `r*` 高的会话没有任何办法关掉它，而"多工具大输出类"也没法
+  按需收紧到 `archive_notice`。
 - **缓存代价断在 run 起点，不是"每轮请求"，也不是"段边界"**：
 
   | 实现 | 断点在哪 | 一个 run 有 20 次工具调用时 |
@@ -86,7 +101,7 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 | --- | --- |
 | 样本 | 46 次真实会话（`docs/dev/handoff/measure-tool-result-clear.md`） |
 | 指标 | "被保留的工具结果体积 ÷ `maxTokens`"的单会话**最大值**，不是全会话平均 |
-| 因此 | **4.7% 是上界**，多数会话 0–3%；用它论证"默认值该给 `placeholder`"是量级错配 |
+| 因此 | **4.7% 只是省字上界**，多数会话 0–3%；它**不能**用来论证"默认值该给谁"——默认值的依据是成本账（§8.1 依据行），不是这个数 |
 | 缓存指标 | 前缀缓存命中率**上界**（冻结前 37.0% / 冻结后 74.8%；未命中上行界 100%） |
 | 已知偏差 | 样本全部来自本地 CLI 场景；WebUI / 团队并发会话未纳入（这也是 per-mode 阈值暂不定的原因之一，§10.2 第 1 项） |
 - **占位没有摘要 ⇒ 重调用**：占位只说明"这里有过一个结果"，模型拿不到可复用信息，于是重跑同样的工具，
@@ -109,7 +124,7 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 | 字段 | 取值枚举 | 默认值 | 语义一句话 | 反例（不能用及原因） |
 | --- | --- | --- | --- | --- |
 | `SessionState.context_projection` | 声明对象（下表） | **总是存在**（会话创建时写） | 会话级底层投射声明 | ❌ `tool_result_clearing` / `compress_tool_results`：写成"工具结果压缩开关"，但 `externalize` 与 `archive_notice` 不是压缩，且 `passthrough` 下这个字段仍然有意义（它声明了"不投射"） |
-| `context_projection.mode` | `passthrough` / `placeholder` / `externalize` / `archive_notice` | 新会话 `passthrough`；0.52 前旧会话 `placeholder`（§7.1） | 请求视图如何由落盘历史导出 | ❌ `off` / `none` / `disabled` / `false`：会被读成"关闭了会话 / 关闭了上下文"，而这里关掉的只是"投射"；❌ `clear`：与 `cleared_tool_call_ids` 同词根但语义漂移（听起来像"清空上下文"）；❌ `on` / `true` / `compact`：把流程（压缩）当模式名 |
+| `context_projection.mode` | `passthrough` / `placeholder` / `externalize` / `archive_notice` | **新会话 `placeholder`**（2026-11-15 用户裁定：「先用 placeholder」）；0.52 前旧会话 `placeholder` + `source:'legacy'`（§7.1）。`passthrough` 是**手动 opt-in**、不是默认值（§8.1） | 请求视图如何由落盘历史导出 | ❌ `off` / `none` / `disabled` / `false`：会被读成"关闭了会话 / 关闭了上下文"，而这里关掉的只是"投射"；❌ `clear`：与 `cleared_tool_call_ids` 同词根但语义漂移（听起来像"清空上下文"）；❌ `on` / `true` / `compact`：把流程（压缩）当模式名 |
 | `context_projection.declaration_id` | ulid | 创建时生成 | 声明幂等键 + 豁免判定凭据 | ❌ `session_id`：复用它无法表达"同段/同会话内声明不可替换"的幂等语义 |
 | `context_projection.source` | `session_created` / `default` / `legacy` / `rotate` / `inherited` | 按建会话路径 | 这条声明由**谁**定（用户显式 / 系统缺省 / 旧会话补写 / agent rotate 自选 / 父会话继承） | ❌ `explicit: boolean`：`default`、`legacy`、`inherited` 都是"非显式"，布尔表不出三种来源；❌ 复用 `rotate` 表示继承：`inherited` 的主语是父会话，`rotate` 的主语是 agent 自己 |
 | `context_projection.policy` | `core.context_projection`（固定） | 固定 | 决策由哪个**内建**实现产出 | ❌ `strategy` / `plugin_id`：现阶段没有插件，叫 strategy 会诱导后来的人当扩展点 |
@@ -133,8 +148,8 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 
 | mode | 本轮落地 | substitute（替换正文） | announce（压缩发生的那次 run 起点追加一条卡） | 是否省 token | C1h |
 | --- | --- | --- | --- | --- | --- |
-| `passthrough` | **是** | `none` | `none` | 否（不投射基线） | 逐字一致，**不解禁** |
-| `placeholder` | **是**（现实现） | `placeholder` | trim 卡 | 是（实测 ≤4.7%） | 需会话级豁免 |
+| `passthrough` | **是**（**手动 opt-in 的逃生门**，不是默认值；2026-11-15 用户裁定） | `none` | `none` | 否（不投射基线） | 逐字一致，**不解禁** |
+| `placeholder` | **是**（现实现；**新会话默认**，2026-11-15 用户裁定） | `placeholder` | trim 卡 | 是（实测 ≤4.7%） | 需会话级豁免 |
 | `archive_notice` | **是**（代码就绪；默认白名单未启用，§7.3；硬依赖读回路径 §2.3f） | `none` | archive 卡 | **否** —— 省字全部来自压缩丢弃，卡本身净增 | 逐字一致（卡已落盘），**不解禁** |
 | `externalize` | **`not_implemented`** | —（本轮为空） | —（本轮为空） | 本轮无 | 本轮无（声明即拒绝，§4.4） |
 
@@ -187,8 +202,10 @@ owning assistant）。归档对象 = **被丢弃前缀里的 `role === 'tool'` �
 
 - **自己不省 token**：省字 100% 来自压缩丢弃；卡本身占几十 token/段（上限 200 token）。
 - **硬依赖读回路径**：卡写"怎么拿回来"才有意义，而读回依赖磁盘事件日志 + `sessions.events`
-  （**当前未实现**）。读回路径不可用时，`archive_notice` 声明在会话创建时**降级为 `passthrough`**，
-  并落 `context.projection_degraded{reason:'readback_unavailable'}`（审计 `effective_mode: 'passthrough'`）
+  （**当前未实现**）。读回路径不可用时，`archive_notice` 声明在会话创建时**降级为 `placeholder`**
+  （**2026-11-15 用户裁定的推论**：原稿为 `passthrough`；默认值改为 `placeholder` 后降级目标随之改为
+  默认值，且降级不得放松严格度，§8.3.1），并落
+  `context.projection_degraded{reason:'readback_unavailable'}`（审计 `effective_mode: 'placeholder'`）
   —— 不允许写一张"指向不存在路径"的卡。
 - **模型侧还缺一个读回通道**：现在没有任何面向模型的工具能按 `tool_call_id` 读会话事件 ⇒ 当前卡的
   "怎么拿回来"只对人/编排层成立。这一项列入 §10.2 未定事项，并与 `sessions.events` 同期解决。
@@ -213,6 +230,17 @@ owning assistant）。归档对象 = **被丢弃前缀里的 `role === 'tool'` �
    违规只有一种：**run 内**（同一次 run 的多次请求之间）集合变了。
 3. **`plan_hash` 的恒定范围是 run**（不是段、不是会话）。下游门禁/告警按 run 作界：run 内两次请求
    hash 不同 ⇒ 红；跨 run hash 不同 ⇒ 正常。
+
+#### 2.5 模式可跨会话混用（2026-11-15 用户裁定）
+
+用户原话：「**之后要用的时候，可以混着用**。」落成条款：
+
+- **模式是会话级属性，不同会话可各自声明不同模式**（父 `placeholder` + 子 `archive_notice` 合法；
+  同一团队里一个成员 `passthrough`、另一个 `placeholder` 也合法）。
+- **同一批量 / 同一团队 / 同一次 `agent create` 派生**都不要求模式统一：任何"为了整齐而强制同模式"的
+  实现或门禁都是**违规**（会把可混用退回成一刀切）。
+- **同一会话内仍不可变**（§2.4 / §8.2）：可混用只发生在**会话边界之间**，不发生在会话中途。
+- 唯一的一致性约束来自 §8.3.1 的**单调收紧**：子的严格度**不得低于**父（`passthrough` 最松）。
 
 #### D1：内化为 core —— 决策层与机制层都在 core，只隔一个**内部 seam**
 
@@ -305,7 +333,7 @@ R4（**run 内**占位/卡条数不增）、C1h（存档=投影）、缓存冻�
 
 1. **会话创建参数**（`context_projection` 显式声明）；
 2. **节点级配置** `config.context.projectionDefaultMode`（一个 harness 实例 = 一个节点；由官方装配层 / CLI 传入）；
-3. **core 内建默认**（新会话 `passthrough`；旧会话走 §7.1 的兼容路径）。
+3. **core 内建默认**（**新会话 `placeholder`**，2026-11-15 用户裁定；旧会话走 §7.1 的兼容路径）。
 
 规则：
 
@@ -430,7 +458,7 @@ export interface ContextProjectionPlan {
 5. 去重后按该 run 起点的消息顺序重排（core 决定顺序，防"顺序也是一种决策"）；
 6. `excluded_tools ⊆ 会话声明豁免`，否则 `excluded_escalation`；
 7. `mode === 'archive_notice'` 要求读回路径可用（`sessions.events` 探针），否则
-   `readback_unavailable` ⇒ 降级 `passthrough`（§2.3f；**不**报创建失败，因为卡没有副作用）。
+   `readback_unavailable` ⇒ 降级 `placeholder`（§2.3f；**不**报创建失败，因为卡没有副作用）。
 
 #### 4.4 失败行为（**绝不静默部分应用**）
 
@@ -440,10 +468,19 @@ export interface ContextProjectionPlan {
 | 决策层抛错 | `passthrough` | `context.projection_degraded{reason:'threw'}` | `audit.degraded = {reason, detail}` |
 | 超时（`projection.policy_timeout_ms`，默认 50；同步实现下为保险丝） | `passthrough` | `...{reason:'timeout'}` | 同上 |
 | 返回非法值（§4.3 任一 code） | `passthrough` | `...{reason:'<code>'}` | 同上 |
-| `archive_notice` 但读回路径不可用 | `passthrough` | `...{reason:'readback_unavailable'}` | `effective_mode: 'passthrough'` |
+| `archive_notice` 但读回路径不可用 | `placeholder` | `...{reason:'readback_unavailable'}` | `effective_mode: 'placeholder'` |
 
 降级后本次 run **全 run** 为 `passthrough`：不占位、不追加卡、不写 `cleared_tool_call_ids` 增量、不改冻结集合。
 部分应用被禁止 —— 它会让"这条占位对应哪次决策"无法回答。
+
+**两层降级不许混为一谈**（**2026-11-15 用户裁定**后必须区分；本表第 4 行原稿为 `passthrough`）：
+
+- **声明期降级**（§7.1 第 4 行 / §2.3f）：`archive_notice` 声明遇上读回不可用 ⇒ 落到**默认值
+  `placeholder`**（不放松）。
+- **运行时降级**（本表第 2/3 行：决策层抛错/超时/返回非法值）：该 run **fail-open 到 `passthrough`**，
+  即"这一 run 不投射"。这是运行时故障的保命路径，且**只影响该 run**、必发 `degraded` 事件 + 审计标
+  `effective_mode`；不是"把会话放松到 `passthrough`"，会话声明仍是 `placeholder`。
+- 判据：**会话声明只会变严（§8.3.1），单 run 可以 fail-open，但 fail-open 必须留痕可查。**
 
 #### 4.5 core 渲染器（唯一文本作者）
 
@@ -611,7 +648,7 @@ P8 渲染器纯函数性
 （同输入两次渲染逐字节相同；对任意正文的 512 字符子串包含 = false）；P9 体积阈值分模式
 （`placeholder` 走 T6；`passthrough` / `archive_notice` 只发 `context.projection_pressure`）；
 P10 硬兜底（0.85 不受 mode 影响）；P11 `externalize` 拒绝路径唯一（`projection_mode_unavailable`，
-无部分写入）**且** `archive_notice` 在读回探针缺失时降级 `passthrough` + 审计标 `degraded`；
+无部分写入）**且** `archive_notice` 在读回探针缺失时降级 `placeholder` + 审计标 `degraded`；
 P12 无全局白名单（删掉声明后 C1h 必须回到红；legacy 会话必须红）；
 P13 入口一致性：8.3 全表入口传 `externalize` 返回**同一**错误码 `projection_mode_unavailable`；
 `agent send` 传任何 mode 返回 `projection_mode_immutable`；子 agent 越权返回 `projection_mode_not_allowed`
@@ -627,35 +664,44 @@ P13 入口一致性：8.3 全表入口传 `externalize` 返回**同一**错误�
 
 | 情形 | 默认 mode | 理由 |
 | --- | --- | --- |
-| 0.52 之前已有会话（有 `cleared_tool_call_ids`、无声明） | **`placeholder`**（创建时补一条 `source:'legacy'` 声明） | 这些会话上一轮就是"占位视图"，默认 `passthrough` 会让同一批历史在下一轮"原文又回来"——前缀一次性变化、缓存全废，体验是"上下文抽搐"。注意：补的声明有 `declaration_id`，但这些会话**没有** `context_projection_audit`，D4 条件 3 不满足 ⇒ C1h 对它们**仍然红**（已裁定：不开临时放行）。 |
-| 0.53 起新建会话 | **`passthrough`** | 4.7% 上界收益不值得给每个会话背一次历史改写；`passthrough` 是唯一让 C1h 无条件全绿的模式。要压就显式声明 `placeholder` / `archive_notice`。 |
+| 0.52 之前已有会话（有 `cleared_tool_call_ids`、无声明） | **`placeholder`**（创建时补一条 `source:'legacy'` 声明） | 这些会话上一轮就是"占位视图"，切成 `passthrough` 会让同一批历史在下一轮"原文又回来"——前缀一次性变化、缓存全废，体验是"上下文抽搐"。注意：补的声明有 `declaration_id`，但这些会话**没有** `context_projection_audit`，D4 条件 3 不满足 ⇒ C1h 对它们**仍然红**（已裁定：不开临时放行）。0.53 起默认值也是 `placeholder`，所以旧会话与新会话的视图口径天然一致（差别只在 `source`）。 |
+| 0.53 起新建会话 | **`placeholder`**（**2026-11-15 用户裁定**：「先用 placeholder」；原稿为 `passthrough`） | 成本账实测（`docs/dev/handoff/cache-ab-cost-model.md`：645 段净赚 **36:1**、临界缓存折扣 `r* = 2.68%`）说明段内冻结占位是**净赚**的，而不是 §1.2 那个 4.7% 那样"白付"。防爆价值（0.20 触顶 ⇒ 提前压一次）也随默认值一起留下。要"一字不改看原文"就**显式** opt-in `passthrough`（逃生门，§8.1 依据行）。 |
 | 显式声明 `externalize` | **拒绝**（`projection_mode_unavailable`） | 本轮不实现，不静默换成别的模式（§4.3 第 3 条）。 |
-| 显式声明 `archive_notice` 但读回路径不可用 | **降级 `passthrough`** + `projection_degraded{readback_unavailable}` | 卡不能指向不存在的路径（§2.3f）。 |
+| 显式声明 `archive_notice` 但读回路径不可用 | **降级 `placeholder`** + `projection_degraded{readback_unavailable}` | 卡不能指向不存在的路径（§2.3f）。**2026-11-15 用户裁定的推论**：降级目标原稿是 `passthrough`，默认值改为 `placeholder` 后降级目标随之改为默认值——降级不得顺手把会话放松到 `passthrough`（§8.3.1 单调收紧）。 |
 
-默认值唯一来源：`config.context.projectionDefaultMode`（core 内建默认 `'passthrough'`）。
+默认值唯一来源：`config.context.projectionDefaultMode`（**core 内建默认 `'placeholder'`**，2026-11-15 用户裁定）。
 
 #### 7.2 为什么不是一刀切
 
-- 一刀切 `passthrough` 的代价：长跑工程会话失去唯一一道"巨型工具结果防爆"手段（主阈值 0.85 还在，
-  但巨型单条结果会从 0.20 触顶信号一路涨到 0.85 才被压缩，中间几轮可能撞 provider 硬限）。故
-  `passthrough` 必须配 `context.projection_pressure` 告警，并与既有主阈值共存（D5）。
-- 一刀切保留 `placeholder` 的代价：所有会话永久背 C1h 例外；收益 0–3% 的会话白付缓存断裂。
+- **本轮的默认值是一刀切 `placeholder`**（2026-11-15 用户裁定：「先用 placeholder」），代价是名单外的会话
+  永久背 C1h 例外、且每个会话都背一次缓存边界。这笔代价是**算过账才认的**：段内冻结后实测净赚 36:1，
+  临界缓存折扣 `r* = 2.68%`（§8.1 依据行），即只有缓存折扣超过 2.68% 时才转亏——这是可接受的风险面。
+- 一刀切 `placeholder` 的**剩余**代价在长文件阅读类会话：这类会话的工具结果体量大、复用率高，实测
+  `r < 6.4%` 时就转亏。它们正是 `passthrough` 作为**手动 opt-in 逃生门**存在的理由（不是默认值，不做
+  自动判定——自动判定需要 per-mode A/B 数据，§10.2 第 1 项）。
+- 一刀切换成 `passthrough` 的代价（**已否决**）：长跑工程会话失去唯一一道"巨型工具结果防爆"手段（主阈值
+  0.85 还在，但巨型单条结果会从 0.20 触顶信号一路涨到 0.85 才被压缩，中间几轮可能撞 provider 硬限），
+  且与成本账方向相反。故 `passthrough` 必须配 `context.projection_pressure` 告警，并与既有主阈值共存（D5）。
 
 #### 7.3 灰度
 
-1. 第一批：`projectionDefaultMode = 'passthrough'`，`modes_enabled = ['placeholder']`；
-   `archive_notice` 待 `sessions.events` 就绪后进白名单；`externalize` 恒被拒绝。
+1. 第一批（**U1 + U2**，附录 B）：`projectionDefaultMode = 'placeholder'`（2026-11-15 用户裁定），
+   `modes_enabled = ['placeholder', 'passthrough']`——`passthrough` 在名单里但**不是默认**，只能被显式
+   声明（opt-in 逃生门）；`archive_notice` 待 `sessions.events` 就绪后进白名单；`externalize` 恒被拒绝。
 2. 观察两周：`projection_pressure` 触发率、`projection_degraded` 率、缓存命中上界、巨型结果导致的
-   provider 错误率。
-3. 第二批：`sessions.events` 就绪 ⇒ 放开 `archive_notice`（并同步做 §10.2 第 3 项的模型侧读回通道）。
+   provider 错误率，以及 **`mode=passthrough` 的声明占比**（若占比异常高，说明默认值或逃生门门槛有问题）。
+3. 第二批（**U3**）：`sessions.events` 就绪 ⇒ 放开 `archive_notice`（并同步做 §10.2 第 3 项的模型侧读回通道）。
 
 #### 7.4 回退
 
 - 任一模式故障 ⇒ 该 run 降级 `passthrough` + `degraded` 事件（§4.4）；**不删** `context_projection_audit`
-  （删了重放就不确定）。
-- 全局回退 = 把 `projectionDefaultMode` 改回 `placeholder`：已有会话声明不动，只影响新会话，**无需数据迁移**。
+  （删了重放就不确定）。注意这一条是**运行时故障**路径，与 §7.1 第 4 行"声明期降级到 `placeholder`"是两层。
+- 全局回退 = 把 `projectionDefaultMode` 改回 `'placeholder'`：由于 2026-11-15 裁定后 `placeholder` 已是默认值，
+  这条回退的语义变成"**从任何新模式回到默认**"（例如 U3 的 `archive_notice` 出问题时）；已有会话声明不动，
+  只影响新会话，**无需数据迁移**。
 - 声明合法但行为不对 ⇒ 把 `projection.modes_enabled` 收成 `['placeholder']`：其余模式在创建时被拒绝
-  （fail loud），不会静默走另一条路。
+  （fail loud），不会静默走另一条路。**代价要说清**：这会把 `passthrough` 逃生门一起关掉，长文件阅读类
+  会话将无法 opt-in ⇒ 属最后手段，且必须记进 CHANGELOG。
 
 ### 8. 模式声明来源与入口
 
@@ -666,11 +712,17 @@ mode"这件事只发生在**会话创建之前**；任何"创建之后再改"的
 
 | # | 会话种类 | 默认 mode | 依据 |
 | --- | --- | --- | --- |
-| 1 | WebUI 交互主会话（用户在对话框里直接聊的那个） | **`passthrough`** | 用户正盯着这份历史看。`placeholder` 会让"你看到的存档"与"模型看到的请求"不一致，必须由用户显式同意，不能由默认值代劳 |
-| 2 | agent 自己开的首个会话（`agent create` / `vessel run` 未传 mode） | **`passthrough`** | 与全局默认一致。agent 的"自选权"只开在 rotate 上（8.4），不在创建时隐式征用 |
-| 3 | team 成员会话（子 agent，`agent hire` 建的） | **继承父会话 mode**（`source:'inherited'`）；父为 `placeholder` 则子也是 `placeholder` | 子 agent 的上下文是父上下文的一部分；父子模式不一致会让"同一批历史两个视图"，且共享缓存前缀时最吃亏。**继承**而不是取默认值 |
-| 4 | 临时任务会话（短寿命一次性任务：`agent create` + 少量 send 后 close） | **`passthrough`** | 4.7% 是**上界**（§1.2 度量 basis），短寿命会话的实际收益趋近 0；这类会话也很少跨 run 复用缓存，压它没有收益 |
-| 5 | 0.52 之前已存在的会话 | **`placeholder`** + `source:'legacy'` | 保持现行为，见 §7.1（且**不**消费 C1h 豁免，因为无审计记录） |
+| 1 | WebUI 交互主会话（用户在对话框里直接聊的那个） | **`placeholder`** | **2026-11-15 用户裁定**（「先用 placeholder」，含主会话）。原稿给 `passthrough`（理由："用户正盯着这份历史看，存档与请求不一致须显式同意"），该理由仍然成立但**反向使用**：正因为默认值会代劳，才要由用户显式 opt-in `passthrough` 才能看到原文。用户正看着历史时，`placeholder` 的视图差异由 §8.5 权限卡片在创建时披露。 |
+| 2 | agent 自己开的首个会话（`agent create` / `vessel run` 未传 mode） | **`placeholder`** | **2026-11-15 用户裁定**（含首个会话）。与全局默认一致。agent 的"自选权"只开在 rotate 上（8.4），不在创建时隐式征用；且 rotate 也只能在单调收紧方向上选（§8.4 / §8.3.1）。 |
+| 3 | team 成员会话（子 agent，`agent hire` 建的） | **继承父会话 mode**（`source:'inherited'`），但**允许收紧、禁止放松**：父 `placeholder` ⇒ 子 ∈ {`placeholder`, `archive_notice`}（`passthrough` 被拒，码 `projection_mode_not_allowed`）；父 `passthrough` ⇒ 子 ∈ {`passthrough`, `placeholder`, `archive_notice`} | 子 agent 的上下文是父上下文的一部分；父子模式不一致会让"同一批历史两个视图"，且共享缓存前缀时最吃亏。**继承是默认动作**（`source:'inherited'`），显式收紧要写 `source:'session_created'` 并留 `declaration_id`。规则改写见 §8.3.1（2026-11-15 用户裁定：原稿是"父 `passthrough` ⇒ 子只能 `passthrough`"）。 |
+| 4 | 临时任务会话（短寿命一次性任务：`agent create` + 少量 send 后 close） | **`placeholder`** | **2026-11-15 用户裁定**。原稿给 `passthrough`（理由："4.7% 是上界、短寿命会话收益趋近 0"），该理由被成本账推翻：`r* = 2.68%` 的临界点远低于短会话的实际缓存折扣，段内冻结仍净赚（§8.1 依据行）。短会话要"看原文"同样走显式 opt-in。 |
+| 5 | 0.52 之前已存在的会话 | **`placeholder`** + `source:'legacy'` | 保持现行为，见 §7.1（且**不**消费 C1h 豁免，因为无审计记录）；与新的默认值口径一致，差别只在 `source`。 |
+
+**§8.1 依据（2026-11-15 用户裁定的量化依据）**：`docs/dev/handoff/cache-ab-cost-model.md` 的 **645 段实测**——
+段内冻结占位相对每请求重算是**净赚 36:1**，临界缓存折扣 **`r* = 2.68%`**（缓存折扣超过该值才转亏）；
+**长文件阅读类会话**的形状不同，实测 **`r < 6.4%` 才转亏**，即它们的缓存折扣普遍高于临界值，
+`placeholder` 在这类会话上是负收益 ⇒ **`passthrough` 作为这类会话的手动 opt-in 逃生门**（报告 §4 有数据）。
+即：默认值取 `placeholder` 是**算过账的**，逃生门取 `passthrough` 是**留给形状不对的会话的**，两者不冲突。
 
 优先级与 `source` 的对应（三层优先级见 D7）：
 
@@ -687,7 +739,8 @@ mode"这件事只发生在**会话创建之前**；任何"创建之后再改"的
 
 第 4 行"临时任务会话"的**判定**必须可执行，不能靠感觉：会话创建入口带 `ephemeral: true` 标志时按第 4 行；
 不带该标志一律按第 2 行。当前实现里没有这个标志 ⇒ 0.53 起需要新增（见 §11 入口行），在此之前第 4 行不生效
-（即所有 `agent create` 会话都按第 2 行取 `passthrough`，结果相同，所以不影响默认值落地）。
+（即所有 `agent create` 会话都按第 2 行取 **`placeholder`**；2026-11-15 裁定后第 2/4 行取值相同，
+所以"标志未落地"这件事不再影响默认值，只影响 metrics 归类）。
 
 #### 8.2 锁点在服务端，不在 UI
 
@@ -714,26 +767,45 @@ mode"这件事只发生在**会话创建之前**；任何"创建之后再改"的
 | 工具 / 入口 | 能传 mode？ | 作用对象 | 有默认兜底？ | 为什么 |
 | --- | --- | --- | --- | --- |
 | `agent create` | **能** | 新建 agent 的**首个会话** | 是（8.1 第 2 行） | 会话还没创建 ⇒ 这是创建参数 |
-| `agent hire` | **能**（受 8.3.1 约束） | 新建 contractor 的**首个会话** | 是（8.1 第 3 行：默认继承父） | 与 create 同构；但它建的是下级成员，能声明的集合受提权约束 |
+| `agent hire` | **能**（受 8.3.1 约束） | 新建 contractor 的**首个会话** | 是（8.1 第 3 行：默认继承父） | 与 create 同构；但它建的是下级成员，能声明的集合受**单调收紧**约束（只能收紧、不能放松） |
 | `agent send` | **不能** | — | — | 目标会话已在用（可能正跑到一半）；带 mode ⇒ `projection_mode_immutable`（8.2） |
 | `agent rotate` | **能** | **下一个 body 的会话**（不是当前会话） | 是（8.1 第 2 行） | rotate 本身就是"开新会话"的动作，新会话尚未创建 ⇒ 合法；但受 8.4 风险条款约束 |
 | `agent post` / `subscribe` / `inbox` / `ask` | **不能** | — | — | 不创建会话，没有声明点 |
 | CLI `vessel run --projection <mode>` | **能** | 本次 run 的首个会话 | 是 | 与 `agent create` 同一条创建路径 |
 | MCP / 插件 / 任意工具入参 | **不能** | — | — | 不开放扩展点（D6）；出现该字段按未知字段拒绝 |
 
-**8.3.1 子 agent 不能提权（硬条款）**
+**8.3.1 子 agent 只能收紧、不能放松（硬条款；2026-11-15 用户裁定改写）**
 
-- 允许集合 = `父会话 mode` ∩ 节点策略 `projection.allowed_modes`。
-  - 父为 `placeholder` ⇒ 子可声明 `{placeholder, passthrough}`；
-  - 父为 `passthrough` ⇒ 子只能 `passthrough`（**不能**独自升级到 `placeholder`）。
-- 越权 ⇒ **拒绝**：`projection_mode_not_allowed`，会话/成员**创建失败**，**不静默降级**。
-  理由：静默降级会产生"我要求了 placeholder，实际跑了 passthrough"这种无法归因的状态，而模式直接
+> 2026-11-15 用户裁定：原条款是"父 `passthrough` ⇒ 子只能 `passthrough`"（允许同层、也隐含允许放松），
+> 现改为**单调收紧**方向：**允许收紧、禁止放松**。
+
+- **严格度全序（本 ADR 的唯一权威排序）**：
+  `passthrough` **<** `placeholder` **≈** `archive_notice` **<** `externalize`（未实现，恒被拒）。
+  越靠右 = 越"狠"地遮蔽原文 = 越保守（token 上越省）。
+  - `archive_notice` 与 `placeholder` **同层**的理由：两者都**丢掉正文**，差别只在"丢得可不可寻址"
+    （`archive_notice` 给一张归档卡指向 `sessions.events`）⇒ 在"模型看不看得见原文"这个判据上二者等价，
+    不构成严格度差异。因此 `placeholder ↔ archive_notice` 之间的互相切换视为**同层**，不算放松、不算收紧。
+  - 未列出的 mode（如未来的新枚举）**不得**默认插进这个序里：必须在 ADR 里补一行排序才能被声明。
+- **可执行判据（服务端单行）**：设父会话模式为 `m_parent`、子会话请求的模式为 `m_child`，
+  `strict(m_child) < strict(m_parent)` ⇒ **拒绝**，`projection_mode_not_allowed`，会话/成员**创建失败**，
+  **不静默降级**；否则接受（等于同层或收紧）。
+  - 父 `placeholder` ⇒ 子**不得**选 `passthrough`（放松被拒，码 `projection_mode_not_allowed`）；
+  - 父 `passthrough` ⇒ 子**可以**选 `placeholder`（**收紧允许**：token 上更保守，且子会话通常短命，
+    收紧不会带来跨会话缓存断裂的额外代价）；
+  - 父 `passthrough` ⇒ 子选 `archive_notice` 亦合法（更保守一侧）。
+  - 父 `archive_notice` ⇒ 子可选 `{archive_notice, placeholder}`（同层或收紧），**不得** `passthrough`。
+- 允许集合 = `{m | strict(m) ≥ strict(m_parent)}` ∩ 节点策略 `projection.allowed_modes`。
+  `archive_notice` / `externalize` 的**可选性仍受节点 `allowed_modes` 约束**（与严格度是两个正交的闸）：
+  节点不许 ⇒ `projection_mode_unavailable`；父不许 ⇒ `projection_mode_not_allowed`。两个码不得混用。
+- 拒绝理由（静默降级不可接受）：静默降级会产生"我要求了 X、实际跑了 Y"这种无法归因的状态，而模式直接
   决定"模型看不看得见原文"，归因必须准确。
-- `archive_notice` 也不例外：它虽然不消费 C1h 豁免，但会写归档卡、影响模型行为，仍在允许集合内判定。
 - **继承与节点策略冲突时的顺序**（避免"父要 placeholder、节点禁 placeholder"这种死结）：节点策略
   `allowed_modes` **优先于**继承。父 mode ∉ `allowed_modes` 时，子会话取 `projectionDefaultMode`
   （缺省兜底），`source` 记 `default`，事件里带 `narrowed_from: 'inherited'`，**不**让成员创建失败
   （hire/create 的首要职责是把成员建出来）。只有"成员自己显式声明了越权 mode"才失败（上一条）。
+  **注意**：兜底取默认值时若默认值 `placeholder` 比父 `passthrough` **更严**，这是合法收紧；反之若默认值
+  比父更松（例如将来默认改成 `passthrough` 而父是 `placeholder`），兜底必须**取两者较严者**，
+  不得因兜底而放松（单调收紧在所有路径上都要成立，包括兜底和降级）。
 
 #### 8.4 rotate 换模式：风险条款
 
@@ -755,7 +827,13 @@ rotate 是 agent 自己用来**逃上下文上限**的动作 —— 允许它选
    两者的区别必须写进错误码与事件 reason，不能都返回"成功"。
 
 另：rotate 选 `externalize` ⇒ `projection_mode_unavailable`（8.6）；选 `archive_notice` 但读回路径不可用
-⇒ 降级 `passthrough` + `readback_unavailable`（§2.3f），handoff 里的 reason 照写（降级事实不得隐去）。
+⇒ 降级 `placeholder` + `readback_unavailable`（§2.3f，与 §7.1 第 4 行同一条降级规则；降级目标是默认值
+`placeholder`，不得放松到 `passthrough`），handoff 里的 reason 照写（降级事实不得隐去）。
+
+另（**2026-11-15 用户裁定的推论**）：rotate 的 mode 自选同样受 **§8.3.1 单调收紧**约束——新会话的模式
+不得比**当前会话**更松（当前会话 `placeholder` ⇒ rotate 不得选 `passthrough`）。理由：rotate 是 agent
+自己发起的换体动作，若允许它借 rotate 把会话放松到 `passthrough`，§8.3.1 对 hire/create 的收紧就形同虚设
+（agent 只要先 rotate 就能出圈）。用户要让某个会话看原文，走创建期显式 opt-in，不走 rotate。
 
 #### 8.5 权限卡片内容（逐字段，approve 前展示）
 
@@ -774,7 +852,9 @@ rotate 是 agent 自己用来**逃上下文上限**的动作 —— 允许它选
 | `reason`（仅 `source: rotate`） | agent 自选模式的一句话理由（= handoff 那行） | 审计 agent 的动机，而不只是结果 |
 
 条款：C1h 披露行**不得**折叠/省略；`mode ∈ {passthrough, archive_notice}` 时不显示该行（不消费豁免，
-显示反而制造噪音）。
+显示反而制造噪音）。**2026-11-15 用户裁定后的后果**：默认值改为 `placeholder` ⇒ 这张卡在**新会话默认路径上
+必然出现 C1h 披露行**（原稿默认 `passthrough` 时它只在用户显式选 `placeholder` 时出现）。这不是噪音，
+是"默认即消费豁免"的必要披露；若用户想看到不带警示行的卡，只能显式 opt-in `passthrough`（§8.1 依据行）。
 
 #### 8.6 `externalize` 未实现的入口表现
 
@@ -792,8 +872,9 @@ rotate 是 agent 自己用来**逃上下文上限**的动作 —— 允许它选
 
 **(a) `archive_notice` 的全部价值押在"读回路径"上。** 卡里写"怎么拿回来"，而读回依赖磁盘事件日志
 （`<sessions_dir>/<session_id>/events.ndjson`）+ `sessions.events`（**未实现**）。读回不可用时
-`archive_notice` 只能降级 `passthrough`（§2.3f），否则就是给模型一张指向不存在路径的卡 —— 那比
-`placeholder` 更糟（它会诱导模型去读一个读不到的东西）。风险的第二层：事件日志可能被裁剪/损坏
+`archive_notice` 只能降级 `placeholder`（§2.3f / §7.1 第 4 行；**2026-11-15 用户裁定的推论**：原稿此处写
+`passthrough`，默认值改后降级目标随之改为默认值，且降级不得放松严格度），否则就是给模型一张指向不存在
+路径的卡 —— 那比 `placeholder` 更糟（它会诱导模型去读一个读不到的东西）。风险的第二层：事件日志可能被裁剪/损坏
 （`truncatePartialTail`、重启恢复），所以卡只能承诺"日志里若还在则可回读"，不能承诺"一定可回读"。
 
 **(b) `archive_notice` 自己**不**省 token**。省字 100% 来自压缩丢弃；卡本身每次压缩净增几十 token（上限 200）。
@@ -830,6 +911,10 @@ rotate 是 agent 自己用来**逃上下文上限**的动作 —— 允许它选
 | 6 | `externalize` | 本轮不实现，只留枚举位与拒绝路径（§2.2、§4.3、附录 A） |
 | 7 | **投射决策粒度** | **run**：每个 run 起点（新 run 与 resume）重算并冻结集合，run 内所有请求共用；"段"只保留给压缩/缓存重基座语境（§2.4）。模式仍是会话级不可变，二者分开 |
 | 8 | **入口与默认兜底** | 会话种类默认表（§8.1）；锁点在服务端（§8.2，`projection_mode_immutable`）；工具矩阵（§8.3）；rotate 四条（§8.4）；权限卡片 8 字段含 C1h 披露行（§8.5）；`externalize` 入口一律拒绝（§8.6） |
+| 9 | **默认 mode（2026-11-15 用户裁定）** | **`placeholder`**——主会话 / agent 首个会话 / 短任务会话一律 `placeholder`；`passthrough` 降级为**手动 opt-in 逃生门**（长文件阅读类会话用）；旧会话 `placeholder` + `source:'legacy'` 不变。依据：`cache-ab-cost-model.md` 645 段实测净赚 **36:1**、`r* = 2.68%`；长文件阅读类 `r < 6.4%` 才转亏（§8.1 依据行、§7.1、§7.2） |
+| 10 | **子 agent 提权规则（2026-11-15 用户裁定）** | 改为**允许收紧、禁止放松**（单调收紧）：严格度序 `passthrough < placeholder ≈ archive_notice`；`strict(子) < strict(父)` ⇒ `projection_mode_not_allowed`；节点 `allowed_modes` 仍是正交的第二道闸（§8.3.1，rotate 同受约束 §8.4） |
+| 11 | **模式可跨会话混用（2026-11-15 用户裁定）** | 模式是**会话级**属性，不同会话可各自声明不同模式（父 `placeholder` + 子 `archive_notice` 合法）；同一批量/团队**不要求**统一；同一会话内仍不可变（§2.5、§8.2） |
+| 12 | **实现分期（2026-11-15 用户裁定）** | **U1**（声明与锁：字段落盘、`declaration_id`、不可变拒绝、`sessions.get` 暴露 `projection_mode`/`projection_locked`，**不接线**、行为不变）→ **U2**（`passthrough` 接线 + 门禁按 mode 判定，T6 只对 `placeholder` 生效）→ **U3**（`archive_notice`：run 起点追加归档卡 + 靠 `sessions.events` 读回）；**`externalize` 本轮不实现**（只留枚举位 + 拒绝路径）。详见附录 B |
 
 **10.2 剩余未定事项（本轮不就绪，不得写成已决）**
 
@@ -851,11 +936,11 @@ rotate 是 agent 自己用来**逃上下文上限**的动作 —— 允许它选
 | 决策 | `packages/core/src/context/projection-policy.ts`（新，`@internal`，**不从 index.ts 导出**） | 内建决策（= 现 `planClearedToolResults` 泛化）+ 夹紧 + 校验 + `externalize` 拒绝 |
 | 机制 | `context/cleared-tool-result.ts`、`context-manager.ts`、`runtime/execution-unit.ts`（**run 起点冻结处** `:1589` / `:2021` + `buildRequestMessages` + `appendNotice`） | 按模式分派；新增 `renderProjectionArchiveNotice`；`withClearedToolResults` → `applyContextProjection`；冻结表键继续用每 run 新建的 `workingContext` |
 | 存储 | `session/project-messages.ts` | 重建从审计读，不重跑决策（`externalize` 无存储改动） |
-| 配置 | `config.context.projectionDefaultMode`、`projection.modes_enabled` | 三层来源的落点（D7）；`params` 不新增配置键；插件无权 |
+| 配置 | `config.context.projectionDefaultMode`（内建默认 `'placeholder'`，2026-11-15 用户裁定）、`projection.modes_enabled` | 三层来源的落点（D7）；`params` 不新增配置键；插件无权 |
 | 门禁 | `check-request-append-only.ts`（R4a–R4g）、`check-append-only-context.ts`（C1h + exempt）、`check-tool-result-clear.ts`（43→50，T6 收窄为只判 `placeholder`）、`check-context-projection-modes.ts`（新 13 项） | §6 |
 | 入口 / 服务端锁 | `agent create` / `agent hire` / `agent rotate` 的 mode 参数；`agent send` 的拒绝路径；`ephemeral: true` 标志（§8.1 第 4 行判定）；`sessions.get` / `sessions.list` 暴露 `projection_mode` + `projection_locked` | §8.2、§8.3、§8.6；错误码 `projection_mode_immutable` / `projection_mode_not_allowed` / `projection_mode_unavailable` |
 | UI | WebUI 新会话发送框工具栏按钮（仅新建会话可改，只读态由服务端 `projection_locked` 决定）；权限卡片的 8 个字段（含 C1h 披露行） | §8.2、§8.5；UI 不自行推断 locked |
-| 依赖 | `sessions.events`（**未实现**，refresh-gap-design §7 第 1 项） | `archive_notice` 的读回前置；未就绪则降级 `passthrough` |
+| 依赖 | `sessions.events`（**未实现**，refresh-gap-design §7 第 1 项） | `archive_notice` 的读回前置；未就绪则不放开该模式（白名单外 ⇒ `projection_mode_unavailable`），已声明但读回失败则降级 `placeholder`（§7.1 第 4 行） |
 | 文档 | `docs/architecture/context.md`、`docs/architecture/extensions.md`（**加一句"投射不是扩展点"**）、`message-invariants.md`（C1h 豁免条款） | 实现轮同步；本轮不动 |
 
 ### 附录 A：`externalize` 的备选实现（**冻结，不在当前范围**）
@@ -875,3 +960,45 @@ rotate 是 agent 自己用来**逃上下文上限**的动作 —— 允许它选
   与失效三分支（`unknown_handle` / `expired_handle` / `invalidated_handle`）、C1h 豁免把
   `externalize` 重新纳入 D4 条件 1、R4 与 C1h 的 `externalize` 列从 `not_implemented` 换成真实断言；
   入口侧放开 §8.3 的限制并去掉 §8.6 的拒绝路径。
+
+### 附录 B：实现分期（**2026-11-15 用户裁定**，U1 → U2 → U3，`externalize` 本轮不做）
+
+> 分期原则：**先让"声明"这件事成立且可见（U1 不改行为），再逐个打开模式**。这样每一步都能独立回退，
+> 且 U1 就能把"默认 `placeholder`"与"会话级不可变"两条都落盘验证，而请求行为一个字节都不变。
+
+#### U1：声明与锁（**不接线**，行为不变）
+
+- 落盘：`SessionState` 增 `projection_mode` + `projection_locked`（+ 声明记录含 `declaration_id`、
+  `source`、`params` 快照），旧会话读取时按 §7.1 生成 `source:'legacy'` 声明。
+- 锁：服务端在任何"创建之后"的入口改 mode ⇒ `projection_mode_immutable`（§8.2）。
+- 读取：`sessions.get` 暴露 `projection_mode` / `projection_locked`（`sessions.list` 同）。
+- 判定：创建期按 §8.1 表取默认值（**`placeholder`**）与 §8.3.1 的单调收紧做**校验与拒绝**
+  （`projection_mode_not_allowed` / `projection_mode_unavailable`）——**只校验、不执行**。
+- 明确**不**包含：`passthrough` 的投射分派、T6 的按 mode 分支、归档卡渲染、任何 `modes_enabled` 生效逻辑。
+- 验收：行为与 0.52 逐字节相同（T1–T5、T7–T9、R4、C1h 全绿）；新增门禁项只有"声明/锁/读取"三类。
+
+#### U2：`passthrough` 接线 + 门禁按 mode 判定
+
+- 接线：`buildRequestMessages` 在 `passthrough` 下**跳过**投射（`withClearedToolResults` →
+  `applyContextProjection` 的短路分支），其余模式行为不变。
+- 门禁：`check-request-append-only` / `check-append-only-context` 的 C1h 判定改为**按会话 mode**
+  查表（`placeholder`/`externalize` 才要求豁免），**T6 收窄为只对 `placeholder` 生效**（已裁定 =
+  破坏性变更，需 minor + CHANGELOG）。
+- 灰度：`modes_enabled` 里 `passthrough` 只作为 opt-in 出现在白名单，**不是默认值**（§7.3）。
+- 验收：默认路径（`placeholder`）与 0.52 行为一致；显式 `passthrough` 会话 C1h 无条件全绿；
+  越权/不可用两类拒绝码可用 `check-context-projection-modes` 覆盖。
+
+#### U3：`archive_notice`
+
+- 前提：`sessions.events` 可读（refresh-gap-design §7 第 1 项，需批准 + `check-rpc-methods` 登记）。
+- 实现：run 起点（`execution-unit.ts` 的冻结处）在压缩发生时追加**归档卡**（文本模板见 §2.3f，
+  上限 200 token），卡里指向 `sessions.events` 的 `tool_call_id` 查询；读回**只**通过
+  `sessions.events`，不做模型侧读回通道（§10.2 第 3 项仍未解）。
+- 降级：读回不可用 ⇒ 降级 `placeholder` + `projection_degraded{readback_unavailable}`（§7.1 第 4 行）。
+- 验收：卡不含正文；卡的存在与否不改变 `tool_call_id` 集合语义；§6.3 T10–T12 相关断言转为真实断言（若在该轮范围内）。
+
+#### `externalize`：**本轮不实现**
+
+- 只保留：枚举位（`passthrough` / `placeholder` / `externalize` / `archive_notice` 四值固定）+ §4.3 第 3 条
+  的拒绝路径 + §8.6 的入口一致性断言。任何"顺手实现"都算越界（附录 A 的形态冻结不动）。
+- 解冻条件见 §10.2 第 2 项（真实巨型结果场景 + 磁盘/句柄选型 + F1–F6）。
