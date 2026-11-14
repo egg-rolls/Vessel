@@ -130,6 +130,7 @@ import { createRunControl } from './run-control';
 import { createRuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
+import { createSessionEventsSource } from './session-events';
 import {
   reconcileStaleSessions,
   type SessionLivenessContext,
@@ -1284,6 +1285,13 @@ async function runWithConfig(result: BootstrapResult) {
             // 只有从事件日志重新派生才能把会话页那张卡找回来。
             systemContext: createSystemContextSource({
               tail: gatewayBundle.eventLog,
+              eventsFile: (sessionId: string) =>
+                sessionEventsFilePath(gatewayBundle.tenantPaths.sessions_dir, sessionId),
+            }),
+            // 会话事件日志读取面（additive 0.53：`sessions.events` 回填 +
+            // `sessions.get.event_cursor`）：同 `SessionEventLog`、同 `sessions_dir`。
+            sessionEvents: createSessionEventsSource({
+              log: gatewayBundle.eventLog,
               eventsFile: (sessionId: string) =>
                 sessionEventsFilePath(gatewayBundle.tenantPaths.sessions_dir, sessionId),
             }),

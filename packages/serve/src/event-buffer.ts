@@ -22,12 +22,33 @@ export interface EventGap {
   to_seq: number;
 }
 
+/**
+ * 环形缓冲默认容量（0.53：10000 → 50000，与 `replay-budget.ts#MAX_EVENTS` 同步）。
+ *
+ * ## 常驻内存代价（放大窗口的真实成本，写在这里免得被当成免费的）
+ *
+ * 环里存的是 `SeqEvent` = `{ seq, event }`，`event` 是**同一个** `RunEvent` 对象的引用
+ * （广播时就已经在堆上，环只延长它的生命周期，不复制正文）。所以代价等于
+ * 「这 50000 条事件本来会被 GC 收掉的那部分内存」：
+ *
+ * - 编码后的 `tool.call.completed` / `llm.request` 带正文，按会话实测普遍在
+ *   **0.3–3 KB/条**；50000 条 ⇒ **约 15–150 MB** 常驻（按 300 B 的极小事件算是 15 MB 下限）；
+ *   一条 MB 级工具输出会让这个会话在环里占掉几十条的位置。
+ * - 环是**全局一份**（整个 gateway 进程 / 每个 tenant hub 一个），不是每会话一份：
+ *   多会话并发时，单个会话能回放的历史会被挤短 —— 这是「窗口靠内存兜底」的天花板。
+ * - 超出窗口的部分**不再不可恢复**：`sessions.events`（磁盘事件日志分页）是回填的兜底，
+ *   前端按 `sessions.get.event_cursor` 判断有没有洞。
+ *
+ * 想再放大（10 万条以上）请先量 RSS：这个数是「纯涨」的常驻，不是峰值。
+ */
+export const DEFAULT_MAX_HISTORY = 50_000;
+
 /** 固定容量的序号事件缓冲 */
 export class SeqEventBuffer {
   private readonly items: SeqEvent[] = [];
   private nextSeq = 1;
 
-  constructor(private readonly maxSize = 10_000) {
+  constructor(private readonly maxSize = DEFAULT_MAX_HISTORY) {
     if (maxSize < 1) throw new Error('SeqEventBuffer maxSize must be >= 1');
   }
 

@@ -186,6 +186,46 @@ export const systemContextSchema = {
   },
 };
 
+/**
+ * 会话事件日志的游标（`sessions.get.event_cursor`，additive 0.53）。
+ *
+ * 两个数是**不同**的东西，别混：
+ * - `last_seq` = 事件日志里最后一条事件的 `seq`（从文件尾定边界，不依赖索引）；
+ * - `derived_upto_seq` = 元数据派生覆盖到的 `seq`（`index.json`）：它 `< last_seq`
+ *   说明还有事件没进会话投影（正跑 / 刚崩）。
+ *
+ * **整字段缺省 = 这个会话还没有事件日志**（一条事件都没落过），不是 0 也不是 null。
+ * `event_count` 与 `derived_upto_seq` 同源（`index.json`），索引缺失/损坏时一起缺省。
+ */
+export const sessionEventCursorSchema = {
+  type: 'object',
+  required: ['last_seq'],
+  properties: {
+    last_seq: { type: 'integer', minimum: 0 },
+    derived_upto_seq: { type: 'integer', minimum: 0 },
+    event_count: { type: 'integer', minimum: 0 },
+  },
+};
+
+/**
+ * `sessions.events` 的事件体（additive 0.53）：与 SSE 回放的**事件对象同字段**——
+ * `RunEvent` 的 `type` / `run_id` / `ts` / `data` 再加 `seq`，前端按 `seq` 幂等合并。
+ *
+ * 落盘记录里的 `v` / `fencing_token` / `session_id` 是写入内部字段，不透出
+ * （`session_id` 就是入参，`data` 形状由事件类型决定，schema 只保证是对象外的一切值）。
+ */
+export const sessionEventSchema = {
+  type: 'object',
+  required: ['seq', 'type', 'ts'],
+  properties: {
+    seq: { type: 'integer', minimum: 1 },
+    type: { type: 'string', minLength: 1 },
+    ts: { type: 'integer', minimum: 0 },
+    run_id: { type: 'string' },
+    data: {},
+  },
+};
+
 export const runStateSchema = {
   type: 'object',
   required: ['run_id', 'session_id', 'messages', 'started_at', 'status'],
@@ -212,6 +252,9 @@ export const runStateSchema = {
     context_usage: contextUsageSchema,
     // Additive（模型这一轮看到的系统消息，从事件日志尾窗派生）：缺省 = 没有可用数据。
     system_context: systemContextSchema,
+    // Additive（0.53）：事件日志游标，决定要不要 `/sessions.events` 补洞。
+    // 缺省 = 该会话还没有事件日志。
+    event_cursor: sessionEventCursorSchema,
   },
 };
 

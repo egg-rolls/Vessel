@@ -28,7 +28,12 @@ import { mapTenantError } from '../../tenant.js';
 import { capToolMessages } from '../../tool-events.js';
 import { MethodError } from '../errors.js';
 import { runInProgressReason, stringParam } from './common.js';
-import { runStateSchema, sessionInfoSchema, sessionSearchHitSchema } from './schemas.js';
+import {
+  runStateSchema,
+  sessionEventSchema,
+  sessionInfoSchema,
+  sessionSearchHitSchema,
+} from './schemas.js';
 
 /** run 记录的最小读取面（gateway 只需要按 run_id 取最近一条）。 */
 export interface SessionRunLookup {
@@ -109,6 +114,62 @@ export interface SessionSystemContext {
  */
 export interface SessionSystemContextPort {
   lookup(sessionId: string): Promise<SessionSystemContext | undefined>;
+  /** 事件日志尾水位（`大小:mtime`）；`undefined` = 没有日志文件。 */
+  watermark(sessionId: string): Promise<string | undefined>;
+}
+
+/**
+ * 会话事件游标（additive `sessions.get.event_cursor`，0.53）。
+ *
+ * 两个数是**不同**的东西，别混（前端据此决定“要不要补洞、从哪儿补”）：
+ * - `last_seq` = 事件日志里最后一条事件的 `seq`（从文件尾定边界，不依赖索引）；
+ * - `derived_upto_seq` = 元数据派生**覆盖到**的 `seq`（`index.json`）：它 `< last_seq`
+ *   说明还有事件没进会话投影（正跑 / 刚崩 / 派生失败重试中）。
+ *
+ * 整字段缺省 = 这个会话**还没有事件日志**（一条都没落过），不是 0、不是 null。
+ * `event_count` 与 `derived_upto_seq` 同源（`index.json`），索引缺失/损坏时一起缺省——
+ * 此时 `last_seq` 仍然给（文件尾定边界不依赖索引）。
+ */
+export interface SessionEventCursor {
+  last_seq: number;
+  derived_upto_seq?: number;
+  event_count?: number;
+}
+
+/**
+ * `sessions.events` 里的事件体：与 SSE 回放**同一个事件对象**（`RunEvent` + `seq`），
+ * 前端按 `seq` 幂等合并；字段与 `event-buffer` 广播的 `{ seq, event }` 一一对应。
+ *
+ * 落盘记录里的 `v` / `fencing_token` / `session_id` 是对外无意义的写入内部字段
+ * （`session_id` 就是入参），**不**透出：否则前端要多判断一层“哪个字段才是身份”。
+ */
+export interface SessionEventView {
+  seq: number;
+  type: string;
+  ts: number;
+  run_id?: string;
+  data?: unknown;
+}
+
+/**
+ * 会话事件日志的读端口（`sessions.events` + `sessions.get.event_cursor`，0.53）。
+ *
+ * 与 `SessionContextUsagePort` / `SessionSystemContextPort` 同一范式：serve 只做
+ * “游标 + 分页 + 形状对齐”，不拼磁盘路径、不读盘；实现在 `src/session-events.ts`
+ * （core `SessionEventLog`，`sinceSeq` 是**排他**游标）。
+ * `cursor` / `watermark` 故意分成两个方法：`watermark` 只是一次 `stat`（缓存键），
+ * `cursor` 才读 `index.json` + 日志尾，只在缓存 miss 时被调到。
+ */
+export interface SessionEventsPort {
+  /** 读 `seq > sinceSeq` 的事件，按 `seq` 升序、最多 `limit` 条（排他游标，同 core）。 */
+  read(
+    sessionId: string,
+    options: { sinceSeq?: number; limit?: number },
+  ): Promise<SessionEventView[]>;
+  /** 日志最新 `seq`（文件尾定边界）；文件不存在/为空 = `undefined`。 */
+  lastSeq(sessionId: string): Promise<number | undefined>;
+  /** 派生水位（`index.json` 的 `derived_upto_seq` / `event_count`）；索引缺失/损坏 = `undefined`。 */
+  cursor(sessionId: string): Promise<{ derived_upto_seq: number; event_count: number } | undefined>;
   /** 事件日志尾水位（`大小:mtime`）；`undefined` = 没有日志文件。 */
   watermark(sessionId: string): Promise<string | undefined>;
 }
@@ -217,6 +278,14 @@ export interface SessionMethodsDeps {
    */
   systemContext?: SessionSystemContextPort;
   /**
+   * 会话事件日志的读端口（0.53：additive `sessions.events` + `sessions.get.event_cursor`）。
+   *
+   * 缺省 = `sessions.events` 返回 `not_supported`、`sessions.get` 不带 `event_cursor`
+   * （旧行为一字不改、不抛错）。serve 不拼磁盘路径、不读盘：读取面
+   * （`SessionEventLog` 所在的 data-dir）由 app 侧注入（见 `src/session-events.ts`）。
+   */
+  sessionEvents?: SessionEventsPort;
+  /**
    * CONTRACT-0.34-context C7：仅服务 `sessions.compact` 的执行面。
    * 结构化读取可选 `compactContext(sessionId)`；缺省或方法缺失 = `compact_unavailable`。
    */
@@ -255,6 +324,27 @@ const MAX_MESSAGE_LIMIT = 500;
 /** 有 `before` 但未给 `message_limit` 时的页大小。 */
 const DEFAULT_MESSAGE_LIMIT = 100;
 const MESSAGE_CURSOR_VERSION = 1;
+
+/**
+ * `sessions.events` 的分页（0.53）：与 `sessions.get.message_limit` / `events.list`
+ * 同一个风格 —— 默认 100、硬顶 500，超限按游标翻页，不一次性把日志塞进一帧。
+ */
+const DEFAULT_SESSION_EVENTS_LIMIT = 100;
+const MAX_SESSION_EVENTS_LIMIT = 500;
+/**
+ * 带 `types` 过滤时每次向磁盘要的**块**大小（游标推进的步长，不是响应上限）：
+ * 过滤可能整块都不中，所以块比页大；响应仍然只回 `limit` 条。
+ */
+const SESSION_EVENTS_READ_CHUNK = 500;
+/**
+ * 单次请求最多扫多少条落盘事件（`types` 全不中时的安全阀）：
+ * 到顶就 `has_more: true` 让客户端继续翻页，宁可变慢也不让一次 RPC 卡死读整份日志。
+ */
+const SESSION_EVENTS_MAX_SCAN = 20_000;
+/** `types` 过滤条数上限（防止有人拿它当全量枚举使）。 */
+const MAX_SESSION_EVENTS_TYPES = 64;
+/** `since_seq` 的硬上界：JS 安全整数（seq 是正整数计数，超过它就不可能是真的游标）。 */
+const MAX_SAFE_SEQ = Number.MAX_SAFE_INTEGER;
 
 /**
  * 历史分页游标：绝对数组下标 + 边界锚点。
@@ -329,6 +419,90 @@ function parseMessageCursor(value: unknown): MessageCursor | undefined {
     throw new RpcError('invalid_params', 'before is not a valid cursor');
   }
   return cursor;
+}
+
+/**
+ * `since_seq`（`sessions.events`）：缺省 0（从日志头开始）；非负整数之外 → invalid_params。
+ * 语义是**排他**游标（只回 `seq > since_seq`），与 core `ReadSessionEventsOptions` 一致。
+ */
+function parseSinceSeq(value: unknown): number {
+  if (value === undefined) return 0;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new RpcError('invalid_params', 'since_seq must be a non-negative integer');
+  }
+  return value;
+}
+
+/** `limit`：缺省 100；1..500 之外 → invalid_params（与 `message_limit` 同口径）。 */
+function parseSessionEventsLimit(value: unknown): number {
+  if (value === undefined) return DEFAULT_SESSION_EVENTS_LIMIT;
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_SESSION_EVENTS_LIMIT
+  ) {
+    throw new RpcError(
+      'invalid_params',
+      `limit must be an integer between 1 and ${MAX_SESSION_EVENTS_LIMIT}`,
+    );
+  }
+  return value;
+}
+
+/**
+ * `types`：条目以 `*` 结尾按**前缀**匹配、否则精确匹配（与 `events.subscribe` 同一口径）；
+ * 缺省 / 空数组 = 不过滤。非法条目（非字符串 / 空串 / 超过上限）→ invalid_params。
+ */
+function parseSessionEventTypes(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new RpcError('invalid_params', 'types must be an array of non-empty strings');
+  }
+  const types: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry.trim() === '') {
+      throw new RpcError('invalid_params', 'types must be an array of non-empty strings');
+    }
+    if (types.length >= MAX_SESSION_EVENTS_TYPES) {
+      throw new RpcError(
+        'invalid_params',
+        `types accepts at most ${MAX_SESSION_EVENTS_TYPES} entries`,
+      );
+    }
+    types.push(entry.trim());
+  }
+  return types.length === 0 ? undefined : types;
+}
+
+/** `types` 过滤（缺省 = 不过滤）；`*` 后缀 = 前缀，其余精确。 */
+function matchesEventTypes(types: readonly string[] | undefined, type: string): boolean {
+  if (types === undefined) return true;
+  for (const pattern of types) {
+    if (pattern.endsWith('*')) {
+      if (type.startsWith(pattern.slice(0, -1))) return true;
+    } else if (type === pattern) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * `event_cursor` 收敛成线上形状：非法值一律当「没有数据」，**不猜、不补 0**
+ * （与 `normalizeContextUsage` 同口径）。
+ */
+function normalizeEventCursor(raw: SessionEventCursor | undefined): SessionEventCursor | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const lastSeq = optionalNumber(raw.last_seq);
+  if (lastSeq === undefined || lastSeq < 0) return undefined;
+  const derived = optionalNumber(raw.derived_upto_seq);
+  const count = optionalNumber(raw.event_count);
+  return {
+    last_seq: Math.floor(lastSeq),
+    ...(derived === undefined || derived < 0 ? {} : { derived_upto_seq: Math.floor(derived) }),
+    ...(count === undefined || count < 0 ? {} : { event_count: Math.floor(count) }),
+  };
 }
 
 /** 游标锚点不再匹配：前缀被改写（compaction / rewind），客户端应重取尾页。 */
@@ -682,6 +856,107 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
     normalize: normalizeSystemContext,
   });
 
+  // ── 会话事件日志（additive `sessions.events` + `sessions.get.event_cursor`，0.53）──
+  // app 侧注入读端口（core `SessionEventLog`），serve 只做游标、分页、形状对齐。
+
+  /**
+   * `event_cursor` 的端口适配：一次 lookup = 文件尾 `last_seq` + `index.json` 派生水位。
+   *
+   * 先 `lastSeq`（文件尾 stat + 尾读，不依赖索引），拿到再读索引：没有日志文件
+   * ⇒ `lookup` 返回 `undefined` ⇒ `sessions.get` 不带 `event_cursor`（旧行为一字不改）。
+   * 索引缺失/损坏只是少了 `derived_upto_seq` / `event_count`，`last_seq` 仍然给。
+   */
+  function eventCursorPort():
+    | {
+        lookup(sessionId: string): Promise<SessionEventCursor | undefined>;
+        watermark(sessionId: string): Promise<string | undefined>;
+      }
+    | undefined {
+    const port = deps.sessionEvents;
+    if (port === undefined) return undefined;
+    return {
+      lookup: async (sessionId) => {
+        const lastSeq = await port.lastSeq(sessionId);
+        if (lastSeq === undefined) return undefined;
+        const derived = await port.cursor(sessionId);
+        return {
+          last_seq: lastSeq,
+          ...(derived === undefined
+            ? {}
+            : { derived_upto_seq: derived.derived_upto_seq, event_count: derived.event_count }),
+        };
+      },
+      watermark: (sessionId) => port.watermark(sessionId),
+    };
+  }
+
+  const eventCursorOf = watermarkCached<SessionEventCursor>({
+    limit: DERIVED_CACHE_LIMIT,
+    port: eventCursorPort,
+    normalize: normalizeEventCursor,
+  });
+
+  /**
+   * 读一页事件：**按游标分块**，不把整份日志一次读进内存。
+   *
+   * - 无 `types`：`read(since_seq, limit + 1)` 一次搞定 —— 多要一条就是 `has_more` 的证据，
+   *   不再单独读一遍日志尾（避免「两次边界不一致」：读到一半又被追加）。
+   * - 有 `types`：按 `SESSION_EVENTS_READ_CHUNK` 推进游标扫块，凑够 `limit + 1` 就停；
+   *   扫到 `SESSION_EVENTS_MAX_SCAN` 还没够 → `has_more: true` 让客户端接着翻页
+   *   （宁可变慢也不让一次 RPC 把整份日志扫穿）。
+   *
+   * `next_seq` 是**已处理到的位置**（排他游标）：没溢出时它可能大于最后一条返回事件的
+   * `seq`（中间那些被 `types` 过滤掉了）；一旦多拿到一条（溢出），游标必须停在**返回的
+   * 最后一条**上 —— 否则翻页会丢事件。
+   *
+   * 注意（core 现状，写清楚免得被误读成 O(limit)）：`SessionEventLog.read()` 内部会从
+   * 游标附近定位起点、把**剩余记录流一遍**、按 `seq` 排序后再截断 —— 多写者可能把行写乱，
+   * 早停不安全。所以单次 `read()` 的峰值内存仍是「游标之后剩下的记录」。本函数保证的是
+   * 响应只回 `limit` 条、页与页之间靠游标推进、同一段不重复解析，不把整份日志塞进一帧；
+   * 要严格 O(limit) 的峰值需要 core 提供带序保证的分块读（follow-up，不在本单）。
+   */
+  async function readEventPage(
+    port: SessionEventsPort,
+    sessionId: string,
+    sinceSeq: number,
+    limit: number,
+    types: readonly string[] | undefined,
+  ): Promise<{ events: SessionEventView[]; nextSeq: number; hasMore: boolean }> {
+    const wanted = limit + 1;
+    const events: SessionEventView[] = [];
+    let cursor = sinceSeq;
+    let scanned = 0;
+    let truncated = false;
+    for (;;) {
+      // 不过滤时只要「还差几条 + 1」；过滤时按固定步长推游标（整块可能全不中）。
+      const chunkSize = types === undefined ? wanted - events.length : SESSION_EVENTS_READ_CHUNK;
+      if (chunkSize < 1) break;
+      const chunk = await port.read(sessionId, { sinceSeq: cursor, limit: chunkSize });
+      if (chunk.length === 0) break;
+      let consumed = cursor;
+      for (const event of chunk) {
+        consumed = event.seq;
+        scanned += 1;
+        if (!matchesEventTypes(types, event.type)) continue;
+        events.push(event);
+        if (events.length >= wanted) break;
+      }
+      // 游标只推到「真正读过的那一条」：chunk 内的记录按 seq 升序。
+      cursor = consumed;
+      if (events.length >= wanted) break;
+      if (chunk.length < chunkSize) break; // 日志到底了
+      if (scanned >= SESSION_EVENTS_MAX_SCAN) {
+        truncated = true;
+        break;
+      }
+    }
+    const overflow = events.length > limit;
+    const page = overflow ? events.slice(0, limit) : events;
+    const last = page.length > 0 ? page[page.length - 1] : undefined;
+    const nextSeq = overflow ? (last === undefined ? sinceSeq : last.seq) : cursor;
+    return { events: page, nextSeq, hasMore: overflow || truncated };
+  }
+
   function requireSession(): SessionStore {
     const resolved = sessionFor();
     if (!resolved) {
@@ -825,6 +1100,10 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           contextUsageOf(state.session_id),
           systemContextOf(state.session_id),
         ]);
+        // Additive (0.53)：事件日志游标。与 `sessions.events` 配成一对 ——
+        // `derived_upto_seq < last_seq` ⇒ 有事件没进投影，客户端据此决定要不要补洞。
+        // 读不到（没有日志 / 端口未注入 / 索引坏了）= 字段缺省，**不抛错**。
+        const eventCursor = await eventCursorOf(state.session_id);
         // 0.52：出站窗口与实时流统一 8 KiB 口径（`role==='tool'` 的 content 与
         // assistant 工具入参）。**在游标之后裁**：`next_before` 的 `length` 取自
         // 未裁剪的 `windowAnchor.content.length`，翻页校验才不会被裁剪改写。
@@ -841,6 +1120,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
             ...toSessionView(state, latest),
             ...(contextUsage !== undefined ? { context_usage: contextUsage } : {}),
             ...(systemContext !== undefined ? { system_context: systemContext } : {}),
+            ...(eventCursor !== undefined ? { event_cursor: eventCursor } : {}),
             messages: capToolMessages(all.slice(start, end)),
             messages_total: total,
             ...(windowAnchor !== undefined
@@ -854,6 +1134,74 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
                 }
               : {}),
           },
+        };
+      },
+    },
+    {
+      // Additive（0.53）：读会话事件日志 —— 复用 `sessions.get.event_cursor` 的同一份
+      // 磁盘事实，按 `seq` 翻页回放，形状与 SSE 回放的事件对象一一对应，前端按 `seq`
+      // 幂等合并。设计出处：`docs/dev/handoff/refresh-gap-design.md` §3 方案 B。
+      name: 'sessions.events',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        required: ['session_id'],
+        properties: {
+          session_id: { type: 'string', minLength: 1, maxLength: 256 },
+          // **排他**游标：只回 seq > since_seq；缺省 = 0（从头）。分页/补洞都靠它，
+          // 客户端把上一页的 next_seq 原样传回来即可，不重不漏。
+          since_seq: { type: 'integer', minimum: 0, maximum: MAX_SAFE_SEQ },
+          // 默认 100、硬顶 500（同 sessions.get.message_limit / events.list 风格）。
+          limit: { type: 'integer', minimum: 1, maximum: MAX_SESSION_EVENTS_LIMIT },
+          // 事件类型过滤；`tool.*` 这种 `*` 后缀 = 前缀匹配（同 events.subscribe）。
+          types: {
+            type: 'array',
+            items: { type: 'string', minLength: 1 },
+            maxItems: MAX_SESSION_EVENTS_TYPES,
+          },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['events', 'next_seq', 'has_more'],
+        properties: {
+          events: { type: 'array', items: sessionEventSchema },
+          // 已处理到的位置（排他游标）：下次作 since_seq 传回。没溢出时可能大于最后
+          // 一条返回事件的 seq —— 中间的记录被 types 过滤掉了。
+          next_seq: { type: 'integer', minimum: 0 },
+          // 日志文件尾的最新 seq（本次读取之后重读一次）：has_more=false 且
+          // next_seq < latest_seq 说明尾部有坏行/刚被追加，客户端按间隔再轮询。
+          latest_seq: { type: 'integer', minimum: 0 },
+          has_more: { type: 'boolean' },
+        },
+      },
+      handler: async (params) => {
+        const port = deps.sessionEvents;
+        if (port === undefined) {
+          // 与 `compact_unavailable` 同思路：能力没注入就是没注入，别假装空日志。
+          throw new RpcError('not_supported', 'Session event log is not configured');
+        }
+        const sessionId = stringParam(params, 'session_id');
+        const backend = requireSession();
+        // 存在性 / 授权与 sessions.get 走同一条口径（不额外开一个越权读盘口子）。
+        const state = await backend.load(sessionId);
+        if (!state) {
+          throw new RpcError('not_found', 'Session not found');
+        }
+        const sinceSeq = parseSinceSeq(params.since_seq);
+        const limit = parseSessionEventsLimit(params.limit);
+        const types = parseSessionEventTypes(params.types);
+        const page = await readEventPage(port, sessionId, sinceSeq, limit, types);
+        // 边界只读一次（`lastSeq` = 文件尾 stat + 尾读，便宜）：与 `sessions.get.event_cursor`
+        // 是同一个数，客户端可以拿它判断「已经追平了」。
+        const latestSeq = await port.lastSeq(sessionId);
+        const lastReturned =
+          page.events.length > 0 ? page.events[page.events.length - 1] : undefined;
+        return {
+          events: page.events,
+          next_seq: page.nextSeq,
+          latest_seq: Math.max(latestSeq ?? 0, lastReturned === undefined ? 0 : lastReturned.seq),
+          has_more: page.hasMore,
         };
       },
     },

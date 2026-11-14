@@ -115,6 +115,7 @@ import { createRunControl } from './run-control';
 import { createRuntimeNoticeBus, type RuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
+import { createSessionEventsSource } from './session-events';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
 import { reportShutdownFailure } from './shutdown-report';
 import { createSystemContextSource } from './system-context';
@@ -1725,6 +1726,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           // 事件不是 message ⇒ 回放窗口淘汰 / 进程重启后只有重新派生才能把卡找回来。
           systemContext: createSystemContextSource({
             tail: eventLog,
+            eventsFile: (sessionId: string) =>
+              sessionEventsFilePath(tenantPaths.sessions_dir, sessionId),
+          }),
+          // 会话事件日志的读取面（additive 0.53：`sessions.events` 回填 +
+          // `sessions.get.event_cursor`）：与上面两个同一个 `eventLog`、同一个
+          // `sessions_dir`，serve 只做游标/分页，磁盘路径留在这里。
+          sessionEvents: createSessionEventsSource({
+            log: eventLog,
             eventsFile: (sessionId: string) =>
               sessionEventsFilePath(tenantPaths.sessions_dir, sessionId),
           }),

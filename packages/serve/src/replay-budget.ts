@@ -126,12 +126,17 @@ export const FLOOR_ANCHOR_EVENT_TYPES: readonly string[] = ['run.started', 'user
 /** 单次回放的字节预算下限（= 旧固定值：小会话回放逐字节等价）。 */
 export const MIN_BUDGET_BYTES = 1024 * 1024;
 /**
- * 单次回放的字节预算硬上限（4 MiB = `gateway.ts#MAX_BUFFERED_BYTES`）。
+ * 单次回放的字节预算硬上限（8 MiB = `gateway.ts#MAX_BUFFERED_BYTES`）。
  *
- * 一次回放不允许超过 WS 缓冲的硬关闭阈值；慢客户端仍会在 2 MiB 背压高水位上丢帧，
+ * 一次回放不允许超过 WS 缓冲的硬关闭阈值；慢客户端仍会在 4 MiB 背压高水位上丢帧，
  * 那是 gap + 回填该管的事，不是把预算无限放大能解决的。
+ *
+ * 0.53 从 4 MiB 抬到 8 MiB（与环 10000→50000 同批）：字节预算必须跟着环一起抬，
+ * 否则「结构优先 + 尾部正文」的窗口对长跑仍然是几百条就咬合，环抬大了也白搭。
+ * 代价是**单连接**单次回放的临时内存上限翻倍（不是常驻）：真正超长的历史交给
+ * `sessions.events` 磁盘回填分页，不靠把这个上限一路顶上去。
  */
-export const MAX_BUDGET_BYTES = 4 * 1024 * 1024;
+export const MAX_BUDGET_BYTES = 8 * 1024 * 1024;
 /**
  * 预算安全系数：地板 × 1.5。
  *
@@ -142,12 +147,16 @@ export const BUDGET_SAFETY_FACTOR = 1.5;
 /** 条数预算下限（= 旧 `REPLAY_MAX_EVENTS`）：小事件很多的会话行为不变。 */
 export const MIN_EVENTS = 2_000;
 /**
- * 条数预算上限（= 环形缓冲默认容量 10000）。
+ * 条数预算上限（= 环形缓冲默认容量 50000）。
  *
  * 取容量而不是更小的数：条数闸门只该是「自定义更大 maxHistory 时的安全网」，不能比
  * 字节预算先咬合（旧实现里 2000 条正是「巨型 run 只剩 5 条事件」的第二凶手）。
+ *
+ * 0.53 从 10000 抬到 50000（环同批放大）：两者是同一个窗口的两种计量，
+ * 不同步抬就会出现「按条数先咬合」—— 涨容量却不涨预算等于没涨。
+ * 常驻内存代价见 `event-buffer.ts#DEFAULT_MAX_HISTORY` 的注释。
  */
-export const MAX_EVENTS = 10_000;
+export const MAX_EVENTS = 50_000;
 /** 条数预算的安全系数，与字节预算同口径。 */
 export const EVENT_SAFETY_FACTOR = 1.5;
 

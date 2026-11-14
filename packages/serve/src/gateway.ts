@@ -87,6 +87,7 @@ import { createRunMethods } from './gateway/methods/runs.js';
 import {
   createSessionMethods,
   type SessionContextUsagePort,
+  type SessionEventsPort,
   type SessionSystemContextPort,
 } from './gateway/methods/sessions.js';
 import { createTeamMethods } from './gateway/methods/teams.js';
@@ -343,6 +344,18 @@ export interface GatewayOptions {
    */
   systemContext?: SessionSystemContextPort;
   /**
+   * 会话事件日志的读取面（additive 0.53：`sessions.events` + `sessions.get.event_cursor`，
+   * asm 注入）。
+   *
+   * 与 `contextUsage` / `systemContext` 同一范式、同一个 `SessionEventLog`：装配层用
+   * `src/session-events.ts` 实现读端口，serve 只做「游标 + 分页 + 形状对齐」——
+   * 不拼磁盘路径、不读盘。
+   *
+   * 缺省 = `sessions.events` 返回 `not_supported`、`sessions.get` 不带 `event_cursor`
+   * （旧装配行为一字不改、不抛错）。
+   */
+  sessionEvents?: SessionEventsPort;
+  /**
    * 方法层（`events.list` 等）脱敏；缺省 core 默认 redactor。
    * 实时广播的脱敏由 hub 的 `map` 决定——自定义时应把同一实例传给
    * `createGatewayEventHub({ redactor })`。
@@ -452,23 +465,35 @@ interface WsData {
 
 type Ws = import('bun').ServerWebSocket<WsData>;
 
-/** WS 慢客户端硬关闭阈值（最终安全网） */
-const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
-/** WS 事件背压：高水位开始丢事件，低水位补 gap（DECISION-009 §10.3.5） */
-const WS_BACKPRESSURE_HIGH = 2 * 1024 * 1024;
-const WS_BACKPRESSURE_LOW = 512 * 1024;
+/**
+ * WS 慢客户端硬关闭阈值（最终安全网）。
+ *
+ * 0.53 从 4 MiB 抬到 8 MiB：与 `replay-budget.ts#MAX_BUDGET_BYTES` 保持
+ * 「单次回放预算 ≤ 硬关闭阈值」这条既有约束（环抬到 50000 条 + 更大预算属同批拍板）。
+ * 代价**不是**常驻内存，而是慢客户端在被踢掉前允许堆的未发字节。
+ */
+const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
+/**
+ * WS 事件背压：高水位开始丢事件，低水位补 gap（DECISION-009 §10.3.5）。
+ *
+ * 与 `MAX_BUFFERED_BYTES` 保持 1/2 比例同步抬（0.53：2→4 MiB）：回放预算涨到
+ * 8 MiB 而水位停在 2 MiB 的话，一次大回放会自己把自己拆成 gap，等于白抬预算。
+ */
+const WS_BACKPRESSURE_HIGH = 4 * 1024 * 1024;
+const WS_BACKPRESSURE_LOW = 1024 * 1024;
 /**
  * 单次回放仍然是**有界**的：只回放最近这段历史，更早的区间用 gap 跳过。
  *
- * 环形缓冲最多 10000 条，单条 `tool.call.completed` 可达 MB 级；长驻 gateway
- * 一次 `since=0` 全量回放可能是数百 MB。慢客户端必然触发背压丢帧 → gap →
- * 重连 → 再全量回放，形成永远追不上最新事件的循环。
+ * 环形缓冲默认 50000 条（`event-buffer.ts#DEFAULT_MAX_HISTORY`），单条
+ * `tool.call.completed` 可达 MB 级；长驻 gateway 一次 `since=0` 全量回放可能是数百 MB。
+ * 慢客户端必然触发背压丢帧 → gap → 重连 → 再全量回放，形成永远追不上最新事件的循环。
  *
  * 预算本身不再固定：`replay-budget.ts` 按「结构优先 + 尾部正文」动态推导
- * （`clamp(最新一轮地板 × 1.5, 1 MiB, 4 MiB)`），保证最新一轮的 `run.started`
- * 必在窗口内（客户端 `hasNewestRunStart()` 的既有依赖），同时保留 4 MiB 硬上限。
+ * （`clamp(最新一轮地板 × 1.5, 1 MiB, 8 MiB)`），保证最新一轮的 `run.started`
+ * 必在窗口内（客户端 `hasNewestRunStart()` 的既有依赖），同时保留 8 MiB 硬上限。
  * 预算之外更早的区间不再「不可恢复」：客户端带 `until_seq` 逐页回退（能力位
  * `events.replay-range`），每页同样受这里的预算约束 —— 分段，而不是把预算调大。
+ * 更早的区间也可以走磁盘（`sessions.events`）回填，那才是「窗口之外」的兜底。
  */
 /** `run_id → session_id` 归属映射上限（LRU）。 */
 const RUN_SESSION_MAP_LIMIT = 5_000;
@@ -1551,6 +1576,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ...(opts.contextUsage !== undefined ? { contextUsage: opts.contextUsage } : {}),
       // 「模型这一轮看到的系统消息」（additive）：缺省不带该字段，旧装配行为不变。
       ...(opts.systemContext !== undefined ? { systemContext: opts.systemContext } : {}),
+      // 会话事件日志读取面（additive 0.53）：缺省 = `sessions.events` 返回 not_supported、
+      // `sessions.get` 不带 `event_cursor`，旧装配行为一字不变。
+      ...(opts.sessionEvents !== undefined ? { sessionEvents: opts.sessionEvents } : {}),
       // CREATE-0.39：sessions.create|restart|activate 与 agents.* 共用同一注入面。
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
     }),
