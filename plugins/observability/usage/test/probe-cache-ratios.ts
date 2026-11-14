@@ -18,8 +18,8 @@
  * Not wired into any gate.
  */
 
-import { readUsageIndex, type RunSummary } from '../src/store.js';
 import { summarizeRuns } from '../src/aggregate.js';
+import { type RunSummary, readUsageIndex } from '../src/store.js';
 
 let passed = 0;
 let failed = 0;
@@ -51,8 +51,8 @@ function run(over: Partial<RunSummary> & { run_id: string }): RunSummary {
   } as RunSummary;
 }
 
-function close(a: number | undefined, b: number): boolean {
-  return a !== undefined && Math.abs(a - b) < 1e-12;
+function close(a: number | undefined, b: number | undefined): boolean {
+  return a !== undefined && b !== undefined && Math.abs(a - b) < 1e-12;
 }
 
 async function main(): Promise<void> {
@@ -120,7 +120,11 @@ async function main(): Promise<void> {
       ],
       T0,
     );
-    check('c. 完全不报缓存 ⇒ input_share 不可用', s.input_share === undefined, String(s.input_share));
+    check(
+      'c. 完全不报缓存 ⇒ input_share 不可用',
+      s.input_share === undefined,
+      String(s.input_share),
+    );
     check(
       'c. 不可用原因是 no-cache-fields',
       s.input_share_unavailable === 'no-cache-fields',
@@ -149,10 +153,7 @@ async function main(): Promise<void> {
       String(s.input_share_unavailable),
     );
     check('d. prompt=0 ⇒ prefix_health 也不可算', s.prefix_health === undefined);
-    check(
-      'd. 无 NaN',
-      !Number.isNaN(s.input_share) && !Number.isNaN(s.prefix_health),
-    );
+    check('d. 无 NaN', !Number.isNaN(s.input_share) && !Number.isNaN(s.prefix_health));
   }
 
   // ------------------------------------------- (e) 多 run：token 加权 vs 平均
@@ -197,7 +198,12 @@ async function main(): Promise<void> {
   {
     const s = summarizeRuns(
       [
-        run({ run_id: 'reports', requests: 10, prompt_tokens: 1_000, cache_read_input_tokens: 900 }),
+        run({
+          run_id: 'reports',
+          requests: 10,
+          prompt_tokens: 1_000,
+          cache_read_input_tokens: 900,
+        }),
         run({ run_id: 'silent', requests: 10, prompt_tokens: 9_000 }),
       ],
       T0,
@@ -252,7 +258,11 @@ async function main(): Promise<void> {
       close(s.input_share, 0.5),
       String(s.input_share),
     );
-    check('d3. prefix_health = read/(read+write)', close(s.prefix_health, 500 / 900), String(s.prefix_health));
+    check(
+      'd3. prefix_health = read/(read+write)',
+      close(s.prefix_health, 500 / 900),
+      String(s.prefix_health),
+    );
   }
 
   // -------------------------------------------------------------- 真实数据模式
@@ -269,8 +279,7 @@ async function main(): Promise<void> {
         const pos = index.runs.filter((r) => r.requests > 0);
         const reporting = pos.filter(
           (r) =>
-            r.cache_read_input_tokens !== undefined ||
-            r.cache_creation_input_tokens !== undefined,
+            r.cache_read_input_tokens !== undefined || r.cache_creation_input_tokens !== undefined,
         );
         const promptAll = pos.reduce((a, r) => a + r.prompt_tokens, 0);
         const promptReporting = reporting.reduce((a, r) => a + r.prompt_tokens, 0);
