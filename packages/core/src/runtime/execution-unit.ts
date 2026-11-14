@@ -903,7 +903,13 @@ export class ExecutionUnit {
     }
 
     // 去重 + 防抖一次判完：同批不重发；换一批新 id 且已过 60s 冷却才再发一张。
-    if (!vault.shouldAnnounceDeadBatch(sessionId, dead.map((entry) => entry.id), systemic ? 'systemic' : 'dead')) {
+    if (
+      !vault.shouldAnnounceDeadBatch(
+        sessionId,
+        dead.map((entry) => entry.id),
+        systemic ? 'systemic' : 'dead',
+      )
+    ) {
       return;
     }
 

@@ -74,12 +74,12 @@ export {
   PII_MAX_SESSIONS,
   PII_MAX_TOMBSTONES,
   PII_NOTICE_MIN_INTERVAL_MS,
-  piiDeadBatchHash,
   type PiiAuditEntry,
   type PiiProtectBatchResult,
   type PiiProtectResult,
   type PiiResolveResult,
   PiiVault,
   type PiiVaultOptions,
+  piiDeadBatchHash,
   setPiiVault,
 } from './vault.js';

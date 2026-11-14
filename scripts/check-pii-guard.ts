@@ -200,10 +200,17 @@ checkUntouched(
 );
 check('D 存储里能看见原始手机号', String(reloaded?.messages?.[1]?.content).includes(PHONE), true);
 
-// 请求构造层：读侧 masker 投影（落盘不动，投影才打码）
+// **注意（0.52 起语义已变）**：下面这段只是 `withReadSideMask` 这个**遗留纯函数**的单测。
+// 生产路径**不再**在请求构造时脱敏 —— 脱敏发生在 append 那一刻（`ExecutionUnit.maskForAppend`），
+// 因为「请求 messages 只能 append，不许改中间内容」（见 docs/architecture/message-invariants.md）。
+// 保留本段是为了钉住 helper 自身的幂等/不叠字；**不要**据此认为请求期脱敏是允许的。
 const forRequest = withReadSideMask(reloaded?.messages ?? [], host.getReadSideMaskers?.() ?? []);
-checkMasked('D 请求投影打码', RAW_TOOL_RESULT, String(forRequest[1]?.content));
-checkMasked('D 请求投影打码 assistant', assistantText, String(forRequest[2]?.content));
+checkMasked('D（遗留 helper 单测）投影打码', RAW_TOOL_RESULT, String(forRequest[1]?.content));
+checkMasked(
+  'D（遗留 helper 单测）投影打码 assistant',
+  assistantText,
+  String(forRequest[2]?.content),
+);
 check('D 请求投影不泄漏原始手机号', String(forRequest[1]?.content).includes(PHONE), false);
 checkUntouched('D 投影不改原数组', RAW_TOOL_RESULT, String(reloaded?.messages?.[1]?.content));
 
@@ -258,4 +265,4 @@ if (failures > 0) {
   console.error(`FAIL ${failures} 项`);
   process.exit(1);
 }
-console.log('OK 时间戳不再被当手机号；脱敏只在读侧，落盘原文不变');
+console.log('OK 时间戳不再被当手机号；生产脱敏在 append（本段只测遗留 helper 的幂等/不叠字）');

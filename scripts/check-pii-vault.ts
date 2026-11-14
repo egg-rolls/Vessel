@@ -689,16 +689,32 @@ function probeNoticeDedup(): void {
   const batchB = ['CCCCCCCC'];
 
   eq('同批第一次 ⇒ 该发', vault.shouldAnnounceDeadBatch(session, batchA), true);
-  eq('同批第二次（立刻）⇒ 不发（批哈希去重）', vault.shouldAnnounceDeadBatch(session, batchA), false);
+  eq(
+    '同批第二次（立刻）⇒ 不发（批哈希去重）',
+    vault.shouldAnnounceDeadBatch(session, batchA),
+    false,
+  );
   eq(
     '同批顺序不同也算同一批（哈希按排序后集合）',
     vault.shouldAnnounceDeadBatch(session, [...batchA].reverse()),
     false,
   );
-  eq('换一批但还在 60s 冷却里 ⇒ 不发（防抖）', vault.shouldAnnounceDeadBatch(session, batchB), false);
+  eq(
+    '换一批但还在 60s 冷却里 ⇒ 不发（防抖）',
+    vault.shouldAnnounceDeadBatch(session, batchB),
+    false,
+  );
   clock += 60_001;
-  eq('换一批且已过 60s ⇒ 允许再发一张（不许静默）', vault.shouldAnnounceDeadBatch(session, batchB), true);
-  eq('已发过的批 A 即使过了 60s 也不再重发（哈希被记住）', vault.shouldAnnounceDeadBatch(session, batchA), false);
+  eq(
+    '换一批且已过 60s ⇒ 允许再发一张（不许静默）',
+    vault.shouldAnnounceDeadBatch(session, batchB),
+    true,
+  );
+  eq(
+    '已发过的批 A 即使过了 60s 也不再重发（哈希被记住）',
+    vault.shouldAnnounceDeadBatch(session, batchA),
+    false,
+  );
   // different session: 独立预算与独立批集合
   eq('不同 session 互不影响', vault.shouldAnnounceDeadBatch('other-session', batchA), true);
 }

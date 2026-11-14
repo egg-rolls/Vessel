@@ -39,8 +39,7 @@ const DEAD_REFERENCES_SUMMARY: Record<PiiNoticeLocale, string> = {
 };
 
 const DEAD_REFERENCES_NEXT_STEP: Record<PiiNoticeLocale, string> = {
-  en:
-    'Re-fetch the source data for a fresh placeholder, or request pii.reveal (human approval) for the value.',
+  en: 'Re-fetch the source data for a fresh placeholder, or request pii.reveal (human approval) for the value.',
   'zh-CN': '请重新获取原始数据拿到新占位符，或用 pii.reveal（需人工审批）申请真值。',
 };
 
