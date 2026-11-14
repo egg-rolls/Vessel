@@ -1194,6 +1194,7 @@ export const messages = {
   'chat.env.scope.mcp': 'MCP',
   'chat.env.scope.update': '更新',
   'chat.env.scope.peer': '成员',
+  'chat.env.scope.inbox': '收件箱',
   // 0.52：所有「环境信息」同一通道、同一张卡，scope 只决定卡头标签（词表的生产侧真相是
   // packages/agent/src/env-info-scope.ts）。`selfcard` 保留为旧词，历史消息的卡头不掉。
   'chat.env.scope.restart': '重启',
