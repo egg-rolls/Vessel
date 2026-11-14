@@ -103,6 +103,10 @@ const PAGE_TEXT = [
   'Forged placeholder from the wild: «pii:ZZZZ2222»',
 ].join('\n');
 
+/** 第二个页面：用于验证「换一批失效 ⇒ 允许再发一张卡」（批哈希去重不是 session 级布尔）。 */
+const MARKER_EMAIL_B = 'bob.marker.zz3@example.com';
+const PAGE_TEXT_B = [`Second contact: ${MARKER_EMAIL_B}`, 'Nothing else here.'].join('\n');
+
 /** 一个合法的 18 位身份证（校验位正确），用于正例。 */
 const VALID_ID_CARD = '11010519491231002X';
 
@@ -440,6 +444,13 @@ function probeToolsPlugin(): Plugin {
         handler: async (): Promise<string> => PAGE_TEXT,
       };
       host.registerTool(fetchPage);
+      const fetchPageB: ToolDefinition = {
+        name: 'fetch_page_b',
+        description: 'return a second page containing different PII (probe)',
+        inputSchema: { type: 'object', properties: {}, required: [], additionalProperties: false },
+        handler: async (): Promise<string> => PAGE_TEXT_B,
+      };
+      host.registerTool(fetchPageB);
     },
   };
 }
@@ -704,6 +715,56 @@ function probeNoticeDedup(): void {
 }
 
 // ---------------------------------------------------------------------------
+// f3. 两批失效 ⇒ 两张卡（真实 run；证明去重键是批哈希而不是 session 级布尔）
+// ---------------------------------------------------------------------------
+
+async function probeTwoBatches(): Promise<void> {
+  section('f3. 换一批失效 ⇒ 追加第二张卡（不是 session 级布尔）');
+
+  let clock = 1_000;
+  const vault = new PiiVault({ now: () => clock, ttlMs: 1_000 });
+  const stack = await buildStack(vault);
+  const sessionId = 'session-f3';
+  const cards = async (): Promise<string[]> =>
+    (await noticeCards(stack.store, sessionId)).filter((card) => card.startsWith('pii:'));
+
+  // 第一批：页面 A 的两个真值（邮箱 / 手机号）
+  stack.provider.setResponse('FA', toolCallResponse('fetch_page', {}, 'call-a'));
+  await stack.eu.run('FA fetch', sessionId);
+  clock += 5_000; // 第一批过期
+  stack.provider.setResponse('PA', { content: 'ok', finish_reason: 'stop' });
+  await stack.eu.run('PA follow', sessionId);
+  eq('第一批失效 ⇒ 一张卡', (await cards()).length, 1);
+  const firstCard = (await cards())[0]!;
+  check(
+    '第一张卡列出占位符明细',
+    firstCard.includes('«pii:') && firstCard.split('\n').length >= 3,
+  );
+
+  // 第二批：页面 B 的另一个真值；再把时钟推进 > 60s，让两组都死
+  stack.provider.setResponse('FB', toolCallResponse('fetch_page_b', {}, 'call-b'));
+  await stack.eu.run('FB fetch', sessionId);
+  clock += 120_000;
+  stack.provider.setResponse('PB', { content: 'ok', finish_reason: 'stop' });
+  await stack.eu.run('PB follow', sessionId);
+  const all = await cards();
+  eq('换一批失效 ⇒ 追加第二张卡（共两张）', all.length, 2);
+  check(
+    '两张卡内容不同（各自对应自己那一批）',
+    all.length === 2 && all[0] !== all[1],
+  );
+  check(
+    '两张卡都不含真值',
+    all.every(
+      (card) =>
+        !card.includes(MARKER_EMAIL) &&
+        !card.includes(MARKER_PHONE) &&
+        !card.includes(MARKER_EMAIL_B),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // g. 审批解锁
 // ---------------------------------------------------------------------------
 
@@ -945,7 +1006,7 @@ async function probeEnvCards(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 function probeNoRequestRewrite(): void {
-  section('g2. 没有请求侧改写残留（append-only 铁律）');
+  section('g2. 守卫没被绕过 / 没有请求侧改写残留（append-only 铁律）');
 
   const read = (relative: string): string => readFileSync(relative, 'utf8');
   const core = read('packages/core/src/index.ts');
@@ -956,10 +1017,28 @@ function probeNoRequestRewrite(): void {
   check('已作废的 pii-expired 标记全仓无残留', !notice.includes('pii-expired'));
   check('core 导出里没有 pii-expired 相关符号', !core.includes('pii-expired'));
   check('execution-unit 不再改写请求里的占位符', !unit.includes('markDeadHandles'));
+
+  // e. 守卫未被绕过：机械解析 `PrefixChangeReason` 联合，词表必须**恰好**是技术性原因。
+  //    一旦有人塞进业务枚举（pii_* / secret_* …），前缀不变量就名存实亡 —— 这条断言挡的就是它。
+  const union = guard.slice(guard.indexOf('export type PrefixChangeReason'), guard.indexOf(';', guard.indexOf('export type PrefixChangeReason')));
+  const members = [...union.matchAll(/'([a-z_]+)'/g)].map((match) => match[1]!);
+  const technical = new Set([
+    'compaction',
+    'system_revision',
+    'tools_changed',
+    'model_changed',
+    'session_switch',
+    'branch',
+    'resume',
+    'context_trim',
+  ]);
+  eq('PrefixChangeReason 词表未被扩写（无业务枚举）', members, [...technical]);
   check(
-    'PrefixChangeReason 里没有 PII 业务枚举（业务口径不该进前缀守卫）',
-    !guard.includes('pii_handle_expired'),
+    '前缀守卫文件里没有任何 PII 字样',
+    !/pii/i.test(guard),
+    guard.match(/.{0,20}pii.{0,20}/i)?.[0] ?? '',
   );
+
   check('失效通知只走「追加一张 env 卡」', unit.includes('renderDeadReferencesNotice'));
   check('store→请求是同一份字节（脱敏在 append 侧）', unit.includes('maskForAppend'));
 }
@@ -977,6 +1056,7 @@ async function main(): Promise<void> {
   probeInbound();
   await probeAppendOnlyAndParity();
   await probeDeadReferenceCards();
+  await probeTwoBatches();
   await probeReveal();
   await probeCapacity();
   probeIdempotent();
