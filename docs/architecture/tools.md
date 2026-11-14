@@ -1,7 +1,7 @@
 ---
 title: 工具与权限边界
 kind: current
-triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask, mcp tool]
+triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask, mcp tool, 工具, 权限, 黑名单, 白名单, 根目录, 提问, 工具集]
 paths: [packages/core/src/types/tool.ts, plugins/tools/**, packages/agent/**]
 ---
 

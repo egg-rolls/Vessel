@@ -1,7 +1,7 @@
 ---
 title: Gateway / RPC / 远程约定
 kind: advisory
-triggers: [gateway, serve, rpc, remote, tls, origin, hub, attention, node, node_id, event stream, shutdown, permission, answer, interactions, only human, websocket, plugin http]
+triggers: [gateway, serve, rpc, remote, tls, origin, hub, attention, node, node_id, event stream, shutdown, permission, answer, interactions, only human, websocket, plugin http, 网关, 服务, 远程, 权限应答, 事件流, 关闭, 节点, 交互]
 paths: [packages/serve/**, src/rpc/**]
 applies_to: [N, M]
 ---

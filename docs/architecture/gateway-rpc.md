@@ -1,7 +1,7 @@
 ---
 title: 统一 RPC 方法表
 kind: current
-triggers: [rpc, method, canonical, envelope, permission, agents.create, sessions.create, sessions.restart, sessions.activate, agents.dispatch, allow_auto_create, teams.spawnFrozen, manifest]
+triggers: [rpc, method, canonical, envelope, permission, agents.create, sessions.create, sessions.restart, sessions.activate, agents.dispatch, allow_auto_create, teams.spawnFrozen, manifest, 方法表, 信封, 权限, 契约, 生命周期契约, 附件, 冻结]
 paths: [packages/serve/src/gateway/methods/**, packages/serve/src/protocol.ts]
 ---
 

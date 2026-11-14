@@ -1,7 +1,7 @@
 ---
 title: Guardrail 与 Hook
 kind: current
-triggers: [guardrail, hook, replacement, input, output, tool_call, tool_result, before_llm]
+triggers: [guardrail, hook, replacement, input, output, tool_call, tool_result, before_llm, 护栏, 钩子, 拦截, 替换, 输入输出, 工具调用]
 paths: [packages/core/src/types/guardrail.ts, packages/core/src/types/hook.ts, packages/core/src/**/*runner*]
 ---
 

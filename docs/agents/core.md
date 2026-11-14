@@ -1,7 +1,7 @@
 ---
 title: Core 边界与运行时不变量
 kind: advisory
-triggers: [core, runtime, execution unit, run, resume, loop, tool pipeline, guardrail, hook, event, config, compaction, limits, lock, storage, journal]
+triggers: [core, runtime, execution unit, run, resume, loop, tool pipeline, guardrail, hook, event, config, compaction, limits, lock, storage, journal, 核心, 边界, 运行时不变量, 存储, 锁, 日志流, 工具管线, 压缩, 上限]
 paths: [packages/core/**, packages/config/**]
 applies_to: [N, M]
 ---

@@ -1,7 +1,7 @@
 ---
 title: 插件发现、信任与生命周期
 kind: advisory
-triggers: [plugin, plugin host, discovery, trust, external, dispose, mcp, skill, evals]
+triggers: [plugin, plugin host, discovery, trust, external, dispose, mcp, skill, evals, 插件, 插件发现, 信任, 隔离, 生命周期, 技能, 评测, 外部插件]
 paths: [plugins/**, src/plugin-loader.ts, src/plugin-selection.ts]
 applies_to: [N, M]
 ---

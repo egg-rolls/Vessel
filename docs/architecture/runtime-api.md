@@ -1,7 +1,7 @@
 ---
 title: 消息与运行时 API
 kind: current
-triggers: [RunOptions, messages, injection, agent runtime, context, at-path, skills]
+triggers: [RunOptions, messages, injection, agent runtime, context, at-path, skills, 运行时接口, 消息组装, 注入, 运行选项, 技能, 附件路径]
 paths: [packages/core/src/runtime/**, packages/core/src/types/**]
 ---
 

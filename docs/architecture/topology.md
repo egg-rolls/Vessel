@@ -1,7 +1,7 @@
 ---
 title: 部署拓扑：公司 / 平台 / 团队
 kind: current
-triggers: [topology, company, workspace, platform, team, plugin scope, ownership, tenant, hub, node, connection, session, guest, owner, node registry, gateway nodes, data_locked]
+triggers: [topology, company, workspace, platform, team, plugin scope, ownership, tenant, hub, node, connection, session, guest, owner, node registry, gateway nodes, data_locked, 拓扑, 归属, 公司, 工作区, 平台, 团队, 节点, 访客, 插件归属, 网关]
 paths: [src/hub/**, src/gateway/**, src/plugin-loader.ts, packages/serve/src/platform/**, packages/serve/src/plugin-host/**, plugins/**, docs/architecture/topology.md]
 ---
 

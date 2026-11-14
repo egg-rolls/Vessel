@@ -1,7 +1,7 @@
 ---
 title: 状态与持久化接口
 kind: current
-triggers: [session, run store, checkpoint, durable, limits, corruption, prune]
+triggers: [session, run store, checkpoint, durable, limits, corruption, prune, 状态, 存储, 检查点, 持久化, 损坏, 裁剪, 上界, 会话存储]
 paths: [packages/core/src/types/session.ts, packages/core/src/types/limits.ts, packages/core/src/types/run-record-store.ts, packages/core/src/session/message-identity.ts]
 ---
 

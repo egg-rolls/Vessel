@@ -1,7 +1,7 @@
 ---
 title: 事件系统
 kind: current
-triggers: [event, event stream, trace, replay, observability, seq, redaction, restart, create, session]
+triggers: [event, event stream, trace, replay, observability, seq, redaction, restart, create, session, 事件, 事件流, 事件回放, 回放, 重放, 可观测, 脱敏, 续传]
 paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace-wiring.ts, src/observability-wiring.ts]
 ---
 

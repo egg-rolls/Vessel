@@ -1,7 +1,7 @@
 ---
 title: TUI 与 CLI 终端面约定
 kind: advisory
-triggers: [tui, cli, repl, terminal, i18n, sanitize, ansi, command, help, ask]
+triggers: [tui, cli, repl, terminal, i18n, sanitize, ansi, command, help, ask, 终端, 命令行, 本地化, 命令, 帮助, 提问, 净化]
 paths: [packages/tui/**, src/i18n/**, src/ui-style.ts, src/commands/**, src/cli.ts]
 applies_to: [N, M]
 ---

@@ -1,7 +1,7 @@
 ---
 title: Plugin Registry 与 Marketplace
 kind: current
-triggers: [plugin, registry, marketplace, install, update, remove, checksum, github pages, release, index.json]
+triggers: [plugin, registry, marketplace, install, update, remove, checksum, github pages, release, index.json, 插件, 插件市场, 插件仓库, 安装, 更新, 卸载, 校验, 发布]
 paths: [plugins/marketplace/**, docs/architecture/plugin-registry.md]
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: 权限桥与会话切换
 kind: current
-triggers: [web, apps/web, permission bridge, ask, session switch, frontend]
+triggers: [web, apps/web, permission bridge, ask, session switch, frontend, 网页, 前端, 权限桥, 会话切换, 浏览器]
 paths: [apps/web/**, packages/serve/src/gateway/**]
 ---
 

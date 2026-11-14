@@ -1,7 +1,7 @@
 ---
 title: 环境信息与 append-only 上下文
 kind: current
-triggers: [append-only, context, message, notice, env info, environment, self card, tool surface, model change, scope, files, doc-subscription, prompt.system_context, changed, compaction, cleared tool result]
+triggers: [append-only, context, message, notice, env info, environment, self card, tool surface, model change, scope, files, doc-subscription, prompt.system_context, changed, compaction, cleared tool result, 环境信息, 环境块, 增量视图, 占位, 旧工具结果, 追加写]
 paths: [packages/core/src/runtime/execution-unit.ts, packages/core/src/context/context-manager.ts, packages/core/src/pii/notice.ts, packages/agent/src/env-info-scope.ts, packages/agent/src/self-card-delta.ts, packages/agent/src/tool-surface-delta.ts, plugins/context/doc-subscription/src/notice.ts, apps/web/src/domains/chat/env-notice.ts, scripts/check-append-only-context.ts]
 ---
 

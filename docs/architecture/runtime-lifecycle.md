@@ -1,7 +1,7 @@
 ---
 title: Run 生命周期
 kind: current
-triggers: [run, resume, finalize, execution, checkpoint, cancel, active run, run_already_running, lease, fencing, execution unit lifecycle]
+triggers: [run, resume, finalize, execution, checkpoint, cancel, active run, run_already_running, lease, fencing, execution unit lifecycle, 生命周期, 恢复, 收尾, 取消, 租约, 检查点, 执行单元, 写者]
 paths: [packages/core/src/runtime/**, packages/core/src/types/run.ts]
 ---
 
