@@ -1,7 +1,7 @@
 ---
 title: Web 控制台约定
 kind: advisory
-triggers: [web, apps/web, i18n, locale, sessionStorage, permission card, ask, teams]
+triggers: [web, apps/web, i18n, locale, sessionStorage, permission card, ask, teams, 网页, 前端, 本地化, 会话存储, 权限卡, 团队]
 paths: [apps/web/**]
 applies_to: [N, M]
 ---

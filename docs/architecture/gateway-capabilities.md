@@ -1,7 +1,7 @@
 ---
 title: Gateway 能力矩阵与职责归属
 kind: current
-triggers: [gateway capability, gateway lifecycle, tls termination, node ticket, origin allowlist, rate limit, audit, metrics, health probe, circuit breaker, adopt, version gate, node registry, routing, standby]
+triggers: [gateway capability, gateway lifecycle, tls termination, node ticket, origin allowlist, rate limit, audit, metrics, health probe, circuit breaker, adopt, version gate, node registry, routing, standby, 网关能力, 生命周期, 证书, 票据, 限流, 审计, 指标, 健康检查, 熔断, 路由]
 paths: [packages/serve/src/platform/**, src/gateway-command.ts, src/gateway/**, docs/architecture/gateway-capabilities.md]
 ---
 

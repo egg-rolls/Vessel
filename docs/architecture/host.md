@@ -1,7 +1,7 @@
 ---
 title: Scheduler 与执行面
 kind: current
-triggers: [host, scheduler, concurrency, serial, resume, snapshot, checkpoint, cancel, agent run, body serial, queue]
+triggers: [host, scheduler, concurrency, serial, resume, snapshot, checkpoint, cancel, agent run, body serial, queue, 宿主, 调度, 串行, 并发, 取消, 快照, 检查点, 队列]
 paths: [packages/core/src/kernel/**, packages/core/src/runtime/**]
 ---
 

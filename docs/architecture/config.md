@@ -1,7 +1,7 @@
 ---
 title: 配置模型
 kind: current
-triggers: [config, yaml, vessel.yaml, precedence, env, data root, gateway token, node token, secrets]
+triggers: [config, yaml, vessel.yaml, precedence, env, data root, gateway token, node token, secrets, 配置, 配置项, 优先级, 数据目录, 密钥, 令牌, 环境变量]
 paths: [packages/config/**, src/cli-overrides.ts, src/serve-config.ts]
 ---
 

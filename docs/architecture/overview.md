@@ -1,7 +1,7 @@
 ---
 title: 概览与分层
 kind: current
-triggers: [architecture, layering, dependency, kernel, module, adapter, core, philosophy]
+triggers: [architecture, layering, dependency, kernel, module, adapter, core, philosophy, 分层, 依赖, 内核, 模块, 适配器, 哲学, 三层]
 paths: [packages/core/**, packages/**, plugins/**]
 ---
 

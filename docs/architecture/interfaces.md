@@ -1,7 +1,7 @@
 ---
 title: 核心接口
 kind: current
-triggers: [LLMProvider, ChatRequest, WorkingContext, EventStream, interface, types]
+triggers: [LLMProvider, ChatRequest, WorkingContext, EventStream, interface, types, 接口, 类型, 契约, 提供者, 聊天请求, 工作上下文, 事件流]
 paths: [packages/core/src/types/provider.ts, packages/core/src/types/context.ts, packages/core/src/types/event.ts]
 ---
 

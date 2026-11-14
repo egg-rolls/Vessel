@@ -1,7 +1,7 @@
 ---
 title: Hub 控制面与跨节点 Federation
 kind: current
-triggers: [hub, federation, control plane, data plane, node, peer, pairing, join code, token, directory, attention, allowlist, hop, cross-node]
+triggers: [hub, federation, control plane, data plane, node, peer, pairing, join code, token, directory, attention, allowlist, hop, cross-node, 联邦, 中枢, 配对, 加入码, 目录, 控制面, 数据面, 跨机, 节点互联]
 paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gateway/**]
 ---
 

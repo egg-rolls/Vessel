@@ -1,7 +1,7 @@
 ---
 title: Gateway 协议与远程
 kind: current
-triggers: [gateway, websocket, sse, tls, origin, csp, cors, remote, protocol, endpoint]
+triggers: [gateway, websocket, sse, tls, origin, csp, cors, remote, protocol, endpoint, 网关, 重启, 协议, 远程, 跨域, 证书, 端点, 端口]
 paths: [packages/serve/src/**, packages/serve/src/gateway/**, src/serve-auth.ts, src/rpc/**]
 ---
 

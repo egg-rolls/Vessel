@@ -1,7 +1,7 @@
 ---
 title: 装配层
 kind: current
-triggers: [bootstrap, cli, args, wiring, repl, headless, resume]
+triggers: [bootstrap, cli, args, wiring, repl, headless, resume, 装配, 装配层, 启动, 命令行, 参数, 无头, 恢复会话]
 paths: [src/**]
 ---
 

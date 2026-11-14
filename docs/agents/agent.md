@@ -1,7 +1,7 @@
 ---
 title: AgentService 与 Team 约定
 kind: advisory
-triggers: [agent, member, team, session, dispatch, rotate, restart, create, sessions.create, spawn, peer, contractor, owner, freeze, budget, visibility, agent tool, permission, answered_by, human, deny-after, timeout, approval]
+triggers: [agent, member, team, session, dispatch, rotate, restart, create, sessions.create, spawn, peer, contractor, owner, freeze, budget, visibility, agent tool, permission, answered_by, human, deny-after, timeout, approval, 成员, 团队, 派生, 投递, 预算, 待处理, 轮换, 审批, 回复, 会话]
 paths: [packages/agent/**]
 applies_to: [N, M]
 ---
