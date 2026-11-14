@@ -22,6 +22,9 @@
  *   j. 环境信息卡（unknown / expired 不发卡；整批失效至多发一张；卡面不含逐值信息）
  */
 
+import { readFileSync } from 'node:fs';
+
+import { envNoticeCard } from '../apps/web/src/domains/chat/env-notice.js';
 import { tierOf } from '../apps/web/src/state/event-visibility.js';
 import type {
   Message,
@@ -640,6 +643,25 @@ async function probeDeadReferenceCards(): Promise<void> {
   );
   eq('同一批死引用只追加一次卡', cardsAfterThird.length, 1);
 
+  // EnvCard 渲染族认得出这张卡：scope = pii，明细区带 id 与类别，摘要行不含真值
+  const card = envNoticeCard(cardsAfterSecond[0] ?? '');
+  eq('失效通知走 EnvCard：scope = pii', card?.scope, 'pii');
+  check(
+    '失效通知的明细区列出占位符与类别',
+    (card?.lines ?? []).some((line) => line.text.includes(handle) && line.text.includes('(email)')),
+    JSON.stringify(card?.lines ?? []),
+  );
+  check(
+    '失效通知的明细里有下一步（重新获取 / reveal）',
+    (card?.lines ?? []).some((line) => /reveal|重新获取|pii\.reveal/.test(line.text)),
+  );
+  check(
+    '卡片全部行都不含真值',
+    (card?.lines ?? []).every(
+      (line) => !line.text.includes(MARKER_EMAIL) && !line.text.includes(MARKER_PHONE),
+    ),
+  );
+
   // 工具侧仍然硬报错：死句柄不许静默外发
   stack.provider.setResponse('USE', toolCallResponse('echo_args', { q: handle }, 'call-use'));
   await stack.eu.run('USE the handle', sessionId);
@@ -651,6 +673,34 @@ async function probeDeadReferenceCards(): Promise<void> {
   check('死句柄进工具参数 ⇒ 工具调用失败', toolResult.includes('PII handle cannot be resolved'));
   check('工具失败文本区分原因（expired_handle）', toolResult.includes('expired_handle'));
   check('没有把占位符原样当结果外发', !toolResult.includes('RESOLVED:'));
+}
+
+// ---------------------------------------------------------------------------
+// f2. 通知去重键：批哈希 + 60s 预算（合成判定）
+// ---------------------------------------------------------------------------
+
+function probeNoticeDedup(): void {
+  section('f2. 失效通知去重：批哈希（同批不重发、换批允许）+ 60s 防抖');
+
+  let clock = 1_000;
+  const vault = new PiiVault({ now: () => clock, ttlMs: 60_000 });
+  const session = 'session-f2';
+  const batchA = ['AAAAAAAA', 'BBBBBBBB'];
+  const batchB = ['CCCCCCCC'];
+
+  eq('同批第一次 ⇒ 该发', vault.shouldAnnounceDeadBatch(session, batchA), true);
+  eq('同批第二次（立刻）⇒ 不发（批哈希去重）', vault.shouldAnnounceDeadBatch(session, batchA), false);
+  eq(
+    '同批顺序不同也算同一批（哈希按排序后集合）',
+    vault.shouldAnnounceDeadBatch(session, [...batchA].reverse()),
+    false,
+  );
+  eq('换一批但还在 60s 冷却里 ⇒ 不发（防抖）', vault.shouldAnnounceDeadBatch(session, batchB), false);
+  clock += 60_001;
+  eq('换一批且已过 60s ⇒ 允许再发一张（不许静默）', vault.shouldAnnounceDeadBatch(session, batchB), true);
+  eq('已发过的批 A 即使过了 60s 也不再重发（哈希被记住）', vault.shouldAnnounceDeadBatch(session, batchA), false);
+  // different session: 独立预算与独立批集合
+  eq('不同 session 互不影响', vault.shouldAnnounceDeadBatch('other-session', batchA), true);
 }
 
 // ---------------------------------------------------------------------------
@@ -891,6 +941,30 @@ async function probeEnvCards(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// g2. append-only 的形状：源码层面没有「请求侧改写句柄」的残留
+// ---------------------------------------------------------------------------
+
+function probeNoRequestRewrite(): void {
+  section('g2. 没有请求侧改写残留（append-only 铁律）');
+
+  const read = (relative: string): string => readFileSync(relative, 'utf8');
+  const core = read('packages/core/src/index.ts');
+  const notice = read('packages/core/src/pii/notice.ts');
+  const unit = read('packages/core/src/runtime/execution-unit.ts');
+  const guard = read('packages/core/src/runtime/prompt-prefix-guard.ts');
+
+  check('已作废的 pii-expired 标记全仓无残留', !notice.includes('pii-expired'));
+  check('core 导出里没有 pii-expired 相关符号', !core.includes('pii-expired'));
+  check('execution-unit 不再改写请求里的占位符', !unit.includes('markDeadHandles'));
+  check(
+    'PrefixChangeReason 里没有 PII 业务枚举（业务口径不该进前缀守卫）',
+    !guard.includes('pii_handle_expired'),
+  );
+  check('失效通知只走「追加一张 env 卡」', unit.includes('renderDeadReferencesNotice'));
+  check('store→请求是同一份字节（脱敏在 append 侧）', unit.includes('maskForAppend'));
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -906,6 +980,8 @@ async function main(): Promise<void> {
   await probeReveal();
   await probeCapacity();
   probeIdempotent();
+  probeNoticeDedup();
+  probeNoRequestRewrite();
   await probeEnvCards();
 
   console.log(`\n${passed} 项通过，${failures.length} 项失败`);

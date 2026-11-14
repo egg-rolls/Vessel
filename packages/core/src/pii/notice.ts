@@ -33,50 +33,59 @@ export interface PiiDeadReference {
   category?: PiiCategory;
 }
 
-const DEAD_REFERENCES_PREFIX: Record<PiiNoticeLocale, string> = {
-  en: 'pii: these placeholders are no longer resolvable (expired, unknown, or invalidated by a restart): ',
-  'zh-CN': 'pii: 以下占位符已无法解析（过期、未知，或运行时重启导致失效）：',
+const DEAD_REFERENCES_SUMMARY: Record<PiiNoticeLocale, string> = {
+  en: 'these references are no longer resolvable (expired, unknown, or invalidated by a restart).',
+  'zh-CN': '以下引用已无法解析（过期、未知，或运行时重启导致失效）。',
 };
 
-const DEAD_REFERENCES_SUFFIX: Record<PiiNoticeLocale, string> = {
+const DEAD_REFERENCES_NEXT_STEP: Record<PiiNoticeLocale, string> = {
   en:
-    '. Do not pass them to tools or external systems — re-fetch the source data to get a fresh placeholder, ' +
-    'or request pii.reveal (human approval) for the value.',
-  'zh-CN':
-    '。不要把它们传给工具或外部系统 —— 请先重新获取原始数据拿到新占位符，' +
-    '或用 pii.reveal（需人工审批）申请真值。',
+    'Re-fetch the source data for a fresh placeholder, or request pii.reveal (human approval) for the value.',
+  'zh-CN': '请重新获取原始数据拿到新占位符，或用 pii.reveal（需人工审批）申请真值。',
 };
 
 const DEAD_REFERENCES_OMITTED: Record<PiiNoticeLocale, (omitted: number) => string> = {
-  en: (omitted) => ` (+${omitted} more)`,
-  'zh-CN': (omitted) => `（另有 ${omitted} 个略）`,
+  en: (omitted) => `+${omitted} more`,
+  'zh-CN': (omitted) => `另有 ${omitted} 项`,
 };
 
 /**
- * 追加的「失效引用清单」env 卡：**只列占位符 id 与类别，不含真值**。
+ * 环境信息卡的**明细行线格式前缀**：两个空格 + `·`。
  *
- * 做成函数是因为要带上本批引用；文案里刻意不给真值/片段/长度，也不给原始位置。
- * 同一批 id 只宣告一次（去重在 vault 的 `claimUnannouncedDeadHandles`）。
+ * **必须**与 `packages/agent/src/env-info-scope.ts` 的 `ENV_INFO_DETAIL_MARK` 以及 Web
+ * 的 `apps/web/src/domains/chat/env-notice.ts` 的 `NOTICE_DETAIL_MARK` 逐字相同：对不上时
+ * 整条消息会被读成一整行（明细全挤进卡头的单行 ellipsis，展开区空着）。
+ *
+ * core 不能 import agent（依赖方向反了），所以这是一份**字面量副本**，
+ * 与 `plugins/context/doc-subscription` 里的副本同性质。
+ */
+export const PII_ENV_DETAIL_MARK = '  · ';
+
+/**
+ * 追加的「失效引用」**环境信息卡**正文（`vessel:notice`，Web 走 EnvCard 渲染族）。
+ *
+ * 形状与其它环境卡一致：首行 `pii: <摘要>`（scope 词决定卡头标签与折叠分组），
+ * 之后每行一条明细、以 {@link PII_ENV_DETAIL_MARK} 开头（Web 按 `\n` 拆行、剥掉明细前缀）。
+ * 明细条数受 `PII_DEAD_REFERENCE_LIST_LIMIT` 限制，超出先收口成「另有 N 项」，
+ * 再加一条「下一步」，整体不越过 Web 的明细上限，不会被静默截断。
+ *
+ * 每行明细**只列占位符 id 与类别**：没有真值、片段、长度，也不给原始位置。
+ * 同一批只公告一次（去重见 `PiiVault.shouldAnnounceDeadBatch`）。
  */
 export function renderDeadReferencesNotice(
   references: readonly PiiDeadReference[],
   locale: PiiNoticeLocale = 'en',
 ): string {
+  const describe = (reference: PiiDeadReference): string =>
+    reference.category === undefined
+      ? reference.handle
+      : `${reference.handle} (${reference.category})`;
   const shown = references.slice(0, PII_DEAD_REFERENCE_LIST_LIMIT);
   const omitted = references.length - shown.length;
-  const listed = shown
-    .map((reference) =>
-      reference.category === undefined
-        ? reference.handle
-        : `${reference.handle} (${reference.category})`,
-    )
-    .join(', ');
-  return (
-    DEAD_REFERENCES_PREFIX[locale] +
-    listed +
-    (omitted > 0 ? DEAD_REFERENCES_OMITTED[locale](omitted) : '') +
-    DEAD_REFERENCES_SUFFIX[locale]
-  );
+  const lines = shown.map((reference) => `${PII_ENV_DETAIL_MARK}${describe(reference)}`);
+  if (omitted > 0) lines.push(`${PII_ENV_DETAIL_MARK}${DEAD_REFERENCES_OMITTED[locale](omitted)}`);
+  lines.push(`${PII_ENV_DETAIL_MARK}${DEAD_REFERENCES_NEXT_STEP[locale]}`);
+  return [`pii: ${DEAD_REFERENCES_SUMMARY[locale]}`, ...lines].join('\n');
 }
 
 /**

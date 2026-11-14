@@ -20,6 +20,7 @@
 export {
   PII_CAPACITY_NOTICE,
   PII_DEAD_REFERENCE_LIST_LIMIT,
+  PII_ENV_DETAIL_MARK,
   PII_INVALIDATION_NOTICE,
   type PiiDeadReference,
   type PiiNoticeLocale,
@@ -68,10 +69,12 @@ export {
 export {
   getPiiVault,
   PII_HANDLE_TTL_MS,
-  PII_MAX_ANNOUNCED_HANDLES,
   PII_MAX_HANDLES_PER_SESSION,
+  PII_MAX_NOTIFIED_BATCHES,
   PII_MAX_SESSIONS,
   PII_MAX_TOMBSTONES,
+  PII_NOTICE_MIN_INTERVAL_MS,
+  piiDeadBatchHash,
   type PiiAuditEntry,
   type PiiProtectBatchResult,
   type PiiProtectResult,
