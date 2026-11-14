@@ -87,11 +87,7 @@ export function t(key: string, params?: Record<string, string | number>): string
  * 0.52 S1c：启动恢复卡片的文案要「同一份文本给用户和模型看」，
  * 而它会随日志/探针被两种语言各查一次，所以需要不带副作用的查表口。
  */
-export function tIn(
-  locale: Locale,
-  key: string,
-  params?: Record<string, string | number>,
-): string {
+export function tIn(locale: Locale, key: string, params?: Record<string, string | number>): string {
   const catalog = CATALOGS[locale] ?? CATALOGS['zh-CN'];
   const template = catalog[key] ?? zhCN[key as MessageKey] ?? key;
   return params ? interpolate(template, params) : template;

@@ -18,7 +18,10 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
+// 真 UI 解析器（web 的 EnvCard 就靠它把  认成一张卡片）
+import { envNoticeCard } from '../apps/web/src/domains/chat/env-notice';
+import { ENV_INFO_MESSAGE_NAME, ENV_INFO_SCOPES } from '../packages/agent/src/env-info-scope';
+import { AgentServiceImpl } from '../packages/agent/src/service';
 import {
   createResumeMarkerRegistry,
   createRunJournalFactory,
@@ -28,21 +31,17 @@ import {
   MemoryLLMProvider,
   MemorySessionStore,
   MemoryWorkingContext,
-  restartCardAdmitted,
-  restartInterruptedIso,
-  sameRestartMarker,
-  SessionEventLog,
   type Message,
   type ResumeAfterRestart,
+  restartCardAdmitted,
+  restartInterruptedIso,
+  SessionEventLog,
   type SessionEventRecord,
   type SessionState,
+  sameRestartMarker,
 } from '../packages/core/src/index';
-import { AgentServiceImpl } from '../packages/agent/src/service';
-import { ENV_INFO_MESSAGE_NAME, ENV_INFO_SCOPES } from '../packages/agent/src/env-info-scope';
-// 真 UI 解析器（web 的 EnvCard 就靠它把  认成一张卡片）
-import { envNoticeCard } from '../apps/web/src/domains/chat/env-notice';
-import { createNodeResumer, restartCardText } from '../src/node-resume';
 import type { Locale } from '../src/i18n/index';
+import { createNodeResumer, restartCardText } from '../src/node-resume';
 
 // ── 断言小工具（与其它 check 脚本同风格）──────────────────────────────────
 let passed = 0;
@@ -74,7 +73,7 @@ function baseState(sessionId: string): SessionState {
     messages: [],
     created_at: Date.now(),
     updated_at: Date.now(),
-  } as SessionState;
+  } as unknown as SessionState;
 }
 
 /** 与 `MemberRuntime` 里 `noticeMessage` 同形（0.52 S1c 给它加了可选 timestamp）。 */
@@ -116,11 +115,14 @@ async function makeHarness(memberIds: string[]): Promise<Harness> {
   const journalFactory = createRunJournalFactory({ session, resumeMarkers, eventLog });
   // 记录「谁写过 SessionState」：清标记必须走 RunJournal 单写口，探针要能看见这一笔。
   const spyTransient = journalFactory.transient.bind(journalFactory);
-  journalFactory.transient = (identity: { runId: string; sessionId: string }) => {
+  journalFactory.transient = (identity: Parameters<typeof spyTransient>[0]) => {
     const journal = spyTransient(identity as never);
     const original = journal.saveSessionState.bind(journal);
     journal.saveSessionState = async (state: SessionState) => {
-      journalSaves.push({ runId: identity.runId, sessionId: identity.sessionId });
+      journalSaves.push({
+        runId: identity.runId ?? 'manual',
+        sessionId: identity.sessionId ?? '',
+      });
       return original(state);
     };
     return journal;
@@ -155,7 +157,10 @@ async function makeHarness(memberIds: string[]): Promise<Harness> {
     eventLog,
     runtime: {
       spawn: async () => undefined,
-      runTurn: async (member: { id: string; session_id: string }, message: { content: unknown }) => {
+      runTurn: async (
+        member: { id: string; session_id: string },
+        message: { content: unknown },
+      ) => {
         // MemberRuntime.executeTurn 的契约：暂存 notice 作为注入消息，排在用户输入之前。
         const pending = notices.get(member.id) ?? [];
         notices.delete(member.id);
@@ -170,7 +175,9 @@ async function makeHarness(memberIds: string[]): Promise<Harness> {
       dispose: async () => undefined,
       notice: (memberId: string, text: string, options?: { timestamp?: number }) => {
         const bucket = notices.get(memberId) ?? [];
-        bucket.push(options?.timestamp === undefined ? { text } : { text, timestamp: options.timestamp });
+        bucket.push(
+          options?.timestamp === undefined ? { text } : { text, timestamp: options.timestamp },
+        );
         notices.set(memberId, bucket);
       },
     } as never,
@@ -191,7 +198,7 @@ async function makeHarness(memberIds: string[]): Promise<Harness> {
       sizeOf: () => 0,
     } as never,
   } as never);
-  await service.ready;
+  await (service as unknown as { ready: Promise<void> }).ready;
 
   const sessionIds = new Map<string, string>();
   for (const memberId of memberIds) {
@@ -337,7 +344,7 @@ function cardMessageOf(
   state: SessionState | undefined,
   marker: RestartCardKeyLike,
 ): Message | undefined {
-  return state?.messages.find((message) => isRestartCardMessage(message, marker));
+  return (state?.messages ?? []).find((message) => isRestartCardMessage(message, marker));
 }
 
 // ── 探针 1（a · b · c）：两张卡、无标记零卡、卡是正常可见消息 ─────────────
@@ -395,10 +402,10 @@ async function probeAnnounce(): Promise<void> {
     events1.some(
       (record) =>
         record.type === 'message.injected' &&
-        isRestartCardMessage(
-          (record.data as { message?: Message }).message as Message,
-          { run_id: 'run_a1', interrupted_at: INTERRUPTED_AT },
-        ),
+        isRestartCardMessage((record.data as { message?: Message }).message as Message, {
+          run_id: 'run_a1',
+          interrupted_at: INTERRUPTED_AT,
+        }),
     ),
   );
   const cardText = typeof card?.content === 'string' ? card.content : '';
@@ -412,7 +419,11 @@ async function probeAnnounce(): Promise<void> {
   check('a. 卡文案含被打断的 run_id', cardText.includes('run_a1'));
   // 用**真 UI 解析器**读这张卡：它是 web 渲染 EnvCard 的那一段代码，不是探针自造的判断。
   const uiCard = envNoticeCard(cardText);
-  check('c. web 的 EnvCard 解析器认出这是一张 restart 卡', uiCard?.scope === 'restart', uiCard?.scope);
+  check(
+    'c. web 的 EnvCard 解析器认出这是一张 restart 卡',
+    uiCard?.scope === 'restart',
+    uiCard?.scope,
+  );
   check(
     'c. 解析出来的明细行与文案一一对应（不是挤进卡头的单行）',
     (uiCard?.lines.length ?? 0) >= 4,
@@ -425,7 +436,10 @@ async function probeAnnounce(): Promise<void> {
   );
   check('a. 卡文案含「先核对再继续」的指令', /check the current state|先核对现状/.test(cardText));
   check('a. 卡文案提到后台进程已停', /background processes were stopped|后台进程/.test(cardText));
-  check('a. 卡首行首 token 是 restart（web 用它选卡头 scope）', /^restart:|^restart\b/.test(cardText));
+  check(
+    'a. 卡首行首 token 是 restart（web 用它选卡头 scope）',
+    /^restart:|^restart\b/.test(cardText),
+  );
   check('a. 准入后标记已清', final.cleared.includes(s1), final.cleared);
 }
 
@@ -435,7 +449,11 @@ async function probeOrdering(): Promise<void> {
   const harness = await makeHarness(['main', 'worker']);
   const sessionId = harness.sessionIdOf('worker');
   const inputId = await queueHumanInput(harness, 'worker', '重启前就被接受的输入');
-  await seedMarker(harness, sessionId, markerOf('run_d1', [inputId], { interruptedAt: INTERRUPTED_AT + 1 }));
+  await seedMarker(
+    harness,
+    sessionId,
+    markerOf('run_d1', [inputId], { interruptedAt: INTERRUPTED_AT + 1 }),
+  );
 
   const resumer = resumerFor(harness);
   await resumer.beginResume();
@@ -459,10 +477,10 @@ async function probeOrdering(): Promise<void> {
   );
 
   const state = await harness.stateOf(sessionId);
-  const cardIndex = state?.messages.findIndex((message) =>
+  const cardIndex = (state?.messages ?? []).findIndex((message) =>
     isRestartCardMessage(message, { run_id: 'run_d1', interrupted_at: INTERRUPTED_AT + 1 }),
   );
-  const userIndex = state?.messages.findIndex((message) => {
+  const userIndex = (state?.messages ?? []).findIndex((message) => {
     if (message.name === 'vessel:notice') return false;
     const content = typeof message.content === 'string' ? message.content : '';
     return content.includes('重启前就被接受的输入');
@@ -472,7 +490,10 @@ async function probeOrdering(): Promise<void> {
     cardIndex !== undefined && userIndex !== undefined && cardIndex >= 0 && cardIndex < userIndex,
     { cardIndex, userIndex },
   );
-  const cardMessage = cardMessageOf(state, { run_id: 'run_d1', interrupted_at: INTERRUPTED_AT + 1 });
+  const cardMessage = cardMessageOf(state, {
+    run_id: 'run_d1',
+    interrupted_at: INTERRUPTED_AT + 1,
+  });
   const cardTs = typeof cardMessage?.timestamp === 'number' ? cardMessage.timestamp : -1;
   check(
     'd. 卡的时间戳是「产生时刻」（早于此后被放行的 run 也不算未来）',
@@ -509,11 +530,18 @@ async function probeAdmissionGate(): Promise<void> {
   const report = await second.beginResume();
   const stalled = await second.whenSettled();
   const afterStall = await harness.stateOf(stalledSession);
-  check('e. 未准入（没有 run）⇒ 标记仍在，不读完就删', afterStall?.resume_after_restart !== undefined);
-  check('e. 报告里记为 kept', report.marks.some((mark) => mark.marker === 'kept') || stalled.settle === 'timeout', {
-    settle: stalled.settle,
-    marks: report.marks,
-  });
+  check(
+    'e. 未准入（没有 run）⇒ 标记仍在，不读完就删',
+    afterStall?.resume_after_restart !== undefined,
+  );
+  check(
+    'e. 报告里记为 kept',
+    report.marks.some((mark) => mark.marker === 'kept') || stalled.settle === 'timeout',
+    {
+      settle: stalled.settle,
+      marks: report.marks,
+    },
+  );
   const stalledEvents = await harness.eventsOf(stalledSession);
   check(
     'e. 未准入时事件流里没有卡的注入记录',
@@ -534,7 +562,10 @@ async function probeIdempotent(): Promise<void> {
   const first = resumerFor(harness);
   await first.beginResume();
   await first.whenSettled();
-  check('f. 第一次启动后标记已清', (await harness.stateOf(sessionId))?.resume_after_restart === undefined);
+  check(
+    'f. 第一次启动后标记已清',
+    (await harness.stateOf(sessionId))?.resume_after_restart === undefined,
+  );
 
   // 「刚清完又崩一次没清成」：把同一份标记写回去，模拟进程在清之前死掉
   await seedMarker(harness, sessionId, marker);
@@ -550,7 +581,10 @@ async function probeIdempotent(): Promise<void> {
     cardsOf(events, { run_id: 'run_f1', interrupted_at: INTERRUPTED_AT }),
   );
   check('f. 报告里记为 deduped', report.deduped === 1, report.deduped);
-  check('f. 已发过的那张卡直接补判定并清标记', (await harness.stateOf(sessionId))?.resume_after_restart === undefined);
+  check(
+    'f. 已发过的那张卡直接补判定并清标记',
+    (await harness.stateOf(sessionId))?.resume_after_restart === undefined,
+  );
   check(
     'f. 清标记走的是 RunJournal 单写口（manual 那一笔 SessionState 落盘）',
     harness.journalSaves.some((save) => save.runId === 'manual' && save.sessionId === sessionId),
@@ -581,8 +615,10 @@ async function probeReplayCount(): Promise<void> {
   check('g. 重放覆盖两个会话', report.replayed_sessions === 2, report.replayed_sessions);
   check(
     'g. 两个会话各自的已接受输入都被吃掉了',
-    (await harness.service.inboxSnapshot('worker-a', { includeHeld: false })).entries.length === 0 &&
-      (await harness.service.inboxSnapshot('worker-b', { includeHeld: false })).entries.length === 0,
+    (await harness.service.inboxSnapshot('worker-a', { includeHeld: false })).entries.length ===
+      0 &&
+      (await harness.service.inboxSnapshot('worker-b', { includeHeld: false })).entries.length ===
+        0,
   );
   const retry = await harness.service.recoverPendingInputs();
   check('g. 重放是幂等的：再扫一次没有可重放的', retry.recovered === 0, retry.recovered);
@@ -602,7 +638,10 @@ async function probeText(): Promise<void> {
   ] as const) {
     check(`${locale}: 含 run_id`, text.includes('run_i18n'));
     check(`${locale}: 含 ISO 时刻`, text.includes(iso));
-    check(`${locale}: 首行 scope token 是 restart`, text.split('\n')[0].startsWith('restart'));
+    check(
+      `${locale}: 首行 scope token 是 restart`,
+      (text.split('\n')[0] ?? '').startsWith('restart'),
+    );
     check(`${locale}: 含「先核对再继续」`, /check the current state|先核对现状/.test(text));
     check(`${locale}: 含后台进程已停`, /background processes were stopped|后台进程/.test(text));
     check(`${locale}: 含排在后面的已接受输入条数`, text.includes('2'));
@@ -623,7 +662,11 @@ async function probeText(): Promise<void> {
   const state = await harness.stateOf(sessionId);
   const card = cardMessageOf(state, { run_id: 'run_i18n2', interrupted_at: INTERRUPTED_AT + 4 });
   const body = typeof card?.content === 'string' ? card.content : '';
-  check('同一份文本：落进会话流的正文与模板一致（模型侧读的就是它）', body === restartCardText(marked, { pending_inputs: 1 }, 'zh-CN'), body.slice(0, 40));
+  check(
+    '同一份文本：落进会话流的正文与模板一致（模型侧读的就是它）',
+    body === restartCardText(marked, { pending_inputs: 1 }, 'zh-CN'),
+    body.slice(0, 40),
+  );
 }
 
 // ── main ─────────────────────────────────────────────────────────────────

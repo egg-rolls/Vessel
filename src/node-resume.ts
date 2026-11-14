@@ -25,18 +25,18 @@
  * @module vessel/node-resume
  */
 
+import { formatEnvInfo } from '../packages/agent/src/env-info-scope.js';
 import {
   findRestartCardRecord,
-  restartCardAdmitted,
-  restartCandidates,
-  restartInterruptedIso,
-  type RestartCardKey,
   type RestartCandidate,
+  type RestartCardKey,
+  restartCandidates,
+  restartCardAdmitted,
+  restartInterruptedIso,
 } from '../packages/core/src/index.js';
 import type { SessionEventRecord } from '../packages/core/src/types/event.js';
 import type { SessionState, SessionStore } from '../packages/core/src/types/session.js';
-import { formatEnvInfo } from '../packages/agent/src/env-info-scope.js';
-import { getLocale, tIn, type Locale } from './i18n/index.js';
+import { getLocale, type Locale, tIn } from './i18n/index.js';
 
 /** 等「准入」的预算（毫秒）：启动阶段不该为此久等，超时就留标记给下次启动。 */
 export const NODE_RESUME_SETTLE_MS = 10_000;
@@ -63,7 +63,10 @@ export interface NodeResumeSources {
   session: Pick<SessionStore, 'list' | 'load'>;
   /** 会话事件日志；只读（卡片发没发过 / 有没有进过请求，都看它） */
   eventLog: {
-    read(sessionId: string, opts?: { sinceSeq?: number; limit?: number }): Promise<SessionEventRecord[]>;
+    read(
+      sessionId: string,
+      opts?: { sinceSeq?: number; limit?: number },
+    ): Promise<SessionEventRecord[]>;
   };
   /**
    * 发卡：把这条文本排进该会话的下一次请求（用户输入之前）。
@@ -286,7 +289,9 @@ export function createNodeResumer(sources: NodeResumeSources): NodeResumer {
     if (waiting.length === 0) {
       return {
         ...report,
-        cleared: report.marks.filter((mark) => mark.marker === 'cleared').map((mark) => mark.session_id),
+        cleared: report.marks
+          .filter((mark) => mark.marker === 'cleared')
+          .map((mark) => mark.session_id),
         settle: 'idle',
       };
     }
@@ -326,7 +331,9 @@ export function createNodeResumer(sources: NodeResumeSources): NodeResumer {
     for (const mark of pending) mark.marker = 'kept';
     return {
       ...report,
-      cleared: report.marks.filter((mark) => mark.marker === 'cleared').map((mark) => mark.session_id),
+      cleared: report.marks
+        .filter((mark) => mark.marker === 'cleared')
+        .map((mark) => mark.session_id),
       settle: outcome,
     };
   }

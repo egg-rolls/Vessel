@@ -115,10 +115,10 @@ export {
   isRestartCardMessage,
   RESTART_CARD_SENDER,
   type RestartCandidate,
-  restartCardAdmitted,
   type RestartCardKey,
-  restartCardKey,
   restartCandidates,
+  restartCardAdmitted,
+  restartCardKey,
   restartInterruptedIso,
   sameRestartMarker,
 } from './runtime/resume-recovery.js';

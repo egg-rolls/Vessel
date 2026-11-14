@@ -17,8 +17,8 @@
  * @module @vessel-agent/core/runtime
  */
 
-import type { Message } from '../types/provider.js';
 import type { SessionEventRecord } from '../types/event.js';
+import type { Message } from '../types/provider.js';
 import type { ResumeAfterRestart, SessionState } from '../types/session.js';
 
 /** 卡片注入用的 notice 消息发送者（与其它环境信息同一条通道，见 env-info-scope）。 */
@@ -41,7 +41,9 @@ export function restartInterruptedIso(marker: RestartCardKey): string {
 }
 
 function messageTextOf(message: Message): string {
-  const content = message.content;
+  // 内容可能是字符串，也可能是 content-part 数组（历史/多模态）。先按 unknown 收窄，
+  // 否则 Array.isArray 作用在声明为 string 的字段上会被 TS 窄化成 never。
+  const content: unknown = message.content;
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   return content
@@ -125,7 +127,8 @@ export function restartCandidates(states: readonly SessionState[]): RestartCandi
     const marker = state.resume_after_restart;
     if (marker === undefined) continue;
     if (typeof marker.run_id !== 'string' || marker.run_id === '') continue;
-    if (typeof marker.interrupted_at !== 'number' || !Number.isFinite(marker.interrupted_at)) continue;
+    if (typeof marker.interrupted_at !== 'number' || !Number.isFinite(marker.interrupted_at))
+      continue;
     candidates.push({ session_id: state.session_id, marker });
   }
   return candidates;
