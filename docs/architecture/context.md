@@ -1,7 +1,7 @@
 ---
 title: 上下文与消息注入
 kind: current
-triggers: [context, message, injection, compaction, system prompt, self card, vessel:source, notice, token, prefix, history]
+triggers: [context, message, injection, compaction, system prompt, self card, vessel:source, notice, token, prefix, history, 上下文, 消息注入, 前缀缓存, 压缩, 系统提示词, 环境块]
 paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.ts, packages/core/src/session/project-messages.ts, packages/agent/src/runtime.ts, packages/agent/src/self-card-delta.ts, src/runtime-notice-hook.ts, src/agent-owner-injection.ts, plugins/context/doc-subscription/**]
 ---
 

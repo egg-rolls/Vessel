@@ -1,7 +1,7 @@
 ---
 title: 消息不变量（可见性对等 / 请求 append-only）
 kind: current
-triggers: [message, append-only, prefix, cache, pii, mask, redact, handle, visibility, symmetry, session, transcript, request, prompt]
+triggers: [message, append-only, prefix, cache, pii, mask, redact, handle, visibility, symmetry, session, transcript, request, prompt, 消息不变量, 可见性对等, 可见性, 前缀缓存, 提示词缓存, 追加写, 脱敏, 系统提示词]
 paths: [docs/architecture/message-invariants.md]
 ---
 
