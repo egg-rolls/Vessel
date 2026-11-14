@@ -55,7 +55,7 @@ Vessel 不试图做一个「更聪明的单体 Agent」，也不做多客户 Saa
 9. **请求消息列表 append-only。** 发给模型的 messages 只能追加，**不许修改中间任何一条**——
    改写中间内容会让从该点往后的 prefix 全部失效，提示词缓存命中率被打掉，长会话代价极高。
    因此「引用已失效」这类状态变化只能**追加一条环境信息消息**来表达，不许回改历史。
-   见 [architecture/message-invariants](../architecture/message-invariants.md)。
+   见 [architecture/message-invariants](architecture/message-invariants.md)。
 
 ## 3. 概念模型
 
