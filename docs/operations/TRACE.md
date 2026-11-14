@@ -1,3 +1,10 @@
+---
+title: Trace 留存与隐私
+kind: current
+triggers: [trace, 追踪, 事件落盘, 事件日志, 留存, 保留期, 隐私, 脱敏, 重放, 级别, jsonl]
+paths: [docs/operations/TRACE.md]
+---
+
 # Trace 留存与隐私
 
 > 适用版本：0.5+。维护者：`gov`。

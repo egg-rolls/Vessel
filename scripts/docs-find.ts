@@ -11,6 +11,9 @@
  *
  * 发现：排除 INDEX.md（INDEX 只做导航，不参与检索）。
  * 打分：paths glob 命中 +5（每模块一次）、trigger 每命中 +1、title 命中 +2（每模块一次）。
+ * 排序：分数 → paths 命中 → trigger 命中数 → title → glob 具体度 → 文档类型权重 → 路径字典序。
+ * 类型权重由「目录类别 + frontmatter 的 kind / status」推出（见 docTypeWeight），同分时
+ * 不再按文件体积排序 —— 体积不是相关性，长的现态总览不该被短的历史文档永久压后。
  * 退出码：0 有命中；1 无命中（调用方必须回落 AGENTS.md 硬规则）；2 参数 / 目录错误。
  *
  * 输出 `path` 可直接从 cwd 打开：个人侧文档按 personal base 距 root 的层数加 `../` 前缀。
@@ -67,7 +70,17 @@ export interface DocsFindResult {
 interface ModuleDoc {
   path: string;
   title: string;
+  /** 展示用的 kind：兜底模块一律合成 `current`，保持输出稳定。 */
   kind: string;
+  /**
+   * frontmatter 里**显式**写出的 kind；ADR 没有 kind 字段，根文档 / versions 没有
+   * frontmatter，落在这里都是 undefined。类型权重只信显式声明，不信合成值。
+   */
+  declaredKind?: string;
+  /** frontmatter 的 `status`（ADR 用 accepted / proposed / superseded）。 */
+  status?: string;
+  /** 文档类别：只由「哪一侧的哪个目录」决定，供同分排序用。 */
+  category: DocCategory;
   triggers: string[];
   paths: string[];
   text: string;
@@ -229,11 +242,85 @@ function resolveDocDirs(root: string): DocDir[] {
   return dirs;
 }
 
+/**
+ * 文档类别：只由「共享侧 / 个人侧」+「所在目录」决定，不看文件名。
+ *
+ * 分层依据 docs/DOC-MANAGEMENT.md 的阅读顺序：现态（architecture / agents）→ 决策溯源
+ * （adr / versions）→ 运维细节（operations）；个人侧（constitution / lessons / roles）
+ * 是跨项目复用的方法与经验，单列一类。
+ */
+type DocCategory = 'architecture' | 'adr' | 'operations' | 'version' | 'root' | 'personal';
+
+/** 没有显式 kind（根文档 / versions / 老 ADR）或 status 不明时的中性基准。 */
+const NEUTRAL_WEIGHT = 16;
+
+/** frontmatter `kind` 的权重：current 描述「现在是什么」，是检索的第一权威。 */
+const KIND_WEIGHT: Record<string, number> = {
+  current: 30,
+  advisory: 26, // 约定与建议：有约束力，但不是现状事实
+  target: 22, // 目标态：意图，尚未落地
+};
+
+/** ADR 用 `status` 而不是 `kind` 定权：已被取代的决策最该沉底。 */
+const ADR_STATUS_WEIGHT: Record<string, number> = {
+  accepted: 24,
+  proposed: 16,
+  superseded: 4,
+};
+
+/**
+ * 目录类别加成：同一个 kind 内按「现态架构 > 运维手册 > 规则/决策 > 时间线」分层，
+ * 与 docs/DOC-MANAGEMENT.md 的阅读顺序一致。数值只是排序刻度，不参与命中分数。
+ */
+const CATEGORY_BONUS: Record<DocCategory, number> = {
+  architecture: 6, // docs/architecture、docs/agents：现态与约定的常青文本
+  operations: 3, // docs/operations：按主题查时该紧跟在架构之后
+  personal: 2, // constitution / lessons / roles：规则与方法论
+  adr: 2, // docs/adr：解释「为什么」，具体现状仍以架构为准
+  root: 0, // 根文档：杂项入口
+  version: -8, // docs/versions：版本时间线，只做回溯旁证
+};
+
+function classifyDoc(displayBase: string, relativeDir: string): DocCategory {
+  if (displayBase !== '') return 'personal';
+  switch (normalizePath(relativeDir)) {
+    case 'docs/architecture':
+    case 'docs/agents':
+      return 'architecture';
+    case 'docs/adr':
+      return 'adr';
+    case 'docs/operations':
+      return 'operations';
+    case 'docs/versions':
+      return 'version';
+    default:
+      return 'root';
+  }
+}
+
+/**
+ * 同分排序用的文档类型权重：数值只由「目录类别 + frontmatter 的 kind / status」推出，
+ * 对任何具体文件名都不特判。高者先出，只有权重也相同才继续用命中细节和路径字典序。
+ *
+ * 旧规则在同分处用 estTokens 升序（越短越靠前），于是 6.4k 的现态总览在「team member
+ * 分工」这类查询里被几百 tok 的历史 ADR 挤到后面 —— 体积不是相关性，已移除。
+ */
+function docTypeWeight(module: ModuleDoc): number {
+  const bonus = CATEGORY_BONUS[module.category];
+  if (module.category === 'adr') {
+    const status = (module.status ?? '').toLowerCase();
+    return (ADR_STATUS_WEIGHT[status] ?? NEUTRAL_WEIGHT) + bonus;
+  }
+  const declared = module.declaredKind?.toLowerCase();
+  return (declared ? (KIND_WEIGHT[declared] ?? NEUTRAL_WEIGHT) : NEUTRAL_WEIGHT) + bonus;
+}
+
 function fallbackModule(
   relative: string,
   file: string,
   text: string,
   frontmatter: Record<string, string> | null,
+  category: DocCategory,
 ): ModuleDoc {
   const heading = /^#{1,6}\s+(.+?)\s*$/m.exec(text)?.[1]?.trim();
   const title = frontmatter?.title ?? heading ?? file.replace(/\.md$/, '');
@@ -247,6 +334,10 @@ function fallbackModule(
     path: relative,
     title,
     kind: 'current',
+    // 兜底模块的 kind 是合成的，只用于展示；类型权重只认 frontmatter 里显式写的值。
+    declaredKind: frontmatter?.kind,
+    status: frontmatter?.status,
+    category,
     triggers,
     paths: [relative],
     text,
@@ -264,13 +355,14 @@ async function loadModules(dirs: DocDir[]): Promise<LoadResult> {
       const files = await readdir(full);
       const markdown = files.filter((file) => file.endsWith('.md') && file !== 'INDEX.md').sort();
       const fallback = dir.base !== undefined && fallbackDirs.has(relativeDir);
+      const category = classifyDoc(dir.displayBase, relativeDir);
       for (const file of markdown) {
         const relative = `${dir.displayBase}${relativeDir}/${file}`;
         const text = await readFile(join(full, file), 'utf8');
         const frontmatter = parseFrontmatter(text);
         if (!frontmatter) {
           if (fallback) {
-            modules.push(fallbackModule(relative, file, text, null));
+            modules.push(fallbackModule(relative, file, text, null, category));
             continue;
           }
           warnings.push(`${relative}: 缺少合法 frontmatter，跳过`);
@@ -280,7 +372,7 @@ async function loadModules(dirs: DocDir[]): Promise<LoadResult> {
         const paths = parseStringArray(frontmatter.paths ?? '');
         if (!frontmatter.title || !frontmatter.kind || !triggers || !paths) {
           if (fallback) {
-            modules.push(fallbackModule(relative, file, text, frontmatter));
+            modules.push(fallbackModule(relative, file, text, frontmatter, category));
             continue;
           }
           warnings.push(`${relative}: frontmatter 字段不完整，跳过`);
@@ -290,6 +382,9 @@ async function loadModules(dirs: DocDir[]): Promise<LoadResult> {
           path: relative,
           title: frontmatter.title,
           kind: frontmatter.kind,
+          declaredKind: frontmatter.kind,
+          status: frontmatter.status,
+          category,
           triggers,
           paths,
           text,
@@ -347,27 +442,36 @@ function scoreModule(
   };
 }
 
-function compareResults(left: DocsFindResult, right: DocsFindResult): number {
-  if (right.score !== left.score) return right.score - left.score;
-  const leftPath = left.why.some((item) => item.startsWith('path:')) ? 1 : 0;
-  const rightPath = right.why.some((item) => item.startsWith('path:')) ? 1 : 0;
+/** 排序用包装：DocsFindResult 保持 JSON 契约不变，类型权重只在内部参与比较。 */
+interface ScoredModule {
+  result: DocsFindResult;
+  /** 文档类型权重，同分时先比它（大者先出）；见 docTypeWeight。 */
+  weight: number;
+}
+
+function compareResults(left: ScoredModule, right: ScoredModule): number {
+  if (right.result.score !== left.result.score) return right.result.score - left.result.score;
+  const leftPath = left.result.why.some((item) => item.startsWith('path:')) ? 1 : 0;
+  const rightPath = right.result.why.some((item) => item.startsWith('path:')) ? 1 : 0;
   if (rightPath !== leftPath) return rightPath - leftPath;
-  const leftTriggers = left.why.filter((item) => item.startsWith('trigger:')).length;
-  const rightTriggers = right.why.filter((item) => item.startsWith('trigger:')).length;
+  const leftTriggers = left.result.why.filter((item) => item.startsWith('trigger:')).length;
+  const rightTriggers = right.result.why.filter((item) => item.startsWith('trigger:')).length;
   if (rightTriggers !== leftTriggers) return rightTriggers - leftTriggers;
-  const leftTitle = left.why.includes('title') ? 1 : 0;
-  const rightTitle = right.why.includes('title') ? 1 : 0;
+  const leftTitle = left.result.why.includes('title') ? 1 : 0;
+  const rightTitle = right.result.why.includes('title') ? 1 : 0;
   if (rightTitle !== leftTitle) return rightTitle - leftTitle;
   // 更具体的 glob 优先（长度作为代理），避免 packages/** 压过精确模块。
   const pathLength = (result: DocsFindResult): number =>
     result.why
       .filter((item) => item.startsWith('path:'))
       .reduce((max, item) => Math.max(max, item.length), 0);
-  const leftPathLength = pathLength(left);
-  const rightPathLength = pathLength(right);
+  const leftPathLength = pathLength(left.result);
+  const rightPathLength = pathLength(right.result);
   if (rightPathLength !== leftPathLength) return rightPathLength - leftPathLength;
-  if (left.estTokens !== right.estTokens) return left.estTokens - right.estTokens;
-  return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
+  // 命中细节都相同时看文档类型（现态 > 决策/规则 > 时间线），不按体积排。
+  if (right.weight !== left.weight) return right.weight - left.weight;
+  // 最后才用路径字典序兜底：同一输入永远得到同一顺序。
+  return left.result.path < right.result.path ? -1 : left.result.path > right.result.path ? 1 : 0;
 }
 
 function formatHuman(results: DocsFindResult[], fallback: boolean): string {
@@ -474,10 +578,14 @@ export async function runDocsFind(argv: string[], defaultRoot = process.cwd()): 
   const tokens = new Set(tokenize(goals.join(' ')));
   const options: DocsFindOptions = { goals, paths, triggers, limit, root, json };
   const results = modules
-    .map((module) => scoreModule(module, options, tokens, goalLower))
-    .filter((result) => result.score > 0)
+    .map((module) => ({
+      result: scoreModule(module, options, tokens, goalLower),
+      weight: docTypeWeight(module),
+    }))
+    .filter((item) => item.result.score > 0)
     .sort(compareResults)
-    .slice(0, limit);
+    .slice(0, limit)
+    .map((item) => item.result);
 
   const fallback = results.length === 0;
   if (json) {

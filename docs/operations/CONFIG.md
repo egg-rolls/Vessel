@@ -1,3 +1,10 @@
+---
+title: 配置与密钥
+kind: current
+triggers: [配置, 配置项, 配置文件, 配置优先级, 密钥, 令牌, 环境变量, 用户级配置, 项目级配置, 默认值, vessel.yaml, 数据目录, 覆盖, secrets]
+paths: [docs/operations/CONFIG.md]
+---
+
 # 配置与密钥
 
 > **Reference（>300 行）**：按需检索，不要求整读；配置语义的当前事实以

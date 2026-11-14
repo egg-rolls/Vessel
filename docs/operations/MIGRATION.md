@@ -1,3 +1,10 @@
+---
+title: 迁移指南
+kind: current
+triggers: [迁移, 数据迁移, 升级, 迁移命令, sqlite, file-v1, file-v2, 存储布局, 会话库, 旧数据, legacy, 干跑, apply]
+paths: [docs/operations/MIGRATION.md]
+---
+
 # 迁移指南（sqlite / file-v1 → file-v2）
 
 > 适用版本：0.5+。维护者：`gov`。

@@ -1,3 +1,10 @@
+---
+title: 跨机器远程运维
+kind: current
+triggers: [远程, 远程运维, 远程访问, 跨机器, 多机部署, 证书, CA, TLS, 令牌, 非回环, 安全边界, hub, 联邦, 出站]
+paths: [docs/operations/REMOTE.md]
+---
+
 # 跨机器远程运维
 
 > 状态：Platform Gateway / Node API 拆分、本地多 Node 与 Hub 出站加入均已实现并合入主线；
