@@ -1268,7 +1268,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       events: runtimeEvents,
       tenantId,
     });
-    registerRuntimeNoticeHook(finalPluginHost, noticeBus);
+    registerRuntimeNoticeHook(finalPluginHost, noticeBus, eventLog);
     // 0.52：附件引用的环境信息行（模型据此知道有附件、该用 media 工具读）。
     registerRefsNoticeHook(finalPluginHost);
     peerNotices = createPeerNoticeRouter({

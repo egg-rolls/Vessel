@@ -60,12 +60,25 @@ export interface StoredNotice {
    * session 会把它消费掉（游标按 session 各自推进）。
    */
   to?: string;
+  /**
+   * 结构化的补充信息，**不进契约 payload**（`broadcast` 只发 `{...notice}`），
+   * 只供注入时落一条 `runtime.notice.injected` 事件用（事后诊断「谁停了」）。
+   */
+  meta?: RuntimeNoticeMeta;
+}
+
+/** 通知涉及的结构化信息（不进契约 §3 的 payload，只进注入事件）。 */
+export interface RuntimeNoticeMeta {
+  /** 成员停下：本次合并涉及的成员与结局（`name` + `kind`）。 */
+  members?: { name: string; kind: string }[];
 }
 
 /** `publish` 的可选投递范围（总线内部语义，不进事件 payload）。 */
 export interface RuntimeNoticeTarget {
   /** session id；只注入该 session。缺省 = 广播给所有 session 的下一轮。 */
   to?: string;
+  /** 见 `StoredNotice.meta`。 */
+  meta?: RuntimeNoticeMeta;
 }
 
 export interface RuntimeNoticeBusOptions {
@@ -97,6 +110,20 @@ function trimTo(value: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/** 裁剪 `meta`（防御调用方传半成品）：没有成员信息就整条丢掉，绝不落空对象。 */
+function normalizeMeta(meta: RuntimeNoticeMeta | undefined): RuntimeNoticeMeta | undefined {
+  const members = (meta?.members ?? []).filter(
+    (member) => typeof member.name === 'string' && member.name !== '',
+  );
+  if (members.length === 0) return undefined;
+  return {
+    members: members.slice(0, NOTICE_DETAILS_MAX).map((member) => ({
+      name: trimTo(member.name, NOTICE_SUMMARY_MAX),
+      kind: trimTo(typeof member.kind === 'string' ? member.kind : '', NOTICE_SUMMARY_MAX),
+    })),
+  };
+}
+
 export interface RuntimeNoticeBus {
   /**
    * 入队 + 可选广播；返回入队后的通知 id。
@@ -110,6 +137,12 @@ export interface RuntimeNoticeBus {
    * 不传 sessionId 时用 `_` 作为匿名游标。定向给别的 session 的通知不取。
    */
   take(sessionId: string | undefined, limit?: number): RuntimeNotice[];
+  /**
+   * `take` 的完整版：同时返回 id / `meta`（定向注入那一刻要落事件，需要这两个）。
+   *
+   * 游标语义与 `take` 完全一致（两者共用同一实现），只是返回粒度更细。
+   */
+  takeStored(sessionId: string | undefined, limit?: number): StoredNotice[];
   /** 已入队通知的只读快照（诊断 / 测试） */
   recent(): StoredNotice[];
 }
@@ -136,6 +169,28 @@ export function createRuntimeNoticeBus(options: RuntimeNoticeBusOptions = {}): R
     }
   };
 
+  /**
+   * 取该 session 未消费的通知（`take` / `takeStored` 的唯一实现，保证两者游标语义一致）。
+   */
+  const takeEntries = (sessionId: string | undefined, limit: number): StoredNotice[] => {
+    const key = sessionId !== undefined && sessionId !== '' ? sessionId : '_';
+    const cursor = cursors.get(key) ?? 0;
+    // 定向给别的 session 的通知对本 session 不可见（它们各自的游标仍小于该 id，
+    // 仍会在目标 session 的下一轮命中）。
+    const pending = retained.filter(
+      (entry) => entry.id > cursor && (entry.to === undefined || entry.to === key),
+    );
+    if (pending.length === 0) return [];
+    const selected = pending.slice(0, Math.max(0, limit));
+    // 游标只推进到**已取出**的最后一条：达到 limit 时剩下的留到下一轮。
+    const last = selected[selected.length - 1];
+    if (last !== undefined) {
+      cursors.set(key, last.id);
+      trimCursors(cursors);
+    }
+    return selected;
+  };
+
   return {
     publish(input, target) {
       const notice = normalizeNotice(input);
@@ -143,7 +198,14 @@ export function createRuntimeNoticeBus(options: RuntimeNoticeBusOptions = {}): R
       const id = nextId;
       nextId += 1;
       const to = target?.to;
-      retained.push({ id, notice, ts, ...(to !== undefined ? { to } : {}) });
+      const meta = normalizeMeta(target?.meta);
+      retained.push({
+        id,
+        notice,
+        ts,
+        ...(to !== undefined ? { to } : {}),
+        ...(meta !== undefined ? { meta } : {}),
+      });
       // 环形裁剪：只保留最近 N 条；同时把游标推进到裁剪后的最小 id 之前，
       // 避免游标落后于缓冲窗口时把旧通知反复当成「未读」。
       if (retained.length > MAX_RETAINED_NOTICES) {
@@ -154,22 +216,11 @@ export function createRuntimeNoticeBus(options: RuntimeNoticeBusOptions = {}): R
     },
 
     take(sessionId, limit = 5) {
-      const key = sessionId !== undefined && sessionId !== '' ? sessionId : '_';
-      const cursor = cursors.get(key) ?? 0;
-      // 定向给别的 session 的通知对本 session 不可见（它们各自的游标仍小于该 id，
-      // 仍会在目标 session 的下一轮命中）。
-      const pending = retained.filter(
-        (entry) => entry.id > cursor && (entry.to === undefined || entry.to === key),
-      );
-      if (pending.length === 0) return [];
-      const selected = pending.slice(0, Math.max(0, limit));
-      // 游标只推进到**已取出**的最后一条：达到 limit 时剩下的留到下一轮。
-      const last = selected[selected.length - 1];
-      if (last !== undefined) {
-        cursors.set(key, last.id);
-        trimCursors(cursors);
-      }
-      return selected.map((entry) => entry.notice);
+      return takeEntries(sessionId, limit).map((entry) => entry.notice);
+    },
+
+    takeStored(sessionId, limit = 5) {
+      return takeEntries(sessionId, limit);
     },
 
     recent() {
