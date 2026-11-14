@@ -474,11 +474,11 @@ async function main(): Promise<void> {
       h.store.logs.length === 1,
       String(h.store.logs.length),
     );
+    const failedLogContent = h.store.logs[0]?.content;
     check(
       'c. 失败日志内容提到 turn failed',
-      typeof h.store.logs[0]?.content === 'string' &&
-        (h.store.logs[0]?.content as string).includes('turn failed'),
-      String(h.store.logs[0]?.content),
+      typeof failedLogContent === 'string' && failedLogContent.includes('turn failed'),
+      String(failedLogContent),
     );
     await h.cleanup();
   }
