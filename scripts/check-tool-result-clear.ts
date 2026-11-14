@@ -39,9 +39,9 @@ import {
   normalizeClearedToolCallIds,
   planClearedToolResults,
   renderContextTrimNotice,
-  shouldCompactForToolResultVolume,
   type SessionState,
   SQLiteSessionStore,
+  shouldCompactForToolResultVolume,
   TOOL_RESULT_VOLUME_THRESHOLD_RATIO,
   withClearedToolResults,
 } from '../packages/core/src/index';
@@ -422,7 +422,10 @@ section('T6 体积阈值：保留结果原文体积超窗口 N% ⇒ 触发压缩
   const singleSmall = segmentBase(1);
   expect(
     'T6.3 可清 0 条：只有 1 条工具结果',
-    [planClearedToolResults(singleSmall, MAX_TOKENS), shouldCompactForToolResultVolume(singleSmall, MAX_TOKENS)],
+    [
+      planClearedToolResults(singleSmall, MAX_TOKENS),
+      shouldCompactForToolResultVolume(singleSmall, MAX_TOKENS),
+    ],
     [[], false],
   );
 
@@ -485,7 +488,10 @@ section('T6 体积阈值：保留结果原文体积超窗口 N% ⇒ 触发压缩
   // 体积判据不许改变清除集合：判据只看保留体积，不参与「清几条」的决策。
   expect(
     'T6.9 体积阈值不参与清除集合决策（同一段触发前后清除集合不变）',
-    [planClearedToolResults(giant, MAX_TOKENS), shouldCompactForToolResultVolume(giant, MAX_TOKENS)],
+    [
+      planClearedToolResults(giant, MAX_TOKENS),
+      shouldCompactForToolResultVolume(giant, MAX_TOKENS),
+    ],
     [['call_0'], true],
   );
   expect(

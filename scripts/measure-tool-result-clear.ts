@@ -23,16 +23,15 @@
 import { Database } from 'bun:sqlite';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-
+import type { ChatRequest, Message, ToolCall, Usage } from '../packages/core/src/index';
 import {
-  estimateMessageTokens,
   estimateMessagesTokens,
-  measureRetainedToolResultVolume,
+  estimateMessageTokens,
   MemoryLLMProvider,
+  measureRetainedToolResultVolume,
   planClearedToolResults,
   withClearedToolResults,
 } from '../packages/core/src/index';
-import type { ChatRequest, Message, ToolCall, Usage } from '../packages/core/src/index';
 
 /** 窗口预算默认值（可用 `--max-tokens=` 覆盖）：本地大会话最大 prompt ≈ 150k。 */
 const DEFAULT_MAX_TOKENS = 200_000;
@@ -59,7 +58,8 @@ function readCli(): CliOptions {
   const topRaw = Number(pick('top') ?? '');
   return {
     dbPath,
-    maxTokens: Number.isFinite(maxTokensRaw) && maxTokensRaw > 0 ? maxTokensRaw : DEFAULT_MAX_TOKENS,
+    maxTokens:
+      Number.isFinite(maxTokensRaw) && maxTokensRaw > 0 ? maxTokensRaw : DEFAULT_MAX_TOKENS,
     top: Number.isFinite(topRaw) && topRaw > 0 ? Math.floor(topRaw) : 6,
     syntheticOnly: args.includes('--synthetic'),
   };
@@ -185,9 +185,13 @@ function resolveDbPath(explicit: string | null): string | null {
 function readRealRuns(dbPath: string): RealRun[] {
   const db = new Database(dbPath, { readonly: true });
   try {
-    const rows: Array<Record<string, unknown>> = db
-      .query('select session_id, run_id, messages, started_at, usage from sessions order by started_at')
-      .all();
+    // bun:sqlite 的 `.all()` 声明为 unknown[]；列名与形状由上面那条 query 固定，
+    // 这里的断言与 packages/core/src/session/sqlite-backend.ts 的做法一致。
+    const rows = db
+      .query(
+        'select session_id, run_id, messages, started_at, usage from sessions order by started_at',
+      )
+      .all() as Array<Record<string, unknown>>;
     const runs: RealRun[] = [];
     for (const row of rows) {
       const runId = pickString(row, 'run_id');
@@ -261,7 +265,11 @@ function prefixReusableTokens(previous: readonly Message[], current: readonly Me
  * 段边界（token 越过 `COMPACT_THRESHOLD`）在两种策略下都按 core 的默认阈值判定，
  * 因为那是 compaction 触发，不是本主题要改的东西。
  */
-function simulate(frames: readonly RunFrame[], maxTokens: number, freezeAtSegmentStart: boolean): RunCost[] {
+function simulate(
+  frames: readonly RunFrame[],
+  maxTokens: number,
+  freezeAtSegmentStart: boolean,
+): RunCost[] {
   const costs: RunCost[] = [];
   let frozen: string[] = [];
   let previousPayload: Message[] = [];
@@ -275,7 +283,8 @@ function simulate(frames: readonly RunFrame[], maxTokens: number, freezeAtSegmen
     }
     const payload = withClearedToolResults(frame.history, frozen);
     const promptTokens = estimateMessagesTokens(payload);
-    const prefixTokens = previousPayload.length > 0 ? prefixReusableTokens(previousPayload, payload) : 0;
+    const prefixTokens =
+      previousPayload.length > 0 ? prefixReusableTokens(previousPayload, payload) : 0;
     const newCleared = Math.max(0, frozen.length - previousClearedCount);
     costs.push({
       index: frame.index,
@@ -338,7 +347,12 @@ function renderRealTable(runs: readonly RealRun[], maxTokens: number): string {
         cached === undefined || promptTokens === undefined || promptTokens === 0
           ? 'N/A（provider 未回报 cache_read_input_tokens）'
           : formatRatio(cached / promptTokens),
-        formatRatio(measured.ratio) + '（保留 ' + String(measured.retainedCount) + ' 条 / ' + String(measured.retainedTokens) + ' tokens）',
+        formatRatio(measured.ratio) +
+          '（保留 ' +
+          String(measured.retainedCount) +
+          ' 条 / ' +
+          String(measured.retainedTokens) +
+          ' tokens）',
         String(deltaCleared),
       ]),
     );
@@ -450,7 +464,11 @@ async function runSynthetic(maxTokens: number): Promise<string> {
       role: 'assistant',
       content: '',
       tool_calls: [
-        { id: toolCallId, type: 'function', function: { name: 'read_file', arguments: '{"path":"f' + String(index) + '"}' } },
+        {
+          id: toolCallId,
+          type: 'function',
+          function: { name: 'read_file', arguments: '{"path":"f' + String(index) + '"}' },
+        },
       ],
     });
     // 每轮工具结果 3k 字符 ≈ 750 tokens：8 轮累计远超默认 5% 保留预算，逼出清理。
@@ -498,7 +516,9 @@ async function runSynthetic(maxTokens: number): Promise<string> {
       '，旧行为（每 run 重算）' +
       formatRatio(totals.recomputed) +
       '；旧行为每 run 平均新清掉 ' +
-      (recomputed.reduce((sum, cost) => sum + cost.newCleared, 0) / Math.max(1, recomputed.length)).toFixed(2) +
+      (
+        recomputed.reduce((sum, cost) => sum + cost.newCleared, 0) / Math.max(1, recomputed.length)
+      ).toFixed(2) +
       ' 条。',
   );
   return lines.join('\n');
@@ -522,11 +542,15 @@ async function main(): Promise<void> {
     if (dbPath === null) {
       console.log('## 表 1/表 2 跳过：本地找不到真实会话库 [实测缺]');
       console.log('');
-      console.log('探测过：`--db=`、`VESSEL_SESSIONS_DB`、`<repo>/Vessel/.vessel/sessions.db`、`<repo>/.vessel/sessions.db`。');
+      console.log(
+        '探测过：`--db=`、`VESSEL_SESSIONS_DB`、`<repo>/Vessel/.vessel/sessions.db`、`<repo>/.vessel/sessions.db`。',
+      );
       console.log('要在真机上拿真数字：跑一次真实会话后执行');
       console.log('');
       console.log('```bash');
-      console.log('bun run scripts/measure-tool-result-clear.ts --db=<你的 sessions.db> --max-tokens=<窗口>');
+      console.log(
+        'bun run scripts/measure-tool-result-clear.ts --db=<你的 sessions.db> --max-tokens=<窗口>',
+      );
       console.log('```');
       console.log('');
     } else {
@@ -537,7 +561,9 @@ async function main(): Promise<void> {
       console.log('');
       console.log(renderRealTable(runs, cli.maxTokens));
       console.log('');
-      const measured = runs.map((run) => measureRetainedToolResultVolume(run.messages, cli.maxTokens));
+      const measured = runs.map((run) =>
+        measureRetainedToolResultVolume(run.messages, cli.maxTokens),
+      );
       const exceeded = measured.filter((item) => item.exceeds).length;
       const ratios = measured.map((item) => item.ratio);
       const maxRatio = ratios.length > 0 ? Math.max(...ratios) : 0;
@@ -563,7 +589,10 @@ async function main(): Promise<void> {
       console.log('');
       const withTools = runs
         .filter((run) => run.messages.filter((message) => message.role === 'tool').length >= 2)
-        .sort((left, right) => estimateMessagesTokens(right.messages) - estimateMessagesTokens(left.messages))
+        .sort(
+          (left, right) =>
+            estimateMessagesTokens(right.messages) - estimateMessagesTokens(left.messages),
+        )
         .slice(0, cli.top);
       const summaries: SimulationSummary[] = withTools.map((run) => ({
         sessionId: run.sessionId,
@@ -573,7 +602,11 @@ async function main(): Promise<void> {
       console.log('## 表 2：两种策略的前缀可复用长度（离线模拟，全部为推算）');
       console.log('');
       console.log('模型：provider 的 cached_tokens ≈ 上一条请求与本条请求的**最长公共前缀**长度；');
-      console.log('段边界（估算 prompt 越过 ' + String(COMPACT_THRESHOLD) + ' × 窗口）按 core 默认压缩阈值判定。');
+      console.log(
+        '段边界（估算 prompt 越过 ' +
+          String(COMPACT_THRESHOLD) +
+          ' × 窗口）按 core 默认压缩阈值判定。',
+      );
       console.log('');
       console.log(renderSimulationTable(summaries));
       console.log('');
@@ -599,7 +632,9 @@ async function main(): Promise<void> {
           String(totals.recomputedUncached - totals.frozenUncached) +
           ' tokens 的净增量就是「每 run 重算」买到的可见代价；结论见报告。',
       );
-      console.log('- cached 理论下界两种策略都是 **0%**（provider 缓存全失效时前缀一条都命中不了）。');
+      console.log(
+        '- cached 理论下界两种策略都是 **0%**（provider 缓存全失效时前缀一条都命中不了）。',
+      );
       console.log(
         '- 差额来自「每 run 重算会把占位符插到窗口**早期位置**」：前缀当场失配，' +
           '之后整段都进不了 cache；段起点冻结则只在开新段那一次失配。',
@@ -612,10 +647,15 @@ async function main(): Promise<void> {
   console.log('');
   console.log('## 真机取真数需要什么');
   console.log('');
-  console.log('- 命令：`bun run scripts/measure-tool-result-clear.ts --db=<sessions.db> --max-tokens=<窗口>`');
-  console.log('- 字段：`sessions.usage` 里的 `prompt_tokens`（已上报）与 `cache_read_input_tokens`（本机 46 个 run 全部未上报）');
-  console.log('- 要真 cached 占比：让 provider 适配层把 `cache_read_input_tokens` 写进 `usage` 后重跑本脚本，表 1 的 cached 两列才会从「未上报」变成实测值。');
+  console.log(
+    '- 命令：`bun run scripts/measure-tool-result-clear.ts --db=<sessions.db> --max-tokens=<窗口>`',
+  );
+  console.log(
+    '- 字段：`sessions.usage` 里的 `prompt_tokens`（已上报）与 `cache_read_input_tokens`（本机 46 个 run 全部未上报）',
+  );
+  console.log(
+    '- 要真 cached 占比：让 provider 适配层把 `cache_read_input_tokens` 写进 `usage` 后重跑本脚本，表 1 的 cached 两列才会从「未上报」变成实测值。',
+  );
 }
 
 await main();
-
