@@ -31,12 +31,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  createRunJournalFactory,
   ExecutionUnit,
   FileSessionStore,
   MemoryEventStream,
   MemoryLLMProvider,
   MemoryWorkingContext,
-  createRunJournalFactory,
   type Plugin,
   type RunEvent,
   type RunRecord,
@@ -150,7 +150,7 @@ function makeProbeTool(name: string): ToolDefinition {
     name,
     description: 'probe tool',
     inputSchema: { type: 'object', properties: {} },
-    handler: async () => ({ content: 'ok' }),
+    handler: async () => ({ content: 'ok' }) as never,
   };
 }
 
@@ -164,7 +164,8 @@ const extraToolPlugin: Plugin = {
 interface NodeSpec {
   dir: string;
   model: string;
-  extraTool: boolean;
+  /** 可选：只在需要「tools 数变化」的用例里给 */
+  extraTool?: boolean;
 }
 
 /**
@@ -316,7 +317,11 @@ async function main(): Promise<void> {
     const persisted1 = await first.reload();
     eq('E1.7 SessionState 落盘了 prompt_context.hash', persisted1?.prompt_context?.hash, baseHash);
     eq('E1.8 落盘的 prompt_context.model', persisted1?.prompt_context?.model, MODEL_A);
-    eq('E1.9 落盘的 prompt_context.tools_count', persisted1?.prompt_context?.tools_count, baseTools);
+    eq(
+      'E1.9 落盘的 prompt_context.tools_count',
+      persisted1?.prompt_context?.tools_count,
+      baseTools,
+    );
 
     console.log('[E2] 同一个 ExecutionUnit 连跑 3 轮（形状不变）：应当 0 张');
     const e2a = await first.turn('第二次说话');
@@ -345,9 +350,7 @@ async function main(): Promise<void> {
     const card4 = e4[0];
     eq('E4.2 换 model 后的卡里 model 是新值', card4?.model, MODEL_B);
     eq('E4.3 跨进程只有指纹可比：仍带 previous_hash', card4?.previous_hash, baseHash);
-    eq('E4.4 只列变了的项（model）', card4?.changed, [
-      'model: ' + MODEL_A + ' → ' + MODEL_B,
-    ]);
+    eq('E4.4 只列变了的项（model）', card4?.changed, ['model: ' + MODEL_A + ' → ' + MODEL_B]);
     eq('E4.5 卡里仍然带全文 system_prompt（全量卡不缩水）', card4?.system_prompt, SYSTEM_PROMPT);
     await swapped.waitForPersisted(card4?.hash);
     swapped.stop();
@@ -401,7 +404,11 @@ async function main(): Promise<void> {
     console.log('[E8] 重启后接管被中断的 run（resumeRun）：指纹没变 => 0 张');
     const resumeDir = await mkdtemp(join(tmpdir(), 'vessel-ctx-card-resume-'));
     try {
-      const beforeRestart = await SimNode.start({ dir: resumeDir, model: MODEL_A, extraTool: false });
+      const beforeRestart = await SimNode.start({
+        dir: resumeDir,
+        model: MODEL_A,
+        extraTool: false,
+      });
       const e8first = await beforeRestart.turn('重启前的那一轮');
       eq('E8.1 重启前的一轮恰好 1 张卡', e8first.length, 1);
       await beforeRestart.waitForPersisted(e8first[0]?.hash);
@@ -429,7 +436,6 @@ async function main(): Promise<void> {
     } finally {
       await rm(resumeDir, { recursive: true, force: true });
     }
-
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

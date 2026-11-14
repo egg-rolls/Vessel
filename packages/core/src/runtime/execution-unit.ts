@@ -1592,6 +1592,10 @@ export class ExecutionUnit {
       // 0.52 C：resume 是「重启后接管被中断 run」的入口，必须与 run() 同一处复原
       // 「上下文卡」去重指纹；漏了这一步会再发一张全量卡（用户实测的重启后重发）。
       this.restorePromptContextFingerprint(history.sessionState);
+      // 同族漏点（ctx-card-dedup 审查时发现）：context_anchor 原来也只在 run() 里复原。
+      // resume 接管时缺了它，估算就退回未校正值 ⇒ 压缩阈值比真实口径晚（估算偏小），
+      // 与 0.52 的「锚点校正」预期相反。两处必须一致。
+      execution.workingContext.setContextAnchor?.(history.sessionState?.context_anchor, this.model);
       this.seedWorkingContext(execution, history);
       this.seedRealTokensFromLastRequest(execution, history);
 
