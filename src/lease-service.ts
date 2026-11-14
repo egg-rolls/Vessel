@@ -232,12 +232,14 @@ export class FileLeaseService implements LeaseServicePort {
 
     const now = this.now();
     const record = await this.readRecord(entry.path);
-    if (
-      record === undefined ||
-      record.lease_id !== leaseId ||
-      record.state !== 'held' ||
-      record.expires_at <= now
-    ) {
+    // 已释放 / 换过 lease_id ⇒ 真的被别人（或自己 release）接管了，照旧失败。
+    if (record === undefined || record.lease_id !== leaseId || record.state !== 'held') {
+      this.held.delete(leaseId);
+      throw new LeaseExpiredError('lease_expired', leaseId);
+    }
+    // 过期但**仍是我们自己的那一条**：说明这段时间没有人接管（典型场景是合盖/挂起，
+    // 整台机器都没在跑）⇒ 原地续期，**fence 不动**。否则长任务跨一次睡眠必死。
+    if (record.expires_at <= now && !this.isOwnRecord(record)) {
       this.held.delete(leaseId);
       throw new LeaseExpiredError('lease_expired', leaseId);
     }
@@ -279,12 +281,15 @@ export class FileLeaseService implements LeaseServicePort {
     const entry = this.held.get(leaseId);
     if (entry === undefined) return false;
     const record = await this.readRecord(entry.path);
-    return (
-      record !== undefined &&
-      record.lease_id === leaseId &&
-      record.fence === entry.grant.fencingToken &&
-      this.isHeld(record, this.now())
-    );
+    if (
+      record === undefined ||
+      record.lease_id !== leaseId ||
+      record.fence !== entry.grant.fencingToken
+    ) {
+      return false;
+    }
+    // 过期但仍是自己的那一条：仍然有效（见 `isOwnRecord` 的说明），别把睡眠判成丢租约。
+    return this.isHeld(record, this.now()) || this.isOwnRecord(record);
   }
 
   async fenceOf(kind: LeaseKind, key: string): Promise<number> {
@@ -292,9 +297,13 @@ export class FileLeaseService implements LeaseServicePort {
     if (record === undefined) return 0;
     // 已释放：release 已把 fence +1。
     if (record.state === 'released') return record.fence;
+    // 未过期 ⇒ 当前 fence。
+    if (this.isHeld(record, this.now())) return record.fence;
+    // **过期但仍是我们自己的租约** ⇒ 期间没人接管，当前 fence 就是它的 fence。
+    // （过去这里一律 +1，等于自己把自己判成 stale，长任务跨一次睡眠即死。）
+    if (this.isOwnRecord(record)) return record.fence;
     // 已过期 / 死 pid：视为失效，旧 token 必须小于当前 fence。
-    if (!this.isHeld(record, this.now())) return record.fence + 1;
-    return record.fence;
+    return record.fence + 1;
   }
 
   private leasePath(kind: LeaseKind, key: string): string {
@@ -341,6 +350,22 @@ export class FileLeaseService implements LeaseServicePort {
       pid: this.pid,
       isPidAlive: this.isPidAlive,
     });
+  }
+
+  /**
+   * 这条（可能已过期的）磁盘记录**是否仍是本进程自己持有的那一条**。
+   *
+   * 判据只看身份，不看时钟：`lease_id` 是 `acquire`/回收时新生成的 `randomUUID()`
+   * （`makeRecord`），谁回收谁换 lease_id。所以「lease_id 没变 + pid/host 是我们」
+   * 就等价于「期间没有人接管过」，与 `expires_at` 无关。
+   *
+   * 这条判据是「合盖/挂起不再打死长任务」的关键：机器睡完醒来时 `expires_at` 必然过期，
+   * 但**没有任何别的进程能在这段时间内接管**（同一台机器也睡着了）。过去这里只看时钟，
+   * 于是 `renew` 抛 `lease_expired`、`fenceOf` 又把 fence +1，把自己在跑的 writer 判成
+   * `stale_fence` —— 长任务因此必然失败。跑着的租约仍然是我们 的，就不该假装它被别人拿走了。
+   */
+  private isOwnRecord(record: LeaseFileRecord): boolean {
+    return record.pid === this.pid && record.host === this.host && this.held.has(record.lease_id);
   }
 
   /** 读磁盘记录；实现与只读探针共用 `readLeaseRecord`（形状校验只有一份）。 */
