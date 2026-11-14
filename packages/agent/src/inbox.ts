@@ -1106,13 +1106,35 @@ const INBOX_TOOL_DESCRIPTION =
   'read returns full text and marks what it returns as consumed. it only sees readable messages by ' +
   'default: held (pending) ones are excluded, so read can legitimately return 0 messages while pending ' +
   'is above 0 — pass includeHeld:true to also get their text. reading held messages does NOT cancel ' +
-  'their delivery and does NOT mark them consumed, so never act twice on one message. ' +
+  'their delivery and does NOT mark them consumed, so never act twice on one message. entries that come ' +
+  'back with will_be_delivered:true are held in exactly that sense: the same text will reach you again ' +
+  'as a run input, so do not execute it twice — claim those ids (irreversible) only if you are handling ' +
+  'them in this turn and want the second delivery cancelled. ' +
   'claim takes message_ids whose FULL TEXT you have already seen (peek them with ' +
   'read includeHeld:true first), returns that text and takes them out of the queue for good — ' +
   'pending ones included, their queued run is cancelled. it is irreversible: there is no unclaim, ' +
   'and claimed messages are never delivered and never listed again — so never claim on a summary alone. ' +
   'delete removes unread, non-held messages by id (held/consumed are skipped); ' +
   'insert appends a message to your own inbox; it does not start a run or wake you.';
+
+/**
+ * read 把 held 的正文吐出来（`includeHeld:true`）时的那句提示。
+ *
+ * 为什么要有这句话：`held` 是个字段名，模型看到正文已经躺在工具结果里，极易当成「读到了
+ * 就没了」，于是同一条消息被当成两条各执行一遍。`will_be_delivered` 字段 + 这句提示是同一
+ * 件事的两层说法（字段给机器读，句子给模型读），都只**报告**事实：正文还会再来一次。
+ *
+ * 只报告、不动状态：这里绝不替模型 claim —— 「读掉但不行动」比重复投递严重得多。
+ */
+function heldRedeliveryHint(heldCount: number): string {
+  return (
+    `${heldCount} message(s) above are marked will_be_delivered:true — their text is already queued as ` +
+    'your next run input(s), so it will reach you again even though you just read it here. this read did ' +
+    'not cancel that delivery and did not mark them consumed. never act twice on one message: if you are ' +
+    'handling them in this turn and want the repeat cancelled, claim their ids (irreversible); otherwise ' +
+    'ignore the copy that arrives later.'
+  );
+}
 
 /**
  * read 里有消息在队列上等着（unread 0 / pending > 0）时的那句提示。
@@ -1205,8 +1227,9 @@ export function createInboxTool(options: {
           description:
             'read only: by default read skips held messages (unread, but already queued as your next ' +
             'input), so it can return 0 messages while pending > 0; set true to also get their text. ' +
-            'reading them does not cancel delivery and does not mark them consumed — never act twice ' +
-            'on one message. list always includes held entries (summary only) and rejects this flag',
+            'such entries come back with will_be_delivered:true: the same text will reach you again as a ' +
+            'run input — reading it does not cancel delivery and does not mark it consumed, so never act ' +
+            'twice on one message. list always includes held entries (summary only) and rejects this flag',
         },
         content: {
           type: 'string',
@@ -1385,8 +1408,15 @@ export function createInboxTool(options: {
       const { unread, pending, held } = snapshot();
       // 一句话解释「为什么 read 是 0 条」：只有在这次没要 held 正文（没给 includeHeld:true）
       // 而队列里确实有东西在等时才提示 —— 要了正文还提示「去要正文」就是纯噪音。
+      // 反过来，这次**吐了** held 正文就必须提示「它还会再来一次」（heldReturned > 0 只可能
+      // 出现在 includeHeld:true 的分支里，两个提示互斥）。
+      const heldReturned = messages.reduce((count, message) => count + (message.held ? 1 : 0), 0);
       const hint =
-        unread === 0 && pending > 0 && includeHeld !== true ? heldOnlyHint(pending) : undefined;
+        heldReturned > 0
+          ? heldRedeliveryHint(heldReturned)
+          : unread === 0 && pending > 0 && includeHeld !== true
+            ? heldOnlyHint(pending)
+            : undefined;
       return JSON.stringify({
         read: messages.length,
         unread,
@@ -1398,7 +1428,10 @@ export function createInboxTool(options: {
           source: message.source,
           text: message.text,
           // held:true = 还没成为 run input，稍后会自动到达；read 没有取消投递，别重复执行。
-          ...(message.held ? { held: true } : {}),
+          // will_be_delivered:true 是**同一件事的显式说法**：`held` 只是个字段名，正文已经在
+          // 结果里了，模型很容易当成「读到了就没了」；这个字段直接说「这份正文还会再投一次」。
+          // 两者都只报告事实（state 不变），默认 includeHeld 行为一字不改。
+          ...(message.held ? { held: true, will_be_delivered: true } : {}),
         })),
         ...(hint !== undefined ? { hint } : {}),
       });
