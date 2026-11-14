@@ -54,8 +54,16 @@ export const PII_MAX_SESSIONS = 512;
 /** 已过期句柄的墓碑上限（只记 id + 类别，用于把「过期」和「未知」分开报错）。 */
 export const PII_MAX_TOMBSTONES = 1024;
 
-/** 已宣告失效的句柄 id 记忆上限（append-only 追加 notice 的去重集合）。 */
-export const PII_MAX_ANNOUNCED_HANDLES = 1024;
+/** 已通知过的失效批次哈希上限（批哈希去重集合的容量）。 */
+export const PII_MAX_NOTIFIED_BATCHES = 32;
+
+/**
+ * 「面上的卡」频率上限：同一 session 每 60 秒至多一张（失效卡与容量卡共用预算）。
+ *
+ * 逐条失效会连续触发，没有防抖就是「逐个失败逐个发卡」的风暴；
+ * 60s 又足够短，不会让「又一批新 id 失效」被永久闸住（那是静默，比重复更糟）。
+ */
+export const PII_NOTICE_MIN_INTERVAL_MS = 60_000;
 
 /**
  * 句柄解不开的三种原因（渲染成三档不同的下一步，见 `rules.ts` 的错误类与
@@ -116,15 +124,15 @@ interface SessionState {
   byValue: Map<string, Entry>;
   /** key = 句柄 id：一个占位符只对一个值 */
   byHandle: Map<string, Entry>;
-  /** 已宣告过期/失效的句柄（去重：同一批只追加一条 notice） */
-  announced: Set<string>;
+  /** 已通知过的失效批次哈希（同批不重发；新一批允许再发） */
+  notifiedBatches: Set<string>;
+  /** 最近一次发「面上的卡」的时间（失效卡与容量卡共用这个预算） */
+  lastNoticeAt: number | undefined;
   /** 已过期句柄墓碑：id → 类别（无值） */
   expired: Map<string, PiiCategory>;
   audit: Map<PiiCategory, { count: number; first_seen_at: number }>;
   degraded: number;
   lastActivityAt: number;
-  /** 本 session 的「整批失效」提示是否已经发过（至多一次） */
-  invalidationNotified: boolean;
 }
 
 /** 构造函数选项（探针用假时钟 / 小容量，生产用默认值）。 */
@@ -381,44 +389,70 @@ export class PiiVault {
   }
 
   /**
-   * 领取「整批失效 / 容量降级」系统提示卡的发放权：**每 session 至多一张**。
+   * 领取「整批失效（broker 重启）」系统提示卡的发放权。
    *
-   * 两种面上的事件共用一个名额（用户裁定：至多一张卡），先到先得：
-   * - broker 重启导致整批句柄失效（`invalidated_handle`）；
-   * - 句柄容量耗尽，后续命中只能直接掩码（模型拿不到新句柄）。
-   *
-   * 返回 true = 这次由你发卡；false = 已经发过（或不需要发）。
+   * 与容量卡共用同一个「每 60 秒一张」的预算（见 `claimNoticeBudget`）。
+   * 调用方顺序：先 `claimNoticeBudget`，发卡时再 `deadBatchNotified` / `markDeadBatchNotified`
+   * 做「同一批不重发」的判定。
    */
   claimInvalidationNotice(sessionId: string): boolean {
-    const state = this.sessions.get(sessionId);
-    if (state === undefined) return false;
-    if (state.invalidationNotified) return false;
-    state.invalidationNotified = true;
+    return this.claimNoticeBudget(sessionId);
+  }
+
+  /**
+   * 领取「面上的卡」的预算：**同一 session 每 60 秒至多一张**（失效卡与容量卡共用）。
+   *
+   * 为什么要频率上限：逐条失效会连续触发，没有防抖就会变成「逐个失败逐个发卡」的风暴。
+   * 返回 true = 这次由你发卡；false = 还在冷却窗口里，这次不发（下次请求再试）。
+   */
+  claimNoticeBudget(sessionId: string): boolean {
+    const state = this.ensureSession(sessionId);
+    const now = this.now();
+    if (state.lastNoticeAt !== undefined && now - state.lastNoticeAt < PII_NOTICE_MIN_INTERVAL_MS) {
+      return false;
+    }
+    state.lastNoticeAt = now;
     return true;
   }
 
   /**
-   * 领取「这一批失效引用还没宣告过」的句柄 id 集合。
+   * 这一批失效引用**是否已经通知过**。
    *
-   * append-only 下宣告失效**只能追加一条 notice**：所以必须去重 —— 同一批 id 只宣告
-   * 一次，之后每轮请求不会重复追加。返回值就是本次该写进 notice 的 id（无值）。
+   * 去重键 = 本批失效 id 的**有序集合哈希**（不是「session 级布尔」）：同批重复 ⇒ 不重发；
+   * 新一批（不同 id 集合）⇒ 允许再发一张。用 session 级布尔会**漏报**：第一批发过之后
+   * 又来一批新的，模型会以为所有引用都还能用 —— 静默比重发更糟。
    */
-  claimUnannouncedDeadHandles(sessionId: string, handleIds: readonly string[]): string[] {
-    if (handleIds.length === 0) return [];
+  deadBatchNotified(sessionId: string, batchHash: string): boolean {
+    return this.sessions.get(sessionId)?.notifiedBatches.has(batchHash) ?? false;
+  }
+
+  /** 记下「这一批已经通知过」（只在真的追加了卡之后调用）。 */
+  markDeadBatchNotified(sessionId: string, batchHash: string): void {
     const state = this.ensureSession(sessionId);
-    const fresh: string[] = [];
-    for (const id of handleIds) {
-      if (state.announced.has(id)) continue;
-      state.announced.add(id);
-      fresh.push(id);
-    }
-    // 去重集合也要有上限：否则一个长会话能把它撑大
-    while (state.announced.size > PII_MAX_ANNOUNCED_HANDLES) {
-      const oldest = state.announced.values().next();
+    state.notifiedBatches.add(batchHash);
+    // 批次哈希集合也要有上限：否则一个长会话能把它撑大
+    while (state.notifiedBatches.size > PII_MAX_NOTIFIED_BATCHES) {
+      const oldest = state.notifiedBatches.values().next();
       if (oldest.done === true) break;
-      state.announced.delete(oldest.value);
+      state.notifiedBatches.delete(oldest.value);
     }
-    return fresh;
+  }
+
+  /**
+   * 「这一批失效引用现在该不该发卡」——把两个闸门按生产顺序合成一次判定：
+   *
+   * 1. 同批（按 `piiDeadBatchHash`）已经通知过 ⇒ 不发（同批重复触发被吃掉）；
+   * 2. 距上次发卡不足 `PII_NOTICE_MIN_INTERVAL_MS`（60s）⇒ 不发（防抖，避免风暴）；
+   * 3. 其余 ⇒ 发，并立即记账（避免同一批被并发/连续触发两次）。
+   *
+   * 换一批新 id 且已过冷却窗口 ⇒ 允许再发一张：**静默比重发更糟**。
+   */
+  shouldAnnounceDeadBatch(sessionId: string, handleIds: readonly string[], tag = 'dead'): boolean {
+    const key = `${tag}:${piiDeadBatchHash(handleIds)}`;
+    if (this.deadBatchNotified(sessionId, key)) return false;
+    if (!this.claimNoticeBudget(sessionId)) return false;
+    this.markDeadBatchNotified(sessionId, key);
+    return true;
   }
 
   /** 审计快照（不含值）。传 sessionId 只取该 session。 */
@@ -501,11 +535,11 @@ export class PiiVault {
         byValue: new Map(),
         byHandle: new Map(),
         expired: new Map(),
-        announced: new Set(),
+        notifiedBatches: new Set(),
+        lastNoticeAt: undefined,
         audit: new Map(),
         degraded: 0,
         lastActivityAt: this.now(),
-        invalidationNotified: false,
       };
       this.sessions.set(sessionId, state);
     }
@@ -627,6 +661,17 @@ export class PiiVault {
 }
 
 let singleton: PiiVault | undefined;
+
+/**
+ * 失效「批次」的稳定哈希：把本批 id 排序后 sha1，取前 12 个 hex。
+ *
+ * 去重键必须是**这一批 id 的集合**（而不是 session 级布尔）：同一批重复触发 ⇒ 不重发，
+ * 但换了一批新 id ⇒ 必须再发一张，否则后来失效的引用会被静默。
+ */
+export function piiDeadBatchHash(handleIds: readonly string[]): string {
+  const sorted = [...handleIds].sort();
+  return createHash('sha1').update(sorted.join(',')).digest('hex').slice(0, 12);
+}
 
 /** 进程级单例（三处边界共用，保证「模型只看到一种形态」）。 */
 export function getPiiVault(): PiiVault {

@@ -877,19 +877,8 @@ export class ExecutionUnit {
         for (const occurrence of findPiiHandleOccurrences(text)) seen.add(occurrence.id);
       }
     }
-    if (seen.size === 0) {
-      // 没有死引用，也可能有「容量耗尽」这张面上的卡要发（每 session 一张）。
-      if (vault.takeDegradedCount(sessionId) > 0 && vault.claimInvalidationNotice(sessionId)) {
-        await this.appendNotice(PII_CAPACITY_NOTICE.en);
-        this.publishEvent({
-          type: 'pii.handles.capacity',
-          run_id: this.activeRun?.runId ?? 'plugin',
-          ts: Date.now(),
-          data: { session: sessionId },
-        });
-      }
-      return;
-    }
+
+    // 分拣：哪些是真解不开的、其中哪些属于「整批失效」（broker 重启）。
     const dead: Array<{ id: string; category: PiiCategory | undefined }> = [];
     let systemic = false;
     for (const id of seen) {
@@ -898,37 +887,47 @@ export class ExecutionUnit {
       dead.push({ id, category: vault.categoryOfDeadHandle(sessionId, id) });
       if (result.reason === 'invalidated_handle') systemic = true;
     }
+
+    // 容量耗尽：也是「面上的」事件，与失效卡共用每 60s 一张的预算。
     if (dead.length === 0) {
-      if (vault.takeDegradedCount(sessionId) > 0 && vault.claimInvalidationNotice(sessionId)) {
-        await this.appendNotice(PII_CAPACITY_NOTICE.en);
-      }
+      if (vault.takeDegradedCount(sessionId) === 0) return;
+      if (!vault.claimNoticeBudget(sessionId)) return;
+      await this.appendNotice(PII_CAPACITY_NOTICE.en);
+      this.publishEvent({
+        type: 'pii.handles.capacity',
+        run_id: this.activeRun?.runId ?? 'plugin',
+        ts: Date.now(),
+        data: { session: sessionId },
+      });
       return;
     }
-    const fresh = vault.claimUnannouncedDeadHandles(
-      sessionId,
-      dead.map((entry) => entry.id),
-    );
-    if (fresh.length === 0) return;
-    const freshSet = new Set(fresh);
-    const references = dead
-      .filter((entry) => freshSet.has(entry.id))
-      .map((entry) => ({
-        handle: piiHandleOf(entry.id),
-        ...(entry.category === undefined ? {} : { category: entry.category }),
-      }));
-    if (systemic && vault.claimInvalidationNotice(sessionId)) {
-      // 整批失效（broker 重启）：一张环境卡就够，不再重复列 id。
+
+    // 去重 + 防抖一次判完：同批不重发；换一批新 id 且已过 60s 冷却才再发一张。
+    if (!vault.shouldAnnounceDeadBatch(sessionId, dead.map((entry) => entry.id), systemic ? 'systemic' : 'dead')) {
+      return;
+    }
+
+    if (systemic) {
+      // broker 重启导致整批失效：发「状态变化」卡（不逐条列 id，避免泄漏 + 噪音）。
       await this.appendNotice(PII_INVALIDATION_NOTICE.en);
       this.publishEvent({
         type: 'pii.handles.invalidated',
         run_id: this.activeRun?.runId ?? 'plugin',
         ts: Date.now(),
-        data: { session: sessionId, reason: 'invalidated_handle', handle_count: fresh.length },
+        data: { session: sessionId, reason: 'invalidated_handle', handle_count: dead.length },
       });
       return;
     }
-    // 逐个失效：追加一张 env 卡（持久、UI 与模型都看得见、不含真值）。
-    await this.appendNotice(renderDeadReferencesNotice(references));
+
+    // 个别失效：追加一张 env 卡，明细**只列占位符 id 与类别**（无真值/片段/长度）。
+    await this.appendNotice(
+      renderDeadReferencesNotice(
+        dead.map((entry) => ({
+          handle: piiHandleOf(entry.id),
+          ...(entry.category === undefined ? {} : { category: entry.category }),
+        })),
+      ),
+    );
   }
 
   /**
