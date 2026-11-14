@@ -2,15 +2,16 @@ import { useEffect, useState } from 'react';
 import { SegmentedTabs } from '../../components/Tabs';
 import { Section } from '../../components/ui';
 import { SUPPORTED_LOCALES, setLocale, t, useLocale } from '../../i18n';
-import { applyTheme, readStoredTheme, storeTheme, THEMES, type Theme } from '../../state/theme';
+import { readStoredTheme, storeTheme, THEMES, type Theme } from '../../state/theme';
 
 /** Settings → Appearance：主题 / 动效 / 界面语言；动效只跟随系统 reduced-motion。 */
 export function AppearanceView() {
   const locale = useLocale();
   const [theme, setTheme] = useState<Theme>(() => readStoredTheme(localStorage));
 
+  // 主题的 DOM 应用与落盘都在 storeTheme 里（0.52 起它是唯一写者），这里不再单独 applyTheme：
+  // 挂载时重复 apply 曾经把「存储 light」在刷新后覆盖成 store 的默认 dark。
   useEffect(() => {
-    applyTheme(theme);
     storeTheme(theme, localStorage);
   }, [theme]);
 

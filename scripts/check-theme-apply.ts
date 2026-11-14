@@ -116,6 +116,39 @@ expect(
   'C: 自愈必须「按存储值重放」，不许另算一遍',
 );
 
+// E. **DOM 主题只有一个写者**（0.52 真机事故：存储 light、刷新后 data-theme=dark）
+//    事故链条：入口首帧前按存储写了 light -> AppShell 挂载 effect 又按 store 的值覆盖
+//    （store 在那个时刻可能还不是用户选择）=> 最终 dark，而且每次刷新都重演。
+//    修法是把 apply 收进 storeTheme()（唯一写者）。断言前先剥注释，免得注释里提到的旧代码误报。
+function stripComments(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => {
+      const index = line.indexOf('//');
+      return index < 0 ? line : line.slice(0, index);
+    })
+    .join('\n');
+}
+
+const shellCode = stripComments(await source('apps/web/src/app/AppShell.tsx'));
+expect(
+  /applyTheme\(theme\)/u.test(shellCode) === false,
+  'E: AppShell 又出现 applyTheme(theme) —— 挂载时会用 store 值覆盖首帧按存储写好的主题（刷新必变暗）',
+);
+expect(shellCode.includes('applyTheme(stored)'), 'E: AppShell 的自愈必须按存储值重放');
+const themeCode = stripComments(await source('apps/web/src/state/theme.ts'));
+expect(
+  /export function storeTheme[\s\S]{0,800}?applyTheme\(theme\)/u.test(themeCode),
+  'E: storeTheme 必须自己应用 DOM —— 它是唯一写者，否则改主题不生效',
+);
+const appearanceCode = stripComments(
+  await source('apps/web/src/domains/settings/AppearanceView.tsx'),
+);
+expect(
+  appearanceCode.includes('applyTheme') === false,
+  'E: AppearanceView 又在单独 applyTheme —— 改主题只该走 storeTheme（单写者）',
+);
+
 // D. 入口必须在首帧前应用（否则每次加载都先闪一遍系统色）
 const main = await source('apps/web/src/main.tsx');
 expect(

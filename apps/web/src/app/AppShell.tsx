@@ -12,7 +12,7 @@ import { useConnection } from '../gateway/ConnectionProvider';
 import { useNodes } from '../gateway/NodeProvider';
 import { t, useLocale } from '../i18n';
 import type { PaletteItem } from '../state/palette';
-import { applyTheme, readStoredTheme, THEME_KEY, useTheme } from '../state/theme';
+import { applyTheme, readStoredTheme, THEME_KEY } from '../state/theme';
 import { resourceData } from '../state/useResource';
 import { useAgentStore } from '../stores/agentStore';
 import { useUiStore } from '../stores/uiStore';
@@ -39,7 +39,6 @@ import { useViewportWidth } from './useViewportWidth';
 
 export function AppShell() {
   const locale = useLocale();
-  const { theme } = useTheme();
   const { route, navigate } = useHashRoute();
   // 路由级订阅：Chat 会话页只回放本会话，Team / Runs 只收失效信号（契约 §4.1）。
   useRouteSubscription(route);
@@ -208,12 +207,14 @@ export function AppShell() {
   }, []);
   const entities = useMemo(() => [...entityMap.values()].flat(), [entityMap]);
 
-  // Theme lives in uiStore; applying it here keeps the DOM in sync when the
-  // preference changes at runtime.
-  useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
-
+  // **0.52：DOM 主题只有一个写者 —— `storeTheme()`（写存储 + 同步 store + 应用 DOM）。**
+  // 这里原来有一条 `useEffect(() => applyTheme(theme), [theme])`，它是「刷新后必变暗」的
+  // 元凶级隐患：挂载时它会把 **store 里的值**（可能还没从存储初始化、或是某条旧路径设过的
+  // 默认值 `dark`）盖到 DOM 上，而 `main.tsx` 刚按存储写好的 `light` 就被它覆盖了 ——
+  // 真机上复现过：`localStorage=vessel.theme:'light'`，刷新后 `data-theme='dark'`。
+  // 删掉它之后，能写 `<html data-theme>` 的只剩三处，且都以**存储值**为准：
+  // `main.tsx`（首帧前）、`storeTheme()`（用户显式改）、下面的自愈（回到前台/跨标签页）。
+  //
   // **主题以存储为准的自愈。** `data-theme` 不是只有这里会写：视觉设置页的 token 表
   // 在退化路径下会临时把 `<html data-theme="dark">`（`domains/design/tokens.ts`），
   // 插件宿主也可能按自己的上下文改它。一旦被改脏而没有还原，界面上没有任何东西会纠正，

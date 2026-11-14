@@ -57,8 +57,14 @@ export function storeTheme(theme: Theme, storage: Pick<Storage, 'setItem'>): voi
   } catch {
     // 隐私模式/配额满：主题仍在本会话内生效，不阻塞 UI。
   }
-  // Keep the shared store in sync so AppShell applies the change immediately.
-  // `setState` (not `setTheme`) avoids persisting twice.
+  // **0.52：这里是 DOM 主题的唯一写者。** 之前 DOM 由 `AppShell` 的
+  // `useEffect(() => applyTheme(theme), [theme])` 跟着 store 变，而挂载时它会把 store 里
+  // 的值（可能还没从存储初始化成用户选择）盖到 `main.tsx` 刚写好的 `data-theme` 上 ——
+  // 真机复现过「存储 light、刷新后 data-theme=dark」。把 apply 收进这一处之后，
+  // 写 DOM 的只剩：`main.tsx`（首帧前按存储）、`storeTheme()`（用户显式改）、`AppShell` 自愈。
+  applyTheme(theme);
+  // 同步共享 store：TUI/其它面板读的是 store，不是 DOM。
+  // `setState`（不是 `setTheme`）避免二次持久化。
   useUiStore.setState({ theme });
 }
 
