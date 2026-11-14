@@ -9,6 +9,8 @@ import { dirname } from 'node:path';
 import {
   normalizeClearedToolCallIds,
   normalizeContextAnchor,
+  normalizeContextProjectionAudit,
+  normalizeProjectionDeclaration,
   normalizePromptContextFingerprint,
 } from '../context/index.js';
 import type { Message } from '../types/provider.js';
@@ -53,6 +55,10 @@ interface SessionRow {
   resume_after_restart: string | null;
   /** 0.52 V1：本段冻结的工具结果占位集合（JSON；NULL = 旧行 / 这一段还没做过决策） */
   cleared_tool_call_ids: string | null;
+  /** 0.53 U1：会话级投射声明（JSON；NULL = 旧行 / 还没声明 ⇒ 读侧按 legacy 解析） */
+  context_projection: string | null;
+  /** 0.53 U1：最近一次投射决策审计（JSON；NULL = 还没有决策） */
+  context_projection_audit: string | null;
 }
 
 /** listRich 查询行形状（含派生列 message_count） */
@@ -152,7 +158,9 @@ export class SQLiteSessionStore implements SessionStore {
         context_anchor TEXT,
         prompt_context TEXT,
         resume_after_restart TEXT,
-        cleared_tool_call_ids TEXT
+        cleared_tool_call_ids TEXT,
+        context_projection TEXT,
+        context_projection_audit TEXT
       )
     `);
     // ALTER TABLE 无 IF NOT EXISTS，逐列 try/catch（已存在则静默）
@@ -173,6 +181,10 @@ export class SQLiteSessionStore implements SessionStore {
     this.ensureColumn('resume_after_restart', 'TEXT');
     // 0.52 V1：旧库补列；NULL = 这一段还没做过占位决策（请求视图与落盘逐字一致）
     this.ensureColumn('cleared_tool_call_ids', 'TEXT');
+    // 0.53 U1（ADR-104 §5.1）：旧库补列；NULL = 旧会话，读侧按 placeholder + legacy 解析
+    this.ensureColumn('context_projection', 'TEXT');
+    // 0.53 U1：旧库补列；NULL = 还没有任何投射决策审计（U2 才写）
+    this.ensureColumn('context_projection_audit', 'TEXT');
   }
 
   /** 为旧库补列（列已存在时静默忽略） */
@@ -223,6 +235,12 @@ export class SQLiteSessionStore implements SessionStore {
       cleared_tool_call_ids: normalizeClearedToolCallIds(
         parseJsonColumn(row.cleared_tool_call_ids),
       ),
+      // 0.53 U1：旧行 NULL / 脏 JSON ⇒ undefined ⇒ resolveProjection 走 legacy（placeholder）。
+      context_projection: normalizeProjectionDeclaration(parseJsonColumn(row.context_projection)),
+      // 0.53 U1：审计行（U2 才写；旧行 / 脏 JSON ⇒ undefined）。
+      context_projection_audit: normalizeContextProjectionAudit(
+        parseJsonColumn(row.context_projection_audit),
+      ),
     };
   }
 
@@ -241,8 +259,8 @@ export class SQLiteSessionStore implements SessionStore {
 
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO sessions
-        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, title_source, preview, updated_at, branch, tenant_id, derived_upto_seq, context_anchor, prompt_context, resume_after_restart, cleared_tool_call_ids)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, title_source, preview, updated_at, branch, tenant_id, derived_upto_seq, context_anchor, prompt_context, resume_after_restart, cleared_tool_call_ids, context_projection, context_projection_audit)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -269,6 +287,12 @@ export class SQLiteSessionStore implements SessionStore {
       // 0.52 V1：本段冻结的占位集合（NULL = 这一段还没做过决策）。
       state.cleared_tool_call_ids !== undefined
         ? JSON.stringify(state.cleared_tool_call_ids)
+        : null,
+      // 0.53 U1：投射声明整体存 JSON（NULL = 旧会话 / 还没声明）。
+      state.context_projection !== undefined ? JSON.stringify(state.context_projection) : null,
+      // 0.53 U1：审计行（NULL = 还没有任何决策）。
+      state.context_projection_audit !== undefined && state.context_projection_audit !== null
+        ? JSON.stringify(state.context_projection_audit)
         : null,
     );
   }

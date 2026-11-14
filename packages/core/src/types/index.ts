@@ -13,6 +13,7 @@ export * from './limits.js';
 export * from './logging.js';
 export * from './member-port.js';
 export * from './plugin.js';
+export * from './projection.js';
 export * from './provider.js';
 export * from './run.js';
 export * from './run-record-store.js';

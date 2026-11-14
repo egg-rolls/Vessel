@@ -263,6 +263,14 @@ export interface SessionCreateLikeInput {
   mode?: 'conversation' | 'both';
   /** mode=both 时必填。 */
   files?: { ref: string; paths: string[] };
+  /**
+   * 0.53 U1（ADR-104 §8.3，additive）：新会话的上下文投射模式。
+   *
+   * 缺省 = `placeholder`（用户口径；`passthrough` 是手动 opt-in 的逃生门）。
+   * 校验 / 拒绝码收口在 agent 层：`projection_declaration_invalid` /
+   * `projection_mode_unavailable` / `projection_mode_not_allowed`。
+   */
+  projection_mode?: string;
 }
 
 /** `sessions.create` 的结果（CONTRACT-0.39 §2.3）；无来源时省略 source / seed / counts。 */
