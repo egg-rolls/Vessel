@@ -39,6 +39,7 @@ import { checkGatewayUrl } from './url';
 import { useConnectionControls } from './use-connection-controls';
 import { useInteractionHydration } from './use-interaction-hydration';
 import { useInteractionResponses } from './use-interaction-responses';
+import { useLinkStatus } from './use-link-status';
 import { useReportConnectError } from './use-report-connect-error';
 
 export type { PermissionRequest, PermissionScope } from './types';
@@ -334,6 +335,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       onSessionHistoryChanged: (sessionId) => {
         void useSessionStore.getState().reloadAfterHistoryChange(client, sessionId);
       },
+      // S1d：重连成功（非首次）不等用户操作，强制重取当前路由快照再对账。
+      // 走既有 hydrate 路径（sessions 列表 + 选中会话 detail + interactions），
+      // 不新增 RPC：detail 的 `status`/`run_id` 就是收口「停止按钮 + 正在思考」的权威来源。
+      onReconnected: () => {
+        invalidateRouteSnapshots();
+        void useSessionStore.getState().refresh(client, { force: true });
+        void hydrateInteractions();
+      },
     }),
     [client, hydrateInteractions],
   );
@@ -422,6 +431,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     submitGuard,
   });
 
+  // S1d：断线 < 2s 当作没发生（平台层重启的不可用窗口约 0.6s），超过 2s 才给轻提示。
+  // 状态机在 gateway/link-status.ts（纯逻辑），这里只接 React 的定时器。
+  const linkStatus = useLinkStatus(connectionState);
+
   const value = useMemo<ConnectionContextValue>(
     () => ({
       client,
@@ -448,7 +461,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       lastError,
       reconnectAttempt,
       epoch,
-      stale: hello !== null && connectionState !== 'open',
+      // 延迟版「已断开」：断开 < 2s 不置位，连上立刻清（见 gateway/link-status.ts）。
+      // 终态关闭（鉴权 / 协议）有自己的错误条，别叠一条「已断开」。
+      stale:
+        hello !== null &&
+        linkStatus.visible &&
+        tokenError === null &&
+        lastError === null &&
+        gatewayError === null,
       closeCode: client.closedWithCode,
       permissions,
       asks,
@@ -469,6 +489,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       subscription,
       connectionState,
       hello,
+      // 2s 宽限期到点时只有这个布尔会变（connectionState/hello 都不动），必须进 deps，
+      // 否则 context value 不会重建 → 轻提示永远不会出现。
+      linkStatus.visible,
       platformUrl,
       nodeUrl,
       platformToken,

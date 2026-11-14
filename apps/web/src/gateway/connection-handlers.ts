@@ -4,7 +4,9 @@ import type { EventStore } from '../state/event-store';
 import { useInteractionStore } from '../stores/interactionStore';
 import type { ConnectionState, GatewayClient } from './client';
 import { askFromEvent, interactionExpiredMessage, permissionFromEvent } from './interactions';
-import { classifyCloseCode, nextReconnectDelay, probeThenConnect } from './reconnect';
+import { nextReconnectDelay } from './backoff';
+import { afterConnectionHello, createReconnectDetector } from './link-status';
+import { classifyCloseCode, probeThenConnect } from './reconnect';
 import type { SubscriptionController } from './subscription';
 import type { HelloInfo, RunEvent } from './types';
 
@@ -23,6 +25,14 @@ export interface ConnectionRecoveryHooks {
   hydrateInteractions: () => void;
   /** session.rewound / message.compaction：丢弃该会话更早页并重取尾页。 */
   onSessionHistoryChanged: (sessionId: string) => void;
+  /**
+   * 重连成功（**非**首次连接）：不等用户操作，强制重取当前路由快照再对账。
+   *
+   * 平台层 / node 重启不是 `agent.closed`：事件流的终态帧可能永远不到，客户端会停在
+   * 「停止按钮 + 正在思考」。断线期间的 run 收口只能靠这次强制 hydrate 把快照里的
+   * 终态（含 `interrupted`）拉回来。
+   */
+  onReconnected: () => void;
 }
 
 export interface ConnectionHandlerDeps {
@@ -79,6 +89,8 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   let disposed = false;
   let retryTimer: number | undefined;
   let attempt = 0;
+  /** 区分「首连」与「重连」：只有重连成功才强制 hydrate（纯逻辑见 link-status.ts）。 */
+  const reconnectDetector = createReconnectDetector();
   // 新的连接目标（token / URL / 显式重连）：旧缓冲属于上一个连接，清空。
   eventStore.clear();
   setHello(null);
@@ -200,6 +212,10 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     setEpoch((value) => value + 1);
     // 重连后服务端回到无过滤连接：按当前路由重新收敛。
     subscription.onConnectionHello(info.latest_seq);
+    // S1d：重连成功（非首次）立刻强制 hydrate，不等用户点设置页 / 刷新。
+    // 断线期间 run 的终态帧可能已经丢在重启里，只有快照能收口（含 interrupted）。
+    // 判定 + 接线在 link-status.ts 里，探针驱动同一个函数做「恰好一次」断言。
+    afterConnectionHello({ detector: reconnectDetector, onReconnected: recovery.onReconnected });
   });
 
   const offGap = client.onGap((gap) => {
@@ -233,7 +249,7 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
       if (close.lastError !== undefined) setLastError(close.lastError);
       return;
     }
-    // 1s 起指数退避，上限 30s，带 jitter。
+    // 0.5s 起指数退避，上限 8s，带 jitter（S1d：抖动抑制，断线期间不刷屏）。
     const delay = nextReconnectDelay(attempt);
     attempt += 1;
     setReconnectAttempt(attempt);
