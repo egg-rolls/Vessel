@@ -18,6 +18,8 @@ import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
 import type { Verbosity } from '../../state/visibility';
+import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
+import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { AgentMessageCard } from './AgentMessageCard';
 import { agentSenderOfName } from './agent-sender';
 import { filterTimelineItems, reasoningVisible, runningToolHint } from './chat-visibility';
@@ -29,6 +31,7 @@ import {
   contextChangeEntries,
   envCardOfPromptContext,
 } from './env-notice';
+import { humanizeRunError } from './error-text';
 import { MessageRefs } from './MessageRefs';
 import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
@@ -247,6 +250,12 @@ export function RunFailureCard({
   // 「能不能展开」仍然只由**可展示内容**决定（错误原文 / 人话提示 / 来源行）：状态 chip 与
   // run id 只是展开体里的排头两行，不能因为它们把没有错误原文的纯行头变成可展开卡。
   const expanded = error !== undefined || hint !== null || failure.source === 'session';
+  // 0.52：错误文本分级。内部 reason 翻成人话；原文只在 debug 口径（与内部事件同一开关）下露出。
+  const { config: configState } = useConfigStoreApi();
+  const humanized = humanizeRunError(error);
+  const showRawError = showsInternalEvents(
+    resolveUiVisibility(configState.status === 'success' ? configState.data : null),
+  );
   const body = expanded ? (
     <>
       {/* 展开体顶部两行（顺序固定，各占一行）：运行失败状态 → 运行 ID。
@@ -257,7 +266,17 @@ export function RunFailureCard({
           {t('chat.run.failure.run', { id: truncate(failure.runId, 12) })}
         </span>
       </div>
-      <pre className="run-error-body">{error ?? t('chat.run.noError')}</pre>
+      {/* 0.52：错误文本分级 —— 内部 reason（lease_expired / stale_fence …）先翻成人话，
+          原文只在 debug 口径下露出（ 或 Observe 面）。
+          用户开着 normal 却在失败卡里看到  就是这里漏的。 */}
+      <pre className="run-error-body">
+        {humanized !== undefined && humanized.key !== undefined
+          ? t(humanized.key)
+          : (error ?? t('chat.run.noError'))}
+      </pre>
+      {humanized?.key !== undefined && showRawError && error !== undefined && (
+        <pre className="run-error-body text-2xs text-muted">{error}</pre>
+      )}
       {hint !== null && <p className="run-error-hint">{hint}</p>}
       {failure.source === 'session' && (
         <p className="run-error-hint">{t('chat.run.failure.fromRecord')}</p>

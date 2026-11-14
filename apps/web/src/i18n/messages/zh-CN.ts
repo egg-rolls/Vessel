@@ -248,6 +248,10 @@ export const messages = {
   'chat.run.hiddenEarlier': '已显示最近 {shown} 个运行；更早的 {hidden} 个请在运行详情中查看。',
   // 0.52：会话时间线里的失败卡（同一次 run 只有一张）
   'chat.run.failed': '运行失败',
+  'chat.run.reason.lease': '会话租约丢失（通常是机器休眠 / 另一实例接管），本轮已中断',
+  'chat.run.reason.locked': '会话被另一实例占用，本轮已中断',
+  'chat.run.reason.rateLimited': '模型侧限流或额度不足，本轮已中断',
+  'chat.run.reason.contextTooLong': '上下文超出模型窗口，本轮已中断',
   'chat.run.failure.aria': '运行失败详情',
   'chat.run.failure.run': '运行 {id}',
   'chat.run.failure.fromRecord': '来自会话记录：该轮的实时事件已不在缓冲区，这里只保留错误摘要。',

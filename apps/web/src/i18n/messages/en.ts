@@ -250,6 +250,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.run.hiddenEarlier':
     'Showing the latest {shown} runs; open run details for the earlier {hidden}.',
   // 0.52: run failure card in the chat timeline (one card per failed run)
+  'chat.run.reason.lease':
+    'Session lease lost (machine sleep or another instance took over); this run was interrupted',
+  'chat.run.reason.locked': 'Session held by another instance; this run was interrupted',
+  'chat.run.reason.rateLimited': 'Model rate limit or quota exhausted; this run was interrupted',
+  'chat.run.reason.contextTooLong':
+    'Prompt exceeded the model context window; this run was interrupted',
   'chat.run.failed': 'Run failed',
   'chat.run.failure.aria': 'Run failure details',
   'chat.run.failure.run': 'Run {id}',
