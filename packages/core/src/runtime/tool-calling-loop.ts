@@ -62,7 +62,13 @@ export interface MessageWindowPort {
   appendPiiDeadNotice?(): Promise<void>;
   appendInjectedMessages(runId: string, messages: readonly Message[] | undefined): void;
   updateRealTokens(total: number): void;
-  /** 对应 `context.autoCompactAsync?.()`；实现缺省时返回 undefined。 */
+  /**
+   * 段起点压缩入口（`context.autoCompactAsync?.()`）；实现缺省时返回 undefined。
+   *
+   * 0.52 V2：**loop 不再调用**它。压缩 = 删中段 + 插新摘要 = 就地改写历史，只允许在
+   * 段边界发生；调用点只剩 `ExecutionUnit` 的段起点（seed 之后、第一条请求之前）。
+   * 接口保留是为了实现方（ExecutionUnit / 探针 mock）契约稳定。
+   */
   autoCompact(): Promise<number | undefined>;
 }
 
@@ -189,18 +195,16 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       throw new LimitExceededError(limitBlock);
     }
 
-    // 90%–95%：不压缩，只提示换 ExecutionUnit；>95% 交给 autoCompactAsync。
+    // 90%–95%：不压缩，只提示换 ExecutionUnit；>95% 交给段起点压缩。
     // 自动压缩关闭时没有后续压缩降水位，提示不设上界（见 publishContextPressureWarning）。
     ctx.controls.publishContextPressureWarning();
 
-    // 0.6.1 E3：按阈值触发真实摘要压缩（旧 WorkingContext 无此方法则跳过）。
-    // 必须在组装请求前完成，保证本轮请求看到压缩后的历史。
-    const compacted = await ctx.window.autoCompact();
-    if (typeof compacted === 'number') {
-      ctx.controls.publishCompacted(compacted, 'auto');
-      // 压缩会删除中间的旧消息：必须显式标记，否则守卫会把它当成前缀重写。
-      if (compacted > 0) ctx.controls.ensurePrefixReason('compaction');
-    }
+    // 0.52 V2：**run 内不许压缩**。压缩 = 删中段 + 插新摘要 = 就地改写历史，历史一旦
+    // 在某一轮改形，本轮之前与之后的请求前缀就对不上（append-only 不变量破、prefix
+    // cache 全丢）。压缩因此只在段边界发生：`ExecutionUnit` 在 run 起点（seed 之后、
+    // 第一条请求之前）调 `autoCompactAsync()`，压缩成功后那段视图就是新段的基准
+    // （`new(compaction)`），段内不再改写。撑爆上下文时也不在这里补救 —— core 追加一张
+    // 「超限」卡并以失败收尾，下一次 run 的段起点压缩后开新段。
 
     // CONTRACT-prefix-invariant §2：system 冻结。hook 可以读基底 system，
     // 但写入被忽略（首次写入发一次事件），system 始终是会话级基底 + Self Card。

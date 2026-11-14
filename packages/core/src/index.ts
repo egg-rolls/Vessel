@@ -39,6 +39,7 @@ export {
   type ProviderPayloadToolCall,
   planClearedToolResults,
   projectionProblems,
+  renderContextOverflowNotice,
   renderContextTrimNotice,
   type RequestSequenceDiff,
   type RequestSequenceDiffKind,

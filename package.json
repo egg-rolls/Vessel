@@ -89,7 +89,8 @@
     "check:rotate-accounting": "bun run scripts/check-rotate-accounting.ts",
     "check:web-fetch": "bun run scripts/check-web-fetch.ts",
     "check:request-append-only": "bun run scripts/check-request-append-only.ts",
-    "check:tool-result-clear": "bun run scripts/check-tool-result-clear.ts"
+    "check:tool-result-clear": "bun run scripts/check-tool-result-clear.ts",
+    "check:compaction-segment": "bun run scripts/check-compaction-segment.ts"
   },
   "workspaces": [
     "packages/*",

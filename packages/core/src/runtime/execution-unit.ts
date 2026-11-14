@@ -8,6 +8,7 @@ import {
   applyReadSideMaskers,
   estimateTokens,
   planClearedToolResults,
+  renderContextOverflowNotice,
   renderContextTrimNotice,
   shouldPublishSystemContext,
   systemContextChangesFromFingerprint,
@@ -726,6 +727,43 @@ export class ExecutionUnit {
         error: errorText(error),
       });
     });
+  }
+
+  /**
+   * 0.52 V2：压缩只在**段边界**发生（run 起点 / 用户显式压缩），run 内绝不改写历史。
+   *
+   * 调用点：`run()` 与 resume 的 seed 之后、本段第一条请求之前。压缩成功 ⇒ 本段的基准
+   * 就是压缩后的 seed 视图（段因 `compaction`，守卫与 UI 都按 `new(compaction)` 记一段），
+   * 段内不再压缩。旧行为是在 tool loop 的**每一轮**请求前压缩：同一段内请求前缀会被反复
+   * 改形（删中段 + 插新摘要），「只有 append 或 pop」与 prefix cache 同时破。
+   */
+  private async compactAtSegmentStart(execution: Run): Promise<void> {
+    const window = execution.workingContext;
+    const autoCompact = window.autoCompactAsync;
+    if (autoCompact === undefined) return;
+    let removed: number;
+    try {
+      removed = await autoCompact.call(window);
+    } catch {
+      // 段起点压缩是尽力而为：摘要失败不该让整个 run 起不来（context-manager 内部已回退
+      // 占位符压缩）。真撑爆时走「超限」卡 + 失败收尾那条路。
+      return;
+    }
+    this.publishCompacted(window, execution.runId, execution.sessionId, removed, 'auto');
+    // 压缩删掉了中段：本段从压缩后的视图开始，必须显式标段因，否则守卫会当成前缀重写。
+    if (removed > 0) this.pendingPrefixReason ??= 'compaction';
+  }
+
+  /**
+   * 0.52 V2：run 内撑爆上下文时**不许静默改写历史**。
+   *
+   * 追加一张「超限」env 卡（scope `context`）讲清发生了什么与下一步动作，然后让本次 Run
+   * 以 provider 的原始错误收尾；压缩留到下一个段起点（`new(compaction)` 开新段）。
+   * 旧行为是这里 `forceCompact(execution, 'overflow')` 就地删中段 + 插摘要后重试 —— 一次
+   * run 内因此出现两个不同的历史视图。
+   */
+  private appendContextOverflowNotice(): void {
+    this.appendNotice(renderContextOverflowNotice());
   }
 
   /**
@@ -1530,6 +1568,10 @@ export class ExecutionUnit {
     // 0.52：恢复「上次发布过的环境快照指纹」，让重启后的第一条消息能正确去重。
     this.restorePromptContextFingerprint(stored);
 
+    // 0.52 V2：压缩只在**段边界**发生 —— 这里是本段的起点（seed 之后、第一条请求之前）。
+    // 压缩成功 ⇒ 本段基准 = 压缩后的 seed 视图（`new(compaction)`），段内不再改写历史。
+    await this.compactAtSegmentStart(execution);
+
     // 0.52 V1：段起点的占位决策只算一次并冻结（落 SessionState.cleared_tool_call_ids）。
     // 必须在 seed / 压缩之后、本 Run 第一条请求之前：段内不再改，`pop` 之后下一个段起点重算。
     this.freezeSegmentClearedToolResults(execution, stored);
@@ -1959,6 +2001,8 @@ export class ExecutionUnit {
       execution.workingContext.setContextAnchor?.(history.sessionState?.context_anchor, this.model);
       this.seedWorkingContext(execution, history);
       this.seedRealTokensFromLastRequest(execution, history);
+      // 0.52 V2：resume 也是一个段起点 —— 压缩同样只在这里做一次。
+      await this.compactAtSegmentStart(execution);
       // 0.52 V1：resume 也是一个段起点 —— 占位决策同样只在这里算一次并冻结。
       this.freezeSegmentClearedToolResults(execution, history.sessionState ?? null);
 
@@ -2142,12 +2186,15 @@ export class ExecutionUnit {
    *   headers/body timeout、429 / 502 / 503 / 504）：指数退避 + 抖动后重发同一请求
    *   （`ProviderRetryPolicy`，默认 4 次、base 500ms、单次封顶 8s）。**只有本次请求
    *   一个增量都没流出过才重试**——已经流出正文 / 思考再重发，父级会看到两段重复文本。
-   * - **context-overflow**（400）：强制压缩一次后重试一次（0.10 R2-17）。
+   * - **context-overflow**（400）：0.52 V2 起**不再**就地压缩重试 —— run 内不许改写历史
+   *   （见 `appendContextOverflowNotice`）：追加一张「超限」卡并原样抛出，下一个段起点压缩。
    *
    * 取消优先：`AbortSignal` 中断（用户取消 / rotate / shutdown）立即抛出，不退避、
    * 不重试；退避期间不改 run 状态、不碰租约。
    *
-   * 每次真实请求都递增 request 计数并发布 `llm.request`（重试请求看到的是压缩后的上下文）。
+   * 每次真实请求都递增 request 计数并发布 `llm.request`。0.52 V2：run 内**不再**压缩 --
+   * 撑爆上下文就追加一张「超限」卡并原样抛出，压缩留给下一个段起点（`new(compaction)`），
+   * 所以这里不再有「重试时看到另一份历史」的路径。
    * 重试用尽后原样抛出，不包装 provider 错误。
    *
    * 两处落盘形态：`llm.request` 的落盘副本只带元信息（`persistData`，正文留在发布
@@ -2160,11 +2207,12 @@ export class ExecutionUnit {
       tools: NonNullable<ChatRequest['tools']>;
       sessionId: string;
       signal?: AbortSignal;
+      /** 重新按当前窗口组装请求；0.52 V2 起 run 内不改写历史，保留位给段起点以后的路径。 */
       rebuildMessages: () => Message[];
     },
   ): Promise<LLMResponse> {
     const { runId, stats } = execution;
-    let messages = args.messages;
+    const messages = args.messages;
     let overflowRetried = false;
     /** 重试链（传输层 / overflow）里的第几次真实请求（1 起；写进落盘元信息） */
     let attempt = 1;
@@ -2368,14 +2416,17 @@ export class ExecutionUnit {
 
         if (overflowRetried || !isContextOverflowError(error)) throw error;
         overflowRetried = true;
-        attempt += 1;
-        const removed = await this.forceCompact(execution, 'overflow');
-        messages = args.rebuildMessages();
-        this.logger.warn('context overflow; compacted and retrying once', {
+        // 0.52 V2：run 内**不许**改写历史（旧行为是 `forceCompact(execution, 'overflow')`
+        // 删中段 + 插新摘要后重试 ⇒ 一次 run 里出现两个历史视图）。现在只追加一张
+        // 「超限」卡并把本次 Run 以原始错误收尾：压缩发生在下一个段起点
+        // （`compactAtSegmentStart`），那里开的是 `new(compaction)` 新段。
+        this.appendContextOverflowNotice();
+        this.logger.warn('context overflow; run ends here, next run starts a new segment', {
           run_id: runId,
-          removed_messages: removed,
+          streamed,
           error: errorText(error),
         });
+        throw error;
       }
     }
   }
@@ -2527,7 +2578,12 @@ export class ExecutionUnit {
     return { removed, remaining, messages };
   }
 
-  /** 强制压缩一次（overflow 重试用）；压缩失败不覆盖 provider 原始错误。 */
+  /**
+   * 强制压缩一次（用户显式压缩；压缩失败不覆盖调用方的原始错误）。
+   *
+   * 0.52 V2：**唯一**合法的压缩时机是段边界 —— 用户显式压缩（两次 run 之间）与 run 起点
+   * （`compactAtSegmentStart`）。run 内撑爆上下文走「超限」卡 + 收尾失败，不再走这里。
+   */
   private async forceCompact(
     execution?: Run,
     reason: ContextCompactedReason = 'overflow',

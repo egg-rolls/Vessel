@@ -16,6 +16,10 @@ export {
   normalizeContextAnchor,
 } from './anchor.js';
 export {
+  type ContextNoticeLocale,
+  renderContextOverflowNotice,
+} from './context-notice.js';
+export {
   formatClearedToolResult,
   isClearedToolResult,
   normalizeClearedToolCallIds,
