@@ -452,6 +452,26 @@ for (const m of all) {                       // all = 落盘全量 messages
 
 `readback` 用可判别联合（discriminated union）而不是 `{kind, ...any}`：三种来源的 UI 动作完全不同（拉事件 / 按偏移读文件 / 解句柄），一个 `any` 会把「不支持」变成运行时惊喜。
 
+#### 4.2.1 读回的三处语义必须分开（2026-11-15 实现反哺）
+
+`original_available` 有四种值，但**只有三种**能读回，而且读回来的东西**不是一回事**，UI 文案不许共用一句：
+
+| 状态 | 读回动作 | 拿回来的是什么 | 文案要求 |
+| --- | --- | --- | --- |
+| `inline` | 不需要 | 原文已在面板里 | — |
+| `inline_truncated` | `sessions.events{tool_call_id, since_seq:0}` | **被 8 KiB 截掉的那条尾巴**（正文前 8 KiB 已在面板里） | 「读回完整原文」，不能暗示「占位之前」 |
+| `readback` | 同上（wire 会下发 `readback.since_seq` 句柄） | **占位之前的原文** | 「读回原文原样」 |
+| `gone` | 无按钮 | — | 「原文已不可恢复」 |
+
+- **`inline_truncated` 不要求服务端额外下发句柄**（wire 只在该条被投影时给 `readback` 键）。许可 UI 直接用
+  `sessions.events{tool_call_id, since_seq:0}` 读回：这是**正式接口**，不是「猜来源」，不违反上面那句「UI 不猜」
+  ——「猜」指的是猜 `kind`（events / file / handle），不是禁止用已知参数拼请求。`since_seq` 是**排他**游标，`0` = 从日志头找。
+- `since_event_seq` 缺省时**不渲染**「发生 seq：未知」这一行（永远显示"未知"是噪音）；有值才显示。
+- badge 文案**不改词表**（§3.2 固定）：`readback` / `gone` 的「为什么」写在原文面板首行（可见文字）+ `title`，
+  不往 badge 上拼后缀。
+- `projection_summary` 的累计数 + 「有 N 条原文体量未知，这是下界」的提示，本轮落在**每张卡的展开体**里；
+  §3.5 的独立批量汇总卡**本轮不做**（另排期）。
+
 ### 4.3 组件层的通用化（三个零件，不做四个）
 
 ```
