@@ -43,16 +43,34 @@
  * 判据结束后立刻还原。`beforeSync` 只用来给「即将发生的同步」打标签（`wal` / `block` / …），
  * 以及注入失败；标签在 `sync()` 调用处**同步消费**，不会串到下一次同步。
  *
- * ## 负控（证明判据不是恒真断言）
+ * ## 负控（证明判据不是恒真断言）—— 可复现开关
  *
- * 写这个门禁时做过两次变异验证（都已还原，未留在提交里）：
+ * ```
+ * bun run scripts/check-timeline-publish-after-wal.ts                       # 正常：必须全绿，退出码 0
+ * VESSEL_I2_NEGATIVE_CONTROL=1 bun run scripts/check-timeline-publish-after-wal.ts   # 负控：判据必须红，退出码 1
+ * bun run scripts/check-timeline-publish-after-wal.ts --negative-control             # 同上（等价开关）
+ * ```
  *
- * 1. 把 `writer.ts` 的 `factStep` 改成「`publishRecord()` 提前到 `writeWal()` 之前」⇒ ①/②/③/④ 立刻红
- *    （`seq=3>wal_head=2`、`seq=1 durableEnd=-1` 等），说明这几条不是空转；
- * 2. 用合成源码喂 `judgeWiring()`：半接线（两个 open 调用点只有一个带 `publish`）与
- *    `publish: undefined` 都被打红，说明 KNOWN GAP 的升级形态真的会变严。
+ * 负控**不改任何生产代码**：注入点只用公开的 `beforeSync` 测试缝。`beforeSync('wal'|'block')` 正是
+ * 「字节已写、fsync 还没返回」那一刻，此时用写者自己的状态算出「正要持久化的那个 seq」
+ * （`wal_head + 1`）并当一次 publish 记下来 —— 这就是「发布提前」这个 bug 的样子。判据读的
+ * `wal_head` 仍是写者实时真值，所以红出来的是真数字。
+ *
+ * 它证明「**判据**抓得住这类 bug」；写者内部真实顺序由正常模式（全绿）证明，两者互补。
+ * 负控模式的末行是 `RESULT: NEGATIVE-CONTROL RED-AS-EXPECTED (checks=… failed=…)`，
+ * 不打印 `KNOWN GAP` 行。
+ *
+ * 退出码约定：`0` = 正常模式全过；`1` = 有 FAIL（含负控模式下「红得对」这个期望结果，
+ * **不代表门禁通过**）；`2` = 负控模式下判据居然全绿 —— 门禁自己失效了，必须修。
+ *
+ * 历史旁证（一次性手工验证，已还原、未进提交）：把 `writer.ts` 的 `factStep` 改成
+ * 「`publishRecord()` 提前到 `writeWal()` 之前」⇒ ①/②/③/④ 立刻红（`seq=3>wal_head=2`、
+ * `seq=1 durableEnd=-1` 等），与脚本化负控的红法一致。另用合成源码喂 `judgeWiring()`：
+ * 半接线（两个 open 调用点只有一个带 `publish`）与 `publish: undefined` 都被打红，
+ * 说明 KNOWN GAP 的升级形态真的会变严。
  *
  * 用法：`bun run scripts/check-timeline-publish-after-wal.ts`
+ * 退出码：见上。
  * 退出码：0 = 全过；1 = 有 FAIL。
  */
 
@@ -85,6 +103,22 @@ const SLOW_FSYNC_MS = 20;
 
 const KNOWN_GAP_TEMPLATE =
   'KNOWN GAP: 端到端 I2 未接线 —— 装配层未传 publish（%WHERE%），本门禁只覆盖写者内部不变量';
+
+/**
+ * 负控开关：`VESSEL_I2_NEGATIVE_CONTROL=1`（或 `--negative-control`）时注入「发布提前」这一 bug
+ * 形态，让判据**必然红**。
+ *
+ * 注入手法只用公开的 `beforeSync` 测试缝（**不改任何生产代码**）：`beforeSync('wal'|'block')` 就是
+ * 「字节已写、fsync 还没返回」那一刻，此刻用写者自己的状态算出「正要持久化的那个 seq」
+ * （`wal_head + 1`）并当作一次 publish 记下来 —— 这正是提前发布会发生的事。判据用的 `wal_head`
+ * 仍是从写者实时读的真值，所以红出来的是真数字，不是编的。
+ *
+ * 它证明的是「**判据**抓得住这类 bug」；写者内部的真实顺序由正常模式（全绿）证明，两者互补。
+ * 详见文件头「负控」一节。
+ */
+const NEGATIVE_CONTROL =
+  process.env.VESSEL_I2_NEGATIVE_CONTROL === '1' || process.argv.includes('--negative-control');
+let negativeInjections = 0;
 
 let checkCount = 0;
 let failureCount = 0;
@@ -251,6 +285,8 @@ function createSyncSeam(
       const ordinal = (counts.get(kind) ?? 0) + 1;
       counts.set(kind, ordinal);
       pendingLabel = kind;
+      // 负控：`beforeSync('wal'|'block')` 正是「字节已写、fsync 未返回」，在这里注入「发布提前」。
+      if (NEGATIVE_CONTROL && (kind === 'wal' || kind === 'block')) currentProbe?.premature();
       if (!shouldFail(kind, ordinal)) return;
       // 注入点在 `sync()` 之前抛错 ⇒ 标签不能留给下一次真正的同步。
       pendingLabel = undefined;
@@ -280,33 +316,48 @@ interface PublishProbe {
   observations: PublishObservation[];
   attach: (writer: TimelineWriter) => void;
   publish: (record: TimelineRecord) => void;
+  /** 负控专用：把「下一个未持久 seq」当作已经发布（只在 `VESSEL_I2_NEGATIVE_CONTROL=1` 下被调用）。 */
+  premature: () => void;
 }
+
+/** 当前活跃的 spy（负控注入点用它拿「写者 + 真值 `wal_head`」）。 */
+let currentProbe: PublishProbe | undefined;
 
 function createPublishProbe(): PublishProbe {
   const observations: PublishObservation[] = [];
   let writer: TimelineWriter | undefined;
-  return {
+
+  const recordObservation = (seq: number, type: string): void => {
+    const durable = fsyncProbe.spans.filter((span) => span.kind === 'wal' || span.kind === 'block');
+    const last = durable[durable.length - 1];
+    observations.push({
+      seq,
+      type,
+      // writer 未挂上 ⇒ -1，判据会立刻红（不会静默放行）。
+      walHead: writer?.heads().wal_head ?? -1,
+      publishedHead: writer?.publishedHead() ?? -1,
+      at: performance.now(),
+      durableSyncs: durable.length,
+      durableEnd: last?.end ?? -1,
+    });
+  };
+
+  const probe: PublishProbe = {
     observations,
     attach: (target) => {
       writer = target;
     },
-    publish: (record) => {
-      const durable = fsyncProbe.spans.filter(
-        (span) => span.kind === 'wal' || span.kind === 'block',
-      );
-      const last = durable[durable.length - 1];
-      observations.push({
-        seq: record.seq,
-        type: record.type,
-        // writer 未挂上 ⇒ -1，判据会立刻红（不会静默放行）。
-        walHead: writer?.heads().wal_head ?? -1,
-        publishedHead: writer?.publishedHead() ?? -1,
-        at: performance.now(),
-        durableSyncs: durable.length,
-        durableEnd: last?.end ?? -1,
-      });
+    publish: (record) => recordObservation(record.seq, record.type),
+    premature: () => {
+      const target = writer;
+      if (target === undefined) return;
+      negativeInjections += 1;
+      // `heads().wal_head + 1` = 写者此刻正要持久化、但 fsync 尚未返回的那个 seq。
+      recordObservation(target.heads().wal_head + 1, '(negative-control: publish-before-fsync)');
     },
   };
+  currentProbe = probe;
+  return probe;
 }
 
 function triplesOf(observations: readonly PublishObservation[]): string {
@@ -1162,6 +1213,11 @@ async function main(): Promise<void> {
   const workDir = await mkdtemp(join(tmpdir(), 'vessel-i2-publish-after-wal-'));
   console.log('ADR-105 I2：publish 只能发生在 WAL 之后（行为断言，无静态读码）');
   console.log(`work-dir: ${workDir}`);
+  console.log(
+    NEGATIVE_CONTROL
+      ? 'negative-control: ACTIVE（VESSEL_I2_NEGATIVE_CONTROL=1 —— 已注入「发布提前」，判据预期必然红）'
+      : 'negative-control: available (VESSEL_I2_NEGATIVE_CONTROL=1)',
+  );
   let verdict: WiringVerdict = { mode: 'gap', scan: { publishSeen: false, openCalls: [] } };
   try {
     selfTestWiringScan();
@@ -1175,6 +1231,23 @@ async function main(): Promise<void> {
     await rm(workDir, { recursive: true, force: true });
   }
   console.log('');
+  if (NEGATIVE_CONTROL) {
+    // 负控模式的判定：红 = 门禁抓得住「发布提前」= 期望结果；没红（或根本没注入） = 门禁本身有 bug。
+    const caughtFailures = failureCount;
+    const caught = caughtFailures > 0 && negativeInjections > 0;
+    assertTrue(
+      '负控：注入「发布提前」后判据必然红（本门禁抓得住这类 bug）',
+      caught,
+      `注入 ${negativeInjections} 次，failed=${caughtFailures}（两者都必须 > 0）`,
+    );
+    console.log(
+      `RESULT: NEGATIVE-CONTROL ${caught ? 'RED-AS-EXPECTED' : 'BROKEN'} (checks=${checkCount} failed=${caughtFailures} injected=${negativeInjections})`,
+    );
+    // 红是期望结果，所以退出码 1（与正常模式的 FAIL 同义：I2 判据红了，不许当成"通过"）；
+    // 没红/没注入 ⇒ 退出码 2：门禁失效，必须修门禁。
+    process.exitCode = caught ? 1 : 2;
+    return;
+  }
   console.log(
     `RESULT: ${failureCount === 0 ? 'PASS' : 'FAIL'} (checks=${checkCount} failed=${failureCount})`,
   );
