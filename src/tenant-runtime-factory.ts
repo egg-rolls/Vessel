@@ -51,6 +51,7 @@ import {
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { createFeishuFromConfig, stopFeishuChannel } from './feishu-wiring';
 import { FileLeaseService } from './lease-service';
+import { normalizeLegacyToolName } from './legacy-tool-names';
 import { installMcp, type McpControl, type McpPluginLike } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import {
@@ -463,17 +464,15 @@ function contextConfigFor(config: VesselConfig, summarizer: ContextSummarizer | 
 }
 
 /**
- * 老配置兼容：0.52 前工具名是 `ask_user`，用户 YAML 的 `auto_approve` / `never_auto_approve`
- * 里可能仍写着旧名 —— 统一换算成现行名 `ask`。
+ * 0.8.2 Wave 2B1：runtime 共用的 resolved 权限配置。
  *
+ * 老配置兼容：用户 YAML 的 `auto_approve` / `never_auto_approve` 里可能仍写着工具**旧名**
+ * （`ask_user` / `pii.reveal`）—— 统一由 `normalizeLegacyToolName` 换算成现行名。
+ *
+ * 表在 `src/legacy-tool-names.ts`（单一真源，与 `scripts/check-tool-name-aliases.ts` 共用）。
  * 不换算的后果正是 L-011 那类事故的另一面：注册侧改了、选择侧不认，而且没有报错，
  * 用户当年选的「always / never」静默失效。
  */
-export function normalizeLegacyAskToolName(name: string): string {
-  return name === 'ask_user' ? 'ask' : name;
-}
-
-/** 0.8.2 Wave 2B1：runtime 共用的 resolved 权限配置。 */
 export function resolveRuntimePermission(
   config: VesselConfig,
   headless: boolean,
@@ -482,14 +481,11 @@ export function resolveRuntimePermission(
     default: headless ? 'allow' : 'ask',
     // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask。
     autoApprove: [
-      ...new Set([
-        ...(config.permission?.autoApprove ?? []).map(normalizeLegacyAskToolName),
-        'ask',
-      ]),
+      ...new Set([...(config.permission?.autoApprove ?? []).map(normalizeLegacyToolName), 'ask']),
     ],
     // 0.27：配置级保险；用户显式配置时以其值为准（与 autoApprove 语义一致，不合并默认）。
     neverAutoApprove: (config.permission?.neverAutoApprove ?? ['agent.close']).map(
-      normalizeLegacyAskToolName,
+      normalizeLegacyToolName,
     ),
   };
 }
