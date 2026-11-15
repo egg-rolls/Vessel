@@ -39,6 +39,7 @@ import {
   type Plugin,
   planClearedToolResults,
   type SessionEventInput,
+  SessionEventLog,
   type SessionEventLogPort,
   type SessionEventRecord,
   type SessionState,
@@ -231,7 +232,7 @@ interface RunEventLike {
 class SimNode {
   readonly dir: string;
   readonly events: MemoryEventStream;
-  readonly log: ProbeEventLog;
+  readonly log: SessionEventLogPort;
   readonly store: FileSessionStore;
   readonly eu: ExecutionUnit;
   readonly provider: ScriptedProvider;
@@ -240,7 +241,7 @@ class SimNode {
   constructor(
     dir: string,
     events: MemoryEventStream,
-    log: ProbeEventLog,
+    log: SessionEventLogPort,
     store: FileSessionStore,
     eu: ExecutionUnit,
     provider: ScriptedProvider,
@@ -256,10 +257,15 @@ class SimNode {
   static async start(
     dir: string,
     toolNames: readonly string[],
-    options?: { store?: FileSessionStore | StateInjectingStore; maxTokens?: number },
+    options?: {
+      store?: FileSessionStore | StateInjectingStore;
+      maxTokens?: number;
+      /** 事件日志端口；缺省 = 没有 `lastSeq` 的 `ProbeEventLog`（读回路径不可用）。 */
+      eventLog?: SessionEventLogPort;
+    },
   ): Promise<SimNode> {
     const events = new MemoryEventStream();
-    const log = new ProbeEventLog();
+    const log = options?.eventLog ?? new ProbeEventLog();
     const store = options?.store ?? new FileSessionStore(dir);
     const windowTokens = options?.maxTokens ?? WINDOW;
     const provider = new ScriptedProvider(toolNames);
@@ -573,10 +579,10 @@ async function scenarioAudit(): Promise<void> {
   });
 }
 
-// ── ⑤⑥ fail-open：未实现 mode / 非法声明 ────────────────────────────────────
+// ── ⑤⑥ fail-open：读回能力不可用 / 非法声明 ────────────────────────────────
 
 async function scenarioFailOpen(): Promise<void> {
-  section('⑤ 未实现 mode（archive_notice）⇒ fail-open passthrough + 审计 reason');
+  section('⑤ 读回能力不可用 ⇒ fail-open passthrough + 审计 reason（不发卡）');
 
   await withDir('vessel-proj-arch-', async (dir) => {
     const node = await SimNode.start(dir, ['probe_read_a']);
@@ -602,6 +608,13 @@ async function scenarioFailOpen(): Promise<void> {
         ['projection_mode_unavailable'],
       );
       expect(
+        '⑤.3b 降级事件点明是「读回路径不可用」（readback 判据，additive 字段）',
+        node
+          .eventsOf('context.projection_degraded')
+          .map((event) => (event.data ?? {}).readback ?? null),
+        ['unavailable'],
+      );
+      expect(
         '⑤.4 生效模式 passthrough ⇒ 请求里零占位（不许静默按 placeholder 跑）',
         node.provider.requests.every((messages) => clearedIdsOf(messages).length === 0),
         true,
@@ -612,6 +625,59 @@ async function scenarioFailOpen(): Promise<void> {
         state.context_projection?.mode ?? null,
         'archive_notice',
       );
+      // 读回路径不可用时**一张归档卡都不许写**（卡上的「按 id 读回」兑不了现）。
+      // 有历史可归档的那种情形由 check-archive-notice 的 ⑤.4/⑤.5 用真历史钉住。
+      expect(
+        '⑤.7 不发归档卡、也不发归档事件（读不回来就不许承诺）',
+        [
+          (state.messages ?? []).filter(
+            (message) =>
+              message.name === 'vessel:notice' &&
+              /archived this run|本轮归档/.test(String(message.content)),
+          ).length,
+          node.eventsOf('context.archive_notice').length,
+        ],
+        [0, 0],
+      );
+    } finally {
+      node.stop();
+    }
+  });
+
+  // 对照：同一个场景，事件日志换成**有 `lastSeq`** 的真 `SessionEventLog`（即
+  // `sessions.events` 真能读回来的那种）⇒ 不降级。这一条与上面成对：
+  // 「降级是不是被读回判据触发的」靠它才判得出来（否则 ⑤ 只是「反正都降级」）。
+  await withDir('vessel-proj-arch-readback-', async (dir) => {
+    const realLog = new SessionEventLog({ dir: join(dir, 'sessions'), durable: false });
+    const node = await SimNode.start(dir, ['probe_read_a'], { eventLog: realLog });
+    try {
+      await node.declare({ mode: 'archive_notice' });
+      const state = await node.run('读这份文件');
+      const audit = state.context_projection_audit ?? null;
+      expect(
+        '⑤.8 对照：读回路径可用 ⇒ 生效 archive_notice（不降级、reason 为 null）',
+        audit === null ? null : [audit.steps, audit.reason, audit.requested_mode],
+        [['archive_notice', 'archive_notice'], null, null],
+      );
+      expect(
+        '⑤.9 对照：没有 degraded 事件；applied 明确写出 effective_mode / readback',
+        [
+          node.eventsOf('context.projection_degraded').length,
+          node
+            .eventsOf('context.projection_applied')
+            .map((event) => [
+              (event.data ?? {}).effective_mode ?? null,
+              (event.data ?? {}).readback ?? null,
+            ]),
+        ],
+        [0, [['archive_notice', 'available']]],
+      );
+      expectTrue(
+        '⑤.10 对照：archive_notice 也不改写请求视图（零占位）',
+        node.provider.requests.every((messages) => clearedIdsOf(messages).length === 0),
+        '请求与落盘逐字节相同（卡只是尾部追加）',
+      );
+      expect('⑤.11 对照：仍然不写占位集合', state.cleared_tool_call_ids ?? [], []);
     } finally {
       node.stop();
     }

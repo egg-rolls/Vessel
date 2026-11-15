@@ -482,7 +482,26 @@ function parseSessionEventTypes(value: unknown): string[] | undefined {
   return types.length === 0 ? undefined : types;
 }
 
-/** `types` 过滤（缺省 = 不过滤）；`*` 后缀 = 前缀，其余精确。 */
+/**
+ * `tool_call_id`（`sessions.events`，0.53 U3 additive）：只回**携带这个工具调用 id** 的事件。
+ *
+ * 为什么需要它：`archive_notice` 的归档卡上写着「按 `tool_call_id` 从事件日志读回原文」
+ * （ADR-104 §2.3(c) 的 `readback` 行）。那条指引必须能在一条 RPC 里走完 —— 否则卡上的
+ * 每一句都是要用户自己去翻 ndjson 的死链。缺省 = 不过滤（旧调用方一字不改）。
+ *
+ * 非法值（非字符串 / 空串 / 超长）→ `invalid_params`，与 `since_seq` / `limit` 同口径。
+ */
+function parseToolCallId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0 || value.length > 256) {
+    throw new RpcError('invalid_params', 'tool_call_id must be a non-empty string');
+  }
+  return value;
+}
+
+/**
+ * `types` 过滤（缺省 = 不过滤）；`*` 后缀 = 前缀，其余精确。
+ */
 function matchesEventTypes(types: readonly string[] | undefined, type: string): boolean {
   if (types === undefined) return true;
   for (const pattern of types) {
@@ -493,6 +512,20 @@ function matchesEventTypes(types: readonly string[] | undefined, type: string): 
     }
   }
   return false;
+}
+
+/** 一条事件上的 `data.tool_call_id`（没有 / 不是字符串 = undefined，不猜）。 */
+function eventToolCallId(event: SessionEventView): string | undefined {
+  const data = event.data;
+  if (typeof data !== 'object' || data === null) return undefined;
+  const value = (data as { tool_call_id?: unknown }).tool_call_id;
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** `tool_call_id` 过滤（缺省 = 不过滤）：只留携带这个工具调用 id 的事件。 */
+function matchesToolCallId(toolCallId: string | undefined, event: SessionEventView): boolean {
+  if (toolCallId === undefined) return true;
+  return eventToolCallId(event) === toolCallId;
 }
 
 /**
@@ -935,15 +968,18 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
   /**
    * 读一页事件：**按游标分块**，不把整份日志一次读进内存。
    *
-   * - 无 `types`：`read(since_seq, limit + 1)` 一次搞定 —— 多要一条就是 `has_more` 的证据，
-   *   不再单独读一遍日志尾（避免「两次边界不一致」：读到一半又被追加）。
-   * - 有 `types`：按 `SESSION_EVENTS_READ_CHUNK` 推进游标扫块，凑够 `limit + 1` 就停；
+   * - 无过滤（`types` 与 `tool_call_id` 都没给）：`read(since_seq, limit + 1)` 一次搞定 ——
+   *   多要一条就是 `has_more` 的证据，不再单独读一遍日志尾（避免「两次边界不一致」：
+   *   读到一半又被追加）。
+   * - 有任一过滤：按 `SESSION_EVENTS_READ_CHUNK` 推进游标扫块，凑够 `limit + 1` 就停；
    *   扫到 `SESSION_EVENTS_MAX_SCAN` 还没够 → `has_more: true` 让客户端接着翻页
    *   （宁可变慢也不让一次 RPC 把整份日志扫穿）。
    *
    * `next_seq` 是**已处理到的位置**（排他游标）：没溢出时它可能大于最后一条返回事件的
-   * `seq`（中间那些被 `types` 过滤掉了）；一旦多拿到一条（溢出），游标必须停在**返回的
-   * 最后一条**上 —— 否则翻页会丢事件。
+   * `seq`（中间那些被过滤掉了）；一旦多拿到一条（溢出），游标必须停在**返回的最后一条**
+   * 上 —— 否则翻页会丢事件。
+   *
+   * 两个过滤是**与**关系（`types` 与 `tool_call_id` 同时给 = 交集），各自缺省不过滤。
    *
    * 注意（core 现状，写清楚免得被误读成 O(limit)）：`SessionEventLog.read()` 内部会从
    * 游标附近定位起点、把**剩余记录流一遍**、按 `seq` 排序后再截断 —— 多写者可能把行写乱，
@@ -957,15 +993,17 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
     sinceSeq: number,
     limit: number,
     types: readonly string[] | undefined,
+    toolCallId: string | undefined,
   ): Promise<{ events: SessionEventView[]; nextSeq: number; hasMore: boolean }> {
     const wanted = limit + 1;
+    const filtered = types !== undefined || toolCallId !== undefined;
     const events: SessionEventView[] = [];
     let cursor = sinceSeq;
     let scanned = 0;
     let truncated = false;
     for (;;) {
       // 不过滤时只要「还差几条 + 1」；过滤时按固定步长推游标（整块可能全不中）。
-      const chunkSize = types === undefined ? wanted - events.length : SESSION_EVENTS_READ_CHUNK;
+      const chunkSize = filtered ? SESSION_EVENTS_READ_CHUNK : wanted - events.length;
       if (chunkSize < 1) break;
       const chunk = await port.read(sessionId, { sinceSeq: cursor, limit: chunkSize });
       if (chunk.length === 0) break;
@@ -974,6 +1012,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         consumed = event.seq;
         scanned += 1;
         if (!matchesEventTypes(types, event.type)) continue;
+        if (!matchesToolCallId(toolCallId, event)) continue;
         events.push(event);
         if (events.length >= wanted) break;
       }
@@ -1195,6 +1234,9 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
             items: { type: 'string', minLength: 1 },
             maxItems: MAX_SESSION_EVENTS_TYPES,
           },
+          // 0.53 U3（additive）：只回携带这个工具调用 id 的事件 —— 归档卡上「按 call id
+          // 读回原文」那条指引的落点（`data.tool_call_id` 精确匹配，与 `types` 取交集）。
+          tool_call_id: { type: 'string', minLength: 1, maxLength: 256 },
         },
       },
       result_schema: {
@@ -1227,7 +1269,8 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         const sinceSeq = parseSinceSeq(params.since_seq);
         const limit = parseSessionEventsLimit(params.limit);
         const types = parseSessionEventTypes(params.types);
-        const page = await readEventPage(port, sessionId, sinceSeq, limit, types);
+        const toolCallId = parseToolCallId(params.tool_call_id);
+        const page = await readEventPage(port, sessionId, sinceSeq, limit, types, toolCallId);
         // 边界只读一次（`lastSeq` = 文件尾 stat + 尾读，便宜）：与 `sessions.get.event_cursor`
         // 是同一个数，客户端可以拿它判断「已经追平了」。
         const latestSeq = await port.lastSeq(sessionId);

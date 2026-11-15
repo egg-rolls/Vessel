@@ -123,6 +123,7 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   // 上下文裁剪（工具结果被清）本身是 run 内部状态同步，但**清理必须可见**：0.52 V1 起
   // 段起点会追加一张 env 卡（scope `trim`），事件与卡是同一个投影 ⇒ 承接 notice。
   'context.cleared_tool_result': { tier: 'internal', live: true, 承接: 'notice' },
+  'context.archive_notice': { tier: 'internal', live: true, 承接: 'notice' },
   // 0.53 U2 会话级投射模式（ADR-104 §5.2）：**决策变更的 run 起点**一条 /
   // 运行期 fail-open 留痕 / 体积触顶告警。三条都是「模型这一轮看到的上下文被怎么改写过」
   // 的审计，与 `prompt.system_context`（content）是同一件事的两面，但正文不是用户要读的

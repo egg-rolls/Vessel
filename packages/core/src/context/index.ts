@@ -16,6 +16,20 @@ export {
   normalizeContextAnchor,
 } from './anchor.js';
 export {
+  ARCHIVE_READBACK_RPC,
+  type ArchiveEntry,
+  type ArchiveNoticeInput,
+  type ArchiveNoticeLocale,
+  type ArchiveNoticeSignatureInput,
+  type ArchiveReadbackAvailability,
+  type ArchiveReadbackLogPort,
+  archiveNoticeSignature,
+  archiveReadbackAvailability,
+  archiveSourceLogPath,
+  measureArchivedToolResults,
+  renderArchiveNotice,
+} from './archive-notice.js';
+export {
   formatClearedToolResult,
   isClearedToolResult,
   normalizeClearedToolCallIds,

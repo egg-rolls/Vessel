@@ -6,12 +6,18 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   applyReadSideMaskers,
+  archiveNoticeSignature,
+  archiveReadbackAvailability,
+  archiveSourceLogPath,
   auditChainOf,
   decideProjectionRunMode,
   estimateTokens,
+  measureArchivedToolResults,
   measureToolResultPressure,
   PROJECTION_POLICY_VERSION,
+  type ProjectionRuntimeMode,
   planClearedToolResults,
+  renderArchiveNotice,
   renderContextOverflowNotice,
   renderContextTrimNotice,
   renderSystemRevisionNotice,
@@ -82,7 +88,11 @@ import type {
   RuntimePermissionConfig,
   SelfCardOptions,
 } from '../types/plugin.js';
-import type { ContextProjectionAudit, ProjectionMode } from '../types/projection.js';
+import type {
+  ContextProjectionAudit,
+  ProjectionDeclaration,
+  ProjectionMode,
+} from '../types/projection.js';
 import type {
   ChatRequest,
   LLMProvider,
@@ -466,7 +476,41 @@ interface SystemContextRequestFacts {
 }
 
 /**
- * 段起点冻结下来的投射决策（0.53 U2）。
+ * 本段**可执行**的投射模式。
+ *
+ * `ProjectionRuntimeMode`（context 层）只有 `placeholder` / `passthrough` 两档，因为它是
+ * 「请求视图怎么变」的类型面。`archive_notice` 在本层多占一档：请求视图与 `passthrough`
+ * **逐字节相同**（一个字节都不改写），但它是一条**真的生效了**的模式 —— 审计里必须写
+ * `effective_mode: 'archive_notice'`，否则「用户声明了什么」与「到底跑成了什么」在重放时
+ * 混成一件事（ADR-104 §2.1 末行）。所以类型在这里放宽一档，窗口上钉的仍然是
+ * `passthrough`（见 `freezeSegmentProjection` 的说明）。
+ */
+type SegmentProjectionMode = 'placeholder' | 'passthrough' | 'archive_notice';
+
+/**
+ * 段起点裁决出来的**模式**（不含集合与 plan_hash —— 那些由 freeze 补）。
+ *
+ * 单独抽出来是因为它被两处用：`primeSegmentProjectionMode`（压缩**之前**，压缩要按本段
+ * 模式判 0.20 维度）与 `freezeSegmentProjection`（压缩**之后**，按压缩后的消息算集合）。
+ * 两处必须给出同一个答案，否则「模式钉到窗口」与「集合按哪个模式算」会分叉。
+ */
+interface SegmentProjectionVerdict {
+  /** 声明里写的模式（fail-open 之前）。 */
+  readonly requested_mode: ProjectionMode;
+  /** 本段实际生效的模式。 */
+  readonly effective_mode: SegmentProjectionMode;
+  /** 降级 / 拒绝原因（正常为 null）。 */
+  readonly reason: string | null;
+  /** 决策链路（冻结词表：首项＝声明模式、末项＝生效模式）。 */
+  readonly steps: readonly string[];
+  /** 读回能力判据（只有 `archive_notice` 有定义）。 */
+  readonly readback: 'available' | 'unavailable' | null;
+  /** 生效的声明原样（没声明 = null）。 */
+  readonly declaration: ProjectionDeclaration | null;
+}
+
+/**
+ * 段起点冻结下来的投射决策（0.53 U2；U3 增 `archive_notice`）。
  *
  * 「run 起点冻结、run 内共享同一集合」是硬不变式：这份记录在段起点算一次，
  * run 内的所有请求共用它，请求期绝不重算（反事实测算：改成每请求重算，净收益
@@ -476,19 +520,30 @@ interface FrozenProjectionDecision {
   /** 声明里写的模式（fail-open 之前）。 */
   readonly requested_mode: ProjectionMode;
   /** 本段实际生效的模式（决定请求层是否替换 + 0.20 维度是否参与判数）。 */
-  readonly effective_mode: 'placeholder' | 'passthrough';
+  readonly effective_mode: SegmentProjectionMode;
   /** 声明 id（没声明时为 null）。 */
   readonly declaration_id: string | null;
   /** 按冻结集合算的 plan 指纹（前 16 位 sha256；passthrough 下为集合空集的指纹）。 */
   readonly plan_hash: string;
-  /** 冻结的占位集合（passthrough 恒为空）。 */
+  /**
+   * 冻结的集合：`placeholder` = 要换占位的 id；`archive_notice` = 要归档的 id
+   * （**不改写正文**，只登记）；`passthrough` 恒为空。
+   */
   readonly ids: readonly string[];
-  /** 集合的来源：'plan'＝placeholder 规划出来的；'empty'＝passthrough 的空集。 */
+  /** 集合的来源：'plan'＝规划出来的；'empty'＝passthrough 的空集。 */
   readonly basis: 'plan' | 'empty';
   /** 决策链路（原样写进审计 `steps`，也进事件 `data.steps`）。 */
   readonly steps: readonly string[];
   /** 降级 / 拒绝原因（正常为 null）。 */
   readonly reason: string | null;
+  /**
+   * 读回能力判据的结果（只有 `archive_notice` 有定义；其余模式为 null）。
+   *
+   * 单独一个字段而不是塞进 `steps`：`steps` 是**冻结词表**（声明模式 → 生效模式），
+   * 门禁逐字断言它；「这次降级是因为读回路径不可用」是细节，放事件与日志里更诚实
+   * （审计行 schema 冻结，不加字段）。
+   */
+  readonly readback: 'available' | 'unavailable' | null;
   /**
    * 这次段起点的决策是否**变更**（模式 / 集合任一变即为变更）。
    * 没变更就不写审计、不发事件 —— 否则每轮都刷一条同内容的记录。
@@ -499,6 +554,24 @@ interface FrozenProjectionDecision {
 }
 
 /**
+ * 本段生效模式 → **钉在窗口上的**运行期模式。
+ *
+ * `archive_notice` 钉 `passthrough`，因为窗口模式管的三件事它都要 `passthrough` 的答案：
+ *
+ * 1. **请求视图不替换**（`buildRequestMessages` 按窗口模式短路）—— 归档模式的全部意义就是
+ *    「一个字节都不改写」，落盘与请求逐字节相同，C1h 的豁免一个都不消费；
+ * 2. **0.20 体积维度不驱动压缩**（ADR-104 §2.3(a)：`archive_notice` 下 0.20 触顶只告警）——
+ *    这与 `passthrough` 同口径（`projectionVolumeDimensionApplies`）；
+ * 3. 体积压力照旧可观测（`context.projection_pressure`）。
+ *
+ * 权威的「到底声明了什么 / 生效成什么」在 `segmentProjections`（写审计与事件），
+ * 不在窗口上：窗口模式只有两档，它回答的是「请求期怎么改」，不是「用户的声明是什么」。
+ */
+function windowModeOf(mode: SegmentProjectionMode): ProjectionRuntimeMode {
+  return mode === 'archive_notice' ? 'passthrough' : mode;
+}
+
+/**
  * 冻结集合的指纹（审计 `plan_hash` / 事件用）：sha256 前 16 位。
  *
  * 口径＝生效模式 + **排序后**的 call id 列表。排序 ⇒ 同一集合不同规划顺序算同一
@@ -506,7 +579,7 @@ interface FrozenProjectionDecision {
  * `placeholder` 的空集不会撞成一个指纹 —— 否则「模式变了」在审计里看不出来。
  * `\u0000` 分隔避免拼接歧义（`a`+`bc` 与 `ab`+`c` 必须是两个 hash）。
  */
-function projectionPlanHash(mode: 'placeholder' | 'passthrough', ids: readonly string[]): string {
+function projectionPlanHash(mode: SegmentProjectionMode, ids: readonly string[]): string {
   const digest = createHash('sha256');
   digest.update(mode);
   digest.update('\u0000');
@@ -885,16 +958,71 @@ export class ExecutionUnit {
   private readonly lastTrimNoticeKeys = new Map<string, string>();
 
   /**
+   * 上一张 **归档卡** 的去重键 + 「上一次冻结的归档集合」，按会话索引（0.53 U3）。
+   *
+   * 两个状态都在内存里、都按会话，理由与 `lastTrimNoticeKeys` 同一条：
+   * `SessionState` **没有**「已归档 id」这个字段（U1 的落盘 schema 冻结，本单不加），
+   * 所以「哪些算新增」与「这张卡发过没有」只能靠会话级记忆。
+   *
+   * - `lastArchivePlans`：上一次段起点冻结的归档集合（算 `fresh` 差集 + 判「决策是否变更」）；
+   * - `lastArchiveNoticeKeys`：上一张卡的 `archiveNoticeSignature`（同载荷不重复发）。
+   *
+   * 代价写清楚：进程重启后这两个 Map 是空的 ⇒ 重启后的第一个段起点会把当前集合整体当成
+   * 「本轮新增」再发一张卡。这比漏一张好（宁可多一张，不可漏一张），与 trim 卡同一取舍；
+   * 而且卡本身只有元数据、上限 200 token，重复一张不会误导读者（数字仍是真实的累计）。
+   */
+  private readonly lastArchivePlans = new Map<string, readonly string[]>();
+  private readonly lastArchiveNoticeKeys = new Map<string, string>();
+
+  /**
+   * 0.53 U2/U3：段起点裁决本段的投射模式（**唯一**入口，prime 与 freeze 共用）。
+   *
+   * 三层口径，一层都不许混：
+   *
+   * 1. `placeholder` / `passthrough` / 非法声明 / `externalize`：完全沿用 U2 的
+   *    `decideProjectionRunMode`（一个字都不改它的判据）。
+   * 2. `archive_notice` **且读回能力可用**：生效 `archive_notice`（不改写正文，追加归档卡）。
+   * 3. `archive_notice` **且读回能力不可用**：fail-open 到 `passthrough` + 审计 reason
+   *    （沿用 §6.4 的冻结码 `projection_mode_unavailable`，**不新造码**；链路仍是
+   *    `声明 → unavailable → passthrough`，细节「是读回路径不可用」只进事件与日志）。
+   *    不许写一张指向不存在日志的卡（ADR-104 §2.3(f)）。
+   */
+  private decideSegmentProjection(stored: SessionState | null): SegmentProjectionVerdict {
+    const resolution = resolveProjection(stored);
+    const decided = decideProjectionRunMode(resolution.mode, resolution.error);
+    const declaration = resolution.declaration;
+    if (resolution.mode !== 'archive_notice' || resolution.error !== null) {
+      return { ...decided, readback: null, declaration };
+    }
+    const readback = archiveReadbackAvailability(this.eventLog);
+    if (!readback.available) {
+      this.logger.warn('archive_notice degraded: readback path unavailable', {
+        session_id: stored?.session_id,
+        reason: readback.reason,
+      });
+      return { ...decided, readback: 'unavailable', declaration };
+    }
+    return {
+      requested_mode: 'archive_notice',
+      effective_mode: 'archive_notice',
+      reason: null,
+      steps: ['archive_notice', 'archive_notice'],
+      readback: 'available',
+      declaration,
+    };
+  }
+
+  /**
    * 0.53 U2：段起点**第一步** —— 只裁决模式并钉到窗口上（不含集合、不写审计）。
    *
    * 为什么单独一层：段起点的压缩要按本段的模式判定（`passthrough` 不吃 0.20 体积
    * 维度），而占位集合必须等压缩**之后**、按压缩后的消息算。所以模式先定、集合后算。
-   * 两侧都调 `resolveProjection`（纯函数、同样的输入 ⇒ 同样的结果），不会漂。
+   * 两侧都走 `decideSegmentProjection`（纯函数 + 同步能力判据，同样的输入 ⇒ 同样的结果），
+   * 不会漂。
    */
   private primeSegmentProjectionMode(execution: Run, stored: SessionState | null): void {
-    const resolution = resolveProjection(stored);
-    const decided = decideProjectionRunMode(resolution.mode, resolution.error);
-    setWindowProjectionMode(execution.workingContext, decided.effective_mode);
+    const verdict = this.decideSegmentProjection(stored);
+    setWindowProjectionMode(execution.workingContext, windowModeOf(verdict.effective_mode));
   }
 
   /**
@@ -925,7 +1053,15 @@ export class ExecutionUnit {
     // 0.53 U2：模式先定，集合再算（顺序不能反：passthrough 下不该跑 plan）。
     const projection = this.freezeSegmentProjection(execution, stored);
     const ids = projection.ids;
-    this.segmentClearPlans.set(window, ids);
+    // `archive_notice` 不改写任何正文 ⇒ 请求视图一条都不替换 ⇒ 落盘的 `cleared_tool_call_ids`
+    // 必须是空集（`saveSessionState` 就是拿这份当「审计集合」写的）。把归档集合写进去等于
+    // 伪造「这批被换成占位了」，C1g（请求视图 vs 审计集合）会当场红。
+    this.segmentClearPlans.set(window, projection.effective_mode === 'archive_notice' ? [] : ids);
+    // 0.53 U3：归档模式只做一件事 —— 新增归档时追加一张归档卡（不替换、不删历史）。
+    if (projection.effective_mode === 'archive_notice') {
+      this.announceArchivedToolResults(execution, messages, projection);
+      return;
+    }
     // passthrough：本段没有占位 ⇒ 不存在「新增了什么要讲」。直接收工。
     if (projection.effective_mode !== 'placeholder') return;
     const known = new Set(stored?.cleared_tool_call_ids ?? []);
@@ -970,6 +1106,78 @@ export class ExecutionUnit {
   }
 
   /**
+   * 0.53 U3：`archive_notice` 的**唯一**产出 —— 新增归档时追加一张归档卡 + 一条事件。
+   *
+   * 三条规矩（都是断言，见 `scripts/check-archive-notice.ts`）：
+   *
+   * 1. **只追加，不改写**：卡片走 `appendNotice`（落盘、UI 可见，与 trim 卡同一类）；
+   *    被归档的工具结果正文一个字节都不动，请求视图与落盘逐字节相同。
+   * 2. **两个口径分两层**：首行只说**本轮**新增（`fresh.length`），累计数只在明细行
+   *    （`docs/dev/handoff/projection-card-spec.md` §3.0）。
+   * 3. **同载荷不重复发**：`archiveNoticeSignature`（累计 + 本轮新增 + 新增 id 列表）与
+   *    上一张卡全等 ⇒ 卡与事件一起不再 append。
+   *
+   * 「哪些算已归档」用的就是 `placeholder` 的那套保留预算（`planClearedToolResults`，见
+   * `freezeSegmentProjection`）：本节不另造预算、不改常量 —— 两个模式对「哪些结果是旧的」
+   * 必须给出同一个答案，否则同一段历史在换模式后会被讲成两件事。
+   */
+  private announceArchivedToolResults(
+    execution: Run,
+    messages: readonly Message[],
+    projection: FrozenProjectionDecision,
+  ): void {
+    const ids = projection.ids;
+    const announced = new Set(this.lastArchivePlans.get(execution.sessionId) ?? []);
+    const fresh = ids.filter((id) => !announced.has(id));
+    // 先记下本段的集合：无论这张卡发不发，下一次段起点都按它算差集（不重复讲同一批）。
+    this.lastArchivePlans.set(execution.sessionId, [...ids]);
+    if (fresh.length === 0) return;
+    const key = archiveNoticeSignature({
+      archived: ids.length,
+      added: fresh.length,
+      tool_call_ids: fresh,
+    });
+    if (this.lastArchiveNoticeKeys.get(execution.sessionId) === key) return;
+    this.lastArchiveNoticeKeys.set(execution.sessionId, key);
+    const entries = measureArchivedToolResults(messages, fresh);
+    const toolNames = entries.map((entry) => entry.tool_name);
+    const bytes = entries.map((entry) => entry.bytes);
+    const bytesTotal = bytes.reduce((sum, value) => sum + value, 0);
+    const sourceLog = archiveSourceLogPath(execution.sessionId);
+    const notice = renderArchiveNotice({
+      ids: fresh,
+      tools: toolNames,
+      bytes,
+      sessionId: execution.sessionId,
+      archived: ids.length,
+    });
+    this.appendNotice(notice);
+    this.publishEvent({
+      type: 'context.archive_notice',
+      run_id: execution.runId,
+      ts: Date.now(),
+      data: {
+        // 卡正文逐字（与 trim 卡同套路）：UI 与模型看的是同一份文本。
+        summary: notice,
+        // `archived` = 会话内**累计**归档条数，`added` = **本轮新增**（两者分两层，见卡面）。
+        archived: ids.length,
+        added: fresh.length,
+        // 只报本轮新增的条目（同一批只讲一次）；顺序＝段基准里的出现顺序。
+        tool_call_ids: fresh,
+        tool_names: toolNames,
+        bytes,
+        bytes_total: bytesTotal,
+        session_id: execution.sessionId,
+        // 原文在哪 + 怎么读回来（ADR-104 §2.3(c) 的两行元数据）。
+        source_log: sourceLog,
+        readback: 'sessions.events',
+        plan_hash: projection.plan_hash,
+        segment: 'archive_notice',
+      },
+    });
+  }
+
+  /**
    * 0.53 U2：段起点裁决本段的投射模式并冻结集合。
    *
    * 三个必须守住的点：
@@ -978,10 +1186,15 @@ export class ExecutionUnit {
    *    `windowProjectionMode(window)` + `segmentClearPlans`，请求期只读。
    * 2. **passthrough 与「没有投射机制」逐字节相同**：不跑 plan（集合恒为空），
    *    请求层直接放行（`buildRequestMessages`），不发 trim 卡 / trim 事件。
-   * 3. **未实现的 mode 与读不出的声明一律 fail-open 到 `passthrough` 并留痕**，
-   *    不许静默按 `placeholder` 跑（那等于偷偷开机制）。两层降级的目标不许混：
+   * 3. **未实现的 mode / 读不出的声明 / 读回路径不可用一律 fail-open 到 `passthrough`
+   *    并留痕**，不许静默按 `placeholder` 跑（那等于偷偷开机制）。两层降级的目标不许混：
    *    声明期降级 → `placeholder`（U1 的 `declareProjection`），运行期单 run 降级 →
    *    `passthrough`（本函数）。见 ADR-104 §4.4。
+   *
+   * 0.53 U3：`archive_notice` 也要跑 plan（**同一套保留预算**，见 `planClearedToolResults`），
+   * 但那份集合的用途是「哪些算已归档」，不是「哪些换成占位」—— 所以它只进
+   * `plan_hash` / 归档卡 / 事件，**不进** `segmentClearPlans`（见
+   * `freezeSegmentClearedToolResults` 的第一行注释）。
    *
    * 审计只在**决策变更**的段起点写一条（ADR-104 §5.1：不刷日志）。
    */
@@ -991,19 +1204,27 @@ export class ExecutionUnit {
   ): FrozenProjectionDecision {
     const window = execution.workingContext;
     const messages = window.messages;
-    const resolution = resolveProjection(stored);
-    const decided = decideProjectionRunMode(resolution.mode, resolution.error);
-    const declaration = resolution.declaration;
-    // 集合：只有 placeholder 才规划；passthrough 恒为空集（不读也不改历史）。
+    const decided = this.decideSegmentProjection(stored);
+    const declaration = decided.declaration;
+    // 集合：`placeholder` 与 `archive_notice` 都按同一套保留预算规划（一个换占位、一个只
+    // 登记）；`passthrough` 恒为空集（不读也不改历史）。
     const ids =
-      decided.effective_mode === 'placeholder'
-        ? planClearedToolResults(messages, window.maxTokens ?? 0)
-        : [];
-    // 模式先钉到窗口上（此后本段内任何请求读到的都是它）。
-    setWindowProjectionMode(window, decided.effective_mode);
+      decided.effective_mode === 'passthrough'
+        ? []
+        : planClearedToolResults(messages, window.maxTokens ?? 0);
+    // 模式先钉到窗口上（此后本段内任何请求读到的都是它）。`archive_notice` 钉 `passthrough`，
+    // 理由见 `windowModeOf`：请求视图与体积维度两件事上两者等价。
+    setWindowProjectionMode(window, windowModeOf(decided.effective_mode));
     const planHash = projectionPlanHash(decided.effective_mode, ids);
     const previous = auditChainOf(stored?.context_projection_audit);
-    const previousIds = [...(stored?.cleared_tool_call_ids ?? [])].sort();
+    // 「上一次的集合」按模式取：`placeholder` 读落盘的占位集合（U2 的既有口径），
+    // `archive_notice` 读本进程上一次冻结的归档集合（`SessionState` 没有归档字段，
+    // 本单不加）。`passthrough` 恒为空集。
+    const previousIds = [
+      ...(decided.effective_mode === 'archive_notice'
+        ? (this.lastArchivePlans.get(execution.sessionId) ?? [])
+        : (stored?.cleared_tool_call_ids ?? [])),
+    ].sort();
     const nextIds = [...ids].sort();
     // 决策变更 = 模式链 / 降级原因 / 冻结集合任一变。第一次决策也算变更
     // （`auditChainOf(null)` 全 null ⇒ 必与任何一个 mode 不等）。
@@ -1032,9 +1253,10 @@ export class ExecutionUnit {
       declaration_id: declaration?.declaration_id ?? null,
       plan_hash: planHash,
       ids,
-      basis: decided.effective_mode === 'placeholder' ? 'plan' : 'empty',
+      basis: decided.effective_mode === 'passthrough' ? 'empty' : 'plan',
       steps: decided.steps,
       reason: decided.reason,
+      readback: decided.readback,
       changed,
       audit,
     };
@@ -1070,6 +1292,9 @@ export class ExecutionUnit {
         basis: frozen.basis,
         reason: frozen.reason,
         steps: frozen.steps,
+        // additive（0.53 U3）：读回能力判据（只有 archive_notice 有值）。降级到 passthrough
+        // 时它说明「是读回路径不可用」，而不必让消费者去猜 steps 的中间项。
+        readback: frozen.readback,
         at,
       },
     });
@@ -1086,6 +1311,7 @@ export class ExecutionUnit {
         reason: frozen.reason,
         basis: frozen.basis,
         steps: frozen.steps,
+        readback: frozen.readback,
       },
     });
   }
