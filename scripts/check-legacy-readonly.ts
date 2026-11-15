@@ -1449,9 +1449,11 @@ async function judgeBehaviour(): Promise<void> {
       'C-1c⑤ gateway 把 decision.code 原样交给客户端（不换成别的码、不静默）',
       // 0.54 B1 过渡期把「subscribed:false + reject 对象」改成了**真 throw**
       // `throw new RpcError(decision.code, decision.message)` —— 码照样逐字透传，而且更严格
-      // （拒绝路径不再需要调用方自己把它翻译成错误帧）。断言意图不变，只更新形状正则。
-      /throw new RpcError\(\s*decision\.code\s*,\s*decision\.message\s*\)/.test(gatewayText) &&
-        /code:\s*decision\.code/.test(gatewayText),
+      // （拒绝路径不再需要调用方自己把它翻译成错误帧）。
+      // 断言意图不变：**错误码必须原样来自 decision**。真 throw 形状里 `RpcError(decision.code, …)`
+      // 本身就证明了这一点，所以**不再**要求旧的 `code: decision.code` 对象字面量同时存在
+      // （那个形状已不存在，继续要求它等于把断言钉死在旧实现上）。
+      /throw new RpcError\(\s*decision\.code\s*,\s*decision\.message\s*\)/.test(gatewayText),
       'packages/serve/src/gateway.ts 里 `throw new RpcError(decision.code, decision.message)`',
     );
 
