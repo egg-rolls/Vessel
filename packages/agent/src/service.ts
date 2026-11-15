@@ -134,7 +134,15 @@ import {
   type PeerStopChange,
   type PeerStopKind,
   type PersistedAgentRecord,
+  RELEASED_MEMBER_DEFAULT_FIELDS,
+  RELEASED_MEMBER_FIELDS,
+  RELEASED_MEMBER_LIMIT_DEFAULT,
+  RELEASED_MEMBER_LIMIT_MAX,
   type ReinstateInput,
+  type ReleasedMemberField,
+  type ReleasedMembersPage,
+  type ReleasedMembersQuery,
+  type ReleasedMemberView,
   type ReplyResult,
   type SendBatchInput,
   type SendInput,
@@ -333,6 +341,98 @@ const PEER_STOP_WINDOW_MS = 2000;
 /** sweep 节奏：`clamp(ttl / 10, 60s, 15min)`；不做独立配置键 */
 const SWEEP_INTERVAL_MIN_MS = 60_000;
 const SWEEP_INTERVAL_MAX_MS = 900_000;
+
+/**
+ * 历史视图的释放原因（与 `agent.closed` 事件的 `reason` 同一口径）。
+ *
+ * `closed` = 显式 close（人 / 父级 / 批量）；`idle_ttl` = 空闲回收（sweep 传入）。
+ * 未知字符串原样保留：历史视图只展示记录里写着的事实，不按白名单改写。
+ */
+const CLOSE_REASON_CLOSED = 'closed';
+
+/** 已释放 = 已离开在册。close 与空闲回收都同时改这两个字段，任一命中即算释放。 */
+function isReleased(record: MemberRecord): boolean {
+  return record.membership === 'left' || record.state === 'closed';
+}
+
+/** 历史视图上限：缺省 20；非数 / 小于 1 回默认；超过硬顶钳到 200（封顶而不是报错） */
+function releasedLimit(value: unknown): number {
+  if (value === undefined) return RELEASED_MEMBER_LIMIT_DEFAULT;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return RELEASED_MEMBER_LIMIT_DEFAULT;
+  return Math.min(Math.floor(parsed), RELEASED_MEMBER_LIMIT_MAX);
+}
+
+/**
+ * 历史视图字段：缺省给精简集；未知字段名直接拒绝。
+ *
+ * 静默忽略未知字段会让调用方以为拿到了自己要的东西（尤其 `cost` 这类可能缺值的），
+ * 所以宁可在入参处失败。重复字段去重，保持调用方给的顺序。
+ */
+function releasedFields(value: readonly string[] | undefined): ReleasedMemberField[] {
+  if (value === undefined || value.length === 0) return [...RELEASED_MEMBER_DEFAULT_FIELDS];
+  const fields: ReleasedMemberField[] = [];
+  for (const entry of value) {
+    if (!(RELEASED_MEMBER_FIELDS as readonly string[]).includes(entry)) {
+      throw new AgentError(
+        'invalid_input',
+        `unknown field "${entry}" (expected ${RELEASED_MEMBER_FIELDS.join('|')})`,
+      );
+    }
+    const field = entry as ReleasedMemberField;
+    if (!fields.includes(field)) fields.push(field);
+  }
+  return fields;
+}
+
+/** 历史排序：释放时刻新的在前；未知释放时刻用 last_seen 兜底，最后按 id 稳定 */
+function compareReleased(left: MemberRecord, right: MemberRecord): number {
+  const leftAt = left.closedAt ?? left.lastSeen ?? 0;
+  const rightAt = right.closedAt ?? right.lastSeen ?? 0;
+  if (leftAt !== rightAt) return rightAt - leftAt;
+  return left.id.localeCompare(right.id);
+}
+
+/** 记录 → 历史条目：只放调用方点名的字段，记录里没有的事实就不出现（不补默认值） */
+function releasedMemberView(
+  record: MemberRecord,
+  fields: readonly ReleasedMemberField[],
+): ReleasedMemberView {
+  const view: ReleasedMemberView = {};
+  for (const field of fields) {
+    switch (field) {
+      case 'name':
+        if (record.name !== undefined) view.name = record.name;
+        break;
+      case 'role':
+        view.role = record.role;
+        break;
+      case 'state':
+        view.state = record.state;
+        break;
+      case 'membership':
+        view.membership = record.membership;
+        break;
+      case 'presence':
+        view.presence = record.presence;
+        break;
+      case 'closed_at':
+        if (record.closedAt !== undefined) view.closed_at = record.closedAt;
+        break;
+      case 'close_reason':
+        if (record.closeReason !== undefined) view.close_reason = record.closeReason;
+        break;
+      case 'session_id':
+        view.session_id = currentBindingSession(record);
+        break;
+      // 记录里只有 token 用量，没有货币成本：原样给出 usage，绝不编造 total_cost。
+      case 'cost':
+        if (record.usage !== undefined) view.cost = record.usage;
+        break;
+    }
+  }
+  return view;
+}
 
 /** ExecutionUnit 执行态（对外 ExecutionUnitStatus.state） */
 type ExecutionUnitState = 'idle' | 'running' | 'waiting_permission' | 'closed';
@@ -605,6 +705,9 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
     ...(status.current_tool !== undefined ? { currentTool: status.current_tool } : {}),
     ...(status.last_seen !== undefined ? { lastSeen: status.last_seen } : {}),
     ...(status.usage !== undefined ? { usage: status.usage } : {}),
+    // 0.53：释放时刻 / 原因随记录一起恢复（历史视图的唯一来源；缺省 = 未知，不补）
+    ...(status.closed_at !== undefined ? { closedAt: status.closed_at } : {}),
+    ...(status.close_reason !== undefined ? { closeReason: status.close_reason } : {}),
   };
 }
 
@@ -3963,6 +4066,10 @@ export class AgentServiceImpl implements AgentService {
     }
     record.state = 'closed';
     record.membership = 'left';
+    // 0.53：与显式 close 同一对 additive 字段（`idle_ttl` 让历史视图能区分「被回收」
+    // 和「被人关掉」）；事件里的 reason 已经带着同一个值。
+    record.closedAt = at;
+    record.closeReason = reason;
     this.registry.setPresence(record.id, 'gone');
     this.emit('agent.closed', record, {
       state: 'closed',
@@ -5853,6 +5960,10 @@ export class AgentServiceImpl implements AgentService {
     this.registry.setState(member.id, 'closed');
     member.membership = 'left';
     this.registry.setPresence(member.id, 'gone');
+    // 0.53：释放时刻 / 原因落盘（additive）。历史视图靠它排序，否则释放后只剩
+    // `state='closed'`，既不知道什么时候没的，也不知道是显式 close 还是被回收。
+    member.closedAt = this.now();
+    member.closeReason = CLOSE_REASON_CLOSED;
     this.emit('agent.closed', member, { state: 'closed', presence: 'gone' });
     // close 是确定性的「停了」：不用窗口判定，但必须先掉尚未发出的终态通知（否则
     // 同一成员会先报 stopped 再报 closed）。
@@ -6226,6 +6337,10 @@ export class AgentServiceImpl implements AgentService {
       this.registry.setMembership(target.id, 'present');
       target.state = 'idle';
       this.registry.setPresence(target.id, 'gone');
+      // 0.53：复活后不再是「已释放成员」，释放时刻 / 原因必须一起清掉，
+      // 否则历史视图会把一个在册成员当历史条目继续展示。
+      target.closedAt = undefined;
+      target.closeReason = undefined;
       // 复活 = 三件事（CONTRACT §4.2）：membership / state / presence（上面三行）+
       // body 原地 unretire（清 retiredAt、重设 primary）+ 清 bindingHistory 里该 session。
       // 不清 retiredAt 的话后续 admit 会撞 `session is retired`，数据在但接不回去。
@@ -6259,6 +6374,43 @@ export class AgentServiceImpl implements AgentService {
     await this.ready;
     // 只读：不在 list 里 sweep（隐式回收会改调用方正要读的快照语义）。
     return this.registry.list(filter).map((record) => this.statusFor(record));
+  }
+
+  /**
+   * 历史视图（0.53）：只读列出已释放成员。
+   *
+   * 为什么单独立一个方法：`list` 的语义是「谁还在」（roster 只放 present），历史视图是
+   * 「谁已经没了」，两者的筛选条件互斥。塞进 `list` 里迟早会被某个入口默认打开，
+   * 那等于让已释放成员悄悄回到 roster。
+   *
+   * 只读铁律（本方法一行都不许破）：不改 `state` / `membership` / `presence`，
+   * 不发任何生命周期事件，不 sweep，不 scheduleSnapshot —— 只是把记录读出来投影成视图。
+   *
+   * 数据来源是成员记录本身（`agents` 快照永不删记录）。`closed_at` / `close_reason` 是
+   * 0.53 才落的 additive 字段：旧快照里没有就**不出现**，不补默认值。
+   */
+  async listReleasedMembers(query: ReleasedMembersQuery = {}): Promise<ReleasedMembersPage> {
+    await this.ready;
+    const fields = releasedFields(query.fields);
+    const limit = releasedLimit(query.limit);
+    const released = this.registry
+      .all()
+      .filter(
+        (record) =>
+          isReleased(record) &&
+          (query.teamId === undefined || record.teamId === query.teamId) &&
+          this.registry.canView(record, query.viewer),
+      )
+      .sort(compareReleased);
+    const members = released.slice(0, limit).map((record) => releasedMemberView(record, fields));
+    return {
+      members,
+      limit,
+      total: released.length,
+      returned: members.length,
+      truncated: released.length > members.length,
+      fields,
+    };
   }
 
   /** 任一 live body session（或成员 id）→ 状态；退役 ExecutionUnit 不再命中 */

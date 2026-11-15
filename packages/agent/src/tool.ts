@@ -26,6 +26,11 @@ import {
   type MemberState,
   type MemberStatus,
   type MemberVisibility,
+  RELEASED_MEMBER_DEFAULT_FIELDS,
+  RELEASED_MEMBER_FIELDS,
+  RELEASED_MEMBER_LIMIT_DEFAULT,
+  RELEASED_MEMBER_LIMIT_MAX,
+  type ReleasedMembersQuery,
   type SendResult,
   type TeamAgentSendResult,
   TeamError,
@@ -257,6 +262,32 @@ function readState(value: unknown): MemberState {
   return value as MemberState;
 }
 
+/**
+ * `list + includeReleases` 的 limit / fields 入参形状校验。
+ *
+ * **只校验形状**：上限裁剪（默认 20 / 硬顶 200）、字段名白名单、截断标记都在服务层
+ * 的 `listReleasedMembers` 里 —— 同一份 clamp 只能有一处实现，否则 CLI / 工具 / RPC
+ * 迟早各说各话。
+ */
+function readReleasedQuery(
+  record: Record<string, unknown>,
+): Pick<ReleasedMembersQuery, 'limit' | 'fields'> {
+  const query: Pick<ReleasedMembersQuery, 'limit' | 'fields'> = {};
+  if (record.limit !== undefined) query.limit = record.limit as number;
+  if (record.fields !== undefined) {
+    if (!Array.isArray(record.fields)) throw invalid('list: fields must be an array');
+    const fields: string[] = [];
+    for (const entry of record.fields) {
+      if (typeof entry !== 'string' || entry === '') {
+        throw invalid('list: fields entries must be non-empty strings');
+      }
+      fields.push(entry);
+    }
+    query.fields = fields;
+  }
+  return query;
+}
+
 /** `read` 的 limit：缺省 20，1..50（封顶而不是报错：模型不该为了一个数字失败）。 */
 function readMessageLimit(value: unknown): number {
   if (value === undefined) return READ_MESSAGE_LIMIT_DEFAULT;
@@ -320,7 +351,8 @@ export function createAgentTool(
       'instead of to the human (ask is the last resort). ' +
       'Add interrupt:true for urgent (cancel + front of queue) or ' +
       'notify:true to append to the inbox + summary wake without running. ' +
-      'close: release member(s), idempotent. list: return the roster. ' +
+      'close: release member(s), idempotent. list: return the roster ' +
+      '(includeReleases: also list released members, read-only history). ' +
       'read: read the last messages of a member session (read-only; role + truncated text), so ' +
       'you can read a report yourself instead of waiting for it to be forwarded to you. ' +
       'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first, ' +
@@ -390,8 +422,23 @@ export function createAgentTool(
         limit: {
           type: 'integer',
           minimum: 1,
-          maximum: READ_MESSAGE_LIMIT_MAX,
-          description: `read: how many trailing messages to return (default ${READ_MESSAGE_LIMIT_DEFAULT}, max ${READ_MESSAGE_LIMIT_MAX})`,
+          maximum: RELEASED_MEMBER_LIMIT_MAX,
+          description:
+            `read: how many trailing messages to return (default ${READ_MESSAGE_LIMIT_DEFAULT}, max ${READ_MESSAGE_LIMIT_MAX}); ` +
+            `list + includeReleases: how many released members to return (default ${RELEASED_MEMBER_LIMIT_DEFAULT}, max ${RELEASED_MEMBER_LIMIT_MAX})`,
+        },
+        includeReleases: {
+          type: 'boolean',
+          description:
+            'list: also list released members (closed / left) as a read-only history view; ' +
+            'default false — the plain roster never includes released members',
+        },
+        fields: {
+          type: 'array',
+          items: { type: 'string', enum: [...RELEASED_MEMBER_FIELDS] },
+          description:
+            'list + includeReleases: which fields each released member carries ' +
+            `(default ${RELEASED_MEMBER_DEFAULT_FIELDS.join(', ')})`,
         },
         member: { type: 'string', description: 'close: member id or session id' },
         startup_prompt: {
@@ -816,6 +863,41 @@ export function createAgentTool(
           const visibility =
             record.visibility === undefined ? undefined : readVisibility(record.visibility);
           const state = record.state === undefined ? undefined : readState(record.state);
+          const includeReleases = record.includeReleases === true;
+
+          if (includeReleases) {
+            // 历史视图（0.53）：只读，默认关闭。visibility / state / parent_id 是 roster 的
+            // 过滤条件，对「已释放成员」没有意义 —— 组合使用一律拒绝，而不是静默忽略
+            // （静默忽略会让人以为筛选生效了）。
+            if (visibility !== undefined || state !== undefined || record.parent_id !== undefined) {
+              throw invalid(
+                'list: includeReleases cannot be combined with visibility / state / parent_id',
+              );
+            }
+            const released = readReleasedQuery(record);
+            if (!isOwnerCaller) {
+              // 成员只该看自己 Team 的历史：不传 teamId 就是把别的 Team 的已释放成员
+              // 也交出去。调用者自身解析不到 Team 时明确报错（不猜、不漏）。
+              if (callerSession === undefined) {
+                throw invalid('list: includeReleases requires a calling member');
+              }
+              const caller = await service.identify(callerSession);
+              if (caller === undefined || caller.team_id === undefined) {
+                throw invalid('no_team: list includeReleases requires a member with a team');
+              }
+              return JSON.stringify(
+                await service.listReleasedMembers({
+                  ...released,
+                  viewer: caller.id,
+                  teamId: caller.team_id,
+                }),
+              );
+            }
+            // root owner：租户级历史（private 记录仍按 owner 判定可见性）。
+            return JSON.stringify(
+              await service.listReleasedMembers({ ...released, viewer: ownerId }),
+            );
+          }
 
           if (!isOwnerCaller) {
             // 成员只看调用者所属 Team 的 roster；filter 在本地做，parent_id 不适用。

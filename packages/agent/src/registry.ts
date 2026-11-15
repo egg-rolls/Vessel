@@ -94,6 +94,14 @@ export interface MemberRecord {
   currentTool?: string;
   lastSeen?: number;
   usage?: Usage;
+  /**
+   * 0.53：释放时刻 / 原因（持久化；`close` 与空闲回收都写）。
+   *
+   * 只给历史视图（`listReleasedMembers`）用：已释放成员的记录永不删，但此前没有任何
+   * 「什么时候没的 / 为什么没的」的落盘字段，释放后只剩 `state='closed'`。
+   */
+  closedAt?: number;
+  closeReason?: string;
 }
 
 /** 允许的状态转移；stale 不再写入（仅保留 read-only legacy 键以维持类型完整性） */
@@ -274,6 +282,9 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
     ...(record.currentTool !== undefined ? { current_tool: record.currentTool } : {}),
     ...(record.lastSeen !== undefined ? { last_seen: record.lastSeen } : {}),
     ...(record.usage !== undefined ? { usage: record.usage } : {}),
+    // 0.53：释放时刻 / 原因（additive；旧二进制忽略未知键）。历史视图的排序与展示来源。
+    ...(record.closedAt !== undefined ? { closed_at: record.closedAt } : {}),
+    ...(record.closeReason !== undefined ? { close_reason: record.closeReason } : {}),
   };
 }
 
