@@ -11,6 +11,10 @@ triggers:
   - snapshot then delta
   - 断线重连无洞
   - 事件游标设计
+  - un-acked 队列
+  - 全局单调 seq
+  - gap 协议
+  - 截断不可观测
 paths:
   - docs/architecture/session-replay.md
   - docs/dev/handoff/refresh-gap-design.md
@@ -103,11 +107,25 @@ transcriptMessages ←── RPC sessions.get ──── SessionState.messages
 
 **水印今天只有一个**：hub seq（`event-store.ts:222-224`）。磁盘水位 `event_cursor.last_seq` 已经在 `sessions.get` 里返回（`sessions.ts:1142`、`:1159`），但 `apps/web` 全仓对它和 `sessions.events` **零引用**。
 
-### 2.3 判据（我们的形式化）与今天不满足的那一段
+### 2.3 判据（外部补强后的可验证形态）与今天不满足的那一段
 
-记 `D` = 磁盘 `events.ndjson` 中 `seq ≤ last_seq` 的全部记录；`R` = 环内该会话保留事件；`P` = 已发布未落盘。
+记 `D` = 磁盘 `events.ndjson` 中 `seq ≤ w` 的全部记录；`R` = 环内该会话保留事件；`U` = **已发生、尚未被磁盘确认（un-acked）**的事件；水印 `w` 为全局单调 seq。
 
-> 判据：对任意时刻 `t`，`UI_items(s,t) == fold(D ∪ R ∪ P)`。弱形式：`fold(D \ R)` 中每条会产生 item 的记录，UI 上必须有对应 item。
+> **判据**（三行必须同时成立）：
+> ① `UI.count(s,t) == count(D(s,w)) + count(U(s,t))`；
+> ② `seqSet(UI) == seqSet(D) ⊎ seqSet(U)` —— 无重复、无洞、无越界；
+> ③ `w == max{seq | seq ∈ D}`。
+> 早期写法 `UI_items(t) == fold(D ∪ R ∪ P)` 与此不等价，且**不可验证**（原因见下表）。
+
+三个边界今天一个都不成立：
+
+| 边界 | 要求 | 今天 | 依据 |
+|---|---|---|---|
+| `U` 可枚举 | 未 ack 队列：事件入环**前**入队、磁盘 ack 后才出队 | **缺失**。近似物只存 Promise，无事件身份与 seq、不跨进程、且不含非落盘类型（chunk 同步早退直接广播） | `run-journal.ts:109`、`:118-127`、`:281-290`；`session-event-log.ts:451-452` |
+| 水印全局单调 | 跨类型、跨子 agent 统一分配、可持久 | 全局计数器只有 hub seq，**易失、重启归零**；磁盘 seq 每会话自增。`ts` / 分类编号 / 内容 hash 都不能当水位 | `event-buffer.ts:49`、`:57`；`session-event-log.ts:451-452` |
+| 两侧带计数 | 回放帧回报 `{from_seq, to_seq, count}` | 没有。`hello` 只有 `from_seq` / `latest_seq` | `gateway/frames.ts:88-99` |
+
+没有 `U` 就只能把它写成「环里那些没落盘的」，而环的淘汰顺序由**别的会话**决定（`event-buffer.ts:37-44`）⇒ 集合无界定，① 右半边悬空、② 无从比对 —— 这就是「不可验证」的准确含义。
 
 **不满足的正是 `D \ R`**：磁盘有、环已淘汰。回填只问环（`subscription.ts:286-309`），磁盘读口只到服务端（`sessions.ts:1180`）为止，前端零调用。
 次生问题：`D` 与 `R` 用**两个互不翻译的 seq**（§2.4），即使接线也判不了「补完没有」。
@@ -121,6 +139,18 @@ transcriptMessages ←── RPC sessions.get ──── SessionState.messages
 | 工具 `tool_call_id` | `provider.ts:44` | `event.ts:214`、`:222` | ✅ | 共用 `tool:<callId>`（`transcript-items.ts:13`） |
 
 **唯一三源同值的是 `tool_call_id` 与 `run_id`**；事件 seq 两套、消息 id 不存在。
+
+### 2.5 断线重连的 gap 协议（今天）
+
+今天重连**只传 cursor**：`client.connect(token, eventStore.currentSeq)`（`connection-handlers.ts:260`）。服务端回 `hello(from_seq, latest_seq)` + 有界回放 + `gap`，**不回条数、不保证连续**。
+
+- 服务端会跳段：预算窗口（`gateway.ts:1286-1331`）与环淘汰都能跳过中间区间，两种原因还被压进同一个 `gap`（`:1394-1399`），协议上分不开「可恢复」与「不可恢复」。
+- 客户端察觉不到：`push` 只丢 `seq <= lastSeq`（`event-store.ts:265`），洞与重复被静默吸收；`onGap` 注释原文是「静默处理，不重连、不提示。**页面感知不到截断**」（`connection-handlers.ts:221-237`），且 `gap.to_seq < currentSeq` 时直接 `return`（`:231`）。
+- 回填同样会截断而不告知：页空 / `hasNewestRunStart` / 6 页上限（`subscription.ts:286-309`）。
+
+**应有形态**：回放区间 `(cursor, head]` + 帧上 `{from_seq, to_seq, count}`（`count == to_seq - from_seq + 1`），客户端**先校验连续**（收到的 seq 集合恰好等于该闭区间且无重复）再合并；不连续就不合并、显式报错、按日志回填。
+
+**原则**：**环只是日志的滑动缓存，重连必须以日志为准。** 今天职责是颠倒的 —— 环是唯一回放源（`gateway.ts:1407-1412` → `hub.since`），磁盘口 `sessions.events` 无人调用（`sessions.ts:1180`），于是「回放能拿到什么」取决于别的会话挤掉了多少。
 
 ## 3. 我们已经试过的 5 次修补，与为什么不够
 
@@ -143,38 +173,46 @@ transcriptMessages ←── RPC sessions.get ──── SessionState.messages
 - **丢掉的正文 100% 已在磁盘 `llm.response`**（653 run：1.45 MB = 流式正文的 100.0%），屏幕丢 ≠ 数据丢（`chunk-loss-measurement.md:157-172`）。
 - 单请求 chunk 峰值：中位 903 / p90 3165 / 最大 11154 条 —— **现役 1 万条已经装不下最长的单个请求**（`chunk-loss-measurement.md:174-182`）。
 
-## 4. 请你回答的问题（13 条，越具体越好）
+## 4. 请你回答的问题（17 条，越具体越好）
 
-**边界与真相源**
+**A. 三个「不遗漏」的前提（外部补强的回应，本简报重点）**
 
-1. 流式增量（live）与会话历史（history）的**边界**应该以什么作为单一真相？是「持久事件 id」、「消息 id」、还是「快照 + 序号」？给出你认为唯一不歧义的定义。
-2. 一台 gateway 同时服务多会话，全局一个 FIFO 是否从根本上就错？按会话分片 + 全局序（每会话一个持久游标、全局一个单调计数器）的取舍是什么？
-3. 未落盘的流式 chunk 是否本身就不该算「事实」？如果 UI 在运行中必须自足，**最小持久化单位**是什么（段级骨架 / 256 B 聚合 / WAL）？代价如何量化？
+1. **un-acked 队列**：我们认同「事件入环前先入队、磁盘 ack 后才出队」是 `U` 可枚举的唯一办法，而今天我们只有一组 write-in-flight Promise（`run-journal.ts:109`），无身份、无 seq、不跨进程。请给最小可用设计：队列里存什么（事件身份？seq？长度？）、谁持有（journal / gateway / 独立 WAL）、重启后怎么恢复、客户端能不能读到它（还是根本不该读）？只在 journal 内保留够不够？
+2. **全局单调 seq**：要求跨类型、跨子 agent 统一分配且可持久。现状是「hub seq 全局但易失、磁盘 seq 持久但每会话」（`event-buffer.ts:57`、`session-event-log.ts:451-452`）。你会把全局 seq 放在哪一层（事件生产者 / 日志写入点 / hub 扇入点）、由谁持久、重启怎么续（`epoch + seq` 复合键？`incarnation` 已存在，够不够）？请顺手反驳「用 timestamp 当水位就行」。
+3. **两侧计数是否足够**：`{from_seq, to_seq, count}` 能挡住「洞」但挡不住「错序/错内容」。要证明 ② 的集合相等，是否需要每页 / 每 epoch 的哈希（Merkle 根）？粒度选在哪最划算？
+4. **gap 协议**：重连回放 `(cursor, head]` + 边界 seq + 条数 + 客户端先校验连续再合并 —— 这个设计还缺什么？今天「服务端跳段」与「前端截断」双方都无法察觉（`connection-handlers.ts:221-237`），你认为最小可观测信号是什么：显式 `truncated{reason}` 帧、每页 ack、还是别的？
+5. **职责**：「环只是日志的滑动缓存，重连必须以日志为准」。这条落地后环还剩什么价值（只做低延迟推送）？两者如何分工而不出现两个真相？服务端在读日志做回放时的延迟预算（今天预算逻辑是给内存环设计的，`replay-budget.ts:365-392`）你怎么估？
 
-**游标与「无洞」的证明**
+**B. 边界与真相源**
 
-4. 增量拉取应该用 `seq`、`timestamp`，还是单调游标（Lamport / hybrid logical clock）？跨进程重启后，游标凭什么继续有效？
-5. 断线重连如何**证明**「无洞」？请给出协议层面可验证的性质（而不是「看起来连上了」）。你见过哪些实现把这条做成机器可检查的？
-6. 环与磁盘双写是否需要 `(source, seq)` 的全局序？还是应该让**落盘先取号、广播用同一个号**（我们现在的顺序是「先落盘后广播」，`run-journal.ts:281-289`，但 chunk 同步广播，两者不保序）——这条你会怎么设计？
-7. `gap` 是否应该区分「已淘汰（不可恢复）」与「预算跳过（可恢复）」两种原因？今天它们被压成一个区间（`gateway.ts:1394-1399`），你认为这个协议设计有什么长期后果？
+6. 流式增量（live）与会话历史（history）的**边界**应该以什么作为单一真相？是「持久事件 id」、「消息 id」、还是「快照 + 序号」？给出你认为唯一不歧义的定义。
+7. 一台 gateway 同时服务多会话，全局一个 FIFO 是否从根本上就错？按会话分片 + 全局序（每会话一个持久游标、全局一个单调计数器）的取舍是什么？
+8. 未落盘的流式 chunk 是否本身就不该算「事实」？如果 UI 在运行中必须自足，**最小持久化单位**是什么（段级骨架 / 256 B 聚合 / WAL）？代价如何量化？
 
-**前端合并策略**
+**C. 游标与「无洞」的证明**
 
-8. 前端合并是否应该**禁止部分更新**、改为「重建快照」？如果重建，如何避免整页闪烁与滚动位置丢失（我们为此专门做过一次修补，`71b27cf3`）？
-9. 服务端是否应该提供「快照（含水位）+ 增量」两段式（snapshot-then-delta）？快照的水位语义你会怎么定义（`last_seq` / `derived_upto_seq` / 双水位）？
-10. 我们的消息侧没有 `message_id`（只有 `run_id` + `run_segment`，`provider.ts:74`、`:85`），跨源去重只能靠「position key + 启发式认领」。你会怎么补：ULID？`(run_id, segment)`？还是别的东西能在 Output guardrail 改写正文后仍然稳定？
+9. 增量拉取应该用 `seq`、`timestamp`，还是单调游标（Lamport / hybrid logical clock）？跨**进程重启**后游标凭什么继续有效（我们把 `incarnation` 放在 `hello` 里，但它不参与编号）？
+10. 环与磁盘双写是否需要 `(source, seq)` 的全局序？还是应该让**落盘先取号、广播用同一个号**（我们今天是「先落盘后广播」，`run-journal.ts:281-289`，但 chunk 同步广播 ⇒ 两者不保序）——这条你会怎么设计？
+11. `gap` 是否应该区分「已淘汰（不可恢复）」与「预算跳过（可恢复）」两种原因？今天它们被压成一个区间（`gateway.ts:1394-1399`）。如果拆开，客户端的状态机应该长什么样？
+12. 服务端是否应该提供「快照（含水位）+ 增量」两段式（snapshot-then-delta）？快照的水位语义你会怎么定义（`last_seq` / `derived_upto_seq` / 双水位）？
 
-**测试与形式化**
+**D. 前端合并策略**
 
-11. 这类 bug 的**可执行断言**你会怎么写？请给一条你认为最强的属性测试（例如：任意前缀截断 + 任意重连序列 ⇒ UI 集合等于未中断参照集合）。
-12. 「不遗漏」你会用什么不变量表述成**机器可检查**形式？我们现在的判据是 `UI_items(t) == fold(D ∪ R ∪ P)`（§2.3），你觉得它缺了哪一项。
-13. **竞品机制**：请联网查证并对比（OpenAI ChatGPT 的流式恢复、Claude Code / Codex CLI 的 session resume、Cursor 的 agent transcript、以及任何公开做过 "resumable event stream" 的产品）。我们要的是**具体机制**：它们的游标是什么、快照和增量怎么拼、重连怎么证明无洞。不要泛泛说「用 WebSocket + 重试」。
+13. 前端合并是否应该**禁止部分更新**、改为「重建快照」？如果重建，如何避免整页闪烁与滚动位置丢失（我们为此专门做过一次修补，`71b27cf3`）？
+14. 我们的消息侧没有 `message_id`（只有 `run_id` + `run_segment`，`provider.ts:74`、`:85`），跨源去重只能靠「position key + 启发式认领」。你会怎么补：ULID？`(run_id, segment)`？还是别的东西能在 Output guardrail 改写正文后仍然稳定？
+
+**E. 测试与形式化**
+
+15. 这类 bug 的**可执行断言**你会怎么写？请给一条你认为最强的属性测试（例如：任意前缀截断 + 任意重连序列 ⇒ UI 集合等于未中断参照集合）。它要能拦住「只有按 F5 才出现」的 bug，而不是手工点刷新。
+16. 「不遗漏」你会用什么不变量表述成**机器可检查**形式？我们现在写的是 `UI.count == disk(seq≤w).count + unacked.count` ∧ `seqSet(UI) == seqSet(D) ⊎ seqSet(U)` ∧ `w == max(D)`（§2.3），你觉得还缺哪一项（子 agent？跨会话？compaction / rewind 这类会改历史的操作？）。
+17. **竞品机制**：请联网查证并对比（OpenAI ChatGPT 的流式恢复、Claude Code / Codex CLI 的 session resume、Cursor 的 agent transcript、以及任何公开做过 "resumable event stream" 的产品）。我们要的是**具体机制**：它们的游标是什么、un-acked 与快照怎么拼、重连怎么证明无洞。不要泛泛说「用 WebSocket + 重试」。
 
 ## 5. 约束（请在这些约束内给方案）
 
 - **不要建议「再加一层缓存」。** 缓存不产生新的真相，只会多一份会过期的副本 —— 我们已走过的路就是两次调大窗口（回放预算 `c21d8c89`、环 1 万 → 5 万 `473bfc4c`），洞每次都只是被推远。
 - 我们要的是**可证明不漏**的数据模型：给出不变量、给出判据、给出反例构造法。
 - 允许改协议（additive 优先）、允许改落盘 schema、允许改前端合并策略；**不允许**用「调大阈值 / 放宽计数 / 换比较口径」让指标变绿 —— 验收必须在「环压到 200 条」与「重建 hub（seq 归零）」两种环境下都通过（`refresh-gap-design.md:263`、`:244-274`）。
+- 同理，为 `U` 引入的任何队列**必须能在进程重启后重新界定**，否则它只是又一个内存窗口（我们今天已经有一个 `pendingEventLogWrites`，重启即蒸发）。
 
 ## 6. 我们的待核实清单（这些我们没敢当结论）
 
@@ -183,6 +221,8 @@ transcriptMessages ←── RPC sessions.get ──── SessionState.messages
 3. 会话事件日志除 `deleteSession` 外是否还有目录级 GC / 配额 —— 本 worktree 内无证据。
 4. `subscription.ts:36-40` 的注释仍按「环最多 10000 条」推导「6 页足够」；环已是 50000，未复算。
 5. §3.1 的所有数字是**环 = 1 万**时测的；抬到 5 万后未重新实测（预期「≤10 分钟不丢」，但「长 run + 并发」两档必然复发）。
+6. **子 agent 的事件是否在同一会话日志内编号** —— 决定全局 seq 要不要跨子 agent 分配；本 worktree 内未逐条核对 subagent 的事件归属。
+7. `pendingEventLogWrites`（`run-journal.ts:109`）之外，是否还有第二条「已发布但未落盘」的路径 —— 本次只核对了 `appendFact` / `appendObserved` 两个入口，未排查所有 `publish` 调用点。
 
 ## 7. 附录：证据索引
 
@@ -195,3 +235,6 @@ transcriptMessages ←── RPC sessions.get ──── SessionState.messages
 | 环槽构成 / 丢失分布 / 已落盘副本占比 | `chunk-loss-measurement.md:71-182` |
 | 会话日志落盘口径（哪些不落、骨架对账式） | `event-log-policy.md:13-45` |
 | 三条事实源与重放序列（本仓口径） | [session-replay.md](../../architecture/session-replay.md) |
+| 未 ack 队列的今天近似物（只是 Promise 集合） | `run-journal.ts:109`、`:118-127`、`:281-290` |
+| gap 被静默处理（「页面感知不到截断」是代码注释原文） | `connection-handlers.ts:221-237`、`:231` |
+| 回放帧没有条数（只有 `from_seq` / `latest_seq`） | `gateway/frames.ts:88-99` |

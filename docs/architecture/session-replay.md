@@ -1,7 +1,7 @@
 ---
 title: 会话重放总架构
 kind: current
-triggers: [会话重放, 重放总架构, 刷新丢事件, 刷新后少了一段, 刷新只剩几条, 事件回填, 三条事实源, 事件游标, event_cursor, sessions.events, 不遗漏判据, 去重契约, 重放幂等]
+triggers: [会话重放, 重放总架构, 刷新丢事件, 刷新后少了一段, 刷新只剩几条, 事件回填, 三条事实源, 事件游标, event_cursor, sessions.events, 不遗漏判据, 去重契约, 重放幂等, un-acked 队列, 未确认落盘, 全局单调 seq, 水印, gap 协议, 断线重连无洞, 截断]
 paths: [packages/serve/src/event-buffer.ts, packages/serve/src/tenant-event-hub.ts, packages/serve/src/replay-budget.ts, packages/serve/src/gateway.ts, packages/serve/src/gateway/methods/sessions.ts, packages/core/src/session/session-event-log.ts, packages/core/src/runtime/run-journal.ts, apps/web/src/gateway/connection-handlers.ts, apps/web/src/gateway/subscription.ts, apps/web/src/state/event-store.ts, apps/web/src/stores/sessionStore.ts, apps/web/src/domains/chat/transcript-items.ts, apps/web/src/domains/chat/useChatTranscript.ts]
 ---
 
@@ -35,15 +35,39 @@ paths: [packages/serve/src/event-buffer.ts, packages/serve/src/tenant-event-hub.
 
 ## 3. 不遗漏判据（可验证形式）
 
-记 `D(s,t)` = 磁盘 `events.ndjson` 中 `seq ≤ last_seq(t)` 的全部记录；`R(s,t)` = 环内该会话的保留事件；`P(s,t)` = 已发布但未落盘（chunk 等）。
+记 `D(s,w)` = 磁盘 `events.ndjson` 中 `seq ≤ w` 的全部记录；`R(s,t)` = 环内该会话的保留事件；`U(s,t)` = **已发生、尚未被磁盘确认（un-acked）**的事件。
 
-> **判据**：对任意时刻 `t`，`UI_items(s,t) == fold(D ∪ R ∪ P)`；等价的弱形式：`fold(D \ R)` 中每条会产生 item 的记录，UI 上必须有对应 item。可执行化见 `refresh-gap-design.md:256-261` 的 H-3（刷新前后 item 集合逐项相等）。对照实现：折叠是 `live-items` 的物化面（`event-store.ts:195`、`:300`），装配在 `transcript-items.ts:2003`。
+> **判据**（外部补强后的可验证形态，水印 `w` 为全局单调 seq）：
+> ① `UI.count(s,t) == count(D(s,w)) + count(U(s,t))`；
+> ② `seqSet(UI) == seqSet(D) ⊎ seqSet(U)` —— 无重复、无洞、无越界；
+> ③ `w == max{seq | seq ∈ D}`（磁盘最大已落盘 seq）。
+> 弱形式（今天只能验这一条）：`fold(D \ R)` 中每条会产生 item 的记录，UI 上必须有对应 item；可执行化见 `refresh-gap-design.md:256-261` 的 H-3。
 
-**今天不满足的那一段**：`D \ R`（磁盘有、环已淘汰）**没有任何一条代码路径把它送进 UI** —— 回填只问环（`subscription.ts:286-309`），磁盘读口只到服务端为止（`sessions.ts:1180`），前端零调用。
+三个边界今天**一个都不成立**，这才是判据不能当验收用的根因：
 
-次生不满足（这条不解决，接线也判不了「补完没有」）：`D` 与 `R` 用**两个互不翻译的 seq**（§4），缺少可判定的共同水位，只能退回 `ts` 比较（毫秒粒度，并列事件会重）。
+| 边界 | 要求 | 今天 | 依据 |
+|---|---|---|---|
+| `U` 可枚举 | 未 ack 队列：事件入环**前**入队，磁盘 ack 后才出队 | **缺失**。近似物 `pendingEventLogWrites` 只存 Promise：无事件身份与 seq（seq 在 `log.append` 内部才分配）、不跨进程可见、且**不含非落盘类型**（chunk 走同步早退分支直接 `publishRaw`，从不入队） | `run-journal.ts:109`、`:118-127`、`:281-290`；`session-event-log.ts:451-452` |
+| 水印是全局单调 seq | 跨类型、跨子 agent 统一分配、可持久 | 唯一跨类型的全局计数器是 hub seq，**易失、重启归零**；磁盘 seq 是**每会话**自增，跨会话不可比。`ts` / 分类编号 / 内容 hash 都不能当水位（毫秒并列会重、hash 无序） | `event-buffer.ts:49`、`:57`；`session-event-log.ts:451-452` |
+| 两侧带计数与首尾 seq | 回放帧回报 `{from_seq, to_seq, count}` | **没有条数**。`hello` 有边界 `from_seq` / `latest_seq`，但 `from_seq` 是**窗口首条**、不是「连续区间起点」（预算跳过与环淘汰都会在区间里留洞）；也没有任何 `count` 可与实收条数核对 | `gateway/frames.ts:88-99`；`gateway.ts:1393-1404` |
 
-## 4. ID 与去重契约
+**为什么 `U` 是不遗漏的前提**：没有 `U` 就只能把它写成「环里那些没落盘的」，而环的淘汰顺序由**别的会话**决定（`event-buffer.ts:37-44`）⇒ 集合本身没有界定，① 右半边悬空、② 无从比对。不可枚举的集合无法断言，也无法在测试里构造反例 —— 这类 bug 就只能靠用户按 F5 去发现。
+
+**今天不满足的那一段**：`D \ R`（磁盘有、环已淘汰）**没有任何一条代码路径把它送进 UI** —— 回填只问环（`subscription.ts:286-309`），磁盘读口只到服务端为止（`sessions.ts:1180`），前端零调用。次生：`D` 与 `R` 用两个互不翻译的 seq（§5），缺共同水位，只能退回 `ts` 比较。
+
+## 4. 断线重连的 gap 协议
+
+今天：重连**只传 cursor**（`connection-handlers.ts:260` 拿 `eventStore.currentSeq` 当 `since`），服务端回 `hello(from_seq, latest_seq)` + 有界回放 + `gap`，**不回条数、不保证连续**。
+
+- 服务端会跳段：预算窗口（`gateway.ts:1286-1331`）与环淘汰都能跳过中间区间，两种原因还被压进同一个 `gap`（`:1394-1399`），协议上分不开「可恢复」与「不可恢复」。
+- 客户端察觉不到：`push` 只丢 `seq <= lastSeq`（`event-store.ts:265`），洞与重复被静默吸收；`onGap` 注释明确「静默处理，不重连、不提示。**页面感知不到截断**」（`connection-handlers.ts:221-237`），且 `gap.to_seq < currentSeq` 时直接 `return`（`:231`）。
+- 回填同样会截断而不告知：页空 / `hasNewestRunStart` / 6 页上限（`subscription.ts:286-309`）。
+
+**应有形态**：重连回放区间 `(cursor, head]`，帧上带 `{from_seq, to_seq, count}`（`count == to_seq - from_seq + 1`）；客户端**先校验连续**（收到的 seq 集合恰好等于该闭区间、无重复），通过才合并，不通过就不合并、显式报出来并按日志回填。
+
+**原则**：**环只是日志的滑动缓存，重连必须以日志为准。** 今天职责是颠倒的 —— 环是唯一回放源（`gateway.ts:1407-1412` → `hub.since`），磁盘口 `sessions.events` 无人调用（`sessions.ts:1180`），于是「回放能拿到什么」取决于别的会话挤掉了多少，而不是日志里有什么。
+
+## 5. ID 与去重契约
 
 | 身份 | 磁盘 | 环 / 实时 | 一致 | 今天的合并 / 去重键 |
 |---|---|---|---|---|
@@ -54,7 +78,7 @@ paths: [packages/serve/src/event-buffer.ts, packages/serve/src/tenant-event-hub.
 
 一句话：**只有工具调用 id 与 run id 是三源同值的**；事件 seq 有两套，消息 id 根本不存在 ⇒ 跨源去重今天只能靠 key 字面量或启发式认领。
 
-## 5. 已知的五次修补
+## 6. 已知的五次修补
 
 | # | commit（日期） | 声称修了什么 | 实际盖住 | 没盖住 |
 |---|---|---|---|---|
@@ -66,14 +90,15 @@ paths: [packages/serve/src/event-buffer.ts, packages/serve/src/tenant-event-hub.
 
 旁证（同族但只解决单点）：`e50ee7a7` 让 `system_context` 从磁盘派生（只补一张卡）、`d0511b31` 消息身份 `run_id + run_segment`（只改认领，不加消息 id）、`71b27cf3` 重连不再整表重挂时间线（只改闪烁）。
 
-## 6. 待核实
+## 7. 待核实
 
 1. 「这次 run 十几个事件刷新后只剩四个」**具体丢在哪一段**未在真机核对。候选：(a) 环淘汰（§1）、(b) 客户端 item 折叠把多条事件并成一个 item（`transcript-items.ts:2003`）、(c) 渲染窗口夹取（`useChatTranscript.ts:285-290`）。现成探针：`claimStats`（`useChatTranscript.ts:568`）、`eventStore.droppedNoise`（`event-store.ts:232`）、`event_cursor.last_seq` 与实际 `currentSeq` 对照（`sessions.ts:1140`）。
 2. hub seq 与磁盘 seq 的**保序性**：落盘成功后才广播（`run-journal.ts:281-289`），而 `llm.stream.chunk` 走同步早退分支立刻广播（`:120-127`）⇒ 同一会话内两者可能不保序；影响面未评估。
 3. 会话事件日志除 `deleteSession` 外是否还有数据目录级 GC / 配额 —— 本 worktree 内没找到证据。
 4. `subscription.ts:36-40` 的注释仍写「环形缓冲最多 10000 条」，而环已是 50000（`event-buffer.ts:44`）⇒ 6 页是否足以走到环起点未复算。
+5. **子 agent 的事件是否在同一会话日志内编号** —— 决定「全局单调 seq」要不要跨子 agent 分配（§3 表格第二行）；本 worktree 内未逐条核对 subagent 的事件归属。
 
-## 7. 相关文档
+## 8. 相关文档
 
 - 丢失窗口公式、方案对比与验收口径：[refresh-gap-design.md](../dev/handoff/refresh-gap-design.md)
 - 量化实测（环容量 / 丢失比例 / 已落盘副本占比）：[chunk-loss-measurement.md](../dev/handoff/chunk-loss-measurement.md)
