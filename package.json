@@ -118,12 +118,12 @@
   ],
   "dependencies": {
     "@promptctl/rich-js": "^0.10.0",
-    "@vessel-agent/agent": "0.53.0",
-    "@vessel-agent/config": "0.53.0",
-    "@vessel-agent/core": "0.53.0",
-    "@vessel-agent/permission": "0.53.0",
-    "@vessel-agent/serve": "0.53.0",
-    "@vessel-agent/tui": "0.53.0",
+    "@vessel-agent/agent": "workspace:*",
+    "@vessel-agent/config": "workspace:*",
+    "@vessel-agent/core": "workspace:*",
+    "@vessel-agent/permission": "workspace:*",
+    "@vessel-agent/serve": "workspace:*",
+    "@vessel-agent/tui": "workspace:*",
     "yaml": "^2.9.0"
   }
 }

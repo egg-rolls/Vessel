@@ -9,9 +9,13 @@
  *   bun run scripts/version.ts --check 0.1.0    # 校验一致性 + CHANGELOG 有该版本
  *   bun run scripts/version.ts --check          # 只校验仓库内一致性
  *
- * 写模式同时把各 manifest 的 `@vessel-agent/*` 依赖（dependencies / devDependencies /
- * peerDependencies）改写为精确目标版本，避免 `workspace:*` / `^x.y.z` 进入发布
- * tarball（`release-dry-run` 的 `internal_dependency_version` 检查）。
+ * manifest 里的 `@vessel-agent/*` 依赖**恒为 `workspace:*`**：本地解析由 workspace 负责，
+ * 发布 tarball 里的精确版本由 `bun pm pack` 打包时自己改写（实测 bun 1.3.9 对
+ * `dependencies` / `devDependencies` / `peerDependencies` 三个字段都会改写）。
+ * 写模式因此只把内部依赖**归一化回 `workspace:*`**（无论原值是 `0.50.0`、`^0.53.0`
+ * 还是已经是 `workspace:*`），不再钉精确版本；`--check` 反向锁住这一点——任何内部
+ * 依赖不是 `workspace:*` 即报错，防止发版把 workspace 协议悄悄钉回固定版本
+ * （那样每次发版都要手工对齐，漏一个就发布 404）。
  *
  * 发布收口时由 1 执行写模式；日常开发只跑 `--check`。
  */
@@ -83,11 +87,18 @@ export async function rootVersionMissing(root: string): Promise<boolean> {
 /** 参与内部版本同步的依赖字段；optionalDependencies 不在此列。 */
 const INTERNAL_DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies'] as const;
 
+/** manifest 里内部依赖的唯一合法写法（精确版本由 bun pack 写进 tarball）。 */
+const WORKSPACE_PROTOCOL = 'workspace:*';
+
 /**
- * 把 `@vessel-agent/*` 依赖改写为精确目标版本；外部依赖保持原样。
+ * 把 `@vessel-agent/*` 依赖归一化为 `workspace:*`；外部依赖保持原样。
  * 返回是否有内容被改写。
+ *
+ * 注意：**不要**改回「写入精确版本」——bun 的 `pm pack` 会在打包时把
+ * `workspace:*` 改写为当前版本，`release-dry-run` 的 `workspace_dependency` /
+ * `internal_dependency_version` 检查看的是 tarball，不是 manifest。
  */
-function syncInternalDependencies(pkg: Record<string, unknown>, version: string): boolean {
+function syncInternalDependencies(pkg: Record<string, unknown>): boolean {
   let updated = false;
 
   for (const field of INTERNAL_DEPENDENCY_FIELDS) {
@@ -97,13 +108,46 @@ function syncInternalDependencies(pkg: Record<string, unknown>, version: string)
     const entries = deps as Record<string, unknown>;
     for (const name of Object.keys(entries)) {
       if (!name.startsWith('@vessel-agent/')) continue;
-      if (entries[name] === version) continue;
-      entries[name] = version;
+      if (entries[name] === WORKSPACE_PROTOCOL) continue;
+      entries[name] = WORKSPACE_PROTOCOL;
       updated = true;
     }
   }
 
   return updated;
+}
+
+/** 内部依赖是否已全部是 `workspace:*`；返回违规描述（空数组 = 合规）。 */
+function internalDependencyIssues(pkg: Record<string, unknown>, path: string): string[] {
+  const issues: string[] = [];
+
+  for (const field of INTERNAL_DEPENDENCY_FIELDS) {
+    const deps = pkg[field];
+    if (!deps || typeof deps !== 'object' || Array.isArray(deps)) continue;
+
+    for (const [name, value] of Object.entries(deps as Record<string, unknown>)) {
+      if (!name.startsWith('@vessel-agent/')) continue;
+      if (value === WORKSPACE_PROTOCOL) continue;
+      issues.push(
+        `${path}: ${field}.${name} = ${JSON.stringify(value)}, expected "${WORKSPACE_PROTOCOL}"` +
+          '（内部依赖不许钉固定版本；tarball 的精确版本由 bun pm pack 负责）',
+      );
+    }
+  }
+
+  return issues;
+}
+
+/** 读取 manifest 的原始 JSON；解析失败时返回 null（由调用方决定是否报错）。 */
+async function readPackageJson(
+  root: string,
+  path: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    return JSON.parse(await readFile(join(root, path), 'utf8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 export async function applyVersion(root: string, version: string): Promise<string[]> {
@@ -118,11 +162,11 @@ export async function applyVersion(root: string, version: string): Promise<strin
     const fullPath = join(root, manifest.path);
     const pkg = JSON.parse(await readFile(fullPath, 'utf8')) as Record<string, unknown>;
 
-    // 版本已经是目标值时也要检查内部依赖：bump 后 `workspace:*` / `^旧版本`
-    // 仍可能残留，release-dry-run 会拒绝这样的 tarball。
+    // 版本已经是目标值时也要检查内部依赖：手工改过、或历史遗留的固定版本
+    // 都要归一化回 `workspace:*`（tarball 的精确版本由 bun pm pack 负责）。
     let updated = manifest.version !== version;
     if (updated) pkg.version = version;
-    if (syncInternalDependencies(pkg, version)) updated = true;
+    if (syncInternalDependencies(pkg)) updated = true;
     if (!updated) continue;
 
     await writeFile(fullPath, `${JSON.stringify(pkg, null, 2)}\n`);
@@ -160,6 +204,16 @@ export async function checkVersions(root: string, expected?: string): Promise<st
     if (manifest.version !== target) {
       errors.push(`${manifest.path}: ${manifest.version} != ${target}`);
     }
+  }
+
+  // 防回退锁：内部依赖恒为 `workspace:*`。发版写模式若把 `@vessel-agent/*` 钉回
+  // 固定版本（漏对齐即发布 404），这里必须拦住；tarball 的精确版本由 bun pm pack 负责。
+  // 根 manifest 即使因为 private/无 version 被 collectManifests 跳过，也要查依赖。
+  const depCheckPaths = new Set([...manifests.map((manifest) => manifest.path), 'package.json']);
+  for (const path of depCheckPaths) {
+    const pkg = await readPackageJson(root, path);
+    if (!pkg) continue;
+    errors.push(...internalDependencyIssues(pkg, path));
   }
 
   if (!(await changelogHasVersion(root, target))) {
@@ -241,14 +295,28 @@ async function main(): Promise<void> {
 
   if (dryRun) {
     const manifests = await collectManifests(ROOT);
-    const pending = manifests.filter((manifest) => manifest.version !== version);
+    const pending: string[] = [];
+    for (const manifest of manifests) {
+      const pkg = await readPackageJson(ROOT, manifest.path);
+      if (!pkg) continue;
+      // 写模式还会把内部依赖归一化为 `workspace:*`，预演必须一起算进去，
+      // 否则版本已是目标值时 dry-run 会谎报「无改动」。
+      const reasons: string[] = [];
+      if (manifest.version !== version) reasons.push(`${manifest.version} -> ${version}`);
+      if (internalDependencyIssues(pkg, manifest.path).length > 0) {
+        reasons.push(`内部依赖 -> ${WORKSPACE_PROTOCOL}`);
+      }
+      if (reasons.length === 0) continue;
+      pending.push(`  ${manifest.path} (${reasons.join('; ')})`);
+    }
     if (pending.length === 0) {
-      console.log(`all manifests already at ${version}`);
+      console.log(
+        `all manifests already at ${version} with internal deps at ${WORKSPACE_PROTOCOL}`,
+      );
       return;
     }
     console.log(`would update ${pending.length} manifest(s) to ${version}:`);
-    for (const manifest of pending)
-      console.log(`  ${manifest.path} (${manifest.version} -> ${version})`);
+    for (const line of pending) console.log(line);
     return;
   }
 

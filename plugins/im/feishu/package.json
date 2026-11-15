@@ -24,8 +24,8 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.76.0",
-    "@vessel-agent/agent": "0.53.0",
-    "@vessel-agent/core": "0.53.0"
+    "@vessel-agent/agent": "workspace:*",
+    "@vessel-agent/core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
