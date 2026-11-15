@@ -8,7 +8,8 @@
  * 设计约束：
  * - 默认只监听回环地址 127.0.0.1；远程监听必须显式 allowRemote + TLS + 显式 token；
  * - 浏览器 WS 必须在首帧 `{kind:'auth',token,since}` 鉴权，token 不接受 URL/query；
- * - 事件在传输层分配单调 seq，支持 since 回放与 gap 信号，不改 core 类型；
+ * - 事件在传输层分配单调 seq，支持 since 回放；0.54 B1 起**没有** gap 帧（缺口靠
+ *   `timeline.hello` 的 `count` / `holes` 声明 + 客户端自报 `timeline.gap_reported`）；
  * - 单 runtime / 单 WorkingContext：运行串行执行；会话切换时 clear 上下文（G2）；
  */
 
@@ -36,7 +37,7 @@ import {
   toRunSummary,
 } from './durable.js';
 import type { EvalsGatewayOptions } from './evals.js';
-import type { EventGap, SeqEvent } from './event-buffer.js';
+import type { SeqEvent } from './event-buffer.js';
 import { createFederationRoute, type FederationGatewayOptions } from './federation.js';
 import type { FeishuGatewayOptions } from './feishu.js';
 import {
@@ -52,7 +53,6 @@ import {
 import { MethodError } from './gateway/errors.js';
 import {
   eventFrame as buildEventFrame,
-  gapFrame as buildGapFrame,
   helloFrame as buildHelloFrame,
   errorFrame,
   resultFrame,
@@ -60,6 +60,18 @@ import {
 import { createAdminMethods, type GatewayReloadResult } from './gateway/methods/admin.js';
 import { createAgentMethods } from './gateway/methods/agents.js';
 import { type AttachmentLister, createAttachmentMethods } from './gateway/methods/attachments.js';
+import {
+  DEFAULT_TIMELINE_READ_FROM,
+  decideTimelineSubscribe,
+  resolveTimelineReadFrom,
+  selectTimelinePage,
+  TIMELINE_PAGE_LIMIT,
+  type TimelineHelloSegment,
+  type TimelineReadFrom,
+  type TimelineReadPort,
+  type TimelineWireEvent,
+  timelineHello,
+} from './gateway/timeline-protocol.js';
 
 export type { GatewayReloadResult } from './gateway/methods/admin.js';
 
@@ -364,6 +376,24 @@ export interface GatewayOptions {
    */
   timelineHeads?: SessionTimelineHeadsPort;
   /**
+   * 时间线**分页读**端口（0.54 B1，asm 注入）。
+   *
+   * `after_timeline_seq` 订阅的帧就来自这里（`readTimelineEvents` 那一路，排他游标）。
+   * 缺省 ⇒ 时间线订阅被拒（`timeline_unavailable`），**不**回落到环形缓冲：
+   * 两套 seq（进程级 hub seq / 会话 timeline_seq）混进一个游标就是 ADR-105 §9 R7 的事。
+   */
+  timelineRead?: TimelineReadPort;
+  /**
+   * 切读开关（0.54 B1，**装配层读一次**，ADR-104 D7：core 是库，不读环境变量）。
+   *
+   * - `'timeline'`（缺省）：`after_timeline_seq` 订阅按时间线读；
+   * - `'legacy'`：一律走老回放（环形 + `since`），`hello.timeline_source` 标 `'legacy'`。
+   *   回退期（B 阶段，上限 48 小时）用；C 阶段删键并在启动时 fail loud。
+   *
+   * 非法值由 `resolveTimelineReadFrom` 抛错 —— 静默回落会让人以为「已经切回旧源」。
+   */
+  timelineReadFrom?: TimelineReadFrom;
+  /**
    * 方法层（`events.list` 等）脱敏；缺省 core 默认 redactor。
    * 实时广播的脱敏由 hub 的 `map` 决定——自定义时应把同一实例传给
    * `createGatewayEventHub({ redactor })`。
@@ -467,6 +497,16 @@ interface WsData {
    * 一次性：`applyWsSubscribe` 用完即清，实时广播也不受它约束。
    */
   until?: number;
+  /**
+   * 0.54 B1：本连接当前 epoch 是否跑在**时间线读源**上。
+   *
+   * 真 = 帧的 `seq` 是会话内 `timeline_seq`，因此环形缓冲的实时广播**不得**再发给它
+   * （那是另一套编号，混进来客户端四条校验必红、且语义上等于两套序号并存）。切回老订阅
+   * （不带 `after_timeline_seq`）时置回 false。
+   */
+  timelineEpoch?: boolean;
+  /** 0.54 B1：时间线 epoch 的排他游标（本连接已发到的最大 `timeline_seq`）。 */
+  afterTimeline?: number;
   /** 0.48 M3：插件 WS 连接；存在时该 WS 不进入 `wsClients`。 */
   pluginWs?: PluginWsConnection;
 }
@@ -605,6 +645,92 @@ function parseSince(value: string | null): number {
   if (value === null) return 0;
   const n = Number.parseInt(value, 10);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * RPC 参数里的可选 seq：缺省 / 非整数 ⇒ `undefined`（= 该参数没给）。
+ *
+ * 与 `parseSince` 的区别只在「缺省」这一侧：`parseSince` 把「没给」折成 0（老语义
+ * 「从 0 开始」），而 `after_timeline_seq` 的「没给」必须能和「给了 0」区分开 ——
+ * 前者是**老订阅**（环形 seq），后者是**时间线订阅**（会话内 seq），两套编号不能混。
+ */
+function optionalSeq(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const seq = Math.floor(value);
+  return seq >= 0 ? seq : undefined;
+}
+
+/**
+ * 从 `events.subscribe` 的 result 里取出「拒绝」信息（0.54 B1）。
+ *
+ * 三个码都在 `ProtocolErrorCode` 里（WS 错误帧直接用），但**不**在 `RpcErrorCode`
+ * 里：后者与根 `src/rpc/types.ts` 逐字同步，加码要改 `src/**`（B1 边界之外）。
+ * 所以 handler 用 `subscribed: false + reject` 返回，由 WS 层在这里转成错误帧。
+ */
+function subscribeRejectOf(
+  result: unknown,
+):
+  | { code: 'session_frozen_readonly' | 'timeline_unavailable' | 'invalid_params'; message: string }
+  | undefined {
+  if (result === null || typeof result !== 'object') return undefined;
+  const raw = (result as { reject?: unknown }).reject;
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const reject = raw as { code?: unknown; message?: unknown };
+  const code = reject.code;
+  if (
+    code !== 'session_frozen_readonly' &&
+    code !== 'timeline_unavailable' &&
+    code !== 'invalid_params'
+  ) {
+    return undefined;
+  }
+  return { code, message: typeof reject.message === 'string' ? reject.message : code };
+}
+
+/**
+ * 从 `events.subscribe` 的结果里取出时间线段（0.54 B1）。
+ *
+ * WS 侧发 hello 用的就是 handler 已经裁决 / 算好的那一份：这里**不重算**，也不重复
+ * `lookup`（重复查盘会让 hello 与 res 对不上，还可能在中途发生归档推进而前后不一致）。
+ * 形状不对 ⇒ 当作「没有时间线段」= 老 epoch（fail-safe：宁可走老回放，不发半截声明）。
+ */
+function timelineSegmentOf(result: unknown): TimelineHelloSegment | undefined {
+  if (result === null || typeof result !== 'object') return undefined;
+  const raw = (result as { timeline?: unknown }).timeline;
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const segment = raw as Partial<TimelineHelloSegment>;
+  if (
+    typeof segment.start_seq !== 'number' ||
+    typeof segment.end_seq !== 'number' ||
+    typeof segment.count !== 'number' ||
+    typeof segment.wal_head !== 'number' ||
+    typeof segment.timeline_head !== 'number' ||
+    // pub-i2：没有 `published_head` 就不能算「声明完整」——它是「这次会发到哪」的边界，
+    // 缺了它 WS epoch 会退回「全部视为已发布」，在崩溃窗口里就是发多（账对不上）。
+    typeof segment.published_head !== 'number'
+  ) {
+    return undefined;
+  }
+  const holes = Array.isArray(segment.holes)
+    ? segment.holes.filter(
+        (hole): hole is { from_seq: number; to_seq: number } =>
+          typeof hole === 'object' &&
+          hole !== null &&
+          typeof (hole as { from_seq?: unknown }).from_seq === 'number' &&
+          typeof (hole as { to_seq?: unknown }).to_seq === 'number',
+      )
+    : [];
+  return {
+    start_seq: segment.start_seq,
+    end_seq: segment.end_seq,
+    count: segment.count,
+    timeline_head: segment.timeline_head,
+    wal_head: segment.wal_head,
+    published_head: segment.published_head,
+    holes,
+    tainted: segment.tainted === true,
+    ...(segment.reset === true ? { reset: true } : {}),
+  };
 }
 
 /** 构造 JSON 响应 */
@@ -784,6 +910,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const token = configuredToken ?? generateToken();
 
   const tlsMaterial = opts.tls ? loadTlsMaterial(opts.tls) : undefined;
+
+  // 0.54 B1：切读开关在**装配层**读一次（ADR-104 D7：core 是库，不读环境变量）。
+  // 非法值在这里直接抛（fail loud），不做「静默回落 = 以为切回旧源」那种事。
+  const timelineReadFrom: TimelineReadFrom =
+    opts.timelineReadFrom === undefined
+      ? DEFAULT_TIMELINE_READ_FROM
+      : resolveTimelineReadFrom(opts.timelineReadFrom);
 
   const defaultTenantId = opts.defaultTenantId ?? DEFAULT_TENANT_ID;
   const redactor: TraceRedactor = opts.redactor ?? createDefaultTraceRedactor();
@@ -1139,9 +1272,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     });
   }
 
-  function helloFrame(fromSeq: number): ServerFrame {
+  function helloFrame(fromSeq: number, timeline?: TimelineHelloSegment): ServerFrame {
     // fromSeq 由回放窗口解析后传入；这里只取同一时刻的 latest / node 快照。
-    const latestSeq = hub.latestSeq;
+    // 时间线 epoch 例外：`from_seq` / `latest_seq` 也换成时间线的区间两端（见 frames.ts）。
+    const latestSeq = timeline !== undefined ? timeline.end_seq : hub.latestSeq;
     const ts = Date.now();
     const node = nodeInfo();
     return buildHelloFrame({
@@ -1152,11 +1286,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
       fromSeq,
       latestSeq,
       ts,
+      source: timeline !== undefined ? 'timeline' : 'legacy',
+      ...(timeline !== undefined ? { timeline } : {}),
     });
-  }
-
-  function gapFrame(gap: EventGap): ServerFrame {
-    return buildGapFrame({ nodeId, gap });
   }
 
   function sendFrameText(ws: Ws, text: string): boolean {
@@ -1228,7 +1360,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   /**
    * 发送一条事件；`encoded` 来自回放窗口时直接复用（不再序列化）。
-   * 背压拒收与 gap 行为与实时广播一致。
+   * 背压拒收与「缺口不再上 wire」的行为与实时广播一致。
    *
    * 缺省 `encoded` 也会经过唯一出站序列化点（补齐后编码），不会漏掉会话归属。
    */
@@ -1238,17 +1370,25 @@ export function startGateway(opts: GatewayOptions): Gateway {
     replaySessions?: ReadonlyMap<string, string>,
     encoded?: string,
   ): void {
+    // 时间线 epoch 的连接只收 `timeline_seq` 帧：环形缓冲的另一套编号一律不发给它
+    // （ADR-105 §9 R7：一个 epoch 里只允许存在一套 seq）。
+    if (ws.data.timelineEpoch === true) return;
     if (!wsAccepts(ws, item.event, replaySessions)) return;
     const inflight = ws.getBufferedAmount();
     if (!ws.data.backpressure.admit(item.seq, inflight)) return;
-    const gap = ws.data.backpressure.takeGap(inflight);
-    if (gap) sendFrame(ws, gapFrame(gap));
+    // 背压恢复只**复位记账**，不再补发 `gap` 帧（0.54 B1 删帧，见 `sse.ts#flushSseGap`）。
+    ws.data.backpressure.takeGap(inflight);
     sendFrameText(ws, encoded ?? outboundEventFrame(item, replaySessions).encoded);
   }
 
-  function flushWsGap(ws: Ws): void {
-    const gap = ws.data.backpressure.takeGap(ws.getBufferedAmount());
-    if (gap) sendFrame(ws, gapFrame(gap));
+  /**
+   * 心跳时复位背压丢弃记账（0.54 B1 起不再往线上发 `gap` 帧）。
+   *
+   * 必须保留这次调用：`takeGap` 是那个状态机的复位点，不调用会让 `dropping`
+   * 永远为真、后续 `admit` 一直按「还在丢弃」处理。
+   */
+  function drainWsGap(ws: Ws): void {
+    ws.data.backpressure.takeGap(ws.getBufferedAmount());
   }
 
   function broadcastEvent(item: SeqEvent): void {
@@ -1280,13 +1420,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
    *
    * 输入必须是**过滤后**的事件（session_id / run_id / types 先过滤），这样
    * 窄订阅不会因为无关事件占满预算而拿不到自己的尾部。`encode` 的结果既用于
-   * 计算字节数也用于发送。返回被跳过的最后一条 seq（`skippedTo`），调用方把它
-   * 和环形缓冲自身的缺口合并成一个 gap。
+   * 计算字节数也用于发送。
    *
    * 与旧实现的差别只在**预算来源**：固定 1 MiB / 2000 条 → 由「最新一个
    * `run.started`（或 `user.message`）起的地板字节数 × 安全系数」动态推导
-   * （clamp 到 1–4 MiB）。保留区仍是源的**连续后缀**、仍按 seq 升序、无重复，
-   * `skippedTo` 口径不变。
+   * （clamp 到 1–4 MiB）。保留区仍是源的**连续后缀**、仍按 seq 升序、无重复。
+   *
+   * 0.54 B1：这里不再返回「被跳过的最后一条 seq」——跳过的区间不再编码成 `gap` 帧
+   * （ADR-105 §9 R4），客户端按 `hello.start_seq` / `count` 与自己的游标对账。
    *
    * `encode` 惰性：`bytesAt` 只在真正需要算预算时才序列化一条事件 —— 找锚点只看
    * 类型，不会为了算窗口把整圈缓冲（可能数十 MB）编码一遍。
@@ -1294,7 +1435,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function tailReplayWindow(
     items: readonly SeqEvent[],
     encode: (item: SeqEvent) => string,
-  ): { frames: ReplayFrame[]; skippedTo?: number; budget: ReplayBudgetSelection } {
+  ): { frames: ReplayFrame[]; budget: ReplayBudgetSelection } {
     const count = items.length;
     const encoded: (string | undefined)[] = new Array(count);
     const sizes: number[] = new Array(count).fill(-1);
@@ -1325,18 +1466,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
       frames.push({ item, encoded: encoded[i] ?? encode(item) });
     }
     consoleNoteReplayBudget(budget);
-    const first = frames[0];
-    if (first === undefined) return { frames: [], budget };
-    const oldest = items[0]?.seq;
-    if (oldest === undefined || first.item.seq <= oldest) return { frames, budget };
-    return { frames, skippedTo: first.item.seq - 1, budget };
+    return { frames, budget };
   }
 
   interface ReplayPlan {
     frames: ReplayFrame[];
-    skippedTo?: number;
-    /** 环形缓冲自身的缺口（保留区之前） */
-    ringGap?: EventGap;
     /** 本次 epoch 实际会发送的第一条 seq */
     fromSeq: number;
     replaySessions: Map<string, string>;
@@ -1347,18 +1481,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
      * `live-item-store` 那单里一起改），不在这一轮的范围内。
      */
     budget: ReplayBudgetSelection;
-  }
-
-  /**
-   * 把环形缺口裁进 `until` 以内：回填页只说明「本次请求区间里没发出去的那段」，
-   * 不重复上报更早（不在本次请求范围）的缺口。区间整个落在缺口里时返回 undefined
-   * （本页无内容），由 `fromSeq = until + 1` 告诉调用方「这里没有可拉取的事件」。
-   */
-  function boundGap(gap: EventGap | null, until: number | undefined): EventGap | undefined {
-    if (gap === null) return undefined;
-    if (until === undefined || gap.to_seq <= until) return gap;
-    if (gap.from_seq > until) return undefined;
-    return { from_seq: gap.from_seq, to_seq: until };
   }
 
   /**
@@ -1388,24 +1510,22 @@ export function startGateway(opts: GatewayOptions): Gateway {
       filtered,
       (item) => outboundEventFrame(item, replaySessions).encoded,
     );
-    const ringGap = boundGap(hub.gapFor(ws.data.since), until);
     return {
-      ...window,
-      ...(ringGap !== undefined ? { ringGap } : {}),
+      frames: window.frames,
       fromSeq: window.frames[0]?.item.seq ?? emptyFromSeq(until),
       replaySessions,
+      budget: window.budget,
     };
   }
 
-  /** hello → gap → 有界回放。hello 已由调用方按 epoch 语义先发。 */
+  /**
+   * hello → 有界回放。hello 已由调用方按 epoch 语义先发。
+   *
+   * 0.54 B1：环形淘汰 / 预算跳过的那一段**不再**发 `gap` 帧（ADR-105 §9 R4：一个区间
+   * 两种成因、客户端无法区分）。少了只可能是「客户端自己算错」，它按 `hello.count`
+   * 一核就知道，并报 `timeline_gap_reported`；服务端不该替它编一个区间。
+   */
   function sendReplay(ws: Ws, plan: ReplayPlan): void {
-    const gapTo = Math.max(plan.ringGap?.to_seq ?? 0, plan.skippedTo ?? 0);
-    if (gapTo > 0) {
-      sendFrame(
-        ws,
-        gapFrame({ from_seq: plan.ringGap?.from_seq ?? ws.data.since + 1, to_seq: gapTo }),
-      );
-    }
     for (const frame of plan.frames) {
       sendEventToWs(ws, frame.item, plan.replaySessions, frame.encoded);
     }
@@ -1425,6 +1545,62 @@ export function startGateway(opts: GatewayOptions): Gateway {
     sendFrame(ws, helloFrame(plan.fromSeq));
     sendReplay(ws, plan);
     return plan.fromSeq;
+  }
+
+  /**
+   * 时间线 epoch（0.54 B1）：`hello` 带六字段声明 → 从时间线读一页 → 发帧。
+   *
+   * 三条与老回放**故意不同**的地方，都是为了「一个 epoch 只有一套 seq」：
+   * 1. `from_seq` / `latest_seq` 也换成时间线区间两端（老客户端永远不会走到这条路径，
+   *    因为它不发 `after_timeline_seq`）；
+   * 2. 帧的 `seq` 是 `timeline_seq`，直接来自时间线记录，不经环形缓冲；
+   * 3. 之后本连接**不再接收**环形广播（`sendEventToWs` 里按 `timelineEpoch` 短路）。
+   *    实时尾随要等写者的 `publish` 接到装配层（ADR-105 §11.1 的已知缺口），
+   *    在那之前宁可只给历史页，也不把两套 seq 混进同一路帧。
+   *
+   * 返回本次 epoch 实际会发送的第一条 seq（供 `res` 对齐）。
+   */
+  async function sendTimelineEpoch(ws: Ws, segment: TimelineHelloSegment): Promise<number> {
+    sendFrame(ws, helloFrame(segment.start_seq, segment));
+    ws.data.afterTimeline = segment.start_seq - 1;
+    const sessionId = ws.data.sessionId;
+    const port = opts.timelineRead;
+    if (sessionId === undefined || port === undefined) return segment.start_seq;
+    // 只发到**有效右端** = `min(end_seq, published_head)`：未发布尾部允许永远不推送
+    // （pub-i2 的崩溃窗口产物），发它会把「UI 见过的集合 = timeline ∖ 未发布尾部」这条
+    // 恒等式打破，也会让客户端手里的 count 账对不上。
+    const effectiveEnd = Math.min(segment.end_seq, segment.published_head);
+    const records = await port.readPage(sessionId, {
+      afterSeq: segment.start_seq - 1,
+      untilSeq: effectiveEnd,
+      limit: TIMELINE_PAGE_LIMIT,
+    });
+    for (const record of selectTimelinePage(
+      records,
+      segment.start_seq,
+      effectiveEnd,
+      TIMELINE_PAGE_LIMIT,
+    )) {
+      if (!sendFrame(ws, timelineEventFrame(record))) break;
+      ws.data.afterTimeline = record.seq;
+    }
+    return segment.start_seq;
+  }
+
+  /** 时间线记录 → 线上事件帧（与 `sessions.events` 的事件体同形，走同一个出站映射）。 */
+  function timelineEventFrame(record: TimelineWireEvent): ServerFrame {
+    return buildEventFrame({
+      nodeId,
+      seq: record.seq,
+      event: {
+        type: record.type,
+        run_id: record.run_id ?? '',
+        ts: record.ts,
+        data: (record.data ?? {}) as RunEvent['data'],
+      },
+      ...(record.run_id !== undefined ? { jobId: record.run_id } : {}),
+      ts: record.ts,
+    });
   }
 
   /**
@@ -1617,6 +1793,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
           // 分段回放（additive）：只回放 `seq <= until_seq` 的区间，用于把有界窗口
           // 之外的更早历史分页拉回。缺省 = 原语义（从 since 到最新，仍有界）。
           until_seq: { type: 'integer', minimum: 0 },
+          // 0.54 B1（ADR-105 §6）：**时间线订阅**的单游标。给了它就按会话内
+          // `timeline_seq` 读（`hello` 带 `start_seq` / `end_seq` / `count` /
+          // `timeline_head` / `wal_head` / `holes`），并要求同时给 `session_id`。
+          // 与 `since` 互斥：两套编号不许混在一个游标里（ADR-105 §9 R7）。
+          after_timeline_seq: { type: 'integer', minimum: 0 },
         },
       },
       result_schema: {
@@ -1628,19 +1809,98 @@ export function startGateway(opts: GatewayOptions): Gateway {
           latest_seq: { type: 'integer' },
           mode: { type: 'string', enum: ['ws', 'stream'] },
           stream_url: { type: 'string' },
+          // 0.54 B1：读源标记 + 时间线段（都是 additive）。
+          timeline_source: { type: 'string', enum: ['timeline', 'legacy'] },
+          timeline: { type: 'object' },
+          // 时间线订阅被拒时的稳定码（`subscribed: false`）。WS 侧把它转成同码的
+          // 错误帧；HTTP 侧只能从这个字段读到原因（见 handler 注释里的取舍）。
+          reject: {
+            type: 'object',
+            required: ['code', 'message'],
+            properties: {
+              code: {
+                type: 'string',
+                enum: ['session_frozen_readonly', 'timeline_unavailable', 'invalid_params'],
+              },
+              message: { type: 'string' },
+            },
+          },
         },
       },
-      handler: (params, ctx) => {
-        const since = typeof params.since === 'number' ? params.since : 0;
+      handler: async (params, ctx) => {
+        const afterTimelineSeq = optionalSeq(params.after_timeline_seq);
+        const sessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
         const mode = ctx.connection === 'ws' ? 'ws' : 'stream';
-        // WS 路径由 applyWsSubscribe 用本次 epoch 实际的 hello.from_seq 覆盖后再发 res
-        // （窗口需要连接过滤，handler 里拿不到）；HTTP 路径没有 hello，返回下一期望序号。
-        return {
+        const legacyResult = (since: number) => ({
           subscribed: true,
           from_seq: since + 1,
           latest_seq: hub.latestSeq,
           mode,
+          timeline_source: 'legacy' as const,
           ...(ctx.connection === 'http' ? { stream_url: `/v1/events?since=${since}` } : {}),
+        });
+        // WS 路径由 applyWsSubscribe 用本次 epoch 实际的 hello 覆盖后再发 res
+        // （窗口需要连接过滤，handler 里拿不到）；HTTP 路径没有 hello，返回下一期望序号。
+        if (afterTimelineSeq === undefined) {
+          return legacyResult(typeof params.since === 'number' ? params.since : 0);
+        }
+        const decision = decideTimelineSubscribe({
+          afterTimelineSeq,
+          sinceGiven:
+            typeof params.since === 'number' ||
+            typeof params.since_ts === 'number' ||
+            typeof params.until_seq === 'number' ||
+            typeof params.run_id === 'string' ||
+            (Array.isArray(params.types) && params.types.length > 0),
+          sessionId,
+          readFrom: timelineReadFrom,
+          headsInjected: opts.timelineHeads !== undefined,
+          heads:
+            opts.timelineHeads !== undefined && sessionId !== undefined
+              ? await opts.timelineHeads.lookup(sessionId)
+              : undefined,
+          readPortInjected: opts.timelineRead !== undefined,
+        });
+        if (decision.kind === 'legacy') {
+          return legacyResult(typeof params.since === 'number' ? params.since : 0);
+        }
+        if (decision.kind === 'reject') {
+          // **不抛**：`RpcErrorCode` 是与根 `src/rpc/types.ts` 逐字同步的冻结集合，
+          // 往里加码要改 `src/**`（B1 边界之外）。于是拒绝走 `subscribed: false` +
+          // 稳定码，WS 侧立刻把它转成**同码的错误帧**（客户端看到的还是
+          // `session_frozen_readonly`），HTTP 侧也能从 `reject` 读到原因 —— 不静默。
+          return {
+            subscribed: false,
+            from_seq: afterTimelineSeq + 1,
+            latest_seq: 0,
+            mode,
+            timeline_source: 'timeline' as const,
+            reject: { code: decision.code, message: decision.message },
+          };
+        }
+        const segment = timelineHello({ afterTimelineSeq, heads: decision.heads });
+        // SSE 的时间线回放还没有实现（`GET /v1/events` 是同步 start 的流，页读是 async）：
+        // 明确拒绝而不是给一个「只发页、不接实时尾」的半截流。
+        if (ctx.connection === 'http') {
+          return {
+            subscribed: false,
+            from_seq: segment.start_seq,
+            latest_seq: segment.end_seq,
+            mode,
+            timeline_source: 'timeline' as const,
+            reject: {
+              code: 'timeline_unavailable' as const,
+              message: '时间线回放只支持 WS：SSE（/v1/events）的时间线读路径未实现',
+            },
+          };
+        }
+        return {
+          subscribed: true,
+          from_seq: segment.start_seq,
+          latest_seq: segment.end_seq,
+          mode,
+          timeline_source: 'timeline' as const,
+          timeline: segment,
         };
       },
     },
@@ -1781,6 +2041,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
     ws.data.alive = true;
     if (frame.kind === 'pong') return;
+    // 0.54 B1：客户端自报时间线缺口（`hello.count` 与实收对不上）。只记录，不改事实源。
+    if (frame.kind === 'timeline_gap') {
+      recordTimelineGapReport(ws, frame);
+      return;
+    }
     if (frame.kind !== 'req') {
       sendResult(ws, '', false, undefined, protocolError('invalid_request', 'Expected req frame'));
       return;
@@ -1866,8 +2131,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
       rememberRunsStartResult(frame.method, response.result);
       let result = response.result;
       if (frame.method === 'events.subscribe') {
+        // 0.54 B1：时间线订阅被拒 ⇒ 转成**同码的协议错误帧**（不是 ok:true 的空订阅）。
+        const reject = subscribeRejectOf(response.result);
+        if (reject !== undefined) {
+          sendResult(ws, frame.id, false, undefined, protocolError(reject.code, reject.message));
+          return;
+        }
         // res 与刚发送的 hello 使用同一个 plan：不重复计算 / 序列化回放窗口。
-        const fromSeq = applyWsSubscribe(ws, frame.params);
+        const fromSeq = await applyWsSubscribe(ws, frame.params, response.result);
         if (result !== null && typeof result === 'object' && !Array.isArray(result)) {
           result = { ...(result as Record<string, unknown>), from_seq: fromSeq };
         }
@@ -1888,8 +2159,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
-  /** 应用订阅过滤并发送新的 epoch；返回本次实际会发送的第一条 seq（供 res 对齐）。 */
-  function applyWsSubscribe(ws: Ws, raw: unknown): number {
+  /**
+   * 应用订阅过滤并发送新的 epoch；返回本次实际会发送的第一条 seq（供 res 对齐）。
+   *
+   * 0.54 B1：两个 epoch 形态 ——
+   * - **老 epoch**（不带 `after_timeline_seq`）：环形缓冲回放，帧带进程级 hub seq；
+   * - **时间线 epoch**（handler 已裁决通过、`result.timeline` 带声明）：帧带
+   *   `timeline_seq`，只发历史页，环形广播不再进入本连接（见 `sendEventToWs`）。
+   *
+   * 裁决与 `lookup` 留在 handler 里（那里能拿到 `params` 与端口）；这里只负责
+   * 「按已裁决的结果发帧」，不重复查盘、也不重复做一次可能前后不一致的判定。
+   */
+  async function applyWsSubscribe(ws: Ws, raw: unknown, result?: unknown): Promise<number> {
     const params =
       raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
     if (typeof params.since === 'number' && params.since >= 0) ws.data.since = params.since;
@@ -1904,6 +2185,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // 它就回到原语义（从 since 到最新），实时广播从来不受它约束。
     const untilParam = params.until_seq;
     ws.data.until = typeof untilParam === 'number' && untilParam >= 0 ? untilParam : undefined;
+    const segment = timelineSegmentOf(result);
+    if (segment !== undefined) {
+      ws.data.timelineEpoch = true;
+      return await sendTimelineEpoch(ws, segment);
+    }
+    // 切回老 epoch：清掉时间线游标，环形广播重新进入本连接。
+    ws.data.timelineEpoch = false;
+    ws.data.afterTimeline = undefined;
     const fromSeq = resubscribeTo(ws);
     ws.data.until = undefined;
     return fromSeq;
@@ -2201,6 +2490,59 @@ export function startGateway(opts: GatewayOptions): Gateway {
   /** 发布 federation 事件（core 内部 camelCase；gateway 边界统一转 snake_case） */
   function publishFederationEvent(type: string, data: Record<string, unknown>): void {
     publishDiagnostic(type, 'federation', data);
+  }
+
+  /**
+   * 0.54 B1：接收客户端自报的时间线缺口（`timeline.gap_reported`）。
+   *
+   * 这是**唯一的接收/记录路径**：客户端按 ADR-105 §6 四条校验发现「收到的集合与
+   * `hello.count` 对不上」时，在**同一条 WS 连接**上发一帧 `{kind:'timeline_gap', ...}`
+   * —— 不新开 RPC 方法，因为这条报告要能在 RPC 通道本身出问题（订阅刚被拒 / 服务端正忙）
+   * 时仍然送达，语义上也是「传输层事实」而不是一个控制面操作。
+   *
+   * 三条口径写死：
+   * 1. **只记录，不改事实源**：不写 `holes`、不切读源。洞只能由写者**声明**
+   *    （ADR-105 §6 / [unacked-queue-closure.md] §3：缺口只有两种解释 —— 写者声明的洞，
+   *    或客户端自己算错），服务端不能靠客户端上报反推「磁盘上有洞」。
+   * 2. **best-effort**：发布失败只吞在 `publishDiagnostic` 里，绝不反过来打断握手
+   *    （诊断事件不得成为新的失败点）。
+   * 3. 事件走 `observe` 档（只出现在观察面，不进聊天 / 团队时间线），payload 只带计数与
+   *    seq，不带任何事件正文。
+   */
+  function recordTimelineGapReport(
+    ws: Ws,
+    frame: {
+      session_id?: string;
+      expected?: number;
+      received?: number;
+      start_seq?: number;
+      end_seq?: number;
+      after_timeline_seq?: number;
+      check?: 1 | 2 | 3 | 4;
+    },
+  ): void {
+    const sessionId =
+      typeof frame.session_id === 'string' && frame.session_id.length > 0
+        ? frame.session_id
+        : ws.data.sessionId;
+    const report: Record<string, unknown> = {
+      ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+      ...(typeof frame.expected === 'number' ? { expected: frame.expected } : {}),
+      ...(typeof frame.received === 'number' ? { received: frame.received } : {}),
+      ...(typeof frame.start_seq === 'number' ? { start_seq: frame.start_seq } : {}),
+      ...(typeof frame.end_seq === 'number' ? { end_seq: frame.end_seq } : {}),
+      ...(typeof frame.after_timeline_seq === 'number'
+        ? { after_timeline_seq: frame.after_timeline_seq }
+        : {}),
+      ...(frame.check !== undefined ? { check: frame.check } : {}),
+      at: Date.now(),
+    };
+    console.warn('[vessel] timeline.gap_reported', report);
+    // `run_id` 用诊断伪 run（与 `rpc.result_invalid` 的 `'rpc'` / 联邦事件的 `'federation'`
+    // 同一范式）：它不是某次 run 的事件，绝不能混进会话里任何一个真实 run 的事件列表。
+    // 会话归属靠 `data.session_id`（gateway 的出站归属以「事件自报」优先），所以它仍然
+    // 会出现在那个会话的订阅流里 —— 只是不会被当成「s1 这个 run 的事件」。
+    publishDiagnostic('timeline.gap_reported', 'timeline', report);
   }
 
   const federationRoute = createFederationRoute({
@@ -3061,6 +3403,17 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
       // SSE：只读事件流（EventSource 无法带 header，使用 ?token=）
       if ((path === '/v1/events' || path === '/events') && req.method === 'GET') {
+        // 0.54 B1：SSE 的时间线读路径没实现 —— 明确拒绝，不给半截流。
+        // 理由：`start()` 是同步的，而时间线分页读是 async；更要紧的是「只发一页历史、
+        // 不接实时尾」会让客户端把「这一页之后没有事件」当成事实。宁可报错。
+        if (url.searchParams.get('after_timeline_seq') !== null) {
+          return errorJson(
+            'timeline_unavailable',
+            'after_timeline_seq is WS-only: SSE timeline replay is not implemented (use WS)',
+            501,
+            extra,
+          );
+        }
         const since = parseSince(url.searchParams.get('since'));
         // 分段回放（additive，与 WS `until_seq` 同义）：只回放 `seq <= until_seq`。
         const until = parseSince(url.searchParams.get('until_seq')) || undefined;
@@ -3095,7 +3448,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
                   low: SSE_LOW_WATER_FRAMES,
                 }),
                 unacked: 0,
-                encodeGap: (gap) => `data: ${JSON.stringify(gapFrame(gap))}\n\n`,
                 onClose: () => sseClients.delete(ctrl),
                 accepts,
               };
@@ -3118,18 +3470,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
               const fromSeq = window.frames[0]?.item.seq ?? emptyFromSeq(until);
               writeSse(ctrl, clientState, 'retry: 3000\n\n');
               writeSse(ctrl, clientState, `data: ${JSON.stringify(helloFrame(fromSeq))}\n\n`);
-              const ringGap = boundGap(hub.gapFor(since), until);
-              const gapTo = Math.max(ringGap?.to_seq ?? 0, window.skippedTo ?? 0);
-              if (gapTo > 0) {
-                writeSse(
-                  ctrl,
-                  clientState,
-                  clientState.encodeGap({
-                    from_seq: ringGap?.from_seq ?? since + 1,
-                    to_seq: gapTo,
-                  }),
-                );
-              }
+              // 0.54 B1：环形淘汰 / 预算跳过的那一段**不再**编码成 `gap` 帧（ADR-105 §9 R4）。
+              // 客户端按 `hello.from_seq` 与自己游标的差自行判断该重拉哪一段。
 
               // 窗口内已序列化，pull 时直接复用；窗口外的新事件再按需序列化。
               const windowFrames = new Map<number, string>();
@@ -3387,8 +3729,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
           }
           ws.data.alive = false;
           sendFrame(ws, { v: PROTOCOL_VERSION, kind: 'ping', node_id: nodeId, ts: Date.now() });
-          // 客户端已排空但没有新事件时，心跳负责补发 pending gap。
-          flushWsGap(ws);
+          // 心跳复位背压丢弃记账（0.54 B1 起不再补发 `gap` 帧，见 `drainWsGap`）。
+          drainWsGap(ws);
         }
         for (const [ctrl, state] of [...sseClients]) {
           if (!flushSseGap(ctrl, state)) continue;

@@ -143,6 +143,17 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   // 不是模型上下文、也不是会话叙事；`internal` 会在 `ui.showInternalEvents` 打开后进
   // 聊天时间线，那是把一个观测告警混进对话。它也不是失败类，所以不进 `content`。
   'timeline.divergence': { tier: 'observe', live: true },
+  // 0.54 B1（ADR-105 §6 校验 3/4 / §7 A7）：客户端**自报**的时间线缺口 ——
+  // 「收到的集合与 `hello.count` 对不上」（`{kind:'timeline_gap'}` 连接帧 → 服务端
+  // `recordTimelineGapReport` → 这条事件 + 一条结构化 warn）。
+  //
+  // 档位 `observe`，与 `timeline.divergence` 同一理由：它是运维/观察面诊断（只在
+  // Observe / Runs 读），不是模型上下文、也不是会话叙事；`internal` 会在
+  // `ui.showInternalEvents` 打开后进聊天时间线，等于把一个握手告警混进对话。
+  //
+  // 它**不是**失败类（不叫 `.failed`/`.error`）：写者的洞由写者自己声明（`holes`），
+  // 这条只说明「有一路客户端核不上自己的游标」，方向上不低于「可能客户端算错」。
+  'timeline.gap_reported': { tier: 'observe', live: true },
   'message.injected': { tier: 'internal', live: true },
   'message.compaction': { tier: 'internal', live: true },
   'limit.blocked': { tier: 'internal', live: true },

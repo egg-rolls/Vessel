@@ -31,7 +31,6 @@ export interface SseClientState {
   backpressure: ClientBackpressure;
   /** pull 之后自增；作为 Bun desiredSize 失效时的退化信号 */
   unacked: number;
-  encodeGap: (gap: EventGap) => string;
   replay?: SseReplayState;
   onClose?: () => void;
   /** 可选事件过滤（events.subscribe run_id / types） */
@@ -66,14 +65,24 @@ export function writeSse(ctrl: SseController, state: SseClientState, chunk: stri
   }
 }
 
+/**
+ * 背压恢复时**清掉**丢弃记账，**不再**往线上发 `gap` 帧（0.54 B1）。
+ *
+ * 为什么删帧而不是保留：`gap` 把两种成因（环形淘汰 / 回放预算跳过）压成同一个区间，
+ * 而客户端无法区分（ADR-105 §9 R4）；新协议里缺口只有两种解释——写者声明的
+ * `holes`，或客户端自己算错（[unacked-queue-closure.md] §3）。慢消费者丢的帧属于
+ * 「客户端自己算错」那一侧：它按 `hello.count` 校验就会发现，并报 `timeline_gap_reported`。
+ *
+ * 但**状态必须清**：`takeGap` 是那个状态机的复位点，不调用会让 `dropping` 永远为真，
+ * 之后的 `admit` 会一直按「还在丢弃」处理。
+ */
 export function flushSseGap(
   ctrl: SseController,
   state: SseClientState,
   highWaterFrames = SSE_HIGH_WATER_FRAMES,
 ): boolean {
-  const gap = state.backpressure.takeGap(sseInflight(ctrl, state, highWaterFrames));
-  if (!gap) return true;
-  return writeSse(ctrl, state, state.encodeGap(gap));
+  state.backpressure.takeGap(sseInflight(ctrl, state, highWaterFrames));
+  return true;
 }
 
 export function sendGatedSse(
@@ -102,11 +111,10 @@ export function pumpSseReplay(
 ): void {
   const replay = state.replay;
   if (!replay) return;
+  // 环形缓冲已经淘汰掉的那一段：**跳过**它（游标前移），不再往线上发 `gap` 帧。
+  // 跳过之后客户端按 `hello.count` 发现少了，自己报 `timeline_gap_reported`（0.54 B1）。
   const historyGap = source.gapFor(replay.cursor - 1);
-  if (historyGap) {
-    if (!writeSse(ctrl, state, state.encodeGap(historyGap))) return;
-    replay.cursor = historyGap.to_seq + 1;
-  }
+  if (historyGap) replay.cursor = historyGap.to_seq + 1;
   let sent = 0;
   for (const item of source.since(replay.cursor - 1)) {
     const desired = ctrl.desiredSize;
