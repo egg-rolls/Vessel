@@ -278,6 +278,10 @@ export abstract class ProtocolClient {
           node: frame.node,
           from_seq: frame.from_seq,
           latest_seq: frame.latest_seq,
+          ...(frame.timeline_source !== undefined
+            ? { timeline_source: frame.timeline_source }
+            : {}),
+          ...(frame.timeline !== undefined ? { timeline: frame.timeline } : {}),
         };
         this.setState('open');
         const resolve = this.connectResolve;
@@ -355,6 +359,26 @@ export abstract class ProtocolClient {
       });
       ws.send(JSON.stringify({ v: 1, kind: 'req', id, method, params }));
     });
+  }
+
+  /**
+   * 自报时间线缺口（0.54 B1 的唯一接收路径）：同一条 WS 连接上发一帧
+   * `{kind:'timeline_gap', …}`，**不新开 RPC 方法** —— 这条报告要能在 RPC 通道本身出问题
+   * （订阅刚被拒 / 服务端正忙）时仍然送达，语义上是「传输层事实」。
+   *
+   * best-effort：连不上就丢（服务端侧同样只记录、不改事实源）。
+   */
+  reportTimelineGap(frame: {
+    session_id?: string;
+    expected?: number;
+    received?: number;
+    start_seq?: number;
+    end_seq?: number;
+    after_timeline_seq?: number;
+    check?: 1 | 2 | 3 | 4;
+  }): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ v: 1, kind: 'timeline_gap', ...frame }));
   }
 
   close(): void {

@@ -232,6 +232,20 @@ export class EventStore {
    */
   private gap: TimelineGapState = emptyGapState();
   /**
+   * 本 epoch 由服务端**声明**的时间段（`timeline.hello` 的 `timeline` 字段）。
+   *
+   * 只有 `timeline_source === 'timeline'` 时才有：那时帧带 `timeline_seq`，四条校验就能
+   * 在**实时流**上做 —— 收到区间左端时开始记账，收到右端（或攒够 `count` 条）时一次核对。
+   * `undefined` = 老订阅（hub seq），不做四条校验（帧 seq 里有跳空是正常的）。
+   */
+  private epoch: { header: TimelineRangeHeader; seqs: number[] } | undefined;
+  /**
+   * 缺口上报的出口（订阅层注入：把 `timeline_gap` 帧发回服务端）。
+   *
+   * 放在 store 外面是因为它要碰 WS；**声明**（`gap` 状态）留在 store 里，两条不混。
+   */
+  private gapReporter: ((report: TimelineGapReport) => void) | undefined;
+  /**
    * 累计被当作「传输噪声」丢掉的流式增量条数（判据 `events.ts#producesTimelineItem`
    * 为 false 的那些）。只为可观测：提示卡那一单要显示「本轮有 N 条事件未在实时视图
    * 里出现」，先只暴露 getter，**不在 UI 里渲染**。
@@ -318,11 +332,57 @@ export class EventStore {
     );
     // 立刻发布：缺口是「界面必须看见」的事实，不能等 50ms 合批（也不能等到下一次 flush）。
     this.flush();
+    // 声明式上报（proto-b1 的 `timeline_gap` 帧）：只记录、不改事实源，best-effort。
+    this.gapReporter?.(report);
     return report;
   }
 
+  /** 注入缺口上报的出口（订阅层把 `timeline_gap` 帧发回服务端；缺省 = 只本地记账）。 */
+  setGapReporter(reporter: ((report: TimelineGapReport) => void) | undefined): void {
+    this.gapReporter = reporter;
+  }
+
   /**
-   * 缺口已被后续重拉补上：收起 `tainted` / `last`（`reports` 是累计值，只增不减）。
+   * 开始一个**服务端声明**的时间线段（`timeline.hello`，0.54 B1）。
+   *
+   * 之后每一帧 `push` 都会记账，收到右端 / 攒够 `count` 时用**同一套**四条校验核对；
+   * 对不上就报 `timeline_gap_reported`（服务端只记录）并把污点条挂出来。
+   * 老订阅（`timeline_source: 'legacy'`）不调用它 —— 那种帧的 seq 跳空是正常的。
+   */
+  beginTimelineEpoch(header: TimelineRangeHeader): void {
+    this.epoch = { header, seqs: [] };
+  }
+
+  /** 结束本 epoch 的记账（订阅换范围 / 断线 / 服务端回到 legacy）。 */
+  endTimelineEpoch(): void {
+    this.epoch = undefined;
+  }
+
+  /** 当前是否处在服务端声明的时间线段里（订阅层据此决定帧的 seq 空间）。 */
+  get timelineEpoch(): boolean {
+    return this.epoch !== undefined;
+  }
+
+  /** 实时流的一段记一条（`push` 调用；区间外的帧不计入期望）。 */
+  private recordEpochSeq(seq: number): void {
+    const epoch = this.epoch;
+    if (epoch === undefined) return;
+    const { header, seqs } = epoch;
+    if (seq < header.start_seq || seq > header.end_seq) return;
+    if (seqs.length > 0 && seq <= (seqs[seqs.length - 1] ?? 0)) {
+      // 重复 / 逆序：直接交给校验（它报 rule 4 / 1），别在这里静默去重。
+      seqs.push(seq);
+    } else {
+      seqs.push(seq);
+    }
+    const done = seq >= header.end_seq || seqs.length >= header.count;
+    if (!done) return;
+    const violation = validateTimelineRange(header, seqs);
+    if (violation !== undefined) this.reportTimelineGap(violation);
+    this.epoch = undefined;
+  }
+
+  /** 缺口已被后续重拉补上：收起 `tainted` / `last`（`reports` 是累计值，只增不减）。
    *
    * 为什么允许收起：`tainted` 的语义是「**现在**有一段读不回来」，不是「历史上曾经坏过」。
    * 洞（`holes`，写者声明的永久事实）不在这里收 —— 它们每次回填都会重新报一次。
@@ -366,6 +426,8 @@ export class EventStore {
    */
   push(event: RunEvent, meta: EventMeta): boolean {
     if (!Number.isFinite(meta.seq)) return false;
+    // 服务端声明的时间线段（`timeline.hello`）：本帧也要进四条校验的记账。
+    if (this.epoch !== undefined) this.recordEpochSeq(meta.seq);
     // B1 兼容分支（`LEGACY_HUB_SEQ_BASE` 的注释就是它的删除工单）：落在 hub 空间的帧
     // 只与**实时水位**比，绝不推进单游标 —— hub seq 与 timeline_seq 今天不是同一空间，
     // 拿它推进游标会让下一次区间回填整段重来。

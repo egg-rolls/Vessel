@@ -36,6 +36,7 @@ import {
   planBackfill,
   planRange,
   readTimelineCursor,
+  readTimelineHelloSegment,
   readTimelinePage,
   type TimelineRangeHeader,
 } from './timeline-protocol';
@@ -162,6 +163,8 @@ export class SubscriptionController {
   /** 串行化订阅请求；期间的新 scope 合并到下一轮。 */
   private running: Promise<void> | null = null;
   private clientFilter: string | undefined;
+  /** 本作用域已确认「不能按 `after_timeline_seq` 订阅」（旧格式会话冻结）⇒ 走老参数。 */
+  private readonly legacyScopes = new Set<string>();
   /** 区间回填在跑（防重入：同一轮里 apply / 路由抖动都不该叠第二次）。 */
   private backfilling = false;
   /**
@@ -207,9 +210,17 @@ export class SubscriptionController {
    * 所以这里只有两种答案。实时流的 seq 纪元对齐由调用方做（`truncateLive`）。
    */
   consumeHello(info: HelloInfo): 'connection' | 'subscribe' {
-    // `from_seq` 是本次流实际会发送的第一条（旧 hub 空间的坐标）：订阅级 hello 必须让它
-    // 生效，否则上一轮更高的水位会把这一轮的帧全判成重复。
-    if (info.from_seq > 0) this.eventStore.truncateLive(info.from_seq);
+    // 0.54 B1：`timeline_source === 'timeline'` ⇒ 本 epoch 的帧带 `timeline_seq`，四条校验
+    // 在实时流上做（服务端**声明**了区间与 `count`）。`legacy` ⇒ 老行为，帧带 hub seq。
+    const header = readTimelineHelloSegment(info.timeline_source, info.timeline);
+    if (header !== undefined) {
+      this.eventStore.beginTimelineEpoch(header);
+    } else {
+      this.eventStore.endTimelineEpoch();
+      // `from_seq` 是本次流实际会发送的第一条（旧 hub 空间的坐标）：订阅级 hello 必须让它
+      // 生效，否则上一轮更高的水位会把这一轮的帧全判成重复。
+      if (info.from_seq > 0) this.eventStore.truncateLive(info.from_seq);
+    }
     if (this.pendingHello === null) return 'connection';
     this.pendingHello = null;
     return 'subscribe';
@@ -352,6 +363,38 @@ export class SubscriptionController {
     return this.desired === null || scopeIdentity(this.desired) !== scopeKey;
   }
 
+  /**
+   * 发一次 `events.subscribe`：**先按新协议**（`after_timeline_seq`，排他游标，不要 `since`），
+   * 被拒（旧格式会话冻结 / 服务端没装 timeline 读面）才退回老参数。
+   *
+   * 为什么必须两条：服务端对「同时给 `since` 和 `after_timeline_seq`」是 `invalid_params`
+   * （两套编号不许混），而**旧格式会话**按 `after_timeline_seq` 订阅会被
+   * `session_frozen_readonly` 拒 —— 那种会话只能走老参数（它的帧带 hub seq，四条校验自动
+   * 关掉，见 `consumeHello`）。退回一次就记进 `legacyScopes`，同一作用域不再重试新参数。
+   */
+  private async subscribeOnce(
+    scopeKey: string,
+    sessionId: string | undefined,
+    legacyFilter: SubscriptionFilter,
+  ): Promise<void> {
+    if (sessionId === undefined || !this.legacyScopes.has(scopeKey)) {
+      this.pendingHello = 'subscribe';
+      try {
+        await this.client.request('events.subscribe', {
+          session_id: sessionId,
+          after_timeline_seq: this.eventStore.currentSeq,
+        });
+        return;
+      } catch {
+        if (sessionId === undefined) throw new Error('subscribe failed');
+        // 只有「这个会话按时间线订阅不了」才退回；其它错误交给上层（旧 gateway / 断线）。
+        this.legacyScopes.add(scopeKey);
+      }
+    }
+    this.pendingHello = 'subscribe';
+    await this.client.request('events.subscribe', legacyFilter);
+  }
+
   private async run(): Promise<void> {
     // 先让出一次微任务：保证 `apply` 里的 `this.running = promise` 一定发生在
     // 本次 run 可能同步结束之前。
@@ -398,7 +441,7 @@ export class SubscriptionController {
       this.clientFilter = built.clientSessionFilter;
       this.pendingHello = 'subscribe';
       try {
-        await this.client.request('events.subscribe', built.filter);
+        await this.subscribeOnce(scopeKey, sessionScoped, built.filter);
         // 新 gateway 的订阅级 hello 在 res 之前到达，`consumeHello` 已消费；
         // 旧 gateway 不发订阅级 hello，这里清掉在途标记，避免它吞掉下一次
         // 连接级 hello（会导致重连后漏 bump epoch / 漏刷新详情）。

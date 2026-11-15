@@ -20,7 +20,7 @@
 
 import type { RunEvent } from './types';
 
-/** 一个洞区间（`event_cursor.holes` 的元素；只给区间，不带原因 / 时间）。 */
+/** 一**个**洞区间（`event_cursor.holes` 的元素；只给区间，不带原因 / 时间）。 */
 export interface TimelineHoleRange {
   from_seq: number;
   to_seq: number;
@@ -78,8 +78,12 @@ export interface TimelineGapReport {
   to_seq: number;
   source: TimelineGapSource;
   rule?: TimelineRule;
+  /** 给人看的期望 / 实收（诊断与 UI 文案）。 */
   expected: string;
   received: string;
+  /** 给服务端记账的两个数（`timeline_gap` 帧的 `expected` / `received`）。 */
+  expectedCount?: number;
+  receivedCount?: number;
   at: number;
 }
 
@@ -108,6 +112,72 @@ function readHoles(raw: unknown): TimelineHoleRange[] {
     holes.push({ from_seq: record.from_seq, to_seq: record.to_seq });
   }
   return holes;
+}
+
+/**
+ * `hello.timeline`（0.54 B1 的**真实帧**）→ 回填 / 校验的头。
+ *
+ * 与 `readTimelineCursor` + `planBackfill` 的分工：那条路是**没有 hello 时**的兜底
+ * （`sessions.get.event_cursor` 四字段 + 客户端游标自己算区间）；proto-b1 合入后，区间与
+ * `count` 由服务端**声明**，客户端只核对。两者产出同一个 `TimelineRangeHeader`，
+ * 所以四条校验与 `applyTimelineRange` 一行都不用改 —— 这就是「不硬编码帧形状」的落点。
+ *
+ * 只认 `timeline_source === 'timeline'` 才有字段；形状不全 ⇒ `undefined`（不猜）。
+ */
+export function readTimelineHelloSegment(
+  source: unknown,
+  raw: unknown,
+): TimelineRangeHeader | undefined {
+  if (source !== 'timeline') return undefined;
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const record = raw as Record<string, unknown>;
+  const start = record.start_seq;
+  const end = record.end_seq;
+  const count = record.count;
+  const timelineHead = record.timeline_head;
+  const walHead = record.wal_head;
+  if (!isSeq(start) || !isSeq(end) || !isSeq(count)) return undefined;
+  if (!isSeq(timelineHead) || !isSeq(walHead)) return undefined;
+  return {
+    start_seq: start,
+    end_seq: end,
+    count,
+    timeline_head: timelineHead,
+    wal_head: walHead,
+    holes: readHoles(record.holes),
+    tainted: record.tainted === true,
+    ...(record.reset === true ? { reset: true } : {}),
+  };
+}
+
+/**
+ * 缺口 → 线上帧（`{kind:'timeline_gap'}`，见 `packages/serve/src/gateway.ts` 的接收面）。
+ *
+ * `expected` / `received` 在线上是**数字**（条数），所以报告里必须留着这两个数：
+ * 文案给人看，数字给服务端记账。四条校验各有 `check` 编号，服务端按它分流。
+ */
+export function gapWireFrame(
+  report: TimelineGapReport,
+  after?: number,
+  sessionId?: string,
+): {
+  session_id?: string;
+  expected?: number;
+  received?: number;
+  start_seq?: number;
+  end_seq?: number;
+  after_timeline_seq?: number;
+  check?: TimelineRule;
+} {
+  return {
+    ...(sessionId !== undefined && sessionId !== '' ? { session_id: sessionId } : {}),
+    ...(report.expectedCount !== undefined ? { expected: report.expectedCount } : {}),
+    ...(report.receivedCount !== undefined ? { received: report.receivedCount } : {}),
+    start_seq: report.from_seq,
+    end_seq: report.to_seq,
+    ...(after !== undefined ? { after_timeline_seq: after } : {}),
+    ...(report.rule !== undefined ? { check: report.rule } : {}),
+  };
 }
 
 /**
@@ -231,13 +301,21 @@ export function validateTimelineRange(
 ): TimelineGapReport | undefined {
   const from = header.start_seq;
   const to = header.end_seq;
-  const make = (rule: TimelineRule, expected: string, received: string): TimelineGapReport => ({
+  const make = (
+    rule: TimelineRule,
+    expected: string,
+    received: string,
+    counts?: { expected: number; received: number },
+  ): TimelineGapReport => ({
     from_seq: from,
     to_seq: to,
     source: 'range',
     rule,
     expected,
     received,
+    ...(counts !== undefined
+      ? { expectedCount: counts.expected, receivedCount: counts.received }
+      : {}),
     at: Date.now(),
   });
   const first = firstExpectedSeq(header);
@@ -250,7 +328,10 @@ export function validateTimelineRange(
   const tail = seqs[seqs.length - 1];
   // 3. 边界（先判：首末不对时下面的连续 / count 判据都会连带红，报错要指得准）。
   if (head !== first || tail !== last) {
-    return make(3, `首 ${first} / 末 ${last}`, `首 ${String(head)} / 末 ${String(tail)}`);
+    return make(3, `首 ${first} / 末 ${last}`, `首 ${String(head)} / 末 ${String(tail)}`, {
+      expected: header.count,
+      received: seqs.length,
+    });
   }
   let previous = Number.NEGATIVE_INFINITY;
   for (const seq of seqs) {
@@ -269,7 +350,10 @@ export function validateTimelineRange(
   }
   // 2. count。
   if (seqs.length !== header.count) {
-    return make(2, `${header.count} 条`, `${seqs.length} 条`);
+    return make(2, `${header.count} 条`, `${seqs.length} 条`, {
+      expected: header.count,
+      received: seqs.length,
+    });
   }
   return undefined;
 }

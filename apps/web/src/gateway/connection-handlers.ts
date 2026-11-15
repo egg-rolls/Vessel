@@ -9,6 +9,7 @@ import { askFromEvent, interactionExpiredMessage, permissionFromEvent } from './
 import { afterConnectionHello, createReconnectDetector } from './link-status';
 import { classifyCloseCode, probeThenConnect } from './reconnect';
 import type { SubscriptionController } from './subscription';
+import { gapWireFrame } from './timeline-protocol';
 import type { HelloInfo, RunEvent } from './types';
 
 interface Current<T> {
@@ -94,6 +95,12 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   const reconnectDetector = createReconnectDetector();
   // 新的连接目标（token / URL / 显式重连）：旧缓冲属于上一个连接，清空。
   eventStore.clear();
+  // 缺口上报的出口（0.54 B1）：同一条 WS 连接上发 `timeline_gap` 帧，只记录、不改事实源。
+  eventStore.setGapReporter((report) => {
+    client.reportTimelineGap(
+      gapWireFrame(report, eventStore.currentSeq, eventStore.scopeSessionId),
+    );
+  });
   setHello(null);
   setConnectionState('connecting');
   setReconnectAttempt(0);
