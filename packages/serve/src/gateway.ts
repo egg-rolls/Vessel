@@ -989,6 +989,22 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (feishuChannel) features.push('feishu');
   if (opts.metrics) features.push('metrics');
   if (opts.config) features.push('config');
+  // 时间线单游标契约（0.54 B1/B2）。**真可用才报**：需要 heads + 分页读两个端口都装配了，
+  // 且 `read_from` 没被回退到 legacy —— 否则客户端按位发 `after_timeline_seq` 会拿到
+  // `timeline_unavailable`，那就是能力位撒谎。
+  //
+  // 报出来就承诺（客户端可据此删掉「试探 + 退回 since」的协商逻辑）：
+  // - `events.subscribe{after_timeline_seq, session_id}` 可用；
+  // - `hello` 带 `start_seq / end_seq / count / timeline_head / wal_head / published_head / holes`；
+  // - 接受客户端帧 `{kind:'timeline_gap'}`（记录为 `timeline.gap_reported`）。
+  // **不**承诺实时尾随（`publish` → 时间线 epoch 的推送要等 src/ 接线，届时另加一位）。
+  if (
+    timelineReadFrom === 'timeline' &&
+    opts.timelineHeads !== undefined &&
+    opts.timelineRead !== undefined
+  ) {
+    features.push('timeline.cursor');
+  }
   const protocolInfo: ProtocolInfo = {
     name: 'vessel.gateway',
     version: PROTOCOL_VERSION,
