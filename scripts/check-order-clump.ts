@@ -22,9 +22,9 @@
  *    的颜色，P1 是那条「修前红、修后绿」的回归钉。
  *
  * 用法：
- *   bun run scripts/probe-order-clump.ts                  # 断言 + 真实数据指标
- *   bun run scripts/probe-order-clump.ts --seq            # 另外打印 (kind, ts, seq, runId)
- *   VESSEL_SESSIONS=<dir> bun run scripts/probe-order-clump.ts --session=<id>
+ *   bun run scripts/check-order-clump.ts                  # 断言 + 真实数据指标
+ *   bun run scripts/check-order-clump.ts --seq            # 另外打印 (kind, ts, seq, runId)
+ *   VESSEL_SESSIONS=<dir> bun run scripts/check-order-clump.ts --session=<id>
  * 退出码：0 = 全过；1 = 有 FAIL（或真实数据里看见聚堆）。
  */
 
