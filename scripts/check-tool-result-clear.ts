@@ -615,6 +615,75 @@ await (async function checkToolResultVolumeByMode(): Promise<void> {
   );
 })();
 
+// ── T7：占位替换幂等（已经是占位时不许重新格式化） ─────────────────────────
+//
+// 0.53 实测 bug：视图层 `withClearedToolResults` 少一条 `isClearedToolResult` 守卫，
+// 对**已经是占位**的正文再跑一次 `formatClearedToolResult` ⇒ 行数取的是占位文本自身
+// （`[cleared read: a -> 13 lines]` 退化成 `-> 1 lines`）。写入侧按 0.52 裁定落成占位
+// 之后，每一次请求投影都会把行数再改一次，请求视图与落盘不再逐字一致。
+// `session/project-messages.ts` 的同一次替换有守卫，这里是视图层的对偶判据。
+
+section('T7 占位替换幂等：已落盘的占位不许被重新格式化');
+
+{
+  /** 4 行原文 ⇒ 占位里必须写 `4 lines`；再格式化一次会变成 `1 lines`。 */
+  const MULTI_LINE = [BODY_SENTINEL + '-m', 'a', 'b', 'c'].join('\n');
+  const contentOf = (view: readonly Message[], id: string): string =>
+    String(view.find((message) => message.role === 'tool' && message.tool_call_id === id)?.content);
+
+  const stored: Message[] = [
+    msg('system', 'sys'),
+    msg('assistant', '', {
+      tool_calls: [
+        { id: 'call_m', type: 'function', function: { name: 'read', arguments: '{"path":"m"}' } },
+      ],
+    }),
+    msg('tool', MULTI_LINE, { tool_call_id: 'call_m' }),
+  ];
+  const frozen = ['call_m'];
+
+  const first = withClearedToolResults(stored, frozen);
+  const firstContent = contentOf(first, 'call_m');
+  expect(
+    'T7.1 第一次投影 = 占位，行数取原文（4 lines）',
+    [isClearedToolResult(firstContent), firstContent.includes('4 lines')],
+    [true, true],
+  );
+
+  // 把「已经是占位」的历史再投影一次 = 写入侧落成占位之后每一次请求都会走的路。
+  const second = withClearedToolResults(first, frozen);
+  const secondContent = contentOf(second, 'call_m');
+  expect(
+    'T7.2 已是占位 ⇒ 再投影逐字不变（行数不许退化成 1 lines）',
+    [secondContent, secondContent === firstContent],
+    [firstContent, true],
+  );
+  const third = withClearedToolResults(second, frozen);
+  expect('T7.3 第三次投影仍逐字不变（不累积漂移）', contentOf(third, 'call_m'), firstContent);
+
+  // 反证：守卫不能退化成「一条都不清」—— 同一份历史里还没占位的工具结果必须照常格式化。
+  const mixed: Message[] = [
+    ...first,
+    msg('assistant', '', {
+      tool_calls: [
+        { id: 'call_n', type: 'function', function: { name: 'read', arguments: '{"path":"n"}' } },
+      ],
+    }),
+    msg('tool', [BODY_SENTINEL + '-n', 'z'].join('\n'), { tool_call_id: 'call_n' }),
+  ];
+  const mixedView = withClearedToolResults(mixed, ['call_m', 'call_n']);
+  const freshContent = contentOf(mixedView, 'call_n');
+  expect(
+    'T7.4 仍未占位的工具结果照常被格式化（2 lines），已占位的那条原样不动',
+    [
+      isClearedToolResult(freshContent),
+      freshContent.includes('2 lines'),
+      contentOf(mixedView, 'call_m'),
+    ],
+    [true, true, firstContent],
+  );
+}
+
 // ── 汇总 ───────────────────────────────────────────────────────────────────
 
 console.log('');
