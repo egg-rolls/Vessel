@@ -21,7 +21,7 @@
 import {
   replayBudgetUnitsOf,
   selectReplayBudgetWindow,
-} from '../packages/serve/src/replay-budget.ts';
+} from '../packages/serve/src/replay-budget';
 
 // ───────────────────────── 最小适配器接口（replay-wire 按此实现） ─────────────────────────
 export interface ReplayEvent {
