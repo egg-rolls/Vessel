@@ -243,13 +243,123 @@ export const sessionEventSchema = {
   },
 };
 
+/**
+ * 一个被裁字段的结构化裁断事实（`messages[i].truncated.<field>`，additive 0.54）。
+ *
+ * 字符串里那串 `... [truncated]` 标记照旧拼（既有 UI 依赖），这三个数只是把它显式化：
+ * `bytes` 是**截断前**的完整 UTF-8 字节数，`limit` 是生效上限，`marker` 是那串标记本身。
+ */
+export const cappedFieldInfoSchema = {
+  type: 'object',
+  required: ['bytes', 'limit', 'marker'],
+  properties: {
+    bytes: { type: 'integer', minimum: 0 },
+    limit: { type: 'integer', minimum: 1 },
+    marker: { type: 'string' },
+  },
+};
+
+/**
+ * 单条消息上的裁断事实（`messages[i].truncated`，additive 0.54）。**sparse**：没被裁就没有。
+ *
+ * `arguments` 是「被裁 call 里的最大原字节数」，`arguments_calls` 只在多个 call 合并时才出现。
+ */
+export const messageTruncationSchema = {
+  type: 'object',
+  properties: {
+    content: cappedFieldInfoSchema,
+    arguments: cappedFieldInfoSchema,
+    arguments_calls: { type: 'integer', minimum: 2 },
+  },
+};
+
+/**
+ * 一条工具消息的投影（`messages[i].projection`，additive 0.54，wire-only 派生）。
+ *
+ * 形状与取值域照抄 `docs/dev/handoff/projection-card-spec.md` §1.7；`mode` 用 ADR-104 §2.2
+ * 冻结的四模式闭集（`externalize` 只占位、不可声明），**不在这里自创枚举**。
+ *
+ * 三个「不知道」的字段故意**不写 type**（校验器只认 string/number/integer/boolean/
+ * object/array 的单一 `type`，写不成 `integer|null`）：
+ * - `original_bytes` / `original_lines`：`integer | null`（null = 原文只在事件日志里，未知）；
+ * - `declaration_id`：`string | null`（null = 该会话没有声明）。
+ * 一律**不写 0 / 不写空串**冒充：0 在字节数与行数上都是合法值。
+ */
+export const projectionViewSchema = {
+  type: 'object',
+  required: ['mode', 'tool_call_id', 'placeholder_text', 'placeholder_hash', 'original_available'],
+  properties: {
+    mode: {
+      type: 'string',
+      enum: ['passthrough', 'placeholder', 'externalize', 'archive_notice'],
+    },
+    tool_call_id: { type: 'string', minLength: 1 },
+    // 逐字：core 渲染好的那一字节。**不 trim、不重排**（UI 只展示）。
+    placeholder_text: { type: 'string' },
+    // 与 `prompt.system_context.hash` 同一口径（sha256 前 16 位）。
+    placeholder_hash: { type: 'string', minLength: 1 },
+    original_bytes: {},
+    original_lines: {},
+    original_available: {
+      type: 'string',
+      enum: ['inline', 'inline_truncated', 'readback', 'gone'],
+    },
+    // 需要跨源读取时的句柄（`kind` 是闭集，其余字段按 kind 走）。
+    readback: { type: 'object', required: ['kind'], properties: { kind: { type: 'string' } } },
+    // 缺省 = 不知道（本次没读事件日志）；**不写 0**（0 在日志里是「第一条事件」）。
+    since_event_seq: { type: 'integer', minimum: 0 },
+    declaration_id: {},
+  },
+};
+
+/**
+ * 整会话的投影汇总（`sessions.get.session.projection_summary`，additive 0.54）。
+ *
+ * 口径 = **整个会话当前态**（在切片前对全量 messages 累加），不是当前分页窗口。
+ * `bytes_saved` 是**净值**（可负，不 clamp）；`unknown_original > 0` 时它是**下界**
+ * （有几条的原文体量未知，未计入 —— 未知不等于 0）。
+ */
+export const projectionSummarySchema = {
+  type: 'object',
+  required: ['total', 'bytes_saved', 'modes'],
+  properties: {
+    total: { type: 'integer', minimum: 0 },
+    // 净值：原文比占位还短的小结果会让它变小 / 变负 —— 不 clamp（那是系统性高估）。
+    bytes_saved: { type: 'integer' },
+    // 闭集键 → 条数（没出现的 mode 不补 0）。
+    modes: { type: 'object' },
+    unknown_original: { type: 'integer', minimum: 0 },
+  },
+};
+
+/**
+ * `sessions.get.session.messages[i]` 的登记面（additive 0.54）。
+ *
+ * 只登记**承载新字段的容器**与 `role` / `tool_call_id`（新字段的语义锚点）：其余字段
+ * （`content` / `tool_calls` / `timestamp` / `refs` …）由 core 的 `Message` 定义，旧数据
+ * 缺字段是常态，**不写 required**，也不在这里重述它们的形状（重述只会漂移）。
+ */
+export const sessionMessageSchema = {
+  type: 'object',
+  properties: {
+    role: { type: 'string' },
+    tool_call_id: { type: 'string' },
+    // Additive（0.54）：8 KiB 裁断事实（始终 ≥ 0 字节；不出现 = 一个字都没裁）。
+    truncated: messageTruncationSchema,
+    // Additive（0.54）：投影（**sparse**，不出现 = 没被投射，UI 与今天完全一致）。
+    projection: projectionViewSchema,
+  },
+};
+
 export const runStateSchema = {
   type: 'object',
   required: ['run_id', 'session_id', 'messages', 'started_at', 'status'],
   properties: {
     run_id: { type: 'string' },
     session_id: { type: 'string' },
-    messages: { type: 'array' },
+    messages: { type: 'array', items: sessionMessageSchema },
+    // Additive（0.54）：整会话投影汇总；一条都没被投影 ⇒ 字段缺省（旧行为一字不改）。
+    projection_summary: projectionSummarySchema,
     // S1：分页元数据（additive；旧客户端忽略）。messages_total 恒返回。
     messages_total: { type: 'integer', minimum: 0 },
     next_before: { type: 'string' },
