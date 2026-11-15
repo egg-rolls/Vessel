@@ -81,6 +81,7 @@ import { registerRefsNoticeHook, registerRuntimeNoticeHook } from './hot-apply-a
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
 import { resolveInteractionsDir } from './interactions-dir';
+import { normalizeLegacyToolName } from './legacy-tool-names';
 import { createLocalRunAdapter } from './local-run-adapter';
 import { createCliLogger } from './logging';
 import type { McpControl } from './mcp-wiring';
@@ -125,11 +126,7 @@ import {
   type LocalHumanTarget,
   type LocalMemberTarget,
 } from './team-human-delivery';
-import {
-  buildTenantRuntime,
-  normalizeLegacyAskToolName,
-  type TenantRuntimeBundle,
-} from './tenant-runtime-factory';
+import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
@@ -1190,13 +1187,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const permission = {
     default: headless ? ('allow' as const) : ('ask' as const),
     // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask。
-    // 老配置里可能仍写着旧工具名（换算见 `normalizeLegacyAskToolName`），不换算
-    // 就等于让用户当年选的「always」静默失效。
+    // 老配置里可能仍写着旧工具名（表见 `src/legacy-tool-names.ts`，换算见
+    // `normalizeLegacyToolName`），不换算就等于让用户当年选的「always」静默失效。
     autoApprove: [
-      ...new Set([
-        ...(config.permission?.autoApprove ?? []).map(normalizeLegacyAskToolName),
-        'ask',
-      ]),
+      ...new Set([...(config.permission?.autoApprove ?? []).map(normalizeLegacyToolName), 'ask']),
     ],
     // 0.27：配置级保险；用户显式配置时以其值为准（与 autoApprove 语义一致，不合并默认）。
     neverAutoApprove: (
@@ -1207,7 +1201,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         // 名字必须是 provider-safe 的驼峰（不能带点号），见 `packages/core/src/pii/reveal.ts`。
         'piiReveal',
       ]
-    ).map(normalizeLegacyAskToolName),
+    ).map(normalizeLegacyToolName),
   };
 
   // ── AgentService + REPL owner 端点（0.17 Phase A）──
