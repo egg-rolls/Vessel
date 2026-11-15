@@ -1416,13 +1416,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
    *
    * 输入必须是**过滤后**的事件（session_id / run_id / types 先过滤），这样
    * 窄订阅不会因为无关事件占满预算而拿不到自己的尾部。`encode` 的结果既用于
-   * 计算字节数也用于发送。返回被跳过的最后一条 seq（`skippedTo`），调用方把它
-   * 和环形缓冲自身的缺口合并成一个 gap。
+   * 计算字节数也用于发送。
    *
    * 与旧实现的差别只在**预算来源**：固定 1 MiB / 2000 条 → 由「最新一个
    * `run.started`（或 `user.message`）起的地板字节数 × 安全系数」动态推导
-   * （clamp 到 1–4 MiB）。保留区仍是源的**连续后缀**、仍按 seq 升序、无重复，
-   * `skippedTo` 口径不变。
+   * （clamp 到 1–4 MiB）。保留区仍是源的**连续后缀**、仍按 seq 升序、无重复。
+   *
+   * 0.54 B1：这里不再返回「被跳过的最后一条 seq」——跳过的区间不再编码成 `gap` 帧
+   * （ADR-105 §9 R4），客户端按 `hello.start_seq` / `count` 与自己的游标对账。
    *
    * `encode` 惰性：`bytesAt` 只在真正需要算预算时才序列化一条事件 —— 找锚点只看
    * 类型，不会为了算窗口把整圈缓冲（可能数十 MB）编码一遍。
@@ -1430,7 +1431,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function tailReplayWindow(
     items: readonly SeqEvent[],
     encode: (item: SeqEvent) => string,
-  ): { frames: ReplayFrame[]; skippedTo?: number; budget: ReplayBudgetSelection } {
+  ): { frames: ReplayFrame[]; budget: ReplayBudgetSelection } {
     const count = items.length;
     const encoded: (string | undefined)[] = new Array(count);
     const sizes: number[] = new Array(count).fill(-1);
@@ -1461,11 +1462,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       frames.push({ item, encoded: encoded[i] ?? encode(item) });
     }
     consoleNoteReplayBudget(budget);
-    const first = frames[0];
-    if (first === undefined) return { frames: [], budget };
-    const oldest = items[0]?.seq;
-    if (oldest === undefined || first.item.seq <= oldest) return { frames, budget };
-    return { frames, skippedTo: first.item.seq - 1, budget };
+    return { frames, budget };
   }
 
   interface ReplayPlan {
