@@ -601,10 +601,13 @@ try {
   // 那是数百 ms 到秒级）三次都会红，噪声则不会连续三次都命中。
   const DELAY_ATTEMPTS = 3;
   const delayBudget = CHUNK_FLUSH_MS + 50;
-  let delayAttempts: { p95: number; ok: boolean }[] = [];
+  const delayAttempts: { p95: number; ok: boolean }[] = [];
   let fast = await measureVolume('fast', 0);
   let slow = await measureVolume('slow', 40);
-  delayAttempts.push({ p95: Math.max(fast.p95, slow.p95), ok: fast.p95 <= delayBudget && slow.p95 <= delayBudget });
+  delayAttempts.push({
+    p95: Math.max(fast.p95, slow.p95),
+    ok: fast.p95 <= delayBudget && slow.p95 <= delayBudget,
+  });
   for (let attempt = 2; attempt <= DELAY_ATTEMPTS; attempt += 1) {
     if (delayAttempts[delayAttempts.length - 1]?.ok === true) break;
     console.log(
@@ -612,7 +615,10 @@ try {
     );
     fast = await measureVolume('fast', 0);
     slow = await measureVolume('slow', 40);
-    delayAttempts.push({ p95: Math.max(fast.p95, slow.p95), ok: fast.p95 <= delayBudget && slow.p95 <= delayBudget });
+    delayAttempts.push({
+      p95: Math.max(fast.p95, slow.p95),
+      ok: fast.p95 <= delayBudget && slow.p95 <= delayBudget,
+    });
   }
   const factsTotal = Math.floor((DELTA_COUNT - 1) / FACT_EVERY);
 
