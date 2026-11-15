@@ -56,8 +56,8 @@ export const CONDENSED_EVENT_TYPE = 'vessel.ui.condensed';
 /**
  * 物化面的写入接缝（`EventStore` 的唯一转发对象）。
  *
- * 五个**管理**动作之外没有第二条写入路径：`ingest` 只由 `EventStore.push` 调用，
- * `freeze` / `resume` 只由回填（`beginBackfill` / `endBackfill`）调用，
+ * 五个**管理**动作之外没有第二条写入路径：`ingest` 只由 `EventStore.push` /
+ * `applyTimelineRange` 调用，`freeze` / `resume` 只由区间并入（退游标 → 整表重折叠）调用，
  * `closeRuns` 只由「外部终态」对账调用（agent 生命周期 / 会话快照）。
  */
 export interface ItemSink {

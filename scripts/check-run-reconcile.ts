@@ -224,8 +224,7 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
       // 环里只剩 run.started + agent.closed（正文 / 思考 delta 不进环）⇒ 重折叠必然折出
       // running 且没有任何 live 尾巴。**对账痕迹（reconciled）只有台账能补回来** ——
       // `mergeGroupScalars` 只保留 base 的 status，不保留这个字段。
-      store.beginBackfill(store.currentSeq);
-      store.endBackfill();
+      store.refold();
       store.items.flush();
       const group = groups(store)[0]!;
       if (group.status !== 'cancelled') return `重折叠把 run 复活成 ${group.status}`;
@@ -235,8 +234,7 @@ const FIXTURES: { name: string; check: () => string | null }[] = [
       if (group.liveReasoning !== undefined) return '重折叠把「正在思考」复活了';
       if (runningGroups(groups(store)).length !== 0) return '重折叠之后停止按钮又出现了';
       // 再来一次：幂等。
-      store.beginBackfill(store.currentSeq);
-      store.endBackfill();
+      store.refold();
       store.items.flush();
       if (itemsOf(groups(store)[0]!).length !== itemsOf(group).length) {
         return '二次重折叠改了 item 条数（收口不幂等）';

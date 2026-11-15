@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react';
 import type { ToastApi } from '../components/ToastProvider';
 import type { EventStore } from '../state/event-store';
+import { LEGACY_HUB_SEQ_BASE } from '../state/event-store';
 import { useInteractionStore } from '../stores/interactionStore';
 import { nextReconnectDelay } from './backoff';
 import type { ConnectionState, GatewayClient } from './client';
@@ -148,7 +149,16 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   };
 
   const offEvent = client.onEvent((event, meta) => {
-    if (!eventStore.push(event, meta)) return;
+    // **B1 兼容**（见 `EventStore#LEGACY_HUB_SEQ_BASE`）：今天的实时帧带 hub seq，与
+    // `timeline_seq` 不是同一空间。这里把旧帧落到常量之上的带里，`EventStore` 的
+    // 单游标才不会被实时流推进（否则下一次区间回填会整段重来）。proto-b1 的
+    // `after_timeline_seq` 合入后这一行删除，帧自带 `timeline_seq`。
+    const timelineSeq = (meta as { timelineSeq?: number }).timelineSeq;
+    const wireMeta =
+      typeof timelineSeq === 'number'
+        ? { ...meta, seq: timelineSeq }
+        : { ...meta, seq: LEGACY_HUB_SEQ_BASE + meta.seq };
+    if (!eventStore.push(event, wireMeta)) return;
     if (event.type === 'session.rewound') {
       // 历史已删除：立即丢掉该会话的缓冲事件（含刚 push 的 marker 本身）。
       const sessionId = eventSessionId(event);
@@ -192,16 +202,10 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     // 订阅 epoch：服务端每次成功 subscribe 都先发 hello；它只重置本地事件库，
     // 不 bump 连接 epoch（否则切路由会无谓重拉 session / team 详情）。
     //
-    // 三种 hello：连接级 / 订阅 epoch / 回填页。回填页是控制器为补更早区间自己发的
-    // `until_seq` 订阅，它既不改游标也不该 reset 连接态（那一段的游标归回填管）。
+    // 两种 hello：连接级 / 订阅 epoch。0.54 起回填不再由 hello 触发（按
+    // `event_cursor` 的区间走、且在订阅之前完成），所以没有第三种。游标的旧 hub 空间
+    // 对齐由 `consumeHello` 里的 `truncateLive` 做（**不碰**单游标，见 EventStore）。
     const helloKind = subscription.consumeHello(info);
-    if (helloKind === 'page') return;
-    // hello 是本地事件 epoch 的唯一边界：从本次实际首条 seq 之前重置。
-    // 有界回放会从窗口首条开始；被跳过的区间由随后的 gap 告知（chat 订阅另有回填）。
-    // 只截断到本次 epoch 的首条之前：已有条目留在屏上，回放再把窗口补回来
-    // （旧的「先清空」会让整条时间线消失一帧 —— 整页闪烁 + 跳底）。
-    // 回填期间是空操作：游标已经由 `EventStore#beginBackfill` 退到订阅起点。
-    eventStore.truncateAfter(Math.max(0, info.from_seq - 1));
     setTokenError(null);
     setGatewayError(null);
     setLastError(null);
@@ -219,18 +223,22 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   });
 
   const offGap = client.onGap((gap) => {
-    // gap = 该区间无法从实时流恢复；静默处理，不重连、不提示。
-    // 页面感知不到截断：正文由 sessions.get / teams.get 的权威快照补回。
-    //
-    // 两种 gap 不能一视同仁：
-    // - 实时缺口（背压丢帧）：`to_seq` 在当前游标之上，退游标是对的；
-    // - 回填页/旧区间的缺口：`to_seq` 低于当前游标，退回去只会把已经收到的更新内容
-    //   截掉（刷新后尤其致命），忽略即可 —— 那一段由回填循环按 hello.from_seq 继续往
-    //   更早拉，拉不到就是环形缓冲已经淘汰。
-    if (eventStore.backfilling) return;
-    if (gap.to_seq < eventStore.currentSeq) return;
-    // 同作用域内的游标重对齐：保留 ≤ to_seq 的条目，不做整表清空。
-    eventStore.truncateAfter(gap.to_seq);
+    // gap = 该区间**服务端声明**读不回来。0.54 起它不再静默（ADR-105 §6：洞与缺口必须
+    // 可见）：① 记成缺口（UI 污点条 + console，带 expected/received）；② 重拉那段区间；
+    // ③ 页面快照与 pending 交互照旧重建。**不**退游标 —— 旧行为 `truncateAfter(to_seq)`
+    // 会把已经收到的更新内容截掉（刷新后尤其致命）。
+    const report = eventStore.reportTimelineGap({
+      from_seq: gap.from_seq,
+      to_seq: gap.to_seq,
+      source: 'server',
+      expected: `[${gap.from_seq}, ${gap.to_seq}] 可读`,
+      received: '服务端声明该区间丢失（gap 帧）',
+      at: Date.now(),
+    });
+    const sessionId = eventStore.scopeSessionId;
+    if (sessionId !== undefined) {
+      void subscription.fillTimelineGap(sessionId, report.from_seq, report.to_seq);
+    }
     recovery.invalidateRouteSnapshot();
     // pending 权限 / ask 不能只依赖连接级 epoch：gap 不重连，必须显式补 hydration。
     recovery.hydrateInteractions();
