@@ -401,8 +401,9 @@ export interface TimelineDualWriteOptions {
     /**
      * 透传给 `TimelineWriter.open` 的**显式 adopt 断言**（见写者侧的说明）。
      *
-     * 自定义实现**应当原样转发**（与 `publish` 同一条纪律）：不转发时本模块会先用一个
-     * 一次性 writer 把标记落好再调你（结果一样，只是多一次 open）。
+     * 自定义实现**必须原样转发**（与 `publish` 同一条纪律）：漏转发 ⇒ 写者仍按旧格式拒
+     * （`session_frozen_readonly`），这个会话的双写会静默缺席 —— 门禁会红，但生产不会报错，
+     * 属于「最难发现」的那一类漏接。
      */
     adoptLegacyShapedSession?: boolean;
   }) => Promise<TimelineWriter>;
@@ -922,39 +923,10 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
         // ADR-105 §3 I2 的端到端接线：**必须**把发布回调交给写者。
         // 写者只在「该 seq 的 WAL/块 fsync 返回之后」调它，所以它是唯一合规的发布点。
         publish: input.publish,
-        // 显式 adopt 断言（ADR-105 D4 / 0.54 C1）：只有「core 判形状像旧格式 ∧ 本进程
-        // 才出现」时才会是 true。标记仍然由写者落 —— 本模块不写 timeline 目录已经很久了。
+        // 显式 adopt 断言（ADR-105 D4 / 0.54 C1）：只有「本进程才出现的会话」时才是 true。
+        // 标记仍然由写者落 —— 本模块不写 timeline 目录。
         ...(input.adoptLegacyShapedSession === true ? { adoptLegacyShapedSession: true } : {}),
       }));
-
-  /**
-   * 自定义 `openWriter` 缝（门禁/探针）没转发 `adoptLegacyShapedSession` 时，
-   * 先让**写者**把标记落好，再让缝打开。
-   *
-   * 为什么要这一步：adopt 断言的语义是「跳过写者自己的冻结闸门」，它必须由打开写者的
-   * 那个人传下去。缝是别人的代码，未必认识这个新字段（现有门禁的缝就只转发 `publish`）。
-   * 而**标记只能由写者落**（`TimelineWriter.open` 的 `ensureManifest()`），所以这里用一个
-   * 一次性 writer 走一遍合法的初始化 —— 装配层依旧一个字节都不直接写 timeline 目录。
-   *
-   * 两条纪律：
-   * - **`publish` 必须一样接上**（I2 硬断言「每一个 `TimelineWriter.open` 都传 publish」；
-   *   这条 writer 不 append 任何记录，正常情况下一次都不会触发，但通道不能留洞）；
-   * - 只对自定义缝、只在本进程刚建的会话上做，且只做一次（`writers` 缓存）。
-   *
-   * 缝**应当**原样转发 `adoptLegacyShapedSession`（与 `publish` 同一条纪律）；都转发之后
-   * 这一步就变成多余的 —— 那时可以直接删掉它。
-   */
-  const customWriterSeam = options.openWriter !== undefined;
-  async function primeAdoptedWriter(sessionId: string, sessionDir: string): Promise<void> {
-    const priming = await TimelineWriter.open({
-      sessionId,
-      sessionDir,
-      chunkFlushMs,
-      publish: (record) => deliverPublication(sessionId, record),
-      adoptLegacyShapedSession: true,
-    });
-    await priming.close();
-  }
 
   const counters: TimelineDualWriteStats = {
     appended: 0,
@@ -1122,8 +1094,10 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
         }
         // 本进程刚建的会话 ⇒ 向写者下 adopt 断言（标记仍由写者落，本模块一个字节都不写
         // timeline 目录）。既有会话不传，写者按 `freeze.ts` 自己判。
+        //
+        // 自定义 `openWriter` 缝必须**原样转发**这个字段（与 `publish` 同一条纪律）：
+        // 不转发 ⇒ 写者仍按旧格式拒（`session_frozen_readonly`），双写对该会话静默缺席。
         const adopt = decision === 'adopt';
-        if (adopt && customWriterSeam) await primeAdoptedWriter(sessionId, sessionDir);
         const writer = await openWriter({
           sessionId,
           sessionDir,
