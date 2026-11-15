@@ -28,6 +28,7 @@ import {
   type MemberVisibility,
   RELEASED_MEMBER_DEFAULT_FIELDS,
   RELEASED_MEMBER_FIELDS,
+  type ReleasedMemberField,
   RELEASED_MEMBER_LIMIT_DEFAULT,
   RELEASED_MEMBER_LIMIT_MAX,
   type ReleasedMembersQuery,
@@ -276,12 +277,14 @@ function readReleasedQuery(
   if (record.limit !== undefined) query.limit = record.limit as number;
   if (record.fields !== undefined) {
     if (!Array.isArray(record.fields)) throw invalid('list: fields must be an array');
-    const fields: string[] = [];
+    const fields: ReleasedMemberField[] = [];
     for (const entry of record.fields) {
       if (typeof entry !== 'string' || entry === '') {
         throw invalid('list: fields entries must be non-empty strings');
       }
-      fields.push(entry);
+      // 字段名白名单在服务层（listReleasedMembers）统一校验；这里只收形状，
+      // 所以逐个 entry 在边界上收窄成联合类型，未知值由服务层报 invalid_input。
+      fields.push(entry as ReleasedMemberField);
     }
     query.fields = fields;
   }
