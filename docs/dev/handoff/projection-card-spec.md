@@ -141,8 +141,9 @@ messages: capToolMessages(all.slice(start, end)),
 
 1. 启动时尾部（`seq > derived_upto_seq`）有 `message.compaction` —— 压缩事件已落盘、会话壳落后
    （进程在「压缩后、下一次 `saveSessionState` 前」被杀 / 崩溃 / 断电）；
-2. 启动时尾部有 `session.rewound` —— 撤回 / 分支切换之后的下一次启动或下一轮 run；
-   **这是最常见的一条**（撤回事件必然晚于最近一次保存）；
+2. 启动时尾部有 `session.rewound` —— 撤回 / 分支切换之后的下一次启动或下一轮 run。
+   **（2026-11-15 存量体检修正：这条是理论入口之一，但我这台机的 19.7 万条事件里 `session.rewound` = 0 条，
+   一次都没发生过 ⇒ 「最常见」这个说法没有数据支撑，不许再当结论用。见 `docs/dev/reports/0.54/stock-audit.md`。）**
 3. 缓存不可用：`SessionState.messages` 为空，或 `derived_upto_seq` 不是 number（旧数据 / 缓存被清 / 会话壳丢了但日志还在）。
 
 走满投影时的链路（每一步都可点开）：
