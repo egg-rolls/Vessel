@@ -337,6 +337,7 @@ timeline.idx/type.idx        # type 索引（可重建，§5）
 ### 12. 关联
 
 - 判据与三边界（今天的形态）：[session-replay.md](../architecture/session-replay.md) §3
+- 0.53 悬空项「un-acked 队列」的结案（0.54：空集，不是实现）：[unacked-queue-closure.md](../architecture/unacked-queue-closure.md)
 - 真机实测与三源差集：[replay-gap-findings.md](../dev/handoff/replay-gap-findings.md) §0 / §1b / §1d
 - 迁移计划（A/B/C、受影响 9 项、回退）：[plan-054-timeline-migration.md](../dev/handoff/plan-054-timeline-migration.md)
 - 投射与读回依赖（不重写）：[ADR-104](ADR-104-context-projection-policy.md) §2.3f
