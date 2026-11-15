@@ -18,10 +18,7 @@
  *
  * 运行：`bun run scripts/check-replay-merge.ts`  退出码 0=PASS，1=FAIL，2=自身错误。
  */
-import {
-  replayBudgetUnitsOf,
-  selectReplayBudgetWindow,
-} from '../packages/serve/src/replay-budget';
+import { replayBudgetUnitsOf, selectReplayBudgetWindow } from '../packages/serve/src/replay-budget';
 
 // ───────────────────────── 最小适配器接口（replay-wire 按此实现） ─────────────────────────
 export interface ReplayEvent {
@@ -191,7 +188,11 @@ class FakeRpc implements ReplaySource {
     if (this.throwOnSession) throw new Error('simulated sessions.events timeout');
     return this.events.filter((e) => e.seq > sinceSeq).slice(0, limit);
   }
-  async fetchTraceSegment(runId: string, sinceRunSeq: number, limit: number): Promise<ReplayEvent[]> {
+  async fetchTraceSegment(
+    runId: string,
+    sinceRunSeq: number,
+    limit: number,
+  ): Promise<ReplayEvent[]> {
     this.traceCalls += 1;
     const rows = this.trace.get(runId) ?? [];
     return rows.filter((e) => e.seq > sinceRunSeq).slice(0, limit);
@@ -277,8 +278,16 @@ async function main(): Promise<void> {
     const src = new FakeRpc(ev, { last_seq: 366, derived_upto_seq: 4 }, []);
     await recover(src, sink);
     const holes = oneTo(366).filter((s) => !sink.seqs.has(s));
-    expect(holes.length === 0, 'A2.1-hole', 'uncovered seqs: ' + JSON.stringify(holes.slice(0, 10)));
-    expect(src.sessionCalls > 0, 'A2.1-rpc-called', 'sessions.events must be called, calls=' + src.sessionCalls);
+    expect(
+      holes.length === 0,
+      'A2.1-hole',
+      'uncovered seqs: ' + JSON.stringify(holes.slice(0, 10)),
+    );
+    expect(
+      src.sessionCalls > 0,
+      'A2.1-rpc-called',
+      'sessions.events must be called, calls=' + src.sessionCalls,
+    );
     expect(sink.size === 366, 'A2.1-size', 'distinct=' + sink.size + ' want 366');
     lines.push(
       '[A2.1 restart/empty-ring] covered 1..366 holes=' +
@@ -302,8 +311,16 @@ async function main(): Promise<void> {
     const appliedUnique = new Set(appliedIds).size;
     expect(ring.length > 0, 'A3-ring-nonempty', 'budget ring must be non-empty');
     expect(sink.size === 366, 'A3-union', 'distinct=' + sink.size + ' want 366 (union)');
-    expect(appliedUnique === sink.applied.length, 'A3-nodup', 'applied has dup ids: ' + (sink.applied.length - appliedUnique));
-    expect(sink.dupIds.length === ring.length, 'A3-ring-deduped', 'ring dups=' + sink.dupIds.length + ' ring=' + ring.length);
+    expect(
+      appliedUnique === sink.applied.length,
+      'A3-nodup',
+      'applied has dup ids: ' + (sink.applied.length - appliedUnique),
+    );
+    expect(
+      sink.dupIds.length === ring.length,
+      'A3-ring-deduped',
+      'ring dups=' + sink.dupIds.length + ' ring=' + ring.length,
+    );
     lines.push(
       '[A3 overlap/dedup] ring=' +
         ring.length +
@@ -333,7 +350,14 @@ async function main(): Promise<void> {
     expect(threw === false, 'failopen-no-throw', 'recover must not throw');
     expect(sink.warnings.length > 0, 'failopen-warn', 'must emit a warning');
     expect(sink.size === 4 + 67, 'failopen-preserve', 'seed+ring preserved, size=' + sink.size);
-    lines.push('[fail-open] threw=' + threw + ' warnings=' + sink.warnings.length + ' preserved=' + sink.size);
+    lines.push(
+      '[fail-open] threw=' +
+        threw +
+        ' warnings=' +
+        sink.warnings.length +
+        ' preserved=' +
+        sink.size,
+    );
   }
 
   // 阶段二（trace）：接口能表达两条回填；只做阶段一补不回 trace-only。
@@ -349,17 +373,35 @@ async function main(): Promise<void> {
     const seed = sessionEv.filter((e) => e.seq <= 4);
 
     const sinkP1 = new CollectingSink(seed);
-    const src1 = new FakeRpc(sessionEv, { last_seq: 20, derived_upto_seq: 4 }, [], new Map([[runId, traceEv]]));
+    const src1 = new FakeRpc(
+      sessionEv,
+      { last_seq: 20, derived_upto_seq: 4 },
+      [],
+      new Map([[runId, traceEv]]),
+    );
     await recover(src1, sinkP1); // no opts.runs => phase1 only
     const p1TraceOnly = sinkP1.applied.filter((e) => isTraceOnly(e.type)).length;
 
     const sinkP2 = new CollectingSink(seed);
-    const src2 = new FakeRpc(sessionEv, { last_seq: 20, derived_upto_seq: 4 }, [], new Map([[runId, traceEv]]));
+    const src2 = new FakeRpc(
+      sessionEv,
+      { last_seq: 20, derived_upto_seq: 4 },
+      [],
+      new Map([[runId, traceEv]]),
+    );
     await recover(src2, sinkP2, { runs: [runId] });
     const p2TraceOnly = sinkP2.applied.filter((e) => isTraceOnly(e.type)).length;
 
-    expect(p1TraceOnly === 0, 'phase2-p1-no-trace', 'phase1 alone must not produce trace-only, got ' + p1TraceOnly);
-    expect(p2TraceOnly >= 2, 'phase2-p2-trace', 'phase1+2 must recover trace-only, got ' + p2TraceOnly);
+    expect(
+      p1TraceOnly === 0,
+      'phase2-p1-no-trace',
+      'phase1 alone must not produce trace-only, got ' + p1TraceOnly,
+    );
+    expect(
+      p2TraceOnly >= 2,
+      'phase2-p2-trace',
+      'phase1+2 must recover trace-only, got ' + p2TraceOnly,
+    );
     lines.push(
       '[phase1 vs phase1+2] trace-only recovered: p1=' +
         p1TraceOnly +

@@ -20,7 +20,7 @@
  * 退出码 0 = PASS，1 = FAIL，2 = 自身错误（本 WSL shim 下 bun 退出码可能恒 0，请看 stdout `result:`）。
  * `--selftest` 对每条规则跑正/反例，证明不误判/不漏判。
  */
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SESSIONS_EVENTS = 'sessions.events';
@@ -98,7 +98,10 @@ function lineAt(code: string, idx: number): number {
 }
 function snippetAt(code: string, idx: number): string {
   const end = code.indexOf('\n', idx);
-  return code.slice(idx, end < 0 ? code.length : end).trim().slice(0, 100);
+  return code
+    .slice(idx, end < 0 ? code.length : end)
+    .trim()
+    .slice(0, 100);
 }
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -154,7 +157,8 @@ function findLocalFsViolations(code: string): { line: number; snippet: string }[
   return hits;
 }
 
-const GATEWAY_MARKERS = /(\b127\.0\.0\.1\b|\blocalhost\b|:8644|\/v1\/|\/v1\b|ws:\/\/|wss:\/\/|\/health\b|\/hub\/events\b|\/v1\/rpc\b)/;
+const GATEWAY_MARKERS =
+  /(\b127\.0\.0\.1\b|\blocalhost\b|:8644|\/v1\/|\/v1\b|ws:\/\/|wss:\/\/|\/health\b|\/hub\/events\b|\/v1\/rpc\b)/;
 const TRANSPORT_CALL = /\b(fetch|XMLHttpRequest|WebSocket)\s*\(/g;
 
 /** 裸 transport 打网关地址（封装层内的不算）。 */
@@ -168,7 +172,8 @@ function findBareTransport(
   while (m !== null) {
     const i = m.index;
     const window = code.slice(Math.max(0, i - 140), i + 260);
-    if (GATEWAY_MARKERS.test(window)) hits.push({ line: lineAt(code, i), snippet: snippetAt(code, i) });
+    if (GATEWAY_MARKERS.test(window))
+      hits.push({ line: lineAt(code, i), snippet: snippetAt(code, i) });
     m = TRANSPORT_CALL.exec(code);
   }
   return hits;
@@ -188,13 +193,19 @@ function readServeMethodTable(): { names: string[]; via: string } {
       }
     }
   }
-  return { names: [...new Set(names)].sort(), via: 'method table scan (packages/serve/src/gateway/methods/*.ts)' };
+  return {
+    names: [...new Set(names)].sort(),
+    via: 'method table scan (packages/serve/src/gateway/methods/*.ts)',
+  };
 }
 
 // ───────────────────────────── 遍历 ─────────────────────────────
 
 function relOf(file: string): string {
-  return file.replace(ROOT, '').replace(/^[\\/]+/, '').replace(/\\/g, '/');
+  return file
+    .replace(ROOT, '')
+    .replace(/^[\\/]+/, '')
+    .replace(/\\/g, '/');
 }
 function walk(dir: string, acc: string[]): void {
   if (!existsSync(dir)) return;
@@ -223,26 +234,86 @@ function selftest(): boolean {
   };
 
   // F: 方法调用检测
-  check('F comment', realCallSites(stripCommentsKeepLines("// this.request('sessions.events',{})"), SESSIONS_EVENTS) === 0);
-  check('F string-const', realCallSites(stripCommentsKeepLines("const M='sessions.events';"), SESSIONS_EVENTS) === 0);
-  check('F type-union', realCallSites(stripCommentsKeepLines("type M='sessions.events'|'x'"), SESSIONS_EVENTS) === 0);
-  check('F real-call', realCallSites(stripCommentsKeepLines("this.request('sessions.events',{})"), SESSIONS_EVENTS) === 1);
-  check('F real-generic', realCallSites(stripCommentsKeepLines("this.rpc<Foo>('events.list',p)"), EVENTS_LIST) === 1);
-  check('F http-then-real', realCallSites(stripCommentsKeepLines("// x http://a/sessions.events\nthis.request('sessions.events',{})"), SESSIONS_EVENTS) === 1);
+  check(
+    'F comment',
+    realCallSites(
+      stripCommentsKeepLines("// this.request('sessions.events',{})"),
+      SESSIONS_EVENTS,
+    ) === 0,
+  );
+  check(
+    'F string-const',
+    realCallSites(stripCommentsKeepLines("const M='sessions.events';"), SESSIONS_EVENTS) === 0,
+  );
+  check(
+    'F type-union',
+    realCallSites(stripCommentsKeepLines("type M='sessions.events'|'x'"), SESSIONS_EVENTS) === 0,
+  );
+  check(
+    'F real-call',
+    realCallSites(stripCommentsKeepLines("this.request('sessions.events',{})"), SESSIONS_EVENTS) ===
+      1,
+  );
+  check(
+    'F real-generic',
+    realCallSites(stripCommentsKeepLines("this.rpc<Foo>('events.list',p)"), EVENTS_LIST) === 1,
+  );
+  check(
+    'F http-then-real',
+    realCallSites(
+      stripCommentsKeepLines("// x http://a/sessions.events\nthis.request('sessions.events',{})"),
+      SESSIONS_EVENTS,
+    ) === 1,
+  );
 
   // F1: 本地文件系统（字符串常量算，注释不算）
-  check('F1 node:fs import', findLocalFsViolations(stripCommentsKeepLines("import fs from 'node:fs';")).length >= 1);
-  check('F1 require fs', findLocalFsViolations(stripCommentsKeepLines("const fs=require('fs');")).length >= 1);
-  check('F1 path literal .vessel', findLocalFsViolations(stripCommentsKeepLines("const p='~/.vessel/data/x';")).length >= 1);
-  check('F1 events.ndjson literal', findLocalFsViolations(stripCommentsKeepLines("const p='/sessions/abc/events.ndjson';")).length >= 1);
-  check('F1 comment ok', findLocalFsViolations(stripCommentsKeepLines('// never import node:fs here')).length === 0);
+  check(
+    'F1 node:fs import',
+    findLocalFsViolations(stripCommentsKeepLines("import fs from 'node:fs';")).length >= 1,
+  );
+  check(
+    'F1 require fs',
+    findLocalFsViolations(stripCommentsKeepLines("const fs=require('fs');")).length >= 1,
+  );
+  check(
+    'F1 path literal .vessel',
+    findLocalFsViolations(stripCommentsKeepLines("const p='~/.vessel/data/x';")).length >= 1,
+  );
+  check(
+    'F1 events.ndjson literal',
+    findLocalFsViolations(stripCommentsKeepLines("const p='/sessions/abc/events.ndjson';"))
+      .length >= 1,
+  );
+  check(
+    'F1 comment ok',
+    findLocalFsViolations(stripCommentsKeepLines('// never import node:fs here')).length === 0,
+  );
   check('F1 clean ok', findLocalFsViolations(stripCommentsKeepLines('const x = 1;')).length === 0);
 
   // F2: 裸 transport（封装层内豁免；非网关地址不算）
-  check('F2 bare fetch gateway', findBareTransport(stripCommentsKeepLines("await fetch('http://127.0.0.1:8644/v1/events')"), false).length >= 1);
-  check('F2 wrapper exempt', findBareTransport(stripCommentsKeepLines("await fetch('http://127.0.0.1:8644/v1/events')"), true).length === 0);
-  check('F2 rpc-call ok', findBareTransport(stripCommentsKeepLines("this.request('sessions.events',{})"), false).length === 0);
-  check('F2 non-gateway fetch ok', findBareTransport(stripCommentsKeepLines("await fetch('/build.json')"), false).length === 0);
+  check(
+    'F2 bare fetch gateway',
+    findBareTransport(
+      stripCommentsKeepLines("await fetch('http://127.0.0.1:8644/v1/events')"),
+      false,
+    ).length >= 1,
+  );
+  check(
+    'F2 wrapper exempt',
+    findBareTransport(
+      stripCommentsKeepLines("await fetch('http://127.0.0.1:8644/v1/events')"),
+      true,
+    ).length === 0,
+  );
+  check(
+    'F2 rpc-call ok',
+    findBareTransport(stripCommentsKeepLines("this.request('sessions.events',{})"), false)
+      .length === 0,
+  );
+  check(
+    'F2 non-gateway fetch ok',
+    findBareTransport(stripCommentsKeepLines("await fetch('/build.json')"), false).length === 0,
+  );
 
   console.log('[A1 selftest] result: ' + (ok ? 'PASS' : 'FAIL'));
   return ok;
@@ -275,7 +346,8 @@ async function main(): Promise<void> {
       }
     }
     for (const h of findLocalFsViolations(code)) fsHits.push({ file: rel, ...h });
-    for (const h of findBareTransport(code, TRANSPORT_LAYER.has(rel))) transportHits.push({ file: rel, ...h });
+    for (const h of findBareTransport(code, TRANSPORT_LAYER.has(rel)))
+      transportHits.push({ file: rel, ...h });
   }
 
   let ok = true;
@@ -294,7 +366,16 @@ async function main(): Promise<void> {
     if (serve && web === 0) tag = 'FAIL half-fix (serve has, web zero call)';
     else if (!serve && web > 0) tag = 'FAIL web calls non-existent RPC';
     else if (!serve) tag = 'FAIL serve missing RPC';
-    lines.push('  ' + m.padEnd(16) + ' serve=' + (serve ? 'YES' : 'NO ') + ' webCalls=' + web + '  => ' + tag);
+    lines.push(
+      '  ' +
+        m.padEnd(16) +
+        ' serve=' +
+        (serve ? 'YES' : 'NO ') +
+        ' webCalls=' +
+        web +
+        '  => ' +
+        tag,
+    );
   }
 
   lines.push('--- rule F1: no local filesystem in apps/web ---');
@@ -302,7 +383,8 @@ async function main(): Promise<void> {
   else {
     ok = false;
     lines.push('  violations: ' + fsHits.length);
-    for (const h of fsHits.slice(0, 20)) lines.push('   - ' + h.file + ':' + h.line + '  ' + h.snippet);
+    for (const h of fsHits.slice(0, 20))
+      lines.push('   - ' + h.file + ':' + h.line + '  ' + h.snippet);
     if (fsHits.length > 20) lines.push('   ... (+' + (fsHits.length - 20) + ')');
   }
 
@@ -311,7 +393,8 @@ async function main(): Promise<void> {
   else {
     ok = false;
     lines.push('  violations: ' + transportHits.length);
-    for (const h of transportHits.slice(0, 20)) lines.push('   - ' + h.file + ':' + h.line + '  ' + h.snippet);
+    for (const h of transportHits.slice(0, 20))
+      lines.push('   - ' + h.file + ':' + h.line + '  ' + h.snippet);
   }
   lines.push('  transport layer (allowed): ' + [...TRANSPORT_LAYER].join(', '));
 

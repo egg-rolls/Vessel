@@ -29,7 +29,7 @@
  *   bun run scripts/probe-replay-gap.ts --trace-dir C:/Users/Lirui/.vessel/data/events
  *   bun run scripts/probe-replay-gap.ts --selftest
  */
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   isStructureEvent,
@@ -65,8 +65,7 @@ interface Argv {
 
 // bun is the Windows build: it cannot stat /mnt/c WSL paths. Use the Windows path form.
 // Override with --base or the VESSEL_SESSIONS_DIR env var if your data dir differs.
-const DEFAULT_BASE =
-  process.env.VESSEL_SESSIONS_DIR ?? 'C:/Users/Lirui/.vessel/data/sessions';
+const DEFAULT_BASE = process.env.VESSEL_SESSIONS_DIR ?? 'C:/Users/Lirui/.vessel/data/sessions';
 
 function toInt(v: string | undefined): number {
   const n = Number.parseInt(v ?? '', 10);
@@ -170,7 +169,11 @@ function pickDefaultSession(base: string): string | undefined {
       const idx = readIndex(d);
       const mtime = statSync(ev).mtimeMs;
       const running = idx.status === 'running';
-      if (best === undefined || (running && !best.running) || (running === best.running && mtime > best.mtime)) {
+      if (
+        best === undefined ||
+        (running && !best.running) ||
+        (running === best.running && mtime > best.mtime)
+      ) {
         best = { id, mtime, running };
       }
     } catch {
@@ -310,17 +313,59 @@ function printReport(a: Analysis, args: Argv): void {
   lines.push('==================== probe-replay-gap ====================');
   lines.push('session        : ' + a.session);
   lines.push('status         : ' + a.status);
-  lines.push('disk events    : seq ' + a.diskSeqFirst + '..' + a.diskSeqLast + '  (' + a.diskCount + ' events)');
-  lines.push('derived_upto   : ' + String(a.derivedUpto) + '   (projection covered up to this seq = what message side can rebuild)');
-  lines.push('run.started@   : ' + String(a.runStartSeq) + '   (this run start; run events ' + a.runCount + ')');
+  lines.push(
+    'disk events    : seq ' +
+      a.diskSeqFirst +
+      '..' +
+      a.diskSeqLast +
+      '  (' +
+      a.diskCount +
+      ' events)',
+  );
+  lines.push(
+    'derived_upto   : ' +
+      String(a.derivedUpto) +
+      '   (projection covered up to this seq = what message side can rebuild)',
+  );
+  lines.push(
+    'run.started@   : ' +
+      String(a.runStartSeq) +
+      '   (this run start; run events ' +
+      a.runCount +
+      ')',
+  );
   lines.push('frontend mode  : ' + mode);
   lines.push('----------------------------------------------------------');
   lines.push('should-be N    : ' + String(a.shouldBe) + '   (all session events on disk)');
-  lines.push('actual   M     : ' + String(a.actual) + '   (rebuildable: projection ' + a.projectionCount + (args.window ? ' + ring ' + a.ringCount : ' + ring 0 (empty)') + ')');
-  lines.push('lost     K     : ' + String(a.lostSeqs.length) + '   seq = ' + sample(a.lostSeqs, 12));
-  lines.push('  structure    : ' + a.lostStructure + ' lost (run.* / tool.* / session.* / ask.* / limit.* / error ...)');
-  lines.push('  disk-backfill: ' + a.diskRecoverableCount + ' recoverable via sessions.events(since_seq=' + a.derivedUpto + ')');
-  lines.push('lost subset disk: ' + (a.lostIsSubsetOfDisk ? 'YES  => data is on disk, lost only in the pipe' : 'NO   => disk also missing, check write side'));
+  lines.push(
+    'actual   M     : ' +
+      String(a.actual) +
+      '   (rebuildable: projection ' +
+      a.projectionCount +
+      (args.window ? ' + ring ' + a.ringCount : ' + ring 0 (empty)') +
+      ')',
+  );
+  lines.push(
+    'lost     K     : ' + String(a.lostSeqs.length) + '   seq = ' + sample(a.lostSeqs, 12),
+  );
+  lines.push(
+    '  structure    : ' +
+      a.lostStructure +
+      ' lost (run.* / tool.* / session.* / ask.* / limit.* / error ...)',
+  );
+  lines.push(
+    '  disk-backfill: ' +
+      a.diskRecoverableCount +
+      ' recoverable via sessions.events(since_seq=' +
+      a.derivedUpto +
+      ')',
+  );
+  lines.push(
+    'lost subset disk: ' +
+      (a.lostIsSubsetOfDisk
+        ? 'YES  => data is on disk, lost only in the pipe'
+        : 'NO   => disk also missing, check write side'),
+  );
   const typeList = Object.keys(a.diskTypeCounts)
     .sort()
     .map((t) => t + '=' + a.diskTypeCounts[t])
@@ -328,8 +373,22 @@ function printReport(a: Analysis, args: Argv): void {
   lines.push('disk types     : ' + typeList);
   if (a.ring) {
     lines.push('----------------------------------------------------------');
-    lines.push('ring window    : kept=' + a.ring.keptEvents + ' dropped=' + a.ring.droppedEvents + ' droppedStructure=' + a.ring.droppedStructureEvents + ' floorTruncated=' + a.ring.floorTruncated);
-    lines.push('  run.started   : ' + (a.ring.hasRunStart ? 'inside window: YES' : 'inside window: NO  => client grouping loses the run start'));
+    lines.push(
+      'ring window    : kept=' +
+        a.ring.keptEvents +
+        ' dropped=' +
+        a.ring.droppedEvents +
+        ' droppedStructure=' +
+        a.ring.droppedStructureEvents +
+        ' floorTruncated=' +
+        a.ring.floorTruncated,
+    );
+    lines.push(
+      '  run.started   : ' +
+        (a.ring.hasRunStart
+          ? 'inside window: YES'
+          : 'inside window: NO  => client grouping loses the run start'),
+    );
   }
   lines.push('==========================================================');
   console.log(lines.join('\n'));
@@ -341,13 +400,29 @@ function selftest(): boolean {
   const head = ['session.created', 'run.started', 'message.injected', 'user.message'];
   for (let i = 0; i < head.length; i += 1) rows.push({ seq: i + 1, type: head[i] as string });
   const runTypes = [
-    'prompt.system_context', 'llm.request', 'llm.stream.summary', 'llm.response',
-    'tool.call.started', 'tool.call.completed', 'llm.request', 'llm.response',
-    'tool.call.started', 'tool.call.completed', 'run.completed',
+    'prompt.system_context',
+    'llm.request',
+    'llm.stream.summary',
+    'llm.response',
+    'tool.call.started',
+    'tool.call.completed',
+    'llm.request',
+    'llm.response',
+    'tool.call.started',
+    'tool.call.completed',
+    'run.completed',
   ];
-  for (let i = 0; i < runTypes.length; i += 1) rows.push({ seq: 5 + i, type: runTypes[i] as string });
+  for (let i = 0; i < runTypes.length; i += 1)
+    rows.push({ seq: 5 + i, type: runTypes[i] as string });
 
-  const args: Argv = { base: '', window: false, dropPrefix: 0, chunksPerStructure: 7, selftest: false, json: false };
+  const args: Argv = {
+    base: '',
+    window: false,
+    dropPrefix: 0,
+    chunksPerStructure: 7,
+    selftest: false,
+    json: false,
+  };
   const a = analyze('selftest', rows, { derived_upto_seq: 4, status: 'running' }, args);
   const pass =
     a.shouldBe === 15 &&
@@ -357,12 +432,39 @@ function selftest(): boolean {
     a.lostSeqs[a.lostSeqs.length - 1] === 15 &&
     a.lostIsSubsetOfDisk === true &&
     a.diskRecoverableCount === 11;
-  console.log('[selftest] restart: should=' + a.shouldBe + ' actual=' + a.actual + ' lost=' + a.lostSeqs.length + ' backfill=' + a.diskRecoverableCount + ' -> ' + (pass ? 'PASS' : 'FAIL'));
+  console.log(
+    '[selftest] restart: should=' +
+      a.shouldBe +
+      ' actual=' +
+      a.actual +
+      ' lost=' +
+      a.lostSeqs.length +
+      ' backfill=' +
+      a.diskRecoverableCount +
+      ' -> ' +
+      (pass ? 'PASS' : 'FAIL'),
+  );
 
-  const wArgs: Argv = { base: '', window: true, dropPrefix: 2, chunksPerStructure: 200, selftest: false, json: false };
+  const wArgs: Argv = {
+    base: '',
+    window: true,
+    dropPrefix: 2,
+    chunksPerStructure: 200,
+    selftest: false,
+    json: false,
+  };
   const w = analyze('selftest-window', rows, { derived_upto_seq: 4, status: 'running' }, wArgs);
   const wPass = w.ring !== undefined && w.ring.hasRunStart === false;
-  console.log('[selftest] window : run.started-in-window=' + String(w.ring === undefined ? '?' : w.ring.hasRunStart) + ' droppedStructure=' + String(w.ring === undefined ? '?' : w.ring.droppedStructureEvents) + ' lost=' + w.lostSeqs.length + ' -> ' + (wPass ? 'PASS' : 'FAIL'));
+  console.log(
+    '[selftest] window : run.started-in-window=' +
+      String(w.ring === undefined ? '?' : w.ring.hasRunStart) +
+      ' droppedStructure=' +
+      String(w.ring === undefined ? '?' : w.ring.droppedStructureEvents) +
+      ' lost=' +
+      w.lostSeqs.length +
+      ' -> ' +
+      (wPass ? 'PASS' : 'FAIL'),
+  );
 
   return pass && wPass;
 }
@@ -400,7 +502,16 @@ function traceScan(dir: string, args: Argv): void {
     }
     if (chunk) withChunk += 1;
     if (samples.length < 6) {
-      samples.push(name.slice(0, 8) + ':' + rows.length + '行 seq' + seqs[0] + '..' + seqs[seqs.length - 1] + (mono ? '' : '(非连续)'));
+      samples.push(
+        name.slice(0, 8) +
+          ':' +
+          rows.length +
+          '行 seq' +
+          seqs[0] +
+          '..' +
+          seqs[seqs.length - 1] +
+          (mono ? '' : '(非连续)'),
+      );
     }
   }
   const typeList = Object.keys(agg)
@@ -409,14 +520,29 @@ function traceScan(dir: string, args: Argv): void {
     .join(', ');
   console.log('==================== trace scan (data/events/<run_id>.jsonl) ====================');
   console.log('files            : ' + files.length);
-  console.log('starts_at_seq1   : ' + startsAtOne + ' (per-run seq from 1 -> single session since_seq must NOT be used here)');
+  console.log(
+    'starts_at_seq1   : ' +
+      startsAtOne +
+      ' (per-run seq from 1 -> single session since_seq must NOT be used here)',
+  );
   console.log('non_monotonic    : ' + nonMonotonic);
   console.log('files_with_chunk : ' + withChunk + ' (0 => chunks are never persisted to trace)');
   console.log('seq samples      : ' + samples.join(' | '));
   console.log('aggregate types  : ' + typeList);
-  console.log('trace has hook? ' + (agg['hook.started'] ? 'YES' : 'NO') + '  context.changed? ' + (agg['context.changed'] ? 'YES' : 'NO') + '  run.checkpoint? ' + (agg['run.checkpoint'] ? 'YES' : 'NO') + '  chunk? ' + (agg['llm.stream.chunk'] ? 'YES' : 'NO'));
+  console.log(
+    'trace has hook? ' +
+      (agg['hook.started'] ? 'YES' : 'NO') +
+      '  context.changed? ' +
+      (agg['context.changed'] ? 'YES' : 'NO') +
+      '  run.checkpoint? ' +
+      (agg['run.checkpoint'] ? 'YES' : 'NO') +
+      '  chunk? ' +
+      (agg['llm.stream.chunk'] ? 'YES' : 'NO'),
+  );
   console.log('NOTE: this is the RUN TRACE (observability). sessions.events/event_cursor read the');
-  console.log('      SESSION log (sessions/<id>/events.ndjson, session-global seq), a different file.');
+  console.log(
+    '      SESSION log (sessions/<id>/events.ndjson, session-global seq), a different file.',
+  );
   if (args.json) console.log(JSON.stringify({ files: files.length, agg }));
 }
 

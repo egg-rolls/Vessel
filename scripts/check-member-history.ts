@@ -445,7 +445,11 @@ check(
 );
 let unknownFieldError = '';
 try {
-  await service.listReleasedMembers({ fields: ['nope'] as unknown as NonNullable<Parameters<typeof service.listReleasedMembers>[0]>['fields'] });
+  await service.listReleasedMembers({
+    fields: ['nope'] as unknown as NonNullable<
+      Parameters<typeof service.listReleasedMembers>[0]
+    >['fields'],
+  });
 } catch (error) {
   unknownFieldError = String((error as { code?: string }).code ?? error);
 }
