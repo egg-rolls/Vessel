@@ -137,6 +137,12 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   'context.projection_applied': { tier: 'observe', live: true },
   'context.projection_degraded': { tier: 'observe', live: true },
   'context.projection_pressure': { tier: 'observe', live: true },
+  // 0.54 A（ADR-105 §11 / plan-054 A-2）：双写一致性抽样的**审计**事件 ——
+  // 「这次 run 结束时，旧链路与 timeline 的多重集比对出了差异」。
+  // 登记为 `observe` 的理由：它是运维/观察面的诊断（差异只在 Observe / Runs 读），
+  // 不是模型上下文、也不是会话叙事；`internal` 会在 `ui.showInternalEvents` 打开后进
+  // 聊天时间线，那是把一个观测告警混进对话。它也不是失败类，所以不进 `content`。
+  'timeline.divergence': { tier: 'observe', live: true },
   'message.injected': { tier: 'internal', live: true },
   'message.compaction': { tier: 'internal', live: true },
   'limit.blocked': { tier: 'internal', live: true },

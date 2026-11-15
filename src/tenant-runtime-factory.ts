@@ -16,7 +16,11 @@
 import { join } from 'node:path';
 import { createInboxMemberBodyContribution } from '@vessel-agent/agent';
 import { deriveSessionMeta } from '@vessel-agent/core/session';
-import type { ConfigSources, VesselConfig } from '../packages/config/src/index';
+import {
+  type ConfigSources,
+  DEFAULT_TIMELINE_OPTIONS,
+  type VesselConfig,
+} from '../packages/config/src/index';
 import {
   type ContextSummarizer,
   createDefaultTraceRedactor,
@@ -72,6 +76,7 @@ import { createSessionControl, type SessionControl } from './session-control';
 import { createSessionStore } from './session-factory';
 import { withSessionWriteLock } from './session-lock-runtime';
 import { reportShutdownFailure } from './shutdown-report';
+import { createTimelineDualWrite, type TimelineDualWrite } from './timeline-dual-write';
 import {
   composeTraceRedactors,
   installTrace,
@@ -194,6 +199,13 @@ export interface TenantRuntimeBundle {
   journalFactory: RunJournalFactory;
   /** 0.18：会话事件日志（唯一真相源）；memory 后端或只读执行面不创建 */
   eventLog?: SessionEventLog;
+  /**
+   * 0.54 A：会话 timeline 双写旁路（ADR-105 §11）。
+   *
+   * 缺省（`timeline.dual_write` 关 / 没有事件日志）⇒ 字段不存在 ⇒
+   * `sessions.get.event_cursor` **不带** timeline 四字段（不报假零）。
+   */
+  timelineDualWrite?: TimelineDualWrite;
   trace?: TraceControl;
   metrics?: MetricsControlLike;
   /** 组合后的 redactor（core 默认 + ext）；live hub / gateway 使用同一实例 */
@@ -651,6 +663,34 @@ export async function buildTenantRuntime(
             : {}),
         })
       : undefined;
+  // 0.54 A：会话 timeline 双写旁路（ADR-105 §11 / plan-054 A4）。
+  // 开关关（默认）⇒ **不构造**：`RunJournal` 拿到的端口是 `undefined`，旁路一次都不调，
+  // 旧链路逐字节不变。开关开 ⇒ 每条已落盘事件多写一份 timeline + 旧链路故意不落盘的
+  // chunk 家族；新链路任何失败只记指标/日志（实现侧自吞，见 `src/timeline-dual-write.ts`）。
+  const timelineOptions = config.timeline ?? DEFAULT_TIMELINE_OPTIONS;
+  const timelineDualWrite: TimelineDualWrite | undefined =
+    eventLog !== undefined && timelineOptions.dualWrite === true
+      ? createTimelineDualWrite({
+          dataDir: tenantPaths.root,
+          sessionsDir: tenantPaths.sessions_dir,
+          dualWrite: true,
+          ...(timelineOptions.chunkFlushMs !== undefined
+            ? { chunkFlushMs: timelineOptions.chunkFlushMs }
+            : {}),
+          ...(timelineOptions.verifySampleRate !== undefined
+            ? { verifySampleRate: timelineOptions.verifySampleRate }
+            : {}),
+          emit: (event) => {
+            try {
+              events.publish(event);
+            } catch {
+              // 观测事件投递失败不得影响 run
+            }
+          },
+          logger,
+        })
+      : undefined;
+  timelineDualWrite?.installExitFlush();
   const sessionControl = createSessionControl({
     session,
     paths: tenantPaths,
@@ -763,6 +803,7 @@ export async function buildTenantRuntime(
       : {}),
     logger,
     resumeMarkers,
+    ...(timelineDualWrite !== undefined ? { timelineDualWrite } : {}),
   });
 
   options.runtime.registerProfile({
@@ -1194,6 +1235,15 @@ export async function buildTenantRuntime(
 
     await closeRunRecordStore(runStore, (error) => report('runStore.close', error));
 
+    if (timelineDualWrite !== undefined) {
+      // 尽力而为：`closeAll` 自带 300ms 上限，关不掉也不拖住退出（数据在旧链路里）。
+      try {
+        await timelineDualWrite.closeAll();
+      } catch (error) {
+        report('timelineDualWrite.close', error);
+      }
+    }
+
     if (eventLog) {
       try {
         await eventLog.close();
@@ -1235,6 +1285,7 @@ export async function buildTenantRuntime(
     resumeMarkers,
     journalFactory,
     ...(eventLog ? { eventLog } : {}),
+    ...(timelineDualWrite !== undefined ? { timelineDualWrite } : {}),
     ...(trace ? { trace } : {}),
     ...(metrics ? { metrics } : {}),
     redactor,

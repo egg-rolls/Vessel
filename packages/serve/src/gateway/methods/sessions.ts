@@ -141,6 +141,45 @@ export interface SessionEventCursor {
   last_seq: number;
   derived_upto_seq?: number;
   event_count?: number;
+  /**
+   * 0.54 A（ADR-105 §3 I4）：会话 timeline 的两个 head / 洞区间 / 污点。
+   *
+   * **四个字段一起出现或一起缺省**：开关关（`timeline.dual_write: false`）或该会话
+   * 根本没有 timeline ⇒ 四个都不出现（**不报假零**：`0` 是「有 timeline 但一条没归档」，
+   * 与「没有 timeline」是两件事）。`timeline_head <= wal_head` 恒成立。
+   *
+   * `holes` 只给区间（`{from_seq,to_seq}`）：洞内是「读不回来的 seq」，贴 payload 只会
+   * 把不可读的东西伪装成可读。
+   */
+  timeline_head?: number;
+  wal_head?: number;
+  holes?: SessionTimelineHoleRange[];
+  tainted?: boolean;
+}
+
+/** 一个洞区间（timeline 四字段里的 `holes`；**不带** reason/at 等写入内部信息）。 */
+export interface SessionTimelineHoleRange {
+  from_seq: number;
+  to_seq: number;
+}
+
+/**
+ * timeline 四字段的**读取面**（0.54 A，`sessions.get.event_cursor` 的 additive 部分）。
+ *
+ * 装配层注入（`src/timeline-dual-write.ts#heads`）：内存里有 writer 就读它，否则读
+ * `timeline.idx` + manifest + holes；**两边都没有 ⇒ `undefined` ⇒ 字段缺省**。
+ * serve 不拼磁盘路径、不读盘，与 `sessionEvents` 同一范式。
+ */
+export interface SessionTimelineHeadsPort {
+  lookup(sessionId: string): Promise<
+    | {
+        timeline_head: number;
+        wal_head: number;
+        holes: readonly { from_seq: number; to_seq: number }[];
+        tainted: boolean;
+      }
+    | undefined
+  >;
 }
 
 /**
@@ -292,6 +331,13 @@ export interface SessionMethodsDeps {
    * （`SessionEventLog` 所在的 data-dir）由 app 侧注入（见 `src/session-events.ts`）。
    */
   sessionEvents?: SessionEventsPort;
+  /**
+   * timeline 四字段的读端口（0.54 A：additive `sessions.get.event_cursor` 的
+   * `timeline_head` / `wal_head` / `holes` / `tainted`）。
+   *
+   * 缺省 = 四个字段一起缺省（旧装配 / 双写开关关，行为一字不改、不抛错）。
+   */
+  timelineHeads?: SessionTimelineHeadsPort;
   /**
    * CONTRACT-0.34-context C7：仅服务 `sessions.compact` 的执行面。
    * 结构化读取可选 `compactContext(sessionId)`；缺省或方法缺失 = `compact_unavailable`。
@@ -538,10 +584,46 @@ function normalizeEventCursor(raw: SessionEventCursor | undefined): SessionEvent
   if (lastSeq === undefined || lastSeq < 0) return undefined;
   const derived = optionalNumber(raw.derived_upto_seq);
   const count = optionalNumber(raw.event_count);
+  const timeline = normalizeTimelineHeads(raw);
   return {
     last_seq: Math.floor(lastSeq),
     ...(derived === undefined || derived < 0 ? {} : { derived_upto_seq: Math.floor(derived) }),
     ...(count === undefined || count < 0 ? {} : { event_count: Math.floor(count) }),
+    ...(timeline ?? {}),
+  };
+}
+
+/**
+ * timeline 四字段的收敛（0.54 A）：**四个一起收或一起丢**，且非法值一律不猜。
+ *
+ * `0 ≤ timeline_head ≤ wal_head` 是写入侧不变量（ADR-105 I4）；读侧不合它说明端口
+ * 给错了东西（不是数据坏了），整组字段缺省比报一对矛盾数字更安全。
+ */
+function normalizeTimelineHeads(
+  raw: SessionEventCursor,
+): Pick<SessionEventCursor, 'timeline_head' | 'wal_head' | 'holes' | 'tainted'> | undefined {
+  const timelineHead = optionalNumber(raw.timeline_head);
+  const walHead = optionalNumber(raw.wal_head);
+  const tainted = raw.tainted;
+  const holes = raw.holes;
+  if (timelineHead === undefined || walHead === undefined || typeof tainted !== 'boolean') {
+    return undefined;
+  }
+  if (!Array.isArray(holes)) return undefined;
+  if (timelineHead < 0 || walHead < 0 || timelineHead > walHead) return undefined;
+  const ranges: SessionTimelineHoleRange[] = [];
+  for (const hole of holes) {
+    if (!isRecord(hole)) return undefined;
+    const from = optionalNumber(hole.from_seq);
+    const to = optionalNumber(hole.to_seq);
+    if (from === undefined || to === undefined || from < 1 || to < from) return undefined;
+    ranges.push({ from_seq: Math.floor(from), to_seq: Math.floor(to) });
+  }
+  return {
+    timeline_head: Math.floor(timelineHead),
+    wal_head: Math.floor(walHead),
+    holes: ranges,
+    tainted,
   };
 }
 
@@ -942,17 +1024,36 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
       }
     | undefined {
     const port = deps.sessionEvents;
+    const headsPort = deps.timelineHeads;
     if (port === undefined) return undefined;
     return {
       lookup: async (sessionId) => {
         const lastSeq = await port.lastSeq(sessionId);
         if (lastSeq === undefined) return undefined;
         const derived = await port.cursor(sessionId);
+        // 0.54 A：timeline 四字段（additive）。端口缺省 / 该会话没有 timeline ⇒ 一起缺省；
+        // 读失败也只少这四个字段（观测值不能把 `sessions.get` 打成 internal）。
+        //
+        // 缓存口径与两个旧派生值相同（按**事件日志尾水位**失效）：有事件 ⇒ 水位变 ⇒ 重读。
+        // 已知边界（照实写）：只发生归档、不写新事件时水位不动，`timeline_head` 可能比
+        // 真值落后一次 `sessions.get`；它不是判据（ADR-105 §5：索引/派生物不得当判据）。
+        const timeline = await headsPort?.lookup(sessionId).catch(() => undefined);
         return {
           last_seq: lastSeq,
           ...(derived === undefined
             ? {}
             : { derived_upto_seq: derived.derived_upto_seq, event_count: derived.event_count }),
+          ...(timeline === undefined
+            ? {}
+            : {
+                timeline_head: timeline.timeline_head,
+                wal_head: timeline.wal_head,
+                holes: timeline.holes.map((hole) => ({
+                  from_seq: hole.from_seq,
+                  to_seq: hole.to_seq,
+                })),
+                tainted: timeline.tainted,
+              }),
         };
       },
       watermark: (sessionId) => port.watermark(sessionId),

@@ -333,6 +333,25 @@ export interface TraceConfig {
 }
 
 /**
+ * 会话 timeline 配置（0.54 A 阶段，ADR-105 §11 / plan-054 A4）。
+ *
+ * **不写入 `DEFAULT_CONFIG`**：未配置 `timeline` 时消费 {@link DEFAULT_TIMELINE_OPTIONS}
+ * （等价于「双写关闭」）。YAML 键走 snake_case（`timeline.dual_write`），
+ * loader 统一转 camelCase 后就是下面的字段名。
+ *
+ * `dualWrite` 的语义是**全有或全无**：`false` ⇒ 旁路一次都不调（旧链路逐字节不变）；
+ * `true` ⇒ 每条已持久化事件多写一份 timeline，新链路任何失败只记指标/日志。
+ */
+export interface TimelineConfig {
+  /** 双写开关；默认 `false`（关 = 旧链路行为一字不改）。 */
+  dualWrite?: boolean;
+  /** chunk 空闲封块间隔（ms，1..1000）；缺省 150（`timeline.CHUNK_FLUSH_MS`）。 */
+  chunkFlushMs?: number;
+  /** 一致性抽样率（0..1）；缺省 `0.01`（1% 的 run 结束时比对一次）。 */
+  verifySampleRate?: number;
+}
+
+/**
  * 0.48 M1：插件 HTTP 反代限额（CONTRACT-0.48 §3.4）。
  *
  * 字段缺省用宿主默认值；`null` 表示该维度不限制。
@@ -688,6 +707,11 @@ export interface VesselConfig {
   dataDir?: string;
   /** trace 配置；缺省消费 DEFAULT_TRACE_OPTIONS */
   trace?: TraceConfig;
+  /**
+   * 0.54 A：会话 timeline 双写（ADR-105）；缺省消费 DEFAULT_TIMELINE_OPTIONS
+   * （`dualWrite: false` = 开关关，旧链路逐字节不变）。
+   */
+  timeline?: TimelineConfig;
   provider?: ProviderConfig;
   agent?: AgentConfig;
   guardrails?: GuardrailConfig[];

@@ -1734,6 +1734,16 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           }),
         }
       : {}),
+    // 0.54 A：timeline 四字段（additive `sessions.get.event_cursor` 的 `timeline_head` /
+    // `wal_head` / `holes` / `tainted`）。双写开关关 / 该会话没有 timeline ⇒ 一起缺省。
+    ...(bundle.timelineDualWrite !== undefined
+      ? {
+          timelineHeads: {
+            lookup: (sessionId: string) =>
+              bundle.timelineDualWrite?.heads(sessionId) ?? Promise.resolve(undefined),
+          },
+        }
+      : {}),
     pluginHostManager: localPluginHostManager,
     pluginsReload: reloadLocalPlugins,
     // 0.15: local RPC runs also take the session write lock.
