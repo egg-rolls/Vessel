@@ -15,6 +15,21 @@
  * - **chunk 块写失败** ⇒ 删除本次新建的半块 → 整个块区间登记成洞；
  * - **撕裂尾帧**（半写、从未发布）在 `open()` 时截断并允许重新分配 seq。
  *
+ * 污点（`tainted`）是**派生值，不是历史累加**：会话级 `tainted` = 「当前还有洞」或
+ * 「manifest 里物理顺序上最后一条状态声明是 `tainted`」。归档成功推进 `timeline_head`
+ * 且当前无洞时追加一条 `tainted_cleared` 把它撤掉（`clearTaintAfterArchive()`）；
+ * 历史 `tainted` 行一条都不删（审计）。三种表达分工固定：
+ *
+ * | 概念 | 载体 | 语义 |
+ * | --- | --- | --- |
+ * | 永久损坏区间 | `holes.ndjson` | 事实，不退役（清理属 0.55+） |
+ * | `tainted` | 本模块的派生值 | 会话级**当前**健康位（UI / 运维消费的就是它） |
+ * | 曾经发生什么 | `timeline.manifest` 的 `tainted` / `tainted_cleared` 行 | 审计历史，全保留 |
+ *
+ * **迁移事实（写死，别当实现细节）**：存量老会话没有 trailing `tainted_cleared` 行 ⇒
+ * 升级后**第一次健康归档之前仍是 `tainted = true`**，不会自动洗白。这是可接受的保守姿态
+ * （安全方向：宁可多报一次脏，不可漏报一次真丢失）。
+ *
  * 封块四个时机（I2 之内的延迟来源）：
  * ① 活动块 ≥ `BLOCK_MAX_BYTES`；② 非 chunk 事件先封块再写该行（严格交错）；
  * ③ 空闲 `chunk_flush_ms`；④ `flush()` / `close()`。
@@ -156,7 +171,7 @@ function validateManifestLine(parsed: unknown): TimelineManifestLine | undefined
       ? line
       : undefined;
   }
-  if (line.kind === 'tainted') {
+  if (line.kind === 'tainted' || line.kind === 'tainted_cleared') {
     return typeof line.reason === 'string' &&
       typeof line.from_seq === 'number' &&
       typeof line.to_seq === 'number' &&
@@ -165,6 +180,24 @@ function validateManifestLine(parsed: unknown): TimelineManifestLine | undefined
       : undefined;
   }
   return undefined;
+}
+
+/**
+ * 会话级污点的**当前值**：物理顺序上最后一条状态声明说了算（last-wins）。
+ *
+ * 从后往前扫，第一条 `tainted` / `tainted_cleared` 就是答案。**不按 `at` 排序**：时钟回退
+ * 会把顺序搞反，而 append-only 文件的行序才是真实写入顺序（这两行的 `at` 只作审计）。
+ *
+ * 没有状态声明（只有 `open` / `archive` 行）⇒ `false`：从未污点过。
+ */
+function lastTaintedState(lines: readonly TimelineManifestLine[]): boolean {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line === undefined) continue;
+    if (line.kind === 'tainted') return true;
+    if (line.kind === 'tainted_cleared') return false;
+  }
+  return false;
 }
 
 /** 找出 `[1..maxKnown]` 里既没有记录、也没被洞覆盖的区间（恢复时补登记）。 */
@@ -329,13 +362,18 @@ export class TimelineWriter {
     await this.walHandle.close().catch(() => {});
   }
 
-  /** 对外可上报的四字段（ADR-105 §3 I4；字段名固定）。 */
+  /**
+   * 对外可上报的四字段（ADR-105 §3 I4；字段名固定）。
+   *
+   * `tainted` 是**派生值**：`holes` 非空恒 true（洞只属于真丢失，且本版不退役洞），
+   * 否则取「最后一次归档后的状态声明」——这样它才不会因为一次瞬时归档失败永久为真。
+   */
   heads(): TimelineHeads {
     return {
       timeline_head: this.timelineHead,
       wal_head: this.walHead,
       holes: this.holes.list().slice(),
-      tainted: this.taintedFlag,
+      tainted: this.taintedFlag || this.holes.list().length > 0,
     };
   }
 
@@ -355,6 +393,9 @@ export class TimelineWriter {
    *
    * 失败：重试 3 次（100/500/2000 ms）；仍失败 ⇒ `timelineHead` 不动、`walHead` 照常、
    * 主 manifest 记 `tainted`、回调 `onArchiveFailed`。**不**写 holes（数据没丢）。
+   *
+   * 成功：`timelineHead` 推进到 `walHead`；若此时**已无存活洞**且当前是污点，再追加一条
+   * `tainted_cleared`（历史 `tainted` 行保留），会话级污点随之撤销。
    */
   archive(): Promise<ArchiveResult> {
     return this.enqueue(() => this.archiveNow());
@@ -464,6 +505,12 @@ export class TimelineWriter {
     });
   }
 
+  /**
+   * 磁盘上的两个事实：已归档到的 seq，以及**当前**的会话级污点。
+   *
+   * `tainted` 用 last-wins 读法（`lastTaintedState()`），不是「出现过任何 tainted 行」——
+   * 后者会让一次瞬时失败永久钉死会话（本单修的就是这个）。
+   */
   private async readManifest(): Promise<{ archivedTo: number; tainted: boolean }> {
     const result = await readCrcNdjsonFile<TimelineManifestLine>(
       this.manifestPath,
@@ -473,12 +520,10 @@ export class TimelineWriter {
       await truncateFile(this.manifestPath, result.truncateTo);
     }
     let archivedTo = 0;
-    let tainted = false;
     for (const line of result.items) {
       if (line.kind === 'archive') archivedTo = Math.max(archivedTo, line.to_seq);
-      if (line.kind === 'tainted') tainted = true;
     }
-    return { archivedTo, tainted };
+    return { archivedTo, tainted: lastTaintedState(result.items) };
   }
 
   private async appendManifest(line: TimelineManifestLine): Promise<void> {
@@ -877,6 +922,7 @@ export class TimelineWriter {
     if (from > to) return { ok: true, from_seq: from, to_seq: to };
 
     let lastError: unknown;
+    let advanced = false;
     for (const wait of [0, ...ARCHIVE_RETRY_DELAYS_MS]) {
       if (wait > 0) await delay(wait);
       // 归档是「数据 + manifest 指针」的原子动作：任一步失败都回滚本次新增的段行，
@@ -913,7 +959,8 @@ export class TimelineWriter {
           at: this.now(),
         });
         this.timelineHead = to;
-        return { ok: true, from_seq: from, to_seq: to };
+        advanced = true;
+        break;
       } catch (error) {
         try {
           const truncateHandle = await open(this.timelinePath, 'r+');
@@ -941,6 +988,13 @@ export class TimelineWriter {
       }
     }
 
+    if (advanced) {
+      // 归档已经提交（段 + archive 行都落盘），先撤销污点再返回成功：
+      // 清退行写不进去不影响「空间已回收」这个事实（best-effort，见方法注释）。
+      await this.clearTaintAfterArchive(from, to);
+      return { ok: true, from_seq: from, to_seq: to };
+    }
+
     const reason = `archive_failed: ${messageOf(lastError)}`;
     this.taintedFlag = true;
     try {
@@ -957,6 +1011,40 @@ export class TimelineWriter {
     }
     this.options.onArchiveFailed?.({ from_seq: from, to_seq: to, reason });
     return { ok: false, from_seq: from, to_seq: to, reason };
+  }
+
+  /**
+   * 健康归档之后撤销会话级污点（ADR-105 §3 I3 ④）：追加一条 `tainted_cleared`。
+   *
+   * 三个前提缺一不可：
+   * ① 本次归档**真的推进了** `timeline_head`（调用点用 `advanced` 保证；`from > to` 的空归档
+   *    不算「清退」，否则一次没有任何归档动作的调用就能把污点洗掉）；
+   * ② 当前**没有存活洞**（洞 = 真丢失，`heads()` 里 `holes` 非空恒 tainted；本版不退役洞，
+   *    所以有洞的会话永远不写 cleared —— 保守方向，不掩盖真丢失）；
+   * ③ 当前**确实是 tainted**（否则每次健康归档都会多算一行噪声，且「连续多次失败后成功一次
+   *    只追加一条 cleared」会被打破）。
+   *
+   * 历史行一条都不改：失败时写下的 `tainted` 行继续留着当审计，`tainted_cleared` 只是
+   * 「物理顺序上的最后一条状态声明」，靠 last-wins 生效。
+   *
+   * 写失败 ⇒ 保持污点、下次健康归档再试（不把「空间已回收」改判成「归档失败」）。
+   */
+  private async clearTaintAfterArchive(fromSeq: number, toSeq: number): Promise<void> {
+    if (!this.taintedFlag) return;
+    if (this.holes.list().length > 0) return;
+    try {
+      await this.appendManifest({
+        v: 1,
+        kind: 'tainted_cleared',
+        reason: 'archive_recovered',
+        from_seq: fromSeq,
+        to_seq: toSeq,
+        at: this.now(),
+      });
+      this.taintedFlag = false;
+    } catch {
+      // 清退行写不进去：内存污点保持不变（安全方向），下次健康归档会再试一次。
+    }
   }
 
   // ---------------------------------------------------------------- index / timer

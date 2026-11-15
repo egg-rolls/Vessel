@@ -147,11 +147,34 @@ export interface TimelineBlockEntry {
 /** `wal.manifest` 的一行。 */
 export type WalManifestLine = { v: 1; kind: 'block' } & TimelineBlockEntry;
 
-/** `timeline.manifest` 的一行（只追加；归档失败也不回改历史行）。 */
+/**
+ * `timeline.manifest` 的一行（只追加；归档失败也不回改历史行）。
+ *
+ * **状态声明只有两种**：`tainted` / `tainted_cleared`。会话级「当前是否污点」= **物理顺序上
+ * 最后一条状态声明**的值（last-wins，读侧从后往前扫，见 `writer.ts#readManifest`）：
+ *
+ * - 排序依据**只能是写入顺序**（append-only 文件的行序）。`at` 仅作审计：时钟回退
+ *   （NTP / 改系统时间 / 跨机器）会把「按 `at` 排序」的结果搞反，读侧一次都不许用它定序；
+ * - `from_seq` / `to_seq` 同样**只作审计**，不参与会话级判定：本版（0.54）不做区间级
+ *   `tainted`，只要 `holes.ndjson` 里还有任何洞，会话级 `tainted` 就恒为 true（保守方向）；
+ * - `tainted` 行与 `tainted_cleared` 行都**永久保留**，它们是「曾经发生过什么」的审计历史，
+ *   不是当前状态；任何实现都不许回改或删除历史行；
+ * - `tainted_cleared` 是 0.54 之后**新增（additive）**的行：旧 reader 对未知 `kind` 返回
+ *   `undefined` ⇒ 忽略它、保守地认为仍 tainted（安全方向），既不抛错也不截断文件。
+ *   因此**存量会话升级后、第一次健康归档之前仍是 tainted=true，不会自动洗白**。
+ */
 export type TimelineManifestLine =
   | { v: 1; kind: 'open'; at: number }
   | { v: 1; kind: 'archive'; from_seq: number; to_seq: number; at: number }
-  | { v: 1; kind: 'tainted'; reason: string; from_seq: number; to_seq: number; at: number };
+  | { v: 1; kind: 'tainted'; reason: string; from_seq: number; to_seq: number; at: number }
+  | {
+      v: 1;
+      kind: 'tainted_cleared';
+      reason: string;
+      from_seq: number;
+      to_seq: number;
+      at: number;
+    };
 
 /** 写者测试缝：在这些位置真正 fsync 之前调用；抛错 = 模拟 fsync/写失败。 */
 export type TimelineSyncKind = 'wal' | 'block' | 'manifest' | 'holes' | 'timeline' | 'blob';
