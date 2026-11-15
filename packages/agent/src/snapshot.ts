@@ -277,6 +277,14 @@ function parseMember(value: unknown, version: number): PersistedAgentRecord | un
   // 0.51：成员 cwd 快照（additive；旧快照没有这个键 = 没有成员 cwd）
   const cwd = optionalString(value.cwd);
   if (cwd !== undefined) record.cwd = cwd;
+  // 0.53：释放时刻 / 原因（additive；旧快照没有 = 释放时刻未知，历史视图不补默认值）
+  const closedAt =
+    typeof value.closed_at === 'number' && Number.isFinite(value.closed_at)
+      ? value.closed_at
+      : undefined;
+  if (closedAt !== undefined) record.closed_at = closedAt;
+  const closeReason = optionalString(value.close_reason);
+  if (closeReason !== undefined) record.close_reason = closeReason;
   const currentBinding = parseBindingPointer(value.current_body);
   if (currentBinding !== undefined) record.current_body = currentBinding;
   const bindingHistory = parseBindingHistory(value.body_history);

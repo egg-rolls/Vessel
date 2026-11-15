@@ -180,6 +180,16 @@ export interface PersistedAgentRecord {
   current_tool?: string;
   last_seen?: number;
   usage?: Usage;
+  /**
+   * 0.53：释放时刻（additive；`close` 与空闲回收都写）。
+   *
+   * 历史视图（`agent list` + `includeReleases`）要按「什么时候没的」排序与展示，而
+   * 已释放成员的 `last_seen` 只表示最后一次活动，不是释放时刻。旧快照没有这个键 =
+   * 释放时刻未知（视图里不补默认值），不影响任何其它路径。
+   */
+  closed_at?: number;
+  /** 0.53：释放原因（additive；`closed` = 显式 close，`idle_ttl` = 空闲回收） */
+  close_reason?: string;
 }
 
 /**
@@ -1092,6 +1102,97 @@ export interface ListFilter {
 }
 
 /**
+ * 历史视图（已释放成员）可选字段白名单（0.53）。
+ *
+ * 这是**只读**视图：`agent list` 默认仍然看不到已释放成员，只有显式
+ * `includeReleases: true` 才走到这里。字段可枚举是为了控制稠稀：默认只给
+ * 「谁、什么状态、什么时候没的」，要 session / 成本再点名要。
+ */
+export const RELEASED_MEMBER_FIELDS = [
+  'name',
+  'role',
+  'state',
+  'membership',
+  'presence',
+  'closed_at',
+  'close_reason',
+  'session_id',
+  'cost',
+] as const;
+
+/** 历史视图字段名 */
+export type ReleasedMemberField = (typeof RELEASED_MEMBER_FIELDS)[number];
+
+/** 缺省精简集：够判断「哪个成员、什么状态、何时释放」，不含 session / 用量 */
+export const RELEASED_MEMBER_DEFAULT_FIELDS: readonly ReleasedMemberField[] = [
+  'name',
+  'state',
+  'membership',
+  'closed_at',
+];
+
+/** 历史视图默认上限；超过就截断并标 `truncated` */
+export const RELEASED_MEMBER_LIMIT_DEFAULT = 20;
+
+/** 历史视图上限硬顶：再大的 limit 一律钳到这里（不报错，只截断） */
+export const RELEASED_MEMBER_LIMIT_MAX = 200;
+
+/**
+ * 历史视图查询。
+ *
+ * `viewer` 与 `ListFilter.viewer` 同一口径（private 成员只对 owner 可见）；
+ * 缺省 = 管理面口径之外没有查看者，private 记录不可见（fail-closed）。
+ */
+export interface ReleasedMembersQuery {
+  viewer?: string;
+  /**
+   * 只列出该 Team 的已释放成员。成员环境下由工具填成调用者所属 Team（不传就等于把
+   * 别的 Team 的历史也交出去）；root owner 不传 = 租户级历史。
+   */
+  teamId?: string;
+  /** 返回条数；缺省 20，缺省以下原样生效，超过 200 钳到 200 */
+  limit?: number;
+  /** 返回字段；缺省 `RELEASED_MEMBER_DEFAULT_FIELDS` */
+  fields?: readonly ReleasedMemberField[];
+}
+
+/**
+ * 历史视图里的一条已释放成员。
+ *
+ * 每个字段都可能缺省：`fields` 决定出现哪些键，而记录里没有的事实（例如回收路径
+ * 没有落 `close_reason` 的旧数据）**不补默认值**——宁缺勿造。
+ */
+export interface ReleasedMemberView {
+  name?: string;
+  role?: AgentRole;
+  state?: MemberState;
+  membership?: MemberMembership;
+  presence?: MemberPresence;
+  closed_at?: number;
+  close_reason?: string;
+  session_id?: string;
+  /**
+   * 该成员记录里保存的 token 用量（`usage`）。成员记录**没有货币成本字段**，
+   * 这里也不编造 `total_cost`；要真实成本得去 run 记录里另算。
+   */
+  cost?: Usage;
+}
+
+/** 历史视图结果；`truncated` 是「被上限截掉了」的显式信号，不是错误 */
+export interface ReleasedMembersPage {
+  members: ReleasedMemberView[];
+  /** 本次生效的上限（钳过之后的值） */
+  limit: number;
+  /** 命中总数（截断之前） */
+  total: number;
+  /** 实际返回条数 */
+  returned: number;
+  truncated: boolean;
+  /** 本次实际生效的字段集（便于调用方知道自己少要了什么） */
+  fields: ReleasedMemberField[];
+}
+
+/**
  * 发送结果：入队即返回，不等待一轮结束。
  *
  * 0.41 起是联合：work / urgent 为 queued；wake 投递（wire `notify:true`）为 notified。notified 分支不带
@@ -1540,6 +1641,14 @@ export interface AgentService {
   close(input: CloseInput): Promise<CloseResult>;
   close(input: CloseBatchInput): Promise<BatchResult<CloseResult>>;
   list(filter?: ListFilter): Promise<MemberStatus[]>;
+  /**
+   * 历史视图（0.53）：**只读**列出已释放成员（`membership='left'` 或 `state='closed'`）。
+   *
+   * 单独立一个方法而不是给 `list` 加开关，是因为两条路线的语义正相反：`list` 是
+   * 「谁还在」，历史视图是「谁已经没了」，把过滤逻辑塞进 `list` 迟早会被默认打开。
+   * 不读也不写 state / membership / presence，不发任何生命周期事件，不触发 sweep。
+   */
+  listReleasedMembers(query?: ReleasedMembersQuery): Promise<ReleasedMembersPage>;
   /** 成员显式回复父级；本轮自动最终文本随后被抑制 */
   reply(memberId: string, content: string): Promise<ReplyResult>;
   /**
