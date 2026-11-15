@@ -4,7 +4,12 @@
  * @module @vessel-agent/serve
  */
 
+import { createHash } from 'node:crypto';
 import {
+  formatClearedToolResult,
+  isClearedToolResult,
+  type Message,
+  type ProjectionMode,
   ProjectionPolicyError,
   projectedKeepCount,
   resolveProjection,
@@ -32,7 +37,11 @@ import {
   searchSessions,
 } from '../../session-search.js';
 import { mapTenantError } from '../../tenant.js';
-import { capToolMessages } from '../../tool-events.js';
+import {
+  type CappedMessage,
+  capToolMessages,
+  TOOL_EVENT_PAYLOAD_LIMIT,
+} from '../../tool-events.js';
 import { MethodError } from '../errors.js';
 import { runInProgressReason, stringParam } from './common.js';
 import {
@@ -123,6 +132,220 @@ export interface SessionSystemContextPort {
   lookup(sessionId: string): Promise<SessionSystemContext | undefined>;
   /** 事件日志尾水位（`大小:mtime`）；`undefined` = 没有日志文件。 */
   watermark(sessionId: string): Promise<string | undefined>;
+}
+
+/**
+ * 一条工具消息的「模型看到的是什么」投影（additive `sessions.get.session.messages[i].projection`，0.54）。
+ *
+ * 形状与取值域**照抄** `docs/dev/handoff/projection-card-spec.md` §1.7：
+ * `mode` 用 ADR-104 §2.2 冻结的四模式闭集（`ProjectionMode`），不在这里自创枚举；
+ * `placeholder_text` 是 core 渲染好的、**模型真正看到的那一字节**，UI 只展示、禁止自行拼装
+ *（`formatClearedToolResult` 不幂等：对已是占位的正文再跑一遍会把行数算成 `1 lines`）。
+ *
+ * **wire-only 派生**：core 的 `SessionState` 一个字节都不动（本字段只活在出站视图里）。
+ * **sparse**：没被投影的消息**不带**这个键 —— 与今天逐字节相同，老客户端忽略它也照旧工作。
+ */
+export interface ProjectionView {
+  /** 取值域 = ADR-104 §2.2 的闭集（`externalize` 只占位、不可声明）。 */
+  mode: ProjectionMode;
+  /** 与 `messages[i].tool_call_id` 相同，便于批量卡按 id 汇总。 */
+  tool_call_id: string;
+  /** core 渲染好的占位文本（**逐字**：不 trim / 不补空格 / 不重排换行）。 */
+  placeholder_text: string;
+  /** `placeholder_text` 的稳定摘要（sha256 前 16 位，同 `system_context.hash` 口径）：客户端按它去重。 */
+  placeholder_hash: string;
+  /** 原始正文的 UTF-8 字节数；**拿不到就 null**（原文只在事件日志里时未知，不写 0）。 */
+  original_bytes: number | null;
+  /** 原始正文的行数（与 `formatClearedToolResult` 同一个切分口径）；同上，拿不到 null。 */
+  original_lines: number | null;
+  /**
+   * - `inline`：`messages[i].content` 就是原文；
+   * - `inline_truncated`：正文是原文的**前 8 KiB**（`truncated.content` 给裁断事实）；
+   * - `readback`：正文已是占位，原文只剩事件日志（按 `readback` 句柄读）；
+   * - `gone`：不可恢复。
+   */
+  original_available: 'inline' | 'inline_truncated' | 'readback' | 'gone';
+  /**
+   * 需要跨源读取时给句柄，UI 不做推断。
+   *
+   * `since_seq` 就是 `sessions.events` 的同名参数（**排他**游标：`> since_seq` 的事件）；
+   * `0` = 从日志头按 `tool_call_id` 找，**不是**「没有这一段」。
+   * `original_available:'readback'` 只表示「请求可得」，不保证一定读得回来：拿到空结果时
+   * UI 按 `gone` 文案降级（服务端本轮不产出 `gone`）。
+   */
+  readback?:
+    | { kind: 'events'; tool_call_id: string; since_seq: number }
+    | { kind: 'file'; path: string; offset?: number; length?: number }
+    | { kind: 'handle'; handle_id: string };
+  /**
+   * 冻结集合的来源事件 `seq`（审计锚点）。
+   *
+   * **缺省 = 不知道**：`sessions.get` 只读 `SessionState`（不扫事件日志），所以本次没有
+   * 任何 seq 事实可给。这里**不写 0** —— 0 在事件日志里是「第一条事件」，会把「不知道」
+   * 伪装成「从日志起点起就成立」。
+   */
+  since_event_seq?: number;
+  /** ADR-104 D4 的声明 id（`SessionState.context_projection.declaration_id`）；没有声明 = null。 */
+  declaration_id: string | null;
+}
+
+/**
+ * 整会话的投影汇总（additive `sessions.get.session.projection_summary`，0.54）。
+ *
+ * **口径 = 整个会话当前态，不是当前分页窗口**：由同一趟两分支判定在 `all`（切片前）上累加，
+ * 因此包含「正文已是占位、但 id 已不在段级冻结集合里」的历史条目（spec §1.3 陷阱 5）。
+ * 别去扫事件日志凑这个数（那是另一个真相源，会与 `messages` 打架）。
+ */
+export interface ProjectionSummary {
+  /** 被投影的条数（`mode` 之和）。 */
+  total: number;
+  /**
+   * `Σ(original_bytes − placeholder 字节)`：**净值**，可以为负。
+   *
+   * 两个必须说清的边界：
+   * - 只累加「原文体量已知」的条目（`inline` / `inline_truncated`）；`unknown_original_count > 0`
+   *   时它是**下界**（未知不等于 0，不拿占位字节反推原文体量）；
+   * - 不 clamp 到 0：原文比占位还短的小结果确实会让占位变大，按 0 记等于系统性高估。
+   *   展示层若要显示「省了多少」自己 clamp（服务端只给真值）。
+   */
+  bytes_saved: number;
+  /** 每个 mode 各有几条（闭集；没出现的 mode 不登记，不补 0）。 */
+  modes: Partial<Record<ProjectionMode, number>>;
+  /** `original_bytes === null` 的条数（= `bytes_saved` 少算了几条）。 */
+  unknown_original_count: number;
+}
+
+/** 一趟两分支判定的结果：`all` 下标 → 投影（没有 = 没被投影）。 */
+interface ProjectionScan {
+  byIndex: Map<number, ProjectionView>;
+  summary: ProjectionSummary;
+}
+
+/** 出站消息（`capToolMessages` 的裁断事实 + 投影）。两个键都是 wire-only 派生。 */
+export interface ProjectedMessage extends CappedMessage {
+  projection?: ProjectionView;
+}
+
+const utf8 = new TextEncoder();
+
+/** 字符串的 UTF-8 字节数（一次编码，不进入任何派生逻辑）。 */
+function utf8ByteLength(text: string): number {
+  return utf8.encode(text).length;
+}
+
+/**
+ * 一条工具消息的占位文本摘要（sha256 前 16 位）：与 `prompt.system_context.hash`
+ * （`execution-unit.ts:401`）同一个口径，客户端拿到就能按 hash 与实时卡去重。
+ */
+function projectionHash(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 16);
+}
+
+/**
+ * 在**落盘全量 messages（`all`）**上跑两分支判定（spec §1.7 约束 1、2）。
+ *
+ * 必须切片之前跑：`formatClearedToolResult` 要在消息全表里按 `tool_call_id` 找 owning
+ * assistant 编译工具名与首参摘要，窗口把那条 assistant 切掉就会退化成
+ * `[cleared -> exit 2, 4 lines]`（spec §1.4 陷阱 3）—— 在窗口上算是把那个 bug 搬到服务端。
+ *
+ * 两分支的理由（spec §1.3 陷阱 5）：`SessionState.cleared_tool_call_ids` 是**段级**的，
+ * 会被覆盖写 / 归一成 undefined，所以「只看 id 集合」会漏报「正文早已是占位」的历史条目；
+ * 反之「重算占位」不幂等（对占位正文再跑一遍 → `1 lines`）。因此：
+ * - 分支 A（正文已是占位）：**原样搬**，绝不重算，不依赖任何 id 集合（正文自证）；
+ * - 分支 B（正文还是原文 + id 在本段冻结集合里）：用 core 同一个函数现算。
+ */
+function scanProjections(all: readonly Message[], state: SessionState): ProjectionScan {
+  const clearedIds = new Set(state.cleared_tool_call_ids ?? []);
+  const declarationId = state.context_projection?.declaration_id ?? null;
+  const byIndex = new Map<number, ProjectionView>();
+  const summary: ProjectionSummary = {
+    total: 0,
+    bytes_saved: 0,
+    modes: {},
+    unknown_original_count: 0,
+  };
+
+  for (let index = 0; index < all.length; index += 1) {
+    const message = all[index];
+    if (message === undefined || message.role !== 'tool') continue;
+    const toolCallId = message.tool_call_id;
+    if (typeof toolCallId !== 'string' || toolCallId.length === 0) continue;
+    // 旧数据里正文可能缺失/不是字符串：**不当成空串**去投影（那会凭空算出 `1 lines`）。
+    if (typeof message.content !== 'string') continue;
+    const content = message.content;
+
+    let view: ProjectionView;
+    if (isClearedToolResult(content)) {
+      // 分支 A：正文已经是占位 ⇒ 它就是模型现在看到的那一字节。原样搬（逐字），不重算、
+      // 不看 id 集合（段级集合可能已经空了）。原文只剩事件日志 ⇒ `readback`。
+      view = {
+        mode: 'placeholder',
+        tool_call_id: toolCallId,
+        placeholder_text: content,
+        placeholder_hash: projectionHash(content),
+        original_bytes: null,
+        original_lines: null,
+        original_available: 'readback',
+        readback: { kind: 'events', tool_call_id: toolCallId, since_seq: 0 },
+        declaration_id: declarationId,
+      };
+    } else if (clearedIds.has(toolCallId)) {
+      // 分支 B：正文还是原文、id 在本段冻结集合里 ⇒ 用 core 的**同一个**函数现算。
+      // 实参顺序照签名（`messages, toolCallId, originalContent`），原文用落盘完整正文
+      // （不是 8 KiB 裁剪后的）—— 否则行数与 exit code 会算错。
+      const text = formatClearedToolResult(all, toolCallId, content);
+      const originalBytes = utf8ByteLength(content);
+      view = {
+        mode: 'placeholder',
+        tool_call_id: toolCallId,
+        placeholder_text: text,
+        placeholder_hash: projectionHash(text),
+        original_bytes: originalBytes,
+        original_lines: content.split('\n').length,
+        // 与 `capToolMessages` 同一把尺子：严格大于上限才被裁（原文字节数 > 8 KiB）。
+        original_available:
+          originalBytes > TOOL_EVENT_PAYLOAD_LIMIT ? 'inline_truncated' : 'inline',
+        declaration_id: declarationId,
+      };
+    } else {
+      // mode:'passthrough' 的条目**不发 projection**（没被投射 = 与今天逐字节相同）。
+      continue;
+    }
+
+    byIndex.set(index, view);
+    summary.total += 1;
+    summary.modes[view.mode] = (summary.modes[view.mode] ?? 0) + 1;
+    if (view.original_bytes === null) {
+      summary.unknown_original_count += 1;
+    } else {
+      // 净值累加（**不 clamp 到 0**）：原文比占位还短的小结果真的会让占位变大，
+      // 把它按 0 记等于系统性高估节省量。聚合结果可以是负数。
+      summary.bytes_saved += view.original_bytes - utf8ByteLength(view.placeholder_text);
+    }
+  }
+
+  return { byIndex, summary };
+}
+
+/**
+ * 把投影挂到**出站窗口**上（`window[i]` 对应 `all[offset + i]`）。
+ *
+ * 没有一条命中时返回原数组（零分配）—— 与今天逐字节相同。
+ */
+function attachProjections(
+  window: readonly CappedMessage[],
+  scan: ProjectionScan,
+  offset: number,
+): ProjectedMessage[] {
+  if (scan.byIndex.size === 0) return window as ProjectedMessage[];
+  let changed = false;
+  const out: ProjectedMessage[] = window.map((message, index) => {
+    const projection = scan.byIndex.get(offset + index);
+    if (projection === undefined) return message;
+    changed = true;
+    return { ...message, projection };
+  });
+  return changed ? out : (window as ProjectedMessage[]);
 }
 
 /**
@@ -1290,6 +1513,11 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         // `apps/web/src/gateway/types/sessions.ts` 的 `Message` 注释）。
         const bindings = await sessionAgentBindings();
         const owner = bindings.get(state.session_id);
+        // 0.54（additive 投影卡）：两分支判定**在切片之前**对落盘全量 `all` 跑一遍 ——
+        // 窗口切掉 owning assistant 时，`formatClearedToolResult` 会丢掉工具名与首参摘要
+        //（spec §1.4 陷阱 3）。`projection_summary` 也由此累加（整会话口径，不是本窗口）。
+        const projections = scanProjections(all, state);
+        const window = capToolMessages(all.slice(start, end));
         return {
           ...(owner === undefined ? {} : { agent: owner }),
           session: {
@@ -1297,7 +1525,9 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
             ...(contextUsage !== undefined ? { context_usage: contextUsage } : {}),
             ...(systemContext !== undefined ? { system_context: systemContext } : {}),
             ...(eventCursor !== undefined ? { event_cursor: eventCursor } : {}),
-            messages: capToolMessages(all.slice(start, end)),
+            messages: attachProjections(window, projections, start),
+            // sparse：一条都没被投影 ⇒ 不带这个字段（与今天逐字节相同）。
+            ...(projections.summary.total > 0 ? { projection_summary: projections.summary } : {}),
             messages_total: total,
             ...(windowAnchor !== undefined
               ? {

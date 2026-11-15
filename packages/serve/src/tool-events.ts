@@ -60,6 +60,55 @@ export interface CappedValue {
 }
 
 /**
+ * 一个被裁字段的**结构化**裁断事实（0.54 投影卡，additive）。
+ *
+ * 存在的理由：0.52 起「静默截断」只把 `... [truncated]` 拼进字符串，UI 只能靠**找标记**
+ * 猜「这条正文是不是不完整」——猜不到原体量，也无法区分「什么都没裁」。这里把
+ * `capToolPayload` 内部早就算过的数字（`CappedValue.bytes`）**加字段**下发：
+ * 标记串照旧拼（既有 UI 依赖），这里只是把它显式化。
+ *
+ * 语义边界：`bytes` 是**截断前**完整字段的 UTF-8 字节数，不是出站后的字节数；`limit`
+ * 是本次生效的上限（= `TOOL_EVENT_PAYLOAD_LIMIT`）；`marker` 是拼进正文的那串标记，
+ * 逐字（客户端不需要硬编码它就能做去重/剥离）。
+ */
+export interface CappedFieldInfo {
+  /** 完整字段的 UTF-8 字节数（**截断前**）。 */
+  bytes: number;
+  /** 生效上限（UTF-8 字节，= `TOOL_EVENT_PAYLOAD_LIMIT`）。 */
+  limit: number;
+  /** 拼进正文的截断标记（逐字，= `TRUNCATED_MARKER`）。 */
+  marker: string;
+}
+
+/**
+ * 单条消息上的裁断事实（`Message.truncated` 的线上形状，additive 0.54）。
+ *
+ * **sparse**：没被裁的消息不带这个字段（不是 `{content: null}`）；被裁时才出现。
+ */
+export interface MessageTruncation {
+  /** 工具结果正文被裁（`role==='tool'`）。 */
+  content?: CappedFieldInfo;
+  /** assistant 工具入参被裁：`bytes` 取**被裁 call 里的最大原字节数**（不点名是哪一条）。 */
+  arguments?: CappedFieldInfo;
+  /** `arguments` 为多个 call 的合并值时才出现：被裁的 call 数（≥2）。 */
+  arguments_calls?: number;
+}
+
+/** 出站消息（`Message` + 裁断事实）。`truncated` 是 wire-only 派生，core 不认识它。 */
+export interface CappedMessage extends Message {
+  truncated?: MessageTruncation;
+}
+
+/** `CappedValue` → 线上形状（只有被裁时才调用）。 */
+function cappedFieldInfo(capped: CappedValue): CappedFieldInfo {
+  return {
+    bytes: capped.bytes,
+    limit: TOOL_EVENT_PAYLOAD_LIMIT,
+    marker: TRUNCATED_MARKER,
+  };
+}
+
+/**
  * 把单个字段裁剪到 8 KiB。
  * - 字符串：保留前缀 + 截断标记；
  * - 对象/数组：序列化超限时折叠为 `{truncated:true, preview}`；
@@ -127,31 +176,49 @@ export function capToolEvent(event: RunEvent): RunEvent {
 }
 
 /** 单条消息的裁剪（内部）；未超限返回原引用。 */
-function capToolMessage(message: Message): Message {
-  let next: Message | null = null;
+function capToolMessage(message: Message): CappedMessage {
+  let next: CappedMessage | null = null;
+  const truncation: MessageTruncation = {};
 
   // 工具结果消息：content 就是工具输出。
   if (message.role === 'tool' && typeof message.content === 'string') {
     const capped = capToolPayload(message.content);
-    if (capped.truncated) next = { ...message, content: capped.value as string };
+    if (capped.truncated) {
+      next = { ...message, content: capped.value as string };
+      truncation.content = cappedFieldInfo(capped);
+    }
   }
 
   // assistant 的工具入参：与实时 `tool.call.started.arguments` 同一口径。
   const toolCalls = message.tool_calls;
   if (toolCalls !== undefined && toolCalls.length > 0) {
     let changed = false;
-    const cappedCalls = toolCalls.map((call) => {
+    let cappedCalls = 0;
+    let maxBytes = 0;
+    const nextCalls = toolCalls.map((call) => {
       const args = call.function?.arguments;
       if (typeof args !== 'string') return call;
       const capped = capToolPayload(args);
       if (!capped.truncated) return call;
       changed = true;
+      cappedCalls += 1;
+      maxBytes = Math.max(maxBytes, capped.bytes);
       return { ...call, function: { ...call.function, arguments: capped.value as string } };
     });
-    if (changed) next = { ...(next ?? message), tool_calls: cappedCalls };
+    if (changed) {
+      next = { ...(next ?? message), tool_calls: nextCalls };
+      truncation.arguments = {
+        bytes: maxBytes,
+        limit: TOOL_EVENT_PAYLOAD_LIMIT,
+        marker: TRUNCATED_MARKER,
+      };
+      // 多个 call 分批被裁时合并成一个数（不点名），但要说清是几条 —— 否则 UI 会把
+      // 「最大值」读成「这条消息只有一处被裁」。
+      if (cappedCalls > 1) truncation.arguments_calls = cappedCalls;
+    }
   }
 
-  return next ?? message;
+  return next === null ? message : { ...next, truncated: truncation };
 }
 
 /**
@@ -159,17 +226,19 @@ function capToolMessage(message: Message): Message {
  *
  * - 与实时流同源（`capToolPayload` + `... [truncated]` 标记，文案一致）；
  * - **不改存储**：入参通常是刚 parse 出来的 `state.messages`，返回副本；
- * - 未截断的消息保留原引用，全部未截断时返回原数组（零分配）。
+ * - 未截断的消息保留原引用，全部未截断时返回原数组（零分配）；
+ * - 0.54（additive）：被裁的消息同时带结构化 `truncated`（`bytes` / `limit` / `marker`），
+ *   字符串里那串标记**照旧拼**（既有 UI 读它），这里只是把裁断事实显式化。
  *
  * 调用方注意：`sessions.get` 的分页游标用**裁剪前**的 `content.length` 校验历史一致性，
  * 裁剪必须发生在游标计算之后（两边都用原长度才稳定）。
  */
-export function capToolMessages(messages: readonly Message[]): Message[] {
+export function capToolMessages(messages: readonly Message[]): CappedMessage[] {
   let changed = false;
   const out = messages.map((message) => {
     const capped = capToolMessage(message);
     if (capped !== message) changed = true;
     return capped;
   });
-  return changed ? out : (messages as Message[]);
+  return changed ? out : (messages as CappedMessage[]);
 }
