@@ -1424,7 +1424,7 @@ async function main(): Promise<void> {
     { name: '四真齐全', state: c1hState, request: c1hGoodView, want: 'exempt' },
     {
       name: '缺声明',
-      state: { ...c1hState, context_projection: null },
+      state: { ...c1hState, context_projection: undefined },
       request: c1hGoodView,
       want: 'violation',
     },
