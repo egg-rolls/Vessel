@@ -36,7 +36,11 @@ export type RpcErrorCode =
   | 'session_not_found'
   | 'compact_unavailable'
   // 0.52 S1a：node 正在 drain（优雅退出），请求应重试；与 serve 侧同步。
-  | 'gateway_restarting';
+  | 'gateway_restarting'
+  // 0.54 B1：旧格式会话在时间线 epoch 下只读冻结（ADR-105 §7 A8）；与 serve 侧同步。
+  | 'session_frozen_readonly'
+  // 0.54 B1：时间线读端口未注入（装配层缺件），与「会话坏了」区分开（ADR-105 §6）。
+  | 'timeline_unavailable';
 
 /** 成功响应 */
 export interface RpcSuccessResponse {

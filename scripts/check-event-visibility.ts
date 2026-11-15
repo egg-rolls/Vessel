@@ -171,6 +171,9 @@ const EXPECTED_NEWLY_HIDDEN: readonly string[] = [
   // 登记成 `observe`（ADR-105 §11 / plan-054 A-2 的审计事件）就必然落进这张差集。
   // 判据（集合相等 + 双向 + 分档计数）一字未动，只是把新增项补进期望值。
   'timeline.divergence',
+  // 0.54 B1 的**新增类型**（同理）：客户端游标校验上报，登记成 `observe + live`，
+  // 新名字在今天的黑名单里不存在 ⇒ 必然落进这张差集。判据一字未动，只补期望值。
+  'timeline.gap_reported',
 ];
 
 /** 报告 §3.1：这些今天可见、**必须继续可见**（content 类被误藏是本方案最痛的风险）。 */
@@ -565,11 +568,14 @@ function checkShadow(): void {
   //   与 `context.cleared_tool_result` 同档：可见记录是那张 vessel:notice 卡，事件是审计镜像）。）
   // （116 → 117：0.54 A 新增双写抽样审计事件 `timeline.divergence`（observe；ADR-105 §11 /
   //   plan-054 A-2），差异只在 Observe / Runs 看，不进聊天时间线。）
+  // （117 → 118：0.54 B1 新增客户端游标校验上报 `timeline.gap_reported`（observe + live；
+  //   ADR-105 §7 A7 / unacked-queue-closure.md §3）。**事件名用点分**，与 `timeline.divergence`
+  //   同族；ADR 里写的是下划线 `timeline_gap_reported`，以代码为准（ADR §11.1 已记录）。）
   const counts = { content: 0, internal: 0, observe: 0 };
   for (const spec of Object.values(EVENT_TIERS)) counts[spec.tier] += 1;
   const total = counts.content + counts.internal + counts.observe;
-  if (total !== 117) {
-    fail('EVENT_TIERS', `[A4 影子] 表里应有 117 条，实际 ${total} 条`);
+  if (total !== 118) {
+    fail('EVENT_TIERS', `[A4 影子] 表里应有 118 条，实际 ${total} 条`);
   }
   note(
     `[shadow] 影子对拍：今天可见→新表隐藏 ${actual.size} 条（期望 ${expected.size}）；` +
