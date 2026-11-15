@@ -879,11 +879,44 @@ export function buildHistoryIndex(
   const toolByCallId = new Map<string, (typeof historyTools)[number]>();
   const orphanTools: { item: (typeof historyTools)[number]; index: number }[] = [];
   for (const tool of historyTools) {
-    if (tool.callId !== undefined) {
+    if (tool.callId === undefined) continue;
+    callIds.add(tool.callId);
+    // 同一个 id 可能有多条结果（重试 / 补写）：调用侧卡片认**配对的那一条**，其余各自走
+    // 孤立刻片。不判断「谁配对了」就 set，最后一条会覆盖掉配对那条 —— 卡上显示的是
+    // 第二次的输出，而第一次的输出只剩在孤儿卡里，看起来像错位。
+    const existing = toolByCallId.get(tool.callId);
+    if (existing === undefined || (!existing.paired && tool.paired)) {
       toolByCallId.set(tool.callId, tool);
-      callIds.add(tool.callId);
     }
   }
+
+  /**
+   * 窗口内**调用侧**还有几张卡可以代表结果（`call_id` → 剩余次数）。
+   *
+   * 为什么要在消息循环**之前**预扫描：结果消息可能出现在它的 assistant **之前**
+   * （窗口从中间切起 / 乱序重试），循环中途的累积状态会让「这条结果有没有卡」取决于
+   * 遍历顺序 —— 那种漏渲染最难复现。这里只依赖「窗口里 assistant 声明了哪些 id」，
+   * 与顺序无关。
+   *
+   * 为什么是**次数**而不是 `Set`：同一个 `tool_call_id` 可能留下两条结果（重试 / 补写），
+   * 调用侧只有一张卡，第二条结果必须自己出卡，否则就是「一条结果凭空消失」。
+   * 每消费一次减一；减到 0 之后的结果按孤立结果处理（下面会为它产出 `tool:orphan:<i>`）。
+   *
+   * 判定条件与下面产生调用侧卡片的循环**逐条对齐**（system / 隐藏 / 被 agent 卡吸收的来源行
+   * 都不产生调用侧卡片）：否则会出现「次数被消费掉了，但那张卡其实没生成」的空白。
+   */
+  const callSidesByCallId = new Map<string, number>();
+  messages.forEach((message, index) => {
+    const absIndex = messageIndexOffset + index;
+    if (message.role === 'system') return;
+    if (hidden.has(absIndex)) return;
+    if (isSourceMessage(message) && foldedSourceIndexes.has(absIndex)) return;
+    for (const call of message.tool_calls ?? []) {
+      const id = typeof call.id === 'string' && call.id.length > 0 ? call.id : undefined;
+      if (id === undefined) continue;
+      callSidesByCallId.set(id, (callSidesByCallId.get(id) ?? 0) + 1);
+    }
+  });
 
   // ts carry：消息缺 timestamp（旧日志 / 迁移数据里的 assistant 段）时沿用**前一条**
   // （本遍历方向上最近的）已知 ts。不 carry 就会按「缺 ts 排最后」沉到末尾，把一轮对话
@@ -910,14 +943,22 @@ export function buildHistoryIndex(
         typeof message.tool_call_id === 'string' && message.tool_call_id.length > 0
           ? message.tool_call_id
           : undefined;
-      const paired = callId === undefined ? undefined : toolByCallId.get(callId);
       if (callId !== undefined && message.timestamp !== undefined) {
         toolResultTs.set(callId, message.timestamp);
       }
-      if (paired !== undefined) {
-        // 配对成功的 tool 消息由调用侧的 item 代表（下面根据 assistant 的 tool_calls 输出），
-        // 这里只记录，不重复产出。
-        return;
+      // 这条结果是否已被**调用侧卡片**代表（`callSidesByCallId` 里还有余量就消耗一次）。
+      //
+      // 不能再用 `toolByCallId.has(callId)` 判：那个 map 是从 `buildHistoryToolItems` 全量
+      // 建的（连孤立结果自己也在里面），于是「窗口切掉 owning assistant」时每条结果都
+      // 命中、被 `return` 掉，而调用侧卡片只在 `callIdsByIndex`（来自窗口内 assistant 的
+      // `tool_calls`）里生成 ⇒ 那条结果**永远不渲染**。这正是满投影落盘后的窗口形态
+      // （首条就是工具结果），投影 badge / 读回也就无从出现。
+      if (callId !== undefined) {
+        const remaining = callSidesByCallId.get(callId) ?? 0;
+        if (remaining > 0) {
+          callSidesByCallId.set(callId, remaining - 1);
+          return;
+        }
       }
       orphanTools.push({
         item: historyTools.find((tool) => tool.key === `history-tool-${index}`) ?? {
@@ -1080,6 +1121,9 @@ export function buildHistoryIndex(
     items.push({
       kind: 'tool',
       key: `tool:orphan:${absIndex}`,
+      // 孤立卡片也带上自己的 `tool_call_id`：它是这张卡的**身份**（读回 / 诊断 / 去重都按它），
+      // 丢了它就只能靠 key 猜，而 key 里装的是绝对下标（换窗口就变）。
+      ...(item.callId !== undefined ? { callId: item.callId } : {}),
       name: item.name,
       ...(item.output !== undefined ? { output: item.output } : {}),
       status: 'done',

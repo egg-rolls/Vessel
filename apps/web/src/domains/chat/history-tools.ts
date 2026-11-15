@@ -79,7 +79,10 @@ export function buildHistoryToolItems(messages: readonly Message[]): HistoryTool
         : undefined;
     const output = typeof message.content === 'string' ? message.content : '';
     const matched = callId === undefined ? undefined : byCallId.get(callId);
-    if (matched !== undefined) {
+    // 只配对**第一条**：同一个 `tool_call_id` 的第二条结果是重试 / 补写，属于它自己
+    // （下面的孤立分支会为它产出一条 item）。覆盖前一条的 output 会把第一次的结果整段吞掉
+    // ——一次真实输出凭空消失，比重试多一张卡糟得多。
+    if (matched !== undefined && !matched.paired) {
       matched.output = output;
       matched.paired = true;
       // 结果时间 = 这条 tool 消息的时间；与 startedAt 一起推出历史卡片的耗时。

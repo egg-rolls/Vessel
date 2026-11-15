@@ -268,6 +268,40 @@ const FIXTURES: readonly Fixture[] = [
     },
   },
   {
+    name: 'F14b 窗口首条就是被投影的工具结果（owning assistant 在窗口外）→ 卡和投影都在',
+    why:
+      '满投影落盘后这就是**主路径**：窗口从 assistant 中间切起，首条是工具结果。' +
+      '这条卡要是丢，badge 与读回连入口都没有 —— 投影卡等于不存在',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          toolMessage(
+            'call_x',
+            '[cleared bash: x]',
+            projection({
+              tool_call_id: 'call_x',
+              placeholder_text: '[cleared bash: x]',
+              original_available: 'readback',
+              original_bytes: null,
+              readback: { kind: 'events', tool_call_id: 'call_x', since_seq: 0 },
+            }),
+          ),
+          { role: 'user', content: '接着说' },
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      });
+      const orphan = toolCard(items, 'call_x');
+      // 孤立卡片带着自己的投影，且默认落模型视角（原文只在事件日志里）。
+      return (
+        orphan?.projection?.tool_call_id === 'call_x' &&
+        orphan.projection.original_available === 'readback' &&
+        defaultProjectionTab(orphan.projection) === 'model' &&
+        orphan.output === '[cleared bash: x]'
+      );
+    },
+  },
+  {
     name: 'F15 占位条目的 badge 与默认视角（badge 按 mode 出，默认视角按原文在哪）',
     why:
       'badge 决定「用户能不能一眼看出模型看到的不是这份」；默认视角是用户 2026-11-15 拍板的 A：' +
