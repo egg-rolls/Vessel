@@ -151,6 +151,7 @@ P3 / P4 的来源。
   `timeline_head`**，`wal_head` 照常前进，事件照常可读；③ 记
   `timeline.archive_failed{from_seq,to_seq,error}`（走 Notifications，**不写进 timeline 自身**，避免递归）；
   ④ 磁盘满 / IO 错持续 ⇒ 会话标 `tainted`，`sessions.get` 里带上，UI 显示污点条，**不阻断渲染**。
+  （`tainted` 是**派生值**：失败后保留到**成功归档一次**为止，复位口径与 `tainted_cleared` 行见 §11.1。）
 - 反向也写死：归档**只**影响"磁盘占用"与"读放大"，不影响 seq 连续、`wal_head` 推进、UI 渲染、验收等式
   （§7 的右半边就是给这种情形留的）。今天没有这个区分（`run-journal.ts:296-321` 落盘失败只报一次日志 +
   一条 `session.log.failed`，随后当成没事），所以"磁盘缺、环有"是沉默的。
@@ -352,6 +353,25 @@ timeline.idx/type.idx        # type 索引（可重建，§5）
   ⇒ 「任何 `seq > wal_head` 的事件不得出现」今天只在写者内部成立，端到端要等 B 阶段切发布点。
   验收时把它当已生效的运行时事实，会验出**假红**。完整范围见
   [unacked-queue-closure.md](../architecture/unacked-queue-closure.md) §6「生效范围（契约 ≠ 现状）」。
+- **`tainted` 改为派生值 + manifest 新增 `tainted_cleared` 行（2026-11-16，A 阶段后续单）**：
+  旧读法把 `tainted` 定义成「**出现过任何** `kind:'tainted'` 行」，一次瞬时归档失败就永久钉死会话、
+  重启也清不掉（而 `tainted` 是 `sessions.get.event_cursor` 里唯一的健康信号）。现在的口径：
+  - `timeline.manifest` 新增 **additive** 行 `{v:1, kind:'tainted_cleared', reason, from_seq, to_seq, at}`
+    （`packages/core/src/timeline/writer.ts#clearTaintAfterArchive`）；已有行一个字不改；
+  - 会话级 `tainted` = 「`holes.ndjson` 非空」**或**「**物理写入顺序**上最后一条状态声明
+    （`tainted` / `tainted_cleared`）的值」——**last-wins，严禁按 `at` 排序**（时钟回退会把顺序搞反，
+    读侧从后往前扫，`writer.ts#lastTaintedState`）；
+  - 清退时机 = `archiveNow()` **成功推进** `timeline_head` 之后，且**当前无存活洞**；连续多次失败后
+    成功一次**只**追加一条 `tainted_cleared`；行里的 `from_seq/to_seq` 只作**审计**、不参与会话级判定
+    （本版**不做**区间级 `tainted`）；历史 `tainted` 行全部保留；
+  - 门禁：`scripts/check-timeline-tainted.ts`（①–⑧ + 时钟回退补充，共 6 个场景 76 条）。
+- **迁移事实（写死，别当实现细节）**：存量会话没有 trailing `tainted_cleared` 行 ⇒ **升级后第一次
+  健康归档之前仍是 `tainted = true`，不会自动洗白**。这是可接受的保守姿态（安全方向）。旧 reader
+  对未知 `kind` 返回 `undefined` ⇒ 忽略新行并保守判 `true`，既不抛错也不截断文件；装配层
+  `src/timeline-dual-write.ts#readHeadsOnDisk` 就是这种读者（磁盘口径仍是 true，进程内与重启后由
+  写入侧 last-wins 收口）。
+- **`holes` 的退役 / 修复生命周期仍不在本单**：洞只增不减 ⇒ 有过真丢失的会话 `tainted` **恒为 true**、
+  永远不写 `tainted_cleared`（这是保守语义，不是漏洞；`check-timeline-holes` 的基线依赖它）。
 
 ### 12. 关联
 
