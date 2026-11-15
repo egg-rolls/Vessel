@@ -400,6 +400,16 @@ export interface SessionTimelineHeadsPort {
         wal_head: number;
         holes: readonly { from_seq: number; to_seq: number }[];
         tainted: boolean;
+        /**
+         * 0.54 pub-i2：**一定被发布过**的最大 seq（`<= wal_head`）。
+         *
+         * core 的 `heads()` 只报对外四字段，`publishedHead()` 是另一个方法
+         * （`packages/core/src/timeline/writer.ts:381`，注释写明「不属于对外四字段」），
+         * 所以装配层要显式透传。**可选**：没给 = 全部视为已发布（pub-i2 之前的装配语义，
+         * 与 core 自己在 open 时的 `this.published = this.walHead` 同口径，
+         * `writer.ts:486`）。`hello.published_head` 在缺省时按 `wal_head` 兜底。
+         */
+        published_head?: number;
       }
     | undefined
   >;

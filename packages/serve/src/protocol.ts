@@ -163,6 +163,16 @@ export type ServerFrame =
       timeline_head?: number;
       /** `[1..wal_head]` 每条要么可读、要么已被 `holes` 声明。 */
       wal_head?: number;
+      /**
+       * **一定被发布过**的最大 seq（`<= wal_head`）。
+       *
+       * `published_head < wal_head` 时，`(published_head, wal_head]` 是 pub-i2 的崩溃窗口产物：
+       * 磁盘上可读、但**从未被发布**，所以**允许永远不被推送**。客户端据此知道：
+       * - `count` 只覆盖到 `min(end_seq, published_head)`；
+       * - 那一段缺失**不得**报 `timeline_gap_reported`（它不是丢数据，是没承诺过要发）。
+       * 缺省（老服务端）等价于 `= wal_head`：全部视为已发布。
+       */
+      published_head?: number;
       /** 本次区间内**已声明**的洞（归并 / 排序 / 裁进区间）；空数组 = 没有洞。 */
       holes?: { from_seq: number; to_seq: number }[];
       /** 会话级污点（洞存在或最后一次状态声明为 tainted）：标记但不阻断渲染。 */

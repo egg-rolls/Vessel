@@ -120,6 +120,7 @@ export function helloFrame(input: HelloFrameInput): ServerFrame {
           count: timeline.count,
           timeline_head: timeline.timeline_head,
           wal_head: timeline.wal_head,
+          published_head: timeline.published_head,
           holes: timeline.holes,
           tainted: timeline.tainted,
           ...(timeline.reset !== undefined ? { reset: timeline.reset } : {}),

@@ -704,7 +704,10 @@ function timelineSegmentOf(result: unknown): TimelineHelloSegment | undefined {
     typeof segment.end_seq !== 'number' ||
     typeof segment.count !== 'number' ||
     typeof segment.wal_head !== 'number' ||
-    typeof segment.timeline_head !== 'number'
+    typeof segment.timeline_head !== 'number' ||
+    // pub-i2：没有 `published_head` 就不能算「声明完整」——它是「这次会发到哪」的边界，
+    // 缺了它 WS epoch 会退回「全部视为已发布」，在崩溃窗口里就是发多（账对不上）。
+    typeof segment.published_head !== 'number'
   ) {
     return undefined;
   }
@@ -723,6 +726,7 @@ function timelineSegmentOf(result: unknown): TimelineHelloSegment | undefined {
     count: segment.count,
     timeline_head: segment.timeline_head,
     wal_head: segment.wal_head,
+    published_head: segment.published_head,
     holes,
     tainted: segment.tainted === true,
     ...(segment.reset === true ? { reset: true } : {}),
@@ -1562,15 +1566,19 @@ export function startGateway(opts: GatewayOptions): Gateway {
     const sessionId = ws.data.sessionId;
     const port = opts.timelineRead;
     if (sessionId === undefined || port === undefined) return segment.start_seq;
+    // 只发到**有效右端** = `min(end_seq, published_head)`：未发布尾部允许永远不推送
+    // （pub-i2 的崩溃窗口产物），发它会把「UI 见过的集合 = timeline ∖ 未发布尾部」这条
+    // 恒等式打破，也会让客户端手里的 count 账对不上。
+    const effectiveEnd = Math.min(segment.end_seq, segment.published_head);
     const records = await port.readPage(sessionId, {
       afterSeq: segment.start_seq - 1,
-      untilSeq: segment.end_seq,
+      untilSeq: effectiveEnd,
       limit: TIMELINE_PAGE_LIMIT,
     });
     for (const record of selectTimelinePage(
       records,
       segment.start_seq,
-      segment.end_seq,
+      effectiveEnd,
       TIMELINE_PAGE_LIMIT,
     )) {
       if (!sendFrame(ws, timelineEventFrame(record))) break;

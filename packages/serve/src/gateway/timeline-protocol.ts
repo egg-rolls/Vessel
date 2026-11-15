@@ -9,21 +9,29 @@
  *
  * ## `count` 的语义（唯一口径，别再造第二个）
  * `count` = **本 epoch 声明的区间里，服务端会发出的可读事件条数**。
- * 时间线读源上「区间」= `[start_seq, end_seq]`，且时间线订阅按契约不带类型过滤，
- * 于是它与 ADR-105 §6 的公式**逐字相等**：
+ * 时间线读源上「有效区间」= `[start_seq, min(end_seq, published_head)]`，且时间线订阅按契约
+ * 不带类型过滤，于是它与 ADR-105 §6 的公式**逐字相等**：
  *
- *     count = (end_seq - start_seq + 1) - Σ|holes ∩ [start_seq, end_seq]|
+ *     count = (有效右端 - start_seq + 1) - Σ|holes ∩ [start_seq, 有效右端]|
  *
- * 五条边界写死（不是措辞，是判据）：
+ * 六条边界写死（不是措辞，是判据）：
  * - `end_seq` 是**闭区间右端**，取 `wal_head`：`[1..wal_head]` 每条要么可读、要么已被
  *   `holes` 声明（[unacked-queue-closure.md] §1）。**不是**页末、也**不是** `timeline_head`
  *   ——后者只是「已归档到哪」，拿它当右端会把 WAL 段当成缺口。
+ * - `published_head`（pub-i2 的崩溃窗口产物）：**一定被发布过**的最大 seq。`published_head <
+ *   wal_head` 时 `(published_head, wal_head]` 是**允许不被推送**的尾部 —— 客户端不得据它报
+ *   `timeline.gap_reported`，也不许把它算进期望条数。所以 `count` 只算有效右端以内，
+ *   `holes` 也只裁到有效右端以内（尾部既没发、也不该被声明成洞：洞是「可读性」事实，
+ *   未发布是「推送」事实，两种语义绝不混进同一个字段 —— ADR-105 §9 R4）。
+ *   写者侧口径：`published` 只在 fsync 之后推进（`writer.ts:796` / `:807`），open 时折成
+ *   `this.published = this.walHead`（`writer.ts:486`），所以重启后两者必然相等、
+ *   这条声明只在「本次进程里有未发布尾部」时起作用。
  * - `start_seq` = `after_timeline_seq + 1`（排他游标的下一条），**可以**落在洞里；
  *   客户端第一条实收 = 该洞之后第一个非洞 seq（§6 校验 1）。
  * - `count` 是**整段区间**的条数，不是单页条数：分页只决定「这一趟发多少帧」（≤ 500 条 /
- *   ≤ 8 MiB），不改声明。客户端攒到 `end_seq` 再核（§6 校验 3 + 校验 4）。
+ *   ≤ 8 MiB），不改声明。客户端攒到有效右端再核（§6 校验 3 + 校验 4）。
  * - `after_timeline_seq > wal_head` ⇒ `reset: true` 且 `start_seq = 1`（本地游标已越过
- *   服务端事实，只能整段重拉；§6 的两种 reset 之一）。此时 `count` 也按 `[1, wal_head]` 算。
+ *   服务端事实，只能整段重拉；§6 的两种 reset 之一）。此时 `count` 也按 `[1, 有效右端]` 算。
  * - `count` 永不为负：洞可以盖满整段区间（= 0），洞区间互相重叠先**归并**再算，
  *   所以「`holes` 里两条重叠」不会把 `count` 多减一次。
  *
@@ -58,6 +66,16 @@ export interface TimelineHeadsLike {
   wal_head: number;
   holes: readonly TimelineHoleRange[];
   tainted: boolean;
+  /**
+   * **一定被发布过**的最大 seq（pub-i2；`published_head <= wal_head`）。
+   *
+   * 可选是因为 core 的 `heads()` 只报对外四字段（`writer.ts:370-379`），
+   * `publishedHead()` 是**另一个方法**（`writer.ts:381`，注释写明「不属于对外四字段」）；
+   * 装配层要显式透传。**没给时按 `wal_head` 兜底**，这不是「放宽」而是 pub-i2 之前
+   * 装配的既有语义：没有未发布尾部的实现，等价于「全部都已发布」
+   * （core 自己在 open 时也是 `this.published = this.walHead`，`writer.ts:486`）。
+   */
+  published_head?: number;
 }
 
 /** 时间线上的一个事件（线上形状与 `sessions.events` 的事件体同形）。 */
@@ -91,6 +109,8 @@ export interface TimelineHelloSegment {
   count: number;
   timeline_head: number;
   wal_head: number;
+  /** 一定被发布过（`<= wal_head`）；`(published_head, wal_head]` 允许不被推送。 */
+  published_head: number;
   holes: TimelineHoleRange[];
   tainted: boolean;
   reset?: true;
@@ -195,11 +215,15 @@ export function countReadableInRange(
 }
 
 /**
- * 由 `after_timeline_seq` + 两指针算出 `hello` 的时间线段（纯函数，无 IO）。
+ * 由 `after_timeline_seq` + 两指针 + `published_head` 算出 `hello` 的时间线段
+ * （纯函数，无 IO）。
  *
  * `timeline_head` 按不变式取 `min(timeline_head, wal_head)`：归档只可能落后、不可能超前
  * （unacked-queue-closure.md §1），读数越界说明磁盘口径坏了 —— 这里**收紧**它而不是
- * 把矛盾值往线上发。
+ * 把矛盾值往线上发。`published_head` 同样收紧到 `<= wal_head`，并且**只用来界定
+ * 「这一次会发到哪」**：`end_seq` 仍是 `wal_head`（可读性事实），有效右端才是
+ * `min(wal_head, published_head)`（推送事实）。两种事实分两个字段，绝不合并成一个 ——
+ * 洞只描述可读性，未发布尾部不许被写成洞（ADR-105 §9 R4）。
  */
 export function timelineHello(input: {
   afterTimelineSeq: number;
@@ -207,16 +231,24 @@ export function timelineHello(input: {
 }): TimelineHelloSegment {
   const walHead = clampSeq(input.heads.wal_head);
   const timelineHead = Math.min(clampSeq(input.heads.timeline_head), walHead);
+  // 端口没报 published_head ⇒ 全部视为已发布（pub-i2 之前的装配语义，见类型注释）。
+  const publishedHead = Math.min(
+    input.heads.published_head === undefined ? walHead : clampSeq(input.heads.published_head),
+    walHead,
+  );
   const after = clampSeq(input.afterTimelineSeq);
   const reset = after > walHead;
   const start = reset ? 1 : after + 1;
-  const holes = clipHoles(input.heads.holes, start, walHead);
+  // 有效右端 = 这次真的会发的最后一条（未发布尾部不算）。
+  const effectiveEnd = Math.min(walHead, publishedHead);
+  const holes = clipHoles(input.heads.holes, start, effectiveEnd);
   return {
     start_seq: start,
     end_seq: walHead,
-    count: countReadableInRange(start, walHead, holes),
+    count: countReadableInRange(start, effectiveEnd, holes),
     timeline_head: timelineHead,
     wal_head: walHead,
+    published_head: publishedHead,
     holes,
     tainted: input.heads.tainted === true,
     ...(reset ? { reset: true as const } : {}),
