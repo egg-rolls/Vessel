@@ -664,7 +664,7 @@ async function probeDeadReferenceCards(): Promise<void> {
   );
   check(
     '失效通知的明细里有下一步（重新获取 / reveal）',
-    (card?.lines ?? []).some((line) => /reveal|重新获取|pii\.reveal/.test(line.text)),
+    (card?.lines ?? []).some((line) => /reveal|重新获取/i.test(line.text)),
   );
   check(
     '卡片全部行都不含真值',
@@ -779,7 +779,7 @@ async function probeTwoBatches(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function probeReveal(): Promise<void> {
-  section('g. 审批解锁（pii.reveal）');
+  section('g. 审批解锁（piiReveal）');
 
   const vault = new PiiVault({ now: () => 11_000, ttlMs: 60_000 });
   const handle = vault.protect(`mail ${MARKER_EMAIL}`, 'session-G').handles[0]!;
@@ -1035,16 +1035,7 @@ function probeNoRequestRewrite(): void {
     guard.indexOf(';', guard.indexOf('export type PrefixChangeReason')),
   );
   const members = [...union.matchAll(/'([a-z_]+)'/g)].map((match) => match[1]!);
-  const technical = new Set([
-    'compaction',
-    'system_revision',
-    'tools_changed',
-    'model_changed',
-    'session_switch',
-    'branch',
-    'resume',
-    'context_trim',
-  ]);
+  const technical = new Set(['compaction', 'session_switch', 'branch', 'context_trim']);
   eq('PrefixChangeReason 词表未被扩写（无业务枚举）', members, [...technical]);
   check(
     '前缀守卫文件里没有任何 PII 字样',

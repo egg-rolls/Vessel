@@ -10,6 +10,15 @@ import type { PluginHost, PluginInstallScope, ReadSideMasker } from '../types/pl
 import type { ProviderFactory } from '../types/provider.js';
 import type { ToolDefinition } from '../types/tool.js';
 
+/**
+ * Provider 对工具名的硬约束（OpenAI 兼容接口与 Anthropic 都是这个形状）。
+ *
+ * 工具名原样进 `tools[].function.name`；带 `.` 等字符会让**整个请求** 400
+ * （不是调用时才失败）。所以在注册期就拒绝，把问题从「运行时 opaque 400」
+ * 提前成「启动/门禁时的明确错误」，而不是依赖各 Provider 的错误信息。
+ */
+const PROVIDER_SAFE_TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
+
 /** 一次插件安装期间记录的注册条目（0.9）；回滚按身份匹配，不影响既有条目 */
 type PluginRegistration =
   | { kind: 'tool'; name: string; def: ToolDefinition }
@@ -58,6 +67,13 @@ export class MemoryPluginHost implements PluginHost {
    * @throws 如果工具名已存在则抛出错误
    */
   registerTool(def: ToolDefinition): void {
+    if (!PROVIDER_SAFE_TOOL_NAME.test(def.name)) {
+      throw new Error(
+        `Tool name "${def.name}" is not provider-safe: it must match ${PROVIDER_SAFE_TOOL_NAME.source} ` +
+          '(letters, digits, underscore, hyphen; 1-64 chars). OpenAI-compatible APIs and Anthropic ' +
+          'reject other characters in tools[].function.name, which fails the whole request.',
+      );
+    }
     if (this.tools.has(def.name)) {
       throw new Error(`Tool "${def.name}" is already registered`);
     }

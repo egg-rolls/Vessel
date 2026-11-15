@@ -5,7 +5,7 @@
  * - `rules.ts`  —— 规则扫描 / 掩码 / 句柄读取与中和（纯函数，零 IO）
  * - `vault.ts`  —— 内存句柄 broker（单 session + TTL + 容量降级，不落盘真值）
  * - `notice.ts` —— 失效 / 容量两类 env 卡的文案（en / zh-CN，纯函数）
- * - `reveal.ts` —— `pii.reveal` 审批解锁工具（复用现有 ask / permission 链）
+ * - `reveal.ts` —— `piiReveal` 审批解锁工具（复用现有 ask / permission 链）
  *
  * 三处边界（同一个 broker，且受两条产品不变量约束）：
  * 1. **append 侧**（唯一打码点）：`ExecutionUnit.maskForAppend` —— 消息写入上下文那一刻

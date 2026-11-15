@@ -59,6 +59,11 @@ export interface ToolDisplay {
  * 工具的唯一注册入口是 PluginHost（插件在 install 里 registerTool）。
  */
 export interface ToolDefinition {
+  /**
+   * 工具名：原样进 provider 的 `tools[].function.name`，所以必须是
+   * `^[a-zA-Z0-9_-]{1,64}$`（OpenAI 兼容接口与 Anthropic 的共同约束；
+   * 点号等字符会让整个请求 400）。`MemoryPluginHost.registerTool` 在注册期校验。
+   */
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;

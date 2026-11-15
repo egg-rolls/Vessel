@@ -39,8 +39,8 @@ const DEAD_REFERENCES_SUMMARY: Record<PiiNoticeLocale, string> = {
 };
 
 const DEAD_REFERENCES_NEXT_STEP: Record<PiiNoticeLocale, string> = {
-  en: 'Re-fetch the source data for a fresh placeholder, or request pii.reveal (human approval) for the value.',
-  'zh-CN': '请重新获取原始数据拿到新占位符，或用 pii.reveal（需人工审批）申请真值。',
+  en: 'Re-fetch the source data for a fresh placeholder, or request piiReveal (human approval) for the value.',
+  'zh-CN': '请重新获取原始数据拿到新占位符，或用 piiReveal（需人工审批）申请真值。',
 };
 
 const DEAD_REFERENCES_OMITTED: Record<PiiNoticeLocale, (omitted: number) => string> = {
@@ -100,10 +100,10 @@ export const PII_INVALIDATION_NOTICE: Record<PiiNoticeLocale, string> = {
   en:
     'pii: PII handles were invalidated in bulk — the in-memory PII broker restarted, so every ' +
     '«pii:…» placeholder from before this restart is unusable. Re-fetch the source data to obtain new ' +
-    'placeholders; values can only be surfaced through pii.reveal with human approval.',
+    'placeholders; values can only be surfaced through piiReveal with human approval.',
   'zh-CN':
     'pii: PII 句柄已整批失效 —— 内存 broker 重启，重启之前的所有 «pii:…» 占位符都不能再用。' +
-    '请重新获取原始数据以获得新占位符；需要真值时只能走 pii.reveal（需人工审批）。',
+    '请重新获取原始数据以获得新占位符；需要真值时只能走 piiReveal（需人工审批）。',
 };
 
 /**
@@ -116,8 +116,8 @@ export const PII_CAPACITY_NOTICE: Record<PiiNoticeLocale, string> = {
   en:
     'pii: PII handle capacity for this session is exhausted — further hits are masked as ' +
     '«pii:mask:<category>» and cannot be re-referenced by placeholder. Reduce the amount of distinct sensitive ' +
-    'data in play, or ask the user for the specific value via pii.reveal (human approval).',
+    'data in play, or ask the user for the specific value via piiReveal (human approval).',
   'zh-CN':
     'pii: 本 session 的 PII 句柄容量已用尽 —— 之后的命中会直接掩码成 «pii:mask:<类别>»，' +
-    '无法再用占位符引用。请减少同时涉及的敏感数据数量，或用 pii.reveal（需人工审批）向用户申请具体值。',
+    '无法再用占位符引用。请减少同时涉及的敏感数据数量，或用 piiReveal（需人工审批）向用户申请具体值。',
 };

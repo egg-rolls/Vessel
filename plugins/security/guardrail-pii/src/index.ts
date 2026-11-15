@@ -254,7 +254,7 @@ export function createPiiGuardrailPlugin(config?: PIIGuardrailConfig): Plugin {
         host.registerReadSideMasker(createPiiMasker(merged));
       }
       // 0.52 句柄 vault：与 masker 同一个开关（配置关掉就整层直通）。
-      // 句柄是真值的**唯一**内存副本，不落盘；解锁只能走 pii.reveal（人工审批）。
+      // 句柄是真值的**唯一**内存副本，不落盘；解锁只能走 piiReveal（人工审批）。
       const vault = getPiiVault();
       vault.configure({
         enabled: merged.enabled !== false && merged.maskOnRead !== false,

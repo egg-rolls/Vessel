@@ -1204,7 +1204,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         'agent.close',
         // 0.52：PII 真值解锁**永远**要人批。默认放行会让 reveal 因为拿不到审批 id 而永久拒绝，
         // 反而把「用户明确同意」这条路堵死；显式列入强制审批名单后语义才正确。
-        'pii.reveal',
+        // 名字必须是 provider-safe 的驼峰（不能带点号），见 `packages/core/src/pii/reveal.ts`。
+        'piiReveal',
       ]
     ).map(normalizeLegacyAskToolName),
   };
