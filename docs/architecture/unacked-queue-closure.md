@@ -46,7 +46,7 @@ paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.
 | 队列里存什么 | **不需要存** | WAL 自带身份：非 chunk 一行一条 `{v,seq,session_id,run_id,ts,type,data}`（ADR-105 §4），chunk 是块内二进制帧（`blocks.ts`）。`seq` 在入 WAL 那一刻分配（ADR-105 §3 I1） |
 | 谁持有 | **不需要第二个持有者** | 持有者是会话目录：`wal.log` / `wal.blocks` / `wal.manifest` / `timeline.ndjson` / `holes.ndjson`（`packages/core/src/timeline/types.ts:22-42` 的 `TIMELINE_LAYOUT`）。进程内存只留四个数字（`writer.ts:226-229`） |
 | 重启怎么恢复 | **不需要恢复队列** | `open()` 扫段 + 块 + WAL + holes 重建（`writer.ts:384-456`）：`nextSeq = max(knownMax, holes.maxSeq()) + 1`（`:443`）、`walHead = contiguousHead(...)`（`:444`）、`published = walHead`（`:445`）、`timelineHead = min(maxArchived, walHead)`（`:447`）；恢复出的空洞补声明（`:437-440`） |
-| 客户端该不该读 | **不该读，也读不到** | 握手只报 `{start_seq, end_seq, count, timeline_head, wal_head}`（ADR-105 §6），客户端只持一个游标 `client_timeline_seq` |
+| 客户端该不该读 | **不该读，也读不到** | 握手只报 `{start_seq, end_seq, count, timeline_head, wal_head}`（ADR-105 §6 的**契约形态**；今天的 `hello` 还只有 `{from_seq, latest_seq}` —— 见 §6 生效范围），客户端只持一个游标 `client_timeline_seq` |
 
 客户端那条要写死：集合对不上**只有两种解释** —— ① 写者**声明**的 `holes`（坏行 / 坏帧 / 缺失块，登记后永久保留、不自动修；登记路径 `writer.ts:842-869`，append-only 文件 `packages/core/src/timeline/holes.ts:7-13`、落盘名 `holes.ndjson`（`types.ts:36`））；② 客户端自己算错。**没有第三种「还没 ack」。**
 

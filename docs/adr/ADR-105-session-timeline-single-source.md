@@ -334,6 +334,25 @@ timeline.idx/type.idx        # type 索引（可重建，§5）
 | 门禁 | 新增 `check-timeline-write-contract`（I1/I2/I3/I4：静态 + 行为）、`check-timeline-index`、`check-timeline-equality`（A1–A8）、`check-effects-idempotent`、`check-legacy-readonly`、`check-timeline-publish-after-wal` | §5、§7、§8 |
 | 文档 | `docs/architecture/session-replay.md`（重写为单源口径；110 行上限，需同时删旧章）、`docs/architecture/event-log-policy.md`、本 ADR 状态 | 实现轮同步；本轮不动 |
 
+### 11.1 实现漂移更正（2026-11-15 实测，路径/门禁以本节为准）
+
+- **写者真实路径**是 `packages/core/src/timeline/writer.ts`（不是 `session/timeline-writer.ts`），同目录
+  `blocks.ts`（块帧编解码 + `seal()` fsync）/ `holes.ts` / `wal.ts` / `types.ts`（`TIMELINE_LAYOUT` 等常量）/ `index.ts`；
+  `timeline-codec.ts`、`timeline-manifest.ts` 没有单独存在，职责并入上述文件。
+- **洞的落盘位置**：独立 append-only 文件 `holes.ndjson`（`timeline/types.ts:36`、`holes.ts:7-13`），
+  **不是**写进 `timeline.manifest`（§6 的措辞按实现读，两个位置都有效）。
+- **§5 / §7 点名的三个门禁尚未实现**：`check-timeline-equality`、`check-timeline-publish-after-wal`、
+  `check-timeline-write-contract`。现有 timeline 门禁只有 reference / conformance / holes / index / dualwrite / archive / perf。
+  A5 两条的**真实探针**落在 `scripts/check-timeline-holes.ts:85-89`（`published_head` 跨重启不下降）与
+  `scripts/check-timeline-archive.ts:353-358`（重启后 `timeline_head` / `wal_head` 不回退）。
+- **脚本名更正**：`scripts/check-timeline-dualwrite.ts`（不是 `check-timeline-dual-write.ts`）。
+- **I2 端到端尚未生效（最重要）**：写者内部确实是「fsync 之后才发布」，但装配层
+  `src/timeline-dual-write.ts:369-373` **没有给 `TimelineWriter.open` 传 `publish`**，UI 仍由旧链路广播
+  （`packages/core/src/runtime/run-journal.ts:131`、`:334`），而旧链路是「**先发布、后双写 timeline**」（`:335-347`）。
+  ⇒ 「任何 `seq > wal_head` 的事件不得出现」今天只在写者内部成立，端到端要等 B 阶段切发布点。
+  验收时把它当已生效的运行时事实，会验出**假红**。完整范围见
+  [unacked-queue-closure.md](../architecture/unacked-queue-closure.md) §6「生效范围（契约 ≠ 现状）」。
+
 ### 12. 关联
 
 - 判据与三边界（今天的形态）：[session-replay.md](../architecture/session-replay.md) §3
