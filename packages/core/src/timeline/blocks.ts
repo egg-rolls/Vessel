@@ -12,7 +12,8 @@
  * 恢复，因此 manifest 追加失败不阻断正确性（只记一次告警）。
  *
  * 封块四个时机由 `writer.ts` 触发（块满 / 非 chunk 事件前 / 空闲 / 终态与 flush）；
- * 本模块只提供「加帧 / 封块 / 恢复」三件事。
+ * 本模块只提供「加帧 / 封块 / 恢复」三件事，外加「**哪些 chunk 配进块**」的唯一判据
+ * （{@link isTransientChunkEvent}，0.54 chunk-slim）。
  *
  * @module @vessel-agent/core/timeline
  */
@@ -21,6 +22,7 @@ import { type FileHandle, mkdir, open, readFile, unlink } from 'node:fs/promises
 import { join } from 'node:path';
 import {
   BLOCK_MAX_BYTES,
+  isChunkEventType,
   TIMELINE_LAYOUT,
   type TimelineBlockEntry,
   type TimelineRecord,
@@ -39,6 +41,59 @@ import {
   truncateFile,
   withCrc,
 } from './wal.js';
+
+/*
+ * ── 路由政策：哪些 chunk 配进块（0.54 chunk-slim） ─────────────────────────
+ *
+ * 「chunk 家族」不是一个整体。按**有没有持久化价值**，它分两类：
+ *
+ * | 子类型 | 是什么 | 刷新后从哪复原 |
+ * | --- | --- | --- |
+ * | `text_delta` / `reasoning_delta` | 正文 / 思考的正文增量 | 没有别的地方有 ⇒ **必须进块** |
+ * | `tool_call_delta` / `finish` | 工具参数的画图增量 / 本次响应的收口 | `tool.call.started` 的 `arguments` + `tool.call.completed` 的产物 / `llm.response` |
+ *
+ * 后两类是**瞬时 UI 提示**，不是时间线事实（web 侧也早就这么判：`producesTimelineItem()`
+ * 对它们恒 false，连环都不进）。它们原本仍然照写进块，代价是实测 69,159 帧
+ * `tool_call_delta` 只承载 208 KB 参数片段，却因为每帧固定元数据（`v/seq/session_id/
+ * run_id×2/ts/type/crc` + 12 B 帧头）占了 23 MB —— 单会话 83% 的块字节。
+ *
+ * 于是它们**退回「非持久化」那一类**，但**不是**退回老口子（`NON_PERSISTED_EVENT_TYPES`
+ * 那条「一行一条写进 `events.ndjson`」，`subagent.llm.stream.chunk` 曾经就那么漏进去过）：
+ * 它们停留在**实时通道**（hub 环）里，**从不请求 `timeline_seq`**。
+ *
+ * 为什么判据放在这里（而不是 `types.ts`）：`types.ts` 的 `isChunkEventType()` 回答
+ * 「是不是 chunk 家族」（ADR-105 §8.1 规则 ④ 的白名单口径，一条都不能多）；本判据回答
+ * 「这个 chunk 该不该进块」——那是**块格式**自己的政策，判据跟着块走，两件事不混。
+ */
+export const TRANSIENT_CHUNK_SUBTYPES: ReadonlySet<string> = new Set(['tool_call_delta', 'finish']);
+
+/** 取 `llm.stream.chunk` 载荷里的子类型（`data.chunk.type`）；取不到 ⇒ `undefined`。 */
+export function chunkSubtypeOf(event: { type: string; data?: unknown }): string | undefined {
+  const data = event.data;
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return undefined;
+  const chunk = (data as { chunk?: unknown }).chunk;
+  if (typeof chunk !== 'object' || chunk === null || Array.isArray(chunk)) return undefined;
+  const subtype = (chunk as { type?: unknown }).type;
+  return typeof subtype === 'string' ? subtype : undefined;
+}
+
+/**
+ * 这条事件是不是**瞬时 chunk**（`tool_call_delta` / `finish`）：不占 `timeline_seq`、
+ * 不进块、不进 `events.ndjson`，只走实时通道。
+ *
+ * 必须**同时**满足「是 chunk 家族」+「子类型在 {@link TRANSIENT_CHUNK_SUBTYPES} 里」：
+ * 只判子类型的话，将来别的事件类型里出现同名 `chunk.type` 会被误判成 chunk。
+ *
+ * 与 ADR-105 §3 I2 的关系（这是本判据存在的全部理由）：**不落盘 ⇒ 不许取 seq**。
+ * 「照取 seq、只是不写进块」会让 `count` 里凭空多出被发布却不可读的 seq（= 洞），
+ * 所以调用点必须在这条事件**进入 seq 分配之前**分叉（`run-journal.ts#appendFact`
+ * 是第一刀，`writer.ts#validateInput` 是第二道闸门）。
+ */
+export function isTransientChunkEvent(event: { type: string; data?: unknown }): boolean {
+  if (!isChunkEventType(event.type)) return false;
+  const subtype = chunkSubtypeOf(event);
+  return subtype !== undefined && TRANSIENT_CHUNK_SUBTYPES.has(subtype);
+}
 
 export interface ChunkBlockStoreOptions {
   maxBytes?: number;
