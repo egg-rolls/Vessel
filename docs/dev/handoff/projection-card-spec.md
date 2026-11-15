@@ -123,19 +123,55 @@ messages: capToolMessages(all.slice(start, end)),
 
 第二行是硬伤：**任何"再跑一遍"的实现（前端复刻、服务端二次投影、卡重算）都必须先 `isClearedToolResult` 护一道，否则历史会自降级**。`withClearedToolResults`（`context-manager.ts:362-378`）自己**也没有**这道护，它能安全只因调用点保证只对落盘原文跑一次；`projectMessages` 那边有护（`project-messages.ts:242`）。**同一件事两处实现、一处有护一处没有**——这本身就是"多实现必漂"的现成反例。
 
-### 1.5 决定性发现：压缩之后，落盘里可能就是占位（原文不在 messages 里）
+### 1.5 决定性发现：**全量重投影之后**，落盘里就是占位（原文不在 messages 里）
 
-代码链路（每一步都可点开）：
+> **状态（2026-11-15）**：本节已由实测裁决，不再是「张力声明」。尺子与原始输出：
+> `docs/dev/reports/0.54/proj-readback-15.md`（探针 `scripts/probe-proj-readback.ts`，真 `ExecutionUnit` +
+> 真 `FileSessionStore` + 真 `SessionEventLog` + 真 `sessions.get` handler，零产品代码改动）。
 
-1. `execution-unit.ts:3485-3492` 判定 `fullProjectionForReplacement`：尾部事件里出现 `message.compaction` **或 `session.rewound`** ⇒ 为真，并强制读全量日志。
-2. 为真则历史走 `projectMessages(events)` 全投影（`execution-unit.ts:3560` 的增量分支为假 ⇒ 落到 `else`，`:3586`）。
-3. `projectMessages` 把正文换掉：`packages/core/src/session/project-messages.ts:232-245` 对命中的 `tool_call_id` 调 `formatClearedToolResult`（注释 `:232-234`：「先按 cleared_tool_call_ids 把已构建消息里命中的 tool 结果换回确定性占位（与压缩时同一函数）」，`:242` 有 `isClearedToolResult` 护）。
-4. `seedTransientContext` 把 `history.messages` **原样**塞进工作上下文（`execution-unit.ts:1916-1918`）。
-5. `finalizeSessionState` 把 `workingContext.messages` **写回** `SessionState.messages`（`execution-unit.ts:3715`、`:3726`）。
+先划清边界（实测）：
 
-⇒ 下一次 `sessions.get` 拿到的这条工具消息**就是占位文本**，原文只剩事件日志（`tool.call.completed` / `message.appended`）。
+- **压缩当轮（同一进程）正文仍是原文。** 压缩只算「请求里会清哪些」的集合
+  （`context-manager.ts` 的 `plannedClearedToolResults`），**一个字都不改正文**；同一条工具结果在
+  请求视图里是 `[cleared ...]`、在落盘 / `sessions.get` 里是原文。**「落盘即占位」不是压缩的直接后果。**
+- **干净重启也仍是原文。** 会话壳（`SessionState.messages` + `derived_upto_seq`）是最新的时候，
+  恢复走「缓存 + 增量」，尾部没有替换类事件 ⇒ 不投影。
 
-**张力声明（需实测确认，不许当既成事实）**：`scripts/check-append-only-context.ts:590-600` 断言「压缩后窗口（= 落盘 / `sessions.get` 的来源）里的旧工具结果仍是原文 —— 今天还成立，因为 V1 还没修」。按上面 5 步读，只有「缓存命中且 tail 里没有 compaction」的增量路径才成立；一旦走满投影（重启、缓存 miss、压缩后的下一轮）就会写回占位。两者不能同时为真。**建议 implementer 先跑一次复现**（3 步：造一条 cleared 工具结果 → 触发一次压缩 → 重启进程后 `sessions.get` 看正文）。无论测出哪一边，本规格都按**最坏情况**设计：**UI 不得假设 `messages[].content` 是原文。**
+真正把占位写进落盘的是 `loadStoredHistory` 的**满投影**分支，触发条件只有三个（任一）：
+
+1. 启动时尾部（`seq > derived_upto_seq`）有 `message.compaction` —— 压缩事件已落盘、会话壳落后
+   （进程在「压缩后、下一次 `saveSessionState` 前」被杀 / 崩溃 / 断电）；
+2. 启动时尾部有 `session.rewound` —— 撤回 / 分支切换之后的下一次启动或下一轮 run；
+   **这是最常见的一条**（撤回事件必然晚于最近一次保存）；
+3. 缓存不可用：`SessionState.messages` 为空，或 `derived_upto_seq` 不是 number（旧数据 / 缓存被清 / 会话壳丢了但日志还在）。
+
+走满投影时的链路（每一步都可点开）：
+
+1. `projectMessages(events)` 全投影（`execution-unit.ts:4116`）；
+2. 重建到 `message.compaction` 那一刻时，先按 `cleared_tool_call_ids` 把命中的 tool 结果换成
+   `formatClearedToolResult` 的占位（`packages/core/src/session/project-messages.ts:232-245`，`:242` 有 `isClearedToolResult` 护），再按 `kept` 裁尾；
+3. `seedTransientContext` 把 `history.messages` **原样**塞进工作上下文（`execution-unit.ts:3123` 起）；
+4. `finalizeSessionState` / `saveSessionState` 把 `workingContext.messages` **写回** `SessionState.messages`（`execution-unit.ts:4255`、`:4266`）。
+
+⇒ 这一次 load 之后，`sessions.get` 拿到的这条工具消息**就是占位文本**；而且**粘住**：`derived_upto_seq`
+从此覆盖压缩事件，之后每次重启都走增量、增量里就是占位。**原文此后只剩事件日志**
+（`tool.call.completed` / `llm.response`）。实测 `A2b`：占位落地之后再重启，仍然是占位。
+
+**实测旁证（陷阱 5 的量化）**：一次压缩的审计集合 26 条，窗口里真正被换成占位的只有 2 条、
+满投影后落盘里变占位的是 3 条 —— **集合 ≠ 谁被换了**，判定必须看正文（`isClearedToolResult`）。
+
+**对 `scripts/check-append-only-context.ts:590-600` 那条断言（「压缩后落盘旧工具结果仍是原文」）的读法**：
+它今天绿是**对的**，但它只压**活窗口**（`MemoryWorkingContext.compact()` + 读 `context.messages`），
+没有 EU、没有日志、没有重启 ⇒ 它覆盖的是「压缩当轮」这一档，**不覆盖**上面三个满投影入口。
+两种事实同时成立，不矛盾，错在**把范围小的断言当成范围大的断言**（这也是这次张力的另一半来源）。
+
+**无论哪一档，本规格都按最坏情况设计：UI 不得假设 `messages[].content` 是原文；想知道「模型看到的那一字节」，
+只能由服务端投影派生（§1.7 的 `ProjectionView`）。**
+
+**对 §1.7 分支分布的修正**：`original_available:'readback'`（正文已是占位）**不是「少数历史条目」**——
+只要这条会话经历过一次满投影（尤其撤回/分支切换），它就会**持续增长**且**不可逆**
+（原文只留在事件日志里，`messages` 拿不回来）。所以 `unknown_original_count` 会随撤回次数单调上升，
+UI 不能把它当噪声；`gone`（原文连日志都没有）本轮仍不产出。
 
 ### 1.6 三条路对比
 
@@ -478,10 +514,18 @@ ADR-104 要求四真同时成立（`docs/adr/ADR-104-context-projection-policy.m
 
 ### 7.1 实施前置（缺一条就别开工）
 
-- [ ] **实测 §1.5 的张力**：造一条 cleared 工具结果 → 触发一次压缩 → **重启进程**后看 `sessions.get` 该条正文是原文还是 `[cleared `。这决定 `original_available` 的默认分支与 §3.3 的默认 tab。3 步复现，别猜。
-- [ ] **拍板 §1.7 的 wire 字段**（`projection` / `projection_summary`），并确认 `declaration_id` 本轮恒 `null`。
-- [ ] 确认 `capToolMessages` 的 8 KiB 截断怎么在 wire 上表达（当前是静默拼 `... [truncated]`，`original_available:'inline_truncated'` 需要服务端判定后下发）。
+- [x] **实测 §1.5 的张力**（2026-11-15 完成，`f37c6070`）：结论 = 压缩当轮与**干净重启**都是原文；
+  只有**满投影**（尾部有压缩事件 / 尾部有 `session.rewound` / 缓存不可用）才把占位写进落盘，且**粘住**。
+  尺子：`scripts/probe-proj-readback.ts`；报告：`docs/dev/reports/0.54/proj-readback-15.md`。§1.5 已按此重写。
+  ⇒ `original_available` 的默认分支：**按正文自证**（`isClearedToolResult`），不按「有没有压缩过」猜。
+- [x] **拍板 §1.7 的 wire 字段**（2026-11-15 合入 `2d31bacb` + `42ae28ea`）：`projection` / `projection_summary` 按本规格落地；
+  改名两处（`readback.since_seq`、`unknown_original_count`），见 §1.7.1。`declaration_id` 本轮取真实值、没有则 `null`。
+- [x] **8 KiB 截断在 wire 上怎么表达**（同上）：`messages[i].truncated` 结构化下发（`{bytes, limit, marker}`，
+  标记串照旧拼、不删）。**实测补充**：`capToolPayload` 是**保前缀**截断，`[cleared ` 在首部 ⇒ 前缀永不被吃掉，
+  `isClearedToolResult` 裁剪后照样认；但**占位本身超过 8 KiB 时尾部 `]` 与数字会被截掉** ⇒
+  服务端**只许用 `isClearedToolResult` 判身份，禁止从（可能被裁剪的）正文重算行数 / exit code**。
 - [ ] 实现 PR 里同步 `scripts/check-chat-visibility.ts` 的 fixture（本轮禁改 `scripts/**`）。
+- [ ] **拍板 §3.6 的默认 tab**（等用户：A 原文默认 / B 整段折叠 / C 模型视角默认；我建议 A）。
 
 ### 7.2 可判定的验收
 

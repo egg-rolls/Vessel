@@ -77,6 +77,9 @@ coverage/
 coverage.lcov
 test-results/
 reports/
+# 例外：0.54 起的实测报告是仓库资产（§1.5 尺子等），不能被上面这条吞掉
+!docs/dev/reports/
+!docs/dev/reports/**
 *.snap
 
 # ----------------------------------------------------------
