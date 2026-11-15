@@ -24,8 +24,9 @@
  *   订阅通知不再发旧的 `vessel:subscription` 通道名。
  *
  * 用法：bun run scripts/check-append-only-context.ts（退出码 0 = 全过，1 = 有 FAIL）
- *       bun run scripts/check-append-only-context.ts --phase=1（灰度一阶段：`pending()` 的条目
- *       只打印、不拦 CI；今天**只剩 C1h** —— C1g 已按投射模式分档，是硬判据）
+ *       bun run scripts/check-append-only-context.ts --phase=1（历史 CI 命令，仍被接受；
+ *       **已无 PENDING 条目**——最后一个（C1h）在 0.53 收口时改成按豁免事实判定的硬判据，
+ *       所以这两种模式的结论从此必须**相同**）
  */
 
 import { readFile } from 'node:fs/promises';
@@ -33,6 +34,7 @@ import { join } from 'node:path';
 import { ENV_NOTICE_SCOPES } from '../apps/web/src/domains/chat/env-notice';
 import { ENV_INFO_DETAIL_MARK, ENV_INFO_SCOPES } from '../packages/agent/src/env-info-scope';
 import {
+  armProjectionDeclaration,
   createRunJournalFactory,
   declareProjection,
   ExecutionUnit,
@@ -57,17 +59,15 @@ const REPO = join(import.meta.dir, '..');
 
 const failures: string[] = [];
 /**
- * 灰度一阶段（V1 修复单落地之前）要打印但不拦 CI 的行。
+ * 灰度一阶段（V1 修复单落地之前）曾经要打印但不拦 CI 的行。
  *
- * 只给「本次裁定新收紧、而产品侧还没修」的判据用 —— 今天**只剩 C1h**（存档 = 请求投影，
- * 逐字一致）。判据本身不弱化：`--phase=1` 换的只是「现在要不要因此红」，去掉这个 flag
- * 就恢复硬拦。
+ * **0.53 收口时已清空并删除这套机制**：它最后一个条目（C1h「存档 = 请求投影，逐字一致」）
+ * 改成了**按豁免事实判定**的硬判据（见 `judgeRequestProjection`）——「设计行为有声明 + 有
+ * 审计 + 集合逐条相等」是可验证的事实，不需要灰度投放。红就是红。
  *
- * C1g **不在**这里：它的「请求视图改写」按投射模式分档判定（`passthrough` = 0 /
- * `placeholder` = 审计集合 ∩ 落盘工具结果）。ADR-104 已裁定 placeholder 的请求期改写是
- * 设计行为，不是灰度项 —— 把设计行为挂成 PENDING 等于判据范围没划准。
+ * 留 `--phase=1` 的解析只为历史 CI 命令不用改（`bun run gates` 里带的仍是它）；它
+ * 现在不改变任何判定，两种模式必须给出同一个结论。
  */
-const pendings: string[] = [];
 const PHASE_ONE = process.argv.includes('--phase=1');
 /** 通过项只计数（门禁输出要能一眼看出跑了多少项，而不是「没输出 = 通过」）。 */
 let passed = 0;
@@ -81,13 +81,6 @@ function ok(label: string): void {
 
 function fail(where: string, message: string): void {
   failures.push(`${where}: ${message}`);
-}
-
-/** 灰度一阶段：现已收紧、但产品侧还没修的判据（`--phase=1` 降级为 PENDING）。 */
-function pending(where: string, message: string): void {
-  const line = `${where}: ${message}`;
-  if (PHASE_ONE) pendings.push(line);
-  else failures.push(line);
 }
 
 // ───────────────────────── C0 判据 ─────────────────────────
@@ -438,11 +431,11 @@ async function runRealPaths(): Promise<void> {
  * C1g 量的是 `MemoryWorkingContext`（落盘数据就是从它来的），但装配层还有 seed / 投影 /
  * journal 三段。这里用 `RunOptions.messages` 注入 assistant(tool_calls) + tool 结果，让真
  * EU 自己把它们落盘，并给 provider 包一层把每一次请求的消息抓下来 —— 于是能在同一时刻
- * 同时验「请求里是占位 / 落盘里是原文」，那正是这一单要钉住的分界：
+ * 同时验「请求期改写了什么 / 落盘是什么 / 审计怎么记」，那正是这一单元要钉住的分界。
  *
- * ① 落盘（`SessionState.messages`，`sessions.get` 读的就是它）里的旧工具结果是**原文**；
- * ② 同一轮发出去的请求里它们是**占位**（省 token 的效果没丢）；
- * ③ 压缩时审计字段 `cleared_tool_call_ids` 点名了这些工具结果。
+ * 会话创建即写投射声明（0.53 U1 的生产形态）：探针直连 `ExecutionUnit`，不走会话创建
+ * 层，所以这里要自己走同一条登记入口（`armProjectionDeclaration`），否则测到的是
+ * 「旧会话缺省兜底」而不是生产形态 —— 而 C1h 的豁免条件一正是「声明存在」。
  */
 async function runToolHistoryProbe(): Promise<void> {
   const provider = new MemoryLLMProvider();
@@ -471,6 +464,9 @@ async function runToolHistoryProbe(): Promise<void> {
     retry: { maxRetries: 0 },
   });
   const sessionId = 'probe-tools';
+  // 声明走 U1 的真入口（`declareProjection` → `armProjectionDeclaration`），
+  // journal 在写盘前把它合并回 `SessionState.context_projection`。
+  armProjectionDeclaration(sessionId, declareProjection({ mode: 'placeholder' }));
   for (let turn = 0; turn < 10; turn += 1) {
     const callId = `call-${String(turn)}`;
     await eu.run(`turn ${String(turn)}`, sessionId, {
@@ -491,38 +487,12 @@ async function runToolHistoryProbe(): Promise<void> {
     });
   }
 
-  // ①/②：同一时刻对照「请求里」与「落盘里」的同一批工具结果。
-  //    0.52 裁定：占位必须在**写入侧**就落成占位符本身（存档 = 请求投影 = UI）。
-  //    旧版本这两句断言是反的 ——「发出去的请求里必须有占位」+「落盘里不许有占位
-  //    （应当只有请求里是占位）」一起构成了「请求期改写历史」的背书，已删除。
-  //    现在只问一件事：请求有没有改写落盘正文。落盘里是占位是**期望方向**，不再是错。
+  // ①/②：同一时刻对照「请求里」与「落盘里」的同一批工具结果，按**豁免事实**判定
+  //      （见 `judgeRequestProjection`）。0.52 那句「请求期改写一律违规」已被 ADR-104 修正：
+  //      `placeholder` 下请求期改写是设计行为，成立条件是可验证的四份事实，不是灰度投放。
   const lastRequest = requests[requests.length - 1] ?? [];
   const persisted = await store.load(sessionId);
-  const persistedById = new Map<string, string>();
-  for (const message of persisted?.messages ?? []) {
-    if (message.role === 'tool' && typeof message.tool_call_id === 'string') {
-      persistedById.set(message.tool_call_id, message.content);
-    }
-  }
-  const clearedOnDisk = [...persistedById.values()].filter((content) =>
-    content.startsWith('[cleared'),
-  ).length;
-  const rewrittenRequests = lastRequest.filter((message) => {
-    if (message.role !== 'tool') return false;
-    const raw = persistedById.get(message.tool_call_id ?? '');
-    return raw !== undefined && raw !== message.content;
-  });
-  if (rewrittenRequests.length > 0) {
-    pending(
-      'C1h',
-      `请求里有 ${String(rewrittenRequests.length)} 条工具结果与落盘正文不同（V1：占位没落盘、` +
-        `请求期改写；落盘占位只有 ${String(clearedOnDisk)} 条）—— 判据见 check-request-append-only 的 R1/R4`,
-    );
-  } else {
-    ok(
-      `C1h 请求与落盘逐字一致（落盘占位 ${String(clearedOnDisk)} 条、请求共 ${String(requests.length)} 次）`,
-    );
-  }
+  judgeRequestProjection(persisted, lastRequest);
 
   const beforeCompact = store.saves.length;
   const result = await eu.compactContext(sessionId);
@@ -603,6 +573,212 @@ const PROJECTION_BRANCHES = ['placeholder', 'passthrough'] as const;
 
 /** 判据分支 = 已实现的运行期模式。 */
 type ProjectionBranch = (typeof PROJECTION_BRANCHES)[number];
+
+/** 请求期改写在设计上成立的两档（`externalize` 是词表合法但本版本不可用，留位不撒谎）。 */
+const REQUEST_REWRITE_MODES: ReadonlySet<string> = new Set(['placeholder', 'externalize']);
+
+/**
+ * C1h 判据需要的会话事实（`SessionState` 的结构子集：只读判据用得上的那几项）。
+ *
+ * 比 `SessionState` 窄有两个用处：`SessionState` 可以直接传进来（结构子类型），
+ * 而**判据自检**能拿构造出来的纯数据跑 —— 判据必须能被证明「该放行的放行、该拦的拦」，
+ * 否则它随时可能退化成永远返回 OK 的空壳。
+ */
+interface RequestProjectionState {
+  readonly messages?: readonly Message[] | undefined;
+  readonly context_projection?: SessionState['context_projection'];
+  readonly context_projection_audit?: SessionState['context_projection_audit'];
+  readonly cleared_tool_call_ids?: readonly string[] | undefined;
+}
+
+/** C1h 对一个（落盘, 请求）对的结论。`why` 一律带 `mode=` / `audit=` / `request=` 现场。 */
+type RequestProjectionVerdict =
+  /** 请求与落盘逐字一致：判据的常态形态，不需要任何豁免。 */
+  | { readonly kind: 'identical'; readonly why: string }
+  /** 四真同时成立 ⇒ 请求期改写是已声明、已审计、范围恰好的设计行为。 */
+  | { readonly kind: 'exempt'; readonly why: string }
+  /** 改写解释不了（缺声明 / 缺审计 / 越界 / 漏改 / 非占位）⇒ 违规。 */
+  | { readonly kind: 'violation'; readonly why: string };
+
+/**
+ * C1h 的豁免判据（0.53 正式裁定）：请求期改写**按豁免事实判定**（纯函数）。
+ *
+ * 「请求视图里的旧工具结果被换成占位」这件事有两种身份：要么是改写历史（违规），要么是
+ * `placeholder` 投射模式下**声明过、审计过、范围恰好等于审计集合**的设计行为
+ * （ADR-104 §2.3 / §5.1 / §6.2 的 D4 条件）。两者在数据上唯一的区别就是下面这四份事实，
+ * 所以判据只看事实，**不看「现在允许不允许」**——不挂 PENDING、不读全局开关、不认白名单：
+ *
+ * 1. **声明存在**：`SessionState.context_projection.mode ∈ {placeholder, externalize}`。
+ *    声明的是 `passthrough` / `archive_notice` 时，请求视图本来就该与落盘**逐字节相同**
+ *    （前者语义如此；后者 `freezeSegmentClearedToolResults` 把冻结集合钉成空集）——
+ *    出现差异就是 FAIL，而不是「换一档再判」。
+ * 2. **审计行存在**：`SessionState.context_projection_audit`（段起点决策留痕，U2 的写入），
+ *    且它的决策链尾（生效模式）必须就是声明解析出的模式 —— 声明与审计不许各说各话。
+ * 3. **集合逐条相等**：审计点名的集合（`SessionState.cleared_tool_call_ids`，与
+ *    `message.compaction` 的 `cleared_tool_call_ids` 同源、C1g 量的是同一份）∩ 落盘工具
+ *    结果，必须**恰好等于**本次请求实际改写的集合 —— 「不少」= 审计点名的都得换（省 token
+ *    的效果没丢）、「不多」= 集合之外一条都不许动（那是改写历史）。
+ * 4. **每条确实是占位**：每条被改写的都是 `role=tool`、`tool_call_id` 在审计集合内、正文
+ *    `isClearedToolResult` 为真（只允许把工具结果换成本函数产出的占位文本）。
+ *
+ * 任一条不成立 ⇒ **violation**（不是 pending、不是 skip）。四份事实在 `C0b` 自检里逐条
+ * 反证过：少一份就红，所以这条判据的绿不是「没输出所以绿」。
+ */
+function requestProjectionVerdict(
+  state: RequestProjectionState | null,
+  request: readonly Message[],
+): RequestProjectionVerdict {
+  // 落盘的工具结果（`tool_call_id → 正文`）：判据的对照基线。
+  const storedContent = new Map<string, string>();
+  for (const message of state?.messages ?? []) {
+    if (message.role !== 'tool' || typeof message.tool_call_id !== 'string') continue;
+    storedContent.set(message.tool_call_id, message.content);
+  }
+  // 请求期**实际**改写的集合：同一 tool_call_id 在请求里与落盘里正文不同。
+  const rewritten = request.filter((message) => {
+    if (message.role !== 'tool') return false;
+    const raw = storedContent.get(message.tool_call_id ?? '');
+    return raw !== undefined && raw !== message.content;
+  });
+  const rewrittenIds = rewritten.map((message) => message.tool_call_id ?? '<缺 tool_call_id>');
+  const resolution = resolveProjection(state);
+  const auditedIds = [...(state?.cleared_tool_call_ids ?? [])];
+  const clearedOnDisk = [...storedContent.values()].filter((content) =>
+    isClearedToolResult(content),
+  ).length;
+  // 现场三份（红绿都带）：模式怎么解析的、审计点名了什么、请求实际改了什么。
+  const facts =
+    `mode=${resolution.mode}（source=${resolution.source}）` +
+    ` audit=${auditedIds.length > 0 ? auditedIds.join(',') : 'none'}` +
+    ` request=${rewrittenIds.length > 0 ? rewrittenIds.join(',') : 'none'}` +
+    ` disk_cleared=${String(clearedOnDisk)}/${String(storedContent.size)}`;
+
+  if (rewritten.length === 0) return { kind: 'identical', why: facts };
+
+  // ① 声明存在。没有声明 ⇒ 请求期改写失去授权（ADR-104 D4 条件 1）。
+  const declaration = resolution.declaration;
+  if (declaration === null) {
+    return {
+      kind: 'violation',
+      why:
+        `请求里改了 ${String(rewritten.length)} 条工具结果，但会话没有投射声明` +
+        `（ADR-104 D4 条件 1 不成立，不是 PENDING）—— ${facts}`,
+    };
+  }
+  if (resolution.error !== null) {
+    return {
+      kind: 'violation',
+      why: `声明读不出可信模式（${String(resolution.error)}）⇒ 判据不能按兜底值放行 —— ${facts}`,
+    };
+  }
+  if (!REQUEST_REWRITE_MODES.has(resolution.mode)) {
+    return {
+      kind: 'violation',
+      why:
+        `声明的模式 ${resolution.mode} 不该产生请求期改写（它的请求视图必须与落盘逐字节相同）` +
+        `—— ${facts}`,
+    };
+  }
+
+  // ② 审计行存在，且审计里的生效模式就是这个模式。
+  const audit = resolution.audit;
+  if (audit === null) {
+    return {
+      kind: 'violation',
+      why:
+        '会话没有投射审计行（`context_projection_audit`）⇒ 改写事后无从追查' +
+        `（ADR-104 D4 条件 2 不成立）—— ${facts}`,
+    };
+  }
+  const auditedEffective = audit.steps.length > 0 ? audit.steps[audit.steps.length - 1] : null;
+  if (auditedEffective !== resolution.mode) {
+    return {
+      kind: 'violation',
+      why:
+        `声明解析出 ${resolution.mode}，但审计链尾写的生效模式是 ${String(auditedEffective)}` +
+        `（声明与审计各说各话）—— ${facts}`,
+    };
+  }
+
+  // ③ 集合逐条相等：允许被改写的 = 审计点名 ∩ 落盘工具结果（已占位的按幂等守卫排除）。
+  const auditedSet = new Set(auditedIds);
+  if (auditedSet.size === 0) {
+    return {
+      kind: 'violation',
+      why:
+        `请求里改了 ${String(rewritten.length)} 条，但落盘没有审计集合` +
+        `（\`cleared_tool_call_ids\`）—— 改了什么没人点名，事后无从追查 —— ${facts}`,
+    };
+  }
+  const allowed = new Set<string>();
+  for (const [id, content] of storedContent) {
+    if (!auditedSet.has(id)) continue;
+    if (isClearedToolResult(content)) continue;
+    allowed.add(id);
+  }
+  const actual = new Set(rewrittenIds);
+  const extra = rewrittenIds.filter((id) => !allowed.has(id));
+  if (extra.length > 0) {
+    return {
+      kind: 'violation',
+      why:
+        `请求期多改了 ${String(extra.length)} 条（不在「审计集合 ∩ 落盘工具结果」里）：` +
+        `${extra.join('、')} —— 审计解释不了的改写就是改写历史 —— ${facts}`,
+    };
+  }
+  const missing = [...allowed].filter((id) => !actual.has(id));
+  if (missing.length > 0) {
+    return {
+      kind: 'violation',
+      why:
+        `请求期少改了 ${String(missing.length)} 条（审计点名的旧工具结果没换成占位）：` +
+        `${missing.join('、')} —— 省 token 的效果没拿到、审计也名不副实 —— ${facts}`,
+    };
+  }
+
+  // ④ 每条确实是占位（只允许「把审计集合内的工具结果换成本函数产出的占位文本」）。
+  const bad = rewritten.filter(
+    (message) =>
+      !(
+        typeof message.tool_call_id === 'string' &&
+        auditedSet.has(message.tool_call_id) &&
+        isClearedToolResult(message.content)
+      ),
+  );
+  if (bad.length > 0) {
+    return {
+      kind: 'violation',
+      why:
+        `请求期改了 ${String(bad.length)} 条**非**占位替换的消息` +
+        `（只允许把审计集合内的工具结果换成本函数产出的占位文本）—— ${facts}`,
+    };
+  }
+
+  // 四真同时成立 ⇒ 豁免（打印 EXEMPT + 原因，不做成静默绿）。
+  return {
+    kind: 'exempt',
+    why:
+      `请求期改写 ${String(rewritten.length)} 条 = 审计集合 ∩ 落盘工具结果（声明 ` +
+      `${String(declaration.declaration_id)}、审计行 at=${String(audit.at)}；${facts}）`,
+  };
+}
+
+/** C1h 的落地：把纯判据的结论翻成门禁行（EXEMPT 也算 OK，但明写原因）。 */
+function judgeRequestProjection(
+  state: RequestProjectionState | null,
+  request: readonly Message[],
+): void {
+  const verdict = requestProjectionVerdict(state, request);
+  if (verdict.kind === 'violation') {
+    fail('C1h', verdict.why);
+    return;
+  }
+  ok(
+    verdict.kind === 'exempt'
+      ? `C1h EXEMPT ${verdict.why}`
+      : `C1h 请求与落盘逐字一致（${verdict.why}）`,
+  );
+}
 
 /**
  * 旧工具结果的占位替换：**按会话声明的投射模式分档判定**（ADR-104 §6.2 / D4）。
@@ -1205,6 +1381,105 @@ async function main(): Promise<void> {
   }
   ok('C0 判据自检（放行追加/凭据压缩，拦下改写与删除）');
 
+  // C0b：C1h 豁免判据的自检。四真少一条就必须红 —— 否则「按豁免事实判定」随时可能
+  //      退化成「永远 EXEMPT」的空壳，那种绿比红更坏（它给的是虚假的安全感）。
+  const c1hDeclaration = declareProjection({ mode: 'placeholder' });
+  const c1hAudit: NonNullable<SessionState['context_projection_audit']> = {
+    schema_version: 1,
+    declaration: c1hDeclaration,
+    steps: ['placeholder', 'placeholder'],
+    reason: null,
+    requested_mode: null,
+    at: 1,
+  };
+  const c1hDisk: readonly Message[] = [
+    { role: 'system', content: 'sys' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'p', arguments: '{}' } }],
+    },
+    { role: 'tool', content: 'raw output 1', tool_call_id: 'call-1' },
+    { role: 'tool', content: 'raw output 2', tool_call_id: 'call-2' },
+  ];
+  /** 该状态下四真齐全的一份会话事实（各反例从此处改一处得到）。 */
+  const c1hState: RequestProjectionState = {
+    messages: c1hDisk,
+    context_projection: c1hDeclaration,
+    context_projection_audit: c1hAudit,
+    cleared_tool_call_ids: ['call-1'],
+  };
+  const c1hGoodView = withClearedToolResults(c1hDisk, ['call-1']);
+  const c1hOverreachView = withClearedToolResults(c1hDisk, ['call-1', 'call-2']);
+  const c1hMaskedView = c1hDisk.map((message) =>
+    message.tool_call_id === 'call-1' ? { ...message, content: '[masked]' } : message,
+  );
+  const c1hCases: Array<{
+    readonly name: string;
+    readonly state: RequestProjectionState;
+    readonly request: readonly Message[];
+    readonly want: RequestProjectionVerdict['kind'];
+  }> = [
+    { name: '逐字一致', state: c1hState, request: c1hDisk, want: 'identical' },
+    { name: '四真齐全', state: c1hState, request: c1hGoodView, want: 'exempt' },
+    {
+      name: '缺声明',
+      state: { ...c1hState, context_projection: null },
+      request: c1hGoodView,
+      want: 'violation',
+    },
+    {
+      name: '声明 passthrough 却有改写',
+      state: { ...c1hState, context_projection: declareProjection({ mode: 'passthrough' }) },
+      request: c1hGoodView,
+      want: 'violation',
+    },
+    {
+      name: '缺审计行',
+      state: { ...c1hState, context_projection_audit: null },
+      request: c1hGoodView,
+      want: 'violation',
+    },
+    {
+      name: '审计链尾与声明不一致',
+      state: {
+        ...c1hState,
+        context_projection_audit: { ...c1hAudit, steps: ['passthrough', 'passthrough'] },
+      },
+      request: c1hGoodView,
+      want: 'violation',
+    },
+    {
+      name: '缺审计集合',
+      state: { ...c1hState, cleared_tool_call_ids: [] },
+      request: c1hGoodView,
+      want: 'violation',
+    },
+    { name: '越界多改', state: c1hState, request: c1hOverreachView, want: 'violation' },
+    {
+      name: '审计点名但漏改',
+      state: { ...c1hState, cleared_tool_call_ids: ['call-1', 'call-2'] },
+      request: c1hGoodView,
+      want: 'violation',
+    },
+    { name: '改了但不是占位', state: c1hState, request: c1hMaskedView, want: 'violation' },
+  ];
+  for (const testCase of c1hCases) {
+    const verdict = requestProjectionVerdict(testCase.state, testCase.request);
+    if (verdict.kind !== testCase.want) {
+      fail(
+        'C0b',
+        `「${testCase.name}」期望 ${testCase.want}，实际 ${verdict.kind}（${verdict.why}）`,
+      );
+    }
+  }
+  if (failures.every((entry) => !entry.startsWith('C0b'))) {
+    ok(
+      `C0b C1h 判据自检（${String(c1hCases.length)} 例：四真放行，缺声明/错模式/缺审计/` +
+        '越界/漏改/非占位逐条拦下）',
+    );
+  }
+
   await runRealPaths();
   await runStaticChecks();
   await runVocabularyChecks();
@@ -1213,8 +1488,13 @@ async function main(): Promise<void> {
   // 通过时也把「跑了哪些路径」打出来：门禁的结论要能被人复核，尤其这条不变量是
   // 「我实测到了什么」而不是「我读代码觉得没问题」。
   for (const line of paths) console.log(line);
-  // 灰度行永远打印出来（不因为「没红」而隐身）：`--phase=1` 只是不拦 CI。
-  for (const line of pendings) console.log(`PENDING ${line}`);
+  // `--phase=1` 只留兼容：已无 PENDING 条目可降级，所以两种模式必须结论相同。
+  if (PHASE_ONE) {
+    console.log(
+      'NOTE --phase=1：已无 PENDING 条目（C1h 在 0.53 收口改成按豁免事实判定的硬判据）——' +
+        '本模式与默认模式必须给出同一个结论',
+    );
+  }
   if (failures.length === 0) {
     console.log(`OK append-only-context: passed ${String(passed)} / ${String(total)} checks`);
     return;

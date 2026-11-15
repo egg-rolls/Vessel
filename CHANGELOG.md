@@ -9,202 +9,111 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
-## [0.52.0] - unreleased
+## [0.53.0] - 2026-11-13
 
-> 开发线已开启（2026-11-13）。0.51.0 的完整变更见
-> [docs/versions/0.51.0.md](docs/versions/0.51.0.md)。
+> 0.53 收口线（基于 `main @ c698471a`；manifest 根 `package.json` = `0.53.0`）。未 tag、
+> 未 publish（tag 等 1.0.0）。完整记录见 [docs/versions/0.53.0.md](docs/versions/0.53.0.md)，
+> 未尽事项与 0.54 边界见 [docs/dev/handoff/plan-remaining-053.md](docs/dev/handoff/plan-remaining-053.md)。
+> 0.52 开发线（prune / PII 金库 / 启动恢复 / 优雅退出与 handoff 重启 / ask 交互 / 事件可见性
+> 加固等）随本版一并收口，条目仍记在 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)。
 
-### Changed
+### 上下文（投射四模式 / trim 卡 / 幂等守卫 / C1g·C1h 判据）
 
-- **`gateway restart` 改为平台层重启（handoff）**：旧 Gateway 退出时不再终止自己 spawn 的
-  node（与 hub），新 Gateway 按既有 adopt 判据接管，改平台层 / Web / registry 不打断在跑的 run。
-  `gateway stop` 仍真停（连 node/hub）；`stop --keep-nodes` / `restart --no-keep-nodes` 是显式开关。
-  node 自身重启（marker + resume）不在本次范围。
+- **会话级投射声明与四模式（ADR-104）**：词表 `passthrough` / `placeholder` / `externalize` /
+  `archive_notice`；**0.53 默认 `placeholder`**（用户 2026-11-15 裁定，覆盖 ADR 默认表里的
+  passthrough）。声明落 `SessionState.context_projection`（`declaration_id` / `source` / `params` /
+  `declared_at`），**不可变**（同值幂等、异值抛 `projection_mode_immutable`）、子不能放松父；
+  读侧唯一入口 `resolveProjection`（declaration / default / legacy 三态 + 四枚冻结错误码）。
+  门禁 `check:projection-declaration`（103 项）。
+- **运行期接线（U2）**：模式与「清哪些旧工具结果」都在 **run（段）起点冻结一次**
+  （`freezeSegmentProjection` → `windowProjectionMode` + `segmentClearPlans`），请求期只读、
+  段内绝不重算（反事实：改成每请求重算把 +9.85 打成 −72.37）。`passthrough` 与「完全没有
+  投射机制」逐字节相同（不跑 plan、不替换、不发 trim 卡）；未实现档运行期 fail-open 到
+  `passthrough` 并写审计（**两层降级不许混**：声明期降级落 `placeholder`、运行期单 run 降级落
+  `passthrough`）。审计 `context_projection_audit` 只在**决策变更**的段起点写一条，不刷日志。
+- **归档模式（U3）**：`archive_notice` 按同一套保留预算规划，但**只登记、不替换** —— 追加一张
+  归档卡（`tool_call_ids` / `tool_names` / `bytes` / 原文日志 + 读回法），集合只进 `plan_hash` /
+  卡 / 事件，**不进**冻结集合（否则等于伪造「这批被换成占位了」）；`sessions.events` 加可选
+  `tool_call_id` 读回原文。门禁 `check:archive-notice`（45 项，含「模式之间不串味」）。
+- **trim 卡分层 + 同载荷去重**：折叠态标题只说**本轮新增**（`added` / `tool_call_ids`），展开
+  明细才给**会话内累计**（`cleared` / 保留条数）；签名 `(cleared, added, fresh ids)` 全等即
+  不再 append、不重复发事件。门禁 `check:tool-result-clear`（76 项，T7 幂等 / T8 分层）。
+- **占位幂等守卫**：`withClearedToolResults` 遇到正文已是占位就原样透传 ——
+  `formatClearedToolResult` 的行数取自原始结果，把占位喂回去会退化成 `-> 1 lines`，每多投影
+  一次多一层漂移（写入侧落成占位后这条路径每轮都命中，所以是必需条件、不是防御性冗余）。
+- **C1g 按模式分档**：`passthrough` = 请求视图改写必须 0（并用「同场景按 placeholder 会改 N 条」
+  的反事实证明不是真空绿）；`placeholder` = 改写集合**恰好等于**「审计集合 ∩ 落盘工具结果」，
+  且每条 `role=tool` + id 在审计集合内 + 正文 `isClearedToolResult`；声明 / 读侧解析 / 请求期
+  生效三者必须同一个模式（防实现把模式静默保底）。
+- **C1h 正式裁定（本版收口）**：请求期改写从「一律违规 / 灰度 PENDING」改成**按豁免事实判定** ——
+  ① 声明存在（mode ∈ `placeholder|externalize`）② 审计行存在且链尾模式与声明一致
+  ③ 审计集合 ∩ 落盘工具结果**逐条等于**实际改写集合 ④ 每条改写确实是占位。四真同时成立才
+  `EXEMPT` 并打印原因；任一不满足即 **FAIL**（错误行带 `mode=` / `audit=` / `request=`）。
+  `pending()` 灰度机制随之清空并删除，`--phase=1` 与默认模式必须给出同一结论；判据自带
+  `C0b` 自检（10 例反证：缺声明 / 错模式 / 缺审计 / 链尾不一致 / 缺集合 / 越界 / 漏改 / 非占位
+  逐条立项），探针也会真跑一遍（真 EU 改了 8 条 = 审计 8 条）。
 
-## [0.32.0] - 2026-10-31
+### 可观测与回放（磁盘回填两阶段 / 内容 id / 竞态用例 / 阶段一触顶）
 
-> 0.32.0（基于 0.31.0，未发布）：上下文管理系统。完整记录见
-> [`docs/versions/0.32.0.md`](docs/versions/0.32.0.md)。
+- **磁盘回填两阶段**：`sessions.events` + `sessions.get.event_cursor` + 环 1 万 → 5 万后，前端
+  **第一次真读磁盘** —— 刷新/重连时阶段一拉本会话日志（`sessions.events`），阶段二按 `run_id`
+  逐 run 拉 trace-only 类型（`events.list`，最多 `REPLAY_MAX_TRACE_RUNS = 3` 个）。只做阶段一会
+  漏 `context.changed` / `hook.*` / `run.checkpoint` / `runtime.notice`（本机实测 767/847 =
+  90.6% 补不回），所以两条回填缺一不可。
+- **观测面 `EventStore#diskBackfill`**：累计位 attempts / merged / duplicates / alreadyMerged /
+  outOfRange / deferred / evicted / truncated，最近一次快照 stage1Pages / stage1HitCap /
+  stage2RunsRequested / stage2RunsFetched / stage1CapWarned / lastError。**押后（deferred）归
+  实时流、不算丢**，这条语义有断言钉住。
+- **内容 id 带 payload 摘要**：跨源去重键 `stableEventId` 从 `run_id|type|ts` 补 payload 摘要，
+  不再吞「同毫秒不同内容」的事件；段内身份 `(run_id, seq)` 保证跨次回填幂等（`alreadyMerged`）。
+- **阶段一触顶可见**：页数硬上限（`REPLAY_MAX_SESSION_PAGES = 20`）先到时置 `stage1HitCap` +
+  一条 warn + 一次 toast —— 否则「早于最近 3 个 run 的事件这次根本没被请求」会被读成「本来
+  就没问题」。
+- **四组用例**：竞态 / 覆盖 / 押后 / 触顶进 `check-replay-apply`（76 项）、
+  `check-replay-merge`（12 项：覆盖 `[1..366]` 零洞 / 确实调 `sessions.events` / 重叠去重 /
+  fail-open / 阶段一 vs 阶段一+二）；静态链路门 `check-replay-wiring`（F 逐方法接线、F1 禁
+  `apps/web` 碰本地文件系统、F2 禁裸 transport，带 16 例 selftest，已转 PASS）。
 
-### Added
+### 通知与可见性（peer-stop / rotate 重解析 / inbox 卡头 / env-scope 门禁）
 
-- **持久化收件箱**（按 agent_id，上限可配置 `agent.inbox_max_messages`，默认 200）；
-  消息有稳定 id、summary、important。
-- **模型驱动读取**：`inbox` 工具 `list`/`read`，由模型决定取几条、取哪条；未读只发一条 notice。
-- **紧急打断**：`agents.send {interrupt, message_id, important}` 取消当前 run 并优先投递指定消息；
-  只读 `vessel agent inbox` / `agent send --interrupt` CLI。
-- **压缩可恢复**：`message.compaction` 事件落事件日志。
-- **可观测**：TUI/Web 渲染 context 生命周期 notice；`agents.tree` 输出真实 `context_used`。
+- **成员停下真能通知到父会话**：peer 成员兜底走创建者进程内映射，注入落
+  `runtime.notice.injected`（0.53 peer-stop notice）；门禁 `check:peer-notice`（68 条断言）。
+- **投递前重解析父 session**：通知在合并窗口内遇到父 rotate 也能投到**新 body**，不再落到旧
+  epoch（装配层接上重解析口）。
+- **inbox 卡头**：待处理/收件卡补 `env` 卡头（scope 词 + 卡头标签中英两侧），
+  **可见性对等**由新门禁 `check:env-scope-parity`（50 项：生产者的 scope 必须在 Web 词表里，
+  且每个词都解析得出卡头标签）机械判定。
 
-### Changed
+### 工具与配置（piiReveal / 注册期校验 / 旧名换算）
 
-- rotate 顺序固定为 启动嘱托 → 旧队列 → 新队列；写前日志。
-- retire 清理旧 pending notice / 权限 / hook；limit warning 不再双投递。
+- **工具名合法性**：`pii.reveal` → `piiReveal`（点号不是合法工具名，模型侧照抄会调不到），
+  连带修内置工具名与配置键；**注册期 fail-fast 校验**：非法字符 / 与内置重名当场炸，不再留到
+  运行期才发现。
+- **旧名换算表驱动**：老配置与老会话里的 `ask_user` / `pii.reveal` 在读侧统一换算（读侧双认、
+  写侧只发新名），表驱动而非散落 `if`；门禁 `check:tool-name-aliases`（67 项）。
 
-### Fixed
+### 成员与历史（includeReleases / closed_at）
 
-- rotate/busy/重启丢消息、顺序错乱、权限挂死、通知串味、startup 失败静默、Web 水位无 producer。
+- **`agent list includeReleases`**：只读历史视图（默认 20 / 上限 200 / `fields` 裁剪），
+  成员停用后的 `closed_at` / `close_reason` 落盘（停用是终态，`retired` / `stale` 不是）；
+  门禁 `check:member-history`（35 项）。
 
-## [0.31.0] - 2026-10-31
+### 门禁与文档（新增 10 条探针 / ADR-104 / session-length / 投影卡规格）
 
-> 0.31.0（基于 0.30.0，未发布）：Chat 修复、热应用降级与 body 热重载、Web IA 收敛、
-> 限额与阈值调整、rotate 权限确认。完整记录见 [`docs/versions/0.31.0.md`](docs/versions/0.31.0.md)。
-
-### Added
-
-- **Body 热重载**：reload 后在同一具 body 上重做工具/权限快照，session / epoch 不变；
-  active run 延迟到 turn 边界应用。
-- **rotate 权限确认**：模型自换需人类批准，确认卡带上下文比例；拒绝 / 无人类通道
-  fail-closed 为 `rotate_not_needed`；owner / CLI 不变。
-- **Web IA**：成员面板收敛到 agents 域；智能体页改响应式卡片网格，点卡片即打开。
-
-### Changed
-
-- **删除 `limits.toolCallsLimit`（breaking config）**：旧配置可加载但不再生效；
-  循环由 `max_iterations` / `max_runtime_seconds` 兜底。
-- 上下文提示 0.9、自动压缩 0.95，temporary body 同步。
-- 用户面术语 Body / epoch → 会话 / 第 N 次会话；wire 字段不变。
-
-### Fixed
-
-- 热应用不再抛 `tools_hot_apply_unsupported`；`TenantToolHost` 转发 unregister；
-  reload scope 相互隔离。
-- Chat：新会话首发送、Stop 真实 run id、队列占位瞬闪。
-
-## [0.30.0] - 2026-10-31
-
-> 0.30.0（基于 0.29.0，未发布）：Web 产物自愈、Tasks 面退场、诊断页补齐、Web 大文件拆分。
-> 完整记录见 [`docs/versions/0.30.0.md`](docs/versions/0.30.0.md)。未 tag、未 publish。
-
-### Added
-
-- **Web 产物自愈**：gateway 启动发现 `dist` 落后于 `src` 时不阻塞，后台重建；bundle 指纹与
-  `dist/build.json` 的 `builtAt` 比对，已开页面提示刷新；无法判断时保持静默。
-- **诊断页**：补 runtime / MCP / plugins / config sources；`health.get` 透传 `wait_reason`；
-  复用既有 RPC，不新增方法。
-
-### Changed
-
-- **删除 Tasks 面（breaking）**：Web Tasks 页与 `tasks.list` / `tasks.get` RPC、
-  `AgentTaskEntry`、`AgentRegistryEntry.delegate`、`state/tasks` 一并退场。
-- **Web 大文件拆分**：10 个 >500 行逻辑文件按域拆为容器 + hooks/子视图，导入路径与导出面不变；
-  最大逻辑文件降至 550 行（i18n 除外）。
-
-### Fixed
-
-- 已结束 run 的时长不再增长；去掉重复 tenant chip。
-- 未启用的飞书 / MCP 渠道显示为「未启用」，不再画成加载失败。
-- Observe / Runs / Settings / Integrations 切 tab 重置滚动。
-- `hello.features` 只在 default tenant 实际有渠道时含 `feishu`。
-
-## [0.29.0] - 2026-10-30
-
-> 0.29.0（基于 0.28.0，未发布）：prompt cache 的计量、命中率与压缩修复。完整记录见
-> [`docs/versions/0.29.0.md`](docs/versions/0.29.0.md)。未 tag、未 publish。
-
-### Fixed
-
-- **缓存开启后压缩不触发**：Anthropic 的 `input_tokens` 不含缓存读写，压缩判断却拿它
-  当真实上下文规模，于是只剩残差 —— 100k 会话可能只报 5k，偏差正好等于命中量。
-  压缩永不触发，只能靠 provider 400 后的溢出重试，第二次直接抛错。
-
-### Added
-
-- **`prompt_tokens` 语义统一**：所有 provider 统一为「含缓存的全部输入」；Anthropic 由
-  adapter 补上两个缓存字段，OpenAI 只提取 `cached_tokens`，DeepSeek 折叠拆分字段。
-  不报告缓存时字段缺省（`undefined`），不是 0。
-- **缓存计数贯通**：`UsageStats` / 事件 / session / checkpoint / **resume** 都带缓存数。
-- **命中率展示**：`metrics.get` 聚合两个计数；Web Observe 与 TUI `/status` 显示
-  「输入占比」与「前缀健康度」。比率在展示层派生，不进快照。
-
-### Changed
-
-- `inputTokensLimit` 会更早触发（限额吃含缓存的 `prompt_tokens`）—— 语义统一的必然结果。
-- 跨版本 resume 按新口径整体读入历史 `prompt_tokens`，长跑 run 可能一跳顶到限额。
-
-### Not building
-
-- 不做计费 / 价格表（ADR-005）。`totalCostLimit` 保持恒 0，是设计选择不是缺陷。
-- 不建模最小可缓存阈值；不做 warmup 单列（聚合量上不可还原）。
-
-## [0.28.0] - 2026-10-29
-
-> 0.28.0（基于 0.27.0，未发布）：Team 即工作区，会话即临时 agent。完整记录见
-> [`docs/versions/0.28.0.md`](docs/versions/0.28.0.md)。未 tag、未 publish。
-
-### Removed
-
-- **`single` role**：`AgentRole` 收敛为 `member | temporary`，`main` 是普通成员。
-  存量快照读取时降级为 `member`。
-- **一 agent 多 body**：一个 agent 恰好一具 live body（`body_id ≡ session_id`），
-  rotate 窗口内允许两具。快照格式不变，存量多 body 取 primary、其余进 `body_history`。
-- **`maxLiveBodies` / `bodyIdleTtlHours`**：换成 agent 级 `agent.temporaryTtlHours`（默认 2h）。
-
-### Added
-
-- **Team 即工作区**：打开目录即得到对应 Team；撞 slug 加后缀且绝不合并；
-  headless 同一 data root 至多一个合成 Team。
-- **会话即 agent**：Web / TUI 新会话建临时 agent，三入口同走 `runs.start → admit`。
-- **临时 agent 回收与复活**：到期从 roster 移除但保留 body 记录，复活可接回原会话。
-- **role 感知上下文策略**：临时 agent 不自动压缩、到线只提示；策略可在活体上热切换。
-
-### Fixed
-
-- `waitForConnectedRun` 事件兜底从不启用（本地 member run 无 durable checkpoint），
-  并修掉同 prompt 并发时误收他人终态。
-- 本地 REPL 绕过准入，会话不属于任何 agent —— 改走 `admit`。
-- 飞书渠道在真实装配下起不来（`AgentService` 早于 wiring 构造）、成员名含冒号非法、
-  TTL 回收后不能复活。
-- `slugifyWorkspace` 缺 `realpath` 与 NFC 归一。
-
-## [0.27.0] - 2026-10-28
-
-> 0.27.0（基于 0.26.2，未发布）：架构级重写——把三套并行执行事实收敛成一套统一
-> agent/body 模型，并删除全部自动化测试。完整记录见
-> [`docs/versions/0.27.0.md`](docs/versions/0.27.0.md)。未 tag、未 publish。
-
-### Removed
-
-- **三套并行执行事实**：`RunEngine`（serve run 账本）、`RuntimeHost` /
-  `InProcessRuntimeHost`（core 执行壳）、owner/member 执行二分
-  （`agent-owner-injection.ts` / `owner-runtime-facade.ts` / `runtime-factory.ts`）。
-  同一件事不再有三套入口、串行语义与生命周期事件。
-- **`agent.turn.*` / `agent.reply.posted` 事件**：`run.*` 是唯一执行生命周期。
-- **全部自动化测试**：483 个文件 / 96,662 行，连同 17 个 `package.json` 的 `bun test`
-  脚本与 CI 11 处调用。门禁改为 `typecheck` + `biome ci` + `scripts/check-*.ts` 静态断言，
-  运行时正确性靠一条端到端烟测。
-- **Team `default_principal` / `handoff_path` 字段**：改结构化 policy 控件。
-
-### Added
-
-- **统一 agent/body 模型**（ADR-097）：所有 agent（含 `main`）只经
-  `AgentService.admit` 准入；`body_id ≡ session_id`，一个 agent 可多 body
-  （≤ 20 live / 空闲 TTL 24h），同 body 串行、跨 body 并发；每 body 独立
-  runtime / context / 历史 / runStore。
-- **按段数寻址**：1 段本机 agent / 2 段本机 Team / 3 段跨节点；来源行是可回信的
-  `<from location="principal@node:team" />`。
-- **保留 principal 词典**：`human` / `system` 不能当成员名或 id。
-- **Web Tailwind L1/L2/L3 分层** + L2 `components/ui` + zustand domain stores。
-- **确定性 `docs-find` + `check-docs` 结构门禁**。
-
-## [0.26.2] - 2026-10-24
-
-> 0.26.2（基于 0.26.1，未发布）：补齐 Web 样式缺口。未 tag、未 publish。
-
-### Fixed
-
-- **`<select>` 原生浮层**：`option` 使用 `--surface-raised` / `--ink` 配色，
-  暗色主题下下拉列表不再回到系统默认样式。
-- **无 CSS 的 className**：审计出 25 个 TSX 使用但 CSS 未定义的类；
-  补齐真实缺口（`ask-answer-required`、`attention-cell`、`attention-kind`、
-  `diag-errors`、`display-setting-row`），删除 3 个已由 `ModalShell size` 取代的
-  弹窗宽度类，其余 17 个确认为语义钩子并保留。
-- **旧 token 失效**：`team.css` / `attention.css` 仍引用已删除的
-  `--surface-2` / `--surface-3` / `--text` / `--text-list` / `--radius` /
-  `--shadow` / `--accent-line`，浏览器会丢弃这些声明；统一替换为现行 tokens
-  （`--hover-tint` / `--surface-sunken` / `--text-sm` / `--radius-md` /
-  `--elev-2` / `--line-strong` / `--ink`）。
-
-### Not building
-
-- 不做视觉重设计；不改组件结构。
+- **新增 10 条探针**（全部并入 `bun run gates`）：`check:projection-declaration`（103）、
+  `check:projection-modes`（52）、`check:archive-notice`（45）、`check:replay-merge`（12）、
+  `check:replay-apply`（76）、`check:replay-wiring`（A1 + 16 例 selftest）、
+  `check:session-events`（40）、`check:peer-notice`（68）、`check:env-scope-parity`（50）、
+  `check:member-history`（35）、`check:tool-name-aliases`（67）；另有同期并入的
+  `check:tool-result-clear`（76，T7 幂等 / T8 trim 分层）。**探针不自证**：多条带反事实断言
+  （passthrough 的反事实改写数、C1h 的 C0b 10 例），不许出现「没输出所以绿」。
+- **ADR-104 会话级上下文投射**：四模式词表 / 两层降级 / 单调收紧 / 可混用 / 按 **run** 粒度
+  决策（两次粒度纠正进了 ADR 正文与 §8 声明来源与入口）。
+- **`docs/architecture/session-length.md`**：会话长度四套机制与体积阈值归属 —— 会话层只做观测
+  兜底、工具层做预防（体积阈值判据 `shouldCompactForToolResultVolume` 只对 `placeholder` 生效，
+  `passthrough` 下压力可观测但不驱动压缩）。
+- **`docs/dev/handoff/projection-card-spec.md`**：投影卡规格（服务端一次渲染 + 双层视图
+  「模型视角 / 原文视角」，含一节明确结论：**卡不能充当 C1h 的豁免凭据**）。
+- **本版留下的调研与实测**（`docs/dev/handoff/`）：placeholder vs passthrough 成本账
+  （645 段净赚 36:1、临界折扣 2.68%、冻结不变式值 +82.2）、chunk 丢失量化（653 run：磁盘
+  1.45 MB = 流式正文 100.0%）、replay gap 简报与取证、投影真值探针、工具名合法性清单。
