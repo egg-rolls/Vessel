@@ -102,6 +102,20 @@ export interface TimelineReadPort {
   ): Promise<readonly TimelineWireEvent[]>;
 }
 
+/**
+ * 实时尾随端口（装配层注入：`timelineTailPort(dualWrite)`）。
+ *
+ * 语义（`pub-i2` 实测口径，serve 侧只负责后半段）：
+ * - 回调在写者 **fsync 之后**逐条触发，`seq` 就是会话内 `timeline_seq`，严格递增；
+ * - 扇出是**进程/租户级**的（一条发布可能属于任何会话），所以 `session_id` 随事件给出，
+ *   serve 必须按连接的 `session_id` 过滤 —— 端口不做游标过滤（那只有连接自己知道）；
+ * - 端口**不重发历史页**：历史由 `TimelineReadPort` 给，尾随只负责「这条以后」。
+ * - 返回退订函数；`startGateway` 在 `stop()` 里调用它。
+ */
+export type TimelineTailPort = (
+  listener: (event: TimelineWireEvent & { session_id: string }) => void,
+) => () => void;
+
 /** `hello` 的时间线段（全字段都是 additive）。 */
 export interface TimelineHelloSegment {
   start_seq: number;
