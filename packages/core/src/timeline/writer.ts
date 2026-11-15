@@ -15,16 +15,22 @@
  * - **chunk 块写失败** ⇒ 删除本次新建的半块 → 整个块区间登记成洞；
  * - **撕裂尾帧**（半写、从未发布）在 `open()` 时截断并允许重新分配 seq。
  *
- * 污点（`tainted`）是**派生值，不是历史累加**：会话级 `tainted` = 「当前还有洞」或
+ * 污点（`tainted`）是**派生值，不是历史累加**：会话级 `tainted` = 「当前还有**未退役**的洞」或
  * 「manifest 里物理顺序上最后一条状态声明是 `tainted`」。归档成功推进 `timeline_head`
- * 且当前无洞时追加一条 `tainted_cleared` 把它撤掉（`clearTaintAfterArchive()`）；
+ * 且当前无存活洞时追加一条 `tainted_cleared` 把它撤掉（`clearTaint()`）；
  * 历史 `tainted` 行一条都不删（审计）。三种表达分工固定：
  *
  * | 概念 | 载体 | 语义 |
  * | --- | --- | --- |
- * | 永久损坏区间 | `holes.ndjson` | 事实，不退役（清理属 0.55+） |
+ * | 损坏区间 | `holes.ndjson` | 事实；登记只增，**退役**必须自证（`retireHoles()`） |
  * | `tainted` | 本模块的派生值 | 会话级**当前**健康位（UI / 运维消费的就是它） |
  * | 曾经发生什么 | `timeline.manifest` 的 `tainted` / `tainted_cleared` 行 | 审计历史，全保留 |
+ *
+ * **洞的退役（第二刀）**：`holes` 过去只增不减 ⇒ 一个洞被修好之后 `tainted` 永远回不到
+ * false（与 `tainted` 粘性 bug 同构）。现在 `retireHoles()` 可以**显式**把一个已登记区间
+ * 退役：它先对该区间做**区间重读自证**（每个 seq 必须逐条 CRC 通过），通过才追加
+ * `hole_retired`；随后若无存活洞就顺带写 `tainted_cleared`。**没有任何自动退役**：
+ * `open()` 不做全量重读、不写退役行（否则启动变慢且掩盖坏块）。
  *
  * **迁移事实（写死，别当实现细节）**：存量老会话没有 trailing `tainted_cleared` 行 ⇒
  * 升级后**第一次健康归档之前仍是 `tainted = true`**，不会自动洗白。这是可接受的保守姿态
@@ -45,7 +51,7 @@ import { dirname, join } from 'node:path';
 import { atomicWrite } from '../session/atomic-write.js';
 import { type ChunkBlockSeal, ChunkBlockStore } from './blocks.js';
 import { assertTimelineWritable } from './freeze.js';
-import { HoleRegistry } from './holes.js';
+import { HoleRegistry, type HoleRetirementResult } from './holes.js';
 import { buildIndex, TimelineIndexBuilder, writeIndexSnapshot } from './index.js';
 import {
   BLOCK_MAX_BYTES,
@@ -366,8 +372,11 @@ export class TimelineWriter {
   /**
    * 对外可上报的四字段（ADR-105 §3 I4；字段名固定）。
    *
-   * `tainted` 是**派生值**：`holes` 非空恒 true（洞只属于真丢失，且本版不退役洞），
-   * 否则取「最后一次归档后的状态声明」——这样它才不会因为一次瞬时归档失败永久为真。
+   * `tainted` 是**派生值**：「还有**未退役**的洞」恒 true，否则取「物理顺序上最后一条状态
+   * 声明」——这样它才不会因为一次瞬时失败（或一个已修好的洞）永久为真。
+   *
+   * `holes` 报的是**存活**洞（`HoleRegistry.list()` 已剔掉退役区间）：客户端拿它算
+   * 「可读条数」时不能减掉已退役的区间 —— 那些 seq 现在真的可读了。
    */
   heads(): TimelineHeads {
     return {
@@ -408,6 +417,55 @@ export class TimelineWriter {
     const records = await readTimelineEvents(this.sessionDir);
     const snapshot = buildIndex(records, this.holes.list());
     await writeIndexSnapshot(this.sessionDir, snapshot);
+  }
+
+  /**
+   * **显式**退役一段已登记的洞（第二刀；`hole_retired` 声明 + last-wins）。
+   *
+   * 触发方式只有这一个 API：没有显式的 `retireHoles()` 调用就不会有任何退役，`open()` 也不会
+   * 「顺手腾一下」（运维命令/CLI 接线在装配层 `src/**`，不在本切片范围）。为什么**默认不做
+   * 自动退役**：自动判定需要全量重读（启动变慢），而且判错方向是把坏块洗白 —— 那是不可逆的
+   * 静默错误，必须由人显式发起。
+   *
+   * 退役**前提 = 区间重读自证**（`HoleRegistry.retire` → `verifyHoleIntervalReadable`）：
+   * `[from_seq,to_seq]` 里每个 seq 都必须能读出一条 CRC 通过的记录。任何一条缺/坏 ⇒
+   * 返回 `ok:false` 且一个字节都不写（`reason` 里带缺哪些 seq）。
+   *
+   * 成功后的连带动作：
+   * - `wal_head` 只可能**前进**（该区间现在真的可读；`published` 一个字节都不动 ——
+   *   退役不是「发布」，把没发过的东西算成已发布就是撒谎）。注意这里的收紧只基于**索引
+   *   已经见过的** seq（打开不重读，见上）：区间右端若当初没进索引，`wal_head` 会**少报**
+   *   而不是多报 —— 下一次 `open()` 读到那些记录后自然补齐；
+   * - 若无别的存活洞且当前是污点 ⇒ 追加一条 `tainted_cleared`（与健康归档同一个函数，
+   *   `clearTaint()`），历史行一条不改。
+   */
+  retireHoles(input: {
+    from_seq: number;
+    to_seq: number;
+    reason: string;
+  }): Promise<HoleRetirementResult> {
+    return this.enqueue(() => this.retireHolesNow(input));
+  }
+
+  private async retireHolesNow(input: {
+    from_seq: number;
+    to_seq: number;
+    reason: string;
+  }): Promise<HoleRetirementResult> {
+    if (this.closed) {
+      throw new TimelineError('timeline_writer_closed', 'retireHoles() after close()');
+    }
+    const outcome = await this.holes.retire(input.from_seq, input.to_seq, input.reason);
+    if (!outcome.ok) return outcome;
+    // 区间逐条可读 ⇒ 可读性右端可能前进（只增不减；`published` 不动）。
+    this.walHead = Math.max(
+      this.walHead,
+      contiguousHead(this.indexBuilder.seqs(), this.holes.list()),
+    );
+    await this.clearTaint('holes_retired', input.from_seq, input.to_seq);
+    this.indexDirty = true;
+    await this.persistIndex();
+    return outcome;
   }
 
   // ---------------------------------------------------------------- queue
@@ -491,6 +549,9 @@ export class TimelineWriter {
     this.published = this.walHead;
     const maxArchived = Math.max(manifest.archivedTo, maxRecordSeq(timelineRead.records));
     this.timelineHead = Math.min(maxArchived, this.walHead);
+    // 两个来源，任一为真即污点：盘上还有**未退役**的洞（真丢失），或 manifest 的
+    // last-wins 状态是 `tainted`。`holes.list()` 已是存活口径，退役区间不再压制污点。
+    // 打开时**不重读区间**：退役声明只在自证通过后才被写出（`retireHoles()`）。
     this.taintedFlag = this.holes.list().length > 0 || manifest.tainted;
 
     const info = await stat(this.walPath).catch(() => undefined);
@@ -996,7 +1057,7 @@ export class TimelineWriter {
     if (advanced) {
       // 归档已经提交（段 + archive 行都落盘），先撤销污点再返回成功：
       // 清退行写不进去不影响「空间已回收」这个事实（best-effort，见方法注释）。
-      await this.clearTaintAfterArchive(from, to);
+      await this.clearTaint('archive_recovered', from, to);
       return { ok: true, from_seq: from, to_seq: to };
     }
 
@@ -1019,29 +1080,33 @@ export class TimelineWriter {
   }
 
   /**
-   * 健康归档之后撤销会话级污点（ADR-105 §3 I3 ④）：追加一条 `tainted_cleared`。
+   * 撤销会话级污点（ADR-105 §3 I3 ④）：追加一条 `tainted_cleared`。
+   *
+   * 两个调用点，各自的**外部前提**由调用者保证「状态确实变好了」：
+   * - 健康归档之后（`archiveNow()` 用 `advanced` 保证：`from > to` 的空归档不算清退，
+   *   否则一次没有任何归档动作的调用就能把污点洗掉）；
+   * - 洞退役自证通过之后（`retireHolesNow()`；退役行已经 fsync 落盘）。
    *
    * 三个前提缺一不可：
-   * ① 本次归档**真的推进了** `timeline_head`（调用点用 `advanced` 保证；`from > to` 的空归档
-   *    不算「清退」，否则一次没有任何归档动作的调用就能把污点洗掉）；
-   * ② 当前**没有存活洞**（洞 = 真丢失，`heads()` 里 `holes` 非空恒 tainted；本版不退役洞，
-   *    所以有洞的会话永远不写 cleared —— 保守方向，不掩盖真丢失）；
+   * ① 调用点保证状态真的变好（见上）；
+   * ② 当前**没有存活洞**（洞 = 真丢失；有洞的会话永远不写 cleared —— 保守方向，
+   *    也不许「清一个洞就把所有污点洗掉」）；
    * ③ 当前**确实是 tainted**（否则每次健康归档都会多算一行噪声，且「连续多次失败后成功一次
    *    只追加一条 cleared」会被打破）。
    *
    * 历史行一条都不改：失败时写下的 `tainted` 行继续留着当审计，`tainted_cleared` 只是
    * 「物理顺序上的最后一条状态声明」，靠 last-wins 生效。
    *
-   * 写失败 ⇒ 保持污点、下次健康归档再试（不把「空间已回收」改判成「归档失败」）。
+   * 写失败 ⇒ 保持污点、下次再试（不把「空间已回收 / 洞已退役」改判成失败）。
    */
-  private async clearTaintAfterArchive(fromSeq: number, toSeq: number): Promise<void> {
+  private async clearTaint(reason: string, fromSeq: number, toSeq: number): Promise<void> {
     if (!this.taintedFlag) return;
     if (this.holes.list().length > 0) return;
     try {
       await this.appendManifest({
         v: 1,
         kind: 'tainted_cleared',
-        reason: 'archive_recovered',
+        reason,
         from_seq: fromSeq,
         to_seq: toSeq,
         at: this.now(),

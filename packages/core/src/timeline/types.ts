@@ -123,6 +123,50 @@ export interface TimelineHole {
   at: number;
 }
 
+/**
+ * `holes.ndjson` 的**声明种类**（additive；ADR-105 §3 I3 补充条款 + §11.1）。
+ *
+ * - `'hole'`：登记一个不可读区间。**历史行没有 `kind` 字段**（等价于 `'hole'`），
+ *   新登记行也**不加** `kind` —— 已有行一个字都不许改，新旧行必须逐字节同形；
+ * - `'hole_retired'`：退役声明。**只有「区间重读逐条 CRC 通过」之后才允许追加**
+ *   （`holes.ts#HoleRegistry.retire` 是唯一写点），所以「读到 retired」本身就等于
+ *   「这段数据在某次显式命令里被逐条自证过」。
+ *
+ * 两种声明都是**追加**，都不回改历史行：某区间的当前状态 = **物理行序上最后一条**
+ * 覆盖该区间的声明（last-wins，见 `holes.ts#HoleRegistry.declarations`）。
+ */
+export type TimelineHoleDeclarationKind = 'hole' | 'hole_retired';
+
+/** 登记行（历史形状：`{v,from_seq,to_seq,reason,at,crc}`，`kind` 缺省）。 */
+export interface TimelineHoleRegisteredLine {
+  v: 1;
+  kind?: 'hole';
+  from_seq: number;
+  to_seq: number;
+  reason: string;
+  at: number;
+}
+
+/**
+ * 退役行（`kind:'hole_retired'`，additive）。
+ *
+ * `evidence` 是**自证摘要**（区间重读的条数与来源，`reread_ok:...`），不是自由文本：
+ * 它让「凭什么退役」跟着声明一起落盘，事后不用去猜。`at` 只作审计，
+ * **不参与定序**（物理行序才是写入顺序）。
+ */
+export interface TimelineHoleRetiredLine {
+  v: 1;
+  kind: 'hole_retired';
+  from_seq: number;
+  to_seq: number;
+  reason: string;
+  at: number;
+  evidence?: string;
+}
+
+/** `holes.ndjson` 的一行（两种声明，都是 append-only）。 */
+export type TimelineHoleDeclarationLine = TimelineHoleRegisteredLine | TimelineHoleRetiredLine;
+
 /** 对外可上报的四个字段（ADR-105 §3 I4；字段名固定，不许改名）。 */
 export interface TimelineHeads {
   timeline_head: number;
@@ -150,18 +194,24 @@ export type WalManifestLine = { v: 1; kind: 'block' } & TimelineBlockEntry;
 /**
  * `timeline.manifest` 的一行（只追加；归档失败也不回改历史行）。
  *
- * **状态声明只有两种**：`tainted` / `tainted_cleared`。会话级「当前是否污点」= **物理顺序上
- * 最后一条状态声明**的值（last-wins，读侧从后往前扫，见 `writer.ts#readManifest`）：
+ * **状态声明只有两种**：`tainted` / `tainted_cleared`。会话级「当前是否污点」= 「`holes.ndjson`
+ * 里还有**未退役**的洞」**或**「**物理顺序上最后一条状态声明**是 `tainted`」（last-wins，
+ * 读侧从后往前扫，见 `writer.ts#readManifest` / `lastTaintedState`）：
  *
  * - 排序依据**只能是写入顺序**（append-only 文件的行序）。`at` 仅作审计：时钟回退
  *   （NTP / 改系统时间 / 跨机器）会把「按 `at` 排序」的结果搞反，读侧一次都不许用它定序；
  * - `from_seq` / `to_seq` 同样**只作审计**，不参与会话级判定：本版（0.54）不做区间级
- *   `tainted`，只要 `holes.ndjson` 里还有任何洞，会话级 `tainted` 就恒为 true（保守方向）；
+ *   `tainted`，只要有**存活洞**（未被 `hole_retired` 退役的区间），会话级 `tainted` 就恒为
+ *   true（保守方向）；
  * - `tainted` 行与 `tainted_cleared` 行都**永久保留**，它们是「曾经发生过什么」的审计历史，
  *   不是当前状态；任何实现都不许回改或删除历史行；
  * - `tainted_cleared` 是 0.54 之后**新增（additive）**的行：旧 reader 对未知 `kind` 返回
  *   `undefined` ⇒ 忽略它、保守地认为仍 tainted（安全方向），既不抛错也不截断文件。
  *   因此**存量会话升级后、第一次健康归档之前仍是 tainted=true，不会自动洗白**。
+ *
+ * 同理，`holes.ndjson` 的 `kind:'hole_retired'` 也是 additive：旧 reader（`wal.ts` 的
+ * `validateHoleLine`，本单**逐字节未改**）不认 `kind`、只校验 `from_seq/to_seq/reason/at`，
+ * 于是把退役行当成**又一条洞登记** ⇒ 保守地认为洞仍在。这是设计上的安全方向。
  */
 export type TimelineManifestLine =
   | { v: 1; kind: 'open'; at: number }
