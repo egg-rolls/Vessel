@@ -1694,7 +1694,7 @@ function validateTrace(trace: TraceConfig, errors: ConfigValidationError[]): voi
  * 那是本单最不能出的错（ADR-105 要求开关关时旧链路逐字节不变）。
  */
 function validateTimeline(timeline: TimelineConfig, errors: ConfigValidationError[]): void {
-  const { dualWrite, chunkFlushMs, verifySampleRate } = timeline;
+  const { dualWrite, chunkFlushMs, verifySampleRate, archiveIntervalMs } = timeline;
 
   if (dualWrite !== undefined && typeof dualWrite !== 'boolean') {
     errors.push({
@@ -1724,6 +1724,19 @@ function validateTimeline(timeline: TimelineConfig, errors: ConfigValidationErro
       path: 'timeline.verifySampleRate',
       message: 'timeline.verifySampleRate must be a number in [0, 1]',
       value: verifySampleRate,
+    });
+  }
+  if (
+    archiveIntervalMs !== undefined &&
+    (typeof archiveIntervalMs !== 'number' ||
+      !Number.isInteger(archiveIntervalMs) ||
+      archiveIntervalMs < 0 ||
+      archiveIntervalMs > 3_600_000)
+  ) {
+    errors.push({
+      path: 'timeline.archiveIntervalMs',
+      message: 'timeline.archiveIntervalMs must be an integer in [0, 3600000] (0 = run end only)',
+      value: archiveIntervalMs,
     });
   }
 }
@@ -2762,7 +2775,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'expandCards',
   ],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
-  timeline: ['dualWrite', 'chunkFlushMs', 'verifySampleRate'],
+  timeline: ['dualWrite', 'chunkFlushMs', 'verifySampleRate', 'archiveIntervalMs'],
 };
 
 /** serve.tls / hub.tls 的已知键 */

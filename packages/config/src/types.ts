@@ -349,6 +349,14 @@ export interface TimelineConfig {
   chunkFlushMs?: number;
   /** 一致性抽样率（0..1）；缺省 `0.01`（1% 的 run 结束时比对一次）。 */
   verifySampleRate?: number;
+  /**
+   * 归档周期保底间隔（ms）；缺省 5000（`timeline.archive_interval_ms`）。
+   *
+   * 长 run 期间没有 `journal.close()`，只靠 run 终态触发的话 `timeline_head` 会一直停在 0。
+   * 这个值是**同一会话两次自动归档之间的最小间隔**（不是「多久必须归档一次」）。
+   * `0` ⇒ 关掉周期保底（只剩 run 终态触发）；归档失败只影响空间回收，不影响任何读写路径。
+   */
+  archiveIntervalMs?: number;
 }
 
 /**

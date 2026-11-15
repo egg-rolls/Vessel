@@ -680,6 +680,9 @@ export async function buildTenantRuntime(
           ...(timelineOptions.verifySampleRate !== undefined
             ? { verifySampleRate: timelineOptions.verifySampleRate }
             : {}),
+          ...(timelineOptions.archiveIntervalMs !== undefined
+            ? { archiveIntervalMs: timelineOptions.archiveIntervalMs }
+            : {}),
           emit: (event) => {
             try {
               events.publish(event);
