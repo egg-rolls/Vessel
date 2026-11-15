@@ -95,7 +95,7 @@ paths: [packages/serve/src/event-buffer.ts, packages/serve/src/tenant-event-hub.
 1. 「这次 run 十几个事件刷新后只剩四个」**具体丢在哪一段**未在真机核对。候选：(a) 环淘汰（§1）、(b) 客户端 item 折叠把多条事件并成一个 item（`transcript-items.ts:2003`）、(c) 渲染窗口夹取（`useChatTranscript.ts:285-290`）。现成探针：`claimStats`（`useChatTranscript.ts:568`）、`eventStore.droppedNoise`（`event-store.ts:232`）、`event_cursor.last_seq` 与实际 `currentSeq` 对照（`sessions.ts:1140`）。
 2. hub seq 与磁盘 seq 的**保序性**：落盘成功后才广播（`run-journal.ts:281-289`），而 `llm.stream.chunk` 走同步早退分支立刻广播（`:120-127`）⇒ 同一会话内两者可能不保序；影响面未评估。
 3. 会话事件日志除 `deleteSession` 外是否还有数据目录级 GC / 配额 —— 本 worktree 内没找到证据。
-4. `subscription.ts:36-40` 的注释仍写「环形缓冲最多 10000 条」，而环已是 50000（`event-buffer.ts:44`）⇒ 6 页是否足以走到环起点未复算。
+4. ~~`subscription.ts:34-39` 的「6 页足够」是按环 10000 条推的~~ **已复算并写进注释**：保守上界 25 页（50000 / 2000），6 页只覆盖 12000 条（环的 24%）；上调属行为变更，待立项（`subscription.ts:35-55`）。
 5. **子 agent 的事件是否在同一会话日志内编号** —— 决定「全局单调 seq」要不要跨子 agent 分配（§3 表格第二行）；本 worktree 内未逐条核对 subagent 的事件归属。
 
 ## 8. 相关文档
