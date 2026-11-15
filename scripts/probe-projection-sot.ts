@@ -19,30 +19,29 @@
  *   bun scripts/probe-projection-sot.ts --all --data-dir "<...>"
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readdir, readFile, unlink } from 'node:fs/promises';
 
 import {
+  type ChatRequest,
+  createRunJournalFactory,
   ExecutionUnit,
   FileSessionStore,
-  MemoryEventStream,
-  MemoryWorkingContext,
-  SessionEventLog,
-  createRunJournalFactory,
   formatClearedToolResult,
   isClearedToolResult,
-  projectMessages,
-  planClearedToolResults,
-  withClearedToolResults,
-  type ChatRequest,
   type LLMProvider,
   type LLMResponse,
+  MemoryEventStream,
+  MemoryWorkingContext,
   type Message,
   type Plugin,
   type PluginHost,
+  planClearedToolResults,
+  projectMessages,
+  SessionEventLog,
   type ToolDefinition,
+  withClearedToolResults,
 } from '../packages/core/src/index';
 import { capToolMessages } from '../packages/serve/src/tool-events';
 
@@ -63,7 +62,9 @@ async function sessionsGetMessages(
   try {
     if (sessionMethodsCache === undefined) {
       const mod = (await import('../packages/serve/src/gateway/methods/sessions')) as {
-        createSessionMethods: (deps: unknown) => Array<{ name: string; handler: (params: unknown, ctx: unknown) => unknown }>;
+        createSessionMethods: (
+          deps: unknown,
+        ) => Array<{ name: string; handler: (params: unknown, ctx: unknown) => unknown }>;
       };
       sessionMethodsCache = mod.createSessionMethods;
     }
@@ -84,13 +85,19 @@ async function sessionsGetMessages(
     const message = String(error).split('\n')[0] ?? String(error);
     if (sessionsGetHandlerError !== message) {
       sessionsGetHandlerError = message;
-      console.log(`  [diag] sessions.get handler 直调不可用，改用 capToolMessages(state.messages)：${message.slice(0, 140)}`);
+      console.log(
+        `  [diag] sessions.get handler 直调不可用，改用 capToolMessages(state.messages)：${message.slice(0, 140)}`,
+      );
     }
     return undefined;
   }
 }
 
-async function getViewOf(store: FileSessionStore, sessionId: string, fallback: readonly Message[]): Promise<Message[]> {
+async function getViewOf(
+  store: FileSessionStore,
+  sessionId: string,
+  fallback: readonly Message[],
+): Promise<Message[]> {
   const view = await sessionsGetMessages(store, sessionId, 500);
   if (view !== undefined) return view;
   return capToolMessages([...fallback] as Message[]);
@@ -106,7 +113,9 @@ const TOOL_NAME = 'probe_echo';
 function rawToolResult(n: number): string {
   const lines: string[] = [`RAWTOOL#${String(n).padStart(2, '0')} 这是第 ${n} 条工具结果的原文`];
   for (let i = 1; i <= 12; i += 1) {
-    lines.push(`  line ${i}: rawwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww ${n}-${i}`);
+    lines.push(
+      `  line ${i}: rawwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww ${n}-${i}`,
+    );
   }
   return lines.join('\n');
 }
@@ -208,11 +217,23 @@ function classify(messages: readonly Message[], rawById: Map<string, string>): R
     if (raw === undefined) continue;
     const placeholder = formatClearedToolResult(messages, id, raw);
     if (content === raw) {
-      rows.push({ toolCallId: id, kind: 'raw', persistedChars: content.length, rawChars: raw.length, note: '' });
+      rows.push({
+        toolCallId: id,
+        kind: 'raw',
+        persistedChars: content.length,
+        rawChars: raw.length,
+        note: '',
+      });
       continue;
     }
     if (content === placeholder) {
-      rows.push({ toolCallId: id, kind: 'placeholder', persistedChars: content.length, rawChars: raw.length, note: '' });
+      rows.push({
+        toolCallId: id,
+        kind: 'placeholder',
+        persistedChars: content.length,
+        rawChars: raw.length,
+        note: '',
+      });
       continue;
     }
     if (isClearedToolResult(content)) {
@@ -278,7 +299,9 @@ function printMeasurement(m: Measurement): void {
   );
   for (const row of m.rows.slice(0, 100)) {
     if (row.kind === 'raw') continue;
-    console.log(`   [${row.kind}] ${row.toolCallId} raw=${row.rawChars}B persisted=${row.persistedChars}B ${row.note}`);
+    console.log(
+      `   [${row.kind}] ${row.toolCallId} raw=${row.rawChars}B persisted=${row.persistedChars}B ${row.note}`,
+    );
   }
 }
 
@@ -303,7 +326,9 @@ function parseNdjson(text: string): Array<Record<string, unknown>> {
 async function scanRealData(dataDir: string): Promise<void> {
   const sessionsDir = join(dataDir, 'sessions');
   const entries = await readdir(sessionsDir, { withFileTypes: true });
-  const stateFiles = entries.filter((e) => e.isFile() && e.name.endsWith('.json')).map((e) => e.name);
+  const stateFiles = entries
+    .filter((e) => e.isFile() && e.name.endsWith('.json'))
+    .map((e) => e.name);
   let scanned = 0;
   let compacted = 0;
   const results: Measurement[] = [];
@@ -361,8 +386,12 @@ async function scanRealData(dataDir: string): Promise<void> {
       ),
     );
   }
-  console.log(`\n[real] 扫描 state 文件=${scanned} 有 compaction 的会话=${compacted} 其中压缩后又跑过 run=${results.length}`);
-  console.log(`[real] 读路径 = ${sessionsGetHandlerUsed ? 'sessions.get handler 直调' : 'capToolMessages(SessionState.messages)'}`);
+  console.log(
+    `\n[real] 扫描 state 文件=${scanned} 有 compaction 的会话=${compacted} 其中压缩后又跑过 run=${results.length}`,
+  );
+  console.log(
+    `[real] 读路径 = ${sessionsGetHandlerUsed ? 'sessions.get handler 直调' : 'capToolMessages(SessionState.messages)'}`,
+  );
   for (const m of results) printMeasurement(m);
 }
 
@@ -385,7 +414,11 @@ function rawByIdOfAll(ns: number[]): Map<string, string> {
   return map;
 }
 
-async function makeStack(sessionsDir: string, maxTokens: number, compactThreshold: number): Promise<Stack> {
+async function makeStack(
+  sessionsDir: string,
+  maxTokens: number,
+  compactThreshold: number,
+): Promise<Stack> {
   const provider = new ScriptedProvider();
   const store = new FileSessionStore(sessionsDir);
   const log = new SessionEventLog({ dir: sessionsDir });
@@ -424,22 +457,25 @@ async function runToolHeavyTurn(stack: Stack, from: number, label: string): Prom
 function requestPlaceholders(stack: Stack): number {
   const last = stack.provider.requests.at(-1);
   if (last === undefined) return 0;
-  return last.messages.filter((m) => m.role === 'tool' && isClearedToolResult(m.content ?? '')).length;
+  return last.messages.filter((m) => m.role === 'tool' && isClearedToolResult(m.content ?? ''))
+    .length;
 }
 
 /** 本轮第一个请求里被换成占位的工具结果条数：反映「历史种子」本身是否已是占位。 */
 function firstRequestPlaceholders(stack: Stack): number {
   const first = stack.provider.requests[0];
   if (first === undefined) return 0;
-  return first.messages.filter((m) => m.role === 'tool' && isClearedToolResult(m.content ?? '')).length;
+  return first.messages.filter((m) => m.role === 'tool' && isClearedToolResult(m.content ?? ''))
+    .length;
 }
 
 async function sessionStateOf(stack: Stack): Promise<{ messages: Message[]; cleared: number }> {
   // journal 的写是排队的：等事件日志与 state 落稳
   for (let tick = 0; tick < 400; tick += 1) {
     const state = await stack.store.load(SESSION_ID);
-    if (state !== null && state.messages.length > 0) {
-      return { messages: state.messages, cleared: (state.cleared_tool_call_ids ?? []).length };
+    const msgs = state?.messages;
+    if (msgs !== undefined && msgs.length > 0) {
+      return { messages: msgs, cleared: (state?.cleared_tool_call_ids ?? []).length };
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
@@ -480,12 +516,16 @@ async function dropStateCache(sessionsDir: string): Promise<void> {
   }
   const fresh = new FileSessionStore(sessionsDir);
   const after = await fresh.load(SESSION_ID);
-  console.log(`  [diag] 删缓存后 store.load() = ${after === null ? 'null（全投影路径）' : '非空（缓存仍在）'}`);
+  console.log(
+    `  [diag] 删缓存后 store.load() = ${after === null ? 'null（全投影路径）' : '非空（缓存仍在）'}`,
+  );
 }
 
 /** 从事件日志直接跑一遍 projectMessages，报出投影里的占位条数（= 全投影 ground truth）。 */
 async function projectionDiagnostics(sessionsDir: string, label: string): Promise<void> {
-  const events = parseNdjson(await readFile(join(sessionsDir, SESSION_ID, 'events.ndjson'), 'utf8'));
+  const events = parseNdjson(
+    await readFile(join(sessionsDir, SESSION_ID, 'events.ndjson'), 'utf8'),
+  );
   const projected = projectMessages(events as never);
   const toolMsgs = projected.filter((m) => m.role === 'tool');
   const placeholders = toolMsgs.filter((m) => isClearedToolResult(m.content ?? ''));
@@ -493,7 +533,9 @@ async function projectionDiagnostics(sessionsDir: string, label: string): Promis
     `  [diag:${label}] projectMessages(events) → 消息 ${projected.length} / 工具 ${toolMsgs.length} / 占位 ${placeholders.length}`,
   );
   for (const m of placeholders.slice(0, 3)) {
-    console.log(`    proj 占位 ${m.tool_call_id}: ${JSON.stringify((m.content ?? '').slice(0, 90))}`);
+    console.log(
+      `    proj 占位 ${m.tool_call_id}: ${JSON.stringify((m.content ?? '').slice(0, 90))}`,
+    );
   }
 }
 
@@ -509,15 +551,31 @@ async function constructScenarios(): Promise<void> {
     const dir = join(root, 'A', 'sessions');
     const stack1 = await makeStack(dir, 200_000, 0.9);
     await runToolHeavyTurn(stack1, 1, 'A-run1');
-    printMeasurement(await measure('A0: run1 之后（未压缩）', stack1, await sessionStateOf(stack1), rawById));
+    printMeasurement(
+      await measure('A0: run1 之后（未压缩）', stack1, await sessionStateOf(stack1), rawById),
+    );
 
     await stack1.eu.compactContext(SESSION_ID);
     await new Promise((resolve) => setTimeout(resolve, 400));
-    printMeasurement(await measure('A1: 手动压缩刚做完（同一 EU，未再跑 run）', stack1, await sessionStateOf(stack1), rawById));
+    printMeasurement(
+      await measure(
+        'A1: 手动压缩刚做完（同一 EU，未再跑 run）',
+        stack1,
+        await sessionStateOf(stack1),
+        rawById,
+      ),
+    );
 
     const stack2 = await makeStack(dir, 200_000, 0.9);
     await runToolHeavyTurn(stack2, 13, 'A-run2');
-    printMeasurement(await measure('A2: 压缩后再跑一次 run（state 命中缓存）', stack2, await sessionStateOf(stack2), rawById));
+    printMeasurement(
+      await measure(
+        'A2: 压缩后再跑一次 run（state 命中缓存）',
+        stack2,
+        await sessionStateOf(stack2),
+        rawById,
+      ),
+    );
   }
 
   // --- 场景 B：同 A，但 run2 之前删掉 state json（缓存缺失 ⇒ 全投影） ---
@@ -527,7 +585,14 @@ async function constructScenarios(): Promise<void> {
     await runToolHeavyTurn(stack1, 1, 'B-run1');
     await stack1.eu.compactContext(SESSION_ID);
     await new Promise((resolve) => setTimeout(resolve, 400));
-    printMeasurement(await measure('B1: 手动压缩刚做完（该段没有清理决策）', stack1, await sessionStateOf(stack1), rawById));
+    printMeasurement(
+      await measure(
+        'B1: 手动压缩刚做完（该段没有清理决策）',
+        stack1,
+        await sessionStateOf(stack1),
+        rawById,
+      ),
+    );
 
     await dropStateCache(dir);
     await projectionDiagnostics(dir, 'B-全投影');
@@ -535,7 +600,12 @@ async function constructScenarios(): Promise<void> {
     await runToolHeavyTurn(stack2, 13, 'B-run2');
     seedDiagnostics('B-run2 种子', stack2);
     printMeasurement(
-      await measure('B2: 删 state 缓存（全投影路径）后再跑一次 run', stack2, await sessionStateOf(stack2), rawById),
+      await measure(
+        'B2: 删 state 缓存（全投影路径）后再跑一次 run',
+        stack2,
+        await sessionStateOf(stack2),
+        rawById,
+      ),
     );
   }
 
@@ -548,11 +618,20 @@ async function constructScenarios(): Promise<void> {
 
     const stack2 = await makeStack(dir, 1_500, 0.3);
     await runToolHeavyTurn(stack2, 13, 'C-run2');
-    printMeasurement(await measure('C1: 自动压缩（run2 段起点）+ run2 落盘', stack2, await sessionStateOf(stack2), rawById));
+    printMeasurement(
+      await measure(
+        'C1: 自动压缩（run2 段起点）+ run2 落盘',
+        stack2,
+        await sessionStateOf(stack2),
+        rawById,
+      ),
+    );
 
     const stack3 = await makeStack(dir, 1_500, 0.3);
     await runToolHeavyTurn(stack3, 25, 'C-run3');
-    printMeasurement(await measure('C2: run3 之后（上一段已压缩）', stack3, await sessionStateOf(stack3), rawById));
+    printMeasurement(
+      await measure('C2: run3 之后（上一段已压缩）', stack3, await sessionStateOf(stack3), rawById),
+    );
   }
 
   // --- 场景 D：自动压缩产生 cleared 集合后，再删 state 缓存 → 下一次 run ---
@@ -563,7 +642,12 @@ async function constructScenarios(): Promise<void> {
     const stack2 = await makeStack(dir, 1_500, 0.3);
     await runToolHeavyTurn(stack2, 13, 'D-run2');
     printMeasurement(
-      await measure('D1: 自动压缩 + run2 落盘（缓存命中）', stack2, await sessionStateOf(stack2), rawById),
+      await measure(
+        'D1: 自动压缩 + run2 落盘（缓存命中）',
+        stack2,
+        await sessionStateOf(stack2),
+        rawById,
+      ),
     );
 
     await dropStateCache(dir);
@@ -572,7 +656,12 @@ async function constructScenarios(): Promise<void> {
     await runToolHeavyTurn(stack3, 25, 'D-run3');
     seedDiagnostics('D-run3 种子', stack3);
     printMeasurement(
-      await measure('D2: 删 state 缓存后 run3（压缩事件带 cleared ids ⇒ 全投影）', stack3, await sessionStateOf(stack3), rawById),
+      await measure(
+        'D2: 删 state 缓存后 run3（压缩事件带 cleared ids ⇒ 全投影）',
+        stack3,
+        await sessionStateOf(stack3),
+        rawById,
+      ),
     );
   }
 
@@ -586,7 +675,12 @@ async function constructScenarios(): Promise<void> {
     const stack2 = await makeStack(dir, 1_500, 0.3);
     await runToolHeavyTurn(stack2, 13, 'E-run2');
     printMeasurement(
-      await measure('E1: 自动压缩产生 cleared ids（run2 落盘，缓存命中）', stack2, await sessionStateOf(stack2), rawById),
+      await measure(
+        'E1: 自动压缩产生 cleared ids（run2 落盘，缓存命中）',
+        stack2,
+        await sessionStateOf(stack2),
+        rawById,
+      ),
     );
 
     await dropStateCache(dir);
@@ -595,7 +689,12 @@ async function constructScenarios(): Promise<void> {
     await runToolHeavyTurn(stack3, 25, 'E-run3');
     seedDiagnostics('E-run3 种子', stack3);
     printMeasurement(
-      await measure('E2: 删缓存 + 不压缩的 run3（占位只可能来自全投影）', stack3, await sessionStateOf(stack3), rawById),
+      await measure(
+        'E2: 删缓存 + 不压缩的 run3（占位只可能来自全投影）',
+        stack3,
+        await sessionStateOf(stack3),
+        rawById,
+      ),
     );
   }
 
@@ -620,11 +719,20 @@ async function constructScenarios(): Promise<void> {
       `[construct:${label}] events.ndjson: tool.call.completed=${completions.length}（正文与造样本原文逐字相同 ${eventRawMatches}，不同 ${eventRawMismatch}）` +
         ` message.compaction=${compactions.length} ` +
         `每个 compaction 的 cleared_tool_call_ids 条数=${JSON.stringify(
-          compactions.map((e) => ((e['data'] as Record<string, unknown>)['cleared_tool_call_ids'] as string[] | undefined)?.length ?? 0),
+          compactions.map(
+            (e) =>
+              (
+                (e['data'] as Record<string, unknown>)['cleared_tool_call_ids'] as
+                  | string[]
+                  | undefined
+              )?.length ?? 0,
+          ),
         )}`,
     );
   }
-  console.log(`\n[construct] 原始 events.ndjson 与 state json 保留在 ${root}（便于人工复核；--keep 之外的清理交给系统临时目录）`);
+  console.log(
+    `\n[construct] 原始 events.ndjson 与 state json 保留在 ${root}（便于人工复核；--keep 之外的清理交给系统临时目录）`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -637,7 +745,9 @@ function idempotencyCheck(): void {
     {
       role: 'assistant',
       content: '',
-      tool_calls: [{ id: 'call_1', type: 'function', function: { name: TOOL_NAME, arguments: '{"n":1}' } }],
+      tool_calls: [
+        { id: 'call_1', type: 'function', function: { name: TOOL_NAME, arguments: '{"n":1}' } },
+      ],
     },
     { role: 'tool', tool_call_id: 'call_1', name: TOOL_NAME, content: raw },
   ];
@@ -647,7 +757,9 @@ function idempotencyCheck(): void {
   console.log(`  原文   : ${JSON.stringify(raw.slice(0, 80))} … (${raw.length}B)`);
   console.log(`  第一次 : ${JSON.stringify(once)}`);
   console.log(`  第二次 : ${JSON.stringify(twice)}`);
-  console.log(`  isClearedToolResult(once)=${isClearedToolResult(once)}  once===twice? ${once === twice}`);
+  console.log(
+    `  isClearedToolResult(once)=${isClearedToolResult(once)}  once===twice? ${once === twice}`,
+  );
   if (once !== twice) {
     let at = 0;
     while (at < once.length && at < twice.length && once[at] === twice[at]) at += 1;
@@ -668,19 +780,40 @@ function c1gRequestViewDiagnostic(): void {
     messages.push({
       role: 'assistant',
       content: '',
-      tool_calls: [{ id: `call_${i}`, type: 'function', function: { name: TOOL_NAME, arguments: JSON.stringify({ n: i }) } }],
+      tool_calls: [
+        {
+          id: `call_${i}`,
+          type: 'function',
+          function: { name: TOOL_NAME, arguments: JSON.stringify({ n: i }) },
+        },
+      ],
     });
-    messages.push({ role: 'tool', tool_call_id: `call_${i}`, name: TOOL_NAME, content: rawToolResult(i) });
+    messages.push({
+      role: 'tool',
+      tool_call_id: `call_${i}`,
+      name: TOOL_NAME,
+      content: rawToolResult(i),
+    });
   }
   const planned = planClearedToolResults(messages, 2_000);
   const withIds = withClearedToolResults(messages, planned);
-  const rewritesWithIds = withIds.filter((m, index) => m.content !== messages[index]!.content).length;
+  const rewritesWithIds = withIds.filter(
+    (m, index) => m.content !== messages[index]!.content,
+  ).length;
   const withNumber = withClearedToolResults(messages, 2_000);
-  const rewritesWithNumber = withNumber.filter((m, index) => m.content !== messages[index]!.content).length;
-  console.log('\n--- check-append-only-context C1g:665 复核（withClearedToolResults 第二实参） ---');
+  const rewritesWithNumber = withNumber.filter(
+    (m, index) => m.content !== messages[index]!.content,
+  ).length;
+  console.log(
+    '\n--- check-append-only-context C1g:665 复核（withClearedToolResults 第二实参） ---',
+  );
   console.log(`  planClearedToolResults(messages, 2000) 点名 ${planned.length} 条`);
-  console.log(`  withClearedToolResults(messages, <ids>)   改写 ${rewritesWithIds} 条  ← 真实请求视图口径`);
-  console.log(`  withClearedToolResults(messages, 2000)    改写 ${rewritesWithNumber} 条  ← C1g:665 实际调用`);
+  console.log(
+    `  withClearedToolResults(messages, <ids>)   改写 ${rewritesWithIds} 条  ← 真实请求视图口径`,
+  );
+  console.log(
+    `  withClearedToolResults(messages, 2000)    改写 ${rewritesWithNumber} 条  ← C1g:665 实际调用`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -703,7 +836,9 @@ async function main(): Promise<void> {
   const dataDir = argValue('--data-dir');
 
   if (!doConstruct && !doIdempotency && dataDir === undefined) {
-    console.log('用法：bun scripts/probe-projection-sot.ts [--construct] [--idempotency] [--data-dir <dir>] [--all]');
+    console.log(
+      '用法：bun scripts/probe-projection-sot.ts [--construct] [--idempotency] [--data-dir <dir>] [--all]',
+    );
     return;
   }
   if (doIdempotency) {
