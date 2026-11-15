@@ -75,9 +75,11 @@ export interface TimelineDualWriteEvent {
   /**
    * 该事件是否已被旧链路落盘（`events.ndjson`）。
    *
-   * `true` = 已落盘事件（双写就写它）；`false` = 旧链路**故意不落盘**的派生事件
-   * （如 `llm.stream.chunk`）。旁路的取舍（只补 chunk 家族）由实现侧决定，journal
-   * 只如实转述，不在这里判断「什么值得写」。
+   * `true` = 已落盘事件（双写就写它）；`false` = 旧链路**故意不落盘**的派生事件，
+   * 其中 chunk 家族（`llm.stream.chunk` / `*.llm.stream.chunk`）是唯一**必须**在 timeline
+   * 侧落盘的一类 —— 它进块级 WAL（`wal.blocks/`），不是「被丢弃」（0.54 A2）。
+   * 旁路的取舍（只补 chunk 家族）由实现侧决定，journal 只如实转述，不在这里判断
+   * 「什么值得写」。
    */
   persisted: boolean;
 }

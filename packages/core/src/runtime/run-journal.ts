@@ -10,6 +10,10 @@
 
 import { applyDeclaredProjection } from '../context/index.js';
 import { assignMessageIdentities } from '../session/index.js';
+// 0.54 A2：chunk 家族的判定**只有一个实现**（`timeline/types.ts`），journal 不再自己写一遍
+// 集合。为什么必须共用：ADR-105 §8.1 规则 ④ 的白名单恰好两条（`llm.stream.chunk` 与
+// `*.llm.stream.chunk`），抄一份就等于多一个会漂移的口径。
+import { isChunkEventType } from '../timeline/types.js';
 import type { RunEvent } from '../types/event.js';
 import { LeaseExpiredError } from '../types/lease.js';
 import type {
@@ -35,15 +39,11 @@ export type {
 } from '../types/run-journal.js';
 
 /**
- * 不写会话事件日志的派生/观测事件。
+ * 不写会话事件日志的派生/观测事件（chunk 家族**不在**这里，见下）。
  *
  * 唯一真相源只保留事实（用户输入、LLM 响应、工具调用、权限、终态）。下面这些
  * 要么是流式/快照级的派生视图，要么自带另一份 durable 记录：
  *
- * - `llm.stream.chunk`：逐 token 增量，一条长正文就能把一次 run 顶到上千条。
- *   **流式正文不落，结构落摘要**：段结束时由 `llm.stream.summary` 落一条定长骨架
- *   （`segment_index` / `kind` / `chunk_count` / `bytes` / `first_seq` / `last_seq` /
- *   `started_at` / `ended_at` / `ttft_ms`），不含任何正文；
  * - `context.changed`：派生快照（每条注入上下文的全量镜像），且叙事已由
  *   `context.pressure` / `context.compacted` 承担 —— 落盘等于同一事实两份；
  * - `run.checkpoint`：`RunRecord` 已有 durable checkpoint（含 `event_cursor`），
@@ -54,9 +54,20 @@ export type {
  *
  * `llm.request` **不在**本集合里：它落盘，但只落元信息（`content_omitted: true` +
  * 计数/配置），`messages` / `tools` 正文由 `stripRequestContent` 兜底裁掉。
+ *
+ * **chunk 家族（`llm.stream.chunk` / `*.llm.stream.chunk`）也不在本集合里**（0.54 A2）。
+ * 以前它在，含义是「什么都不落盘」—— 于是刷新/重启后正文与思考永久丢失（ADR-105 §0 P5）。
+ * 现在它的去处在 {@link SessionRunJournal.appendFact} 的 chunk 分支：
+ *
+ * - **不写** `events.ndjson`（一次长 run 上千条 delta，一条一行就是上千行、上千次 fsync）；
+ * - **写** timeline 的**块级 WAL**（`wal.blocks/`，`[u64 seq][u32 len][utf8 JSON] × N`，
+ *   满 32 KiB 或空闲 150 ms 封块，封块即 fsync）。
+ *
+ * 判定用 {@link isChunkEventType}（唯一实现），所以**带前缀的转发形态**也走块路径 ——
+ * 以前只有精确的 `llm.stream.chunk` 在集合里，`subagent.llm.stream.chunk` 会掉进
+ * `enqueuePersistedEvent` 被一行一条写进 `events.ndjson`（块级设计正好被绕过）。
  */
 const NON_PERSISTED_EVENT_TYPES: ReadonlySet<string> = new Set([
-  'llm.stream.chunk',
   'context.changed',
   'session.saved',
   'run.checkpoint',
@@ -120,16 +131,22 @@ export class SessionRunJournal implements RunJournal {
 
   appendFact(event: RunEvent, persistData?: unknown): void {
     const dualWrite = this.deps.timelineDualWrite;
+    // 0.54 A2：chunk 家族**有它自己的落盘去处**，既不是「什么都不落」也不是「写 ndjson」。
+    // 顺序与其它事件一致：先发布（旧链路的可见性一字不改），再把落盘交给块级 WAL。
+    // 开关关（`dualWrite` 为 undefined）⇒ 只发布，`events.ndjson` 逐字节不变。
+    if (isChunkEventType(event.type)) {
+      this.publishRaw(event);
+      if (dualWrite !== undefined) this.recordTimelineOnly(event, dualWrite);
+      return;
+    }
     if (
       !this.deps.eventLog ||
       NON_PERSISTED_EVENT_TYPES.has(event.type) ||
       !this.shouldPersistSessionEvent(event)
     ) {
       // 0.54 A：双写旁路（开关关 ⇒ `dualWrite` 是 undefined，这里连分支都不进）。
-      // 非持久事件里只有 chunk 家族值得进 timeline（它是旧链路**故意不落盘**的那一类），
-      // 取舍在实现侧；这里只转述「旧链路没落它」这个事实。
       this.publishRaw(event);
-      if (dualWrite !== undefined) this.recordNonPersisted(event, dualWrite);
+      if (dualWrite !== undefined) this.recordTimelineOnly(event, dualWrite);
       return;
     }
     this.enqueuePersistedEvent(event, true, persistData);
@@ -274,11 +291,18 @@ export class SessionRunJournal implements RunJournal {
   }
 
   /**
-   * 0.54 A：把「旧链路没落盘」的事件转给双写旁路。
+   * 0.54 A：把「旧链路（`events.ndjson`）不落盘」的事件转给 timeline 双写旁路。
+   *
+   * 两类事件走到这里，语义**不同**（`persisted: false` 如实表示「旧链路没有它」）：
+   *
+   * | 类别 | 例 | timeline 侧 |
+   * | --- | --- | --- |
+   * | chunk 家族 | `llm.stream.chunk` / `*.llm.stream.chunk` | 块级 WAL（`wal.blocks/`），**必落** |
+   * | 其余派生/观测 | `context.changed` / `plugin.*` | 实现侧按白名单取舍 |
    *
    * 只转述、不判断值不值得写；异常一律吞掉 —— 旁路坏了不能影响 run。
    */
-  private recordNonPersisted(event: RunEvent, port: TimelineDualWritePort): void {
+  private recordTimelineOnly(event: RunEvent, port: TimelineDualWritePort): void {
     try {
       const sessionId = this.resolveEventSessionId(event);
       if (sessionId === undefined) return;
