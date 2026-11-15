@@ -296,6 +296,7 @@ export {
   MemorySessionStore,
   mergeHistoryProjection,
   type ProjectableEvent,
+  type ProjectMessagesOptions,
   type PruneRunsOptions,
   type PruneRunsResult,
   projectedKeepCount,

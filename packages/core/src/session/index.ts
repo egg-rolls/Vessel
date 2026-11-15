@@ -36,6 +36,7 @@ export { assignMessageIdentities, withRunIdentity } from './message-identity.js'
 export {
   mergeHistoryProjection,
   type ProjectableEvent,
+  type ProjectMessagesOptions,
   projectedKeepCount,
   projectMessages,
 } from './project-messages.js';

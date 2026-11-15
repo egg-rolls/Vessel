@@ -1679,7 +1679,13 @@ export class AgentServiceImpl implements AgentService {
     }
     await this.eventLog.flush(sourceSessionId);
     const events = await this.eventLog.read(sourceSessionId);
-    const projected = projectMessages(events);
+    // 0.54：种子会被写成新会话的 `message.injected` **事实**（`writeSeedEvents`）。
+    // 事实日志里不许出现清集替换的占位正文 —— 否则「原文只剩事件日志」这条读回路径
+    // 在新会话上当场失效：`sessions.get` 的 projection 会按「正文已是占位」判成
+    // `original_available:'readback'`，而日志里回的仍然是占位。
+    // 新会话自己的模型视图不受影响：段起点按它自己的窗口重算集合
+    // （`freezeSegmentClearedToolResults`），请求视图照旧有占位。
+    const projected = projectMessages(events, { applyClearedReplacements: false });
     if (keepMessages !== undefined && keepMessages > projected.length) {
       throw new AgentError(
         'invalid_input',

@@ -19,6 +19,9 @@
  * - `session.rewound`        → 把当前投影截到 `keep_projected`（0.37 消息撤回；
  *                              全量重投影时不能复活已删除的消息）
  *
+ * 两条**事实**（`kept` 裁尾 / `rewound` 截断）无条件应用；只有「把工具结果换成占位」
+ * 这一件**视图**事可以按调用方要求跳过（见 `ProjectMessagesOptions`）。
+ *
  * 消息身份（additive `run_id` / `run_segment`）：`run_id` 取自事件的 `data.run_id`，
  * 段序由 `assignMessageIdentities` 在投影末尾统一补（与落盘漏斗同一个函数）。
  * 缺 `run_id` 的旧事件两个字段都缺省 —— 消费端退回内容比较。
@@ -161,11 +164,36 @@ function withEventRunId(message: Message, data: Record<string, unknown>): Messag
 }
 
 /**
+ * 投影选项。
+ *
+ * 只有「清集替换」（把 `message.compaction.cleared_tool_call_ids` 命中的工具结果换成本段
+ * 占位文本）是**视图**行为，可以关掉；`kept` 裁尾与 `session.rewound` 截断是**事实**
+ * （压缩真的替换掉了旧历史、撤回真的删掉了尾部），永远照做。
+ */
+export interface ProjectMessagesOptions {
+  /**
+   * 是否应用清集替换（占位正文）。
+   *
+   * - `true`（缺省）：既有行为，投影产物是**请求/展示**口径（占位在正文里）。
+   * - `false`：投影产物是**原文**口径 —— 恢复/加载路径必须用这个，否则占位会被
+   *   `finalizeSessionState` 写回 `SessionState.messages` 并**永久粘住**（原文只剩
+   *   事件日志）。模型视图不靠它：请求构建层按本段冻结集合自己替换
+   *   （`withClearedToolResults`）。
+   */
+  applyClearedReplacements?: boolean;
+}
+
+/**
  * 把事件序列投影成 `Message[]`。
  *
  * 事件应已按 `seq` 升序；函数不排序、不读取文件。
  */
-export function projectMessages(events: Iterable<ProjectableEvent>): Message[] {
+export function projectMessages(
+  events: Iterable<ProjectableEvent>,
+  options?: ProjectMessagesOptions,
+): Message[] {
+  // 缺省 true：既有调用方（请求/展示口径）语义一个字不变。
+  const applyClearedReplacements = options?.applyClearedReplacements ?? true;
   const list = [...events];
 
   // 先收集工具调用的实际执行参数：guardrail / hook 可能改写 name/arguments。
@@ -232,7 +260,13 @@ export function projectMessages(events: Iterable<ProjectableEvent>): Message[] {
       // 0.34 S1：先按 cleared_tool_call_ids 把已构建消息里命中的 tool 结果
       // 换回确定性占位（与压缩时同一函数），再按 `kept` 裁剪。
       // 已是占位的保持幂等；旧事件没有该字段时整段跳过。
-      const clearedIds = readStringArray(data.cleared_tool_call_ids);
+      //
+      // 0.54：这一步是**视图**（模型会看到什么），不是事实 —— 加载/恢复路径传
+      // `applyClearedReplacements: false` 跳过它，让 `SessionState.messages` 保持原文。
+      // 注意 `kept` 裁剪（下面一段）**不在**这个开关里：那是压缩真的替换掉了旧历史。
+      const clearedIds = applyClearedReplacements
+        ? readStringArray(data.cleared_tool_call_ids)
+        : [];
       if (clearedIds.length > 0) {
         const wanted = new Set(clearedIds);
         for (const entry of messages) {

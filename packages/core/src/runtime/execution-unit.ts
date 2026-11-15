@@ -4089,7 +4089,9 @@ export class ExecutionUnit {
 
     if (cached !== undefined && !fullProjectionForReplacement) {
       const history = structuredClone(cached);
-      const projected = projectMessages(events);
+      // 0.54：增量分支同样**不**应用清集替换 —— 拆包出来的消息会 push 进
+      // `SessionState.messages`，这个字段是原文视图（见 `SessionState.messages` 的注释）。
+      const projected = projectMessages(events, { applyClearedReplacements: false });
       if (typeof derived === 'number') {
         // 增量：tail 严格在缓存之后，直接追加；崩溃在工具轮中间时 tool 结果在这里。
         if (projected.length > 0) history.push(...projected);
@@ -4113,7 +4115,12 @@ export class ExecutionUnit {
     }
 
     if (events.length > 0) {
-      const projected = projectMessages(events);
+      // 0.54：满投影分支的产物是 `SessionState.messages`（经 `seedTransientContext` →
+      // `finalizeSessionState` 写回），**必须**是原文视图。以前这里默认应用清集替换，
+      // 于是「尾部有压缩/撤回事件」或「缓存不可用」时占位被物化进盘上并永久粘住
+      // （实测见 docs/dev/reports/0.54/proj-readback-15.md §1.6/§1.8/§1.9/§1.7）。
+      // 模型视图不受影响：请求构建层按本段冻结集合自己替换（`buildRequestMessages`）。
+      const projected = projectMessages(events, { applyClearedReplacements: false });
       if (projected.length > 0) {
         return {
           messages: projected,
