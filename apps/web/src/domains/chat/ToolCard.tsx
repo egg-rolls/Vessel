@@ -1,21 +1,15 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: diff 行没有稳定 id，顺序即语义
-import { useEffect, useId, useMemo, useState } from 'react';
-import { CopyButton } from '../../components/CopyButton';
-import { Button } from '../../components/ui';
+import { useEffect, useState } from 'react';
 import { formatDuration, formatTimestamp } from '../../format';
+import type { ProjectionSummary } from '../../gateway/types';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { Verbosity } from '../../state/visibility';
+import { PayloadSection } from './payload-section';
+import { projectedOriginalText, showsOutputSection } from './projection';
+import { ProjectionBadge, ProjectionPanes } from './projection-card';
 import { StreamCard } from './StreamCard';
-import {
-  type DiffLine,
-  editDiffOf,
-  PAYLOAD_CHUNK_BYTES,
-  PREVIEW_LINES,
-  previewPayload,
-  type ToolCardView,
-  toolSummary,
-} from './tool-cards';
+import { type DiffLine, editDiffOf, type ToolCardView, toolSummary, valueText } from './tool-cards';
 import { useToolDescription } from './tool-catalog';
 
 const STATUS_GLYPH: Record<ToolCardView['status'], string> = {
@@ -35,94 +29,6 @@ const STATUS_TONE: Record<ToolCardView['status'], string> = {
   done: 'tone-ok',
   error: 'tone-danger',
 };
-
-function valueText(value: unknown): string {
-  if (value === undefined || value === null) return '';
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value, null, 2) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
-
-interface SectionProps {
-  label: string;
-  value: unknown;
-  defaultOpen?: boolean;
-  tone?: 'error';
-  verbosity: Verbosity;
-}
-
-/**
- * 独立折叠的 payload 分区：折叠时只渲染 20 行 / 8KB 预览，不挂载完整 DOM；
- * 展开后超过 200KB 分段加载。保留原始换行与行首空格。
- */
-function PayloadSection({ label, value, defaultOpen = false, tone, verbosity }: SectionProps) {
-  // JSON.stringify(pretty) 对 512KiB payload 约 1ms；卡片每次重渲都会走一次（流式 20Hz），
-  // 而 value 的引用是稳定的，按引用 memo 就够了。
-  const text = useMemo(() => valueText(value), [value]);
-  const [open, setOpen] = useState(defaultOpen);
-  const [loadedBytes, setLoadedBytes] = useState(PAYLOAD_CHUNK_BYTES);
-  const id = useId();
-  if (!text) return null;
-
-  const preview = previewPayload(text);
-  const shown = open ? text.slice(0, loadedBytes) : preview.preview;
-  const hasMore = open && text.length > loadedBytes;
-  const hiddenLines = preview.truncated && !open;
-
-  return (
-    <section className={`tool-section ${tone === 'error' ? 'tool-section-error' : ''}`.trim()}>
-      <div className="tool-section-head">
-        <button
-          type="button"
-          className="tool-section-toggle"
-          aria-expanded={open}
-          aria-controls={id}
-          onClick={() => setOpen((value) => !value)}
-        >
-          <span aria-hidden="true">{open ? '▾' : '▸'}</span>
-          <span className="tool-section-label">{label}</span>
-          {!open && hiddenLines && (
-            <span className="tool-section-meta">
-              {t('chat.tool.previewLines', {
-                shown: Math.min(preview.totalLines, PREVIEW_LINES),
-                total: preview.totalLines,
-              })}
-            </span>
-          )}
-        </button>
-        <CopyButton text={text} label={t('chat.tool.copy')} className="tool-section-copy" />
-      </div>
-      <pre className={`tool-section-body ${open ? '' : 'tool-section-preview'}`.trim()} id={id}>
-        {shown}
-      </pre>
-      {hasMore && (
-        <Button
-          variant="link"
-          className="tool-section-more"
-          onClick={() => setLoadedBytes((value) => value + PAYLOAD_CHUNK_BYTES)}
-        >
-          {t('chat.tool.loadMore', {
-            loaded: Math.round(loadedBytes / 1024),
-            total: Math.round(text.length / 1024),
-          })}
-        </Button>
-      )}
-      {!open && preview.truncated && (
-        <Button variant="link" className="tool-section-more" onClick={() => setOpen(true)}>
-          {t('chat.tool.showAll', { total: preview.totalLines })}
-        </Button>
-      )}
-      {verbosity === 'debug' && (
-        <div className="tool-section-debug font-mono tabular-nums">
-          {preview.totalLines} lines · {preview.totalBytes} bytes
-        </div>
-      )}
-    </section>
-  );
-}
 
 function DiffSection({ lines, path }: { lines: DiffLine[]; path?: string }) {
   if (lines.length === 0) return null;
@@ -175,6 +81,7 @@ export function ToolCard({
   verbosity = 'normal',
   defaultOpen = false,
   entering = false,
+  projectionSummary,
 }: {
   card: ToolCardView;
   verbosity?: Verbosity;
@@ -182,12 +89,20 @@ export function ToolCard({
   defaultOpen?: boolean;
   /** 本卡是事件流里新追加的一项：入场只播一次（判据在调用方，见 StreamCard）。 */
   entering?: boolean;
+  /**
+   * 整会话投影汇总（`SessionDetail.projection_summary`）。
+   *
+   * 只进**展开体**（spec §3.0：折叠态只讲本轮变化量，累计数放展开后），
+   * 且只在卡片自己带 `projection` 时渲染；缺省 = 没有汇总可显示。
+   */
+  projectionSummary?: ProjectionSummary;
 }) {
   const description = useToolDescription(card.name);
   const summary = toolSummary(card.name, card.args);
   const diff = card.name === 'edit' ? editDiffOf(card.args) : null;
   const errorText = card.error !== undefined ? valueText(card.error) : '';
   const meta = formatErrorMeta(card.errorMeta);
+  const projection = card.projection;
 
   // 卡片头（StreamCard 的 meta 槽）只放**运行耗时**，运行中 / 已结束同一个口径：
   // 运行中 = 现在 - startedAt（每秒刷新），已结束 = 事件给的总耗时。
@@ -214,9 +129,21 @@ export function ToolCard({
         </>
       }
       meta={
-        // 只显示耗时（不是绝对时间）；没有数据时整块省略。
-        durationMs === undefined ? undefined : (
-          <span className="tabular-nums">{formatDuration(durationMs)}</span>
+        // 只显示耗时（不是绝对时间）+ 投影 badge（层级 1）。两者都没有就整块省略。
+        // badge 在这里（`<summary>` 的 `meta` 槽）→ **折叠态也看得见**；它是纯文本 span，
+        // 没有 tabindex / 点击，不破坏「summary 里不得放可点元素」的约束。
+        durationMs === undefined && projection === undefined ? undefined : (
+          <>
+            {durationMs !== undefined && (
+              <span className="tabular-nums">{formatDuration(durationMs)}</span>
+            )}
+            {projection !== undefined && (
+              <>
+                {durationMs !== undefined && <span aria-hidden="true"> · </span>}
+                <ProjectionBadge view={projection} />
+              </>
+            )}
+          </>
         )
       }
       summary={summary.length > 0 ? summary : undefined}
@@ -229,6 +156,23 @@ export function ToolCard({
         ) : undefined
       }
     >
+      {projection !== undefined && (
+        // 卡体首段（只有 projection 存在时出现）：原文视角 | 模型视角 + 读回。
+        // 原文面板的输入是**消息正文**（`inline` / `inline_truncated` 时它就是原文）；
+        // 取值走 `projectedOriginalText`：它逐字等于原「输出」分区的正文（门禁钉这条等式），
+        // `readback` / `gone` 时返回 undefined，面板自己说「原文不在这里」。
+        <ProjectionPanes
+          view={projection}
+          toolName={card.name}
+          original={projectedOriginalText(projection, card.result)}
+          verbosity={verbosity}
+          defaultOpen={defaultOpen}
+          {...(card.truncatedLimitBytes !== undefined
+            ? { truncatedLimitBytes: card.truncatedLimitBytes }
+            : {})}
+          {...(projectionSummary !== undefined ? { summary: projectionSummary } : {})}
+        />
+      )}
       <div className="flex flex-col gap-1">
         <span className="font-mono text-xs uppercase tracking-wide text-faint">
           {t('chat.tool.description')}
@@ -244,7 +188,16 @@ export function ToolCard({
         defaultOpen
         verbosity={verbosity}
       />
-      <PayloadSection label={t('chat.tool.output')} value={card.result} verbosity={verbosity} />
+      {/* 输出分区：**有投影时交给上面的双层面板**，这里不再重复一份。
+          两个理由：① `inline` 时两处文本逐字相同，同一张卡显示两遍像 bug；
+          ② `readback` 时消息正文已经是占位符 —— 把它当成「输出」摆一遍，等于在
+          「原文不在消息里」的旁边展示 `[cleared …]`。投影卡自己负责这两层。
+
+          「接管」不等于「丢失」：面板里的原文逐字等于这里本来会显示的那份
+          （`projectedOriginalText`，门禁按「原样输出 / 空白不丢 / exit code 还在」钉住）。 */}
+      {showsOutputSection(projection) && (
+        <PayloadSection label={t('chat.tool.output')} value={card.result} verbosity={verbosity} />
+      )}
       {diff && <DiffSection lines={diff.lines} path={diff.path} />}
       <PayloadSection
         label={t('chat.tool.error')}

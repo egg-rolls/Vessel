@@ -58,6 +58,111 @@ export interface ToolCall {
   };
 }
 
+/**
+ * 上下文投影模式（0.54 投影卡）：**照抄 ADR-104 §2.2 的闭集**，客户端不自创枚举。
+ *
+ * - `passthrough`：逐字一致（没被投射）—— wire 上根本不发 `projection`；
+ * - `placeholder`：正文被换成占位符（`[cleared …]`），消费 C1h 豁免；
+ * - `externalize`：正文被换成句柄引用（同为「消费披露」类）；
+ * - `archive_notice`：卡本身不替换正文，原文靠读回（批量清单卡形态）。
+ */
+export type ProjectionMode = 'passthrough' | 'placeholder' | 'externalize' | 'archive_notice';
+
+/** 原文现在在哪（决定默认视角，见 `domains/chat/projection.ts`）。 */
+export type ProjectionOriginalAvailability = 'inline' | 'inline_truncated' | 'readback' | 'gone';
+
+/**
+ * 一条工具消息的「模型看到的是什么」（additive `sessions.get.session.messages[i].projection`）。
+ *
+ * 服务端派生 + **sparse**：没被投影的消息**不带**这个键，与 0.54 之前逐字节相同。
+ * 与 `system_context` 同一层（wire-only 派生），core 的 `SessionState` 不认识它。
+ *
+ * 三条不可违反的读取纪律（排查成本最高的一类 bug 都长在这里）：
+ * 1. **按 `tool_call_id` 合并**，不按数组下标 —— 消息窗口可能从 assistant 中间切起；
+ * 2. `placeholder_text` 是**模型真正看到的那一字节**，只展示、**禁止** trim / 补空格 /
+ *    重排换行 / 本地化（UI 复刻 formatter 就是这个字段存在的原因）；
+ * 3. 体量只读 `original_bytes`（wire 给的），**禁止**从正文 parse 行数 / exit code ——
+ *    正文本身超过 8 KiB 时尾部会被裁掉，parse 出来的数字是错的。
+ */
+export interface ProjectionView {
+  mode: ProjectionMode;
+  /** 与 `messages[i].tool_call_id` 相同：合并 / 汇总的唯一键。 */
+  tool_call_id: string;
+  /** core 渲染好的占位文本（逐字：不 trim / 不补空格 / 不重排换行）。 */
+  placeholder_text: string;
+  /** `placeholder_text` 的稳定摘要（sha256 前 16 位）：与实时卡去重时用。 */
+  placeholder_hash: string;
+  /** 原始正文的 UTF-8 字节数；**`null` = 服务端也不知道**（不是 0）。 */
+  original_bytes: number | null;
+  /** 原始正文的行数；同上。 */
+  original_lines: number | null;
+  original_available: ProjectionOriginalAvailability;
+  /**
+   * 跨源读回句柄（可判别联合，UI 不猜来源）。
+   *
+   * `kind:'events'` 的 `since_seq` 就是 `sessions.events` 的同名参数（**排他**游标：只回
+   * `seq > since_seq`）；`0` = 从日志头按 `tool_call_id` 找，**不是**「没有这一段」。
+   *
+   * `kind:'file'` / `kind:'handle'` 的读回动作还没接线：卡只展示「原文不在这里」，
+   * 不乱猜来源、也不假装读得到。
+   */
+  readback?:
+    | { kind: 'events'; tool_call_id: string; since_seq: number }
+    | { kind: 'file'; path: string; offset?: number; length?: number }
+    | { kind: 'handle'; handle_id: string };
+  /** 冻结集合的来源事件 `seq`（审计锚点）。**缺省 = 不知道**（服务端不写 0 冒充「从日志头起」）。 */
+  since_event_seq?: number;
+  /** ADR-104 D4 的声明 id；没有声明 = `null`。 */
+  declaration_id: string | null;
+}
+
+/**
+ * 整会话的投影汇总（additive `sessions.get.session.projection_summary`）。
+ *
+ * **口径 = 整个会话当前态，不是当前分页窗口**，所以它跟卡片上的单条投影不是同一个数：
+ * 「这一条」看 `projection`，「这个会话一共」看这里（展示纪律见 spec §3.0：折叠态只讲
+ * 本轮变化量，累计数只在展开体里出现）。
+ */
+export interface ProjectionSummary {
+  /** 被投影的条数。 */
+  total: number;
+  /**
+   * `Σ(original_bytes − 占位字节)` 的**净值**，**可以为负**（原文比占位还短的小结果真的存在）。
+   *
+   * 服务端不 clamp；展示「省了多少」时由 `domains/chat/projection.ts#savedBytesOf` 自己 clamp。
+   * 只累加体量已知的条目 ⇒ `unknown_original_count > 0` 时它是**下界**。
+   */
+  bytes_saved: number;
+  /** 每个 mode 各有几条（闭集；没出现的 mode 不登记）。 */
+  modes: Partial<Record<ProjectionMode, number>>;
+  /** `original_bytes === null` 的条数（= `bytes_saved` 少算了几条）。 */
+  unknown_original_count: number;
+}
+
+/** 一个被裁字段的结构化裁断事实（wire `CappedFieldInfo` 的客户端形状）。 */
+export interface TruncatedFieldInfo {
+  /** 完整字段的 UTF-8 字节数（**截断前**）。 */
+  bytes: number;
+  /** 本次生效的上限（UTF-8 字节）—— 界面上「已截到前 N」这个数字只能用它。 */
+  limit: number;
+  /** 拼进正文的截断标记（逐字）。 */
+  marker: string;
+}
+
+/**
+ * 单条消息上的裁断事实（additive 0.54 `Message.truncated`）。
+ *
+ * **sparse**：没被裁的消息不带这个字段；被裁时才出现。
+ */
+export interface MessageTruncation {
+  /** 工具结果正文被裁（`role==='tool'`）。 */
+  content?: TruncatedFieldInfo;
+  /** assistant 工具入参被裁（`bytes` 取被裁 call 里的最大值）。 */
+  arguments?: TruncatedFieldInfo;
+  /** `arguments` 是多个 call 的合并值时才出现：被裁的 call 数（≥2）。 */
+  arguments_calls?: number;
+}
+
 /** 单条会话消息（sessions.get 返回的 session.messages） */
 export interface Message {
   role: MessageRole;
@@ -94,6 +199,20 @@ export interface Message {
    * **缺失 = 旧数据**：同上，退回内容比较。
    */
   run_segment?: number;
+  /**
+   * 上下文投影（additive 0.54）：这条工具消息「模型看到的是什么」。
+   *
+   * **sparse**：没被投影的消息不带这个键（老 gateway / 老会话 = 与 0.54 之前逐字节相同）。
+   * 只挂在 `role:'tool'` 消息上；合并 / 汇总一律按 `projection.tool_call_id`，不按下标。
+   */
+  projection?: ProjectionView;
+  /**
+   * 裁断事实（additive 0.54）：正文被裁时才有（**sparse**，没被裁就不带）。
+   *
+   * 投影卡的「已截到前 N」里的 N 必须取这里的 `content.limit` —— 那是本次真正生效的上限，
+   * 服务端改上限时界面上的数字跟着变，不许硬编码。
+   */
+  truncated?: MessageTruncation;
 }
 
 /** sessions.search 的单条结果（E5 冻结形状）。 */
@@ -185,6 +304,13 @@ export interface SessionDetail {
     changed?: string[];
     previous_hash?: string;
   };
+  /**
+   * 整会话的投影汇总（additive 0.54 `sessions.get.session.projection_summary`）。
+   *
+   * **缺省 = 这个会话没有任何被投影的条目**（服务端只在 `total > 0` 时下发），
+   * 不是「省了 0 B」；口径是整个会话当前态，不是当前分页窗口。
+   */
+  projection_summary?: ProjectionSummary;
 }
 
 /** ask 单个问题 */

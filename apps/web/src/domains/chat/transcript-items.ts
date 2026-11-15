@@ -31,7 +31,7 @@
  * 屏上以落盘那份为准；身份缺失（旧数据）或不唯一时才退回**内容相等**，那时认不出来
  * 就两边都渲染 —— 宁可重复，绝不吞消息。
  */
-import type { Message, MessageRef, RunEvent } from '../../gateway/types';
+import type { Message, MessageRef, ProjectionView, RunEvent } from '../../gateway/types';
 import type { SessionDetail } from '../../gateway/types/sessions';
 import type { ErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
@@ -51,6 +51,7 @@ import {
   mergeEnvNoticeCards,
 } from './env-notice';
 import { buildHistoryToolItems } from './history-tools';
+import { projectionIndexByCallId } from './projection';
 import { type RotateHandoff, rotateHandoffOf } from './rotate-handoff';
 import { compareTimelineEntries } from './timeline-order';
 import { type ChatRenderItem, foldToolItems, type ToolCardStatus } from './tool-cards';
@@ -236,6 +237,20 @@ export interface ToolItem extends ItemMeta {
   startedAt: number;
   /** false = 有调用无结果 / 孤立结果（渲染 outputMissing）。 */
   paired: boolean;
+  /**
+   * 0.54 additive：这条工具消息的「模型看到的是什么」（`sessions.get` 的 wire 派生）。
+   *
+   * **按 `tool_call_id` 合并**（见 `projectionIndexByCallId`），不按数组下标 —— 消息窗口
+   * 可能从 assistant 中间切起，按下标对齐会把 A 卡的占位挂到 B 卡上。缺省 = 没被投影。
+   */
+  projection?: ProjectionView;
+  /**
+   * 0.54 additive：正文被裁时**本次生效的上限**（wire `message.truncated.content.limit`）。
+   *
+   * 投影卡的「已截到前 N」读它；缺省 = wire 没告诉（那时候才退回常量兜底，
+   * 见 `projection.ts#TRUNCATION_LIMIT_FALLBACK_BYTES`）。
+   */
+  truncatedLimitBytes?: number;
 }
 
 export interface NoticeItem extends ItemMeta {
@@ -864,14 +879,51 @@ export function buildHistoryIndex(
 
   // 历史工具消息：与 assistant 的 tool_calls 配对后各自成 item（tool:<callId>）。
   const historyTools = buildHistoryToolItems(messages);
+  // 0.54 投影：**按 `tool_call_id` 建索引**（不是按下标）。窗口可能从 assistant 中间切起，
+  // 那时「第 i 条消息的 projection」与「第 i 张卡」根本不是一回事 —— 按下标对齐会把 A 卡的
+  // 占位挂到 B 卡上。索引键只认 wire 声明的那一个：`projection.tool_call_id`。
+  const projectionByCallId = projectionIndexByCallId(messages);
   const toolByCallId = new Map<string, (typeof historyTools)[number]>();
   const orphanTools: { item: (typeof historyTools)[number]; index: number }[] = [];
   for (const tool of historyTools) {
-    if (tool.callId !== undefined) {
+    if (tool.callId === undefined) continue;
+    callIds.add(tool.callId);
+    // 同一个 id 可能有多条结果（重试 / 补写）：调用侧卡片认**配对的那一条**，其余各自走
+    // 孤立刻片。不判断「谁配对了」就 set，最后一条会覆盖掉配对那条 —— 卡上显示的是
+    // 第二次的输出，而第一次的输出只剩在孤儿卡里，看起来像错位。
+    const existing = toolByCallId.get(tool.callId);
+    if (existing === undefined || (!existing.paired && tool.paired)) {
       toolByCallId.set(tool.callId, tool);
-      callIds.add(tool.callId);
     }
   }
+
+  /**
+   * 窗口内**调用侧**还有几张卡可以代表结果（`call_id` → 剩余次数）。
+   *
+   * 为什么要在消息循环**之前**预扫描：结果消息可能出现在它的 assistant **之前**
+   * （窗口从中间切起 / 乱序重试），循环中途的累积状态会让「这条结果有没有卡」取决于
+   * 遍历顺序 —— 那种漏渲染最难复现。这里只依赖「窗口里 assistant 声明了哪些 id」，
+   * 与顺序无关。
+   *
+   * 为什么是**次数**而不是 `Set`：同一个 `tool_call_id` 可能留下两条结果（重试 / 补写），
+   * 调用侧只有一张卡，第二条结果必须自己出卡，否则就是「一条结果凭空消失」。
+   * 每消费一次减一；减到 0 之后的结果按孤立结果处理（下面会为它产出 `tool:orphan:<i>`）。
+   *
+   * 判定条件与下面产生调用侧卡片的循环**逐条对齐**（system / 隐藏 / 被 agent 卡吸收的来源行
+   * 都不产生调用侧卡片）：否则会出现「次数被消费掉了，但那张卡其实没生成」的空白。
+   */
+  const callSidesByCallId = new Map<string, number>();
+  messages.forEach((message, index) => {
+    const absIndex = messageIndexOffset + index;
+    if (message.role === 'system') return;
+    if (hidden.has(absIndex)) return;
+    if (isSourceMessage(message) && foldedSourceIndexes.has(absIndex)) return;
+    for (const call of message.tool_calls ?? []) {
+      const id = typeof call.id === 'string' && call.id.length > 0 ? call.id : undefined;
+      if (id === undefined) continue;
+      callSidesByCallId.set(id, (callSidesByCallId.get(id) ?? 0) + 1);
+    }
+  });
 
   // ts carry：消息缺 timestamp（旧日志 / 迁移数据里的 assistant 段）时沿用**前一条**
   // （本遍历方向上最近的）已知 ts。不 carry 就会按「缺 ts 排最后」沉到末尾，把一轮对话
@@ -898,14 +950,22 @@ export function buildHistoryIndex(
         typeof message.tool_call_id === 'string' && message.tool_call_id.length > 0
           ? message.tool_call_id
           : undefined;
-      const paired = callId === undefined ? undefined : toolByCallId.get(callId);
       if (callId !== undefined && message.timestamp !== undefined) {
         toolResultTs.set(callId, message.timestamp);
       }
-      if (paired !== undefined) {
-        // 配对成功的 tool 消息由调用侧的 item 代表（下面根据 assistant 的 tool_calls 输出），
-        // 这里只记录，不重复产出。
-        return;
+      // 这条结果是否已被**调用侧卡片**代表（`callSidesByCallId` 里还有余量就消耗一次）。
+      //
+      // 不能再用 `toolByCallId.has(callId)` 判：那个 map 是从 `buildHistoryToolItems` 全量
+      // 建的（连孤立结果自己也在里面），于是「窗口切掉 owning assistant」时每条结果都
+      // 命中、被 `return` 掉，而调用侧卡片只在 `callIdsByIndex`（来自窗口内 assistant 的
+      // `tool_calls`）里生成 ⇒ 那条结果**永远不渲染**。这正是满投影落盘后的窗口形态
+      // （首条就是工具结果），投影 badge / 读回也就无从出现。
+      if (callId !== undefined) {
+        const remaining = callSidesByCallId.get(callId) ?? 0;
+        if (remaining > 0) {
+          callSidesByCallId.set(callId, remaining - 1);
+          return;
+        }
       }
       orphanTools.push({
         item: historyTools.find((tool) => tool.key === `history-tool-${index}`) ?? {
@@ -1039,6 +1099,7 @@ export function buildHistoryIndex(
         tool.startedAt !== undefined && tool.endedAt !== undefined
           ? Math.max(0, tool.endedAt - tool.startedAt)
           : undefined;
+      const projection = projectionByCallId.get(callId);
       items.push({
         kind: 'tool',
         key: `tool:${callId}`,
@@ -1049,6 +1110,10 @@ export function buildHistoryIndex(
         status: 'done',
         startedAt: message?.timestamp ?? 0,
         paired: tool.paired,
+        ...(projection !== undefined ? { projection } : {}),
+        ...(tool.truncatedLimitBytes !== undefined
+          ? { truncatedLimitBytes: tool.truncatedLimitBytes }
+          : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
         // ts 用「工具结果消息」的时间（历史侧的权威时刻）：比所属 assistant 消息的
         // timestamp 更贴近真实发生顺序（F19/F20 守这条）。
@@ -1060,14 +1125,24 @@ export function buildHistoryIndex(
   }
   for (const { item, index } of orphanTools) {
     const absIndex = messageIndexOffset + index;
+    // 孤立结果（窗口从中间切起 / 调用被截断）：投影照样按**它自己的** id 挂上 ——
+    // 这正是「窗口里没有 owning assistant」的那条路径，按下标对齐在这里必错。
+    const projection = item.callId === undefined ? undefined : projectionByCallId.get(item.callId);
     items.push({
       kind: 'tool',
       key: `tool:orphan:${absIndex}`,
+      // 孤立卡片也带上自己的 `tool_call_id`：它是这张卡的**身份**（读回 / 诊断 / 去重都按它），
+      // 丢了它就只能靠 key 猜，而 key 里装的是绝对下标（换窗口就变）。
+      ...(item.callId !== undefined ? { callId: item.callId } : {}),
       name: item.name,
       ...(item.output !== undefined ? { output: item.output } : {}),
       status: 'done',
       startedAt: messageByIndex.get(absIndex)?.timestamp ?? 0,
       paired: false,
+      ...(projection !== undefined ? { projection } : {}),
+      ...(item.truncatedLimitBytes !== undefined
+        ? { truncatedLimitBytes: item.truncatedLimitBytes }
+        : {}),
       ...(messageByIndex.get(absIndex)?.timestamp !== undefined
         ? { ts: messageByIndex.get(absIndex)?.timestamp }
         : {}),

@@ -1,4 +1,4 @@
-import type { RunEvent } from '../../gateway/types';
+import type { ProjectionView, RunEvent } from '../../gateway/types';
 import { type ErrorMeta, errorMetaOf } from '../../state/error-visibility';
 import type { TimelineItem } from '../../state/events';
 
@@ -18,6 +18,20 @@ export interface ToolCardView {
   durationMs?: number;
   truncated?: boolean;
   startedAt: number;
+  /**
+   * 0.54 additive：这条工具消息的「模型看到的是什么」（`sessions.get` 的 wire 派生）。
+   *
+   * 只有历史侧有（live 事件流不带它）；`undefined` = 没被投影 = 与 0.54 之前完全一致。
+   * 身份由 `tool_call_id` 决定，已按 id 合并在调用方完成（见 `transcript-items.ts`）。
+   */
+  projection?: ProjectionView;
+  /**
+   * 0.54 additive：正文被裁时**本次生效的上限**（wire `message.truncated.content.limit`）。
+   *
+   * 投影卡的「已截到前 N」里的 N 取它（缺省时用 `projection.ts` 的常量兜底）：
+   * 这个数字用户会当事实读，不许硬编码、也不许从正文里数。
+   */
+  truncatedLimitBytes?: number;
   /**
    * 该卡解析到的事件锚点（`tool.call.started` 的 seq）。
    *
@@ -385,6 +399,25 @@ export function editDiffOf(
 export const PREVIEW_LINES = 20;
 export const PREVIEW_BYTES = 8 * 1024;
 export const PAYLOAD_CHUNK_BYTES = 200 * 1024;
+
+/**
+ * 任意值 → 展示用文本。
+ *
+ * 字符串**原样返回**（不 trim、不动空白）：工具结果与投影占位的空白都是信息，
+ * 复制出来的东西必须与正文逐字相等。对象走 pretty JSON。
+ *
+ * 0.54 从 `payload-section.tsx` 搬到这儿（纯逻辑与渲染分离）：投影卡的「原文」取值
+ * 与门禁断言共用同一个函数，才谈得上「逐字」。
+ */
+export function valueText(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
 
 export interface PayloadPreview {
   preview: string;

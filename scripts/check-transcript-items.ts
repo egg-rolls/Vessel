@@ -1985,6 +1985,82 @@ const FIXTURES: readonly Fixture[] = [
       );
     },
   },
+  {
+    name: 'F39 窗口切掉 owning assistant（首条就是工具结果）→ 仍然成卡',
+    why:
+      '满投影落盘后窗口首条可能就是一条工具结果，它的 assistant 在窗口外。' +
+      '判据曾经是「toolByCallId 里有这个 id」（那个 map 连孤立结果自己都有）⇒ 这条结果被当成' +
+      '「已由调用侧卡片代表」而丢掉，而调用侧卡片永远不会生成：投影 badge / 读回连入口都没有',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [toolMsg('c-orphan', '工具结果正文'), msg('user', '接着说')],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      });
+      const tools = items.filter((item) => item.kind === 'tool');
+      return (
+        tools.length === 1 &&
+        tools[0]?.key === 'tool:orphan:0' &&
+        tools[0]?.output === '工具结果正文' &&
+        tools[0]?.paired === false
+      );
+    },
+  },
+  {
+    name: 'F40 有 owning assistant → 仍由调用侧代表，不得重复出卡',
+    why:
+      '上一条修法的反作用：孤立刻片不能变成「每条结果各出一张卡」。' +
+      'assistant 在窗口里时结果必须由 tool:<callId> 那张卡代表（结果正文照样挂在它上面），' +
+      '且与两条消息的先后顺序无关',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [assistantCall('c1', 'bash'), toolMsg('c1', 'ok'), msg('assistant', '好了')],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      });
+      const tools = items.filter((item) => item.kind === 'tool');
+      // 乱序窗口：结果在调用之前，判据仍必须一致（预扫描与遍历顺序无关）。
+      const reversed = buildTranscriptItems({
+        messages: [toolMsg('c1', 'ok'), assistantCall('c1', 'bash')],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      }).filter((item) => item.kind === 'tool');
+      return (
+        tools.length === 1 &&
+        tools[0]?.key === 'tool:c1' &&
+        tools[0]?.output === 'ok' &&
+        tools[0]?.paired === true &&
+        reversed.length === 1 &&
+        reversed[0]?.key === 'tool:c1'
+      );
+    },
+  },
+  {
+    name: 'F41 同一 tool_call_id 两条结果（重试）→ 两条都出，一条都不许去重丢掉',
+    why:
+      '重试 / 补写会在同一 id 下留下两条 tool 消息；调用侧只有一张卡，第二条必须自己出卡。' +
+      '判据用「剩余次数」而不是 Set 正是为了这条：Set 会把第二条一起跳过，等于吞掉一次真实结果',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          assistantCall('c1', 'bash'),
+          toolMsg('c1', '第一次的输出'),
+          toolMsg('c1', '第二次的输出'),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      });
+      const tools = items.filter((item) => item.kind === 'tool');
+      const outputs = tools.map((item) => item.output).sort();
+      return (
+        tools.length === 2 &&
+        tools[0]?.key === 'tool:c1' &&
+        // 第二条走孤立刻片，key 用绝对下标（不覆盖调用侧那张）。
+        tools[1]?.key === 'tool:orphan:2' &&
+        outputs.join('|') === '第一次的输出|第二次的输出'
+      );
+    },
+  },
 ];
 
 const failures: { name: string; why: string }[] = [];

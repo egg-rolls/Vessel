@@ -37,6 +37,13 @@ export interface HistoryToolItem {
   startedAt?: number;
   /** 结果回到的时间（配对的 `role:'tool'` 消息时间戳）。 */
   endedAt?: number;
+  /**
+   * 正文被裁时**本次生效的上限**（wire `message.truncated.content.limit`）。
+   *
+   * 只搬 wire 的数字：投影卡的「已截到前 N」用它，界面上这个数字是会被当事实读的，
+   * 所以绝不在这里硬编码、也不从正文里数。
+   */
+  truncatedLimitBytes?: number;
 }
 
 /**
@@ -79,11 +86,19 @@ export function buildHistoryToolItems(messages: readonly Message[]): HistoryTool
         : undefined;
     const output = typeof message.content === 'string' ? message.content : '';
     const matched = callId === undefined ? undefined : byCallId.get(callId);
-    if (matched !== undefined) {
+    // 只配对**第一条**：同一个 `tool_call_id` 的第二条结果是重试 / 补写，属于它自己
+    // （下面的孤立分支会为它产出一条 item）。覆盖前一条的 output 会把第一次的结果整段吞掉
+    // ——一次真实输出凭空消失，比重试多一张卡糟得多。
+    if (matched !== undefined && !matched.paired) {
       matched.output = output;
       matched.paired = true;
       // 结果时间 = 这条 tool 消息的时间；与 startedAt 一起推出历史卡片的耗时。
       if (message.timestamp !== undefined) matched.endedAt = message.timestamp;
+      // 裁断上限跟着**结果**消息走（wire 上它挂在被裁的那条消息上）。
+      const limit = message.truncated?.content?.limit;
+      if (typeof limit === 'number' && Number.isFinite(limit) && limit > 0) {
+        matched.truncatedLimitBytes = limit;
+      }
       // 调用没带 name 时用结果消息上的 name 补全（旧数据只有 tool 消息才带 name）。
       if (matched.name === 'tool' && typeof message.name === 'string' && message.name.length > 0) {
         matched.name = message.name;
@@ -91,6 +106,7 @@ export function buildHistoryToolItems(messages: readonly Message[]): HistoryTool
       return;
     }
     // 孤立结果（历史从中间开始 / 调用被截断）：保留输出，别丢。
+    const orphanLimit = message.truncated?.content?.limit;
     items.push({
       key: `history-tool-${index}`,
       ...(callId !== undefined ? { callId } : {}),
@@ -98,6 +114,9 @@ export function buildHistoryToolItems(messages: readonly Message[]): HistoryTool
       output,
       status: 'neutral',
       paired: false,
+      ...(typeof orphanLimit === 'number' && Number.isFinite(orphanLimit) && orphanLimit > 0
+        ? { truncatedLimitBytes: orphanLimit }
+        : {}),
     });
   });
 
