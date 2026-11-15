@@ -34,6 +34,14 @@
  * ① 活动块 ≥ `BLOCK_MAX_BYTES`；② 非 chunk 事件先封块再写该行（严格交错）；
  * ③ 空闲 `chunk_flush_ms`；④ `flush()` / `close()`。
  *
+ * **谁能进本写者（0.54 chunk-slim）**：chunk 家族里只有**有持久化价值**的那两个子类型
+ * （`text_delta` / `reasoning_delta`）。`tool_call_delta` / `finish` 是瞬时 UI 提示
+ * （刷新后由 `tool.call.started` / `tool.call.completed` / `llm.response` 复原），
+ * 见 `blocks.ts#isTransientChunkEvent`。它们在 {@link TimelineWriter#append} 里被
+ * **在分配 seq 之前**拒绝（`timeline_event_type_excluded`），理由就是 I2 的逆否：
+ * 不落盘 ⇒ 不许取 seq（照取 seq 而不写 = 已发布未落盘 + `count` 里凭空造洞）。
+ * 正常路径上第一刀在 `run-journal.ts#appendFact`，本闸门是第二道（防止别的调用方绕过）。
+ *
  * 本模块**不读配置、不读环境变量**：块大小与间隔由装配层传进来。发布回调也在装配层
  * 接（0.54 A 阶段是双写，旧广播路径不动）。
  *
@@ -43,7 +51,7 @@
 import { type FileHandle, mkdir, open, stat, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { atomicWrite } from '../session/atomic-write.js';
-import { type ChunkBlockSeal, ChunkBlockStore } from './blocks.js';
+import { type ChunkBlockSeal, ChunkBlockStore, isTransientChunkEvent } from './blocks.js';
 import { assertTimelineWritable } from './freeze.js';
 import { HoleRegistry } from './holes.js';
 import { buildIndex, TimelineIndexBuilder, writeIndexSnapshot } from './index.js';
@@ -301,7 +309,9 @@ export class TimelineWriter {
    * 追加一条事件；返回的记录在对应 WAL 落盘后才 resolve（I1/I2）。
    *
    * - 非 chunk：写 `wal.log` 一行 + fsync；
-   * - chunk：进活动块；块满/被迫封块后 fsync，再 resolve。
+   * - chunk（仅 `text_delta` / `reasoning_delta`）：进活动块；块满/被迫封块后 fsync，再 resolve；
+   * - **瞬时 chunk**（`tool_call_delta` / `finish`）：不在这里 —— 在分配 seq **之前**就抛
+   *   `timeline_event_type_excluded`（它们只走实时通道，见 `blocks.ts#isTransientChunkEvent`）。
    *
    * 失败 ⇒ 抛 `timeline_write_failed`，该 seq 作废不回收，并已落盘成洞。
    */
@@ -327,6 +337,9 @@ export class TimelineWriter {
    *
    * 语义与逐条 `append` 一致（seq 序列相同、发布顺序相同）；块/非块交替时会在边界
    * 处封块，因此**不会**出现“chunk 先发布、更小的 seq 后发布”。
+   *
+   * 校验在分配任何 seq **之前**跑完全部入参：任一条不合法（含瞬时 chunk，见
+   * {@link TimelineWriter#append}）⇒ 整批拒绝、一条 seq 都不消费。
    */
   appendMany(inputs: readonly TimelineAppendInput[]): Promise<TimelineRecord[]> {
     if (this.closed) {
@@ -554,6 +567,16 @@ export class TimelineWriter {
       throw new TimelineError(
         'timeline_event_type_excluded',
         `${input.type} is not a session fact (ADR-105 §8.1)`,
+      );
+    }
+    // 0.54 chunk-slim（I2 的逆否）：瞬时 chunk（`tool_call_delta` / `finish`）刷新后由
+    // `tool.call.*` / `llm.response` 复原，没有「读不回来」的内容 ⇒ 不落盘。而不落盘就
+    // **不许取 seq** —— 所以必须在 `nextSeq += 1` 之前拒绝，否则「已发布未落盘」+ `count`
+    // 里凭空多出不可读区间。第一刀在 `run-journal.ts#appendFact`，这里是第二道闸门。
+    if (isTransientChunkEvent(input)) {
+      throw new TimelineError(
+        'timeline_event_type_excluded',
+        `${input.type} carries a transient chunk (tool_call_delta / finish): live channel only, never a timeline_seq`,
       );
     }
     if (typeof input.run_id !== 'string') {

@@ -10,6 +10,9 @@
 
 import { applyDeclaredProjection } from '../context/index.js';
 import { assignMessageIdentities } from '../session/index.js';
+// 0.54 chunk-slim：瞬时 chunk（`tool_call_delta` / `finish`）的判据同样**只有一个实现**，
+// 与块路由放在一起（`timeline/blocks.ts`）—— 它回答的是「这个 chunk 配不配进块」。
+import { isTransientChunkEvent } from '../timeline/blocks.js';
 // 0.54 A2：chunk 家族的判定**只有一个实现**（`timeline/types.ts`），journal 不再自己写一遍
 // 集合。为什么必须共用：ADR-105 §8.1 规则 ④ 的白名单恰好两条（`llm.stream.chunk` 与
 // `*.llm.stream.chunk`），抄一份就等于多一个会漂移的口径。
@@ -66,6 +69,21 @@ export type {
  * 判定用 {@link isChunkEventType}（唯一实现），所以**带前缀的转发形态**也走块路径 ——
  * 以前只有精确的 `llm.stream.chunk` 在集合里，`subagent.llm.stream.chunk` 会掉进
  * `enqueuePersistedEvent` 被一行一条写进 `events.ndjson`（块级设计正好被绕过）。
+ *
+ * **0.54 chunk-slim：chunk 家族内部再分一层，瞬时子类型连块都不进。**
+ * `tool_call_delta` / `finish` 是**瞬时 UI 提示**（参数片段 / 本次响应收口），没有
+ * 「刷新后读不回来」的内容：工具卡由 `tool.call.started` 的 `arguments` +
+ * `tool.call.completed` 的产物复原，用量与终态由 `llm.response` 复原。它们因此
+ * **不占 `timeline_seq`** —— 这是 ADR-105 §3 I2 的逆否，不是省事：
+ *
+ * | 想做的事 | 后果 |
+ * | --- | --- |
+ * | 取 seq 但不写进块 | **违反 I2**（已发布未落盘），且 `count` 里凭空多出不可读的 seq（= 洞） |
+ * | 不取 seq | 只存在于实时通道（hub 环），刷新后由事实复原 —— 正确形态 |
+ *
+ * 判定用 {@link isTransientChunkEvent}（`timeline/blocks.ts`，唯一实现）。**绝不能**退回
+ * 「一行一条写进 `events.ndjson`」那条老口子（`NON_PERSISTED_EVENT_TYPES` 以前正是那个
+ * 含义，`subagent.llm.stream.chunk` 就那么漏进去过）：瞬时 delta 的落点是「不落盘」。
  */
 const NON_PERSISTED_EVENT_TYPES: ReadonlySet<string> = new Set([
   'context.changed',
@@ -134,9 +152,16 @@ export class SessionRunJournal implements RunJournal {
     // 0.54 A2：chunk 家族**有它自己的落盘去处**，既不是「什么都不落」也不是「写 ndjson」。
     // 顺序与其它事件一致：先发布（旧链路的可见性一字不改），再把落盘交给块级 WAL。
     // 开关关（`dualWrite` 为 undefined）⇒ 只发布，`events.ndjson` 逐字节不变。
+    //
+    // 0.54 chunk-slim：**瞬时 chunk（`tool_call_delta` / `finish`）在这里就分叉**——
+    // 发布照旧（实时通道不变），但**不派给双写**，于是它连 seq 都不会被请求。
+    // 这一步就是「本单在哪一层决定不占 seq」的答案：**journal 的派发点**
+    // （`appendFact`），在所有 seq 分配之前；`writer.ts#validateInput` 是第二道闸门。
     if (isChunkEventType(event.type)) {
       this.publishRaw(event);
-      if (dualWrite !== undefined) this.recordTimelineOnly(event, dualWrite);
+      if (dualWrite !== undefined && !isTransientChunkEvent(event)) {
+        this.recordTimelineOnly(event, dualWrite);
+      }
       return;
     }
     if (
@@ -297,8 +322,11 @@ export class SessionRunJournal implements RunJournal {
    *
    * | 类别 | 例 | timeline 侧 |
    * | --- | --- | --- |
-   * | chunk 家族 | `llm.stream.chunk` / `*.llm.stream.chunk` | 块级 WAL（`wal.blocks/`），**必落** |
+   * | chunk 家族（有正文的） | `llm.stream.chunk` / `*.llm.stream.chunk` | 块级 WAL（`wal.blocks/`），**必落** |
    * | 其余派生/观测 | `context.changed` / `plugin.*` | 实现侧按白名单取舍 |
+   *
+   * 瞬时 chunk（`tool_call_delta` / `finish`）**不经过本方法**：它们连块都不进，见
+   * {@link SessionRunJournal.appendFact}（0.54 chunk-slim）。
    *
    * 只转述、不判断值不值得写；异常一律吞掉 —— 旁路坏了不能影响 run。
    */
