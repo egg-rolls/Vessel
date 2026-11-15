@@ -1429,7 +1429,21 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
       });
     }
   }
-  return items;
+  // **位置由自己的事件 seq 决定**（0.54 order-bug：T3「集体锚到 run 起点」）。
+  //
+  // 上面每个 push 都只披了 `group.firstSeq`（组起始 seq），于是同一个 run 的所有 live
+  // item 在比较器眼里 seq 完全相同 —— 「ts 相同就按 seq 回退」这条不变量（不变量 2）对
+  // live 项等于失效，谁先谁后只能退回插入序（折 run 的顺序），聚堆就从这里长出来。
+  // 这里把带锚点（`anchorSeq` = 该项自己那个事件的 seq）的项换成真实 seq；没有锚点的
+  // （`run-input`、`run-failure`、手工分组）继续用组起始 seq。
+  //
+  // ⚠️ B2「单游标 + item 身份统一成 seq」落地后，这段应当整体删掉：那时每个 item 天生
+  // 带一个持久全局 seq，这里只是一份临时替身（同一把尺子的近似）。
+  return items.map((item) =>
+    item.anchorSeq !== undefined && item.seq !== item.anchorSeq
+      ? { ...item, seq: item.anchorSeq }
+      : item,
+  );
 }
 
 /** 一段 live 正文 / 思考（认领与交棒的最小单位）。 */
@@ -2053,6 +2067,9 @@ function mergeItem(
       ...(args !== undefined ? { args } : {}),
       ...(output !== undefined ? { output } : {}),
       // 执行态取 live（历史 item 是「已落盘」的快照，running→done 的真实态只在 live）。
+      // ⚠️ 这条是**既有契约**（`check-transcript-items` 的 G1：live 只有 started、历史有结果
+      // ⇒ 一张卡、output 取历史、status 取 live），别为了「卡片不变灰」把它改成终态优先。
+      // 「结果丢失」若真发生，病在 output/配对那一侧，不在 status 的取值优先级。
       status: next.status,
       ...(next.durationMs !== undefined ? { durationMs: next.durationMs } : {}),
       ...(next.error !== undefined ? { error: next.error } : {}),

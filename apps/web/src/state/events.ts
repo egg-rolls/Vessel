@@ -927,6 +927,37 @@ export function isVisibleForGrouping(
 }
 
 /**
+ * 折 run 之前的**时间序**规整（0.54 order-bug：刷新后工具卡与思考段按类聚堆）。
+ *
+ * 为什么需要：事件可能来自三个 seq 频带（会话日志 / run trace / hub 环，见
+ * `disk-replay.ts` 的带图）。频带顺序是「会话日志 → trace → 环」，**不是时间顺序**：
+ * 同一条 run 的 `tool.call.*` 在会话日志带里，它的 `llm.stream.chunk`（正文 / 思考）
+ * 却可能只在后一个带里（trace 只给最新的几个 run，环只给进程内还留着的 run）。
+ *
+ * 折叠是**顺序敏感**的：chunk 靠「相邻同 kind」成段，`buildLiveItems` 的组内时间还按
+ * 插入序单调夹。于是按频带序折出来的结果是「工具卡按真实时间排好，思考段被并成一段、
+ * 还被夹到 run 末尾」—— 用户看到的就是「上方全是工具卡片，下方全是思考过程」。
+ *
+ * 口径：**按事件自身的 `ts` 升序**；`ts` 相同或缺失时保持原插入序（`sort` 稳定），
+ * 缺 `ts`（≤0 / 非有限）的排在最后、不猜它的位置。跨 run 的相对顺序不改（分组只看
+ * `run_id`，组间顺序由 `startedAt` 决定）。
+ */
+export function orderEntriesByEventTime(entries: readonly StoredEvent[]): StoredEvent[] {
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((left, right) => {
+      const a = left.entry.event.ts;
+      const b = right.entry.event.ts;
+      const aKnown = Number.isFinite(a) && a > 0;
+      const bKnown = Number.isFinite(b) && b > 0;
+      if (aKnown && bKnown && a !== b) return a - b;
+      if (aKnown !== bKnown) return aKnown ? -1 : 1;
+      return left.index - right.index;
+    })
+    .map((item) => item.entry);
+}
+
+/**
  * 按 run_id 分组并按开始时间正序排列。
  * `errorLevel` 默认 `user`：internal 级错误只在 `all` 或展开内部事件时进入时间线。
  */
@@ -936,7 +967,8 @@ export function groupEvents(
   errorLevel: ErrorVisibility = 'user',
 ): RunGroup[] {
   const byRun = new Map<string, StoredEvent[]>();
-  for (const entry of entries) {
+  // 按事件时间规整再折（跨 seq 频带时频带序 ≠ 时间序，见 `orderEntriesByEventTime`）。
+  for (const entry of orderEntriesByEventTime(entries)) {
     if (!isVisibleForGrouping(entry, showInternal, errorLevel)) continue;
     const runId = entry.event.run_id;
     const list = byRun.get(runId);

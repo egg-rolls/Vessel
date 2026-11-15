@@ -27,6 +27,7 @@ import type { ErrorVisibility } from './error-visibility';
 import {
   createFold,
   isVisibleForGrouping,
+  orderEntriesByEventTime,
   type RunFold,
   type RunGroup,
   type StoredEvent,
@@ -744,7 +745,11 @@ export class LiveItemStore implements ItemSink {
       if (list === undefined) byRun.set(runId, [entry]);
       else list.push(entry);
     }
-    for (const [runId, list] of byRun) this.refoldRun(runId, list, keepSurvivors);
+    for (const [runId, list] of byRun) {
+      // 折叠顺序敏感（chunk 靠相邻成段、组内时间单调夹）：跨 seq 频带时到达序不是
+      // 时间序，先按事件时间规整再折，否则正文/思考会被并成一段并夹到 run 末尾。
+      this.refoldRun(runId, orderEntriesByEventTime(list), keepSurvivors);
+    }
     // 水位取「环里出现过的最大 seq」：之后的新事件继续走 `ingest`（I5）。
     for (const entry of entries) {
       if (entry.seq > this.ingestedSeq) this.ingestedSeq = entry.seq;
