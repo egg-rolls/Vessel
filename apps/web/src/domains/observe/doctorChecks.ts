@@ -40,8 +40,8 @@ export interface DoctorCheckInput {
   connected: boolean;
 }
 
-/** 与 packages/config defaults.ts 的 DEFAULT_DATA_DIR 一致（仅展示用）。 */
-const DEFAULT_DATA_DIR = '~/.vessel/data';
+/** `dataDir` 未下发时**不许**猜一个本地路径：远程 gateway 下浏览器根本不知道那台机器的目录。 */
+const UNKNOWN_DATA_DIR = 'observe.diagnostics.doctor.dataDir.gatewayDecided';
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -136,9 +136,7 @@ export function buildDoctorChecks(input: DoctorCheckInput): DoctorCheck[] {
             path: configured,
             source: source ?? '—',
           })} · ${t('observe.diagnostics.doctor.dataDir.unverified')}`
-        : `${t('observe.diagnostics.doctor.dataDir.default', { path: DEFAULT_DATA_DIR })} · ${t(
-            'observe.diagnostics.doctor.dataDir.unverified',
-          )}`,
+        : `${t(UNKNOWN_DATA_DIR)} · ${t('observe.diagnostics.doctor.dataDir.unverified')}`,
     });
   }
 
@@ -163,9 +161,17 @@ export function buildDoctorChecks(input: DoctorCheckInput): DoctorCheck[] {
       });
     } else {
       const leaf = backend === 'sqlite' ? 'sessions.db' : 'sessions';
-      const base = nonEmpty(configRoot.dataDir) ?? DEFAULT_DATA_DIR;
-      const path = storagePath ?? `${base}/${leaf}`;
-      const derived = storagePath ? '' : ` (${t('observe.diagnostics.doctor.session.derived')})`;
+      // `dataDir` 可能不下发（远程 gateway / 旧 gateway）：那时只给**相对**路径并说明
+      // 基准由网关决定 —— 绝不回退到某个本机默认目录（浏览器不知道对端磁盘布局）。
+      const base = nonEmpty(configRoot.dataDir);
+      const relative = base === undefined;
+      const path = storagePath ?? (relative ? leaf : `${base}/${leaf}`);
+      const markers: string[] = [];
+      if (storagePath === undefined) markers.push(t('observe.diagnostics.doctor.session.derived'));
+      if (relative && storagePath === undefined) {
+        markers.push(t('observe.diagnostics.doctor.session.relative'));
+      }
+      const derived = markers.length > 0 ? ` (${markers.join(' · ')})` : '';
       checks.push({
         name: 'session',
         status: 'info',

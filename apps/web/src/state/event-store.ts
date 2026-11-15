@@ -25,8 +25,17 @@
  *   chunk 子类型，判据见 `events.ts#producesTimelineItem`）：它们一条都不产 item，
  *   却按 delta 计占 per-run 额度 —— 实测一个 run 6.1 万条 `tool_call_delta`，
  *   约 14 次工具调用就把 2000 条额度填满，随后真正产卡的条目被逐条挤出去。
+ * - **回填段并入**（`applyReplaySegment`）：刷新 / 重连时环只留得住尾部，`D \ R`
+ *   （磁盘有、环已淘汰）那一段由 `sessions.events` / `events.list` 拉回来并进同一个
+ *   `entries`。它在 `seq` 上整体落在环带**之下**（见 `disk-replay.ts` 的带图），
+ *   所以 `entries` 仍是升序、`truncateAfter` 的二分不用改，`currentSeq`（重连 `since`）
+ *   也仍然只由环推进 —— 三套 seq 空间不混算。并入后按 `entries` 整表重折叠
+ *   （与 `endBackfill` 同一个理由：更早的段往尾部追加 delta 一定错）。
  */
+
+import type { ReplayEvent } from '../gateway/replay-source';
 import type { RunEvent } from '../gateway/types';
+import { hubTsCeiling, planSegmentMerge, type ReplaySegment } from './disk-replay';
 import type { ErrorVisibility } from './error-visibility';
 import { producesTimelineItem, type StoredEvent } from './events';
 import { type ItemSink, LiveItemStore } from './live-items';
@@ -117,6 +126,70 @@ export interface EventStoreOptions {
   maxItemsTotal?: number;
 }
 
+/**
+ * 回填段（`sessions.events` / `events.list`）的观测面（`EventStore#diskBackfill`）。
+ *
+ * 为什么要有它：回填失败必须 **fail-open**（行为退回「只有环」的今天），所以失败不能
+ * 抛、不能弹窗、不能清空已收到的数据 —— 那就必须留下可核对的东西，否则「磁盘段有没有
+ * 接上」在页面上是**不可观测的**，而这正是本次要修的那类 bug 的形态。
+ *
+ * 口径与 `droppedNoise` 一致：只读、不进快照（不为一个观测数字让每次 50ms 合批都换
+ * 一次 snapshot 对象）。探针 / 诊断页直接读 getter。
+ */
+export interface DiskBackfillStats {
+  /** 触发过几次尝试（每次刷新 / 重连的 chat 订阅算一次）。 */
+  attempts: number;
+  /** 累计成功并入的回填条目数。 */
+  merged: number;
+  /** 累计因「环 / live 已有同一内容 id」而丢掉的条目数（跨源去重的实际战果）。 */
+  duplicates: number;
+  /** 累计因段内身份 `(run_id, seq)` 已并入过而跳过的条目数（跨次回填幂等）。 */
+  alreadyMerged: number;
+  /** 累计因 seq 越界而拒绝的条目数。 */
+  outOfRange: number;
+  /** 累计因「晚于环里最新一条」而押后的条目数（它们归实时流，不是丢）。 */
+  deferred: number;
+  /** 累计因传输窗口上限被清出的条目数（并入后又被裁剪）。 */
+  evicted: number;
+  /** 触发过几次「页数上限先到」（尾部可能没拉全，有洞风险）。 */
+  truncated: number;
+  /** 最后一次失败原因；成功则清空。**这是 fail-open 的那条可观测警告。** */
+  lastError?: string;
+  /** 最后一次尝试结束的时间（ms）。 */
+  at?: number;
+}
+
+function emptyDiskBackfillStats(): DiskBackfillStats {
+  return {
+    attempts: 0,
+    merged: 0,
+    duplicates: 0,
+    alreadyMerged: 0,
+    outOfRange: 0,
+    deferred: 0,
+    evicted: 0,
+    truncated: 0,
+  };
+}
+
+/** `applyReplaySegment` 的返回：本次并入了什么（探针 / 日志用）。 */
+export interface DiskSegmentOutcome {
+  /** 实际并入的条目数。 */
+  merged: number;
+  /** 跨源重复被丢掉的条目数。 */
+  duplicates: number;
+  /** 跨次回填已并入过而跳过的条目数。 */
+  alreadyMerged: number;
+  /** seq 越界被拒的条目数。 */
+  outOfRange: number;
+  /** 并入后被传输窗口上限清出的条目数。 */
+  evicted: number;
+  /** 因「晚于环里最新一条」而押后的条目数（归实时流，不是丢）。 */
+  deferred: number;
+  /** 没有并入的原因（`backfilling` / `empty`）；正常并入时缺省。 */
+  skipped?: 'backfilling' | 'empty';
+}
+
 /** 事件自报的 session 归属：优先顶层字段，其次 `data.session_id`；缺失时 undefined。 */
 function eventSessionId(event: RunEvent): string | undefined {
   const topLevel = (event as { session_id?: unknown }).session_id;
@@ -166,6 +239,27 @@ export class EventStore {
   private held: HeldEvent[] = [];
   /** 回填游标地板；非 null = 正在回填。 */
   private holdFloor: number | null = null;
+  /**
+   * 已并入过的磁盘事件身份键（`(run_id, seq)` 复合键，见 `disk-replay.ts`）。
+   *
+   * 作用只有一个：**跨次回填幂等**。刷新 / 重连可能连续触发两次回填，磁盘段里同一批
+   * 事件不该在第二次被当成「新的」再算一遍 hash、再进一次重折叠。条目本身的去重不靠
+   * 它（靠 `planDiskMerge` 的跨源内容键与 `entries` 的 seq 带）。
+   *
+   * `clear()` / hub 纪元重置（`truncateAfter(0)`）时清空：那两种情况下磁盘段会连同
+   * item 一起作废，下一次回填必须重新并入。
+   */
+  private replayMerged = new Set<string>();
+  /** 回填段的观测面（见 `DiskBackfillStats`）。 */
+  private diskStats: DiskBackfillStats = emptyDiskBackfillStats();
+  /**
+   * trace 带的下一批 rank 起点（`disk-replay.ts#TRACE_SEQ_OFFSET`）。
+   *
+   * 必须是**单调递增的计数器**而不是「本批序号」：`events.list` 的 seq 是 per-run 的，
+   * 跨批无可比性；只有本地分配的 rank 才能保证「后一次回填拿到的 trace 事件」排在
+   * 前一次之后（同一 run 内顺序才不会反）。
+   */
+  private traceRank = 0;
   /**
    * 累计被当作「传输噪声」丢掉的流式增量条数（判据 `events.ts#producesTimelineItem`
    * 为 false 的那些）。只为可观测：提示卡那一单要显示「本轮有 N 条事件未在实时视图
@@ -234,6 +328,39 @@ export class EventStore {
   }
 
   /**
+   * 磁盘段回填的观测面（只读副本）。
+   *
+   * `lastError` 有值 = 这一次**没接上**磁盘段，行为已 fail-open 到「只有环」的今天；
+   * `truncated > 0` = 接过，但页数上限 / 预算先到，尾部可能有洞（两个都是可观测告警，
+   * 不弹窗、不清数据 —— 磁盘回填是增强，不是前置条件）。
+   */
+  get diskBackfill(): Readonly<DiskBackfillStats> {
+    return { ...this.diskStats };
+  }
+
+  /**
+   * 记一次回填尝试的**开始**（每次刷新 / 重连的 chat 订阅一次）。
+   *
+   * `lastError` 在开始时清空：它的语义是「**最近这一次**尝试没接上的原因」，不是历史
+   * 累计 —— 否则一次失败会永远挂在那里，观测面就没法用来看「今天到底接上没有」。
+   */
+  beginDiskBackfillAttempt(): void {
+    this.diskStats.attempts += 1;
+    this.diskStats.at = Date.now();
+    this.diskStats.lastError = undefined;
+  }
+
+  /**
+   * 记一次回填尝试的**结果元信息**（失败原因 / 页数上限先到），由订阅控制器在它那一层
+   * 知道「请求是失败还是截断」时调用 —— `EventStore` 不碰 RPC，只记账。
+   */
+  noteDiskBackfill(result: { truncated?: boolean; error?: string }): void {
+    this.diskStats.at = Date.now();
+    if (result.truncated === true) this.diskStats.truncated += 1;
+    if (result.error !== undefined) this.diskStats.lastError = result.error;
+  }
+
+  /**
    * 设置「订阅范围内的会话」。**必须显式传值**（含 `undefined`）：
    * 换会话要立刻覆写，换到 run / runs / team / none 范围要立刻清空 ——
    * 「不设」会保留上一个会话的残留作用域，把别的会话的增量误归属过来（串台）。
@@ -298,17 +425,38 @@ export class EventStore {
     this.entries.push(entry);
     // 唯一 item 写入点：事件进环之后立刻折叠（裁剪与 item 正交，见 I4）。
     this.sink.ingest(entry);
-    const count = (this.runCounts.get(runId) ?? 0) + 1;
-    this.runCounts.set(runId, count);
+    this.runCounts.set(runId, (this.runCounts.get(runId) ?? 0) + 1);
+    this.trimEntries(runId);
+    this.scheduleNotify();
+    return true;
+  }
 
-    // 每 run 上限：丢该 run 最旧的**非锚点**条目（锚点见 `RUN_ANCHOR_EVENT_TYPES`）。
-    // 裁剪只影响传输面：屏上的 item 由 `LiveItemStore` 物化，不随环缩水（I4）。
-    if (count > this.maxEventsPerRun) {
-      const index = this.oldestEvictableIndex(runId);
-      if (index >= 0) this.entries.splice(index, 1);
-      this.runCounts.set(runId, count - 1);
+  /**
+   * 传输窗口的两道上限（每 run / 总量）。
+   *
+   * 抽出来是为了让**磁盘段并入**（`applyDiskSegment`）走同一套裁剪口径：一次并入几千条
+   * 之后再复制一份裁剪逻辑，两条路径迟早会漂（一条按锚点保护、一条不按）。
+   * `runId` 缺省 = 检查全部 run（批量并入用）；`push` 只传自己那条 run（热路径 O(1)）。
+   *
+   * 每 run 上限：丢该 run 最旧的**非锚点**条目（锚点见 `RUN_ANCHOR_EVENT_TYPES`）。
+   * 裁剪只影响传输面：屏上的 item 由 LiveItemStore 物化，不随环缩水（I4）。
+   * 返回被清出的条数。
+   */
+  private trimEntries(runId?: string): number {
+    let evicted = 0;
+    for (const id of runId === undefined ? [...this.runCounts.keys()] : [runId]) {
+      let over = (this.runCounts.get(id) ?? 0) - this.maxEventsPerRun;
+      while (over > 0) {
+        const index = this.oldestEvictableIndex(id);
+        if (index < 0) break;
+        this.entries.splice(index, 1);
+        const next = (this.runCounts.get(id) ?? 1) - 1;
+        if (next <= 0) this.runCounts.delete(id);
+        else this.runCounts.set(id, next);
+        over -= 1;
+        evicted += 1;
+      }
     }
-
     // 总上限：从最旧开始丢。
     while (this.entries.length > this.maxEventsTotal) {
       const removed = this.entries.shift();
@@ -317,10 +465,105 @@ export class EventStore {
       const remaining = (this.runCounts.get(removedRun) ?? 1) - 1;
       if (remaining <= 0) this.runCounts.delete(removedRun);
       else this.runCounts.set(removedRun, remaining);
+      evicted += 1;
     }
+    return evicted;
+  }
 
-    this.scheduleNotify();
-    return true;
+  /**
+   * 并入一段**回填事件**（`sessions.events` 或 `events.list` 拉回来的那段）——
+   * 前端回填的落点。
+   *
+   * 语义（四条，缺一条这个功能就是骗人的）：
+   * 1. **只增**：把这段里「本地还没有的」条目按 seq 升序插进 `entries`，从不表达删除、
+   *    从不清空、从不 replace 已有内容（「禁止整段 replace」在这一层是结构性的：没有
+   *    那条动作可用）。
+   * 2. **三套 seq 不混算**：会话日志 / trace 各映射到环带**之下**的负数带
+   *    （见 `disk-replay.ts` 的带图），`lastSeq` / `currentSeq`（重连 `since`、
+   *    `truncateAfter` 的判据）**不动**。
+   * 3. **整表重折叠**：并入后按 `entries` 重折一遍（`sink.resume`）。理由与
+   *    `endBackfill` 逐字相同 —— 更早的段往尾部追加 delta 一定错，整 run 重折叠是唯一
+   *    正确做法；顺带把「本段」同屏上已有 item 做锚点合并（Rule R）。
+   * 4. **押后而不是乱序**：`ts` 晚于环里最新一条的事件不并入（`deferred`），它们马上
+   *    由实时流送到；硬并会把「更晚的」排到「更早的」前面。
+   *
+   * 失败是不可能的（纯内存操作）；「这段拿不到」由调用方在 RPC 层 fail-open，
+   * 见 `gateway/replay-source.ts#recoverReplay` 与 `DiskBackfillStats#lastError`。
+   */
+  applyReplaySegment(
+    segment: ReplaySegment,
+    events: readonly ReplayEvent[],
+    opts: { sessionId?: string; truncated?: boolean } = {},
+  ): DiskSegmentOutcome {
+    // 回填暂存期间不许并入：那段时间 `entries` 的游标归 `beginBackfill` / `endBackfill`
+    // 管，中间插一批更早的条目会让暂存帧的落点错位。真发生了就是调用顺序错了（应当先
+    // 跑完环回填再拉磁盘段），这里按「不并入」处理并记进统计，绝不半途改游标。
+    if (this.holdFloor !== null) {
+      return {
+        merged: 0,
+        duplicates: 0,
+        alreadyMerged: 0,
+        outOfRange: 0,
+        deferred: 0,
+        evicted: 0,
+        skipped: 'backfilling',
+      };
+    }
+    const plan = planSegmentMerge({
+      segment,
+      events,
+      existing: this.entries,
+      merged: this.replayMerged,
+      tsCeiling: hubTsCeiling(this.entries),
+      traceRankStart: this.traceRank + 1,
+      ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
+    });
+    // ledger 记全部「看过」的段内身份（含被判重复的）：跨次回填幂等靠它。
+    for (const identity of plan.identities) this.replayMerged.add(identity);
+    this.traceRank += plan.traceRankUsed;
+    const stats = this.diskStats;
+    stats.merged += plan.stats.accepted;
+    stats.duplicates += plan.stats.duplicates;
+    stats.alreadyMerged += plan.stats.alreadyMerged;
+    stats.outOfRange += plan.stats.outOfRange;
+    stats.deferred += plan.stats.deferred;
+    if (opts.truncated === true) stats.truncated += 1;
+    if (plan.entries.length === 0) {
+      return {
+        merged: 0,
+        duplicates: plan.stats.duplicates,
+        alreadyMerged: plan.stats.alreadyMerged,
+        outOfRange: plan.stats.outOfRange,
+        deferred: plan.stats.deferred,
+        evicted: 0,
+        skipped: 'empty',
+      };
+    }
+    // 两个负带的映射都是确定性的（会话：`seq - 2e9`；trace：单调 rank），所以合并后整体
+    // 重排一次就是正确的升序，与「先并入哪一段 / 分几次并入」无关。
+    this.entries = [...this.entries, ...plan.entries].sort((left, right) => left.seq - right.seq);
+    this.runCounts.clear();
+    this.runSessions.clear();
+    for (const entry of this.entries) {
+      const runId = entry.event.run_id;
+      this.runCounts.set(runId, (this.runCounts.get(runId) ?? 0) + 1);
+      // 归属来源与 `truncateAfter` 的重建口径一致：条目自带（回填段由调用方盖）优先。
+      const owner = entry.sessionId ?? eventSessionId(entry.event);
+      if (owner !== undefined) this.runSessions.set(runId, owner);
+    }
+    const evicted = this.trimEntries();
+    stats.evicted += evicted;
+    // 整表重折叠（含 Rule R 的保留）：屏上「更早的那一段长出来」，已有内容不动。
+    this.sink.resume(this.entries);
+    this.flush();
+    return {
+      merged: plan.stats.accepted,
+      duplicates: plan.stats.duplicates,
+      alreadyMerged: plan.stats.alreadyMerged,
+      outOfRange: plan.stats.outOfRange,
+      deferred: plan.stats.deferred,
+      evicted,
+    };
   }
 
   /**
@@ -407,7 +650,22 @@ export class EventStore {
     // 陈旧 epoch）：item 的 seq 身份与新事件**不可比**，必须整体作废重来，否则水位会把
     // 新事件全部当重放丢掉、时间线从此定格。正常 hello 的 `from_seq - 1` 落在已有窗口
     // 之内，item 不动（I6）；回填期间 `beginBackfill` 已先冻结，这里不会误伤。
-    if (nextSeq === 0) this.sink.reset();
+    //
+    // 磁盘带（负 seq）随 item 一起作废：`sink.reset()` 已经把屏上 item 清空，条目留着只会
+    // 变成「环里有、屏上没有」；而磁盘 seq 本身是持久的，下一次回填一定会重新并入同一批
+    // 事件，所以清 ledger 是安全的（不清 ledger 才会让那批事件永远进不来）。
+    const epochReset = nextSeq === 0;
+    let epochDropped = 0;
+    if (epochReset) {
+      this.sink.reset();
+      this.replayMerged.clear();
+      const kept: StoredEvent[] = [];
+      for (const entry of this.entries) {
+        if (entry.seq > 0) kept.push(entry);
+        else epochDropped += 1;
+      }
+      if (epochDropped > 0) this.entries = kept;
+    }
     // entries 按 seq 升序：二分出第一条 seq > nextSeq。
     let low = 0;
     let high = this.entries.length;
@@ -418,7 +676,7 @@ export class EventStore {
     }
     const dropped = this.entries.slice(low);
     this.lastSeq = nextSeq;
-    if (dropped.length === 0) {
+    if (dropped.length === 0 && epochDropped === 0) {
       // 只推进了游标（没有尾部要丢）：仍然发布一次，保证快照里的 lastSeq 与内部一致。
       this.flush();
       return 0;
@@ -439,7 +697,7 @@ export class EventStore {
       if (!this.runCounts.has(runId)) this.runSessions.delete(runId);
     }
     this.flush();
-    return dropped.length;
+    return dropped.length + epochDropped;
   }
 
   /**
@@ -544,6 +802,8 @@ export class EventStore {
    * 清空只处理条目。`runSessions`（run→session 自报映射）清空：它只是当前缓冲窗口的
    * 派生数据，重新回放/接收时重建；作用域不依赖它。
    * 回填暂存一并丢弃（作用域都变了，更早的分页也没有意义）。
+   * 磁盘段的 ledger 一并清空：条目已经全没了，留着 ledger 只会让下一次回填把同一批
+   * 事件当成「已并入过」而跳过 —— 那是「清了又永远补不回来」的最坏形态。
    */
   clear(nextSeq = 0): void {
     this.entries = [];
@@ -551,6 +811,7 @@ export class EventStore {
     this.holdFloor = null;
     this.runCounts.clear();
     this.runSessions.clear();
+    this.replayMerged.clear();
     this.lastSeq = nextSeq;
     // 作用域真变了：传输窗口清了，物化面必须一起清（否则串台 / 幽灵卡片）。
     this.sink.clear();
