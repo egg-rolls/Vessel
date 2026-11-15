@@ -28,23 +28,25 @@
  * 运行：`bun run scripts/check-replay-apply.ts`  退出码 0=PASS，1=FAIL，2=自身错误。
  */
 
-import {
-  buildLiveItems,
-  type TranscriptItem,
-} from '../apps/web/src/domains/chat/transcript-items';
+import { buildLiveItems, type TranscriptItem } from '../apps/web/src/domains/chat/transcript-items';
 import {
   inHoles,
   planBackfill,
   planRange,
-  toRunEvent,
-  validateTimelineRange,
   type TimelineCursor,
   type TimelineEvent,
   type TimelineHoleRange,
   type TimelineRangeHeader,
+  toRunEvent,
+  validateTimelineRange,
 } from '../apps/web/src/gateway/timeline-protocol';
 import { EventStore } from '../apps/web/src/state/event-store';
-import { groupEvents, producesTimelineItem, type RunGroup, type StoredEvent } from '../apps/web/src/state/events';
+import {
+  groupEvents,
+  producesTimelineItem,
+  type RunGroup,
+  type StoredEvent,
+} from '../apps/web/src/state/events';
 
 const SESSION = 's-b2';
 const RUN = 'r-b2';
@@ -79,7 +81,9 @@ function midRunEvents(count = 40): TimelineEvent[] {
   let round = 0;
   while (events.length < count - 1) {
     round += 1;
-    push('llm.stream.chunk', { chunk: { type: 'reasoning_delta', delta: `想一想 ${String(round)}.` } });
+    push('llm.stream.chunk', {
+      chunk: { type: 'reasoning_delta', delta: `想一想 ${String(round)}.` },
+    });
     push('llm.stream.chunk', { chunk: { type: 'text_delta', delta: `第 ${String(round)} 句。` } });
     push('tool.call.started', { call_id: `c${String(round)}`, tool_name: 'bash' });
     push('tool.call.completed', {
@@ -93,7 +97,10 @@ function midRunEvents(count = 40): TimelineEvent[] {
   return events.slice(0, count).map((event, index) => ({ ...event, seq: index + 1 }));
 }
 
-function headerOf(events: readonly TimelineEvent[], holes: TimelineHoleRange[] = []): TimelineRangeHeader {
+function headerOf(
+  events: readonly TimelineEvent[],
+  holes: TimelineHoleRange[] = [],
+): TimelineRangeHeader {
   const end = events.reduce((top, event) => Math.max(top, event.seq), 0);
   return planRange(1, end, {
     timeline_head: end,
@@ -148,7 +155,11 @@ function s1OneRange(): void {
     'S1 覆盖',
     `entries ${String(seqsOf(store).length)} 条 != 应入环 ${String(expected.length)} 条`,
   );
-  expect(store.currentSeq === events.length, 'S1 游标', `游标 ${store.currentSeq} != ${events.length}`);
+  expect(
+    store.currentSeq === events.length,
+    'S1 游标',
+    `游标 ${store.currentSeq} != ${events.length}`,
+  );
   expect(
     JSON.stringify(itemsOf(groupsOf(store))) === JSON.stringify(itemsOf(rebuild(events))),
     'S1 item 流',
@@ -166,7 +177,11 @@ function s2Idempotent(): void {
   expect(again.violation === undefined, 'S2 复喂不报缺口', '同一区间第二次不该被当成缺口');
   expect(again.merged === 0, 'S2 一条不并', `第二次并入了 ${String(again.merged)} 条`);
   expect(JSON.stringify(seqsOf(store)) === entriesBefore, 'S2 环不变', '复喂之后环里的条目变了');
-  expect(JSON.stringify(itemsOf(groupsOf(store))) === before, 'S2 item 幂等', '复喂之后 item 流变了');
+  expect(
+    JSON.stringify(itemsOf(groupsOf(store))) === before,
+    'S2 item 幂等',
+    '复喂之后 item 流变了',
+  );
 }
 
 function s3JoinTail(): void {
@@ -178,13 +193,13 @@ function s3JoinTail(): void {
   const tail = store.currentSeq;
   const outcome = store.applyTimelineRange(headerOf(events), events);
   expect(outcome.violation === undefined, 'S3 不报缺口', '补更早一段不该被当成缺口');
-  expect(store.currentSeq === events.length, 'S3 游标', `游标 ${store.currentSeq} != ${events.length}`);
-  const stored = seqsOf(store);
   expect(
-    stored.includes(tail - 1),
-    'S3 接上',
-    `更早那一段没有接上（${String(tail)} 之前是空的）`,
+    store.currentSeq === events.length,
+    'S3 游标',
+    `游标 ${store.currentSeq} != ${events.length}`,
   );
+  const stored = seqsOf(store);
+  expect(stored.includes(tail - 1), 'S3 接上', `更早那一段没有接上（${String(tail)} 之前是空的）`);
   expect(
     JSON.stringify(itemsOf(groupsOf(store))) === JSON.stringify(itemsOf(rebuild(events))),
     'S3 item 流',
@@ -194,7 +209,9 @@ function s3JoinTail(): void {
 
 // ───────────────────────────── V1..V7：四条校验 ─────────────────────────────
 
-function gapOf(store: EventStore): { rule?: number; expected: string; received: string } | undefined {
+function gapOf(
+  store: EventStore,
+): { rule?: number; expected: string; received: string } | undefined {
   return store.timelineGap.last;
 }
 
@@ -251,12 +268,24 @@ function v5CursorTamper(): void {
   // 篡改①：游标 +1（少拉一条）⇒ 区间从 32 起，收到的却是 1..40。
   const plus = planBackfill(cursor, 31);
   expect(plus !== undefined && plus.start_seq === 32, 'V5 构造①', '游标 +1 的区间起点不对');
-  const plusGap = plus === undefined ? undefined : validateTimelineRange(plus, events.map((e) => e.seq));
+  const plusGap =
+    plus === undefined
+      ? undefined
+      : validateTimelineRange(
+          plus,
+          events.map((e) => e.seq),
+        );
   expect(plusGap !== undefined && plusGap.rule === 3, 'V5 拒绝①', '游标 +1 未被拒绝（应报边界）');
   // 篡改②：游标 -1（多拉一条）⇒ 区间从 30 起，但首条是 1。
   const minus = planBackfill(cursor, 29);
   expect(minus !== undefined && minus.start_seq === 30, 'V5 构造②', '游标 -1 的区间起点不对');
-  const minusGap = minus === undefined ? undefined : validateTimelineRange(minus, events.map((e) => e.seq));
+  const minusGap =
+    minus === undefined
+      ? undefined
+      : validateTimelineRange(
+          minus,
+          events.map((e) => e.seq),
+        );
   expect(minusGap !== undefined, 'V5 拒绝②', '游标 -1 未被拒绝');
   // 篡改③：游标落在声明洞里 ⇒ 该 seq 本来就不该收到；实收里有它 ⇒ 连续性对不上。
   const holed: TimelineCursor = {
@@ -268,12 +297,21 @@ function v5CursorTamper(): void {
   const inHole = planBackfill(holed, 30);
   expect(inHole !== undefined && inHoles(31, inHole.holes), 'V5 构造③', '声明的洞没进区间头部');
   const holeGap =
-    inHole === undefined ? undefined : validateTimelineRange(inHole, events.map((e) => e.seq));
+    inHole === undefined
+      ? undefined
+      : validateTimelineRange(
+          inHole,
+          events.map((e) => e.seq),
+        );
   expect(holeGap !== undefined, 'V5 拒绝③', '落在洞内的实收未被拒绝');
   // 三种构造都必须留下可读的 expected / received（不是只喊「有缺口」）。
   for (const gap of [plusGap, minusGap, holeGap]) {
     if (gap === undefined) continue;
-    expect(gap.expected.length > 0 && gap.received.length > 0, 'V5 可读', '缺口报告缺 expected/received');
+    expect(
+      gap.expected.length > 0 && gap.received.length > 0,
+      'V5 可读',
+      '缺口报告缺 expected/received',
+    );
   }
 }
 
@@ -285,10 +323,22 @@ function v6Holes(): void {
   store.setScopeSession(SESSION);
   const header = headerOf(all, holes);
   const outcome = store.applyTimelineRange(header, events);
-  expect(outcome.violation === undefined, 'V6 洞内不期望', `声明的洞被判成缺口：${String(gapOf(store)?.rule)}`);
+  expect(
+    outcome.violation === undefined,
+    'V6 洞内不期望',
+    `声明的洞被判成缺口：${String(gapOf(store)?.rule)}`,
+  );
   const expected = events.filter((event) => producesTimelineItem(event)).length;
-  expect(outcome.merged === expected, 'V6 条数', `并入 ${String(outcome.merged)} != ${String(expected)}`);
-  expect(store.currentSeq === all.length, 'V6 游标', `游标 ${store.currentSeq} != ${all.length}（洞不许卡住游标）`);
+  expect(
+    outcome.merged === expected,
+    'V6 条数',
+    `并入 ${String(outcome.merged)} != ${String(expected)}`,
+  );
+  expect(
+    store.currentSeq === all.length,
+    'V6 游标',
+    `游标 ${store.currentSeq} != ${all.length}（洞不许卡住游标）`,
+  );
   expect(store.timelineGap.tainted, 'V6 污点', '有声明洞时 UI 必须显示「这一段读不回来」');
 }
 
@@ -384,7 +434,11 @@ function t2Interleave(): void {
   expect(runs >= 4, 'T2 交错', `工具 / 思考只有 ${String(runs)} 段（聚堆了）`);
   const tools = kinds.filter((kind) => kind === 'tool').length;
   const reasoning = kinds.filter((kind) => kind === 'run-reasoning').length;
-  expect(tools > 0 && reasoning > 0, 'T2 两类都在', `工具 ${String(tools)} / 思考 ${String(reasoning)}`);
+  expect(
+    tools > 0 && reasoning > 0,
+    'T2 两类都在',
+    `工具 ${String(tools)} / 思考 ${String(reasoning)}`,
+  );
 }
 
 function t3OwnSeq(): void {
@@ -405,7 +459,11 @@ function t4SegmentsJoin(): void {
   const events = midRunEvents();
   const { store, live } = midRunRefresh();
   const last = live[live.length - 1] as TimelineEvent;
-  expect(store.currentSeq === last.seq, 'T4 游标', `游标 ${store.currentSeq} != 实时末条 ${last.seq}`);
+  expect(
+    store.currentSeq === last.seq,
+    'T4 游标',
+    `游标 ${store.currentSeq} != 实时末条 ${last.seq}`,
+  );
   const stored = seqsOf(store);
   const tailOfRange = events[events.length - 1]?.seq ?? 0;
   expect(
@@ -450,4 +508,3 @@ function main(): void {
 }
 
 main();
-

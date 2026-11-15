@@ -56,10 +56,10 @@ import {
   claimRunFactsOf,
   type TranscriptItem,
 } from '../apps/web/src/domains/chat/transcript-items';
+import type { TimelineEvent, TimelineRangeHeader } from '../apps/web/src/gateway/timeline-protocol';
 import type { RunEvent } from '../apps/web/src/gateway/types';
 import type { Message } from '../apps/web/src/gateway/types/sessions';
 import { EventStore } from '../apps/web/src/state/event-store';
-import type { TimelineEvent, TimelineRangeHeader } from '../apps/web/src/gateway/timeline-protocol';
 import { groupEvents, type RunGroup, type StoredEvent } from '../apps/web/src/state/events';
 import type { ItemStoreSnapshot } from '../apps/web/src/state/live-items';
 
