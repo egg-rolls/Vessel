@@ -1,6 +1,11 @@
 {
   "lockfileVersion": 1,
   "configVersion": 1,
+  // 注：workspaces 段里各成员内部的 `@vessel-agent/*` 依赖串（共 27 行）是**人工**规范成
+  // `workspace:*` 的：bun 1.3.9 只在首次生成成员条目时按 manifest 写 `workspace:*`，
+  // 之后不会刷新已有条目的嵌套依赖串（它们曾停留在 0.26.2 / 0.10.0 / 0.33.0 / 0.1.0 / 0.50.0）。
+  // 验证方式：改完再跑一次 `bun install`，`git diff bun.lock` 为空；`bun install --frozen-lockfile`
+  // 干净通过。外部依赖的版本与完整性哈希均未改动。
   "workspaces": {
     "": {
       "name": "vessel-agent",
