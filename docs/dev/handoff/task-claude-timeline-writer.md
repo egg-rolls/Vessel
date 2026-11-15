@@ -81,3 +81,45 @@ packages/core/src/timeline/
 2. 三份自证脚本的真实 stdout（不是转述）；
 3. 性能三数字；
 4. 「与 ADR 的差异」清单（没有就写"无"）。
+
+---
+
+## 八、关于「逐条相等」怎么做（2026-11-16 实测修正，必读）
+
+我们已把「尺子」实现好并接进门禁：`scripts/timeline-reference.ts` + `scripts/check-timeline-reference.ts`（34 项自检，`bun run check:timeline-reference`）。
+**你必须调用它，不许自己实现比较逻辑**（否则就是拿自己的秤称自己的货）：
+
+```ts
+import { loadSessionReference, multisetDiff, refEventFromRaw, isTimelineOnlyType } from '../scripts/timeline-reference';
+```
+
+### 8.1 三处与你原本预期不同的事实（都有实测证据）
+
+1. **跨源不能用「四段内容 id」**：trace 落盘前会过 `redact()` + `summarizeLlmRequestEvent()`，
+   同一逻辑事件在两份旧源里 payload **本来就不同**（实测：`llm.request` 全部不等——trace 丢 `tools`/`messages`、多 `last_message`；`llm.response` 部分丢 `reasoning`）。
+   ⇒ 旧源侧的身份是 **`(run_id, type, ts)` 三段 + 重数（multiplicity）**：逐键取 `max(会话日志条数, trace 条数)`，相等取会话日志侧。
+   这不是放宽：同一毫秒同型的两条仍然都保留（不塌成 1），只是不再拿 payload 区分。
+   **但你自己 timeline 的内部身份仍然是 `timeline_seq`**，与这条无关。
+2. **「旧源没有、timeline 会有」的类型不是空集，恰好两条**：
+   `llm.stream.chunk` 与 `*.llm.stream.chunk`（子 agent 形态）。实测本机 242 份 `events.ndjson` + 1217 个 trace 文件，chunk 事件数 **0**。
+   你的 A-1 差集白名单必须**恰好等于**这两条（多一条或写成「包含」都不合格）。
+   **不在此列**（必须两边同样排除）：`trace.*`、`replay.*`（recorder 自激防护行）、`trace.overflow`（记账行，非会话事实）、`session.deleted`（目录已删，两边都留不下）。
+3. **`run_id` 是重载的**：会话级事件的 `run_id == session_id`（`session.created` / `agent.spawned` / `agent.message.queued` / `agent.retired` / `agent.closed`），对应 trace 文件是 `events/<session_id>.jsonl`（242 个会话里 236 个真有）。
+   ⇒ **不能**把 `run_id == session_id` 当伪 run 剔掉，否则整个 `agent.*` 家族静默消失。
+
+### 8.2 夹具选择（否则你会看到"新链路多写了几百条"的假差异）
+
+必须选 **trace 齐全** 的会话：本机 `main` 会话 122 个 run 只有 12 个 trace 文件——拿它当夹具，`trace_only` 那 300–500 条会全部看起来像"timeline 多写了"。
+用 `--sessions` 指定；报告里必须写明每个夹具的 `events=N runs=M` 与 trace 覆盖率。
+
+### 8.3 你的 conformance 脚本判据
+
+```
+ref  = await loadSessionReference(sessionId, { dataDir })
+mine = <你的 timeline 归一化成 RefEvent[]>
+diff = multisetDiff(ref, mine)
+extraFiltered  = diff.extra.filter(e => !isTimelineOnlyType(e.type))   // 只允许 chunk 类
+合格 = diff.missing.length === 0 && extraFiltered.length === 0
+```
+并打印 `missing` / `extra`（含被 `isTimelineOnlyType` 剔掉的条数），以及夹具的 trace 覆盖率。
+
