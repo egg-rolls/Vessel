@@ -655,19 +655,19 @@ section('T7 分层口径（折叠态=增量 / 展开=总数）与同载荷去重
     enHead.includes('6 older tool result(s) turned into placeholders this run') &&
     !enHead.includes('231')
   )
-    ok('T7.1 en 折叠态首行只说本轮新增 6 条（不带总数 231）');
-  else fail('T7.1', 'en 首行口径不对：' + enHead);
+    ok('T8.1 en 折叠态首行只说本轮新增 6 条（不带总数 231）');
+  else fail('T8.1', 'en 首行口径不对：' + enHead);
   if (zhHead.includes('本轮新增 6 条旧工具结果换为占位符') && !zhHead.includes('231'))
-    ok('T7.2 zh-CN 折叠态首行只说本轮新增 6 条（不带总数 231）');
-  else fail('T7.2', 'zh-CN 首行口径不对：' + zhHead);
+    ok('T8.2 zh-CN 折叠态首行只说本轮新增 6 条（不带总数 231）');
+  else fail('T8.2', 'zh-CN 首行口径不对：' + zhHead);
   // 明细行（展开区）才给总数，且原有明细（保留条数 / call id）不变形。
   if (
     (enLines[1] ?? '').startsWith('  · ') &&
     (enLines[1] ?? '').includes('231 cleared in this session') &&
     (zhLines[1] ?? '').includes('会话内已累计 231 条被占位')
   )
-    ok('T7.3 展开明细第一行给出总数 231（en / zh-CN 都有）');
-  else fail('T7.3', '明细行没有总数：' + JSON.stringify([enLines[1], zhLines[1]]));
+    ok('T8.3 展开明细第一行给出总数 231（en / zh-CN 都有）');
+  else fail('T8.3', '明细行没有总数：' + JSON.stringify([enLines[1], zhLines[1]]));
   if (
     enLines.length === 4 &&
     enLines.slice(1).every((line) => line.startsWith('  · ')) &&
@@ -675,12 +675,12 @@ section('T7 分层口径（折叠态=增量 / 展开=总数）与同载荷去重
     (enLines[3] ?? '').includes('call_f') &&
     (enLines[3] ?? '').includes('call_a')
   )
-    ok('T7.4 明细行仍是「env 卡同一格式」，kept / 新增 call id 未变、id 列表没改回全量');
-  else fail('T7.4', '明细行形状变了：' + JSON.stringify(enLines.slice(1)));
+    ok('T8.4 明细行仍是「env 卡同一格式」，kept / 新增 call id 未变、id 列表没改回全量');
+  else fail('T8.4', '明细行形状变了：' + JSON.stringify(enLines.slice(1)));
   // 反证：两个口径各在一层 —— 总数只出现在明细、增量只出现在首行。
   if (!enHead.includes('231') && en.includes('231 cleared in this session'))
-    ok('T7.5 总数只在展开明细、增量只在折叠首行（不再一句话两个口径）');
-  else fail('T7.5', '两个口径的层次没分开：' + en);
+    ok('T8.5 总数只在展开明细、增量只在折叠首行（不再一句话两个口径）');
+  else fail('T8.5', '两个口径的层次没分开：' + en);
   // 缩略照旧：新增溢出折成 `+N`，不许把 id 全量摊开把卡炸大。
   const flooded = renderContextTrimNotice({
     cleared: 231,
@@ -688,18 +688,18 @@ section('T7 分层口径（折叠态=增量 / 展开=总数）与同载荷去重
     tool_call_ids: Array.from({ length: 210 }, (_unused, index) => 'call_' + String(index)),
   });
   if (flooded.includes(', +202') && !flooded.includes('call_9,'))
-    ok('T7.6 新增 id 溢出仍折成 +N（卡不会因 210 条新增被撑大）');
-  else fail('T7.6', '溢出缩略坏了：' + (flooded.split('\n')[3] ?? ''));
+    ok('T8.6 新增 id 溢出仍折成 +N（卡不会因 210 条新增被撑大）');
+  else fail('T8.6', '溢出缩略坏了：' + (flooded.split('\n')[3] ?? ''));
 
   // 去重键：三元组全等才相等，任一项不同就不同（JSON 编码，id 里带分隔符也不撞）。
   const sig = trimNoticeSignature;
   expect(
-    'T7.7 去重键：三元组全等 ⇒ 同一个键',
+    'T8.7 去重键：三元组全等 ⇒ 同一个键',
     sig({ cleared: 5, added: 2, tool_call_ids: ['call_0', 'call_1'] }),
     sig({ cleared: 5, added: 2, tool_call_ids: ['call_0', 'call_1'] }),
   );
   expect(
-    'T7.8 去重键：总数 / 新增条数 / id 列表任一项变了 ⇒ 键不同',
+    'T8.8 去重键：总数 / 新增条数 / id 列表任一项变了 ⇒ 键不同',
     new Set([
       sig({ cleared: 5, added: 2, tool_call_ids: ['call_0', 'call_1'] }),
       sig({ cleared: 6, added: 2, tool_call_ids: ['call_0', 'call_1'] }),
@@ -712,8 +712,8 @@ section('T7 分层口径（折叠态=增量 / 展开=总数）与同载荷去重
     sig({ cleared: 5, added: 1, tool_call_ids: ['a|b'] }) !==
     sig({ cleared: 5, added: 2, tool_call_ids: ['a', 'b'] })
   )
-    ok('T7.9 去重键不会把不同载荷撞成同一张卡（id 里带分隔符）');
-  else fail('T7.9', '不同载荷拼出了同一个去重键');
+    ok('T8.9 去重键不会把不同载荷撞成同一张卡（id 里带分隔符）');
+  else fail('T8.9', '不同载荷拼出了同一个去重键');
 }
 
 /**
@@ -882,14 +882,14 @@ await (async function checkDualScaleAndDedupe(): Promise<void> {
       try {
         const state = await runAndWait(runtime, dir, '继续读');
         const events = trimEventsOf(runtime.seen);
-        expect('T7.10 一次段起点只发一条 trim 事件', events.length, 1);
+        expect('T8.10 一次段起点只发一条 trim 事件', events.length, 1);
         expect(
-          'T7.11 事件 data：cleared = 总数 5、added = 本轮新增 3、kept = 1',
+          'T8.11 事件 data：cleared = 总数 5、added = 本轮新增 3、kept = 1',
           [events[0]?.data?.['cleared'], events[0]?.data?.['added'], events[0]?.data?.['kept']],
           [5, 3, 1],
         );
         expect(
-          'T7.12 事件 data.tool_call_ids 只有本轮新增的 3 条',
+          'T8.12 事件 data.tool_call_ids 只有本轮新增的 3 条',
           events[0]?.data?.['tool_call_ids'],
           ['call_2', 'call_3', 'call_4'],
         );
@@ -902,13 +902,13 @@ await (async function checkDualScaleAndDedupe(): Promise<void> {
           ) &&
           (summaryLines[1] ?? '').includes('5 cleared in this session')
         )
-          ok('T7.13 事件 summary 分层：首行是增量 3，明细行是总数 5');
-        else fail('T7.13', 'summary 层次不对：' + JSON.stringify(summaryLines));
+          ok('T8.13 事件 summary 分层：首行是增量 3，明细行是总数 5');
+        else fail('T8.13', 'summary 层次不对：' + JSON.stringify(summaryLines));
         const cards = trimCardsIn(state);
-        expect('T7.14 落盘里就一张 trim 卡', cards.length, 1);
+        expect('T8.14 落盘里就一张 trim 卡', cards.length, 1);
         if (cards[0] !== undefined && String(cards[0].content) === summary)
-          ok('T7.15 卡正文与事件 summary 逐字一致');
-        else fail('T7.15', '卡正文与 summary 不一致：' + String(cards[0]?.content));
+          ok('T8.15 卡正文与事件 summary 逐字一致');
+        else fail('T8.15', '卡正文与 summary 不一致：' + String(cards[0]?.content));
       } finally {
         runtime.stop();
       }
@@ -933,10 +933,10 @@ await (async function checkDualScaleAndDedupe(): Promise<void> {
       let afterFirst: SessionState;
       try {
         afterFirst = await runAndWait(first, dir, '继续读');
-        expect('T7.16 第一轮：发一条 trim 事件', trimEventsOf(first.seen).length, 1);
-        expect('T7.17 第一轮：落盘一张 trim 卡', trimCardsIn(afterFirst).length, 1);
+        expect('T8.16 第一轮：发一条 trim 事件', trimEventsOf(first.seen).length, 1);
+        expect('T8.17 第一轮：落盘一张 trim 卡', trimCardsIn(afterFirst).length, 1);
         expect(
-          'T7.18 第一轮 added = cleared（上一张卡没讲过的全算新增）',
+          'T8.18 第一轮 added = cleared（上一张卡没讲过的全算新增）',
           [
             trimEventsOf(first.seen)[0]?.data?.['cleared'],
             trimEventsOf(first.seen)[0]?.data?.['added'],
@@ -947,11 +947,11 @@ await (async function checkDualScaleAndDedupe(): Promise<void> {
         // 第二轮：同一个实例、同样的窗口 ⇒ 同样的载荷（总数 5 / 新增 5 / 同样 5 个 id）。
         const afterSecond = await runAndWait(first, dir, '再继续');
         expect(
-          'T7.19 第二轮同样的载荷 ⇒ 不再发 trim 事件（去重）',
+          'T8.19 第二轮同样的载荷 ⇒ 不再发 trim 事件（去重）',
           trimEventsOf(first.seen).length,
           1,
         );
-        expect('T7.20 第二轮落盘里仍然只有那一张 trim 卡', trimCardsIn(afterSecond).length, 1);
+        expect('T8.20 第二轮落盘里仍然只有那一张 trim 卡', trimCardsIn(afterSecond).length, 1);
       } finally {
         first.stop();
       }
@@ -961,11 +961,11 @@ await (async function checkDualScaleAndDedupe(): Promise<void> {
       try {
         const afterThird = await runAndWait(second, dir, '再来一次');
         expect(
-          'T7.21 反证：新实例（去重记忆为空）会再发一张卡',
+          'T8.21 反证：新实例（去重记忆为空）会再发一张卡',
           trimEventsOf(second.seen).length,
           1,
         );
-        expect('T7.22 反证：盘上因此有两张 trim 卡', trimCardsIn(afterThird).length, 2);
+        expect('T8.22 反证：盘上因此有两张 trim 卡', trimCardsIn(afterThird).length, 2);
       } finally {
         second.stop();
       }
