@@ -136,8 +136,8 @@ P3 / P4 的来源。
   `sessions.events` / `timeline.read` 的任何一页里。
 - 直接后果（写清，别当副作用）：chunk 的实时性由**封块策略**决定，不由"发布提前"决定。封块触发条件
   （全部在这条不变量之内）：① 活动块 ≥ `BLOCK_MAX_BYTES`（32 KiB）；② 有非 chunk 事件要落盘
-  （**严格交错优先**：先封块再写该行）；③ 空闲 `CHUNK_FLUSH_MS = 250`（上限 1000，配置键
-  `timeline.chunk_flush_ms`）；④ run 终态 / `flush()` / 进程退出。⇒ chunk 发布延迟上界 = 250 ms
+  （**严格交错优先**：先封块再写该行）；③ 空闲 `CHUNK_FLUSH_MS = 150`（上限 1000，配置键
+  `timeline.chunk_flush_ms`）；④ run 终态 / `flush()` / 进程退出。⇒ chunk 发布延迟上界 = 150 ms
   （或一次工具事件的间隔）；嫌慢只能调小 ②③ 的参数，**不得旁路 WAL**（门禁
   `check-timeline-publish-after-wal`）。
 - 为什么这是"未归档集合可枚举"的前提：UI 见过的每个 seq 都 ≤ `wal_head`，所以 UI 的集合恒等于
@@ -155,6 +155,14 @@ P3 / P4 的来源。
   （§7 的右半边就是给这种情形留的）。今天没有这个区分（`run-journal.ts:296-321` 落盘失败只报一次日志 +
   一条 `session.log.failed`，随后当成没事），所以"磁盘缺、环有"是沉默的。
 
+  **失败必须落盘成可声明的洞**（2026-11-16 补，断言见 §7 A5）：
+  - append 失败后，写者在**同一会话的洞登记区**（与 timeline 同目录、append-only、crc32 校验）追加一条
+    `{from_seq, to_seq, reason, at}`，该区间永久计入 `holes`，**不得只在内存或日志里记**；
+  - 断言形态：模拟 WAL fsync 失败 → **重启后** `sessions.get.event_cursor.holes` 必含该区间、
+    `tainted === true`、UI 出污点条；只做内存标记不算通过；
+  - 唯一例外：**撕裂尾帧**（最后一条半写、从未发布）允许重分配 seq，因为任何客户端都没见过它；
+    判据是 `published_head` 单调（见 I4）。
+
 #### I4 **`timeline_head` 与 `wal_head` 两个指针必须可对外上报**
 
 - 两指针出现在三处，字段名固定：`sessions.get` 的 `event_cursor`（今天有 `last_seq` / `derived_upto_seq`，
@@ -162,6 +170,9 @@ P3 / P4 的来源。
   `timeline.read` 的每页。
 - 恒等式与单调性（断言见 §7）：`0 ≤ timeline_head ≤ wal_head`；同一会话内两指针**只增不减**；重启后第一帧的
   `wal_head` **不小于**重启前最后对外报出的 `wal_head`（否则就是丢数据，必须报 `holes`）。
+- **`published_head` 单调（2026-11-16 补，具名断言）**：`published_head` = 已对外发布过的最大 seq，
+  跨重启必须**不下降**；任何回退 ⇒ A5 断言 FAIL，且该回退区间必须出现在 `holes` 里。
+  这条与 I1 的"作废不回收"配对：**未发布的尾部可重分配，已发布的绝不可**。
 - 为什么"必须可上报"而不是内部指标：验收等式（§7）两边都要**对外可枚举**，客户端才能自己核对；今天客户端
   能拿到的唯一水位是易失的 hub seq（`event-store.ts:379-380`）。
 
@@ -305,7 +316,7 @@ timeline.idx/type.idx        # type 索引（可重建，§5）
 | 1 | **跨会话顺序** | 会话内 seq 跨会话不可比；团队视图/成员历史今天只能按 `ts` 排（`disk-replay.ts:33-36`） | 决定：**团队视图排序键 = `(ts, session_id, timeline_seq)`**（复合、稳定，但**不**声称会话间全序）；真正的跨会话全序（节点级单调）属 0.55+，需要 platform 层决策，本文不预支 |
 | 2 | **子 agent 事件的归属** | 子 agent 是独立会话（独立目录）；子 agent 事件进父会话还是自己会话，今天无逐条核对（`session-replay.md` §7 第 5 项 = 待核实） | 决定：**子 agent 事件只进子会话 timeline**，父会话只记 `agent.*` 生命周期事件（与今天 `agent.post`/`subscribe` 的边界一致）；"团队一条时间线"用第 1 项的复合排序在**读侧**拼，不给子会话另造 seq |
 | 3 | **磁盘损坏检测手段** | 今天只有 `truncatePartialTail` + 读时 bad-line 容错（findings §2），**没有**主动校验 | 0.54 只做**被动声明**（crc32 + `holes`），不做定期 scrub；scrub 的调度、代价、告警阈值列为 0.55 事项（需实测 IO 预算） |
-| 4 | **块大小 / flush 间隔的取值** | 32 KiB / 250 ms 是本文取值 | 需 A 阶段实测：chunk 发布延迟 P95、块数、fsync 次数、RSS。若影响体感，先调 `timeline.chunk_flush_ms`，**不**改 I2 |
+| 4 | **块大小 / flush 间隔的取值** | 32 KiB / 150 ms 是本文取值 | 需 A 阶段实测：chunk 发布延迟 P95、块数、fsync 次数、RSS。若影响体感，先调 `timeline.chunk_flush_ms`，**不**改 I2 |
 | 5 | **`trace.prune` 的归宿** | 今天删 `data/events/<run_id>.jsonl`（`observability.ts` 的 `trace.prune`） | 0.54 起返回 `not_supported`（旧 trace 只读、不删）；timeline 归档段的回收需要**独立 ADR**——本文不授权任何 timeline 删除 |
 | 6 | **ADR-104 读回通道** | ADR-104 §2.3f 的 `sessions.events` 读回，在 0.54 由 `timeline.read`（同 RPC 名 `sessions.events`，换源）承接 | 实现顺序：B 阶段切读时**同一 commit** 落地，否则 `archive_notice` 会在切读窗口里"指向不存在的路径" |
 
