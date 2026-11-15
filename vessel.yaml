@@ -1,0 +1,4 @@
+timeline:
+  dual_write: true
+  verify_sample_rate: 0.05
+  chunk_flush_ms: 150
