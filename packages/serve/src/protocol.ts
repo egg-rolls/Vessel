@@ -95,7 +95,15 @@ export type ProtocolErrorCode =
   | 'run_ended'
   // 0.48 M3：插件 WS 路由形态错误（CONTRACT-0.48 §3.3）。
   | 'upgrade_required'
-  | 'upgrade_not_allowed';
+  | 'upgrade_not_allowed'
+  // 0.54 B1：时间线订阅（ADR-105 §6 / D4）。
+  // - `session_frozen_readonly`：旧格式会话（有 `events.ndjson`、没有 timeline 标记）
+  //   只读冻结。与 core 的写者错误码**同名同义**（`packages/core/src/timeline/types.ts:187`），
+  //   今天只在写者打开时抛，0.54 B1 起订阅路径也抛（A8②）。
+  // - `timeline_unavailable`：装配层没开 timeline 读面（端口缺失）。与上一条分开，
+  //   是因为「服务端没开这个能力」不是「这个会话坏了」——报错文本会误导排障。
+  | 'session_frozen_readonly'
+  | 'timeline_unavailable';
 
 export interface ProtocolError {
   code: ProtocolErrorCode;
@@ -126,6 +134,41 @@ export type ServerFrame =
       from_seq: number;
       /** 服务端当前最新 seq；无事件时为 0 */
       latest_seq: number;
+      // ── 0.54 B1：时间线段（**全部 additive**，老客户端忽略即旧行为）──────────
+      /**
+       * 本次 epoch 的读源。
+       * - `'timeline'`：下面六个字段都有效，帧的 `seq` 是会话内 `timeline_seq`；
+       * - `'legacy'`：老订阅 / `read_from = 'legacy'` 回退期，帧的 `seq` 仍是进程级
+       *   hub seq，客户端必须按老行为处理（**不做**四条 count 校验）。
+       * 缺省 = 老服务端，等价于 `'legacy'`。
+       */
+      timeline_source?: 'timeline' | 'legacy';
+      /**
+       * 声明区间的左端（闭）= `after_timeline_seq + 1`；`reset` 时为 1。
+       * 可以落在 `holes` 里 ⇒ 客户端第一条实收是「该洞之后第一个非洞 seq」。
+       */
+      start_seq?: number;
+      /**
+       * 声明区间的右端（**闭**）= `wal_head`。不是页末、也不是 `timeline_head`。
+       * 分页时每页报同一个右端，客户端攒到它再核 count。
+       */
+      end_seq?: number;
+      /**
+       * `[start_seq, end_seq]` 里服务端会发出的可读事件条数
+       * = `(end_seq - start_seq + 1) - Σ|holes ∩ 区间|`。
+       * 口径与边界见 `gateway/timeline-protocol.ts#timelineHello`。
+       */
+      count?: number;
+      /** 已归档进 `timeline.ndjson` 的最大 seq（`≤ wal_head`，不变式）。 */
+      timeline_head?: number;
+      /** `[1..wal_head]` 每条要么可读、要么已被 `holes` 声明。 */
+      wal_head?: number;
+      /** 本次区间内**已声明**的洞（归并 / 排序 / 裁进区间）；空数组 = 没有洞。 */
+      holes?: { from_seq: number; to_seq: number }[];
+      /** 会话级污点（洞存在或最后一次状态声明为 tainted）：标记但不阻断渲染。 */
+      tainted?: boolean;
+      /** 客户端游标已越过服务端事实（`after_timeline_seq > wal_head`）：整段重拉。 */
+      reset?: boolean;
     }
   | {
       v: 1;
@@ -136,14 +179,6 @@ export type ServerFrame =
       /** 网关级运行 id（run.started 之后可知） */
       job_id?: string;
       event: RunEvent;
-    }
-  | {
-      v: 1;
-      kind: 'gap';
-      node_id: string;
-      ts: number;
-      from_seq: number;
-      to_seq: number;
     }
   | { v: 1; kind: 'res'; node_id: string; ts: number; id: string; ok: true; result: unknown }
   | {
@@ -169,7 +204,31 @@ export type ClientFrame =
       incarnation?: string;
     }
   | { v?: 1; kind: 'req'; id: string; method: string; params?: unknown }
-  | { v?: 1; kind: 'pong' };
+  | { v?: 1; kind: 'pong' }
+  /**
+   * 0.54 B1：客户端自报「游标收到的集合与 `hello` 的 `count` 对不上」。
+   *
+   * 为什么走**连接上一帧**而不是一个 RPC 方法：这条报告的语义是「这趟握手/回放我核不上」，
+   * 属于传输层事实，且它必须能在 RPC 通道坏掉（服务端正忙 / 订阅刚失败）时仍然送达。
+   * 服务端只做**记录**（`timeline.gap_reported` 事件 + 一条结构化 warn），
+   * 不据此改 `holes`、不改读源——洞只能由写者声明（ADR-105 §6）。
+   */
+  | {
+      v?: 1;
+      kind: 'timeline_gap';
+      /** 发生在哪个会话上（`timeline_seq` 是会话内序号，缺它这条报告无从定位）。 */
+      session_id?: string;
+      /** 客户端算的、与服务端声明对不上的两个数（ADR-105 §6 校验 3/4）。 */
+      expected?: number;
+      received?: number;
+      /** 本次 epoch 服务端声明的区间（可选，便于对账）。 */
+      start_seq?: number;
+      end_seq?: number;
+      /** 客户端游标在报告时的位置（排他游标的当前值）。 */
+      after_timeline_seq?: number;
+      /** 四条校验里哪条没过：1 首条 / 2 末条 / 3 条数 / 4 集合闭区间。 */
+      check?: 1 | 2 | 3 | 4;
+    };
 
 /** 运行状态 */
 export interface RunStatus {

@@ -5,7 +5,6 @@
  */
 
 import type { RunEvent } from '@vessel-agent/core';
-import type { EventGap } from '../event-buffer.js';
 import {
   type NodeInfo,
   PROTOCOL_VERSION,
@@ -14,6 +13,7 @@ import {
   protocolError,
   type ServerFrame,
 } from '../protocol.js';
+import type { TimelineHelloSegment, TimelineReadFrom } from './timeline-protocol.js';
 
 /** camelCase key → snake_case */
 function toSnakeKey(key: string): string {
@@ -83,9 +83,25 @@ export interface HelloFrameInput {
   fromSeq: number;
   latestSeq: number;
   ts?: number;
+  /**
+   * 0.54 B1：本次 epoch 的读源。缺省 `'legacy'`（老装配没这个概念时保持老形状）。
+   *
+   * `timeline_source` **总是**出现在线上帧里（老客户端忽略未知键即可），
+   * 这样新客户端有一个确定的地方判断「该不该做四条 count 校验」，
+   * 不用靠「`count` 字段在不在」猜。
+   */
+  source?: TimelineReadFrom;
+  /**
+   * 0.54 B1：时间线段（只有 `source === 'timeline'` 时才给）。
+   *
+   * 给了就与 `from_seq` / `latest_seq` **并存**（不改它们的老口径）：
+   * 老客户端照样按 `from_seq` 起、`latest_seq` 判断追平；新客户端读这一段做校验。
+   */
+  timeline?: TimelineHelloSegment;
 }
 
 export function helloFrame(input: HelloFrameInput): ServerFrame {
+  const timeline = input.source === 'timeline' ? input.timeline : undefined;
   return {
     v: PROTOCOL_VERSION,
     kind: 'hello',
@@ -96,23 +112,19 @@ export function helloFrame(input: HelloFrameInput): ServerFrame {
     incarnation: input.incarnation,
     from_seq: input.fromSeq,
     latest_seq: input.latestSeq,
-  };
-}
-
-export interface GapFrameInput {
-  nodeId: string;
-  gap: EventGap;
-  ts?: number;
-}
-
-export function gapFrame(input: GapFrameInput): ServerFrame {
-  return {
-    v: PROTOCOL_VERSION,
-    kind: 'gap',
-    node_id: input.nodeId,
-    ts: input.ts ?? Date.now(),
-    from_seq: input.gap.from_seq,
-    to_seq: input.gap.to_seq,
+    timeline_source: input.source ?? 'legacy',
+    ...(timeline !== undefined
+      ? {
+          start_seq: timeline.start_seq,
+          end_seq: timeline.end_seq,
+          count: timeline.count,
+          timeline_head: timeline.timeline_head,
+          wal_head: timeline.wal_head,
+          holes: timeline.holes,
+          tainted: timeline.tainted,
+          ...(timeline.reset !== undefined ? { reset: timeline.reset } : {}),
+        }
+      : {}),
   };
 }
 
