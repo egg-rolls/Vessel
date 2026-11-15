@@ -220,6 +220,76 @@ function kindRuns(items: readonly TranscriptItem[]): number {
   return runs;
 }
 
+/**
+ * D1：同一个 `tool_call_id` 在最终 item 序列里出现几次（>1 = 重复渲染，红）。
+ *
+ * 跨源回放时 live 卡（`tool:<callId>`）与历史卡（`tool:<callId>`）必须按 key 合并成
+ * 一张；这里数的是**实际渲染出来的重复**，不猜来源。
+ */
+function duplicateCalls(items: readonly TranscriptItem[]): string[] {
+  const seen = new Map<string, number>();
+  for (const item of items) {
+    if (item.kind !== 'tool') continue;
+    const callId = (item as { callId?: string }).callId;
+    if (callId === undefined) continue;
+    seen.set(callId, (seen.get(callId) ?? 0) + 1);
+  }
+  return [...seen.entries()].filter(([, count]) => count > 1).map(([callId]) => callId);
+}
+
+/**
+ * D2：连续工具卡里哪些是**非法归堆**（合法的不许判红）。
+ *
+ * 一个 run 内部连续几次工具调用是合法的（并行调用 / 多步无正文），所以判据不是「连续
+ * 多长」，而是：
+ * - 该连续段里出现了**跨 run** 的工具卡 ⇒ 归堆（不同 run 的卡被挤到一起）；
+ * - 段的**起点早于该 run 的第一条消息**（历史里已有这一轮的用户消息，卡却跑到它前面）
+ *   ⇒ 归堆。
+ */
+function clumpedToolRuns(
+  items: readonly TranscriptItem[],
+): { length: number; runs: string[]; why: string }[] {
+  const out: { length: number; runs: string[]; why: string }[] = [];
+  const firstMessageTs = new Map<string, number>();
+  for (const item of items) {
+    if (item.kind !== 'message') continue;
+    const runId = (item as { runId?: string }).runId;
+    const ts = (item as { ts?: number }).ts;
+    if (runId === undefined || ts === undefined) continue;
+    const known = firstMessageTs.get(runId);
+    if (known === undefined || ts < known) firstMessageTs.set(runId, ts);
+  }
+  let current: TranscriptItem[] = [];
+  const flush = (): void => {
+    if (current.length < 2) {
+      current = [];
+      return;
+    }
+    const runIds = new Set(current.map((item) => (item as { runId?: string }).runId ?? ''));
+    const first = current[0] as { ts?: number; runId?: string };
+    const reasons: string[] = [];
+    if (runIds.size > 1) reasons.push(`跨 ${runIds.size} 个 run`);
+    const messageTs = first.runId === undefined ? undefined : firstMessageTs.get(first.runId);
+    if (first.ts !== undefined && messageTs !== undefined && first.ts < messageTs) {
+      reasons.push('起点早于该轮第一条消息');
+    }
+    if (reasons.length > 0) {
+      out.push({
+        length: current.length,
+        runs: [...runIds].map((run) => run.slice(0, 8)),
+        why: reasons.join('、'),
+      });
+    }
+    current = [];
+  };
+  for (const item of items) {
+    if (item.kind === 'tool') current.push(item);
+    else flush();
+  }
+  flush();
+  return out;
+}
+
 /** 最长的「连续工具卡」厚度：一堵工具墙有多高（中间没有任何别的 item）。 */
 function toolWall(items: readonly TranscriptItem[]): number {
   let best = 0;
@@ -591,6 +661,92 @@ const FIXTURES: readonly Fixture[] = [
       );
     },
   },
+  {
+    name: 'T1 中途刷新：live 只回放到 started、历史已有结果 ⇒ 一张卡、结果正文取历史（不丢结果）',
+    why: '跨源回放时 started 与 completed 可能落在不同 seq 频带；结果正文必须从历史侧补上（ 按既有契约取 live，见 check-transcript-items 的 G1）',
+    before: 'guard',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          msg('user', 'q', { timestamp: 10_000 }),
+          msg('assistant', '', {
+            timestamp: 10_100,
+            tool_calls: [
+              { id: 'call-x', type: 'function', function: { name: 'bash', arguments: '{}' } },
+            ],
+          }),
+          msg('tool', '结果正文', {
+            timestamp: 10_400,
+            tool_call_id: 'call-x',
+          } as Partial<Message>),
+        ],
+        messageIndexOffset: 0,
+        windowStartTs: 10_000,
+        liveGroups: [
+          group({
+            runId: 'run-mid',
+            input: 'q',
+            startedAt: 10_000,
+            firstSeq: 700,
+            // live 侧只回放到 started ⇒ 执行态是 running（结果还没在回放里配上）
+            items: [
+              {
+                kind: 'tool',
+                key: 'ev-call-x',
+                callId: 'call-x',
+                name: 'bash',
+                status: 'running',
+                startedAt: 10_200,
+              },
+            ],
+          }),
+        ],
+      });
+      const cards = items.filter((item) => item.kind === 'tool') as {
+        status?: string;
+        output?: unknown;
+        ts?: number;
+      }[];
+      // 一张卡（不重复）、结果正文来自历史、位置/时间来自历史。
+      return cards.length === 1 && cards[0]?.output === '结果正文' && cards[0]?.ts === 10_400;
+    },
+  },
+  {
+    name: 'T3 live 项的位置由**自己的事件 seq** 决定，不许集体锚到 run 起点',
+    why: '所有 live 项都披 group.firstSeq 时，「同 ts 用 seq 回退」这条不变量对 live 侧等于失效，先后只能退回插入序（折 run 的顺序），聚堆就是从这儿长出来的',
+    before: 'red',
+    check: () => {
+      const event = (type: string, ts: number, data: Record<string, unknown>): RunEvent =>
+        ({ type, run_id: 'run-seq', ts, data }) as RunEvent;
+      const entries: StoredEvent[] = [
+        event('run.started', 20_000, { run_id: 'run-seq', input: 'q' }),
+        event('tool.call.started', 20_300, { run_id: 'run-seq', tool_call_id: 'c1' }),
+        event('tool.call.completed', 20_400, {
+          run_id: 'run-seq',
+          tool_call_id: 'c1',
+          result: 'ok',
+        }),
+        event('llm.stream.chunk', 20_500, { chunk: { type: 'reasoning_delta', delta: '想' } }),
+        event('tool.call.started', 20_600, { run_id: 'run-seq', tool_call_id: 'c2' }),
+        event('tool.call.completed', 20_700, {
+          run_id: 'run-seq',
+          tool_call_id: 'c2',
+          result: 'ok',
+        }),
+      ].map((entry, index) => ({ seq: index + 1, sessionId: 's-seq', event: entry }));
+      const live = buildLiveItems(groupEvents(entries, false, 'user')) as {
+        kind: string;
+        seq?: number;
+        anchorSeq?: number;
+      }[];
+      const anchored = live.filter((item) => item.anchorSeq !== undefined);
+      // 每一项的 seq 必须等于它自己的 anchorSeq（= 该项首个事件的 seq），且各不相同的项
+      // 不该共用同一个 seq（= 不许集体披组起始 seq）。
+      const allOwn = anchored.every((item) => item.seq === item.anchorSeq);
+      const distinct = new Set(anchored.map((item) => item.seq)).size;
+      return anchored.length >= 3 && allOwn && distinct === anchored.length;
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -745,10 +901,28 @@ function reportReal(id: string): number {
   console.log(
     `  聚堆指标：ghosts=${ghosts} toolWall=${toolBarrier} topWall=${wall} kindRuns=${runs}`,
   );
+  const duplicates = duplicateCalls(view.items);
+  const clumps = clumpedToolRuns(view.items);
+  console.log(
+    `  D1 重复工具卡：${duplicates.length} 个 callId 出现两次以上` +
+      `${duplicates.length > 0 ? `（${duplicates.slice(0, 3).join(', ')}…）` : ''}`,
+  );
+  console.log(
+    `  D2 非法归堆的连续工具段：${clumps.length} 段` +
+      `${
+        clumps.length > 0
+          ? clumps
+              .slice(0, 3)
+              .map((clump) => `（${clump.length} 张：${clump.why}）`)
+              .join('')
+          : '（连续的都在同一个 run 内、且在该轮第一条消息之后 = 合法）'
+      }`,
+  );
   console.log(`  开头 8 条：${kindsOf(view.items).slice(0, 8).join(' → ')}`);
   if (SHOW_SEQ) printSequence(view.items);
-  // 结构判据（与「窗口截断」这条事实绑定）：截断的窗口前面不许出现任何 item。
-  return ghosts + bandReport(id);
+  // 结构判据：截断的窗口前面不许有 item；同一 callId 不许重复；连续工具段不许跨 run /
+  // 跑到该轮第一条消息之前；跨频带折叠不许把思考并成一段并夹到末尾。
+  return ghosts + duplicates.length + clumps.length + bandReport(id);
 }
 
 function main(): void {
