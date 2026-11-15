@@ -23,8 +23,9 @@
  */
 
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { atomicWrite } from '../session/atomic-write.js';
+import { assertTimelineWritable } from './freeze.js';
 import { TIMELINE_LAYOUT, type TimelineHole, type TimelineRecord } from './types.js';
 import { parseWithCrc, readCrcNdjsonFile, readHoles, readTimelineEvents, withCrc } from './wal.js';
 
@@ -210,11 +211,17 @@ function indexPaths(sessionDir: string): {
  * 写索引（确定性：run 按码点排序、type 按键排序、seq 升序、无时间戳）。
  *
  * 三个文件都走 `atomicWrite`（临时文件 + rename），读者不会看到半截索引。
+ *
+ * **`timeline.idx/` 也是 timeline 文件**：用旧格式会话目录调用它，会在一个只读冻结的会话里
+ * 凭空造出 `timeline.idx/`（C1 之前的真实口子：`TimelineIndexReader.open` 建索引就走这条路，
+ * 而它看起来「只是读」）。因此这里与写者用**同一个闸门** `assertTimelineWritable`：
+ * 旧格式会话一律 `session_frozen_readonly`，不是「静默不写」——静默会让人以为索引已经建好。
  */
 export async function writeIndexSnapshot(
   sessionDir: string,
   snapshot: TimelineIndexSnapshot,
 ): Promise<void> {
+  await assertTimelineWritable(sessionDir, basename(sessionDir));
   const paths = indexPaths(sessionDir);
   await mkdir(paths.dir, { recursive: true });
 

@@ -44,6 +44,7 @@ import { type FileHandle, mkdir, open, stat, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { atomicWrite } from '../session/atomic-write.js';
 import { type ChunkBlockSeal, ChunkBlockStore } from './blocks.js';
+import { assertTimelineWritable } from './freeze.js';
 import { HoleRegistry } from './holes.js';
 import { buildIndex, TimelineIndexBuilder, writeIndexSnapshot } from './index.js';
 import {
@@ -424,12 +425,9 @@ export class TimelineWriter {
 
   private async initialize(): Promise<void> {
     await mkdir(this.sessionDir, { recursive: true });
-    if (await isLegacyFrozenSession(this.sessionDir)) {
-      throw new TimelineError(
-        'session_frozen_readonly',
-        `${this.sessionId} has legacy events.ndjson and no timeline marker`,
-      );
-    }
+    // 旧格式会话只读冻结（ADR-105 D4）。判据与错误码在 `freeze.ts` 一处定义：
+    // 索引写回、读器建索引也都走同一个闸门，所以「哪条写路径忘了判」在结构上不成立。
+    await assertTimelineWritable(this.sessionDir, this.sessionId);
     await this.ensureManifest();
 
     this.holes = await HoleRegistry.open(this.sessionDir, {
@@ -1090,19 +1088,4 @@ export class TimelineWriter {
   private now(): number {
     return this.options.now?.() ?? Date.now();
   }
-}
-
-/** 旧格式会话（0.54 前）判定：有旧日志、且没有任何 timeline 标记。 */
-async function isLegacyFrozenSession(sessionDir: string): Promise<boolean> {
-  const hasLegacyLog = await fileExists(join(sessionDir, 'events.ndjson'));
-  if (!hasLegacyLog) return false;
-  const markers = [
-    TIMELINE_LAYOUT.timelineManifest,
-    TIMELINE_LAYOUT.walManifest,
-    TIMELINE_LAYOUT.walLog,
-  ];
-  for (const marker of markers) {
-    if (await fileExists(join(sessionDir, marker))) return false;
-  }
-  return true;
 }
