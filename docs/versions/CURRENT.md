@@ -10,7 +10,7 @@ manifest 根 `package.json` = `0.53.0`（`packages/**` / `apps/web` / `plugins/*
 package.json 仍是 `0.52.0`，本版有意只动根）；未 tag、未 publish（tag 等 1.0.0）；
 版本号以根 `package.json` 为唯一来源。
 完整变更见 [0.53.0](0.53.0.md)；**0.53 收口结论与 0.54 边界**见
-[plan-remaining-053](../dev/handoff/plan-remaining-053.md)（含移交 0.54 的四项与
+移交清单（个人侧 handoff，不入共享仓）（含移交 0.54 的四项与
 「仍需用户做的一件」）。**0.52 开发线随本版并入**（未单独收口）。
 
 ## 已合入（现态）
@@ -191,7 +191,7 @@ package.json 仍是 `0.52.0`，本版有意只动根）；未 tag、未 publish�
 
 ## 未实现 / 下一步
 
-- **移交 0.54（0.53 收口时明确移交，见 [plan-remaining-053](../dev/handoff/plan-remaining-053.md)）**：
+- **移交 0.54（0.53 收口时明确移交，见 移交清单（个人侧 handoff，不入共享仓））**：
   投影卡实现（PC-1/2/3）、gap 协议 + 两侧计数、un-acked 队列（0.54 直接消灭该概念）、
   AB-1 三模式对比（需预算批准）。**仍需用户做的一件**：真机刷新验证（重启后刷几次，
   看 `diskBackfill` 六字段）。另有三条已知边界（chunk 不落盘 / 三套 seq / trace-only 不交错）

@@ -13,7 +13,7 @@
 
 > 0.53 收口线（基于 `main @ c698471a`；manifest 根 `package.json` = `0.53.0`）。未 tag、
 > 未 publish（tag 等 1.0.0）。完整记录见 [docs/versions/0.53.0.md](docs/versions/0.53.0.md)，
-> 未尽事项与 0.54 边界见 [docs/dev/handoff/plan-remaining-053.md](docs/dev/handoff/plan-remaining-053.md)。
+> 未尽事项与 0.54 边界记在个人侧 handoff（不入共享仓）。
 > 0.52 开发线（prune / PII 金库 / 启动恢复 / 优雅退出与 handoff 重启 / ask 交互 / 事件可见性
 > 加固等）随本版一并收口，条目仍记在 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)。
 
