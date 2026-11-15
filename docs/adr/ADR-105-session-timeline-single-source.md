@@ -266,13 +266,13 @@ timeline.idx/type.idx        # type 索引（可重建，§5）
 | # | 断言 |
 | --- | --- |
 | A1 | 夹具会话跑「写入 → 断开 → 重连 → 拉全量」：`seqSet(UI) === seqSet(timeline ∪ WAL)`，且逐条 `(type, run_id, ts, sha256(data))` 相等 |
-| A2 | 归档并行进行（归档到一半断开）⇒ A1 仍成立（这正是 `timeline_head < wal_head` 的窗口） |
+| A2 | 归档并行进行（**两种"一半"都要造**：① 归档落后于写入的窗口 `timeline_head < wal_head`；② 归档写段中途 fsync 失败/进程崩溃）⇒ A1 仍成立，且**段文件里不得留重复行**（不许靠读侧去重掩盖半成品） |
 | A3 | 注入归档失败（I3）⇒ A1 仍成立，且 `timeline_head` 停在旧值、`wal_head` 已前进 |
-| A4 | 注入磁盘坏块 ⇒ `holes` 恰好覆盖坏区间，`seqSet(UI) ⊎ holes === seqSet(timeline ∪ WAL)`，UI 不空白 |
+| A4 | 注入磁盘坏块 ⇒ `holes` 恰好覆盖坏区间；**等式要按两种读法都断言**：`seqSet(UI_重连后) ⊎ holes` = 闭区间 `[1..wal_head]`，且 `UI_曾收到 \ 可读 = holes`（对称差）。原文「`seqSet(UI) ⊎ holes === seqSet(timeline ∪ WAL)`」在「UI 已见过坏块前那条」的读法下不成立——那条既在 UI 又在 holes。UI 不空白 |
 | A5 | **`published_head` 单调**：重启前后对比 `wal_head` 不下降；任一次握手返回过的最大 seq 之后不出现"更小的新 seq" |
 | A6 | **严格交错**：夹具造 chunk / `tool.call.*` / `context.changed` 交织，断言 UI 的 seq 序列**严格升序且无空洞**（今天 `disk-replay.ts:33-36` 承认做不到） |
 | A7 | `count` 校验：把客户端游标篡改成 +1 / -1 / 落在洞内三种构造，客户端必须拒绝合并并报 `timeline_gap_reported` |
-| A8 | 旧格式会话：`after_timeline_seq` 订阅返回 `session_frozen_readonly`，读路径（`sessions.events` / `events.list`）结果与今天逐字节相同（回归夹具） |
+| A8 | **分两半**：①（已实现，回归另一半）读路径 `sessions.events` / `events.list` 的结果与今天**逐字节相同**、写者打开旧目录抛 `session_frozen_readonly`、冻结层碰过之后旧文件一字节不变；②（**属 C 阶段，未实现**）`after_timeline_seq` 订阅返回 `session_frozen_readonly` —— 今天该错误只在写者打开时抛（`timeline/writer.ts:386-391`），订阅路径不认识 timeline |
 
 **失败时的处置（写死）**：A1–A6 任一红 ⇒ **禁止进 C 阶段**（计划书 §1）；A7 红 ⇒ 客户端校验实现回退到
 "全量重拉 + 报错可见"，不得静默。
@@ -347,6 +347,13 @@ timeline.idx/type.idx        # type 索引（可重建，§5）
   A5 两条的**真实探针**落在 `scripts/check-timeline-holes.ts:85-89`（`published_head` 跨重启不下降）与
   `scripts/check-timeline-archive.ts:353-358`（重启后 `timeline_head` / `wal_head` 不回退）。
 - **脚本名更正**：`scripts/check-timeline-dualwrite.ts`（不是 `check-timeline-dual-write.ts`）。
+- **归档是「复制」不是「搬移」**：0.54 不删 WAL（§10 第 5 项明确「本文不授权任何 timeline 删除」），
+  所以 `wal.log` **恒覆盖 `1..wal_head`**，`timeline.ndjson` **恒是前缀 `1..timeline_head`**。
+  §4/§6 若读成"归档后从 WAL 移除"，以本行为准（`check-timeline-equality` A2 有对应断言）。
+- **两个协议字段也仍缺（不只是门禁缺）**：`timeline.hello` 的四字段（`count/start_seq/end_seq/timeline_head/wal_head`）
+  与 `events.subscribe{after_timeline_seq}` 都未落地（`gateway/frames.ts:88-99`、`gateway.ts:1606-1622`），
+  全仓 `.ts` 里 `timeline_gap_reported` **0 处**。⇒ `check-timeline-equality` 的 **A7** 与 **A8②** 会报 `NOT_IMPLEMENTED`，
+  这是**协议没实现**，不是门禁写错。A7/A8② 落地属 C 阶段；届时把该门禁从默认模式切到 `--strict` 并进 gates。
 - **I2 端到端尚未生效（最重要）**：写者内部确实是「fsync 之后才发布」，但装配层
   `src/timeline-dual-write.ts:369-373` **没有给 `TimelineWriter.open` 传 `publish`**，UI 仍由旧链路广播
   （`packages/core/src/runtime/run-journal.ts:131`、`:334`），而旧链路是「**先发布、后双写 timeline**」（`:335-347`）。
