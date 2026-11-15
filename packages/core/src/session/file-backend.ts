@@ -34,6 +34,7 @@ import {
   deriveSessionMeta,
   normalizeResumeAfterRestart,
   normalizeTitleSource,
+  projectionCacheKeysOf,
   toSessionInfo,
 } from './session-store.js';
 
@@ -112,6 +113,21 @@ function optionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined;
 }
 
+/**
+ * 缓存覆盖水位的**读取形状**（0.54 B3）：新名字优先，旧名字当别名。
+ *
+ * 旧壳（只有 `derived_upto_seq`）、新壳（两个键都在）、被手改过的壳（新键是个字符串）
+ * 都能读：认不出就返回空对象，绝不编一个数（与「索引坏了不编 `derived_upto_seq`」同一口径）。
+ */
+function projectionCacheReadOf(raw: Record<string, unknown>): {
+  projection_cache_seq?: number;
+  derived_upto_seq?: number;
+} {
+  const value = optionalNumber(raw.projection_cache_seq) ?? optionalNumber(raw.derived_upto_seq);
+  if (value === undefined) return {};
+  return { projection_cache_seq: value, derived_upto_seq: value };
+}
+
 /** 旧 JSON 顶层 run 字段 -> SessionState.legacy_run（一版兼容） */
 function toLegacyRun(raw: Record<string, unknown>): LegacyRunSnapshot | undefined {
   const completed_at = optionalNumber(raw.completed_at);
@@ -147,7 +163,9 @@ function toSessionState(value: unknown): SessionState {
     preview: optionalString(raw.preview),
     created_on_branch: optionalString(raw.created_on_branch) ?? optionalString(raw.branch),
     messages: Array.isArray(raw.messages) ? (raw.messages as Message[]) : undefined,
-    derived_upto_seq: optionalNumber(raw.derived_upto_seq),
+    // 0.54 B3：`projection_cache_seq` 是正名，`derived_upto_seq` 是旧名（别名读）。
+    // 两个都回填同一个数：旧读者（wire / migrate / 旧 core）读旧键照旧；新读者读新键。
+    ...projectionCacheReadOf(raw),
     status: raw.status as SessionStatus | undefined,
     last_run_id: optionalString(raw.last_run_id) ?? optionalString(raw.run_id),
     legacy_run: toLegacyRun(raw),
@@ -432,7 +450,8 @@ export class FileSessionStore implements SessionStore {
       branch: state.created_on_branch,
       run_id: state.last_run_id,
       messages,
-      derived_upto_seq: state.derived_upto_seq,
+      // 0.54 B3：缓存覆盖水位写两个键（正名 + 旧名同值）。旧键保留 = 旧读者不降级。
+      ...projectionCacheKeysOf(state),
       // 0.52 C：真实用量锚点。旧文件没有这个键 ⇒ 读取时为 undefined ⇒ 裸估算（0.51 行为）。
       ...(state.context_anchor !== undefined ? { context_anchor: state.context_anchor } : {}),
       ...(state.prompt_context !== undefined ? { prompt_context: state.prompt_context } : {}),

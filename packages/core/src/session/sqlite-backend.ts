@@ -26,8 +26,24 @@ import {
   deriveSessionMeta,
   normalizeResumeAfterRestart,
   normalizeTitleSource,
+  projectionCacheKeysOf,
   withTitleSource,
 } from './session-store.js';
+
+/**
+ * 列 → `SessionState` 的两个键（0.54 B3）。
+ *
+ * sqlite 的列名仍然是 `derived_upto_seq`（**不做 schema 迁移**：这一列只是缓存提示，
+ * 存量库不需要搬数据，旧版本 core 也还在写它）。读出来同时填正名与别名，写回去取
+ * `projection_cache_seq ?? derived_upto_seq`。
+ */
+function sqliteProjectionCacheOf(value: unknown): {
+  projection_cache_seq?: number;
+  derived_upto_seq?: number;
+} {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return {};
+  return projectionCacheKeysOf({ projection_cache_seq: value });
+}
 
 /** sessions 表完整行（SELECT * 的形状） */
 interface SessionRow {
@@ -218,10 +234,9 @@ export class SQLiteSessionStore implements SessionStore {
       preview: row.preview || undefined,
       created_on_branch: row.branch || undefined,
       messages: JSON.parse(row.messages) as Message[],
-      derived_upto_seq:
-        typeof row.derived_upto_seq === 'number' && Number.isFinite(row.derived_upto_seq)
-          ? row.derived_upto_seq
-          : undefined,
+      // 0.54 B3：列名沿用旧名（不做 schema 迁移 —— 列只是缓存提示，且旧版本 core 还会读它），
+      // 读出来同时填 `projection_cache_seq`（正名）与 `derived_upto_seq`（别名）。
+      ...sqliteProjectionCacheOf(row.derived_upto_seq),
       status: row.status,
       last_run_id: row.run_id || undefined,
       legacy_run: toLegacyRun(row.completed_at, row.usage, row.error),
@@ -278,7 +293,9 @@ export class SQLiteSessionStore implements SessionStore {
       updatedAt,
       state.created_on_branch ?? null,
       null,
-      typeof state.derived_upto_seq === 'number' ? state.derived_upto_seq : null,
+      typeof state.derived_upto_seq === 'number' || typeof state.projection_cache_seq === 'number'
+        ? (projectionCacheKeysOf(state).derived_upto_seq ?? null)
+        : null,
       // 0.52 C：真实锚点整体存 JSON —— 形状会随实现演进，列不再拆字段。
       state.context_anchor !== undefined ? JSON.stringify(state.context_anchor) : null,
       state.prompt_context !== undefined ? JSON.stringify(state.prompt_context) : null,

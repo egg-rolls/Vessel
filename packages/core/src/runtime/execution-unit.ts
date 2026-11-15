@@ -53,8 +53,8 @@ import {
 // D2：跨模块只允许从 barrel 导入（不得直接引用 session 的内部文件）。
 import {
   deriveSessionMeta,
-  mergeHistoryProjection,
   projectMessages,
+  reconcileCachedProjection,
   withRunIdentity,
 } from '../session/index.js';
 import {
@@ -156,13 +156,16 @@ type RunTerminalOutcome =
   | { status: 'completed'; output: string }
   | { status: 'failed'; error: unknown; signal?: AbortSignal };
 
-/** loadStoredHistory 的结果：消息窗口 + 已覆盖的事件游标 + 会话壳。 */
+/** loadStoredHistory 的结果：消息窗口 + 日志尾游标 + 会话壳。 */
 interface StoredHistory {
   messages: Message[];
-  /** 消息窗口已覆盖到的事件 seq（无持久游标时 undefined） */
+  /**
+   * 本次窗口覆盖到的事件 seq = **日志尾**（0.54 B3：投影恒读整份日志，所以它就是最后一条
+   * 事件的 seq）。没有事件日志 / 读失败时 undefined。
+   */
   cursor?: number;
   sessionState: SessionState | null;
-  /** 读到的会话事件条数；用于判定「会话是否存在（事件日志）」 */
+  /** 读到的会话事件条数（0.54 B3 起恒为整份日志的条数）。 */
   eventCount: number;
   /**
    * 最近一次 provider 请求的 `prompt_tokens + completion_tokens`。
@@ -319,13 +322,6 @@ function streamsAssistantOutput(chunk: StreamChunk): boolean {
     chunk.delta.length > 0
   );
 }
-
-/**
- * 恢复历史时「补读最近一次 llm.response」的尾部窗口（按事件条数）。
- * `llm.response` 每个请求一条，真实会话里最后一条通常距 EOF 几 KB；
- * 窗口内找不到时回退全量读，行为与不设窗口等价。
- */
-const LAST_REQUEST_PROBE_EVENTS = 200;
 
 /**
  * BeforeLlm 注入消息的稳定键（0.16 E5）。
@@ -2027,10 +2023,9 @@ export class ExecutionUnit {
     // 0.15 E9：Self Card 在 run 开始时生成一次；无 selfCard 时等于原 systemPrompt
     this.runSystemPrompt = this.composeRunSystemPrompt();
 
-    // Stage 4：本 Run 的新窗口不从上一 Run 对象复用；总是用 SessionState 快照
-    // （derived_upto_seq == lastSeq 时 O(1)）或事件日志全量投影重新播种。
-    // 0.18：这也保证 session 缓存之后的日志增量被重放，saveSessionState 不会
-    // 把未进入上下文的事件标记成“已覆盖”（derived_upto_seq 超前）。
+    // Stage 4：本 Run 的新窗口不从上一 Run 对象复用；总是用「事件日志整份投影 + 会话壳
+    // 缓存按内容对账」重新播种（0.54 B3：不再有「位说覆盖到日志尾就 O(1) 复用」那条路，
+    // 那条路会让运行中刷新只剩 run 起点的几条 —— P7）。
     const history = await this.loadStoredHistory(sessionId);
     const stored = history.sessionState;
     // Stage 4 parity：baseline 在同一 session + 窗口可复用时跳过播种（不发
@@ -2153,7 +2148,9 @@ export class ExecutionUnit {
         ts: Date.now(),
       });
 
-      // 初始保存：先 RunRecord（含 event_cursor），再 SessionState 投影（含 derived_upto_seq）。
+      // 初始保存：先 RunRecord（含 event_cursor），再 SessionState 投影（含缓存覆盖水位
+      // `projection_cache_seq` / 旧名 `derived_upto_seq`，由 RunJournal 在落盘前写 —
+      // 0.54 B3 起它只是缓存提示，读侧不拿它做任何判定）。
       // 恢复历史 + 注入 + 用户输入都已进入上下文，运行中崩溃不再丢历史（C-02）。
       sessionState.messages = workingContext.messages;
       await this.writeRunRecord(execution, 'running');
@@ -2513,8 +2510,8 @@ export class ExecutionUnit {
         execution.branch,
         Date.now(),
       );
-      // 0.18：先发布 run.resumed，再落盘；否则 derived_upto_seq 会漏掉
-      // 这条事件（legacy RunRecord 复用 session 时尤其明显）。
+      // 0.18：先发布 run.resumed，再落盘；否则缓存覆盖水位（`projection_cache_seq`，
+      // 旧名 `derived_upto_seq`）会漏掉这条事件（legacy RunRecord 复用 session 时尤其明显）。
       this.publishEvent({
         type: 'run.resumed',
         run_id: runId,
@@ -3979,13 +3976,20 @@ export class ExecutionUnit {
   }
 
   /**
-   * 0.18：恢复历史（run 启动 / resume 共用）。优先级：
-   * 1) SessionState 缓存（含压缩摘要等事件不可重建的消息）+ 事件日志中 `seq > derived_upto_seq` 的增量；
-   * 2) 事件日志完整投影（旧缓存无 derived 时做重叠去重）；
+   * 0.18：恢复历史（run 启动 / resume 共用）。0.54 B3 起是**纯读侧**：
+   *
+   * 1) 事件日志**整份**投影（`projectMessages`，原文口径）＝事实；
+   * 2) 会话壳里的 `messages` 只是**缓存**，按内容与那份投影对账（`reconcileCachedProjection`），
+   *    **不读** `derived_upto_seq` / `projection_cache_seq`（见该方法注释与门禁
+   *    `scripts/check-projection-cache-agnostic.ts`）；
    * 3) legacy 回退：RunRecord.legacy_messages（旧 checkpoint messages）→ SessionState.messages。
    *
-   * run() 也必须走这里：否则崩溃后新 run 只读缓存，saveSessionState 会把未重放的
-   * 尾段事件错误标记为已覆盖。
+   * 为什么不再「照水位只读增量」：那个水位只在四路保存点推进（初始保存 / checkpoint /
+   * 终态 / 手动压缩），普通 run 期间一直停在 run 起点 ⇒ 读侧把「缓存覆盖到哪」当成了
+   * 「事实覆盖到哪」，运行中刷新只剩 4 条（P7）。ADR-105 D2 要求投影是
+   * `fold(timeline[1..seq])` 的纯函数结果、缓存可丢弃；删掉那个字段产出必须逐字节不变。
+   *
+   * run() 与 resume 都必须走这里：否则崩溃后新 run 只读缓存，未重放的尾段事件就丢了。
    */
   private async loadStoredHistory(sessionId: string, record?: RunRecord): Promise<StoredHistory> {
     let sessionState: SessionState | null = null;
@@ -3994,33 +3998,18 @@ export class ExecutionUnit {
     }
 
     const cached = sessionState?.messages?.length ? sessionState.messages : undefined;
-    const derived = cached !== undefined ? sessionState?.derived_upto_seq : undefined;
-    // 有缓存且知道派生态 → 只读增量；否则必须全量投影（旧 sqlite 行没有该列）。
-    const needFullProjection = cached === undefined || typeof derived !== 'number';
 
     let events: Awaited<ReturnType<SessionEventLogPort['read']>> = [];
-    let fullProjectionForReplacement = false;
-    // 日志最后的 seq：既用于一致性告警，也用于把下面「补读 llm.response」
-    // 限制在尾部窗口内。
+    // 日志最后的 seq：既用于一致性告警，也是本次窗口「覆盖到哪」的唯一来源。
     let lastSeq: number | undefined;
     if (this.eventLog) {
       try {
         await this.eventLog.flush(sessionId);
-        events = await this.eventLog.read(
-          sessionId,
-          needFullProjection ? {} : { sinceSeq: derived },
-        );
-        // 压缩 / 撤回是「替换」不是「追加」：缓存 + 增量无法表达“删掉旧历史”，
-        // 只要尾部出现这两类事件就回退到全量投影（事件本身很少）。
-        if (
-          events.some(
-            (event) => event.type === 'message.compaction' || event.type === 'session.rewound',
-          )
-        ) {
-          fullProjectionForReplacement = true;
-          if (!needFullProjection) events = await this.eventLog.read(sessionId);
-        }
-        // 一致性校验（P2）：RunRecord 游标 / SessionState 派生游标不得超前于日志。
+        // 0.54 B3：**整份读**。投影的输入不再由会话壳里的游标裁剪 —— 那是写侧水位参与
+        // 可见性判定（B 阶段要消灭的东西）。旧写法是 `read({ sinceSeq: derived })`：
+        // 壳落后时尾部事实根本进不了投影（P7：`derived=4` vs `last_seq=366`）。
+        events = await this.eventLog.read(sessionId);
+        // 一致性校验（P2）：RunRecord 游标不得超前于日志。
         lastSeq = await this.eventLog.lastSeq?.(sessionId);
         const recordCursor = record?.event_cursor;
         if (
@@ -4034,17 +4023,6 @@ export class ExecutionUnit {
             last_seq: lastSeq,
           });
         }
-        if (
-          typeof derived === 'number' &&
-          derived > 0 &&
-          (lastSeq === undefined || lastSeq < derived)
-        ) {
-          this.logger.warn('session cache is ahead of event log', {
-            session_id: sessionId,
-            derived_upto_seq: derived,
-            last_seq: lastSeq,
-          });
-        }
       } catch (error) {
         this.logger.warn('session event log read failed during resume', {
           session_id: sessionId,
@@ -4053,77 +4031,33 @@ export class ExecutionUnit {
       }
     }
 
-    // 上下文锚点只认最近一次请求的 per-request usage。增量里通常没有
-    // `llm.response`（它在上一次 run 结束时已随派生游标被覆盖），
-    // 此时补读日志；压缩 / 增量读已经不是全量时都需要。
-    // 补读先只问尾部窗口：`llm.response` 每个请求一条、必然靠近 EOF（真实会话里
-    // 最后一条距文件尾只有几 KB），没必要为一个数字把整份 NDJSON 读进来。
-    // 窗口里没有（如尾部堆了大段工具结果）则回退全量读，行为与之前等价。
-    let lastRequestTokens = lastRequestTokensFromEvents(events);
-    if (lastRequestTokens === undefined && this.eventLog && !needFullProjection) {
-      try {
-        if (typeof lastSeq === 'number' && lastSeq > 0) {
-          lastRequestTokens = lastRequestTokensFromEvents(
-            await this.eventLog.read(sessionId, {
-              sinceSeq: Math.max(0, lastSeq - LAST_REQUEST_PROBE_EVENTS),
-            }),
-          );
-        }
-        if (lastRequestTokens === undefined) {
-          lastRequestTokens = lastRequestTokensFromEvents(await this.eventLog.read(sessionId));
-        }
-      } catch (error) {
-        this.logger.warn('session event log usage probe failed', {
-          session_id: sessionId,
-          error: errorText(error),
-        });
-      }
-    }
+    // 上下文锚点只认最近一次请求的 per-request usage（`llm.response.usage`）。
+    // 0.54 B3：投影输入恒为整份日志 ⇒ 这里不必再「补读尾部窗口」。
+    const lastRequestTokens = lastRequestTokensFromEvents(events);
 
-    // 消息窗口实际覆盖到的游标：缓存游标与本次读到的最后事件 seq 的较大者。
-    let cursor = typeof derived === 'number' ? derived : undefined;
+    // 覆盖游标**只由日志决定**：它是「本次窗口覆盖到哪」的上报值（`lastCoveredCursor`
+    // 据此决定要不要发 `context.changed`），不许再被会话壳里的任何缓存提示影响。
     const lastReadSeq = events[events.length - 1]?.seq;
-    if (typeof lastReadSeq === 'number') cursor = Math.max(cursor ?? lastReadSeq, lastReadSeq);
+    const cursor = typeof lastReadSeq === 'number' ? lastReadSeq : undefined;
     const eventCount = events.length;
     const usageField = lastRequestTokens !== undefined ? { lastRequestTokens } : {};
 
-    if (cached !== undefined && !fullProjectionForReplacement) {
-      const history = structuredClone(cached);
-      // 0.54：增量分支同样**不**应用清集替换 —— 拆包出来的消息会 push 进
-      // `SessionState.messages`，这个字段是原文视图（见 `SessionState.messages` 的注释）。
-      const projected = projectMessages(events, { applyClearedReplacements: false });
-      if (typeof derived === 'number') {
-        // 增量：tail 严格在缓存之后，直接追加；崩溃在工具轮中间时 tool 结果在这里。
-        if (projected.length > 0) history.push(...projected);
-        return {
-          messages: history,
-          ...(cursor !== undefined ? { cursor } : {}),
-          sessionState,
-          eventCount,
-          ...usageField,
-        };
-      }
-      // 旧数据（无 derived）：全量投影可能与缓存重叠，按尾部重叠去重后追加。
-      const merged = projected.length > 0 ? mergeHistoryProjection(history, projected) : history;
-      return {
-        messages: merged,
-        ...(cursor !== undefined ? { cursor } : {}),
-        sessionState,
-        eventCount,
-        ...usageField,
-      };
-    }
-
     if (events.length > 0) {
-      // 0.54：满投影分支的产物是 `SessionState.messages`（经 `seedTransientContext` →
-      // `finalizeSessionState` 写回），**必须**是原文视图。以前这里默认应用清集替换，
-      // 于是「尾部有压缩/撤回事件」或「缓存不可用」时占位被物化进盘上并永久粘住
-      // （实测见 docs/dev/reports/0.54/proj-readback-15.md §1.6/§1.8/§1.9/§1.7）。
-      // 模型视图不受影响：请求构建层按本段冻结集合自己替换（`buildRequestMessages`）。
+      // 0.54 B3：缓存覆盖到哪**只按内容算**（`reconcileCachedProjection`），不读会话壳里的
+      // 任何游标字段。投影恒取原文口径 —— 见 `SessionState.messages` 的注释：这里会经
+      // `finalizeSessionState` 写回盘上，占位不许物化。
       const projected = projectMessages(events, { applyClearedReplacements: false });
-      if (projected.length > 0) {
+      const messages =
+        cached !== undefined
+          ? // 深拷贝：缓存对象是 store 的内存引用，播种过程会就地补 `timestamp`。
+            reconcileCachedProjection(structuredClone(cached), projected, {
+              // 撤回 = 删尾部事实：缓存里那几条必须消失（与压缩同一类「替换」语义）。
+              replacementInLog: events.some((event) => event.type === 'session.rewound'),
+            })
+          : projected;
+      if (messages.length > 0) {
         return {
-          messages: projected,
+          messages,
           ...(cursor !== undefined ? { cursor } : {}),
           sessionState,
           eventCount,

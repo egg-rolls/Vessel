@@ -37,6 +37,25 @@ function truncateCodePoints(value: string, limit: number): string {
 }
 
 /**
+ * 缓存覆盖水位的**写入形状**（0.54 B3）。
+ *
+ * 同一个数写两个键：`projection_cache_seq` 是正名，`derived_upto_seq` 是旧名。
+ * 为什么还写旧键：wire（`sessions.get.event_cursor`）、`src/migrate.ts`、
+ * `src/session-liveness.ts` 与旧版本的 core 只认旧名字；只写新键等于把它们静默降级
+ * （覆盖提示从此恒缺省）。additive 是双向兼容的唯一做法 —— 旧壳能被新代码读（读侧取
+ * 别名），新壳也能被旧代码读（旧键同值）。
+ *
+ * 它只是提示：**没有任何读路径用它做判定**（见 `SessionState.projection_cache_seq`）。
+ */
+export function projectionCacheKeysOf(
+  state: Pick<SessionState, 'derived_upto_seq' | 'projection_cache_seq'>,
+): { projection_cache_seq?: number; derived_upto_seq?: number } {
+  const value = state.projection_cache_seq ?? state.derived_upto_seq;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return {};
+  return { projection_cache_seq: value, derived_upto_seq: value };
+}
+
+/**
  * title_source 是封闭联合：JSON / SQL 上的其它值一律当「无标记」丢弃（不抛错）。
  *
  * 唯一实现：file / sqlite 两个后端与 `toSessionInfo` 共用，避免同一口径各写一份。

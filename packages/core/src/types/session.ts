@@ -32,8 +32,9 @@ export interface LegacyRunSnapshot {
 /**
  * 会话壳（元数据 + messages 投影缓存）。
  *
- * `messages` / `derived_upto_seq` / `status` / `last_run_id` 都是派生数据，
- * 唯一真相源是 `SessionEventLog`；`legacy_run` 仅用于一版旧数据兼容。
+ * `messages` / `projection_cache_seq`（旧名 `derived_upto_seq`）/ `status` / `last_run_id`
+ * 都是派生数据，唯一真相源是 `SessionEventLog`；`legacy_run` 仅用于一版旧数据兼容。
+ * 0.54 B3 起 `messages` 与那个 seq 都只是**缓存**：投影不读它们做判定。
  */
 export interface SessionState {
   session_id: string;
@@ -63,6 +64,22 @@ export interface SessionState {
    * 想省 token 就改请求视图，**不要**改这个字段的正文。
    */
   messages?: Message[];
+  /**
+   * **缓存覆盖到哪**的提示（0.54 B3 改名自 `derived_upto_seq`）。
+   *
+   * 语义只有一条：`messages` 这份缓存大概覆盖到 `seq ≤ projection_cache_seq`。
+   * 它**不是**事实水位、**不表示**「事实已重建到这个 seq」，**不许**参与任何
+   * 可见性 / 发布 / 覆盖判定（ADR-105 R2）。投影的真输入恒为事件日志整份
+   * （`loadStoredHistory` ⇒ `projectMessages` + `reconcileCachedProjection`），
+   * 所以删掉这个字段、或者把它写成一个错的值，投影输出必须**逐字节不变**
+   * （门禁：`scripts/check-projection-cache-agnostic.ts`）。
+   */
+  projection_cache_seq?: number;
+  /**
+   * @deprecated 0.54 B3：旧名字，读侧当 `projection_cache_seq` 的**别名**；写侧仍然镜像
+   * 一份（值相同），让只认旧名字的读者（wire / migrate / 旧版本的 core）继续能读到。
+   * 新代码请写 `projection_cache_seq`。
+   */
   derived_upto_seq?: number;
   /** Derived snapshot of the latest RunRecord; NOT truth. */
   status?: SessionStatus;

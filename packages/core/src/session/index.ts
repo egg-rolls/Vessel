@@ -39,6 +39,7 @@ export {
   type ProjectMessagesOptions,
   projectedKeepCount,
   projectMessages,
+  reconcileCachedProjection,
 } from './project-messages.js';
 export {
   type PruneRunsOptions,

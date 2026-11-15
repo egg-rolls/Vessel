@@ -367,8 +367,9 @@ function judgeProjectCallSites(): void {
       }
     }
   }
-  // 4 个已知调用点：增量投影 / 满投影 / idle 会话压缩 / 派生会话的种子。
-  expect('N0.1 产品代码里的 projectMessages 调用点数量（≥4）', labels.length >= 4, true);
+  // 3 个已知调用点（0.54 B3 起）：投影读路径（原「增量 / 满投影」两个分支已合并成一个）/
+  // idle 会话压缩 / 派生会话的种子。数量闸只是「扫描没失灵」的抓手：真正的不变量是 N0.2。
+  expect('N0.1 产品代码里的 projectMessages 调用点数量（≥3）', labels.length >= 3, true);
   expect(`N0.2 每个调用点都显式传「${REQUIRED_OPTION}」`, offenders, []);
   if (labels.length > 0) ok(`N0.3 扫描到的调用点：${labels.join(' / ')}`);
 }
@@ -1054,14 +1055,17 @@ async function runRealRestore(root: string): Promise<void> {
   await judgeWire(crashDir, a2, 'A2');
 
   // ── A3：缓存不可用（没有 derived_upto_seq）⇒ 满投影 ─────────────────────
-  section('A3 缓存没有 derived_upto_seq（旧数据 / 缓存缺失）⇒ 满投影');
+  section('A3 缓存没有缓存水位（旧数据 / 缓存缺失）⇒ 满投影');
   const noCacheDir = join(root, 'nocache');
   cpSync(pristine, noCacheDir, { recursive: true });
   const shellJson = JSON.parse(readFileSync(sessionFile(noCacheDir), 'utf8')) as Record<
     string,
     unknown
   >;
+  // 0.54 B3：正名 `projection_cache_seq` 与旧名 `derived_upto_seq` 是同一个数（别名），
+  // 要造「没有水位」就必须两个都删 —— 只删旧名的话读侧会从正名回填，夹具就不成立了。
   delete shellJson.derived_upto_seq;
+  delete shellJson.projection_cache_seq;
   writeFileSync(sessionFile(noCacheDir), JSON.stringify(shellJson));
   expect(
     'A3.0 入口条件成立：缓存里的 derived_upto_seq 已经不存在',
