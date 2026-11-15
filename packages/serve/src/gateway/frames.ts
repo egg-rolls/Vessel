@@ -5,6 +5,7 @@
  */
 
 import type { RunEvent } from '@vessel-agent/core';
+import type { EventGap } from '../event-buffer.js';
 import {
   type NodeInfo,
   PROTOCOL_VERSION,
@@ -164,5 +165,30 @@ export function errorFrame(input: ErrorFrameInput): ServerFrame {
     id: input.id,
     ok: false,
     error: input.error ?? protocolError('internal', 'Unknown error'),
+  };
+}
+
+export interface GapFrameInput {
+  nodeId: string;
+  gap: EventGap;
+  ts?: number;
+}
+
+/**
+ * 缺口帧（**过渡期字段，B2 落地即删**）。
+ *
+ * 调用方**只能**在 `timeline_source === 'legacy'` 的老 epoch 上用它；时间线 epoch 的
+ * 连续性由 `hello.count` + `hello.holes` 表达，服务端不替客户端编区间
+ * （ADR-105 §9 R4）。为什么过渡期还留：B2 上线前老客户端是生产客户端，
+ * 它靠这一帧知道「慢消费跳过了 [from_seq, to_seq]」，删早了就退化为静默丢帧。
+ */
+export function gapFrame(input: GapFrameInput): ServerFrame {
+  return {
+    v: PROTOCOL_VERSION,
+    kind: 'gap',
+    node_id: input.nodeId,
+    ts: input.ts ?? Date.now(),
+    from_seq: input.gap.from_seq,
+    to_seq: input.gap.to_seq,
   };
 }

@@ -33,6 +33,11 @@ export interface SseClientState {
   unacked: number;
   replay?: SseReplayState;
   onClose?: () => void;
+  /**
+   * 缺口帧编码（**过渡期，B2 落地即删**）：SSE 只走老路径，老客户端靠它知道
+   * 「慢消费漏了哪一段」。时间线 epoch 在 WS 侧，不走这里。
+   */
+  encodeGap: (gap: EventGap) => string;
   /** 可选事件过滤（events.subscribe run_id / types） */
   accepts?: (event: RunEvent) => boolean;
 }
@@ -76,13 +81,21 @@ export function writeSse(ctrl: SseController, state: SseClientState, chunk: stri
  * 但**状态必须清**：`takeGap` 是那个状态机的复位点，不调用会让 `dropping` 永远为真，
  * 之后的 `admit` 会一直按「还在丢弃」处理。
  */
+/**
+ * 背压恢复时补发缺口帧（**过渡期保留，B2 落地即删**）。
+ *
+ * SSE 没有 epoch 概念、也永远读不到时间线（`?after_timeline_seq=` 直接 501），
+ * 所以这里一律是**老路径**：老客户端靠这一帧知道「慢消费漏了 [from_seq, to_seq]」，
+ * 删早了就退化成静默丢帧。时间线 epoch（WS）**不**走这条。
+ */
 export function flushSseGap(
   ctrl: SseController,
   state: SseClientState,
   highWaterFrames = SSE_HIGH_WATER_FRAMES,
 ): boolean {
-  state.backpressure.takeGap(sseInflight(ctrl, state, highWaterFrames));
-  return true;
+  const gap = state.backpressure.takeGap(sseInflight(ctrl, state, highWaterFrames));
+  if (gap === null) return true;
+  return writeSse(ctrl, state, state.encodeGap(gap));
 }
 
 export function sendGatedSse(
@@ -111,10 +124,13 @@ export function pumpSseReplay(
 ): void {
   const replay = state.replay;
   if (!replay) return;
-  // 环形缓冲已经淘汰掉的那一段：**跳过**它（游标前移），不再往线上发 `gap` 帧。
-  // 跳过之后客户端按 `hello.count` 发现少了，自己报 `timeline_gap_reported`（0.54 B1）。
+  // 环形缓冲已经淘汰掉的那一段：游标前移，并把缺口**告诉老客户端**
+  // （过渡期保留，B2 落地即删）。
   const historyGap = source.gapFor(replay.cursor - 1);
-  if (historyGap) replay.cursor = historyGap.to_seq + 1;
+  if (historyGap) {
+    if (!writeSse(ctrl, state, state.encodeGap(historyGap))) return;
+    replay.cursor = historyGap.to_seq + 1;
+  }
   let sent = 0;
   for (const item of source.since(replay.cursor - 1)) {
     const desired = ctrl.desiredSize;

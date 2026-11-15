@@ -37,7 +37,16 @@ export type RpcErrorCode =
   | 'compact_unavailable'
   // 0.52 S1a：node 正在优雅退出（fence 已打开）。**可重试**：等 node 回来再发，
   // 客户端按「稍后重试」处理，不要当终态错误展示。
-  | 'gateway_restarting';
+  | 'gateway_restarting'
+  // 0.54 B1（ADR-105 §6 / D4）：时间线订阅的两个稳定码。
+  // - `session_frozen_readonly`：旧格式会话只读冻结（与 core 写者同名同义，
+  //   `packages/core/src/timeline/types.ts`）；0.54 之前它只在写者打开时抛，
+  //   现在订阅路径也真抛（A8②）。
+  // - `timeline_unavailable`：装配层没开 timeline 读面（端口缺失）。与上一条分开：
+  //   「服务端没开这个能力」不是「这个会话坏了」，混成一个码会误导排障。
+  // 两条与根 `src/rpc/types.ts` 逐字同步（main 已补），所以这里可以直接抛。
+  | 'session_frozen_readonly'
+  | 'timeline_unavailable';
 
 /** 方法权限（manifest 同名字段） */
 export type MethodPermission = 'read' | 'write' | 'admin';
