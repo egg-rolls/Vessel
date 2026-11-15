@@ -466,7 +466,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Config validation errors/warnings are not exposed by gateway RPC; run `vessel doctor`',
   'observe.diagnostics.doctor.provider.detail': '{provider} / {model} / api key {key}',
   'observe.diagnostics.doctor.dataDir.configured': '{path} (source: {source})',
-  'observe.diagnostics.doctor.dataDir.default': '{path} (default)',
+  'observe.diagnostics.doctor.dataDir.gatewayDecided':
+    'decided by the gateway (not reported; remote or older gateway)',
+  'observe.diagnostics.doctor.session.relative': 'relative to the gateway data dir',
   'observe.diagnostics.doctor.dataDir.unverified':
     'Writability is checked by `vessel doctor` on the host',
   'observe.diagnostics.doctor.session.memory': 'backend=memory (no persistence)',
@@ -1749,6 +1751,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.client.closed': 'Connection closed',
   'gateway.client.stopped': 'The gateway has stopped',
   'gateway.client.unreachable': 'Cannot reach the gateway (not started or wrong address)',
+  'replay.notice.partial':
+    'Restored details for only {runs} of {total} recent runs (event backfill hit its limit).',
+  'replay.notice.failed':
+    'Event log backfill is unavailable; showing only what the live stream already delivered.',
   'gateway.error.unauthorized':
     'The token is invalid or expired; enter it again in connection settings.',
   'gateway.error.forbidden': 'This token cannot perform the operation.',

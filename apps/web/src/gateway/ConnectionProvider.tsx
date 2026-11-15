@@ -134,8 +134,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const client = useMemo(() => new GatewayClient(nodeUrl ?? ''), [nodeUrl]);
   /** 路由级订阅控制器：每个 node 连接一个；切路由时由 S3 调 `apply`。 */
   const subscription = useMemo(
-    () => new SubscriptionController(client, eventStore),
-    [client, eventStore],
+    // 第三个参数是「回填降级」的可读出口：远程 / 截断 / 部分失败时至少有一句话，
+    // 不许静默少补（数据层的观测面在 `EventStore#diskBackfill`）。
+    () => new SubscriptionController(client, eventStore, (message) => toast.info(message)),
+    [client, eventStore, toast],
   );
   const nodeTokenRef = useRef(nodeToken);
   nodeTokenRef.current = nodeToken;

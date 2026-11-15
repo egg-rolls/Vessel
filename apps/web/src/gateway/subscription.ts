@@ -21,10 +21,34 @@
  * 有缺口，就退游标 + 暂存帧（`EventStore#beginBackfill`），再带
  * `until_seq = 上一页首条 seq - 1` 逐页往更早拉，直到覆盖当前 run 的起点
  * （`EventStore#hasNewestRunStart`）或环里再没有更早的事件。
+ *
+ * **磁盘段（`D \ R`）**：环只是磁盘日志的滑动缓存，环回填的天花板是「环的最旧一条」——
+ * 被淘汰掉的那一段（磁盘有、环没有）今天一条都拿不回来，这就是「刷新后这次 run 只剩
+ * 几条」的结构性缺口。所以环回填**之后**再问一次磁盘（`sessions.events`，
+ * 见 `gateway/disk-backfill.ts`）：
+ * - 拉回来的是「日志尾部窗口」，扫过环窗口并与它重叠，重叠部分按跨源内容键去重
+ *   （`state/disk-replay.ts`），所以不会重复、也不会 replace 环里已有的内容；
+ * - 任何失败（旧 gateway 没有这个方法 / 报错 / 超时）一律 **fail-open**：不合并、
+ *   不清空、不动游标，行为退回「只有环」的今天，并记一条可观测警告
+ *   （`EventStore#diskBackfill.lastError`）；
+ * - 页数有硬上限（`DISK_BACKFILL_MAX_PAGES`），超限告警而不无限翻页。
+ *
+ * 顺序为什么是「先环后磁盘」而不是并行：环回填期间 `EventStore` 处于暂存 + 冻结态
+ * （`holdFloor`，`truncateAfter` 是空操作），此时往 `entries` 里插一批更早的条目会把
+ * 暂存帧的落点踩坏。磁盘段并入本身不依赖环，但它必须发生在环的游标稳定之后。
  */
 
+import { t } from '../i18n';
+import type { ReplaySegment } from '../state/disk-replay';
 import type { EventStore } from '../state/event-store';
 import type { GatewayClient } from './client';
+import {
+  GatewayReplaySource,
+  newestRunIds,
+  type ReplayEvent,
+  type ReplaySink,
+  recoverReplay,
+} from './replay-source';
 import type { HelloInfo } from './types';
 
 /** 旧 gateway 不识别 `session_id`；用 feature 做版本协商，不用形状探测。 */
@@ -170,6 +194,15 @@ export class SubscriptionController {
   /** 回填中：待补区间上界（含）；非 null = 回填在跑。 */
   private backfillUpper: number | null = null;
   /**
+   * 本轮的环回填判定发现过缺口（`startBackfill` 里和 `backfillUpper` 一起 arm）。
+   *
+   * 它决定**要不要再问一次磁盘**：只有「环确实接不上」的那一轮才值得拉
+   * `sessions.events` —— 环完整时（短会话 / 刚刷新但环没淘汰）磁盘段只会是重复内容。
+   */
+  private diskPending = false;
+  /** 磁盘段回填在跑（防重入：同一轮里 apply / 路由抖动都不该叠第二次）。 */
+  private diskRunning = false;
+  /**
    * 连接级 hello 时的服务端最新 seq。重连后自动重新收敛时用它作为
    * `since=currentSeq` 的锚点：连接级回放已经发生，Team / 无范围订阅不必再回放一遍。
    */
@@ -178,6 +211,11 @@ export class SubscriptionController {
   constructor(
     private readonly client: GatewayClient,
     private readonly eventStore: EventStore,
+    /**
+     * 可读提示的出口（远程 / 截断时「少补了」必须说出来，不许静默）。
+     * 缺省 = 不说话（仍进 `EventStore#diskBackfill`）。
+     */
+    private readonly notice?: (message: string) => void,
   ) {}
 
   /** 路由变化时调用；重复 scope 幂等（同一 filter 不重复发请求）。 */
@@ -267,13 +305,17 @@ export class SubscriptionController {
     // 就不回放历史（`since` 指向当前 seq），回填补不出东西。
     const sessionId = serverScopedSessionId(built);
     if (sessionId === undefined) return;
-    if (!this.supportsReplayRange()) return;
-    // 当前 run 的起点已经在缓冲里（含从连接级回放拿到的那一段）：不需要回填。
+    // 当前 run 的起点已经在缓冲里（含从连接级回放拿到的那一段）：两种回填都不需要。
     // 这条判据同时覆盖「同一作用域重订阅 / 重连」的重复回填。
     if (this.eventStore.hasNewestRunStart(sessionId)) return;
+    // 环没接到当前 run 的起点 ⇒ 磁盘段值得问一次。**与 `events.replay-range` 无关**：
+    // 旧 gateway 连 `until_seq` 都没有时磁盘更是唯一来源（拿不到就 fail-open，见
+    // `runReplayBackfill`）；进程重启后环整体为空（`from_seq` 可能 <= 1）时同理。
+    this.diskPending = true;
+    if (!this.supportsReplayRange()) return;
     const since = built.filter.since;
     const fromSeq = info.from_seq;
-    // 已经追平（没有缺口）：常态路径，按 hello 截断即可。
+    // 环这一段已经追平（没有缺口）：只有磁盘段还要问（见上）。
     if (fromSeq <= since + 1) return;
     // 先退游标再暂存：`since` 之上刚刚收到的尾部会由分页重新送达，不能被当成「已有」。
     // 暂存必须在订阅 hello 的这一帧就开始，否则本页的帧会先被当成「已有」写进时间线。
@@ -328,6 +370,91 @@ export class SubscriptionController {
       // 无论如何都要撤销暂存：留着会让 `push()` 永远只写暂存区。
       // 作用域变了的那份内容由 `run()` 的 `clear()` 负责丢掉。
       this.eventStore.endBackfill();
+    }
+  }
+
+  /**
+   * 磁盘段回填（`D \ R`）：环的天花板是「环的最旧一条」，磁盘才有更早的那一段。
+   *
+   * 编排在 `gateway/replay-source.ts#recoverReplay`（阶段一 `sessions.events` + 阶段二
+   * `events.list` 补 trace-only 类型），本方法只做三件本层才知道的事：
+   * 1. **作用域守卫**：横跨多次 `await`，期间路由 / 会话可能已经变了 —— 变了就**不并入**
+   *    （把 A 会话的磁盘事件并进 B 的缓冲 = 串台），已拉到的东西直接丢掉（下次回填还有）。
+   * 2. **按段缓冲**：`apply()` 是逐页回调，每页都 `applyReplaySegment` 会触发一次整表
+   *    重折叠；按段攒到段尾一次并入，页数就只是一次折叠的输入。
+   * 3. **fail-open + 观测**：任何失败只进 `EventStore#diskBackfill`（attempts / lastError），
+   *    不清空、不动游标、不抛。
+   *
+   * 只在 `run()` 里、**环回填之后**调用：环回填期间 `EventStore` 处于暂存 + 冻结态
+   * （`holdFloor`），那时并入会让暂存帧的落点错位。
+   */
+  private async runReplayBackfill(
+    scope: SubscriptionScope,
+    built: BuiltSubscription,
+  ): Promise<void> {
+    const sessionId = serverScopedSessionId(built);
+    if (sessionId === undefined || !this.diskPending) return;
+    this.diskPending = false;
+    if (this.diskRunning) return;
+    this.diskRunning = true;
+    const scopeKey = scopeIdentity(scope);
+    const inScope = (): boolean =>
+      this.desired !== null && scopeIdentity(this.desired) === scopeKey;
+    let segment: ReplaySegment | null = 'session-log';
+    const pending: ReplayEvent[] = [];
+    const flush = (): void => {
+      if (pending.length === 0) return;
+      const batch = pending.splice(0, pending.length);
+      // 作用域变了：这一批属于别的会话，不并入（会串台），也不记失败。
+      const target = segment;
+      if (!inScope() || target === null) return;
+      this.eventStore.applyReplaySegment(target, batch, { sessionId });
+    };
+    const sink: ReplaySink = {
+      apply: (events) => {
+        // `segment === null` = 环段。Web 侧的环段在订阅帧到达时就已经 `push` 进
+        // `EventStore`（`GatewayReplaySource#fetchRingSegment` 因此返回空），这里不再
+        // 并入：环事件带的是 hub seq，落进磁盘负带会把两套 seq 混算。
+        if (segment === null) return pending.length;
+        pending.push(...events);
+        return pending.length;
+      },
+      // 逐条警告都落到同一个可观测面：`lastError` 就是「这次没接上」的唯一信号。
+      warn: (message) => this.eventStore.noteDiskBackfill({ error: message }),
+      beginSegment: (next) => {
+        flush();
+        segment = next === 'ring' ? null : next;
+      },
+    };
+    this.eventStore.beginDiskBackfillAttempt();
+    try {
+      const result = await recoverReplay(new GatewayReplaySource(this.client, sessionId), sink, {
+        // 阶段二逐 run：只追最新几个 run（trace 只补它们的 trace-only 类型）。
+        // **归属校验**：`runs` 只从**本会话的 session 日志**里取（`newestRunIds`），
+        // 拿不到归属就不拉 —— 宁可不补，也不把别的会话的 run trace 拉进这个会话。
+        runs: (events) => newestRunIds(events),
+      });
+      flush();
+      this.eventStore.noteDiskBackfill({ truncated: result.truncated });
+      // 降级必须可读（远程 / 截断 / 部分失败）：不许静默少补。
+      if (result.sessionError !== undefined) {
+        this.notice?.(t('replay.notice.failed'));
+      } else if (result.truncated || result.traceRunsFetched.length < result.traceRunsRequested) {
+        this.notice?.(
+          t('replay.notice.partial', {
+            runs: Math.max(1, result.traceRunsFetched.length),
+            total: Math.max(1, result.traceRunsRequested),
+          }),
+        );
+      }
+    } catch (error) {
+      // `recoverReplay` 自己逐段 fail-open，理论上到不了这里；留着是防「适配器自己炸」
+      // 把订阅循环一起带走（那是 fail-closed，比「少一段」更坏）。
+      this.eventStore.noteDiskBackfill({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.diskRunning = false;
     }
   }
 
@@ -401,6 +528,10 @@ export class SubscriptionController {
           this.eventStore.endBackfill();
         }
       }
+      // 磁盘段（`D \ R`）：环回填已经收尾、暂存/frozen 都已解除，这里才允许并入更早的
+      // 那一段。`subscribed` 是前置条件（旧 gateway 上连方法表都可能没有；没有就
+      // fail-open，见 `runReplayBackfill` 里的观测面）。
+      if (subscribed && this.diskPending) await this.runReplayBackfill(scope, built);
       // 等待期间路由又变了：用新 scope 再跑一轮。
       if (this.desired === scope) return;
     }
