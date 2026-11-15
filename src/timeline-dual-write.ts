@@ -118,7 +118,7 @@
  * @module vessel/timeline-dual-write
  */
 
-import { mkdir, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   EventStream,
@@ -126,7 +126,7 @@ import type {
   RunEvent,
   TimelineDualWriteEvent,
 } from '../packages/core/src/index';
-import { atomicWrite, encodeSessionDirName, sessionDirPath } from '../packages/core/src/index';
+import { encodeSessionDirName, sessionDirPath } from '../packages/core/src/index';
 import { isLegacyFrozenSessionDir, LEGACY_SESSION_LOG } from '../packages/core/src/timeline/freeze';
 import { loadIndexSnapshot } from '../packages/core/src/timeline/index';
 import {
@@ -143,7 +143,6 @@ import {
   readCrcNdjsonFile,
   readHoles,
   readTimelineEvents,
-  withCrc,
 } from '../packages/core/src/timeline/wal';
 import { TimelineWriter } from '../packages/core/src/timeline/writer';
 import {
@@ -399,6 +398,13 @@ export interface TimelineDualWriteOptions {
     sessionDir: string;
     chunkFlushMs: number;
     publish: (record: TimelineRecord) => void;
+    /**
+     * 透传给 `TimelineWriter.open` 的**显式 adopt 断言**（见写者侧的说明）。
+     *
+     * 自定义实现**应当原样转发**（与 `publish` 同一条纪律）：不转发时本模块会先用一个
+     * 一次性 writer 把标记落好再调你（结果一样，只是多一次 open）。
+     */
+    adoptLegacyShapedSession?: boolean;
   }) => Promise<TimelineWriter>;
 }
 
@@ -514,35 +520,6 @@ export interface TimelineTailEvent extends TimelinePageEvent {
 /** 会话目录：与旧链路同一条口径（`encodeURIComponent`）。 */
 function sessionDirOf(sessionsDir: string, sessionId: string): string {
   return sessionDirPath(sessionsDir, sessionId);
-}
-
-/**
- * 打开 writer **之前**先把 `timeline.manifest`（`kind: 'open'`）放好。
- *
- * 为什么必须这么做（这不是可选的洁癖）：`TimelineWriter.open` 的第一条判定是
- * 「有 `events.ndjson`、却没有任何 timeline 标记 ⇒ 旧格式会话 ⇒ `session_frozen_readonly`」
- * （ADR-105 D4：0.54 不做迁移）。而双写发生时旧链路**必然**已经写了 `events.ndjson`
- * —— 不先落标记，每个双写会话第一次打开 writer 都会被判成旧会话。先落的这条标记
- * 表达的就是「这个会话有 timeline 了」这一条事实本身，内容与写入侧 `ensureManifest()`
- * 完全一致（同一份 `withCrc` 行），不是第二套格式。
- *
- * **0.54 C1 起只能在「已确认不是旧格式」之后调**（见 {@link createPreexistingSessionSnapshot}
- * 与 `writerFor` 的守卫）：早先版本对**每个**会话无条件先落标记，于是旧格式会话被就地
- * 解冻（标记一写，`freeze.ts` 的判据永远看不见旧格式了）。现在旧格式会话一个字节都不写。
- *
- * 幂等：文件已存在就直接返回（写入侧自己会在缺失时补）。
- */
-async function ensureTimelineMarker(sessionDir: string): Promise<void> {
-  const path = join(sessionDir, TIMELINE_LAYOUT.timelineManifest);
-  try {
-    await stat(path);
-    return;
-  } catch {
-    // 不存在 ⇒ 落一条 open 标记
-  }
-  await mkdir(sessionDir, { recursive: true });
-  const line = withCrc({ v: 1 as const, kind: 'open' as const, at: Date.now() });
-  await atomicWrite(path, `${JSON.stringify(line)}\n`, { mode: 0o600, durable: true });
 }
 
 /**
@@ -936,6 +913,7 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
       sessionDir: string;
       chunkFlushMs: number;
       publish: (record: TimelineRecord) => void;
+      adoptLegacyShapedSession?: boolean;
     }) =>
       TimelineWriter.open({
         sessionId: input.sessionId,
@@ -944,7 +922,39 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
         // ADR-105 §3 I2 的端到端接线：**必须**把发布回调交给写者。
         // 写者只在「该 seq 的 WAL/块 fsync 返回之后」调它，所以它是唯一合规的发布点。
         publish: input.publish,
+        // 显式 adopt 断言（ADR-105 D4 / 0.54 C1）：只有「core 判形状像旧格式 ∧ 本进程
+        // 才出现」时才会是 true。标记仍然由写者落 —— 本模块不写 timeline 目录已经很久了。
+        ...(input.adoptLegacyShapedSession === true ? { adoptLegacyShapedSession: true } : {}),
       }));
+
+  /**
+   * 自定义 `openWriter` 缝（门禁/探针）没转发 `adoptLegacyShapedSession` 时，
+   * 先让**写者**把标记落好，再让缝打开。
+   *
+   * 为什么要这一步：adopt 断言的语义是「跳过写者自己的冻结闸门」，它必须由打开写者的
+   * 那个人传下去。缝是别人的代码，未必认识这个新字段（现有门禁的缝就只转发 `publish`）。
+   * 而**标记只能由写者落**（`TimelineWriter.open` 的 `ensureManifest()`），所以这里用一个
+   * 一次性 writer 走一遍合法的初始化 —— 装配层依旧一个字节都不直接写 timeline 目录。
+   *
+   * 两条纪律：
+   * - **`publish` 必须一样接上**（I2 硬断言「每一个 `TimelineWriter.open` 都传 publish」；
+   *   这条 writer 不 append 任何记录，正常情况下一次都不会触发，但通道不能留洞）；
+   * - 只对自定义缝、只在本进程刚建的会话上做，且只做一次（`writers` 缓存）。
+   *
+   * 缝**应当**原样转发 `adoptLegacyShapedSession`（与 `publish` 同一条纪律）；都转发之后
+   * 这一步就变成多余的 —— 那时可以直接删掉它。
+   */
+  const customWriterSeam = options.openWriter !== undefined;
+  async function primeAdoptedWriter(sessionId: string, sessionDir: string): Promise<void> {
+    const priming = await TimelineWriter.open({
+      sessionId,
+      sessionDir,
+      chunkFlushMs,
+      publish: (record) => deliverPublication(sessionId, record),
+      adoptLegacyShapedSession: true,
+    });
+    await priming.close();
+  }
 
   const counters: TimelineDualWriteStats = {
     appended: 0,
@@ -1057,21 +1067,37 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   };
 
   /**
-   * 这个会话是不是「**对本进程**而言的旧格式会话」（⇒ 不 adopt、不写、不抛）。
+   * 这个会话在本进程里该怎么处理：`frozen`（旧格式只读）/ `adopt`（本进程刚建）/ `plain`（照常）。
    *
-   * 判据的两半都不可省，且**都不是新的判据**：
-   * - `isLegacyFrozenSessionDir`（core `freeze.ts`）：「形状上像旧格式」；
-   * - `preexistingSessions`（构造时快照）：「本进程开始之前就在」。
+   * - **形状**只有一处判据：`isLegacyFrozenSessionDir`（core `freeze.ts`）；
+   * - **时间**只有一个来源：`preexistingSessions`（manager 构造那一刻的快照）。
    *
-   * 为什么不能只看第一半：0.54 新会话第一次双写时形状与旧会话**完全相同**（旧链路先写
-   * `events.ndjson` 再调 `record()`）—— 只看形状会把每个新会话判死（双写全灭）。
-   * 为什么不能只看第二半：一个 0.53 会话如果在**本进程里**刚好被旧链路写过（例如续跑
-   * 一个旧会话），它也可能「不是构造时就有日志」，形状仍必须由 core 判。
+   * ```
+   * core 说「旧格式」      ∧ 快照说「本进程开始之前就在」  ⇒ frozen
+   * 快照说「本进程才出现」                                  ⇒ adopt（向写者下断言，标记仍由写者落）
+   * 其它（有标记的既有 0.54 会话）                          ⇒ plain（写者自己会放行）
+   * ```
+   *
+   * 为什么 `adopt` 只看时间、不再叠「core 判旧格式」：第一条事件的 `record()` 与
+   * `events.ndjson` 的落盘是**并发**的（`RunJournal` 侧 fire-and-forget），所以
+   * 「此刻形状像不像旧格式」随时会变 —— 拿它当 adopt 条件会漏掉「判的时候文件还没落、
+   * 写者打开时文件已经在了」这一窗口（实测：`check-timeline-dualwrite` 掉 13 条）。
+   * 形状该由**写者**在自己 open 的那一刻问 `freeze.ts`；装配层只提供它问不出来的时间事实。
+   *
+   * 为什么不能只看形状（不叠时间）：0.54 新会话的第一次双写形状与 0.53 遗留会话完全一样
+   * （有 `events.ndjson`、无标记）—— 只看形状会把每个新会话判死（双写全灭，实测掉 8 条）。
    */
-  async function isFrozenForThisProcess(sessionId: string, sessionDir: string): Promise<boolean> {
-    if (!(await isLegacyFrozenSessionDir(sessionDir))) return false;
-    const preexisting = await preexistingSessions();
-    return preexisting.has(encodeSessionDirName(sessionId));
+  async function decideAdoption(
+    sessionId: string,
+    sessionDir: string,
+  ): Promise<'frozen' | 'adopt' | 'plain'> {
+    const preexisting = (await preexistingSessions()).has(encodeSessionDirName(sessionId));
+    if (preexisting) {
+      // 既有会话：形状由 core 判；形状是旧格式 ⇒ 冻结（本进程之前就存在，不可能是新会话）。
+      return (await isLegacyFrozenSessionDir(sessionDir)) ? 'frozen' : 'plain';
+    }
+    // 本进程才出现的会话：断言「是我建的」——写者据此跳过冻结闸门，标记仍由写者落。
+    return 'adopt';
   }
 
   async function writerFor(sessionId: string): Promise<TimelineWriter | undefined> {
@@ -1081,13 +1107,8 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     const opening = (async () => {
       try {
         // 0.54 C1（ADR-105 D4）：旧格式会话**只读冻结** —— 不 adopt、不写一个字节、不抛。
-        //
-        // 两个条件一起看，判据仍然只有 `freeze.ts` 一份：
-        // ① core 说它「有 events.ndjson 且没有任何 timeline 标记」；
-        // ② 而且它在**本进程开始之前**就已经带着日志（构造时快照）。
-        // ② 是必须的：0.54 新会话的第一次双写发生时形状与旧会话一模一样（旧链路先写
-        // events.ndjson、再调 record），光凭 ① 会把每个新会话都判死。
-        if (await isFrozenForThisProcess(sessionId, sessionDir)) {
+        const decision = await decideAdoption(sessionId, sessionDir);
+        if (decision === 'frozen') {
           counters.frozen_sessions += 1;
           frozenSessions.add(sessionId);
           warn('timeline dual-write skipped (legacy session is frozen read-only)', {
@@ -1099,12 +1120,16 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
           gate?.releaseSession(sessionId);
           return undefined;
         }
-        await ensureTimelineMarker(sessionDir);
+        // 本进程刚建的会话 ⇒ 向写者下 adopt 断言（标记仍由写者落，本模块一个字节都不写
+        // timeline 目录）。既有会话不传，写者按 `freeze.ts` 自己判。
+        const adopt = decision === 'adopt';
+        if (adopt && customWriterSeam) await primeAdoptedWriter(sessionId, sessionDir);
         const writer = await openWriter({
           sessionId,
           sessionDir,
           chunkFlushMs,
           publish: (record) => deliverPublication(sessionId, record),
+          ...(adopt ? { adoptLegacyShapedSession: true } : {}),
         });
         counters.sessions += 1;
         // 周期保底：writer 出现的第一刻起开计时（长 run 期间也要有归档）。
