@@ -37,10 +37,12 @@
  *
  * ## 去重（跨源，**禁用 seq**）
  *
- * 跨源只认内容 id `run_id|type|ts`（`gateway/replay-source.ts#stableEventId`，契约 §8 第
- * 3 条）：三套 seq 之间没有任何映射，同一逻辑事件在三处的数字完全不同。
- * 段内幂等另用一条 ledger：会话日志用 `(run_id, seq)` 复合键，trace 用
- * `(run_id, seq)` —— 它们在**各自 seq 空间内**唯一，用来挡住「同一批事件被回填两次」。
+ * 跨源只认内容 id `run_id|type|ts|<payload 摘要>`（`gateway/replay-source.ts#stableEventId`，
+ * 契约 §8 第 3 条的补强）：三套 seq 之间没有任何映射，同一逻辑事件在三处的数字完全不同。
+ * 第四段（payload 摘要）是**必须**的 —— 只到毫秒的 `ts` 挡不住「同 run 同类型同毫秒的两条
+ * 不同事件」，三段口径会把后到的那条并掉（那是吞内容，不是去重）。段内幂等另用一条
+ * ledger：会话日志用 `(run_id, seq)` 复合键，trace 用 `(run_id, seq)` —— 它们在**各自
+ * seq 空间内**唯一，用来挡住「同一批事件被回填两次」。
  */
 import type { ReplayEvent } from '../gateway/replay-source';
 import { stableEventId } from '../gateway/replay-source';
@@ -168,7 +170,9 @@ export function hubTsCeiling(entries: readonly StoredEvent[]): number {
  * 1. **只增不改**：返回的是**新增**条目，绝不表达删除 —— 调用方没有「整段 replace」这种
  *    动作可用（「禁止整段 replace」在这里是结构性的，不是靠纪律）。
  * 2. **幂等**：同一段重复喂进来，`identities` 命中 ledger 后 `entries` 为空。
- * 3. **跨源去重**：内容 id 已在 `existing` 里的事件不会再产出一份（`duplicates`）。
+ * 3. **跨源去重**：内容 id（含 payload 摘要）已在 `existing` 里的事件不会再产出一份
+ *    （`duplicates`）；反过来，同 run/type/ts 但 payload 不同的两条**都必须留下** ——
+ *    这条去重只允许「并掉完全相同的那一份」，不许吞内容。
  * 4. **顺序确定性**：会话日志按 session seq、trace 按 `(ts, run_id, seq)`；与「先喂哪一段」
  *    无关（各带互不重叠）。
  */
@@ -187,6 +191,10 @@ export function planSegmentMerge(input: SegmentMergeInput): SegmentMergePlan {
 
   // 跨源索引只覆盖「本段出现过的类型」：既不为无关类型算内容 id，也让代价与「这段多大」
   // 成正比，而不是与「环里有多少条」成正比。
+  //
+  // `data` 必须一起算：内容 id 的第四段是 payload 摘要（见 `replay-source.ts#stableEventId`），
+  // 少了它，「已有的这一份」和「段里的那一份」会得到不同的 id —— 去重直接失效（每条都
+  // 重复一遍），而「同 ts 不同 payload」的反例还会被错误地判成重复。
   const wantedTypes = new Set(input.events.map((event) => event.type));
   const existingIds = new Set<string>();
   for (const entry of input.existing) {
@@ -197,6 +205,7 @@ export function planSegmentMerge(input: SegmentMergeInput): SegmentMergePlan {
         type: entry.event.type,
         ts: entry.event.ts,
         run_id: entry.event.run_id,
+        data: entry.event.data,
       }),
     );
   }

@@ -42,6 +42,7 @@ paths: [packages/serve/src/event-buffer.ts, packages/serve/src/tenant-event-hub.
 > ② `seqSet(UI) == seqSet(D) ⊎ seqSet(U)` —— 无重复、无洞、无越界；
 > ③ `w == max{seq | seq ∈ D}`（磁盘最大已落盘 seq）。
 > 弱形式（今天只能验这一条）：`fold(D \ R)` 中每条会产生 item 的记录，UI 上必须有对应 item；可执行化见 `refresh-gap-design.md:256-261` 的 H-3。
+> **边界（0.53 回填的适用面）**：本机制只保证「**已落盘**事件可补回」，**不保证「未持久化事件不丢」** —— `llm.stream.chunk` 不在任何磁盘上，重启即永久丢弃；判据右半边（未落盘的 `U`）目前不可枚举。
 
 三个边界今天**一个都不成立**，这才是判据不能当验收用的根因：
 
