@@ -5,12 +5,34 @@
 
 ## 版本
 
-**0.52 开发线（2026-11-13，进行中）** — 基线 `main @ b394b7a0`；manifest `0.52.0`；
-未 tag、未 publish（tag 等 1.0.0）；版本号以根 `package.json` 为唯一来源。**0.51.0 已收口**，
-完整变更见 [0.51.0](0.51.0.md)。
+**0.53.0 已收口（2026-11-13）** — 收口线 `0.53-closeout`，基线 `main @ c698471a`；
+manifest 根 `package.json` = `0.53.0`（`packages/**` / `apps/web` / `plugins/**` 的
+package.json 仍是 `0.52.0`，本版有意只动根）；未 tag、未 publish（tag 等 1.0.0）；
+版本号以根 `package.json` 为唯一来源。
+完整变更见 [0.53.0](0.53.0.md)；**0.53 收口结论与 0.54 边界**见
+[plan-remaining-053](../dev/handoff/plan-remaining-053.md)（含移交 0.54 的四项与
+「仍需用户做的一件」）。**0.52 开发线随本版并入**（未单独收口）。
 
 ## 已合入（现态）
 
+- **0.53 本版已合**（详见 [0.53.0](0.53.0.md)）：
+  - **上下文投射四模式落地运行期（ADR-104）**：`passthrough` / `placeholder` /
+    `externalize` / `archive_notice`，默认 **placeholder**；声明不可变、读侧唯一入口
+    `resolveProjection`；模式与冻结集合在 **run 起点**定一次，请求期只读；`passthrough`
+    与「完全没有投射机制」逐字节相同；未实现档 fail-open 到 `passthrough` 并留审计；
+    `archive_notice` 只登记不替换（归档卡 + `sessions.events` 按 `tool_call_id` 读回）。
+  - **trim 卡分层 + 占位幂等**：折叠态只说本轮新增、展开给会话内累计、同载荷不重复发；
+    `withClearedToolResults` 对已是占位的正文原样透传。
+  - **判据收口**：C1g 按模式分档（passthrough=0 / placeholder=审计集合 ∩ 落盘）；**C1h
+    改成按豁免事实判定**（声明 + 审计 + 集合逐条相等 + 每条确实是占位，四真才 `EXEMPT`，
+    任一不满足即 FAIL），`pending()` 灰度机制删除，`--phase=1` 与默认模式结论相同。
+  - **前端第一次真读磁盘（可观测与回放）**：`sessions.events` + `event_cursor`、环 1 万→5 万；
+    刷新/重连两阶段回填（`sessions.events` + `events.list` 逐 run 拉 trace-only）；
+    `EventStore#diskBackfill` 观测面；内容 id 补 payload 摘要。
+  - **通知与可见性**：peer 停下真能通知父会话、投递前重解析父 session（rotate 窗口内也落
+    新 body）、inbox 卡头 + `check:env-scope-parity` 可见性对等。
+  - **工具与配置**：`pii.reveal` → `piiReveal` + 注册期 fail-fast 校验；旧工具名换算表驱动。
+  - **成员与历史**：`agent list includeReleases` + `closed_at` / `close_reason` 落盘。
 - **0.52 本日已合**：
   - **「数字不该错」三件**：上下文估算接**真实用量锚点**（`ratio = prompt_tokens / 未校正估算`，
     按会话持久化在 `SessionState.context_anchor`，`realTokens==0` 回 `round(estimate*ratio)`，
@@ -169,7 +191,12 @@
 
 ## 未实现 / 下一步
 
-- **0.52 待办（0.51 未做完的）**：**B′ rotate 收口解耦**（下一单首选，见下）；TUI 答 async ask；
+- **移交 0.54（0.53 收口时明确移交，见 [plan-remaining-053](../dev/handoff/plan-remaining-053.md)）**：
+  投影卡实现（PC-1/2/3）、gap 协议 + 两侧计数、un-acked 队列（0.54 直接消灭该概念）、
+  AB-1 三模式对比（需预算批准）。**仍需用户做的一件**：真机刷新验证（重启后刷几次，
+  看 `diskBackfill` 六字段）。另有三条已知边界（chunk 不落盘 / 三套 seq / trace-only 不交错）
+  由 0.54 timeline 迁移兼并。
+- **0.52 遗留（仍未做）**：**B′ rotate 收口解耦**（下一单首选，见下）；TUI 答 async ask；
   工具卡交棒（需历史侧 `duration_ms`）；位置认领（前置已具备：消息身份 `run_id` + `run_segment`
   已落盘）；`sessions.search` 读侧投影缓存；用量 43% unpriced；`guardrail PII 误伤`（13 位时间戳
   被当手机号打码，且在改写落盘正文）；
@@ -201,4 +228,4 @@
 
 - 版本历史：[INDEX.md](INDEX.md)
 - 变更摘要：[../../CHANGELOG.md](../../CHANGELOG.md)
-- 版本记录：[0.50.0](0.50.0.md)、[0.49.0](0.49.0.md)、[0.48.0](0.48.0.md)
+- 版本记录：[0.53.0](0.53.0.md)、[0.50.0](0.50.0.md)、[0.49.0](0.49.0.md)、[0.48.0](0.48.0.md)
