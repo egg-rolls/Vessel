@@ -24,7 +24,8 @@
  *   订阅通知不再发旧的 `vessel:subscription` 通道名。
  *
  * 用法：bun run scripts/check-append-only-context.ts（退出码 0 = 全过，1 = 有 FAIL）
- *       bun run scripts/check-append-only-context.ts --phase=1（灰度一阶段：见 `PENDING_IN_PHASE_ONE`）
+ *       bun run scripts/check-append-only-context.ts --phase=1（灰度一阶段：`pending()` 的条目
+ *       只打印、不拦 CI；今天**只剩 C1h** —— C1g 已按投射模式分档，是硬判据）
  */
 
 import { readFile } from 'node:fs/promises';
@@ -33,6 +34,7 @@ import { ENV_NOTICE_SCOPES } from '../apps/web/src/domains/chat/env-notice';
 import { ENV_INFO_DETAIL_MARK, ENV_INFO_SCOPES } from '../packages/agent/src/env-info-scope';
 import {
   createRunJournalFactory,
+  declareProjection,
   ExecutionUnit,
   isClearedToolResult,
   MemoryEventStream,
@@ -40,10 +42,14 @@ import {
   MemorySessionStore,
   MemoryWorkingContext,
   type Message,
+  type ProjectionRuntimeMode,
+  resolveProjection,
   type SessionEventInput,
   type SessionEventLogPort,
   type SessionEventRecord,
   type SessionState,
+  setWindowProjectionMode,
+  windowProjectionMode,
   withClearedToolResults,
 } from '../packages/core/src/index';
 
@@ -53,9 +59,13 @@ const failures: string[] = [];
 /**
  * 灰度一阶段（V1 修复单落地之前）要打印但不拦 CI 的行。
  *
- * 只给「本次裁定新收紧、而产品侧还没修」的判据用 —— 今天只有 C1g 的
- * 「占位必须落盘」一条（V1：工具结果滑窗占位）。判据本身不弱化：`--phase=1`
- * 换的只是「现在要不要因此红」，去掉这个 flag 就恢复硬拦。
+ * 只给「本次裁定新收紧、而产品侧还没修」的判据用 —— 今天**只剩 C1h**（存档 = 请求投影，
+ * 逐字一致）。判据本身不弱化：`--phase=1` 换的只是「现在要不要因此红」，去掉这个 flag
+ * 就恢复硬拦。
+ *
+ * C1g **不在**这里：它的「请求视图改写」按投射模式分档判定（`passthrough` = 0 /
+ * `placeholder` = 审计集合 ∩ 落盘工具结果）。ADR-104 已裁定 placeholder 的请求期改写是
+ * 设计行为，不是灰度项 —— 把设计行为挂成 PENDING 等于判据范围没划准。
  */
 const pendings: string[] = [];
 const PHASE_ONE = process.argv.includes('--phase=1');
@@ -588,28 +598,117 @@ async function runToolHistoryProbe(): Promise<void> {
   await eu.dispose();
 }
 
+/** 已实现的两种运行期投射模式（ADR-104：`externalize` / `archive_notice` 本轮未实现）。 */
+const PROJECTION_BRANCHES = ['placeholder', 'passthrough'] as const;
+
+/** 判据分支 = 已实现的运行期模式。 */
+type ProjectionBranch = (typeof PROJECTION_BRANCHES)[number];
+
 /**
- * 旧工具结果的占位替换：**占位必须在 append 侧就落成占位符本身**（0.52 裁定）。
+ * 旧工具结果的占位替换：**按会话声明的投射模式分档判定**（ADR-104 §6.2 / D4）。
  *
- * 旧版本这段断言写的是反的：要求「落盘必须是原文、请求视图才是占位」，等于把
- * 「请求期改写历史」当成通过条件 —— 门禁在背书违规（审计见
- * `docs/dev/research/invariant-audit-appendonly.md`）。0.52 的裁定是：存档 = 请求投影
- * = UI 三者逐字一致，占位（以及 PII 脱敏）都在**写入侧**做；请求期只剩「》(投影 + 拼装)」。
+ * 判据原文（0.52）是「任何请求视图改写落盘消息都是违规」。ADR-104 已裁定：`placeholder`
+ * 模式下请求期改写是**设计行为**，成立条件是「有声明 + 有审计集合 + 改写范围恰好等于审计
+ * 集合」。所以「必须为 0」只在 `passthrough` 下成立 —— 旧写法把 placeholder 的设计行为
+ * 也一律判成违规，而 0.53 起默认模式就是 placeholder（`docs/adr/ADR-104`「默认全部改为
+ * placeholder」），于是这条判据对默认模式**必然误报**。红的是判据范围，不是产品。
  *
- * 现在三条一起验：
- * ① 压缩后窗口（= 落盘 / `sessions.get` 的来源）里的旧工具结果**仍是原文**
- *    —— 这一条今天还成立，因为 V1 还没修（修复单排在后面）；
- * ② 请求视图必须与窗口**逐字一致**：占位若存在，必须在落盘时就存在（V1 判据，见
- *    `scripts/check-request-append-only.ts` 的 R4「同一段内占位条数不得增加」）；
+ * 现在按模式分档，三档都是硬判据（不再挂 PENDING）：
+ *
+ * 1. **`passthrough`：请求视图改写必须 == 0**。同场景按 placeholder 口径会改写 N 条，
+ *    这个反事实打在 ok 文案里 —— 「0 条」不能是真空绿（探针没覆盖占位路径时最坏）。
+ * 2. **`placeholder`：改写集合必须恰好等于**「审计集合 ∩ 落盘工具结果」（不多不少），
+ *    且每条被改写的必须是 `role=tool`、`tool_call_id` 在审计集合内、正文
+ *    `isClearedToolResult` 为真。审计集合缺失 / 没有声明 ⇒ FAIL（不是 PENDING）。
+ * 3. **声明与分支一致**：探针声明的模式、读侧 `resolveProjection` 解析出的模式、请求期
+ *    `windowProjectionMode` 拿到的模式必须三者相同。不一致 ⇒ FAIL —— 否则实现可以把模式
+ *    静默保底（声明 passthrough 却按 placeholder 跑），而判据按「自己选的分支」看不见。
+ *
+ * 探针只碰**请求视图**这一层：真压缩造出一份落盘，再按该模式的请求期口径构建视图。
+ * ① 压缩后落盘（= `sessions.get` 的来源）里的旧工具结果必须仍是原文 —— 那是判据的对照
+ *    基线；「落盘即占位」是 V1 的方向，届时这条改判「请求与落盘逐字一致」（C1h 的地盘）。
+ * ② 请求视图只在 placeholder 下、且只在冻结集合内改写（分档判据见上）。
  * ③ 审计字段 `cleared_tool_call_ids` 点名了这些工具结果。
  */
 async function runClearingProbe(): Promise<void> {
+  // 两个已实现的运行期模式各跑一遍：判据**按模式分档**，不是「一条断言判所有模式」。
+  for (const branch of PROJECTION_BRANCHES) {
+    const probe = buildClearingProbe(branch);
+    if (probe !== undefined) judgeClearingProbe(probe);
+  }
+}
+
+/** 一个模式下的探针结果：真压缩后的落盘 + 该模式请求期的视图。 */
+interface ClearingProbe {
+  /** 探针声明的模式 = 判据选中的分支。 */
+  readonly declared: ProjectionBranch;
+  /** 读侧唯一入口 `resolveProjection` 解析出的模式。 */
+  readonly resolved: string;
+  /** 请求期真正生效的模式（`windowProjectionMode`：段起点钉死后才读）。 */
+  readonly requestMode: ProjectionRuntimeMode;
+  /** 压缩事件点名的审计集合（ADR-104 D4 条件 2）。 */
+  readonly audited: readonly string[];
+  /** 压缩后的落盘消息（`context.messages` 的来源 = `sessions.get` 的来源）。 */
+  readonly stored: readonly Message[];
+  /** 落盘里仍在窗口中的工具结果条数（= 判据的取样范围）。 */
+  readonly survived: number;
+  /** 交给请求层的冻结集合（同样的落盘、不同的模式会给不同的集合）。 */
+  readonly frozen: readonly string[];
+  /** 该模式下的请求视图。 */
+  readonly requestView: readonly Message[];
+  /** 本次压缩移除的条数（探针是否真的覆盖了清空路径）。 */
+  readonly removed: number;
+}
+
+/** 视图里与落盘「不是同一条」的下标（同一对象 = 没被改写）。 */
+function rewrittenIndexes(stored: readonly Message[], view: readonly Message[]): number[] {
+  const indexes: number[] = [];
+  for (let index = 0; index < stored.length; index += 1) {
+    if (view[index] !== stored[index]) indexes.push(index);
+  }
+  return indexes;
+}
+
+/**
+ * 跑一遍「真压缩 → 段起点裁决 → 请求视图构建」，产出该模式的探针结果。
+ *
+ * `undefined` = 构造阶段就已经 FAIL（原因已记进 failures，不再往下判以免同一处报两遍）。
+ */
+function buildClearingProbe(declared: ProjectionBranch): ClearingProbe | undefined {
   const maxTokens = 2_000;
+  const sessionId = `clearing-${declared}`;
+  const label = `C1g ${declared}`;
+
+  // ① 声明 → 读侧解析。判据不自己「猜」模式：声明的模式走 U1 的真入口
+  //    `declareProjection`，再从读侧唯一入口 `resolveProjection` 拿回来。
+  const declaration = declareProjection({ mode: declared });
+  const resolution = resolveProjection({
+    session_id: sessionId,
+    context_projection: declaration,
+  });
+  if (resolution.declaration === null) {
+    // ADR-104 D4 条件 1：placeholder 的请求期改写只在「有声明」时成立。
+    fail(label, '会话没有投射声明（缺声明 ⇒ 请求期改写失去授权，判据 FAIL 而不是 PENDING）');
+    return undefined;
+  }
+  if (resolution.error !== null) {
+    fail(label, `声明解析失败（${String(resolution.error)}）—— 判据拿不到可信模式，不能按兜底值判`);
+    return undefined;
+  }
+  if (resolution.mode !== declared) {
+    fail(
+      label,
+      `声明与解析不一致：声明 ${declared}，读侧 resolveProjection 解析出 ${resolution.mode}` +
+        '—— 判据不能按「自己以为的模式」判',
+    );
+    return undefined;
+  }
+
   const context = new MemoryWorkingContext({ maxTokens });
-  context.setSessionId('clearing');
+  context.setSessionId(sessionId);
   const before: Message[] = [{ role: 'system', content: 'sys' }];
   // 12 轮「assistant 要工具 → tool 结果」：旧结果远超「保留最近 5% 预算 / 10 条」的口径，
-  // 请求视图里必然有内容被替换成占位。
+  // 压缩必然移除一段、请求视图里必然有原文被替换成占位（判据要的就是这个可分档的场景）。
   for (let turn = 0; turn < 12; turn += 1) {
     before.push({ role: 'user', content: `turn ${String(turn)}` });
     before.push({
@@ -632,9 +731,16 @@ async function runClearingProbe(): Promise<void> {
   for (const message of before) context.add(message);
   const removed = context.compact(true);
   if (removed === 0) {
-    fail('C1g', '工具结果场景下压缩没有移除任何消息（探针没覆盖清空路径）');
-    return;
+    fail(label, '工具结果场景下压缩没有移除任何消息（探针没覆盖清空路径）');
+    return undefined;
   }
+
+  // ② 段起点：runtime 把本段生效模式钉到窗口上（`freezeSegmentProjection`），run 内请求期
+  //    只读 `windowProjectionMode`。这里做同一件事，再读回来当「请求期真正生效的模式」——
+  //    这一读正是「实现别把模式静默保底」的抓手。
+  setWindowProjectionMode(context, resolution.mode);
+  const requestMode = windowProjectionMode(context);
+
   const stored = context.messages;
   const rawById = new Map<string, string>();
   for (const message of before) {
@@ -642,108 +748,193 @@ async function runClearingProbe(): Promise<void> {
       rawById.set(message.tool_call_id, message.content);
     }
   }
-  let rewritten = 0;
   let survived = 0;
+  let rewrittenOnDisk = 0;
   for (const message of stored) {
     if (message.role !== 'tool' || typeof message.tool_call_id !== 'string') continue;
     const raw = rawById.get(message.tool_call_id);
     if (raw === undefined) continue;
     survived += 1;
-    if (message.content !== raw) rewritten += 1;
+    if (message.content !== raw) rewrittenOnDisk += 1;
   }
-  if (rewritten > 0) {
+  if (rewrittenOnDisk > 0) {
+    // 判据的对照基线：落盘正文必须还是原文（改的话「请求视图 vs 落盘」比的就是两个都不对的
+    // 东西）。落盘即占位是 V1 的方向，届时这条改判「请求与落盘逐字一致」—— 那是 C1h 的地盘。
     fail(
-      'C1g',
-      `压缩改写了 ${String(rewritten)} 条落盘工具结果正文（0.52 裁定：落盘只能 append，` +
-        '唯一允许的 pop 是压缩摘要替换；占位必须在写入侧落成占位符本身）',
+      label,
+      `压缩改写了 ${String(rewrittenOnDisk)} 条落盘工具结果正文（落盘只能 append，` +
+        '唯一允许的 pop 是压缩摘要替换；占位是请求视图的事，落盘正文是判据的对照基线）',
+    );
+    return undefined;
+  }
+
+  const audited = [...(context.lastCompaction?.cleared_tool_call_ids ?? [])];
+  // 冻结集合：`placeholder` 下 runtime 交给请求层的就是审计点名的这一份
+  // （`SessionState.cleared_tool_call_ids` 与 `message.compaction` 同源：段起点按保留预算
+  // 算一次、run 内冻结）；`passthrough` 下集合恒为空、请求层直接放行（不跑 plan、不替换）。
+  const frozen = requestMode === 'placeholder' ? audited : [];
+  const requestView =
+    requestMode === 'passthrough' ? stored : withClearedToolResults(stored, frozen);
+  return {
+    declared,
+    resolved: resolution.mode,
+    requestMode,
+    audited,
+    stored,
+    survived,
+    frozen,
+    requestView,
+    removed,
+  };
+}
+
+/** 分档判定：`declared` 决定用哪一档的硬判据（每档都必须真跑，没有一档是 PENDING）。 */
+function judgeClearingProbe(probe: ClearingProbe): void {
+  const label = `C1g ${probe.declared}`;
+  // ③ 声明 / 读侧解析 / 请求期生效三者必须是同一个模式。不一致说明实现把模式静默保底了
+  //    （例如声明了 passthrough 却按 placeholder 跑），此时判据若只按「自己选的分支」判，
+  //    就会给出一个与实现无关的绿。
+  if (probe.resolved !== probe.declared || probe.requestMode !== probe.declared) {
+    fail(
+      label,
+      `模式不一致：声明 ${probe.declared} / 读侧解析 ${probe.resolved} / 请求期生效 ` +
+        `${String(probe.requestMode)} —— 判据的分支必须与实现真跑的模式一致`,
     );
     return;
   }
-  // ② 请求视图必须与窗口逐字一致 —— 占位若存在，必须落盘时就已经是占位。
-  //    旧语义「请求视图里必须有占位」已删除：它把「请求期改写历史」写成了通过条件，
-  //    正好是不变量禁止的事。这一条现在由 `scripts/check-request-append-only.ts` 的
-  //    R1/R4（段内前缀延伸 + 同段内占位条数不得增加）承担硬判据，这里只做同名同源的复核。
-  //
-  //    0.53 修：旧写法传的是 `maxTokens`（**数字**，0.52 之前的旧签名）。现在
-  //    `withClearedToolResults(messages, cleared)` 的第二个参数是 **cleared id 数组**，
-  //    传数字走「这一段还没有决策 ⇒ 一条都不清」的分支 ⇒ 改写恒为 0，
-  //    这条断言其实什么都没检查（永远绿）。这里改成按该场景**真实的冻结集合**构造：
-  //    压缩事件点名的那些 id 就是写进 `SessionState.cleared_tool_call_ids`、请求期交给
-  //    `withClearedToolResults` 的那一份。
-  //
-  //    ③ 审计必须在 ② 之前算：② 要用它构造入参，不再是「先看改写再补审计」。
-  const audited = context.lastCompaction?.cleared_tool_call_ids ?? [];
-  if (audited.length === 0) {
-    fail('C1g', '压缩事件没有点名 cleared_tool_call_ids（审计缺口）');
+  const actual = rewrittenIndexes(probe.stored, probe.requestView);
+  if (probe.declared === 'passthrough') {
+    judgePassthroughRewrites(probe, actual);
     return;
   }
-  // 对照：空集合（没有决策 / passthrough 口径）必须一条都不改，且逐条同对象。
-  // 没有这条，「传 ids 改写 N 条」可能只是函数在乱改，看起来却像抓到了违规。
-  const noDecisionView = withClearedToolResults(stored, []);
-  const untouched =
-    noDecisionView.length === stored.length &&
-    noDecisionView.every((message, index) => message === stored[index]);
-  if (!untouched) {
+  judgePlaceholderRewrites(probe, actual);
+}
+
+/** `passthrough`：请求视图改写必须 == 0（ADR-104：与「完全没有投射机制」逐字节相同）。 */
+function judgePassthroughRewrites(probe: ClearingProbe, actual: readonly number[]): void {
+  const label = 'C1g passthrough';
+  if (actual.length > 0) {
     fail(
-      'C1g',
-      '对照判据失效：传空 cleared ids 时请求视图仍改写了落盘消息（没有决策必须逐字、逐条同对象）',
+      label,
+      `请求视图改写了 ${String(actual.length)} 条落盘消息（passthrough 的语义是「与完全没有` +
+        '投射机制逐字节相同」⇒ 改写必须为 0；实现是否按模式选对了分支？）',
     );
     return;
   }
-  const requestView = withClearedToolResults(stored, audited);
-  const rewrittenIndexes: number[] = [];
-  for (let index = 0; index < stored.length; index += 1) {
-    if (requestView[index] !== stored[index]) rewrittenIndexes.push(index);
-  }
-  const rewrittenInView = rewrittenIndexes.length;
-  // 该场景「应被改写」的条数：落盘工具结果里 id 在冻结集合内、且正文还不是占位的那些。
-  // 断言查的是**真实改写行为**（改了几条 + 每条改成了什么），不是「改没改」。
-  const frozenSet = new Set(audited);
-  const expectedRewrites = stored.filter(
-    (message) =>
-      message.role === 'tool' &&
-      typeof message.tool_call_id === 'string' &&
-      frozenSet.has(message.tool_call_id) &&
-      !isClearedToolResult(message.content),
+  // 反事实：同一份落盘按 placeholder 口径（审计集合）跑会改写几条。若这个数也是 0，
+  // 「改写 0 条」就是**真空绿**（探针根本没覆盖占位路径）—— 那比红更坏。
+  const counterfactual = rewrittenIndexes(
+    probe.stored,
+    withClearedToolResults(probe.stored, probe.audited),
   ).length;
-  const badRewrites = rewrittenIndexes.filter((index) => {
-    const after = requestView[index];
-    return !(
-      after !== undefined &&
-      after.role === 'tool' &&
-      typeof after.tool_call_id === 'string' &&
-      frozenSet.has(after.tool_call_id) &&
-      isClearedToolResult(after.content)
-    );
-  });
-  if (badRewrites.length > 0) {
+  if (counterfactual === 0) {
     fail(
-      'C1g',
-      `请求视图改写了 ${String(badRewrites.length)} 条**非**占位替换的消息（只允许把冻结集合内的` +
-        '工具结果换成本函数产出的占位文本）',
-    );
-    return;
-  }
-  if (rewrittenInView !== expectedRewrites) {
-    fail(
-      'C1g',
-      `请求视图改写条数 ${String(rewrittenInView)} ≠ 该场景应改写的 ${String(expectedRewrites)} 条` +
-        `（冻结集合 ${String(audited.length)} 条 ∩ 落盘工具结果）`,
-    );
-    return;
-  }
-  if (rewrittenInView > 0) {
-    pending(
-      'C1g',
-      `请求视图改写了 ${String(rewrittenInView)} 条落盘消息（V1：占位没落盘、在请求期改写；` +
-        '判据见 check-request-append-only 的 R1/R4 —— 修复单落地后这条不再允许 PENDING）',
+      label,
+      `反事实对照失效：同一份落盘按 placeholder 口径（审计 ${String(probe.audited.length)} 条）` +
+        `也一条都没改写（落盘工具结果 ${String(probe.survived)} 条）—— 这条 0 是真空绿`,
     );
     return;
   }
   ok(
-    `C1g 工具结果：落盘 ${String(survived)} 条仍为原文（待 V1 改为占位本身）、` +
-      `请求视图改写 ${String(rewrittenInView)} 条（对照：传空集合改写 0 条）、` +
-      `审计点名 ${String(audited.length)} 条（移除 ${String(removed)} 条）`,
+    `C1g passthrough 模式：请求视图改写 0 条（同场景按 placeholder 口径会改写 ` +
+      `${String(counterfactual)} 条 ⇒ 非真空绿；落盘工具结果 ${String(probe.survived)} 条）`,
+  );
+}
+
+/**
+ * `placeholder`：请求视图改写集合必须**恰好等于**「审计集合 ∩ 落盘工具结果」。
+ *
+ * 「不少」= 审计点名的旧工具结果必须都换成占位（否则省 token 的效果没拿到、审计也名不副实）；
+ * 「不多」= 审计集合之外一条都不许动（那是改写历史）。另外每条被改写的形状必须是
+ * `role=tool` + `tool_call_id ∈ 审计集合` + 正文 `isClearedToolResult` 为真 —— 只允许
+ * 把工具结果换成本函数产出的占位文本，不允许顺手改别的东西。
+ */
+function judgePlaceholderRewrites(probe: ClearingProbe, actual: readonly number[]): void {
+  const label = 'C1g placeholder';
+  const auditedSet = new Set(probe.audited);
+  if (auditedSet.size === 0) {
+    fail(
+      label,
+      '压缩事件没有点名 cleared_tool_call_ids（缺审计集合 ⇒ 请求期改写事后无从追查，' +
+        'ADR-104 D4 条件 2 不满足 ⇒ FAIL，不是 PENDING）',
+    );
+    return;
+  }
+  // 对照：没有决策（空集合）时必须一条都不改，且逐条同对象。没有这条，「传 ids 改写 N 条」
+  // 可能只是函数在乱改，看起来却像抓到了违规。
+  const noDecisionView = withClearedToolResults(probe.stored, []);
+  const untouched =
+    noDecisionView.length === probe.stored.length &&
+    noDecisionView.every((message, index) => message === probe.stored[index]);
+  if (!untouched) {
+    fail(
+      label,
+      '对照判据失效：传空 cleared ids 时请求视图仍改写了落盘消息（没有决策必须逐字、逐条同对象）',
+    );
+    return;
+  }
+  // 允许被改写的下标 = 审计集合 ∩ 落盘工具结果。已是占位的成员（幂等：不二次格式化）
+  // 不进这一集；若视图把它们也改了，下面的 `extra` 会逮住 —— 那正是写侧幂等守卫守的东西。
+  const allowed = new Set<number>();
+  for (let index = 0; index < probe.stored.length; index += 1) {
+    const message = probe.stored[index];
+    if (message === undefined) continue;
+    if (message.role !== 'tool' || typeof message.tool_call_id !== 'string') continue;
+    if (!auditedSet.has(message.tool_call_id)) continue;
+    if (isClearedToolResult(message.content)) continue;
+    allowed.add(index);
+  }
+  if (allowed.size === 0) {
+    fail(
+      label,
+      `审计集合（${String(auditedSet.size)} 条）与落盘工具结果（${String(probe.survived)} 条）` +
+        '没有交集 —— 探针没覆盖占位路径，这条判据等于没跑',
+    );
+    return;
+  }
+  const actualSet = new Set(actual);
+  const extra = actual.filter((index) => !allowed.has(index));
+  const missing = [...allowed].filter((index) => !actualSet.has(index));
+  if (extra.length > 0) {
+    fail(
+      label,
+      `请求视图多改了 ${String(extra.length)} 条（不在「审计集合 ∩ 落盘工具结果」里）：` +
+        `第 ${extra.map((index) => String(index + 1)).join('、')} 条（冻结集合 ` +
+        `${String(probe.frozen.length)} 条 / 审计 ${String(auditedSet.size)} 条）`,
+    );
+    return;
+  }
+  if (missing.length > 0) {
+    fail(
+      label,
+      `请求视图少改了 ${String(missing.length)} 条（审计点名的旧工具结果没换成占位）：` +
+        `第 ${missing.map((index) => String(index + 1)).join('、')} 条（冻结集合 ` +
+        `${String(probe.frozen.length)} 条 / 审计 ${String(auditedSet.size)} 条）`,
+    );
+    return;
+  }
+  const bad = actual.filter((index) => {
+    const after = probe.requestView[index];
+    return !(
+      after !== undefined &&
+      after.role === 'tool' &&
+      typeof after.tool_call_id === 'string' &&
+      auditedSet.has(after.tool_call_id) &&
+      isClearedToolResult(after.content)
+    );
+  });
+  if (bad.length > 0) {
+    fail(
+      label,
+      `请求视图改写了 ${String(bad.length)} 条**非**占位替换的消息（只允许把审计集合内的` +
+        '工具结果换成本函数产出的占位文本）',
+    );
+    return;
+  }
+  ok(
+    `C1g placeholder 模式：请求视图改写 ${String(actual.length)} 条 = 审计集合 ∩ 落盘工具结果` +
+      `（审计 ${String(auditedSet.size)} 条、落盘工具结果 ${String(probe.survived)} 条、` +
+      `压缩移除 ${String(probe.removed)} 条；对照传空集合改写 0 条）`,
   );
 }
 
