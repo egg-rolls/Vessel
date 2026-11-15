@@ -68,8 +68,14 @@ const atomicWriteStub = async (path: string, data: string) => {
  * core / config 的运行时替身：清单照 src/ask-batch.test.ts 的口径（serve + src/ask-*
  * 这条 import 链上真正取用的出口）。少一个会在 import 期炸「缺命名导出」。
  */
+// 0.54：`sessions.get` 的投影卡要这两个出口。用**真实现**而不是替身——占位文本必须与 core
+// 逐字一致，替身一旦和 core 漂移，本探针链上的 sessions.get 就会算出不一样的占位而不自知。
+const clearedToolResult = await import('../packages/core/src/context/cleared-tool-result');
+
 mock.module('@vessel-agent/core', () => ({
   atomicWrite: atomicWriteStub,
+  formatClearedToolResult: clearedToolResult.formatClearedToolResult,
+  isClearedToolResult: clearedToolResult.isClearedToolResult,
   createDefaultTraceRedactor: () => (event: unknown) => event,
   projectedKeepCount: () => 0,
   summarizeBroadcastEvent: () => ({}),

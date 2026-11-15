@@ -42,7 +42,12 @@ import { dirname, join } from 'node:path';
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
 /** core 运行时替身：只列 packages/agent/src 真取用的出口，少一个就会在 import 时炸。 */
+// 0.54：`sessions.get` 的投影卡要这两个出口（真实现，口径必须与 core 逐字一致）。
+const clearedToolResult = await import('../packages/core/src/context/cleared-tool-result');
+
 mock.module('@vessel-agent/core', () => ({
+  formatClearedToolResult: clearedToolResult.formatClearedToolResult,
+  isClearedToolResult: clearedToolResult.isClearedToolResult,
   assertTenantId: () => {},
   compactMessagesForSeed: () => [],
   LeaseExpiredError: class extends Error {},

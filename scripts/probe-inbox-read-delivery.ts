@@ -24,7 +24,12 @@ quietLogger.warn = () => {};
 quietLogger.error = () => {};
 quietLogger.child = () => quietLogger;
 
+// 0.54：`sessions.get` 的投影卡要这两个出口（真实现，口径必须与 core 逐字一致）。
+const clearedToolResult = await import('../packages/core/src/context/cleared-tool-result');
+
 mock.module('@vessel-agent/core', () => ({
+  formatClearedToolResult: clearedToolResult.formatClearedToolResult,
+  isClearedToolResult: clearedToolResult.isClearedToolResult,
   atomicWrite: async (path: string, data: string) => {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, data, 'utf8');
