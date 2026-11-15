@@ -294,6 +294,11 @@ export function stableEventId(e: ReplayEvent): string { return `${e.run_id ?? ''
 
 ## 10. 两条防复发门禁（新建，不改既有 `scripts/check-*.ts`）
 
-- `scripts/check-replay-wiring.ts`（A1 静态链路门）：网关方法表里有 `sessions.events` ⇒ `apps/web/src` 必须有**真实 request 调用**（注释/字符串常量不算）；反向（web 调了但 serve 没这个 RPC）也 FAIL。含 `--selftest` 证明检测器不吃注释/字符串。**当前仓库 = FAIL**（正是 `473bfc4c` 半截态：serve 有、web 零引用），`replay-wire` 落地后转 PASS。
+- `scripts/check-replay-wiring.ts`（A1 静态链路门，三条并列规则、无白名单）：
+  - **F 逐方法接线**：`sessions.events` 与 `events.list` **各自**断言 `serveHas && webRealCall`（真实 `this.request/rpc('m',…)`，注释/字符串常量不算）；serve 有 web 无 = 半截修复；web 有 serve 无 = 调了不存在的 RPC。
+  - **F1 禁本地文件系统**：`apps/web` 不得出现 `node:fs`/`fs`/`node:path`/`path` 的 import/require，或 `.vessel/…`、`events.ndjson`、`/sessions/<id>/events.ndjson` 这类本地路径**字符串常量**（注释不算、字符串算）。命中打印 `file:line`。
+  - **F2 必须走封装层**：裸 `fetch(`/`WebSocket(` 打网关地址（`127.0.0.1`/`localhost`/`:8644`/`/v1/`、`ws://`）且**不在既定传输封装层**内 ⇒ FAIL；封装层 = `gateway/node/{protocol,rpc}.ts`、`gateway/nodes.ts`、`gateway/platform/{client,hub}.ts`。
+  - `--selftest` 覆盖 F/F1/F2 正反例（16 例全 PASS），证明不误判/漏判。
+  - **当前 = FAIL**（设计如此）：① `sessions.events` web 零调用（`473bfc4c` 半截态，`replay-wire` 落地后该项转 ok）；② **F1 命中 `apps/web/src/domains/observe/doctorChecks.ts:44` 的字符串常量 `~/.vessel/data`**（既有、注释称"仅展示用"）——按"字符串常量也算"规则命中，建议改为从 `config.get` 取值而非硬编码本地路径；本轮不改 `apps/web`，交 main 决策。
 - `scripts/check-replay-merge.ts`（A2 行为 + A3 幂等 + fail-open）：用真实 `replay-budget.ts` + 夹具，断言 覆盖 `[1..366]` 零洞 / 确实调 `sessions.events` / 重叠去重（distinct=366）/ fail-open（不抛+警告+保数据）/ 阶段一补不回 trace-only、阶段一+二能补回。**当前 = PASS（12/12）**。
-- **退出码注意**：本 WSL shim 下 `bun`/`node` 退出码恒 0（Windows 二进制经 shim 不传），故本环境以 stdout 的 `result: PASS/FAIL` 判定；Linux/原生 CI 上 `process.exit(1)` 正常生效。
+- **退出码**：本环境 `bun run <file>` 的退出码可被捕获（本次 FAIL 观测到 `1`）；但历史上 `bun -e`/经管道时 `$?` 曾为 0，故 CI 仍建议同时校验 stdout 的 `result: PASS/FAIL`；Linux/原生 CI 上 `process.exit` 正常生效。
