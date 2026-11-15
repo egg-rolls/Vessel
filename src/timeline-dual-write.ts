@@ -18,6 +18,26 @@
  * | 4 | 抽样不得影响 run 结果 | `verifySession()` 是纯读 + 一份 `timeline.divergence` 事件；任一步失败只记指标 |
  * | 5 | 归档不上 publish 路径、失败只影响空间回收 | 归档（`timeline_head` 推进）走会话级串行队列 fire-and-forget：`record()` 只 `maybeArchive()` 派发，永不 await；失败 ⇒ `timeline_head` 冻结、`wal_head` 照常、**不写洞**、标 `tainted` |
  *
+ * ## 旧格式会话只读冻结（0.54 C1 / ADR-105 D4）——本模块的 adopt 边界
+ *
+ * 判据**只有一份**：`packages/core/src/timeline/freeze.ts`（有 `<sid>/events.ndjson`、且
+ * `timeline.manifest` / `wal.manifest` / `wal.log` 三者皆无）。本模块只负责回答
+ * core 问不出来的那半个问题：**「这个会话是不是本进程刚建的？」**
+ *
+ * 因为 `RunJournal` 是**先写 events.ndjson、再调 `record()`**，所以
+ * 「0.53 遗留会话」与「0.54 新会话的第一次双写」在磁盘上**形状完全一样**。分辨只能靠时间：
+ * manager 在**构造那一刻**对 `sessionsDir` 做一次快照（哪些会话已经带着日志），于是
+ *
+ * ```
+ * core 说「旧格式」 ∧ 快照说「进程开始之前就在」  ⇒ 冻结：不 adopt、一个字节都不写、
+ *                                                 flushSession() 抛 session_frozen_readonly
+ * 其它（有标记 / 本进程才出现）                    ⇒ adopt（标记与写入都由写者做）
+ * ```
+ *
+ * 保守方向是硬的：**重启后进程内没有任何登记**，所以「重启前就存在的旧会话」永远不可能被
+ * adopt；宁可少 adopt（新链路缺席），绝不解冻（把旧会话写成半新半旧）。
+ * 计数见 `stats().frozen_sessions`，与 `broken_sessions`（运行时故障）分开记。
+ *
  * ## 发布点：ADR-105 §3 I2 的端到端接线（0.54 B）
  *
  * 写入侧（`packages/core/src/timeline/writer.ts#publishRecord`）只在**该 seq 的 WAL/块 fsync
@@ -98,7 +118,7 @@
  * @module vessel/timeline-dual-write
  */
 
-import { mkdir, stat } from 'node:fs/promises';
+import { mkdir, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   EventStream,
@@ -107,12 +127,14 @@ import type {
   TimelineDualWriteEvent,
 } from '../packages/core/src/index';
 import { atomicWrite, encodeSessionDirName, sessionDirPath } from '../packages/core/src/index';
+import { isLegacyFrozenSessionDir, LEGACY_SESSION_LOG } from '../packages/core/src/timeline/freeze';
 import { loadIndexSnapshot } from '../packages/core/src/timeline/index';
 import {
   CHUNK_FLUSH_MS,
   isChunkEventType,
   isExcludedEventType,
   TIMELINE_LAYOUT,
+  TimelineError,
   type TimelineHeads,
   type TimelineHole,
   type TimelineRecord,
@@ -296,6 +318,14 @@ export interface TimelineDualWriteStats {
   publishDeduped: number;
   /** 发布通道失败次数（`onPublish` 抛错/拒绝；数据已持久，只记不影响落盘）。 */
   publishFailed: number;
+  /**
+   * 因「旧格式会话只读冻结」而**跳过双写**的会话数（ADR-105 D4 / 0.54 C1）。
+   *
+   * 这不是失败：旧链路照常写、读路径一字节不变，只是新链路不 adopt 这个会话。
+   * 与 `broken_sessions` 分开计数，是因为两者的用户可见后果完全不同：
+   * 「写者坏了」是运行时故障（下一轮可恢复），「冻结」是**不该写**（永远不该）。
+   */
+  frozen_sessions: number;
 }
 
 /** 一次抽样比对的结果（门禁直接读，不做二次解释）。 */
@@ -496,6 +526,10 @@ function sessionDirOf(sessionsDir: string, sessionId: string): string {
  * 表达的就是「这个会话有 timeline 了」这一条事实本身，内容与写入侧 `ensureManifest()`
  * 完全一致（同一份 `withCrc` 行），不是第二套格式。
  *
+ * **0.54 C1 起只能在「已确认不是旧格式」之后调**（见 {@link createPreexistingSessionSnapshot}
+ * 与 `writerFor` 的守卫）：早先版本对**每个**会话无条件先落标记，于是旧格式会话被就地
+ * 解冻（标记一写，`freeze.ts` 的判据永远看不见旧格式了）。现在旧格式会话一个字节都不写。
+ *
  * 幂等：文件已存在就直接返回（写入侧自己会在缺失时补）。
  */
 async function ensureTimelineMarker(sessionDir: string): Promise<void> {
@@ -509,6 +543,59 @@ async function ensureTimelineMarker(sessionDir: string): Promise<void> {
   await mkdir(sessionDir, { recursive: true });
   const line = withCrc({ v: 1 as const, kind: 'open' as const, at: Date.now() });
   await atomicWrite(path, `${JSON.stringify(line)}\n`, { mode: 0o600, durable: true });
+}
+
+/**
+ * 「本进程开始**之前**就已经带着 `events.ndjson` 的会话」——旧格式的唯一可分辨证据。
+ *
+ * ## 为什么需要它（而不是直接看目录形状）
+ *
+ * `packages/core/src/timeline/freeze.ts` 的判据是「有 `events.ndjson` 且无任何 timeline
+ * 标记」。而 `RunJournal` 是**先写 `events.ndjson`、再调 `record()`** 的，所以：
+ *
+ * ```
+ * 0.53 遗留会话           ：events.ndjson ✓、标记 ✗   ⇒ 旧格式（必须冻结）
+ * 0.54 新会话的第一次双写 ：events.ndjson ✓、标记 ✗   ⇒ **形状一模一样**
+ * ```
+ *
+ * 光看形状两边不可分辨。能分辨的只有**时间先后**：「这个目录在本进程创建这个 manager
+ * 之前就有日志了吗」——有 ⇒ 不是本进程生的 ⇒ 旧格式；没有 ⇒ 本进程生的 ⇒ 可以 adopt。
+ *
+ * ## 为什么用「构造时快照」而不是「登记 sessions.create」
+ *
+ * 1. **不依赖任何创建入口**：`sessions.create` / CLI 起 run / 种子消息 / 子会话 / 重启续跑
+ *    都走同一条 `SessionEventLog.append`，登记点漏一个就静默不 adopt（且很难发现）；
+ *    快照只看盘，天然覆盖所有入口。
+ * 2. **保守方向是硬的**：快照在**构造那一刻**取，所以「本进程之前就存在」一律判旧格式
+ *    ——重启后进程内没有任何登记，也就永远不可能 adopt 一个重启前就存在的旧会话；
+ *    这正是 ADR-105 D4 要的方向（宁可少 adopt，绝不解冻）。
+ * 3. 代价只有构造时的一次 `readdir` + 每个既有会话一次 `stat`（异步、不阻塞）。
+ *
+ * 注意：**它不参与冻结判定** —— 冻结判据只有 `freeze.ts` 一份。这里只回答
+ * 「能不能把这条 `freeze.ts` 的『旧格式』结论当成本进程不该 adopt 的会话」。
+ */
+function createPreexistingSessionSnapshot(sessionsDir: string): () => Promise<Set<string>> {
+  const snapshot = (async (): Promise<Set<string>> => {
+    const withLog = new Set<string>();
+    let entries: Array<{ name: string; isDirectory: () => boolean }>;
+    try {
+      entries = await readdir(sessionsDir, { withFileTypes: true });
+    } catch {
+      // 目录还不存在 ⇒ 没有任何既有会话（全新安装）
+      return withLog;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        await stat(join(sessionsDir, entry.name, LEGACY_SESSION_LOG));
+      } catch {
+        continue; // 目录在、但还没写过日志 ⇒ 不算「带着日志存在过」
+      }
+      withLog.add(entry.name);
+    }
+    return withLog;
+  })();
+  return () => snapshot;
 }
 
 function errorText(error: unknown): string {
@@ -872,6 +959,7 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     published: 0,
     publishDeduped: 0,
     publishFailed: 0,
+    frozen_sessions: 0,
   };
 
   /** 发送缓冲闸门（装配层装了才有；不装 ⇒ 每条记录直接走 `onPublish`）。 */
@@ -891,6 +979,19 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
    * timeline_seq」这一串，而不是再进一遍事件流）。两者都在 seq 水位之后，都不会重复。
    */
   const publishListeners = new Set<(publication: TimelinePublication) => void>();
+  /**
+   * 「本进程开始之前就带着 `events.ndjson` 的会话」快照（构造那一刻取，见
+   * {@link createPreexistingSessionSnapshot}）。它只用来解释 `freeze.ts` 的结论：
+   * 「旧格式 + 本进程之前就在」⇒ 这个会话不是本进程生的 ⇒ **不 adopt**。
+   */
+  const preexistingSessions = createPreexistingSessionSnapshot(options.sessionsDir);
+  /**
+   * 被判定为「旧格式 ⇒ 只读冻结」的会话（本进程内已裁决过，不再重复判、也不再试写）。
+   *
+   * 命中它的会话：`record()` 一个字节都不写、`flushSession()` 抛 `session_frozen_readonly`、
+   * 生命周期钩子（`endRun` / 抽样）安静跳过 —— 旧链路与读路径完全不受影响。
+   */
+  const frozenSessions = new Set<string>();
 
   /** sessionId → 打开中的 writer（打开失败时 map 里留下 `undefined`，表示已标 broken）。 */
   const writers = new Map<string, Promise<TimelineWriter | undefined>>();
@@ -955,12 +1056,49 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     }
   };
 
+  /**
+   * 这个会话是不是「**对本进程**而言的旧格式会话」（⇒ 不 adopt、不写、不抛）。
+   *
+   * 判据的两半都不可省，且**都不是新的判据**：
+   * - `isLegacyFrozenSessionDir`（core `freeze.ts`）：「形状上像旧格式」；
+   * - `preexistingSessions`（构造时快照）：「本进程开始之前就在」。
+   *
+   * 为什么不能只看第一半：0.54 新会话第一次双写时形状与旧会话**完全相同**（旧链路先写
+   * `events.ndjson` 再调 `record()`）—— 只看形状会把每个新会话判死（双写全灭）。
+   * 为什么不能只看第二半：一个 0.53 会话如果在**本进程里**刚好被旧链路写过（例如续跑
+   * 一个旧会话），它也可能「不是构造时就有日志」，形状仍必须由 core 判。
+   */
+  async function isFrozenForThisProcess(sessionId: string, sessionDir: string): Promise<boolean> {
+    if (!(await isLegacyFrozenSessionDir(sessionDir))) return false;
+    const preexisting = await preexistingSessions();
+    return preexisting.has(encodeSessionDirName(sessionId));
+  }
+
   async function writerFor(sessionId: string): Promise<TimelineWriter | undefined> {
     const existing = writers.get(sessionId);
     if (existing !== undefined) return existing;
     const sessionDir = sessionDirOf(options.sessionsDir, sessionId);
     const opening = (async () => {
       try {
+        // 0.54 C1（ADR-105 D4）：旧格式会话**只读冻结** —— 不 adopt、不写一个字节、不抛。
+        //
+        // 两个条件一起看，判据仍然只有 `freeze.ts` 一份：
+        // ① core 说它「有 events.ndjson 且没有任何 timeline 标记」；
+        // ② 而且它在**本进程开始之前**就已经带着日志（构造时快照）。
+        // ② 是必须的：0.54 新会话的第一次双写发生时形状与旧会话一模一样（旧链路先写
+        // events.ndjson、再调 record），光凭 ① 会把每个新会话都判死。
+        if (await isFrozenForThisProcess(sessionId, sessionDir)) {
+          counters.frozen_sessions += 1;
+          frozenSessions.add(sessionId);
+          warn('timeline dual-write skipped (legacy session is frozen read-only)', {
+            session_id: sessionId,
+            reason: 'legacy_events_ndjson_without_timeline_marker',
+          });
+          // 这个会话不会再有 timeline 发布了 ⇒ 把闸门扣住的旧广播立刻放出去
+          // （旧链路行为不变：UI 一条都不少）。
+          gate?.releaseSession(sessionId);
+          return undefined;
+        }
         await ensureTimelineMarker(sessionDir);
         const writer = await openWriter({
           sessionId,
@@ -1164,6 +1302,17 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   async function flushSession(sessionId: string): Promise<void> {
     // 先等派出去的那几条真正 `writer.append()`（否则 flush 会「什么也没刷」）。
     await drainInflight();
+    // 旧格式会话（ADR-105 D4）：这里**明确拒绝**而不是「悄悄没有 writer」。
+    // 理由：静默返回会让调用方以为「刷完了」，而真相是「这个会话永远不会有 timeline」；
+    // 冻结状态必须能被上层稳定识别成 `session_frozen_readonly`（与写者、索引重建同一个码）。
+    if (frozenSessions.has(sessionId)) {
+      // 文案里不复述文件名（旧链路那次写只属于 core）：用 core 的常量拼，
+      // 免得同一句话在装配层变成第二份「文件名口径」。
+      throw new TimelineError(
+        'session_frozen_readonly',
+        `${sessionId} has legacy ${LEGACY_SESSION_LOG} and no timeline marker`,
+      );
+    }
     const pending = writers.get(sessionId);
     if (pending === undefined) return;
     try {
@@ -1387,6 +1536,8 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
       missing_types: [],
       unexpected_extra_types: [],
     };
+    // 旧格式会话：没有 timeline 可比（与 writer 打不开同一条出口：`compared:false`）。
+    if (frozenSessions.has(sessionId)) return empty;
     await flushSession(sessionId);
     const sessionDir = sessionDirOf(options.sessionsDir, sessionId);
     const records = await readTimelineEvents(sessionDir).catch(() => []);
@@ -1429,6 +1580,9 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     const key = `${sessionId}\u0000${runId}`;
     if (finishedRuns.has(key)) return undefined;
     finishedRuns.add(key);
+    // 旧格式会话：没有 timeline 可 flush/归档/抽样。生命周期钩子**安静跳过**
+    // （不记失败、不制造噪音）—— 冻结不是故障，是「这个会话不该有 timeline」。
+    if (frozenSessions.has(sessionId)) return undefined;
     await flushSession(sessionId);
     // run 终态（journal.close / endRun）触发一次归档：不 await（fire-and-forget），
     // 归档失败只影响空间回收 —— run 结果与旧链路都不看它。
