@@ -17,6 +17,7 @@ import {
   DEFAULT_COMPACT_THRESHOLD,
   type WorkingContext,
 } from '../types/context.js';
+import type { ContextProjectionAudit, ProjectionMode } from '../types/projection.js';
 import type { Message } from '../types/provider.js';
 import { clampAnchorRatio, normalizeContextAnchor } from './anchor.js';
 import { formatClearedToolResult, isClearedToolResult } from './cleared-tool-result.js';
@@ -340,6 +341,215 @@ export function shouldCompactForToolResultVolume(
   options?: ToolResultVolumeOptions,
 ): boolean {
   return measureRetainedToolResultVolume(messages, maxTokens, options).exceeds;
+}
+
+/**
+ * 0.53 U2：运行期**可执行**的投射模式。
+ *
+ * 声明层有四档，本版本只实现两档：`placeholder`（占位）与 `passthrough`（原样）。
+ * 未实现的两档（`externalize` / `archive_notice`）在运行期一律 fail-open 到
+ * `passthrough`（ADR-104 §4.4「运行期单 run 降级 ⇒ 机制中立的那一档」），所以
+ * 类型面只留这两档 —— 拿到 `ProjectionRuntimeMode` 的代码不必再判未实现值。
+ */
+export type ProjectionRuntimeMode = 'placeholder' | 'passthrough';
+
+/**
+ * 每个窗口对象的运行期投射模式（**不进** `WorkingContext` 端口面）。
+ *
+ * 为什么是 WeakMap：U2 不改 `types/context.ts` 的端口，而模式是**窗口级**状态。
+ * 以窗口对象为键 ⇒ 换窗口（新 run / pop / 换会话）自动失效，重建出来的
+ * `MemoryWorkingContext` 也不会继承旧模式。缺省（没写过）= `placeholder`：
+ * U2 之前的调用方与探针行为一字不变。
+ *
+ * 冻结语义（硬不变式）：只在 **run（段）起点**写一次，run 内请求期只读。不许改成
+ * 「每请求按当前 messages 重算更省」—— 反事实测算把它从 +9.85 净收益打成 −72.37
+ * （占位集合每轮漂移 ⇒ prefix cache 全丢）。
+ */
+const windowProjectionModes = new WeakMap<object, ProjectionRuntimeMode>();
+
+/** run（段）起点：把本段生效模式钉到窗口上（只有 runtime 该调用）。 */
+export function setWindowProjectionMode(target: object, mode: ProjectionRuntimeMode): void {
+  windowProjectionModes.set(target, mode);
+}
+
+/** 请求期：读本段生效模式（缺省 `placeholder` = 与 U2 之前完全一致）。 */
+export function windowProjectionMode(target: object | undefined): ProjectionRuntimeMode {
+  if (target === undefined) return 'placeholder';
+  return windowProjectionModes.get(target) ?? 'placeholder';
+}
+
+/**
+ * 体积维度（`TOOL_RESULT_VOLUME_THRESHOLD_RATIO`）**只对 `placeholder` 生效**。
+ *
+ * `passthrough` 的字面语义是「与完全没有投射机制时逐字节相同」，而「按体积开新段 /
+ * 压缩」本身就是机制产物（它改变请求消息序列）—— 在 passthrough 下让它触发等于偷偷
+ * 开机制。压力照样**可观测**（`measureToolResultPressure` + `context.projection_pressure`
+ * 事件），只是不驱动压缩。token 主阈值（0.85）与条数上限是硬兜底，对所有 mode 生效。
+ */
+export function projectionVolumeDimensionApplies(mode: ProjectionRuntimeMode): boolean {
+  return mode === 'placeholder';
+}
+
+/** 未实现 / 不可用模式在运行期 fail-open 的留痕原因（ADR-104 §6.4 错误码）。 */
+export const PROJECTION_MODE_UNAVAILABLE = 'projection_mode_unavailable';
+
+/**
+ * 一个 run 起点裁决出来的东西（纯数据，不带 ids / plan_hash —— 那些由 runtime 补）。
+ */
+export interface ProjectionRunDecision {
+  /** 声明里写的模式（fail-open 之前）。 */
+  readonly requested_mode: ProjectionMode;
+  /** 本 run 实际生效的模式。 */
+  readonly effective_mode: ProjectionRuntimeMode;
+  /** 降级 / 拒绝原因；正常时为 null。 */
+  readonly reason: string | null;
+  /** 决策链路（写进审计 `steps`，按发生顺序）。 */
+  readonly steps: readonly string[];
+}
+
+/**
+ * 运行期模式裁决（纯函数）：声明的 mode + 解析错误码 ⇒ 本 run 的生效模式。
+ *
+ * ADR-104「两层降级」的两个落点**不许混**：
+ * - **声明期**降级落在 `placeholder`（写声明失败时按最保守的语义跑，判定见 U1 的
+ *   `declareProjection`）；
+ * - **运行期单 run** 降级落在 `passthrough`（机制中立：与「完全没有投射机制」逐字节
+ *   相同；按 placeholder 跑等于静默开机制）。
+ *
+ * 单调收紧（ADR-104 §8.3.1）：本函数**不改写**会话声明，只降这一个 run 的生效模式。
+ * 兜底不得放松声明的严格度 —— 声明原样留着，下一次 run 重新解析。
+ */
+export function decideProjectionRunMode(
+  mode: ProjectionMode,
+  error: string | null,
+): ProjectionRunDecision {
+  if (error !== null) {
+    // 声明读不出合法值（脏数据 / 旧格式 / 未实现值）：运行期一律 fail-open passthrough。
+    return {
+      requested_mode: mode,
+      effective_mode: 'passthrough',
+      reason: error,
+      steps: [mode, error, 'passthrough'],
+    };
+  }
+  switch (mode) {
+    case 'placeholder':
+      return {
+        requested_mode: mode,
+        effective_mode: 'placeholder',
+        reason: null,
+        steps: [mode, 'placeholder'],
+      };
+    case 'passthrough':
+      return {
+        requested_mode: mode,
+        effective_mode: 'passthrough',
+        reason: null,
+        steps: [mode, 'passthrough'],
+      };
+    case 'externalize':
+    case 'archive_notice': {
+      // 两档本版本都未实现：reason 用 §6.4 的**冻结码**（词表外的码禁止自造，
+      // 「`not_implemented`」是给用户看的结果、不是审计码），区别靠 `steps` 的首项。
+      return {
+        requested_mode: mode,
+        effective_mode: 'passthrough',
+        reason: PROJECTION_MODE_UNAVAILABLE,
+        steps: [mode, 'unavailable', 'passthrough'],
+      };
+    }
+  }
+}
+
+/**
+ * 从一条审计行还原「上一个 run 的裁决」—— 用于「决策没变就不写审计」。
+ *
+ * 只读 `steps` 的首尾（链路头 = 声明模式，链路尾 = 生效模式）与 `reason`，
+ * 不给审计行加字段（U1 的 schema 冻结）。
+ */
+export function auditChainOf(audit: ContextProjectionAudit | null | undefined): {
+  declared: string | null;
+  effective: string | null;
+  reason: string | null;
+} {
+  if (audit === null || audit === undefined) {
+    return { declared: null, effective: null, reason: null };
+  }
+  const steps = audit.steps;
+  return {
+    declared: steps.length > 0 ? (steps[0] ?? null) : null,
+    effective: steps.length > 0 ? (steps[steps.length - 1] ?? null) : null,
+    reason: audit.reason,
+  };
+}
+
+/**
+ * 体积压力快照（`basis: 'all_tool_results'`，U2 的观测面）。
+ *
+ * 与 `ToolResultVolumeMeasurement` 的区别是**口径**：那条量「会保留原文的那几条」
+ * （判据要的就是它 —— 只有保留的才在每轮重复计费）；这条量窗口里**全部**工具结果。
+ * 两个口径都带上，事件里显式标 `basis`，免得读日志的人把观测面当判据。
+ */
+export interface ToolResultPressureReport {
+  /** 口径：全部工具结果（不是判据，判据见 `measureRetainedToolResultVolume`）。 */
+  readonly basis: 'all_tool_results';
+  /** 全部工具结果原文的估算 token 合计。 */
+  readonly used: number;
+  /** 窗口预算（token）。 */
+  readonly max: number;
+  /** `used / max`。 */
+  readonly ratio: number;
+  /** 本次使用的体积阈值占比（默认 0.20）。 */
+  readonly thresholdRatio: number;
+  /** `ratio > thresholdRatio`（严格大于，与判据同边界）。 */
+  readonly exceeded: boolean;
+  /** 工具结果条数（含已是占位的）。 */
+  readonly totalCount: number;
+  /** 保留口径的原文 token（同 `measureRetainedToolResultVolume`）。 */
+  readonly retainedTokens: number;
+  /** 保留口径的占比（placeholder 判据用的就是它）。 */
+  readonly retainedRatio: number;
+  /** 单条最大工具结果 token（定位「一条吃掉一角」的元凶）。 */
+  readonly topResultTokens: number;
+}
+
+/**
+ * 量窗口里**全部**工具结果的原文体积占预算多少（纯函数，只读消息）。
+ *
+ * 读的是落盘历史（占位从不写回历史），所以同一段内 `used` 单调不减 —— 正好是
+ * 「压力」该有的形状。
+ */
+export function measureToolResultPressure(
+  messages: readonly Message[],
+  maxTokens: number,
+  options?: ToolResultVolumeOptions,
+): ToolResultPressureReport {
+  const thresholdRatio = options?.thresholdRatio ?? TOOL_RESULT_VOLUME_THRESHOLD_RATIO;
+  const retained = measureRetainedToolResultVolume(messages, maxTokens, options);
+  let used = 0;
+  let totalCount = 0;
+  let topResultTokens = 0;
+  for (const message of messages) {
+    if (message.role !== 'tool') continue;
+    const cost = estimateMessageTokens(message);
+    used += cost;
+    totalCount += 1;
+    if (cost > topResultTokens) topResultTokens = cost;
+  }
+  const ratio = maxTokens > 0 ? used / maxTokens : 0;
+  return {
+    basis: 'all_tool_results',
+    used,
+    max: maxTokens,
+    ratio,
+    thresholdRatio,
+    // 严格大于：与 `measureRetainedToolResultVolume` 同边界（T6.1 / T6.2 已钉死）。
+    exceeded: maxTokens > 0 && ratio > thresholdRatio,
+    totalCount,
+    retainedTokens: retained.retainedTokens,
+    retainedRatio: retained.ratio,
+    topResultTokens,
+  };
 }
 
 /**
@@ -820,9 +1030,15 @@ export class MemoryWorkingContext implements WorkingContext {
     // 0.53 主题1②：第三个维度 —— 「保留下来的工具结果原文体积超窗口 N%」。
     // 它只在单条巨型工具结果自己就吃掉窗口一角时才可能触发（多条保留已被
     // 5% 保留预算封住），正常会话仍是 token 阈值先到。
-    const volumeExceeded = shouldCompactForToolResultVolume(this.messages, max, {
-      thresholdRatio: this.config.toolResultVolumeRatio,
-    });
+    // 0.53 U2：第三个维度**按 mode 分层** —— 它只对 `placeholder` 生效。
+    // `passthrough` 下 0.20 不参与判据（只发 `context.projection_pressure` 事件），
+    // 否则「体积一到就压缩」会在 passthrough 里偷偷改变请求消息序列。
+    // 前两个维度（0.85 / 条数上限）是硬兜底，对所有 mode 一律生效。
+    const volumeExceeded = projectionVolumeDimensionApplies(windowProjectionMode(this))
+      ? shouldCompactForToolResultVolume(this.messages, max, {
+          thresholdRatio: this.config.toolResultVolumeRatio,
+        })
+      : false;
     return this.tokenCount > max * threshold || this.isOverMessageCap() || volumeExceeded;
   }
 

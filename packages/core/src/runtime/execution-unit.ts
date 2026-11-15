@@ -6,13 +6,21 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   applyReadSideMaskers,
+  auditChainOf,
+  decideProjectionRunMode,
   estimateTokens,
+  measureToolResultPressure,
+  PROJECTION_POLICY_VERSION,
   planClearedToolResults,
   renderContextOverflowNotice,
   renderContextTrimNotice,
   renderSystemRevisionNotice,
+  resolveProjection,
+  setWindowProjectionMode,
   shouldPublishSystemContext,
   systemContextChangesFromFingerprint,
+  type ToolResultPressureReport,
+  windowProjectionMode,
   withClearedToolResults,
 } from '../context/index.js';
 import {
@@ -73,6 +81,7 @@ import type {
   RuntimePermissionConfig,
   SelfCardOptions,
 } from '../types/plugin.js';
+import type { ContextProjectionAudit, ProjectionMode } from '../types/projection.js';
 import type {
   ChatRequest,
   LLMProvider,
@@ -456,6 +465,58 @@ interface SystemContextRequestFacts {
 }
 
 /**
+ * 段起点冻结下来的投射决策（0.53 U2）。
+ *
+ * 「run 起点冻结、run 内共享同一集合」是硬不变式：这份记录在段起点算一次，
+ * run 内的所有请求共用它，请求期绝不重算（反事实测算：改成每请求重算，净收益
+ * 从 +9.85 变 −72.37，占位集合每轮漂移把 prefix cache 全丢了）。
+ */
+interface FrozenProjectionDecision {
+  /** 声明里写的模式（fail-open 之前）。 */
+  readonly requested_mode: ProjectionMode;
+  /** 本段实际生效的模式（决定请求层是否替换 + 0.20 维度是否参与判数）。 */
+  readonly effective_mode: 'placeholder' | 'passthrough';
+  /** 声明 id（没声明时为 null）。 */
+  readonly declaration_id: string | null;
+  /** 按冻结集合算的 plan 指纹（前 16 位 sha256；passthrough 下为集合空集的指纹）。 */
+  readonly plan_hash: string;
+  /** 冻结的占位集合（passthrough 恒为空）。 */
+  readonly ids: readonly string[];
+  /** 集合的来源：'plan'＝placeholder 规划出来的；'empty'＝passthrough 的空集。 */
+  readonly basis: 'plan' | 'empty';
+  /** 决策链路（原样写进审计 `steps`，也进事件 `data.steps`）。 */
+  readonly steps: readonly string[];
+  /** 降级 / 拒绝原因（正常为 null）。 */
+  readonly reason: string | null;
+  /**
+   * 这次段起点的决策是否**变更**（模式 / 集合任一变即为变更）。
+   * 没变更就不写审计、不发事件 —— 否则每轮都刷一条同内容的记录。
+   */
+  readonly changed: boolean;
+  /** 要落盘的新审计行（只在 `changed` 时非 null）。 */
+  readonly audit: ContextProjectionAudit | null;
+}
+
+/**
+ * 冻结集合的指纹（审计 `plan_hash` / 事件用）：sha256 前 16 位。
+ *
+ * 口径＝生效模式 + **排序后**的 call id 列表。排序 ⇒ 同一集合不同规划顺序算同一
+ * plan（要的是集合语义，不是「谁先谁后」）；模式也进摘要 ⇒ `passthrough` 的空集与
+ * `placeholder` 的空集不会撞成一个指纹 —— 否则「模式变了」在审计里看不出来。
+ * `\u0000` 分隔避免拼接歧义（`a`+`bc` 与 `ab`+`c` 必须是两个 hash）。
+ */
+function projectionPlanHash(mode: 'placeholder' | 'passthrough', ids: readonly string[]): string {
+  const digest = createHash('sha256');
+  digest.update(mode);
+  digest.update('\u0000');
+  for (const id of [...ids].sort()) {
+    digest.update(id);
+    digest.update('\u0000');
+  }
+  return digest.digest('hex').slice(0, 16);
+}
+
+/**
  * Execution Unit
  * 核心运行时，实现 tool-calling loop。
  * 协调 provider/context/events/limits/termination/session + 三个编排器（权限/guardrail/hook），
@@ -742,6 +803,13 @@ export class ExecutionUnit {
     const window = execution.workingContext;
     const autoCompact = window.autoCompactAsync;
     if (autoCompact === undefined) return;
+    // 0.53 U2：`passthrough` 下 0.20 体积维度**不参与**判据（`shouldCompact()` 里按
+    // 模式分层），这里只把压力做成可观测量：一条 `context.projection_pressure` 事件。
+    // 压缩仍然可能发生 —— 但只可能由 token 主阈值（0.85）/ 条数硬兜底触发，
+    // 那两个对所有 mode 生效。
+    if (windowProjectionMode(window) === 'passthrough') {
+      this.publishProjectionPressure(window, execution.runId);
+    }
     let removed: number;
     try {
       removed = await autoCompact.call(window);
@@ -788,6 +856,28 @@ export class ExecutionUnit {
   private readonly segmentClearPlans = new WeakMap<object, readonly string[]>();
 
   /**
+   * 段起点冻结的**投射决策**（0.53 U2），按窗口对象索引。
+   *
+   * 与 `segmentClearPlans` 同一生命周期：窗口换了就失效（新 run / `pop` / 换会话）。
+   * 存的是「本段生效模式 + 实际参与判数的 plan_hash / ids_count / basis / 是否降级」，
+   * 供 `saveSessionState` 写审计用；请求期只读 `windowProjectionMode(window)`。
+   */
+  private readonly segmentProjections = new WeakMap<object, FrozenProjectionDecision>();
+
+  /**
+   * 0.53 U2：段起点**第一步** —— 只裁决模式并钉到窗口上（不含集合、不写审计）。
+   *
+   * 为什么单独一层：段起点的压缩要按本段的模式判定（`passthrough` 不吃 0.20 体积
+   * 维度），而占位集合必须等压缩**之后**、按压缩后的消息算。所以模式先定、集合后算。
+   * 两侧都调 `resolveProjection`（纯函数、同样的输入 ⇒ 同样的结果），不会漂。
+   */
+  private primeSegmentProjectionMode(execution: Run, stored: SessionState | null): void {
+    const resolution = resolveProjection(stored);
+    const decided = decideProjectionRunMode(resolution.mode, resolution.error);
+    setWindowProjectionMode(execution.workingContext, decided.effective_mode);
+  }
+
+  /**
    * 0.52 V1：段起点把「清哪些工具结果」一次算完并**冻结**（清理必须一次到位）。
    *
    * 旧行为是每次请求按当前 messages 重算窗口（K = min(10, 5% 预算)）⇒ 第 11 条工具结果
@@ -802,12 +892,20 @@ export class ExecutionUnit {
    * 清理必须可见：新增 call id 时追加一张 env 卡（scope `trim`）+ 一条
    * `context.cleared_tool_result` 事件；正文只说「清了几条 / 为什么 / 被清的 call id」，
    * 不含任何工具输出正文，同一批 id 只讲一次（按已落盘的集合去重）。
+   *
+   * 0.53 U2：这里同时是**投射模式的段起点冻结点**（`freezeSegmentProjection`）。
+   * `passthrough` 下集合恒为空：没有占位、没有 trim 卡、没有 trim 事件 —— 请求与
+   * 「完全没有投射机制」逐字节相同。
    */
   private freezeSegmentClearedToolResults(execution: Run, stored: SessionState | null): void {
     const window = execution.workingContext;
     const messages = window.messages;
-    const ids = planClearedToolResults(messages, window.maxTokens ?? 0);
+    // 0.53 U2：模式先定，集合再算（顺序不能反：passthrough 下不该跑 plan）。
+    const projection = this.freezeSegmentProjection(execution, stored);
+    const ids = projection.ids;
     this.segmentClearPlans.set(window, ids);
+    // passthrough：本段没有占位 ⇒ 不存在「新增了什么要讲」。直接收工。
+    if (projection.effective_mode !== 'placeholder') return;
     const known = new Set(stored?.cleared_tool_call_ids ?? []);
     const fresh = ids.filter((id) => !known.has(id));
     if (fresh.length === 0) return;
@@ -832,6 +930,127 @@ export class ExecutionUnit {
         // 只报本次新增的 id（同一批只讲一次）；顺序＝段基准里的出现顺序。
         tool_call_ids: fresh,
         segment: 'context_trim',
+      },
+    });
+  }
+
+  /**
+   * 0.53 U2：段起点裁决本段的投射模式并冻结集合。
+   *
+   * 三个必须守住的点：
+   *
+   * 1. **run 起点冻结、run 内共享同一集合**。模式和集合都在这里定一次，写进
+   *    `windowProjectionMode(window)` + `segmentClearPlans`，请求期只读。
+   * 2. **passthrough 与「没有投射机制」逐字节相同**：不跑 plan（集合恒为空），
+   *    请求层直接放行（`buildRequestMessages`），不发 trim 卡 / trim 事件。
+   * 3. **未实现的 mode 与读不出的声明一律 fail-open 到 `passthrough` 并留痕**，
+   *    不许静默按 `placeholder` 跑（那等于偷偷开机制）。两层降级的目标不许混：
+   *    声明期降级 → `placeholder`（U1 的 `declareProjection`），运行期单 run 降级 →
+   *    `passthrough`（本函数）。见 ADR-104 §4.4。
+   *
+   * 审计只在**决策变更**的段起点写一条（ADR-104 §5.1：不刷日志）。
+   */
+  private freezeSegmentProjection(
+    execution: Run,
+    stored: SessionState | null,
+  ): FrozenProjectionDecision {
+    const window = execution.workingContext;
+    const messages = window.messages;
+    const resolution = resolveProjection(stored);
+    const decided = decideProjectionRunMode(resolution.mode, resolution.error);
+    const declaration = resolution.declaration;
+    // 集合：只有 placeholder 才规划；passthrough 恒为空集（不读也不改历史）。
+    const ids =
+      decided.effective_mode === 'placeholder'
+        ? planClearedToolResults(messages, window.maxTokens ?? 0)
+        : [];
+    // 模式先钉到窗口上（此后本段内任何请求读到的都是它）。
+    setWindowProjectionMode(window, decided.effective_mode);
+    const planHash = projectionPlanHash(decided.effective_mode, ids);
+    const previous = auditChainOf(stored?.context_projection_audit);
+    const previousIds = [...(stored?.cleared_tool_call_ids ?? [])].sort();
+    const nextIds = [...ids].sort();
+    // 决策变更 = 模式链 / 降级原因 / 冻结集合任一变。第一次决策也算变更
+    // （`auditChainOf(null)` 全 null ⇒ 必与任何一个 mode 不等）。
+    const changed =
+      previous.declared !== decided.requested_mode ||
+      previous.effective !== decided.effective_mode ||
+      previous.reason !== decided.reason ||
+      previousIds.length !== nextIds.length ||
+      previousIds.some((id, index) => id !== nextIds[index]);
+    const now = Date.now();
+    const audit: ContextProjectionAudit | null = changed
+      ? {
+          schema_version: PROJECTION_POLICY_VERSION,
+          // 审计里存**实际使用的声明原样**（U1 的归一化结果），不二次改写；
+          // 没声明就是 null（旧会话 / 未声明）。
+          declaration,
+          steps: decided.steps,
+          reason: decided.reason,
+          requested_mode: decided.reason !== null ? decided.requested_mode : null,
+          at: now,
+        }
+      : null;
+    const frozen: FrozenProjectionDecision = {
+      requested_mode: decided.requested_mode,
+      effective_mode: decided.effective_mode,
+      declaration_id: declaration?.declaration_id ?? null,
+      plan_hash: planHash,
+      ids,
+      basis: decided.effective_mode === 'placeholder' ? 'plan' : 'empty',
+      steps: decided.steps,
+      reason: decided.reason,
+      changed,
+      audit,
+    };
+    this.segmentProjections.set(window, frozen);
+    if (changed) this.publishProjectionDecision(execution, frozen, now);
+    return frozen;
+  }
+
+  /**
+   * 决策变更时：一条审计（随 session 落盘，`saveSessionState` 写）+ 同名可见事件。
+   *
+   * 事件是审计行的可见投影（与 `context.cleared_tool_result` 同套路）：`data` 里把
+   * 任务单要求的字段全带上（mode / effective_mode / declaration_id / plan_hash /
+   * ids_count / basis / reason / schema_version）。审计行本身**不**加字段 ——
+   * U1 的 `ContextProjectionAudit` schema 冻结，多出来的信息只能走事件与 `steps`。
+   */
+  private publishProjectionDecision(
+    execution: Run,
+    frozen: FrozenProjectionDecision,
+    at: number,
+  ): void {
+    this.publishEvent({
+      type: 'context.projection_applied',
+      run_id: execution.runId,
+      ts: at,
+      data: {
+        schema_version: PROJECTION_POLICY_VERSION,
+        mode: frozen.requested_mode,
+        effective_mode: frozen.effective_mode,
+        declaration_id: frozen.declaration_id,
+        plan_hash: frozen.plan_hash,
+        ids_count: frozen.ids.length,
+        basis: frozen.basis,
+        reason: frozen.reason,
+        steps: frozen.steps,
+        at,
+      },
+    });
+    if (frozen.reason === null) return;
+    // 降级要单独可见：消费者不必从 applied 里推断「这次是不是被降级了」。
+    this.publishEvent({
+      type: 'context.projection_degraded',
+      run_id: execution.runId,
+      ts: at,
+      data: {
+        schema_version: PROJECTION_POLICY_VERSION,
+        mode: frozen.requested_mode,
+        effective_mode: frozen.effective_mode,
+        reason: frozen.reason,
+        basis: frozen.basis,
+        steps: frozen.steps,
       },
     });
   }
@@ -1580,6 +1799,10 @@ export class ExecutionUnit {
     // 0.52：恢复「上次发布过的环境快照指纹」，让重启后的第一条消息能正确去重。
     this.restorePromptContextFingerprint(stored);
 
+    // 0.53 U2：**先**裁决本段的投射模式并钉到窗口上，再压缩 —— 顺序反过来会让
+    // 段起点的压缩按上一段的模式判（passthrough 会话会误吃 0.20 体积维度，
+    // 请求序列就与「没有投射机制」不同了）。集合的冻结仍在压缩之后（见下）。
+    this.primeSegmentProjectionMode(execution, stored);
     // 0.52 V2：压缩只在**段边界**发生 —— 这里是本段的起点（seed 之后、第一条请求之前）。
     // 压缩成功 ⇒ 本段基准 = 压缩后的 seed 视图（`new(compaction)`），段内不再改写历史。
     await this.compactAtSegmentStart(execution);
@@ -2015,6 +2238,8 @@ export class ExecutionUnit {
       execution.workingContext.setContextAnchor?.(history.sessionState?.context_anchor, this.model);
       this.seedWorkingContext(execution, history);
       this.seedRealTokensFromLastRequest(execution, history);
+      // 0.53 U2：resume 同为段起点 —— 模式也要在压缩之前先钉住（同 run()）。
+      this.primeSegmentProjectionMode(execution, history.sessionState ?? null);
       // 0.52 V2：resume 也是一个段起点 —— 压缩同样只在这里做一次。
       await this.compactAtSegmentStart(execution);
       // 0.52 V1：resume 也是一个段起点 —— 占位决策同样只在这里算一次并冻结。
@@ -2650,6 +2875,45 @@ export class ExecutionUnit {
     }
   }
 
+  /**
+   * 0.53 U2：`passthrough` 下的体积压力观测（**只发事件，不驱动压缩**）。
+   *
+   * 为什么不压缩：`passthrough` 的语义是「与完全没有投射机制时逐字节相同」，
+   * 按体积开新段 / 压缩本身就是机制产物，会改变请求消息序列。压力必须仍然可见，
+   * 否则「宣告了 passthrough 的会话其实一直在爆窗口」就没人知道。
+   *
+   * `basis: 'all_tool_results'` 显式标口径：量的是窗口里全部工具结果的原文，
+   * 不是保留口径的判据（判据只在 `placeholder` 下用，见 `shouldCompact()`）。
+   * 同时带上 ADR-104 §5.2 里的 `retained_tokens / max_tokens / top_result_bytes`
+   * 等价字段，读事件的人不必自己换算。
+   */
+  private publishProjectionPressure(window: WorkingContext, runId: string): void {
+    const max = window.maxTokens ?? 0;
+    if (max <= 0) return;
+    const pressure: ToolResultPressureReport = measureToolResultPressure(window.messages, max);
+    // 没触顶就不发：事件是「压力触顶」的观测面，不是每段一条的日志噪声。
+    if (!pressure.exceeded) return;
+    this.publishEvent({
+      type: 'context.projection_pressure',
+      run_id: runId,
+      ts: Date.now(),
+      data: {
+        used: pressure.used,
+        max: pressure.max,
+        ratio: pressure.ratio,
+        basis: pressure.basis,
+        threshold_ratio: pressure.thresholdRatio,
+        total_count: pressure.totalCount,
+        // ADR-104 §5.2 的同义字段（换算关系见事件文档）：不给读侧留换算工作。
+        retained_tokens: pressure.retainedTokens,
+        max_tokens: pressure.max,
+        retained_ratio: pressure.retainedRatio,
+        top_result_bytes: pressure.topResultTokens,
+        effective_mode: 'passthrough',
+      },
+    });
+  }
+
   /** 0.15 E1：removed>0 时发布 `context.compacted`；0.32 同时把摘要落事件日志 */
   private publishCompacted(
     workingContext: WorkingContext,
@@ -3199,10 +3463,15 @@ export class ExecutionUnit {
     workingContext: WorkingContext,
   ): Message[] {
     const normalized = this.normalizeMessages(workingContext.messages);
+    // 0.53 U2：`passthrough` ⇒ 请求视图**就是**落盘历史（不跑 plan、不替换、不加占位），
+    // 与「完全没有投射机制」逐字节相同。这里读的是段起点钉死的模式，不是当前
+    // messages 重算出来的东西 —— run 内不重算。
+    const runtimeMode = windowProjectionMode(workingContext);
+    const frozen = this.segmentClearPlans.get(workingContext) ?? [];
     // 0.52 V1：只应用「本段冻结」的集合，**不再**按当前 messages 重算窗口；
     // 没冻结过（非常规入口）= 一条都不清，请求视图与落盘逐字一致。
-    const frozen = this.segmentClearPlans.get(workingContext) ?? [];
-    const prepared = withClearedToolResults(normalized, frozen);
+    const prepared =
+      runtimeMode === 'passthrough' ? normalized : withClearedToolResults(normalized, frozen);
     if (prepared.some((message, index) => message !== normalized[index])) {
       // 占位替换是真实的（已声明）前缀变化：不标 reason 的话守卫会当成「莫名重写」。
       this.pendingPrefixReason ??= 'context_trim';
@@ -3695,6 +3964,16 @@ export class ExecutionUnit {
       ...(stored?.cleared_tool_call_ids !== undefined
         ? { cleared_tool_call_ids: stored.cleared_tool_call_ids }
         : {}),
+      // 0.53 U2：投射声明与审计同理必须继承 —— 漏一行就会把「用户声明的 mode」整轮洗掉，
+      // 下一次段起点退回缺省 placeholder（等于偷偷改声明）。声明只由应用层写
+      // （U1 的 `declareProjection`），runtime 只读不写；审计由 saveSessionState 按
+      // 本段决策覆盖。
+      ...(stored?.context_projection !== undefined
+        ? { context_projection: stored.context_projection }
+        : {}),
+      ...(stored?.context_projection_audit !== undefined
+        ? { context_projection_audit: stored.context_projection_audit }
+        : {}),
       status: 'running',
       last_run_id: runId,
     };
@@ -3735,6 +4014,12 @@ export class ExecutionUnit {
         sessionState.cleared_tool_call_ids = [...frozen];
       } else {
         delete sessionState.cleared_tool_call_ids;
+      }
+      // 0.53 U2：审计只在**决策变更**的段起点更新（`segmentProjections` 里只有变更时才
+      // 带 audit）；没变更就原样保留继承来的那条 —— 不刷日志，也不伪造「新决策」。
+      const projection = this.segmentProjections.get(execution.workingContext);
+      if (projection?.changed === true && projection.audit !== null) {
+        sessionState.context_projection_audit = projection.audit;
       }
     }
     // 0.52：环境快照的发布指纹随 session 落盘（跨重启去重用）。
