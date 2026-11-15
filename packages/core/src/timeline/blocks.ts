@@ -34,6 +34,8 @@ import {
   encodeChunkFrame,
   fsyncDirectory,
   listBlockFiles,
+  parseWithCrc,
+  readCrcNdjsonFile,
   truncateFile,
   withCrc,
 } from './wal.js';
@@ -55,6 +57,46 @@ export interface ChunkBlockRecovery {
   invalid: Array<{ from_seq: number; to_seq: number; reason: string }>;
   /** 被截断过的块文件名（撕裂尾帧清理）。 */
   truncated: string[];
+}
+
+/** `wal.manifest` 一行的形状校验（crc 之外还要形状对，才配当「完整性证明」）。 */
+function validateManifestLine(parsed: unknown): WalManifestLine | undefined {
+  const line = parseWithCrc<WalManifestLine>(parsed);
+  if (line === undefined || line.v !== 1 || line.kind !== 'block') return undefined;
+  if (typeof line.block !== 'string' || line.block.length === 0) return undefined;
+  if (!Number.isSafeInteger(line.start_seq) || line.start_seq < 1) return undefined;
+  if (!Number.isSafeInteger(line.end_seq) || line.end_seq < line.start_seq) return undefined;
+  if (!Number.isSafeInteger(line.count) || line.count < 1) return undefined;
+  if (!Number.isSafeInteger(line.bytes) || line.bytes < 0) return undefined;
+  if (typeof line.crc32 !== 'string' || line.crc32.length === 0) return undefined;
+  return line;
+}
+
+/**
+ * 把 `[from..to]` 里不在 `present` 的 seq 压成连续区间。
+ *
+ * 单块最多 `BLOCK_MAX_BYTES / 12` 个 seq（≈2.7k），逐 seq 扫一遍完全可以接受；只在
+ * **恢复**路径上跑一次，不在写路径上。
+ */
+function missingRanges(
+  from: number,
+  to: number,
+  present: ReadonlySet<number>,
+): Array<{ from_seq: number; to_seq: number }> {
+  const ranges: Array<{ from_seq: number; to_seq: number }> = [];
+  let start: number | undefined;
+  for (let seq = from; seq <= to; seq += 1) {
+    if (present.has(seq)) {
+      if (start !== undefined) {
+        ranges.push({ from_seq: start, to_seq: seq - 1 });
+        start = undefined;
+      }
+      continue;
+    }
+    start ??= seq;
+  }
+  if (start !== undefined) ranges.push({ from_seq: start, to_seq: to });
+  return ranges;
 }
 
 /** chunk 块写入器（每会话一个，串行队列由 `TimelineWriter` 保证）。 */
@@ -81,6 +123,11 @@ export class ChunkBlockStore {
    *
    * - 每个块都解码；撕裂尾帧截断到最后一个完整帧（这些 seq 从未发布，可重新分配）；
    * - 完整但坏掉的帧进 `invalid`，由写者登记为洞；
+   * - **manifest 是完整性证明**：`wal.manifest` 的行只在块文件 fsync **之后**才写，
+   *   所以「有 manifest 行、seq 却读不到」= 发布过的数据真的丢了（归 manifest 或
+   *   外部损坏），必须登记成洞（ADR-105 §3 I4：回退区间必须出现在 `holes` 里）。
+   *   没有 manifest 行 = 崩在「块已 fsync、manifest 还没写」之间，帧本身都在，
+   *   因此不参与这条判定（避免把正常崩溃误判成丢数据）；
    * - 下一个块号从现有最大块号 + 1 开始（崩溃留下的半块不会被续写）。
    */
   static async open(
@@ -93,6 +140,8 @@ export class ChunkBlockStore {
     const records: TimelineRecord[] = [];
     const invalid: ChunkBlockRecovery['invalid'] = [];
     const truncated: string[] = [];
+    /** 每个块里「可读或已声明坏帧」的 seq（manifest 比对用）。 */
+    const coveredByBlock = new Map<string, Set<number>>();
     let maxNumber = 0;
     for (const name of names) {
       maxNumber = Math.max(maxNumber, blockNumber(name));
@@ -102,11 +151,45 @@ export class ChunkBlockStore {
       const decode = decodeChunkBlock(buffer);
       records.push(...decode.records);
       invalid.push(...decode.invalid);
+      const covered = new Set<number>();
+      for (const record of decode.records) covered.add(record.seq);
+      // 坏帧自己已经登记进 `invalid`（写者会为它建洞），不重复算成「丢了」。
+      for (const item of decode.invalid) {
+        for (let seq = item.from_seq; seq <= item.to_seq; seq += 1) covered.add(seq);
+      }
+      coveredByBlock.set(name, covered);
       if (decode.torn) {
         await truncateFile(path, decode.validBytes);
         truncated.push(name);
       }
     }
+
+    // manifest ↔ 块文件互相校验（I4 对块内丢帧同样适用）。
+    const manifestPath = join(sessionDir, TIMELINE_LAYOUT.walManifest);
+    const manifest = await readCrcNdjsonFile<WalManifestLine>(
+      manifestPath,
+      validateManifestLine,
+    ).catch(() => undefined);
+    // 崩在「manifest 追加中途」会留下半行；截掉它，否则下一次追加的行会接在半行后面
+    // 变成一行坏 JSON —— 一条条目丢失就等于一条完整性证明丢失（目录是派生数据，可截）。
+    if (manifest?.truncateTo !== undefined) await truncateFile(manifestPath, manifest.truncateTo);
+    for (const entry of manifest?.items ?? []) {
+      const covered = coveredByBlock.get(entry.block);
+      if (covered === undefined) {
+        // manifest 说这个块写完了，块文件却不在 ⇒ 整段丢失（块只写一次、永不重写）。
+        invalid.push({
+          from_seq: entry.start_seq,
+          to_seq: entry.end_seq,
+          reason: 'chunk_block_file_missing',
+        });
+        continue;
+      }
+      for (const range of missingRanges(entry.start_seq, entry.end_seq, covered)) {
+        invalid.push({ ...range, reason: 'chunk_block_short_of_manifest' });
+      }
+    }
+    invalid.sort((a, b) => a.from_seq - b.from_seq);
+
     const store = new ChunkBlockStore(
       blocksDir,
       join(sessionDir, TIMELINE_LAYOUT.walManifest),

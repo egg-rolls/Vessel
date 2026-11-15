@@ -459,20 +459,27 @@ export class TimelineWriter {
     for (const record of sorted) this.indexBuilder.add(record);
 
     // 完整但损坏的帧/行：seq 可读的登记成洞（读不回来必须可声明）。
-    const invalidRanges: Array<{ from_seq: number; to_seq: number }> = [
+    // 块的 `invalid` 自带 reason（坏帧 / manifest 说写完了但帧缺 / 块文件不在），
+    // 原样落到洞记录里 —— 恢复期最需要的正是「为什么少了这一段」。
+    const invalidRanges: Array<{ from_seq: number; to_seq: number; reason: string }> = [
       ...blockOpen.recovery.invalid.map((item) => ({
         from_seq: item.from_seq,
         to_seq: item.to_seq,
+        reason: item.reason,
       })),
     ];
     for (const invalid of [...walRead.invalid, ...timelineRead.invalid]) {
       if (invalid.seq !== undefined) {
-        invalidRanges.push({ from_seq: invalid.seq, to_seq: invalid.seq });
+        invalidRanges.push({
+          from_seq: invalid.seq,
+          to_seq: invalid.seq,
+          reason: 'corrupt_frame_on_recovery',
+        });
       }
     }
     for (const range of invalidRanges) {
       if (records.has(range.from_seq) || this.holes.covers(range.from_seq)) continue;
-      await this.declareRecoveryHole(range.from_seq, range.to_seq, 'corrupt_frame_on_recovery');
+      await this.declareRecoveryHole(range.from_seq, range.to_seq, range.reason);
     }
 
     // 恢复出的空洞（既无记录也无洞）必须补声明，否则 wal_head 会停在一个说不出原因的洞里。
