@@ -1,4 +1,4 @@
-import type { RunEvent } from '../../gateway/types';
+import type { ProjectionView, RunEvent } from '../../gateway/types';
 import { type ErrorMeta, errorMetaOf } from '../../state/error-visibility';
 import type { TimelineItem } from '../../state/events';
 
@@ -18,6 +18,13 @@ export interface ToolCardView {
   durationMs?: number;
   truncated?: boolean;
   startedAt: number;
+  /**
+   * 0.54 additive：这条工具消息的「模型看到的是什么」（`sessions.get` 的 wire 派生）。
+   *
+   * 只有历史侧有（live 事件流不带它）；`undefined` = 没被投影 = 与 0.54 之前完全一致。
+   * 身份由 `tool_call_id` 决定，已按 id 合并在调用方完成（见 `transcript-items.ts`）。
+   */
+  projection?: ProjectionView;
   /**
    * 该卡解析到的事件锚点（`tool.call.started` 的 seq）。
    *

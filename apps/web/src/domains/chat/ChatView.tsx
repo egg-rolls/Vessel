@@ -27,6 +27,7 @@ import { ComposerSlot } from './ComposerSlot';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
 import { errorMessage } from './errors';
 import { PendingStrip } from './PendingStrip';
+import { ProjectionReadbackProvider } from './projection-readback';
 import { SessionRail } from './SessionRail';
 import { TranscriptWindow } from './TranscriptWindow';
 import { ToolCatalogProvider } from './tool-catalog';
@@ -453,55 +454,64 @@ export function ChatView({
               />
             )}
 
-            <TranscriptWindow
-              hasToken={hasToken}
-              selectedId={selectedId}
-              activeAgent={transcriptApi.activeAgent}
-              draftActive={draftActive}
-              restorePending={sessionsApi.restorePending}
-              hydrateError={transcriptApi.hydrateError}
-              hydrating={transcriptApi.hydrating}
-              hydrateStale={transcriptApi.hydrateStale}
-              hasTranscript={transcriptApi.hasTranscript}
-              hasEarlier={transcriptApi.hasEarlier}
-              visibleGroups={transcriptApi.visibleGroups}
-              renderedGroups={transcriptApi.renderedGroups}
-              transcriptWindow={transcriptApi.transcriptWindow}
-              transcriptMessages={transcriptApi.transcriptMessages}
-              historyIndex={transcriptApi.historyIndex}
-              isHiddenMessage={transcriptApi.isHiddenMessage}
-              noticeKindOf={transcriptApi.noticeKindOf}
-              messageIndexOffset={transcriptApi.messageIndexOffset}
-              sessionFailure={transcriptApi.sessionFailure}
-              sessionSystemContext={transcriptApi.sessionSystemContext}
-              detailNotice={transcriptApi.detailNotice}
-              onDismissDetailNotice={transcriptApi.dismissDetailNotice}
-              earlierError={transcriptApi.earlierError}
-              onDismissEarlierError={transcriptApi.dismissEarlierError}
-              onRetryEarlier={() => {
-                // 重试只重取「上一页」：服务端游标由窗口首条决定，失败后窗口没动，
-                // 因此直接重发同一个 before 请求（不经本地扩窗，避免白扩一页）。
-                if (!selectedId) return;
-                void sessionsApi.loadEarlierDetail(client, selectedId, { epoch });
-              }}
-              verbosity={transcriptApi.visibility.verbosity}
-              cardsDefaultOpen={transcriptApi.cardsDefaultOpen}
-              errorLevel={transcriptApi.errorLevel}
-              entries={snapshot.entries}
-              snapshotVersion={snapshot.version}
-              detailSessionId={sessionsApi.sessionDetail?.session_id}
-              sendTick={submitApi.sendTick}
-              onRetryDetail={transcriptApi.reloadDetail}
-              onLoadEarlier={transcriptApi.loadEarlier}
-              onConfigureConnection={() => navigate({ domain: 'gateway' })}
-              onGoChat={() => navigate({ domain: 'chat' })}
-              onEditMessage={handleEditMessage}
-              onRetryMessage={handleRetryMessage}
-              // 已答提问：服务端 answered 记录按 answered_at 落进时间线（item kind
-              // ask-answered），不再是滚动区末尾的额外一段。子 agent 详情页讲的是另一个
-              // run，那里不画（TranscriptWindow 按 activeAgent 自己断，同失败卡的口径）。
-              answeredAsks={transcriptApi.activeAgent ? EMPTY_ANSWERED_ASKS : answeredAsks}
-            />
+            {/* 投影卡的「读回完整原文」（0.54）只影响时间线里的工具卡，所以只包住转录区：
+              `sessions.events` 按 `tool_call_id` 找那条工具结果。sessionId 用这份消息属于哪个
+              会话（detail 到了以它为准，切会话的中途不会去读隔壁会话的日志）。 */}
+            <ProjectionReadbackProvider
+              client={client}
+              sessionId={sessionsApi.sessionDetail?.session_id ?? selectedId ?? undefined}
+            >
+              <TranscriptWindow
+                hasToken={hasToken}
+                selectedId={selectedId}
+                activeAgent={transcriptApi.activeAgent}
+                draftActive={draftActive}
+                restorePending={sessionsApi.restorePending}
+                hydrateError={transcriptApi.hydrateError}
+                hydrating={transcriptApi.hydrating}
+                hydrateStale={transcriptApi.hydrateStale}
+                hasTranscript={transcriptApi.hasTranscript}
+                hasEarlier={transcriptApi.hasEarlier}
+                visibleGroups={transcriptApi.visibleGroups}
+                renderedGroups={transcriptApi.renderedGroups}
+                transcriptWindow={transcriptApi.transcriptWindow}
+                transcriptMessages={transcriptApi.transcriptMessages}
+                historyIndex={transcriptApi.historyIndex}
+                isHiddenMessage={transcriptApi.isHiddenMessage}
+                noticeKindOf={transcriptApi.noticeKindOf}
+                messageIndexOffset={transcriptApi.messageIndexOffset}
+                sessionFailure={transcriptApi.sessionFailure}
+                sessionSystemContext={transcriptApi.sessionSystemContext}
+                projectionSummary={sessionsApi.sessionDetail?.projection_summary}
+                detailNotice={transcriptApi.detailNotice}
+                onDismissDetailNotice={transcriptApi.dismissDetailNotice}
+                earlierError={transcriptApi.earlierError}
+                onDismissEarlierError={transcriptApi.dismissEarlierError}
+                onRetryEarlier={() => {
+                  // 重试只重取「上一页」：服务端游标由窗口首条决定，失败后窗口没动，
+                  // 因此直接重发同一个 before 请求（不经本地扩窗，避免白扩一页）。
+                  if (!selectedId) return;
+                  void sessionsApi.loadEarlierDetail(client, selectedId, { epoch });
+                }}
+                verbosity={transcriptApi.visibility.verbosity}
+                cardsDefaultOpen={transcriptApi.cardsDefaultOpen}
+                errorLevel={transcriptApi.errorLevel}
+                entries={snapshot.entries}
+                snapshotVersion={snapshot.version}
+                detailSessionId={sessionsApi.sessionDetail?.session_id}
+                sendTick={submitApi.sendTick}
+                onRetryDetail={transcriptApi.reloadDetail}
+                onLoadEarlier={transcriptApi.loadEarlier}
+                onConfigureConnection={() => navigate({ domain: 'gateway' })}
+                onGoChat={() => navigate({ domain: 'chat' })}
+                onEditMessage={handleEditMessage}
+                onRetryMessage={handleRetryMessage}
+                // 已答提问：服务端 answered 记录按 answered_at 落进时间线（item kind
+                // ask-answered），不再是滚动区末尾的额外一段。子 agent 详情页讲的是另一个
+                // run，那里不画（TranscriptWindow 按 activeAgent 自己断，同失败卡的口径）。
+                answeredAsks={transcriptApi.activeAgent ? EMPTY_ANSWERED_ASKS : answeredAsks}
+              />
+            </ProjectionReadbackProvider>
 
             {/* 待处理条带与转录区**同一个容器**（`.content-stage`），但不在滚动区里：
               条带只负责「还有几条在等」，跟着输入区一起常驻。宽度 / 内边距由它自己

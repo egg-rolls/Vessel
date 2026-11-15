@@ -542,6 +542,79 @@
   overflow-wrap: anywhere;
 }
 
+/* 投影卡（0.54）：badge 常驻卡头 + 双层面板。
+
+   badge 放在 `<summary>` 的 meta 槽里（折叠态也看得见），所以这里只允许**纯文本样式**：
+   不加 cursor、不加下划线、不响应 hover —— 它不是按钮，点它什么也不会发生。 */
+
+.projection-badge {
+  white-space: nowrap;
+  color: var(--faint);
+}
+
+.projection-badge-danger {
+  color: var(--danger);
+}
+
+/* 卡体首段：切换器 + 面板。与下面的「描述 / 输入 / 输出」分区保持同一竖向节奏。 */
+.projection-panes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-bottom: var(--space-1);
+}
+
+.projection-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* 原文不在消息里 / 已不可恢复：一行说明，不用告警底色（它不是错误，是事实）。 */
+.projection-missing,
+.projection-gone,
+.projection-note,
+.projection-warn,
+.projection-summary {
+  margin: 0;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+
+.projection-gone {
+  color: var(--danger);
+}
+
+/* 「已截到前 8 KiB」是**裁断事实**，不是失败：warn 色只用来让它别被当成正文。 */
+.projection-warn {
+  color: var(--warn);
+}
+
+.projection-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 0;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: var(--faint);
+}
+
+.projection-meta dt {
+  color: var(--muted);
+}
+
+.projection-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.projection-action {
+  margin: 0 8px 2px;
+  font-size: 10.5px;
+}
+
 /* 思考流：弱化、可折叠，与正文分开渲染。 */
 
 .reasoning-block {

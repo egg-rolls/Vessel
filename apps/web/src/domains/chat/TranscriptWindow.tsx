@@ -2,7 +2,7 @@ import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef } from 'r
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { Button, MessageActions, useMessageCopy } from '../../components/ui';
 import { formatClock } from '../../format';
-import type { Message } from '../../gateway/types';
+import type { Message, ProjectionSummary } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { AgentNode } from '../../state/agents';
 import type { ErrorVisibility } from '../../state/error-visibility';
@@ -149,6 +149,7 @@ export function TranscriptWindow({
   messageIndexOffset,
   sessionFailure,
   sessionSystemContext,
+  projectionSummary,
   answeredAsks,
   detailNotice,
   onDismissDetailNotice,
@@ -199,6 +200,12 @@ export function TranscriptWindow({
    * 留在时间线上；与事件流里的失败卡按 runId 去重（见 transcript-items.ts）。
    */
   sessionFailure?: RunFailure;
+  /**
+   * 整会话投影汇总（additive 0.54 `sessions.get.session.projection_summary`）。
+   *
+   * 只喂给**展开后的投影卡**（累计数不进卡片头，spec §3.0）；缺省 = 这个会话没有被投影的条目。
+   */
+  projectionSummary?: ProjectionSummary;
   /**
    * 会话记录里的「模型这一轮看到了什么系统消息」（`sessions.get.system_context`）。
    *
@@ -497,11 +504,15 @@ export function TranscriptWindow({
               ...(item.error !== undefined ? { error: item.error } : {}),
               ...(item.durationMs !== undefined ? { durationMs: item.durationMs } : {}),
               ...(item.truncated === true ? { truncated: true } : {}),
+              // 0.54 投影：item 上的那份已经按 `tool_call_id` 合并好（见 transcript-items.ts），
+              // 这里只搬运，不再按下标找。
+              ...(item.projection !== undefined ? { projection: item.projection } : {}),
               startedAt: item.startedAt,
             }}
             verbosity={verbosity}
             defaultOpen={cardsDefaultOpen}
             entering={isEntering(item.key)}
+            {...(projectionSummary !== undefined ? { projectionSummary } : {})}
           />
         );
       case 'notice':

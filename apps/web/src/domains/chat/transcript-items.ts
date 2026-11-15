@@ -31,7 +31,7 @@
  * 屏上以落盘那份为准；身份缺失（旧数据）或不唯一时才退回**内容相等**，那时认不出来
  * 就两边都渲染 —— 宁可重复，绝不吞消息。
  */
-import type { Message, MessageRef, RunEvent } from '../../gateway/types';
+import type { Message, MessageRef, ProjectionView, RunEvent } from '../../gateway/types';
 import type { SessionDetail } from '../../gateway/types/sessions';
 import type { ErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
@@ -51,6 +51,7 @@ import {
   mergeEnvNoticeCards,
 } from './env-notice';
 import { buildHistoryToolItems } from './history-tools';
+import { projectionIndexByCallId } from './projection';
 import { type RotateHandoff, rotateHandoffOf } from './rotate-handoff';
 import { compareTimelineEntries } from './timeline-order';
 import { type ChatRenderItem, foldToolItems, type ToolCardStatus } from './tool-cards';
@@ -236,6 +237,13 @@ export interface ToolItem extends ItemMeta {
   startedAt: number;
   /** false = 有调用无结果 / 孤立结果（渲染 outputMissing）。 */
   paired: boolean;
+  /**
+   * 0.54 additive：这条工具消息的「模型看到的是什么」（`sessions.get` 的 wire 派生）。
+   *
+   * **按 `tool_call_id` 合并**（见 `projectionIndexByCallId`），不按数组下标 —— 消息窗口
+   * 可能从 assistant 中间切起，按下标对齐会把 A 卡的占位挂到 B 卡上。缺省 = 没被投影。
+   */
+  projection?: ProjectionView;
 }
 
 export interface NoticeItem extends ItemMeta {
@@ -864,6 +872,10 @@ export function buildHistoryIndex(
 
   // 历史工具消息：与 assistant 的 tool_calls 配对后各自成 item（tool:<callId>）。
   const historyTools = buildHistoryToolItems(messages);
+  // 0.54 投影：**按 `tool_call_id` 建索引**（不是按下标）。窗口可能从 assistant 中间切起，
+  // 那时「第 i 条消息的 projection」与「第 i 张卡」根本不是一回事 —— 按下标对齐会把 A 卡的
+  // 占位挂到 B 卡上。索引键只认 wire 声明的那一个：`projection.tool_call_id`。
+  const projectionByCallId = projectionIndexByCallId(messages);
   const toolByCallId = new Map<string, (typeof historyTools)[number]>();
   const orphanTools: { item: (typeof historyTools)[number]; index: number }[] = [];
   for (const tool of historyTools) {
@@ -1039,6 +1051,7 @@ export function buildHistoryIndex(
         tool.startedAt !== undefined && tool.endedAt !== undefined
           ? Math.max(0, tool.endedAt - tool.startedAt)
           : undefined;
+      const projection = projectionByCallId.get(callId);
       items.push({
         kind: 'tool',
         key: `tool:${callId}`,
@@ -1049,6 +1062,7 @@ export function buildHistoryIndex(
         status: 'done',
         startedAt: message?.timestamp ?? 0,
         paired: tool.paired,
+        ...(projection !== undefined ? { projection } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
         // ts 用「工具结果消息」的时间（历史侧的权威时刻）：比所属 assistant 消息的
         // timestamp 更贴近真实发生顺序（F19/F20 守这条）。
@@ -1060,6 +1074,9 @@ export function buildHistoryIndex(
   }
   for (const { item, index } of orphanTools) {
     const absIndex = messageIndexOffset + index;
+    // 孤立结果（窗口从中间切起 / 调用被截断）：投影照样按**它自己的** id 挂上 ——
+    // 这正是「窗口里没有 owning assistant」的那条路径，按下标对齐在这里必错。
+    const projection = item.callId === undefined ? undefined : projectionByCallId.get(item.callId);
     items.push({
       kind: 'tool',
       key: `tool:orphan:${absIndex}`,
@@ -1068,6 +1085,7 @@ export function buildHistoryIndex(
       status: 'done',
       startedAt: messageByIndex.get(absIndex)?.timestamp ?? 0,
       paired: false,
+      ...(projection !== undefined ? { projection } : {}),
       ...(messageByIndex.get(absIndex)?.timestamp !== undefined
         ? { ts: messageByIndex.get(absIndex)?.timestamp }
         : {}),

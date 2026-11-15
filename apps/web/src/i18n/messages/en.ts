@@ -279,6 +279,39 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.tool.meta': 'Metadata',
   'chat.tool.retryable': 'Retryable',
   'chat.tool.truncated': 'Output truncated',
+  // 0.54 projection card: the placeholder the model saw, side by side with the original.
+  // Wording matches ADR-104 §8.5; `passthrough` / `archive_notice` get no badge.
+  'chat.projection.badge.placeholder': 'Model saw: placeholder',
+  'chat.projection.badge.placeholderHint':
+    'This tool result was replaced by a placeholder ([cleared …]): the model sees the placeholder, the original is still on this card.',
+  'chat.projection.badge.externalize': 'Model saw: handle',
+  'chat.projection.badge.externalizeHint':
+    'This tool result was replaced by a handle reference: the model sees the handle, the body has to be read back.',
+  'chat.projection.badge.reason.readback':
+    'The original is no longer in the messages, only in the event log.',
+  'chat.projection.badge.reason.gone': 'The original is unrecoverable.',
+  'chat.projection.tabsLabel': 'Projection view',
+  'chat.projection.tab.original': 'Original',
+  'chat.projection.tab.model': 'Model view',
+  'chat.projection.original': 'Original',
+  'chat.projection.modelView': 'Model view',
+  'chat.projection.copyOriginal': 'Copy original',
+  'chat.projection.copyModel': 'Copy what the model saw',
+  'chat.projection.readbackAll': 'Read back the full original',
+  'chat.projection.readbackFromLog': 'Read back from the event log',
+  'chat.projection.readbackUnsupported': 'Reading this kind of original back is not wired up yet.',
+  'chat.projection.notInMessage': 'The original is not in the messages (only the placeholder is).',
+  'chat.projection.gone': 'The original is unrecoverable.',
+  'chat.projection.truncatedWarn': 'Truncated to the first 8 KiB of {bytes} B.',
+  'chat.projection.truncatedWarnUnknown': 'Truncated to the first 8 KiB; original size unknown.',
+  'chat.projection.meta.tool': 'tool',
+  'chat.projection.meta.bytes': 'original',
+  'chat.projection.meta.sinceSeq': 'since seq',
+  'chat.projection.meta.unknown': 'unknown',
+  'chat.projection.bytes': '{bytes} B',
+  'chat.projection.summary.total': 'Session total: {total} projected · {saved} B saved',
+  'chat.projection.summary.lowerBound':
+    '({count} without a known original size, so this is a lower bound)',
   'chat.tool.previewLines': 'Preview {shown}/{total} lines',
   'chat.tool.loadMore': 'Load more ({loaded}/{total} KB)',
   'chat.tool.showAll': 'Show all {total} lines',
@@ -1965,6 +1998,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.preview.tabs.title': 'SegmentedTabs',
   'designLab.preview.tool.desc':
     'Tool card: the header holds only the name and duration; expand for description, input and output. Errors stay visible while collapsed.',
+  'designLab.preview.projection.desc':
+    'Projection card (0.54): a badge stays in the header (visible while collapsed); the first body section switches between the original and what the model saw. The original is the default when it lives in the message body; when it only exists in the event log the card lands on the model view and offers a read-back (an empty read-back degrades to “the original is unrecoverable”).',
   'designLab.preview.toolbar.desc':
     'Control strip directly above a table or Section: filters, search and batch actions.',
   'designLab.preview.toolbar.label': 'Sample table toolbar',
