@@ -139,6 +139,30 @@ export interface ProjectionSummary {
   unknown_original_count: number;
 }
 
+/** 一个被裁字段的结构化裁断事实（wire `CappedFieldInfo` 的客户端形状）。 */
+export interface TruncatedFieldInfo {
+  /** 完整字段的 UTF-8 字节数（**截断前**）。 */
+  bytes: number;
+  /** 本次生效的上限（UTF-8 字节）—— 界面上「已截到前 N」这个数字只能用它。 */
+  limit: number;
+  /** 拼进正文的截断标记（逐字）。 */
+  marker: string;
+}
+
+/**
+ * 单条消息上的裁断事实（additive 0.54 `Message.truncated`）。
+ *
+ * **sparse**：没被裁的消息不带这个字段；被裁时才出现。
+ */
+export interface MessageTruncation {
+  /** 工具结果正文被裁（`role==='tool'`）。 */
+  content?: TruncatedFieldInfo;
+  /** assistant 工具入参被裁（`bytes` 取被裁 call 里的最大值）。 */
+  arguments?: TruncatedFieldInfo;
+  /** `arguments` 是多个 call 的合并值时才出现：被裁的 call 数（≥2）。 */
+  arguments_calls?: number;
+}
+
 /** 单条会话消息（sessions.get 返回的 session.messages） */
 export interface Message {
   role: MessageRole;
@@ -182,6 +206,13 @@ export interface Message {
    * 只挂在 `role:'tool'` 消息上；合并 / 汇总一律按 `projection.tool_call_id`，不按下标。
    */
   projection?: ProjectionView;
+  /**
+   * 裁断事实（additive 0.54）：正文被裁时才有（**sparse**，没被裁就不带）。
+   *
+   * 投影卡的「已截到前 N」里的 N 必须取这里的 `content.limit` —— 那是本次真正生效的上限，
+   * 服务端改上限时界面上的数字跟着变，不许硬编码。
+   */
+  truncated?: MessageTruncation;
 }
 
 /** sessions.search 的单条结果（E5 冻结形状）。 */

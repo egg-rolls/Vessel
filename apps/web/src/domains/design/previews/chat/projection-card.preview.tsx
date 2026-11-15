@@ -40,6 +40,7 @@ function card(
   result: string,
   view: ProjectionView,
   status: 'done' | 'error' = 'done',
+  truncatedLimitBytes?: number,
 ): ToolCardView {
   return {
     kind: 'tool',
@@ -52,6 +53,7 @@ function card(
     durationMs: 18_400,
     startedAt: STARTED_AT,
     projection: view,
+    ...(truncatedLimitBytes !== undefined ? { truncatedLimitBytes } : {}),
   };
 }
 
@@ -69,6 +71,10 @@ const TRUNCATED = card(
     original_available: 'inline_truncated',
     original_bytes: 147_456,
   }),
+  'done',
+  // 「已截到前 N」里的 N 来自 wire 的 `truncated.content.limit`（这里 4 KiB，
+  // 故意与兜底常量 8 KiB 不同：实验室里一眼能看出这个数字是 wire 给的）。
+  4096,
 );
 
 const READBACK = card(

@@ -22,14 +22,21 @@ import {
   defaultProjectionTab,
   hasProjectionPanes,
   modelViewTextOf,
+  projectedOriginalText,
   projectionBadgeOf,
+  projectionMetaFieldsOf,
+  readbackActionKeyOf,
   readbackOriginalOf,
   readbackOutcomeOf,
   readbackRequestOf,
   savedBytesOf,
+  showsOutputSection,
   summaryLowerBoundCount,
+  TRUNCATION_LIMIT_FALLBACK_BYTES,
+  truncationLimitLabel,
 } from '../apps/web/src/domains/chat/projection';
 import type { ChatRenderItem } from '../apps/web/src/domains/chat/tool-cards';
+import { toolSummary, valueText } from '../apps/web/src/domains/chat/tool-cards';
 import type { TranscriptItem } from '../apps/web/src/domains/chat/transcript-items';
 import { buildTranscriptItems } from '../apps/web/src/domains/chat/transcript-items';
 import type {
@@ -443,6 +450,144 @@ const FIXTURES: readonly Fixture[] = [
         // 有未知体量的条数时必须能算出「下界提示」，没有时不加这句话。
         summaryLowerBoundCount({ ...base, unknown_original_count: 3 }) === 3 &&
         summaryLowerBoundCount(base) === 0
+      );
+    },
+  },
+  {
+    name: 'F19 输出分区让位给投影面板 ⇒ 不丢信息（逐字 / 复制是原文 / exit code 还在）',
+    why:
+      '有投影时不再渲染「输出」分区，这是对既有卡片的行为改动。' +
+      '必须能证明接管≠丢失：原文面板拿到的是**逐字**的正文（含首尾空白与空行），' +
+      '复制出去的就是它，exit code 这类数字没被吞，参数区与工具名也照旧由卡片自己管',
+    check: () => {
+      const view = projection({ tool_call_id: 'c-inline' });
+      // 首行缩进 + 行尾空格 + 空行 + 末尾换行：任何 trim / 重排都会让它变。
+      const result = '  exit code 1\n\n第二行尾部有空格   \n';
+      const original = projectedOriginalText(view, result);
+      const readbackView = projection({
+        tool_call_id: 'c-readback',
+        original_available: 'readback',
+        original_bytes: null,
+        readback: { kind: 'events', tool_call_id: 'c-readback', since_seq: 0 },
+      });
+      return (
+        // ① 逐字相等：面板里的正文 === 原「输出」分区本来会显示的正文。
+        original === result &&
+        valueText(original) === result &&
+        // 输出分区确实让位了（没投影时仍然照常渲染）。
+        showsOutputSection(view) === false &&
+        showsOutputSection(undefined) === true &&
+        // ② 复制出去的是**原文**：不是占位、也不是截断版。
+        modelViewTextOf(view) !== original &&
+        original.includes('exit code 1') &&
+        original.endsWith('\n') &&
+        // readback 态绝不能把占位当原文端出来（那边没有「原文」可复制）。
+        projectedOriginalText(readbackView, '[cleared bash: x]') === undefined &&
+        // ③ 工具名 / 参数不归投影管：调用摘要照样算得出来（没被一起吞掉）。
+        toolSummary('bash', { command: 'bun run gates' }).includes('bun run gates')
+      );
+    },
+  },
+  {
+    name: 'F20 「已截到前 N」的 N 来自 wire（truncated.content.limit），不是常量',
+    why:
+      '这个数字用户会当事实读：服务端把上限从 8 KiB 调到 4 KiB 时界面必须跟着变。' +
+      '常量只是 wire 没给时的兜底，且 KiB/字节的换算不许编造小数',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          assistantCalls([{ id: 'call_t' }]),
+          {
+            // 上限故意设成 4096：与兜底常量（8 KiB）不同，才验得出「用的是 wire」。
+            ...toolMessage(
+              'call_t',
+              '前半段... [truncated]',
+              projection({
+                tool_call_id: 'call_t',
+                original_available: 'inline_truncated',
+                original_bytes: 9000,
+              }),
+            ),
+            truncated: { content: { bytes: 9000, limit: 4096, marker: '... [truncated]' } },
+          },
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      });
+      const card = toolCard(items, 'call_t');
+      return (
+        card?.truncatedLimitBytes === 4096 &&
+        truncationLimitLabel(4096) === '4 KiB' &&
+        truncationLimitLabel(TRUNCATION_LIMIT_FALLBACK_BYTES) === '8 KiB' &&
+        // 不是整 KiB 就退回字节数，不四舍五入成假精度。
+        truncationLimitLabel(8000) === '8000 B'
+      );
+    },
+  },
+  {
+    name: 'F21 两处读回文案必须区分（取回尾巴 vs 取回占位之前的原文）',
+    why:
+      '`inline_truncated` 的读回是取回被上限截掉的**尾巴**（前半段已在卡上）；' +
+      '`readback` 的读回是取回**占位之前的原文**。共用一句会让人以为要做同一件事',
+    check: () => {
+      const truncated = projection({
+        tool_call_id: 'c-tail',
+        original_available: 'inline_truncated',
+        original_bytes: 9000,
+      });
+      const readback = projection({
+        tool_call_id: 'c-ph',
+        original_available: 'readback',
+        original_bytes: null,
+        readback: { kind: 'events', tool_call_id: 'c-ph', since_seq: 0 },
+      });
+      const gone = projection({
+        tool_call_id: 'c-gone',
+        original_available: 'gone',
+        original_bytes: null,
+      });
+      return (
+        readbackActionKeyOf(truncated) === 'chat.projection.readbackTail' &&
+        readbackActionKeyOf(readback) === 'chat.projection.readbackFromLog' &&
+        readbackActionKeyOf(truncated) !== readbackActionKeyOf(readback) &&
+        // 全文本来就在卡上（inline）/ 不可恢复（gone）：没有按钮。
+        readbackActionKeyOf(projection({ tool_call_id: 'c-inline' })) === undefined &&
+        readbackActionKeyOf(gone) === undefined
+      );
+    },
+  },
+  {
+    name: 'F22 元信息：since_event_seq 缺省时那一行根本不出现',
+    why:
+      '服务端本轮两个分支都不写它（缺省 = 不知道，绝不写 0 冒充）。永远显示「发生 seq: 未知」' +
+      '只是一行噪音，用户还会以为这个会话的记录有问题',
+    check: () => {
+      const withoutSeq = projectionMetaFieldsOf(
+        projection({ tool_call_id: 'c1', original_available: 'readback', original_bytes: null }),
+        'bash',
+      );
+      const withSeq = projectionMetaFieldsOf(
+        projection({
+          tool_call_id: 'c2',
+          original_available: 'readback',
+          original_bytes: 1024,
+          since_event_seq: 42,
+        }),
+        'bash',
+      );
+      const labels = (fields: { labelKey: string }[]) => fields.map((field) => field.labelKey);
+      return (
+        !labels(withoutSeq).includes('chat.projection.meta.sinceSeq') &&
+        labels(withSeq).includes('chat.projection.meta.sinceSeq') &&
+        // 体量未知时仍是「未知」而不是 0（0 会读成「零字节」）。
+        withoutSeq.some(
+          (field) => field.labelKey === 'chat.projection.meta.bytes' && field.value === null,
+        ) &&
+        withSeq.some(
+          (field) => field.labelKey === 'chat.projection.meta.bytes' && field.value === '1024',
+        ) &&
+        // 工具名永远在（至少让人知道是哪一条调用的原文丢了）。
+        withoutSeq[0]?.value === 'bash'
       );
     },
   },

@@ -504,6 +504,9 @@ export function TranscriptWindow({
               ...(item.error !== undefined ? { error: item.error } : {}),
               ...(item.durationMs !== undefined ? { durationMs: item.durationMs } : {}),
               ...(item.truncated === true ? { truncated: true } : {}),
+              ...(item.truncatedLimitBytes !== undefined
+                ? { truncatedLimitBytes: item.truncatedLimitBytes }
+                : {}),
               // 0.54 投影：item 上的那份已经按 `tool_call_id` 合并好（见 transcript-items.ts），
               // 这里只搬运，不再按下标找。
               ...(item.projection !== undefined ? { projection: item.projection } : {}),

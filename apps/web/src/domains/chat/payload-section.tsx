@@ -3,7 +3,7 @@ import { CopyButton } from '../../components/CopyButton';
 import { Button } from '../../components/ui';
 import { t } from '../../i18n';
 import type { Verbosity } from '../../state/visibility';
-import { PAYLOAD_CHUNK_BYTES, PREVIEW_LINES, previewPayload } from './tool-cards';
+import { PAYLOAD_CHUNK_BYTES, PREVIEW_LINES, previewPayload, valueText } from './tool-cards';
 
 /**
  * 一段原始文本的完整能力：折叠预览（20 行 / 8 KiB）+ 展开分块加载 + 复制 + debug 行列字节。
@@ -12,16 +12,6 @@ import { PAYLOAD_CHUNK_BYTES, PREVIEW_LINES, previewPayload } from './tool-cards
  * 要复用它（spec §3.3「两个面板都是 PayloadSection，零新渲染逻辑」），而 `ToolCard` 又要
  * import 投影卡组件 —— 留在原文件会绕成循环 import。搬出来是唯一不复制那份渲染逻辑的走法。
  */
-
-export function valueText(value: unknown): string {
-  if (value === undefined || value === null) return '';
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value, null, 2) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
 
 export interface SectionProps {
   label: string;

@@ -5,10 +5,11 @@ import type { ProjectionSummary } from '../../gateway/types';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { Verbosity } from '../../state/visibility';
-import { PayloadSection, valueText } from './payload-section';
+import { PayloadSection } from './payload-section';
+import { projectedOriginalText, showsOutputSection } from './projection';
 import { ProjectionBadge, ProjectionPanes } from './projection-card';
 import { StreamCard } from './StreamCard';
-import { type DiffLine, editDiffOf, type ToolCardView, toolSummary } from './tool-cards';
+import { type DiffLine, editDiffOf, type ToolCardView, toolSummary, valueText } from './tool-cards';
 import { useToolDescription } from './tool-catalog';
 
 const STATUS_GLYPH: Record<ToolCardView['status'], string> = {
@@ -158,18 +159,17 @@ export function ToolCard({
       {projection !== undefined && (
         // 卡体首段（只有 projection 存在时出现）：原文视角 | 模型视角 + 读回。
         // 原文面板的输入是**消息正文**（`inline` / `inline_truncated` 时它就是原文）；
-        // `readback` / `gone` 时正文里已经是占位，这里不给它，面板自己说「原文不在这里」。
+        // 取值走 `projectedOriginalText`：它逐字等于原「输出」分区的正文（门禁钉这条等式），
+        // `readback` / `gone` 时返回 undefined，面板自己说「原文不在这里」。
         <ProjectionPanes
           view={projection}
           toolName={card.name}
-          original={
-            projection.original_available === 'inline' ||
-            projection.original_available === 'inline_truncated'
-              ? valueText(card.result)
-              : undefined
-          }
+          original={projectedOriginalText(projection, card.result)}
           verbosity={verbosity}
           defaultOpen={defaultOpen}
+          {...(card.truncatedLimitBytes !== undefined
+            ? { truncatedLimitBytes: card.truncatedLimitBytes }
+            : {})}
           {...(projectionSummary !== undefined ? { summary: projectionSummary } : {})}
         />
       )}
@@ -191,8 +191,11 @@ export function ToolCard({
       {/* 输出分区：**有投影时交给上面的双层面板**，这里不再重复一份。
           两个理由：① `inline` 时两处文本逐字相同，同一张卡显示两遍像 bug；
           ② `readback` 时消息正文已经是占位符 —— 把它当成「输出」摆一遍，等于在
-          「原文不在消息里」的旁边展示 `[cleared …]`。投影卡自己负责这两层。 */}
-      {projection === undefined && (
+          「原文不在消息里」的旁边展示 `[cleared …]`。投影卡自己负责这两层。
+
+          「接管」不等于「丢失」：面板里的原文逐字等于这里本来会显示的那份
+          （`projectedOriginalText`，门禁按「原样输出 / 空白不丢 / exit code 还在」钉住）。 */}
+      {showsOutputSection(projection) && (
         <PayloadSection label={t('chat.tool.output')} value={card.result} verbosity={verbosity} />
       )}
       {diff && <DiffSection lines={diff.lines} path={diff.path} />}

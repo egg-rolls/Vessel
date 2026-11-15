@@ -14,7 +14,7 @@
  *   `projection_summary`，**折叠态不出累计数**（spec §3.0）。
  */
 
-import { useId, useState } from 'react';
+import { Fragment, useId, useState } from 'react';
 import { SegmentedTabs } from '../../components/Tabs';
 import { Button } from '../../components/ui';
 import type { ProjectionSummary, ProjectionView } from '../../gateway/types';
@@ -27,10 +27,14 @@ import {
   modelViewTextOf,
   type ProjectionTab,
   projectionBadgeOf,
+  projectionMetaFieldsOf,
+  readbackActionKeyOf,
   readbackOutcomeOf,
   readbackRequestOf,
   savedBytesOf,
   summaryLowerBoundCount,
+  TRUNCATION_LIMIT_FALLBACK_BYTES,
+  truncationLimitLabel,
 } from './projection';
 import { useProjectionReadback } from './projection-readback';
 
@@ -64,22 +68,23 @@ export function ProjectionBadge({ view }: { view: ProjectionView }) {
 
 /** 元信息一行（`工具名 / 原文体量 / 发生 seq`）：原文不在消息里时至少让人知道是哪一条。 */
 function ProjectionMeta({ view, toolName }: { view: ProjectionView; toolName: string }) {
-  const bytes =
-    view.original_bytes === null
-      ? t('chat.projection.meta.unknown')
-      : t('chat.projection.bytes', { bytes: view.original_bytes });
-  const since =
-    view.since_event_seq === undefined
-      ? t('chat.projection.meta.unknown')
-      : String(view.since_event_seq);
   return (
     <dl className="projection-meta font-mono tabular-nums">
-      <dt>{t('chat.projection.meta.tool')}</dt>
-      <dd>{toolName}</dd>
-      <dt>{t('chat.projection.meta.bytes')}</dt>
-      <dd>{bytes}</dd>
-      <dt>{t('chat.projection.meta.sinceSeq')}</dt>
-      <dd>{since}</dd>
+      {projectionMetaFieldsOf(view, toolName).map((field) => {
+        // `null` = 服务端不知道（显示「未知」，绝不显示 0）；字节数带单位，其余原样。
+        const value =
+          field.value === null
+            ? t('chat.projection.meta.unknown')
+            : field.unit === 'bytes'
+              ? t('chat.projection.bytes', { bytes: field.value })
+              : field.value;
+        return (
+          <Fragment key={field.labelKey}>
+            <dt>{t(field.labelKey)}</dt>
+            <dd>{value}</dd>
+          </Fragment>
+        );
+      })}
     </dl>
   );
 }
@@ -97,6 +102,7 @@ export function ProjectionPanes({
   verbosity,
   defaultOpen,
   summary,
+  truncatedLimitBytes,
 }: {
   view: ProjectionView;
   /** 工具名（只用于元信息行；投影本身不认识工具）。 */
@@ -107,6 +113,13 @@ export function ProjectionPanes({
   defaultOpen: boolean;
   /** 整会话汇总（展开体里的累计数；缺省 = 没有汇总可显示）。 */
   summary?: ProjectionSummary;
+  /**
+   * 截断上限（wire `message.truncated.content.limit`）。
+   *
+   * 缺省 = wire 没告诉 ⇒ 用 `TRUNCATION_LIMIT_FALLBACK_BYTES` 兜底（末路，不是默认值）：
+   * 「已截到前 N」是要用户当事实读的数字，优先永远取 wire。
+   */
+  truncatedLimitBytes?: number;
 }) {
   const [tab, setTab] = useState<ProjectionTab>(() => defaultProjectionTab(view));
   const [readback, setReadback] = useState<ReadbackState>({ kind: 'idle' });
@@ -117,6 +130,8 @@ export function ProjectionPanes({
 
   const request = readbackRequestOf(view);
   const loaded = readback.kind === 'loaded' ? readback.text : undefined;
+  // 「已截到前 N」：N 优先取 wire 的 `truncated.content.limit`，常量只是兜底。
+  const limitLabel = truncationLimitLabel(truncatedLimitBytes ?? TRUNCATION_LIMIT_FALLBACK_BYTES);
   // 原文面板里能拿到的东西，按优先级：本次读回 > 消息正文（inline / inline_truncated）。
   const inlineOriginal = original !== undefined && original.length > 0 ? original : undefined;
   const shownOriginal = loaded ?? inlineOriginal;
@@ -144,6 +159,9 @@ export function ProjectionPanes({
 
   const readbackButton = () => {
     if (request === undefined || goneCopy !== undefined) return null;
+    // 文案按状态区分：截断态取回「被截掉的尾巴」，占位态取回「占位之前的原文」。
+    const labelKey = readbackActionKeyOf(view);
+    if (labelKey === undefined) return null;
     return (
       <Button
         variant="link"
@@ -151,9 +169,7 @@ export function ProjectionPanes({
         disabled={readback.kind === 'loading'}
         onClick={load}
       >
-        {view.original_available === 'inline_truncated'
-          ? t('chat.projection.readbackAll')
-          : t('chat.projection.readbackFromLog')}
+        {t(labelKey)}
       </Button>
     );
   };
@@ -171,15 +187,20 @@ export function ProjectionPanes({
             verbosity={verbosity}
           />
           {view.original_available === 'inline_truncated' && loaded === undefined && (
-            // 截断是**事实**，不是错误：一行 warn，原文体量只读 wire（`original_bytes`）。
+            // 截断是**事实**，不是错误：一行 warn。
+            // 上限取 wire 的 `truncated.content.limit`（`truncationLimitLabel`），拿不到才兜底；
+            // 原文体量只读 wire 的 `original_bytes`（不从正文数）。
             <p className="projection-warn">
               {view.original_bytes === null
-                ? t('chat.projection.truncatedWarnUnknown')
-                : t('chat.projection.truncatedWarn', { bytes: view.original_bytes })}
+                ? t('chat.projection.truncatedWarnUnknown', { limit: limitLabel })
+                : t('chat.projection.truncatedWarn', {
+                    limit: limitLabel,
+                    bytes: view.original_bytes,
+                  })}
             </p>
           )}
           {readback.kind === 'gone' && (
-            // 读回失败 / 为空：**明确降级**（这里已经显示了裁到 8 KiB 的那一段，
+            // 读回失败 / 为空：**明确降级**（这里已经显示了裁断前的那一段，
             // 但「完整原文」确实回不来了）。不弹错误框、不显示 stack。
             <p className="projection-gone">{t('chat.projection.gone')}</p>
           )}

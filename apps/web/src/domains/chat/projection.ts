@@ -11,6 +11,7 @@
  */
 
 import type { ProjectionSummary, ProjectionView } from '../../gateway/types';
+import { valueText } from './tool-cards';
 
 /** 双层卡的两个视角（spec §3.3）：`original` = 原文，`model` = 模型看到的。 */
 export type ProjectionTab = 'original' | 'model';
@@ -66,6 +67,96 @@ export function projectionBadgeOf(view: ProjectionView): ProjectionBadgeSpec | n
 /** 这张投影有没有「两层」可展示。`archive_notice`（卡就是消息）/ `passthrough` 没有。 */
 export function hasProjectionPanes(view: ProjectionView): boolean {
   return BADGE_KEYS[view.mode] !== undefined;
+}
+
+/**
+ * 元信息的一行：`labelKey` 是 i18n key，`value === null` = 服务端不知道（渲染成「未知」）。
+ *
+ * 单独抽出来是为了让「`since_event_seq` 缺省时这一行根本不出现」变成可断言的事实，
+ * 而不是 JSX 里的一处 `?? '未知'`（永远显示「未知」只是噪音）。
+ */
+export interface ProjectionMetaField {
+  labelKey: string;
+  value: string | null;
+  /** `bytes` = 数值（渲染时带上 B 单位）；`text` = 原样输出。 */
+  unit: 'bytes' | 'text';
+}
+
+/** 原文不在消息里时给的最低限度交代：哪条工具、多大、什么时候发生的。 */
+export function projectionMetaFieldsOf(
+  view: ProjectionView,
+  toolName: string,
+): ProjectionMetaField[] {
+  const fields: ProjectionMetaField[] = [
+    { labelKey: 'chat.projection.meta.tool', value: toolName, unit: 'text' },
+    {
+      labelKey: 'chat.projection.meta.bytes',
+      value: view.original_bytes === null ? null : String(view.original_bytes),
+      unit: 'bytes',
+    },
+  ];
+  // 「发生 seq」只在**有值**时给：缺省 = 不知道（服务端不写 0 冒充「从日志头起」），
+  // 而一行永远显示「未知」的元信息只是噪音。
+  if (view.since_event_seq !== undefined) {
+    fields.push({
+      labelKey: 'chat.projection.meta.sinceSeq',
+      value: String(view.since_event_seq),
+      unit: 'text',
+    });
+  }
+  return fields;
+}
+
+/**
+ * 「原文视角」面板里的文本；`undefined` = 原文不在消息里（`readback` / `gone`）。
+ *
+ * **逐字**等于消息正文（= 原「输出」分区的内容）：投影卡接管输出展示后，这条等式就是
+ * 「没有信息丢失」的判据 —— 不许 trim、不许补空格、不许把占位/截断版当成原文。
+ * 归一化只做一件事：空正文当作「没有原文」（渲染层不画空面板）。
+ */
+export function projectedOriginalText(view: ProjectionView, result: unknown): string | undefined {
+  if (view.original_available !== 'inline' && view.original_available !== 'inline_truncated') {
+    return undefined;
+  }
+  const text = valueText(result);
+  return text.length > 0 ? text : undefined;
+}
+
+/**
+ * 「输出」分区还要不要渲染：**有投影时由双层面板接管**。
+ *
+ * 两个理由：① `inline` 时两处文本逐字相同，同一张卡显示两遍像 bug；
+ * ② `readback` 时消息正文已经是占位符，把它当「输出」摆在「原文不在消息里」旁边会误导。
+ * 这个判断单独一个函数是为了让门禁能钉住「接管 ≠ 丢失」（见 `projectedOriginalText`）。
+ */
+export function showsOutputSection(view: ProjectionView | undefined): boolean {
+  return view === undefined;
+}
+
+/**
+ * 截断上限的**兜底**常量：只在 wire 没给 `truncated.content.limit` 时才用它。
+ *
+ * 正常情况下这个数字必须来自 wire（`truncatedLimitLabel` 的入参）：界面上「已截到前 N」
+ * 是用户会当事实读的数字，服务端改上限时它得跟着变。兜底是末路，不是默认值。
+ */
+export const TRUNCATION_LIMIT_FALLBACK_BYTES = 8 * 1024;
+
+/** 上限的人话：整 KiB 用 `KiB`，否则退回字节（不编造小数）。 */
+export function truncationLimitLabel(limitBytes: number): string {
+  if (limitBytes > 0 && limitBytes % 1024 === 0) return `${limitBytes / 1024} KiB`;
+  return `${limitBytes} B`;
+}
+
+/**
+ * 读回按钮的文案 key。**两处语义不同，不许共用一句**：
+ * - `inline_truncated`：取回**被上限截掉的尾巴**（正文前半段已经在卡上）；
+ * - `readback`：取回**占位之前的那份原文**（消息里只剩占位）。
+ */
+export function readbackActionKeyOf(view: ProjectionView): string | undefined {
+  if (readbackRequestOf(view) === undefined) return undefined;
+  return view.original_available === 'inline_truncated'
+    ? 'chat.projection.readbackTail'
+    : 'chat.projection.readbackFromLog';
 }
 
 /**

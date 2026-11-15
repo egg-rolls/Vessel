@@ -244,6 +244,13 @@ export interface ToolItem extends ItemMeta {
    * 可能从 assistant 中间切起，按下标对齐会把 A 卡的占位挂到 B 卡上。缺省 = 没被投影。
    */
   projection?: ProjectionView;
+  /**
+   * 0.54 additive：正文被裁时**本次生效的上限**（wire `message.truncated.content.limit`）。
+   *
+   * 投影卡的「已截到前 N」读它；缺省 = wire 没告诉（那时候才退回常量兜底，
+   * 见 `projection.ts#TRUNCATION_LIMIT_FALLBACK_BYTES`）。
+   */
+  truncatedLimitBytes?: number;
 }
 
 export interface NoticeItem extends ItemMeta {
@@ -1104,6 +1111,9 @@ export function buildHistoryIndex(
         startedAt: message?.timestamp ?? 0,
         paired: tool.paired,
         ...(projection !== undefined ? { projection } : {}),
+        ...(tool.truncatedLimitBytes !== undefined
+          ? { truncatedLimitBytes: tool.truncatedLimitBytes }
+          : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
         // ts 用「工具结果消息」的时间（历史侧的权威时刻）：比所属 assistant 消息的
         // timestamp 更贴近真实发生顺序（F19/F20 守这条）。
@@ -1130,6 +1140,9 @@ export function buildHistoryIndex(
       startedAt: messageByIndex.get(absIndex)?.timestamp ?? 0,
       paired: false,
       ...(projection !== undefined ? { projection } : {}),
+      ...(item.truncatedLimitBytes !== undefined
+        ? { truncatedLimitBytes: item.truncatedLimitBytes }
+        : {}),
       ...(messageByIndex.get(absIndex)?.timestamp !== undefined
         ? { ts: messageByIndex.get(absIndex)?.timestamp }
         : {}),
