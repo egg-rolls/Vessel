@@ -45,6 +45,20 @@
  * **开关关时这三件全不存在**：装配层不建闸门、不包事件流、不传 `onPublish`，写者也没有
  * `publish` ⇒ 旧链路就是唯一发布者，行为与 0.53 逐字节相同（这是默认安装路径）。
  *
+ * ## 读面：`heads()` / `readPage()` / `onPublish()`（serve 的三个时间线端口）
+ *
+ * 同一条 `publish` 的下游还有三个**读侧**出口，serve 的 `timeline.hello` / 时间线 epoch 全靠它们：
+ *
+ * | 出口 | 对应 serve | 关键口径 |
+ * | --- | --- | --- |
+ * | `heads()` | `GatewayOptions.timelineHeads` | 对外四字段 **+ `published_head`**（`= writer.publishedHead()`，收紧到 `≤ wal_head`）。纯磁盘口径明确给 `wal_head`，不留 `undefined` 让上层兜底 —— 否则 `timeline.hello.published_head` 恒等于 `wal_head`，崩溃窗口那一段永远声明不出来 |
+ * | `readPage()` | `GatewayOptions.timelineRead` | `afterSeq` **排他** / `untilSeq` 含 / 升序 / 去重 / 最多 `limit`（硬顶 {@link TIMELINE_PAGE_MAX}）。事实源是 core 的 `readTimelineEvents`（归档 + 块 + WAL 归并），装配层**只裁窗口**：不跳洞、不补占位、不另造 seq |
+ * | `onPublish()` | 实时尾随的帧源 | 每条**放行的** `seq` 一次（含闸门放行旧广播的那些），严格递增、都在 fsync 之后、`seq` 就是 `timeline_seq`（ADR-105 §9 R7：不另造编号）。监听者异常各自隔离 |
+ *
+ * 「能读什么」由 `readPage` 决定，「能推到哪」由 `published_head` 决定 —— 两者是同一件事的
+ * 两半：`count = (min(end_seq, published_head) - start_seq + 1) - Σ|holes ∩ 区间|`，帧只发到
+ * `min(end_seq, published_head)`，`(published_head, wal_head]` 永不推送也不写成洞。
+ *
  * ## 归档调度（`timeline_head` 为什么会动）
  *
  * 双写只写 `wal.log` + 块，`timeline_head` 要等**归档**才前进（写入侧 `archive()` 把非 chunk
@@ -386,12 +400,85 @@ export interface TimelineDualWrite {
   /** 进程退出时 flush 一次（`beforeExit`；最多占 300ms）。 */
   installExitFlush(target?: NodeJS.Process): void;
   /**
-   * `sessions.get.event_cursor` 的 timeline 四字段。
+   * `sessions.get.event_cursor` 的 timeline 四字段 **+ `published_head`**。
    *
    * 内存里有 writer ⇒ 直接读它；没有（新进程 / 只读面）⇒ 从 `timeline.idx` + manifest +
    * holes 读；两者都没有 ⇒ `undefined`（**字段缺省**，绝不报假零）。
+   *
+   * `published_head`（0.54 B/C 交界，pub-i2）：**一定被发布过**的最大 seq。写者的
+   * `heads()` 只报对外四字段，`publishedHead()` 是另一个方法，所以必须在这里显式透传
+   * —— 不透传时 `timeline.hello.published_head` 会被上游按 `wal_head` 兜底，
+   * 「崩溃窗口里 `(published_head, wal_head]` 允许不被推送」这条声明就永远发不出来
+   * （ADR-105 §3 I2 的唯一残余缺口）。
    */
-  heads(sessionId: string): Promise<TimelineHeads | undefined>;
+  heads(sessionId: string): Promise<TimelineHeadsView | undefined>;
+  /**
+   * 时间线**分页读**（`packages/serve` 的 `timelineRead` 端口，0.54 B1/C）。
+   *
+   * `afterSeq` **排他**（只回 `seq > afterSeq`）、`untilSeq` 含、按 `seq` 升序、去重、
+   * 最多 `limit` 条（硬顶 `TIMELINE_PAGE_MAX`）。读面用 core 的 `readTimelineEvents`
+   * （归档 + 块 + WAL 三处归并、按 seq 去重、外置 blob 取回），装配层只做窗口裁剪 ——
+   * 不拼第二套编号、不猜洞（洞是**声明**，由 `heads().holes` 报；读不到就是读不到）。
+   */
+  readPage(sessionId: string, options: TimelinePageQuery): Promise<readonly TimelinePageEvent[]>;
+  /**
+   * 订阅**发布点**（ADR-105 §3 I2 / §9 R7）：写者在 WAL/块 fsync 之后放行的每一条记录。
+   *
+   * 帧的 `seq` **就是** `timeline_seq`（不许另造），严格递增、每条至多一次 —— 与
+   * `deliverPublication` 的 seq 水位同一套口径。serve 的时间线 epoch 应当拿它当实时尾随
+   * 的帧源；`deliverPublication` 是同步调监听者的，所以监听者**必须**自己 try/catch
+   * （本模块也兜了一层，异常不影响落盘）。
+   *
+   * 返回取消订阅函数（幂等）。
+   */
+  onPublish(listener: (publication: TimelinePublication) => void): () => void;
+}
+
+/**
+ * `heads()` 的返回：对外四字段 + `published_head`（可结构类型直接喂给
+ * `SessionTimelineHeadsPort.lookup`）。
+ */
+export interface TimelineHeadsView extends TimelineHeads {
+  /**
+   * **一定被发布过**的最大 seq（`<= wal_head`）。
+   *
+   * `published_head < wal_head` ⇒ `(published_head, wal_head]` 是「本进程里还没被放行」的
+   * 尾部：它可能可读（页缓存里活下来了），但**从未**对外发布，客户端不得据它报
+   * `timeline.gap_reported`，也不许算进期望条数（ADR-105 §9 R4 的语义分工）。
+   */
+  published_head: number;
+}
+
+/** `readPage` 的查询窗口（`afterSeq` 排他、`untilSeq` 含、`limit` 硬顶见端口实现）。 */
+export interface TimelinePageQuery {
+  afterSeq: number;
+  untilSeq?: number;
+  limit?: number;
+}
+
+/**
+ * 时间线线上事件（与 `packages/serve/src/gateway/timeline-protocol.ts#TimelineWireEvent`
+ * 同形；这里的结构类型对齐，不 import serve）。
+ */
+export interface TimelinePageEvent {
+  seq: number;
+  type: string;
+  ts: number;
+  run_id?: string;
+  data?: unknown;
+}
+
+/** `readPage` 的单页硬顶（与 serve 的 `TIMELINE_PAGE_LIMIT` 同值；调用方可以更小）。 */
+export const TIMELINE_PAGE_MAX = 500;
+
+/**
+ * 实时尾随的一条（`readPage` 的事件体 **+ `session_id`**）。
+ *
+ * 为什么要多一个 `session_id`：`readPage` 是「按会话读」，会话由入参给出；而发布点扇出是
+ * **进程/租户级**的，serve 必须自己按连接的 `session_id` 过滤（见 `timelineTailPort`）。
+ */
+export interface TimelineTailEvent extends TimelinePageEvent {
+  session_id: string;
 }
 
 /** 会话目录：与旧链路同一条口径（`encodeURIComponent`）。 */
@@ -796,6 +883,14 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
    * 放行」与「`onPublish` 转发」是两条路，任何一条重复调用都不许让 UI 看见两次同一 seq。
    */
   const publishedSeqs = new Map<string, number>();
+  /**
+   * 发布点的进程内订阅者（实时尾随的帧源；`deliverPublication` 放行之后同步回调）。
+   *
+   * 与 `options.onPublish` 的分工：`onPublish` 是**装配层**把它投进事件流的出口；
+   * 这里是**进程内**的扇出（serve 的时间线 epoch 要的就是「fsync 之后、seq =
+   * timeline_seq」这一串，而不是再进一遍事件流）。两者都在 seq 水位之后，都不会重复。
+   */
+  const publishListeners = new Set<(publication: TimelinePublication) => void>();
 
   /** sessionId → 打开中的 writer（打开失败时 map 里留下 `undefined`，表示已标 broken）。 */
   const writers = new Map<string, Promise<TimelineWriter | undefined>>();
@@ -905,14 +1000,34 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   }
 
   /**
+   * 把一条发布扇出给进程内订阅者（实时尾随）。**每个监听者自己隔离**：一个监听者抛错
+   * 不许拖累其它监听者，更不许冒泡进写者（那会把已 fsync 的 append 变成失败）。
+   */
+  function notifyPublishListeners(publication: TimelinePublication): void {
+    for (const listener of [...publishListeners]) {
+      try {
+        listener(publication);
+      } catch (error) {
+        counters.publishFailed += 1;
+        warn('timeline publish listener failed (record already durable)', {
+          session_id: publication.session_id,
+          seq: publication.seq,
+          error: errorText(error),
+        });
+      }
+    }
+  }
+
+  /**
    * **唯一的对外发布点**（ADR-105 §3 I2）：由写者在 WAL/块 fsync 之后调用。
    *
    * 三件事，顺序不能换：
    *
    * 1. **seq 水位去重**：`seq <= 已发布` ⇒ 丢掉（记 `publishDeduped`）。同一条事件只到 UI
    *    一次；`seq` 严格递增 ⇒ 可见顺序 = timeline seq 顺序；
-   * 2. **闸门结算**：旧链路那条广播可能正被扣着（`gate.settle()` 放它出来 = 这次发布），
-   *    或者已经放出去过（压掉，避免二次投递）；两者都不需要再发；
+   * 2. **闸门结算 + 进程内扇出**：旧链路那条广播可能正被扣着（`gate.settle()` 放它出来 =
+   *    这次发布），或者已经放出去过（压掉，避免二次投递）；无论哪条路，`onPublish` 的
+   *    进程内订阅者都收到一次（serve 的时间线 epoch 拿它当实时尾随帧源）；
    * 3. **转发给 `onPublish`**：装配层接 `events.publish`。**异常一律吞掉** —— 数据已经
    *    fsync，坏的只是通知通道，绝不能让写者回滚或让 append 失败。
    */
@@ -941,7 +1056,11 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
         ...(record.fencing_token !== undefined ? { fencing_token: record.fencing_token } : {}),
       };
       // 闸门：能放行旧链路那条广播就别再发一份（同一条事件 UI 只看到一次）。
-      if (gate?.settle(publication) === true) return;
+      const releasedByGate = gate?.settle(publication) === true;
+      // 进程内扇出（实时尾随的帧源）：**每一条放行的 seq 都要通知**，与闸门是否放行
+      // 旧广播无关 —— 闸门解决「UI 只看到一次」，这里解决「新事件能追上来」。
+      notifyPublishListeners(publication);
+      if (releasedByGate) return;
       const sink = options.onPublish;
       if (sink === undefined) return;
       try {
@@ -1435,7 +1554,7 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     }
   }
 
-  async function heads(sessionId: string): Promise<TimelineHeads | undefined> {
+  async function heads(sessionId: string): Promise<TimelineHeadsView | undefined> {
     // 开关关 ⇒ **四个字段一起缺省**（哪怕磁盘上留着上次开启时写的 timeline）：
     // 「有没有 timeline」不能由旧数据决定，否则关掉开关后 UI 还在报新链路的两指针。
     if (!enabled) return undefined;
@@ -1444,16 +1563,94 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     if (pending !== undefined) {
       try {
         const writer = await pending;
-        if (writer !== undefined) return withArchiveTaint(sessionId, writer.heads());
+        if (writer !== undefined) {
+          // `published_head` 必须显式补：core 的 `heads()` 只报对外四字段，
+          // `publishedHead()` 是另一个方法（凸出来的「未发布尾部」只有调度侧知道）。
+          return {
+            ...withArchiveTaint(sessionId, writer.heads()),
+            published_head: clampPublishedHead(writer.publishedHead(), writer.heads().wal_head),
+          };
+        }
       } catch {
         // 落到磁盘口径
       }
     }
     try {
-      return await readHeadsOnDisk(sessionDirOf(options.sessionsDir, sessionId));
+      const onDisk = await readHeadsOnDisk(sessionDirOf(options.sessionsDir, sessionId));
+      if (onDisk === undefined) return undefined;
+      // 纯磁盘口径：没有进程内写入者 ⇒ 写者 open 时已把 `published` 折成 `wal_head`
+      // （`writer.ts:486`），两者必然相等。这里**明确给值**，不留 `undefined` 让上层兜底
+      // 假装是「未发布」。
+      return { ...onDisk, published_head: onDisk.wal_head };
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * 时间线分页读（`timelineRead` 端口的装配实现）。
+   *
+   * 事实源是 core 的 `readTimelineEvents`：归档 `timeline.ndjson` + 块文件 + `wal.log`
+   * 三处按 `seq` 归并去重、外置 blob 取回。**装配层只做窗口裁剪**：
+   * - `afterSeq` 排他 / `untilSeq` 含（与 `sessions.events` 的 `since_seq` 同一口径）；
+   * - 升序、按 `seq` 去重（归档是「复制不是搬移」，同一条可能两处都有）；
+   * - 最多 `limit`（缺省且硬顶 `TIMELINE_PAGE_MAX`）。
+   *
+   * **不跳过洞**：洞（`heads().holes`）是「声明不可读」，不是「读侧过滤条件」；
+   * 落盘里本来就没有那些 seq 的记录，所以跳过是自动的。反过来，读侧也**不许**替
+   * 丢失的 seq 编一条占位 —— 那会让 `count` 与实收对不上。
+   *
+   * 成本：一次整份读（`readTimelineEvents` 是 core 唯一的读面，没有按区间下推）。
+   * 调用频次是「每个 epoch 一次」（`sendTimelineEpoch`），不是每帧一次。
+   */
+  async function readPage(
+    sessionId: string,
+    query: TimelinePageQuery,
+  ): Promise<readonly TimelinePageEvent[]> {
+    if (!enabled) return [];
+    if (sessionId.length === 0) return [];
+    const after = Number.isFinite(query.afterSeq) ? Math.max(0, Math.floor(query.afterSeq)) : 0;
+    const until =
+      query.untilSeq === undefined || !Number.isFinite(query.untilSeq)
+        ? Number.POSITIVE_INFINITY
+        : Math.floor(query.untilSeq);
+    const requested =
+      query.limit === undefined || !Number.isFinite(query.limit)
+        ? TIMELINE_PAGE_MAX
+        : Math.floor(query.limit);
+    const limit = Math.max(1, Math.min(TIMELINE_PAGE_MAX, requested));
+    const records = await readTimelineEvents(sessionDirOf(options.sessionsDir, sessionId));
+    const page: TimelinePageEvent[] = [];
+    const seen = new Set<number>();
+    for (const record of records) {
+      if (record.seq <= after || record.seq > until) continue;
+      if (seen.has(record.seq)) continue;
+      seen.add(record.seq);
+      page.push({
+        seq: record.seq,
+        type: record.type,
+        ts: record.ts,
+        ...(record.run_id !== undefined ? { run_id: record.run_id } : {}),
+        ...(record.data !== undefined ? { data: record.data } : {}),
+      });
+      if (page.length >= limit) break;
+    }
+    page.sort((a, b) => a.seq - b.seq);
+    return page;
+  }
+
+  /**
+   * 订阅发布点（实时尾随的装配侧半边）。
+   *
+   * 回调里的 `seq` **就是** `timeline_seq`（ADR-105 §9 R7：不另造编号）；顺序与
+   * `deliverPublication` 的放行顺序一致（严格递增、每条至多一次），并且一定发生在该
+   * seq 的 fsync 之后 —— 所以拿它当帧源不需要二次校验。
+   */
+  function onPublish(listener: (publication: TimelinePublication) => void): () => void {
+    publishListeners.add(listener);
+    return () => {
+      publishListeners.delete(listener);
+    };
   }
 
   /**
@@ -1490,7 +1687,59 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     closeAll,
     installExitFlush,
     heads,
+    readPage,
+    onPublish,
   };
+}
+
+/**
+ * `published_head` 收紧到 `<= wal_head`：写入侧的 `publishedHead()` 本来就只会 ≤
+ * `wal_head`，这里防的是「读到的两个值来自两个时刻」（先读 `wal_head`、再读
+ * `publishedHead()` 之间块封了）—— 越界的值不往线上发，取 `wal_head` 是唯一安全收敛。
+ */
+function clampPublishedHead(publishedHead: number, walHead: number): number {
+  const published = Number.isFinite(publishedHead) ? Math.floor(publishedHead) : 0;
+  const wal = Number.isFinite(walHead) ? Math.floor(walHead) : 0;
+  if (published < 0) return 0;
+  return Math.min(published, wal);
+}
+
+/**
+ * 实时尾随端口（装配层半边）：把 `TimelineDualWrite.onPublish` 装成 serve 的帧源形状。
+ *
+ * 帧源与 `readPage()` 返回**同一个事件形状**（`TimelinePageEvent`），所以 serve 里
+ * 「历史页」与「实时尾随」走同一个 `timelineEventFrame(record)`，不会出现两套映射；
+ * `seq` 仍然是 `timeline_seq`（不另造编号，ADR-105 §9 R7）。
+ *
+ * 多带一个 **`session_id`**：`readPage` 的入参就是会话，不需要它；而进程内扇出是**全租户**
+ * 的，serve 必须按连接自己的 `session_id` 过滤，否则多会话并发时会把 B 会话的帧发进
+ * A 会话的连接（两套区间叠在一个游标上，客户端四条校验必红）。
+ *
+ * 用法（等 serve 侧那个 hook 落地后，装配层一行）：
+ *
+ * ```ts
+ * timelineTail: bundle.timelineDualWrite === undefined
+ *   ? undefined
+ *   : timelineTailPort(bundle.timelineDualWrite),
+ * ```
+ *
+ * 注意：**不做游标过滤**（那是连接的 `afterTimeline` 的事，只有 serve 知道），也不重发
+ * 历史页 —— 端口只负责「fsync 之后、逐条、严格递增」这一串。
+ */
+export function timelineTailPort(
+  manager: TimelineDualWrite,
+): (listener: (event: TimelineTailEvent) => void) => () => void {
+  return (listener) =>
+    manager.onPublish((publication) => {
+      listener({
+        session_id: publication.session_id,
+        seq: publication.seq,
+        type: publication.type,
+        ts: publication.ts,
+        ...(publication.run_id !== undefined ? { run_id: publication.run_id } : {}),
+        ...(publication.data !== undefined ? { data: publication.data } : {}),
+      });
+    });
 }
 
 /** 会话目录名（门禁与探针拼路径用；与旧链路同一条 `encodeURIComponent` 口径）。 */
