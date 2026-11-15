@@ -1674,6 +1674,8 @@ export const messages = {
   'gateway.client.unreachable': '无法连接 gateway（未启动或地址错误）',
   'replay.notice.partial': '仅恢复了最近 {total} 个 run 中 {runs} 个的细节（事件回填触到上限）。',
   'replay.notice.failed': '磁盘事件回填不可用，当前只显示实时流已经送到的内容。',
+  'replay.notice.stage1cap':
+    '事件回填的第一阶段（会话日志）已翻到页数上限：早于最近 {runs} 个 run 的细节（trace-only 事件）这次可能没有被回填。',
   'gateway.error.unauthorized': 'token 无效或已过期，请在连接设置中重新输入。',
   'gateway.error.forbidden': '当前 token 没有执行该操作的权限。',
   'gateway.error.forbidden_origin': '请求来源不在 serve.allowed_origins 中。',

@@ -45,6 +45,7 @@ import type { GatewayClient } from './client';
 import {
   GatewayReplaySource,
   newestRunIds,
+  REPLAY_MAX_TRACE_RUNS,
   type ReplayEvent,
   type ReplaySink,
   recoverReplay,
@@ -435,10 +436,22 @@ export class SubscriptionController {
         runs: (events) => newestRunIds(events),
       });
       flush();
-      this.eventStore.noteDiskBackfill({ truncated: result.truncated });
+      const stage1CapWarned = this.eventStore.noteDiskBackfill({
+        truncated: result.truncated,
+        stage1Pages: result.sessionCalls,
+        stage1HitCap: result.sessionPageCap,
+        stage2RunsRequested: result.traceRunsRequested,
+        stage2RunsFetched: result.traceRunsFetched.length,
+        sessionId,
+      });
       // 降级必须可读（远程 / 截断 / 部分失败）：不许静默少补。
       if (result.sessionError !== undefined) {
         this.notice?.(t('replay.notice.failed'));
+      } else if (stage1CapWarned) {
+        // 阶段一触顶 + 本会话 run 数 > 3：早于最近 3 个 run 的 trace-only 事件这次**根本
+        // 没被请求过**（判据与解释见 `EventStore#diskBackfill.stage1HitCap`）。这条必须
+        // 说出来 —— 否则老 run 的缺口会被当成「没这问题」。
+        this.notice?.(t('replay.notice.stage1cap', { runs: REPLAY_MAX_TRACE_RUNS }));
       } else if (result.truncated || result.traceRunsFetched.length < result.traceRunsRequested) {
         this.notice?.(
           t('replay.notice.partial', {

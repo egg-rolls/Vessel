@@ -94,22 +94,131 @@ export interface RecoverResult {
   traceRunsFetched: string[];
   /** 是否因为页数上限提前收手（尾部可能有没拿到的事件）。 */
   truncated: boolean;
+  /**
+   * 阶段一是否**恰好**卡在页数硬上限（`REPLAY_MAX_SESSION_PAGES`）。
+   *
+   * 与 `truncated` 的区别：后者还包含「RPC 失败 / 游标不前进 / 阶段二部分失败」，而
+   * 这条只回答一个可行动的问题 —— **早于最近 3 个 run 的那一段，这次是不是根本没去拿**
+   * （见 `EventStore#diskBackfill.stage1HitCap`）。别把「没触顶」读成「没缺口」。
+   */
+  sessionPageCap: boolean;
 }
 
 /**
- * 跨源内容 id：`run_id|type|ts`（契约 §8 第 3 条）。
+ * 稳定 JSON：对象键**递归排序**后序列化（同一份 payload 在任何到达顺序 / 任何进程里
+ * 都得到同一串字节）。不引依赖 —— 这里只需要「确定性」，不需要「可逆」。
+ *
+ * 与 `JSON.stringify` 的差异（都是**故意的**）：`undefined` / 非有限数当 `null` 处理
+ * （同 JSON 的成员语义），对象里的 `undefined` 成员跳过；超深结构（> 12 层）截断成
+ * `"…"` 而**不抛**（回填是 fail-open 路径，不能因为一条畸形 payload 就整段不进）。
+ */
+function canonicalJson(value: unknown, depth = 0): string {
+  if (value === null || value === undefined) return 'null';
+  const kind = typeof value;
+  if (kind === 'number') return Number.isFinite(value as number) ? String(value) : 'null';
+  if (kind === 'boolean') return value === true ? 'true' : 'false';
+  if (kind === 'string') return JSON.stringify(value);
+  if (kind !== 'object') return JSON.stringify(String(value));
+  if (depth >= 12) return '"…"';
+  if (Array.isArray(value)) {
+    const items = value.map((item) => canonicalJson(item, depth + 1));
+    return `[${items.join(',')}]`;
+  }
+  const record = value as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const key of Object.keys(record).sort()) {
+    const item = record[key];
+    if (item === undefined) continue;
+    parts.push(`${JSON.stringify(key)}:${canonicalJson(item, depth + 1)}`);
+  }
+  return `{${parts.join(',')}}`;
+}
+
+/** 32 位 FNV-1a（轻量、无依赖；一次线性扫描）。 */
+function fnv1a32(text: string, seed: number): string {
+  let hash = seed >>> 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/** 「这条事件到底有没有 payload」：`undefined` / `null` / `{}` / `[]` 都算没有。 */
+function hasPayload(data: unknown): boolean {
+  if (data === null || data === undefined) return false;
+  if (Array.isArray(data)) return data.length > 0;
+  if (typeof data === 'object') return Object.keys(data as Record<string, unknown>).length > 0;
+  return true;
+}
+
+/**
+ * payload 摘要（内容 id 的第四段）：`<fnv(seed1)>.<fnv(seed2)>`，两个独立 32 位散列
+ * 并排 —— 单个 32 位散列在「上万条同型 payload」量级上的生日碰撞不可忽略，两个并排
+ * 之后是 ~64 位，工程上够用；真的撞了也只会少一条重复行（与旧的三段口径同级），
+ * 而**不会**再出现「同一毫秒里两条不同内容被并成一条」。
+ *
+ * `undefined` / `null` / `{}` 归一到同一个值：磁盘事件常常没有 `data`，而经过
+ * `toRunEvent` 之后同一个事件的 `data` 是 `{}` —— 两侧必须算同一个 id，否则跨源去重
+ * 立刻失效（反而制造重复行）。「没有 payload」本就只有一个含义。
+ */
+export function payloadDigest(data: unknown): string {
+  if (!hasPayload(data)) return '0';
+  let json: string;
+  try {
+    json = canonicalJson(data);
+  } catch {
+    // 循环引用等畸形结构：宁可「所有畸形 payload 同 id」也不要整段回填失败。
+    json = '!';
+  }
+  return `${fnv1a32(json, 0x811c9dc5)}.${fnv1a32(json, 0x9e3779b9)}`;
+}
+
+/**
+ * 内容 id 用的 payload：**抹平传输层补的归属字段**。
+ *
+ * `gateway.ts#withSessionAttribution` 往**出站副本**的 `data` 里补一个 `session_id`
+ * （`llm.stream.chunk` / `tool.call.*` 本体不带它，订阅侧要靠它把事件挂回会话），而磁盘
+ * 副本是**原始事件**、没有这个字段。同一个逻辑事件在「磁盘段」与「已收到的那一份」之间
+ * 因此只差这一个键 —— 内容 id 必须把它抹平，否则跨源去重永远配不上对，回填会把每条
+ * 工具 / LLM 事件都再并一遍（那是**制造重复**，比少一条更糟）。
+ *
+ * 只在「run 自己就能定位会话」时抹平（`run_id` 非空且不是 `manual`）：`session.*` 这类
+ * 没有 run 的事件正是靠 `data.session_id` 才是唯一身份，抹掉会把两个会话的事件并成一条
+ * —— 那才是吞内容。方向不对称是有意的：宁可多一条重复行，不可少一条内容。
+ */
+function payloadForId(event: ReplayEvent): unknown {
+  const data = event.data;
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) return data;
+  const runId = event.run_id ?? '';
+  if (runId === '' || runId === 'manual') return data;
+  const record = data as Record<string, unknown>;
+  if (!('session_id' in record)) return data;
+  const copy: Record<string, unknown> = {};
+  for (const key of Object.keys(record)) {
+    if (key === 'session_id') continue;
+    copy[key] = record[key];
+  }
+  return copy;
+}
+
+/**
+ * 跨源内容 id：`run_id|type|ts|<payload 摘要>`（契约 §8 第 3 条的**补强**）。
  *
  * 为什么不是 seq：三个 seq 空间互不映射（session 全局 / per-run / hub 全局），同一逻辑
  * 事件在三处的数字完全不同，且磁盘 seq 在重启后与 hub seq 的「纪元」没有任何共同起点。
  * `run_id + type + ts` 是唯一三源同值的组合（`ts` 由生产者在事件对象上盖一次，落盘、
  * 广播、trace 都是同一个值）。
  *
- * 已知代价：同 run 同类型同毫秒的两条事件会被当成一条（例如 1ms 内两次
- * `hook.started`）。取这个方向是因为它**只会少一条重复行，不会吞内容**：两条真的是
- * 不同事件时，环 / live 那条仍在（去重只发生在「磁盘段 vs 已收到」之间，不删已有条目）。
+ * 为什么要加第四段（payload 摘要）：`ts` 只到毫秒，而同 run 同类型的两条事件落在同一
+ * 毫秒是**真实存在**的（1ms 内两次 `hook.started`、批量 `context.changed`）。三段口径
+ * 下它们会被当成一条、**后到的那条被丢掉** —— 那是吞内容，不是去重。加上 payload 摘要
+ * 之后：内容相同 ⇒ 同 id（仍然去重）；同 run/type/ts 但 payload 不同 ⇒ 不同 id
+ * （两条都留下，屏上多一张卡，而不是少一条内容）。跨源语义不变：仍按内容 id 比对，
+ * 绝不比 seq。归属字段的抹平见 `payloadForId`。
  */
 export function stableEventId(event: ReplayEvent): string {
-  return `${event.run_id ?? ''}|${event.type}|${event.ts}`;
+  return `${event.run_id ?? ''}|${event.type}|${event.ts}|${payloadDigest(payloadForId(event))}`;
 }
 
 /** 单页条数：`sessions.events` / `events.list` 的服务端硬顶都是 500。 */
@@ -181,6 +290,7 @@ export async function recoverReplay(
     traceRunsRequested: 0,
     traceRunsFetched: [],
     truncated: false,
+    sessionPageCap: false,
   };
   let cursor: ReplayCursor;
   try {
@@ -200,7 +310,9 @@ export async function recoverReplay(
   const sessionEvents: ReplayEvent[] = [];
   // 「完整走完」的判据只有一条：游标追上 `last_seq`。任何 break 出去都算不完整。
   result.sessionOk = since >= last;
+  let pages = 0;
   for (let page = 0; page < REPLAY_MAX_SESSION_PAGES && since < last; page += 1) {
+    pages += 1;
     let rows: ReplayEvent[];
     try {
       const raw = await source.fetchSessionLogSegment(since, REPLAY_PAGE_LIMIT);
@@ -225,6 +337,11 @@ export async function recoverReplay(
     if (rows.length < REPLAY_PAGE_LIMIT) break;
   }
   result.sessionEvents = sessionEvents.length;
+  // 「触顶」= 页预算用完时游标还没追上 `last_seq`。失败 / 页空 / 游标不前进都不算触顶
+  // （那些是别的原因，`truncated` 一并兜住）。
+  if (!result.sessionOk && since < last && pages >= REPLAY_MAX_SESSION_PAGES) {
+    result.sessionPageCap = true;
+  }
   if (!result.sessionOk) {
     result.truncated = true;
     sink.warn(`sessions.events incomplete (page cap or gap): covered up to ${since} of ${last}`);

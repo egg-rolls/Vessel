@@ -1755,6 +1755,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Restored details for only {runs} of {total} recent runs (event backfill hit its limit).',
   'replay.notice.failed':
     'Event log backfill is unavailable; showing only what the live stream already delivered.',
+  'replay.notice.stage1cap':
+    'Stage 1 of the event backfill (session log) hit its page cap: details older than the last {runs} runs (trace-only events) may not have been backfilled this time.',
   'gateway.error.unauthorized':
     'The token is invalid or expired; enter it again in connection settings.',
   'gateway.error.forbidden': 'This token cannot perform the operation.',

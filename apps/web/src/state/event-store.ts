@@ -33,7 +33,7 @@
  *   （与 `endBackfill` 同一个理由：更早的段往尾部追加 delta 一定错）。
  */
 
-import type { ReplayEvent } from '../gateway/replay-source';
+import { REPLAY_MAX_TRACE_RUNS, type ReplayEvent } from '../gateway/replay-source';
 import type { RunEvent } from '../gateway/types';
 import { hubTsCeiling, planSegmentMerge, type ReplaySegment } from './disk-replay';
 import type { ErrorVisibility } from './error-visibility';
@@ -153,11 +153,53 @@ export interface DiskBackfillStats {
   evicted: number;
   /** 触发过几次「页数上限先到」（尾部可能没拉全，有洞风险）。 */
   truncated: number;
+  /**
+   * **最近一次**尝试里阶段一（`sessions.events`）真的翻了几页。
+   *
+   * 与 `stage1HitCap` 一起读才有意义：页数接近 `REPLAY_MAX_SESSION_PAGES` 且没触顶 =
+   * 「再大一点就漏」，触顶 = 「这次确实没拿全」。下面四个都是**最近一次**的快照
+   * （不是累计），因为它们描述的是「这一次回填覆盖到了哪里」，累计值在这里没有语义。
+   */
+  stage1Pages: number;
+  /**
+   * 最近一次尝试里阶段一是否**触顶**（页数硬上限先到）。
+   *
+   * 为什么必须可见：阶段一只覆盖「最近那一段」，更早的 run 的 trace-only 事件要在阶段二
+   * 逐 run 拉（最多 `REPLAY_MAX_TRACE_RUNS = 3` 个 run）。一旦阶段一触顶、而本会话又
+   * 不止 3 个 run，那「早于最近 3 个 run」的那些事件**这次根本没有被请求过** —— 页面上
+   * 看起来只是「老 run 没有细节」，很容易被归成「没这问题」。所以这一位 + 一条 warn
+   * （见 `EventStore#stage1CapWarned`）是判据的一部分，不是装饰。
+   */
+  stage1HitCap: boolean;
+  /** 最近一次尝试里阶段二打算回填几个 run（`<= REPLAY_MAX_TRACE_RUNS`）。 */
+  stage2RunsRequested: number;
+  /** 最近一次尝试里阶段二真正拉到的 run 数（< requested ⇒ 已有提示语说明「细节不全」）。 */
+  stage2RunsFetched: number;
+  /**
+   * 最近一次尝试是否打出了「阶段一已触顶而且 run 数超过 3」的那条 warn（文案见
+   * `STAGE1_CAP_WARNING`）。`true` 时订阅层还会给一次 toast，别让缺口静默。
+   */
+  stage1CapWarned: boolean;
+  /** 那条 warn 的原文（`console.warn` / toast / 探针读同一份；没触发时缺省）。 */
+  stage1CapWarn?: string;
   /** 最后一次失败原因；成功则清空。**这是 fail-open 的那条可观测警告。** */
   lastError?: string;
   /** 最后一次尝试结束的时间（ms）。 */
   at?: number;
 }
+
+/**
+ * 「阶段一触顶」的 warn 文案（代码、`console.warn`、toast 共用同一份措辞）。
+ *
+ * 为什么是 run 数 > 3 才报：阶段二逐 run 的 trace 只追最新的
+ * `REPLAY_MAX_TRACE_RUNS = 3` 个 run；本会话不超过 3 个 run 时，阶段一触顶也**不影响**
+ * 「每个 run 的 trace-only 事件都有人去拉」。超过 3 个 run 才有「早于最近 3 个 run 的
+ * trace-only 事件谁也拿不到」这个真实缺口。
+ */
+export const STAGE1_CAP_WARNING = `阶段一已触顶（sessions.events 页数到上限），早于最近 ${REPLAY_MAX_TRACE_RUNS} 个 run 的 trace-only 事件可能无法回填`;
+
+/** 触发「触顶」warn 的 run 数门槛（= 阶段二 trace 的 run 上限）。 */
+export const STAGE1_CAP_RUNS = REPLAY_MAX_TRACE_RUNS;
 
 function emptyDiskBackfillStats(): DiskBackfillStats {
   return {
@@ -169,7 +211,28 @@ function emptyDiskBackfillStats(): DiskBackfillStats {
     deferred: 0,
     evicted: 0,
     truncated: 0,
+    stage1Pages: 0,
+    stage1HitCap: false,
+    stage2RunsRequested: 0,
+    stage2RunsFetched: 0,
+    stage1CapWarned: false,
   };
+}
+
+/** `noteDiskBackfill` 的入参：一次尝试的**结果元信息**（缺省 = 这一项这次不知道）。 */
+export interface DiskBackfillNote {
+  truncated?: boolean;
+  error?: string;
+  /** 阶段一翻了几页（`RecoverResult#sessionCalls`）。 */
+  stage1Pages?: number;
+  /** 阶段一是否触顶（`RecoverResult#sessionPageCap`）。 */
+  stage1HitCap?: boolean;
+  /** 阶段二想回填几个 run（`RecoverResult#traceRunsRequested`）。 */
+  stage2RunsRequested?: number;
+  /** 阶段二拉到几个 run（`RecoverResult#traceRunsFetched.length`）。 */
+  stage2RunsFetched?: number;
+  /** 本次回填属于哪个会话（用来数「本会话有几个 run」，缺省 = 不分会话地数）。 */
+  sessionId?: string;
 }
 
 /** `applyReplaySegment` 的返回：本次并入了什么（探针 / 日志用）。 */
@@ -343,21 +406,67 @@ export class EventStore {
    *
    * `lastError` 在开始时清空：它的语义是「**最近这一次**尝试没接上的原因」，不是历史
    * 累计 —— 否则一次失败会永远挂在那里，观测面就没法用来看「今天到底接上没有」。
+   * `stage1*` / `stage2*` 同理是**这一次**的快照，一起清零：上一次触顶不该被读成这一次
+   * 也触顶（那会把「这次没缺口」误判成「这次漏了」）。
    */
   beginDiskBackfillAttempt(): void {
     this.diskStats.attempts += 1;
     this.diskStats.at = Date.now();
     this.diskStats.lastError = undefined;
+    this.diskStats.stage1Pages = 0;
+    this.diskStats.stage1HitCap = false;
+    this.diskStats.stage2RunsRequested = 0;
+    this.diskStats.stage2RunsFetched = 0;
+    this.diskStats.stage1CapWarned = false;
+    this.diskStats.stage1CapWarn = undefined;
   }
 
   /**
-   * 记一次回填尝试的**结果元信息**（失败原因 / 页数上限先到），由订阅控制器在它那一层
-   * 知道「请求是失败还是截断」时调用 —— `EventStore` 不碰 RPC，只记账。
+   * 记一次回填尝试的**结果元信息**（失败原因 / 页数上限 / 阶段一触顶 / 阶段二覆盖），
+   * 由订阅控制器在它那一层知道这些（它才持有 `RecoverResult`）时调用 —— `EventStore`
+   * 不碰 RPC，只记账。
+   *
+   * 返回是否打出了「阶段一触顶」的 warn：`true` 时调用方应当给一次可读提示（toast），
+   * 别让「老 run 没有细节」被当成「没这问题」。判据见 `DiskBackfillStats#stage1HitCap`。
    */
-  noteDiskBackfill(result: { truncated?: boolean; error?: string }): void {
+  noteDiskBackfill(result: DiskBackfillNote): boolean {
     this.diskStats.at = Date.now();
     if (result.truncated === true) this.diskStats.truncated += 1;
     if (result.error !== undefined) this.diskStats.lastError = result.error;
+    if (typeof result.stage1Pages === 'number') this.diskStats.stage1Pages = result.stage1Pages;
+    if (result.stage1HitCap !== undefined) this.diskStats.stage1HitCap = result.stage1HitCap;
+    if (typeof result.stage2RunsRequested === 'number') {
+      this.diskStats.stage2RunsRequested = result.stage2RunsRequested;
+    }
+    if (typeof result.stage2RunsFetched === 'number') {
+      this.diskStats.stage2RunsFetched = result.stage2RunsFetched;
+    }
+    const runs = this.countSessionRuns(result.sessionId);
+    if (!this.diskStats.stage1HitCap || runs <= STAGE1_CAP_RUNS) return false;
+    this.diskStats.stage1CapWarned = true;
+    this.diskStats.stage1CapWarn = STAGE1_CAP_WARNING;
+    // 浏览器控制台那一份（探针 / 真机排查时的第一落点）：带够上下文，别只喊一句。
+    console.warn(
+      `${STAGE1_CAP_WARNING} [session=${result.sessionId ?? '-'} runs=${runs} stage1Pages=${this.diskStats.stage1Pages} stage2=${this.diskStats.stage2RunsFetched}/${this.diskStats.stage2RunsRequested}]`,
+    );
+    return true;
+  }
+
+  /**
+   * 本会话有几个 run（用于「阶段一触顶」那条 warn 的判据）。
+   *
+   * 口径：`entries` 里归属到该会话的**去重 run_id**（磁盘段并入时由调用方盖会话章，
+   * 环事件看自报 / 作用域）。传 `sessionId` 时只数该会话；不传 = 不分会话地数
+   * （回填本身已经按会话作用域拼好了，这里只是兜底）。
+   */
+  private countSessionRuns(sessionId?: string): number {
+    const runs = new Set<string>();
+    for (const entry of this.entries) {
+      if (entry.event.run_id === '') continue;
+      if (sessionId !== undefined && this.ownerOf(entry) !== sessionId) continue;
+      runs.add(entry.event.run_id);
+    }
+    return runs.size;
   }
 
   /**
