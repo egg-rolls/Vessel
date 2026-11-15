@@ -197,6 +197,7 @@ export const DEFAULT_TIMELINE_OPTIONS: Required<TimelineConfig> = {
   dualWrite: false,
   chunkFlushMs: 150,
   verifySampleRate: 0.01,
+  archiveIntervalMs: 5_000,
 };
 
 /** 安全默认值 */

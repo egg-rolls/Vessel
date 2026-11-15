@@ -8,7 +8,7 @@
  * 写入侧已冻结）。读路径、协议、UI 全部照旧 —— 这一阶段只证明「新链路写出来的东西和旧链路
  * 一样」，不切换任何读者。
  *
- * ## 四条硬纪律（违反任何一条都应判红，不是「注意一下」）
+ * ## 五条硬纪律（违反任何一条都应判红，不是「注意一下」）
  *
  * | # | 纪律 | 落点 |
  * | --- | --- | --- |
@@ -16,6 +16,22 @@
  * | 2 | 新链路任何失败 ⇒ 只记指标/日志 | `record()` / `endRun()` 返回 void，内部 `catch` 全吞；writer 打不开就把该会话标成 broken，不再重试 |
  * | 3 | 不改旧链路语义 | 本模块不改 `SessionEventLog`、不改 trace、不改事件流的发布顺序；`RunJournal` 在「已发布之后」才调 `record()` |
  * | 4 | 抽样不得影响 run 结果 | `verifySession()` 是纯读 + 一份 `timeline.divergence` 事件；任一步失败只记指标 |
+ * | 5 | 归档不上 publish 路径、失败只影响空间回收 | 归档（`timeline_head` 推进）走会话级串行队列 fire-and-forget：`record()` 只 `maybeArchive()` 派发，永不 await；失败 ⇒ `timeline_head` 冻结、`wal_head` 照常、**不写洞**、标 `tainted` |
+ *
+ * ## 归档调度（`timeline_head` 为什么会动）
+ *
+ * 双写只写 `wal.log` + 块，`timeline_head` 要等**归档**才前进（写入侧 `archive()` 把非 chunk
+ * 行固化进 `timeline.ndjson` 并落 manifest 指针）。不接线 ⇒ 观察期只会看到 `timeline_head`
+ * 恒为 0、`wal_head` 一直涨。三条触发路径：
+ *
+ * | 触发 | 时机 | 约束 |
+ * | --- | --- | --- |
+ * | `run_end` | `journal.close()` → `endRun()` → `finishRun()` | 一次 run 一次，不 await |
+ * | `periodic` | 每次成功 append 之后 + 一个 `unref` 的 interval 计时器 | 同一会话两次自动归档间隔 ≥ `archiveIntervalMs`（默认 5000ms） |
+ * | `explicit` | `archiveSession()`（门禁 / 运维） | 绕过节流与退避，但仍排在同一条串行队列里 |
+ *
+ * 同一会话任何时刻在飞归档数 ≤ 1（`inFlight` 闸门 + 串行链）；失败计数达到
+ * `ARCHIVE_BACKOFF_THRESHOLD`（3）后，自动归档按 100/500/2000ms 退避，成功一次即清零。
  *
  * ## 为什么在这里而不在 core
  *
@@ -80,6 +96,42 @@ export const EXIT_FLUSH_BUDGET_MS = 300;
 /** 默认抽样率（plan-054 A-2：`0.01` = 1% 的 run 结束比一次）。 */
 export const DEFAULT_VERIFY_SAMPLE_RATE = 0.01;
 
+/**
+ * 归档周期保底间隔默认值（ms；配置键 `timeline.archive_interval_ms`）。
+ *
+ * 长 run 期间 `journal.close()` 不会发生，若只靠 run 终态触发，`timeline_head` 会在整个
+ * run 期间停在 0 —— 观察期就看不到「归档真的推进」。这个间隔是**上限**（同一会话两次
+ * 自动归档之间至少隔这么久），不是「必须等这么久」。
+ */
+export const DEFAULT_ARCHIVE_INTERVAL_MS = 5_000;
+
+/** 连续归档失败达到该次数后开始退避（ADR-105 §3 I3 ③）。 */
+export const ARCHIVE_BACKOFF_THRESHOLD = 3;
+
+/** 退避阶梯（ms）：第 3 / 4 / 5+ 次连续失败后，下一次**自动**归档的最早时刻。 */
+export const ARCHIVE_BACKOFF_DELAYS_MS = [100, 500, 2_000] as const;
+
+/** 归档触发源（只用于日志/指标口径，不影响语义）。 */
+export type TimelineArchiveTrigger = 'periodic' | 'run_end' | 'explicit';
+
+/**
+ * 一次归档失败的上报体（`onArchiveFailed` 的实参）。
+ *
+ * 与写入侧 `TimelineWriterOptions.onArchiveFailed` 同源，但**多带**会话、连续失败次数与
+ * 退避时长 —— 后者只有调度侧知道。
+ */
+export interface TimelineArchiveFailure {
+  session_id: string;
+  from_seq: number;
+  to_seq: number;
+  reason: string;
+  /** 连续失败次数（含本次；成功一次即归零）。 */
+  consecutive: number;
+  /** 本次失败后加给下一次**自动**归档的退避（ms；未到阈值 ⇒ 0）。 */
+  backoff_ms: number;
+  trigger: TimelineArchiveTrigger;
+}
+
 /** 双写指标（只增不减；`record()` 内部这样记，门禁照着断言）。 */
 export interface TimelineDualWriteStats {
   /** 成功交给 writer（不保证已经落盘）。 */
@@ -94,6 +146,12 @@ export interface TimelineDualWriteStats {
   sampled_runs: number;
   /** 比出差异的 run 数（发过 `timeline.divergence`）。 */
   divergences: number;
+  /** **真的推进了指针**的归档次数（`from_seq <= to_seq`；无事可做的不计）。 */
+  archiveCount: number;
+  /** 归档失败次数（写入侧 3 次重试全部失败后才计一次 —— 只影响空间回收）。 */
+  archiveFailed: number;
+  /** 最近一次成功归档的时刻（ms；从未成功 ⇒ 0）。 */
+  lastArchiveAt: number;
 }
 
 /** 一次抽样比对的结果（门禁直接读，不做二次解释）。 */
@@ -120,6 +178,18 @@ export interface TimelineDualWriteOptions {
   chunkFlushMs?: number;
   /** 抽样率 [0,1]；缺省 0.01。`>= 1` 恒抽样，`<= 0` 从不抽样。 */
   verifySampleRate?: number;
+  /**
+   * 归档周期保底间隔（ms）；缺省 {@link DEFAULT_ARCHIVE_INTERVAL_MS}（5000）。
+   *
+   * `<= 0` ⇒ 关掉周期保底（只剩 run 终态 / 显式 `archiveSession()` 两条触发路径，
+   * 门禁要确定性时用）。
+   */
+  archiveIntervalMs?: number;
+  /**
+   * 归档失败通知（ADR-105 §3 I3 ③）。写入侧 3 次重试都失败后才发一次；
+   * 抛错被吞（通知通道坏了不能反过来影响归档调度）。
+   */
+  onArchiveFailed?: (info: TimelineArchiveFailure) => void;
   /** 发 `timeline.divergence` 的出口（装配层接 tenant 事件流；抛错被吞）。 */
   emit?: (event: RunEvent) => void;
   logger?: Logger;
@@ -147,6 +217,15 @@ export interface TimelineDualWrite {
   finishRun(sessionId: string, runId: string): Promise<TimelineVerifyResult | undefined>;
   /** flush 一个会话的 writer（尽力而为）。 */
   flushSession(sessionId: string): Promise<void>;
+  /**
+   * 显式归档一次并等它结束（门禁 / 运维入口；永不抛）。
+   *
+   * 与自动触发的关系：显式调用**绕过**周期节流与退避闸门（调用方是故意要它现在跑），
+   * 但仍走该会话的同一条串行队列 —— 同一会话任何时刻在飞归档数 ≤ 1。
+   */
+  archiveSession(sessionId: string): Promise<void>;
+  /** 等所有在飞归档落定（门禁定序用；永不抛）。 */
+  drainArchives(): Promise<void>;
   /** 关掉全部 writer（≤ `EXIT_FLUSH_BUDGET_MS`；尽力而为）。 */
   closeAll(): Promise<void>;
   /** 进程退出时 flush 一次（`beforeExit`；最多占 300ms）。 */
@@ -279,6 +358,11 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     : DEFAULT_VERIFY_SAMPLE_RATE;
   const now = options.now ?? (() => Date.now());
   const random = options.random ?? Math.random;
+  const archiveIntervalMs = (() => {
+    const raw = options.archiveIntervalMs;
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) return DEFAULT_ARCHIVE_INTERVAL_MS;
+    return Math.max(raw, 0);
+  })();
   const openWriter =
     options.openWriter ??
     ((input: { sessionId: string; sessionDir: string; chunkFlushMs: number }) =>
@@ -295,6 +379,9 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     broken_sessions: 0,
     sampled_runs: 0,
     divergences: 0,
+    archiveCount: 0,
+    archiveFailed: 0,
+    lastArchiveAt: 0,
   };
 
   /** sessionId → 打开中的 writer（打开失败时 map 里留下 `undefined`，表示已标 broken）。 */
@@ -310,6 +397,47 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   /** 已进入抽样队列的 run（`endRun` 与 `finishRun` 可能对同一 run 各调一次）。 */
   const finishedRuns = new Set<string>();
   let exitFlushInstalled = false;
+
+  /**
+   * 会话级归档调度状态（ADR-105 §3 I3 的调度侧）。
+   *
+   * `chain` 是**同一会话**的串行队列：`archive()` 只能一个一个跑，门禁 ④ 用外部计数器
+   * 断言「同一时刻在飞归档数 ≤ 1」。
+   */
+  interface ArchiveState {
+    /** 串行队列尾；每个归档都挂在它后面（前一个失败也不断链）。 */
+    chain: Promise<void>;
+    /** 当前在飞归档数（同一会话恒 ≤ 1；用来挡住排队的堆积）。 */
+    inFlight: number;
+    /** 上次**自动**派发时刻（周期节流的起点；显式调用也刷新它）。 */
+    lastDispatchAt: number;
+    /** 连续失败次数（成功一次归零）。 */
+    consecutiveFailures: number;
+    /** 退避闸门：早于该时刻**自动**归档一律跳过。 */
+    nextAllowedAt: number;
+    /** 失败之后成功过一次 ⇒ 归档污点可清除（ADR I3「保留 tainted 直到成功一次」）。 */
+    recovered: boolean;
+  }
+  const archiveStates = new Map<string, ArchiveState>();
+  /** 在飞的归档任务（`drainArchives` / `closeAll` 必须等它们）。 */
+  const archiveTasks = new Set<Promise<void>>();
+  let archiveTimer: ReturnType<typeof setInterval> | undefined;
+
+  function archiveStateOf(sessionId: string): ArchiveState {
+    let state = archiveStates.get(sessionId);
+    if (state === undefined) {
+      state = {
+        chain: Promise.resolve(),
+        inFlight: 0,
+        lastDispatchAt: 0,
+        consecutiveFailures: 0,
+        nextAllowedAt: 0,
+        recovered: false,
+      };
+      archiveStates.set(sessionId, state);
+    }
+    return state;
+  }
 
   const warn = (message: string, detail: Record<string, unknown>): void => {
     try {
@@ -328,6 +456,8 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
         await ensureTimelineMarker(sessionDir);
         const writer = await openWriter({ sessionId, sessionDir, chunkFlushMs });
         counters.sessions += 1;
+        // 周期保底：writer 出现的第一刻起开计时（长 run 期间也要有归档）。
+        ensureArchiveTimer();
         return writer;
       } catch (error) {
         counters.failed += 1;
@@ -371,6 +501,8 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
             ...(event.fencing_token !== undefined ? { fencing_token: event.fencing_token } : {}),
           });
           counters.appended += 1;
+          // 周期保底：不 await（归档永不落在 publish 路径上）。门禁 ⑥ 断言这一点。
+          maybeArchive(sessionId, 'periodic');
         } catch (error) {
           counters.failed += 1;
           warn('timeline dual-write append failed (legacy path unaffected)', {
@@ -423,6 +555,194 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
       return random() < verifySampleRate;
     } catch {
       return false;
+    }
+  }
+
+  // ---------------------------------------------------------------- archive 调度
+
+  /** 第 n 次连续失败（n ≥ 阈值）对应的退避时长；未到阈值 ⇒ 0。 */
+  function backoffFor(consecutive: number): number {
+    if (consecutive < ARCHIVE_BACKOFF_THRESHOLD) return 0;
+    const index = Math.min(
+      consecutive - ARCHIVE_BACKOFF_THRESHOLD,
+      ARCHIVE_BACKOFF_DELAYS_MS.length - 1,
+    );
+    return ARCHIVE_BACKOFF_DELAYS_MS[index] ?? ARCHIVE_BACKOFF_DELAYS_MS[0];
+  }
+
+  /** 周期保底计时器（`unref`：它只是空间回收，不是进程活着的理由）。 */
+  function ensureArchiveTimer(): void {
+    if (!enabled || archiveIntervalMs <= 0 || archiveTimer !== undefined) return;
+    if (writers.size === 0) return;
+    archiveTimer = setInterval(() => {
+      for (const sessionId of [...writers.keys()]) maybeArchive(sessionId, 'periodic');
+    }, archiveIntervalMs);
+    const handle = archiveTimer as unknown as { unref?: () => void };
+    try {
+      handle.unref?.();
+    } catch {
+      // 宿主没有 unref：计时器仍可用（最多让进程多等一个 interval）。
+    }
+  }
+
+  function stopArchiveTimer(): void {
+    if (archiveTimer === undefined) return;
+    clearInterval(archiveTimer);
+    archiveTimer = undefined;
+  }
+
+  /**
+   * **自动**触发一次归档（run 终态 / 周期保底）。同步返回，绝不 await、绝不抛。
+   *
+   * 三道闸门（顺序有讲究）：
+   * 1. 同会话已有归档在飞 ⇒ 跳过（不许排队堆积，自动降级为「有进展再试」）；
+   * 2. `periodic` 还要满足周期节流（同一会话两次自动归档间隔 ≥ `archiveIntervalMs`）；
+   * 3. 连续失败 ≥ 3 次的会话要让退避时间过去（100/500/2000ms）才允许下一次自动归档。
+   *
+   * 任何一道闸门拦住都**不是**错误：`wal_head` 照常前进，`timeline_head` 只是晚一点追上。
+   */
+  function maybeArchive(
+    sessionId: string,
+    trigger: Exclude<TimelineArchiveTrigger, 'explicit'>,
+  ): void {
+    if (!enabled || sessionId.length === 0) return;
+    try {
+      const state = archiveStateOf(sessionId);
+      if (state.inFlight > 0) return;
+      const at = now();
+      if (trigger === 'periodic') {
+        if (archiveIntervalMs <= 0) return;
+        if (state.lastDispatchAt !== 0 && at - state.lastDispatchAt < archiveIntervalMs) return;
+      }
+      if (at < state.nextAllowedAt) return;
+      state.lastDispatchAt = at;
+      void enqueueArchive(sessionId, trigger).catch(() => {
+        // `enqueueArchive` 内部已把所有失败记进 counters，这里只防未处理拒绝。
+      });
+    } catch (error) {
+      counters.archiveFailed += 1;
+      warn('timeline archive dispatch failed (space reclaim only)', {
+        session_id: sessionId,
+        trigger,
+        error: errorText(error),
+      });
+    }
+  }
+
+  /** 挂到该会话的串行归档队列尾部；返回本次归档的完成 Promise（永不 reject）。 */
+  function enqueueArchive(sessionId: string, trigger: TimelineArchiveTrigger): Promise<void> {
+    const state = archiveStateOf(sessionId);
+    const run = state.chain.then(() => runArchive(sessionId, trigger, state));
+    state.chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    archiveTasks.add(run);
+    void run.finally(() => {
+      archiveTasks.delete(run);
+    });
+    return run;
+  }
+
+  /**
+   * 真正归档一次：先把派出去的双写落定，再让写入侧 `archive()`。
+   *
+   * 失败语义严格按 ADR-105 §3 I3：`timeline_head` 不动、`wal_head` 照常、**不写洞**、
+   * 记 `archiveFailed` + 退避；`tainted` 由 `heads()` 按「失败过一次且尚未恢复」上报。
+   */
+  async function runArchive(
+    sessionId: string,
+    trigger: TimelineArchiveTrigger,
+    state: ArchiveState,
+  ): Promise<void> {
+    state.inFlight += 1;
+    try {
+      const pending = writers.get(sessionId);
+      // 没有 writer（新进程 / 只读面 / 编译期开关关）：没有可归档的内存 writer。
+      // 磁盘上的 `timeline_head` 由 `heads()` 的磁盘口径给出，不需要这里补。
+      if (pending === undefined) return;
+      const writer = await pending;
+      if (writer === undefined) return; // writer 打不开 ⇒ 已标 broken，归档也无从谈起
+      // 先等派出去的 append 落定，否则归档会漏掉刚派发的尾巴。
+      await drainInflight();
+      const result = await writer.archive();
+      if (result.ok) {
+        if (result.from_seq <= result.to_seq) {
+          counters.archiveCount += 1;
+          counters.lastArchiveAt = now();
+        }
+        if (state.consecutiveFailures > 0) state.recovered = true;
+        state.consecutiveFailures = 0;
+        state.nextAllowedAt = 0;
+        return;
+      }
+      noteArchiveFailure(sessionId, trigger, state, {
+        from_seq: result.from_seq,
+        to_seq: result.to_seq,
+        reason: result.reason ?? 'archive_failed',
+      });
+    } catch (error) {
+      // `archive()` 自己不该抛（写入侧把失败变成 ok:false）；真抛了也按失败处理。
+      noteArchiveFailure(sessionId, trigger, state, {
+        from_seq: 0,
+        to_seq: 0,
+        reason: errorText(error),
+      });
+    } finally {
+      state.inFlight -= 1;
+    }
+  }
+
+  function noteArchiveFailure(
+    sessionId: string,
+    trigger: TimelineArchiveTrigger,
+    state: ArchiveState,
+    detail: { from_seq: number; to_seq: number; reason: string },
+  ): void {
+    counters.archiveFailed += 1;
+    state.consecutiveFailures += 1;
+    // 又失败了 ⇒ 归档污点重新生效（清过的 tainted 要能再亮起来）。
+    state.recovered = false;
+    const backoff = backoffFor(state.consecutiveFailures);
+    if (backoff > 0) state.nextAllowedAt = now() + backoff;
+    const info: TimelineArchiveFailure = {
+      session_id: sessionId,
+      from_seq: detail.from_seq,
+      to_seq: detail.to_seq,
+      reason: detail.reason,
+      consecutive: state.consecutiveFailures,
+      backoff_ms: backoff,
+      trigger,
+    };
+    // 归档失败**只影响空间回收**：旧链路、publish、run 结果一律不受影响。
+    warn('timeline archive failed (space reclaim only; timeline_head frozen)', { ...info });
+    try {
+      options.onArchiveFailed?.(info);
+    } catch {
+      // 通知通道坏了不能反过来影响调度
+    }
+  }
+
+  async function archiveSession(sessionId: string): Promise<void> {
+    if (!enabled || sessionId.length === 0) return;
+    try {
+      const state = archiveStateOf(sessionId);
+      // 显式调用刷新节流起点（避免与紧随其后的自动归档重复做同一件事）。
+      state.lastDispatchAt = now();
+      await enqueueArchive(sessionId, 'explicit');
+    } catch (error) {
+      counters.archiveFailed += 1;
+      warn('timeline archive (explicit) failed (space reclaim only)', {
+        session_id: sessionId,
+        error: errorText(error),
+      });
+    }
+  }
+
+  /** 等所有在飞归档落定（不抛）。 */
+  async function drainArchives(): Promise<void> {
+    while (archiveTasks.size > 0) {
+      await Promise.allSettled([...archiveTasks]);
     }
   }
 
@@ -483,6 +803,9 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     if (finishedRuns.has(key)) return undefined;
     finishedRuns.add(key);
     await flushSession(sessionId);
+    // run 终态（journal.close / endRun）触发一次归档：不 await（fire-and-forget），
+    // 归档失败只影响空间回收 —— run 结果与旧链路都不看它。
+    maybeArchive(sessionId, 'run_end');
     if (!shouldSample()) return undefined;
     counters.sampled_runs += 1;
     let result: TimelineVerifyResult;
@@ -551,7 +874,16 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   }
 
   async function closeAll(): Promise<void> {
+    stopArchiveTimer();
     await drainInflight();
+    // 归档也是「该落的东西」：先让在飞的归档跑完（同样受 300ms 上限约束）。
+    await Promise.race([
+      drainArchives(),
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, EXIT_FLUSH_BUDGET_MS);
+        void timer;
+      }),
+    ]);
     const pending = [...writers.values()];
     writers.clear();
     if (pending.length === 0) return;
@@ -598,7 +930,7 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     if (pending !== undefined) {
       try {
         const writer = await pending;
-        if (writer !== undefined) return writer.heads();
+        if (writer !== undefined) return withArchiveTaint(sessionId, writer.heads());
       } catch {
         // 落到磁盘口径
       }
@@ -610,6 +942,28 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     }
   }
 
+  /**
+   * 把**归档污点**按 ADR I3 的口径合并进四字段：失败过且还没成功过 ⇒ `tainted=true`；
+   * 失败之后成功过一次 ⇒ 归档那一份污点清除。
+   *
+   * 为什么要在调度侧做这一层：写入侧冻结、且它的 `taintedFlag` 一旦置位就不再复位
+   * （`packages/core/src/timeline/**` 不许改）。而 I3 要求「保留 tainted 直到成功一次」——
+   * 这份「已恢复」的知识只有调度侧有。
+   *
+   * **不掩盖真正的丢失**：`holes` 非空时 `tainted` 恒为 true（洞只属于真丢失，归档不写洞）。
+   *
+   * 已知边界：重启后磁盘口径仍会看到历史 `tainted` manifest 行（写入侧不写 untaint 行），
+   * 所以「恢复后的 tainted=false」只在同一进程内成立；`timeline_head` 不回退不受影响。
+   */
+  function withArchiveTaint(sessionId: string, heads: TimelineHeads): TimelineHeads {
+    if (heads.holes.length > 0) return heads;
+    const state = archiveStates.get(sessionId);
+    if (state === undefined) return heads;
+    if (!state.recovered) return heads;
+    // 恢复过且没有洞 ⇒ 归档污点可以撤掉（真正的数据丢失只会以 holes 出现）。
+    return { ...heads, tainted: false };
+  }
+
   return {
     enabled,
     stats: () => ({ ...counters }),
@@ -617,6 +971,8 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     endRun,
     finishRun,
     flushSession,
+    archiveSession,
+    drainArchives,
     closeAll,
     installExitFlush,
     heads,
