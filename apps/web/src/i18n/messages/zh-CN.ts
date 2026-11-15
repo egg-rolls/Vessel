@@ -1168,7 +1168,8 @@ export const messages = {
   'chat.event.empty': '无载荷',
   'chat.notice.contextPressure': '上下文水位 {percent}% · {used}/{max}',
   'chat.notice.contextCompacted': '上下文压缩 · 移除 {removed} · 剩余 {remaining} · {reason}',
-  'chat.notice.contextTrimmed': '上下文裁剪 · {cleared} 条旧工具结果已换占位符 · 保留 {kept} 条',
+  'chat.notice.contextTrimmed':
+    '上下文裁剪 · 本轮新增 {added} 条（会话内累计 {cleared} 条）· 保留 {kept} 条',
   'chat.notice.limitWarning': '限额预警 · {key} {current}/{max}',
   'chat.notice.restarting': '上下文重启中 · {session} · epoch {from} → {epoch}',
   'chat.notice.restarted': '上下文已重启 · {session} · epoch {from} → {epoch}',

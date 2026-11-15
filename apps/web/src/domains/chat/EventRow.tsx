@@ -232,10 +232,13 @@ function noticeView(event: RunEvent): { tone: 'info' | 'warn' | 'danger'; text: 
       };
     }
     case 'context.cleared_tool_result': {
+      // 双口径（0.53 主题3）：`cleared` = 总数，`added` = 本轮新增（additive 字段；
+      // 旧事件没有它时退化成 0，与「这一张卡是老逻辑发的、讲不出增量」一致）。
       return {
         tone: 'info',
         text: t('chat.notice.contextTrimmed', {
           cleared: numberOf(data.cleared) ?? 0,
+          added: numberOf(data.added) ?? 0,
           kept: numberOf(data.kept) ?? 0,
         }),
       };
