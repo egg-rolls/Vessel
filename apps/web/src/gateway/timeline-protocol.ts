@@ -155,8 +155,8 @@ function holeCount(from: number, to: number, holes: readonly TimelineHoleRange[]
  * - `after > wal_head`（服务端重启 / 会话重开导致的游标作废）⇒ `reset`：从 1 重拉整段。
  * - 否则 `[after + 1, wal_head]`：**一个区间**，一次拿完（分页只在区间内部）。
  *
- * 时间不参与：ADR-105 §3.4 明文「UI 不得自行按 ts 排 / 按 ts 截断」，所以这里没有
- * `tsCeiling` 那种东西。
+ * 时间不参与：ADR-105 §3.4 明文「UI 不得自行按 ts 排 / 按 ts 截断」，所以这里没有任何
+ * 时间截断参数（那一套随三源读路径一起删除，不再有第二个入口）。
  */
 export function planBackfill(
   cursor: TimelineCursor,
