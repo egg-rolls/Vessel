@@ -1784,6 +1784,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.client.closed': 'Connection closed',
   'gateway.client.stopped': 'The gateway has stopped',
   'gateway.client.unreachable': 'Cannot reach the gateway (not started or wrong address)',
+  'timeline.gap.title': 'Timeline gap',
+  'timeline.gap.body':
+    '{range} could not be read back from the gateway (declared as a hole). The rest still renders.',
+  'timeline.gap.detail': 'expected {expected} / received {received}.',
+  'timeline.gap.notice':
+    'Event backfill failed its checks and still has a gap after one re-pull; see the banner above the timeline.',
   'replay.notice.partial':
     'Restored details for only {runs} of {total} recent runs (event backfill hit its limit).',
   'replay.notice.failed':

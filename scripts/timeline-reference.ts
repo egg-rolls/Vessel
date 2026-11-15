@@ -50,8 +50,10 @@
  *
  * **③ digest = 稳定序列化 + 双 FNV-1a 32 位**
  *
- * 直接 `import { payloadDigest }` 复用 `apps/web/src/gateway/replay-source.ts` 的现有实现
- * （对象键递归排序、`undefined`/非有限数归一、深度截断、两个独立种子并排），**不另写一套**。
+ * 本模块**自带**一份实现（对象键递归排序、`undefined`/非有限数归一、深度截断、两个独立
+ * 种子并排）。0.54 B2 之后 web 侧**不再有**内容 id 去重（ADR-105 §6：单游标 + 单 seq 空间，
+ * `apps/web/src/gateway/replay-source.ts` 整文件已删），而尺子**必须自己拿着秤** ——
+ * 它不能依赖被测实现里的辅助函数（plan-054 §1 判据 A-1 的理由就是这个）。
  *
  * **④ 「旧源不包含、但 timeline 会包含」的类型 = {@link TIMELINE_ONLY_EVENT_TYPES}**
  *
@@ -59,7 +61,65 @@
  * 常量；A-1 的差集白名单必须**恰好等于**它（不是"包含"）。
  */
 import { join } from 'node:path';
-import { payloadDigest } from '../apps/web/src/gateway/replay-source';
+
+/** 稳定 JSON：对象键**递归排序**后序列化（同一份 payload 在任何到达顺序 / 任何进程里同值）。 */
+function canonicalJson(value: unknown, depth = 0): string {
+  if (value === null || value === undefined) return 'null';
+  const kind = typeof value;
+  if (kind === 'number') return Number.isFinite(value as number) ? String(value) : 'null';
+  if (kind === 'boolean') return value === true ? 'true' : 'false';
+  if (kind === 'string') return JSON.stringify(value);
+  if (kind !== 'object') return JSON.stringify(String(value));
+  if (depth >= 12) return '"…"';
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item, depth + 1)).join(',')}]`;
+  }
+  const record = value as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const key of Object.keys(record).sort()) {
+    const item = record[key];
+    if (item === undefined) continue;
+    parts.push(`${JSON.stringify(key)}:${canonicalJson(item, depth + 1)}`);
+  }
+  return `{${parts.join(',')}}`;
+}
+
+/** 32 位 FNV-1a（轻量、无依赖；一次线性扫描）。 */
+function fnv1a32(text: string, seed: number): string {
+  let hash = seed >>> 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/** 「这条事件到底有没有 payload」：`undefined` / `null` / `{}` / `[]` 都算没有。 */
+function hasPayload(data: unknown): boolean {
+  if (data === null || data === undefined) return false;
+  if (Array.isArray(data)) return data.length > 0;
+  if (typeof data === 'object') return Object.keys(data as Record<string, unknown>).length > 0;
+  return true;
+}
+
+/**
+ * payload 摘要：`<fnv(seed1)>.<fnv(seed2)>`，两个独立 32 位散列并排（单个 32 位在「上万条
+ * 同型 payload」量级上的生日碰撞不可忽略）。
+ *
+ * `undefined` / `null` / `{}` 归一到同一个值：磁盘事件常常没有 `data`，「没有 payload」只有
+ * 一个含义。（0.54 之前这段与 web 的 `payloadDigest` 逐字相同；现在只剩这一份。）
+ */
+export function payloadDigest(data: unknown): string {
+  if (!hasPayload(data)) return '0';
+  let json: string;
+  try {
+    json = canonicalJson(data);
+  } catch {
+    // 循环引用等畸形结构：宁可「所有畸形 payload 同 id」也不要整段失败。
+    json = '!';
+  }
+  return `${fnv1a32(json, 0x811c9dc5)}.${fnv1a32(json, 0x9e3779b9)}`;
+}
 
 /**
  * 一条参考事件。**故意没有 `seq`**：三套 seq 互不映射（会话内自增 / 每 run 从 1 / 进程内全局），

@@ -29,6 +29,7 @@ import { errorMessage } from './errors';
 import { PendingStrip } from './PendingStrip';
 import { ProjectionReadbackProvider } from './projection-readback';
 import { SessionRail } from './SessionRail';
+import { TimelineGapBar } from './TimelineGapBar';
 import { TranscriptWindow } from './TranscriptWindow';
 import { ToolCatalogProvider } from './tool-catalog';
 import { useAnsweredAsks } from './useAnsweredAsks';
@@ -445,6 +446,10 @@ export function ChatView({
                 });
               }}
             />
+
+            {/* 污点条（0.54 单游标）：会话有一段事件读不回来时**只标记、不阻断** ——
+              条上给区间与期望/实收，下面的时间线照常渲染（ADR-105 §6）。 */}
+            <TimelineGapBar gap={snapshot.timelineGap} />
 
             {selectedId && (
               <PluginPanels

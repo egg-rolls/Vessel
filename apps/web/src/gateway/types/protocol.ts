@@ -52,6 +52,20 @@ export interface NodeInfo {
   };
 }
 
+/** hello 帧的时间线段（0.54 B1，ADR-105 §6；只有 `timeline_source === 'timeline'` 时给）。 */
+export interface HelloTimelineSegment {
+  start_seq: number;
+  end_seq: number;
+  count: number;
+  timeline_head: number;
+  wal_head: number;
+  /** 一定被发布过（`published_head <= wal_head`）：`(published_head, wal_head]` 允许不被推送。 */
+  published_head: number;
+  holes: { from_seq: number; to_seq: number }[];
+  tainted: boolean;
+  reset?: true;
+}
+
 /** hello 帧 */
 export interface HelloInfo {
   protocol: ProtocolInfo;
@@ -60,6 +74,12 @@ export interface HelloInfo {
   latest_seq: number;
   /** 0.24 additive：进程 incarnation；仅当前 WS 节点可读。 */
   incarnation?: string;
+  /**
+   * 0.54 B1：本 epoch 的读源。`'timeline'` ⇒ 帧带 `timeline_seq`、且 `timeline` 段一定在；
+   * `'legacy'`（回退期 / 旧订阅 / 旧服务端不发这个键）⇒ 帧带 hub seq，老行为。
+   */
+  timeline_source?: 'timeline' | 'legacy';
+  timeline?: HelloTimelineSegment;
 }
 
 /** RPC 响应信封（0.5） */
@@ -256,7 +276,12 @@ export interface GapFrame {
 
 /** 服务端帧（前端只消费用到的字段） */
 export type ServerFrame =
-  | ({ v: 1; kind: 'hello'; node_id: string; ts: number } & HelloInfo)
+  | ({
+      v: 1;
+      kind: 'hello';
+      node_id: string;
+      ts: number;
+    } & HelloInfo & { timeline_source?: 'timeline' | 'legacy'; timeline?: HelloTimelineSegment })
   | {
       v: 1;
       kind: 'event';

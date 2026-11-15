@@ -1703,6 +1703,10 @@ export const messages = {
   'gateway.client.closed': '连接已关闭',
   'gateway.client.stopped': 'gateway 已停止',
   'gateway.client.unreachable': '无法连接 gateway（未启动或地址错误）',
+  'timeline.gap.title': '时间线有缺口',
+  'timeline.gap.body': '{range} 这一段没能从服务端读回（已声明为洞）。其余内容照常显示。',
+  'timeline.gap.detail': '期望 {expected} / 实收 {received}。',
+  'timeline.gap.notice': '事件回填校验未通过，已重拉一次仍有缺口，见时间线顶部的提示条。',
   'replay.notice.partial': '仅恢复了最近 {total} 个 run 中 {runs} 个的细节（事件回填触到上限）。',
   'replay.notice.failed': '磁盘事件回填不可用，当前只显示实时流已经送到的内容。',
   'replay.notice.stage1cap':

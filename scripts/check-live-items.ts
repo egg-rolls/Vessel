@@ -59,6 +59,7 @@ import {
 import type { RunEvent } from '../apps/web/src/gateway/types';
 import type { Message } from '../apps/web/src/gateway/types/sessions';
 import { EventStore } from '../apps/web/src/state/event-store';
+import type { TimelineEvent, TimelineRangeHeader } from '../apps/web/src/gateway/timeline-protocol';
 import { groupEvents, type RunGroup, type StoredEvent } from '../apps/web/src/state/events';
 import type { ItemStoreSnapshot } from '../apps/web/src/state/live-items';
 
@@ -103,6 +104,35 @@ function rebuild(events: readonly StoredEvent[]): RunGroup[] {
 
 function feed(store: EventStore, events: readonly StoredEvent[]): void {
   for (const entry of events) store.push(entry.event, { seq: entry.seq });
+}
+
+/** `StoredEvent[]` → 区间回填的 wire 形状（`applyTimelineRange` 的入参）。 */
+function timelineEventsOf(events: readonly StoredEvent[]): TimelineEvent[] {
+  return events.map((entry) => ({
+    seq: entry.seq,
+    type: entry.event.type,
+    run_id: entry.event.run_id,
+    ts: entry.event.ts,
+    data: entry.event.data,
+  }));
+}
+
+/**
+ * 一段**声明**的区间（`applyTimelineRange` 的头部）：无洞、无 timeline 头。
+ *
+ * 这就是 0.54 单区间回填的形状 —— 测试里不需要「阶段一 / 阶段二 / 押后」，只需要一条
+ * `[start..end]` 的声明与它对应的期望条数。
+ */
+function rangeHeader(startSeq: number, endSeq: number): TimelineRangeHeader {
+  return {
+    start_seq: startSeq,
+    end_seq: endSeq,
+    count: endSeq - startSeq + 1,
+    timeline_head: endSeq,
+    wal_head: endSeq,
+    holes: [],
+    tainted: false,
+  };
 }
 
 /**
@@ -406,19 +436,17 @@ const FIXTURES: readonly Fixture[] = [
       const events = eventsOf(specs, 'r-e');
       const rebuilt = rebuild(events);
       const rebuiltItems = itemsOf(rebuilt);
-      // ① 尾部先到（更早的分页还在路上）；之后 freeze → 回填全量 → endBackfill 重折叠。
+      // ① 尾部先到（刷新时环里只有最新那一段）；之后**按声明的区间**重拉整段
+      //    `[1..N]`：区间起点早于游标 ⇒ 内部先退游标再按 seq 升序并入，最后整表重折叠。
       const store = new EventStore(0);
       feed(store, events.slice(9));
-      store.beginBackfill(0);
-      feed(store, events);
-      store.endBackfill();
+      store.applyTimelineRange(rangeHeader(1, events.length), timelineEventsOf(events));
       const afterBackfill = groupsFromStore(store);
       const mismatch = sameJson('回填后的 item 流', afterBackfill, rebuilt);
       if (mismatch !== null) return mismatch;
-      // ② 同一个 run 再被冻结 / 重折叠（环内容不变）：必须原样，不许缩回。
+      // ② 同一个 run 再被整表重折叠（环内容不变）：必须原样，不许缩回。
       const before = itemsOf(afterBackfill).length;
-      store.beginBackfill(store.currentSeq);
-      store.endBackfill();
+      store.refold();
       const after = itemsOf(groupsFromStore(store));
       if (after.length !== before) return `重折叠让 item 少了：${before} → ${after.length}`;
       const rebuiltKeys = rebuiltItems.map((item) => item.key);
@@ -444,9 +472,8 @@ const FIXTURES: readonly Fixture[] = [
       feed(store, events);
       const before = itemsOf(groupsFromStore(store)).map((item) => item.key);
       const rebuiltKeys = itemsOf(rebuild(events)).map((item) => item.key);
-      // 被迫重折叠（回填结束）：环里已经取不到更早的 notice，它们只能来自 Rule R 的保留。
-      store.beginBackfill(store.currentSeq);
-      store.endBackfill();
+      // 被迫重折叠：环里已经取不到更早的 notice，它们只能来自 Rule R 的保留。
+      store.refold();
       const after = itemsOf(groupsFromStore(store)).map((item) => item.key);
       const lost = before.filter((key) => !after.includes(key));
       if (lost.length > 0) return `回填丢失了已经上屏的 item：${lost.join(',')}`;
