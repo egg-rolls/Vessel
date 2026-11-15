@@ -34,8 +34,24 @@ export const SESSION_FILTER_FEATURE = 'events.session-filter';
 export const REPLAY_RANGE_FEATURE = 'events.replay-range';
 
 /**
- * 回填页数上限：单页最多 2000 条（服务端回放预算），环形缓冲最多 10000 条，
- * 所以 6 页足以走到缓冲最旧端。走不到就是真的取不到（更早的已被淘汰），停手。
+ * 回填页数上限。
+ *
+ * 上下界推导（改这个数之前请重算，别只改常量）：
+ * - 单页条数由服务端回放预算决定：地板 2000 条 / 1 MiB（`replay-budget.ts` 的
+ *   `MIN_EVENTS` / `MIN_BUDGET_BYTES`；范围内找不到 `run.started` / `user.message` 锚点
+ *   时整段退化为地板预算，见那里的 `floorIndex < 0` 分支），天花板 50000 条 / 8 MiB。
+ *   保守假设取地板：**单页至少 2000 条**。
+ * - 环形缓冲容量 50000 条（`event-buffer.ts#DEFAULT_MAX_HISTORY`）。
+ * - ⇒「走穿整个环」的保守上界 = ceil(50000 / 2000) = **25 页**；6 页只覆盖 12000 条，
+ *   即环的 24%。
+ * - 真实停止条件不是走穿环，而是「本 run 起点已经进来」（`hasNewestRunStart`），
+ *   所以实际需要的是「本 run 起点 → 尾部」的条数：短 run 1–2 页够；单个长请求的
+ *   chunk 峰值已到 11154 条（`docs/dev/handoff/chunk-loss-measurement.md`），多轮工具
+ *   调用的 run 必然超过 6 页。
+ *
+ * 结论：`6` 是「环 = 10000 条」时代的遗留值（当时 6 × 2000 > 10000 才成立），
+ * 0.53 把环与预算一起抬到 50000 后这里没跟着重算。上调属**行为变更**（更多 RPC 页、
+ * 更长暂存窗口、`endBackfill` 更晚），需单独立项，不在文档单内改。
  */
 const MAX_BACKFILL_PAGES = 6;
 

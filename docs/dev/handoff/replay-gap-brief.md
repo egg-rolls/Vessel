@@ -157,7 +157,7 @@ transcriptMessages ←── RPC sessions.get ──── SessionState.messages
 | # | commit（日期） | 声称修了什么 | 实际盖住 | 没盖住 |
 |---|---|---|---|---|
 | 1 | `05209aca`（11-10） | hydrate 期间不隐藏 running run；出站补 `session_id` | 隐藏行为；增量能被挂回会话 | 事件本体不在环里时仍无内容；更早区间不补 |
-| 2 | `20eba554`（11-11） | 按段回放 `until_seq` + 客户端 6 页回填，「长 run 的开头不再丢」 | 环内可回填到环起点 | 环外（提交信息自述「已知上限」）；`MAX_BACKFILL_PAGES=6` 与今天的 5 万条环已不匹配（`subscription.ts:36-40`） |
+| 2 | `20eba554`（11-11） | 按段回放 `until_seq` + 客户端 6 页回填，「长 run 的开头不再丢」 | 环内可回填到环起点 | 环外（提交信息自述「已知上限」）；`MAX_BACKFILL_PAGES=6` 与今天的 5 万条环已不匹配（推导已写进 `subscription.ts:35-55`：6 页 = 12000 条，环的 24%） |
 | 3 | `2db7a727`（11-11，WIP） | 不产 item 的流式增量不进客户端缓冲 | 客户端 per-run 额度不再被 `tool_call_delta` 吃满（`event-store.ts:266-280`） | 只动客户端缓冲；serve 环与磁盘链路未动 |
 | 4 | `c21d8c89`（11-12） | 回放预算「结构优先 + 动态」（1 MiB 固定 → clamp） | 单帧窗口变大，锚点更可能在窗口内 | 仍是**有界连续后缀**；锚点被淘汰时 `floorIndex=-1` 直接退化为最小预算（`replay-budget.ts:374-392`） |
 | 5 | `473bfc4c`（11-14） | 新增 `sessions.events` + `event_cursor`，环 1 万 → 5 万 | 服务端有了读磁盘的口（`sessions.ts:1180`） | **前端零调用**；没有「刷新后无洞」的门禁 |
@@ -219,7 +219,7 @@ transcriptMessages ←── RPC sessions.get ──── SessionState.messages
 1. 「十几个事件只剩四个」的具体成因段（环淘汰 / item 折叠 / 渲染窗口）—— 未真机核对，§1.3 给了 1 分钟探针。
 2. hub seq 与磁盘 seq 是否严格保序 —— 机制上可达不保序（chunk 同步广播 vs 落盘异步广播），影响面未评估。
 3. 会话事件日志除 `deleteSession` 外是否还有目录级 GC / 配额 —— 本 worktree 内无证据。
-4. `subscription.ts:36-40` 的注释仍按「环最多 10000 条」推导「6 页足够」；环已是 50000，未复算。
+4. ~~`subscription.ts:34-39` 的「6 页足够」是按环 10000 条推的~~ **已复算并写进注释**（`subscription.ts:35-55`）：保守上界 25 页（50000 / 2000），6 页只覆盖 12000 条（环的 24%），真实需求是「本 run 起点→尾部」的条数（单请求 chunk 峰值 11154 条已超 6 页）；上调属行为变更，待立项。
 5. §3.1 的所有数字是**环 = 1 万**时测的；抬到 5 万后未重新实测（预期「≤10 分钟不丢」，但「长 run + 并发」两档必然复发）。
 6. **子 agent 的事件是否在同一会话日志内编号** —— 决定全局 seq 要不要跨子 agent 分配；本 worktree 内未逐条核对 subagent 的事件归属。
 7. `pendingEventLogWrites`（`run-journal.ts:109`）之外，是否还有第二条「已发布但未落盘」的路径 —— 本次只核对了 `appendFact` / `appendObserved` 两个入口，未排查所有 `publish` 调用点。
@@ -238,3 +238,75 @@ transcriptMessages ←── RPC sessions.get ──── SessionState.messages
 | 未 ack 队列的今天近似物（只是 Promise 集合） | `run-journal.ts:109`、`:118-127`、`:281-290` |
 | gap 被静默处理（「页面感知不到截断」是代码注释原文） | `connection-handlers.ts:221-237`、`:231` |
 | 回放帧没有条数（只有 `from_seq` / `latest_seq`） | `gateway/frames.ts:88-99` |
+
+## 8. 附：三个 1 分钟探针（audit 直接照做，不需要改代码）
+
+**前置：定位会话事件日志。** `<data_dir>` 默认 `~/.vessel`（`packages/config/src/loader.ts:125`），日志在 `<data_dir>/sessions/<session_id>/events.ndjson`（`packages/core/src/tenant/tenant-paths.ts:79-81`）：
+
+```bash
+ls -lt ~/.vessel/sessions/ | head -5          # 最近活跃的会话目录
+export SID=<会话 id>
+export D=~/.vessel/sessions/$SID
+```
+
+### 探针 1：缺口是否落在 `D \ R`（磁盘有、环已淘汰）
+
+```bash
+wc -l $D/events.ndjson                                  # 磁盘总条数
+tail -1 $D/events.ndjson | jq -r .seq                   # 磁盘最大 seq（会话内编号）
+jq -c 'select(.type=="run.started") | {seq, run_id:.data.run_id}' $D/events.ndjson | tail -3
+```
+
+刷新**之后**在 DevTools → Network → WS → Messages 里搜 `"hello"`，读 `from_seq` / `latest_seq`（`gateway/frames.ts:88-99`）。
+
+**判定**：最新 `run.started` 的 `seq` **≤** `hello.from_seq - 1` ⇒ 本 run 的起点已被环淘汰，缺口正是 `D \ R`（§2.3 的不可恢复那一段）。若反过来（`run.started` 的 seq ≥ `from_seq`），缺口在环内，本来就该被回填补上 —— 那就是回填的 bug，不是淘汰。
+
+> ⚠️ 不要拿 `hello.latest_seq` 与磁盘 `.seq` 比大小：两个编号空间不同（§2.4 第一行）。这段对照只在**两侧都换算到会话内 seq** 时才有意义。
+
+### 探针 2：丢的是不是「本来就不产 item 的噪声」
+
+Sources 面板里对 `apps/web/src/state/event-store.ts:278`（`this.droppedNoiseCount += 1`）加 **logpoint**（右键行号 → *Add logpoint*，不改代码）：
+
+```js
+{ seq: meta.seq, type: event.type }
+```
+
+刷新一次，看命中：
+
+- 全是 `llm.stream.chunk` / `tool_call_delta` ⇒ 只在丢不可见噪声，屏上条数少是 fold 的结果（§1.3 候选 b），**不是**本 bug。
+- 出现 `run.started` / `user.message` / `tool.call.*` / `run.completed` ⇒ 真丢可见事件。
+
+### 探针 3：认领/去重是否吃掉了内容
+
+对 `apps/web/src/domains/chat/useChatTranscript.ts:568`（`claimStats: claimLedger.stats`）加 logpoint：
+
+```js
+claimLedger.stats
+```
+
+刷新一次，读 `ClaimStats` 的五个字段（定义见 `transcript-items.ts:1481-1498`）：
+
+| 字段 | 非 0 的含义 |
+|---|---|
+| `userMisses` | run 有输入，但历史里找不到可认领的同文消息 ⇒ 输入卡可能重复或被藏 |
+| `assistantMisses` | run 有输出，但一条 assistant 都没认领上 ⇒ 终态后正文有两份或让位失败 |
+| `unclaimedSegments` | 终态 run 里没让位的正文段（潜在重复渲染） |
+| `rewrittenSegments` | 按身份让位、但落盘正文 ≠ 流式原文（guardrail 打码被识别）⇒ 屏上是打码那份，**内容变了但没丢** |
+| `decisions` | 账本重判次数（粘住期间不涨；只作参照） |
+
+`unclaimedSegments` / `assistantMisses` 持续非 0 ⇒ 「少了几条」可能是 §2.4 的消息身份问题，不是 `D \ R`。
+
+### 探针 4（可选，30 秒）：磁盘水位 vs 线上水位
+
+DevTools → WS 帧里搜 `event_cursor`（`sessions.get` 的响应里就有，`sessions.ts:1142`、`:1159`；`apps/web` 今天不读它，只当证据面），记下 `event_cursor.last_seq`，与本会话事件数对账。
+
+> ⚠️ 它与 `eventStore.currentSeq`（hub seq）**不同编号空间**（§2.4）。只能比「是否单调前进」「是否等于磁盘 `.seq`」，**不能比大小** —— 要真正对账就得先有 `hub seq ↔ 磁盘 seq` 的映射，那正是 §3 表格第二行缺失的东西。
+
+### 探针结果怎么记
+
+三条探针合起来只有四种结论，请直接落到 §6 的待核实第 1 条：
+
+1. 探针 1 命中 ⇒ 环淘汰（`D \ R`），走磁盘回填那条路。
+2. 探针 1 未命中 + 探针 2 只命中共噪声 ⇒ 只是 fold，用户观感问题。
+3. 探针 1 未命中 + 探针 2 命中可见事件 ⇒ 回填/合并 bug（在前端接线单 `replay-wire` 范围内）。
+4. 探针 3 非 0 ⇒ 消息身份/认领问题，与重放链路正交。
