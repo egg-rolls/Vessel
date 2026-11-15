@@ -1447,9 +1447,12 @@ async function judgeBehaviour(): Promise<void> {
     const gatewayText = await readFile(join(REPO_ROOT, 'packages/serve/src/gateway.ts'), 'utf8');
     assertTrue(
       'C-1c⑤ gateway 把 decision.code 原样交给客户端（不换成别的码、不静默）',
-      /reject:\s*\{\s*code:\s*decision\.code/.test(gatewayText) &&
+      // 0.54 B1 过渡期把「subscribed:false + reject 对象」改成了**真 throw**
+      // `throw new RpcError(decision.code, decision.message)` —— 码照样逐字透传，而且更严格
+      // （拒绝路径不再需要调用方自己把它翻译成错误帧）。断言意图不变，只更新形状正则。
+      /throw new RpcError\(\s*decision\.code\s*,\s*decision\.message\s*\)/.test(gatewayText) &&
         /code:\s*decision\.code/.test(gatewayText),
-      'packages/serve/src/gateway.ts 里 `reject: { code: decision.code, ... }`',
+      'packages/serve/src/gateway.ts 里 `throw new RpcError(decision.code, decision.message)`',
     );
 
     // ⑥ 反向（保证断言不真空）：新格式会话的写入口必须**真的能写**
