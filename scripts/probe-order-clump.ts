@@ -40,7 +40,7 @@ import {
   isRuntimeMessageVisible,
   type RuntimeVisibility,
   runtimeMessageKind,
-} from '../apps/web/src/state/runtime-visibility';
+} from '../apps/web/src/state/runtime-kinds';
 import { windowTail } from '../apps/web/src/transcript';
 
 /** `useChatTranscript.ts` 的 `TRANSCRIPT_WINDOW`（那边是模块私有常量，这里照抄值）。 */
