@@ -4,6 +4,7 @@
   "description": "Shared presentational React UI primitives for Vessel host and plugins",
   "type": "module",
   "license": "MIT",
+  "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./styles.css": "./src/styles.css"

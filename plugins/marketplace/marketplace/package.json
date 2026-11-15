@@ -3,6 +3,7 @@
   "version": "0.53.0",
   "description": "Plugin marketplace for Vessel: browse, install and update plugins from a static GitHub registry",
   "type": "module",
+  "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts"
   },
