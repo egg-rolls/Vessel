@@ -48,7 +48,7 @@ triggers:
 
 ### 1b. 三源类型差集（直接检验外部假设 A3「落盘层只存 message/response」）
 
-同一 running 会话、同一窗口（UTC `02:51`）。`S_disk` = `events.ndjson`；`S_ring` = `events.subscribe{since:0, session_id}` 回放；`S_rpc` = 前端收到的原始事件帧 ≈ `S_ring` 子集（前端只是把 subscribe 帧 push 进 `EventStore`，没有第二来源）。
+同一 running 会话、同一窗口（UTC `02:51`）。注意这里有**两份不同的"磁盘"**：`S_session` = `sessions/<id>/events.ndjson`（会话事件日志，`sessions.events` 读它）；`S_trace` = `data/events/<run_id>.jsonl`（run trace，`events.list` 读它，见 §1d）；`S_ring` = `events.subscribe{since:0, session_id}` 回放；`S_rpc` = 前端收到的原始事件帧 ≈ `S_ring` 子集（前端只是把 subscribe 帧 push 进 `EventStore`，没有第二来源）。下表 `S_disk` 特指 `S_session`（即 `sessions.events` 的来源）。
 
 | 事件类型 | S_disk | S_ring(2000 条内) | 归属 |
 | --- | ---: | ---: | --- |
@@ -71,13 +71,33 @@ triggers:
 **结论：**
 
 1. **A3 被数据否定**：磁盘**确实**落了 `tool.call.*`（90/89）、`llm.request`（70）、`llm.stream.summary`（114）——不是「只存 message/response」。写入侧没有类型白名单把结构事件丢掉。
-2. 但存在**另一条（方向相反的）不对称**：chunk / `context.changed` / `run.checkpoint` / `hook.*` / `runtime.notice` **只在环、不在磁盘**（chunk 不落盘是 `event-log-policy` 的既有规定）。这些类型**方案 B 的磁盘回填盖不住**，重启即永久丢——这是本报告的**已知边界**，不是用户这次的「只剩 4」。
+2. 但存在**另一条不对称（修正上一版）**：chunk / `context.changed` / `run.checkpoint` / `hook.*` / `runtime.notice` **不在 session 日志**；其中 `context.changed` / `run.checkpoint` / `hook.*` / `runtime.notice` **确实落在 run trace**（`data/events/<run_id>.jsonl`，见 §1d），**只有 `llm.stream.chunk` 两处都不落**。所以「走 `sessions.events`（session 日志）回填」盖不住这些 trace-only 类型；要盖它们得走 `events.list`（run trace，逐 run）。这是修复选型的关键，不是"磁盘全缺"。
 3. 决定性的不对称：`run.started` / `user.message` / `session.created` / `prompt.system_context` 是 **disk-only 且已被环淘汰**（S_disk 有、S_ring 无、S_rpc 无）⇒ 正好落在外部分支 **step 3「回填没回退磁盘」（D1/D2）**，与主结论一致：**缺的链路是「前端读磁盘事件日志」。**
 
-### 1c. 「按全局 seq 对齐三源」今天做不到——两处结构性障碍
+### 1c. 三套 seq 空间：单一整数游标在**各自作用域**内是对的——错的是**混用**
 
-1. **两套 seq 空间**：磁盘 `events.ndjson` 的 `seq` 是**每会话单调**（1..N）；环/SSE 的 `seq` 是**进程内全局自增**（hub seq，重启归零）。两者无映射（`refresh-gap-design.md` §2.2-4）。所以外部决策树里「以全局 seq 对齐 S_disk/S_ring/S_rpc」当前无法执行：磁盘回填只能按**会话 seq** 翻页；跨源去重只能靠 `(run_id, ts, type)` 或服务端稳定 id（`input_message_id`）。方案 C（`session_seq`）正是为消除这条障碍。
-2. **前端没有「unacked（未确认落盘）」队列**：服务端有内存 append 队列与 `lastPersistedSeq`（`run-journal.ts#currentSeq` 优先用它），文件尾 `lastSeq` 只反映**已 flush** 的部分，未 flush 的在途事件只在环里；前端 store 完全没有 unacked 概念。⇒ 外部验收等式的 `unacked(本run)` 右半边**当前无法枚举，需新增**（见 §5）。
+| seq 空间 | 谁产生 | 形状 | 跨 run？ | 重启？ | 消费方 |
+| --- | --- | --- | --- | --- | --- |
+| **session 日志 seq** | `SessionEventLog`（`sessions/<id>/events.ndjson`） | 单一整数，**每会话全局单调** | **连续跨 run**（实测多 run：`run.started@[2,635]`、`[2,625,1474]`、`[2,1081,1825]`，`seq` 均 `1..N` 连续） | 持久 | `sessions.events`/`event_cursor`/消息投影 |
+| **run trace seq** | `trace-recorder`（`data/events/<run_id>.jsonl`） | 单一整数，**每 run 从 1** | **不跨 run**（每 run 独立文件；实测 1177 文件全 `starts_at_seq1`） | 持久 | `events.list`（跑 run 详情/观测） |
+| **hub/环 seq** | `SeqEventBuffer`（进程内） | 单一整数，**进程全局自增** | 跨 run（同一进程内连续） | **归零**（`nextSeq=1`） | `events.subscribe`/`until_seq`（聊天实时+回填） |
+
+**结论：单一整数不是 bug。** `sessions.events(since_seq)` 用 session 全局 seq，**跨 run 正确**；`events.list(since_seq)` 用 per-run seq，只要**按 `run_id` 作用域**也正确。「切错」只会发生在把**某个空间的 seq 当另一个空间的游标**用：例如拿 hub seq 去 `sessions.events`、或拿 session 全局 seq 去 `events.list` 跨 run。真正危险的是 **hub seq 重启归零**（B1）：前端 `until_seq` 只对本 epoch 环有效，重启后再问就是空。
+
+### 1d. 直接回应 main 真机事实（三条优先证据）
+
+**① 类型直方图差集（盘=S_session，已补 环 与 RPC）**
+
+- `S_session` / **RPC `sessions.events`**（实测，session 全局 seq）：`session.created, run.started, message.injected, user.message, prompt.system_context, llm.request, llm.stream.summary, llm.response, tool.call.started/completed, run.completed, context.cleared_tool_result`。**没有** `hook.*`/`context.changed`/`run.checkpoint`/`session.saved`/`agent.*`/`ask.*`/`runtime.notice`，**没有** chunk。
+- `S_trace`（`data/events/<run_id>.jsonl`，1177 文件，`--trace-dir` 实测）：`hook.started/completed` 各 165958、`context.changed` 103612、`run.checkpoint` 36754、`tool.call.*` 39106/39087、`llm.request/response` 35867/35806、`llm.stream.summary` 19834、`session.saved` 1774、`message.injected` 1427、`agent.*`/`ask.*`/`tool.permission.*`、`run.started/user.message/run.completed` 894/894/817、`runtime.notice` 473、`run.cancelled/failed` 42/20、`tool.call.failed` 15。**`files_with_chunk=0`**（chunk 从不落 trace）。
+- `S_ring`（实测 2000 窗口）：`llm.stream.chunk` 1910 + 最近全类型的尾巴。
+- ⇒ **A3 再否定一次**：`tool.call.*` 在 session 日志、trace、环**三处都在**。**且不存在单一"磁盘超集"**：session 日志缺 trace-only 类型，trace 缺 chunk。
+
+**② 水印形状**：`sessions.events`、`events.list`、`events.subscribe` 的 `since_seq` **全是单一整数**，差别只在**作用域**（session / run / hub，见 §1c 表）。`sessions.events` 的会话 seq 实测**跨 run 连续**，故单一游标**不是**根因；`events.list` 跨 run 必须按 `run_id` 分次；hub seq 重启归零才是隐患。
+
+**③ 一个会话两个 run**：聊天刷新**不读任何 run trace 文件**——`apps/web` 里 `events.list`/`useRunTrace` 只出现在 `RunDetailPage`（run 详情），聊天走 `events.subscribe`（环）+ `sessions.get.messages`。所以「回填了几个 run 文件」= **0**。多 run 会话由 session 日志的全局 seq 串起来（`run.started@[2,635]`），因此走 `sessions.events` 的回填**天然跨 run 正确**，无需逐 run 文件——**漏的不是"选了哪个 run 文件"，是"根本没有磁盘路径"**。
+
+> 另需注意：聊天时间线 `EventRow`/`StreamItems` 仍会渲染 `hook.*`/`context.changed`/`runtime.notice`（折叠成内部行）。这些是 **trace-only** 类型，`sessions.events` 补不回，要走 `events.list`（逐 `run_id`）。所以如果用户丢的"十几个"里混了这些内部行，方案 B 需要**两条回填**（session 日志 + trace），不是一条。
 
 ---
 
@@ -115,6 +135,7 @@ triggers:
 bun run scripts/probe-replay-gap.ts                 # 默认取最近一个 running 会话
 bun run scripts/probe-replay-gap.ts --session <id>
 bun run scripts/probe-replay-gap.ts --window --drop-prefix 200 --chunks-per-structure 7
+bun run scripts/probe-replay-gap.ts --trace-dir 'C:/Users/Lirui/.vessel/data/events'   # run trace 直方图 + per-run seq 证明
 bun run scripts/probe-replay-gap.ts --selftest
 ```
 
@@ -175,7 +196,11 @@ ring window    : kept=1280 dropped=0 droppedStructure=0 floorTruncated=false
 **根因修法（方案 B 收尾）：把前端接到磁盘事件日志上。**
 
 1. `apps/web/src/state/event-store.ts`：新增「权威帧」入口（可 `push` 带磁盘 `seq` 的帧，与现有 `push` 共用去重）。
-2. `apps/web/src/gateway/subscription.ts`：订阅 hello 后，若 `event_cursor.derived_upto_seq < last_seq`（或 `hasNewestRunStart(sessionId)` 为 false），**先调 `sessions.get` 取 `event_cursor`，再以 `since_seq = 已覆盖水位` 调 `sessions.events` 逐页补到 `latest_seq`**，与环回放共同去重；环回填仅作快速路径。
+2. `apps/web/src/gateway/subscription.ts`：订阅 hello 后，若 `event_cursor.derived_upto_seq < last_seq`（或 `hasNewestRunStart(sessionId)` 为 false）：
+   - **主回填 = session 日志**：先 `sessions.get` 取 `event_cursor`，再以 `since_seq = 已覆盖水位` 调 `sessions.events` 逐页补到 `latest_seq`。session seq 是**会话全局单调、跨 run 连续**（§1c 实测），**单个游标就够**，不需要 `(run_id, seq)` 复合游标。
+   - **补回 trace-only 类型**（`hook.*` / `context.changed` / `run.checkpoint` / `runtime.notice`… 聊天 `EventRow` 会渲染）：需要 `events.list`，按 `run_id` **逐 run** 拉（其 `seq` 是 per-run，**不能用一个 since_seq 跨 run**——否则正好踩中外部担心的"切错"）。
+   - `llm.stream.chunk` 两处磁盘都没有，**无法回填**；UI 应回落到 `llm.stream.summary` / `llm.response` 的聚合正文。
+   与环回放共同去重；环回填仅作快速路径。
 3. 去重键必须是**服务端稳定 id**（`input_message_id`），否则「补回一段」会变成「回来两条」（见 `refresh-gap-design.md` §6 的 B1–B6 阻塞项）。这部分是同一根因的另一面。
 
 **必须带的、能拦住它的可执行断言（不是加日志）：**
@@ -188,7 +213,7 @@ ring window    : kept=1280 dropped=0 droppedStructure=0 floorTruncated=false
 
 - **A4 覆盖等式（按外部验收形状，补上缺失的右半边）**：`UI.seq集 == disk(seq ≤ watermark).seq集 ∪ unacked(本run).seq集`，且 `watermark == 磁盘最大已落盘 seq`。**但 `unacked` 集合今天无人维护**：需要新增一个「入环前先入队、磁盘 ack 后才出队」的未确认队列（服务端 `lastPersistedSeq` 目前只到「已 flush 水位」，不含在途；前端无任何 unacked 概念）。在没有这个队列之前，A4 的右半边是悬空的——**把它写进修复范围，而不是拿一个凑不出的等式当绿**。
 
-**边界**：方案 B 只能补**落盘类型**（见 §1b：chunk / `context.changed` / `run.checkpoint` / `hook.*` / `runtime.notice` 只在环、磁盘没有）。要让「流式中途刷新正文也不丢」必须走方案 C（`session_seq` 持久身份）或继续放大环——不要用 A4 去要求磁盘回填它根本没有的类型。
+**边界（修正上一版）**：`context.changed` / `run.checkpoint` / `hook.*` / `runtime.notice` 在 **run trace** 有、session 日志没有（见 §1d），所以**两条回填都要做**（`sessions.events` + `events.list` 逐 run）；`llm.stream.chunk` **两处都没有**，方案 B 盖不住——要「流式中途刷新正文完全不丢」必须走方案 C（`session_seq` 持久身份）或继续放大环。不要用 A4 去要求任何日志回填 chunk。
 
 ---
 

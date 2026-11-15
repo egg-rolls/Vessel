@@ -26,6 +26,7 @@
  *   bun run scripts/probe-replay-gap.ts --session <id>
  *   bun run scripts/probe-replay-gap.ts --dir <session_dir>
  *   bun run scripts/probe-replay-gap.ts --window --drop-prefix 1 --chunks-per-structure 7
+ *   bun run scripts/probe-replay-gap.ts --trace-dir C:/Users/Lirui/.vessel/data/events
  *   bun run scripts/probe-replay-gap.ts --selftest
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -59,6 +60,7 @@ interface Argv {
   chunksPerStructure: number;
   selftest: boolean;
   json: boolean;
+  traceDir?: string;
 }
 
 // bun is the Windows build: it cannot stat /mnt/c WSL paths. Use the Windows path form.
@@ -113,6 +115,10 @@ function parseArgs(argv: string[]): Argv {
       case '--json':
         out.json = true;
         break;
+      case '--trace-dir':
+        i += 1;
+        out.traceDir = argv[i];
+        break;
       default:
         break;
     }
@@ -120,8 +126,7 @@ function parseArgs(argv: string[]): Argv {
   return out;
 }
 
-function readEvents(dir: string): DiskEvent[] {
-  const file = join(dir, 'events.ndjson');
+function readEventsFile(file: string): DiskEvent[] {
   const text = readFileSync(file, 'utf8');
   const rows: DiskEvent[] = [];
   for (const line of text.split('\n')) {
@@ -136,6 +141,10 @@ function readEvents(dir: string): DiskEvent[] {
   }
   rows.sort((a, b) => a.seq - b.seq);
   return rows;
+}
+
+function readEvents(dir: string): DiskEvent[] {
+  return readEventsFile(join(dir, 'events.ndjson'));
 }
 
 function readIndex(dir: string): IndexInfo {
@@ -358,10 +367,67 @@ function selftest(): boolean {
   return pass && wPass;
 }
 
+/**
+ * `--trace-dir` 模式：扫 run trace 目录（`data/events/<run_id>.jsonl`，每 run 一个文件）。
+ * 证明：①seq 是**每 run 从 1 开始**（不是会话全局）；②trace 里**有** hook/context.changed/
+ * run.checkpoint 但**没有** llm.stream.chunk；③它是与 `sessions.events` 不同的第二条落盘。
+ */
+function traceScan(dir: string, args: Argv): void {
+  const files = existsSync(dir)
+    ? readdirSync(dir).filter((e) => e.endsWith('.jsonl') && !e.startsWith('.'))
+    : [];
+  const agg: Record<string, number> = {};
+  let startsAtOne = 0;
+  let nonMonotonic = 0;
+  let withChunk = 0;
+  const samples: string[] = [];
+  for (const name of files) {
+    let rows: DiskEvent[] = [];
+    try {
+      rows = readEventsFile(join(dir, name));
+    } catch {
+      continue;
+    }
+    if (rows.length === 0) continue;
+    const seqs = rows.map((r) => r.seq);
+    const mono = seqs.every((s, i) => s === (seqs[0] as number) + i);
+    if (seqs[0] === 1) startsAtOne += 1;
+    if (!mono) nonMonotonic += 1;
+    let chunk = false;
+    for (const r of rows) {
+      agg[r.type] = (agg[r.type] ?? 0) + 1;
+      if (r.type === 'llm.stream.chunk') chunk = true;
+    }
+    if (chunk) withChunk += 1;
+    if (samples.length < 6) {
+      samples.push(name.slice(0, 8) + ':' + rows.length + '行 seq' + seqs[0] + '..' + seqs[seqs.length - 1] + (mono ? '' : '(非连续)'));
+    }
+  }
+  const typeList = Object.keys(agg)
+    .sort((a, b) => (agg[b] as number) - (agg[a] as number))
+    .map((t) => t + '=' + agg[t])
+    .join(', ');
+  console.log('==================== trace scan (data/events/<run_id>.jsonl) ====================');
+  console.log('files            : ' + files.length);
+  console.log('starts_at_seq1   : ' + startsAtOne + ' (per-run seq from 1 -> single session since_seq must NOT be used here)');
+  console.log('non_monotonic    : ' + nonMonotonic);
+  console.log('files_with_chunk : ' + withChunk + ' (0 => chunks are never persisted to trace)');
+  console.log('seq samples      : ' + samples.join(' | '));
+  console.log('aggregate types  : ' + typeList);
+  console.log('trace has hook? ' + (agg['hook.started'] ? 'YES' : 'NO') + '  context.changed? ' + (agg['context.changed'] ? 'YES' : 'NO') + '  run.checkpoint? ' + (agg['run.checkpoint'] ? 'YES' : 'NO') + '  chunk? ' + (agg['llm.stream.chunk'] ? 'YES' : 'NO'));
+  console.log('NOTE: this is the RUN TRACE (observability). sessions.events/event_cursor read the');
+  console.log('      SESSION log (sessions/<id>/events.ndjson, session-global seq), a different file.');
+  if (args.json) console.log(JSON.stringify({ files: files.length, agg }));
+}
+
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
   if (args.selftest) {
     process.exit(selftest() ? 0 : 1);
+  }
+  if (args.traceDir !== undefined) {
+    traceScan(args.traceDir, args);
+    return;
   }
   let dir = args.dir;
   let session = args.session ?? '';
