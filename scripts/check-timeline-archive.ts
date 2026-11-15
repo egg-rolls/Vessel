@@ -180,6 +180,9 @@ async function createScenario(options: {
         sessionId: input.sessionId,
         sessionDir: input.sessionDir,
         chunkFlushMs: input.chunkFlushMs,
+        // 自定义 openWriter 缝**必须原样转发 publish**，否则 I2「发布只能发生在 WAL 之后」会被静默绕过
+        // （pub-i2 实测发现：本门禁只验归档调度，漏转发也不会红 —— 正是最容易被后人复制走的那种隐患）。
+        ...(input.publish !== undefined ? { publish: input.publish } : {}),
         beforeSync: (kind) => {
           if (seam.failKind === kind) throw new Error(`injected_fsync_failure: ${kind}`);
         },

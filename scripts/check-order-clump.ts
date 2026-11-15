@@ -920,9 +920,20 @@ function reportReal(id: string): number {
   );
   console.log(`  开头 8 条：${kindsOf(view.items).slice(0, 8).join(' → ')}`);
   if (SHOW_SEQ) printSequence(view.items);
-  // 结构判据：截断的窗口前面不许有 item；同一 callId 不许重复；连续工具段不许跨 run /
-  // 跑到该轮第一条消息之前；跨频带折叠不许把思考并成一段并夹到末尾。
-  return ghosts + duplicates.length + clumps.length + bandReport(id);
+  // 真实数据这一段的**硬判据只保留 D1（同一 callId 出现两次）**——它没有任何合法形态。
+  // 其余三项（ghosts / 连续工具段跨 run / 跨频带折叠）都依赖**用户实时数据形状**：
+  //   · 两个 run 背靠背各打一次工具、中间没有正文/消息，是**合法**的（曾把 d813eaea 判红过一次）；
+  //   · 窗口截断位置随用户滚动而变。
+  // 拿它们当门禁的退出条件，会得到一个「用户一边用一边随机红」的门禁 —— 那种门禁最终一定被绕过。
+  // 所以它们降级为 **WARN**：照旧打印数字（人审日志时一眼能看见回归），但不决定退出码。
+  const advisory = ghosts + clumps.length + bandReport(id);
+  if (advisory > 0) {
+    console.log(
+      `  WARN 非硬判据项 ${advisory} 条（ghosts=${ghosts} 跨run连续工具段=${clumps.length} 频带折叠=${bandReport(id)}）` +
+        ' —— 依赖实时数据形状，不决定退出码；回归时请人工看这几个数字',
+    );
+  }
+  return duplicates.length;
 }
 
 function main(): void {

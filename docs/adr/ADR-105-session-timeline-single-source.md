@@ -350,6 +350,12 @@ timeline.idx/type.idx        # type 索引（可重建，§5）
 - **归档是「复制」不是「搬移」**：0.54 不删 WAL（§10 第 5 项明确「本文不授权任何 timeline 删除」），
   所以 `wal.log` **恒覆盖 `1..wal_head`**，`timeline.ndjson` **恒是前缀 `1..timeline_head`**。
   §4/§6 若读成"归档后从 WAL 移除"，以本行为准（`check-timeline-equality` A2 有对应断言）。
+- **「未发布尾部」是等式里真实存在的一小段（2026-11-15 实测，`pub-i2`）**：在 `beforeSync('wal')` 里 `exit(9)` 时，
+  那条**未 fsync 的帧可能以完整行留在页缓存并存活** ⇒ 重开后 `wal_head` 会跨过它、它也可读，
+  但它**从未被发布**；而 `publishedHead` 在 open 时被设为 `wal_head`，所以之后也不会再发。
+  ⇒ 「UI 见过的集合」= `timeline ∖ {该 seq}`。**`timeline.hello` 必须增报 `published_head`**，
+  客户端据此把 `published_head < wal_head` 的那一小段当作「允许不被推送」的尾部，**不得据此报 gap**。
+  §7 的等式与 `check-timeline-equality` 的 A1 读法需按这一条核对（A1 目前用"重连拉全量"，不受影响，但 A7 的 `count` 校验必须区分这段）。
 - **两个协议字段也仍缺（不只是门禁缺）**：`timeline.hello` 的四字段（`count/start_seq/end_seq/timeline_head/wal_head`）
   与 `events.subscribe{after_timeline_seq}` 都未落地（`gateway/frames.ts:88-99`、`gateway.ts:1606-1622`），
   全仓 `.ts` 里 `timeline_gap_reported` **0 处**。⇒ `check-timeline-equality` 的 **A7** 与 **A8②** 会报 `NOT_IMPLEMENTED`，
