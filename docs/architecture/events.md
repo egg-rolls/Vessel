@@ -138,6 +138,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `context.pressure` | internal | notice | none | live |
 | `context.compacted` | internal | notice | none | live |
 | `context.cleared_tool_result` | internal | notice | none | live |
+| `context.archive_notice` | internal | notice | none | live |
 | `context.projection_applied` | observe | — | none | live |
 | `context.projection_degraded` | observe | — | none | live |
 | `context.projection_pressure` | observe | — | none | live |
