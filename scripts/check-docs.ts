@@ -54,15 +54,26 @@ const DOC_INDEX_LINE_LIMIT = 60;
 /**
  * 有界例外：单文件行数上限覆盖（键 = `docs/architecture` 下的文件名）。
  *
- * 只有一种情况允许进这里：**该文件含一张由门禁机器解析的契约表**，拆文件会削弱
- * 那份门禁（表被搬走、对拍失效）。现在只有 `events.md`：它的「事件可见性三档表」
- * 是 `scripts/check-event-visibility.ts` 的对拍对象（`<!-- event-visibility:begin/end -->`），
- * 而表本身有 114 行事件名，压不到 110 行以内。
+ * 只有一种情况允许进这里：**该文件里有一组机器解析或互相引用的判据**，拆文件会削弱
+ * 那份门禁或割裂对拍关系（表被搬走、判据与被判据的正文明分家）。每加一项必须在本
+ * 注释里写清理由 —— 上限是「有界」的，不是取消。
  *
- * 不新增项的铁律与 `LEGACY_ADR_LINK_TARGETS` 相同：新增必须先把表拆成独立文档并
- * 让门禁跟着搬家，不要在这里加第二个文件名。
+ * - `events.md`：它的「事件可见性三档表」是 `scripts/check-event-visibility.ts` 的
+ *   对拍对象（`<!-- event-visibility:begin/end -->`），而表本身有 114 行事件名，
+ *   压不到 110 行以内。
+ * - `session-replay.md`（0.54 加入）：它是 timeline 迁移的规范面，C-5 要按单源口径
+ *   重写；「等式 → 两指针 → 判据 → 边界」四段互相引用（判据的三行直接引用等式里的
+ *   `D`/`R`/`U`，边界表逐行回指判据成立与否，§8 又回指 §3 的 `U` 为什么在 0.54 是空集）。
+ *   拆成多文件会把对拍关系割裂，读者要跳三处才能拼出同一个集合的定义，因此给到 140
+ *   —— 仍是有界上限，不是无限篇幅的通行证。
+ *
+ * 精神与 `LEGACY_ADR_LINK_TARGETS` 相同：新增必须先把能拆的都拆掉（独立表 / 独立正文），
+ * 只给**确实需要连贯叙述**的规范文件加一行；「文档写长了就来加一条」是后门，不是通道。
  */
-const ARCH_FILE_LINE_LIMIT_OVERRIDES: ReadonlyMap<string, number> = new Map([['events.md', 320]]);
+const ARCH_FILE_LINE_LIMIT_OVERRIDES: ReadonlyMap<string, number> = new Map([
+  ['events.md', 320],
+  ['session-replay.md', 140],
+]);
 
 function archLineLimit(kind: string, file: string): number {
   if (kind === 'target') return TARGET_MODULE_LINE_LIMIT;

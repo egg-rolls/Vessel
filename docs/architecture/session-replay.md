@@ -52,7 +52,9 @@ paths: [packages/serve/src/event-buffer.ts, packages/serve/src/tenant-event-hub.
 | 水印是全局单调 seq | 跨类型、跨子 agent 统一分配、可持久 | 唯一跨类型的全局计数器是 hub seq，**易失、重启归零**；磁盘 seq 是**每会话**自增，跨会话不可比。`ts` / 分类编号 / 内容 hash 都不能当水位（毫秒并列会重、hash 无序） | `event-buffer.ts:49`、`:57`；`session-event-log.ts:451-452` |
 | 两侧带计数与首尾 seq | 回放帧回报 `{from_seq, to_seq, count}` | **没有条数**。`hello` 有边界 `from_seq` / `latest_seq`，但 `from_seq` 是**窗口首条**、不是「连续区间起点」（预算跳过与环淘汰都会在区间里留洞）；也没有任何 `count` 可与实收条数核对 | `gateway/frames.ts:88-99`；`gateway.ts:1393-1404` |
 
-**为什么 `U` 是不遗漏的前提**：没有 `U` 就只能把它写成「环里那些没落盘的」，而环的淘汰顺序由**别的会话**决定（`event-buffer.ts:37-44`）⇒ 集合本身没有界定，① 右半边悬空、② 无从比对。不可枚举的集合无法断言，也无法在测试里构造反例 —— 这类 bug 就只能靠用户按 F5 去发现。**今天不满足的那一段**：`D \ R`（磁盘有、环已淘汰）**没有任何一条代码路径把它送进 UI** —— 回填只问环（`subscription.ts:286-309`），磁盘读口只到服务端为止（`sessions.ts:1180`），前端零调用。次生：`D` 与 `R` 用两个互不翻译的 seq（§5），缺共同水位，只能退回 `ts` 比较。
+**为什么 `U` 是不遗漏的前提**：没有 `U` 就只能把它写成「环里那些没落盘的」，而环的淘汰顺序由**别的会话**决定（`event-buffer.ts:37-44`）⇒ 集合本身没有界定，① 右半边悬空、② 无从比对。不可枚举的集合无法断言，也无法在测试里构造反例 —— 这类 bug 就只能靠用户按 F5 去发现。
+
+**今天不满足的那一段**：`D \ R`（磁盘有、环已淘汰）**没有任何一条代码路径把它送进 UI** —— 回填只问环（`subscription.ts:286-309`），磁盘读口只到服务端为止（`sessions.ts:1180`），前端零调用。次生：`D` 与 `R` 用两个互不翻译的 seq（§5），缺共同水位，只能退回 `ts` 比较。
 
 ## 4. 断线重连的 gap 协议
 
@@ -62,7 +64,9 @@ paths: [packages/serve/src/event-buffer.ts, packages/serve/src/tenant-event-hub.
 - 客户端察觉不到：`push` 只丢 `seq <= lastSeq`（`event-store.ts:265`），洞与重复被静默吸收；`onGap` 注释明确「静默处理，不重连、不提示。**页面感知不到截断**」（`connection-handlers.ts:221-237`），且 `gap.to_seq < currentSeq` 时直接 `return`（`:231`）。
 - 回填同样会截断而不告知：页空 / `hasNewestRunStart` / 6 页上限（`subscription.ts:286-309`）。
 
-**应有形态**：重连回放区间 `(cursor, head]`，帧上带 `{from_seq, to_seq, count}`（`count == to_seq - from_seq + 1`）；客户端**先校验连续**（收到的 seq 集合恰好等于该闭区间、无重复），通过才合并，不通过就不合并、显式报出来并按日志回填。**原则**：**环只是日志的滑动缓存，重连必须以日志为准。** 今天职责是颠倒的 —— 环是唯一回放源（`gateway.ts:1407-1412` → `hub.since`），磁盘口 `sessions.events` 无人调用（`sessions.ts:1180`），于是「回放能拿到什么」取决于别的会话挤掉了多少，而不是日志里有什么。
+**应有形态**：重连回放区间 `(cursor, head]`，帧上带 `{from_seq, to_seq, count}`（`count == to_seq - from_seq + 1`）；客户端**先校验连续**（收到的 seq 集合恰好等于该闭区间、无重复），通过才合并，不通过就不合并、显式报出来并按日志回填。
+
+**原则**：**环只是日志的滑动缓存，重连必须以日志为准。** 今天职责是颠倒的 —— 环是唯一回放源（`gateway.ts:1407-1412` → `hub.since`），磁盘口 `sessions.events` 无人调用（`sessions.ts:1180`），于是「回放能拿到什么」取决于别的会话挤掉了多少，而不是日志里有什么。
 
 ## 5. ID 与去重契约
 
