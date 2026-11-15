@@ -41,6 +41,7 @@ import {
   type PluginHost,
   projectMessages,
   type ResumeMarkerRegistryState,
+  type RunEvent,
   type RunJournalFactory,
   type RunnableAgent,
   type RunRecordStore,
@@ -76,7 +77,13 @@ import { createSessionControl, type SessionControl } from './session-control';
 import { createSessionStore } from './session-factory';
 import { withSessionWriteLock } from './session-lock-runtime';
 import { reportShutdownFailure } from './shutdown-report';
-import { createTimelineDualWrite, type TimelineDualWrite } from './timeline-dual-write';
+import {
+  createTimelineDualWrite,
+  createTimelineLegacyBroadcastGate,
+  type TimelineDualWrite,
+  type TimelineLegacyBroadcastGate,
+  type TimelinePublication,
+} from './timeline-dual-write';
 import {
   composeTraceRedactors,
   installTrace,
@@ -553,6 +560,23 @@ export async function drainActiveRuns(options: DrainActiveRunsOptions): Promise<
 }
 
 /**
+ * 把一次 timeline 发布还原成事件流里的 `RunEvent`（ADR-105 §3 I2 的新发布点）。
+ *
+ * 形状与旧链路广播的事件同形（`type` / `run_id` / `ts` / `data`）：UI 与订阅者不需要知道
+ * 这条事件是从哪条链路来的。**不写 `seq` 字段** —— `RunEvent.seq` 是 trace 的 run 内序号，
+ * timeline seq 是会话内持久序号，两者不是一套编号（ADR-105 §9 R7），混用会造出第二套 seq。
+ */
+function publicationToRunEvent(publication: TimelinePublication): RunEvent {
+  const data = publication.data;
+  return {
+    type: publication.type,
+    run_id: publication.run_id,
+    ts: publication.ts,
+    data: (data === undefined || data === null ? {} : data) as RunEvent['data'],
+  };
+}
+
+/**
  * 构造一个 tenant 的独立执行面。
  * 失败时释放本函数获取的锁；调用方负责释放传入的锁。
  */
@@ -605,7 +629,20 @@ export async function buildTenantRuntime(
   // R7：熔断按 session 分桶；owner / 成员共享同一份计数，`force` 由 core 传入。
   const summarizerForSession =
     summarizer !== undefined ? createSessionBreaker(summarizer) : undefined;
-  const events = createEventStream(config);
+  // 0.54 B（ADR-105 §3 I2 端到端）：双写开启时，旧链路的广播**降级为发送缓冲**。
+  //
+  // 顺序有讲究：闸门必须在 `events` 第一次被交出去之前包好，否则早退的订阅者会拿到
+  // 未受控的流。开关关（**默认安装路径**）⇒ 不建闸门、不包流，`events` 与今天同一个对象。
+  const timelineOptions = config.timeline ?? DEFAULT_TIMELINE_OPTIONS;
+  const writesEventLog = options.writeTrace === true && backend !== 'memory';
+  // 只有「真会装双写端口」时才装闸门：没有事件日志 / memory 后端 / 开关关 ⇒ 一个都不建。
+  const dualWriteActive = writesEventLog && timelineOptions.dualWrite === true;
+  const broadcastGate: TimelineLegacyBroadcastGate | undefined = dualWriteActive
+    ? createTimelineLegacyBroadcastGate({ logger })
+    : undefined;
+  const rawEvents = createEventStream(config);
+  const events: EventStream =
+    broadcastGate !== undefined ? broadcastGate.wrap(rawEvents) : rawEvents;
   // 0.27（spec §5.1）：每 tenant 唯一 scheduler，装配层只在此处构造。
   // 所有 body / owner / 成员的执行都经它的 executor，不再有第二套队列。
   // 未配置项沿用 core 缺省（无并发上限 / 队列 100 / per-body 串行），符合 spec §5.1「默认无上限」。
@@ -651,23 +688,26 @@ export async function buildTenantRuntime(
   });
   // 0.18：事件日志按 tenant 的 sessions 目录落盘（`sessions/<id>/events.ndjson`）。
   // 仅在本地写意图 + 持久化后端时创建；memory 后端/只读执行面保持零磁盘写入。
-  const eventLog =
-    options.writeTrace === true && backend !== 'memory'
-      ? new SessionEventLog({
-          dir: tenantPaths.sessions_dir,
-          tenantId,
-          logger,
-          // ADR-098 C2：旧 fencing token 拒绝 append；读路径不校验。
-          ...(leaseService !== undefined
-            ? { fenceOf: (kind, key) => leaseService.fenceOf(kind, key) }
-            : {}),
-        })
-      : undefined;
+  const eventLog = writesEventLog
+    ? new SessionEventLog({
+        dir: tenantPaths.sessions_dir,
+        tenantId,
+        logger,
+        // ADR-098 C2：旧 fencing token 拒绝 append；读路径不校验。
+        ...(leaseService !== undefined
+          ? { fenceOf: (kind, key) => leaseService.fenceOf(kind, key) }
+          : {}),
+      })
+    : undefined;
   // 0.54 A：会话 timeline 双写旁路（ADR-105 §11 / plan-054 A4）。
   // 开关关（默认）⇒ **不构造**：`RunJournal` 拿到的端口是 `undefined`，旁路一次都不调，
   // 旧链路逐字节不变。开关开 ⇒ 每条已落盘事件多写一份 timeline + 旧链路故意不落盘的
   // chunk 家族；新链路任何失败只记指标/日志（实现侧自吞，见 `src/timeline-dual-write.ts`）。
-  const timelineOptions = config.timeline ?? DEFAULT_TIMELINE_OPTIONS;
+  //
+  // 0.54 B（ADR-105 §3 I2）：`onPublish` 是**唯一的对外发布出口** —— 写者在 WAL/块
+  // fsync 之后才回调它，所以「UI 能看见的事件」的可见性由 timeline 的持久化决定。
+  // `publicationGate` 把旧链路那条广播扣成发送缓冲：同一条事件不会因为两条路都发而
+  // 在 UI 里出现两次（闸门放行的就是它自己那条，带完整的旧链路 payload）。
   const timelineDualWrite: TimelineDualWrite | undefined =
     eventLog !== undefined && timelineOptions.dualWrite === true
       ? createTimelineDualWrite({
@@ -685,11 +725,21 @@ export async function buildTenantRuntime(
             : {}),
           emit: (event) => {
             try {
-              events.publish(event);
+              // 观测事件直接进底层流：它永远不进 timeline，不该被发送缓冲扣一下。
+              rawEvents.publish(event);
             } catch {
               // 观测事件投递失败不得影响 run
             }
           },
+          // 发布点：写者 fsync 之后回调 ⇒ 发到**底层**事件流（不能回到闸门，否则自我循环）。
+          onPublish: (publication) => {
+            try {
+              rawEvents.publish(publicationToRunEvent(publication));
+            } catch {
+              // 发布通道失败不影响落盘（数据已 fsync；实现侧还会再兜一层指标）
+            }
+          },
+          ...(broadcastGate !== undefined ? { publicationGate: broadcastGate } : {}),
           logger,
         })
       : undefined;

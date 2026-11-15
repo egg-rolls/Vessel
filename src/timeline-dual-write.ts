@@ -14,9 +14,36 @@
  * | --- | --- | --- |
  * | 1 | 开关关 ⇒ 旁路**一次都不调**（不是「调了再丢弃」） | 装配层：`dual_write: false` 时**不装**端口（`createTimelineDualWrite` 仍可构造，但 `record` 直接返回） |
  * | 2 | 新链路任何失败 ⇒ 只记指标/日志 | `record()` / `endRun()` 返回 void，内部 `catch` 全吞；writer 打不开就把该会话标成 broken，不再重试 |
- * | 3 | 不改旧链路语义 | 本模块不改 `SessionEventLog`、不改 trace、不改事件流的发布顺序；`RunJournal` 在「已发布之后」才调 `record()` |
+ * | 3 | 不改旧链路语义（**开关关**时） | `dual_write: false` ⇒ 本模块不装闸门、不传 `publish`、不碰事件流；开关开时旧链路广播降级为发送缓冲（见下节），落盘与 seq 语义仍逐字节不变 |
  * | 4 | 抽样不得影响 run 结果 | `verifySession()` 是纯读 + 一份 `timeline.divergence` 事件；任一步失败只记指标 |
  * | 5 | 归档不上 publish 路径、失败只影响空间回收 | 归档（`timeline_head` 推进）走会话级串行队列 fire-and-forget：`record()` 只 `maybeArchive()` 派发，永不 await；失败 ⇒ `timeline_head` 冻结、`wal_head` 照常、**不写洞**、标 `tainted` |
+ *
+ * ## 发布点：ADR-105 §3 I2 的端到端接线（0.54 B）
+ *
+ * 写入侧（`packages/core/src/timeline/writer.ts#publishRecord`）只在**该 seq 的 WAL/块 fsync
+ * 返回之后**调 `publish`。本模块把它接上，于是「UI 能看见什么」由这条链路决定：
+ *
+ * ```
+ * journal.appendFact → 旧链路落盘 events.ndjson
+ *                    → 旧链路广播  ………（闸门扣住，见下）
+ *                    → 双写 record() → writer.append() → WAL fsync ✅
+ *                                                     → publish(record)
+ *                                                     → deliverPublication()
+ *                                                        ├ 闸门里有这条被扣住的广播 ⇒ 现在放出（UI 这时才看见）
+ *                                                        ├ 已被放出过一次            ⇒ 丢掉（同一条只发一次）
+ *                                                        └ 旧链路压根没广播过        ⇒ onPublish() 自己发
+ * ```
+ *
+ * 三个部件（都在本模块里，装配层只负责把 `onPublish` / `publicationGate` 接上）：
+ *
+ * | 部件 | 干什么 | 失败怎么办 |
+ * | --- | --- | --- |
+ * | `deliverPublication()` | **唯一**对外发布点：seq 严格递增 + 每条 seq 至多一次 | 订阅方抛错/拒绝一律吞掉、只记 `publishFailed` —— **绝不回滚已 fsync 的数据**（数据已持久，坏的只是「通知」） |
+ * | `createTimelineLegacyBroadcastGate()` | 把**旧链路的广播**扣成发送缓冲：事件先入队，等 fsync 之后的 `settle()` 才放出；没被双写认领的（`context.changed` / `run.checkpoint` / `plugin.*` 这类不进 timeline 的事件）在**同一 tick 的微任务**里直通 | 写者打不开 / append 失败 ⇒ 立刻放出（旧链路行为不变）；超时（{@link DEFAULT_BROADCAST_HOLD_TIMEOUT_MS}）兜底放出；退出时 `flushAll()` |
+ * | `publishedSeqs` 水位 | 每条 seq 只发一次（写入侧重开、块封块、重复回调都不许让同一条事件到 UI 两次） | —— |
+ *
+ * **开关关时这三件全不存在**：装配层不建闸门、不包事件流、不传 `onPublish`，写者也没有
+ * `publish` ⇒ 旧链路就是唯一发布者，行为与 0.53 逐字节相同（这是默认安装路径）。
  *
  * ## 归档调度（`timeline_head` 为什么会动）
  *
@@ -59,7 +86,12 @@
 
 import { mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Logger, RunEvent, TimelineDualWriteEvent } from '../packages/core/src/index';
+import type {
+  EventStream,
+  Logger,
+  RunEvent,
+  TimelineDualWriteEvent,
+} from '../packages/core/src/index';
 import { atomicWrite, encodeSessionDirName, sessionDirPath } from '../packages/core/src/index';
 import { loadIndexSnapshot } from '../packages/core/src/timeline/index';
 import {
@@ -69,6 +101,7 @@ import {
   TIMELINE_LAYOUT,
   type TimelineHeads,
   type TimelineHole,
+  type TimelineRecord,
 } from '../packages/core/src/timeline/types';
 import {
   readCrcNdjsonFile,
@@ -111,8 +144,99 @@ export const ARCHIVE_BACKOFF_THRESHOLD = 3;
 /** 退避阶梯（ms）：第 3 / 4 / 5+ 次连续失败后，下一次**自动**归档的最早时刻。 */
 export const ARCHIVE_BACKOFF_DELAYS_MS = [100, 500, 2_000] as const;
 
+/**
+ * 发送缓冲的兜底上限（ms）：旧链路的广播被闸门扣住之后，最多扣这么久。
+ *
+ * 正常情况下「扣住」只持续一次 WAL fsync（个位数毫秒；chunk 最多等到封块，ADR-105 §3 I2
+ * 给的上界是 `chunk_flush_ms + 50`）。这个常量是**故障兜底**：写者卡住、发布回调丢了、
+ * 或者某个事件永远不会进 timeline（生产者 bug）时，宁可晚一点让 UI 看见，也**不许**把旧
+ * 链路的事件扣丢。所以它是 fail-open 的定时器，不是「允许发布早于 WAL」的窗口。
+ */
+export const DEFAULT_BROADCAST_HOLD_TIMEOUT_MS = 5_000;
+
+/** 兜底扫描周期（ms）：只做「扣太久了就放出来」，不参与正常释放路径。 */
+const BROADCAST_SWEEP_INTERVAL_MS = 200;
+
+/** 「已放出过的身份」台账上限（防止长跑进程里无界增长）。 */
+const BROADCAST_LEDGER_LIMIT = 1_024;
+
 /** 归档触发源（只用于日志/指标口径，不影响语义）。 */
 export type TimelineArchiveTrigger = 'periodic' | 'run_end' | 'explicit';
+
+/**
+ * 一次**对外发布**（ADR-105 §3 I2）：这条记录所在 seq 的 WAL/块已经 fsync 返回。
+ *
+ * 它就是「UI 可以看见的事件」这一侧的形状：`seq` 是 timeline seq（会话内持久单调），
+ * `data` 与旧链路广播的内容一致（`llm.request` 的正文裁剪只发生在落盘副本上，UI 拿到的
+ * 仍是旧链路那份；见下面的闸门）。
+ */
+export interface TimelinePublication {
+  session_id: string;
+  seq: number;
+  run_id: string;
+  type: string;
+  ts: number;
+  data: unknown;
+  fencing_token?: number;
+}
+
+/** 发送缓冲闸门的指标（只增不减；全在内存，进程重启归零）。 */
+export interface TimelineBroadcastGateStats {
+  /** 当前还扣着没放出的广播条数。 */
+  held: number;
+  /** 因为「timeline 已经 fsync」或「超时/失败兜底」而放出的广播条数。 */
+  released: number;
+  /** 其中因超出 `holdTimeoutMs` 被兜底放出的条数（正常应为 0）。 */
+  timedOut: number;
+  /** 被 `settle()` 压掉的**重复**投递次数（同一条事件 UI 只该看见一次）。 */
+  dropped: number;
+}
+
+/**
+ * 发送缓冲闸门（ADR-105 §3 I2 端到端 / §6「发送缓存」的装配层形态）。
+ *
+ * 装配层拿它把 **event stream 包一层**：`publish` 进来的事件先入队，等双写旁路在
+ * **fsync 之后**调 {@link TimelineLegacyBroadcastGate.settle} 时才真正放出去。于是
+ * 「UI 什么时候看见一条事实」由 timeline 的持久化决定，而不是由旧链路的广播顺序决定。
+ *
+ * 三条不含糊的边界：
+ *
+ * 1. **只扣双写认领的事件**：`record()` 同步调 {@link TimelineLegacyBroadcastGate.claim}
+ *    把紧邻的那条广播标成「本次 timeline 拥有」。没被认领的（`context.changed` /
+ *    `run.checkpoint` / `session.saved` / `plugin.*` / ask·权限回复 …）在当前 tick 的
+ *    微任务里**直通**，行为与今天一致 —— 它们本来就不进 timeline，扣它们只会让 UI 卡住。
+ * 2. **fail-open**：写者打不开、append 失败、扣太久、进程退出 ⇒ 一律把扣住的放出去。
+ *    旧链路的事件**一条都不会因为双写坏了而消失**（ADR-105 §3 I2 只允许「晚一点看见」，
+ *    不允许「看不见」）。
+ * 3. **同一个身份只放一次**：放出去过的身份记在一张有界台账里，`settle()` 撞上第二次就
+ *    丢掉并记 `dropped` —— 这就是「同一条事件 UI 只看到一次」的落点（超时先放、fsync 后到
+ *    的那条序列也能对上）。
+ */
+export interface TimelineLegacyBroadcastGate {
+  /** 包一层事件流：只有 `publish` 走闸门，`subscribe` / `getHistory` / `waitFor` / `clear` 直通。 */
+  wrap(stream: EventStream): EventStream;
+  /**
+   * 认领「刚刚被旧链路广播的那条事件」（由 `record()` **同步**调用）。
+   *
+   * 用 `(run_id, type, ts)` 认身份：**不含 `data`** —— 落盘副本可能被裁剪
+   * （`llm.request` 的正文只留在广播那一份里），比 `data` 会把同一条事件认成两条。
+   */
+  claim(sessionId: string, event: { run_id: string; type: string; ts: number }): void;
+  /**
+   * 一条记录已 fsync 并且被发布：放行它对应的那条广播。
+   *
+   * @returns `true` = 这次发布已经由闸门完成（放出 / 压掉重复），调用方**不要**再发；
+   *          `false` = 旧链路从没广播过这条（例如 timeline 独有的 chunk），调用方自己发。
+   */
+  settle(publication: TimelinePublication): boolean;
+  /** 该事件不会再进 timeline（append 失败）：立刻放行，旧链路行为不变。 */
+  release(input: { session_id: string; run_id: string; type: string; ts: number }): void;
+  /** 该会话的 writer 打不开：放行它扣住的一切，并把会话标成 broken（此后不再认领）。 */
+  releaseSession(sessionId: string): void;
+  /** 进程退出 / 关闭：把扣住的全部放出去（尽力而为，永不抛）。 */
+  flushAll(): void;
+  stats(): TimelineBroadcastGateStats;
+}
 
 /**
  * 一次归档失败的上报体（`onArchiveFailed` 的实参）。
@@ -152,6 +276,12 @@ export interface TimelineDualWriteStats {
   archiveFailed: number;
   /** 最近一次成功归档的时刻（ms；从未成功 ⇒ 0）。 */
   lastArchiveAt: number;
+  /** 已**对外发布**的记录条数（= fsync 之后被放行的事件数；I2 端到端的计数器）。 */
+  published: number;
+  /** 被 seq 水位压掉的重复发布次数（同一条事件第二次到发布点 ⇒ 丢弃）。 */
+  publishDeduped: number;
+  /** 发布通道失败次数（`onPublish` 抛错/拒绝；数据已持久，只记不影响落盘）。 */
+  publishFailed: number;
 }
 
 /** 一次抽样比对的结果（门禁直接读，不做二次解释）。 */
@@ -192,14 +322,39 @@ export interface TimelineDualWriteOptions {
   onArchiveFailed?: (info: TimelineArchiveFailure) => void;
   /** 发 `timeline.divergence` 的出口（装配层接 tenant 事件流；抛错被吞）。 */
   emit?: (event: RunEvent) => void;
+  /**
+   * **唯一的对外发布出口**（ADR-105 §3 I2）：写者在 WAL/块 fsync 之后回调它。
+   *
+   * 装配层接成 `events.publish(...)`（见 `tenant-runtime-factory`）。约束：
+   *
+   * - 抛错 / 返回被拒绝的 Promise **一律被吞掉**（只记 `publishFailed` + 一条 warn）：
+   *   数据已经持久，坏掉的只是「通知」通道，不许因此回滚、也不许让 append 失败；
+   * - 调用时该 `seq` 已 ≤ `wal_head`（写者保证），并且每条 `seq` 至多调一次（本模块保证）。
+   */
+  onPublish?: (publication: TimelinePublication) => void | Promise<void>;
+  /**
+   * 发送缓冲闸门（可选；装配层在双写开启时装上，见 {@link TimelineLegacyBroadcastGate}）。
+   *
+   * 装了它 ⇒ 旧链路广播由闸门扣住，`onPublish` 只在「旧链路没广播过这条」时才会被调用
+   * （绝大多数事件是闸门放行旧广播，避免同一条事件出现两次）。不装 ⇒ 每条记录都走
+   * `onPublish`（门禁 / 探针的口径）。
+   */
+  publicationGate?: TimelineLegacyBroadcastGate;
   logger?: Logger;
   /** 时刻 / 随机数 / writer 构造是**测试缝**：门禁强制造差异时用，生产不传。 */
   now?: () => number;
   random?: () => number;
+  /**
+   * writer 构造缝：`publish` 由本模块传入（**不许**自己另接一条发布路径，否则 I2 就绕过了）。
+   *
+   * 自定义实现必须把它原样交给 `TimelineWriter.open({... publish})`；典型的测试缝只在
+   * `beforeSync` 上做手脚（见 `scripts/check-timeline-archive.ts`）。
+   */
   openWriter?: (options: {
     sessionId: string;
     sessionDir: string;
     chunkFlushMs: number;
+    publish: (record: TimelineRecord) => void;
   }) => Promise<TimelineWriter>;
 }
 
@@ -275,6 +430,243 @@ function errorText(error: unknown): string {
 
 function uniqueSorted(values: readonly string[]): string[] {
   return [...new Set(values)].sort();
+}
+
+/** 事件身份（旧链路广播 ↔ timeline 记录的共同键）：**不含 `data`**（落盘副本可能被裁剪）。 */
+function broadcastKeyOf(parts: { run_id: string; type: string; ts: number }): string {
+  return `${parts.run_id}\u0000${parts.type}\u0000${parts.ts}`;
+}
+
+/**
+ * 创建发送缓冲闸门（ADR-105 §3 I2 / §6「发送缓存」；装配层只在双写开启时装它）。
+ *
+ * 语义全在 {@link TimelineLegacyBroadcastGate} 的文档里，这里只写清三处实现取舍：
+ *
+ * 1. **认领靠「同一个 tick」**：`RunJournal` 是 `publishRaw(event)` 之后**同步**调
+ *    `record()` 的（`run-journal.ts:334-347`），所以「入队 → `claim()`」之间没有 await。
+ *    没被认领的入队项在**微任务**里直通 —— 于是「不归 timeline 管的事件」最多多等一个
+ *    微任务，不会因为闸门而卡住（ask / 权限回复这条链就靠它保证不被扣）。
+ * 2. **放行是 fail-open**：`releaseSession` / `release` / `flushAll` / 超时扫描一律直接把
+ *    扣住的旧广播发出去。旧链路的事件只会「晚一点」到 UI，不会消失。
+ * 3. **先放过的身份留痕**：超时兜底先放出去的条目，等它的 fsync 尾巴后到时会撞上台账，
+ *    被 `settle()` 压掉（记 `dropped`）—— 这就是「同一条事件 UI 只看到一次」。
+ */
+export function createTimelineLegacyBroadcastGate(options?: {
+  logger?: Logger;
+  /** 兜底上限（ms）；缺省 {@link DEFAULT_BROADCAST_HOLD_TIMEOUT_MS}。 */
+  holdTimeoutMs?: number;
+  now?: () => number;
+}): TimelineLegacyBroadcastGate {
+  const rawHold = options?.holdTimeoutMs;
+  const holdTimeoutMs =
+    typeof rawHold === 'number' && Number.isFinite(rawHold) && rawHold >= 0
+      ? rawHold
+      : DEFAULT_BROADCAST_HOLD_TIMEOUT_MS;
+  const now = options?.now ?? (() => Date.now());
+
+  const warn = (message: string, detail: Record<string, unknown>): void => {
+    try {
+      options?.logger?.warn(message, detail);
+    } catch {
+      // 日志通道自己炸了也不能反过来影响发布
+    }
+  };
+
+  interface HeldBroadcast {
+    event: RunEvent;
+    key: string;
+    /** 认领它的会话；`undefined` = 还没认领（微任务里直通）。 */
+    sessionId?: string;
+    at: number;
+  }
+
+  /** 扣住中的广播（FIFO；放行时可以中间抽走，跨会话的先后不作为语义）。 */
+  const queue: HeldBroadcast[] = [];
+  /** 已放出去过的身份计数（有界；`settle()` 用它压掉重复投递）。 */
+  const delivered = new Map<string, number>();
+  /** 写者打不开的会话：此后不再认领（事件直通，等价今天的旧链路）。 */
+  const brokenSessions = new Set<string>();
+  let raw: EventStream | undefined;
+  let sweepTimer: ReturnType<typeof setInterval> | undefined;
+  let flushScheduled = false;
+  let released = 0;
+  let timedOut = 0;
+  let dropped = 0;
+
+  function noteDelivered(key: string): void {
+    const next = (delivered.get(key) ?? 0) + 1;
+    delivered.delete(key);
+    delivered.set(key, next);
+    while (delivered.size > BROADCAST_LEDGER_LIMIT) {
+      const oldest = delivered.keys().next();
+      if (oldest.done === true) break;
+      delivered.delete(oldest.value);
+    }
+  }
+
+  /** 真正交给旧链路的下游（底层事件流自己会 try/catch 订阅者异常）。 */
+  function emit(event: RunEvent): void {
+    released += 1;
+    noteDelivered(broadcastKeyOf(event));
+    try {
+      raw?.publish(event);
+    } catch (error) {
+      warn('legacy broadcast forward failed', {
+        run_id: event.run_id,
+        type: event.type,
+        error: errorText(error),
+      });
+    }
+  }
+
+  function takeIndexOf(predicate: (entry: HeldBroadcast) => boolean): number {
+    for (let index = 0; index < queue.length; index += 1) {
+      const entry = queue[index];
+      if (entry !== undefined && predicate(entry)) return index;
+    }
+    return -1;
+  }
+
+  function releaseAt(index: number): boolean {
+    const entry = queue[index];
+    if (entry === undefined) return false;
+    queue.splice(index, 1);
+    emit(entry.event);
+    return true;
+  }
+
+  /** 把当前扣住的全部放出去（`clear()` / 退出路径；不停止兜底扫描）。 */
+  function releaseAllHeld(): void {
+    for (const entry of [...queue]) releaseAt(queue.indexOf(entry));
+  }
+
+  /** 微任务：把「没被双写认领」的入队项直通（不归 timeline 管的事件不能扣）。 */
+  function scheduleFlushUnclaimed(): void {
+    if (flushScheduled) return;
+    flushScheduled = true;
+    queueMicrotask(() => {
+      flushScheduled = false;
+      try {
+        for (const entry of [...queue]) {
+          if (entry.sessionId !== undefined) continue;
+          releaseAt(queue.indexOf(entry));
+        }
+      } catch (error) {
+        warn('legacy broadcast gate flush failed', { error: errorText(error) });
+      }
+    });
+  }
+
+  function ensureSweep(): void {
+    if (sweepTimer !== undefined || holdTimeoutMs <= 0) return;
+    sweepTimer = setInterval(
+      () => {
+        try {
+          const at = now();
+          for (const entry of [...queue]) {
+            if (at - entry.at < holdTimeoutMs) continue;
+            timedOut += 1;
+            releaseAt(queue.indexOf(entry));
+          }
+        } catch (error) {
+          warn('legacy broadcast gate sweep failed', { error: errorText(error) });
+        }
+      },
+      Math.max(25, Math.min(BROADCAST_SWEEP_INTERVAL_MS, holdTimeoutMs)),
+    );
+    const handle = sweepTimer as unknown as { unref?: () => void };
+    try {
+      handle.unref?.();
+    } catch {
+      // 宿主没有 unref：计时器仍可用（最多让进程多等一个周期）。
+    }
+  }
+
+  function stopSweep(): void {
+    if (sweepTimer === undefined) return;
+    clearInterval(sweepTimer);
+    sweepTimer = undefined;
+  }
+
+  const gate: TimelineLegacyBroadcastGate = {
+    wrap(stream) {
+      raw = stream;
+      ensureSweep();
+      return {
+        subscribe: (handler) => stream.subscribe(handler),
+        publish: (event) => {
+          queue.push({ event, key: broadcastKeyOf(event), at: now() });
+          scheduleFlushUnclaimed();
+        },
+        clear: () => {
+          // 「清历史」之前先把扣着的放出去：它们已经被旧链路广播过，不能因为清历史丢掉。
+          // 只放行、不停止兜底扫描 —— `clear()` 不是退出路径，闸门之后还要能兜住。
+          releaseAllHeld();
+          stream.clear();
+        },
+        getHistory: (runId) =>
+          runId === undefined ? stream.getHistory() : stream.getHistory(runId),
+        waitFor: (name, opts) => stream.waitFor(name, opts),
+      };
+    },
+
+    claim(sessionId, event) {
+      if (raw === undefined || sessionId.length === 0) return;
+      if (brokenSessions.has(sessionId)) return;
+      const key = broadcastKeyOf(event);
+      for (let index = queue.length - 1; index >= 0; index -= 1) {
+        const entry = queue[index];
+        if (entry === undefined || entry.sessionId !== undefined) continue;
+        if (entry.key !== key) continue;
+        entry.sessionId = sessionId;
+        return;
+      }
+    },
+
+    settle(publication) {
+      const key = broadcastKeyOf(publication);
+      const index = takeIndexOf((entry) => entry.sessionId !== undefined && entry.key === key);
+      if (index >= 0) {
+        // 这一次发布就是那条旧广播：现在（fsync 之后）才让 UI 看见它。
+        releaseAt(index);
+        return true;
+      }
+      const seen = delivered.get(key) ?? 0;
+      if (seen > 0) {
+        // 已经放出去过一次（超时兜底 / 直通）⇒ 压掉，同一条事件不许第二次到 UI。
+        if (seen === 1) delivered.delete(key);
+        else delivered.set(key, seen - 1);
+        dropped += 1;
+        return true;
+      }
+      return false;
+    },
+
+    release(input) {
+      const key = broadcastKeyOf(input);
+      const index = takeIndexOf((entry) => entry.sessionId !== undefined && entry.key === key);
+      if (index >= 0) releaseAt(index);
+    },
+
+    releaseSession(sessionId) {
+      brokenSessions.add(sessionId);
+      for (const entry of [...queue]) {
+        if (entry.sessionId !== sessionId) continue;
+        releaseAt(queue.indexOf(entry));
+      }
+    },
+
+    flushAll() {
+      releaseAllHeld();
+      stopSweep();
+    },
+
+    stats() {
+      return { held: queue.length, released, timedOut, dropped };
+    },
+  };
+
+  return gate;
 }
 
 /** `timeline.manifest` 里我们关心的一行（只读；写入归 core）。 */
@@ -365,11 +757,19 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   })();
   const openWriter =
     options.openWriter ??
-    ((input: { sessionId: string; sessionDir: string; chunkFlushMs: number }) =>
+    ((input: {
+      sessionId: string;
+      sessionDir: string;
+      chunkFlushMs: number;
+      publish: (record: TimelineRecord) => void;
+    }) =>
       TimelineWriter.open({
         sessionId: input.sessionId,
         sessionDir: input.sessionDir,
         chunkFlushMs: input.chunkFlushMs,
+        // ADR-105 §3 I2 的端到端接线：**必须**把发布回调交给写者。
+        // 写者只在「该 seq 的 WAL/块 fsync 返回之后」调它，所以它是唯一合规的发布点。
+        publish: input.publish,
       }));
 
   const counters: TimelineDualWriteStats = {
@@ -382,7 +782,20 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     archiveCount: 0,
     archiveFailed: 0,
     lastArchiveAt: 0,
+    published: 0,
+    publishDeduped: 0,
+    publishFailed: 0,
   };
+
+  /** 发送缓冲闸门（装配层装了才有；不装 ⇒ 每条记录直接走 `onPublish`）。 */
+  const gate = options.publicationGate;
+  /**
+   * 每个会话已发布到哪（I2 的「同一条 seq 只发一次」水位）。
+   *
+   * 写入侧本来就只在 fsync 之后、且按 seq 递增调 `publish`；这里再压一道是因为「闸门
+   * 放行」与「`onPublish` 转发」是两条路，任何一条重复调用都不许让 UI 看见两次同一 seq。
+   */
+  const publishedSeqs = new Map<string, number>();
 
   /** sessionId → 打开中的 writer（打开失败时 map 里留下 `undefined`，表示已标 broken）。 */
   const writers = new Map<string, Promise<TimelineWriter | undefined>>();
@@ -454,7 +867,12 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     const opening = (async () => {
       try {
         await ensureTimelineMarker(sessionDir);
-        const writer = await openWriter({ sessionId, sessionDir, chunkFlushMs });
+        const writer = await openWriter({
+          sessionId,
+          sessionDir,
+          chunkFlushMs,
+          publish: (record) => deliverPublication(sessionId, record),
+        });
         counters.sessions += 1;
         // 周期保底：writer 出现的第一刻起开计时（长 run 期间也要有归档）。
         ensureArchiveTimer();
@@ -466,6 +884,9 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
           session_id: sessionId,
           error: errorText(error),
         });
+        // 这个会话不会再有 timeline 发布了 ⇒ 把它扣住的旧广播立刻放出去
+        // （旧链路行为不变：UI 一条都不少，只是不再等一条永远不会来的 fsync）。
+        gate?.releaseSession(sessionId);
         return undefined;
       }
     })();
@@ -483,10 +904,84 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     return true;
   }
 
+  /**
+   * **唯一的对外发布点**（ADR-105 §3 I2）：由写者在 WAL/块 fsync 之后调用。
+   *
+   * 三件事，顺序不能换：
+   *
+   * 1. **seq 水位去重**：`seq <= 已发布` ⇒ 丢掉（记 `publishDeduped`）。同一条事件只到 UI
+   *    一次；`seq` 严格递增 ⇒ 可见顺序 = timeline seq 顺序；
+   * 2. **闸门结算**：旧链路那条广播可能正被扣着（`gate.settle()` 放它出来 = 这次发布），
+   *    或者已经放出去过（压掉，避免二次投递）；两者都不需要再发；
+   * 3. **转发给 `onPublish`**：装配层接 `events.publish`。**异常一律吞掉** —— 数据已经
+   *    fsync，坏的只是通知通道，绝不能让写者回滚或让 append 失败。
+   */
+  function deliverPublication(sessionId: string, record: TimelineRecord): void {
+    if (!enabled) return;
+    try {
+      const last = publishedSeqs.get(sessionId) ?? 0;
+      if (record.seq <= last) {
+        counters.publishDeduped += 1;
+        warn('timeline publish skipped (seq already published; UI must not see it twice)', {
+          session_id: sessionId,
+          seq: record.seq,
+          published_head: last,
+        });
+        return;
+      }
+      publishedSeqs.set(sessionId, record.seq);
+      counters.published += 1;
+      const publication: TimelinePublication = {
+        session_id: sessionId,
+        seq: record.seq,
+        run_id: record.run_id,
+        type: record.type,
+        ts: record.ts,
+        data: record.data,
+        ...(record.fencing_token !== undefined ? { fencing_token: record.fencing_token } : {}),
+      };
+      // 闸门：能放行旧链路那条广播就别再发一份（同一条事件 UI 只看到一次）。
+      if (gate?.settle(publication) === true) return;
+      const sink = options.onPublish;
+      if (sink === undefined) return;
+      try {
+        const result = sink(publication);
+        if (result !== undefined && typeof result.then === 'function') {
+          void Promise.resolve(result).catch((error: unknown) => {
+            counters.publishFailed += 1;
+            warn('timeline publish sink failed (record already durable; publication skipped)', {
+              session_id: sessionId,
+              seq: record.seq,
+              error: errorText(error),
+            });
+          });
+        }
+      } catch (error) {
+        counters.publishFailed += 1;
+        warn('timeline publish sink failed (record already durable; publication skipped)', {
+          session_id: sessionId,
+          seq: record.seq,
+          error: errorText(error),
+        });
+      }
+    } catch (error) {
+      // 发布路径上的任何意外都不许冒泡进写者（那会让已 fsync 的 append 变成失败）。
+      counters.publishFailed += 1;
+      warn('timeline publish failed (record already durable)', {
+        session_id: sessionId,
+        seq: record.seq,
+        error: errorText(error),
+      });
+    }
+  }
+
   function record(sessionId: string, event: TimelineDualWriteEvent): void {
     if (!enabled) return;
     try {
       if (sessionId.length === 0 || !shouldWrite(event)) return;
+      // 同步认领「刚刚被旧链路广播的那一条」（`RunJournal` 是 publish 之后立刻调 record 的）：
+      // 它在 fsync 之前不许出现在 UI 上，所以先扣在闸门里，等 deliverPublication() 放行。
+      gate?.claim(sessionId, event);
       const task = (async () => {
         const writer = await writerFor(sessionId);
         if (writer === undefined) return;
@@ -511,6 +1006,13 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
             type: event.type,
             error: errorText(error),
           });
+          // 这条永远不会有 fsync 后的发布 ⇒ 立刻把扣住的旧广播放出去（旧链路行为不变）。
+          gate?.release({
+            session_id: sessionId,
+            run_id: event.run_id,
+            type: event.type,
+            ts: event.ts,
+          });
         }
       })();
       inflight.add(task);
@@ -523,6 +1025,12 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
         session_id: sessionId,
         type: event.type,
         error: errorText(error),
+      });
+      gate?.release({
+        session_id: sessionId,
+        run_id: event.run_id,
+        type: event.type,
+        ts: event.ts,
       });
     }
   }
@@ -886,7 +1394,10 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     ]);
     const pending = [...writers.values()];
     writers.clear();
-    if (pending.length === 0) return;
+    if (pending.length === 0) {
+      gate?.flushAll();
+      return;
+    }
     const closing = Promise.all(
       pending.map(async (entry) => {
         try {
@@ -906,6 +1417,9 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
         void timer;
       }),
     ]);
+    // 退出前把闸门里剩下的放出去（writer.close() 会 flush 掉活动块，绝大多数已经放行过了；
+    // 剩下的要么是坏会话、要么超时兜底 —— 一条都不许因为双写坏掉而从 UI 消失）。
+    gate?.flushAll();
   }
 
   function installExitFlush(target: NodeJS.Process = process): void {
