@@ -376,6 +376,14 @@ export interface SessionEventCursor {
    */
   timeline_head?: number;
   wal_head?: number;
+  /**
+   * 0.54 pub-i2：**一定被发布过**的最大 seq（`published_head <= wal_head`）。
+   *
+   * 与 `timeline.hello.published_head` 同一字段、同一口径：`(published_head, wal_head]`
+   * 是「可读但从未发布」的崩溃窗口尾部，**不是**洞。装配层不透传时按 `wal_head` 兜底
+   * （= 没有未发布尾部）。它只会随 `wal_head` 出现，不单独出现。
+   */
+  published_head?: number;
   holes?: SessionTimelineHoleRange[];
   tainted?: boolean;
 }
@@ -827,14 +835,19 @@ function normalizeEventCursor(raw: SessionEventCursor | undefined): SessionEvent
 }
 
 /**
- * timeline 四字段的收敛（0.54 A）：**四个一起收或一起丢**，且非法值一律不猜。
+ * timeline 四字段 + `published_head` 的收敛（0.54 A / pub-i2）：**一起收或一起丢**，
+ * 且非法值一律不猜。
  *
- * `0 ≤ timeline_head ≤ wal_head` 是写入侧不变量（ADR-105 I4）；读侧不合它说明端口
- * 给错了东西（不是数据坏了），整组字段缺省比报一对矛盾数字更安全。
+ * 不变量：`0 ≤ timeline_head ≤ published_head ≤ wal_head`（写入侧
+ * `timeline_head ≤ wal_head`、`published ≤ wal_head`；`published_head` 缺省时按
+ * `wal_head` 兜底 = 没有未发布尾部）。读侧不合它说明端口给错了东西（不是数据坏了），
+ * 整组字段缺省比报一对矛盾数字更安全。
  */
 function normalizeTimelineHeads(
   raw: SessionEventCursor,
-): Pick<SessionEventCursor, 'timeline_head' | 'wal_head' | 'holes' | 'tainted'> | undefined {
+):
+  | Pick<SessionEventCursor, 'timeline_head' | 'wal_head' | 'published_head' | 'holes' | 'tainted'>
+  | undefined {
   const timelineHead = optionalNumber(raw.timeline_head);
   const walHead = optionalNumber(raw.wal_head);
   const tainted = raw.tainted;
@@ -844,6 +857,10 @@ function normalizeTimelineHeads(
   }
   if (!Array.isArray(holes)) return undefined;
   if (timelineHead < 0 || walHead < 0 || timelineHead > walHead) return undefined;
+  // pub-i2：`published_head` 缺省 = `wal_head`（装配层没透传 ⇒ 没有未发布尾部）。
+  const publishedRaw = optionalNumber(raw.published_head);
+  const publishedHead = publishedRaw === undefined ? walHead : publishedRaw;
+  if (publishedHead < 0 || publishedHead > walHead) return undefined;
   const ranges: SessionTimelineHoleRange[] = [];
   for (const hole of holes) {
     if (!isRecord(hole)) return undefined;
@@ -855,6 +872,7 @@ function normalizeTimelineHeads(
   return {
     timeline_head: Math.floor(timelineHead),
     wal_head: Math.floor(walHead),
+    published_head: Math.floor(publishedHead),
     holes: ranges,
     tainted,
   };
@@ -1281,6 +1299,11 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
             : {
                 timeline_head: timeline.timeline_head,
                 wal_head: timeline.wal_head,
+                // 0.54 pub-i2：未发布尾部（`published_head <= wal_head`）。
+                // 与 `timeline.hello` **同一个字段、同一口径**：缺省时按 `wal_head` 兜底
+                // （= 该装配没有未发布尾部；core 自己在 open 时也是
+                // `this.published = this.walHead`，writer.ts:486）。
+                published_head: timeline.published_head ?? timeline.wal_head,
                 holes: timeline.holes.map((hole) => ({
                   from_seq: hole.from_seq,
                   to_seq: hole.to_seq,

@@ -127,6 +127,9 @@ import {
   type LocalMemberTarget,
 } from './team-human-delivery';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
+// 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
+// 只有双写开关开时才有 `timelineDualWrite`，此时才传；关闭路径与 0.53 逐字节相同。
+import { timelineTailPort } from './timeline-dual-write';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
@@ -1735,13 +1738,23 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         }
       : {}),
     // 0.54 A：timeline 四字段（additive `sessions.get.event_cursor` 的 `timeline_head` /
-    // `wal_head` / `holes` / `tainted`）。双写开关关 / 该会话没有 timeline ⇒ 一起缺省。
+    // `wal_head` / `published_head` / `holes` / `tainted`）。双写开关关 / 该会话没有
+    // timeline ⇒ 一起缺省。
     ...(bundle.timelineDualWrite !== undefined
       ? {
           timelineHeads: {
             lookup: (sessionId: string) =>
               bundle.timelineDualWrite?.heads(sessionId) ?? Promise.resolve(undefined),
           },
+          // 0.54 B1：时间线 epoch 的两个端口。`readPage` 是历史页，`timelineTail` 是
+          // 发布点实时尾随（`pub-i2` 的 `onPublish` 扇出；serve 按连接的 session_id 过滤）。
+          timelineRead: {
+            readPage: (
+              sessionId: string,
+              options: { afterSeq: number; untilSeq?: number; limit?: number },
+            ) => bundle.timelineDualWrite?.readPage(sessionId, options) ?? Promise.resolve([]),
+          },
+          timelineTail: timelineTailPort(bundle.timelineDualWrite),
         }
       : {}),
     pluginHostManager: localPluginHostManager,

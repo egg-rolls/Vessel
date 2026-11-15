@@ -70,6 +70,7 @@ import {
   type TimelineHelloSegment,
   type TimelineReadFrom,
   type TimelineReadPort,
+  type TimelineTailPort,
   type TimelineWireEvent,
   timelineHello,
 } from './gateway/timeline-protocol.js';
@@ -384,6 +385,17 @@ export interface GatewayOptions {
    * 两套 seq（进程级 hub seq / 会话 timeline_seq）混进一个游标就是 ADR-105 §9 R7 的事。
    */
   timelineRead?: TimelineReadPort;
+  /**
+   * 时间线**实时尾随**端口（0.54 B1 末块，asm 注入 `timelineTailPort(dualWrite)`）。
+   *
+   * 时间线 epoch 建好历史页之后，新写入的事件从这条来：发布点在写者 fsync 之后逐条扇出，
+   * `seq` 就是 `timeline_seq`（ADR-105 §9 R7：不另造编号），**不重发历史页**
+   * （排他游标 `ws.data.afterTimeline` 兜住重叠）。
+   *
+   * 缺省 ⇒ 时间线 epoch 只有历史页、没有实时尾，`timeline.cursor` 能力位仍可报
+   * （它只承诺历史页 + 声明字段），但客户端不应期待「新事件立刻到」。
+   */
+  timelineTail?: TimelineTailPort;
   /**
    * 切读开关（0.54 B1，**装配层读一次**，ADR-104 D7：core 是库，不读环境变量）。
    *
@@ -1650,6 +1662,28 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   /**
+   * 时间线 epoch 的**实时尾随**一帧（0.54 B1 末块）。
+   *
+   * 四条过滤/约束，每条都对应一个已实测的口径：
+   * 1. `timelineEpoch !== true` ⇒ 不要（老 epoch 的连接在收环形广播，两套 seq 不许混）；
+   * 2. `session_id` 不匹配 ⇒ 不要（发布点是**进程/租户级**扇出，不是按会话的）；
+   * 3. `seq <= afterTimeline` ⇒ 不要（排他游标：历史页已经发过的绝不重发，端口也不做
+   *    游标过滤 —— 那是连接自己的账）；
+   * 4. 背压拒收 ⇒ 停在这一条、**不推进游标**（与历史页同一处理：宁可丢这一帧让客户端
+   *    按 `count` 发现并报 `timeline.gap_reported`，也不能把游标推过去装作发过）。
+   *
+   * **尾随帧不改本 epoch 的 `start_seq` / `end_seq` / `count` 声明**：那三个数是历史页
+   * 那一段的账，区间外的帧客户端不计入期望（`pub-i2` 实测口径）。
+   */
+  function sendTimelineTailFrame(ws: Ws, record: TimelineWireEvent & { session_id: string }): void {
+    if (ws.data.timelineEpoch !== true) return;
+    if (record.session_id !== ws.data.sessionId) return;
+    if (record.seq <= (ws.data.afterTimeline ?? 0)) return;
+    if (!sendFrame(ws, timelineEventFrame(record))) return;
+    ws.data.afterTimeline = record.seq;
+  }
+
+  /**
    * 订阅 hub 的脱敏 / 裁剪后事件（0.18）：agent registry → 广播。
    * 序号由 hub 分配，回放与实时读同一份副本。
    */
@@ -1659,6 +1693,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
     rememberEventSession(safeEvent);
     agentRegistry.ingest(safeEvent);
     broadcastEvent(item);
+  });
+
+  /**
+   * 时间线 epoch 的实时尾随（0.54 B1 末块）：与 hub 订阅同一层订阅一次，
+   * 进程级扇出 → 逐个连接按自己的 `session_id` / 排他游标过滤。
+   *
+   * 与 hub 那条**并存**、互不影响：老 epoch 走 `broadcastEvent`（环形 seq），
+   * 时间线 epoch 走这里（`timeline_seq`），一个连接只会吃到其中一路
+   * （`sendEventToWs` 与 `sendTimelineTailFrame` 各自短路对方）。
+   */
+  const unsubscribeTimelineTail = opts.timelineTail?.((record) => {
+    for (const ws of [...wsClients]) sendTimelineTailFrame(ws, record);
   });
 
   // ── 运行快照（只读控制面）─────────────────────
@@ -3814,6 +3860,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
       unsubscribe();
     } catch (error) {
       reportStopError('unsubscribe events', error);
+    }
+    try {
+      unsubscribeTimelineTail?.();
+    } catch (error) {
+      reportStopError('unsubscribe timeline tail', error);
     }
     try {
       unsubscribeInteractions();

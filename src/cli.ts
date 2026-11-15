@@ -139,6 +139,8 @@ import {
 import { resolveContinueSessionId, resumeSession, runSessionList } from './session-resume';
 import { shutdownServeStack } from './shutdown-sequence';
 import { createSystemContextSource } from './system-context';
+// 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
+import { timelineTailPort } from './timeline-dual-write';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
@@ -1298,14 +1300,24 @@ async function runWithConfig(result: BootstrapResult) {
           }
         : {}),
       // 0.54 A：timeline 四字段（additive `sessions.get.event_cursor` 的
-      // `timeline_head` / `wal_head` / `holes` / `tainted`）。只有双写开关开、且该会话
-      // 真有 timeline 时才给；缺省 ⇒ 四个字段一起缺省（不报假零）。
+      // `timeline_head` / `wal_head` / `published_head` / `holes` / `tainted`）。只有双写
+      // 开关开、且该会话真有 timeline 时才给；缺省 ⇒ 一起缺省（不报假零）。
       ...(gatewayBundle.timelineDualWrite !== undefined
         ? {
             timelineHeads: {
               lookup: (sessionId: string) =>
                 gatewayBundle.timelineDualWrite?.heads(sessionId) ?? Promise.resolve(undefined),
             },
+            // 0.54 B1：时间线 epoch 的两个端口（历史页 + 发布点实时尾随）。
+            timelineRead: {
+              readPage: (
+                sessionId: string,
+                options: { afterSeq: number; untilSeq?: number; limit?: number },
+              ) =>
+                gatewayBundle.timelineDualWrite?.readPage(sessionId, options) ??
+                Promise.resolve([]),
+            },
+            timelineTail: timelineTailPort(gatewayBundle.timelineDualWrite),
           }
         : {}),
       metricsControl: {
