@@ -15,6 +15,7 @@ import type {
   PluginHttpLimitsConfig,
   SchedulerConfig,
   ServeConfig,
+  TimelineConfig,
   TraceConfig,
   TransportConfig,
   VesselConfig,
@@ -181,6 +182,21 @@ export const DEFAULT_TRACE_OPTIONS: Required<TraceConfig> = {
   maxRuns: 1000,
   maxBytes: 1073741824,
   includeStreamChunks: false,
+};
+
+/**
+ * 0.54 A：会话 timeline 双写默认值（ADR-105 §11 / plan-054 A4）。
+ *
+ * 不写入 DEFAULT_CONFIG：未配置 `timeline` 时按这些值消费 —— 也就是**开关关**，
+ * 旁路一次都不调，旧链路逐字节不变。
+ *
+ * `chunkFlushMs` 的 150 与写入侧常量 `CHUNK_FLUSH_MS` 同值（写入侧也有 clamp 兜底，
+ * 这里给默认值只是让装配层不必判断「配了没配」）。
+ */
+export const DEFAULT_TIMELINE_OPTIONS: Required<TimelineConfig> = {
+  dualWrite: false,
+  chunkFlushMs: 150,
+  verifySampleRate: 0.01,
 };
 
 /** 安全默认值 */

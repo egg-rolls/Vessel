@@ -60,6 +60,46 @@ export interface RunJournalFactory {
   transient(identity: RunJournalTransientIdentity): RunJournal;
 }
 
+/**
+ * 一条交给 timeline 双写的会话事实（0.54 A）。
+ *
+ * 形状与 `SessionEventInput` 对齐（同样的 `run_id` / `type` / `ts` / `data`），
+ * 但**没有 `session_id`**：会话是 `record()` 的第一个实参，避免同一个值出现两次。
+ */
+export interface TimelineDualWriteEvent {
+  run_id: string;
+  type: string;
+  ts: number;
+  data?: unknown;
+  fencing_token?: number;
+  /**
+   * 该事件是否已被旧链路落盘（`events.ndjson`）。
+   *
+   * `true` = 已落盘事件（双写就写它）；`false` = 旧链路**故意不落盘**的派生事件
+   * （如 `llm.stream.chunk`）。旁路的取舍（只补 chunk 家族）由实现侧决定，journal
+   * 只如实转述，不在这里判断「什么值得写」。
+   */
+  persisted: boolean;
+}
+
+/**
+ * 0.54 A：timeline 双写旁路端口（ADR-105 §11 / plan-054 A4）。
+ *
+ * 三条硬约束（写在类型上，实现必须自证）：
+ * 1. **不装 = 一次都不调**：`undefined` 时 journal 连这个对象都不看 ⇒ 开关关时旧链路
+ *    逐字节不变（不是「调了再丢弃」）；
+ * 2. **实现永不抛**：`record()` / `endRun()` 都是 fire-and-forget，返回 void；
+ *    新链路任何失败只记指标/日志，绝不影响旧链路返回；
+ * 3. **不改旧链路顺序**：journal 在「已发布之后」才调 `record()`，因此旧链路的
+ *    写入/发布时序一字不改。
+ */
+export interface TimelineDualWritePort {
+  /** 一条会话事实（已落盘或显式旁路写）；实现必须自己吞掉所有异常。 */
+  record(sessionId: string, event: TimelineDualWriteEvent): void;
+  /** Run 结束（journal.close）：flush 该会话的 writer + 抽样校验。尽力而为，永不抛。 */
+  endRun?(sessionId: string, runId: string): void;
+}
+
 /** 默认实现的构造依赖：装配层按 tenant 持有 */
 export interface RunJournalFactoryOptions {
   eventLog?: SessionEventLogPort;
@@ -76,4 +116,11 @@ export interface RunJournalFactoryOptions {
    * 不装（旧装配 / 探针）⇒ 行为与 0.51 完全一致。
    */
   resumeMarkers?: ResumeMarkerRegistry;
+  /**
+   * 0.54 A：timeline 双写旁路（ADR-105 §11）。
+   *
+   * 缺省 = 不装：旁路**一次都不调**，旧链路逐字节不变（开关关的那一侧）。
+   * 装上时新链路失败不得影响旧链路（实现侧自吞，见 {@link TimelineDualWritePort}）。
+   */
+  timelineDualWrite?: TimelineDualWritePort;
 }

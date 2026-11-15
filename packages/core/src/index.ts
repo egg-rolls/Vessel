@@ -277,6 +277,8 @@ export {
   type RunJournal,
   type RunJournalFactory,
   type RunJournalFactoryOptions,
+  type TimelineDualWriteEvent,
+  type TimelineDualWritePort,
 } from './runtime/run-journal.js';
 // 会话后端
 export {

@@ -166,6 +166,11 @@ const EXPECTED_NEWLY_HIDDEN: readonly string[] = [
   // 新名字天然算「今天可见」，登记成 `internal` 就必然落进这张差集。判据（集合相等 + 双向）
   // 一字未动，只是把新增项补进期望值。
   'context.archive_notice',
+  // 0.54 A 的**新增类型**（同理，不是既有类型改档）：`timeline.divergence` 在双写抽样
+  // 落地前不存在 ⇒ 影子判据只能按「今天的两张黑名单」算，新名字天然算「今天可见」，
+  // 登记成 `observe`（ADR-105 §11 / plan-054 A-2 的审计事件）就必然落进这张差集。
+  // 判据（集合相等 + 双向 + 分档计数）一字未动，只是把新增项补进期望值。
+  'timeline.divergence',
 ];
 
 /** 报告 §3.1：这些今天可见、**必须继续可见**（content 类被误藏是本方案最痛的风险）。 */
@@ -558,11 +563,13 @@ function checkShadow(): void {
   //   `_pressure`，都是 observe（ADR-104 §5.2「登记为 notice/audit，不得 internal」）。）
   // （115 → 116：0.53 U3 新增归档卡事件 `context.archive_notice`（internal + 承接 notice，
   //   与 `context.cleared_tool_result` 同档：可见记录是那张 vessel:notice 卡，事件是审计镜像）。）
+  // （116 → 117：0.54 A 新增双写抽样审计事件 `timeline.divergence`（observe；ADR-105 §11 /
+  //   plan-054 A-2），差异只在 Observe / Runs 看，不进聊天时间线。）
   const counts = { content: 0, internal: 0, observe: 0 };
   for (const spec of Object.values(EVENT_TIERS)) counts[spec.tier] += 1;
   const total = counts.content + counts.internal + counts.observe;
-  if (total !== 116) {
-    fail('EVENT_TIERS', `[A4 影子] 表里应有 116 条，实际 ${total} 条`);
+  if (total !== 117) {
+    fail('EVENT_TIERS', `[A4 影子] 表里应有 117 条，实际 ${total} 条`);
   }
   note(
     `[shadow] 影子对拍：今天可见→新表隐藏 ${actual.size} 条（期望 ${expected.size}）；` +

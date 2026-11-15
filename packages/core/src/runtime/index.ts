@@ -32,6 +32,8 @@ export {
   type RunJournalFactoryOptions,
   type RunJournalIdentity,
   type RunJournalTransientIdentity,
+  type TimelineDualWriteEvent,
+  type TimelineDualWritePort,
 } from './run-journal.js';
 export { type ExecutionUnitRequest, Runtime, type TenantRuntimeProfile } from './runtime.js';
 export {

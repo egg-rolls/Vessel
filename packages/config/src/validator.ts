@@ -22,6 +22,7 @@ import type {
   ServeConfig,
   TeamConfigInput,
   TerminationConfig,
+  TimelineConfig,
   TraceConfig,
   UsageLimitsConfig,
   VesselConfig,
@@ -1686,6 +1687,47 @@ function validateTrace(trace: TraceConfig, errors: ConfigValidationError[]): voi
   }
 }
 
+/**
+ * 校验 timeline 块（0.54 A，ADR-105 §11）。
+ *
+ * `dualWrite` 只收布尔：写成 `"false"` 字符串会让「开关关」变成「开关开」，
+ * 那是本单最不能出的错（ADR-105 要求开关关时旧链路逐字节不变）。
+ */
+function validateTimeline(timeline: TimelineConfig, errors: ConfigValidationError[]): void {
+  const { dualWrite, chunkFlushMs, verifySampleRate } = timeline;
+
+  if (dualWrite !== undefined && typeof dualWrite !== 'boolean') {
+    errors.push({
+      path: 'timeline.dualWrite',
+      message: 'timeline.dualWrite must be a boolean',
+      value: dualWrite,
+    });
+  }
+  if (
+    chunkFlushMs !== undefined &&
+    (typeof chunkFlushMs !== 'number' || !Number.isInteger(chunkFlushMs) || chunkFlushMs < 1)
+  ) {
+    errors.push({
+      path: 'timeline.chunkFlushMs',
+      message: 'timeline.chunkFlushMs must be a positive integer (1..1000, clamped by writer)',
+      value: chunkFlushMs,
+    });
+  }
+  if (
+    verifySampleRate !== undefined &&
+    (typeof verifySampleRate !== 'number' ||
+      !Number.isFinite(verifySampleRate) ||
+      verifySampleRate < 0 ||
+      verifySampleRate > 1)
+  ) {
+    errors.push({
+      path: 'timeline.verifySampleRate',
+      message: 'timeline.verifySampleRate must be a number in [0, 1]',
+      value: verifySampleRate,
+    });
+  }
+}
+
 /** 校验 mcpServers env / headers 的 `_env` 键（0.5） */
 function validateMcpEnvRefs(
   servers: Record<string, unknown>,
@@ -2551,6 +2593,15 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
+  // 校验 0.54 A timeline（双写开关；缺省 = 关，消费 DEFAULT_TIMELINE_OPTIONS）
+  if (config.timeline !== undefined) {
+    if (!isPlainObject(config.timeline)) {
+      errors.push({ path: 'timeline', message: 'timeline must be an object' });
+    } else {
+      validateTimeline(config.timeline as TimelineConfig, errors);
+    }
+  }
+
   // 校验 0.4 块；块缺省时不做任何事（保持 0.3 行为）。
   if (config.evals) validateEvals(config.evals, errors);
   if (config.feishu) validateFeishu(config.feishu, errors);
@@ -2711,6 +2762,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'expandCards',
   ],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
+  timeline: ['dualWrite', 'chunkFlushMs', 'verifySampleRate'],
 };
 
 /** serve.tls / hub.tls 的已知键 */
@@ -2802,6 +2854,7 @@ export const KNOWN_CONFIG_KEYS = [
   'apiKeyEnv',
   'dataDir',
   'trace',
+  'timeline',
   'provider',
   'agent',
   'guardrails',

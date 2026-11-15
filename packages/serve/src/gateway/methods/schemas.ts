@@ -204,6 +204,23 @@ export const sessionEventCursorSchema = {
     last_seq: { type: 'integer', minimum: 0 },
     derived_upto_seq: { type: 'integer', minimum: 0 },
     event_count: { type: 'integer', minimum: 0 },
+    // 0.54 A（ADR-105 §3 I4）：timeline 的四个技术字段。**一起出现或一起缺省**：
+    // 开关关 / 该会话没有 timeline ⇒ 四个都不在（0 是「有 timeline 但还没归档」，不是「没有」）。
+    timeline_head: { type: 'integer', minimum: 0 },
+    wal_head: { type: 'integer', minimum: 0 },
+    holes: {
+      type: 'array',
+      // 只给区间：洞内是读不回来的 seq，贴 payload = 把不可读伪装成可读。
+      items: {
+        type: 'object',
+        required: ['from_seq', 'to_seq'],
+        properties: {
+          from_seq: { type: 'integer', minimum: 1 },
+          to_seq: { type: 'integer', minimum: 1 },
+        },
+      },
+    },
+    tainted: { type: 'boolean' },
   },
 };
 

@@ -89,6 +89,7 @@ import {
   type SessionContextUsagePort,
   type SessionEventsPort,
   type SessionSystemContextPort,
+  type SessionTimelineHeadsPort,
 } from './gateway/methods/sessions.js';
 import { createTeamMethods } from './gateway/methods/teams.js';
 import {
@@ -355,6 +356,13 @@ export interface GatewayOptions {
    * （旧装配行为一字不改、不抛错）。
    */
   sessionEvents?: SessionEventsPort;
+  /**
+   * timeline 四字段的读面（additive 0.54：`sessions.get.event_cursor` 的
+   * `timeline_head` / `wal_head` / `holes` / `tainted`，asm 注入）。
+   *
+   * 缺省（旧装配 / 双写开关关）⇒ 四个字段一起缺省，旧行为一字不改、不抛错。
+   */
+  timelineHeads?: SessionTimelineHeadsPort;
   /**
    * 方法层（`events.list` 等）脱敏；缺省 core 默认 redactor。
    * 实时广播的脱敏由 hub 的 `map` 决定——自定义时应把同一实例传给
@@ -1579,6 +1587,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       // 会话事件日志读取面（additive 0.53）：缺省 = `sessions.events` 返回 not_supported、
       // `sessions.get` 不带 `event_cursor`，旧装配行为一字不变。
       ...(opts.sessionEvents !== undefined ? { sessionEvents: opts.sessionEvents } : {}),
+      // 0.54 A：timeline 四字段（additive）。缺省 ⇒ 四个一起缺省，旧装配行为一字不变。
+      ...(opts.timelineHeads !== undefined ? { timelineHeads: opts.timelineHeads } : {}),
       // CREATE-0.39：sessions.create|restart|activate 与 agents.* 共用同一注入面。
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
     }),

@@ -1297,6 +1297,17 @@ async function runWithConfig(result: BootstrapResult) {
             }),
           }
         : {}),
+      // 0.54 A：timeline 四字段（additive `sessions.get.event_cursor` 的
+      // `timeline_head` / `wal_head` / `holes` / `tainted`）。只有双写开关开、且该会话
+      // 真有 timeline 时才给；缺省 ⇒ 四个字段一起缺省（不报假零）。
+      ...(gatewayBundle.timelineDualWrite !== undefined
+        ? {
+            timelineHeads: {
+              lookup: (sessionId: string) =>
+                gatewayBundle.timelineDualWrite?.heads(sessionId) ?? Promise.resolve(undefined),
+            },
+          }
+        : {}),
       metricsControl: {
         rebuild: () => rebuildMetrics(gatewayBundle.tenantPaths.events_dir),
         reset: () => {

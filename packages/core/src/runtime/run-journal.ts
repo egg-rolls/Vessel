@@ -18,6 +18,7 @@ import type {
   RunJournalFactoryOptions,
   RunJournalIdentity,
   RunJournalTransientIdentity,
+  TimelineDualWritePort,
 } from '../types/run-journal.js';
 import type { RunRecord } from '../types/run-record-store.js';
 import type { SessionState } from '../types/session.js';
@@ -29,6 +30,8 @@ export type {
   RunJournalFactoryOptions,
   RunJournalIdentity,
   RunJournalTransientIdentity,
+  TimelineDualWriteEvent,
+  TimelineDualWritePort,
 } from '../types/run-journal.js';
 
 /**
@@ -116,12 +119,17 @@ export class SessionRunJournal implements RunJournal {
   ) {}
 
   appendFact(event: RunEvent, persistData?: unknown): void {
+    const dualWrite = this.deps.timelineDualWrite;
     if (
       !this.deps.eventLog ||
       NON_PERSISTED_EVENT_TYPES.has(event.type) ||
       !this.shouldPersistSessionEvent(event)
     ) {
+      // 0.54 A：双写旁路（开关关 ⇒ `dualWrite` 是 undefined，这里连分支都不进）。
+      // 非持久事件里只有 chunk 家族值得进 timeline（它是旧链路**故意不落盘**的那一类），
+      // 取舍在实现侧；这里只转述「旧链路没落它」这个事实。
       this.publishRaw(event);
+      if (dualWrite !== undefined) this.recordNonPersisted(event, dualWrite);
       return;
     }
     this.enqueuePersistedEvent(event, true, persistData);
@@ -141,6 +149,21 @@ export class SessionRunJournal implements RunJournal {
 
   async close(): Promise<void> {
     await this.flush();
+    // 0.54 A：run 结束（journal 关闭）通知双写旁路：flush 该会话 writer + 一致性抽样。
+    // 未装端口（开关关）⇒ 不做任何事；抛错也只记日志（旁路坏了不影响 run 结果）。
+    const dualWrite = this.deps.timelineDualWrite;
+    if (dualWrite?.endRun === undefined) return;
+    const sessionId = 'sessionId' in this.identity ? this.identity.sessionId : undefined;
+    if (sessionId === undefined) return;
+    try {
+      dualWrite.endRun(sessionId, this.identity.runId);
+    } catch (error) {
+      this.deps.logger?.warn('timeline dual-write endRun failed', {
+        session_id: sessionId,
+        run_id: this.identity.runId,
+        error: errorText(error),
+      });
+    }
   }
 
   async saveCheckpoint(record: RunRecord, opts?: { bestEffort?: boolean }): Promise<void> {
@@ -251,6 +274,34 @@ export class SessionRunJournal implements RunJournal {
   }
 
   /**
+   * 0.54 A：把「旧链路没落盘」的事件转给双写旁路。
+   *
+   * 只转述、不判断值不值得写；异常一律吞掉 —— 旁路坏了不能影响 run。
+   */
+  private recordNonPersisted(event: RunEvent, port: TimelineDualWritePort): void {
+    try {
+      const sessionId = this.resolveEventSessionId(event);
+      if (sessionId === undefined) return;
+      port.record(sessionId, {
+        run_id: event.run_id,
+        type: event.type,
+        ts: event.ts,
+        data: event.data,
+        ...(this.identity.fencingToken !== undefined
+          ? { fencing_token: this.identity.fencingToken }
+          : {}),
+        persisted: false,
+      });
+    } catch (error) {
+      this.deps.logger?.warn('timeline dual-write dispatch failed', {
+        run_id: event.run_id,
+        type: event.type,
+        error: errorText(error),
+      });
+    }
+  }
+
+  /**
    * 入队一次 append +（可选）发布。
    * 所有写入按调用顺序串行（日志内部按 session 排队），publish 在 append
    * 成功/失败后执行，因此对外可见顺序始终与 seq 顺序一致。
@@ -281,6 +332,28 @@ export class SessionRunJournal implements RunJournal {
       .then(
         () => {
           if (publish) this.publishRaw(event);
+          // 0.54 A：已落盘事件的双写旁路。放在发布**之后**：旧链路的可见顺序与
+          // 失败处理完全不受影响；未装端口（开关关）时这里什么都不做。
+          const dualWrite = this.deps.timelineDualWrite;
+          if (dualWrite !== undefined) {
+            try {
+              dualWrite.record(sessionId, {
+                run_id: event.run_id,
+                type: event.type,
+                ts: event.ts,
+                data,
+                ...(fencingToken !== undefined ? { fencing_token: fencingToken } : {}),
+                persisted: true,
+              });
+            } catch (error) {
+              this.deps.logger?.warn('timeline dual-write dispatch failed', {
+                session_id: sessionId,
+                run_id: event.run_id,
+                type: event.type,
+                error: errorText(error),
+              });
+            }
+          }
         },
         (error: unknown) => {
           this.reportEventLogFailure(error, event, sessionId);
