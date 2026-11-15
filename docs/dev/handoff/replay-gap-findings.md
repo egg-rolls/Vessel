@@ -223,3 +223,77 @@ ring window    : kept=1280 dropped=0 droppedStructure=0 floorTruncated=false
 - 「运行中的逐 delta 正文」`llm.stream.chunk` **不落盘**，方案 B 只能保证结构骨架 + 已完成正文。要让「流式中途刷新正文完全不丢」需要方案 C（`session_seq` 持久身份）或扩大环。
 - live RPC 取证用本地 gateway（`127.0.0.1:8644`，`serve.token`），只读调用 `sessions.get`/`events.subscribe`/`sessions.events`，未改动任何状态。
 - 部署注意：`gateway.pid.version` 写的是 `0.52.0`，但实测 `sessions.get` 已返回 `event_cursor`、`sessions.events` 可用（0.53 能力已在跑）。版本号是陈旧标签，不影响结论。
+
+---
+
+## 7. 真机会话三类拆分（`16d265ec-2d6d-44ea-8e81-5f2ea30c4731`，最后 6 个 run）
+
+该会话现状态 `failed`、42 个 run、2483 条 session 事件。用户"刚才"的批次 = 最近这串失败/取消的 run（最后 6 个）。逐 run 拆三类：
+
+| run(start@seq) | session 日志（可回填） | trace-only（需 events.list） | chunk（磁盘全无） | session seq 区间 | 只做 session 回填 → 补不回 |
+| --- | ---: | ---: | ---: | --- | --- |
+| d5fbf4cf(2403) | 23 | 68 | 0 | 2403..2425 | 68/91 = 75% |
+| fbc9d0a0(2426) | 13 | 36 | 0 | 2426..2438 | 36/49 = 73% |
+| 6db3bbd4(2439) | 25 | 79 | 0 | 2439..2463 | 79/104 = 76% |
+| 1068d703(2465) | 7 | 547 | 0 | 2464..2470 | 547/554 = 99% |
+| 7e5ad4b4(2471) | 7 | 19 | 0 | 2471..2477 | 19/26 = 73% |
+| 0ec68b07(2478) | 5 | 18 | 0 | 2478..2482 | 18/23 = 78% |
+| **合计** | **80** | **767** | **0** | — | **767/847 = 90.6%** |
+
+trace-only 明细（last 6 runs）：`context.changed` 562、`hook.started/completed` 84/84、`run.checkpoint` 20、`session.saved` 12、`agent.queue.entered/left` 2/2、`runtime.notice` 1。其中 `hook.*`/`run.checkpoint`/`session.saved`/`agent.queue.*` 默认隐藏（204 条），`context.changed`+`runtime.notice` 可能可见（563 条）。
+
+**一句话回答 main：只做 session 日志回填，last-6-run 这 847 条里还剩 767 条（90.6%）补不回；即便只算非隐藏的，仍有 563 条（几乎全是 `context.changed`）补不回。所以方案 B 必须两条回填都做——阶段一（session 日志）对这批失败 run 是杯水车薪。**
+
+> 说明：这批 run 都是失败/取消的短 run，`chunk=0`；真正成功流式的长 run 的 chunk 才两处磁盘都没有（§1d）。"chunk 类=0" 不代表 chunk 不重要，而是这批没有成功流式正文。若用户当时看的是「聊天时间线的可见卡片」而非原始事件，`context.changed`/`hook` 多在内部/折叠行，session 日志占比会更高——但 `runtime.notice` 与折叠的 hook 行照样丢。结论方向不变：**只做一条回填不足以"可证明不漏"**。
+
+## 8. 最小适配器接口（给 replay-wire，`check-replay-merge.ts` 已按此断言）
+
+```ts
+export interface ReplayEvent { seq: number; type: string; run_id?: string; ts: number; }
+export interface ReplayCursor { last_seq: number; derived_upto_seq: number; }
+
+export interface ReplaySource {
+  getCursor(): Promise<ReplayCursor>;                                          // sessions.get.event_cursor
+  fetchSessionLogSegment(sinceSeq: number, limit: number): Promise<ReplayEvent[]>;             // 阶段一：sessions.events（session 全局 seq）
+  fetchTraceSegment?(runId: string, sinceRunSeq: number, limit: number): Promise<ReplayEvent[]>; // 阶段二：events.list（per-run seq）
+  fetchRingSegment(): Promise<ReplayEvent[]>;                                  // 快速路径：events.subscribe{since:0}
+}
+export interface ReplaySink {
+  apply(events: ReplayEvent[]): number;   // 幂等，按稳定 id 去重，返回 distinct 总数
+  warn(message: string): void;            // fail-open
+}
+export interface RecoverOptions { runs?: string[]; }   // 缺省 = 只做阶段一
+export function stableEventId(e: ReplayEvent): string { return `${e.run_id ?? ''}|${e.type}|${e.ts}`; }
+```
+
+**契约要点**
+
+1. **阶段一 = session 日志**：单一 session 游标（session 全局 seq，跨 run 正确）。
+2. **阶段二 = run trace**：必须按 `run_id` **逐 run**（per-run seq，**不能用一个 since_seq 跨 run**）。
+3. **跨源去重用 `stableEventId`（内容 id：`run_id|type|ts`），禁止用 seq**——三套 seq 空间不可混。
+4. **所有源 fail-open**：报错/超时只 `warn`、不抛、不清空已渲染数据。
+5. `derived_upto_seq` 是投影水位：`[1..derived]` 由消息投影覆盖，`[derived+1..last]` 由阶段一覆盖。
+6. 稳定 id 三源必须一致（同一逻辑事件的 `run_id/type/ts` 在磁盘与环里相同），否则去重会漏——需服务端保证。
+
+**阶段一 vs 阶段二 验收差异**
+
+| | 覆盖 session 日志类型 | 覆盖 trace-only（hook/context.changed/run.checkpoint/runtime.notice） | 覆盖 chunk |
+| --- | --- | --- | --- |
+| 只做阶段一（session 日志） | ✅ | ❌（本会话 last-6-run 下 767/847 = 90.6% 补不回） | ❌ |
+| 阶段一 + 阶段二（+ trace） | ✅ | ✅ | ❌（磁盘两处都无） |
+
+门禁里用 `[phase1 vs phase1+2]` 一行钉死这个差异（`p1=0 / p1+2>=2`）。
+
+## 9. 已知边界（不阻塞本次修复，但影响「可证明不漏」的完整性）
+
+1. **unacked 队列缺失**：服务端 `lastPersistedSeq` 只到「已 flush 水位」，在途未 flush 事件只在环；前端无 unacked 概念。⇒ 验收等式 `UI.seq集 == disk(seq ≤ watermark) ∪ unacked(本run)` 的右半边当前**无法枚举**。不阻塞方案 B（只补已落盘部分），但做不到「可证明不漏」。
+2. **chunk 不落盘**：`llm.stream.chunk` 磁盘两处都无（trace `files_with_chunk=0`），只能从环拿，重启即永久丢。方案 B（含阶段二）都不覆盖；要「流式中途刷新正文不丢」需方案 C（`session_seq` 持久身份）或放大环。
+3. **三套 seq 无映射**：session 全局 / run per-run / hub 进程全局，互不映射。跨源只能按内容 id 去重，不能按 seq；`events.list` 必须逐 run 作用域。
+
+> 以上三条：**不阻塞本次修复、会影响「可证明不漏」的完整性**。
+
+## 10. 两条防复发门禁（新建，不改既有 `scripts/check-*.ts`）
+
+- `scripts/check-replay-wiring.ts`（A1 静态链路门）：网关方法表里有 `sessions.events` ⇒ `apps/web/src` 必须有**真实 request 调用**（注释/字符串常量不算）；反向（web 调了但 serve 没这个 RPC）也 FAIL。含 `--selftest` 证明检测器不吃注释/字符串。**当前仓库 = FAIL**（正是 `473bfc4c` 半截态：serve 有、web 零引用），`replay-wire` 落地后转 PASS。
+- `scripts/check-replay-merge.ts`（A2 行为 + A3 幂等 + fail-open）：用真实 `replay-budget.ts` + 夹具，断言 覆盖 `[1..366]` 零洞 / 确实调 `sessions.events` / 重叠去重（distinct=366）/ fail-open（不抛+警告+保数据）/ 阶段一补不回 trace-only、阶段一+二能补回。**当前 = PASS（12/12）**。
+- **退出码注意**：本 WSL shim 下 `bun`/`node` 退出码恒 0（Windows 二进制经 shim 不传），故本环境以 stdout 的 `result: PASS/FAIL` 判定；Linux/原生 CI 上 `process.exit(1)` 正常生效。
