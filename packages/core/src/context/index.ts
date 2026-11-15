@@ -24,6 +24,8 @@ export {
   TRIM_ENV_SCOPE,
   type TrimNoticeInput,
   type TrimNoticeLocale,
+  type TrimNoticeSignatureInput,
+  trimNoticeSignature,
 } from './cleared-tool-result.js';
 export {
   auditChainOf,

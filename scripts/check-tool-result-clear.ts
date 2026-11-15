@@ -22,6 +22,10 @@
  *   钉死常量默认值（5% / 10 条 / 20%）、阈值边界（恰好等于不触发、+1 token 触发）、
  *   可清 0 条、整个窗口超阈值、默认配置与旧行为逐字节等价，并锁住「体积判据不参与
  *   清几条的决策」——它只决定还要不要在同一段里继续塞。
+ * - T7（0.53 主题3）卡的**分层口径**：折叠态首行只说本轮新增，总数与保留条数进展开明细
+ *   （中/英双语）；事件 `data` 同时带 `cleared`（总数）与 `added`（增量），`summary` 与
+ *   卡正文逐字一致；同一会话里「总数 + 新增条数 + 新增 id 列表」全等的载荷**不再发卡、
+ *   不再发事件**（附反证：换一个新实例就照旧发，说明去重断言不是「什么都不发」的假绿）。
  *
  * 用法：bun run scripts/check-tool-result-clear.ts（退出码 0 = 全过，1 = 有 FAIL）
  */
@@ -30,23 +34,32 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  createRunJournalFactory,
+  ExecutionUnit,
   FileSessionStore,
   isClearedToolResult,
   KEEP_RECENT_MAX,
   KEEP_RECENT_TOKEN_RATIO,
+  type LLMProvider,
+  MemoryEventStream,
   MemoryWorkingContext,
   type Message,
   measureRetainedToolResultVolume,
   measureToolResultPressure,
   normalizeClearedToolCallIds,
+  type Plugin,
   planClearedToolResults,
   projectionVolumeDimensionApplies,
   renderContextTrimNotice,
+  type SessionEventInput,
+  type SessionEventLogPort,
+  type SessionEventRecord,
   type SessionState,
   SQLiteSessionStore,
   setWindowProjectionMode,
   shouldCompactForToolResultVolume,
   TOOL_RESULT_VOLUME_THRESHOLD_RATIO,
+  trimNoticeSignature,
   windowProjectionMode,
   withClearedToolResults,
 } from '../packages/core/src/index';
@@ -613,6 +626,353 @@ await (async function checkToolResultVolumeByMode(): Promise<void> {
     ],
     [[], true],
   );
+})();
+
+// ── T7：分层口径（折叠=增量 / 展开=总数）+ 同载荷去重（0.53 主题3） ─────────
+//
+// 用户原话：「这个 trim 数量是总的对吧，是每一轮都要计算这 231 个，还是增量的」——
+// 旧卡标题写总数（231 = 这一段一共清了几条），列出的 id 却只有本轮新增的 6 条，
+// 一句话里两个口径，读起来像自相矛盾。用户裁定（2026-02）的口径是**分两层**：
+// 折叠态标题只说增量，总数挪到展开后的明细里。T7 钉两件事：
+//   ① 首行（折叠态）= 本轮新增，明细行（展开区）= 总数 + 保留条数 + 新增 id（中/英），
+//      且 id 列表仍只有新增（不炸大）；
+//   ② 同一会话里「总数 + 新增条数 + 新增 id 列表」全等 ⇒ 卡片与事件都不再 append。
+// ② 为什么必须跑真 runtime：重复发送是**跨 run** 的行为（段起点每轮重算一次），
+// 纯函数测不出「有没有 append」。
+
+section('T7 分层口径（折叠态=增量 / 展开=总数）与同载荷去重');
+
+// ①.1 纯函数：首行只有增量，总数在明细行。
+{
+  const fresh = ['call_a', 'call_b', 'call_c', 'call_d', 'call_e', 'call_f'];
+  const en = renderContextTrimNotice({ cleared: 231, kept: 10, tool_call_ids: fresh });
+  const zh = renderContextTrimNotice({ cleared: 231, kept: 10, tool_call_ids: fresh }, 'zh-CN');
+  const enLines = en.split('\n');
+  const zhLines = zh.split('\n');
+  const enHead = enLines[0] ?? '';
+  const zhHead = zhLines[0] ?? '';
+  if (
+    enHead.includes('6 older tool result(s) turned into placeholders this run') &&
+    !enHead.includes('231')
+  )
+    ok('T7.1 en 折叠态首行只说本轮新增 6 条（不带总数 231）');
+  else fail('T7.1', 'en 首行口径不对：' + enHead);
+  if (zhHead.includes('本轮新增 6 条旧工具结果换为占位符') && !zhHead.includes('231'))
+    ok('T7.2 zh-CN 折叠态首行只说本轮新增 6 条（不带总数 231）');
+  else fail('T7.2', 'zh-CN 首行口径不对：' + zhHead);
+  // 明细行（展开区）才给总数，且原有明细（保留条数 / call id）不变形。
+  if (
+    (enLines[1] ?? '').startsWith('  · ') &&
+    (enLines[1] ?? '').includes('231 cleared in this session') &&
+    (zhLines[1] ?? '').includes('会话内已累计 231 条被占位')
+  )
+    ok('T7.3 展开明细第一行给出总数 231（en / zh-CN 都有）');
+  else fail('T7.3', '明细行没有总数：' + JSON.stringify([enLines[1], zhLines[1]]));
+  if (
+    enLines.length === 4 &&
+    enLines.slice(1).every((line) => line.startsWith('  · ')) &&
+    (enLines[2] ?? '').includes('kept the 10 most recent') &&
+    (enLines[3] ?? '').includes('call_f') &&
+    (enLines[3] ?? '').includes('call_a')
+  )
+    ok('T7.4 明细行仍是「env 卡同一格式」，kept / 新增 call id 未变、id 列表没改回全量');
+  else fail('T7.4', '明细行形状变了：' + JSON.stringify(enLines.slice(1)));
+  // 反证：两个口径各在一层 —— 总数只出现在明细、增量只出现在首行。
+  if (!enHead.includes('231') && en.includes('231 cleared in this session'))
+    ok('T7.5 总数只在展开明细、增量只在折叠首行（不再一句话两个口径）');
+  else fail('T7.5', '两个口径的层次没分开：' + en);
+  // 缩略照旧：新增溢出折成 `+N`，不许把 id 全量摊开把卡炸大。
+  const flooded = renderContextTrimNotice({
+    cleared: 231,
+    kept: 10,
+    tool_call_ids: Array.from({ length: 210 }, (_unused, index) => 'call_' + String(index)),
+  });
+  if (flooded.includes(', +202') && !flooded.includes('call_9,'))
+    ok('T7.6 新增 id 溢出仍折成 +N（卡不会因 210 条新增被撑大）');
+  else fail('T7.6', '溢出缩略坏了：' + (flooded.split('\n')[3] ?? ''));
+
+  // 去重键：三元组全等才相等，任一项不同就不同（JSON 编码，id 里带分隔符也不撞）。
+  const sig = trimNoticeSignature;
+  expect(
+    'T7.7 去重键：三元组全等 ⇒ 同一个键',
+    sig({ cleared: 5, added: 2, tool_call_ids: ['call_0', 'call_1'] }),
+    sig({ cleared: 5, added: 2, tool_call_ids: ['call_0', 'call_1'] }),
+  );
+  expect(
+    'T7.8 去重键：总数 / 新增条数 / id 列表任一项变了 ⇒ 键不同',
+    new Set([
+      sig({ cleared: 5, added: 2, tool_call_ids: ['call_0', 'call_1'] }),
+      sig({ cleared: 6, added: 2, tool_call_ids: ['call_0', 'call_1'] }),
+      sig({ cleared: 5, added: 3, tool_call_ids: ['call_0', 'call_1'] }),
+      sig({ cleared: 5, added: 2, tool_call_ids: ['call_1', 'call_0'] }),
+    ]).size,
+    4,
+  );
+  if (
+    sig({ cleared: 5, added: 1, tool_call_ids: ['a|b'] }) !==
+    sig({ cleared: 5, added: 2, tool_call_ids: ['a', 'b'] })
+  )
+    ok('T7.9 去重键不会把不同载荷撞成同一张卡（id 里带分隔符）');
+  else fail('T7.9', '不同载荷拼出了同一个去重键');
+}
+
+/**
+ * T7 的真 run 夹具：6 条工具结果（每条 ≈106 tokens）+ 窗口 1500 tokens。
+ *
+ * 5% 保留预算 = 75 tokens ⇒ 只留最近 1 条原文、清掉最旧 5 条（`call_0`..`call_4`）；
+ * 20% 体积线 = 300 tokens，保留的 1 条只有 106 ⇒ 不会先被段起点压缩抢走判据。
+ */
+const TRIM_RUN_WINDOW = 1_500;
+const TRIM_RUN_SESSION = 's-trim-run';
+
+/** 内存事件日志（journal 需要它；本探针只看内存事件流）。 */
+class TrimProbeEventLog implements SessionEventLogPort {
+  private readonly rows: SessionEventRecord[] = [];
+
+  async append(input: SessionEventInput): Promise<SessionEventRecord> {
+    const record = { ...input, seq: this.rows.length + 1 } as unknown as SessionEventRecord;
+    this.rows.push(record);
+    return record;
+  }
+
+  async read(
+    sessionId: string,
+    opts?: { sinceSeq?: number; limit?: number },
+  ): Promise<SessionEventRecord[]> {
+    const since = opts?.sinceSeq ?? 0;
+    const rows = this.rows.filter(
+      (row) => (row as unknown as { session_id: string }).session_id === sessionId,
+    );
+    const tail = rows.filter((row) => (row as unknown as { seq: number }).seq > since);
+    return opts?.limit === undefined ? tail : tail.slice(0, opts.limit);
+  }
+
+  lastPersistedSeq(sessionId: string): number | undefined {
+    const rows = this.rows.filter(
+      (row) => (row as unknown as { session_id: string }).session_id === sessionId,
+    );
+    const last = rows[rows.length - 1] as unknown as { seq: number } | undefined;
+    return last?.seq;
+  }
+
+  async flush(): Promise<void> {}
+
+  async sync(): Promise<void> {}
+
+  async release(): Promise<void> {}
+}
+
+/**
+ * 「不持久化 `cleared_tool_call_ids`」的 store —— 复现重复发卡的真实成因。
+ *
+ * 旧卡去重只靠这个落盘字段取差集（`fresh = ids - stored.cleared_tool_call_ids`）。
+ * 后端不存这个 additive 字段时（旧 store / 只搬 messages 的宿主），每个段起点
+ * `known` 都恒空 ⇒ `fresh` 恒等于全量 ⇒ 同一张卡一轮一轮重发。这个 store 就是那样
+ * 一个后端：**只丢这一个字段**，其余照旧，保证 T7 的差异只来自去重逻辑本身。
+ */
+class ForgetfulStore extends FileSessionStore {
+  override async save(state: SessionState): Promise<void> {
+    const copy: SessionState = { ...state };
+    delete copy.cleared_tool_call_ids;
+    await super.save(copy);
+  }
+}
+
+/** 一次就收尾的假 provider（本节不关心请求内容，只关心段起点发了什么卡）。 */
+const DONE_PROVIDER: LLMProvider = {
+  chat: async () => ({
+    content: 'done',
+    finish_reason: 'stop',
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+  }),
+};
+
+/** 一支 `read` 工具：种好的历史里有它的 tool_calls，注册上才算合法上下文。 */
+function trimToolPlugin(): Plugin {
+  return {
+    name: 'probe-trim-tools',
+    install(host): void {
+      host.registerTool({
+        name: 'read',
+        description: 'probe tool（T7 不真的调用它）',
+        inputSchema: { type: 'object', properties: {} },
+        handler: async () => 'probe',
+      });
+    },
+  };
+}
+
+interface TrimRuntime {
+  eu: ExecutionUnit;
+  /** 本实例发布过的事件（按会话过滤见 `trimEventsOf`）。 */
+  seen: { type?: string; data?: Record<string, unknown> }[];
+  stop(): void;
+}
+
+async function startTrimRuntime(store: FileSessionStore): Promise<TrimRuntime> {
+  const events = new MemoryEventStream();
+  const log = new TrimProbeEventLog();
+  const eu = await ExecutionUnit.create({
+    provider: DONE_PROVIDER,
+    model: 'probe/trim',
+    contextFactory: () => {
+      const context = new MemoryWorkingContext({
+        maxTokens: TRIM_RUN_WINDOW,
+        autoCompact: true,
+      });
+      // 不给 sessionId 会让 token 计数是 NaN（本节的判据与数量无关，但不该留 NaN）。
+      context.setSessionId(TRIM_RUN_SESSION);
+      return context;
+    },
+    events,
+    limits: {},
+    termination: {},
+    journalFactory: createRunJournalFactory({ session: store as never, eventLog: log }),
+    session: store as never,
+    eventLog: log,
+    plugins: [trimToolPlugin()],
+    systemPrompt: 'probe system prompt for trim notice',
+    retry: { maxRetries: 0 },
+  });
+  const seen: { type?: string; data?: Record<string, unknown> }[] = [];
+  events.subscribe((event: unknown) => {
+    seen.push(event as { type?: string; data?: Record<string, unknown> });
+  });
+  return { eu, seen, stop: () => eu.dispose?.() };
+}
+
+/** 落盘的 trim 卡（`vessel:notice` + 首行 scope `trim`，中英冒号都认）。 */
+function trimCardsIn(state: SessionState | null | undefined): Message[] {
+  return (state?.messages ?? []).filter(
+    (message) => message.name === 'vessel:notice' && /^trim[：:]/.test(String(message.content)),
+  );
+}
+
+function trimEventsOf(
+  seen: readonly { type?: string; data?: Record<string, unknown> }[],
+): { type?: string; data?: Record<string, unknown> }[] {
+  return seen.filter((event) => event.type === 'context.cleared_tool_result');
+}
+
+/** 一轮跑完并把盘上的 SessionState 读回来（journal 的写是异步排队的）。 */
+async function runAndWait(runtime: TrimRuntime, dir: string, input: string): Promise<SessionState> {
+  await runtime.eu.run(input, TRIM_RUN_SESSION);
+  for (let tick = 0; tick < 800; tick += 1) {
+    const fresh = await new FileSessionStore(dir).load(TRIM_RUN_SESSION);
+    if (fresh !== undefined && fresh !== null && fresh.status !== 'running') return fresh;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error('session state 没有落盘');
+}
+
+await (async function checkDualScaleAndDedupe(): Promise<void> {
+  // ① 事件载荷的两个口径：种好的会话里已有 call_0 / call_1 被清过（上一张卡讲过），
+  //    本段起点规划清 call_0..call_4 ⇒ 总数 5、本轮新增 3（只讲没讲过的）。
+  await (async function checkEventPayload(): Promise<void> {
+    const dir = mkdtempSync(join(tmpdir(), 'vessel-trim-evt-'));
+    try {
+      const store = new FileSessionStore(dir);
+      await store.save({
+        ...baseState(TRIM_RUN_SESSION),
+        messages: segmentBase(6),
+        derived_upto_seq: 0,
+        cleared_tool_call_ids: ['call_0', 'call_1'],
+      } as SessionState);
+      const runtime = await startTrimRuntime(store);
+      try {
+        const state = await runAndWait(runtime, dir, '继续读');
+        const events = trimEventsOf(runtime.seen);
+        expect('T7.10 一次段起点只发一条 trim 事件', events.length, 1);
+        expect(
+          'T7.11 事件 data：cleared = 总数 5、added = 本轮新增 3、kept = 1',
+          [events[0]?.data?.['cleared'], events[0]?.data?.['added'], events[0]?.data?.['kept']],
+          [5, 3, 1],
+        );
+        expect(
+          'T7.12 事件 data.tool_call_ids 只有本轮新增的 3 条',
+          events[0]?.data?.['tool_call_ids'],
+          ['call_2', 'call_3', 'call_4'],
+        );
+        const summary = String(events[0]?.data?.['summary'] ?? '');
+        const summaryLines = summary.split('\n');
+        // 分层：首行（折叠态）= 增量 3，明细行（展开区）= 总数 5。
+        if (
+          (summaryLines[0] ?? '').includes(
+            '3 older tool result(s) turned into placeholders this run',
+          ) &&
+          (summaryLines[1] ?? '').includes('5 cleared in this session')
+        )
+          ok('T7.13 事件 summary 分层：首行是增量 3，明细行是总数 5');
+        else fail('T7.13', 'summary 层次不对：' + JSON.stringify(summaryLines));
+        const cards = trimCardsIn(state);
+        expect('T7.14 落盘里就一张 trim 卡', cards.length, 1);
+        if (cards[0] !== undefined && String(cards[0].content) === summary)
+          ok('T7.15 卡正文与事件 summary 逐字一致');
+        else fail('T7.15', '卡正文与 summary 不一致：' + String(cards[0]?.content));
+      } finally {
+        runtime.stop();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  })();
+
+  // ② 去重：后端不存 `cleared_tool_call_ids`（`fresh` 每轮都等于全量）⇒ 同样的卡
+  //    第二轮必须**不再** append；换一个新实例（去重记忆为空）则照旧发 —— 反证
+  //    这条断言抓得到「去重被删掉」，而不是「什么都不发」的假绿。
+  await (async function checkDedupe(): Promise<void> {
+    const dir = mkdtempSync(join(tmpdir(), 'vessel-trim-dedupe-'));
+    try {
+      const store = new ForgetfulStore(dir);
+      await store.save({
+        ...baseState(TRIM_RUN_SESSION),
+        messages: segmentBase(6),
+        derived_upto_seq: 0,
+      } as SessionState);
+      const first = await startTrimRuntime(store);
+      let afterFirst: SessionState;
+      try {
+        afterFirst = await runAndWait(first, dir, '继续读');
+        expect('T7.16 第一轮：发一条 trim 事件', trimEventsOf(first.seen).length, 1);
+        expect('T7.17 第一轮：落盘一张 trim 卡', trimCardsIn(afterFirst).length, 1);
+        expect(
+          'T7.18 第一轮 added = cleared（上一张卡没讲过的全算新增）',
+          [
+            trimEventsOf(first.seen)[0]?.data?.['cleared'],
+            trimEventsOf(first.seen)[0]?.data?.['added'],
+          ],
+          [5, 5],
+        );
+
+        // 第二轮：同一个实例、同样的窗口 ⇒ 同样的载荷（总数 5 / 新增 5 / 同样 5 个 id）。
+        const afterSecond = await runAndWait(first, dir, '再继续');
+        expect(
+          'T7.19 第二轮同样的载荷 ⇒ 不再发 trim 事件（去重）',
+          trimEventsOf(first.seen).length,
+          1,
+        );
+        expect('T7.20 第二轮落盘里仍然只有那一张 trim 卡', trimCardsIn(afterSecond).length, 1);
+      } finally {
+        first.stop();
+      }
+
+      // 反证：新实例（去重记忆为空）对同一份状态、同一个窗口跑 ⇒ 又发了一张。
+      const second = await startTrimRuntime(store);
+      try {
+        const afterThird = await runAndWait(second, dir, '再来一次');
+        expect(
+          'T7.21 反证：新实例（去重记忆为空）会再发一张卡',
+          trimEventsOf(second.seen).length,
+          1,
+        );
+        expect('T7.22 反证：盘上因此有两张 trim 卡', trimCardsIn(afterThird).length, 2);
+      } finally {
+        second.stop();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  })();
 })();
 
 // ── 汇总 ───────────────────────────────────────────────────────────────────

@@ -1220,7 +1220,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.notice.contextCompacted':
     'context compacted · removed {removed} · remaining {remaining} · {reason}',
   'chat.notice.contextTrimmed':
-    'context trimmed · {cleared} older tool result(s) became placeholders · {kept} kept',
+    'context trimmed · {added} added this run ({cleared} cleared in this session) · {kept} kept',
   'chat.notice.limitWarning': 'limit warning · {key} {current}/{max}',
   'chat.notice.restarting': 'context restarting · {session} · epoch {from} → {epoch}',
   'chat.notice.restarted': 'context restarted · {session} · epoch {from} → {epoch}',

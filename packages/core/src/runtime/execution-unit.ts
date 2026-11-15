@@ -20,6 +20,7 @@ import {
   shouldPublishSystemContext,
   systemContextChangesFromFingerprint,
   type ToolResultPressureReport,
+  trimNoticeSignature,
   windowProjectionMode,
   withClearedToolResults,
 } from '../context/index.js';
@@ -865,6 +866,25 @@ export class ExecutionUnit {
   private readonly segmentProjections = new WeakMap<object, FrozenProjectionDecision>();
 
   /**
+   * 上一张 trim 卡的**去重键**，按会话索引（0.53 主题3）。
+   *
+   * 去重键 = `trimNoticeSignature({ cleared, added, tool_call_ids })`，即「总数（本段共清了
+   * 几条）/ 本轮新增条数 / 本轮新增的 call id 列表（按段基准出现顺序）」三件事全等 ⇒ 认为是
+   * **同一张卡**，卡片与 `context.cleared_tool_result` 事件一起不再 append。
+   *
+   * 为什么不拿落盘的 `SessionState.cleared_tool_call_ids` 当去重依据：那正是本卡缺的输入 ——
+   * 某个后端不持久化这个 additive 字段时（旧 store / 只搬 messages 的宿主 / 字段被洗掉），
+   * 每个段起点都算不出 `fresh` 差集（`known` 恒空），于是同一张卡（同样的总数、同样的 id
+   * 列表）被一轮一轮重复追加。会话级的「上一张卡的签名」是唯一不依赖那个字段的依据。
+   *
+   * 键里带上 `added`（它与 id 列表长度恒等，取念上是冗余）是为了让键与卡面讲的口径一一对应：
+   * 改卡面口径时必须同步改键，漏改会被 T7 的去重断言当场抓住。
+   *
+   * 内存态、按会话：进程重启后的第一个段起点会重发一次同样的卡 —— 宁可多一张，不可漏一张。
+   */
+  private readonly lastTrimNoticeKeys = new Map<string, string>();
+
+  /**
    * 0.53 U2：段起点**第一步** —— 只裁决模式并钉到窗口上（不含集合、不写审计）。
    *
    * 为什么单独一层：段起点的压缩要按本段的模式判定（`passthrough` 不吃 0.20 体积
@@ -890,8 +910,10 @@ export class ExecutionUnit {
    * - `pop`（回退 / 分支切换）之后基准重置，下一个段起点按新基准重算并覆盖。
    *
    * 清理必须可见：新增 call id 时追加一张 env 卡（scope `trim`）+ 一条
-   * `context.cleared_tool_result` 事件；正文只说「清了几条 / 为什么 / 被清的 call id」，
-   * 不含任何工具输出正文，同一批 id 只讲一次（按已落盘的集合去重）。
+   * `context.cleared_tool_result` 事件；正文只说「本轮新增几条 / 会话内累计几条 / 为什么 /
+   * 被清的 call id」（首行＝折叠态的增量标题，其余行进展开明细），不含任何工具输出正文。
+   * 同一批 id 只讲一次：先按已落盘的集合取差集，再按「上一张卡的签名」去重
+   * （0.53 主题3，见 `lastTrimNoticeKeys`）。
    *
    * 0.53 U2：这里同时是**投射模式的段起点冻结点**（`freezeSegmentProjection`）。
    * `passthrough` 下集合恒为空：没有占位、没有 trim 卡、没有 trim 事件 —— 请求与
@@ -909,6 +931,12 @@ export class ExecutionUnit {
     const known = new Set(stored?.cleared_tool_call_ids ?? []);
     const fresh = ids.filter((id) => !known.has(id));
     if (fresh.length === 0) return;
+    // 去重（0.53 主题3）：同一会话里「总数 + 本轮新增条数 + 新增 id 列表」与上一张卡全等
+    // ⇒ 这张卡已经在上下文里了，不再 append 卡片、也不再发事件（键的口径见字段注释）。
+    const added = fresh.length;
+    const key = trimNoticeSignature({ cleared: ids.length, added, tool_call_ids: fresh });
+    if (this.lastTrimNoticeKeys.get(execution.sessionId) === key) return;
+    this.lastTrimNoticeKeys.set(execution.sessionId, key);
     const cleared = new Set(ids);
     const kept = messages.filter(
       (message) =>
@@ -916,6 +944,9 @@ export class ExecutionUnit {
         typeof message.tool_call_id === 'string' &&
         !cleared.has(message.tool_call_id),
     ).length;
+    // 两个口径分两层（0.53 主题3）：**首行**（折叠态标题）只说本轮新增
+    // （`tool_call_ids` 的长度），**明细行**（展开后）才给总数 `cleared` / 保留条数 /
+    // 新增的 call id。列出的 id 仍然只有新增的那几条 —— 改回全量会把卡本身撑大。
     const notice = renderContextTrimNotice({ cleared: ids.length, kept, tool_call_ids: fresh });
     this.appendNotice(notice);
     this.publishEvent({
@@ -925,7 +956,11 @@ export class ExecutionUnit {
       data: {
         // 旧消费者只认 data.summary：占位卡的可见投影，与 env 卡正文逐字一致。
         summary: notice,
+        // `cleared` = **总数**（本会话/本段累计清了几条），`added` = **本轮新增**
+        // （additive，0.53）。卡面把增量放折叠态标题、总数放展开后的明细，事件两个都带
+        // （UI 自己决定展示层次，消费者不必再从 summary 里抠数字）。
         cleared: ids.length,
+        added,
         kept,
         // 只报本次新增的 id（同一批只讲一次）；顺序＝段基准里的出现顺序。
         tool_call_ids: fresh,

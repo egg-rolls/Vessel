@@ -142,12 +142,35 @@ export type TrimNoticeLocale = 'en' | 'zh-CN';
 
 /** 一张占位卡要说清的三件事：清了几条、留了几条、被清的 call id。 */
 export interface TrimNoticeInput {
-  /** 本段总共被换成占位的工具结果条数。 */
+  /** 本段总共被换成占位的工具结果条数（**总数**，累计口径；只出现在明细行）。 */
   cleared: number;
-  /** 请求视图里仍保留原文的工具结果条数。 */
+  /** 请求视图里仍保留原文的工具结果条数（明细行）。 */
   kept: number;
-  /** 要点名的 call id（只传本次新增的；同一批 id 只讲一次）。 */
+  /**
+   * 要点名的 call id（只传本次新增的；同一批 id 只讲一次）。
+   *
+   * 它的长度就是卡面首行那个**增量**口径（「本轮新增 N 条」）—— 不另开一个 `added`
+   * 字段：两个数一旦分别传入就可能不一致（总数 231 + 增量 6 + 列了 5 个 id），
+   * 而「一句里两个口径」正是这张卡过去让人困惑的根源。这里让增量恒等于列表长度。
+   */
   tool_call_ids: readonly string[];
+}
+
+/** 去重键的三元组：总数 / 本轮新增条数 / 本轮新增的 call id（按段基准出现顺序）。 */
+export interface TrimNoticeSignatureInput {
+  cleared: number;
+  added: number;
+  tool_call_ids: readonly string[];
+}
+
+/**
+ * 占位卡的**去重键**（0.53 主题3）：三个口径全等 ⇒ 是同一张卡。
+ *
+ * 用 JSON 编码而不是自定义分隔符拼接：id 里出现分隔符时 `['a|b']` 与 `['a','b']`
+ * 会拼出同一个键（不同载荷被误判成重复 ⇒ 该发的卡没了）。JSON 保证单射。
+ */
+export function trimNoticeSignature(input: TrimNoticeSignatureInput): string {
+  return JSON.stringify([input.cleared, input.added, [...input.tool_call_ids]]);
 }
 
 function listToolCallIds(ids: readonly string[]): string {
@@ -159,21 +182,35 @@ function listToolCallIds(ids: readonly string[]): string {
 /**
  * 工具结果占位的**可见投影**（env 卡正文）。
  *
- * 只讲「清了几条 / 为什么 / 哪些 call id」，**不含任何工具输出正文**；按 session 去重
- * （调用方只把新增的 id 传进来）。0.52 V1：占位集合在段起点冻结，所以这张卡也只在
- * 集合变了的那一个段起点出现一次。
+ * 只讲「本轮新增几条 / 会话内累计几条 / 为什么 / 哪些 call id」，**不含任何工具输出
+ * 正文**；按 session 去重（调用方只把新增的 id 传进来）。0.52 V1：占位集合在段起点
+ * 冻结，所以这张卡也只在集合变了的那一个段起点出现一次。
+ *
+ * **两个口径分两层**（0.53 主题3，用户裁定 2026-02）：
+ * - 首行 = 折叠态标题，只说**增量**（`tool_call_ids` 的长度 = 本轮新增几条）。卡默认
+ *   收起，用户扫一眼看到的就是「这一轮发生了什么」，不背累计数字；
+ * - 明细行 = 展开后才看：**总数**（`cleared`：这一会话累计把多少条工具结果换成了占位）、
+ *   保留条数、被清的 call id。
+ *
+ * 旧文案把总数塞在标题里、却只列新增的 id ⇒ 一句话两个口径，读起来像「231 条里只清了
+ * 6 条」（用户原话：「这个 trim 数量是总的对吧，是每一轮都要计算这 231 个，还是增量的」）。
+ * id 列表**不许**改回全量：卡的作用是讲清楚，不是把上下文复制一份（超过
+ * `TRIM_NOTICE_MAX_IDS` 照旧折成 `+N`）。
+ *
+ * 首行与明细行之间用 `\n` 分隔 —— `apps/web` 的 `envNoticeCard()` 就是按行解析的
+ * （`env-notice.ts:201`：首行进折叠摘要，其余行进展开区），所以前端渲染层不需要为这次
+ * 口径调整改任何代码。
  */
 export function renderContextTrimNotice(
   input: TrimNoticeInput,
   locale: TrimNoticeLocale = 'en',
 ): string {
   const ids = listToolCallIds(input.tool_call_ids);
+  const added = input.tool_call_ids.length;
   if (locale === 'zh-CN') {
     return [
-      TRIM_ENV_SCOPE +
-        '：为守住上下文上限，把 ' +
-        String(input.cleared) +
-        ' 条较早的工具结果换成了占位符',
+      TRIM_ENV_SCOPE + '：本轮新增 ' + String(added) + ' 条旧工具结果换为占位符',
+      TRIM_ENV_DETAIL_MARK + '会话内已累计 ' + String(input.cleared) + ' 条被占位',
       TRIM_ENV_DETAIL_MARK + '保留最近 ' + String(input.kept) + ' 条工具结果原文',
       TRIM_ENV_DETAIL_MARK + '被清的 call id：' + ids,
     ].join('\n');
@@ -181,8 +218,9 @@ export function renderContextTrimNotice(
   return [
     TRIM_ENV_SCOPE +
       ': ' +
-      String(input.cleared) +
-      ' older tool result(s) replaced with placeholders to stay under the context limit',
+      String(added) +
+      ' older tool result(s) turned into placeholders this run',
+    TRIM_ENV_DETAIL_MARK + String(input.cleared) + ' cleared in this session',
     TRIM_ENV_DETAIL_MARK + 'kept the ' + String(input.kept) + ' most recent tool result(s) as-is',
     TRIM_ENV_DETAIL_MARK + 'cleared call ids: ' + ids,
   ].join('\n');
