@@ -18,7 +18,25 @@ import {
   runningToolHint,
   toolVisible,
 } from '../apps/web/src/domains/chat/chat-visibility';
+import {
+  defaultProjectionTab,
+  hasProjectionPanes,
+  modelViewTextOf,
+  projectionBadgeOf,
+  readbackOriginalOf,
+  readbackOutcomeOf,
+  readbackRequestOf,
+  savedBytesOf,
+  summaryLowerBoundCount,
+} from '../apps/web/src/domains/chat/projection';
 import type { ChatRenderItem } from '../apps/web/src/domains/chat/tool-cards';
+import type { TranscriptItem } from '../apps/web/src/domains/chat/transcript-items';
+import { buildTranscriptItems } from '../apps/web/src/domains/chat/transcript-items';
+import type {
+  Message,
+  ProjectionSummary,
+  ProjectionView,
+} from '../apps/web/src/gateway/types/sessions';
 import type { Verbosity } from '../apps/web/src/state/visibility';
 
 function tool(status: 'running' | 'done' | 'error'): ChatRenderItem {
@@ -36,6 +54,53 @@ function text(value: string): ChatRenderItem {
 }
 
 const liveTool = (status: 'running' | 'done' | 'error') => [text('正文'), tool(status)];
+
+// ─────────────────────────── 0.54 投影卡 fixture ───────────────────────────
+
+/** 一条投影（缺省是「正文就是原文」的 placeholder）：只补测试关心的字段。 */
+function projection(overrides: Partial<ProjectionView> & { tool_call_id: string }): ProjectionView {
+  return {
+    mode: 'placeholder',
+    placeholder_text: `[cleared bash: pnpm build -> exit 1, 3 lines]`,
+    placeholder_hash: 'hash-0',
+    original_bytes: 2048,
+    original_lines: 3,
+    original_available: 'inline',
+    declaration_id: null,
+    ...overrides,
+  };
+}
+
+/** 一条 assistant 的 tool_calls（历史里调用与结果靠 `tool_call_id` 配对）。 */
+function assistantCalls(calls: readonly { id: string; name?: string }[]): Message {
+  return {
+    role: 'assistant',
+    content: '',
+    tool_calls: calls.map((call) => ({
+      id: call.id,
+      type: 'function' as const,
+      function: { name: call.name ?? 'bash', arguments: '{"command":"x"}' },
+    })),
+  };
+}
+
+/** 一条工具结果消息（可带投影）。 */
+function toolMessage(toolCallId: string, content: string, view?: ProjectionView): Message {
+  return {
+    role: 'tool',
+    tool_call_id: toolCallId,
+    content,
+    ...(view !== undefined ? { projection: view } : {}),
+  };
+}
+
+/** 从 item 流里按 `tool_call_id` 取那张卡（`undefined` = 没这张卡）。 */
+function toolCard(items: readonly TranscriptItem[], callId: string) {
+  return items.find(
+    (item): item is Extract<TranscriptItem, { kind: 'tool' }> =>
+      item.kind === 'tool' && item.callId === callId,
+  );
+}
 
 interface Fixture {
   name: string;
@@ -127,6 +192,225 @@ const FIXTURES: readonly Fixture[] = [
     name: 'F8 minimal + 普通事件行 -> 隐藏',
     why: 'minimal 语义是「只留正文 / 上下文 notice / 失败」，普通事件行不该刷屏',
     check: () => !eventRowVisible('llm.stream.chunk', 'minimal'),
+  },
+  // ───────────────── 0.54 投影卡（spec §7.1 第 4 条要求同步 fixture） ─────────────────
+  {
+    name: 'F13 投影按 tool_call_id 合并（结果消息与调用顺序不一致也对得上）',
+    why:
+      '窗口可能从 assistant 中间切起：按下标对齐会把 A 卡的占位挂到 B 卡上。' +
+      '这里故意让「消息顺序」与「调用顺序」相反，只有按 id 合并才全对',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          assistantCalls([{ id: 'call_a' }, { id: 'call_b' }]),
+          // 倒序回结果：第 1 条工具消息属于 call_b，第 2 条属于 call_a。
+          toolMessage(
+            'call_b',
+            'B 的原文',
+            projection({ tool_call_id: 'call_b', placeholder_text: '[cleared b]' }),
+          ),
+          toolMessage(
+            'call_a',
+            'A 的原文',
+            projection({ tool_call_id: 'call_a', placeholder_text: '[cleared a]' }),
+          ),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      });
+      const a = toolCard(items, 'call_a');
+      const b = toolCard(items, 'call_b');
+      if (a?.projection === undefined || b?.projection === undefined) return false;
+      // 两张卡各拿自己的那份：错位时这里必然交叉。
+      if (a.projection.placeholder_text !== '[cleared a]') return false;
+      if (b.projection.placeholder_text !== '[cleared b]') return false;
+      // 反证（按下标对齐会得到什么）：投影属于 call_b，而卡片按调用顺序先是 call_a。
+      const byIndex = items.filter((item) => item.kind === 'tool');
+      return (
+        byIndex[0]?.kind === 'tool' &&
+        byIndex[0].callId === 'call_a' &&
+        byIndex[1]?.kind === 'tool' &&
+        byIndex[1].callId === 'call_b'
+      );
+    },
+  },
+  {
+    name: 'F14 投影不借给邻居（同批结果里只有一条被投影，另一条必须空着）',
+    why:
+      '窗口切掉 owning assistant 时最容易按下标对齐：一借就是「B 的占位挂在 A 的卡上」。' +
+      '这里 call_a 没有投影、call_b 有，且两条结果消息的先后与调用顺序相反 —— 只有按 id 合并才都正确',
+    check: () => {
+      const items = buildTranscriptItems({
+        messages: [
+          assistantCalls([{ id: 'call_a' }, { id: 'call_b' }]),
+          toolMessage(
+            'call_b',
+            'B 的原文',
+            projection({
+              tool_call_id: 'call_b',
+              placeholder_text: '[cleared b]',
+            }),
+          ),
+          toolMessage('call_a', 'A 的原文'),
+        ],
+        messageIndexOffset: 0,
+        liveGroups: [],
+      });
+      const a = toolCard(items, 'call_a');
+      const b = toolCard(items, 'call_b');
+      return (
+        a?.projection === undefined &&
+        b?.projection?.tool_call_id === 'call_b' &&
+        b.projection.placeholder_text === '[cleared b]' &&
+        // 两张卡都还在（没被投影不该改变可见性）。
+        items.filter((item) => item.kind === 'tool').length === 2
+      );
+    },
+  },
+  {
+    name: 'F15 占位条目的 badge 与默认视角（badge 按 mode 出，默认视角按原文在哪）',
+    why:
+      'badge 决定「用户能不能一眼看出模型看到的不是这份」；默认视角是用户 2026-11-15 拍板的 A：' +
+      '原文在正文里就展开原文，原文只在日志 / 不可恢复时才落模型视角（否则默认给空面板）',
+    check: () => {
+      const inline = projection({ tool_call_id: 'c1' });
+      const truncated = projection({ tool_call_id: 'c2', original_available: 'inline_truncated' });
+      const readback = projection({
+        tool_call_id: 'c3',
+        original_available: 'readback',
+        original_bytes: null,
+        readback: { kind: 'events', tool_call_id: 'c3', since_seq: 0 },
+      });
+      const gone = projection({
+        tool_call_id: 'c4',
+        original_available: 'gone',
+        original_bytes: null,
+      });
+      const externalize = projection({ tool_call_id: 'c5', mode: 'externalize' });
+      const badge = (view: ProjectionView) => projectionBadgeOf(view);
+      return (
+        // badge：placeholder / externalize 出，passthrough / archive_notice 不出（ADR-104 §8.5）。
+        badge(inline)?.labelKey === 'chat.projection.badge.placeholder' &&
+        badge(readback)?.labelKey === 'chat.projection.badge.placeholder' &&
+        badge(gone)?.labelKey === 'chat.projection.badge.placeholder' &&
+        badge(externalize)?.labelKey === 'chat.projection.badge.externalize' &&
+        badge({ ...inline, mode: 'passthrough' }) === null &&
+        badge({ ...inline, mode: 'archive_notice' }) === null &&
+        // danger 只给「原文不可恢复」，普通占位不许染红。
+        badge(gone)?.danger === true &&
+        badge(inline)?.danger === false &&
+        // readback / gone 的 badge 要能解释「为什么默认落在模型视角」。
+        badge(readback)?.reasonKey !== undefined &&
+        badge(inline)?.reasonKey === undefined &&
+        // 默认视角（拍板 A）。
+        defaultProjectionTab(inline) === 'original' &&
+        defaultProjectionTab(truncated) === 'original' &&
+        defaultProjectionTab(readback) === 'model' &&
+        defaultProjectionTab(gone) === 'model' &&
+        // 没有「两层」可看的投影不画切换器。
+        hasProjectionPanes(inline) &&
+        hasProjectionPanes(externalize) &&
+        !hasProjectionPanes({ ...inline, mode: 'passthrough' }) &&
+        !hasProjectionPanes({ ...inline, mode: 'archive_notice' })
+      );
+    },
+  },
+  {
+    name: 'F16 模型视角逐字（placeholder_text 不许 trim / 补空格 / 本地化）',
+    why:
+      '这个字段是「模型真正看到的那一字节」：卡的全部价值在于用户复制到的东西 === 模型看到的输入。' +
+      '任何展示层的加工都会让两者不再相等（占位本身超 8 KiB 时尾部还会被裁）',
+    check: () => {
+      const verbatim = '[cleared bash:  pnpm  build->exit 1, 3 lines] ';
+      const view = projection({ tool_call_id: 'c', placeholder_text: verbatim });
+      return (
+        modelViewTextOf(view) === verbatim &&
+        // 首尾空白 / 中间双空格原样保留。
+        modelViewTextOf(view).startsWith('[cleared ') &&
+        modelViewTextOf(view).endsWith('] ') &&
+        modelViewTextOf(view) === view.placeholder_text
+      );
+    },
+  },
+  {
+    name: 'F17 readback 读回为空 -> 降级成 gone 文案（不弹错、不错挂别的 id）',
+    why:
+      '`original_available:"readback"` 只是「请求可得」，读回可能变死链（spec §6.5）。' +
+      '此时必须明确降级成「原文已不可恢复」，而不是空面板 / 错误框；也不许把别条调用的结果张冠李戴',
+    check: () => {
+      const empty = readbackOutcomeOf(readbackOriginalOf([], 'call_a'));
+      return (
+        // 读回为空 ⇒ gone 文案（这条是「降级」，不是「读了但为空」）。
+        empty.kind === 'gone' &&
+        empty.labelKey === 'chat.projection.gone' &&
+        // 空串同理（0 字节的原文等于没有内容）。
+        readbackOutcomeOf('').kind === 'gone' &&
+        // 正控：读到了就展示，且只取这条调用自己的结果。
+        readbackOriginalOf(
+          [{ type: 'tool.call.completed', data: { tool_call_id: 'call_a', result: '原文' } }],
+          'call_a',
+        ) === '原文' &&
+        readbackOriginalOf(
+          [{ type: 'tool.call.completed', data: { tool_call_id: 'call_b', result: '别人的' } }],
+          'call_a',
+        ) === undefined &&
+        // 失败调用的原文在 error 里，completed 优先。
+        readbackOriginalOf(
+          [
+            { type: 'tool.call.failed', data: { tool_call_id: 'call_a', error: 'boom' } },
+            { type: 'tool.call.completed', data: { tool_call_id: 'call_a', result: 'ok' } },
+          ],
+          'call_a',
+        ) === 'ok' &&
+        // 读回参数：readback 用 wire 句柄；inline_truncated 没有句柄但同一个口径读全文；
+        // inline（本来就是全文）与 gone（不可恢复）不给按钮。
+        readbackRequestOf(
+          projection({
+            tool_call_id: 'c3',
+            original_available: 'readback',
+            readback: { kind: 'events', tool_call_id: 'c3', since_seq: 0 },
+          }),
+        )?.toolCallId === 'c3' &&
+        readbackRequestOf(
+          projection({ tool_call_id: 'c2', original_available: 'inline_truncated' }),
+        )?.sinceSeq === 0 &&
+        readbackRequestOf(projection({ tool_call_id: 'c1' })) === undefined &&
+        readbackRequestOf(
+          projection({ tool_call_id: 'c4', original_available: 'gone', original_bytes: null }),
+        ) === undefined &&
+        // file / handle 句柄的读回没接线：不猜来源、不给按钮。
+        readbackRequestOf(
+          projection({
+            tool_call_id: 'c6',
+            mode: 'externalize',
+            original_available: 'readback',
+            readback: { kind: 'handle', handle_id: 'h1' },
+          }),
+        ) === undefined
+      );
+    },
+  },
+  {
+    name: 'F18 汇总数字口径：净值 clamp 到 ≥0 + 未知体量说成下界',
+    why:
+      '`bytes_saved` 是净值、可为负（实测 -6 B），展示层不 clamp 就会显示「省了 -6 B」；' +
+      '`unknown_original_count > 0` 时它只是下界，不写明就等于把下界当总数',
+    check: () => {
+      const base: ProjectionSummary = {
+        total: 3,
+        bytes_saved: 1024,
+        modes: { placeholder: 3 },
+        unknown_original_count: 0,
+      };
+      return (
+        savedBytesOf(base) === 1024 &&
+        // 负数 clamp 到 0（真值口径不变，只是不显示负数）。
+        savedBytesOf({ ...base, bytes_saved: -6 }) === 0 &&
+        // 有未知体量的条数时必须能算出「下界提示」，没有时不加这句话。
+        summaryLowerBoundCount({ ...base, unknown_original_count: 3 }) === 3 &&
+        summaryLowerBoundCount(base) === 0
+      );
+    },
   },
 ];
 
