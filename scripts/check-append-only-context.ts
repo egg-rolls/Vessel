@@ -34,6 +34,7 @@ import { ENV_INFO_DETAIL_MARK, ENV_INFO_SCOPES } from '../packages/agent/src/env
 import {
   createRunJournalFactory,
   ExecutionUnit,
+  isClearedToolResult,
   MemoryEventStream,
   MemoryLLMProvider,
   MemorySessionStore,
@@ -662,27 +663,86 @@ async function runClearingProbe(): Promise<void> {
   //    旧语义「请求视图里必须有占位」已删除：它把「请求期改写历史」写成了通过条件，
   //    正好是不变量禁止的事。这一条现在由 `scripts/check-request-append-only.ts` 的
   //    R1/R4（段内前缀延伸 + 同段内占位条数不得增加）承担硬判据，这里只做同名同源的复核。
-  const requestView = withClearedToolResults(stored, maxTokens);
-  const rewrittenInView = requestView.filter((message, index) => message !== stored[index]).length;
+  //
+  //    0.53 修：旧写法传的是 `maxTokens`（**数字**，0.52 之前的旧签名）。现在
+  //    `withClearedToolResults(messages, cleared)` 的第二个参数是 **cleared id 数组**，
+  //    传数字走「这一段还没有决策 ⇒ 一条都不清」的分支 ⇒ 改写恒为 0，
+  //    这条断言其实什么都没检查（永远绿）。这里改成按该场景**真实的冻结集合**构造：
+  //    压缩事件点名的那些 id 就是写进 `SessionState.cleared_tool_call_ids`、请求期交给
+  //    `withClearedToolResults` 的那一份。
+  //
+  //    ③ 审计必须在 ② 之前算：② 要用它构造入参，不再是「先看改写再补审计」。
+  const audited = context.lastCompaction?.cleared_tool_call_ids ?? [];
+  if (audited.length === 0) {
+    fail('C1g', '压缩事件没有点名 cleared_tool_call_ids（审计缺口）');
+    return;
+  }
+  // 对照：空集合（没有决策 / passthrough 口径）必须一条都不改，且逐条同对象。
+  // 没有这条，「传 ids 改写 N 条」可能只是函数在乱改，看起来却像抓到了违规。
+  const noDecisionView = withClearedToolResults(stored, []);
+  const untouched =
+    noDecisionView.length === stored.length &&
+    noDecisionView.every((message, index) => message === stored[index]);
+  if (!untouched) {
+    fail(
+      'C1g',
+      '对照判据失效：传空 cleared ids 时请求视图仍改写了落盘消息（没有决策必须逐字、逐条同对象）',
+    );
+    return;
+  }
+  const requestView = withClearedToolResults(stored, audited);
+  const rewrittenIndexes: number[] = [];
+  for (let index = 0; index < stored.length; index += 1) {
+    if (requestView[index] !== stored[index]) rewrittenIndexes.push(index);
+  }
+  const rewrittenInView = rewrittenIndexes.length;
+  // 该场景「应被改写」的条数：落盘工具结果里 id 在冻结集合内、且正文还不是占位的那些。
+  // 断言查的是**真实改写行为**（改了几条 + 每条改成了什么），不是「改没改」。
+  const frozenSet = new Set(audited);
+  const expectedRewrites = stored.filter(
+    (message) =>
+      message.role === 'tool' &&
+      typeof message.tool_call_id === 'string' &&
+      frozenSet.has(message.tool_call_id) &&
+      !isClearedToolResult(message.content),
+  ).length;
+  const badRewrites = rewrittenIndexes.filter((index) => {
+    const after = requestView[index];
+    return !(
+      after !== undefined &&
+      after.role === 'tool' &&
+      typeof after.tool_call_id === 'string' &&
+      frozenSet.has(after.tool_call_id) &&
+      isClearedToolResult(after.content)
+    );
+  });
+  if (badRewrites.length > 0) {
+    fail(
+      'C1g',
+      `请求视图改写了 ${String(badRewrites.length)} 条**非**占位替换的消息（只允许把冻结集合内的` +
+        '工具结果换成本函数产出的占位文本）',
+    );
+    return;
+  }
+  if (rewrittenInView !== expectedRewrites) {
+    fail(
+      'C1g',
+      `请求视图改写条数 ${String(rewrittenInView)} ≠ 该场景应改写的 ${String(expectedRewrites)} 条` +
+        `（冻结集合 ${String(audited.length)} 条 ∩ 落盘工具结果）`,
+    );
+    return;
+  }
   if (rewrittenInView > 0) {
     pending(
       'C1g',
       `请求视图改写了 ${String(rewrittenInView)} 条落盘消息（V1：占位没落盘、在请求期改写；` +
         '判据见 check-request-append-only 的 R1/R4 —— 修复单落地后这条不再允许 PENDING）',
     );
-  }
-  // ③ 审计：压缩事件点名了这些工具结果。
-  const audited = context.lastCompaction?.cleared_tool_call_ids ?? [];
-  if (audited.length === 0) {
-    fail('C1g', '压缩事件没有点名 cleared_tool_call_ids（审计缺口）');
     return;
   }
-  // ② 已经记了 pending/fail（请求期改写），就不再报这条 ok —— 否则输出里
-  // 「OK C1g」和「FAIL C1g」会同时出现，读的人第一眼会以为过了。
-  if (rewrittenInView > 0) return;
   ok(
     `C1g 工具结果：落盘 ${String(survived)} 条仍为原文（待 V1 改为占位本身）、` +
-      `请求视图改写 0 条、` +
+      `请求视图改写 ${String(rewrittenInView)} 条（对照：传空集合改写 0 条）、` +
       `审计点名 ${String(audited.length)} 条（移除 ${String(removed)} 条）`,
   );
 }

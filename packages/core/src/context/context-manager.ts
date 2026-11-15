@@ -575,16 +575,23 @@ export function withClearedToolResults(
 ): Message[] {
   if (!Array.isArray(cleared) || cleared.length === 0) return [...messages];
   const ids = new Set(cleared);
-  return messages.map((message) =>
-    message.role === 'tool' &&
-    typeof message.tool_call_id === 'string' &&
-    ids.has(message.tool_call_id)
-      ? {
-          ...message,
-          content: formatClearedToolResult(messages, message.tool_call_id, message.content),
-        }
-      : message,
-  );
+  return messages.map((message) => {
+    if (message.role !== 'tool') return message;
+    if (typeof message.tool_call_id !== 'string') return message;
+    if (!ids.has(message.tool_call_id)) return message;
+    // **幂等守卫**（0.53）：正文已经是占位就原样透传，不再格式化第二次。
+    // `formatClearedToolResult` 的输入必须是**原始结果**——它的行数是
+    // `originalContent.split('\n').length`；把占位文本喂回去等于给占位自己数行，
+    // `[cleared read: a -> 13 lines]` 会退化成 `-> 1 lines`，视图与落盘不再逐字一致
+    // （每多投影一次就多一层漂移）。写入侧落成占位（0.52 裁定的目标形态）之后，这条
+    // 路径每次请求都会命中，所以守卫在这里是必需的，不是防御性冗余。
+    // `session/project-messages.ts` 的同一次替换一直带着同一守卫，两处口径一致。
+    if (isClearedToolResult(message.content)) return message;
+    return {
+      ...message,
+      content: formatClearedToolResult(messages, message.tool_call_id, message.content),
+    };
+  });
 }
 
 /**
