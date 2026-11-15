@@ -356,6 +356,16 @@ timeline.idx/type.idx        # type 索引（可重建，§5）
   ⇒ 「UI 见过的集合」= `timeline ∖ {该 seq}`。**`timeline.hello` 必须增报 `published_head`**，
   客户端据此把 `published_head < wal_head` 的那一小段当作「允许不被推送」的尾部，**不得据此报 gap**。
   §7 的等式与 `check-timeline-equality` 的 A1 读法需按这一条核对（A1 目前用"重连拉全量"，不受影响，但 A7 的 `count` 校验必须区分这段）。
+- **落地后的精确口径（`proto-b1` 定，2026-11-15，以此为准）**：两个事实分两个字段、**绝不合并**——
+  `end_seq = wal_head` 是**可读性**事实（`[1..wal_head]` 每条可读或已声明成洞）；**有效右端 = `min(end_seq, published_head)`** 是**推送**事实。
+  `count` = `(有效右端 - start_seq + 1) - Σ|holes ∩ [start_seq, 有效右端]|`（**洞必须归并再减**——`holes.ndjson` 不去重不合并，
+  写者按"坏帧一条/缺口一条"分别登记，重叠是常态）；`holes` 也只裁到有效右端（落进未发布尾部的洞不上线）。
+  ⇒ 崩溃窗口里客户端三条校验仍成立，**不需要**为"未发布尾部"造新洞（洞只描述可读性，把未发布尾部写成洞就是把两种语义压进一个字段）。
+  端口没报 `published_head` ⇒ 按 `wal_head` 兜底（与 core `timeline/writer.ts:486` open 时 `published = walHead` 同口径，不是放宽）。
+  **装配层还差一行透传**（`src/timeline-dual-write.ts` 的 `withArchiveTaint(sessionId, writer.heads())` 要并上
+  `published_head: writer.publishedHead()`，因为 `heads()` 只报对外四字段）——已在 `pub-i2` 手上。
+- **`timeline.gap_reported` 的点分/下划线**：代码与门禁扫描用**点分** `timeline.gap_reported`（与 `timeline.divergence` 同族；
+  扫描正则只认点分，下划线名扫不到会被判"表腐烂"）。本文 §7 A7 与 plan-054 里的下划线写法**以点分为准**。
 - **两个协议字段也仍缺（不只是门禁缺）**：`timeline.hello` 的四字段（`count/start_seq/end_seq/timeline_head/wal_head`）
   与 `events.subscribe{after_timeline_seq}` 都未落地（`gateway/frames.ts:88-99`、`gateway.ts:1606-1622`），
   全仓 `.ts` 里 `timeline_gap_reported` **0 处**。⇒ `check-timeline-equality` 的 **A7** 与 **A8②** 会报 `NOT_IMPLEMENTED`，
