@@ -35,7 +35,7 @@ import {
   isStructureEvent,
   replayBudgetUnitsOf,
   selectReplayBudgetWindow,
-} from '../packages/serve/src/replay-budget.ts';
+} from '../packages/serve/src/replay-budget';
 
 interface DiskEvent {
   seq: number;
