@@ -878,7 +878,10 @@ export async function buildTenantRuntime(
     if (eventLog !== undefined) {
       await eventLog.flush(sessionId);
       const stored = await eventLog.read(sessionId);
-      if (stored.length > 0) history = projectMessages(stored);
+      // 0.54：这条路径的产物会经 `saveSessionState` 写回 `SessionState.messages`
+      // （见下面的 `journal.saveSessionState`），所以必须取原文视图，不能把清集替换的
+      // 占位物化进盘上。模型视图由请求构建层按段冻结集合自己替换。
+      if (stored.length > 0) history = projectMessages(stored, { applyClearedReplacements: false });
     }
     if (
       !history.some(

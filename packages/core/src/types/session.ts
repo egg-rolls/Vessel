@@ -47,7 +47,21 @@ export interface SessionState {
   created_at: number;
   updated_at: number;
   created_on_branch?: string;
-  /** Projection cache only; truth is SessionEventLog. */
+  /**
+   * 派生投影缓存（原文视图）；真相是 `SessionEventLog`。
+   *
+   * **语义（0.54）：原文视图 —— 这里不允许出现清集替换的占位正文
+   * （`isClearedToolResult(content)` 为真的 tool 消息）。** 它由事件日志重建
+   * （`projectMessages(events, { applyClearedReplacements: false })`）或按
+   * 「缓存 + 增量」拼出来，是**事实**的一份可重建快照；占位是「模型这一轮看到什么」的
+   * **视图**，只存在于请求视图（`withClearedToolResults`）与 UI 的派生投影
+   * （`sessions.get.session.messages[i].projection`）里。
+   *
+   * 为什么写进类型注释：0.54 之前满投影会在这里落成占位（`projectMessages` 默认行为），
+   * 一旦落盘就**粘住** —— `derived_upto_seq` 越过压缩事件，之后每次重启走增量、增量里
+   * 就是占位，原文只剩事件日志（实测 `docs/dev/reports/0.54/proj-readback-15.md` §1.7）。
+   * 想省 token 就改请求视图，**不要**改这个字段的正文。
+   */
   messages?: Message[];
   derived_upto_seq?: number;
   /** Derived snapshot of the latest RunRecord; NOT truth. */
