@@ -172,11 +172,11 @@ export interface ProjectionView {
   original_available: 'inline' | 'inline_truncated' | 'readback' | 'gone';
   /** 需要跨源读取时给句柄，UI 不做推断 */
   readback?:
-    | { kind: 'events'; tool_call_id: string; from_seq: number }
+    | { kind: 'events'; tool_call_id: string; since_seq: number }
     | { kind: 'file'; path: string; offset?: number; length?: number }
     | { kind: 'handle'; handle_id: string };
-  /** 冻结集合的来源事件 seq（审计锚点） */
-  since_event_seq: number;
+  /** 冻结集合的来源事件 seq（审计锚点）。**缺省 = 不知道**：绝不写 0（0 是「第一条事件」） */
+  since_event_seq?: number;
   /** ADR-104 D4 的声明 id；声明机制落地前恒为 null */
   declaration_id: string | null;
 }
@@ -184,8 +184,11 @@ export interface ProjectionView {
 // SessionDetail.messages[i] += projection?: ProjectionView   // sparse：没有就是没被投影，UI 与今天完全一致
 // SessionDetail += projection_summary?: {
 //   total: number; bytes_saved: number; modes: Partial<Record<ProjectionView['mode'], number>>;
+//   unknown_original_count: number;   // 未知体量的条数（bytes_saved 的下界提示：3 = 少算了 3 条）
 // }   // 整会话当前态（不是当前窗口）：由同一趟两分支判定累加得出，
 //     // 因此包含「正文已是占位但 id 已不在冻结集合」的历史条目（§1.3 陷阱 5），别去扫事件日志凑这个数
+//     // bytes_saved 是**净值**：Σ(original_bytes − 占位字节)，可以为负（原文比占位还短的小结果）；
+//     // 服务端不 clamp，展示层要显示「省了多少」自己 clamp
 ```
 
 三条实现约束（每条都能踩出 bug）：
@@ -208,8 +211,8 @@ for (const m of all) {                       // all = 落盘全量 messages
       original_bytes: bytesFromEventLog(id),  // 事件日志里该条结果的字节数；取不到 null
       original_lines: null,
       original_available: 'readback',
-      readback: { kind: 'events', tool_call_id: id, from_seq: sinceSeq(id) },
-      since_event_seq: sinceSeq(id),
+      readback: { kind: 'events', tool_call_id: id, since_seq: sinceSeq(id) },  // 0 = 从日志头按 id 找
+      since_event_seq: sinceSeq(id),   // 取不到就**不带这个键**（不写 0）
       declaration_id: null,
     };
     continue;
@@ -224,7 +227,7 @@ for (const m of all) {                       // all = 落盘全量 messages
       original_bytes: byteLength(m.content),
       original_lines: m.content.split('\n').length,
       original_available: capped(id) ? 'inline_truncated' : 'inline',
-      since_event_seq: sinceSeq(id),
+      since_event_seq: sinceSeq(id),   // 同上：缺省 = 不知道
       declaration_id: null,
     };
   }
@@ -234,7 +237,26 @@ for (const m of all) {                       // all = 落盘全量 messages
 **分支 A 不需要任何 id 集合**——它靠正文自证。这是本设计对"段级冻结集合会被清空"（陷阱 5）的免疫点：即便集合空了，落盘里的占位也能被认出来。
 3. **不要新增 core 字段**。`ProjectionView` 是 wire-only 派生（跟 `system_context` / `context_usage` 同一层），core 的 `SessionState` 一个字节都不动。
 
-读回动作：给 `sessions.events` 的 params 加一个可选 `tool_call_id?: string`（`sessions.ts:905-960` 现有 params 是 `from_seq` / `types` / `limit`），比新开一个 RPC 便宜，且天然带分页。
+读回动作：`sessions.events` 的 params 里用可选 `tool_call_id?: string`（现有 params 是 `since_seq` / `types` / `limit` / `tool_call_id`；`tool_call_id` 已在 0.53 U3 落地 = `sessions.ts:761` 的 `parseToolCallId` + `readEventPage` 过滤），比新开一个 RPC 便宜，且天然带分页。
+
+三个 wire 细节（实现期定死，改字段前先改这里）：
+
+- `readback.since_seq` 就是 `sessions.events` 的 `since_seq`（**排他**游标：只回 `seq > since_seq`）；`0` = 从日志头按 `tool_call_id` 找，**不是**「没有这一段」。wire 上不出现两个词指同一个游标（不存在 `from_seq`）。
+- `original_available:'readback'` 是「**请求可得**」，不是「保证存在」：读回为空/失败时 UI 按 `gone` 文案降级（「原文已被清理」）。`gone` 本轮**不产生**（判它要扫事件日志确认该 id 没有 `tool.call.completed`，等接线），wire 形状与 schema 已登记。
+- 可空三兄弟（`original_bytes` / `original_lines` / `declaration_id`）在 `schemas.ts` 里登记成 `{}`：既有 RPC 校验器只认单一 `type`，写不成 `integer|null` 联合 type。`since_event_seq` 登记为可选 integer（缺省即「不知道」）。
+
+### 1.7.1 实现反哺（2026-11-15，`c570a085` + 本次）
+
+服务端落地时被现实修正的 6 条（前面设计段落保持原样，以这里为准）：
+
+1. **`readback.from_seq` → `readback.since_seq`**。线上不该有两个词指同一个游标，对端参数就叫 `since_seq`（排他、缺省 0）。
+2. **`projection_summary` 多一个 `unknown_original_count`**（spec 原只有三个字段）。分支 A 的原文只在事件日志里、`sessions.get` 不扫日志 ⇒ `original_bytes` 只能是 `null` ⇒ `bytes_saved` 对那几条**无从计入**。没有这个计数，UI 必然把下界当总数。命名跟 `messages_total` 一个口径（计数带 `_count`）。
+3. **`bytes_saved` 是净值，可为负、服务端不 clamp**。原文比占位还短的小结果真实存在（探针实测 -6 B），按 0 记 = 系统性高估；展示层要显示「省了多少」自己 clamp。
+4. **`since_event_seq` 缺省即「不知道」，绝不写 0**。`sessions.get` 只读 `SessionState`，本次没有任何真实 seq 事实；0 在事件日志里是「第一条事件」，写 0 等于把「不知道」伪装成「从日志起点起就成立」。
+5. **可空三兄弟用 `{}` 登记**（见上），不是偷懒：校验器不支持联合 type。
+6. **`'readback'` ≠ 「读得回来」**（见上）：它是请求可得性快照，空结果由 UI 降级到 `gone` 文案；`gone` 本轮无产出。
+
+另两个实现取舍（不是修正，是本轮定下的）：`truncated.arguments` 在一条 assistant 有多个被裁 call 时给**最大原字节数** + `arguments_calls`（不点名具体 call）；`placeholder_hash` = sha256 前 16 位（同 `prompt.system_context.hash` 口径）。
 
 ---
 

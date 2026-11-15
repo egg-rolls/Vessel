@@ -128,7 +128,7 @@ interface ProjectionWire {
   original_bytes: number | null;
   original_lines: number | null;
   original_available: string;
-  readback?: { kind: string; tool_call_id?: string; from_seq?: number };
+  readback?: { kind: string; tool_call_id?: string; since_seq?: number };
   since_event_seq?: number;
   declaration_id: string | null;
 }
@@ -149,7 +149,7 @@ interface SessionWire {
     total: number;
     bytes_saved: number;
     modes: Record<string, number>;
-    unknown_original?: number;
+    unknown_original_count?: number;
   };
   [key: string]: unknown;
 }
@@ -283,9 +283,14 @@ section('T2 分支 A：正文已是占位 ⇒ readback，占位文本逐字搬�
     expect('T2.6 readback.kind', projection.readback?.kind, 'events');
     expect('T2.7 readback.tool_call_id', projection.readback?.tool_call_id, 'call_b');
     expect(
-      'T2.8 readback.from_seq = 0（sessions.events 的默认起点）',
-      projection.readback?.from_seq,
+      'T2.8 readback.since_seq = 0（sessions.events 的排他游标默认值：从日志头找）',
+      projection.readback?.since_seq,
       0,
+    );
+    expect(
+      'T2.8b 不出现 from_seq（wire 上只留一个词）',
+      projection.readback === undefined ? 'no-readback' : 'from_seq' in projection.readback,
+      false,
     );
     expect('T2.9 original_bytes 未知就是 null（不写 0）', projection.original_bytes, null);
     expect('T2.10 original_lines 同上', projection.original_lines, null);
@@ -311,7 +316,7 @@ section('T2 分支 A：正文已是占位 ⇒ readback，占位文本逐字搬�
     total: 1,
     bytes_saved: 0,
     modes: { placeholder: 1 },
-    unknown_original: 1,
+    unknown_original_count: 1,
   });
 }
 
@@ -458,7 +463,7 @@ section('T4 大正文 > 8 KiB：inline_truncated + 原始体量按全文算 + �
     summary !== undefined && summary.bytes_saved > originalBytes - 200,
     `bytes_saved = ${JSON.stringify(summary?.bytes_saved)}`,
   );
-  expect('T4.10 unknown_original = 0（体量已知）', summary?.unknown_original, 0);
+  expect('T4.10 unknown_original_count = 0（体量已知）', summary?.unknown_original_count, 0);
 }
 
 // ── T5：窗口切掉 owning assistant ─────────────────────────────────────────
@@ -531,7 +536,7 @@ section('T5 窗口切掉 owning assistant：工具名与首参摘要不丢（判
   const summary = session.projection_summary;
   expect(
     'T5.6 projection_summary 是整会话口径（含窗口外的条目）',
-    { total: summary?.total, modes: summary?.modes, unknown: summary?.unknown_original },
+    { total: summary?.total, modes: summary?.modes, unknown: summary?.unknown_original_count },
     { total: 2, modes: { placeholder: 2 }, unknown: 0 },
   );
   assertTrue(
@@ -608,6 +613,38 @@ section('T7 readback 句柄对得上 sessions.events 的参数');
       'limit' in properties,
     'params_schema 少了既有分页参数',
   );
+  assertTrue(
+    'T7.3 sessions.events 没有 from_seq（线上只留一个词）',
+    properties !== undefined && !('from_seq' in properties),
+    'params_schema 里出现了 from_seq',
+  );
+
+  // 句柄的键名必须**就是**对端认的那个参数名：wire 上不该有两个词指同一个游标。
+  currentState = {
+    ...currentState,
+    messages: [
+      msg('system', 'sys'),
+      msg('user', '跑测试。'),
+      ...round(
+        'call_h',
+        'bash',
+        '{"command":"pnpm test"}',
+        '[cleared bash: pnpm test -> exit 2, 4 lines]',
+      ),
+    ],
+    cleared_tool_call_ids: undefined,
+  };
+  const projection = projectionAt(await get(), 'call_h');
+  if (projection?.readback === undefined) {
+    fail('T7.4 readback 句柄存在', '拿不到 readback');
+  } else {
+    assertTrue(
+      'T7.4 since_seq 就是 sessions.events 认得的那把钥匙（0 = 从日志头）',
+      properties !== undefined && projection.readback.since_seq === 0 && 'since_seq' in properties,
+      `readback.since_seq = ${JSON.stringify(projection.readback.since_seq)}`,
+    );
+    expect('T7.5 句柄里没有 from_seq', 'from_seq' in projection.readback, false);
+  }
 }
 
 // ── 收口 ──────────────────────────────────────────────────────────────────

@@ -165,9 +165,16 @@ export interface ProjectionView {
    * - `gone`：不可恢复。
    */
   original_available: 'inline' | 'inline_truncated' | 'readback' | 'gone';
-  /** 需要跨源读取时给句柄，UI 不做推断（`from_seq` 是 `sessions.events` 的排他游标）。 */
+  /**
+   * 需要跨源读取时给句柄，UI 不做推断。
+   *
+   * `since_seq` 就是 `sessions.events` 的同名参数（**排他**游标：`> since_seq` 的事件）；
+   * `0` = 从日志头按 `tool_call_id` 找，**不是**「没有这一段」。
+   * `original_available:'readback'` 只表示「请求可得」，不保证一定读得回来：拿到空结果时
+   * UI 按 `gone` 文案降级（服务端本轮不产出 `gone`）。
+   */
   readback?:
-    | { kind: 'events'; tool_call_id: string; from_seq: number }
+    | { kind: 'events'; tool_call_id: string; since_seq: number }
     | { kind: 'file'; path: string; offset?: number; length?: number }
     | { kind: 'handle'; handle_id: string };
   /**
@@ -196,7 +203,7 @@ export interface ProjectionSummary {
    * `Σ(original_bytes − placeholder 字节)`：**净值**，可以为负。
    *
    * 两个必须说清的边界：
-   * - 只累加「原文体量已知」的条目（`inline` / `inline_truncated`）；`unknown_original > 0`
+   * - 只累加「原文体量已知」的条目（`inline` / `inline_truncated`）；`unknown_original_count > 0`
    *   时它是**下界**（未知不等于 0，不拿占位字节反推原文体量）；
    * - 不 clamp 到 0：原文比占位还短的小结果确实会让占位变大，按 0 记等于系统性高估。
    *   展示层若要显示「省了多少」自己 clamp（服务端只给真值）。
@@ -205,7 +212,7 @@ export interface ProjectionSummary {
   /** 每个 mode 各有几条（闭集；没出现的 mode 不登记，不补 0）。 */
   modes: Partial<Record<ProjectionMode, number>>;
   /** `original_bytes === null` 的条数（= `bytes_saved` 少算了几条）。 */
-  unknown_original: number;
+  unknown_original_count: number;
 }
 
 /** 一趟两分支判定的结果：`all` 下标 → 投影（没有 = 没被投影）。 */
@@ -255,7 +262,7 @@ function scanProjections(all: readonly Message[], state: SessionState): Projecti
     total: 0,
     bytes_saved: 0,
     modes: {},
-    unknown_original: 0,
+    unknown_original_count: 0,
   };
 
   for (let index = 0; index < all.length; index += 1) {
@@ -279,7 +286,7 @@ function scanProjections(all: readonly Message[], state: SessionState): Projecti
         original_bytes: null,
         original_lines: null,
         original_available: 'readback',
-        readback: { kind: 'events', tool_call_id: toolCallId, from_seq: 0 },
+        readback: { kind: 'events', tool_call_id: toolCallId, since_seq: 0 },
         declaration_id: declarationId,
       };
     } else if (clearedIds.has(toolCallId)) {
@@ -309,7 +316,7 @@ function scanProjections(all: readonly Message[], state: SessionState): Projecti
     summary.total += 1;
     summary.modes[view.mode] = (summary.modes[view.mode] ?? 0) + 1;
     if (view.original_bytes === null) {
-      summary.unknown_original += 1;
+      summary.unknown_original_count += 1;
     } else {
       // 净值累加（**不 clamp 到 0**）：原文比占位还短的小结果真的会让占位变大，
       // 把它按 0 记等于系统性高估节省量。聚合结果可以是负数。

@@ -304,8 +304,18 @@ export const projectionViewSchema = {
       type: 'string',
       enum: ['inline', 'inline_truncated', 'readback', 'gone'],
     },
-    // 需要跨源读取时的句柄（`kind` 是闭集，其余字段按 kind 走）。
-    readback: { type: 'object', required: ['kind'], properties: { kind: { type: 'string' } } },
+    // 需要跨源读取时的句柄（`kind` 是闭集；`events` 用 tool_call_id + since_seq。
+    // `since_seq` 与 `sessions.events` 同名同义：**排他**游标，0 = 从日志头按 id 找）。
+    // `readback` 只表示「请求可得」，不保证读得回来：空结果时 UI 降级到 `gone` 文案。
+    readback: {
+      type: 'object',
+      required: ['kind'],
+      properties: {
+        kind: { type: 'string', enum: ['events', 'file', 'handle'] },
+        tool_call_id: { type: 'string', minLength: 1 },
+        since_seq: { type: 'integer', minimum: 0 },
+      },
+    },
     // 缺省 = 不知道（本次没读事件日志）；**不写 0**（0 在日志里是「第一条事件」）。
     since_event_seq: { type: 'integer', minimum: 0 },
     declaration_id: {},
@@ -316,7 +326,7 @@ export const projectionViewSchema = {
  * 整会话的投影汇总（`sessions.get.session.projection_summary`，additive 0.54）。
  *
  * 口径 = **整个会话当前态**（在切片前对全量 messages 累加），不是当前分页窗口。
- * `bytes_saved` 是**净值**（可负，不 clamp）；`unknown_original > 0` 时它是**下界**
+ * `bytes_saved` 是**净值**（可负，不 clamp）；`unknown_original_count > 0` 时它是**下界**
  * （有几条的原文体量未知，未计入 —— 未知不等于 0）。
  */
 export const projectionSummarySchema = {
@@ -328,7 +338,7 @@ export const projectionSummarySchema = {
     bytes_saved: { type: 'integer' },
     // 闭集键 → 条数（没出现的 mode 不补 0）。
     modes: { type: 'object' },
-    unknown_original: { type: 'integer', minimum: 0 },
+    unknown_original_count: { type: 'integer', minimum: 0 },
   },
 };
 
