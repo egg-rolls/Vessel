@@ -65,7 +65,7 @@ export interface TimelineEvent {
 export type TimelineRule = 1 | 2 | 3 | 4;
 
 /** 缺口从哪来：四条校验 / RPC 拿不全 / 服务端 gap 帧（旧的混合语义，只能如实转记）。 */
-export type TimelineGapSource = 'range' | 'fetch' | 'server';
+export type TimelineGapSource = 'range' | 'fetch' | 'server' | 'holes';
 
 /**
  * 一次**已声明**的缺口（`timeline_gap_reported` 的载荷）。
@@ -185,9 +185,7 @@ export function planRange(
 ): TimelineRangeHeader {
   const start = Number.isInteger(start_seq) ? Math.max(0, start_seq) : 0;
   const end = Number.isInteger(end_seq) ? Math.max(start, end_seq) : start;
-  const holes = cursor.holes.filter(
-    (hole) => hole.to_seq >= start && hole.from_seq <= end,
-  );
+  const holes = cursor.holes.filter((hole) => hole.to_seq >= start && hole.from_seq <= end);
   return {
     start_seq: start,
     end_seq: end,
@@ -233,11 +231,7 @@ export function validateTimelineRange(
 ): TimelineGapReport | undefined {
   const from = header.start_seq;
   const to = header.end_seq;
-  const make = (
-    rule: TimelineRule,
-    expected: string,
-    received: string,
-  ): TimelineGapReport => ({
+  const make = (rule: TimelineRule, expected: string, received: string): TimelineGapReport => ({
     from_seq: from,
     to_seq: to,
     source: 'range',
@@ -250,9 +244,7 @@ export function validateTimelineRange(
   const last = lastExpectedSeq(header);
   // 空区间（整段都被声明成洞）：实收必须为 0。
   if (first === undefined || last === undefined) {
-    return seqs.length === 0
-      ? undefined
-      : make(3, '0 条（整段已声明为洞）', `${seqs.length} 条`);
+    return seqs.length === 0 ? undefined : make(3, '0 条（整段已声明为洞）', `${seqs.length} 条`);
   }
   const head = seqs[0];
   const tail = seqs[seqs.length - 1];

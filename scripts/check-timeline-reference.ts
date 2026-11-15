@@ -23,17 +23,46 @@
 import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { stableEventId } from '../apps/web/src/gateway/replay-source';
 import {
   DEFAULT_DATA_DIR,
   isTimelineOnlyType,
   loadSessionReference,
   multisetDiff,
+  payloadDigest,
   type RefEvent,
   refEventFromRaw,
   resolveDataDir,
   TIMELINE_ONLY_EVENT_TYPES,
 } from './timeline-reference';
+
+/**
+ * 独立复算「内容 id 的第 4 段」（= payload 摘要，抹掉出站才补的 `session_id`）。
+ *
+ * 为什么在这里再写一遍：0.54 B2 删掉了 web 侧的 `stableEventId`（客户端不再有内容 id 去重，
+ * ADR-105 §6），尺子若继续引用被测实现的辅助函数就等于自己称自己。这里用**独立实现**
+ * 复算同一条口径 —— 断言从「复用同一实现」升级成「两条独立实现结论相同」。
+ */
+function fourthSegment(event: {
+  type: string;
+  run_id?: string;
+  ts: number;
+  data?: unknown;
+}): string {
+  const runId = event.run_id ?? '';
+  let payload = event.data;
+  if (runId !== '' && runId !== 'manual' && typeof payload === 'object' && payload !== null) {
+    const record = payload as Record<string, unknown>;
+    if ('session_id' in record) {
+      const copy: Record<string, unknown> = {};
+      for (const key of Object.keys(record)) {
+        if (key === 'session_id') continue;
+        copy[key] = record[key];
+      }
+      payload = copy;
+    }
+  }
+  return payloadDigest(payload);
+}
 
 /** 样本个数（任务单要求 ≥3，验收要看 4 个）。 */
 const SAMPLE_COUNT = 4;
@@ -455,17 +484,16 @@ async function main(): Promise<void> {
       normalized.payload_digest === denormalized.payload_digest,
     `with=${normalized?.payload_digest ?? '-'} without=${denormalized?.payload_digest ?? '-'}`,
   );
-  const fourth = stableEventId({
-    seq: 1,
+  const fourth = fourthSegment({
     type: 'tool.call.started',
     run_id: 'run-constructed',
     ts,
     data: { tool_name: 'bash', session_id: 'sess-constructed' },
-  }).split('|')[3];
+  });
   assertEqual(
-    '⑤ digest == stableEventId 第 4 段（复用同一实现）',
+    '⑤ digest == 独立复算的第 4 段（两条独立实现同口径）',
     normalized?.payload_digest ?? '',
-    fourth ?? '',
+    fourth,
   );
   const manualWith = refEventFromRaw({
     type: 'session.created',

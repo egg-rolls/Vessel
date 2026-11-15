@@ -32,11 +32,11 @@ import {
   buildLiveItems,
   type TranscriptItem,
 } from '../apps/web/src/domains/chat/transcript-items';
-import type { RunEvent } from '../apps/web/src/gateway/types';
 import {
   inHoles,
   planBackfill,
   planRange,
+  toRunEvent,
   validateTimelineRange,
   type TimelineCursor,
   type TimelineEvent,
@@ -44,7 +44,7 @@ import {
   type TimelineRangeHeader,
 } from '../apps/web/src/gateway/timeline-protocol';
 import { EventStore } from '../apps/web/src/state/event-store';
-import { groupEvents, type RunGroup, type StoredEvent } from '../apps/web/src/state/events';
+import { groupEvents, producesTimelineItem, type RunGroup, type StoredEvent } from '../apps/web/src/state/events';
 
 const SESSION = 's-b2';
 const RUN = 'r-b2';
@@ -79,8 +79,8 @@ function midRunEvents(count = 40): TimelineEvent[] {
   let round = 0;
   while (events.length < count - 1) {
     round += 1;
-    push('llm.stream.chunk', { kind: 'reasoning_delta', text: `想一想 ${String(round)}.` });
-    push('llm.stream.chunk', { kind: 'text_delta', text: `第 ${String(round)} 句。` });
+    push('llm.stream.chunk', { chunk: { type: 'reasoning_delta', delta: `想一想 ${String(round)}.` } });
+    push('llm.stream.chunk', { chunk: { type: 'text_delta', delta: `第 ${String(round)} 句。` } });
     push('tool.call.started', { call_id: `c${String(round)}`, tool_name: 'bash' });
     push('tool.call.completed', {
       call_id: `c${String(round)}`,
@@ -116,7 +116,12 @@ function groupsOf(store: EventStore): RunGroup[] {
 }
 
 function rebuild(events: readonly TimelineEvent[]): RunGroup[] {
-  const stored: StoredEvent[] = events.map((event) => ({ seq: event.seq, event: event as RunEvent }));
+  // 两侧必须走**同一个** wire → `RunEvent` 转换（`toRunEvent`）：否则重建那侧会多带一个
+  // `seq` 字段，比较的是转换差异而不是折叠差异。
+  const stored: StoredEvent[] = events.map((event) => ({
+    seq: event.seq,
+    event: toRunEvent(event),
+  }));
   return groupEvents(stored, false, 'user');
 }
 
@@ -125,6 +130,8 @@ function itemsOf(groups: readonly RunGroup[]): TranscriptItem[] {
 }
 
 function seqsOf(store: EventStore): number[] {
+  // `push` 只排 50ms 合批，快照要显式 flush 才是最新的（与渲染侧同一节拍）。
+  store.flush();
   return store.getSnapshot().entries.map((entry) => entry.seq);
 }
 
@@ -133,13 +140,15 @@ function seqsOf(store: EventStore): number[] {
 function s1OneRange(): void {
   const events = midRunEvents();
   const store = storeWith(events);
-  const expected = events.map((event) => event.seq);
+  // 环里只留「产 item」的条目（`producesTimelineItem` 是唯一判据，与 `push` 同口径）：
+  // 传输噪声（`tool_call_delta` / `finish`）不占额度，也不进环。
+  const expected = events.filter((event) => producesTimelineItem(event)).map((event) => event.seq);
   expect(
     JSON.stringify(seqsOf(store)) === JSON.stringify(expected),
     'S1 覆盖',
-    `entries ${String(seqsOf(store).length)} 条 != 区间 ${String(expected.length)} 条`,
+    `entries ${String(seqsOf(store).length)} 条 != 应入环 ${String(expected.length)} 条`,
   );
-  expect(store.currentSeq === expected.length, 'S1 游标', `游标 ${store.currentSeq} != ${expected.length}`);
+  expect(store.currentSeq === events.length, 'S1 游标', `游标 ${store.currentSeq} != ${events.length}`);
   expect(
     JSON.stringify(itemsOf(groupsOf(store))) === JSON.stringify(itemsOf(rebuild(events))),
     'S1 item 流',
@@ -152,26 +161,34 @@ function s2Idempotent(): void {
   const events = midRunEvents();
   const store = storeWith(events);
   const before = JSON.stringify(itemsOf(groupsOf(store)));
+  const entriesBefore = JSON.stringify(seqsOf(store));
   const again = store.applyTimelineRange(headerOf(events), events);
   expect(again.violation === undefined, 'S2 复喂不报缺口', '同一区间第二次不该被当成缺口');
   expect(again.merged === 0, 'S2 一条不并', `第二次并入了 ${String(again.merged)} 条`);
+  expect(JSON.stringify(seqsOf(store)) === entriesBefore, 'S2 环不变', '复喂之后环里的条目变了');
   expect(JSON.stringify(itemsOf(groupsOf(store))) === before, 'S2 item 幂等', '复喂之后 item 流变了');
 }
 
-function s3Rewind(): void {
+function s3JoinTail(): void {
   const events = midRunEvents();
   const store = new EventStore(0);
   store.setScopeSession(SESSION);
   // 刷新时环里只有尾部（`push` 是实时路径）：游标先到尾部。
-  for (const event of events.slice(24)) store.push(event as RunEvent, { seq: event.seq });
+  for (const event of events.slice(24)) store.push(toRunEvent(event), { seq: event.seq });
   const tail = store.currentSeq;
   const outcome = store.applyTimelineRange(headerOf(events), events);
-  expect(outcome.rewound > 0, 'S3 退游标', `区间起点早于游标 ${String(tail)} 时没有退游标`);
+  expect(outcome.violation === undefined, 'S3 不报缺口', '补更早一段不该被当成缺口');
   expect(store.currentSeq === events.length, 'S3 游标', `游标 ${store.currentSeq} != ${events.length}`);
+  const stored = seqsOf(store);
+  expect(
+    stored.includes(tail - 1),
+    'S3 接上',
+    `更早那一段没有接上（${String(tail)} 之前是空的）`,
+  );
   expect(
     JSON.stringify(itemsOf(groupsOf(store))) === JSON.stringify(itemsOf(rebuild(events))),
     'S3 item 流',
-    '退游标 + 重拉之后的 item 流与整表重建不同',
+    '补上更早一段之后的 item 流与整表重建不同',
   );
 }
 
@@ -269,7 +286,8 @@ function v6Holes(): void {
   const header = headerOf(all, holes);
   const outcome = store.applyTimelineRange(header, events);
   expect(outcome.violation === undefined, 'V6 洞内不期望', `声明的洞被判成缺口：${String(gapOf(store)?.rule)}`);
-  expect(outcome.merged === events.length, 'V6 条数', `并入 ${String(outcome.merged)} != ${String(events.length)}`);
+  const expected = events.filter((event) => producesTimelineItem(event)).length;
+  expect(outcome.merged === expected, 'V6 条数', `并入 ${String(outcome.merged)} != ${String(expected)}`);
   expect(store.currentSeq === all.length, 'V6 游标', `游标 ${store.currentSeq} != ${all.length}（洞不许卡住游标）`);
   expect(store.timelineGap.tainted, 'V6 污点', '有声明洞时 UI 必须显示「这一段读不回来」');
 }
@@ -306,7 +324,7 @@ function midRunRefresh(tail = 12): { store: EventStore; live: TimelineEvent[] } 
       ts: 1000 + seq,
       data: { run_id: RUN, session_id: SESSION, round: index },
     });
-    store.push(live[live.length - 1] as RunEvent, { seq });
+    store.push(toRunEvent(live[live.length - 1] as TimelineEvent), { seq });
   }
   return { store, live };
 }
@@ -407,7 +425,7 @@ function t4SegmentsJoin(): void {
 function main(): void {
   s1OneRange();
   s2Idempotent();
-  s3Rewind();
+  s3JoinTail();
   v1Continuity();
   v2Count();
   v3Bounds();

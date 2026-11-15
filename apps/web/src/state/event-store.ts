@@ -33,15 +33,16 @@
  *   整表重折叠（更早的段往尾部追加 delta 一定错）。
  */
 
-import type { RunEvent } from '../gateway/types';
 import {
-  toRunEvent,
+  inHoles,
   type TimelineEvent,
   type TimelineGapReport,
   type TimelineGapState,
   type TimelineRangeHeader,
+  toRunEvent,
   validateTimelineRange,
 } from '../gateway/timeline-protocol';
+import type { RunEvent } from '../gateway/types';
 import type { ErrorVisibility } from './error-visibility';
 import { producesTimelineItem, type StoredEvent } from './events';
 import { type ItemSink, LiveItemStore } from './live-items';
@@ -145,22 +146,19 @@ export interface EventStoreOptions {
  * 一次区间并入的结果（探针 / 日志 / 门禁读它）。
  *
  * `violation` 有值 = 四条校验之一没过，**这一段一条都没并**（`merged` 为 0），缺口已记进
- * `TimelineGapState`（UI 看得见）。`rewound` = 这次并入把游标退回去了多少条（区间起点早于
- * 当前游标：刷新 / 缺口重拉的唯一入口）。
+ * `TimelineGapState`（UI 看得见）。`duplicates` = 区间里已经收过的条数（幂等复喂 /
+ * 缺口重拉都会命中这里）。
  */
 export interface TimelineRangeOutcome {
   merged: number;
   duplicates: number;
   evicted: number;
-  rewound: number;
   violation?: TimelineGapReport;
 }
 
 function emptyGapState(): TimelineGapState {
   return { reports: 0, tainted: false };
 }
-
-
 
 /** 事件自报的 session 归属：优先顶层字段，其次 `data.session_id`；缺失时 undefined。 */
 function eventSessionId(event: RunEvent): string | undefined {
@@ -318,7 +316,8 @@ export class EventStore {
         `${report.rule === undefined ? '' : ` rule=${report.rule}`}` +
         ` expected=${report.expected} received=${report.received}`,
     );
-    this.scheduleNotify();
+    // 立刻发布：缺口是「界面必须看见」的事实，不能等 50ms 合批（也不能等到下一次 flush）。
+    this.flush();
     return report;
   }
 
@@ -329,10 +328,12 @@ export class EventStore {
    * 洞（`holes`，写者声明的永久事实）不在这里收 —— 它们每次回填都会重新报一次。
    */
   clearTimelineGap(): void {
-    if (this.gap.tainted) {
-      this.gap = { reports: this.gap.reports, tainted: false };
-      this.scheduleNotify();
-    }
+    if (!this.gap.tainted) return;
+    // 声明洞（`source: 'holes'`）是**永久事实**：重拉成功也不许把污点收掉，否则「这一段
+    // 读不回来」会变成一次性提示（ADR-105 §6：洞登记后永久保留，不自动修复）。
+    if (this.gap.last?.source === 'holes') return;
+    this.gap = { reports: this.gap.reports, tainted: false };
+    this.scheduleNotify();
   }
 
   /** 当前订阅作用域所属的会话（缺口重拉要它；未设 = undefined）。 */
@@ -454,36 +455,68 @@ export class EventStore {
     );
     if (violation !== undefined) {
       this.reportTimelineGap(violation);
-      return { merged: 0, duplicates: 0, evicted: 0, rewound: 0, violation };
+      return { merged: 0, duplicates: 0, evicted: 0, violation };
     }
-    let rewound = 0;
-    if (header.start_seq - 1 < this.clientTimelineSeq) {
-      // 冻结物化面：退游标**不该**动屏上已显示的 item（I6），整表重折叠在下面一次性做。
-      this.sink.freeze();
-      rewound = this.truncateAfter(header.start_seq - 1);
-    }
+    // 按 seq **缺席才插**：区间与实时流共用同一个 seq 空间，所以「已经在环里」就是收过
+    // （幂等复喂 / 缺口重拉 / 刷新时环里已有的尾部都走这一条），不需要退游标、也不需要
+    // 第二套去重键。洞里的 seq 本来就不该收到（校验按声明已放行），跳过它们。
+    const present = new Set<number>();
+    for (const entry of this.entries) present.add(entry.seq);
     let merged = 0;
     let duplicates = 0;
+    let insertedBefore = false;
     for (const event of ordered) {
-      if (event.seq <= this.clientTimelineSeq) {
-        // 校验已过 ⇒ 走到这里只可能是「上一轮已经收过同一段」，记账不静默。
+      if (present.has(event.seq)) {
         duplicates += 1;
         continue;
       }
-      if (!producesTimelineItem(toRunEvent(event))) {
+      present.add(event.seq);
+      // 声明为洞的 seq：没有内容可并，但游标要跨过去（见下）。
+      if (inHoles(event.seq, header.holes)) continue;
+      const runEvent = toRunEvent(event);
+      if (!producesTimelineItem(runEvent)) {
         this.droppedNoiseCount += 1;
         continue;
       }
-      this.appendEntry(toRunEvent(event), event.seq);
+      if (event.seq <= this.clientTimelineSeq) insertedBefore = true;
+      this.appendEntry(runEvent, event.seq);
       merged += 1;
     }
-    // 区间里的洞是**声明**：游标照样推到区间右端，否则下一次回填会把它们再拉一遍。
+    // 单游标只前进：区间里的洞是**声明**，跳过它们不算缺口，游标照样推到右端。
+    const advanced = header.end_seq > this.clientTimelineSeq;
     this.clientTimelineSeq = Math.max(this.clientTimelineSeq, header.end_seq);
+    if (merged > 0) {
+      // entries 必须按 seq 升序（`truncateAfter` 的二分前提）：插入的是更早的一段时重排一次。
+      if (insertedBefore)
+        this.entries = [...this.entries].sort((left, right) => left.seq - right.seq);
+      this.runCounts.clear();
+      for (const entry of this.entries) {
+        const runId = entry.event.run_id;
+        this.runCounts.set(runId, (this.runCounts.get(runId) ?? 0) + 1);
+      }
+    }
     const evicted = this.trimEntries();
-    // 整表重折叠（含 Rule R 的保留）：屏上「更早的那一段长出来」，已有内容不动。
-    this.sink.resume(this.entries);
-    this.flush();
-    return { merged, duplicates, evicted, rewound };
+    // 区间带声明洞 ⇒ 这一段**读不回来**是永久事实，UI 必须挂污点（ADR-105 §6）。
+    const holesInRange = header.holes.filter(
+      (hole) => hole.to_seq >= header.start_seq && hole.from_seq <= header.end_seq,
+    );
+    if (holesInRange.length > 0 || header.tainted) {
+      this.reportTimelineGap({
+        from_seq: holesInRange[0]?.from_seq ?? header.start_seq,
+        to_seq: holesInRange[holesInRange.length - 1]?.to_seq ?? header.end_seq,
+        source: 'holes',
+        expected: `[${String(header.start_seq)}, ${String(header.end_seq)}] 可读`,
+        received: `已声明 ${String(holesInRange.length)} 段不可读（holes）`,
+        at: Date.now(),
+      });
+    }
+    if (merged > 0 || !advanced) {
+      // 并入 / 重排之后按环里的全部事件重折叠一遍（Rule R 的保留口径：屏上「更早的那一段
+      // 长出来」，已有内容不动）。只推了游标时不必重算。
+      this.sink.resume(this.entries);
+      this.flush();
+    }
+    return { merged, duplicates, evicted };
   }
 
   /** 一条已校验通过的事件进环（`push` 与 `applyTimelineRange` 共用；归属口径一致）。 */

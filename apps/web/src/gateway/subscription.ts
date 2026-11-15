@@ -263,10 +263,7 @@ export class SubscriptionController {
   }
 
   /** 拉一段区间（页只在区间内部）并交回 store 做四条校验。 */
-  private async pullRange(
-    sessionId: string,
-    header: TimelineRangeHeader,
-  ): Promise<'ok' | 'gap'> {
+  private async pullRange(sessionId: string, header: TimelineRangeHeader): Promise<'ok' | 'gap'> {
     const fetched = await collectTimelineRange(header, async (sinceSeq, limit) => {
       const body = await this.client.request<unknown>(
         'sessions.events',
@@ -392,7 +389,9 @@ export class SubscriptionController {
       // ② 回填追平之后才开实时订阅：`since` 取**当前游标**，所以实时流只送增量，
       //    与回填的区间不重叠（「边回填边追平」的形态从结构上不存在）。
       const built = buildSubscription(scope, {
-        currentSeq: this.eventStore.currentSeq,
+        // chat：回填已经追平，实时流只要增量（游标就是右端）；team / none 沿用连接级
+        // hello 给的锚点（它们本来就不重放历史）；runs / run 固定 `since: 0`。
+        currentSeq: scope.kind === 'chat' ? this.eventStore.currentSeq : baseSeq,
         sessionFilter: this.supportsSessionFilter(),
       });
       this.appliedKey = scopeKey;
@@ -415,4 +414,3 @@ export class SubscriptionController {
     }
   }
 }
-
