@@ -548,11 +548,11 @@ export interface ContextProjectionAudit {
 
 | 事件 | 何时 | 本轮状态 |
 | --- | --- | --- |
-| `context.projection_declared` | 会话创建（含 rotate 开新会话、子 agent 继承） | 已实现（`source: session_created / default / legacy / rotate / inherited`，`previous_mode`、`reason`） |
+| `context.projection_declared` | 会话创建（含 rotate 开新会话、子 agent 继承） | **未实现生产者**（2026-11-16 核实：U1 只落声明不发事件；计划 U3 补，形状 `source: session_created / default / legacy / rotate / inherited`、`previous_mode`、`reason`） |
 | `context.projection_applied` | **决策发生变更的那次 run 起点**（条件见 §5.1，不是每个 run） | 已实现（`cleared / kept / archived / announced`） |
 | `context.projection_degraded` | §4.4 | 已实现（含 `readback_unavailable`） |
 | `context.projection_pressure` | 体积触顶（只告警；每个 run 起点最多一条，去重键 = run） | 已实现 |
-| `context.projection_rejected` | **试图改声明**（改 mode/params/豁免工具）；不是"集合每 run 重算" | 已实现 |
+| `context.projection_rejected` | **试图改声明**（改 mode/params/豁免工具）；不是"集合每 run 重算" | **未实现生产者**（同上，计划 U3 补；当前拒绝只以 `ProjectionModeImmutableError` + RPC 错误码体现） |
 | `context.cleared_tool_result` | `placeholder`（既有，不变） | 已实现 |
 | `context.externalized_tool_result` | `externalize` 落盘 | **`not_implemented`**（附录 A） |
 
