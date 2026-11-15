@@ -23,8 +23,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vessel-agent/config": "0.53.0",
-    "@vessel-agent/core": "0.53.0"
+    "@vessel-agent/config": "workspace:*",
+    "@vessel-agent/core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
