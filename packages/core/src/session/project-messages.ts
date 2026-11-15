@@ -422,6 +422,136 @@ function messageSignature(message: Message): string {
 }
 
 /**
+ * 「会话壳里的缓存」⇄「事件日志的纯投影」对账（0.54 B3）。
+ *
+ * **这条函数不许读会话壳里的任何游标字段**（`derived_upto_seq` / `projection_cache_seq`
+ * 都不许）。为什么：那个数一旦参与判定，它就从「缓存覆盖到哪的提示」变回「事实水位」，
+ * 于是「壳落后于日志」时整段尾部事实对人不可见（P7：`derived=4 < last_seq=366` ⇒ 刷新
+ * 只剩 4 条），「壳说覆盖到 1e7」时撤回/压缩就不再生效。判据见
+ * `scripts/check-projection-cache-agnostic.ts`：把这个字段删掉 / 灌毒之后，本函数的
+ * 输出必须逐字节不变。
+ *
+ * **为什么不是「一律用投影」**：事件日志里的载荷是**脱敏之前**的那一份
+ * （`context.changed` / `tool.call.completed` 发的是 `identified`，脱敏发生在
+ * `ExecutionUnit#maskForAppend`，即写上下文那一刻）。投影直接顶替缓存会把真值/未中和的
+ * 同形 token 重新带回 store 与请求（`check-pii-vault` 的「历史消息逐条未改」当场红）。
+ * 所以缓存在**它已经覆盖的范围内是内容权威**，日志只用于「补出缓存还没有的尾部」。
+ *
+ * 规则（顺序即语义）：
+ *
+ * 0. **替换语义先判**：投影头部是一条**缓存里没有的**压缩摘要 ⇒ 中间一定发生过压缩
+ *    （压缩把历史换成一条摘要，摘要必然落在投影头部）⇒ 缓存正文作废、只留基底 system，
+ *    正文全部取投影。日志里出现 `session.rewound` 时同理（撤回 = 删尾部事实，缓存里那几条
+ *    必须消失）。这两条都只看**日志的形状与内容**，不看任何游标。
+ * 1. **对齐点按内容算**：把缓存里每条「非缓存专属」消息在投影里按顺序找一遍（跳过投影里
+ *    多出来的那条 —— 它可能是脱敏 / guardrail 改写过的同一句）。全部找到 ⇒ 覆盖到
+ *    「最后一条命中位置 + 1」；有**一条**找不到 ⇒ 缓存与事实无法对齐（外来缓存 / 事件里
+ *    根本没有它），此时**不动缓存**（宁可不补，也不改写已有正文：append-only 是硬约束）。
+ * 2. **补尾部**：`projected.slice(cut)` 整段追加。这是 P7 的修复点：壳落后时尾部事实照旧
+ *    可见，且**前缀一个字节都不变**（落盘序列因此是 append-only）。
+ * 3. 缓存专属消息（基底 system / 带 `name` 的运行时提示）永远留在原位：它们不是事件投影
+ *    的产物，丢了等于让用户可见的卡片在重启后消失。
+ *
+ * 幂等性：对「结果」再跑一遍结果不变（对齐点已到投影尾部 ⇒ 追加空段）。
+ */
+export function reconcileCachedProjection(
+  cached: readonly Message[],
+  projected: readonly Message[],
+  options?: { replacementInLog?: boolean },
+): Message[] {
+  // 0. 替换语义：日志里有撤回、或投影头部是一条**缓存里没有的**压缩摘要 ⇒ 缓存正文作废
+  //    （基底 system 除外）。只看日志与内容，不看任何游标。
+  if (options?.replacementInLog === true || compactionUnseenByCache(cached, projected)) {
+    return [...cached.filter(isBaseSystemMessage), ...projected];
+  }
+  // 1. 对齐点（内容算，不看游标）。
+  const cut = coverageCut(cached, projected);
+  // 2. 对不上 ⇒ 保守：不动缓存（改写已有正文等于回改历史，PII 与 append-only 都破）。
+  if (cut === undefined) return [...cached];
+  // 3. 补尾部（前缀逐字不变）。
+  if (cut >= projected.length) return [...cached];
+  return [...cached, ...projected.slice(cut)];
+}
+
+/**
+ * 投影头部是不是一条**缓存里没有的**压缩摘要。
+ *
+ * 为什么这条能精确识别「压缩把历史换掉了」：`message.compaction` 的投影会把摘要放在
+ * **最前面**（它是替换语义），所以「投影头是摘要、缓存里却没有它」只可能是「壳停在压缩
+ * 之前」。反过来，缓存头与投影头对不上还有别的正当原因（壳里的种子消息从来不是事件、
+ * append 侧脱敏改写过正文…）—— 那些**不是**替换，不许据此丢缓存正文。
+ */
+function compactionUnseenByCache(
+  cached: readonly Message[],
+  projected: readonly Message[],
+): boolean {
+  const head = projected[0];
+  if (head === undefined) return false;
+  if (head.role !== 'system' || head.compaction_summary !== true) return false;
+  const signature = messageSignature(head);
+  return !cached.some((message) => messageSignature(message) === signature);
+}
+
+/**
+ * 缓存已经覆盖到投影的第几条（返回该下标；`0` = 一条都没覆盖）。
+ *
+ * 缓存没有可比正文（只有基底 system / 暂无历史）⇒ 返回 `0`（投影整段都是新的）。
+ * 有任何一条缓存正文在投影里找不到 ⇒ 返回 `undefined`（无法对齐，调用方不许改缓存）。
+ * 复杂度：签名各算一次，两个指针单调前进（O(n + m)）—— 会话可以有几万条事件。
+ */
+function coverageCut(
+  cached: readonly Message[],
+  projected: readonly Message[],
+): number | undefined {
+  const projectedSignatures = projected.map((message) => messageSignature(message));
+  const cursorBySignature = new Map<string, number[]>();
+  for (let index = 0; index < projectedSignatures.length; index += 1) {
+    const signature = projectedSignatures[index];
+    if (signature === undefined) continue;
+    const list = cursorBySignature.get(signature);
+    if (list === undefined) cursorBySignature.set(signature, [index]);
+    else list.push(index);
+  }
+  let covered = 0;
+  let searchFrom = 0;
+  let matched = false;
+  for (const message of cached) {
+    if (isCacheOnlyMessage(message)) continue;
+    const positions = cursorBySignature.get(messageSignature(message));
+    if (positions === undefined) return undefined;
+    // 从当前位置往后找第一条还没用过的同签名投影消息（顺序对齐，不回头）。
+    let found: number | undefined;
+    for (const position of positions) {
+      if (position < searchFrom) continue;
+      found = position;
+      break;
+    }
+    if (found === undefined) return undefined;
+    covered = found + 1;
+    searchFrom = found + 1;
+    matched = true;
+  }
+  return matched ? covered : 0;
+}
+
+/** 基底 system prompt（非压缩摘要）：事件投影永远产不出它。 */
+function isBaseSystemMessage(message: Message): boolean {
+  return message.role === 'system' && message.compaction_summary !== true;
+}
+
+/**
+ * 这条消息是不是**只可能来自缓存**（事件投影永远产不出来）。
+ *
+ * 两类，都是 `projectMessages` 的产物集之外的：
+ * - 基底 system prompt（压缩摘要不算：那是 `message.compaction` 事件的投影）；
+ * - 带 `name` 的运行时提示行（`vessel:notice` 环境卡 / limit / source / hook / subscription）。
+ */
+function isCacheOnlyMessage(message: Message): boolean {
+  if (isBaseSystemMessage(message)) return true;
+  return message.role !== 'system' && message.name !== undefined && message.name.length > 0;
+}
+
+/**
  * 合并「session 缓存」与「事件全量投影」（0.18）。
  *
  * 用于旧数据没有 `derived_upto_seq`（无法只重放增量）时：
@@ -430,6 +560,9 @@ function messageSignature(message: Message): string {
  *
  * 无任何重叠时：缓存不短于投影 → 认为缓存更新，原样返回；否则拼接
  * （宁可多一条也不丢历史）。
+ *
+ * @deprecated 0.54 B3：读路径已改用 [`reconcileCachedProjection`]（它不依赖任何游标
+ * 字段、且壳落后时以日志为准）。本函数保留只为不破坏已发布的导出；新代码不要用。
  */
 export function mergeHistoryProjection(cached: Message[], projected: Message[]): Message[] {
   if (projected.length === 0) return cached;

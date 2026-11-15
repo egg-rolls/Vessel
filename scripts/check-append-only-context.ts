@@ -1172,10 +1172,60 @@ async function runStaticChecks(): Promise<void> {
     ok('C2 SessionState 唯一写口 = RunJournal');
   }
   // 投影的「替换语义」只有压缩 / 撤回两类事件能触发（多一类就是新的重写后门）。
-  if (!eu.includes("event.type === 'message.compaction'")) {
-    fail('packages/core/src/runtime/execution-unit.ts', '全量重投影的触发条件里没有压缩事件');
+  //
+  // 0.54 B3 更新（判据**加强**，不是放宽）：以前这里断言的是「`loadStoredHistory` 的
+  // 事件读取里出现 `event.type === 'message.compaction'` 这个触发串」—— 那要求的是
+  // 「尾部有压缩/撤回时才重放整份日志」，前提是读侧会按缓存水位裁剪读取范围。
+  // B3 把那个裁剪整个删掉了（ADR-105 D2：投影 = `fold(timeline[1..seq])` 的纯函数结果），
+  // 换来的不变量**更强**，所以这里改钉更强的三条：
+  //   ① 投影的事件读取**不许**出现 `sinceSeq` 裁剪（旧写法 `read({sinceSeq: derived})`
+  //      正是 P7「运行中刷新只剩 4 条」的入口）；
+  //   ② 缓存只按**内容**对账（`reconcileCachedProjection`），不认任何游标字段；
+  //   ③ 投影恒取原文口径（`applyClearedReplacements: false`），替换语义无条件生效。
+  // 另外把「替换语义只认压缩/撤回」这条钉回它真正的归属地：投影函数本身。
+  const historyStart = eu.indexOf('private async loadStoredHistory');
+  const historyEnd =
+    historyStart < 0 ? -1 : eu.indexOf('\n  private ', historyStart + 'private async '.length);
+  const historyBody =
+    historyStart < 0 ? '' : eu.slice(historyStart, historyEnd < 0 ? eu.length : historyEnd);
+  // 只看代码行：注释里提 `sinceSeq`（解释为什么不能这么写）不算违规。
+  const historyCode = historyBody
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim();
+      return !trimmed.startsWith('//') && !trimmed.startsWith('*') && !trimmed.startsWith('/*');
+    })
+    .join('\n');
+  if (historyBody.length === 0) {
+    fail('packages/core/src/runtime/execution-unit.ts', '找不到 loadStoredHistory（改名了？）');
+  } else if (/sinceSeq\s*:/.test(historyCode)) {
+    fail(
+      'packages/core/src/runtime/execution-unit.ts',
+      '投影的事件读取被游标裁剪（`sinceSeq:` 又出现在 loadStoredHistory 里）—— 那是 P7 的入口',
+    );
+  } else if (!historyCode.includes('reconcileCachedProjection(')) {
+    fail(
+      'packages/core/src/runtime/execution-unit.ts',
+      '缓存没有走「按内容对账」的纯读侧函数（reconcileCachedProjection）',
+    );
+  } else if (!historyBody.includes('applyClearedReplacements: false')) {
+    fail('packages/core/src/runtime/execution-unit.ts', '投影没有显式取原文口径（会物化占位）');
   } else {
-    ok('C2 全量重投影只认压缩/撤回事件');
+    ok('C2 投影恒为整份日志（无游标裁剪）+ 缓存按内容对账 + 原文口径');
+  }
+
+  const projection = await source('packages/core/src/session/project-messages.ts');
+  if (projection.length > 0) {
+    const triggers = ["event.type === 'message.compaction'", "event.type === 'session.rewound'"];
+    const missing = triggers.filter((trigger) => !projection.includes(trigger));
+    if (missing.length > 0) {
+      fail(
+        'packages/core/src/session/project-messages.ts',
+        `替换语义的两类触发事件不齐：缺 ${missing.join(' / ')}`,
+      );
+    } else {
+      ok('C2 全量重投影只认压缩/撤回事件（判据落在投影函数上）');
+    }
   }
 }
 
