@@ -2121,8 +2121,41 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     items.push(item);
   }
 
+  /**
+   * 「窗口之前」的 live item 闸门（0.54 order-bug：刷新后工具卡与思考段按类聚堆）。
+   *
+   * 触发条件 = **历史窗口被截断**：`messageIndexOffset > 0` 表示 `sessions.get` 只回了
+   * 最近一页消息（`sessionStore.loadDetail` 固定传 `TRANSCRIPT_WINDOW`），更早的消息还没
+   * 加载。这时事件日志那侧仍然**全量回放**（0.54 的 `sessions.events`：刷新不再丢事件），
+   * 于是更早那些 run 的工具卡 / 输入被一并重建出来；而它们的正文与思考在窗口外 ——
+   * 历史没加载，`llm.stream.chunk` 又不落盘（ADR-105 的已知边界「chunk 不落盘」），
+   * 回放里根本没有 —— 屏幕上就只剩一整片工具卡挂在上方、中间没有任何内容：
+   * 用户报的「上方全是工具卡片，下方全是思考过程」正是这个形状（实测 `main` 会话
+   * 1150 条 item 里 1109 条落在窗口之前，其中 1006 条是工具卡）。
+   *
+   * 口径：时间线是**已加载窗口的连续后缀**。窗口之前的 live item 不渲染 —— 那段内容的
+   * 权威在历史侧，点「加载更早」把消息拉进来之后，同一批工具卡会由历史侧（owning
+   * assistant 就在窗口里）以正确位置重新出现，一条都不丢。
+   *
+   * 三个边界（都是有意为之）：
+   * - `messageIndexOffset === 0`（窗口没被截断：短会话 / 新会话 / 全量消息）一律保留。
+   *   这正是 `check-transcript-items` 的 F9/O5 守的形状 —— 那里窗口外**没有**「还没加载
+   *   的历史」，live 项就是唯一内容，抹掉它们才是错。
+   * - 缺 ts 的 live 项不参与这条闸门（不知道时刻就不猜它落在哪），仍旧由比较器按
+   *   「缺 ts 排最后」沉底 —— 那条设计不变量一个字都没动。
+   * - 只筛 live 侧：历史 item 本身就是这个窗口的内容。
+   */
+  const unloadedBefore =
+    input.messageIndexOffset > 0 && input.windowStartTs !== undefined
+      ? input.windowStartTs
+      : undefined;
+
   for (const item of live) {
     const runId = 'runId' in item ? item.runId : undefined;
+    if (unloadedBefore !== undefined && item.ts !== undefined && item.ts < unloadedBefore) {
+      continue;
+    }
+
     // 输入已被历史消息认领：历史那条负责渲染，run 侧那份丢弃（绝不两个气泡 / 两张卡）。
     // 四种输入共用这条规则：人的输入（run-input）、async ask 的答案（ask-answer）、
     // rotate 交接嘱托（rotate-handoff）、运行时上下文输入（runtime-notice 带 runId，
