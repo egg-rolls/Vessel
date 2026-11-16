@@ -12,15 +12,17 @@
  * 硬约束（ADR-105 §5 断言）：
  *
  * 1. 删掉整个 `timeline.idx/` ⇒ 读结果逐条相同（只有变慢）；
- * 2. 索引写入假区间 ⇒ 读结果不变。**「并发 `timeline.index_mismatch`」这一半 0.54 没有实现**
- *    （全仓没有该事件类型，也没有生产读路径会校验索引 —— 唯一校验的是下面这个零调用点的
- *    `TimelineIndexReader`，它只回调 `onMismatch`）。漂移记在 ADR-105 §11.1；
- * 3. `rebuild` 两次 ⇒ 字节相同 —— 用 `buildIndex` + `writeIndexSnapshot` 表达，**不提供**
- *    零调用点的 rebuild 包装（政策：没人调的包装就是会腐烂的第二套口径）；
+ * 2. 索引写入假区间 ⇒ 读结果不变 —— 因为**生产读路径恒整份读记录**，索引只用于求 `wal_head`
+ *    与 `run_id → session_id` 快路径，没有任何"先信索引再校验"的读动作，也就不存在
+ *    "索引不一致 ⇒ 回退全扫"这个环节。`timeline.index_mismatch` 事件随之在 0.54 未实现
+ *    （漂移记在 ADR-105 §11.1）；
+ * 3. `rebuild` 两次 ⇒ 字节相同。重建的真实路径只有一条：写者打开时读回记录喂进
+ *    `TimelineIndexBuilder`（`writer.ts:558`）再用 `writeIndexSnapshot` 落盘（`writer.ts:1205`）；
+ *    **不提供**rebuild 包装或"从记录整份构造"的便捷函数（零调用点的包装 = 会腐烂的第二套口径）；
  * 4. 写索引的位置只有本模块与 `writer.ts`（静态门禁在 C 阶段落地）。
  *
- * `TimelineIndexReader` 是给未来读侧的**独立读器**（先信索引、再逐条校验、不一致回退全扫），
- * **今天零生产调用点**：生产读路径恒整份读记录，索引只用来求 `wal_head`。
+ * 原先还有一个"先信索引、逐条校验、不一致回退全扫"的独立**读器**，**已删除**：
+ * 它零生产调用点，却让人以为断言 2 的"校验 + 回退"在生产里真的会发生。
  *
  * @module @vessel-agent/core/timeline
  */
@@ -29,8 +31,8 @@ import { mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { atomicWrite } from '../session/atomic-write.js';
 import { assertTimelineWritable } from './freeze.js';
-import { TIMELINE_LAYOUT, type TimelineHole, type TimelineRecord } from './types.js';
-import { parseWithCrc, readCrcNdjsonFile, readHoles, readTimelineEvents, withCrc } from './wal.js';
+import { TIMELINE_LAYOUT, type TimelineRecord } from './types.js';
+import { parseWithCrc, readCrcNdjsonFile, withCrc } from './wal.js';
 
 export interface SeqRange {
   start_seq: number;
@@ -48,12 +50,6 @@ export interface TimelineIndexSnapshot {
   session: SessionIndexSummary;
   runs: Map<string, SeqRange[]>;
   types: Map<string, number[]>;
-}
-
-export interface IndexMismatch {
-  source: 'run' | 'type';
-  key: string;
-  detail: string;
 }
 
 function compareText(a: string, b: string): number {
@@ -134,16 +130,6 @@ export class TimelineIndexBuilder {
   }
 }
 
-/** 从一份已按 seq 升序的记录构造索引。 */
-export function buildIndex(
-  records: readonly TimelineRecord[],
-  holes: readonly TimelineHole[] | number,
-): TimelineIndexSnapshot {
-  const builder = new TimelineIndexBuilder();
-  for (const record of records) builder.add(record);
-  return builder.snapshot(typeof holes === 'number' ? holes : holes.length);
-}
-
 interface SessionIndexLine extends SessionIndexSummary {
   v: 1;
   crc: string;
@@ -216,8 +202,8 @@ function indexPaths(sessionDir: string): {
  * 三个文件都走 `atomicWrite`（临时文件 + rename），读者不会看到半截索引。
  *
  * **`timeline.idx/` 也是 timeline 文件**：用旧格式会话目录调用它，会在一个只读冻结的会话里
- * 凭空造出 `timeline.idx/`（C1 之前的真实口子：`TimelineIndexReader.open` 建索引就走这条路，
- * 而它看起来「只是读」）。因此这里与写者用**同一个闸门** `assertTimelineWritable`：
+ * 凭空造出 `timeline.idx/`（C1 之前的真实口子：已删除的那个离线读器 `open` 建索引就走
+ * 这条路，而它看起来「只是读」）。因此这里与写者用**同一个闸门** `assertTimelineWritable`：
  * 旧格式会话一律 `session_frozen_readonly`，不是「静默不写」——静默会让人以为索引已经建好。
  */
 export async function writeIndexSnapshot(
@@ -305,117 +291,4 @@ export async function loadIndexSnapshot(
     runs,
     types,
   };
-}
-
-export interface TimelineIndexReaderOptions {
-  /**
-   * 索引与记录不一致时调用（ADR-105 §5 的可观测钩子；不阻断读）。
-   *
-   * 这是**回调**，不是事件：`timeline.index_mismatch` 事件 0.54 未实现（见 ADR-105 §11.1）。
-   */
-  onMismatch?: (mismatch: IndexMismatch) => void;
-}
-
-/**
- * 独立读器：索引只是加速，**结果永远以记录为准**。
- *
- * 每次查询都逐条校验索引指向的记录；任何不一致（假区间、漏区间、类型不符）都会
- * 回退到全扫并回调 `onMismatch`。
- */
-export class TimelineIndexReader {
-  private constructor(
-    private readonly records: TimelineRecord[],
-    private readonly bySeq: Map<number, TimelineRecord>,
-    private readonly snapshot: TimelineIndexSnapshot,
-    private readonly options: TimelineIndexReaderOptions,
-  ) {}
-
-  /**
-   * 打开读器：优先读已落盘索引；缺失则从记录重建并写回。
-   *
-   * 注意：**不**校验索引是否过期（记录是事实源）；查询时逐条校验会兜住一切不一致。
-   */
-  static async open(
-    sessionDir: string,
-    options: TimelineIndexReaderOptions = {},
-  ): Promise<TimelineIndexReader> {
-    const records = await readTimelineEvents(sessionDir);
-    const bySeq = new Map(records.map((record) => [record.seq, record]));
-    let snapshot = await loadIndexSnapshot(sessionDir);
-    if (snapshot === undefined) {
-      const holes = await readHoles(sessionDir);
-      snapshot = buildIndex(records, holes);
-      await writeIndexSnapshot(sessionDir, snapshot);
-    }
-    return new TimelineIndexReader(records, bySeq, snapshot, options);
-  }
-
-  /** 当前索引快照（自证脚本用来做逐条比较）。 */
-  currentSnapshot(): TimelineIndexSnapshot {
-    return this.snapshot;
-  }
-
-  /** 按 run 查询（逐条校验 `record.run_id`；不一致 ⇒ 全扫回退）。 */
-  readByRun(runId: string): TimelineRecord[] {
-    const expected = this.records.filter((record) => record.run_id === runId);
-    const ranges = this.snapshot.runs.get(runId);
-    if (ranges === undefined) {
-      if (expected.length === 0) return [];
-      this.report('run', runId, 'missing_index_entry');
-      return expected;
-    }
-    const selected: TimelineRecord[] = [];
-    for (const range of ranges) {
-      for (let seq = range.start_seq; seq <= range.end_seq; seq += 1) {
-        const record = this.bySeq.get(seq);
-        if (record === undefined || record.run_id !== runId) {
-          this.report('run', runId, `seq=${seq} record_mismatch`);
-          return expected;
-        }
-        selected.push(record);
-      }
-    }
-    if (selected.length !== expected.length) {
-      this.report(
-        'run',
-        runId,
-        `count_mismatch selected=${selected.length} actual=${expected.length}`,
-      );
-      return expected;
-    }
-    return selected.sort((a, b) => a.seq - b.seq);
-  }
-
-  /** 按 type 查询（逐条校验 `record.type`；不一致 ⇒ 全扫回退）。 */
-  readByType(type: string): TimelineRecord[] {
-    const expected = this.records.filter((record) => record.type === type);
-    const seqs = this.snapshot.types.get(type);
-    if (seqs === undefined) {
-      if (expected.length === 0) return [];
-      this.report('type', type, 'missing_index_entry');
-      return expected;
-    }
-    const selected: TimelineRecord[] = [];
-    for (const seq of seqs) {
-      const record = this.bySeq.get(seq);
-      if (record === undefined || record.type !== type) {
-        this.report('type', type, `seq=${seq} record_mismatch`);
-        return expected;
-      }
-      selected.push(record);
-    }
-    if (selected.length !== expected.length) {
-      this.report(
-        'type',
-        type,
-        `count_mismatch selected=${selected.length} actual=${expected.length}`,
-      );
-      return expected;
-    }
-    return selected.sort((a, b) => a.seq - b.seq);
-  }
-
-  private report(source: 'run' | 'type', key: string, detail: string): void {
-    this.options.onMismatch?.({ source, key, detail });
-  }
 }
