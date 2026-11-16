@@ -35,8 +35,6 @@ import {
 import {
   type EventStream,
   pruneTrace,
-  type ReadTraceOptions,
-  readTraceEvents,
   rebuildMetrics,
   sessionEventsFilePath,
 } from '../packages/core/src/index';
@@ -140,7 +138,8 @@ import { resolveContinueSessionId, resumeSession, runSessionList } from './sessi
 import { shutdownServeStack } from './shutdown-sequence';
 import { createSystemContextSource } from './system-context';
 // 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
-import { timelineTailPort } from './timeline-dual-write';
+// 0.54 C：`events.list` 的按 run 读端口（同一模块）。
+import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-write';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
@@ -1249,9 +1248,20 @@ async function runWithConfig(result: BootstrapResult) {
       // 单执行面的 RPC 数据源：config / trace / session 数据 / metrics。
       defaultTenantId: result.tenantId,
       config: tenantConfigControl,
+      // 0.54 C：`events.list` 换源到时间线（`seq` = `timeline_seq`）；旧 `readEvents`
+      // （per-run seq 的 trace 读法）已删除，见 bootstrap 侧同一处注释。
+      timelineRunEvents: createTimelineRunEventsPort({
+        sessionsDir: gatewayBundle.tenantPaths.sessions_dir,
+        ...(gatewayBundle.runStore !== undefined
+          ? {
+              resolveSession: async (runId: string) => {
+                const record = await gatewayBundle.runStore?.load(runId);
+                return record?.session_id;
+              },
+            }
+          : {}),
+      }),
       trace: {
-        readEvents: (filter: Record<string, unknown>) =>
-          readTraceEvents(gatewayBundle.tenantPaths.events_dir, filter as ReadTraceOptions),
         prune: (params: Record<string, unknown>) =>
           pruneTrace(gatewayBundle.tenantPaths.events_dir, {
             ...(typeof params.older_than_days === 'number'

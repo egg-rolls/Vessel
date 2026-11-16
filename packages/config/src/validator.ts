@@ -1739,6 +1739,19 @@ function validateTimeline(timeline: TimelineConfig, errors: ConfigValidationErro
       value: archiveIntervalMs,
     });
   }
+  // 0.54 C（plan-054 判据 C-3）：`timeline.read_from` 在 cutover 被删除。旧配置**必须**在
+  // 启动时 fail loud，不许静默忽略 —— 静默会让人以为"已经切回旧源"，而读源只剩时间线一个。
+  // （未知键的通用校验也会报，但那句 "Did you mean ...?" 不说明为什么消失；这里给原因。）
+  const removedReadFrom = (timeline as { readFrom?: unknown }).readFrom;
+  if (removedReadFrom !== undefined) {
+    errors.push({
+      path: 'timeline.readFrom',
+      message:
+        'timeline.read_from was removed in 0.54: the only read source is the session timeline ' +
+        '(delete the key; there is no fallback to the legacy session log)',
+      value: removedReadFrom,
+    });
+  }
 }
 
 /** 校验 mcpServers env / headers 的 `_env` 键（0.5） */

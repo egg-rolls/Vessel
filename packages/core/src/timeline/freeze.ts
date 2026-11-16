@@ -1,6 +1,19 @@
 /**
  * 旧格式会话的**只读冻结**（ADR-105 D4；plan-054 §3.4「旧会话误写」/ §C-1）。
  *
+ * ## 0.54 cutover 后它是**防御**，不是常规路径
+ *
+ * 全库会话已用 `vessel session migrate` 一次性迁到时间线（0.54 C2），新会话从第一条事件起
+ * 就写 timeline ⇒ **正常安装里不存在旧格式会话**。本模块保留的原因是**别人可能恢复旧备份 /
+ * 从另一台机器拷一份旧 `sessions/` 进来**：那种目录一旦被写，就是"半新半旧"（同一会话有
+ * 两套 seq、两份事实），比直接拒绝难收拾得多。所以这里的判定与拒绝一字未改，**只当防御**用；
+ * 不要因为"已经全库迁移"就把它删了 —— 它守的不是迁移窗口，是误操作窗口。
+ *
+ * 读路径不再为旧格式会话开分支（0.54 C：`timeline.read_from` 开关与 `sessions.events` 的
+ * 事件日志分支都已删除）；一个没有时间线标记的会话在读面上是**空时间线**
+ * （`packages/serve/src/gateway/timeline-protocol.ts#EMPTY_TIMELINE_HEADS`）——新会话在
+ * 磁盘上也是这个形状，把它报成"冻结"是假事实。
+ *
  * ## 「旧格式会话」只有一条口径，写在这里，别在别处再写一遍
  *
  * ```
@@ -62,7 +75,9 @@ async function fileExists(path: string): Promise<boolean> {
  * 这个会话是不是**旧格式（只读冻结）**会话。
  *
  * 纯读盘、无副作用：只 `stat` 四个文件名，不创建目录、不建句柄 —— 所以它可以被
- * **读路径**调用（门禁用它解释「为什么这个会话没有 timeline」而不担心把会话改了）。
+ * **门禁**调用（门禁用它解释「为什么这个会话没有 timeline」而不担心把会话改了）。
+ *
+ * 0.54 cutover 后：全库已无旧格式会话，这里只对「恢复旧备份 / 拷进来的旧目录」成立。
  */
 export async function isLegacyFrozenSessionDir(sessionDir: string): Promise<boolean> {
   if (!(await fileExists(join(sessionDir, LEGACY_SESSION_LOG)))) return false;
@@ -74,6 +89,9 @@ export async function isLegacyFrozenSessionDir(sessionDir: string): Promise<bool
 
 /**
  * 写 timeline 之前的唯一闸门：旧格式会话 ⇒ 抛 `session_frozen_readonly`。
+ *
+ * **0.54 后全库已无旧格式会话，此处仅为防御性拒绝**（恢复旧备份 / 从别处拷进来的旧
+ * `sessions/` 目录）。门禁 `check-legacy-readonly` 用它断言"写入口一个字节都不碰旧目录"。
  *
  * 幂等、无副作用（除了那 4 次 `stat`）。返回 `undefined` 只表示「可以写」，
  * **不**表示目录已存在 / 配额够 / 权限对 —— 那些失败仍按 `timeline_write_failed` 报。

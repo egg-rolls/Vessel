@@ -1899,3 +1899,148 @@ export function timelineTailPort(
 export function timelineSessionDirName(sessionId: string): string {
   return encodeSessionDirName(sessionId);
 }
+
+/** `createTimelineRunEventsPort().read()` 的返回：`seq` 是**会话内** `timeline_seq`。 */
+export interface TimelineRunEvent {
+  seq: number;
+  type: string;
+  ts: number;
+  run_id?: string;
+  data?: unknown;
+}
+
+/** `run_id → session_id` 的一次解析结果（缓存的是「扫过一遍索引」这件事）。 */
+interface RunSessionIndex {
+  /** run_id → session_id */
+  runs: Map<string, string>;
+  /** 建索引时扫过的会话目录数（诊断用，不进 RPC）。 */
+  scanned: number;
+}
+
+/**
+ * `events.list` 的读源（0.54 C，ADR-105 D5）：**按 run 从时间线读**，`seq` = `timeline_seq`。
+ *
+ * ## 为什么需要「run → session」这一步
+ * 时间线的 run 索引（`timeline.idx/run.idx`）是**会话内**的：一个 run 的 seq 区间只在自己
+ * 会话目录里。所以「按 run 读」必须先回答「这个 run 属于哪个会话」。三条来源，按代价排序：
+ *
+ * 1. `resolveSession`（RunRecord store；durable 打开的安装才有）—— 一次 JSON 读；
+ * 2. 进程内缓存（上一次扫出来的表）—— 0 次 IO；
+ * 3. 扫全库 `timeline.idx/run.idx`（每会话一个 CRC ndjson，**不**读 `session.idx` /
+ *    `type.idx`，也不读事件本体）—— 只在缓存未命中时付一次。
+ *
+ * 扫一遍的代价与「会话数」成正比（实测 ~270 会话 / 一次几百毫秒），所以结果**缓存到进程**；
+ * 未命中就重扫一次（新 run 是正常情况：它的会话目录是**刚**被建的）。
+ *
+ * ## 跨 run（不给 `run_id`）
+ * `vessel errors --connect` 这条靠 `events.list` 扫「最近的错误」，没有 run：
+ * 那就按会话扫全部时间线、合成一个升序流（排序键 `(ts, session_id, timeline_seq)`，
+ * ADR-105 §10 第 1 项），游标语义交给调用方（serve 侧过滤 + 截断）。
+ * **成本写清楚**：这是 O(全库事件数) 的一次读（实测 267 会话 / 19 万条约 1–3 秒），
+ * 所以它是**运维命令**的路径，不是页面路径；页面永远给 `run_id`。
+ */
+export function createTimelineRunEventsPort(options: {
+  sessionsDir: string;
+  /** 可选快路径：`run_id → session_id`（RunRecord store）。返回 `undefined` 表示没查到。 */
+  resolveSession?: (runId: string) => Promise<string | undefined>;
+}): { read(query: { runId?: string }): Promise<readonly TimelineRunEvent[]> } {
+  let index: RunSessionIndex | undefined;
+
+  /** 扫全库 `run.idx`：只读 run 索引文件，不碰事件本体。 */
+  async function buildIndex(): Promise<RunSessionIndex> {
+    const runs = new Map<string, string>();
+    let scanned = 0;
+    let names: string[];
+    try {
+      names = await readdir(options.sessionsDir);
+    } catch {
+      return { runs, scanned };
+    }
+    for (const name of names) {
+      const sessionDir = join(options.sessionsDir, name);
+      const snapshot = await loadIndexSnapshot(sessionDir).catch(() => undefined);
+      if (snapshot === undefined) continue;
+      scanned += 1;
+      // 目录名是 `encodeURIComponent(session_id)`；解码失败就跳过（不是本模块该修的数据）。
+      let sessionId: string;
+      try {
+        sessionId = decodeURIComponent(name);
+      } catch {
+        continue;
+      }
+      for (const runId of snapshot.runs.keys()) {
+        if (!runs.has(runId)) runs.set(runId, sessionId);
+      }
+    }
+    return { runs, scanned };
+  }
+
+  async function resolveRunSession(runId: string): Promise<string | undefined> {
+    const fast = await options.resolveSession?.(runId).catch(() => undefined);
+    if (fast !== undefined) return fast;
+    if (index === undefined) index = await buildIndex();
+    const hit = index.runs.get(runId);
+    if (hit !== undefined) return hit;
+    // 未命中 ⇒ 可能是刚建的会话：重扫一次（只一次，别让 miss 变成常态开销）。
+    index = await buildIndex();
+    return index.runs.get(runId);
+  }
+
+  /** 某会话的全部时间线记录 → 线上事件形状（升序、按 seq 去重）。 */
+  async function readSessionRecords(sessionId: string): Promise<TimelineRunEvent[]> {
+    const records = await readTimelineEvents(sessionDirOf(options.sessionsDir, sessionId)).catch(
+      () => [],
+    );
+    const seen = new Set<number>();
+    const events: TimelineRunEvent[] = [];
+    for (const record of [...records].sort((a, b) => a.seq - b.seq)) {
+      if (seen.has(record.seq)) continue;
+      seen.add(record.seq);
+      events.push({
+        seq: record.seq,
+        type: record.type,
+        ts: record.ts,
+        ...(record.run_id !== undefined ? { run_id: record.run_id } : {}),
+        ...(record.data !== undefined ? { data: record.data } : {}),
+      });
+    }
+    return events;
+  }
+
+  return {
+    async read(query) {
+      if (query.runId === undefined || query.runId === '') {
+        // 跨 run：全库合成一条流。排序键 (ts, session_id, seq) 保证同毫秒也不歧义。
+        let names: string[];
+        try {
+          names = await readdir(options.sessionsDir);
+        } catch {
+          return [];
+        }
+        const merged: Array<TimelineRunEvent & { session_id: string }> = [];
+        for (const name of names) {
+          let sessionId: string;
+          try {
+            sessionId = decodeURIComponent(name);
+          } catch {
+            continue;
+          }
+          for (const event of await readSessionRecords(sessionId)) {
+            merged.push({ ...event, session_id: sessionId });
+          }
+        }
+        merged.sort(
+          (a, b) =>
+            a.ts - b.ts ||
+            (a.session_id === b.session_id ? 0 : a.session_id < b.session_id ? -1 : 1) ||
+            a.seq - b.seq,
+        );
+        return merged.map(({ session_id: _sessionId, ...event }) => event);
+      }
+      const sessionId = await resolveRunSession(query.runId);
+      if (sessionId === undefined) return [];
+      const events = await readSessionRecords(sessionId);
+      return events.filter((event) => event.run_id === query.runId);
+    },
+  };
+}

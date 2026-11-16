@@ -15,6 +15,7 @@ import {
 } from '../../metrics.js';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import { capToolEvent } from '../../tool-events.js';
+import type { TimelineRunEventsPort, TimelineWireEvent } from '../timeline-protocol.js';
 import { metricsSnapshotSchema, runEventSchema } from './schemas.js';
 
 export interface ObservabilityMethodsDeps {
@@ -24,6 +25,13 @@ export interface ObservabilityMethodsDeps {
     prune?(options: Record<string, unknown>): Promise<unknown>;
     readEvents?(filter: Record<string, unknown>): Promise<RunEvent[]>;
   };
+  /**
+   * 0.54 C：`events.list` 的读源（时间线按 run 读，`seq` = `timeline_seq`）。
+   *
+   * 缺省 ⇒ `events.list` 返回 `not_supported`。**不**回落到 `trace.readEvents`：
+   * 那条路的 `seq` 是 per-run 序号，静默回退就等于两条语义同名的 RPC。
+   */
+  timelineRunEvents?: TimelineRunEventsPort;
   metricsControl?: {
     reset?(): void;
     rebuild?(): Promise<MetricsSnapshot>;
@@ -31,9 +39,61 @@ export interface ObservabilityMethodsDeps {
   metrics?: MetricsProvider;
 }
 
+/** 与 core `readTraceEvents` 同一口径的默认页大小（`limit` 缺省 50 / 硬顶 500）。 */
+const EVENTS_LIST_DEFAULT_LIMIT = 50;
+const EVENTS_LIST_MAX_LIMIT = 500;
+
+/**
+ * 参数 → 「要什么」的纯函数（不读盘）。
+ *
+ * 过滤口径从旧实现（core `readTraceEvents`）原样搬过来，**只有 `seq` 的来源变了**：
+ * - `since_seq` 排他：`seq > since_seq`（现在是 `timeline_seq`）；
+ * - `since_ts` 含（`ts >= since_ts`，与旧实现一致）；
+ * - `types` 精确匹配、`type_prefix` 前缀匹配，两者互斥（调用方已校验）；
+ * - `limit` 缺省 50、硬顶 500、`0` ⇒ 空数组。
+ */
+function selectEventsListPage(
+  events: readonly TimelineWireEvent[],
+  params: Record<string, unknown>,
+): TimelineWireEvent[] {
+  const rawLimit = typeof params.limit === 'number' ? Math.floor(params.limit) : undefined;
+  const limit = Math.min(
+    EVENTS_LIST_MAX_LIMIT,
+    rawLimit === undefined ? EVENTS_LIST_DEFAULT_LIMIT : Math.max(0, rawLimit),
+  );
+  if (limit === 0) return [];
+  const sinceSeq = typeof params.since_seq === 'number' ? params.since_seq : undefined;
+  const sinceTs = typeof params.since_ts === 'number' ? params.since_ts : undefined;
+  const types = Array.isArray(params.types)
+    ? (params.types.filter((type): type is string => typeof type === 'string') as string[])
+    : undefined;
+  const typePrefix = typeof params.type_prefix === 'string' ? params.type_prefix : undefined;
+  const selected: TimelineWireEvent[] = [];
+  for (const event of events) {
+    if (sinceSeq !== undefined && event.seq <= sinceSeq) continue;
+    if (sinceTs !== undefined && event.ts < sinceTs) continue;
+    if (types !== undefined && !types.includes(event.type)) continue;
+    if (typePrefix !== undefined && !event.type.startsWith(typePrefix)) continue;
+    selected.push(event);
+    if (selected.length >= limit) break;
+  }
+  return selected;
+}
+
+/** 时间线记录 → `events.list` 的线上事件（`seq` = `timeline_seq`，不做任何重编号）。 */
+function toRunEvent(record: TimelineWireEvent): RunEvent {
+  return {
+    type: record.type,
+    run_id: record.run_id ?? '',
+    seq: record.seq,
+    ts: record.ts,
+    data: (record.data ?? {}) as RunEvent['data'],
+  };
+}
+
 /** events.list */
 export function createEventsMethods(deps: ObservabilityMethodsDeps): RpcMethodDefinition[] {
-  const { trace, redactor } = deps;
+  const { timelineRunEvents, redactor } = deps;
   return [
     {
       name: 'events.list',
@@ -57,34 +117,33 @@ export function createEventsMethods(deps: ObservabilityMethodsDeps): RpcMethodDe
         },
       },
       handler: async (params) => {
-        if (!trace?.readEvents) throw new RpcError('not_found', 'Trace reader is not available');
+        if (timelineRunEvents === undefined) {
+          // 端口没装配就是没这个能力（`vessel errors` 把 `not_supported` 与 `not_found`
+          // 同等处理 ⇒ 行为不变）。**不**回落到旧 trace：见 `timelineRunEvents` 的注释。
+          throw new RpcError('not_supported', 'Timeline event reader is not available');
+        }
         if (params.types !== undefined && params.type_prefix !== undefined) {
           throw new RpcError('invalid_params', 'types and type_prefix are mutually exclusive');
         }
-        const filter: Record<string, unknown> = {};
-        for (const key of [
-          'run_id',
-          'since_seq',
-          'since_ts',
-          'types',
-          'type_prefix',
-          'limit',
-        ] as const) {
-          if (params[key] !== undefined) filter[key] = params[key];
-        }
+        const runId = typeof params.run_id === 'string' ? params.run_id : undefined;
         try {
+          // 0.54 C（ADR-105 D5）：同一 RPC 名换源 —— 时间线的 run 索引，`seq` = `timeline_seq`。
           // CONTRACT-0.49 C5：读取端不按 tenant_id 过滤（旧事件含 legacy id 原样可见）。
-          const events = await trace.readEvents(filter);
+          const records = await timelineRunEvents.read(runId === undefined ? {} : { runId });
+          const page = selectEventsListPage(records, params);
           return {
             // 读路径与实时流一致：先脱敏，再按 8 KiB 裁剪工具参数/结果。
-            events: events.map((event) => capToolEvent(redactor ? redactor.redact(event) : event)),
+            events: page.map((record) => {
+              const event = toRunEvent(record);
+              return capToolEvent(redactor ? redactor.redact(event) : event);
+            }),
           };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (message.includes('invalid_params')) {
             throw new RpcError('invalid_params', message);
           }
-          throw new RpcError('internal', 'Failed to read trace');
+          throw new RpcError('internal', 'Failed to read timeline');
         }
       },
     },

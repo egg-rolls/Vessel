@@ -39,17 +39,19 @@
  * 新字段是**加**在同一个 `kind:'hello'` 帧上的：不改 `kind`、不改 `from_seq` /
  * `latest_seq` 的口径。老客户端按 `from_seq` 起、忽略不认识的键 ⇒ 行为一字节不变。
  * 另外 `timeline_source` 标出本次 epoch 的读源：只有 `'timeline'` 才做四条校验，
- * `'legacy'`（回退期 / 旧订阅）仍是老行为 —— 两种编号（进程级 hub seq 与 session
- * timeline_seq）绝不混在同一个 epoch 里（ADR-105 §9 R7）。
+ * `'legacy'`（没给 `after_timeline_seq` 的旧订阅）仍是老行为 —— 两种编号（进程级 hub seq
+ * 与 session timeline_seq）绝不混在同一个 epoch 里（ADR-105 §9 R7）。
+ *
+ * **0.54 C：`timeline.read_from` 开关已删除。** 它只服务 B 阶段的 48 小时回退窗口；
+ * 0.54 之后没有第二个读源可回退（旧格式会话已全部迁到时间线，`freeze.ts` 只剩写保护），
+ * 留着这个开关就会留下一条"读旧源"的活路径。`timeline_source` 这个**帧字段**保留：
+ * 它描述的是「本 epoch 是哪一种订阅」（时间线段 / 老环形），与开关不是一回事。
  *
  * @module @vessel-agent/serve/gateway/timeline-protocol
  */
 
-/** 切读开关的取值（进程级、装配层读一次；见 §3.2 与 ADR-104 D7）。 */
+/** 本次 epoch 的读源标记（帧字段 `timeline_source` 的取值；不是可配置开关）。 */
 export type TimelineReadFrom = 'timeline' | 'legacy';
-
-/** 缺省读源：时间线（回退通道在 B 阶段末尾随 C 阶段一起删除）。 */
-export const DEFAULT_TIMELINE_READ_FROM: TimelineReadFrom = 'timeline';
 
 /** 单页上限（ADR-105 §6：每页 ≤ 500 条，另有 8 MiB 字节上限在装配侧）。 */
 export const TIMELINE_PAGE_LIMIT = 500;
@@ -103,6 +105,22 @@ export interface TimelineReadPort {
 }
 
 /**
+ * `events.list` 的**按 run 读**端口（0.54 C：同一 RPC 名换源到时间线）。
+ *
+ * 返回事件的 `seq` **就是会话内 `timeline_seq`**（不再是 `data/events/<run_id>.jsonl` 的
+ * per-run 序号）—— 这是 CHANGELOG 登记的破坏性变更，别在本层"抹平"它。
+ *
+ * - `runId` 给了 ⇒ 只回该 run 的事件（升序）；
+ * - `runId` 缺省 ⇒ 扫描式跨 run 读（`vessel errors --connect` 那条），排序键
+ *   `(ts, session_id, timeline_seq)`（ADR-105 §10 第 1 项）；
+ * - 过滤（`since_seq` / `since_ts` / `types` / `type_prefix` / `limit`）**在 serve 侧做**：
+ *   端口只交「事实」，口径留在一个地方。
+ */
+export interface TimelineRunEventsPort {
+  read(query: { runId?: string }): Promise<readonly TimelineWireEvent[]>;
+}
+
+/**
  * 实时尾随端口（装配层注入：`timelineTailPort(dualWrite)`）。
  *
  * 语义（`pub-i2` 实测口径，serve 侧只负责后半段）：
@@ -128,20 +146,6 @@ export interface TimelineHelloSegment {
   holes: TimelineHoleRange[];
   tainted: boolean;
   reset?: true;
-}
-
-/**
- * 读一次 `read_from` 开关（**装配层**调用；core / 读路径里不得再读环境变量）。
- *
- * 非法值 **fail loud**：静默回落到缺省会让人以为「已经切回旧源」，而那正是回退期
- * 最不能搞错的一件事（计划书 §3.2 / C-3 同口径）。
- */
-export function resolveTimelineReadFrom(raw: unknown): TimelineReadFrom {
-  if (raw === undefined || raw === null) return DEFAULT_TIMELINE_READ_FROM;
-  if (raw === 'timeline' || raw === 'legacy') return raw;
-  throw new Error(
-    `timeline.read_from 只接受 'timeline' | 'legacy'，收到 ${JSON.stringify(raw)}（拒绝静默回落）`,
-  );
 }
 
 /** 非负整数 seq；其它（NaN / 负数 / 小数 / 非数字）一律按 0 —— 不猜也不抛。 */
@@ -302,44 +306,61 @@ export interface TimelineSubscribeInput {
   /** 同一次订阅里是否也给了 `since`（时间线订阅上 `since` 被拒，ADR-105 §6）。 */
   sinceGiven: boolean;
   sessionId: string | undefined;
-  readFrom: TimelineReadFrom;
   /** `timelineHeads` 端口是否注入（false = 装配层没开 timeline 读面）。 */
   headsInjected: boolean;
-  /** `lookup(sessionId)` 的结果；`undefined` = 该会话没有任何 timeline 标记（旧格式会话）。 */
+  /**
+   * `lookup(sessionId)` 的结果。
+   *
+   * `undefined` = 该会话**还没有任何 timeline 标记**（新会话，第一次写之前）——
+   * 0.54 起这不再是「旧格式会话」的同义词，见 {@link EMPTY_TIMELINE_HEADS}。
+   */
   heads: TimelineHeadsLike | undefined;
   /** `timelineRead` 端口是否注入。 */
   readPortInjected: boolean;
 }
 
-/** 订阅裁决的错误码：三个都是协议里已有的稳定码，不新增同义码。 */
-export type TimelineSubscribeRejectCode =
-  | 'session_frozen_readonly'
-  | 'timeline_unavailable'
-  | 'invalid_params';
+/**
+ * 「还没有任何 timeline 标记」的读面形状：空段 `[1..0]`、`wal_head = 0`、无洞。
+ *
+ * 0.54 C 之前这个情形被报成 `session_frozen_readonly`（理由是「有旧日志、没有时间线标记
+ * ⇒ 旧格式会话」）。全库会话迁完之后这条推理不成立了：一个刚建好、还没写第一条事件的
+ * 会话在磁盘上与「旧格式会话」形状相同，而把它报成"只读冻结"是一句**假事实**（用户看到
+ * 的是「这个会话坏了」，实际只是还没开始）。所以这里给空段：客户端拿到的声明就是
+ * 「0 条可读，等实时尾」，而 `(published_head, wal_head]` 的语义不受影响（都是 0）。
+ *
+ * 真的旧格式会话怎么做：写路径仍由 `packages/core/src/timeline/freeze.ts` 拒绝
+ * （`session_frozen_readonly`，防御性）；读路径不再有旧源可回退，这是 0.54 的已知取舍。
+ */
+export const EMPTY_TIMELINE_HEADS: TimelineHeadsLike = {
+  timeline_head: 0,
+  wal_head: 0,
+  published_head: 0,
+  holes: [],
+  tainted: false,
+};
+
+/** 订阅裁决的错误码：两个都是协议里已有的稳定码，不新增同义码。 */
+export type TimelineSubscribeRejectCode = 'timeline_unavailable' | 'invalid_params';
 
 /**
  * 订阅时「这一趟读哪个源」的裁决（**纯函数**，由调用方负责那次 `lookup`）。
  *
  * 判据顺序即优先级，每条都有明确理由：
  * 1. 没给 `after_timeline_seq` ⇒ 老订阅（`legacy`）：老客户端连这个参数名都不知道。
- * 2. `read_from = 'legacy'` ⇒ 老订阅：回退开关的全部意义就是「不读新源」，
- *    此时连 `after_timeline_seq` 一起忽略（hello 里会标 `timeline_source: 'legacy'`，
- *    新客户端据此退回老行为，不是静默错配）。
- * 3. 同时给了 `since` ⇒ `invalid_params`：两套编号（进程级 hub seq / 会话 timeline_seq）
- *    混在一个游标里就是 ADR-105 §9 R7 拒绝的那件事。
- * 4. 没有 `session_id` ⇒ `invalid_params`：`timeline_seq` 是**会话内**序号，跨会话不可比
+ * 2. 同时给了 `since` ⇒ `invalid_params`：两套编号（进程级 hub seq / 会话 timeline_seq）
+ *    混在一个游标里就是 ADR-105 §9 R7 的那件事。
+ * 3. 没有 `session_id` ⇒ `invalid_params`：`timeline_seq` 是**会话内**序号，跨会话不可比
  *    （ADR-105 §10 第 1 项），拿不到会话就没有可核对的区间。
- * 5. `timelineHeads` 端口没注入 ⇒ `timeline_unavailable`：装配层把 timeline 读面整个关掉了，
- *    这不是「会话被冻结」，不许报成 `session_frozen_readonly`（那是会误导排障的假事实）。
- * 6. 端口在、`lookup` 返回 `undefined` ⇒ `session_frozen_readonly`：**旧格式会话**
- *    （有旧日志、没有任何 timeline 标记）只能只读冻结（ADR-105 D4）。这正是 A8② 的缺口：
- *    今天这个码只在写者打开时抛（`packages/core/src/timeline/writer.ts:386-391`）。
- * 7. `timelineRead` 端口没注入 ⇒ `timeline_unavailable`：能算区间却没有页读路径。
+ * 4. `timelineHeads` 端口没注入 ⇒ `timeline_unavailable`：装配层把 timeline 读面整个关掉了
+ *    （`dual_write: false` 的安装），这不是「会话有问题」。
+ * 5. `timelineRead` 端口没注入 ⇒ `timeline_unavailable`：能算区间却没有页读路径。
  *    **不**回落到环形缓冲——那会让帧带另一套 seq，客户端四条校验必然全红。
+ * 6. `lookup` 返回 `undefined` ⇒ 空段（{@link EMPTY_TIMELINE_HEADS}），**不是**拒绝：
+ *    0.54 C 删掉了 `timeline.read_from` 回退开关，读路径只剩时间线一个源，而「没有标记」
+ *    只意味着「还没有事件」。旧格式只读冻结只剩写路径（`freeze.ts`，防御性拒绝）。
  */
 export function decideTimelineSubscribe(input: TimelineSubscribeInput): TimelineSubscribeDecision {
   if (input.afterTimelineSeq === undefined) return { kind: 'legacy' };
-  if (input.readFrom === 'legacy') return { kind: 'legacy' };
   if (input.sinceGiven) {
     return {
       kind: 'reject',
@@ -361,13 +382,6 @@ export function decideTimelineSubscribe(input: TimelineSubscribeInput): Timeline
       message: '服务端未装配 timeline 读面（timelineHeads 端口缺失），无法声明时间线区间',
     };
   }
-  if (input.heads === undefined) {
-    return {
-      kind: 'reject',
-      code: 'session_frozen_readonly',
-      message: `会话 ${input.sessionId} 没有 timeline（旧格式会话只读冻结，不迁移）：不能按 after_timeline_seq 订阅`,
-    };
-  }
   if (!input.readPortInjected) {
     return {
       kind: 'reject',
@@ -375,7 +389,8 @@ export function decideTimelineSubscribe(input: TimelineSubscribeInput): Timeline
       message: '服务端未装配 timeline 分页读端口（timelineRead 端口缺失）：拒绝回落到环形 seq',
     };
   }
-  return { kind: 'timeline', heads: input.heads };
+  // 「没有标记」⇒ 空段，不是拒绝（0.54 C：`session_frozen_readonly` 不再是读分支）。
+  return { kind: 'timeline', heads: input.heads ?? EMPTY_TIMELINE_HEADS };
 }
 
 /**

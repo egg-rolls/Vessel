@@ -97,9 +97,11 @@ export type ProtocolErrorCode =
   | 'upgrade_required'
   | 'upgrade_not_allowed'
   // 0.54 B1：时间线订阅（ADR-105 §6 / D4）。
-  // - `session_frozen_readonly`：旧格式会话（有 `events.ndjson`、没有 timeline 标记）
-  //   只读冻结。与 core 的写者错误码**同名同义**（`packages/core/src/timeline/types.ts:187`），
-  //   今天只在写者打开时抛，0.54 B1 起订阅路径也抛（A8②）。
+  // - `session_frozen_readonly`：旧格式会话**写**保护（有 `events.ndjson`、没有 timeline
+  //   标记 ⇒ 只读冻结）。与 core 的写者错误码**同名同义**（`packages/core/src/timeline/types.ts`）。
+  //   0.54 C 起它**不再**是读分支：`after_timeline_seq` 订阅遇到"没有时间线标记"时给空段
+  //   （新会话在磁盘上也是这个形状，报成冻结是假事实，见 `EMPTY_TIMELINE_HEADS`）；
+  //   `timeline.read_from` 回退开关也随之删除。
   // - `timeline_unavailable`：装配层没开 timeline 读面（端口缺失）。与上一条分开，
   //   是因为「服务端没开这个能力」不是「这个会话坏了」——报错文本会误导排障。
   | 'session_frozen_readonly'

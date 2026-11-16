@@ -62,15 +62,13 @@ import { createAdminMethods, type GatewayReloadResult } from './gateway/methods/
 import { createAgentMethods } from './gateway/methods/agents.js';
 import { type AttachmentLister, createAttachmentMethods } from './gateway/methods/attachments.js';
 import {
-  DEFAULT_TIMELINE_READ_FROM,
   decideTimelineSubscribe,
   declareEpochChunk,
-  resolveTimelineReadFrom,
   selectTimelinePage,
   TIMELINE_PAGE_LIMIT,
   type TimelineHelloSegment,
-  type TimelineReadFrom,
   type TimelineReadPort,
+  type TimelineRunEventsPort,
   type TimelineTailPort,
   type TimelineWireEvent,
   timelineHello,
@@ -398,15 +396,17 @@ export interface GatewayOptions {
    */
   timelineTail?: TimelineTailPort;
   /**
-   * 切读开关（0.54 B1，**装配层读一次**，ADR-104 D7：core 是库，不读环境变量）。
+   * 按 run 读时间线（0.54 C：`events.list` 的读源，asm 注入）。
    *
-   * - `'timeline'`（缺省）：`after_timeline_seq` 订阅按时间线读；
-   * - `'legacy'`：一律走老回放（环形 + `since`），`hello.timeline_source` 标 `'legacy'`。
-   *   回退期（B 阶段，上限 48 小时）用；C 阶段删键并在启动时 fail loud。
+   * 同一 RPC 名换源：返回的事件的 `seq` **就是会话内 `timeline_seq`**（不再是
+   * `data/events/<run_id>.jsonl` 的 per-run 序号），这是 CHANGELOG 里登记的破坏性变更。
+   * 端口收 `run_id` 是因为调用方（Run 详情 / 观测页）只知道 run，`run_id → session_id`
+   * 的归属与 `timeline_seq` 的分配都在端口实现里（serve 不拼磁盘路径、不读盘）。
    *
-   * 非法值由 `resolveTimelineReadFrom` 抛错 —— 静默回落会让人以为「已经切回旧源」。
+   * 缺省 ⇒ `events.list` 返回 `not_supported`（**不**回落到旧 trace：那会让 `seq` 语义
+   * 悄悄变回 per-run，正是本单要消灭的东西）。
    */
-  timelineReadFrom?: TimelineReadFrom;
+  timelineRunEvents?: TimelineRunEventsPort;
   /**
    * 方法层（`events.list` 等）脱敏；缺省 core 默认 redactor。
    * 实时广播的脱敏由 hub 的 `map` 决定——自定义时应把同一实例传给
@@ -906,13 +906,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   const tlsMaterial = opts.tls ? loadTlsMaterial(opts.tls) : undefined;
 
-  // 0.54 B1：切读开关在**装配层**读一次（ADR-104 D7：core 是库，不读环境变量）。
-  // 非法值在这里直接抛（fail loud），不做「静默回落 = 以为切回旧源」那种事。
-  const timelineReadFrom: TimelineReadFrom =
-    opts.timelineReadFrom === undefined
-      ? DEFAULT_TIMELINE_READ_FROM
-      : resolveTimelineReadFrom(opts.timelineReadFrom);
-
   const defaultTenantId = opts.defaultTenantId ?? DEFAULT_TENANT_ID;
   const redactor: TraceRedactor = opts.redactor ?? createDefaultTraceRedactor();
   // 0.43：plugin 事件转发走 hub 的 raw fan-in；先过 gateway 的 redactor。
@@ -1010,20 +1003,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (feishuChannel) features.push('feishu');
   if (opts.metrics) features.push('metrics');
   if (opts.config) features.push('config');
-  // 时间线单游标契约（0.54 B1/B2）。**真可用才报**：需要 heads + 分页读两个端口都装配了，
-  // 且 `read_from` 没被回退到 legacy —— 否则客户端按位发 `after_timeline_seq` 会拿到
-  // `timeline_unavailable`，那就是能力位撒谎。
+  // 时间线单游标契约（0.54 B1/B2）。**真可用才报**：需要 heads + 分页读两个端口都装配了
+  // —— 否则客户端按位发 `after_timeline_seq` 会拿到 `timeline_unavailable`，那就是能力位撒谎。
+  // （0.54 C 删掉了 `read_from` 回退开关：不存在「装配了但被切回旧源」这种状态了。）
   //
   // 报出来就承诺（客户端可据此删掉「试探 + 退回 since」的协商逻辑）：
   // - `events.subscribe{after_timeline_seq, session_id}` 可用；
   // - `hello` 带 `start_seq / end_seq / count / timeline_head / wal_head / published_head / holes`；
   // - 接受客户端帧 `{kind:'timeline_gap'}`（记录为 `timeline.gap_reported`）。
   // **不**承诺实时尾随（`publish` → 时间线 epoch 的推送要等 src/ 接线，届时另加一位）。
-  if (
-    timelineReadFrom === 'timeline' &&
-    opts.timelineHeads !== undefined &&
-    opts.timelineRead !== undefined
-  ) {
+  if (opts.timelineHeads !== undefined && opts.timelineRead !== undefined) {
     features.push('timeline.cursor');
   }
   const protocolInfo: ProtocolInfo = {
@@ -1885,6 +1874,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const observabilityMethodsDeps = {
     redactor,
     trace: opts.trace,
+    // 0.54 C：`events.list` 的读源是时间线（`seq` = `timeline_seq`）。端口缺省 ⇒
+    // `events.list` 返回 `not_supported`，**不**回落到旧 trace（那会让 seq 语义悄悄变回
+    // per-run，正是本单要消灭的东西）。
+    ...(opts.timelineRunEvents !== undefined ? { timelineRunEvents: opts.timelineRunEvents } : {}),
     metricsControl: opts.metricsControl,
     metrics: opts.metrics,
   };
@@ -1908,10 +1901,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ...(opts.sessionEvents !== undefined ? { sessionEvents: opts.sessionEvents } : {}),
       // 0.54 A：timeline 四字段（additive）。缺省 ⇒ 四个一起缺省，旧装配行为一字不变。
       ...(opts.timelineHeads !== undefined ? { timelineHeads: opts.timelineHeads } : {}),
-      // 0.54 B1：`sessions.events` 的读源切换（时间线优先；端口缺失 / 旧格式会话自动退回
-      // 事件日志）。`timelineReadFrom` 由装配层读一次并传进来（ADR-104 D7）。
+      // 0.54 B1：`sessions.events` 的读源（时间线；0.54 C 起是**唯一**读源，没有回退开关）。
       ...(opts.timelineRead !== undefined ? { timelineRead: opts.timelineRead } : {}),
-      timelineReadFrom,
       // CREATE-0.39：sessions.create|restart|activate 与 agents.* 共用同一注入面。
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
     }),
@@ -1987,7 +1978,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
             typeof params.run_id === 'string' ||
             (Array.isArray(params.types) && params.types.length > 0),
           sessionId,
-          readFrom: timelineReadFrom,
           headsInjected: opts.timelineHeads !== undefined,
           heads:
             opts.timelineHeads !== undefined && sessionId !== undefined
