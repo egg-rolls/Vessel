@@ -1,7 +1,7 @@
 ---
 adr: 105
 title: 会话 timeline 单一真相（append-only / 全局单调 timeline_seq / 块级 chunk / 单游标握手）
-status: proposed
+status: accepted
 date: 2026-11-15
 related: [032, 046, 047, 056, 089, 098, 104]
 tags: [session, timeline, replay, wal, seq, storage, index, handshake, idempotency, migration]
@@ -9,7 +9,10 @@ tags: [session, timeline, replay, wal, seq, storage, index, handshake, idempoten
 
 ## ADR-105：会话 timeline 单一真相（append-only / 全局单调 timeline_seq / 块级 chunk / 单游标握手）
 
-- **状态**：proposed。
+- **状态**：accepted（0.54 已实现；与本文的差异以 §11.1「实现漂移更正」为准）。
+  **双格式（新 timeline / 旧 `events.ndjson` 只读冻结）是迁移窗口里的过渡态，不是终态** ——
+  旧格式的目标是「一次性迁移成新格式后删掉旧读路径」，届时全库只有一种格式（口径见
+  [event-log-policy.md](../architecture/event-log-policy.md) §1）。
 - **owner 裁定（已并入，不再讨论）**：
   1. **0.54.0 只做这一件事**：每个会话一条 **append-only timeline**，会话内**持久单调 `timeline_seq`**。
   2. **所有事件（含 `llm.stream.chunk`）先写 WAL，再进 timeline**：chunk 不再有"不落盘"的特权。
