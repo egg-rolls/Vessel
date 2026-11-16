@@ -22,7 +22,15 @@ function currentOrigin(): string {
     : 'http://127.0.0.1';
 }
 
-import type { GapFrame, GatewayErrorBody, HelloInfo, RunEvent, ServerFrame } from '../types';
+import type {
+  GapFrame,
+  GatewayErrorBody,
+  HelloInfo,
+  HelloTimelineSegment,
+  RunEvent,
+  ServerFrame,
+  TimelineEpochEndFrame,
+} from '../types';
 import { toWebSocketBase } from '../url';
 
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error';
@@ -45,6 +53,58 @@ export interface EventMeta {
   jobId?: string;
 }
 
+/**
+ * hello 帧的**平铺**时间线段 → 内部归一化对象（`HelloTimelineSegment`）。
+ *
+ * 线上形状由 `packages/serve/src/gateway/frames.ts#helloFrame` 决定：`timeline_source ===
+ * 'timeline'` 时它把六个字段（+ `published_head` / `reset`）**平铺**在 hello 帧上，**没有**
+ * 嵌套的 `timeline` 对象。0.54 B1 起线的两端就一直是这个形状；客户端早先按嵌套对象读，
+ * 于是 `readTimelineHelloSegment(source, undefined)` 永远返回 `undefined` —— 四条校验与
+ * epoch 记账在真机上从未生效（一律退化成老 epoch 行为）。这个映射就是那处修复。
+ *
+ * 判据（不猜）：`timeline_source` 不是 `'timeline'` ⇒ 不给；时间线的键缺一个 / 不是非负整数
+ * ⇒ 也不给（半截实现按老 epoch 处理，宁可不校验也不假校验）。
+ */
+function readHelloTimelineSegment(frame: {
+  timeline_source?: 'timeline' | 'legacy';
+  start_seq?: number;
+  end_seq?: number;
+  count?: number;
+  timeline_head?: number;
+  wal_head?: number;
+  published_head?: number;
+  holes?: { from_seq: number; to_seq: number }[];
+  tainted?: boolean;
+  reset?: boolean;
+}): HelloTimelineSegment | undefined {
+  if (frame.timeline_source !== 'timeline') return undefined;
+  const isSeq = (value: number | undefined): value is number =>
+    typeof value === 'number' && Number.isInteger(value) && value >= 0;
+  const {
+    start_seq: start,
+    end_seq: end,
+    count,
+    timeline_head: timelineHead,
+    wal_head: walHead,
+  } = frame;
+  if (!isSeq(start) || !isSeq(end) || !isSeq(count)) return undefined;
+  if (!isSeq(timelineHead) || !isSeq(walHead)) return undefined;
+  return {
+    start_seq: start,
+    end_seq: end,
+    count,
+    timeline_head: timelineHead,
+    wal_head: walHead,
+    // `(published_head, wal_head]` 允许永不被推送；缺省 = 全部已发布（与 core 同口径）。
+    ...(isSeq(frame.published_head)
+      ? { published_head: Math.min(frame.published_head, walHead) }
+      : {}),
+    holes: Array.isArray(frame.holes) ? frame.holes : [],
+    tainted: frame.tainted === true,
+    ...(frame.reset === true ? { reset: true as const } : {}),
+  };
+}
+
 /** 请求超时（毫秒） */
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -60,6 +120,8 @@ export abstract class ProtocolClient {
   private readonly stateListeners = new Set<(state: ConnectionState) => void>();
   private readonly helloListeners = new Set<(info: HelloInfo) => void>();
   private readonly gapListeners = new Set<(gap: GapFrame) => void>();
+  /** 0.55：时间线 epoch 的显式结束标记（`timeline-epoch-end`）。 */
+  private readonly epochEndListeners = new Set<(end: TimelineEpochEndFrame) => void>();
   private readonly closeListeners = new Set<(code: number) => void>();
 
   private readonly pending = new Map<
@@ -116,6 +178,18 @@ export abstract class ProtocolClient {
   onGap(cb: (gap: GapFrame) => void): () => void {
     this.gapListeners.add(cb);
     return () => this.gapListeners.delete(cb);
+  }
+
+  /**
+   * 时间线 epoch 的显式结束标记（0.55，能力位 `timeline.epoch-end`）。
+   *
+   * 只在服务端把本趟声明区间**整趟发完**时到来；提前停不发（那时客户端从订阅 `res`
+   * 那条显式事实收尾，见 `SubscriptionController#run`）。老服务端（0.54）永远不触发它，
+   * 所以订阅层不能把它当唯一出口。
+   */
+  onEpochEnd(cb: (end: TimelineEpochEndFrame) => void): () => void {
+    this.epochEndListeners.add(cb);
+    return () => this.epochEndListeners.delete(cb);
   }
 
   onClose(cb: (code: number) => void): () => void {
@@ -273,6 +347,13 @@ export abstract class ProtocolClient {
 
     switch (frame.kind) {
       case 'hello': {
+        // 0.54 B1：时间线段在**线上是平铺的**（`start_seq` / `end_seq` / `count` / …），
+        // 归一化成一个对象往下传。这里是唯一一处 wire → 内部形状的映射：下游
+        // （`readTimelineHelloSegment` / 四条校验 / `beginTimelineEpoch`）只认一个对象。
+        //
+        // 形状不全 ⇒ 不给 `timeline`（fail-closed 当成老 epoch）：`timeline_source` 说是
+        // 时间线、六个字段却缺一个，说明对端是半截实现，按「不做四条校验」处理。
+        const segment = readHelloTimelineSegment(frame);
         this.helloInfo = {
           protocol: frame.protocol,
           node: frame.node,
@@ -281,7 +362,7 @@ export abstract class ProtocolClient {
           ...(frame.timeline_source !== undefined
             ? { timeline_source: frame.timeline_source }
             : {}),
-          ...(frame.timeline !== undefined ? { timeline: frame.timeline } : {}),
+          ...(segment !== undefined ? { timeline: segment } : {}),
         };
         this.setState('open');
         const resolve = this.connectResolve;
@@ -302,6 +383,21 @@ export abstract class ProtocolClient {
       }
       case 'gap': {
         for (const cb of [...this.gapListeners]) cb(frame);
+        return;
+      }
+      case 'timeline-epoch-end': {
+        // 0.55：结趟的**显式**事实（`{end_seq, count, has_more}`）。形状不全就当没收到
+        // （老客户端行为等价于空行；这里也守住「不猜」）：三个字段缺一个都不结趟。
+        if (
+          typeof frame.end_seq !== 'number' ||
+          !Number.isFinite(frame.end_seq) ||
+          typeof frame.count !== 'number' ||
+          !Number.isFinite(frame.count) ||
+          typeof frame.has_more !== 'boolean'
+        ) {
+          return;
+        }
+        for (const cb of [...this.epochEndListeners]) cb(frame);
         return;
       }
       case 'res': {

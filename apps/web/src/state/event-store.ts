@@ -79,13 +79,25 @@ import { type ItemSink, LiveItemStore } from './live-items';
 export const MAX_EVENTS_PER_RUN = 5000;
 
 /**
- * epoch 的「这一趟停了」判据：这么久没有新帧就认为本趟发完了。
+ * **`EPOCH_IDLE_MS` 已删除（0.55）**：那张「400ms 没新帧就认为这趟发完了」的空闲猜测不再
+ * 存在。结趟改吃两条**显式事实**，都不是时钟：
  *
- * 为什么需要它：服务端按条数 / 字节收集窗口后发 hello，但**发帧时撞背压会提前停**，
- * 客户端拿不到"本趟结束"的显式信号（`res` 早就回来了）。用空闲作为信号是唯一可行且
- * 无需新字段的办法 —— 停错了也只是多重订一次（`after_timeline_seq` 幂等）。
+ * 1. `timeline-epoch-end` 帧（能力位 `timeline.epoch-end`，0.55）：服务端把本趟声明区间
+ *    **整趟发完**后才发，`has_more` 直接给出「还要不要续拉」。入口
+ *    `EventStore#endTimelineEpochPass`。
+ * 2. 订阅 `res` 已经回来（`SubscriptionController#run` 在 `events.subscribe` 的应答之后
+ *    调 `EventStore#settleTimelineEpochIfOpen`）：老服务端（0.54 不发结束帧）/ 服务端撞
+ *    背压提前停时，它就是「这一趟不会再发帧了」的显式事实，按**连续前缀**收口续拉。
+ *
+ * 为什么要删：猜测的代价是双向的 —— 网络慢一点或一次 GC 停顿就误判成「停」，按前缀收口
+ * 并续拉（用户看到的是那条假缺口报告）；反过来真没发完时也分不清「没发完」和「发完了
+ * 没东西」。线上序列是固定的：hello → event×N → timeline-epoch-end → res，帧与应答都在
+ * 事件循环里排好了序，不需要等待一段时间。
+ *
+ * 两条判据都只对**时间线** epoch 有效：没有 `hello.timeline` 段就没有 epoch（
+ * `beginTimelineEpoch` 不会被调用），legacy epoch 上它们都是空操作 —— 这正是
+ * `serve-epoch` 报告要求的「只在 `timeline_source === 'timeline'` 的 epoch 上依赖结束帧」。
  */
-export const EPOCH_IDLE_MS = 400;
 
 /**
  * 缓冲总量上限（跨 run 的安全网）。
@@ -157,6 +169,17 @@ export interface TimelineRangeOutcome {
   duplicates: number;
   evicted: number;
   violation?: TimelineGapReport;
+}
+
+/**
+ * 一趟 epoch 收尾时交给订阅层的**续拉判据**。
+ *
+ * `hasMore` 只在收到 `timeline-epoch-end`（0.55，能力位 `timeline.epoch-end`）时有值：
+ * 那是服务端按「后面还有**可读**的」算出来的事实。缺省 = 没有那一帧（0.54 服务端 / 提前停），
+ * 订阅层退回自己的判据（本趟末 seq 与应到右端比）。
+ */
+export interface TimelineEpochSettle {
+  hasMore?: boolean;
 }
 
 function emptyGapState(): TimelineGapState {
@@ -246,16 +269,16 @@ export class EventStore {
    * `undefined` = 老订阅（hub seq），不做四条校验（帧 seq 里有跳空是正常的）。
    */
   private epoch: { header: TimelineRangeHeader; seqs: number[] } | undefined;
-  /** epoch 的「这一趟停了」定时器（见 `recordEpochSeq` 的两段式判定）。 */
-  private epochTimer: ReturnType<typeof setTimeout> | undefined;
   /**
-   * 一个 epoch 记完账（收到右端或攒够 `count`）后的出口。
+   * 一个 epoch 记完账（收到结束帧 / 订阅 `res` 已回）后的出口。
    *
    * 用途只有一个：服务端每趟最多送 2000 条，声明区间**短于**真实右端
    * （`end_seq < min(wal_head, published_head)`）时，订阅层据此续拉下一趟 ——「续拉循环」
    * 在实时流那一侧的一半（另一半是 `sessions.events` 的分段回填）。
    */
-  private epochEndHook: ((header: TimelineRangeHeader) => void) | undefined;
+  private epochEndHook:
+    | ((header: TimelineRangeHeader, settle: TimelineEpochSettle) => void)
+    | undefined;
   /**
    * 缺口上报的出口（订阅层注入：把 `timeline_gap` 帧发回服务端）。
    *
@@ -382,18 +405,18 @@ export class EventStore {
   /**
    * 开始一个**服务端声明**的时间线段（`timeline.hello`，0.54 B1）。
    *
-   * 之后每一帧 `push` 都会记账，收到右端 / 攒够 `count` 时用**同一套**四条校验核对；
-   * 对不上就报 `timeline_gap_reported`（服务端只记录）并把污点条挂出来。
-   * 老订阅（`timeline_source: 'legacy'`）不调用它 —— 那种帧的 seq 跳空是正常的。
+   * 之后每一帧 `push` 都只**记账**；判缺口的时机由「这趟确认发完」的显式事实决定
+   * （`timeline-epoch-end` 帧 / 订阅 `res`），见 {@link endTimelineEpochPass} 与
+   * {@link settleTimelineEpochIfOpen}。老订阅（没有 `hello.timeline` 段）不调用它 ——
+   * 那种帧的 seq 跳空是正常的。
    */
   beginTimelineEpoch(header: TimelineRangeHeader): void {
+    // 覆盖在途 epoch：一趟 epoch 只有一套声明（0.55 起没有定时器要清）。
     this.epoch = { header, seqs: [] };
-    this.armEpochTimer();
   }
 
   /** 结束本 epoch 的记账（订阅换范围 / 断线 / 服务端回到 legacy）。 */
   endTimelineEpoch(): void {
-    this.cancelEpochTimer();
     this.epoch = undefined;
   }
 
@@ -403,49 +426,75 @@ export class EventStore {
   }
 
   /**
+   * 收到 `timeline-epoch-end`（0.55）：这一趟**显式**发完了。
+   *
+   * 服务端只在整趟发完时发这一帧（提前停不发），所以到这里可以按四条硬校验核对声明；
+   * `has_more` 是它给出的续拉判据 —— 按「后面还有**可读**的」算，尾部只剩洞时为 false
+   * （裸的 `end_seq < min(wal_head, published_head)` 在那种会话上恒真，客户端会原地
+   * 打转：每趟 0 条、`has_more` 仍为真）。
+   *
+   * 没有在途 epoch 时是空操作：老服务端不发这一帧，legacy epoch 也不会有 epoch。
+   */
+  endTimelineEpochPass(end: { end_seq: number; count: number; has_more: boolean }): void {
+    const header = this.closeEpoch();
+    if (header === undefined) return;
+    this.epochEndHook?.(header, { hasMore: end.has_more === true });
+  }
+
+  /**
+   * 订阅 `res` 已经回来、本趟还没收尾 ⇒ 用这条**显式事实**收尾（0.54 服务端不发结束帧 /
+   * 服务端撞背压提前停）。
+   *
+   * 返回本趟实际覆盖的声明；`undefined` = 没有在途 epoch，或者收口失败并已报过缺口 ——
+   * 两种都不该续拉。续拉的决定留给调用方（它才持有「应到右端」与 stall 计数）。
+   *
+   * 为什么 `res` 算显式事实：线上序列被服务端写死了 —— hello → event×N →
+   * `timeline-epoch-end` → `res`。应答回来就意味着这一趟不会再发帧，**不需要等待**任何时间。
+   */
+  settleTimelineEpochIfOpen(): TimelineRangeHeader | undefined {
+    return this.closeEpoch();
+  }
+
+  /**
    * 实时流的一段记一条（`push` 调用；区间外的帧不计入期望）。
    *
-   * **两段式判定**（用户报的那个假缺口的修复点）：四条校验**不在每批到达时判**，而是
-   * 等这一趟"确认发完"再判 —— 判据有两条：
-   * 1. 收到声明区间的右端 / 攒够 `count` ⇒ 整趟到齐，按四条规则严格核对；
-   * 2. 流**空闲**（{@link EPOCH_IDLE_MS} 内没有新帧）⇒ 这一趟停了。此时**不**直接判缺口，
-   *    而是把实收当成"声明区间的连续前缀"：前缀合法 ⇒ 交回 `epochEndHook` 让订阅层用
-   *    `after_timeline_seq = 实收末 seq` 续拉；只有"一条都没收到 / 前缀不合法"才是真缺口。
-   *
-   * 为什么必须有第 2 条：服务端按条数 2000 / 字节 2 MiB 收集本趟窗口并据此发 hello，但发帧
-   * 时**撞背压会提前停**（实测声明 2000 条、实收 1189 条）。那不是丢数据，是这一趟没发完；
-   * 按"每批到达即判"就会把"没发完"误报成"少给了"（用户看到的正是 rule 3）。
+   * 只记账、**不在这里判缺口，也不在这里结趟**：四条校验要等「这一趟确实发完了」的显式
+   * 事实（结束帧 / 订阅应答）。为什么不能按「末条贴住右端 / 攒够 `count`」提前判：服务端
+   * 发帧时撞背压会提前停，而它**不发**结束帧 —— 那种情况必须按连续前缀收口续拉，扣一条
+   * 缺口就是把「没发完」误报成「少给了」（用户看到的那条 rule 3 假缺口）。
    */
   private recordEpochSeq(seq: number): void {
     const epoch = this.epoch;
     if (epoch === undefined) return;
-    const { header } = epoch;
-    if (seq < header.start_seq || seq > header.end_seq) {
+    if (seq < epoch.header.start_seq || seq > epoch.header.end_seq) {
       // 区间外的帧照常入环（它属于下一趟 / 别的段），但不进这一段的期望集合。
-      this.armEpochTimer();
       return;
     }
     epoch.seqs.push(seq);
-    const complete = seq >= header.end_seq || epoch.seqs.length >= header.count;
-    if (!complete) {
-      this.armEpochTimer();
-      return;
-    }
-    // 整趟到齐：严格四条校验（连续性 / count / 边界 / 重复）。
-    this.cancelEpochTimer();
-    const violation = validateTimelineRange(header, epoch.seqs);
-    if (violation !== undefined) this.reportTimelineGap(violation);
-    this.epoch = undefined;
-    // 本趟记完：订阅层据此判断「还有没有下一趟」（服务端每趟 ≤ 2000 条）。
-    this.epochEndHook?.(header);
   }
 
-  /** 这一趟的"停"信号（帧空了 {@link EPOCH_IDLE_MS}）：按**连续前缀**收口，不判缺口。 */
-  private settleEpoch(): void {
+  /**
+   * 收掉在途 epoch，返回「这一趟实际覆盖的声明」（`undefined` = 没有可交回去的一段）。
+   *
+   * 两段判定（0.55 起的判据只有一个：这趟确实发完了）：
+   * 1. **到齐**（末条贴住声明右端 / 条数够）⇒ 四条硬校验（连续性 / count / 边界 / 重复），
+   *    对不上才报缺口 —— 到齐了还少，那才是真缺口；
+   * 2. **没到齐** ⇒ 按**连续前缀**收口：前缀合法 ⇒ 按实收末 seq 收缩声明交回去续拉
+   *    （服务端撞背压提前停不是丢数据）；一条都没收到 / 前缀不合法才是真缺口，且**不**
+   *    回调续拉（再订一次只会得到同一条空区间）。
+   */
+  private closeEpoch(): TimelineRangeHeader | undefined {
     const epoch = this.epoch;
-    if (epoch === undefined) return;
+    if (epoch === undefined) return undefined;
     this.epoch = undefined;
     const { header, seqs } = epoch;
+    const last = seqs.length > 0 ? (seqs[seqs.length - 1] as number) : undefined;
+    const complete = (last !== undefined && last >= header.end_seq) || seqs.length >= header.count;
+    if (complete) {
+      const violation = validateTimelineRange(header, seqs);
+      if (violation !== undefined) this.reportTimelineGap(violation);
+      return header;
+    }
     const prefixEnd = contiguousPrefixEnd(header, seqs);
     if (prefixEnd === undefined) {
       // 一条都没收到 / 收到的不是"从区间左端起、只跳过声明洞"的连续前缀 ⇒ 真缺口。
@@ -463,38 +512,21 @@ export class EventStore {
         receivedCount: seqs.length,
         at: Date.now(),
       });
-      // **不**回调续拉：这一趟没有任何进展，再订一次也只会得到同一条空区间
-      // （订阅层的 stall 保护是第二道闸，但这里根本不该产生一次请求）。
-      return;
+      return undefined;
     }
     // 连续前缀：这一趟只是**没发完**。按实收末 seq 收缩声明，交给订阅层续拉。
-    const shrunk = planRange(header.start_seq, prefixEnd, {
+    return planRange(header.start_seq, prefixEnd, {
       timeline_head: header.timeline_head,
       wal_head: header.wal_head,
       holes: header.holes,
       tainted: header.tainted,
     });
-    this.epochEndHook?.(shrunk);
-  }
-
-  private armEpochTimer(): void {
-    this.cancelEpochTimer();
-    this.epochTimer = setTimeout(() => {
-      this.epochTimer = undefined;
-      this.settleEpoch();
-    }, EPOCH_IDLE_MS);
-    // Bun / Node 里别让这个定时器拖住进程退出（浏览器没有 unref）。
-    (this.epochTimer as unknown as { unref?: () => void }).unref?.();
-  }
-
-  private cancelEpochTimer(): void {
-    if (this.epochTimer === undefined) return;
-    clearTimeout(this.epochTimer);
-    this.epochTimer = undefined;
   }
 
   /** 注入 epoch 结束出口（续拉用；缺省 = 不续拉）。 */
-  setEpochEndHook(hook: ((header: TimelineRangeHeader) => void) | undefined): void {
+  setEpochEndHook(
+    hook: ((header: TimelineRangeHeader, settle: TimelineEpochSettle) => void) | undefined,
+  ): void {
     this.epochEndHook = hook;
   }
 
@@ -915,6 +947,9 @@ export class EventStore {
     this.earliestSeq = 0;
     // 作用域真变了：传输窗口清了，物化面必须一起清（否则串台 / 幽灵卡片）。
     this.sink.clear();
+    // 在途 epoch 的声明属于**上一个** seq 空间：留着会让新作用域的帧被记进旧区间、
+    // 结趟时报一条凭空缺口（0.55 删掉空闲定时器后这里必须显式收掉，不能靠「等它自己停」）。
+    this.epoch = undefined;
     this.version += 1;
     this.snapshot = {
       entries: [],
