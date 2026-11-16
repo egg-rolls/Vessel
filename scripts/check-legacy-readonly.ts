@@ -822,6 +822,92 @@ const READ_ALLOWLIST: readonly AllowEntry[] = [
     reason: '同上（import 语句）',
     expires_in: '0.55.0',
   },
+  // ── 迁移工具（`vessel session migrate`）：**离线读**旧日志、**只写**时间线 ──
+  //
+  // 为什么这些提及不该被当成「旧链路还活着」：迁移器是**唯一**被允许读 `events.ndjson`
+  // 的写侧工具，它的读是**离线扫描**（一次性、无写回，源 sha256 前后自证相等）；它对
+  // 时间线的写发生在会话目录里的**暂存区**（`MIGRATE_STAGING_DIR`），promote 之后才进
+  // 会话目录 —— 所以它不经过 `TimelineWriter` 的冻结闸门也不破坏「唯一写者」纪律。
+  {
+    file: 'src/session-migrate.ts',
+    family: 'events',
+    token: LEGACY_SESSION_LOG,
+    reason:
+      '迁移器的**离线读 + 源完整性自证**（sha256 前后比对、seq 升序/缺口校验）；无写回，0.54 已全库迁移完毕，工具保留供恢复旧备份',
+    expires_in: '0.56.0',
+  },
+  {
+    file: 'src/session-migrate-command.ts',
+    family: 'events',
+    token: LEGACY_SESSION_LOG,
+    reason:
+      '迁移命令的用户可见文案（「旧格式会话只有 events.ndjson」/ 源字节数与 sha256 输出）；无 IO',
+    expires_in: '0.56.0',
+  },
+  {
+    file: 'src/i18n/messages/en.ts',
+    family: 'events',
+    token: LEGACY_SESSION_LOG,
+    reason: '迁移命令的英文帮助文案（同一条），纯字符串，无 IO',
+    expires_in: '0.56.0',
+  },
+  {
+    file: 'src/i18n/messages/zh-CN.ts',
+    family: 'events',
+    token: LEGACY_SESSION_LOG,
+    reason: '迁移命令的中文帮助文案（同一条），纯字符串，无 IO',
+    expires_in: '0.56.0',
+  },
+  {
+    file: 'src/session-migrate.ts',
+    family: 'timeline',
+    token: 'timeline.manifest',
+    reason:
+      '迁移器检查「这个会话是不是已经迁过」（存在 ⇔ 已迁）+ 自证时逐名读回暂存区里刚落的时间线文件；写归 core（`TimelineWriter` 写在暂存区）',
+    expires_in: '0.56.0',
+  },
+  {
+    file: 'src/session-migrate.ts',
+    family: 'timeline',
+    token: 'timeline.ndjson',
+    reason: '同上：迁移自证逐名比对暂存区文件（只读）',
+    expires_in: '0.56.0',
+  },
+  {
+    file: 'src/session-migrate.ts',
+    family: 'timeline',
+    token: 'timeline.idx',
+    reason: '同上：迁移自证逐名比对暂存区文件（只读）',
+    expires_in: '0.56.0',
+  },
+  {
+    file: 'src/session-migrate.ts',
+    family: 'timeline',
+    token: 'wal.log',
+    reason: '同上：迁移自证逐名比对暂存区文件（只读）',
+    expires_in: '0.56.0',
+  },
+  {
+    file: 'src/session-migrate.ts',
+    family: 'timeline',
+    token: 'wal.manifest',
+    reason: '同上：迁移自证逐名比对暂存区文件（只读）',
+    expires_in: '0.56.0',
+  },
+  {
+    file: 'src/session-migrate.ts',
+    family: 'timeline',
+    token: 'wal.blocks',
+    reason: '同上：迁移自证逐名比对暂存区文件（只读）',
+    expires_in: '0.56.0',
+  },
+  {
+    file: 'src/session-migrate.ts',
+    family: 'timeline',
+    token: 'holes.ndjson',
+    reason: '同上：迁移自证逐名比对暂存区文件（只读）',
+    expires_in: '0.56.0',
+  },
   // ── timeline 目录名的**只读使用方**（装配层读两指针，ADR-105 §11.1）──
   {
     file: 'src/timeline-dual-write.ts',
