@@ -1694,7 +1694,7 @@ function validateTrace(trace: TraceConfig, errors: ConfigValidationError[]): voi
  * 那是本单最不能出的错（ADR-105 要求开关关时旧链路逐字节不变）。
  */
 function validateTimeline(timeline: TimelineConfig, errors: ConfigValidationError[]): void {
-  const { dualWrite, chunkFlushMs, verifySampleRate, archiveIntervalMs } = timeline;
+  const { dualWrite, chunkFlushMs, archiveIntervalMs } = timeline;
 
   if (dualWrite !== undefined && typeof dualWrite !== 'boolean') {
     errors.push({
@@ -1711,19 +1711,6 @@ function validateTimeline(timeline: TimelineConfig, errors: ConfigValidationErro
       path: 'timeline.chunkFlushMs',
       message: 'timeline.chunkFlushMs must be a positive integer (1..1000, clamped by writer)',
       value: chunkFlushMs,
-    });
-  }
-  if (
-    verifySampleRate !== undefined &&
-    (typeof verifySampleRate !== 'number' ||
-      !Number.isFinite(verifySampleRate) ||
-      verifySampleRate < 0 ||
-      verifySampleRate > 1)
-  ) {
-    errors.push({
-      path: 'timeline.verifySampleRate',
-      message: 'timeline.verifySampleRate must be a number in [0, 1]',
-      value: verifySampleRate,
     });
   }
   if (
@@ -1752,6 +1739,10 @@ function validateTimeline(timeline: TimelineConfig, errors: ConfigValidationErro
       value: removedReadFrom,
     });
   }
+  // 0.54（同一口径）：抽样对拍的配置键 `timeline.verify_sample_rate` 已随那套装置一起删除。
+  // 旧配置**不会**被静默忽略：它已经不在 `KNOWN_BLOCK_KEYS.timeline` 里，`validateConfig`
+  // 的未知键校验会在启动时 hard error（`Unknown configuration key "timeline.…"`）。
+  // 这里不再单独给「为什么消失」的文案 —— 那需要在源码里写出已删除标识符本身。
 }
 
 /** 校验 mcpServers env / headers 的 `_env` 键（0.5） */
@@ -2788,7 +2779,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'expandCards',
   ],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
-  timeline: ['dualWrite', 'chunkFlushMs', 'verifySampleRate', 'archiveIntervalMs'],
+  timeline: ['dualWrite', 'chunkFlushMs', 'archiveIntervalMs'],
 };
 
 /** serve.tls / hub.tls 的已知键 */

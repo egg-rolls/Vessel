@@ -8,15 +8,14 @@
  * 写入侧已冻结）。读路径、协议、UI 全部照旧 —— 这一阶段只证明「新链路写出来的东西和旧链路
  * 一样」，不切换任何读者。
  *
- * ## 五条硬纪律（违反任何一条都应判红，不是「注意一下」）
+ * ## 四条硬纪律（违反任何一条都应判红，不是「注意一下」）
  *
  * | # | 纪律 | 落点 |
  * | --- | --- | --- |
  * | 1 | 开关关 ⇒ 旁路**一次都不调**（不是「调了再丢弃」） | 装配层：`dual_write: false` 时**不装**端口（`createTimelineDualWrite` 仍可构造，但 `record` 直接返回） |
  * | 2 | 新链路任何失败 ⇒ 只记指标/日志 | `record()` / `endRun()` 返回 void，内部 `catch` 全吞；writer 打不开就把该会话标成 broken，不再重试 |
  * | 3 | 不改旧链路语义（**开关关**时） | `dual_write: false` ⇒ 本模块不装闸门、不传 `publish`、不碰事件流；开关开时旧链路广播降级为发送缓冲（见下节），落盘与 seq 语义仍逐字节不变 |
- * | 4 | 抽样不得影响 run 结果 | `verifySession()` 是纯读 + 一份 `timeline.divergence` 事件；任一步失败只记指标 |
- * | 5 | 归档不上 publish 路径、失败只影响空间回收 | 归档（`timeline_head` 推进）走会话级串行队列 fire-and-forget：`record()` 只 `maybeArchive()` 派发，永不 await；失败 ⇒ `timeline_head` 冻结、`wal_head` 照常、**不写洞**、标 `tainted` |
+ * | 4 | 归档不上 publish 路径、失败只影响空间回收 | 归档（`timeline_head` 推进）走会话级串行队列 fire-and-forget：`record()` 只 `maybeArchive()` 派发，永不 await；失败 ⇒ `timeline_head` 冻结、`wal_head` 照常、**不写洞**、标 `tainted` |
  *
  * ## 旧格式会话只读冻结（0.54 C1 / ADR-105 D4）——本模块的 adopt 边界
  *
@@ -109,27 +108,6 @@
  * 同一会话任何时刻在飞归档数 ≤ 1（`inFlight` 闸门 + 串行链）；失败计数达到
  * `ARCHIVE_BACKOFF_THRESHOLD`（3）后，自动归档按 100/500/2000ms 退避，成功一次即清零。
  *
- * ## 为什么在这里而不在 core
- *
- * 一致性抽样要用**尺子**（`scripts/timeline-reference.ts` 的 `loadSessionReference` /
- * `multisetDiff`）。尺子依赖 `apps/web` 的 `payloadDigest`，core 是发布用的库，不能反向
- * 依赖 `scripts/` 与 `apps/`（`scripts/check-deps.ts` D3）。所以装配层（`src/`）是唯一
- * 同时看得到「core 写入侧」与「尺子」的地方。
- *
- * ## 抽样比什么
- *
- * 比 **`(run_id, type, ts, payload_digest)` 多重集**（尺子的口径），不是比 seq（三套 seq
- * 互不映射）。旧源只取**会话日志**那一路（`sources: ['session-log']`）：双写的数据源就是
- * `RunJournal` 的落盘点，与 `events.ndjson` 同源；trace 侧另有一套 trace-only 事件
- * （`hook.*` / `context.changed` / `run.checkpoint` …），它们本来就不经 journal，比进来
- * 只会造出假差异。
- *
- * 差集口径（ADR-105 §8.1 规则 ④）：
- *
- * - `missing` 只要**大于 0** 就是差异（旧链路有、timeline 没有）；
- * - `extra` 只允许 **chunk 家族**（`llm.stream.chunk` 与 `*.llm.stream.chunk`）——
- *   那是旧链路**故意不落盘**的一类，timeline 有它是对的。其它 extra 也算差异。
- *
  * @module vessel/timeline-dual-write
  */
 
@@ -161,13 +139,6 @@ import {
   readTimelineEvents,
 } from '../packages/core/src/timeline/wal';
 import { TimelineWriter } from '../packages/core/src/timeline/writer';
-import {
-  isTimelineOnlyType,
-  loadSessionReference,
-  multisetDiff,
-  type RefEvent,
-  refEventFromRaw,
-} from '../scripts/timeline-reference';
 
 /**
  * 进程退出时给 flush 留的上限（ms）。
@@ -176,9 +147,6 @@ import {
  * timeline 少写几条不会让任何读者看到错的东西）。
  */
 export const EXIT_FLUSH_BUDGET_MS = 300;
-
-/** 默认抽样率（plan-054 A-2：`0.01` = 1% 的 run 结束比一次）。 */
-export const DEFAULT_VERIFY_SAMPLE_RATE = 0.01;
 
 /**
  * 归档周期保底间隔默认值（ms；配置键 `timeline.archive_interval_ms`）。
@@ -311,16 +279,12 @@ export interface TimelineArchiveFailure {
 export interface TimelineDualWriteStats {
   /** 成功交给 writer（不保证已经落盘）。 */
   appended: number;
-  /** 新链路失败次数（打不开 writer / append 抛错 / 抽样本身抛错）。 */
+  /** 新链路失败次数（打不开 writer / append 抛错）。 */
   failed: number;
   /** 成功打开的 writer 数（= 参与双写的会话数）。 */
   sessions: number;
   /** 打开 writer 失败后被标成 broken 的会话数（不再重试，避免每条事件都撞一遍）。 */
   broken_sessions: number;
-  /** 被抽样比对的 run 数。 */
-  sampled_runs: number;
-  /** 比出差异的 run 数（发过 `timeline.divergence`）。 */
-  divergences: number;
   /** **真的推进了指针**的归档次数（`from_seq <= to_seq`；无事可做的不计）。 */
   archiveCount: number;
   /** 归档失败次数（写入侧 3 次重试全部失败后才计一次 —— 只影响空间回收）。 */
@@ -343,35 +307,17 @@ export interface TimelineDualWriteStats {
   frozen_sessions: number;
 }
 
-/** 一次抽样比对的结果（门禁直接读，不做二次解释）。 */
-export interface TimelineVerifyResult {
-  /** 是否真的比了（时间线空 / 端口关 / 未抽样 ⇒ false）。 */
-  compared: boolean;
-  missing: number;
-  /** 白名单内的 chunk 差集条数（不算差异）。 */
-  allowed_extra: number;
-  /** 非 chunk 的 extra 条数（算差异）。 */
-  unexpected_extra: number;
-  missing_types: string[];
-  unexpected_extra_types: string[];
-}
-
 export interface TimelineDualWriteOptions {
-  /** 数据根（尺子读旧源用的口径：`<dataDir>/sessions/<sid>/events.ndjson`）。 */
-  dataDir: string;
   /** 会话目录根（`<dataDir>/sessions`）。 */
   sessionsDir: string;
   /** 开关；`false` ⇒ 本对象所有方法都是空操作（装配层还会选择根本不装端口）。 */
   dualWrite: boolean;
   /** chunk 空闲封块间隔；缺省 150（写入侧还会 clamp 到 1..1000）。 */
   chunkFlushMs?: number;
-  /** 抽样率 [0,1]；缺省 0.01。`>= 1` 恒抽样，`<= 0` 从不抽样。 */
-  verifySampleRate?: number;
   /**
    * 归档周期保底间隔（ms）；缺省 {@link DEFAULT_ARCHIVE_INTERVAL_MS}（5000）。
    *
-   * `<= 0` ⇒ 关掉周期保底（只剩 run 终态 / 显式 `archiveSession()` 两条触发路径，
-   * 门禁要确定性时用）。
+   * `<= 0` ⇒ 关掉周期保底（只剩 run 终态 / 显式 `archiveSession()` 两条触发路径）。
    */
   archiveIntervalMs?: number;
   /**
@@ -379,8 +325,6 @@ export interface TimelineDualWriteOptions {
    * 抛错被吞（通知通道坏了不能反过来影响归档调度）。
    */
   onArchiveFailed?: (info: TimelineArchiveFailure) => void;
-  /** 发 `timeline.divergence` 的出口（装配层接 tenant 事件流；抛错被吞）。 */
-  emit?: (event: RunEvent) => void;
   /**
    * **唯一的对外发布出口**（ADR-105 §3 I2）：写者在 WAL/块 fsync 之后回调它。
    *
@@ -396,18 +340,16 @@ export interface TimelineDualWriteOptions {
    *
    * 装了它 ⇒ 旧链路广播由闸门扣住，`onPublish` 只在「旧链路没广播过这条」时才会被调用
    * （绝大多数事件是闸门放行旧广播，避免同一条事件出现两次）。不装 ⇒ 每条记录都走
-   * `onPublish`（门禁 / 探针的口径）。
+   * `onPublish`。
    */
   publicationGate?: TimelineLegacyBroadcastGate;
   logger?: Logger;
-  /** 时刻 / 随机数 / writer 构造是**测试缝**：门禁强制造差异时用，生产不传。 */
+  /** 时钟缝（归档节流/退避用）；生产不传，缺省 `Date.now`。 */
   now?: () => number;
-  random?: () => number;
   /**
    * writer 构造缝：`publish` 由本模块传入（**不许**自己另接一条发布路径，否则 I2 就绕过了）。
    *
-   * 自定义实现必须把它原样交给 `TimelineWriter.open({... publish})`；典型的测试缝只在
-   * `beforeSync` 上做手脚（见 `scripts/check-timeline-archive.ts`）。
+   * 自定义实现必须把它原样交给 `TimelineWriter.open({... publish})`。
    */
   openWriter?: (options: {
     sessionId: string;
@@ -463,8 +405,8 @@ export interface TimelineDualWrite {
   closeSession(sessionId: string): Promise<void>;
   /** journal.close 的旁路入口（fire-and-forget；`finishRun` 是它的可等待版本）。 */
   endRun(sessionId: string, runId: string): void;
-  /** flush +（可能）抽样；可等待，门禁用它定序。永不抛。 */
-  finishRun(sessionId: string, runId: string): Promise<TimelineVerifyResult | undefined>;
+  /** flush + 触发一次 run 终态归档；可等待，永不抛。 */
+  finishRun(sessionId: string, runId: string): Promise<void>;
   /** flush 一个会话的 writer（尽力而为）。 */
   flushSession(sessionId: string): Promise<void>;
   /**
@@ -569,10 +511,6 @@ function sessionDirOf(sessionsDir: string, sessionId: string): string {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function uniqueSorted(values: readonly string[]): string[] {
-  return [...new Set(values)].sort();
 }
 
 /** 事件身份（旧链路广播 ↔ timeline 记录的共同键）：**不含 `data`**（落盘副本可能被裁剪）。 */
@@ -887,12 +825,7 @@ async function readHeadsOnDisk(sessionDir: string): Promise<TimelineHeads | unde
 export function createTimelineDualWrite(options: TimelineDualWriteOptions): TimelineDualWrite {
   const enabled = options.dualWrite === true;
   const chunkFlushMs = options.chunkFlushMs ?? CHUNK_FLUSH_MS;
-  const rawRate = options.verifySampleRate ?? DEFAULT_VERIFY_SAMPLE_RATE;
-  const verifySampleRate = Number.isFinite(rawRate)
-    ? Math.min(1, Math.max(0, rawRate))
-    : DEFAULT_VERIFY_SAMPLE_RATE;
   const now = options.now ?? (() => Date.now());
-  const random = options.random ?? Math.random;
   const archiveIntervalMs = (() => {
     const raw = options.archiveIntervalMs;
     if (typeof raw !== 'number' || !Number.isFinite(raw)) return DEFAULT_ARCHIVE_INTERVAL_MS;
@@ -920,8 +853,6 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     failed: 0,
     sessions: 0,
     broken_sessions: 0,
-    sampled_runs: 0,
-    divergences: 0,
     archiveCount: 0,
     archiveFailed: 0,
     lastArchiveAt: 0,
@@ -952,7 +883,7 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
    * 被判定为「旧格式 ⇒ 只读冻结」的会话（本进程内已裁决过，不再重复判、也不再试写）。
    *
    * 命中它的会话：`record()` 一个字节都不写、`flushSession()` 抛 `session_frozen_readonly`、
-   * 生命周期钩子（`endRun` / 抽样）安静跳过。
+   * 生命周期钩子（`endRun`）安静跳过。
    */
   const frozenSessions = new Set<string>();
 
@@ -961,12 +892,11 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   /**
    * 在飞的双写任务（`record()` 的 fire-and-forget 体）。
    *
-   * `flushSession` / `closeAll` / 抽样**必须先等它们**：`record()` 是同步返回的，若不等
-   * 在飞任务就 `flush()`，刚派出去的那条还没 `writer.append`，flush 会「什么也没刷」，
-   * 抽样就会拿一份缺尾巴的 timeline 去比对 —— 那会造出假差异。
+   * `flushSession` / `closeAll` **必须先等它们**：`record()` 是同步返回的，若不等在飞任务
+   * 就 `flush()`，刚派出去的那条还没 `writer.append`，flush 会「什么也没刷」。
    */
   const inflight = new Set<Promise<void>>();
-  /** 已进入抽样队列的 run（`endRun` 与 `finishRun` 可能对同一 run 各调一次）。 */
+  /** 已结束过的 run（`endRun` 与 `finishRun` 可能对同一 run 各调一次）。 */
   const finishedRuns = new Set<string>();
   let exitFlushInstalled = false;
 
@@ -1085,15 +1015,12 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   /**
    * 一条事件是否值得进 timeline。
    *
-   * 0.54 stop-write：时间线是**唯一**落盘口，所以这里只剩「什么不算会话事实」一条判据
+   * 0.54 stop-write：时间线是**唯一**落盘口，所以判据只有一条
    * （`timeline/types.ts#isExcludedEventType`：派生快照 / 自带 durable 记录的同步事件 /
-   * 进程生命周期）＋ 抽样告警自身的防递归。
+   * 进程生命周期）。
    */
   function shouldWrite(event: TimelineDualWriteEvent): boolean {
-    if (isNonFactEventType(event.type)) return false;
-    // 抽样告警自身绝不回写 timeline（否则「比对发现差异」会改输入，递归）。
-    if (event.type.startsWith('timeline.')) return false;
-    return true;
+    return !isNonFactEventType(event.type);
   }
 
   /**
@@ -1399,16 +1326,6 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     }
   }
 
-  function shouldSample(): boolean {
-    if (verifySampleRate >= 1) return true;
-    if (verifySampleRate <= 0) return false;
-    try {
-      return random() < verifySampleRate;
-    } catch {
-      return false;
-    }
-  }
-
   // ---------------------------------------------------------------- archive 调度
 
   /** 第 n 次连续失败（n ≥ 阈值）对应的退避时长；未到阈值 ⇒ 0。 */
@@ -1597,125 +1514,18 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     }
   }
 
-  /**
-   * 尺子对拍：`loadSessionReference(sid)`（只取会话日志那一路）vs 该会话 timeline。
-   *
-   * 纯读：不改 timeline、不改旧日志、不碰 writer 状态（flush 之后只 `readTimelineEvents`）。
-   */
-  async function verifySession(sessionId: string): Promise<TimelineVerifyResult> {
-    const empty: TimelineVerifyResult = {
-      compared: false,
-      missing: 0,
-      allowed_extra: 0,
-      unexpected_extra: 0,
-      missing_types: [],
-      unexpected_extra_types: [],
-    };
-    // 旧格式会话：没有 timeline 可比（与 writer 打不开同一条出口：`compared:false`）。
-    if (frozenSessions.has(sessionId)) return empty;
-    await flushSession(sessionId);
-    const sessionDir = sessionDirOf(options.sessionsDir, sessionId);
-    const records = await readTimelineEvents(sessionDir).catch(() => []);
-    // timeline 还不存在（例如 writer 打不开）⇒ 没有可比的东西，不报差异（不制造噪音）。
-    if (records.length === 0) return empty;
-
-    const actual: RefEvent[] = [];
-    for (const record of records) {
-      // 记录形状与旧链路同形（v/seq/session_id/run_id/ts/type/data/crc），尺子直接吃。
-      const event = refEventFromRaw({
-        run_id: record.run_id,
-        type: record.type,
-        ts: record.ts,
-        data: record.data,
-      });
-      if (event !== undefined) actual.push(event);
-    }
-    const expected = await loadSessionReference(sessionId, {
-      dataDir: options.dataDir,
-      sources: ['session-log'],
-    });
-    // 0.54 stop-write：新会话**不再产生 `events.ndjson`** ⇒ 旧源为空不是「timeline 多了」，
-    // 而是「没有第二份东西可比」。照实报 `compared: false`（不制造假差异、也不要假绿）：
-    // 已迁移会话仍有旧日志，比对照旧有效，直到迁移工具的读面退役（0.55+）。
-    if (expected.length === 0) {
-      warn('timeline verify skipped (no legacy session log; two-source comparison is over)', {
-        session_id: sessionId,
-      });
-      return empty;
-    }
-    const diff = multisetDiff(expected, actual);
-    const unexpectedExtra = diff.extra.filter((event) => !isTimelineOnlyType(event.type));
-    const result: TimelineVerifyResult = {
-      compared: true,
-      missing: diff.missing.length,
-      allowed_extra: diff.extra.length - unexpectedExtra.length,
-      unexpected_extra: unexpectedExtra.length,
-      missing_types: uniqueSorted(diff.missing.map((event) => event.type)),
-      unexpected_extra_types: uniqueSorted(unexpectedExtra.map((event) => event.type)),
-    };
-    return result;
-  }
-
-  async function finishRun(
-    sessionId: string,
-    runId: string,
-  ): Promise<TimelineVerifyResult | undefined> {
-    if (!enabled) return undefined;
+  async function finishRun(sessionId: string, runId: string): Promise<void> {
+    if (!enabled) return;
     const key = `${sessionId}\u0000${runId}`;
-    if (finishedRuns.has(key)) return undefined;
+    if (finishedRuns.has(key)) return;
     finishedRuns.add(key);
-    // 旧格式会话：没有 timeline 可 flush/归档/抽样。生命周期钩子**安静跳过**
+    // 旧格式会话：没有 timeline 可 flush/归档。生命周期钩子**安静跳过**
     // （不记失败、不制造噪音）—— 冻结不是故障，是「这个会话不该有 timeline」。
-    if (frozenSessions.has(sessionId)) return undefined;
+    if (frozenSessions.has(sessionId)) return;
     await flushSession(sessionId);
     // run 终态（journal.close / endRun）触发一次归档：不 await（fire-and-forget），
     // 归档失败只影响空间回收 —— run 结果与旧链路都不看它。
     maybeArchive(sessionId, 'run_end');
-    if (!shouldSample()) return undefined;
-    counters.sampled_runs += 1;
-    let result: TimelineVerifyResult;
-    try {
-      result = await verifySession(sessionId);
-    } catch (error) {
-      counters.failed += 1;
-      warn('timeline dual-write verify failed (run result unaffected)', {
-        session_id: sessionId,
-        run_id: runId,
-        error: errorText(error),
-      });
-      return undefined;
-    }
-    if (result.compared && (result.missing > 0 || result.unexpected_extra > 0)) {
-      counters.divergences += 1;
-      // 发 `timeline.divergence`：**additive** 观测事件，不进 timeline 自身（`shouldWrite`）。
-      // payload 只带类型/计数/时间戳 —— 不带任何正文，审计事件不携带内容。
-      try {
-        options.emit?.({
-          type: 'timeline.divergence',
-          run_id: runId,
-          ts: now(),
-          data: {
-            session_id: sessionId,
-            run_id: runId,
-            missing_count: result.missing,
-            allowed_extra_count: result.allowed_extra,
-            unexpected_extra_count: result.unexpected_extra,
-            missing_types: result.missing_types,
-            unexpected_extra_types: result.unexpected_extra_types,
-            verify_sample_rate: verifySampleRate,
-            at: now(),
-          },
-        });
-      } catch (error) {
-        counters.failed += 1;
-        warn('timeline.divergence emit failed', {
-          session_id: sessionId,
-          run_id: runId,
-          error: errorText(error),
-        });
-      }
-    }
-    return result;
   }
 
   function endRun(sessionId: string, runId: string): void {
