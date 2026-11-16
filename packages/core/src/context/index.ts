@@ -72,6 +72,7 @@ export {
 export {
   type ContextNoticeLocale,
   renderContextOverflowNotice,
+  renderContextWindowExceededNotice,
   renderSystemRevisionNotice,
 } from './context-notice.js';
 export {
@@ -159,4 +160,19 @@ export {
   segmentRecordEvents,
   toProviderPayload,
 } from './request-sequence.js';
+export {
+  CONTEXT_WINDOW_EXCEEDED,
+  ContextWindowExceededError,
+  estimateMessagesTokensUpperBound,
+  estimateMessageTokensUpperBound,
+  estimateRequestViewTokens,
+  estimateTokensUpperBound,
+  NO_ANCHOR_SAFETY_MARGIN,
+  REQUEST_MESSAGE_OVERHEAD_TOKENS,
+  type RequestViewEstimateInput,
+  UPPER_BOUND_RATE_CONTROL,
+  UPPER_BOUND_RATE_PLAIN,
+  UPPER_BOUND_RATE_PUNCT,
+  UPPER_BOUND_RATE_WIDE,
+} from './request-view.js';
 export { createSessionBreaker } from './session-breaker.js';

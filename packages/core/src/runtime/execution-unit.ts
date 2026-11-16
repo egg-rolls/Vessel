@@ -9,16 +9,24 @@ import {
   archiveNoticeSignature,
   archiveReadbackAvailability,
   auditChainOf,
+  type ContextAnchor,
+  ContextWindowExceededError,
+  clampAnchorRatio,
   decideProjectionRunMode,
+  estimateMessagesTokensUpperBound,
+  estimateRequestViewTokens,
   estimateTokens,
   measureArchivedToolResults,
   measureToolResultPressure,
+  NO_ANCHOR_SAFETY_MARGIN,
+  normalizeContextAnchor,
   PROJECTION_POLICY_VERSION,
   type ProjectionRuntimeMode,
   planClearedToolResults,
   renderArchiveNotice,
   renderContextOverflowNotice,
   renderContextTrimNotice,
+  renderContextWindowExceededNotice,
   renderSystemRevisionNotice,
   resolveProjection,
   setWindowProjectionMode,
@@ -173,6 +181,28 @@ interface StoredHistory {
   lastRequestTokens?: number;
 }
 
+/**
+ * 本 run 的上下文计数状态（0.55 P0），按窗口对象存在 `contextAccounting` 里。
+ *
+ * 字段含义与合同见 `context/request-view.ts` 模块头；这里只放**状态**，判据在
+ * `correctedContextTokens` / `recordProviderPromptTokens` 两个方法里。
+ */
+interface RunContextAccounting {
+  /**
+   * 最近一次真实请求视图的读数：`tokens` = `estimateRequestViewTokens(args.messages)`
+   * 的上界估算（已含每条消息开销与 tools），`messageCount` = 那次请求的消息条数
+   * （用来算「其后追加了多少」）。
+   */
+  requestView?: { tokens: number; messageCount: number };
+  /** 校正锚点（provider `prompt_tokens` ÷ 同一请求视图的上界估算）。 */
+  anchor?: ContextAnchor;
+  /**
+   * 上一次 provider 回报的 per-request 用量（地板值，不是现值）。
+   * 「上一次响应之后追加的内容」不会被它抹掉：现值来自估算，它只做 `max` 的下界。
+   */
+  providerPrompt?: number;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -250,10 +280,22 @@ function errorText(error: unknown): string {
 /**
  * context-overflow 的通用文案 / 错误码（0.10 R2-17）。
  * 不绑定厂商名：只认状态码 400 + 可识别的描述。
+ *
+ * 0.55 P0：**补上 Volcengine / litellm 的措辞**。真实事故原文是
+ * `litellm.BadRequestError: VolcengineException - Input exceeds the context limit
+ * (1048568 tokens)` —— 老清单一条都不匹配（`context[_ ]length` / `context window` /
+ * `maximum context` / `prompt is too long` / `input is too long` / `too many tokens` /
+ * `token limit` / `request too large`），于是：
+ * - 走不到「追加超限卡」那条路（会话里连一张说明都没有）；
+ * - `run.failed.error_code` 落成 `provider_http_error`（不是 `provider_context_overflow`），
+ *   观测侧因此看不出「这是上下文超了」。
+ * 教训：**provider 已经告诉我们超限了，我们却没听懂**。新增的两条覆盖同族措辞：
+ * `Input exceeds the context limit` / `context limit reached` / `exceeded the context limit`。
  */
 const CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
   /context[_ ]length/i,
   /context window/i,
+  /context limit/i,
   /maximum context/i,
   /prompt is too long/i,
   /input is too long/i,
@@ -261,6 +303,45 @@ const CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
   /token limit/i,
   /request too large/i,
 ];
+
+/**
+ * 从 provider 的超限文案里读出它报的 token 数（读不出 = `undefined`）。
+ *
+ * 用途：把这一次 400 当成**免费的实测读数**——provider 说「这次输入到了 N tokens」，
+ * 那就是上一次请求视图的真实大小（我们本地估算的下界）。记成锚点比值 + 地板，
+ * 下一个段起点的压缩与发送前闸立刻按真实口径判定，不必等下一次成功响应。
+ *
+ * 只认紧挨着 `token(s)` 的数字（`: 1,048,568 tokens` / `(1048568 tokens)`），
+ * 不抓消息里别的数字：误抓一个「400」当 token 数会让地板大得荒唐。
+ */
+function reportedContextTokens(message: string): number | undefined {
+  if (!/token/i.test(message)) return undefined;
+  const match = /(\d[\d,_ ]{2,})\s*tokens?\b/i.exec(message);
+  if (!match?.[1]) return undefined;
+  const value = Number(match[1].replace(/[,_ ]/g, ''));
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
+}
+
+/**
+ * 把「已识别的 provider 超限错误」包装成带稳定错误码的错误（0.55 P0）。
+ *
+ * 为什么需要在本地重写一层：`toErrorEnvelope`（`runtime/error-envelope.ts`，本次不改）
+ * 用它自己的模式表 + HTTP 400 判定 `provider_context_overflow`，表里同样没有 Volcengine
+ * 的措辞。这里**不丢原文**：前缀给 envelope 认得的措辞（`context length`）+ 稳定码，
+ * provider 的原始正文原样跟在后面，`run.failed.error` 因此既保留了原文，又拿到了正确的
+ * `error_code`。`status = 400` 让 envelope 不必再从文本里猜状态码。
+ */
+class ProviderContextOverflowError extends Error {
+  readonly code = 'provider_context_overflow';
+  readonly status = 400;
+  /** 原始 provider 错误（不参与分类，只留给需要原始对象的调用方/调试）。 */
+  readonly original: unknown;
+  constructor(cause: unknown) {
+    super(`provider_context_overflow: context length exceeded — ${errorText(cause)}`);
+    this.name = 'ProviderContextOverflowError';
+    this.original = cause;
+  }
+}
 
 /** 从错误对象读取 HTTP 状态码（status / statusCode / httpStatus / response.status） */
 function readHttpStatus(error: Record<string, unknown>): number | undefined {
@@ -659,7 +740,8 @@ export class ExecutionUnit {
   private lastCoveredCursor?: number;
   /**
    * 上一 Run 的 provider 真实 token 数。baseline 的 WorkingContext 跨 Run 存活，
-   * `tokenCount` 会继续返回该值；per-Run 新实例在首次请求前用它保持同一口径。
+   * `updateRealTokens` 沿用该值（0.55 P0 起它只是 `tokenCount` 的**地板**，
+   * 现值来自「下一次请求视图的上界估算」，见 `context/request-view.ts` 合同 1）。
    */
   private lastRealTokens?: number;
   private lastBranch?: string;
@@ -893,8 +975,15 @@ export class ExecutionUnit {
       return;
     }
     this.publishCompacted(window, execution.runId, execution.sessionId, removed, 'auto');
-    // 压缩删掉了中段：本段从压缩后的视图开始，必须显式标段因，否则守卫会当成前缀重写。
-    if (removed > 0) this.pendingPrefixReason ??= 'compaction';
+    if (removed > 0) {
+      // 压缩删掉了中段：本段从压缩后的视图开始，必须显式标段因，否则守卫会当成前缀重写。
+      this.pendingPrefixReason ??= 'compaction';
+      // 0.55 P0：窗口真的变小了 ⇒ 「上一次 provider 回报」这条地板必须撤掉，
+      // 否则压缩后的显示会卡在压缩前的数（地板只保证「不倒退」，不该阻止「正当缩小」）。
+      const state = this.accounting(execution);
+      state.providerPrompt = undefined;
+      state.requestView = undefined;
+    }
   }
 
   /**
@@ -937,6 +1026,146 @@ export class ExecutionUnit {
    * 供 `saveSessionState` 写审计用；请求期只读 `windowProjectionMode(window)`。
    */
   private readonly segmentProjections = new WeakMap<object, FrozenProjectionDecision>();
+
+  /**
+   * 本 run 的**上下文计数状态**（0.55 P0），按窗口对象索引。
+   *
+   * 存在的理由：计数的唯一权威口径是「下一次请求视图的上界估算」（合同见
+   * `context/request-view.ts`），而**请求视图**只有 runtime 手里有（`buildRequestMessages`
+   * 之后、`withClearedToolResults` 之后的那一份）。窗口侧只有整窗，够不到冻结的占位集合
+   * —— 而且 `WorkingContext` 端口上没有任何「把这个数交给你」的成员（`packages/agent` 的
+   * `RoleAwareContext` 包装层也不会转发新增成员）。所以状态放在这里，不新增端口成员。
+   *
+   * 按窗口对象索引：新 run / `pop` / 换会话都会换窗口 ⇒ 自动失效，随窗口 GC，
+   * 不需要显式清理，也不会跨 run 串味（与 `segmentClearPlans` 同一生命周期口径）。
+   */
+  private readonly contextAccounting = new WeakMap<object, RunContextAccounting>();
+
+  /**
+   * 取（必要时新建）本 run 的计数状态。
+   *
+   * 上界：每个窗口一条记录（三个数字 + 一个锚点对象），与窗口同生共死。
+   */
+  private accounting(execution: Run): RunContextAccounting {
+    const key = execution.workingContext;
+    let state = this.contextAccounting.get(key);
+    if (state === undefined) {
+      state = {};
+      this.contextAccounting.set(key, state);
+    }
+    return state;
+  }
+
+  /**
+   * 段起点：把落盘锚点接进本段账本（并按模型过滤）。
+   *
+   * 为什么过滤模型：换模型的 tokenizer 不同，硬套别人的比值比不校正更糟
+   * （与 `MemoryWorkingContext.setContextAnchor` 同一判据，两处必须一致）。
+   */
+  private adoptStoredAnchor(
+    execution: Run,
+    stored: SessionState | null,
+    lastRequestTokens?: number,
+  ): void {
+    const state = this.accounting(execution);
+    const normalized = normalizeContextAnchor(stored?.context_anchor);
+    state.anchor =
+      normalized === undefined
+        ? undefined
+        : normalized.model !== undefined &&
+            this.model !== undefined &&
+            normalized.model !== this.model
+          ? undefined
+          : normalized;
+    // 地板：上一次 provider 回报的 per-request 用量（prompt + completion，`llm.response`）。
+    // 只做 `max` 的下界，保证「run 起点数字不倒退」（合同 1）——**不是**现值。
+    state.providerPrompt =
+      lastRequestTokens !== undefined && lastRequestTokens > 0 ? lastRequestTokens : undefined;
+    // 窗口也注入一份：直接持有 `MemoryWorkingContext` 的实现（TUI / 无包装层）据此校正。
+    execution.workingContext.setContextAnchor?.(state.anchor, this.model);
+  }
+
+  /**
+   * 把「本地上界估算」换算成**要显示 / 要比阈值**的那个数（合同 2 / 5）。
+   *
+   * - 有锚点：乘 `anchor.ratio`（provider ÷ 同一请求视图的上界估算，**同口径**，合同 3）。
+   *   有锚点说明我们实测过这台机器 / 这个模型的偏差，`NO_ANCHOR_SAFETY_MARGIN` 不再叠加
+   *   （再乘就是双重高报，会凭空提前压缩）。
+   * - 无锚点：乘 `NO_ANCHOR_SAFETY_MARGIN`（未知 tokenizer 的保守边距，取值依据见
+   *   `context/request-view.ts`）。
+   * - 最后用 `providerPrompt` 做地板：数字永不因「provider 回报比较小」而倒退（合同 1）。
+   */
+  private correctedContextTokens(execution: Run, rawTokens: number): number {
+    const state = this.accounting(execution);
+    const factor = state.anchor !== undefined ? state.anchor.ratio : NO_ANCHOR_SAFETY_MARGIN;
+    const corrected = Math.round(Math.max(0, rawTokens) * factor);
+    const floor = state.providerPrompt ?? 0;
+    return Math.max(corrected, floor);
+  }
+
+  /**
+   * 「下一次请求」的视图估算（未校正）—— 显示 / 预警用的现值。
+   *
+   * 增量口径（第十一条）：本段已经构建过一次请求（`state.requestView` 有值）时，取那次
+   * 的视图估算 + **其后追加的消息**的上界估算；没有请求过（run 刚起来）就按整窗上界估。
+   * 两者都不会「倒退」：追加只加，压缩会换窗口（新 run 的段起点）。
+   *
+   * tools 只在有请求视图时计入（那是上一次请求真的带上的那张表）；整窗兜底路径不知道
+   * 工具表，因此略偏低 —— 但发送前闸会补上 tools（它手上有 `args.tools`），闸不受影响。
+   */
+  private nextRequestTokens(execution: Run): number {
+    const state = this.accounting(execution);
+    const messages = execution.workingContext.messages;
+    const view = state.requestView;
+    if (view === undefined) return estimateMessagesTokensUpperBound(messages);
+    if (messages.length <= view.messageCount) return view.tokens;
+    const appended = messages.slice(view.messageCount);
+    return view.tokens + estimateMessagesTokensUpperBound(appended);
+  }
+
+  /** 现值（显示 / 压缩判据口径）= 下一次请求视图估算，按锚点校正并压地板。 */
+  private currentContextTokens(execution: Run): number {
+    return this.correctedContextTokens(execution, this.nextRequestTokens(execution));
+  }
+
+  /**
+   * 拿到 provider 上报的 `prompt_tokens` 那一刻记下校正比（合同 2 / 3）。
+   *
+   * 分母 `requestViewTokens` 必须是**这一次请求的视图**估算（`args.messages` 的上界），
+   * 不是整窗：整窗比请求视图大（占位后正文变短），比值会被结构性压小，重启后校正不够
+   * —— 那正是 0.52 起「锚点从没落过盘、落盘也偏小」的半个原因。
+   *
+   * 落盘由 `saveSessionState` 负责（`SessionState.context_anchor`）。这里同时把锚点注入
+   * 窗口（`setContextAnchor`），让只认窗口的实现也能用上。
+   */
+  private recordProviderPromptTokens(
+    execution: Run,
+    promptTokens: number,
+    requestViewTokens: number,
+  ): void {
+    const state = this.accounting(execution);
+    if (!(promptTokens > 0)) return;
+    // 地板值：provider 的 per-request 回报（含 completion —— 下一轮它会作为 assistant
+    // 消息重新进请求，所以取 prompt + completion 不多算）。
+    state.providerPrompt = promptTokens;
+    if (!(requestViewTokens > 0)) return;
+    const ratio = clampAnchorRatio(promptTokens / requestViewTokens);
+    if (ratio === undefined) return;
+    const anchor: ContextAnchor = {
+      ratio,
+      prompt_tokens: promptTokens,
+      request_estimate: requestViewTokens,
+      ...(this.model !== undefined && this.model.length > 0 ? { model: this.model } : {}),
+      at: Date.now(),
+    };
+    state.anchor = anchor;
+    execution.workingContext.setContextAnchor?.(anchor, this.model);
+  }
+
+  /** 本 run 当前可落盘的锚点（`saveSessionState` 用）。 */
+  private anchorOf(execution: Run): ContextAnchor | undefined {
+    return this.accounting(execution).anchor ?? execution.workingContext.contextAnchor;
+  }
 
   /**
    * 上一张 trim 卡的**去重键**，按会话索引（0.53 主题3）。
@@ -1824,11 +2053,13 @@ export class ExecutionUnit {
 
   private async endExecution(execution: Run): Promise<void> {
     // 记录本 Run 结束时的水位；下一 Run 重建窗口，无 active Run 时 host 读此值。
+    // 0.55 P0：口径 = 下一次请求视图的上界估算（锚点校正 + provider 地板），
+    // 不是 `workingContext.tokenCount`（那只是整窗上界，占位后偏大且不含 tools）。
     const context = execution.workingContext;
     const max = context.maxTokens;
     this.lastContextRatioValue =
       typeof max === 'number' && Number.isFinite(max) && max > 0
-        ? context.tokenCount / max
+        ? this.currentContextTokens(execution) / max
         : undefined;
     await this.flushJournalWrites();
     if (this.activeRun === execution) this.activeRun = undefined;
@@ -2050,10 +2281,13 @@ export class ExecutionUnit {
       // 不能用 RunRecord 的 usage：那是整轮累计，多请求 run 会线性放大。
       this.seedRealTokensFromLastRequest(execution, history);
     }
-    // 0.52 C：真实用量锚点（按会话落盘）。`realTokens` 归零期间（重启 / 新进程第一轮 /
-    // 压缩后）用它把本地估算校正到 provider 口径；有真实值时锚点不抢（见 tokenCount）。
+    // 0.52 C / 0.55 P0：真实用量锚点（按会话落盘）。计数现值现在由「下一次请求视图的
+    // 上界估算」给出（见 `context/request-view.ts` 合同），锚点只负责把估算校正到
+    // provider 口径；`realTokens` 退化成地板值（数字不许倒退）。
     // 必须在 seed 之后注入：播种会 setSessionId，切会话时会把锚点清掉。
-    execution.workingContext.setContextAnchor?.(stored?.context_anchor, this.model);
+    // 落盘锚点同时进本段账本（`contextAccounting`）—— provider 的包装层
+    // （`RoleAwareContext`）不转发 `setContextAnchor`，账本才是唯一权威。
+    this.adoptStoredAnchor(execution, stored, history.lastRequestTokens);
     // 0.52：恢复「上次发布过的环境快照指纹」，让重启后的第一条消息能正确去重。
     this.restorePromptContextFingerprint(stored);
 
@@ -2403,12 +2637,16 @@ export class ExecutionUnit {
   }
 
   /**
-   * V4 / G4：用最近一次 provider 请求的 per-request usage 恢复真实 token 锚点。
+   * V4 / G4：用最近一次 provider 请求的 per-request usage 播种**地板值**。
    *
    * 取值来自已落盘的 `llm.response.usage`，**不是** RunRecord 的 `usage`：
    * 后者是整轮累计（例如 53 轮 agentic run 可到 35M），拿它当上下文大小会让
    * 每次新 run 都误判超预算、触发不必要的压缩，既丢历史又多一次摘要调用。
-   * 没有 provider usage 时保持无锚点，由 `WorkingContext` 的字符估算兜底。
+   *
+   * ⚠️ 0.55 P0：这个值**不再是现值**（合同 1）。事故里正是它把数字从 778,258 拽回
+   * 673,076 —— 上一次响应之后追加的那条 106k 工具结果被整体抹掉，于是三个 run 都以
+   * 67% 的假象发出一个 105% 的真实请求。现在它只做 `correctedContextTokens` 的地板
+   * （`max`），现值来自「下一次请求视图的上界估算」；锚点由 `adoptStoredAnchor` 接。
    */
   private seedRealTokensFromLastRequest(execution: Run, history: StoredHistory): void {
     const total = history.lastRequestTokens;
@@ -2496,9 +2734,11 @@ export class ExecutionUnit {
       // 同族漏点（ctx-card-dedup 审查时发现）：context_anchor 原来也只在 run() 里复原。
       // resume 接管时缺了它，估算就退回未校正值 ⇒ 压缩阈值比真实口径晚（估算偏小），
       // 与 0.52 的「锚点校正」预期相反。两处必须一致。
-      execution.workingContext.setContextAnchor?.(history.sessionState?.context_anchor, this.model);
+      // 0.55 P0：改由 `adoptStoredAnchor` 一次接进本段账本（锚点 + 地板值 + 窗口注入），
+      // 且必须在 seed 之后（seed 会 clear 窗口、切会话会清锚点）。
       this.seedWorkingContext(execution, history);
       this.seedRealTokensFromLastRequest(execution, history);
+      this.adoptStoredAnchor(execution, history.sessionState ?? null, history.lastRequestTokens);
       // 0.53 U2：resume 同为段起点 —— 模式也要在压缩之前先钉住（同 run()）。
       this.primeSegmentProjectionMode(execution, history.sessionState ?? null);
       // 0.52 V2：resume 也是一个段起点 —— 压缩同样只在这里做一次。
@@ -2742,6 +2982,51 @@ export class ExecutionUnit {
           ? Math.floor(rawContextMax)
           : undefined;
 
+      // ── 0.55 P0：上下文计数 / 发送前闸 ────────────────────────────────────────
+      // 这个 `messages` 就是**请求视图**（`buildRequestMessages` 之后、
+      // `withClearedToolResults` 之后），也是合同（`context/request-view.ts`）要求
+      // 估算的那一份。三件事按顺序做：
+      //   1) 估算 + 记进本段账本（此后 `context.changed` / 预警 / 下一轮都从它增量推）；
+      //   2) 发送前闸：按锚点校正（无锚点用保守上界）≥ 窗口上限 ⇒ **不发**；
+      //   3) 把同一个数写进 `llm.request.estimated_tokens`（显示 / `sessions.get` 的口径）。
+      // 顺序不能反：闸先判定，判定通过才允许发事件与请求 —— 否则日志里会出现一条
+      // 「请求已发出」但实际没发的假事实。
+      const requestViewTokens = estimateRequestViewTokens(messages, { tools: args.tools });
+      this.accounting(execution).requestView = {
+        tokens: requestViewTokens,
+        messageCount: messages.length,
+      };
+      const contextUsed = this.correctedContextTokens(execution, requestViewTokens);
+      if (contextMax !== undefined && contextUsed >= contextMax) {
+        // 压缩只在段起点发生（`compactAtSegmentStart`）。走到这里说明「段起点压缩之后
+        // 仍然装不下」（典型：单条巨型工具结果，或压缩刚做完又追加了一大坨输出）。
+        // 此时发出去必然被 provider 400 打回（今天真实发生了三次），所以不发：
+        // 把原因写进两个可见处（env 卡 + `run.failed`）与一条 `context.pressure`（环）。
+        this.publishEvent({
+          type: 'context.pressure',
+          run_id: runId,
+          data: {
+            run_id: runId,
+            session_id: args.sessionId,
+            used: contextUsed,
+            max: contextMax,
+            ratio: contextUsed / contextMax,
+            threshold: CONTEXT_PRESSURE_WARN_RATIO,
+            hint:
+              'request not sent: context window exceeded; compact at the next segment start ' +
+              'or start a new session',
+          },
+          ts: Date.now(),
+        });
+        this.appendNotice(
+          renderContextWindowExceededNotice({ used: contextUsed, max: contextMax }),
+        );
+        // 阶段写成 run（而不是 llm）：这是本地闸拦下的，不是 provider 报错，
+        // `run.failed` 的 envelope 因此是 `context_window_exceeded` + `{used, max}`。
+        execution.phase = 'run';
+        throw new ContextWindowExceededError(contextUsed, contextMax);
+      }
+
       // 「模型这一轮看到的系统消息」（基底 system prompt + Self Card）紧贴着请求落一条
       // 独立事件：`composeRunSystemPrompt()` 已在 run 开始时拼好，这里有 `messages` /
       // `tools` 的最终条数，正是折叠态摘要要的那几个数。同 hash 只发一次（见
@@ -2749,7 +3034,7 @@ export class ExecutionUnit {
       this.publishSystemContext(execution, {
         messageCount: messages.length,
         toolsCount: args.tools.length,
-        estimatedTokens: execution.workingContext.tokenCount,
+        estimatedTokens: contextUsed,
         ...(contextMax !== undefined ? { contextMax } : {}),
       });
 
@@ -2784,8 +3069,11 @@ export class ExecutionUnit {
             model: this.model,
             message_count: messages.length,
             tools_count: args.tools.length,
-            // 增量缓存的现成值（有真实锚点就返回锚点），不在这里重扫整段历史。
-            estimated_tokens: execution.workingContext.tokenCount,
+            // 0.55 P0：**请求视图**的估算（`args.messages` 的上界估算 + tools），
+            // 按锚点校正、以 provider 上一次回报为地板。它回答的是「这一次请求有多大」，
+            // 不再是「上一次 provider 回报了多少」（那就是 67% vs 105% 的来源）。
+            // 读侧（`sessions.get.context_usage.used`）用的就是它。
+            estimated_tokens: contextUsed,
             // 上下文窗口上限随事件落盘（与 `estimated_tokens` 并列的一个整数）：
             // 历史会话因此自足 —— 读侧（`sessions.get.context_usage.max`）不必再
             // 回推「当时的配置值」，按 agent / 模型配不同窗口时也不会串。
@@ -2848,16 +3136,15 @@ export class ExecutionUnit {
 
       try {
         const response = await this.provider.chat(request);
-        // 0.52 C：真实用量到达的那一刻记下校正比（`prompt_tokens` 与同一请求的本地
-        // 估算都在手边）。存的是「provider 口径 ÷ 本地口径」，与 `realTokens` 无关，
-        // 所以重启后估算仍能被拉回真实量级。
-        const promptTokens = response.usage?.prompt_tokens ?? 0;
-        if (promptTokens > 0) {
-          execution.workingContext.recordRealPromptTokens?.({
-            promptTokens,
-            model: this.model,
-          });
-        }
+        // 0.52 C / 0.55 P0：真实用量到达的那一刻记下校正比。分子是 provider 的
+        // `prompt_tokens`，分母是**这一次请求视图**的同一个上界估算（`requestViewTokens`
+        // 就在上面算过）—— 同口径才叫校正（合同 3）。比值随 `saveSessionState` 落进
+        // `SessionState.context_anchor`，重启后由 `adoptStoredAnchor` 读回来。
+        this.recordProviderPromptTokens(
+          execution,
+          response.usage?.prompt_tokens ?? 0,
+          requestViewTokens,
+        );
         // provider 未必发 `finish`；请求正常结束也要收口当前段。
         this.flushStreamSegment(execution, args.sessionId);
         return response;
@@ -2916,6 +3203,18 @@ export class ExecutionUnit {
 
         if (overflowRetried || !isContextOverflowError(error)) throw error;
         overflowRetried = true;
+        // 0.55 P0：**把这一次 400 当实测读数**（provider 亲口说的输入大小）。
+        // 记成锚点（比值 = 它报的 token ÷ 本次请求视图的上界估算）+ 地板，于是：
+        // - 显示立刻变成真实量级（事故里会从 67% 变成 105%），不再是「上一次回报」；
+        // - 下一个段起点的压缩按真实口径触发（窗口地板 ≥ 窗口上限 ⇒ 必然压缩）；
+        // - 压缩后仍装不下时，发送前闸会**不发**，不再重复 400。
+        // 读不出数字（文案里没有 token 数）时至少把地板抬到窗口上限 —— provider 已经说
+        // 「这次输入超了」⇒ 这一次请求的真实大小 ≥ 窗口上限，这是下界，不是猜测。
+        const reported = reportedContextTokens(errorText(error));
+        const overflowFloor = reported ?? (contextMax !== undefined ? contextMax : undefined);
+        if (overflowFloor !== undefined) {
+          this.recordProviderPromptTokens(execution, overflowFloor, requestViewTokens);
+        }
         // 0.52 V2：run 内**不许**改写历史（旧行为是 `forceCompact(execution, 'overflow')`
         // 删中段 + 插新摘要后重试 ⇒ 一次 run 里出现两个历史视图）。现在只追加一张
         // 「超限」卡并把本次 Run 以原始错误收尾：压缩发生在下一个段起点
@@ -2924,9 +3223,11 @@ export class ExecutionUnit {
         this.logger.warn('context overflow; run ends here, next run starts a new segment', {
           run_id: runId,
           streamed,
+          reported_tokens: reported,
           error: errorText(error),
         });
-        throw error;
+        // 重写前缀只为让 envelope 给出 `provider_context_overflow`（原文一字不动地保留）。
+        throw new ProviderContextOverflowError(error);
       }
     }
   }
@@ -3249,7 +3550,9 @@ export class ExecutionUnit {
     const workingContext = execution.workingContext;
     const max = workingContext.maxTokens;
     if (max === undefined || max <= 0) return;
-    const used = workingContext.tokenCount;
+    // 0.55 P0：与显示 / 闸同一个数（下一次请求视图的上界估算，锚点校正后），
+    // 不是 `workingContext.tokenCount` —— 两处口径必须一致，否则「环」与「闸」打架。
+    const used = this.currentContextTokens(execution);
     const ratio = used / max;
     // 缺省（实现不暴露 autoCompact）按开启处理，与 0.27 行为一致。
     const autoCompact = workingContext.autoCompact !== false;
@@ -3895,7 +4198,10 @@ export class ExecutionUnit {
         // 持久化保留 reasoning_content；事件里剔除，避免思维链泄漏到 TUI/观测
         message: this.stripReasoningFromMessage(identified),
         message_count: workingContext.messages.length,
-        token_count: workingContext.tokenCount,
+        // 0.55 P0：同一个现值口径（下一次请求视图的上界估算 + 锚点校正 + 地板）。
+        // 以前这里是 `workingContext.tokenCount` = 上一次 provider 回报 + 增量，
+        // 也就是事故里那条「刚追加了 106k 却还显示 67%」的数。
+        token_count: this.currentContextTokens(execution),
       },
       ts: Date.now(),
     });
@@ -4205,9 +4511,13 @@ export class ExecutionUnit {
     const execution = this.activeRun;
     if (execution !== undefined) {
       sessionState.messages = execution.workingContext.messages;
-      // 0.52 C：真实锚点跟着这份投影一起落盘（journal 是 SessionState 唯一写口）。
+      // 0.52 C / 0.55 P0：真实锚点跟着这份投影一起落盘（journal 是 SessionState 唯一写口）。
+      // 取**账本**里的锚点（`contextAccounting`）—— 计数的权威口径在 runtime，而
+      // `packages/agent` 的 `RoleAwareContext` 包装层不会转发 `setContextAnchor` /
+      // `contextAnchor`，只读窗口的那条路在 agent 模式下恒为 undefined（这就是
+      // 「283 个会话文件一个 `context_anchor` 都没有」的原因）。
       // 窗口没有锚点（旧会话 / 本次没拿到 usage）时保留继承来的旧值。
-      const anchor = execution.workingContext.contextAnchor;
+      const anchor = this.anchorOf(execution);
       if (anchor !== undefined) sessionState.context_anchor = anchor;
       // 0.52 V1：本段冻结的占位集合跟着窗口一起落盘（这一段没有决策就清掉继承来的旧值，
       // 否则下次段起点会把「已经不在窗口里的 id」当成已讲过的卡而不发）。
