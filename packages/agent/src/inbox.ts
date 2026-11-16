@@ -17,26 +17,32 @@
  * **消息状态机（I1–I4，与 `AgentService` 共守）**：
  * `append(unread)` → `hold(被某个 body 的 mailbox 接管)` → `consumed + unhold`
  * （消费口两个，都走同一个 `consume`：`markConsumed` 在消息真正成为一轮 run input 时调用；
- * `claim` 是模型显式认领，见下）。
+ * `claim` 是「我拿到了正文、从队列里拿走」那一步，见下）。
  * 侧出口只有两个：`unhold`（失败 / 退役 / 预算回退 → 回到 unread）与 `discard`（明确
  * 投递失败 → 移除）。`hold` 记录持有者 bodyId，`releaseHeldFor` 只放一个 body 的队列。
  *
  * 模型侧不再自动注入正文：`createInboxNoticeHook` 只发一条 `vessel:notice` 计数行
- * （无消息 / 计数没变就不发），正文由模型调用 `createInboxTool` 的 `inbox` 工具按需读取
- * （读即消费；`includeHeld:true` 只 peek held 的正文，不消费、不取消投递）。
+ * （无消息 / 计数没变就不发），正文由模型调用 `createInboxTool` 的 `inbox` 工具按需读取。
  *
- * **`claim`（0.51，工具层的第二条消费口）**：`read includeHeld:true` 看过的正文之后还会
- * 作为 run input 再投一遍 —— 同一段内容进两次上下文、还多触发一次 run。所以给模型一个
- * 显式的口子：`inbox { action: 'claim', message_ids }` = 「这几条我已经拿到正文了，从队列
- * 里拿走、别再投给我」，把条目从任何 `unread`（**含 held**）标成 `consumed` + 解 hold，
- * 并立刻落盘（不可逆，没有 unclaim）。下发判定与 `markConsumed` 共用同一个 `consume`，
- * 只是入口不同：一个由「run 真的开始」触发，一个由模型明确要求触发。
- * `list` / `read` 仍是观测，不因为被看就消费。
+ * **模型契约（0.55 起）：`list` 是唯一的廉价偷看，`read` 就等于拿走。**
+ * - `list` 只给 id + 来源 + **前 40 字符**前缀 + 「还有 N 字符」，永不吐正文；
+ * - `read` = 取正文 + 消费，`unread` 与 `held` **一视同仁**：held 的那几条先走
+ *   `AgentService.claim` 的同一条前置收口（取消 queued run + 从 mailbox 出队），再
+ *   `consume`。不可逆：读过的不会再投、不再出现在 list / read 里。
+ * 为什么把两个动作并成一个：0.51 的 `claim` 让模型必须先 peek（`read includeHeld:true`）
+ * 再 claim，同一条消息因此有「看过但没拿走」这个中间态 —— 两套消费语义、两句提示、两次
+ * 决策，模型漏一步就变成同一段正文进两次上下文。现在只有一条口子：想留着别读。
+ *
+ * **兼容（只在这一层，不改语义）**：老会话仍可能发 `action:'claim'`（0.51 的工具面）。
+ * 工具把它当 `read` 的**别名**执行（取正文 + 消费 + 取消 queued run），并在结果里附一行
+ * `note` 说明「claim 已并入 read」。不报错、不静默 —— 老会话的意图与新语义本来就一致。
  *
  * **本层只管状态，拦不住已排程的那次投递**：held 的条目已经排进了 scheduler 的一次 run，
  * 执行侧不看 inbox 状态 ⇒ 只在这里标 consumed，那次 run 照样把它当 run input 投出去。
  * 「拿了就真的不再投」靠 `AgentService.claim` 的前置收口（取消 queued run + 出队），
- * 与本层同一个 `consume` 落状态。`agents.claim` RPC 与 web 条带都走 service 那条路。
+ * 与本层同一个 `consume` 落状态。工具的 `read` 因此对 held 条目先调本层的 `claim`
+ * （构造时注入的 `beforeClaim` → `withdrawQueuedRuns`），再返回正文。
+ * `agents.claim` RPC 与 web 条带仍走 service 那条路（模型侧不再有 `claim` 动作）。
  *
  * **投递模式**（`AgentInboxDelivery`，模式属于 inbox 自己，不是入口开关）：
  * `input` = 本体作为下一轮 run input 送达；`wake` = 到达时只落 inbox（目标忙时不打断、
@@ -182,7 +188,15 @@ export interface AgentInboxListEntry {
   ts: number;
   source: string;
   summary: string;
-  /** 当前被某个 body 的 mailbox 持有（尚未成为 run input）；read 需 `includeHeld`。 */
+  /**
+   * 正文总字符数（0.55 additive）：工具 `list` 用它算「还有 N 字符」。
+   *
+   * 为什么不能从 `summary` 推：`summary` 在写入时就被裁到 160 字，一条 5000 字的消息
+   * 与一条 200 字的消息在 summary 上看不出差别 —— 而「还差多少」正是模型决定要不要
+   * `read` 的唯一依据。只给长度，不给正文。
+   */
+  chars: number;
+  /** 当前被某个 body 的 mailbox 持有（尚未成为 run input）。 */
   held: boolean;
   /** 归属会话（只读视图透传，条带 / 恢复据此按会话定位）；缺省 = 归属未知。 */
   session_id?: string;
@@ -201,15 +215,23 @@ export interface AgentInboxReadSelection {
   /** read：未给 ids 时的条数上限，缺省 `INBOX_READ_DEFAULT_LIMIT`。 */
   limit?: number;
   /**
-   * read：true 时连 held（已排进某次 run、尚未成为 run input）的消息一起取；
-   * 缺省 false，与 `list` 同名同义。held 条目只读出正文，**不消费、不取消投递**。
+   * read：true 时连 held（已排进某次 run、尚未成为 run input）的消息一起取。
+   *
+   * **这是存储层的低层开关，不是模型契约**（0.55 起工具的 `read` 恒为 true 并且对 held
+   * 条目走 `claim` 收口）。留着它是因为插件端口 `MemberInboxPort.read` 仍然需要「只读
+   * peek held」那条路；held 条目在本层只读出正文，**不消费、不取消投递**。
    */
   includeHeld?: boolean;
 }
 
 /** read 的一条结果：正文 + 当前是否仍被某个 body 持有。 */
 export interface AgentInboxReadEntry extends StoredInboxMessage {
-  /** true：这条还没成为 run input，之后会自动到达；read 它不改变投递。 */
+  /**
+   * true：这条还没成为 run input（已排进某次 run）。
+   *
+   * 存储层 `read` 不消费它；工具的 `read` 会紧接着走 `claim`（取消 queued run + 消费），
+   * 所以工具结果里不会再出现这个字段 —— 见到 held:true 的只有插件端口那条路。
+   */
   held: boolean;
 }
 
@@ -318,7 +340,10 @@ export interface AgentInboxPort {
   releaseHeldFor(agentId: string, bodyId: string): void;
   /**
    * unread 且未被持有，按插入顺序；不改状态。`includeHeld:true` 时 messages 同时
-   * 包含 held 的消息（正文仍只有 160 字 summary），并返回 `pending`。
+   * 包含 held 的消息（`summary` 仍是 160 字摘要，另带正文长度 `chars`），并返回 `pending`。
+   *
+   * 模型看得到的只是工具 `list` 的前 40 字前缀：本方法是**数据源**（RPC 条带、notice
+   * 计数、插件端口都用它），前缀裁剪在工具层做，别在这里改口径。
    *
    * `unread` / `pending` 由 `counts()` 统一派生，与 read / notice 同一口径：
    * `unread` 只计可读，`pending` 只计 `unread ∩ held`。
@@ -331,7 +356,10 @@ export interface AgentInboxPort {
    * 取正文。缺省只取 `unread 且未被持有`；`includeHeld:true` 时连 held 一起取。
    *
    * 消费语义（I2）：只有**未被持有**的条目会被标 consumed —— held 的正文已经排进
-   * 某次 run，read 不取消投递、不改变它的状态，只在结果里带 `held:true`。
+   * 某次 run，本方法不取消投递、不改变它的状态，只在结果里带 `held:true`。
+   *
+   * 模型契约（0.55）不直接用它：工具的 `read` 用 `includeHeld:true` 取正文，再对结果里
+   * `held:true` 的那几条调 `claim`（取消 queued run + 消费）。插件端口仍走本方法。
    */
   read(
     agentId: string,
@@ -339,21 +367,20 @@ export interface AgentInboxPort {
     sessionId?: string,
   ): Promise<AgentInboxReadEntry[]>;
   /**
-   * 显式认领（「这几条我已经看到正文了，从队列里拿走、别再投给我」）：
-   * 任何 `unread`（**包括 held**）→ `consumed` + 解 hold，返回这批正文与新计数。
+   * 认领（「这几条我已经拿到正文了，从队列里拿走、别再投给我」）：
+   * 任何 `unread`（**包括 held**）→ `consumed` + 解 hold，返回这批正文。
    *
    * **不可逆**：没有 unclaim。进了 consumed 就不再投递、也不再出现在 list / read 里，
-   * 下一次 `append` 裁剪时清掉。**只对已经看到完整正文的条目用** —— 认领一条没读过的
-   * 消息 = 主动放弃它。
+   * 下一次 `append` 裁剪时清掉。
    *
-   * 为什么不是复用 `read`：`read` 是**观测**（顺带消费未被持有的条目，被持有的照旧投递），
-   * `claim` 是**明确的「我处理完了」**，必须也能落在 held 上 —— 这正是它存在的理由：
-   * `read includeHeld:true` 拿到的正文不该再作为 run input 进一次上下文。
+   * 0.55 起这是**内部/服务层口子**，不再是模型动作：模型的 `read` 就等于拿走（它取到
+   * held 条目后会调本方法收口）。两个入口仍然共用同一段实现，只是模型只看见一个。
+   * `agents.claim` RPC 与 web 条带也走 service 那条路（`AgentService.claim`）。
    * 已经 consumed / 找不到的 id 进 `skipped`，不报错。
    *
    * **本方法只改 inbox 状态**：held 条目对应的那次 queued run 仍在 scheduler 里，要真的
-   * 「不再投递」必须走 `AgentService.claim`（先取消 queued run 再调这里）。只做模型的
-   * 工具面时调用方就是 service，所以工具侧不会漏掉这一步。
+   * 「不再投递」必须走 `AgentService.claim`（先取消 queued run 再调这里）。工具的 `read`
+   * 用的是同一条前置收口（`beforeClaim`），不是自己另写一套。
    */
   claim(
     agentId: string,
@@ -644,6 +671,7 @@ export class AgentInboxStore implements AgentInboxPort {
       ts: message.ts,
       source: message.source,
       summary: message.summary,
+      chars: message.text.length,
       held: state.held.has(message.id),
       // 归属只读透传：条带按会话过滤、启动恢复按会话重投都要它。
       ...(message.session_id !== undefined ? { session_id: message.session_id } : {}),
@@ -1101,61 +1129,39 @@ const INBOX_TOOL_DESCRIPTION =
   'every reply carries three counts: unread = yours to read now, pending = unread messages ' +
   'already held as your next run input(s) (they arrive on their own — do not resend or redo them), ' +
   'held = every message currently held (pending is its unread part; today the two numbers are equal). ' +
-  'list returns the three counts + a one-line summary of every unread message, held ones included ' +
-  '(summary only, no text). ' +
-  'read returns full text and marks what it returns as consumed. it only sees readable messages by ' +
-  'default: held (pending) ones are excluded, so read can legitimately return 0 messages while pending ' +
-  'is above 0 — pass includeHeld:true to also get their text. reading held messages does NOT cancel ' +
-  'their delivery and does NOT mark them consumed, so never act twice on one message. entries that come ' +
-  'back with will_be_delivered:true are held in exactly that sense: the same text will reach you again ' +
-  'as a run input, so do not execute it twice — claim those ids (irreversible) only if you are handling ' +
-  'them in this turn and want the second delivery cancelled. ' +
-  'claim takes message_ids whose FULL TEXT you have already seen (peek them with ' +
-  'read includeHeld:true first), returns that text and takes them out of the queue for good — ' +
-  'pending ones included, their queued run is cancelled. it is irreversible: there is no unclaim, ' +
-  'and claimed messages are never delivered and never listed again — so never claim on a summary alone. ' +
-  'delete removes unread, non-held messages by id (held/consumed are skipped); ' +
-  'insert appends a message to your own inbox; it does not start a run or wake you.';
-
-/**
- * read 把 held 的正文吐出来（`includeHeld:true`）时的那句提示。
- *
- * 为什么要有这句话：`held` 是个字段名，模型看到正文已经躺在工具结果里，极易当成「读到了
- * 就没了」，于是同一条消息被当成两条各执行一遍。`will_be_delivered` 字段 + 这句提示是同一
- * 件事的两层说法（字段给机器读，句子给模型读），都只**报告**事实：正文还会再来一次。
- *
- * 只报告、不动状态：这里绝不替模型 claim —— 「读掉但不行动」比重复投递严重得多。
- */
-function heldRedeliveryHint(heldCount: number): string {
-  return (
-    `${heldCount} message(s) above are marked will_be_delivered:true — their text is already queued as ` +
-    'your next run input(s), so it will reach you again even though you just read it here. this read did ' +
-    'not cancel that delivery and did not mark them consumed. never act twice on one message: if you are ' +
-    'handling them in this turn and want the repeat cancelled, claim their ids (irreversible); otherwise ' +
-    'ignore the copy that arrives later.'
-  );
-}
-
-/**
- * read 里有消息在队列上等着（unread 0 / pending > 0）时的那句提示。
- *
- * 为什么要有这句话：`read` 缺省只看可读（不吐 held 正文，那是调度的不变量 —— held 的正文
- * 已经排进某次 run，再吐一遍就成了「读一次 + 到一次」两次执行）。于是「3 条在等我」与
- * 「read 返回 0 条」可以同时成立，模型看到的 `{"read":0,"messages":[]}` 会被读成「什么都没有」。
- * 计数与提示都是**报告层**，不放松可见范围：要正文仍然得显式给 `includeHeld:true`。
- *
- * 措辞跟工具面其它文案一致（英文、单复数用 `message(s)`、只引模型看得见的字段名）。
- */
-function heldOnlyHint(pending: number): string {
-  return (
-    `${pending} message(s) are already queued as your next input(s) (held), so their text is not in this read. ` +
-    'Use read with includeHeld:true to see it. ' +
-    'Reading them does not cancel delivery and does not mark them consumed — never act twice on one message.'
-  );
-}
+  'list is the ONLY cheap peek: the three counts + per message {id, ts, source, a preview of the first ' +
+  '40 characters, and more_chars = how many characters are NOT shown}. it never returns the body, so it ' +
+  'never consumes anything — use it to decide what to read. ' +
+  'read TAKES messages: it returns the full text and consumes them, held (pending) ones included — for ' +
+  'those it also cancels their queued run input, so the same text cannot arrive twice. it is irreversible: ' +
+  'a message you read is never delivered again and never listed again. there is no peek-then-take: if you ' +
+  'do not want to handle a message yet, do not read it (list is enough), and never act twice on one ' +
+  'message. ' +
+  'delete removes unread, non-held messages by id (held/consumed are skipped): the way to drop a message ' +
+  'without reading it. insert appends a message to your own inbox; it does not start a run or wake you. ' +
+  "legacy: action:'claim' is accepted as an alias of read (0.51 sessions may still send it).";
 
 function invalidInput(message: string): string {
   return JSON.stringify({ error: `invalid_input: ${message}` });
+}
+
+/**
+ * `list` 的前缀长度（0.55）：只给前 40 个字符 + 「还有 N 字符」。
+ *
+ * 为什么是 40 而不是原来的 160 字 summary：`list` 的定位已经变了 —— 它是**唯一**的廉价
+ * 偷看，模型靠它决定「读哪几条」。160 字足以让模型以为自己已经知道内容、于是不回 `read`
+ * 也不会处理；40 字只够认清「这是谁发的、大概什么事」，正文必须自己拿。
+ */
+const INBOX_LIST_PREVIEW_CHARS = 40;
+
+/** `list` 的一行前缀：前 40 字符（截断时补 `…`）+ 还有多少字符没给。 */
+function listPreview(message: AgentInboxListEntry): { preview: string; more_chars: number } {
+  const preview =
+    message.summary.length > INBOX_LIST_PREVIEW_CHARS
+      ? `${message.summary.slice(0, INBOX_LIST_PREVIEW_CHARS)}…`
+      : message.summary;
+  // 正文长度口径（不是 summary 长度）：summary 被裁到 160 字，据此算「还差多少」会撒谎。
+  return { preview, more_chars: Math.max(0, message.chars - INBOX_LIST_PREVIEW_CHARS) };
 }
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
@@ -1163,14 +1169,13 @@ function isRecordValue(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * 成员可见的 `inbox` 工具：`list` 看摘要与 pending，`read` 取原文并消费，
- * `claim` 把**已经看到正文**的条目从队列里拿走（不可逆，held 也能拿），`delete` 删除未持有
- * 的未读，`insert` 给自己追加一条消息。
+ * 成员可见的 `inbox` 工具：`list` 只给 40 字前缀（唯一廉价偷看），`read` 取原文**并拿走**
+ * （unread 与 held 一视同仁，held 的 queued run 一并取消，不可逆），`delete` 删除未持有的
+ * 未读，`insert` 给自己追加一条消息。
  *
  * **每个动作都报 `unread` / `pending` / `held` 三个计数**（口径见 `snapshot`）：只报一个数字
- * 会让「3 条在队列里等我」和「read 返回 0 条」看起来互相矛盾 —— 那是同一件事的两面
- * （held 的正文不进 read 的缺省可见范围）。read 报出「0 条可读、held 非空」时再补一句
- * `hint` 说明正文从哪里读；三个计数只改报告，不改可见范围。
+ * 会让「3 条在队列里等我」和「read 返回 0 条」看起来互相矛盾 —— 那只是两种口径的差别，
+ * 三个计数只改报告，不改可见范围。
  *
  * 只读本地队列，不触达工作区；`checkPermission` 恒 `allow`（deny 模式也注册）。
  * 返回 JSON 字符串；非法参数返回 `{ error: 'invalid_input: ...' }`，不抛错。
@@ -1204,32 +1209,24 @@ export function createInboxTool(options: {
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'read', 'delete', 'claim', 'insert'] },
+        // 0.55：`claim` 不在枚举里 —— 它已经并进 `read`。老会话仍发它时按别名执行
+        // （见 handler 的 legacy 分支），但模型看得到的契约只有这四个动作。
+        action: { type: 'string', enum: ['list', 'read', 'delete', 'insert'] },
         ids: {
           type: 'array',
           items: { type: 'string' },
           description: 'read/delete: ids returned by list',
         },
+        // 只为兼容 0.51 会话保留形状说明；新会话不该用它（read 用 `ids`）。
         message_ids: {
           type: 'array',
           items: { type: 'string' },
-          description:
-            'claim: ids whose full text you have ALREADY seen (claim is irreversible: they are ' +
-            'consumed, never delivered and never listed again)',
+          description: "legacy only: same as `ids` for the old action:'claim' (use read + ids)",
         },
         limit: {
           type: 'integer',
           minimum: 1,
           description: 'read: max messages when ids omitted (default 20)',
-        },
-        includeHeld: {
-          type: 'boolean',
-          description:
-            'read only: by default read skips held messages (unread, but already queued as your next ' +
-            'input), so it can return 0 messages while pending > 0; set true to also get their text. ' +
-            'such entries come back with will_be_delivered:true: the same text will reach you again as a ' +
-            'run input — reading it does not cancel delivery and does not mark it consumed, so never act ' +
-            'twice on one message. list always includes held entries (summary only) and rejects this flag',
         },
         content: {
           type: 'string',
@@ -1241,42 +1238,50 @@ export function createInboxTool(options: {
     async handler(args, ctx: ToolContext): Promise<string> {
       const input = isRecordValue(args) ? args : {};
       const action = input.action;
+      // 0.55 兼容：`claim` 已并入 `read`。老会话（0.51 的模型契约）还会发它 —— 认作
+      // `read` 的别名执行同一套语义（取正文 + 消费 + 取消 queued run），结果里附一行
+      // `note` 指路。不报错（意图本来就一致），也不静默（模型得知道契约变了）。
+      const legacyClaim = action === 'claim';
       if (
         action !== 'list' &&
         action !== 'read' &&
         action !== 'delete' &&
-        action !== 'claim' &&
-        action !== 'insert'
+        action !== 'insert' &&
+        !legacyClaim
       ) {
-        return invalidInput('action must be "list", "read", "delete", "claim", or "insert"');
+        return invalidInput('action must be "list", "read", "delete", or "insert"');
       }
       const contentDefined = input.content !== undefined;
       const idsDefined = input.ids !== undefined;
       const messageIdsDefined = input.message_ids !== undefined;
       const limitDefined = input.limit !== undefined;
-      const includeHeldDefined = input.includeHeld !== undefined;
+      // `includeHeld`（0.55 删除）：read 现在天然含 held，这个开关没有第二个语义了。
+      // 老会话带上它时**容忍并忽略**（真按旧语义执行会更糟：把正文吐出来却不拿走）；
+      // 不再当非法输入拒绝，也不在结果里复述。
 
       if (action === 'list') {
         if (idsDefined || limitDefined || contentDefined) {
           return invalidInput('list does not accept ids, limit, or content');
         }
         if (messageIdsDefined) return invalidInput('list does not accept message_ids');
-        // list 恒含 held（只有摘要）；includeHeld 是 read 的选项，显式传入按非法输入拒绝。
-        if (includeHeldDefined) {
-          return invalidInput('list always includes held; includeHeld is a read-only option');
-        }
         const { unread, pending, held, messages } = snapshot();
+        // 0.55：只给前缀 —— 列表是「决定读哪条」的地方，不是读正文的地方。正文全摊出来
+        // 就等于让模型以为自己读过了，然后既不 read 也不处理。
         return JSON.stringify({
           unread,
           pending,
           held,
-          messages: messages.map((message) => ({
-            id: message.id,
-            ts: message.ts,
-            source: message.source,
-            summary: message.summary,
-            held: message.held,
-          })),
+          messages: messages.map((message) => {
+            const { preview, more_chars } = listPreview(message);
+            return {
+              id: message.id,
+              ts: message.ts,
+              source: message.source,
+              preview,
+              more_chars,
+              held: message.held,
+            };
+          }),
         });
       }
 
@@ -1284,7 +1289,6 @@ export function createInboxTool(options: {
         if (idsDefined) return invalidInput('insert does not accept ids');
         if (messageIdsDefined) return invalidInput('insert does not accept message_ids');
         if (limitDefined) return invalidInput('insert does not accept limit');
-        if (includeHeldDefined) return invalidInput('insert does not accept includeHeld');
         if (input.id !== undefined || input.source !== undefined || input.ts !== undefined) {
           return invalidInput('insert does not accept id, source, or ts');
         }
@@ -1338,44 +1342,10 @@ export function createInboxTool(options: {
         limit = input.limit;
       }
 
-      if (action === 'claim') {
-        // claim 只认 `message_ids`：`ids` 是 read / delete 的形状，两种写法同时存在时
-        // 谁都不该猜「以哪个为准」，直接拒绝并把正确字段名说出来。
-        if (idsDefined) return invalidInput('claim takes message_ids, not ids');
-        if (limitDefined) return invalidInput('claim does not accept limit');
-        if (contentDefined) return invalidInput('claim does not accept content');
-        if (includeHeldDefined) return invalidInput('claim does not accept includeHeld');
-        if (messageIds === undefined || messageIds.length === 0) {
-          return invalidInput('claim requires a non-empty message_ids array');
-        }
-        const result = await options.inbox.claim(options.agentId, messageIds, ctx.session_id);
-        // 认领是**不可逆**的写：先落盘再回话。留在写链里就返回等于「嘴上说拿走了，
-        // 磁盘上还是 unread」——崩溃 / 重启后它照样会投递一次。
-        await options.inbox.flush();
-        // 计数与 list 同一个口径源（`snapshot`），且必须在 claim **之后**读：
-        // 先数再拿会把刚拿走的那几条还算在 unread / pending 里。
-        const { unread, pending, held } = snapshot();
-        return JSON.stringify({
-          claimed: result.claimed.length,
-          // 只有真拿走的才带正文；跳过的只报 id + reason，调用方不必再反查。
-          messages: result.messages.map((message) => ({
-            id: message.id,
-            ts: message.ts,
-            source: message.source,
-            text: message.text,
-          })),
-          skipped: result.skipped,
-          unread,
-          pending,
-          held,
-        });
-      }
-
       if (action === 'delete') {
         if (limitDefined) return invalidInput('delete does not accept limit');
         if (contentDefined) return invalidInput('delete does not accept content');
         if (messageIdsDefined) return invalidInput('delete takes ids, not message_ids');
-        if (includeHeldDefined) return invalidInput('delete does not accept includeHeld');
         if (ids === undefined || ids.length === 0) {
           return invalidInput('delete requires a non-empty ids array');
         }
@@ -1385,55 +1355,68 @@ export function createInboxTool(options: {
         return JSON.stringify({ deleted: deleted.length, skipped });
       }
 
+      // ─── read（0.55：取正文 = 拿走）──────────────────────────────────
       if (contentDefined) return invalidInput('read does not accept content');
-      if (messageIdsDefined) return invalidInput('read takes ids, not message_ids');
-      let includeHeld: boolean | undefined;
-      if (includeHeldDefined) {
-        if (typeof input.includeHeld !== 'boolean') {
-          return invalidInput('includeHeld must be a boolean');
+      let readIds = ids;
+      if (legacyClaim) {
+        // 老会话的 `claim` 用 `message_ids`；两种形状都给时以 message_ids 为准（那才是
+        // 老动作的正式字段），单给 `ids` 也认 —— 兼容优先于挑剔。
+        if (limitDefined) return invalidInput('read does not accept limit with claim');
+        readIds = messageIds ?? ids;
+        if (readIds === undefined || readIds.length === 0) {
+          return invalidInput('read requires a non-empty ids array');
         }
-        includeHeld = input.includeHeld;
+      } else if (messageIdsDefined) {
+        return invalidInput('read takes ids, not message_ids');
       }
-      const messages = await options.inbox.read(
+      // `includeHeld: true` 是**恒真**的取值：read 连 held 一起取（这是本动作的定义，
+      // 不是选项）。存储层仍保留该形参（插件端口 `MemberInboxPort.read` 还在用它做
+      // 只读 peek），工具面不再暴露。
+      const read = await options.inbox.read(
         options.agentId,
         {
-          ...(ids !== undefined ? { ids } : {}),
+          ...(readIds !== undefined ? { ids: readIds } : {}),
           ...(limit !== undefined ? { limit } : {}),
-          ...(includeHeld !== undefined ? { includeHeld } : {}),
+          includeHeld: true,
         },
         ctx.session_id,
       );
-      // 计数必须在 read **之后**读：read 会把它返回的条目标 consumed，先数再读就会把刚读掉
-      // 的那些还算在 unread / pending 里，模型看到的是上一秒的世界。
+      // held 的那几条：存储层 read 只吐正文、不消费 held（它拦不住已排程的那次投递）。
+      // 要真的「拿走」，必须走 `AgentService.claim` 的同一条前置收口 —— 本层 `claim`
+      // 构造时注入的 `beforeClaim`（= service 的 `withdrawQueuedRuns`：取消 queued run
+      // + 从 mailbox 出队），再落同一个 `consume`。不许绕开：只标 consumed 的那次 run
+      // 照样会把它当 run input 投一遍，等于「读到了还会再来一次」。
+      const heldIds = read.filter((message) => message.held).map((message) => message.id);
+      let deliveryCancelled = 0;
+      if (heldIds.length > 0) {
+        const claimed = await options.inbox.claim(options.agentId, heldIds, ctx.session_id);
+        deliveryCancelled = claimed.claimed.length;
+        // 不可逆的写：先落盘再回话，否则崩溃/重启后它照样会投递一次。
+        await options.inbox.flush();
+      }
+      // 计数必须在取走**之后**读：先数再拿会把刚读掉的还标在 unread / pending 里。
       const { unread, pending, held } = snapshot();
-      // 一句话解释「为什么 read 是 0 条」：只有在这次没要 held 正文（没给 includeHeld:true）
-      // 而队列里确实有东西在等时才提示 —— 要了正文还提示「去要正文」就是纯噪音。
-      // 反过来，这次**吐了** held 正文就必须提示「它还会再来一次」（heldReturned > 0 只可能
-      // 出现在 includeHeld:true 的分支里，两个提示互斥）。
-      const heldReturned = messages.reduce((count, message) => count + (message.held ? 1 : 0), 0);
-      const hint =
-        heldReturned > 0
-          ? heldRedeliveryHint(heldReturned)
-          : unread === 0 && pending > 0 && includeHeld !== true
-            ? heldOnlyHint(pending)
-            : undefined;
       return JSON.stringify({
-        read: messages.length,
+        read: read.length,
+        // 这次顺手取消了几个「已排程的下一轮输入」—— 模型该知道这几条不会自己再来了。
+        ...(deliveryCancelled > 0 ? { delivery_cancelled: deliveryCancelled } : {}),
         unread,
         pending,
         held,
-        messages: messages.map((message) => ({
+        messages: read.map((message) => ({
           id: message.id,
           ts: message.ts,
           source: message.source,
           text: message.text,
-          // held:true = 还没成为 run input，稍后会自动到达；read 没有取消投递，别重复执行。
-          // will_be_delivered:true 是**同一件事的显式说法**：`held` 只是个字段名，正文已经在
-          // 结果里了，模型很容易当成「读到了就没了」；这个字段直接说「这份正文还会再投一次」。
-          // 两者都只报告事实（state 不变），默认 includeHeld 行为一字不改。
-          ...(message.held ? { held: true, will_be_delivered: true } : {}),
         })),
-        ...(hint !== undefined ? { hint } : {}),
+        ...(legacyClaim
+          ? {
+              note:
+                "action:'claim' has been merged into 'read' (0.55): read now returns the full text and " +
+                'takes the message — held/pending ones included, their queued run cancelled. use ' +
+                "action:'read' with ids next time.",
+            }
+          : {}),
       });
     },
     async checkPermission(): Promise<'allow'> {

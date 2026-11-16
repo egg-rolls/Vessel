@@ -3467,6 +3467,10 @@ export class AgentServiceImpl implements AgentService {
   /**
    * 认领待处理输入（`agents.claim`，0.51）：「这几条我已经拿到正文了，从队列里拿走」。
    *
+   * 0.55 起**模型侧不再有这个动作**：工具的 `read` 就等于拿走（它取到 held 条目时走的是
+   * 同一条前置收口）。这条 service 路径保留给 `agents.claim` RPC 与 web 条带（用户手动
+   * 「我看到了，别再投」）。
+   *
    * 与 `recall` 共用**前置收口**（取消该消息的 queued run + 从 body mailbox 出队），差别
    * 只在出口：recall 按 source 真删 / 留档，`claim` 一律**消费**（inbox `consumed` +
    * 解 hold）。也就是说 claim 之后这条消息不再投递、不再出现在 list / read 里。
