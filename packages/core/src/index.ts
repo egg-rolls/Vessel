@@ -36,6 +36,7 @@ export {
   forgetProjectionDeclaration,
   formatClearedToolResult,
   IncrementalClearedToolResultPlanner,
+  indexToolCalls,
   isClearedToolResult,
   isDeclarationId,
   isPrefixSequence,

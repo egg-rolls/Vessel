@@ -217,5 +217,33 @@ export interface SessionStore {
   list(): Promise<string[]>;
   /** 列出会话摘要（含 title/preview/updated_at/message_count），按 recency 倒序，过滤空会话 */
   listRich(): Promise<SessionInfo[]>;
+  /**
+   * 会话**存在**吗？（可选；0.56：存在性校验别再 `load()` 整份会话壳）
+   *
+   * 只需要「在 / 不在」的调用方（`sessions.events` / `sessions.compact` 这类先确认会话
+   * 存在再按会话 id 干活的路径）用它。文件后端实现成**一次 `stat`**：1.8 MB 的壳 parse
+   * 一次在长寿进程里实测 ~230 ms，而存在性只值一次 stat。
+   *
+   * 口径与 {@link load} 的 `null` 分支一致（主路径与 legacy 路径都不在 ⇒ false）。没实现
+   * 的后端由调用方退回 `load() !== null`。
+   *
+   * **已知差别**：壳存在但内容损坏时，`load()` 抛 `SessionCorruptError`，而 `exists()`
+   * 只说「在」。所以需要壳的路径**必须**继续走 `load()`（别为了快改成 exists），
+   * 只有「不读壳也要干活」的路径才该用它。
+   */
+  exists?(sessionId: string): Promise<boolean>;
+  /**
+   * 读一侧的会话壳快照（可选；0.56：`sessions.get` 的固定开销别再每次 parse 1.8 MB）
+   *
+   * 与 {@link load} 的返回**逐字段相同**（同一个 `toSessionState`、同一份 tenant 判定、
+   * 同样的 `SessionCorruptError`），区别只在**生命周期**：实现方可以按
+   * (路径, size, mtime) 短路复用上一次 parse 出来的对象，于是「同一份壳被读 N 次」
+   * 只 parse 一次。mtime/size 变了就自然重读，没有 TTL、没有手工失效。
+   *
+   * **契约**：返回给调用方的是**共享只读快照** —— 不许改字段、不许 push/splice
+   * `messages`、不许给 message 挂属性。要写（rename / compact / fork 之后 save 之类）
+   * **必须**走 `load()` 拿独占对象。实现方应当把它冻结，让误写当场炸而不是悄悄污染缓存。
+   */
+  loadForRead?(sessionId: string): Promise<SessionState | null>;
   close?(): void;
 }

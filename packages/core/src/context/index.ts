@@ -30,9 +30,11 @@ export {
 } from './archive-notice.js';
 export {
   formatClearedToolResult,
+  indexToolCalls,
   isClearedToolResult,
   normalizeClearedToolCallIds,
   renderContextTrimNotice,
+  type ToolCallLookup,
   TRIM_ENV_DETAIL_MARK,
   TRIM_ENV_SCOPE,
   type TrimNoticeInput,
