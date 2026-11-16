@@ -129,7 +129,9 @@ export interface HandoverRequest {
  * - `agent-closed`：该会话的 agent 已被关掉（`agent.closed`），**结局未知** ⇒ 调用侧
  *   固定传 `status: 'cancelled'`，且不带 `runIds`（这条会话里还开着的 run 全部收口）；
  * - `session-snapshot`：`sessions.get` 的会话快照说这一 run 已是终态 ⇒ 带 `runIds`
- *   （快照的 `run_id`）+ 快照自己的状态与 `error`。
+ *   （快照的 `run_id`）+ 快照自己的状态与 `error`；**快照说整个会话已是终态时不带
+ *   `runIds`**（见 `useChatTranscript` 的对账 effect）：那时这一会话里所有还开着的
+ *   run 都结束了，只收口快照点名的那个 run 会把更早的残留留在屏上「永远在跑」。
  */
 export interface SessionCloseRequest {
   /** 要收口的 run（快照路径给 `run_id`）；省略 = 该会话所有仍 `running` 的 run。 */
@@ -153,7 +155,7 @@ interface ReconciledClose {
   status: 'completed' | 'failed' | 'cancelled' | 'interrupted';
   at: number;
   error?: string;
-  via: 'agent-closed' | 'session-snapshot';
+  via: 'agent-closed' | 'session-snapshot' | 'superseded';
 }
 
 export interface ItemStoreStats {
@@ -349,13 +351,26 @@ export class LiveItemStore implements ItemSink {
   /** 发生过交棒的 run（上限策略档 3 的输入：这些 run 的残留最该被折掉）。 */
   private readonly releasedRuns = new Set<string>();
   /**
-   * 对账台账①（会话级）：「这个会话在 `at` 之后不会再有 run 终态帧」。
+   * 对账台账①（会话级）：「这个会话在 `at` 之前起的所有 run 都已经结束」+ 结束成什么状态。
    *
-   * `agent.closed` 折出来的结论，Live 路径在 `ingest` 里登记、回填路径在 `refold`
-   * 里从环扫出来。`refoldRun` 用它收口「重折叠出来的 running 组」—— 否则重连 / 回填
-   * 会把已经对账过的 run 复活成 running（本地残留推翻终态）。
+   * 两个来源都登记在这里，所以 `refoldRun`（重折叠出来的 running 组）与 `ingest`（新建
+   * 的 fold）都能在**创建那一刻**就拿到结论 —— 否则重连 / 回填 / 换会话会把已经收口过的
+   * run 复活成 running（本地残留推翻服务端的事实）。
+   *
+   * - `agent-closed`：该会话的 agent 没了，结局未知 ⇒ 一律 `cancelled`；
+   * - `session-snapshot`：`sessions.get` 说这个会话已是终态 ⇒ 状态照抄快照。
+   *
+   * `clear()`**不**清它（见那里的说明）：键是稳定的 session_id，内容是服务端的事实。
    */
-  private readonly sessionClosed = new Map<string, { at: number; via: 'agent-closed' }>();
+  private readonly sessionClosed = new Map<
+    string,
+    {
+      at: number;
+      via: 'agent-closed' | 'session-snapshot';
+      status: 'completed' | 'failed' | 'cancelled' | 'interrupted';
+      error?: string;
+    }
+  >();
   /** 对账台账②（run 级）：直接写进 fold 的收口结论（快照路径可能带具体状态与 error）。 */
   private readonly closedRuns = new Map<string, ReconciledClose>();
   private readonly dirty = new Set<string>();
@@ -522,9 +537,20 @@ export class LiveItemStore implements ItemSink {
   closeRuns(sessionId: string, request: SessionCloseRequest): number {
     const notAfter = request.notAfter ?? request.at;
     const wanted = request.runIds === undefined ? undefined : new Set(request.runIds);
-    if (request.via === 'agent-closed' && wanted === undefined) {
-      // 会话级结论：登记台账，之后 `refoldRun` 折出来的 running 组同样收口。
-      this.sessionClosed.set(sessionId, { at: request.at, via: request.via });
+    if (wanted === undefined) {
+      // 会话级结论：登记台账，之后 `refoldRun` 折出来的 running 组 / 新建的 fold 同样收口
+      // （这是「切会话 → 回填 → 旧 run 复活」这条路径的唯一拦截点）。
+      // 只在新结论不更旧时写：第二个更旧的快照（例如切回旧会话时的缓存 detail）不许把
+      // 台账往回拨。
+      const known = this.sessionClosed.get(sessionId);
+      if (known === undefined || request.at >= known.at) {
+        this.sessionClosed.set(sessionId, {
+          at: request.at,
+          via: request.via,
+          status: request.status,
+          ...(request.error !== undefined ? { error: request.error } : {}),
+        });
+      }
     }
     const targets: string[] = [];
     for (const [runId, fold] of this.folds) {
@@ -608,8 +634,9 @@ export class LiveItemStore implements ItemSink {
     const at = typeof entry.event.ts === 'number' ? entry.event.ts : undefined;
     if (at === undefined) return undefined;
     const known = this.sessionClosed.get(raw);
-    if (known === undefined || at > known.at)
-      this.sessionClosed.set(raw, { at, via: 'agent-closed' });
+    if (known === undefined || at >= known.at) {
+      this.sessionClosed.set(raw, { at, via: 'agent-closed', status: 'cancelled' });
+    }
     return { sessionId: raw, at };
   }
 
@@ -617,8 +644,14 @@ export class LiveItemStore implements ItemSink {
    * 把台账里这条 run 的对账结论写回 fold（重折叠之后 / 帧晚到之后）。
    *
    * `closedRuns` 优先（它带具体状态 / error，来自会话快照）；否则看会话级台账
-   * （`agent.closed`）：只收「最后一条事件不晚于关闭时刻」的组。
-   * 真终态已经折出来时（`close` 返回 false）就把 run 级记录作废 —— 真证据优先。
+   * （`agent.closed` / 会话快照）：只收「最后一条事件不晚于那个时刻」的组。
+   *
+   * **台账不因为「这一折已经是终态」而作废**（旧实现在这里是 `closedRuns.delete`）：
+   * 那条删除的理由是「真证据优先」，但代价是**下一次重折叠**把结论丢了 —— 重折叠只认
+   * 环里的证据，环是有界的（尾部窗口 / 选择性回填 / 裁剪），一个旧 run 的终态帧常常
+   * 不在环里，于是「已结束的 run 复活成 running」，「正在思考 + 停止」诈尸。
+   * 真终态与台账说的同一件事，留着它只多一次 no-op（`RunFold.close` 在非 running 上
+   * 直接返回 false，一条 item 都不动），不会写出第二条记录。
    *
    * 收口成功时**回写 `closedRuns`**：之后的增量事件（delta 会把 live 尾巴拼回来）也走
    * `closedRuns.has(runId)` 这条热路径，被收口的 run 不会半路又变成「正在思考」。
@@ -630,7 +663,9 @@ export class LiveItemStore implements ItemSink {
         error: direct.error,
         via: direct.via,
       });
-      if (!applied) this.closedRuns.delete(runId);
+      // `applied === false`：这一折已经有真终态（同一件事的更硬证据）。台账留着 ——
+      // 下一次重折叠可能拿不到那条终态帧（见上面的说明），那时只有台账能拦住复活。
+      if (applied) this.dirty.add(runId);
       return;
     }
     if (this.sessionClosed.size === 0) return;
@@ -640,19 +675,31 @@ export class LiveItemStore implements ItemSink {
     const closed = this.sessionClosed.get(fresh.sessionId);
     if (closed === undefined) return;
     if (fresh.lastTs !== undefined && fresh.lastTs > closed.at) return;
-    if (!fold.close('cancelled', closed.at, { via: closed.via })) return;
-    this.closedRuns.set(runId, { status: 'cancelled', at: closed.at, via: closed.via });
+    if (!fold.close(closed.status, closed.at, { error: closed.error, via: closed.via })) return;
+    this.closedRuns.set(runId, {
+      status: closed.status,
+      at: closed.at,
+      ...(closed.error !== undefined ? { error: closed.error } : {}),
+      via: closed.via,
+    });
     this.dirty.add(runId);
   }
 
-  /** 语义删除（rewind / 作用域变化）：这些历史真的不存在了，item 跟着删。 */
+  /** 语义删除（rewind / 历史真的不存在了）：这些历史真的不存在了，item 跟着删。
+   *
+   * **这里清台账，而 `clear()`（作用域变化 / 纪元重置）不清** —— 两者性质不同：
+   * - 作用域变化：屏上的东西变了，但服务端的事实不变（run 还是那些 run，还是那个结局）
+   *   ⇒ 台账必须留着，否则每次切会话都要重新对账一次，对账没到之前「正在思考 + 停止」
+   *   会在已停的会话上复活（用户实测的第二个症状）；
+   * - rewind（本方法）：历史被删除，那些 run 在服务端也不存在了 ⇒ 台账里的结论跟着失效。
+   */
   dropSession(sessionId: string, runIds: readonly string[] = []): void {
     const targets = new Set(runIds);
     for (const [runId, group] of this.groups) {
       if (group.sessionId === sessionId) targets.add(runId);
     }
     if (targets.size === 0) return;
-    // rewind / 作用域变化：台账也要跟着失效，否则被删的 run 一重现就被收口。
+    // rewind：历史真的没了，台账里的结论跟着失效（否则被删的 run 一重现就被收口）。
     this.sessionClosed.delete(sessionId);
     for (const runId of targets) {
       this.folds.delete(runId);
@@ -676,9 +723,17 @@ export class LiveItemStore implements ItemSink {
     this.condensed.clear();
     this.released.clear();
     this.releasedRuns.clear();
-    // 台账跟着清：seq 纪元重置后环也空了，留着旧台账只会误杀新纪元的 run。
-    this.sessionClosed.clear();
-    this.closedRuns.clear();
+    // 台账**不跟着清**：两条台账的键都是稳定 id（run_id / session_id 都是服务端分配的
+    // UUID，不会复用），内容是「服务端说这些 run 已经结束」这一类**不随时间失效的事实**。
+    //
+    // 旧实现在这里清空，理由是「seq 纪元重置后环也空了，留着旧台账只会误杀新纪元的 run」。
+    // 但纪元重置换的是 seq 编号，**不是 run 身份**：同一条 run 在重启前后是同一个 id，
+    // 「它已经结束」仍然成立；而清空的代价是每次换作用域（切会话 A→B→A / 刷新后重连）
+    // 都要重新对一次账 —— 对账没到之前那些 run 又变回 `running`，「正在思考 + 停止」
+    // 在已停的会话上复活一次（用户实测的第二个症状）。台账留着，`refoldRun` 折出来的
+    // running 组立刻被 `applyCloses` 收口，屏上不出现那一帧。
+    //
+    // 真正让结论失效的只有一条：历史被删（rewind）⇒ `dropSession` 里清（见那里的说明）。
     this.dirty.clear();
     this.structureDirty = false;
     this.ingestedSeq = 0;
@@ -709,6 +764,9 @@ export class LiveItemStore implements ItemSink {
   flush(): void {
     if (this.dirty.size === 0 && !this.structureDirty) return;
     this.structureDirty = false;
+    // 收口「被后继 run 顶掉的旧 run」：必须在物化之前 —— 它改的是 fold 的状态，
+    // 物化只读 fold（见 `supersedeStaleRuns`）。
+    this.supersedeStaleRuns();
     for (const runId of this.dirty) this.materialize(runId);
     this.dirty.clear();
     // 上限策略可能再折掉一些旧的 item（→ 折叠卡），折完要重新物化一次。
@@ -716,6 +774,66 @@ export class LiveItemStore implements ItemSink {
     for (const runId of this.dirty) this.materialize(runId);
     this.dirty.clear();
     this.publish();
+  }
+
+  /**
+   * 收口「被同一个会话里后继 run 顶掉的旧 run」：它一定已经结束，但我们不知道结局。
+   *
+   * ## 为什么这条判据是**可核对**的，而不是猜
+   *
+   * 一个会话里的 run 是**串行**的：后一个 run 起来之前，前一个必然已经收了终态。所以
+   * 「同会话另一个 run 的起始时刻晚于我最后一条事件」= 我**一定**结束了。这不是超时
+   * 猜测（那张 `EPOCH_IDLE_MS` 的空闲猜测已经删了），是两条已收到的帧之间的确定性关系。
+   *
+   * ## 为什么必须做
+   *
+   * item 面的 `running` 只有一个含义：「**我还没见过**这一 run 的终态帧」。事件流是有界的
+   * ——首屏只回填尾部窗口、更早的段按需补、环还按 run / 总量裁剪。于是一条旧 run 完全
+   * 可能只剩一半帧在本地（终态帧从未进过本地），而它的后继 run 的帧一定在。屏上的结果
+   * 就是「一条早就结束的 run 永远在『正在思考』，停止按钮永远可点」。
+   * 快照对账（`closeRuns`）只救得了**快照点名的那一条** run，救不了更早的残留。
+   *
+   * ## 纪律
+   *
+   * - 只碰 `running` 的组（`RunFold.close` 自己再挡一次：真终态先到 ⇒ 一条 item 都不动）；
+   * - **不冒充结局**：一律 `interrupted` + `reconciled: 'superseded'`（「已结束，怎么结束的
+   *   不知道」），绝不写 `completed`（那会伪造一次成功）；
+   * - 只对**真正的 run 分组**生效（`hasRunEvent`）：成员级事件的 `run_id` 是成员 id，
+   *   它们的组本来就永远不会有终态，与 run 的串行关系无关；
+   * - 缺 `sessionId` 的组不碰：没有会话归属就谈不上「同会话后继」。
+   *
+   * 复杂度：一趟按下标扫（每个 fold 一次 `toGroup`），与 `materialize` 同阶，不引入
+   * O(run²)。
+   */
+  private supersedeStaleRuns(): void {
+    if (this.folds.size < 2) return;
+    /** sessionId → 该会话里最晚的 run 起始时刻（`startedAt`，退化为 `firstTs`）。 */
+    const latestStart = new Map<string, number>();
+    for (const fold of this.folds.values()) {
+      const group = fold.summary();
+      if (group.sessionId === undefined) continue;
+      const start = group.startedAt ?? group.firstTs;
+      if (start === undefined) continue;
+      const known = latestStart.get(group.sessionId);
+      if (known === undefined || start > known) latestStart.set(group.sessionId, start);
+    }
+    if (latestStart.size === 0) return;
+    for (const [runId, fold] of this.folds) {
+      const group = fold.summary();
+      if (group.status !== 'running' || !group.hasRunEvent) continue;
+      if (group.sessionId === undefined) continue;
+      const latest = latestStart.get(group.sessionId);
+      if (latest === undefined) continue;
+      // 判据是**严格**晚于：我最后一条事件都早于那个 run 的开始 ⇒ 我结束了。同一毫秒
+      // 不算（那可能是同一次发布里的两个瞬间，证据不够硬，宁可不动）。
+      const tail = group.lastTs;
+      if (tail === undefined || latest <= tail) continue;
+      // `at` 用**我自己**的最后一条事件时刻：这一段的时间线到那里为止，不借后继 run 的
+      // 时间（否则「思考过程 · Ns」会凭空多出前一条 run 死后的那一段）。
+      if (!fold.close('interrupted', tail, { via: 'superseded' })) continue;
+      this.closedRuns.set(runId, { status: 'interrupted', at: tail, via: 'superseded' });
+      this.dirty.add(runId);
+    }
   }
 
   private visible(entry: StoredEvent): boolean {

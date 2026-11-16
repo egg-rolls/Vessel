@@ -282,12 +282,47 @@ export function useChatTranscript({
     [sessionDetail],
   );
 
+  /**
+   * 会话快照说的终态（`sessions.get` 的 `status` / `completed_at` / `error`），
+   * 只认属于当前选中会话的那一份。
+   *
+   * 这是判断「服务端确实在跑吗」的**唯一可核对**来源：`group.status === 'running'` 只说
+   * 「我还没见过这一 run 的终态帧」，那不是「服务端在跑」。事件流是尽力而为的（背压丢帧 /
+   * 回放窗口淘汰 / hub 重启换 seq 纪元 / body 被关掉之后再没人发终态帧），终态帧一旦没到，
+   * 本地的 running 就永远不会自己消失 —— 成员早就关了，屏上还在跑（用户实测的第一个症状）。
+   *
+   * 判据用「终态时刻 **不早于** 这条 run 的起始」（`at >= startedAt`）：结束之后用户又
+   * 发了一条消息时，新 run 的 `startedAt` 比快照时刻更晚，那条 run 的停止入口不受影响。
+   */
+  const serverSessionTerminal = useMemo(() => {
+    if (!selectedId || sessionDetailId !== selectedId) return undefined;
+    const terminal = sessionTerminalOfDetail(sessionDetail);
+    if (terminal === undefined || terminal.sessionId !== selectedId) return undefined;
+    return terminal;
+  }, [selectedId, sessionDetail, sessionDetailId]);
+
   // 单会话实时组上限：长会话只渲染最近 `MAX_LIVE_GROUPS` 个 run（更早的轮次仍可由历史 /
   // 运行详情查看）。这里**不再算** `hiddenLiveGroups`：以前算了却没有渲染入口 = 静默隐藏。
   // 真正的提示行需要新 i18n 文案与样式（本单不动 `i18n/**`），留给阶段 4；在那之前
   // 至少不留一个「算了不用」的假变量。
-  const renderedGroups: readonly RunGroup[] =
-    visibleGroups.length > MAX_LIVE_GROUPS ? visibleGroups.slice(-MAX_LIVE_GROUPS) : visibleGroups;
+  //
+  // 快照说这一轮已经结束的组在这里就地改判成 `interrupted`（`reconciled` 标成
+  // `session-snapshot`，与 `closeRuns` 走的是同一条结论）：渲染面只有一个判据
+  // （`status === 'running'`），所以「正在思考」与停止入口**同时**下线，不需要第二套判断；
+  // 下面的 effect 把同一结论写回物化面（下一帧开始就是物化过的终态，不是渲染期补丁）。
+  // `interrupted` 不是 `cancelled`：用户没按停止，快照只说「它被中断了」，不冒充。
+  const renderedGroups: readonly RunGroup[] = useMemo(() => {
+    const base =
+      visibleGroups.length > MAX_LIVE_GROUPS
+        ? visibleGroups.slice(-MAX_LIVE_GROUPS)
+        : visibleGroups;
+    if (serverSessionTerminal === undefined) return base;
+    return base.map((group) =>
+      group.status === 'running' && serverSessionTerminal.at >= (group.startedAt ?? 0)
+        ? { ...group, status: 'interrupted' as const, reconciled: 'session-snapshot' as const }
+        : group,
+    );
+  }, [visibleGroups, serverSessionTerminal]);
 
   // 0.18：停止入口固定在底部 Composer 区域，只对当前会话仍在跑的 run 出现。
   // `hasRunEvent` 排除成员事件聚合出的“永不终态”分组：它们的 runId 是成员 id，
@@ -303,37 +338,28 @@ export function useChatTranscript({
   const stopBusy = runningGroup ? cancelling.has(runningGroup.runId) : false;
 
   /**
-   * 会话快照的**终态对账**（`sessions.get` 的 `status` / `run_id` / `completed_at`）。
+   * 会话快照的**终态对账**：把上面那条结论写回物化面（见 `serverSessionTerminal` 的说明）。
    *
-   * 为什么需要：`runningGroup`（停止按钮）与「正在思考」都只看事件流折出来的 `status`。
-   * 事件流是尽力而为的（背压丢帧 / 回放窗口淘汰 / hub 重启换 seq 纪元 / body 被关掉之后
-   * 再没人发终态帧），终态帧一旦没到，就**永远**没人收口 —— 成员早就关了，屏上还在跑。
-   * 会话投影里 `status` / `run_id` / `completed_at` / `error` 是落盘的，这是同一个页面里
-   * 唯一「可核对」的第二条源（与失败卡同一条路径，不新增 RPC）。
-   *
-   * 依赖里挂 `runningGroup?.runId`：详情先到、组后到（回填 / 重连把 run 补回来）时也要
-   * 再对一次账，否则「快照早就 terminal」与「组晚一步出现」两边都刚好错开，残留照样留住。
-   * 纪律：只碰仍 `running` 的组（`closeRuns` 内部再挡一次，真终态先到就是 no-op），状态
-   * 照抄快照（`completed` / `failed` / `cancelled` / `interrupted`），不把「不知道」写成
-   * 「成功」。`interrupted`（S1d）是为 Host / node 重启补的：那条路径没有 `agent.closed`，
-   * 快照只给 `interrupted`，不收口就会一直挂着「停止按钮 + 正在思考」。
+   * 三条要点：
+   * 1. **不带 `runIds`**：`sessionTerminalOfDetail` 只在会话已经是终态时才返回，此时这一
+   *    会话里**所有**还开着的 run 都结束了 —— 只收口快照点名的那个 run（旧实现）会把更早
+   *    的残留留在屏上「永远在跑」（它的终态帧早就被有界回放挤出本地，没人再来收口）；
+   * 2. 会话级结论由 `closeRuns` 登记进台账，于是**之后**才建起来的 fold（切会话 / 回填
+   *    重折叠 / 重连补帧）在创建那一刻就被收口，屏上不会再出现一帧假运行态；
+   * 3. 不挂「有没有 running 组」这个前置：台账必须**先**登记，否则「快照先到、组后到」正好
+   *    错开。`closeRuns` 在没有可收口对象时是一个 Map 写入，代价可忽略。
    */
-  const runningRunId = runningGroup?.runId ?? null;
   useEffect(() => {
-    if (!selectedId || sessionDetailId !== selectedId) return;
-    // 没有 running 组就没有可收口的对象；一旦有（含回填 / 重连晚到的），本 effect 会因
-    // `runningRunId` 变化再跑一次 —— 两侧刚好错开的时序才收得住。
-    if (runningRunId === null) return;
-    const terminal = sessionTerminalOfDetail(sessionDetail);
-    if (terminal === undefined || terminal.sessionId !== selectedId) return;
+    if (!selectedId) return;
+    const terminal = serverSessionTerminal;
+    if (terminal === undefined) return;
     itemStore.closeRuns(selectedId, {
-      ...(terminal.runId !== undefined ? { runIds: [terminal.runId] } : {}),
       status: terminal.status,
       at: terminal.at,
       ...(terminal.error !== undefined ? { error: terminal.error } : {}),
       via: 'session-snapshot',
     });
-  }, [itemStore, selectedId, sessionDetail, sessionDetailId, runningRunId]);
+  }, [itemStore, selectedId, serverSessionTerminal]);
 
   // 0.18：当前会话的 pending 固定落在 Composer 槽位，不再挂到运行段或页面顶部。
   // 缺 sessionId 的旧流请求按 run 归属补判；run 终态时 ConnectionProvider 会清掉请求。
