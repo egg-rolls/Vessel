@@ -333,6 +333,22 @@ vessel gateway status    # 平台在哪、是否在跑
 curl -s http://127.0.0.1:8642/health   # {"status":"ok","role":"platform",...}
 ```
 
+`doctor` 的 `exposure` 行会把「回环监听 + 完全没有凭据」的三个面列出来（只提示，不改行为）：
+
+```
+[warn]  exposure: node 127.0.0.1 没有 serve.token / serve.tokens：同机反代下匿名请求会被当成 admin；
+        配 serve.token_env（或 serve.proxy_secret_env）后重启; 平台 127.0.0.1 没有 gateway.token：…
+        hub 127.0.0.1 没有 hub.token_env：回环匿名可读目录、可删节点（吊销 node token）；…
+```
+
+三个面都有凭据/密钥时该行变成：
+
+```
+[ok]    exposure: loopback listeners are protected by a token or a proxy secret
+```
+
+纯本机使用、确认没有反代也没有其他本机进程时，可以按需忽略这条 warning；它不阻止启动。
+
 > 回滚：四条收紧各自一个 commit（`git revert <sha>` 可单条回退）。回退后行为立即回到
 > 「回环即可信」的旧形态——**只在确认该机器不暴露到公网时**才这么做。
 
