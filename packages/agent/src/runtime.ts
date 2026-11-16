@@ -1990,9 +1990,18 @@ export class MemberExecutionHost implements MemberExecutionPort {
   }
 
   /**
-   * ask 在 bridge 可用时放行给 core（发请求事件 → 父级应答）；
-   * bridge 关闭 / 缺失时按 deny 收口并记日志，避免 run 永久等待应答。
-   * 工具没有 checkPermission 时用权限配置的 default（ask 同样按上述规则处理）。
+   * ask 的收口顺序（0.54 Bug：用户配了 `auto_approve: [bash]` 仍被拒）：
+   *
+   * 1. `autoApprove` 命中（且不在 `neverAutoApprove` 里）⇒ **allow**。这是用户的显式授权
+   *    （REPL 的 "always" 也写回这里），无论如何都不该再问一次、更不该折成 deny；
+   * 2. bridge 可用 ⇒ 放行给 core（发请求事件 → 父级应答）；
+   * 3. 其余按 deny 收口并记日志，避免 run 永久等待应答。
+   *
+   * 为什么 1 必须在 2 之前：2 的前提是「有人能应答」，而 autoApprove 已经是事前的答案。
+   * 为什么这条以前漏了：`autoApprove` 只在 `fallbackDecision`（**没有** checkPermission 的
+   * 工具）里查过；bash / read / edit 自带 checkPermission 并统一返回 `ask`（想让 core 的
+   * PermissionPolicy 去查表白名单），而本方法在非 bridge 档把 ask 直接折成 deny ——
+   * 于是「越需要免确认的重工具越拿不到 autoApprove」，正好反了。
    */
   private restrictPermissions(
     tool: ToolDefinition,
@@ -2005,6 +2014,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
       checkPermission: async (input, ctx) => {
         const decision = check ? await check(input, ctx) : this.fallbackDecision(tool.name);
         if (decision !== 'ask') return decision;
+        if (this.autoApproved(tool.name)) return 'allow';
         if (mode === 'bridge' && this.parentEvents !== undefined) return 'ask';
         this.logger.warn('agent.member.permission_ask_denied', {
           member_id: memberId,
@@ -2015,9 +2025,15 @@ export class MemberExecutionHost implements MemberExecutionPort {
     };
   }
 
+  /** 用户显式免确认（`neverAutoApprove` 的精确工具名命中优先，永远否决）。 */
+  private autoApproved(toolName: string): boolean {
+    if (this.permission?.neverAutoApprove?.includes(toolName) === true) return false;
+    return this.permission?.autoApprove?.includes(toolName) === true;
+  }
+
   /** 无 checkPermission 的工具：autoApprove 放行，default=ask 因无 bridge 转为 deny */
   private fallbackDecision(toolName: string): 'allow' | 'deny' {
-    if (this.permission?.autoApprove?.includes(toolName)) return 'allow';
+    if (this.autoApproved(toolName)) return 'allow';
     return this.permission?.default === 'ask' ? 'deny' : 'allow';
   }
 
