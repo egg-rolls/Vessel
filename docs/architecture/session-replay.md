@@ -79,9 +79,9 @@ seq；② 末条 = 区间内最后一个非洞 seq；③ 实收条数 `=== count
 
 - 落盘口径（新格式 / 旧格式 / 迁移目标）：[event-log-policy.md](event-log-policy.md)；事件命名与可见性：[events.md](events.md)
 - 0.53 悬空项的结案（`U` 为何是空集、两指针不变式、chunk 的内存窗口）：[unacked-queue-closure.md](unacked-queue-closure.md)
-- 0.53 三源形态的历史记录（只作历史引用）：[refresh-gap-design.md](../dev/handoff/refresh-gap-design.md)、
-  [chunk-loss-measurement.md](../dev/handoff/chunk-loss-measurement.md)
-- 迁移计划（A/B/C、受影响 9 项、回退）：[plan-054-timeline-migration.md](../dev/handoff/plan-054-timeline-migration.md)
+- 0.53 三源形态的历史记录（只作历史引用）：[refresh-gap-design.md](../specs/refresh-gap-design.md)、
+  [chunk-loss-measurement.md](../specs/chunk-loss-measurement.md)
+- 迁移计划（A/B/C、受影响 9 项、回退）：[plan-054-timeline-migration.md](../specs/plan-054-timeline-migration.md)
 
 **未核实**（不按已实现写）：
 

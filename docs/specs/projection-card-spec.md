@@ -90,7 +90,7 @@ messages: capToolMessages(all.slice(start, end)),
 | 事件 | 携带 | 落盘？ | 前端怎么处理 |
 | --- | --- | --- | --- |
 | `message.compaction` | `cleared_tool_call_ids`（**全量、不截断**，`execution-unit.ts:2698-2711`）、`report` | ✅ 落盘（`packages/core/src/runtime/run-journal.ts:54-63` 的 `NON_PERSISTED_EVENT_TYPES` 里没有它） | `apps/web/src/gateway/connection-handlers.ts:161-164`：只**整段重载历史**，`cleared_tool_call_ids` 用完即弃，store 不存 |
-| `context.cleared_tool_result` | `model`、`cleared`、`kept`、`summary`（= 那条 trim 通知文本）、`tool_call_ids`（**全量**，`execution-unit.ts:833` 传的是 `fresh` 数组） | ✅ 落盘 | `apps/web/src/state/events.ts:461` → `kind:'notice'`，item 里带**完整 event**（`events.ts:469-474`）；但 notice 是 live-only，刷新后不复现（`docs/dev/handoff/refresh-gap-design.md:126-150`） |
+| `context.cleared_tool_result` | `model`、`cleared`、`kept`、`summary`（= 那条 trim 通知文本）、`tool_call_ids`（**全量**，`execution-unit.ts:833` 传的是 `fresh` 数组） | ✅ 落盘 | `apps/web/src/state/events.ts:461` → `kind:'notice'`，item 里带**完整 event**（`events.ts:469-474`）；但 notice 是 live-only，刷新后不复现（`docs/specs/refresh-gap-design.md:126-150`） |
 
 **(c) `apps/web` 里哪个 store 存了它。**
 
@@ -318,7 +318,7 @@ for (const m of all) {                       // all = 落盘全量 messages
 两条现成的硬约束（照抄，别违反）：
 
 - `StreamCard.tsx:19-20`：「`summary` 里不得再放可点元素」⇒ **投影 badge 只能放 `meta`（纯文本 span）**；任何可点控件（切换器、复制、读回）必须去 `actions`（`:142`，在 summary 外、始终可见）或卡体里。
-- 刷新缺口（`docs/dev/handoff/refresh-gap-design.md:126-150`）：从事件派生出来的东西刷新后会消失 ⇒ **投影卡的载荷必须挂在消息上**（`sessions.get`），不能只靠 `context.cleared_tool_result` 的 notice。
+- 刷新缺口（`docs/specs/refresh-gap-design.md:126-150`）：从事件派生出来的东西刷新后会消失 ⇒ **投影卡的载荷必须挂在消息上**（`sessions.get`），不能只靠 `context.cleared_tool_result` 的 notice。
 
 ---
 

@@ -77,7 +77,7 @@
 ## 文件与目录
 
 - 共享侧 / 个人侧分工、目录结构、角色独占路径、分支与发布规则见 [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)。共享侧只放源码、长期文档与 CI。
-- 每个角色只写自己的独占路径；跨路径改动先与 1 协商。引用路径前先确认存在（`docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`processes/`、`legacy/` 已删除）；当前版本见 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)。
+- 每个角色只写自己的独占路径；跨路径改动先与 1 协商。引用路径前先确认存在（`docs/role/`、`docs/api/`、`docs/guides/`、`processes/`、`legacy/` 已删除）；当前版本见 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)。
 - **文档就是 prompt**：写意图与允许的例外，不写会被字面执行的绝对禁令；ADR 的 `status` 与 `supersedes` / `related` 由 `check-docs` 校验，不能只写在正文。
 - **提交可追溯**：squash / revert 提交带 `Squash-of:` / `Reverts:` / `Contract:` / `Decision:` trailer；合并以 tree-sha 为证据，不用“看起来一致”。
 
