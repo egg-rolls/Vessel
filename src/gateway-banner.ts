@@ -94,14 +94,18 @@ export interface PlatformStartupNode {
   name: string;
   url: string;
   autoStart: boolean;
-  /** handoff（0.52）：进程不是本平台 spawn 的，而是 adopt 来的既有 node。 */
-  adopted?: boolean;
+  /**
+   * 启动分段（0.55）：摘要打印时刻的节点状态。此时节点通常还是 `starting`，
+   * 就绪/失败随后由结构化日志行补齐；`failed` 会带上 `reason`。
+   */
+  state?: 'starting' | 'ready' | 'failed' | 'adopted' | 'external';
+  reason?: string;
 }
 
-/** 本地 Hub 的启动结果：本次 spawn / adopt 已有实例 / 关闭 / 拉起失败。 */
+/** 本地 Hub 的启动结果：本次 spawn（`starting`）/ adopt 已有实例 / 关闭 / 拉起失败。 */
 export type PlatformStartupHub =
   | { state: 'auto-started' | 'adopted'; url: string }
-  | { state: 'disabled' | 'unavailable' };
+  | { state: 'starting' | 'disabled' | 'unavailable' };
 
 /** `gateway start` 前台摘要输入（字段全部来自运行态，不打印 token）。 */
 export interface PlatformStartupInfo {
@@ -122,6 +126,13 @@ function platformHubValue(hub: PlatformStartupHub): string {
   return hub.state;
 }
 
+/** 节点行尾注：状态早已在 URL/名字之后，失败原因也照实打出来（0.55）。 */
+function platformNodeState(node: PlatformStartupNode): string {
+  if (node.state === undefined) return '';
+  const reason = node.reason !== undefined && node.reason !== '' ? `: ${node.reason}` : '';
+  return `  (${node.state}${reason})`;
+}
+
 /**
  * `gateway start` 前台 Vite 风格启动摘要（0.50）。
  *
@@ -135,7 +146,7 @@ export function renderPlatformStartup(info: PlatformStartupInfo): string {
     ...info.nodes.map((node, index): [string, string] => [
       index === 0 ? 'Node' : '',
       `${node.url} (${node.name})${node.autoStart ? '' : '  (auto_start: false)'}` +
-        `${node.adopted === true ? '  (adopted)' : ''}`,
+        platformNodeState(node),
     ]),
     ['Hub', platformHubValue(info.hub)],
     ['Web', info.platformUrl],

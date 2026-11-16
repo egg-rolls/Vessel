@@ -88,11 +88,15 @@ function defaultSleep(ms: number): Promise<void> {
  * 启动失败/超时时的子进程回滚（0.49 G3b）。平台进程若被硬终止（Windows 无
  * POSIX 信号），已 spawn 的 node 子进程会留在 runtime manifest 里；由父进程
  * 复核 manifest 后清理，避免孤儿。动态 import 避免 daemon ↔ supervisor 静态环。
+ *
+ * 0.55：只清理**本次启动之后** spawn 的条目（`startedSince`）。node/hub 与平台
+ * 不再共命运——上一代就活着、本次 adopt 回来的进程不能因为这次启动失败被误杀。
  */
 async function rollbackSpawnedChildren(
   dataDir: string,
   instance: string | undefined,
   stateKind: GatewayStateKind,
+  startedSince: number,
 ): Promise<void> {
   if (stateKind !== 'platform') return;
   try {
@@ -100,6 +104,7 @@ async function rollbackSpawnedChildren(
     await stopSpawnedChildren({
       gatewayDataDir: dataDir,
       ...(instance !== undefined ? { instance } : {}),
+      startedSince,
     });
   } catch {
     // 回滚尽力而为；不覆盖原始启动失败原因。
@@ -228,6 +233,8 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
   const spawn = options.spawn ?? Bun.spawn;
   const sleep = options.sleep ?? defaultSleep;
 
+  // 0.55：记下本次启动的时刻；失败回滚只清理这之后 spawn 的子进程。
+  const spawnedSince = Date.now();
   let child: ReturnType<typeof spawn>;
   try {
     child = spawn(argv, {
@@ -257,7 +264,7 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
     }
     if (child.exitCode !== null) {
       await handle.close().catch(() => undefined);
-      await rollbackSpawnedChildren(options.dataDir, instance, stateKind);
+      await rollbackSpawnedChildren(options.dataDir, instance, stateKind, spawnedSince);
       const tail = await tailLog(logPath);
       return {
         ok: false,
@@ -283,7 +290,7 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
     return { ok: true, record: raced, logPath, unconfirmed: true };
   }
 
-  await rollbackSpawnedChildren(options.dataDir, instance, stateKind);
+  await rollbackSpawnedChildren(options.dataDir, instance, stateKind, spawnedSince);
   const tail = await tailLog(logPath);
   return {
     ok: false,
