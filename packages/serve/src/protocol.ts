@@ -211,6 +211,37 @@ export type ServerFrame =
       from_seq: number;
       to_seq: number;
     }
+  /**
+   * 时间线 epoch 的**显式结束标记**（0.55，additive 新 kind）。
+   *
+   * 服务端把本趟声明区间（`hello.start_seq..end_seq`）的帧发完之后发这一帧，
+   * 客户端据此知道「这一趟发完了」——**不用**再靠「400ms 没新帧」猜
+   * （那个猜测是 `apps/web/src/state/event-store.ts#EPOCH_IDLE_MS`，P1 删除项）。
+   *
+   * 三条边界（都是判据，不是措辞）：
+   * - **只由时间线 epoch 发**（`timeline_source === 'timeline'`）。老 epoch 的环形 seq
+   *   没有「本趟区间」的声明，给它一个结束标记等于凭空造第二个事实源。
+   * - **只在整趟发完时发**。提前停（连接坏 / 撞 8 MiB 背压硬阈值）**不发**：
+   *   那不是「发完了」。
+   * - `count` = 本趟**实发**条数（整趟发完 ⇒ 等于 `hello.count`）；`end_seq` = 本趟已发的
+   *   最后一条 seq（零条已发时 = `start_seq - 1`）；`has_more` = 后面还有**可读**的没发
+   *   （洞不算「还有」，否则客户端续拉会原地打转）。口径全文见
+   *   `gateway/timeline-protocol.ts#TimelineEpochEndSegment`。
+   *
+   * 老客户端不受影响：未知 `kind` 在客户端分发里落 `default: return`（静默忽略）。
+   * 能力位：`timeline.epoch-end`（0.55 新增；`timeline.cursor` 的承诺面未被改动）。
+   */
+  | {
+      v: 1;
+      kind: 'timeline-epoch-end';
+      node_id: string;
+      ts: number;
+      /** 本 epoch 的会话（时间线订阅必有；缺省则不出现在线上）。 */
+      session_id?: string;
+      end_seq: number;
+      count: number;
+      has_more: boolean;
+    }
   | { v: 1; kind: 'res'; node_id: string; ts: number; id: string; ok: true; result: unknown }
   | {
       v: 1;

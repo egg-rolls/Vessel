@@ -429,6 +429,73 @@ export function declareEpochChunk(
   };
 }
 
+/**
+ * 时间线 epoch 的**显式结束标记**（0.55）—— 落成线上一帧 `{kind:'timeline-epoch-end'}`。
+ *
+ * ## 为什么需要它（真实事故）
+ * 0.55 之前服务端把一趟区间发完就**不说话了**：客户端只能靠「400ms 没有新帧」猜
+ * 「这一趟发完了」（`apps/web/src/state/event-store.ts#EPOCH_IDLE_MS`）。猜测的代价是双向的：
+ * - 网络慢一点 / 一次 GC 停顿 ⇒ 误判成「停了」，按「连续前缀」收口并续拉，用户看到的
+ *   正是那条假缺口报告；
+ * - 反过来真的没发完（撞背压提前停）时，客户端也分不清「没发完」和「发完了没东西」。
+ * 一帧显式标记把猜测换成事实。
+ *
+ * ## 字段口径（唯一口径，别再造第二个）
+ * - `end_seq` = 本趟**已发**的最后一条 seq。零条已发时 = `start_seq - 1`（空区间，与
+ *   `declareEpochChunk` 的空 chunk 同构；`start_seq = 1` 时报 `0`），客户端不必为此写分支。
+ * - `count` = 本趟**实际发出**的事件帧条数。它 `=== hello.count` 当整趟发完；本实现只在
+ *   整趟发完时发这一帧（见 `gateway.ts#sendTimelineEpoch`），所以线上两者必然相等 ——
+ *   留着是让客户端**核对**，而不是让它去推断。
+ * - `has_more` = 「后面还有**可读**的、本趟没发的」。判据
+ *   `countReadableInRange(end_seq + 1, min(声明 end_seq, published_head), holes) > 0`，
+ *   **不是**裸的 `end_seq < min(wal_head, published_head)`：尾部若只剩洞（写者声明过的
+ *   不可读区间），裸判据永远为真，客户端带 `after_timeline_seq = end_seq` 续拉就原地打转
+ *   （每趟 0 条、`has_more` 仍为 true，永不收敛）。按「有可读的」收紧；**没有洞时两者
+ *   逐字等价**，所以这不是改口径，是把「洞」这个已知事实算进去。
+ *
+ * ## 老客户端为什么不受影响（additive 的具体含义）
+ * 这是**新增 kind**，不是改既有帧：老客户端按 `switch (frame.kind)` 分发，未知 kind 落
+ * `default: return` 静默忽略（`apps/web/src/gateway/node/protocol.ts` 的 `handleFrame`），
+ * 且 JSON 解析外面包了 `try/catch` —— 收到这一帧与收到空行等价。
+ * 服务端**只在时间线 epoch** 发它：老 epoch（环形 seq）连「这一趟区间」的声明都没有，
+ * 发一个没有声明可对照的结束标记只会制造第二个事实源。
+ * 能力位 `timeline.cursor` 的承诺面**一个字段都没改**：新帧由新能力位
+ * `timeline.epoch-end` 声明（见 `gateway.ts` 的 features 段）——老服务端报
+ * `timeline.cursor` 却不发这一帧，客户端要靠位判断能不能删掉 400ms 猜测。
+ */
+export interface TimelineEpochEndSegment {
+  end_seq: number;
+  count: number;
+  has_more: boolean;
+}
+
+/**
+ * 由「本趟声明 + 分页前的整段声明 + 实发条数」算出结束标记（纯函数，无 IO）。
+ *
+ * 只在**整趟发完**时调用。提前停（连接坏 / 撞背压硬阈值）不发这一帧 —— 那恰恰是
+ * 不能对客户端说「这一趟发完了」的时刻。
+ */
+export function timelineEpochEnd(input: {
+  /** 本趟 `hello` 实际声明的区间（`declareEpochChunk` 的产物）。 */
+  declared: TimelineHelloSegment;
+  /** 分页**之前**的整段声明：`has_more` 要按它的有效右端与洞来算。 */
+  segment: TimelineHelloSegment;
+  /** 本趟实际发出的事件帧条数。 */
+  sent: number;
+}): TimelineEpochEndSegment {
+  const declaredEnd = clampSeq(input.declared.end_seq);
+  const effectiveEnd = Math.min(
+    clampSeq(input.segment.end_seq),
+    clampSeq(input.segment.published_head),
+  );
+  return {
+    end_seq: declaredEnd,
+    count: Math.max(0, Math.floor(input.sent)),
+    // `[declaredEnd + 1, effectiveEnd]` 里还剩多少**可读**事件：洞不算「还有」。
+    has_more: countReadableInRange(declaredEnd + 1, effectiveEnd, input.segment.holes) > 0,
+  };
+}
+
 /** 订阅裁决结果（三种，互斥）。 */
 export type TimelineSubscribeDecision =
   | { kind: 'legacy' }

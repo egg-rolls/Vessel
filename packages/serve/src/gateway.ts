@@ -57,6 +57,7 @@ import {
   helloFrame as buildHelloFrame,
   errorFrame,
   resultFrame,
+  timelineEpochEndFrame,
 } from './gateway/frames.js';
 import { createAdminMethods, type GatewayReloadResult } from './gateway/methods/admin.js';
 import { createAgentMethods } from './gateway/methods/agents.js';
@@ -71,6 +72,7 @@ import {
   type TimelineRunEventsPort,
   type TimelineTailPort,
   type TimelineWireEvent,
+  timelineEpochEnd,
   timelineHello,
 } from './gateway/timeline-protocol.js';
 
@@ -531,9 +533,135 @@ interface WsData {
   timelineEpochEnd?: number;
   /** 0.48 M3：插件 WS 连接；存在时该 WS 不进入 `wsClients`。 */
   pluginWs?: PluginWsConnection;
+  /**
+   * 0.55：连接短 id（只用于把日志行串起来，不含 token / principal / 任何敏感值）。
+   */
+  connId?: string;
+  /** 0.55：连接建立时刻（`duration_ms` 用）。 */
+  openedAt?: number;
+  /** 0.55：本连接的计数（断连时一次性打进结构化 warn）。 */
+  stats?: WsConnStats;
+  /**
+   * 0.55：**本端**主动关连接时先记账的原因。
+   *
+   * 对端关（浏览器刷新 / 网络断）时这里没有值 ⇒ `close_by: 'client'`。
+   * 有了它，`close(ws, code, reason)` 那个回调才能回答「谁关的」——
+   * WebSocket 的 close 帧只带 code/reason，`1001` 既可能是 drain 也可能是心跳超时。
+   */
+  closeCause?: WsCloseCause;
+}
+
+/** 断连的账（0.55）：本连接发了多少、丢了多少、发到哪。 */
+interface WsConnStats {
+  /** 实发帧数（hello / event / res / ping / timeline-epoch-end 全算）。 */
+  frames_sent: number;
+  /** 实发字节数（UTF-8，与线上字节一致；只统计本端写出的帧）。 */
+  bytes_sent: number;
+  /** 本连接成功发出过几次 epoch 的 `hello`（含时间线 / 老回放 / 重订阅）。 */
+  epochs: number;
+  /** 因背压没发出去的事件帧条数（`admit` 拒收 + 8 MiB 硬阈值拒发）。 */
+  backpressure_drops: number;
+  /** 最后一条发出的事件帧 seq（本 epoch 的 seq 空间；没发过为 0）。 */
+  last_seq_sent: number;
+}
+
+/** 谁关的连接 —— 排障时第一个要看的东西。 */
+type WsCloseBy =
+  | 'client'
+  | 'server_drain'
+  | 'server_backpressure'
+  | 'server_protocol'
+  | 'server_heartbeat';
+
+interface WsCloseCause {
+  by: WsCloseBy;
+  code: number;
+  reason: string;
 }
 
 type Ws = import('bun').ServerWebSocket<WsData>;
+
+/** 连接的计数（懒建：升级后没走到任何发帧路径的连接也照样能报账）。 */
+function connStats(ws: Ws): WsConnStats {
+  let stats = ws.data.stats;
+  if (stats === undefined) {
+    stats = {
+      frames_sent: 0,
+      bytes_sent: 0,
+      epochs: 0,
+      backpressure_drops: 0,
+      last_seq_sent: 0,
+    };
+    ws.data.stats = stats;
+  }
+  return stats;
+}
+
+/**
+ * **本端主动关连接的唯一出口**：先记「谁关的、为什么」，再关。
+ *
+ * 所有 `ws.close(...)` 都必须走这里（插件 WS 除外：它有自己的一套审计）。
+ * 不记账的裸 `ws.close()` 会让断连日志退化成一个 code —— 而 `1001` 既可能是
+ * `server stopping` 也可能是心跳超时，那正是这次事故里最缺的那一句。
+ */
+function closeWsBy(ws: Ws, code: number, reason: string, by: WsCloseBy): void {
+  ws.data.closeCause = { by, code, reason };
+  try {
+    ws.close(code, reason);
+  } catch {
+    // 已经在关 / 已经关了：`close` 回调自己会把账报出去，这里不吞也不重试。
+  }
+}
+
+/**
+ * 断连的**唯一账目出口**（0.55）—— 每条事件 WS 连接关闭时打一行结构化 warn。
+ *
+ * 为什么是 `warn` 而不是 `debug/info`：这次事故里最贵的一句话是「连接断了，然后呢」，
+ * 而 WebUI 断连本就是异常线索（正常页面关闭也带得上 `close_by: 'client'` + code，
+ * 一行即可判定是否需要追）。一条连接一行，不做采样 —— 采样掉的那一条往往就是事故那条。
+ *
+ * 为什么不用新 RPC 方法查：第十条「勿增实体」。每条连接的生命周期在进程里只有一次，
+ * 日志是它唯一自然的位置；事后要查就 grep `gateway.ws.closed` + `conn_id`。
+ *
+ * 字段（每条都在本文件里被真实累加过，没有"预留位"）：
+ * - `conn_id`：连接短 id（8 hex），把同一连接的日志行串起来；不含 token/principal；
+ * - `close_by`：谁关的 —— `client`（对端）/ `server_drain`（`stop()`）/ `server_backpressure`
+ *   （1013 慢消费者）/ `server_protocol`（4400/4401 协议·鉴权·鉴权超时）/
+ *   `server_heartbeat`（心跳超时）。`close_code` 单独报，不代替这一项：
+ *   `1001` 既可能是 drain 也可能是心跳超时，靠 code 分不出来；
+ * - `frames_sent` / `bytes_sent` / `epochs` / `backpressure_drops` / `last_seq_sent`：
+ *   本连接的账（`WsConnStats`）；
+ * - `session_id` / `run_id` / `timeline_epoch`：断在哪个订阅范围内、走的是哪套 seq。
+ */
+function logWsClosed(ws: Ws, code: number, reason: string): void {
+  const stats = ws.data.stats;
+  // open() 一定会建好这本账；没建说明这条连接连 open 都没走到（升级失败），
+  // 那种情况没有连接可断，也就没有账要报。
+  if (stats === undefined) return;
+  const cause = ws.data.closeCause;
+  let bufferedBytes = 0;
+  try {
+    bufferedBytes = ws.getBufferedAmount();
+  } catch {
+    // 已关的连接不保证还能读积压：读不到就报 0，别让日志自己抛。
+  }
+  console.warn('[vessel] gateway.ws.closed', {
+    conn_id: ws.data.connId ?? '-',
+    close_by: cause?.by ?? 'client',
+    close_code: code,
+    ...(reason !== '' ? { close_reason: reason } : {}),
+    ...(ws.data.sessionId !== undefined ? { session_id: ws.data.sessionId } : {}),
+    ...(ws.data.runId !== undefined ? { run_id: ws.data.runId } : {}),
+    timeline_epoch: ws.data.timelineEpoch === true,
+    frames_sent: stats.frames_sent,
+    bytes_sent: stats.bytes_sent,
+    epochs: stats.epochs,
+    backpressure_drops: stats.backpressure_drops,
+    last_seq_sent: stats.last_seq_sent,
+    duration_ms: ws.data.openedAt === undefined ? 0 : Date.now() - ws.data.openedAt,
+    buffered_bytes: bufferedBytes,
+  });
+}
 
 /**
  * WS 慢客户端硬关闭阈值（最终安全网）。
@@ -1014,6 +1142,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
   // **不**承诺实时尾随（`publish` → 时间线 epoch 的推送要等 src/ 接线，届时另加一位）。
   if (opts.timelineHeads !== undefined && opts.timelineRead !== undefined) {
     features.push('timeline.cursor');
+    // 0.55：显式 epoch 结束标记（`kind:'timeline-epoch-end'`）。
+    //
+    // 为什么**单开一位**而不是并进 `timeline.cursor`：能力位是承诺，而 0.54 的服务端
+    // 报 `timeline.cursor` 却不发这一帧。客户端要删掉「400ms 空闲猜收尾」就必须有一个
+    // 「这个服务端会显式收尾」的判据，并进旧位就等于**偷偷改**了它的承诺面（老服务端
+    // 立刻变成"承诺了却做不到"）。取新串，老客户端忽略未知 feature，行为一字节不变。
+    //
+    // 承诺面（只在 `timeline.cursor` 之上**追加**，不改它已承诺的任何字段/帧）：
+    // - 每个**时间线** epoch 整趟发完后发一帧
+    //   `{kind:'timeline-epoch-end', session_id?, end_seq, count, has_more}`；
+    // - 提前停（连接坏 / 撞背压硬阈值）**不发**这一帧 —— 那时"发完了"不是事实。
+    features.push('timeline.epoch-end');
   }
   const protocolInfo: ProtocolInfo = {
     name: 'vessel.gateway',
@@ -1305,12 +1445,20 @@ export function startGateway(opts: GatewayOptions): Gateway {
       return false;
     }
     if (ws.getBufferedAmount() > MAX_BUFFERED_BYTES) {
-      ws.close(1013, 'slow_consumer');
+      // 0.55：硬阈值拒发也是一次「背压丢了这一帧」——记进账再关，否则断连日志里
+      // 只有 `1013 slow_consumer`，看不出究竟堆了多少、丢在第几帧。
+      connStats(ws).backpressure_drops += 1;
+      closeWsBy(ws, 1013, 'slow_consumer', 'server_backpressure');
       wsClients.delete(ws);
       return false;
     }
     try {
       ws.send(text);
+      const stats = connStats(ws);
+      stats.frames_sent += 1;
+      // 按 UTF-8 字节计（帧里是中文时 `text.length` 会小于线上字节数，
+      // 而排障要对的是"发了多少流量"）。
+      stats.bytes_sent += Buffer.byteLength(text, 'utf8');
       return true;
     } catch {
       wsClients.delete(ws);
@@ -1319,7 +1467,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   function sendFrame(ws: Ws, frame: ServerFrame): boolean {
-    return sendFrameText(ws, JSON.stringify(frame));
+    const ok = sendFrameText(ws, JSON.stringify(frame));
+    if (ok && frame.kind === 'event') connStats(ws).last_seq_sent = frame.seq;
+    return ok;
   }
 
   /** 回放窗口预算与发送复用同一字符串，避免为算大小再序列化一次。 */
@@ -1383,14 +1533,23 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (ws.data.timelineEpoch === true) return;
     if (!wsAccepts(ws, item.event, replaySessions)) return;
     const inflight = ws.getBufferedAmount();
-    if (!ws.data.backpressure.admit(item.seq, inflight)) return;
+    if (!ws.data.backpressure.admit(item.seq, inflight)) {
+      // 0.55：这一帧进了丢弃记账。老 epoch 靠之后补发的 `gap` 帧告诉客户端
+      // （过渡期字段，B2 落地即删），但**断连那一刻**没有任何帧能说清丢了多少 ——
+      // 所以本连接自己留一份数（`backpressure_drops`），进断连日志。
+      connStats(ws).backpressure_drops += 1;
+      return;
+    }
     // 背压恢复：补发缺口帧（过渡期，B2 落地即删）。能走到这里的连接必然是**老 epoch**
     // —— 时间线 epoch 在本函数开头就 return 了（它不发环形 seq、也不发 gap 帧）。
     const recoveryGap = ws.data.backpressure.takeGap(inflight);
     if (recoveryGap !== null) {
       sendFrame(ws, gapFrame({ from_seq: recoveryGap.from_seq, to_seq: recoveryGap.to_seq }));
     }
-    sendFrameText(ws, encoded ?? outboundEventFrame(item, replaySessions).encoded);
+    const sent = sendFrameText(ws, encoded ?? outboundEventFrame(item, replaySessions).encoded);
+    // 0.55：`encoded` 走的是**文本捷径**（不为算大小再序列化一次），所以这里要自己
+    // 补一次 `last_seq_sent` —— 否则老 epoch 的连接断连日志里永远是 0（实测踩到过）。
+    if (sent) connStats(ws).last_seq_sent = item.seq;
   }
 
   /**
@@ -1591,14 +1750,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function replayTo(ws: Ws): void {
     wsClients.add(ws);
     const plan = planReplay(ws);
-    sendFrame(ws, helloFrame(plan.fromSeq));
+    if (sendFrame(ws, helloFrame(plan.fromSeq))) connStats(ws).epochs += 1;
     sendReplay(ws, plan);
   }
 
   /** 订阅 epoch：每次成功的 `events.subscribe` 都重新发 hello；返回该 hello 的 from_seq。 */
   function resubscribeTo(ws: Ws): number {
     const plan = planReplay(ws);
-    sendFrame(ws, helloFrame(plan.fromSeq));
+    if (sendFrame(ws, helloFrame(plan.fromSeq))) connStats(ws).epochs += 1;
     sendReplay(ws, plan);
     return plan.fromSeq;
   }
@@ -1655,15 +1814,33 @@ export function startGateway(opts: GatewayOptions): Gateway {
       lastSeq: window.length > 0 ? window[window.length - 1]?.seq : undefined,
       count: window.length,
     });
-    sendFrame(ws, helloFrame(declared.start_seq, declared));
+    if (sendFrame(ws, helloFrame(declared.start_seq, declared))) connStats(ws).epochs += 1;
     ws.data.afterTimeline = declared.start_seq - 1;
     ws.data.timelineEpochEnd = declared.end_seq;
     // 发帧：逐条推进游标；背压/连接坏就停，**不把游标推过已发范围**
     // （客户端按自己的游标续拉，服务端不装作发过）。
+    let sent = 0;
     for (const record of window) {
-      if (!sendFrame(ws, timelineEventFrame(record))) return declared.start_seq;
+      if (!sendFrame(ws, timelineEventFrame(record))) {
+        // 0.55：提前停 ⇒ **不发**结束标记。此处「这一趟没发完」是事实；
+        // 发一个结束标记等于把两件事（发完了 / 发不动了）说成一件。
+        return declared.start_seq;
+      }
       ws.data.afterTimeline = record.seq;
+      sent += 1;
     }
+    // 0.55：整趟发完 ⇒ 显式结束标记。这是客户端删掉「400ms 空闲猜测」的事实来源：
+    // `count` 与 `hello.count` 必然相等（整趟都发了），`has_more` 告诉它还要不要续拉。
+    // 位置在最后一帧之后、`res` 之前（`res` 由 `handleWsMessage` 在 applyWsSubscribe
+    // 返回后发），所以线上序列是 hello → event×N → timeline-epoch-end → res。
+    sendFrame(
+      ws,
+      timelineEpochEndFrame({
+        nodeId,
+        ...(sessionId !== undefined ? { sessionId } : {}),
+        end: timelineEpochEnd({ declared, segment, sent }),
+      }),
+    );
     return declared.start_seq;
   }
 
@@ -2124,11 +2301,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
     if (!ws.data.authed) {
       if (frame.kind !== 'auth') {
-        ws.close(4401, 'auth required');
+        closeWsBy(ws, 4401, 'auth required', 'server_protocol');
         return;
       }
       if (frame.v !== undefined && frame.v !== PROTOCOL_VERSION) {
-        ws.close(4400, 'unsupported protocol');
+        closeWsBy(ws, 4400, 'unsupported protocol', 'server_protocol');
         return;
       }
       const principal = resolvePrincipal(
@@ -2137,7 +2314,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         token,
       );
       if (!principal) {
-        ws.close(4401, 'unauthorized');
+        closeWsBy(ws, 4401, 'unauthorized', 'server_protocol');
         return;
       }
       ws.data.authed = true;
@@ -3780,13 +3957,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
           ws.data.pluginWs.begin(ws);
           return;
         }
+        // 0.55：从这一刻起这本账就存在了 —— 哪怕它一帧都没发出去就断，
+        // `close` 里也要有一条能对得上「谁、什么时候、为什么」的记录。
+        ws.data.openedAt = Date.now();
+        ws.data.connId = randomBytes(4).toString('hex');
+        connStats(ws);
         ws.data.alive = true;
         if (ws.data.authed) {
           replayTo(ws);
           return;
         }
         ws.data.authTimer = setTimeout(() => {
-          if (!ws.data.authed) ws.close(4401, 'auth timeout');
+          if (!ws.data.authed) closeWsBy(ws, 4401, 'auth timeout', 'server_protocol');
         }, authTimeoutMs);
         const timer = ws.data.authTimer as { unref?: () => void };
         timer.unref?.();
@@ -3806,6 +3988,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         }
         if (ws.data.authTimer) clearTimeout(ws.data.authTimer);
         wsClients.delete(ws);
+        logWsClosed(ws, code, reason);
       },
       pong(ws) {
         if (ws.data.pluginWs !== undefined) {
@@ -3840,7 +4023,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     : setInterval(() => {
         for (const ws of [...wsClients]) {
           if (!ws.data.alive) {
-            ws.close(1001, 'heartbeat timeout');
+            closeWsBy(ws, 1001, 'heartbeat timeout', 'server_heartbeat');
             wsClients.delete(ws);
             continue;
           }
@@ -3865,7 +4048,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function closeWsClients(): void {
     for (const ws of wsClients) {
       try {
-        ws.close(1001, 'server stopping');
+        // 0.55：drain 也是「谁关的」的一种，走记账出口（`close_by: 'server_drain'`）。
+        closeWsBy(ws, 1001, 'server stopping', 'server_drain');
       } catch (error) {
         reportStopError('close websocket', error);
       }
