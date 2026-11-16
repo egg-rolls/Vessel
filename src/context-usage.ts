@@ -12,10 +12,24 @@
  *
  * | 事件 | 字段 | 含义 |
  * |---|---|---|
- * | `context.pressure` | `used`（+ `max`） | ≥90% 水位的真实读数，与 live 注册表同源 |
+ * | `context.pressure` | `used`（+ `max`） | ≥90% 水位的真实读数 / 发送前闸拒发时的读数 |
  * | `context.changed` | `token_count` | 同上（live 注册表的另一来源） |
  * | `llm.request` | `estimated_tokens` | **实际生效的那条**（见下） |
  * | `llm.response` | `usage.prompt_tokens` | provider 报的真实 prompt 大小，最后兜底 |
+ *
+ * ## 0.55 P0：这两条数字的**含义**变了（读侧口径不变，值变了）
+ *
+ * - `llm.request.estimated_tokens` 以前是 `workingContext.tokenCount` = 「上一次 provider
+ *   回报 + 少量增量」。事故现场：盘上 67%，provider 实际 105%，请求被 400 打回三次。
+ *   现在它是**下一次请求视图的上界估算**（`buildRequestMessages` 之后、
+ *   `withClearedToolResults` 之后那一份，按锚点校正），由 `ExecutionUnit` 在发请求前算。
+ *   所以同一个字段名背后的数会变大 —— 那是变**准**了，不是放大。
+ * - `llm.response.usage.prompt_tokens` 降为纯兜底：它是「上一次请求的真实大小」，
+ *   天然比「下一次请求」慢半拍（事故里差 375k）。
+ *
+ * 读侧逻辑（新 → 旧、tier 优先）不用改：本来就更信 `llm.request`，只是以前那个数自己
+ * 是错的。**不要**为了「让环好看」在这里另算一遍：重算要读整份 messages，等于把
+ * `sessions.get` 变成 O(会话大小)（违反第十一条），而写侧已经把准数落在事件里了。
  *
  * 选择规则：**取文件里最新那条带可用数字的**（新 → 旧逐条试），不做「类型优先级」跳跃。
  * 为什么不用固定的类型优先级：`context.pressure` 只在 ≥90% 水位发，压缩把水位降下来
@@ -160,6 +174,10 @@ const SOURCES: readonly {
   },
   {
     type: 'llm.response',
+    // 0.55 P0：这一档**降级**了。`prompt_tokens` 是「上一次请求的**真实**大小」，
+    // 不是「下一次请求会有多大」——事故里它比真实请求小 375k（673k vs 1.048M），
+    // 拿它当现值等于让环永远慢半拍。现在它只作兜底（新日志里几乎不会命中，因为
+    // 每条请求都会先写一条 `llm.request.estimated_tokens`）。
     source: 'prompt',
     tier: 2,
     read: (data) => numberField(isRecord(data) ? data.usage : undefined, 'prompt_tokens'),
@@ -218,10 +236,9 @@ function resolveContextWindow(args: {
 /**
  * 尾窗里最多看这么多个候选事件。
  *
- * 取 64 而不是个位数：同一个 64 KiB 尾窗里常常同时躺着  与
- * （两者字节数差一个量级），条数上限太小会先被 response 占满、
- * 看不到同一次调用的 request，白白退到 provider 报的 。
- * 多解析几十行是纯 CPU、不多读一个字节。
+ * 取 64 而不是个位数：同一个 64 KiB 尾窗里常常同时躺着 `llm.request` 与 `llm.response`
+ * （两者字节数差一个量级），条数上限太小会先被 response 占满、看不到同一次调用的
+ * request，白白退到 provider 报的 `prompt_tokens`。多解析几十行是纯 CPU、不多读一个字节。
  */
 const TAIL_MATCH_LIMIT = 64;
 

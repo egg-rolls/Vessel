@@ -60,3 +60,44 @@ export function renderContextOverflowNotice(locale: ContextNoticeLocale = 'en'):
     DETAIL_MARK + 'no in-place trimming, no mid-history summary swap inside this run',
   ].join('\n');
 }
+
+/**
+ * 发送前闸的「没发」卡（0.55 P0）。
+ *
+ * 与 `renderContextOverflowNotice` 的区别：那张卡说的是「provider 已经打回了」，
+ * 这张说的是「我们算出来会超，所以**根本没发**」—— 请求没有出去，也就没有 HTTP 400，
+ * 但用户必须知道这一轮为什么停在这里，以及下一轮会发生什么。所以两个数字都带上：
+ * 估算值（下一次请求视图，已按锚点校正）与窗口上限。
+ *
+ * 两个数字都来自本地估算（不是 provider 回报）：卡里不写 "provider said"，避免把
+ * 「我们的上界」说成「对方的判定」。精确到 token 的数只在这里出现一次，明细行不再重复。
+ */
+export function renderContextWindowExceededNotice(
+  input: { used: number; max: number },
+  locale: ContextNoticeLocale = 'en',
+): string {
+  const used = String(Math.round(input.used));
+  const max = String(Math.round(input.max));
+  const percent = input.max > 0 ? String(Math.round((input.used / input.max) * 100)) : '?';
+  if (locale === 'zh-CN') {
+    return [
+      'context：下一次请求估算 ' + used + ' / ' + max + ' tokens（' + percent + '%），已达窗口上限',
+      DETAIL_MARK + '本轮**没有**把这条请求发出去（发了只会被 provider 打回）',
+      DETAIL_MARK + '下一步：本次 run 在此收尾；下一次 run 从段起点压缩后的 seed 继续',
+      DETAIL_MARK + '若压缩后仍然超限：开新会话，或先 pop 掉那段巨型输出',
+    ].join('\n');
+  }
+  return [
+    'context: next request would be ' +
+      used +
+      ' / ' +
+      max +
+      ' tokens (' +
+      percent +
+      '%), at the window limit',
+    DETAIL_MARK + 'this request was NOT sent (the provider would only reject it)',
+    DETAIL_MARK + 'next step: this run ends here; the next run continues from a compacted seed',
+    DETAIL_MARK +
+      'if it is still over after compaction: start a new session or pop that huge output',
+  ].join('\n');
+}

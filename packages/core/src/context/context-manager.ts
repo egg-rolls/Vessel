@@ -21,6 +21,12 @@ import type { ContextProjectionAudit, ProjectionMode } from '../types/projection
 import type { Message } from '../types/provider.js';
 import { clampAnchorRatio, normalizeContextAnchor } from './anchor.js';
 import { formatClearedToolResult, isClearedToolResult } from './cleared-tool-result.js';
+import {
+  estimateMessagesTokensUpperBound,
+  estimateMessageTokensUpperBound,
+  NO_ANCHOR_SAFETY_MARGIN,
+  REQUEST_MESSAGE_OVERHEAD_TOKENS,
+} from './request-view.js';
 
 /** 无 summarizer 时的占位摘要（保持 0.4/0.5 的可见行为） */
 function placeholderSummary(removed: number): string {
@@ -1073,8 +1079,18 @@ export async function compactMessagesForSeed(
 
 export class MemoryWorkingContext implements WorkingContext {
   private sessionMessages: Map<string, Message[]> = new Map();
-  /** 估算 token 增量缓存（按 session）：避免 `tokenCount` 每次重扫整段历史。 */
-  private estimatedTokens: Map<string, number> = new Map();
+  /**
+   * **上界**估算的增量缓存（按 session）：口径 = `estimateMessageTokensUpperBound`
+   * + 每条消息的固定开销（`REQUEST_MESSAGE_OVERHEAD_TOKENS`），即
+   * `estimateMessagesTokensUpperBound(本会话整窗)`。
+   *
+   * 为什么不用 `estimateTokens` 那一套：它的语义被冻结在「ASCII 0.25 / CJK 0.5」
+   * （0.4 起的对外契约），不能改；而计数链路（合同见 `context/request-view.ts`）
+   * 只许高报。所以 `tokenCount` 只读这一份上界缓存；老口径只剩 `add()` 里给
+   * `realTokens` 地板做增量，不再单独缓存（同一个数存两份就是第二份真相）。
+   *
+   * 内存上界：每个会话一个数字。 */
+  private estimatedUpperTokens: Map<string, number> = new Map();
   /**
    * 占位集合的**增量**规划器（按 session）：0.55 起 `plannedClearedToolResults`
    * 不再每次重扫整窗，只处理新增 / 重对齐受影响的那一段。
@@ -1149,11 +1165,17 @@ export class MemoryWorkingContext implements WorkingContext {
     // 真实锚点 + 尾部增量：realTokens 来自上一次 provider 响应的真实用量；
     // 响应之后新增的消息（本轮追加、工具结果）用估算补齐，下一次响应再校正。
     // 必须在同步压缩之前累加——压缩会按现有逻辑把 realTokens 归零。
-    // 估算缓存同时累加：没有真实锚点时 `tokenCount` 直接读它，避免 O(n²) 重扫。
+    // 上界估算缓存同时累加：`tokenCount` 读它，避免 O(n²) 重扫。
+    //
+    // 0.55 P0：`realTokens` 从此**只是地板值**（`tokenCount` 里取 max），不再是现值 ——
+    // 「上一次 provider 回报 + 少量增量」正是事故里数字倒退的来源（见
+    // `context/request-view.ts` 模块头的合同 1）。这里照旧累加是为了让地板值也跟着
+    // 尾部内容长，不会比真实请求更小。
     const delta = estimateMessageTokens(msg);
-    this.estimatedTokens.set(
+    const upperDelta = estimateMessageTokensUpperBound(msg) + REQUEST_MESSAGE_OVERHEAD_TOKENS;
+    this.estimatedUpperTokens.set(
       this.currentSessionId,
-      (this.estimatedTokens.get(this.currentSessionId) ?? 0) + delta,
+      (this.estimatedUpperTokens.get(this.currentSessionId) ?? 0) + upperDelta,
     );
     if (this.realTokens > 0) {
       this.realTokens += delta;
@@ -1179,27 +1201,32 @@ export class MemoryWorkingContext implements WorkingContext {
   }
 
   /**
-   * Token 数：真实用量 > 锚点校正后的估算 > 裸估算。
+   * Token 数：**下一次请求视图的上界估算**（按锚点校正），不是「上一次 provider 回报」。
    *
-   * 1. `realTokens > 0`（本进程拿过 provider 的 usage）：直接用真实值，锚点不抢。
-   * 2. 否则（重启 / 新进程第一轮 / 压缩后）用 `context_anchor.ratio` 把本地估算
-   *    校正到 provider 口径 —— 本地估算对 CJK / reasoning / 工具参数偏乐观，
-   *    不校正会让同一份上下文显示从 80% 掉回 51%。
-   * 3. 没有可用锚点（旧会话 / 脏数据 / 换模型）：裸估算，行为与 0.51 一致。
+   * 合同见 `context/request-view.ts` 模块头（五条），这里是它在窗口侧的落点：
    *
-   * **副作用（期望，不是回退）**：校正后估算变大 ⇒ `shouldCompact()` 会更早
-   * 越过 `compactThreshold`，压缩因此提前触发。那才是真实占用，别把它当 bug 修掉。
+   * 1. 现值 = 窗口的**上界**估算（`estimatedUpperTokens`，口径 = `estimateMessagesTokensUpperBound`）。
+   *    用整窗而不是请求视图：本段冻结的占位集合在 runtime 侧（`ExecutionUnit.segmentClearPlans`），
+   *    窗口拿不到，而占位只会让请求**更小** ⇒ 整窗是请求视图的上界，永不低估（合同 5）。
+   *    runtime 手里有真正的请求视图，它把精确的那个数写进事件（`llm.request.estimated_tokens`）
+   *    —— 显示口径以那条为准。
+   * 2. 校正：有锚点就乘 `anchor.ratio`（provider ÷ 同一请求视图的上界估算，同口径，合同 3），
+   *    没有锚点就乘 `NO_ANCHOR_SAFETY_MARGIN`（未知 tokenizer 的保守上界，合同 5）。
+   * 3. 地板：`max(校正值, realTokens)`。`realTokens` 是上一次 provider 回报 + 尾部增量，
+   *    只用来保证「数字不倒退」（合同 1 的判据之一）；**永不**单独返回它 ——
+   *    那正是事故里 67% 而实际 105% 的由来。
    *
-   * 无真实锚点时读 `estimatedTokens` 增量缓存：历史播种 / 逐条重放会对每条
-   * 消息取一次 `tokenCount`，重扫整段历史会退化成 O(n²) 并阻塞事件循环
-   * （长会话下一次 run 可卡住数十秒，租约因此过期）。
+   * 副作用（期望，不是回退）：校正后估算变大 ⇒ `shouldCompact()` 更早越过
+   * `compactThreshold`，压缩因此提前触发。那才是真实占用，别把它当 bug 修掉。
    */
   get tokenCount(): number {
-    if (this.realTokens > 0) return this.realTokens;
-    const estimate = this.estimatedTokens.get(this.currentSessionId) ?? 0;
+    const estimate = this.estimatedUpperTokens.get(this.currentSessionId) ?? 0;
     const anchor = this.anchor;
-    if (anchor === undefined || estimate <= 0) return estimate;
-    return Math.round(estimate * anchor.ratio);
+    const factor =
+      anchor !== undefined && anchor.ratio > 0 ? anchor.ratio : NO_ANCHOR_SAFETY_MARGIN;
+    const corrected = estimate > 0 ? Math.round(estimate * factor) : 0;
+    // 地板：上一次 provider 回报（+ 其后追加的估算增量）。不参与现值计算，只做下界。
+    return Math.max(corrected, this.realTokens);
   }
 
   /** 0.15：上下文 token 预算上限（快照 context_max 使用） */
@@ -1216,8 +1243,14 @@ export class MemoryWorkingContext implements WorkingContext {
   }
 
   /**
-   * 用 LLM 返回的真实 token 数绝对重置锚点（而非累加）；之后 add() 的新消息
-   * 在锚点上做估算增量，直到下一次 provider 响应再次校正。
+   * 记录一次 provider 回报的**地板值**（0.55 P0 起它不再决定现值，见 `tokenCount`）。
+   *
+   * 语义变化（重要）：以前它是「真实值 = 现值」，于是上一次响应之后追加的内容整体被
+   * 抹掉（事故里 778,258 → 673,076 的倒退就是这个 reset）。现在它只做两件事：
+   * 1. `tokenCount` 的 `max` 地板（保证数字不倒退）；
+   * 2. 让 `add()` 的增量从这个值继续累加。
+   *
+   * 谁想影响「现值」，改的是上界估算（`estimatedUpperTokens`）与锚点，不是这里。
    */
   updateRealTokens(total: number): void {
     this.realTokens = total;
@@ -1250,17 +1283,20 @@ export class MemoryWorkingContext implements WorkingContext {
   /**
    * 0.52 C：拿到 provider 上报的 `prompt_tokens` 那一刻记下校正比。
    *
-   * 分母必须是**未校正的本地估算**（`estimatedTokens` 缓存），不能是 `tokenCount`：
-   * 后者在第一次响应之后已经等于真实口径，比值会塌成 1.0，重启后就起不到校正作用。
+   * 分母必须是**未校正的估算**，不能是 `tokenCount`（后者已经乘过锚点，比值会塌成 1.0，
+   * 重启后就失去校正意义）。0.55 P0 起分母换成**上界口径**的整窗估算
+   * （`estimatedUpperTokens`）：这与 `tokenCount` 的现值同一口径，比值才自洽（合同 3）。
    *
-   * 注意分母是「窗口里全部消息」的估算，而请求里的旧工具结果会被占位压缩，
-   * 所以比值是略偏保守的下界 —— 对 1.48 这类系统性偏差够用。
+   * ⚠️ 首选路径不是这里：`ExecutionUnit` 手上才有**请求视图**（占位替换之后的那一份），
+   * 它在那边自己算比值（分母 = `estimateRequestViewTokens` 的结果）并落盘。这条路留给
+   * 只有窗口、没有请求视图的调用方；分母是整窗（比请求视图大）⇒ 比值偏小 ⇒ 校正偏保守
+   * （宁可少校正也不放大）。
    */
   recordRealPromptTokens(input: {
     promptTokens: number;
     model?: string;
   }): ContextAnchor | undefined {
-    const requestEstimate = this.estimatedTokens.get(this.currentSessionId) ?? 0;
+    const requestEstimate = this.estimatedUpperTokens.get(this.currentSessionId) ?? 0;
     if (!(input.promptTokens > 0) || !(requestEstimate > 0)) return this.anchor;
     const ratio = clampAnchorRatio(input.promptTokens / requestEstimate);
     if (ratio === undefined) return this.anchor;
@@ -1357,14 +1393,14 @@ export class MemoryWorkingContext implements WorkingContext {
 
   clear(): void {
     this.sessionMessages.set(this.currentSessionId, []);
-    this.estimatedTokens.set(this.currentSessionId, 0);
+    this.estimatedUpperTokens.set(this.currentSessionId, 0);
     this.clearedPlanners.get(this.currentSessionId)?.reset();
     this.realTokens = 0;
   }
 
   clearSession(sessionId: string): void {
     this.sessionMessages.set(sessionId, []);
-    this.estimatedTokens.set(sessionId, 0);
+    this.estimatedUpperTokens.set(sessionId, 0);
     this.clearedPlanners.get(sessionId)?.reset();
     // 清空当前会话后旧锚点已不代表其内容，必须归零；其他会话的锚点不受影响。
     if (sessionId === this.currentSessionId) this.realTokens = 0;
@@ -1372,7 +1408,7 @@ export class MemoryWorkingContext implements WorkingContext {
 
   deleteSession(sessionId: string): void {
     this.sessionMessages.delete(sessionId);
-    this.estimatedTokens.delete(sessionId);
+    this.estimatedUpperTokens.delete(sessionId);
     this.clearedPlanners.delete(sessionId);
   }
 
@@ -1447,8 +1483,8 @@ export class MemoryWorkingContext implements WorkingContext {
     const current = this.sessionMessages.get(plan.sessionId) ?? [];
     const next = applyCompactionToMessages(current, plan.toSummarize, summaryText);
     this.sessionMessages.set(plan.sessionId, next);
-    // 移除 / 替换了消息：重建该会话的估算缓存。
-    this.estimatedTokens.set(plan.sessionId, estimateMessagesTokens(next));
+    // 移除 / 替换了消息：重建该会话的上界估算缓存（唯一现值口径）。
+    this.estimatedUpperTokens.set(plan.sessionId, estimateMessagesTokensUpperBound(next));
     this.config.onCompact?.(plan.toSummarize.length, next.length);
   }
 
