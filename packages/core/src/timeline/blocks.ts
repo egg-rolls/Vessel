@@ -31,13 +31,19 @@ import {
 } from './types.js';
 import {
   blockNumber,
+  CHUNK_FRAME_HEADER_BYTES,
+  type ChunkBlockDecode,
   crc32Hex,
   decodeChunkBlock,
   encodeChunkFrame,
+  findLineStartBefore,
   fsyncDirectory,
+  type LineReadBudget,
   listBlockFiles,
   parseWithCrc,
   readCrcNdjsonFile,
+  readFileWindow,
+  readNdjsonLineAt,
   readNdjsonTail,
   truncateFile,
   withCrc,
@@ -482,5 +488,383 @@ export class ChunkBlockStore {
     } finally {
       await handle.close().catch(() => {});
     }
+  }
+}
+
+/*
+ * ── 范围读的定位与自证（0.56 · 时间线范围读） ────────────────────────────────
+ *
+ * 这一节只服务「按 `sinceSeq` 读一页」那一件事，回答两个问题：
+ *
+ * 1. **从哪个块开始开？**（{@link locateRangeAnchor}）
+ *    - 首选 `wal.manifest` 锚点：对该文件做**按字节的行二分**，不整份解析（169 ms）。
+ *      它只是**目录**，追加是 best-effort（{@link ChunkBlockStore.seal} 里 `.catch(() => {})`），
+ *      所以它只负责「给出一个起点」，**块的全集永远以 `readdir` 为准**；
+ *    - 退路（manifest 缺失 / 不可信 / 命中条目邻域不自洽）：**文件名二分 + 首帧 12 B**
+ *      （{@link lastBlockAtOrBefore}）。这条依据只依赖三条写侧不变量：块只写一次
+ *      （`open('wx')`）、块号单调（`maxNumber + 1`）、seq 单调分配 —— 一个落盘元数据都不用。
+ * 2. **这个块配不配当证据？**（{@link verifyBlockAgainstManifest}）
+ *    ①首末 seq ②条数 ③整块 crc32 ④完整性（撕裂）。
+ *
+ * **纪律（0.56 设计 §3.1 / §9）**：判据不成立只许**放宽**（多读一个块、降级整份读），
+ * 永不许缩窄。所以本模块的函数**只回答事实**，不做 `if (crc 不符) continue` 这种决定 ——
+ * 「不通过」的块照样被读出来，是否降级由上层的**覆盖算术**（`wal.ts#readTimelineRange`）说。
+ */
+
+/** manifest 锚点定位的总读字节预算（一行约 150 B；超过它就说「不知道」，换退路）。 */
+const MANIFEST_PROBE_BUDGET_BYTES = 512 * 1024;
+
+/** 二分探针次数上限（实测 13,177 行只用 12 次；五倍余量之后就说「不知道」）。 */
+const ANCHOR_PROBE_LIMIT = 64;
+
+/** 首帧探测读的字节数：帧头是 `[u64 seq][u32 len]`，8 B 足够取 seq，12 B 顺带把 len 一起读进来。 */
+const FIRST_FRAME_BYTES = 12;
+
+/** manifest 一行的物理上限（行长超过它就不是这个文件该有的形状，不猜）。 */
+const MANIFEST_LINE_MAX_BYTES = 64 * 1024;
+
+/** 邻域检查窗口（查「下一条的 start_seq > 本条的 end_seq」）。 */
+const MANIFEST_NEIGHBOR_BYTES = 4 * 1024;
+
+/** 逐块比对时 manifest 的顺序读窗（8 KiB ≈ 54 行，一次块打开最多读一窗）。 */
+const MANIFEST_STREAM_WINDOW = 8 * 1024;
+
+/** manifest 条目 ↔ 块文件的匹配滑动上限（条目比块多时最多跳这么多条就放弃比对）。 */
+const MANIFEST_MATCH_SKIP_LIMIT = 64;
+
+/** `wal.manifest` 里定位到的锚点条目（含它在文件里的字节区间，供邻域检查与顺序读用）。 */
+export interface ManifestAnchor {
+  entry: WalManifestLine;
+  /** 该行在文件里的起点（含行首）。 */
+  lineStart: number;
+  /** 该行之后（含行尾换行）的偏移。 */
+  lineEnd: number;
+}
+
+/**
+ * 在 `wal.manifest` 里二分出**第一条 `end_seq >= sinceSeq` 的条目**（按字节行二分）。
+ *
+ * 为什么是「`end_seq >= sinceSeq`」而不是「区间包含 `sinceSeq`」：`sinceSeq` 可能落在
+ * 一段**事实行**里（块不覆盖它），此时正确的起点是「它之后第一个块」。
+ *
+ * 判据只有一份：{@link validateManifestLine}（坏行跳过，不当锚点也不当证据）。
+ * 取不到（文件缺失 / 空 / 全无有效行 / 探针用尽）⇒ `undefined`，由调用方换退路。
+ */
+async function locateManifestAnchor(
+  manifestPath: string,
+  sinceSeq: number,
+): Promise<ManifestAnchor | undefined> {
+  const size = (await stat(manifestPath).catch(() => undefined))?.size ?? 0;
+  if (size <= 0) return undefined;
+  // 不变式（`lo` / `hi` 都是**行首**的字节偏移）：
+  // - `[0, lo)` 里的行，`end_seq` 全部 `< sinceSeq`（太小）；
+  // - `[hi, size)` 里的行，`end_seq` 全部 `>= sinceSeq`（够大）。
+  // 每次探针都让区间**严格**收窄，不会有「同一个行首被反复探到」的空转 —— 第一版就死在
+  // 那里：命中候选后把 `hi` 收成行首、而中点仍落在同一条跨行的长行里，`hi` 再也不前进，
+  // 探针用尽后把第 3 行当成锚点，于是开头 1..49 那一段被静默跳过（只剩一个降级信号）。
+  const budget: LineReadBudget = { bytes: 0, maxBytes: MANIFEST_PROBE_BUDGET_BYTES };
+  let lo = 0;
+  let hi = size;
+  let probes = 0;
+  let best: ManifestAnchor | undefined;
+  while (lo < hi) {
+    if (probes >= ANCHOR_PROBE_LIMIT) return undefined; // 不猜：调用方换文件名二分
+    probes += 1;
+    const mid = lo + Math.floor((hi - lo) / 2);
+    // 探**中点所在的那一行**：往回找行首，再整行读出来（两半都严格推进）。
+    const lineStart = await findLineStartBefore(
+      manifestPath,
+      lo,
+      mid,
+      budget,
+      MANIFEST_LINE_MAX_BYTES,
+    );
+    if (lineStart === undefined) return undefined;
+    const line = await readNdjsonLineAt(
+      manifestPath,
+      lineStart,
+      size,
+      budget,
+      false,
+      MANIFEST_LINE_MAX_BYTES,
+    );
+    if (line === undefined) return undefined;
+    const entry = parseManifestText(line.text);
+    if (entry === undefined || entry.end_seq < sinceSeq) {
+      // 坏行 / 太小：跳过它继续往右找（坏行不是锚点，也不是判据）。
+      lo = Math.max(line.next, lo + 1);
+      continue;
+    }
+    best = { entry, lineStart: line.start, lineEnd: line.next };
+    if (line.start <= lo) return best; // 不可能再往左：它就是第一条
+    hi = line.start;
+  }
+  return best;
+}
+
+/**
+ * 邻域自洽：`上一条.end_seq < 本条.start_seq <= 本条.end_seq < 下一条.start_seq`。
+ *
+ * 这是在验 0.56 设计 §2.1 的前提「manifest 行序 = 块号序 = `start_seq` 单调」。不成立
+ * ⇒ 不拿它当锚点（换文件名二分），**不是**拿它当「附近找找」的起点。读不出来的邻域
+ * （文件短 / 行坏）算「没有证据」而不是「有证据说它错」。
+ */
+async function manifestNeighborhoodOk(
+  manifestPath: string,
+  anchor: ManifestAnchor,
+  size: number,
+): Promise<boolean> {
+  // 上一条：读 [lineStart - 4 KiB, lineStart)，它的最后一整行必须以换行结束在 lineStart。
+  if (anchor.lineStart > 0) {
+    const from = Math.max(0, anchor.lineStart - MANIFEST_NEIGHBOR_BYTES);
+    const buffer = await readFileWindow(manifestPath, from, anchor.lineStart - from);
+    if (buffer !== undefined) {
+      const lastNewline = buffer.lastIndexOf(0x0a, buffer.length - 2);
+      const start = lastNewline + 1;
+      if (lastNewline >= 0 || from === 0) {
+        const previous = parseManifestText(buffer.toString('utf8', start, buffer.length));
+        if (previous !== undefined && previous.end_seq >= anchor.entry.start_seq) return false;
+      }
+    }
+  }
+  // 下一条：从 lineEnd 往后读一窗，取第一整行。
+  if (anchor.lineEnd < size) {
+    const length = Math.min(MANIFEST_NEIGHBOR_BYTES, size - anchor.lineEnd);
+    const buffer = await readFileWindow(manifestPath, anchor.lineEnd, length);
+    if (buffer !== undefined) {
+      const newline = buffer.indexOf(0x0a);
+      if (newline !== -1) {
+        const next = parseManifestText(buffer.toString('utf8', 0, newline));
+        if (next !== undefined && next.start_seq <= anchor.entry.end_seq) return false;
+      }
+    }
+  }
+  return true;
+}
+
+/** 一个块文件的首帧 seq（读 12 B 就够）；读不到（空文件 / 短于帧头）⇒ `undefined`。 */
+async function readFirstFrameSeq(path: string): Promise<number | undefined> {
+  const buffer = await readFileWindow(path, 0, FIRST_FRAME_BYTES);
+  if (buffer === undefined || buffer.length < CHUNK_FRAME_HEADER_BYTES) return undefined;
+  const seq = Number(buffer.readBigUInt64LE(0));
+  if (!Number.isSafeInteger(seq) || seq < 1) return undefined;
+  return seq;
+}
+
+/**
+ * 沿**文件名序**二分，找**最后一个首帧 seq <= `sinceSeq`** 的块下标（`-1` = 所有块都更靠后）。
+ *
+ * 依据只有三条写侧不变量（块只写一次、块号单调、seq 单调分配）：名字序 = 写入序 =
+ * seq 序。`manifest` 缺失 / 被删 / 内容不可信时，这是**唯一**还能定位的根据，而它
+ * 不需要任何落盘元数据 —— 这正是 0.56 设计 §5 最后一格「既不整份读也不跳过」的解法。
+ */
+async function lastBlockAtOrBefore(
+  blocksDir: string,
+  names: readonly string[],
+  sinceSeq: number,
+): Promise<number | undefined> {
+  let lo = 0;
+  let hi = names.length - 1;
+  let probes = 0;
+  let best = -1;
+  while (lo <= hi && probes < ANCHOR_PROBE_LIMIT) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    const name = names[mid];
+    if (name === undefined) return undefined;
+    const first = await readFirstFrameSeq(join(blocksDir, name));
+    probes += 1;
+    if (first === undefined) return undefined; // 首帧读不出来：不猜（空块 / 坏块）
+    if (first <= sinceSeq) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best;
+}
+
+/** 一个块文件的首帧 seq（供范围读判断「起点是否已在事实边界之后」）；读不到 ⇒ `undefined`。 */
+export async function blockFirstFrameSeq(
+  sessionDir: string,
+  name: string,
+): Promise<number | undefined> {
+  return readFirstFrameSeq(join(sessionDir, TIMELINE_LAYOUT.walBlocks, name));
+}
+
+/**
+ * 「事实边界之后的第一个块」在 `names[]` 里的下标 —— 也就是连续尾块链的**链首**。
+ *
+ * 范围读为什么需要它：`selectBlocksForSnapshot` 对 `start_seq > factBoundary` 的块只认
+ * 「紧接 `cursor + 1`」的连续尾块。一页若从尾链**中段**开始，光看那一段无法判断链在前面
+ * 有没有断过（断过的块整段都不属于本趟快照，给出来就是**多给**）。所以链必须从
+ * `factBoundary` 那一端重新验一遍。
+ *
+ * 返回 `undefined` = 二分不可判（首帧读不出来），由调用方降级。
+ */
+export async function locateTailChainStart(
+  sessionDir: string,
+  names: readonly string[],
+  factBoundary: number,
+): Promise<number | undefined> {
+  if (names.length === 0) return 0;
+  const last = await lastBlockAtOrBefore(
+    join(sessionDir, TIMELINE_LAYOUT.walBlocks),
+    names,
+    factBoundary,
+  );
+  if (last === undefined) return undefined;
+  return last + 1;
+}
+
+/** 范围读的起始块（`names[]` 里的下标）+ 它凭什么被选中（留痕）。 */
+export interface BlockAnchor {
+  index: number;
+  block: string;
+  /** `manifest` = 行二分命中；`first_frame` = 文件名二分 + 首帧 seq */
+  source: 'manifest' | 'first_frame';
+  /**
+   * manifest 命中条目之后第一条待消费条目的字节偏移（逐块比对从这里往后顺序读）。
+   * 没有可信条目（退路 / 邻域不自洽 / 命中条目不在目录里）⇒ `undefined`。
+   */
+  manifestPosition?: number;
+}
+
+/**
+ * 定位「`[sinceSeq, …]` 从这个块开始开」。
+ *
+ * 顺序：`manifest` 锚点（**含邻域自洽 + 文件真的在 `names[]` 里**）→ 退路「文件名二分」。
+ * 两条都不成立才返回 `undefined`（调用方降级整份读），**绝不**在中间挑一个「差不多」的。
+ */
+export async function locateRangeAnchor(
+  sessionDir: string,
+  names: readonly string[],
+  sinceSeq: number,
+): Promise<BlockAnchor | undefined> {
+  const blocksDir = join(sessionDir, TIMELINE_LAYOUT.walBlocks);
+  const manifestPath = join(sessionDir, TIMELINE_LAYOUT.walManifest);
+  const anchor = await locateManifestAnchor(manifestPath, sinceSeq);
+  if (anchor !== undefined) {
+    const index = names.indexOf(anchor.entry.block);
+    const size = (await stat(manifestPath).catch(() => undefined))?.size ?? 0;
+    if (index >= 0 && (await manifestNeighborhoodOk(manifestPath, anchor, size))) {
+      return {
+        index,
+        block: anchor.entry.block,
+        source: 'manifest',
+        manifestPosition: anchor.lineStart,
+      };
+    }
+  }
+  const fallback = await lastBlockAtOrBefore(blocksDir, names, sinceSeq);
+  if (fallback === undefined) return undefined;
+  // 所有块都比 `sinceSeq` 靠后 ⇒ 起点就是第一个块（`lastBlockAtOrBefore` 给 -1）。
+  const index = Math.max(0, fallback);
+  const block = names[index];
+  if (block === undefined) return undefined;
+  return { index, block, source: 'first_frame' };
+}
+
+/** 一个块与它 manifest 条目的四项比对结果（`failed` 空 = 全通过）。 */
+export interface BlockSelfCheck {
+  /** ①首末 seq ②条数 ③整块 crc32 ④完整性 全部成立 */
+  ok: boolean;
+  /** 不成立的项（稳定短名，留痕用）：`seq_range` / `count` / `crc32` / `torn`。 */
+  failed: string[];
+}
+
+/**
+ * 块 ↔ manifest 条目的四项比对（0.56 设计 §3.2 ①②③④）。
+ *
+ * **它只是证据，不是过滤条件**：不通过的块照样要被读出来（整份读根本不看 manifest），
+ * 是否降级由「窗口覆盖算术」决定 —— 见 `wal.ts#readTimelineRange`。把这里写成
+ * `if (!ok) continue` 就是 0.56 设计 §9 点名的那个「变快了、少几条、零报错」的写法。
+ */
+export function verifyBlockAgainstManifest(
+  buffer: Uint8Array,
+  decode: ChunkBlockDecode,
+  entry: WalManifestLine,
+): BlockSelfCheck {
+  const failed: string[] = [];
+  const first = decode.records[0];
+  const last = decode.records[decode.records.length - 1];
+  if (first?.seq !== entry.start_seq || last?.seq !== entry.end_seq) failed.push('seq_range');
+  // 坏帧也占 seq：条数要连 `invalid` 一起算，否则「中间坏了一帧」会被误判成条数不符。
+  if (decode.records.length + decode.invalid.length !== entry.count) failed.push('count');
+  if (crc32Hex(buffer) !== entry.crc32) failed.push('crc32');
+  // 有 manifest 条目的块必须完整：条目只在块 fsync 之后才追加。
+  if (decode.torn) failed.push('torn');
+  return { ok: failed.length === 0, failed };
+}
+
+/**
+ * `wal.manifest` 的**顺序**读器（逐块比对用）：只往前读，每次一窗，读完即止。
+ *
+ * 为什么不整份解析：13,177 行 / 2 MB / 169 ms，一页读付不起。为什么不重新二分：
+ * 块是按名字升序打开的，条目也是按封块顺序追加的 ⇒ 一条顺序游标就够，每开一个块最多
+ * 读一窗。条目缺失（追加失败）或坏行（跳过）都只是「这个块没有证据」，不影响读数据。
+ */
+export class ManifestForwardReader {
+  private position: number;
+  private readonly queue: WalManifestLine[] = [];
+  private finished = false;
+
+  constructor(
+    private readonly path: string,
+    position: number,
+  ) {
+    this.position = position;
+  }
+
+  /** 预读下一条（不消费）；读到文件尾 / 读不动 ⇒ `undefined`。 */
+  async peek(): Promise<WalManifestLine | undefined> {
+    while (this.queue.length === 0) {
+      if (this.finished) return undefined;
+      const buffer = await readFileWindow(this.path, this.position, MANIFEST_STREAM_WINDOW);
+      if (buffer === undefined) {
+        this.finished = true;
+        return undefined;
+      }
+      let cursor = 0;
+      let consumed = 0;
+      while (cursor < buffer.length) {
+        const newline = buffer.indexOf(0x0a, cursor);
+        if (newline === -1) break;
+        const text = buffer.toString('utf8', cursor, newline);
+        cursor = newline + 1;
+        consumed = cursor;
+        const entry = parseManifestText(text);
+        if (entry !== undefined) this.queue.push(entry);
+      }
+      if (consumed === 0) {
+        // 一行比整窗还长（正常 manifest 一行 ≈ 150 B）：不猜，停止比对。
+        this.finished = true;
+        return undefined;
+      }
+      this.position += consumed;
+    }
+    return this.queue[0];
+  }
+
+  /** 消费一条（与 {@link peek} 成对使用）。 */
+  take(): WalManifestLine | undefined {
+    return this.queue.shift();
+  }
+
+  /**
+   * 取 `block` 的条目：按名字升序消费，跳过比它小的（那些条目对应的块本趟没开）。
+   *
+   * 返回 `undefined` = 这个块**没有条目**（追加 best-effort 落后 / 文件被外部改过）——
+   * 这是「证据弱一档」，不是「块不可读」。
+   */
+  async entryFor(block: string): Promise<WalManifestLine | undefined> {
+    for (let skip = 0; skip < MANIFEST_MATCH_SKIP_LIMIT; skip += 1) {
+      const next = await this.peek();
+      if (next === undefined) return undefined;
+      if (next.block === block) return this.take();
+      if (next.block > block) return undefined; // 后面的条目更靠后 ⇒ 这个块没有条目
+      this.take();
+    }
+    return undefined;
   }
 }
