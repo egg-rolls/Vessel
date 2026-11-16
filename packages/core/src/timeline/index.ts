@@ -12,12 +12,15 @@
  * 硬约束（ADR-105 §5 断言）：
  *
  * 1. 删掉整个 `timeline.idx/` ⇒ 读结果逐条相同（只有变慢）；
- * 2. 索引写入假区间 ⇒ 读结果不变（逐条校验记录后回退全扫）并发 `timeline.index_mismatch`；
- * 3. `rebuild` 两次 ⇒ 索引文件字节相同（键排序、无时间戳、无哈希顺序抖动）；
+ * 2. 索引写入假区间 ⇒ 读结果不变。**「并发 `timeline.index_mismatch`」这一半 0.54 没有实现**
+ *    （全仓没有该事件类型，也没有生产读路径会校验索引 —— 唯一校验的是下面这个零调用点的
+ *    `TimelineIndexReader`，它只回调 `onMismatch`）。漂移记在 ADR-105 §11.1；
+ * 3. `rebuild` 两次 ⇒ 字节相同 —— 用 `buildIndex` + `writeIndexSnapshot` 表达，**不提供**
+ *    零调用点的 rebuild 包装（政策：没人调的包装就是会腐烂的第二套口径）；
  * 4. 写索引的位置只有本模块与 `writer.ts`（静态门禁在 C 阶段落地）。
  *
- * `TimelineIndexReader` 是给自证脚本与未来读侧的**独立读器**：它先信索引、再逐条校验，
- * 不一致就回退全扫。这就是「索引可重建」的可执行判据。
+ * `TimelineIndexReader` 是给未来读侧的**独立读器**（先信索引、再逐条校验、不一致回退全扫），
+ * **今天零生产调用点**：生产读路径恒整份读记录，索引只用来求 `wal_head`。
  *
  * @module @vessel-agent/core/timeline
  */
@@ -304,21 +307,12 @@ export async function loadIndexSnapshot(
   };
 }
 
-/** 从记录重建并写回索引（自证判据 3：两次重建字节相同）。 */
-export async function rebuildIndexFiles(
-  sessionDir: string,
-  records?: readonly TimelineRecord[],
-  holes?: readonly TimelineHole[],
-): Promise<TimelineIndexSnapshot> {
-  const actualRecords = records ?? (await readTimelineEvents(sessionDir));
-  const actualHoles = holes ?? (await readHoles(sessionDir));
-  const snapshot = buildIndex(actualRecords, actualHoles);
-  await writeIndexSnapshot(sessionDir, snapshot);
-  return snapshot;
-}
-
 export interface TimelineIndexReaderOptions {
-  /** 索引与记录不一致时调用（ADR-105 §5；不阻断读）。 */
+  /**
+   * 索引与记录不一致时调用（ADR-105 §5 的可观测钩子；不阻断读）。
+   *
+   * 这是**回调**，不是事件：`timeline.index_mismatch` 事件 0.54 未实现（见 ADR-105 §11.1）。
+   */
   onMismatch?: (mismatch: IndexMismatch) => void;
 }
 

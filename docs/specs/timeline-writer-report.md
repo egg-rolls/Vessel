@@ -209,7 +209,21 @@ work-dir: C:\Users\Lirui\AppData\Local\Temp\vessel-timeline-holes-RDp3bI
 RESULT: PASS (checks=26 failed=0)
 ```
 
-### 7.3 索引可重建（`bun run scripts/check-timeline-index.ts`）
+### 7.3 索引可重建（`bun run scripts/check-timeline-index.ts`）—— **已作废，勿引用**
+
+> **已作废（2026-11-16，`0.54-truth-fix` 标注）**：本节有两个问题，历史保留、结论不要再引用。
+>
+> 1. **不可复现**：产生这份输出的 `scripts/check-timeline-index.ts` 已按新准则（不写 gate / test / probe）
+>    在 `58118376` 删除；两个零调用点的 rebuild 包装（`rebuildIndexFiles()` /
+>    `TimelineWriter.rebuildIndex()`）在 `0.54-truth-fix` 这一单里删除，所以下面
+>    `rebuild 两次 … 字节相同` 那几条现在连入口都没有了。
+> 2. **`index_mismatch` 那两行是假的自证**：它们数的是 `TimelineIndexReader.onMismatch`
+>    **回调次数**，不是事件 —— 全仓从来没有 `timeline.index_mismatch` 事件类型，也**没有生产读路径**
+>    会去校验索引（唯一会校验的 `TimelineIndexReader` 零调用点）。所以「触发 index_mismatch」
+>    在任何真实读路径上都不成立。裁定与现状见 ADR-105 §11.1「索引一致性告警」。
+>
+> 能留下来仍然成立的部分：删索引后读结果逐条相同、索引可重建、篡改索引读结果不变
+> —— 这三条由 ADR-105 §5 断言 1 + 生产读路径"恒整份读记录"保证，只是不再有脚本自证。
 
 ```
 0.54 A-3 index: rebuildable / tamper-proof / deterministic
