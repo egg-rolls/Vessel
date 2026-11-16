@@ -15,6 +15,11 @@
  * 这不是沙箱——只做字符串/规范化路径匹配，变量拼接、`cd`、符号链接等仍可能绕过。
  * 可选 `cwd`（0.11.1）提供默认工作目录：`bash` 未显式传 `cwd` 时使用它，
  * `read` / `edit` 的相对路径按它解析；边界仍按解析后的绝对路径判定。
+ *
+ * 输出预算（0.55）：任一工具的结果回给模型之前都过**同一个** token 闸
+ * （`boundToolResult`：单条 ≤ 16k token，超了先落盘全文再按头 30% / 尾 70% + 一行省略标注
+ * 裁切）。2000 行 / 2 MiB 两道旧闸保留作兜底，顺序是 token → 行 / 字节。
+ * 事故校准：1,344 行 / 423 KB（≈106k token）的输出两道旧闸都没碰到，所以闸必须按 token 计。
  */
 
 import {
@@ -30,13 +35,18 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { Plugin, PluginHost, ToolContext, ToolDefinition } from '@vessel-agent/core';
+import { estimateTokens } from '@vessel-agent/core';
 
 // ── 常量 ──────────────────────────────────────────
 
 /** bash 缺省超时（毫秒） */
 const DEFAULT_BASH_TIMEOUT_MS = 120_000;
 
-/** 单方向输出超过该行数即触发截断 */
+/**
+ * 单方向输出超过该行数即触发截断（**第二道闸**，token 闸之后的兜底）。
+ * 语义自 0.4 起未变；它挡的是「行很多」这一种形状，挡不住「行少但每行超长」
+ * ——那种形状由下面的 token 闸负责。
+ */
 const MAX_OUTPUT_LINES = 2000;
 
 /** 截断后保留的头行数 */
@@ -48,11 +58,40 @@ const KEEP_TAIL_LINES = 1000;
 /** read 缺省读取行数 */
 const DEFAULT_READ_LIMIT = 2000;
 
-/** 返回给模型的单方向预览字节数（超出即标注） */
+/** 返回给模型的单方向预览字节数（**第三道闸**，超出即标注） */
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 
 /** 落盘时单方向最多保留的字节数（超出仍丢弃，防止无界输出撑爆内存） */
 const MAX_PERSIST_BYTES = 16 * 1024 * 1024;
+
+/**
+ * 单条工具结果回给模型的 **token 上限**（第一道闸；2026-11 用户裁定：默认 ≤ 16k/次）。
+ *
+ * 取值理由：16k token ≈ 64k ASCII 字符，是「一轮完整问答」的量级；再高就会把对话历史、
+ * 系统提示、self card 挤出去。事故校准：一条 bash 输出 1,344 行 / 423,386 字符
+ * （平均每行 315 字符）≈ 106k token，**行数闸（2000 行）与字节闸（2 MiB）都没碰到**，
+ * 于是原文整块进了上下文、直接撑爆 1M 窗口。所以闸必须按 token 计，不能只按行 / 字节计。
+ */
+const MAX_RESULT_TOKENS = 16_000;
+
+/** 超预算时头部保留的预算比例（30%） */
+const RESULT_HEAD_SHARE = 0.3;
+
+/** 超预算时尾部保留的预算比例（70%）：错误信息、结论、汇总表通常压在尾部 */
+const RESULT_TAIL_SHARE = 0.7;
+
+/**
+ * 省略标注行预留的 token（含落盘路径）。
+ * 实测标注（中文 + 路径）< 150 token；取 256 是为了让「标注 + 头 + 尾」不越 MAX_RESULT_TOKENS。
+ */
+const OMIT_MARKER_RESERVE_TOKENS = 256;
+
+/**
+ * 标注重切的最大轮数。收敛条件是预算单调下降（每轮按实测溢出量收缩），
+ * 正常情况下第 1 轮就够；留 4 轮是防御 CJK 占比极端 + 标注异常长的输入。
+ * 每轮 O(n) 扫一遍，n 已被 MAX_PERSIST_BYTES 封在 16 MiB 内。
+ */
+const RESULT_BUDGET_ATTEMPTS = 4;
 
 /** 取消时返回的固定文本 */
 const CANCELLED_TEXT = '错误：操作已取消（cancelled）。';
@@ -407,6 +446,163 @@ function truncateLines(text: string): string {
   return [...head, `...（已省略 ${omitted} 行）...`, ...tail].join('\n');
 }
 
+// ── token 闸（单条工具结果预算；第一道，行 / 字节闸之前） ──────
+//
+// token 口径**只有一份**：直接用 core 的 `estimateTokens`（ASCII 0.25 / CJK 0.5 token
+// 每字符，`packages/core/src/context/context-manager.ts`）。这里不另写一份实现 ——
+// 口径漂移会让「上下文压缩」和「工具结果截断」互相打架（一个说装得下、一个说装不下）。
+// 所以下面所有切点搜索都**调用同一个函数**在切片上求值，不做第二套计数。
+
+/** 统计换行数（省略行数与行边界对齐共用；不 split，避免为计数复制整串） */
+function countNewlines(text: string): number {
+  let count = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) === 10) count += 1;
+  }
+  return count;
+}
+
+/**
+ * 头部保留长度：求最大的 `end` 使 `estimateTokens(text.slice(0, end)) <= budget`。
+ *
+ * 搜索窗口 `maxChars = ceil(budget / 0.25)`：0.25 是每字符最便宜的计价（纯 ASCII），
+ * 所以长度超过它的前缀必然超预算 —— 窗口把一次搜索的代价封在 O(budget) 字符内
+ * （16k 预算 ≈ 64k 字符窗口 × log2 轮二分），与输出总长无关。
+ */
+function fitHeadLength(text: string, budget: number): number {
+  const maxChars = Math.min(text.length, Math.ceil(budget / 0.25));
+  let low = 0;
+  let high = maxChars;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (estimateTokens(text.slice(0, mid)) <= budget) low = mid;
+    else high = mid - 1;
+  }
+  return low;
+}
+
+/**
+ * 尾部保留起点：求最小的 `start` 使 `estimateTokens(text.slice(start)) <= budget`。
+ * 窗口同上，从尾部量。
+ */
+function fitTailStart(text: string, budget: number): number {
+  const maxChars = Math.ceil(budget / 0.25);
+  const floor = Math.max(0, text.length - maxChars);
+  let low = floor;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (estimateTokens(text.slice(mid)) <= budget) high = mid;
+    else low = mid + 1;
+  }
+  return low;
+}
+
+/**
+ * 头部切点退到行边界（丢掉被切断的半行）。
+ * 只在新边界不低于「字符切点的一半」时才对齐 —— 否则（比如整份输出就是一行 200 万字符）
+ * 退让会把头部退空，那还不如保留字符级切点。
+ */
+function snapHeadToLine(text: string, end: number): number {
+  if (end <= 0 || end >= text.length) return end;
+  const newline = text.lastIndexOf('\n', end - 1);
+  if (newline < 0) return end;
+  return newline + 1 >= Math.floor(end / 2) ? newline + 1 : end;
+}
+
+/** 尾部切点前进到行边界（丢掉被切断的半行）；同样带「不超过一半」的退让保护 */
+function snapTailToLine(text: string, start: number): number {
+  if (start <= 0 || start >= text.length) return start;
+  const newline = text.indexOf('\n', start);
+  if (newline < 0) return start;
+  const room = text.length - start;
+  return newline + 1 - start <= Math.ceil(room / 2) ? newline + 1 : start;
+}
+
+/** 一次 token 裁剪的结果 */
+interface TokenCut {
+  /** 头部保留内容 */
+  head: string;
+  /** 尾部保留内容 */
+  tail: string;
+  /** 被省略的字符数 */
+  omittedChars: number;
+  /** 被省略的行数（切点落在行中时，那一行也算被省略） */
+  omittedLines: number;
+}
+
+/** 把文本按「头 30% / 尾 70%」的 token 预算切一刀（切点尽量对齐行边界） */
+function cutToTokenBudget(text: string, contentBudget: number): TokenCut {
+  const headEnd = snapHeadToLine(text, fitHeadLength(text, contentBudget * RESULT_HEAD_SHARE));
+  const fittedTail = snapTailToLine(text, fitTailStart(text, contentBudget * RESULT_TAIL_SHARE));
+  // 防御：两侧预算之和 < 100%（预留标注）时不该重叠；真重叠就退化成不留尾部
+  const tailStart = Math.max(fittedTail, headEnd);
+  const omitted = text.slice(headEnd, tailStart);
+  return {
+    head: text.slice(0, headEnd),
+    tail: text.slice(tailStart),
+    omittedChars: omitted.length,
+    omittedLines: countNewlines(omitted) + (omitted !== '' && !omitted.endsWith('\n') ? 1 : 0),
+  };
+}
+
+/** 省略标注行：行数 / 字符数 / 落盘路径（落盘失败也要说清，别让模型以为输出就这么多） */
+function omitMarker(cut: TokenCut, persistPath: string | undefined): string {
+  const counts = `省略 ${cut.omittedLines} 行 / ${cut.omittedChars} 字符`;
+  return persistPath !== undefined
+    ? `… ${counts} · 完整输出：${persistPath}`
+    : `… ${counts} · 完整输出落盘失败（写入不可用）`;
+}
+
+/** 预算收口时的落盘钩子：只有真的超预算才会被调用 */
+interface ResultBudgetOptions {
+  /** 触顶时把**完整**结果写盘；返回落盘路径，失败返回 undefined */
+  persist: () => Promise<string | undefined>;
+}
+
+/**
+ * **唯一的出口闸**：所有工具结果回给模型之前都过这里（bash / read / edit 三个 handler 收敛于此）。
+ *
+ * 行为：
+ * 1. 预算内（`estimateTokens <= MAX_RESULT_TOKENS`）**原样返回**，逐字节不变 —— 小输出零改动；
+ * 2. 超预算 ⇒ 先落盘完整结果，再按「头 30% / 尾 70% + 中间一行省略标注（含路径）」裁切；
+ * 3. 无论输入多畸形，返回值都 ≤ MAX_RESULT_TOKENS：标注预留 256 token，仍超就按实测溢出量
+ *    收缩预算重切，最多 RESULT_BUDGET_ATTEMPTS 轮。
+ *
+ * 为什么尾部>头部：错误信息、失败原因、汇总行几乎总在末尾，砍掉尾部的代价远大于砍中间。
+ */
+async function boundToolResult(text: string, options: ResultBudgetOptions): Promise<string> {
+  if (estimateTokens(text) <= MAX_RESULT_TOKENS) return text;
+
+  const persistPath = await options.persist();
+
+  let contentBudget = MAX_RESULT_TOKENS - OMIT_MARKER_RESERVE_TOKENS;
+  let bounded = text;
+  for (let attempt = 0; attempt < RESULT_BUDGET_ATTEMPTS; attempt += 1) {
+    const cut = cutToTokenBudget(text, contentBudget);
+    if (cut.omittedChars === 0) return text; // 理论上不可达（已确认超预算）
+    bounded = `${cut.head}\n${omitMarker(cut, persistPath)}\n${cut.tail}`;
+    const tokens = estimateTokens(bounded);
+    if (tokens <= MAX_RESULT_TOKENS) return bounded;
+    // 实测溢出（标注比预留的更贵 / 舍入）：按溢出量收缩内容预算再切
+    contentBudget -= tokens - MAX_RESULT_TOKENS;
+    if (contentBudget <= 1024) break;
+  }
+  return bounded;
+}
+
+/** 把「某个工具的一次结果」按 token 预算收口，并按需落盘全文（read / edit 用） */
+async function boundToolOutput(ctx: ToolContext, tool: string, text: string): Promise<string> {
+  return boundToolResult(text, {
+    persist: () =>
+      writeToolOutput({
+        tool,
+        body: text,
+        ...(ctx.session_id !== undefined ? { sessionId: ctx.session_id } : {}),
+      }),
+  });
+}
+
 /**
  * 替换首个匹配。
  * 刻意不用 `String.prototype.replace`——它的字符串替换会把 `$&`、`$1` 当特殊模式解释，
@@ -519,7 +715,31 @@ function safeSegment(value: string | undefined): string {
   return cleaned === '' ? 'no-session' : cleaned;
 }
 
-/** 把完整输出写入 session 目录；失败返回 undefined（调用方降级为纯截断） */
+/**
+ * 把一次工具结果的**全文**写进 `<输出根>/<session>/<tool>-<ts>-<rand>.log`。
+ * 失败返回 undefined（调用方把标注降级成「落盘失败」，但截断照做 ——
+ * 一次 IO 失败不能变成「那就把整块原文塞回模型」）。
+ */
+async function writeToolOutput(payload: {
+  tool: string;
+  body: string;
+  sessionId?: string;
+}): Promise<string | undefined> {
+  try {
+    const dir = path.join(toolOutputRoot(), safeSegment(payload.sessionId));
+    await mkdir(dir, { recursive: true });
+    const file = path.join(
+      dir,
+      `${safeSegment(payload.tool)}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.log`,
+    );
+    await writeFile(file, payload.body, 'utf-8');
+    return file;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 把完整 bash 输出写入 session 目录；失败返回 undefined（调用方降级为纯截断） */
 async function persistBashOutput(payload: {
   command: string;
   exitCode: number | null;
@@ -530,30 +750,30 @@ async function persistBashOutput(payload: {
   truncated: boolean;
   sessionId?: string;
 }): Promise<string | undefined> {
-  try {
-    const dir = path.join(toolOutputRoot(), safeSegment(payload.sessionId));
-    await mkdir(dir, { recursive: true });
-    const file = path.join(dir, `bash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.log`);
-    const body = [
-      `# command: ${payload.command}`,
-      `# exit_code: ${payload.exitCode ?? 'null'}`,
-      `# cancelled: ${payload.cancelled}`,
-      `# timed_out: ${payload.timedOut}`,
-      `# truncated_at_16MiB: ${payload.truncated}`,
-      '',
-      '[stdout]',
-      payload.stdout,
-      '[stderr]',
-      payload.stderr,
-    ].join('\n');
-    await writeFile(file, body, 'utf-8');
-    return file;
-  } catch {
-    return undefined;
-  }
+  const body = [
+    `# command: ${payload.command}`,
+    `# exit_code: ${payload.exitCode ?? 'null'}`,
+    `# cancelled: ${payload.cancelled}`,
+    `# timed_out: ${payload.timedOut}`,
+    `# truncated_at_16MiB: ${payload.truncated}`,
+    '',
+    '[stdout]',
+    payload.stdout,
+    '[stderr]',
+    payload.stderr,
+  ].join('\n');
+  return writeToolOutput({
+    tool: 'bash',
+    body,
+    ...(payload.sessionId !== undefined ? { sessionId: payload.sessionId } : {}),
+  });
 }
 
-/** 组装 bash 返回文本：退出码 + 非空输出段（行数或字节超限时截断并标注） */
+/**
+ * 组装 bash 返回文本：退出码 + 非空输出段。
+ * `lineGate` 为真时套用行数闸（`truncateLines`，第二道闸）；token 闸要用**未过行闸**
+ * 的原文量预算，所以这里把它做成开关，而不是无条件截断。
+ */
 function formatBashResult(result: {
   exitCode: number | null;
   stdout: string;
@@ -563,6 +783,7 @@ function formatBashResult(result: {
   timedOut: boolean;
   timeoutMs: number;
   cancelled: boolean;
+  lineGate: boolean;
 }): string {
   const parts: string[] = [];
   if (result.cancelled) {
@@ -572,14 +793,16 @@ function formatBashResult(result: {
   }
   parts.push(`退出码: ${result.exitCode ?? 'null（进程被信号终止）'}`);
 
-  const stdout = truncateLines(normalizeNewlines(result.stdout));
-  if (result.stdout.trim() !== '') {
+  const gate = (text: string): string =>
+    result.lineGate ? truncateLines(normalizeNewlines(text)) : normalizeNewlines(text);
+  const stdout = gate(result.stdout);
+  if (stdout.trim() !== '') {
     const marker = result.stdoutTruncated ? '\n...（输出超过 2MB，已截断）...' : '';
     parts.push(`stdout:\n${stdout}${marker}`);
   }
 
-  const stderr = truncateLines(normalizeNewlines(result.stderr));
-  if (result.stderr.trim() !== '') {
+  const stderr = gate(result.stderr);
+  if (stderr.trim() !== '') {
     const marker = result.stderrTruncated ? '\n...（输出超过 2MB，已截断）...' : '';
     parts.push(`stderr:\n${stderr}${marker}`);
   }
@@ -712,11 +935,11 @@ async function runBash(
   const overLines =
     splitLines(stdout).length > MAX_OUTPUT_LINES || splitLines(stderr).length > MAX_OUTPUT_LINES;
   const overBytes = stdoutPreview.truncated || stderrPreview.truncated;
-  const shouldPersist = overLines || overBytes || stdoutSink.truncated || stderrSink.truncated;
 
-  let persistNote: string | undefined;
-  if (shouldPersist) {
-    const saved = await persistBashOutput({
+  // 落盘按**需要**发生，且只写一次：token 闸与行 / 字节闸共用同一次写入（否则一次调用落两份盘）。
+  let savedOnce: Promise<string | undefined> | undefined;
+  const persistRaw = (): Promise<string | undefined> => {
+    savedOnce ??= persistBashOutput({
       command,
       exitCode: proc.exitCode,
       cancelled,
@@ -726,12 +949,32 @@ async function runBash(
       truncated: stdoutSink.truncated || stderrSink.truncated,
       ...(ctx.session_id !== undefined ? { sessionId: ctx.session_id } : {}),
     });
-    persistNote =
-      saved !== undefined
-        ? `完整输出已写入：${saved}（${Buffer.byteLength(stdout) + Buffer.byteLength(stderr)} 字节）`
-        : '完整输出落盘失败（预览已截断）。';
-  }
+    return savedOnce;
+  };
 
+  // ── 三层闸，顺序：token → 行 → 字节 ──────────────────
+  //
+  // 第一道（token）必须量**没被任何闸动过**的原文：先砍到 2 MiB 再取尾，会把「真正的结尾」
+  // （错误信息、失败原因所在）丢掉。代价是这条路径要拼一次全文，峰值内存 ≈ 2 ×
+  // MAX_PERSIST_BYTES（stdout/stderr 各 16 MiB + 拼出来的字符串），仍是显式上界。
+  const full = formatBashResult({
+    exitCode: proc.exitCode,
+    stdout,
+    stderr,
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut,
+    timeoutMs,
+    cancelled,
+    lineGate: false,
+  });
+  // 预算内时 boundToolResult 原样返回同一个字符串引用（不做任何拷贝/裁剪）。
+  const budgeted = await boundToolResult(full, { persist: persistRaw });
+  if (budgeted !== full) return budgeted;
+
+  // 第二 / 三道闸（行数 2000 / 字节 2 MiB）：语义与 0.4 起一致，作为兜底保留。
+  // 按上面的顺序，它们实际只在「行很多但每行极短」的输出上生效（token 闸都放行了，
+  // 字节闸必然放行）；留着是为了守住旧行为，也让将来放宽 token 预算时仍有防线。
   const formatted = formatBashResult({
     exitCode: proc.exitCode,
     stdout: stdoutPreview.text,
@@ -741,8 +984,14 @@ async function runBash(
     timedOut,
     timeoutMs,
     cancelled,
+    lineGate: true,
   });
-  return persistNote !== undefined ? `${formatted}\n${persistNote}` : formatted;
+  const shouldPersist = overLines || overBytes || stdoutSink.truncated || stderrSink.truncated;
+  if (!shouldPersist) return formatted;
+  const saved = await persistRaw();
+  return saved !== undefined
+    ? `${formatted}\n完整输出已写入：${saved}（${Buffer.byteLength(stdout) + Buffer.byteLength(stderr)} 字节）`
+    : `${formatted}\n完整输出落盘失败（预览已截断）。`;
 }
 
 /** 构造 bash 工具（路径边界随配置固定；默认工作目录按调用期解析） */
@@ -902,7 +1151,10 @@ function createReadTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
         boundary,
       );
     },
-    handler: async (args, ctx) => readFileSlice(args, ctx, boundary, config),
+    // 出口闸（token 预算）：2000 行 × 每行几千字符的文件同样能一次灌满窗口，
+    // 所以 read 也必须过同一个 boundToolResult，而不是只靠「文件 ≤ 8 MiB」这一道闸。
+    handler: async (args, ctx) =>
+      boundToolOutput(ctx, 'read', readFileSlice(args, ctx, boundary, config)),
   };
 }
 
@@ -1033,7 +1285,8 @@ function createEditTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
       // 统一由 core PermissionPolicy 发一次请求；autoApprove / neverAutoApprove / always 在那里生效
       return 'ask';
     },
-    handler: async (args, ctx) => editFile(args, ctx, boundary, config),
+    handler: async (args, ctx) =>
+      boundToolOutput(ctx, 'edit', editFile(args, ctx, boundary, config)),
   };
 }
 
