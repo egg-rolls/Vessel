@@ -319,6 +319,8 @@ bun ws-node.ts legacy       # WS 首帧不带 token 也拿到事件流
    proxy_set_header X-Vessel-Proxy-Secret $vessel_hub_proxy_secret;
    ```
 5. 不配 `hub.proxy_secret_env` = hub 的回环判定保持旧行为（不新增拒绝）。
+6. 本机命令行不受影响：`vessel hub directory` / `vessel hub node rm` 会从**同一个环境变量**
+   读值并自带该头（不经过反代也能用）；只有「经反代进来又没带头」的请求会被拒。
 
 ### 第 4 步：node 入口（可选但推荐）
 
