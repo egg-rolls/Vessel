@@ -20,8 +20,15 @@
  * （`boundToolResult`：单条 ≤ 16k token，超了先落盘全文再按头 30% / 尾 70% + 一行省略标注
  * 裁切）。2000 行 / 2 MiB 两道旧闸保留作兜底，顺序是 token → 行 / 字节。
  * 事故校准：1,344 行 / 423 KB（≈106k token）的输出两道旧闸都没碰到，所以闸必须按 token 计。
+ *
+ * 异步（0.55）：`bash` 多一个 `async?: boolean`。缺省（不传）= 同步，行为与 0.54 逐字节相同；
+ * `true` = 发起就返回，命令结束时把「退出码 + 头尾输出 + 落盘路径」以一条 `vessel:notice`
+ * 尾消息注入该会话的下一次模型请求（复用 runtime notice 那条既有通道，不新造 RPC）。
+ * 为什么不单开一个 `bash_async` 工具名：bash 的权限判定（deny 命令文本 / cwd 边界 / ask）、
+ * 输出闸、落盘目录都必须与同步路径**同一份实现**，同名同参最不容易漂成两套。
  */
 
+import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   readFileSync,
@@ -34,8 +41,15 @@ import {
 import { mkdir, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Plugin, PluginHost, ToolContext, ToolDefinition } from '@vessel-agent/core';
-import { estimateTokens } from '@vessel-agent/core';
+import type {
+  Hook,
+  HookContext,
+  Plugin,
+  PluginHost,
+  ToolContext,
+  ToolDefinition,
+} from '@vessel-agent/core';
+import { estimateTokens, HookType } from '@vessel-agent/core';
 
 // ── 常量 ──────────────────────────────────────────
 
@@ -115,6 +129,75 @@ const MAX_READ_BYTES = 8 * 1024 * 1024;
  * 管道不会关闭——硬等会永久挂住，超时兜底后带着已读到的输出返回。
  */
 const DRAIN_GRACE_MS = 300;
+
+// ── 异步作业的预算（0.55）────────────────────────
+//
+// 异步作业脱离工具调用活着，所以它的每一处都得有**显式上界**（守则第十一条）：
+// 同时几条、跑多久、留几份记录、一条通知最多占多少 token —— 全是常量，不取决于负载。
+
+/**
+ * 异步作业的缺省超时（毫秒）：30 分钟。
+ *
+ * 为什么不是同步的 120s：异步存在的理由就是「这条命令要跑半分钟以上」（用户举例
+ * `git worktree add` 实测 30–90s，还有超 120s 的），拿 120s 当缺省等于照样杀。30 分钟是
+ * 一次交互式等编译 / 等安装的合理上界；要更久就显式传 `timeout_ms`。
+ */
+const DEFAULT_ASYNC_BASH_TIMEOUT_MS = 30 * 60_000;
+
+/**
+ * 同时在跑的后台作业上限。
+ * 内存上界 = 4 ×（16 MiB stdout + 16 MiB stderr）= 128 MiB（两个方向各自受
+ * `MAX_PERSIST_BYTES` 封顶）；超了显式拒绝，不排队、不静默顶掉别人。
+ */
+const MAX_ASYNC_JOBS = 4;
+
+/**
+ * 已完成作业的记录保留上限（只留元数据与收口后的通知文本，输出缓冲已释放）。
+ * 未注入的记录不会被这条裁掉（`pruneAsyncJobs` 先注入、后清理的语义也靠它），
+ * 所以「结果还没送到模型」永远不会因为保留上限而丢；上限只淘汰已送达的旧记录。
+ */
+const MAX_ASYNC_RECORDS = 16;
+
+/**
+ * 一次注入最多带几条完成通知 —— **必须等于 `MAX_ASYNC_JOBS`**。
+ *
+ * 这是个不变式，不是巧合：开始作业只发生在模型调工具时，注入只发生在模型请求前，
+ * 两次相邻的模型请求之间最多有 `MAX_ASYNC_JOBS` 条作业可能完成。让「排空速率 ≥ 到达速率」，
+ * 未注入的通知集合就永远 ≤ 4 条（不需要靠淘汰去兜底，也就不会为了腾地方丢结果）。
+ * 代价是最坏一条尾消息约 4 × 1300 ≈ 5.2k token —— 一次性、有上界，且只有四条同时收尾时才会发生。
+ */
+const MAX_ASYNC_NOTICES_PER_INJECTION = MAX_ASYNC_JOBS;
+
+/**
+ * 完成通知里**输出预览**的 token 预算：1200。
+ * 单条工具结果的总闸是 16k（`MAX_RESULT_TOKENS`），一条后台通知只该占它的 7.5% ——
+ * 通知是「顺带告诉你一声」，不是又一次整块输出；剩下的量靠日志路径按需 read。
+ */
+const MAX_ASYNC_PREVIEW_TOKENS = 1_200;
+
+/**
+ * 完成通知的消息名：与 `runtime-notice-hook` / `refs-notice-hook` / doc-subscription 同一个
+ * 通道名（`vessel:notice`）。Web 按它认出「这是运行时上下文」，再按正文首行判 scope —
+ * 这里刻意不带 `词:` 形式的 scope 前缀（首行是 `[runtime] bash job … finished`），
+ * 于是落进兜底的「上下文」卡：不对词表撒谎，也不需要改动别人的 scope 词表。
+ *
+ * 已知的显示层取舍：头四行套了明细标记（Web 认得出），**输出预览的原文行不套** ——
+ * 那些行是命令的逐字输出，套上 `  · ` 只会让 Web 把它们当明细并在第 11 行折叠掉，反而
+ * 更不像原样。代价是卡片最多显示前 11 行（其余折成「还有 N 行」），而落盘路径就在卡头下面
+ * 第三行，要看全量点那个文件。模型侧不受影响：它读到的是完整的预览。
+ */
+const ASYNC_NOTICE_MESSAGE_NAME = 'vessel:notice';
+
+/**
+ * 明细行标记：两个空格 + `·`。
+ * 必须与 `src/runtime-notice-hook.ts` 的 `NOTICE_DETAIL_MARK` / `packages/agent/src/env-info-scope.ts`
+ * 的 `ENV_INFO_DETAIL_MARK` 逐字相同：Web 的 `env-notice.ts` 按它认「这一行是明细」，
+ * 对不上时整条通知会被读成一整行（明细全挤进卡头并截断）。
+ */
+const ASYNC_NOTICE_DETAIL_MARK = '  · ';
+
+/** 异步作业的 hook 注册名（幂等注册用：热应用的旁路 host 会重复 install 同一个插件）。 */
+export const ASYNC_BASH_NOTICE_HOOK = 'bash-async-notice';
 
 // ── 参数与文本工具 ────────────────────────────────
 
@@ -739,8 +822,8 @@ async function writeToolOutput(payload: {
   }
 }
 
-/** 把完整 bash 输出写入 session 目录；失败返回 undefined（调用方降级为纯截断） */
-async function persistBashOutput(payload: {
+/** bash 落盘正文（同步与异步共用同一格式：头几行元数据 + `[stdout]` / `[stderr]` 两段）。 */
+function bashOutputBody(payload: {
   command: string;
   exitCode: number | null;
   cancelled: boolean;
@@ -748,9 +831,8 @@ async function persistBashOutput(payload: {
   stdout: string;
   stderr: string;
   truncated: boolean;
-  sessionId?: string;
-}): Promise<string | undefined> {
-  const body = [
+}): string {
+  return [
     `# command: ${payload.command}`,
     `# exit_code: ${payload.exitCode ?? 'null'}`,
     `# cancelled: ${payload.cancelled}`,
@@ -762,11 +844,51 @@ async function persistBashOutput(payload: {
     '[stderr]',
     payload.stderr,
   ].join('\n');
+}
+
+/** 把完整 bash 输出写入 session 目录；失败返回 undefined（调用方降级为纯截断） */
+async function persistBashOutput(payload: {
+  command: string;
+  exitCode: number | null;
+  cancelled: boolean;
+  timedOut: boolean;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+  sessionId?: string;
+}): Promise<string | undefined> {
   return writeToolOutput({
     tool: 'bash',
-    body,
+    body: bashOutputBody(payload),
     ...(payload.sessionId !== undefined ? { sessionId: payload.sessionId } : {}),
   });
+}
+
+/**
+ * 把完整 bash 输出写到**指定**路径（异步作业用）。
+ *
+ * 异步作业在启动时就把路径给模型了（并写一行 `# status: running` 占位），收口时覆盖它 ——
+ * 只有这样才能让「日志路径」从第一秒起就成立。失败返回 undefined，通知里退化成只有预览。
+ */
+async function persistBashOutputAt(
+  target: string,
+  payload: {
+    command: string;
+    exitCode: number | null;
+    cancelled: boolean;
+    timedOut: boolean;
+    stdout: string;
+    stderr: string;
+    truncated: boolean;
+  },
+): Promise<string | undefined> {
+  try {
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, bashOutputBody(payload), 'utf-8');
+    return target;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -854,6 +976,346 @@ function killProcessTree(proc: ReturnType<typeof spawnBash>): void {
   }
 }
 
+// ── bash 异步作业（0.55，显式 opt-in）──────────────────
+//
+// 触发场景：`git worktree add` 这类命令要 30–90 秒（实测还有超 120 秒的），同步 bash 会把
+// 整个回合按住等它结束。`async: true` 起进程就返回，回合继续；命令结束时把
+// 「退出码 + 头尾输出 + 落盘路径」送回模型。
+//
+// **交付不新造通道**：完成结果拼成一条 `vessel:notice` 尾消息，由本插件注册的 BeforeLlm
+// hook 注入该会话**下一次模型请求之前** —— 与 `runtime-notice-hook` / `refs-notice-hook` /
+// doc-subscription 同一个消息名、同一个落盘位置、同一套渲染。为什么不用 inbox + 新 run
+// （`ask` 的 async 走那条）：那条路要 node 装配层的 `AgentService.admit`，插件层拿不到端口，
+// 也不该为了一个工具去开新 RPC。
+//
+// 代价（写清楚，别让下一个人猜）：注入发生在**下一次模型请求前**。回合还在跑时通知几乎立刻
+// 到（模型每次迭代都过一次 BeforeLlm）；回合已经结束就等到该会话下一次 run 的第一轮。
+// 所以工具返回文本必须说清「本轮不等待」，并把日志路径给模型（想看进度可以自己 read）。
+//
+// 进程生命周期（不留孤儿）：
+// - 每个作业有自己的超时（`timeout_ms`，缺省 30 分钟），到点整棵进程树被杀；
+// - 插件 dispose（tenant / 会话收口）时杀掉全部在跑作业；
+// - 进程退出时（`process.once('exit')`）再兜一次，best-effort；
+// - 刻意**不**挂 run 的 AbortSignal：异步作业的全部意义就是活过这次工具调用，跟着 run
+//   一起死等于把异步退化成同步。要停它，靠超时或进程退出。
+
+/** 一条后台作业的记账（输出缓冲在收口时释放，只留元数据与通知正文）。 */
+interface AsyncBashJob {
+  readonly id: string;
+  readonly command: string;
+  readonly cwd: string;
+  readonly startedAt: number;
+  readonly timeoutMs: number;
+  readonly logPath: string;
+  readonly proc: ReturnType<typeof spawnBash>;
+  readonly pumps: { stdout: Pump; stderr: Pump };
+  readonly sinks: { stdout: OutputSink; stderr: OutputSink };
+  /** 发起它的会话；缺省 = 无会话（CLI 单会话），任何会话的下一轮都可注入 */
+  sessionId?: string;
+  /** 超时被杀（由定时器写，收口时读） */
+  timedOut: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+  finishedAt?: number;
+  /** 收口后的通知正文；有值即「已完成」 */
+  notice?: string;
+  /** 已注入过（同一作业只注入一次） */
+  announced?: boolean;
+}
+
+/**
+ * 作业表的唯一持有者：**进程级**，不是插件安装级。
+ *
+ * 为什么必须这样：热应用会用**旁路 host** 重新 install 一遍 basic-tools 来算出目标工具集
+ * （`assemblePluginTools`），那批工具定义随后替换掉真实 host 上的定义 —— 若作业表跟着安装
+ * 实例走，替换后新工具起的作业就落在一张 hook 永远看不到的表里。进程级单表 + 按名字幂等
+ * 注册 hook，两条路径都收敛到同一份状态。
+ */
+const asyncJobs = new Map<string, AsyncBashJob>();
+
+/** 进程退出兜底是否已武装（只装一次，避免多次 install 叠加监听器） */
+let asyncExitSweepInstalled = false;
+
+/** 异步日志目录：`<输出根>/<session>/bash-async`（与同步落盘同一个根，便于一起清理）。 */
+function asyncLogDir(sessionId: string | undefined): string {
+  return path.join(toolOutputRoot(), safeSegment(sessionId), 'bash-async');
+}
+
+/** 折成一行并截断（命令 / cwd 这类字段进通知用；全文在日志里）。 */
+function oneLineText(text: string, max = 200): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/** 在跑（未收口）的作业数 */
+function liveAsyncCount(): number {
+  let live = 0;
+  for (const job of asyncJobs.values()) if (job.notice === undefined) live += 1;
+  return live;
+}
+
+/** 已完成但还没注入的作业（按完成时间升序），`sessionId` 只取本会话的（无会话作业给所有会话）。 */
+function completedAsyncJobs(sessionId: string | undefined): AsyncBashJob[] {
+  const ready: AsyncBashJob[] = [];
+  for (const job of asyncJobs.values()) {
+    if (job.notice === undefined || job.announced === true) continue;
+    if (job.sessionId !== undefined && job.sessionId !== sessionId) continue;
+    ready.push(job);
+  }
+  return ready.sort((left, right) => (left.finishedAt ?? 0) - (right.finishedAt ?? 0));
+}
+
+/**
+ * 淘汰已注入的旧记录（只淘汰 `announced` 的：未注入的结果不会因为保留上限而丢）。
+ * 同步（非 await）只删 Map 条目，成本 O(记录数 ≤ MAX_ASYNC_RECORDS + MAX_ASYNC_JOBS)。
+ */
+function pruneAsyncJobs(): void {
+  const delivered: AsyncBashJob[] = [];
+  for (const job of asyncJobs.values()) {
+    if (job.notice !== undefined && job.announced === true) delivered.push(job);
+  }
+  const excess = delivered.length - MAX_ASYNC_RECORDS;
+  if (excess <= 0) return;
+  delivered.sort((left, right) => (left.finishedAt ?? 0) - (right.finishedAt ?? 0));
+  for (const job of delivered.slice(0, excess)) asyncJobs.delete(job.id);
+}
+
+/** 杀掉全部在跑作业（插件 dispose / 进程退出时收口）。 */
+function killLiveAsyncJobs(): void {
+  for (const job of asyncJobs.values()) {
+    if (job.notice !== undefined) continue;
+    killProcessTree(job.proc);
+  }
+}
+
+/**
+ * 进程退出兜底：在 'exit' 里同步杀一遍。
+ *
+ * 为什么必须有：`bash -c` 的子进程在父进程退出后会被 init 收养（POSIX 不级联杀），
+ * 一次 `vessel` 一次性运行结束就会留下一条还在跑的长命令 —— 那正是「孤儿」。
+ * 这里只做 best-effort（Windows 的 taskkill 走 `Bun.spawnSync`），失败不报错。
+ */
+function installAsyncExitSweep(): void {
+  if (asyncExitSweepInstalled) return;
+  asyncExitSweepInstalled = true;
+  process.once('exit', () => {
+    try {
+      killLiveAsyncJobs();
+    } catch {
+      // 退出路径不抛错
+    }
+  });
+}
+
+/** 起一条后台命令（校验已在 `runBash` 里做完）；返回给模型的「已启动」文本。 */
+async function startAsyncBash(options: {
+  command: string;
+  cwd: string;
+  timeoutMs: number;
+  ctx: ToolContext;
+}): Promise<string> {
+  if (liveAsyncCount() >= MAX_ASYNC_JOBS) {
+    return (
+      `错误：后台作业已达上限（${MAX_ASYNC_JOBS} 个在跑）。等其中一条结束再发，` +
+      '或者去掉 async 用同步方式跑这一条。'
+    );
+  }
+
+  const id = randomUUID().slice(0, 8);
+  const logPath = path.join(asyncLogDir(options.ctx.session_id), `bash-async-${id}.log`);
+  // 先落一行 started：路径从第一秒起就存在，模型中途 read 也不会误判成「文件不存在」。
+  try {
+    await mkdir(path.dirname(logPath), { recursive: true });
+    await writeFile(
+      logPath,
+      [
+        `# command: ${options.command}`,
+        `# cwd: ${options.cwd}`,
+        `# started_at: ${Date.now()}`,
+        '# status: running（命令结束后本文件被完整输出覆盖）',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+  } catch {
+    // 落盘不可用：作业照跑，通知里会带输出预览（只是没有全文）
+  }
+
+  let proc: ReturnType<typeof spawnBash>;
+  try {
+    proc = spawnBash(options.command, options.cwd);
+  } catch (error) {
+    // 占位日志别留在盘上假装还在跑
+    try {
+      unlinkSync(logPath);
+    } catch {
+      // 文件可能没写成功，忽略
+    }
+    return `错误：无法启动 bash：${String(error)}`;
+  }
+
+  const sinks = { stdout: createSink(), stderr: createSink() };
+  const job: AsyncBashJob = {
+    id,
+    command: options.command,
+    cwd: options.cwd,
+    startedAt: Date.now(),
+    timeoutMs: options.timeoutMs,
+    logPath,
+    proc,
+    pumps: {
+      stdout: pumpStream(proc.stdout, sinks.stdout),
+      stderr: pumpStream(proc.stderr, sinks.stderr),
+    },
+    sinks,
+    timedOut: false,
+    ...(options.ctx.session_id !== undefined ? { sessionId: options.ctx.session_id } : {}),
+  };
+  asyncJobs.set(id, job);
+  installAsyncExitSweep();
+
+  // 定时器**不** unref：作业在跑的时候我们就要求进程别退出（否则输出会被丢在半路）。
+  job.timer = setTimeout(() => {
+    job.timedOut = true;
+    killProcessTree(proc);
+  }, options.timeoutMs);
+
+  // 收口是脱钩的（工具已经返回了）：异常没有收件人，收敛成一条「收集失败」的通知。
+  void finalizeAsyncBash(job).catch(() => {
+    job.finishedAt = Date.now();
+    job.notice = `[runtime] bash job ${id} finished, but its output could not be collected. See ${logPath}.`;
+    pruneAsyncJobs();
+  });
+
+  return [
+    `已启动（异步）：job ${id}`,
+    `命令：${oneLineText(options.command, 400)}`,
+    `cwd：${options.cwd}`,
+    `超时：${options.timeoutMs}ms`,
+    `日志：${logPath}（运行中只有一行 started 标记，命令结束后写入完整输出）`,
+    '本轮不等待：继续做别的事，不要轮询、不要重复启动同一条命令。',
+    '命令结束时会有一条 runtime 消息（退出码 + 头尾输出 + 日志路径）注入你这个会话的下一轮上下文；',
+    '若本轮已结束，它在该会话下一次 run 的第一轮到达。中途想看进度就直接 read 上面的日志文件。',
+    '注意：本进程退出时仍在跑的后台命令会被一并终止。',
+  ].join('\n');
+}
+
+/** 作业收口（只跑一次）：等退出 → 排空管道 → 落盘全文 → 收口通知正文。 */
+async function finalizeAsyncBash(job: AsyncBashJob): Promise<void> {
+  let exitCode: number | null = null;
+  try {
+    exitCode = await job.proc.exited;
+  } catch {
+    exitCode = job.proc.exitCode ?? null;
+  }
+  if (job.timer !== undefined) clearTimeout(job.timer);
+  await waitAtMost(Promise.all([job.pumps.stdout.done, job.pumps.stderr.done]), DRAIN_GRACE_MS);
+  job.pumps.stdout.cancel();
+  job.pumps.stderr.cancel();
+
+  const stdout = job.sinks.stdout.chunks.join('');
+  const stderr = job.sinks.stderr.chunks.join('');
+  const truncated = job.sinks.stdout.truncated || job.sinks.stderr.truncated;
+  job.finishedAt = Date.now();
+
+  // 全文落盘：与同步路径同一个格式（覆盖启动时那行 running 占位）
+  const saved = await persistBashOutputAt(job.logPath, {
+    command: job.command,
+    exitCode,
+    cancelled: false,
+    timedOut: job.timedOut,
+    stdout,
+    stderr,
+    truncated,
+  });
+
+  // 预览：先按 bash 结果的组装口径拼（行闸关，交给 token 闸），再按通知预算切头尾
+  const full = formatBashResult({
+    exitCode,
+    stdout,
+    stderr,
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut: job.timedOut,
+    timeoutMs: job.timeoutMs,
+    cancelled: false,
+    lineGate: false,
+  });
+  const cut = cutToTokenBudget(full, MAX_ASYNC_PREVIEW_TOKENS);
+  const preview =
+    cut.omittedChars === 0
+      ? full
+      : `${cut.head}\n${omitMarker(cut, saved ?? job.logPath)}\n${cut.tail}`;
+
+  const elapsed = Math.max(0, Math.round((job.finishedAt - job.startedAt) / 1000));
+  const outcome = job.timedOut
+    ? `timed out after ${job.timeoutMs}ms`
+    : `exit ${exitCode ?? 'null (killed by signal)'}`;
+  const head = [
+    `[runtime] bash job ${job.id} finished — ${outcome} · ${elapsed}s`,
+    `${ASYNC_NOTICE_DETAIL_MARK}cmd: ${oneLineText(job.command)}`,
+    `${ASYNC_NOTICE_DETAIL_MARK}cwd: ${job.cwd}`,
+    `${ASYNC_NOTICE_DETAIL_MARK}log: ${saved ?? job.logPath} (stdout ${Buffer.byteLength(stdout)} B · stderr ${Buffer.byteLength(stderr)} B${truncated ? ` · output over ${MAX_PERSIST_BYTES} B was dropped` : ''})`,
+    `${ASYNC_NOTICE_DETAIL_MARK}output (head/tail; the log path has all of it):`,
+  ].join('\n');
+
+  // 出口闸：与其它工具结果同一个（≤ MAX_RESULT_TOKENS；超了先落盘再头 30% / 尾 70% 裁切）
+  job.notice = await boundToolResult(`${head}\n${preview}`, {
+    persist: async () => saved ?? job.logPath,
+  });
+
+  // 输出缓冲释放：完成态只留元数据与通知文本（否则一条 16 MiB 的输出会被一直攥着）
+  job.sinks.stdout.chunks.length = 0;
+  job.sinks.stderr.chunks.length = 0;
+  pruneAsyncJobs();
+}
+
+/**
+ * 取走本会话「已完成、还没注入」的通知（取走即标记已注入，保证只注入一次）。
+ *
+ * 返回的是收口时就算好的**纯文本**：hook 只负责挂消息，不重新读输出、不重新走闸 ——
+ * 一条通知的预算在收口那一刻就定了，注入路径上不做第二次裁切（两处裁切必然漂）。
+ */
+function takeAsyncNotices(sessionId: string | undefined): string[] {
+  const texts: string[] = [];
+  for (const job of completedAsyncJobs(sessionId)) {
+    if (texts.length >= MAX_ASYNC_NOTICES_PER_INJECTION) break;
+    if (job.notice === undefined) continue;
+    job.announced = true;
+    texts.push(job.notice);
+  }
+  if (texts.length > 0) pruneAsyncJobs();
+  return texts;
+}
+
+/**
+ * 完成通知的 BeforeLlm hook：把已完成作业的通知作为一条 `vessel:notice` 尾消息挂到本次请求上
+ * （`role: 'user'` + `name: 'vessel:notice'`，与 runtime-notice / doc-subscription 同一条通道）。
+ *
+ * 为什么不用 `HookResult.additionalContext`：那条路已废弃（会破坏 system 前缀稳定性），
+ * 现有三个通知 hook 全部写 `ctx.messages`，这里跟随。
+ */
+export function createAsyncBashNoticeHook(): Hook {
+  return {
+    name: ASYNC_BASH_NOTICE_HOOK,
+    type: HookType.BeforeLlm,
+    // 排在 doc-subscription（150）之后：命令完成是「刚发生的事实」，晚一点挂上去更靠近本轮请求
+    priority: 160,
+    run: async (ctx: HookContext): Promise<void> => {
+      const texts = takeAsyncNotices(ctx.session_id);
+      if (texts.length === 0) return;
+      ctx.messages = [
+        ...(ctx.messages ?? []),
+        {
+          role: 'user',
+          name: ASYNC_NOTICE_MESSAGE_NAME,
+          content: texts.join('\n'),
+          timestamp: Date.now(),
+        },
+      ];
+    },
+  };
+}
+
 /** 执行 bash 命令；超时/取消返回错误文本，不抛异常 */
 async function runBash(
   args: unknown,
@@ -881,11 +1343,20 @@ async function runBash(
   }
   if (cwd === '' && baseCwd.issue !== undefined) return baseCwd.issue;
 
-  const timeoutMs = readNumber(args, 'timeout_ms') ?? DEFAULT_BASH_TIMEOUT_MS;
+  const timeoutMs =
+    readNumber(args, 'timeout_ms') ??
+    (args.async === true ? DEFAULT_ASYNC_BASH_TIMEOUT_MS : DEFAULT_BASH_TIMEOUT_MS);
   if (timeoutMs <= 0) return '错误：timeout_ms 必须为正数';
 
   const signal = ctx.signal;
   if (signal?.aborted) return CANCELLED_TEXT;
+
+  // 异步（0.55，显式 opt-in）：起进程就返回，结果稍后经 BeforeLlm hook 注入本会话下一轮。
+  // 校验（deny 命令文本 / cwd 边界 / 缺省 cwd 的配置错误）已在上面全部做完，
+  // 所以异步路径与同步路径**同一套拒绝口径**，不会出现「换个参数就能绕过」。
+  if (args.async === true) {
+    return startAsyncBash({ command, cwd: effectiveCwd, timeoutMs, ctx });
+  }
 
   let proc: ReturnType<typeof spawnBash>;
   try {
@@ -1005,7 +1476,13 @@ function createBashTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
       'instead of cat/sed/head/tail/awk. Do NOT use it to modify files: use the `edit` tool. ' +
       'Commands that spell out built-in or configured sensitive paths (~/.ssh, ~/.aws, ' +
       '~/.gnupg, ~/.vessel/config.yaml and extra deny_paths) are rejected. That check matches ' +
-      'the command text only; it is best-effort, not a sandbox.',
+      'the command text only; it is best-effort, not a sandbox. ' +
+      'For commands that take longer than about thirty seconds (builds, installs, ' +
+      '`git worktree add`), pass async: true: the call returns immediately with a job id and a ' +
+      'log path, this turn keeps going, and when the command finishes a runtime message with ' +
+      'the exit code, head/tail of the output and the log path is injected into your next ' +
+      'request in the same session. Default (no async) is synchronous: the call waits for the ' +
+      'command and returns its output, exactly as before.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1016,7 +1493,12 @@ function createBashTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
         },
         timeout_ms: {
           type: 'number',
-          description: `Timeout in milliseconds (default ${DEFAULT_BASH_TIMEOUT_MS})`,
+          description: `Timeout in milliseconds (default ${DEFAULT_BASH_TIMEOUT_MS} when synchronous, ${DEFAULT_ASYNC_BASH_TIMEOUT_MS} when async)`,
+        },
+        async: {
+          type: 'boolean',
+          description:
+            'Default false = wait for the command and return its output here. true = start it in the background and return at once with a job id and a log path; the result (exit code, head/tail of the output, log path) arrives later as a runtime message before your next model call in this session. Use it only for long commands — do not poll, and do not start the same command twice.',
         },
       },
       required: ['command'],
@@ -1309,7 +1791,12 @@ export function createBasicTools(config: BasicToolsConfig = {}): ToolDefinition[
   ];
 }
 
-/** basic-tools 插件——唯一工具包，install 时把三个工具注册进 PluginHost */
+/**
+ * basic-tools 插件——唯一工具包，install 时把三个工具注册进 PluginHost。
+ *
+ * 0.55：install 还要注册**一个** BeforeLlm hook（异步 bash 的完成通知）。按名字幂等：
+ * 热应用的旁路 host 会为算目标工具集反复 install 同一个插件，重复注册会让同一条通知被注入两次。
+ */
 export const basicToolsPlugin: Plugin = {
   name: 'basic-tools',
   version: '0.1.0',
@@ -1319,6 +1806,17 @@ export const basicToolsPlugin: Plugin = {
     for (const tool of createBasicTools(config)) {
       host.registerTool(tool);
     }
+    // 幂等注册：同一个 host 上只留一个（`RUNTIME_NOTICE_HOOK` / `REFS_NOTICE_HOOK` 同口径）
+    if (!host.getHooks().some((hook) => hook.name === ASYNC_BASH_NOTICE_HOOK)) {
+      host.registerHook(createAsyncBashNoticeHook());
+    }
+  },
+  /**
+   * 收口在跑的后台作业：tenant / 会话收口之后没有 hook 再去注入它们的通知，
+   * 留着就是一条没人读的孤儿进程（作业自己的超时是最后一道，不该是唯一一道）。
+   */
+  dispose() {
+    killLiveAsyncJobs();
   },
 };
 
