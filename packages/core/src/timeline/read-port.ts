@@ -34,7 +34,7 @@
  * @module @vessel-agent/core/timeline
  */
 
-import { type FileHandle, open, readFile, rm, stat } from 'node:fs/promises';
+import { readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { noopLogger } from '../logging.js';
 import {
@@ -51,6 +51,7 @@ import {
   hydrateRecordData,
   listBlockFiles,
   parseRecordLine,
+  readFileWindow,
   readTimelineEvents,
 } from './wal.js';
 
@@ -111,33 +112,13 @@ function isNotFound(error: unknown): boolean {
   );
 }
 
-/** 把 `[offset, offset+length)` 读满；读不满返回 `undefined`（文件在读取期间变短了）。 */
-async function readWindow(
-  path: string,
-  offset: number,
-  length: number,
-): Promise<Buffer | undefined> {
-  if (length <= 0) return undefined;
-  let handle: FileHandle;
-  try {
-    handle = await open(path, 'r');
-  } catch (error) {
-    if (isNotFound(error)) return undefined;
-    throw error;
-  }
-  try {
-    const buffer = Buffer.alloc(length);
-    let filled = 0;
-    while (filled < length) {
-      const { bytesRead } = await handle.read(buffer, filled, length - filled, offset + filled);
-      if (bytesRead === 0) return undefined; // 文件变短了
-      filled += bytesRead;
-    }
-    return buffer;
-  } finally {
-    await handle.close().catch(() => {});
-  }
-}
+/**
+ * 把 `[offset, offset+length)` 读满；读不满返回 `undefined`（文件在读取期间变短了）。
+ *
+ * 实现搬到 `wal.ts#readFileWindow`（写者的尾窗恢复也要用同一份）：本模块只保留这个名字，
+ * 免得两处各写一份「读不满怎么办」。
+ */
+const readWindow = readFileWindow;
 
 /**
  * 在一个尾窗里**从后往前**收集命中 `types` 的记录（新 → 旧）。
