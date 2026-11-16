@@ -1,7 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react';
 import type { ToastApi } from '../components/ToastProvider';
 import type { EventStore } from '../state/event-store';
-import { LEGACY_HUB_SEQ_BASE } from '../state/event-store';
 import { useInteractionStore } from '../stores/interactionStore';
 import { nextReconnectDelay } from './backoff';
 import type { ConnectionState, GatewayClient } from './client';
@@ -156,16 +155,7 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
   };
 
   const offEvent = client.onEvent((event, meta) => {
-    // **B1 兼容**（见 `EventStore#LEGACY_HUB_SEQ_BASE`）：今天的实时帧带 hub seq，与
-    // `timeline_seq` 不是同一空间。这里把旧帧落到常量之上的带里，`EventStore` 的
-    // 单游标才不会被实时流推进（否则下一次区间回填会整段重来）。proto-b1 的
-    // `after_timeline_seq` 合入后这一行删除，帧自带 `timeline_seq`。
-    const timelineSeq = (meta as { timelineSeq?: number }).timelineSeq;
-    const wireMeta =
-      typeof timelineSeq === 'number'
-        ? { ...meta, seq: timelineSeq }
-        : { ...meta, seq: LEGACY_HUB_SEQ_BASE + meta.seq };
-    if (!eventStore.push(event, wireMeta)) return;
+    if (!eventStore.push(event, meta)) return;
     if (event.type === 'session.rewound') {
       // 历史已删除：立即丢掉该会话的缓冲事件（含刚 push 的 marker 本身）。
       const sessionId = eventSessionId(event);
@@ -210,8 +200,9 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     // 不 bump 连接 epoch（否则切路由会无谓重拉 session / team 详情）。
     //
     // 两种 hello：连接级 / 订阅 epoch。0.54 起回填不再由 hello 触发（按
-    // `event_cursor` 的区间走、且在订阅之前完成），所以没有第三种。游标的旧 hub 空间
-    // 对齐由 `consumeHello` 里的 `truncateLive` 做（**不碰**单游标，见 EventStore）。
+    // `event_cursor` 的区间走、且在订阅之前完成），所以没有第三种。帧的 `seq` 就是
+    // `timeline_seq`（timeline 订阅，见 serve `frames.ts`），单游标因此只有一个空间：
+    // 双 seq 兼容带（`LEGACY_HUB_SEQ_BASE`）已随「A2 端到端 + 帧带 timeline_seq」删除。
     const helloKind = subscription.consumeHello(info);
     setTokenError(null);
     setGatewayError(null);

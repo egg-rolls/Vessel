@@ -34,7 +34,10 @@
  */
 
 import {
+  contiguousPrefixEnd,
+  firstExpectedSeq,
   inHoles,
+  planRange,
   type TimelineEvent,
   type TimelineGapReport,
   type TimelineGapState,
@@ -72,18 +75,13 @@ import { type ItemSink, LiveItemStore } from './live-items';
 export const MAX_EVENTS_PER_RUN = 5000;
 
 /**
- * **B1 兼容常量**（ADR-105 §6 的协议还没合入时的唯一补丁）。
+ * epoch 的「这一趟停了」判据：这么久没有新帧就认为本趟发完了。
  *
- * 今天实时帧带的是 hub seq（进程内自增、重启归零，`event-buffer.ts`），磁盘 / 区间带的是
- * `timeline_seq`（会话内自增、跨重启续号）。两者**不是同一空间**：拿 hub seq 推进单游标
- * 会让下一次区间回填整段重来，而拿 `timeline_seq` 判实时帧的重复又会把正常帧全丢掉。
- *
- * 所以：实时帧在**入口处**（`connection-handlers.ts`）落到这个常量之上的带里，
- * `EventStore` 只按「值 ≥ 本常量」认出「这是旧 hub 空间的帧」。proto-b1 的
- * `timeline.hello` / `after_timeline_seq` 合入后，帧自带 `timeline_seq` ⇒ 该偏移与
- * `EventStore` 里的这个分支**一起删除**（`liveSeq` / `truncateLive` 同批删除）。
+ * 为什么需要它：服务端按条数 / 字节收集窗口后发 hello，但**发帧时撞背压会提前停**，
+ * 客户端拿不到"本趟结束"的显式信号（`res` 早就回来了）。用空闲作为信号是唯一可行且
+ * 无需新字段的办法 —— 停错了也只是多重订一次（`after_timeline_seq` 幂等）。
  */
-export const LEGACY_HUB_SEQ_BASE = 1_000_000_000_000;
+export const EPOCH_IDLE_MS = 400;
 
 /**
  * 缓冲总量上限（跨 run 的安全网）。
@@ -215,20 +213,11 @@ export class EventStore {
    */
   private clientTimelineSeq = 0;
   /**
-   * 旧 hub 空间的实时水位（**B1 删除**，见 `LEGACY_HUB_SEQ_BASE`）。
-   *
-   * 它**不是**第二个客户端游标：hub seq 只用来给实时帧去重（hello 之后的重放），
-   * 不参与回填区间、不参与握手。只由 `push`（旧帧）与 `truncateLive` 改。
-   */
-  private liveSeq = 0;
-  /** 旧 hub 空间里被判重复而丢弃的帧数（诊断用；重放语义本来就会重复）。 */
-  private liveDuplicates = 0;
-  /**
    * 缺口声明面（见 `TimelineGapState`）。
    *
-   * 四条校验任一不成立、RPC 拿不全、服务端 gap 帧 —— 三条来源都记在这里，**没有一条
-   * 会静默**：`tainted` 进快照 ⇒ UI 挂出污点条（ADR-105 §6）。累计值只增，`last` 是
-   * 最近一次（重拉成功后由 `clearTimelineGap` 收起）。
+   * 四条校验任一不成立、RPC 拿不全、服务端 gap 帧 —— 三条来源都记在这里。**界面不显示它**
+   * （用户明确要求"这条前端提示不应该出现"）：出口只有 console 与 `timeline_gap_reported`
+   * 上报。累计值只增，`last` 是最近一次（重拉成功后由 `clearTimelineGap` 收起）。
    */
   private gap: TimelineGapState = emptyGapState();
   /**
@@ -239,6 +228,8 @@ export class EventStore {
    * `undefined` = 老订阅（hub seq），不做四条校验（帧 seq 里有跳空是正常的）。
    */
   private epoch: { header: TimelineRangeHeader; seqs: number[] } | undefined;
+  /** epoch 的「这一趟停了」定时器（见 `recordEpochSeq` 的两段式判定）。 */
+  private epochTimer: ReturnType<typeof setTimeout> | undefined;
   /**
    * 一个 epoch 记完账（收到右端或攒够 `count`）后的出口。
    *
@@ -359,10 +350,12 @@ export class EventStore {
    */
   beginTimelineEpoch(header: TimelineRangeHeader): void {
     this.epoch = { header, seqs: [] };
+    this.armEpochTimer();
   }
 
   /** 结束本 epoch 的记账（订阅换范围 / 断线 / 服务端回到 legacy）。 */
   endTimelineEpoch(): void {
+    this.cancelEpochTimer();
     this.epoch = undefined;
   }
 
@@ -371,25 +364,95 @@ export class EventStore {
     return this.epoch !== undefined;
   }
 
-  /** 实时流的一段记一条（`push` 调用；区间外的帧不计入期望）。 */
+  /**
+   * 实时流的一段记一条（`push` 调用；区间外的帧不计入期望）。
+   *
+   * **两段式判定**（用户报的那个假缺口的修复点）：四条校验**不在每批到达时判**，而是
+   * 等这一趟"确认发完"再判 —— 判据有两条：
+   * 1. 收到声明区间的右端 / 攒够 `count` ⇒ 整趟到齐，按四条规则严格核对；
+   * 2. 流**空闲**（{@link EPOCH_IDLE_MS} 内没有新帧）⇒ 这一趟停了。此时**不**直接判缺口，
+   *    而是把实收当成"声明区间的连续前缀"：前缀合法 ⇒ 交回 `epochEndHook` 让订阅层用
+   *    `after_timeline_seq = 实收末 seq` 续拉；只有"一条都没收到 / 前缀不合法"才是真缺口。
+   *
+   * 为什么必须有第 2 条：服务端按条数 2000 / 字节 2 MiB 收集本趟窗口并据此发 hello，但发帧
+   * 时**撞背压会提前停**（实测声明 2000 条、实收 1189 条）。那不是丢数据，是这一趟没发完；
+   * 按"每批到达即判"就会把"没发完"误报成"少给了"（用户看到的正是 rule 3）。
+   */
   private recordEpochSeq(seq: number): void {
     const epoch = this.epoch;
     if (epoch === undefined) return;
-    const { header, seqs } = epoch;
-    if (seq < header.start_seq || seq > header.end_seq) return;
-    if (seqs.length > 0 && seq <= (seqs[seqs.length - 1] ?? 0)) {
-      // 重复 / 逆序：直接交给校验（它报 rule 4 / 1），别在这里静默去重。
-      seqs.push(seq);
-    } else {
-      seqs.push(seq);
+    const { header } = epoch;
+    if (seq < header.start_seq || seq > header.end_seq) {
+      // 区间外的帧照常入环（它属于下一趟 / 别的段），但不进这一段的期望集合。
+      this.armEpochTimer();
+      return;
     }
-    const done = seq >= header.end_seq || seqs.length >= header.count;
-    if (!done) return;
-    const violation = validateTimelineRange(header, seqs);
+    epoch.seqs.push(seq);
+    const complete = seq >= header.end_seq || epoch.seqs.length >= header.count;
+    if (!complete) {
+      this.armEpochTimer();
+      return;
+    }
+    // 整趟到齐：严格四条校验（连续性 / count / 边界 / 重复）。
+    this.cancelEpochTimer();
+    const violation = validateTimelineRange(header, epoch.seqs);
     if (violation !== undefined) this.reportTimelineGap(violation);
     this.epoch = undefined;
     // 本趟记完：订阅层据此判断「还有没有下一趟」（服务端每趟 ≤ 2000 条）。
     this.epochEndHook?.(header);
+  }
+
+  /** 这一趟的"停"信号（帧空了 {@link EPOCH_IDLE_MS}）：按**连续前缀**收口，不判缺口。 */
+  private settleEpoch(): void {
+    const epoch = this.epoch;
+    if (epoch === undefined) return;
+    this.epoch = undefined;
+    const { header, seqs } = epoch;
+    const prefixEnd = contiguousPrefixEnd(header, seqs);
+    if (prefixEnd === undefined) {
+      // 一条都没收到 / 收到的不是"从区间左端起、只跳过声明洞"的连续前缀 ⇒ 真缺口。
+      this.reportTimelineGap({
+        from_seq: header.start_seq,
+        to_seq: header.end_seq,
+        source: 'range',
+        rule: 3,
+        expected: `首 ${String(firstExpectedSeq(header) ?? header.start_seq)} / 末 ${String(header.end_seq)}`,
+        received:
+          seqs.length === 0
+            ? '这一段一条都没收到'
+            : `首 ${String(seqs[0])} / 末 ${String(seqs[seqs.length - 1])}（不是连续前缀）`,
+        expectedCount: header.count,
+        receivedCount: seqs.length,
+        at: Date.now(),
+      });
+      // **不**回调续拉：这一趟没有任何进展，再订一次也只会得到同一条空区间
+      // （订阅层的 stall 保护是第二道闸，但这里根本不该产生一次请求）。
+      return;
+    }
+    // 连续前缀：这一趟只是**没发完**。按实收末 seq 收缩声明，交给订阅层续拉。
+    const shrunk = planRange(header.start_seq, prefixEnd, {
+      timeline_head: header.timeline_head,
+      wal_head: header.wal_head,
+      holes: header.holes,
+      tainted: header.tainted,
+    });
+    this.epochEndHook?.(shrunk);
+  }
+
+  private armEpochTimer(): void {
+    this.cancelEpochTimer();
+    this.epochTimer = setTimeout(() => {
+      this.epochTimer = undefined;
+      this.settleEpoch();
+    }, EPOCH_IDLE_MS);
+    // Bun / Node 里别让这个定时器拖住进程退出（浏览器没有 unref）。
+    (this.epochTimer as unknown as { unref?: () => void }).unref?.();
+  }
+
+  private cancelEpochTimer(): void {
+    if (this.epochTimer === undefined) return;
+    clearTimeout(this.epochTimer);
+    this.epochTimer = undefined;
   }
 
   /** 注入 epoch 结束出口（续拉用；缺省 = 不续拉）。 */
@@ -443,19 +506,8 @@ export class EventStore {
     if (!Number.isFinite(meta.seq)) return false;
     // 服务端声明的时间线段（`timeline.hello`）：本帧也要进四条校验的记账。
     if (this.epoch !== undefined) this.recordEpochSeq(meta.seq);
-    // B1 兼容分支（`LEGACY_HUB_SEQ_BASE` 的注释就是它的删除工单）：落在 hub 空间的帧
-    // 只与**实时水位**比，绝不推进单游标 —— hub seq 与 timeline_seq 今天不是同一空间，
-    // 拿它推进游标会让下一次区间回填整段重来。
-    if (meta.seq >= LEGACY_HUB_SEQ_BASE) {
-      const raw = meta.seq - LEGACY_HUB_SEQ_BASE;
-      if (raw <= this.liveSeq) {
-        // 旧协议的回放语义（hello 之后的重放）本来就会重复送达：记账不静默，但不污点。
-        this.liveDuplicates += 1;
-        return false;
-      }
-      this.liveSeq = raw;
-    } else if (meta.seq <= this.clientTimelineSeq) {
-      // 重复吸收不许静默：单游标只认更大的 seq。报一条缺口（UI 污点条 + console），
+    if (meta.seq <= this.clientTimelineSeq) {
+      // 重复吸收不许静默：单游标只认更大的 seq。报一条缺口（console + 上报），
       // 但**不**回退游标、也不重新合并 —— 重复帧没有内容价值，记账就够。
       this.reportTimelineGap({
         from_seq: meta.seq,
@@ -779,40 +831,6 @@ export class EventStore {
   }
 
   /**
-   * 旧 hub 空间的「游标回退」（**B1 删除**）：hello 说本次流从 `fromSeq` 起，把更晚的
-   * 旧帧从传输窗口里丢掉、水位退到 `fromSeq - 1`，随后到达的重放帧才会被收下。
-   *
-   * 与 `truncateAfter` 的区别就是空间：这里只碰 `LEGACY_HUB_SEQ_BASE` 之上的条目，
-   * **不动单游标、不动 item**（I6：重放靠水位幂等，屏上内容一条都不许少）。
-   */
-  truncateLive(fromSeq: number): number {
-    const floor = Number.isFinite(fromSeq) ? Math.max(0, Math.floor(fromSeq) - 1) : 0;
-    this.liveSeq = floor;
-    const ceiling = LEGACY_HUB_SEQ_BASE + floor;
-    // entries 升序：二分出第一条 seq > 水位。
-    let low = 0;
-    let high = this.entries.length;
-    while (low < high) {
-      const mid = (low + high) >>> 1;
-      if ((this.entries[mid]?.seq ?? 0) <= ceiling) low = mid + 1;
-      else high = mid;
-    }
-    const dropped = this.entries.slice(low);
-    if (dropped.length === 0) return 0;
-    this.entries = this.entries.slice(0, low);
-    this.runCounts.clear();
-    for (const entry of this.entries) {
-      const runId = entry.event.run_id;
-      this.runCounts.set(runId, (this.runCounts.get(runId) ?? 0) + 1);
-    }
-    for (const entry of dropped) {
-      const runId = entry.event.run_id;
-      if (!this.runCounts.has(runId)) this.runSessions.delete(runId);
-    }
-    return dropped.length;
-  }
-
-  /**
    * 真清空缓冲（换节点 / 断开连接 / 订阅作用域变化 / gateway 重启）。
    *
    * **不变量**：`scopeSession` 不随 clear 变化 —— 作用域由 `setScopeSession()` 负责，
@@ -825,7 +843,6 @@ export class EventStore {
     this.runCounts.clear();
     this.runSessions.clear();
     this.clientTimelineSeq = nextSeq;
-    this.liveSeq = 0;
     this.gap = emptyGapState();
     // 作用域真变了：传输窗口清了，物化面必须一起清（否则串台 / 幽灵卡片）。
     this.sink.clear();

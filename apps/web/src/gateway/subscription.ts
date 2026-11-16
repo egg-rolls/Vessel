@@ -39,6 +39,7 @@ import type { EventStore } from '../state/event-store';
 import type { GatewayClient } from './client';
 import {
   collectTimelineRange,
+  contiguousPrefixEnd,
   cursorTarget,
   MAX_TIMELINE_SEGMENTS,
   planBackfill,
@@ -218,7 +219,15 @@ export class SubscriptionController {
     // 续拉循环的实时流那一半：本趟 epoch 记完，若服务端声明区间短于应到右端
     // （每趟 ≤ 2000 条导致的），立刻按 `after_timeline_seq = 本趟末 seq` 再订一次。
     this.eventStore.setEpochEndHook((header) => {
-      if (header.end_seq >= this.epochTarget) return;
+      if (header.end_seq >= this.epochTarget) {
+        this.epochStalls = 0;
+        return;
+      }
+      // 「这一趟没发完」⇒ 按 `after_timeline_seq = 实收末 seq` 续订一次。
+      // 但**连续两趟没有任何进展**就停手：再订只会得到同一条空区间（缺口已由 store 报）。
+      this.epochStalls =
+        this.eventStore.currentSeq > this.epochSubscribeFrom ? 0 : this.epochStalls + 1;
+      if (this.epochStalls >= 2) return;
       const scope = this.desired;
       if (scope === null) return;
       // 清掉幂等短路：同一作用域也要再发一次 `events.subscribe`（新的排他游标）。
@@ -229,6 +238,10 @@ export class SubscriptionController {
 
   /** 本趟 epoch 应到的右端（`min(wal_head, published_head)`；无 timeline 时为 0）。 */
   private epochTarget = 0;
+  /** 本趟订阅发出时的游标（判断"这一趟有没有前进"）。 */
+  private epochSubscribeFrom = 0;
+  /** 连续几趟 epoch 没有前进（`>= 2` 就不再续订）。 */
+  private epochStalls = 0;
 
   /** 路由变化时调用；重复 scope 幂等（同一作用域不重复发请求）。 */
   apply(scope: SubscriptionScope): Promise<void> {
@@ -271,9 +284,10 @@ export class SubscriptionController {
     } else {
       this.epochTarget = 0;
       this.eventStore.endTimelineEpoch();
-      // `from_seq` 是本次流实际会发送的第一条（旧 hub 空间的坐标）：订阅级 hello 必须让它
-      // 生效，否则上一轮更高的水位会把这一轮的帧全判成重复。
-      if (info.from_seq > 0) this.eventStore.truncateLive(info.from_seq);
+      // legacy 订阅（旧格式会话 / 旧 gateway）：帧 seq 是同一个计数空间的起点
+      // `from_seq`，游标退到它之前 —— 随后到达的重放帧才会被收下（`truncateAfter` 只动
+      // 传输窗口，不动 item，I6）。
+      if (info.from_seq > 0) this.eventStore.truncateAfter(Math.max(0, info.from_seq - 1));
     }
     if (this.pendingHello === null) return 'connection';
     this.pendingHello = null;
@@ -329,7 +343,7 @@ export class SubscriptionController {
   private async pullRange(
     sessionId: string,
     header: TimelineRangeHeader,
-  ): Promise<{ ok: boolean; merged: number; duplicates: number; fetched: number }> {
+  ): Promise<{ ok: boolean; merged: number; duplicates: number; fetched: number; end: number }> {
     const fetched = await collectTimelineRange(header, async (sinceSeq, limit) => {
       const body = await this.client.request<unknown>(
         'sessions.events',
@@ -338,12 +352,33 @@ export class SubscriptionController {
       );
       return readTimelinePage(body);
     });
-    const outcome = this.eventStore.applyTimelineRange(header, fetched.events);
+    const seqs = fetched.events.map((event) => event.seq);
+    let effective = header;
+    let outcome = this.eventStore.applyTimelineRange(header, fetched.events);
+    // 「声明了一段、实收只是它的**连续前缀**」不是丢数据，是这一趟没发完（服务端撞背压
+    // 会提前停）。这时按实收末 seq 收缩声明再并 —— 判缺口的时机推迟到「确认无法继续」
+    // （回填循环里的 no-progress / epoch 的 stall），不在这里按每批到达即判。
+    if (outcome.violation?.rule === 3) {
+      const prefixEnd = contiguousPrefixEnd(
+        header,
+        [...seqs].sort((left, right) => left - right),
+      );
+      if (prefixEnd !== undefined && prefixEnd >= header.start_seq) {
+        effective = planRange(header.start_seq, prefixEnd, {
+          timeline_head: header.timeline_head,
+          wal_head: header.wal_head,
+          holes: header.holes,
+          tainted: header.tainted,
+        });
+        outcome = this.eventStore.applyTimelineRange(effective, fetched.events);
+      }
+    }
     return {
       ok: outcome.violation === undefined,
       merged: outcome.merged,
       duplicates: outcome.duplicates,
       fetched: fetched.events.length,
+      end: effective.end_seq,
     };
   }
 
@@ -402,15 +437,32 @@ export class SubscriptionController {
         report.declared += header.count;
         report.segments += 1;
         let outcome = await this.pullRange(sessionId, header);
+        // 「这一趟没发完」= 实收是连续前缀、游标前进了：继续下一段（不算缺口）。
+        // 只有**同一游标再要一次仍不前进**才判缺口（ADR-105 §6 的"确认无法继续"）。
         if (outcome.ok === false && !this.scopeChanged(scopeKey)) {
-          // 重拉这一段一次（区间并入是幂等的：缺席才插）。
           outcome = await this.pullRange(sessionId, header);
         }
         report.fetched += outcome.fetched;
         report.received += outcome.merged + outcome.duplicates;
+        const advanced = this.eventStore.currentSeq > after;
         if (outcome.ok === false) {
-          this.notice?.(t('timeline.gap.notice'));
-          break;
+          if (!advanced) {
+            // 从同一游标再要一次也没前进 ⇒ 确认无法继续，才报缺口（不弹用户，只上报 + console）。
+            this.eventStore.reportTimelineGap({
+              from_seq: after + 1,
+              to_seq: header.end_seq,
+              source: 'fetch',
+              rule: 3,
+              expected: `[${String(header.start_seq)}, ${String(header.end_seq)}] 可读`,
+              received: `这一段没有任何前进（停在 ${String(after)}）`,
+              expectedCount: header.count,
+              receivedCount: outcome.fetched,
+              at: Date.now(),
+            });
+            this.notice?.(t('timeline.gap.notice'));
+            break;
+          }
+          continue;
         }
         this.eventStore.clearTimelineGap();
         if (this.scopeChanged(scopeKey)) break;
