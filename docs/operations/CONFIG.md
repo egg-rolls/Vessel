@@ -447,6 +447,7 @@ Platform Gateway token 独立，只读 `gateway.token` / `gateway.token_env`，�
   `gateway.token_env` ⇒ **平台拒绝启动**（`platform_listen_insecure`）。回环监听不受影响。
 - `platform.nodes.credentials` 只认 `mode === 'token'`：浏览器需要平台 token
   （`#token=<值>` 导入），脚本需要 `Authorization: Bearer <platform-token>`。
+  **纯本机安装也一样**：不配 `gateway.token` 时页面能列节点但连不上 node。
 - `hub.proxy_secret_env` 配置后，hub 的目录 / WS 目录流 / 删节点都要求密钥头。
 - `vessel doctor` 会对「回环 + 没有任何 token」给出 warning（只提示，不改变运行行为）。
 

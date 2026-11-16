@@ -33,6 +33,8 @@ paths: [docs/operations/REVERSE-PROXY.md]
    - hub 的三个回环判定（目录 / WS 目录流 / 删节点）在配置了反代密钥后**必须带密钥头**；
    - `vessel doctor` 对「回环 + 无任何 token」报警（只提示，不改语义）。
    迁移步骤见 §8；每一条的拒绝文案都写明「缺什么 / 配置键叫什么 / 一行可复制的命令」。
+   **升级后最可能感知到的两件事**：① 绑 `0.0.0.0` 且无 token 的平台起不来；② 本地 WebUI
+   要先用平台 token（`#token=`）导入一次才能连 node。
 
 
 ## 2. 信任边界图
@@ -261,14 +263,19 @@ bun ws-node.ts legacy       # WS 首帧不带 token 也拿到事件流
 
 ## 8. 升级清单（从旧行为到新行为）
 
-0.55 的四条收紧**默认生效**，装上新版本后现网可能出现的三种「突然不可用」：
-平台起不来、页面提示要 token、hub 匿名请求 401。按下面顺序过一遍即可。
+0.55 的四条收紧**默认生效**。升级后现网可能出现的三种可见变化，先对号入座：
+
+1. **平台起不来**：配置是 `gateway.hostname: 0.0.0.0`（或网卡 IP）又没有 `gateway.token`
+   ⇒ 报 `platform_listen_insecure` 直接退出（`gateway restart` 会先拒绝、旧实例保持运行）。
+2. **WebUI 连不上 node**：`platform.nodes.credentials` 现在要平台 token；多数本地安装没有配
+   ⇒ 页面能列出节点但连不上，需要按第 2 步补 `gateway.token_env` 并用 `#token=` 导入一次。
+3. **hub 请求 401/403**：只有当你**主动配了** `hub.proxy_secret_env` 才会变（不配行为不变）。
 
 ### 第 0 步：先判断自己属于哪一类
 
 | 你的形态 | 需要做什么 |
 |----------|------------|
-| 纯本机（浏览器直接开 `http://127.0.0.1:8642`，没反代） | 不需要改配置；平台仍以回环 + 匿名运行（doctor 会提示风险） |
+| 纯本机（浏览器直接开 `http://127.0.0.1:8642`，没反代） | **平台能照常启动**，但 WebUI 连 node 需要平台 token：做第 2 步第 1–2 条（配 `gateway.token_env` 并导入）。不想配 token 的话页面只能读节点列表，拿不到 node 连接 |
 | 同机反代 + 公网/内网访问 | 走第 1–3 步（推荐全配） |
 | 平台绑 `0.0.0.0` 且没配 `gateway.token` | **必须先做第 1 步**，否则起步就被拒绝（这是有意的） |
 | 多机（每台一个 node，各自可能被反代） | 每台机器单独做第 1–3 步；密钥不要跨机复用 |
@@ -297,13 +304,28 @@ bun ws-node.ts legacy       # WS 首帧不带 token 也拿到事件流
 
 ### 第 2 步：`platform.nodes.credentials` 要凭据了
 
-- 页面首次打开会提示需要 token：在地址栏用 `http://<host>:<port>/#token=<platform-token 的值>`
-  导入一次（之后只存 `sessionStorage`），或使用界面里的 token 输入框。
-- 用脚本打 `/platform/rpc` 的自动化：加 `Authorization: Bearer <platform-token>`。
-- 只有 node token 没有平台 token 的旧脚本会拿到 401 `platform_unauthorized`
-  （文案会说明要用平台 token，别混用 node token）。
-- **只读接口不变**：`platform.nodes.list` / `platform.nodes.get` / `platform.whoami` 在回环
-  （且配了反代密钥时带上密钥头）仍可匿名调用，本次只收紧「下发 node token」这一个端点。
+1. **先确认有没有平台 token**（多数本地安装没有）：
+   ```bash
+   vessel config show | grep -A2 '^gateway:'
+   ```
+   没有 `gateway.token` / `gateway.token_env` 就补一个（令牌只进环境变量）：
+   ```bash
+   openssl rand -hex 32            # 生成一次
+   export VESSEL_PLATFORM_TOKEN=<上面生成的值>      # 写进 systemd / .env / shell profile
+   ```
+   ```yaml
+   gateway:
+     token_env: VESSEL_PLATFORM_TOKEN
+   ```
+   然后 `vessel gateway restart`。
+2. **浏览器导入**：地址栏用 `http://<host>:<port>/#token=<平台 token 的值>` 打开一次
+   （之后只存 `sessionStorage`），或用界面里的 token 输入框。
+   注意是**平台 token**，不是 node token。
+3. **脚本**：打 `/platform/rpc` 时加 `Authorization: Bearer <平台 token>`。
+4. 只有 node token 的旧脚本会拿到 401 `platform_unauthorized`（文案会提示要用平台 token）。
+5. **只读接口不变**：`platform.nodes.list` / `platform.nodes.get` / `platform.whoami` 在回环
+   （且配了反代密钥时带上密钥头）仍可匿名调用，本次只收紧「下发 node token」这一个端点。
+   所以**不配 token 也不会白屏**：页面能列节点，只是连不上 node（`credentials` 401）。
 
 ### 第 3 步：hub 回环判定收紧（配了密钥才收紧）
 
