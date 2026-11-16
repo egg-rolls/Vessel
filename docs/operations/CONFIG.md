@@ -418,6 +418,8 @@ lease:
 - `feishu.app_secret_env`
 - `serve.token_env`（node token）
 - `gateway.token_env`（Platform Gateway token，与 node token 分开）
+- `serve.proxy_secret_env` / `gateway.proxy_secret_env`（0.55：同机反代的共享密钥头；
+  未配置 = 不做任何事，见 [REVERSE-PROXY.md](REVERSE-PROXY.md)）
 
 规则：
 
@@ -431,6 +433,12 @@ node token 解析顺序：`serve.tokens` → `serve.token` / `serve.token_env` �
 `transport.token` → `VESSEL_GATEWAY_TOKEN` → 自动生成。principal 由 token 决定：
 `serve.token` → admin；`serve.tokens` 按条目 `role`；回环无 token → admin。
 Platform Gateway token 独立，只读 `gateway.token` / `gateway.token_env`，不与 node token 互相回退。
+
+**同机反代（0.55）**：反代与 Vessel 同机时，客户端对端地址恒为 `127.0.0.1`，
+「回环 = 本机」不再成立。把反代密钥的环境变量名配到 `gateway.proxy_secret_env` /
+`serve.proxy_secret_env`，并让反代注入 `X-Vessel-Proxy-Secret` 头（**覆盖**，不是追加）。
+未配置时行为与之前逐字一致；配置后该监听只接受经反代来的匿名请求，带 Bearer token 的
+客户端不受影响。威胁模型与拍板点见 [REVERSE-PROXY.md](REVERSE-PROXY.md)。
 
 ## 4. 命令
 

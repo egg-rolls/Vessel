@@ -4,6 +4,7 @@
  * @module @vessel-agent/serve/gateway/auth
  */
 
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 
@@ -26,6 +27,31 @@ export function isLoopbackAddress(address: string | null | undefined): boolean {
   if (lower === '::1') return true;
   const mapped = lower.startsWith('::ffff:') ? lower.slice('::ffff:'.length) : lower;
   return isIP(mapped) === 4 && mapped.startsWith('127.');
+}
+
+/**
+ * 0.55 P0：反代密钥头（opt-in；默认不配置 = 行为逐字不变）。
+ *
+ * 反代与 gateway 同机时客户端 peer 恒为 127.0.0.1，回环地址不再是可信信号。
+ * 配好 `serve.proxy_secret_env` / `gateway.proxy_secret_env` 之后，反代必须为
+ * 每个请求注入这个头；缺头 / 不匹配的请求不再被当作回环客户端。
+ * 头名以 `x-vessel-` 开头，插件反代（`plugin-host/proxy.ts`）会剥离客户端自带的同名头。
+ */
+export const PROXY_SECRET_HEADER = 'x-vessel-proxy-secret';
+
+/**
+ * 反代密钥是否成立。
+ *
+ * - 未配置（undefined / 空串）→ `true`：旧部署与旧调用方一字不改；
+ * - 已配置 → 请求必须带同值头，比较用定长哈希 + 常量时间（不按字节提前返回）。
+ */
+export function proxySecretAllowed(req: Request, secret: string | undefined): boolean {
+  if (typeof secret !== 'string' || secret === '') return true;
+  const provided = req.headers.get(PROXY_SECRET_HEADER);
+  if (typeof provided !== 'string' || provided === '') return false;
+  const expected = createHash('sha256').update(secret).digest();
+  const actual = createHash('sha256').update(provided).digest();
+  return timingSafeEqual(expected, actual);
 }
 
 /** 通配绑定：0.0.0.0 / ::（可带方括号） */

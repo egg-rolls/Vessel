@@ -115,6 +115,8 @@ export {
   loadTlsMaterial,
   normalizeAllowedOrigins,
   originAllowed,
+  PROXY_SECRET_HEADER,
+  proxySecretAllowed,
 } from './gateway/auth.js';
 export {
   type GatewayReloadResult,

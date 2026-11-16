@@ -1028,6 +1028,12 @@ export function validateServeSettings(
     string,
     unknown
   >;
+  // 0.55 P0：反代共享密钥的环境变量名（opt-in；只校验变量名形状，不读值）。
+  validateEnvName(
+    'serve.proxySecretEnv',
+    (serve as Record<string, unknown>).proxySecretEnv,
+    errors,
+  );
 
   if (hostname !== undefined) {
     const invalid =
@@ -1238,6 +1244,12 @@ function validateGatewaySettings(
   }
 
   validateEnvName('gateway.tokenEnv', tokenEnv, errors);
+  // 0.55 P0：反代共享密钥的环境变量名（opt-in；只校验变量名形状，不读值）。
+  validateEnvName(
+    'gateway.proxySecretEnv',
+    (gateway as Record<string, unknown>).proxySecretEnv,
+    errors,
+  );
 
   if (allowedOrigins !== undefined) {
     if (!Array.isArray(allowedOrigins)) {
@@ -2732,8 +2744,9 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'tokenEnv',
     'tokens',
     'pluginHttp',
+    'proxySecretEnv',
   ],
-  gateway: ['port', 'hostname', 'token', 'tokenEnv', 'allowedOrigins'],
+  gateway: ['port', 'hostname', 'token', 'tokenEnv', 'allowedOrigins', 'proxySecretEnv'],
   connect: ['token', 'tokenEnv', 'caFile'],
   attention: ['nodes'],
   hub: [

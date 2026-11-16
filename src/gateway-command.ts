@@ -21,6 +21,7 @@ import {
   DEFAULT_SERVE_OPTIONS,
   loadConfig,
   resolveGatewayNodePorts,
+  resolvePlatformProxySecret,
   resolvePlatformToken,
   type VesselConfig,
 } from '../packages/config/src/index';
@@ -2285,6 +2286,8 @@ export async function runPlatformGatewayForeground(
     ).trim();
     const platformPort = targetPort ?? config.gateway?.port ?? DEFAULT_GATEWAY_OPTIONS.port;
     const platformToken = resolvePlatformToken(config, env);
+    // 0.55 P0：反代共享密钥（opt-in）。未配置 = undefined = 旧行为。
+    const platformProxySecret = resolvePlatformProxySecret(config, env);
     // 0.50：本地 Hub 默认随 gateway 自动拉起（`hub.auto_start: false` 关闭）。
     // `direction: 'node'` 的 gateway 是出站加入远端 Hub，不再起一个空本地 Hub。
     const hubConfig = config.hub;
@@ -2387,6 +2390,7 @@ export async function runPlatformGatewayForeground(
         port: platformPort,
         hostname: platformHostname,
         ...(platformToken !== undefined ? { platformToken } : {}),
+        ...(platformProxySecret !== undefined ? { proxySecret: platformProxySecret } : {}),
         ...(config.gateway?.allowedOrigins !== undefined
           ? { allowedOrigins: config.gateway.allowedOrigins }
           : {}),
