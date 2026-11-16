@@ -59,6 +59,15 @@ export interface AgentStatusLike {
     started_at: number;
     retired_at: number;
   }>;
+  /**
+   * 0.55 additive：这具 body 的硬错误闸（缺省 = 能接活）。
+   *
+   * 与 `MemberStatus.bodies[].blocked` 是**同一个对象**、同一个名字、同一个形状：闸是
+   * body 维度的事实，但「这个成员跑不动了、因为什么」是看列表的人唯一要知道的一句，
+   * 所以在这里提到顶层，省得每个消费方都去翻 bodies 数组。缺省时**不写这个键**
+   * （不是 `blocked: null`）—— 「没有闸」和「闸的字段解析失败」不能长得一样。
+   */
+  blocked?: { code: string; reason: string; at: number };
 }
 
 /** `agents.create` 的单个条目（workspace 由 handler 从 team_id 解析后填入）。 */
