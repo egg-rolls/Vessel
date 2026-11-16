@@ -409,6 +409,18 @@ export class TimelineWriter {
    *
    * `holes` 报的是**存活**洞（`HoleRegistry.list()` 已剔掉退役区间）：客户端拿它算
    * 「可读条数」时不能减掉已退役的区间 —— 那些 seq 现在真的可读了。
+   *
+   * ## `wal_head` 的定义（本字段存在的全部意义）
+   *
+   * `wal_head` = **最大的 `h`，使 `[1..h]` 里每个 seq 要么读得回来、要么已在
+   * `holes.ndjson` 里声明**（ADR-105 §3）。读侧据此算 `count = 区间长度 - |holes ∩ 区间|`，
+   * 它只要偏离一点点，客户端就会把「服务端自己没读到」当成缺口。
+   *
+   * 因此 head 只在这两件事**都已落盘**时才前进：该 seq 的载荷（`wal.log` 行 / 块文件）
+   * fsync 过；或该 seq 的洞声明进了 `holes.ndjson`。**没落盘成功的洞不许顶 head**
+   * （`recordFailure` 返回 false ⇒ 不推进）：宁可少报，绝不把「读不到又没声明」的 seq
+   * 算进来。另一半责任在读侧 —— 一次读必须是自洽快照（见 `wal.ts#readTimelineEvents`
+   * 的读取顺序），否则「可读」这个词本身就没有定义。
    */
   heads(): TimelineHeads {
     return {
@@ -739,8 +751,13 @@ export class TimelineWriter {
       try {
         storedData = await this.writeBlob(seq, input.data);
       } catch (error) {
-        await this.recordFailure(seq, seq, `blob_write_failed: ${messageOf(error)}`);
-        this.advanceWalHead(seq);
+        // 只有洞真的落到 `holes.ndjson` 才允许把 head 推过这个 seq（见 recordFailure）。
+        const declared = await this.recordFailure(
+          seq,
+          seq,
+          `blob_write_failed: ${messageOf(error)}`,
+        );
+        if (declared) this.advanceWalHead(seq);
         throw new TimelineError('timeline_write_failed', `blob seq=${seq}`, { cause: error });
       }
     }
@@ -749,8 +766,8 @@ export class TimelineWriter {
     try {
       await this.writeWal(line);
     } catch (error) {
-      await this.recordFailure(seq, seq, `wal_append_failed: ${messageOf(error)}`);
-      this.advanceWalHead(seq);
+      const declared = await this.recordFailure(seq, seq, `wal_append_failed: ${messageOf(error)}`);
+      if (declared) this.advanceWalHead(seq);
       throw new TimelineError('timeline_write_failed', `seq=${seq}`, { cause: error });
     }
     this.acceptRecord(record);
@@ -762,8 +779,8 @@ export class TimelineWriter {
     this.nextSeq += 1;
     if (this.dataBytes(input.data) > MAX_INLINE_BYTES) {
       // chunk 必须始终可内联（块帧是紧凑载体）；超大 chunk 是生产者 bug，显式拒绝。
-      await this.recordFailure(seq, seq, 'chunk_record_too_large');
-      this.advanceWalHead(seq);
+      const declared = await this.recordFailure(seq, seq, 'chunk_record_too_large');
+      if (declared) this.advanceWalHead(seq);
       throw new TimelineError(
         'timeline_record_too_large',
         `chunk data > ${MAX_INLINE_BYTES} bytes (seq=${seq})`,
@@ -801,8 +818,12 @@ export class TimelineWriter {
       } catch (error) {
         const from = records[0]?.seq ?? 0;
         const to = records[records.length - 1]?.seq ?? from;
-        await this.recordFailure(from, to, `wal_append_failed: ${messageOf(error)}`);
-        this.advanceWalHead(to);
+        const declared = await this.recordFailure(
+          from,
+          to,
+          `wal_append_failed: ${messageOf(error)}`,
+        );
+        if (declared) this.advanceWalHead(to);
         throw new TimelineError('timeline_write_failed', `batch from=${from} to=${to}`, {
           cause: error,
         });
@@ -842,8 +863,12 @@ export class TimelineWriter {
             try {
               storedData = await this.writeBlob(seq, input.data);
             } catch (error) {
-              await this.recordFailure(seq, seq, `blob_write_failed: ${messageOf(error)}`);
-              this.advanceWalHead(seq);
+              const declared = await this.recordFailure(
+                seq,
+                seq,
+                `blob_write_failed: ${messageOf(error)}`,
+              );
+              if (declared) this.advanceWalHead(seq);
               throw new TimelineError('timeline_write_failed', `blob seq=${seq}`, {
                 cause: error,
               });
@@ -944,19 +969,24 @@ export class TimelineWriter {
     if (seal !== undefined) this.completeBlock(seal);
   }
 
-  /** 封块失败：整块登记成洞、拒绝等待中的 append、把 `wal_head` 推过该区间。 */
+  /**
+   * 封块失败：整块登记成洞、拒绝等待中的 append、把 `wal_head` 推过该区间。
+   *
+   * 「推过」只在洞真的落到 `holes.ndjson` 之后（见 `recordFailure` 的返回值）：登记失败
+   * 时 head 停在坏 seq 之前 —— 少报是安全的，多报等于给读侧造一个说不出原因的缺口。
+   */
   private async failPendingChunks(error: unknown): Promise<void> {
     const pending = this.blocks.takePending();
     if (pending.length > 0) {
       const first = pending[0];
       const last = pending[pending.length - 1];
       if (first !== undefined && last !== undefined) {
-        await this.recordFailure(
+        const declared = await this.recordFailure(
           first.seq,
           last.seq,
           `chunk_block_write_failed: ${messageOf(error)}`,
         );
-        this.advanceWalHead(last.seq);
+        if (declared) this.advanceWalHead(last.seq);
       }
     }
     const failure = new TimelineError('timeline_write_failed', 'chunk_block_write_failed', {
@@ -998,11 +1028,21 @@ export class TimelineWriter {
     }
   }
 
-  /** 写失败后登记洞；登记失败仍置内存污点，并尽力在主 manifest 留痕。 */
-  private async recordFailure(fromSeq: number, toSeq: number, reason: string): Promise<void> {
+  /**
+   * 写失败后登记洞；返回「这条声明是否**已经落到 `holes.ndjson`**」。
+   *
+   * 返回值是 `wal_head` 的判据，不是装饰：ADR-105 §3 定义 `wal_head` 必须保证
+   * `[1..wal_head]` 每条**要么可读、要么已在 holes 里声明**。洞只写进内存 / 只写进
+   * manifest 的 `tainted` 行，对读侧（客户端 / 独立读器）都**不存在** —— 那种情况下
+   * 把 head 推过这个 `seq` 就是撒谎（读侧看到一个说不出原因的缺口）。
+   * 所以登记失败时调用方**不许**推进 head：宁可少报（head 停在坏 seq 之前，重启时
+   * `missing_seq_on_recovery` 会补登记），也不多报。
+   */
+  private async recordFailure(fromSeq: number, toSeq: number, reason: string): Promise<boolean> {
     this.taintedFlag = true;
     try {
       await this.holes.add(fromSeq, toSeq, reason);
+      return true;
     } catch (error) {
       try {
         await this.appendManifest({
@@ -1016,6 +1056,7 @@ export class TimelineWriter {
       } catch {
         // 连 manifest 都写不进去：内存污点仍生效，重启后可能丢这条声明（已知边界）。
       }
+      return false;
     }
   }
 

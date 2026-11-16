@@ -2176,7 +2176,14 @@ export class ExecutionUnit {
    * 统一终态（C1）：run()/resume() 共用。
    *
    * 顺序：status 映射 → OnError hook（best-effort）→ writeRunRecord →
-   * saveSessionState → 发布 run.completed / run.cancelled / run.failed。
+   * `index.json` 终态（先落小文件）→ saveSessionState → 发布 run.completed /
+   * run.cancelled / run.failed。
+   *
+   * 为什么 `index.json` 排在 `saveSessionState` **之前**：壳（`sessions/<id>.json`）是
+   * 投影缓存，动辄几百 KB～几 MB，一次 `atomicWrite`（含 fsync）在真机上要几百毫秒；
+   * 而 `index.json` 是几百字节的元数据。终态是**已经确定的事实**，没有理由让它排在
+   * 一份大文件的写后面 —— 排后面的直接后果就是用户先看到的「状态」比事实晚，界面
+   * 在那段窗口里只能继续挂着「正在思考」。两处都只写一次，与事件条数无关。
    */
   private async finalizeRun(
     execution: Run,
@@ -2188,6 +2195,8 @@ export class ExecutionUnit {
     if (outcome.status === 'completed') {
       await this.writeRunRecord(execution, 'completed');
       this.finalizeSessionState(execution, sessionState, 'completed');
+      // 终态第一落点：小文件、便宜、与投影壳的大小无关（见方法注释）。
+      await this.updateSessionIndexBestEffort(sessionState);
       await this.saveSessionState(sessionState);
 
       this.publishEvent({
@@ -2248,6 +2257,8 @@ export class ExecutionUnit {
     // 失败同样保存真实上下文，避免用单条 user 消息覆盖既有历史（C-02）。
     await this.writeRunRecord(execution, terminalStatus, errorMessage, true, envelope);
     this.finalizeSessionState(execution, sessionState, terminalStatus);
+    // 与成功路径同一顺序：终态先落 `index.json`，再写投影壳（见 finalizeRun 注释）。
+    await this.updateSessionIndexBestEffort(sessionState);
     await this.saveSessionState(sessionState);
 
     const partial = execution.partialContent;

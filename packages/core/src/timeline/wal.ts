@@ -324,24 +324,97 @@ export async function readAllBlocks(sessionDir: string): Promise<DecodedBlock[]>
 }
 
 /**
- * 读出一个会话的全部 timeline 事件（按 `seq` 升序）。
+ * 折出「本趟快照的事实边界」：归档副本 + `wal.log` 里最大的 `seq`。
  *
- * 三个来源合并、按 seq 去重（同一条在归档副本与 WAL 副本里逐字节相同）：
- * `timeline.ndjson`（归档）→ `wal.blocks/*.wblk`（chunk）→ `wal.log`（WAL 原文，最后覆盖）。
- * 坏行/坏帧**不在这里登记**（读侧无写权限）；写者打开会话时会登记。
+ * 它只由**事实行**（`wal.log` / 归档副本，两者同格式）决定，所以它一定是一条事实的
+ * `seq`；块里只有 chunk，因此边界不会落在某个块的区间内部（见
+ * {@link selectBlocksForSnapshot}）。
+ */
+function factBoundaryOf(records: Iterable<TimelineRecord>): number {
+  let max = 0;
+  for (const record of records) if (record.seq > max) max = record.seq;
+  return max;
+}
+
+/**
+ * 从磁盘上「现在能看见的块」里挑出**与本趟快照自洽**的那些。
+ *
+ * 为什么需要挑：{@link readAllBlocks} 的目录快照与 `wal.log` 的读取时刻不同，一次读
+ * 横跨几秒（实测活写会话 11k 块 ≈ 2.9 s）。块目录先列、`wal.log` 后读的话，一次读会
+ * 拿到「新的事实 + 旧的块」，中间凭空少掉一段时间里封的 chunk —— `count` 与实收不再
+ * 相等，客户端只能判缺口，尾部终态事件永远等不到。
+ *
+ * 反过来（**先事实、后块**，即本模块现在的顺序）就有硬保证：写者 `factStep` 先封
+ * 活动块再分配事实 seq（`writer.ts`），所以「`seq < B` 的 chunk 所在的块」必然在写
+ * 第 `B` 行事实之前就已 fsync 落盘 —— 只要块目录是在读完事实之后列的，它们一定可见。
+ * 于是 `end_seq <= B` 的块**无条件纳入**（这段区间属于本趟快照）。
+ *
+ * `start_seq > B` 的块是「读事实之后才封的」：它前面那条事实（`B+1..start-1` 里那条）
+ * 不在本趟快照里，整块纳入就会在 `count` 里造一个**读侧自己造的洞**。所以它只在
+ * **紧接当前最大可读 `seq`**（`start_seq <= cursor + 1`）时纳入 —— 连续尾块，不造洞；
+ * 一旦断链就停下（快照就到此为止，下一次读自然接上）。
+ *
+ * 注意「纳入」不等于「挑好的」：这里不做全量一致性判定，会话真有的洞（坏帧、丢块）
+ * 该出现还是会出现，由写者登记、由 `heads().holes` 声明。
+ */
+function selectBlocksForSnapshot(
+  blocks: readonly DecodedBlock[],
+  factBoundary: number,
+): DecodedBlock[] {
+  const ordered = [...blocks].sort((a, b) => a.entry.start_seq - b.entry.start_seq);
+  const selected: DecodedBlock[] = [];
+  let cursor = factBoundary;
+  for (const block of ordered) {
+    const start = block.entry.start_seq;
+    const end = block.entry.end_seq;
+    if (start < 1 || end < start) continue;
+    // 边界之内的块：无条件纳入（封块早于边界那条事实，必然已完整落盘）。
+    if (end <= factBoundary) {
+      selected.push(block);
+      if (end > cursor) cursor = end;
+      continue;
+    }
+    // 边界之外的块：只有连续尾块才纳入，断链即停。
+    if (start > cursor + 1) continue;
+    selected.push(block);
+    if (end > cursor) cursor = end;
+  }
+  return selected;
+}
+
+/**
+ * 读出一个会话的全部 timeline 事件（按 `seq` 升序），**作为一次自洽快照**。
+ *
+ * 来源仍是三处，按 seq 去重（同一条在归档副本与 WAL 副本里逐字节相同），坏行/坏帧
+ * 不在这里登记（读侧无写权限）；但**读取顺序有硬性要求**：
+ *
+ * 1. 先读事实源：`timeline.ndjson`（归档副本）+ `wal.log`（WAL 原文，同 seq 覆盖归档）；
+ * 2. 再读 chunk 块：`wal.blocks/*.wblk`，并且只取 `selectBlocksForSnapshot` 认可的块。
+ *
+ * 顺序不是性能选择，是**一致性**要求（ADR-105 §3「`[1..wal_head]` 每条要么可读、要么
+ * 已在 holes 里声明」）：块目录必须在事实之后列，否则这段窗口里封的块会缺席，而
+ * 窗口里写下的事实还在 —— 读出来就是一个**中间洞**，`count` 因此大于实收，客户端
+ * 只能停在缺口处（用户看到的是永远「正在思考」）。实测（活写会话，11k 块 / 一次读
+ * 2.9 s）：一次读缺 3 个块 / 102 条，全部是窗口内封的 chunk。
+ *
+ * 代价：「边界之外」的连续尾块之外的部分不参与本趟快照，所以**正在被写着的**最新
+ * 记录可能要等到下一次读。这不是丢数据：reader 的历史窗口由 `heads()` 声明，读到的
+ * 永远是「声明之内、且完整」的那一段。
  */
 export async function readTimelineEvents(sessionDir: string): Promise<TimelineRecord[]> {
   const bySeq = new Map<number, TimelineRecord>();
 
+  // ① 事实源先读：这两处决定了本趟快照的边界（`factBoundaryOf`）。
   const archived = await readNdjsonFile(join(sessionDir, TIMELINE_LAYOUT.timeline));
   for (const record of archived.records) bySeq.set(record.seq, record);
-
-  for (const block of await readAllBlocks(sessionDir)) {
-    for (const record of block.decode.records) bySeq.set(record.seq, record);
-  }
-
   const wal = await readNdjsonFile(join(sessionDir, TIMELINE_LAYOUT.walLog));
   for (const record of wal.records) bySeq.set(record.seq, record);
+  const factBoundary = factBoundaryOf(bySeq.values());
+
+  // ② 块目录后列：此时「边界之内封的块」必然已经在目录里（见 selectBlocksForSnapshot）。
+  for (const block of selectBlocksForSnapshot(await readAllBlocks(sessionDir), factBoundary)) {
+    for (const record of block.decode.records) bySeq.set(record.seq, record);
+  }
 
   const hydrated: TimelineRecord[] = [];
   for (const record of bySeq.values()) {
