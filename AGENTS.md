@@ -44,6 +44,7 @@
 - **路径边界**：`read` / `edit` / `bash cwd` 统一走 `evaluatePath`；内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）是硬 `deny`；`allowed_roots` 只把越界降级为 `ask`；`deny_paths` 只能追加；比较基于 realpath。`bash` 文本匹配是 **best-effort，不是沙箱**（ADR-055/083）。
 - **密钥**：不输出 / 不记录解析后的密钥；`app_secret` 永不打印，`app_id` 只允许前 4 位 + `***`；trace / 事件 / 日志 / `config show` 经 redactor；core 不给默认厂商 Key / Base URL / 价格（ADR-050/069）。
 - **权限**：默认无限等待，不得重新引入 120s / 固定 TTL；只有显式正数 `timeoutMs` 才超时；abort 优先于超时。只有 human / policy 能答，没有 agent 审批人，不提供 `allow-after`（ADR-077/079/091）。
+- **授权分级**：「这点小事能不能不问就做」按 [docs/constitution/12-autonomy.md](docs/constitution/12-autonomy.md) 自己判，不再逐次请示：`allow` 直接做并在 commit message / 回报里注明依据，`ask` 用 ask 工具一次问全，`deny` 不做并说明命中哪条；顺序 deny → ask → allow，**未知按 ask**，冲突从重。
 - **数据写入**：session / checkpoint 一律 `atomicWrite`，默认 `durable: true`；损坏 ≠ 不存在，抛 `SessionCorruptError`、不 unlink；单公司 data-dir 写意图锁（`src/data-lock.ts`），冲突返回 `data_locked` / `session_locked` / `run_locked`；运行时不再获取写者锁（ADR-056/086）。
 - **单 run**：同一个 `ExecutionUnit` 同时只允许一个 active run；第二个 run 抛 `run_already_running`；不要另写终态持久化 / 事件发布路径（ADR-054）。
 - **发布纪律**：1.0 前只做干跑，不 tag、不 publish、不 force-push；1 本地 squash 到 `main` 后直接 push，PR 只在用户明确要求时开；CI 异步，不作为 push 前置；tag `v*` 只有 1 打。
