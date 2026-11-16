@@ -2328,7 +2328,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       // 0.55 P0：配了反代密钥后，首帧不带 token 不再自动获得匿名（本机）身份。
       const frameToken = typeof frame.token === 'string' && frame.token !== '' ? frame.token : null;
       if (frameToken === null && ws.data.proxyAuthed === false) {
-        closeWsBy(ws, 4401, 'unauthorized', 'server_protocol');
+        // 4401 reason 有长度限制（123 字节）：用简短标记代替整句提示。
+        closeWsBy(ws, 4401, 'proxy_secret_missing', 'server_protocol');
         return;
       }
       const principal = resolvePrincipal(opts.auth, frameToken, token);
@@ -3685,7 +3686,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
           queryTokenAllowed(req, path) ? url.searchParams.get('token') : null,
         );
         if (rawToken === null && !proxySecretAllowed(req, opts.proxySecret)) {
-          return errorJson('unauthorized', 'Missing or invalid token', 401, extra);
+          // 文案必须能直接照做：说清缺哪个头、配置键叫什么、怎么走本机直连。
+          return errorJson(
+            'unauthorized',
+            'proxy_secret_missing: 本监听要求反代密钥头 X-Vessel-Proxy-Secret（值取自 ' +
+              'serve.proxy_secret_env 指向的环境变量）。反代 snippet: ' +
+              'proxy_set_header X-Vessel-Proxy-Secret $vessel_proxy_secret; 本机直连请改用 ' +
+              'Authorization: Bearer <serve.token>。',
+            401,
+            extra,
+          );
         }
       }
 

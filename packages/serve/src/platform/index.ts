@@ -14,6 +14,11 @@ export {
   resolvePlatformAuth,
 } from './auth.js';
 export {
+  isLoopbackListen,
+  PLATFORM_LISTEN_GUARD_DOC,
+  platformListenGuard,
+} from './listen-guard.js';
+export {
   createPlatformRegistry,
   PlatformNodeNotFoundError,
   type PlatformRegistry,

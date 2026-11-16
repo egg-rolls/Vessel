@@ -436,9 +436,18 @@ Platform Gateway token 独立，只读 `gateway.token` / `gateway.token_env`，�
 
 **同机反代（0.55）**：反代与 Vessel 同机时，客户端对端地址恒为 `127.0.0.1`，
 「回环 = 本机」不再成立。把反代密钥的环境变量名配到 `gateway.proxy_secret_env` /
-`serve.proxy_secret_env`，并让反代注入 `X-Vessel-Proxy-Secret` 头（**覆盖**，不是追加）。
-未配置时行为与之前逐字一致；配置后该监听只接受经反代来的匿名请求，带 Bearer token 的
-客户端不受影响。威胁模型与拍板点见 [REVERSE-PROXY.md](REVERSE-PROXY.md)。
+`serve.proxy_secret_env` / `hub.proxy_secret_env`，并让反代注入 `X-Vessel-Proxy-Secret` 头
+（**覆盖**，不是追加）。未配置时行为与之前逐字一致；配置后该监听只接受经反代来的匿名请求，
+带 Bearer token 的客户端不受影响。
+
+**0.55 起默认生效的收紧**（会打断部分现有部署，迁移见 [REVERSE-PROXY.md](REVERSE-PROXY.md) §8）：
+
+- `gateway.hostname` 非回环（`0.0.0.0` / `::` / 网卡地址）且没有 `gateway.token` /
+  `gateway.token_env` ⇒ **平台拒绝启动**（`platform_listen_insecure`）。回环监听不受影响。
+- `platform.nodes.credentials` 只认 `mode === 'token'`：浏览器需要平台 token
+  （`#token=<值>` 导入），脚本需要 `Authorization: Bearer <platform-token>`。
+- `hub.proxy_secret_env` 配置后，hub 的目录 / WS 目录流 / 删节点都要求密钥头。
+- `vessel doctor` 会对「回环 + 没有任何 token」给出 warning（只提示，不改变运行行为）。
 
 ## 4. 命令
 

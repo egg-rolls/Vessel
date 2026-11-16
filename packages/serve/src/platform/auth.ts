@@ -19,6 +19,11 @@ export interface PlatformAuthResult {
   mode: PlatformAuthMode;
   /** 请求来源 socket 是否回环（credentials 端点额外要求）。 */
   loopback: boolean;
+  /**
+   * 0.55 P0：反代密钥头是否成立。未配置 `proxySecret` 时恒为 `true`。
+   * 用来把 401 的文案分成「缺反代密钥」与「缺平台 token」两种可操作提示。
+   */
+  proxySecretOk: boolean;
 }
 
 export interface ResolvePlatformAuthInput {
@@ -58,13 +63,13 @@ function constantTimeEqual(a: string, b: string): boolean {
  * - 0.55 P0：配置了 `proxySecret` 时，「回环」还要求请求带反代密钥头。
  */
 export function resolvePlatformAuth(input: ResolvePlatformAuthInput): PlatformAuthResult {
-  const loopback =
-    isLoopbackAddress(input.address) && proxySecretAllowed(input.req, input.proxySecret);
+  const proxySecretOk = proxySecretAllowed(input.req, input.proxySecret);
+  const loopback = isLoopbackAddress(input.address) && proxySecretOk;
   const expected = input.platformToken;
   if (typeof expected === 'string' && expected !== '') {
     const provided = bearerToken(input.req);
     const ok = provided !== null && constantTimeEqual(provided, expected);
-    return { ok, mode: ok ? 'token' : 'anonymous', loopback };
+    return { ok, mode: ok ? 'token' : 'anonymous', loopback, proxySecretOk };
   }
-  return { ok: loopback, mode: 'anonymous', loopback };
+  return { ok: loopback, mode: 'anonymous', loopback, proxySecretOk };
 }

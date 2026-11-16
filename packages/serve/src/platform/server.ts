@@ -17,7 +17,8 @@ import {
   originAllowed,
 } from '../gateway/auth.js';
 import { serveStatic } from '../gateway/static.js';
-import { resolvePlatformAuth } from './auth.js';
+import { type PlatformAuthResult, resolvePlatformAuth } from './auth.js';
+import { platformListenGuard } from './listen-guard.js';
 import { createPlatformRegistry } from './registry.js';
 import { handlePlatformRpc } from './rpc.js';
 import type { PlatformGateway, PlatformGatewayOptions } from './types.js';
@@ -35,6 +36,27 @@ function isNodeOnlyPath(path: string): boolean {
     path.startsWith('/ws/') ||
     path === '/sse' ||
     path.startsWith('/sse/')
+  );
+}
+
+/**
+ * 0.55 P0：401 文案必须能直接照做 —— 分清「缺反代密钥」与「缺平台 token」。
+ * 仍然只用 CONTRACT §7 的 `platform_unauthorized` 错误码（Web 端据此弹「需要 token」）。
+ */
+function platformUnauthorizedMessage(auth: PlatformAuthResult): string {
+  if (!auth.proxySecretOk) {
+    return (
+      'proxy_secret_missing: 请求没带（或带错）反代密钥头 X-Vessel-Proxy-Secret。' +
+      '请让同机反代覆盖注入这个头，值取自 gateway.proxy_secret_env 指向的环境变量；' +
+      '反代 snippet: proxy_set_header X-Vessel-Proxy-Secret $vessel_proxy_secret; ' +
+      '本机直连请改用 Authorization: Bearer <gateway.token>。'
+    );
+  }
+  return (
+    'platform_token_required: 需要 Authorization: Bearer <gateway.token>（浏览器可用 ' +
+    '#token=<同一个值> 导入）。令牌来自 gateway.token 或 gateway.token_env 指向的环境变量；' +
+    '生成: export VESSEL_PLATFORM_TOKEN=$(openssl rand -hex 32) 然后 gateway.token_env: ' +
+    'VESSEL_PLATFORM_TOKEN。'
   );
 }
 
@@ -63,6 +85,14 @@ function errorJson(
  * 启动平台监听。`staticDir/index.html` 缺失时 fail-fast（P10），错误信息带解析后路径。
  */
 export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGateway {
+  // 0.55 P0：fail-closed。非回环监听 + 没有 platform token ⇒ 拒绝启动（不是警告）。
+  const listenGuard = platformListenGuard({
+    hostname: opts.hostname,
+    port: opts.port,
+    platformToken: opts.platformToken,
+  });
+  if (listenGuard !== null) throw new Error(listenGuard);
+
   const staticDir = resolve(opts.staticDir);
   const indexFile = resolve(staticDir, 'index.html');
   if (!existsSync(indexFile)) {
@@ -113,7 +143,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
 
       // 非回环且未通过平台认证：一律 401（即使未配置平台 token）。
       if (!auth.loopback && !auth.ok) {
-        return errorJson('platform_unauthorized', 'Missing or invalid platform token', 401, extra);
+        return errorJson('platform_unauthorized', platformUnauthorizedMessage(auth), 401, extra);
       }
 
       if (path === '/health') {
@@ -132,12 +162,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
           });
         }
         if (!auth.ok) {
-          return errorJson(
-            'platform_unauthorized',
-            'Missing or invalid platform token',
-            401,
-            extra,
-          );
+          return errorJson('platform_unauthorized', platformUnauthorizedMessage(auth), 401, extra);
         }
         return handlePlatformRpc(
           req,

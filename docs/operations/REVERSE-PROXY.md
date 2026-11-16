@@ -8,8 +8,9 @@ paths: [docs/operations/REVERSE-PROXY.md]
 # 公网暴露与同机反代的安全边界
 
 > 本文是 0.55 的 P0 审计结论：**反代与 gateway / hub / node 同机**时，客户端对端地址恒为
-> `127.0.0.1`，于是所有「回环 = 本机 = 可信」的判定都失效。文中给出复现证据、候选修复与
-> 需要产品拍板的点。本文只描述**审计与设计**；默认行为没有任何改动，新增开关一律 opt-in。
+> `127.0.0.1`，于是所有「回环 = 本机 = 可信」的判定都失效。文中给出复现证据、修复方案与
+> 迁移步骤。§4 的共享密钥开关仍是 **opt-in**；§8 的四条收紧是**默认生效的行为变化**，
+> 升级前请按 §8 的清单逐条过。移植/回滚粒度：每一条收紧各自一个 commit。
 
 ## 1. 结论摘要（先看这个）
 
@@ -26,6 +27,13 @@ paths: [docs/operations/REVERSE-PROXY.md]
 5. 没有任何启发式能区分「本机浏览器」与「同机反代转发的公网请求」：peer、Host、Origin
    三者都能被同一个反代做出与被信任请求完全一致的样子。**唯一可靠的办法是让反代出示一个
    共享密钥**（方案 A），其余方案都是范围收窄，不是根治。
+6. **0.55 最终口径（四条收紧，默认生效）**：
+   - 平台**非回环监听 + 无 `gateway.token` ⇒ 拒绝启动**（不是警告）；回环监听不受影响；
+   - `platform.nodes.credentials` **必须** `mode === 'token'`（不再接受「回环匿名」）；
+   - hub 的三个回环判定（目录 / WS 目录流 / 删节点）在配置了反代密钥后**必须带密钥头**；
+   - `vessel doctor` 对「回环 + 无任何 token」报警（只提示，不改语义）。
+   迁移步骤见 §8；每一条的拒绝文案都写明「缺什么 / 配置键叫什么 / 一行可复制的命令」。
+
 
 ## 2. 信任边界图
 
@@ -203,47 +211,142 @@ HTTP/1.1 200 OK  {"..."token":"node-b-ADMIN-TOKEN-88a0be31f5"...}
 
 ### 推荐
 
-**A**，理由：唯一能真正区分「本机」与「同机反代」的机制；默认关闭所以不破现有部署；
-一次实现同时覆盖 platform / node（hub 可按同一模式跟进）；多机配置成本只是「每台一份随机串
-+ 反代一行指令」。B 可以叠在 A 之上作为纵深（但需要产品拍板是否接受本地匿名 UI 的变化）。
+**A + B + 平台 fail-closed + hub 收紧**（0.55 最终口径）：A 是唯一能区分「本机」与「同机反代」
+的机制；B / fail-closed / hub 收紧把剩下能绕过 A 的匿名面一起关掉。四项默认生效与否见 §8。
 
-## 5. 本单落地了什么 / 没落地什么
+## 5. 落地清单（按 commit）
 
-已落地（全部 opt-in，默认行为不变）：
+已落地，默认行为不变（opt-in）：
 
 - 共享密钥头机制 + `serve.proxy_secret_env` / `gateway.proxy_secret_env` 两个配置键；
-- 平台入口：回环信任要求密钥头（`platform.nodes.credentials` 因此不再被匿名利用）；
+- 平台入口：回环信任要求密钥头；
 - node 入口：无凭据的 HTTP / WS 请求要求密钥头（带 token 的请求不变）。
 
-**没落地（等拍板 / 后续单）**：
+已落地，**默认生效的行为变化**（详见 §8）：
 
-- hub 的三个回环判定（`src/hub/server.ts:348/452/651`）——同一模式可加，但 hub 还有
-  `allow_remote` + TLS + token 的既有守卫，改动面要单独评估；
-- 「平台非回环监听必须 token」的启动守卫（与 node/hub 对齐）——会改变现有部署的启动结果，
-  属于行为变化，需拍板；
-- 方案 B 的凭据端点收紧；
+1. 平台 fail-closed：非回环监听 + 无 `gateway.token` ⇒ 启动被拒
+   （`packages/serve/src/platform/listen-guard.ts`；`startPlatformGateway` 与 CLI 预检双处判定）；
+2. `platform.nodes.credentials` 要求 `mode === 'token'`（`packages/serve/src/platform/rpc.ts`）；
+3. hub 三个回环判定在配置了 `hub.proxy_secret_env` 后必须带密钥头（`src/hub/server.ts`）；
+4. `vessel doctor` 对「回环 + 无论任何 token」报警（只提示）。
+
+仍未做（明确不做 / 留给后续）：
+
 - mTLS / 反代信任头（`X-Forwarded-For`）识别。**特别提示**：`X-Forwarded-*` 不能作为
-  信任来源——客户端可以自己伪造，除非反代保证覆盖。
+  信任来源——客户端可以自己伪造，除非反代保证覆盖；
+- 密钥自动铸造 / 轮换命令（当前是手工 env，步骤见 §9）。
 
-## 6. 需要用户拍板的点
+## 6. 设计决策记录（已拍板）
 
-1. **是否接受「开了 `proxy_secret_env` 就只能经反代访问」**（直连 127.0.0.1 的页面不再有匿名身份）。
-   备选：同时要求配 `gateway.token`，把直连模式改成「token 模式」。
-2. **`platform.nodes.credentials` 的长期归属**：是永远允许「回环匿名下发 node token」，
-   还是改成必须带平台 token（方案 B）？这决定本地 WebUI 是否还需要粘贴 token。
-3. **平台是否要在非回环监听时强制 `gateway.token`（fail-closed 启动守卫）**：与 node/hub 对齐
-   会挡住一类「0.0.0.0 + 无 token」的现网部署（它们现在能启动且匿名可读）。
-4. **hub 的回环判定是否同样收紧**（会要求反代对 hub 也注入密钥头；纯本机 hub 不受影响）。
-5. **密钥轮换与分发方式**：手工 env、还是纳入 SecretStore / 后续 `vessel gateway rotate` 一类命令。
-6. **是否把「没配任何 token 的回环监听」在 `vessel doctor` 里降级为 warning/error**
-   （只提示、不改语义，风险最低的一种收口）。
+1. 「开了 `proxy_secret_env` 就只能经反代访问」——**接受**（直连 127.0.0.1 的页面不再有
+   匿名身份；要直连就连同 `gateway.token` 一起配）。
+2. `platform.nodes.credentials` —— **改为必须带平台 token**（方案 B）。本地 WebUI 需要在
+   页面里粘贴平台 token（`#token=<值>` 或界面输入）。
+3. 平台非回环监听 —— **强制 `gateway.token`（fail-closed 启动守卫）**，与 node/hub 对齐。
+4. hub 的回环判定 —— **同样收紧**（要求反代对 hub 也注入密钥头；纯本机 hub 不受影响）。
+5. 密钥分发 —— 当前**手工 env**；轮换步骤见 §9，自动轮换命令留后续。
+6. doctor —— **只警告、不改语义**（把风险暴露出来，不替用户停服务）。
 
 ## 7. 复现与验证命令
 
 ```bash
 cd /mnt/d/tmp/pubnet
-bun attack-platform.ts    # 证明洞在
-bun verify-fix.ts         # 证明开关三态（不配 / 缺头 / 带头）
-bun node-gateway.ts       # node 侧无凭据 = admin
-bun ws-node.ts legacy     # WS 首帧不带 token 也拿到事件流
+bun attack-platform.ts      # 证明洞在（改造前）
+bun verify-fix.ts           # 反代密钥开关三态（不配 / 缺头 / 带头）
+bun verify-a-listen.ts      # 验收 a：平台 fail-closed 四形态 + 密钥缺头/错头
+bun node-gateway.ts         # node 侧无凭据 = admin
+bun ws-node.ts legacy       # WS 首帧不带 token 也拿到事件流
 ```
+
+## 8. 升级清单（从旧行为到新行为）
+
+0.55 的四条收紧**默认生效**，装上新版本后现网可能出现的三种「突然不可用」：
+平台起不来、页面提示要 token、hub 匿名请求 401。按下面顺序过一遍即可。
+
+### 第 0 步：先判断自己属于哪一类
+
+| 你的形态 | 需要做什么 |
+|----------|------------|
+| 纯本机（浏览器直接开 `http://127.0.0.1:8642`，没反代） | 不需要改配置；平台仍以回环 + 匿名运行（doctor 会提示风险） |
+| 同机反代 + 公网/内网访问 | 走第 1–3 步（推荐全配） |
+| 平台绑 `0.0.0.0` 且没配 `gateway.token` | **必须先做第 1 步**，否则起步就被拒绝（这是有意的） |
+| 多机（每台一个 node，各自可能被反代） | 每台机器单独做第 1–3 步；密钥不要跨机复用 |
+
+### 第 1 步：平台监听（fail-closed）
+
+1. 看当前监听：`vessel gateway status`（或 `grep -A3 '^gateway:' ~/.vessel/config.yaml`）。
+2. 如果是回环（`127.0.0.1` / `localhost`）→ 无需改动。
+3. 如果是 `0.0.0.0` 或具体网卡地址，二选一：
+   - **推荐**：改成回环，让同机反代转发进来：
+     ```yaml
+     gateway:
+       hostname: 127.0.0.1
+     ```
+   - 或者配平台 token（令牌只进环境变量）：
+     ```bash
+     openssl rand -hex 32          # 生成一次，粘贴到下面
+     # 写进 gateway.token_env 指向的环境（systemd Environment= / .env / shell profile）
+     export VESSEL_PLATFORM_TOKEN=<上面生成的值>
+     ```
+     ```yaml
+     gateway:
+       token_env: VESSEL_PLATFORM_TOKEN
+     ```
+4. 重启：`vessel gateway restart`。若仍被拒，报错会直接写出缺什么。
+
+### 第 2 步：`platform.nodes.credentials` 要凭据了
+
+- 页面首次打开会提示需要 token：在地址栏用 `http://<host>:<port>/#token=<platform-token 的值>`
+  导入一次（之后只存 `sessionStorage`），或使用界面里的 token 输入框。
+- 用脚本打 `/platform/rpc` 的自动化：加 `Authorization: Bearer <platform-token>`。
+- 只有 node token 没有平台 token 的旧脚本会拿到 401 `platform_unauthorized`
+  （文案会说明要用平台 token，别混用 node token）。
+
+### 第 3 步：hub 回环判定收紧（配了密钥才收紧）
+
+1. 生成 hub 的反代密钥：`openssl rand -hex 32`。
+2. 写进 hub 服务的环境：`export VESSEL_HUB_PROXY_SECRET=<值>`。
+3. 配置键：
+   ```yaml
+   hub:
+     proxy_secret_env: VESSEL_HUB_PROXY_SECRET
+   ```
+4. 反代对 hub 的 location 也加一行（**覆盖**，不是追加）：
+   ```nginx
+   proxy_set_header X-Vessel-Proxy-Secret $vessel_hub_proxy_secret;
+   ```
+5. 不配 `hub.proxy_secret_env` = hub 的回环判定保持旧行为（不新增拒绝）。
+
+### 第 4 步：node 入口（可选但推荐）
+
+同机反代指向 node 的话，`serve.proxy_secret_env` + 反代注入头；配了之后**直连 node 的本地
+CLI/TUI 必须带 `serve.token`**（它们本来就带，因此通常无感）。
+
+### 第 5 步：自检
+
+```bash
+vessel doctor            # 有没有「回环 + 无 token」警告
+vessel gateway status    # 平台在哪、是否在跑
+curl -s http://127.0.0.1:8642/health   # {"status":"ok","role":"platform",...}
+```
+
+> 回滚：四条收紧各自一个 commit（`git revert <sha>` 可单条回退）。回退后行为立即回到
+> 「回环即可信」的旧形态——**只在确认该机器不暴露到公网时**才这么做。
+
+## 9. 密钥轮换（手工，当前版本）
+
+平台 token、反代密钥、hub 密钥都是「环境变量里的值」；轮换 = 换值 + 重启相关进程。
+
+1. **生成新值**：`openssl rand -hex 32`（不同用途各生成一份，不要复用）。
+2. **更新来源**：改 `systemd` 的 `Environment=` / `env_file` / shell 里的 `export`，不要写进
+   YAML（配置键只存**变量名**，`validator` 不接受内联密钥）。
+3. **平台 token**：更新 `gateway.token_env` 指向的变量后 `vessel gateway restart`；
+   浏览器页面需要重新用 `#token=<新值>` 导入一次（旧值立即失效）。
+4. **反代密钥**（`serve.proxy_secret_env` / `hub.proxy_secret_env`）：先改 Vessel 侧环境与
+   反代侧变量名指向的值，两者**必须同时**切换；顺序建议：先把新值写进 Vessel 环境并重启 →
+   再改反代注入值并 `nginx -s reload`（中间会有短暂 401，可在维护窗口做）。
+5. **node token**：`serve.token_env` 换值后重启 node；hub 目录里该 node 的 token 由平台
+   重新下发（`platform.nodes.credentials` 拿到的就是新值），旧值立即被拒。
+6. **轮换之后自检**：`vessel doctor` + 打开页面确认能连；`curl` 旧 token 应当 401。
+
+
