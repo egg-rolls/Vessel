@@ -19,10 +19,20 @@
 import { type FileHandle, open, readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  blockFirstFrameSeq,
+  locateRangeAnchor,
+  locateTailChainStart,
+  ManifestForwardReader,
+  verifyBlockAgainstManifest,
+} from './blocks.js';
+import { validateHoleDeclarationLine } from './holes.js';
+import {
   isTimelineBlobRef,
+  MAX_INLINE_BYTES,
   TIMELINE_LAYOUT,
   type TimelineBlockEntry,
   type TimelineHole,
+  type TimelineHoleDeclarationLine,
   type TimelineRecord,
 } from './types.js';
 
@@ -638,4 +648,905 @@ export async function fsyncDirectory(path: string): Promise<void> {
   } catch {
     // 平台不支持目录 fsync：忽略。
   }
+}
+
+/*
+ * ── 范围读（0.56 · 只开窗口内那几十个块） ────────────────────────────────────
+ *
+ * ## 它解决的问题
+ *
+ * 读侧今天把 `wal.manifest`（块目录）当不存在：任何一页都靠「整份归档 + 整份 WAL +
+ * 全部块文件」凑出来。`d813eaea`（209,835 条 / 13,177 块 / 69 MB）实测整份读 4.2 s
+ * （同进程第 3 次 16 s），其中 92% 花在「解全部块」。而一页 100 条只要 6 个块、
+ * 一页 2000 条只要 120 个块。
+ *
+ * ## 这一刀的三条纪律（违反任何一条就是比现状更差的实现）
+ *
+ * 1. **枚举走 `readdir`，`readdir` 才是「有哪些块」的权威**。`wal.manifest` 的追加是
+ *    best-effort（`blocks.ts` 里 `.catch(() => {})`），它**落后于块目录是设计允许的**，
+ *    拿它枚举 ⇒ 尾部一整段 chunk 静默消失。它只配当**锚点**（`locateRangeAnchor`）。
+ * 2. **不可信只许两种行为**：明确声明洞，或者降级整份读。**绝对禁止静默少给**。
+ * 3. **输出必须与整份读逐条等价**：同一个 `sinceSeq`，返回的 seq 集合完全相等。
+ *
+ * ## 凭什么证明「没少给」（这是本模块唯一的硬保证）
+ *
+ * 序号空间是**精确二分覆盖**的：`1..max(seq)` 每个号恰好在一个位置（要么是一条事实行，
+ * 要么是某个块里的一帧）—— 这是写侧「唯一 seq 分配点 + 块只写一次」的推论，也是
+ * 0.56 设计 §1 实测的性质（204,834 帧 + 5,001 事实行 = 209,835 = `max(seq)`，零缺口）。
+ *
+ * 于是「窗口 `(since, hi]` 里一个都不许少」可以机械校验：
+ *
+ * ```
+ * ∀ seq ∈ (since, hi]:  seq ∈ 本次收上来的记录  ∪  已声明且未退役的洞
+ * ```
+ *
+ * 不成立 ⇒ **降级整份读**（{@link TimelineRangeUndecidable}），绝不允许「跳过这个块」
+ * 「凑够 limit 就停」把结果变窄。`hi` 是**本次证明到的右端**：拿满 `limit` 条时它就是
+ * 第 `limit` 条的 seq；没拿满时它必须是「真的没有更多可读记录」的那个右端（事实行读到
+ * 文件尾 + 块目录枚举完 / 连续尾块断链）。
+ *
+ * ## 覆盖的三段与「归档段为什么不读」
+ *
+ * | 段 | 范围读怎么处理 | 为什么 |
+ * | --- | --- | --- |
+ * | `timeline.ndjson`（归档副本） | **不读**，但先验两条绊线 | 归档是「复制不是搬移」：`archiveNow()` 只 append、从不截断 `wal.log`（实测两者 md5 相同） |
+ * | `wal.log`（事实行） | 行二分定位 + 从前向后顺读（有界） | 尾窗 256 KiB 只够尾页；中段用行二分（11 探针 / 3 ms） |
+ * | `wal.blocks/*`（chunk） | 锚点 + 顺序开块 + 连续尾块规则 | 这里就是那 92% 的耗时 |
+ *
+ * 「归档段不读」的**前提检查**（{@link readArchiveTripline}）：① `wal.log` 首行 seq 必须
+ * 是 1（搬移会截掉头部，首行 seq 立刻 > 1）；② 归档末 seq 必须 `<=` `wal.log` 末 seq
+ * （归档里出现 WAL 没有的号 = 归档不是副本）。任一不成立 ⇒ 降级，**不是**无条件跳过。
+ * 这两条是给「哪天归档改成搬移 + 截断」那次改动设的绊线：一改就降级，而不是静默丢掉
+ * 一整段历史（丢得还特别有规律：越老的会话丢得越多）。
+ *
+ * ## 上界（第十一条「有界」三问）
+ *
+ * - **上界**：块 ≤ 窗口 seq 跨度里的块数（`RANGE_WINDOW_MAX_SEQ_SPAN = 64 × limit`，
+ *   超了降级）；事实行 ≤ `RANGE_FACT_SCAN_MAX_BYTES`（4 MiB）；连续尾块重验 ≤
+ *   `RANGE_TAIL_CHAIN_MAX_BLOCKS`（256 块）。三条都是常量，不随会话长大；
+ * - **谁在触发**：`TimelineEventLog.read({sinceSeq, limit})`（一页一次，客户端翻页时）；
+ * - **用户看得到吗**：看得到 —— 就是他正在翻的那一页。
+ *
+ * ## 不改什么
+ *
+ * 落盘格式一个字不动、不新增文件、不加新 RPC；`read()` 仍是唯一读口；
+ * `readTimelineEvents()`（整份读）不删、不降级 —— 索引重建、显式修复和**本模块的降级
+ * 路径**都还用它。
+ */
+
+/** 范围读的块数门槛：块数低于它时整份读只是 100 ms 量级，多一条分支只会多一处会漂的口径。 */
+export const RANGE_READ_MIN_BLOCKS = 256;
+
+/**
+ * 扩窗上界（`× limit`）：`sinceSeq` 之后可能夹着洞，`limit` 条记录要跨更多 seq。
+ *
+ * 取 64：健康会话一页 `limit` 条记录恰好跨约 `limit` 个 seq（每个 seq 都是一条记录），
+ * 留 64 倍余量给「大片已声明洞」。超过它说明定位或数据已经病到不可判，降级整份读。
+ */
+export const RANGE_WINDOW_MAX_SEQ_SPAN = 64;
+
+/**
+ * 事实行顺读的首窗（64 KiB ≈ 40 条事实行；不够就 ×4 扩窗，上限见下）。
+ *
+ * 缺省页只要几十条记录：首窗开 1 MiB 是白读（实测同一页：1 MiB 首窗读 1.94 MB / 24 ms，
+ * 64 KiB 首窗读约 150 KB / 7 ms）。窗口随需要增长，总量仍受
+ * {@link RANGE_FACT_SCAN_MAX_BYTES} 约束。
+ */
+export const RANGE_FACT_SCAN_FIRST_BYTES = 64 * 1024;
+
+/**
+ * 事实行顺读总预算（4 MiB，与 `TAIL_WINDOW_MAX_BYTES` 同一量级与含义）。
+ *
+ * 超过它就不猜：窗口还没覆盖满 ⇒ 降级整份读（`window_incomplete`）。
+ */
+export const RANGE_FACT_SCAN_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * 连续尾块重验的块数上界（第十一条：任何一次 IO 都要有显式上界）。
+ *
+ * 为什么需要重验：`selectBlocksForSnapshot` 对 `start_seq > factBoundary` 的块只认
+ * 「紧接 `cursor + 1`」的连续尾块。如果一页从**尾链中段**开始，链就必须从
+ * `factBoundary` 那一端重新验一遍（否则会把「链早就断了」的块当成可读 —— 那是多给）。
+ * 链上没有任何索引可借（seq → 块号只能顺序走），所以这段成本就是链长 × 单块耗时。
+ *
+ * 1024 块的来由：单块打开 ≈ 0.2 ms ⇒ 上界 ≈ 200 ms，仍比一次整份读（实测 6–18 s）便宜
+ * 两个数量级；而 1024 块 ≈ 1.6 万帧，比「一个正在流式输出、还没写终态事实的 run」长得多。
+ * 超过它说明尾部形状反常，直接降级整份读（**不许**为了快而把链的中段当成可读）。
+ */
+export const RANGE_TAIL_CHAIN_MAX_BLOCKS = 1024;
+
+/**
+ * 一页的绝对上界（条）。
+ *
+ * 超过它就不做范围读（降级整份读）：一页要 10 万条的场景本来就没有「按窗口读」的意义，
+ * 顺手把 `limit × RANGE_WINDOW_MAX_SEQ_SPAN` 的算术关在安全整数范围内。
+ */
+export const RANGE_READ_MAX_LIMIT = 100_000;
+
+/** 一行的物理上限（`MAX_INLINE_BYTES` 的 `data` + 元数据）：二分探针最多扩到这么大。 */
+const FACT_LINE_MAX_BYTES = MAX_INLINE_BYTES + 16 * 1024;
+
+/**
+ * 二分探针次数上限与总字节上限（两次都说「不知道」就降级，不在这上面耗）。
+ *
+ * 次数：`log2(64 MiB / 1 B) ≈ 26`，给 64 已是两倍余量；字节：每次探针读 8–16 KiB 的窗口
+ * （长行会扩窗），实测一次定位读不到 300 KiB。
+ */
+const FACT_PROBE_LIMIT = 64;
+const FACT_PROBE_TOTAL_MAX_BYTES = 8 * 1024 * 1024;
+
+/** `wal.log` 头部检查窗口（首行 seq 是不是 1）。 */
+const WAL_HEAD_BYTES = 64 * 1024;
+
+/** 归档副本尾窗（取「归档末 seq」）；归档行与事实行同形、同尺寸。 */
+const ARCHIVE_TAIL_FIRST_BYTES = 64 * 1024;
+const ARCHIVE_TAIL_MAX_BYTES = 1024 * 1024;
+
+/** 范围读为什么会「不可判」（稳定 code；上层只按它决定要不要留痕/告警）。 */
+export type TimelineRangeUndecidableReason =
+  | 'invalid_cursor'
+  | 'invalid_limit'
+  | 'blocks_below_threshold'
+  | 'archive_not_copy'
+  | 'read_failed'
+  | 'anchor_unavailable'
+  | 'window_too_wide'
+  | 'coverage_gap'
+  | 'window_incomplete'
+  | 'order_broken'
+  | 'block_spans_fact_boundary';
+
+/**
+ * 范围读「这次不可判，请降级整份读」。
+ *
+ * 它**不是错误处理**，是设计的一部分（0.56 设计 §3.4 的 A 路）：调用方必须退回
+ * `readTimelineEvents()`（输出与今天逐条相同）并**留痕**。把输出变窄（少给几条、
+ * 跳过一个块、返回空数组）都是错的。
+ */
+export class TimelineRangeUndecidable extends Error {
+  readonly reason: TimelineRangeUndecidableReason;
+
+  constructor(reason: TimelineRangeUndecidableReason, detail: string) {
+    super(`timeline_range_undecidable: ${reason}: ${detail}`);
+    this.name = 'TimelineRangeUndecidable';
+    this.reason = reason;
+  }
+}
+
+/** 范围读的一次调用统计（review 三问的答案；`deb` 日志与自证脚本都看它）。 */
+export interface TimelineRangeStats {
+  /** 本次打开的块文件数 */
+  blocks_opened: number;
+  /** 本次读的块文件字节数 */
+  block_bytes: number;
+  /** 本次读的 `wal.log` 字节数（含定位探针） */
+  fact_bytes: number;
+  /** 锚点来源：`manifest` 行二分 / `first_frame` 文件名二分 */
+  anchor_source: 'manifest' | 'first_frame';
+  /** 窗口左端（排他游标本身） */
+  since_seq: number;
+  /** 本次**证明到**的右端（`hi`）：`(since, hi]` 内一个都不许少 */
+  window_to: number;
+  /** 窗口内落在已声明（未退役）洞里的 seq 数 */
+  declared_holes: number;
+  /** 自证不通过的块名（这些块**照样被读**，只是它的 manifest 记账不可信） */
+  unverified_blocks: string[];
+  /** 命中并返回的记录数 */
+  count: number;
+}
+
+/** `readTimelineRange` 的入参。 */
+export interface TimelineRangeQuery {
+  /** 排他游标：只返回 `seq > sinceSeq` 的记录 */
+  sinceSeq: number;
+  /** 页上限（上限，不是「必须给满」；真给不满必须能被覆盖算术证明） */
+  limit: number;
+}
+
+/** 一次窗口内的「洞」区间（存活声明，last-wins 折叠后的）。 */
+interface LiveHole {
+  from_seq: number;
+  to_seq: number;
+}
+
+/**
+ * 读**存活**洞区间（只读；不截断、不追加 —— 读侧没有声明权）。
+ *
+ * 判据与折叠口径复用 `holes.ts`：`validateHoleDeclarationLine`（认 `kind:'hole_retired'`）
+ * + 「同区间 last-wins，按物理行序，不看 `at`」。
+ *
+ * **为什么不能直接用 `readHoles`**：那个函数（`wal.ts` 的老读器）不认退役行，会把已退役
+ * 的区间仍当成洞 —— 已退役意味着「这段数据逐条 CRC 通过、可读」，把它算成洞就会把
+ * 「本窗口少给了一条」误判成「正常」，正是 0.56 设计最禁止的那种静默少给。
+ */
+async function readLiveHoles(sessionDir: string): Promise<LiveHole[]> {
+  const result = await readCrcNdjsonFile<TimelineHoleDeclarationLine>(
+    join(sessionDir, TIMELINE_LAYOUT.holes),
+    validateHoleDeclarationLine,
+  );
+  const states = new Map<string, { from_seq: number; to_seq: number; retired: boolean }>();
+  for (const line of result.items) {
+    states.set(`${String(line.from_seq)}:${String(line.to_seq)}`, {
+      from_seq: line.from_seq,
+      to_seq: line.to_seq,
+      retired: line.kind === 'hole_retired',
+    });
+  }
+  const live: LiveHole[] = [];
+  for (const state of states.values()) {
+    if (state.retired) continue;
+    live.push({ from_seq: state.from_seq, to_seq: state.to_seq });
+  }
+  return live;
+}
+
+/** `wal.log` 第一条完整事实行的 seq（`0` = 文件不存在/为空）。 */
+async function firstFactSeqOf(path: string, size: number): Promise<number> {
+  if (size <= 0) return 0;
+  let window = Math.min(size, WAL_HEAD_BYTES);
+  for (;;) {
+    const buffer = await readFileWindow(path, 0, window);
+    if (buffer === undefined) {
+      throw new TimelineRangeUndecidable('read_failed', 'wal.log 头部读不出来');
+    }
+    const newline = buffer.indexOf(0x0a);
+    if (newline !== -1) {
+      const record = parseRecordLine(buffer.toString('utf8', 0, newline));
+      if (record === undefined) {
+        throw new TimelineRangeUndecidable(
+          'archive_not_copy',
+          'wal.log 首行不可解析（无法确认头部未被搬移）',
+        );
+      }
+      return record.seq;
+    }
+    if (window >= size) {
+      throw new TimelineRangeUndecidable('read_failed', 'wal.log 没有一行完整事实行');
+    }
+    if (window >= FACT_LINE_MAX_BYTES) {
+      throw new TimelineRangeUndecidable('read_failed', 'wal.log 首行超过单行上限');
+    }
+    window = Math.min(size, Math.min(window * 4, FACT_LINE_MAX_BYTES));
+  }
+}
+
+/** `wal.log` 最后一条完整事实行的 seq（尾窗读；读不出来 ⇒ 不可判）。 */
+async function lastFactSeqOf(path: string, size: number): Promise<number> {
+  if (size <= 0) return 0;
+  const window = await readNdjsonTail(path, TAIL_WINDOW_FIRST_BYTES, TAIL_WINDOW_MAX_BYTES);
+  if (window === undefined) {
+    throw new TimelineRangeUndecidable('read_failed', 'wal.log 尾窗读不出来（边界不知道）');
+  }
+  for (let index = window.lines.length - 1; index >= 0; index -= 1) {
+    const line = window.lines[index];
+    if (line === undefined) continue;
+    const record = parseRecordLine(line);
+    if (record !== undefined) return record.seq;
+  }
+  throw new TimelineRangeUndecidable('read_failed', 'wal.log 尾窗里没有一条完整事实行');
+}
+
+/** 归档副本（`timeline.ndjson`）最后一条记录的 seq（`0` = 没有归档）。 */
+async function lastArchivedSeqOf(sessionDir: string): Promise<number> {
+  const path = join(sessionDir, TIMELINE_LAYOUT.timeline);
+  const info = await stat(path).catch(() => undefined);
+  if (info === undefined || info.size <= 0) return 0;
+  const window = await readNdjsonTail(path, ARCHIVE_TAIL_FIRST_BYTES, ARCHIVE_TAIL_MAX_BYTES);
+  if (window === undefined) {
+    throw new TimelineRangeUndecidable('read_failed', 'timeline.ndjson 尾窗读不出来');
+  }
+  for (let index = window.lines.length - 1; index >= 0; index -= 1) {
+    const line = window.lines[index];
+    if (line === undefined) continue;
+    const record = parseRecordLine(line);
+    if (record !== undefined) return record.seq;
+  }
+  throw new TimelineRangeUndecidable('read_failed', 'timeline.ndjson 尾窗里没有一条完整记录');
+}
+
+/** `wal.log` 与归档副本的重叠关系（「归档段可以不读」的两条前提）。 */
+interface ArchiveTripline {
+  /** `wal.log` 第一条事实行的 seq（`0` = 没有事实行） */
+  walFirstSeq: number;
+  /** `wal.log` 最后一条事实行的 seq（`0` = 没有事实行） */
+  walLastSeq: number;
+}
+
+/**
+ * 归档段「不读」的前提检查（0.56 设计 §4.1）。
+ *
+ * ① `wal.log` 首行 seq == 1：归档是**复制**（`archiveNow()` 只 append、从不截断 wal.log）
+ *    时恒成立；改成「搬移 + 截断」之后首行 seq 立刻 > 1；
+ * ② 归档末 seq <= `wal.log` 末 seq：归档里出现 WAL 已经没有的号 ⇒ 归档不是副本。
+ *
+ * 任一不成立 ⇒ **降级**（`archive_not_copy`）：这时「不读归档」会静默丢一整段历史。
+ */
+async function checkArchiveTripline(
+  sessionDir: string,
+  walPath: string,
+  walSize: number,
+): Promise<ArchiveTripline> {
+  const walFirstSeq = await firstFactSeqOf(walPath, walSize);
+  const walLastSeq = await lastFactSeqOf(walPath, walSize);
+  const archivedLastSeq = await lastArchivedSeqOf(sessionDir);
+  if (walFirstSeq > 1) {
+    throw new TimelineRangeUndecidable(
+      'archive_not_copy',
+      `wal.log 首行 seq=${String(walFirstSeq)}（> 1：头部可能被搬移，归档段必须读）`,
+    );
+  }
+  if (archivedLastSeq > walLastSeq) {
+    throw new TimelineRangeUndecidable(
+      'archive_not_copy',
+      `归档末 seq=${String(archivedLastSeq)} > wal 末 seq=${String(walLastSeq)}（归档不是 wal.log 的前缀）`,
+    );
+  }
+  return { walFirstSeq, walLastSeq };
+}
+
+/** 事实行顺读的进度（生成器没法「返回」值，所以状态写在对象里）。 */
+interface FactScanState {
+  bytes: number;
+  /** 读到文件尾了（`true` 才能说「后面没有更多事实行」） */
+  eof: boolean;
+  /** 事实行 seq 是否严格升序（`false` ⇒ 顺序不可信） */
+  ascending: boolean;
+  /** 上一条已收的 seq（升序校验用） */
+  lastSeq: number;
+}
+
+/** 一条被定位到的行（偏移 + 文本）。 */
+export interface NdjsonLineAt {
+  /** 行首字节偏移 */
+  start: number;
+  /** 行尾（含换行）之后的偏移 */
+  next: number;
+  /** 行文本（不含换行） */
+  text: string;
+}
+
+/** 行读取的字节记账：范围读必须能说出「这次读了多少字节」。 */
+export interface LineReadBudget {
+  bytes: number;
+  /** 总预算；超过 ⇒ `undefined`（不猜） */
+  maxBytes: number;
+}
+
+// 行读取的首窗（典型事实行约 1.7 KB、manifest 行约 150 B；2 KiB 通常已含一整行）。
+const LINE_FIRST_BYTES = 2 * 1024;
+
+/**
+ * 读 `offset` 处或之后的**一条完整行**。
+ *
+ * `skipPartial` 为 `true` 时先跳过 `offset` 落在其中的那半行，再取一整行（二分探针用：
+ * 中点是随机字节，几乎不可能正好落在行首）。
+ *
+ * 行长超过 `maxLineBytes`（缺省 {@link FACT_LINE_MAX_BYTES} = 单条内联 `data` 上限 + 元数据；
+ * `wal.manifest` 的行用 64 KiB）⇒ `undefined`：那不是这个文件该有的形状，不猜。每次真正读
+ * 的字节记进 `budget`。
+ */
+export async function readNdjsonLineAt(
+  path: string,
+  offset: number,
+  size: number,
+  budget: LineReadBudget,
+  skipPartial: boolean,
+  maxLineBytes: number = FACT_LINE_MAX_BYTES,
+): Promise<NdjsonLineAt | undefined> {
+  let window = Math.min(LINE_FIRST_BYTES, maxLineBytes);
+  for (;;) {
+    const length = Math.min(window, size - offset);
+    if (length <= 0) return undefined;
+    const chunk = await readFileWindow(path, offset, length);
+    if (chunk === undefined) return undefined;
+    budget.bytes += length;
+    if (budget.bytes > budget.maxBytes) return undefined;
+    let from = 0;
+    if (skipPartial) {
+      const firstNewline = chunk.indexOf(0x0a);
+      from = firstNewline === -1 ? chunk.length : firstNewline + 1;
+    }
+    if (from < chunk.length) {
+      const newline = chunk.indexOf(0x0a, from);
+      if (newline !== -1) {
+        return {
+          start: offset + from,
+          next: offset + newline + 1,
+          text: chunk.toString('utf8', from, newline),
+        };
+      }
+    }
+    // 这一窗里没有完整行（一行比窗口还长）：扩窗重读；扩到单行上限还不成就说「不知道」。
+    if (offset + length >= size) return undefined; // 到文件尾仍未换行 ⇒ 残行，不是完整行
+    if (window >= maxLineBytes) return undefined;
+    window = Math.min(window * 4, maxLineBytes);
+  }
+}
+
+/**
+ * 找一个字节偏移**所在的那一行的行首**（二分探针用：中点几乎不可能正好落在行首）。
+ *
+ * `floor` 必须是一个已知的行首；退到它还找不到换行 ⇒ 返回 `floor`（不变式：行首之前的
+ * 那一行的换行就在 `floor - 1`）。窗口从 8 KiB 起、×4 扩到 `maxLineBytes` 上限，
+ * 超过 ⇒ `undefined`（不猜）。
+ */
+export async function findLineStartBefore(
+  path: string,
+  floor: number,
+  mid: number,
+  budget: LineReadBudget,
+  maxLineBytes: number = FACT_LINE_MAX_BYTES,
+): Promise<number | undefined> {
+  if (mid <= floor) return floor;
+  let window = Math.min(LINE_FIRST_BYTES, maxLineBytes);
+  for (;;) {
+    const from = Math.max(floor, mid - window);
+    const length = mid - from;
+    if (length <= 0) return floor;
+    const chunk = await readFileWindow(path, from, length);
+    if (chunk === undefined) return undefined;
+    budget.bytes += length;
+    if (budget.bytes > budget.maxBytes) return undefined;
+    const newline = chunk.lastIndexOf(0x0a);
+    if (newline !== -1) return from + newline + 1;
+    if (from === floor) return floor;
+    if (window >= maxLineBytes) return undefined;
+    window = Math.min(window * 4, maxLineBytes);
+  }
+}
+
+/**
+ * 在 `wal.log` 里二分出一个**安全起点**：它之前的行，seq 全部 `<= afterSeq`。
+ *
+ * 与整份读的关系：整份读把 `wal.log` 从头解析到尾。这里只解析「从某个安全起点往后」的
+ * 那一小段 —— 只要起点安全（它之前的行都 `<= afterSeq`），窗口内的事实行就一条都不会漏。
+ *
+ * 两半都必须**严格推进**，否则会在这里空转（第一版就踩过：候选行的行首被当成新的右界，
+ * 而中点仍落在同一条跨行的长行里，右界再也不动 —— 探针用尽后返回了「当前最好的那一行」，
+ * 于是 1..49 这几条事实行被静默跳过，最后只剩一个 `coverage_gap` 降级）：
+ *
+ * - 往右：`lo = 行尾`（严格大于中点）；
+ * - 往左：`hi = 行首`；若行首 `<= lo`，它已经是「第一条」，直接返回；
+ * - 收窄到一窗以内改用**顺序扫**（个位到几十行），彻底避开「中点卡在同一条长行里」的退化。
+ */
+async function locateFactStart(
+  path: string,
+  size: number,
+  afterSeq: number,
+  state: FactScanState,
+): Promise<number | undefined> {
+  const budget: LineReadBudget = {
+    bytes: state.bytes,
+    maxBytes: state.bytes + FACT_PROBE_TOTAL_MAX_BYTES,
+  };
+  // 游标在 0（或更早）时，事实行的起点就是文件头 —— 不必二分。
+  if (afterSeq < 1) {
+    state.bytes = budget.bytes;
+    return 0;
+  }
+  let lo = 0;
+  let hi = size;
+  let best = size;
+  let probes = 0;
+  while (lo < hi) {
+    if (probes >= FACT_PROBE_LIMIT) {
+      state.bytes = budget.bytes;
+      // 探针用尽还不收敛：不猜（调用方降级整份读）。**绝不**把当前 `best` 当起点 ——
+      // 它不一定是第一条 `seq > afterSeq` 的行，那会静默跳过中间几条事实行。
+      return undefined;
+    }
+    probes += 1;
+    const mid = lo + Math.floor((hi - lo) / 2);
+    // 探的是**中点所在的那一行**（而不是「中点之后的第一行」）：后者在「一行跨过中点又
+    // 跨过后界」时会原地打转（实测 `wal.log` 里真有 500 KB 的长行），这里两半都严格推进。
+    const lineStart = await findLineStartBefore(path, lo, mid, budget);
+    if (lineStart === undefined) {
+      state.bytes = budget.bytes;
+      return undefined;
+    }
+    const line = await readNdjsonLineAt(path, lineStart, size, budget, false);
+    if (line === undefined) {
+      state.bytes = budget.bytes;
+      return undefined;
+    }
+    const record = parseRecordLine(line.text);
+    if (record === undefined || record.seq <= afterSeq) {
+      lo = Math.max(line.next, lo + 1);
+      continue;
+    }
+    best = line.start;
+    if (line.start <= lo) {
+      state.bytes = budget.bytes;
+      return best;
+    }
+    hi = line.start;
+  }
+  state.bytes = budget.bytes;
+  return best;
+}
+
+/**
+ * 从 `[offset, size)` **顺序**读出 `seq > afterSeq` 的事实行（有界：总字节 ≤ 4 MiB）。
+ *
+ * 只做一件事：把窗口里的事实行按 seq 升序吐出来。**不判 read 的其它口径**（洞、块、
+ * 快照自洽）—— 那些由调用方的覆盖算术与连续尾块规则决定。
+ *
+ * 三个「不猜」的出口都让 `state.eof` 保持 `false`：读不满、碰到超过单行上限的长行、
+ * 预算用完。那时调用方**不能说「后面没有事实行了」**，只能降级整份读。
+ */
+async function* iterateFactsFrom(args: {
+  path: string;
+  size: number;
+  offset: number;
+  sinceSeq: number;
+  maxSeq: number;
+  state: FactScanState;
+}): AsyncGenerator<TimelineRecord> {
+  const { path, size, sinceSeq, maxSeq, state } = args;
+  let position = args.offset;
+  let window = RANGE_FACT_SCAN_FIRST_BYTES;
+  while (position < size) {
+    const length = Math.min(window, size - position);
+    const buffer = await readFileWindow(path, position, length);
+    if (buffer === undefined) return; // 读不满（文件变短）：`eof` 保持 false ⇒ 上层降级
+    state.bytes += length;
+    let cursor = 0;
+    let consumed = 0;
+    while (cursor < buffer.length) {
+      const newline = buffer.indexOf(0x0a, cursor);
+      if (newline === -1) break;
+      const text = buffer.toString('utf8', cursor, newline);
+      cursor = newline + 1;
+      consumed = cursor;
+      const record = parseRecordLine(text);
+      if (record === undefined) continue; // 坏行：与整份读同口径忽略
+      if (record.seq <= sinceSeq) continue; // 起点稍微偏左：无害
+      if (record.seq > maxSeq) return; // 窗口右端已过（再多也没有意义）
+      if (record.seq <= state.lastSeq) {
+        state.ascending = false;
+        return;
+      }
+      state.lastSeq = record.seq;
+      yield record;
+    }
+    if (consumed === 0) {
+      // 整个窗口没有一行完整（一行比窗口还长）：扩窗；到上限就 `eof` 保持 false ⇒ 降级。
+      if (position + length >= size) return;
+      if (window >= FACT_LINE_MAX_BYTES) return;
+      window = Math.min(window * 4, FACT_LINE_MAX_BYTES);
+      continue;
+    }
+    position += consumed;
+    if (position >= size) {
+      state.eof = true;
+      return;
+    }
+    if (state.bytes >= RANGE_FACT_SCAN_MAX_BYTES) return; // 预算用完：`eof` 保持 false
+    // 这一窗还不够（消费者又向下一项）：扩窗再读（总量仍受 RANGE_FACT_SCAN_MAX_BYTES 约束）。
+    window = Math.min(window * 4, RANGE_FACT_SCAN_MAX_BYTES);
+  }
+  state.eof = true;
+}
+
+/** 顺序开块时的进度（同上：状态写在对象里）。 */
+interface BlockScanState {
+  opened: number;
+  bytes: number;
+  /** 自证不通过的块名（照样读，只是记账不可信） */
+  unverified: string[];
+  /** 目录枚举完 / 连续尾块断链 ⇒ 没有更多**参与本趟快照**的块了 */
+  exhausted: boolean;
+}
+
+/**
+ * 从 `startIndex` 起**顺序**开块，按 `selectBlocksForSnapshot` 的同一口径吐出窗口内的帧。
+ *
+ * 纳入规则逐条对齐 `wal.ts#selectBlocksForSnapshot`（全文最重要的两行）：
+ *
+ * - `end_seq <= factBoundary` 的块**无条件纳入**（封块早于那条事实，必然已完整落盘）；
+ * - `start_seq > factBoundary` 的块只认**紧接 `cursor + 1`** 的连续尾块，断链即止
+ *   （否则会给出比事实还新的 chunk，破坏「先事实后块」的自洽快照，客户端当场报假缺口）。
+ *
+ * 与整份读的差别只有一处、且更严：块内帧必须 seq 升序、块的 `start_seq` 必须随文件名
+ * 递增，否则抛 `order_broken` 降级（整份读对此不做判定，因为它本来就在读全部）。
+ */
+async function* iterateBlocksFrom(args: {
+  blocksDir: string;
+  names: readonly string[];
+  startIndex: number;
+  sinceSeq: number;
+  maxSeq: number;
+  factBoundary: number;
+  /** 本次最多开几个块（第十一条：显式上界，见 `readTimelineRange`） */
+  blockOpenMax: number;
+  reader: ManifestForwardReader | undefined;
+  state: BlockScanState;
+}): AsyncGenerator<TimelineRecord> {
+  const { blocksDir, names, sinceSeq, maxSeq, factBoundary, blockOpenMax, reader, state } = args;
+  let cursor = factBoundary;
+  let lastStart = 0;
+  for (let index = args.startIndex; index < names.length; index += 1) {
+    const name = names[index];
+    if (name === undefined) break;
+    if (state.opened >= blockOpenMax) {
+      throw new TimelineRangeUndecidable(
+        'window_too_wide',
+        `开了 ${String(state.opened)} 个块还没覆盖满窗口`,
+      );
+    }
+    const buffer = await readFile(join(blocksDir, name)).catch(() => undefined);
+    if (buffer === undefined) {
+      // 文件读不出来（被删 / 权限）：与整份读同口径「这个块不在」，但记账上留痕。
+      state.unverified.push(name);
+      continue;
+    }
+    const decode = decodeChunkBlock(buffer);
+    state.opened += 1;
+    state.bytes += buffer.length;
+
+    // 块内帧必须 seq 升序（解码序 = 写入序）。不升序 ⇒ 顺序不可信，不猜。
+    let previous = 0;
+    for (const record of decode.records) {
+      if (record.seq <= previous) {
+        throw new TimelineRangeUndecidable('order_broken', `块 ${name} 内帧 seq 不升序`);
+      }
+      previous = record.seq;
+    }
+    // 逐块自证（①首末 seq ②条数 ③整块 crc ④完整性）：**证据，不是过滤条件**。
+    if (reader !== undefined) {
+      const entry = await reader.entryFor(name);
+      if (entry !== undefined && !verifyBlockAgainstManifest(buffer, decode, entry).ok) {
+        state.unverified.push(name);
+      }
+    }
+
+    const first = decode.records[0];
+    const last = decode.records[decode.records.length - 1];
+    const start = first?.seq ?? 0;
+    const end = last?.seq ?? 0;
+    if (start < 1 || end < start) continue; // 与 selectBlocksForSnapshot 同口径：空块/全坏块不参与
+    if (lastStart > 0 && start <= lastStart) {
+      throw new TimelineRangeUndecidable(
+        'order_broken',
+        `块 ${name} 的 start_seq 没有随文件名递增`,
+      );
+    }
+    if (start <= factBoundary && end > factBoundary) {
+      // 块跨越事实边界：写侧「先封块、再分配事实 seq」不成立 ⇒ 快照口径不可判。
+      throw new TimelineRangeUndecidable(
+        'block_spans_fact_boundary',
+        `块 ${name} 覆盖 ${String(start)}–${String(end)}，事实边界 ${String(factBoundary)} 落在其中`,
+      );
+    }
+    if (end <= factBoundary) {
+      // 边界之内：无条件纳入。
+    } else if (start <= cursor + 1) {
+      if (end > cursor) cursor = end;
+    } else {
+      // 连续尾块断链：后面都不参与本趟快照（与 selectBlocksForSnapshot 的 continue 等价）。
+      state.exhausted = true;
+      return;
+    }
+    lastStart = start;
+    if (start > maxSeq) {
+      throw new TimelineRangeUndecidable(
+        'window_too_wide',
+        `窗口右端已过（块 ${name} 从 ${String(start)} 起，上限 ${String(maxSeq)}）`,
+      );
+    }
+    for (const record of decode.records) {
+      if (record.seq <= sinceSeq) continue;
+      // 窗口右端之外（一段块可以比窗口尾部多出几帧）：不再往下给，也不宣称「已到尾」。
+      if (record.seq > maxSeq) return;
+      yield record;
+    }
+  }
+  state.exhausted = true;
+}
+
+/**
+ * 读一个会话的**一页**（`seq > sinceSeq` 的前 `limit` 条），只开窗口内那几个块。
+ *
+ * 返回 `records` 与整份读 `readTimelineEvents()` **逐条等价**（同一个 `sinceSeq`，
+ * seq 集合完全相等）；不可判时抛 {@link TimelineRangeUndecidable}，调用方降级整份读
+ * + 留痕（**不许**把异常吞成空数组，那就是静默少给）。
+ *
+ * 不做的事：不写任何文件（不截断撕裂尾帧、不登记洞 —— 读侧没有声明权）、
+ * 不新增落盘格式、不读 `timeline.idx`（索引永不当判据）。
+ */
+export async function readTimelineRange(
+  sessionDir: string,
+  query: TimelineRangeQuery,
+): Promise<{ records: TimelineRecord[]; stats: TimelineRangeStats }> {
+  const since = Number.isFinite(query.sinceSeq) ? Math.floor(query.sinceSeq) : Number.NaN;
+  const limit = Number.isFinite(query.limit) ? Math.floor(query.limit) : Number.NaN;
+  if (!Number.isSafeInteger(since) || since < 0) {
+    throw new TimelineRangeUndecidable('invalid_cursor', String(query.sinceSeq));
+  }
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new TimelineRangeUndecidable('invalid_limit', String(query.limit));
+  }
+  // 离谱的 `limit`（一页要 10 万条以上）本来就没有范围读的意义，直接让上层整份读 ——
+  // 顺手把 `limit × 64` 的算术关在安全整数范围内。
+  if (limit > RANGE_READ_MAX_LIMIT) {
+    throw new TimelineRangeUndecidable(
+      'invalid_limit',
+      `${String(limit)} > ${String(RANGE_READ_MAX_LIMIT)}`,
+    );
+  }
+  // 第十一条：这次调用的三条上界（块数 / seq 跨度 / 字节）——
+  // 块数由 `names.length` 决定（低于门槛整份读更快），seq 跨度由 `maxSeq` 收口，
+  // 开块数由 `blockOpenMax` 收口（每块至少 1 帧 ⇒ 健康会话远小于它）。
+  const maxSeq = since + limit * RANGE_WINDOW_MAX_SEQ_SPAN;
+  const blockOpenMax = RANGE_TAIL_CHAIN_MAX_BLOCKS + limit * 2;
+
+  const blocksDir = join(sessionDir, TIMELINE_LAYOUT.walBlocks);
+  // 枚举**只走 readdir**：manifest 会落后于块目录，拿它枚举会静默丢掉尾部一整段 chunk。
+  const names = await listBlockFiles(blocksDir);
+  if (names.length < RANGE_READ_MIN_BLOCKS) {
+    throw new TimelineRangeUndecidable(
+      'blocks_below_threshold',
+      `${String(names.length)} < ${String(RANGE_READ_MIN_BLOCKS)}`,
+    );
+  }
+
+  const walPath = join(sessionDir, TIMELINE_LAYOUT.walLog);
+  const walSize = (await stat(walPath).catch(() => undefined))?.size ?? 0;
+  const tripline = await checkArchiveTripline(sessionDir, walPath, walSize);
+  const factBoundary = tripline.walLastSeq;
+
+  // ── 定位：manifest 锚点 → 文件名二分退路
+  const anchor = await locateRangeAnchor(sessionDir, names, since);
+  if (anchor === undefined) {
+    throw new TimelineRangeUndecidable('anchor_unavailable', 'manifest 与文件名二分都定位不到起点');
+  }
+
+  // 起点若落在「事实边界之后」的**尾链中段**，链必须从边界那一端重新验：
+  // 否则会把「链早就断了」的块当成可读（那是多给，与整份读不等价）。
+  let startIndex = anchor.index;
+  const anchorFirstSeq = await blockFirstFrameSeq(sessionDir, anchor.block);
+  if (anchorFirstSeq === undefined) {
+    throw new TimelineRangeUndecidable('anchor_unavailable', `块 ${anchor.block} 首帧读不出来`);
+  }
+  if (anchorFirstSeq > factBoundary + 1) {
+    const tailStart = await locateTailChainStart(sessionDir, names, factBoundary);
+    if (tailStart === undefined) {
+      throw new TimelineRangeUndecidable('anchor_unavailable', '连续尾块的链首定位不到');
+    }
+    startIndex = Math.min(startIndex, tailStart);
+  }
+
+  const factState: FactScanState = { bytes: 0, eof: walSize <= 0, ascending: true, lastSeq: since };
+  const factOffset = walSize <= 0 ? 0 : await locateFactStart(walPath, walSize, since, factState);
+  if (factOffset === undefined) {
+    throw new TimelineRangeUndecidable('anchor_unavailable', 'wal.log 行二分定位不到安全起点');
+  }
+
+  const blockState: BlockScanState = { opened: 0, bytes: 0, unverified: [], exhausted: false };
+  const reader =
+    anchor.source === 'manifest' && anchor.manifestPosition !== undefined
+      ? new ManifestForwardReader(
+          join(sessionDir, TIMELINE_LAYOUT.walManifest),
+          anchor.manifestPosition,
+        )
+      : undefined;
+
+  const facts = iterateFactsFrom({
+    path: walPath,
+    size: walSize,
+    offset: factOffset,
+    sinceSeq: since,
+    maxSeq,
+    state: factState,
+  });
+  const blocks = iterateBlocksFrom({
+    blocksDir,
+    names,
+    startIndex,
+    sinceSeq: since,
+    maxSeq,
+    factBoundary,
+    blockOpenMax,
+    reader,
+    state: blockState,
+  });
+
+  // ── 归并：两路都按 seq 升序，同 seq 时**块帧胜**（与 readTimelineEvents 的覆盖顺序一致：
+  // `Map.set` 的先后是「归档副本 → wal.log → 块帧」，所以同 seq 时最后写进去的块帧赢）。
+  const collected = new Map<number, TimelineRecord>();
+  let fact = await nextOrUndefined(facts);
+  let block = await nextOrUndefined(blocks);
+  let high = 0;
+  while (collected.size < limit) {
+    if (fact === undefined && block === undefined) break;
+    const factRecord = fact;
+    const blockRecord = block;
+    if (
+      factRecord !== undefined &&
+      blockRecord !== undefined &&
+      factRecord.seq === blockRecord.seq
+    ) {
+      collected.set(blockRecord.seq, blockRecord);
+      high = blockRecord.seq;
+      fact = await nextOrUndefined(facts);
+      block = await nextOrUndefined(blocks);
+      continue;
+    }
+    if (
+      blockRecord === undefined ||
+      (factRecord !== undefined && factRecord.seq < blockRecord.seq)
+    ) {
+      const record = factRecord as TimelineRecord;
+      collected.set(record.seq, record);
+      high = record.seq;
+      fact = await nextOrUndefined(facts);
+      continue;
+    }
+    collected.set(blockRecord.seq, blockRecord);
+    high = blockRecord.seq;
+    block = await nextOrUndefined(blocks);
+  }
+
+  // ── 覆盖算术：「拿满 limit」时证明到第 limit 条；「没拿满」时必须证明后面真的没有了。
+  if (collected.size < limit) {
+    if (!factState.ascending || factState.eof !== true || !blockState.exhausted) {
+      throw new TimelineRangeUndecidable(
+        'window_incomplete',
+        `只收到 ${String(collected.size)} 条：事实行=${factState.eof ? '已到尾' : '未到尾'}、块=${blockState.exhausted ? '已枚举完' : '未枚举完'}`,
+      );
+    }
+  }
+  if (!factState.ascending) {
+    throw new TimelineRangeUndecidable('order_broken', 'wal.log 事实行 seq 不升序');
+  }
+
+  const holes = await readLiveHoles(sessionDir);
+  let declaredHoles = 0;
+  if (high > since) {
+    const holeSeqs = new Set<number>();
+    for (const hole of holes) {
+      const from = Math.max(hole.from_seq, since + 1);
+      const to = Math.min(hole.to_seq, high);
+      for (let seq = from; seq <= to; seq += 1) holeSeqs.add(seq);
+    }
+    for (let seq = since + 1; seq <= high; seq += 1) {
+      if (collected.has(seq)) continue;
+      if (holeSeqs.has(seq)) {
+        declaredHoles += 1;
+        continue;
+      }
+      // 窗口里有一个 seq 既没有记录、也没被声明成洞 ⇒ 本次窗口不可信，**不许少给**。
+      throw new TimelineRangeUndecidable(
+        'coverage_gap',
+        `seq ${String(seq)} 在窗口 (${String(since)}, ${String(high)}] 内既无记录也未声明为洞`,
+      );
+    }
+  }
+
+  const records: TimelineRecord[] = [];
+  for (const record of collected.values()) {
+    if (records.length >= limit) break;
+    records.push(await hydrateRecordData(sessionDir, record));
+  }
+
+  return {
+    records,
+    stats: {
+      blocks_opened: blockState.opened,
+      block_bytes: blockState.bytes,
+      fact_bytes: factState.bytes,
+      anchor_source: anchor.source,
+      since_seq: since,
+      window_to: high,
+      declared_holes: declaredHoles,
+      unverified_blocks: blockState.unverified,
+      count: records.length,
+    },
+  };
+}
+
+/** 取生成器的下一项；`done` ⇒ `undefined`。 */
+async function nextOrUndefined<T>(iterator: AsyncGenerator<T>): Promise<T | undefined> {
+  const result = await iterator.next();
+  return result.done === true ? undefined : result.value;
 }

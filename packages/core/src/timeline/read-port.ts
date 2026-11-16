@@ -12,11 +12,12 @@
  * `updateIndex()`。类型上没有 `append`，所以读方**写不进去**（不是「约定不写」）。
  * 写入只有一条路：`TimelineWriter`（`timeline/writer.ts`，唯一 seq 分配点 + 唯一 fsync 点）。
  *
- * ## 读的三个口径（与旧日志读口的差异写清楚，避免"看起来一样、边界不同"）
+ * ## 读的四个口径（与旧日志读口的差异写清楚，避免"看起来一样、边界不同"）
  *
  * | 方法 | 事实源 | 成本 |
  * | --- | --- | --- |
- * | `read()` | `readTimelineEvents`（归档 + 块 + WAL 归并、按 seq 去重、外置 blob 取回） | O(会话) —— 调用方本来就要整份 |
+ * | `read()`（无 `sinceSeq`） | `readTimelineEvents`（归档 + 块 + WAL 归并、按 seq 去重、外置 blob 取回） | O(会话) —— 调用方本来就要整份 |
+ * | `read()`（有 `sinceSeq` + `limit`） | `readTimelineRange`（0.56 范围读：只开窗口内那几个块） | O(页)：缺省一页 6 个块、首屏一段 120 个块 |
  * | `lastSeq()` | `wal.log` 尾窗 + 最后一个块文件的尾帧（**不读整份**） | O(64 KiB) |
  * | `readTailMatches()` | `wal.log` 尾窗（事实行） | 首窗 64 KiB，扩窗到 4 MiB 后放弃 |
  *
@@ -53,7 +54,25 @@ import {
   parseRecordLine,
   readFileWindow,
   readTimelineEvents,
+  readTimelineRange,
+  TimelineRangeUndecidable,
 } from './wal.js';
+
+/**
+ * 范围读的进程内计数（review 三问的「有没有降级」信号；不落盘、不进 wire）。
+ *
+ * - `hits`：真的走了范围读的调用数；
+ * - `degraded`：范围读不可判、退回整份读的调用数（每条都另有一条 `warn`）。
+ *
+ * 为什么要有它：`warn` 只有出事时才响，「范围读到底有没有生效」需要一眼能看；
+ * 采集方（gateway 的 `stats()` / 自证脚本）拿它直接回答，不必去翻日志。
+ */
+const rangeReadCounters = { hits: 0, degraded: 0 };
+
+/** 读一份范围读计数快照（见 {@link rangeReadCounters}）。 */
+export function timelineRangeReadCounters(): Readonly<{ hits: number; degraded: number }> {
+  return { ...rangeReadCounters };
+}
 
 /** 读 `read()` 的选项；`sinceSeq` 为**排他**游标（只返回 `seq > sinceSeq`）。 */
 export interface TimelineReadOptions {
@@ -179,9 +198,18 @@ export class TimelineEventLog {
   /**
    * 读一个会话的全部事件（按 seq 升序）；`sinceSeq` 是**排他**游标。
    *
-   * 事实源是 `readTimelineEvents`：归档段 + 块 + WAL 三处归并、按 seq 去重、外置 blob
-   * 取回、并且**先事实后块**（`wal.ts` 的一致快照顺序）。所以一次读的返回永远自洽：
-   * 不存在「读到一半的位置比事实还新」的窗口。
+   * 两条路，**输出逐条等价**（同一个 `sinceSeq` 返回的 seq 集合完全相等）：
+   *
+   * | 情况 | 走哪条 | 成本 |
+   * | --- | --- | --- |
+   * | 没有 `sinceSeq`（索引重建 / 显式修复 / `read()` 的整份语义） | `readTimelineEvents` | O(会话) |
+   * | 有 `sinceSeq` + 有 `limit`（翻页） | `readTimelineRange`（0.56 范围读） | O(页) + 固定探针 |
+   *
+   * 范围读不可判时**降级整份读并留痕**（`timeline range read degraded` 告警 + 计数）——
+   * 绝不把不可判吞成空数组或「少给几条的正常返回」（0.56 设计 §3.4：那是最坏的实现）。
+   *
+   * 整份读那一路的三个口径不变：事实源是三处归并、按 seq 去重、外置 blob 取回，并且
+   * **先事实后块**（`wal.ts` 的一致快照顺序），所以一次读的返回永远自洽。
    */
   async read(sessionId: string, options: TimelineReadOptions = {}): Promise<SessionEventRecord[]> {
     const limit =
@@ -190,11 +218,18 @@ export class TimelineEventLog {
         : undefined;
     if (limit === 0) return [];
     await this.settled(sessionId);
-    const records = await readTimelineEvents(this.sessionDir(sessionId));
+    const dir = this.sessionDir(sessionId);
     const since =
       typeof options.sinceSeq === 'number' && Number.isFinite(options.sinceSeq)
         ? Math.floor(options.sinceSeq)
         : undefined;
+    // 第十一条：只有「排他游标 + 页上限」这一种调用才有窗口可开。没有 sinceSeq 的调用方
+    // 本来就要整份（索引重建、`execution-unit` 的历史投影），范围读对它没有收益。
+    if (since !== undefined && limit !== undefined) {
+      const ranged = await this.readRange(dir, sessionId, since, limit);
+      if (ranged !== undefined) return ranged;
+    }
+    const records = await readTimelineEvents(dir);
     const selected = since !== undefined ? records.filter((record) => record.seq > since) : records;
     const windowed = limit !== undefined ? selected.slice(0, limit) : selected;
     return windowed.map(toSessionEventRecord);
@@ -358,6 +393,71 @@ export class TimelineEventLog {
     if (!existed) return false;
     await rm(this.sessionDir(sessionId), { recursive: true, force: true });
     return true;
+  }
+
+  /**
+   * 尝试走范围读（0.56）；不可判 / 失败 ⇒ `undefined`（调用方退回整份读）。
+   *
+   * 三条纪律：
+   *
+   * 1. **不把不可判吞成答案**：这里返回 `undefined` 只是「换一条路」，绝不返回空数组或
+   *    一个短页 —— 那正是 0.56 设计 §9 点名的最坏实现（真机复现过：2000 条页只回 1971
+   *    条、零报错）；
+   * 2. **降级必须留痕**：一次 `warn`（`reason` 是稳定 code）+ 一次进程内计数
+   *    （{@link timelineRangeReadCounters}）—— 静默降级 = 下次没人知道范围读一直没生效；
+   * 3. **阈值不是降级**：块数 < `RANGE_READ_MIN_BLOCKS`、`limit` 不适用这类「设计好的直路」
+   *    只走整份读、不告警（否则每个小会话每页一条 warn，日志就成了噪音）。
+   */
+  private async readRange(
+    dir: string,
+    sessionId: string,
+    since: number,
+    limit: number,
+  ): Promise<SessionEventRecord[] | undefined> {
+    try {
+      const { records, stats } = await readTimelineRange(dir, { sinceSeq: since, limit });
+      rangeReadCounters.hits += 1;
+      // 第十一条 review 三问的答案：这次开了几个块、读了几字节、有没有降级。
+      this.logger.debug('timeline range read', {
+        session_id: sessionId,
+        since_seq: stats.since_seq,
+        count: stats.count,
+        opened_blocks: stats.blocks_opened,
+        block_bytes: stats.block_bytes,
+        fact_bytes: stats.fact_bytes,
+        anchor: stats.anchor_source,
+        window_to: stats.window_to,
+        declared_holes: stats.declared_holes,
+      });
+      if (stats.unverified_blocks.length > 0) {
+        // 块照样读出来了（窗口是覆盖算术证明过的），只是它的 manifest 记账对不上 —— 值得一条 warn。
+        this.logger.warn('timeline range read block unverified', {
+          session_id: sessionId,
+          since_seq: since,
+          blocks: stats.unverified_blocks.slice(0, 8),
+          blocks_total: stats.unverified_blocks.length,
+        });
+      }
+      return records.map(toSessionEventRecord);
+    } catch (error) {
+      const reason = error instanceof TimelineRangeUndecidable ? error.reason : 'read_failed';
+      if (
+        reason === 'blocks_below_threshold' ||
+        reason === 'invalid_cursor' ||
+        reason === 'invalid_limit'
+      ) {
+        return undefined;
+      }
+      rangeReadCounters.degraded += 1;
+      this.logger.warn('timeline range read degraded', {
+        session_id: sessionId,
+        since_seq: since,
+        limit,
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   private async settled(sessionId?: string): Promise<void> {
