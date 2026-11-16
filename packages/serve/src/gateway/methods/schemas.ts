@@ -191,11 +191,13 @@ export const systemContextSchema = {
  *
  * 两个数是**不同**的东西，别混：
  * - `last_seq` = 事件日志里最后一条事件的 `seq`（从文件尾定边界，不依赖索引）；
- * - `derived_upto_seq` = 元数据派生覆盖到的 `seq`（`index.json`）：它 `< last_seq`
- *   说明还有事件没进会话投影（正跑 / 刚崩）。
+ * - `derived_upto_seq` = **落盘水位**：写入侧已落盘到哪个 `seq`（`index.json`）；与 `last_seq`
+ *   相等表示已追平。**不代表投影覆盖范围**（ADR-105 D2：写侧不宣布投影覆盖），所以
+ *   「`derived_upto_seq < last_seq` ⇒ 还有事件没进投影」这个推论**不成立**，别这么用。
  *
  * **整字段缺省 = 这个会话还没有事件日志**（一条事件都没落过），不是 0 也不是 null。
- * `event_count` 与 `derived_upto_seq` 同源（`index.json`），索引缺失/损坏时一起缺省。
+ * `event_count` 与 `derived_upto_seq` 同源（`index.json`），索引缺失/损坏时一起缺省；
+ * `event_count` 是**最后 seq 口径**而不是事件条数（chunk 也占 seq），**别拿它数条数**。
  */
 export const sessionEventCursorSchema = {
   type: 'object',
