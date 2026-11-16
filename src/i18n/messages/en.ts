@@ -42,11 +42,11 @@ export const en: Record<MessageKey, string> = {
     'start in the foreground; --daemon detaches to gateway.log; --instance names it',
   'help.cmd.gatewayList': 'list gateway instances and PID files',
   'help.cmd.gatewayStop':
-    'graceful SIGTERM stop (process termination on Windows); --keep-nodes keeps node/hub for handoff',
+    'graceful SIGTERM stop (process termination on Windows); default stops node/hub too (--keep-nodes keeps them for handoff)',
   'help.cmd.gatewayStatus':
     'pid/port/uptime/version/service state (--rpc is deprecated; use node status --rpc)',
   'help.cmd.gatewayRestart':
-    'stop then start (keeps --daemon); node/hub stay alive and are adopted (--no-keep-nodes = cold restart)',
+    'stop then start (keeps --daemon); node/hub cold-restart too (--keep-nodes = platform layer only)',
   'help.cmd.gatewayReload': 'hot-reload config/plugins without restarting',
   'help.cmd.gatewayInstall': 'register login autostart (systemd / launchd / schtasks)',
   'help.cmd.gatewayUninstall': 'remove the system service registration',

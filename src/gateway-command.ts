@@ -669,13 +669,13 @@ export async function stopGateway(
     /** 已收集的状态（restart 停前快照）；缺省自行 collect。 */
     entries?: GatewayStateEntry[];
     /**
-     * 0.55：「停平台层时要不要连 node/hub 一起停」。
+     * 0.55.1：「停平台层时要不要连 node/hub 一起停」。
      *
-     * - 缺省（undefined / true）= **只停平台层**，本 Gateway spawn 的 node/hub 继续
-     *   跑，留给下一次 `gateway start` 按既有 adopt 判据接管；`gateway stop` 与
-     *   `gateway restart` 都是这个语义。
-     * - `false`（`gateway stop --no-keep-nodes`）= 整体关闭：连本机 spawn 的
-     *   node/hub 一起停。
+     * - 缺省（undefined / false）= **全停**：连本机 spawn 的 node/hub 一起停
+     *   （`stop` 的直觉就是「停」）。`gateway stop` 与 `gateway restart` 同语义。
+     * - `true`（`gateway stop --keep-nodes` / `gateway restart --keep-nodes`）=
+     *   **只停平台层**：node/hub 继续跑，留给下一次 `gateway start` 按既有 adopt
+     *   判据接管（平台层热换）。
      *
      * 见 `src/gateway/handoff.ts`。
      */
@@ -705,7 +705,7 @@ export async function stopGateway(
   let failed = false;
   const stateKind = gatewayStateKind(options, context.env);
   // 0.55：缺省 = 只停平台层（node/hub 继续跑）；`--no-keep-nodes` 才是整体关闭。
-  const keepForHandoff = options.keepNodes !== false && stateKind === 'platform';
+  const keepForHandoff = options.keepNodes === true && stateKind === 'platform';
   let keptNodes = 0;
   let keptHubs = 0;
   const stoppedChildren: StoppedChildDetail[] = [];
@@ -1805,7 +1805,7 @@ async function restartDaemonCommand(
     ...deps,
     selector: command,
     entries,
-    keepNodes: command.keepNodes !== false,
+    keepNodes: command.keepNodes === true,
   });
   if (stopCode !== 0) return stopCode;
 
@@ -2197,7 +2197,7 @@ export async function runPlatformGatewayForeground(
       printErr,
       timeoutMs: 10_000,
       // handoff（0.52）：前台 restart 也只重启平台层，node/hub 保活待 adopt。
-      keepNodes: command.keepNodes !== false,
+      keepNodes: command.keepNodes === true,
     });
     if (stopCode !== 0) return stopCode;
   }
@@ -2559,7 +2559,7 @@ export async function runGatewayCommand(
         selector: command,
         // 0.55：缺省**只停平台层**（node/hub 继续跑，下次 start 走 adopt）；
         // `--no-keep-nodes` 才是整体关闭（连 node/hub 一起停）。
-        keepNodes: command.keepNodes !== false,
+        keepNodes: command.keepNodes === true,
       });
     case 'status':
       return gatewayStatus({ ...deps, json: command.json, rpc: command.rpc, selector: command });

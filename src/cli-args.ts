@@ -46,9 +46,9 @@ export type GatewayCommand =
       kind: 'stop';
       timeoutMs: number;
       /**
-       * 0.55：缺省 undefined = **只停平台层**（node/hub 继续跑，下次 start adopt 回来）；
-       * `--no-keep-nodes` 置 false = 整体关闭（连 node/hub 一起停）；
-       * `--keep-nodes` 置 true 保留为显式别名（0.52 语义，现在是缺省）。
+       * 0.55.1：缺省 **全停**（平台 + hub + node，与 `stop` 这个字面一致）。
+       * `--keep-nodes` 置 true = 只停平台层（node/hub 继续跑，下次 start adopt 回来）；
+       * `--no-keep-nodes` 保留解析作兼容别名（等价于缺省）。
        */
       keepNodes?: boolean;
     } & GatewaySelector)
@@ -58,8 +58,8 @@ export type GatewayCommand =
       kind: 'restart';
       daemon: boolean;
       /**
-       * handoff（0.52）：缺省 undefined = **保留** node/hub（新平台 adopt 接管）；
-       * `--no-keep-nodes` 置 false = 回到「连 node 一起停」的冷重启。
+       * 0.55.1：缺省 **全重启**（node/hub 一起冷重启）；`--keep-nodes` 置 true = 只换平台层
+       * （handoff，新平台 adopt 接管节点）；`--no-keep-nodes` 保留作兼容别名（等价于缺省）。
        */
       keepNodes?: boolean;
     } & GatewaySelector)
@@ -1807,10 +1807,11 @@ function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `gateway stop [--timeout 10s] [--instance N|--port N|--all] [--no-keep-nodes]` */
+/** `gateway stop [--timeout 10s] [--instance N|--port N|--all] [--keep-nodes]` */
 function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
   let timeoutMs = DEFAULT_STOP_TIMEOUT_MS;
-  let keepNodes: boolean | undefined;
+  // 0.55.1：缺省全停（平台 + hub + node）。`stop` 的直觉就是「停」。
+  let keepNodes = false;
   const selector: GatewaySelector = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
@@ -1819,12 +1820,12 @@ function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
       continue;
     }
     if (a === '--no-keep-nodes') {
-      // 0.55：整体关闭——连本机 spawn 的 node/hub 一起停（缺省只停平台层）。
+      // 兼容别名：0.55 曾用它表达「整体关闭」，现在那已经是缺省。
       keepNodes = false;
       continue;
     }
     if (a === '--keep-nodes') {
-      // 0.52 遗留别名；0.55 起「只停平台层」已是缺省，显式写出来仍是它。
+      // 只停平台层：node/hub 继续跑，下次 start 走 adopt 接管。
       keepNodes = true;
       continue;
     }
@@ -1853,7 +1854,7 @@ function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
   args.gateway = {
     kind: 'stop',
     timeoutMs,
-    ...(keepNodes !== undefined ? { keepNodes } : {}),
+    keepNodes,
     ...selector,
   };
   return { ok: true, args };
@@ -1912,10 +1913,11 @@ function parseGatewayList(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `gateway restart [--daemon] [--instance N|--port N|--all] [--no-keep-nodes]` */
+/** `gateway restart [--daemon] [--instance N|--port N|--all] [--keep-nodes]` */
 function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
   let daemon = false;
-  let keepNodes: boolean | undefined;
+  // 0.55.1：缺省冷重启（连 node/hub 一起）；--keep-nodes 才走 handoff。
+  let keepNodes = false;
   const selector: GatewaySelector = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
@@ -1928,12 +1930,12 @@ function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
       continue;
     }
     if (a === '--keep-nodes') {
-      // 缺省已经是 handoff；显式写出来是让脚本自证意图。
-      keepNodes = undefined;
+      // 只换平台层（handoff）：新平台 adopt 接管节点，不重启 node/hub。
+      keepNodes = true;
       continue;
     }
     if (a === '--no-keep-nodes') {
-      // 冷重启：连 node/hub 一起停（0.51 语义）。
+      // 兼容别名：0.55 曾用它表达冷重启，现在那已经是缺省。
       keepNodes = false;
       continue;
     }
@@ -1954,7 +1956,7 @@ function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
   args.gateway = {
     kind: 'restart',
     daemon,
-    ...(keepNodes === false ? { keepNodes: false } : {}),
+    keepNodes,
     ...selector,
   };
   return { ok: true, args };
