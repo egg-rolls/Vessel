@@ -26,54 +26,17 @@
 
 import { createReadStream, type Dirent } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
-import { chmod, mkdir, open, readdir, readFile, rm, stat, unlink } from 'node:fs/promises';
+import { chmod, mkdir, open, readdir, rm, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { noopLogger } from '../logging.js';
 // D2：跨模块只允许从 barrel 导入（不得直接引用 tenant 的内部文件）。
-import {
-  encodeSessionDirName,
-  sessionDirPath,
-  sessionEventsFilePath,
-  sessionIndexFilePath,
-} from '../tenant/index.js';
+import { encodeSessionDirName, sessionDirPath, sessionEventsFilePath } from '../tenant/index.js';
 import type { SessionEventInput, SessionEventRecord, SessionIndexPatch } from '../types/event.js';
 import { LeaseExpiredError, type LeaseKind } from '../types/lease.js';
 import type { Logger } from '../types/logging.js';
-import { atomicWrite } from './atomic-write.js';
+import { readSessionIndex, type SessionLogIndex, writeSessionIndex } from './session-index.js';
 
-/** 会话索引（`index.json`）；只放元数据，messages 仍是缓存 */
-export interface SessionLogIndex {
-  v: 1;
-  session_id: string;
-  title?: string;
-  preview?: string;
-  status?: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
-  started_at?: number;
-  /**
-   * 终态时刻（additive）：**只在 `status` 是终态时存在**，等于该次终态写入的
-   * `updated_at`。`running` 时一律不写（连继承来的旧值也清掉）——「跑着但已经完成于
-   * 某刻」是自相矛盾的元数据，比缺字段更容易骗人。
-   *
-   * 它让「这份索引说会话已经完了」变成**一个字段就能回答**的问题：读侧不必再拿
-   * `updated_at` 猜（`updated_at` 在 run 进行中也会前进）。
-   */
-  completed_at?: number;
-  updated_at: number;
-  /** 已落盘事件数（= 最后 seq；seq 从 1 连续递增） */
-  event_count: number;
-  /** 元数据派生覆盖到的 seq；与 event_count 同步 */
-  derived_upto_seq: number;
-  /** 显式标注：`sessions/<id>.json` 中的 messages 只是投影缓存 */
-  messages_cached: true;
-}
-
-/** 终态 status（`updated_at` 在这几种状态下可以当 `completed_at` 用）。 */
-const TERMINAL_SESSION_STATUSES: ReadonlySet<string> = new Set([
-  'completed',
-  'failed',
-  'cancelled',
-  'interrupted',
-]);
+export type { SessionLogIndex } from './session-index.js';
 
 /** 读取选项；`sinceSeq` 为**排他**游标（只返回 seq > sinceSeq） */
 export interface ReadSessionEventsOptions {
@@ -915,69 +878,32 @@ export class SessionEventLog {
 
   /** 读 `index.json`；缺失/损坏返回 null（索引是缓存，可从日志重建计数） */
   async readIndex(sessionId: string): Promise<SessionLogIndex | null> {
-    const path = sessionIndexFilePath(this.dir, sessionId);
-    let content: string;
-    try {
-      content = await readFile(path, 'utf8');
-    } catch (error) {
-      if (isNotFound(error)) return null;
-      throw error;
-    }
-    try {
-      const parsed = JSON.parse(content) as SessionLogIndex;
-      if (parsed.v !== 1 || typeof parsed.session_id !== 'string') return null;
-      return parsed;
-    } catch (error) {
-      this.logger.warn('session index corrupt', {
-        session_id: sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return null;
-    }
+    return readSessionIndex(this.dir, sessionId, (detail) => {
+      this.logger.warn('session index corrupt', detail);
+    });
   }
 
   /**
    * 合并写 `index.json`（进程内按 session 串行，atomicWrite + 0600）。
    * 写失败向调用方抛出；runtime 侧按 best-effort 记录，不影响 run 终态。
    *
-   * **终态先落这里**：`status` 是终态时同时写 `completed_at`（= 本次 `updated_at`），
-   * 于是「这份索引说会话已经完了」只有一个来源、一个时刻。呼入方（`finalizeRun`）
-   * 在 run 结束的**第一条**就调它 —— 小文件的写入不该排在几百 KB～几 MB 的会话壳
-   * 投影写后面（那是「run 早就结束、界面上一直『正在思考』」的可见来源之一）。
-   *
-   * `status` 回到非终态（下一轮 run 开始）时 `completed_at` **必须消失**，所以它不从
-   * `existing` 继承：继承会让「running + 上次的完成时刻」这种自相矛盾的索引活下去。
+   * **终态先落这里**：呼入方（`finalizeRun`）在 run 结束的**第一条**就调它 —— 小文件的
+   * 写入不该排在几百 KB～几 MB 的会话壳投影写后面（那是「run 早就结束、界面上一直
+   * 『正在思考』」的可见来源之一）。形状与合并口径见 `session-index.ts`（唯一实现）。
    */
   async updateIndex(sessionId: string, patch: SessionIndexPatch): Promise<void> {
     const state = this.getOrCreateWriter(sessionId);
     await state.ready;
     await state.queue;
-    const path = sessionIndexFilePath(this.dir, sessionId);
     const existing = await this.readIndex(sessionId);
     const persisted = state.persistedSeq;
-    const status = patch.status ?? existing?.status;
-    const updatedAt = patch.updated_at ?? Date.now();
-    const next: SessionLogIndex = {
-      v: 1,
-      session_id: sessionId,
-      ...(existing?.title !== undefined ? { title: existing.title } : {}),
-      ...(existing?.preview !== undefined ? { preview: existing.preview } : {}),
-      ...(existing?.status !== undefined ? { status: existing.status } : {}),
-      ...(existing?.started_at !== undefined ? { started_at: existing.started_at } : {}),
-      updated_at: updatedAt,
-      event_count: patch.event_count ?? persisted,
-      derived_upto_seq: patch.derived_upto_seq ?? persisted,
-      messages_cached: true,
-      ...(patch.title !== undefined ? { title: patch.title } : {}),
-      ...(patch.preview !== undefined ? { preview: patch.preview } : {}),
-      ...(patch.status !== undefined ? { status: patch.status } : {}),
-      ...(patch.started_at !== undefined ? { started_at: patch.started_at } : {}),
-      // 终态才有完成时刻；`running` / 未知状态一律不写（见下方 SessionLogIndex 注释）。
-      ...(status !== undefined && TERMINAL_SESSION_STATUSES.has(status)
-        ? { completed_at: updatedAt }
-        : {}),
-    };
-    await atomicWrite(path, JSON.stringify(next, null, 2), { mode: 0o600, ensureDir: true });
+    await writeSessionIndex(
+      this.dir,
+      sessionId,
+      patch,
+      { event_count: persisted, derived_upto_seq: persisted },
+      existing,
+    );
   }
 
   /**
