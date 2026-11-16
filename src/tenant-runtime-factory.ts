@@ -49,10 +49,12 @@ import {
   type RuntimePermissionConfig,
   type Scheduler,
   SessionEventLog,
+  type SessionEventLogPort,
   type SessionStore,
   type TenantPaths,
   type TraceRedactor,
 } from '../packages/core/src/index';
+import { TimelineEventLog } from '../packages/core/src/timeline/read-port';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { createFeishuFromConfig, stopFeishuChannel } from './feishu-wiring';
 import { FileLeaseService } from './lease-service';
@@ -204,8 +206,15 @@ export interface TenantRuntimeBundle {
    * 启动侧只用 `transient({ runId: 'manual' }).saveSessionState()` 这一条。
    */
   journalFactory: RunJournalFactory;
-  /** 0.18：会话事件日志（唯一真相源）；memory 后端或只读执行面不创建 */
-  eventLog?: SessionEventLog;
+  /** 0.18：会话事件写口（0.54 stop-write：时间线实现，`events.ndjson` 不再写） */
+  eventLog?: SessionEventLogPort;
+  /**
+   * 0.54 stop-write：会话事件的**只读口**（`TimelineEventLog`，类型上没有 `append`）。
+   *
+   * 读方（EU 历史投影 / idle 压缩 / 读回判定 / 两张卡 / `sessions.events` / `event_cursor`）
+   * 只拿它；写入只有 `journalFactory` 一条路。memory 后端或只读执行面 ⇒ 字段不存在。
+   */
+  timelineLog?: TimelineEventLog;
   /**
    * 0.54 A：会话 timeline 双写旁路（ADR-105 §11）。
    *
@@ -745,6 +754,31 @@ export async function buildTenantRuntime(
         })
       : undefined;
   timelineDualWrite?.installExitFlush();
+  /**
+   * 0.54 stop-write：**读口**（没有 `append`）。
+   *
+   * 所有读链路（EU 的 `loadStoredHistory` / `archiveReadbackAvailability`、idle 压缩、
+   * `context_usage` / `system_context` 两张卡、`sessions.events`、`event_cursor`）从这里
+   * 读；写入只有 `journalFactory`（经时间线写者）。
+   *
+   * `settle` 接双写旁路的 `flushSession`：块级 WAL 的活动块在内存里，不等它封块就读会
+   * 少一段在飞 chunk。冻结会话会抛 `session_frozen_readonly` —— 读口自己吞掉并降级为
+   * 「直接读磁盘」（旧格式会话的 timeline 本来就是空的，读不到是正确结果）。
+   */
+  const timelineLog: TimelineEventLog | undefined = writesEventLog
+    ? new TimelineEventLog({
+        dir: tenantPaths.sessions_dir,
+        logger,
+        ...(timelineDualWrite !== undefined
+          ? {
+              settle: async (sessionId?: string) => {
+                if (sessionId === undefined) return;
+                await timelineDualWrite.flushSession(sessionId);
+              },
+            }
+          : {}),
+      })
+    : undefined;
   const sessionControl = createSessionControl({
     session,
     paths: tenantPaths,
@@ -898,7 +932,9 @@ export async function buildTenantRuntime(
       sessionId,
       events,
       session,
-      ...(eventLog !== undefined ? { eventLog } : {}),
+      // 0.54 stop-write：EU 拿的是**只读口**（没有 `append`）—— 它只读历史、判读回、
+      // 合并写 `index.json`；写入的唯一入口是 journal（经时间线写者）。
+      ...(timelineLog !== undefined ? { eventLog: timelineLog } : {}),
       ...(leaseService !== undefined ? { leaseService } : {}),
       pluginHost: finalPluginHost,
       plugins: [],
@@ -926,9 +962,9 @@ export async function buildTenantRuntime(
     );
     workingContext.setSessionId(sessionId);
     let history: Message[] = state.messages ?? [];
-    if (eventLog !== undefined) {
-      await eventLog.flush(sessionId);
-      const stored = await eventLog.read(sessionId);
+    if (timelineLog !== undefined) {
+      await timelineLog.flush(sessionId);
+      const stored = await timelineLog.read(sessionId);
       // 0.54：这条路径的产物会经 `saveSessionState` 写回 `SessionState.messages`
       // （见下面的 `journal.saveSessionState`），所以必须取原文视图，不能把清集替换的
       // 占位物化进盘上。模型视图由请求构建层按段冻结集合自己替换。
@@ -1342,6 +1378,7 @@ export async function buildTenantRuntime(
     resumeMarkers,
     journalFactory,
     ...(eventLog ? { eventLog } : {}),
+    ...(timelineLog !== undefined ? { timelineLog } : {}),
     ...(timelineDualWrite !== undefined ? { timelineDualWrite } : {}),
     ...(trace ? { trace } : {}),
     ...(metrics ? { metrics } : {}),

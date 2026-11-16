@@ -31,7 +31,7 @@ import {
   type Logger,
   type RunRecord,
   type RunRecordStore,
-  type SessionEventLog,
+  type SessionEventLogPort,
   type SessionInfo,
   type SessionState,
   type SessionStore,
@@ -59,7 +59,13 @@ export interface SessionLivenessContext {
   tenantDir: string;
   /** 原始 backend（与调用方暴露的是同一实例） */
   session: SessionStore;
-  eventLog?: SessionEventLog;
+  /**
+   * 事件写口（append + read + updateIndex）；0.54 stop-write 起是时间线实现。
+   *
+   * 这里必须留 `append`：硬崩后的 `run.failed` 终态事件是**事实**，要落进时间线；
+   * 只读口（`SessionEventReadPort`）写不进去，用它会让停摆会话永远停在 running。
+   */
+  eventLog?: SessionEventLogPort;
   runStore?: RunRecordStore;
   logger: Logger;
   now?: () => number;
@@ -224,7 +230,7 @@ export async function reconcileSession(
       await ctx.session.save(failed);
 
       // 9) index 同步（best-effort 语义由调用方决定；这里失败即上报 error）。
-      if (ctx.eventLog !== undefined) {
+      if (ctx.eventLog?.updateIndex !== undefined) {
         await ctx.eventLog.updateIndex(sessionId, {
           status: 'interrupted',
           updated_at: completedAt,

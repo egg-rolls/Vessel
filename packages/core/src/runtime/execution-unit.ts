@@ -67,7 +67,7 @@ import type { ErrorEnvelope } from '../types/error.js';
 import type {
   EventStream,
   RunEvent,
-  SessionEventLogPort,
+  SessionEventReadPort,
   SessionEventRecord,
   Unsubscribe,
 } from '../types/event.js';
@@ -712,8 +712,13 @@ export class ExecutionUnit {
   };
   /** 0.10 R2-14：诊断日志；缺省 noop（`VESSEL_DEBUG` 时兜底 stderr） */
   private readonly logger: Logger;
-  /** 0.18：会话事件日志（Stage 4 只读句柄；写由 RunJournal 承担） */
-  private readonly eventLog?: SessionEventLogPort;
+  /**
+   * 0.18：会话事件读口（Stage 4 / 0.54 stop-write：**只读**）。
+   *
+   * 类型是 `SessionEventReadPort`（没有 `append`）：EU 只做三件事 —— 整份读投影历史、
+   * 读回可用性判定、合并写 `index.json`。写入的唯一入口是 `RunJournal`（经时间线写者）。
+   */
+  private readonly eventLog?: SessionEventReadPort;
   /** 0.18：观察 harness 直接发布的交互事件（permission/ask response） */
   private readonly eventLogUnsubscribe?: Unsubscribe;
   /** 0.51：opt-in 用量计价；缺省不注入 → `totalCost` 保持 0。 */
@@ -2308,16 +2313,6 @@ export class ExecutionUnit {
       await this.updateSessionIndex(sessionState);
     } catch (error) {
       this.logger.warn('session index update failed', {
-        session_id: sessionState.session_id,
-        error: errorText(error),
-      });
-    }
-    // P2：run 结束关闭该 session 的写句柄，避免长进程每会话永久占用一个 FD。
-    // 下次 run/append 会重新打开并从文件尾恢复 seq。
-    try {
-      await this.eventLog.release?.(sessionState.session_id);
-    } catch (error) {
-      this.logger.warn('session event log release failed', {
         session_id: sessionState.session_id,
         error: errorText(error),
       });
@@ -4010,7 +4005,7 @@ export class ExecutionUnit {
 
     const cached = sessionState?.messages?.length ? sessionState.messages : undefined;
 
-    let events: Awaited<ReturnType<SessionEventLogPort['read']>> = [];
+    let events: Awaited<ReturnType<SessionEventReadPort['read']>> = [];
     // 日志最后的 seq：既用于一致性告警，也是本次窗口「覆盖到哪」的唯一来源。
     let lastSeq: number | undefined;
     if (this.eventLog) {
@@ -4137,8 +4132,6 @@ export class ExecutionUnit {
     if (!this.eventLog) return undefined;
     try {
       await this.eventLog.flush(sessionId);
-      const inMemory = this.eventLog.lastPersistedSeq(sessionId);
-      if (inMemory !== undefined) return inMemory;
       return await this.eventLog.lastSeq?.(sessionId);
     } catch {
       return undefined;

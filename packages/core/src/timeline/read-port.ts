@@ -304,6 +304,35 @@ export class TimelineEventLog {
   }
 
   /**
+   * 该会话的**尾水位**（派生读的缓存键：水位不变 ⇒ 派生结果不可能变）。
+   *
+   * 口径（0.54 stop-write，替代旧的 `stat events.ndjson` 那次读）：
+   * `wal.log` 的 `大小:mtime` + **尾块名**。三处都要看，因为三类写入各自只动其中一处：
+   *
+   * | 写入 | 动的是 | 只 stat 它会漏掉 |
+   * | --- | --- | --- |
+   * | 事实行 | `wal.log` 大小 / mtime | —— |
+   * | chunk 封块 | 新增 `wal.blocks/NNNNNN.wblk`（`wal.log` 不动） | 长 run 的正文/思考增量 |
+   * | 归档 | `timeline.ndjson`（只复制已存在的事实） | 不影响「可派生到什么」 |
+   *
+   * 归档那一行故意**不**进水位：归档是复制不是搬移，它不产生新的可派生内容；把它算进
+   * 水位只会让缓存无谓失效（每次 `sessions.get` 都重算一遍尾窗）。
+   *
+   * `undefined` = 这个会话还没有任何事件（连 `wal.log` 都没建）—— 调用方据此「不带
+   * `event_cursor`」，不是 `0`。
+   */
+  async watermark(sessionId: string): Promise<string | undefined> {
+    const dir = this.sessionDir(sessionId);
+    const wal = await stat(join(dir, TIMELINE_LAYOUT.walLog)).catch(() => undefined);
+    const blocks = await listBlockFiles(join(dir, TIMELINE_LAYOUT.walBlocks));
+    const lastBlock = blocks[blocks.length - 1];
+    if (wal === undefined && lastBlock === undefined) return undefined;
+    const size = wal?.size ?? 0;
+    const mtime = wal === undefined ? 0 : Math.floor(wal.mtimeMs);
+    return `${String(size)}:${String(mtime)}:${lastBlock ?? '-'}`;
+  }
+
+  /**
    * 合并写 `index.json`（元数据：title / preview / status / 时间戳 / 计数）。
    *
    * 这是读口唯一的写：它写的是**元数据缓存**，不是事件（事件只有 `TimelineWriter` 能写）。

@@ -62,7 +62,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { RunEvent } from '../apps/web/src/gateway/types';
@@ -1420,7 +1420,15 @@ async function checkA8(): Promise<void> {
       }) as never,
     sessionEvents: createSessionEventsSource({
       log,
-      eventsFile: (id) => join(sessionDirPath(fixture.sessionsDir, id), 'events.ndjson'),
+      // 旧日志只当夹具（本门禁自己写它）；水位按它给不影响断言。
+      watermark: async (id: string) => {
+        const info = await stat(
+          join(sessionDirPath(fixture.sessionsDir, id), 'events.ndjson'),
+        ).catch(() => undefined);
+        return info === undefined
+          ? undefined
+          : `${String(info.size)}:${String(Math.floor(info.mtimeMs))}`;
+      },
     }),
   });
   const eventsMethods = createEventsMethods({

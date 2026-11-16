@@ -18,7 +18,7 @@
  * 用完即弃：日志写在系统临时目录，跑完删掉。退出码 0 = 全过。
  */
 
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionEventLog, sessionIndexFilePath } from '../packages/core/src/index';
@@ -116,6 +116,13 @@ try {
   const log = new SessionEventLog({ dir: sessionsDir, durable: false });
   const eventsFile = (sessionId: string) =>
     join(sessionsDir, encodeURIComponent(sessionId), 'events.ndjson');
+  /** 本脚本的夹具就是旧日志本身 ⇒ 水位按旧日志文件给（缓存键，口径不影响断言）。 */
+  const watermark = async (sessionId: string): Promise<string | undefined> => {
+    const info = await stat(eventsFile(sessionId)).catch(() => undefined);
+    return info === undefined
+      ? undefined
+      : `${String(info.size)}:${String(Math.floor(info.mtimeMs))}`;
+  };
 
   for (const [index, item] of APPENDED.entries()) {
     await log.append({
@@ -127,7 +134,7 @@ try {
     });
   }
 
-  const source = createSessionEventsSource({ log, eventsFile });
+  const source = createSessionEventsSource({ log, watermark });
   // 真实会话的 `index.json` 由派生层写（append 本身不写）：探针照实模拟一次「派生追平」。
   await log.updateIndex(SESSION, {});
   const sessions = [{ session_id: SESSION }, { session_id: EMPTY_SESSION }];
@@ -390,7 +397,7 @@ try {
   // 派生落后（崩在派生中间）：把 index 的 derived_upto_seq 改小，last_seq 必须仍然来自文件尾。
   await log.updateIndex(SESSION, { derived_upto_seq: 5, event_count: total });
   // 换一个实例绕开写入进程内的缓存（真实场景是 gateway 重启后第一次读）。
-  const freshSource = createSessionEventsSource({ log, eventsFile });
+  const freshSource = createSessionEventsSource({ log, watermark });
   const freshMethods = createSessionMethods({
     sessionFor: () =>
       ({
@@ -415,7 +422,7 @@ try {
 
   // index 坏掉：只丢派生数，last_seq 仍然给（否则前端会以为「没有日志」而丢掉整段历史）。
   await writeFile(sessionIndexFilePath(sessionsDir, SESSION), '{ 这不是 JSON', 'utf8');
-  const brokenIndexSource = createSessionEventsSource({ log, eventsFile });
+  const brokenIndexSource = createSessionEventsSource({ log, watermark });
   const brokenIndexMethods = createSessionMethods({
     sessionFor: () =>
       ({

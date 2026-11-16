@@ -236,10 +236,12 @@ export interface ExecutionUnitOptions {
    */
   contextPressureHint?: string;
   /**
-   * 0.18：会话事件日志（唯一真相源）。提供时 runtime 在发布每个事实事件前
-   * 先追加落盘（`llm.stream.chunk` 等派生事件除外）；缺省不落盘，行为与 0.17 一致。
+   * 0.18：会话事件**读口**（0.54 stop-write：只读子集，没有 `append`）。
+   *
+   * 提供时 runtime 用它读历史投影 / 读回判定 / 合并写 `index.json`。写入的唯一入口是
+   * `RunJournal`（journal 经时间线写者落盘），EU 拿不到写权限。
    */
-  eventLog?: import('./event.js').SessionEventLogPort;
+  eventLog?: import('./event.js').SessionEventReadPort;
   /**
    * ADR-098 C2：两级租约服务（装配层注入；缺省 no-op，行为等同现状）。
    * 提供时 EU 在首个 run/resume 前 acquire SessionLease，后台续租并注入 fencing token。

@@ -21,6 +21,7 @@
  */
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // 归档卡的文案与去重键按模块 barrel 引入（与 runtime 内部接线同一个入口）：
@@ -441,6 +442,13 @@ const mainDir = mkdtempSync(join(tmpdir(), 'vessel-archive-notice-'));
 const sessionsDir = join(mainDir, 'sessions');
 const eventsFileOf = (sessionId: string): string =>
   join(sessionsDir, encodeURIComponent(sessionId), 'events.ndjson');
+/** 本脚本仍用旧日志做夹具（`SessionEventLog`），水位就照旧日志的 大小:mtime 给。 */
+const watermarkOf = async (sessionId: string): Promise<string | undefined> => {
+  const info = await stat(eventsFileOf(sessionId)).catch(() => undefined);
+  return info === undefined
+    ? undefined
+    : `${String(info.size)}:${String(Math.floor(info.mtimeMs))}`;
+};
 
 try {
   const store = new FileSessionStore(mainDir);
@@ -595,7 +603,7 @@ try {
       if (probe.some((record) => record.type === 'tool.call.completed')) break;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    const source = createSessionEventsSource({ log, eventsFile: eventsFileOf });
+    const source = createSessionEventsSource({ log, watermark: watermarkOf });
     const methods = createSessionMethods({
       sessionFor: () => ({ load: async () => await reload(mainDir) }) as never,
       sessionEvents: source,

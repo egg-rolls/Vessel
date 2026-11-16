@@ -63,7 +63,6 @@
  * @module vessel/context-usage
  */
 
-import { stat } from 'node:fs/promises';
 import { DEFAULT_CONFIG } from '../packages/config/src/index';
 import type { SessionEventRecord } from '../packages/core/src/index';
 
@@ -226,10 +225,15 @@ function resolveContextWindow(args: {
 const TAIL_MATCH_LIMIT = 64;
 
 export interface ContextUsageSourceOptions {
-  /** 事件日志（装配层传 tenant 的 `SessionEventLog`）。 */
+  /** 事件**读口**（时间线实现；0.54 stop-write 起装配层传 `TimelineEventLog`）。 */
   tail: SessionEventTailReader;
-  /** 该会话的 `events.ndjson` 路径（装配层用 core 的 `sessionEventsFilePath` 拼）。 */
-  eventsFile(sessionId: string): string;
+  /**
+   * 该会话的**尾水位**（缓存键：水位不变 ⇒ 派生结果不可能变）。
+   *
+   * 0.54 stop-write：不再由装配层拼 `events.ndjson` 路径去 `stat` —— 时间线的尾水位
+   * 由读口自己算（`wal.log` 大小/mtime + 块目录尾块），装配层只转交。
+   */
+  watermark(sessionId: string): Promise<string | undefined>;
   /**
    * 上下文窗口 = `config.context.maxTokens`（与 `workingContext.maxTokens` 同源）。
    * 缺省（未配置）时用 `DEFAULT_CONFIG.context.maxTokens`，与 runtime 同一份默认值。
@@ -248,7 +252,7 @@ const DEFAULT_CONTEXT_WINDOW_TOKENS = DEFAULT_CONFIG.context?.maxTokens;
  * 命中事件的字段不成形。
  */
 export function createContextUsageSource(options: ContextUsageSourceOptions): ContextUsageSource {
-  const { tail, eventsFile } = options;
+  const { tail } = options;
   const windowTokens =
     typeof options.contextWindowTokens === 'number' &&
     Number.isFinite(options.contextWindowTokens) &&
@@ -303,15 +307,9 @@ export function createContextUsageSource(options: ContextUsageSourceOptions): Co
       return undefined;
     },
 
-    async watermark(sessionId: string): Promise<string | undefined> {
-      try {
-        const info = await stat(eventsFile(sessionId));
-        // 大小 + mtime 一起看：只追加的日志上 size 变化最可靠，mtime 兜住
-        // 「同长度改写」（重写 / 换写者）这种极端情况。
-        return `${info.size}:${Math.floor(info.mtimeMs)}`;
-      } catch {
-        return undefined;
-      }
+    watermark(sessionId: string): Promise<string | undefined> {
+      // 尾水位口径归读口（时间线：`wal.log` 大小/mtime + 尾块名），本模块只当缓存键转发。
+      return options.watermark(sessionId);
     },
   };
 }

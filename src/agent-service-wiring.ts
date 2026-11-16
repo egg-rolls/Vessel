@@ -45,6 +45,7 @@ import type {
   Runtime,
   RuntimePermissionConfig,
   Scheduler,
+  SessionEventLogPort,
   TerminationPolicy,
   ToolDefinition,
   UsageLimits,
@@ -102,8 +103,8 @@ export interface AgentServiceWiringOptions {
   humanApproval?: boolean;
   /** tenant SessionStore；成员 ExecutionUnit 用同一份存储按 session_id 续接历史 */
   session?: ExecutionUnitOptions['session'];
-  /** tenant SessionEventLog；与父入口同源（缺省不落 trace） */
-  eventLog?: ExecutionUnitOptions['eventLog'];
+  /** tenant 的事件日志（写口）；与父入口同源（缺省不落 trace） */
+  eventLog?: SessionEventLogPort;
   /**
    * ADR-098 C2：per-tenant 租约服务。透传给 AgentService（BindingLease）与成员
    * ExecutionUnit（SessionLease）；缺省时两级租约都是 no-op。
