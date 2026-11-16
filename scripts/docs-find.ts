@@ -25,7 +25,34 @@
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { parseFrontmatter, parseStringArray } from './check-docs';
+
+/** 最小 frontmatter 解析（原来在 `check-docs` 里；按新政策门禁已删，这里保留检索需要的那一点）。 */
+function parseFrontmatter(text: string): Record<string, string> {
+  if (!text.startsWith('---\n')) return {};
+  const end = text.indexOf('\n---', 4);
+  if (end < 0) return {};
+  const block = text.slice(4, end);
+  const out: Record<string, string> = {};
+  for (const line of block.split('\n')) {
+    const match = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line.trim());
+    if (match) out[match[1] as string] = (match[2] as string).replace(/^["']|["']$/g, '');
+  }
+  return out;
+}
+
+/** `[a, b]` 或 `- a` 列表 → string[]；解析不出来就给空数组（检索兜底，不是门禁）。 */
+function parseStringArray(raw: string | undefined): string[] {
+  if (raw === undefined) return [];
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('[')) {
+    return trimmed
+      .replace(/^\[|\]$/g, '')
+      .split(',')
+      .map((item) => item.trim().replace(/^["']|["']$/g, ''))
+      .filter((item) => item.length > 0);
+  }
+  return trimmed.length > 0 ? [trimmed] : [];
+}
 
 /** 共享侧：相对 root，始终参与扫描。 */
 const SHARED_DOC_DIRS = ['docs/architecture', 'docs/agents'] as const;
