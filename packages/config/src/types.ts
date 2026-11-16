@@ -615,6 +615,14 @@ export interface HubConfig {
   tls?: HubTlsConfig;
   allowedOrigins?: string[];
   tokenEnv?: string;
+  /**
+   * 0.55 P0：反代共享密钥的环境变量名（opt-in）。
+   *
+   * 配置后，hub 只把「回环 peer **且** 带 `X-Vessel-Proxy-Secret`」的请求当成可信本机
+   * （目录 / WS 目录流 / 删节点都走这条判定）。不配 = 旧行为（回环即可信）。
+   * 与 `serve.proxy_secret_env` / `gateway.proxy_secret_env` 同机制，密钥不要跨用途复用。
+   */
+  proxySecretEnv?: string;
   allowFileSecrets?: boolean;
   pairingTtlSeconds?: number;
 }

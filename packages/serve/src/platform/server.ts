@@ -17,7 +17,8 @@ import {
   originAllowed,
 } from '../gateway/auth.js';
 import { serveStatic } from '../gateway/static.js';
-import { resolvePlatformAuth } from './auth.js';
+import { platformUnauthorizedMessage, resolvePlatformAuth } from './auth.js';
+import { platformListenGuard } from './listen-guard.js';
 import { createPlatformRegistry } from './registry.js';
 import { handlePlatformRpc } from './rpc.js';
 import type { PlatformGateway, PlatformGatewayOptions } from './types.js';
@@ -38,6 +39,11 @@ function isNodeOnlyPath(path: string): boolean {
   );
 }
 
+/**
+ * 0.55 P0：401 文案必须能直接照做 —— 分清「缺反代密钥」与「缺平台 token」。
+ * 仍然只用 CONTRACT §7 的 `platform_unauthorized` 错误码（Web 端据此弹「需要 token」）。
+ * 0.55 拍板项 2：文案与 `rpc.ts` 的凭据端点共用（见 `auth.ts`），避免两处口径漂移。
+ */
 function json(data: unknown, status: number, extra: Record<string, string>): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -63,6 +69,14 @@ function errorJson(
  * 启动平台监听。`staticDir/index.html` 缺失时 fail-fast（P10），错误信息带解析后路径。
  */
 export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGateway {
+  // 0.55 P0：fail-closed。非回环监听 + 没有 platform token ⇒ 拒绝启动（不是警告）。
+  const listenGuard = platformListenGuard({
+    hostname: opts.hostname,
+    port: opts.port,
+    platformToken: opts.platformToken,
+  });
+  if (listenGuard !== null) throw new Error(listenGuard);
+
   const staticDir = resolve(opts.staticDir);
   const indexFile = resolve(staticDir, 'index.html');
   if (!existsSync(indexFile)) {
@@ -113,7 +127,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
 
       // 非回环且未通过平台认证：一律 401（即使未配置平台 token）。
       if (!auth.loopback && !auth.ok) {
-        return errorJson('platform_unauthorized', 'Missing or invalid platform token', 401, extra);
+        return errorJson('platform_unauthorized', platformUnauthorizedMessage(auth), 401, extra);
       }
 
       if (path === '/health') {
@@ -132,12 +146,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
           });
         }
         if (!auth.ok) {
-          return errorJson(
-            'platform_unauthorized',
-            'Missing or invalid platform token',
-            401,
-            extra,
-          );
+          return errorJson('platform_unauthorized', platformUnauthorizedMessage(auth), 401, extra);
         }
         return handlePlatformRpc(
           req,

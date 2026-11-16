@@ -196,10 +196,35 @@ function resolveHubToken(
   return resolveEnvToken(deps, envName);
 }
 
-function makeHeaders(token: string | undefined, hasBody: boolean): Record<string, string> {
+/**
+ * 0.55 P0：本机 hub CLI 的反代密钥头。
+ *
+ * `hub.proxy_secret_env` 配置后，hub 的读端点/删节点要求「回环 + 密钥头」；
+ * CLI 直连本机时也带上同一个头，避免把管理命令挡在外面（不需要经过反代）。
+ * 未配置 → undefined → 不发头（旧行为）。
+ */
+function resolveHubProxySecret(deps: HubCommandDeps, config: VesselConfig): string | undefined {
+  const envName =
+    typeof config.hub?.proxySecretEnv === 'string' && config.hub.proxySecretEnv !== ''
+      ? config.hub.proxySecretEnv
+      : undefined;
+  if (envName === undefined) return undefined;
+  const env = deps.env ?? process.env;
+  const value = env[envName];
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+function makeHeaders(
+  token: string | undefined,
+  hasBody: boolean,
+  proxySecret?: string,
+): Record<string, string> {
   const headers: Record<string, string> = { accept: 'application/json' };
   if (hasBody) headers['content-type'] = 'application/json';
   if (token !== undefined) headers.authorization = `Bearer ${token}`;
+  // 0.55 P0：hub 配了 hub.proxy_secret_env 时，本机 CLI 也带上密钥头，
+  // 这样「直连本机的管理命令」不会被自己的收紧挡在外面（不需要经过反代）。
+  if (proxySecret !== undefined) headers['x-vessel-proxy-secret'] = proxySecret;
   return headers;
 }
 
@@ -222,6 +247,8 @@ async function requestJson(
     token?: string;
     body?: unknown;
     tls?: { ca: string };
+    /** 0.55 P0：hub 配了 `hub.proxy_secret_env` 时本机 CLI 也要带的密钥头。 */
+    proxySecret?: string;
   } = {},
 ): Promise<unknown> {
   const fetchImpl = deps.fetchImpl ?? fetch;
@@ -232,7 +259,7 @@ async function requestJson(
 
   const init: FetchInit = {
     method: options.method ?? (hasBody ? 'POST' : 'GET'),
-    headers: makeHeaders(options.token, hasBody),
+    headers: makeHeaders(options.token, hasBody, options.proxySecret),
     ...(hasBody ? { body: JSON.stringify(options.body) } : {}),
     signal: controller.signal,
   };
@@ -394,7 +421,11 @@ async function directoryCommand(
 ): Promise<number> {
   const baseUrl = resolveHubUrl(hubUrl, config);
   const token = resolveHubToken(deps, config, tokenEnv);
-  const body = await requestJson(deps, `${baseUrl}/v1/hub/directory`, { token });
+  const proxySecret = resolveHubProxySecret(deps, config);
+  const body = await requestJson(deps, `${baseUrl}/v1/hub/directory`, {
+    ...(token !== undefined ? { token } : {}),
+    ...(proxySecret !== undefined ? { proxySecret } : {}),
+  });
   output(deps, json ? JSON.stringify(body, null, 2) : formatDirectory(body));
   return 0;
 }
@@ -786,10 +817,14 @@ async function nodeRemoveCommand(
   config: VesselConfig,
 ): Promise<number> {
   const baseUrl = resolveHubUrl(command.hubUrl, config);
+  const proxySecret = resolveHubProxySecret(deps, config);
   const body = await requestJson(
     deps,
     `${baseUrl}/v1/hub/nodes/${encodeURIComponent(command.pairingId)}`,
-    { method: 'DELETE' },
+    {
+      method: 'DELETE',
+      ...(proxySecret !== undefined ? { proxySecret } : {}),
+    },
   );
   if (!isRecord(body) || body.ok !== true) {
     throw new HubCommandFailure('invalid_response', t('hub.error.invalidResponse'));

@@ -25,7 +25,7 @@ import {
   resolvePlatformToken,
   type VesselConfig,
 } from '../packages/config/src/index';
-import { startPlatformGateway } from '../packages/serve/src/index';
+import { platformListenGuard, startPlatformGateway } from '../packages/serve/src/index';
 import type { GatewayCommand, GatewayInstallTarget, GatewaySelector } from './cli-args';
 import { formatConfigErrors } from './config-error-format';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
@@ -236,6 +236,25 @@ export function printSplitModePortError(
   if (error === null) return null;
   printErr(formatConfigErrors([error]));
   return 2;
+}
+
+/**
+ * 0.55 P0：平台监听的 fail-closed 预检（在 spawn / bind / 停旧实例之前）。
+ *
+ * 非回环 + 没配 `gateway.token` ⇒ 返回可直接照做的多行说明；`null` = 放行。
+ * 与 node / hub 的非回环守卫同口径；回环监听一律放行（本仓自己的启动路径不受影响）。
+ */
+function platformListenError(
+  config: VesselConfig,
+  env: Record<string, string | undefined>,
+  hostname: string | undefined,
+  port: number | undefined,
+): string | null {
+  return platformListenGuard({
+    hostname: hostname ?? config.gateway?.hostname ?? DEFAULT_GATEWAY_OPTIONS.hostname,
+    port: port ?? config.gateway?.port ?? DEFAULT_GATEWAY_OPTIONS.port,
+    platformToken: resolvePlatformToken(config, env),
+  });
 }
 
 /** `config.hub.dataDir` 分流时的 hub 目录；缺省交给 collect 用 `<dataDir>/hub`。 */
@@ -1657,6 +1676,20 @@ async function startDaemonCommand(
         );
   if (portError !== null) return portError;
   const stateKind = gatewayStateKind(options, context.env);
+  // 0.55 P0：daemon 父进程也 fail-fast（子进程会再判一次），避免「只留一段日志」。
+  // 只对平台生效：`node` 的 daemon 里 `gateway.hostname` 不是它的监听地址。
+  if (stateKind === 'platform') {
+    const listenError = platformListenError(
+      context.config,
+      context.env,
+      options.host,
+      options.port,
+    );
+    if (listenError !== null) {
+      printErr(ui.err(listenError));
+      return 1;
+    }
+  }
   const instance = deriveGatewayInstance(options.instance, options.port);
   const logPath = options.daemonLog ?? options.logPath ?? gatewayLogPath(context.dataDir, instance);
 
@@ -2195,6 +2228,12 @@ export async function runPlatformGatewayForeground(
         targetHost = previous.record.host;
       }
     }
+    // 0.55 P0：restart 也必须在**停旧实例之前**过守卫 —— 配置不安全就别重启（免得白停）。
+    const restartListenError = platformListenError(config, env, targetHost, targetPort);
+    if (restartListenError !== null) {
+      printErr(ui.err(restartListenError));
+      return 1;
+    }
     const stopCode = await stopGateway({
       config,
       dataDir,
@@ -2228,6 +2267,13 @@ export async function runPlatformGatewayForeground(
     command.kind === 'start' ? command.port : undefined,
   );
   if (portError !== null) return portError;
+
+  // 0.55 P0：fail-closed。非回环监听 + 没配 platform token ⇒ 在 spawn 之前就拒绝。
+  const listenError = platformListenError(config, env, targetHost, targetPort);
+  if (listenError !== null) {
+    printErr(ui.err(listenError));
+    return 1;
+  }
 
   const instance = deriveGatewayInstance(targetInstance, targetPort);
 

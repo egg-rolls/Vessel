@@ -16,14 +16,19 @@ import * as path from 'node:path';
 import {
   loadConfig,
   resolveEffectiveApiKey,
+  resolvePlatformProxySecret,
+  resolvePlatformToken,
+  resolveServeProxySecret,
   type VesselConfig,
 } from '../packages/config/src/index';
+import { isLoopbackHostname } from '../packages/serve/src/index';
 import type { DoctorCommandArgs } from './cli-args';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
 import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
 import { declarativePluginEntries } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
 
@@ -245,6 +250,60 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
             : `${host}:${config.serve.port} check failed`,
     });
   }
+
+  // 0.55 P0：公开暴露面提醒（**只提示，不改任何运行语义**）。
+  // 同机反代下 peer 恒为 127.0.0.1，所以「回环监听 + 完全没有凭据」= 局域网/公网也能进。
+  const exposure: string[] = [];
+  const serveHost = config.serve?.hostname ?? '127.0.0.1';
+  const serveTokens = Object.keys(config.serve?.tokens ?? {}).length > 0;
+  if (
+    isLoopbackHostname(serveHost) &&
+    resolveGatewayToken(config, env) === undefined &&
+    !serveTokens &&
+    resolveServeProxySecret(config, env) === undefined
+  ) {
+    const where =
+      config.serve?.port !== undefined ? `${serveHost}:${String(config.serve.port)}` : serveHost;
+    exposure.push(
+      `node ${where} 没有 serve.token / serve.tokens：同机反代下匿名请求会被当成 admin；` +
+        '配 serve.token_env（或 serve.proxy_secret_env）后重启',
+    );
+  }
+  const gatewayHost = config.gateway?.hostname ?? '127.0.0.1';
+  if (
+    isLoopbackHostname(gatewayHost) &&
+    resolvePlatformToken(config, env) === undefined &&
+    resolvePlatformProxySecret(config, env) === undefined
+  ) {
+    exposure.push(
+      `平台 ${gatewayHost} 没有 gateway.token：回环匿名仍可读平台面（node token 已需要凭据）；` +
+        '配 gateway.token_env（或 gateway.proxy_secret_env）',
+    );
+  }
+  const hubHost = config.hub?.listen?.hostname ?? '127.0.0.1';
+  const hubTokenEnvName = config.hub?.tokenEnv;
+  const hubToken = hubTokenEnvName !== undefined ? env[hubTokenEnvName] : undefined;
+  const hubProxySecretEnvName = config.hub?.proxySecretEnv;
+  const hubProxySecret =
+    hubProxySecretEnvName !== undefined ? env[hubProxySecretEnvName] : undefined;
+  if (
+    isLoopbackHostname(hubHost) &&
+    nonEmpty(hubToken) === undefined &&
+    nonEmpty(hubProxySecret) === undefined
+  ) {
+    exposure.push(
+      `hub ${hubHost} 没有 hub.token_env：回环匿名可读目录、可删节点（吊销 node token）；` +
+        '配 hub.token_env 或 hub.proxy_secret_env',
+    );
+  }
+  checks.push({
+    name: 'exposure',
+    status: exposure.length > 0 ? 'warn' : 'ok',
+    message:
+      exposure.length > 0
+        ? `${exposure.join('; ')}（详见 docs/operations/REVERSE-PROXY.md §8）`
+        : 'loopback listeners are protected by a token or a proxy secret',
+  });
 
   // --deep：只读查询本地 gateway（连接 / runtime / MCP 实际状态）。
   if (options.deep === true) {

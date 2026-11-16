@@ -32,7 +32,9 @@ paths: [docs/operations/REMOTE.md]
 - **不在 0.6 范围**：mTLS / 客户端证书、HTTP/2、ACME / 自动续期、反向代理信任头、mDNS / 服务网格 / 节点自动发现。
 
 > 0.55 补充：同机反代的威胁模型、复现证据与 `proxy_secret_env` 开关见
-> [REVERSE-PROXY.md](./REVERSE-PROXY.md)。默认行为不变；不配开关就等于仍信任「回环」。
+> [REVERSE-PROXY.md](./REVERSE-PROXY.md)。共享密钥开关仍是 opt-in；但 0.55 另有四条
+> **默认生效**的收紧（平台非回环必须配 token、`platform.nodes.credentials` 要凭据、
+> hub 回环判定在配密钥后收紧、`vessel doctor` 警告），升级前请按该文 §8 的清单逐条过。
 
 ### 1.1 0.6.1 的安全收紧
 

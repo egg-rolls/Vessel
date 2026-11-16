@@ -242,6 +242,8 @@ export {
   normalizeMetricsSnapshot,
 } from './metrics.js';
 export {
+  isLoopbackListen,
+  PLATFORM_LISTEN_GUARD_DOC,
   type PlatformAuthMode,
   type PlatformAuthResult,
   type PlatformGateway,
@@ -251,6 +253,7 @@ export {
   type PlatformNodeSummary,
   type PlatformRpcErrorCode,
   type PlatformRpcMethod,
+  platformListenGuard,
   startPlatformGateway,
 } from './platform/index.js';
 // 0.43：体验型 plugin 宿主（CONTRACT-0.43）。

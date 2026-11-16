@@ -153,12 +153,15 @@ export async function handlePlatformRpc(
       }
     }
     case 'platform.nodes.credentials': {
-      // 只接受回环来源；非回环一律 401（P4 oracle）。
-      if (!ctx.auth.loopback) {
+      // 0.55 P0（拍板项 2）：只发给**已认证**的平台客户端（mode === 'token'）。
+      // 回环 socket 不再构成「可以下发 node token」的理由：反代与平台同机时它就是公网。
+      if (ctx.auth.mode !== 'token') {
         return failure(
           id,
           'platform_unauthorized',
-          'Node credentials are only available on loopback',
+          'platform_token_required: platform.nodes.credentials 只发给带平台 token 的客户端。' +
+            '浏览器用 #token=<平台 token 的值> 导入，脚本用 Authorization: Bearer <平台 token>；' +
+            '令牌来自 gateway.token 或 gateway.token_env 指向的环境变量（不是 node token）。',
           401,
           extra,
         );
