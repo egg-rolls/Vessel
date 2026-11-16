@@ -321,6 +321,38 @@ export function lastExpectedSeq(header: TimelineRangeHeader): number | undefined
 }
 
 /**
+ * 实收是不是**声明区间的连续前缀**？返回前缀末 seq（`undefined` = 不是前缀）。
+ *
+ * 用途：服务端每趟发到一半撞背压就停（实测声明 2000 条、实收 1189 条），那不是丢数据，
+ * 是这一趟没发完。只要实收满足「从区间内第一个非洞 seq 起、逐个递增、只跳过声明洞」，
+ * 就可以按实收末 seq 收缩声明继续续拉 —— 缺口只在**确认无法继续**时才判。
+ *
+ * 空数组 ⇒ `undefined`（一条都没收到不是前缀，是"没进度"）。
+ */
+export function contiguousPrefixEnd(
+  header: TimelineRangeHeader,
+  seqs: readonly number[],
+): number | undefined {
+  if (seqs.length === 0) return undefined;
+  const first = firstExpectedSeq(header);
+  if (first === undefined) return undefined;
+  if (seqs[0] !== first) return undefined;
+  let expected = first;
+  for (let index = 0; index < seqs.length; index += 1) {
+    if (seqs[index] !== expected) return undefined;
+    if (index === seqs.length - 1) return expected;
+    let next = expected + 1;
+    while (next <= header.end_seq && inHoles(next, header.holes)) next += 1;
+    if (next > header.end_seq) {
+      // 已经到区间右端还多出条目 ⇒ 不是前缀。
+      return undefined;
+    }
+    expected = next;
+  }
+  return undefined;
+}
+
+/**
  * 四条客户端校验（ADR-105 §6，**全部硬**）。返回 `undefined` = 这一段可以合并。
  *
  * 1. **连续性**：`seq` 严格升序，且相邻两条之间只允许被声明的洞跳过 —— 不许有「静默

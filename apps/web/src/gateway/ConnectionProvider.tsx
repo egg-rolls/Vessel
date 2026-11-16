@@ -134,10 +134,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const client = useMemo(() => new GatewayClient(nodeUrl ?? ''), [nodeUrl]);
   /** 路由级订阅控制器：每个 node 连接一个；切路由时由 S3 调 `apply`。 */
   const subscription = useMemo(
-    // 第三个参数是「缺口」的可读出口：区间回填校验不过 / 重拉仍不过时至少有一句话，
-    // 不许静默少补（数据层的观测面在 `EventStore#timelineGap`，UI 上是污点条）。
-    () => new SubscriptionController(client, eventStore, (message) => toast.info(message)),
-    [client, eventStore, toast],
+    // **不传 notice**：0.54 的缺口/回填是内部时序事实，用户不该看到（用户明确要求）。
+    // 出口只有 console（`[timeline-backfill]` / `[timeline_gap_reported]`）与
+    // `timeline_gap_reported` 上报；数据面观测点在 `EventStore#timelineGap`。
+    () => new SubscriptionController(client, eventStore),
+    [client, eventStore],
   );
   const nodeTokenRef = useRef(nodeToken);
   nodeTokenRef.current = nodeToken;
