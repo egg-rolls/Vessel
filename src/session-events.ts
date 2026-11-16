@@ -51,7 +51,7 @@ export interface SessionEventIndexLike {
 }
 
 /**
- * 读事件日志的最小面（装配层传 tenant 的 `SessionEventLog`；探针传假的也行）。
+ * 读事件日志的最小面（装配层传 tenant 的时间线读口 `TimelineEventLog`；探针传假的也行）。
  *
  * `read` 的 `sinceSeq` 是**排他**游标（只回 `seq > sinceSeq`）；不给 `limit` 就是读到尾。
  */
@@ -79,7 +79,7 @@ export interface SessionEventsSourceOptions {
 /**
  * serve 侧 `SessionEventsPort` 的实现（结构类型对齐，不依赖 serve 的模块）。
  *
- * - `read` / `lastSeq` / `cursor`：直通 core 的 `SessionEventLog`（排他游标语义原样保留）；
+ * - `read` / `lastSeq` / `cursor`：直通读口（排他游标语义原样保留）；
  * - `watermark`：只 `stat` 事件文件（`大小:mtime`），用来给 `event_cursor` 做按会话缓存 ——
  *   append-only 意味着「水位没变 ⇒ 读到的游标不会变」，所以稳态下 `sessions.get` 不会每次
  *   都去读 `index.json` + 日志尾。

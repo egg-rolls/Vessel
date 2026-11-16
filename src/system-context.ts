@@ -24,7 +24,8 @@
  *   每一轮，得把尾窗里的全部匹配记录都透出，并由客户端按 run 落位；这一单不做。
  *
  * ## 读数成本
- * 尾窗回扫（`SessionEventLog.readTailMatches`）：首窗 64 KiB，命中即停；该会话尾部没有
+ * 尾窗回扫（读口的 `readTailMatches`，0.54 stop-write 起由 `TimelineEventLog` 提供）：
+ * 首窗 64 KiB，命中即停；该会话尾部没有
  * 这类事件时按 64K→256K→1M→4M 扩窗，累计最多 ≈5.3 MiB 后返回「不知道」，**不回退全量
  * 扫盘**。调用方（`sessions.get`）按**尾水位**缓存（见 `packages/serve` 的
  * `systemContext` 端口契约）：水位不变时连 `lookup` 都不会被调到，只花一次 `stat`。

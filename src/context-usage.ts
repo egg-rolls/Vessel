@@ -54,10 +54,10 @@
  * 不回填旧数据：`context_max` 只在会写它的新日志里存在。
  *
  * ## 读数成本
- * 尾窗回扫（`SessionEventLog.readTailMatches`）：首窗 64 KiB，命中即停；一次 miss
- * （该会话根本没有用量事件）按 64K→256K→1M→4M 扩窗，累计最多 ≈5.3 MiB 后返回
- * 「不知道」，**不回退全量扫盘**。调用方（`sessions.get`）按**尾水位**缓存，见
- * `packages/serve` 的 `contextUsage` 端口契约；本模块只额外提供
+ * 尾窗回扫（读口的 `readTailMatches`，0.54 stop-write 起是 `TimelineEventLog` 的实现）：
+ * 首窗 64 KiB，命中即停；一次 miss（该会话根本没有用量事件）按 64K→256K→1M→4M 扩窗，
+ * 累计最多 ≈5.3 MiB 后返回「不知道」，**不回退全量扫盘**。调用方（`sessions.get`）按
+ * **尾水位**缓存，见 `packages/serve` 的 `contextUsage` 端口契约；本模块只额外提供
  * {@link ContextUsageSource.watermark}。
  *
  * @module vessel/context-usage
@@ -67,9 +67,10 @@ import { DEFAULT_CONFIG } from '../packages/config/src/index';
 import type { SessionEventRecord } from '../packages/core/src/index';
 
 /**
- * 事件日志的**只读尾窗面**（`SessionEventLog.readTailMatches` 的结构子集）+
- * 尾水位来源。用结构类型而不是 import 具体类：装配层原样传 `SessionEventLog`，
- * 测试也可以传一个假的。
+ * 事件**只读尾窗面**（读口 `readTailMatches` 的结构子集）+ 尾水位来源。
+ *
+ * 用结构类型而不是 import 具体类：装配层原样传 `TimelineEventLog`（0.54 stop-write 之后
+ * 唯一读口，`events.ndjson` 已停写），测试也可以传一个假的。
  */
 export interface SessionEventTailReader {
   readTailMatches(
