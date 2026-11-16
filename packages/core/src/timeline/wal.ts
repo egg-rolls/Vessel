@@ -33,6 +33,7 @@ import {
   type TimelineBlockEntry,
   type TimelineHole,
   type TimelineHoleDeclarationLine,
+  type TimelineManifestLine,
   type TimelineRecord,
 } from './types.js';
 
@@ -198,16 +199,31 @@ export interface CrcLineReadResult<T extends object> {
    */
   truncateTo?: number;
   size: number;
+  /**
+   * 被 `skipLine` 跳过的**完整行数**（`0`/缺省 = 一行都没跳）。
+   *
+   * 与 `invalid` 的分工：跳过是**调用方已经证明「这一行在别处有同一份」**（见
+   * {@link readNdjsonFile} 的水位去重），不是「这行坏了」—— 所以它不进 `invalid`，
+   * 也不参与截断判定。计数存在只为让「跳过到底生效了没有」看得见。
+   */
+  skipped?: number;
 }
 
 /**
  * 读一个「每行都是带 crc 的 JSON」的 ndjson 文件。
  *
  * `validate` 缺省只做 CRC 校验；需要形状校验的调用方（时间线记录、洞登记）自带判定。
+ *
+ * `skipLine` 是**给水位去重留的唯一缝**：命中它的行只做行边界扫描，不 `JSON.parse`、
+ * 不算 CRC、不进 `items` / `invalid`。它回答的是「这一行要不要解析」，**不是**
+ * 「这一行要不要」—— 跳过必须由调用方自己证明（跳过 = 同一份事实已在别处读到），
+ * 否则就是静默少给（0.56 设计 §9 点名的最坏实现）。参数是行内容的字节区间
+ * `[start, end)`（不含行尾换行）。
  */
 export async function readCrcNdjsonFile<T extends object>(
   path: string,
   validate: (parsed: unknown) => T | undefined = (parsed) => parseWithCrc<T>(parsed),
+  skipLine?: (buffer: Buffer, start: number, end: number) => boolean,
 ): Promise<CrcLineReadResult<T>> {
   let buffer: Buffer;
   try {
@@ -217,10 +233,18 @@ export async function readCrcNdjsonFile<T extends object>(
   }
   const items: T[] = [];
   const invalid: NdjsonInvalid[] = [];
+  let skipped = 0;
   let lineStart = 0;
   let lastNewline = -1;
   for (let index = 0; index < buffer.length; index += 1) {
     if (buffer[index] !== 0x0a) continue;
+    if (skipLine !== undefined && index > lineStart && skipLine(buffer, lineStart, index)) {
+      // 只扫行边界：这一行的事实已由调用方在别处读到（水位去重），这里不解析、不校验。
+      skipped += 1;
+      lastNewline = index;
+      lineStart = index + 1;
+      continue;
+    }
     const text = buffer.subarray(lineStart, index).toString('utf8').trim();
     if (text.length > 0) {
       let parsed: unknown;
@@ -240,6 +264,7 @@ export async function readCrcNdjsonFile<T extends object>(
     lineStart = index + 1;
   }
   const result: CrcLineReadResult<T> = { items, invalid, size: buffer.length };
+  if (skipped > 0) result.skipped = skipped;
   if (lineStart < buffer.length) {
     // 末尾无换行：最后一行从未完整写出（write 与换行在同一次调用里），截掉。
     result.truncateTo = lastNewline + 1;
@@ -252,17 +277,76 @@ export interface NdjsonReadResult {
   invalid: NdjsonInvalid[];
   truncateTo?: number;
   size: number;
+  /** 见 {@link CrcLineReadResult.skipped}（水位去重跳过的行数）。 */
+  skipped?: number;
+}
+
+/** `readNdjsonFile` 的选项。 */
+export interface NdjsonReadOptions {
+  /**
+   * 水位：`seq <= skipParsedUpToSeq` 的**事实行**只扫行边界、不解析（见 {@link readCrcNdjsonFile}
+   * 的 `skipLine`）。
+   *
+   * 只有一种调用配用它 —— 「同一批事实行已经被归档副本解析过一遍」的整份读
+   * （{@link readTimelineEvents} 的水位去重）。传它之前**必须**先自证归档副本真的覆盖到
+   * 这个水位（{@link resolveFactWatermark} 的 `trusted`），否则就是拿性能换静默丢数据。
+   */
+  skipParsedUpToSeq?: number;
 }
 
 /** 读一个时间线记录 ndjson 文件；不存在 ⇒ 空结果（缺文件不是错误）。 */
-export async function readNdjsonFile(path: string): Promise<NdjsonReadResult> {
-  const result = await readCrcNdjsonFile<TimelineRecord>(path, validateRecord);
+export async function readNdjsonFile(
+  path: string,
+  options: NdjsonReadOptions = {},
+): Promise<NdjsonReadResult> {
+  const watermark = options.skipParsedUpToSeq;
+  const skipLine =
+    typeof watermark === 'number' && Number.isSafeInteger(watermark) && watermark > 0
+      ? (buffer: Buffer, start: number, end: number) =>
+          recordSeqAtOrBelow(buffer, start, end, watermark)
+      : undefined;
+  const result = await readCrcNdjsonFile<TimelineRecord>(path, validateRecord, skipLine);
   return {
     records: result.items,
     invalid: result.invalid,
     size: result.size,
     ...(result.truncateTo !== undefined ? { truncateTo: result.truncateTo } : {}),
+    ...(result.skipped !== undefined ? { skipped: result.skipped } : {}),
   };
+}
+
+/**
+ * 行首前缀里能读到 `"seq":N` 的最大探测字节数。
+ *
+ * 事实行的键顺序由写者固定（`{v, seq, session_id, run_id, ts, type, data, crc}`，
+ * `writer.ts#buildRecord`），所以 `"seq":` 恒在开头十来个字节内；64 B 是给
+ * 「键顺序将来多了一个字段」留的余量，读不到就**不跳过**（回落到正常解析，安全方向）。
+ */
+const SEQ_PREFIX_PROBE_BYTES = 64;
+
+/**
+ * 这一行的 `seq` 是否 `<= watermark`（是 ⇒ 这一行可以跳过解析）。
+ *
+ * 三个「不猜」的诚实出口都返回 `false`（= 照常解析）：
+ * ① 前缀里没有 `"seq":`；② 数字被前缀截断；③ 数字后面还是数字（说明截在号中间）。
+ * 只多做一次 64 B 的 `toString` + 一次正则，换来的是省掉整行的 `JSON.parse` + CRC32。
+ */
+function recordSeqAtOrBelow(
+  buffer: Buffer,
+  start: number,
+  end: number,
+  watermark: number,
+): boolean {
+  const limit = Math.min(end, start + SEQ_PREFIX_PROBE_BYTES);
+  const text = buffer.toString('utf8', start, limit);
+  const match = /"seq":(\d+)/.exec(text);
+  if (match === null) return false;
+  const digitsEnd = match.index + match[0].length;
+  if (digitsEnd >= text.length) return false; // 前缀切在数字中间：不猜
+  const code = text.charCodeAt(digitsEnd);
+  if (code >= 0x30 && code <= 0x39) return false;
+  const seq = Number(match[1]);
+  return Number.isSafeInteger(seq) && seq >= 1 && seq <= watermark;
 }
 
 /** 从残缺 JSON 文本里捞 `"seq":N`（仅用于把坏行登记成可声明的洞）。 */
@@ -526,6 +610,195 @@ function selectBlocksForSnapshot(
   return selected;
 }
 
+/*
+ * ── 事实行水位去重（整份读的「同一批事实只解析一份」） ──────────────────────
+ *
+ * ## 它解决什么
+ *
+ * 归档是**复制不是搬移**（`writer.ts#archiveNow` 只把 `wal.log` 的行 append 到
+ * `timeline.ndjson`，从不截断 `wal.log`）—— 所以 `seq <= timeline_head` 的那批事实行
+ * **同时存在于两个文件里**，整份读把它们逐字节解析了两遍（0.56 设计 §1 实测：
+ * 8.4 MB / 5,001 行 / 106 ms + 97 ms，md5 相同）。
+ *
+ * 这条缝让第二份**不解析**：`wal.log` 里 `seq <= timeline_head` 的行只扫行边界
+ * （{@link readNdjsonFile} 的 `skipParsedUpToSeq`）。事实仍然在 `bySeq` 里 —— 由归档副本
+ * 提供（它先读）。
+ *
+ * ## 为什么必须**先自证才敢跳**（否则就是静默丢数据）
+ *
+ * 「归档副本有这一行」不是物理定律，它依赖三条写侧行为：① 归档只 append（不搬移、不截断
+ * `wal.log`）；② 按 seq 升序复制；③ manifest 的 `timeline_head` 不会超前于归档落盘。
+ * 任何一条被破坏（归档被截 / 中间坏一行 / manifest 被改大），跳过就会**把一条事实从
+ * 读结果里拿掉，而且没有任何报错** —— 0.56 设计 §9 点名的最坏实现。
+ *
+ * 所以只有**归档尾部自证**成立时才信任水位：
+ *
+ * ```
+ * trusted ⇔ head > 0 ∧ 归档副本最大 seq >= head ∧ 归档副本里一条坏行都没有
+ * ```
+ *
+ * 不成立 ⇒ `skipParsedUpToSeq = 0`，老老实实**读两份**（重叠靠 `Map` 的 seq 去重）。
+ * 降级的代价只是那 97 ms 的重复解析，不是正确性。
+ *
+ * ## 为什么只作用在整份读
+ *
+ * 范围读（{@link readTimelineRange}）的事实行**只从 `wal.log` 读一份**（归档段根本不读，
+ * 前提由 `checkArchiveTripline` 证明：`archive ⊆ wal.log`）。它本来就是「只解析一份」，
+ * 没有第二份可省，也就没有水位跳过可用 —— 在这里跳会直接丢掉 `seq <= head` 的事实。
+ * 两条路的等价性由这一点保证：整份读跳掉的每一行都由归档副本补上（且被上面的自证保证），
+ * 范围读则从 `wal.log` 直接读到同一行；任何一侧不可信都退回「读两份/整份读」。
+ */
+
+/** 水位不可信的原因（稳定 code；只有观测用途，判定只看 `trusted`）。 */
+export type FactWatermarkReason =
+  /** 没有归档过（`timeline_head` = 0 或 manifest 里没有 `archive` 行）⇒ 没有可省的那一份 */
+  | 'no_archive_head'
+  /** manifest 的 `timeline_head` 读不出来（尾窗只有坏行 / 文件读不动）⇒ 不知道水位在哪 */
+  | 'head_unreadable'
+  /** 归档副本里最大 seq < `timeline_head`：归档被截 / manifest 超前 ⇒ 归档不覆盖水位 */
+  | 'archive_tail_behind_head'
+  /** 归档副本里有坏行：那几行的事实只剩 `wal.log` 一份 ⇒ 不许跳过 */
+  | 'archive_line_invalid';
+
+/**
+ * 「同一批事实行只解析一份」的水位快照。
+ *
+ * `trusted` 是**唯一**被读侧使用的字段（{@link readTimelineEvents}）；其余三个是让它可
+ * 复查的答案（哪个水位、归档自证到哪、为什么不信）。
+ */
+export interface FactWatermark {
+  /** `timeline.manifest` 里最后一条 `archive` 行的 `to_seq`（`0` = 从未归档） */
+  head: number;
+  /** 调用方已解析的归档副本里最大的 seq（`0` = 归档副本不存在/空） */
+  archive_tail: number;
+  /** 归档尾部自证是否成立（成立才允许跳过 `wal.log` 水下那一段的解析） */
+  trusted: boolean;
+  /** `trusted=false` 的原因 */
+  reason?: FactWatermarkReason;
+}
+
+/** 进程内的水位去重计数（`timelineFactWatermarkCounters()` 读它；不落盘、不进 wire）。 */
+const factWatermarkCounters = {
+  /** 走了「只解析一份」的整份读次数 */
+  trusted: 0,
+  /** 水位不可信、老老实实读两份的整份读次数 */
+  degraded: 0,
+  /** 累计跳过解析的 `wal.log` 行数（= 归档副本已经提供的那一批） */
+  lines_skipped: 0,
+};
+
+/**
+ * 一次水位去重的进程内计数快照。
+ *
+ * 为什么要它：`trusted` 恒为 0 而 `degraded` 在涨，说明自证从来没通过（水位去重等于白做）；
+ * 两者都在涨则说明「有的会话归档落后」—— 这两种情况都不该靠翻日志才发现。
+ */
+export function timelineFactWatermarkCounters(): Readonly<{
+  trusted: number;
+  degraded: number;
+  lines_skipped: number;
+}> {
+  return { ...factWatermarkCounters };
+}
+
+/** 主 manifest 尾窗的首读字节（只找「最后一条 archive 行」，一段就够）。 */
+const WATERMARK_MANIFEST_FIRST_BYTES = 64 * 1024;
+const WATERMARK_MANIFEST_MAX_BYTES = 1024 * 1024;
+
+/**
+ * `timeline.manifest` 一行的形状校验（读侧**最小一份**：只要 `v` 与 `kind`/`to_seq`）。
+ *
+ * 为什么不复用 `writer.ts#validateManifestLine`：那个是私有的（写者自己恢复状态用），
+ * 而本模块不许为了复用去改 writer。判据强弱在这里**不改变安全性**：水位只被当**上界**用，
+ * 且必须再被「归档副本最大 seq >= head」这一条独立自证复核 —— 形状被放宽的后果只有两种，
+ * 都落在安全方向：上界偏大 ⇒ 自证不过 ⇒ 读两份；上界偏小 ⇒ 少跳一些 ⇒ 仍等价。
+ * CRC 仍然必查（`parseWithCrc`）：坏行的 `to_seq` 不可信，跳过它去找更早的 `archive` 行。
+ */
+function readManifestForWatermark(parsed: unknown): TimelineManifestLine | undefined {
+  const line = parseWithCrc<TimelineManifestLine>(parsed);
+  if (line === undefined || line.v !== 1) return undefined;
+  if (line.kind === 'archive') {
+    return Number.isSafeInteger(line.to_seq) && Number.isSafeInteger(line.from_seq)
+      ? line
+      : undefined;
+  }
+  if (line.kind === 'open') return typeof line.at === 'number' ? line : undefined;
+  if (line.kind === 'tainted' || line.kind === 'tainted_cleared') {
+    return typeof line.reason === 'string' && Number.isSafeInteger(line.to_seq) ? line : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * `timeline.manifest` 里**文件序最后一条** `archive` 行的 `to_seq`（= `timeline_head`）。
+ *
+ * 尾窗读（64 KiB → 1 MiB）：`archive` 行的 `to_seq` 单调（`from = timelineHead + 1`、
+ * `to = walHead`），所以文件序最后一条就是最大的一条，与写者
+ * `readManifestTail()` 的 `archivedTo` 同一口径。
+ *
+ * `0` = 没归档过（文件不存在 / 读到文件起点都没有 `archive` 行；
+ * `undefined` = 答不准（尾窗只有坏行 / 文件读不动 / 尾窗没覆盖到起点又找不到 `archive` 行）。
+ */
+async function readTimelineHeadForWatermark(manifestPath: string): Promise<number | undefined> {
+  // 没有主 manifest = 这个会话从没归档过（`timeline_head` 就是 0），不是「读不出来」。
+  const exists = await stat(manifestPath).catch(() => undefined);
+  if (exists === undefined) return 0;
+  let firstBytes = WATERMARK_MANIFEST_FIRST_BYTES;
+  for (;;) {
+    const window = await readNdjsonTail(manifestPath, firstBytes, WATERMARK_MANIFEST_MAX_BYTES);
+    if (window === undefined) return undefined;
+    for (let index = window.lines.length - 1; index >= 0; index -= 1) {
+      const text = window.lines[index];
+      if (text === undefined) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        continue; // 坏行：与全量读同口径忽略
+      }
+      const line = readManifestForWatermark(parsed);
+      if (line === undefined) continue;
+      if (line.kind === 'archive') return line.to_seq;
+    }
+    if (window.fromStart) return 0; // 读到了文件起点：一行 archive 都没有
+    if (firstBytes >= WATERMARK_MANIFEST_MAX_BYTES) return undefined;
+    firstBytes = Math.min(firstBytes * 4, WATERMARK_MANIFEST_MAX_BYTES);
+  }
+}
+
+/**
+ * 判这次整份读能不能「只解析一份」（0.56 · 事实行水位去重，见上面的长注释）。
+ *
+ * `evidence` 是调用方**已经**拿到手的归档副本解析结果 —— 这个函数不重复读归档
+ * （整份读刚把它整份解析过；让一个判据函数再整份读一遍就是白花钱）。
+ * 唯一的额外 IO 是主 manifest 的尾窗（一条 `to_seq`）。
+ */
+export async function resolveFactWatermark(
+  sessionDir: string,
+  evidence: { archiveInvalid: number; archiveMaxSeq: number },
+): Promise<FactWatermark> {
+  const headValue = await readTimelineHeadForWatermark(
+    join(sessionDir, TIMELINE_LAYOUT.timelineManifest),
+  ).catch(() => undefined);
+  const head = headValue !== undefined && headValue > 0 ? headValue : 0;
+  const archiveTail = evidence.archiveMaxSeq > 0 ? evidence.archiveMaxSeq : 0;
+  if (head === 0) {
+    return {
+      head,
+      archive_tail: archiveTail,
+      trusted: false,
+      reason: headValue === undefined ? 'head_unreadable' : 'no_archive_head',
+    };
+  }
+  if (evidence.archiveInvalid > 0) {
+    return { head, archive_tail: archiveTail, trusted: false, reason: 'archive_line_invalid' };
+  }
+  if (archiveTail < head) {
+    return { head, archive_tail: archiveTail, trusted: false, reason: 'archive_tail_behind_head' };
+  }
+  return { head, archive_tail: archiveTail, trusted: true };
+}
+
 /**
  * 读出一个会话的全部 timeline 事件（按 `seq` 升序），**作为一次自洽快照**。
  *
@@ -544,6 +817,15 @@ function selectBlocksForSnapshot(
  * 代价：「边界之外」的连续尾块之外的部分不参与本趟快照，所以**正在被写着的**最新
  * 记录可能要等到下一次读。这不是丢数据：reader 的历史窗口由 `heads()` 声明，读到的
  * 永远是「声明之内、且完整」的那一段。
+ *
+ * ## 0.56 · 事实行只解析一份
+ *
+ * 读归档副本时顺手拿到的两个事实（坏行数 / 最大 seq）就是水位自证的**全部证据**：
+ * 成立 ⇒ `wal.log` 里 `seq <= timeline_head` 的行只扫行边界、不解析（那批事实已经在
+ * `bySeq` 里了）；不成立 ⇒ 读两份（`skipParsedUpToSeq = 0`，与本次改动前逐字节同一条
+ * 代码路径）。判据、理由与「为什么只作用在整份读」都写在
+ * {@link resolveFactWatermark} 上面那段长注释里 —— **输出必须与改动前逐条等价**，
+ * 这个函数没有第二个变体。
  */
 export async function readTimelineEvents(sessionDir: string): Promise<TimelineRecord[]> {
   const bySeq = new Map<number, TimelineRecord>();
@@ -551,7 +833,16 @@ export async function readTimelineEvents(sessionDir: string): Promise<TimelineRe
   // ① 事实源先读：这两处决定了本趟快照的边界（`factBoundaryOf`）。
   const archived = await readNdjsonFile(join(sessionDir, TIMELINE_LAYOUT.timeline));
   for (const record of archived.records) bySeq.set(record.seq, record);
-  const wal = await readNdjsonFile(join(sessionDir, TIMELINE_LAYOUT.walLog));
+  // 水位自证用刚解析出来的归档副本证据 —— 不为了判据再整份读一遍归档。
+  const watermark = await resolveFactWatermark(sessionDir, {
+    archiveInvalid: archived.invalid.length,
+    archiveMaxSeq: factBoundaryOf(archived.records),
+  });
+  factWatermarkCounters[watermark.trusted ? 'trusted' : 'degraded'] += 1;
+  const wal = await readNdjsonFile(join(sessionDir, TIMELINE_LAYOUT.walLog), {
+    skipParsedUpToSeq: watermark.trusted ? watermark.head : 0,
+  });
+  if (wal.skipped !== undefined) factWatermarkCounters.lines_skipped += wal.skipped;
   for (const record of wal.records) bySeq.set(record.seq, record);
   const factBoundary = factBoundaryOf(bySeq.values());
 

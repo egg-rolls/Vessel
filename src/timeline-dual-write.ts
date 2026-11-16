@@ -86,7 +86,7 @@
  * | 出口 | 对应 serve | 关键口径 |
  * | --- | --- | --- |
  * | `heads()` | `GatewayOptions.timelineHeads` | 对外四字段 **+ `published_head`**（`= writer.publishedHead()`，收紧到 `≤ wal_head`）。纯磁盘口径明确给 `wal_head`，不留 `undefined` 让上层兜底 —— 否则 `timeline.hello.published_head` 恒等于 `wal_head`，崩溃窗口那一段永远声明不出来 |
- * | `readPage()` | `GatewayOptions.timelineRead` | `afterSeq` **排他** / `untilSeq` 含 / 升序 / 去重 / 最多 `limit`（硬顶 {@link TIMELINE_PAGE_MAX}）。事实源是 core 的 `readTimelineEvents`（归档 + 块 + WAL 归并），装配层**只裁窗口**：不跳洞、不补占位、不另造 seq |
+ * | `readPage()` | `GatewayOptions.timelineRead` | `afterSeq` **排他** / `untilSeq` 含 / 升序 / 去重 / 最多 `limit`（硬顶 {@link TIMELINE_PAGE_MAX}）。事实源是 core 的只读口 `TimelineEventLog.read({sinceSeq, limit})`：有窗口 ⇒ **范围读**（0.56，只开窗口内那几个块），不可判 ⇒ 它自己降级整份读并留痕。装配层**只裁窗口**：不跳洞、不补占位、不另造 seq |
  * | `onPublish()` | 实时尾随的帧源 | 每条**放行的** `seq` 一次（含闸门放行旧广播的那些），严格递增、都在 fsync 之后、`seq` 就是 `timeline_seq`（ADR-105 §9 R7：不另造编号）。监听者异常各自隔离 |
  *
  * 「能读什么」由 `readPage` 决定，「能推到哪」由 `published_head` 决定 —— 两者是同一件事的
@@ -123,7 +123,7 @@ import type {
 import { encodeSessionDirName, sessionDirPath } from '../packages/core/src/index';
 import { isLegacyFrozenSessionDir, LEGACY_SESSION_LOG } from '../packages/core/src/timeline/freeze';
 import { loadIndexSnapshot } from '../packages/core/src/timeline/index';
-import { toSessionEventRecord } from '../packages/core/src/timeline/read-port';
+import { TimelineEventLog, toSessionEventRecord } from '../packages/core/src/timeline/read-port';
 import {
   CHUNK_FLUSH_MS,
   isNonFactEventType,
@@ -439,9 +439,11 @@ export interface TimelineDualWrite {
    * 时间线**分页读**（`packages/serve` 的 `timelineRead` 端口，0.54 B1/C）。
    *
    * `afterSeq` **排他**（只回 `seq > afterSeq`）、`untilSeq` 含、按 `seq` 升序、去重、
-   * 最多 `limit` 条（硬顶 `TIMELINE_PAGE_MAX`）。读面用 core 的 `readTimelineEvents`
-   * （归档 + 块 + WAL 三处归并、按 seq 去重、外置 blob 取回），装配层只做窗口裁剪 ——
-   * 不拼第二套编号、不猜洞（洞是**声明**，由 `heads().holes` 报；读不到就是读不到）。
+   * 最多 `limit` 条（硬顶 `TIMELINE_PAGE_MAX`）。读面用 core 的只读口
+   * `TimelineEventLog.read({sinceSeq, limit})` —— 有窗口就**范围读**（0.56：只开窗口内那
+   * 几个块，而不是整份归档 + 全部块），不可判时它自己降级整份读并留痕；装配层只做窗口
+   * 裁剪 —— 不拼第二套编号、不猜洞（洞是**声明**，由 `heads().holes` 报；读不到就是
+   * 读不到）。
    */
   readPage(sessionId: string, options: TimelinePageQuery): Promise<readonly TimelinePageEvent[]>;
   /**
@@ -847,6 +849,21 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
         // 写者只在「该 seq 的 WAL/块 fsync 返回之后」调它，所以它是唯一合规的发布点。
         publish: input.publish,
       }));
+
+  /**
+   * 分页读用的**只读口**（0.56：`readPage` 从「整份读 + 装配层裁窗口」改成走 core 的
+   * 范围读）。
+   *
+   * 三件事刻意与写侧**无关**：
+   * 1. 不传 `settle`：这里读的是磁盘（本模块自己就是写入侧，读之前不做 flush —— 与
+   *    0.56 之前的 `readPage` 同一条口径，否则「读到的内容」会随一次额外 flush 漂移）；
+   * 2. 没有 `append`：类型上就写不进去（读口只有 `TimelineWriter` 一个写点）；
+   * 3. 构造时零 IO：`dir` 只是拼路径用，真正的读发生在 `read()`。
+   */
+  const pageReader = new TimelineEventLog({
+    dir: options.sessionsDir,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+  });
 
   const counters: TimelineDualWriteStats = {
     appended: 0,
@@ -1638,18 +1655,28 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   /**
    * 时间线分页读（`timelineRead` 端口的装配实现）。
    *
-   * 事实源是 core 的 `readTimelineEvents`：归档 `timeline.ndjson` + 块文件 + `wal.log`
-   * 三处按 `seq` 归并去重、外置 blob 取回。**装配层只做窗口裁剪**：
+   * 事实源是 core 的**只读口** `TimelineEventLog.read({ sinceSeq, limit })`（0.56）：
+   * 有排他游标 + 页上限 ⇒ 走**范围读**（`readTimelineRange`，只开窗口内那几个块、
+   * 事实行用行二分定位），不可判 ⇒ 它自己降级整份读并留痕
+   * （`timeline range read degraded` + 进程内计数）。**装配层只做窗口裁剪**：
    * - `afterSeq` 排他 / `untilSeq` 含（与 `sessions.events` 的 `since_seq` 同一口径）；
    * - 升序、按 `seq` 去重（归档是「复制不是搬移」，同一条可能两处都有）；
-   * - 最多 `limit`（缺省且硬顶 `TIMELINE_PAGE_MAX`）。
+   * - 最多 `limit`（缺省且硬顶 {@link TIMELINE_PAGE_MAX}）。
    *
    * **不跳过洞**：洞（`heads().holes`）是「声明不可读」，不是「读侧过滤条件」；
    * 落盘里本来就没有那些 seq 的记录，所以跳过是自动的。反过来，读侧也**不许**替
    * 丢失的 seq 编一条占位 —— 那会让 `count` 与实收对不上。
    *
-   * 成本：一次整份读（`readTimelineEvents` 是 core 唯一的读面，没有按区间下推）。
-   * 调用频次是「每个 epoch 一次」（`sendTimelineEpoch`），不是每帧一次。
+   * ## 成本（0.56 之前 / 之后）
+   *
+   * 之前：**每一页都整份读**（`readTimelineEvents`：归档 + 全部块 + WAL，`d813eaea`
+   * 20.9 万条 / 13,177 块实测 4.2 s（新进程）～16 s（长寿进程），真 RPC
+   * `limit=100` 17.5 s）。今天：一页只开窗口内那几个块（缺省 100 条 ≈ 6 块）。
+   *
+   * `untilSeq` 在装配层裁（范围读的入参只有排他游标 + 页上限）：这不是整份读，代价是
+   * 一页的内存过滤。裁完不可能「少给」——`read({sinceSeq, limit})` 给的是
+   * `seq > afterSeq` 的**前 `limit` 条升序记录**，其中 `seq <= untilSeq` 的那些恰好就是
+   * `(afterSeq, untilSeq]` 的全部（前 `limit` 条里已经包含了窗口里最靠前的那些）。
    */
   async function readPage(
     sessionId: string,
@@ -1667,7 +1694,9 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
         ? TIMELINE_PAGE_MAX
         : Math.floor(query.limit);
     const limit = Math.max(1, Math.min(TIMELINE_PAGE_MAX, requested));
-    const records = await readTimelineEvents(sessionDirOf(options.sessionsDir, sessionId));
+    // core 的只读口：`sinceSeq` 排他 + `limit` 页上限 ⇒ 范围读（0.56）；不可判时它自己
+    // 降级整份读并留痕，所以这里拿到的永远是「与整份读逐条等价」的那一页。
+    const records = await pageReader.read(sessionId, { sinceSeq: after, limit });
     const page: TimelinePageEvent[] = [];
     const seen = new Set<number>();
     for (const record of records) {
