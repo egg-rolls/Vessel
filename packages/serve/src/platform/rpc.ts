@@ -155,7 +155,13 @@ export async function handlePlatformRpc(
     case 'platform.nodes.credentials': {
       // 0.55 P0（拍板项 2）：只发给**已认证**的平台客户端（mode === 'token'）。
       // 回环 socket 不再构成「可以下发 node token」的理由：反代与平台同机时它就是公网。
-      if (ctx.auth.mode !== 'token') {
+      //
+      // 0.55.1 迁移安全（用户实测踩到）：**完全没配置平台 token 的部署**如果也被这条挡住，
+      // 一次升级就会把本地 WebUI 锁死（前端拿不到 node token ⇒ 整页掉线），而症状只是
+      // 「连不上」。所以：未配置 token ⇒ 回环仍放行（doctor 报警 + 启动日志提示）；
+      // 一旦配置了 token，回环不再豁免。这条不是后门，是「配置存在才收紧」。
+      const unconfiguredLoopback = ctx.auth.loopback && !ctx.auth.tokenConfigured;
+      if (ctx.auth.mode !== 'token' && !unconfiguredLoopback) {
         return failure(
           id,
           'platform_unauthorized',

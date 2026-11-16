@@ -24,6 +24,14 @@ export interface PlatformAuthResult {
    * 用来把 401 的文案分成「缺反代密钥」与「缺平台 token」两种可操作提示。
    */
   proxySecretOk: boolean;
+  /**
+   * 部署是否**配置**了平台 token（与本次请求带没带对无关）。
+   *
+   * 0.55.1：用来做「迁移安全」——未配置 token 的部署不能因为 0.55 的收紧而把本地 WebUI
+   * 直接锁死（升级即掉线）。此时回环仍然放行 `platform.nodes.credentials`，但 doctor 会
+   * 报警、日志会提示；**一旦配置了 token，回环不再豁免**。
+   */
+  tokenConfigured: boolean;
 }
 
 export interface ResolvePlatformAuthInput {
@@ -90,7 +98,7 @@ export function resolvePlatformAuth(input: ResolvePlatformAuthInput): PlatformAu
   if (typeof expected === 'string' && expected !== '') {
     const provided = bearerToken(input.req);
     const ok = provided !== null && constantTimeEqual(provided, expected);
-    return { ok, mode: ok ? 'token' : 'anonymous', loopback, proxySecretOk };
+    return { ok, mode: ok ? 'token' : 'anonymous', loopback, proxySecretOk, tokenConfigured: true };
   }
-  return { ok: loopback, mode: 'anonymous', loopback, proxySecretOk };
+  return { ok: loopback, mode: 'anonymous', loopback, proxySecretOk, tokenConfigured: false };
 }
