@@ -46,8 +46,9 @@ export type GatewayCommand =
       kind: 'stop';
       timeoutMs: number;
       /**
-       * handoff（0.52）：显式 `--keep-nodes` = 只停平台层，node/hub 保留待 adopt。
-       * 缺省 undefined = 真停（连 node/hub 一起停），保持 0.51 语义。
+       * 0.55：缺省 undefined = **只停平台层**（node/hub 继续跑，下次 start adopt 回来）；
+       * `--no-keep-nodes` 置 false = 整体关闭（连 node/hub 一起停）；
+       * `--keep-nodes` 置 true 保留为显式别名（0.52 语义，现在是缺省）。
        */
       keepNodes?: boolean;
     } & GatewaySelector)
@@ -1806,7 +1807,7 @@ function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `gateway stop [--timeout 10s] [--instance N|--port N|--all] [--keep-nodes]` */
+/** `gateway stop [--timeout 10s] [--instance N|--port N|--all] [--no-keep-nodes]` */
 function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
   let timeoutMs = DEFAULT_STOP_TIMEOUT_MS;
   let keepNodes: boolean | undefined;
@@ -1817,8 +1818,13 @@ function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
       args.help = true;
       continue;
     }
+    if (a === '--no-keep-nodes') {
+      // 0.55：整体关闭——连本机 spawn 的 node/hub 一起停（缺省只停平台层）。
+      keepNodes = false;
+      continue;
+    }
     if (a === '--keep-nodes') {
-      // handoff：只停平台层，保留 node/hub（缺省是真停，见 GatewayCommand.stop）。
+      // 0.52 遗留别名；0.55 起「只停平台层」已是缺省，显式写出来仍是它。
       keepNodes = true;
       continue;
     }
@@ -1847,7 +1853,7 @@ function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
   args.gateway = {
     kind: 'stop',
     timeoutMs,
-    ...(keepNodes === true ? { keepNodes: true } : {}),
+    ...(keepNodes !== undefined ? { keepNodes } : {}),
     ...selector,
   };
   return { ok: true, args };

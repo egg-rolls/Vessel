@@ -44,7 +44,14 @@ import {
   resolveNodeIdForRegistryAdd,
   synthesizeImplicitNode,
 } from './gateway/node-registry';
-import { type LocalNodeSpec, NodeSupervisor, stopSpawnedChildren } from './gateway/node-supervisor';
+import {
+  type HubSupervisorBeginResult,
+  type LocalNodeSpec,
+  NodeSupervisor,
+  type StoppedChildDetail,
+  type SupervisedNodeInfo,
+  stopSpawnedChildren,
+} from './gateway/node-supervisor';
 import {
   type CommandRunner,
   cleanupGatewayStateEntry,
@@ -62,6 +69,7 @@ import {
   isGatewayCommandLine,
   isProcessAlive,
   normalizeGatewayInstance,
+  readGatewayPidRecord,
   writeGatewayPid,
 } from './gateway/pid';
 import { gatewayBaseUrl, reloadGateway } from './gateway/reload';
@@ -73,6 +81,7 @@ import {
   uninstallService,
 } from './gateway/service';
 import { isHumanTerminal, type PlatformStartupHub, renderPlatformStartup } from './gateway-banner';
+import { readHubLockFile } from './hub/runtime';
 import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from './hub/server';
 import { t } from './i18n';
 import { createHttpRpcClient } from './rpc/http-client';
@@ -146,6 +155,23 @@ function sleepDefault(ms: number): Promise<void> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 节点状态行的尾注（0.55）：原因 + 耗时/时刻 + pid。
+ *
+ * 「节点没起来必须看得见」——失败不能静默跳过：一行里同时给出**状态**、**稳定
+ * 错误码/原因**、**什么时候**发生的。不含 token（`LocalNodeSpec.token` 不在这里）。
+ */
+function describeNodeState(info: SupervisedNodeInfo): string {
+  const parts: string[] = [];
+  if (info.reason !== undefined) parts.push(info.reason);
+  if (info.state === 'ready' || info.state === 'failed') {
+    parts.push(`after ${info.elapsedMs} ms`);
+  }
+  if (info.state === 'failed') parts.push(`at ${info.since}`);
+  if (info.pid !== undefined) parts.push(`pid ${info.pid}`);
+  return parts.length === 0 ? '' : ` (${parts.join(', ')})`;
 }
 
 /** 解析启动实例：显式 instance > 显式 port（0 除外）> default（0.14） */
@@ -643,9 +669,15 @@ export async function stopGateway(
     /** 已收集的状态（restart 停前快照）；缺省自行 collect。 */
     entries?: GatewayStateEntry[];
     /**
-     * handoff（0.52）：停平台时**保留**本 Gateway spawn 的 node/hub，留给下一次
-     * `gateway start` 按既有 adopt 判据接管。`gateway restart` 缺省开启；
-     * `gateway stop` 需显式 `--keep-nodes`。见 `src/gateway/handoff.ts`。
+     * 0.55：「停平台层时要不要连 node/hub 一起停」。
+     *
+     * - 缺省（undefined / true）= **只停平台层**，本 Gateway spawn 的 node/hub 继续
+     *   跑，留给下一次 `gateway start` 按既有 adopt 判据接管；`gateway stop` 与
+     *   `gateway restart` 都是这个语义。
+     * - `false`（`gateway stop --no-keep-nodes`）= 整体关闭：连本机 spawn 的
+     *   node/hub 一起停。
+     *
+     * 见 `src/gateway/handoff.ts`。
      */
     keepNodes?: boolean;
   } = {},
@@ -672,13 +704,17 @@ export async function stopGateway(
 
   let failed = false;
   const stateKind = gatewayStateKind(options, context.env);
-  const keepForHandoff = options.keepNodes === true && stateKind === 'platform';
+  // 0.55：缺省 = 只停平台层（node/hub 继续跑）；`--no-keep-nodes` 才是整体关闭。
+  const keepForHandoff = options.keepNodes !== false && stateKind === 'platform';
   let keptNodes = 0;
   let keptHubs = 0;
+  const stoppedChildren: StoppedChildDetail[] = [];
+  const failedChildren: StoppedChildDetail[] = [];
 
   // 0.49 G3b（CONTRACT §4.3）：只终止本 Gateway spawn 的子进程。
   // 子进程先停，再停平台；adopt/external 不在 manifest 中，天然不受影响。
-  // 0.52 handoff（`keepNodes`）：**一个都不终止**，只清点并保留，交给新平台 adopt。
+  // 0.52/0.55：`keepForHandoff`（缺省）= **一个都不终止**，只清点并保留，
+  // 交给下一次 `gateway start` adopt。见 `src/gateway/handoff.ts`。
   if (stateKind === 'platform') {
     const selectorSpecified =
       selector.instance !== undefined || selector.port !== undefined || selector.all === true;
@@ -706,6 +742,8 @@ export async function stopGateway(
       if (result.failed > 0) failed = true;
       keptNodes += result.kept?.nodes ?? 0;
       keptHubs += result.kept?.hubs ?? 0;
+      stoppedChildren.push(...(result.stoppedChildren ?? []));
+      failedChildren.push(...(result.failedChildren ?? []));
     }
   }
 
@@ -717,6 +755,15 @@ export async function stopGateway(
 
   if (targets.entries.length === 0) {
     print(ui.info(t('gateway.notRunning')));
+    // 0.55：即使没有 platform 在跑，也要把「谁还在跑」交代清楚，别让用户猜。
+    await reportChildLifecycle({
+      context,
+      keepForHandoff,
+      stoppedChildren,
+      failedChildren,
+      print,
+      printErr,
+    });
     return failed ? 1 : 0;
   }
 
@@ -837,7 +884,120 @@ export async function stopGateway(
     if (!clean) failed = true;
   }
 
+  // 0.55 停机可核：`gateway stop` 说清「node/hub 仍在跑」，整体关闭说清「停了谁、
+  // 谁没停下来及原因」——不许让用户猜。
+  await reportChildLifecycle({
+    context,
+    keepForHandoff,
+    stoppedChildren,
+    failedChildren,
+    print,
+    printErr,
+  });
+
   return failed ? 1 : 0;
+}
+
+/**
+ * 停机后的子进程交代（0.55）。
+ *
+ * - `keep` 路径：从**既有** pid/lock 文件读出本机节点与 Hub 的真实状态，逐个写明
+ *   「仍在运行（pid N）/ 不在运行」+ 停它们的命令；
+ * - 整体关闭路径：逐条列出「已停止 / 未停下 + 原因」。
+ *
+ * 只读既有运行时文件（`gateway.pid` / `hub.lock` / `nodes.json`），不新增状态实体。
+ */
+async function reportChildLifecycle(options: {
+  context: ResolvedContext;
+  keepForHandoff: boolean;
+  stoppedChildren: StoppedChildDetail[];
+  failedChildren: StoppedChildDetail[];
+  print: (line: string) => void;
+  printErr: (line: string) => void;
+}): Promise<void> {
+  const { context, keepForHandoff, stoppedChildren, failedChildren, print, printErr } = options;
+
+  if (!keepForHandoff) {
+    for (const child of stoppedChildren) {
+      print(ui.ok(`stopped ${child.kind} ${child.name} (pid ${child.pid})`));
+    }
+    for (const child of failedChildren) {
+      printErr(
+        ui.err(
+          `failed to stop ${child.kind} ${child.name} (pid ${child.pid}): ${child.reason ?? 'unknown'}`,
+        ),
+      );
+    }
+    if (stoppedChildren.length === 0 && failedChildren.length === 0) {
+      print(ui.dim('no node/hub spawned by this gateway was running'));
+    }
+    return;
+  }
+
+  // keep 路径也可能终止「还没就绪」的子进程：没有归属证据、也还没接管端口，
+  // 留着只会变孤儿（原因同 `NodeSupervisor.stop`）。要让它看得见，不静默。
+  for (const child of stoppedChildren) {
+    print(
+      ui.dim(
+        `stopped ${child.kind} ${child.name} (pid ${child.pid}) — it had not become ready yet`,
+      ),
+    );
+  }
+
+  const registry = await loadNodeRegistry(context.dataDir).catch(() => undefined);
+  // 隐式单节点（无 nodes.json）与平台共用 dataDir，但也可能被独立拉起 —— 同样要交代。
+  const entries =
+    registry?.kind === 'ready'
+      ? registry.registry.nodes
+      : [{ name: 'default', data_dir: context.dataDir, auto_start: true, config_path: undefined }];
+  let running = 0;
+  for (const entry of entries) {
+    const record = await readGatewayPidRecord(entry.data_dir).catch(() => null);
+    const alive = record !== null && isProcessAlive(record.pid);
+    if (alive && record !== null) {
+      running += 1;
+      print(
+        ui.info(
+          `node ${entry.name}: still running (pid ${record.pid}) — ` +
+            'left alone; stop it with `vessel gateway stop --no-keep-nodes`',
+        ),
+      );
+      continue;
+    }
+    if (entry.auto_start !== true) {
+      print(
+        ui.dim(
+          `node ${entry.name}: not running (auto_start: false) — start it with ` +
+            (entry.config_path !== undefined
+              ? `\`vessel node start --daemon --config ${entry.config_path}\``
+              : '`vessel node start --daemon`'),
+        ),
+      );
+    } else {
+      print(ui.dim(`node ${entry.name}: not running`));
+    }
+  }
+
+  const hubDataDir =
+    context.config.hub?.dataDir !== undefined
+      ? path.resolve(expandHome(context.config.hub.dataDir))
+      : path.join(context.dataDir, 'hub');
+  const hub = await readHubLockFile(hubDataDir).catch(() => null);
+  const hubAlive = hub !== null && isProcessAlive(hub.pid);
+  if (hubAlive && hub !== null) {
+    running += 1;
+    print(
+      ui.info(
+        `hub: still running (pid ${hub.pid}${hub.url !== undefined ? `, ${hub.url}` : ''}) — ` +
+          'stop it with `vessel gateway stop --no-keep-nodes`',
+      ),
+    );
+  }
+  if (entries.length === 0 && !hubAlive) {
+    print(ui.dim('no node/hub was running'));
+  } else if (running > 0) {
+    print(ui.dim(`gateway stopped; ${running} node/hub process(es) left running`));
+  }
 }
 
 /** 进程确认死亡后清理该实例的 pid/lock/owner，并核对文件确实消失。 */
@@ -2158,6 +2318,13 @@ export async function runPlatformGatewayForeground(
         ? { readinessTimeoutMs: options.readinessTimeoutMs }
         : {}),
       ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
+      // 0.55：节点状态变化 → 结构化日志行（daemon 下进 logs/gateway.log）。
+      // 这是「节点没起来必须看得见」的既有通道：状态 + 原因 + 耗时，一行一条。
+      onNodeState: (info) => {
+        const line = `node ${info.name}: ${info.state}${describeNodeState(info)}`;
+        if (info.state === 'failed') printErr(ui.warn(line));
+        else print(ui.dim(line));
+      },
     });
     const specs: LocalNodeSpec[] = nodes.map((node) => ({
       nodeId: node.entry.node_id,
@@ -2170,13 +2337,11 @@ export async function runPlatformGatewayForeground(
       ...(node.token !== undefined ? { token: node.token } : {}),
       autoStart: node.entry.auto_start,
     }));
-    const started = await supervisor.start(specs);
-    if (!started.ok) {
-      printErr(ui.err(`${started.code}: ${started.message}`));
-      await platformGateway?.stop().catch(() => undefined);
-      platformGateway = undefined;
-      return 1;
-    }
+    // 0.55 分段启动 phase A：只做 adopt 判定 + spawn（毫秒级，不等就绪）。
+    // 单个节点在这里失败只标该节点 failed，**不再回滚整个 gateway**。
+    await supervisor.begin(specs);
+    // phase B 在监听/写 PID 之后启动（见下面的 `settlePromise`）：就绪等待离开
+    // 启动关键路径，慢节点不拖住「我能接请求」。
 
     // 0.52（handoff 的硬前置）：**监听必须晚于 spawn 子进程**。
     //
@@ -2188,18 +2353,15 @@ export async function runPlatformGatewayForeground(
     // 所以这里把「起监听」挪到「spawn 完成」之后；顺带让子进程显式不继承 stdio。
     // 0.50：本地 Hub 是独立进程；启动失败只 warning，不阻断 gateway。
     // 手工/外部启动的 Hub 走 adopt，不记 manifest（`gateway stop` 不会杀它）。
-    let hubStarted: { url: string; adopted: boolean } | undefined;
+    // 0.55：Hub 也分段——命中 adopt 立刻拿到 url；本进程 spawn 的只等 settle。
+    let hubBegin: HubSupervisorBeginResult | undefined;
     if (hubAutoStart) {
       const hubDataDir =
         hubConfig?.dataDir !== undefined
           ? path.resolve(expandHome(hubConfig.dataDir))
           : path.join(dataDir, 'hub');
-      const hub = await supervisor.startHub({ dataDir: hubDataDir });
-      if (hub.ok) {
-        hubStarted = { url: hub.url, adopted: hub.adopted };
-      } else {
-        printErr(ui.warn(`${hub.code}: ${hub.message}`));
-      }
+      hubBegin = await supervisor.beginHub({ dataDir: hubDataDir });
+      if (!hubBegin.ok) printErr(ui.warn(`${hubBegin.code}: ${hubBegin.message}`));
     }
 
     try {
@@ -2263,26 +2425,47 @@ export async function runPlatformGatewayForeground(
     }
 
     const platformUrl = nodeOriginOf(platformHostname, platformGateway.port, false);
-    // 0.52 handoff 可见性：`state: 'external'` = 本平台没有 spawn 它，是 adopt 来的
-    // （`gateway restart` 保活的 node 正是这种；auto_start: false 的 node 不算）。
-    // 不新增字段，复用 supervisor 既有信息。
-    const adoptedNodes = new Set(
-      supervisor
-        .list()
-        .filter((info) => !info.spawned && info.state === 'external')
-        .map((info) => info.nodeId),
-    );
+    // 0.55 分段启动 phase B：节点/Hub 就绪等待**离开关键路径**——平台已经在监听、
+    // `platform.pid` 已写好，这里只是后台收尾：谁先好谁先报，失败只更新那个节点的
+    // 状态（`onNodeState` 打日志），绝不回滚平台、也不阻塞「我能接请求」。
+    void supervisor
+      .settle()
+      .then((report) => {
+        const hub = report.hub;
+        if (hub !== undefined) {
+          if (hub.ok) {
+            print(ui.dim(`hub ${hub.url !== '' ? hub.url : 'running'}  (auto-started)`));
+          } else {
+            printErr(ui.warn(`${hub.code}: ${hub.message}`));
+          }
+        }
+        // 一次性收口：几个节点就绪、几个失败（失败原因已逐条打过）。
+        if (report.counts.failed > 0 && report.counts.ready + report.counts.adopted > 0) {
+          print(
+            ui.info(
+              `nodes: ${report.counts.ready + report.counts.adopted} ready, ` +
+                `${report.counts.failed} failed (gateway keeps serving)`,
+            ),
+          );
+        }
+      })
+      .catch(() => undefined);
+    // 0.52 handoff 可见性：`adopted` / `external` = 本平台没有 spawn 它，是 adopt 来的
+    // （`gateway restart` 保活的 node 走 `adopted`；手工/外部启动的走 `external`）。
+    // 不新增字段，复用 supervisor 既有状态机。
+    const stateNow = new Map(supervisor.list().map((info) => [info.nodeId, info]));
     // 0.50：前台 TTY 输出 Vite 风格摘要；daemon 子进程 stdout 重定向到日志
     // （非 TTY），保持既有逐行日志不变。显式注入 `print` 的嵌入方按交互处理。
     // 0.51：TTY 判定与 box banner 同一入口（`isHumanTerminal`），summary 本身无框线。
     const interactive = options.print !== undefined || isHumanTerminal();
     if (interactive) {
       const hub: PlatformStartupHub =
-        hubStarted !== undefined
-          ? {
-              state: hubStarted.adopted ? 'adopted' : 'auto-started',
-              url: hubStarted.url !== '' ? hubStarted.url : 'running',
-            }
+        hubBegin !== undefined
+          ? hubBegin.ok
+            ? hubBegin.adopted
+              ? { state: 'adopted', url: hubBegin.url !== '' ? hubBegin.url : 'running' }
+              : { state: 'starting' }
+            : { state: 'unavailable' }
           : hubAutoStart
             ? { state: 'unavailable' }
             : { state: 'disabled' };
@@ -2290,12 +2473,17 @@ export async function runPlatformGatewayForeground(
         renderPlatformStartup({
           version,
           platformUrl,
-          nodes: nodes.map((node) => ({
-            name: node.entry.name,
-            url: node.apiUrl,
-            autoStart: node.entry.auto_start,
-            ...(adoptedNodes.has(node.entry.node_id) ? { adopted: true } : {}),
-          })),
+          // 这一刻节点可能还在 `starting`：如实显示，就绪/失败随后由日志行补齐。
+          nodes: nodes.map((node) => {
+            const info = stateNow.get(node.entry.node_id);
+            return {
+              name: node.entry.name,
+              url: node.apiUrl,
+              autoStart: node.entry.auto_start,
+              ...(info !== undefined ? { state: info.state } : {}),
+              ...(info?.reason !== undefined ? { reason: info.reason } : {}),
+            };
+          }),
           hub,
           readyMs: Math.max(0, Math.round(performance.now() - startupStartedAt)),
           stopHint: t('cli.gatewayRunning'),
@@ -2304,17 +2492,21 @@ export async function runPlatformGatewayForeground(
     } else {
       print(ui.ok(t('gateway.started', { pid: process.pid, url: platformUrl })));
       for (const node of nodes) {
+        const info = stateNow.get(node.entry.node_id);
         print(
           ui.dim(
             `node ${node.entry.name}  ${node.apiUrl}` +
               (node.entry.auto_start ? '' : '  (auto_start: false)') +
-              (adoptedNodes.has(node.entry.node_id) ? '  (adopted)' : ''),
+              (info !== undefined ? `  (${info.state})` : ''),
           ),
         );
       }
-      if (hubStarted !== undefined) {
-        const detail = hubStarted.url !== '' ? hubStarted.url : 'running';
-        print(ui.dim(`hub ${detail}${hubStarted.adopted ? '  (adopted)' : ''}`));
+      if (hubBegin !== undefined) {
+        if (hubBegin.ok && hubBegin.adopted) {
+          print(ui.dim(`hub ${hubBegin.url !== '' ? hubBegin.url : 'running'}  (adopted)`));
+        } else if (!hubBegin.ok) {
+          print(ui.dim('hub unavailable'));
+        }
       }
     }
 
@@ -2365,8 +2557,9 @@ export async function runGatewayCommand(
         ...deps,
         timeoutMs: command.timeoutMs,
         selector: command,
-        // 真停是缺省；`--keep-nodes` 是显式求「只停平台层、保留 node/hub」（handoff）。
-        ...(command.keepNodes === true ? { keepNodes: true } : {}),
+        // 0.55：缺省**只停平台层**（node/hub 继续跑，下次 start 走 adopt）；
+        // `--no-keep-nodes` 才是整体关闭（连 node/hub 一起停）。
+        keepNodes: command.keepNodes !== false,
       });
     case 'status':
       return gatewayStatus({ ...deps, json: command.json, rpc: command.rpc, selector: command });

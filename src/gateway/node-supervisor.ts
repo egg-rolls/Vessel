@@ -7,6 +7,10 @@
  *   `platform.pid` / `platform-<instance>.lock`，两族文件不交叉；
  * - 启动前已有健康 node → adopt/external，不重复 spawn；
  * - 只终止本 Gateway spawn 的子进程；adopt/external 永不杀；
+ * - **0.55 分段启动**：`begin()` 只做「adopt 判定 + spawn」（毫秒级、不等就绪），
+ *   平台据此立刻监听；`settle()` 在后台并发等待就绪。每个节点是独立状态机
+ *   （`starting` / `ready` / `failed` / `adopted` / `external`），一个节点慢、
+ *   起不来或崩溃**只标它自己**（状态 + 原因 + 时刻），不回滚平台、不阻塞别人；
  * - Windows 无 POSIX 信号语义：`process.kill(pid)` 后 `taskkill /PID <pid> /T /F`
  *   兜底；`gateway stop`（另一进程）通过平台写下的 runtime manifest 找到这些
  *   PID，逐条复核 `gateway.pid` 归属后才终止。
@@ -31,7 +35,15 @@ import {
   readGatewayPidRecord,
 } from './pid';
 
-const DEFAULT_READINESS_TIMEOUT_MS = 20_000;
+/**
+ * 单个 node/hub 的就绪上界（0.55）。
+ *
+ * 上界理由：实测冷启动（首次解压插件 + 建 WAL 尾部索引）通常 < 5s，20s 曾把
+ * 慢机器上的正常节点判死；这里按 5s 的 36 倍留余量，覆盖慢磁盘 + 大 registry。
+ * 超时**只**把该节点标 `failed`（原因带毫秒数），平台照常 ready；超过 3 分钟
+ * 仍拿不到 `/health` 基本可判定为卡死，可由 `gateway restart` 显式重来。
+ */
+const DEFAULT_READINESS_TIMEOUT_MS = 180_000;
 const DEFAULT_STOP_TIMEOUT_MS = 5_000;
 const POLL_MS = 100;
 const HEALTH_TIMEOUT_MS = 1_000;
@@ -62,7 +74,30 @@ export type HubSupervisorStartResult =
   | { ok: true; adopted: boolean; url: string }
   | { ok: false; code: string; message: string };
 
-export type SupervisedNodeState = 'up' | 'down' | 'external' | 'unknown';
+/** `beginHub` 结果：命中已有 Hub 可立刻给出 url；本进程 spawn 的就绪待 `settle`。 */
+export type HubSupervisorBeginResult =
+  | { ok: true; adopted: true; url: string }
+  | { ok: true; adopted: false }
+  | { ok: false; code: string; message: string };
+
+/** `settle` 里 Hub 的最终结果（只出现在本进程 spawn 的 Hub 上）。 */
+export type HubSupervisorSettleResult =
+  | { ok: true; adopted: false; url: string }
+  | { ok: false; code: string; message: string };
+
+/**
+ * 节点状态机（0.55 分段启动）。
+ *
+ * - `starting` 本进程已 spawn、或 dataDir 里已有活进程（adopt 候选），就绪未确认；
+ * - `ready` 本进程 spawn 且已通过 `gateway.pid` + `/health` 校验；
+ * - `failed` 该节点当前不可用：spawn 抛错、启动中退出、就绪超时、身份不符、已就绪
+ *   后崩溃、或被本进程停止。**原因与时刻在 `reason` / `since`**，平台不受影响；
+ * - `adopted` 未 spawn：已有健康进程接管，且本实例 manifest 里有它的归属记录
+ *   （0.52 handoff 保活的子进程）；
+ * - `external` 未 spawn：已有健康进程接管但不在 manifest（手工/外部启动，永不杀），
+ *   或该节点 `auto_start: false`（本进程不管它的生命周期）。
+ */
+export type SupervisedNodeState = 'starting' | 'ready' | 'failed' | 'adopted' | 'external';
 
 export interface SupervisedNodeInfo {
   nodeId: string;
@@ -71,11 +106,29 @@ export interface SupervisedNodeInfo {
   state: SupervisedNodeState;
   pid?: number;
   spawned: boolean;
+  /** 未就绪/不可用原因（`failed` 必有；`adopted`/`external` 说明来源）。不含 token。 */
+  reason?: string;
+  /** 进入当前状态的时刻（ISO 8601）。 */
+  since: string;
+  /** 从 `begin()` 到进入当前状态的毫秒数（`ready` 即该节点的启动耗时）。 */
+  elapsedMs: number;
 }
 
-export type NodeSupervisorStartResult =
-  | { ok: true }
-  | { ok: false; code: string; message: string; node?: string };
+/** phase A 结果：只表示「adopt/spawn 判定已下发」，**不代表就绪**。 */
+export interface NodeSupervisorBeginResult {
+  /** 本阶段由本进程 spawn 的 node 子进程数。 */
+  spawned: number;
+  /** adopt 候选数（已有活进程，健康待 `settle` 确认）。 */
+  adoptCandidates: number;
+}
+
+/** phase B 报告：每个节点的最终状态（失败只标该节点，不抛错、不回滚）。 */
+export interface NodeSupervisorReport {
+  nodes: SupervisedNodeInfo[];
+  counts: Record<SupervisedNodeState, number>;
+  /** 本进程 spawn 的 Hub 的最终结果；adopt/未起 Hub 时为 undefined。 */
+  hub?: HubSupervisorSettleResult;
+}
 
 export interface NodeSupervisorOptions {
   /** 平台 dataDir；node 日志与 manifest 写在这里。 */
@@ -98,6 +151,12 @@ export interface NodeSupervisorOptions {
   platformOrigins?: readonly string[];
   /** 测试 seam：覆盖单进程终止；返回 false 表示未确认停止（manifest 保留）。 */
   terminate?: (pid: number) => Promise<boolean>;
+  /**
+   * 0.55：节点状态迁移观察者（每次变化一次，含失败原因与耗时）。I/O 由调用方
+   * 决定（结构日志行 / banner），监督器本身不打印、不落盘——不新增状态实体。
+   * 观察者抛错不影响状态机。
+   */
+  onNodeState?: (info: SupervisedNodeInfo) => void;
 }
 
 /** Manifest 中的一条：只记录本平台 spawn 的子进程。 */
@@ -124,6 +183,18 @@ function isErrno(error: unknown, code: string): boolean {
   return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === code;
 }
 
+/**
+ * 节点缺席时的「怎么起」提示（0.55）。
+ *
+ * `auto_start: false` 的节点不由 gateway 拉起；缺席时不能只留一个空状态，
+ * 要把可复制的命令写在原因里（显式 registry 带 `--config`，隐式单节点不用）。
+ */
+function nodeStartHint(spec: Pick<LocalNodeSpec, 'configPath'>): string {
+  return spec.configPath !== undefined
+    ? `vessel node start --daemon --config ${spec.configPath}`
+    : 'vessel node start --daemon';
+}
+
 /** `<gatewayDataDir>/logs/node-<name>.log`（0600）；名字里的路径分隔符归一为 `_`。 */
 export function nodeLogPath(gatewayDataDir: string, name: string): string {
   const safe = name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 64) || 'node';
@@ -142,7 +213,6 @@ export function spawnedChildrenPath(gatewayDataDir: string, instance?: string): 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
-
 function parseManifest(raw: unknown): SpawnedChildRecord[] {
   if (!isRecord(raw) || raw.v !== MANIFEST_VERSION || !Array.isArray(raw.children)) return [];
   const out: SpawnedChildRecord[] = [];
@@ -360,6 +430,21 @@ export interface StopSpawnedChildrenOptions {
    * 交给新平台按既有 adopt 判据接管（见 `src/gateway/handoff.ts`）。
    */
   keep?: boolean;
+  /**
+   * 0.55：只终止 `started_at` **不早于**该 epoch 毫秒的条目——即「本次启动才
+   * spawn 的」。daemon 启动失败的回滚用它，避免把上一代就活着（本次 adopt 回来）
+   * 的 node/hub 一起杀掉。缺省 undefined = 不过滤（整体关闭要停全部）。
+   */
+  startedSince?: number;
+}
+
+/** manifest 条目的启动时刻（node 写 ISO 8601；hub lock 写 epoch 毫秒字符串）。 */
+function startedAtMs(record: SpawnedChildRecord): number | undefined {
+  if (record.started_at === '') return undefined;
+  const iso = Date.parse(record.started_at);
+  if (!Number.isNaN(iso)) return iso;
+  const epoch = Number(record.started_at);
+  return Number.isFinite(epoch) && epoch > 0 ? epoch : undefined;
 }
 
 /** handoff 保活的子进程计数（按 kind 分开，便于日志说清「保留了谁」）。 */
@@ -368,11 +453,23 @@ export interface KeptChildren {
   hubs: number;
 }
 
+/** 停机可核（0.55）：被终止/未被终止的一个子进程（不含 token）。 */
+export interface StoppedChildDetail {
+  name: string;
+  kind: 'node' | 'hub';
+  pid: number;
+  /** 仅在未确认终止时出现：为什么没停下来（manifest 条目已保留供重试）。 */
+  reason?: string;
+}
+
 export interface StopSpawnedChildrenResult {
   stopped: number;
   failed: number;
   /** 仅在 `keep: true` 时返回：被**有意保留**的子进程。 */
   kept?: KeptChildren;
+  /** 仅在 `keep` 不为真时返回：逐条终止结果（`gateway stop --no-keep-nodes` 输出用）。 */
+  stoppedChildren?: StoppedChildDetail[];
+  failedChildren?: StoppedChildDetail[];
 }
 
 /**
@@ -405,6 +502,8 @@ export async function stopSpawnedChildren(
   let failed = 0;
   let keptNodes = 0;
   let keptHubs = 0;
+  const stoppedChildren: StoppedChildDetail[] = [];
+  const failedChildren: StoppedChildDetail[] = [];
   for (const file of files) {
     const children = await readSpawnedChildren(options.gatewayDataDir, file.instance);
     const remaining: SpawnedChildRecord[] = [];
@@ -418,15 +517,34 @@ export async function stopSpawnedChildren(
         else keptNodes += 1;
         continue;
       }
+      const startedAt = startedAtMs(child);
+      if (
+        options.startedSince !== undefined &&
+        startedAt !== undefined &&
+        startedAt < options.startedSince
+      ) {
+        // 本次启动之前就在跑的（adopt 来的）：不是这次的 spawn，不动，条目留着。
+        remaining.push(child);
+        continue;
+      }
       const ok =
         options.terminate !== undefined
           ? await options.terminate(child.pid)
           : await terminateChild(child.pid, { platform, runCommand, sleep, timeoutMs });
-      if (ok) stopped += 1;
-      else {
+      const kind: 'node' | 'hub' = child.kind === 'hub' ? 'hub' : 'node';
+      if (ok) {
+        stopped += 1;
+        stoppedChildren.push({ name: child.name, kind, pid: child.pid });
+      } else {
         // 未确认停止：保留 manifest 条目，供后续 `gateway stop` 重试。
         failed += 1;
         remaining.push(child);
+        failedChildren.push({
+          name: child.name,
+          kind,
+          pid: child.pid,
+          reason: `not confirmed stopped within ${timeoutMs}ms`,
+        });
       }
     }
     if (options.keep === true) continue;
@@ -441,7 +559,25 @@ export async function stopSpawnedChildren(
   if (options.keep === true) {
     return { stopped, failed, kept: { nodes: keptNodes, hubs: keptHubs } };
   }
-  return { stopped, failed };
+  return { stopped, failed, stoppedChildren, failedChildren };
+}
+
+/** phase A 下发、phase B 待确认的一个节点（本进程内存，不落盘）。 */
+interface PendingNode {
+  spec: LocalNodeSpec;
+  pid: number;
+  /** true = 本进程 spawn 的子进程；false = 已有活进程（adopt 候选，不重复 spawn）。 */
+  spawned: boolean;
+  /** 本进程 spawn 的子进程 manifest 条目（就绪后才写盘）。 */
+  manifestEntry?: SpawnedChildRecord;
+}
+
+/** phase A 下发、phase B 待确认的 Hub（同上，只有一个）。 */
+interface PendingHub {
+  dataDir: string;
+  pid: number;
+  manifestEntry: SpawnedChildRecord;
+  result?: HubSupervisorSettleResult;
 }
 
 /** 平台进程内的子进程监督器。 */
@@ -452,6 +588,22 @@ export class NodeSupervisor {
   private readonly runCommand: CommandRunner;
   private spawned: SpawnedChildRecord[] = [];
   private readonly infos = new Map<string, SupervisedNodeInfo>();
+  /** 每个节点 `begin()` 的时刻（`elapsedMs` 基准）。 */
+  private readonly beginAt = new Map<string, number>();
+  private pending: PendingNode[] = [];
+  private hubPending: PendingHub | undefined;
+  private settlePromise: Promise<NodeSupervisorReport> | undefined;
+  /** manifest 写入串行化：并发就绪的节点不能互相覆盖对方条目。 */
+  private manifestWrites: Promise<void> = Promise.resolve();
+  /**
+   * 上一代 gateway 留在盘上、本进程**没有** spawn 的子进程条目（handoff 保活、
+   * 本次走 adopt 的 node/hub）。写 manifest 时必须原样带着它们，否则一个新节点
+   * 失败就会把还在跑的 node/hub 从盘上抹掉，`gateway stop --no-keep-nodes` 之后
+   * 再也找不到它们（孤儿）。
+   */
+  private carried: SpawnedChildRecord[] = [];
+  /** 已开始停止：就绪轮询立即收尾，不再刷状态事件。 */
+  private stopping = false;
 
   constructor(options: NodeSupervisorOptions) {
     this.options = options;
@@ -460,75 +612,221 @@ export class NodeSupervisor {
     this.runCommand = options.runCommand ?? createCommandRunner(3_000);
   }
 
-  /** 当前监督视图（spawn/adopt 结果与运行期崩溃标记）。 */
+  /** 当前监督视图（每个节点的状态机快照，顺序与 `begin()` 的 registry 顺序一致）。 */
   list(): SupervisedNodeInfo[] {
     return [...this.infos.values()];
   }
 
-  /**
-   * 按 registry 顺序启动 `auto_start` 节点；任一失败 → 回滚本进程已 spawn 的子进程
-   * 并返回稳定错误码。运行期崩溃只标 down（由 `child.exited` 标记），不自动重启。
-   */
-  async start(specs: readonly LocalNodeSpec[]): Promise<NodeSupervisorStartResult> {
-    for (const spec of specs) {
-      if (!spec.autoStart) {
-        this.infos.set(spec.nodeId, {
-          nodeId: spec.nodeId,
-          name: spec.name,
-          dataDir: spec.dataDir,
-          state: 'unknown',
-          spawned: false,
-        });
-        continue;
-      }
-      const existing = await this.adoptOrSpawn(spec);
-      if (!existing.ok) {
-        await this.stop();
-        return existing;
+  /** 写一条状态（`elapsedMs`/`since` 在此计算；状态变化才通知观察者）。 */
+  private setState(
+    target: { nodeId: string; name: string; dataDir: string },
+    state: SupervisedNodeState,
+    extra: { pid?: number; spawned?: boolean; reason?: string } = {},
+  ): SupervisedNodeInfo {
+    const previous = this.infos.get(target.nodeId);
+    const now = Date.now();
+    const startedAt = this.beginAt.get(target.nodeId) ?? now;
+    const pid = extra.pid ?? previous?.pid;
+    const spawned = extra.spawned ?? previous?.spawned ?? false;
+    const info: SupervisedNodeInfo = {
+      nodeId: target.nodeId,
+      name: target.name,
+      dataDir: target.dataDir,
+      state,
+      spawned,
+      since: new Date(now).toISOString(),
+      elapsedMs: Math.max(0, now - startedAt),
+      ...(pid !== undefined ? { pid } : {}),
+      ...(extra.reason !== undefined ? { reason: extra.reason } : {}),
+    };
+    this.infos.set(target.nodeId, info);
+    // 首次登记（`previous === undefined`）不通知：调用方从 `list()`/banner 已能看到
+    // 初始 `starting`，日志只记「结果」（ready/failed/adopted/external/崩溃）。
+    if (previous !== undefined && !this.stopping) {
+      try {
+        this.options.onNodeState?.(info);
+      } catch {
+        // 观察者（日志）异常不影响状态机。
       }
     }
-    return { ok: true };
+    return info;
   }
 
-  private async adoptOrSpawn(spec: LocalNodeSpec): Promise<NodeSupervisorStartResult> {
+  /**
+   * phase A（0.55 分段启动）：按 registry 顺序登记状态，然后**并发**给每个
+   * `auto_start` 节点做 adopt/spawn 判定。只做文件读 + `spawn` 系统调用，
+   * **不等就绪、不做健康探测**，所以平台可以在毫秒级继续监听（监听仍必须在
+   * spawn 之后，见 gateway-command 的 0.52 句柄继承注释）。
+   *
+   * 单个节点在这一阶段失败（spawn 抛错、dataDir 里是别的 node_id）只把它标
+   * `failed` 并带上原因，不影响其它节点，也不回滚平台。
+   */
+  async begin(specs: readonly LocalNodeSpec[]): Promise<NodeSupervisorBeginResult> {
+    this.pending = [];
+    // 盘上已有条目的子进程是上一代 gateway 留下的（本次可能 adopt 回来）：
+    // 写 manifest 时要把它们一起带回去，别因为一个新节点失败就把它们抹掉。
+    this.carried = await readSpawnedChildren(
+      this.options.gatewayDataDir,
+      this.options.instance,
+    ).catch(() => []);
+    for (const spec of specs) {
+      this.beginAt.set(spec.nodeId, Date.now());
+      if (!spec.autoStart) {
+        // 不由本进程管生命周期：不 spawn。缺席时必须给出「怎么起」而不是留空。
+        this.setState(spec, 'external', {
+          spawned: false,
+          reason: `auto_start: false — start it with: ${nodeStartHint(spec)}`,
+        });
+      }
+    }
+    await Promise.all(
+      specs.map(async (spec) => {
+        if (!spec.autoStart) {
+          // 只读一次 pid 文件：区分「已经在跑」和「缺席」，两种都仍是 external。
+          const record = await readGatewayPidRecord(spec.dataDir).catch(() => null);
+          if (record === null || !isProcessAlive(record.pid)) return;
+          this.setState(spec, 'external', {
+            spawned: false,
+            pid: record.pid,
+            reason: `auto_start: false; already running outside this gateway (pid ${record.pid})`,
+          });
+          return;
+        }
+        this.setState(spec, 'starting', { spawned: false });
+        await this.claim(spec);
+      }),
+    );
+    const spawned = this.pending.filter((entry) => entry.spawned).length;
+    return { spawned, adoptCandidates: this.pending.length - spawned };
+  }
+
+  /** phase A 的单节点判定：已有活进程 → adopt 候选；否则 spawn。 */
+  private async claim(spec: LocalNodeSpec): Promise<void> {
     const existing = await readGatewayPidRecord(spec.dataDir);
     if (existing !== null && isProcessAlive(existing.pid)) {
       if (existing.node_id !== undefined && existing.node_id !== spec.nodeId) {
-        return {
-          ok: false,
-          code: 'node_identity_mismatch',
-          node: spec.name,
-          message: `node "${spec.name}": ${path.join(spec.dataDir, 'gateway.pid')} belongs to another node_id`,
-        };
+        // 不 spawn（会抢端口）、也不杀（不是我们的进程）。
+        this.setState(spec, 'failed', {
+          spawned: false,
+          pid: existing.pid,
+          reason:
+            `node_identity_mismatch: node "${spec.name}": ` +
+            `${path.join(spec.dataDir, 'gateway.pid')} belongs to another node_id`,
+        });
+        return;
       }
-      const health = await this.waitForHealth(spec, ADOPT_WAIT_MS);
-      if (!health.ok) {
-        return {
-          ok: false,
-          code: 'node_unreachable',
-          node: spec.name,
-          message: `node "${spec.name}" already has a live process (pid ${existing.pid}) but is not healthy`,
-        };
-      }
-      if (health.nodeId !== undefined && health.nodeId !== spec.nodeId) {
-        return {
-          ok: false,
-          code: 'node_identity_mismatch',
-          node: spec.name,
-          message: `node "${spec.name}" health reports node_id ${health.nodeId}`,
-        };
-      }
-      this.infos.set(spec.nodeId, {
-        nodeId: spec.nodeId,
-        name: spec.name,
-        dataDir: spec.dataDir,
-        state: 'external',
-        pid: existing.pid,
-        spawned: false,
-      });
-      return { ok: true };
+      // 已有健康 node 不重复 spawn；健康确认挪到 phase B（不拖住平台启动）。
+      this.setState(spec, 'starting', { spawned: false, pid: existing.pid });
+      this.pending.push({ spec, pid: existing.pid, spawned: false });
+      return;
     }
-    return this.spawn(spec);
+    const manifestEntry = await this.spawnOnly(spec);
+    if (manifestEntry === null) return;
+    this.setState(spec, 'starting', { spawned: true, pid: manifestEntry.pid });
+    this.pending.push({ spec, pid: manifestEntry.pid, spawned: true, manifestEntry });
+  }
+
+  /**
+   * phase B：等待所有节点（以及本进程 spawn 的 Hub）就绪。**并发**等待，慢节点
+   * 不拖住快节点；任何失败只标记该节点，不抛错、不回滚平台。幂等（重复调用复用
+   * 同一次等待）。
+   */
+  async settle(): Promise<NodeSupervisorReport> {
+    if (this.settlePromise === undefined) this.settlePromise = this.runSettle();
+    return this.settlePromise;
+  }
+
+  private async runSettle(): Promise<NodeSupervisorReport> {
+    const pending = this.pending;
+    const hub = this.hubPending;
+    await Promise.all([
+      ...pending.map((entry) =>
+        entry.spawned ? this.finishSpawned(entry) : this.finishAdopt(entry),
+      ),
+      ...(hub !== undefined ? [this.finishHub(hub)] : []),
+    ]);
+    const nodes = this.list();
+    const counts: Record<SupervisedNodeState, number> = {
+      starting: 0,
+      ready: 0,
+      failed: 0,
+      adopted: 0,
+      external: 0,
+    };
+    for (const info of nodes) counts[info.state] += 1;
+    return { nodes, counts, ...(hub?.result !== undefined ? { hub: hub.result } : {}) };
+  }
+
+  /** 本进程 spawn 的节点：等 `gateway.pid` + `/health`；失败只标该节点。 */
+  private async finishSpawned(entry: PendingNode): Promise<void> {
+    const { spec } = entry;
+    const ready = await this.waitForReady(spec, entry.pid);
+    if (!ready.ok) {
+      // 本进程正在停止：不算节点失败，也不去杀（stop() 已经在收）。
+      if (ready.code === 'stopped') return;
+      await this.abandonSpawned(entry, `${ready.code}: ${ready.message}`);
+      return;
+    }
+    const record = await readGatewayPidRecord(spec.dataDir);
+    if (record === null) {
+      await this.abandonSpawned(
+        entry,
+        `node_start_failed: node "${spec.name}" did not write ${path.join(spec.dataDir, 'gateway.pid')}`,
+      );
+      return;
+    }
+    if (entry.manifestEntry !== undefined) entry.manifestEntry.started_at = record.started_at;
+    await this.writeManifest();
+    this.setState(spec, 'ready', { spawned: true, pid: entry.pid });
+  }
+
+  /** adopt 候选：确认健康后定 `adopted`（manifest 有记录）/ `external`（外部启动）。 */
+  private async finishAdopt(entry: PendingNode): Promise<void> {
+    const { spec } = entry;
+    const health = await this.waitForHealth(spec, ADOPT_WAIT_MS);
+    if (this.stopping) return;
+    if (!health.ok) {
+      // 已有活进程但不健康：不重复 spawn（会抢端口）、也不杀（不是我们的进程）。
+      this.setState(spec, 'failed', {
+        spawned: false,
+        pid: entry.pid,
+        reason:
+          `node_unreachable: node "${spec.name}" already has a live process ` +
+          `(pid ${entry.pid}) but is not healthy`,
+      });
+      return;
+    }
+    if (health.nodeId !== undefined && health.nodeId !== spec.nodeId) {
+      this.setState(spec, 'failed', {
+        spawned: false,
+        pid: entry.pid,
+        reason: `node_identity_mismatch: node "${spec.name}" health reports node_id ${health.nodeId}`,
+      });
+      return;
+    }
+    const adopted = await this.inThisManifest(spec.nodeId, entry.pid);
+    this.setState(spec, adopted ? 'adopted' : 'external', {
+      spawned: false,
+      pid: entry.pid,
+      reason: adopted
+        ? 'taken over from a previous gateway (handoff, in this manifest)'
+        : 'started outside this gateway',
+    });
+  }
+
+  /** 该 pid 是否本实例 manifest 里的条目（只用于区分 `adopted` / `external` 显示）。 */
+  private async inThisManifest(nodeId: string, pid: number): Promise<boolean> {
+    try {
+      const children = await readSpawnedChildren(
+        this.options.gatewayDataDir,
+        this.options.instance,
+      );
+      return children.some(
+        (child) => child.kind !== 'hub' && child.node_id === nodeId && child.pid === pid,
+      );
+    } catch {
+      return false;
+    }
   }
 
   private async waitForHealth(spec: LocalNodeSpec, timeoutMs: number): Promise<HealthProbeResult> {
@@ -553,8 +851,11 @@ export class NodeSupervisor {
    * - 否则 spawn `vessel hub start --data-dir <hubDataDir>`，等 `hub.lock` 归本
    *   child 且 `/health` 通过后写入与 node 共用的 manifest（`kind:'hub'`）；
    * - 失败只返回错误，由调用方 warning，不阻断 gateway。
+   *
+   * 0.55：拆成 `beginHub()`（adopt 命中立刻给 url；spawn 成功立即返回，**不等就绪**）
+   * + `settle()` 里的就绪等待，Hub 慢启动不再拖住平台 ready。
    */
-  async startHub(spec: LocalHubSpec): Promise<HubSupervisorStartResult> {
+  async beginHub(spec: LocalHubSpec): Promise<HubSupervisorBeginResult> {
     const existing = await readHubLockFile(spec.dataDir);
     if (existing !== null && isProcessAlive(existing.pid) && !isBeforeBoot(existing.started_at)) {
       return { ok: true, adopted: true, url: existing.url ?? '' };
@@ -616,7 +917,8 @@ export class NodeSupervisor {
     child.unref?.();
 
     const pid = child.pid;
-    // 就绪前只存在于本进程内存（started_at 未知）；失败由本进程 stop() 按 pid 回滚。
+    // 就绪前只存在于本进程内存（started_at 未知，不能做归属复核）；
+    // 就绪后才写 manifest，失败由本进程按 pid 终止（`gateway stop` 找不到它）。
     const record: SpawnedChildRecord = {
       node_id: 'hub',
       name: 'hub',
@@ -626,12 +928,39 @@ export class NodeSupervisor {
       kind: 'hub',
     };
     this.spawned.push(record);
+    this.hubPending = { dataDir: spec.dataDir, pid, manifestEntry: record };
+    return { ok: true, adopted: false };
+  }
 
-    const ready = await this.waitForHubReady(spec.dataDir, pid);
-    if (!ready.ok) return ready;
-    record.started_at = ready.startedAt;
+  /** 兼容入口：`beginHub()` + 等就绪（阻塞版；0.55 起平台走分段启动，不用它）。 */
+  async startHub(spec: LocalHubSpec): Promise<HubSupervisorStartResult> {
+    const begun = await this.beginHub(spec);
+    if (!begun.ok) return begun;
+    if (begun.adopted) return { ok: true, adopted: true, url: begun.url };
+    const pending = this.hubPending;
+    if (pending === undefined) {
+      return { ok: false, code: 'hub_start_failed', message: 'hub was not spawned' };
+    }
+    await this.finishHub(pending);
+    return (
+      pending.result ?? { ok: false, code: 'hub_start_failed', message: 'hub result is unknown' }
+    );
+  }
+
+  /** phase B：等本进程 spawn 的 Hub 就绪；失败只报告，不回滚、不影响节点。 */
+  private async finishHub(pending: PendingHub): Promise<void> {
+    const ready = await this.waitForHubReady(pending.dataDir, pending.pid);
+    if (!ready.ok) {
+      // 本进程 spawn 的 Hub 没起来：尽力终止自己的子进程，避免孤儿。
+      const stopped = await this.terminatePid(pending.pid);
+      if (stopped) this.spawned = this.spawned.filter((child) => child !== pending.manifestEntry);
+      await this.writeManifest().catch(() => undefined);
+      pending.result = ready;
+      return;
+    }
+    pending.manifestEntry.started_at = ready.startedAt;
     await this.writeManifest();
-    return { ok: true, adopted: false, url: ready.url };
+    pending.result = { ok: true, adopted: false, url: ready.url };
   }
 
   private async waitForHubReady(
@@ -661,16 +990,22 @@ export class NodeSupervisor {
     };
   }
 
-  private async spawn(spec: LocalNodeSpec): Promise<NodeSupervisorStartResult> {
+  /**
+   * phase A 的 spawn 部分：只把子进程拉起来并登记 manifest 条目（`started_at`
+   * 留空，就绪后才落盘），**不等就绪**。失败返回 null 并把该节点标 `failed`。
+   */
+  private async spawnOnly(spec: LocalNodeSpec): Promise<SpawnedChildRecord | null> {
+    const fail = (code: string, message: string): null => {
+      this.setState(spec, 'failed', { spawned: false, reason: `${code}: ${message}` });
+      return null;
+    };
     const execPath = this.options.execPath ?? process.execPath;
     const entryPath = this.options.entryPath ?? process.argv[1];
     if (entryPath === undefined || entryPath === '') {
-      return {
-        ok: false,
-        code: 'node_start_failed',
-        node: spec.name,
-        message: 'cannot resolve the vessel entry script (process.argv[1] is empty)',
-      };
+      return fail(
+        'node_start_failed',
+        `node "${spec.name}": cannot resolve the vessel entry script (process.argv[1] is empty)`,
+      );
     }
 
     const argv = buildDaemonArgv({
@@ -686,14 +1021,12 @@ export class NodeSupervisor {
     try {
       handle = await open(logPath, 'a', 0o600);
     } catch (error) {
-      return {
-        ok: false,
-        code: 'node_start_failed',
-        node: spec.name,
-        message: `node "${spec.name}": cannot open log ${logPath}: ${
+      return fail(
+        'node_start_failed',
+        `node "${spec.name}": cannot open log ${logPath}: ${
           error instanceof Error ? error.message : String(error)
         }`,
-      };
+      );
     }
 
     const spawn = this.options.spawn ?? Bun.spawn;
@@ -714,29 +1047,19 @@ export class NodeSupervisor {
       });
     } catch (error) {
       await handle.close().catch(() => undefined);
-      return {
-        ok: false,
-        code: 'node_start_failed',
-        node: spec.name,
-        message: `node "${spec.name}" failed to spawn: ${
+      return fail(
+        'node_start_failed',
+        `node "${spec.name}" failed to spawn: ${
           error instanceof Error ? error.message : String(error)
         }`,
-      };
+      );
     }
     await handle.close().catch(() => undefined);
     child.unref?.();
 
     const pid = child.pid;
-    this.infos.set(spec.nodeId, {
-      nodeId: spec.nodeId,
-      name: spec.name,
-      dataDir: spec.dataDir,
-      state: 'down',
-      pid,
-      spawned: true,
-    });
     // 就绪前只存在于本进程内存（started_at 未知，不能做 §4.7 归属复核）；
-    // readiness 成功后才写 manifest。启动失败由本进程 stop() 回滚。
+    // readiness 成功后才写 manifest，失败由 `abandonSpawned()` 按 pid 终止。
     const manifestEntry: SpawnedChildRecord = {
       node_id: spec.nodeId,
       name: spec.name,
@@ -745,40 +1068,62 @@ export class NodeSupervisor {
       started_at: '',
     };
     this.spawned.push(manifestEntry);
-    // 运行期崩溃：只标 down，不重启（G3 不自动重启）。
+    // 运行期崩溃：只标 failed + 原因，不重启（G3 不自动重启）。
     void child.exited.then(() => {
       const info = this.infos.get(spec.nodeId);
-      if (info !== undefined) info.state = 'down';
+      if (info === undefined || info.state !== 'ready') return;
+      if (this.stopping) return;
+      this.setState(spec, 'failed', { spawned: true, pid, reason: `node exited (pid ${pid})` });
     });
-
-    const ready = await this.waitForReady(spec, pid);
-    if (!ready.ok) return ready;
-
-    const record = await readGatewayPidRecord(spec.dataDir);
-    if (record === null) {
-      return {
-        ok: false,
-        code: 'node_start_failed',
-        node: spec.name,
-        message: `node "${spec.name}" did not write ${path.join(spec.dataDir, 'gateway.pid')}`,
-      };
-    }
-    manifestEntry.started_at = record.started_at;
-    await this.writeManifest();
-    const info = this.infos.get(spec.nodeId);
-    if (info !== undefined) info.state = 'up';
-    return { ok: true };
+    return manifestEntry;
   }
 
-  private async waitForReady(spec: LocalNodeSpec, pid: number): Promise<NodeSupervisorStartResult> {
+  /**
+   * 本进程 spawn 的节点没就绪：先记下归属证据（子进程若已写 `gateway.pid`），
+   * 再尽力终止**自己的**子进程。终止不掉就把条目留在 manifest 里由 `gateway stop`
+   * 重试——不留孤儿，也不因为一个节点拖垮整个平台。
+   */
+  private async abandonSpawned(entry: PendingNode, reason: string): Promise<void> {
+    const { spec } = entry;
+    const manifestEntry = entry.manifestEntry;
+    const record = await readGatewayPidRecord(spec.dataDir).catch(() => null);
+    if (record !== null && record.pid === entry.pid && manifestEntry !== undefined) {
+      manifestEntry.started_at = record.started_at;
+    }
+    const stopped = await this.terminatePid(entry.pid);
+    if (stopped && manifestEntry !== undefined) {
+      this.spawned = this.spawned.filter((child) => child !== manifestEntry);
+    }
+    await this.writeManifest().catch(() => undefined);
+    if (this.stopping) return;
+    this.setState(spec, 'failed', { spawned: true, pid: entry.pid, reason });
+  }
+
+  private async terminatePid(pid: number): Promise<boolean> {
+    if (this.options.terminate !== undefined) return this.options.terminate(pid);
+    return terminateChild(pid, {
+      platform: this.platform,
+      runCommand: this.runCommand,
+      sleep: this.sleep,
+      timeoutMs: this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS,
+    });
+  }
+
+  private async waitForReady(
+    spec: LocalNodeSpec,
+    pid: number,
+  ): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
     const timeoutMs = this.options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      // 本进程已在停止：别把「我们自己停了」写成节点失败。
+      if (this.stopping) {
+        return { ok: false, code: 'stopped', message: 'gateway is stopping' };
+      }
       if (!isProcessAlive(pid)) {
         return {
           ok: false,
           code: 'node_start_failed',
-          node: spec.name,
           message: `node "${spec.name}" exited during startup`,
         };
       }
@@ -788,7 +1133,6 @@ export class NodeSupervisor {
           return {
             ok: false,
             code: 'node_identity_mismatch',
-            node: spec.name,
             message: `node "${spec.name}" wrote node_id ${record.node_id}`,
           };
         }
@@ -801,7 +1145,6 @@ export class NodeSupervisor {
             return {
               ok: false,
               code: 'node_identity_mismatch',
-              node: spec.name,
               message: `node "${spec.name}" health reports node_id ${health.nodeId}`,
             };
           }
@@ -813,29 +1156,60 @@ export class NodeSupervisor {
     return {
       ok: false,
       code: 'node_start_failed',
-      node: spec.name,
       message: `node "${spec.name}" was not ready within ${timeoutMs}ms`,
     };
   }
 
-  private async writeManifest(): Promise<void> {
-    await writeSpawnedChildren(this.options.gatewayDataDir, this.options.instance, this.spawned);
+  /**
+   * 写 manifest（**只写已有 `started_at` 的条目**）。
+   *
+   * 并发就绪时，未就绪的兄弟条目 `started_at` 还是空——它没有归属证据，落盘只会
+   * 让 `gateway stop`（另一进程）复核失败、把活子进程当孤儿漏掉。写入串行化，
+   * 否则两个并发就绪的节点会互相覆盖对方的条目。
+   */
+  private writeManifest(): Promise<void> {
+    const own = this.spawned.filter((child) => child.started_at !== '');
+    return this.enqueueManifestWrite(own).catch(() => undefined);
+  }
+
+  private enqueueManifestWrite(own: SpawnedChildRecord[]): Promise<void> {
+    this.manifestWrites = this.manifestWrites.then(async () => {
+      // 合并盘上**仍活着、且本进程没有重新 spawn** 的条目：adopt 来的 node/hub
+      // 不在 `this.spawned` 里，但它们属于上一代 gateway 的 manifest（`gateway stop
+      //  --no-keep-nodes` 要能按它找到进程）。死条目顺手丢掉，避免跨代累积。
+      const ownIds = new Set(own.map((child) => child.node_id));
+      const carried = this.carried.filter(
+        (child) => !ownIds.has(child.node_id) && isProcessAlive(child.pid),
+      );
+      const body = [...carried, ...own];
+      if (body.length === 0) {
+        await removeSpawnedChildren(this.options.gatewayDataDir, this.options.instance);
+        return;
+      }
+      await writeSpawnedChildren(this.options.gatewayDataDir, this.options.instance, body);
+    });
+    return this.manifestWrites;
   }
 
   /**
    * 停止本监督器 spawn 的子进程（rollback / SIGTERM）；adopt/external 不动。
    *
-   * `keep: true` = handoff（`gateway restart` 与 `gateway stop --keep-nodes`）：
-   * 一个子进程都不终止，也不动内存/清单，留给新平台按 adopt 判据接管。
+   * `keep: true` = handoff（`gateway restart` 与 `gateway stop` 缺省）：**已就绪**的
+   * 子进程一个都不终止，也不动内存/清单，留给新平台按 adopt 判据接管。
+   * 例外：还没就绪（`started_at` 空）的子进程既没有归属证据、也还没接管端口，
+   * 留着只会变成「没人认识、下次启动还可能撞端口」的孤儿 —— 这种情况下终止它。
    */
   async stop(options?: { keep?: boolean }): Promise<StopSpawnedChildrenResult> {
-    const timeoutMs = this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS;
     const keep = options?.keep === true;
     let stopped = 0;
     let failed = 0;
     let keptNodes = 0;
     let keptHubs = 0;
     const remaining: SpawnedChildRecord[] = [];
+    const stoppedChildren: StoppedChildDetail[] = [];
+    // 0.55：先置停止旗标——后台 `settle()` 里的就绪/健康轮询立即收尾，不再把
+    // 「我们正在停」写成节点失败事件。
+    if (!keep) this.stopping = true;
     await Promise.all(
       this.spawned.map(async (child) => {
         // 就绪前条目（started_at 空）只在本进程内存中，按 pid 活性回滚；
@@ -843,41 +1217,48 @@ export class NodeSupervisor {
         const owns =
           child.started_at === '' ? isProcessAlive(child.pid) : await recordOwnsPid(child);
         if (!owns) return;
-        if (keep) {
+        if (keep && child.started_at !== '') {
           if (child.kind === 'hub') keptHubs += 1;
           else keptNodes += 1;
           return;
         }
-        const ok =
-          this.options.terminate !== undefined
-            ? await this.options.terminate(child.pid)
-            : await terminateChild(child.pid, {
-                platform: this.platform,
-                runCommand: this.runCommand,
-                sleep: this.sleep,
-                timeoutMs,
-              });
-        if (ok) stopped += 1;
-        else {
+        // keep 路径下走到这里 = 还没就绪的子进程：没有归属证据、也还没接管端口，
+        // 留着只会变孤儿（下次启动还可能撞端口），所以照样终止。
+        const ok = await this.terminatePid(child.pid);
+        const kind: 'node' | 'hub' = child.kind === 'hub' ? 'hub' : 'node';
+        if (ok) {
+          stopped += 1;
+          stoppedChildren.push({ name: child.name, kind, pid: child.pid });
+        } else {
           failed += 1;
           remaining.push(child);
         }
-        const info = this.infos.get(child.node_id);
-        if (info !== undefined) info.state = ok ? 'down' : info.state;
+        if (ok && child.kind !== 'hub') {
+          // 本进程管理的子进程已停止：状态机记为不可用（原因写清是主动停的）。
+          const info = this.infos.get(child.node_id);
+          if (info !== undefined && info.state !== 'failed') {
+            this.setState(
+              { nodeId: info.nodeId, name: info.name, dataDir: info.dataDir },
+              'failed',
+              { spawned: info.spawned, pid: child.pid, reason: 'stopped by gateway' },
+            );
+          }
+        }
       }),
     );
     if (keep) {
       // 内存与 manifest 都不动：留着的子进程仍然「属于本进程」，盘上条目也仍然准确。
-      return { stopped, failed, kept: { nodes: keptNodes, hubs: keptHubs } };
+      //  只可能来自「还没就绪就被终止」的那几个（见上面的例外）。
+      return {
+        stopped,
+        failed,
+        kept: { nodes: keptNodes, hubs: keptHubs },
+        ...(stoppedChildren.length > 0 ? { stoppedChildren } : {}),
+      };
     }
     this.spawned = remaining;
-    if (remaining.length === 0) {
-      await removeSpawnedChildren(this.options.gatewayDataDir, this.options.instance).catch(
-        () => undefined,
-      );
-    } else {
-      await this.writeManifest().catch(() => undefined);
-    }
+    // 停止路径要写回未终止的条目（含 started_at 空的），所以不过滤。
+    await this.enqueueManifestWrite(remaining).catch(() => undefined);
     return { stopped, failed };
   }
 }
