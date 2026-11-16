@@ -9,9 +9,14 @@
  * - 快照对象在通知时整体替换，`entries` 也必须是新数组：消费者（ChatView / RunDetail）
  *   用 `useMemo(..., [snapshot.entries])` 派生视图，复用可变数组会让流式事件不触发重算，
  *   表现为“必须刷新才看到内容”。
- * - **锚点事件不参与按 run 裁剪**：`run.started` / `user.message` / 终态事件承载
- *   `session_id`、`input`、`status`，裁掉就会让整段 live run 从会话时间线消失（见
- *   `RUN_ANCHOR_EVENT_TYPES`）。`session_id` 另外按 run 记住，裁剪后仍能归属会话。
+ * - **锚点事件不参与裁剪**（按 run 的两道闸都算）：`run.started` / `user.message` / 终态
+ *   事件承载 `session_id`、`input`、`status`，裁掉就会让整段 live run 从会话时间线消失
+ *   （见 `RUN_ANCHOR_EVENT_TYPES`）。`session_id` 另外按 run 记住，裁剪后仍能归属会话。
+ *   按 run 的那道闸 0.53 起就护锚点；**总量那道闸 0.55 才护** —— 旧实现从环头
+ *   `entries.shift()`，锚点与内容一视同仁，于是「某个 run 的内容还在环里、它的终态却
+ *   已经被挤出去」是可能的：重折叠 / 重连重建出来的视图是一条**永远 `running`** 的
+ *   run（`superseded` 只救得了有后继 run 的那些，会话最后一条 run 没有后继，只能等
+ *   会话快照）。口径与上界见 `trimEntries`。
  * - **单游标**（`clientTimelineSeq`）：前端只持**一个**游标（ADR-105 §6 / §7 的
  *   `client_timeline_seq`），回填按**一个区间** `[start_seq, end_seq]` 一次拿全
  *   （`applyTimelineRange`），四条校验（连续性 / `count` / 边界 / 重复）任一不成立就
@@ -79,6 +84,18 @@ import { type ItemSink, LiveItemStore } from './live-items';
 export const MAX_EVENTS_PER_RUN = 5000;
 
 /**
+ * 总量裁剪时从环头往后扫「最旧的可裁条目」的最大步数。
+ *
+ * 环头若堆着一大段**受保护的锚点**（病态流：一个 run 里几千条 `user.message`），逐条跳过
+ * 会把每次裁剪退化成 O(锚点数)。超过这个步数就按「最老的 run 整组丢」
+ * （`dropOldestRunGroup`）—— 这也是口径上本来就对的粒度：那个 run 的内容本来也要被裁光。
+ *
+ * 512 的取法：正常流里一个 run 的锚点是 2~5 条（`run.started` / `user.message` / 终态 /
+ * 成员边界），512 远大于它，所以这条出口只在病态流上走到。
+ */
+export const MAX_TRIM_SCAN = 512;
+
+/**
  * **`EPOCH_IDLE_MS` 已删除（0.55）**：那张「400ms 没新帧就认为这趟发完了」的空闲猜测不再
  * 存在。结趟改吃两条**显式事实**，都不是时钟：
  *
@@ -106,18 +123,31 @@ export const MAX_EVENTS_PER_RUN = 5000;
  * 单个 run；换范围时 `clear()`），所以这个数正常情况下摸不到 —— 它只是防止某个
  * 订阅范围异常宽时把内存吃爆。与 `MAX_EVENTS_PER_RUN` 同比抬高（10000 → 20000），
  * 保证「两个满额 run」不会被总量闸门提前裁掉。
+ *
+ * **这个上限是硬的**：裁剪后环长度恒 ≤ `maxEventsTotal`（唯一例外：剩下的每一条都是
+ * **最新那条 run** 的锚点 —— 那条不许裁，见 `trimEntries`；此时上界退化为
+ * `maxEventsPerRun`，仍然有界）。超长会话（实测单会话 17 万条事件）就是靠它在内存上
+ * 封顶的，所以「护锚点」不能变成「无上限地护」。
  */
 export const MAX_EVENTS_TOTAL = 20000;
 export const NOTIFY_INTERVAL_MS = 50;
 
 /**
- * 单 run 裁剪时必须保留的锚点事件。
+ * 裁剪时必须保留的锚点事件（**两道闸共用**：按 run 的闸 0.53 起、总量那道闸 0.55 起）。
  *
- * 流式增量（`llm.stream.chunk`）按 delta 计，一条长正文就能把同一个 run 的 2000 条
- * 额度吃满；老实现从 run 头部逐条丢，`run.started` 一旦被丢：
+ * 流式增量（`llm.stream.chunk`）按 delta 计，一条长正文就能把同一个 run 的额度吃满；
+ * 老实现从 run 头部逐条丢，`run.started` 一旦被丢：
  * `group.sessionId` 变 undefined → 会话窗口按 sessionId 过滤时整段 live run 消失，
  * 用户表现为「跑的时候看不见正文/工具卡，run 结束刷新后才一次性出现」。
- * 这里只丢非锚点条目，并保留 run 首尾的语义事件。
+ *
+ * 三类条目在这里，判据都是「**丢了就等于那个对象的结局消失**」：
+ * - run 的边界：`run.started`（身份 / input / session_id）与三条终态（`status`、
+ *   `completedAt`、`error`）。终态丢了 → 重建出来的视图是一条永远 `running` 的 run；
+ * - 用户输入：`user.message`（`run.started` 之后到达、可能覆盖 input 的唯一来源）；
+ * - **成员终态**（0.55）：`subagent.delegate.started/completed/failed` 是成员树
+ *   （`state/agents.ts#reduceAgents`）的终态来源，而成员树是**纯 `entries` 派生**的
+ *   ——它没有 `LiveItemStore` 的台账（`closedRuns` / `sessionClosed`）那一层兜底，
+ *   终态被总量裁剪挤掉就是「成员永远在跑」，没有任何机制能救回来。
  */
 export const RUN_ANCHOR_EVENT_TYPES: ReadonlySet<string> = new Set([
   'run.started',
@@ -125,6 +155,9 @@ export const RUN_ANCHOR_EVENT_TYPES: ReadonlySet<string> = new Set([
   'run.completed',
   'run.failed',
   'run.cancelled',
+  'subagent.delegate.started',
+  'subagent.delegate.completed',
+  'subagent.delegate.failed',
 ]);
 
 export interface EventMeta {
@@ -206,6 +239,14 @@ function emptySnapshot(): EventStoreSnapshot {
 export class EventStore {
   private entries: StoredEvent[] = [];
   private runCounts = new Map<string, number>();
+  /**
+   * run_id → 环里属于它的**锚点**条目数（`RUN_ANCHOR_EVENT_TYPES`）。
+   *
+   * 只服务总量裁剪的保护判据 `runHasContent()`（run 的条目数 > 锚点数 ⇒ 它还有内容在
+   * 环里 ⇒ 锚点受保护）。跟着 `runCounts` 走：同两处增删、同一批重建点（见
+   * `noteEntry` / `rebuildCounts`）。不另建数据结构：两次 O(1) 的 Map 操作。
+   */
+  private runAnchorCounts = new Map<string, number>();
   /** run_id → session_id：裁剪掉 `run.started` 后仍能把事件归属到会话。 */
   private runSessions = new Map<string, string>();
   /**
@@ -625,7 +666,7 @@ export class EventStore {
     this.entries.push(entry);
     // 唯一 item 写入点：事件进环之后立刻折叠（裁剪与 item 正交，见 I4）。
     this.sink.ingest(entry);
-    this.runCounts.set(runId, (this.runCounts.get(runId) ?? 0) + 1);
+    this.noteEntry(runId, event.type, 1);
     this.trimEntries(runId);
     this.scheduleNotify();
     return true;
@@ -690,11 +731,8 @@ export class EventStore {
       // entries 必须按 seq 升序（`truncateAfter` 的二分前提）：插入的是更早的一段时重排一次。
       if (insertedBefore)
         this.entries = [...this.entries].sort((left, right) => left.seq - right.seq);
-      this.runCounts.clear();
-      for (const entry of this.entries) {
-        const runId = entry.event.run_id;
-        this.runCounts.set(runId, (this.runCounts.get(runId) ?? 0) + 1);
-      }
+      // 计数表跟着环重建（并入可能改了顺序，也可能插进「更早的段」）。
+      this.rebuildCounts();
     }
     const evicted = this.trimEntries();
     // 左缘（见 `earliestSeq`）：这一段把「已加载窗口」往更早的方向接长了多少。
@@ -761,7 +799,7 @@ export class EventStore {
     };
     this.entries.push(entry);
     this.sink.ingest(entry);
-    this.runCounts.set(runId, (this.runCounts.get(runId) ?? 0) + 1);
+    this.noteEntry(runId, event.type, 1);
   }
 
   /**
@@ -774,6 +812,25 @@ export class EventStore {
    * 每 run 上限：丢该 run 最旧的**非锚点**条目（锚点见 `RUN_ANCHOR_EVENT_TYPES`）。
    * 裁剪只影响传输面：屏上的 item 由 LiveItemStore 物化，不随环缩水（I4）。
    * 返回被清出的条数。
+   *
+   * **总量上限也护锚点（0.55）**，三条口径：
+   *
+   * 1. **有内容的 run，锚点不裁**（`runHasContent`：该 run 的条目数 > 锚点数，O(1)）。
+   *    只要环里还留着这个 run 的任何一条内容，它的 `run.started` / 终态就留着 ——
+   *    「重建出来的视图」要么看见完整边界，要么这个 run 一条都不在环里；**不存在
+   *    「有内容、没终态 ⇒ 永远正在思考」**这一档。旧实现（环头 `shift()`）正是这一档
+   *    的产地：`superseded` 只救得了有后继 run 的那些，会话最后一条 run 没有后继。
+   * 2. **最新那条 run 的锚点一律不裁**（`newestRunId`）：它是会话末轮的结局，没有后继
+   *    run 顶它、台账也可能是空的（新视图 / `dropSession` 之后），丢了就没人救。
+   * 3. **有界**：环长度恒 ≤ `maxEventsTotal`。唯一例外是「剩下的每一条都是最新那条 run
+   *    的锚点」（再裁就正好裁掉第 2 条要保的东西）：此时那条 run 的条目数已被每 run
+   *    上限夹住（`maxEventsPerRun`），所以上界是 `max(maxEventsTotal, maxEventsPerRun)`，
+   *    不是无上限。
+   *
+   * 这也让裁剪顺序自带「整组丢」的语义：一个老 run 的内容按序被裁光之后，它的锚点
+   * 就不再受保护（`runHasContent` 为假）——不会在环里留下一串没有内容的历史锚点。
+   * 环头整段都是受保护锚点时（病态流）走 `dropOldestRunGroup`，仍然按「最老的那一组」
+   * 整组丢，且绝不动最新那条 run。
    */
   private trimEntries(runId?: string): number {
     let evicted = 0;
@@ -782,25 +839,120 @@ export class EventStore {
       while (over > 0) {
         const index = this.oldestEvictableIndex(id);
         if (index < 0) break;
-        this.entries.splice(index, 1);
-        const next = (this.runCounts.get(id) ?? 1) - 1;
-        if (next <= 0) this.runCounts.delete(id);
-        else this.runCounts.set(id, next);
+        this.removeEntryAt(index);
         over -= 1;
         evicted += 1;
       }
     }
-    // 总上限：从最旧开始丢。
+    // 总量上限：从最旧的**可裁**条目开始丢（受保护的锚点跳过，见上面的口径）。
     while (this.entries.length > this.maxEventsTotal) {
-      const removed = this.entries.shift();
-      if (!removed) break;
-      const removedRun = removed.event.run_id;
-      const remaining = (this.runCounts.get(removedRun) ?? 1) - 1;
-      if (remaining <= 0) this.runCounts.delete(removedRun);
-      else this.runCounts.set(removedRun, remaining);
-      evicted += 1;
+      const index = this.oldestEvictableTotalIndex(MAX_TRIM_SCAN);
+      if (index >= 0) {
+        this.removeEntryAt(index);
+        evicted += 1;
+        continue;
+      }
+      // 环头 `MAX_TRIM_SCAN` 条全是受保护锚点 ⇒ 那是「最老的那一组」，整组丢（口径见下）。
+      const dropped = this.dropOldestRunGroup(MAX_TRIM_SCAN);
+      if (dropped === 0) break;
+      evicted += dropped;
     }
     return evicted;
+  }
+
+  /** 从环里删掉第 `index` 条并同步两张计数表（两道闸共用；返回是否真删了）。 */
+  private removeEntryAt(index: number): boolean {
+    const removed = this.entries.splice(index, 1)[0];
+    if (removed === undefined) return false;
+    this.noteEntry(removed.event.run_id, removed.event.type, -1);
+    return true;
+  }
+
+  /** 一个 run 的条目 / 锚点计数（`delta` = +1 进环、−1 出环；两张表必须同步）。 */
+  private noteEntry(runId: string, type: string, delta: 1 | -1): void {
+    const total = (this.runCounts.get(runId) ?? 0) + delta;
+    if (total <= 0) this.runCounts.delete(runId);
+    else this.runCounts.set(runId, total);
+    if (!RUN_ANCHOR_EVENT_TYPES.has(type)) return;
+    const anchors = (this.runAnchorCounts.get(runId) ?? 0) + delta;
+    if (anchors <= 0) this.runAnchorCounts.delete(runId);
+    else this.runAnchorCounts.set(runId, anchors);
+  }
+
+  /** 按环里的条目重建两张计数表（批量并入 / 截断 / 语义删除之后，O(n) 低频路径）。 */
+  private rebuildCounts(): void {
+    this.runCounts.clear();
+    this.runAnchorCounts.clear();
+    for (const entry of this.entries) this.noteEntry(entry.event.run_id, entry.event.type, 1);
+  }
+
+  /** 这个 run 还有**内容**（非锚点条目）在环里吗 —— 总量裁剪的保护判据（O(1)）。 */
+  private runHasContent(runId: string): boolean {
+    return (this.runCounts.get(runId) ?? 0) > (this.runAnchorCounts.get(runId) ?? 0);
+  }
+
+  /** 环里**最新**那条 run（末条条目的 run）：它的锚点一律不裁（见 `trimEntries` 口径 2）。 */
+  private newestRunId(): string | undefined {
+    return this.entries[this.entries.length - 1]?.event.run_id;
+  }
+
+  /**
+   * 从环头往后找最旧的可裁条目下标（最多扫 `limit` 步）；`-1` = 这几步里没有可裁的。
+   *
+   * 「可以裁」= 非锚点，或锚点但不受保护（该 run 在环里没有内容 / 不是最新那条 run）。
+   * 复杂度：一个 run 的锚点紧挨着它自己的内容，所以通常第一步就命中；同一个 run 的锚点
+   * 数量被每 run 上限夹住，扫描被 `limit` 再夹一道（超了走 `dropOldestRunGroup`）。
+   */
+  private oldestEvictableTotalIndex(limit: number): number {
+    const newestRunId = this.newestRunId();
+    const end = Math.min(this.entries.length, limit);
+    for (let index = 0; index < end; index += 1) {
+      const entry = this.entries[index];
+      if (entry === undefined) continue;
+      if (!RUN_ANCHOR_EVENT_TYPES.has(entry.event.type)) return index;
+      const runId = entry.event.run_id;
+      if (runId === newestRunId) continue;
+      if (!this.runHasContent(runId)) return index;
+    }
+    return -1;
+  }
+
+  /**
+   * 把「最老的那一组 run」整个从环里删掉（总量裁剪走到「环头全是受保护锚点」时的出口）。
+   *
+   * 为什么整组删：环头这一段都是同一个 run 的锚点（`user.message` 密集的病态流），逐条跳
+   * 太贵（`oldestEvictableTotalIndex` 的 `limit` 就是为了不在这上面退化），而这个 run 的
+   * 内容本来也快被裁光了。**绝不动最新那条 run**：它的终态没有人能救（没有后继 run 顶它、
+   * 台账也可能是空的），口径见 `trimEntries` 的第 2 条。
+   *
+   * 返回删掉的条数（0 = 环里只剩最新那条 run 了 ⇒ 宁可超上限也不删）。
+   */
+  private dropOldestRunGroup(limit: number): number {
+    const newestRunId = this.newestRunId();
+    const end = Math.min(this.entries.length, limit);
+    let runId: string | undefined;
+    for (let index = 0; index < end; index += 1) {
+      const entry = this.entries[index];
+      if (entry === undefined) continue;
+      if (entry.event.run_id === newestRunId) continue;
+      runId = entry.event.run_id;
+      break;
+    }
+    if (runId === undefined) return 0;
+    const kept: StoredEvent[] = [];
+    let dropped = 0;
+    for (const entry of this.entries) {
+      if (entry.event.run_id === runId) {
+        dropped += 1;
+        continue;
+      }
+      kept.push(entry);
+    }
+    if (dropped === 0) return 0;
+    this.entries = kept;
+    this.runCounts.delete(runId);
+    this.runAnchorCounts.delete(runId);
+    return dropped;
   }
 
   /**
@@ -841,11 +993,7 @@ export class EventStore {
       return 0;
     }
 
-    this.runCounts.clear();
-    for (const entry of this.entries) {
-      const runId = entry.event.run_id;
-      this.runCounts.set(runId, (this.runCounts.get(runId) ?? 0) + 1);
-    }
+    this.rebuildCounts();
     for (const runId of removedRunIds) {
       // 已没有条目的 run 不再需要 run→session 映射（留着会让新事件串到旧归属）。
       if (!this.runCounts.has(runId)) this.runSessions.delete(runId);
@@ -891,11 +1039,10 @@ export class EventStore {
     }
 
     this.entries = this.entries.slice(0, low);
-    this.runCounts.clear();
+    this.rebuildCounts();
     this.runSessions.clear();
     for (const entry of this.entries) {
       const runId = entry.event.run_id;
-      this.runCounts.set(runId, (this.runCounts.get(runId) ?? 0) + 1);
       const owner = entry.sessionId ?? eventSessionId(entry.event);
       if (owner !== undefined) this.runSessions.set(runId, owner);
     }
@@ -939,6 +1086,7 @@ export class EventStore {
    */
   clear(nextSeq = 0): void {
     this.entries = [];
+    this.runAnchorCounts.clear();
     this.runCounts.clear();
     this.runSessions.clear();
     this.clientTimelineSeq = nextSeq;
