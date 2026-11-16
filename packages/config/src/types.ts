@@ -439,6 +439,18 @@ export interface GatewayConfig {
   proxySecretEnv?: string;
 }
 
+/**
+ * 0.56：`node:` 段（对应 `vessel node start`），`serve:` 的**规范新名**。
+ *
+ * 为什么改名：0.55 之后已经没有 `vessel serve` 命令了，「serve:」这个名字会让
+ * 用户以为它在配一个不存在的东西。字段形状与 `ServeConfig` 完全一致，
+ * 由 loader 归一化后仍落到运行时的 `config.serve`（内部单一真源）。
+ *
+ * 优先级：两段同时出现时 **`node:` 赢**，被覆盖的 `serve:` 键逐项警告；
+ * 只写 `serve:` → 仍然生效，但启动与 `doctor` 都会提示改成 `node:`（0.57 移除）。
+ */
+export type NodeConfig = ServeConfig;
+
 /** Transport 配置（0.2；0.22.1 只剩 in-process） */
 export interface TransportConfig {
   kind?: 'in-process';
@@ -649,6 +661,22 @@ export interface ConfigSnapshot {
   paths: { user: string; project: string };
 }
 
+/**
+ * 0.56：单一根密钥（`<dataDir>/root-secret`）的覆盖点。
+ *
+ * 只读环境变量名，**不接受内联密钥**（避免密钥落盘到 config）。
+ */
+export interface SecurityConfig {
+  /**
+   * 根密钥所在环境变量名。
+   *
+   * 未配置（或变量为空）→ 使用 `<dataDir>/root-secret`（首次启动自动生成 0600）；
+   * 配置后该环境变量**优先于文件**，值可以是 base64（恰好 32 字节）或 ≥32 字节的
+   * 原始字符串。用途是容器 / systemd 只注入密钥、不落盘的部署形态。
+   */
+  rootSecretEnv?: string;
+}
+
 /** 权限配置（0.6.1；交互确认与免确认规则） */
 export interface PermissionConfig {
   /**
@@ -774,8 +802,17 @@ export interface VesselConfig {
   mcpServers?: Record<string, McpServerConfig>;
   /** 0.3：durable run（checkpoint / resume） */
   durable?: DurableConfig;
-  /** 0.3：gateway 监听与 TLS */
+  /** 0.3：gateway 监听与 TLS（**deprecated**：0.56 起规范名是 `node:`） */
   serve?: ServeConfig;
+  /**
+   * 0.56：`node:` 段（规范新名；`serve:` 退化为兼容别名）。
+   *
+   * loader 归一化后**不会**保留这个键：内容合并进 `serve`（node 优先），
+   * 运行时只有一份真源。这里保留类型是为了让用户层 / CLI 层能安全地写 `node:`。
+   */
+  node?: NodeConfig;
+  /** 0.56：单一根密钥（派生 token 的来源） */
+  security?: SecurityConfig;
   /** 0.49：平台 Gateway（与 node 侧 serve 分区） */
   gateway?: GatewayConfig;
   /** S5：hub 控制面 */

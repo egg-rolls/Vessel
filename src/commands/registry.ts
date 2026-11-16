@@ -37,6 +37,8 @@ import { sessionMigrateCommand } from '../session-migrate-command';
 import { statusCommand } from '../status-command';
 import { runTeamCommand } from '../team-command';
 import { listTools } from '../tools-list';
+// 0.56：`vessel token show|list|rotate`（根密钥 / 派生 token）。
+import { tokenListCommand, tokenRotateCommand, tokenShowCommand } from '../token-command';
 import { tracePruneCommand } from '../trace-command';
 import { ui } from '../ui-style';
 import { attentionCommand } from './attention';
@@ -214,6 +216,43 @@ export const cliCommands: readonly CliCommand[] = [
           dryRun: command.dryRun,
           json: command.json,
         }),
+      );
+    },
+  },
+  {
+    name: 'token',
+    match: (args) => (args.tokenCommand ?? null) !== null,
+    run: async (args) => {
+      const command = args.tokenCommand ?? null;
+      if (command === null) return 1;
+      if (command.kind === 'show') {
+        return printCommandResult(
+          await tokenShowCommand(
+            {
+              purpose: command.purpose,
+              ...(command.id !== undefined ? { id: command.id } : {}),
+              json: command.json,
+            },
+            {
+              allowNonInteractive: command.allowNonInteractive,
+              ...(command.dataDir !== undefined ? { dataDir: command.dataDir } : {}),
+            },
+          ),
+        );
+      }
+      if (command.kind === 'list') {
+        return printCommandResult(
+          await tokenListCommand(
+            { json: command.json },
+            { ...(command.dataDir !== undefined ? { dataDir: command.dataDir } : {}) },
+          ),
+        );
+      }
+      return printCommandResult(
+        await tokenRotateCommand(
+          { yes: command.yes, json: command.json },
+          { ...(command.dataDir !== undefined ? { dataDir: command.dataDir } : {}) },
+        ),
       );
     },
   },
