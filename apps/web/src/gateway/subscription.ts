@@ -41,12 +41,14 @@ import {
   cursorTarget,
   MAX_TIMELINE_SEGMENTS,
   planBackfill,
+  planEarlierRange,
   planRange,
   readTimelineCursor,
   readTimelineHelloSegment,
   readTimelinePage,
   type TimelineCursor,
   type TimelineRangeHeader,
+  tailWindowStart,
 } from './timeline-protocol';
 import type { HelloInfo } from './types';
 
@@ -199,6 +201,8 @@ export class SubscriptionController {
   private readonly legacyScopes = new Set<string>();
   /** 区间回填在跑（防重入：同一轮里 apply / 路由抖动都不该叠第二次）。 */
   private backfilling = false;
+  /** 更早一段（滚动加载）在途：滚动事件很密，同一时刻只允许一段。 */
+  private loadingEarlier = false;
   /**
    * 连接级 hello 时的服务端最新 seq。重连后自动重新收敛时用它作为
    * `since=currentSeq` 的锚点：连接级回放已经发生，Team / 无范围订阅不必再回放一遍。
@@ -379,6 +383,11 @@ export class SubscriptionController {
    * 单游标回填 = **续拉循环**：`after = 游标`，一段 ≤ `TIMELINE_SEGMENT_MAX_EVENTS` 条，
    * 每段独立过四条校验，跑完接着下一段，直到 `游标 == min(wal_head, published_head)`。
    *
+   * **首屏必须有界：一次刷新推 19 万帧会把 WS 压死（2026-11-16 事故）。** 所以循环的起点
+   * 不是 1，而是**尾部窗口**的左端（`tailWindowStart(target)`）：19 万 seq 的会话刷新一次
+   * 只推 2000 条（一段），更早的内容由 `loadEarlier()` 在滚到顶时一段一段补。
+   * 任何「刷新就续拉到会话末尾」的形态都是这次事故的复现。
+   *
    * 为什么必须分段（而不是"一次声明整段 +
              + 抬高上限"）：服务端每趟订阅最多送 2000 条 /
    * 2 MiB，背压时停且不推游标 —— 一次声明 17 万条的结果是"声明了但发不完"，于是客户端的
@@ -422,8 +431,14 @@ export class SubscriptionController {
         // 游标作废（服务端重启 / 会话被冻结后重开）：从 1 重拉，item 一起作废。
         this.eventStore.truncateAfter(0);
       }
+      // **首屏必须有界**：刷新只回填尾部窗口 `[tailWindowStart(target) .. target]`。
+      // 一次刷新推 19 万帧会把 WS 压死（2026-11-16 事故）—— 那次就是从这里一路续拉到
+      // 会话末尾。游标落后于窗口左端时**直接锚到左端**（不从 1 追），更早的段由
+      // `loadEarlier()` 在滚到顶时一段一段补（`EventStore#hasEarlier`）。
+      const floor = tailWindowStart(target) - 1;
       for (let index = 0; index < MAX_TIMELINE_SEGMENTS; index += 1) {
-        const after = this.eventStore.currentSeq;
+        let after = this.eventStore.currentSeq;
+        if (after < floor) after = floor;
         if (after >= target) break;
         const header = planBackfill(cursor, after);
         if (header === undefined) break;
@@ -484,10 +499,87 @@ export class SubscriptionController {
           `[timeline-backfill] session=${sessionId} segments=${String(report.segments)}` +
             ` declared=${String(report.declared)} fetched=${String(report.fetched)}` +
             ` entries=${String(report.received)}` +
-            ` end=${String(report.end)} target=${String(report.target)}`,
+            ` end=${String(report.end)} target=${String(report.target)}` +
+            // **首屏必须有界**：`target - end` 的差就是「首屏没加载的那一段」，它由
+            // `hasEarlier` 表达、由滚动加载补（见 `loadEarlier`）。`items` 是屏上总量，
+            // 用来对数「分段加载 == 整份加载」。
+            ` items=${String(this.itemCount())}`,
         );
       }
     }
+  }
+
+  /**
+   * 滚动到顶时向**更早**要一段（分段滚动加载，`EventStore#hasEarlier` 为真时才有事做）。
+   *
+   * 为什么在订阅层而不在 store 里：这一段要「读 `sessions.get.event_cursor` + 按区间拉
+   * `sessions.events` + 四条校验 + 前缀收缩重试」，那就是 `readCursor` / `pullRange` 那一套
+   * （与回填**同一套代码**，不另写一份）。store 只表达状态（`hasEarlier` /
+   * `earliestLoadedSeq`），发起请求的职责留在这里。
+   *
+   * **首屏必须有界：一次刷新推 19 万帧会把 WS 压死（2026-11-16 事故）。** 首屏只加载
+   * 尾部窗口（`TIMELINE_TAIL_WINDOW_EVENTS`），更早的内容就靠这里：每次一段
+   * `[左缘 - 窗口 .. 左缘 - 1]`，成功之后左缘随之前移（下一段从新的左缘往前接），
+   * 到 1 就 `hasEarlier === false`，滚动不再发请求。
+   *
+   * 失败处置与回填同口径：同一段要两次仍不过 ⇒ 记一条缺口（console + 上报），停手；
+   * **界面上不出现任何新元素**（用户口径：前端要清爽），滚动加载的可见反馈只有内容本身
+   * 在顶部慢慢长出来。
+   */
+  async loadEarlier(): Promise<void> {
+    if (this.loadingEarlier) return;
+    const sessionId = this.eventStore.scopeSessionId;
+    if (sessionId === undefined || !this.eventStore.hasEarlier) return;
+    this.loadingEarlier = true;
+    try {
+      let cursor: TimelineCursor | undefined;
+      try {
+        cursor = await this.readCursor(sessionId);
+      } catch {
+        // 旧 gateway / 会话不存在：没有 timeline 就没有更早的段（与回填同口径）。
+        return;
+      }
+      if (cursor === undefined) return;
+      // 期间换了会话 / 换出 chat 范围：这一段属于别的会话，不许并进来。
+      if (this.eventStore.scopeSessionId !== sessionId) return;
+      const from = this.eventStore.earliestLoadedSeq;
+      const header = planEarlierRange(cursor, from);
+      if (header === undefined) return;
+      let outcome = await this.pullRange(sessionId, header);
+      if (outcome.ok === false) outcome = await this.pullRange(sessionId, header);
+      if (outcome.ok === false) {
+        this.eventStore.reportTimelineGap({
+          from_seq: header.start_seq,
+          to_seq: header.end_seq,
+          source: 'fetch',
+          rule: 3,
+          expected: `[${String(header.start_seq)}, ${String(header.end_seq)}] 可读`,
+          received: `这一段要了两次都没通过（实收 ${String(outcome.fetched)}）`,
+          expectedCount: header.count,
+          receivedCount: outcome.fetched,
+          at: Date.now(),
+        });
+        return;
+      }
+      this.eventStore.clearTimelineGap();
+      console.info(
+        `[timeline-earlier] session=${sessionId} from=${String(from)}` +
+          ` start=${String(header.start_seq)} end=${String(header.end_seq)}` +
+          ` fetched=${String(outcome.fetched)} merged=${String(outcome.merged)}` +
+          ` floor=${String(this.eventStore.earliestLoadedSeq)}` +
+          ` hasEarlier=${String(this.eventStore.hasEarlier)}` +
+          ` items=${String(this.itemCount())}`,
+      );
+    } finally {
+      this.loadingEarlier = false;
+    }
+  }
+
+  /** 屏上 item 总数（滚动加载的观测数：内容「长出来」了多少）。 */
+  private itemCount(): number {
+    let total = 0;
+    for (const group of this.eventStore.items.getSnapshot().groups) total += group.items.length;
+    return total;
   }
 
   /**

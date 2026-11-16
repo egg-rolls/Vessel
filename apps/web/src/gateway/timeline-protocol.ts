@@ -252,6 +252,11 @@ function holeCount(from: number, to: number, holes: readonly TimelineHoleRange[]
  *
  * 时间不参与：ADR-105 §3.4 明文「UI 不得自行按 ts 排 / 按 ts 截断」，所以这里没有任何
  * 时间截断参数（那一套随三源读路径一起删除，不再有第二个入口）。
+ *
+ * **首屏必须有界：一次刷新推 19 万帧会把 WS 压死（2026-11-16 事故）。** 这个函数本身只
+ * 算「下一段」；「从哪里开始」由调用方定 —— `runTimelineBackfill` 的首屏起点是
+ * {@link tailWindowStart}（尾部窗口），更早的内容由 {@link planEarlierRange} 一段一段补，
+ * 不再有「刷新就续拉到末尾」的形态。
  */
 export function planBackfill(
   cursor: TimelineCursor,
@@ -456,6 +461,10 @@ export interface TimelinePage {
 /**
  * 一段回填的**条数**上限（不是"整段会话的上限"）。
  *
+ * **首屏必须有界：一次刷新推 19 万帧会把 WS 压死（2026-11-16 事故）。** 所以这个常量
+ * 既是一段的上限，也是首屏窗口（{@link TIMELINE_TAIL_WINDOW_EVENTS}）的量级；任何
+ * "把首屏上限抬到会话长度"的改动都在复现那次事故。
+ *
  * 为什么按段而不是抬大 cap：服务端 `sendTimelineEpoch` 每趟最多 2000 条 / 2 MiB（背压时停、
  * 不推游标），`sessions.events` 也是 500/页 —— 客户端跟着按段续拉，每段都能过四条校验、
  * 每段都能独立重试。把上限抬到"覆盖 17 万条"只是把问题推后（18 万、20 万照样炸），
@@ -464,9 +473,48 @@ export interface TimelinePage {
 export const TIMELINE_SEGMENT_MAX_EVENTS = 2000;
 
 /**
+ * **首屏尾部窗口**：一次刷新只回填 `[target - 1999 .. target]` 这么多条。
+ *
+ * **首屏必须有界：一次刷新推 19 万帧会把 WS 压死（2026-11-16 事故）。** 19 万 seq 的会话
+ * 曾经在刷新时从 1 一路续拉到末尾（90 多段 × 2000 条），WebUI↔Gateway 直接断连；更早的
+ * 内容改为**滚动到顶时一段一段地要**（`planEarlierRange` + `subscription.loadEarlier`）。
+ *
+ * 取值与段大小同量级（2000）：首屏就是**一段**，`[timeline-backfill]` 那行的
+ * `fetched` 应当 ≈ 这个数，而不是会话长度。实时尾随不受它影响（新事件照常从游标继续收）。
+ */
+export const TIMELINE_TAIL_WINDOW_EVENTS = 2000;
+
+/**
+ * 尾部窗口的左端：`[tailWindowStart(target) .. target]` 就是首屏回填的**唯一**区间。
+ *
+ * 会话比窗口短时就是 1（整段会话都在窗口里）；`target <= 0`（空会话）也返回 1。
+ */
+export function tailWindowStart(target: number): number {
+  if (!Number.isInteger(target) || target < 1) return 1;
+  return Math.max(1, target - TIMELINE_TAIL_WINDOW_EVENTS + 1);
+}
+
+/**
+ * 更早一段（分段滚动加载）的区间：`[max(1, before - WINDOW) .. before - 1]`。
+ *
+ * `before` = 已经加载到的窗口**左缘**（`EventStore#earliestLoadedSeq`），不是单游标
+ * `client_timeline_seq` —— 那个是往前的右端（重连 `since` 用），只许前进，不能拿它当
+ * 「还没加载到哪」用。左缘 <= 1 ⇒ 没有更早的段了（`undefined`）。
+ */
+export function planEarlierRange(
+  cursor: TimelineCursor,
+  before: number,
+): TimelineRangeHeader | undefined {
+  const edge = Number.isInteger(before) && before > 0 ? before : 0;
+  if (edge <= 1) return undefined;
+  return planRange(Math.max(1, edge - TIMELINE_TAIL_WINDOW_EVENTS), edge - 1, cursor);
+}
+
+/**
  * 续拉段数硬上限（安全网，不是正常出口）：200 段 × 2000 条 = 40 万条。
  *
  * 正常会话在几十段内追平；触顶说明服务端游标不前进（真正的故障），这时才报缺口。
+ * **首屏不得靠它兜底**：首屏的界是 `TIMELINE_TAIL_WINDOW_EVENTS`（一次事故的教训）。
  */
 export const MAX_TIMELINE_SEGMENTS = 200;
 
@@ -510,6 +558,10 @@ export async function collectTimelineRange(
     let maxSeq = since;
     for (const event of page.events) {
       if (event.seq <= since) continue;
+      // 页是按 `limit` 给的、**不认识区间的右端**：最后一页可能越过 `end_seq`（分段滚动
+      // 加载的段起点不再是 2000 的整数倍，越界就成了常态）。越过的那部分不属于本区间，
+      // 收下就会让「边界 / count」两条校验必然报假缺口（真机上就是这么撞到的）。
+      if (event.seq > header.end_seq) continue;
       events.push(event);
       if (event.seq > maxSeq) maxSeq = event.seq;
     }

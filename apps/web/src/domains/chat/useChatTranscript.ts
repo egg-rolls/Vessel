@@ -146,7 +146,7 @@ export function useChatTranscript({
   // （DESIGN.md I1 / I4 / I6）。
   // `snapshot.entries` 在本文件里只剩两个**传输面**消费者（标记逐处标明，见 tripwire）：
   // 成员树（`reduceAgents`）与终态刷新扫描（找 `run.completed` 等触发一次 detail 刷新）。
-  const { eventStore } = useConnection();
+  const { eventStore, subscription } = useConnection();
   const itemStore = eventStore.items;
   const itemSnapshot = useSyncExternalStore(
     itemStore.subscribe,
@@ -521,15 +521,36 @@ export function useChatTranscript({
   // useLayoutEffect 依赖，新身份会让锚点回填 effect 每渲染都重跑）。
   const earlierStateRef = useRef({ localHidden: 0, nextBefore: undefined as string | undefined });
   earlierStateRef.current = { localHidden: transcriptStart, nextBefore: windowNextBefore };
-  const loadEarlier = useCallback(() => {
+  /**
+   * 滚到顶时向更早要一屏：**两条时间轴各推一步**。
+   *
+   * 1. 历史消息窗口（会话记录 `sessions.messages` 分页）：先扩本地可见窗口，耗尽后拉
+   *    服务端上一页 —— 这是「对话正文」那条轴，老逻辑，一行不动。
+   * 2. 事件时间线段（`subscription.loadEarlier`）：首屏只加载了尾部窗口，再往前的
+   *    run / 工具卡 / 提示卡要靠它一段一段补（`EventStore#hasEarlier`）。
+   *
+   * 为什么两条一起推、而不是「先到底再拉事件」：这条时间线是**混排**的（历史消息与 live
+   * item 同一列表），只推一条会让顶部出现「历史挖到底、卡片还缺一大段」的半屏。两条都
+   * 是幂等的段式请求，一起推的代价只有一次多余的往返。
+   *
+   * 返回 Promise 是给滚动区用的：锚点回填要知道「这一趟什么时候落地」（见
+   * `TranscriptWindow#requestEarlier`），否则没有可见增长的那一段会把锚点扣住 3 秒。
+   */
+  const loadEarlier = useCallback(async () => {
     const { localHidden, nextBefore } = earlierStateRef.current;
     // 先扩本地可见窗口；耗尽后（本地下标已到 0）再拉服务端上一页。
     setTranscriptLimit((value) => value + TRANSCRIPT_WINDOW);
-    if (localHidden > 0 || nextBefore === undefined || !selectedId) return;
-    void loadEarlierDetail(client, selectedId, { epoch });
-  }, [client, epoch, loadEarlierDetail, selectedId]);
-  // 还有更早的分页没加载：本地窗口外还有可见消息，或服务端还有 `next_before`。
-  const hasEarlier = transcriptStart > 0 || windowHasEarlier(selectedWindow);
+    const messageStep =
+      localHidden > 0 || nextBefore === undefined || !selectedId
+        ? undefined
+        : loadEarlierDetail(client, selectedId, { epoch });
+    // 事件时间线那一段：`loadEarlier` 自己判 `hasEarlier` / 在途 / 作用域，无更早时是空操作。
+    const timelineStep = subscription.loadEarlier();
+    await Promise.all([messageStep, timelineStep]);
+  }, [client, epoch, loadEarlierDetail, selectedId, subscription]);
+  // 还有更早的分页没加载：本地窗口外还有可见消息，或服务端还有 `next_before`，
+  // 或事件时间线还没补到 seq 1（**首屏只加载尾部窗口**，见 event-store 的 `hasEarlier`）。
+  const hasEarlier = transcriptStart > 0 || windowHasEarlier(selectedWindow) || snapshot.hasEarlier;
   const hasTranscript = visibleTranscript.length > 0;
 
   return {

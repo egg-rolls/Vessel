@@ -127,6 +127,10 @@ function useEnteringItems(
  *
  * 历史分页是**无感**的：没有「加载更早」按钮，也没有「仅显示最近 N 条」提示；
  * 滚到顶部阈值内自动前插一页，并用 `scrollHeight` 差值回填 `scrollTop` 保住视觉锚点。
+ *
+ * 「更早」有**两条轴**，滚到顶时各推一步（`onLoadEarlier`）：历史消息分页（会话记录）与
+ * 事件时间线段（首屏只加载尾部窗口，见 `EventStore#hasEarlier`）。两条共用这一个滚动
+ * 触发器与同一个锚点回填 —— **不新增任何控件 / 提示条**（用户口径：前端要清爽）。
  */
 export function TranscriptWindow({
   hasToken,
@@ -179,7 +183,12 @@ export function TranscriptWindow({
   hydrating: boolean;
   hydrateStale: string | null;
   hasTranscript: boolean;
-  /** 历史窗口之外还有更早的消息（滚到顶自动前插，不再有按钮 / 提示）。 */
+  /**
+   * 更早还有内容（滚到顶自动前插，不再有按钮 / 提示）。
+   *
+   * 两条轴任一为真即为真：历史消息窗口（本地窗口外还有消息 / 服务端还有上一页）**或**
+   * 事件时间线还没补到 seq 1（首屏只加载尾部窗口，见 `EventStore#hasEarlier`）。
+   */
   hasEarlier: boolean;
   visibleGroups: readonly RunGroup[];
   renderedGroups: readonly RunGroup[];
@@ -237,7 +246,13 @@ export function TranscriptWindow({
   /** 发送受理序号（每次受理自增）：变化即贴底，见 `useStickyBottom` 的 `sendTick`。 */
   sendTick: number;
   onRetryDetail: () => void;
-  onLoadEarlier: () => void;
+  /**
+   * 加载更早的一屏（历史消息分页 + 事件时间线段各推一步，见 `useChatTranscript`）。
+   *
+   * 返回 Promise 时，滚动区会在它落地后检查「有没有长高」并据此收口锚点 —— 时间线那一段
+   * 前插的是 item，不改变历史消息窗口长度，锚点回填靠的就是这个信号。
+   */
+  onLoadEarlier: () => void | Promise<void>;
   onConfigureConnection: () => void;
   onGoChat: () => void;
   onEditMessage: (keepMessages: number, text: string) => void;
@@ -275,29 +290,29 @@ export function TranscriptWindow({
       // 3000ms 覆盖「加载更早」的服务端往返；本地扩窗仍在下一帧立即回填。
       if (anchorRef.current === anchor) anchorRef.current = null;
     }, 3000);
-    onLoadEarlier();
+    const settled = onLoadEarlier();
+    if (!(settled instanceof Promise)) return;
+    // 事件时间线那一段前插的是 **item**（历史消息窗口长度不变），所以上面的布局回填
+    // effect 不一定被触发。落地后两帧内按同一套口径收口：长高多少就推多少 scrollTop；
+    // 一点都没长（这一段没有可见内容）就把锚点放掉 —— 否则下一次滚到顶会被扣住 3 秒。
+    // 成功与失败都要收口：请求失败时锚点不能留着（那会让滚动加载卡 3 秒）。
+    const settle = (): void => {
+      window.setTimeout(() => {
+        window.requestAnimationFrame(() => {
+          if (anchorRef.current !== anchor) return; // 布局 effect 已经收口
+          anchorRef.current = null;
+          window.clearTimeout(anchorTimerRef.current);
+          const live = getElement();
+          if (!live) return;
+          const grown = live.scrollHeight - anchor.height;
+          if (grown <= 0) return;
+          live.scrollTop = anchor.top + grown;
+          autoPagesRef.current += 1;
+        });
+      }, 0);
+    };
+    void settled.then(settle, settle);
   }, [hasEarlier, getElement, onLoadEarlier]);
-
-  // 布局阶段回填：前插内容在上方长高多少，就把 scrollTop 推高多少。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 分页长度是回填的显式触发器
-  useLayoutEffect(() => {
-    const anchor = anchorRef.current;
-    if (anchor === null) return;
-    anchorRef.current = null;
-    window.clearTimeout(anchorTimerRef.current);
-    const element = getElement();
-    if (!element) return;
-    const grown = element.scrollHeight - anchor.height;
-    element.scrollTop = anchor.top + Math.max(0, grown);
-    autoPagesRef.current += 1;
-    // 一页还没填满视口（没有滚动条）且还有更早的分页：继续补，直到出现滚动条或没有更多。
-    if (
-      autoPagesRef.current < AUTO_PAGE_BUDGET &&
-      element.scrollHeight <= element.clientHeight + 1
-    ) {
-      requestEarlier();
-    }
-  }, [transcriptWindow.shown.length, getElement, requestEarlier]);
 
   // 可见窗口首条消息的 ts：比它更早的 live item 由 buildTranscriptItems 夹到末尾
   // （turn 锚点 / 窗口夹取 / 伪 run 拆条都在那里，由 check-transcript-items 守）。
@@ -333,6 +348,32 @@ export function TranscriptWindow({
       answeredAsks,
     ],
   );
+
+  // 前插触发器：历史消息页长度变化，或 item 流的**首项**变了。
+  // 后者是事件时间线那一段的特征（更早的段前插 ⇒ 首项换人；追加不会改变首项），
+  // 没有它，「滚动加载的更早内容」长在视口上方时保不住视觉锚点。
+  const firstItemKey = items[0]?.key ?? '';
+
+  // 布局阶段回填：前插内容在上方长高多少，就把 scrollTop 推高多少。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 分页长度 / 首项身份是回填的显式触发器
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    if (anchor === null) return;
+    anchorRef.current = null;
+    window.clearTimeout(anchorTimerRef.current);
+    const element = getElement();
+    if (!element) return;
+    const grown = element.scrollHeight - anchor.height;
+    element.scrollTop = anchor.top + Math.max(0, grown);
+    autoPagesRef.current += 1;
+    // 一页还没填满视口（没有滚动条）且还有更早的分页：继续补，直到出现滚动条或没有更多。
+    if (
+      autoPagesRef.current < AUTO_PAGE_BUDGET &&
+      element.scrollHeight <= element.clientHeight + 1
+    ) {
+      requestEarlier();
+    }
+  }, [transcriptWindow.shown.length, firstItemKey, getElement, requestEarlier]);
 
   // 入场门：只有挂载之后**新追加**的 item 播入场（判据见 useEnteringItems 的头注释）。
   // 历史消息（Transcript 里的 `message` item）不进门 —— 历史加载是回填，不是追加。
