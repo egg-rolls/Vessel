@@ -64,6 +64,7 @@ import { type AttachmentLister, createAttachmentMethods } from './gateway/method
 import {
   DEFAULT_TIMELINE_READ_FROM,
   decideTimelineSubscribe,
+  declareEpochChunk,
   resolveTimelineReadFrom,
   selectTimelinePage,
   TIMELINE_PAGE_LIMIT,
@@ -520,6 +521,14 @@ interface WsData {
   timelineEpoch?: boolean;
   /** 0.54 B1：时间线 epoch 的排他游标（本连接已发到的最大 `timeline_seq`）。 */
   afterTimeline?: number;
+  /**
+   * 0.54 B1 分页：本 epoch 声明的右端（`hello.end_seq`）。
+   *
+   * `end_seq < min(wal_head, published_head)` ⇒ **还有更多**，客户端用
+   * `after_timeline_seq = 收到的末 seq` 续拉。这里存下来只为日志/排障可读，
+   * 以及给将来的自动续拉留一个可观测点（现在不自动续，避免和客户端的续拉撞车）。
+   */
+  timelineEpochEnd?: number;
   /** 0.48 M3：插件 WS 连接；存在时该 WS 不进入 `wsClients`。 */
   pluginWs?: PluginWsConnection;
 }
@@ -1619,30 +1628,54 @@ export function startGateway(opts: GatewayOptions): Gateway {
    * 返回本次 epoch 实际会发送的第一条 seq（供 `res` 对齐）。
    */
   async function sendTimelineEpoch(ws: Ws, segment: TimelineHelloSegment): Promise<number> {
-    sendFrame(ws, helloFrame(segment.start_seq, segment));
-    ws.data.afterTimeline = segment.start_seq - 1;
     const sessionId = ws.data.sessionId;
     const port = opts.timelineRead;
-    if (sessionId === undefined || port === undefined) return segment.start_seq;
     // 只发到**有效右端** = `min(end_seq, published_head)`：未发布尾部允许永远不推送
-    // （pub-i2 的崩溃窗口产物），发它会把「UI 见过的集合 = timeline ∖ 未发布尾部」这条
-    // 恒等式打破，也会让客户端手里的 count 账对不上。
+    // （pub-i2 的崩溃窗口产物）。
     const effectiveEnd = Math.min(segment.end_seq, segment.published_head);
-    const records = await port.readPage(sessionId, {
-      afterSeq: segment.start_seq - 1,
-      untilSeq: effectiveEnd,
-      limit: TIMELINE_PAGE_LIMIT,
+    // 先**取够本 epoch 这一批**再发 hello：声明必须在发帧之前就确定，而声明只允许覆盖
+    // 这一趟真的会送到的区间（分页；见 `declareEpochChunk` 的长注释）。
+    const window: TimelineWireEvent[] = [];
+    if (sessionId !== undefined && port !== undefined && effectiveEnd >= segment.start_seq) {
+      let cursor = segment.start_seq - 1;
+      let bytes = 0;
+      while (
+        window.length < TIMELINE_EPOCH_MAX_EVENTS &&
+        bytes < TIMELINE_EPOCH_MAX_BYTES &&
+        cursor < effectiveEnd
+      ) {
+        const page = await port.readPage(sessionId, {
+          afterSeq: cursor,
+          untilSeq: effectiveEnd,
+          limit: TIMELINE_PAGE_LIMIT,
+        });
+        const ordered = selectTimelinePage(page, cursor + 1, effectiveEnd, TIMELINE_PAGE_LIMIT);
+        if (ordered.length === 0) break;
+        for (const record of ordered) {
+          if (cursor >= effectiveEnd) break;
+          cursor = record.seq;
+          window.push(record);
+          bytes += approximateEventBytes(record);
+          if (window.length >= TIMELINE_EPOCH_MAX_EVENTS || bytes >= TIMELINE_EPOCH_MAX_BYTES) {
+            break;
+          }
+        }
+      }
+    }
+    const declared = declareEpochChunk(segment, {
+      lastSeq: window.length > 0 ? window[window.length - 1]?.seq : undefined,
+      count: window.length,
     });
-    for (const record of selectTimelinePage(
-      records,
-      segment.start_seq,
-      effectiveEnd,
-      TIMELINE_PAGE_LIMIT,
-    )) {
-      if (!sendFrame(ws, timelineEventFrame(record))) break;
+    sendFrame(ws, helloFrame(declared.start_seq, declared));
+    ws.data.afterTimeline = declared.start_seq - 1;
+    ws.data.timelineEpochEnd = declared.end_seq;
+    // 发帧：逐条推进游标；背压/连接坏就停，**不把游标推过已发范围**
+    // （客户端按自己的游标续拉，服务端不装作发过）。
+    for (const record of window) {
+      if (!sendFrame(ws, timelineEventFrame(record))) return declared.start_seq;
       ws.data.afterTimeline = record.seq;
     }
-    return segment.start_seq;
+    return declared.start_seq;
   }
 
   /** 时间线记录 → 线上事件帧（与 `sessions.events` 的事件体同形，走同一个出站映射）。 */
@@ -1659,6 +1692,24 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ...(record.run_id !== undefined ? { jobId: record.run_id } : {}),
       ts: record.ts,
     });
+  }
+
+  /**
+   * 时间线 epoch 每次会话最多发多少条 / 多少字节（B1 分页修复的上界）。
+   *
+   * 为什么需要上界：17 万条的会话不可能在一个 epoch 里送完（浏览器 + 背压 + 内存都扛不住），
+   * 但**声明必须诚实** —— 所以「这一趟发多少」要有确定的预算，声明与发送共用一个数。
+   *
+   * 取值依据：一页 `TIMELINE_PAGE_LIMIT = 500`，4 页够跨过常规刷新（≤ 2000 条），
+   * 又不会让单个 epoch 的 `hello` 之后出现长时间静默；2 MiB 与老回放预算的下界同一量级。
+   * 超出的部分由客户端续拉（`end_seq < min(wal_head, published_head)` 即「还有更多」）。
+   */
+  const TIMELINE_EPOCH_MAX_EVENTS = 2000;
+  const TIMELINE_EPOCH_MAX_BYTES = 2 * 1024 * 1024;
+
+  /** 一条时间线事件的粗估字节数（只用于上面的预算闸门，不做精确计费）。 */
+  function approximateEventBytes(record: TimelineWireEvent): number {
+    return 96 + (record.run_id?.length ?? 0) + JSON.stringify(record.data ?? null).length;
   }
 
   /**
@@ -1857,6 +1908,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ...(opts.sessionEvents !== undefined ? { sessionEvents: opts.sessionEvents } : {}),
       // 0.54 A：timeline 四字段（additive）。缺省 ⇒ 四个一起缺省，旧装配行为一字不变。
       ...(opts.timelineHeads !== undefined ? { timelineHeads: opts.timelineHeads } : {}),
+      // 0.54 B1：`sessions.events` 的读源切换（时间线优先；端口缺失 / 旧格式会话自动退回
+      // 事件日志）。`timelineReadFrom` 由装配层读一次并传进来（ADR-104 D7）。
+      ...(opts.timelineRead !== undefined ? { timelineRead: opts.timelineRead } : {}),
+      timelineReadFrom,
       // CREATE-0.39：sessions.create|restart|activate 与 agents.* 共用同一注入面。
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
     }),
