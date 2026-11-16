@@ -1207,6 +1207,13 @@ async function startAsyncBash(options: {
   };
   asyncJobs.set(id, job);
   installAsyncExitSweep();
+  // 一条起步日志：事后能回答「这条作业当时走的是哪条交付通道」（装配层的唤醒投递
+  // 注册在 src/，插件看不到它是否成功；这里只读出口槽本身）。
+  console.error(
+    `[vessel] basic-tools: bash job ${id} started in background (wake delivery: ${
+      asyncSinkSlot().sink === undefined ? 'hook-only' : 'wired'
+    })`,
+  );
 
   // 定时器**不** unref：作业在跑的时候我们就要求进程别退出（否则输出会被丢在半路）。
   job.timer = setTimeout(() => {
@@ -1304,7 +1311,7 @@ async function finalizeAsyncBash(job: AsyncBashJob): Promise<void> {
 
   // 二选一：装了唤醒出口就试它一次（成功 = 自己起一轮 run，hook 永不再注入这份通知）。
   // 失败不标记，hook 仍会兜底 —— 宁可晚到，不可不到，也不可送两遍。
-  const sink = asyncBashCompletionSink;
+  const sink = asyncSinkSlot().sink;
   if (sink !== undefined && job.sessionId !== undefined) {
     let delivered = false;
     try {
@@ -1376,13 +1383,31 @@ export interface AsyncBashCompletion {
 
 export type AsyncBashCompletionSink = (completion: AsyncBashCompletion) => Promise<boolean>;
 
-let asyncBashCompletionSink: AsyncBashCompletionSink | undefined;
+/**
+ * 出口槽挂在 `globalThis` 上，不挂在模块变量上 —— 真机踩到过：
+ *
+ * 插件的**模块实例**和装配层 `import` 的那个实例不一定是同一个（插件按目录/自身根两条
+ * 路径解析时会出现两份）。挂在模块变量上的话，装配层注册的出口会被写进"另一份"，而
+ * 真正跑作业的那份永远看不到它 —— 表现是「一声不响地不投递」，比报错难查得多。
+ * 进程级 single slot + `Symbol.for` 让两份实例看到同一个槽。
+ */
+const ASYNC_SINK_SLOT = Symbol.for('vessel.basic-tools.async-bash-completion-sink');
+
+function asyncSinkSlot(): { sink?: AsyncBashCompletionSink } {
+  const host = globalThis as unknown as Record<symbol, { sink?: AsyncBashCompletionSink }>;
+  const existing = host[ASYNC_SINK_SLOT];
+  if (existing !== undefined) return existing;
+  const created: { sink?: AsyncBashCompletionSink } = {};
+  host[ASYNC_SINK_SLOT] = created;
+  return created;
+}
 
 /** 注册唤醒投递出口（进程级单槽，最后一次注册生效）。 */
 export function registerAsyncBashCompletionSink(sink: AsyncBashCompletionSink): () => void {
-  asyncBashCompletionSink = sink;
+  asyncSinkSlot().sink = sink;
   return () => {
-    if (asyncBashCompletionSink === sink) asyncBashCompletionSink = undefined;
+    const slot = asyncSinkSlot();
+    if (slot.sink === sink) slot.sink = undefined;
   };
 }
 
