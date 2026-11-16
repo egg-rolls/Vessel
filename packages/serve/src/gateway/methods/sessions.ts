@@ -43,6 +43,13 @@ import {
   TOOL_EVENT_PAYLOAD_LIMIT,
 } from '../../tool-events.js';
 import { MethodError } from '../errors.js';
+import {
+  selectTimelinePage,
+  TIMELINE_PAGE_LIMIT,
+  type TimelineReadFrom,
+  type TimelineReadPort,
+  type TimelineWireEvent,
+} from '../timeline-protocol.js';
 import { runInProgressReason, stringParam } from './common.js';
 import {
   runStateSchema,
@@ -580,6 +587,19 @@ export interface SessionMethodsDeps {
    */
   timelineHeads?: SessionTimelineHeadsPort;
   /**
+   * 时间线**分页读**端口（0.54 B1：`sessions.events` 的读源切换）。
+   *
+   * 有 timeline 的会话从时间线读（`timeline_seq` 口径，`ADR-105 §6` 单游标），
+   * 旧格式会话 / 双写关闭时退回事件日志 —— 见 `sessions.events` 的 `timelineReadFrom` 判定。
+   * 缺省 = 一律走事件日志（旧行为一字不改）。
+   */
+  timelineRead?: TimelineReadPort;
+  /**
+   * 切读开关（装配层读一次，ADR-104 D7）。缺省 `'timeline'`。
+   * `'legacy'` ⇒ `sessions.events` 一律走事件日志（回退通道，B 阶段末尾随 C 阶段删除）。
+   */
+  timelineReadFrom?: TimelineReadFrom;
+  /**
    * CONTRACT-0.34-context C7：仅服务 `sessions.compact` 的执行面。
    * 结构化读取可选 `compactContext(sessionId)`；缺省或方法缺失 = `compact_unavailable`。
    */
@@ -832,6 +852,110 @@ function normalizeEventCursor(raw: SessionEventCursor | undefined): SessionEvent
     ...(count === undefined || count < 0 ? {} : { event_count: Math.floor(count) }),
     ...(timeline ?? {}),
   };
+}
+
+/**
+ * 时间线读源的一页（0.54 B1，`sessions.events` 换源后的实现）。
+ *
+ * 语义与旧日志那一页**逐条对齐**（客户端 `collectTimelineRange` 只认这两个停止条件）：
+ * - `next_seq` = **已处理到的位置**（排他游标）：过滤掉的 seq 也要算进去，否则翻页会漏；
+ * - `has_more` = 还有没有「未读且未跳过」的 seq —— 只按 `limit + 1` 多要一条来判，
+ *   不猜、不重读一遍边界（重读会让两次边界不一致）；
+ * - `latest_seq` = 有效右端 `min(wal_head, published_head)`（未发布尾部不算「追平」依据）。
+ *
+ * 两个过滤器（`types` / `tool_call_id`）与旧路径同为**与**关系；带过滤时按页扫，
+ * 凑够 `limit + 1` 就停，扫到上限仍不够 ⇒ `has_more: true` 让客户端继续翻（宁可多翻几次，
+ * 也不让一次 RPC 把 17 万条扫穿）。
+ */
+async function readTimelineEventPage(
+  port: TimelineReadPort,
+  sessionId: string,
+  heads: { wal_head: number; published_head?: number },
+  sinceSeq: number,
+  limit: number,
+  types: readonly string[] | undefined,
+  toolCallId: string | undefined,
+): Promise<{
+  events: ReturnType<typeof toTimelineEventView>[];
+  next_seq: number;
+  latest_seq: number;
+  has_more: boolean;
+}> {
+  const effectiveEnd =
+    heads.published_head === undefined
+      ? Math.max(0, Math.floor(heads.wal_head))
+      : Math.min(Math.floor(heads.wal_head), Math.max(0, Math.floor(heads.published_head)));
+  const events: ReturnType<typeof toTimelineEventView>[] = [];
+  let cursor = Math.max(0, Math.floor(sinceSeq));
+  let scanned = 0;
+  let hasMore = false;
+  while (scanned < SESSION_EVENTS_MAX_SCAN) {
+    if (cursor >= effectiveEnd) break;
+    const page = await port.readPage(sessionId, {
+      afterSeq: cursor,
+      untilSeq: effectiveEnd,
+      limit: TIMELINE_PAGE_LIMIT,
+    });
+    const ordered = selectTimelinePage(page, cursor + 1, effectiveEnd, TIMELINE_PAGE_LIMIT);
+    if (ordered.length === 0) break;
+    for (const record of ordered) {
+      if (record.seq <= cursor) continue;
+      cursor = record.seq;
+      scanned += 1;
+      if (
+        types !== undefined &&
+        !types.some((type) =>
+          type.endsWith('*') ? record.type.startsWith(type.slice(0, -1)) : record.type === type,
+        )
+      ) {
+        continue;
+      }
+      if (toolCallId !== undefined && recordDataField(record, 'tool_call_id') !== toolCallId) {
+        continue;
+      }
+      events.push(toTimelineEventView(record));
+      if (events.length > limit) {
+        hasMore = true;
+        break;
+      }
+    }
+    if (hasMore) break;
+    if (cursor >= effectiveEnd) break;
+  }
+  if (!hasMore && cursor < effectiveEnd) hasMore = true;
+  const trimmed = events.length > limit ? events.slice(0, limit) : events;
+  const lastReturned = trimmed.length > 0 ? trimmed[trimmed.length - 1] : undefined;
+  // 溢出时游标停在**返回的最后一条**上（与旧路径同口径：否则翻页会丢事件）。
+  const nextSeq = hasMore ? (lastReturned?.seq ?? cursor) : cursor;
+  return {
+    events: trimmed,
+    next_seq: nextSeq,
+    latest_seq: Math.max(effectiveEnd, lastReturned?.seq ?? 0),
+    has_more: hasMore,
+  };
+}
+
+/** 时间线记录 → `sessions.events` 的 wire 事件（与 `sessions.get` 同形）。 */
+function toTimelineEventView(record: TimelineWireEvent): {
+  seq: number;
+  type: string;
+  run_id?: string;
+  ts: number;
+  data: unknown;
+} {
+  return {
+    seq: record.seq,
+    type: record.type,
+    ...(record.run_id !== undefined ? { run_id: record.run_id } : {}),
+    ts: record.ts,
+    data: record.data ?? {},
+  };
+}
+
+function recordDataField(record: TimelineWireEvent, key: string): unknown {
+  const data = record.data;
+  if (typeof data !== 'object' || data === null) return undefined;
+  return (data as Record<string, unknown>)[key];
 }
 
 /**
@@ -1618,11 +1742,6 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         },
       },
       handler: async (params) => {
-        const port = deps.sessionEvents;
-        if (port === undefined) {
-          // 与 `compact_unavailable` 同思路：能力没注入就是没注入，别假装空日志。
-          throw new RpcError('not_supported', 'Session event log is not configured');
-        }
         const sessionId = stringParam(params, 'session_id');
         const backend = requireSession();
         // 存在性 / 授权与 sessions.get 走同一条口径（不额外开一个越权读盘口子）。
@@ -1634,6 +1753,40 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         const limit = parseSessionEventsLimit(params.limit);
         const types = parseSessionEventTypes(params.types);
         const toolCallId = parseToolCallId(params.tool_call_id);
+        // 0.54 B1（ADR-105 §6 单游标 / §7 A8①）：**有 timeline 的会话从时间线读**。
+        //
+        // 为什么必须切：写者迁到时间线之后，旧事件日志**停止增长**（剩下的是历史行）。
+        // 时间线里 17 万条的会话，旧日志可能只有几千条 —— 客户端按
+        // `event_cursor.wal_head` 声明 1..174404 的区间去拉，只拿到 1..2855，
+        // 于是报「1–174404 这一段读不回」。这不是数据问题，是读源没切。
+        //
+        // 判定顺序（每条都有理由）：
+        // 1. `timelineReadFrom === 'legacy'` ⇒ 一律旧读路径（回退开关）；
+        // 2. `timelineRead` 端口没注入 ⇒ 旧读路径（旧装配）；
+        // 3. 该会话没有 timeline 标记（`heads` 无结果）⇒ 旧读路径（旧格式会话只读冻结，
+        //    它们的数据只在旧日志里）；
+        // 4. 否则时间线。
+        const timelinePort = deps.timelineRead;
+        const timelineHeads =
+          timelinePort !== undefined && deps.timelineReadFrom !== 'legacy'
+            ? await deps.timelineHeads?.lookup(sessionId)
+            : undefined;
+        if (timelinePort !== undefined && timelineHeads !== undefined) {
+          return readTimelineEventPage(
+            timelinePort,
+            sessionId,
+            timelineHeads,
+            sinceSeq,
+            limit,
+            types,
+            toolCallId,
+          );
+        }
+        const port = deps.sessionEvents;
+        if (port === undefined) {
+          // 与 `compact_unavailable` 同思路：能力没注入就是没注入，别假装空日志。
+          throw new RpcError('not_supported', 'Session event log is not configured');
+        }
         const page = await readEventPage(port, sessionId, sinceSeq, limit, types, toolCallId);
         // 边界只读一次（`lastSeq` = 文件尾 stat + 尾读，便宜）：与 `sessions.get.event_cursor`
         // 是同一个数，客户端可以拿它判断「已经追平了」。

@@ -378,6 +378,42 @@ export function decideTimelineSubscribe(input: TimelineSubscribeInput): Timeline
   return { kind: 'timeline', heads: input.heads };
 }
 
+/**
+ * 把「整个剩余区间」的声明裁成「本 epoch 真正要发的这一段」（0.54 B1 分页修复）。
+ *
+ * 为什么需要：一个 epoch 声明的右端必须是**这一趟真的会送到**的最后一条。声明
+ * `[start, wal_head]` 却只发一页（旧实现，`TIMELINE_PAGE_LIMIT = 500`）会让客户端的
+ * 第 2/3 条校验（末条贴住 `end_seq`、实收 `=== count`）**必然失败** —— 17 万条的会话
+ * 一刷新就挂出「1–174404 这一段读不回」的假缺口。小会话（< 一页）永远碰不到，所以夹具全绿。
+ *
+ * 剩下的部分怎么让客户端知道还有：`end_seq < min(wal_head, published_head)` 就是
+ * 「还有更多，请用 `after_timeline_seq = 收到末 seq` 续拉」。这条**不需要新字段**，
+ * 两个数客户端本来就都收到了（`wal_head` / `published_head`）。
+ *
+ * `count` 只算裁剪后的区间：`(end - start + 1) - Σ|holes ∩ 区间|`（`holes` 同步裁），
+ * 与 `timelineHello` 同一口径 —— 只是区间短了一截。
+ */
+export function declareEpochChunk(
+  segment: TimelineHelloSegment,
+  chunk: { lastSeq: number | undefined; count: number },
+): TimelineHelloSegment {
+  const start = segment.start_seq;
+  // 空 chunk：`end_seq = start_seq - 1`（空区间），与老回放 `from_seq = until + 1` 同构。
+  const end = chunk.lastSeq === undefined ? start - 1 : Math.min(chunk.lastSeq, segment.end_seq);
+  const holes = end < start ? [] : clipHoles(segment.holes, start, end);
+  return {
+    start_seq: start,
+    end_seq: end,
+    count: end < start ? 0 : Math.min(chunk.count, countReadableInRange(start, end, holes)),
+    timeline_head: segment.timeline_head,
+    wal_head: segment.wal_head,
+    published_head: segment.published_head,
+    holes,
+    tainted: segment.tainted,
+    ...(segment.reset !== undefined ? { reset: segment.reset } : {}),
+  };
+}
+
 /** 订阅裁决结果（三种，互斥）。 */
 export type TimelineSubscribeDecision =
   | { kind: 'legacy' }
