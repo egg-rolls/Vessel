@@ -47,6 +47,8 @@ export interface ProjectableEvent {
   type: string;
   ts: number;
   data?: unknown;
+  /** 事件在日志里的 seq（增量续算要用；旧调用方传的事件没有它 = 不推进游标）。 */
+  seq?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -184,6 +186,55 @@ export interface ProjectMessagesOptions {
 }
 
 /**
+ * 投影游标：把「事件 → 消息」这件事做成**可续算的一步**（第十一条：增量）。
+ *
+ * 存在理由（0.55 send-latency）：`ExecutionUnit.loadStoredHistory` 每次 run 起点都要
+ * 「整份日志 → 消息视图」，0.54 B3 起那次读是**整份读**（58k 事件的会话实测 7.0 s，
+ * 占一次发送的 ~92%）。而窗口只会 append，投影本身是**折叠**（fold）：上一段事件折出
+ * 的消息 + 尾巴那段事件 = 整份投影，逐条相同。
+ *
+ * 为什么必须放在本模块：投影口径只能有一份。`projectMessages()` 现在就是
+ * 「空游标 + 一次 extend」，两条路走同一个循环体，不可能漂。
+ *
+ * **共享对象的口径**：游标里的消息对象与调用方拿到的、窗口里的消息对象是**同一批**
+ * （不深拷贝 —— 一次会话视图 1.3 MB，每次发送复制一遍没有意义）。所以调用方必须把
+ * 投影产物当只读：目前唯一的就地写是 `assignMessageIdentities`（`run_segment`，幂等 +
+ * 续编），本模块每次 extend 末尾都会再跑一次，所以共享不会造成漂移。
+ */
+export interface ProjectionCursor {
+  /** 已折出的消息（顺序 = 事件顺序；与 `projectMessages` 的返回值同一口径）。 */
+  readonly messages: Message[];
+  /** 当前「最后一条 assistant 正文（无 tool_calls）」—— `run.completed.output` 要就地改它。 */
+  lastAssistant: Message | undefined;
+  /** `tool_call_id` → `tool.call.started` 里的实际 name/arguments（跨段保留）。 */
+  readonly toolStarts: Map<string, { name: string; arguments: string }>;
+  /** 构造时钉死的清集替换口径（同一游标只服务一种口径）。 */
+  readonly applyClearedReplacements: boolean;
+  /** 已折叠的最后一条事件的 seq（没有 seq 的事件不推进它）。 */
+  seq: number | undefined;
+  /** 已折叠的事件条数（= 整份读的 `events.length`）。 */
+  count: number;
+  /** 最近一次 `llm.response.usage` 的 per-request 总量（旧 `lastRequestTokensFromEvents` 口径）。 */
+  lastRequestTokens: number | undefined;
+  /** 事件里出现过 `session.rewound`（`reconcileCachedProjection` 的 `replacementInLog`）。 */
+  rewoundSeen: boolean;
+}
+
+/** 建一个空游标（`projectMessages` 的起点）。 */
+export function createProjectionCursor(options?: ProjectMessagesOptions): ProjectionCursor {
+  return {
+    messages: [],
+    lastAssistant: undefined,
+    toolStarts: new Map(),
+    applyClearedReplacements: options?.applyClearedReplacements ?? true,
+    seq: undefined,
+    count: 0,
+    lastRequestTokens: undefined,
+    rewoundSeen: false,
+  };
+}
+
+/**
  * 把事件序列投影成 `Message[]`。
  *
  * 事件应已按 `seq` 升序；函数不排序、不读取文件。
@@ -192,28 +243,99 @@ export function projectMessages(
   events: Iterable<ProjectableEvent>,
   options?: ProjectMessagesOptions,
 ): Message[] {
-  // 缺省 true：既有调用方（请求/展示口径）语义一个字不变。
-  const applyClearedReplacements = options?.applyClearedReplacements ?? true;
+  const cursor = createProjectionCursor(options);
+  extendProjection(cursor, events);
+  return cursor.messages;
+}
+
+/**
+ * 把一条 `tool.call.started` 的实参回填到**已经建好的** assistant 消息上。
+ *
+ * 只在一种形状下需要：分段折叠的切点正好落在 `llm.response` 与它的 `tool.call.started`
+ * 之间。整份投影的预扫描先收齐全部 started 再建消息，所以那条 assistant 的参数必然被
+ * started 覆盖；分段折叠时它已经在上一段建好了，只能回填。
+ *
+ * 找法：从尾部倒着找第一条**带这个 tool_call id** 的 assistant（id 唯一，命中即停）。
+ * 这条路径只在上述罕见切点发生，正常段一次都不会走到（`emittedHere` 已过滤）。
+ */
+function backfillToolCallStarts(
+  messages: readonly Message[],
+  toolCallId: string,
+  started: { name: string; arguments: string } | undefined,
+): void {
+  if (started === undefined) return;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message === undefined || message.role !== 'assistant') continue;
+    let hit = false;
+    for (const call of message.tool_calls ?? []) {
+      if (call.id !== toolCallId) continue;
+      call.function = { name: started.name, arguments: started.arguments };
+      hit = true;
+    }
+    if (hit) return;
+  }
+}
+
+/**
+ * 把一段（**必须接在游标之后**的）事件折进游标；结果与「整份重投影」逐条相同。
+ *
+ * 调用方负责保证这段事件紧接 `cursor.seq`（连续性 / 到达日志头这两件事由读侧判，
+ * 见 `ExecutionUnit.loadStoredHistory`）——本函数不做猜测：喂进来什么就折什么。
+ */
+export function extendProjection(
+  cursor: ProjectionCursor,
+  events: Iterable<ProjectableEvent>,
+): void {
+  const applyClearedReplacements = cursor.applyClearedReplacements;
   const list = [...events];
+  cursor.count += list.length;
+  /** 本段里 `tool.call.started` 带来的 id（回填只需要看这一批，不看全部历史）。 */
+  const startedHere: string[] = [];
 
   // 先收集工具调用的实际执行参数：guardrail / hook 可能改写 name/arguments。
-  const toolStarts = new Map<string, { name: string; arguments: string }>();
+  // 跨段保留：一个 `llm.response` 的 `tool.call.started` 可能不在同一段里。
   for (const event of list) {
+    if (typeof event.seq === 'number' && Number.isFinite(event.seq)) {
+      cursor.seq = cursor.seq === undefined ? event.seq : Math.max(cursor.seq, event.seq);
+    }
+    if (event.type === 'session.rewound') cursor.rewoundSeen = true;
+    if (event.type === 'llm.response') {
+      const usage = dataOf(event).usage;
+      if (isRecord(usage)) {
+        const prompt = typeof usage.prompt_tokens === 'number' ? usage.prompt_tokens : 0;
+        const completion =
+          typeof usage.completion_tokens === 'number' ? usage.completion_tokens : 0;
+        if (prompt + completion > 0) cursor.lastRequestTokens = prompt + completion;
+      }
+    }
     if (event.type !== 'tool.call.started') continue;
     const data = dataOf(event);
     const id = readString(data.tool_call_id);
     const name = readString(data.tool_name);
     if (id === undefined || name === undefined) continue;
     const args = data.arguments;
-    toolStarts.set(id, {
+    startedHere.push(id);
+    cursor.toolStarts.set(id, {
       name,
       // started 事件里非法 JSON 时保留原字符串；projection 只保证结构一致。
       arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
     });
   }
 
-  const messages: Message[] = [];
-  let lastAssistant: Message | undefined;
+  const toolStarts = cursor.toolStarts;
+  const messages = cursor.messages;
+  let lastAssistant = cursor.lastAssistant;
+  /**
+   * 本段里**新写出**的 tool_call id。
+   *
+   * 用途只有一个：判断「有没有一条 started 事件属于**上一段**已经落成的 assistant」。
+   * 整份投影的预扫描把**全部** started 事件先收齐再构造消息，所以一条 `llm.response`
+   * 的参数总是被它后面的 `tool.call.started` 覆盖。分段折叠时，如果切点正好落在
+   * `llm.response` 与它的 `tool.call.started` 之间，那条 assistant 在上一段就已经建好了，
+   * 预扫描的新条目没有机会作用到它 —— 于是本段末尾补一次回填（见 `backfillStarts`）。
+   */
+  const emittedHere = new Set<string>();
 
   for (const event of list) {
     const data = dataOf(event);
@@ -300,6 +422,7 @@ export function projectMessages(
       const toolCalls = asToolCalls(data.tool_calls);
       if (toolCalls) {
         const effective = toolCalls.map((call) => {
+          emittedHere.add(call.id);
           const started = toolStarts.get(call.id);
           if (!started) return call;
           return {
@@ -379,11 +502,20 @@ export function projectMessages(
     }
   }
 
+  cursor.lastAssistant = lastAssistant;
+  // 切点落在一对「response / 它的 started」之间时，回填那条 assistant 的实参
+  // —— 整份投影的预扫描本来就会覆盖它，这里让分段折叠与它逐条相同。
+  for (const id of startedHere) {
+    if (emittedHere.has(id)) continue;
+    backfillToolCallStarts(messages, id, toolStarts.get(id));
+  }
   // 消息身份（additive）：`run_id` 上面已按事件补齐，段序在这里统一补 —— 与落盘漏斗
   // （`RunJournal.saveSessionState`）**同一个函数、同一个口径**，两条重建路径才认得出
   // 同一段正文。旧事件没有 `run_id` 时这两个字段保持缺省（消费端退回内容比较）。
-  assignMessageIdentities(messages);
-  return messages;
+  //
+  // 增量续算也照跑：`assignMessageIdentities` 幂等（已盖章的只抬水位），对「上一段
+  // 已经盖过章的消息 + 本段新消息」跑一遍，结果与整份重投影后跑一遍逐条相同。
+  assignMessageIdentities(cursor.messages);
 }
 
 /**
