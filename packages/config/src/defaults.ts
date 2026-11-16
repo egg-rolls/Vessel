@@ -185,16 +185,21 @@ export const DEFAULT_TRACE_OPTIONS: Required<TraceConfig> = {
 };
 
 /**
- * 0.54 A：会话 timeline 双写默认值（ADR-105 §11 / plan-054 A4）。
+ * 会话 timeline 默认值（ADR-105 §11 / plan-054 A4；0.54 cutover 起 `dualWrite` 默认开）。
  *
- * 不写入 DEFAULT_CONFIG：未配置 `timeline` 时按这些值消费 —— 也就是**开关关**，
- * 旁路一次都不调，旧链路逐字节不变。
+ * 不写入 DEFAULT_CONFIG：未配置 `timeline` 时按这些值消费 —— 也就是**开关开**，
+ * timeline 与新会话的写入路径**默认就启用**。
+ *
+ * 为什么默认改成开（0.54 cutover）：`dualWrite` 是「新的写不写」的唯一开关。全库会话已
+ * 全部迁到时间线之后，如果默认仍是关，任何「停写旧的」动作都会让**默认安装彻底没有写入**：
+ * 开关关的安装只有旧路径，而旧路径正在被拆掉。默认开是把它反过来：默认安装走新路径，
+ * 只有显式写 `dual_write: false` 的安装才退回旧链路（那是给还没迁移的安装留的门）。
  *
  * `chunkFlushMs` 的 150 与写入侧常量 `CHUNK_FLUSH_MS` 同值（写入侧也有 clamp 兜底，
  * 这里给默认值只是让装配层不必判断「配了没配」）。
  */
 export const DEFAULT_TIMELINE_OPTIONS: Required<TimelineConfig> = {
-  dualWrite: false,
+  dualWrite: true,
   chunkFlushMs: 150,
   verifySampleRate: 0.01,
   archiveIntervalMs: 5_000,

@@ -11,6 +11,11 @@
  * | C-1b | 写 timeline 目录（`wal.*` / `timeline.ndjson` / `timeline.manifest` / `timeline/blobs` / `holes.ndjson` / `timeline.idx`）的路径**必须经过** `TimelineWriter.open`（即 `packages/core/src/timeline/**` 之外不得直接拼这些文件名） | 「唯一写者」这句话如果没有机械判据，下一个人加一行 `atomicWrite(join(dir,'timeline.manifest'))` 就破了 |
  * | C-1c | 旧格式会话被**写**的时候抛的是 `session_frozen_readonly`，不是别的错误（且目录一字节不变） | 错误码是上层唯一的可映射信息；抛成 `timeline_write_failed` 或静默成功都算失效 |
  *
+ * **0.54 C cutover 之后，读面不再服务旧源**：`sessions.events` / `events.list` 的唯一读源
+ * 都是时间线（`timeline.read_from` 开关与事件日志读分支已删除）。所以 C-1c 的读那一半断言的
+ * 是"旧目录里的数据**不再**从这两条 RPC 出去"（未注入 timeline 端口 ⇒ `not_supported`，
+ * 注入空 timeline ⇒ 空页），写那一半（`session_frozen_readonly` + 目录逐字节不变）不变。
+ *
  * ## 「旧格式会话」是怎么识别出来的（唯一口径）
  *
  * `packages/core/src/timeline/freeze.ts#isLegacyFrozenSessionDir`：
@@ -61,8 +66,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 
-import type { ReadTraceOptions } from '../packages/core/src/index';
-import { readTraceEvents, SessionEventLog, sessionDirPath } from '../packages/core/src/index';
+import { SessionEventLog, sessionDirPath } from '../packages/core/src/index';
 import {
   isLegacyFrozenSessionDir,
   LEGACY_SESSION_LOG,
@@ -73,7 +77,12 @@ import { TIMELINE_LAYOUT } from '../packages/core/src/timeline/types';
 import { TimelineWriter } from '../packages/core/src/timeline/writer';
 import { createEventsMethods } from '../packages/serve/src/gateway/methods/observability';
 import { createSessionMethods } from '../packages/serve/src/gateway/methods/sessions';
-import { decideTimelineSubscribe } from '../packages/serve/src/gateway/timeline-protocol';
+import {
+  decideTimelineSubscribe,
+  EMPTY_TIMELINE_HEADS,
+  selectTimelinePage,
+  timelineHello,
+} from '../packages/serve/src/gateway/timeline-protocol';
 import { createSessionEventsSource } from '../src/session-events';
 import { createTimelineDualWrite } from '../src/timeline-dual-write';
 
@@ -1256,56 +1265,108 @@ async function judgeBehaviour(): Promise<void> {
         eventsFile: (id) => join(sessionDirPath(fixture.sessionsDir, id), LEGACY_SESSION_LOG),
       }),
     });
-    const eventsMethods = createEventsMethods({
-      trace: {
-        readEvents: (filter) => readTraceEvents(fixture.traceDir, filter as ReadTraceOptions),
-      },
+    // 0.54 C：`sessions.events` 的**唯一**读源是时间线，所以这里要两种装配：
+    // - 没有 timeline 端口 ⇒ 能力没注入 ⇒ `not_supported`（不悄悄退回旧日志）；
+    // - 注入「该会话还没有时间线标记」的空端口 ⇒ 空页（`EMPTY_TIMELINE_HEADS`）。
+    const sessionMethodsEmptyTimeline = createSessionMethods({
+      sessionFor: () =>
+        ({
+          load: async (id: string) => ({ session_id: id, messages: [], status: 'completed' }),
+        }) as never,
+      timelineHeads: { lookup: async () => undefined },
+      timelineRead: { readPage: async () => [] },
+    });
+    // `events.list` 同理：没有 timeline 端口 ⇒ `not_supported`；端口在但时间线上没有这个
+    // run ⇒ 空列表。**两条都不读 `data/events/<run>.jsonl`**（那张表已不在读路径上）。
+    const eventsMethods = createEventsMethods({});
+    const eventsMethodsEmptyTimeline = createEventsMethods({
+      timelineRunEvents: { read: async () => [] },
     });
 
-    async function readSessionsEvents(): Promise<string> {
-      const method = sessionMethods.find((item) => item.name === 'sessions.events');
+    const sessionsEventsMethod = sessionMethods.find((item) => item.name === 'sessions.events');
+    if (sessionsEventsMethod === undefined) throw new Error('sessions.events missing');
+    const sessionsEventsEmptyMethod = sessionMethodsEmptyTimeline.find(
+      (item) => item.name === 'sessions.events',
+    );
+    if (sessionsEventsEmptyMethod === undefined) throw new Error('sessions.events missing (empty)');
+    const eventsListMethod = eventsMethods.find((item) => item.name === 'events.list');
+    if (eventsListMethod === undefined) throw new Error('events.list missing');
+    const eventsListEmptyMethod = eventsMethodsEmptyTimeline.find(
+      (item) => item.name === 'events.list',
+    );
+    if (eventsListEmptyMethod === undefined) throw new Error('events.list missing (empty)');
+
+    /** 读一次 `sessions.events`：区分「抛错」与「返回一页」（两者都是被断言的行为）。 */
+    async function sessionsEventsOutcome(
+      method: typeof sessionsEventsMethod | undefined,
+    ): Promise<{ kind: 'error'; code: string } | { kind: 'page'; page: SessionsEventsResult }> {
       if (method === undefined) throw new Error('sessions.events missing');
-      return JSON.stringify(
-        (await method.handler(
+      try {
+        const page = (await method.handler(
           { session_id: LEGACY_SESSION_ID },
           {} as never,
-        )) as SessionsEventsResult,
-      );
+        )) as SessionsEventsResult;
+        return { kind: 'page', page };
+      } catch (error) {
+        return { kind: 'error', code: (error as { code?: string }).code ?? '' };
+      }
     }
 
-    async function readEventsList(): Promise<string> {
-      const method = eventsMethods.find((item) => item.name === 'events.list');
+    async function eventsListOutcome(
+      method: typeof eventsListMethod | undefined,
+    ): Promise<{ kind: 'error'; code: string } | { kind: 'page'; page: EventsListResult }> {
       if (method === undefined) throw new Error('events.list missing');
-      return JSON.stringify(
-        (await method.handler({ run_id: LEGACY_RUN_ID }, {} as never)) as EventsListResult,
-      );
+      try {
+        const page = (await method.handler(
+          { run_id: LEGACY_RUN_ID },
+          {} as never,
+        )) as EventsListResult;
+        return { kind: 'page', page };
+      } catch (error) {
+        return { kind: 'error', code: (error as { code?: string }).code ?? '' };
+      }
     }
+    const EMPTY_SESSIONS_EVENTS_PAGE: SessionsEventsResult = {
+      events: [],
+      next_seq: 0,
+      latest_seq: 0,
+      has_more: false,
+    };
 
-    // ① 基线：读结果与**旧文件本身**逐字节相同（oracle = 文件内容，不是实现的输出）。
-    const sessionsEventsBefore = await readSessionsEvents();
-    const eventsListBefore = await readEventsList();
-    const expectedEvents = LEGACY_RECORDS.map((record) => ({
-      seq: record.seq,
-      type: record.type,
-      ts: record.ts,
-      run_id: record.run_id,
-      data: record.data,
-    }));
-    assertBytes(
-      'C-1c① sessions.events 的事件体与 events.ndjson 逐字节相同（顺序 / 字段 / 内容）',
-      JSON.stringify((JSON.parse(sessionsEventsBefore) as SessionsEventsResult).events),
-      JSON.stringify(expectedEvents),
+    // ① 基线（0.54 C 起）：**读面不再服务旧源**。
+    //
+    // 旧断言是"读结果与 events.ndjson / trace 逐字节相同"——那两条读路径正是本单删掉的
+    // （`sessions.events` / `events.list` 的唯一读源已是时间线）。所以这里断言的**对象**
+    // 换成"现在真实发生的事"，而不是把断言删掉：
+    // 旧目录里的数据**不再**从这两条 RPC 出去，且旧文件本体一字节没动。
+    assertTrue(
+      'C-1c① 夹具确实写着旧日志与旧 trace（否则下面"读不到"是空断言）',
+      LEGACY_RECORDS.length > 0 && LEGACY_TRACE_EVENTS.length > 0,
+      `session-log=${LEGACY_RECORDS.length} trace=${LEGACY_TRACE_EVENTS.length}`,
     );
-    assertBytes(
-      'C-1c① events.list 与旧 trace（data/events/<run>.jsonl）逐字节相同',
-      JSON.stringify((JSON.parse(eventsListBefore) as EventsListResult).events),
-      JSON.stringify(LEGACY_TRACE_EVENTS),
-    );
-    const parsed = JSON.parse(sessionsEventsBefore) as SessionsEventsResult;
+    const sessionsEventsBefore = await sessionsEventsOutcome(sessionsEventsMethod);
     assertEqual(
-      'C-1c① sessions.events 游标三字段（next_seq / latest_seq / has_more）',
-      [parsed.next_seq, parsed.latest_seq, parsed.has_more],
-      [LEGACY_RECORDS.length, LEGACY_RECORDS.length, false],
+      'C-1c① sessions.events（未注入 timeline 端口）⇒ not_supported（不退回旧日志）',
+      sessionsEventsBefore,
+      { kind: 'error', code: 'not_supported' },
+    );
+    const sessionsEventsEmptyBefore = await sessionsEventsOutcome(sessionsEventsEmptyMethod);
+    assertEqual(
+      'C-1c① sessions.events（注入空 timeline）⇒ 空页，旧日志一条都不出',
+      sessionsEventsEmptyBefore,
+      { kind: 'page', page: EMPTY_SESSIONS_EVENTS_PAGE },
+    );
+    const eventsListBefore = await eventsListOutcome(eventsListMethod);
+    assertEqual(
+      'C-1c① events.list（未注入 timeline 端口）⇒ not_supported（不退回旧 trace）',
+      eventsListBefore,
+      { kind: 'error', code: 'not_supported' },
+    );
+    const eventsListEmptyBefore = await eventsListOutcome(eventsListEmptyMethod);
+    assertEqual(
+      'C-1c① events.list（注入空 timeline）⇒ 空列表，旧 trace 一条都不出',
+      eventsListEmptyBefore,
+      { kind: 'page', page: { events: [] } },
     );
     const snapshotBefore = await snapshotDir(fixture.sessionDir);
 
@@ -1413,36 +1474,74 @@ async function judgeBehaviour(): Promise<void> {
       fixture.legacyBytes,
     );
 
-    // ④ 读路径在冻结层碰过之后仍然逐字节相同
-    assertBytes(
-      'C-1c④ 冻结层碰过之后 sessions.events 逐字节不变',
-      await readSessionsEvents(),
+    // ④ 写入口碰过之后，读面的行为**没变**（同一批断言重跑一遍）。
+    //
+    // 这一条不是"复读"：旧实现在冻结层的写尝试之后可能把 `index.json` / 写句柄状态改掉，
+    // 从而改变读结果；现在读面根本不看旧目录，所以要证明的是「碰过之后还是同样的两条
+    // 结论」——未注入端口仍 `not_supported`、注入空 timeline 仍空页（旧日志一条都不出）。
+    const sessionsEventsAfter = await sessionsEventsOutcome(sessionsEventsMethod);
+    assertEqual(
+      'C-1c④ 冻结层碰过之后 sessions.events 仍然 not_supported',
+      sessionsEventsAfter,
       sessionsEventsBefore,
     );
-    assertBytes(
-      'C-1c④ 冻结层碰过之后 events.list 逐字节不变',
-      await readEventsList(),
+    const sessionsEventsEmptyAfter = await sessionsEventsOutcome(sessionsEventsEmptyMethod);
+    assertEqual(
+      'C-1c④ 冻结层碰过之后 sessions.events 仍是空页（旧日志一条都不出）',
+      sessionsEventsEmptyAfter,
+      { kind: 'page', page: EMPTY_SESSIONS_EVENTS_PAGE },
+    );
+    const eventsListAfter = await eventsListOutcome(eventsListMethod);
+    assertEqual(
+      'C-1c④ 冻结层碰过之后 events.list 仍然 not_supported',
+      eventsListAfter,
       eventsListBefore,
     );
+    const eventsListEmptyAfter = await eventsListOutcome(eventsListEmptyMethod);
+    assertEqual(
+      'C-1c④ 冻结层碰过之后 events.list 仍是空列表（旧 trace 一条都不出）',
+      eventsListEmptyAfter,
+      { kind: 'page', page: { events: [] } },
+    );
 
-    // ⑤ 订阅侧（A8②）：旧格式会话按 after_timeline_seq 订阅必须被同一个码拒绝
+    // ⑤ 订阅侧（0.54 C 后）：没有时间线标记的会话**不再**被拒成 `session_frozen_readonly`。
+    //
+    // 旧格式只读冻结在 0.54 cutover 之后**只剩写保护**（`freeze.ts#assertTimelineWritable`，
+    // 由本脚本的 ② / C-1c② 断言覆盖）；读面上「没有标记」与「刚建好的新会话」形状相同，
+    // 把它报成"旧格式只读冻结"是假事实。所以这里断言**现在的真实行为**：
+    // 裁决给出空段，且 `end_seq = start_seq - 1` / `count = 0`（没有任何可发的帧）。
     const decision = decideTimelineSubscribe({
       afterTimelineSeq: LEGACY_RECORDS.length,
       sinceGiven: false,
       sessionId: LEGACY_SESSION_ID,
-      readFrom: 'timeline',
       headsInjected: true,
       heads: undefined,
       readPortInjected: true,
     });
     assertEqual(
-      'C-1c⑤ decideTimelineSubscribe(旧格式会话, after_timeline_seq) ⇒ reject',
+      'C-1c⑤ decideTimelineSubscribe(无时间线标记, after_timeline_seq) ⇒ 空段',
       decision,
       {
-        kind: 'reject',
-        code: 'session_frozen_readonly',
-        message: `会话 ${LEGACY_SESSION_ID} 没有 timeline（旧格式会话只读冻结，不迁移）：不能按 after_timeline_seq 订阅`,
+        kind: 'timeline',
+        heads: EMPTY_TIMELINE_HEADS,
       },
+    );
+    if (decision.kind !== 'timeline') {
+      throw new Error(`C-1c⑤ 期望 kind=timeline（空段），收到 ${decision.kind}`);
+    }
+    const segment = timelineHello({
+      afterTimelineSeq: LEGACY_RECORDS.length,
+      heads: decision.heads,
+    });
+    assertEqual(
+      'C-1c⑤ 空段的形状：end_seq = start_seq - 1 且 count = 0（不发帧、不抛错）',
+      [segment.end_seq, segment.start_seq - 1, segment.count, segment.wal_head],
+      [segment.start_seq - 1, segment.end_seq, 0, 0],
+    );
+    assertEqual(
+      'C-1c⑤ 空段没有任何可读 seq（页读为空） ⇒ 客户端不会去重试一个不存在的区间',
+      selectTimelinePage([], segment.start_seq, segment.end_seq),
+      [],
     );
     const gatewayText = await readFile(join(REPO_ROOT, 'packages/serve/src/gateway.ts'), 'utf8');
     assertTrue(

@@ -629,10 +629,10 @@ export async function buildTenantRuntime(
   // R7：熔断按 session 分桶；owner / 成员共享同一份计数，`force` 由 core 传入。
   const summarizerForSession =
     summarizer !== undefined ? createSessionBreaker(summarizer) : undefined;
-  // 0.54 B（ADR-105 §3 I2 端到端）：双写开启时，旧链路的广播**降级为发送缓冲**。
+  // 0.54 B（ADR-105 §3 I2 端到端）：timeline 写入开启时，旧链路的广播**降级为发送缓冲**。
   //
   // 顺序有讲究：闸门必须在 `events` 第一次被交出去之前包好，否则早退的订阅者会拿到
-  // 未受控的流。开关关（**默认安装路径**）⇒ 不建闸门、不包流，`events` 与今天同一个对象。
+  // 未受控的流。显式 `dual_write: false`（0.54 cutover 起不再是默认）⇒ 不建闸门、不包流。
   const timelineOptions = config.timeline ?? DEFAULT_TIMELINE_OPTIONS;
   const writesEventLog = options.writeTrace === true && backend !== 'memory';
   // 只有「真会装双写端口」时才装闸门：没有事件日志 / memory 后端 / 开关关 ⇒ 一个都不建。
@@ -699,10 +699,11 @@ export async function buildTenantRuntime(
           : {}),
       })
     : undefined;
-  // 0.54 A：会话 timeline 双写旁路（ADR-105 §11 / plan-054 A4）。
-  // 开关关（默认）⇒ **不构造**：`RunJournal` 拿到的端口是 `undefined`，旁路一次都不调，
-  // 旧链路逐字节不变。开关开 ⇒ 每条已落盘事件多写一份 timeline + 旧链路故意不落盘的
-  // chunk 家族；新链路任何失败只记指标/日志（实现侧自吞，见 `src/timeline-dual-write.ts`）。
+  // 0.54：会话 timeline 写路径（ADR-105 §11 / plan-054 A4）。
+  // 开关关（0.54 cutover 起是**显式** `dual_write: false`，不再是默认）⇒ **不构造**：
+  // `RunJournal` 拿到的端口是 `undefined`，一次都不调。开关开（默认）⇒ 每条事件多写一份
+  // timeline + 旧链路故意不落盘的 chunk 家族；新链路任何失败只记指标/日志
+  // （实现侧自吞，见 `src/timeline-dual-write.ts`）。
   //
   // 0.54 B（ADR-105 §3 I2）：`onPublish` 是**唯一的对外发布出口** —— 写者在 WAL/块
   // fsync 之后才回调它，所以「UI 能看见的事件」的可见性由 timeline 的持久化决定。

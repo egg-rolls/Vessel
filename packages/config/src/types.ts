@@ -333,17 +333,22 @@ export interface TraceConfig {
 }
 
 /**
- * 会话 timeline 配置（0.54 A 阶段，ADR-105 §11 / plan-054 A4）。
+ * 会话 timeline 配置（ADR-105 §11 / plan-054 A4）。
  *
  * **不写入 `DEFAULT_CONFIG`**：未配置 `timeline` 时消费 {@link DEFAULT_TIMELINE_OPTIONS}
- * （等价于「双写关闭」）。YAML 键走 snake_case（`timeline.dual_write`），
+ * （等价于「双写开启」）。YAML 键走 snake_case（`timeline.dual_write`），
  * loader 统一转 camelCase 后就是下面的字段名。
  *
  * `dualWrite` 的语义是**全有或全无**：`false` ⇒ 旁路一次都不调（旧链路逐字节不变）；
  * `true` ⇒ 每条已持久化事件多写一份 timeline，新链路任何失败只记指标/日志。
  */
 export interface TimelineConfig {
-  /** 双写开关；默认 `false`（关 = 旧链路行为一字不改）。 */
+  /**
+   * 双写开关；默认 `true`（0.54 cutover 起）。
+   *
+   * 显式 `false` = 旧的「只有 `events.ndjson`」安装形态；0.54 之后新的写入路径是唯一
+   * 被保证的路径，`false` 只留给还没迁移的安装。
+   */
   dualWrite?: boolean;
   /** chunk 空闲封块间隔（ms，1..1000）；缺省 150（`timeline.CHUNK_FLUSH_MS`）。 */
   chunkFlushMs?: number;
@@ -716,8 +721,8 @@ export interface VesselConfig {
   /** trace 配置；缺省消费 DEFAULT_TRACE_OPTIONS */
   trace?: TraceConfig;
   /**
-   * 0.54 A：会话 timeline 双写（ADR-105）；缺省消费 DEFAULT_TIMELINE_OPTIONS
-   * （`dualWrite: false` = 开关关，旧链路逐字节不变）。
+   * 0.54：会话 timeline（ADR-105）；缺省消费 DEFAULT_TIMELINE_OPTIONS
+   * （`dualWrite: true` = 双写默认开；显式 `false` 才退回旧链路）。
    */
   timeline?: TimelineConfig;
   provider?: ProviderConfig;

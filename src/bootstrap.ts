@@ -28,13 +28,11 @@ import {
   MemoryWorkingContext,
   type Message,
   pruneTrace,
-  type ReadTraceOptions,
   type RunEvent,
   type RunnableAgent,
   type RunOptions,
   type RunRecordStore,
   Runtime,
-  readTraceEvents,
   rebuildMetrics,
   sameRestartMarker,
   sessionEventsFilePath,
@@ -129,7 +127,8 @@ import {
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
 // 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
 // 只有双写开关开时才有 `timelineDualWrite`，此时才传；关闭路径与 0.53 逐字节相同。
-import { timelineTailPort } from './timeline-dual-write';
+// 0.54 C：`events.list` 的按 run 读端口（同一模块，共用 timeline 的读面与路径口径）。
+import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-write';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
@@ -1785,9 +1784,23 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         : {}),
       rebuild: () => rebuildMetrics(tenantPaths.events_dir),
     },
+    // 0.54 C：`events.list` 换源到时间线（`seq` = `timeline_seq`）。旧的
+    // `readEvents: (filter) => readTraceEvents(events_dir, filter)` 已删除：那条路读
+    // `data/events/<run_id>.jsonl` 的 per-run 序号，与登记在 CHANGELOG 的新语义同名不同义。
+    // timeline 的 run 索引是**会话内**的，所以 run → session 的解析也在端口实现里。
+    timelineRunEvents: createTimelineRunEventsPort({
+      sessionsDir: tenantPaths.sessions_dir,
+      // 快路径：durable 打开的安装能从 RunRecord 一次读到 `session_id`。
+      ...(bundle.runStore !== undefined
+        ? {
+            resolveSession: async (runId: string) => {
+              const record = await bundle.runStore?.load(runId);
+              return record?.session_id;
+            },
+          }
+        : {}),
+    }),
     trace: {
-      readEvents: (filter: Record<string, unknown>) =>
-        readTraceEvents(tenantPaths.events_dir, filter as ReadTraceOptions),
       prune: (params: Record<string, unknown>) => {
         const pruneOptions = {
           ...(typeof params.older_than_days === 'number'
