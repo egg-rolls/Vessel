@@ -125,9 +125,9 @@ messages: capToolMessages(all.slice(start, end)),
 
 ### 1.5 决定性发现：**全量重投影之后**，落盘里就是占位（原文不在 messages 里）
 
-> **状态（2026-11-15）**：本节已由实测裁决，不再是「张力声明」。尺子与原始输出：
-> `docs/dev/reports/0.54/proj-readback-15.md`（探针 `scripts/probe-proj-readback.ts`，真 `ExecutionUnit` +
-> 真 `FileSessionStore` + 真 `SessionEventLog` + 真 `sessions.get` handler，零产品代码改动）。
+> **状态（2026-11-15）**：本节已由实测裁决，不再是「张力声明」。
+> 取证装置用真 `ExecutionUnit` + 真 `FileSessionStore` + 真 `sessions.get` handler，零产品代码改动；
+> 原始输出属过程产物，按守则 01 留在个人侧，不在共享仓。
 
 先划清边界（实测）：
 
@@ -143,7 +143,8 @@ messages: capToolMessages(all.slice(start, end)),
    （进程在「压缩后、下一次 `saveSessionState` 前」被杀 / 崩溃 / 断电）；
 2. 启动时尾部有 `session.rewound` —— 撤回 / 分支切换之后的下一次启动或下一轮 run。
    **（2026-11-15 存量体检修正：这条是理论入口之一，但我这台机的 19.7 万条事件里 `session.rewound` = 0 条，
-   一次都没发生过 ⇒ 「最常见」这个说法没有数据支撑，不许再当结论用。见 `docs/dev/reports/0.54/stock-audit.md`。）**
+   一次都没发生过 ⇒ 「最常见」这个说法没有数据支撑，不许再当结论用。（同批体检：全库 971 条占位集中在那 2 个
+   2026-11-11 的历史会话，其后落盘的 92 个壳里 0 条。）**
 3. 缓存不可用：`SessionState.messages` 为空，或 `derived_upto_seq` 不是 number（旧数据 / 缓存被清 / 会话壳丢了但日志还在）。
 
 走满投影时的链路（每一步都可点开）：
@@ -537,7 +538,7 @@ ADR-104 要求四真同时成立（`docs/adr/ADR-104-context-projection-policy.m
 
 - [x] **实测 §1.5 的张力**（2026-11-15 完成，`f37c6070`）：结论 = 压缩当轮与**干净重启**都是原文；
   只有**满投影**（尾部有压缩事件 / 尾部有 `session.rewound` / 缓存不可用）才把占位写进落盘，且**粘住**。
-  尺子：`scripts/probe-proj-readback.ts`；报告：`docs/dev/reports/0.54/proj-readback-15.md`。§1.5 已按此重写。
+  §1.5 已按此重写（取证原始输出按守则 01 留在个人侧）。
   ⇒ `original_available` 的默认分支：**按正文自证**（`isClearedToolResult`），不按「有没有压缩过」猜。
 - [x] **拍板 §1.7 的 wire 字段**（2026-11-15 合入 `2d31bacb` + `42ae28ea`）：`projection` / `projection_summary` 按本规格落地；
   改名两处（`readback.since_seq`、`unknown_original_count`），见 §1.7.1。`declaration_id` 本轮取真实值、没有则 `null`。

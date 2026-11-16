@@ -413,9 +413,9 @@ timeline.idx/type.idx        # type 索引（可重建，§5）
     `events.md`）违背当前"删 gate / probe"的政策。要落地时的最小接法写在这里备查：在双写旁路那两处
     `loadIndexSnapshot` 调用点，把 `snapshot.session.last_seq` 与 `readTimelineEvents` 的实测尾 seq 比对，
     不一致就发事件并改用实测值 —— **代价是每次 `sessions.get` 多一次全扫**，所以不能默认开。
-  - 连带作废一条自证：[timeline-writer-report.md](../dev/handoff/timeline-writer-report.md) §7.3 的
-    `[PASS] 篡改 run.idx 触发 index_mismatch — count=1` 观察的是 `TimelineIndexReader.onMismatch`
-    **回调次数**，不是事件；产生该输出的 `scripts/check-timeline-index.ts` 已被 `58118376` 删除，
+  - 连带作废一条自证：0.54 的 timeline-writer 交付报告 §7.3（**已按守则 01 移入个人侧**，共享侧不再保留）
+    里的 `[PASS] 篡改 run.idx 触发 index_mismatch — count=1` 观察的是 `TimelineIndexReader.onMismatch`
+    **回调次数**，不是事件；产生该输出的自证脚本已随「删除全部 gate/probe」一并删除，
     该节**不可复现** ⇒ 报告里已就地标注**已作废**（历史不删）。
 
 ### 12. 关联
