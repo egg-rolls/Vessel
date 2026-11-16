@@ -1784,27 +1784,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.client.closed': 'Connection closed',
   'gateway.client.stopped': 'The gateway has stopped',
   'gateway.client.unreachable': 'Cannot reach the gateway (not started or wrong address)',
-  'timeline.gap.title': 'Timeline gap',
-  'timeline.gap.body': '{range} could not be read back from the gateway. The rest still renders.',
-  'timeline.gap.body.holes':
-    '{range} cannot be read back (the writer declared it as a hole, so it will not be recovered). The rest still renders.',
-  'timeline.gap.body.rule1':
-    '{range} has a hole in the middle: the seqs we got are not contiguous with the declared range. The rest still renders.',
-  'timeline.gap.body.rule2':
-    '{range} came back with the wrong count: the gateway sent fewer events than it declared. The rest still renders.',
-  'timeline.gap.body.rule3':
-    '{range} does not line up at its edges: the first or last seq we got misses the declared boundary (usually a partial send). The rest still renders.',
-  'timeline.gap.body.rule4':
-    '{range} contains duplicate events: the same seq arrived twice, so it was not merged. The rest still renders.',
-  'timeline.gap.detail': 'expected {expected} / received {received}.',
-  'timeline.gap.notice':
-    'Event backfill failed its checks and still has a gap after one re-pull; see the banner above the timeline.',
-  'replay.notice.partial':
-    'Restored details for only {runs} of {total} recent runs (event backfill hit its limit).',
-  'replay.notice.failed':
-    'Event log backfill is unavailable; showing only what the live stream already delivered.',
-  'replay.notice.stage1cap':
-    'Stage 1 of the event backfill (session log) hit its page cap: details older than the last {runs} runs (trace-only events) may not have been backfilled this time.',
   'gateway.error.unauthorized':
     'The token is invalid or expired; enter it again in connection settings.',
   'gateway.error.forbidden': 'This token cannot perform the operation.',

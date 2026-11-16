@@ -120,11 +120,6 @@ export interface EventStoreSnapshot {
   entries: readonly StoredEvent[];
   /** 单游标（`client_timeline_seq`）的当前值；重连 `since` / hello 判断用。 */
   lastSeq: number;
-  /**
-   * 缺口声明面（UI 污点条读它）：`tainted` = 这个会话有一段事件读不回来，其余照常渲染
-   * （ADR-105 §6「污点标记但不阻断渲染」）。进快照是因为**界面必须能看见它**。
-   */
-  timelineGap: TimelineGapState;
   version: number;
 }
 
@@ -170,7 +165,6 @@ function emptySnapshot(): EventStoreSnapshot {
   return {
     entries: [],
     lastSeq: 0,
-    timelineGap: emptyGapState(),
     version: 0,
   };
 }
@@ -850,7 +844,6 @@ export class EventStore {
     this.snapshot = {
       entries: [],
       lastSeq: nextSeq,
-      timelineGap: this.gap,
       version: this.version,
     };
     this.cancelTimer();
@@ -868,7 +861,6 @@ export class EventStore {
       // 复制数组：entries 在 push 中原地追加，复用引用会让 memo 消费者永远看到旧视图。
       entries: [...this.entries],
       lastSeq: this.clientTimelineSeq,
-      timelineGap: this.gap,
       version: this.version,
     };
     // 快照是整体替换的：没有「增量字段」需要在消费后清空（旧的 truncatedSince 已删）。

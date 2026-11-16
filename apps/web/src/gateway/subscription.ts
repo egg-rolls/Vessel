@@ -28,13 +28,11 @@
              + 内容 id 去重）在本单**整段删除**：那是三源（会话日志 /
  * run trace / 进程内环）的补丁，不是时间线的能力。
  *
- * 还没落地的协议（proto-b1 的 `timeline.hello` / `after_timeline_seq`）：区间声明与校验
- * 已经收敛在 `gateway/timeline-protocol.ts` 一处，帧自带四字段后只换头部来源，
- * 调用点不动；**在此之前不伪造帧形状**（今天实时帧只带 hub seq，见
- * `EventStore#LEGACY_HUB_SEQ_BASE` 的兼容说明）。
+ * 协议来源（proto-b1 已合入）：`timeline.hello` 的四字段与 `after_timeline_seq` 就是这里
+ * 的唯一输入 —— 区间声明 / 校验 / 续拉全部收敛在 `gateway/timeline-protocol.ts` 一处，
+ * 客户端只持一个 `client_timeline_seq`，没有第二套 seq 空间。
  */
 
-import { t } from '../i18n';
 import type { EventStore } from '../state/event-store';
 import type { GatewayClient } from './client';
 import {
@@ -210,11 +208,6 @@ export class SubscriptionController {
   constructor(
     private readonly client: GatewayClient,
     private readonly eventStore: EventStore,
-    /**
-     * 可读提示的出口（缺口必须说出来，不许静默）。
-     * 缺省 = 不说话（仍进 `EventStore#timelineGap` 与 console）。
-     */
-    private readonly notice?: (message: string) => void,
   ) {
     // 续拉循环的实时流那一半：本趟 epoch 记完，若服务端声明区间短于应到右端
     // （每趟 ≤ 2000 条导致的），立刻按 `after_timeline_seq = 本趟末 seq` 再订一次。
@@ -267,7 +260,7 @@ export class SubscriptionController {
    * 只会让**下一个** hello 命中；连接级 hello 不受影响。
    *
    * 0.54：回填不再由 hello 触发（它按 `event_cursor` 的区间走，且发生在订阅**之前**），
-   * 所以这里只有两种答案。实时流的 seq 纪元对齐由调用方做（`truncateLive`）。
+   * 所以这里只有两种答案。帧 seq 与游标同一空间，不需要任何"纪元对齐"。
    */
   consumeHello(info: HelloInfo): 'connection' | 'subscribe' {
     // 0.54 B1：`timeline_source === 'timeline'` ⇒ 本 epoch 的帧带 `timeline_seq`，四条校验
@@ -393,8 +386,8 @@ export class SubscriptionController {
    * 声明多少收多少、校验多少、失败也只重拉这一段。
    *
    * 失败处置（ADR-105 §7「失败时的处置」同口径）：某一段校验不过 ⇒ **重拉这一段一次**；
-   * 还不过 ⇒ 缺口进 `timelineGap`（UI 污点条 +
-             + console）并停手 —— 半段覆盖**绝不**静默。
+   * 还不过 ⇒ 缺口进 `timelineGap`（数据面记账 + console + `timeline_gap_reported` 上报，
+   * **不上界面**）并停手 —— 半段覆盖绝不静默。
    *
    * 观测：跑完打一行
    * `[timeline-backfill] segments=… declared=… fetched=… entries=… end=… target=…`，
@@ -459,7 +452,8 @@ export class SubscriptionController {
               receivedCount: outcome.fetched,
               at: Date.now(),
             });
-            this.notice?.(t('timeline.gap.notice'));
+            // 面向用户的提示一律不发（用户定：这类内部时序细节不该出现在前端）；
+            // 出口只有 `reportTimelineGap` 里的 console + `timeline_gap_reported` 上报。
             break;
           }
           continue;
