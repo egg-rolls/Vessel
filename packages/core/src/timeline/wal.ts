@@ -16,7 +16,7 @@
  * @module @vessel-agent/core/timeline
  */
 
-import { open, readdir, readFile } from 'node:fs/promises';
+import { type FileHandle, open, readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   isTimelineBlobRef,
@@ -270,6 +270,140 @@ export async function truncateFile(path: string, size: number): Promise<void> {
     await handle.truncate(size);
   } finally {
     await handle.close();
+  }
+}
+
+/*
+ * ── 尾窗读（第十一条：启动路径不许 O(会话大小)） ────────────────────────────
+ *
+ * 写者 `open()` 恢复状态时的唯一读原语。三问回答：
+ *
+ * - **上界**：一次调用最多读 `maxBytes`（缺省 4 MiB），首窗 `firstBytes`（缺省 256 KiB）；
+ *   行数上界 = 窗口字节数 / 最短行，两条都在常量里，不随会话长大；
+ * - **谁在触发**：`TimelineWriter.open()`（进程启动 / 会话打开 / idle 压缩 / adopt）；
+ * - **用户看得到吗**：看不到 —— 所以只读「回答问题所需要的最后一小段」：最后一条事实
+ *   的 seq、最后一条归档行的 seq、最后一条状态声明。更早的内容属于**显式修复**路径
+ *   （写者打开失败于自洽检查时才退回全量读）。
+ */
+
+/** 尾窗首读字节数（256 KiB ≈ 上百条事实行 / 上千条 manifest 行）。 */
+export const TAIL_WINDOW_FIRST_BYTES = 256 * 1024;
+
+/** 尾窗扩读上限（4 MiB = 单条内联 `data` 上限的 4 倍；超过它就不猜，交由调用方退回全量）。 */
+export const TAIL_WINDOW_MAX_BYTES = 4 * 1024 * 1024;
+
+/** 尾窗读结果；**只含完整行**，`truncateTo` 指需要截掉的撕裂残行。 */
+export interface NdjsonTailWindow {
+  /** 窗口里的完整行（文件顺序：旧 → 新）。窗口起点被切在半行时，那半行被丢掉。 */
+  lines: string[];
+  /** 窗口是否覆盖到**文件起点**（false ⇒ 更早的行没读，别把它当「全部」）。 */
+  fromStart: boolean;
+  /** 文件总字节数。 */
+  size: number;
+  /** 末尾撕裂残行的截断偏移（`undefined` = 文件以换行结尾，没有残行）。 */
+  truncateTo?: number;
+}
+
+/**
+ * 读 `[offset, offset+length)` 并读满；读不满（文件在读取期间变短 / 不存在）⇒ `undefined`。
+ *
+ * 与 `read-port.ts#readWindow` 同一口径，抽在这里是为了让「尾窗读」只有一份实现。
+ */
+export async function readFileWindow(
+  path: string,
+  offset: number,
+  length: number,
+): Promise<Buffer | undefined> {
+  if (length <= 0) return undefined;
+  let handle: FileHandle;
+  try {
+    handle = await open(path, 'r');
+  } catch {
+    return undefined;
+  }
+  try {
+    const buffer = Buffer.alloc(length);
+    let filled = 0;
+    while (filled < length) {
+      const { bytesRead } = await handle.read(buffer, filled, length - filled, offset + filled);
+      if (bytesRead === 0) return undefined; // 文件变短了：不猜
+      filled += bytesRead;
+    }
+    return buffer;
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+/**
+ * 从一个 ndjson 文件的**尾部**读回完整行（不整份读）。
+ *
+ * 三条纪律：
+ *
+ * 1. **只返回完整行**：窗口起点切在一条记录中间时，那一段**丢掉**（不拼接、不猜）；
+ * 2. **撕裂残行要报出来**：末尾没有换行 ⇒ 最后一行从未完整写出（`write` 与换行在同一次
+ *    调用里），`truncateTo` 给调用方去截断 —— 与全量读 `readCrcNdjsonFile` 的口径逐字相同；
+ * 3. **读不到就说不知道**：文件不存在 / 读取期间变短 / 预算内连一条完整行都拿不到 ⇒
+ *    `undefined`。调用方必须把它当「不能用尾窗下结论」，退回全量路径。
+ *
+ * 本函数**不校验 CRC、不解析 JSON**：坏行留给调用方判定（写者要把它们登记成洞，读侧跳过）。
+ */
+export async function readNdjsonTail(
+  path: string,
+  firstBytes: number = TAIL_WINDOW_FIRST_BYTES,
+  maxBytes: number = TAIL_WINDOW_MAX_BYTES,
+): Promise<NdjsonTailWindow | undefined> {
+  let size: number;
+  try {
+    size = (await stat(path)).size;
+  } catch {
+    return undefined;
+  }
+  if (size <= 0) return { lines: [], fromStart: true, size: 0 };
+
+  const budget = Math.max(1, Math.min(Math.floor(maxBytes), size));
+  let window = Math.max(1, Math.min(Math.floor(firstBytes), budget));
+  for (;;) {
+    const start = Math.max(0, size - window);
+    const buffer = await readFileWindow(path, start, size - start);
+    if (buffer === undefined) return undefined;
+
+    // ① 起点切在半行上 ⇒ 丢掉第一段（它缺前半截）。
+    let regionStart = 0;
+    if (start > 0) {
+      const firstNewline = buffer.indexOf(0x0a);
+      if (firstNewline === -1) {
+        // 窗口里连一个换行都没有：窗口太小（一行很长），扩窗重来；预算用尽就不猜。
+        if (window >= budget) return undefined;
+        window = Math.min(window * 4, budget);
+        continue;
+      }
+      regionStart = firstNewline + 1;
+    }
+
+    // ② 末尾撕裂残行：文件不以换行结尾 ⇒ 最后一段从未完整写出。
+    let contentEnd = buffer.length;
+    let truncateTo: number | undefined;
+    if (buffer.length > 0 && buffer[buffer.length - 1] !== 0x0a) {
+      const lastNewline = buffer.lastIndexOf(0x0a);
+      if (lastNewline === -1) {
+        // 走到这里只可能是「整个文件就是一条残行」（start === 0 且没有换行）。
+        return { lines: [], fromStart: true, size, truncateTo: 0 };
+      }
+      contentEnd = lastNewline + 1;
+      truncateTo = start + contentEnd;
+    }
+
+    const text = buffer.toString('utf8', regionStart, contentEnd);
+    const lines = text.length === 0 ? [] : text.split('\n');
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+    const result: NdjsonTailWindow = {
+      lines,
+      fromStart: start === 0,
+      size,
+      ...(truncateTo !== undefined ? { truncateTo } : {}),
+    };
+    return result;
   }
 }
 

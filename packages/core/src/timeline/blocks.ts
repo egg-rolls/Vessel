@@ -18,7 +18,7 @@
  * @module @vessel-agent/core/timeline
  */
 
-import { type FileHandle, mkdir, open, readFile, unlink } from 'node:fs/promises';
+import { type FileHandle, mkdir, open, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   BLOCK_MAX_BYTES,
@@ -38,9 +38,20 @@ import {
   listBlockFiles,
   parseWithCrc,
   readCrcNdjsonFile,
+  readNdjsonTail,
   truncateFile,
   withCrc,
 } from './wal.js';
+
+/**
+ * `wal.manifest` 尾窗预算（只服务 `recovery: 'tail'`）。
+ *
+ * 一行 ≈ 150 B，64 KiB ≈ 400 个条目 —— 足够覆盖「最后一个块的条目」以及它前面若干条；
+ * 上限 1 MiB。**超过就不猜**：拿不到尾窗就没有互校结论（`manifestCrossChecked = false`），
+ * 写者退回全量恢复。
+ */
+const WAL_MANIFEST_TAIL_BYTES = 64 * 1024;
+const WAL_MANIFEST_TAIL_MAX_BYTES = 1024 * 1024;
 
 /*
  * ── 路由政策：哪些 chunk 配进块（0.54 chunk-slim） ─────────────────────────
@@ -99,6 +110,20 @@ export interface ChunkBlockStoreOptions {
   maxBytes?: number;
   /** 测试缝：每次真正 fsync 之前调用；抛错 = 模拟 fsync 失败。 */
   beforeSync?: (kind: TimelineSyncKind) => void;
+  /**
+   * 恢复范围（第十一条：启动路径有界）。
+   *
+   * | 取值 | 解哪些块 | 用在哪 |
+   * | --- | --- | --- |
+   * | `'full'`（缺省） | **全部**块文件 + 全量 `wal.manifest` 互校 | 显式修复 / 索引不可信 / 尾窗不自洽 |
+   * | `'tail'` | 只解**最后一个**块 + `wal.manifest` 尾窗互校 | 写者 `open()` 的增量路径 |
+   *
+   * `'tail'` 只是**少读**，不放松判定：最后一个块的撕裂尾帧照样截断、坏帧照样报
+   * `invalid`、manifest 说写完但帧缺/块不在照样报（只是范围限制在尾部）。写者拿到
+   * `manifestCrossChecked = false` 或非空 `invalid` 时必须退回 `'full'` —— 尾窗没看全的
+   * 部分，只有全量恢复能下结论。
+   */
+  recovery?: 'full' | 'tail';
 }
 
 export interface ChunkBlockSeal {
@@ -112,6 +137,14 @@ export interface ChunkBlockRecovery {
   invalid: Array<{ from_seq: number; to_seq: number; reason: string }>;
   /** 被截断过的块文件名（撕裂尾帧清理）。 */
   truncated: string[];
+  /**
+   * 本次恢复有没有把 `wal.manifest` 与本趟解出来的块**互校过**。
+   *
+   * `'full'` 恒 `true`。`'tail'` 下只有在「manifest 尾窗读得出来」且「尾窗覆盖到 manifest
+   * 起点或至少含最后一个块的条目」时才是 `true`；否则为 `false` ⇒ 调用方**不许**用这次
+   * 恢复的结论走增量路径（退回 `'full'`）。
+   */
+  manifestCrossChecked: boolean;
 }
 
 /** `wal.manifest` 一行的形状校验（crc 之外还要形状对，才配当「完整性证明」）。 */
@@ -125,6 +158,22 @@ function validateManifestLine(parsed: unknown): WalManifestLine | undefined {
   if (!Number.isSafeInteger(line.bytes) || line.bytes < 0) return undefined;
   if (typeof line.crc32 !== 'string' || line.crc32.length === 0) return undefined;
   return line;
+}
+
+/**
+ * `wal.manifest` 尾窗里一行文本 → 条目（坏行 ⇒ `undefined`，与全量读同口径忽略）。
+ *
+ * 尾窗读给的是**原始行**（`wal.ts#readNdjsonTail` 不解析 JSON），所以这里补上「解析 +
+ * 形状校验」，判据仍然只有 {@link validateManifestLine} 一份。
+ */
+function parseManifestText(text: string): WalManifestLine | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  return validateManifestLine(parsed);
 }
 
 /**
@@ -184,6 +233,11 @@ export class ChunkBlockStore {
    *   没有 manifest 行 = 崩在「块已 fsync、manifest 还没写」之间，帧本身都在，
    *   因此不参与这条判定（避免把正常崩溃误判成丢数据）；
    * - 下一个块号从现有最大块号 + 1 开始（崩溃留下的半块不会被续写）。
+   *
+   * `options.recovery` 决定**解几个块**（见 {@link ChunkBlockStoreOptions.recovery}）：
+   * `'full'` 全解，`'tail'` 只解最后一个 + 只拿 manifest 尾窗互校。`'tail'` 存在的唯一
+   * 理由是写者 `open()` 要满足第十一条（启动路径不许 O(会话大小)）—— 12,900 个块文件
+   * 88 MB 也只在「最后一个块」这一小块上花时间，判定口径一个字都不放松。
    */
   static async open(
     sessionDir: string,
@@ -192,14 +246,17 @@ export class ChunkBlockStore {
     const blocksDir = join(sessionDir, TIMELINE_LAYOUT.walBlocks);
     await mkdir(blocksDir, { recursive: true });
     const names = await listBlockFiles(blocksDir);
+    const tailOnly = options.recovery === 'tail';
+    // 上界：`'tail'` 只解 1 个块文件（≤ `maxBytes` + 一帧），`'full'` 解全部。
+    const decodedNames = tailOnly ? names.slice(-1) : names;
     const records: TimelineRecord[] = [];
     const invalid: ChunkBlockRecovery['invalid'] = [];
     const truncated: string[] = [];
     /** 每个块里「可读或已声明坏帧」的 seq（manifest 比对用）。 */
     const coveredByBlock = new Map<string, Set<number>>();
     let maxNumber = 0;
-    for (const name of names) {
-      maxNumber = Math.max(maxNumber, blockNumber(name));
+    for (const name of names) maxNumber = Math.max(maxNumber, blockNumber(name));
+    for (const name of decodedNames) {
       const path = join(blocksDir, name);
       const buffer = await readFile(path).catch(() => undefined);
       if (buffer === undefined) continue;
@@ -221,26 +278,68 @@ export class ChunkBlockStore {
 
     // manifest ↔ 块文件互相校验（I4 对块内丢帧同样适用）。
     const manifestPath = join(sessionDir, TIMELINE_LAYOUT.walManifest);
-    const manifest = await readCrcNdjsonFile<WalManifestLine>(
-      manifestPath,
-      validateManifestLine,
-    ).catch(() => undefined);
-    // 崩在「manifest 追加中途」会留下半行；截掉它，否则下一次追加的行会接在半行后面
-    // 变成一行坏 JSON —— 一条条目丢失就等于一条完整性证明丢失（目录是派生数据，可截）。
-    if (manifest?.truncateTo !== undefined) await truncateFile(manifestPath, manifest.truncateTo);
-    for (const entry of manifest?.items ?? []) {
-      const covered = coveredByBlock.get(entry.block);
-      if (covered === undefined) {
-        // manifest 说这个块写完了，块文件却不在 ⇒ 整段丢失（块只写一次、永不重写）。
-        invalid.push({
-          from_seq: entry.start_seq,
-          to_seq: entry.end_seq,
-          reason: 'chunk_block_file_missing',
-        });
-        continue;
+    let manifestCrossChecked = true;
+    if (tailOnly) {
+      const exists = await stat(manifestPath).catch(() => undefined);
+      const last = decodedNames[decodedNames.length - 1];
+      if (exists !== undefined) {
+        // manifest 是目录、可由扫描重建：不整份读，只看尾部（有界）。
+        const window = await readNdjsonTail(
+          manifestPath,
+          WAL_MANIFEST_TAIL_BYTES,
+          WAL_MANIFEST_TAIL_MAX_BYTES,
+        );
+        if (window === undefined) {
+          manifestCrossChecked = false;
+        } else {
+          // 崩在「manifest 追加中途」会留下半行；截掉它，否则下一次追加会接在半行后面。
+          if (window.truncateTo !== undefined) {
+            await truncateFile(manifestPath, window.truncateTo);
+          }
+          for (const text of window.lines) {
+            const entry = parseManifestText(text);
+            if (entry === undefined) continue; // 坏行：与全量读同一口径忽略
+            const covered = coveredByBlock.get(entry.block);
+            if (covered === undefined) {
+              // 只对「比最后解出来的块更新」的条目下结论（更早的块本趟没解，留给显式修复）。
+              if (last !== undefined && entry.block <= last) continue;
+              invalid.push({
+                from_seq: entry.start_seq,
+                to_seq: entry.end_seq,
+                reason: 'chunk_block_file_missing',
+              });
+              continue;
+            }
+            for (const range of missingRanges(entry.start_seq, entry.end_seq, covered)) {
+              invalid.push({ ...range, reason: 'chunk_block_short_of_manifest' });
+            }
+          }
+        }
       }
-      for (const range of missingRanges(entry.start_seq, entry.end_seq, covered)) {
-        invalid.push({ ...range, reason: 'chunk_block_short_of_manifest' });
+    } else {
+      const manifest = await readCrcNdjsonFile<WalManifestLine>(
+        manifestPath,
+        validateManifestLine,
+      ).catch(() => undefined);
+      // 崩在「manifest 追加中途」会留下半行；截掉它，否则下一次追加的行会接在半行后面
+      // 变成一行坏 JSON —— 一条条目丢失就等于一条完整性证明丢失（目录是派生数据，可截）。
+      if (manifest?.truncateTo !== undefined) {
+        await truncateFile(manifestPath, manifest.truncateTo);
+      }
+      for (const entry of manifest?.items ?? []) {
+        const covered = coveredByBlock.get(entry.block);
+        if (covered === undefined) {
+          // manifest 说这个块写完了，块文件却不在 ⇒ 整段丢失（块只写一次、永不重写）。
+          invalid.push({
+            from_seq: entry.start_seq,
+            to_seq: entry.end_seq,
+            reason: 'chunk_block_file_missing',
+          });
+          continue;
+        }
+        for (const range of missingRanges(entry.start_seq, entry.end_seq, covered)) {
+          invalid.push({ ...range, reason: 'chunk_block_short_of_manifest' });
+        }
       }
     }
     invalid.sort((a, b) => a.from_seq - b.from_seq);
@@ -252,7 +351,7 @@ export class ChunkBlockStore {
       options,
       maxNumber + 1,
     );
-    return { store, recovery: { records, invalid, truncated } };
+    return { store, recovery: { records, invalid, truncated, manifestCrossChecked } };
   }
 
   /** 当前活动块里的记录数（0 = 没有待封块）。 */

@@ -40,6 +40,25 @@
  * ① 活动块 ≥ `BLOCK_MAX_BYTES`；② 非 chunk 事件先封块再写该行（严格交错）；
  * ③ 空闲 `chunk_flush_ms`；④ `flush()` / `close()`。
  *
+ * ## 打开（`open()`）读多少（第十一条：启动路径不许 O(会话大小)）
+ *
+ * 两条路径，**一套语义**（产出同一份状态：`next_seq` / 两个 head / `published` / 洞 /
+ * 污点 / 索引 / 下一个块号），差别只是读多少：
+ *
+ * | 路径 | 读什么 | 上界（常量） | 什么时候走 |
+ * | --- | --- | --- | --- |
+ * | 增量（`tryIncrementalRecovery`） | `timeline.idx` + `wal.log` 尾窗 + 归档尾窗 + `timeline.manifest` 尾窗 + **最后一个**块 + `wal.manifest` 尾窗 + `holes.ndjson` | 32 MiB + 4 MiB×2 + 1 MiB + 一个块（32 KiB 级）+ 洞文件 | 缺省；能自洽答出四个 head 时 |
+ * | 全量（`fullRecovery`） | 上面全部 + 其余所有块与整份 `wal.log` / 归档 | O(会话大小) | 增量路径任何一条自洽检查不成立时，**以及显式修复**（删掉 `timeline.idx/` 再 open） |
+ *
+ * 增量路径**一条判定都没有放松**：它只是「少读」。可疑就整份读 —— 索引缺失/算术不自洽、
+ * 与尾窗不一致、尾窗里有坏行/坏帧、`wal.manifest` 说写完但块缺帧、manifest 尾部答不准，
+ * 六种情况一律退回全量。因此「洞声明」「adopt 边界」「冻结闸门」「`published_head` 语义」
+ * 在两条路径上完全一样。取舍写在明处：**历史中段**（早已封好的老块、更早的 `wal.log` 行）
+ * 的外部损坏不再每次打开都重扫一遍 —— 那是显式修复路径的职责，不是启动路径的。
+ *
+ * 实测量级（`d813eaea`：206,561 条 seq / `wal.log` 6.9 MB / 归档 6.9 MB / 12,900 个块
+ * 88 MB）：全量恢复要逐帧解析 340 MB，秒级；增量恢复只解析尾部几十条，毫秒级。
+ *
  * **谁能进本写者（0.54 chunk-slim）**：chunk 家族里只有**有持久化价值**的那两个子类型
  * （`text_delta` / `reasoning_delta`）。`tool_call_delta` / `finish` 是瞬时 UI 提示
  * （刷新后由 `tool.call.started` / `tool.call.completed` / `llm.response` 复原），
@@ -60,7 +79,7 @@ import { atomicWrite } from '../session/atomic-write.js';
 import { type ChunkBlockSeal, ChunkBlockStore, isTransientChunkEvent } from './blocks.js';
 import { assertTimelineWritable } from './freeze.js';
 import { HoleRegistry, type HoleRetirementResult } from './holes.js';
-import { TimelineIndexBuilder, writeIndexSnapshot } from './index.js';
+import { loadIndexSnapshot, TimelineIndexBuilder, writeIndexSnapshot } from './index.js';
 import {
   BLOCK_MAX_BYTES,
   CHUNK_FLUSH_LEAD_MS,
@@ -83,11 +102,14 @@ import {
   crc32Hex,
   encodeLine,
   fsyncDirectory,
+  parseRecordLine,
   parseWithCrc,
   readCrcNdjsonFile,
   readNdjsonFile,
+  readNdjsonTail,
   readTimelineEvents,
   stampRecord,
+  TAIL_WINDOW_MAX_BYTES,
   truncateFile,
   withCrc,
 } from './wal.js';
@@ -159,6 +181,25 @@ interface ChunkStep {
 }
 
 const ARCHIVE_RETRY_DELAYS_MS = [100, 500, 2_000] as const;
+
+/*
+ * ── `open()` 的读预算（第十一条：上界是常量，不是「取决于数据量」） ──────────
+ *
+ * 三问：上界 = 下面四个常量之和（32 MiB + 4 MiB×2 + 1 MiB + 一个块文件）；
+ * 谁触发 = `TimelineWriter.open()`（进程启动 / 会话打开 / idle 压缩 / adopt）；
+ * 用户看得到吗 = 看不到，所以只读回答问题所需的最尾部。
+ *
+ * 取值理由：
+ * - `OPEN_INDEX_SEED_MAX_BYTES`：`type.idx` ≈ 7 B/事件 ⇒ 32 MiB ≈ 450 万事件。超过这个
+ *   量级的索引不再是「派生缓存」而是第二份数据，此时宁可退回全量重建（慢但确定）；
+ * - `OPEN_TAIL_MAX_EXTENSION_RECORDS`：尾窗能覆盖的增量（索引滞后 = 进程被强杀之后）。
+ *   尾窗本身受 `TAIL_WINDOW_MAX_BYTES`（4 MiB）约束，这里再给一个条数上界（≈ 4 MiB / 64 B）；
+ * - `MANIFEST_TAIL_*`：主 manifest 一行 ≈ 100 B，64 KiB ≈ 650 行；扩到 1 MiB ≈ 1 万行。
+ */
+const OPEN_INDEX_SEED_MAX_BYTES = 32 * 1024 * 1024;
+const OPEN_TAIL_MAX_EXTENSION_RECORDS = 64 * 1024;
+const MANIFEST_TAIL_FIRST_BYTES = 64 * 1024;
+const MANIFEST_TAIL_MAX_BYTES = 1024 * 1024;
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -234,6 +275,39 @@ function lastTaintedState(lines: readonly TimelineManifestLine[]): boolean {
   return false;
 }
 
+/**
+ * 主 manifest 尾窗里一行文本 → 行对象（坏行 ⇒ `undefined`，与全量读同口径忽略）。
+ *
+ * 尾窗读给的是原始行（`wal.ts#readNdjsonTail` 不解析 JSON），判据仍然只有
+ * {@link validateManifestLine} 一份。
+ */
+function parseManifestText(text: string): TimelineManifestLine | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  return validateManifestLine(parsed);
+}
+
+/**
+ * 尾窗里的行 → 记录；**任何一行不合法就返回 `undefined`**。
+ *
+ * 为什么不是「跳过坏行」：坏行意味着「这条 seq 读不回来」，而「读不回来必须可声明」
+ * （ADR-105 §3）—— 声明要按原口径走全量恢复那一条路（含从残行里捞 seq、与已有洞去重）。
+ * 增量路径没有写洞的资格，也就不许把坏行当没事。
+ */
+function parseTailRecords(lines: readonly string[]): TimelineRecord[] | undefined {
+  const records: TimelineRecord[] = [];
+  for (const text of lines) {
+    const record = parseRecordLine(text);
+    if (record === undefined) return undefined;
+    records.push(record);
+  }
+  return records;
+}
+
 /** 找出 `[1..maxKnown]` 里既没有记录、也没被洞覆盖的区间（恢复时补登记）。 */
 function findGaps(
   recordSeqs: readonly number[],
@@ -272,6 +346,42 @@ function contiguousHead(recordSeqs: readonly number[], holes: readonly TimelineH
 }
 
 /**
+ * `(fromExclusive, toInclusive]` 里**没被存活洞覆盖**的区间（升序）—— 增量路径版的
+ * {@link findGaps}。
+ *
+ * 全量恢复逐个 seq 问「这个号在不在记录集合里」；增量路径已经证明了记录集恰好是连续区间
+ * `[1..fromExclusive]`，于是同一个判定只需要在洞区间上做减法：判据一样，20 万次集合查询
+ * 换成几个区间的比较。
+ *
+ * `fromExclusive >= toInclusive` ⇒ 空数组（没有需要补声明的缺口）。
+ */
+function uncoveredTailRanges(
+  fromExclusive: number,
+  toInclusive: number,
+  holes: readonly TimelineHole[],
+): Array<{ from_seq: number; to_seq: number }> {
+  if (toInclusive <= fromExclusive) return [];
+  const covered: Array<[number, number]> = [];
+  for (const hole of holes) {
+    if (hole.to_seq <= fromExclusive) continue;
+    covered.push([Math.max(hole.from_seq, fromExclusive + 1), hole.to_seq]);
+  }
+  covered.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const gaps: Array<{ from_seq: number; to_seq: number }> = [];
+  let cursor = fromExclusive + 1;
+  for (const [start, end] of covered) {
+    if (end < cursor) continue;
+    if (start > cursor) {
+      gaps.push({ from_seq: cursor, to_seq: Math.min(start - 1, toInclusive) });
+    }
+    cursor = Math.max(cursor, end + 1);
+    if (cursor > toInclusive) break;
+  }
+  if (cursor <= toInclusive) gaps.push({ from_seq: cursor, to_seq: toInclusive });
+  return gaps;
+}
+
+/**
  * 每会话一个的 append-only timeline 写入者。
  *
  * 同一会话只允许一个实例（跨进程由数据目录写意图锁保证；本模块不做锁）。
@@ -288,7 +398,11 @@ export class TimelineWriter {
   private walHandle!: FileHandle;
   private holes!: HoleRegistry;
   private blocks!: ChunkBlockStore;
-  private readonly indexBuilder = new TimelineIndexBuilder();
+  /**
+   * 索引构造器。**不是 `readonly`**：全量恢复要从零重建（`fullRecovery` 会换一个新实例，
+   * 否则增量路径打过的底会让条数被算两遍）。
+   */
+  private indexBuilder = new TimelineIndexBuilder();
 
   private nextSeq = 1;
   private walHead = 0;
@@ -517,6 +631,18 @@ export class TimelineWriter {
 
   // ---------------------------------------------------------------- open
 
+  /**
+   * 打开时的状态恢复：**先增量、后全量**，两条路径产出同一份状态。
+   *
+   * 增量路径（`tryIncrementalRecovery`）读的是「索引 + 尾部窗口」，上界全是常量；只要它
+   * 能自洽地答出四个 head，就不碰会话的历史部分。任何一条自洽检查不成立 ⇒ 退回
+   * `fullRecovery`（整份读，0.54 之前唯一的那条路径），**判定口径一个字都不放宽**。
+   *
+   * 为什么必须这样分（第十一条 · 真实事故）：`d813eaea` 这种 19 万事件 / 340 MB 的会话，
+   * 一次全量恢复要读 6.9 MB `wal.log` + 6.9 MB 归档 + 4,150~12,900 个块文件（≈ 88 MB），
+   * 逐帧 JSON.parse + CRC，实测秒级；而 `dualWrite` 现在是每次进程启动 / 会话打开 /
+   * idle 压缩 / adopt 都要付一遍。用户看到的就是「重启后明显变慢」。
+   */
   private async initialize(): Promise<void> {
     await mkdir(this.sessionDir, { recursive: true });
     // 旧格式会话只读冻结（ADR-105 D4）。判据与错误码在 `freeze.ts` 一处定义：
@@ -535,9 +661,174 @@ export class TimelineWriter {
       beforeSync: this.options.beforeSync,
       now: this.options.now,
     });
+
+    if (!(await this.tryIncrementalRecovery())) await this.fullRecovery();
+
+    const info = await stat(this.walPath).catch(() => undefined);
+    this.walSize = info?.size ?? 0;
+    this.walHandle = await open(this.walPath, 'a', 0o600);
+  }
+
+  /**
+   * 增量恢复（启动路径；读量上界 = 索引 32 MiB + 尾窗各 4 MiB + 一个块文件）。
+   *
+   * 返回 `false` = **什么都没提交**（除了撕裂尾帧的截断，那是两条路径共有的清理），调用方
+   * 必须走 {@link fullRecovery}。所有自洽检查的结论都只用「索引的算术性质 + 盘上尾窗实测」
+   * 两件事，任一处对不上就整份读：
+   *
+   * | 检查 | 不成立意味着 |
+   * | --- | --- |
+   * | 索引存在且三文件总量 ≤ 32 MiB | 索引缺失/被删/过大 ⇒ 没有水位锚点 |
+   * | `first_seq = 1 ∧ count = last_seq`（空会话单独放行） | `1..last_seq` 可能有号不在 ⇒ 算不出 `wal_head` 的连续性 |
+   * | 尾窗实测 `tailMax ≥ last_seq` 且 `(last_seq, tailMax]` 逐号齐全 | 索引比盘上还新，或尾窗没覆盖住尾部 |
+   * | 尾窗里每一行都是合法记录 | 有坏行 ⇒ 必须按原口径登记成洞（那是全量路径的活） |
+   * | 块侧 `manifestCrossChecked` 且 `invalid` 为空 | 最后一个块与 manifest 对不上 ⇒ 可能真有丢数据 |
+   * | manifest 尾窗找得到 `archive` 行与状态声明（或已到文件起点） | `timeline_head` / `tainted` 的 last-wins 答不准 |
+   *
+   * 第 5、6 行是**故意保守**的：任何可疑都退回全量，宁可慢一次也不猜。
+   */
+  private async tryIncrementalRecovery(): Promise<boolean> {
+    // ① 索引（派生数据）：先看预算再读。超过上限 ⇒ 不读，走全量（第十一条：有界优先）。
+    const snapshot = await loadIndexSnapshot(this.sessionDir, OPEN_INDEX_SEED_MAX_BYTES);
+    if (snapshot === undefined) return false;
+    // 「1..last_seq 每个号都在」只能由索引自己的算术给出：`count` 是**不同 seq 的个数**，
+    // 于是 `first_seq = 1 ∧ count = last_seq` ⇒ 1..last_seq 没有一个号缺失。空会话（还没
+    // 写过任何事件，`count = last_seq = 0`）没有「1..N」可数，单独放行。
+    const isEmptyIndex = snapshot.session.count === 0 && snapshot.session.last_seq === 0;
+    const isContiguous =
+      snapshot.session.first_seq === 1 && snapshot.session.count === snapshot.session.last_seq;
+    if (!isEmptyIndex && !isContiguous) return false;
+
+    // ② 归档副本尾窗：`timeline_head` 只要「最后一条归档行的 seq」，一段就够。
+    const archivedTail = await readNdjsonTail(this.timelinePath);
+    if (archivedTail === undefined) return false;
+    // 坏行**不在这一步声明**：洞必须按原口径（含残行捞 seq、与已有洞去重）由全量路径登记，
+    // 所以这里见到一行不合法就整份重读。
+    const archivedRecords = parseTailRecords(archivedTail.lines);
+    if (archivedRecords === undefined) return false;
+
+    // ③ 主 manifest 尾窗：最后一条 `archive`（archivedTo）+ 最后一条状态声明（污点 last-wins）。
+    const manifest = await this.readManifestTail();
+    if (manifest === undefined) return false;
+
+    // ④ 块：只解最后一个块，并用 `wal.manifest` 尾窗与它互校（口径同 `recovery:'full'`）。
     const blockOpen = await ChunkBlockStore.open(this.sessionDir, {
       maxBytes: this.options.blockMaxBytes ?? BLOCK_MAX_BYTES,
       beforeSync: this.options.beforeSync,
+      recovery: 'tail',
+    });
+    if (!blockOpen.recovery.manifestCrossChecked) return false;
+    // 块侧任何一处不自洽（坏帧 / manifest 说写完但帧缺 / 块文件不在）⇒ 退回全量：
+    // 洞声明是正确性，这一步一个字都不省。
+    if (blockOpen.recovery.invalid.length > 0) return false;
+
+    /**
+     * 一趟 `wal.log` 尾窗 → `(last_seq, tailMax]` 的增量记录。
+     *
+     * 返回 `undefined` 的三种情形都意味着「这趟尾窗答不准」：尾窗里有坏行、索引比盘上还新、
+     * 或增量区间不是逐号齐全（尾窗没覆盖住 / 中间可能缺号）。
+     */
+    const buildExtension = (
+      walLines: readonly string[],
+    ): { extension: TimelineRecord[]; tailMax: number } | undefined => {
+      const walRecords = parseTailRecords(walLines);
+      if (walRecords === undefined) return undefined;
+      const tail = new Map<number, TimelineRecord>();
+      // 覆盖顺序与全量恢复一致：归档副本 < 块帧 < WAL 原文（同一条逐字节相同，后者覆盖以防截断）。
+      for (const record of archivedRecords) tail.set(record.seq, record);
+      for (const record of blockOpen.recovery.records) tail.set(record.seq, record);
+      for (const record of walRecords) tail.set(record.seq, record);
+      let tailMax = 0;
+      for (const seq of tail.keys()) if (seq > tailMax) tailMax = seq;
+      if (tailMax < snapshot.session.last_seq) return undefined; // 索引比盘上还新 ⇒ 不自洽
+      if (tailMax - snapshot.session.last_seq > OPEN_TAIL_MAX_EXTENSION_RECORDS) return undefined;
+      const extension: TimelineRecord[] = [];
+      for (let seq = snapshot.session.last_seq + 1; seq <= tailMax; seq += 1) {
+        const record = tail.get(seq);
+        if (record === undefined) return undefined;
+        extension.push(record);
+      }
+      return { extension, tailMax };
+    };
+
+    // ⑤ `wal.log` 尾窗（首窗 256 KiB）。装不下增量就按上限（4 MiB）再读一次 —— 那正是
+    // 「进程被强杀、索引滞后一段」的常见形态，仍是有界读。再装不下 ⇒ 全量。
+    let walTail = await readNdjsonTail(this.walPath);
+    if (walTail === undefined) return false;
+    let built = buildExtension(walTail.lines);
+    if (built === undefined && !walTail.fromStart) {
+      walTail = await readNdjsonTail(this.walPath, TAIL_WINDOW_MAX_BYTES, TAIL_WINDOW_MAX_BYTES);
+      if (walTail === undefined) return false;
+      built = buildExtension(walTail.lines);
+    }
+    if (built === undefined) return false;
+    const { extension, tailMax } = built;
+
+    // 撕裂尾帧清理：与全量路径逐字同一口径（末尾没有换行的那一段从未完整写出）。
+    if (walTail.truncateTo !== undefined) await truncateFile(this.walPath, walTail.truncateTo);
+    if (archivedTail.truncateTo !== undefined) {
+      await truncateFile(this.timelinePath, archivedTail.truncateTo);
+    }
+
+    // ⑥ 补声明恢复洞。全量路径的判据是 `findGaps(记录 seq 集合, 洞, knownMax)`：`[1..knownMax]`
+    //    里**既没有记录、也没被洞覆盖**的区间一律登记成 `missing_seq_on_recovery`。
+    //    这里记录集已经证明恰好是区间 `[1..tailMax]`（① 的算术 + ⑤ 的逐号检查），于是同一个
+    //    判定退化成「`(tailMax, knownMax]` 减去洞区间」—— 判据不变，省掉的只是 20 万次
+    //    「这个号在不在集合里」。`archivedTo` 出现在 `knownMax` 里正是「manifest 说已经归档、
+    //    盘上却读不回来」那一类缺口，和全量路径一样要声明，不许因为读得少就少报。
+    const knownMax = Math.max(tailMax, this.holes.maxSeq(), manifest.archivedTo);
+    let declaredHoles = 0;
+    for (const range of uncoveredTailRanges(tailMax, knownMax, this.holes.list())) {
+      try {
+        await this.holes.add(range.from_seq, range.to_seq, 'missing_seq_on_recovery');
+        declaredHoles += 1;
+      } catch {
+        // 洞没落盘 ⇒ 不许拿它顶 `wal_head`（`recordFailure` 的同一纪律）。退回全量，让它再试。
+        return false;
+      }
+    }
+
+    // ⑦ 提交：索引打底 + 追加增量（此后 `persistIndex()` 写出的仍是**完整**索引）。
+    if (!this.indexBuilder.seed(snapshot)) return false;
+    for (const record of extension) this.indexBuilder.add(record);
+
+    this.blocks = blockOpen.store;
+    // ⑥ 之后 `[1..knownMax]` 每条要么是记录、要么已声明成洞 ⇒ 连续头就是 `knownMax`
+    // （与全量路径的 `contiguousHead(seqs, holes)` 同一个结果）。
+    this.walHead = knownMax;
+    this.published = this.walHead;
+    const maxArchived = Math.max(manifest.archivedTo, maxRecordSeq(archivedRecords));
+    this.timelineHead = Math.min(maxArchived, this.walHead);
+    this.nextSeq = Math.max(knownMax, this.holes.maxSeq()) + 1;
+    // 两个来源，任一为真即污点（与全量路径同一判据）。
+    this.taintedFlag = this.holes.list().length > 0 || manifest.tainted;
+    // 索引没变化就不重写：`open()` 不该为「什么都没变」付一次 1 MB 级的 durable 写。
+    // （⑤ 有增量、或 ⑥ 声明了新洞时必须落盘：否则下一次打开又要多读一遍尾部。）
+    this.indexDirty = extension.length > 0 || declaredHoles > 0;
+    if (this.indexDirty) await this.persistIndex();
+    return true;
+  }
+
+  /**
+   * 全量恢复（**唯一的全量重读入口**；0.54 之前 `open()` 只有这一条）。
+   *
+   * 什么时候走到这里（都是「增量路径答不准」的情况，不是错误）：
+   *
+   * - 索引缺失 / 被删 / 超过 {@link OPEN_INDEX_SEED_MAX_BYTES} / 算术不自洽；
+   * - 尾窗里有坏行、坏帧，或 `wal.manifest` 与块对不上（**洞要按原口径声明**）；
+   * - 索引比盘上还新，或尾部的增量超出一个尾窗（例如进程被强杀后索引滞后很多）；
+   * - `wal.manifest` / `timeline.manifest` 的尾部读不出结论。
+   *
+   * 它也是显式修复路径：把索引删掉再打开一次，就等于「整份重读并重建索引 + 重新声明洞」。
+   * 成本 O(会话大小) —— 这就是它不该在启动路径上的原因。
+   */
+  private async fullRecovery(): Promise<void> {
+    // 增量路径可能已经给构造器打过底；全量重建必须从零开始（否则条数会被算两遍）。
+    this.indexBuilder = new TimelineIndexBuilder();
+    const blockOpen = await ChunkBlockStore.open(this.sessionDir, {
+      maxBytes: this.options.blockMaxBytes ?? BLOCK_MAX_BYTES,
+      beforeSync: this.options.beforeSync,
+      recovery: 'full',
     });
     this.blocks = blockOpen.store;
 
@@ -597,10 +888,6 @@ export class TimelineWriter {
     // 打开时**不重读区间**：退役声明只在自证通过后才被写出（`retireHoles()`）。
     this.taintedFlag = this.holes.list().length > 0 || manifest.tainted;
 
-    const info = await stat(this.walPath).catch(() => undefined);
-    this.walSize = info?.size ?? 0;
-    this.walHandle = await open(this.walPath, 'a', 0o600);
-
     this.indexDirty = true;
     await this.persistIndex();
   }
@@ -633,6 +920,51 @@ export class TimelineWriter {
       if (line.kind === 'archive') archivedTo = Math.max(archivedTo, line.to_seq);
     }
     return { archivedTo, tainted: lastTaintedState(result.items) };
+  }
+
+  /**
+   * 从**尾部**读主 manifest 的两个事实（增量恢复用；不整份读）。
+   *
+   * 与 {@link readManifest} 同一个判据，只是范围换成尾窗：
+   *
+   * - `archivedTo` = **文件序最后一条** `archive` 行的 `to_seq`（`archive` 行的 `to_seq` 恒
+   *   单调：`from = timelineHead + 1`、`to = walHead`，而 `timelineHead` 只会推进到 `to`），
+   *   所以「最后一条」就是「全部行里的最大」；
+   * - `tainted` = 从后往前扫到的**第一条**状态声明（last-wins，物理行序，不看 `at`）——
+   *   与 `lastTaintedState()` 同一条口径。
+   *
+   * 两个事实都在尾窗之外时扩窗（64 KiB → 1 MiB）；到上限还答不准 ⇒ `undefined`，调用方
+   * 退回全量恢复。坏行按 {@link readManifest} 的口径**忽略**（那边也不为坏行做任何声明）。
+   */
+  private async readManifestTail(): Promise<{ archivedTo: number; tainted: boolean } | undefined> {
+    let firstBytes = MANIFEST_TAIL_FIRST_BYTES;
+    for (;;) {
+      const window = await readNdjsonTail(this.manifestPath, firstBytes, MANIFEST_TAIL_MAX_BYTES);
+      if (window === undefined) return undefined;
+      // 崩在「manifest 追加中途」留下的半行：与全量读同一处理（截掉，否则下一次追加会接在半行后面）。
+      if (window.truncateTo !== undefined) {
+        await truncateFile(this.manifestPath, window.truncateTo);
+      }
+      let archivedTo = 0;
+      let state: boolean | undefined;
+      for (let index = window.lines.length - 1; index >= 0; index -= 1) {
+        const text = window.lines[index];
+        if (text === undefined) continue;
+        const line = parseManifestText(text);
+        if (line === undefined) continue; // 坏行：与全量读同口径忽略
+        if (archivedTo === 0 && line.kind === 'archive') archivedTo = line.to_seq;
+        if (state === undefined && (line.kind === 'tainted' || line.kind === 'tainted_cleared')) {
+          state = line.kind === 'tainted';
+        }
+        if (archivedTo > 0 && state !== undefined) break;
+      }
+      // 读到了文件起点 ⇒ 更早的行不存在，答案就是它（没有状态声明 ⇒ tainted = false）。
+      if (window.fromStart || (archivedTo > 0 && state !== undefined)) {
+        return { archivedTo, tainted: state === true };
+      }
+      if (firstBytes >= MANIFEST_TAIL_MAX_BYTES) return undefined;
+      firstBytes = Math.min(firstBytes * 4, MANIFEST_TAIL_MAX_BYTES);
+    }
   }
 
   private async appendManifest(line: TimelineManifestLine): Promise<void> {

@@ -5,20 +5,23 @@
  *
  * | 文件 | 内容 | 用途 |
  * | --- | --- | --- |
- * | `timeline.idx/session.idx` | `{first_seq,last_seq,count,holes}` 摘要 | 体积/条数展示；**不得**当判据 |
+ * | `timeline.idx/session.idx` | `{first_seq,last_seq,count,holes}` 摘要 | 体积/条数展示 + 写者 `open()` 的水位锚点 |
  * | `timeline.idx/run.idx` | `run_id → [{start_seq,end_seq}]` | `events.list` 换源、Run 详情 |
  * | `timeline.idx/type.idx` | `type → 有序 seq 列表` | types 前缀过滤、审计检索 |
  *
  * 硬约束（ADR-105 §5 断言）：
  *
  * 1. 删掉整个 `timeline.idx/` ⇒ 读结果逐条相同（只有变慢）；
- * 2. 索引写入假区间 ⇒ 读结果不变 —— 因为**生产读路径恒整份读记录**，索引只用于求 `wal_head`
- *    与 `run_id → session_id` 快路径，没有任何"先信索引再校验"的读动作，也就不存在
- *    "索引不一致 ⇒ 回退全扫"这个环节。`timeline.index_mismatch` 事件随之在 0.54 未实现
- *    （漂移记在 ADR-105 §11.1）；
- * 3. `rebuild` 两次 ⇒ 字节相同。重建的真实路径只有一条：写者打开时读回记录喂进
- *    `TimelineIndexBuilder`（`writer.ts:558`）再用 `writeIndexSnapshot` 落盘（`writer.ts:1205`）；
- *    **不提供**rebuild 包装或"从记录整份构造"的便捷函数（零调用点的包装 = 会腐烂的第二套口径）；
+ * 2. **索引永远不被当成「数据的证据」**。它唯一的判据用法是写者 `open()` 的
+ *    {@link TimelineWriter} 自洽检查：`session.idx` 说 `first_seq = 1 ∧ count = last_seq`
+ *    （一条纯算术性质：`1..last_seq` 每个号都在），**并且**尾窗实测到同一个 `last_seq`。
+ *    两件事只要有一件不成立 —— 缺失 / 算术不自洽 / 与尾窗不一致 —— 就退回「读回记录
+ *    全量重建」，所以假索引最多让人多读一次记录，读出来的结果一个字都不会变。
+ *    删索引同样只会触发这条重建路径（断言 1 仍然成立：只有变慢）；
+ * 3. `rebuild` 两次 ⇒ 字节相同。重建的真实路径有两条，都是同一套 `TimelineIndexBuilder`
+ *    + `writeIndexSnapshot`：写者全量恢复时读回记录喂进构造器（`writer.ts#fullRecovery`），
+ *    或者增量恢复时用 `seed()` 给构造器**打底**再继续累加；**不提供**rebuild 包装或
+ *    "从记录整份构造"的便捷函数（零调用点的包装 = 会腐烂的第二套口径）；
  * 4. 写索引的位置只有本模块与 `writer.ts`（静态门禁在 C 阶段落地）。
  *
  * 原先还有一个"先信索引、逐条校验、不一致回退全扫"的独立**读器**，**已删除**：
@@ -27,7 +30,7 @@
  * @module @vessel-agent/core/timeline
  */
 
-import { mkdir } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { atomicWrite } from '../session/atomic-write.js';
 import { assertTimelineWritable } from './freeze.js';
@@ -75,7 +78,7 @@ function appendSeq(ranges: SeqRange[], seq: number): void {
 export class TimelineIndexBuilder {
   private readonly runs = new Map<string, SeqRange[]>();
   private readonly types = new Map<string, number[]>();
-  private readonly seqSet = new Set<number>();
+  private seqSet = new Set<number>();
   private firstSeq = 0;
   private lastSeq = 0;
   private count = 0;
@@ -114,6 +117,39 @@ export class TimelineIndexBuilder {
   /** 已收录的 seq 升序副本（连续性计算用；不要改它）。 */
   seqs(): number[] {
     return [...this.seqSet].sort((a, b) => a - b);
+  }
+
+  /**
+   * 用**已落盘的索引快照**给构造器打底（增量路径：不读记录就给得出完整索引）。
+   *
+   * 为什么需要它：写者 `open()` 不再整份读记录（第十一条），但索引仍然是它的资产 ——
+   * 之后每一次 `persistIndex()` 都会**整份重写** `run.idx` / `type.idx`。如果打开时只把
+   * 尾窗里那几十条记录喂进来就落盘，等于把整份索引**截短**成刚才读到的尾部。所以增量
+   * 路径必须先打底，后续累加才是「已有结果 + 变化部分」。
+   *
+   * 自洽判据（不成立 ⇒ 返回 `false`，调用方必须退回全量重建，且**不要**信任当前状态）：
+   * `type.idx` 里所有 seq 的并集大小必须等于 `session.idx` 的 `count` —— 索引自己说
+   * 「一共 count 条」，那它就必须真的能数出 count 个不同的号。对不上说明索引是半成品 /
+   * 被外部改过，此时只能重读记录。
+   */
+  seed(snapshot: TimelineIndexSnapshot): boolean {
+    const seqSet = new Set<number>();
+    for (const seqs of snapshot.types.values()) {
+      for (const seq of seqs) seqSet.add(seq);
+    }
+    if (seqSet.size !== snapshot.session.count) return false;
+
+    // 直接接管快照里的容器：`snapshot` 是调用方刚从磁盘读出来的**局部**对象，没有第二个
+    // 持有者，拷一份只会让 open 多走一遍 20 万个数（实测多花 ~20 ms，纯浪费）。
+    this.runs.clear();
+    for (const [runId, ranges] of snapshot.runs) this.runs.set(runId, ranges);
+    this.types.clear();
+    for (const [type, seqs] of snapshot.types) this.types.set(type, seqs);
+    this.seqSet = seqSet;
+    this.firstSeq = snapshot.session.first_seq;
+    this.lastSeq = snapshot.session.last_seq;
+    this.count = snapshot.session.count;
+    return true;
   }
 
   snapshot(holeCount: number): TimelineIndexSnapshot {
@@ -248,11 +284,27 @@ export async function writeIndexSnapshot(
   });
 }
 
-/** 读索引；任一文件缺失/损坏 ⇒ `undefined`（调用方应重建）。 */
+/**
+ * 读索引；任一文件缺失/损坏 ⇒ `undefined`（调用方应重建）。
+ *
+ * `maxBytes` 是**增量路径的预算闸门**（第十一条）：三个文件的 `stat` 之和超过它 ⇒ 直接
+ * 返回 `undefined`，调用方退回「读记录全量重建」。上界是常量，不随会话长大 —— 宁可让
+ * 超大索引退回慢路径，也不许 `open()` 读一份不封顶的派生文件。
+ */
 export async function loadIndexSnapshot(
   sessionDir: string,
+  maxBytes?: number,
 ): Promise<TimelineIndexSnapshot | undefined> {
   const paths = indexPaths(sessionDir);
+  if (maxBytes !== undefined) {
+    let total = 0;
+    for (const path of [paths.session, paths.run, paths.type]) {
+      const info = await stat(path).catch(() => undefined);
+      if (info === undefined) return undefined;
+      total += info.size;
+      if (total > maxBytes) return undefined;
+    }
+  }
   const sessionRead = await readCrcNdjsonFile<SessionIndexLine>(
     paths.session,
     validateSessionIndex,
