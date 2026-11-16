@@ -33,6 +33,7 @@ import { isForegroundNodeCommand, runNodeCommand } from '../node-command';
 import { runPluginCommand } from '../plugin-command';
 import { pruneCommand } from '../prune-command';
 import { runResumeList } from '../resume-command';
+import { sessionMigrateCommand } from '../session-migrate-command';
 import { statusCommand } from '../status-command';
 import { runTeamCommand } from '../team-command';
 import { listTools } from '../tools-list';
@@ -182,6 +183,22 @@ export const cliCommands: readonly CliCommand[] = [
           apply: command.apply,
           json: command.json,
           ...(command.source !== undefined ? { source: command.source } : {}),
+        }),
+      );
+    },
+  },
+  {
+    name: 'session',
+    match: (args) => args.sessionCommand !== null,
+    run: async (args) => {
+      const command = args.sessionCommand;
+      if (command === null) return 1;
+      return printCommandResult(
+        await sessionMigrateCommand({
+          sessionId: command.sessionId,
+          all: command.all,
+          dryRun: command.dryRun,
+          json: command.json,
         }),
       );
     },
