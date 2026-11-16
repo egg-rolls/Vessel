@@ -81,6 +81,39 @@ function findToolCall(
   return undefined;
 }
 
+/** `tool_call_id → 拥有它的那个 tool_call`（见 {@link indexToolCalls}）。 */
+export type ToolCallLookup = (
+  toolCallId: string,
+) => { name: string; arguments: string } | undefined;
+
+/**
+ * 把「tool_call id → 函数签名」预先建好索引，供**批量**调 {@link formatClearedToolResult} 用。
+ *
+ * 为什么需要：{@link findToolCall} 是「从后往前扫全部消息」的线性查找，单次调用没问题；
+ * 但 `sessions.get` 要给**每一个**已占位工具结果各算一次占位文本，于是变成
+ * `O(已占位条数 × 消息条数)` —— 实测 413 个 id × 1,047 条消息 **6.3 ms**（新进程）、
+ * 长寿进程里 ~60 ms，而这一页只回了 1 条消息。建一次索引是 `O(消息条数 + tool_call 数)`。
+ *
+ * **语义与 {@link findToolCall} 逐条一致**（否则占位文本会漂）：
+ * - `findToolCall` 从后往前找 ⇒ 同一个 id 出现在多条 assistant 消息里时取**最后那条**；
+ * - 同一条消息里重复同一个 id ⇒ 取该消息里**第一个**（`findToolCall` 命中即返回）。
+ * 所以这里顺着扫、后出现的消息覆盖先出现的，消息内先出现的 call 不被后者覆盖。
+ */
+export function indexToolCalls(messages: readonly Message[]): ToolCallLookup {
+  const index = new Map<string, { name: string; arguments: string }>();
+  for (const message of messages) {
+    if (message?.role !== 'assistant') continue;
+    const seenInMessage = new Set<string>();
+    for (const call of message.tool_calls ?? []) {
+      if (typeof call.id !== 'string' || call.id.length === 0) continue;
+      if (seenInMessage.has(call.id)) continue;
+      seenInMessage.add(call.id);
+      index.set(call.id, call.function);
+    }
+  }
+  return (toolCallId: string) => index.get(toolCallId);
+}
+
 /**
  * 生成被清空工具结果的占位文本：
  * `[cleared <name>: <summary ≤60 码点> -> exit <n>, <n> lines]`。
@@ -92,8 +125,10 @@ export function formatClearedToolResult(
   messages: readonly Message[],
   toolCallId: string,
   originalContent: string,
+  /** 批量调用时传 {@link indexToolCalls} 的结果：省掉逐条的线性查找（语义完全相同） */
+  lookup?: ToolCallLookup,
 ): string {
-  const call = findToolCall(messages, toolCallId);
+  const call = lookup === undefined ? findToolCall(messages, toolCallId) : lookup(toolCallId);
   const rawSummary = summaryFromArguments(call?.arguments);
   const summary = rawSummary
     ? truncateCodePoints(redactSummary(rawSummary), SUMMARY_MAX_CODE_POINTS)

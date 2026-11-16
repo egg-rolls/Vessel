@@ -19,12 +19,18 @@
 import { type FileHandle, open, readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  ArrayNameSource,
+  type BlockNameSource,
   blockFirstFrameSeq,
+  type EnumeratedBlock,
   locateRangeAnchor,
   locateTailChainStart,
   ManifestForwardReader,
+  ManifestUntrustedError,
+  openManifestNameSource,
   verifyBlockAgainstManifest,
 } from './blocks.js';
+import { blockEnumerationCounters } from './enum-stats.js';
 import { validateHoleDeclarationLine } from './holes.js';
 import {
   isTimelineBlobRef,
@@ -503,6 +509,8 @@ export async function readNdjsonTail(
 
 /** 列出一个 chunk 块目录里的块文件名（按数字升序；`000007.wblk`）。 */
 export async function listBlockFiles(blocksDir: string): Promise<string[]> {
+  // 单 A 的核心指标：这个函数就是「每页一次 readdir」的那一次。
+  blockEnumerationCounters.readdirCalls += 1;
   const entries = await readdir(blocksDir, { withFileTypes: true }).catch(() => undefined);
   if (entries === undefined) return [];
   return entries
@@ -1114,6 +1122,10 @@ export interface TimelineRangeStats {
   fact_bytes: number;
   /** 锚点来源：`manifest` 行二分 / `first_frame` 文件名二分 */
   anchor_source: 'manifest' | 'first_frame';
+  /** **块名枚举**走的是哪条路（0.56 尾部读固定开销那一单的核心指标） */
+  enumeration_source: 'manifest' | 'readdir';
+  /** 枚举没用 manifest 快路径时的原因（稳定 code；走了快路径 ⇒ 缺省） */
+  enumeration_fallback?: string;
   /** 窗口左端（排他游标本身） */
   since_seq: number;
   /** 本次**证明到**的右端（`hi`）：`(since, hi]` 内一个都不许少 */
@@ -1525,12 +1537,12 @@ interface BlockScanState {
   bytes: number;
   /** 自证不通过的块名（照样读，只是记账不可信） */
   unverified: string[];
-  /** 目录枚举完 / 连续尾块断链 ⇒ 没有更多**参与本趟快照**的块了 */
+  /** 枚举完了 / 连续尾块断链 ⇒ 没有更多**参与本趟快照**的块了 */
   exhausted: boolean;
 }
 
 /**
- * 从 `startIndex` 起**顺序**开块，按 `selectBlocksForSnapshot` 的同一口径吐出窗口内的帧。
+ * 从 `source` 的 `startIndex` 起**顺序**开块，按 `selectBlocksForSnapshot` 的同一口径吐出窗口内的帧。
  *
  * 纳入规则逐条对齐 `wal.ts#selectBlocksForSnapshot`（全文最重要的两行）：
  *
@@ -1540,10 +1552,13 @@ interface BlockScanState {
  *
  * 与整份读的差别只有一处、且更严：块内帧必须 seq 升序、块的 `start_seq` 必须随文件名
  * 递增，否则抛 `order_broken` 降级（整份读对此不做判定，因为它本来就在读全部）。
+ *
+ * 块的**名字从哪来**由 `source` 决定（0.56 manifest 快路径 / readdir 兜底）：
+ * 这里只按下标要名字，不认识 manifest —— 「枚举」与「开块」是两件事，别混。
  */
 async function* iterateBlocksFrom(args: {
   blocksDir: string;
-  names: readonly string[];
+  source: BlockNameSource;
   startIndex: number;
   sinceSeq: number;
   maxSeq: number;
@@ -1553,12 +1568,18 @@ async function* iterateBlocksFrom(args: {
   reader: ManifestForwardReader | undefined;
   state: BlockScanState;
 }): AsyncGenerator<TimelineRecord> {
-  const { blocksDir, names, sinceSeq, maxSeq, factBoundary, blockOpenMax, reader, state } = args;
+  const { blocksDir, source, sinceSeq, maxSeq, factBoundary, blockOpenMax, reader, state } = args;
   let cursor = factBoundary;
   let lastStart = 0;
-  for (let index = args.startIndex; index < names.length; index += 1) {
-    const name = names[index];
-    if (name === undefined) break;
+  for (let index = args.startIndex; ; index += 1) {
+    const enumerated: EnumeratedBlock | undefined = await source.at(index);
+    if (enumerated === undefined) {
+      // 「枚举完了」只有在 `tailProven` 时才等于「后面真的没有块」；
+      // 没据（manifest 尾部核对没能给出结论）⇒ 不许声称到尾，留给覆盖算术降级。
+      state.exhausted = source.tailProven;
+      return;
+    }
+    const name = enumerated.name;
     if (state.opened >= blockOpenMax) {
       throw new TimelineRangeUndecidable(
         'window_too_wide',
@@ -1584,11 +1605,13 @@ async function* iterateBlocksFrom(args: {
       previous = record.seq;
     }
     // 逐块自证（①首末 seq ②条数 ③整块 crc ④完整性）：**证据，不是过滤条件**。
-    if (reader !== undefined) {
-      const entry = await reader.entryFor(name);
-      if (entry !== undefined && !verifyBlockAgainstManifest(buffer, decode, entry).ok) {
-        state.unverified.push(name);
-      }
+    //
+    // 条目从两处来：manifest 快路径的条目由枚举顺手给（`enumerated.entry`）；
+    // readdir 兜底路沿用 `ManifestForwardReader` 的顺序游标（锚点命中 manifest 时才有）。
+    const entry =
+      enumerated.entry ?? (reader === undefined ? undefined : await reader.entryFor(name));
+    if (entry !== undefined && !verifyBlockAgainstManifest(buffer, decode, entry).ok) {
+      state.unverified.push(name);
     }
 
     const first = decode.records[0];
@@ -1632,7 +1655,92 @@ async function* iterateBlocksFrom(args: {
       yield record;
     }
   }
-  state.exhausted = true;
+}
+
+/**
+ * 一次范围读的块名枚举 + 起点定位（0.56 尾部读的固定开销）。
+ *
+ * 两条路，**输出逐条等价**：
+ *
+ * | 路 | 什么时候走 | 枚举成本 |
+ * | --- | --- | --- |
+ * | `manifest` | manifest 存在、够长、锚点 / 邻域 / 首帧 / 链首全部可判 | 只读窗口内那几条（几个 8 KiB 窗），**0 次 readdir** |
+ * | `readdir` | 上面任一条不成立（manifest 缺失 / 落后 / 坏 / 小会话） | 今天的 `listBlockFiles` + 文件名二分，**1 次 readdir** |
+ *
+ * 快路径为什么可以「不枚举全量」：见 `blocks.ts` 顶部「块名枚举」那段长注释（枚举不是
+ * 判据，覆盖算术才是）。这里只负责**决定走哪条**并把「起点」翻译成各自的下标 / 偏移。
+ *
+ * 六条判据全在 `blocks.ts#openManifestNameSource` 里；这里只保证**任何一条不成立就整条
+ * 退回 readdir**，不做「差不多就行」的中间态。
+ */
+async function locateRangeBlocks(
+  sessionDir: string,
+  sinceSeq: number,
+  factBoundary: number,
+  /** `true` = 跳过 manifest 快路径（manifest 已被判定不可信时的兜底重来） */
+  forceReaddir = false,
+): Promise<{
+  source: BlockNameSource;
+  reader: ManifestForwardReader | undefined;
+  anchorSource: 'manifest' | 'first_frame';
+  /** 快路径没走成的原因（稳定 code；只进 debug 日志） */
+  fallback?: string;
+}> {
+  const fast = forceReaddir
+    ? ({ ok: false, reason: 'manifest_untrusted' } as const)
+    : await openManifestNameSource({
+        sessionDir,
+        sinceSeq,
+        factBoundary,
+        minBlocks: RANGE_READ_MIN_BLOCKS,
+      });
+  if (fast.ok) {
+    blockEnumerationCounters.manifest += 1;
+    return { source: fast.source, reader: undefined, anchorSource: 'manifest' };
+  }
+
+  blockEnumerationCounters.readdirFallback += 1;
+  const blocksDir = join(sessionDir, TIMELINE_LAYOUT.walBlocks);
+  // 兜底：枚举**只走 readdir**（manifest 会落后于块目录，拿它枚举会静默丢掉尾部一整段 chunk）。
+  const names = await listBlockFiles(blocksDir);
+  if (names.length < RANGE_READ_MIN_BLOCKS) {
+    throw new TimelineRangeUndecidable(
+      'blocks_below_threshold',
+      `${String(names.length)} < ${String(RANGE_READ_MIN_BLOCKS)}`,
+    );
+  }
+  const anchor = await locateRangeAnchor(sessionDir, names, sinceSeq);
+  if (anchor === undefined) {
+    throw new TimelineRangeUndecidable('anchor_unavailable', 'manifest 与文件名二分都定位不到起点');
+  }
+  // 起点若落在「事实边界之后」的**尾链中段**，链必须从边界那一端重新验：
+  // 否则会把「链早就断了」的块当成可读（那是多给，与整份读不等价）。
+  let startIndex = anchor.index;
+  const anchorFirstSeq = await blockFirstFrameSeq(sessionDir, anchor.block);
+  if (anchorFirstSeq === undefined) {
+    throw new TimelineRangeUndecidable('anchor_unavailable', `块 ${anchor.block} 首帧读不出来`);
+  }
+  if (anchorFirstSeq > factBoundary + 1) {
+    const tailStart = await locateTailChainStart(sessionDir, names, factBoundary);
+    if (tailStart === undefined) {
+      throw new TimelineRangeUndecidable('anchor_unavailable', '连续尾块的链首定位不到');
+    }
+    startIndex = Math.min(startIndex, tailStart);
+  }
+  return {
+    source: new ArrayNameSource(names, startIndex),
+    reader:
+      anchor.source === 'manifest' && anchor.manifestPosition !== undefined
+        ? new ManifestForwardReader(
+            join(sessionDir, TIMELINE_LAYOUT.walManifest),
+            anchor.manifestPosition,
+            (await stat(join(sessionDir, TIMELINE_LAYOUT.walManifest)).catch(() => undefined))
+              ?.size,
+          )
+        : undefined,
+    anchorSource: anchor.source,
+    fallback: fast.reason,
+  };
 }
 
 /**
@@ -1648,6 +1756,27 @@ async function* iterateBlocksFrom(args: {
 export async function readTimelineRange(
   sessionDir: string,
   query: TimelineRangeQuery,
+): Promise<{ records: TimelineRecord[]; stats: TimelineRangeStats }> {
+  try {
+    return await readTimelineRangeAttempt(sessionDir, query, false);
+  } catch (error) {
+    if (!(error instanceof ManifestUntrustedError)) throw error;
+    // manifest 在被枚举到的那一段里出现了**过不了校验的行** ⇒ 整条改走 readdir
+    // 兜底重来（**只重试一次**，且只在 manifest 快路径上才可能走到这里）。
+    //
+    // 为什么不是「跳过着这一条继续」：坏行意味着「这条 manifest 的记账不可信」，
+    // 跳过后无法知道它是否本来就该有一条、覆盖了哪些 seq —— 那正是静默少给的入口。
+    // 重来一次花的是本页那点时间，不是整份读。
+    blockEnumerationCounters.readdirFallback += 1;
+    return readTimelineRangeAttempt(sessionDir, query, true);
+  }
+}
+
+/** {@link readTimelineRange} 的一次尝试（`forceReaddir` 用于 manifest 不可信时的兜底重来）。 */
+async function readTimelineRangeAttempt(
+  sessionDir: string,
+  query: TimelineRangeQuery,
+  forceReaddir: boolean,
 ): Promise<{ records: TimelineRecord[]; stats: TimelineRangeStats }> {
   const since = Number.isFinite(query.sinceSeq) ? Math.floor(query.sinceSeq) : Number.NaN;
   const limit = Number.isFinite(query.limit) ? Math.floor(query.limit) : Number.NaN;
@@ -1672,40 +1801,17 @@ export async function readTimelineRange(
   const blockOpenMax = RANGE_TAIL_CHAIN_MAX_BLOCKS + limit * 2;
 
   const blocksDir = join(sessionDir, TIMELINE_LAYOUT.walBlocks);
-  // 枚举**只走 readdir**：manifest 会落后于块目录，拿它枚举会静默丢掉尾部一整段 chunk。
-  const names = await listBlockFiles(blocksDir);
-  if (names.length < RANGE_READ_MIN_BLOCKS) {
-    throw new TimelineRangeUndecidable(
-      'blocks_below_threshold',
-      `${String(names.length)} < ${String(RANGE_READ_MIN_BLOCKS)}`,
-    );
-  }
-
   const walPath = join(sessionDir, TIMELINE_LAYOUT.walLog);
   const walSize = (await stat(walPath).catch(() => undefined))?.size ?? 0;
   const tripline = await checkArchiveTripline(sessionDir, walPath, walSize);
   const factBoundary = tripline.walLastSeq;
 
-  // ── 定位：manifest 锚点 → 文件名二分退路
-  const anchor = await locateRangeAnchor(sessionDir, names, since);
-  if (anchor === undefined) {
-    throw new TimelineRangeUndecidable('anchor_unavailable', 'manifest 与文件名二分都定位不到起点');
-  }
-
-  // 起点若落在「事实边界之后」的**尾链中段**，链必须从边界那一端重新验：
-  // 否则会把「链早就断了」的块当成可读（那是多给，与整份读不等价）。
-  let startIndex = anchor.index;
-  const anchorFirstSeq = await blockFirstFrameSeq(sessionDir, anchor.block);
-  if (anchorFirstSeq === undefined) {
-    throw new TimelineRangeUndecidable('anchor_unavailable', `块 ${anchor.block} 首帧读不出来`);
-  }
-  if (anchorFirstSeq > factBoundary + 1) {
-    const tailStart = await locateTailChainStart(sessionDir, names, factBoundary);
-    if (tailStart === undefined) {
-      throw new TimelineRangeUndecidable('anchor_unavailable', '连续尾块的链首定位不到');
-    }
-    startIndex = Math.min(startIndex, tailStart);
-  }
+  // ── 枚举 + 定位：manifest 快路径（**不 readdir**）→ readdir 兜底（今天的行为）
+  const located = await locateRangeBlocks(sessionDir, since, factBoundary, forceReaddir);
+  const source = located.source;
+  const startIndex = 0;
+  const reader = located.reader;
+  const anchorSource = located.anchorSource;
 
   const factState: FactScanState = { bytes: 0, eof: walSize <= 0, ascending: true, lastSeq: since };
   const factOffset = walSize <= 0 ? 0 : await locateFactStart(walPath, walSize, since, factState);
@@ -1714,13 +1820,6 @@ export async function readTimelineRange(
   }
 
   const blockState: BlockScanState = { opened: 0, bytes: 0, unverified: [], exhausted: false };
-  const reader =
-    anchor.source === 'manifest' && anchor.manifestPosition !== undefined
-      ? new ManifestForwardReader(
-          join(sessionDir, TIMELINE_LAYOUT.walManifest),
-          anchor.manifestPosition,
-        )
-      : undefined;
 
   const facts = iterateFactsFrom({
     path: walPath,
@@ -1732,7 +1831,7 @@ export async function readTimelineRange(
   });
   const blocks = iterateBlocksFrom({
     blocksDir,
-    names,
+    source,
     startIndex,
     sinceSeq: since,
     maxSeq,
@@ -1826,7 +1925,9 @@ export async function readTimelineRange(
       blocks_opened: blockState.opened,
       block_bytes: blockState.bytes,
       fact_bytes: factState.bytes,
-      anchor_source: anchor.source,
+      anchor_source: anchorSource,
+      enumeration_source: source.kind,
+      enumeration_fallback: located.fallback,
       since_seq: since,
       window_to: high,
       declared_holes: declaredHoles,
