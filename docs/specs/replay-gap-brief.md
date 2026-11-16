@@ -17,8 +17,8 @@ triggers:
   - 截断不可观测
 paths:
   - docs/architecture/session-replay.md
-  - docs/dev/handoff/refresh-gap-design.md
-  - docs/dev/handoff/chunk-loss-measurement.md
+  - docs/specs/refresh-gap-design.md
+  - docs/specs/chunk-loss-measurement.md
   - packages/serve/src/event-buffer.ts
   - packages/serve/src/replay-budget.ts
   - packages/serve/src/gateway.ts

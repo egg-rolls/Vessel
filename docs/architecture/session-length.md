@@ -46,7 +46,7 @@ rotate 之后，前三种机制的基准全部归零（新 body ⇒ 新 session 
 
 - 量法 `measureRetainedToolResultVolume`（`:304-329`）：从尾部取 `retainedToolResultCount` 条（`:240-260`，累计 ≤ 窗口 5%、至少 1 条、至多 10 条）工具结果的**原文**估算 token 合计 ÷ maxTokens；`exceeds` 严格大于，等值不触发（`:326-327`）。
 - 效果：让 `shouldCompact()` 为 true ⇒ **在这一次段起点就压缩**，即使 token 还不到 85%。判据是纯函数，「该不该」在 context manager，「开新段」在 runtime（`:331-336` 注释）。
-- 它**不截断任何东西**：不删 message、不改正文、不缩短工具结果。实测 46 个真实 run 最坏 4.7%，从未触发（[measure-tool-result-clear](../dev/handoff/measure-tool-result-clear.md)）。它抓的是**单条巨型结果**：保留集合含「最新 1 条无论如何保留」这条硬规则（`:254-255`），所以一条巨型结果能直接顶穿 5% 预算 —— 这正是阈值要抓的唯一情形（`:301-302` 注释）。
+- 它**不截断任何东西**：不删 message、不改正文、不缩短工具结果。实测 46 个真实 run 最坏 4.7%，从未触发（[measure-tool-result-clear](../specs/measure-tool-result-clear.md)）。它抓的是**单条巨型结果**：保留集合含「最新 1 条无论如何保留」这条硬规则（`:254-255`），所以一条巨型结果能直接顶穿 5% 预算 —— 这正是阈值要抓的唯一情形（`:301-302` 注释）。
 
 ## 4. rotate + handoff：唯一不在 core 里的机制
 
@@ -89,9 +89,9 @@ rotate 之后，前三种机制的基准全部归零（新 body ⇒ 新 session 
 - [context](context.md)：WorkingContext per Run、注入点、压缩与前缀不变量的完整表。
 - [ADR-104](../adr/ADR-104-context-projection-policy.md)：四模式定义与 D6（模式与压缩的关系）。
 - [member-team](member-team.md)：rotate / admit / dispatch 与 body 生命周期。
-- [measure-tool-result-clear](../dev/handoff/measure-tool-result-clear.md)：46 个真实 run 的体积实测、判据与门禁清单。
-- [refresh-gap-design](../dev/handoff/refresh-gap-design.md)：相邻但不同层 —— 它讲事件流回放缺口。相关点：投射 / 压缩 / 体积阈值这三件事的判定大多**不产生正文**，留痕靠事件（`context.compacted`、`context.pressure`）；gap 一出现这些事件就永久丢，长会话复盘只能靠消息侧的 `[runtime]` 尾巴（`:146`）。
-- `docs/dev/handoff/tool-result-compression-mechanism.md`：**本分支不存在**（`docs/dev/handoff/` 下无此文件）⇒ 未链接，待核实是否改名或未落库。
+- [measure-tool-result-clear](../specs/measure-tool-result-clear.md)：46 个真实 run 的体积实测、判据与门禁清单。
+- [refresh-gap-design](../specs/refresh-gap-design.md)：相邻但不同层 —— 它讲事件流回放缺口。相关点：投射 / 压缩 / 体积阈值这三件事的判定大多**不产生正文**，留痕靠事件（`context.compacted`、`context.pressure`）；gap 一出现这些事件就永久丢，长会话复盘只能靠消息侧的 `[runtime]` 尾巴（`:146`）。
+- `docs/specs/tool-result-compression-mechanism.md`：**本分支不存在**（`docs/specs/` 下无此文件）⇒ 未链接，待核实是否改名或未落库。
 
 ## 待核实
 

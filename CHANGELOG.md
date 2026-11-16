@@ -11,7 +11,7 @@
 
 ## [0.54.0] - 未发布（草案）
 
-> 本节按 [plan-054-timeline-migration.md](docs/dev/handoff/plan-054-timeline-migration.md) 判据 B-4
+> 本节按 [plan-054-timeline-migration.md](docs/specs/plan-054-timeline-migration.md) 判据 B-4
 > 「破坏性变更必须登记」写；标 **实现中 / 未核实** 的条目 = 该行为在本分支尚未核实到落地代码，不能当已生效读。
 
 ### 破坏性
@@ -158,8 +158,8 @@
 - **`docs/architecture/session-length.md`**：会话长度四套机制与体积阈值归属 —— 会话层只做观测
   兜底、工具层做预防（体积阈值判据 `shouldCompactForToolResultVolume` 只对 `placeholder` 生效，
   `passthrough` 下压力可观测但不驱动压缩）。
-- **`docs/dev/handoff/projection-card-spec.md`**：投影卡规格（服务端一次渲染 + 双层视图
+- **`docs/specs/projection-card-spec.md`**：投影卡规格（服务端一次渲染 + 双层视图
   「模型视角 / 原文视角」，含一节明确结论：**卡不能充当 C1h 的豁免凭据**）。
-- **本版留下的调研与实测**（`docs/dev/handoff/`）：placeholder vs passthrough 成本账
+- **本版留下的调研与实测**（`docs/specs/`）：placeholder vs passthrough 成本账
   （645 段净赚 36:1、临界折扣 2.68%、冻结不变式值 +82.2）、chunk 丢失量化（653 run：磁盘
   1.45 MB = 流式正文 100.0%）、replay gap 简报与取证、投影真值探针、工具名合法性清单。
