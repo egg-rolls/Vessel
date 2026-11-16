@@ -201,8 +201,7 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     //
     // 两种 hello：连接级 / 订阅 epoch。0.54 起回填不再由 hello 触发（按
     // `event_cursor` 的区间走、且在订阅之前完成），所以没有第三种。帧的 `seq` 就是
-    // `timeline_seq`（timeline 订阅，见 serve `frames.ts`），单游标因此只有一个空间：
-    // 双 seq 兼容带（`LEGACY_HUB_SEQ_BASE`）已随「A2 端到端 + 帧带 timeline_seq」删除。
+    // `timeline_seq`（timeline 订阅，见 serve `frames.ts`）：前端只持一个游标。
     const helloKind = subscription.consumeHello(info);
     setTokenError(null);
     setGatewayError(null);

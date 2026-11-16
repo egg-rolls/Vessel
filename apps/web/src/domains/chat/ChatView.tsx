@@ -446,11 +446,6 @@ export function ChatView({
               }}
             />
 
-            {/* 0.54 的缺口条**已从界面移除**（用户明确要求：这类内部时序提示不该出现，见
-              政策「要加前端必须先问」）。数据面照旧：`EventStore#timelineGap` 记账、
-              `timeline_gap_reported` 上报、console 打 `[timeline_gap_reported]`。
-              诊断时想把它挂回来需要单独批准。 */}
-
             {selectedId && (
               <PluginPanels
                 slot="session-detail"

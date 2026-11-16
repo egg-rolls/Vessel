@@ -14,8 +14,7 @@
  * | V3 | **边界**：末条贴不住 `end_seq` ⇒ 不合并、`rule=3`、污点 |
  * | V4 | **重复**：同一 seq 出现两次 ⇒ 不合并、`rule=4`、污点 |
  * | V5 | **游标被篡改三种构造**（+1 / -1 / 落在声明洞里）⇒ 一律拒绝合并并报缺口（ADR-105 §7 A7） |
- * | V6 | 声明洞：`holes` 内的 seq 不期望收到 ⇒ 合并通过、游标推到区间右端、UI 有污点 |
- * | V7 | 缺口在**快照**里可见（`timelineGap.tainted` + `last.expected/received`），不是「人工看」 |
+ * | V6 | 声明洞：`holes` 内的 seq 不期望收到 ⇒ 合并通过、游标推到区间右端、数据面记账 |
  * | T1 | 刷新时有 `tool.call.completed` ⇒ 工具卡不得停在 running / unknown |
  * | T2 | 同一 run 内工具项与思考项按各自 seq 交错（不许「工具全在前、思考全在后」） |
  * | T3 | 项的位置由自己的 seq 决定（不许集体锚到 run 起点 = 用户消息之后） |
@@ -339,22 +338,7 @@ function v6Holes(): void {
     'V6 游标',
     `游标 ${store.currentSeq} != ${all.length}（洞不许卡住游标）`,
   );
-  expect(store.timelineGap.tainted, 'V6 污点', '有声明洞时 UI 必须显示「这一段读不回来」');
-}
-
-function v7Snapshot(): void {
-  const events = midRunEvents().slice(0, 38);
-  const store = new EventStore(0);
-  store.setScopeSession(SESSION);
-  store.applyTimelineRange(headerOf(midRunEvents()), events);
-  const snapshot = store.getSnapshot();
-  expect(snapshot.timelineGap.tainted, 'V7 快照污点', '快照里看不到缺口（UI 就不可能显示）');
-  expect(
-    typeof snapshot.timelineGap.last?.expected === 'string' &&
-      snapshot.timelineGap.last.expected.length > 0,
-    'V7 快照可读',
-    '快照的缺口缺 expected',
-  );
+  expect(store.timelineGap.tainted, 'V6 污点', '有声明洞时必须记账（数据面，不上 UI）');
 }
 
 // ─────────────────────── T1..T4：刷新时正在跑的 run ───────────────────────
@@ -490,14 +474,13 @@ function main(): void {
   v4Duplicate();
   v5CursorTamper();
   v6Holes();
-  v7Snapshot();
   t1ToolStatus();
   t2Interleave();
   t3OwnSeq();
   t4SegmentsJoin();
 
   if (failures.length === 0) {
-    console.log('单游标区间回填：S1–S3 / V1–V7 / T1–T4 全过');
+    console.log('单游标区间回填：S1–S3 / V1–V6 / T1–T4 全过');
     return;
   }
   for (const failure of failures) {

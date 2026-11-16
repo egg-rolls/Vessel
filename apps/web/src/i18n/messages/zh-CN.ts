@@ -1703,24 +1703,6 @@ export const messages = {
   'gateway.client.closed': '连接已关闭',
   'gateway.client.stopped': 'gateway 已停止',
   'gateway.client.unreachable': '无法连接 gateway（未启动或地址错误）',
-  'timeline.gap.title': '时间线有缺口',
-  'timeline.gap.body': '{range} 这一段没能从服务端读回。其余内容照常显示。',
-  'timeline.gap.body.holes':
-    '{range} 这一段事件读不回来（写入侧已登记为洞，不会恢复）。其余内容照常显示。',
-  'timeline.gap.body.rule1':
-    '{range} 这一段中间缺条：连续性断了，读回来的 seq 与声明的区间中间有未声明的空档。其余内容照常显示。',
-  'timeline.gap.body.rule2':
-    '{range} 这一段条数不对：声明了多少条、实收就该是多少条，服务端少给了。其余内容照常显示。',
-  'timeline.gap.body.rule3':
-    '{range} 这一段两端没对齐：读回来的第一条或最后一条贴不住声明区间的边界（多半是服务端只发了一部分）。其余内容照常显示。',
-  'timeline.gap.body.rule4':
-    '{range} 这一段里有重复事件：同一条 seq 被送了两遍，客户端拒绝合并。其余内容照常显示。',
-  'timeline.gap.detail': '期望 {expected} / 实收 {received}。',
-  'timeline.gap.notice': '事件回填校验未通过，已重拉一次仍有缺口，见时间线顶部的提示条。',
-  'replay.notice.partial': '仅恢复了最近 {total} 个 run 中 {runs} 个的细节（事件回填触到上限）。',
-  'replay.notice.failed': '磁盘事件回填不可用，当前只显示实时流已经送到的内容。',
-  'replay.notice.stage1cap':
-    '事件回填的第一阶段（会话日志）已翻到页数上限：早于最近 {runs} 个 run 的细节（trace-only 事件）这次可能没有被回填。',
   'gateway.error.unauthorized': 'token 无效或已过期，请在连接设置中重新输入。',
   'gateway.error.forbidden': '当前 token 没有执行该操作的权限。',
   'gateway.error.forbidden_origin': '请求来源不在 serve.allowed_origins 中。',
