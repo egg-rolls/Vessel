@@ -71,16 +71,19 @@ paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.
 
 **未实现的门禁**（ADR-105 §7 / §11 点名，本仓没有）：`check-timeline-equality`（A1–A8 等式套餐）、`check-timeline-publish-after-wal`、`check-timeline-write-contract`。现有 timeline 门禁只有 reference / conformance / holes / index / dualwrite / archive / perf。
 
-## 6. 生效范围（契约 ≠ 现状，别读串）
+## 6. 生效范围（2026-11-16 更新：B 阶段已完成，本文等式已是运行时事实）
 
 | 契约 | 今天的实际 |
 | --- | --- |
-| UI 帧的 seq 一定 ≤ `wal_head` | **写者内部成立，端到端未接线**：装配层 `TimelineWriter.open` 没传 `publish`（`src/timeline-dual-write.ts:369-373`），UI 仍由旧链路广播（`packages/core/src/runtime/run-journal.ts:131`、`:334`），旧链路是「先发布、后双写 timeline」（`:335-347`） |
-| 握手报 `{start_seq,end_seq,count,timeline_head,wal_head}` | `hello` 仍是 `{from_seq, latest_seq}`（`packages/serve/src/gateway/frames.ts:97-98`） |
-| `sessions.get.event_cursor` 四字段 | **已落地** `{timeline_head, wal_head, holes, tainted}`（`packages/serve/src/gateway/methods/sessions.ts:377-380`） |
-| timeline 双写开 | **默认关** `dualWrite: false`（`packages/config/src/defaults.ts:197`，装配见 `src/tenant-runtime-factory.ts:670-694`） |
+| UI 帧的 seq 一定 ≤ `wal_head` | **端到端已接线**：装配层 `TimelineWriter.open` 传了 `publish`（`src/timeline-dual-write.ts:919-929`），旧链路广播**降级为发送缓冲**（fsync 之后才放行）；「未发布尾部」由 `published_head` 显式表达 |
+| 握手报 `{start_seq,end_seq,count,timeline_head,wal_head,published_head}` | **已落地**（`packages/serve/src/protocol.ts:145-181`）：`end_seq=wal_head` 是**可读性**事实，`min(end_seq, published_head)` 是**推送**事实，两者绝不合并 |
+| `sessions.get.event_cursor` 四字段 | **已落地** `{timeline_head, wal_head, holes, tainted}` + `published_head`（`packages/serve/src/gateway/methods/sessions.ts`） |
+| timeline 双写开 | **默认仍关**（`packages/config/src/defaults.ts:197`）——这是**配置默认值**，不是"没做"；开的时候整条链（写者 → 操作 → 单游标读 → 按段续拉）已可用 |
+| 前端读路径 | **只剩一条**：单游标 `client_timeline_seq` + 单区间回填 + **按段续拉** + 四条校验 + 污点条（`apps/web/src/gateway/timeline-protocol.ts`、`state/event-store.ts`）；`disk-replay.ts` / `replay-source.ts` **已删除** |
 
-一句话：本文等式对 timeline 这条链路是**已实现的写者不变量 + 已上线的双指针**；「UI 跑在 timeline 上」要等 ADR-105 的 B 阶段。在那之前把它当「已生效的运行时事实」验收，会验出假红。
+**一句话**：本文等式（`UI == timeline(≤timeline_head) ∪ WAL(≤wal_head)`，其中只有 `published_head` 以内的会被推送）
+对 timeline 链路已**端到端成立**。仍成立的前提是「写者内部 fsync 之后才 publish」这条不变量——
+它由 `check:timeline-publish-after-wal`（唯一保留的断言）兜住。
 
 ## 7. 一句话结论
 
