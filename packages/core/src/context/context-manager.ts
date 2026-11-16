@@ -293,6 +293,386 @@ export function planClearedToolResults(
 }
 
 /**
+ * 一条工具结果的**分类结果**（0.55 游标增量的最小单元，按消息顺序存）。
+ *
+ * 为什么不存「消息下标」而存分类：窗口只会 append（不变量「落盘消息只能 pop 或
+ * append」），所以每条工具结果的两个判据 —— 「能不能被占位」和「保留预算花多少
+ * token」—— 一旦算过就不会再变。存分类 ⇒ 新消息到达时只处理新增那几条，
+ * 老消息一条都不用重看（第十一条：不做全量重算）。
+ */
+interface ClearedToolEntry {
+  /** `tool_call_id`：`undefined` = 落盘时就缺 id，永远进不了占位集合。 */
+  readonly id: string | undefined;
+  /** 「正文非空 + 还不是占位文本 + 有 id」⇒ 这一条**可以**被换成占位（与此刻是否在保留区无关）。 */
+  readonly clearable: boolean;
+  /** 消息对象引用：压缩前后用它把保留区对齐（引用相同 = 同一条消息）。 */
+  readonly ref: Message;
+  /** `estimateMessageTokens` 的惰性缓存：只有可能进保留区的那几条才需要算。 */
+  tokens: number | null;
+}
+
+/**
+ * 增量占位规划器的读数（0.55「有界」的硬指标：一次调用扫几条消息）。
+ *
+ * `scannedMessages` 只数**消息条数**（不是字符数），等价比对以它为准：
+ * 全量实现每轮必扫全窗（第二段循环无条件走完 `messages`），增量实现平时只扫新增。
+ */
+export interface ClearedToolResultPlannerStats {
+  /** `plan()` 被调用次数。 */
+  readonly calls: number;
+  /** 累计扫过的消息条数（跨全部调用）。 */
+  readonly scannedMessages: number;
+  /** 其中「窗口没变 ⇒ 直接复用上次结果」的次数（零重算）。 */
+  readonly reused: number;
+  /** 只扫了尾部新增消息的次数。 */
+  readonly appends: number;
+  /** 走「压缩后按公共尾部重新对齐」的次数（只碰保留区）。 */
+  readonly reanchors: number;
+  /** 整窗重建次数（兜底路径：换会话 / 同数组对象变短 / 结构对不上）。 */
+  readonly rebuilds: number;
+  /** 内部不变量兜底到全量实现的次数（必须恒为 0，非 0 说明增量有 bug）。 */
+  readonly fallbacks: number;
+  /** 当前保留原文的工具结果条数（`keep`，仅调试用）。 */
+  readonly keep: number;
+}
+
+/**
+ * 占位集合的**游标增量**规划器（0.55）。
+ *
+ * 语义（游标 = `seenMessages`，已扫到第几条消息）：
+ *
+ * - `entries` 里按消息顺序存「窗口内每条工具结果的分类」，`cut` 之前的那些就是
+ *   本次要换成占位的（`keep` 之后的全部）。**结果 = entries[0..cut) 里 clearable 的 id**，
+ *   与 `planClearedToolResults` 的两段循环逐条对应；
+ * - 新消息到达 ⇒ 从 `seenMessages` 往后只扫新增，`keep` 最多回看 `KEEP_RECENT_MAX`
+ *   （10）条工具结果 ⇒ 每轮 O(新增)，不是 O(窗口)；
+ * - 窗口没变 ⇒ 命中 `cached` 直接返回（零重算）；
+ * - 压缩（数组被换掉）⇒ 先按**公共尾部**对齐（`prev[i] === next[j]`），只重算
+ *   保留区那一小段，被移走的头部整段裁掉；对齐不上才整窗重建；
+ * - `keep` 变小（预算变紧 / 新来一条巨型结果）⇒ 从保留区头部移到占位区；
+ *   `keep` 变大（预算变松 / 压缩后变短）⇒ 从占位区尾部搬回保留区。两个方向都按
+ *   消息顺序搬，输出的顺序因此永远与全量实现一致。
+ *
+ * 正确性的前提（违反就宁可整窗重建，不许算错）：已扫描过的消息对象**不会被就地
+ * 改写**。校验点是数组引用 + 长度 + 首尾消息引用 + 压缩时的逐条引用对齐；
+ * 任何一条对不上都退回 `rebuild()`（全量），并在 `stats.fallbacks/rebuilds` 里留痕。
+ *
+ * 内存上界：`entries` 一条工具结果一项，最多 `messageCap`（`maxTokens / 100`，1M 预算
+ * ⇒ 1 万条）项 —— 与它要返回的 id 集合同一量级；`reset()` / 会话删除时清空。
+ */
+export class IncrementalClearedToolResultPlanner {
+  /** 窗口内全部工具结果的分类，按消息顺序（`entryHead` 之前的已失效）。 */
+  private entries: ClearedToolEntry[] = [];
+  /** `entries` 的逻辑起点（压缩裁掉头部时只挪游标，不搬数组）。 */
+  private entryHead = 0;
+  /** 占位集合（`clearedHead` 之前的是压缩裁掉后留下的失效前缀）。 */
+  private clearedIds: string[] = [];
+  private clearedHead = 0;
+  /** 占位区大小：`entries[entryHead .. entryHead + cut)` 是本次会被换成占位的那些。 */
+  private cut = 0;
+  /** 保留原文的工具结果条数（与 `retainedToolResultCount` 逐条一致的 `keep`）。 */
+  private keep = 0;
+  /** 游标：已经扫到当前数组的第几条消息。 */
+  private seenMessages = 0;
+  private arrayRef: readonly Message[] | null = null;
+  private firstScanned: Message | null = null;
+  private lastScanned: Message | null = null;
+  /** 上次用的预算口径（`maxTokens` + 两个可覆盖项）—— 变了只需要重算 `keep`。 */
+  private budgetKey: string | null = null;
+  /** 上次算出来的结果（窗口没变就原样复用，零重算）。 */
+  private cached: string[] | null = null;
+  private readonly counters = {
+    calls: 0,
+    scannedMessages: 0,
+    reused: 0,
+    appends: 0,
+    reanchors: 0,
+    rebuilds: 0,
+    fallbacks: 0,
+  };
+
+  get stats(): ClearedToolResultPlannerStats {
+    return { ...this.counters, keep: this.keep };
+  }
+
+  /** 丢掉全部状态（换会话 / 会话被清空时调用）。 */
+  reset(): void {
+    this.entries = [];
+    this.entryHead = 0;
+    this.clearedIds = [];
+    this.clearedHead = 0;
+    this.cut = 0;
+    this.keep = 0;
+    this.seenMessages = 0;
+    this.arrayRef = null;
+    this.firstScanned = null;
+    this.lastScanned = null;
+    this.budgetKey = null;
+    this.cached = null;
+  }
+
+  /**
+   * 算本次窗口要换成占位的 tool_call_id（按消息顺序）—— 与
+   * `planClearedToolResults(messages, maxTokens, options)` **逐字节相同**。
+   */
+  plan(messages: readonly Message[], maxTokens: number, options?: ToolResultKeepOptions): string[] {
+    try {
+      return this.planIncremental(messages, maxTokens, options);
+    } catch {
+      // 内部不变量兜底：宁可整窗重算（正确但慢），也绝不把算错的结果交出去。
+      this.counters.fallbacks += 1;
+      this.reset();
+      return planClearedToolResults(messages, maxTokens, options);
+    }
+  }
+
+  private planIncremental(
+    messages: readonly Message[],
+    maxTokens: number,
+    options?: ToolResultKeepOptions,
+  ): string[] {
+    this.counters.calls += 1;
+    const budgetKey = `${maxTokens}|${options?.keepRecentTokenRatio ?? ''}|${options?.keepRecentMax ?? ''}`;
+    // 窗口没变（同一个数组、同长度、首尾同引用、同预算）⇒ 零重算。
+    if (
+      this.cached !== null &&
+      budgetKey === this.budgetKey &&
+      this.prefixIntact(messages) &&
+      this.seenMessages === messages.length &&
+      (messages.length === 0 || messages[messages.length - 1] === this.lastScanned)
+    ) {
+      this.counters.reused += 1;
+      return [...this.cached];
+    }
+    this.budgetKey = budgetKey;
+    if (!this.prefixIntact(messages)) {
+      this.reanchor(messages);
+    } else if (this.seenMessages < messages.length) {
+      // 纯追加：只扫新增那几条。
+      this.counters.appends += 1;
+      this.scanRange(messages, this.seenMessages, messages.length);
+      this.remember(messages);
+    }
+    // 预算口径 / 尾部都可能变 ⇒ 重算 keep（回看 ≤ KEEP_RECENT_MAX 条），再把 cut 挪到位。
+    this.balance(maxTokens, options);
+    this.cached = this.result();
+    return [...this.cached];
+  }
+
+  /** 前缀是否还是上次扫过的那个（真正的校验点，见类注释里的前提）。 */
+  private prefixIntact(messages: readonly Message[]): boolean {
+    const previous = this.arrayRef;
+    if (previous === null || previous !== messages) return false;
+    if (messages.length < this.seenMessages) return false;
+    if (this.seenMessages > 0 && messages[this.seenMessages - 1] !== this.lastScanned) return false;
+    if (messages.length > 0 && messages[0] !== this.firstScanned) return false;
+    return true;
+  }
+
+  /** 记下「扫到哪儿了」（游标 + 校验用的首尾引用）。 */
+  private remember(messages: readonly Message[]): void {
+    this.arrayRef = messages;
+    this.seenMessages = messages.length;
+    this.firstScanned = messages.length > 0 ? (messages[0] as Message) : null;
+    this.lastScanned = messages.length > 0 ? (messages[messages.length - 1] as Message) : null;
+    this.compactBuffers();
+  }
+
+  /** 扫 `[from, to)` 区间的消息，把工具结果追加进 `entries`（唯一的分拣入口）。 */
+  private scanRange(messages: readonly Message[], from: number, to: number): void {
+    for (let index = from; index < to; index += 1) {
+      this.counters.scannedMessages += 1;
+      const message = messages[index];
+      if (message?.role !== 'tool') continue;
+      const content = message.content;
+      this.entries.push({
+        id: message.tool_call_id,
+        // 与 `planClearedToolResults` 的判据逐字对应：正文非空 + 还不是占位 + 有 id。
+        clearable:
+          typeof content === 'string' &&
+          content.length > 0 &&
+          !isClearedToolResult(content) &&
+          message.tool_call_id !== undefined,
+        ref: message,
+        tokens: null,
+      });
+    }
+  }
+
+  /**
+   * 数组被换掉之后重新对齐（压缩 / 换会话 / clear）。
+   *
+   * 先找公共尾部（`previous[i] === next[j]` 一路往前）：压缩只是「砍掉旧的一段 + 插一条
+   * 摘要」，保留区整段是**原对象引用**，所以公共尾部就是保留区，按它对齐只需要碰
+   * 保留下来的那一小段（受 `maxTokens × 0.3` 保留预算封顶），不是整窗。
+   */
+  private reanchor(messages: readonly Message[]): void {
+    const previous = this.arrayRef;
+    // 「同一个数组对象但变短」= 有代码在就地 splice，旧的那一段已经取不回来 ⇒ 只能整窗重建。
+    if (
+      previous !== null &&
+      previous !== messages &&
+      this.seenMessages > 0 &&
+      this.seenMessages === previous.length &&
+      messages.length > 0
+    ) {
+      let i = this.seenMessages - 1;
+      let j = messages.length - 1;
+      let overlap = 0;
+      while (i >= 0 && j >= 0) {
+        this.counters.scannedMessages += 2;
+        if (previous[i] !== messages[j]) break;
+        overlap += 1;
+        i -= 1;
+        j -= 1;
+      }
+      // 至少对上一条，才值得走「按尾部对齐」这条路。
+      if (overlap > 0 && this.alignToTail(messages, j)) return;
+    }
+    this.rebuild(messages);
+  }
+
+  /**
+   * 按公共尾部对齐（`messages[lastReplaced + 1 ..]` 是保留区）。
+   *
+   * @param lastReplaced 新数组里最后一条**不在**公共尾部里的消息下标（-1 = 整段都是公共尾部）
+   * @returns 对齐成功；`false` = 结构对不上，调用方整窗重建
+   */
+  private alignToTail(messages: readonly Message[], lastReplaced: number): boolean {
+    // 头部（对齐区之前）是被压缩改写的那段：只要里面还有工具结果，就无法沿用旧分类。
+    for (let index = 0; index <= lastReplaced; index += 1) {
+      this.counters.scannedMessages += 1;
+      if (messages[index]?.role === 'tool') return false;
+    }
+    // 保留区里的工具结果必须与旧条目逐条对上（引用相同），否则说明窗口结构变了。
+    let entry = this.entries.length - 1;
+    for (let index = messages.length - 1; index > lastReplaced; index -= 1) {
+      this.counters.scannedMessages += 1;
+      if (messages[index]?.role !== 'tool') continue;
+      if (entry < this.entryHead || this.entries[entry]?.ref !== messages[index]) return false;
+      entry -= 1;
+    }
+    if (entry < this.entryHead - 1) return false;
+    const surviving = this.entries.length - 1 - entry;
+    this.trimHead(this.total() - surviving);
+    this.counters.reanchors += 1;
+    this.remember(messages);
+    return true;
+  }
+
+  /** 压缩裁掉头部 `removed` 条工具结果：占位区从头部缩、保留区从头部丢。 */
+  private trimHead(removed: number): void {
+    if (removed <= 0) return;
+    const clearedPart = Math.min(removed, this.cut);
+    let droppedIds = 0;
+    for (let offset = 0; offset < clearedPart; offset += 1) {
+      if (this.entryAt(offset).clearable) droppedIds += 1;
+    }
+    this.clearedHead += droppedIds;
+    this.entryHead += clearedPart;
+    this.cut -= clearedPart;
+    // 剩下的被移除条目原本就在保留区，没进 `clearedIds`，挪游标即可。
+    this.entryHead += removed - clearedPart;
+    if (this.cut < 0) this.cut = 0;
+    this.compactBuffers();
+  }
+
+  /** 整窗重建（兜底路径）：清空状态、从头扫一遍。 */
+  private rebuild(messages: readonly Message[]): void {
+    this.counters.rebuilds += 1;
+    this.entries = [];
+    this.entryHead = 0;
+    this.clearedIds = [];
+    this.clearedHead = 0;
+    this.cut = 0;
+    this.keep = 0;
+    this.seenMessages = 0;
+    this.arrayRef = null;
+    this.firstScanned = null;
+    this.lastScanned = null;
+    this.scanRange(messages, 0, messages.length);
+    this.remember(messages);
+  }
+
+  /** 重算 `keep` 并把占位区边界 `cut` 挪过去（两个方向都要能挪）。 */
+  private balance(maxTokens: number, options?: ToolResultKeepOptions): void {
+    this.keep = this.keepCount(maxTokens, options);
+    this.setCut(this.total() - this.keep);
+  }
+
+  /**
+   * 保留原文的条数：与 `retainedToolResultCount` 逐条一致（同样的 `maxTokens × ratio`
+   * 预算、同样的「最新 1 条无论如何保留」、同样的 `maxCount` 上限），
+   * 区别只是它直接在工具结果序列上回退，所以天然只有 ≤ `maxCount` 次。
+   */
+  private keepCount(maxTokens: number, options?: ToolResultKeepOptions): number {
+    const ratio = options?.keepRecentTokenRatio ?? KEEP_RECENT_TOKEN_RATIO;
+    const maxCount = options?.keepRecentMax ?? KEEP_RECENT_MAX;
+    const budget = maxTokens * ratio;
+    const total = this.total();
+    let kept = 0;
+    let tokens = 0;
+    for (let offset = total - 1; offset >= 0 && kept < maxCount; offset -= 1) {
+      const cost = this.tokensOf(this.entryAt(offset));
+      // 最新 1 条无论如何保留；之后超出预算即停止（与全量实现同一个边界）。
+      if (kept > 0 && tokens + cost > budget) break;
+      tokens += cost;
+      kept += 1;
+    }
+    return kept;
+  }
+
+  /** 惰性 + 缓存的 token 估算（口径就是 `estimateMessageTokens`，一个字没改）。 */
+  private tokensOf(entry: ClearedToolEntry): number {
+    if (entry.tokens === null) {
+      this.counters.scannedMessages += 1;
+      entry.tokens = estimateMessageTokens(entry.ref);
+    }
+    return entry.tokens;
+  }
+
+  /** 把占位区边界挪到 `next`：往右搬进来的条目按顺序补 id，往左搬回去的按顺序撤销。 */
+  private setCut(next: number): void {
+    while (this.cut < next) {
+      const entry = this.entryAt(this.cut);
+      if (entry.clearable && entry.id !== undefined) this.clearedIds.push(entry.id);
+      this.cut += 1;
+    }
+    while (this.cut > next) {
+      this.cut -= 1;
+      if (this.entryAt(this.cut).clearable) this.clearedIds.pop();
+    }
+  }
+
+  private result(): string[] {
+    return this.clearedIds.slice(this.clearedHead);
+  }
+
+  /** 逻辑长度（`entries` 里还有效的条数）。 */
+  private total(): number {
+    return this.entries.length - this.entryHead;
+  }
+
+  private entryAt(offset: number): ClearedToolEntry {
+    const entry = this.entries[this.entryHead + offset];
+    if (entry === undefined) throw new Error('IncrementalClearedToolResultPlanner: 游标越界');
+    return entry;
+  }
+
+  /** 偶尔收紧一次数组（摊还 O(1)），避免游标只增不减把内存撑住。 */
+  private compactBuffers(): void {
+    if (this.entryHead > 64 && this.entryHead * 2 >= this.entries.length) {
+      this.entries = this.entries.slice(this.entryHead);
+      this.entryHead = 0;
+    }
+    if (this.clearedHead > 64 && this.clearedHead * 2 >= this.clearedIds.length) {
+      this.clearedIds = this.clearedIds.slice(this.clearedHead);
+      this.clearedHead = 0;
+    }
+  }
+}
+
+/**
  * 量「保留下来的工具结果原文体积」占窗口预算多少（0.53 主题1②，纯函数，不改消息）。
  *
  * 用词对齐 HANDOFF：「保留下来的」= `planClearedToolResults` 会保留原文的那几条
@@ -683,6 +1063,12 @@ export class MemoryWorkingContext implements WorkingContext {
   private sessionMessages: Map<string, Message[]> = new Map();
   /** 估算 token 增量缓存（按 session）：避免 `tokenCount` 每次重扫整段历史。 */
   private estimatedTokens: Map<string, number> = new Map();
+  /**
+   * 占位集合的**增量**规划器（按 session）：0.55 起 `plannedClearedToolResults`
+   * 不再每次重扫整窗，只处理新增 / 重对齐受影响的那一段。
+   * 会话删除 / 清空时一起丢掉（`entries` 的条目数上界 = 窗口内工具结果条数）。
+   */
+  private clearedPlanners: Map<string, IncrementalClearedToolResultPlanner> = new Map();
   private currentSessionId = 'default';
   private config: ContextConfig;
   private realTokens = 0;
@@ -950,12 +1336,14 @@ export class MemoryWorkingContext implements WorkingContext {
   clear(): void {
     this.sessionMessages.set(this.currentSessionId, []);
     this.estimatedTokens.set(this.currentSessionId, 0);
+    this.clearedPlanners.get(this.currentSessionId)?.reset();
     this.realTokens = 0;
   }
 
   clearSession(sessionId: string): void {
     this.sessionMessages.set(sessionId, []);
     this.estimatedTokens.set(sessionId, 0);
+    this.clearedPlanners.get(sessionId)?.reset();
     // 清空当前会话后旧锚点已不代表其内容，必须归零；其他会话的锚点不受影响。
     if (sessionId === this.currentSessionId) this.realTokens = 0;
   }
@@ -963,6 +1351,7 @@ export class MemoryWorkingContext implements WorkingContext {
   deleteSession(sessionId: string): void {
     this.sessionMessages.delete(sessionId);
     this.estimatedTokens.delete(sessionId);
+    this.clearedPlanners.delete(sessionId);
   }
 
   getSessionIds(): string[] {
@@ -992,13 +1381,24 @@ export class MemoryWorkingContext implements WorkingContext {
    * `SessionState.messages` / 落盘 / `sessions.get` 读回来的永远是原文。原因是不变量
    * 「落盘的 message 只能 pop 或 append」—— 就地改内容等于在磁盘上重写历史。
    *
+   * 0.55：改成**游标增量**。以前每次调用都整窗重扫一遍（两段循环都从尾部走完全部消息），
+   * 但窗口只会 append，所以老消息的分类结果 `IncrementalClearedToolResultPlanner`
+   * 全部留着复用；压缩之后只按公共尾部重对齐保留区。结果与
+   * `planClearedToolResults(本会话窗口, maxTokens)` 逐字节相同（真机等价比对见
+   * `docs/` 的 0.55 交接）。
+   *
    * 算出来的集合仍写进 `message.compaction.cleared_tool_call_ids`：审计要知道「这一次
    * 之后，模型看到的是哪些工具结果的占位」。
    *
    * @returns 会被替换为占位的 tool_call_id（按消息顺序）
    */
   private plannedClearedToolResults(sessionId: string): string[] {
-    return planClearedToolResults(
+    let planner = this.clearedPlanners.get(sessionId);
+    if (planner === undefined) {
+      planner = new IncrementalClearedToolResultPlanner();
+      this.clearedPlanners.set(sessionId, planner);
+    }
+    return planner.plan(
       this.sessionMessages.get(sessionId) ?? [],
       this.config.maxTokens ?? 1_000_000,
     );
