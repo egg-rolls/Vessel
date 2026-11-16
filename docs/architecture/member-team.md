@@ -89,7 +89,9 @@ paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
 - **I3 无静默遗弃**：任何移出 mailbox 的路径必须在 `consume` / `unhold` / `discard` 里选一个出口（六个审计点：提交失败、正常出队、body 已收口早返回、预算 `turn_start` 阻塞、retire/dispose 清空、`retryHeldMessages` 重投）。
 - **I4 held ⊆ 被引用**：`held` 记 `message id → 持有者 bodyId`，只存内存；释放 API 是 `releaseHeldFor(agentId, bodyId)`，**没有** agent 级释放（多 live body 时 A 退役不得放出 B 在排队的消息，否则「read 取走 + B 又送达」就是真·重复投递）。
 
-**WAL 与崩溃语义**：`append` 先于 scheduler 接管，`consumed` 只在成为 run input 时写；`held` 不落盘，**崩溃/重启后未消费的一律回到 `unread` 且可读**，有意取舍是**不自动重投**（由下一轮 inbox notice 提示、模型自己 read）。  **两个模型可见数字**（notice 与 `list` 同一口径，由 `counts()` 派生）：`unread` = 可读；`pending` = `unread ∩ held`（已接管、会自动成为下一轮输入，**不要重发或重做**）。**notice 只报计数**：一行 `[inbox] <pending> pending · <unread> unread`（无用法散文，用法常驻在 `inbox` 工具 description）；计数全 0 完全不注入，`(unread, pending, held)` 与上次注入相同也不再注入 —— 正文投递走 run input，提示只是提示。`read` 缺省只读可读；`includeHeld:true` 连 held 一起返回正文，**只 peek、不消费、不取消投递**。
+**WAL 与崩溃语义**：`append` 先于 scheduler 接管，`consumed` 只在成为 run input 时写；`held` 不落盘，**崩溃/重启后未消费的一律回到 `unread` 且可读**，有意取舍是**不自动重投**（由下一轮 inbox notice 提示、模型自己 read）。  **两个模型可见数字**（notice 与 `list` 同一口径，由 `counts()` 派生）：`unread` = 可读；`pending` = `unread ∩ held`（已接管、会自动成为下一轮输入，**不要重发或重做**）。**notice 只报计数**：一行 `[inbox] <pending> pending · <unread> unread`（无用法散文，用法常驻在 `inbox` 工具 description）；计数全 0 完全不注入，`(unread, pending, held)` 与上次注入相同也不再注入 —— 正文投递走 run input，提示只是提示。
+
+**模型契约（0.55）**：`list` 是唯一的廉价偷看——每条只给 `id` / 来源 / **前 40 字符**前缀 / `more_chars`（还有多少字符没给），永不吐正文；`read` 就等于拿走——取正文 + 消费，`unread` 与 `held` 一视同仁，held 的那几条先走 `AgentService.claim` 的同一条前置收口（取消 queued run + 出队）再落 `consume`，不可逆。0.51 的 `claim` 动作已并入 `read`（老会话仍发它时当 `read` 的别名执行并在结果里附一行 `note`；`agents.claim` RPC 与 web 条带不变），`includeHeld` 开关已删除（存储层的同名形参只留给插件端口做只读 peek）。
 
 <a id="message-source"></a>
 
