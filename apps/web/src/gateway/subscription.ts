@@ -2,10 +2,12 @@
  * 路由级事件订阅控制器（CONTRACT-msg-system §4.1，S2 数据层）。
  *
  * 每个 node 只有一条 WS。路由切换时由本控制器发 `events.subscribe` 收敛过滤，
- * 不再靠「全量回放 + 浏览器开窗」。它不 import 任何 Chat / Team 组件；S3 在路由
+ * 不再靠「全量回放 +
+             + 浏览器开窗」。它不 import 任何 Chat / Team 组件；S3 在路由
  * 变化时调用 `apply(scope)`。
  *
- * ## 0.54：单游标 + **一个**区间回填（ADR-105 §6）
+ * ## 0.54：单游标 +
+             + **一个**区间回填（ADR-105 §6）
  *
  * chat 订阅的顺序被写死成三步，**不许**并行、不许边回填边追平：
  * 1. 读 `sessions.get.event_cursor` 的 timeline 四字段
@@ -18,8 +20,12 @@
  * 3. 回填**追平之后**才发 `events.subscribe`（`since = 游标`）：实时流只负责增量，绝不
  *    与回填重叠，于是「先到的尾巴」和「后到的更早一段」这种交错形态从结构上不存在。
  *
- * 今天的旧形态（两阶段 `until_seq` 逐页往更早拉 + `sessions.events`/`events.list`
- * 三源合并 + 押后 + 负数带 + 内容 id 去重）在本单**整段删除**：那是三源（会话日志 /
+ * 今天的旧形态（两阶段 `until_seq` 逐页往更早拉 +
+             + `sessions.events`/`events.list`
+ * 三源合并 +
+             + 押后 +
+             + 负数带 +
+             + 内容 id 去重）在本单**整段删除**：那是三源（会话日志 /
  * run trace / 进程内环）的补丁，不是时间线的能力。
  *
  * 还没落地的协议（proto-b1 的 `timeline.hello` / `after_timeline_seq`）：区间声明与校验
@@ -33,11 +39,14 @@ import type { EventStore } from '../state/event-store';
 import type { GatewayClient } from './client';
 import {
   collectTimelineRange,
+  cursorTarget,
+  MAX_TIMELINE_SEGMENTS,
   planBackfill,
   planRange,
   readTimelineCursor,
   readTimelineHelloSegment,
   readTimelinePage,
+  type TimelineCursor,
   type TimelineRangeHeader,
 } from './timeline-protocol';
 import type { HelloInfo } from './types';
@@ -151,6 +160,28 @@ export function serverScopedSessionId(built: BuiltSubscription): string | undefi
   return built.filter.session_id;
 }
 
+/**
+ * 一次续拉回填的观测面（真机排查 / 探针读它；`console.info` 打的是同一组数）。
+ *
+ * `segments` = 续拉了几段；`declared` = 各段声明条数之和；`received` = 实际并入 +
+             + 判重复
+ * 的条数之和（两者相等才说明"声明多少收了多少"）；`end` / `target` = 停下来的游标与应到的
+ * 右端（`min(wal_head, published_head)`）。
+ */
+export interface BackfillReport {
+  segments: number;
+  /** 各段**声明**条数之和（= 各段区间长度减去声明洞）。 */
+  declared: number;
+  /** 各段**从线上实收**的行数之和。`declared === fetched` 才说明「声明多少收多少」。 */
+  fetched: number;
+  /** 真正进环 / 记重复的条数（其余是传输噪声：chunk delta 等不产 item 的增量）。 */
+  received: number;
+  /** 停下来的游标（应等于 `target`）。 */
+  end: number;
+  /** 应到的右端 = `min(wal_head, published_head)`。 */
+  target: number;
+}
+
 export class SubscriptionController {
   /** 最近一次路由请求的订阅；重连后据此重新收敛。 */
   private desired: SubscriptionScope | null = null;
@@ -163,6 +194,8 @@ export class SubscriptionController {
   /** 串行化订阅请求；期间的新 scope 合并到下一轮。 */
   private running: Promise<void> | null = null;
   private clientFilter: string | undefined;
+  /** 最近一次续拉回填的数字（见 `BackfillReport`）。 */
+  lastBackfill: BackfillReport | null = null;
   /** 本作用域已确认「不能按 `after_timeline_seq` 订阅」（旧格式会话冻结）⇒ 走老参数。 */
   private readonly legacyScopes = new Set<string>();
   /** 区间回填在跑（防重入：同一轮里 apply / 路由抖动都不该叠第二次）。 */
@@ -181,7 +214,21 @@ export class SubscriptionController {
      * 缺省 = 不说话（仍进 `EventStore#timelineGap` 与 console）。
      */
     private readonly notice?: (message: string) => void,
-  ) {}
+  ) {
+    // 续拉循环的实时流那一半：本趟 epoch 记完，若服务端声明区间短于应到右端
+    // （每趟 ≤ 2000 条导致的），立刻按 `after_timeline_seq = 本趟末 seq` 再订一次。
+    this.eventStore.setEpochEndHook((header) => {
+      if (header.end_seq >= this.epochTarget) return;
+      const scope = this.desired;
+      if (scope === null) return;
+      // 清掉幂等短路：同一作用域也要再发一次 `events.subscribe`（新的排他游标）。
+      this.appliedKey = null;
+      void this.apply(scope);
+    });
+  }
+
+  /** 本趟 epoch 应到的右端（`min(wal_head, published_head)`；无 timeline 时为 0）。 */
+  private epochTarget = 0;
 
   /** 路由变化时调用；重复 scope 幂等（同一作用域不重复发请求）。 */
   apply(scope: SubscriptionScope): Promise<void> {
@@ -214,8 +261,15 @@ export class SubscriptionController {
     // 在实时流上做（服务端**声明**了区间与 `count`）。`legacy` ⇒ 老行为，帧带 hub seq。
     const header = readTimelineHelloSegment(info.timeline_source, info.timeline);
     if (header !== undefined) {
+      // 本趟应到的右端：`(published_head, wal_head]` 允许不被推送，所以取 min。
+      const published = info.timeline?.published_head;
+      this.epochTarget =
+        typeof published === 'number'
+          ? Math.min(header.wal_head, Math.min(published, header.wal_head))
+          : header.wal_head;
       this.eventStore.beginTimelineEpoch(header);
     } else {
+      this.epochTarget = 0;
       this.eventStore.endTimelineEpoch();
       // `from_seq` 是本次流实际会发送的第一条（旧 hub 空间的坐标）：订阅级 hello 必须让它
       // 生效，否则上一轮更高的水位会把这一轮的帧全判成重复。
@@ -261,20 +315,21 @@ export class SubscriptionController {
     return this.client.protocol?.protocol.features.includes(SESSION_FILTER_FEATURE) ?? false;
   }
 
-  /** 读 timeline 游标的四字段（`sessions.get.event_cursor`；旧 gateway 返回 undefined）。 */
-  private async readCursor(sessionId: string): Promise<TimelineRangeHeader | undefined> {
+  /** 读 timeline 游标（`sessions.get.event_cursor` 四字段；旧 gateway 返回 undefined）。 */
+  private async readCursor(sessionId: string): Promise<TimelineCursor | undefined> {
     const body = await this.client.request<{ session?: { event_cursor?: unknown } }>(
       'sessions.get',
       { session_id: sessionId, message_limit: 1 },
       TIMELINE_REQUEST_TIMEOUT_MS,
     );
-    const cursor = readTimelineCursor(body?.session?.event_cursor);
-    if (cursor === undefined) return undefined;
-    return planBackfill(cursor, this.eventStore.currentSeq);
+    return readTimelineCursor(body?.session?.event_cursor);
   }
 
   /** 拉一段区间（页只在区间内部）并交回 store 做四条校验。 */
-  private async pullRange(sessionId: string, header: TimelineRangeHeader): Promise<'ok' | 'gap'> {
+  private async pullRange(
+    sessionId: string,
+    header: TimelineRangeHeader,
+  ): Promise<{ ok: boolean; merged: number; duplicates: number; fetched: number }> {
     const fetched = await collectTimelineRange(header, async (sinceSeq, limit) => {
       const body = await this.client.request<unknown>(
         'sessions.events',
@@ -284,53 +339,108 @@ export class SubscriptionController {
       return readTimelinePage(body);
     });
     const outcome = this.eventStore.applyTimelineRange(header, fetched.events);
-    return outcome.violation === undefined ? 'ok' : 'gap';
+    return {
+      ok: outcome.violation === undefined,
+      merged: outcome.merged,
+      duplicates: outcome.duplicates,
+      fetched: fetched.events.length,
+    };
   }
 
   /**
-   * 单区间回填：`[client_timeline_seq + 1 .. wal_head]` 一次拿全。
+   * 单游标回填 = **续拉循环**：`after = 游标`，一段 ≤ `TIMELINE_SEGMENT_MAX_EVENTS` 条，
+   * 每段独立过四条校验，跑完接着下一段，直到 `游标 == min(wal_head, published_head)`。
    *
-   * 失败处置（写死，与 ADR-105 §7「失败时的处置」同口径）：校验不过 ⇒ **重拉该区间一次**；
-   * 还不过 ⇒ 缺口已经进了 `timelineGap`（UI 污点条 + console），实时流照常接上 ——
-   * 半段覆盖**绝不**静默：那张条会一直挂着，直到下一次回填把它收掉。
+   * 为什么必须分段（而不是"一次声明整段 +
+             + 抬高上限"）：服务端每趟订阅最多送 2000 条 /
+   * 2 MiB，背压时停且不推游标 —— 一次声明 17 万条的结果是"声明了但发不完"，于是客户端的
+   * 四条校验必然报边界缺口（真机上那个假警报就是这个形态）。分段之后**每段自洽**：
+   * 声明多少收多少、校验多少、失败也只重拉这一段。
+   *
+   * 失败处置（ADR-105 §7「失败时的处置」同口径）：某一段校验不过 ⇒ **重拉这一段一次**；
+   * 还不过 ⇒ 缺口进 `timelineGap`（UI 污点条 +
+             + console）并停手 —— 半段覆盖**绝不**静默。
+   *
+   * 观测：跑完打一行
+   * `[timeline-backfill] segments=… declared=… fetched=… entries=… end=… target=…`，
+   * 探针与真机排查都读这一行（`lastBackfill` 也是同一组数）。`declared === fetched` 是
+   * 「每段声明多少就收多少」的直接证据；`entries` 小一些是正常的（chunk delta 不产 item）。
    */
   private async runTimelineBackfill(sessionId: string, scopeKey: string): Promise<void> {
     if (this.backfilling) return;
     this.backfilling = true;
+    const report: BackfillReport = {
+      segments: 0,
+      declared: 0,
+      fetched: 0,
+      received: 0,
+      end: 0,
+      target: 0,
+    };
     try {
-      let header: TimelineRangeHeader | undefined;
+      let cursor: TimelineCursor | undefined;
       try {
-        header = await this.readCursor(sessionId);
+        cursor = await this.readCursor(sessionId);
       } catch {
         // 旧 gateway / 会话不存在：没有 timeline ⇒ fail-open 到「只有实时流」的今天。
         return;
       }
-      if (header === undefined) return;
+      if (cursor === undefined) return;
       if (this.scopeChanged(scopeKey)) return;
-      if (header.reset === true) {
-        // 游标作废（服务端重启 / 会话被冻结后重开）：从 1 重拉整段，item 一起作废。
+      const target = cursorTarget(cursor);
+      report.target = target;
+      report.end = this.eventStore.currentSeq;
+      if (this.eventStore.currentSeq > cursor.wal_head) {
+        // 游标作废（服务端重启 / 会话被冻结后重开）：从 1 重拉，item 一起作废。
         this.eventStore.truncateAfter(0);
-        const reset = planRange(1, header.end_seq, {
-          timeline_head: header.timeline_head,
-          wal_head: header.wal_head,
-          holes: header.holes,
-          tainted: header.tainted,
-        });
-        header = reset;
       }
-      if (header.count === 0 && header.start_seq > header.end_seq) return;
-      const first = await this.pullRange(sessionId, header);
-      if (first === 'ok') {
+      for (let index = 0; index < MAX_TIMELINE_SEGMENTS; index += 1) {
+        const after = this.eventStore.currentSeq;
+        if (after >= target) break;
+        const header = planBackfill(cursor, after);
+        if (header === undefined) break;
+        report.declared += header.count;
+        report.segments += 1;
+        let outcome = await this.pullRange(sessionId, header);
+        if (outcome.ok === false && !this.scopeChanged(scopeKey)) {
+          // 重拉这一段一次（区间并入是幂等的：缺席才插）。
+          outcome = await this.pullRange(sessionId, header);
+        }
+        report.fetched += outcome.fetched;
+        report.received += outcome.merged + outcome.duplicates;
+        if (outcome.ok === false) {
+          this.notice?.(t('timeline.gap.notice'));
+          break;
+        }
         this.eventStore.clearTimelineGap();
-        return;
+        if (this.scopeChanged(scopeKey)) break;
       }
-      // 重拉一次（区间是幂等的：`applyTimelineRange` 只在游标之上并入）。
-      if (this.scopeChanged(scopeKey)) return;
-      const second = await this.pullRange(sessionId, header);
-      if (second === 'ok') this.eventStore.clearTimelineGap();
-      else this.notice?.(t('timeline.gap.notice'));
+      report.end = this.eventStore.currentSeq;
+      // 触顶也是缺口（游标不前进 = 真故障），不许静默；正常的几十段以内一定会先 break。
+      if (report.segments >= MAX_TIMELINE_SEGMENTS && report.end < target) {
+        this.eventStore.reportTimelineGap({
+          from_seq: report.end + 1,
+          to_seq: target,
+          source: 'fetch',
+          rule: 3,
+          expected: `追平到 ${String(target)}`,
+          received: `停在 ${String(report.end)}（${String(MAX_TIMELINE_SEGMENTS)} 段上限）`,
+          expectedCount: target - report.end,
+          receivedCount: 0,
+          at: Date.now(),
+        });
+      }
     } finally {
       this.backfilling = false;
+      this.lastBackfill = report;
+      if (report.segments > 0) {
+        console.info(
+          `[timeline-backfill] session=${sessionId} segments=${String(report.segments)}` +
+            ` declared=${String(report.declared)} fetched=${String(report.fetched)}` +
+            ` entries=${String(report.received)}` +
+            ` end=${String(report.end)} target=${String(report.target)}`,
+        );
+      }
     }
   }
 
@@ -356,7 +466,7 @@ export class SubscriptionController {
       return;
     }
     const outcome = await this.pullRange(sessionId, header);
-    if (outcome === 'ok') this.eventStore.clearTimelineGap();
+    if (outcome.ok) this.eventStore.clearTimelineGap();
   }
 
   private scopeChanged(scopeKey: string): boolean {

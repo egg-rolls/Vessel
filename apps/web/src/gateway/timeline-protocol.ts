@@ -32,6 +32,13 @@ export interface TimelineCursor {
   wal_head: number;
   holes: readonly TimelineHoleRange[];
   tainted: boolean;
+  /**
+   * **一定发布过**的最大 seq（`<= wal_head`；缺省 = 全部已发布，与 core 的 open 同口径）。
+   *
+   * 续拉的右端点取 `min(wal_head, published_head)`：`(published_head, wal_head]` 那一段
+   * 允许不被推送（pub-i2 的语义），客户端不必去追它，追了也只会得到「服务端没给」。
+   */
+  published_head?: number;
 }
 
 /**
@@ -196,7 +203,20 @@ export function readTimelineCursor(raw: unknown): TimelineCursor | undefined {
     wal_head: record.wal_head,
     holes: readHoles(record.holes),
     tainted: record.tainted === true,
+    ...(isSeq(record.published_head)
+      ? { published_head: Math.min(record.published_head, record.wal_head) }
+      : {}),
   };
+}
+
+/**
+ * 续拉的右端点：`min(wal_head, published_head)`。
+ *
+ * `published_head` 缺省时按 `wal_head` 兜底（与 core 自己在 `open` 时的口径一致）。
+ */
+export function cursorTarget(cursor: TimelineCursor): number {
+  const published = cursor.published_head ?? cursor.wal_head;
+  return Math.min(cursor.wal_head, published);
 }
 
 /** `seq` 是否落在任一声明的洞里。 */
@@ -219,11 +239,16 @@ function holeCount(from: number, to: number, holes: readonly TimelineHoleRange[]
 }
 
 /**
- * 由游标 + 客户端游标算出**一段**回填区间的声明。
+ * 由游标 + 客户端游标算出**下一段**回填区间的声明（续拉循环的一步）。
  *
- * - 已经追平（`after >= wal_head`）⇒ `undefined`：没有要补的区间（不是「空区间」）。
- * - `after > wal_head`（服务端重启 / 会话重开导致的游标作废）⇒ `reset`：从 1 重拉整段。
- * - 否则 `[after + 1, wal_head]`：**一个区间**，一次拿完（分页只在区间内部）。
+ * - 已经追平（`after >= min(wal_head, published_head)`）⇒ `undefined`：没有要补的段。
+ * - `after > wal_head`（服务端重启 / 会话重开导致的游标作废）⇒ `reset`：从 1 重拉。
+ * - 否则 `[after + 1, end]`，`end` 再夹到**最多 `maxEvents` 条**（`holes` 也算进去：
+ *   洞里的 seq 不占额度，否则有洞的会话永远凑不满一段）。
+ *
+ * 为什么要分段而不是一次声明到底：服务端每趟订阅最多送 2000 条 / 2 MiB 且背压时停，
+ * 一次声明 17 万条必然"声明了但发不完" —— 那正是真机上那个假缺口的成因。分段之后
+ * **每段都自洽**（声明多少就校验多少），跑完一段续下一段，直到追平。
  *
  * 时间不参与：ADR-105 §3.4 明文「UI 不得自行按 ts 排 / 按 ts 截断」，所以这里没有任何
  * 时间截断参数（那一套随三源读路径一起删除，不再有第二个入口）。
@@ -231,16 +256,28 @@ function holeCount(from: number, to: number, holes: readonly TimelineHoleRange[]
 export function planBackfill(
   cursor: TimelineCursor,
   after: number,
+  maxEvents = TIMELINE_SEGMENT_MAX_EVENTS,
 ): TimelineRangeHeader | undefined {
   const from = Number.isInteger(after) && after > 0 ? after : 0;
+  const target = cursorTarget(cursor);
   if (from > cursor.wal_head) {
     return {
       ...planRange(cursor.wal_head > 0 ? 1 : 0, cursor.wal_head, cursor),
       reset: true,
     };
   }
-  if (from >= cursor.wal_head) return undefined;
-  return planRange(from + 1, cursor.wal_head, cursor);
+  if (from >= target) return undefined;
+  const start = from + 1;
+  // 按**期望条数**夹右端（不是按 seq 跨度）：洞越多，同样的 seq 跨度里条数越少。
+  let end = start - 1;
+  let budget = Math.max(1, Math.floor(maxEvents));
+  for (let seq = start; seq <= target; seq += 1) {
+    end = seq;
+    if (inHoles(seq, cursor.holes)) continue;
+    budget -= 1;
+    if (budget <= 0) break;
+  }
+  return planRange(start, Math.min(end, cursor.wal_head), cursor);
 }
 
 /**
@@ -384,14 +421,28 @@ export interface TimelinePage {
   error?: string;
 }
 
-/** 单次区间的页数硬上限（防 WAN 上首屏被拖死；触顶 ⇒ 声明式缺口，不静默截断）。 */
-export const MAX_TIMELINE_RANGE_PAGES = 200;
+/**
+ * 一段回填的**条数**上限（不是"整段会话的上限"）。
+ *
+ * 为什么按段而不是抬大 cap：服务端 `sendTimelineEpoch` 每趟最多 2000 条 / 2 MiB（背压时停、
+ * 不推游标），`sessions.events` 也是 500/页 —— 客户端跟着按段续拉，每段都能过四条校验、
+ * 每段都能独立重试。把上限抬到"覆盖 17 万条"只是把问题推后（18 万、20 万照样炸），
+ * 而 100,000 那种"单段吃满再报规则 3"是**假缺口**：真机上 176k 会话就撞在这里。
+ */
+export const TIMELINE_SEGMENT_MAX_EVENTS = 2000;
+
+/**
+ * 续拉段数硬上限（安全网，不是正常出口）：200 段 × 2000 条 = 40 万条。
+ *
+ * 正常会话在几十段内追平；触顶说明服务端游标不前进（真正的故障），这时才报缺口。
+ */
+export const MAX_TIMELINE_SEGMENTS = 200;
 
 /** 一次区间拉取的结果（`collectTimelineRange`）。 */
 export interface TimelineRangeFetch {
   events: TimelineEvent[];
   pages: number;
-  /** 失败 / 触顶原因（有值 ⇒ 调用方仍走校验，校验会如实报缺口）。 */
+  /** 失败原因（有值 ⇒ 调用方仍走校验，校验会如实报缺口）。 */
   error?: string;
 }
 
@@ -399,8 +450,9 @@ export interface TimelineRangeFetch {
  * 把**一个区间**的页拼齐（区间内部翻页，不改变区间）。
  *
  * 只认 `has_more` + 游标前进这两条停止条件；页游标不前进就停手（服务端异常 / 日志被截，
- * 在这里转圈是最坏的形态）。页数上限是硬上界，触顶**如实**记 `error` —— 由调用方的四条
- * 校验把它变成可见的缺口，而不是「少了几条但没人知道」。
+ * 在这里转圈是最坏的形态）。**页数上界由区间长度算出来**（`count / pageLimit + 2`），
+ * 不再是一个跟区间长度无关的常数 —— 否则长会话会在那个常数处"提前收手"，把
+ * 「我拉够了」误报成「服务端没给全」（真机上 17 万条会话就撞过这个假缺口）。
  */
 export async function collectTimelineRange(
   header: TimelineRangeHeader,
@@ -410,7 +462,8 @@ export async function collectTimelineRange(
   const events: TimelineEvent[] = [];
   let since = header.start_seq - 1;
   let pages = 0;
-  for (; pages < MAX_TIMELINE_RANGE_PAGES && since < header.end_seq; pages += 1) {
+  const maxPages = Math.ceil(header.count / Math.max(1, pageLimit)) + 2;
+  for (; pages < maxPages && since < header.end_seq; pages += 1) {
     let page: TimelinePage;
     try {
       page = await fetchPage(since, pageLimit);
@@ -435,9 +488,7 @@ export async function collectTimelineRange(
     since = maxSeq;
   }
   const done = since >= header.end_seq;
-  return done && pages < MAX_TIMELINE_RANGE_PAGES
-    ? { events, pages }
-    : { events, pages, error: 'range page cap reached' };
+  return done && pages < maxPages ? { events, pages } : { events, pages, error: 'page bound hit' };
 }
 
 /**

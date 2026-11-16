@@ -240,6 +240,14 @@ export class EventStore {
    */
   private epoch: { header: TimelineRangeHeader; seqs: number[] } | undefined;
   /**
+   * 一个 epoch 记完账（收到右端或攒够 `count`）后的出口。
+   *
+   * 用途只有一个：服务端每趟最多送 2000 条，声明区间**短于**真实右端
+   * （`end_seq < min(wal_head, published_head)`）时，订阅层据此续拉下一趟 ——「续拉循环」
+   * 在实时流那一侧的一半（另一半是 `sessions.events` 的分段回填）。
+   */
+  private epochEndHook: ((header: TimelineRangeHeader) => void) | undefined;
+  /**
    * 缺口上报的出口（订阅层注入：把 `timeline_gap` 帧发回服务端）。
    *
    * 放在 store 外面是因为它要碰 WS；**声明**（`gap` 状态）留在 store 里，两条不混。
@@ -380,6 +388,13 @@ export class EventStore {
     const violation = validateTimelineRange(header, seqs);
     if (violation !== undefined) this.reportTimelineGap(violation);
     this.epoch = undefined;
+    // 本趟记完：订阅层据此判断「还有没有下一趟」（服务端每趟 ≤ 2000 条）。
+    this.epochEndHook?.(header);
+  }
+
+  /** 注入 epoch 结束出口（续拉用；缺省 = 不续拉）。 */
+  setEpochEndHook(hook: ((header: TimelineRangeHeader) => void) | undefined): void {
+    this.epochEndHook = hook;
   }
 
   /** 缺口已被后续重拉补上：收起 `tainted` / `last`（`reports` 是累计值，只增不减）。
@@ -558,11 +573,15 @@ export class EventStore {
       }
     }
     const evicted = this.trimEntries();
-    // 区间带声明洞 ⇒ 这一段**读不回来**是永久事实，UI 必须挂污点（ADR-105 §6）。
+    // 区间带**声明洞** ⇒ 这一段读不回来是永久事实，UI 必须挂污点（ADR-105 §6）。
+    //
+    // 只认 `holes`：`tainted` 是一个**会话级**标记，没有洞区间时它给不出「哪一段不可读」，
+    // 拿它挂条会变成一条指不出区间、也修不掉的假警报（真机上 176k 会话的假缺口就是这种
+    // 形态：`holes.ndjson` 0 行、四字段里 `tainted` 却为真）。所以这里不放行它。
     const holesInRange = header.holes.filter(
       (hole) => hole.to_seq >= header.start_seq && hole.from_seq <= header.end_seq,
     );
-    if (holesInRange.length > 0 || header.tainted) {
+    if (holesInRange.length > 0) {
       this.reportTimelineGap({
         from_seq: holesInRange[0]?.from_seq ?? header.start_seq,
         to_seq: holesInRange[holesInRange.length - 1]?.to_seq ?? header.end_seq,
