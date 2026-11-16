@@ -47,11 +47,6 @@ const ARCHIVE_NOTICE_MAX_IDS = 8;
 /** 读回通道的线上形态（本版本唯一读回路径，ADR-104 §2.3(f)）。 */
 export const ARCHIVE_READBACK_RPC = 'sessions.events';
 
-/** 原文所在的日志文件（会话目录内的相对路径，ADR-104 §10.2 第 6 项）。 */
-export function archiveSourceLogPath(sessionId: string): string {
-  return sessionId + '/events.ndjson';
-}
-
 /**
  * 一条被归档的工具结果（逐条元数据）。
  *
@@ -81,7 +76,7 @@ export interface ArchiveNoticeInput {
   readonly tools: readonly string[];
   /** 逐条 UTF-8 字节数，与 `ids` 同序（缺项渲染成 0）。 */
   readonly bytes: readonly number[];
-  /** 会话 id（卡上要写清原文在哪：`<session_id>/events.ndjson`）。 */
+  /** 会话 id（读回 RPC 的参数）。 */
   readonly sessionId: string;
   /**
    * 会话内**累计**归档条数（展开态口径，只出现在明细行）。
@@ -208,7 +203,6 @@ export function renderArchiveNotice(
     .map((entry) => entry.name + ' ' + formatBytes(entry.bytes))
     .join(' / ');
   const ids = listIds(input.ids);
-  const source = archiveSourceLogPath(input.sessionId);
   if (locale === 'zh-CN') {
     return [
       TRIM_ENV_SCOPE +
@@ -221,9 +215,7 @@ export function renderArchiveNotice(
       TRIM_ENV_DETAIL_MARK +
         '读回：' +
         ARCHIVE_READBACK_RPC +
-        '{session_id, tool_call_id} 取 data.result（原文在 ' +
-        source +
-        '）',
+        '{session_id, tool_call_id} 取 data.result',
     ].join('\n');
   }
   return [
@@ -237,9 +229,7 @@ export function renderArchiveNotice(
     TRIM_ENV_DETAIL_MARK +
       'read back: ' +
       ARCHIVE_READBACK_RPC +
-      '{session_id, tool_call_id} -> data.result (source: ' +
-      source +
-      ')',
+      '{session_id, tool_call_id} -> data.result',
   ].join('\n');
 }
 

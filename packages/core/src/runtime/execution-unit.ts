@@ -8,7 +8,6 @@ import {
   applyReadSideMaskers,
   archiveNoticeSignature,
   archiveReadbackAvailability,
-  archiveSourceLogPath,
   auditChainOf,
   decideProjectionRunMode,
   estimateTokens,
@@ -1144,7 +1143,6 @@ export class ExecutionUnit {
     const toolNames = entries.map((entry) => entry.tool_name);
     const bytes = entries.map((entry) => entry.bytes);
     const bytesTotal = bytes.reduce((sum, value) => sum + value, 0);
-    const sourceLog = archiveSourceLogPath(execution.sessionId);
     const notice = renderArchiveNotice({
       ids: fresh,
       tools: toolNames,
@@ -1169,8 +1167,7 @@ export class ExecutionUnit {
         bytes,
         bytes_total: bytesTotal,
         session_id: execution.sessionId,
-        // 原文在哪 + 怎么读回来（ADR-104 §2.3(c) 的两行元数据）。
-        source_log: sourceLog,
+        // 怎么读回来（ADR-104 §2.3(c)）。不再报「原文在哪个文件」：0.54 停写 events.ndjson 后那个路径是假的。
         readback: 'sessions.events',
         plan_hash: projection.plan_hash,
         segment: 'archive_notice',

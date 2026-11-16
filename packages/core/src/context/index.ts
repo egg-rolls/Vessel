@@ -25,7 +25,6 @@ export {
   type ArchiveReadbackLogPort,
   archiveNoticeSignature,
   archiveReadbackAvailability,
-  archiveSourceLogPath,
   measureArchivedToolResults,
   renderArchiveNotice,
 } from './archive-notice.js';
