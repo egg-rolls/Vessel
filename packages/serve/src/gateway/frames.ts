@@ -14,7 +14,11 @@ import {
   protocolError,
   type ServerFrame,
 } from '../protocol.js';
-import type { TimelineHelloSegment, TimelineReadFrom } from './timeline-protocol.js';
+import type {
+  TimelineEpochEndSegment,
+  TimelineHelloSegment,
+  TimelineReadFrom,
+} from './timeline-protocol.js';
 
 /** camelCase key → snake_case */
 function toSnakeKey(key: string): string {
@@ -127,6 +131,37 @@ export function helloFrame(input: HelloFrameInput): ServerFrame {
           ...(timeline.reset !== undefined ? { reset: timeline.reset } : {}),
         }
       : {}),
+  };
+}
+
+export interface TimelineEpochEndFrameInput {
+  nodeId: string;
+  /** 本 epoch 的会话（时间线订阅必须有 `session_id`；缺省时不出现在线上）。 */
+  sessionId?: string;
+  end: TimelineEpochEndSegment;
+  ts?: number;
+}
+
+/**
+ * 时间线 epoch 的显式结束帧（0.55，additive 新 kind）。
+ *
+ * 调用方**只能**在时间线 epoch 整趟发完之后用它（见 `gateway.ts#sendTimelineEpoch`）；
+ * 老 epoch 没有「这一趟区间」的声明，不该有结束标记。字段口径与「为什么不是猜测」
+ * 写在 `timeline-protocol.ts#timelineEpochEnd` / `TimelineEpochEndSegment` 上。
+ *
+ * 老客户端收不到它也无所谓：未知 `kind` 走客户端分发的 `default:` 静默忽略，
+ * 既有帧（`hello` / `event`）的形状与语义**一个字没改**。
+ */
+export function timelineEpochEndFrame(input: TimelineEpochEndFrameInput): ServerFrame {
+  return {
+    v: PROTOCOL_VERSION,
+    kind: 'timeline-epoch-end',
+    node_id: input.nodeId,
+    ts: input.ts ?? Date.now(),
+    ...(input.sessionId !== undefined ? { session_id: input.sessionId } : {}),
+    end_seq: input.end.end_seq,
+    count: input.end.count,
+    has_more: input.end.has_more,
   };
 }
 
