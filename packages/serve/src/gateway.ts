@@ -531,6 +531,28 @@ interface WsData {
    * 以及给将来的自动续拉留一个可观测点（现在不自动续，避免和客户端的续拉撞车）。
    */
   timelineEpochEnd?: number;
+  /**
+   * 0.55 P0-2：时间线 epoch 的**游标是否已就位**（`true` = 实时尾随可以直接发帧）。
+   *
+   * 建 epoch（读历史页）是 async 的：从 `timelineEpoch = true` 到 `afterTimeline` 落到
+   * 声明区间右端之间有一个窗口。老实现（每条记录当场扇出）里这个窗口也会漏，但漏的量
+   * 等于「页读期间恰好被发布的条数」——页读本身没有 await 挂起以外的时间。0.55 把扇出
+   * 挪进 25ms 窗口之后，**窗口里攒着的旧记录**会在建 epoch 期间被扇出去：它们的 seq 落在
+   * 历史页区间里 ⇒ 客户端收到重复帧、且顺序不再是「页在前、尾随在后」（实测：中途接入
+   * 300 条历史 + 300 条尾随，重复 44 帧）。
+   *
+   * 所以建 epoch 期间这个标记是 `false`：尾随记录**按住**在 `timelineHold` 里，等
+   * `afterTimeline` 定稿后再按游标过滤着一并发（页里已发过的自然被过滤掉）。
+   */
+  timelineArmed?: boolean;
+  /**
+   * 0.55 P0-2：建 epoch 期间按住的尾随记录（只在 `timelineArmed === false` 时有值）。
+   *
+   * 有界：攒到 {@link TIMELINE_TAIL_MAX_BATCH} 就不再按住 —— `sendTimelineEpoch` 会
+   * **停止翻页**并用已经取到的部分做声明（`has_more` 为真，客户端续拉）。于是「按住的
+   * 记录」永远不会丢、也不会无界，代价只是这一趟历史页短一些。
+   */
+  timelineHold?: (TimelineWireEvent & { session_id: string })[];
   /** 0.48 M3：插件 WS 连接；存在时该 WS 不进入 `wsClients`。 */
   pluginWs?: PluginWsConnection;
   /**
@@ -1439,7 +1461,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
     });
   }
 
-  function sendFrameText(ws: Ws, text: string): boolean {
+  /**
+   * 发一帧**已序列化**的文本。
+   *
+   * `byteLength` 是给「一次序列化、多个连接共用」的调用方的（时间线尾随的合并窗口、
+   * 环形广播的出站捷径）：它们已经算过 UTF-8 字节数，重复 `Buffer.byteLength` 是白花
+   * 的钱。缺省时自己量。
+   */
+  function sendFrameText(ws: Ws, text: string, byteLength?: number): boolean {
     if (ws.readyState !== 1) {
       wsClients.delete(ws);
       return false;
@@ -1458,7 +1487,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       stats.frames_sent += 1;
       // 按 UTF-8 字节计（帧里是中文时 `text.length` 会小于线上字节数，
       // 而排障要对的是"发了多少流量"）。
-      stats.bytes_sent += Buffer.byteLength(text, 'utf8');
+      stats.bytes_sent += byteLength ?? Buffer.byteLength(text, 'utf8');
       return true;
     } catch {
       wsClients.delete(ws);
@@ -1778,6 +1807,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
   async function sendTimelineEpoch(ws: Ws, segment: TimelineHelloSegment): Promise<number> {
     const sessionId = ws.data.sessionId;
     const port = opts.timelineRead;
+    // 0.55 P0-2：本趟是**建 epoch**，游标还没定稿 —— 实时尾随的记录先按住（见
+    // `WsData.timelineArmed`），否则页里的历史与窗口里攒着的尾随会重复、乱序。
+    ws.data.timelineArmed = false;
+    ws.data.timelineHold = [];
     // 只发到**有效右端** = `min(end_seq, published_head)`：未发布尾部允许永远不推送
     // （pub-i2 的崩溃窗口产物）。
     const effectiveEnd = Math.min(segment.end_seq, segment.published_head);
@@ -1797,6 +1830,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
           untilSeq: effectiveEnd,
           limit: TIMELINE_PAGE_LIMIT,
         });
+        // 0.55 P0-2：页读是 async 的，期间发布的记录被按住了。按住的量到上界就**停止
+        // 翻页**：用已经取到的部分做声明（`has_more` 自然为真，客户端续拉），既不会让
+        // 按住队列无界、也不会丢那几条 —— 它们的 seq 一定 > 本次声明的 `end_seq`
+        // （`effectiveEnd` 在翻页之前就定下了），下一趟/尾随都会送到。
+        if ((ws.data.timelineHold?.length ?? 0) >= TIMELINE_TAIL_MAX_BATCH) break;
         const ordered = selectTimelinePage(page, cursor + 1, effectiveEnd, TIMELINE_PAGE_LIMIT);
         if (ordered.length === 0) break;
         for (const record of ordered) {
@@ -1814,6 +1852,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
       lastSeq: window.length > 0 ? window[window.length - 1]?.seq : undefined,
       count: window.length,
     });
+    // fail-open 兜底（见 `holdTimelineTail` 的硬上界）：按住的量已经撞线 ⇒ 那边已经把
+    // 游标放开并把记录发出去了。此时**绝不能再发这一趟历史页**（那会把同一条 seq 发
+    // 第二遍、并让「页在前、尾随在后」反过来）：直接收手，`res` 里的 `from_seq` 由
+    // 当前游标推。
+    // 这里显式放宽类型：本函数开头刚把它置成 false，但 `holdTimelineTail` 可能在
+    // `await` 期间把它改回 true —— 控制流分析看不到这一点。
+    if ((ws.data.timelineArmed as boolean | undefined) === true) {
+      return (ws.data.afterTimeline ?? 0) + 1;
+    }
     if (sendFrame(ws, helloFrame(declared.start_seq, declared))) connStats(ws).epochs += 1;
     ws.data.afterTimeline = declared.start_seq - 1;
     ws.data.timelineEpochEnd = declared.end_seq;
@@ -1824,6 +1871,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (!sendFrame(ws, timelineEventFrame(record))) {
         // 0.55：提前停 ⇒ **不发**结束标记。此处「这一趟没发完」是事实；
         // 发一个结束标记等于把两件事（发完了 / 发不动了）说成一件。
+        // 游标仍然就位：按住的记录照常尝试（真坏的连接反正发不出去）。
+        armTimelineTail(ws);
         return declared.start_seq;
       }
       ws.data.afterTimeline = record.seq;
@@ -1841,6 +1890,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
         end: timelineEpochEnd({ declared, segment, sent }),
       }),
     );
+    // 0.55 P0-2：历史页发完才放开尾随 —— 按住的那些按 seq 升序补发，页里已发过的
+    // 由游标过滤掉。线上序列因此是 hello → event×N → epoch-end → event×M(尾随) → res。
+    armTimelineTail(ws);
     return declared.start_seq;
   }
 
@@ -1878,26 +1930,273 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return 96 + (record.run_id?.length ?? 0) + JSON.stringify(record.data ?? null).length;
   }
 
+  // ── 时间线实时尾随：合并窗口（0.55 P0-2）─────────────────────────
+  //
+  // 0.54 的尾随是「**每条记录立刻扇出**」：发布点在写者 fsync 之后逐条回调，一次回调
+  // 遍历一遍连接表。活跃 run 每秒几十上百条事件时，这条路径的代价按 (记录 × 订阅者)
+  // 增长，全部压在**写者的 fsync 回调**上：
+  //   - `[...wsClients]` 每条记录复制一次连接表；
+  //   - `timelineEventFrame` + `JSON.stringify` 每条记录**每个连接**各做一次
+  //     （实测 558 字节帧 ≈ 330ns/次，6 个订阅者就是 6 倍重复劳动）；
+  //   - 每条记录一次定时器/事件循环往返，fsync 与 WS 写互相拉扯。
+  //
+  // 0.55 只改**驱动方式**，不改协议形状：仍然是「一条事件一帧」（老客户端、能力位、
+  // `timeline-epoch-end.has_more`、`hello.count` 的语义一个字不动），但把「每条记录
+  // 立刻发」换成「攒一个窗口（{@link TIMELINE_TAIL_FLUSH_MS}）再一次遍历发送」：
+  //   - 发布回调退化成**入队 O(1)**，扇出从 fsync 路径上挪走；
+  //   - 一个窗口内**连接表只快照一次**，外层连接 / 内层记录；
+  //   - 每条记录的线上文本**只序列化一次**，同会话的所有连接共用（帧内容与连接无关）；
+  //   - 每个连接内部仍按 `seq` 升序逐条发帧、逐条推进排他游标 ⇒ 顺序语义不变。
+  // 代价是每个事件最多晚一个窗口（25ms）到客户端，远低于「体感卡」的量级。
+  //
+  // **不丢事件**是这个改动唯一的硬约束，所以队列**有界**（{@link TIMELINE_TAIL_MAX_BATCH}）：
+  // 攒满就**立刻冲刷**（等于退回「即时逐条发送」，只是此刻已经攒的那些一起走），
+  // 并记一次 `windows_cut_short` —— 宁可多跑几遍扇出，也不许丢或乱序。
+
+  /** 合并窗口（ms）。25ms ≈ 40Hz 的扇出频率，比「每 fsync 一次」低一到两个数量级。 */
+  const TIMELINE_TAIL_FLUSH_MS = 25;
   /**
-   * 时间线 epoch 的**实时尾随**一帧（0.54 B1 末块）。
+   * 一个窗口最多攒多少条记录（队列上界）。
    *
-   * 四条过滤/约束，每条都对应一个已实测的口径：
+   * 为什么按条数而不按字节：精确字节数要 `JSON.stringify(data)`，而**省掉那次序列化**
+   * 正是本改动的收益之一 —— 不能在写者的 fsync 回调上把它再付一遍。记录对象本来就
+   * 已在内存里（发布点交出来的就是它），256 条的上界对应的额外驻留量与环形缓冲
+   * （默认 50000 条）比可以忽略。
+   *
+   * 为什么是 256（而不是更大/更小）—— 上界同时也是**延迟闸门**，实测三档：
+   * - 256：一次 2000 条的突发（一次 fsync 逐条发布）最后一帧比老实现晚 55ms；
+   * - 1024：写者回调少干一部分活（fsync 段再快 15ms），但最后一帧晚到 107ms；
+   * - 更小（64）：每次突发都在写者回调里当场扇出，等于回到老行为。
+   * 所以 256 是「fsync 段能省下 ~18%」与「尾帧延迟 ≤ 100ms」的折中。
+   */
+  const TIMELINE_TAIL_MAX_BATCH = 256;
+  /**
+   * 「按住」的硬上界（fail-open 线，见 `holdTimelineTail`）：正常路径永远到不了 ——
+   * 翻页循环在 256 就停手；只有页读卡住/抛错时按住的量才会继续长。
+   */
+  const TIMELINE_TAIL_HOLD_HARD_MAX = 2048;
+
+  /** 当前窗口里攒着的记录（顺序 = 发布顺序 = `seq` 升序）。 */
+  let timelineTailBatch: (TimelineWireEvent & { session_id: string })[] = [];
+  /** 本轮窗口的定时器（`undefined` = 没排）。`unref`：定时器不许拖住进程退出。 */
+  let timelineTailTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** 尾随扇出的账（排障用；断连日志里的 `backpressure_drops` 仍是按连接的账）。 */
+  const timelineTailStats = {
+    windows: 0,
+    records: 0,
+    max_batch: 0,
+    /** 攒满被提前冲刷的窗口数（= 退回即时发送的次数；队列从不越界，也从不丢）。 */
+    windows_cut_short: 0,
+    /** 窗口里没有任何可发的时间线连接（整批跳过；记录本身已在盘上，客户端按游标拉）。 */
+    windows_without_targets: 0,
+    /** 每个连接上因背压/连接坏而停下的帧数（与 `WsConnStats.backpressure_drops` 同一现象）。 */
+    send_failures: 0,
+    /** 建 epoch 期间按住的量撞上硬上界（fail-open 放开尾随）的次数 —— 正常路径为 0。 */
+    hold_overflows: 0,
+  };
+  let timelineTailOverflowLoggedAt = 0;
+  let timelineTailHoldOverflowLoggedAt = 0;
+
+  /**
+   * 一条记录 → 线上文本。**每条记录只做一次**，与订阅者数无关（老实现是每个连接一次）。
+   * 字节数顺手算好：`frames_sent` / `bytes_sent` 的记账要用，重复 `Buffer.byteLength`
+   * 也要钱。
+   */
+  function encodeTimelineTail(record: TimelineWireEvent): { text: string; bytes: number } {
+    const text = JSON.stringify(timelineEventFrame(record));
+    return { text, bytes: Buffer.byteLength(text, 'utf8') };
+  }
+
+  /**
+   * 一条记录发给**一个**连接：游标过滤 + 发帧 + 推进游标。返回是否发出。
+   *
+   * `encoded` 由调用方给（同一批里多个连接共用同一份文本），缺省自己序列化。
+   */
+  function sendTimelineTailRecord(
+    ws: Ws,
+    record: TimelineWireEvent,
+    encoded?: { text: string; bytes: number },
+  ): boolean {
+    if (record.seq <= (ws.data.afterTimeline ?? 0)) return false;
+    const payload = encoded ?? encodeTimelineTail(record);
+    // 与 `sendEventToWs` 同一条文本捷径：不为算字节再序列化一次，`last_seq_sent`
+    // 由这里自己补（`sendFrame` 才会替我们写）。
+    if (!sendFrameText(ws, payload.text, payload.bytes)) {
+      timelineTailStats.send_failures += 1;
+      return false;
+    }
+    connStats(ws).last_seq_sent = record.seq;
+    ws.data.afterTimeline = record.seq;
+    return true;
+  }
+
+  /**
+   * 建 epoch 期间的按住。**两道上界**，都是「绝不丢、绝不无界」的落点：
+   *
+   * 1. {@link TIMELINE_TAIL_MAX_BATCH}：`sendTimelineEpoch` 的翻页循环在每次 `await`
+   *    之后检查它，到了就停止翻页（这一趟历史页短一点，`has_more` 让客户端续拉）；
+   * 2. {@link TIMELINE_TAIL_HOLD_HARD_MAX}：页读卡住 / 抛错时按住的量还能继续长
+   *    （只有写者在发布才会长 —— 而写者要的是同一块盘），到这条硬线就**放开尾随**
+   *    （fail-open：先把按住的按序发出去，宁可让这个 epoch 的声明缺一段，也不留一个
+   *    永不 arm 的连接在那里无限攒）。
+   */
+  function holdTimelineTail(ws: Ws, record: TimelineWireEvent & { session_id: string }): void {
+    const hold = ws.data.timelineHold ?? [];
+    if (hold.length >= TIMELINE_TAIL_HOLD_HARD_MAX) {
+      const now = Date.now();
+      if (now - timelineTailHoldOverflowLoggedAt >= 1_000) {
+        timelineTailHoldOverflowLoggedAt = now;
+        console.warn('[vessel] gateway.timeline_tail.hold_overflow', {
+          session_id: record.session_id,
+          seq: record.seq,
+          held: hold.length,
+        });
+      }
+      timelineTailStats.hold_overflows += 1;
+      hold.push(record);
+      ws.data.timelineHold = hold;
+      armTimelineTail(ws);
+      return;
+    }
+    hold.push(record);
+    ws.data.timelineHold = hold;
+  }
+
+  /**
+   * 游标就位：把建 epoch 期间按住的记录**按序**发出去，然后放开实时尾随。
+   *
+   * 顺序是硬约束：调用点必须在历史页各帧发完之后（页在前、尾随在后）。页里已经发过的
+   * 那些在这里被 `sendTimelineTailRecord` 的游标判断过滤掉 —— 这就是「中途接入不重复、
+   * 不丢、不乱序」的落点。
+   */
+  function armTimelineTail(ws: Ws): void {
+    const hold = ws.data.timelineHold ?? [];
+    ws.data.timelineHold = undefined;
+    ws.data.timelineArmed = true;
+    for (const record of hold) sendTimelineTailRecord(ws, record);
+  }
+
+  /**
+   * 把一个窗口的记录扇给所有订阅者：**外层连接、内层记录**。
+   *
+   * 四条过滤/约束，每条都对应一个已实测的口径（与 0.54 逐条版逐字相同，只是挪到了
+   * 批里）：
    * 1. `timelineEpoch !== true` ⇒ 不要（老 epoch 的连接在收环形广播，两套 seq 不许混）；
-   * 2. `session_id` 不匹配 ⇒ 不要（发布点是**进程/租户级**扇出，不是按会话的）；
+   * 2. `session_id` 不匹配 ⇒ 不要（发布点是**进程/租户级**扇出，不是按会话的）——
+   *    这里先按 `session_id` 把连接分组，顺带让「没有订阅者的会话」整段跳过；
    * 3. `seq <= afterTimeline` ⇒ 不要（排他游标：历史页已经发过的绝不重发，端口也不做
    *    游标过滤 —— 那是连接自己的账）；
    * 4. 背压拒收 ⇒ 停在这一条、**不推进游标**（与历史页同一处理：宁可丢这一帧让客户端
    *    按 `count` 发现并报 `timeline.gap_reported`，也不能把游标推过去装作发过）。
    *
+   * 正在建 epoch（`timelineArmed !== true`，游标还没定稿）的连接只按游标判一遍就拿去
+   * **按住**，不发：现在发就是「历史页 + 尾随」的重复与乱序（见 `WsData.timelineArmed`）。
+   *
    * **尾随帧不改本 epoch 的 `start_seq` / `end_seq` / `count` 声明**：那三个数是历史页
    * 那一段的账，区间外的帧客户端不计入期望（`pub-i2` 实测口径）。
    */
-  function sendTimelineTailFrame(ws: Ws, record: TimelineWireEvent & { session_id: string }): void {
-    if (ws.data.timelineEpoch !== true) return;
-    if (record.session_id !== ws.data.sessionId) return;
-    if (record.seq <= (ws.data.afterTimeline ?? 0)) return;
-    if (!sendFrame(ws, timelineEventFrame(record))) return;
-    ws.data.afterTimeline = record.seq;
+  function fanoutTimelineTailBatch(
+    batch: readonly (TimelineWireEvent & { session_id: string })[],
+  ): void {
+    // 连接表一个窗口只快照一次（老实现：每条记录快照一次）。
+    const bySession = new Map<string, Ws[]>();
+    for (const ws of [...wsClients]) {
+      if (ws.data.timelineEpoch !== true) continue;
+      const sessionId = ws.data.sessionId;
+      if (sessionId === undefined) continue;
+      const list = bySession.get(sessionId);
+      if (list === undefined) bySession.set(sessionId, [ws]);
+      else list.push(ws);
+    }
+    if (bySession.size === 0) {
+      timelineTailStats.windows_without_targets += 1;
+      return;
+    }
+    for (const record of batch) {
+      const targets = bySession.get(record.session_id);
+      if (targets === undefined) continue;
+      // 惰性序列化：这一条一个订阅者都不需要（全被游标挡住了）就一次都不序列化。
+      let encoded: { text: string; bytes: number } | undefined;
+      for (const ws of targets) {
+        // 快照是窗口开头的：本窗口内被关掉/踢掉的连接不再重试（老实现每条记录重新
+        // 快照一次，这里是同一口径的等价物）。
+        if (!wsClients.has(ws)) continue;
+        if (record.seq <= (ws.data.afterTimeline ?? 0)) continue;
+        if (ws.data.timelineArmed !== true) {
+          // 正在建 epoch：按住，等历史页发完再按序补发（见 `WsData.timelineArmed`）。
+          holdTimelineTail(ws, record);
+          continue;
+        }
+        encoded ??= encodeTimelineTail(record);
+        sendTimelineTailRecord(ws, record, encoded);
+      }
+    }
+  }
+
+  /**
+   * 冲刷当前窗口（幂等、同步、不可重入）。`reason` 只用于记账/日志，不影响发送。
+   *
+   * 三处调用点：定时器到期（`window`）、队列攒满（`cut_short`，同时也是「退回即时
+   * 逐条发送」的落点）、`stop()`（`stop`，把手里最后的记录发出去）。
+   */
+  function flushTimelineTail(reason: 'window' | 'cut_short' | 'stop'): void {
+    if (timelineTailTimer !== undefined) {
+      clearTimeout(timelineTailTimer);
+      timelineTailTimer = undefined;
+    }
+    if (timelineTailBatch.length === 0) return;
+    const batch = timelineTailBatch;
+    timelineTailBatch = [];
+    timelineTailStats.windows += 1;
+    timelineTailStats.records += batch.length;
+    if (batch.length > timelineTailStats.max_batch) timelineTailStats.max_batch = batch.length;
+    if (reason === 'cut_short') {
+      timelineTailStats.windows_cut_short += 1;
+      // 溢出是「窗口被撑满」的运维信号，不是丢事件（这一批照样全发）——
+      // 每秒最多记一行，避免自己变成日志风暴。
+      const now = Date.now();
+      if (now - timelineTailOverflowLoggedAt >= 1_000) {
+        timelineTailOverflowLoggedAt = now;
+        console.warn('[vessel] gateway.timeline_tail.cut_short', {
+          batch: batch.length,
+          ...timelineTailStats,
+        });
+      }
+    }
+    try {
+      fanoutTimelineTailBatch(batch);
+    } catch (error) {
+      // 扇出路径上的意外不许冒泡回发布点（那里连着写者的 fsync）——记录已持久，
+      // 客户端按游标续拉即可。
+      console.error('[vessel] gateway.timeline_tail.flush', {
+        batch: batch.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** 排一次窗口；已有定时器就不重复排（同窗口内的记录共用一次扇出）。 */
+  function scheduleTimelineTailFlush(): void {
+    if (timelineTailTimer !== undefined) return;
+    const timer = setTimeout(() => {
+      timelineTailTimer = undefined;
+      flushTimelineTail('window');
+    }, TIMELINE_TAIL_FLUSH_MS);
+    // 尾随窗口不许成为「进程为什么退不掉」的原因。
+    (timer as { unref?: () => void }).unref?.();
+    timelineTailTimer = timer;
+  }
+
+  /** 发布回调的唯一落点：**入队 O(1)**（扇出已从这里挪到窗口里去）。 */
+  function enqueueTimelineTail(record: TimelineWireEvent & { session_id: string }): void {
+    timelineTailBatch.push(record);
+    if (timelineTailBatch.length >= TIMELINE_TAIL_MAX_BATCH) {
+      // 队列有界：攒满立刻冲刷（= 退回即时逐条发送，一条不丢、顺序不变）。
+      flushTimelineTail('cut_short');
+      return;
+    }
+    scheduleTimelineTailFlush();
   }
 
   /**
@@ -1913,15 +2212,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
   });
 
   /**
-   * 时间线 epoch 的实时尾随（0.54 B1 末块）：与 hub 订阅同一层订阅一次，
-   * 进程级扇出 → 逐个连接按自己的 `session_id` / 排他游标过滤。
+   * 时间线 epoch 的实时尾随（0.54 B1 末块；0.55 改为合并窗口）：与 hub 订阅同一层
+   * 订阅一次，进程级扇出 → 按会话分组 → 逐个连接按自己的排他游标过滤。
+   *
+   * 发布回调只做**入队**（O(1)）：真正的扇出在 {@link flushTimelineTail} 的窗口里，
+   * 于是写者的 fsync 路径不再被连接表 / 序列化拖住（见上面那段注释）。
    *
    * 与 hub 那条**并存**、互不影响：老 epoch 走 `broadcastEvent`（环形 seq），
    * 时间线 epoch 走这里（`timeline_seq`），一个连接只会吃到其中一路
-   * （`sendEventToWs` 与 `sendTimelineTailFrame` 各自短路对方）。
+   * （`sendEventToWs` 与尾随窗口各自短路对方）。
    */
   const unsubscribeTimelineTail = opts.timelineTail?.((record) => {
-    for (const ws of [...wsClients]) sendTimelineTailFrame(ws, record);
+    enqueueTimelineTail(record);
   });
 
   // ── 运行快照（只读控制面）─────────────────────
@@ -2473,6 +2775,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // 切回老 epoch：清掉时间线游标，环形广播重新进入本连接。
     ws.data.timelineEpoch = false;
     ws.data.afterTimeline = undefined;
+    // 0.55 P0-2：建 epoch 期间按住的尾随记录一并作废（它们属于被放弃的那个 epoch；
+    // 记录还在盘上，切回时间线订阅时按游标重读，既不会丢也不会重）。
+    ws.data.timelineArmed = undefined;
+    ws.data.timelineHold = undefined;
     const fromSeq = resubscribeTo(ws);
     ws.data.until = undefined;
     return fromSeq;
@@ -4094,6 +4400,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
       unsubscribeTimelineTail?.();
     } catch (error) {
       reportStopError('unsubscribe timeline tail', error);
+    }
+    try {
+      // 0.55：退订后把窗口里剩的**发出去**再关连接（发不出去也无所谓：记录已在盘上，
+      // 客户端带游标重连就能拉到）。这一步必须早于 `closeWsClients`，否则每一帧都会
+      // 撞上「连接已关」。
+      flushTimelineTail('stop');
+    } catch (error) {
+      reportStopError('flush timeline tail', error);
     }
     try {
       unsubscribeInteractions();
