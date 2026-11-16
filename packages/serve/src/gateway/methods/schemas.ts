@@ -510,6 +510,21 @@ export const agentInfoSchema = {
     team_id: { type: 'string' },
     epoch: { type: 'integer', minimum: 0 },
     last_seen: { type: 'number' },
+    /**
+     * 0.55 additive：这具 body 的硬错误闸（不可重试的 provider 错误之后停摆）。
+     *
+     * 缺省 = 能接活。**不写 `null`**：`blocked: null` 会让「没有闸」与「闸字段坏了」
+     * 在线上长得一样。只有 analyst 需要的三个字段：稳定错误码、单行原因、落闸时刻。
+     */
+    blocked: {
+      type: 'object',
+      required: ['code', 'reason', 'at'],
+      properties: {
+        code: { type: 'string' },
+        reason: { type: 'string' },
+        at: { type: 'number' },
+      },
+    },
   },
 };
 

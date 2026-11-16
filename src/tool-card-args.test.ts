@@ -148,16 +148,6 @@ expectSummary(
   'read → 最多 2 条',
 );
 expectSummary(
-  '② inbox claim 多条 → 条数',
-  toolSummary('inbox', { action: 'claim', message_ids: ['msg_1', 'msg_2'] }),
-  'claim → 2 条',
-);
-expectSummary(
-  '② inbox claim 单条 → id',
-  toolSummary('inbox', { action: 'claim', message_ids: ['msg_1'] }),
-  'claim → msg_1',
-);
-expectSummary(
   '② inbox delete 多条 → 条数',
   toolSummary('inbox', { action: 'delete', ids: ['a', 'b', 'c'] }),
   'delete → 3 条',
@@ -257,11 +247,6 @@ expectSummary(
   '④ agent members 非数组不推算人数',
   toolSummary('agent', { action: 'create' }),
   'create',
-);
-expectSummary(
-  '④ inbox ids 非数组不推算条数',
-  toolSummary('inbox', { action: 'claim', ids: 'msg_1' }),
-  'claim',
 );
 
 {

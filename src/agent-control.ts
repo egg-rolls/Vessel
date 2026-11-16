@@ -58,7 +58,14 @@ export interface AgentControlOptions {
 }
 
 function statusOf(status: MemberStatus): AgentStatusLike {
-  return status as unknown as AgentStatusLike;
+  // 0.55：硬错误闸只在 body 维度（`bodies[].blocked`），但 `agents.list` / `agents.get`
+  // 的消费方只看顶层 —— 这里把它提上来，**对象原样透传**，不复制、不新造字段名。
+  // 没有闸时**不写这个键**：`blocked: null` 会让「没闸」和「闸字段坏了」长得一样。
+  const blocked = status.bodies?.find((body) => body.blocked !== undefined)?.blocked;
+  return {
+    ...(status as unknown as AgentStatusLike),
+    ...(blocked !== undefined ? { blocked } : {}),
+  };
 }
 
 function failureOf(item: { error: string; code?: string }): AgentLifecycleFailLike {
