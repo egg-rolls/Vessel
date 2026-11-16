@@ -276,7 +276,7 @@ export const messageTruncationSchema = {
 /**
  * 一条工具消息的投影（`messages[i].projection`，additive 0.54，wire-only 派生）。
  *
- * 形状与取值域照抄 `docs/dev/handoff/projection-card-spec.md` §1.7；`mode` 用 ADR-104 §2.2
+ * 形状与取值域照抄 `docs/specs/projection-card-spec.md` §1.7；`mode` 用 ADR-104 §2.2
  * 冻结的四模式闭集（`externalize` 只占位、不可声明），**不在这里自创枚举**。
  *
  * 三个「不知道」的字段故意**不写 type**（校验器只认 string/number/integer/boolean/

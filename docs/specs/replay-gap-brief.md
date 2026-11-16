@@ -18,7 +18,6 @@ triggers:
 paths:
   - docs/architecture/session-replay.md
   - docs/specs/refresh-gap-design.md
-  - docs/specs/chunk-loss-measurement.md
   - packages/serve/src/event-buffer.ts
   - packages/serve/src/replay-budget.ts
   - packages/serve/src/gateway.ts
@@ -47,7 +46,7 @@ paths:
 - 「会话事件的展示，是由落盘事件、回放事件、新事件覆盖的；在刷新或者切换之后，会读取落盘事件 + 进行这次 run 的事件回放来获得此刻时间点前的所有事实事件，而不应该出现遗漏。」
 - 「我刚才刷新时，发现这次 run 的**十几个会话事件丢了，只剩四个**。」
 
-即：用户的心智模型是「三条来源按水位合并 = 此刻全部事实」。观察到的形态是**只剩尾部几条**，与实测的「环前缀淘汰 ⇒ 一段连续前缀消失」同形（`chunk-loss-measurement.md:51-53`），但**具体成因未真机核对**（§1.3）。这个差异正是本简报要外部专家回答的核心。
+即：用户的心智模型是「三条来源按水位合并 = 此刻全部事实」。观察到的形态是**只剩尾部几条**，与实测的「环前缀淘汰 ⇒ 一段连续前缀消失」同形（0.53 期的 217 会话 / 1,048 run 刷新丢失实测），但**具体成因未真机核对**（§1.3）。这个差异正是本简报要外部专家回答的核心。
 
 ### 1.2 可控复现（1 分钟，不需要长跑）
 
@@ -89,11 +88,11 @@ transcriptMessages ←── RPC sessions.get ──── SessionState.messages
 | 源 | 写什么 | 保留多久 | 什么时候会缺 |
 |---|---|---|---|
 | 磁盘 · 会话事件日志 | `events.ndjson` 一行一事件，`seq` 按**会话**自增、逐条 `sync`（`session-event-log.ts:451-470`） | append-only，只随 `deleteSession` 删（`:957`） | 写盘失败时事件**仍广播**（`run-journal.ts:283-288`），只上报一次 `session.log.failed`（`:304-330`） |
-| 磁盘 · `SessionState.messages` | `sessions.get` 的返回（`sessions.ts:1096-1106`） | 随会话 | run 进行中本轮正文与工具卡整段不在（只在收尾/checkpoint 落盘，`chunk-loss-measurement.md:170-172`） |
+| 磁盘 · `SessionState.messages` | `sessions.get` 的返回（`sessions.ts:1096-1106`） | 随会话 | run 进行中本轮正文与工具卡整段不在（只在收尾/checkpoint 落盘） |
 | 进程内环 | 已广播事件的 `{seq,event}`，**全局一份**（`event-buffer.ts:37-44`），容量 5 万（`:44`），seq 扇入时分配（`tenant-event-hub.ts:123`）、重启归零（`event-buffer.ts:49`） | 进程内存 | 淘汰 / 重启 / 并发会话摊薄 |
 | 实时流 | 环的同一个 item 出站，会话归属补在**出站副本**（`gateway.ts:1193`），8 MiB 硬断 + 背压丢帧转 gap（`:475`、`:1236-1243`） | 不保留 | 慢客户端、断线期间 |
 
-**关键不对称**：`llm.stream.chunk` / `context.changed` / `run.checkpoint` / `session.*` / `plugin.*` **不落盘**（`run-journal.ts:56-66`），流式段落只落骨架 `llm.stream.summary`（`event-log-policy.md:31-45`）。所以「在飞请求的正文 + 全部 reasoning」**只存在于环里**，磁盘永远没有（`chunk-loss-measurement.md:209-218`）。这也是为什么「放大窗口」永远不是修复 —— 窗口只是把洞推远。
+**关键不对称**：`llm.stream.chunk` / `context.changed` / `run.checkpoint` / `session.*` / `plugin.*` **不落盘**（`run-journal.ts:56-66`），流式段落只落骨架 `llm.stream.summary`（`event-log-policy.md:31-45`）。所以「在飞请求的正文 + 全部 reasoning」**只存在于环里**，磁盘永远没有。这也是为什么「放大窗口」永远不是修复 —— 窗口只是把洞推远。
 
 ### 2.2 刷新时的重放序列（今天实际发生的事）
 
@@ -166,12 +165,12 @@ transcriptMessages ←── RPC sessions.get ──── SessionState.messages
 
 ### 3.1 实测数字（供你判断量级；基线 `235a40f8`，当时环 = 1 万，现在 5 万）
 
-- 环被谁吃掉：正文 `text_delta` 只占 **1.7%** 的槽，reasoning **26.8%**，`tool_call_delta` **69.7%**，结构事件 1.8%（`chunk-loss-measurement.md:73-84`）。
-- 1 万条 ≈ 一个 run 最后 **约 200 秒**（长 run 46–52 槽/秒，`chunk-loss-measurement.md:86-97`）。
-- 5–10 分钟 run：**82%** 刷新丢正文，丢者中位 **9.8%**、最坏 100%；>10 分钟：**94%** 丢、中位 **21.6%**；653 个 run 末尾刷新一次合计丢 **81.7 KB**（`chunk-loss-measurement.md:31-43`）。
-- 9 个真·运行中样本（不是构造）：**7/9 丢 60.5%–100%**（`chunk-loss-measurement.md:135-155`）。
-- **丢掉的正文 100% 已在磁盘 `llm.response`**（653 run：1.45 MB = 流式正文的 100.0%），屏幕丢 ≠ 数据丢（`chunk-loss-measurement.md:157-172`）。
-- 单请求 chunk 峰值：中位 903 / p90 3165 / 最大 11154 条 —— **现役 1 万条已经装不下最长的单个请求**（`chunk-loss-measurement.md:174-182`）。
+- 环被谁吃掉：正文 `text_delta` 只占 **1.7%** 的槽，reasoning **26.8%**，`tool_call_delta` **69.7%**，结构事件 1.8%。
+- 1 万条 ≈ 一个 run 最后 **约 200 秒**（长 run 46–52 槽/秒）。
+- 5–10 分钟 run：**82%** 刷新丢正文，丢者中位 **9.8%**、最坏 100%；>10 分钟：**94%** 丢、中位 **21.6%**；653 个 run 末尾刷新一次合计丢 **81.7 KB**。
+- 9 个真·运行中样本（不是构造）：**7/9 丢 60.5%–100%**。
+- **丢掉的正文 100% 已在磁盘 `llm.response`**（653 run：1.45 MB = 流式正文的 100.0%），屏幕丢 ≠ 数据丢。
+- 单请求 chunk 峰值：中位 903 / p90 3165 / 最大 11154 条 —— **现役 1 万条已经装不下最长的单个请求**。
 
 ## 4. 请你回答的问题（17 条，越具体越好）
 
@@ -232,7 +231,7 @@ transcriptMessages ←── RPC sessions.get ──── SessionState.messages
 | 确定性复算（12200 条事件 ⇒ 2200 条永久不送达） | `refresh-gap-design.md:102-124` |
 | 方案 A/B/C 对比与推荐顺序 | `refresh-gap-design.md:186-237` |
 | 硬验收 H-1/H-2/H-3 | `refresh-gap-design.md:244-274` |
-| 环槽构成 / 丢失分布 / 已落盘副本占比 | `chunk-loss-measurement.md:71-182` |
+| 环槽构成 / 丢失分布 / 已落盘副本占比 | 0.53 期刷新丢失实测（217 会话 / 1,048 run；数字见 §6 清单） |
 | 会话日志落盘口径（哪些不落、骨架对账式） | `event-log-policy.md:13-45` |
 | 三条事实源与重放序列（本仓口径） | [session-replay.md](../../architecture/session-replay.md) |
 | 未 ack 队列的今天近似物（只是 Promise 集合） | `run-journal.ts:109`、`:118-127`、`:281-290` |

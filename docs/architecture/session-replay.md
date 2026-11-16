@@ -80,8 +80,10 @@ seq；② 末条 = 区间内最后一个非洞 seq；③ 实收条数 `=== count
 - 落盘口径（新格式 / 旧格式 / 迁移目标）：[event-log-policy.md](event-log-policy.md)；事件命名与可见性：[events.md](events.md)
 - 0.53 悬空项的结案（`U` 为何是空集、两指针不变式、chunk 的内存窗口）：[unacked-queue-closure.md](unacked-queue-closure.md)
 - 0.53 三源形态的历史记录（只作历史引用）：[refresh-gap-design.md](../specs/refresh-gap-design.md)、
-  [chunk-loss-measurement.md](../specs/chunk-loss-measurement.md)
-- 迁移计划（A/B/C、受影响 9 项、回退）：[plan-054-timeline-migration.md](../specs/plan-054-timeline-migration.md)
+  外加一次 217 个真实会话 / 1,048 个 run 的刷新丢失实测（环 1 万槽 ≈ 一个 run 最后 200 秒：
+  5–10 分钟的 run **82%** 会丢正文、中位丢 **9.8%**；>10 分钟的 run **94%** 会丢、中位丢 **21.6%**；
+  而丢掉的正文 **100% 已在磁盘的 `llm.response` 里**，丢的只是屏幕能不能重建）
+- 迁移分 A/B/C 三阶段、受影响 9 项、可回退；施工单随实现轮维护，不进本仓
 
 **未核实**（不按已实现写）：
 

@@ -2,7 +2,7 @@
  * 会话事件日志的读取面（additive `sessions.events` + `sessions.get.event_cursor`，0.53）的装配实现。
  *
  * ## 为什么需要它
- * 磁盘回填（`docs/dev/handoff/refresh-gap-design.md` §3 方案 B）：gateway 的内存环只能回放
+ * 磁盘回填（`docs/specs/refresh-gap-design.md` §3 方案 B）：gateway 的内存环只能回放
  * 一个窗口，进程重启 / 离线超过一个窗口之后，前端 live 流断在哪里就只能来问磁盘。
  * `sessions.events` 是那条读路径；`sessions.get` 的 `event_cursor` 告诉前端「有没有洞、
  * 从哪儿开始补」。

@@ -4,10 +4,11 @@
  * 按目标检索静态文档。
  *
  * 扫描范围（两级）：
- * - 共享侧：`docs/architecture`、`docs/agents`（相对 root，始终参与）。
- * - 个人侧：`docs/constitution`、`docs/lessons`、`docs/roles`；从 root 起向上查找
- *   （含 root 自身，最多 3 层祖先），取第一个其 `docs/` 下含上述任一目录的祖先作为
- *   personal base，只扫该 base 下实际存在的目录。CI 只 clone 共享仓库，找不到时静默跳过。
+ * - 共享侧：`docs/architecture`、`docs/agents`、`docs/specs`（相对 root，始终参与）。
+ * - 个人侧：`docs/constitution`、`docs/lessons`、`docs/roles`、`docs/dev/handoff`、
+ *   `docs/state`；从 root 起向上查找（含 root 自身，最多 3 层祖先），取第一个其 `docs/`
+ *   下含上述任一目录的祖先作为 personal base，只扫该 base 下实际存在的目录。
+ *   CI 只 clone 共享仓库，找不到时静默跳过。
  *
  * 发现：排除 INDEX.md（INDEX 只做导航，不参与检索）。
  * 打分：paths glob 命中 +5（每模块一次）、trigger 每命中 +1、title 命中 +2（每模块一次）。
@@ -55,14 +56,30 @@ function parseStringArray(raw: string | undefined): string[] {
 }
 
 /** 共享侧：相对 root，始终参与扫描。 */
-const SHARED_DOC_DIRS = ['docs/architecture', 'docs/agents'] as const;
+const SHARED_DOC_DIRS = ['docs/architecture', 'docs/agents', 'docs/specs'] as const;
 /**
  * 没有 frontmatter 的共享侧目录：用标题 / 文件名 / tags 合成最小模块参与检索。
  * 不要求给历史 ADR、版本记录和根文档补 frontmatter；这是检索兜底，不是结构门禁。
  */
 const FALLBACK_SHARED_DIRS = ['docs/operations', 'docs/adr', 'docs/versions', '.'] as const;
-/** 个人侧：只在找到 personal base 时扫描。 */
-const PERSONAL_DOC_DIRS = ['docs/constitution', 'docs/lessons', 'docs/roles'] as const;
+/**
+ * 个人侧：只在找到 personal base 时扫描。
+ * `docs/dev/handoff` 是真交接与存量计划/报告的落点（共享侧同名目录已改名 `docs/specs`），
+ * `docs/state` 是当前态（HANDOFF 之外的现态页）的落点；两者都必须在检索里，否则
+ * 搜「交接」「状态」永远命中不到人写的那些文件。
+ */
+const PERSONAL_DOC_DIRS = [
+  'docs/constitution',
+  'docs/lessons',
+  'docs/roles',
+  'docs/dev/handoff',
+  'docs/state',
+] as const;
+/**
+ * 没有 frontmatter 的**个人侧**目录：人写的交接 / 现态页不要求补 frontmatter，
+ * 但必须能被检索命中（否则搜「交接」永远搜不到 `HANDOFF-*.md`，这是检索的 bug 不是纪律）。
+ */
+const FALLBACK_PERSONAL_DIRS = ['docs/dev/handoff', 'docs/state'] as const;
 const MAX_PERSONAL_DEPTH = 3;
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 20;
@@ -144,10 +161,11 @@ const USAGE = `用法: bun run scripts/docs-find.ts --goal "<目标>" [--paths <
   --root <dir>      仅用于测试（默认 process.cwd()）
   --help            显示本说明
 
-扫描范围：root 的 docs/architecture、docs/agents；docs/operations、docs/adr、
+扫描范围：root 的 docs/architecture、docs/agents、docs/specs；docs/operations、docs/adr、
 docs/versions 与根目录文档用标题/文件名做无 frontmatter 兜底；若 root 或其 3 层内
-祖先存在 docs/constitution、docs/lessons、docs/roles，则同时扫描最近的那个 base
-（个人侧，输出路径带 ../ 前缀，可直接从 cwd 打开；找不到时静默跳过）。
+祖先存在 docs/constitution、docs/lessons、docs/roles、docs/dev/handoff、docs/state，
+则同时扫描最近的那个 base（个人侧，输出路径带 ../ 前缀，可直接从 cwd 打开；
+找不到时静默跳过）。
 `;
 
 function tokenize(text: string): string[] {
@@ -237,8 +255,8 @@ function extractAnchors(text: string): DocsFindAnchor[] {
  * 解析参与扫描的文档目录。
  *
  * 共享侧两个目录相对 root，displayBase 为空（输出仍是 `docs/architecture/x.md`）。
- * 个人侧从 root 向上最多 3 层祖先里找第一个 `docs/{constitution,lessons,roles}` 存在的
- * 祖先作为 personal base；只加入该 base 下实际存在的目录，找不到时静默跳过。
+ * 个人侧从 root 向上最多 3 层祖先里找第一个 `docs/{constitution,lessons,roles,dev/handoff,state}`
+ * 存在的祖先作为 personal base；只加入该 base 下实际存在的目录，找不到时静默跳过。
  */
 function resolveDocDirs(root: string): DocDir[] {
   const dirs: DocDir[] = SHARED_DOC_DIRS.map((dir) => ({
@@ -273,7 +291,8 @@ function resolveDocDirs(root: string): DocDir[] {
  * 文档类别：只由「共享侧 / 个人侧」+「所在目录」决定，不看文件名。
  *
  * 分层依据 docs/DOC-MANAGEMENT.md 的阅读顺序：现态（architecture / agents）→ 决策溯源
- * （adr / versions）→ 运维细节（operations）；个人侧（constitution / lessons / roles）
+ * （adr / versions）→ 运维细节（operations）；个人侧（constitution / lessons / roles /
+ * dev/handoff / state）
  * 是跨项目复用的方法与经验，单列一类。
  */
 type DocCategory = 'architecture' | 'adr' | 'operations' | 'version' | 'root' | 'personal';
@@ -302,7 +321,7 @@ const ADR_STATUS_WEIGHT: Record<string, number> = {
 const CATEGORY_BONUS: Record<DocCategory, number> = {
   architecture: 6, // docs/architecture、docs/agents：现态与约定的常青文本
   operations: 3, // docs/operations：按主题查时该紧跟在架构之后
-  personal: 2, // constitution / lessons / roles：规则与方法论
+  personal: 2, // constitution / lessons / roles / dev/handoff / state：规则、方法论与真交接
   adr: 2, // docs/adr：解释「为什么」，具体现状仍以架构为准
   root: 0, // 根文档：杂项入口
   version: -8, // docs/versions：版本时间线，只做回溯旁证
@@ -313,6 +332,9 @@ function classifyDoc(displayBase: string, relativeDir: string): DocCategory {
   switch (normalizePath(relativeDir)) {
     case 'docs/architecture':
     case 'docs/agents':
+    // docs/specs：功能定稿（规格 / 设计 / 简报），与 architecture 同属「现态常青文本」，
+    // 实现前读它、实现后它冻结；分层加成与 architecture 同档。
+    case 'docs/specs':
       return 'architecture';
     case 'docs/adr':
       return 'adr';
@@ -374,14 +396,14 @@ function fallbackModule(
 async function loadModules(dirs: DocDir[]): Promise<LoadResult> {
   const modules: ModuleDoc[] = [];
   const warnings: string[] = [];
-  const fallbackDirs = new Set<string>(FALLBACK_SHARED_DIRS);
+  const fallbackDirs = new Set<string>([...FALLBACK_SHARED_DIRS, ...FALLBACK_PERSONAL_DIRS]);
   for (const dir of dirs) {
     for (const relativeDir of dir.dirs) {
       const full = join(dir.base, relativeDir);
       if (!existsSync(full)) continue;
       const files = await readdir(full);
       const markdown = files.filter((file) => file.endsWith('.md') && file !== 'INDEX.md').sort();
-      const fallback = dir.base !== undefined && fallbackDirs.has(relativeDir);
+      const fallback = fallbackDirs.has(relativeDir);
       const category = classifyDoc(dir.displayBase, relativeDir);
       for (const file of markdown) {
         const relative = `${dir.displayBase}${relativeDir}/${file}`;

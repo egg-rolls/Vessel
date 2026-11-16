@@ -2,7 +2,7 @@
  * 配置层工具名兼容换算（表驱动，单一真源）。
  *
  * 用户 YAML 的 `permission.auto_approve` / `never_auto_approve` 里可能仍写着**已改名**的工具
- * 旧名。注册侧只认现行名（见 docs/dev/handoff/tool-name-legality.md §5），选择侧不换算
+ * 旧名。注册侧只认现行名（见 docs/specs/tool-name-legality.md §5），选择侧不换算
  * ⇒ 用户当年选的 always / never **静默失效**：不报错、只是规则不生效（L-011 同一个形状）。
  *
  * 三条硬口径：
@@ -20,7 +20,7 @@
  *
  * - `ask_user` → `ask`：0.52 前 `ask` 工具叫 `ask_user`；
  * - `pii.reveal` → `piiReveal`：点号会让 provider 400 拒掉**整个请求**，0.52 改名
- *   （见 `docs/dev/handoff/tool-name-legality.md` §3）。
+ *   （见 `docs/specs/tool-name-legality.md` §3）。
  */
 export const LEGACY_TOOL_NAME_ALIASES: Readonly<Record<string, string>> = {
   ask_user: 'ask',

@@ -1113,7 +1113,7 @@ export class ExecutionUnit {
    * 1. **只追加，不改写**：卡片走 `appendNotice`（落盘、UI 可见，与 trim 卡同一类）；
    *    被归档的工具结果正文一个字节都不动，请求视图与落盘逐字节相同。
    * 2. **两个口径分两层**：首行只说**本轮**新增（`fresh.length`），累计数只在明细行
-   *    （`docs/dev/handoff/projection-card-spec.md` §3.0）。
+   *    （`docs/specs/projection-card-spec.md` §3.0）。
    * 3. **同载荷不重复发**：`archiveNoticeSignature`（累计 + 本轮新增 + 新增 id 列表）与
    *    上一张卡全等 ⇒ 卡与事件一起不再 append。
    *

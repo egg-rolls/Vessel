@@ -247,7 +247,7 @@ N1/N4 —— 探针（`buildClearingProbe`）是 `new MemoryWorkingContext(...)`
 读 `context.messages`，根本没有 EU、日志、重启，所以它证明的是「活窗口不改正文」，
 **证明不了**「落盘不改正文」。它在 §1.5 语境里被当成后者的证据，是这次张力的一半来源。
 
-## 4. 对 `docs/dev/handoff/projection-card-spec.md` §1.5 的判断
+## 4. 对 `docs/specs/projection-card-spec.md` §1.5 的判断
 
 **判断：方向成立（占位确实会进落盘、原文确实可能不在 `messages` 里），但表述有两处需要改写**，
 否则 implementer 会按「压缩之后就是占位」去做，在压缩当轮和干净重启后看到原文而误判成 bug；
