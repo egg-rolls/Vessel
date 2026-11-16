@@ -1,7 +1,7 @@
 ---
 title: 会话重放总架构
 kind: current
-triggers: [会话重放, 重放总架构, 刷新丢事件, 刷新后少了一段, 刷新只剩几条, 事件回填, 单游标, client_timeline_seq, timeline_seq, 区间回填, 按段续拉, 四条校验, timeline.hello, timeline_head, wal_head, published_head, holes, tainted, 污点条, timeline.gap_reported, sessions.events, event_cursor, 无洞, 重放幂等]
+triggers: [会话重放, 重放总架构, 刷新丢事件, 刷新后少了一段, 刷新只剩几条, 事件回填, 单游标, client_timeline_seq, timeline_seq, 区间回填, 按段续拉, 四条校验, timeline.hello, timeline_head, wal_head, published_head, holes, tainted, 污点条, timeline.gap_reported, sessions.events, event_cursor, 无洞, 重放幂等, 尾部窗口, timeline-epoch-end, has_more, 结趟]
 paths: [apps/web/src/gateway/timeline-protocol.ts, apps/web/src/gateway/subscription.ts, apps/web/src/state/event-store.ts, apps/web/src/domains/chat/TimelineGapBar.tsx, packages/serve/src/protocol.ts, packages/serve/src/gateway/timeline-protocol.ts, packages/serve/src/gateway.ts, packages/core/src/timeline/holes.ts, packages/core/src/timeline/writer.ts]
 ---
 
@@ -66,14 +66,15 @@ seq；② 末条 = 区间内最后一个非洞 seq；③ 实收条数 `=== count
 - `gap` 帧对**时间线 epoch 永不发**（`packages/serve/src/protocol.ts:193-213` 自述「过渡期字段，B2 落地即删」）：
   时间线段用 `count` + `holes` 表达完整性，缺一条就是客户端自己算错。
 
-## 5. 单区间封顶与按段续拉（实现中）
+## 5. 单区间封顶与按段续拉（已落地，见 §7）
 
 - 分页只在**区间内部**发生：每页 ≤ 500 条（`collectTimelineRange` 的 `pageLimit` 默认 500，
   `timeline-protocol.ts:405-409`），停止条件只有「游标不前进 / 已到区间右端 / `has_more !== true`」（`:432`）。
 - 硬上界 `MAX_TIMELINE_RANGE_PAGES = 200`（`:388`）⇒ 单区间约 **100,000 条**（200 × 500）。触顶**不静默截断**：
   记 `error: 'range page cap reached'`（`:437-441`），调用方照走四条校验，于是它变成**可见**缺口。
-- **实现中（web-b2）**：触顶后**按段续拉** —— 剩余区间重新声明成下一段继续拉，而不是整段变成缺口；
-  目标口径是「区间可续、声明不撒谎」。落地前这一行不删。
+- **已落地（0.55）**：触顶后**按段续拉** —— 剩余区间重新声明成下一段继续拉，而不是整段变成缺口；
+  目标口径是「区间可续、声明不撒谎」。收口点在客户端两侧，见 §7。上一句里那两个常量名/行号是
+  0.54 施工期口径（现名 `MAX_TIMELINE_SEGMENTS = 200` / `TIMELINE_SEGMENT_MAX_EVENTS = 2000`）。
 
 ## 6. 相关文档与未核实
 
@@ -87,10 +88,32 @@ seq；② 末条 = 区间内最后一个非洞 seq；③ 实收条数 `=== count
 
 **未核实**（不按已实现写）：
 
-1. §5 的「按段续拉」：本分支 `collectTimelineRange` 触顶仍返回 `error`（`timeline-protocol.ts:437-441`）。
+1. §5 的「按段续拉」：**段级已落地（0.55，见 §7）**；单区间内部的页上限触顶仍返回
+   `error: 'page bound hit'`（`timeline-protocol.ts` 的 `collectTimelineRange` 尾部）—— 那是
+   「一个区间读不齐」的如实报错，续拉由调用方按**下一段**重新声明，不在页循环里偷偷扩区间。
 2. 「刷新不清零」的本地游标：`event-store.ts:210-216` 的注释指向 `apps/web/src/state/timeline-cursor.ts`，
    但该文件不存在；`clear(nextSeq = 0)` 仍把游标置为入参（`:804-810`）。
 3. `events.list` 换源（`seq` → `timeline_seq`）：仍是 `trace.readEvents`
    （`packages/serve/src/gateway/methods/observability.ts:36-90` → `packages/core/src/observability/read-trace.ts:120`）。
 4. 污点条的 UI 快照断言（plan-054 B-3 要求）：未核实。
 5. 子 agent 事件归属未逐条核对（ADR-105 §10 第 2 项）。
+
+## 7. 尾部窗口与显式结趟（客户端）
+
+三件事同时改了「首屏拉多少」与「一趟什么时候算发完」，它们共用同一个预算口径：
+
+- **首屏只取尾部窗口**：`TIMELINE_TAIL_WINDOW_EVENTS = 2000`（`apps/web/src/gateway/timeline-protocol.ts`），
+  刷新只回填 `[target - 1999 .. target]`（`target = min(wal_head, published_head)`），更早的段由滚动到顶的
+  `loadEarlier()` 一段一段往前要，`hasEarlier` 由 `EventStore#earliestLoadedSeq` 表达。
+  **回填失败也不从 0 回放**：chat 订阅的 `after_timeline_seq` 同样夹到 `tailWindowStart(target) - 1`
+  （`SubscriptionController#tailWindowFloor`），否则单游标停在 0 时服务端会从 seq 1 回放最老的那一批。
+- **一趟结束是帧，不是时钟**：服务端整趟发完后补 `timeline-epoch-end {end_seq, count, has_more}`
+  （能力位 `timeline.epoch-end`，帧口径见 [gateway-rpc](gateway-rpc.md)）；客户端收到就结趟，并按
+  `has_more` 决定续不续拉。0.54 的「400ms 没新帧 = 这趟发完了」(`EPOCH_IDLE_MS`) **已删除** ——
+  网络慢 / 一次 GC 停顿就会误判成「停」并按前缀收口续拉（用户看到的是那条假缺口）。
+- **没有结束帧时的兜底也是显式事实**：老服务端（0.54）与「服务端撞背压提前停」都不发结束帧，
+  此时订阅 `res` 已回就是「这一趟不会再发帧」的证据，客户端按**连续前缀**收口、按实收末 seq 续拉
+  （`EventStore#settleTimelineEpochIfOpen`）。线上序列固定为
+  `hello → event×N → timeline-epoch-end → res`，两个判据都在同一条事件流里排好序，不需要等待任何时间。
+- `has_more` 由服务端按「后面还有**可读**的」算：尾部只剩写者声明的洞时为 `false`，所以客户端的续拉
+  不会原地打转；客户端自己那半边的 stall 保护（连续两趟没有前进就停手）仍在。

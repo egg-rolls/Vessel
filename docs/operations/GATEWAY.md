@@ -1,7 +1,7 @@
 ---
 title: Gateway 运维：单点启动、节点独立运行与停止
 kind: current
-triggers: [gateway, 运维, operations, 单点启动, node 独立启动, node start, daemon, systemd, launchd, schtasks, 计划任务, stop, keep-nodes, 整体关闭, 端口占用, 句柄继承, readiness, 20s, adopt, 缺席, 诊断, 日志]
+triggers: [gateway, 运维, operations, 单点启动, node 独立启动, node start, daemon, systemd, launchd, schtasks, 计划任务, stop, keep-nodes, 整体关闭, 端口占用, 句柄继承, readiness, 20s, adopt, 缺席, 诊断, 日志, 时间线修复, timeline.idx, 索引重建, 中段损坏]
 paths: [src/gateway/**, src/gateway-command.ts, docs/architecture/gateway-lifecycle.md]
 ---
 
@@ -140,3 +140,33 @@ vessel gateway uninstall-service
 | `<hubDataDir>/hub.lock` | hub | Hub 实例状态；adopt 判据 |
 | `<dataDir>/nodes.json` | registry | 本地节点唯一真源（`gateway nodes *` 读写） |
 | `<dataDir>/logs/gateway.log`、`logs/node-<name>.log` | 平台 / 子进程 | 平台与子进程输出（0600） |
+
+## 8. 会话时间线修复：删 `timeline.idx` 再 open
+
+0.55 起写者 `open()` 只读尾部（索引打底 + 尾窗），**历史中段的外部损坏不再每次打开重扫** ——
+这是启动路径的取舍，不是故障（口径与判据见 [architecture/event-log-policy.md §7](../architecture/event-log-policy.md)）。
+
+判据与处置：
+
+| 症状 | 是 / 不是 |
+|---|---|
+| 某次重启 / adopt 后，会话**更早**的一段读不回来，`open()` 没报错、`heads` 正常 | **是**：中段损坏，尾窗是好的 |
+| 尾部（最后一个块 / `wal.log` 尾行）损坏、撕裂、帧缺 | **不是**：尾窗逐条校验，照旧退全量路径并登记洞 / 污点 |
+| `sessions.events` / UI 报某段 `timeline_gap_reported`（rule 3，区间固定一小段） | 先按上面的口径分清是尾窗还是中段；尾窗问题不需要人工介入 |
+
+处置（**只对单个会话目录**，不需要停 node，但该会话不要有 active run）：
+
+```bash
+# 1) 确认是哪个会话、先备份（索引可重建，数据文件不要删）
+ls <dataDir>/sessions/<session_id>/
+cp -a <dataDir>/sessions/<session_id>/timeline.idx <dataDir>/sessions/<session_id>/timeline.idx.bak
+
+# 2) 删掉索引目录（删的是**可重建的索引**，不是事件）
+rm -rf <dataDir>/sessions/<session_id>/timeline.idx
+
+# 3) 再 open：下一次 `sessions.get` / `sessions.events` / 启动 adopter 读到它即整份重读 + 重建索引 + 重新声明洞
+```
+
+- 代价：这一次 open 是**全量**（19/20 万 seq 的会话实测秒级，读数见 [event-log-policy §7](../architecture/event-log-policy.md)），之后回到 88 ms 量级。
+- 判据没变：修复只是让 `open()` 走全量路径，洞 / 污点 / `wal_head` 的判定与 0.55 之前逐字段一致。
+- 不要为了「让读数变好」批量删索引：删完第一次 open 就是整份读，这正是第十一条要挡的形态。

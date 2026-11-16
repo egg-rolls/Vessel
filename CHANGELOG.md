@@ -9,6 +9,45 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
+## [0.55.0] - 未发布
+
+> 本节只写**已在 main 上落地**的条目；真机读数与未核实项逐条标注，不按「计划」写。
+
+### 性能 / 语义变更
+
+- **写者 `open()` 只读尾部**（`perf(core/timeline)`，commit `daa0b00a`）：`timeline.initialize()` 拆成两条路径 ——
+  增量（缺省）：`timeline.idx` 打底 + `wal.log` / 归档 / `timeline.manifest` 尾窗（`readNdjsonTail`，首窗 256 KiB、
+  上限 4 MiB）+ 只解**最后一个块** + `holes.ndjson` 全读；全量：老路径一条判定不改，任何自洽检查不成立就退回。
+  19/20 万 seq 的会话（`d813eaea` 只读拷贝，before/after 各 3 次交错跑）：**中位 4484.0 ms → 87.6 ms（51×，约 −98%）**，
+  冷缓存首次 8531.2 ms → 87.6 ms；`heads` 逐字段一致（`wal_head` / `timeline_head` / `published_head` / `holes` / `tainted`）。
+  为什么必须改：那是**启动路径**（进程启动 / 会话打开 / idle 压缩 / adopt 每一次都付一遍），第十一条禁止启动路径出现
+  O(会话大小)。为什么能在尾部结束：判据没放松 —— 索引算术（`first_seq = 1` 且 `count = last_seq`）+ 尾窗实测
+  `tailMax >= last_seq` 且 `(last_seq, tailMax]` 逐号齐全 ⇒ 记录集恰好是 `[1..tailMax]`；`knownMax` 仍含
+  `manifest.archivedTo`，所以「manifest 说已归档、盘上却读不回来」照样声明成洞、照样顶 `wal_head`。
+- **语义变更（运维要知道的一条）**：**历史中段**（早已封好的老块、更早的 `wal.log` 行）的**外部**损坏不再每次打开重扫 ——
+  这是启动路径的取舍，不是故障。**显式修复路径 = 删 `<sessionDir>/timeline.idx/` 整个目录再 open**（整份重读 + 重建索引 +
+  重新声明洞；索引本就可重建，ADR-105 §5 的不变式「删掉索引 ⇒ 所有读 RPC 返回逐字节相同的结果，只有耗时变长」）。
+  **尾部损坏的判定一个字节都没省**：坏行 / 坏帧 / manifest 说写完但帧缺 / 撕裂尾帧按原口径处理（尾窗里见到就整份退回）。
+  口径见 [event-log-policy §7](docs/architecture/event-log-policy.md)，步骤见 [operations/GATEWAY §7](docs/operations/GATEWAY.md)。
+
+### 客户端（WebUI）
+
+- **删掉「400ms 没新帧 = 这趟发完了」的空闲猜测**（`EPOCH_IDLE_MS` 已删除）：结趟改吃两条**显式事实** ——
+  ① 服务端整趟发完后补的 `timeline-epoch-end {end_seq, count, has_more}`（能力位 `timeline.epoch-end`）；
+  ② 订阅 `res` 已回（老服务端 0.54 / 服务端撞背压提前停时的兜底，按连续前缀收口续拉）。为什么要删：网络慢一点或
+  一次 GC 停顿就误判成「停」并按前缀收口续拉（用户看到的是那条假缺口报告），反过来真没发完时也分不清两件事。
+  帧口径见 [gateway-rpc](docs/architecture/gateway-rpc.md)。
+- **首屏回填失败时不再从 seq 1 回放**：chat 订阅的 `after_timeline_seq` 夹到**当前尾部窗口**左端
+  （`tailWindowStart(target) - 1`，与首屏回填同一预算 `TIMELINE_TAIL_WINDOW_EVENTS = 2000`）。真机（`d813eaea` 只读拷贝、
+  同一 0.55 网关、避开 8644）：订阅起点 `0 → 207835`（`wal_head = 209835`），首屏帧数两边都是 2000，但尾部窗口落在
+  209835 且 `has_more: false`；旧行为停在 2000（= 会话开头）且 `has_more: true`，会一路续下去。
+- **修：时间线 hello 的时间线段是平铺的，客户端却按嵌套对象读** —— `readTimelineHelloSegment(source, info.timeline)`
+  拿到的永远是 `undefined`，于是**四条校验与 epoch 记账在真机上从未生效**（一律退化成老 epoch 行为，靠 `truncateAfter`
+  硬对齐游标）。现在 wire → 内部形状的映射收敛在 `apps/web/src/gateway/node/protocol.ts#readHelloTimelineSegment`
+  一处（`timeline_source === 'timeline'` 且六个键齐全才给），判定与 `packages/serve/src/gateway/frames.ts#helloFrame`
+  的平铺形状一致。真机（`eecc5a48`，订阅 `after_timeline_seq: 7000`）：epoch 记账生效、`timeline-epoch-end` 收尾得到声明
+  `[7001..7955] count=955 has_more=false`，四条校验通过、零缺口（此前同一路径不会有任何 epoch 结算）。
+
 ## [0.54.0] - 2026-11-16
 
 > 本节按 0.54 迁移判据 B-4

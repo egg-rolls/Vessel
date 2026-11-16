@@ -11,7 +11,7 @@ paths: [docs/operations/**]
 
 | 文档 | 一句话 |
 |---|---|
-| [GATEWAY](GATEWAY.md) | 单点启动 gateway、node 独立 `--daemon` 启动、systemd/launchd/schtasks 常驻、`stop` 与 `stop --no-keep-nodes` 的区别、节点缺席诊断、端口占用/句柄继承/readiness 常见故障 |
+| [GATEWAY](GATEWAY.md) | 单点启动 gateway、node 独立 `--daemon` 启动、systemd/launchd/schtasks 常驻、`stop` 与 `stop --no-keep-nodes` 的区别、节点缺席诊断、端口占用/句柄继承/readiness 常见故障、会话时间线修复（删 `timeline.idx` 再 open） |
 | [CONFIG](CONFIG.md) | 配置层序、resolver、执行锁与密钥 |
 | [MIGRATION](MIGRATION.md) | sqlite / file-v1 → file-v2 数据迁移 |
 | [REMOTE](REMOTE.md) | 远程连接与中继 |
