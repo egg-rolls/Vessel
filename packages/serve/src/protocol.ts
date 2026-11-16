@@ -216,7 +216,7 @@ export type ServerFrame =
    *
    * 服务端把本趟声明区间（`hello.start_seq..end_seq`）的帧发完之后发这一帧，
    * 客户端据此知道「这一趟发完了」——**不用**再靠「400ms 没新帧」猜
-   * （那个猜测是 `apps/web/src/state/event-store.ts#EPOCH_IDLE_MS`，P1 删除项）。
+   * （那个猜测在 0.55 已删除：`apps/web` 改吃本帧 + 订阅 `res` 两条显式事实）。
    *
    * 三条边界（都是判据，不是措辞）：
    * - **只由时间线 epoch 发**（`timeline_source === 'timeline'`）。老 epoch 的环形 seq
