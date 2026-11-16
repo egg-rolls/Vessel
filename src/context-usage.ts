@@ -24,8 +24,8 @@
  * 当成现值。新 → 旧是唯一单调可靠的顺序；`source` 告诉你最后用了哪个字段。
  *
  * 为什么 `context.pressure` / `context.changed` 在真实数据里几乎永远不命中：
- * `context.changed` **本来就不落盘**（`packages/core/src/runtime/run-journal.ts` 的
- * `NON_PERSISTED_EVENT_TYPES`，ADR-098 C1：派生快照，落盘等于同一事实两份），
+ * `context.changed` **本来就不落盘**（`packages/core/src/timeline/types.ts` 的
+ * `isNonFactEventType`，ADR-098 C1：派生快照，落盘等于同一事实两份），
  * `context.pressure` 只在 ≥90% 水位才发。落盘上稳定存在的是后两条：
  *
  * - `estimated_tokens`：`execution-unit.ts` 的 `persistData` 里存的**就是**
@@ -54,23 +54,23 @@
  * 不回填旧数据：`context_max` 只在会写它的新日志里存在。
  *
  * ## 读数成本
- * 尾窗回扫（`SessionEventLog.readTailMatches`）：首窗 64 KiB，命中即停；一次 miss
- * （该会话根本没有用量事件）按 64K→256K→1M→4M 扩窗，累计最多 ≈5.3 MiB 后返回
- * 「不知道」，**不回退全量扫盘**。调用方（`sessions.get`）按**尾水位**缓存，见
- * `packages/serve` 的 `contextUsage` 端口契约；本模块只额外提供
+ * 尾窗回扫（读口的 `readTailMatches`，0.54 stop-write 起是 `TimelineEventLog` 的实现）：
+ * 首窗 64 KiB，命中即停；一次 miss（该会话根本没有用量事件）按 64K→256K→1M→4M 扩窗，
+ * 累计最多 ≈5.3 MiB 后返回「不知道」，**不回退全量扫盘**。调用方（`sessions.get`）按
+ * **尾水位**缓存，见 `packages/serve` 的 `contextUsage` 端口契约；本模块只额外提供
  * {@link ContextUsageSource.watermark}。
  *
  * @module vessel/context-usage
  */
 
-import { stat } from 'node:fs/promises';
 import { DEFAULT_CONFIG } from '../packages/config/src/index';
 import type { SessionEventRecord } from '../packages/core/src/index';
 
 /**
- * 事件日志的**只读尾窗面**（`SessionEventLog.readTailMatches` 的结构子集）+
- * 尾水位来源。用结构类型而不是 import 具体类：装配层原样传 `SessionEventLog`，
- * 测试也可以传一个假的。
+ * 事件**只读尾窗面**（读口 `readTailMatches` 的结构子集）+ 尾水位来源。
+ *
+ * 用结构类型而不是 import 具体类：装配层原样传 `TimelineEventLog`（0.54 stop-write 之后
+ * 唯一读口，`events.ndjson` 已停写），测试也可以传一个假的。
  */
 export interface SessionEventTailReader {
   readTailMatches(
@@ -226,10 +226,15 @@ function resolveContextWindow(args: {
 const TAIL_MATCH_LIMIT = 64;
 
 export interface ContextUsageSourceOptions {
-  /** 事件日志（装配层传 tenant 的 `SessionEventLog`）。 */
+  /** 事件**读口**（时间线实现；0.54 stop-write 起装配层传 `TimelineEventLog`）。 */
   tail: SessionEventTailReader;
-  /** 该会话的 `events.ndjson` 路径（装配层用 core 的 `sessionEventsFilePath` 拼）。 */
-  eventsFile(sessionId: string): string;
+  /**
+   * 该会话的**尾水位**（缓存键：水位不变 ⇒ 派生结果不可能变）。
+   *
+   * 0.54 stop-write：不再由装配层拼 `events.ndjson` 路径去 `stat` —— 时间线的尾水位
+   * 由读口自己算（`wal.log` 大小/mtime + 块目录尾块），装配层只转交。
+   */
+  watermark(sessionId: string): Promise<string | undefined>;
   /**
    * 上下文窗口 = `config.context.maxTokens`（与 `workingContext.maxTokens` 同源）。
    * 缺省（未配置）时用 `DEFAULT_CONFIG.context.maxTokens`，与 runtime 同一份默认值。
@@ -248,7 +253,7 @@ const DEFAULT_CONTEXT_WINDOW_TOKENS = DEFAULT_CONFIG.context?.maxTokens;
  * 命中事件的字段不成形。
  */
 export function createContextUsageSource(options: ContextUsageSourceOptions): ContextUsageSource {
-  const { tail, eventsFile } = options;
+  const { tail } = options;
   const windowTokens =
     typeof options.contextWindowTokens === 'number' &&
     Number.isFinite(options.contextWindowTokens) &&
@@ -303,15 +308,9 @@ export function createContextUsageSource(options: ContextUsageSourceOptions): Co
       return undefined;
     },
 
-    async watermark(sessionId: string): Promise<string | undefined> {
-      try {
-        const info = await stat(eventsFile(sessionId));
-        // 大小 + mtime 一起看：只追加的日志上 size 变化最可靠，mtime 兜住
-        // 「同长度改写」（重写 / 换写者）这种极端情况。
-        return `${info.size}:${Math.floor(info.mtimeMs)}`;
-      } catch {
-        return undefined;
-      }
+    watermark(sessionId: string): Promise<string | undefined> {
+      // 尾水位口径归读口（时间线：`wal.log` 大小/mtime + 尾块名），本模块只当缓存键转发。
+      return options.watermark(sessionId);
     },
   };
 }

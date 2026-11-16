@@ -28,7 +28,16 @@
  * 退出码：0 = 全过；1 = 有 FAIL。
  */
 
-import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -347,12 +356,19 @@ try {
   function sessionMethodsFor(outcome: RunOutcome): Methods {
     const eventsFile = (id: string) =>
       join(outcome.sessionsDir, encodeURIComponent(id), 'events.ndjson');
+    // 旧日志只当夹具（写侧 `SessionEventLog` 仍在）；水位按它给不影响断言。
+    const watermark = async (id: string): Promise<string | undefined> => {
+      const info = await stat(eventsFile(id)).catch(() => undefined);
+      return info === undefined
+        ? undefined
+        : `${String(info.size)}:${String(Math.floor(info.mtimeMs))}`;
+    };
     return createSessionMethods({
       sessionFor: () =>
         ({
           load: async (id: string) => ({ session_id: id, messages: [], status: 'completed' }),
         }) as never,
-      sessionEvents: createSessionEventsSource({ log: outcome.log, eventsFile }),
+      sessionEvents: createSessionEventsSource({ log: outcome.log, watermark }),
       ...(outcome.manager !== undefined
         ? {
             timelineHeads: {

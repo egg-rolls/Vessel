@@ -183,10 +183,6 @@ async function createScenario(options: {
         // 自定义 openWriter 缝**必须原样转发 publish**，否则 I2「发布只能发生在 WAL 之后」会被静默绕过
         // （pub-i2 实测发现：本门禁只验归档调度，漏转发也不会红 —— 正是最容易被后人复制走的那种隐患）。
         ...(input.publish !== undefined ? { publish: input.publish } : {}),
-        // 同一条纪律：显式 adopt 断言也必须原样转发，否则缝会变成「绕过 freeze 闸门」的旁路。
-        ...(input.adoptLegacyShapedSession !== undefined
-          ? { adoptLegacyShapedSession: input.adoptLegacyShapedSession }
-          : {}),
         beforeSync: (kind) => {
           if (seam.failKind === kind) throw new Error(`injected_fsync_failure: ${kind}`);
         },

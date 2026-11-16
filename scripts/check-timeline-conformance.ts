@@ -44,7 +44,6 @@ import {
   type RefEvent,
   refEventFromRaw,
   resolveDataDir,
-  TIMELINE_ONLY_EVENT_TYPES,
 } from './timeline-reference';
 
 const SAMPLE_COUNT = 4;
@@ -405,13 +404,15 @@ async function runSyntheticChunks(workDir: string): Promise<void> {
     [...chunkTypeSet].join(','),
   );
 
-  // 白名单必须**恰好**两条：多一条、或写成“包含”都不合格。
-  assertEqual('TIMELINE_ONLY_EVENT_TYPES 条数', TIMELINE_ONLY_EVENT_TYPES.length, 2);
+  // 0.54 stop-write：`TIMELINE_ONLY_EVENT_TYPES` 白名单已随「两份源并存」一起删除
+  // （`events.ndjson` 停写 ⇒「旧源没有它」不再可比较）。判据只剩一条：这个谓词必须与
+  // core 的 `isChunkEventType` 同口径 —— 两条 chunk 形态为真，别的一律为假。
   assertTrue(
-    '白名单逐条 == 两条 chunk 形态',
-    TIMELINE_ONLY_EVENT_TYPES.every(
-      (gap) => gap.type === 'llm.stream.chunk' || gap.type === '*.llm.stream.chunk',
-    ),
+    '尺子 isTimelineOnlyType == chunk 家族（白名单已删，判据只剩一条）',
+    isTimelineOnlyType('llm.stream.chunk') &&
+      isTimelineOnlyType('sub.agent.llm.stream.chunk') &&
+      !isTimelineOnlyType('user.message') &&
+      !isTimelineOnlyType('llm.request'),
   );
   assertTrue(
     '核心 isChunkEventType 与尺子同口径',

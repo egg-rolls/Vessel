@@ -28,7 +28,6 @@
  * @module vessel/session-events
  */
 
-import { stat } from 'node:fs/promises';
 import type { SessionEventRecord } from '../packages/core/src/index';
 
 /**
@@ -52,7 +51,7 @@ export interface SessionEventIndexLike {
 }
 
 /**
- * 读事件日志的最小面（装配层传 tenant 的 `SessionEventLog`；探针传假的也行）。
+ * 读事件日志的最小面（装配层传 tenant 的时间线读口 `TimelineEventLog`；探针传假的也行）。
  *
  * `read` 的 `sinceSeq` 是**排他**游标（只回 `seq > sinceSeq`）；不给 `limit` 就是读到尾。
  */
@@ -68,16 +67,19 @@ export interface SessionEventLogReader {
 }
 
 export interface SessionEventsSourceOptions {
-  /** 事件日志（与 `contextUsage` / `systemContext` 同一个实例）。 */
+  /** 事件**读口**（与 `contextUsage` / `systemContext` 同一个实例：时间线读口）。 */
   log: SessionEventLogReader;
-  /** 该会话的 `events.ndjson` 路径 —— **只**用于计算缓存水位（不读内容）。 */
-  eventsFile(sessionId: string): string;
+  /**
+   * 该会话的**尾水位**（缓存键）。0.54 stop-write：装配层不再拼 `events.ndjson` 路径，
+   * 水位口径归读口（时间线：`wal.log` 大小/mtime + 尾块名）。
+   */
+  watermark(sessionId: string): Promise<string | undefined>;
 }
 
 /**
  * serve 侧 `SessionEventsPort` 的实现（结构类型对齐，不依赖 serve 的模块）。
  *
- * - `read` / `lastSeq` / `cursor`：直通 core 的 `SessionEventLog`（排他游标语义原样保留）；
+ * - `read` / `lastSeq` / `cursor`：直通读口（排他游标语义原样保留）；
  * - `watermark`：只 `stat` 事件文件（`大小:mtime`），用来给 `event_cursor` 做按会话缓存 ——
  *   append-only 意味着「水位没变 ⇒ 读到的游标不会变」，所以稳态下 `sessions.get` 不会每次
  *   都去读 `index.json` + 日志尾。
@@ -128,24 +130,15 @@ export function createSessionEventsSource(
       return { derived_upto_seq: index.derived_upto_seq, event_count: index.event_count };
     },
 
-    async watermark(sessionId) {
-      const file = options.eventsFile(sessionId);
-      try {
-        const info = await stat(file);
-        return `${String(info.size)}:${String(info.mtimeMs)}`;
-      } catch (error) {
-        // 文件还不存在 = 还没有事件日志：照实回 `undefined`（`sessions.get` 不带
-        // `event_cursor`）；其它错误（权限/IO）仍然抛。
-        if (isMissingFile(error)) return undefined;
-        throw error;
-      }
+    watermark(sessionId) {
+      // 尾水位口径归读口（时间线：`wal.log` 大小/mtime + 尾块名）；`undefined` = 还没有
+      // 任何事件 ⇒ `sessions.get` 不带 `event_cursor`（与旧行为一致）。
+      return options.watermark(sessionId);
     },
   };
 }
 
-/** `ENOENT` / `ENOTDIR` = 事件文件还没有（不是错误）；不 cast，按结构取 `code`。 */
-function isMissingFile(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null || !('code' in error)) return false;
-  const code: unknown = error.code;
-  return code === 'ENOENT' || code === 'ENOTDIR';
-}
+/**
+ * 尾水位 / 读口的失败语义都在实现侧（`TimelineEventLog`）：读不到 = `undefined`，
+ * 不在这里重复一遍 `ENOENT` 判定。
+ */

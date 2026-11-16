@@ -62,7 +62,7 @@
 
 import { createHash } from 'node:crypto';
 import type { Dirent } from 'node:fs';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 
@@ -1348,7 +1348,16 @@ async function judgeBehaviour(): Promise<void> {
         }) as never,
       sessionEvents: createSessionEventsSource({
         log,
-        eventsFile: (id) => join(sessionDirPath(fixture.sessionsDir, id), LEGACY_SESSION_LOG),
+        // `sessions.events` 已换源到时间线（0.54 C），旧日志只在这里当夹具；
+        // 水位按旧日志文件给即可（与实现无关的缓存键）。
+        watermark: async (id: string) => {
+          const info = await stat(
+            join(sessionDirPath(fixture.sessionsDir, id), LEGACY_SESSION_LOG),
+          ).catch(() => undefined);
+          return info === undefined
+            ? undefined
+            : `${String(info.size)}:${String(Math.floor(info.mtimeMs))}`;
+        },
       }),
     });
     // 0.54 C：`sessions.events` 的**唯一**读源是时间线，所以这里要两种装配：
@@ -1488,7 +1497,6 @@ async function judgeBehaviour(): Promise<void> {
               type: 'user.message',
               ts: NOW + 3,
               data: { text: 'must not be written' },
-              persisted: true,
             });
             await dual.finishRun(LEGACY_SESSION_ID, LEGACY_RUN_ID);
             await dual.flushSession(LEGACY_SESSION_ID);

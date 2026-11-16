@@ -32,12 +32,7 @@ import {
   resolveGatewayNodePorts,
   type VesselConfig,
 } from '../packages/config/src/index';
-import {
-  type EventStream,
-  pruneTrace,
-  rebuildMetrics,
-  sessionEventsFilePath,
-} from '../packages/core/src/index';
+import { type EventStream, pruneTrace, rebuildMetrics } from '../packages/core/src/index';
 import {
   buildPluginCatalog,
   type ConfigSnapshotLike,
@@ -1276,36 +1271,33 @@ async function runWithConfig(result: BootstrapResult) {
         // 活 SessionLease）直接抛 `conflict`，不做任何删除。
         deleteSessionData: (sessionId: string) => gatewayBundle.sessionControl.delete(sessionId),
       },
-      // 会话级上下文用量（additive `sessions.get.context_usage`）：从**会话事件日志
-      // 尾窗**派生，历史会话 / rotate 之后 / 进程重启之后都能恢复。内存注册表
+      // 会话级上下文用量（additive `sessions.get.context_usage`）：从**时间线尾窗**派生，
+      // 历史会话 / rotate 之后 / 进程重启之后都能恢复。内存注册表
       // （`agents.tree` 的 `context_used`）只覆盖 live body，不能当唯一来源。
       // `contextWindowTokens` 与 runtime 算百分比的分母同源（`config.context.maxTokens`，
       // 缺省走 `DEFAULT_CONFIG`）；已知边界：配置是全局一个值，见 addendum。
-      ...(gatewayBundle.eventLog !== undefined
+      //
+      // 0.54 stop-write：读源是 `bundle.timelineLog`（只读口，没有 append）。
+      ...(gatewayBundle.timelineLog !== undefined
         ? {
             contextUsage: createContextUsageSource({
-              tail: gatewayBundle.eventLog,
-              eventsFile: (sessionId: string) =>
-                sessionEventsFilePath(gatewayBundle.tenantPaths.sessions_dir, sessionId),
+              tail: gatewayBundle.timelineLog,
+              watermark: (sessionId: string) => gatewayBundle.timelineLog!.watermark(sessionId),
               ...(liveConfig.context?.maxTokens !== undefined
                 ? { contextWindowTokens: liveConfig.context.maxTokens }
                 : {}),
             }),
             // 「模型这一轮看到了什么系统消息」（additive `sessions.get.system_context`）：
-            // 同一个 `SessionEventLog`、同一个 `sessions_dir`，只是取的是另一类事件
-            // （`prompt.system_context`）。事件不是 message，回放窗口淘汰 / 进程重启之后
-            // 只有从事件日志重新派生才能把会话页那张卡找回来。
+            // 同一个读口，只是取的是另一类事件（`prompt.system_context`）。事件不是 message，
+            // 回放窗口淘汰 / 进程重启之后只有重新派生才能把会话页那张卡找回来。
             systemContext: createSystemContextSource({
-              tail: gatewayBundle.eventLog,
-              eventsFile: (sessionId: string) =>
-                sessionEventsFilePath(gatewayBundle.tenantPaths.sessions_dir, sessionId),
+              tail: gatewayBundle.timelineLog,
+              watermark: (sessionId: string) => gatewayBundle.timelineLog!.watermark(sessionId),
             }),
-            // 会话事件日志读取面（additive 0.53：`sessions.events` 回填 +
-            // `sessions.get.event_cursor`）：同 `SessionEventLog`、同 `sessions_dir`。
+            // `sessions.events` 回填 + `sessions.get.event_cursor`：同一个读口。
             sessionEvents: createSessionEventsSource({
-              log: gatewayBundle.eventLog,
-              eventsFile: (sessionId: string) =>
-                sessionEventsFilePath(gatewayBundle.tenantPaths.sessions_dir, sessionId),
+              log: gatewayBundle.timelineLog,
+              watermark: (sessionId: string) => gatewayBundle.timelineLog!.watermark(sessionId),
             }),
           }
         : {}),

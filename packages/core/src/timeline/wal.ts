@@ -418,7 +418,7 @@ export async function readTimelineEvents(sessionDir: string): Promise<TimelineRe
 
   const hydrated: TimelineRecord[] = [];
   for (const record of bySeq.values()) {
-    hydrated.push(await hydrateBlob(sessionDir, record));
+    hydrated.push(await hydrateRecordData(sessionDir, record));
   }
   return hydrated.sort((a, b) => a.seq - b.seq);
 }
@@ -433,8 +433,15 @@ export function blobPath(sessionDir: string, seq: number): string {
  *
  * blob 缺失/损坏时**保留引用**返回（而不是猜一个空值）：调用方能看到“这条记录的外置
  * 数据不可读”，与 holes 的“损坏可声明”口径一致。写入侧保证 blob 先于记录行 fsync。
+ *
+ * 导出原因：读口（`timeline/read-port.ts`）的**尾窗读**不走 `readTimelineEvents` 的整份
+ * 归并（那是 O(全库)），但它读到的记录同样可能带外置 blob 引用 —— 同一个还原口径不能
+ * 抄第二份（抄了就会分叉出「整份读能还原、尾窗读不能」这种只有长会话才碰到的洞）。
  */
-async function hydrateBlob(sessionDir: string, record: TimelineRecord): Promise<TimelineRecord> {
+export async function hydrateRecordData(
+  sessionDir: string,
+  record: TimelineRecord,
+): Promise<TimelineRecord> {
   if (!isTimelineBlobRef(record.data)) return record;
   const ref = record.data;
   const buffer = await readFile(blobPath(sessionDir, record.seq)).catch(() => undefined);

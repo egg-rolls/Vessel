@@ -358,25 +358,47 @@ export interface SessionIndexPatch {
 }
 
 /**
- * ExecutionUnit 依赖的事件日志端口（0.18）。
+ * 事件日志的**只读子集**（0.54 stop-write）。
  *
- * 只暴露 runtime 需要的部分；完整实现见 `@vessel-agent/core/session`
- * 的 `SessionEventLog`（read / iterate / 索引 / 删除）。
+ * 读方（`ExecutionUnit` 的历史投影 / idle 压缩 / 读回可用性 / 两张卡 / `event_cursor`）
+ * 只依赖这一层：**类型上没有 `append`，所以读路径写不进去**。这不是风格问题 ——
+ * 0.54 C 之前读方拿的是完整的 `SessionEventLogPort`，于是「顺手 append 一条」既编译得过，
+ * 又会在 `events.ndjson` 停写之后变成一个谁也不知道的旧源写入口。
+ *
+ * 两个实现：
+ * - `TimelineEventLog`（`packages/core/src/timeline/read-port.ts`）—— 新会话的唯一读口；
+ * - `SessionEventLog`（`session/session-event-log.ts`）—— 旧格式会话的只读面 + 迁移工具用。
  */
-export interface SessionEventLogPort {
-  /** 追加一条事件；返回已分配 seq 的记录 */
-  append(input: SessionEventInput): Promise<SessionEventRecord>;
+export interface SessionEventReadPort {
   /** 读取事件（按 seq 升序）；`sinceSeq` 为排他游标 */
   read(
     sessionId: string,
     opts?: { sinceSeq?: number; limit?: number },
   ): Promise<SessionEventRecord[]>;
-  /** 最近一次**已落盘**的 seq；未初始化/未写入返回 undefined */
-  lastPersistedSeq(sessionId: string): number | undefined;
   /** 从磁盘读取最后 seq（不需要已打开的 writer；实现可缺省） */
   lastSeq?(sessionId: string): Promise<number | undefined>;
-  /** 等待该 session（缺省全部）的写入队列排空 */
+  /**
+   * 读到最新已落盘的数据（等写入队列 / 在飞 append 排空）。
+   *
+   * 读方的必填方法：块级 WAL 的活动块在内存里，不等写入落定就会读到少一段的快照。
+   */
   flush(sessionId?: string): Promise<void>;
+  /** 合并写会话索引（best-effort；实现可缺省） */
+  updateIndex?(sessionId: string, patch: SessionIndexPatch): Promise<void>;
+}
+
+/**
+ * 事件日志的**写 + 读**端口（0.18 起是 runtime 的持久化端口）。
+ *
+ * 0.54 stop-write 之后装配层交给它的是「时间线实现」：`append` 落到时间线 WAL、
+ * 读落到 `TimelineEventLog`。`SessionEventLog`（旧 `events.ndjson` 实现）仍满足本接口，
+ * 但装配层**不再为任何新会话创建它**（ADR-105 D4：旧格式会话只读冻结）。
+ */
+export interface SessionEventLogPort extends SessionEventReadPort {
+  /** 追加一条事件；返回已分配 seq 的记录 */
+  append(input: SessionEventInput): Promise<SessionEventRecord>;
+  /** 最近一次**已落盘**的 seq；未初始化/未写入返回 undefined */
+  lastPersistedSeq(sessionId: string): number | undefined;
   /**
    * 把该 session 已入队的事件落盘（fsync）。用于 `append({ durable: false })`
    * 的批量路径：整批写完后调用一次（实现可缺省）。
@@ -384,8 +406,6 @@ export interface SessionEventLogPort {
   sync?(sessionId: string): Promise<void>;
   /** 关闭并移除该 session 的写句柄（run 结束 / idle 回收；实现可缺省） */
   release?(sessionId: string): Promise<void>;
-  /** 合并写会话索引（best-effort；实现可缺省） */
-  updateIndex?(sessionId: string, patch: SessionIndexPatch): Promise<void>;
 }
 
 /** 事件处理器 */

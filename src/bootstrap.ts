@@ -35,7 +35,6 @@ import {
   Runtime,
   rebuildMetrics,
   sameRestartMarker,
-  sessionEventsFilePath,
   type TenantPaths,
   type TraceRedactor,
 } from '../packages/core/src/index';
@@ -1163,6 +1162,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     metrics,
     runStore,
     eventLog,
+    timelineLog,
     journalFactory,
     feishu: feishuChannel,
   } = bundle;
@@ -1705,34 +1705,33 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
     hub: localEventHub,
     session,
-    // 会话级上下文用量（additive `sessions.get.context_usage`）：从会话事件日志
-    // 尾窗派生（历史会话 / rotate 后 / 重启后都可用）。`contextWindowTokens` 与
-    // runtime 算百分比的分母同源（`config.context.maxTokens`，缺省走 DEFAULT_CONFIG）。
-    ...(eventLog !== undefined
+    // 会话级上下文用量（additive `sessions.get.context_usage`）：从**时间线**尾窗派生
+    // （历史会话 / rotate 后 / 重启后都可用）。`contextWindowTokens` 与 runtime 算百分比的
+    // 分母同源（`config.context.maxTokens`，缺省走 DEFAULT_CONFIG）。
+    //
+    // 0.54 stop-write：读源是 `bundle.timelineLog`（只读口，没有 append）——
+    // `events.ndjson` 已停写，装配层也不再拼那条路径去 `stat`。
+    ...(timelineLog !== undefined
       ? {
           contextUsage: createContextUsageSource({
-            tail: eventLog,
-            eventsFile: (sessionId: string) =>
-              sessionEventsFilePath(tenantPaths.sessions_dir, sessionId),
+            tail: timelineLog,
+            watermark: (sessionId: string) => timelineLog.watermark(sessionId),
             ...(config.context?.maxTokens !== undefined
               ? { contextWindowTokens: config.context.maxTokens }
               : {}),
           }),
           // 「模型这一轮看到了什么系统消息」（additive `sessions.get.system_context`）：
-          // 同一个事件日志、同一个 sessions_dir，取的是另一类事件（`prompt.system_context`）。
+          // 同一个读口，取的是另一类事件（`prompt.system_context`）。
           // 事件不是 message ⇒ 回放窗口淘汰 / 进程重启后只有重新派生才能把卡找回来。
           systemContext: createSystemContextSource({
-            tail: eventLog,
-            eventsFile: (sessionId: string) =>
-              sessionEventsFilePath(tenantPaths.sessions_dir, sessionId),
+            tail: timelineLog,
+            watermark: (sessionId: string) => timelineLog.watermark(sessionId),
           }),
-          // 会话事件日志的读取面（additive 0.53：`sessions.events` 回填 +
-          // `sessions.get.event_cursor`）：与上面两个同一个 `eventLog`、同一个
-          // `sessions_dir`，serve 只做游标/分页，磁盘路径留在这里。
+          // `sessions.events` 回填 + `sessions.get.event_cursor`：与上面两个同一个读口，
+          // serve 只做游标/分页。
           sessionEvents: createSessionEventsSource({
-            log: eventLog,
-            eventsFile: (sessionId: string) =>
-              sessionEventsFilePath(tenantPaths.sessions_dir, sessionId),
+            log: timelineLog,
+            watermark: (sessionId: string) => timelineLog.watermark(sessionId),
           }),
         }
       : {}),

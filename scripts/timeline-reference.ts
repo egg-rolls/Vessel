@@ -55,12 +55,15 @@
  * `apps/web/src/gateway/replay-source.ts` 整文件已删），而尺子**必须自己拿着秤** ——
  * 它不能依赖被测实现里的辅助函数（plan-054 §1 判据 A-1 的理由就是这个）。
  *
- * **④ 「旧源不包含、但 timeline 会包含」的类型 = {@link TIMELINE_ONLY_EVENT_TYPES}**
+ * **④ 「旧源不包含、但 timeline 会包含」的类型 —— 0.54 stop-write 之后这条不再需要白名单**
  *
- * 今天**不是空集**：恰好是 chunk 家族（`llm.stream.chunk` 与其前缀转发形态）。逐条理由见该
- * 常量；A-1 的差集白名单必须**恰好等于**它（不是"包含"）。
+ * 以前这里有一张 `TIMELINE_ONLY_EVENT_TYPES`（恰好 chunk 家族两条），因为「旧源没有」与
+ * 「timeline 有」只有在**两份源并存**时才是可比较的事实。`events.ndjson` 停写之后 timeline
+ * 是唯一落盘口，白名单没有可表达的语义，已被删除：判据只剩 core 的 `isChunkEventType`
+ * （唯一实现），{@link isTimelineOnlyType} 就是它的别名。
  */
 import { join } from 'node:path';
+import { isChunkEventType } from '../packages/core/src/timeline/types';
 
 /** 稳定 JSON：对象键**递归排序**后序列化（同一份 payload 在任何到达顺序 / 任何进程里同值）。 */
 function canonicalJson(value: unknown, depth = 0): string {
@@ -154,57 +157,21 @@ export function resolveDataDir(dataDir?: string): string {
   return host.replace(/\\/g, '/').replace(/\/+$/, '');
 }
 
-/** 一条「旧源不包含、但 timeline 会包含」的类型（A-1 差集白名单的条目）。 */
-export interface OldSourceGap {
-  /** 类型名；以 `*` 开头表示"后缀匹配"，例如 `*.llm.stream.chunk`。 */
-  type: string;
-  /** 为什么两份旧源都没有它。 */
-  reason: string;
-}
-
 /**
- * 规则 ④：旧源没有、timeline 会有的类型。
+ * 规则 ④（0.54 stop-write 之后**已不存在**）：以前这里有一张
+ * `TIMELINE_ONLY_EVENT_TYPES` 白名单，「旧源没有、timeline 会有」的类型（恰好两条：
+ * `llm.stream.chunk` 与 `*.llm.stream.chunk`）。
  *
- * 今天**不是空集**（ADR-105 §0 说 chunk 两处磁盘都不落，实测复现）：
+ * 它为什么能被删：白名单的存在前提是**两份源并存** —— 一边写 `events.ndjson`、一边写
+ * timeline，才有「差集里哪几条是该有的」。0.54 停写旧源之后 timeline 是唯一落盘口，
+ * 「旧源没有它」不再是一个可比较的事实，白名单也就没有可表达的语义。
  *
- * - 会话日志侧：`run-journal.ts` 的 `NON_PERSISTED_EVENT_TYPES` 让 chunk 走 `publishRaw` 早退，
- *   不写 `events.ndjson`；
- * - trace 侧：`FileTraceRecorder` 的 `includeStreamChunks` 默认 `false`，`isStreamChunkEvent`
- *   再对 `llm.stream.chunk` 与 `*.llm.stream.chunk` 各过滤一次。
- *
- * 实测（本机 242 份会话日志 / 1217 个 trace 文件，按 `type` 字段精确统计而非 grep 文本）：
- * chunk 事件数 **0**，与 `docs/dev/handoff/replay-gap-findings.md` §1d 一致。
- *
- * 不在此列的、曾考虑过的类型（写清，免得被误加进来）：
- * - `trace.*` / `replay.*`：`trace-recorder.ts#handle` 第一条就跳过（防自激、防回放重复落盘），
- *   timeline 侧同样必须排除，所以**不是**"timeline 会包含"。唯一的例外 `trace.overflow` 是
- *   recorder 自己绕过队列直写文件的记账行，属于旧源自身的元数据，不是会话事实。
- * - `session.deleted`：会话目录被删，两份源都留不下（trace 侧另有 `0.18 C7` 的显式跳过），
- *   timeline 同样留不下。
+ * `isTimelineOnlyType` 保留，语义收紧成「**chunk 家族**」（带前缀的转发形态也算）：
+ * 对拍脚本还要回答「timeline 里这条 chunk 是不是旧源本来就没有的那一类」，而这件事现在
+ * 由 core 的 `isChunkEventType` 一处回答 —— 唯一实现，不再有第二份名单。
  */
-export const TIMELINE_ONLY_EVENT_TYPES: readonly OldSourceGap[] = [
-  {
-    type: 'llm.stream.chunk',
-    reason:
-      '会话日志侧被 NON_PERSISTED_EVENT_TYPES 跳过（run-journal.ts）；trace 侧被 ' +
-      'includeStreamChunks=false + isStreamChunkEvent 双重过滤（trace-recorder.ts）。' +
-      'ADR-105 §3 I1 起 chunk 以块级帧落 WAL ⇒ timeline 有、两份旧源都没有。',
-  },
-  {
-    type: '*.llm.stream.chunk',
-    reason:
-      '子 agent / 转发形态（如 subagent.llm.stream.chunk）：trace 侧按后缀过滤（isStreamChunkEvent），' +
-      '会话日志侧也不在落盘白名单里，所以同样只有 timeline 会有。',
-  },
-];
-
-/** 这条类型是否属于「旧源没有、timeline 会有」（规则 ④ 的判定）。 */
 export function isTimelineOnlyType(type: string): boolean {
-  for (const gap of TIMELINE_ONLY_EVENT_TYPES) {
-    if (gap.type === type) return true;
-    if (gap.type.startsWith('*') && type.endsWith(gap.type.slice(1))) return true;
-  }
-  return false;
+  return isChunkEventType(type);
 }
 
 /**

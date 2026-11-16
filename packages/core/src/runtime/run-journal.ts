@@ -13,10 +13,9 @@ import { assignMessageIdentities } from '../session/index.js';
 // 0.54 chunk-slim：瞬时 chunk（`tool_call_delta` / `finish`）的判据同样**只有一个实现**，
 // 与块路由放在一起（`timeline/blocks.ts`）—— 它回答的是「这个 chunk 配不配进块」。
 import { isTransientChunkEvent } from '../timeline/blocks.js';
-// 0.54 A2：chunk 家族的判定**只有一个实现**（`timeline/types.ts`），journal 不再自己写一遍
-// 集合。为什么必须共用：ADR-105 §8.1 规则 ④ 的白名单恰好两条（`llm.stream.chunk` 与
-// `*.llm.stream.chunk`），抄一份就等于多一个会漂移的口径。
-import { isChunkEventType } from '../timeline/types.js';
+// 0.54 stop-write：「什么不算会话事实」只有一处判据（`timeline/types.ts`）。以前 journal 自己
+// 有一份 `NON_PERSISTED_EVENT_TYPES`，与旁路侧的白名单漂一次就会多出一个谁也不知道的写入口。
+import { isChunkEventType, isNonFactEventType } from '../timeline/types.js';
 import type { RunEvent } from '../types/event.js';
 import { LeaseExpiredError } from '../types/lease.js';
 import type {
@@ -40,62 +39,6 @@ export type {
   TimelineDualWriteEvent,
   TimelineDualWritePort,
 } from '../types/run-journal.js';
-
-/**
- * 不写会话事件日志的派生/观测事件（chunk 家族**不在**这里，见下）。
- *
- * 唯一真相源只保留事实（用户输入、LLM 响应、工具调用、权限、终态）。下面这些
- * 要么是流式/快照级的派生视图，要么自带另一份 durable 记录：
- *
- * - `context.changed`：派生快照（每条注入上下文的全量镜像），且叙事已由
- *   `context.pressure` / `context.compacted` 承担 —— 落盘等于同一事实两份；
- * - `run.checkpoint`：`RunRecord` 已有 durable checkpoint（含 `event_cursor`），
- *   日志里再写一遍是同一事实的第二份；
- * - `session.saved` / `session.deleted` / `session.log.failed`：进程内状态同步与
- *   写盘失败上报，落盘会递归；
- * - `plugin.*`：进程生命周期，不进会话叙事。
- *
- * `llm.request` **不在**本集合里：它落盘，但只落元信息（`content_omitted: true` +
- * 计数/配置），`messages` / `tools` 正文由 `stripRequestContent` 兜底裁掉。
- *
- * **chunk 家族（`llm.stream.chunk` / `*.llm.stream.chunk`）也不在本集合里**（0.54 A2）。
- * 以前它在，含义是「什么都不落盘」—— 于是刷新/重启后正文与思考永久丢失（ADR-105 §0 P5）。
- * 现在它的去处在 {@link SessionRunJournal.appendFact} 的 chunk 分支：
- *
- * - **不写** `events.ndjson`（一次长 run 上千条 delta，一条一行就是上千行、上千次 fsync）；
- * - **写** timeline 的**块级 WAL**（`wal.blocks/`，`[u64 seq][u32 len][utf8 JSON] × N`，
- *   满 32 KiB 或空闲 150 ms 封块，封块即 fsync）。
- *
- * 判定用 {@link isChunkEventType}（唯一实现），所以**带前缀的转发形态**也走块路径 ——
- * 以前只有精确的 `llm.stream.chunk` 在集合里，`subagent.llm.stream.chunk` 会掉进
- * `enqueuePersistedEvent` 被一行一条写进 `events.ndjson`（块级设计正好被绕过）。
- *
- * **0.54 chunk-slim：chunk 家族内部再分一层，瞬时子类型连块都不进。**
- * `tool_call_delta` / `finish` 是**瞬时 UI 提示**（参数片段 / 本次响应收口），没有
- * 「刷新后读不回来」的内容：工具卡由 `tool.call.started` 的 `arguments` +
- * `tool.call.completed` 的产物复原，用量与终态由 `llm.response` 复原。它们因此
- * **不占 `timeline_seq`** —— 这是 ADR-105 §3 I2 的逆否，不是省事：
- *
- * | 想做的事 | 后果 |
- * | --- | --- |
- * | 取 seq 但不写进块 | **违反 I2**（已发布未落盘），且 `count` 里凭空多出不可读的 seq（= 洞） |
- * | 不取 seq | 只存在于实时通道（hub 环），刷新后由事实复原 —— 正确形态 |
- *
- * 判定用 {@link isTransientChunkEvent}（`timeline/blocks.ts`，唯一实现）。**绝不能**退回
- * 「一行一条写进 `events.ndjson`」那条老口子（`NON_PERSISTED_EVENT_TYPES` 以前正是那个
- * 含义，`subagent.llm.stream.chunk` 就那么漏进去过）：瞬时 delta 的落点是「不落盘」。
- */
-const NON_PERSISTED_EVENT_TYPES: ReadonlySet<string> = new Set([
-  'context.changed',
-  'session.saved',
-  'run.checkpoint',
-  'session.deleted',
-  'session.log.failed',
-  'plugin.loaded',
-  'plugin.failed',
-  'plugin.init.failed',
-  'plugin.dispose.failed',
-]);
 
 /**
  * 由 harness / 插件直接发布到事件流、但必须落盘的交互事件。
@@ -136,12 +79,8 @@ function stripRequestContent(data: unknown): unknown {
   return next;
 }
 
-/** 默认 RunJournal：写 EventLog / RunRecord / SessionState，并在成功后发布。 */
+/** 默认 RunJournal：写时间线 / RunRecord / SessionState，并在成功后发布。 */
 export class SessionRunJournal implements RunJournal {
-  private readonly pendingEventLogWrites = new Set<Promise<void>>();
-  /** 每个 journal 只报告一次落盘失败，避免刷屏 */
-  private eventLogFailureReported = false;
-
   constructor(
     private readonly deps: RunJournalFactoryOptions,
     private readonly identity: RunJournalIdentity | RunJournalTransientIdentity,
@@ -149,43 +88,55 @@ export class SessionRunJournal implements RunJournal {
 
   appendFact(event: RunEvent, persistData?: unknown): void {
     const dualWrite = this.deps.timelineDualWrite;
-    // 0.54 A2：chunk 家族**有它自己的落盘去处**，既不是「什么都不落」也不是「写 ndjson」。
-    // 顺序与其它事件一致：先发布（旧链路的可见性一字不改），再把落盘交给块级 WAL。
-    // 开关关（`dualWrite` 为 undefined）⇒ 只发布，`events.ndjson` 逐字节不变。
+    const sessionId = this.resolveEventSessionId(event);
+    // 0.54 stop-write：`events.ndjson` 停写 ⇒ **落盘只剩一条路**（时间线写者）。于是顺序
+    // 也只剩一种：先发布（可见性由「WAL fsync 之后才放行」的发送闸门决定，ADR-105 §3 I2），
+    // 再把这条事实交给写者；写者失败由闸门 fail-open 放行，UI 一条都不会丢。
     //
     // 0.54 chunk-slim：**瞬时 chunk（`tool_call_delta` / `finish`）在这里就分叉**——
-    // 发布照旧（实时通道不变），但**不派给双写**，于是它连 seq 都不会被请求。
-    // 这一步就是「本单在哪一层决定不占 seq」的答案：**journal 的派发点**
-    // （`appendFact`），在所有 seq 分配之前；`writer.ts#validateInput` 是第二道闸门。
+    // 发布照旧（实时通道不变），但**不派给写者**，于是它连 seq 都不会被请求。
+    // 这一步就是「本单在哪一层决定不占 seq」的答案：**journal 的派发点**（`appendFact`），
+    // 在所有 seq 分配之前；`writer.ts#validateInput` 是第二道闸门。
+    this.publishRaw(event);
+    if (dualWrite === undefined || sessionId === undefined) return;
     if (isChunkEventType(event.type)) {
-      this.publishRaw(event);
-      if (dualWrite !== undefined && !isTransientChunkEvent(event)) {
-        this.recordTimelineOnly(event, dualWrite);
-      }
+      if (!isTransientChunkEvent(event)) this.dispatchToTimeline(sessionId, event, dualWrite);
       return;
     }
-    if (
-      !this.deps.eventLog ||
-      NON_PERSISTED_EVENT_TYPES.has(event.type) ||
-      !this.shouldPersistSessionEvent(event)
-    ) {
-      // 0.54 A：双写旁路（开关关 ⇒ `dualWrite` 是 undefined，这里连分支都不进）。
-      this.publishRaw(event);
-      if (dualWrite !== undefined) this.recordTimelineOnly(event, dualWrite);
-      return;
-    }
-    this.enqueuePersistedEvent(event, true, persistData);
+    // 「什么不该落盘」的判据只有一处（`timeline/types.ts#isNonFactEventType`）。
+    if (isNonFactEventType(event.type)) return;
+    this.dispatchToTimeline(sessionId, event, dualWrite, persistData);
   }
 
   appendObserved(event: RunEvent): void {
-    if (!this.deps.eventLog || !OBSERVED_PERSISTED_EVENT_TYPES.has(event.type)) return;
-    if (!this.shouldPersistSessionEvent(event)) return;
-    this.enqueuePersistedEvent(event, false);
+    // 观察外部已发布的事件：只补落盘，不二次发布（避免回环）。
+    const dualWrite = this.deps.timelineDualWrite;
+    if (dualWrite === undefined) return;
+    if (!OBSERVED_PERSISTED_EVENT_TYPES.has(event.type)) return;
+    if (isNonFactEventType(event.type)) return;
+    const sessionId = this.resolveEventSessionId(event);
+    if (sessionId === undefined) return;
+    this.dispatchToTimeline(sessionId, event, dualWrite);
   }
 
+  /**
+   * 等到「已派出去的事实」真正落盘。
+   *
+   * 0.54 stop-write：写者自己排队 + fsync，journal 不再持有写入 Promise 链，所以这里
+   * 委托写者的 drain（`flushSession`）。冻结会话会抛 `session_frozen_readonly` ——
+   * 它不是故障（那个会话本就不该有 timeline），吞掉并记一条 debug 级日志。
+   */
   async flush(): Promise<void> {
-    while (this.pendingEventLogWrites.size > 0) {
-      await Promise.allSettled([...this.pendingEventLogWrites]);
+    const dualWrite = this.deps.timelineDualWrite;
+    const sessionId = this.identity.sessionId;
+    if (dualWrite?.flushSession === undefined || sessionId === undefined) return;
+    try {
+      await dualWrite.flushSession(sessionId);
+    } catch (error) {
+      this.deps.logger?.warn('timeline flush failed (session may be frozen/read-only)', {
+        session_id: sessionId,
+        error: errorText(error),
+      });
     }
   }
 
@@ -286,22 +237,21 @@ export class SessionRunJournal implements RunJournal {
     });
   }
 
-  /** 当前会话已落盘的事件游标（内存优先，否则读文件尾） */
+  /**
+   * 当前会话已落盘的事件游标。
+   *
+   * 0.54 stop-write：游标**只由磁盘事实决定**（时间线读口的 `lastSeq`：`wal.log` 尾行 +
+   * 尾块最后一帧）。以前先问写者的内存 `lastPersistedSeq` —— 那是内存态的缓存，
+   * 换进程就没了，且对读侧没有承诺力。
+   */
   async currentSeq(sessionId: string): Promise<number | undefined> {
     const log = this.deps.eventLog;
     if (!log) return undefined;
-    const inMemory = log.lastPersistedSeq(sessionId);
-    if (inMemory !== undefined) return inMemory;
     try {
       return await log.lastSeq?.(sessionId);
     } catch {
       return undefined;
     }
-  }
-
-  /** 能否确定该事件属于某个 session（不能时就只发布、不落盘） */
-  private shouldPersistSessionEvent(event: RunEvent): boolean {
-    return this.resolveEventSessionId(event) !== undefined;
   }
 
   /** session_id 优先取 payload；否则用当前 Run 的 session 反查 */
@@ -316,132 +266,43 @@ export class SessionRunJournal implements RunJournal {
   }
 
   /**
-   * 0.54 A：把「旧链路（`events.ndjson`）不落盘」的事件转给 timeline 双写旁路。
+   * 把一条会话事实交给时间线写者（0.54 stop-write 的**唯一**落盘出口）。
    *
-   * 两类事件走到这里，语义**不同**（`persisted: false` 如实表示「旧链路没有它」）：
+   * 三个纪律，缺一条就会回到「两个写口」的老毛病：
    *
-   * | 类别 | 例 | timeline 侧 |
-   * | --- | --- | --- |
-   * | chunk 家族（有正文的） | `llm.stream.chunk` / `*.llm.stream.chunk` | 块级 WAL（`wal.blocks/`），**必落** |
-   * | 其余派生/观测 | `context.changed` / `plugin.*` | 实现侧按白名单取舍 |
-   *
-   * 瞬时 chunk（`tool_call_delta` / `finish`）**不经过本方法**：它们连块都不进，见
-   * {@link SessionRunJournal.appendFact}（0.54 chunk-slim）。
-   *
-   * 只转述、不判断值不值得写；异常一律吞掉 —— 旁路坏了不能影响 run。
+   * 1. **落盘副本的裁剪口径在这里定**：`persistData`（producer 给的元信息）优先，
+   *    `llm.request` 再过一道 `stripRequestContent` 兜底 —— 发布出去的那一份仍带正文，
+   *    只有落到磁盘的这一份被裁（与 0.54 之前逐字节一致）。
+   * 2. **不判断值不值得写**：这里只转发，判据在 `timeline/types.ts`（不进 timeline 的
+   *    类型由 `isNonFactEventType` 回答）与写者（瞬时 chunk 会被它拒绝）。
+   * 3. **永不抛**：写者内部失败只记指标/日志，并通过发送闸门 fail-open 放行那条广播 ——
+   *    落盘坏了不能反过来打断 run。
    */
-  private recordTimelineOnly(event: RunEvent, port: TimelineDualWritePort): void {
-    try {
-      const sessionId = this.resolveEventSessionId(event);
-      if (sessionId === undefined) return;
-      port.record(sessionId, {
-        run_id: event.run_id,
-        type: event.type,
-        ts: event.ts,
-        data: event.data,
-        ...(this.identity.fencingToken !== undefined
-          ? { fencing_token: this.identity.fencingToken }
-          : {}),
-        persisted: false,
-      });
-    } catch (error) {
-      this.deps.logger?.warn('timeline dual-write dispatch failed', {
-        run_id: event.run_id,
-        type: event.type,
-        error: errorText(error),
-      });
-    }
-  }
-
-  /**
-   * 入队一次 append +（可选）发布。
-   * 所有写入按调用顺序串行（日志内部按 session 排队），publish 在 append
-   * 成功/失败后执行，因此对外可见顺序始终与 seq 顺序一致。
-   */
-  private enqueuePersistedEvent(event: RunEvent, publish: boolean, persistData?: unknown): void {
-    const log = this.deps.eventLog;
-    if (!log) return;
-    const sessionId = this.resolveEventSessionId(event);
-    if (sessionId === undefined) {
-      if (publish) this.publishRaw(event);
-      return;
-    }
-
+  private dispatchToTimeline(
+    sessionId: string,
+    event: RunEvent,
+    port: TimelineDualWritePort,
+    persistData?: unknown,
+  ): void {
     // ADR-098 C2：随事件携带当前 SessionLease 的 fencing token（未持有则缺省）。
     const fencingToken = this.identity.fencingToken;
-    // 落盘副本：producer 给的 persistData 优先；`llm.request` 再过一道正文兜底裁剪。
     const persistedData = persistData ?? event.data;
     const data = event.type === 'llm.request' ? stripRequestContent(persistedData) : persistedData;
-    const done = log
-      .append({
-        session_id: sessionId,
+    try {
+      port.record(sessionId, {
         run_id: event.run_id,
         type: event.type,
         ts: event.ts,
         data,
         ...(fencingToken !== undefined ? { fencing_token: fencingToken } : {}),
-      })
-      .then(
-        () => {
-          if (publish) this.publishRaw(event);
-          // 0.54 A：已落盘事件的双写旁路。放在发布**之后**：旧链路的可见顺序与
-          // 失败处理完全不受影响；未装端口（开关关）时这里什么都不做。
-          const dualWrite = this.deps.timelineDualWrite;
-          if (dualWrite !== undefined) {
-            try {
-              dualWrite.record(sessionId, {
-                run_id: event.run_id,
-                type: event.type,
-                ts: event.ts,
-                data,
-                ...(fencingToken !== undefined ? { fencing_token: fencingToken } : {}),
-                persisted: true,
-              });
-            } catch (error) {
-              this.deps.logger?.warn('timeline dual-write dispatch failed', {
-                session_id: sessionId,
-                run_id: event.run_id,
-                type: event.type,
-                error: errorText(error),
-              });
-            }
-          }
-        },
-        (error: unknown) => {
-          this.reportEventLogFailure(error, event, sessionId);
-          if (publish) this.publishRaw(event);
-        },
-      );
-    this.pendingEventLogWrites.add(done);
-    void done.then(() => {
-      this.pendingEventLogWrites.delete(done);
-    });
-  }
-
-  /** 落盘失败必须可见：Logger（不落盘事件日志本身，避免递归） */
-  private reportEventLogFailure(error: unknown, event: RunEvent, sessionId: string): void {
-    this.deps.logger?.error('session event log write failed', {
-      session_id: sessionId,
-      run_id: event.run_id,
-      type: event.type,
-      error: errorText(error),
-    });
-    if (this.eventLogFailureReported) return;
-    this.eventLogFailureReported = true;
-    try {
-      this.identity.events.publish({
-        type: 'session.log.failed',
-        run_id: event.run_id,
-        data: {
-          session_id: sessionId,
-          run_id: event.run_id,
-          event_type: event.type,
-          error: errorText(error),
-        },
-        ts: Date.now(),
       });
-    } catch {
-      // 事件投递失败不得影响 run
+    } catch (error) {
+      this.deps.logger?.warn('timeline dispatch failed (event not persisted)', {
+        session_id: sessionId,
+        run_id: event.run_id,
+        type: event.type,
+        error: errorText(error),
+      });
     }
   }
 

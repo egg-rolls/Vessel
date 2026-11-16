@@ -308,6 +308,7 @@ export {
   SessionDeleteConflictError,
   SessionEventLog,
   type SessionEventLogOptions,
+  type SessionLogDirectoryPort,
   type SessionLogIndex,
   SQLiteSessionStore,
   sessionLogDirExists,

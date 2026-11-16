@@ -262,16 +262,49 @@ export function isChunkEventType(type: string): boolean {
 }
 
 /**
- * 不进 timeline 的类型（两份旧源同样没有/不该有；ADR-105 §8.1 规则 ④）：
+ * **写者入口硬拒绝**的类型（`TimelineWriter#validateInput` 用它）：这些名字进 timeline 就是
+ * 自激 / 已删除的事实，没有任何正常路径会写它们。
  *
- * - `trace.*` / `replay.*`：trace recorder 的防自激行，不是会话事实；
+ * - `trace.*` / `replay.*`：trace recorder 的防自激行（`trace.overflow` 属于 `trace.*`，不必单列）；
  * - `session.deleted`：目录已删，写了也读不回来。
- *
- * 注意 `trace.overflow` 属于 `trace.*`，不必单列。
  */
 export function isExcludedEventType(type: string): boolean {
   return type === 'session.deleted' || type.startsWith('trace.') || type.startsWith('replay.');
 }
+
+/**
+ * **不算会话事实**的类型（journal 的派发点用它：这些事件不交给写者）。
+ *
+ * 0.54 stop-write 之前这份名单叫 `NON_PERSISTED_EVENT_TYPES`，住在 `runtime/run-journal.ts`，
+ * 只回答「不要写 `events.ndjson`」；旁路侧另有自己的取舍 —— 两份名单漂一次就会多出一个谁也
+ * 不知道的写入口。现在 `events.ndjson` 停写，问题只剩一个：**什么不值得落盘**。所以它搬到
+ * 这里，与写者的硬拒绝同一文件、同一段文档。
+ *
+ * 与 {@link isExcludedEventType} 的区别（**故意不是同一个谓词**）：
+ * `context.changed` / `run.checkpoint` / `session.saved` 这类派生事件**可以被直接写**
+ * （门禁与自证脚本要造它们来验写者行为），只是 journal 不会派发它们。
+ *
+ * 三类，理由不同：
+ *
+ * | 类别 | 例 | 为什么不落盘 |
+ * | --- | --- | --- |
+ * | 派生快照 | `context.changed` | 每条注入上下文的全量镜像；叙事已由 `context.pressure` / `context.compacted` 承担，落盘等于同一事实两份 |
+ * | 自带另一份 durable 记录 | `run.checkpoint` / `session.saved` | `RunRecord` 与 `SessionState` 自己就是 durable 的 |
+ * | 进程内观测 / 生命周期 | `plugin.*` / `session.log.failed` | 不是会话叙事 |
+ */
+export function isNonFactEventType(type: string): boolean {
+  if (isExcludedEventType(type)) return true;
+  if (type.startsWith('plugin.')) return true;
+  return DERIVED_EVENT_TYPES.has(type);
+}
+
+/** 派生 / 同步类（见 {@link isNonFactEventType} 的表）；列举而不是前缀，免误伤同名业务事件。 */
+const DERIVED_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'context.changed',
+  'run.checkpoint',
+  'session.saved',
+  'session.log.failed',
+]);
 
 /** 把 `chunk_flush_ms` 收进 [1, CHUNK_FLUSH_MS_MAX]。 */
 export function clampChunkFlushMs(value: number | undefined): number {

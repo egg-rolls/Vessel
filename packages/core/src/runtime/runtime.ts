@@ -12,7 +12,7 @@
 import { MemoryWorkingContext } from '../context/index.js';
 import { noopLogger } from '../logging.js';
 import type { ContextSummarizer, WorkingContext } from '../types/context.js';
-import type { EventStream, SessionEventLogPort } from '../types/event.js';
+import type { EventStream, SessionEventReadPort } from '../types/event.js';
 import type { LeaseGrant, LeaseServicePort } from '../types/lease.js';
 import type { TerminationPolicy, UsageLimits, UsagePricing } from '../types/limits.js';
 import type { Logger } from '../types/logging.js';
@@ -65,8 +65,8 @@ export interface ExecutionUnitRequest {
   session?: SessionStore;
   /** per-EU 观察流（tenant 或 member） */
   events: EventStream;
-  /** EU 只读；写由 RunJournal 承担 */
-  eventLog?: SessionEventLogPort;
+  /** EU 只读历史（0.54 stop-write：类型上没有 `append`，读路径写不进去） */
+  eventLog?: SessionEventReadPort;
   leaseService?: LeaseServicePort;
   bindingLease?: LeaseGrant;
   /** 成员 body 自有宿主（白名单工具/桥接 hook）；缺省用 profile 的工厂 */

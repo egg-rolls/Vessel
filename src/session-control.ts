@@ -13,7 +13,7 @@ import {
   type DeleteSessionDataResult,
   type EventStream,
   type RunRecordStore,
-  type SessionEventLog,
+  type SessionLogDirectoryPort,
   type SessionStore,
   type TenantPaths,
 } from '../packages/core/src/index';
@@ -46,7 +46,7 @@ export type DeleteSessionDataFn = (
     runStore?: RunRecordStore;
     events?: EventStream;
     tenantId?: string;
-    eventLog?: SessionEventLog;
+    eventLog?: SessionLogDirectoryPort;
   },
 ) => Promise<SessionDeleteResult>;
 
@@ -68,8 +68,12 @@ export interface CreateSessionControlOptions {
   runStore?: RunRecordStore;
   /** 传入后 core 会发 `session.deleted`（带计数） */
   events?: EventStream;
-  /** 0.18：删除会话时同目录清理事件日志（events.ndjson + index.json） */
-  eventLog?: SessionEventLog;
+  /**
+   * 删除会话时同目录清理日志目录（时间线：`wal.*` / `timeline.*` / 块 / 索引）。
+   *
+   * 只需要「在不在 + 删掉」两个动作，与日志实现无关（旧日志 / 时间线端口都满足）。
+   */
+  eventLog?: SessionLogDirectoryPort;
   /**
    * 0.34 Stage 3：删除前的权威钩子（`AgentService.detachSession`）。
    * 冲突（active run / 活 SessionLease）必须抛 `conflict`，且不得删除任何数据。
@@ -86,7 +90,7 @@ function defaultDeleteSessionData(
     paths: TenantPaths;
     runStore?: RunRecordStore;
     events?: EventStream;
-    eventLog?: SessionEventLog;
+    eventLog?: SessionLogDirectoryPort;
   },
 ): Promise<DeleteSessionDataResult> {
   return coreDeleteSessionData(sessionId, {
