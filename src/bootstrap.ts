@@ -1364,6 +1364,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.53 notice-rotate：回填通知的重解析口（router 早在上面就建好了，flush 时才读）。
     noticeAgentService = wiring.service;
     registerBashJobDelivery({ service: wiring.service, logger });
+    logger.info('agent.bash_job.delivery_ready', {});
     finalPluginHost.registerTool(wiring.tool);
     // 顺序契约：`main` 的 ExecutionUnit 在 spawn 时快照父宿主工具列表，
     // 必须等 `agent` 工具注册完再派生 owner，否则 main 永久缺 `agent`。

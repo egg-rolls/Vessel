@@ -192,9 +192,20 @@ const DEFAULT_MESSAGE_SENDER = HUMAN_PRINCIPAL;
  */
 export const ASK_ANSWER_INBOX_SOURCE = 'ask';
 
+/**
+ * 0.55：后台 bash 作业结果的 inbox 来源标签。
+ *
+ * 与 `ask` 同级：`from` 是成员自己（它自己的作业回报它自己），直接拿 `from` 当来源会在
+ * 条带里显示成「自己发给自己」。固定标签让时间线能指出「这是运行时送回来的作业结果」。
+ */
+export const BASH_JOB_INBOX_SOURCE = 'bash';
+
 /** inbox 条目的来源：只有「人对 ask 的答复」与普通人类消息在这里分家。 */
 function inboxSourceOf(message: AgentMessage): string {
-  return message.origin === 'ask_answer' ? ASK_ANSWER_INBOX_SOURCE : message.from;
+  if (message.origin === 'ask_answer') return ASK_ANSWER_INBOX_SOURCE;
+  // 0.55：后台作业的结果不是「谁说的话」，用固定标签而不是 from（from 就是收件人自己）
+  if (message.origin === 'bash_job') return BASH_JOB_INBOX_SOURCE;
+  return message.from;
 }
 
 /**
@@ -2613,6 +2624,8 @@ export class AgentServiceImpl implements AgentService {
     const resume = input.resume === true;
     // 0.52：async ask 的答案投递（见 AdmitInput.origin）。
     const fromAskAnswer = input.origin === 'ask_answer';
+    // 0.55：后台 bash 作业的结果投递（见 AdmitInput.origin）。
+    const fromBashJob = input.origin === 'bash_job';
     // 附件引用（0.52）：只收「绝对路径 + 已知 kind」，逐条丢弃其余；条数有上限。
     // 越界 / deny 目录的判定属于写侧闸门（runs.start 的 refs 闸门），这里只做形状归一。
     const refs = normalizeRefs(input.refs);
@@ -2650,7 +2663,10 @@ export class AgentServiceImpl implements AgentService {
     // 2. membership / presence / visibility（只按 sender 自身的可见性判定）
     //    0.52 例外：async ask 的答案是**成员自己提的问题**被人类回答，投递不受
     //    「谁能驱动这个成员」的可见性闸门约束 —— 否则 private 成员的提问永远答不了。
-    if (!fromAskAnswer && !this.canAdmitView(record, from)) {
+    //    0.55 同理：后台 bash 作业的结果是**成员自己的作业回报它自己**，不是「谁能驱动
+    //    它」的问题；private 成员（owner 不是运行期身份自己）否则永远收不到作业结果。
+    //    跳过的是**可见性**闸门：下面的 member_closed / strict / 预算 / inbox 投递全部照旧。
+    if (!fromAskAnswer && !fromBashJob && !this.canAdmitView(record, from)) {
       throw new AgentError('member_not_visible', `member_not_visible: ${record.id}`);
     }
     if (record.membership === 'left' || record.state === 'closed') {
@@ -2735,7 +2751,7 @@ export class AgentServiceImpl implements AgentService {
       channel,
       // 名字随消息带上：执行内核不持有 registry，渲染时无处可查。
       ...(senderName !== undefined ? { from_name: senderName } : {}),
-      ...(fromAskAnswer ? { origin: 'ask_answer' as const } : {}),
+      ...(input.origin !== undefined ? { origin: input.origin } : {}),
       // 会话身份（`Message.name`）：目前只有 rotate 交接嘱托声明（见
       // `ROTATE_HANDOFF_INPUT_NAME`）。缺省不写 —— 人类正文的载荷与今天逐字节一致。
       ...(internal?.inputName !== undefined ? { input_name: internal.inputName } : {}),

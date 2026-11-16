@@ -12,16 +12,15 @@
  * （hook 永不再注入）；返回 false 则不标，hook 兜底（结果不丢，退回「等下一次 run」）。
  * 所以这里的每一次失败都必须**返回 false**、不许抛、不许重试 —— 重试会变成第二条投递。
  *
- * 为什么 `from` 是「成员自己」，退化时才是「它的归属者」：
- * `admit` 第 2 步是 `registry.canView(record, from)` —— private 成员只放行 `owner`。
- * 运行期没有自己的 principal：`system` 会被 `isHumanPrincipal` 认成人类（0.55 的硬错误闸
- * 会被它自动解开，正是那次事故的形状），`human` 同理，都不能借。于是按两档试：
- * - 自己（`record.id`）：最诚实的来源（成员自己的作业回报自己），且不是 human principal，
- *   不碰硬错误闸、不受停机 fence 影响；team 可见的成员都放行。
- * - 归属者（`record.owner`）：private 成员唯一放行的 principal，兜 private 的底。
- * 两档都不行就返回 false 交给 hook，并留一条 warn 证据。
- * 要一个真正的运行期身份，需要 `packages/agent` 把 `AdmitInput.origin` 的闭集合加一个
- * `bash_job`（并让它像 `ask_answer` 一样跳过 canView）—— 那是另一个包的改动，不在本次范围。
+ * 为什么 `from` 是「成员自己」，而且能投进 private 成员：
+ * `admit` 第 2 步是 `registry.canView(record, from)` —— private 成员只放行 `owner`，
+ * 而运行期**没有自己的 principal**：`system` / `human` 会被 `isHumanPrincipal` 认成人类，
+ * 顺手解开 0.55 的硬错误闸（正是那次事故的形状），一个都不能借。
+ * 0.55 的做法是给 `AdmitInput.origin` 加一个 `bash_job`（与 `ask_answer` 同级）：
+ * **跳过 canView**（这不是「谁能驱动这个成员」，而是它自己的作业回报它自己），
+ * 但**不是人类**（不落 `unblockBodies`、不受停机 fence 的人类分支约束），
+ * 消息照常进目标 body 的 inbox / mailbox、照常走预算闸（自投递也可能成环，闸要留）。
+ * 于是 `from` 可以用真正的运行期身份 —— 起这条作业的那个成员 —— 不再借归属者。
  */
 
 import type { AgentService } from '../packages/agent/src/index';
@@ -90,59 +89,52 @@ async function deliver(
   const member = await deps.service.identify(completion.sessionId);
   if (member === undefined) return false;
 
-  const senders: string[] = [member.id];
-  if (member.owner !== undefined && member.owner !== member.id) senders.push(member.owner);
-
-  for (const from of senders) {
-    try {
-      deps.logger?.info('agent.bash_job.delivering', {
-        job_id: completion.jobId,
-        session_id: completion.sessionId,
-        from,
-        waited_ms: Date.now() - startedAt,
-      });
-      const result = await deps.service.admit({
-        content: completion.content,
-        agent_id: member.id,
-        session_id: completion.sessionId,
-        from,
-        channel: 'direct',
-      });
-      deps.logger?.info('agent.bash_job.delivered', {
-        job_id: completion.jobId,
-        session_id: completion.sessionId,
-        agent_id: member.id,
-        from,
-        run_id: result.run_id,
-        status: result.status,
-        exit_code: completion.exitCode,
-        timed_out: completion.timedOut,
-        elapsed_ms: completion.elapsedMs,
-        waited_ms: Date.now() - startedAt,
-      });
-      return true;
-    } catch (error) {
-      const code = errorCodeOf(error);
-      if (code === 'member_not_visible') continue;
-      deps.logger?.warn('agent.bash_job.delivery_failed', {
-        job_id: completion.jobId,
-        session_id: completion.sessionId,
-        from,
-        code,
-        waited_ms: Date.now() - startedAt,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    }
+  // `from` = 真正起这条作业的那个成员（它就是这条会话的持有者）：
+  // 「它自己的后台作业回报它自己」。不借 `human` / `system`（那会被 isHumanPrincipal
+  // 认成人类，顺手解开 0.55 的硬错误闸）；也不借归属者 —— 有了 `origin: 'bash_job'`
+  // 之后 admit 会跳过 canView，所以不需要谁来「代表」它。
+  const from = member.id;
+  try {
+    deps.logger?.info('agent.bash_job.delivering', {
+      job_id: completion.jobId,
+      session_id: completion.sessionId,
+      from,
+      waited_ms: Date.now() - startedAt,
+    });
+    const result = await deps.service.admit({
+      content: completion.content,
+      agent_id: member.id,
+      session_id: completion.sessionId,
+      from,
+      channel: 'direct',
+      origin: 'bash_job',
+    });
+    deps.logger?.info('agent.bash_job.delivered', {
+      job_id: completion.jobId,
+      session_id: completion.sessionId,
+      agent_id: member.id,
+      from,
+      run_id: result.run_id,
+      status: result.status,
+      exit_code: completion.exitCode,
+      timed_out: completion.timedOut,
+      elapsed_ms: completion.elapsedMs,
+      waited_ms: Date.now() - startedAt,
+    });
+    return true;
+  } catch (error) {
+    // 一次投递、一次判定：不换发送者重试（重试 = 可能出现第二条投递）。
+    // 失败就返回 false 交给插件侧的 notice hook 兜底（结果不丢，只是退回「等下一次 run」）。
+    deps.logger?.warn('agent.bash_job.delivery_failed', {
+      job_id: completion.jobId,
+      session_id: completion.sessionId,
+      from,
+      code: errorCodeOf(error),
+      waited_ms: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
   }
-  deps.logger?.warn('agent.bash_job.delivery_failed', {
-    job_id: completion.jobId,
-    session_id: completion.sessionId,
-    from: senders.join(','),
-    code: 'member_not_visible',
-    waited_ms: Date.now() - startedAt,
-  });
-  return false;
 }
 
 /** `AgentError.code`（不 import 类：只读一个字符串字段，避免把错误类型绑进装配层）。 */

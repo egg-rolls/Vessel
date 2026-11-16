@@ -257,12 +257,15 @@ export interface AgentMessage {
    */
   from_name?: string;
   /**
-   * 0.52：这条投递的来路（内存内元数据，不落 snapshot、不进 wire）。
+   * 0.55：这条投递的来路（内存内元数据，不落 snapshot、不进 wire）。
    *
-   * `ask_answer` = 人类在待批页回答了本成员发的 async `ask`；执行内核据此把
-   * core `Message.name` 写成 `ask:answer`，Web 渲染成「待批答复」卡而不是用户气泡。
+   * - `ask_answer` = 人类在待批页回答了本成员发的 async `ask`；执行内核据此把
+   *   core `Message.name` 写成 `ask:answer`，Web 渲染成「待批答复」卡而不是用户气泡。
+   * - `bash_job` = 该成员自己起的后台 bash 作业跑完了，运行时把结果投回同一个成员
+   *   （见 `src/bash-job-delivery.ts`）。它不是「谁说的话」，所以不写 `input_name`：
+   *   正文自带 `[runtime] bash job …` 前缀，渲染与普通成员消息一致即可。
    */
-  origin?: 'ask_answer';
+  origin?: 'ask_answer' | 'bash_job';
   /**
    * 这条投递在会话里应写成的 `Message.name`（内存内元数据，不落 snapshot）。
    *
@@ -807,12 +810,17 @@ export interface AdmitInput {
   /**
    * 0.52（仅内部装配，不暴露为 RPC）：这条投递的来路，决定它在会话里的身份。
    *
-   * `ask_answer` = 人类在待批页回答的 async `ask`：答案必须能投进**提问的成员**
-   * （成员自己发的请求 + 人给的答案），因此跳过 `canView` 的可见性闸门（那里判定的是
-   * 「谁可以驱动这个成员」，不是「它自己提的问题能不能被回答」）；并让执行内核把它
-   * 标成 `ask:answer`（Web 渲染成「待批答复」卡，而不是用户气泡）。
+   * - `ask_answer` = 人类在待批页回答的 async `ask`：答案必须能投进**提问的成员**
+   *   （成员自己发的请求 + 人给的答案），因此跳过 `canView` 的可见性闸门（那里判定的是
+   *   「谁可以驱动这个成员」，不是「它自己提的问题能不能被回答」）；并让执行内核把它
+   *   标成 `ask:answer`（Web 渲染成「待批答复」卡，而不是用户气泡）。
+   * - `bash_job`（0.55）= 该成员自己起的后台 bash 作业跑完了，运行时把结果投回它自己：
+   *   同样跳过 `canView`（这不是「谁能驱动它」，而是「它自己的作业回报它自己」，
+   *   private 成员否则永远收不到）。**它仍然不是人类**：不落 `unblockBodies`（0.55 硬
+   *   错误闸不许被一次作业回报解开）、不受停机 fence 的「人类」分支约束、也照常走预算
+   *   闸（自投递同样可能成环，闸要留）。消息照常进目标 body 的 inbox / mailbox。
    */
-  origin?: 'ask_answer';
+  origin?: 'ask_answer' | 'bash_job';
   /**
    * 0.53（仅内部装配，不暴露为 RPC）：**复用这条消息的 id**（启动恢复用）。
    *
