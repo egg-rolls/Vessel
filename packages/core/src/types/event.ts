@@ -353,6 +353,7 @@ export interface SessionIndexPatch {
   status?: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
   started_at?: number;
   updated_at?: number;
+  /** 只是提示：写入取 `max(patch, 日志自报, 已有值)`，外来 seq 空间（旧日志/`RunJournal`）只会少报 */
   event_count?: number;
   derived_upto_seq?: number;
 }

@@ -4092,9 +4092,6 @@ export class ExecutionUnit {
   private async updateSessionIndex(sessionState: SessionState): Promise<void> {
     if (!this.eventLog?.updateIndex) return;
     await this.flushJournalWrites();
-    const cursor = await (
-      this.activeJournal ?? this.transientJournal('manual', sessionState.session_id)
-    ).currentSeq(sessionState.session_id);
     let stored: SessionState | null = null;
     if (this.session) {
       try {
@@ -4114,7 +4111,9 @@ export class ExecutionUnit {
       preview: sessionState.preview ?? stored?.preview ?? derived.preview,
       started_at: sessionState.created_at,
       updated_at: sessionState.updated_at,
-      ...(cursor !== undefined ? { event_count: cursor, derived_upto_seq: cursor } : {}),
+      // 两个计数**不从这里给**：`RunJournal.currentSeq()` 是旧日志（`events.ndjson`）的行数，
+      // 在双写会话里它是**另一个 seq 空间**（实测 4115 vs 时间线 195382）。日志实现自己知道
+      // 「落盘到哪」（时间线 `lastSeq()` / 旧写者 `persistedSeq`），索引的唯一口径就在那里取。
     });
   }
 

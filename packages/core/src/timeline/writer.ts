@@ -60,7 +60,7 @@ import { atomicWrite } from '../session/atomic-write.js';
 import { type ChunkBlockSeal, ChunkBlockStore, isTransientChunkEvent } from './blocks.js';
 import { assertTimelineWritable } from './freeze.js';
 import { HoleRegistry, type HoleRetirementResult } from './holes.js';
-import { buildIndex, TimelineIndexBuilder, writeIndexSnapshot } from './index.js';
+import { TimelineIndexBuilder, writeIndexSnapshot } from './index.js';
 import {
   BLOCK_MAX_BYTES,
   CHUNK_FLUSH_LEAD_MS,
@@ -453,14 +453,6 @@ export class TimelineWriter {
    */
   archive(): Promise<ArchiveResult> {
     return this.enqueue(() => this.archiveNow());
-  }
-
-  /** 从磁盘全量重建索引并写回（自证判据 3：两次重建字节相同）。 */
-  async rebuildIndex(): Promise<void> {
-    await this.flush();
-    const records = await readTimelineEvents(this.sessionDir);
-    const snapshot = buildIndex(records, this.holes.list());
-    await writeIndexSnapshot(this.sessionDir, snapshot);
   }
 
   /**

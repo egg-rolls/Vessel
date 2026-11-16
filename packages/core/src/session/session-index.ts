@@ -40,9 +40,15 @@ export interface SessionLogIndex {
    */
   completed_at?: number;
   updated_at: number;
-  /** 已落盘事件数（= 最后 seq；seq 从 1 连续递增） */
+  /**
+   * **会话事实源的最后 seq**（时间线时代 = `timeline.idx/session.idx` 的 `last_seq`），
+   * **不是事件条数**：chunk 也占 seq（长 run 里可以是事实行的几十倍），拿它数条数会少报
+   * 一个数量级。旧口径写的是 `events.ndjson` 行数 —— 双写会话里那是**另一个 seq 空间**
+   * （实测 4133 vs 195979）。现在**只增不减**：多写者各报各的空间时取最大（见
+   * `writeSessionIndex`），少报的被兜住、多报的不会发生。
+   */
   event_count: number;
-  /** 元数据派生覆盖到的 seq；与 event_count 同步 */
+  /** 落盘水位（与 `event_count` 同源同值；「写侧不宣布投影覆盖」，ADR-105 D2） */
   derived_upto_seq: number;
   /** 显式标注：`sessions/<id>.json` 中的 messages 只是投影缓存 */
   messages_cached: true;
@@ -102,6 +108,11 @@ export async function readSessionIndex(
  *
  * @param patch 调用方的合并意图
  * @param counts 调用方拿到的「已落盘到哪」（缺省字段用它兜底）
+ *
+ * **两个计数只增不减**（`Math.max`）：`event_count` / `derived_upto_seq` 的唯一口径是「事实源的
+ * 最后 seq」，而调用方常常只拿得到**别的 seq 空间**的游标（旧日志行数、会话壳的
+ * `derived_upto_seq`、`RunJournal.currentSeq()`）——那些数只会**少报**，取最大就让索引永远
+ * 不会被一个外来游标按下去。反过来不会发生：没有任何调用方能报出比事实源更大的 seq。
  */
 export async function writeSessionIndex(
   sessionsDir: string,
@@ -115,6 +126,12 @@ export async function writeSessionIndex(
   const status = patch.status ?? base?.status;
   const updatedAt = patch.updated_at ?? Date.now();
   const persisted = counts.event_count ?? 0;
+  const eventCount = Math.max(patch.event_count ?? 0, persisted, base?.event_count ?? 0);
+  const derivedUpto = Math.max(
+    patch.derived_upto_seq ?? 0,
+    counts.derived_upto_seq ?? persisted,
+    base?.derived_upto_seq ?? 0,
+  );
   const next: SessionLogIndex = {
     v: 1,
     session_id: sessionId,
@@ -123,8 +140,8 @@ export async function writeSessionIndex(
     ...(base?.status !== undefined ? { status: base.status } : {}),
     ...(base?.started_at !== undefined ? { started_at: base.started_at } : {}),
     updated_at: updatedAt,
-    event_count: patch.event_count ?? persisted,
-    derived_upto_seq: patch.derived_upto_seq ?? counts.derived_upto_seq ?? persisted,
+    event_count: eventCount,
+    derived_upto_seq: derivedUpto,
     messages_cached: true,
     ...(patch.title !== undefined ? { title: patch.title } : {}),
     ...(patch.preview !== undefined ? { preview: patch.preview } : {}),
