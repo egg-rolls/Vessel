@@ -32,7 +32,6 @@ import {
   type RefEvent,
   refEventFromRaw,
   resolveDataDir,
-  TIMELINE_ONLY_EVENT_TYPES,
 } from './timeline-reference';
 
 /**
@@ -284,8 +283,9 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const dataDir = resolveDataDir(args.dataDir);
   console.log(`data-dir: ${dataDir}  (default: ${DEFAULT_DATA_DIR})`);
-  console.log(`timeline-only types (旧源没有、timeline 会有): ${TIMELINE_ONLY_EVENT_TYPES.length}`);
-  for (const gap of TIMELINE_ONLY_EVENT_TYPES) console.log(`  - ${gap.type}`);
+  // 0.54 stop-write：`TIMELINE_ONLY_EVENT_TYPES` 白名单已删除（两份源并存结束）——
+  // 只剩一条判据：chunk 家族。这里报的是它，不是一张名单。
+  console.log('timeline-only predicate: chunk 家族（llm.stream.chunk / *.llm.stream.chunk）');
   console.log('');
 
   const scans = await scanSessions(dataDir);

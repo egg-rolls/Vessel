@@ -24,8 +24,8 @@
  * 当成现值。新 → 旧是唯一单调可靠的顺序；`source` 告诉你最后用了哪个字段。
  *
  * 为什么 `context.pressure` / `context.changed` 在真实数据里几乎永远不命中：
- * `context.changed` **本来就不落盘**（`packages/core/src/runtime/run-journal.ts` 的
- * `NON_PERSISTED_EVENT_TYPES`，ADR-098 C1：派生快照，落盘等于同一事实两份），
+ * `context.changed` **本来就不落盘**（`packages/core/src/timeline/types.ts` 的
+ * `isNonFactEventType`，ADR-098 C1：派生快照，落盘等于同一事实两份），
  * `context.pressure` 只在 ≥90% 水位才发。落盘上稳定存在的是后两条：
  *
  * - `estimated_tokens`：`execution-unit.ts` 的 `persistData` 里存的**就是**
