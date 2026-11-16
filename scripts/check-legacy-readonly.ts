@@ -793,35 +793,6 @@ const READ_ALLOWLIST: readonly AllowEntry[] = [
       'usage 插件只读会话日志（`SESSION_LOG` 常量仅用于 readdir/stat/读），插件不能 import core 内部常量',
     expires_in: '0.55.0',
   },
-  {
-    file: 'src/bootstrap.ts',
-    family: 'events',
-    token: 'sessionEventsFilePath',
-    reason:
-      '装配层把只读尾窗探针的路径交给 `contextUsage` / `systemContext` / `sessionEvents`（`eventsFile` 回调，只读）',
-    expires_in: '0.55.0',
-  },
-  {
-    file: 'src/bootstrap.ts',
-    family: 'events',
-    token: 'sessionEventsFilePath',
-    reason: '同上（import 语句也算引用，避免名字被搬走后门禁失明）',
-    expires_in: '0.55.0',
-  },
-  {
-    file: 'src/cli.ts',
-    family: 'events',
-    token: 'sessionEventsFilePath',
-    reason: '装配层第二条入口（daemon / cli）：同一批只读探针的 `eventsFile` 回调',
-    expires_in: '0.55.0',
-  },
-  {
-    file: 'src/cli.ts',
-    family: 'events',
-    token: 'sessionEventsFilePath',
-    reason: '同上（import 语句）',
-    expires_in: '0.55.0',
-  },
   // ── 迁移工具（`vessel session migrate`）：**离线读**旧日志、**只写**时间线 ──
   //
   // 为什么这些提及不该被当成「旧链路还活着」：迁移器是**唯一**被允许读 `events.ndjson`
