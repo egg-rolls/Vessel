@@ -195,6 +195,17 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     }
   });
 
+  /**
+   * 时间线 epoch 的**显式结束标记**（0.55，能力位 `timeline.epoch-end`）：一趟发完了。
+   *
+   * 这是删掉「400ms 没新帧 = 这趟发完了」那张空闲猜测之后的**主**判据（次判据是订阅
+   * `res` 已回，见 `SubscriptionController#run`）。整趟发完才发 ⇒ 这里可以按四条硬校验
+   * 核对声明；`has_more` 直接决定续不续拉。
+   */
+  const offEpochEnd = client.onEpochEnd((end) => {
+    eventStore.endTimelineEpochPass(end);
+  });
+
   const offHello = client.onHello((info) => {
     // 订阅 epoch：服务端每次成功 subscribe 都先发 hello；它只重置本地事件库，
     // 不 bump 连接 epoch（否则切路由会无谓重拉 session / team 详情）。
@@ -224,6 +235,11 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     // 可见）：① 记成缺口（UI 污点条 + console，带 expected/received）；② 重拉那段区间；
     // ③ 页面快照与 pending 交互照旧重建。**不**退游标 —— 旧行为 `truncateAfter(to_seq)`
     // 会把已经收到的更新内容截掉（刷新后尤其致命）。
+    //
+    // **P1 #4（`PLAN-0.55-backlog`）待决标记 —— 0.55 这一轮不删**：这一段与
+    // `timeline_source` 帧字段、`consumeHello` 的 legacy 分支、`subscribeOnce` 退回 `since`
+    // 的那一支**必须同一个 commit 删**（gap 帧只由 legacy epoch 发）。生产方在
+    // `packages/serve/**`，不在本单边界内，理由与顺序见 `types/protocol.ts#HelloInfo`。
     const report = eventStore.reportTimelineGap({
       from_seq: gap.from_seq,
       to_seq: gap.to_seq,
@@ -274,6 +290,7 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     subscription.onDisconnect();
     offEvent();
     offHello();
+    offEpochEnd();
     offGap();
     offState();
     offClose();

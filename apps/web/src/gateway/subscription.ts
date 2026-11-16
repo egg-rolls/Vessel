@@ -213,20 +213,18 @@ export class SubscriptionController {
     private readonly client: GatewayClient,
     private readonly eventStore: EventStore,
   ) {
-    // 续拉循环的实时流那一半：本趟 epoch 记完，若服务端声明区间短于应到右端
-    // （每趟 ≤ 2000 条导致的），立刻按 `after_timeline_seq = 本趟末 seq` 再订一次。
-    this.eventStore.setEpochEndHook((header) => {
-      if (header.end_seq >= this.epochTarget) {
-        this.epochStalls = 0;
-        return;
-      }
-      // 「这一趟没发完」⇒ 按 `after_timeline_seq = 实收末 seq` 续订一次。
-      // 但**连续两趟没有任何进展**就停手：再订只会得到同一条空区间（缺口已由 store 报）。
-      this.epochStalls =
-        this.eventStore.currentSeq > this.epochSubscribeFrom ? 0 : this.epochStalls + 1;
-      if (this.epochStalls >= 2) return;
+    // 续拉循环的实时流那一半：本趟 epoch 收尾（`timeline-epoch-end` 帧）后，若服务端说
+    // 后面还有可读的 / 或本趟末 seq 还没到应到右端（每趟 ≤ 2000 条导致的），立刻按
+    // `after_timeline_seq = 游标` 再订一次。
+    //
+    // 0.55：结趟的唯一判据是这条帧（不再有 400ms 空闲猜测）。它可能在本轮 `run()` 还在
+    // 等 `res` 时到达 —— 那时 `apply()` 会被 `running !== null` 短路丢掉，所以这里只置一个
+    // 续订意图，由 `run()` 的循环自己接（见 `continuationPending`）。
+    this.eventStore.setEpochEndHook((header, settle) => {
+      if (!this.advanceEpoch(header, settle)) return;
       const scope = this.desired;
       if (scope === null) return;
+      this.continuationPending = true;
       // 清掉幂等短路：同一作用域也要再发一次 `events.subscribe`（新的排他游标）。
       this.appliedKey = null;
       void this.apply(scope);
@@ -239,6 +237,49 @@ export class SubscriptionController {
   private epochSubscribeFrom = 0;
   /** 连续几趟 epoch 没有前进（`>= 2` 就不再续订）。 */
   private epochStalls = 0;
+  /**
+   * 「本趟收尾要求再订一次」的意图。`run()` 之外来的收尾（结束帧 / 定时外的回调）直接
+   * `apply()` 就够；`run()` 内部来的那条（订阅 `res` 已回）会撞上 `running !== null` 的
+   * 幂等短路，所以两个入口都统一置这个标志，由 `run()` 的循环决定是否再跑一轮。
+   */
+  private continuationPending = false;
+  /**
+   * **尾部窗口左端 - 1**（订阅 `since` / `after_timeline_seq` 的下限）。
+   *
+   * 为什么需要它（tail-window 的 (b)）：回填失败（读面超时 / 旧 gateway）时单游标停在
+   * 0，`after_timeline_seq = 0` 会让服务端**从 seq 1 回放**——19 万 seq 的会话首屏就会
+   * 把最老的那一批事件塞进包里（帧数有界，但内容是最老的一段，不是尾部窗口）。
+   * 这里把订阅起点夹到**当前尾部窗口**的左端，与首屏回填同一个预算口径
+   * （`TIMELINE_TAIL_WINDOW_EVENTS`）；代价是回填失败时首屏只有窗口内容 —— 那比
+   * 「显示会话开头」诚实，且滚动到顶仍可往前要（`hasEarlier` 由回填/滚动加载落位）。
+   *
+   * 只在 chat 作用域用；由 `runTimelineBackfill` 每次读游标时重算（0 = 不知道，不夹）。
+   */
+  private tailWindowFloor = 0;
+
+  /**
+   * 本趟收尾之后是否还要再订一次（服务端每趟 ≤ 2000 条，续拉到应到右端为止）。
+   *
+   * 三条出口，判据全部来自**显式事实**：
+   * - 服务端显式说 `has_more: false`（`timeline-epoch-end`）⇒ 到头了，停。**不能**用
+   *   `end_seq < 应到右端` 代替：尾部只剩写者声明的洞时那个比较恒真，续拉会原地打转
+   *   （每趟 0 条、`has_more` 仍为真）；
+   * - 本趟末 seq 已到应到右端 ⇒ 停；
+   * - 连续两趟没有任何进展 ⇒ 停（再订只会得到同一条空区间；缺口已由 store 报）。
+   */
+  private advanceEpoch(header: { end_seq: number }, settle: { hasMore?: boolean }): boolean {
+    if (settle.hasMore === false) {
+      this.epochStalls = 0;
+      return false;
+    }
+    if (header.end_seq >= this.epochTarget) {
+      this.epochStalls = 0;
+      return false;
+    }
+    this.epochStalls =
+      this.eventStore.currentSeq > this.epochSubscribeFrom ? 0 : this.epochStalls + 1;
+    return this.epochStalls < 2;
+  }
 
   /** 路由变化时调用；重复 scope 幂等（同一作用域不重复发请求）。 */
   apply(scope: SubscriptionScope): Promise<void> {
@@ -427,6 +468,10 @@ export class SubscriptionController {
       const target = cursorTarget(cursor);
       report.target = target;
       report.end = this.eventStore.currentSeq;
+      // **订阅起点也要服从同一个预算**（tail-window 的 (b)）：回填失败时单游标停在 0，
+      // 订阅 `after_timeline_seq = 0` 会让服务端从 seq 1 回放最老的一批帧。夹到尾部窗口
+      // 左端 ⇒ 首屏最多只有窗口内容，不会把会话开头当成首屏（见 `tailWindowFloor`）。
+      this.tailWindowFloor = target > 0 ? tailWindowStart(target) - 1 : 0;
       if (this.eventStore.currentSeq > cursor.wal_head) {
         // 游标作废（服务端重启 / 会话被冻结后重开）：从 1 重拉，item 一起作废。
         this.eventStore.truncateAfter(0);
@@ -619,18 +664,25 @@ export class SubscriptionController {
    * （两套编号不许混），而**旧格式会话**按 `after_timeline_seq` 订阅会被
    * `session_frozen_readonly` 拒 —— 那种会话只能走老参数（它的帧带 hub seq，四条校验自动
    * 关掉，见 `consumeHello`）。退回一次就记进 `legacyScopes`，同一作用域不再重试新参数。
+   *
+   * `afterSeq` 是**已经夹过尾部窗口**的起点（见 `tailWindowFloor`）：回填失败时它不等于
+   * 单游标 0，而等于尾部窗口左端 —— 否则服务端会从 seq 1 回放最老的那一批。
    */
   private async subscribeOnce(
     scopeKey: string,
     sessionId: string | undefined,
+    afterSeq: number,
     legacyFilter: SubscriptionFilter,
   ): Promise<void> {
+    // 这一趟从哪个游标出发（`advanceEpoch` 判「有没有前进」要它；旧实现从未赋值，
+    // 于是 stall 保护恒不触发 —— 0.55 一起修掉）。
+    this.epochSubscribeFrom = afterSeq;
     if (sessionId === undefined || !this.legacyScopes.has(scopeKey)) {
       this.pendingHello = 'subscribe';
       try {
         await this.client.request('events.subscribe', {
           session_id: sessionId,
-          after_timeline_seq: this.eventStore.currentSeq,
+          after_timeline_seq: afterSeq,
         });
         return;
       } catch {
@@ -647,6 +699,8 @@ export class SubscriptionController {
     // 先让出一次微任务：保证 `apply` 里的 `this.running = promise` 一定发生在
     // 本次 run 可能同步结束之前。
     await Promise.resolve();
+    // 上一轮遗留的续订意图由**这次** run 覆盖（它本身就是那次续订），先清掉再跑。
+    this.continuationPending = false;
     for (;;) {
       const scope = this.desired;
       if (scope === null) return;
@@ -685,11 +739,18 @@ export class SubscriptionController {
         currentSeq: scope.kind === 'chat' ? this.eventStore.currentSeq : baseSeq,
         sessionFilter: this.supportsSessionFilter(),
       });
+      // 时间线订阅的起点 = max(单游标, 尾部窗口左端 - 1)：**回填失败也不从 0 回放**
+      // （tail-window 的 (b)）。旧参数那条（`since`，见 `built.filter`）保持原口径：
+      // 它跑在 hub 环形 seq 空间里，与这里的尾窗口径不是同一套编号。
+      const afterSeq =
+        scope.kind === 'chat'
+          ? Math.max(this.eventStore.currentSeq, this.tailWindowFloor)
+          : this.eventStore.currentSeq;
       this.appliedKey = scopeKey;
       this.clientFilter = built.clientSessionFilter;
       this.pendingHello = 'subscribe';
       try {
-        await this.subscribeOnce(scopeKey, sessionScoped, built.filter);
+        await this.subscribeOnce(scopeKey, sessionScoped, afterSeq, built.filter);
         // 新 gateway 的订阅级 hello 在 res 之前到达，`consumeHello` 已消费；
         // 旧 gateway 不发订阅级 hello，这里清掉在途标记，避免它吞掉下一次
         // 连接级 hello（会导致重连后漏 bump epoch / 漏刷新详情）。
@@ -699,6 +760,21 @@ export class SubscriptionController {
         // 重连后的连接级 hello 会重新 apply；期间订阅退回默认过滤。
         this.appliedKey = null;
         if (this.pendingHello === 'subscribe') this.pendingHello = null;
+      }
+      // ③ 本趟收尾（`res` 已回）：服务端**发自 0.55 就有** `timeline-epoch-end` 帧，
+      //    上面已经结过趟；老服务端（0.54 不发结束帧）/ 服务端撞背压提前停时，`res`
+      //    本身就是「这一趟不会再发帧了」的显式事实 —— 按连续前缀收口，需要续拉就在本轮
+      //    循环里继续（`run()` 在跑时 `apply()` 会被幂等短路丢掉，所以不能靠它）。
+      const settled = this.eventStore.settleTimelineEpochIfOpen();
+      if (settled !== undefined && this.advanceEpoch(settled, {})) {
+        this.appliedKey = null;
+        continue;
+      }
+      if (this.continuationPending) {
+        // 结束帧在 `res` 之前就到了（0.55 的正常顺序），钩子只置了意图。
+        this.continuationPending = false;
+        this.appliedKey = null;
+        continue;
       }
       // 等待期间路由又变了：用新 scope 再跑一轮。
       if (this.desired === scope) return;

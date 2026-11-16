@@ -52,15 +52,28 @@ export interface NodeInfo {
   };
 }
 
-/** hello 帧的时间线段（0.54 B1，ADR-105 §6；只有 `timeline_source === 'timeline'` 时给）。 */
+/**
+ * hello 帧的时间线段（0.54 B1，ADR-105 §6；只有 `timeline_source === 'timeline'` 时给）。
+ *
+ * **这是客户端的归一化形状，不是线上形状**：线上 `hello` 把这几个键**平铺**在帧上
+ * （`packages/serve/src/gateway/frames.ts#helloFrame` 的 spread），映射发生在
+ * `node/protocol.ts#handleFrame`（wire → 这里）**唯一一处**。为什么归一化：下游
+ * （`readTimelineHelloSegment` / 四条校验 / `EventStore#beginTimelineEpoch`）只认一个对象，
+ * 不必到处判「帧上有没有这几个键」。
+ */
 export interface HelloTimelineSegment {
   start_seq: number;
   end_seq: number;
   count: number;
   timeline_head: number;
   wal_head: number;
-  /** 一定被发布过（`published_head <= wal_head`）：`(published_head, wal_head]` 允许不被推送。 */
-  published_head: number;
+  /**
+   * 一定被发布过（`published_head <= wal_head`）：`(published_head, wal_head]` 允许不被推送。
+   *
+   * 可选：0.54 早期服务端不发这个键，缺省语义 = 全部已发布（`= wal_head`），与 core 自己
+   * `open()` 的口径一致（`timeline-protocol.ts#cursorTarget` 同一条规则）。
+   */
+  published_head?: number;
   holes: { from_seq: number; to_seq: number }[];
   tainted: boolean;
   reset?: true;
@@ -77,9 +90,59 @@ export interface HelloInfo {
   /**
    * 0.54 B1：本 epoch 的读源。`'timeline'` ⇒ 帧带 `timeline_seq`、且 `timeline` 段一定在；
    * `'legacy'`（回退期 / 旧订阅 / 旧服务端不发这个键）⇒ 帧带 hub seq，老行为。
+   *
+   * **P1 #4（`PLAN-0.55-backlog`）待决标记 —— 0.55 这一轮不删**：这个帧字段与三支伴生
+   * （`subscription.consumeHello` 的 legacy 分支 / `subscription.subscribeOnce` 退回
+   * `since` 的那一支 / `connection-handlers.offGap` 的 gap 帧处理）绑在一起，**必须同一个
+   * commit 删**。本轮做不到，判据有三条：
+   * 1. 生产方在 `packages/serve/**`（`frames.ts` 的 `timeline_source` 字段 + 两个 hello
+   *    构造点），不在本单边界内 —— 单删客户端只会让旧服务端的 hello 变成「形状不全」，
+   *    老 epoch 的重放帧被 `truncateAfter(from_seq - 1)` 之外的路径丢掉；
+   * 2. 老格式会话（冻结只读）仍会走 `session_frozen_readonly` → `legacyScopes` 那条退回
+   *    路径，它靠 `'legacy'` 判定「不要做四条校验、游标退到 `from_seq - 1`」；
+   * 3. 0.55 的 `timeline-epoch-end` 只在**时间线** epoch 发，客户端「可以依赖结束帧」的
+   *    判据就是这里（`timeline_source === 'timeline'` ⇒ `hello.timeline` 在 ⇒ 有 epoch）。
+   * 删的顺序应该是：先让服务端停发这个键、客户端改吃「`hello.timeline` 在不在」的形状
+   * 判据，再一起删掉三支伴生。
+   *
+   * **现在删会怎么坏**（两步都是真的，不是理论）：① 老格式会话的重放帧会被当成时间线帧做四条例校验
+   * （每帧一条假缺口），且游标不再 `truncateAfter(from_seq - 1)` ⇒ 重放后游标停在远处、后续帧全被判重丢弃；
+   * ② 新会话的 hello 会被当成老 epoch ⇒ `timeline-epoch-end` 被静默忽略、`has_more` 失效，
+   * 续拉退回「订阅 `res` + 连续前缀」那条单腿（0.54 服务端的处境内核，能用但不是主判据）。
    */
   timeline_source?: 'timeline' | 'legacy';
   timeline?: HelloTimelineSegment;
+}
+
+/**
+ * 时间线 epoch 的**显式结束标记**（0.55，additive 新 kind；能力位 `timeline.epoch-end`）。
+ *
+ * 服务端把本趟声明区间（`hello.start_seq..end_seq`）的帧发完后补发这一帧，位置是最后一帧
+ * 之后、订阅 `res` 之前。客户端据此结趟 —— 0.54 的「400ms 没新帧 = 发完了」那张空闲猜测
+ * 已删除（见 `state/event-store.ts` 里 `EPOCH_IDLE_MS` 的位置）。
+ *
+ * 三条判据（都是契约，不是措辞）：
+ * - **只在时间线 epoch 发**：老 epoch 的环形 seq 没有「本趟区间」的声明，发结束标记等于
+ *   凭空造第二个事实源；
+ * - **只在整趟发完时发**：提前停（连接坏 / 撞背压硬阈值）不发 —— 那一刻「发完了」不是事实，
+ *   客户端会从订阅 `res` 那条显式事实按连续前缀收口续拉；
+ * - `count` = 本趟**实发**条数（整趟发完 ⇒ 与 `hello.count` 必然相等，留它是让客户端核对）；
+ *   `end_seq` = 本趟已发末条（零条已发时 = `start_seq - 1`）；`has_more` = 后面还有**可读**的
+ *   没发（写者声明的洞不算「还有」，否则客户端的续拉会原地打转）。
+ *
+ * 老客户端不受影响：未知 `kind` 在 `node/protocol.ts#handleFrame` 的 `switch` 里落
+ * `default: return`（静默忽略），JSON 解析还包着 try/catch ⇒ 收到这一帧与收到空行等价。
+ */
+export interface TimelineEpochEndFrame {
+  kind: 'timeline-epoch-end';
+  /** 本 epoch 的会话（时间线订阅必有；缺省则不出现在线上）。 */
+  session_id?: string;
+  /** 本趟已发的最后一条 seq（零条已发时 = `start_seq - 1`）。 */
+  end_seq: number;
+  /** 本趟**实发**的事件帧条数（整趟发完 ⇒ 等于 `hello.count`）。 */
+  count: number;
+  /** 后面还有**可读**的没发（洞不算「还有」）。 */
+  has_more: boolean;
 }
 
 /** RPC 响应信封（0.5） */
@@ -281,7 +344,23 @@ export type ServerFrame =
       kind: 'hello';
       node_id: string;
       ts: number;
-    } & HelloInfo & { timeline_source?: 'timeline' | 'legacy'; timeline?: HelloTimelineSegment })
+    } & HelloInfo & {
+        timeline_source?: 'timeline' | 'legacy';
+        /**
+         * 0.54 B1 时间线段：**线上是平铺的**（不是嵌套对象），见 `HelloTimelineSegment` 的注释；
+         * 只有 `timeline_source === 'timeline'` 时才出现，形状见
+         * `packages/serve/src/protocol.ts` 的 hello 分支。
+         */
+        start_seq?: number;
+        end_seq?: number;
+        count?: number;
+        timeline_head?: number;
+        wal_head?: number;
+        published_head?: number;
+        holes?: { from_seq: number; to_seq: number }[];
+        tainted?: boolean;
+        reset?: boolean;
+      })
   | {
       v: 1;
       kind: 'event';
@@ -292,6 +371,12 @@ export type ServerFrame =
       event: RunEvent;
     }
   | ({ v: 1; kind: 'gap'; node_id: string; ts: number } & Omit<GapFrame, 'kind'>)
+  /** 0.55：时间线 epoch 的显式结束标记（能力位 `timeline.epoch-end`；未知 kind 的老客户端静默忽略）。 */
+  | ({
+      v: 1;
+      node_id: string;
+      ts: number;
+    } & TimelineEpochEndFrame)
   | { v: 1; kind: 'res'; node_id: string; ts: number; id: string; ok: true; result: unknown }
   | {
       v: 1;

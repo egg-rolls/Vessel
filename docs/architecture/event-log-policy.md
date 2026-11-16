@@ -92,3 +92,46 @@ ADR-105 D4 记的是「不做迁移、只读冻结到 0.55.0」，本文按迁�
 - 历史回放的 `llm.request` 行只有 `tools_count` 可用于展示（`messages` 已被裁掉），`EventRow` 优先读
   `message_count`、缺失时不渲染 msgs 数字，因此不会崩。
 
+<a id="open-tail-only"></a>
+
+## 7. 打开会话：只读尾部
+
+写者 `open()`（`packages/core/src/timeline/writer.ts#initialize`）是**启动路径**：进程启动、会话打开、
+idle 压缩、adopt 每一次都付一遍。0.55 之前它整份读 `wal.log` + 归档副本 + 全部块文件再逐帧解析 ——
+19/20 万 seq 的会话（`d813eaea`）实测 `wal.log` 6.9 MB + 归档 6.9 MB + 12,900 个块 ≈ 88 MB ≈ 340 MB 解码，
+**中位 4484 ms**（冷缓存首次 8531 ms）。第十一条（增量、按需、有界）禁止启动路径出现 O(会话大小)。
+
+现在 `initialize()` 是两条路径，产出**同一份状态**（`next_seq` / 两个 head / `published` / 洞 / 污点 /
+索引 / 下一个块号）：
+
+| 路径 | 何时 | 读什么 |
+|---|---|---|
+| 增量（缺省，`tryIncrementalRecovery`） | 每次 open | `timeline.idx` 打底（`loadIndexSnapshot`，32 MiB 预算）+ `wal.log` / 归档 / `timeline.manifest` **尾窗**（`wal.readNdjsonTail`，首窗 256 KiB、上限 4 MiB，可从尾部展开）+ 只解**最后一个块** + `holes.ndjson` 全读 |
+| 全量（`fullRecovery`） | 增量路径任何一条自洽检查不成立 | 老路径一条判定不改；它同时是**显式修复入口** |
+
+同一份盘上状态、before/after 各 3 次交错跑：**4484 ms → 87.6 ms**（中位，约 −98%，51×），
+`heads` 逐字段一致（`wal_head` / `timeline_head` / `published_head` / `holes` / `tainted`）。
+
+**判据没有放松**：索引算术（`first_seq = 1` 且 `count = last_seq`，`count` 是不同 seq 的个数）
++ 尾窗实测 `tailMax >= last_seq` 且 `(last_seq, tailMax]` 逐号齐全 ⇒ 记录集恰好是 `[1..tailMax]`；
+恢复洞用 `findGaps` 同一个判据的区间版，`knownMax` 仍然含 `manifest.archivedTo` ——
+「manifest 说已归档、盘上却读不回来」照样声明成洞、照样顶 `wal_head`。
+坏行 / 坏帧 / manifest 说写完但帧缺 / 撕裂尾帧**一个字没省**：尾窗里见到就整份退回、让全量路径登记。
+
+**语义变更（写在这里，别当 bug 追）**：**历史中段**（早已封好的老块、更早的 `wal.log` 行）的**外部**损坏
+不再每次 open 重扫 —— 那是修复路径的职责，不是启动路径的职责。判据与代价：
+
+- 症状：某次刷新 / 重启后更早的一段读不回来，而 `open()` 没报错、`heads` 也正常（因为尾窗是好的）。
+- 显式修复路径：**删 `<sessionDir>/timeline.idx/` 整个目录再 open** = 整份重读 + 重建索引 + 重新声明洞
+  （索引本就可重建，ADR-105 §5 的不变式「删掉索引 ⇒ 所有读 RPC 返回逐字节相同的结果，只有耗时变长」）。
+  运维步骤见 [operations/GATEWAY.md §8](../operations/GATEWAY.md)。
+- 尾部损坏的判定**一个字节都没退**：尾窗逐条校验、撕裂残行照旧截断、缺帧照旧退全量。
+
+**读放大（同一台机器实测，`sessions.events` 的 `since_seq` 与 `limit` 见回报）：** 单次 `sessions.events` 仍是
+「整份读时间线」的成本（19/20 万 seq 的会话 `limit=100` ≈ 17.5 s、`limit=500` ≈ 31.6–35.3 s），与 `since` 落在
+哪一段几乎无关 —— 因为读面一次整份读，`limit` 只决定截多少条回来。所以**读放大的直接后果是超时，不是缺数据**：
+客户端的 `TIMELINE_REQUEST_TIMEOUT_MS = 8 s` / 订阅 `REQUEST_TIMEOUT_MS = 30 s` 在这种会话上必然先超时，
+随后 `timeline_gap_reported`（rule 3）与「退回 `since: 0`」都是**超时触发的假缺口**，不是盘上真的少了一段 ——
+排查时先看这一节的口径，别当成写者丢事件。
+
+
