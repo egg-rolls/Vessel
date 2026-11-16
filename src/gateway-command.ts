@@ -669,15 +669,14 @@ export async function stopGateway(
     /** 已收集的状态（restart 停前快照）；缺省自行 collect。 */
     entries?: GatewayStateEntry[];
     /**
-     * 0.55.1：「停平台层时要不要连 node/hub 一起停」。
+     * 0.55.2：「停平台层时要不要连 node/hub 一起停」。
      *
-     * - 缺省（undefined / false）= **全停**：连本机 spawn 的 node/hub 一起停
-     *   （`stop` 的直觉就是「停」）。`gateway stop` 与 `gateway restart` 同语义。
-     * - `true`（`gateway stop --keep-nodes` / `gateway restart --keep-nodes`）=
-     *   **只停平台层**：node/hub 继续跑，留给下一次 `gateway start` 按既有 adopt
-     *   判据接管（平台层热换）。
+     * - 缺省（undefined / true）= **只停平台层**：node/hub 继续跑（它们身上可能跑着会话，
+     *   杀掉不可恢复），留给下一次 `gateway start` 按既有 adopt 判据接管。
+     * - `false`（`--stop-nodes`）= 连本机 spawn/接管、且归属可复核的 node/hub 一起停。
      *
-     * 见 `src/gateway/handoff.ts`。
+     * `stop` 与 `restart` 同口径：破坏性动作要显式。`--no-keep-nodes`（0.55 写法）与
+     * `--keep-nodes`（0.52 写法）都保留为别名。见 `src/gateway/handoff.ts`。
      */
     keepNodes?: boolean;
   } = {},
@@ -705,7 +704,7 @@ export async function stopGateway(
   let failed = false;
   const stateKind = gatewayStateKind(options, context.env);
   // 0.55：缺省 = 只停平台层（node/hub 继续跑）；`--no-keep-nodes` 才是整体关闭。
-  const keepForHandoff = options.keepNodes === true && stateKind === 'platform';
+  const keepForHandoff = options.keepNodes !== false && stateKind === 'platform';
   let keptNodes = 0;
   let keptHubs = 0;
   const stoppedChildren: StoppedChildDetail[] = [];
@@ -959,7 +958,7 @@ async function reportChildLifecycle(options: {
       print(
         ui.info(
           `node ${entry.name}: still running (pid ${record.pid}) — ` +
-            'left alone; stop it with `vessel gateway stop --no-keep-nodes`',
+            'left alone; stop it with `vessel gateway stop --stop-nodes`',
         ),
       );
       continue;
@@ -989,7 +988,7 @@ async function reportChildLifecycle(options: {
     print(
       ui.info(
         `hub: still running (pid ${hub.pid}${hub.url !== undefined ? `, ${hub.url}` : ''}) — ` +
-          'stop it with `vessel gateway stop --no-keep-nodes`',
+          'stop it with `vessel gateway stop --stop-nodes`',
       ),
     );
   }
@@ -997,6 +996,7 @@ async function reportChildLifecycle(options: {
     print(ui.dim('no node/hub was running'));
   } else if (running > 0) {
     print(ui.dim(`gateway stopped; ${running} node/hub process(es) left running`));
+    print(ui.dim('to stop them too: `vessel gateway stop --stop-nodes`'));
   }
 }
 
@@ -1791,6 +1791,7 @@ async function restartDaemonCommand(
 ): Promise<number> {
   const context = await resolveContext(deps);
   const printErr = deps.printErr ?? console.error;
+  const printOut = deps.print ?? console.log;
   // 停前快照：instance/port/host 原样保留（lock-only 也保留 instance）。
   const entries = (await collectStateFor(context, deps)).entries;
   const targets = await resolveGatewayTargets(context.dataDir, command, { entries });
@@ -1799,15 +1800,24 @@ async function restartDaemonCommand(
     return 1;
   }
 
-  // handoff（0.52）：restart 只重启平台层 —— node/hub 保活，由新平台 adopt 接管，
-  // 因此在跑的 run 不受影响。`--no-keep-nodes` 才回到 0.51 的「连 node 一起停」。
+  // 0.55.2：restart 缺省只换平台层 —— node/hub 保活并被新平台 adopt 接管，
+  // 在跑的 run 不受影响（代价：node 仍跑旧代码，命令结尾会打印提示）。
+  // 要连 node 一起冷重启：`--stop-nodes`。
   const stopCode = await stopGateway({
     ...deps,
     selector: command,
     entries,
-    keepNodes: command.keepNodes === true,
+    keepNodes: command.keepNodes !== false,
   });
   if (stopCode !== 0) return stopCode;
+  if (command.keepNodes !== false) {
+    printOut(
+      ui.dim(
+        'node/hub were kept running (still on the old code); ' +
+          'to restart them too: `vessel gateway restart --stop-nodes`',
+      ),
+    );
+  }
 
   if (command.all === true) {
     if (targets.entries.length === 0) return startDaemonCommand({ ...deps });
@@ -2196,10 +2206,18 @@ export async function runPlatformGatewayForeground(
       print,
       printErr,
       timeoutMs: 10_000,
-      // handoff（0.52）：前台 restart 也只重启平台层，node/hub 保活待 adopt。
-      keepNodes: command.keepNodes === true,
+      // 0.55.2：前台 restart 同口径，缺省只换平台层，node/hub 保活待 adopt。
+      keepNodes: command.keepNodes !== false,
     });
     if (stopCode !== 0) return stopCode;
+    if (command.keepNodes !== false) {
+      print(
+        ui.dim(
+          'node/hub were kept running (still on the old code); ' +
+            'to restart them too: `vessel gateway restart --stop-nodes`',
+        ),
+      );
+    }
   }
 
   const portError = printSplitModePortError(
@@ -2559,7 +2577,7 @@ export async function runGatewayCommand(
         selector: command,
         // 0.55：缺省**只停平台层**（node/hub 继续跑，下次 start 走 adopt）；
         // `--no-keep-nodes` 才是整体关闭（连 node/hub 一起停）。
-        keepNodes: command.keepNodes === true,
+        keepNodes: command.keepNodes !== false,
       });
     case 'status':
       return gatewayStatus({ ...deps, json: command.json, rpc: command.rpc, selector: command });

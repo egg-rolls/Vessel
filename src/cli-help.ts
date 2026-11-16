@@ -333,12 +333,12 @@ export function renderGlobalHelp(): string {
     ],
     ['vessel gateway nodes remove <name>', t('help.cmd.gatewayNodesRemove')],
     [
-      'vessel gateway stop [--instance <name>|--port N|--all] [--keep-nodes]',
+      'vessel gateway stop [--instance <name>|--port N|--all] [--stop-nodes]',
       t('help.cmd.gatewayStop'),
     ],
     ['vessel gateway status [--json] [--rpc]', t('help.cmd.gatewayStatus')],
     [
-      'vessel gateway restart [--daemon] [--instance <name>|--all] [--keep-nodes]',
+      'vessel gateway restart [--daemon] [--instance <name>|--all] [--stop-nodes]',
       t('help.cmd.gatewayRestart'),
     ],
     ['vessel gateway reload [--scope config,plugins]', t('help.cmd.gatewayReload')],

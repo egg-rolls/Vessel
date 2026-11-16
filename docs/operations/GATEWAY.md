@@ -88,21 +88,21 @@ vessel gateway uninstall-service
 
 服务管理器托管的是**平台层**。要连 node 一起常驻，给每个 node 单独配常驻
 （`vessel node start --daemon --config …` ＋ 各自的计划任务/unit）。注意：`gateway stop`
-缺省会把本机 spawn 的 node/hub 一起停（见 §4）；要留活用 `--keep-nodes`。
+缺省只停平台层，不会动本机 spawn 的 node/hub（见 §4）；要一起停用 `--stop-nodes`。
 
-## 4. 停止：`stop` vs `stop --keep-nodes`
+## 4. 停止：`stop` vs `stop --stop-nodes`
 
-`stop` 的直觉就是「停」，所以**缺省全停**（平台 + hub + node）。只有平台层热换时才用 `--keep-nodes`。
+**缺省只停平台层，不动 node/hub** —— 它们身上可能跑着会话，杀掉不可恢复。破坏性动作必须显式。
 
 | 命令 | 平台层 | node/hub | 输出 |
 |---|---|---|---|
-| `vessel gateway stop` | 停 | **一起停掉本机 spawn/接管、且归属可复核的** | `stopped node n-a (pid 1234)` / `stopped hub hub (pid 5678)`；停不下来的逐条给原因 |
-| `vessel gateway stop --keep-nodes` | 停 | **不动**（继续跑，下次 start adopt 回来） | `node n-a: still running (pid 1234) — left alone; stop it with …` / `hub: still running (…)` |
-| `vessel gateway restart` | 重启 | 一起冷重启 | 重启后重新 spawn |
-| `vessel gateway restart --keep-nodes` | 重启 | 不动 | 重启后 adopt 回来 |
-| `vessel gateway stop --all` | 停**所有实例**的平台层 | 按上面的缺省（全停） | `--all` 仍是实例选择器，不是「连 node 一起停」的同义词 |
+| `vessel gateway stop` | 停 | **不动**（继续跑，下次 start adopt 回来） | `node n-a: still running (pid 1234) — left alone; stop it with vessel gateway stop --stop-nodes` / `gateway stopped; 2 node/hub process(es) left running` + 一行可复制提示 |
+| `vessel gateway stop --stop-nodes` | 停 | **一起停掉本机 spawn/接管、且归属可复核的** | `stopped node n-a (pid 1234)` / `stopped hub hub (pid 5678)`；停不下来的逐条给原因 |
+| `vessel gateway restart` | 重启 | 不动（新平台 adopt 回来，**仍跑旧代码** —— 命令会打印提示） | 结尾提示：`to restart them too: vessel gateway restart --stop-nodes` |
+| `vessel gateway restart --stop-nodes` | 重启 | 一起冷重启 | 重新 spawn |
+| `vessel gateway stop --all` | 停**所有实例**的平台层 | 按缺省（不动） | `--all` 仍是实例选择器，不是「连 node 一起停」的同义词 |
 
-- `--no-keep-nodes` 保留解析，等价于缺省（0.55 曾把「只停平台层」当缺省，旧脚本不会因此改义）。
+- `--no-keep-nodes`（0.55 写法）与 `--keep-nodes`（0.52 写法）都保留为别名，分别等价于 `--stop-nodes` 与缺省。
 
 - 判别依据仍是归属：pid + `started_at` + `node_id`（node）/ `hub.lock`（hub）三元复核；
   adopt / 外部启动的进程**永远**不在终止名单里。
@@ -131,7 +131,7 @@ vessel gateway uninstall-service
 | 节点 20s 就被判失败（≤0.54） | readiness 上界 20s 在启动关键路径上，慢机器冷启动超过就被判死 | 0.55 起上界 180s 且**不在关键路径**：平台先 ready，慢节点继续等；超时只标该节点 `failed` |
 | `node_identity_mismatch` | 该 `data_dir` 的 `gateway.pid` / `/health` 报告的 `node_id` 与 registry 不一致 | 确认 registry 条目与节点配置 `host.nodeId` 一致；不要手工搬 `data_dir` |
 | `node_unreachable` | `data_dir` 里有活进程但 `/health` 不通过 | 进程卡死：`vessel node stop` 后再 `gateway start`；gateway 不会替你杀它 |
-| `gateway stop --keep-nodes` 后 WebUI 打不开但 node 端口还在 | 这是**设计行为**：只停了平台层，node 继续跑 | 要整体关闭就去掉 `--keep-nodes` |
+| `gateway stop` 后 WebUI 打不开但 node 端口还在 | 这是**设计行为**：缺省只停平台层，node 继续跑 | 要整体关闭加 `--stop-nodes` |
 | `implicit_node_conflict` | 隐式单节点与平台共用 `dataDir` 的 `gateway.pid`/锁，同目录另一个实例在跑 | 停掉那个实例，或改用显式 registry（`gateway nodes add`） |
 
 ## 7. 与 standalone 相关的文件
@@ -139,7 +139,7 @@ vessel gateway uninstall-service
 | 路径 | 归属 | 说明 |
 |---|---|---|
 | `<dataDir>/platform.pid`、`platform-<instance>.lock` | 平台 | 平台实例状态；停止时按 pid+started_at 条件清理 |
-| `<dataDir>/platform-children.json` | 平台 | **只**记录本平台 spawn 的子进程（pid/started_at/data_dir/kind）；缺省全停与失败回滚按它复核归属 |
+| `<dataDir>/platform-children.json` | 平台 | **只**记录本平台 spawn 的子进程（pid/started_at/data_dir/kind）；失败回滚与 `--stop-nodes` 按它复核归属 |
 | `<nodeDataDir>/gateway.pid`、`gateway-default.lock` | node | node 自己的实例状态；`gateway stop` 不删 |
 | `<nodeDataDir>/node.json` | node | 节点身份（`node_id`） |
 | `<hubDataDir>/hub.lock` | hub | Hub 实例状态；adopt 判据 |
