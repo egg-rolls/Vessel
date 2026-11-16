@@ -44,9 +44,9 @@ export interface SessionEventView {
 
 /** `index.json` 里本模块用到的两个数（结构类型，不绑定 core 的索引类）。 */
 export interface SessionEventIndexLike {
-  /** 已落盘事件条数；正常等于最后一个 `seq`。 */
+  /** 最后 seq 口径（chunk 也占 seq），**不是事件条数**。 */
   event_count: number;
-  /** 元数据派生覆盖到的 `seq`。 */
+  /** **落盘水位**：写入侧已落盘到哪个 seq；不代表投影覆盖（ADR-105 D2）。 */
   derived_upto_seq: number;
 }
 
