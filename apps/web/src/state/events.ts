@@ -140,13 +140,18 @@ export interface RunGroup {
    * `run.failed` / `run.cancelled`）折出来的 —— 即客户端没收到那一帧，改用外部
    * 真相收的口。`status` 只表达结论，`reconciled` 表达证据强度。
    *
-   * 两个来源（`RunFold.close` 的 `via`）：
+   * 三个来源（`RunFold.close` 的 `via`）：
    * - `agent-closed`：该会话的 agent 已 `closed`（成员被关 / body 退役后再也不会有
    *   这一 run 的终态帧），run 的真实结局未知 ⇒ 一律 `cancelled`，绝不冒充「正常完成」；
    * - `session-snapshot`：`sessions.get` 的会话快照（`status` / `run_id` /
-   *   `completed_at` / `error`）说这一 run 已是终态，按快照状态收口。
+   *   `completed_at` / `error`）说这一 run 已是终态，按快照状态收口；
+   * - `superseded`：**同一会话里另一个 run 在它最后一条事件之后才起来**（见
+   *   `LiveItemStore#supersedeStaleRuns`）。会话里的 run 是串行的，所以这条只证明
+   *   「它已经结束」，不证明它是怎么结束的 ⇒ 一律 `interrupted`，不冒充完成 / 取消。
+   *   存在的理由：事件流是有界的（尾部窗口 / 选择性回填），一个旧 run 的终态帧可能
+   *   永远进不了本地，而它的后继 run 的帧一定在 —— 那是唯一可核对的「它结束了」证据。
    */
-  reconciled?: 'agent-closed' | 'session-snapshot';
+  reconciled?: 'agent-closed' | 'session-snapshot' | 'superseded';
   /** 首个事件时间（没有 run.started 时用于排序） */
   firstTs?: number;
   /** 最后一个事件时间：尾部未闭合的正文/思考用它排序（落在自己真实发生的时刻）。 */
@@ -214,6 +219,15 @@ export interface RunFold {
   /** 当前状态 → `RunGroup` 副本（快照对象不能被后续 apply 改到）。 */
   toGroup(): RunGroup;
   /**
+   * 只读**标量**摘要（不含 `items`，因此不复制数组、不随 item 数变慢）。
+   *
+   * 用途：`LiveItemStore#supersedeStaleRuns` 每个 50ms 节拍都要看一遍「这个 run 还是
+   * running 吗 / 它最后一条事件在什么时候」，而 `toGroup()` 每次都会 `[...items]`
+   * 复制一遍 —— 长会话（几百轮 × 200 项）在本该是 O(run) 的判定上花 O(items) 的代价，
+   * 违反第十一条的有界要求。两者字段同源（同一个 `group` 对象），不会漂。
+   */
+  summary(): RunFoldSummary;
+  /**
    * 把最旧的 item 折掉，只留最近 `keep` 项（item 侧上限策略，见 DESIGN.md §8.2）。
    *
    * 返回被折掉的条数与 seq 范围；调用侧据此渲染一张**可见的**折叠卡（条数 +
@@ -253,7 +267,24 @@ export interface RunFold {
 /** `close()` 的附带证据：来自快照的错误文本 + 收口来源。 */
 export interface FoldCloseOptions {
   error?: string;
-  via?: 'agent-closed' | 'session-snapshot';
+  via?: 'agent-closed' | 'session-snapshot' | 'superseded';
+}
+
+/**
+ * fold 的**标量**摘要（`RunFold.summary` 的产物）。
+ *
+ * 只含「判断一条 run 还在不在跑」需要的五个字段：状态、是不是真 run 分组、会话归属、
+ * 起始时刻、最后一条事件时刻。`items` 不在里面 —— 这是它存在的全部理由（见 `summary`）。
+ */
+export interface RunFoldSummary {
+  status: RunGroup['status'];
+  hasRunEvent: boolean;
+  sessionId?: string;
+  startedAt?: number;
+  /** 组里第一条事件的 `ts`（没有 `run.started` 时它就是「起始」的唯一来源）。 */
+  firstTs?: number;
+  /** 组里最后一条事件的 `ts`。 */
+  lastTs?: number;
 }
 
 /** `trim()` 的结果：折掉了几条、覆盖的 seq 区间（折叠卡的 anchor 用 `fromSeq`）。 */
@@ -767,6 +798,16 @@ export function createFold(runId: string): RunFold {
     return true;
   };
 
+  /** 标量摘要（不复制 `items`，见 `RunFold.summary` 的说明）。 */
+  const summary = (): RunFoldSummary => ({
+    status: group.status,
+    hasRunEvent: group.hasRunEvent,
+    ...(group.sessionId !== undefined ? { sessionId: group.sessionId } : {}),
+    ...(group.startedAt !== undefined ? { startedAt: group.startedAt } : {}),
+    ...(group.firstTs !== undefined ? { firstTs: group.firstTs } : {}),
+    ...(group.lastTs !== undefined ? { lastTs: group.lastTs } : {}),
+  });
+
   return {
     runId,
     get itemCount() {
@@ -774,6 +815,7 @@ export function createFold(runId: string): RunFold {
     },
     apply,
     toGroup,
+    summary,
     trim,
     drop,
     close,
