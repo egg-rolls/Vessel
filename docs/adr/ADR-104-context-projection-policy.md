@@ -22,7 +22,7 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
      T6 语义变更**算破坏性变更**（需 minor + CHANGELOG）。
 - **2026-11-15 用户裁定（本版修订，四条；改动处均标注「2026-11-15 用户裁定」）**：
   1. **默认 mode 全部改为 `placeholder`**（原稿为「新会话默认 `passthrough`」）。用户原话：「**先用 placeholder**」。
-     依据是成本账实测（`docs/specs/cache-ab-cost-model.md`：645 段净赚 36:1、临界缓存折扣
+     依据是成本账实测（645 段真实会话：净赚 36:1、临界缓存折扣
      `r* = 2.68%`，§8.1 依据行）。`passthrough` 由此重新定位为**手动 opt-in 的逃生门**，不再是默认值；
      0.52 前旧会话仍为 `placeholder` + `source:'legacy'`（不顺带改，保持原口径）。
   2. **子 agent 的提权规则改为「允许收紧、禁止放松」**（原稿是「父 `passthrough` ⇒ 子只能 `passthrough`」，
@@ -59,7 +59,7 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 - 读回 RPC `sessions.events` **尚未实现**：它是 `docs/specs/refresh-gap-design.md` §3 方案 B /
   §7 第 1 项（"新增 RPC，需批准 + `check-rpc-methods` 登记"）。当前 `sessions.*` 方法里没有它。
 
-补充实测（`docs/specs/measure-tool-result-clear.md`，46 次真实会话）：保留体积占比最大 **4.7%**，
+补充实测（46 次真实会话，0.53 期体积探针）：保留体积占比最大 **4.7%**，
 多数会话 0–3%；按 **run 起点**冻结后前缀缓存上界从 37.0% 改善到 74.8%。
 
 ### 1. 背景与问题
@@ -80,7 +80,7 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 **1.2 为什么要改**
 
 - **收益量级错配：问题不是"占位赚不赚"，而是"全局强制唯一取值不可换"**。4.7% 只是**省字**上界，多数会话
-  0–3%；真正的成本账要算缓存（`cache-ab-cost-model.md` 实测：段内冻结后净赚 **36:1**，见 §8.1 依据）。
+  0–3%；真正的成本账要算缓存（实测：段内冻结后净赚 **36:1**，见 §8.1 依据）。
   所以 2026-11-15 用户裁定的口径是：**默认仍是 `placeholder`**（"先用 placeholder"），但模式必须变成
   会话级可声明——否则"长文件阅读类"这类 `r*` 高的会话没有任何办法关掉它，而"多工具大输出类"也没法
   按需收紧到 `archive_notice`。
@@ -99,7 +99,7 @@ tags: [context, tools, projection, session, audit, gate, cache, compaction, exte
 
 | 项 | 口径 |
 | --- | --- |
-| 样本 | 46 次真实会话（`docs/specs/measure-tool-result-clear.md`） |
+| 样本 | 46 次真实会话（0.53 期体积探针） |
 | 指标 | "被保留的工具结果体积 ÷ `maxTokens`"的单会话**最大值**，不是全会话平均 |
 | 因此 | **4.7% 只是省字上界**，多数会话 0–3%；它**不能**用来论证"默认值该给谁"——默认值的依据是成本账（§8.1 依据行），不是这个数 |
 | 缓存指标 | 前缀缓存命中率**上界**（冻结前 37.0% / 冻结后 74.8%；未命中上行界 100%） |
@@ -665,7 +665,7 @@ P13 入口一致性：8.3 全表入口传 `externalize` 返回**同一**错误�
 | 情形 | 默认 mode | 理由 |
 | --- | --- | --- |
 | 0.52 之前已有会话（有 `cleared_tool_call_ids`、无声明） | **`placeholder`**（创建时补一条 `source:'legacy'` 声明） | 这些会话上一轮就是"占位视图"，切成 `passthrough` 会让同一批历史在下一轮"原文又回来"——前缀一次性变化、缓存全废，体验是"上下文抽搐"。注意：补的声明有 `declaration_id`，但这些会话**没有** `context_projection_audit`，D4 条件 3 不满足 ⇒ C1h 对它们**仍然红**（已裁定：不开临时放行）。0.53 起默认值也是 `placeholder`，所以旧会话与新会话的视图口径天然一致（差别只在 `source`）。 |
-| 0.53 起新建会话 | **`placeholder`**（**2026-11-15 用户裁定**：「先用 placeholder」；原稿为 `passthrough`） | 成本账实测（`docs/specs/cache-ab-cost-model.md`：645 段净赚 **36:1**、临界缓存折扣 `r* = 2.68%`）说明段内冻结占位是**净赚**的，而不是 §1.2 那个 4.7% 那样"白付"。防爆价值（0.20 触顶 ⇒ 提前压一次）也随默认值一起留下。要"一字不改看原文"就**显式** opt-in `passthrough`（逃生门，§8.1 依据行）。 |
+| 0.53 起新建会话 | **`placeholder`**（**2026-11-15 用户裁定**：「先用 placeholder」；原稿为 `passthrough`） | 成本账实测（645 段净赚 **36:1**、临界缓存折扣 `r* = 2.68%`）说明段内冻结占位是**净赚**的，而不是 §1.2 那个 4.7% 那样"白付"。防爆价值（0.20 触顶 ⇒ 提前压一次）也随默认值一起留下。要"一字不改看原文"就**显式** opt-in `passthrough`（逃生门，§8.1 依据行）。 |
 | 显式声明 `externalize` | **拒绝**（`projection_mode_unavailable`） | 本轮不实现，不静默换成别的模式（§4.3 第 3 条）。 |
 | 显式声明 `archive_notice` 但读回路径不可用 | **降级 `placeholder`** + `projection_degraded{readback_unavailable}` | 卡不能指向不存在的路径（§2.3f）。**2026-11-15 用户裁定的推论**：降级目标原稿是 `passthrough`，默认值改为 `placeholder` 后降级目标随之改为默认值——降级不得顺手把会话放松到 `passthrough`（§8.3.1 单调收紧）。 |
 
@@ -718,10 +718,10 @@ mode"这件事只发生在**会话创建之前**；任何"创建之后再改"的
 | 4 | 临时任务会话（短寿命一次性任务：`agent create` + 少量 send 后 close） | **`placeholder`** | **2026-11-15 用户裁定**。原稿给 `passthrough`（理由："4.7% 是上界、短寿命会话收益趋近 0"），该理由被成本账推翻：`r* = 2.68%` 的临界点远低于短会话的实际缓存折扣，段内冻结仍净赚（§8.1 依据行）。短会话要"看原文"同样走显式 opt-in。 |
 | 5 | 0.52 之前已存在的会话 | **`placeholder`** + `source:'legacy'` | 保持现行为，见 §7.1（且**不**消费 C1h 豁免，因为无审计记录）；与新的默认值口径一致，差别只在 `source`。 |
 
-**§8.1 依据（2026-11-15 用户裁定的量化依据）**：`docs/specs/cache-ab-cost-model.md` 的 **645 段实测**——
+**§8.1 依据（2026-11-15 用户裁定的量化依据）**：0.53 期的 **645 段真实会话**成本账实测——
 段内冻结占位相对每请求重算是**净赚 36:1**，临界缓存折扣 **`r* = 2.68%`**（缓存折扣超过该值才转亏）；
 **长文件阅读类会话**的形状不同，实测 **`r < 6.4%` 才转亏**，即它们的缓存折扣普遍高于临界值，
-`placeholder` 在这类会话上是负收益 ⇒ **`passthrough` 作为这类会话的手动 opt-in 逃生门**（报告 §4 有数据）。
+`placeholder` 在这类会话上是负收益 ⇒ **`passthrough` 作为这类会话的手动 opt-in 逃生门**。
 即：默认值取 `placeholder` 是**算过账的**，逃生门取 `passthrough` 是**留给形状不对的会话的**，两者不冲突。
 
 优先级与 `source` 的对应（三层优先级见 D7）：
@@ -911,7 +911,7 @@ rotate 是 agent 自己用来**逃上下文上限**的动作 —— 允许它选
 | 6 | `externalize` | 本轮不实现，只留枚举位与拒绝路径（§2.2、§4.3、附录 A） |
 | 7 | **投射决策粒度** | **run**：每个 run 起点（新 run 与 resume）重算并冻结集合，run 内所有请求共用；"段"只保留给压缩/缓存重基座语境（§2.4）。模式仍是会话级不可变，二者分开 |
 | 8 | **入口与默认兜底** | 会话种类默认表（§8.1）；锁点在服务端（§8.2，`projection_mode_immutable`）；工具矩阵（§8.3）；rotate 四条（§8.4）；权限卡片 8 字段含 C1h 披露行（§8.5）；`externalize` 入口一律拒绝（§8.6） |
-| 9 | **默认 mode（2026-11-15 用户裁定）** | **`placeholder`**——主会话 / agent 首个会话 / 短任务会话一律 `placeholder`；`passthrough` 降级为**手动 opt-in 逃生门**（长文件阅读类会话用）；旧会话 `placeholder` + `source:'legacy'` 不变。依据：`cache-ab-cost-model.md` 645 段实测净赚 **36:1**、`r* = 2.68%`；长文件阅读类 `r < 6.4%` 才转亏（§8.1 依据行、§7.1、§7.2） |
+| 9 | **默认 mode（2026-11-15 用户裁定）** | **`placeholder`**——主会话 / agent 首个会话 / 短任务会话一律 `placeholder`；`passthrough` 降级为**手动 opt-in 逃生门**（长文件阅读类会话用）；旧会话 `placeholder` + `source:'legacy'` 不变。依据：645 段实测净赚 **36:1**、`r* = 2.68%`；长文件阅读类 `r < 6.4%` 才转亏（§8.1 依据行、§7.1、§7.2） |
 | 10 | **子 agent 提权规则（2026-11-15 用户裁定）** | 改为**允许收紧、禁止放松**（单调收紧）：严格度序 `passthrough < placeholder ≈ archive_notice`；`strict(子) < strict(父)` ⇒ `projection_mode_not_allowed`；节点 `allowed_modes` 仍是正交的第二道闸（§8.3.1，rotate 同受约束 §8.4） |
 | 11 | **模式可跨会话混用（2026-11-15 用户裁定）** | 模式是**会话级**属性，不同会话可各自声明不同模式（父 `placeholder` + 子 `archive_notice` 合法）；同一批量/团队**不要求**统一；同一会话内仍不可变（§2.5、§8.2） |
 | 12 | **实现分期（2026-11-15 用户裁定）** | **U1**（声明与锁：字段落盘、`declaration_id`、不可变拒绝、`sessions.get` 暴露 `projection_mode`/`projection_locked`，**不接线**、行为不变）→ **U2**（`passthrough` 接线 + 门禁按 mode 判定，T6 只对 `placeholder` 生效）→ **U3**（`archive_notice`：run 起点追加归档卡 + 靠 `sessions.events` 读回）；**`externalize` 本轮不实现**（只留枚举位 + 拒绝路径）。详见附录 B |

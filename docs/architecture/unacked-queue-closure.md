@@ -93,4 +93,4 @@ paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.
 
 - 判据与三边界（0.53 形态）：[session-replay.md](session-replay.md) §3
 - 决策与不变量：[ADR-105](../adr/ADR-105-session-timeline-single-source.md) §3（I1–I4）、§6（握手）、§7（A1–A8）
-- 阶段与回退：[plan-054-timeline-migration.md](../specs/plan-054-timeline-migration.md)
+- 阶段与回退：迁移分 A/B/C 三阶段、可回退；施工单随实现轮维护，不进本仓

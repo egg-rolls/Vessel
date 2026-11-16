@@ -19,7 +19,7 @@ tags: [session, timeline, replay, wal, seq, storage, index, handshake, idempoten
   3. **不做历史兼容**：旧会话（0.54 之前写下的 `events.ndjson` / `data/events/<run_id>.jsonl`）**只读冻结**，
      不迁移、不回填、不双格式读写。
   4. **允许重写写入链路 / 存储 / 索引**，接受高实现成本；**计划书必须把受影响功能逐一列出**
-     （见 [plan-054-timeline-migration.md](../specs/plan-054-timeline-migration.md) §2）。
+     （实现轮的施工图见 §11；受影响功能清单随施工单维护，不进本仓）。
   5. 目标仍是三条：**可证明不漏**、**断线无洞**、**回放自洽**，外加**时序严格交错**（同一会话内所有
      事件按 `timeline_seq` 严格交错，不再有"trace 带的条目排在会话日志带之后"这种结构性失真）。
 - **本轮范围**：只有本文档 + 迁移计划书 + `docs/adr/README.md` 一行索引。**不改任何代码**，
@@ -32,7 +32,7 @@ tags: [session, timeline, replay, wal, seq, storage, index, handshake, idempoten
 ### 0. 先核实的事实（后面每条决策都建在这上面）
 
 基线 `main c698471a`（2026-11-15）。三条边界今天**一条都不成立**（判据与实测见
-[session-replay.md](../architecture/session-replay.md) §3、[replay-gap-findings.md](../specs/replay-gap-findings.md) §0）：
+[session-replay.md](../architecture/session-replay.md) §3；0.54 期一次真机采集：同一时刻磁盘 366 条事件、投影只到 `derived_upto_seq=4`、`sessions.events(since_seq=4)` 可取回 362 条、进程内环 2000 槽里 `llm.stream.chunk` 占 93.6% 且 `run.started` 已不在窗口）：
 
 | 事实 | 证据位置 | 对本 ADR 的后果 |
 | --- | --- | --- |
@@ -422,8 +422,8 @@ timeline.idx/type.idx        # type 索引（可重建，§5）
 
 - 判据与三边界（今天的形态）：[session-replay.md](../architecture/session-replay.md) §3
 - 0.53 悬空项「un-acked 队列」的结案（0.54：空集，不是实现）：[unacked-queue-closure.md](../architecture/unacked-queue-closure.md)
-- 真机实测与三源差集：[replay-gap-findings.md](../specs/replay-gap-findings.md) §0 / §1b / §1d
-- 迁移计划（A/B/C、受影响 9 项、回退）：[plan-054-timeline-migration.md](../specs/plan-054-timeline-migration.md)
+- 真机实测与三源差集：0.54 期一次真机会话采集（磁盘 366 条 / 投影 3 条消息 / 派生水位 4 / 可取回 362 条 / 环内 chunk 占 93.6%、`run.started` 不在窗口），数字见 §0 表格
+- 迁移分 A/B/C 三阶段、受影响 9 项、可回退；施工单随实现轮维护，不进本仓（施工图见 §11）
 - 投射与读回依赖（不重写）：[ADR-104](ADR-104-context-projection-policy.md) §2.3f
 - 落盘口径相关：[ADR-032](ADR-032-event-replay-file-event-store.md)、[ADR-046](ADR-046-file-first-storage.md)、
   [ADR-047](ADR-047-trace-first-observability.md)、[ADR-056](ADR-056-persistence-durability-and-corruption.md)

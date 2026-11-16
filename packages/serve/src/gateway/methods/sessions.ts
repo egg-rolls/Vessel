@@ -144,7 +144,7 @@ export interface SessionSystemContextPort {
 /**
  * 一条工具消息的「模型看到的是什么」投影（additive `sessions.get.session.messages[i].projection`，0.54）。
  *
- * 形状与取值域**照抄** `docs/dev/handoff/projection-card-spec.md` §1.7：
+ * 形状与取值域**照抄** `docs/specs/projection-card-spec.md` §1.7：
  * `mode` 用 ADR-104 §2.2 冻结的四模式闭集（`ProjectionMode`），不在这里自创枚举；
  * `placeholder_text` 是 core 渲染好的、**模型真正看到的那一字节**，UI 只展示、禁止自行拼装
  *（`formatClearedToolResult` 不幂等：对已是占位的正文再跑一遍会把行数算成 `1 lines`）。
@@ -1603,7 +1603,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
     {
       // Additive（0.53）：读会话事件日志 —— 复用 `sessions.get.event_cursor` 的同一份
       // 磁盘事实，按 `seq` 翻页回放，形状与 SSE 回放的事件对象一一对应，前端按 `seq`
-      // 幂等合并。设计出处：`docs/dev/handoff/refresh-gap-design.md` §3 方案 B。
+      // 幂等合并。设计出处：`docs/specs/refresh-gap-design.md` §3 方案 B。
       name: 'sessions.events',
       permission: 'read',
       params_schema: {
