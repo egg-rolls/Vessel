@@ -40,6 +40,27 @@ export interface ResolvePlatformAuthInput {
   proxySecret?: string;
 }
 
+/**
+ * 0.55 P0：401 文案必须能直接照做 —— 分清「缺反代密钥」与「缺平台 token」。
+ * 错误码仍然是 CONTRACT §7 的 `platform_unauthorized`（Web 端据此弹「需要 token」）。
+ */
+export function platformUnauthorizedMessage(auth: PlatformAuthResult): string {
+  if (!auth.proxySecretOk) {
+    return (
+      'proxy_secret_missing: 请求没带（或带错）反代密钥头 X-Vessel-Proxy-Secret。' +
+      '请让同机反代覆盖注入这个头，值取自 gateway.proxy_secret_env 指向的环境变量；' +
+      '反代 snippet: proxy_set_header X-Vessel-Proxy-Secret $vessel_proxy_secret; ' +
+      '本机直连请改用 Authorization: Bearer <gateway.token>。'
+    );
+  }
+  return (
+    'platform_token_required: 需要 Authorization: Bearer <gateway.token>（浏览器可用 ' +
+    '#token=<同一个值> 导入）。令牌来自 gateway.token 或 gateway.token_env 指向的环境变量；' +
+    '生成: export VESSEL_PLATFORM_TOKEN=$(openssl rand -hex 32) 然后 gateway.token_env: ' +
+    'VESSEL_PLATFORM_TOKEN。'
+  );
+}
+
 /** 从 Authorization: Bearer 取 token；空串视为未提供。 */
 export function bearerToken(req: Request): string | null {
   const authorization = req.headers.get('authorization');

@@ -301,6 +301,8 @@ bun ws-node.ts legacy       # WS 首帧不带 token 也拿到事件流
 - 用脚本打 `/platform/rpc` 的自动化：加 `Authorization: Bearer <platform-token>`。
 - 只有 node token 没有平台 token 的旧脚本会拿到 401 `platform_unauthorized`
   （文案会说明要用平台 token，别混用 node token）。
+- **只读接口不变**：`platform.nodes.list` / `platform.nodes.get` / `platform.whoami` 在回环
+  （且配了反代密钥时带上密钥头）仍可匿名调用，本次只收紧「下发 node token」这一个端点。
 
 ### 第 3 步：hub 回环判定收紧（配了密钥才收紧）
 

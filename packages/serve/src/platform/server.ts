@@ -17,7 +17,7 @@ import {
   originAllowed,
 } from '../gateway/auth.js';
 import { serveStatic } from '../gateway/static.js';
-import { type PlatformAuthResult, resolvePlatformAuth } from './auth.js';
+import { platformUnauthorizedMessage, resolvePlatformAuth } from './auth.js';
 import { platformListenGuard } from './listen-guard.js';
 import { createPlatformRegistry } from './registry.js';
 import { handlePlatformRpc } from './rpc.js';
@@ -42,24 +42,8 @@ function isNodeOnlyPath(path: string): boolean {
 /**
  * 0.55 P0：401 文案必须能直接照做 —— 分清「缺反代密钥」与「缺平台 token」。
  * 仍然只用 CONTRACT §7 的 `platform_unauthorized` 错误码（Web 端据此弹「需要 token」）。
+ * 0.55 拍板项 2：文案与 `rpc.ts` 的凭据端点共用（见 `auth.ts`），避免两处口径漂移。
  */
-function platformUnauthorizedMessage(auth: PlatformAuthResult): string {
-  if (!auth.proxySecretOk) {
-    return (
-      'proxy_secret_missing: 请求没带（或带错）反代密钥头 X-Vessel-Proxy-Secret。' +
-      '请让同机反代覆盖注入这个头，值取自 gateway.proxy_secret_env 指向的环境变量；' +
-      '反代 snippet: proxy_set_header X-Vessel-Proxy-Secret $vessel_proxy_secret; ' +
-      '本机直连请改用 Authorization: Bearer <gateway.token>。'
-    );
-  }
-  return (
-    'platform_token_required: 需要 Authorization: Bearer <gateway.token>（浏览器可用 ' +
-    '#token=<同一个值> 导入）。令牌来自 gateway.token 或 gateway.token_env 指向的环境变量；' +
-    '生成: export VESSEL_PLATFORM_TOKEN=$(openssl rand -hex 32) 然后 gateway.token_env: ' +
-    'VESSEL_PLATFORM_TOKEN。'
-  );
-}
-
 function json(data: unknown, status: number, extra: Record<string, string>): Response {
   return new Response(JSON.stringify(data), {
     status,
