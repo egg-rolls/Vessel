@@ -30,6 +30,7 @@ import {
   loadTlsMaterial,
   normalizeAllowedOrigins,
   originAllowed,
+  proxySecretAllowed,
 } from '@vessel-agent/serve';
 import type { HubClientHelloFrame, HubDirectoryFrame } from './client-protocol.js';
 import {
@@ -97,8 +98,13 @@ interface DirectoryWsData {
   kind: 'directory';
   authed: boolean;
   alive: boolean;
-  /** upgrade 时由 requestIP 判定；回环客户端可匿名。 */
+  /** upgrade 时由 requestIP 判定；回环客户端可匿名（见 `proxySecretOk`）。 */
   local: boolean;
+  /**
+   * 0.55 P0：`hub.proxy_secret_env` 配置后，`local` 还必须带头才算可信本机。
+   * 未配置密钥时恒为 true（旧行为）。
+   */
+  proxySecretOk: boolean;
   authTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -272,6 +278,11 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
   const loopback = isLoopbackHostname(hostname);
   const tokenEnv = isNonEmptyString(config.tokenEnv) ? config.tokenEnv : undefined;
   const hubToken = tokenEnv !== undefined ? process.env[tokenEnv] : undefined;
+  // 0.55 P0：反代共享密钥（opt-in）。未配置 = undefined = 旧的「回环即可信」。
+  const proxySecretEnv = isNonEmptyString(config.proxySecretEnv)
+    ? config.proxySecretEnv
+    : undefined;
+  const hubProxySecret = proxySecretEnv !== undefined ? process.env[proxySecretEnv] : undefined;
 
   if (!loopback) {
     if (config.allowRemote !== true) {
@@ -345,8 +356,33 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
     existing.count += 1;
   }
 
+  /**
+   * 0.55 P0：可信本机 = 回环 peer **且**（未配反代密钥 或 密钥头成立）。
+   *
+   * 反代与 hub 同机时 peer 恒为 127.0.0.1，回环本身不再是可信信号；配了
+   * `hub.proxy_secret_env` 之后，反代必须注入 `X-Vessel-Proxy-Secret`。
+   */
+  function isTrustedLocalPeer(srv: import('bun').Server<HubWsData>, request: Request): boolean {
+    return isLoopbackPeer(srv, request) && proxySecretAllowed(request, hubProxySecret);
+  }
+
+  /** 401 文案：能直接照做（缺反代密钥 vs 缺 hub token）。 */
+  function readUnauthorizedMessage(srv: import('bun').Server<HubWsData>, request: Request): string {
+    if (isLoopbackPeer(srv, request) && !proxySecretAllowed(request, hubProxySecret)) {
+      return (
+        'proxy_secret_missing: hub 要求反代密钥头 X-Vessel-Proxy-Secret（值取自 ' +
+        'hub.proxy_secret_env 指向的环境变量）。反代 snippet: proxy_set_header ' +
+        'X-Vessel-Proxy-Secret $vessel_hub_proxy_secret;'
+      );
+    }
+    return (
+      'hub_token_required: 远程读取需要 Authorization: Bearer <hub token>（值取自 ' +
+      'hub.token_env 指向的环境变量）；本机反代转发请注入 X-Vessel-Proxy-Secret。'
+    );
+  }
+
   function readAuthorized(srv: import('bun').Server<HubWsData>, request: Request): boolean {
-    if (isLoopbackPeer(srv, request)) return true;
+    if (isTrustedLocalPeer(srv, request)) return true;
     if (!isNonEmptyString(hubToken)) return false;
     return bearerToken(request) === hubToken;
   }
@@ -449,8 +485,22 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
     nodeId: string,
     extra: Record<string, string>,
   ): Promise<Response> {
-    if (!isLoopbackPeer(srv, request)) {
-      return errorResponse('forbidden', 'loopback peers only', 403, extra);
+    // 0.55 P0：删除节点会吊销 hub 签发的 node token，因此只对**可信本机**开放
+    // （回环 peer + 配了代理密钥时的密钥头）。
+    if (!isTrustedLocalPeer(srv, request)) {
+      const missingSecret =
+        isLoopbackPeer(srv, request) && !proxySecretAllowed(request, hubProxySecret);
+      return errorResponse(
+        'forbidden',
+        missingSecret
+          ? 'proxy_secret_missing: 删除节点（会吊销 node token）只对可信本机开放：hub 配了 ' +
+              'hub.proxy_secret_env 时，反代必须注入 X-Vessel-Proxy-Secret 头' +
+              '（proxy_set_header X-Vessel-Proxy-Secret $vessel_hub_proxy_secret;）。'
+          : 'loopback peers only: 删除节点（会吊销 node token）不开放给远程；请在 hub 本机执行 ' +
+              'vessel hub nodes rm <node_id>。',
+        403,
+        extra,
+      );
     }
     const existing = registry.get(nodeId);
     if (!existing) return errorResponse('not_found', 'node not found', 404, extra);
@@ -649,8 +699,16 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         }
 
         if (path === '/v1/hub/events' && request.method === 'GET') {
+          // 0.55 P0：`local` 保留「socket 回环」这一原始事实，是否可信还要看密钥头。
           const local = isLoopbackPeer(srv, request);
-          const data: DirectoryWsData = { kind: 'directory', authed: false, alive: true, local };
+          const proxySecretOk = proxySecretAllowed(request, hubProxySecret);
+          const data: DirectoryWsData = {
+            kind: 'directory',
+            authed: false,
+            alive: true,
+            local,
+            proxySecretOk,
+          };
           const upgraded = srv.upgrade(request, { data });
           if (!upgraded) {
             return errorResponse('upgrade_failed', 'websocket upgrade failed', 400, extra);
@@ -697,7 +755,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
 
         if (path === '/v1/hub/directory' && request.method === 'GET') {
           if (!readAuthorized(srv, request)) {
-            return errorResponse('unauthorized', 'missing or invalid token', 401, extra);
+            return errorResponse('unauthorized', readUnauthorizedMessage(srv, request), 401, extra);
           }
           // `version` 只加在响应上，不写进 registry.json（磁盘形状保持不变）。
           return jsonResponse(200, { ...registry.snapshot(), version }, extra);
@@ -716,7 +774,12 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
           }
           if (request.method === 'GET') {
             if (!readAuthorized(srv, request)) {
-              return errorResponse('unauthorized', 'missing or invalid token', 401, extra);
+              return errorResponse(
+                'unauthorized',
+                readUnauthorizedMessage(srv, request),
+                401,
+                extra,
+              );
             }
             const record = registry.get(nodeId);
             if (!record) return errorResponse('not_found', 'node not found', 404, extra);
@@ -799,10 +862,12 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         }
 
         // 回环客户端可匿名；远程必须携带与 hub 配置一致的 Bearer token。
+        // 0.55 P0：配了 `hub.proxy_secret_env` 后，回环还必须带反代密钥头。
         const token = typeof frame.token === 'string' ? frame.token : undefined;
-        const isLocal = ws.data.local;
+        const isLocal = ws.data.local && ws.data.proxySecretOk;
         if (!isLocal && (!isNonEmptyString(hubToken) || token !== hubToken)) {
-          ws.close(4401, 'unauthorized');
+          // close reason 有 123 字节上限：用简短标记，正文提示走 HTTP 401。
+          ws.close(4401, ws.data.local ? 'proxy_secret_missing' : 'unauthorized');
           return;
         }
 

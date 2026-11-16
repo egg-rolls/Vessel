@@ -1316,6 +1316,7 @@ export function validateHubSettings(
     tls,
     allowedOrigins,
     tokenEnv,
+    proxySecretEnv,
     allowFileSecrets,
     pairingTtlSeconds,
   } = hub as unknown as Record<string, unknown>;
@@ -1502,6 +1503,8 @@ export function validateHubSettings(
   } else {
     validateEnvName('hub.tokenEnv', tokenEnv, errors);
   }
+  // 0.55 P0：hub 反代共享密钥的环境变量名（opt-in；只校验变量名形状，不读值）。
+  validateEnvName('hub.proxySecretEnv', proxySecretEnv, errors);
 
   if (allowFileSecrets !== undefined && typeof allowFileSecrets !== 'boolean') {
     errors.push({
@@ -2761,6 +2764,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'tls',
     'allowedOrigins',
     'tokenEnv',
+    'proxySecretEnv',
     'allowFileSecrets',
     'pairingTtlSeconds',
   ],

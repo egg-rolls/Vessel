@@ -227,7 +227,8 @@ HTTP/1.1 200 OK  {"..."token":"node-b-ADMIN-TOKEN-88a0be31f5"...}
 1. 平台 fail-closed：非回环监听 + 无 `gateway.token` ⇒ 启动被拒
    （`packages/serve/src/platform/listen-guard.ts`；`startPlatformGateway` 与 CLI 预检双处判定）；
 2. `platform.nodes.credentials` 要求 `mode === 'token'`（`packages/serve/src/platform/rpc.ts`）；
-3. hub 三个回环判定在配置了 `hub.proxy_secret_env` 后必须带密钥头（`src/hub/server.ts`）；
+3. hub 三个回环判定在配置了 `hub.proxy_secret_env` 后必须带密钥头
+   （`GET /v1/hub/directory`、`GET /v1/hub/events` WS 首帧、`DELETE /v1/hub/nodes/:id`）；
 4. `vessel doctor` 对「回环 + 无论任何 token」报警（只提示）。
 
 仍未做（明确不做 / 留给后续）：

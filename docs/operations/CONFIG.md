@@ -418,8 +418,9 @@ lease:
 - `feishu.app_secret_env`
 - `serve.token_env`（node token）
 - `gateway.token_env`（Platform Gateway token，与 node token 分开）
-- `serve.proxy_secret_env` / `gateway.proxy_secret_env`（0.55：同机反代的共享密钥头；
-  未配置 = 不做任何事，见 [REVERSE-PROXY.md](REVERSE-PROXY.md)）
+- `serve.proxy_secret_env` / `gateway.proxy_secret_env` / `hub.proxy_secret_env`
+  （0.55：同机反代的共享密钥头；未配置 = 不做任何事，见
+  [REVERSE-PROXY.md](REVERSE-PROXY.md)）。三者用途不同，**不要复用同一个值**。
 
 规则：
 
