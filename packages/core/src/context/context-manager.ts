@@ -356,9 +356,13 @@ export interface ClearedToolResultPlannerStats {
  * 正确性的前提（违反就宁可整窗重建，不许算错）：已扫描过的消息对象**不会被就地
  * 改写**。校验点是数组引用 + 长度 + 首尾消息引用 + 压缩时的逐条引用对齐；
  * 任何一条对不上都退回 `rebuild()`（全量），并在 `stats.fallbacks/rebuilds` 里留痕。
+ * ⚠️ 谁要把历史消息**就地改写**（不是 append / pop），必须调 `reset()` —— 首尾引用
+ * 校验抓不到「中间某条老消息被就地改正文」。挂载处的合同见
+ * `MemoryWorkingContext.clearedPlanners`。
  *
- * 内存上界：`entries` 一条工具结果一项，最多 `messageCap`（`maxTokens / 100`，1M 预算
- * ⇒ 1 万条）项 —— 与它要返回的 id 集合同一量级；`reset()` / 会话删除时清空。
+ * 内存上界：`entries` 一条工具结果一项 —— 上界 = **当前窗口内的工具结果条数**
+ * （不超过 `messageCap = maxTokens / 100`，1M 预算 ⇒ 1 万条），与它要返回的 id 集合
+ * 同一量级；会话删除 / 清空时一起丢掉（`deleteSession` / `clear` / `clearSession`）。
  */
 export class IncrementalClearedToolResultPlanner {
   /** 窗口内全部工具结果的分类，按消息顺序（`entryHead` 之前的已失效）。 */
@@ -395,7 +399,15 @@ export class IncrementalClearedToolResultPlanner {
     return { ...this.counters, keep: this.keep };
   }
 
-  /** 丢掉全部状态（换会话 / 会话被清空时调用）。 */
+  /**
+   * 丢掉全部状态（换会话 / 会话被清空时调用）。
+   *
+   * ⚠️ 也必须在**就地改写历史消息**之后调用（append / pop 不用）：增量复用的是
+   * 「扫过的消息不会再变」，就地改内容不会被首尾引用校验发现。见挂载处合同
+   * `MemoryWorkingContext.clearedPlanners`。
+   *
+   * `stats` 里的累计计数不清零（那是给「省了多少」看的累计读数，只丢状态）。
+   */
   reset(): void {
     this.entries = [];
     this.entryHead = 0;
@@ -1066,7 +1078,17 @@ export class MemoryWorkingContext implements WorkingContext {
   /**
    * 占位集合的**增量**规划器（按 session）：0.55 起 `plannedClearedToolResults`
    * 不再每次重扫整窗，只处理新增 / 重对齐受影响的那一段。
-   * 会话删除 / 清空时一起丢掉（`entries` 的条目数上界 = 窗口内工具结果条数）。
+   *
+   * 内存上界 = **该会话窗口内的工具结果条数**（一条工具结果一项，不超过
+   * `messageCap`），与会话消息一荣俱荣一损俱损：`deleteSession` 删掉规划器、
+   * `clear` / `clearSession` 调 `reset()`，不会跨会话越攒越多。
+   *
+   * ⚠️ **合同（后来人必须遵守）**：规划器复用了「已扫描过的消息对象不会再变」这个
+   * 前提。谁要在 `MemoryWorkingContext` 里新增**就地改写历史消息**的代码
+   * （改 `content` / `tool_call_id`、原地 `splice` 之类），**必须同时**调用
+   * `this.clearedPlanners.get(sessionId)?.reset()`，否则占位集合会继续用旧的分类，
+   * 增量结果与全量 `planClearedToolResults` 不再逐字节相同。这条比 `reset()`
+   * 本身重要 —— 改历史的人不会想到还有个 planner 在缓存。
    */
   private clearedPlanners: Map<string, IncrementalClearedToolResultPlanner> = new Map();
   private currentSessionId = 'default';
