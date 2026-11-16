@@ -31,6 +31,12 @@ const CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
   /too many tokens/i,
   /token limit/i,
   /request too large/i,
+  // Volcengine/LiteLLM：`Input exceeds the context limit (1048568 tokens)`。
+  // 2026-11-16 事故里三次 400 都是这一句，旧模式表一条不认 ⇒ 被判成
+  // `provider_http_error`，超限卡没生成、锚点没记、压缩没触发。
+  /context[_ ]limit/i,
+  /exceeds the context/i,
+  /input tokens? exceed/i,
 ];
 
 const PROVIDER_NETWORK_PATTERN =

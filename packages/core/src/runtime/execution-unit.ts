@@ -325,11 +325,9 @@ function reportedContextTokens(message: string): number | undefined {
 /**
  * 把「已识别的 provider 超限错误」包装成带稳定错误码的错误（0.55 P0）。
  *
- * 为什么需要在本地重写一层：`toErrorEnvelope`（`runtime/error-envelope.ts`，本次不改）
- * 用它自己的模式表 + HTTP 400 判定 `provider_context_overflow`，表里同样没有 Volcengine
- * 的措辞。这里**不丢原文**：前缀给 envelope 认得的措辞（`context length`）+ 稳定码，
- * provider 的原始正文原样跟在后面，`run.failed.error` 因此既保留了原文，又拿到了正确的
- * `error_code`。`status = 400` 让 envelope 不必再从文本里猜状态码。
+ * `toErrorEnvelope`（`runtime/error-envelope.ts`）的模式表已补上 Volcengine 的措辞
+ * （`Input exceeds the context limit`），所以这里**不再伪造前缀**：message 就是 provider
+ * 原文。`status = 400` 仍写死，让 envelope 不必再从文本里猜状态码；`code` 让分类稳定。
  */
 class ProviderContextOverflowError extends Error {
   readonly code = 'provider_context_overflow';
@@ -337,7 +335,7 @@ class ProviderContextOverflowError extends Error {
   /** 原始 provider 错误（不参与分类，只留给需要原始对象的调用方/调试）。 */
   readonly original: unknown;
   constructor(cause: unknown) {
-    super(`provider_context_overflow: context length exceeded — ${errorText(cause)}`);
+    super(errorText(cause));
     this.name = 'ProviderContextOverflowError';
     this.original = cause;
   }
