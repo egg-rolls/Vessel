@@ -248,6 +248,11 @@ expectSummary(
   toolSummary('agent', { action: 'create' }),
   'create',
 );
+expectSummary(
+  '④ inbox ids 非数组不推算条数',
+  toolSummary('inbox', { action: 'read', ids: 'msg_1' }),
+  'read',
+);
 
 {
   // 非对象入参走的是 parseToolArgs 的既有 stringify 分支（对所有工具一致，本单不改），
