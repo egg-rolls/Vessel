@@ -1677,6 +1677,10 @@ function assertTeamNotArchived(record: TeamRecord, teamId: string): void {
 }
 
 function toMemberSummary(status: MemberStatus): TeamMemberSummary {
+  // 0.55：硬错误闸跟着 roster 一起出去 —— Team 侧只看得到 roster（`bodies` 不进
+  // roster），少了这一格，团队视角只有 `state=failed`，看不出「为什么跑不动」，
+  // 于是会继续往这具不会再动的 body 投消息。
+  const blocked = status.bodies?.find((body) => body.blocked !== undefined)?.blocked;
   return {
     agent_id: status.id,
     ...(status.name !== undefined ? { name: status.name } : {}),
@@ -1690,6 +1694,7 @@ function toMemberSummary(status: MemberStatus): TeamMemberSummary {
     state: status.state,
     epoch: status.epoch ?? 0,
     ...(status.last_seen !== undefined ? { last_seen: status.last_seen } : {}),
+    ...(blocked !== undefined ? { blocked } : {}),
     ...(status.body_history !== undefined && status.body_history.length > 0
       ? { body_history: status.body_history }
       : {}),

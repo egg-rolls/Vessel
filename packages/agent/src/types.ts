@@ -78,6 +78,27 @@ export interface BindingHistoryEntry extends BindingPointer {
   retired_at: number;
 }
 
+/**
+ * 硬错误闸（0.55）：这具 body 为什么不再自动接单（进程内状态，不落盘）。
+ *
+ * 只在**不可重试的 provider 硬错误**之后写（`toErrorEnvelope` 的 category=provider 且
+ * retryable=false、`classifyProviderRetry` 也不允许重发）：上下文超限 / 认证 / 余额 /
+ * 模型不存在这一类错误的共同点是「同一份请求再发一次必然再失败」，自动链路每多发一次
+ * 就多烧一次钱、并在 Team 里重复同一条失败。
+ *
+ * 闸落下后 body 照旧收消息（落 durable inbox + pending/hold 保留），只是不再开新 run；
+ * 解闸只有一条显式动作（人类投递 / interrupt / 换新 body），见 `AgentService` 的
+ * `unblockBodies`。字段与 budget 的 `blocked` 同义：**不接活，不是不存在**。
+ */
+export interface BodyBlocked {
+  /** 稳定错误码（`toErrorEnvelope().error_code`，如 `provider_context_overflow`） */
+  code: string;
+  /** 单行原因（已折行 + 截断；原样来自 provider 的错误文本） */
+  reason: string;
+  /** 闸落下时刻（epoch ms） */
+  at: number;
+}
+
 /** ExecutionUnit 的对外状态（`body_id ≡ session_id`） */
 export interface ExecutionUnitStatus {
   session_id: string;
@@ -86,6 +107,8 @@ export interface ExecutionUnitStatus {
   primary: boolean;
   created_at: number;
   last_active_at: number;
+  /** 0.55 additive：硬错误闸的现场（缺省 = 这具 body 能接活） */
+  blocked?: BodyBlocked;
 }
 
 /** 持久化的 Binding 记录（v4 唯一真相） */
@@ -1871,6 +1894,13 @@ export interface TeamMemberSummary {
   last_seen?: number;
   /** 已退役 Binding 历史（0.19 S6 additive；可选，旧数据缺失不报错） */
   body_history?: BindingHistoryEntry[];
+  /**
+   * 0.55 additive：硬错误闸（与 `MemberStatus.bodies[].blocked` 同一份事实）。
+   *
+   * roster 是 Team 侧唯一「看成员状态」的入口，`bodies` 不进 roster；缺了这一格，
+   * 团队视角只能看到 `state=failed` 而看不到「因为什么跑不动」，于是会把消息继续投进去。
+   */
+  blocked?: BodyBlocked;
 }
 
 export interface TeamSummary {
