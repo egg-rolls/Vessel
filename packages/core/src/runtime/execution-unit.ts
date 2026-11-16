@@ -4335,16 +4335,20 @@ export class ExecutionUnit {
   /**
    * 0.18：恢复历史（run 启动 / resume 共用）。0.54 B3 起是**纯读侧**：
    *
-   * 1) 事件日志**整份**投影（`projectMessages`，原文口径）＝事实；
+   * 1) 事件日志投影（`extendProjection`，原文口径）＝事实。**整份读或尾部续读**两种走法
+   *    输出逐条相同（见 `restoreProjection`）；0.55 之前恒为整份读 —— 58k 事件的会话实测
+   *    7.0 s，占一次发送的 92%；
    * 2) 会话壳里的 `messages` 只是**缓存**，按内容与那份投影对账（`reconcileCachedProjection`），
    *    **不读** `derived_upto_seq` / `projection_cache_seq`（见该方法注释与门禁
    *    `scripts/check-projection-cache-agnostic.ts`）；
    * 3) legacy 回退：RunRecord.legacy_messages（旧 checkpoint messages）→ SessionState.messages。
    *
-   * 为什么不再「照水位只读增量」：那个水位只在四路保存点推进（初始保存 / checkpoint /
-   * 终态 / 手动压缩），普通 run 期间一直停在 run 起点 ⇒ 读侧把「缓存覆盖到哪」当成了
-   * 「事实覆盖到哪」，运行中刷新只剩 4 条（P7）。ADR-105 D2 要求投影是
-   * `fold(timeline[1..seq])` 的纯函数结果、缓存可丢弃；删掉那个字段产出必须逐字节不变。
+   * 为什么不再「照水位只读增量」（0.54 的教训，与 0.55 的增量不是一回事）：那个水位只在
+   * 四路保存点推进（初始保存 / checkpoint / 终态 / 手动压缩），普通 run 期间一直停在 run
+   * 起点 ⇒ 读侧把「缓存覆盖到哪」当成了「事实覆盖到哪」，运行中刷新只剩 4 条（P7）。
+   * ADR-105 D2 要求投影是 `fold(timeline[1..seq])` 的纯函数结果、缓存可丢弃；删掉那个字段
+   * 产出必须逐字节不变。0.55 的游标**不是**那个水位：它是本进程内 `fold` 到哪，判据是
+   * 事件 seq 的连续性与日志头比对，与任何落盘游标字段无关。
    *
    * run() 与 resume 都必须走这里：否则崩溃后新 run 只读缓存，未重放的尾段事件就丢了。
    */
@@ -4456,7 +4460,7 @@ export class ExecutionUnit {
   }
 
   /**
-   * 本进程内已折出的会话投影（10.56 增量续读的起点）。
+   * 本进程内已折出的会话投影（0.55 增量续读的起点）。
    *
    * 上界：`PROJECTION_CURSOR_MAX_SESSIONS` 条；每条的内容就是「一次会话视图」，与
    * `WorkingContext` 里那份是**同一批消息对象**（共享，不复制二次）。
