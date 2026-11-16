@@ -35,8 +35,11 @@ export {
 export { FileSessionStore, SessionCorruptError } from './file-backend.js';
 export { assignMessageIdentities, withRunIdentity } from './message-identity.js';
 export {
+  createProjectionCursor,
+  extendProjection,
   mergeHistoryProjection,
   type ProjectableEvent,
+  type ProjectionCursor,
   type ProjectMessagesOptions,
   projectedKeepCount,
   projectMessages,

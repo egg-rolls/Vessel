@@ -59,8 +59,10 @@ import {
 } from '../pii/index.js';
 // D2：跨模块只允许从 barrel 导入（不得直接引用 session 的内部文件）。
 import {
+  createProjectionCursor,
   deriveSessionMeta,
-  projectMessages,
+  extendProjection,
+  type ProjectionCursor,
   reconcileCachedProjection,
   withRunIdentity,
 } from '../session/index.js';
@@ -158,6 +160,56 @@ import { createToolPipeline, type ToolPipeline } from './tool-pipeline.js';
  */
 export const CONTEXT_PRESSURE_WARN_RATIO = 0.9;
 
+/**
+ * 历史投影的**增量续读**预算（第十一条：增量 / 有界）。
+ *
+ * 背景：0.54 B3 起 `loadStoredHistory` 每次 run 起点都**整份读**时间线（可读性口径正确，
+ * 但代价是 O(会话)）。58k 事件 / 6.2k 块的会话实测 **7.0 s**，占一次发送的 ~92%；同一份
+ * 数据在长寿进程里重复读还会随堆压力放大到 16 s（0.56 §1）。窗口只会 append，投影本身
+ * 是折叠，所以「上一段折出的消息 + 尾巴那段事件」与整份重投影**逐条相同**。
+ *
+ * 这三条上界各回答一个问题：
+ * - `PROJECTION_TAIL_MAX_EVENTS`：一次续读最多补多少条事件？超过 ⇒ 放弃增量、整份读。
+ *   取值 2000 = 与前端首屏一段同量级（`apps/web` 的 `TIMELINE_SEGMENT_MAX_EVENTS`）：
+ *   尾巴比一段还长，通常意味着进程重启过 / 别的写者写过一大段，那时候增量读要开的块数
+ *   已经接近整份读，没必要赌。
+ * - `PROJECTION_CURSOR_MAX_SESSIONS`：进程里最多留几条投影？EU 正常只服务一个 session
+ *   （rotate 窗口里会短暂看到两个），再多的会话一旦回来也是整份读（不猜）。
+ * - `PROJECTION_CURSOR_MAX_TOOL_CALLS`：一条游标里最多记多少个 tool_call 的实参？
+ *   它与消息视图同阶（每条 assistant 的 tool_calls 本来就带同一份实参）；超过这个数
+ *   （极端碎片会话）就不再缓存游标 —— 让内存有界，代价只是下次整份读。
+ */
+export const PROJECTION_TAIL_MAX_EVENTS = 2000;
+export const PROJECTION_CURSOR_MAX_SESSIONS = 2;
+export const PROJECTION_CURSOR_MAX_TOOL_CALLS = 20_000;
+
+/**
+ * 这段续读能不能直接折进已有游标（**判据全在这里，别在调用点再判一次**）。
+ *
+ * 四条都是「不成立 ⇒ 整份读」的**保守**判据，绝不把「不确定」翻译成「少给几条」：
+ * 1. 有数据；
+ * 2. 没读满窗口（读满 ⇒ 尾巴比预算还长，我们还不知道日志头在哪）；
+ * 3. 起点严格新于已折到的 seq（重叠 / 倒退 ⇒ 日志被换过）；
+ * 4. seq 严格递增且最后一条正好是**日志头**（中间有洞 ⇒ 说明有别的东西动过盘）。
+ */
+function isContiguousTail(
+  foldedSeq: number,
+  tail: readonly SessionEventRecord[],
+  head: number | undefined,
+): boolean {
+  if (tail.length === 0) return false;
+  if (tail.length >= PROJECTION_TAIL_MAX_EVENTS) return false;
+  if (head === undefined) return false;
+  const first = tail[0]?.seq;
+  if (typeof first !== 'number' || first <= foldedSeq) return false;
+  let previous = foldedSeq;
+  for (const event of tail) {
+    if (typeof event.seq !== 'number' || event.seq <= previous) return false;
+    previous = event.seq;
+  }
+  return previous === head;
+}
+
 /** finalizeRun 的终态输入（C1） */
 type RunTerminalOutcome =
   | { status: 'completed'; output: string }
@@ -201,26 +253,6 @@ interface RunContextAccounting {
    * 「上一次响应之后追加的内容」不会被它抹掉：现值来自估算，它只做 `max` 的下界。
    */
   providerPrompt?: number;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** 从会话事件里取最近一次 `llm.response.usage` 的 per-request token 数。 */
-function lastRequestTokensFromEvents(events: readonly SessionEventRecord[]): number | undefined {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event === undefined || event.type !== 'llm.response') continue;
-    if (!isRecord(event.data)) continue;
-    const usage = event.data.usage;
-    if (!isRecord(usage)) continue;
-    const prompt = typeof usage.prompt_tokens === 'number' ? usage.prompt_tokens : 0;
-    const completion = typeof usage.completion_tokens === 'number' ? usage.completion_tokens : 0;
-    const total = prompt + completion;
-    if (total > 0) return total;
-  }
-  return undefined;
 }
 
 /** 新建一次 run 的 usage 统计 */
@@ -275,6 +307,23 @@ function legacyRunFromRecord(record: RunRecord): LegacyRunSnapshot | undefined {
 /** 错误文本（事件/持久化统一口径） */
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 一次 run 起点的历史恢复读数（`session history restored` 日志的载荷）。
+ *
+ * 为什么这条日志值得留：0.54 B3 之后「恢复历史」是发送路径上唯一 O(会话) 的动作，
+ * 而它的成本结构（整份读 vs 尾读 / 投影 / 对账）不看数字根本猜不出来 —— 0.56 §10
+ * 要求的就是「在真实 gateway 里加一次计时，只加计时、不改口径」。这里的数字全部是
+ * `performance.now()` 的差，不参与任何判定。
+ */
+interface HistoryRestoreTiming {
+  /** `full` = 整份读重建；`tail` = 尾部续读；`reuse` = 日志没长，一条都没读。 */
+  mode: 'full' | 'tail' | 'reuse';
+  /** 日志读（含范围读的定位）耗时。 */
+  read_ms: number;
+  /** 折叠（`extendProjection`）耗时。 */
+  fold_ms: number;
 }
 
 /**
@@ -2990,6 +3039,7 @@ export class ExecutionUnit {
       // 顺序不能反：闸先判定，判定通过才允许发事件与请求 —— 否则日志里会出现一条
       // 「请求已发出」但实际没发的假事实。
       const requestViewTokens = estimateRequestViewTokens(messages, { tools: args.tools });
+
       this.accounting(execution).requestView = {
         tokens: requestViewTokens,
         messageCount: messages.length,
@@ -4299,25 +4349,34 @@ export class ExecutionUnit {
    * run() 与 resume 都必须走这里：否则崩溃后新 run 只读缓存，未重放的尾段事件就丢了。
    */
   private async loadStoredHistory(sessionId: string, record?: RunRecord): Promise<StoredHistory> {
+    const startedAt = performance.now();
     let sessionState: SessionState | null = null;
     if (this.session) {
       sessionState = await this.session.load(sessionId);
     }
+    const shellMs = performance.now() - startedAt;
+    let restoreMs = 0;
+    let restore: { cursor: ProjectionCursor | undefined; timing: HistoryRestoreTiming } = {
+      cursor: undefined,
+      timing: { mode: 'full', read_ms: 0, fold_ms: 0 },
+    };
 
     const cached = sessionState?.messages?.length ? sessionState.messages : undefined;
 
-    let events: Awaited<ReturnType<SessionEventReadPort['read']>> = [];
+    let projection: ProjectionCursor | undefined;
     // 日志最后的 seq：既用于一致性告警，也是本次窗口「覆盖到哪」的唯一来源。
     let lastSeq: number | undefined;
     if (this.eventLog) {
       try {
+        const tRestore = performance.now();
         await this.eventLog.flush(sessionId);
-        // 0.54 B3：**整份读**。投影的输入不再由会话壳里的游标裁剪 —— 那是写侧水位参与
-        // 可见性判定（B 阶段要消灭的东西）。旧写法是 `read({ sinceSeq: derived })`：
-        // 壳落后时尾部事实根本进不了投影（P7：`derived=4` vs `last_seq=366`）。
-        events = await this.eventLog.read(sessionId);
         // 一致性校验（P2）：RunRecord 游标不得超前于日志。
         lastSeq = await this.eventLog.lastSeq?.(sessionId);
+        // 投影：整份读（0.54 B3 的可读性口径，一次都不能少）或尾部续读（第十一条）。
+        // 选哪条只由「本进程上次折到哪 + 这次日志头在哪」决定，见 restoreProjection。
+        restore = await this.restoreProjection(sessionId, lastSeq);
+        projection = restore.cursor;
+        restoreMs = performance.now() - tRestore;
         const recordCursor = record?.event_cursor;
         if (
           typeof recordCursor === 'number' &&
@@ -4340,26 +4399,42 @@ export class ExecutionUnit {
 
     // 上下文锚点只认最近一次请求的 per-request usage（`llm.response.usage`）。
     // 0.54 B3：投影输入恒为整份日志 ⇒ 这里不必再「补读尾部窗口」。
-    const lastRequestTokens = lastRequestTokensFromEvents(events);
+    const lastRequestTokens = projection?.lastRequestTokens;
 
     // 覆盖游标**只由日志决定**：它是「本次窗口覆盖到哪」的上报值（`lastCoveredCursor`
     // 据此决定要不要发 `context.changed`），不许再被会话壳里的任何缓存提示影响。
-    const lastReadSeq = events[events.length - 1]?.seq;
+    const lastReadSeq = projection?.seq;
     const cursor = typeof lastReadSeq === 'number' ? lastReadSeq : undefined;
-    const eventCount = events.length;
+    const eventCount = projection?.count ?? 0;
     const usageField = lastRequestTokens !== undefined ? { lastRequestTokens } : {};
 
-    if (events.length > 0) {
+    // 「这次历史恢复花了多少」：整份读 / 尾读 / 一条都没读，各是多少毫秒 —— 这是发送
+    // 路径上唯一 O(会话) 的一段，只观测、不参与任何判定（0.56 §10 的同一条要求）。
+    this.logger.debug('session history restored', {
+      session_id: sessionId,
+      mode: restore.timing.mode,
+      shell_ms: Math.round(shellMs),
+      event_read_ms: Math.round(restore.timing.read_ms),
+      fold_ms: Math.round(restore.timing.fold_ms),
+      restore_ms: Math.round(restoreMs),
+      events: projection?.count ?? 0,
+      messages: projection?.messages.length ?? 0,
+    });
+
+    if (projection !== undefined && projection.messages.length > 0) {
       // 0.54 B3：缓存覆盖到哪**只按内容算**（`reconcileCachedProjection`），不读会话壳里的
       // 任何游标字段。投影恒取原文口径 —— 见 `SessionState.messages` 的注释：这里会经
       // `finalizeSessionState` 写回盘上，占位不许物化。
-      const projected = projectMessages(events, { applyClearedReplacements: false });
+      //
+      // 数组复制一份（消息对象共享，口径见 `ProjectionCursor` 注释）：游标要活到下一次
+      // run，调用方对「它拿到的那个数组」做任何事都不该改到游标自己的视图。
+      const projected = [...projection.messages];
       const messages =
         cached !== undefined
           ? // 深拷贝：缓存对象是 store 的内存引用，播种过程会就地补 `timestamp`。
             reconcileCachedProjection(structuredClone(cached), projected, {
               // 撤回 = 删尾部事实：缓存里那几条必须消失（与压缩同一类「替换」语义）。
-              replacementInLog: events.some((event) => event.type === 'session.rewound'),
+              replacementInLog: projection.rewoundSeen,
             })
           : projected;
       if (messages.length > 0) {
@@ -4378,6 +4453,85 @@ export class ExecutionUnit {
       return { messages: record.legacy_messages, sessionState, eventCount, ...usageField };
     }
     return { messages: sessionState?.messages ?? [], sessionState, eventCount, ...usageField };
+  }
+
+  /**
+   * 本进程内已折出的会话投影（10.56 增量续读的起点）。
+   *
+   * 上界：`PROJECTION_CURSOR_MAX_SESSIONS` 条；每条的内容就是「一次会话视图」，与
+   * `WorkingContext` 里那份是**同一批消息对象**（共享，不复制二次）。
+   */
+  private readonly projectionCursors = new Map<string, ProjectionCursor>();
+
+  /**
+   * 取出（或重建）会话投影：**能续读就续读，不能就整份读**。
+   *
+   * 为什么可以续：投影是折叠（`fold`），`fold(fold(∅, A), B) === fold(∅, A ++ B)`；
+   * `project-messages.ts` 里只有一份折叠实现（`extendProjection`），所以两条路输出
+   * 逐条相同。**为什么必须有整份读的退路**：0.54 B3 的可读性判据是「投影 = 日志的纯
+   * 函数」，一旦「上次折到哪」与「这次日志头在哪」对不上（日志被换过 / 中间有洞 / 读不
+   * 满窗口 / 进程刚起），续读就会把一段事实当成不存在 —— 那不是优化，那是丢数据。
+   *
+   * 判据不成立时的动作只有一条：**丢掉游标、整份读**，并留痕（否则下次没人知道增量
+   * 一直没生效）。
+   */
+  private async restoreProjection(
+    sessionId: string,
+    head: number | undefined,
+  ): Promise<{ cursor: ProjectionCursor | undefined; timing: HistoryRestoreTiming }> {
+    const log = this.eventLog;
+    if (log === undefined)
+      return { cursor: undefined, timing: { mode: 'full', read_ms: 0, fold_ms: 0 } };
+    const folded = this.projectionCursors.get(sessionId);
+    if (folded !== undefined) {
+      if (head !== undefined && folded.seq !== undefined && head === folded.seq) {
+        // 日志没长（同一段内再次组请求 / 上个 run 收尾后没有新事件）：一条都不用读。
+        return { cursor: folded, timing: { mode: 'reuse', read_ms: 0, fold_ms: 0 } };
+      }
+      if (head !== undefined && folded.seq !== undefined && head > folded.seq) {
+        const tTail = performance.now();
+        const tail = await log.read(sessionId, {
+          sinceSeq: folded.seq,
+          limit: PROJECTION_TAIL_MAX_EVENTS,
+        });
+        const readMs = performance.now() - tTail;
+        if (isContiguousTail(folded.seq, tail, head)) {
+          const tFold = performance.now();
+          extendProjection(folded, tail);
+          const foldMs = performance.now() - tFold;
+          if (folded.seq === head) {
+            return { cursor: folded, timing: { mode: 'tail', read_ms: readMs, fold_ms: foldMs } };
+          }
+        }
+      }
+      this.projectionCursors.delete(sessionId);
+      this.logger.debug('session projection cursor dropped', {
+        session_id: sessionId,
+        folded_seq: folded.seq,
+        head_seq: head,
+      });
+    }
+    const tFull = performance.now();
+    const events = await log.read(sessionId);
+    const readMs = performance.now() - tFull;
+    const tFold = performance.now();
+    const cursor = createProjectionCursor({ applyClearedReplacements: false });
+    extendProjection(cursor, events);
+    const foldMs = performance.now() - tFold;
+    this.rememberProjection(sessionId, cursor);
+    return { cursor, timing: { mode: 'full', read_ms: readMs, fold_ms: foldMs } };
+  }
+
+  /** 记住一条投影游标（超出条数 / 条目上界就干脆不留，下次整份读）。 */
+  private rememberProjection(sessionId: string, cursor: ProjectionCursor): void {
+    if (cursor.toolStarts.size > PROJECTION_CURSOR_MAX_TOOL_CALLS) return;
+    this.projectionCursors.delete(sessionId);
+    this.projectionCursors.set(sessionId, cursor);
+    while (this.projectionCursors.size > PROJECTION_CURSOR_MAX_SESSIONS) {
+      const oldest = this.projectionCursors.keys().next();
+      if (oldest.done === true) break;
+      this.projectionCursors.delete(oldest.value);
+    }
   }
 
   /** 0.18：best-effort 索引更新；永不向外抛 */
