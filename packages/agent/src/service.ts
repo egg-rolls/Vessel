@@ -18,6 +18,7 @@ import {
   assertProjectionModeAllowedForChild,
   assertTenantId,
   type ContextSummarizer,
+  classifyProviderRetry,
   // CREATE-0.39 内部改名：与 core 导出同名，不再使用 import alias。
   compactMessagesForSeed,
   declareProjection,
@@ -48,6 +49,7 @@ import {
   type Scheduler,
   type SessionEventLogPort,
   type ToolDefinition,
+  toErrorEnvelope,
   type Usage,
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
@@ -104,6 +106,7 @@ import {
   type AgentUpdateResult,
   type BatchItemResult,
   type BatchResult,
+  type BodyBlocked,
   type BudgetBlockReason,
   type BudgetCheckResult,
   type BudgetOverrideInput,
@@ -469,6 +472,14 @@ interface ExecutionUnitEntry {
     conversationId?: string;
   };
   budgetHold: Set<string>;
+  /**
+   * 硬错误闸（0.55）：不可重试的 provider 硬错误之后落下的现场（单对象，有上界）。
+   *
+   * 存在即「这具 body 不再自动接单」：新消息照常入 inbox + pending/hold，但不 submit
+   * 新 run（`startExecutionUnitRun` / `admitInternal` / `canDispatchInbox` 三处同判）；
+   * 清空只有显式解闸一条路（`unblockBodies`）。不落盘：重启 = 人类显式动作。
+   */
+  hardStop?: BodyBlocked;
   closing: boolean;
   spawned: boolean;
   /** 在途 spawn（single-flight）：并发 admit 只 spawn 一次 */
@@ -613,7 +624,43 @@ function toExecutionUnitStatus(entry: ExecutionUnitEntry): ExecutionUnitStatus {
     primary: entry.primary,
     created_at: entry.createdAt,
     last_active_at: entry.lastActiveAt,
+    // 0.55：硬错误闸随状态一起出去 —— 「这个 body 因为什么跑不动」必须在状态查询里
+    // 一眼可见，不能只留在节点日志里（那对 WebUI / 父 agent 都是不可见的）。
+    ...(entry.hardStop !== undefined ? { blocked: entry.hardStop } : {}),
   };
+}
+
+/**
+ * 一次 provider 失败里「必然再失败」的那一类（0.55 硬错误闸的判据）。
+ *
+ * 两套既有分类同时点头才算，理由：
+ * - `classifyProviderRetry` 决定「能不能自动重发同一请求」——它说能重发（传输层 / 429）
+ *   的，本就不是硬错误，不该立闸；
+ * - `toErrorEnvelope` 给出稳定错误码与 category —— 只有 category=provider 且
+ *   retryable=false（400 上下文超限 / 401·403 认证 / 402 余额 / 模型不存在 / 其它 4xx）
+ *   才是「同一份请求重发必然再失败」。工具错误 / 权限超时 / 内部 bug 都落在别的 category，
+ *   立闸只会把可自愈的失败变成要人捞的失败。
+ *
+ * 不另造分类：两个函数都是既有判据的唯一实现，这里只做合取。
+ */
+function hardProviderFailure(error: unknown, at: number): BodyBlocked | undefined {
+  if (classifyProviderRetry(error).retryable) return undefined;
+  // 不传 options：让 envelope 自己按错误文本判 category。强行传 phase='llm' 会把
+  // 工具 / 权限失败也算成 provider。
+  const envelope = toErrorEnvelope(error);
+  if (envelope.category !== 'provider' || envelope.retryable) return undefined;
+  return { code: envelope.error_code, reason: singleLineReason(errorText(error)), at };
+}
+
+/** 闸里的原因上限：与 Team 日志的失败原因同口径，超出截断并加标记 */
+const MAX_BLOCKED_REASON_CHARS = 500;
+
+/** 失败原因折成单行并截断（一条状态 / 一行日志不该被 provider 的多行正文撑开） */
+function singleLineReason(value: string): string {
+  const flat = value.replace(/\s+/g, ' ').trim();
+  return flat.length > MAX_BLOCKED_REASON_CHARS
+    ? `${flat.slice(0, MAX_BLOCKED_REASON_CHARS)}...`
+    : flat;
 }
 
 /**
@@ -2626,6 +2673,12 @@ export class AgentServiceImpl implements AgentService {
       }
     }
 
+    // 0.55 硬错误闸的解闸动作（第一处，共三处）：
+    // **人类**投递 = 人在键盘前说「再试一次」。agent 投递**不**解闸 —— 今天事故正是
+    // 别的成员每来一条报告就自动把 main 唤醒重发同一份必然 400 的上下文；把「agent
+    // 发消息」当成解闸信号，等于把那个循环原样搬回来。
+    if (this.isHumanPrincipal(from)) this.unblockBodies(record.id, 'human');
+
     // 4. 预算：human 直接对话免 conversation budget（替代原 externalOwner 特例）；
     //    面向 member 的投递（含 human → member）仍走 budget，与旧口径一致。
     //    投递侧只拦 hop / cycle / wall-clock / team 不一致；turns / tokens 是 turn 域，
@@ -2771,6 +2824,26 @@ export class AgentServiceImpl implements AgentService {
       ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
     });
     this.scheduleSnapshot();
+
+    // 0.55 硬错误闸（通往 scheduler 的闸）：body 被闸住时**只排队、不 submit**。
+    //
+    // 与上面 draining 那段同形：消息已经落 durable inbox 并 hold 成 pending（看得见、
+    // 读得到、id 不变），只是不再开新 run。为什么不 throw：投递失败会让
+    // `admitInternal` 的失败出口把消息 discard 掉（用户正文丢失），而这里要的恰恰是
+    // 「收下、留着、等一条显式动作」。status 仍是 queued，调用方拿到的语义是「排队了」。
+    if (entry.hardStop !== undefined) {
+      const blockedRunId = this.newId();
+      this.runMessageIds.set(blockedRunId, message.id);
+      return {
+        result: {
+          run_id: blockedRunId,
+          agent_id: record.id,
+          session_id: entry.bindingId,
+          status: 'queued',
+        },
+        message,
+      };
+    }
 
     let submitted: { runId: string; handle: RunHandle };
     try {
@@ -2962,6 +3035,16 @@ export class AgentServiceImpl implements AgentService {
       cancelled.markCancelled('body closed');
       return cancelled;
     }
+    if (entry.hardStop !== undefined) {
+      // 0.55 硬错误闸（最后一道）：闸之前就已经 submit 出去的 run 也会走到这里。
+      // 与预算 turn_start 阻塞同一形态 —— 不出队、不消费、不调 provider，消息留在
+      // `entry.pending` + held；解闸（`unblockBodies`）后由 `retryHeldMessages` 重投。
+      // 这是「同一份必然失败的请求只允许发一次」的实现点：闸落下之后任何自动链路
+      // （队头直投 / 摘要唤醒 / 已排队 run）都到不了 provider。
+      const held = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
+      held.complete('');
+      return held;
+    }
     const conversationId = message.conversation_id;
     if (!this.isHumanPrincipal(record.id)) {
       const check = this.checkTurnStart(record, message, entry.bindingId);
@@ -3037,6 +3120,9 @@ export class AgentServiceImpl implements AgentService {
           run_id: handle.id,
           error: failure,
         });
+        // 0.55 硬错误闸：不可重试的 provider 失败之后，这具 body 停止自动接单。
+        // 租约丢失的那一类不算（body 马上被 dispose 重起，闸挂在旧 entry 上没有意义）。
+        if (!leaseLostFailure) this.markBlocked(entry, error);
       }
     }
     handle.setUsage(result?.usage);
@@ -3129,6 +3215,84 @@ export class AgentServiceImpl implements AgentService {
     this.settleHandle(handle, outcome, failure, result?.content);
   }
 
+  // ─── 硬错误闸（0.55） ────────────────────────────────────────────────
+
+  /**
+   * 立闸：这具 body 在一轮不可重试的 provider 硬错误之后停止自动接单。
+   *
+   * 为什么必须立闸（今天 14:52–14:58 的真事故）：`run.failed` 只写一行 Team 日志，
+   * 状态与投放链路都不知道这一轮已经废了；下一条 inbox 消息照样把同一份必然 400 的
+   * 上下文再发一次，于是 3 分钟里同一份请求被自动重发 3 次、每次都是同一个 400，
+   * 最后只能由人手 `turn cancelled`。
+   *
+   * 落闸只改**闸字段**，不碰 `state`：终态仍由 `updateAgentState(record, 'failed')`
+   * 那条既有路径写（对外看到的就是 `failed` + `bodies[].blocked`）。
+   */
+  private markBlocked(entry: ExecutionUnitEntry, error: unknown): void {
+    const blocked = hardProviderFailure(error, this.now());
+    if (blocked === undefined) return;
+    entry.hardStop = blocked;
+    // 已有的 queued run 不再去调 provider：`startExecutionUnitRun` 的闸会拦下它们，
+    // 消息留在 pending + held（下面这条日志里的 count 就是它们的条数）。
+    this.logger.warn('agent.body.blocked', {
+      agent_id: entry.agentId,
+      session_id: entry.bindingId,
+      code: blocked.code,
+      at: blocked.at,
+      queued_runs: entry.queuedRuns.size,
+      pending: entry.pending.length,
+      error: blocked.reason,
+    });
+  }
+
+  /**
+   * 解闸：清掉这具 body 的硬错误闸，并把留在队列里的消息重新准入。
+   *
+   * 只有**显式动作**能走到这里（见三个调用点），闸本身没有超时 / 自动重试：
+   * - 人类投递（`admitInternal` 里 `isHumanPrincipal`）：人在键盘前说「再试一次」；
+   * - `interrupt: true` 的 urgent 投递（`interrupt`）：调用者明确要求「现在就做」；
+   * - 换新 body（rotate / restart）：新 entry 没有闸，旧 entry 随退役消失。
+   *
+   * `by` 只进日志：解闸是一条留下痕迹的动作，排查时必须能说出「谁放行的」。
+   */
+  private unblockBodies(agentId: string, by: string): void {
+    let cleared = false;
+    for (const entry of this.liveEntries(agentId)) {
+      if (this.clearBlocked(entry, by)) cleared = true;
+    }
+    if (!cleared) return;
+    for (const entry of this.liveEntries(agentId)) {
+      // 闸期间排进来的消息全都还在：mailbox 里的一批重新 submit，inbox 里未被持有的
+      // 那一批交给 `dispatchInbox`（队头直投 / 摘要唤醒，与正常链路同一条路）。
+      this.retryHeldMessages(entry);
+    }
+    if (this.noticeDirty.has(agentId)) {
+      void this.dispatchInbox(agentId).catch(() => {});
+    }
+  }
+
+  /**
+   * 清闸 + 留痕（不动队列）。返回 true 表示这具 body 之前确实是闸着的。
+   *
+   * 与 `unblockBodies` 分开：`interrupt` 那条路会**自己**重排整个 mailbox（打断消息
+   * 排最前、旧队列随后），它只需要清闸，不能让 `retryHeldMessages` 抢先出队。
+   */
+  private clearBlocked(entry: ExecutionUnitEntry, by: string): boolean {
+    const blocked = entry.hardStop;
+    if (blocked === undefined) return false;
+    entry.hardStop = undefined;
+    this.logger.info('agent.body.unblocked', {
+      agent_id: entry.agentId,
+      session_id: entry.bindingId,
+      by,
+      code: blocked.code,
+      blocked_at: blocked.at,
+      pending: entry.pending.length,
+      error: blocked.reason,
+    });
+    return true;
+  }
+
   /**
    * 本轮失败是否由租约丢失导致。
    *
@@ -3173,6 +3337,14 @@ export class AgentServiceImpl implements AgentService {
     agent_id: string;
     unread: number;
     pending: number;
+    /**
+     * 0.55 additive：这具 body 的硬错误闸（缺省 = 能接活）。
+     *
+     * 放在条带视图中，是因为「排队消息为什么一直不动」的上下文就在这里：用户看到
+     * 3 条 pending 时，同一次读里就能看到「因为 400 上下文超限停摆、什么时刻停的」。
+     * `agents.inbox` 的 handler 是 `{...snapshot}` 透传，所以这条字段直接上 wire。
+     */
+    blocked?: BodyBlocked;
     entries: {
       message_id: string;
       from: string;
@@ -3216,7 +3388,17 @@ export class AgentServiceImpl implements AgentService {
         };
       });
     // `unread` / `pending` 保持 **agent 维度**（过滤前），它们是收件箱口径，不是会话口径。
-    return { agent_id: agentId, unread: listed.unread, pending: listed.pending, entries };
+    // 0.55：闸是 body 维度的事实，与统计口径无关——有闸就带上，没有就不写。
+    const blocked = this.liveEntries(agentId).find(
+      (entry) => entry.hardStop !== undefined,
+    )?.hardStop;
+    return {
+      agent_id: agentId,
+      unread: listed.unread,
+      pending: listed.pending,
+      ...(blocked !== undefined ? { blocked } : {}),
+      entries,
+    };
   }
 
   /**
@@ -3866,6 +4048,10 @@ export class AgentServiceImpl implements AgentService {
     // rotate 窗口内旧 body 正在退役、新 body 马上接手：此刻不是「停了」。
     if (this.rotations.has(agentId)) return true;
     for (const entry of this.liveEntries(agentId)) {
+      // 0.55 硬错误闸：闸落下的 body 是「真的停了」—— 它不会自己再动，等的是人。
+      // 队列里哪怕还压着消息也必须报出去，否则父级只会看到一个 failed 状态、却拿不到
+      // 「因为什么跑不动」，于是继续往死里投（今天事故里就是这样一路重发到第 3 次）。
+      if (entry.hardStop !== undefined) return false;
       if (entry.active !== undefined) return true;
       if (entry.queuedRuns.size > 0) return true;
       if (entry.spawning !== undefined) return true;
@@ -4302,6 +4488,11 @@ export class AgentServiceImpl implements AgentService {
         throw new AgentError('member_closed', `member_closed: ${target.id}`);
       }
 
+      // 0.55 硬错误闸的解闸动作（第二处，共三处）：`interrupt: true` 是既有语义里
+      // 唯一带「现在就做」意图的显式动作（调用者主动按下去，不是自动链路捡起来的消息）。
+      // 这里只清闸；重排由本函数下面那段统一做（打断消息排最前、旧队列随后）。
+      if (entry.hardStop !== undefined) this.clearBlocked(entry, `interrupt:${input.from}`);
+
       // 1. 该 body 当前的 running / queued run（scheduler 快照是活跃状态的唯一真相）。
       const snapshot = this.scheduler.snapshot?.();
       let runningIds: string[];
@@ -4446,6 +4637,23 @@ export class AgentServiceImpl implements AgentService {
           seenMessageIds.add(message.id);
           oldMessages.push(message);
         }
+      }
+      // 0.55：闸期间排进 mailbox 的消息**从来没有 queued run**（`admitInternal` 只排队、
+      // 不 submit），上面按 `queuedRunIds` 收集的 oldMessages 里看不到它们。不补这一段，
+      // 「用 interrupt 解闸」会把整个队列永久搁在 pending + held —— 解闸动作反而制造黑洞。
+      // 判据只看「在 mailbox 里、还没有在途 run」，不猜别的状态。
+      const inFlight = new Set<string>();
+      for (const runId of entry.queuedRuns) {
+        const messageId = this.runMessageIds.get(runId);
+        if (messageId !== undefined) inFlight.add(messageId);
+      }
+      const activeId = entry.active?.messageId;
+      if (activeId !== undefined) inFlight.add(activeId);
+      for (const message of entry.pending) {
+        if (message.id === interruptMessage.id) continue;
+        if (inFlight.has(message.id) || seenMessageIds.has(message.id)) continue;
+        seenMessageIds.add(message.id);
+        oldMessages.push(message);
       }
 
       // 7. 取消 active；若原消息是 urgent，则重投它（work 消息不重投）。
@@ -4729,6 +4937,9 @@ export class AgentServiceImpl implements AgentService {
         return false;
       }
       if (entry.state === 'running' || entry.state === 'waiting_permission') return false;
+      // 0.55 硬错误闸：闸落下 = 这一刻不接活。返回 false 而不是继续投，是为了让
+      // 消息**留在队列里**（队头仍是 unread，`noticeDirty` 记着），解闸时再投。
+      if (entry.hardStop !== undefined) return false;
     }
     return this.registry.get(agentId) !== undefined;
   }

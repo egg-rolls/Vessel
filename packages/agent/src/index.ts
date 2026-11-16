@@ -159,6 +159,7 @@ export {
   type BatchResult,
   type BindingHistoryEntry,
   type BindingPointer,
+  type BodyBlocked,
   type BudgetBlockReason,
   type BudgetCheckResult,
   type BudgetDeliveryInput,
