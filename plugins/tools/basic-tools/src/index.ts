@@ -98,13 +98,15 @@ function readNumber(record: Record<string, unknown>, key: string): number | unde
 
 // ── 路径边界（0.8 E1） ────────────────────────────
 
-/** 内置敏感路径：命中即 deny，不可通过 ask 放行 */
-const DEFAULT_DENY_PATHS: readonly string[] = [
-  '~/.ssh',
-  '~/.aws',
-  '~/.gnupg',
-  '~/.vessel/config.yaml',
-];
+/**
+ * 内置敏感路径：命中即 deny，不可通过 ask 放行。
+ *
+ * 2026-11-16 用户裁定：**把 `~/.vessel/config.yaml` 从这里移除**（原话「不怕 agent 会改坏，不要对 agent
+ * 做过多限制，他们有自觉」）。它不再是"不可放行"的敏感路径——agent 可以读写自己的配置。
+ * 保留 `~/.ssh` / `~/.aws` / `~/.gnupg`：那不是我们自己的配置，是**第三方凭据**，误改影响别人。
+ * 若要进一步放开，改这里即可（只此一处，read/edit 路径边界与 bash 命令文本匹配同源）。
+ */
+const DEFAULT_DENY_PATHS: readonly string[] = ['~/.ssh', '~/.aws', '~/.gnupg'];
 
 /** 插件配置（同时接受 camelCase / snake_case；未知键忽略） */
 export interface BasicToolsConfig {
