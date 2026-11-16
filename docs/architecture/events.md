@@ -44,7 +44,6 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `context.projection_applied` | `{ schema_version, mode, effective_mode, declaration_id, plan_hash, ids_count, basis, reason, steps, at }`（**决策变更**的 run 起点一条，落盘审计 `context_projection_audit` 的可见镜像，ADR-104 §5.1/§5.2） | execution-unit |
 | `context.projection_degraded` | `{ schema_version, mode, effective_mode, reason, basis, steps }`（运行期 fail-open 到 `passthrough` 的留痕；`reason` 用 §6.4 冻结码，如 `projection_mode_unavailable` / `projection_declaration_invalid`） | execution-unit |
 | `context.projection_pressure` | `{ used, max, ratio, basis, threshold_ratio, total_count, retained_tokens, max_tokens, retained_ratio, top_result_bytes, effective_mode }`（`passthrough` 下体积触顶**只告警不压缩**；`basis: 'all_tool_results'`） | execution-unit |
-| `timeline.divergence` | `{ session_id, run_id, missing_count, allowed_extra_count, unexpected_extra_count, missing_types, unexpected_extra_types, verify_sample_rate, at }`（0.54 A 双写抽样审计：旧链路与 timeline 的多重集比对出差异；**不带任何正文**，也不进 timeline 自身） | src/timeline-dual-write |
 | `timeline.gap_reported` | `{ session_id?, expected?, received?, start_seq?, end_seq?, after_timeline_seq?, check?, at }`（0.54 B1 握手自检：**客户端**按 ADR-105 §6 四条校验发现实收与 `hello.count` 对不上时，在同一 WS 连接上发 `{kind:'timeline_gap'}` 帧，服务端只记录、不改事实源；`check` = 1 首条 / 2 末条 / 3 条数 / 4 集合闭区间。不含任何事件正文） | serve gateway（`recordTimelineGapReport`） |
 | `run.completed` | `RunCompletedPayload` | execution-unit |
 | `run.failed` | `RunFailedPayload` | execution-unit |
@@ -144,7 +143,6 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 | `context.projection_applied` | observe | — | none | live |
 | `context.projection_degraded` | observe | — | none | live |
 | `context.projection_pressure` | observe | — | none | live |
-| `timeline.divergence` | observe | — | none | live |
 | `timeline.gap_reported` | observe | — | none | live |
 | `message.injected` | internal | — | none | live |
 | `message.compaction` | internal | — | none | live |

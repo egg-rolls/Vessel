@@ -251,11 +251,11 @@ export class TimelineError extends Error {
 }
 
 /**
- * chunk 判定：**恰好两条**（ADR-105 §8.1 规则 ④ 的镜像）。
+ * chunk 判定：**恰好两条**（ADR-105 §8.1 规则 ④）。
  *
- * 与 `scripts/timeline-reference.ts#isTimelineOnlyType` 的白名单逐字一致：
- * `llm.stream.chunk` 与其子 agent 后缀形态 `*.llm.stream.chunk`。写成「包含」
- * 或加第三条都会被 `check-timeline-conformance` 的差集判据打红。
+ * 白名单逐字只有 `llm.stream.chunk` 与其子 agent 后缀形态 `*.llm.stream.chunk`：
+ * 写成「包含」会让 `foo.llm.stream.chunkx` 这类名字混进来，加第三条会把「旧链路故意
+ * 不落盘」的一类扩大到没有依据的范围。
  */
 export function isChunkEventType(type: string): boolean {
   return type === 'llm.stream.chunk' || type.endsWith('.llm.stream.chunk');

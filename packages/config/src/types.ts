@@ -352,8 +352,6 @@ export interface TimelineConfig {
   dualWrite?: boolean;
   /** chunk 空闲封块间隔（ms，1..1000）；缺省 150（`timeline.CHUNK_FLUSH_MS`）。 */
   chunkFlushMs?: number;
-  /** 一致性抽样率（0..1）；缺省 `0.01`（1% 的 run 结束时比对一次）。 */
-  verifySampleRate?: number;
   /**
    * 归档周期保底间隔（ms）；缺省 5000（`timeline.archive_interval_ms`）。
    *

@@ -201,7 +201,6 @@ export const DEFAULT_TRACE_OPTIONS: Required<TraceConfig> = {
 export const DEFAULT_TIMELINE_OPTIONS: Required<TimelineConfig> = {
   dualWrite: true,
   chunkFlushMs: 150,
-  verifySampleRate: 0.01,
   archiveIntervalMs: 5_000,
 };
 

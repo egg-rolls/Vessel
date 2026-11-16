@@ -717,26 +717,14 @@ export async function buildTenantRuntime(
   // `publicationGate` 把那条广播扣成发送缓冲：写者 fsync 之后才放行给 UI。
   const timelineDualWrite: TimelineDualWrite | undefined = writesEventLog
     ? createTimelineDualWrite({
-        dataDir: tenantPaths.root,
         sessionsDir: tenantPaths.sessions_dir,
         dualWrite: true,
         ...(timelineOptions.chunkFlushMs !== undefined
           ? { chunkFlushMs: timelineOptions.chunkFlushMs }
           : {}),
-        ...(timelineOptions.verifySampleRate !== undefined
-          ? { verifySampleRate: timelineOptions.verifySampleRate }
-          : {}),
         ...(timelineOptions.archiveIntervalMs !== undefined
           ? { archiveIntervalMs: timelineOptions.archiveIntervalMs }
           : {}),
-        emit: (event) => {
-          try {
-            // 观测事件直接进底层流：它永远不进 timeline，不该被发送缓冲扣一下。
-            rawEvents.publish(event);
-          } catch {
-            // 观测事件投递失败不得影响 run
-          }
-        },
         // 发布点：写者 fsync 之后回调 ⇒ 发到**底层**事件流（不能回到闸门，否则自我循环）。
         onPublish: (publication) => {
           try {
