@@ -22,7 +22,7 @@ packages/core/src/timeline/types.ts     # 记录/头/洞/块类型 + 常量 + �
 packages/core/src/timeline/wal.ts       # ndjson/frame 编解码 + crc32 + 撕裂尾 + 可枚举读
 packages/core/src/timeline/blocks.ts    # chunk 块：帧、封块、manifest（目录，异步）
 packages/core/src/timeline/holes.ts     # 洞登记区：append-only + crc32 + 跨重启
-packages/core/src/timeline/index.ts     # session/run/type 索引 + 独立读器（可重建/校验回退）
+packages/core/src/timeline/index.ts     # session/run/type 索引（可重建；独立读器已删，见下注）
 packages/core/src/timeline/writer.ts    # 唯一 seq 分配点 + 唯一 publish 出口 + 归档
 scripts/check-timeline-conformance.ts   # A-1 逐条相等（调用 scripts/timeline-reference.ts）
 scripts/check-timeline-holes.ts         # A-3 洞可声明（WAL/chunk/归档三种失败）
@@ -93,6 +93,10 @@ scripts/check-timeline-perf.ts          # A-5 延迟 / 写放大 / 常驻内存
 `TimelineIndexReader` 是独立读器：先信索引，逐条回读校验 `run_id` / `type` / 条数；
 任何不一致（假区间、漏区间、类型不符）都回退全扫并回调 `onMismatch`。
 自证覆盖：删整目录重建、假区间篡改、两次重建字节相同、正常读取 0 mismatch（§7）。
+
+> **注（2026-11-16，`0.54-truth-fix`）**：这个读器**已删除**（零生产调用点，留着它就成了
+> ADR-105 §5 断言 2"校验 + 回退"的假物证）。上面这段描述的是它当时的形态，不再是现状；
+> 生产读路径恒整份读记录，索引只用于 `wal_head` 与 `run_id → session_id` 快路径。
 
 ## 6. 性能（A-5 真实输出）
 
@@ -219,8 +223,8 @@ RESULT: PASS (checks=26 failed=0)
 >    `rebuild 两次 … 字节相同` 那几条现在连入口都没有了。
 > 2. **`index_mismatch` 那两行是假的自证**：它们数的是 `TimelineIndexReader.onMismatch`
 >    **回调次数**，不是事件 —— 全仓从来没有 `timeline.index_mismatch` 事件类型，也**没有生产读路径**
->    会去校验索引（唯一会校验的 `TimelineIndexReader` 零调用点）。所以「触发 index_mismatch」
->    在任何真实读路径上都不成立。裁定与现状见 ADR-105 §11.1「索引一致性告警」。
+>    会去校验索引（唯一会校验的 `TimelineIndexReader` 零调用点，且已在 `0.54-truth-fix` 删除）。
+>    所以「触发 index_mismatch」在任何真实读路径上都不成立。裁定与现状见 ADR-105 §11.1「索引一致性告警」。
 >
 > 能留下来仍然成立的部分：删索引后读结果逐条相同、索引可重建、篡改索引读结果不变
 > —— 这三条由 ADR-105 §5 断言 1 + 生产读路径"恒整份读记录"保证，只是不再有脚本自证。
@@ -293,6 +297,7 @@ RESULT: PASS (checks=20 failed=0)
   `effect_key`。这属接线/消费侧，A 阶段任务书未列入。
 - **配置层**：`timeline.chunk_flush_ms` 只作为 `TimelineWriterOptions` 传入；未接 config resolver。
 - **索引读器常驻内存**：`TimelineIndexReader` 为自证方便一次性读入全部记录；分页/按需读属 B 阶段。
+  **注（2026-11-16，`0.54-truth-fix`）：该读器已删除，本条不再是现状**（见本文件索引一节末的注）。
 - **跨进程写锁**：模块内不做锁，依赖 ADR-056/086 的数据目录写意图锁。
 - **`session.idx` 摘要**：已写但没有 RPC 消费；按 ADR §5 不得作为判据。
 - **RSS 预算**：heap 增量 1.42 MB 达标；RSS 观测 31.21 MB（略高于 30 MB，含运行时开销），

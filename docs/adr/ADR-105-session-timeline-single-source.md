@@ -211,15 +211,15 @@ timeline.idx/type.idx        # type 索引（可重建，§5）
 | 索引 | 内容 | 谁用 | 重建 | 成为第二事实源的禁止方式 |
 | --- | --- | --- | --- | --- |
 | **session** | 不另立文件（timeline 天然按会话分目录）；`timeline.idx/session.idx` 只存 `{first_seq,last_seq,count,holes}` 摘要 | `sessions.list` 的体积/条数展示、握手 | 扫段头 | 与段不一致 ⇒ **以段为准**并重写索引（不报错、不阻断）；摘要**不得**被任何断言当判据 |
-| **run** | `run_id → [{start_seq,end_seq}]`（通常 1 段；resume / 分段会有多段） | `events.list`（换源后）、Run 详情、usage/KPI 按 run 汇总 | 顺序扫段 | 读路径必须对返回区间**逐条校验记录的 `run_id`**；不一致 ⇒ 走全扫并记 `timeline.index_mismatch`（**0.54 未实现该可观测项**：全仓没有这个事件类型，见 §11.1「索引一致性告警」；回退全扫本身也不发生在生产读路径上 —— 生产读路径恒整份读记录，索引只用来求 `wal_head`） |
+| **run** | `run_id → [{start_seq,end_seq}]`（通常 1 段；resume / 分段会有多段） | `events.list`（换源后）、Run 详情、usage/KPI 按 run 汇总 | 顺序扫段 | 若真用索引取区间，必须对返回区间**逐条校验记录的 `run_id`**；不一致 ⇒ 走全扫并记 `timeline.index_mismatch`。**0.54 的读路径根本不走这一列**：恒整份读记录，索引只用于 `wal_head` 与 `run_id → session_id` 快路径，因此 `timeline.index_mismatch` 未实现（见 §11.1「索引一致性告警」） |
 | **type** | `type → 有序 seq 列表`（或按段的位置区间） | `types` 前缀过滤（`gateway.ts:1607`）、PII 审计检索、`context.changed` 折叠 | 顺序扫段 | 同上：命中后必须回读记录核对 `type` |
 
-**断言（进 A 阶段门禁 `check-timeline-index`）**：
+**断言（契约；原 A 阶段门禁 `check-timeline-index` 已按新准则在 `58118376` 删除，下列断言不再有脚本自证）**：
 
 1. 删掉 `timeline.idx/` 整目录 ⇒ 所有读 RPC 返回**逐字节相同**的结果（只有耗时变长）。
-2. 把 `run.idx` 写入一条假区间 ⇒ 读结果不变（走校验回退），且发出 `timeline.index_mismatch`。
-   **（0.54 实现注记，2026-11-16：只落了前半句 —— 读结果不变；`timeline.index_mismatch` 事件
-   未实现，读侧也没有"校验回退"这个动作可触发，理由与现状见 §11.1。）**
+2. 把 `run.idx` 写入一条假区间 ⇒ 读结果不变。**因为生产读路径恒整份读记录**：索引只用于求
+   `wal_head` 与 `run_id → session_id` 快路径，没有"先信索引再校验"的读动作，**不存在索引不一致的
+   读风险**，也就没有"回退全扫"这一环（`timeline.index_mismatch` 因此 0.54 未实现，见 §11.1）。
 3. `rebuild` 两次 ⇒ 索引文件字节相同（确定性，无时间戳/哈希顺序抖动）。
 4. 全仓唯一写索引的位置 = `timelineWriter`（静态断言：`timeline.idx` 字符串只允许出现在该模块与门禁里）。
 
@@ -401,20 +401,21 @@ timeline.idx/type.idx        # type 索引（可重建，§5）
 - **`holes` 的退役 / 修复生命周期仍不在本单**：洞只增不减 ⇒ 有过真丢失的会话 `tainted` **恒为 true**、
   永远不写 `tainted_cleared`（这是保守语义，不是漏洞；`check-timeline-holes` 的基线依赖它）。
 - **索引一致性告警 `timeline.index_mismatch` 未实现（2026-11-16 实测，§5 断言 2 的一半作废）**：
-  - 事实一：全仓 `index_mismatch` / `indexMismatch` 只命中 `packages/core/src/timeline/index.ts`
-    模块头的一句注释，**零实现点**；这个事件类型不存在，`docs/architecture/events.md` 里也没有它。
-  - 事实二：**也没有触发点**。唯一会逐条校验索引的是 `TimelineIndexReader`，它**零生产调用点**
-    （原先调它的自证脚本已按新准则删除）；生产读路径（`TimelineReadPort.read`、`src/timeline-dual-write.ts`）
-    恒整份读记录，索引只用于 `wal_head`（`readHeadsOnDisk`）与 `run_id → session_id` 快路径。
-    没有"先信索引、再逐条校验"这个动作，就无从发现不一致 —— 篡改 `session.idx` 的
-    `count/last_seq/holes/crc` 后读结果仍然逐条正确（断言 1 成立），但没有任何东西会去比对。
+  - 事实一：全仓 `index_mismatch` / `indexMismatch` **零实现点**、零事件类型；这个事件在
+    `docs/architecture/events.md` 里也不存在。
+  - 事实二：**也没有触发点**。唯一逐条校验过索引的是 `TimelineIndexReader`，它**零生产调用点**，
+    已在本单**删除**（留着它就是断言 2"校验 + 回退"的假物证）；生产读路径
+    （`TimelineReadPort.read`、`src/timeline-dual-write.ts`）恒整份读记录，索引只用于 `wal_head`
+    （`readHeadsOnDisk`）与 `run_id → session_id` 快路径。没有"先信索引、再逐条校验"这个动作，
+    就无从发现不一致 —— 篡改 `session.idx` 的 `count/last_seq/holes/crc` 后读结果仍然逐条正确
+    （断言 1 成立），但没有任何东西会去比对。
   - 裁定：这是**可观测性**项，不是正确性项（索引是派生数据，删了读结果不变），0.54 **不做**。
     为一个没有消费者的告警新增事件类型（还要登记 `apps/web/src/state/event-visibility.ts` 与
     `events.md`）违背当前"删 gate / probe"的政策。要落地时的最小接法写在这里备查：在双写旁路那两处
     `loadIndexSnapshot` 调用点，把 `snapshot.session.last_seq` 与 `readTimelineEvents` 的实测尾 seq 比对，
     不一致就发事件并改用实测值 —— **代价是每次 `sessions.get` 多一次全扫**，所以不能默认开。
-  - 连带作废一条自证：[timeline-writer-report.md](../dev/handoff/timeline-writer-report.md) §7.3 的
-    `[PASS] 篡改 run.idx 触发 index_mismatch — count=1` 观察的是 `TimelineIndexReader.onMismatch`
+  - 连带作废一条自证：[timeline-writer-report.md](../specs/timeline-writer-report.md) §7.3 的
+    `[PASS] 篡改 run.idx 触发 index_mismatch — count=1` 观察的是已删除的 `TimelineIndexReader.onMismatch`
     **回调次数**，不是事件；产生该输出的 `scripts/check-timeline-index.ts` 已被 `58118376` 删除，
     该节**不可复现** ⇒ 报告里已就地标注**已作废**（历史不删）。
 
