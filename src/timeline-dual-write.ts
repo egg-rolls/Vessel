@@ -24,19 +24,34 @@
  * `timeline.manifest` / `wal.manifest` / `wal.log` 三者皆无）。本模块只负责回答
  * core 问不出来的那半个问题：**「这个会话是不是本进程刚建的？」**
  *
- * 因为 `RunJournal` 是**先写 events.ndjson、再调 `record()`**，所以
- * 「0.53 遗留会话」与「0.54 新会话的第一次双写」在磁盘上**形状完全一样**。分辨只能靠时间：
- * manager 在**构造那一刻**对 `sessionsDir` 做一次快照（哪些会话已经带着日志），于是
+ * 因为 `RunJournal` 是**先写 events.ndjson、再调 `record()`**（fire-and-forget），所以
+ * 「0.53 遗留会话」与「0.54 新会话的第一次双写」在磁盘上**形状完全一样**。分辨要靠两条事实：
+ *
+ * 1. **快照**：manager 在**构造那一刻**对 `sessionsDir` 做一次快照（哪些会话已经带着日志）；
+ * 2. **内容年龄**（0.54 cutover 补的）：旧日志里**第一条记录的 `ts`**（= 这个目录的出生时间）。
  *
  * ```
- * core 说「旧格式」 ∧ 快照说「进程开始之前就在」  ⇒ 冻结：不 adopt、一个字节都不写、
- *                                                 flushSession() 抛 session_frozen_readonly
- * 其它（有标记 / 本进程才出现）                    ⇒ adopt（标记与写入都由写者做）
+ * core 说「旧格式」 ∧ 快照说「进程之前就在」                    ⇒ 冻结（不 adopt、一个字节都不写）
+ * core 说「旧格式」 ∧ 快照没有 ∧ 日志**第一条** ts < 启动时刻   ⇒ 冻结（事后才出现的旧目录）
+ * core 说「旧格式」 ∧ 快照没有 ∧ 日志第一条 ts ≥ 启动时刻       ⇒ adopt（竞态窗口里我们自己写的）
+ * core 说「旧格式」 ∧ 快照没有 ∧ 日志里没有完整记录（空/残行）  ⇒ adopt（没有任何事实可保护）
+ * 有 timeline 标记                                             ⇒ plain（写者自己会放行）
  * ```
  *
- * 保守方向是硬的：**重启后进程内没有任何登记**，所以「重启前就存在的旧会话」永远不可能被
- * adopt；宁可少 adopt（新链路缺席），绝不解冻（把旧会话写成半新半旧）。
- * 计数见 `stats().frozen_sessions`，与 `broken_sessions`（运行时故障）分开记。
+ * ### 为什么必须有第 2 条（0.54 cutover 补的洞）
+ *
+ * 只看快照的话，**在 gateway 运行中把旧目录拷进来**（恢复备份 / 从别的机器搬一份
+ * `sessions/`）会满足「快照没有」⇒ 被 adopt ⇒ 写者跳过冻结闸门并落下 `timeline.manifest`
+ * ⇒ 这个旧会话被**解冻**，从此半新半旧。而 0.54 把旧读路径删干净之后，`freeze.ts` 是它
+ * **唯一**的保护 —— 这条洞是不可逆事故，所以补。
+ *
+ * 为什么用「日志**第一条**的 ts」而不是文件 mtime、也不是「最后一条」：拷进来会重写 mtime
+ * （Windows `copy` 甚至给当前时间），而内容里的 ts 不会被拷改；而**最后一条**会被"正在写"
+ * 刷新（实测：`sessions.compact` 会先把旧日志追加一行再开时间线写者，用末条 ts 就等于拿
+ * 「正在写」证明「是我建的」——保护当场失效）。日志开头是追加式写入永不改的部分。
+ *
+ * 残缺/空日志按「没有事实可保护」处理，正好也是 `RunJournal` 先落盘、`record()` 先到的
+ * 那个竞态窗口（判成冻结会让每个新会话偶尔掉双写）。
  *
  * ## 发布点：ADR-105 §3 I2 的端到端接线（0.54 B）
  *
@@ -118,7 +133,7 @@
  * @module vessel/timeline-dual-write
  */
 
-import { readdir, stat } from 'node:fs/promises';
+import { type FileHandle, open, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   EventStream,
@@ -175,6 +190,16 @@ export const DEFAULT_ARCHIVE_INTERVAL_MS = 5_000;
 
 /** 连续归档失败达到该次数后开始退避（ADR-105 §3 I3 ③）。 */
 export const ARCHIVE_BACKOFF_THRESHOLD = 3;
+
+/**
+ * 「旧日志出生时间 vs 本进程启动时刻」的容忍窗口（ms）。
+ *
+ * 新会话的第一条事件与本进程启动是同一瞬间（同一个时钟），但事件 `ts` 与 `now()` 之间
+ * 有毫秒级抖动；留 5 秒既盖住抖动，又远小于「备份拷进来」与「进程启动」的真实间隔。
+ * 方向仍是安全的：容忍窗口只会让**更多**目录被判成 adopt，而容忍窗口之外的模糊情形
+ * 一律按冻结处理。
+ */
+export const LEGACY_BIRTH_TOLERANCE_MS = 5_000;
 
 /** 退避阶梯（ms）：第 3 / 4 / 5+ 次连续失败后，下一次**自动**归档的最早时刻。 */
 export const ARCHIVE_BACKOFF_DELAYS_MS = [100, 500, 2_000] as const;
@@ -551,6 +576,10 @@ function sessionDirOf(sessionsDir: string, sessionId: string): string {
  *
  * 注意：**它不参与冻结判定** —— 冻结判据只有 `freeze.ts` 一份。这里只回答
  * 「能不能把这条 `freeze.ts` 的『旧格式』结论当成本进程不该 adopt 的会话」。
+ *
+ * 0.54 cutover 补：快照只覆盖「构造那一刻已经存在」的目录，**运行中才拷进来的旧目录**
+ * 它看不见。那半个问题由 `readLastLegacyRecordTs`（旧日志末条的 `ts` vs 本进程启动时刻）
+ * 回答 —— 两个时间事实合起来才是完整的 `decideAdoption`。
  */
 function createPreexistingSessionSnapshot(sessionsDir: string): () => Promise<Set<string>> {
   const snapshot = (async (): Promise<Set<string>> => {
@@ -578,6 +607,60 @@ function createPreexistingSessionSnapshot(sessionsDir: string): () => Promise<Se
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 旧日志里**第一条完整记录的 `ts`**（读文件头 64 KiB、取第一整行；读不到就是 `undefined`）。
+ *
+ * 用途只有一个：分辨「事后拷进来的旧目录」与「本进程刚建的会话」—— 拷进来会重写文件
+ * mtime（Windows 上甚至直接给当前时间），但**内容里的 `ts` 不会被拷改**。所以它是这两个
+ * 场景里唯一不可伪造的时间事实。
+ *
+ * **为什么取第一条而不是最后一条**（这个区别是要命的）：往一个拷进来的旧目录写东西的
+ * 第一步就会把旧日志追加一行、于是「最后一条 ts」立刻变成"现在"——用最后一条等于用
+ * "正在写"来证明"是我建的"，判据自我否定。日志的**开头**是追加式写入永远不改的部分，
+ * 所以它才是这个目录的出生时间。实测确认过：用末条 ts 时 `sessions.compact` 会把这层
+ * 保护骗过去（时间线文件被创建、旧目录被解冻）。
+ *
+ * 读不到（文件空 / 只有崩溃残行 / 解析失败）⇒ `undefined`，调用方按「没有事实可保护」
+ * 处理：那也正是 `RunJournal` 先落盘、`record()` 先到的竞态窗口。
+ *
+ * 代价：一次 64 KiB 的头部读（不足 64 KiB 就是文件大小），只在「形状像旧格式 ∧ 快照里
+ * 没有」这一个分支上发生，每个会话最多一次（决定完就进 writers 缓存）。
+ */
+async function readLegacyLogBirthTs(sessionDir: string): Promise<number | undefined> {
+  const path = join(sessionDir, LEGACY_SESSION_LOG);
+  let size: number;
+  try {
+    size = (await stat(path)).size;
+  } catch {
+    return undefined;
+  }
+  if (size <= 0) return undefined;
+  const window = Math.min(size, 64 * 1024);
+  let file: FileHandle | undefined;
+  try {
+    file = await open(path, 'r');
+    const buffer = Buffer.alloc(window);
+    await file.read(buffer, 0, window, 0);
+    // 只解析**完整行**：窗口可能结在一条记录中间 ⇒ 最后一行丢掉（不拼接、不猜）。
+    const lines = buffer.toString('utf8').split('\n');
+    if (size > window) lines.pop();
+    for (const line of lines) {
+      if (line.trim() === '') continue;
+      try {
+        const parsed = JSON.parse(line) as { ts?: unknown };
+        if (typeof parsed.ts === 'number' && Number.isFinite(parsed.ts)) return parsed.ts;
+      } catch {
+        // 头部残行 / 坏行：往后找第一条能解析的（与 `recoverLastSeq` 同策略）
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  } finally {
+    await file?.close().catch(() => {});
+  }
 }
 
 function uniqueSorted(values: readonly string[]): string[] {
@@ -965,8 +1048,19 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
    * 「本进程开始之前就带着 `events.ndjson` 的会话」快照（构造那一刻取，见
    * {@link createPreexistingSessionSnapshot}）。它只用来解释 `freeze.ts` 的结论：
    * 「旧格式 + 本进程之前就在」⇒ 这个会话不是本进程生的 ⇒ **不 adopt**。
+   * 运行中才出现的旧目录不在快照里，由 `processStartedAt` + 日志末条 `ts` 兜住
+   * （见 `decideAdoption`）。
    */
   const preexistingSessions = createPreexistingSessionSnapshot(options.sessionsDir);
+  /**
+   * 本进程启动时刻（`ms`）——判定 adopt 的第二个时间事实。
+   *
+   * 用途只有一个：把「事后拷进来的旧目录」与「本进程刚建的会话」分开。旧日志末条记录的
+   * `ts` 早于这个时刻 ⇒ 那些字节不是我们写的 ⇒ 这个目录是别人的 ⇒ 冻结。
+   * 用构造时的 `now()` 而不是模块加载时刻：manager 构造与本进程开始是同一件事，
+   * 早一点只会让判定更保守（更多人被判成旧格式），方向安全。
+   */
+  const processStartedAt = now();
   /**
    * 被判定为「旧格式 ⇒ 只读冻结」的会话（本进程内已裁决过，不再重复判、也不再试写）。
    *
@@ -1042,34 +1136,45 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
    * 这个会话在本进程里该怎么处理：`frozen`（旧格式只读）/ `adopt`（本进程刚建）/ `plain`（照常）。
    *
    * - **形状**只有一处判据：`isLegacyFrozenSessionDir`（core `freeze.ts`）；
-   * - **时间**只有一个来源：`preexistingSessions`（manager 构造那一刻的快照）。
+   * - **时间**两个来源：`preexistingSessions`（manager 构造那一刻的快照）与
+   *   `readLastLegacyRecordTs`（旧日志**内容**里的时间，0.54 cutover 补）。
    *
    * ```
-   * core 说「旧格式」      ∧ 快照说「本进程开始之前就在」  ⇒ frozen
-   * 快照说「本进程才出现」                                  ⇒ adopt（向写者下断言，标记仍由写者落）
-   * 其它（有标记的既有 0.54 会话）                          ⇒ plain（写者自己会放行）
+   * core 说「旧格式」 ∧ 快照说「进程之前就在」                   ⇒ frozen
+   * core 说「旧格式」 ∧ 快照没有 ∧ 末条 ts < 本进程启动时刻      ⇒ frozen（事后拷进来的旧目录）
+   * core 说「旧格式」 ∧ 快照没有 ∧ 末条 ts ≥ 启动时刻            ⇒ adopt（竞态窗口里我们自己写的）
+   * core 说「旧格式」 ∧ 快照没有 ∧ 没有完整记录（空 / 只有残行） ⇒ adopt（没有事实可保护）
+   * 有标记的既有 0.54 会话                                      ⇒ plain（写者自己会放行）
    * ```
    *
-   * 为什么 `adopt` 只看时间、不再叠「core 判旧格式」：第一条事件的 `record()` 与
-   * `events.ndjson` 的落盘是**并发**的（`RunJournal` 侧 fire-and-forget），所以
-   * 「此刻形状像不像旧格式」随时会变 —— 拿它当 adopt 条件会漏掉「判的时候文件还没落、
-   * 写者打开时文件已经在了」这一窗口（实测：`check-timeline-dualwrite` 掉 13 条）。
-   * 形状该由**写者**在自己 open 的那一刻问 `freeze.ts`；装配层只提供它问不出来的时间事实。
+   * 为什么 `adopt` 不再只看快照（0.54 cutover 补的洞）：只在**构造那一刻**做快照，意味着
+   * 「gateway 运行中拷进来的旧目录」会被当成「本进程刚出现的新会话」而 adopt ⇒ 写者跳过
+   * 冻结闸门并落 `timeline.manifest` ⇒ 旧会话被解冻。0.54 删掉旧读路径之后 `freeze.ts` 是它
+   * **唯一**的保护，所以这里必须再要一个**内容级**的时间事实：旧日志末条的 `ts`。
    *
-   * 为什么不能只看形状（不叠时间）：0.54 新会话的第一次双写形状与 0.53 遗留会话完全一样
-   * （有 `events.ndjson`、无标记）—— 只看形状会把每个新会话判死（双写全灭，实测掉 8 条）。
+   * 为什么末条 ts 不是文件 mtime：拷贝会重写 mtime（Windows `copy` 直接给当前时间），
+   * 但不会改内容里的 `ts`。空日志 / 只有残行 ⇒ 没有可保护的事实 ⇒ 放行（而且那正是
+   * `RunJournal` 先落盘、`record()` 先到的竞态窗口：判成冻结会让新会话偶尔掉双写）。
+   *
+   * 模糊情形一律 `frozen`（宁可少 adopt，绝不解冻）。
    */
   async function decideAdoption(
     sessionId: string,
     sessionDir: string,
   ): Promise<'frozen' | 'adopt' | 'plain'> {
     const preexisting = (await preexistingSessions()).has(encodeSessionDirName(sessionId));
+    const legacyShaped = await isLegacyFrozenSessionDir(sessionDir);
     if (preexisting) {
       // 既有会话：形状由 core 判；形状是旧格式 ⇒ 冻结（本进程之前就存在，不可能是新会话）。
-      return (await isLegacyFrozenSessionDir(sessionDir)) ? 'frozen' : 'plain';
+      return legacyShaped ? 'frozen' : 'plain';
     }
-    // 本进程才出现的会话：断言「是我建的」——写者据此跳过冻结闸门，标记仍由写者落。
-    return 'adopt';
+    // 快照里没有 ⇒ 可能是本进程刚建的，也可能是**运行中才被拷进来**的旧目录。
+    if (!legacyShaped) return 'adopt';
+    const birthTs = await readLegacyLogBirthTs(sessionDir);
+    // 读不出出生时间（空日志 / 只有残行）⇒ 没有事实可保护，而且这多半是先落盘的竞态窗口。
+    if (birthTs === undefined) return 'adopt';
+    // 日志的**第一条**记录早于本进程启动（留 5 秒容忍时钟粒度）⇒ 那些字节不是我们写的。
+    return birthTs < processStartedAt - LEGACY_BIRTH_TOLERANCE_MS ? 'frozen' : 'adopt';
   }
 
   async function writerFor(sessionId: string): Promise<TimelineWriter | undefined> {
