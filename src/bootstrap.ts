@@ -54,6 +54,7 @@ import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
 import { createAskAnswerDelivery } from './ask-answer-delivery';
 import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from './ask-channel';
 import { createConfigAttachmentLister } from './attachments-list';
+import { registerBashJobDelivery } from './bash-job-delivery';
 import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import {
@@ -1362,6 +1363,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     feishuAgentService = wiring.service;
     // 0.53 notice-rotate：回填通知的重解析口（router 早在上面就建好了，flush 时才读）。
     noticeAgentService = wiring.service;
+    registerBashJobDelivery({ service: wiring.service, logger });
     finalPluginHost.registerTool(wiring.tool);
     // 顺序契约：`main` 的 ExecutionUnit 在 spawn 时快照父宿主工具列表，
     // 必须等 `agent` 工具注册完再派生 owner，否则 main 永久缺 `agent`。

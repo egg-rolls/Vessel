@@ -158,8 +158,7 @@ const MAX_ASYNC_JOBS = 4;
  */
 const MAX_ASYNC_RECORDS = 16;
 
-/**
- * 一次注入最多带几条完成通知 —— **必须等于 `MAX_ASYNC_JOBS`**。
+/** 一次注入最多带几条完成通知 —— **必须等于 `MAX_ASYNC_JOBS`**。
  *
  * 这是个不变式，不是巧合：开始作业只发生在模型调工具时，注入只发生在模型请求前，
  * 两次相邻的模型请求之间最多有 `MAX_ASYNC_JOBS` 条作业可能完成。让「排空速率 ≥ 到达速率」，
@@ -198,6 +197,16 @@ const ASYNC_NOTICE_DETAIL_MARK = '  · ';
 
 /** 异步作业的 hook 注册名（幂等注册用：热应用的旁路 host 会重复 install 同一个插件）。 */
 export const ASYNC_BASH_NOTICE_HOOK = 'bash-async-notice';
+
+/**
+ * 未送达记录的保留时长：1 小时。
+ *
+ * 为什么需要：作业表的收口只有「自己的超时」和「进程退出」。如果一条作业完成的会话再也
+ * 不跑（成员被关、CLI 换个会话），它的通知就永远没人取 —— 没有 TTL 的话，长驻进程里这类
+ * 记录会一直攒着。1 小时足够覆盖「人离开一会儿再回来」的正常间隔，超时的那条结果仍在
+ * 日志文件里（`log` 路径随记录一起进过工具返回），丢掉内存里的通知副本不算丢事实。
+ */
+const ASYNC_RECORD_TTL_MS = 60 * 60_000;
 
 // ── 参数与文本工具 ────────────────────────────────
 
@@ -831,12 +840,15 @@ function bashOutputBody(payload: {
   stdout: string;
   stderr: string;
   truncated: boolean;
+  /** 异步作业被谁停下（超时 / 插件收口 / 进程退出）；同步路径不带，正文逐字节不变 */
+  sweptBy?: 'timeout' | 'exit';
 }): string {
   return [
     `# command: ${payload.command}`,
     `# exit_code: ${payload.exitCode ?? 'null'}`,
     `# cancelled: ${payload.cancelled}`,
     `# timed_out: ${payload.timedOut}`,
+    ...(payload.sweptBy !== undefined ? [`# stopped_by: ${payload.sweptBy}`] : []),
     `# truncated_at_16MiB: ${payload.truncated}`,
     '',
     '[stdout]',
@@ -932,12 +944,20 @@ function formatBashResult(result: {
 }
 
 /** 启动 `bash -c`；返回类型交给 Bun.spawn 推导（手写 Subprocess 泛型参数极易踩错） */
-function spawnBash(command: string, cwd: string | undefined) {
+function spawnBash(command: string, cwd: string | undefined, options?: { ignoreStdin?: boolean }) {
   return Bun.spawn({
     cmd: ['bash', '-c', command],
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
+    /**
+     * 异步作业**不**继承父进程 stdin。
+     *
+     * 它活过工具调用，继承下来的 stdin 就是宿主（TUI / gateway）那一个 —— 一条会读 stdin 的
+     * 命令会把宿主的输入流吃掉，真机里的表现是「起了后台作业后 REPL 立刻退出」（stdin 被
+     * 子进程共享后父侧读到 EOF）。同步路径保持继承：那是 0.54 的行为，不传 async 时不变。
+     */
+    ...(options?.ignoreStdin === true ? { stdin: 'ignore' as const } : {}),
     // Windows + WSL bash 默认会弹出控制台窗口；隐藏它（POSIX 忽略该选项）
     windowsHide: true,
     // POSIX 下建独立进程组，取消时能连同孙进程一起杀
@@ -1020,6 +1040,8 @@ interface AsyncBashJob {
   notice?: string;
   /** 已注入过（同一作业只注入一次） */
   announced?: boolean;
+  /** 谁把它停下的（超时 / 插件收口 / 进程退出）：进日志，事后能解释作业为什么没跑完 */
+  sweptBy?: 'timeout' | 'exit';
 }
 
 /**
@@ -1065,13 +1087,23 @@ function completedAsyncJobs(sessionId: string | undefined): AsyncBashJob[] {
 }
 
 /**
- * 淘汰已注入的旧记录（只淘汰 `announced` 的：未注入的结果不会因为保留上限而丢）。
- * 同步（非 await）只删 Map 条目，成本 O(记录数 ≤ MAX_ASYNC_RECORDS + MAX_ASYNC_JOBS)。
+ * 淘汰完成记录（两条规则，都是常量上界，与负载无关）：
+ * 1) 没人来取的通知超过 `ASYNC_RECORD_TTL_MS` 就丢（理由见该常量）；
+ * 2) 已送达的记录只留最近 `MAX_ASYNC_RECORDS` 条。
+ * 在跑（未收口）的作业永远不在这里被动。
  */
 function pruneAsyncJobs(): void {
   const delivered: AsyncBashJob[] = [];
-  for (const job of asyncJobs.values()) {
-    if (job.notice !== undefined && job.announced === true) delivered.push(job);
+  const now = Date.now();
+  // 1) 过期：没人来取的完成通知最多留 ASYNC_RECORD_TTL_MS（理由见该常量）。
+  for (const [id, job] of asyncJobs) {
+    if (job.notice === undefined) continue;
+    if (job.announced !== true) {
+      if (now - (job.finishedAt ?? now) > ASYNC_RECORD_TTL_MS) asyncJobs.delete(id);
+      continue;
+    }
+    // 2) 已送达的旧记录：只留最近 MAX_ASYNC_RECORDS 条（bounded，与负载无关）。
+    delivered.push(job);
   }
   const excess = delivered.length - MAX_ASYNC_RECORDS;
   if (excess <= 0) return;
@@ -1079,10 +1111,13 @@ function pruneAsyncJobs(): void {
   for (const job of delivered.slice(0, excess)) asyncJobs.delete(job.id);
 }
 
-/** 杀掉全部在跑作业（插件 dispose / 进程退出时收口）。 */
-function killLiveAsyncJobs(): void {
+/** 杀掉全部在跑作业（进程退出时收口）。 */
+function killLiveAsyncJobs(reason: 'exit'): void {
   for (const job of asyncJobs.values()) {
     if (job.notice !== undefined) continue;
+    job.sweptBy ??= reason;
+    // 收口留一条 stderr：事后能解释「这条作业为什么没了」
+    console.error(`[vessel] basic-tools: stopping bash job ${job.id} (${reason})`);
     killProcessTree(job.proc);
   }
 }
@@ -1099,7 +1134,7 @@ function installAsyncExitSweep(): void {
   asyncExitSweepInstalled = true;
   process.once('exit', () => {
     try {
-      killLiveAsyncJobs();
+      killLiveAsyncJobs('exit');
     } catch {
       // 退出路径不抛错
     }
@@ -1142,7 +1177,7 @@ async function startAsyncBash(options: {
 
   let proc: ReturnType<typeof spawnBash>;
   try {
-    proc = spawnBash(options.command, options.cwd);
+    proc = spawnBash(options.command, options.cwd, { ignoreStdin: true });
   } catch (error) {
     // 占位日志别留在盘上假装还在跑
     try {
@@ -1176,6 +1211,7 @@ async function startAsyncBash(options: {
   // 定时器**不** unref：作业在跑的时候我们就要求进程别退出（否则输出会被丢在半路）。
   job.timer = setTimeout(() => {
     job.timedOut = true;
+    job.sweptBy ??= 'timeout';
     killProcessTree(proc);
   }, options.timeoutMs);
 
@@ -1226,6 +1262,7 @@ async function finalizeAsyncBash(job: AsyncBashJob): Promise<void> {
     stdout,
     stderr,
     truncated,
+    ...(job.sweptBy !== undefined && job.sweptBy !== 'timeout' ? { sweptBy: job.sweptBy } : {}),
   });
 
   // 预览：先按 bash 结果的组装口径拼（行闸关，交给 token 闸），再按通知预算切头尾
@@ -1249,7 +1286,9 @@ async function finalizeAsyncBash(job: AsyncBashJob): Promise<void> {
   const elapsed = Math.max(0, Math.round((job.finishedAt - job.startedAt) / 1000));
   const outcome = job.timedOut
     ? `timed out after ${job.timeoutMs}ms`
-    : `exit ${exitCode ?? 'null (killed by signal)'}`;
+    : `exit ${exitCode ?? 'null (killed by signal)'}${
+        job.sweptBy === 'exit' ? ' · stopped by process exit' : ''
+      }`;
   const head = [
     `[runtime] bash job ${job.id} finished — ${outcome} · ${elapsed}s`,
     `${ASYNC_NOTICE_DETAIL_MARK}cmd: ${oneLineText(job.command)}`,
@@ -1262,6 +1301,27 @@ async function finalizeAsyncBash(job: AsyncBashJob): Promise<void> {
   job.notice = await boundToolResult(`${head}\n${preview}`, {
     persist: async () => saved ?? job.logPath,
   });
+
+  // 二选一：装了唤醒出口就试它一次（成功 = 自己起一轮 run，hook 永不再注入这份通知）。
+  // 失败不标记，hook 仍会兜底 —— 宁可晚到，不可不到，也不可送两遍。
+  const sink = asyncBashCompletionSink;
+  if (sink !== undefined && job.sessionId !== undefined) {
+    let delivered = false;
+    try {
+      delivered = await sink({
+        jobId: job.id,
+        sessionId: job.sessionId,
+        content: job.notice,
+        exitCode,
+        timedOut: job.timedOut,
+        elapsedMs: job.finishedAt - job.startedAt,
+        logPath: saved ?? job.logPath,
+      });
+    } catch {
+      delivered = false;
+    }
+    if (delivered) job.announced = true;
+  }
 
   // 输出缓冲释放：完成态只留元数据与通知文本（否则一条 16 MiB 的输出会被一直攥着）
   job.sinks.stdout.chunks.length = 0;
@@ -1285,6 +1345,45 @@ function takeAsyncNotices(sessionId: string | undefined): string[] {
   }
   if (texts.length > 0) pruneAsyncJobs();
   return texts;
+}
+
+/**
+ * 完成通知的**第二条出口**：装配层的唤醒投递（0.55，可选）。
+ *
+ * 为什么需要第二条：BeforeLlm hook 只能在该会话**下一次模型请求前**注入通知。回合先结束、
+ * 之后没人再说话时，那份结果就永远送不到 —— 而那正是异步最该覆盖的场景（长作业 + 回合早退）。
+ * 装配层（`src/bash-job-delivery.ts`）手里有 `AgentService`，可以把同一份通知当一条消息投进
+ * 会话并**自己起一轮 run**（与 ask 的异步答复同一条准入链）。
+ *
+ * 判据（二选一，绝不两个都送）：收口那一刻看有没有装出口 ——
+ * - 装了且投递返回 true → 立即标 `announced`，hook 永不再注入；
+ * - 装了但返回 false → **不**标记，hook 仍然兜底（结果不丢，只是退回「等下一次 run」）；
+ * - 没装 → 纯 hook（今天的默认形态：CLI / TUI / 嵌入方都能跑，不依赖装配层）。
+ *
+ * 槽是**进程级单槽**（只留最后一次注册）：一个进程只该有一条唤醒通道，两个出口同时生效
+ * 必然送两遍。返回值是注销函数，方便宿主收口。
+ */
+export interface AsyncBashCompletion {
+  jobId: string;
+  sessionId: string;
+  /** 已过出口闸的通知正文（元数据 + 头尾预览 ≤1200 token + 日志路径），全文不在里面 */
+  content: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  elapsedMs: number;
+  logPath: string;
+}
+
+export type AsyncBashCompletionSink = (completion: AsyncBashCompletion) => Promise<boolean>;
+
+let asyncBashCompletionSink: AsyncBashCompletionSink | undefined;
+
+/** 注册唤醒投递出口（进程级单槽，最后一次注册生效）。 */
+export function registerAsyncBashCompletionSink(sink: AsyncBashCompletionSink): () => void {
+  asyncBashCompletionSink = sink;
+  return () => {
+    if (asyncBashCompletionSink === sink) asyncBashCompletionSink = undefined;
+  };
 }
 
 /**
@@ -1812,11 +1911,15 @@ export const basicToolsPlugin: Plugin = {
     }
   },
   /**
-   * 收口在跑的后台作业：tenant / 会话收口之后没有 hook 再去注入它们的通知，
-   * 留着就是一条没人读的孤儿进程（作业自己的超时是最后一道，不该是唯一一道）。
+   * 刻意**不**在这里杀在跑作业。
+   *
+   * 真机教训（0.55）：宿主会为每一次 body 收口调用插件的 `dispose()`（交互式 REPL 里跑完一轮
+   * 就会发生），而作业表是**进程级**的 —— 在 dispose 里杀，等于「任何一次收口都把别的会话
+   * 的长作业杀掉」，实测表现为「起了后台作业，回合结束那一刻它就被杀」。
+   * 作业的收口只有两个：自己的超时，和进程退出时的那一次兜底。
    */
   dispose() {
-    killLiveAsyncJobs();
+    // 见上：不杀作业，也不清表（进程还活着，别的会话可能还要它）。
   },
 };
 
