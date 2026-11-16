@@ -31,6 +31,10 @@
  *   `timeline_seq`（ADR-105 §7 的等式：`UI == timeline(≤timeline_head) ∪ WAL(≤wal_head)`），
  *   所以没有任何负数带、没有内容 id 去重 —— `entries` 天然升序。区间并入后按 `entries`
  *   整表重折叠（更早的段往尾部追加 delta 一定错）。
+ * - **首屏有界 + 分段滚动加载**（`earliestSeq` / `hasEarlier`）：**首屏必须有界：一次刷新
+ *   推 19 万帧会把 WS 压死（2026-11-16 事故）**。刷新只并入尾部窗口
+ *   （`TIMELINE_TAIL_WINDOW_EVENTS`）的那一段，更早的段由滚动到顶时一段一段补
+ *   （`gateway/subscription.ts#loadEarlier`，左缘随之前移，到 1 为止）。
  */
 
 import {
@@ -120,6 +124,12 @@ export interface EventStoreSnapshot {
   entries: readonly StoredEvent[];
   /** 单游标（`client_timeline_seq`）的当前值；重连 `since` / hello 判断用。 */
   lastSeq: number;
+  /**
+   * 还有更早的时间线段没加载（滚动到顶时向前要一段，见 `EventStore#hasEarlier`）。
+   *
+   * 进快照是因为**滚动触发器**读它：它一变（加载到底 / 清空），滚动区就该停止请求。
+   */
+  hasEarlier: boolean;
   version: number;
 }
 
@@ -165,6 +175,7 @@ function emptySnapshot(): EventStoreSnapshot {
   return {
     entries: [],
     lastSeq: 0,
+    hasEarlier: false,
     version: 0,
   };
 }
@@ -206,6 +217,19 @@ export class EventStore {
    * 换作用域才随 `clear()` 归零。
    */
   private clientTimelineSeq = 0;
+  /**
+   * **已加载窗口的左缘**（最小的「已并入」seq；0 = 还没并入过任何区间）。
+   *
+   * 为什么要它、而不是直接用单游标：单游标是**右端**（重连 `since` 用它，只许前进），
+   * 「还有更早的没加载」问的是**左端**。刷新时首屏只回填尾部窗口
+   * （`TIMELINE_TAIL_WINDOW_EVENTS`），左缘就是那个窗口的第一条；滚动到顶时
+   * `[左缘 - 窗口 .. 左缘 - 1]` 再要一段，左缘随之前移，直到 1。
+   *
+   * **首屏必须有界：一次刷新推 19 万帧会把 WS 压死（2026-11-16 事故）。** 那次事故的
+   * 形态就是「左缘恒为 1、右端一路追到会话末尾」，所以「还有更早的」必须能被表达出来
+   * （{@link hasEarlier}），否则没有人会去分段加载。
+   */
+  private earliestSeq = 0;
   /**
    * 缺口声明面（见 `TimelineGapState`）。
    *
@@ -292,6 +316,26 @@ export class EventStore {
   /** 单游标的当前值（`client_timeline_seq`；不等待 50ms 合批）。 */
   get currentSeq(): number {
     return this.clientTimelineSeq;
+  }
+
+  /**
+   * 还有更早的时间线段没加载（滚动到顶时向前要一段）。
+   *
+   * 判据就是左缘（`earliestLoadedSeq`）> 1：**首屏只加载尾部窗口**
+   * （`TIMELINE_TAIL_WINDOW_EVENTS`），所以刷新之后它一定是 true，直到用户滚到顶、
+   * 一段一段把 1 之前的都补回来为止。
+   */
+  get hasEarlier(): boolean {
+    return this.earliestSeq > 1;
+  }
+
+  /**
+   * 已加载窗口的左缘（0 = 还没并入过任何区间）。
+   *
+   * 订阅层用它算「更早的一段」：`[左缘 - 窗口 .. 左缘 - 1]`（`planEarlierRange`）。
+   */
+  get earliestLoadedSeq(): number {
+    return this.earliestSeq;
   }
 
   /** 缺口声明的只读副本（诊断页 / 探针读它；快照里也有一份，给界面）。 */
@@ -566,6 +610,8 @@ export class EventStore {
    * 3. **一次折叠**：整段并入后按 `entries` 重折叠一遍（`sink.resume`）。更早的段往尾部
    *    追加 delta 一定错，整 run 重折叠是唯一正确做法。
    * 4. **不产 item 的噪声不进环**（与 `push` 同口径）：它们只推游标，不占 per-run 额度。
+   * 5. **左缘**（`earliestSeq`）随并入的区间往更早处前移：它是「还有更早的没加载」的判据
+   *    （`hasEarlier`），也是滚动加载下一段的右端。首屏的尾部窗口就是靠这一条落位的。
    */
   applyTimelineRange(
     header: TimelineRangeHeader,
@@ -619,6 +665,12 @@ export class EventStore {
       }
     }
     const evicted = this.trimEntries();
+    // 左缘（见 `earliestSeq`）：这一段把「已加载窗口」往更早的方向接长了多少。
+    // 首屏就是这里落位成尾部窗口的左端 —— 于是 `hasEarlier` 立刻为 true，滚动时
+    // 才有一段一段往前补的入口（**首屏必须有界**，见该字段的注释）。
+    const edgeBefore = this.earliestSeq;
+    this.noteCoveredRange(header.start_seq, header.end_seq);
+    const edgeMoved = this.earliestSeq !== edgeBefore;
     // 区间带**声明洞** ⇒ 这一段读不回来是永久事实，UI 必须挂污点（ADR-105 §6）。
     //
     // 只认 `holes`：`tainted` 是一个**会话级**标记，没有洞区间时它给不出「哪一段不可读」，
@@ -637,13 +689,31 @@ export class EventStore {
         at: Date.now(),
       });
     }
-    if (merged > 0 || !advanced) {
+    if (merged > 0 || !advanced || edgeMoved) {
       // 并入 / 重排之后按环里的全部事件重折叠一遍（Rule R 的保留口径：屏上「更早的那一段
       // 长出来」，已有内容不动）。只推了游标时不必重算。
       this.sink.resume(this.entries);
       this.flush();
     }
     return { merged, duplicates, evicted };
+  }
+
+  /**
+   * 记录「`[start_seq, end_seq]` 这一段已经并入」，必要时把左缘往更早的方向推进。
+   *
+   * 只接受**接在已加载窗口上**的区间（`end_seq >= 左缘 - 1`）：滚动加载正是这个形态
+   * （`[左缘 - 2000 .. 左缘 - 1]`），首屏的尾部窗口也走这里（左缘为空时直接落位）。
+   * 跳着来的区间（缺口重拉 `planRange(from, to)`，`to` 远在窗口之前）**不许**把左缘
+   * 拉下去 —— 否则它和窗口之间那一段会永远没人去拉，屏上却以为自己「已经到那儿了」。
+   */
+  private noteCoveredRange(startSeq: number, endSeq: number): void {
+    const start = Number.isInteger(startSeq) && startSeq > 0 ? startSeq : 1;
+    if (this.earliestSeq === 0) {
+      this.earliestSeq = start;
+      return;
+    }
+    if (endSeq < this.earliestSeq - 1) return;
+    this.earliestSeq = Math.min(this.earliestSeq, start);
   }
 
   /** 一条已校验通过的事件进环（`push` 与 `applyTimelineRange` 共用；归属口径一致）。 */
@@ -769,6 +839,9 @@ export class EventStore {
   truncateAfter(nextSeq: number): number {
     // 纪元重置：item 与新 seq 不可比，整体作废（`sink.reset()` 清空屏上 item）。
     if (nextSeq === 0) this.sink.reset();
+    // 左缘跟着退：截断之后 `(nextSeq, 左缘)` 这一段不再「已加载」，滚动加载要从那里重来
+    // （`nextSeq === 0` = 什么都还没加载，左缘归零，首屏回填会重新落位）。
+    if (this.earliestSeq > nextSeq + 1) this.earliestSeq = nextSeq === 0 ? 0 : nextSeq + 1;
     // entries 按 seq 升序：二分出第一条 seq > nextSeq。
     let low = 0;
     let high = this.entries.length;
@@ -838,12 +911,15 @@ export class EventStore {
     this.runSessions.clear();
     this.clientTimelineSeq = nextSeq;
     this.gap = emptyGapState();
+    // 左缘归零：新作用域的窗口要从首屏的尾部窗口重新开始（见 `earliestSeq`）。
+    this.earliestSeq = 0;
     // 作用域真变了：传输窗口清了，物化面必须一起清（否则串台 / 幽灵卡片）。
     this.sink.clear();
     this.version += 1;
     this.snapshot = {
       entries: [],
       lastSeq: nextSeq,
+      hasEarlier: false,
       version: this.version,
     };
     this.cancelTimer();
@@ -861,6 +937,8 @@ export class EventStore {
       // 复制数组：entries 在 push 中原地追加，复用引用会让 memo 消费者永远看到旧视图。
       entries: [...this.entries],
       lastSeq: this.clientTimelineSeq,
+      // 滚动触发器读它（更早的段加载完 / 到 1 了 ⇒ 停止继续要）。
+      hasEarlier: this.hasEarlier,
       version: this.version,
     };
     // 快照是整体替换的：没有「增量字段」需要在消费后清空（旧的 truncatedSince 已删）。
