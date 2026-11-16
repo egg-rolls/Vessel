@@ -55,12 +55,13 @@ import {
   pruneTrace,
   type RunRecord,
   type RunRecordStore,
-  SessionEventLog,
+  type SessionLogDirectoryPort,
   type SessionStore,
   sessionDirPath,
   sessionLogDirExists,
   type TenantPaths,
 } from '../packages/core/src/index';
+import { TimelineEventLog } from '../packages/core/src/timeline/read-port';
 import { inspectSessionLease } from './lease-service';
 import {
   createRunRecordStore,
@@ -635,13 +636,14 @@ async function buildPlan(
   return { snapshot, agents, teams, skipped };
 }
 
-/** 会话事件日志目录的删除句柄（真删才需要；构造本身不写盘） */
-function createEventLog(ctx: PruneContext): SessionEventLog {
-  return new SessionEventLog({
-    dir: ctx.tenantPaths.sessions_dir,
-    tenantId: ctx.tenantId,
-    logger: noopLogger,
-  });
+/**
+ * 会话日志目录的删除句柄（真删才需要；构造本身不写盘）。
+ *
+ * 0.54 stop-write：删除只做两件事 —— 会话目录在不在、删掉它。用时间线读口而不是旧
+ * ：后者构造本身不写盘，但它属于旧链路，prune 没有理由再握它。
+ */
+function createEventLog(ctx: PruneContext): SessionLogDirectoryPort {
+  return new TimelineEventLog({ dir: ctx.tenantPaths.sessions_dir, logger: noopLogger });
 }
 
 /**
@@ -679,7 +681,7 @@ async function deleteSession(
   ctx: PruneContext,
   sessionStore: SessionStore,
   runStore: RunRecordStore | undefined,
-  eventLog: SessionEventLog,
+  eventLog: SessionLogDirectoryPort,
   sessionId: string,
 ): Promise<boolean> {
   try {

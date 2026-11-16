@@ -133,21 +133,22 @@
  * @module vessel/timeline-dual-write
  */
 
-import { type FileHandle, open, readdir, stat } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   EventStream,
   Logger,
   RunEvent,
+  SessionEventRecord,
   TimelineDualWriteEvent,
 } from '../packages/core/src/index';
 import { encodeSessionDirName, sessionDirPath } from '../packages/core/src/index';
 import { isLegacyFrozenSessionDir, LEGACY_SESSION_LOG } from '../packages/core/src/timeline/freeze';
 import { loadIndexSnapshot } from '../packages/core/src/timeline/index';
+import { toSessionEventRecord } from '../packages/core/src/timeline/read-port';
 import {
   CHUNK_FLUSH_MS,
-  isChunkEventType,
-  isExcludedEventType,
+  isNonFactEventType,
   TIMELINE_LAYOUT,
   TimelineError,
   type TimelineHeads,
@@ -190,16 +191,6 @@ export const DEFAULT_ARCHIVE_INTERVAL_MS = 5_000;
 
 /** 连续归档失败达到该次数后开始退避（ADR-105 §3 I3 ③）。 */
 export const ARCHIVE_BACKOFF_THRESHOLD = 3;
-
-/**
- * 「旧日志出生时间 vs 本进程启动时刻」的容忍窗口（ms）。
- *
- * 新会话的第一条事件与本进程启动是同一瞬间（同一个时钟），但事件 `ts` 与 `now()` 之间
- * 有毫秒级抖动；留 5 秒既盖住抖动，又远小于「备份拷进来」与「进程启动」的真实间隔。
- * 方向仍是安全的：容忍窗口只会让**更多**目录被判成 adopt，而容忍窗口之外的模糊情形
- * 一律按冻结处理。
- */
-export const LEGACY_BIRTH_TOLERANCE_MS = 5_000;
 
 /** 退避阶梯（ms）：第 3 / 4 / 5+ 次连续失败后，下一次**自动**归档的最早时刻。 */
 export const ARCHIVE_BACKOFF_DELAYS_MS = [100, 500, 2_000] as const;
@@ -423,14 +414,6 @@ export interface TimelineDualWriteOptions {
     sessionDir: string;
     chunkFlushMs: number;
     publish: (record: TimelineRecord) => void;
-    /**
-     * 透传给 `TimelineWriter.open` 的**显式 adopt 断言**（见写者侧的说明）。
-     *
-     * 自定义实现**必须原样转发**（与 `publish` 同一条纪律）：漏转发 ⇒ 写者仍按旧格式拒
-     * （`session_frozen_readonly`），这个会话的双写会静默缺席 —— 门禁会红，但生产不会报错，
-     * 属于「最难发现」的那一类漏接。
-     */
-    adoptLegacyShapedSession?: boolean;
   }) => Promise<TimelineWriter>;
 }
 
@@ -440,8 +423,44 @@ export interface TimelineDualWrite {
   readonly enabled: boolean;
   /** 指标快照（副本；调用方随便改）。 */
   stats(): TimelineDualWriteStats;
-  /** journal 的旁路入口（实现自吞异常，永不抛）。 */
+  /**
+   * 一条会话事实（fire-and-forget；实现自吞异常，永不抛）。
+   *
+   * 0.54 stop-write：`events.ndjson` 停写之后这是 journal 的**唯一**落盘派发口。
+   */
   record(sessionId: string, event: TimelineDualWriteEvent): void;
+  /**
+   * 可等待的一次落盘（`SessionEventLogPort.append` 的时间线实现）。
+   *
+   * journal 之外的直接写者（种子消息 / 通知注入 / 停摆会话的终态事件）用它：它们要
+   * 拿到 seq，或要按「失败就上报」处理。失败**会抛**（`session_frozen_readonly` /
+   * `timeline_write_failed` / `timeline_event_type_excluded`）。
+   */
+  appendFact(
+    sessionId: string,
+    input: {
+      run_id: string;
+      type: string;
+      ts: number;
+      data: unknown;
+      fencing_token?: number;
+      durable?: boolean;
+    },
+  ): Promise<SessionEventRecord>;
+  /** 批量版本（种子消息）：一次 write + 一次 fsync，语义与逐条 `appendFact` 一致。 */
+  appendFacts(
+    sessionId: string,
+    inputs: readonly {
+      run_id: string;
+      type: string;
+      ts: number;
+      data: unknown;
+      fencing_token?: number;
+      durable?: boolean;
+    }[],
+  ): Promise<SessionEventRecord[]>;
+  /** 关掉一个会话的写者（删会话之前必须先关句柄）。幂等。 */
+  closeSession(sessionId: string): Promise<void>;
   /** journal.close 的旁路入口（fire-and-forget；`finishRun` 是它的可等待版本）。 */
   endRun(sessionId: string, runId: string): void;
   /** flush +（可能）抽样；可等待，门禁用它定序。永不抛。 */
@@ -548,119 +567,8 @@ function sessionDirOf(sessionsDir: string, sessionId: string): string {
   return sessionDirPath(sessionsDir, sessionId);
 }
 
-/**
- * 「本进程开始**之前**就已经带着 `events.ndjson` 的会话」——旧格式的唯一可分辨证据。
- *
- * ## 为什么需要它（而不是直接看目录形状）
- *
- * `packages/core/src/timeline/freeze.ts` 的判据是「有 `events.ndjson` 且无任何 timeline
- * 标记」。而 `RunJournal` 是**先写 `events.ndjson`、再调 `record()`** 的，所以：
- *
- * ```
- * 0.53 遗留会话           ：events.ndjson ✓、标记 ✗   ⇒ 旧格式（必须冻结）
- * 0.54 新会话的第一次双写 ：events.ndjson ✓、标记 ✗   ⇒ **形状一模一样**
- * ```
- *
- * 光看形状两边不可分辨。能分辨的只有**时间先后**：「这个目录在本进程创建这个 manager
- * 之前就有日志了吗」——有 ⇒ 不是本进程生的 ⇒ 旧格式；没有 ⇒ 本进程生的 ⇒ 可以 adopt。
- *
- * ## 为什么用「构造时快照」而不是「登记 sessions.create」
- *
- * 1. **不依赖任何创建入口**：`sessions.create` / CLI 起 run / 种子消息 / 子会话 / 重启续跑
- *    都走同一条 `SessionEventLog.append`，登记点漏一个就静默不 adopt（且很难发现）；
- *    快照只看盘，天然覆盖所有入口。
- * 2. **保守方向是硬的**：快照在**构造那一刻**取，所以「本进程之前就存在」一律判旧格式
- *    ——重启后进程内没有任何登记，也就永远不可能 adopt 一个重启前就存在的旧会话；
- *    这正是 ADR-105 D4 要的方向（宁可少 adopt，绝不解冻）。
- * 3. 代价只有构造时的一次 `readdir` + 每个既有会话一次 `stat`（异步、不阻塞）。
- *
- * 注意：**它不参与冻结判定** —— 冻结判据只有 `freeze.ts` 一份。这里只回答
- * 「能不能把这条 `freeze.ts` 的『旧格式』结论当成本进程不该 adopt 的会话」。
- *
- * 0.54 cutover 补：快照只覆盖「构造那一刻已经存在」的目录，**运行中才拷进来的旧目录**
- * 它看不见。那半个问题由 `readLastLegacyRecordTs`（旧日志末条的 `ts` vs 本进程启动时刻）
- * 回答 —— 两个时间事实合起来才是完整的 `decideAdoption`。
- */
-function createPreexistingSessionSnapshot(sessionsDir: string): () => Promise<Set<string>> {
-  const snapshot = (async (): Promise<Set<string>> => {
-    const withLog = new Set<string>();
-    let entries: Array<{ name: string; isDirectory: () => boolean }>;
-    try {
-      entries = await readdir(sessionsDir, { withFileTypes: true });
-    } catch {
-      // 目录还不存在 ⇒ 没有任何既有会话（全新安装）
-      return withLog;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      try {
-        await stat(join(sessionsDir, entry.name, LEGACY_SESSION_LOG));
-      } catch {
-        continue; // 目录在、但还没写过日志 ⇒ 不算「带着日志存在过」
-      }
-      withLog.add(entry.name);
-    }
-    return withLog;
-  })();
-  return () => snapshot;
-}
-
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * 旧日志里**第一条完整记录的 `ts`**（读文件头 64 KiB、取第一整行；读不到就是 `undefined`）。
- *
- * 用途只有一个：分辨「事后拷进来的旧目录」与「本进程刚建的会话」—— 拷进来会重写文件
- * mtime（Windows 上甚至直接给当前时间），但**内容里的 `ts` 不会被拷改**。所以它是这两个
- * 场景里唯一不可伪造的时间事实。
- *
- * **为什么取第一条而不是最后一条**（这个区别是要命的）：往一个拷进来的旧目录写东西的
- * 第一步就会把旧日志追加一行、于是「最后一条 ts」立刻变成"现在"——用最后一条等于用
- * "正在写"来证明"是我建的"，判据自我否定。日志的**开头**是追加式写入永远不改的部分，
- * 所以它才是这个目录的出生时间。实测确认过：用末条 ts 时 `sessions.compact` 会把这层
- * 保护骗过去（时间线文件被创建、旧目录被解冻）。
- *
- * 读不到（文件空 / 只有崩溃残行 / 解析失败）⇒ `undefined`，调用方按「没有事实可保护」
- * 处理：那也正是 `RunJournal` 先落盘、`record()` 先到的竞态窗口。
- *
- * 代价：一次 64 KiB 的头部读（不足 64 KiB 就是文件大小），只在「形状像旧格式 ∧ 快照里
- * 没有」这一个分支上发生，每个会话最多一次（决定完就进 writers 缓存）。
- */
-async function readLegacyLogBirthTs(sessionDir: string): Promise<number | undefined> {
-  const path = join(sessionDir, LEGACY_SESSION_LOG);
-  let size: number;
-  try {
-    size = (await stat(path)).size;
-  } catch {
-    return undefined;
-  }
-  if (size <= 0) return undefined;
-  const window = Math.min(size, 64 * 1024);
-  let file: FileHandle | undefined;
-  try {
-    file = await open(path, 'r');
-    const buffer = Buffer.alloc(window);
-    await file.read(buffer, 0, window, 0);
-    // 只解析**完整行**：窗口可能结在一条记录中间 ⇒ 最后一行丢掉（不拼接、不猜）。
-    const lines = buffer.toString('utf8').split('\n');
-    if (size > window) lines.pop();
-    for (const line of lines) {
-      if (line.trim() === '') continue;
-      try {
-        const parsed = JSON.parse(line) as { ts?: unknown };
-        if (typeof parsed.ts === 'number' && Number.isFinite(parsed.ts)) return parsed.ts;
-      } catch {
-        // 头部残行 / 坏行：往后找第一条能解析的（与 `recoverLastSeq` 同策略）
-      }
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  } finally {
-    await file?.close().catch(() => {});
-  }
 }
 
 function uniqueSorted(values: readonly string[]): string[] {
@@ -997,7 +905,6 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
       sessionDir: string;
       chunkFlushMs: number;
       publish: (record: TimelineRecord) => void;
-      adoptLegacyShapedSession?: boolean;
     }) =>
       TimelineWriter.open({
         sessionId: input.sessionId,
@@ -1006,9 +913,6 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
         // ADR-105 §3 I2 的端到端接线：**必须**把发布回调交给写者。
         // 写者只在「该 seq 的 WAL/块 fsync 返回之后」调它，所以它是唯一合规的发布点。
         publish: input.publish,
-        // 显式 adopt 断言（ADR-105 D4 / 0.54 C1）：只有「本进程才出现的会话」时才是 true。
-        // 标记仍然由写者落 —— 本模块不写 timeline 目录。
-        ...(input.adoptLegacyShapedSession === true ? { adoptLegacyShapedSession: true } : {}),
       }));
 
   const counters: TimelineDualWriteStats = {
@@ -1045,27 +949,10 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
    */
   const publishListeners = new Set<(publication: TimelinePublication) => void>();
   /**
-   * 「本进程开始之前就带着 `events.ndjson` 的会话」快照（构造那一刻取，见
-   * {@link createPreexistingSessionSnapshot}）。它只用来解释 `freeze.ts` 的结论：
-   * 「旧格式 + 本进程之前就在」⇒ 这个会话不是本进程生的 ⇒ **不 adopt**。
-   * 运行中才出现的旧目录不在快照里，由 `processStartedAt` + 日志末条 `ts` 兜住
-   * （见 `decideAdoption`）。
-   */
-  const preexistingSessions = createPreexistingSessionSnapshot(options.sessionsDir);
-  /**
-   * 本进程启动时刻（`ms`）——判定 adopt 的第二个时间事实。
-   *
-   * 用途只有一个：把「事后拷进来的旧目录」与「本进程刚建的会话」分开。旧日志末条记录的
-   * `ts` 早于这个时刻 ⇒ 那些字节不是我们写的 ⇒ 这个目录是别人的 ⇒ 冻结。
-   * 用构造时的 `now()` 而不是模块加载时刻：manager 构造与本进程开始是同一件事，
-   * 早一点只会让判定更保守（更多人被判成旧格式），方向安全。
-   */
-  const processStartedAt = now();
-  /**
    * 被判定为「旧格式 ⇒ 只读冻结」的会话（本进程内已裁决过，不再重复判、也不再试写）。
    *
    * 命中它的会话：`record()` 一个字节都不写、`flushSession()` 抛 `session_frozen_readonly`、
-   * 生命周期钩子（`endRun` / 抽样）安静跳过 —— 旧链路与读路径完全不受影响。
+   * 生命周期钩子（`endRun` / 抽样）安静跳过。
    */
   const frozenSessions = new Set<string>();
 
@@ -1133,48 +1020,20 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   };
 
   /**
-   * 这个会话在本进程里该怎么处理：`frozen`（旧格式只读）/ `adopt`（本进程刚建）/ `plain`（照常）。
+   * 这个会话能不能写：**判据只有一处**（core 的 `freeze.ts#isLegacyFrozenSessionDir`）。
    *
-   * - **形状**只有一处判据：`isLegacyFrozenSessionDir`（core `freeze.ts`）；
-   * - **时间**两个来源：`preexistingSessions`（manager 构造那一刻的快照）与
-   *   `readLastLegacyRecordTs`（旧日志**内容**里的时间，0.54 cutover 补）。
+   * ## 0.54 stop-write 让这件事变简单了（写清楚，别再把它加回来）
    *
-   * ```
-   * core 说「旧格式」 ∧ 快照说「进程之前就在」                   ⇒ frozen
-   * core 说「旧格式」 ∧ 快照没有 ∧ 末条 ts < 本进程启动时刻      ⇒ frozen（事后拷进来的旧目录）
-   * core 说「旧格式」 ∧ 快照没有 ∧ 末条 ts ≥ 启动时刻            ⇒ adopt（竞态窗口里我们自己写的）
-   * core 说「旧格式」 ∧ 快照没有 ∧ 没有完整记录（空 / 只有残行） ⇒ adopt（没有事实可保护）
-   * 有标记的既有 0.54 会话                                      ⇒ plain（写者自己会放行）
-   * ```
+   * `freeze.ts` 的判据是「有 `events.ndjson` 且没有任何 timeline 标记」。在**双写时代**
+   * 这条判据对新会话也成立（`RunJournal` 先写 `events.ndjson`、`record()` 后到），所以
+   * 装配层不得不另外回答「这个会话是不是本进程刚建的」（构造时快照 + 旧日志首条 `ts`）。
    *
-   * 为什么 `adopt` 不再只看快照（0.54 cutover 补的洞）：只在**构造那一刻**做快照，意味着
-   * 「gateway 运行中拷进来的旧目录」会被当成「本进程刚出现的新会话」而 adopt ⇒ 写者跳过
-   * 冻结闸门并落 `timeline.manifest` ⇒ 旧会话被解冻。0.54 删掉旧读路径之后 `freeze.ts` 是它
-   * **唯一**的保护，所以这里必须再要一个**内容级**的时间事实：旧日志末条的 `ts`。
-   *
-   * 为什么末条 ts 不是文件 mtime：拷贝会重写 mtime（Windows `copy` 直接给当前时间），
-   * 但不会改内容里的 `ts`。空日志 / 只有残行 ⇒ 没有可保护的事实 ⇒ 放行（而且那正是
-   * `RunJournal` 先落盘、`record()` 先到的竞态窗口：判成冻结会让新会话偶尔掉双写）。
-   *
-   * 模糊情形一律 `frozen`（宁可少 adopt，绝不解冻）。
+   * 停写之后**新会话根本不产生 `events.ndjson`**，于是「旧格式」与「不是本进程生的」变成
+   * 同一件事 —— 那两层时间推断（快照 / 出生时间）连同 `adoptLegacyShapedSession` 断言
+   * 一起删掉。多留一天，它就多一天可能把某个旧目录误判成新会话（那是不可逆的解冻）。
    */
-  async function decideAdoption(
-    sessionId: string,
-    sessionDir: string,
-  ): Promise<'frozen' | 'adopt' | 'plain'> {
-    const preexisting = (await preexistingSessions()).has(encodeSessionDirName(sessionId));
-    const legacyShaped = await isLegacyFrozenSessionDir(sessionDir);
-    if (preexisting) {
-      // 既有会话：形状由 core 判；形状是旧格式 ⇒ 冻结（本进程之前就存在，不可能是新会话）。
-      return legacyShaped ? 'frozen' : 'plain';
-    }
-    // 快照里没有 ⇒ 可能是本进程刚建的，也可能是**运行中才被拷进来**的旧目录。
-    if (!legacyShaped) return 'adopt';
-    const birthTs = await readLegacyLogBirthTs(sessionDir);
-    // 读不出出生时间（空日志 / 只有残行）⇒ 没有事实可保护，而且这多半是先落盘的竞态窗口。
-    if (birthTs === undefined) return 'adopt';
-    // 日志的**第一条**记录早于本进程启动（留 5 秒容忍时钟粒度）⇒ 那些字节不是我们写的。
-    return birthTs < processStartedAt - LEGACY_BIRTH_TOLERANCE_MS ? 'frozen' : 'adopt';
+  async function isFrozen(sessionDir: string): Promise<boolean> {
+    return isLegacyFrozenSessionDir(sessionDir);
   }
 
   async function writerFor(sessionId: string): Promise<TimelineWriter | undefined> {
@@ -1183,32 +1042,24 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     const sessionDir = sessionDirOf(options.sessionsDir, sessionId);
     const opening = (async () => {
       try {
-        // 0.54 C1（ADR-105 D4）：旧格式会话**只读冻结** —— 不 adopt、不写一个字节、不抛。
-        const decision = await decideAdoption(sessionId, sessionDir);
-        if (decision === 'frozen') {
+        // 0.54 C1（ADR-105 D4）：旧格式会话**只读冻结** —— 不写一个字节、不抛。
+        if (await isFrozen(sessionDir)) {
           counters.frozen_sessions += 1;
           frozenSessions.add(sessionId);
-          warn('timeline dual-write skipped (legacy session is frozen read-only)', {
+          warn('timeline write skipped (legacy session is frozen read-only)', {
             session_id: sessionId,
             reason: 'legacy_events_ndjson_without_timeline_marker',
           });
-          // 这个会话不会再有 timeline 发布了 ⇒ 把闸门扣住的旧广播立刻放出去
-          // （旧链路行为不变：UI 一条都不少）。
+          // 这个会话不会再有 timeline 发布了 ⇒ 把闸门扣住的广播立刻放出去
+          // （UI 一条都不少）。
           gate?.releaseSession(sessionId);
           return undefined;
         }
-        // 本进程刚建的会话 ⇒ 向写者下 adopt 断言（标记仍由写者落，本模块一个字节都不写
-        // timeline 目录）。既有会话不传，写者按 `freeze.ts` 自己判。
-        //
-        // 自定义 `openWriter` 缝必须**原样转发**这个字段（与 `publish` 同一条纪律）：
-        // 不转发 ⇒ 写者仍按旧格式拒（`session_frozen_readonly`），双写对该会话静默缺席。
-        const adopt = decision === 'adopt';
         const writer = await openWriter({
           sessionId,
           sessionDir,
           chunkFlushMs,
           publish: (record) => deliverPublication(sessionId, record),
-          ...(adopt ? { adoptLegacyShapedSession: true } : {}),
         });
         counters.sessions += 1;
         // 周期保底：writer 出现的第一刻起开计时（长 run 期间也要有归档）。
@@ -1231,13 +1082,17 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     return opening;
   }
 
-  /** 一条事件是否值得进 timeline（旁路的取舍，写在实现侧）。 */
+  /**
+   * 一条事件是否值得进 timeline。
+   *
+   * 0.54 stop-write：时间线是**唯一**落盘口，所以这里只剩「什么不算会话事实」一条判据
+   * （`timeline/types.ts#isExcludedEventType`：派生快照 / 自带 durable 记录的同步事件 /
+   * 进程生命周期）＋ 抽样告警自身的防递归。
+   */
   function shouldWrite(event: TimelineDualWriteEvent): boolean {
-    if (isExcludedEventType(event.type)) return false;
+    if (isNonFactEventType(event.type)) return false;
     // 抽样告警自身绝不回写 timeline（否则「比对发现差异」会改输入，递归）。
     if (event.type.startsWith('timeline.')) return false;
-    // 旧链路没落盘的事件里，只补 chunk 家族（ADR-105 §8.1 规则 ④ 白名单的两条）。
-    if (!event.persisted) return isChunkEventType(event.type);
     return true;
   }
 
@@ -1331,6 +1186,122 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
       warn('timeline publish failed (record already durable)', {
         session_id: sessionId,
         seq: record.seq,
+        error: errorText(error),
+      });
+    }
+  }
+
+  /**
+   * **可等待**的一次事实落盘（`SessionEventLogPort.append` 的时间线实现）。
+   *
+   * 与 {@link record} 的差别只有两处，都是调用方要的：
+   * - 这里的 Promise 在**该 seq 的 WAL/块 fsync 之后**才 resolve（调用方能拿到 seq）；
+   * - 失败**会抛**（`session_frozen_readonly` / `timeline_write_failed`），由调用方决定
+   *   「best-effort 吞掉」还是「当成错误上报」。`record()` 那条 fire-and-forget 路径
+   *   仍然永抛。
+   *
+   * 直接 append 的调用方（种子消息 / 通知注入 / 停摆会话的终态事件）都在 journal 之外，
+   * 它们的可见性由写者自己的发布点（`deliverPublication`）负责，所以这里**不认领**闸门里
+   * 的广播：没被认领的旧广播会在微任务里直通，`settle()` 再用台账压掉重复投递。
+   */
+  async function appendFact(
+    sessionId: string,
+    input: {
+      run_id: string;
+      type: string;
+      ts: number;
+      data: unknown;
+      fencing_token?: number;
+      durable?: boolean;
+    },
+  ): Promise<SessionEventRecord> {
+    if (!enabled) throw new TimelineError('timeline_write_failed', 'timeline is not configured');
+    if (sessionId.length === 0) {
+      throw new TimelineError('timeline_write_failed', 'session_id must be non-empty');
+    }
+    if (!shouldWrite({ run_id: input.run_id, type: input.type, ts: input.ts })) {
+      throw new TimelineError(
+        'timeline_event_type_excluded',
+        `${input.type} is not a session fact`,
+      );
+    }
+    const writer = await writerFor(sessionId);
+    if (writer === undefined) {
+      // 只有两种成因：旧格式会话（已进 frozenSessions）或写者打不开。
+      const code = frozenSessions.has(sessionId)
+        ? 'session_frozen_readonly'
+        : 'timeline_write_failed';
+      throw new TimelineError(code, `${sessionId} has no writable timeline`);
+    }
+    const record = await writer.append({
+      run_id: input.run_id,
+      type: input.type,
+      ts: input.ts,
+      data: input.data,
+      ...(input.fencing_token !== undefined ? { fencing_token: input.fencing_token } : {}),
+    });
+    counters.appended += 1;
+    // 周期保底：不 await（归档永不落在写路径上）。
+    maybeArchive(sessionId, 'periodic');
+    return toSessionEventRecord(record);
+  }
+
+  /** 批量版本（种子消息）：一次 write + 一次 fsync，语义与逐条 {@link appendFact} 一致。 */
+  async function appendFacts(
+    sessionId: string,
+    inputs: readonly {
+      run_id: string;
+      type: string;
+      ts: number;
+      data: unknown;
+      fencing_token?: number;
+      durable?: boolean;
+    }[],
+  ): Promise<SessionEventRecord[]> {
+    if (inputs.length === 0) return [];
+    if (!enabled) throw new TimelineError('timeline_write_failed', 'timeline is not configured');
+    for (const input of inputs) {
+      if (!shouldWrite({ run_id: input.run_id, type: input.type, ts: input.ts })) {
+        throw new TimelineError(
+          'timeline_event_type_excluded',
+          `${input.type} is not a session fact`,
+        );
+      }
+    }
+    const writer = await writerFor(sessionId);
+    if (writer === undefined) {
+      const code = frozenSessions.has(sessionId)
+        ? 'session_frozen_readonly'
+        : 'timeline_write_failed';
+      throw new TimelineError(code, `${sessionId} has no writable timeline`);
+    }
+    const records = await writer.appendMany(
+      inputs.map((input) => ({
+        run_id: input.run_id,
+        type: input.type,
+        ts: input.ts,
+        data: input.data,
+        ...(input.fencing_token !== undefined ? { fencing_token: input.fencing_token } : {}),
+      })),
+    );
+    counters.appended += records.length;
+    maybeArchive(sessionId, 'periodic');
+    return records.map(toSessionEventRecord);
+  }
+
+  /** 关掉一个会话的写者（删会话 / 目录要删之前必须先关句柄，Windows 必需）。幂等。 */
+  async function closeSession(sessionId: string): Promise<void> {
+    const pending = writers.get(sessionId);
+    writers.delete(sessionId);
+    frozenSessions.delete(sessionId);
+    if (pending === undefined) return;
+    try {
+      const writer = await pending;
+      await writer?.close();
+    } catch (error) {
+      counters.failed += 1;
+      warn('timeline writer close failed at session close', {
+        session_id: sessionId,
         error: errorText(error),
       });
     }
@@ -1663,6 +1634,15 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
       dataDir: options.dataDir,
       sources: ['session-log'],
     });
+    // 0.54 stop-write：新会话**不再产生 `events.ndjson`** ⇒ 旧源为空不是「timeline 多了」，
+    // 而是「没有第二份东西可比」。照实报 `compared: false`（不制造假差异、也不要假绿）：
+    // 已迁移会话仍有旧日志，比对照旧有效，直到迁移工具的读面退役（0.55+）。
+    if (expected.length === 0) {
+      warn('timeline verify skipped (no legacy session log; two-source comparison is over)', {
+        session_id: sessionId,
+      });
+      return empty;
+    }
     const diff = multisetDiff(expected, actual);
     const unexpectedExtra = diff.extra.filter((event) => !isTimelineOnlyType(event.type));
     const result: TimelineVerifyResult = {
@@ -1937,6 +1917,9 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     enabled,
     stats: () => ({ ...counters }),
     record,
+    appendFact,
+    appendFacts,
+    closeSession,
     endRun,
     finishRun,
     flushSession,

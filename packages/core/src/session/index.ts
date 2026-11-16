@@ -30,6 +30,7 @@ export {
   type DeleteSessionDataResult,
   deleteSessionData,
   SessionDeleteConflictError,
+  type SessionLogDirectoryPort,
 } from './delete-session.js';
 export { FileSessionStore, SessionCorruptError } from './file-backend.js';
 export { assignMessageIdentities, withRunIdentity } from './message-identity.js';

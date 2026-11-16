@@ -671,7 +671,6 @@ async function runGate(): Promise<void> {
         run_id: RUN,
         chunk: { type: 'tool_call_delta', tool_call_index: 0, arguments_delta: '"x"' },
       },
-      persisted: false,
     });
     await on.manager.flushSession(SESSION);
     const recordsAfterProbe = (await readTimelineEvents(on.sessionDir)).length;

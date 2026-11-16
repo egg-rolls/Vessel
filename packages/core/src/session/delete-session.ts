@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import type { EventStream } from '../types/event.js';
 import type { RunRecordStore } from '../types/run-record-store.js';
 import type { SessionStore } from '../types/session.js';
-import { removeLegacySessionTrace, type SessionEventLog } from './session-event-log.js';
+import { removeLegacySessionTrace } from './session-event-log.js';
 
 const PAGE_LIMIT = 200;
 const MAX_PAGES = 10_000;
@@ -37,6 +37,21 @@ export class SessionDeleteConflictError extends Error {
   }
 }
 
+/**
+ * 会话日志目录的**删除面**（0.18 起是 `SessionEventLog` 的子集；0.54 stop-write 起
+ * 时间线端口也满足它）。
+ *
+ * 只两件事：目录在不在、把目录删掉（删之前关写句柄是实现的内部职责）。
+ * 独立成结构类型的原因：删除路径不需要 `append`，也不需要读 —— 让它依赖最小的面，
+ * 装配层就能把「时间线端口」直接交进来。
+ */
+export interface SessionLogDirectoryPort {
+  /** 会话目录是否存在 */
+  hasSession(sessionId: string): Promise<boolean>;
+  /** 删除整个会话目录（先关写句柄）；不存在 ⇒ `false` */
+  deleteSession(sessionId: string): Promise<boolean>;
+}
+
 /** 删除选项 */
 export interface DeleteSessionDataOptions {
   session: SessionStore;
@@ -46,10 +61,10 @@ export interface DeleteSessionDataOptions {
   traceDir?: string;
   events?: EventStream;
   /**
-   * 0.18：会话事件日志。提供时删除 `sessions/<id>/` 整个目录
-   * （events.ndjson + index.json），并先关闭写句柄（Windows 必需）。
+   * 会话日志目录（时间线端口或旧日志实现）。提供时删除 `sessions/<id>/` 整个目录
+   * （事件 + 块 + 索引），并先关闭写句柄（Windows 必需）。
    */
-  eventLog?: SessionEventLog;
+  eventLog?: SessionLogDirectoryPort;
 }
 
 /** 删除计数（A-4 §11.3 + 1 追加：sessions_deleted 为 0/1） */

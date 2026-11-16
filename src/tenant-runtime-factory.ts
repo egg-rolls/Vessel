@@ -48,8 +48,6 @@ import {
   type Runtime,
   type RuntimePermissionConfig,
   type Scheduler,
-  SessionEventLog,
-  type SessionEventLogPort,
   type SessionStore,
   type TenantPaths,
   type TraceRedactor,
@@ -86,6 +84,7 @@ import {
   type TimelineLegacyBroadcastGate,
   type TimelinePublication,
 } from './timeline-dual-write';
+import { createTimelineSessionLog, type TimelineSessionLog } from './timeline-session-log';
 import {
   composeTraceRedactors,
   installTrace,
@@ -206,8 +205,12 @@ export interface TenantRuntimeBundle {
    * 启动侧只用 `transient({ runId: 'manual' }).saveSessionState()` 这一条。
    */
   journalFactory: RunJournalFactory;
-  /** 0.18：会话事件写口（0.54 stop-write：时间线实现，`events.ndjson` 不再写） */
-  eventLog?: SessionEventLogPort;
+  /**
+   * 0.18：会话事件**唯一持久化端口**（0.54 stop-write：时间线实现，`events.ndjson` 不再写）。
+   *
+   * 需要「写 + 读」的几处（停摆会话终态 / 通知注入 / ask 恢复 / 种子消息 / 会话删除）拿它。
+   */
+  eventLog?: TimelineSessionLog;
   /**
    * 0.54 stop-write：会话事件的**只读口**（`TimelineEventLog`，类型上没有 `append`）。
    *
@@ -695,64 +698,57 @@ export async function buildTenantRuntime(
     tenantSessionsDbPath: tenantSessionsDbPath(tenantPaths.root),
     tenantId,
   });
-  // 0.18：事件日志按 tenant 的 sessions 目录落盘（`sessions/<id>/events.ndjson`）。
-  // 仅在本地写意图 + 持久化后端时创建；memory 后端/只读执行面保持零磁盘写入。
-  const eventLog = writesEventLog
-    ? new SessionEventLog({
-        dir: tenantPaths.sessions_dir,
-        tenantId,
-        logger,
-        // ADR-098 C2：旧 fencing token 拒绝 append；读路径不校验。
-        ...(leaseService !== undefined
-          ? { fenceOf: (kind, key) => leaseService.fenceOf(kind, key) }
+  // 0.54 stop-write：**会话事件的唯一持久化落点 = 时间线**。
+  //
+  // `sessions/<id>/events.ndjson` 从这一版起不再被写（旧格式会话仍只读冻结，见
+  // `timeline/freeze.ts`；`vessel session migrate` 是离线读，不受影响）。所以装配层
+  // **不再创建 `SessionEventLog`** —— 它在类型上还活着（旧格式会话的只读面 + 迁移工具），
+  // 但新会话一个字节都不会经过它。
+  //
+  // 之前的 `timeline.dual_write` 开关没有意义了：时间线是**唯一**落盘口，关掉它就是关掉
+  // 整个事件的持久化。显式写 `false` 的安装会拿到一条警告（不是静默降级）。
+  if (writesEventLog && timelineOptions.dualWrite === false) {
+    logger.warn('timeline.dual_write=false is ignored (timeline is the only durable event sink)', {
+      tenant_id: tenantId,
+    });
+  }
+  // 0.54（ADR-105 §3 I2）：`onPublish` 是**唯一的对外发布出口** —— 写者在 WAL/块
+  // fsync 之后才回调它，所以「UI 能看见的事件」的可见性由 timeline 的持久化决定。
+  // `publicationGate` 把那条广播扣成发送缓冲：写者 fsync 之后才放行给 UI。
+  const timelineDualWrite: TimelineDualWrite | undefined = writesEventLog
+    ? createTimelineDualWrite({
+        dataDir: tenantPaths.root,
+        sessionsDir: tenantPaths.sessions_dir,
+        dualWrite: true,
+        ...(timelineOptions.chunkFlushMs !== undefined
+          ? { chunkFlushMs: timelineOptions.chunkFlushMs }
           : {}),
+        ...(timelineOptions.verifySampleRate !== undefined
+          ? { verifySampleRate: timelineOptions.verifySampleRate }
+          : {}),
+        ...(timelineOptions.archiveIntervalMs !== undefined
+          ? { archiveIntervalMs: timelineOptions.archiveIntervalMs }
+          : {}),
+        emit: (event) => {
+          try {
+            // 观测事件直接进底层流：它永远不进 timeline，不该被发送缓冲扣一下。
+            rawEvents.publish(event);
+          } catch {
+            // 观测事件投递失败不得影响 run
+          }
+        },
+        // 发布点：写者 fsync 之后回调 ⇒ 发到**底层**事件流（不能回到闸门，否则自我循环）。
+        onPublish: (publication) => {
+          try {
+            rawEvents.publish(publicationToRunEvent(publication));
+          } catch {
+            // 发布通道失败不影响落盘（数据已 fsync；实现侧还会再兜一层指标）
+          }
+        },
+        ...(broadcastGate !== undefined ? { publicationGate: broadcastGate } : {}),
+        logger,
       })
     : undefined;
-  // 0.54：会话 timeline 写路径（ADR-105 §11 / plan-054 A4）。
-  // 开关关（0.54 cutover 起是**显式** `dual_write: false`，不再是默认）⇒ **不构造**：
-  // `RunJournal` 拿到的端口是 `undefined`，一次都不调。开关开（默认）⇒ 每条事件多写一份
-  // timeline + 旧链路故意不落盘的 chunk 家族；新链路任何失败只记指标/日志
-  // （实现侧自吞，见 `src/timeline-dual-write.ts`）。
-  //
-  // 0.54 B（ADR-105 §3 I2）：`onPublish` 是**唯一的对外发布出口** —— 写者在 WAL/块
-  // fsync 之后才回调它，所以「UI 能看见的事件」的可见性由 timeline 的持久化决定。
-  // `publicationGate` 把旧链路那条广播扣成发送缓冲：同一条事件不会因为两条路都发而
-  // 在 UI 里出现两次（闸门放行的就是它自己那条，带完整的旧链路 payload）。
-  const timelineDualWrite: TimelineDualWrite | undefined =
-    eventLog !== undefined && timelineOptions.dualWrite === true
-      ? createTimelineDualWrite({
-          dataDir: tenantPaths.root,
-          sessionsDir: tenantPaths.sessions_dir,
-          dualWrite: true,
-          ...(timelineOptions.chunkFlushMs !== undefined
-            ? { chunkFlushMs: timelineOptions.chunkFlushMs }
-            : {}),
-          ...(timelineOptions.verifySampleRate !== undefined
-            ? { verifySampleRate: timelineOptions.verifySampleRate }
-            : {}),
-          ...(timelineOptions.archiveIntervalMs !== undefined
-            ? { archiveIntervalMs: timelineOptions.archiveIntervalMs }
-            : {}),
-          emit: (event) => {
-            try {
-              // 观测事件直接进底层流：它永远不进 timeline，不该被发送缓冲扣一下。
-              rawEvents.publish(event);
-            } catch {
-              // 观测事件投递失败不得影响 run
-            }
-          },
-          // 发布点：写者 fsync 之后回调 ⇒ 发到**底层**事件流（不能回到闸门，否则自我循环）。
-          onPublish: (publication) => {
-            try {
-              rawEvents.publish(publicationToRunEvent(publication));
-            } catch {
-              // 发布通道失败不影响落盘（数据已 fsync；实现侧还会再兜一层指标）
-            }
-          },
-          ...(broadcastGate !== undefined ? { publicationGate: broadcastGate } : {}),
-          logger,
-        })
-      : undefined;
   timelineDualWrite?.installExitFlush();
   /**
    * 0.54 stop-write：**读口**（没有 `append`）。
@@ -779,6 +775,19 @@ export async function buildTenantRuntime(
           : {}),
       })
     : undefined;
+  /**
+   * 0.54 stop-write：**唯一持久化端口**（读口 + 时间线写者拼起来的 `SessionEventLogPort`）。
+   *
+   * 需要写的几处（停摆会话终态 / 通知注入 / ask 恢复 / 种子消息 / 会话删除）拿它；
+   * EU 的读路径只拿上面那个没有 `append` 的读口 —— 权限差别在类型上。
+   */
+  const eventLog: TimelineSessionLog | undefined =
+    timelineLog !== undefined
+      ? createTimelineSessionLog({
+          read: timelineLog,
+          ...(timelineDualWrite !== undefined ? { dualWrite: timelineDualWrite } : {}),
+        })
+      : undefined;
   const sessionControl = createSessionControl({
     session,
     paths: tenantPaths,
@@ -1339,9 +1348,10 @@ export async function buildTenantRuntime(
 
     if (eventLog) {
       try {
-        await eventLog.close();
+        // 时间线写者有自己的关闭路径（`closeAll`，带 300ms 上限）；这个端口没有额外句柄。
+        await eventLog.flush?.();
       } catch (error) {
-        report('eventLog.close', error);
+        report('eventLog.flush', error);
       }
     }
 

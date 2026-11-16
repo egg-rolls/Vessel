@@ -1497,7 +1497,6 @@ async function judgeBehaviour(): Promise<void> {
               type: 'user.message',
               ts: NOW + 3,
               data: { text: 'must not be written' },
-              persisted: true,
             });
             await dual.finishRun(LEGACY_SESSION_ID, LEGACY_RUN_ID);
             await dual.flushSession(LEGACY_SESSION_ID);

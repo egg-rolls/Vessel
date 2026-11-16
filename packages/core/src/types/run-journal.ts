@@ -7,7 +7,7 @@
  * @module @vessel-agent/core/types
  */
 
-import type { EventStream, RunEvent, SessionEventLogPort } from './event.js';
+import type { EventStream, RunEvent, SessionEventReadPort } from './event.js';
 import type { LeaseKind } from './lease.js';
 import type { Logger } from './logging.js';
 import type { RunRecord, RunRecordStore } from './run-record-store.js';
@@ -61,10 +61,15 @@ export interface RunJournalFactory {
 }
 
 /**
- * 一条交给 timeline 双写的会话事实（0.54 A）。
+ * 一条交给 timeline 写者的会话事实（0.54 A）。
  *
  * 形状与 `SessionEventInput` 对齐（同样的 `run_id` / `type` / `ts` / `data`），
  * 但**没有 `session_id`**：会话是 `record()` 的第一个实参，避免同一个值出现两次。
+ *
+ * 0.54 stop-write：没有 `persisted` 这个字段了。它以前表示「旧链路（`events.ndjson`）
+ * 是否已经落盘」，用来让旁路只补 chunk 家族；旧链路停写之后这个问题不存在 ——
+ * 时间线是**唯一**落盘口，「什么不该落盘」由 `timeline/types.ts#isExcludedEventType`
+ * 一处回答。
  */
 export interface TimelineDualWriteEvent {
   run_id: string;
@@ -72,39 +77,42 @@ export interface TimelineDualWriteEvent {
   ts: number;
   data?: unknown;
   fencing_token?: number;
-  /**
-   * 该事件是否已被旧链路落盘（`events.ndjson`）。
-   *
-   * `true` = 已落盘事件（双写就写它）；`false` = 旧链路**故意不落盘**的派生事件，
-   * 其中 chunk 家族（`llm.stream.chunk` / `*.llm.stream.chunk`）是唯一**必须**在 timeline
-   * 侧落盘的一类 —— 它进块级 WAL（`wal.blocks/`），不是「被丢弃」（0.54 A2）。
-   * 旁路的取舍（只补 chunk 家族）由实现侧决定，journal 只如实转述，不在这里判断
-   * 「什么值得写」。
-   */
-  persisted: boolean;
 }
 
 /**
- * 0.54 A：timeline 双写旁路端口（ADR-105 §11 / plan-054 A4）。
+ * 0.54 A：timeline 写者端口（ADR-105 §11 / plan-054 A4）。
  *
  * 三条硬约束（写在类型上，实现必须自证）：
- * 1. **不装 = 一次都不调**：`undefined` 时 journal 连这个对象都不看 ⇒ 开关关时旧链路
- *    逐字节不变（不是「调了再丢弃」）；
+ * 1. **不装 = 一次都不调**：`undefined` 时 journal 连这个对象都不看；
  * 2. **实现永不抛**：`record()` / `endRun()` 都是 fire-and-forget，返回 void；
- *    新链路任何失败只记指标/日志，绝不影响旧链路返回；
- * 3. **不改旧链路顺序**：journal 在「已发布之后」才调 `record()`，因此旧链路的
- *    写入/发布时序一字不改。
+ *    新链路任何失败只记指标/日志，绝不影响 run；
+ * 3. **不改发布顺序**：journal 在「已发布之后」才调 `record()`，可见性由写者 fsync 之后的
+ *    发布点与发送闸门决定（ADR-105 §3 I2）。
  */
 export interface TimelineDualWritePort {
-  /** 一条会话事实（已落盘或显式旁路写）；实现必须自己吞掉所有异常。 */
+  /** 一条会话事实（fire-and-forget；实现必须自己吞掉所有异常）。 */
   record(sessionId: string, event: TimelineDualWriteEvent): void;
   /** Run 结束（journal.close）：flush 该会话的 writer + 抽样校验。尽力而为，永不抛。 */
   endRun?(sessionId: string, runId: string): void;
+  /**
+   * 等到该会话已派发的事件真正落盘（journal.flush 用）。
+   *
+   * 与 `record()` 不同，这里**允许**抛：调用方（journal）自己兜住并降级
+   * （冻结会话抛 `session_frozen_readonly`，那不是故障）。
+   */
+  flushSession?(sessionId: string): Promise<void>;
 }
 
 /** 默认实现的构造依赖：装配层按 tenant 持有 */
 export interface RunJournalFactoryOptions {
-  eventLog?: SessionEventLogPort;
+  /**
+   * 会话事件**读口**（只读子集）。
+   *
+   * 0.54 stop-write：journal 不再 `append` 到它（它类型上也没有 `append`）；这里只用于
+   * 读「已落盘到哪」（`lastSeq`，写 RunRecord 的 `event_cursor` 与会话壳的
+   * `derived_upto_seq` 都要它）。
+   */
+  eventLog?: SessionEventReadPort;
   session?: SessionStore;
   runStore?: RunRecordStore;
   /** ADR-098 C2：fencing 校验回调（不持 LeaseService） */
@@ -119,10 +127,10 @@ export interface RunJournalFactoryOptions {
    */
   resumeMarkers?: ResumeMarkerRegistry;
   /**
-   * 0.54 A：timeline 双写旁路（ADR-105 §11）。
+   * 0.54：timeline 写者端口（`events.ndjson` 停写之后它是**唯一**落盘口）。
    *
-   * 缺省 = 不装：旁路**一次都不调**，旧链路逐字节不变（开关关的那一侧）。
-   * 装上时新链路失败不得影响旧链路（实现侧自吞，见 {@link TimelineDualWritePort}）。
+   * 缺省 = 不装：一条事件都不落盘（只发布）。装上时写者失败不得影响 run
+   * （实现侧自吞，见 {@link TimelineDualWritePort}）。
    */
   timelineDualWrite?: TimelineDualWritePort;
 }
