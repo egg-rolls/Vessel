@@ -30,6 +30,7 @@ import {
   type PluginExposeConfig,
   resolveEffectiveApiKey,
   resolveGatewayNodePorts,
+  resolveServeProxySecret,
   type VesselConfig,
 } from '../packages/config/src/index';
 import { type EventStream, pruneTrace, rebuildMetrics } from '../packages/core/src/index';
@@ -1149,6 +1150,9 @@ async function runWithConfig(result: BootstrapResult) {
       process.env.VESSEL_PLATFORM_ORIGINS,
     );
 
+    // 0.55 P0：反代共享密钥（opt-in）。只读环境变量；不配 = undefined = 旧行为。
+    const serveProxySecret = resolveServeProxySecret(config);
+
     const gatewayOptions: GatewayOptions = {
       // capabilities.list 需要真实版本；缺省会退化为 0.0.0。
       version: readPackageVersion(),
@@ -1200,6 +1204,8 @@ async function runWithConfig(result: BootstrapResult) {
       nodeName: result.nodeName,
       auth: authResult.auth,
       token: resolveGatewayToken(config),
+      // 0.55 P0：反代共享密钥（opt-in）。未配置 = 不传 = 旧行为逐字不变。
+      ...(serveProxySecret !== undefined ? { proxySecret: serveProxySecret } : {}),
       hostname: resolved.options.hostname,
       port: resolved.options.port,
       allowRemote: resolved.options.allowRemote,

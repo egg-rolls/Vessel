@@ -29,7 +29,10 @@ export {
 export {
   checkPlatformTokenConflict,
   resolveGatewayNodePorts,
+  resolvePlatformProxySecret,
   resolvePlatformToken,
+  resolveProxySecret,
+  resolveServeProxySecret,
 } from './gateway.js';
 export {
   applyLayerWithSources,

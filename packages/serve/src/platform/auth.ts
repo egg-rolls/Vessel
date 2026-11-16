@@ -8,7 +8,7 @@
  */
 
 import { timingSafeEqual } from 'node:crypto';
-import { isLoopbackAddress } from '../gateway/auth.js';
+import { isLoopbackAddress, proxySecretAllowed } from '../gateway/auth.js';
 
 /** 平台凭据模式：token = 平台 bearer；anonymous = 回环只读。 */
 export type PlatformAuthMode = 'token' | 'anonymous';
@@ -27,6 +27,12 @@ export interface ResolvePlatformAuthInput {
   address: string | null | undefined;
   /** 未配置 = undefined。 */
   platformToken?: string;
+  /**
+   * 0.55 P0：反代共享密钥（`gateway.proxy_secret_env` 解析结果）。
+   * 未配置 → `loopback` 只看 socket 地址（旧行为）；配置后 → 还必须带密钥头，
+   * 否则一律按「非回环」处理（`platform.nodes.credentials` 因此不再被匿名取走）。
+   */
+  proxySecret?: string;
 }
 
 /** 从 Authorization: Bearer 取 token；空串视为未提供。 */
@@ -49,9 +55,11 @@ function constantTimeEqual(a: string, b: string): boolean {
  * 平台鉴权矩阵（契约 §3.2）：
  * - 配置了 `platformToken`：必须匹配，回环也不例外。
  * - 未配置：仅回环 socket → 匿名只读；非回环 → 拒绝（即使未配置）。
+ * - 0.55 P0：配置了 `proxySecret` 时，「回环」还要求请求带反代密钥头。
  */
 export function resolvePlatformAuth(input: ResolvePlatformAuthInput): PlatformAuthResult {
-  const loopback = isLoopbackAddress(input.address);
+  const loopback =
+    isLoopbackAddress(input.address) && proxySecretAllowed(input.req, input.proxySecret);
   const expected = input.platformToken;
   if (typeof expected === 'string' && expected !== '') {
     const provided = bearerToken(input.req);

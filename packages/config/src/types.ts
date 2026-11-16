@@ -396,6 +396,14 @@ export interface ServeConfig {
   tokenEnv?: string;
   /** A-3：token → { role }；键为原始 token，必须原样保留 */
   tokens?: Record<string, ServeTokenEntry>;
+  /**
+   * 0.55 P0：反代共享密钥的环境变量名（opt-in）。
+   *
+   * 反代与 node 同机时客户端 peer 恒为 127.0.0.1，「回环 = 本机」不再成立。
+   * 配了它之后：**无凭据**的请求必须由反代注入 `x-vessel-proxy-secret` 才放行；
+   * 带 Bearer token 的请求（本机 CLI / TUI / 客户端）行为不变。不配 = 旧行为。
+   */
+  proxySecretEnv?: string;
   /** TLS 证书对 */
   tls?: ServeTlsConfig;
   /**
@@ -421,6 +429,14 @@ export interface GatewayConfig {
   tokenEnv?: string;
   /** 平台静态宿主的浏览器 Origin allowlist（规则同 serve.allowedOrigins） */
   allowedOrigins?: string[];
+  /**
+   * 0.55 P0：反代共享密钥的环境变量名（opt-in）。
+   *
+   * 配置后，「回环 socket」不再自动等于可信来源：平台只在请求带
+   * `x-vessel-proxy-secret` 时才把回环对端当成本机，`platform.nodes.credentials`
+   * 因此不会经同机反代被匿名取走。不配 = 旧行为（0.55 之前）。
+   */
+  proxySecretEnv?: string;
 }
 
 /** Transport 配置（0.2；0.22.1 只剩 in-process） */

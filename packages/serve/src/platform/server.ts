@@ -78,6 +78,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
   const registry = createPlatformRegistry(opts.nodes);
   const version = opts.version ?? 'unknown';
   const platformToken = opts.platformToken;
+  const proxySecret = opts.proxySecret;
 
   const server = Bun.serve({
     port: opts.port,
@@ -103,7 +104,12 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
       }
 
       const address = srv.requestIP(req)?.address;
-      const auth = resolvePlatformAuth({ req, address, platformToken });
+      const auth = resolvePlatformAuth({
+        req,
+        address,
+        platformToken,
+        ...(proxySecret !== undefined ? { proxySecret } : {}),
+      });
 
       // 非回环且未通过平台认证：一律 401（即使未配置平台 token）。
       if (!auth.loopback && !auth.ok) {

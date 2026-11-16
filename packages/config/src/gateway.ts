@@ -32,6 +32,38 @@ export function resolvePlatformToken(
 }
 
 /**
+ * 0.55 P0：解析反代共享密钥。
+ *
+ * - 平台入口：`gateway.proxy_secret_env` 指向的环境变量；
+ * - node 入口：`serve.proxy_secret_env` 指向的环境变量。
+ *
+ * 只读环境变量名，**不接受 YAML 内联密钥**（避免密钥落盘到 config）。
+ * 未配置 / 变量为空 → undefined，调用方据此逐字保持旧行为。
+ */
+export function resolveProxySecret(
+  envName: string | undefined,
+  env: EnvMap = process.env,
+): string | undefined {
+  return nonEmpty(envName ? env[envName] : undefined);
+}
+
+/** 平台入口的反代密钥（`gateway.proxy_secret_env`）。 */
+export function resolvePlatformProxySecret(
+  config: VesselConfig,
+  env: EnvMap = process.env,
+): string | undefined {
+  return resolveProxySecret(config.gateway?.proxySecretEnv, env);
+}
+
+/** node 入口的反代密钥（`serve.proxy_secret_env`）。 */
+export function resolveServeProxySecret(
+  config: VesselConfig,
+  env: EnvMap = process.env,
+): string | undefined {
+  return resolveProxySecret(config.serve?.proxySecretEnv, env);
+}
+
+/**
  * 平台 token 与 node 生效凭据的冲突检查。
  *
  * `nodeToken` 必须由调用方传入 `resolveGatewayToken(config, env)` 的结果

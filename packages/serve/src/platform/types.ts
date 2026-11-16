@@ -45,6 +45,12 @@ export interface PlatformGatewayOptions {
   hostname: string;
   /** 未配置 = undefined；仅回环匿名只读。 */
   platformToken?: string;
+  /**
+   * 0.55 P0：反代共享密钥（opt-in；未配置 = 旧行为）。
+   * 配置后，平台只在请求带 `x-vessel-proxy-secret` 时把 socket 回环当成可信来源 ——
+   * 同机反代场景下这是唯一还能区分「本机浏览器」与「公网经反代」的信号。
+   */
+  proxySecret?: string;
   /** `gateway.allowed_origins`；已由组合根解析。 */
   allowedOrigins?: string[];
   /** 用于 CSP `frame-src` / `connect-src` 的 node origin。 */

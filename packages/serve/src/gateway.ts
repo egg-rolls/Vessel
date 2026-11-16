@@ -49,6 +49,7 @@ import {
   loadTlsMaterial,
   normalizeAllowedOrigins,
   originAllowed,
+  proxySecretAllowed,
 } from './gateway/auth.js';
 import { MethodError } from './gateway/errors.js';
 import {
@@ -186,6 +187,8 @@ export {
   isLoopbackHostname,
   normalizeAllowedOrigins,
   originAllowed,
+  PROXY_SECRET_HEADER,
+  proxySecretAllowed,
 } from './gateway/auth.js';
 
 /** 网关启动选项 */
@@ -215,6 +218,15 @@ export interface GatewayOptions {
   hostname?: string;
   /** 访问令牌（默认随机生成） */
   token?: string;
+  /**
+   * 0.55 P0：反代共享密钥（opt-in；未配置 = 旧行为逐字不变）。
+   *
+   * 反代与 node 同机时客户端 peer 恒为 127.0.0.1，`Host` 也可能被反代改写成
+   * `127.0.0.1:<port>`（nginx 默认 `$proxy_host`），于是「回环 = 本机」不再成立。
+   * 配置后：**无凭据**的请求必须由反代注入 `x-vessel-proxy-secret` 头才放行；
+   * 带 Bearer token 的请求不受影响（本机 CLI/TUI 直连照旧可用）。
+   */
+  proxySecret?: string;
   /** 节点名（可选，展示用） */
   nodeName?: string;
   /** 节点 id；缺省随机。federation / hub 必须使用同一个值（U3） */
@@ -496,6 +508,11 @@ interface WsData {
   authed: boolean;
   since: number;
   alive: boolean;
+  /**
+   * 0.55 P0：upgrade 时算好的「反代密钥头成立」。未配置 `proxySecret` 时恒为 true；
+   * 配置后，首帧不带 token 的 auth 只有在它为 true 时才被当成匿名本机客户端。
+   */
+  proxyAuthed?: boolean;
   authTimer?: ReturnType<typeof setTimeout>;
   backpressure: ClientBackpressure;
   /** 0.5：token 解析出的 principal；未鉴权时为 undefined */
@@ -2308,11 +2325,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
         closeWsBy(ws, 4400, 'unsupported protocol', 'server_protocol');
         return;
       }
-      const principal = resolvePrincipal(
-        opts.auth,
-        typeof frame.token === 'string' ? frame.token : null,
-        token,
-      );
+      // 0.55 P0：配了反代密钥后，首帧不带 token 不再自动获得匿名（本机）身份。
+      const frameToken = typeof frame.token === 'string' && frame.token !== '' ? frame.token : null;
+      if (frameToken === null && ws.data.proxyAuthed === false) {
+        closeWsBy(ws, 4401, 'unauthorized', 'server_protocol');
+        return;
+      }
+      const principal = resolvePrincipal(opts.auth, frameToken, token);
       if (!principal) {
         closeWsBy(ws, 4401, 'unauthorized', 'server_protocol');
         return;
@@ -3562,6 +3581,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
             authed: false,
             since: parseSince(url.searchParams.get('since')),
             alive: true,
+            // 0.55 P0：反代密钥在 upgrade 时定值（首帧才带 token，来不及再判）。
+            proxyAuthed: proxySecretAllowed(req, opts.proxySecret),
             backpressure: new ClientBackpressure({
               high: WS_BACKPRESSURE_HIGH,
               low: WS_BACKPRESSURE_LOW,
@@ -3654,6 +3675,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
           401,
           extra,
         );
+      }
+
+      // 0.55 P0：反代密钥（opt-in）。配置之后，**无凭据**的请求不再因为「本监听在回环」
+      // 被当成可信本机客户端；它必须由反代注入共享密钥头。带 token 的请求语义不变。
+      if (opts.proxySecret !== undefined) {
+        const rawToken = extractToken(
+          req.headers.get('authorization'),
+          queryTokenAllowed(req, path) ? url.searchParams.get('token') : null,
+        );
+        if (rawToken === null && !proxySecretAllowed(req, opts.proxySecret)) {
+          return errorJson('unauthorized', 'Missing or invalid token', 401, extra);
+        }
       }
 
       const principal = principalForRequest(req, url, path);

@@ -31,6 +31,9 @@ paths: [docs/operations/REMOTE.md]
 - **信任边界**：`node_id` 以 token + TLS 边界信任，没有逐事件签名；不要通过不可信第三方转发同 Origin 的节点事件。
 - **不在 0.6 范围**：mTLS / 客户端证书、HTTP/2、ACME / 自动续期、反向代理信任头、mDNS / 服务网格 / 节点自动发现。
 
+> 0.55 补充：同机反代的威胁模型、复现证据与 `proxy_secret_env` 开关见
+> [REVERSE-PROXY.md](./REVERSE-PROXY.md)。默认行为不变；不配开关就等于仍信任「回环」。
+
 ### 1.1 0.6.1 的安全收紧
 
 > 以下收紧在 0.6.1 已实现。
