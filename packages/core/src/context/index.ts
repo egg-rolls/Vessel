@@ -42,11 +42,13 @@ export {
 } from './cleared-tool-result.js';
 export {
   auditChainOf,
+  type ClearedToolResultPlannerStats,
   compactMessagesForSeed,
   decideProjectionRunMode,
   estimateMessagesTokens,
   estimateMessageTokens,
   estimateTokens,
+  IncrementalClearedToolResultPlanner,
   KEEP_RECENT_MAX,
   KEEP_RECENT_TOKEN_RATIO,
   MemoryWorkingContext,
