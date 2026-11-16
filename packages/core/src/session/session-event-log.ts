@@ -49,6 +49,15 @@ export interface SessionLogIndex {
   preview?: string;
   status?: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
   started_at?: number;
+  /**
+   * 终态时刻（additive）：**只在 `status` 是终态时存在**，等于该次终态写入的
+   * `updated_at`。`running` 时一律不写（连继承来的旧值也清掉）——「跑着但已经完成于
+   * 某刻」是自相矛盾的元数据，比缺字段更容易骗人。
+   *
+   * 它让「这份索引说会话已经完了」变成**一个字段就能回答**的问题：读侧不必再拿
+   * `updated_at` 猜（`updated_at` 在 run 进行中也会前进）。
+   */
+  completed_at?: number;
   updated_at: number;
   /** 已落盘事件数（= 最后 seq；seq 从 1 连续递增） */
   event_count: number;
@@ -57,6 +66,14 @@ export interface SessionLogIndex {
   /** 显式标注：`sessions/<id>.json` 中的 messages 只是投影缓存 */
   messages_cached: true;
 }
+
+/** 终态 status（`updated_at` 在这几种状态下可以当 `completed_at` 用）。 */
+const TERMINAL_SESSION_STATUSES: ReadonlySet<string> = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
+]);
 
 /** 读取选项；`sinceSeq` 为**排他**游标（只返回 seq > sinceSeq） */
 export interface ReadSessionEventsOptions {
@@ -922,6 +939,14 @@ export class SessionEventLog {
   /**
    * 合并写 `index.json`（进程内按 session 串行，atomicWrite + 0600）。
    * 写失败向调用方抛出；runtime 侧按 best-effort 记录，不影响 run 终态。
+   *
+   * **终态先落这里**：`status` 是终态时同时写 `completed_at`（= 本次 `updated_at`），
+   * 于是「这份索引说会话已经完了」只有一个来源、一个时刻。呼入方（`finalizeRun`）
+   * 在 run 结束的**第一条**就调它 —— 小文件的写入不该排在几百 KB～几 MB 的会话壳
+   * 投影写后面（那是「run 早就结束、界面上一直『正在思考』」的可见来源之一）。
+   *
+   * `status` 回到非终态（下一轮 run 开始）时 `completed_at` **必须消失**，所以它不从
+   * `existing` 继承：继承会让「running + 上次的完成时刻」这种自相矛盾的索引活下去。
    */
   async updateIndex(sessionId: string, patch: SessionIndexPatch): Promise<void> {
     const state = this.getOrCreateWriter(sessionId);
@@ -930,6 +955,8 @@ export class SessionEventLog {
     const path = sessionIndexFilePath(this.dir, sessionId);
     const existing = await this.readIndex(sessionId);
     const persisted = state.persistedSeq;
+    const status = patch.status ?? existing?.status;
+    const updatedAt = patch.updated_at ?? Date.now();
     const next: SessionLogIndex = {
       v: 1,
       session_id: sessionId,
@@ -937,7 +964,7 @@ export class SessionEventLog {
       ...(existing?.preview !== undefined ? { preview: existing.preview } : {}),
       ...(existing?.status !== undefined ? { status: existing.status } : {}),
       ...(existing?.started_at !== undefined ? { started_at: existing.started_at } : {}),
-      updated_at: patch.updated_at ?? Date.now(),
+      updated_at: updatedAt,
       event_count: patch.event_count ?? persisted,
       derived_upto_seq: patch.derived_upto_seq ?? persisted,
       messages_cached: true,
@@ -945,6 +972,10 @@ export class SessionEventLog {
       ...(patch.preview !== undefined ? { preview: patch.preview } : {}),
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       ...(patch.started_at !== undefined ? { started_at: patch.started_at } : {}),
+      // 终态才有完成时刻；`running` / 未知状态一律不写（见下方 SessionLogIndex 注释）。
+      ...(status !== undefined && TERMINAL_SESSION_STATUSES.has(status)
+        ? { completed_at: updatedAt }
+        : {}),
     };
     await atomicWrite(path, JSON.stringify(next, null, 2), { mode: 0o600, ensureDir: true });
   }
