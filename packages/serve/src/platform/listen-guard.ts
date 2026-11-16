@@ -59,6 +59,8 @@ export function platformListenGuard(input: {
     '         token_env: VESSEL_PLATFORM_TOKEN',
     '     然后用令牌的**值**（不是变量名）打开页面：',
     `       http://${where}/#token=<上面生成的值>`,
+    '     已经配了 gateway.token_env 却起不来：确认该变量在**服务进程**里非空（systemd 的',
+    '     Environment= / env_file 要生效；只在一个终端里 export 只影响那个终端）。',
     '',
     '注意：platform token 必须与 node token 不同（同值会被 checkPlatformTokenConflict 拦下）。',
     `细节与迁移清单：${PLATFORM_LISTEN_GUARD_DOC}`,
