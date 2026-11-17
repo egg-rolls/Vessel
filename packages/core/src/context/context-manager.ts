@@ -985,10 +985,19 @@ export function withClearedToolResults(
     // 路径每次请求都会命中，所以守卫在这里是必需的，不是防御性冗余。
     // `session/project-messages.ts` 的同一次替换一直带着同一守卫，两处口径一致。
     if (isClearedToolResult(message.content)) return message;
-    return {
+    const next: Message = {
       ...message,
       content: formatClearedToolResult(messages, message.tool_call_id, message.content),
     };
+    // 0.56：占位把正文换掉的同时**必须**把这条消息的图片引用一起删掉。
+    // 否则「文本占位省了 token、图还在按 1024/张照发」—— 省的正好是反的（design §7.6）。
+    // 这里只删视图副本上的 `refs`，落盘历史一个字不改（与内容替换同一口径）。
+    if (message.refs !== undefined) {
+      const kept = message.refs.filter((ref) => ref.kind !== 'image');
+      if (kept.length === 0) delete next.refs;
+      else next.refs = kept;
+    }
+    return next;
   });
 }
 
