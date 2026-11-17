@@ -35,7 +35,26 @@ export interface DeepSeekCallOptions {
   config: WebToolsConfig;
   /** 这次调用该看哪个环境变量（search / fetch 可分开账户） */
   keyKind: KeyKind;
+  /**
+   * 显式指定环境变量名（搜索侧按 provider 的 `keyEnv` 解析好后传进来）。
+   * 不给 ⇒ 走 `config` 的 `search_key_env`/`fetch_key_env`/`key_env` 口径。
+   */
+  keyEnvName?: string;
   path: string;
+  /**
+   * 绝对地址覆盖（缺省 = `config.baseUrl` + path）。
+   *
+   * Tavily / Serper 这类**固定 host** 的后端用绝对地址：它们的域名不该被
+   * `base_url` 配置串到（那是 DeepSeek tools API 的旋钮）。
+   */
+  endpoint?: string;
+  /**
+   * 鉴权头（缺省 = `authorization: Bearer <key>`）。
+   *
+   * Serper 只认 `X-API-KEY`，这时由它的 `ProviderHttp` 提供本函数；
+   * **重试/退避/错误映射/擦除仍然只有这一份实现**，不因为头不同而分叉。
+   */
+  authHeaders?: (key: string) => Record<string, string>;
   body: unknown;
   signal?: AbortSignal;
   deps?: DeepSeekDeps;
@@ -262,13 +281,19 @@ export async function callDeepSeekTool(options: DeepSeekCallOptions): Promise<De
   const now = deps.now ?? (() => Date.now());
   const sleep = deps.sleep ?? defaultSleep;
 
-  const key = readKey(config, options.keyKind, deps.env ?? process.env);
+  const key = readKey(config, options.keyKind, deps.env ?? process.env, options.keyEnvName);
   if (!key.present) {
     // 缺 key：本地判，不发请求，不静默降级
     throw new WebFetchError('provider_auth_failed', missingKeyMessage(key.envName));
   }
 
-  const endpoint = endpointFor(config.baseUrl, options.path);
+  const endpoint =
+    options.endpoint !== undefined && options.endpoint !== ''
+      ? options.endpoint
+      : endpointFor(config.baseUrl, options.path);
+  // 缺省是 Bearer：只因为 deepseek 是第一个后端，不代表其他家的鉴权风格
+  const authHeaders =
+    options.authHeaders ?? ((value: string) => ({ authorization: `Bearer ${value}` }));
   const startedAt = now();
   const controller = new AbortController();
   let timedOut = false;
@@ -293,7 +318,7 @@ export async function callDeepSeekTool(options: DeepSeekCallOptions): Promise<De
           method: 'POST',
           redirect: 'manual',
           headers: {
-            authorization: `Bearer ${key.value}`,
+            ...authHeaders(key.value),
             'content-type': 'application/json',
             accept: 'application/json',
             'user-agent': config.userAgent,
