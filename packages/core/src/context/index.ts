@@ -43,6 +43,23 @@ export {
   trimNoticeSignature,
 } from './cleared-tool-result.js';
 export {
+  appendCompactionStub,
+  type BuildCompactionIndexInput,
+  buildCompactionIndexEntry,
+  COMPACTION_STUB_MARK,
+  COMPACTION_STUB_MAX_ENTRIES,
+  type CompactionIndexEntry,
+  type CompactionRange,
+  type CompactionReplacement,
+  formatCompactionStub,
+  RECALL_MAX_MESSAGES,
+  RECALL_MAX_TOKENS,
+  removedRangesFromSeqs,
+  SUMMARY_HEAD_MAX_CHARS,
+  stripCompactionStub,
+  summaryFingerprint,
+} from './compaction-index.js';
+export {
   auditChainOf,
   type ClearedToolResultPlannerStats,
   compactMessagesForSeed,

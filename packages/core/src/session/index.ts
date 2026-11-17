@@ -28,6 +28,29 @@ export {
   atomicWrite,
 } from './atomic-write.js';
 export {
+  type DeriveCompactionIndexInput,
+  type DeriveCompactionIndexResult,
+  deriveCompactionIndex,
+} from './compaction-index-derive.js';
+export {
+  appendCompactionIndex,
+  COMPACTION_INDEX_FILE,
+  COMPACTION_INDEX_MAX_BYTES,
+  compactionIndexPath,
+  readCompactionIndex,
+} from './compaction-index-store.js';
+export {
+  RECALL_MAX_SCANNED_EVENTS,
+  RECALL_PAGE_EVENTS,
+  type RecallCompactedInput,
+  type RecallCompactedResult,
+  type RecallDegraded,
+  type RecalledMessage,
+  type RecallRange,
+  type RecallStopReason,
+  recallCompactedMessages,
+} from './compaction-recall.js';
+export {
   type DeleteSessionDataOptions,
   type DeleteSessionDataResult,
   deleteSessionData,
@@ -48,6 +71,7 @@ export {
   withRunIdentity,
 } from './message-identity.js';
 export {
+  alignMessageSeqs,
   createProjectionCursor,
   extendProjection,
   mergeHistoryProjection,

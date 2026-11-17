@@ -42,6 +42,14 @@ export interface ProjectionCacheSnapshot {
   rewound_seen: boolean;
   /** 折出的消息（= `projectMessages` 的产物，原文口径）。 */
   messages: Message[];
+  /**
+   * 与 `messages` 逐位对齐的「这条消息由哪条事件产出」的 seq（0.56 ctx-recall，additive）。
+   *
+   * 缺省 = 旧快照 / 老版本写的：读回来的消息**没有** seq 映射，压缩索引的
+   * `unmapped_messages` 会如实计 0 段区间而不是猜一个号（宁可说「这段读不回来」）。
+   * 只存数字，体积与 `messages` 同阶（真实会话 1175 条 ⇒ 十几 KB），换掉一次整份读。
+   */
+  message_seqs?: Array<number | null>;
   /** `tool_call_id` → `tool.call.started` 的实际 name/arguments（跨段回填要用）。 */
   tool_starts: Array<[string, { name: string; arguments: string }]>;
 }

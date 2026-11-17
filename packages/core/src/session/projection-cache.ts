@@ -161,8 +161,29 @@ function readSnapshot(raw: unknown, sessionId: string): ProjectionCacheSnapshot 
       : {}),
     rewound_seen: record.rewound_seen === true,
     messages,
+    ...readMessageSeqs(record.message_seqs),
     tool_starts: pairs,
   };
+}
+
+/**
+ * 校验 `message_seqs`（additive，0.56）。
+ *
+ * 只接受「与消息条数相同的数组，元素是非负整数或 null」。长度不符 / 形状不对 ⇒ **整份不认**
+ * （不是逐条丢：一份错位的映射会让「按区间读回」读出别人的历史）。缺省 = 旧快照 ⇒ 不写字段。
+ */
+function readMessageSeqs(raw: unknown): { message_seqs?: Array<number | null> } {
+  if (!Array.isArray(raw)) return {};
+  const seqs: Array<number | null> = [];
+  for (const entry of raw) {
+    if (entry === null) {
+      seqs.push(null);
+      continue;
+    }
+    if (typeof entry !== 'number' || !Number.isInteger(entry) || entry <= 0) return {};
+    seqs.push(entry);
+  }
+  return { message_seqs: seqs };
 }
 
 /**
@@ -194,6 +215,9 @@ export function serializeProjectionCursor(
       : {}),
     rewound_seen: cursor.rewoundSeen,
     messages: cursor.messages,
+    // seq 记录与消息**逐位对齐**（`extendProjection` 维护等长不变量）；只存数字，
+    // 不动消息形状 —— 快照的体积增量与消息条数同阶，换掉重启后的一次整份读。
+    message_seqs: cursor.messageSeqs.map((seq) => (typeof seq === 'number' ? seq : null)),
     tool_starts: [...cursor.toolStarts.entries()],
   };
   try {
@@ -208,6 +232,14 @@ export function serializeProjectionCursor(
 export function cursorFromProjectionSnapshot(snapshot: ProjectionCacheSnapshot): ProjectionCursor {
   const cursor = createProjectionCursor({ applyClearedReplacements: false });
   for (const message of snapshot.messages) cursor.messages.push(message);
+  // seq 记录：与消息等长（缺失 / 长度不符 ⇒ 全部 `undefined`，让压缩索引如实记
+  // `unmapped_messages`，而不是猜一个号；错位的区间比缺 seq 糟得多）。
+  const storedSeqs = snapshot.message_seqs;
+  const sameLength = Array.isArray(storedSeqs) && storedSeqs.length === snapshot.messages.length;
+  for (let index = 0; index < snapshot.messages.length; index += 1) {
+    const seq = sameLength ? storedSeqs[index] : null;
+    cursor.messageSeqs.push(typeof seq === 'number' && seq > 0 ? seq : undefined);
+  }
   cursor.seq = snapshot.seq;
   cursor.count = snapshot.count;
   if (snapshot.last_request_tokens !== undefined) {

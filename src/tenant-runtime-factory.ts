@@ -22,13 +22,21 @@ import {
   type VesselConfig,
 } from '../packages/config/src/index';
 import {
+  alignMessageSeqs,
+  appendCompactionIndex,
+  appendCompactionStub,
+  buildCompactionIndexEntry,
+  type CompactionIndexEntry,
   type ContextSummarizer,
   createDefaultTraceRedactor,
+  createProjectionCursor,
   createResumeMarkerRegistry,
   createRunJournalFactory,
   createSessionBreaker,
   type EventStream,
   estimateTokens,
+  extendProjection,
+  formatCompactionStub,
   InProcessScheduler,
   installPluginsIntoHost,
   type LLMProvider,
@@ -39,7 +47,7 @@ import {
   noopLogger,
   type Plugin,
   type PluginHost,
-  projectMessages,
+  type ProjectionCursor,
   type ResumeMarkerRegistryState,
   type RunEvent,
   type RunJournalFactory,
@@ -49,11 +57,13 @@ import {
   type RuntimePermissionConfig,
   type Scheduler,
   type SessionStore,
+  sessionDirPath,
   type TenantPaths,
   type TraceRedactor,
 } from '../packages/core/src/index';
 import { TimelineEventLog } from '../packages/core/src/timeline/read-port';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
+import { resolveDataDir } from './data-paths';
 import { createFeishuFromConfig, stopFeishuChannel } from './feishu-wiring';
 import { FileLeaseService } from './lease-service';
 import { normalizeLegacyToolName } from './legacy-tool-names';
@@ -795,6 +805,7 @@ export async function buildTenantRuntime(
     config.plugins,
     declarativePlugins,
     resolveAgentCwd(config),
+    resolveDataDir(config),
   );
   const pluginSelection = resolvePluginSelection(
     loader,
@@ -955,6 +966,8 @@ export async function buildTenantRuntime(
       // 合并写 `index.json`；写入的唯一入口是 journal（经时间线写者）。
       ...(timelineLog !== undefined ? { eventLog: timelineLog } : {}),
       ...(leaseService !== undefined ? { leaseService } : {}),
+      // 0.56 ctx-recall：压缩索引（`<sessionDir>/compactions.ndjson`）的落点。
+      compactionIndexDir: tenantPaths.sessions_dir,
       pluginHost: finalPluginHost,
       plugins: [],
       // tenant EU 仍用完整 context 配置（maxMessages / compactThreshold 不进 profile 形状）；
@@ -981,14 +994,24 @@ export async function buildTenantRuntime(
     );
     workingContext.setSessionId(sessionId);
     let history: Message[] = state.messages ?? [];
+    /** 0.56 ctx-recall：投影游标（压缩索引要按 seq 定位被替换的消息）。 */
+    let projection: ProjectionCursor | undefined;
     if (timelineLog !== undefined) {
       await timelineLog.flush(sessionId);
       const stored = await timelineLog.read(sessionId);
       // 0.54：这条路径的产物会经 `saveSessionState` 写回 `SessionState.messages`
       // （见下面的 `journal.saveSessionState`），所以必须取原文视图，不能把清集替换的
       // 占位物化进盘上。模型视图由请求构建层按段冻结集合自己替换。
-      if (stored.length > 0) history = projectMessages(stored, { applyClearedReplacements: false });
+      // 0.56：用游标而不是 `projectMessages` —— 同一套折叠，但多一份与消息平行的 seq 记录
+      // （压缩索引的区间来源，见 `ProjectionCursor.messageSeqs`）。
+      if (stored.length > 0) {
+        const cursor = createProjectionCursor({ applyClearedReplacements: false });
+        extendProjection(cursor, stored);
+        projection = cursor;
+        history = cursor.messages;
+      }
     }
+    let prependedBaseSystem = false;
     if (
       !history.some(
         (message) => message.role === 'system' && message.compaction_summary !== true,
@@ -996,8 +1019,28 @@ export async function buildTenantRuntime(
       systemPrompt !== ''
     ) {
       workingContext.add({ role: 'system', content: systemPrompt, timestamp: Date.now() });
+      prependedBaseSystem = true;
     }
     for (const message of history) workingContext.add(message);
+    /**
+     * 与**窗口**逐位对齐的 seq（对不上 ⇒ `undefined`，索引如实记 unmapped）。
+     *
+     * 窗口前面可能补了一条基底 system（它不来自任何事件）⇒ 整份右移一位；
+     * 对不齐就别用（错位的区间读出来是别人的历史）。
+     */
+    const aligned = alignMessageSeqs(
+      history,
+      projection?.messages ?? [],
+      projection?.messageSeqs ?? [],
+    );
+    const windowLength = workingContext.messages.length;
+    const windowSeqs =
+      projection !== undefined && aligned.length + (prependedBaseSystem ? 1 : 0) === windowLength
+        ? prependedBaseSystem
+          ? [undefined, ...aligned]
+          : aligned
+        : [];
+    const tokensBefore = workingContext.tokenCount;
     const removed = workingContext.compactAsync
       ? await workingContext.compactAsync()
       : workingContext.compact();
@@ -1010,6 +1053,33 @@ export async function buildTenantRuntime(
         .reverse()
         .find((message) => message.role === 'system' && message.compaction_summary === true);
       const ts = summary?.timestamp ?? Date.now();
+      // ── 0.56 ctx-recall：索引（这条 idle 路径与 EU 里的段起点压缩是同一个段边界，
+      // 同样要能读回；否则「用户在两次 run 之间点压缩」就等于静默丢一条通道）。
+      let compaction: CompactionIndexEntry | undefined;
+      let nextCompactions: CompactionIndexEntry[] = state.compactions ?? [];
+      if (summary !== undefined) {
+        const indices = report?.removed_indices ?? [];
+        const removedSeqs: (number | undefined)[] = [];
+        for (let offset = 0; offset < removed; offset += 1) {
+          const index = indices[offset];
+          const aligned = index === undefined ? undefined : windowSeqs[index];
+          removedSeqs.push(aligned);
+        }
+        const nextId =
+          nextCompactions.reduce((max, entry) => Math.max(max, entry.compaction_id), 0) + 1;
+        compaction = buildCompactionIndexEntry({
+          compaction_id: nextId,
+          at: ts,
+          reason: 'manual',
+          summary: summary.content,
+          removedSeqs,
+          tokens_before: tokensBefore,
+          tokens_after: workingContext.tokenCount,
+        });
+        nextCompactions = [...nextCompactions, compaction];
+        // stub 只在这里写一次；摘要正文从此冻结（重放逐字节一致）。
+        appendCompactionStub(messages, formatCompactionStub(nextCompactions));
+      }
       journal.appendFact({
         type: 'context.compacted',
         run_id: 'manual',
@@ -1020,6 +1090,7 @@ export async function buildTenantRuntime(
           remaining,
           reason: 'manual',
           ...(report?.degraded !== undefined ? { degraded: report.degraded } : {}),
+          ...(compaction !== undefined ? { compaction } : {}),
         },
         ts,
       });
@@ -1042,7 +1113,18 @@ export async function buildTenantRuntime(
           ts,
         });
       }
-      await journal.saveSessionState({ ...state, messages, updated_at: Date.now() });
+      if (compaction !== undefined) {
+        await appendCompactionIndex(
+          sessionDirPath(tenantPaths.sessions_dir, sessionId),
+          compaction,
+        ).catch(() => false);
+      }
+      await journal.saveSessionState({
+        ...state,
+        messages,
+        updated_at: Date.now(),
+        ...(nextCompactions.length > 0 ? { compactions: nextCompactions } : {}),
+      });
     }
     return { removed, remaining, messages };
   };

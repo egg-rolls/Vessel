@@ -213,6 +213,24 @@ export interface ProjectMessagesOptions {
 export interface ProjectionCursor {
   /** 已折出的消息（顺序 = 事件顺序；与 `projectMessages` 的返回值同一口径）。 */
   readonly messages: Message[];
+  /**
+   * 与 `messages` **逐位对齐**的「这条消息由哪条事件产出」的 seq（0.56 ctx-recall）。
+   *
+   * 为什么需要它：压缩索引要回答「被替换的 766 条原来在哪」，而消息对象上没有 seq
+   * （`Message` 是对 provider 的形状，不该塞内部寻址信息；加字段还会进落盘壳与 projection
+   * 快照）。窗口消息与投影消息是**同一批对象**（见 `ProjectionCursor` 注释），所以在投影
+   * 时记一份平行数组，运行时播种窗口时按内容对齐一次，压缩那一刻就查得到。
+   *
+   * 口径：
+   * - 一条 `llm.response` 产出的 assistant ⇒ 那条事件的 seq（`tool.call.started` 只回填实参，
+   *   **不**改写这个号 —— 消息的身份仍是那次响应）；
+   * - `message.compaction` 产出的摘要 ⇒ 该压缩事件的 seq；
+   * - `session.rewound` 截掉的消息与 seq 一起截（事实是「删尾部」）；
+   * - 不产出消息的事件不占位。
+   *
+   * 谁也不许把它当判据做业务决策：它只服务「按区间读回被压缩的历史」这一件事。
+   */
+  readonly messageSeqs: (number | undefined)[];
   /** 当前「最后一条 assistant 正文（无 tool_calls）」—— `run.completed.output` 要就地改它。 */
   lastAssistant: Message | undefined;
   /** `tool_call_id` → `tool.call.started` 里的实际 name/arguments（跨段保留）。 */
@@ -244,6 +262,7 @@ export const PROJECTION_CURSOR_MAX_TOOL_CALLS = 20_000;
 export function createProjectionCursor(options?: ProjectMessagesOptions): ProjectionCursor {
   return {
     messages: [],
+    messageSeqs: [],
     lastAssistant: undefined,
     toolStarts: new Map(),
     applyClearedReplacements: options?.applyClearedReplacements ?? true,
@@ -345,6 +364,8 @@ export function extendProjection(
 
   const toolStarts = cursor.toolStarts;
   const messages = cursor.messages;
+  /** 与 `messages` 平行的 seq 记录（口径见 `ProjectionCursor.messageSeqs`）。 */
+  const messageSeqs = cursor.messageSeqs;
   let lastAssistant = cursor.lastAssistant;
   /**
    * 本段里**新写出**的 tool_call id。
@@ -369,6 +390,7 @@ export function extendProjection(
       );
       message.timestamp ??= event.ts;
       messages.push(message);
+      messageSeqs.push(event.seq);
       lastAssistant = undefined;
       continue;
     }
@@ -378,6 +400,7 @@ export function extendProjection(
         const message = withEventRunId(raw, data);
         message.timestamp ??= event.ts;
         messages.push(message);
+        messageSeqs.push(event.seq);
         lastAssistant = undefined;
       }
       continue;
@@ -388,6 +411,8 @@ export function extendProjection(
       const keepProjected = readCount(data.keep_projected) ?? readCount(data.keep_messages);
       if (keepProjected !== undefined && messages.length > keepProjected) {
         messages.length = keepProjected;
+        // 删尾部是事实：seq 记录跟着截，否则两份数组会错位（错位比缺 seq 更糟）。
+        messageSeqs.length = Math.min(messageSeqs.length, keepProjected);
       }
       lastAssistant = undefined;
       continue;
@@ -424,14 +449,43 @@ export function extendProjection(
       const kept = readCount(data.kept);
       if (kept === undefined) {
         messages.push(message);
+        messageSeqs.push(event.seq);
       } else {
-        const prior = messages.filter((entry) => entry.compaction_summary !== true);
-        const systemMessages = prior.filter((entry) => entry.role === 'system');
-        const nonSystem = prior.filter((entry) => entry.role !== 'system');
-        const tail =
-          kept >= nonSystem.length ? nonSystem : nonSystem.slice(nonSystem.length - kept);
+        // 按下标重建两份数组（消息 + seq）：先按 `prior` 的**下标**分类，
+        // 再一次性重排，`messages` 的产物与旧实现逐条相同。
+        const keptSeqs: (number | undefined)[] = [];
+        const systemIndexes: number[] = [];
+        const nonSystemIndexes: number[] = [];
+        for (let index = 0; index < messages.length; index += 1) {
+          const entry = messages[index];
+          if (entry === undefined || entry.compaction_summary === true) continue;
+          if (entry.role === 'system') systemIndexes.push(index);
+          else nonSystemIndexes.push(index);
+        }
+        const tailIndexes =
+          kept >= nonSystemIndexes.length
+            ? nonSystemIndexes
+            : nonSystemIndexes.slice(nonSystemIndexes.length - kept);
+        const nextMessages: Message[] = [];
+        for (const index of systemIndexes) {
+          const entry = messages[index];
+          if (entry !== undefined) {
+            nextMessages.push(entry);
+            keptSeqs.push(messageSeqs[index]);
+          }
+        }
+        nextMessages.push(message);
+        keptSeqs.push(event.seq);
+        for (const index of tailIndexes) {
+          const entry = messages[index];
+          if (entry === undefined) continue;
+          nextMessages.push(entry);
+          keptSeqs.push(messageSeqs[index]);
+        }
         messages.length = 0;
-        messages.push(...systemMessages, message, ...tail);
+        messageSeqs.length = 0;
+        messages.push(...nextMessages);
+        messageSeqs.push(...keptSeqs);
       }
       lastAssistant = undefined;
       continue;
@@ -461,6 +515,7 @@ export function extendProjection(
           data,
         );
         messages.push(assistant);
+        messageSeqs.push(event.seq);
         lastAssistant = undefined;
       } else {
         const assistant = withEventRunId(
@@ -473,6 +528,7 @@ export function extendProjection(
           data,
         );
         messages.push(assistant);
+        messageSeqs.push(event.seq);
         lastAssistant = assistant;
       }
       continue;
@@ -491,6 +547,7 @@ export function extendProjection(
           data,
         ),
       );
+      messageSeqs.push(event.seq);
       lastAssistant = undefined;
       continue;
     }
@@ -510,6 +567,7 @@ export function extendProjection(
           data,
         ),
       );
+      messageSeqs.push(event.seq);
       lastAssistant = undefined;
       continue;
     }
@@ -523,6 +581,9 @@ export function extendProjection(
   }
 
   cursor.lastAssistant = lastAssistant;
+  // 两条数组必须等长：漏记一处 seq 会让后续的「按区间读回」整体错位（错位比缺 seq 更糟）。
+  // 短了补空位（`undefined` = 这条消息追不到 seq），长了截掉。
+  if (messageSeqs.length !== messages.length) messageSeqs.length = messages.length;
   // 切点落在一对「response / 它的 started」之间时，回填那条 assistant 的实参
   // —— 整份投影的预扫描本来就会覆盖它，这里让分段折叠与它逐条相同。
   for (const id of startedHere) {
@@ -549,6 +610,62 @@ export function projectedKeepCount(messages: readonly Message[], keep: number): 
   const hasBaseSystem =
     first !== undefined && first.role === 'system' && first.compaction_summary !== true;
   return Math.max(0, keep - (hasBaseSystem ? 1 : 0));
+}
+
+/**
+ * 给一批消息补上「它由哪条事件产出」的 seq（0.56 ctx-recall）。
+ *
+ * 输入的三份东西口径不同，对齐**只能按内容**：
+ * - `target`：调用方手里的那份（窗口 / `SessionState.messages` / 对账后的历史）。
+ *   它是缓存对象或 `structuredClone` 出来的副本 ⇒ **对象身份对不上**，只能按签名对；
+ * - `projected`：游标里的投影消息（顺序 = 事件顺序）；
+ * - `seqs`：与 `projected` 逐位对齐的 seq 记录（`ProjectionCursor.messageSeqs`）。
+ *
+ * 对齐规则与 `coverageCut` 同口径：两条指针都只前进，同签名的重复消息（比如两条
+ * 内容相同的工具结果）按出现顺序一一配对，不会把后一条配到前一条上。
+ * 配不上的 `target` 消息得到 `undefined`（缓存独有的基底 system / 运行时提示行，
+ * 它们本来就不是事件投影的产物）——**不许猜**一个相邻 seq：错位的区间读出来是别人的历史。
+ *
+ * 返回值与 `target` 等长、逐位对齐。纯函数，不读盘。
+ */
+export function alignMessageSeqs(
+  target: readonly Message[],
+  projected: readonly Message[],
+  seqs: readonly (number | undefined)[],
+): (number | undefined)[] {
+  const positions = new Map<string, number[]>();
+  for (let index = 0; index < projected.length; index += 1) {
+    const message = projected[index];
+    if (message === undefined) continue;
+    const signature = messageSignature(message);
+    const list = positions.get(signature);
+    if (list === undefined) positions.set(signature, [index]);
+    else list.push(index);
+  }
+  /** 每个签名已经用掉到第几个候选（单调前进，避免同签名消息互相抢占）。 */
+  const used = new Map<string, number>();
+  const aligned: (number | undefined)[] = [];
+  let searchFrom = 0;
+  for (const message of target) {
+    const signature = messageSignature(message);
+    const list = positions.get(signature);
+    if (list === undefined) {
+      aligned.push(undefined);
+      continue;
+    }
+    let pointer = used.get(signature) ?? 0;
+    while (pointer < list.length && (list[pointer] as number) < searchFrom) pointer += 1;
+    const found = pointer < list.length ? list[pointer] : undefined;
+    if (found === undefined) {
+      used.set(signature, pointer);
+      aligned.push(undefined);
+      continue;
+    }
+    used.set(signature, pointer + 1);
+    searchFrom = found + 1;
+    aligned.push(seqs[found]);
+  }
+  return aligned;
 }
 
 /**

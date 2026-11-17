@@ -243,6 +243,18 @@ export interface ExecutionUnitOptions {
    */
   eventLog?: import('./event.js').SessionEventReadPort;
   /**
+   * 会话目录根（`<dataDir>/sessions`，0.56 ctx-recall；additive）。
+   *
+   * 只有一件事要用它：**压缩索引**（`<sessionDir>/compactions.ndjson`）。压缩发生的那一刻
+   * `context.compacted` 事件里会带一份索引条目（被替换消息的 seq 区间），这份小文件是它的
+   * 物化副本，专供 `recall` 工具无参列表 —— 读它只值一次 `readFile`，而按事件回扫
+   * （`readTailMatches` 有 4 MB 上界）会漏掉较早的段、纯读会话壳要 parse 1.8 MB。
+   *
+   * 缺省（库用法 / 没注入）：索引只留在**事件与内存**里，读回仍可用
+   * `deriveCompactionIndex` 从事件重建，行为不降级成「静默没有索引」。
+   */
+  compactionIndexDir?: string;
+  /**
    * ADR-098 C2：两级租约服务（装配层注入；缺省 no-op，行为等同现状）。
    * 提供时 EU 在首个 run/resume 前 acquire SessionLease，后台续租并注入 fencing token。
    */

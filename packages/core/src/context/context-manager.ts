@@ -21,6 +21,7 @@ import type { ContextProjectionAudit, ProjectionMode } from '../types/projection
 import type { Message } from '../types/provider.js';
 import { clampAnchorRatio, normalizeContextAnchor } from './anchor.js';
 import { formatClearedToolResult, isClearedToolResult } from './cleared-tool-result.js';
+import { stripCompactionStub } from './compaction-index.js';
 import {
   estimateMessagesTokensUpperBound,
   estimateMessageTokensUpperBound,
@@ -1023,12 +1024,16 @@ function clearOldToolResultsIn(messages: readonly Message[], maxTokens: number):
  *
  * 摘要器据此在原摘要上合并，而不是每次只概括本次移除的消息；没有旧摘要
  * （首次压缩）时返回 undefined。
+ *
+ * 0.56 ctx-recall：摘要在落盘时会带一条 `[compacted] …` stub（压缩索引的读回指引，
+ * 见 `context/compaction-index.ts`）。它不是摘要内容，喂给摘要器只会把机制噪音滚进摘要，
+ * 所以这里先削掉。
  */
 function lastSummaryContent(messages: readonly Message[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (message?.role === 'system' && message.compaction_summary === true) {
-      return message.content;
+      return stripCompactionStub(message.content);
     }
   }
   return undefined;
@@ -1331,9 +1336,11 @@ export class MemoryWorkingContext implements WorkingContext {
     // 先按原始内容决定压缩边界（阈值与 0.3 保留预算不变），再记「请求里会清空哪些」。
     // 注意：这里**不改**任何一个工具结果的正文 —— 占位发生在请求构建层。
     const cleared = this.plannedClearedToolResults(plan.sessionId);
+    // 0.56 ctx-recall：移除下标必须在 apply 之前算（apply 之后数组已重排）。
+    const removedIndices = this.removedIndexes(plan.sessionId, plan.toSummarize);
     this.applyCompaction(plan, placeholderSummary(plan.toSummarize.length));
     this.realTokens = 0;
-    this.recordCompaction(plan.toSummarize.length, cleared, true);
+    this.recordCompaction(plan.toSummarize.length, cleared, true, removedIndices);
     return plan.toSummarize.length;
   }
 
@@ -1356,6 +1363,8 @@ export class MemoryWorkingContext implements WorkingContext {
 
     // 只记「请求里会清空哪些」，不动正文：落盘的历史消息必须是原文。
     const cleared = this.plannedClearedToolResults(plan.sessionId);
+    // 0.56 ctx-recall：移除下标（= 索引里的区间来源），在 apply 之前算。
+    const removedIndices = this.removedIndexes(plan.sessionId, plan.toSummarize);
 
     const removed = plan.toSummarize.length;
     const task = (async () => {
@@ -1376,7 +1385,7 @@ export class MemoryWorkingContext implements WorkingContext {
       const text = summary.trim() ? summary : placeholderSummary(removed);
       this.applyCompaction(plan, text);
       if (this.currentSessionId === plan.sessionId) this.realTokens = 0;
-      this.recordCompaction(removed, cleared, !summary.trim());
+      this.recordCompaction(removed, cleared, !summary.trim(), removedIndices);
       return removed;
     })();
 
@@ -1472,14 +1481,40 @@ export class MemoryWorkingContext implements WorkingContext {
   }
 
   /** 记录一次成功压缩（C2）：单调 id 供 runtime 判重，不持久化。 */
-  private recordCompaction(removed: number, cleared: string[], degraded: boolean): void {
+  private recordCompaction(
+    removed: number,
+    cleared: string[],
+    degraded: boolean,
+    removedIndices: number[],
+  ): void {
     this.compactionSeq += 1;
     this.compactionReport = {
       id: this.compactionSeq,
       removed,
+      removed_indices: removedIndices,
       cleared_tool_call_ids: cleared,
       degraded,
     };
+  }
+
+  /**
+   * 被移除消息在**压缩前窗口数组**里的下标（0.56 ctx-recall）。
+   *
+   * `plan.toSummarize` 是按对象引用挑出来的，而 `messages` 可能在此期间被追加过
+   * （summarizer await 期间新消息进来）；所以按「集合命中」扫一遍当前数组，
+   * 顺序与窗口一致。O(窗口条数)，只在下标缺失的极端情况下才会比移除条数大得多。
+   */
+  private removedIndexes(sessionId: string, toSummarize: readonly Message[]): number[] {
+    const current = this.sessionMessages.get(sessionId) ?? [];
+    if (toSummarize.length === 0) return [];
+    const wanted = new Set(toSummarize);
+    const indices: number[] = [];
+    for (let index = 0; index < current.length; index += 1) {
+      const message = current[index];
+      if (message === undefined) continue;
+      if (wanted.has(message)) indices.push(index);
+    }
+    return indices;
   }
 
   /**
