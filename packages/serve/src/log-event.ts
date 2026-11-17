@@ -31,6 +31,9 @@ const PREFIX = '[vessel] ';
 /** 长文本（`reason` / `error` / `path`）在单行里的上限，超了截断并加省略号。 */
 const TEXT_MAX = 60;
 
+/** 路径字段（`log` / `dir`）的上限：够放下 Windows 长 tmp 路径，又不至于把一行撑爆。 */
+const PATH_MAX = 200;
+
 /** `id` 类字段（`session_id` / `conn_id` / `run_id`）短形式：头 4 + … + 尾 6。 */
 const ID_HEAD = 4;
 const ID_TAIL = 6;
@@ -60,6 +63,11 @@ export type EventFieldKind =
   | 'value'
   /** 布尔：true 输出 true（键名即事实），false 省略 */
   | 'flag'
+  /**
+   * 文件路径：**不**按 60 字截断（截断了的路径没法照抄去翻日志），上限 200；
+   * 含空白时加引号。只给 `log=` / `dir=` 这类「用户要照着去打开」的字段用。
+   */
+  | 'path'
   /** 毫秒时间戳：输出 ISO 8601（可 grep、可排序） */
   | 'time';
 
@@ -198,6 +206,142 @@ const EVENT_FIELDS: Record<string, readonly FieldSpec[]> = {
     { key: 'request', from: ['request_id'], kind: 'id' },
     { key: 'error', from: ['error', 'message'], kind: 'text' },
   ],
+  /**
+   * Web 控制台产物构建：**唯一**的构建事实来源（0.60）。
+   *
+   * 规律：`start` / 可选 `progress` / 终态（`done` | `fail` | `interrupted`）——
+   * 一次构建最多 4 行（终态的失败尾部另算，它是证据不是事件）。字段序在这里定死，
+   * 启动横幅、`/build.json`、`gateway status` 都从这里派生，不再各写一套文案。
+   */
+  'web.build.start': [
+    { key: 'reason' },
+    { key: 'target' },
+    { key: 'pid', kind: 'value' },
+    { key: 'log', kind: 'path' },
+  ],
+  'web.build.progress': [
+    { key: 'elapsed', kind: 'ms' },
+    { key: 'rss', kind: 'bytes' },
+  ],
+  'web.build.done': [
+    { key: 'dur', kind: 'ms' },
+    { key: 'assets', kind: 'count' },
+    { key: 'bytes', kind: 'bytes' },
+  ],
+  'web.build.fail': [
+    { key: 'exit', kind: 'value' },
+    { key: 'dur', kind: 'ms' },
+    { key: 'error', kind: 'text' },
+    { key: 'log', kind: 'path' },
+  ],
+  'web.build.interrupted': [
+    { key: 'signal' },
+    { key: 'elapsed', kind: 'ms' },
+    { key: 'log', kind: 'path' },
+  ],
+  /** 上次启动被硬杀留下的构建临时目录（下次启动清掉，只报一次总数）。 */
+  'web.build.stale_artifact': [
+    { key: 'cleaned', kind: 'count' },
+    { key: 'dir', kind: 'path' },
+  ],
+  /** `gateway status` 里「构建正在跑」那一行（读同一份内存态，不是另写文案）。 */
+  'web.build.running': [
+    { key: 'elapsed', kind: 'ms' },
+    { key: 'pid', kind: 'value' },
+    { key: 'log', kind: 'path' },
+  ],
+  /** `gateway status` 里「上次构建的终态」那一行。 */
+  'web.build.last': [
+    { key: 'phase' },
+    { key: 'exit', kind: 'value' },
+    { key: 'signal' },
+    { key: 'dur', kind: 'ms' },
+    { key: 'at', kind: 'time' },
+    { key: 'log', kind: 'path' },
+  ],
+  /**
+   * 0.60：闸门内诊断类事件 —— 以前是各文件手拼 `[vessel] xxx: detail` 的 console 行，
+   * 同样的信息在这里排一次，全仓一种口径（结构化的 `path` / `error` 也就不用再靠人眼切）。
+   */
+  'gateway.replay.budget_truncated': [
+    { key: 'tail', from: ['tail_bytes'], kind: 'bytes' },
+    { key: 'tail_lower_bound', kind: 'flag' },
+    { key: 'budget', from: ['budget_bytes'], kind: 'bytes' },
+    { key: 'kept', from: ['kept_events'], kind: 'count' },
+    { key: 'kept_bytes', kind: 'bytes' },
+    { key: 'hint' },
+  ],
+  'gateway.events.global_replay_denied': [
+    { key: 'since', kind: 'value' },
+    { key: 'candidates', kind: 'count' },
+    { key: 'hint' },
+  ],
+  'gateway.stop.failed': [{ key: 'action' }, { key: 'error', kind: 'text' }],
+  /** 写 trace 失败（只 warn，不回写 trace，避免递归）。 */
+  'trace.write.failed': [{ key: 'reason' }, { key: 'error', kind: 'text' }],
+  /** Hub 没起来（启动阶段与收尾阶段同一件事、同一套字段）。 */
+  'hub.start_failed': [{ key: 'code' }, { key: 'error', kind: 'text' }],
+  'gateway.tenant_hub.failed': [{ key: 'action' }, { key: 'error', kind: 'text' }],
+  'interactions.registry.reload_failed': [
+    { key: 'request', from: ['request_id'], kind: 'id' },
+    { key: 'error', kind: 'text' },
+  ],
+  'interactions.store.quarantined': [
+    { key: 'path', kind: 'path' },
+    { key: 'reason' },
+    { key: 'to', kind: 'path' },
+  ],
+  'interactions.store.quarantine_failed': [
+    { key: 'path', kind: 'path' },
+    { key: 'reason' },
+    { key: 'error', kind: 'text' },
+  ],
+  'interactions.store.skipped': [
+    { key: 'path', kind: 'path' },
+    { key: 'tenant' },
+    { key: 'reason' },
+  ],
+  'interactions.store.persist_failed': [
+    { key: 'path', kind: 'path' },
+    { key: 'error', kind: 'text' },
+  ],
+  'interactions.store.load_failed': [
+    { key: 'path', kind: 'path' },
+    { key: 'error', kind: 'text' },
+  ],
+  /** 存活看门狗（0.58 起是手拼的 `event=...` 行，0.60 收口到本表）。 */
+  'supervisor.stall_restart': [
+    { key: 'node', from: ['node_name', 'node_id'], kind: 'node' },
+    { key: 'pid', kind: 'value' },
+    { key: 'consecutive_failures', kind: 'count' },
+    { key: 'last_ok_ms', kind: 'value' },
+    { key: 'stalled_for_ms', kind: 'ms' },
+    { key: 'probe_timeout_ms', kind: 'ms' },
+    { key: 'attempt_in_hour' },
+    { key: 'backoff_ms', kind: 'ms' },
+    { key: 'action' },
+  ],
+  'supervisor.stall_restart_failed': [
+    { key: 'node', from: ['node_name', 'node_id'], kind: 'node' },
+    { key: 'pid', kind: 'value' },
+    { key: 'consecutive_failures', kind: 'count' },
+    { key: 'probe_timeout_ms', kind: 'ms' },
+    { key: 'error', kind: 'text' },
+  ],
+  'supervisor.stall_restart_gave_up': [
+    { key: 'node', from: ['node_name', 'node_id'], kind: 'node' },
+    { key: 'pid', kind: 'value' },
+    { key: 'restarts_last_hour', kind: 'count' },
+    { key: 'max_restarts_per_hour', kind: 'value' },
+    { key: 'last_ok_ms', kind: 'value' },
+    { key: 'stalled_for_ms', kind: 'ms' },
+    { key: 'reason', kind: 'text' },
+  ],
+  'supervisor.stall_recovered': [
+    { key: 'node', from: ['node_name', 'node_id'], kind: 'node' },
+    { key: 'pid', kind: 'value' },
+    { key: 'consecutive_ok', kind: 'count' },
+  ],
 };
 
 /** 定义表里没有的事件：字段全留，只按 key 名推断种类。 */
@@ -226,6 +370,17 @@ function renderText(raw: string): string | null {
   if (flat === '') return null;
   const cut = flat.length > TEXT_MAX ? `${flat.slice(0, TEXT_MAX)}…` : flat;
   return /[\s="]/.test(cut) ? JSON.stringify(cut) : cut;
+}
+
+/**
+ * 路径：只压行、不短截（`TEXT_MAX` 会把 `/tmp/vessel-web-build/<ts>/build.log` 这类
+ * 刚好能照抄的路径切掉一半），仍留 200 字硬上界防爆行。
+ */
+function renderPath(raw: string): string | null {
+  const flat = flatten(raw);
+  if (flat === '') return null;
+  const cut = flat.length > PATH_MAX ? `${flat.slice(0, PATH_MAX)}…` : flat;
+  return /[\s"']/.test(cut) ? JSON.stringify(cut) : cut;
 }
 
 /** 毫秒 → 500ms / 12.1s / 30s / 202s / 1.5h（.0 去掉）。 */
@@ -281,6 +436,8 @@ function renderValue(kind: EventFieldKind, value: unknown, source: string): stri
   switch (kind) {
     case 'text':
       return renderText(stringify(value));
+    case 'path':
+      return renderPath(stringify(value));
     case 'id':
       return renderId(stringify(value));
     case 'node': {

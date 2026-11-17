@@ -311,13 +311,7 @@ export const en: Record<MessageKey, string> = {
   'gateway.webDistStale':
     'Web console assets may be stale: {index} is older than {source}; build with `cd apps/web && npm run build`.',
   'gateway.webDistStaleLine':
-    'Web console assets are behind the sources: {index} is older than {source}. They are rebuilt automatically at runtime (3 failures in a row stop it; restart to try again); you can also run `bun run build:web`.',
-  'gateway.webDistBuilding':
-    'Web console assets are missing or stale; building in the background ({path})…',
-  'gateway.webDistBuilt': 'Web console assets rebuilt ({ms}ms).',
-  'gateway.webDistBuildFailed': 'Web console build failed ({ms}ms): {detail} (build log: {log})',
-  'gateway.webDistBuildGaveUp':
-    'Web console build failed {count} times in a row; automatic rebuilds stopped (restart to try again).',
+    'Web console assets are behind the sources: {index} is older than {source}. Fix: run `bun run build:web`, or restart the gateway (it rebuilds on start).',
   'gateway.noToken':
     'No gateway token configured (serve.token / serve.admin_token / VESSEL_GATEWAY_TOKEN); cannot call the local RPC.',
   'gateway.reloadNoGateway': 'Gateway is not running; run `vessel gateway start` first.',

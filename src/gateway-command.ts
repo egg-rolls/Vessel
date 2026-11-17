@@ -25,7 +25,11 @@ import {
   resolvePlatformProxySecret,
   type VesselConfig,
 } from '../packages/config/src/index';
-import { platformListenGuard, startPlatformGateway } from '../packages/serve/src/index';
+import {
+  formatEventLine,
+  platformListenGuard,
+  startPlatformGateway,
+} from '../packages/serve/src/index';
 import type { GatewayCommand, GatewayInstallTarget, GatewaySelector } from './cli-args';
 import { formatConfigErrors } from './config-error-format';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
@@ -92,7 +96,6 @@ import { readHubLockFile } from './hub/runtime';
 import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from './hub/server';
 import { t } from './i18n';
 import { createHttpRpcClient } from './rpc/http-client';
-import { resolveProxyTimeoutLimits } from './serve-config';
 // 0.56：派生 token（显式配置永远优先；未配置时自动派生，绝不再「未配置就挂」）。
 import { effectiveNodeToken, effectivePlatformToken } from './token-derive';
 import { resolveGatewayToken } from './transport-factory';
@@ -100,8 +103,10 @@ import { ui } from './ui-style';
 import { readPackageVersion } from './version';
 import {
   inspectWebDist,
-  webDistAutoBuildStatus,
-  webDistBuildInFlight,
+  interruptBuildOfStoppedHost,
+  interruptWebBuild,
+  readLatestWebBuildRecord,
+  webDistBuildState,
   webDistProbe,
   webDistStaleLine,
   webDistWarning,
@@ -933,6 +938,21 @@ export async function stopGateway(
     // 确认死亡后按 pid+started_at 条件清理（Windows 强杀补偿）。
     const clean = await cleanupStoppedEntry(context, entry, print, printErr);
     if (!clean) failed = true;
+    // 0.60：这个平台上如果正在重建 Web 产物，它现在也没了宿主（Windows 上宿主连
+    // 一句话都来不及说）—— 由**停止方**代打一行 `web.build.interrupted`，并顺手把
+    // 构建树杀掉，不留孤儿。宿主自己说过的（记录已是终态）这里一句都不说。
+    const interruptedBuild = await interruptBuildOfStoppedHost(pid, 'stop').catch(() => undefined);
+    if (interruptedBuild !== undefined) {
+      printErr(
+        ui.warn(
+          formatEventLine('web.build.interrupted', {
+            signal: interruptedBuild.signal,
+            elapsed: interruptedBuild.elapsedMs,
+            log: interruptedBuild.log,
+          }),
+        ),
+      );
+    }
   }
 
   // 0.55 停机可核：`gateway stop` 说清「node/hub 仍在跑」，整体关闭说清「停了谁、
@@ -1155,52 +1175,107 @@ function formatEntryState(entry: GatewayStateEntry, config: VesselConfig): strin
 /**
  * 0.58：看门狗事件 → 一行结构日志。
  *
- * 为什么是 `event=` + `key=value`：僵死现场**只有父进程**还能写日志，这一行要能被
- * `grep 'event=supervisor.stall_restart'` 直接捞出来对时间线，也要能被人读懂。
- * 事件名固定，附带 `consecutive_failures` / `last_ok_ms` / `probe_timeout_ms`。
+ * 0.60：排版走**同一个** `formatEventLine`（`supervisor.*` 的字段序写在
+ * `log-event.ts` 的 `EVENT_FIELDS` 里），不再在这里手拼 `key=value` —— 手拼的
+ * 那一份迟早和模块化那份字段名/单位打架，而僵死时间线是**只能靠这一行**重建的。
+ * 输出通道仍然可注入（`print` / `printErr`），只有「怎么排」收口。
  */
 function printWatchdogEvent(
   event: WatchdogEvent,
   print: (line: string) => void,
   printErr: (line: string) => void,
 ): void {
-  const head = `event=${event.kind} node=${event.name} pid=${event.pid}`;
+  const node = event.name;
+  const pid = event.pid;
   switch (event.kind) {
     case 'supervisor.stall_restart':
       printErr(
         ui.warn(
-          `${head} consecutive_failures=${event.consecutiveFailures} ` +
-            `last_ok_ms=${event.lastOkMs === null ? 'null' : event.lastOkMs} ` +
-            `stalled_for_ms=${event.stalledForMs === null ? 'null' : event.stalledForMs} ` +
-            `probe_timeout_ms=${event.probeTimeoutMs} ` +
-            `attempt_in_hour=${event.attemptInHour}/${event.maxRestartsPerHour} ` +
-            `backoff_ms=${event.backoffMs} → kill + respawn`,
+          formatEventLine('supervisor.stall_restart', {
+            node,
+            pid,
+            consecutive_failures: event.consecutiveFailures,
+            last_ok_ms: event.lastOkMs,
+            stalled_for_ms: event.stalledForMs,
+            probe_timeout_ms: event.probeTimeoutMs,
+            attempt_in_hour: `${event.attemptInHour}/${event.maxRestartsPerHour}`,
+            backoff_ms: event.backoffMs,
+            action: 'kill+respawn',
+          }),
         ),
       );
       return;
     case 'supervisor.stall_restart_failed':
       printErr(
         ui.err(
-          `${head} consecutive_failures=${event.consecutiveFailures} ` +
-            `probe_timeout_ms=${event.probeTimeoutMs} error=${JSON.stringify(event.error)}`,
+          formatEventLine('supervisor.stall_restart_failed', {
+            node,
+            pid,
+            consecutive_failures: event.consecutiveFailures,
+            probe_timeout_ms: event.probeTimeoutMs,
+            error: event.error,
+          }),
         ),
       );
       return;
     case 'supervisor.stall_restart_gave_up':
       printErr(
         ui.err(
-          `${head} restarts_last_hour=${event.restartsLastHour} ` +
-            `max_restarts_per_hour=${event.maxRestartsPerHour} ` +
-            `last_ok_ms=${event.lastOkMs === null ? 'null' : event.lastOkMs} ` +
-            `stalled_for_ms=${event.stalledForMs === null ? 'null' : event.stalledForMs} ` +
-            `reason=${JSON.stringify(event.reason)}`,
+          formatEventLine('supervisor.stall_restart_gave_up', {
+            node,
+            pid,
+            restarts_last_hour: event.restartsLastHour,
+            max_restarts_per_hour: event.maxRestartsPerHour,
+            last_ok_ms: event.lastOkMs,
+            stalled_for_ms: event.stalledForMs,
+            reason: event.reason,
+          }),
         ),
       );
       return;
     case 'supervisor.stall_recovered':
-      print(ui.dim(`${head} consecutive_ok=${event.consecutiveOk} (backoff cleared)`));
+      print(
+        ui.dim(
+          formatEventLine('supervisor.stall_recovered', {
+            node,
+            pid,
+            consecutive_ok: event.consecutiveOk,
+          }),
+        ),
+      );
       return;
   }
+}
+
+/**
+ * `gateway status` 的构建段（0.60）：**不另写文案**。
+ *
+ * 读构建自己落盘的那条记录（`web.build.*` 的同一份事实），用 `formatEventLine` 出
+ * 同一套 key=value —— 否则「日志说在构建、status 说没构建」这种矛盾只能靠人猜。
+ */
+async function webBuildStatusLines(): Promise<string[]> {
+  const record = await readLatestWebBuildRecord();
+  if (record === undefined) return [];
+  if (record.running) {
+    return [
+      formatEventLine('web.build.running', {
+        elapsed: Date.now() - record.startedAt,
+        pid: record.pid,
+        log: record.log,
+      }),
+    ];
+  }
+  if (record.phase === 'idle' || record.phase === 'running') return [];
+  return [
+    formatEventLine('web.build.last', {
+      phase: record.phase,
+      ...(record.exitCode !== undefined ? { exit: record.exitCode } : {}),
+      ...(record.signal !== undefined ? { signal: record.signal } : {}),
+      ...(record.durMs !== undefined ? { dur: record.durMs } : {}),
+      at: record.endedAt ?? record.startedAt,
+      log: record.log,
+    }),
+  ];
 }
 
 /**
@@ -1299,6 +1374,8 @@ export async function gatewayStatus(
   const webDistLine = webDistStaleLine(
     await inspectWebDist(webDistStaticDir !== '' ? { staticDir: webDistStaticDir } : {}),
   );
+  // 0.60：构建段也在这里取一次（跨进程读构建落盘的记录；口径与 `web.build.*` 一致）。
+  const webBuildLines = await webBuildStatusLines();
   // 0.49 G3b：多节点投影只读 registry + 各 node 健康；不含 token。
   const nodeViews =
     stateKind === 'platform'
@@ -1363,6 +1440,7 @@ export async function gatewayStatus(
       const pidFile = entry.pidPath ?? entry.lockPath;
       if (pidFile !== undefined) print(`  ${ui.dim(pidFile)}`);
     }
+    for (const line of webBuildLines) print(`  ${ui.dim(line)}`);
     if (webDistLine !== null) print(`  ${ui.warn(webDistLine)}`);
     return allLive ? 0 : 1;
   }
@@ -1419,6 +1497,7 @@ export async function gatewayStatus(
     print(ui.dim(t('gateway.status.selectHint', { count: entries.length })));
   }
   print(ui.kv(t('gateway.status.service'), serviceLine(service), 10));
+  for (const line of webBuildLines) print(`  ${ui.dim(line)}`);
   if (webDistLine !== null) print(`  ${ui.warn(webDistLine)}`);
   return allLive ? 0 : 1;
 }
@@ -2317,15 +2396,21 @@ async function resolveLocalNodes(options: {
   return resolved;
 }
 
+/** 最近一次终止信号名：`web.build.interrupted signal=…` 要如实，读不到就别编。 */
+let lastStopSignal: 'SIGINT' | 'SIGTERM' | undefined;
+
 function waitForTerminationSignal(): Promise<void> {
   return new Promise((resolve) => {
-    const stop = (): void => {
-      process.off('SIGINT', stop);
-      process.off('SIGTERM', stop);
+    const onSigint = (): void => stop('SIGINT');
+    const onSigterm = (): void => stop('SIGTERM');
+    function stop(signal: 'SIGINT' | 'SIGTERM'): void {
+      lastStopSignal = signal;
+      process.off('SIGINT', onSigint);
+      process.off('SIGTERM', onSigterm);
       resolve();
-    };
-    process.once('SIGINT', stop);
-    process.once('SIGTERM', stop);
+    }
+    process.once('SIGINT', onSigint);
+    process.once('SIGTERM', onSigterm);
   });
 }
 
@@ -2631,7 +2716,17 @@ export async function runPlatformGatewayForeground(
           ? path.resolve(expandHome(hubConfig.dataDir))
           : path.join(dataDir, 'hub');
       hubBegin = await supervisor.beginHub({ dataDir: hubDataDir });
-      if (!hubBegin.ok) printErr(ui.warn(`${hubBegin.code}: ${hubBegin.message}`));
+      if (!hubBegin.ok) {
+        // 0.60：与收尾阶段同一条事件、同一套字段（`hub.start_failed`）。
+        printErr(
+          ui.warn(
+            formatEventLine('hub.start_failed', {
+              code: hubBegin.code,
+              error: hubBegin.message,
+            }),
+          ),
+        );
+      }
     }
 
     // 0.56：WebUI 登录（GitHub OAuth，单用户）。未配置 auth.backends 时
@@ -2678,12 +2773,9 @@ export async function runPlatformGatewayForeground(
         // 0.57：`/build.json` 的实时字段 —— 判据复用 `web-dist.ts`，平台不自己比 mtime。
         // 这是「产物过期但没人重建」时唯一能被浏览器看见的证据。
         webDist: webDistProbe(options.staticDir),
-        // 0.58：`/build.json` 的 `building` —— 后台重建在跑时前端提示「正在构建」，
-        // 不给「刷新」按钮（刷新那一刻磁盘上还是旧产物）。
-        webBuildInFlight: webDistBuildInFlight,
-        // 0.59：`/build.json` 的 `autobuild` —— 运行期**还会不会**自己重建。前端据此把
-        // 「马上就好」和「不会再有动作了（关掉 / 只在启动建 / 连续失败到顶）」分开说。
-        webBuildAuto: webDistAutoBuildStatus,
+        // 0.60：构建状态（在不在建 / 上次成没成 / 日志在哪）的唯一注入点 —— 平台不再
+        // 自己拿一个布尔去拼「正在构建」，`/build.json` 与日志共用这一份快照。
+        webBuild: webDistBuildState,
         nodes: nodes.map((node) => ({
           nodeId: node.entry.node_id,
           name: node.entry.name,
@@ -2698,14 +2790,7 @@ export async function runPlatformGatewayForeground(
         // 0.58：浏览器/CLI 只连平台，node 的 HTTP 与 WS 由平台代理（node token 不出网关）。
         // `gateway.proxy_nodes: false` 是保留的显式回退：平台不提供 `/nodes/*`，
         // 前端据 `platform.whoami.proxy.enabled` 自动回到「取 credentials 直连 node」。
-        //
-        // 0.57：两个响应头超时都可配（env，见 `resolveProxyTimeoutLimits`）。**健康探测**
-        // 用短超时（缺省 1.5s）而不是 RPC 的 30s：node 没起来时每个探活请求都该在 ~1.5s
-        // 内报 `node_unreachable` 并让前端重试，而不是白等 30 秒。
-        proxy: {
-          enabled: config.gateway?.proxyNodes !== false,
-          limits: resolveProxyTimeoutLimits(env),
-        },
+        proxy: { enabled: config.gateway?.proxyNodes !== false },
         version,
         auth: {
           publicOrigin: resolvedAuth.publicOrigin,
@@ -2772,7 +2857,11 @@ export async function runPlatformGatewayForeground(
           if (hub.ok) {
             print(ui.dim(`hub ${hub.url !== '' ? hub.url : 'running'}  (auto-started)`));
           } else {
-            printErr(ui.warn(`${hub.code}: ${hub.message}`));
+            // 0.60：`hub_start_failed:` 这种「裸码：整句」的第二种排版收口成一行事件 ——
+            // 同一件事（hub 没起来）在日志里只有一种说法。
+            printErr(
+              ui.warn(formatEventLine('hub.start_failed', { code: hub.code, error: hub.message })),
+            );
           }
         }
         // 一次性收口：几个节点就绪、几个失败（失败原因已逐条打过）。
@@ -2849,6 +2938,10 @@ export async function runPlatformGatewayForeground(
     print(ui.dim(`supervise: ${superviseLine(supervise)}`));
 
     await (options.waitForStop ?? waitForTerminationSignal)();
+    // 构建中被叫停（`gateway stop` / Ctrl-C / 外部 SIGTERM）：**真的**杀掉构建子进程，
+    // 并留一行 `web.build.interrupted` —— 用户要的是「知道这次构建被中断了」，
+    // 而不是下次发现 dist 半新半旧却查不到痕迹。
+    interruptWebBuild(lastStopSignal ?? 'SIGTERM');
     // handoff（0.52）：停止方在发终止信号**之前**写了 marker ⇒ 这次退出只交出平台层，
     // 自己 spawn 的 node/hub 原样留着，等新平台按 `gateway.pid` 三元组 / hub lock 接管；
     // 没有 marker（Ctrl-C、`gateway stop`、外部 SIGTERM）就照旧连子进程一起停。

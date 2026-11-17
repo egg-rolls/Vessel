@@ -73,28 +73,40 @@ export interface WebDistProbeResult {
   newestSource?: { path: string; mtimeMs: number };
 }
 
-/**
- * 0.59：运行期自动重建的现场状态（`/build.json` 的 `autobuild` 字段）。
- *
- * 为什么需要它：0.58 之前「产物过期」只有一种含义 —— 没人再建了，提示条只能说
- * 「失败，重启重试」。0.59 起 gateway 在运行期也会自己重建，于是 `stale: true` 分裂成
- * 两件事：**马上就会自己好**（`enabled: true`）和**不会再有动作了**（`enabled: false`：
- * 被关掉、只在启动时建、或连续失败到顶）。前端据此决定说「正在构建」还是说「失败/已关闭」。
- *
- * 判定逻辑不在这里：组合根注入（`src/web-dist.ts#webDistAutoBuildStatus`）。
- */
-export interface WebAutoBuildState {
-  /** 运行期还会不会自己重建。 */
-  enabled: boolean;
-  mode: 'live' | 'startup' | 'off';
-  /** 连续失败次数（成功一次清零）。 */
-  failures: number;
-  /** 最后一次失败的一句话原因；没失败过则省略。 */
-  lastError?: string;
-}
-
 /** 组合根注入的实时判定；省略 = `/build.json` 只发磁盘上的静态构建戳。 */
 export type WebDistProbe = () => Promise<WebDistProbeResult>;
+
+/**
+ * 0.60：后台构建状态的**快照**（平台侧的类型镜像，避免 `packages/serve` 反向依赖
+ * `src/`）。
+ *
+ * 字段与 `src/web-dist.ts#WebBuildState` 一一对应；组合根只做 `() => webDistBuildState()`
+ * 的转发，平台不自己判断「在不在建」。
+ */
+export interface WebBuildSnapshot {
+  phase: 'idle' | 'running' | 'done' | 'failed' | 'interrupted';
+  /** 本次构建开始时刻（epoch ms） */
+  startedAt?: number;
+  /** 为什么建：产物缺失 / 落后于源码 */
+  reason?: 'missing' | 'stale';
+  pid?: number;
+  /** 构建输出文件（用户要照着去翻的那份） */
+  logPath?: string;
+  /** 上一次构建的终态 */
+  last?: {
+    phase: 'done' | 'failed' | 'interrupted';
+    at: number;
+    durMs: number;
+    exitCode?: number;
+    signal?: string;
+    assets?: number;
+    bytes?: number;
+    logPath?: string;
+  };
+}
+
+/** 构建状态读取口（同步、零成本；省略 = 本平台不管构建）。 */
+export type WebBuildProbe = () => WebBuildSnapshot;
 
 /** 组合根解析后注入 Platform Gateway 的全部运行参数。 */
 export interface PlatformGatewayOptions {
@@ -135,24 +147,16 @@ export interface PlatformGatewayOptions {
    */
   webDist?: WebDistProbe;
   /**
-   * 0.58：后台重建**此刻**是否在进行（`/build.json` 的 `building` 字段）。
+   * 0.60：**构建这件事**的唯一读取口（组合根注入，读 `src/web-dist.ts` 的内存态）。
    *
-   * 为什么单独一个同步回调，而不是塞进 `webDist` 的返回值：现场判断带 5 秒缓存
-   * （源码树遍历很贵），而「构建结束」必须**立刻**反映出去 —— 否则提示条会在构建
-   * 已经结束之后还继续说「正在构建」。这个回调只读一个内存状态，零成本。
+   * 为什么不是「一个布尔」：`building` 只回答「在不在建」，而用户还要知道「建成了
+   * 没有、上次为什么失败、日志在哪」。同一份状态里塞一个布尔出去，另一边就会自己
+   * 再拼一句「正在构建」，两句话迟早对不上 —— 所以注射器只给快照，文案由本包统一
+   * 从快照派生（见 `buildJsonPayload`）。
    *
    * 省略 = 永远认为没有构建在进行（`building: false`），老行为。
    */
-  webBuildInFlight?: () => boolean;
-  /**
-   * 0.59：运行期自动重建的现场状态（`/build.json` 的 `autobuild` 字段）。
-   *
-   * 与 `webBuildInFlight` 分开的理由相同：它是**内存事实**（失败次数 / 是否停手），
-   * 混进 5 秒缓存的现场判断里会让「刚失败」这件事晚 5 秒才说出去。
-   *
-   * 省略 = 响应体里没有 `autobuild`：前端按「不知道」处理，沿用 0.58 的文案（老行为）。
-   */
-  webBuildAuto?: () => WebAutoBuildState;
+  webBuild?: WebBuildProbe;
   /** registry 中全部本地 node（`auto_start:false` 也注入，只做健康展示）。 */
   nodes: PlatformNodeDescriptor[];
   /**

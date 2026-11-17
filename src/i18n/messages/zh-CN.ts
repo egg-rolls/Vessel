@@ -297,12 +297,7 @@ export const zhCN = {
   'gateway.webDistStale':
     'Web 控制台产物可能已过期：{index} 旧于 {source}。构建：`cd apps/web && npm run build`。',
   'gateway.webDistStaleLine':
-    'Web 控制台产物落后于源码：{index} 旧于 {source}。运行期会自动重建（连续失败 3 次后停手，重启可再试）；也可以直接跑 `bun run build:web`。',
-  'gateway.webDistBuilding': 'Web 控制台产物缺失或已过期，正在后台构建（{path}）……',
-  'gateway.webDistBuilt': 'Web 控制台产物已重建（{ms}ms）。',
-  'gateway.webDistBuildFailed': 'Web 控制台产物构建失败（{ms}ms）：{detail}（构建日志：{log}）',
-  'gateway.webDistBuildGaveUp':
-    'Web 控制台产物已连续 {count} 次构建失败，停止自动重建；重启后再试一次。',
+    'Web 控制台产物落后于源码：{index} 旧于 {source}。修复：跑 `bun run build:web`；或重启 gateway（启动时会自动重建）。',
   'gateway.noToken':
     '未配置 gateway token（serve.token / serve.admin_token / VESSEL_GATEWAY_TOKEN），无法调用本地 RPC。',
   'gateway.reloadNoGateway': 'Gateway 未运行；先执行 `vessel gateway start`。',

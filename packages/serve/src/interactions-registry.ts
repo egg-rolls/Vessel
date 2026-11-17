@@ -18,6 +18,7 @@ import {
   type StoredInteractionAnswer,
   type StoredInteractionStatus,
 } from './interactions-store.js';
+import { logEvent } from './log-event.js';
 import { RpcError } from './rpc.js';
 
 /** 权限应答 scope（DECISION-024 §2.1）。 */
@@ -1087,9 +1088,10 @@ export function createInteractionsRegistry(
     try {
       return store.loadAllSync().find((record) => record.requestId === requestId);
     } catch (error) {
-      console.warn('[vessel] interactions: persisted record reload failed', {
+      // 0.60：单行 key=value（唯一排版口），不再把对象直接丢给 console。
+      logEvent('warn', 'interactions.registry.reload_failed', {
         request_id: requestId,
-        message: error instanceof Error ? error.message : String(error),
+        error,
       });
       return undefined;
     }

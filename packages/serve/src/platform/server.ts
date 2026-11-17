@@ -31,7 +31,7 @@ import type {
   PlatformAuthOptions,
   PlatformGateway,
   PlatformGatewayOptions,
-  WebAutoBuildState,
+  WebBuildProbe,
   WebDistProbe,
   WebDistProbeResult,
 } from './types.js';
@@ -149,6 +149,9 @@ function createWebDistProbeCache(): (
  * `building`（0.58）：后台重建**此刻**是否在跑。少了这一项，提示条会在构建进行中
  * 让用户「刷新以加载新版本」—— 而刷新那一刻磁盘上还是旧产物，是句废话。
  *
+ * （0.60）：「在不在建 / 建成了没有 / 上一次为什么失败 / 日志在哪」全部来自
+ * **同一份**构建状态（组合根注入的 `webBuild`），平台不自己拼第二套话。
+ *
  * 返回 null = 没有可用的构建戳（文件缺失 / 读坏 / JSON 非对象）：HTTP 端点交给静态
  * 兜底，保住旧行为；任何读盘失败都**不 500**（页面不能被一个诊断文件打挂）。
  */
@@ -156,8 +159,7 @@ async function buildJsonPayload(
   staticDir: string,
   probe: WebDistProbe | undefined,
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>,
-  buildInFlight: (() => boolean) | undefined,
-  buildAuto: (() => WebAutoBuildState) | undefined,
+  webBuild: WebBuildProbe | undefined,
 ): Promise<Record<string, unknown> | null> {
   let base: Record<string, unknown>;
   try {
@@ -171,12 +173,40 @@ async function buildJsonPayload(
   }
   // 构建状态**不走缓存**：缓存里那份可能是构建开始前的快照，会让提示条在构建结束
   // 之后继续说「正在构建」。
-  const building = buildInFlight?.() === true;
+  const build = webBuild?.();
+  const building = build?.phase === 'running';
   const live = probe === undefined ? undefined : await probeCached(probe);
   const body: Record<string, unknown> = { ...base, building };
-  // 0.59：`autobuild` 同理不进缓存 —— 三连失败之后必须**立刻**能说「不会再有动作了」。
-  const auto = buildAuto?.();
-  if (auto !== undefined) body.autobuild = auto;
+  if (build !== undefined && build.phase !== 'idle') {
+    // 同一份状态的两个派生视图：`building`（老字段，前端提示条在用）+ `build`（新字段，
+    // 说清「哪一步、多久、成没成、日志在哪」）。两者永远指向同一次构建。
+    body.build = {
+      phase: build.phase,
+      ...(build.startedAt !== undefined
+        ? { startedAt: new Date(build.startedAt).toISOString() }
+        : {}),
+      ...(building && build.startedAt !== undefined
+        ? { elapsedMs: Math.max(0, Date.now() - build.startedAt) }
+        : {}),
+      ...(build.pid !== undefined ? { pid: build.pid } : {}),
+      ...(build.reason !== undefined ? { reason: build.reason } : {}),
+      ...(build.logPath !== undefined ? { log: build.logPath } : {}),
+      ...(build.last !== undefined
+        ? {
+            last: {
+              phase: build.last.phase,
+              at: new Date(build.last.at).toISOString(),
+              durMs: build.last.durMs,
+              ...(build.last.exitCode !== undefined ? { exit: build.last.exitCode } : {}),
+              ...(build.last.signal !== undefined ? { signal: build.last.signal } : {}),
+              ...(build.last.assets !== undefined ? { assets: build.last.assets } : {}),
+              ...(build.last.bytes !== undefined ? { bytes: build.last.bytes } : {}),
+              ...(build.last.logPath !== undefined ? { log: build.last.logPath } : {}),
+            },
+          }
+        : {}),
+    };
+  }
   if (live !== undefined) {
     body.stale = live.stale;
     if (live.newestSource !== undefined) {
@@ -195,10 +225,9 @@ async function buildJsonResponse(
   method: string,
   probe: WebDistProbe | undefined,
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>,
-  buildInFlight: (() => boolean) | undefined,
-  buildAuto: (() => WebAutoBuildState) | undefined,
+  webBuild: WebBuildProbe | undefined,
 ): Promise<Response | null> {
-  const body = await buildJsonPayload(staticDir, probe, probeCached, buildInFlight, buildAuto);
+  const body = await buildJsonPayload(staticDir, probe, probeCached, webBuild);
   if (body === null) return null;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json;charset=utf-8',
@@ -234,10 +263,8 @@ function createBuildEventStream(options: {
   staticDir: string;
   probe: WebDistProbe | undefined;
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>;
-  /** 后台重建是否在进行（见 `PlatformGatewayOptions.webBuildInFlight`）。 */
-  buildInFlight: (() => boolean) | undefined;
-  /** 0.59：运行期自动重建的现场状态（见 `PlatformGatewayOptions.webBuildAuto`）。 */
-  buildAuto: (() => WebAutoBuildState) | undefined;
+  /** 后台构建状态快照（见 `PlatformGatewayOptions.webBuild`）。 */
+  webBuild: WebBuildProbe | undefined;
 }): BuildEventStream {
   const encoder = new TextEncoder();
   const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
@@ -262,8 +289,7 @@ function createBuildEventStream(options: {
       options.staticDir,
       options.probe,
       options.probeCached,
-      options.buildInFlight,
-      options.buildAuto,
+      options.webBuild,
     );
     return payload === null ? undefined : JSON.stringify(payload);
   };
@@ -513,17 +539,14 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
 
   // 0.57：`/build.json` 的现场判断缓存（每个 server 一份，判定函数由组合根注入）。
   const probeWebDist = createWebDistProbeCache();
-  // 0.58：`building` 的来源。**不进上面那份缓存**：构建一结束就必须说「结束了」。
-  const buildInFlight = opts.webBuildInFlight;
-  // 0.59：`autobuild`（运行期还会不会自己重建）同样不进缓存：三连失败要立刻可见。
-  const buildAuto = opts.webBuildAuto;
+  // 0.60：构建状态的唯一来源。**不进上面那份缓存**：构建一结束就必须说「结束了」。
+  const webBuild = opts.webBuild;
   // 0.57：产物变更推送（SSE）。`/build.json` 仍是唯一事实源，这里只是加速通道。
   const buildEvents = createBuildEventStream({
     staticDir,
     probe: opts.webDist,
     probeCached: probeWebDist,
-    buildInFlight,
-    buildAuto,
+    webBuild,
   });
 
   /**
@@ -551,47 +574,6 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
       console.warn(formatEventFields(fields));
     },
   });
-
-  /**
-   * 0.58 崩溃排查：**周期性资源采样**（`VESSEL_RESOURCE_SAMPLE_MS`，缺省 60000；0 = 关）。
-   *
-   * 为什么必须加：0.54 那次 `panic(main thread): Segmentation fault` 之后，能拿到的只有
-   * Bun 自己的死后读数（RSS/Peak/Commit/Faults），**崩之前一条都没有** —— 于是「是持续
-   * 泄漏还是瞬时踩空」这个问题永远答不了。一行 60 秒的成本可以忽略，缺的是有人记。
-   *
-   * 字段刻意选「一眼能判断形状」的那几个：
-   * - `rss` / `heap`：持续单向上升 = 泄漏；窄带抖动 = 正常；
-   * - `ws_active` / `ws_pending`：WS 桥的连接数与待发字节（背压是否在涨）；
-   * - `http_inflight` / `passthrough`：代理 HTTP 的并发与本次加固后新增的直通计数；
-   * - `mode`：代理流式转发实现（`pump` / `passthrough`）——下次崩了先看这一项，
-   *   因为 `pump` 在本机（win32）有可复现的段错误（见 `proxy.ts#httpStreamMode`）。
-   *
-   * 这里**不报** crc32 实现：本进程（平台网关）不写时间线，把 core 拉进来只为打一行诊断
-   * 不值得；时间线那条 crc32 的实况由 `scripts/crash-hunt/stress-a-blocks.ts` 的读数给出。
-   */
-  const resourceSampleMs = Number(process.env.VESSEL_RESOURCE_SAMPLE_MS ?? 60_000);
-  if (Number.isFinite(resourceSampleMs) && resourceSampleMs > 0) {
-    const resourceTimer = setInterval(() => {
-      const usage = process.memoryUsage();
-      const proxyStats = proxy.stats();
-      console.warn(
-        formatEventFields({
-          event: 'gateway.resources',
-          uptime_s: Math.round(process.uptime()),
-          rss_mb: Math.round(usage.rss / 1048576),
-          heap_mb: Math.round(usage.heapUsed / 1048576),
-          http_requests: proxyStats.http_requests,
-          http_failures: proxyStats.http_failures,
-          http_inflight: proxyStats.http_inflight,
-          passthrough: proxyStats.http_passthrough_streams,
-          mode: proxyStats.http_stream_mode,
-          ws_active: proxyStats.ws_active,
-          ws_pending: proxyStats.ws_pending_bytes,
-        }),
-      );
-    }, resourceSampleMs);
-    resourceTimer.unref?.();
-  }
 
   /**
    * 平台数据面闸（`/platform/rpc` 与 `/nodes/**` 的**同一套**权威判定）。
@@ -647,6 +629,38 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
     }
     return provided !== '' && platformTokenMatches(provided, platformToken);
   };
+
+  /**
+   * 0.57：**周期性资源采样**（每 `VESSEL_RESOURCE_SAMPLE_MS`，缺省 60s 一行）。
+   *
+   * 为什么要有：0.56 那次 Bun segfault 之后我们才发现「崩之前没有任何曲线」——
+   * 只有尸体和一串事件，无法判断是泄漏到爆还是瞬时非法调用。这一行让「崩之前」
+   * 变成可回看的：rss/heap/代理并发/流式模式/WS 活跃与待发字节。
+   *
+   * 只在能拿到代理统计时打（`proxy.stats()`），不拿网关自身的内存冒充代理开销。
+   */
+  const resourceSampleMs = Number(process.env.VESSEL_RESOURCE_SAMPLE_MS ?? 60_000);
+  const resourceTimer = setInterval(() => {
+    if (!Number.isFinite(resourceSampleMs) || resourceSampleMs <= 0) return;
+    const usage = process.memoryUsage();
+    const proxyStats = proxy.stats();
+    console.warn(
+      formatEventFields({
+        event: 'gateway.resources',
+        uptime_s: Math.round(process.uptime()),
+        rss_mb: Math.round(usage.rss / 1048576),
+        heap_mb: Math.round(usage.heapUsed / 1048576),
+        http_requests: proxyStats.http_requests,
+        http_failures: proxyStats.http_failures,
+        http_inflight: proxyStats.http_inflight,
+        passthrough: proxyStats.http_passthrough_streams,
+        mode: proxyStats.http_stream_mode,
+        ws_active: proxyStats.ws_active,
+        ws_pending: proxyStats.ws_pending_bytes,
+      }),
+    );
+  }, Number.isFinite(resourceSampleMs) && resourceSampleMs > 0 ? resourceSampleMs : 60_000);
+  resourceTimer.unref?.();
 
   const server = Bun.serve<PlatformWsData>({
     port: opts.port,
@@ -765,8 +779,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
           req.method,
           opts.webDist,
           probeWebDist,
-          buildInFlight,
-          buildAuto,
+          webBuild,
         );
         if (buildResponse !== null) {
           for (const [key, value] of Object.entries(extra)) {
@@ -957,6 +970,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
       // 0.58：代理 WS 同理 —— 不让一条事件流把停服卡死；关闭时按 `who: 'platform'` 记账。
       proxy.closeAll();
       clearInterval(authCleanupTimer);
+      clearInterval(resourceTimer);
       await authService.flush();
       await server.stop(true);
     },

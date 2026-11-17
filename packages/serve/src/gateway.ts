@@ -770,13 +770,15 @@ let replayFloorTruncatedWarned = false;
 function consoleNoteReplayBudget(selection: ReplayBudgetSelection): void {
   if (!selection.floorTruncated || replayFloorTruncatedWarned) return;
   replayFloorTruncatedWarned = true;
-  console.warn(
-    `[vessel] replay budget: newest run tail ${selection.floorBytes}B${
-      selection.floorBytesIsLowerBound ? '+' : ''
-    } exceeds hard cap ` +
-      `${selection.budgetBytes}B; replaying a bounded suffix of ${selection.keptEvents} events / ` +
-      `${selection.keptBytes}B (clients backfill via until_seq).`,
-  );
+  // 0.60：一行 key=value（`log-event.ts` 是唯一排版口），字段序写在 `EVENT_FIELDS`。
+  logEvent('warn', 'gateway.replay.budget_truncated', {
+    tail_bytes: selection.floorBytes,
+    tail_lower_bound: selection.floorBytesIsLowerBound,
+    budget_bytes: selection.budgetBytes,
+    kept_events: selection.keptEvents,
+    kept_bytes: selection.keptBytes,
+    hint: 'clients backfill via until_seq',
+  });
 }
 
 /** 事件自带的 `session_id`；没有时返回 undefined。 */
@@ -859,14 +861,12 @@ let globalReplayDeniedWarned = false;
 function noteGlobalReplayDenied(since: number, candidates: number): void {
   if (globalReplayDeniedWarned) return;
   globalReplayDeniedWarned = true;
-  console.warn(
-    '[vessel] events: 全局回放已默认拒绝（since=' +
-      String(since) +
-      ', ' +
-      String(candidates) +
-      ' 条候选）；' +
-      '要拿进程级全量流，客户端必须显式 opt-in：events.subscribe{allow_global:true} 或 ?allow_global=1。',
-  );
+  // 0.60：同上，走唯一排版口；`hint` 只点名称，不在日志里教命令。
+  logEvent('warn', 'gateway.events.global_replay_denied', {
+    since,
+    candidates,
+    hint: 'opt-in allow_global',
+  });
 }
 
 const DEFAULT_PORT = 8642;
@@ -4457,8 +4457,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   /** 关闭路径的异常只记 stderr，不阻断后续清理 */
   function reportStopError(action: string, error: unknown): void {
-    const detail = error instanceof Error ? error.message : String(error);
-    console.error(`[vessel] gateway stop: ${action} failed: ${detail}`);
+    // 0.60：单行 key=value（同一套排版口），`action` 保留原始动作名以便对时间线。
+    logEvent('error', 'gateway.stop.failed', { action, error });
   }
 
   function closeWsClients(): void {
