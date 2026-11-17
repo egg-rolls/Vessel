@@ -864,8 +864,9 @@ export class LiveItemStore implements ItemSink {
       else list.push(entry);
     }
     for (const [runId, list] of byRun) {
-      // 折叠顺序敏感（chunk 靠相邻成段、组内时间单调夹）：跨 seq 频带时到达序不是
-      // 时间序，先按事件时间规整再折，否则正文/思考会被并成一段并夹到 run 末尾。
+      // 折叠顺序敏感（chunk 靠相邻同 kind 成段、组内时间单调夹）。单 seq 空间下到达序
+      // 就是时间序，这一步是恒等（口径与实测见 `orderEntriesByEventTime`）：只有 `seq`
+      // 与 `ts` 真的换序时才退回按事件时间重排，否则段会被折错 / 夹到 run 末尾。
       this.refoldRun(runId, orderEntriesByEventTime(list), keepSurvivors);
     }
     // 水位取「环里出现过的最大 seq」：之后的新事件继续走 `ingest`（I5）。

@@ -316,9 +316,9 @@ export function buildDoctorChecks(input: DoctorCheckInput): DoctorCheck[] {
         detail: t('observe.diagnostics.doctor.servePort.notConfigured'),
       });
     } else {
-      // 0.57：这里原本读 `serve?.hostname` —— 0.55 把内部字段从 `serve` 改名 `node` 时
-      // 漏了这一个引用（TS2304 未定义名，整条 web 的 `tsc --noEmit` 因此一直是红的）。
-      // 语义与上面同一个键：host 只用来在 detail 文案里显示「监听在哪」。
+      // 这里原本读 `serve?.hostname` —— 0.55 把内部字段从 `serve` 改名 `node` 时漏了这一个引用
+      // （TS2304 未定义名，整条 web 的 `tsc --noEmit` 因此一直是红的）。语义与上面同一个键：
+      // host 只用来在 detail 文案里显示「监听在哪」。
       const host = nonEmpty(node?.hostname) ?? '127.0.0.1';
       checks.push({
         name: 'serve_port',
