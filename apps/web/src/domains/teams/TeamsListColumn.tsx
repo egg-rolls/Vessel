@@ -53,6 +53,7 @@ export function TeamsListColumn({ state, panes }: TeamsListColumnProps) {
     visible,
     openTeam,
     isActiveTeam,
+    isRunningTeam,
     menuItems,
   } = state;
 
@@ -150,6 +151,7 @@ export function TeamsListColumn({ state, panes }: TeamsListColumnProps) {
                       node={result.node}
                       team={team}
                       active={isActiveTeam(result.node, team)}
+                      running={isRunningTeam(result.node, team)}
                       menuItems={menuItems}
                       onOpen={openTeam}
                     />
