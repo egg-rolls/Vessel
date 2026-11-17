@@ -62,6 +62,39 @@ provider 与 transport 写死（`DEFAULT_SEARCH_PROVIDER_ID` + `createDeepSeekHt
 
 选中谁是可观测的：结果的 `backend: <id>` 与指标行的 `provider_id` 都是它。
 
+## 错误文案格式（加第四家后端时照抄这段）
+
+「缺凭据」这类错误只有三种形态，措辞是契约的一部分。每条都要：① 说清什么坏了；
+② 把**下一步**写出来（能直接抄去 export）；③ 不让模型误以为「这个能力不存在」。
+
+**① 一个可用 key 都没有（`auto` 兜底）** → `provider_auth_failed`
+
+```text
+没有可用的搜索后端：按注册顺序（deepseek → tavily → serper）都没有可用的 key。设置其一即可：
+deepseek → DEEPSEEK_API_KEY、tavily → VESSEL_TAVILY_API_KEY、serper → VESSEL_SERPER_API_KEY；
+或用配置 search_provider 指定某一家（本次没有发出任何请求）
+```
+
+三个要素：**注册顺序**（解释为什么没选别家）、**每家 → 环境变量名**（可直接照抄）、
+**「本次没有发出任何请求」**（排除「是不是白花了钱」）。加第四家 ⇒ 往「设置其一即可」那段续一项即可。
+
+**② 显式指定了后端，但缺它那把 key** → `provider_auth_failed`，**只点名一家**
+
+```text
+环境变量 VESSEL_TAVILY_API_KEY 未设置或为空；设置后重试（本次没有发出任何请求）
+```
+
+**③ 配置写了没注册的后端** → `provider_unavailable`，列出在册 id
+
+```text
+配置 search_provider=bravesearch 没有对应的搜索后端；已注册：deepseek | serper | tavily
+```
+
+这条**不是** `provider_auth_failed`：它是配置错，不是缺凭据——两者的下一步动作完全不同。
+
+共同规则：文案里**只出现环境变量名，永不出现 key 的值**；本地拒绝时**一次请求都不发**；
+失败也要落到指标行（`backend` / `provider_id` / `code`），不许静默失败。
+
 ## 配置（全部在 `plugins[].config`，不进 `packages/config`）
 
 | 键 | 缺省 | 说明 |
