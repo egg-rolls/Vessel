@@ -30,6 +30,12 @@
  * 尾消息注入该会话的下一次模型请求（复用 runtime notice 那条既有通道，不新造 RPC）。
  * 为什么不单开一个 `bash_async` 工具名：bash 的权限判定（deny 命令文本 / cwd 边界 / ask）、
  * 输出闸、落盘目录都必须与同步路径**同一份实现**，同名同参最不容易漂成两套。
+ *
+ * 写文件警告（只警告、不阻断）：`bash` 结果文本**末尾**追加一行提示（一次调用最多一行），
+ * 覆盖 `sed -i` / `tee <file>` / 重定向到文件 / heredoc 带元字符 / 反引号。理由是这些写法
+ * bash **不校验内容**：写坏了不报错、退出码照样 0，模型没有任何反馈可以自纠（实测 74 个会话
+ * 1,700+ 次写文件，并且已经出过一次 heredoc 反引号被沙箱预处理掉的事故）。判定是纯文本
+ * 正则 / 字符扫描，不改权限、不改退出码与 stdout/stderr；`edit` / `read` 的输出一个字节都不动。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -645,6 +651,185 @@ function pumpStream(stream: ReadableStream<Uint8Array>, sink: OutputSink): Pump 
   };
 }
 
+// ── bash 写文件警告（只警告、不阻断）──────────────────
+//
+// 为什么要有这一段：实测 74 个会话 19,150 次工具调用里，bash 写文件 1,700+ 次
+// （`> file` 1,310 / heredoc 262 / `sed -i` 93 / `cat >` 69 / `tee` 9），而 bash
+// **不校验内容** —— 写坏了不报错、退出码照样 0，模型没有任何信号可以自纠。真机已经出过
+// 一次：heredoc 里的反引号被沙箱预处理掉，文件内容静默变形。
+// `edit` 不需要这类提醒：它逐字符匹配，匹配不中当场报错（实测失败率 2.8%，其中 54/106
+// 的路径随后改成功）—— 会失败的东西自带反馈，不会失败的东西才需要提示。
+//
+// 形态（硬约束）：
+// - **只追加一行**、固定在工具结果文本的**末尾**（`退出码 / stdout / stderr / 落盘提示`
+//   之后，`\n` + 一行）。放末尾的理由：既有输出格式逐字节不变（纯追加），而且模型读完
+//   输出、正好在最后一行拿到「下次别这么写」的动作建议；放开头会把首行的退出码顶掉。
+// - 一次调用最多一行：多命中合并成一句（命中 heredoc 元字符时不再叠一条反引号警告）。
+// - 命令照跑、退出码与输出不变，不动 `deny` / `ask` 权限逻辑，不动 `boundToolResult`；
+//   不新增事件 —— `tool.call.completed` 的 `result` 就是这段文本，自然带上。
+//
+// 成本：纯字符扫描 + 正则（命令文本通常 < 10 KB），不读盘、不 spawn、不 await。
+//
+// 判据刻意保守（宁可漏报，不许误报成灾）：
+//  1. 写文件类：`sed -i` / `tee <file>` / 重定向到像文件的目标。
+//     `/dev/null`、`/dev/stdout`、`/dev/stderr`、`/dev/fd/*`、`&1`、`&2` 这些
+//     「丢弃 / 接管输出」不算写文件（`cmd 2>/dev/null` 绝不能报）。
+//  2. heredoc 且正文可能被预处理：有 `<<` 起手式，且命令文本里同时出现反引号 / `$(` / `${`。
+//     这正是出事那一类（内容会被 shell 展开，沙箱也可能改写）。
+//     刻意不区分界定符是否加引号（`<<'EOF'`）：本次事故就是沙箱预处理这一层动的手，
+//     它不看 bash 的引号语义。
+//  3. 命令里出现反引号：单独命中也给一行（命令替换是最常见的「静默变形」来源）。
+//
+// 判定前的去噪（否则误报会成灾）：先抹掉 heredoc 正文，再抹掉单 / 双引号内的字面量，
+// 只拿**真正会被 bash 当命令解释的部分**去匹配重定向 / sed / tee —— 否则
+// `echo "a > b"`、写 commit message 里的 `->`、`awk '{print > f}'` 全都会触发。
+// 规则 2 / 3 仍扫**原文**：正文里的反引号正是要提醒的东西。
+
+/** 反引号（单独取出来，免得下面几个字面量里混着它不好读） */
+const BACKTICK = '\u0060';
+
+/** 警告行前缀：固定一个字符，方便一眼看到 / 也方便事后按它统计命中率 */
+const BASH_WRITE_WARN_PREFIX = '⚠ ';
+
+/**
+ * heredoc 起手式：`<<` / `<<-` + 可选引号 + 标识符。
+ * `<<<`（herestring）与 `1 << 2`（位运算）不算 —— 宁可漏报。
+ */
+const HEREDOC_START = /<<-?\s*(['"]?)([A-Za-z_]\w*)\1/;
+
+/** `sed` 原地改文件：`-i`、`-i.bak`、`-ibak`、`--in-place` */
+const SED_IN_PLACE = /\bsed\b[^|;&\n]*\s(?:-i[\w.]*|--in-place)\b/;
+
+/** `tee` 带文件参数（只给选项 = 仍写到 stdout，不算写文件） */
+const TEE_WITH_FILE = /\btee\b(?:\s+-{1,2}[\w-]+)*\s+[^\s|;&<>][^\s|;&<>]*/;
+
+/** 重定向：`> ` / `>>` / `2>` / `&>` ……；捕获组 1 就是目标（fd 复制形如 `&1` 由调用方排除） */
+const REDIRECT_TARGET = /(?:^|[\s;&|()])(?:[0-9]*>>?|&>>?)\s*([^\s;&|()<>]+)/g;
+
+/** 这些重定向目标不是「写文件」：丢弃输出 / 复制既有 fd */
+function isIgnoredRedirectTarget(target: string): boolean {
+  // `2>&1` / `>&2` / `>&-`：目标是 fd 复制或关闭，不落文件
+  if (target.startsWith('&') || target === '-') return true;
+  if (target === '/dev/null' || target === '/dev/tty') return true;
+  if (/^\/dev\/(?:fd\/\d+|stdout|stderr)$/.test(target)) return true;
+  if (/^\/proc\/self\/fd\/\d+$/.test(target)) return true;
+  return false;
+}
+
+/**
+ * 抹掉 heredoc 正文（`<<EOF` 的下一行到界定符那一行），只留「会被 bash 当命令读的行」。
+ * 正文里出现 `>` / `->` 是常态（写文档、写 commit message），拿它匹配重定向必然误报。
+ */
+function stripHeredocBodies(command: string): string {
+  if (!command.includes('<<')) return command;
+  const out: string[] = [];
+  let pending: { delimiter: string; stripTabs: boolean } | undefined;
+  for (const line of command.split('\n')) {
+    if (pending !== undefined) {
+      const candidate = pending.stripTabs ? line.replace(/^\t+/, '') : line;
+      // 界定符那一行本身是命令的一部分（它闭合 heredoc），保留
+      if (candidate.trimEnd() === pending.delimiter) {
+        pending = undefined;
+        out.push(line);
+      }
+      continue;
+    }
+    out.push(line);
+    const start = HEREDOC_START.exec(line);
+    if (start !== null && start[2] !== undefined) {
+      pending = { delimiter: start[2], stripTabs: line.includes('<<-') };
+    }
+  }
+  return out.join('\n');
+}
+
+/**
+ * 抹掉 shell 引号内的字面量（单 / 双引号 + 反斜杠转义），只留引号外的命令部分。
+ * 只为「写文件」判定去噪：`echo "a > b"` 里的 `>` 不是重定向。
+ * 引号不配对时（正文里的撇号很常见）该段一直吃到文本结尾 —— 那一段不参与判定，
+ * 属于「宁可漏报」。
+ */
+function stripShellQuotes(command: string): string {
+  const out: string[] = [];
+  let quote: '"' | "'" | undefined;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (ch === undefined) break;
+    if (quote === undefined) {
+      if (ch === '\\') {
+        i += 1; // 转义的字符一并丢掉
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        continue;
+      }
+      out.push(ch);
+      continue;
+    }
+    if (quote === '"' && ch === '\\') {
+      i += 1;
+      continue;
+    }
+    if (ch === quote) quote = undefined;
+  }
+  return out.join('');
+}
+
+/** 命令（去掉正文与引号后）是否会写文件：`sed -i` / `tee <file>` / 重定向到文件 */
+function commandWritesFile(command: string): boolean {
+  const code = stripShellQuotes(stripHeredocBodies(command));
+  if (SED_IN_PLACE.test(code)) return true;
+  if (TEE_WITH_FILE.test(code)) return true;
+  for (const match of code.matchAll(REDIRECT_TARGET)) {
+    const target = match[1];
+    if (target !== undefined && !isIgnoredRedirectTarget(target)) return true;
+  }
+  return false;
+}
+
+/** 命令原文里有没有会被 shell 展开的元字符：反引号 / `$(` / `${` */
+function hasExpandedMeta(command: string): boolean {
+  return command.includes(BACKTICK) || command.includes('$(') || command.includes('${');
+}
+
+const WRITE_FILE_WARN =
+  '这条命令会写文件（sed -i / 重定向 / tee / heredoc），而 bash 不会校验写进去的内容——' +
+  '写坏了也不报错、退出码照样是 0。要改代码请优先用 `edit`（逐字符唯一匹配，改不中会报错）；' +
+  '非得用 bash 写，写完用 `read` 复核一遍。';
+
+const HEREDOC_META_WARN =
+  'heredoc 内容里的反引号与 $ 开头的写法（$() 与 $' +
+  '{…}）会被 shell 先展开再写入，沙箱也可能改写正文，文件可能静默变形；' +
+  '建议改用 `edit`，或先把内容写到临时文件再 cp。';
+
+const BACKTICK_WARN =
+  '命令里的反引号会被 bash 当命令替换（先执行、再用输出替换成文本）；' +
+  '若只是想写反引号字面量（例如写 markdown），请用单引号包住，或用 `edit` 写文件。';
+
+/**
+ * 组装这条命令的写文件警告；无命中返回 `undefined`。
+ * 返回值是**一整行**（不含换行），多命中已合并 —— 一次调用只追加这一行。
+ */
+function bashWriteWarning(command: string): string | undefined {
+  if (command === '') return undefined;
+  const parts: string[] = [];
+  if (commandWritesFile(command)) parts.push(WRITE_FILE_WARN);
+  if (HEREDOC_START.test(command) && hasExpandedMeta(command)) {
+    // 这条已经说清「反引号会被预处理」，再叠一条反引号警告就是啰嗦
+    parts.push(HEREDOC_META_WARN);
+  } else if (command.includes(BACKTICK)) {
+    parts.push(BACKTICK_WARN);
+  }
+  if (parts.length === 0) return undefined;
+  return `${BASH_WRITE_WARN_PREFIX}${parts.join(' ')}`;
+}
+
+/** 把警告行追加到结果文本末尾（无警告时原样返回，逐字节不变） */
+function appendWriteWarning(text: string, warning: string | undefined): string {
+  return warning === undefined ? text : `${text}\n${warning}`;
+}
+
 // ── bash ─────────────────────────────────────────
 
 /** 把完整输出裁成模型可读预览（按字节上限） */
@@ -1059,6 +1244,9 @@ async function startAsyncBash(options: {
     pruneAsyncJobs();
   });
 
+  // 写文件警告只挂在**起步文本**上：这是模型还能改主意的时刻；收口通知是「结果」，
+  // 同一条命令的同一句提醒不重复塞两遍。
+  const asyncWriteWarning = bashWriteWarning(options.command);
   return [
     `已启动（异步）：job ${id}`,
     `命令：${oneLineText(options.command, 400)}`,
@@ -1069,6 +1257,7 @@ async function startAsyncBash(options: {
     '命令结束时会有一条 runtime 消息（退出码 + 头尾输出 + 日志路径）注入你这个会话的下一轮上下文；',
     '若本轮已结束，它在该会话下一次 run 的第一轮到达。中途想看进度就直接 read 上面的日志文件。',
     '注意：本进程退出时仍在跑的后台命令会被一并终止。',
+    ...(asyncWriteWarning === undefined ? [] : [asyncWriteWarning]),
   ].join('\n');
 }
 
@@ -1306,6 +1495,10 @@ async function runBash(
     (args.async === true ? DEFAULT_ASYNC_BASH_TIMEOUT_MS : DEFAULT_BASH_TIMEOUT_MS);
   if (timeoutMs <= 0) return '错误：timeout_ms 必须为正数';
 
+  // 写文件警告：只算一次（纯文本判定），命中的话在后面**每个返回点**末尾追加同一行。
+  // 放在校验之后：被拒绝的命令根本没执行，不该再提「写完要复核」。
+  const writeWarning = bashWriteWarning(command);
+
   const signal = ctx.signal;
   if (signal?.aborted) return CANCELLED_TEXT;
 
@@ -1403,7 +1596,7 @@ async function runBash(
   if (budgeted.bounded) {
     // 幂等回执：bash 自己裁过了，loop 别再裁第二遍（否则省略标注行会被裁掉）。
     markToolResultBounded(ctx, budgeted.originalChars);
-    return budgeted.content;
+    return appendWriteWarning(budgeted.content, writeWarning);
   }
 
   // 第二 / 三道闸（行数 2000 / 字节 2 MiB）：语义与 0.4 起一致，作为兜底保留。
@@ -1421,11 +1614,14 @@ async function runBash(
     lineGate: true,
   });
   const shouldPersist = overLines || overBytes || stdoutSink.truncated || stderrSink.truncated;
-  if (!shouldPersist) return formatted;
+  if (!shouldPersist) return appendWriteWarning(formatted, writeWarning);
   const saved = await persistRaw();
-  return saved !== undefined
-    ? `${formatted}\n完整输出已写入：${saved}（${Buffer.byteLength(stdout) + Buffer.byteLength(stderr)} 字节）`
-    : `${formatted}\n完整输出落盘失败（预览已截断）。`;
+  return appendWriteWarning(
+    saved !== undefined
+      ? `${formatted}\n完整输出已写入：${saved}（${Buffer.byteLength(stdout) + Buffer.byteLength(stderr)} 字节）`
+      : `${formatted}\n完整输出落盘失败（预览已截断）。`,
+    writeWarning,
+  );
 }
 
 /** 构造 bash 工具（路径边界随配置固定；默认工作目录按调用期解析） */
