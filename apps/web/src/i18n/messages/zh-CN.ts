@@ -498,7 +498,7 @@ export const messages = {
   'observe.diagnostics.doctor.mcp.rpc': 'RPC 返回 {servers} 个 server / 配置 {configured} 个',
   'observe.diagnostics.doctor.mcp.disabled': '该 gateway 未启用 MCP',
   'observe.diagnostics.doctor.mcp.unavailable': 'MCP 状态不可用',
-  'observe.diagnostics.doctor.servePort.notConfigured': 'serve.port 未显式配置；doctor 会跳过该项',
+  'observe.diagnostics.doctor.servePort.notConfigured': 'node.port 未显式配置；doctor 会跳过该项',
   'observe.diagnostics.doctor.servePort.systemPort': '{host}:0（系统分配）· endpoint {endpoint}',
   'observe.diagnostics.doctor.servePort.detail': '{host}:{port} 已配置 · endpoint {endpoint}',
   'observe.diagnostics.doctor.servePort.unverified':
@@ -1602,7 +1602,7 @@ export const messages = {
   'connection.closeCodeForbidden': ' · 无权访问',
   'connection.closeCodeProtocol': ' · 协议不兼容',
   'connection.failureHint':
-    '连接失败时请依次检查：地址是否可达、Origin 是否在 serve.allowed_origins、token 是否有效、非回环是否使用 HTTPS。',
+    '连接失败时请依次检查：地址是否可达、Origin 是否在 node.allowed_origins、token 是否有效、非回环是否使用 HTTPS。',
   'connection.connected': '已连接 gateway',
   'config.noTokenReason': '连接后才能读取配置。',
   'config.disabledTitle': '配置接口未启用',
@@ -1689,9 +1689,9 @@ export const messages = {
   'gateway.connection.invalidUrl': '无效的 gateway 地址',
   'gateway.connection.authFailed': '鉴权失败：token 错误或已失效',
   'gateway.connection.originRejected':
-    'gateway 拒绝该 Origin/Host：{detail}。跨 Origin 部署需把本站加入 serve.allowed_origins。',
+    'gateway 拒绝该 Origin/Host：{detail}。跨 Origin 部署需把本站加入 node.allowed_origins。',
   'gateway.connection.unreachable':
-    '无法连接 gateway（检查地址/TLS/网络）：{detail}。跨 Origin 时还需配置 serve.allowed_origins。',
+    '无法连接 gateway（检查地址/TLS/网络）：{detail}。跨 Origin 时还需配置 node.allowed_origins。',
   'gateway.connection.forbiddenTenant': '无权访问（需要 admin token）',
   'gateway.connection.protocolMismatch': '协议版本不兼容（需要 vessel.gateway/1）',
   'gateway.connection.tokenRequired': '请输入 gateway token',
@@ -1731,7 +1731,7 @@ export const messages = {
   'gateway.client.unreachable': '无法连接 gateway（未启动或地址错误）',
   'gateway.error.unauthorized': 'token 无效或已过期，请在连接设置中重新输入。',
   'gateway.error.forbidden': '当前 token 没有执行该操作的权限。',
-  'gateway.error.forbidden_origin': '请求来源不在 serve.allowed_origins 中。',
+  'gateway.error.forbidden_origin': '请求来源不在 node.allowed_origins 中。',
   'gateway.error.invalid_host': 'Host 头不被 gateway 允许。',
   'gateway.error.not_found': '目标不存在或已被删除。',
   'gateway.error.invalid_params': '请求参数不合法。',

@@ -56,6 +56,18 @@ export interface SourceCoverage {
   duration_ms?: number;
   /** `true` when a worker thread produced the result, `false` on the fallback. */
   worker?: boolean;
+  /**
+   * 0.56: the source this plugin reads stopped being written (no `events.ndjson`
+   * anywhere). 0.54 made the timeline the only durable sink, so "no file" means
+   * *these numbers cannot be computed any more*, not "you have no usage".
+   */
+  source_retired?: boolean;
+  /**
+   * 0.56: newest session-log mtime ⇒ pages render "data is frozen at {date}".
+   * mtime, not the newest event `ts`: independent of range / read budget and
+   * identical on both read paths (index and logs).
+   */
+  frozen_at?: number;
 }
 
 /** One request (or failed run) as shown in Logs. */

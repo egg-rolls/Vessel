@@ -300,6 +300,10 @@ export function buildDoctorChecks(input: DoctorCheckInput): DoctorCheck[] {
       detail: pendingDetail(configError),
     });
   } else {
+    // 读 `serve` 而不是 `node`：**快照里的字段名就是 `serve`** —— `node:` 只是配置
+    // 文件的规范写法，loader 把它归一化进 `serve` 后 `delete next.node`
+    // （packages/config/src/loader.ts），所以 `config.get` 下发的对象里没有 `node` 键；
+    // 改成读 `node` 会让这一行永远「未配置」。用户可见文案仍说 `node.port`。
     const serve = asRecord(configRoot.serve);
     const port = serve?.port;
     const endpoint = input.health?.node.endpoint ?? input.nodeUrl;

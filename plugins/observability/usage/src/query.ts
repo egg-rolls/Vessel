@@ -125,8 +125,10 @@ export class QueryRuntime {
     const started = Date.now();
     if (query.kind === 'logs') return this.logs(query, started);
     const snapshot = await this.loadRuns();
+    const degradation = await this.degradation();
     const withMetrics = (source: SourceCoverage): SourceCoverage => ({
       ...source,
+      ...degradation,
       duration_ms: Date.now() - started,
     });
     if (query.kind === 'summary') {
@@ -154,14 +156,26 @@ export class QueryRuntime {
     });
     const records = buildRecords(loaded.events, this.settings);
     const dto = listLogs(records, query.params);
+    const degradation = await this.degradation();
     return {
       result: { kind: 'logs', dto },
       source: {
         ...coverageOf(loaded),
+        ...degradation,
         peeked: this.store.firstLinePeeks - peeksBefore,
         duration_ms: Date.now() - started,
       },
     };
+  }
+
+  /**
+   * 0.56: the source's state, shared by both read paths (see `SourceCoverage`).
+   * No session log ⇒ `source_retired`; files present ⇒ `frozen_at` = newest mtime.
+   */
+  private async degradation(): Promise<Pick<SourceCoverage, 'source_retired' | 'frozen_at'>> {
+    const sources = await readSessionSources(this.dataDir as string);
+    if (sources.files === 0) return { source_retired: true };
+    return sources.max_mtime > 0 ? { frozen_at: sources.max_mtime } : {};
   }
 
   /**
