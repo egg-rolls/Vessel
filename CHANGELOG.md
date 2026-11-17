@@ -48,6 +48,17 @@
   的平铺形状一致。真机（`eecc5a48`，订阅 `after_timeline_seq: 7000`）：epoch 记账生效、`timeline-epoch-end` 收尾得到声明
   `[7001..7955] count=955 has_more=false`，四条校验通过、零缺口（此前同一路径不会有任何 epoch 结算）。
 
+### 破坏性（删除清单，逐项可直接回滚）
+
+- **`serve:` 段移除（0.55）**：`serve` 从此**不是配置块**，写它就**启动失败**（`exit 2`），整块一个键都不生效
+  —— 不是「警告 + 照旧生效」。文案逐键给出可照做的改名提示（`serve.token -> node.token`、
+  `serve.token_env -> node.token_env`、`serve.allowed_origins -> node.allowed_origins` …），
+  用户复制改名即可，字段名与语义一个都没变。为什么现在动：`serve:` 是 0.3 时代的名，`vessel serve`
+  命令 0.49 就没了；留着两个名字读同一份字段，`doctor` 和启动迟早会漂开。同步落地：loader 拦住并**丢弃**
+  该块（绝不静默生效）、验证错误路径一律写 `node.*`、脱敏路径 `serve.tokens.*` → `node.tokens.*`
+  （token 永不打印这条不变）、`vessel doctor` 的 `config` 一行直接显示这条错误（状态 `fail`）。
+  口径见 [operations/CONFIG §2.0](docs/operations/CONFIG.md)、[operations/REMOTE §3.1](docs/operations/REMOTE.md)。
+
 ## [0.54.0] - 2026-11-16
 
 > 本节按 0.54 迁移判据 B-4

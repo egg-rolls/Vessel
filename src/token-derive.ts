@@ -232,8 +232,8 @@ export function effectiveNodeToken(input: TokenContext & { nodeId: string }): To
   const explicit = resolveGatewayToken(input.config, env);
   if (explicit !== undefined) {
     const detail =
-      nonEmpty(input.config.serve?.token) !== undefined
-        ? "node.token (or the legacy 'serve.token' alias)"
+      nonEmpty(input.config.node?.token) !== undefined
+        ? 'node.token'
         : 'node.token_env / VESSEL_GATEWAY_TOKEN / transport.token';
     return { ok: true, value: { token: explicit, source: 'explicit', detail } };
   }
@@ -296,7 +296,7 @@ export function effectiveProxySecret(
       },
     };
   }
-  const nodeEnvName = nonEmpty(ctx.config.serve?.proxySecretEnv);
+  const nodeEnvName = nonEmpty(ctx.config.node?.proxySecretEnv);
   const nodeSecret = nodeEnvName !== undefined ? nonEmpty(env[nodeEnvName]) : undefined;
   if (nodeSecret !== undefined) {
     return {

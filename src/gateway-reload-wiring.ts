@@ -4,7 +4,7 @@
  * serve 只暴露 RPC 形状与 scope 枚举；这里维护 `scope -> applier` 映射，决定哪些东西
  * 真的能热应用：
  * - `plugins`：清空插件扫描缓存（下次 `list()` 重新扫描；已安装插件与 active run 不受影响）；
- * - `config`：重新 `loadConfig()`；`serve.allowed_origins` 通过 web 的
+ * - `config`：重新 `loadConfig()`；`node.allowed_origins` 通过 web 的
  *   `gateway.reconfigure({ allowedOrigins })` 生效；其余字段一律进 `requires_restart`，
  *   不假装已经生效；
  * - `permission` / `tools` / `mcp`：由 `src/cli.ts` 注入 applier（见下）。
@@ -70,16 +70,16 @@ const RESTART_FIELDS: readonly RestartField[] = [
   { name: 'model', read: (config) => config.provider?.model },
   { name: 'agent', read: (config) => config.agent },
   // CONTRACT-hot-apply §1：permission 走 applier，不再进 requires_restart。
-  { name: 'tls', read: (config) => config.serve?.tls },
+  { name: 'tls', read: (config) => config.node?.tls },
   {
     name: 'token',
     read: (config) => ({
-      token: config.serve?.token,
-      tokenEnv: config.serve?.tokenEnv,
-      tokens: config.serve?.tokens,
+      token: config.node?.token,
+      tokenEnv: config.node?.tokenEnv,
+      tokens: config.node?.tokens,
     }),
   },
-  { name: 'port', read: (config) => config.serve?.port },
+  { name: 'port', read: (config) => config.node?.port },
 ];
 
 /** 稳定序列化（对象键排序；undefined 也参与比较） */
@@ -107,8 +107,8 @@ export function diffRestartFields(current: VesselConfig, next: VesselConfig): st
  */
 export function allowedOriginsChanged(current: VesselConfig, next: VesselConfig): boolean {
   const normalize = (value: string[] | undefined): string[] => [...(value ?? [])].sort();
-  const left = normalize(current.serve?.allowedOrigins);
-  const right = normalize(next.serve?.allowedOrigins);
+  const left = normalize(current.node?.allowedOrigins);
+  const right = normalize(next.node?.allowedOrigins);
   return left.length !== right.length || left.some((origin, index) => origin !== right[index]);
 }
 
@@ -181,10 +181,10 @@ export function createGatewayReloadRunner(
             const reconfigure = target?.reconfigure;
             if (!target || typeof reconfigure !== 'function') {
               // web 尚未提供 reconfigure：不声称 config 已生效。
-              requiresRestart.push('serve.allowedOrigins');
+              requiresRestart.push('node.allowedOrigins');
             } else {
               await reconfigure.call(target, {
-                allowedOrigins: next.serve?.allowedOrigins ?? [],
+                allowedOrigins: next.node?.allowedOrigins ?? [],
               });
               reloaded.push('config');
             }

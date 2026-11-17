@@ -123,7 +123,7 @@ async function listenForEntry(
       host: listen.host,
       port: listen.port,
       url: listen.url,
-      tls: platformConfig.serve?.tls !== undefined,
+      tls: platformConfig.node?.tls !== undefined,
     };
   }
   try {
@@ -134,7 +134,7 @@ async function listenForEntry(
       host: listen.host,
       port: listen.port,
       url: listen.url,
-      tls: config.serve?.tls !== undefined,
+      tls: config.node?.tls !== undefined,
     };
   } catch {
     return { ok: false };
@@ -304,7 +304,7 @@ async function addCommand(
     if (otherPort === nodePort) throw portConflict(nodePort, `node "${other.name}"`);
   }
 
-  const host = (nodeConfig.serve?.hostname ?? DEFAULT_SERVE_OPTIONS.hostname).trim();
+  const host = (nodeConfig.node?.hostname ?? DEFAULT_SERVE_OPTIONS.hostname).trim();
   const isPortAvailable = deps.isPortAvailable ?? checkPortAvailable;
   if (!(await isPortAvailable(host, nodePort))) {
     throw portConflict(nodePort, `an already bound address (${host})`);

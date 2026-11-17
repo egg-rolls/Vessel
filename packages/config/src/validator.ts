@@ -18,9 +18,9 @@ import type {
   FeishuConfig,
   GatewayConfig,
   HubConfig,
+  NodeConfig,
   ObservabilityConfig,
   PricingConfig,
-  ServeConfig,
   TeamConfigInput,
   TerminationConfig,
   TimelineConfig,
@@ -981,13 +981,13 @@ const PLUGIN_HTTP_LIMIT_KEYS = [
   'maxFrameBytes',
 ] as const;
 
-/** 0.48 M1：`serve.pluginHttp` 限额校验；`null` = 不限制。 */
+/** 0.48 M1：`node.plugin_http` 限额校验；`null` = 不限制。 */
 function validatePluginHttpLimits(value: unknown, errors: ConfigValidationError[]): void {
   if (value === undefined) return;
   if (!isPlainObject(value)) {
     errors.push({
-      path: 'serve.pluginHttp',
-      message: 'serve.pluginHttp must be a mapping',
+      path: 'node.pluginHttp',
+      message: 'node.pluginHttp must be a mapping',
       value,
     });
     return;
@@ -995,8 +995,8 @@ function validatePluginHttpLimits(value: unknown, errors: ConfigValidationError[
   for (const key of Object.keys(value)) {
     if (!(PLUGIN_HTTP_LIMIT_KEYS as readonly string[]).includes(key)) {
       errors.push({
-        path: `serve.pluginHttp.${key}`,
-        message: `serve.pluginHttp.${key} is not a known limit`,
+        path: `node.pluginHttp.${key}`,
+        message: `node.pluginHttp.${key} is not a known limit`,
       });
     }
   }
@@ -1006,9 +1006,9 @@ function validatePluginHttpLimits(value: unknown, errors: ConfigValidationError[
     const minimum = key === 'maxBodyBytes' || key === 'maxResponseBytes' ? 0 : 1;
     if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < minimum) {
       errors.push({
-        path: `serve.pluginHttp.${key}`,
+        path: `node.pluginHttp.${key}`,
         message:
-          `serve.pluginHttp.${key} must be ${minimum === 0 ? 'a non-negative' : 'a positive'} ` +
+          `node.pluginHttp.${key} must be ${minimum === 0 ? 'a non-negative' : 'a positive'} ` +
           'integer, or null for unlimited',
         value: raw,
       });
@@ -1017,24 +1017,25 @@ function validatePluginHttpLimits(value: unknown, errors: ConfigValidationError[
 }
 
 /**
- * 校验 serve 块（schema 层；文件存在性由启动前检查）。
+ * 校验 `node:` 块（schema 层；文件存在性由启动前检查）。
  * 非回环必须 `allowRemote: true`；TLS 必须 cert/key 成对。
+ *
+ * **错误路径一律写成 `node.*`**：`serve:` 段 0.55 起已不存在（loader 读到直接报错并
+ * 要求改名），所以用户看到的键名必须和他能写的那一个一致 —— 报 `serve.port` 会把人
+ * 指到一个已经被拒绝的块上。
+ *
  * @param errors 可选的目标数组；缺省返回新数组
  */
 export function validateServeSettings(
-  serve: ServeConfig,
+  node: NodeConfig,
   errors: ConfigValidationError[] = [],
 ): ConfigValidationError[] {
-  const { hostname, port, allowRemote, tls, token, tokenEnv, tokens } = serve as Record<
+  const { hostname, port, allowRemote, tls, token, tokenEnv, tokens } = node as Record<
     string,
     unknown
   >;
   // 0.55 P0：反代共享密钥的环境变量名（opt-in；只校验变量名形状，不读值）。
-  validateEnvName(
-    'serve.proxySecretEnv',
-    (serve as Record<string, unknown>).proxySecretEnv,
-    errors,
-  );
+  validateEnvName('node.proxySecretEnv', (node as Record<string, unknown>).proxySecretEnv, errors);
 
   if (hostname !== undefined) {
     const invalid =
@@ -1045,8 +1046,8 @@ export function validateServeSettings(
       hostname.includes('://');
     if (invalid) {
       errors.push({
-        path: 'serve.hostname',
-        message: 'serve.hostname must be a host name or IP address (no scheme or path)',
+        path: 'node.hostname',
+        message: 'node.hostname must be a host name or IP address (no scheme or path)',
         value: hostname,
       });
     }
@@ -1057,27 +1058,27 @@ export function validateServeSettings(
     (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535)
   ) {
     errors.push({
-      path: 'serve.port',
-      message: 'serve.port must be an integer between 0 and 65535',
+      path: 'node.port',
+      message: 'node.port must be an integer between 0 and 65535',
       value: port,
     });
   }
 
   if (allowRemote !== undefined && typeof allowRemote !== 'boolean') {
     errors.push({
-      path: 'serve.allowRemote',
-      message: 'serve.allowRemote must be a boolean',
+      path: 'node.allowRemote',
+      message: 'node.allowRemote must be a boolean',
       value: allowRemote,
     });
   }
 
-  // 0.6：独立前端 Origin allowlist（YAML：serve.allowed_origins）。
-  const allowedOrigins = (serve as Record<string, unknown>).allowedOrigins;
+  // 0.6：独立前端 Origin allowlist（YAML：node.allowed_origins）。
+  const allowedOrigins = (node as Record<string, unknown>).allowedOrigins;
   if (allowedOrigins !== undefined) {
     if (!Array.isArray(allowedOrigins)) {
       errors.push({
-        path: 'serve.allowedOrigins',
-        message: 'serve.allowedOrigins must be an array of origins',
+        path: 'node.allowedOrigins',
+        message: 'node.allowedOrigins must be an array of origins',
       });
     } else {
       allowedOrigins.forEach((origin, index) => {
@@ -1085,8 +1086,8 @@ export function validateServeSettings(
           typeof origin === 'string' ? allowedOriginError(origin) : 'origin must be a string';
         if (message !== null) {
           errors.push({
-            path: `serve.allowedOrigins[${index}]`,
-            message: `serve.allowedOrigins[${index}] ${message}`,
+            path: `node.allowedOrigins[${index}]`,
+            message: `node.allowedOrigins[${index}] ${message}`,
             // origin 不是密钥，可回显
             value: origin,
           });
@@ -1096,7 +1097,7 @@ export function validateServeSettings(
   }
 
   // 0.48 M1：插件 HTTP 反代限额（CONTRACT-0.48 §3.4）。
-  validatePluginHttpLimits((serve as Record<string, unknown>).pluginHttp, errors);
+  validatePluginHttpLimits((node as Record<string, unknown>).pluginHttp, errors);
 
   if (
     typeof hostname === 'string' &&
@@ -1106,10 +1107,10 @@ export function validateServeSettings(
     allowRemote !== true
   ) {
     errors.push({
-      path: 'serve.allowRemote',
+      path: 'node.allowRemote',
       message:
         `Refusing to listen on non-loopback hostname "${hostname}": ` +
-        'set serve.allow_remote=true to expose the gateway.',
+        'set node.allow_remote=true to expose the gateway.',
       value: allowRemote,
     });
   }
@@ -1124,37 +1125,37 @@ export function validateServeSettings(
     tls === undefined
   ) {
     errors.push({
-      path: 'serve.tls',
+      path: 'node.tls',
       message:
         `Refusing to expose non-loopback gateway "${hostname}" without TLS: ` +
-        'set serve.tls.cert_file and serve.tls.key_file.',
+        'set node.tls.cert_file and node.tls.key_file.',
     });
   }
 
-  validateEnvName('serve.tokenEnv', tokenEnv, errors);
+  validateEnvName('node.tokenEnv', tokenEnv, errors);
 
   if (token !== undefined && (typeof token !== 'string' || token.trim() === '')) {
     // 不把 token 值放进 error
-    errors.push({ path: 'serve.token', message: 'serve.token must be a non-empty string' });
+    errors.push({ path: 'node.token', message: 'node.token must be a non-empty string' });
   }
 
   if (tokens !== undefined) {
     if (!isPlainObject(tokens)) {
-      errors.push({ path: 'serve.tokens', message: 'serve.tokens must be a mapping' });
+      errors.push({ path: 'node.tokens', message: 'node.tokens must be a mapping' });
     } else {
       for (const [rawToken, rawEntry] of Object.entries(tokens)) {
         // 永不把 token 键写进 error / message。
         if (rawToken.trim() === '') {
           errors.push({
-            path: 'serve.tokens',
-            message: 'serve.tokens must not contain an empty token key',
+            path: 'node.tokens',
+            message: 'node.tokens must not contain an empty token key',
           });
           continue;
         }
         if (!isPlainObject(rawEntry)) {
           errors.push({
-            path: 'serve.tokens.<entry>',
-            message: 'serve.tokens entries must be objects',
+            path: 'node.tokens.<entry>',
+            message: 'node.tokens entries must be objects',
           });
           continue;
         }
@@ -1164,8 +1165,8 @@ export function validateServeSettings(
           !['read', 'write', 'admin'].includes(entry.role as string)
         ) {
           errors.push({
-            path: 'serve.tokens.<entry>.role',
-            message: 'serve.tokens role must be "read", "write", or "admin"',
+            path: 'node.tokens.<entry>.role',
+            message: 'node.tokens role must be "read", "write", or "admin"',
           });
         }
       }
@@ -1174,7 +1175,7 @@ export function validateServeSettings(
 
   if (tls !== undefined) {
     if (!isPlainObject(tls)) {
-      errors.push({ path: 'serve.tls', message: 'serve.tls must be an object', value: tls });
+      errors.push({ path: 'node.tls', message: 'node.tls must be an object', value: tls });
     } else {
       const cert = tls.certFile;
       const key = tls.keyFile;
@@ -1183,15 +1184,15 @@ export function validateServeSettings(
       if (certInvalid || keyInvalid) {
         if (certInvalid) {
           errors.push({
-            path: 'serve.tls.certFile',
-            message: 'serve.tls requires both cert_file and key_file',
+            path: 'node.tls.certFile',
+            message: 'node.tls requires both cert_file and key_file',
             value: cert,
           });
         }
         if (keyInvalid) {
           errors.push({
-            path: 'serve.tls.keyFile',
-            message: 'serve.tls requires both cert_file and key_file',
+            path: 'node.tls.keyFile',
+            message: 'node.tls requires both cert_file and key_file',
             value: key,
           });
         }
@@ -1204,7 +1205,7 @@ export function validateServeSettings(
 
 /**
  * 0.49：校验平台 gateway 块（CONTRACT-0.49 §3.1）。
- * 与 serve 分区：不复用字段；origin 规则复用 `allowedOriginError`。
+ * 与 `node:` 分区：不复用字段；origin 规则复用 `allowedOriginError`。
  * token 值永不写入 error / message。
  */
 function validateGatewaySettings(
@@ -1781,15 +1782,10 @@ export function findExplicitSecretPaths(config: Record<string, unknown>, prefix 
   check(config, 'apiKey', 'apiKey');
   check(config.provider, 'apiKey', 'provider.apiKey');
   check(config.feishu, 'appSecret', 'feishu.appSecret');
-  check(config.serve, 'token', 'serve.token');
-  // 0.56：`node:` 是 `serve:` 的规范新名，同样是密钥（项目层只允许 `_env` 形式）。
   check(config.node, 'token', 'node.token');
   check(config.gateway, 'token', 'gateway.token');
   check(config.transport, 'token', 'transport.token');
   check(config.connect, 'token', 'connect.token');
-  if (isPlainObject(config.serve) && isPlainObject(config.serve.tokens)) {
-    if (Object.keys(config.serve.tokens).length > 0) found.push(at('serve.tokens'));
-  }
   if (isPlainObject(config.node) && isPlainObject(config.node.tokens)) {
     if (Object.keys(config.node.tokens).length > 0) found.push(at('node.tokens'));
   }
@@ -1823,33 +1819,33 @@ export function findRemovedTenantConfigKeys(
     });
   }
 
-  const serve = isPlainObject(config.serve) ? config.serve : undefined;
-  if (serve === undefined) return removed;
+  const node = isPlainObject(config.node) ? config.node : undefined;
+  if (node === undefined) return removed;
 
-  if (Object.hasOwn(serve, 'adminToken')) {
+  if (Object.hasOwn(node, 'adminToken')) {
     removed.push({
-      path: 'serve.adminToken',
+      path: 'node.adminToken',
       message:
-        'serve.adminToken was removed in 0.49. ' +
-        'Fix: delete serve.adminToken and put the admin client token under serve.tokens as `<token>: { role: admin }`.',
+        'node.adminToken was removed in 0.49. ' +
+        'Fix: delete node.adminToken and put the admin client token under node.tokens as `<token>: { role: admin }`.',
     });
   }
-  if (Object.hasOwn(serve, 'adminTokenEnv')) {
+  if (Object.hasOwn(node, 'adminTokenEnv')) {
     removed.push({
-      path: 'serve.adminTokenEnv',
+      path: 'node.adminTokenEnv',
       message:
-        'serve.adminTokenEnv was removed in 0.49. ' +
-        'Fix: delete serve.adminTokenEnv and put the admin client token under serve.tokens as `<token>: { role: admin }`.',
+        'node.adminTokenEnv was removed in 0.49. ' +
+        'Fix: delete node.adminTokenEnv and put the admin client token under node.tokens as `<token>: { role: admin }`.',
     });
   }
 
-  if (isPlainObject(serve.tokens)) {
-    Object.values(serve.tokens).forEach((entry, index) => {
+  if (isPlainObject(node.tokens)) {
+    Object.values(node.tokens).forEach((entry, index) => {
       if (!isPlainObject(entry) || !Object.hasOwn(entry, 'tenantId')) return;
       removed.push({
-        path: `serve.tokens.<entry#${index + 1}>.tenantId`,
+        path: `node.tokens.<entry#${index + 1}>.tenantId`,
         message:
-          'serve.tokens[*].tenantId was removed in 0.49: every token belongs to this node. ' +
+          'node.tokens[*].tenantId was removed in 0.49: every token belongs to this node. ' +
           'Fix: delete the tenantId key from the token entry and keep only role.',
       });
     });
@@ -2768,29 +2764,12 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
-  // 校验 serve（0.3；默认回环 + 明文）
-  if (config.serve) {
-    validateServeSettings(config.serve, errors);
-  }
-
-  // 0.56：`node:` 段（`serve:` 的规范新名）。loader 已把它归一化进 `serve`，
-  // 这里兜住「直接构造 / CLI 覆盖层只写了 node:」的配置。错误路径改写成 node.*，
-  // 保证用户看到的键名和自己写的一致（否则会去改一个不存在的 serve 段）。
+  // 校验 `node:` 段（0.3 起就有这个块，0.55 起它是唯一的名字；默认回环 + 明文）
   if (config.node !== undefined) {
     if (!isPlainObject(config.node)) {
       errors.push({ path: 'node', message: 'node must be an object' });
     } else {
-      const nodeErrors: ConfigValidationError[] = [];
-      validateServeSettings(config.node as ServeConfig, nodeErrors);
-      for (const error of nodeErrors) {
-        errors.push({
-          ...error,
-          path: error.path.startsWith('serve.')
-            ? `node.${error.path.slice('serve.'.length)}`
-            : error.path,
-          message: error.message.replaceAll('serve.', 'node.'),
-        });
-      }
+      validateServeSettings(config.node, errors);
     }
   }
 
@@ -2807,7 +2786,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
-  // 校验 gateway（0.49；平台侧，与 serve 分区）
+  // 校验 gateway（0.49；平台侧，与 `node:` 分区）
   if (config.gateway !== undefined) {
     if (!isPlainObject(config.gateway)) {
       errors.push({ path: 'gateway', message: 'gateway must be an object' });
@@ -2984,19 +2963,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   lease: ['ttlMs', 'renewMs'],
   transport: ['kind', 'token'],
   durable: ['enabled', 'backend', 'path', 'checkpointEvery'],
-  serve: [
-    'hostname',
-    'allowedOrigins',
-    'port',
-    'allowRemote',
-    'tls',
-    'token',
-    'tokenEnv',
-    'tokens',
-    'pluginHttp',
-    'proxySecretEnv',
-  ],
-  // 0.56：`node:` 与 `serve:` 同形（规范名 / 兼容别名）。
+  // 0.55：`node:` 是这个块的唯一名字（`serve:` 段已移除，loader 读到直接报错）。
   node: [
     'hostname',
     'allowedOrigins',
@@ -3062,7 +3029,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   timeline: ['dualWrite', 'chunkFlushMs', 'archiveIntervalMs'],
 };
 
-/** serve.tls / hub.tls 的已知键 */
+/** `node.tls` / `hub.tls` 的已知键 */
 const KNOWN_TLS_KEYS = ['certFile', 'keyFile'] as const;
 
 /** hub.listen 的已知键 */
@@ -3090,11 +3057,11 @@ export function findUnknownNestedKeys(config: Record<string, unknown>): UnknownN
     }
   }
 
-  const tls = isPlainObject(config.serve) ? config.serve.tls : undefined;
+  const tls = isPlainObject(config.node) ? config.node.tls : undefined;
   if (isPlainObject(tls)) {
     for (const key of Object.keys(tls)) {
       if (!KNOWN_TLS_KEYS.includes(key as (typeof KNOWN_TLS_KEYS)[number])) {
-        unknown.push({ path: `serve.tls.${key}`, key, block: 'serve.tls' });
+        unknown.push({ path: `node.tls.${key}`, key, block: 'node.tls' });
       }
     }
   }
@@ -3172,8 +3139,7 @@ export const KNOWN_CONFIG_KEYS = [
   'attention',
   'mcpServers',
   'durable',
-  'serve',
-  // 0.56：`node:` 是 `serve:` 的规范新名（loader 归一化；`serve` 为兼容别名）。
+  // 0.55：`node:` 是唯一的块名（`serve:` 已移除，由 loader 单独报错并要求改名）。
   'node',
   // 0.56：单一根密钥覆盖点（`security.root_secret_env`）。
   'security',

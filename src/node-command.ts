@@ -1,7 +1,7 @@
 /**
  * `vessel node` 一次性子命令（0.49 G1）。
  *
- * Node API 单独监听（缺省 `serve.port` / 8644），与 `vessel gateway start`
+ * Node API 单独监听（缺省 `node.port` / 8644），与 `vessel gateway start`
  * 共享同一 `<dataDir>/gateway-<instance>.pid/.lock`：同一 node 只允许一个写者。
  *
  * - `node start --daemon`：分离子进程，子进程走 cli.ts 的 node 前台管线；
@@ -138,7 +138,7 @@ async function startNodeDaemonCommand(
   });
 
   if (result.ok) {
-    const url = gatewayBaseUrl(result.record, context.config.serve?.tls !== undefined);
+    const url = gatewayBaseUrl(result.record, context.config.node?.tls !== undefined);
     if (result.unconfirmed === true) {
       print(ui.warn(t('gateway.startedUnconfirmed', { pid: result.record.pid })));
     } else {
@@ -195,7 +195,7 @@ async function nodeStatusCommand(
   const health = await probeHttpHealth(
     fakeRecord(listen),
     1500,
-    context.config.serve?.tls !== undefined,
+    context.config.node?.tls !== undefined,
   );
   const running = alive && health !== undefined;
 
@@ -368,7 +368,7 @@ async function nodeReloadCommand(
       record,
       token: reloadToken,
       ...(command.scopes !== undefined ? { scopes: command.scopes } : {}),
-      tls: context.config.serve?.tls !== undefined,
+      tls: context.config.node?.tls !== undefined,
     });
     if (!result.ok) {
       printErr(ui.err(t('gateway.reloadFailed', { detail: result.error })));

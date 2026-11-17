@@ -24,9 +24,9 @@ paths: [docs/operations/REMOTE.md]
 - **非回环 fail-closed**：非回环访问必须同时具备 **token** 与 **HTTPS/WSS**；缺一即失败，不回退匿名或明文。
 - **无逃生口**：不提供 `--insecure` / `-k` / “忽略证书错误”；失败信息区分 token 401、Origin 403、TLS 校验失败与网络错误。
 - **token 不进 URL**：WS 首帧 `{ kind: 'auth', token, since? }`；HTTP 用 `Authorization: Bearer`。token 不写入日志。
-- **Origin allowlist**：`serve.allowed_origins` 只接受显式 `http(s)://host[:port]`，拒绝 `*`、path、query；HTTP 与 WS upgrade 共用同一 allowlist。命中时返回 CORS 头并带 `Vary: Origin`，永不使用 `Access-Control-Allow-Credentials`。
+- **Origin allowlist**：`node.allowed_origins` 只接受显式 `http(s)://host[:port]`，拒绝 `*`、path、query；HTTP 与 WS upgrade 共用同一 allowlist。命中时返回 CORS 头并带 `Vary: Origin`，永不使用 `Access-Control-Allow-Credentials`。
 - **浏览器凭据**：Web token 只放 `sessionStorage`（独立前端可用 `#token=` 首次导入）；不写 `localStorage`、不进 query。
-- **per-node token**：Platform Gateway 的 `gateway.token` / `gateway.token_env` 与 Node API 的 `serve.token(s)` / `serve.token_env` 分开，互不回退；远端 `--connect` 使用节点 token。`serve.tokens` 条目只含 `role`，不带 tenant。
+- **per-node token**：Platform Gateway 的 `gateway.token` / `gateway.token_env` 与 Node API 的 `node.token(s)` / `node.token_env` 分开，互不回退；远端 `--connect` 使用节点 token。`node.tokens` 条目只含 `role`，不带 tenant。
 - **单公司**：一个 node 恰好一份执行面、一条事件流；数据直接位于 `<dataDir>/**`（`sessions` / `runs` / `events` / `agents` 等），没有 `tenants/<id>` 层；principal 由 token 决定（`role: read | write | admin`），没有跨 tenant 读取或 `forbidden` 语义。
 - **信任边界**：`node_id` 以 token + TLS 边界信任，没有逐事件签名；不要通过不可信第三方转发同 Origin 的节点事件。
 - **不在 0.6 范围**：mTLS / 客户端证书、HTTP/2、ACME / 自动续期、反向代理信任头、mDNS / 服务网格 / 节点自动发现。
@@ -50,7 +50,7 @@ paths: [docs/operations/REMOTE.md]
 非回环 Node API 必须提供 PEM 格式的 cert/key，且成对、文件非空：
 
 ```yaml
-serve:
+node:
   hostname: 0.0.0.0
   port: 8644
   allow_remote: true
@@ -88,9 +88,9 @@ connect:
 
 ### 3.1 node-b：暴露 Node API
 
-> **`serve:` 已改名为 `node:`（0.56）。** 旧键仍然生效（同一份字段、同一套行为），
-> 但启动会打一条弃用警告、`vessel doctor` 也会提示；**0.57 移除 `serve:`**。
-> 两段同时出现时 **`node:` 赢**，被覆盖的 `serve:` 键会被逐项警告。迁移就是改名：
+> **`serve:` 在 0.55 已移除：写 `serve:` = 启动失败（exit 2），整块一个键都不生效。**
+> 报错文案逐键给出 `serve.<x> -> node.<x>` 的改名提示，用户复制改名即可；
+> `vessel doctor` 的 `config` 一行显示同一条错误（`fail`）。改名前后字段完全一致：
 
 ```diff
 -serve:
@@ -100,14 +100,15 @@ connect:
 ```
 
 理由：`vessel serve` 这个命令早就不存在了（0.49 起只有 `vessel node start`），
-`serve:` 这个名字会让人以为它在配一个不存在的东西。
+`serve:` 这个名字会让人以为它在配一个不存在的东西；留成「警告 + 照旧生效」等于让同一份
+字段有两个名字，两条读法迟早会漂开。
 
 ```yaml
 # ~/.vessel/config.yaml（node-b）
 host:
   node_id: node-b
 
-node:            # 等价于旧键 serve:
+node:
   hostname: 0.0.0.0
   port: 8644
   allow_remote: true
@@ -217,7 +218,7 @@ vessel node stop
 - `vessel node start --config <path>`：用独立配置启动 standalone Node API；`gateway nodes add` 把本地 node 写入 `nodes.json`（0600 原子写，不含 token），`auto_start` 节点由 gateway 拉起。
 - 运行态以 `<dataDir>/gateway.pid`（node，G1 兼容名）与 `<dataDir>/platform.pid`（平台）为准，均 `0600`；daemon 日志在 `<dataDir>/logs/`。`status --json` 只输出 JSON。
 - 修改 TLS 证书、token、端口或 provider / model 后必须 `restart`；`reload` 会在 `requires_restart` 中列出这些字段，不能把 reload 成功当成新证书 / 新 token 已生效。
-- 跨 Origin 的 `serve.allowed_origins` 是少数可热更新项：改配置后执行 `vessel gateway reload --scope config`（或 `node reload`）即可，无需重启。token 仍在配置解析时读取，热重载不替换已建立的鉴权状态。
+- 跨 Origin 的 `node.allowed_origins` 是少数可热更新项：改配置后执行 `vessel gateway reload --scope config`（或 `node reload`）即可，无需重启。token 仍在配置解析时读取，热重载不替换已建立的鉴权状态。
 - PID 文件与 daemon 日志权限为 `0600`；节点升级用 `vessel update`（npm / bun 全局安装）或 `--check` 仅检查；源码部署只提示 `git pull && bun install`。
 - 常驻与开机自启交给 `install-service`（当前平台的用户级服务）；daemon 自身不做崩溃重启。
 
@@ -277,7 +278,7 @@ npm run build            # 产物在 apps/web/dist
 
 把 `dist/` 部署到任意静态站点（例如 `https://console.example.com`），然后：
 
-1. 服务端加入该 Origin：浏览器直连 node 时改 `serve.allowed_origins`；页面由 Platform Gateway 托管时改 `gateway.allowed_origins`（或启动时重复 `--allowed-origin https://console.example.com`）。
+1. 服务端加入该 Origin：浏览器直连 node 时改 `node.allowed_origins`；页面由 Platform Gateway 托管时改 `gateway.allowed_origins`（或启动时重复 `--allowed-origin https://console.example.com`）。
 2. 浏览器信任 node 证书（自签 CA 装入系统 / 浏览器信任库）。
 3. 打开页面后设置 node 地址：
    - 运行时优先级：`localStorage['vessel.gateway-url']` > `VITE_GATEWAY_URL` > 同源；
@@ -298,8 +299,8 @@ Platform Gateway 同源托管 `dist` 时不需要 `allowed_origins`，CSP 由平
 
 | 现象 | 可能原因 | 处理 |
 |---|---|---|
-| HTTP 401 `unauthorized` | token 缺失 / 错误 / 未映射 | 检查 `--connect-token`、`VESSEL_CONNECT_TOKEN`、`connect.token_env`、`serve.tokens` |
-| HTTP 403 `forbidden` | Origin 不在 allowlist，或 token role 不足 | 加 `serve.allowed_origins`；确认 token 的 `role` |
+| HTTP 401 `unauthorized` | token 缺失 / 错误 / 未映射 | 检查 `--connect-token`、`VESSEL_CONNECT_TOKEN`、`connect.token_env`、`node.tokens` |
+| HTTP 403 `forbidden` | Origin 不在 allowlist，或 token role 不足 | 加 `node.allowed_origins`；确认 token 的 `role` |
 | WS 关闭 4401 | 首帧 `auth` 缺失或超过 5s | 确认客户端版本；token 不能放 URL |
 | `data_locked` | 本地写意图命令（`migrate --apply` / `trace prune` / `eval`）遇到同一 dataDir 的另一写者 | 停掉占用进程；不要删除活跃锁；或改用 `--connect` |
 | `non_root_layout` | 存在非空 `<dataDir>/tenants/**` 或 `.t2-migrating-*` | 先归档旧数据，再在根布局启动；命令不迁移、不删除 |

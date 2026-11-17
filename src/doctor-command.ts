@@ -340,19 +340,19 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
         : `${mcpEnabled.length} enabled / ${mcpEntries.length} configured (connect not tested)`,
   });
 
-  // serve 端口（仅在显式配置时检查）
-  if (config.serve?.port !== undefined && config.serve.port !== 0) {
-    const host = config.serve.hostname ?? '127.0.0.1';
-    const status = await checkPort(host, config.serve.port);
+  // node 端口（仅在显式配置时检查）
+  if (config.node?.port !== undefined && config.node.port !== 0) {
+    const host = config.node.hostname ?? '127.0.0.1';
+    const status = await checkPort(host, config.node.port);
     checks.push({
       name: 'serve_port',
       status: status === 'available' ? 'ok' : 'warn',
       message:
         status === 'available'
-          ? `${host}:${config.serve.port} available`
+          ? `${host}:${config.node.port} available`
           : status === 'in_use'
-            ? `${host}:${config.serve.port} already in use`
-            : `${host}:${config.serve.port} check failed`,
+            ? `${host}:${config.node.port} already in use`
+            : `${host}:${config.node.port} check failed`,
     });
   }
 
@@ -366,8 +366,8 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
   checks.push(tokensCheck);
 
   const exposure: string[] = [];
-  const serveHost = config.serve?.hostname ?? '127.0.0.1';
-  const serveTokens = Object.keys(config.serve?.tokens ?? {}).length > 0;
+  const serveHost = config.node?.hostname ?? '127.0.0.1';
+  const serveTokens = Object.keys(config.node?.tokens ?? {}).length > 0;
   const explicitNodeToken = resolveGatewayToken(config, env) !== undefined || serveTokens;
   if (
     isLoopbackHostname(serveHost) &&
@@ -375,7 +375,7 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     resolveServeProxySecret(config, env) === undefined
   ) {
     const where =
-      config.serve?.port !== undefined ? `${serveHost}:${String(config.serve.port)}` : serveHost;
+      config.node?.port !== undefined ? `${serveHost}:${String(config.node.port)}` : serveHost;
     exposure.push(
       `node ${where} 没有显式 token（已自动派生，见 tokens）：同机反代下匿名请求仍会被当成 admin；` +
         '要关掉这条匿名通道，配 node.token_env（或 node.proxy_secret_env）后重启',
