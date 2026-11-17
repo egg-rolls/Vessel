@@ -198,8 +198,8 @@ export type TranscriptItemRenderer = (item: TranscriptItem) => ReactNode;
  * - **只播「追加」不播「回填」**：`renderItem` 渲染的事件流项由调用方决定要不要挂入场类
  *   （`.msg-enter` / `.motion-appear`）；会话页在挂载 / F5 回放那一批上不播，之后的追加才播；
  * - **历史消息不播**：历史加载是「回填 / 换页」不是「追加」，而且 live 落盘后会把位置
- *   让给历史消息（`run:<runId>:input` 由 `msg:<absIndex>` 接管，key 不同 = DOM 节点
- *   重建），两边都播就是同一段正文淡入两次。
+ *   让给历史消息（`run:<runId>:input` 由 `msg:<runId>:<role>:<ts>` 接管，key 不同 =
+ *   DOM 节点重建），两边都播就是同一段正文淡入两次。
  */
 export function Transcript({
   items,
