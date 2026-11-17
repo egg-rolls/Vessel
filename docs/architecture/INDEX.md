@@ -46,6 +46,7 @@ paths: [docs/architecture/**]
 | [gateway-capabilities](gateway-capabilities.md) | 四组能力矩阵（A 生命周期 / B 对外暴露 / C 连接发现 / D 运维）、现状三值、可判定验收判据、不做时的替代方案 | gateway capability, lifecycle, tls, ticket, rate limit, audit, metrics, health probe, circuit breaker, adopt, version gate, registry, routing | `packages/serve/src/platform/**`, `src/gateway-command.ts`, `src/gateway/**` |
 | [message-invariants](message-invariants.md)（kind: current） | **两条产品核心不变量**：① 可见性对等（UI 必须含 agent 看到的全部消息）② 请求 messages append-only（改写中间内容会打掉 prefix 缓存）；实现推论与门禁方向 | message, append-only, prefix, prompt cache, pii, mask, handle, visibility, symmetry, transcript, request | `docs/architecture/message-invariants.md` |
 | [0.34-target](0.34-target.md)（kind: target） | 目标/迁移态：五词、附属词、分层、10 边界、C1–C4、10 裁决、4 连线、3 铁律、Stage 0–4、5 图 | target, migration, layering, agent, session, runtime, loop, run, control plane, execution unit, lease, federation | `docs/architecture/**`, `packages/core/**`, `packages/agent/**`, `src/**` |
+| [0.57-tool-host](0.57-tool-host.md)（kind: target） | 目标/迁移态：工具执行与 runtime 解耦（registry 留 core、只搬 handler）；四动机逐条核查（热更新疼点窄/崩溃隔离买保险/并发配额今天缺失/跨机不做）、A 形只能有限次重载（实测 1.3 MB/次不回收）、B 形协议（管道 + 长度前缀、取消/超时/有界/崩溃语义）、两侧路径校验与出口闸、`VESSEL_TOOL_HOST` 混合态、6 条尖刺读数 + 6 条待测、10 条风险与「何时不值得做」的判据 | tool host, sidecar, 工具解耦, 热重载, 热更新, 崩溃隔离, ipc, 消息队列, 配额, 背压, tool.call.request, VESSEL_TOOL_HOST, 混合态 | `packages/core/src/runtime/**`, `src/hot-apply-appliers.ts`, `plugins/tools/**` |
 | [0.55-gateway-proxies-node](0.55-gateway-proxies-node.md)（kind: target） | 目标/迁移态：WebUI/CLI 只连 gateway，由平台代理 node 的 HTTP + WS；`platform.nodes.credentials` 退化为 CLI 专用；延迟预算、方法白名单、WS 背压/半开/心跳与 `gateway.ws.closed` 唯一口径、`node_id` 缺省规则、7 条风险 | gateway proxy, node 代理, 直连, platform.nodes.credentials, node token, ws, 背压, 半开, 心跳, csp, 延迟预算, 多节点, 鉴权, 白名单 | `packages/serve/src/platform/**`, `src/gateway-command.ts`, `src/gateway/**`, `apps/web/src/gateway/**` |
 
 ## 主题入口
@@ -56,3 +57,4 @@ paths: [docs/architecture/**]
 - **拓扑 / 公司 / 插件归属 / Hub 边界** → [topology](topology.md) · [plugins](plugins.md)
 - **gateway 职责 / 票据 / 单点预算** → [gateway-capabilities](gateway-capabilities.md) · [ADR-103](../adr/ADR-103-gateway-responsibilities.md) · [gateway-plan](../dev/research/gateway-plan.md)
 - **node 代理 / 不再直连 node / node token 不出平台** → [0.55-gateway-proxies-node](0.55-gateway-proxies-node.md) · [topology](topology.md)
+- **工具热更新 / 崩溃隔离 / 工具并发配额 / 工具进程拆不拆** → [0.57-tool-host](0.57-tool-host.md) · [tools](tools.md) · [plugins](plugins.md)
