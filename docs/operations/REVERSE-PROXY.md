@@ -405,7 +405,11 @@ gateway:
   port: 8642
   proxy_secret_env: VESSEL_PROXY_SECRET      # 反代密钥的变量名
 auth:
-  public_origin: https://egg-rolls.top       # redirect_uri 的唯一来源（无尾斜杠）
+  # 0.60：来源白名单可以并列（线上域名 + 回环）。
+  # 只想让公网域名登录就只写这一条；想让本机调试也能登就再加 http://127.0.0.1:8642。
+  public_origins:
+    - https://egg-rolls.top
+  # public_origin: https://egg-rolls.top   # 等价的老写法（单来源），两者同时出现会合并去重
   backends:
     - kind: github_oauth
       client_id: <OAuth App client id>
@@ -441,7 +445,8 @@ server {
 }
 ```
 
-- GitHub OAuth App 的 **Authorization callback URL** 必须是 `https://egg-rolls.top/auth/github/callback`（逐字节，无尾斜杠）——它只能由 `auth.public_origin` 拼出来，代码不会从请求头推导。
+- GitHub OAuth App 的 **Authorization callback URL** 必须是 `https://egg-rolls.top/auth/github/callback`（逐字节，无尾斜杠）——它只能由 `auth.public_origins` 里的某个来源拼出来，代码不会从请求头推导。
+- **多个来源时（`auth.public_origins` 并列，例如线上域名 + `http://127.0.0.1:8642`）**：登录页走哪个域名由**受信边缘**决定 —— 用户用哪个域名访问，就用哪个来源拼 `redirect_uri`（回环直连 ⇒ 回环，经反代 ⇒ 反代声明的域名）；`state` 里绑定本次来源，回调落到另一个来源会被直接拒绝。所以每个域名都要在 GitHub OAuth App 里登记回调地址。
 - 「伪造 Host 但没带反代密钥」= 403；`X-Forwarded-Proto` 只有在密钥成立时才被采信，所以 https 页面拿到的是 `wss://`。
 - 静态资源与 `/auth/*`、`/login` 在鉴权闸之前：即使配了 `gateway.token`，浏览器也能打开登录页；`/platform/rpc` 仍然要 Bearer token 或会话 cookie。
 - 只想临时验证：`curl -H 'Host: egg-rolls.top' -H 'X-Forwarded-Proto: https' -H "X-Vessel-Proxy-Secret: <值>" http://127.0.0.1:8642/` 应 200 且 CSP 里是 `wss://egg-rolls.top`；去掉密钥头应 403。

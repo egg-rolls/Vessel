@@ -333,12 +333,13 @@ export function buildContentSecurityPolicy(
  *
  * 公网部署（反代保留原始 Host）时，监听地址仍是 `127.0.0.1`，`Host: egg-rolls.top`
  * 与它不相等 —— 旧实现直接 403，登录页都打不开。这里改为**显式允许列表**：
- * `publicHosts`（来自 `auth.publicOrigin`）+ `additionalHosts`（额外同意的域名）。
+ * `publicHosts`（来自 `auth.public_origins` / `auth.public_origin`，每个来源的 host）
+ * + `additionalHosts`（额外同意的域名）。
  */
 export interface HostPolicy {
   /** 平台/node 监听地址（旧语义：与它完全相同的 host 放行）。 */
   listenHost: string;
-  /** 公网 origin 派生的 host（含端口，小写）；如 `egg-rolls.top`。 */
+  /** 公网来源派生的 host（含端口，小写）；如 `egg-rolls.top`、`127.0.0.1:8642`。 */
   publicHosts?: string[];
   /** 额外允许的 host（含端口或裸域名）。 */
   additionalHosts?: string[];

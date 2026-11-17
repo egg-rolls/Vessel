@@ -2638,6 +2638,23 @@ export async function runPlatformGatewayForeground(
     // 不会拦住 gateway 启动 —— 这是「破坏性变更必须自带自愈」的那条。
     const resolvedAuth = resolveAuthSettings({ auth: config.auth, dataDir });
     for (const warning of resolvedAuth.warnings) printErr(ui.warn(`auth: ${warning}`));
+    // 0.60：来源白名单可能有多条（线上域名 + 回环并列）。启动日志必须说清「几个来源在用」，
+    // 否则登录跳错域名时没人能从日志判断这是配置还是判定问题。
+    // 只在真的用了 `public_origins`（或合并后 >1）时打，单来源老配置的输出逐字不变。
+    if (
+      resolvedAuth.publicOrigins.length > 1 ||
+      (config.auth?.publicOrigins !== undefined && resolvedAuth.publicOrigins.length > 0)
+    ) {
+      printErr(
+        ui.info(
+          'auth: 使用了 ' +
+            String(resolvedAuth.publicOrigins.length) +
+            ' 个公网来源（' +
+            resolvedAuth.publicOrigins.join('、') +
+            '）—— 登录走哪个由受信边缘决定',
+        ),
+      );
+    }
 
     try {
       platformGateway = startPlatformGateway({
@@ -2680,6 +2697,7 @@ export async function runPlatformGatewayForeground(
         version,
         auth: {
           publicOrigin: resolvedAuth.publicOrigin,
+          publicOrigins: resolvedAuth.publicOrigins,
           allowedHosts: resolvedAuth.allowedHosts,
           ...(resolvedAuth.trustedProxies !== undefined
             ? { trustedProxies: resolvedAuth.trustedProxies }
