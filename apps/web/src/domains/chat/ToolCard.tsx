@@ -5,11 +5,19 @@ import type { ProjectionSummary } from '../../gateway/types';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { Verbosity } from '../../state/visibility';
+import { useAgentNames } from './agent-name-context';
 import { PayloadSection } from './payload-section';
 import { projectedOriginalText, showsOutputSection } from './projection';
 import { ProjectionBadge, ProjectionPanes } from './projection-card';
 import { StreamCard } from './StreamCard';
-import { type DiffLine, editDiffOf, type ToolCardView, toolSummary, valueText } from './tool-cards';
+import {
+  DEFAULT_SUMMARY_LENGTH,
+  type DiffLine,
+  editDiffOf,
+  type ToolCardView,
+  toolSummary,
+  valueText,
+} from './tool-cards';
 import { useToolDescription } from './tool-catalog';
 
 const STATUS_GLYPH: Record<ToolCardView['status'], string> = {
@@ -98,7 +106,9 @@ export function ToolCard({
   projectionSummary?: ProjectionSummary;
 }) {
   const description = useToolDescription(card.name);
-  const summary = toolSummary(card.name, card.args);
+  // 摘要里的内部 id 换成人能认的名字（名字表由 ChatView 注入，没有就退短 id）。
+  const agentNames = useAgentNames();
+  const summary = toolSummary(card.name, card.args, DEFAULT_SUMMARY_LENGTH, agentNames);
   const diff = card.name === 'edit' ? editDiffOf(card.args) : null;
   const errorText = card.error !== undefined ? valueText(card.error) : '';
   const meta = formatErrorMeta(card.errorMeta);
