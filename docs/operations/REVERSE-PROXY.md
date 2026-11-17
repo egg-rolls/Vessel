@@ -392,4 +392,59 @@ curl -s http://127.0.0.1:8642/health   # {"status":"ok","role":"platform",...}
    重新下发（`platform.nodes.credentials` 拿到的就是新值），旧值立即被拒。
 6. **轮换之后自检**：`vessel doctor` + 打开页面确认能连；`curl` 旧 token 应当 401。
 
+## 10. 0.56：公网域名 + GitHub 登录（单用户）
+
+域名访问（如 `https://egg-rolls.top`）不再是「回环才行」的特例：平台仍绑 `127.0.0.1`，
+由反代保留原始 Host，并由反代侧的密钥头证明「这个请求确实来自反代」。
+
+**Vessel 侧**（`vessel.yaml`，不含密钥）：
+
+```yaml
+gateway:
+  hostname: 127.0.0.1
+  port: 8642
+  proxy_secret_env: VESSEL_PROXY_SECRET      # 反代密钥的变量名
+auth:
+  public_origin: https://egg-rolls.top       # redirect_uri 的唯一来源（无尾斜杠）
+  backends:
+    - kind: github_oauth
+      client_id: <OAuth App client id>
+      client_secret_env: VESSEL_GITHUB_OAUTH_SECRET
+      allow_user_ids: [174765587]
+```
+
+**反代侧**（nginx 片段，平台 + node 两段都要，登录后浏览器直连的是 node）：
+
+```nginx
+server {
+  listen 443 ssl http2;
+  server_name egg-rolls.top;
+  # 1) 必须保留原始 Host；2) 协议只有反代知道，必须显式告知
+  location / {
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-Host  $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    # 3) 反代密钥：没有它，平台不把回环 peer 当受信来源
+    proxy_set_header X-Vessel-Proxy-Secret <VESSEL_PROXY_SECRET 的值>;
+    proxy_pass http://127.0.0.1:8642;
+  }
+  # node 的 /v1 与 /ws（WebSocket 必须带 Upgrade 头），否则登录后仍然连不上 node
+  location /v1/ { proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_set_header X-Vessel-Proxy-Secret <同样的值>; proxy_pass http://127.0.0.1:<node 端口>; }
+  location /ws    { proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade;
+                    proxy_set_header Connection "upgrade"; proxy_set_header Host $host;
+                    proxy_set_header X-Forwarded-Proto $scheme;
+                    proxy_set_header X-Vessel-Proxy-Secret <同样的值>;
+                    proxy_pass http://127.0.0.1:<node 端口>; }
+  location /health { proxy_pass http://127.0.0.1:8642; }
+}
+```
+
+- GitHub OAuth App 的 **Authorization callback URL** 必须是 `https://egg-rolls.top/auth/github/callback`（逐字节，无尾斜杠）——它只能由 `auth.public_origin` 拼出来，代码不会从请求头推导。
+- 「伪造 Host 但没带反代密钥」= 403；`X-Forwarded-Proto` 只有在密钥成立时才被采信，所以 https 页面拿到的是 `wss://`。
+- 静态资源与 `/auth/*`、`/login` 在鉴权闸之前：即使配了 `gateway.token`，浏览器也能打开登录页；`/platform/rpc` 仍然要 Bearer token 或会话 cookie。
+- 只想临时验证：`curl -H 'Host: egg-rolls.top' -H 'X-Forwarded-Proto: https' -H "X-Vessel-Proxy-Secret: <值>" http://127.0.0.1:8642/` 应 200 且 CSP 里是 `wss://egg-rolls.top`；去掉密钥头应 403。
+- 回滚：删掉 `auth` 块 + 反代的 `X-Vessel-Proxy-Secret`/`X-Forwarded-*`，行为立即回到 0.55（回环可用），不需要改代码。
+
 

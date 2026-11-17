@@ -409,8 +409,35 @@ lease:
 - **手动编辑不在锁内**：直接用编辑器改 `config.yaml` 不参与该协议，可能与进程内的读改写竞争；协议只能约束经由上述入口的写入。
 - 不新增配置键、CLI 命令、RPC 或事件；锁仅依赖本地文件系统语义，不做跨主机锁。
 
-## 3. 密钥与 `_env`
+### 2.18 `auth`（0.56：WebUI 用 GitHub 登录，单用户）
 
+```yaml
+auth:
+  public_origin: https://egg-rolls.top        # redirect_uri 的唯一来源（无尾斜杠）
+  backends:
+    - kind: github_oauth
+      client_id: <GitHub OAuth App 的 client id>
+      client_secret_env: VESSEL_GITHUB_OAUTH_SECRET   # 只写变量名，不写值
+      allow_user_ids: [174765587]                    # 数值 GitHub user id（不用 email）
+  allowed_hosts: []          # 额外放行的反代域名；一般留空
+  trusted_proxies: []        # 受信代理地址；缺省只信回环 socket
+  session:
+    idle_minutes: 30         # 空闲超时（滑动）
+    absolute_hours: 12       # 绝对超时
+    persist: true            # <dataDir>/auth/sessions.json（只存 sha256）
+```
+
+- **不配 `auth.backends`（或 `enabled: false`）= 功能不存在**：回环照旧可用，行为与 0.55 逐字一致，前端不出现登录入口（不锁死、不出现坏按钮）。
+- `public_origin` 是 `redirect_uri` 的**唯一**来源：`<public_origin>/auth/github/callback`，必须与 GitHub OAuth App 登记的地址逐字节一致。缺失或非法时登录后端被忽略并告警，gateway 照常启动。
+- `client_secret` 只从 `client_secret_env` 指向的**环境变量**读；不要写进配置（validator 直接报错并给修复提示）。OAuth access token 用完即弃：不落盘、不进日志、不进错误文案。
+- 白名单只认 `allow_user_ids` 里的**数值** user id；email 会变，这里不作为身份。
+- 反代的 `Host` / `X-Forwarded-Host` / `X-Forwarded-Proto` 只在「请求来自 `trusted_proxies`（缺省回环）**且**带 `gateway.proxy_secret_env` 指向的密钥头」时才被采信；否则伪造 Host 一律 403，`public_origin` 也不能当通行证。
+- 会话：cookie 名 `__Host-vessel_sid`（https；http 退化为 `vessel_sid`），属性 `HttpOnly; SameSite=Strict; Secure`；登录成功即轮换 id（防会话固定），空闲/绝对双超时，登出立即撤销。落盘只写 `sha256(sid)` 与 subject，重启后会话仍有效但需重新取 CSRF。
+- CSRF：同步令牌。`GET /auth/status` 返回 `csrfToken`（`no-store`），所有变更类请求带 `X-Vessel-CSRF`；缺失/不匹配即 403。
+- 端点：`GET /auth/status`、`GET /auth/csrf`、`POST /auth/logout`、`GET /auth/github/start`、`GET /auth/github/callback`、`GET /login`（SPA 登录页）。静态资源与这些端点在鉴权闸**之前**，所以配了 `gateway.token` 也能打开登录页；`POST /platform/rpc` 仍然需要 Bearer token 或会话。
+- 公网部署还需要：反代保留原始 Host、注入 `X-Forwarded-Proto` 与反代密钥头；浏览器直连 node 的 `/v1`、`/ws` 也要转发到 node 端口（见 `REVERSE-PROXY.md`），否则登录后仍然连不上 node。
+
+## 3. 密钥与 `_env`
 所有接受密钥的字段支持 `<field>_env`：
 
 - `api_key_env`
