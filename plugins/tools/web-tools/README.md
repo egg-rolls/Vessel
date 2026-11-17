@@ -61,7 +61,7 @@ provider 与 transport 写死（`DEFAULT_SEARCH_PROVIDER_ID` + `createDeepSeekHt
 | `deepseek` | `DEEPSEEK_API_KEY` | 上游 `summary` | `need_content` | `site:` / `lang:` / `after:` / `before:` 渲染进 query |
 | `tavily` | `VESSEL_TAVILY_API_KEY` | 上游 `content`（它自己的摘要口径） | `include_raw_content` | 只支持 `site`（走 `include_domains`）；**`lang` / `after` / `before` 没有对应参数，不做过滤**；结果上限 20 |
 | `serper` | `VESSEL_SERPER_API_KEY` | 上游 `snippet`（Google `organic[]` 里**没有** `summary` 字段） | **没有正文**（`need_content` 无效，要全文用 `web_fetch`） | `site:` 拼进 `q`；`lang` → `hl`/`gl`；`after`/`before` → `tbs` |
-| `bocha` | `BOCHAAI_SEARCH_API_KEY` | 上游 `snippet`；长摘要 `summary` 归到正文 | `summary: true` 才回的**长摘要**（不是整页正文） | **声明式预设**：`site`/`lang` 不发送（body 里没有对应占位符）；`after`+`before` 都给才映射成 `freshness` 区间，只给一端则整条键省略；上限 50 |
+| `bocha` | `BOCHAAI_SEARCH_API_KEY` | 上游 `snippet`；长摘要 `summary` 归到正文 | `summary: true` 才回的**长摘要**（不是整页正文） | **声明式预设**：`site`/`lang` 无法表达（不发 + `filters_ignored`）；`after`+`before` 都给才映射成 `freshness` 区间，单边同样 `filters_ignored`；上限 50 |
 
 `authority` 只有 `deepseek` 有；Tavily 的 `score` 是相关性、Serper 不给、Bocha 给的是 `siteName`
 （网站名不是权威度）——**都不冒充**，条目里就是「(未提供)」。
@@ -151,24 +151,32 @@ plugins:
 5. **可见性同等**：在 `--tools` 的可用性预检里与内置后端一视同仁（没 key 一样让
    `web_search` 不出现）。
 
-### 过滤条件：**表达不了就发请求前拒掉**（映射规则 + 升级成错误）
+### 过滤条件：能表达就表达；表达不了 **照常返回 + 明说**
 
 底层是一条映射规则（**不需要表达式语言**）：占位符解析为空 ⇒ 整条键省略。
-但当「省略」意味着**用户要的过滤被静默丢掉**时必须升级成错误——拿到一份「看起来过滤过、
-其实全网」的结果，比拿一条报错危险得多。所以：
+但「省了却不吭声」等于**静默变宽**（用户以为过滤了、其实全网），而硬报错又太脆
+（模型得先知道这家不支持才能重试，多一轮往返）。所以选第三条路：
+
+**照常返回，并在信封里加一行 `filters_ignored: site, lang`**（只在真被忽略时出现；
+没有就不出现）。这是渲染层的一行事实，不是映射逻辑。
 
 | 情况 | 行为 |
 | --- | --- |
-| body 里有 `{{site}}`，用户传了 `site` | 正常映射 |
-| body 里**没有** `{{site}}`，用户传了 `site` | `provider_bad_request`，**不发请求** |
-| 同上（`lang`） | 同上 |
-| 有日期占位符，`after`+`before` 都给 | `{{freshness}}` = `a..b` |
-| 有 `{{freshness}}`，只给一端 | `provider_bad_request`（上游没有单边写法） |
-| 完全没有日期占位符，用户给了 `after`/`before` | `provider_bad_request` |
-| 用户没给该项 | 占位符解析为空 ⇒ 键省略（正常路径，不报错） |
+| body 有 `{{site}}` 且用户传了 `site` | 正常映射 |
+| body **没有** `{{site}}` 且用户传了 `site` | 发请求（不带该项）+ `filters_ignored: site` |
+| 有 `{{freshness}}`，after+before 都给 | `a..b` |
+| 有 `{{freshness}}`，只给一端 | 键省略 + `filters_ignored: after/before 单边` |
+| 完全无日期占位符但给了 after/before | + `filters_ignored: after/before` |
+| 用户没给该项 | 无此行（正常路径） |
 
-每条错误都带**下一步**（去掉参数 / 换后端 / 在 spec 里加占位符），否则模型会反复重试同一个调用。
-Bocha 就是这套规则的实例：它的 body 里只有 `{{freshness}}`，所以传 `site`/`lang` 会被拒。
+各后端支持什么（也写进工具描述，模型每轮都看得见）：
+
+| 后端 | site | lang | after/before |
+| --- | --- | --- | --- |
+| `deepseek` | ✅ 渲染进 query | ✅ | ✅ 渲染进 query |
+| `serper` | ✅ 拼进 `q` | ✅ `hl`/`gl` | ✅ `tbs` |
+| `tavily` | ✅ `include_domains` | ❌ → `filters_ignored` | ❌ → `filters_ignored` |
+| `bocha`（声明式预设） | ❌ → `filters_ignored` | ❌ → `filters_ignored` | 仅完整区间，单边 → `filters_ignored` |
 
 ### `field_map` 只收 `SearchHit` **真有**的字段
 

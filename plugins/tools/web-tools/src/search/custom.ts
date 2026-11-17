@@ -428,6 +428,21 @@ export function createCustomProvider(
     // 声明式后端不替上游「翻译语法」：查询串原样，过滤条件走 body/headers
     renderQuery: (query: SearchQuery): string => query.query,
 
+    /**
+     * 哪些过滤**这套配置表达不了**（用户给了才算）：共用的渲染层会把它写进
+     * 信封的 `filters_ignored:`。省略仍然发生（映射规则不变），但不再静默。
+     */
+    unsupportedFilters(query: SearchQuery): string[] {
+      const ignored: string[] = [];
+      if (query.site !== undefined && !used.has('site')) ignored.push('site');
+      if (query.lang !== undefined && !used.has('lang')) ignored.push('lang');
+      if (query.after !== undefined || query.before !== undefined) {
+        if (!supportsDates) ignored.push('after/before');
+        else if (contextFor(query).freshness === undefined) ignored.push('after/before 单边');
+      }
+      return ignored;
+    },
+
     createHttp(options: ProviderHttpOptions): ProviderHttp {
       const headers =
         spec.auth.style === 'bearer'
@@ -455,45 +470,11 @@ export function createCustomProvider(
       query: SearchQuery,
       renderedQuery: string,
     ): Promise<ProviderHttpResponse> {
-      // 过滤条件：**能表达就表达，表达不了就在发请求前明确拒**（宁可难看，不许看着对）。
-      //
-      // 底层仍是「占位符解析为空 ⇒ 整条键省略」这条映射规则（不需要表达式语言），
-      // 但省略一旦意味着「用户要的过滤被静默丢掉」，就必须升级成错误：
-      // 用户拿到一份「看起来过滤过、其实全网」的结果，比拿一条报错危险得多。
-      // 每条错误都要写清**下一步怎么做**，否则模型会反复重试同一个调用。
+      // 过滤条件：**能表达就表达；表达不了照常返回，但如实报告**（信封 `filters_ignored:`）。
+      // 纯省略 = 静默变宽（用户以为过滤了、其实全网）；硬报错 = 太脆（模型得多一轮才知道）。
+      // 所以选「照常返回 + 显式披露」；底层仍然是「占位符解析为空 ⇒ 整条键省略」，
+      // 不需要表达式语言——披露是渲染层的一行事实，不是映射逻辑。
       const context = contextFor({ ...query, query: renderedQuery });
-      if (query.site !== undefined && !used.has('site')) {
-        throw new WebFetchError(
-          'provider_bad_request',
-          `后端 ${providerId} 的声明式映射里没有 {{site}}，无法按站点过滤。` +
-            '下一步：去掉 site 参数，或改用支持站点过滤的后端（deepseek / serper），' +
-            '或在 custom_search 的 request.body 里加一个 "{{site}}"（本次没有发出任何请求）',
-        );
-      }
-      if (query.lang !== undefined && !used.has('lang')) {
-        throw new WebFetchError(
-          'provider_bad_request',
-          `后端 ${providerId} 的声明式映射里没有 {{lang}}，无法按语言过滤。` +
-            '下一步：去掉 lang 参数，或改用支持它的后端，或在 request.body 里加 "{{lang}}"（本次没有发出任何请求）',
-        );
-      }
-      if ((query.after !== undefined || query.before !== undefined) && !supportsDates) {
-        throw new WebFetchError(
-          'provider_bad_request',
-          `后端 ${providerId} 的声明式映射里没有任何日期占位符（{{after}}/{{before}}/{{freshness}}），无法按日期过滤。` +
-            '下一步：去掉 after/before，或改用支持日期过滤的后端（本次没有发出任何请求）',
-        );
-      }
-      if (
-        (query.after !== undefined || query.before !== undefined) &&
-        context.freshness === undefined
-      ) {
-        throw new WebFetchError(
-          'provider_bad_request',
-          `后端 ${providerId} 的 {{freshness}} 只接受完整的 after+before 区间（上游没有「某天之后」的单边写法）。` +
-            '下一步：同时给 after 和 before，或两个都不给（本次没有发出任何请求）',
-        );
-      }
 
       const resolvedBody = substitute(spec.request.body, context);
       const resolvedHeaders = substitute(spec.request.headers, context);
