@@ -543,6 +543,28 @@ auth:
 - 端点：`GET /auth/status`、`GET /auth/csrf`、`POST /auth/logout`、`GET /auth/github/start`、`GET /auth/github/callback`、`GET /login`（SPA 登录页）。静态资源与这些端点在鉴权闸**之前**，所以配了 `gateway.token` 也能打开登录页；`POST /platform/rpc` 仍然需要 Bearer token 或会话。
 - 公网部署还需要：反代保留原始 Host、注入 `X-Forwarded-Proto` 与反代密钥头；浏览器直连 node 的 `/v1`、`/ws` 也要转发到 node 端口（见 `REVERSE-PROXY.md`），否则登录后仍然连不上 node。
 
+### 2.19 `gateway.supervise`（0.58：父进程侧存活看门狗）
+
+```yaml
+gateway:
+  supervise:
+    enabled: true            # 缺省开；false = 关掉（外部 systemd/k8s 已在做同一件事）
+    probe_interval_ms: 2000  # 探活周期
+    probe_timeout_ms: 2000   # 单次探活超时（超时算这一次失败）
+    failure_threshold: 3     # 连续失败多少次判僵死（成功一次即清零）
+    max_restarts_per_hour: 5 # 每小时重启上限；超了停手并报错
+    backoff_start_ms: 1000   # 重启后的退避（每次翻倍）
+    backoff_max_ms: 60000    # 退避上限
+    recovery_probes: 5       # 连续成功多少次退出退避
+```
+
+- **为什么在父进程**：`runs.start` 之后出现的整段僵死（`docs/dev/research/run-start-stall.md`）会让子进程**进程内所有定时器一起停摆**、`/health` 超时、日志无新行 —— 这个状态下进程内部没有任何自救手段，只能由父进程（gateway）强杀重起。
+- **判定纪律（宁可漏杀，不许误杀）**：单次探活 2s 超时；**连续** 3 次失败才判定（≈6–8s 窗口，跨过一次 GC / 慢磁盘抖动），成功一次立刻清零。处置 = 强制终止（POSIX `SIGKILL`）→ 重新 spawn → 记一条 `event=supervisor.stall_restart` 日志（带 `consecutive_failures` / `last_ok_ms` / `probe_timeout_ms`）。
+- **防抖与上界**：重启后进入退避 1s→2s→4s…（上限 60s），连续 5 次探活成功才退出退避；一小时内重启超过 5 次就**停手**并打一行 `event=supervisor.stall_restart_gave_up`（不无限重启、不刷日志），等人工 `gateway restart`。
+- **不误伤**：`gateway stop` / `gateway restart` 的关停期间看门狗先停（不探活、不重启）；子进程已退出、节点不是 `ready`/`adopted`（含 `external`）时也不动 —— 正常退出路径不变。
+- **可观测**：`gateway status` 显示每个节点的最近一次探活成功/失败时刻与重启计数；数据源是 `<dataDir>/platform-watchdog[-<instance>].json`（0600、不含 token）。启动输出也会打印一行 `supervise: 开/关 …`。
+- **关掉**：`enabled: false`，或环境变量 `VESSEL_GATEWAY_SUPERVISE=0`（显式覆盖配置文件）。关掉后不探活、不重启，`gateway status` 仍会显示「关」，避免下一个人误以为看门狗坏了。
+
 ## 3. 密钥与 `_env`
 所有接受密钥的字段支持 `<field>_env`：
 

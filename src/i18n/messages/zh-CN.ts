@@ -329,6 +329,14 @@ export const zhCN = {
   'gateway.status.degraded': '进程存活但身份未确认（pid {pid}）：{reason}',
   'gateway.status.unknown': '无法确认 gateway 状态，未删除任何文件。',
   'gateway.status.foreignHost': '锁属于其它主机（{host}），未删除任何文件。',
+  // ── 存活看门狗（0.58）──
+  'gateway.status.supervise': '存活看门狗',
+  'gateway.status.superviseOn':
+    '开 · 探活 {probe}ms × {threshold}，≤{max}/小时，退避 {backoff}→{backoffMax}ms',
+  'gateway.status.superviseOff': '关（gateway.supervise.enabled: false）',
+  'gateway.status.superviseNode':
+    '{name}：{phase} · 最近成功 {lastOk} · 最近失败 {lastFail} · 重启 {restarts}（近一小时 {lastHour}）{error}',
+  'gateway.status.superviseError': ' · 错误：{error}',
   'gateway.status.selectHint':
     '发现 {count} 个 gateway 实例；用 --instance、--port 或 --all 选择。',
   'gateway.stop.starting': 'Gateway 实例“{instance}”仍在启动，请稍后重试；未删除任何文件。',

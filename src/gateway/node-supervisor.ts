@@ -34,6 +34,14 @@ import {
   normalizeGatewayInstance,
   readGatewayPidRecord,
 } from './pid';
+import {
+  DEFAULT_STALL_WATCHDOG_CONFIG,
+  NodeWatchdog,
+  type StallWatchdogConfig,
+  type WatchdogEvent,
+  type WatchdogSnapshot,
+  writeWatchdogSnapshot,
+} from './watchdog';
 
 /**
  * 单个 node/hub 的就绪上界（0.55）。
@@ -49,6 +57,8 @@ const POLL_MS = 100;
 const HEALTH_TIMEOUT_MS = 1_000;
 const ADOPT_WAIT_MS = 2_000;
 const MANIFEST_VERSION = 1;
+/** 0.58：看门狗快照的最小落盘间隔（事件/相位变化不受限）。 */
+const WATCHDOG_STATE_WRITE_MIN_MS = 5_000;
 
 /** 已解析的本地 node 运行参数（组合根从 registry + 各 node config 推导）。 */
 export interface LocalNodeSpec {
@@ -157,6 +167,16 @@ export interface NodeSupervisorOptions {
    * 观察者抛错不影响状态机。
    */
   onNodeState?: (info: SupervisedNodeInfo) => void;
+  /**
+   * 0.58：父进程侧存活看门狗的生效配置（由组合根从 `gateway.supervise` 解析）。
+   * 缺省 = 缺省配置（开启）。关掉时**不建**任何看门狗：不探活、不重启。
+   */
+  supervise?: StallWatchdogConfig;
+  /**
+   * 0.58：看门狗事件（探活判定 / 重启 / 放弃 / 恢复）。与 `onNodeState` 分开：
+   * 那是状态机，这是外部看护的动作记录（一行一条结构日志）。抛错不影响判定。
+   */
+  onWatchdogEvent?: (event: WatchdogEvent) => void;
 }
 
 /** Manifest 中的一条：只记录本平台 spawn 的子进程。 */
@@ -276,12 +296,13 @@ interface HealthProbeResult {
 async function fetchHealthJson(
   url: string,
   headers: Record<string, string>,
+  timeoutMs: number = HEALTH_TIMEOUT_MS,
 ): Promise<{ status: number; body?: unknown }> {
   try {
     const response = await fetch(url, {
       method: 'GET',
       headers,
-      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     let body: unknown;
     try {
@@ -293,6 +314,28 @@ async function fetchHealthJson(
   } catch {
     return { status: 0 };
   }
+}
+
+/**
+ * 存活看门狗的探活（0.58）：只问「主线程还在不在跑事件循环」。
+ *
+ * 为什么单打 `/health`：这个僵死形态的特征就是主线程停摆 —— `/health` 超时是
+ * 最灵敏的外部信号（`docs/dev/research/run-start-stall.md` §2）。**不**回退到
+ * `/v1/health`，也**不**解析 body：一次探活只花一份超时预算，超时即失败。
+ * `/health` 在 node 上一律开放（不需要 token），探活因此不依赖任何凭据。
+ */
+export async function probeNodeLiveness(
+  spec: { apiUrl: string; token?: string },
+  timeoutMs: number,
+): Promise<boolean> {
+  const base = spec.apiUrl.endsWith('/') ? spec.apiUrl : `${spec.apiUrl}/`;
+  const headers: Record<string, string> = { accept: 'application/json' };
+  if (spec.token !== undefined && spec.token !== '') {
+    headers.authorization = `Bearer ${spec.token}`;
+  }
+  const response = await fetchHealthJson(`${base}health`, headers, timeoutMs);
+  if (response.status < 200 || response.status >= 300) return false;
+  return isRecord(response.body) ? response.body.status === 'ok' : false;
 }
 
 /** Hub `/health` 预检（回环对端免 token；无 Origin 头，不受 CORS 白名单限制）。 */
@@ -388,6 +431,9 @@ async function waitUntilDead(
 /**
  * 终止一个子进程。POSIX `SIGTERM`；Windows `process.kill` 后
  * `taskkill /PID <pid> /T /F` 兜底（不做按端口/进程名的批量杀）。
+ *
+ * 0.58：`force: true` = 僵死路径 —— 主线程停摆的进程收不到、也不会处理 SIGTERM，
+ * 所以 POSIX 直接 `SIGKILL`（Windows 上 `process.kill` 本身就是强制终止）。
  */
 async function terminateChild(
   pid: number,
@@ -396,11 +442,12 @@ async function terminateChild(
     runCommand: CommandRunner;
     sleep: (ms: number) => Promise<void>;
     timeoutMs: number;
+    force?: boolean;
   },
 ): Promise<boolean> {
   try {
     if (options.platform === 'win32') process.kill(pid);
-    else process.kill(pid, 'SIGTERM');
+    else process.kill(pid, options.force === true ? 'SIGKILL' : 'SIGTERM');
   } catch (error) {
     if (!isErrno(error, 'ESRCH')) return false;
     return true;
@@ -604,17 +651,189 @@ export class NodeSupervisor {
   private carried: SpawnedChildRecord[] = [];
   /** 已开始停止：就绪轮询立即收尾，不再刷状态事件。 */
   private stopping = false;
+  /** 0.58：每个节点一条存活看门狗（只覆盖本进程 spawn / adopt 的节点）。 */
+  private readonly watchdogs = new Map<string, NodeWatchdog>();
+  /** 0.58：正在「强杀 + 重起」的节点（其 `exited` 回调不许记成崩溃）。 */
+  private readonly restarting = new Set<string>();
+  /** 0.58：已进入关停流程 —— 看门狗**绝不许**在这个窗口里重启任何子进程。 */
+  private noRestart = false;
+  private readonly superviseConfig: StallWatchdogConfig;
+  /** 看门狗快照落盘的串行化（`gateway status` 是另一个进程，只能靠这个文件）。 */
+  private watchdogWrites: Promise<void> = Promise.resolve();
+  /** 落盘节流：探活每 2s 一次，但文件没必要每 2s 重写一遍。 */
+  private lastWatchdogWriteAt = 0;
 
   constructor(options: NodeSupervisorOptions) {
     this.options = options;
     this.sleep = options.sleep ?? sleepDefault;
     this.platform = options.platform ?? process.platform;
     this.runCommand = options.runCommand ?? createCommandRunner(3_000);
+    this.superviseConfig = options.supervise ?? DEFAULT_STALL_WATCHDOG_CONFIG;
   }
 
   /** 当前监督视图（每个节点的状态机快照，顺序与 `begin()` 的 registry 顺序一致）。 */
   list(): SupervisedNodeInfo[] {
     return [...this.infos.values()];
+  }
+
+  /** 0.58：存活看门狗的当前快照（落盘 + `gateway status`；不含 token）。 */
+  watchdogSnapshot(): WatchdogSnapshot {
+    return {
+      v: 1,
+      updated_at: new Date(Date.now()).toISOString(),
+      config: this.superviseConfig,
+      nodes: [...this.watchdogs.values()].map((watchdog) => watchdog.snapshot()),
+    };
+  }
+
+  /**
+   * 把看门狗快照写到 `<dataDir>/platform-watchdog[-<instance>].json`。
+   *
+   * 关掉看门狗时也写（`nodes: []` + `config.enabled: false`）：`gateway status`
+   * 必须能回答「为什么这里没有重启计数」，而不是留一行空白让人猜。
+   *
+   * 节流（2s 探活 ≠ 2s 一次盘写）：事件与相位变化走 `force`，其余最多 5s 一次；
+   * 显示的是「最近一次探活」，5s 的粒度不影响判定与排障。
+   */
+  private publishWatchdogState(force = false): void {
+    const now = Date.now();
+    if (!force && now - this.lastWatchdogWriteAt < WATCHDOG_STATE_WRITE_MIN_MS) return;
+    this.lastWatchdogWriteAt = now;
+    const snapshot = this.watchdogSnapshot();
+    const { gatewayDataDir, instance } = this.options;
+    this.watchdogWrites = this.watchdogWrites
+      .then(() => writeWatchdogSnapshot(gatewayDataDir, instance, snapshot))
+      .catch(() => undefined);
+  }
+
+  /**
+   * 0.58：给一个「本进程负责的」节点起看门狗（`ready` / `adopted` 之后调用）。
+   *
+   * 只覆盖本进程 spawn 或从 manifest 接管的节点；`external`（手工/外部启动）
+   * 永不探活、永不重启 —— 那不是我们的进程。
+   */
+  private startWatchdog(spec: LocalNodeSpec, pid: number): void {
+    if (!this.superviseConfig.enabled) return;
+    if (this.watchdogs.has(spec.nodeId)) return;
+    const watchdog = new NodeWatchdog({
+      nodeId: spec.nodeId,
+      name: spec.name,
+      pid,
+      config: this.superviseConfig,
+      probe: () =>
+        probeNodeLiveness(
+          {
+            apiUrl: spec.apiUrl,
+            ...(spec.token !== undefined ? { token: spec.token } : {}),
+          },
+          this.superviseConfig.probeTimeoutMs,
+        ),
+      // 正常关停 / 子进程已退出 / 节点不是 ready|adopted → 不探活（走正常退出路径）。
+      paused: () => {
+        if (this.noRestart) return true;
+        const info = this.infos.get(spec.nodeId);
+        return info === undefined || (info.state !== 'ready' && info.state !== 'adopted');
+      },
+      onEvent: (event) => {
+        try {
+          this.options.onWatchdogEvent?.(event);
+        } catch {
+          // 日志通道异常不影响判定。
+        }
+        // 事件必须立刻落盘（时间线证据不能被节流吃掉）。
+        this.publishWatchdogState(true);
+      },
+      onChange: () => this.publishWatchdogState(),
+      restart: () => this.restartStalledNode(spec),
+    });
+    this.watchdogs.set(spec.nodeId, watchdog);
+    watchdog.start();
+    this.publishWatchdogState(true);
+  }
+
+  /**
+   * 停止所有看门狗（`stop()` 起手第一件事：正常关停期间绝不许探活/重启）。
+   *
+   * 保留 map 里的对象（只是 `stop()` 了）：快照要能继续回答「停之前最近一次
+   * 探活成功是什么时候、重启过几次」——诊断信息不随关停一起消失。
+   */
+  private stopWatchdogs(): void {
+    this.noRestart = true;
+    for (const watchdog of this.watchdogs.values()) watchdog.stop();
+    this.publishWatchdogState(true);
+  }
+
+  /**
+   * 0.58 僵死处置：强杀 → 重新 spawn → 等就绪 → 更新 manifest / 状态机。
+   *
+   * 安全闸门（顺序即优先级）：
+   * 1. 本进程已在停止 → 不动手（正常关停走 `stop()`）；
+   * 2. `gateway.pid` 归属复核：记录已被别的 pid 改写 = 不是我们僵死的那个进程 → 不杀；
+   * 3. 进程已经不在了 → 不杀，直接按「重新 spawn」走（退出路径本来也不需要探活）。
+   *
+   * 失败不抛：看门狗据此记一条 `supervisor.stall_restart_failed`，节点转 `failed`
+   * （原因写清），随后**不再**探活 —— 起不来的节点不是「僵死」，重试只会把日志刷爆；
+   * 由人工 `vessel gateway restart` 或下一单排查接手。
+   */
+  private async restartStalledNode(
+    spec: LocalNodeSpec,
+  ): Promise<{ ok: true; pid: number } | { ok: false; error: string }> {
+    if (this.stopping || this.noRestart) return { ok: false, error: 'gateway is stopping' };
+    const info = this.infos.get(spec.nodeId);
+    const oldPid = info?.pid;
+    if (oldPid === undefined) return { ok: false, error: 'node has no pid to restart' };
+
+    this.restarting.add(spec.nodeId);
+    try {
+      const record = await readGatewayPidRecord(spec.dataDir).catch(() => null);
+      if (record !== null && record.pid !== oldPid) {
+        return {
+          ok: false,
+          error:
+            `pid record mismatch: ${path.join(spec.dataDir, 'gateway.pid')} now points at ` +
+            `${record.pid}, not the stalled ${oldPid}`,
+        };
+      }
+      if (isProcessAlive(oldPid)) {
+        const killed = await this.terminatePid(oldPid, true);
+        if (!killed) return { ok: false, error: `could not terminate stalled pid ${oldPid}` };
+      }
+      // 旧条目（已死）先摘掉，避免 manifest 里留一条指向死 pid 的记录。
+      this.spawned = this.spawned.filter(
+        (child) => !(child.node_id === spec.nodeId && child.pid === oldPid),
+      );
+      await this.writeManifest().catch(() => undefined);
+      if (this.stopping || this.noRestart) return { ok: false, error: 'gateway is stopping' };
+
+      const entry = await this.spawnOnly(spec);
+      if (entry === null) return { ok: false, error: `respawn of node "${spec.name}" failed` };
+      // 重启后 `elapsedMs` 从这一刻算：否则日志会拿「平台启动到现在」冒充「重启耗时」。
+      this.beginAt.set(spec.nodeId, Date.now());
+      this.setState(spec, 'starting', { spawned: true, pid: entry.pid });
+      // 新 pid 的 `exited` 回调此时已经登记：把 pid 与状态机对齐，重启不算崩溃。
+      const ready = await this.waitForReady(spec, entry.pid);
+      if (!ready.ok) {
+        await this.abandonSpawned(
+          { spec, pid: entry.pid, spawned: true, manifestEntry: entry },
+          `${ready.code}: ${ready.message}`,
+        );
+        return { ok: false, error: `${ready.code}: ${ready.message}` };
+      }
+      const startedRecord = await readGatewayPidRecord(spec.dataDir).catch(() => null);
+      if (startedRecord === null) {
+        await this.abandonSpawned(
+          { spec, pid: entry.pid, spawned: true, manifestEntry: entry },
+          `node_start_failed: node "${spec.name}" did not write ${path.join(spec.dataDir, 'gateway.pid')}`,
+        );
+        return { ok: false, error: 'node did not write its pid record after restart' };
+      }
+      entry.started_at = startedRecord.started_at;
+      await this.writeManifest();
+      this.setState(spec, 'ready', { spawned: true, pid: entry.pid });
+      return { ok: true, pid: entry.pid };
+    } finally {
+      this.restarting.delete(spec.nodeId);
+    }
   }
 
   /** 写一条状态（`elapsedMs`/`since` 在此计算；状态变化才通知观察者）。 */
@@ -697,6 +916,8 @@ export class NodeSupervisor {
       }),
     );
     const spawned = this.pending.filter((entry) => entry.spawned).length;
+    // 0.58：先把看门狗快照落一次（即使关掉也要落：状态页要看得出「关」）。
+    this.publishWatchdogState(true);
     return { spawned, adoptCandidates: this.pending.length - spawned };
   }
 
@@ -778,6 +999,8 @@ export class NodeSupervisor {
     if (entry.manifestEntry !== undefined) entry.manifestEntry.started_at = record.started_at;
     await this.writeManifest();
     this.setState(spec, 'ready', { spawned: true, pid: entry.pid });
+    // 0.58：就绪之后才开始探活（启动期的慢不算僵死）。
+    this.startWatchdog(spec, entry.pid);
   }
 
   /** adopt 候选：确认健康后定 `adopted`（manifest 有记录）/ `external`（外部启动）。 */
@@ -812,6 +1035,9 @@ export class NodeSupervisor {
         ? 'taken over from a previous gateway (handoff, in this manifest)'
         : 'started outside this gateway',
     });
+    // 0.58：`adopted` 是本进程接管的子进程（manifest 里有记录），僵死时由本进程强杀重起；
+    // `external` 是别人起的，永不探活、永不重启。
+    if (adopted) this.startWatchdog(spec, entry.pid);
   }
 
   /** 该 pid 是否本实例 manifest 里的条目（只用于区分 `adopted` / `external` 显示）。 */
@@ -1079,6 +1305,11 @@ export class NodeSupervisor {
       const info = this.infos.get(spec.nodeId);
       if (info === undefined || info.state !== 'ready') return;
       if (this.stopping) return;
+      // 0.58：pid 必须还是这条子进程的 —— 僵死重启之后状态机已经换了 pid，
+      // 旧子进程的退出不能把刚起来的新进程记成 `failed`。
+      if (info.pid !== pid) return;
+      // 0.58：正在「强杀 + 重起」时退出是预期动作，不是崩溃（不记假事件）。
+      if (this.restarting.has(spec.nodeId)) return;
       this.setState(spec, 'failed', { spawned: true, pid, reason: `node exited (pid ${pid})` });
     });
     return manifestEntry;
@@ -1105,13 +1336,14 @@ export class NodeSupervisor {
     this.setState(spec, 'failed', { spawned: true, pid: entry.pid, reason });
   }
 
-  private async terminatePid(pid: number): Promise<boolean> {
+  private async terminatePid(pid: number, force = false): Promise<boolean> {
     if (this.options.terminate !== undefined) return this.options.terminate(pid);
     return terminateChild(pid, {
       platform: this.platform,
       runCommand: this.runCommand,
       sleep: this.sleep,
       timeoutMs: this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS,
+      ...(force ? { force: true } : {}),
     });
   }
 
@@ -1215,6 +1447,9 @@ export class NodeSupervisor {
     const stoppedChildren: StoppedChildDetail[] = [];
     // 0.55：先置停止旗标——后台 `settle()` 里的就绪/健康轮询立即收尾，不再把
     // 「我们正在停」写成节点失败事件。
+    // 0.58：看门狗**先停**（不论 keep）——正常关停期间绝不许探活/重启，
+    // 否则 `gateway restart` 的交接会被自己的看门狗打断。
+    this.stopWatchdogs();
     if (!keep) this.stopping = true;
     await Promise.all(
       this.spawned.map(async (child) => {
