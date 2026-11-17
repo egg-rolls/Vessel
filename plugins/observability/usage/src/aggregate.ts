@@ -20,16 +20,18 @@ const COST_DIVISOR = 1_000_000;
  * Two different incompletenesses are reported apart, because the honest sentence
  * for each is different:
  *
- * - `files_truncated` — some session log in the range was not read at all (the
- *   reader only does that when an injected I/O cap or a read error forces it, or
- *   when retention evicted a file that was never read): runs are missing;
- * - `partial_files` — that many counted files were only read partially: their
+ * - `files_truncated` — some session timeline in the range was not read at all
+ *   (the reader only does that when the per-call budget, the session cap or a
+ *   read error forces it, or when retention evicted a session that was never
+ *   read): runs are missing;
+ * - `partial_files` — that many counted sessions were only read partially (their
+ *   timeline is bigger than the per-file cap, or retention dropped them): their
  *   runs are counted but some of their events may be missing. This is what the
  *   *memory* bound produces (`maxRetainedBytesTotal`), and it cannot be tuned
  *   away, only reported.
  *
- * `truncated` stays as `files_truncated || partial_files > 0`. Files outside the
- * selected range are **not** truncation: the user asked for that range.
+ * `truncated` stays as `files_truncated || partial_files > 0`. Sessions outside
+ * the selected range are **not** truncation: the user asked for that range.
  *
  * The metrics at the end are for observation, not for correctness: they say which
  * path answered (`worker`), how much I/O it cost (`bytes_read`, `peeked`) and how
@@ -38,15 +40,15 @@ const COST_DIVISOR = 1_000_000;
  */
 export interface SourceCoverage {
   truncated: boolean;
-  /** Session logs in the range that contributed nothing. */
+  /** Session timelines in the range that contributed nothing. */
   files_truncated?: boolean;
-  /** Counted session logs that were only partially read (memory bound). */
+  /** Counted session timelines that were only partially read (per-file cap or memory bound). */
   partial_files?: number;
-  /** Session logs counted (read from disk or answered by the index). */
+  /** Session timelines counted (read from disk or answered by the index). */
   files_read: number;
-  /** Session logs inside the selected range (`mtime >= cutoff`). */
+  /** Session timelines inside the selected range (`mtime >= cutoff`). */
   files_in_window?: number;
-  /** Session logs present in `<dataDir>/sessions`. */
+  /** Session timelines present in `<dataDir>/sessions`. */
   files_total: number;
   /** Event bytes this call actually read from disk (0 when cached or indexed). */
   bytes_read?: number;
@@ -57,17 +59,19 @@ export interface SourceCoverage {
   /** `true` when a worker thread produced the result, `false` on the fallback. */
   worker?: boolean;
   /**
-   * 0.56: the source this plugin reads stopped being written (no `events.ndjson`
-   * anywhere). 0.54 made the timeline the only durable sink, so "no file" means
-   * *these numbers cannot be computed any more*, not "you have no usage".
+   * 0.56: there are session directories, but not one of them has a timeline this
+   * plugin can read (pre-0.54 sessions only carry `events.ndjson`, which Vessel
+   * cannot parse any more). "No readable source" means *these numbers cannot be
+   * computed*, not "you have no usage" — the pages must say so.
    */
   source_retired?: boolean;
   /**
-   * 0.56: newest session-log mtime ⇒ pages render "data is frozen at {date}".
-   * mtime, not the newest event `ts`: independent of range / read budget and
-   * identical on both read paths (index and logs).
+   * 0.56: session directories on disk that carry no readable timeline
+   * (`events.ndjson` only). Their usage is **not** in any total; this is the
+   * count of what is missing, so a partial view can name the gap instead of
+   * looking complete.
    */
-  frozen_at?: number;
+  unreadable_sessions?: number;
 }
 
 /** One request (or failed run) as shown in Logs. */
@@ -550,13 +554,14 @@ export type LogsRangeError = 'range_conflict' | 'range_inverted';
  * `days` and `since`/`until` are **mutually exclusive**. They are two different
  * ways to name one range, and `days` is relative to `now`: combining them would
  * produce two lower bounds (`daysCutoff(now, days)` and `since`), and then the
- * coverage the reader reports (`files_in_window`, "N of M run files in this
- * range") could not be attributed to one of them. Rejecting the request is
+ * coverage the reader reports (`files_in_window`, "N of M session timelines in
+ * this range") could not be attributed to one of them. Rejecting the request is
  * clearer than silently preferring one.
  *
- * `since` (or `days`) also becomes the reader's `cutoff`, so the *file* window
- * follows the request; `until` cannot prune files (see `LoadOptions` in
- * `store.ts`) and is applied per record in `listLogs`.
+ * `since` (or `days`) also becomes the reader's `cutoff`, so the *session* window
+ * follows the request; `until` can only prune sessions whose first event proves
+ * they start after it (see `LoadOptions` in `store.ts`) and is applied per record
+ * in `listLogs`.
  */
 export type LogsRange =
   | {

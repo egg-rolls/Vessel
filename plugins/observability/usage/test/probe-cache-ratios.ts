@@ -335,7 +335,9 @@ async function main(): Promise<void> {
       if (index === undefined) {
         check(`real. 读不到 usage index: ${dataDir}`, false);
       } else {
-        const pos = index.runs.filter((r) => r.requests > 0);
+        // The index groups rows per session (v2); the ratios only care about runs.
+        const runs = index.sessions.flatMap((session) => session.runs);
+        const pos = runs.filter((r) => r.requests > 0);
         const reporting = pos.filter(
           (r) =>
             r.cache_read_input_tokens !== undefined || r.cache_creation_input_tokens !== undefined,
@@ -344,7 +346,7 @@ async function main(): Promise<void> {
         const promptReporting = reporting.reduce((a, r) => a + r.prompt_tokens, 0);
         const read = reporting.reduce((a, r) => a + (r.cache_read_input_tokens ?? 0), 0);
         const write = reporting.reduce((a, r) => a + (r.cache_creation_input_tokens ?? 0), 0);
-        const s = summarizeRuns(index.runs, Date.now());
+        const s = summarizeRuns(runs, Date.now());
         console.log(
           `\n[real] runs=${pos.length} reporting=${reporting.length} prompt_all=${promptAll} ` +
             `prompt_reporting=${promptReporting} read=${read} write=${write}`,
