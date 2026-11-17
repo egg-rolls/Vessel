@@ -15,6 +15,8 @@ import type { AnsweredAsk } from './ask-answered';
 import { ChatWelcome } from './ChatWelcome';
 import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
+import { PendingBubble } from './PendingBubble';
+import type { PendingSend } from './pending-sends';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { RotateHandoffCard } from './RotateHandoffCard';
 import { StreamCard } from './StreamCard';
@@ -173,6 +175,9 @@ export function TranscriptWindow({
   onGoChat,
   onEditMessage,
   onRetryMessage,
+  pendingSends,
+  onRetryPending,
+  onDismissPending,
 }: {
   hasToken: boolean;
   selectedId: string | null;
@@ -229,6 +234,16 @@ export function TranscriptWindow({
    * 与消息 item 一起排序决定；不是滚动区末尾的额外一段（0.51 用户裁决）。
    */
   answeredAsks?: readonly AnsweredAsk[];
+  /**
+   * 0.56 乐观渲染：本地待确认的用户气泡（点击那一帧就在屏上，回显到达即撤）。
+   *
+   * 它**不是** `TranscriptItem` 的一员：不进 item 流、不进消息身份认领集合、不参与
+   * 历史 / 实时身份判定（见 `pending-sends.ts` 的三条硬约束）。所以这里是「整条 item
+   * 流之后追加的一段」，与「正在思考」同一层。
+   */
+  pendingSends: readonly PendingSend[];
+  onRetryPending: (pending: PendingSend) => void;
+  onDismissPending: (pending: PendingSend) => void;
   /** 历史前缀被改写的一次性提示（i18n key）；null = 无。 */
   detailNotice: string | null;
   onDismissDetailNotice: () => void;
@@ -693,6 +708,19 @@ export function TranscriptWindow({
               onRetryMessage={onRetryMessage}
             />
           ) : null}
+
+          {/* 0.56 乐观渲染：本地已发出、还没被服务端回显的那几句。排在整条 item 流之后、
+              「正在思考」之前 —— 它们就是「还没有对应 run 内容的最后一段」。回显一到
+              pending-sends.ts 就把它们撤掉，屏上只剩服务端那份（不重复是结构性的：撤掉
+              之后本地没有第二份可画，渲染层不做去重）。 */}
+          {pendingSends.map((pending) => (
+            <PendingBubble
+              key={pending.id}
+              pending={pending}
+              onRetry={onRetryPending}
+              onDismiss={onDismissPending}
+            />
+          ))}
 
           {/* run 在跑但还没有任何可见内容：一句「正在思考」（判据见上面的 showThinking）。
               它是会话滚动区的直接子项，排在整条 item 流之后（正在跑的 run 永远是最后一段）。 */}

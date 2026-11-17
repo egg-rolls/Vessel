@@ -27,6 +27,7 @@ import { ComposerSlot } from './ComposerSlot';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
 import { errorMessage } from './errors';
 import { PendingStrip } from './PendingStrip';
+import type { PendingSend } from './pending-sends';
 import { ProjectionReadbackProvider } from './projection-readback';
 import { SessionRail } from './SessionRail';
 import { TranscriptWindow } from './TranscriptWindow';
@@ -35,11 +36,15 @@ import { useAnsweredAsks } from './useAnsweredAsks';
 import { useChatSessions } from './useChatSessions';
 import { useChatSubmit } from './useChatSubmit';
 import { useChatTranscript } from './useChatTranscript';
+import { usePendingSends } from './usePendingSends';
 
 type ChatRoute = Extract<Route, { domain: 'chat' }>;
 
 /** 子 agent 详情态不给已答卡：空数组用固定引用，避免每帧换一个数组让时间线 memo 失效。 */
 const EMPTY_ANSWERED_ASKS: readonly AnsweredAsk[] = [];
+
+/** 子 agent 详情态不画本地待确认气泡：空数组用固定引用（与上一行同一个理由）。 */
+const EMPTY_PENDING_SENDS: readonly PendingSend[] = [];
 
 /**
  * 当前会话 body 的成员 id（工具描述目录按它拉 `tools.list{agent_id}`）。
@@ -216,6 +221,19 @@ export function ChatView({
     refreshSessions: sessionsApi.refreshSessions,
     permissions,
     asks,
+  });
+
+  // 0.56 乐观渲染：本地待确认的灰气泡。数据源是**事件流**（`snapshot.entries`，与
+  // `LiveItemStore` 同一条），回显一到就撤；15 s 没回显转失败态（重试 / 删除）。
+  // 它只消费 `run_id` / `session_id`，不碰 transcript 的消息身份（见 pending-sends.ts）。
+  // 子 agent 详情页不画（那一屏讲的是另一个 run，与失败卡 / 已答卡同一个口径），
+  // 但照常吃事件 —— 摘除动作与画不画无关，停掉反而会让 pending 卡在屏上等超时。
+  const pendingSendsApi = usePendingSends({
+    entries: snapshot.entries,
+    sessionId: selectedId,
+    onRetry: (pending) => {
+      void submitApi.handleRetryPending(pending);
+    },
   });
 
   // 已答提问的取数：数据来自服务端 answered 记录（落盘的真相），刷新 / 重连靠它重建。
@@ -510,6 +528,13 @@ export function ChatView({
                 // ask-answered），不再是滚动区末尾的额外一段。子 agent 详情页讲的是另一个
                 // run，那里不画（TranscriptWindow 按 activeAgent 自己断，同失败卡的口径）。
                 answeredAsks={transcriptApi.activeAgent ? EMPTY_ANSWERED_ASKS : answeredAsks}
+                // 0.56 乐观渲染：本地待确认的灰气泡（点击那一帧就在屏上）。
+                // 子 agent 详情页不画（那一屏讲的是另一个 run），数据仍照常订阅。
+                pendingSends={
+                  transcriptApi.activeAgent ? EMPTY_PENDING_SENDS : pendingSendsApi.pending
+                }
+                onRetryPending={pendingSendsApi.retry}
+                onDismissPending={pendingSendsApi.dismiss}
               />
             </ProjectionReadbackProvider>
 
