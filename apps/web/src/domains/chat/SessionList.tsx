@@ -55,7 +55,8 @@ export function SessionList({
   selectedId,
   draftActive,
   pendingBySession,
-  inflightBySession,
+  // inflightBySession 仍留在 props 类型里（会话排序用它，调用方照传），
+  // 但卡片上的「运行中」徽标已删，所以这里不再解构它。
   pendingAskCount,
   onOpenPending,
   agentAddresses,
@@ -322,7 +323,6 @@ export function SessionList({
                 const editing = editingId === session.session_id;
                 const title = sessionTitle(session);
                 const pendingCount = pendingBySession?.get(session.session_id) ?? 0;
-                const inflight = inflightBySession?.get(session.session_id);
                 const agentAddress = agentAddresses?.get(session.session_id);
                 // 四级第二行（0.52）：
                 // 1) 节点地址（只有 roster 有 `node:team`，团队成员的显示一个字都不变）；
@@ -425,29 +425,9 @@ export function SessionList({
                                 </span>
                               </Tooltip>
                             )}
-                            {inflight !== undefined && (
-                              <Tooltip
-                                label={
-                                  inflight === 'running'
-                                    ? t('chat.session.running')
-                                    : t('chat.session.queued')
-                                }
-                              >
-                                <span
-                                  className={
-                                    inflight === 'running'
-                                      ? 'session-run-badge is-running'
-                                      : 'session-run-badge is-queued'
-                                  }
-                                  role="status"
-                                >
-                                  <span className="session-run-dot" aria-hidden="true" />
-                                  {inflight === 'running'
-                                    ? t('chat.session.running')
-                                    : t('chat.session.queued')}
-                                </span>
-                              </Tooltip>
-                            )}
+                            {/* 0.55.1：删掉「运行中」文字徽标（用户判定为多余设计）。
+                                位置本身已经表达这件事（开始时顶到最前），而 run 结束后卡片留在原位、
+                                徽标消失反而会让人以为「刚结束的那个还在跑」。要信息就去看会话里的运行态。 */}
                             {pendingCount > 0 && (
                               <Tooltip label={t('chat.session.pending', { count: pendingCount })}>
                                 <span className="session-pending-badge">

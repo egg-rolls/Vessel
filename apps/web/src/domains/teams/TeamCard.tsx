@@ -29,7 +29,7 @@ interface TeamCardProps {
   onOpen: (node: NodeView, team: TeamSummary) => void;
 }
 
-export function TeamCard({ node, team, active, running, menuItems, onOpen }: TeamCardProps) {
+export function TeamCard({ node, team, active, menuItems, onOpen }: TeamCardProps) {
   // 归档 Team 只在开关打开时出现（默认被列表裁掉），所以它必须与正常卡片**一眼可分**：
   // 降透明度 + 「已归档 · 待移除」标记，而不是和活着的 Team 长得一模一样。
   const archived = isArchivedTeam(team);
@@ -47,15 +47,8 @@ export function TeamCard({ node, team, active, running, menuItems, onOpen }: Tea
         <span className="flex items-center justify-between gap-2">
           <span className="min-w-0 truncate font-semibold">{team.name || team.team_id}</span>
           <span className="flex flex-none items-center gap-2">
-            {/* 与会话卡的「运行中」标记**同一套类**（`--amber` + 5px 圆点、无背景无边框、
-                pulse 只动不透明度、`prefers-reduced-motion` 下由 base.css 关掉）：
-                两处同形同色，"有东西在跑" 这件事在列表里就是一个视觉信号。 */}
-            {running && (
-              <span className="session-run-badge is-running" role="status">
-                <span className="session-run-dot" aria-hidden="true" />
-                {t('teams.card.running')}
-              </span>
-            )}
+            {/* 0.55.1：删掉「有成员在跑」文字徽标（用户判定为多余设计，与会话卡同一处理）。
+                位置本身已经表达这件事；徽标消失时反而会误导。 */}
             {archived && (
               <Badge tone="warn" className="flex-none">
                 {t(pendingRemovalBadgeKey('team'))}
