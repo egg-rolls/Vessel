@@ -34,6 +34,20 @@ export const TIMELINE_LAYOUT = {
   timelineManifest: 'timeline.manifest',
   /** 洞登记区：append-only + crc32，跨重启可读。 */
   holes: 'holes.ndjson',
+  /**
+   * 归档锁（**只保护 `archiveNow()` 的「读水位 → 追加段 → 提交 manifest」这一小段**）。
+   *
+   * 为什么需要它：归档是「先读盘上已经有到哪、再决定抄哪一段」，读和写之间若插进第二个
+   * 写者（另一个进程：CLI / node / 第二个 gateway —— 或者同进程里第二个 writer 实例），
+   * 两个写者会各自按自己的快照把**同一段**抄进 `timeline.ndjson`，而 append-only 流里
+   * 同一个 seq 出现两次就足以让读侧（`validateTimelineRange` 的「严格递增 / 不得重复」）
+   * 整段拒绝，用户侧表现为「往上加载更早」永久卡住。
+   *
+   * 锁文件只是一个**门槛**（`open(…, 'wx')`），不装数据、不参与读侧任何判据；
+   * 崩溃留下的锁靠 mtime 过期回收（见 `archive-lock.ts`），过期回收失败只会让归档
+   * 这一次失败（空间晚点回收），不会影响任何事实的写入与读取。
+   */
+  archiveLock: 'timeline.archive.lock',
   /** 索引目录（派生数据，可整目录删掉重建）。 */
   indexDir: 'timeline.idx',
   indexSession: 'session.idx',
@@ -236,7 +250,15 @@ export type TimelineErrorCode =
   | 'timeline_event_type_excluded'
   | 'session_frozen_readonly'
   | 'timeline_writer_closed'
-  | 'timeline_index_invalid';
+  | 'timeline_index_invalid'
+  /**
+   * 归档这一次没做成（**只影响空间回收**，数据没丢）：归档副本读不出来、尾窗答不准、
+   * 归档锁拿不到，或「本次要抄的段」与已经落盘的内容重叠（重复 seq 的硬闸门）。
+   *
+   * 单独给一个 code 是为了让这条失败在日志/统计里与「写事实失败」区分开：
+   * 前者照常推进 `wal_head`，后者会把该 seq 登记成洞。
+   */
+  | 'timeline_archive_failed';
 
 /** timeline 写入错误。 */
 export class TimelineError extends Error {
