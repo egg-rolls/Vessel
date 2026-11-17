@@ -1,6 +1,14 @@
 import type { ProjectionView, RunEvent } from '../../gateway/types';
 import { type ErrorMeta, errorMetaOf } from '../../state/error-visibility';
 import type { TimelineItem } from '../../state/events';
+import {
+  type AgentNameIndex,
+  agentDisplayName,
+  EMPTY_AGENT_NAMES,
+  internalIdLabel,
+  MEMBER_LIST_MAX_NAMES,
+  membersLabel,
+} from './agent-labels';
 
 export type ToolCardStatus = 'running' | 'done' | 'error';
 
@@ -131,8 +139,8 @@ function scalarArg(args: Record<string, unknown>, keys: readonly string[]): stri
 
 type ToolArgs = Record<string, unknown>;
 
-/** 结构化入参工具的摘要：`action → 目标/条数`。 */
-type StructuredSummarizer = (args: ToolArgs) => string | undefined;
+/** 结构化入参工具的摘要：`action → 目标/条数`；名字表用于把内部 id 换成人能认的名字。 */
+type StructuredSummarizer = (args: ToolArgs, names: AgentNameIndex) => string | undefined;
 
 function isRecord(value: unknown): value is ToolArgs {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -176,16 +184,31 @@ function principalLabel(value: string | undefined): string | undefined {
 }
 
 /**
+ * 目标以「谁能认出来」的形式出现：名字优先，内部 id 退短 id（见 `agent-labels.ts`）。
+ *
+ * 顺序不能反：地址先砍成 principal（那是「发给谁」而不是完整路由），再查名字表，
+ * 最后才是形状判定 —— 先截断再查表会把 `ecfc6a4f-…@node:team` 变成一个永远查不到的串。
+ */
+function targetLabel(value: string | undefined, names: AgentNameIndex): string | undefined {
+  return agentDisplayName(principalLabel(value), names);
+}
+
+/**
  * `agent`：`action` + 目标 / 人数 / 条数。
  *
  * 入参见 `packages/agent/src/tool.ts:339`（`action` 首位必填，目标散在
  * `to` / `member` / `members[]` / `name`）：这些都是结构化字段，旧实现只在标量名单里
  * 找 → 卡片头部只剩工具名。
+ *
+ * 目标**不再回显原值**：`to` / `member` / `members[]` 允许传 id，模型后来越来越多
+ * 传 id（重名、rotate 之后 id 才无歧义），于是卡片把 36 位 UUID 摆到人面前。这里统一过
+ * `agentDisplayName`：roster 里有名字就用名字，没有就短 id，绝不编名字。
  */
-function agentSummary(args: ToolArgs): string | undefined {
+function agentSummary(args: ToolArgs, names: AgentNameIndex): string | undefined {
   const action = shortText(args.action, 16);
   if (action === undefined) return undefined;
   if (action === 'create' || action === 'hire') {
+    // `members` 这里是「要建几个」的定义对象，`name` 是新 agent 的名字都不是 id：原样。
     const count = listLength(args.members);
     const name = shortText(args.name, 48);
     if (count !== undefined && count > 1) return `${action} → ${count} 名成员`;
@@ -193,18 +216,24 @@ function agentSummary(args: ToolArgs): string | undefined {
     if (count === 1) return `${action} → 1 名成员`;
     return action;
   }
-  const target = principalLabel(
-    shortText(args.to, 64) ??
-      shortText(args.member, 64) ??
-      stringItems(args.members)[0] ??
-      shortText(args.name, 64),
-  );
+  const members = stringItems(args.members);
+  const target =
+    targetLabel(shortText(args.to, 64), names) ??
+    targetLabel(shortText(args.member, 64), names) ??
+    agentDisplayName(members[0], names) ??
+    targetLabel(shortText(args.name, 64), names);
   const head = target === undefined ? action : `${action} → ${target}`;
   // 只报条数：`messages` 的正文不进摘要。
   const messages = listLength(args.messages);
   if (messages !== undefined && messages > 0) return `${head}（${messages} 条）`;
-  const closing = action === 'close' ? stringItems(args.members).length : 0;
-  if (closing > 1) return `${head}（共 ${closing} 名）`;
+  if (action !== 'close') return head;
+  // 关多名成员：一两个就报名字（`共 N 名`），再多只留「N 名成员（前两个 等）」——
+  // 别把成员表串成一句读不完的长句（完整列表在展开体的入参里）。
+  if (members.length > MEMBER_LIST_MAX_NAMES) {
+    const list = membersLabel(members, names);
+    if (list !== undefined) return `${action} → ${list}`;
+  }
+  if (members.length > 1) return `${head}（共 ${members.length} 名）`;
   return head;
 }
 
@@ -212,8 +241,11 @@ function agentSummary(args: ToolArgs): string | undefined {
  * `inbox`：`action` + 条数 / 首个 id / 正文首段。
  *
  * 入参见 `packages/agent/src/inbox.ts:1185`（`ids` / `message_ids` / `limit` / `content`）。
+ *
+ * 单个 `ids[]` 也过一遍名字表 —— 它是消息 id，一般解析不出名字，那就退短 id
+ * （以前是把 36 位 UUID 原样摆到卡头，摘要被它挤满还读不出一件事）。
  */
-function inboxSummary(args: ToolArgs): string | undefined {
+function inboxSummary(args: ToolArgs, names: AgentNameIndex): string | undefined {
   const action = shortText(args.action, 16);
   if (action === undefined) return undefined;
   if (action === 'insert') {
@@ -223,14 +255,20 @@ function inboxSummary(args: ToolArgs): string | undefined {
   const ids = [...stringItems(args.ids), ...stringItems(args.message_ids)];
   const first = ids[0];
   if (first !== undefined) {
-    return ids.length === 1 ? `${action} → ${first.slice(0, 48)}` : `${action} → ${ids.length} 条`;
+    if (ids.length > 1) return `${action} → ${ids.length} 条`;
+    return `${action} → ${agentDisplayName(first, names) ?? first}`;
   }
   const limit = intValue(args.limit);
   if (limit !== undefined && limit > 0) return `${action} → 最多 ${limit} 条`;
   return action;
 }
 
-/** `subscribe`：`action` + 文件 / 订阅 id（入参见 `plugins/context/doc-subscription/src/tool.ts:450`）。 */
+/**
+ * `subscribe`：`action` + 文件 / 订阅 id（入参见 `plugins/context/doc-subscription/src/tool.ts:450`）。
+ *
+ * `id` 是订阅的内部标识（UUID），以前原样（48 字）摆在卡头 —— 过一遍
+ * `internalIdLabel` 退短 id；它不是 agent，名字表查不到，也不该查。
+ */
 function subscribeSummary(args: ToolArgs): string | undefined {
   const action = shortText(args.action, 16);
   if (action === undefined) return undefined;
@@ -239,8 +277,8 @@ function subscribeSummary(args: ToolArgs): string | undefined {
   const many = stringItems(args.paths);
   const paths = single === undefined ? many : [single, ...many];
   const first = paths[0];
-  if (first === undefined) {
-    const id = shortText(args.id, 48);
+  if (paths.length === 0) {
+    const id = internalIdLabel(shortText(args.id, 96));
     return id === undefined ? action : `${action} → ${id}`;
   }
   return paths.length === 1
@@ -293,8 +331,20 @@ const KNOWN_ARG_NAMES: readonly string[] = [
   'name',
 ];
 
+/** 摘要行的默认字符上限：够说完「发给谁 / 干了什么」，再多就会被卡头自己截掉。 */
+export const DEFAULT_SUMMARY_LENGTH = 96;
+
 /** Codex 式关键参数摘要：bash 命令行首行、路径、pattern。 */
-export function toolSummary(name: string, args: unknown, maxLength = 96): string {
+export function toolSummary(
+  name: string,
+  args: unknown,
+  maxLength = DEFAULT_SUMMARY_LENGTH,
+  /**
+   * 标识 → 名字（`agentNamesOf(rosters)`）。缺省 = 没有 roster：`agent` / `inbox` 卡上的
+   * 内部 id 退短 id，其它工具与旧行为逐字一致（静态渲染 / 设计预览走的就是这条）。
+   */
+  agentNames: AgentNameIndex = EMPTY_AGENT_NAMES,
+): string {
   const parsed = parseToolArgs(args);
   if (parsed === undefined) return '';
   let value: string | undefined;
@@ -310,7 +360,7 @@ export function toolSummary(name: string, args: unknown, maxLength = 96): string
       search: ['query', 'pattern'],
     };
     value =
-      STRUCTURED_ARG_SUMMARIES[name]?.(parsed) ??
+      STRUCTURED_ARG_SUMMARIES[name]?.(parsed, agentNames) ??
       scalarArg(parsed, byTool[name] ?? []) ??
       scalarArg(parsed, ['command', 'path', 'pattern', 'query', 'task', 'url', 'name']) ??
       // 兜底只在**已知参数名**里找：`Object.values` 会把 serve 截断后塞进来的
