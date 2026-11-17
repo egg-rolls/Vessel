@@ -33,6 +33,13 @@ export interface PlatformConnection {
   anonymous: boolean;
   /** 选中节点 credentials 失败时为错误；调用方可让用户手填 node token。 */
   credentialsError: PlatformRpcError | null;
+  /**
+   * 0.58：代理数据面。`null` = 直连老路径（平台没开代理 / 老平台不支持）。
+   *
+   * 非 null 时：`nodeToken` 恒为空串、`nodeCredentials` 恒为空数组（**不取凭据**），
+   * 数据面 URL 用 `proxyBaseUrl`（`<platform origin>/nodes/<node_id>`）。
+   */
+  proxy: { baseUrl: string; platformOrigin: string } | null;
   /** 选择结果：`fallback` 非空表示持久化节点失效后的回退。 */
   selection: {
     preferredNodeId: string | null;
@@ -96,6 +103,35 @@ export async function bootstrapPlatform(
   }
   const node = selection.node;
 
+  // 0.58：代理开启时**不取凭据**。这就是「node token 不出网关」在前端的那一半：
+  // 浏览器连 credentials 端点都不调，自然没有可泄漏的东西。数据面改为
+  // `<platform origin>/nodes/<node_id>`，鉴权仍是平台会话语义（cookie / 平台 token）。
+  const proxyCapability = probe.whoami.proxy;
+  if (proxyCapability?.enabled === true) {
+    const basePath = proxyCapability.base_path ?? '/nodes';
+    const platformOrigin = client.originUrl();
+    return {
+      kind: 'platform',
+      connection: {
+        whoami: probe.whoami,
+        node,
+        nodes,
+        nodeCredentials: [],
+        nodeToken: '',
+        anonymous: false,
+        credentialsError: null,
+        proxy: {
+          baseUrl: `${platformOrigin}${basePath}/${encodeURIComponent(node.node_id)}`,
+          platformOrigin,
+        },
+        selection: {
+          preferredNodeId,
+          fallback: selection.fallback,
+        },
+      },
+    };
+  }
+
   // 平台模式的多节点数据面直连各 Node API，需要每个节点的凭据（不只选中节点）。
   // 单节点时省略 node_id 保持 G1 兼容；多节点时逐个带 node_id。并行取，
   // 单节点失败只记录在该条目上，不拒绝整个引导。
@@ -145,6 +181,7 @@ export async function bootstrapPlatform(
       nodeToken,
       anonymous,
       credentialsError,
+      proxy: null,
       selection: {
         preferredNodeId,
         fallback: selection.fallback,

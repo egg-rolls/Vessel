@@ -2664,6 +2664,10 @@ export async function runPlatformGatewayForeground(
           const token = credentials.get(id);
           return token !== undefined ? { found: true, token } : { found: true };
         },
+        // 0.58：浏览器/CLI 只连平台，node 的 HTTP 与 WS 由平台代理（node token 不出网关）。
+        // `gateway.proxy_nodes: false` 是保留的显式回退：平台不提供 `/nodes/*`，
+        // 前端据 `platform.whoami.proxy.enabled` 自动回到「取 credentials 直连 node」。
+        proxy: { enabled: config.gateway?.proxyNodes !== false },
         version,
         auth: {
           publicOrigin: resolvedAuth.publicOrigin,

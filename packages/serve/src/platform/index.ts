@@ -19,6 +19,16 @@ export {
   platformListenGuard,
 } from './listen-guard.js';
 export {
+  PlatformProxy,
+  type PlatformProxyDeps,
+  type PlatformProxyStats,
+} from './proxy.js';
+export {
+  DEFAULT_PLATFORM_PROXY_LIMITS,
+  type PlatformProxyLimits,
+  PROXY_BASE_PATH,
+} from './proxy-config.js';
+export {
   createPlatformRegistry,
   PlatformNodeNotFoundError,
   type PlatformRegistry,
@@ -38,6 +48,7 @@ export type {
   PlatformNodeDescriptor,
   PlatformNodeStatus,
   PlatformNodeSummary,
+  PlatformProxyOptions,
   WebDistProbe,
   WebDistProbeResult,
 } from './types.js';

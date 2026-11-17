@@ -91,6 +91,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [nodeUrl, setNodeUrl] = useState<string | null>(null);
   const [nodeToken, setNodeToken] = useState('');
   const [anonymousNode, setAnonymousNode] = useState(false);
+  /**
+   * 0.58：数据面是否走平台代理（`<platform>/nodes/<node_id>`）。
+   *
+   * 代理模式下 `nodeToken` 是**平台 token**（可能为空：OAuth 会话走 cookie 就够），
+   * 浏览器永远不持有 node token —— bootstrap 连 credentials 都不取。
+   */
+  const [proxyMode, setProxyMode] = useState(false);
   const [nodeIdentity, setNodeIdentity] = useState<NodeIdentity | null>(null);
   const [mode, setMode] = useState<ConnectionMode>('pending');
   const [bootstrapSeq, setBootstrapSeq] = useState(0);
@@ -134,7 +141,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   /** 上一次 registry 的 node_id 集合：用于清理已消失节点的 token 槽。 */
   const platformNodeIdsRef = useRef<Set<string>>(new Set());
 
-  const client = useMemo(() => new GatewayClient(nodeUrl ?? ''), [nodeUrl]);
+  const client = useMemo(
+    () => new GatewayClient(nodeUrl ?? '', proxyMode ? { proxy: true } : {}),
+    [nodeUrl, proxyMode],
+  );
   /** 路由级订阅控制器：每个 node 连接一个；切路由时由 S3 调 `apply`。 */
   const subscription = useMemo(
     // **不传 notice**：0.54 的缺口/回填是内部时序事实，用户不该看到（用户明确要求）。
@@ -145,7 +155,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   );
   const nodeTokenRef = useRef(nodeToken);
   nodeTokenRef.current = nodeToken;
-  const canConnect = nodeUrl !== null && (nodeToken.trim() !== '' || anonymousNode);
+  // 0.58：代理模式下「能连」不再取决于有没有 node token —— 鉴权是平台会话语义。
+  const canConnect =
+    nodeUrl !== null && (proxyMode || nodeToken.trim() !== '' || anonymousNode);
   const hasToken = canConnect;
 
   /**
@@ -169,6 +181,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       setPlatformNodes([]);
       setSelectedNodeId(null);
       setNodeIdentity(null);
+      setProxyMode(false);
       setNodeUrl(platformUrl);
       setNodeToken(legacyTokenRef.current);
       setAnonymousNode(false);
@@ -198,6 +211,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           setPlatformNodes([]);
           setSelectedNodeId(null);
           setNodeIdentity(null);
+          setProxyMode(false);
           setNodeUrl(platformUrl);
           setNodeToken(legacyToken);
           setAnonymousNode(false);
@@ -219,6 +233,31 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           nodeId: connection.node.node_id,
           name: connection.node.name,
         };
+        // 0.58：代理数据面。这里**不写任何 node token 槽**（浏览器不该有 node token），
+        // URL 换成 `<platform>/nodes/<node_id>`，鉴权交给平台会话。
+        if (connection.proxy !== null) {
+          // 上一次若是直连路径留下的 token 槽，清理掉（别让旧凭据留在 sessionStorage）。
+          for (const previous of platformNodeIdsRef.current) {
+            removeNodeToken(nodeTokenIdentity({ name: previous, nodeId: previous }));
+          }
+          platformNodeIdsRef.current = new Set(connection.nodes.map((item) => item.node_id));
+          preferredNodeIdRef.current = connection.node.node_id;
+          requirePreferredUpRef.current = true;
+          writeSelectedNodeId(connection.node.node_id);
+          setMode('platform');
+          setPlatformNodes(connection.nodes);
+          setSelectedNodeId(connection.node.node_id);
+          setNodeSelection(connection.selection);
+          setNodeIdentity(identity);
+          setProxyMode(true);
+          setNodeUrl(connection.proxy.baseUrl);
+          // 平台 token 只用于平台鉴权（cookie 登录时可以是空串）。
+          setNodeToken(platformToken.trim());
+          setAnonymousNode(false);
+          setPlatformError(null);
+          return;
+        }
+        setProxyMode(false);
         // 每个节点按 node_id 分槽写 sessionStorage；选中节点写“生效 token”
         // （可能来自手填覆盖），其它节点写各自 credentials 结果。
         // token 不落 localStorage / URL / 日志。生效 token 为空（mode:'none' /

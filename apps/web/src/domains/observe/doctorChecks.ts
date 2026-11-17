@@ -316,7 +316,10 @@ export function buildDoctorChecks(input: DoctorCheckInput): DoctorCheck[] {
         detail: t('observe.diagnostics.doctor.servePort.notConfigured'),
       });
     } else {
-      const host = nonEmpty(serve?.hostname) ?? '127.0.0.1';
+      // 0.58 顺手修：同一处改名（`serve` → `node`）漏了这一行 —— 它让 `apps/web`
+      // 的 `tsc --noEmit` 直接报 TS2304（web 构建因此是红的），而症状只是
+      // doctor 的 serve_port 宿主显示成 127.0.0.1。
+      const host = nonEmpty(node?.hostname) ?? '127.0.0.1';
       checks.push({
         name: 'serve_port',
         status: 'info',
