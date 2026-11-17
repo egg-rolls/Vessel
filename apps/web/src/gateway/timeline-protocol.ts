@@ -547,7 +547,7 @@ export interface TimelineRangeFetch {
  * 「退回 {@link LEGACY_TIMELINE_PAGE_LIMIT} 再来一次」的降级路（见
  * `subscription.ts#pullRange`），否则远端旧 gateway 连首屏都拉不下来。
  */
-export const TIMELINE_EVENTS_PAGE_LIMIT = 2000;
+export const TIMELINE_EVENTS_PAGE_LIMIT = 1000;
 
 /** 旧 gateway 的硬顶：降级时用的页大小（`MAX_SESSION_EVENTS_LIMIT` 0.57 之前的值）。 */
 export const LEGACY_TIMELINE_PAGE_LIMIT = 500;

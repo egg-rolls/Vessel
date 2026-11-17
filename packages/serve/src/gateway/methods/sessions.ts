@@ -765,7 +765,7 @@ const MESSAGE_CURSOR_VERSION = 1;
  * 客户端往返 4 → 1。
  */
 const DEFAULT_SESSION_EVENTS_LIMIT = 100;
-const MAX_SESSION_EVENTS_LIMIT = 2000;
+const MAX_SESSION_EVENTS_LIMIT = 1000;
 /**
  * 单次请求最多扫多少条落盘事件（`types` 全不中时的安全阀）：
  * 到顶就 `has_more: true` 让客户端继续翻页，宁可变慢也不让一次 RPC 卡死读整份日志。
@@ -774,11 +774,15 @@ const SESSION_EVENTS_MAX_SCAN = 20_000;
 /**
  * 一次 `readPage` 向时间线读口要多少条（内部翻页的页大小）。
  *
- * 这个数必须 **≤ 读口硬顶**（`src/timeline-dual-write.ts#TIMELINE_PAGE_MAX = 2000`）：
- * 要多了端口会自己裁掉，白写一次 `limit`。取 2000 而不是老的 500 的理由是「同样的
- * 数据量，开的块数差 4 倍」：一页 2000 条只定位一次块与索引，4 页要定位四次（实测
- * 82–100 ms vs 46–47 ms）。`types` / `tool_call_id` 过滤时也一样——扫的条数不变，只是
+ * 这个数必须 **≤ 读口硬顶**（`src/timeline-dual-write.ts#TIMELINE_PAGE_MAX = 1000`）：
+ * 要多了端口会自己裁掉，白写一次 `limit`。取 1000 而不是老的 500 的理由是「同样的
+ * 数据量，开的块数差 2 倍」：一页 1000 条只定位一次块与索引，2 页要定位两次（实测
+ * 46–62 ms vs 4 页的 106–152 ms）。`types` / `tool_call_id` 过滤时也一样——扫的条数不变，只是
  * 少几趟定位。
+ *
+ * 为什么**不**取 2000：最重的会话实测 4.6 KB/事件 ⇒ 2000 条一帧约 8.8 MB，正好撞上
+ * WS 单帧的 8 MiB 硬阈值（那只拦「发之前已堆积」，单帧仍会发出去）。1000 时最坏约 4.4 MB，
+ * 留足余量；往返从 4 趟降到 2 趟，已经拿走大部分收益。
  */
 const SESSION_EVENTS_READ_CHUNK = 2000;
 /** `types` 过滤条数上限（防止有人拿它当全量枚举使）。 */

@@ -481,7 +481,7 @@ export interface TimelinePageEvent {
  * 与 serve 的 `TIMELINE_PAGE_LIMIT`（epoch 帧仍按 500 一段发）**不再同值**：那是帧大小
  * （受 2 MiB 预算约束），这是读口的硬顶，两者约束的不是同一件事。
  */
-export const TIMELINE_PAGE_MAX = 2000;
+export const TIMELINE_PAGE_MAX = 1000;
 
 /**
  * 实时尾随的一条（`readPage` 的事件体 **+ `session_id`**）。
