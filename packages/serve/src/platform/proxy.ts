@@ -34,6 +34,10 @@ import type { PlatformNodeDescriptor } from './types.js';
 export type { PlatformProxyLimits, ProxyRoute };
 export { PROXY_BASE_PATH, parseProxyRoute };
 
+/** 失败类日志的节流窗口（毫秒）与条目上限。 */
+const LOG_THROTTLE_MS = 5_000;
+const LOG_THROTTLE_MAX_KEYS = 256;
+
 /** 逐跳头（RFC 7230 §6.1）：转发任一侧都必须剔除。 */
 const HOP_BY_HOP_HEADERS: ReadonlySet<string> = new Set([
   'connection',
@@ -197,6 +201,8 @@ export class PlatformProxy {
   private readonly log: (fields: Record<string, unknown>) => void;
   private readonly fetchImpl: typeof fetch;
   private readonly bridges = new Set<ProxyWsBridge>();
+  /** 失败日志节流状态：key → 上次输出时间与合并掉的次数。 */
+  private readonly failureLog = new Map<string, { at: number; suppressed: number }>();
   private heartbeat?: ReturnType<typeof setInterval>;
   private inflight = 0;
   private wsOpened = 0;
@@ -332,12 +338,15 @@ export class PlatformProxy {
           if (denial !== null) {
             releaseSlot();
             this.httpFailures += 1;
-            this.log({
-              event: 'gateway.proxy.rpc_denied',
-              node_id: node.nodeId,
-              method: typeof method === 'string' ? method : null,
-              code: denial.code,
-            });
+            this.logThrottled(
+              `rpc_http|${node.nodeId}|${typeof method === 'string' ? method : ''}`,
+              {
+                event: 'gateway.proxy.rpc_denied',
+                node_id: node.nodeId,
+                method: typeof method === 'string' ? method : null,
+                code: denial.code,
+              },
+            );
             return jsonError(denial.code, denial.message, denial.status);
           }
         }
@@ -362,7 +371,7 @@ export class PlatformProxy {
         releaseSlot();
         this.httpFailures += 1;
         const aborted = error instanceof Error && error.name === 'AbortError';
-        this.log({
+        this.logThrottled(`${aborted ? 'timeout' : 'unreachable'}|${node.nodeId}|${route.rest}`, {
           event: aborted ? 'gateway.proxy.node_timeout' : 'gateway.proxy.node_unreachable',
           node_id: node.nodeId,
           path: route.rest,
@@ -426,7 +435,7 @@ export class PlatformProxy {
     } catch (error) {
       releaseSlot();
       this.httpFailures += 1;
-      this.log({
+      this.logThrottled(`failed|${node.nodeId}|${route.rest}`, {
         event: 'gateway.proxy.failed',
         node_id: node.nodeId,
         path: route.rest,
@@ -517,13 +526,16 @@ export class PlatformProxy {
         const denial = checkRpcMethod(frame.method);
         if (denial === null) return null;
         // 记账：被拒的 WS 方法也必须有痕迹（否则「点了没反应」永远查不出来）。
-        this.log({
-          event: 'gateway.proxy.rpc_denied',
-          node_id: node.nodeId,
-          method: typeof frame.method === 'string' ? frame.method : null,
-          via: 'ws',
-          code: denial.code,
-        });
+        this.logThrottled(
+          `rpc_ws|${node.nodeId}|${typeof frame.method === 'string' ? frame.method : ''}`,
+          {
+            event: 'gateway.proxy.rpc_denied',
+            node_id: node.nodeId,
+            method: typeof frame.method === 'string' ? frame.method : null,
+            via: 'ws',
+            code: denial.code,
+          },
+        );
         return denial.message;
       },
       limits: this.limits,
@@ -594,12 +606,36 @@ export class PlatformProxy {
     (this.heartbeat as { unref?: () => void }).unref?.();
   }
 
+  /**
+   * 失败类日志的节流（同一 `key` 每 `LOG_THROTTLE_MS` 最多一行，其余计数合并）。
+   *
+   * 为什么需要：node 挂掉时每个标签页每秒都在重试，一次事故能打几十 KB 日志
+   * （0.58 验收实测：一次 70 并发超时用例打了 5 KB）。日志是排障工具，被刷爆之后
+   * 就没人看了。合并行里带 `suppressed` —— 丢的是重复，不是事实。
+   */
+  private logThrottled(key: string, fields: Record<string, unknown>): void {
+    const now = Date.now();
+    const previous = this.failureLog.get(key);
+    if (previous !== undefined && now - previous.at < LOG_THROTTLE_MS) {
+      previous.suppressed += 1;
+      return;
+    }
+    // 无界 Map 是隐患：条目数只随 (node, 事件, 方法) 组合增长，但也要有上限。
+    if (this.failureLog.size > LOG_THROTTLE_MAX_KEYS) this.failureLog.clear();
+    this.failureLog.set(key, { at: now, suppressed: 0 });
+    this.log({
+      ...fields,
+      ...(previous !== undefined && previous.suppressed > 0
+        ? { suppressed: previous.suppressed }
+        : {}),
+    });
+  }
+
   private reserveBytes(bytes: number): boolean {
     if (this.wsPendingBytes + bytes > this.limits.wsPendingBudgetBytes) return false;
     this.wsPendingBytes += bytes;
     return true;
   }
-
   private releaseBytes(bytes: number): void {
     this.wsPendingBytes = Math.max(0, this.wsPendingBytes - bytes);
   }
