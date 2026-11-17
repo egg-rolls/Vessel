@@ -14,6 +14,7 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import {
+  getUserConfigPath,
   loadConfig,
   resolveEffectiveApiKey,
   resolvePlatformProxySecret,
@@ -39,6 +40,8 @@ import {
   readKnownNodeId,
 } from './token-derive';
 import { resolveGatewayToken } from './transport-factory';
+// 0.56.1：Web 控制台产物缺失要在 doctor 就能看见（`gateway start` 的硬前置）。
+import { DEFAULT_WEB_DIST_DIR } from './web-dist';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
 
@@ -243,6 +246,22 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     message: `${dataDir} (source: ${dataDirSource})${
       fs.existsSync(dataDir) ? '' : ' (will be created)'
     }`,
+  });
+
+  // 0.56.1：**哪一份用户配置在生效**必须能看到 —— 「我明明写的是空配置」这类
+  // 假绿全部来自这里没说清。只显示路径与是否存在，绝不显示内容。
+  const userConfigPath = getUserConfigPath();
+  const userConfigExplicit =
+    (env.VESSEL_USER_CONFIG ?? '').trim() !== '' || options.userConfigPath !== undefined;
+  const userConfigExists = fs.existsSync(userConfigPath);
+  checks.push({
+    name: 'user_config',
+    status: userConfigExplicit && !userConfigExists ? 'fail' : 'ok',
+    message: userConfigExplicit
+      ? `${userConfigPath} (source: --user-config/VESSEL_USER_CONFIG${
+          userConfigExists ? '' : '; MISSING — it was given explicitly, so it must exist'
+        })`
+      : `${userConfigPath} (default${userConfigExists ? '' : '; not created yet'})`,
   });
 
   const backend = config.session?.backend ?? 'file';
@@ -484,6 +503,21 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     config.evals?.enabled !== false ? 'evals' : null,
     config.feishu?.enabled === true ? 'feishu' : null,
   ].filter((value): value is string => value !== null);
+  // 0.56.1：Web 控制台产物是 `gateway start` 的硬前置 —— 在这里先看出来，
+  // 别等 start 才失败（新克隆必踩）。只判存在，不触发构建。
+  {
+    const staticDir = (env.VESSEL_STATIC_DIR ?? '').trim() || DEFAULT_WEB_DIST_DIR;
+    const present = fs.existsSync(path.join(staticDir, 'index.html'));
+    checks.push({
+      name: 'web',
+      status: present ? 'ok' : 'fail',
+      message: present
+        ? staticDir
+        : `missing at ${staticDir} — run "bun run build:web" (fresh clone has no assets), ` +
+          'or point VESSEL_STATIC_DIR at an existing build',
+    });
+  }
+
   checks.push({
     name: 'capabilities',
     status: 'info',

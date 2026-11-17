@@ -106,12 +106,16 @@ vessel --session <id> --run "..."    # 续接指定会话
 
 ### Web 控制台
 
+> **源码 checkout 必须先构建一次 Web 控制台**：`bun run build:web`（= `cd apps/web && npm ci && npm run build`）。
+> 没有 `apps/web/dist/index.html` 时 `vessel gateway start` 会**直接失败并提示这条命令**
+> （`vessel doctor` 的 `web` 一行也会提前报出来）。
+
 ```bash
 vessel gateway start --daemon       # 平台 8642 + Node API 8644（同进程）
 vessel node start --daemon          # 只起 Node API（缺省 8644）
 vessel gateway status --json        # 两个监听的状态
 vessel node status --json
-cd apps/web && npm ci && npm run build  # 生产：Platform Gateway 托管 dist
+bun run build:web                   # 生产：Platform Gateway 托管 apps/web/dist
 bun run dev:web                     # 开发：http://127.0.0.1:5173
 VESSEL_MOCK=1 vessel --serve 8642   # legacy 单监听（保留至 G5）
 ```

@@ -278,6 +278,8 @@ export function renderGlobalHelp(): string {
     ['vessel', t('help.cmd.repl')],
     ['vessel demo', t('help.cmd.demo')],
     ['vessel help [command]', t('help.cmd.helpCommand')],
+    ['vessel <command> --data-dir <path>', t('help.cmd.globalDataDir')],
+    ['vessel <command> --user-config <path>', t('help.cmd.globalUserConfig')],
   ];
   const session: Array<[string, string]> = [
     ['vessel -c', t('help.cmd.continue')],

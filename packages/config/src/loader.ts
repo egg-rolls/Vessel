@@ -14,6 +14,7 @@
 
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { stat } from 'node:fs/promises';
 import { parse as parseYaml } from 'yaml';
 import { DEFAULT_CONFIG, DEFAULT_TENANT_ID, defaultModelForProvider } from './defaults.js';
 import { resolveEnvRefsInLayer } from './secrets.js';
@@ -128,7 +129,20 @@ export function getUserConfigDir(): string {
 /**
  * 获取用户配置文件路径
  */
+/**
+ * 用户配置路径（`~/.vessel/config.yaml`）。
+ *
+ * `VESSEL_USER_CONFIG` 可以整体替换它 —— 这是给**隔离运行**用的（同一台机器上跑
+ * 第二套环境、或端到端验证「用户什么都没配」）。`vessel --user-config <path>`
+ * 就是把参数落到这个环境变量上，从而对所有命令、以及它们 spawn 的子进程
+ * （daemon / node / hub）一致生效。
+ *
+ * 注意：显式指定时**必须存在**，`loadConfig` 会对「显式给了但读不到」直接报错
+ * —— 否则会出现「以为验的是空配置，其实还是读了真配置」这种假绿。
+ */
 export function getUserConfigPath(): string {
+  const override = (process.env.VESSEL_USER_CONFIG ?? '').trim();
+  if (override !== '') return path.resolve(override);
   return path.join(getUserConfigDir(), 'config.yaml');
 }
 
@@ -161,6 +175,16 @@ function configFileError(filePath: string, error: unknown): ConfigValidationErro
   // `Map keys must be unique at line 2, column 1:`，已包含位置。
   const firstLine = message.split('\n', 1)[0] ?? 'Unknown parse error';
   return { path: filePath, message: `YAML parse error: ${firstLine}` };
+}
+
+/** 文件是否存在（只判存在，不读内容；ENOENT → false）。 */
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 读取原始顶层对象；只有 ENOENT 当缺省，其它读取/解析错误记入 validation。 */
@@ -528,7 +552,16 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   const env: EnvMap = options.env ?? process.env;
   const envPrefix = options.envPrefix ?? 'VESSEL_';
   const projectPath = options.configPath ?? 'vessel.yaml';
-  const userPath = options.userConfigPath ?? getUserConfigPath();
+  // `options.userConfigPath`（程序入口显式给）或 `VESSEL_USER_CONFIG`（CLI
+  // `--user-config` 落到这里，好让 spawn 的子进程也一致）：两者都算「显式指定」，
+  // 显式指定但文件不存在 → 报错，**绝不**静默回落成空配置（那会读出真配置还以为在验空配置）。
+  const explicitUserPath = (() => {
+    const fromOption = options.userConfigPath;
+    if (fromOption !== undefined && fromOption.trim() !== '') return path.resolve(fromOption);
+    const fromEnv = (env.VESSEL_USER_CONFIG ?? '').trim();
+    return fromEnv !== '' ? path.resolve(fromEnv) : undefined;
+  })();
+  const userPath = explicitUserPath ?? getUserConfigPath();
 
   const sources: ConfigSources = {};
   const preErrors: ConfigValidationError[] = [];
@@ -540,6 +573,17 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   // 2. 用户层：legacy 映射 + 完整 config 键（source=user）
   const userFile = await loadRawConfig(userPath);
   if (userFile.error) preErrors.push(userFile.error);
+  if (explicitUserPath !== undefined && !(await pathExists(explicitUserPath))) {
+    preErrors.push({
+      path: 'user_config',
+      message:
+        `user config ${explicitUserPath} does not exist. ` +
+        'It was given explicitly (--user-config or VESSEL_USER_CONFIG), so it must exist; ' +
+        'refusing to fall back — an empty/missing explicit file almost always means you are ' +
+        'still validating the real config by accident. Create it (an empty file is fine) or ' +
+        'drop the flag.',
+    });
+  }
   const rawUser = userFile.raw;
   // 同层出现新版 `provider:` 时 legacy 键整体忽略（DECISION-020 §R1.4）。
   const hasNewProvider = isRecord(rawUser.provider);

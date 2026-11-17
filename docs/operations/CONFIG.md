@@ -48,6 +48,20 @@ vessel gateway list --data-dir /var/tmp/vessel-b     # 只看得到 b
 各自的 `sessions/` 与 `.locks/`、各自的 `root-secret`（派生 token 互不相同）。
 默认实例的 `8642/8644` 与它的数据目录完全不受影响。
 
+### 2.0.1 `--user-config <path>`：只换用户层
+
+```bash
+vessel gateway start --daemon --data-dir /var/tmp/vessel-b \
+  --user-config /var/tmp/vessel-b/user.yaml --port 18920
+```
+
+- **只替换用户层**（`~/.vessel/config.yaml`）：项目 `vessel.yaml`、`VESSEL_*` 环境变量、
+  CLI 参数的原有优先级不变（`VESSEL_USER_CONFIG` 等价，daemon/node/hub 子进程也一致携带）。
+- 显式给出但**文件不存在 → 直接报错退出（exit 2）**，绝不静默回落成空配置：
+  「以为验的是空配置，其实还是读了真配置」是这类隔离最常见的假绿。
+  需要一个空用户层就写一个空文件（`{}`）。
+- `vessel doctor` 的 `user_config` 一行会回显**当前生效的路径与来源**（只显示路径，不显示内容）。
+
 ## 2. 关键配置块
 
 ```yaml

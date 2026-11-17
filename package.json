@@ -40,6 +40,7 @@
     "start": "bun run src/cli.ts",
     "demo": "bun run examples/demo.ts",
     "dev:web": "bun run scripts/dev-web.ts",
+    "build:web": "bun run --cwd apps/web build",
     "build:web:watch": "bun run --cwd apps/web build:watch",
     "build": "bun run scripts/build.ts",
     "lint": "bunx @biomejs/biome ci .",

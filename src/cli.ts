@@ -247,6 +247,24 @@ const args = parsed.args;
 // explicit --data-dir into the env layer so they resolve the same data root.
 // The main bootstrap path still passes it through buildCliConfigOverrides().
 if (args.dataDirArg !== null) process.env.VESSEL_DATA_DIR = args.dataDirArg;
+// 0.56.1：`--user-config <path>` 只替换**用户层**配置路径。落到 env 是为了让
+// 一次性命令与它 spawn 的 daemon / node / hub 子进程看到同一个用户层
+// （否则子进程会去读真实 `~/.vessel/config.yaml`，「隔离开销」白做）。
+if (args.userConfigArg !== null) process.env.VESSEL_USER_CONFIG = args.userConfigArg;
+// 显式给了用户配置却读不到 → 立刻报错退出（解析层就拦住）。
+// 放到这里而不是只靠 loader：`gateway list` 这类命令根本不加载配置，若只靠 loader
+// 校验，打错的路径会被静默忽略 —— 那正是「以为验了隔离配置」的假绿来源。
+if (args.userConfigArg !== null) {
+  const userConfigPath = path.resolve(expandHome(args.userConfigArg));
+  if (!existsSync(userConfigPath)) {
+    console.error(
+      `user config not found: ${userConfigPath}\n` +
+        'It was given explicitly (--user-config), so it must exist: refusing to fall back ' +
+        'to ~/.vessel/config.yaml. Create the file (an empty one is fine: {}) or drop the flag.',
+    );
+    process.exit(2);
+  }
+}
 // 0.49 G3a：`node start --config <path>` 的配置路径；仅为 standalone node 生效，
 // 不改全局配置发现规则。
 const nodeConfigPath =

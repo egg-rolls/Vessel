@@ -2361,6 +2361,14 @@ export async function runPlatformGatewayForeground(
   }
   const lock = prepared.lock;
 
+  // 0.56.1：Web 控制台产物是平台的**硬前置**（没有它就只剩一堆 404 的纯 API）。
+  // 先判再打印任何启动信息：新克隆的仓库必然是空的，报错必须直接说出「跑什么」，
+  // 而不是让用户对着 `cannot GET /` 猜是缺构建产物。
+  if (!existsSync(path.join(options.staticDir, 'index.html'))) {
+    printErr(ui.err(t('gateway.webDistMissing', { path: options.staticDir })));
+    return 1;
+  }
+
   let platformGateway: ReturnType<typeof startPlatformGateway> | undefined;
   let supervisor: NodeSupervisor | undefined;
   // handoff（0.52）：命中「保留子进程」时，成功/失败/退出路径都不能把它们停掉。
@@ -2397,11 +2405,6 @@ export async function runPlatformGatewayForeground(
     const hubAutoStart = hubConfig?.autoStart !== false && hubConfig?.direction !== 'node';
     const hubHostname = (hubConfig?.listen?.hostname ?? HUB_DEFAULT_HOSTNAME).trim();
     const hubPort = hubConfig?.listen?.port ?? HUB_DEFAULT_PORT;
-
-    if (!existsSync(path.join(options.staticDir, 'index.html'))) {
-      printErr(ui.err(t('gateway.webDistMissing', { path: options.staticDir })));
-      return 1;
-    }
 
     let nodes: ResolvedLocalNode[];
     try {
