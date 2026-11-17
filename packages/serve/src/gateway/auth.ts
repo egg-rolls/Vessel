@@ -150,22 +150,155 @@ function cspSafeUrl(origin: string): URL | null {
   }
 }
 
+/** 受信边缘输入：反代与 gateway 同机时，「谁给了 Host / 协议真值」的唯一依据。 */
+export interface EdgeTrustInput {
+  /** `srv.requestIP(req)?.address`；null / undefined 视为不受信。 */
+  address?: string | null;
+  /** `gateway.proxy_secret_env` 解析结果；未配置 / 空串 = undefined（旧行为）。 */
+  proxySecret?: string | undefined;
+  /**
+   * `auth.trustedProxies`：受信代理地址（精确地址，或以 `.` 结尾的网段前缀）。
+   * 缺省 = 只信回环 socket。显式配置后**替换**缺省，不再自动包含回环。
+   */
+  trustedProxies?: string[] | undefined;
+}
+
+/** 一次请求的边缘事实：Host 与协议的生效值 + 可信度。 */
+export interface RequestEdge {
+  /** 请求是否来自受信代理（此时才读 `X-Forwarded-*`）。 */
+  viaProxy: boolean;
+  /** 反代密钥头是否成立（未配置密钥时恒为 true）。 */
+  proxySecretOk: boolean;
+  /** 生效 Host（小写、含端口）；缺失 / 非法 = null。 */
+  host: string | null;
+  /** 生效协议（受信时代理说了算）。 */
+  protocol: 'http' | 'https';
+  /**
+   * 本机直连：回环 socket ∧ 未经受信代理 ∧ Host 指向回环。
+   * 反代同机时客户端 peer 也是回环，所以只靠地址无法区分；Host 是最后一个信号。
+   */
+  localDirect: boolean;
+}
+
+/** CSP 只需要这两个事实；单独成型便于在静态响应里复用同一次解析。 */
+export interface CspRequestFacts {
+  host: string | null;
+  protocol: 'http' | 'https';
+}
+
+/** 常规 host[:port] 字符白名单（同时用于 CSP 指令注入防护）。 */
+function safeHostValue(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string' || raw === '') return null;
+  const value = raw.trim().toLowerCase();
+  if (!/^[a-z0-9.\-:[\]]+$/.test(value)) return null;
+  return value;
+}
+
+/** 取的第一个非空值；`x-forwarded-host` 允许逗号链，取最左（原始客户端）。 */
+function firstForwardedValue(raw: string | null): string | null {
+  if (raw === null) return null;
+  const first = raw.split(',')[0];
+  return first === undefined ? null : safeHostValue(first);
+}
+
+/** 回环地址是否在受信代理列表内（支持精确地址与 `10.0.` 这种前缀）。 */
+function addressInTrustedProxies(address: string, trustedProxies: string[]): boolean {
+  const lower = address.toLowerCase();
+  for (const raw of trustedProxies) {
+    const entry = raw.trim().toLowerCase();
+    if (entry === '') continue;
+    if (entry.endsWith('.') || entry.endsWith(':')) {
+      if (lower.startsWith(entry)) return true;
+      continue;
+    }
+    if (lower === entry) return true;
+  }
+  return false;
+}
+
+/**
+ * 解析本次请求的「边缘事实」（0.56）。
+ *
+ * 规则（fail-closed）：`X-Forwarded-Host` / `X-Forwarded-Proto` **只在**请求来自
+ * 受信代理时被采信 —— 受信 = socket 在受信代理列表内（缺省回环）∧ 反代密钥成立。
+ * 其它情况一律用请求自身（`Host` / `req.url`），因此伪造 Host 不会拿到公网身份。
+ */
+export function resolveRequestEdge(req: Request, trust: EdgeTrustInput = {}): RequestEdge {
+  const proxySecretOk = proxySecretAllowed(req, trust.proxySecret);
+  const address = typeof trust.address === 'string' ? trust.address : '';
+  const addressTrusted =
+    address !== '' &&
+    (trust.trustedProxies !== undefined && trust.trustedProxies.length > 0
+      ? addressInTrustedProxies(address, trust.trustedProxies)
+      : isLoopbackAddress(address));
+  const viaProxy = addressTrusted && proxySecretOk;
+
+  const rawHost = safeHostValue(req.headers.get('host'));
+  const forwardedHost = viaProxy ? firstForwardedValue(req.headers.get('x-forwarded-host')) : null;
+  const host = forwardedHost ?? rawHost;
+
+  const forwardedProto = viaProxy
+    ? req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
+    : undefined;
+  const protocol: 'http' | 'https' =
+    forwardedProto === 'https'
+      ? 'https'
+      : forwardedProto === 'http'
+        ? 'http'
+        : isHttpsRequest(req)
+          ? 'https'
+          : 'http';
+
+  let hostname = '';
+  if (host !== null) {
+    try {
+      hostname = new URL(`http://${host}`).hostname.toLowerCase();
+    } catch {
+      hostname = '';
+    }
+  }
+  return {
+    viaProxy,
+    proxySecretOk,
+    host,
+    protocol,
+    // 直连 = 回环 socket ∧ 未经受信代理 ∧ Host 指回环。反代与浏览器同机时
+    // 两者都是回环 socket，只有 Host 能区分；不满足任一条就不算直连。
+    localDirect:
+      isLoopbackAddress(address) && !viaProxy && hostname !== '' && isLoopbackHostname(hostname),
+  };
+}
+
+/** 请求自身是否 https（Bun 下 TLS 监听会给出 https: url）。 */
+function isHttpsRequest(req: Request): boolean {
+  try {
+    return new URL(req.url).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * HTML CSP：connect-src 只放同源 Host 与显式 allowlist，不再使用裸 `ws:` / `wss:`。
  * 其余指令保持 0.5 的基线；`extend` 缺省时输出逐字不变。
+ *
+ * 0.56：`facts` 由受信边缘解析（`resolveRequestEdge`）给出。反代后面板
+ * `req.url` 恒为 `http:`，只看它会给 https 页面下发 `ws://` 并被浏览器拦掉；
+ * 传 `facts` 时以「有效 host / 有效协议」为准，不传时逐字保持旧行为。
  */
 export function buildContentSecurityPolicy(
   req: Request,
   allowedOrigins: string[],
   extend?: CspExtensionSources,
+  facts?: CspRequestFacts,
 ): string {
   const sources = new Set<string>(["'self'"]);
-  const rawHost = req.headers.get('host');
+  const rawHost = facts !== undefined ? facts.host : req.headers.get('host');
   // Host 会进入 CSP 指令；只接受常规 host[:port] 字符，防止指令注入。
   const host = rawHost && /^[A-Za-z0-9.\-:[\]]+$/.test(rawHost) ? rawHost : null;
   // IPv6 字面量不是合法 CSP source；这类页面靠 `'self'` 覆盖同源连接。
   if (host && !host.startsWith('[')) {
-    const secure = new URL(req.url).protocol === 'https:';
+    const secure = facts !== undefined ? facts.protocol === 'https' : isHttpsRequest(req);
     sources.add(`${secure ? 'wss' : 'ws'}://${host}`);
   }
   for (const origin of allowedOrigins) {
@@ -195,10 +328,48 @@ export function buildContentSecurityPolicy(
   );
 }
 
-/** 判断 Host 是否指向回环地址（防 DNS rebinding） */
-export function hostAllowed(req: Request, listenHost: string): boolean {
-  const host = req.headers.get('host');
-  if (!host) return true;
+/**
+ * Host 放行策略（0.56）。
+ *
+ * 公网部署（反代保留原始 Host）时，监听地址仍是 `127.0.0.1`，`Host: egg-rolls.top`
+ * 与它不相等 —— 旧实现直接 403，登录页都打不开。这里改为**显式允许列表**：
+ * `publicHosts`（来自 `auth.publicOrigin`）+ `additionalHosts`（额外同意的域名）。
+ */
+export interface HostPolicy {
+  /** 平台/node 监听地址（旧语义：与它完全相同的 host 放行）。 */
+  listenHost: string;
+  /** 公网 origin 派生的 host（含端口，小写）；如 `egg-rolls.top`。 */
+  publicHosts?: string[];
+  /** 额外允许的 host（含端口或裸域名）。 */
+  additionalHosts?: string[];
+  /** 受信边缘事实；缺省 = 不采信任何转发头（旧行为）。 */
+  edge?: RequestEdge;
+}
+
+/** host 比对：允许「带端口」与「裸域名」两种写法互相命中。 */
+function hostMatches(host: string, allowed: string): boolean {
+  const target = allowed.trim().toLowerCase();
+  if (target === '') return false;
+  if (host === target) return true;
+  const hostname = host.split(':')[0] ?? '';
+  return hostname !== '' && hostname === target;
+}
+
+/**
+ * 判断 Host 是否可信。
+ *
+ * 旧签名 `hostAllowed(req, listenHost)` 逐字保留（hub / 已知调用方不动）；
+ * 平台入口传 {@link HostPolicy}：先看受信边缘给出的**生效 Host**，再比对显式列表。
+ *
+ * 0.56 关键一条：`publicHosts` / `additionalHosts` 是**反代域名**，只在请求确实
+ * 来自受信代理（`edge.viaProxy`）时才放行 —— 否则「伪造 `Host: egg-rolls.top`
+ * 但没带反代凭据」就会拿到公网身份。本机直连永远走回环分支。
+ */
+export function hostAllowed(req: Request, policy: string | HostPolicy): boolean {
+  const resolved: HostPolicy = typeof policy === 'string' ? { listenHost: policy } : policy;
+  const rawHost = resolved.edge !== undefined ? resolved.edge.host : req.headers.get('host');
+  if (!rawHost) return true;
+  const host = rawHost.toLowerCase();
   let hostname: string;
   try {
     hostname = new URL(`http://${host}`).hostname.toLowerCase();
@@ -207,8 +378,17 @@ export function hostAllowed(req: Request, listenHost: string): boolean {
   }
   if (isLoopbackHostname(hostname)) return true;
   // 通配绑定无法与 Host 精确比较；远程模式仍要求 token，浏览器 Origin 仍须同源。
-  if (isWildcardHostname(listenHost)) return true;
-  return hostname === listenHost.toLowerCase();
+  if (isWildcardHostname(resolved.listenHost)) return true;
+  if (hostname === resolved.listenHost.toLowerCase()) return true;
+  // 反代域名：没有「受信代理」这个前提，显式列表不生效。
+  if (resolved.edge !== undefined && !resolved.edge.viaProxy) return false;
+  for (const allowed of resolved.publicHosts ?? []) {
+    if (hostMatches(host, allowed)) return true;
+  }
+  for (const allowed of resolved.additionalHosts ?? []) {
+    if (hostMatches(host, allowed)) return true;
+  }
+  return false;
 }
 
 /** Origin 校验：无 Origin（curl / peer）放行；浏览器必须同源或在允许列表 */

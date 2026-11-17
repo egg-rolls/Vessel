@@ -55,6 +55,17 @@ export {
   createAgentRegistry,
 } from './agents-registry.js';
 export {
+  AuthService,
+  type AuthSettings,
+  type AuthSubject,
+  CSRF_HEADER,
+  GITHUB_CALLBACK_PATH,
+  isAuthPublicPath,
+  LOGIN_PATH,
+  type SessionSnapshot,
+  SessionStore,
+} from './auth/index.js';
+export {
   type BackpressureThresholds,
   ClientBackpressure,
 } from './backpressure.js';
@@ -110,6 +121,8 @@ export {
 export {
   type CspExtensionSources,
   corsHeaders,
+  type EdgeTrustInput,
+  type HostPolicy,
   hostAllowed,
   isWildcardHostname,
   loadTlsMaterial,
@@ -117,6 +130,8 @@ export {
   originAllowed,
   PROXY_SECRET_HEADER,
   proxySecretAllowed,
+  type RequestEdge,
+  resolveRequestEdge,
 } from './gateway/auth.js';
 export {
   type GatewayReloadResult,

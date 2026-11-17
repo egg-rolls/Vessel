@@ -20,6 +20,7 @@ import {
   DEFAULT_GATEWAY_OPTIONS,
   DEFAULT_SERVE_OPTIONS,
   loadConfig,
+  resolveAuthSettings,
   resolveGatewayNodePorts,
   resolvePlatformProxySecret,
   resolvePlatformToken,
@@ -2431,6 +2432,13 @@ export async function runPlatformGatewayForeground(
       if (!hubBegin.ok) printErr(ui.warn(`${hubBegin.code}: ${hubBegin.message}`));
     }
 
+    // 0.56：WebUI 登录（GitHub OAuth，单用户）。未配置 auth.backends 时
+    // backends 为空 ⇒ 平台行为与 0.55 逐字一致（回环可用，不锁死）。
+    // 配错（缺 publicOrigin / 缺白名单 / 缺 clientId）只降级为「登录未启用」+ 告警，
+    // 不会拦住 gateway 启动 —— 这是「破坏性变更必须自带自愈」的那条。
+    const resolvedAuth = resolveAuthSettings({ auth: config.auth, dataDir });
+    for (const warning of resolvedAuth.warnings) printErr(ui.warn(`auth: ${warning}`));
+
     try {
       platformGateway = startPlatformGateway({
         port: platformPort,
@@ -2458,6 +2466,16 @@ export async function runPlatformGatewayForeground(
           return token !== undefined ? { found: true, token } : { found: true };
         },
         version,
+        auth: {
+          publicOrigin: resolvedAuth.publicOrigin,
+          allowedHosts: resolvedAuth.allowedHosts,
+          ...(resolvedAuth.trustedProxies !== undefined
+            ? { trustedProxies: resolvedAuth.trustedProxies }
+            : {}),
+          backends: resolvedAuth.backends,
+          session: resolvedAuth.session,
+          env,
+        },
       });
     } catch (error) {
       printErr(ui.err(`Platform gateway failed to start: ${errorMessage(error)}`));
