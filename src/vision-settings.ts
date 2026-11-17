@@ -21,8 +21,8 @@
  * @module vessel/vision-settings
  */
 
-import type { VisionSettings } from '../packages/core/src/index';
 import type { VesselConfig } from '../packages/config/src/index';
+import type { VisionSettings } from '../packages/core/src/index';
 
 /** 单请求张数的安全上界（夹取风格与 `temporaryTtlHours` 一类配置一致）。 */
 export const MAX_IMAGES_PER_REQUEST_LIMIT = 32;

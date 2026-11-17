@@ -30,14 +30,14 @@
  */
 
 import type { Message, MessageRef } from '../types/provider.js';
-import {
-  type AttachmentPlan,
-  type CanonicalImagePart,
-  type DroppedImage,
-  type ImageDropReason,
-  type PlannedImage,
-  type VisionBackend,
-  type VisionSettings,
+import type {
+  AttachmentPlan,
+  CanonicalImagePart,
+  DroppedImage,
+  ImageDropReason,
+  PlannedImage,
+  VisionBackend,
+  VisionSettings,
 } from '../types/vision.js';
 import { readImageBlob, sha8Of, sha256Of } from './blobs.js';
 
@@ -99,9 +99,7 @@ function collectImageRefs(
  *
  * 没有任何图片引用时返回空计划（`tokens: 0`），调用方照旧把它显式传给估算器。
  */
-export async function resolveAttachmentPlan(
-  input: AttachmentPlanInput,
-): Promise<AttachmentPlan> {
+export async function resolveAttachmentPlan(input: AttachmentPlanInput): Promise<AttachmentPlan> {
   const settings = input.settings;
   const collected = collectImageRefs(input.messages);
   const byMessageIndex = new Map<number, PlannedImage[]>();
@@ -224,11 +222,7 @@ function backendTag(backend: VisionBackend): { id: string; kind: VisionBackend['
   return { id: backend.id, kind: backend.kind };
 }
 
-function dropOf(
-  messageIndex: number,
-  ref: MessageRef,
-  reason: ImageDropReason,
-): DroppedImage {
+function dropOf(messageIndex: number, ref: MessageRef, reason: ImageDropReason): DroppedImage {
   return {
     message_index: messageIndex,
     ...(ref.sha256 !== undefined ? { sha256: ref.sha256 } : {}),

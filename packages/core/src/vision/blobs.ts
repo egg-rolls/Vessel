@@ -26,7 +26,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 

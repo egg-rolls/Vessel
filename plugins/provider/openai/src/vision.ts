@@ -21,11 +21,7 @@
  * 永不按 base64 字符数（1 MiB ≈ 1,398,104 字符，字符口径 ≈ 432k token —— 420 倍误差）。
  */
 
-import type {
-  CanonicalImagePart,
-  RequestContentPart,
-  VisionBackend,
-} from '@vessel-agent/core';
+import type { CanonicalImagePart, RequestContentPart, VisionBackend } from '@vessel-agent/core';
 
 /** deepseek / OpenAI 兼容端点的单图 token 上界（文档值，只许高报）。 */
 export const OPENAI_COMPAT_TOKENS_PER_IMAGE = 1024;
@@ -94,9 +90,7 @@ export interface OpenAiCompatVisionOptions {
  * 描述符实例是**不可变**的：所有方法都只读构造参数 —— 于是「同一 provider 实例」在整条
  * run 里给出的能力是同一个答案（`agent.model` 覆盖会换 provider 实例，能力自动跟着走）。
  */
-export function createOpenAiCompatVision(
-  options: OpenAiCompatVisionOptions = {},
-): VisionBackend {
+export function createOpenAiCompatVision(options: OpenAiCompatVisionOptions = {}): VisionBackend {
   const id = options.id ?? 'openai-compat';
   const maxImages = options.maxImagesPerRequest ?? 32;
   const maxBytesPerImage = options.maxBytesPerImage ?? 8 * 1024 * 1024;

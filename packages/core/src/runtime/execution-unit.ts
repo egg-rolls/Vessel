@@ -115,15 +115,6 @@ import type {
   StreamChunk,
 } from '../types/provider.js';
 import type { Run, RunInterruptReason, RunOptions, StreamSegmentState } from '../types/run.js';
-import type { AttachmentPlan, VisionSettings } from '../types/vision.js';
-import { EMPTY_ATTACHMENT_PLAN } from '../types/vision.js';
-import {
-  imageDropLabel,
-  imageDropStatus,
-  resolveAttachmentPlan,
-  sha8Of,
-  summarizeAttachmentPlan,
-} from '../vision/index.js';
 import type { RunRecord, RunUsage } from '../types/run-record-store.js';
 import {
   RUN_INTERRUPT_REASONS,
@@ -137,6 +128,15 @@ import type {
   SessionStatus,
   SessionStore,
 } from '../types/session.js';
+import type { AttachmentPlan, VisionSettings } from '../types/vision.js';
+import { EMPTY_ATTACHMENT_PLAN } from '../types/vision.js';
+import {
+  imageDropLabel,
+  imageDropStatus,
+  resolveAttachmentPlan,
+  sha8Of,
+  summarizeAttachmentPlan,
+} from '../vision/index.js';
 
 export type { RunOptions } from '../types/run.js';
 
@@ -1049,10 +1049,7 @@ export class ExecutionUnit {
    * 为什么按 sha 而不按消息下标：压缩会删中段 + 插摘要，下标全部重排；图片的身份是内容
    * （sha256），**只有它能跨压缩对齐**。同一条图被压缩删掉一次就记一次（去重键含 session）。
    */
-  private reportCompactionImageDrops(
-    execution: Run,
-    before: ReadonlySet<string>,
-  ): void {
+  private reportCompactionImageDrops(execution: Run, before: ReadonlySet<string>): void {
     if (before.size === 0) return;
     const after = new Set<string>();
     for (const ref of this.imageRefsOfWindow(execution.workingContext)) after.add(ref);
@@ -4236,11 +4233,7 @@ export class ExecutionUnit {
    * 去重：(session, sha8, 结果) 只记一条 —— plan 每轮重算，同一张历史里的图会被反复解析
    * 出来，不去重就会随轮数线性增长（P0-09 的幂等性判据）。
    */
-  private reportImageDelivery(
-    execution: Run,
-    sessionId: string,
-    plan: AttachmentPlan,
-  ): void {
+  private reportImageDelivery(execution: Run, sessionId: string, plan: AttachmentPlan): void {
     const { runId } = execution;
     if (plan.disabled === true && !this.visionDisabledReported.has(sessionId)) {
       this.visionDisabledReported.add(sessionId);
@@ -4325,10 +4318,7 @@ export class ExecutionUnit {
    * 去重键与 `reportImageDelivery` 同一套（session + sha8 + 结果）：请求视图每轮都重建，
    * 不去重就会每轮重复记一条。
    */
-  private reportPlaceholderImageDrops(
-    before: readonly Message[],
-    after: readonly Message[],
-  ): void {
+  private reportPlaceholderImageDrops(before: readonly Message[], after: readonly Message[]): void {
     const run = this.activeRun;
     if (run === undefined) return;
     const reported = this.reportedImageDelivery.get(run.sessionId);

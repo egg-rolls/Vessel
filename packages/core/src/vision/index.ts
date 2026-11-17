@@ -26,20 +26,20 @@ export type {
 } from '../types/vision.js';
 export { conservativeTokenCost, EMPTY_ATTACHMENT_PLAN } from '../types/vision.js';
 export {
-  collectImageBlobs,
   type CollectImageBlobsOptions,
   type CollectImageBlobsResult,
+  collectImageBlobs,
   DEFAULT_IMAGE_BLOB_TTL_DAYS,
   DEFAULT_ORPHAN_GRACE_HOURS,
-  type ImageBlobStats,
   IMAGE_BLOB_POOL_MAX_BYTES,
+  type ImageBlobStats,
   imageBlobRoot,
   imageExtOf,
   isSha256,
   readImageBlob,
   scanImageBlobs,
-  sha256Of,
   sha8Of,
+  sha256Of,
 } from './blobs.js';
 export {
   collectReferencedShas,

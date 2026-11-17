@@ -64,7 +64,9 @@ function numberField(source: unknown, key: string): number | undefined {
 }
 
 /** 一条事件 → 投递事实（形状不对返回 `undefined`，调用方按「没有记录」处理）。 */
-function deliveryOfRecord(record: SessionEventRecord): { sha8: string; view: ImageDeliveryView } | undefined {
+function deliveryOfRecord(
+  record: SessionEventRecord,
+): { sha8: string; view: ImageDeliveryView } | undefined {
   const data = record.data;
   const sha8 = textField(data, 'sha8');
   if (sha8 === undefined) return undefined;
@@ -111,9 +113,7 @@ export interface ImageDeliverySourceOptions {
  * `lookup` 返回 `undefined` = 「不知道」（没有日志 / 尾窗内没有这类事件），
  * 调用方与客户端都按「没有记录」处理，不猜、不补默认值。
  */
-export function createImageDeliverySource(
-  options: ImageDeliverySourceOptions,
-): ImageDeliveryPort {
+export function createImageDeliverySource(options: ImageDeliverySourceOptions): ImageDeliveryPort {
   const { tail } = options;
   return {
     async lookup(sessionId: string): Promise<ReadonlyMap<string, ImageDeliveryView> | undefined> {

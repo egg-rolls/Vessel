@@ -24,9 +24,9 @@
  */
 
 import * as path from 'node:path';
+import type { VesselConfig } from '../packages/config/src/index';
 import type { MessageRef } from '../packages/core/src/index';
 import { ingestImageRefs } from '../packages/core/src/index';
-import type { VesselConfig } from '../packages/config/src/index';
 import {
   buildPathBoundary,
   canonicalPath,
@@ -34,8 +34,8 @@ import {
   type PathBoundary,
   parseBasicToolsConfig,
 } from '../plugins/tools/basic-tools/src/index';
-import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
 import { resolveAgentCwd } from './path-resolution';
+import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
 
 export interface AttachmentIngestOptions {
   /** 当前活配置（getter：热应用后下一次入池就用新边界）。 */
@@ -51,11 +51,9 @@ export interface AttachmentIngestOptions {
  * `buildPluginConfigMap`）：面板里列得出来的路径，这里也必须读得了 —— 反过来也一样。
  */
 function boundaryOf(config: VesselConfig, agentCwd: string | undefined): PathBoundary {
-  const merged = buildPluginConfigMap(
-    config.plugins,
-    declarativePluginEntries(config),
-    agentCwd,
-  )['basic-tools'];
+  const merged = buildPluginConfigMap(config.plugins, declarativePluginEntries(config), agentCwd)[
+    'basic-tools'
+  ];
   return buildPathBoundary(parseBasicToolsConfig(merged));
 }
 

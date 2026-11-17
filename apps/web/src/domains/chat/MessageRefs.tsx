@@ -1,5 +1,5 @@
 // biome-ignore-all lint/a11y/noSvgWithoutTitle: decorative icons are marked aria-hidden
-import type { MessageRef } from '../../gateway/types';
+import type { ImageDelivery, MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
 
 /**
@@ -69,16 +69,102 @@ function RefIcon({ kind }: { kind: MessageRef['kind'] }) {
 }
 
 /**
+ * 图片投递状态的文案（0.56）。
+ *
+ * 三态（决策 3）：
+ * - `sent` ⇒「已发送 · <provider> · <tokens> tok」（隐私知情：图去了哪家、花了多少）；
+ * - `dropped` ⇒「已丢弃 · <原因>」（预算 / 格式 / 缺 blob / 占位 / 压缩）；
+ * - `not_sent` ⇒「未发送 · <原因>」（视觉被关 / 模型无视觉 / 没入池）。
+ *
+ * 原因走闭集 `chat.refs.image.reason.*`；服务端给的是稳定短标签（`over per-request budget`
+ * 这种是日志口径），**UI 一律按 code 查词**，查不到就原样显示 —— 不显示 `error` 这种
+ * 不可操作的字眼（那是「状态靠猜」的反面）。
+ */
+export function imageDeliveryLabel(delivery: ImageDelivery | undefined): string {
+  if (delivery === undefined) return t('chat.composer.sending');
+  if (delivery.status === 'sent') {
+    const provider = delivery.backend ?? delivery.model;
+    if (provider !== undefined && delivery.tokens !== undefined) {
+      return t('chat.refs.image.sent', { provider, tokens: delivery.tokens });
+    }
+    return t('chat.refs.image.sentPlain');
+  }
+  const reason = t(`chat.refs.image.reason.${reasonCodeOf(delivery.reason)}`);
+  return delivery.status === 'dropped'
+    ? t('chat.refs.image.dropped', { reason })
+    : t('chat.refs.image.notSent', { reason });
+}
+
+/**
+ * 服务端 `reason` → i18n code。
+ *
+ * 两个来源：`vision/plan.ts` 的 `ImageDropReason` 闭集（下划线形式）与服务端的
+ * `label` 短标签（空格形式，日志口径）。这里只做「短标签 → 闭集 code」的归一，
+ * 认不出就当 `unknown`（**不显示原始英文短标签**：那是给运维看的，用户看不懂）。
+ */
+function reasonCodeOf(reason: string | undefined): string {
+  if (reason === undefined || reason.length === 0) return 'unknown';
+  const normalized = reason
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  switch (normalized) {
+    case 'budget':
+    case 'over_per_request_budget':
+      return 'budget';
+    case 'bytes_budget':
+    case 'over_per_request_byte_budget':
+      return 'bytes_budget';
+    case 'unsupported_format':
+      return 'unsupported_format';
+    case 'not_an_image':
+      return 'not_an_image';
+    case 'too_large':
+      return 'too_large';
+    case 'blob_missing':
+    case 'attachment_blob_missing':
+      return 'blob_missing';
+    case 'not_ingested':
+      return 'not_ingested';
+    case 'vision_disabled':
+      return 'vision_disabled';
+    case 'no_vision':
+    case 'no_vision_backend':
+      return 'no_vision';
+    case 'placeholder':
+      return 'placeholder';
+    case 'compaction':
+      return 'compaction';
+    case 'no_delivery_event':
+      return 'no_delivery_event';
+    default:
+      return 'unknown';
+  }
+}
+
+/** 投递状态 → chip 的修饰类（颜色由 CSS 决定；三态各一档）。 */
+function deliveryClass(delivery: ImageDelivery | undefined): string {
+  if (delivery === undefined) return 'msg-ref-delivery pending';
+  return `msg-ref-delivery ${delivery.status.replace('_', '-')}`;
+}
+
+/**
  * 引用 chip 行。`onRemove` 缺省即只读（已发消息一侧不传）。
+ *
+ * 0.56：`imageDelivery` 与 `refs` 里的 **image** 引用一一对应（同序）。给了就渲染三态；
+ * 没给（输入框草稿 / 实时流的新消息）= 不渲染状态（草稿还没投递，猜「已发送」是最坏的错）。
  *
  * 缺省 / 空数组渲染 `null`（不占位、不留空行）。
  */
 export function MessageRefs({
   refs,
+  imageDelivery,
   onRemove,
   className = '',
 }: {
   refs?: readonly MessageRef[];
+  /** 每张图的投递状态（与 refs 的 image 项同序；缺省 = 不显示状态）。 */
+  imageDelivery?: readonly ImageDelivery[];
   /** 传了才可删；参数是 refs 里的下标。 */
   onRemove?: (index: number) => void;
   className?: string;
@@ -87,12 +173,19 @@ export function MessageRefs({
   // key 用「同一路径的第几次引用」：在渲染前建表，既不用数组下标，也不会因为
   // 同一路径被引用多次而撞 key（列表本身不排序、不重排）。
   const occurrence = new Map<string, number>();
+  // 图片引用在 `refs` 里的有序位次 → 投递状态（服务端按 image 项同序下发）。
+  let imageIndex = 0;
   return (
     <ul className={`msg-refs ${className}`.trim()} aria-label={t('chat.refs.label')}>
       {refs.map((ref, index) => {
         const seen = occurrence.get(ref.path) ?? 0;
         occurrence.set(ref.path, seen + 1);
         const name = refDisplayName(ref);
+        const delivery =
+          ref.kind === 'image' && imageDelivery !== undefined
+            ? imageDelivery[imageIndex++]
+            : undefined;
+        const deliveryText = delivery === undefined ? undefined : imageDeliveryLabel(delivery);
         return (
           <li key={`${ref.path}#${seen}`} className="msg-ref" title={ref.path}>
             <span className="msg-ref-icon" aria-hidden="true">
@@ -101,6 +194,11 @@ export function MessageRefs({
             {/* 图标是装饰：种类以 sr-only 文本保留可访问名。 */}
             <span className="sr-only">{refKindLabel(ref)}</span>
             <span className="msg-ref-name">{name}</span>
+            {deliveryText !== undefined && (
+              <span className={deliveryClass(delivery)} title={deliveryText}>
+                {deliveryText}
+              </span>
+            )}
             {onRemove !== undefined && (
               <button
                 type="button"

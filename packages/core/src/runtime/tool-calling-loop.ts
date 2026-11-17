@@ -194,7 +194,9 @@ async function gateToolResult(outcome: ToolExecutionOutcome, sessionId: string):
  * 或 `data:image/...;base64,` 前缀，且那一段 ≥ 4096 个 base64 字符。只回一个类名 + 长度，
  * **不回内容**（事件里永远不出现 base64 本身，否则 8 KiB 裁剪会把它切成垃圾 —— P0-07）。
  */
-export function detectBase64ImagePayload(text: string): { kind: string; bytes: number } | undefined {
+export function detectBase64ImagePayload(
+  text: string,
+): { kind: string; bytes: number } | undefined {
   const marker = text.indexOf('data:image/');
   if (marker >= 0) {
     const end = text.indexOf('base64,', marker);

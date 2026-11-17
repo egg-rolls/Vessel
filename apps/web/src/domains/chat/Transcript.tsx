@@ -132,8 +132,9 @@ function TranscriptMessage({
     }
     return (
       <div className="msg-user group flex max-w-full flex-col items-end gap-1">
-        {/* 引用（只有路径）在气泡上方一行：不改正文，也不影响 copy / edit。 */}
-        <MessageRefs refs={message.refs} />
+        {/* 引用（只有路径）在气泡上方一行：不改正文，也不影响 copy / edit。
+            0.56：图片引用同时显示投递三态（从事件派生，服务端随历史下发）。 */}
+        <MessageRefs refs={message.refs} imageDelivery={message.image_delivery} />
         <div className="msg-bubble">
           <MessageFold>{message.content}</MessageFold>
         </div>
