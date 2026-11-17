@@ -650,6 +650,24 @@ function compactionUnseenByCache(
  * 缓存没有可比正文（只有基底 system / 暂无历史）⇒ 返回 `0`（投影整段都是新的）。
  * 有任何一条缓存正文在投影里找不到 ⇒ 返回 `undefined`（无法对齐，调用方不许改缓存）。
  * 复杂度：签名各算一次，两个指针单调前进（O(n + m)）—— 会话可以有几万条事件。
+ *
+ * **带 `name` 的消息是「尽力对齐」，不是「一律跳过」**（0.56 修「落盘两份」的根）。
+ *
+ * 旧实现把「带 name」直接当成 `isCacheOnlyMessage` 跳过（`continue`），于是只要壳里的
+ * 正文整段都带 name，就没有一条参与对齐 ⇒ 返回 0 ⇒ 调用方把**整份投影**追加到壳后面。
+ * 壳里那几条（`vessel:source` 来源行 + 这一轮的输入本身）在投影里也有，结果就是同一条
+ * 输入写了两遍。触发条件很窄但完全真实：
+ *
+ * 1. A2A 投递（`agent:<alias>`）/ async ask 答案（`ask:answer`）/ rotate 交接嘱托的输入
+ *    **本身带 name**（`inputNameOf`），来源行也带 name；
+ * 2. run 在**初始保存**（输入已进壳、assistant 还没有）之后被硬杀 / 超时 —— 壳就停在
+ *    「全是带 name 的消息」这个形状；
+ * 3. 下一次 run 的 `loadStoredHistory` 对账 ⇒ 旧实现 cut=0 ⇒ 整份投影再追加一遍。
+ *
+ * 判据回到「投影能不能产出它」这件事本身：带 name 的消息**也可能**是投影产物
+ * （`user.message` / `message.injected` 的事件载荷本来就带 name），所以先在投影里找；
+ * 只在**找不到**时才按缓存专属跳过（`appendNoticeToSnapshot` 那类不落事件的提示）。
+ * 找不到的**不具名正文**仍然返回 `undefined`（保守：无法对齐就不动缓存）。
  */
 function coverageCut(
   cached: readonly Message[],
@@ -668,17 +686,23 @@ function coverageCut(
   let searchFrom = 0;
   let matched = false;
   for (const message of cached) {
-    if (isCacheOnlyMessage(message)) continue;
+    // 基底 system prompt 是缓存独有的（投影永不产出）：它不占投影位置，直接跳过。
+    if (isBaseSystemMessage(message)) continue;
     const positions = cursorBySignature.get(messageSignature(message));
-    if (positions === undefined) return undefined;
     // 从当前位置往后找第一条还没用过的同签名投影消息（顺序对齐，不回头）。
     let found: number | undefined;
-    for (const position of positions) {
+    for (const position of positions ?? []) {
       if (position < searchFrom) continue;
       found = position;
       break;
     }
-    if (found === undefined) return undefined;
+    if (found === undefined) {
+      // 投影里有它 ⇒ 上面已经对齐；这里只剩「投影里没有」两种情况：
+      // - 带 name 的运行时提示（`appendNoticeToSnapshot` 不落事件）：缓存专属，跳过；
+      // - 不具名正文：对齐不了，交给调用方保守处理（不动缓存）。
+      if (isCacheOnlyMessage(message)) continue;
+      return undefined;
+    }
     covered = found + 1;
     searchFrom = found + 1;
     matched = true;
@@ -697,6 +721,9 @@ function isBaseSystemMessage(message: Message): boolean {
  * 两类，都是 `projectMessages` 的产物集之外的：
  * - 基底 system prompt（压缩摘要不算：那是 `message.compaction` 事件的投影）；
  * - 带 `name` 的运行时提示行（`vessel:notice` 环境卡 / limit / source / hook / subscription）。
+ *
+ * 只在对齐**找不到**时被 `coverageCut` 查询：「带 name」不足以证明它不来自事件
+ * （`user.message` / `message.injected` 的载荷本来就带 name），必须先按内容找一遍。
  */
 function isCacheOnlyMessage(message: Message): boolean {
   if (isBaseSystemMessage(message)) return true;

@@ -63,7 +63,9 @@ import {
   cursorFromProjectionSnapshot,
   deriveSessionMeta,
   extendProjection,
+  injectedHookMessageIdOf,
   injectedMessageIdOf,
+  noticeMessageIdOf,
   PROJECTION_CURSOR_MAX_TOOL_CALLS,
   type ProjectionCursor,
   reconcileCachedProjection,
@@ -806,6 +808,13 @@ export class ExecutionUnit {
   /** 0.16 E5：本 run 已注入的消息稳定键 / 对象引用（BeforeLlm 去重） */
   private readonly injectedMessageKeys = new Set<string>();
   private injectedMessageRefs = new WeakSet<Message>();
+  /**
+   * 本 run 已写进上下文的 hook 注入条数（0.56：`message_id` 的下标来源）。
+   *
+   * 只数**真正落进上下文**的那些（去重跳过的、对象引用重复的都不数），所以同一条
+   * hook 消息在同一个 run 里拿到的是同一个 `${runId}:inject:hook:<n>`。
+   */
+  private injectedHookSeq = 0;
   /** CONTRACT-prefix-invariant：跨轮前缀守卫（每个 session 一份快照） */
   private readonly prefixGuard: PromptPrefixGuard;
   /** 调用点设置的显式失效原因；guard 消费后清空 */
@@ -1028,15 +1037,22 @@ export class ExecutionUnit {
    * 只走 addContext：同步写上下文并发布 `context.changed`；**不入队、不启动 run**。
    * 下一轮请求（当前 run 的后续迭代或下一次 run）在尾部看到该消息。调用方需保证
    * 上下文已初始化（成员 runtime 在首次 runTurn 前改用 RunOptions.messages 注入）。
+   *
+   * 0.56：提示也是**进了会话的消息**，所以在这里（唯一构造点）盖 `message_id`。
+   * 时间戳同样在构造时定死 —— id 由「归属 + 时间戳」拼出，两者必须同源，之后
+   * `addContext` / 快照追加都不再改写它们，否则同一条提示会拿到两个身份。
    */
   appendNotice(text: string): void {
+    const execution = this.activeRun;
+    const timestamp = Date.now();
+    const owner = execution?.runId ?? 'notice';
     const message: Message = {
       role: 'user',
       name: 'vessel:notice',
       content: text,
-      timestamp: Date.now(),
+      timestamp,
+      message_id: noticeMessageIdOf(owner, timestamp),
     };
-    const execution = this.activeRun;
     if (execution !== undefined) {
       this.addContext(message, execution.runId);
       return;
@@ -2200,6 +2216,8 @@ export class ExecutionUnit {
     // 0.16 E5：BeforeLlm 注入去重按 run 重置
     this.injectedMessageKeys.clear();
     this.injectedMessageRefs = new WeakSet();
+    // 0.56：hook 注入的 `message_id` 下标同口径按 run 重置（与去重集合同一个生命周期）
+    this.injectedHookSeq = 0;
     // CONTRACT-prefix-invariant：每 run 只报告一次的事件与旧 additionalContext 去重
     this.systemPromptIgnoredReported = false;
     this.additionalContextDeprecatedReported = false;
@@ -4184,6 +4202,11 @@ export class ExecutionUnit {
   /**
    * 消费 BeforeLlm 的 `ctx.messages`（0.16 E5）：逐条写入上下文一次。
    * 已注入的消息按稳定键（`name` / `timestamp`）去重；两者都缺失时按对象引用去重。
+   *
+   * 0.56：这一条通道同样在**进入会话的这一处**盖 `message_id`（`${runId}:inject:hook:<n>`）。
+   * 不补这里会留下一整类「没有身份」的人类可见消息（环境卡 / 收件箱提示 / Self Card
+   * delta / refs 提示 / 订阅通知都从这里进库），前端只能退回内容比较 —— 正是本单要根除
+   * 的那件事。id 必须与落盘、事件流是**同一个字符串**，所以盖章点只能在这一处。
    */
   private appendInjectedMessages(
     execution: Run,
@@ -4200,17 +4223,22 @@ export class ExecutionUnit {
         if (this.injectedMessageRefs.has(message)) continue;
         this.injectedMessageRefs.add(message);
       }
+      const identified = withMessageId(
+        message,
+        injectedHookMessageIdOf(runId, this.injectedHookSeq),
+      );
+      this.injectedHookSeq += 1;
       this.publishEvent({
         type: 'message.injected',
         run_id: runId,
         data: {
           run_id: runId,
           session_id: execution.workingContext.getSessionId(),
-          message,
+          message: identified,
         },
         ts: Date.now(),
       });
-      this.addContext(message, runId);
+      this.addContext(identified, runId);
     }
   }
 
@@ -4537,7 +4565,15 @@ export class ExecutionUnit {
     const execution = this.activeRun;
     if (execution === undefined) {
       // PLAN §4.3：无 active Run（只可能是 notice 类调用）写 SessionState 快照。
-      void this.appendNoticeToSnapshot(stamped).catch((error: unknown) => {
+      //
+      // 0.56：这条通道同样是「消息进入会话」，所以同样补 `message_id`（只补缺；调用方
+      // 已在构造处盖过章的原样保留）。id 用 `notice` 作为归属段：无 active run 时没有
+      // run id 可拼，时间戳是这条消息唯一的稳定事实。
+      const identified =
+        typeof stamped.message_id === 'string' && stamped.message_id.length > 0
+          ? stamped
+          : withMessageId(stamped, noticeMessageIdOf('notice', stamped.timestamp ?? Date.now()));
+      void this.appendNoticeToSnapshot(identified).catch((error: unknown) => {
         this.logger.warn('session context snapshot append failed', {
           session_id: this.lastSessionId,
           error: errorText(error),

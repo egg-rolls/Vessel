@@ -36,8 +36,13 @@ export {
 } from './delete-session.js';
 export { FileSessionStore, SessionCorruptError } from './file-backend.js';
 export {
+  askAnswerMessageIdOf,
   assignMessageIdentities,
+  dropDuplicateMessageIds,
+  injectedHookMessageIdOf,
   injectedMessageIdOf,
+  noticeMessageIdOf,
+  seedMessageIdOf,
   userMessageIdOf,
   withMessageId,
   withRunIdentity,

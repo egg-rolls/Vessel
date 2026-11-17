@@ -49,9 +49,11 @@ import {
   type ScheduledTask,
   type Scheduler,
   type SessionEventLogPort,
+  seedMessageIdOf,
   type ToolDefinition,
   toErrorEnvelope,
   type Usage,
+  withMessageId,
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import {
@@ -1835,19 +1837,27 @@ export class AgentServiceImpl implements AgentService {
     };
     // 事件输入类型直接由端口函数取，种子路径不需要新增 core 的公开类型导出。
     type SeedEventInput = Parameters<SessionEventLogPort['append']>[0];
-    const events: SeedEventInput[] = seedResult.messages.map((message) => ({
+    // 0.56：种子消息也走同一条身份口径 —— 它们是**进了新会话的消息**，落盘后前端要按
+    // `message_id` 归并；没有 id 的话 fork 出来的会话整段历史都退回内容比较。
+    // `withMessageId` 只补缺：从父会话复制来的消息带着它当初的身份，原样保留。
+    const events: SeedEventInput[] = seedResult.messages.map((message, index) => ({
       session_id: meta.sessionId,
       run_id: meta.sessionId,
       type: 'message.injected',
       ts: this.now(),
-      data: { message },
+      data: { message: withMessageId(message, seedMessageIdOf(meta.sessionId, index)) },
     }));
     events.push({
       session_id: meta.sessionId,
       run_id: meta.sessionId,
       type: 'message.injected',
       ts: this.now(),
-      data: { message: createdNotice(meta) },
+      data: {
+        message: withMessageId(
+          createdNotice(meta),
+          seedMessageIdOf(meta.sessionId, seedResult.messages.length),
+        ),
+      },
     });
     events.push({
       session_id: meta.sessionId,

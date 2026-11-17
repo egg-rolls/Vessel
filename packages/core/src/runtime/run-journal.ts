@@ -9,7 +9,7 @@
  */
 
 import { applyDeclaredProjection } from '../context/index.js';
-import { assignMessageIdentities } from '../session/index.js';
+import { assignMessageIdentities, dropDuplicateMessageIds } from '../session/index.js';
 // 0.54 chunk-slim：瞬时 chunk（`tool_call_delta` / `finish`）的判据同样**只有一个实现**，
 // 与块路由放在一起（`timeline/blocks.ts`）—— 它回答的是「这个 chunk 配不配进块」。
 import { isTransientChunkEvent } from '../timeline/blocks.js';
@@ -218,7 +218,32 @@ export class SessionRunJournal implements RunJournal {
     // 的唯一写口（初始保存 / checkpoint / 终态 / 手动压缩四路都经过它），一个口径、
     // 幂等（已盖过的不重写）。它必须发生在 save 之前：读侧（`sessions.get`）拿到的
     // 就是库里那一份，身份不在库里则刷新后依然没有身份可用。
-    if (state.messages !== undefined) assignMessageIdentities(state.messages);
+    //
+    // 幂等守卫（0.56）：同一 `message_id` 在 `messages` 里最多一条。这里是**唯一**的会话
+    // 写口，所以也是唯一需要断言的地方 —— 上游哪条路径把同一条输入写了两遍（根因见
+    // `project-messages.ts#coverageCut` 的注释），落盘时必然撞同一个 id。选择「丢掉后来的
+    // 同内容副本 + warn」而不是抛错：
+    // - 抛错会让一次已经跑完的 run 因为「历史里多了一条同样的消息」而落不进终态；
+    // - 丢掉的必须是**正文逐字节相同**的那一份（不同内容 = id 生成有 bug，两份都留并报错
+    //   日志），所以不吞任何一条真实内容。
+    // 入参 `state.messages` 往往就是 live 窗口的数组：守卫产出**新数组**，不就地改窗口。
+    const stateMessages = state.messages;
+    if (stateMessages !== undefined) {
+      const unique = dropDuplicateMessageIds(stateMessages);
+      if (unique.dropped > 0) {
+        this.deps.logger?.warn('session messages carried duplicate message_id (kept first)', {
+          session_id: state.session_id,
+          dropped: unique.dropped,
+          sample: unique.sample,
+          before: stateMessages.length,
+          after: unique.messages.length,
+        });
+        state = { ...state, messages: unique.messages };
+        assignMessageIdentities(unique.messages);
+      } else {
+        assignMessageIdentities(stateMessages);
+      }
+    }
     if (this.deps.eventLog) {
       // 先等待已入队事件落盘，再记录缓存覆盖到的 seq；resume 只重放之后的增量。
       await this.flush();
