@@ -45,5 +45,13 @@ export function useStableTeamOrder(
       }),
     [runningTeams, membersByTeam],
   );
-  return useStableOrder(cards, { keyOf: cardKeyOf, order, resetKey });
+  // 同会话侧：有成员**刚**开始跑 ⇒ 把这张 team 卡顶上去一次；跑完不移动。
+  const promoteToken = useCallback(
+    (card: TeamOrderCard): string | null => {
+      const key = teamCardKey(card.nodeKey, card.team.team_id);
+      return runningTeams?.has(key) === true ? key : null;
+    },
+    [runningTeams],
+  );
+  return useStableOrder(cards, { keyOf: cardKeyOf, order, resetKey, promoteToken });
 }

@@ -37,5 +37,12 @@ export function useStableSessionOrder(
       }),
     [inflight],
   );
-  return useStableOrder(sessions, { keyOf: sessionKeyOf, order, resetKey });
+  // 「开始时移动一次」：run 开始（该会话从空闲变成 running/queued）⇒ 立刻把它顶上去；
+  // run 结束不移动（令牌消失不触发收敛）。见 `app/useStableOrder.ts#promoteToken`。
+  const promoteToken = useCallback(
+    (session: SessionInfo): string | null =>
+      inflight?.has(session.session_id) === true ? session.session_id : null,
+    [inflight],
+  );
+  return useStableOrder(sessions, { keyOf: sessionKeyOf, order, resetKey, promoteToken });
 }

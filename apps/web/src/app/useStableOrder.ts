@@ -43,15 +43,45 @@ export interface StableOrderOptions<T> {
   order: (items: readonly T[], now: number) => readonly T[];
   /** 显式时机：变化即「整体重置为目标顺序」。 */
   resetKey: string;
+  /**
+   * 「**开始时移动一次**」的触发令牌（可选）。
+   *
+   * 返回非 null 表示该项此刻处于「需要被顶到前面」的状态（会话：有 run 在跑；Team：有成员在跑）。
+   * 语义是**单向**的：
+   * - 令牌集合**新增**成员 ⇒ 当作一次显式时机，整体收敛到目标顺序（于是它立刻被顶上去了）；
+   * - 令牌**消失**（run 结束）⇒ **不**收敛，卡片原地失去徽标，位置留到下一次显式时机。
+   *
+   * 为什么这样切：用户要的是「有 run 在跑的排在上面」（一次有意义的移动）；
+   * 「禁止跳动」防的是**持续抖动**（每次事件都重排）。只对「新增」收敛，
+   * 两个目标同时满足，而且 run 结束时不会把用户正在看的卡甩走。
+   */
+  promoteToken?: (item: T) => string | null;
 }
 
 export function useStableOrder<T>(items: readonly T[], options: StableOrderOptions<T>): T[] {
-  const { keyOf, order, resetKey } = options;
+  const { keyOf, order, resetKey, promoteToken } = options;
   // `now` 只在显式时机取一次：用它夹未来时间戳，避免每次渲染都不同（那会让目标顺序
   // 随真实时间漂移，虽然落屏顺序有闸门挡着，但没必要制造无谓的变更）。
   const nowRef = useRef(Date.now());
   const target = useMemo(() => order(items, nowRef.current), [items, order]);
   const targetKeys = useMemo(() => target.map((item) => keyOf(item)), [target, keyOf]);
+
+  // 「开始时移动一次」：记住上一次的令牌集合，只有**新增**成员才算一次显式时机。
+  // 令牌消失（run 结束）不动位置——那是用户正在看的那张卡，不该被甩走。
+  const promotedRef = useRef<ReadonlySet<string>>(new Set());
+  const promotedNow = useMemo(() => {
+    if (promoteToken === undefined) return new Set<string>();
+    const acc = new Set<string>();
+    for (const item of items) {
+      const token = promoteToken(item);
+      if (token !== null && token !== '') acc.add(token);
+    }
+    return acc;
+  }, [items, promoteToken]);
+  const gainedPromotion = useMemo(() => {
+    for (const token of promotedNow) if (!promotedRef.current.has(token)) return true;
+    return false;
+  }, [promotedNow]);
 
   const [snapshot, setSnapshot] = useState<OrderSnapshot>(() => ({
     resetKey,
@@ -65,15 +95,18 @@ export function useStableOrder<T>(items: readonly T[], options: StableOrderOptio
   );
 
   useEffect(() => {
-    const reset = snapshot.resetKey !== resetKey;
+    // 显式时机 = resetKey 变了（进入列表 / 刷新 / 换搜索）**或**新出现了「在被顶上去」的项
+    // （run 刚开始）。后者只对「新增」成立：run 结束时令牌消失，这里不动位置。
+    const reset = snapshot.resetKey !== resetKey || gainedPromotion;
     const nextKeys = reset ? targetKeys : mergedKeys;
     const unchanged =
       nextKeys.length === snapshot.keys.length &&
       nextKeys.every((key, index) => key === snapshot.keys[index]);
+    promotedRef.current = promotedNow;
     if (!reset && unchanged) return;
     nowRef.current = Date.now();
     setSnapshot({ resetKey, keys: nextKeys });
-  }, [resetKey, mergedKeys, targetKeys, snapshot]);
+  }, [gainedPromotion, promotedNow, resetKey, mergedKeys, targetKeys, snapshot]);
 
   return useMemo(() => {
     const byKey = new Map(items.map((item) => [keyOf(item), item]));
