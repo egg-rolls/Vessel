@@ -1,14 +1,18 @@
 /**
- * Web 控制台静态产物检查（gateway 启动诊断；只读）。
+ * Web 控制台静态产物检查 + 后台重建（gateway 启动诊断）。
  *
  * @module vessel/web-dist
  */
 
+import type { ChildProcess } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import type { Dirent } from 'node:fs';
-import { existsSync } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { createWriteStream, existsSync, writeFileSync } from 'node:fs';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { logEvent } from '../packages/serve/src/log-event';
 import { t } from './i18n';
 
 /** 仓库内默认静态目录（与 `src/cli.ts` 的 `resolveStaticDir` 一致） */
@@ -137,8 +141,6 @@ export async function inspectWebDist(options: InspectWebDistOptions = {}): Promi
 export interface EnsureWebDistOptions extends InspectWebDistOptions {
   /** 显式关闭自动构建；缺省读 `VESSEL_NO_WEB_AUTOBUILD` */
   autoBuild?: boolean;
-  /** 进度 / 失败信息出口；缺省写 stderr */
-  warn?: (line: string) => void;
   /** 构建超时（ms）；缺省 180_000 */
   buildTimeoutMs?: number;
   /**
@@ -183,10 +185,9 @@ export function webDistWarning(
   status: WebDistStatus,
   options: { autoBuildManaged?: boolean } = {},
 ): string | null {
-  // 自修复会接管时，「缺失 / 过期」都不是用户的事：进度行（`webDistBuilding`）
-  // 已经说过一遍，紧接着就自己修好了 —— 再把「缺失 + 命令教学」糊到启动输出里
-  // 只是噪声。只有真的修不了（关了自动构建 / 不是默认目录 / 没装依赖 / 构建失败）
-  // 才值得占一行终端。
+  // 自修复会接管时，「缺失 / 过期」都不是用户的事：`web.build.*` 事件已经说过一遍，
+  // 紧接着就自己修好了 —— 再把「缺失 + 命令教学」糊到启动输出里只是噪声。只有真的
+  // 修不了（关了自动构建 / 不是默认目录 / 没装依赖 / 构建失败）才值得占一行终端。
   if (options.autoBuildManaged ?? autoBuildManaged()) return null;
   if (!status.exists) {
     return t('gateway.webDistMissing', { path: status.staticDir });
@@ -232,85 +233,754 @@ export function webDistStaleLine(status: WebDistStatus): string | null {
 // biome-ignore lint/suspicious/noControlCharactersInRegex: 去 ANSI 转义必须匹配 ESC（\u001B），范围已收窄到 CSI 序列，不是任意控制字符
 const ANSI_ESCAPE = /\u001B\[[0-9;]*[A-Za-z]/g;
 
-/**
- * 把一次失败的构建压成**一句**人话。
+/* ══════════════════════════════════════════════════════════════════════════
+ * 构建运行时：「web 产物在不在建、建成没有」只有这一份状态（0.60）
  *
- * `bun run build`（= `tsc --noEmit && vite build`）出错时 stdout/stderr 里可能有
- * 几百行 vite 进度、chunk 体积表和 tsc 报错；`execFile` 的 error.message 还会把
- * 整段 stderr 拼进来。用户要的只是一句「哪坏了」，所以这里取：优先含
- * error/failed/cannot 的**最后一行**，否则最后一行非空输出；ANSI 全去、截到 200 字。
- */
-function summarizeBuildFailure(error: unknown): string {
-  const raw: string[] = [];
-  if (typeof error === 'object' && error !== null) {
-    const { stdout, stderr, message } = error as Record<string, unknown>;
-    for (const part of [stderr, stdout, message]) {
-      if (typeof part === 'string') raw.push(part);
-    }
-  } else {
-    raw.push(String(error));
-  }
-  const lines = raw
-    .join('\n')
-    .replace(ANSI_ESCAPE, '')
-    .split('\n')
-    .map((line) => line.trim())
-    // vite 的 chunk 体积警告不是「失败原因」，别让它顶掉真错误。
-    .filter((line) => line !== '' && !/Some chunks are larger than/i.test(line));
-  // `execFile` 自己拼的包装行（"Command failed: …" / 超时）信息量最低，
-  // 只能在没有真实报错行时兜底，别让它抢在 tsc/vite 的报错前面。
-  const isWrapper = (line: string): boolean =>
-    /^Command failed:/i.test(line) || /timed out after/i.test(line);
-  const candidates = lines.filter((line) => !isWrapper(line));
-  const keyword = [...candidates]
-    .reverse()
-    .find((line) => /error|failed|cannot|not found|ENOENT/i.test(line));
-  const picked =
-    keyword ??
-    candidates[candidates.length - 1] ??
-    lines[lines.length - 1] ??
-    (error instanceof Error ? error.message : 'unknown error');
-  return picked.length > 200 ? `${picked.slice(0, 200)}…` : picked;
+ * 一次构建在日志里的全部输出（单行 key=value，字段序见 `log-event.ts`）：
+ *
+ *   [vessel] web.build.start reason=stale target=apps/web pid=1234 log=/tmp/…
+ *   [vessel] web.build.progress elapsed=30s rss=180MB        （可选，最多 2 条）
+ *   [vessel] web.build.done dur=17.2s assets=42 bytes=8.1MB
+ *   [vessel] web.build.fail exit=1 dur=9.1s log=/tmp/…
+ *   | error TS2322: …                                        （失败尾部，≤15 行）
+ *   [vessel] web.build.interrupted signal=SIGTERM elapsed=8.4s
+ *
+ * 为什么集中在这里：构建状态以前有四处各自的说法（启动横幅 / `/build.json` /
+ * WebUI 横幅 / `gateway status`），改一处文案另一处就开始说谎。现在四处都从
+ * {@link webDistBuildState} 派生，人的话只有 `EVENT_FIELDS` 一份。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** 构建事件里 `target=` 的值（人读的短标签，不是绝对路径）。 */
+const BUILD_TARGET = 'apps/web';
+/** 第一次进度行的门槛：构建不到 30s 一条都不打（19 秒的常态构建不产生噪声）。 */
+const BUILD_PROGRESS_FIRST_MS = 30_000;
+/** 进度行间隔（≥15s，避免刷屏）。 */
+const BUILD_PROGRESS_INTERVAL_MS = 15_000;
+/** 进度行上限：一次构建最多 2 条。 */
+const BUILD_PROGRESS_MAX = 2;
+/** 失败时内联的尾部行数上限。 */
+const BUILD_TAIL_LINES = 15;
+/** 失败尾部每行的字符上限。 */
+const BUILD_TAIL_LINE_MAX = 160;
+/** 内存里保留的构建输出行数（只为自己算尾部，不落盘）。 */
+const BUILD_RING_LINES = 600;
+/** 构建临时目录根：`<os tmp>/vessel-web-build/<startedAt>-<pid>/`。 */
+const BUILD_LOG_DIRNAME = 'vessel-web-build';
+/** 收尾过的构建目录保留期（超期在下次启动时静默清掉）。 */
+const BUILD_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** 判定「残留在跑」的最长可信时间：超过这个岁数的 running 记录一定是死的。 */
+const BUILD_STALE_AFTER_MS = 60 * 60 * 1000;
+
+/** 中断结果（停止方据此打同一套 `web.build.interrupted` 行）。 */
+export interface WebBuildInterruption {
+  signal: string;
+  elapsedMs: number;
+  log: string;
 }
 
+/** 构建阶段。`idle` = 本进程还没建过（也可能根本不需要建）。 */
+export type WebBuildPhase = 'idle' | 'running' | 'done' | 'failed' | 'interrupted';
+
+/** 上一次构建的终态（`/build.json`、`gateway status` 都读它）。 */
+export interface WebBuildLast {
+  phase: 'done' | 'failed' | 'interrupted';
+  /** 结束时刻（epoch ms） */
+  at: number;
+  durMs: number;
+  exitCode?: number;
+  signal?: string;
+  assets?: number;
+  bytes?: number;
+  logPath?: string;
+}
+
+/** 构建状态的**唯一**快照。 */
+export interface WebBuildState {
+  phase: WebBuildPhase;
+  /** 本次构建开始时刻（epoch ms） */
+  startedAt?: number;
+  /** 为什么建：产物缺失 / 落后于源码 */
+  reason?: 'missing' | 'stale';
+  pid?: number;
+  logPath?: string;
+  last?: WebBuildLast;
+}
+
+const buildState: WebBuildState = { phase: 'idle' };
 /** 进行中的构建；重复调用共用同一个 promise，避免并发起两份。 */
 let inFlightBuild: Promise<void> | undefined;
+/** 正在跑的构建子进程（中断时要真的杀掉它，不留孤儿）。 */
+let activeChild: ChildProcess | undefined;
+/** 本次构建的临时目录（中断时要同步落终态，得知道写哪）。 */
+let activeBuildDir: string | undefined;
 
 /**
- * 后台重建**此刻**是否在跑（`/build.json` 的 `building` 字段来源，0.58）。
+ * 构建状态快照（**唯一**读取口）。
  *
- * 存在的理由：构建要 19 秒，而「构建中」和「构建完了但失败了」对用户是**两件事** ——
- * 前者让他等（刷新也没用，磁盘上还是旧的），后者才该让他重启重试。只看 `stale` 分不出
- * 这两种，所以把「在跑」这个内存事实直接说出去。
+ * `/build.json`、`gateway status`、启动诊断都从这里取；谁都不许自己拼「正在构建」
+ * 这种话 —— 拼出来的第二份文案迟早和 `web.build.*` 事件对不上。
  */
-export function webDistBuildInFlight(): boolean {
-  return inFlightBuild !== undefined;
+export function webDistBuildState(): WebBuildState {
+  return buildState.last === undefined
+    ? { ...buildState }
+    : { ...buildState, last: { ...buildState.last } };
 }
 
-/** 起一次 `bun run build`（或复用在飞的那次）；输出全部捕获，只报一行进度/结果。 */
-function startBuild(options: EnsureWebDistOptions, warn: (line: string) => void): Promise<void> {
-  if (inFlightBuild !== undefined) return inFlightBuild;
-  warn(t('gateway.webDistBuilding', { path: DEFAULT_WEB_ROOT }));
-  const task = (async (): Promise<void> => {
-    try {
-      const { execFile } = await import('node:child_process');
-      const { promisify } = await import('node:util');
-      // stdout/stderr 一律捕获：vite 的进度条、chunk 体积表、体积警告都不该泼到
-      // 用户终端 —— 构建在这里只是「把产物弄出来」，不是用户敲的动作。
-      await promisify(execFile)(process.execPath, ['run', 'build'], {
-        cwd: DEFAULT_WEB_ROOT,
-        timeout: options.buildTimeoutMs ?? 180_000,
-        encoding: 'utf8',
-        maxBuffer: 8 * 1024 * 1024,
-      });
-      warn(t('gateway.webDistBuilt'));
-    } catch (error) {
-      // 失败也只留一句（见 summarizeBuildFailure）；不改退出码。
-      warn(t('gateway.webDistBuildFailed', { detail: summarizeBuildFailure(error) }));
-    } finally {
-      inFlightBuild = undefined;
+/**
+ * 后台重建**此刻**是否在跑（`/build.json` 的 `building` 字段）。
+ *
+ * 只是 {@link webDistBuildState} 的一个派生判断：「构建中」和「构建完了但失败了」
+ * 对用户是两件事（前者让他等，后者才该重试），所以这两种状态的来源都要明确。
+ */
+export function webDistBuildInFlight(): boolean {
+  return buildState.phase === 'running';
+}
+
+/** `<os tmp>/vessel-web-build`：构建日志与元数据的根（永不进仓库）。 */
+function buildLogRoot(): string {
+  return path.join(os.tmpdir(), BUILD_LOG_DIRNAME);
+}
+
+/** 本次构建的临时目录（`build.log` + `meta.json`）。 */
+async function prepareBuildDir(startedAt: number): Promise<{ dir: string; logPath: string }> {
+  const dir = path.join(buildLogRoot(), `${startedAt}-${process.pid}`);
+  await mkdir(dir, { recursive: true });
+  return { dir, logPath: path.join(dir, 'build.log') };
+}
+
+interface BuildMeta {
+  v: 1;
+  /** 构建子进程 pid（中断时要杀的就是它）。 */
+  pid: number;
+  /**
+   * 跑这次构建的宿主进程 pid（gateway）。
+   *
+   * 为什么要记：Windows 上 `process.kill(pid,'SIGTERM')` 是直接终止，宿主没机会
+   * 说「我被打断了」—— 停止方（`gateway stop`）只能靠这一个字段认出「这次构建是
+   * 我刚刚杀掉的那个宿主的」。
+   */
+  parentPid: number;
+  startedAt: number;
+  phase: WebBuildPhase;
+  log: string;
+  /** 终态才写（`gateway status` 跨进程读同一份记录，不另存一份口径）。 */
+  endedAt?: number;
+  durMs?: number;
+  exitCode?: number;
+  signal?: string;
+  assets?: number;
+  bytes?: number;
+}
+
+/** 跨进程读到的构建记录（`gateway status` 与日志里的 `web.build.*` 同一条事实）。 */
+export interface WebBuildRecord {
+  /** 这次构建的临时目录（宿主已死时，停止方改写 `meta.json` 用它）。 */
+  dir: string;
+  pid: number;
+  parentPid: number;
+  startedAt: number;
+  phase: WebBuildPhase;
+  log: string;
+  endedAt?: number;
+  durMs?: number;
+  exitCode?: number;
+  signal?: string;
+  assets?: number;
+  bytes?: number;
+  /** 「此刻仍在建」：写记录时说在跑、进程还活着、岁数没超可信窗口。 */
+  running: boolean;
+}
+
+async function readBuildMeta(dir: string): Promise<BuildMeta | undefined> {
+  try {
+    const raw: unknown = JSON.parse(await readFile(path.join(dir, 'meta.json'), 'utf8'));
+    if (typeof raw !== 'object' || raw === null) return undefined;
+    const meta = raw as Partial<BuildMeta>;
+    if (typeof meta.pid !== 'number' || typeof meta.startedAt !== 'number') return undefined;
+    return {
+      v: 1,
+      pid: meta.pid,
+      parentPid: typeof meta.parentPid === 'number' ? meta.parentPid : 0,
+      startedAt: meta.startedAt,
+      phase: meta.phase ?? 'running',
+      log: typeof meta.log === 'string' ? meta.log : path.join(dir, 'build.log'),
+      ...(typeof meta.endedAt === 'number' ? { endedAt: meta.endedAt } : {}),
+      ...(typeof meta.durMs === 'number' ? { durMs: meta.durMs } : {}),
+      ...(typeof meta.exitCode === 'number' ? { exitCode: meta.exitCode } : {}),
+      ...(typeof meta.signal === 'string' ? { signal: meta.signal } : {}),
+      ...(typeof meta.assets === 'number' ? { assets: meta.assets } : {}),
+      ...(typeof meta.bytes === 'number' ? { bytes: meta.bytes } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 最近一次构建落盘的记录（`gateway status` 用）。
+ *
+ * 为什么要落盘：构建发生在 gateway 进程里，而 `gateway status` 是**另一个**进程 ——
+ * 内存态读不到，只能读同一份记录。这不是第二个事实源：记录就是 {@link WebBuildState}
+ * 的持久化投影，字段一个不多。
+ */
+export async function readLatestWebBuildRecord(): Promise<WebBuildRecord | undefined> {
+  const root = buildLogRoot();
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch {
+    return undefined;
+  }
+  let latest: BuildMeta | undefined;
+  for (const name of names) {
+    const meta = await readBuildMeta(path.join(root, name));
+    if (meta === undefined) continue;
+    if (latest === undefined || meta.startedAt > latest.startedAt) latest = meta;
+  }
+  if (latest === undefined) return undefined;
+  const running =
+    latest.phase === 'running' &&
+    isPidAlive(latest.pid) &&
+    Date.now() - latest.startedAt < BUILD_STALE_AFTER_MS;
+  return {
+    dir: path.join(root, `${latest.startedAt}-${latest.parentPid}`),
+    pid: latest.pid,
+    parentPid: latest.parentPid,
+    startedAt: latest.startedAt,
+    phase: latest.phase,
+    log: latest.log,
+    ...(latest.endedAt !== undefined ? { endedAt: latest.endedAt } : {}),
+    ...(latest.durMs !== undefined ? { durMs: latest.durMs } : {}),
+    ...(latest.exitCode !== undefined ? { exitCode: latest.exitCode } : {}),
+    ...(latest.signal !== undefined ? { signal: latest.signal } : {}),
+    ...(latest.assets !== undefined ? { assets: latest.assets } : {}),
+    ...(latest.bytes !== undefined ? { bytes: latest.bytes } : {}),
+    running,
+  };
+}
+
+/** 元数据写失败不是错误：只影响下次启动能不能判断「上一轮是硬死的」。 */
+async function writeBuildMeta(dir: string, meta: BuildMeta): Promise<void> {
+  try {
+    await writeFile(path.join(dir, 'meta.json'), `${JSON.stringify(meta)}\n`, 'utf8');
+  } catch {
+    // 忽略。
+  }
+}
+
+/**
+ * 同步版本：只在**中断**路径用。
+ *
+ * 进程可能下一秒就没了（Windows 上它已经没了），异步写有丢终态的机会 —— 丢了就会被
+ * 停止方替我们说第二遍，或者下次启动误报 `stale_artifact`。
+ */
+function writeBuildMetaSync(dir: string, meta: BuildMeta): void {
+  try {
+    writeFileSync(path.join(dir, 'meta.json'), `${JSON.stringify(meta)}\n`, 'utf8');
+  } catch {
+    // 忽略。
+  }
+}
+
+/** pid 还活着吗（EPERM = 活着但不归我，照样算活）。 */
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * 清掉**上次被硬杀**留下的构建临时目录（`SIGKILL` / 断电才留得下）。
+ *
+ * 判据不是「目录存在」—— 收尾过的目录还要留着给人翻日志；只有「元数据还写着
+ * running、进程却已经不在了」才是残留。返回清掉的数量，调用方只报**一行**总数
+ * （用户要的是「有没有残留」，不是每个目录一条）。
+ */
+export async function cleanStaleWebBuildDirs(): Promise<number> {
+  const root = buildLogRoot();
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch {
+    return 0;
+  }
+  const now = Date.now();
+  let cleaned = 0;
+  for (const name of names) {
+    const dir = path.join(root, name);
+    const meta = await readBuildMeta(dir);
+    if (meta === undefined) {
+      // 这个根只有我们写：没有可用元数据的目录没有保留价值。
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      cleaned += 1;
+      continue;
     }
-  })();
+    if (meta.phase === 'running') {
+      const dead = !isPidAlive(meta.pid);
+      const tooOld = now - meta.startedAt > BUILD_STALE_AFTER_MS;
+      if (!dead && !tooOld) continue;
+      // 构建进程已经不在了：产物是半截的，元数据也别留。
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      cleaned += 1;
+      continue;
+    }
+    if (now - meta.startedAt > BUILD_LOG_RETENTION_MS) {
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+  return cleaned;
+}
+
+/** 一行行切出来的环形缓冲：只为算失败尾部，绝不整体读回日志文件。 */
+function createLineRing(): { push: (chunk: string) => void; snapshot: () => string[] } {
+  const lines: string[] = [];
+  let pending = '';
+  const push = (chunk: string): void => {
+    pending += chunk;
+    const parts = pending.split('\n');
+    pending = parts.pop() ?? '';
+    for (const part of parts) {
+      lines.push(part.replace(/\r$/, ''));
+      if (lines.length > BUILD_RING_LINES) lines.shift();
+    }
+  };
+  const snapshot = (): string[] => {
+    const all = pending === '' ? [...lines] : [...lines, pending];
+    return all.map((line) => line.replace(ANSI_ESCAPE, '').trimEnd());
+  };
+  return { push, snapshot };
+}
+
+/** 失败尾部：`|` 前缀、每行 ≤160 字、总共 ≤15 行，超出写一行省略。 */
+function printBuildTail(lines: readonly string[]): void {
+  const kept = lines.filter((line) => line.trim() !== '');
+  if (kept.length === 0) return;
+  const shown = kept.slice(-BUILD_TAIL_LINES);
+  if (kept.length > BUILD_TAIL_LINES) {
+    console.error(`| … 省略前 ${kept.length - BUILD_TAIL_LINES} 行（完整输出见上面的 log= 路径）`);
+  }
+  for (const line of shown) {
+    const flat = line.replace(/\s+/g, ' ').trim();
+    const cut = flat.length > BUILD_TAIL_LINE_MAX ? `${flat.slice(0, BUILD_TAIL_LINE_MAX)}…` : flat;
+    console.error(`| ${cut}`);
+  }
+}
+
+/**
+ * 杀掉构建子进程**连同它的孩子们**（`bun run build` → `tsc` / `vite`）。
+ *
+ * POSIX 上子进程自成进程组（`detached`），一次 `kill(-pid)` 带走整棵树；Windows
+ * 没有进程组，退回 `taskkill /T`。再兜一个 3 秒后的 SIGKILL：用户要的是「中断了
+ * 就别留孤儿」，不是「发过信号了」。
+ *
+ * 只认 pid 不认 `ChildProcess`：宿主被打死时（Windows 的 SIGTERM 就是直接终止），
+ * 替它收尾的是**另一个进程**（`gateway stop`），它只有构建 pid。
+ */
+function killBuildTreeByPid(pid: number, signal: NodeJS.Signals): void {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    } catch {
+      // 进程已经不在了。
+    }
+    return;
+  }
+  try {
+    // 负 pid = 整个进程组（spawn 时 detached 建的）。
+    process.kill(-pid, signal);
+  } catch {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // 已经退出。
+    }
+  }
+  const hard = setTimeout(() => {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      // 已经退出。
+    }
+  }, 3_000);
+  hard.unref?.();
+}
+
+/**
+ * 子进程整棵树的常驻内存（`web.build.progress` 的 `rss=`）。
+ *
+ * 为什么不是自己的 `process.memoryUsage()`：用户问的是「构建还在动吗」，那要看
+ * **构建**那棵树。Linux 走 `/proc`（`children` + `VmRSS`）；其它平台读不到就不打
+ * 这个字段，绝不拿网关自己的数字冒充。
+ */
+async function processTreeRssBytes(root: number): Promise<number | undefined> {
+  if (process.platform !== 'linux' || root <= 0) return undefined;
+  const queue = [root];
+  const seen = new Set<number>();
+  let total = 0;
+  while (queue.length > 0 && seen.size < 64) {
+    const pid = queue.shift() as number;
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    total += await readRssBytes(pid);
+    let tids: string[];
+    try {
+      tids = await readdir(`/proc/${pid}/task`);
+    } catch {
+      continue;
+    }
+    for (const tid of tids) {
+      try {
+        const raw = await readFile(`/proc/${pid}/task/${tid}/children`, 'utf8');
+        for (const part of raw.split(/\s+/)) {
+          if (part !== '') queue.push(Number(part));
+        }
+      } catch {
+        // 线程刚退出：跳过。
+      }
+    }
+  }
+  return total > 0 ? total : undefined;
+}
+
+async function readRssBytes(pid: number): Promise<number> {
+  try {
+    const raw = await readFile(`/proc/${pid}/status`, 'utf8');
+    const match = /^VmRSS:\s+(\d+)\s+kB$/m.exec(raw);
+    return match === null ? 0 : Number(match[1]) * 1024;
+  } catch {
+    return 0;
+  }
+}
+
+/** `apps/web/dist` 的体量（`assets=` / `bytes=` 的来源）；有界，读不到就报 0。 */
+async function distFootprint(
+  dir: string,
+  maxFiles = DEFAULT_MAX_FILES,
+): Promise<{ assets: number; bytes: number }> {
+  let assets = 0;
+  let bytes = 0;
+  let visited = 0;
+  const walk = async (current: string): Promise<void> => {
+    if (visited >= maxFiles) return;
+    let entries: Dirent<string>[];
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (visited >= maxFiles) return;
+      if (entry.isSymbolicLink()) continue;
+      const target = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        await walk(target);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      visited += 1;
+      assets += 1;
+      try {
+        bytes += (await stat(target)).size;
+      } catch {
+        // 产物正在被替换：算个文件数就够。
+      }
+    }
+  };
+  await walk(dir);
+  return { assets, bytes };
+}
+
+/**
+ * 中断正在跑的构建（gateway 收到 SIGTERM / SIGINT / 正常停止时调用）。
+ *
+ * **真的杀**：先整树 SIGTERM、3 秒后 SIGKILL，所以不会留下还在往 `dist` 写的孤儿；
+ * 然后打**一行**终态。返回是否真的中断了一次构建（没在构建 = false，静默）。
+ *
+ * **同步写元数据**：终态必须赶在进程退出前落盘，否则停止方（`gateway stop`）看到
+ * 的还是 `running`，会替我们说第二遍 —— 同一件事不能说两次。
+ *
+ * 为什么由调用方显式调而不是在模块里挂 `process.on('SIGTERM')`：gateway 的停止
+ * 顺序（drain → stop 子进程）是既有的，模块偷偷加监听会把顺序变成两套。
+ */
+export function interruptWebBuild(signal: string): boolean {
+  const child = activeChild;
+  if (child === undefined || buildState.phase !== 'running') return false;
+  const startedAt = buildState.startedAt ?? Date.now();
+  const elapsed = Date.now() - startedAt;
+  buildState.phase = 'interrupted';
+  buildState.last = {
+    phase: 'interrupted',
+    at: Date.now(),
+    durMs: elapsed,
+    signal,
+    ...(buildState.logPath !== undefined ? { logPath: buildState.logPath } : {}),
+  };
+  if (child.pid !== undefined) killBuildTreeByPid(child.pid, 'SIGTERM');
+  logEvent('warn', 'web.build.interrupted', {
+    signal,
+    elapsed,
+    ...(buildState.logPath !== undefined ? { log: buildState.logPath } : {}),
+  });
+  if (activeBuildDir !== undefined) {
+    writeBuildMetaSync(activeBuildDir, {
+      v: 1,
+      pid: child.pid ?? process.pid,
+      parentPid: process.pid,
+      startedAt,
+      phase: 'interrupted',
+      log: buildState.logPath ?? '',
+      endedAt: Date.now(),
+      durMs: elapsed,
+      signal,
+    });
+  }
+  return true;
+}
+
+/**
+ * 宿主已经被打死、由**停止方**代打的「构建被中断」终态（Windows 唯一可行路径）。
+ *
+ * 为什么需要：Windows 没有可捕获的 SIGTERM（`process.kill` 就是 TerminateProcess），
+ * gateway 来不及说任何话 —— 于是「这次构建是被刚才那次停止打断的」只能由刚执行停止
+ * 的那个进程说，它从构建记录里认得出宿主 pid（`parentPid`）。
+ *
+ * 单口规则：记录已经是终态（宿主自己说过了）就**一句都不说**；只处理还写着
+ * `running` 的那一次，顺手把构建树杀掉（`taskkill /T`），不留孤儿。
+ * 返回 undefined = 「这次不归我说」；行由调用方用 `formatEventLine` 打。
+ */
+export async function interruptBuildOfStoppedHost(
+  parentPid: number,
+  signal: string,
+): Promise<WebBuildInterruption | undefined> {
+  const record = await readLatestWebBuildRecord();
+  if (record === undefined || record.parentPid !== parentPid) return undefined;
+  if (record.phase !== 'running') return undefined;
+  const elapsed = Math.max(0, Date.now() - record.startedAt);
+  killBuildTreeByPid(record.pid, 'SIGTERM');
+  await writeBuildMeta(record.dir, {
+    v: 1,
+    pid: record.pid,
+    parentPid: record.parentPid,
+    startedAt: record.startedAt,
+    phase: 'interrupted',
+    log: record.log,
+    endedAt: Date.now(),
+    durMs: elapsed,
+    signal,
+  });
+  // 行由调用方用 `formatEventLine` 打（同一个排版口），这里只说事实。
+  return { signal, elapsedMs: elapsed, log: record.log };
+}
+
+/**
+ * 跑一次构建（`bun run build`），「开始 / 进度 / 终态」各一行。
+ *
+ * 构建自己的输出**始终**写文件（路径就在 start 行里）：日志要能一眼看出「在不在
+ * 建、建成没成」，失败时才把最后 ≤15 行内联出来 —— 用户说的是「一眼看出为什么
+ * 失败」，不是「去翻文件」。
+ */
+async function runBuild(options: EnsureWebDistOptions, status: WebDistStatus): Promise<void> {
+  const reason: 'missing' | 'stale' = status.exists ? 'stale' : 'missing';
+  const startedAt = Date.now();
+  const { dir, logPath } = await prepareBuildDir(startedAt);
+  const ring = createLineRing();
+  const sink = createWriteStream(logPath, { flags: 'w' });
+  const timeoutMs = options.buildTimeoutMs ?? 180_000;
+
+  buildState.phase = 'running';
+  buildState.startedAt = startedAt;
+  buildState.reason = reason;
+  buildState.logPath = logPath;
+
+  let child: ChildProcess;
+  try {
+    child = spawn(process.execPath, ['run', 'build'], {
+      cwd: DEFAULT_WEB_ROOT,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // POSIX：自成进程组，中断时一次带走 tsc / vite；Windows：无进程组，靠 taskkill /T。
+      detached: process.platform !== 'win32',
+      // 构建输出进文件，不需要也不想要 ANSI：日志行要能直接 grep。
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    await writeBuildMeta(dir, {
+      v: 1,
+      pid: process.pid,
+      parentPid: process.pid,
+      startedAt,
+      phase: 'failed',
+      log: logPath,
+      endedAt: Date.now(),
+      durMs: 0,
+      exitCode: -1,
+    });
+    buildState.phase = 'failed';
+    buildState.last = { phase: 'failed', at: Date.now(), durMs: 0, logPath };
+    logEvent('warn', 'web.build.fail', { exit: -1, dur: 0, error: detail, log: logPath });
+    await new Promise<void>((resolve) => sink.end(resolve));
+    return;
+  }
+
+  activeChild = child;
+  activeBuildDir = dir;
+  if (child.pid !== undefined) buildState.pid = child.pid;
+  logEvent('warn', 'web.build.start', {
+    reason,
+    target: BUILD_TARGET,
+    ...(child.pid !== undefined ? { pid: child.pid } : {}),
+    log: logPath,
+  });
+  await writeBuildMeta(dir, {
+    v: 1,
+    pid: child.pid ?? process.pid,
+    parentPid: process.pid,
+    startedAt,
+    phase: 'running',
+    log: logPath,
+  });
+
+  const onData = (chunk: string): void => {
+    ring.push(chunk);
+    sink.write(chunk);
+  };
+  child.stdout?.on('data', onData);
+  child.stderr?.on('data', onData);
+
+  let progressCount = 0;
+  const progressTimer = setInterval(() => {
+    if (progressCount >= BUILD_PROGRESS_MAX) return;
+    if (Date.now() - startedAt < BUILD_PROGRESS_FIRST_MS) return;
+    progressCount += 1;
+    // rss 只是「它还在动」的旁证：读不到就不打这个字段，绝不编。
+    void processTreeRssBytes(child.pid ?? 0).then((rss) => {
+      logEvent('warn', 'web.build.progress', {
+        elapsed: Date.now() - startedAt,
+        ...(rss !== undefined ? { rss } : {}),
+      });
+    });
+  }, BUILD_PROGRESS_INTERVAL_MS);
+  progressTimer.unref?.();
+
+  interface BuildOutcome {
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    timedOut: boolean;
+    spawnError?: string;
+  }
+  const outcome = await new Promise<BuildOutcome>((resolve) => {
+    let settled = false;
+    const settle = (value: BuildOutcome): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const watchdog = setTimeout(() => {
+      // 超时也是失败，但原因必须写在行里 —— 否则看到 exit=124 的人查不出为什么。
+      settle({ code: 124, signal: null, timedOut: true });
+      if (child.pid !== undefined) killBuildTreeByPid(child.pid, 'SIGTERM');
+    }, timeoutMs);
+    watchdog.unref?.();
+    child.on('error', (error) => {
+      clearTimeout(watchdog);
+      settle({ code: null, signal: null, timedOut: false, spawnError: error.message });
+    });
+    child.on('close', (code, signal) => {
+      clearTimeout(watchdog);
+      settle({ code, signal, timedOut: false });
+    });
+  });
+
+  clearInterval(progressTimer);
+  activeChild = undefined;
+  activeBuildDir = undefined;
+  await new Promise<void>((resolve) => sink.end(resolve));
+
+  const durMs = Date.now() - startedAt;
+  const metaBase = {
+    v: 1 as const,
+    pid: child.pid ?? process.pid,
+    parentPid: process.pid,
+    startedAt,
+    log: logPath,
+  };
+  // 已经被 `interruptWebBuild` 收尾（终态行也打过了）：这里只做清理，别打第二遍。
+  // 走快照而不是直接读字段：`interruptWebBuild` 是另一个函数改的状态，直接比较会被
+  // TS 上面那次 `phase = 'running'` 的收窄骗过去。
+  const phaseAfter = webDistBuildState().phase;
+  if (phaseAfter === 'interrupted') {
+    await writeBuildMeta(dir, {
+      ...metaBase,
+      phase: 'interrupted',
+      endedAt: Date.now(),
+      durMs,
+      ...(buildState.last?.signal !== undefined ? { signal: buildState.last.signal } : {}),
+    });
+    return;
+  }
+
+  if (outcome.code === 0 && !outcome.timedOut) {
+    const footprint = await distFootprint(DEFAULT_WEB_DIST_DIR);
+    buildState.phase = 'done';
+    buildState.last = {
+      phase: 'done',
+      at: Date.now(),
+      durMs,
+      assets: footprint.assets,
+      bytes: footprint.bytes,
+      logPath,
+    };
+    logEvent('warn', 'web.build.done', {
+      dur: durMs,
+      assets: footprint.assets,
+      bytes: footprint.bytes,
+    });
+  } else {
+    const exit = outcome.code ?? -1;
+    buildState.phase = 'failed';
+    buildState.last = {
+      phase: 'failed',
+      at: Date.now(),
+      durMs,
+      exitCode: exit,
+      logPath,
+    };
+    logEvent('warn', 'web.build.fail', {
+      exit,
+      dur: durMs,
+      ...(outcome.spawnError !== undefined ? { error: outcome.spawnError } : {}),
+      log: logPath,
+    });
+    printBuildTail(ring.snapshot());
+  }
+
+  await writeBuildMeta(dir, {
+    ...metaBase,
+    phase: buildState.phase,
+    endedAt: Date.now(),
+    durMs,
+    ...(buildState.last?.exitCode !== undefined ? { exitCode: buildState.last.exitCode } : {}),
+    ...(buildState.last?.signal !== undefined ? { signal: buildState.last.signal } : {}),
+    ...(buildState.last?.assets !== undefined ? { assets: buildState.last.assets } : {}),
+    ...(buildState.last?.bytes !== undefined ? { bytes: buildState.last.bytes } : {}),
+  });
+}
+
+/** 起一次 `bun run build`（或复用在飞的那次）。 */
+function startBuild(options: EnsureWebDistOptions, status: WebDistStatus): Promise<void> {
+  if (inFlightBuild !== undefined) return inFlightBuild;
+  const task = runBuild(options, status)
+    .catch(() => undefined)
+    .finally(() => {
+      inFlightBuild = undefined;
+      activeChild = undefined;
+      activeBuildDir = undefined;
+    });
   inFlightBuild = task;
   return task;
 }
@@ -332,7 +1002,6 @@ function startBuild(options: EnsureWebDistOptions, warn: (line: string) => void)
  * 不改退出码，继续以现有产物提供服务。
  */
 export async function ensureWebDist(options: EnsureWebDistOptions = {}): Promise<WebDistStatus> {
-  const warn = options.warn ?? ((line: string) => console.error(line));
   const status = await inspectWebDist(options);
   const enabled = options.autoBuild ?? (process.env.VESSEL_NO_WEB_AUTOBUILD ?? '').trim() !== '1';
   if (!enabled) return status;
@@ -342,11 +1011,17 @@ export async function ensureWebDist(options: EnsureWebDistOptions = {}): Promise
   if (explicitDir !== undefined && explicitDir.trim() !== '') return status;
   if (!canAutoBuild()) return status;
 
-  const task = startBuild(options, warn);
+  // 上次被硬杀留下的构建临时目录：先清掉，再开工（只报一行总数）。
+  const cleaned = await cleanStaleWebBuildDirs().catch(() => 0);
+  if (cleaned > 0) {
+    logEvent('warn', 'web.build.stale_artifact', { cleaned, dir: buildLogRoot() });
+  }
+
+  const task = startBuild(options, status);
   if (options.waitWhenMissing === true && !status.exists) {
     await task;
     // 建完复核真实结果：成功 → `exists: true`；失败 → 仍是「缺失」，交给调用方
-    // 用一句精简提示收尾（构建细节已经在 webDistBuildFailed 里）。
+    // 用一句精简提示收尾（构建细节已经在 `web.build.fail` + 尾部里）。
     return inspectWebDist(options);
   }
   return status;

@@ -76,6 +76,38 @@ export interface WebDistProbeResult {
 /** 组合根注入的实时判定；省略 = `/build.json` 只发磁盘上的静态构建戳。 */
 export type WebDistProbe = () => Promise<WebDistProbeResult>;
 
+/**
+ * 0.60：后台构建状态的**快照**（平台侧的类型镜像，避免 `packages/serve` 反向依赖
+ * `src/`）。
+ *
+ * 字段与 `src/web-dist.ts#WebBuildState` 一一对应；组合根只做 `() => webDistBuildState()`
+ * 的转发，平台不自己判断「在不在建」。
+ */
+export interface WebBuildSnapshot {
+  phase: 'idle' | 'running' | 'done' | 'failed' | 'interrupted';
+  /** 本次构建开始时刻（epoch ms） */
+  startedAt?: number;
+  /** 为什么建：产物缺失 / 落后于源码 */
+  reason?: 'missing' | 'stale';
+  pid?: number;
+  /** 构建输出文件（用户要照着去翻的那份） */
+  logPath?: string;
+  /** 上一次构建的终态 */
+  last?: {
+    phase: 'done' | 'failed' | 'interrupted';
+    at: number;
+    durMs: number;
+    exitCode?: number;
+    signal?: string;
+    assets?: number;
+    bytes?: number;
+    logPath?: string;
+  };
+}
+
+/** 构建状态读取口（同步、零成本；省略 = 本平台不管构建）。 */
+export type WebBuildProbe = () => WebBuildSnapshot;
+
 /** 组合根解析后注入 Platform Gateway 的全部运行参数。 */
 export interface PlatformGatewayOptions {
   /** 平台监听端口；由组合根解析（默认 8642）。 */
@@ -115,15 +147,16 @@ export interface PlatformGatewayOptions {
    */
   webDist?: WebDistProbe;
   /**
-   * 0.58：后台重建**此刻**是否在进行（`/build.json` 的 `building` 字段）。
+   * 0.60：**构建这件事**的唯一读取口（组合根注入，读 `src/web-dist.ts` 的内存态）。
    *
-   * 为什么单独一个同步回调，而不是塞进 `webDist` 的返回值：现场判断带 5 秒缓存
-   * （源码树遍历很贵），而「构建结束」必须**立刻**反映出去 —— 否则提示条会在构建
-   * 已经结束之后还继续说「正在构建」。这个回调只读一个内存状态，零成本。
+   * 为什么不是「一个布尔」：`building` 只回答「在不在建」，而用户还要知道「建成了
+   * 没有、上次为什么失败、日志在哪」。同一份状态里塞一个布尔出去，另一边就会自己
+   * 再拼一句「正在构建」，两句话迟早对不上 —— 所以注射器只给快照，文案由本包统一
+   * 从快照派生（见 `buildJsonPayload`）。
    *
    * 省略 = 永远认为没有构建在进行（`building: false`），老行为。
    */
-  webBuildInFlight?: () => boolean;
+  webBuild?: WebBuildProbe;
   /** registry 中全部本地 node（`auto_start:false` 也注入，只做健康展示）。 */
   nodes: PlatformNodeDescriptor[];
   /**

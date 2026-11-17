@@ -29,6 +29,7 @@ import {
   type TraceRedactor,
   type Unsubscribe,
 } from '../packages/core/src/index';
+import { logEvent } from '../packages/serve/src/log-event';
 
 /** trace 控制面（bootstrap / CLI 消费） */
 export interface TraceControl {
@@ -95,9 +96,12 @@ export function composeTraceRedactors(base: TraceRedactor, extra?: TraceRedactor
 /** 写失败只 warn，不再写回 trace（避免递归与静默） */
 function warnWriteFailure(event: RunEvent): void {
   const data = event.data as Record<string, unknown>;
-  const reason = typeof data.reason === 'string' ? ` (${data.reason})` : '';
-  const error = typeof data.error === 'string' ? `: ${data.error}` : '';
-  console.warn(`[vessel] trace.write.failed${reason}${error}`);
+  // 0.60：一行 key=value（唯一排版口）；原来是手拼 `[vessel] trace.write.failed(reason): err`，
+  // 同一件事在日志里就成了第二种说法。
+  logEvent('warn', 'trace.write.failed', {
+    reason: typeof data.reason === 'string' ? data.reason : undefined,
+    error: typeof data.error === 'string' ? data.error : undefined,
+  });
 }
 
 /**

@@ -31,6 +31,7 @@ import type {
   PlatformAuthOptions,
   PlatformGateway,
   PlatformGatewayOptions,
+  WebBuildProbe,
   WebDistProbe,
   WebDistProbeResult,
 } from './types.js';
@@ -148,6 +149,9 @@ function createWebDistProbeCache(): (
  * `building`（0.58）：后台重建**此刻**是否在跑。少了这一项，提示条会在构建进行中
  * 让用户「刷新以加载新版本」—— 而刷新那一刻磁盘上还是旧产物，是句废话。
  *
+ * （0.60）：「在不在建 / 建成了没有 / 上一次为什么失败 / 日志在哪」全部来自
+ * **同一份**构建状态（组合根注入的 `webBuild`），平台不自己拼第二套话。
+ *
  * 返回 null = 没有可用的构建戳（文件缺失 / 读坏 / JSON 非对象）：HTTP 端点交给静态
  * 兜底，保住旧行为；任何读盘失败都**不 500**（页面不能被一个诊断文件打挂）。
  */
@@ -155,7 +159,7 @@ async function buildJsonPayload(
   staticDir: string,
   probe: WebDistProbe | undefined,
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>,
-  buildInFlight: (() => boolean) | undefined,
+  webBuild: WebBuildProbe | undefined,
 ): Promise<Record<string, unknown> | null> {
   let base: Record<string, unknown>;
   try {
@@ -169,9 +173,40 @@ async function buildJsonPayload(
   }
   // 构建状态**不走缓存**：缓存里那份可能是构建开始前的快照，会让提示条在构建结束
   // 之后继续说「正在构建」。
-  const building = buildInFlight?.() === true;
+  const build = webBuild?.();
+  const building = build?.phase === 'running';
   const live = probe === undefined ? undefined : await probeCached(probe);
   const body: Record<string, unknown> = { ...base, building };
+  if (build !== undefined && build.phase !== 'idle') {
+    // 同一份状态的两个派生视图：`building`（老字段，前端提示条在用）+ `build`（新字段，
+    // 说清「哪一步、多久、成没成、日志在哪」）。两者永远指向同一次构建。
+    body.build = {
+      phase: build.phase,
+      ...(build.startedAt !== undefined
+        ? { startedAt: new Date(build.startedAt).toISOString() }
+        : {}),
+      ...(building && build.startedAt !== undefined
+        ? { elapsedMs: Math.max(0, Date.now() - build.startedAt) }
+        : {}),
+      ...(build.pid !== undefined ? { pid: build.pid } : {}),
+      ...(build.reason !== undefined ? { reason: build.reason } : {}),
+      ...(build.logPath !== undefined ? { log: build.logPath } : {}),
+      ...(build.last !== undefined
+        ? {
+            last: {
+              phase: build.last.phase,
+              at: new Date(build.last.at).toISOString(),
+              durMs: build.last.durMs,
+              ...(build.last.exitCode !== undefined ? { exit: build.last.exitCode } : {}),
+              ...(build.last.signal !== undefined ? { signal: build.last.signal } : {}),
+              ...(build.last.assets !== undefined ? { assets: build.last.assets } : {}),
+              ...(build.last.bytes !== undefined ? { bytes: build.last.bytes } : {}),
+              ...(build.last.logPath !== undefined ? { log: build.last.logPath } : {}),
+            },
+          }
+        : {}),
+    };
+  }
   if (live !== undefined) {
     body.stale = live.stale;
     if (live.newestSource !== undefined) {
@@ -190,9 +225,9 @@ async function buildJsonResponse(
   method: string,
   probe: WebDistProbe | undefined,
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>,
-  buildInFlight: (() => boolean) | undefined,
+  webBuild: WebBuildProbe | undefined,
 ): Promise<Response | null> {
-  const body = await buildJsonPayload(staticDir, probe, probeCached, buildInFlight);
+  const body = await buildJsonPayload(staticDir, probe, probeCached, webBuild);
   if (body === null) return null;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json;charset=utf-8',
@@ -228,8 +263,8 @@ function createBuildEventStream(options: {
   staticDir: string;
   probe: WebDistProbe | undefined;
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>;
-  /** 后台重建是否在进行（见 `PlatformGatewayOptions.webBuildInFlight`）。 */
-  buildInFlight: (() => boolean) | undefined;
+  /** 后台构建状态快照（见 `PlatformGatewayOptions.webBuild`）。 */
+  webBuild: WebBuildProbe | undefined;
 }): BuildEventStream {
   const encoder = new TextEncoder();
   const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
@@ -254,7 +289,7 @@ function createBuildEventStream(options: {
       options.staticDir,
       options.probe,
       options.probeCached,
-      options.buildInFlight,
+      options.webBuild,
     );
     return payload === null ? undefined : JSON.stringify(payload);
   };
@@ -504,14 +539,14 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
 
   // 0.57：`/build.json` 的现场判断缓存（每个 server 一份，判定函数由组合根注入）。
   const probeWebDist = createWebDistProbeCache();
-  // 0.58：`building` 的来源。**不进上面那份缓存**：构建一结束就必须说「结束了」。
-  const buildInFlight = opts.webBuildInFlight;
+  // 0.60：构建状态的唯一来源。**不进上面那份缓存**：构建一结束就必须说「结束了」。
+  const webBuild = opts.webBuild;
   // 0.57：产物变更推送（SSE）。`/build.json` 仍是唯一事实源，这里只是加速通道。
   const buildEvents = createBuildEventStream({
     staticDir,
     probe: opts.webDist,
     probeCached: probeWebDist,
-    buildInFlight,
+    webBuild,
   });
 
   /**
@@ -712,7 +747,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
           req.method,
           opts.webDist,
           probeWebDist,
-          buildInFlight,
+          webBuild,
         );
         if (buildResponse !== null) {
           for (const [key, value] of Object.entries(extra)) {

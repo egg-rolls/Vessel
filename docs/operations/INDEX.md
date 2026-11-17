@@ -11,6 +11,7 @@ paths: [docs/operations/**]
 
 | 文档 | 一句话 |
 |---|---|
+| [LOGS](LOGS.md) | **日志口径**：一件事只有一种说法（同一事实的权威来源表）、`web.build.*` 构建日志怎么读、`console.*` 判定标准 |
 | [GATEWAY](GATEWAY.md) | 单点启动 gateway、node 独立 `--daemon` 启动、systemd/launchd/schtasks 常驻、`stop` 与 `stop --no-keep-nodes` 的区别、节点缺席诊断、端口占用/句柄继承/readiness 常见故障、会话时间线修复（删 `timeline.idx` 再 open） |
 | [CONFIG](CONFIG.md) | 配置层序、resolver、执行锁与密钥 |
 | [MIGRATION](MIGRATION.md) | sqlite / file-v1 → file-v2 数据迁移 |

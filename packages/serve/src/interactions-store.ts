@@ -12,6 +12,7 @@
 import { mkdirSync, readdirSync, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWrite } from '@vessel-agent/core';
+import { logEvent } from './log-event.js';
 
 /** 持久化状态；`orphaned` = run 已终止/进程重启后找不到 run。 */
 export type StoredInteractionStatus = 'pending' | 'answered' | 'orphaned';
@@ -313,11 +314,11 @@ export class InteractionsStore {
     try {
       renameSync(path, target);
       this.unquarantinable.delete(path);
-      console.error(`[vessel] interactions: quarantined ${path} (${reason}) -> ${target}`);
+      // 0.60：单行 key=value（唯一排版口）—— `path` 用 path 类型，不截成半截路径。
+      logEvent('warn', 'interactions.store.quarantined', { path, reason, to: target });
     } catch (error) {
       this.unquarantinable.add(path);
-      const detail = error instanceof Error ? error.message : String(error);
-      console.error(`[vessel] interactions: failed to quarantine ${path} (${reason}): ${detail}`);
+      logEvent('error', 'interactions.store.quarantine_failed', { path, reason, error });
     }
   }
 
@@ -325,26 +326,22 @@ export class InteractionsStore {
   async save(tenantId: string, records: readonly StoredInteraction[]): Promise<void> {
     const path = this.pathFor(tenantId);
     if (path === null) {
-      console.error(`[vessel] interactions: skip persistence for unsafe tenant "${tenantId}"`);
+      logEvent('warn', 'interactions.store.skipped', { tenant: tenantId, reason: 'unsafe_tenant' });
       return;
     }
     if (this.unquarantinable.has(path)) {
-      console.error(
-        `[vessel] interactions: skip persistence for ${path}; corrupt file could not be quarantined`,
-      );
+      logEvent('warn', 'interactions.store.skipped', { path, reason: 'quarantine_failed' });
       return;
     }
     const payload = `${JSON.stringify({ version: 1, interactions: records }, null, 2)}\n`;
     try {
       await atomicWrite(path, payload, { ensureDir: true, mode: 0o600 });
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      console.error(`[vessel] interactions: failed to persist ${path}: ${detail}`);
+      logEvent('error', 'interactions.store.persist_failed', { path, error });
     }
   }
 }
 
 function reportLoadError(path: string, error: unknown): void {
-  const detail = error instanceof Error ? error.message : String(error);
-  console.error(`[vessel] interactions: failed to load ${path}: ${detail}`);
+  logEvent('error', 'interactions.store.load_failed', { path, error });
 }

@@ -28,6 +28,7 @@ import {
   SeqEventBuffer,
 } from './event-buffer.js';
 import { summarizeBroadcastEvent } from './event-summary.js';
+import { logEvent } from './log-event.js';
 import { capToolEvent } from './tool-events.js';
 
 /** hub 选项 */
@@ -73,11 +74,7 @@ export interface TenantEventHub {
 }
 
 function reportHubError(action: string, error: unknown): void {
-  console.error(
-    `[vessel] tenant event hub: ${action} failed: ${
-      error instanceof Error ? error.message : String(error)
-    }`,
-  );
+  logEvent('error', 'gateway.tenant_hub.failed', { action, error });
 }
 
 /** 创建事件扇入面 */

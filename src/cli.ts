@@ -145,7 +145,7 @@ import { scheduleUpdateCheck } from './update/background';
 import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update/gateway-check';
 import { readPackageVersion } from './version';
 import { visionSurfaceOf } from './vision-settings';
-import { ensureWebDist, webDistWarning } from './web-dist';
+import { ensureWebDist, interruptWebBuild, webDistWarning } from './web-dist';
 
 /**
  * 由专用装配路径管理的工厂式插件：tools applier 不能把它们当普通插件装
@@ -352,10 +352,7 @@ if (
   //
   // 只在仓库内默认目录生效：`VESSEL_STATIC_DIR` 指向的外部产物不归我们管；
   // `VESSEL_NO_WEB_AUTOBUILD=1` 关掉自修复；构建失败只告警、不改退出码。
-  await ensureWebDist({
-    warn: (line) => console.error(ui.warn(line)),
-    waitWhenMissing: true,
-  });
+  await ensureWebDist({ waitWhenMissing: true });
   const { runPlatformGatewayForeground } = await import('./gateway-command');
   process.exit(
     await runPlatformGatewayForeground({
@@ -463,11 +460,8 @@ if (foregroundGateway && args.gateway !== null) {
 // 0.50 起拆分路径（`gateway start` / `node start`）也在启动诊断里自修复；`node start`
 // 本身不宿 WebUI（staticDir 只在 Gateway 解析）。
 if (args.servePort !== null && !nodeOnlyMode) {
-  const status = await ensureWebDist({
-    warn: (line) => console.error(ui.warn(line)),
-    waitWhenMissing: true,
-  });
-  // 自修复能接管时 webDistWarning 返回 null（进度行已经说过），只留真正修不了的情况。
+  const status = await ensureWebDist({ waitWhenMissing: true });
+  // 自修复能接管时 webDistWarning 返回 null（`web.build.*` 事件已经说过），只留真正修不了的情况。
   const warning = webDistWarning(status);
   if (warning) console.error(ui.warn(warning));
 }
@@ -1598,6 +1592,9 @@ async function runWithConfig(result: BootstrapResult) {
   // 固定顺序：await gateway.stop()（自带 interrupt + 5s drain）
   // → closeAll → shutdown；后两步 drain:false，避免重复限时等待。
   const finish = async (beforeClose?: () => Promise<void>): Promise<void> => {
+    // 构建中被叫停：先把构建子进程**真的**杀掉并留一行 `web.build.interrupted`，
+    // 再走原有关闭顺序（否则构建还在这台机器上往 dist 里写，人却以为已经停了）。
+    interruptWebBuild(shutdownSignal ?? 'SIGTERM');
     // 0.43：先停 watcher 并回收 plugin 子进程（停订阅 / 动态 RPC / 子进程）。
     pluginWatch?.close();
     pluginWatch = undefined;
