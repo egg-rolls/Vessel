@@ -370,7 +370,10 @@ export function rotateRootSecret(
       extra.push({ path: target, fingerprint: '-', skipped: next.error.code });
       continue;
     }
-    extra.push({ path: target, fingerprint: tokenFingerprint(next.value.secret.toString('base64')) });
+    extra.push({
+      path: target,
+      fingerprint: tokenFingerprint(next.value.secret.toString('base64')),
+    });
   }
 
   return {
@@ -403,12 +406,20 @@ export function listTokens(input: {
   nodeIds: string[];
   instanceId: string;
   hubConfigured?: boolean;
+  /**
+   * 是否允许「查询顺手创建根密钥」（缺省 **false**）。
+   *
+   * `token list` 是只读核对手段：不该因为查一眼就写盘。根密钥不存在时返回
+   * `root_secret_missing`，由调用方说明「首次启动会自动生成」。
+   */
+  create?: boolean;
 }):
   | { ok: true; rows: TokenListRow[]; root: Omit<RootSecretState, 'secret'> }
   | { ok: false; code: string; message: string } {
   const ctx: TokenContext = {
     config: input.config,
     dataDir: input.dataDir,
+    create: input.create === true,
     ...(input.env !== undefined ? { env: input.env } : {}),
   };
   const loaded = loadRootSecret(ctx);

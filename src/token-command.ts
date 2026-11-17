@@ -20,6 +20,7 @@ import {
   loadConfig,
   parseTokenPurpose,
   purposeLabel,
+  rootSecretPath,
   tokenFingerprint,
 } from '../packages/config/src/index';
 import { formatConfigErrors } from './config-error-format';
@@ -281,8 +282,23 @@ export async function tokenListCommand(
     env: context.env,
     nodeIds,
     instanceId: 'default',
+    // 只读核对：不因为查一眼就创建根密钥（首次启动才生成）。
+    create: false,
   });
   if (!listed.ok) {
+    if (listed.code === 'root_secret_missing') {
+      const path = rootSecretPath(context.dataDir);
+      return {
+        exitCode: 0,
+        stdout: [
+          `root secret  ${path}`,
+          '             not created yet — it is generated automatically on the first start',
+          '',
+          'nothing to list until then: every token is derived from that file.',
+        ].join('\n'),
+        stderr: '',
+      };
+    }
     return { exitCode: 1, stdout: '', stderr: `${listed.code}: ${listed.message}` };
   }
 
