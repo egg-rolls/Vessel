@@ -313,3 +313,22 @@ export function envCardOfPromptContext(
     ...(blocks.length > 0 ? { blocks: [...blocks] } : {}),
   };
 }
+
+/**
+ * 0.55.1：`[inbox] N pending` 这一类通知**只给模型看**，不给人在消息列表里再看一遍。
+ *
+ * 为什么（用户裁定「多余设计」）：同一件事人类侧已经有 PendingStrip（输入框上方的待处理条带，
+ * 带「收回来编辑 / 取消 / 删除」三个动作，数据源是 agents.inbox 的服务端真相）。
+ * 而这条 vessel:notice 是模型侧的尾消息（packages/agent/src/inbox.ts#noticeContent）——
+ * 它存在的目的是让模型知道「有排队输入，别重发别重做」，**不是给人类的界面**。
+ * Web 把 vessel:notice 一律渲染成卡片，于是同一事实在屏幕上出现了两次。
+ *
+ * 只隐藏**纯 pending** 那一种（`[inbox] N pending`，不含 unread）：
+ * 含 unread 的行说的是「别人给你发了消息」，条带**不覆盖**这类（无 session 归属的条目会被条带隐藏），
+ * 所以那条必须留给人看。
+ */
+export function isStripCoveredInboxNotice(card: EnvNoticeCard): boolean {
+  if (card.scope !== 'inbox') return false;
+  if (card.lines.length === 0) return false;
+  return card.lines.every((line) => /^\[inbox\] \d+ pending$/i.test(line.text.trim()));
+}

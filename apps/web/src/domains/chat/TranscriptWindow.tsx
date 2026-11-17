@@ -14,6 +14,7 @@ import { AskAnswerCard } from './AskAnswerCard';
 import type { AnsweredAsk } from './ask-answered';
 import { ChatWelcome } from './ChatWelcome';
 import { EnvCard } from './EnvCard';
+import { isStripCoveredInboxNotice } from './env-notice';
 import { NoticeRow } from './EventRow';
 import { PendingBubble } from './PendingBubble';
 import type { PendingSend } from './pending-sends';
@@ -594,6 +595,10 @@ export function TranscriptWindow({
       case 'runtime-notice': {
         const env = item.env;
         if (env !== undefined) {
+          // 0.55.1：`[inbox] N pending` 这类通知**只给模型看**——人类侧已有输入框上方的
+          // 待处理条带（带收回/取消/删除），同一事实渲染两次就是多余。详见
+          // `env-notice.ts#isStripCoveredInboxNotice` 的注释（含 unread 的行仍然要留）。
+          if (isStripCoveredInboxNotice(env)) return null;
           // 环境信息卡（vessel:notice）：与「来自 agent X」卡同一张卡、同一套展开机制。
           // 卡头 scope 标签 + 条数、summary 首行、展开看全部原文（见 EnvCard.tsx）。
           return <EnvCard env={env} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
