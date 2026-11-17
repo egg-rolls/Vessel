@@ -1,10 +1,15 @@
 # @vessel-agent/web-tools
 
-`web_search`（三家搜索后端）+ `web_fetch`（双后端）。设计：`docs/dev/design/0.56-web-tools.md`。
+`web_search`（四家搜索后端）+ `web_fetch`（双后端）。设计：`docs/dev/design/0.56-web-tools.md`。
 
-**默认加载**（0.56 起）：任何会话都能用 `web_search` / `web_fetch`，缺 key 时工具**仍然在**，
-调用时报 `provider_auth_failed` 并点名要设置哪个环境变量。想关掉：`plugins:` 里写
+**默认加载**（0.56 起）：任何会话都能用 `web_search` / `web_fetch`。**没有可用的搜索 key 时
+`web_search` 不注册**（`--tools` 里也不出现，只留 `web_fetch`），并在启动时打一行原因
+（不含 key 值）；想「先看到工具再配 key」就配 `always_register: true`，那时调用会返回
+`provider_auth_failed` 并点名要设置哪个环境变量。想关掉整个插件：`plugins:` 里写
 `- name: web-tools` + `enabled: false`。
+
+密钥不必 export：顶层配置 `env_file: <path>` 让 Vessel 启动时从文件加载
+（见 `docs/operations/CONFIG.md` §3.1）；本插件只认**环境变量名**，从不存值。
 
 ## 两个工具
 
@@ -24,6 +29,7 @@ src/search/provider.ts          SearchProvider 接口 + 注册表
 src/search/deepseek.ts          deepseek 搜索实现（Bearer + config.base_url）
 src/search/tavily.ts            tavily 搜索实现（固定 host + Bearer，include_raw_content）
 src/search/serper.ts            serper 搜索实现（固定 host + X-API-KEY，organic[]）
+src/search/bocha.ts             bocha 搜索实现（固定 host + Bearer，data.webPages.value[]）
 src/fetch/provider.ts           FetchBackend 接口 + 注册表
 src/fetch/local.ts              local 抓取（SSRF / robots / 抽取全在 http.ts）
 src/deepseek-fetch.ts           deepseek 抓取
@@ -43,40 +49,56 @@ provider 与 transport 写死（`DEFAULT_SEARCH_PROVIDER_ID` + `createDeepSeekHt
 - `maxCount?`：上游条数上限（Tavily 20），由 provider 自己夹紧。
 
 
-## 搜索后端（三选一，`search_provider` 或注册顺序）
+## 搜索后端（四选一，`search_provider` 或注册顺序）
 
 | 后端 | key 环境变量 | 摘要来源 | 正文 | 过滤支持 |
 | --- | --- | --- | --- | --- |
 | `deepseek` | `DEEPSEEK_API_KEY` | 上游 `summary` | `need_content` | `site:` / `lang:` / `after:` / `before:` 渲染进 query |
 | `tavily` | `VESSEL_TAVILY_API_KEY` | 上游 `content`（它自己的摘要口径） | `include_raw_content` | 只支持 `site`（走 `include_domains`）；**`lang` / `after` / `before` 没有对应参数，不做过滤**；结果上限 20 |
 | `serper` | `VESSEL_SERPER_API_KEY` | 上游 `snippet`（Google `organic[]` 里**没有** `summary` 字段） | **没有正文**（`need_content` 无效，要全文用 `web_fetch`） | `site:` 拼进 `q`；`lang` → `hl`/`gl`；`after`/`before` → `tbs` |
+| `bocha` | `BOCHAAI_SEARCH_API_KEY` | 上游 `snippet`；长摘要 `summary` 归到正文 | `summary: true` 才回的**长摘要**（不是整页正文） | `after`+`before` **都给**才映射成 `freshness` 区间；**只给一端不传**（它没有单边形式）；**`site` 不传**（无域名过滤参数）；上限 50 |
 
-三家的 `authority` 只有 `deepseek` 有；Tavily 的 `score` 是相关性、Serper 不给权威度，**都不冒充**。
-`date`：Tavily 给绝对日期，Serper 是 Google 的相对时间（`2 days ago`）——**原样透传**，不解析。
+`authority` 只有 `deepseek` 有；Tavily 的 `score` 是相关性、Serper 不给、Bocha 给的是 `siteName`
+（网站名不是权威度）——**都不冒充**，条目里就是「(未提供)」。
+`date`：Tavily/Bocha 给绝对时间，Serper 是 Google 的相对时间（`2 days ago`）——**原样透传**，不解析。
 
 ### 选择顺序（写在工具描述里，模型也能看见）
 
 1. 配置优先：`search_provider: tavily` ⇒ 只用它（没注册就 `provider_unavailable`）；
-2. 否则 `auto`（缺省）⇒ **按 `src/backends.ts` 的注册顺序**取第一个 key 在位的：`deepseek → tavily → serper`；
-3. 一个 key 都没有 ⇒ `provider_auth_failed`，文案里列出每家要哪个环境变量（不发请求、不降级）。
+2. 否则 `auto`（缺省）⇒ **按 `src/backends.ts` 的注册顺序**取第一个 key 在位的：`deepseek → tavily → serper → bocha`；
+3. 一个 key 都没有 ⇒ 工具**不注册**（见下节）；配了 `always_register: true` 时改为调用报
+   `provider_auth_failed`，文案里列出每家要哪个环境变量（不发请求、不降级）。
 
 选中谁是可观测的：结果的 `backend: <id>` 与指标行的 `provider_id` 都是它。
+
+### 可用性预检：没有 key 就不注册 `web_search`（0.56，用户要求）
+
+- **装配时判定**（`install()` / `createWebTools()` 调 `searchAvailability()`，纯本地、不发请求）：
+  没有任何搜索后端能解析到 key ⇒ **不注册 `web_search`**，`--tools` 里看不到它，
+  stderr 打一行原因（只含环境变量名）：`web-tools: web_search 未注册 —— …（web_fetch 不受影响）`。
+- `web_fetch` 不受影响：`local` 后端不需要 key，永远可用。
+- **可用性在进程启动/工具装配时判定**：改 `env_file` 或环境变量后**需要重启**
+  （或重新装配工具）才生效，不做热更新。
+- 逃生阀：`plugins[].config.always_register: true` ⇒ 无 key 也注册，调用时按
+  `provider_auth_failed` 报原因（给「想先看到工具再配 key」的人）。
+  为什么不叫 `web.tools.always_register` 顶层键：这条语义只对 web-tools 有效，
+  放进配置包会让「配置包」知道某个插件的行为细节。
 
 ## 错误文案格式（加第四家后端时照抄这段）
 
 「缺凭据」这类错误只有三种形态，措辞是契约的一部分。每条都要：① 说清什么坏了；
 ② 把**下一步**写出来（能直接抄去 export）；③ 不让模型误以为「这个能力不存在」。
 
-**① 一个可用 key 都没有（`auto` 兜底）** → `provider_auth_failed`
+**① 一个可用 key 都没有（`auto` 兜底）** → 缺省**不注册工具**（stderr 一行说明）；配 `always_register: true` 时是 `provider_auth_failed`
 
 ```text
-没有可用的搜索后端：按注册顺序（deepseek → tavily → serper）都没有可用的 key。设置其一即可：
-deepseek → DEEPSEEK_API_KEY、tavily → VESSEL_TAVILY_API_KEY、serper → VESSEL_SERPER_API_KEY；
-或用配置 search_provider 指定某一家（本次没有发出任何请求）
+没有可用的搜索后端：按注册顺序（deepseek → tavily → serper → bocha）都没有可用的 key。设置其一即可：
+deepseek → DEEPSEEK_API_KEY、tavily → VESSEL_TAVILY_API_KEY、serper → VESSEL_SERPER_API_KEY、
+bocha → BOCHAAI_SEARCH_API_KEY；或用配置 search_provider 指定某一家（本次没有发出任何请求）
 ```
 
 三个要素：**注册顺序**（解释为什么没选别家）、**每家 → 环境变量名**（可直接照抄）、
-**「本次没有发出任何请求」**（排除「是不是白花了钱」）。加第四家 ⇒ 往「设置其一即可」那段续一项即可。
+**「本次没有发出任何请求」**（排除「是不是白花了钱」）。加第五家 ⇒ 往「设置其一即可」那段续一项即可。
 
 **② 显式指定了后端，但缺它那把 key** → `provider_auth_failed`，**只点名一家**
 
@@ -97,10 +119,15 @@ deepseek → DEEPSEEK_API_KEY、tavily → VESSEL_TAVILY_API_KEY、serper → VE
 
 ## 配置（全部在 `plugins[].config`，不进 `packages/config`）
 
+> 拼写：`packages/config` 会把 `plugins[].config` 的键**转成 camelCase**
+> （`search_provider` → `searchProvider`），插件这边的读法统一按 snake_case 写，
+> 入口处做一次归一 ⇒ **两种拼写都认**（YAML 文档口径是 snake）。
+
 | 键 | 缺省 | 说明 |
 | --- | --- | --- |
 | `backend` | `local` | `local` / `deepseek` |
-| `search_provider` | `auto` | 搜索后端：`auto` / `deepseek` / `tavily` / `serper`（选择顺序见上） |
+| `search_provider` | `auto` | 搜索后端：`auto` / `deepseek` / `tavily` / `serper` / `bocha`（选择顺序见上） |
+| `always_register` | `false` | 无可用搜索 key 时也注册 `web_search`（默认不注册；见「可用性预检」） |
 | `base_url` | `https://api.deepseek.com` | tools API 地址（不含末尾斜杠） |
 | `key_env` | `DEEPSEEK_API_KEY` | **只写环境变量名**，绝不写 key 本身（写错在 install 时报错） |
 | `search_key_env` / `fetch_key_env` | 空 | 分开账户时才用；空则回落 `key_env` |

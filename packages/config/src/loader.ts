@@ -17,6 +17,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { DEFAULT_CONFIG, DEFAULT_TENANT_ID, defaultModelForProvider } from './defaults.js';
+import { type EnvFileLoadInfo, loadEnvFiles } from './env-file.js';
 import { resolveEnvRefsInLayer } from './secrets.js';
 import type {
   ConfigLoadOptions,
@@ -43,6 +44,11 @@ export interface ConfigLoadResult {
   paths: { user: string; project: string };
   /** 内部单公司 id（C0：供路径段 / principal 使用，不是用户可配置维度） */
   tenantId: string;
+  /**
+   * `env_file` 的加载结果（**只有键名与计数，绝不含值**）。
+   * 用于启动诊断：从哪个文件加载了几个键、哪些键因为真实 env 已存在而被保留。
+   */
+  envFiles?: EnvFileLoadInfo[];
 }
 
 /** 类型守卫：判断值是否为纯对象（非 null、非数组） */
@@ -522,6 +528,40 @@ function projectSecretErrors(layer: Record<string, unknown>): ConfigValidationEr
 }
 
 /**
+ * 0.56：加载 `env_file`（配置里只写路径，值留在文件里）。
+ *
+ * 时机：**在 env 层之前**——否则从 env 读的键（`VESSEL_*`、插件自身的 key）拿不到文件里的值。
+ * 优先级：**真实环境变量 > 文件**（文件只填空缺，显式 `export` 仍然赢）。
+ * 显式配置的路径读不到 ⇒ error，不静默跳过（"以为加载了其实没有" 的排查成本太高）。
+ */
+async function applyEnvFiles(
+  configured: string | string[] | undefined,
+  env: EnvMap,
+): Promise<{
+  files: EnvFileLoadInfo[];
+  errors: ConfigValidationError[];
+  warnings: ConfigValidationWarning[];
+}> {
+  if (configured === undefined) return { files: [], errors: [], warnings: [] };
+  const result = await loadEnvFiles(configured, { target: env });
+  const warnings: ConfigValidationWarning[] = [];
+  for (const file of result.files) {
+    for (const issue of file.issues) {
+      // 只带文件名/行号/键名，不带值
+      warnings.push({
+        path: 'envFile',
+        message: `${path.basename(file.path)} line ${issue.line}: ${issue.message} (ignored)`,
+      });
+    }
+  }
+  return {
+    files: result.files,
+    errors: result.errors.map((error) => ({ path: 'envFile', message: error.message })),
+    warnings,
+  };
+}
+
+/**
  * 加载配置（综合加载）
  * 优先级：CLI flag > env (VESSEL_*) > vessel.yaml > ~/.vessel/config.yaml > 安全默认
  * @param options 加载选项
@@ -600,6 +640,12 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   preErrors.push(...resolvedProject.errors);
   preErrors.push(...projectSecretErrors(projectLayer.layer));
 
+  // 3.5 `env_file`：密钥文件 → 环境变量（真实 env 优先）。必须早于 env 层（第 5 步），
+  //     否则 `VESSEL_*` 与插件 key 都读不到文件里的值。
+  const envFiles = await applyEnvFiles(config.envFile, env);
+  preErrors.push(...envFiles.errors);
+  preWarnings.push(...envFiles.warnings);
+
   // 4. 单公司 id：T4 删除 tenant 块 / --tenant / VESSEL_TENANT 输入后，
   //    解析结果固定为内部常量（C0），仅供路径段与 principal 使用。
   const tenantId = DEFAULT_TENANT_ID;
@@ -643,6 +689,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
     sources,
     paths: { user: userPath, project: projectPath },
     tenantId,
+    ...(envFiles.files.length > 0 ? { envFiles: envFiles.files } : {}),
   };
 }
 

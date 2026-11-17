@@ -33,6 +33,16 @@ export {
   PROVIDER_DEFAULT_MODELS,
 } from './defaults.js';
 export {
+  type EnvFileEntry,
+  type EnvFileLoadInfo,
+  type EnvFileLoadResult,
+  type EnvFileParseIssue,
+  type EnvFileParseResult,
+  expandHomePath,
+  loadEnvFiles,
+  parseEnvFile,
+} from './env-file.js';
+export {
   checkPlatformTokenConflict,
   resolveGatewayNodePorts,
   resolvePlatformProxySecret,

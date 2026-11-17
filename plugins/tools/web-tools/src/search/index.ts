@@ -334,6 +334,79 @@ function selectSearchProvider(config: WebToolsConfig, env: EnvLike): SearchProvi
   );
 }
 
+/** 每个后端「要哪把 key、现在在不在」——**只有变量名，没有值**，供诊断与工具装配判定 */
+export interface SearchKeyRequirement {
+  providerId: string;
+  keyEnv: string;
+  present: boolean;
+}
+
+export interface SearchAvailability {
+  /** 现在这个配置下，至少有一个搜索后端能解析到 key */
+  available: boolean;
+  /** 将会选中的后端（`auto` 时是第一个 key 在位的；不可用时为 undefined） */
+  providerId?: string;
+  /** 不可用的原因（**不含 key 值**，只含变量名）——写进 debug 行，别让它静默 */
+  reason?: string;
+  /** 全部在册后端的 key 需求（顺序 = 注册顺序），诊断用 */
+  requirements: SearchKeyRequirement[];
+}
+
+/**
+ * 可用性预检（**纯本地**，不发请求、不读 key 值）：
+ * 工具装配时用它决定「要不要注册 `web_search`」。
+ *
+ * 与 `selectSearchProvider` 的区别：那个在调用时抛错（`provider_auth_failed`），
+ * 这个在装配时回答「有没有任何一个能用」——同一个判定函数，两种用途，
+ * 避免出现「--tools 说有、调用说没有」的两套口径。
+ */
+export function searchAvailability(
+  config: WebToolsConfig,
+  env: EnvLike = process.env,
+): SearchAvailability {
+  const entries = listSearchProviderEntries();
+  const requirements: SearchKeyRequirement[] = entries.map((provider) => ({
+    providerId: provider.id,
+    keyEnv: keyEnvNameFor(config, provider),
+    present: provider.requiresKey ? providerHasKey(config, provider, env) : true,
+  }));
+
+  if (config.searchProvider !== 'auto') {
+    const explicit = getSearchProvider(config.searchProvider);
+    if (explicit === undefined) {
+      return {
+        available: false,
+        reason: `search_provider=${config.searchProvider} 没有对应的后端；在册：${listSearchProviders().join(' | ')}`,
+        requirements,
+      };
+    }
+    const requirement = requirements.find((item) => item.providerId === explicit.id);
+    if (explicit.requiresKey && requirement !== undefined && !requirement.present) {
+      return {
+        available: false,
+        reason: `search_provider=${explicit.id} 的 key 未设置（${requirement.keyEnv}）`,
+        requirements,
+      };
+    }
+    return { available: true, providerId: explicit.id, requirements };
+  }
+
+  for (const provider of entries) {
+    const requirement = requirements.find((item) => item.providerId === provider.id);
+    if (!provider.requiresKey || requirement?.present === true) {
+      return { available: true, providerId: provider.id, requirements };
+    }
+  }
+
+  return {
+    available: false,
+    reason: `按注册顺序（${entries.map((provider) => provider.id).join(' → ')}）都没有可用的 key：${requirements
+      .map((item) => `${item.providerId} → ${item.keyEnv}`)
+      .join('、')}`,
+    requirements,
+  };
+}
+
 // ---------------------------------------------------------------- 主流程
 
 /** 本地拒绝（未发请求）：只释放半开探针，不计也不罚 */

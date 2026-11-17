@@ -670,6 +670,38 @@ Platform Gateway token 独立，只读 `gateway.token` / `gateway.token_env`，�
 - `hub.proxy_secret_env` 配置后，hub 的目录 / WS 目录流 / 删节点都要求密钥头。
 - `vessel doctor` 会对「回环 + 没有任何 token」给出 warning（只提示，不改变运行行为）。
 
+### 3.1 `env_file`：密钥放文件、配置只写路径（0.56）
+
+不想每条命令 `export` 时，把密钥写进一个文件，配置里**只写路径**：
+
+```yaml
+# ~/.vessel/config.yaml
+env_file: ~/.vessel/secrets.env        # 一个路径
+# env_file:                            # 或一组（按顺序加载，先到先得）
+#   - ~/.vessel/secrets.env
+#   - ./deploy/keys.env
+```
+
+```dotenv
+# ~/.vessel/secrets.env
+export BOCHAAI_SEARCH_API_KEY=tvly-...     # export 前缀可有可无
+VESSEL_TAVILY_API_KEY="..."                # 单/双引号都行
+VESSEL_SERPER_API_KEY=...                  # 未加引号时行内 " #…" 算注释
+```
+
+规则：
+
+1. **优先级：真实环境变量 > 文件**。文件只填空缺的键，显式 `export` 仍然赢
+   （CI 注入的临时值不会被仓库/家目录里的文件盖掉）。
+2. 时机：**在 env 层之前**加载，所以文件里的值对 `VESSEL_*` 与插件 key 同样生效。
+3. 相对路径按**进程 cwd** 解析；`~` 会展开；不做 `${VAR}` 插值（同 §3 第 4 条）。
+4. **显式配置的路径读不到 ⇒ 启动报错**（`envFile: … does not exist`）。理由与
+   `--user-config` 一致：静默忽略会让人以为加载了，其实没有。
+5. 加载后**不打印任何值**；加载结果（每个文件加载了哪些**键名**、哪些因真实 env 已存在被保留）
+   在 `loadConfig()` 的 `envFiles` 字段里，供诊断使用。
+6. 密钥**永远不进 `vessel.yaml`**（§3 第 5 条仍生效）：`env_file` 只是「值的搬运工」，它
+   本身是路径，不是值。
+
 ## 4. 命令
 
 ```bash

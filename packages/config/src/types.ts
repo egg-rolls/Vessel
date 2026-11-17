@@ -926,6 +926,18 @@ export interface VesselConfig {
   apiKeyEnv?: string;
   /** 全局数据根 */
   dataDir?: string;
+  /**
+   * 0.56：密钥文件路径（一个路径或路径列表）。配置里**只写路径，永远不写值**——
+   * 值留在文件里，启动时注入进程环境。
+   *
+   * - 语法：`KEY=VALUE`（允许 `export ` 前缀、单双引号、`#` 注释、空行）；
+   * - 优先级：**真实环境变量 > 文件**（显式 `export` 仍然赢），文件只填空缺的键；
+   * - 相对路径按**进程 cwd** 解析；`~` 会展开；
+   * - 显式配置的路径**读不到就报错**（不静默跳过）。
+   *
+   * 为什么不支持「配置里直接写 key」：那会绕过项目配置的密钥拦截与日志脱敏。
+   */
+  envFile?: string | string[];
   /** trace 配置；缺省消费 DEFAULT_TRACE_OPTIONS */
   trace?: TraceConfig;
   /**
