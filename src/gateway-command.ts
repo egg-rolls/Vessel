@@ -92,6 +92,7 @@ import { readHubLockFile } from './hub/runtime';
 import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from './hub/server';
 import { t } from './i18n';
 import { createHttpRpcClient } from './rpc/http-client';
+import { resolveProxyTimeoutLimits } from './serve-config';
 // 0.56：派生 token（显式配置永远优先；未配置时自动派生，绝不再「未配置就挂」）。
 import { effectiveNodeToken, effectivePlatformToken } from './token-derive';
 import { resolveGatewayToken } from './transport-factory';
@@ -2697,7 +2698,14 @@ export async function runPlatformGatewayForeground(
         // 0.58：浏览器/CLI 只连平台，node 的 HTTP 与 WS 由平台代理（node token 不出网关）。
         // `gateway.proxy_nodes: false` 是保留的显式回退：平台不提供 `/nodes/*`，
         // 前端据 `platform.whoami.proxy.enabled` 自动回到「取 credentials 直连 node」。
-        proxy: { enabled: config.gateway?.proxyNodes !== false },
+        //
+        // 0.57：两个响应头超时都可配（env，见 `resolveProxyTimeoutLimits`）。**健康探测**
+        // 用短超时（缺省 1.5s）而不是 RPC 的 30s：node 没起来时每个探活请求都该在 ~1.5s
+        // 内报 `node_unreachable` 并让前端重试，而不是白等 30 秒。
+        proxy: {
+          enabled: config.gateway?.proxyNodes !== false,
+          limits: resolveProxyTimeoutLimits(env),
+        },
         version,
         auth: {
           publicOrigin: resolvedAuth.publicOrigin,

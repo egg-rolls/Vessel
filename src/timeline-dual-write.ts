@@ -123,6 +123,7 @@ import {
   readTimelineEvents,
 } from '../packages/core/src/timeline/wal';
 import { TimelineWriter } from '../packages/core/src/timeline/writer';
+import { noteStartup, noteStartupMax } from './startup-timing';
 
 /**
  * 进程退出时给 flush 留的上限（ms）。
@@ -1026,12 +1027,18 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     const sessionDir = sessionDirOf(options.sessionsDir, sessionId);
     const opening = (async () => {
       try {
+        const openStartedAt = performance.now();
         const writer = await openWriter({
           sessionId,
           sessionDir,
           chunkFlushMs,
           publish: (record) => deliverPublication(sessionId, record),
         });
+        // 时间线打开的代价 = 读索引 + 校验 + （必要时）整份恢复，是「启动慢」的头号嫌疑。
+        // 启动窗口内每次打开都记一笔；`flushStartupTiming` 之后就自动不再计。
+        noteStartup('timeline.open', performance.now() - openStartedAt);
+        noteStartup('timeline.opens', 1);
+        noteStartupMax('timeline.open.max', performance.now() - openStartedAt);
         counters.sessions += 1;
         // 周期保底：writer 出现的第一刻起开计时（长 run 期间也要有归档）。
         ensureArchiveTimer();

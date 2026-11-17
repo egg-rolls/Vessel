@@ -123,6 +123,9 @@ const EVENT_FIELDS: Record<string, readonly FieldSpec[]> = {
   'gateway.proxy.node_unreachable': [
     { key: 'node', from: ['node_name', 'node_id'], kind: 'node' },
     { key: 'path' },
+    // 0.57：**这次用的预算是多少**必须看得见。`/health` 走 1.5s、其它 RPC 走 30s；
+    // 少了这个字段，读者无法判断「等 30s 才报连不上」到底是配置还是代码。
+    { key: 'timeout', from: ['timeout_ms'], kind: 'ms' },
     { key: 'suppressed', kind: 'count' },
   ],
   /** 平台代理：转发过程中内部错误。 */

@@ -165,6 +165,7 @@ import {
   sleepWithAbort,
 } from './provider-retry.js';
 import type { RunJournal, RunJournalFactory } from './run-journal.js';
+import { createRunTiming, type RunTiming } from './run-timing.js';
 import {
   type LoopContext,
   type PreparedToolCall,
@@ -926,6 +927,13 @@ export class ExecutionUnit {
    */
   private activeRun?: Run;
   /**
+   * 0.57：当前 run 的分段耗时账本（`run.timing` / `run.llm.gap` 的唯一出口）。
+   * 与 `activeRun` 同寿命：`beginExecution` 建、`endExecution` 丢。
+   */
+  private runTiming?: RunTiming;
+  /** 本 run 的终态（`finalizeRun` 写，`endExecution` 读来打 `outcome=`）。 */
+  private runTimingOutcome?: 'completed' | 'failed' | 'cancelled';
+  /**
    * 当前 run 的中断控制（0.10 R2-18）：`interrupt()` 与调用方 `opts.signal`
    * 汇合到同一个内部 AbortController；随 active run 创建 / 释放。
    */
@@ -1215,6 +1223,9 @@ export class ExecutionUnit {
     // 否则压缩后的显示会卡在压缩前的数（地板只保证「不倒退」，不该阻止「正当缩小」）。
     const compactedState = removed > 0 ? this.accounting(execution) : undefined;
     if (removed > 0) this.reportCompactionImageDrops(execution, imagesBefore);
+    // 0.57：`compacted=yes/no` 是本段起点有没有压缩的唯一读数（压缩 = 额外一次 LLM
+    // 摘要调用，会把第一条请求再往后推一大截）。
+    this.runTiming?.text('compacted', removed > 0 ? 'yes' : 'no');
     this.publishCompacted(window, execution.runId, execution.sessionId, removed, 'auto', decision);
     if (compactedState !== undefined) {
       // 压缩删掉了中段：本段从压缩后的视图开始，必须显式标段因，否则守卫会当成前缀重写。
@@ -2432,6 +2443,8 @@ export class ExecutionUnit {
       throw new RunAlreadyRunningError(runId);
     }
     const now = Date.now();
+    // 0.57：本 run 的分段耗时账本。起点 = run 真正开始执行（不含上游排队）。
+    this.runTiming = createRunTiming(runId);
     const workingContext = this.contextFactory({ sessionId });
     // 工厂实现可能不切会话；播种前统一设到本次 run 的 session（clear 只清当前桶）。
     workingContext.setSessionId(sessionId);
@@ -2476,6 +2489,14 @@ export class ExecutionUnit {
   }
 
   private async endExecution(execution: Run): Promise<void> {
+    // 0.57：run 收口时打一行 `run.timing`（一次 run 一条，宪法第十四条：不刷屏）。
+    // 放在最前面：即使后面的清理失败，账也已经落地。
+    this.runTiming?.finish({
+      outcome: this.runTimingOutcome ?? 'failed',
+      totalMs: Date.now() - execution.startedAt,
+    });
+    this.runTiming = undefined;
+    this.runTimingOutcome = undefined;
     // 记录本 Run 结束时的水位；下一 Run 重建窗口，无 active Run 时 host 读此值。
     // 0.55 P0：口径 = 下一次请求视图的上界估算（锚点校正 + provider 地板），
     // 不是 `workingContext.tokenCount`（那只是整窗上界，占位后偏大且不含 tools）。
@@ -2684,6 +2705,10 @@ export class ExecutionUnit {
     // 缓存按内容对账」重新播种（0.54 B3：不再有「位说覆盖到日志尾就 O(1) 复用」那条路，
     // 那条路会让运行中刷新只剩 run 起点的几条 —— P7）。
     const history = await this.loadStoredHistory(sessionId);
+    // 0.57：历史加载是一段独立的账。`history=` 给的是**读到了什么规模**，不是「用了多久」——
+    // 两者一起才能回答「启动首条消息为什么慢」（消息多 / 每条大 / 投影没命中）。
+    this.runTiming?.mark('history');
+    this.runTiming?.count('history.messages', history.messages.length);
     const stored = history.sessionState;
     // Stage 4 parity：baseline 在同一 session + 窗口可复用时跳过播种（不发
     // context.changed）。per-Run 窗口必须重建，但“重建”不应变成可观察事件；
@@ -2722,6 +2747,9 @@ export class ExecutionUnit {
     // 0.52 V2：压缩只在**段边界**发生 —— 这里是本段的起点（seed 之后、第一条请求之前）。
     // 压缩成功 ⇒ 本段基准 = 压缩后的 seed 视图（`new(compaction)`），段内不再改写历史。
     await this.compactAtSegmentStart(execution);
+    // 0.57：压缩**是否发生**必须出现在账上（用户问的是「我们中间做了什么」，
+    // 「这一次 run 起点有没有压缩」直接决定第一条请求要等多久）。
+    this.runTiming?.mark('compact');
 
     // 0.52 V1：段起点的占位决策只算一次并冻结（落 SessionState.cleared_tool_call_ids）。
     // 必须在 seed / 压缩之后、本 Run 第一条请求之前：段内不再改，`pop` 之后下一个段起点重算。
@@ -2866,6 +2894,8 @@ export class ExecutionUnit {
     const { runId, sessionId, startedAt, stats } = execution;
 
     if (outcome.status === 'completed') {
+      // 0.57：账上的终态（`endExecution` 收口并打印 `run.timing`）。
+      this.runTimingOutcome = 'completed';
       await this.writeRunRecord(execution, 'completed');
       this.finalizeSessionState(execution, sessionState, 'completed');
       // 终态第一落点：小文件、便宜、与投影壳的大小无关（见方法注释）。
@@ -2892,6 +2922,8 @@ export class ExecutionUnit {
     const signal = outcome.signal;
     // 用户显式取消 → cancelled；Host 中断/普通错误 → failed（与事件口径一致）
     const cancelled = this.isUserCancelled(signal);
+    // 0.57：run 终态在账上要一眼看出（ended 后再由 `endExecution` 打那一行）。
+    this.runTimingOutcome = cancelled ? 'cancelled' : 'failed';
     const errorMessage = errorText(outcome.error);
     const terminalStatus = this.failureCheckpointStatus(signal);
 
@@ -3315,6 +3347,7 @@ export class ExecutionUnit {
       events: {
         emit: (e, o) => this.publishEvent(e, o),
       },
+      ...(this.runTiming !== undefined ? { timing: this.runTiming } : {}),
       controls: {
         signal,
         limits: this.limits,
@@ -3561,6 +3594,9 @@ export class ExecutionUnit {
       // 用完即清 —— 后续段不是「第一个 token」）。
       const requestStartedAt = Date.now();
       this.streamSegmentState(execution).pendingTtftBase = requestStartedAt;
+      // 0.57：run 账上的 `llm` 段 = 第一条请求发出的时刻（前面的时间都花在我们这边：
+      // 历史加载 / 压缩 / 组请求）。之后几轮的请求起点不再覆盖它。
+      this.runTiming?.mark('llm');
 
       // 「本次请求是否已经流出过增量」：正文 / 思考 / 工具调用任一出现即置位。
       // 置位后不再自动重发——已流出的文本重来一遍，父级时间线上就是两段重复。
@@ -3584,6 +3620,8 @@ export class ExecutionUnit {
         stream: true,
         on_chunk: (chunk) => {
           if (streamsAssistantOutput(chunk)) streamed = true;
+          // 0.57：首个真实增量 = 用户看到的「开始输出」那一刻（mark 保留第一次）。
+          if (streamsAssistantOutput(chunk)) this.runTiming?.mark('first_token');
           if (chunk.type === 'text_delta' && typeof chunk.delta === 'string') {
             execution.partialContent = `${execution.partialContent ?? ''}${chunk.delta}`;
           }

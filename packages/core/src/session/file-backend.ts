@@ -164,7 +164,7 @@ interface CachedState {
  * 实测串行 45–70 ms、8 路 18–28 ms（Windows/NTFS，含杀软）；再往上加没有增量收益，
  * 因为瓶颈是每次调用的固定开销而不是排队。
  */
-const LIST_RICH_CONCURRENCY = 8;
+const LIST_RICH_CONCURRENCY = 16; // startup-obs 实测：16 路把 344 壳的 sweep 从 5.0s 压到 0.86s
 
 /**
  * 有界并发的遍历（顺序无关的场景专用）。
@@ -175,7 +175,7 @@ const LIST_RICH_CONCURRENCY = 8;
 async function forEachBounded<T>(
   items: readonly T[],
   limit: number,
-  run: (item: T) => Promise<void>,
+  run: (item: T, index: number) => Promise<void>,
 ): Promise<void> {
   const width = Math.max(1, Math.min(limit, items.length));
   let cursor = 0;
@@ -189,7 +189,7 @@ async function forEachBounded<T>(
       const item = items[index];
       if (item === undefined) return;
       try {
-        await run(item);
+        await run(item, index);
       } catch (error) {
         failure ??= { error };
         return;
@@ -858,7 +858,6 @@ export class FileSessionStore implements SessionStore {
   async list(): Promise<string[]> {
     return this.scanIds();
   }
-
   /**
    * 列出会话摘要（含 title/preview/updated_at/message_count）
    *
@@ -879,21 +878,25 @@ export class FileSessionStore implements SessionStore {
   async listRich(): Promise<SessionInfo[]> {
     const ids = await this.scanIds();
     const results: SessionInfo[] = [];
+    // 保序槽位：`forEachBounded` 按输入顺序传 index，完成后统一收集（不随完成顺序漂移）。
+    const slots: Array<SessionInfo | null> = new Array(ids.length).fill(null);
 
     // 0.57：**有界并发**（不是多线程）。每个会话是「stat + 读侧车」两次独立的文件系统
-    // 调用，串行 349 次就等于 349 个来回排在一行里（真机 ~45–70 ms）；8 路并发只是把
+    // 调用，串行 349 次就等于 349 个来回排在一行里（真机 ~45–70 ms）；16 路并发只是把
     // 等待重叠起来，不增加任何工作、不改变任何一条结果 —— 顺序由下面那次全序 sort
-    // （`updated_at` 倒序 + `session_id` 升序）决定，与 push 的先后无关。
-    await forEachBounded(ids, LIST_RICH_CONCURRENCY, async (id) => {
+    // （`updated_at` 倒序 + `session_id` 升序）决定，与完成的先后无关。
+    //
+    // 结果必须**按输入顺序**收（`forEachBounded` 保序），这样「第一个错误」不会随
+    // 完成顺序漂移；单个文件损坏（`SessionCorruptError`）只跳过该项（0.8.1 口径）。
+    await forEachBounded(ids, LIST_RICH_CONCURRENCY, async (id, index) => {
       try {
         const info = await this.listRichInfo(id);
-        if (info !== null) results.push(info);
+        if (info !== null) slots[index] = info;
       } catch (error) {
-        // 0.8.1：单个文件损坏只跳过这一项（与串行版同一口径）；其它错误照原样抛。
-        if (error instanceof SessionCorruptError) return;
-        throw error;
+        if (!(error instanceof SessionCorruptError)) throw error;
       }
     });
+    for (const info of slots) if (info !== null) results.push(info);
 
     // updated_at 倒序；同值用 session_id 升序，避免刷新时顺序抖动。
     results.sort(compareSessionInfo);

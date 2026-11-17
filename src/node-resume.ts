@@ -44,6 +44,40 @@ export const NODE_RESUME_SETTLE_MS = 10_000;
 /** 准入轮询间隔（毫秒）：只读事件日志尾部，不起任何 run。 */
 const RESUME_POLL_MS = 20;
 
+/**
+ * 启动恢复扫描的读并发上限（0.57）。
+ *
+ * 扫的是「哪些会话带着 `resume_after_restart` 标记」，必须把每个会话的状态读出来
+ * （标记在会话壳里，没有更便宜的权威来源）。16 路并发把串行等待摊成流水线：
+ * 实测 344 会话从 ~1.0s 降到 ~0.2s（本机，会话壳平均 0.8MB）。
+ */
+const RESUME_SCAN_CONCURRENCY = 16;
+
+/**
+ * 有界并发 map（结果按输入顺序返回）。与 `file-backend.ts` 里那份同形：这里不引依赖，
+ * 只求「并发上限 + 顺序稳定 + 一个不漏」。
+ */
+async function mapBounded<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const size = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(
+    Array.from({ length: size }, async () => {
+      while (true) {
+        const index = cursor;
+        cursor += 1;
+        if (index >= items.length) return;
+        results[index] = await worker(items[index] as T);
+      }
+    }),
+  );
+  return results;
+}
+
 /** 重放结果（沿用既有 `recoverPendingInputs()` 的回报）。 */
 export interface NodeResumeReplay {
   /** 真的被重放的输入条数 */
@@ -190,17 +224,25 @@ export function createNodeResumer(sources: NodeResumeSources): NodeResumer {
   /** 1 步：扫出带标记的会话（只读落盘状态，不猜）。 */
   async function scan(): Promise<RestartCandidate[]> {
     const ids = await sources.session.list();
+    // 0.57：**有界并发**读会话状态（原来是一条条 await）。
+    //
+    // 为什么（真实读数）：这是启动期的第二座大山 —— 344 个会话 × 一份会话壳
+    // （平均 0.8MB）串行读，实测 agent.resume = 1.0s。`load()` 之间没有任何依赖，候选集
+    // 只按标记过滤、与顺序无关，所以并发读不改变语义（错误仍按会话逐个 warn）。
     const states: SessionState[] = [];
-    for (const id of ids) {
+    const loaded = await mapBounded(ids, RESUME_SCAN_CONCURRENCY, async (id) => {
       try {
-        const state = await sources.session.load(id);
-        if (state !== null) states.push(state);
+        return await sources.session.load(id);
       } catch (error) {
         warn('node.resume.load_failed', {
           session_id: id,
           error: error instanceof Error ? error.message : String(error),
         });
+        return null;
       }
+    });
+    for (const state of loaded) {
+      if (state !== null) states.push(state);
     }
     return restartCandidates(states);
   }

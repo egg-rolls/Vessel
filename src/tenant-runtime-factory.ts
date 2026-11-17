@@ -77,6 +77,7 @@ import { createSessionControl, type SessionControl } from './session-control';
 import { createSessionStore } from './session-factory';
 import { withSessionWriteLock } from './session-lock-runtime';
 import { reportShutdownFailure } from './shutdown-report';
+import { noteStartup, noteStartupMax, timeStartup } from './startup-timing';
 import {
   createTimelineDualWrite,
   createTimelineLegacyBroadcastGate,
@@ -633,7 +634,10 @@ export async function buildTenantRuntime(
     tenantRunsDir: tenantPaths.runs_dir,
     tenantId,
   });
-  const resolvedProvider = await createProvider(config, loader, useMock, options.mockScenario);
+  const resolvedProvider = await timeStartup(
+    'runtime.provider',
+    createProvider(config, loader, useMock, options.mockScenario),
+  );
   const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
   // 0.51：opt-in 计价；无配置时为 undefined，total_cost 保持 0。
   const pricing = createUsagePricing(config.pricing);
@@ -810,7 +814,11 @@ export async function buildTenantRuntime(
   for (const name of defaultPluginNames) {
     const descriptor = loader.list().find((candidate) => candidate.name === name);
     const category = descriptor?.category ?? 'unknown';
+    // 逐个插件计时（明细行里一条一个 key）：插件全是动态 import，谁慢要能指名道姓。
+    const pluginStartedAt = performance.now();
     const plugin = await loader.load(name);
+    noteStartup(`plugin.load.${name}`, performance.now() - pluginStartedAt);
+    noteStartupMax(`plugin.load.max`, performance.now() - pluginStartedAt);
     if (plugin) {
       // E1：配置在 install 时透传（host 路径直接传；非 host 路径见 ExecutionUnit）。
       plugins.push(plugin);
@@ -861,12 +869,16 @@ export async function buildTenantRuntime(
   // 插件安装原本在 ExecutionUnit 构造内；改成 per-session EU 后，同一 tenant 的
   // 多个 EU 共享一个 PluginHost，安装/init/dispose 只发生一次。
   const finalPluginHost = new MemoryPluginHost();
-  const installedPlugins = await installPluginsIntoHost({
-    host: finalPluginHost,
-    plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
-    publish: (event) => events.publish(event),
-    logger,
-  });
+  const installedPlugins = await timeStartup(
+    'runtime.plugin-install',
+    installPluginsIntoHost({
+      host: finalPluginHost,
+      plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
+      publish: (event) => events.publish(event),
+      logger,
+    }),
+  );
+  noteStartup('plugin.count', installedPlugins.plugins.length);
   // 0.51 期 0：`inbox` 的成员面贡献（空壳，`tools()` 返回空数组 ⇒ 工具面与 0.50 逐字相同）。
   // 注册在 tenant 宿主上而不是 body 上，是因为 `MemberExecutionHost` 握的就是这一个宿主：
   // spawn 直接 `getMemberBodyContributions()` 读，零新增透传（报告 §3.2）。

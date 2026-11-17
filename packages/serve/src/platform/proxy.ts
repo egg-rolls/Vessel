@@ -17,6 +17,7 @@ import {
   checkProxyMethod,
   checkProxyWsPath,
   checkRpcMethod,
+  isHealthProbePath,
   type PlatformProxyLimits,
   PROXY_BASE_PATH,
   type ProxyRejection,
@@ -399,8 +400,15 @@ export class PlatformProxy {
 
       // 响应头超时：流式响应在头到达后不再受这个定时器约束（否则 SSE 必被 30s 掐断）。
       const streamMode = httpStreamMode();
+      //
+      // 0.57：**健康探测单独一条短超时**。`/health` 借 30s 的 RPC 超时是错的——node 没起来
+      // 时每个探活请求都白等 30s，用户看到的就是「页面卡住，然后 node_unreachable」。
+      // 探活要快失败、快重试（1.5s 缺省），RPC 保持 30s（它本来就可能跑很久）。
+      const timeoutMs = isHealthProbePath(route.rest)
+        ? this.limits.probeTimeoutMs
+        : this.limits.requestTimeoutMs;
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.limits.requestTimeoutMs);
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       (timer as { unref?: () => void }).unref?.();
       /**
        * 客户端断开 → 取消上游 fetch。
@@ -435,12 +443,12 @@ export class PlatformProxy {
           node_id: node.nodeId,
           node_name: node.name,
           path: route.rest,
-          timeout_ms: this.limits.requestTimeoutMs,
+          timeout_ms: timeoutMs,
         });
         return aborted
           ? jsonError(
               'node_timeout',
-              `node_timeout: node ${node.nodeId} 在 ${this.limits.requestTimeoutMs}ms 内没有回响应头。`,
+              `node_timeout: node ${node.nodeId} 在 ${timeoutMs}ms 内没有回响应头。`,
               504,
             )
           : jsonError(
