@@ -167,6 +167,11 @@
       var(--dock-safe-bottom)
     )
   );
+  /* 提示卡（权限 / 提问）里「参数 / 选项」内容区的唯一滚动上限：卡片自己不滚，
+     只有这一块滚（见 styles/prompt-dock.css 的「长内容只由内容区滚动」一节）。
+     rem 上限不能省：只看 vh 的话，高视口下 40vh 会超过 --dock-max-h，内容区又把卡
+     顶回槽位高度以上，滚动就落回外层 —— 那正是 0.57 之前的样子。 */
+  --prompt-params-max-h: min(40vh, 24rem);
   --touch-target: 44px;
 
   /* 层级：nav < drawer/scrim < modal/palette < toast。drawer 内打开的确认框必须在抽屉之上。 */
@@ -261,7 +266,11 @@
 @media (max-width: 680px) {
   :root {
     --dock-gap: 8px;
-    --dock-safe-bottom: 0;
+    /* 必须是 `0px` 而不是 `0`：这个令牌参与 --dock-max-h 里的 calc 长度运算，
+       无单位的 0 会让 min(56dvh, 520px, calc(...)) 在计算值阶段整条失效，
+       max-height 退回 `none` —— 窄屏上槽位于是彻底没有上限，一屏长的参数能把卡
+       撑到几千像素高（既滚不动，也钻出圆角槽位）。 */
+    --dock-safe-bottom: 0px;
     --bottom-nav-h: 57px;
   }
 }

@@ -1,6 +1,7 @@
-/* ── Prompt dock（0.18 S2/S3） ─────────────────────────────
+/* ── Prompt dock（0.18 S2/S3，0.57 改滚动层级） ─────────────
    替换式卡牌：槽位是唯一表面，卡内只负责布局；head 吸顶、actions 吸底。
-   高度只设上限（--dock-max-h），超出后由槽位统一滚动。 */
+   高度：槽位只设上限（--dock-max-h）作为兜底；长内容的滚动条在「参数 / 选项」区
+   自己身上（令牌 --prompt-params-max-h），见下面「长内容只由内容区滚动」一节。 */
 
 .prompt-slot {
   max-width: var(--dock-width);
@@ -33,6 +34,8 @@
   top: 0;
   z-index: 1;
   background: var(--surface-raised);
+  /* 卡头与按钮条永不参与压缩：被让出高度的只能是中间那块内容。 */
+  flex: none;
 }
 
 /* 权限 / 提问共用标题区：accent 圆点标识，不画分隔线。 */
@@ -53,18 +56,49 @@
   bottom: 0;
   z-index: 1;
   background: var(--surface-raised);
+  flex: none;
 }
 
-/* 长内容只由槽位滚动，取消卡内第二层滚动。 */
+/* ── 长内容只由「参数 / 选项」区滚动（0.57） ─────────────────────
+   上一版是反的：槽位 `overflow-y: auto`，内容区 `max-height: none; overflow: visible`。
+   于是长参数把卡撑高 → 滚的是槽位 → 参数块整块滑到吸顶头 / 吸底按钮条下面，
+   看起来像上下两块内容互相穿透（叠影），滚轮也落在「不该滚的那一层」上。
+   现在：
+     1. 内容区自己带 `max-height`（令牌 --prompt-params-max-h）与 `overflow-y: auto`，
+        它是唯一的滚动容器；
+     2. flex 链路每一层都显式 `min-height: 0`（flex 子项默认 min-height: auto 会顶住
+        收缩，滚动于是又落回外层）；
+     3. 槽位的 `overflow-y: auto` 保留，只作为「整张卡超过视口」时的最后一次兜底。 */
 
-.prompt-slot .permission-input {
-  max-height: none;
-  overflow: visible;
-}
-
+.prompt-slot .permission-input,
 .prompt-slot .ask-list {
-  max-height: none;
-  overflow: visible;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: var(--prompt-params-max-h);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* fieldset（`.permission-card` / `.ask-card`）在槽位里**不吃自己的盒子**：Chrome 给
+   fieldset 生成了一个匿名内容盒，里面的块不参与外层 flex 的收缩 —— 实测（无头 Chrome
+   的 CDP 几何读数）：槽位被 max-height 卡在 448px 后，卡被压到 393px，参数块却仍按内容
+   高度 1183px 排版，于是整块溢出圆角容器（params.bottom − slot.bottom = +810px），
+   外层又变成滚动的那一层，滚动时内容从吸顶头 / 吸底按钮条下面透出来。
+   `display: contents` 让卡内各块直接成为槽位的 flex 子项，收缩与滚动才能落在参数区自己
+   身上（卡自己的背景 / 内衬 / 描边在槽位里本来就已被抹平，见上面「单层表面」那条）。
+   只在槽位里这么做：AppShell 面板里的同一张卡仍保留自己的表面与内衬。 */
+
+.prompt-slot .permission-card,
+.prompt-slot .ask-card {
+  display: contents;
+}
+
+/* 内容块成为槽位的直接子项后，块间距只剩槽位的 gap：把卡内原来那两层 margin 归零，
+   免得 8 + 8 叠成 16（视觉与改前一致）。 */
+
+.prompt-slot .ask-card-head,
+.prompt-slot .ask-card-actions {
+  margin: 0;
 }
 
 /* 队列摘要：活动卡之后的最多 3 项。 */

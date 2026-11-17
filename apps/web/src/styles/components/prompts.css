@@ -27,7 +27,7 @@
 .permission-input {
   margin: 0;
   padding: 12px 14px;
-  max-height: 38vh;
+  max-height: var(--prompt-params-max-h);
   overflow: auto;
   border-radius: var(--radius-sm);
   background: var(--surface-sunken);
