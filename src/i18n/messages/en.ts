@@ -345,6 +345,14 @@ export const en: Record<MessageKey, string> = {
   'gateway.status.degraded': 'Process alive but identity not confirmed (pid {pid}): {reason}',
   'gateway.status.unknown': 'Unable to confirm the gateway state; no files were deleted.',
   'gateway.status.foreignHost': 'Lock belongs to another host ({host}); no files were deleted.',
+  // ── stall watchdog (0.58) ──
+  'gateway.status.supervise': 'Watchdog',
+  'gateway.status.superviseOn':
+    'on · probe {probe}ms × {threshold}, ≤{max}/h, backoff {backoff}→{backoffMax}ms',
+  'gateway.status.superviseOff': 'off (gateway.supervise.enabled: false)',
+  'gateway.status.superviseNode':
+    '{name}: {phase} · last ok {lastOk} · last fail {lastFail} · restarts {restarts} (last hour {lastHour}){error}',
+  'gateway.status.superviseError': ' · error: {error}',
   'gateway.status.selectHint':
     '{count} gateway instances found; use --instance, --port, or --all to choose one.',
   'gateway.stop.starting':

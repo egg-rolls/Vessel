@@ -1204,6 +1204,96 @@ export function validateServeSettings(
 }
 
 /**
+ * `gateway.supervise` 的已知键（0.58）。
+ *
+ * 负一层嵌套不在 `KNOWN_BLOCK_KEYS` 的检查范围内，所以这里自己收口：写错一个
+ * 字母（`probe_intervall`）必须报错，而不是静默退回缺省值。
+ */
+const KNOWN_GATEWAY_SUPERVISE_KEYS = [
+  'enabled',
+  'probeIntervalMs',
+  'probeTimeoutMs',
+  'failureThreshold',
+  'maxRestartsPerHour',
+  'backoffStartMs',
+  'backoffMaxMs',
+  'recoveryProbes',
+] as const;
+
+/** 数值型看门狗参数的合理区间（只挡笔误，不做业务判断）。 */
+const SUPERVISE_NUMBER_BOUNDS: Readonly<Record<string, { min: number; max: number }>> = {
+  probeIntervalMs: { min: 1, max: 3_600_000 },
+  probeTimeoutMs: { min: 1, max: 3_600_000 },
+  failureThreshold: { min: 1, max: 1_000 },
+  maxRestartsPerHour: { min: 1, max: 10_000 },
+  backoffStartMs: { min: 1, max: 3_600_000 },
+  backoffMaxMs: { min: 1, max: 3_600_000 },
+  recoveryProbes: { min: 1, max: 10_000 },
+};
+
+/**
+ * 0.58：校验 `gateway.supervise` 块（父进程侧存活看门狗）。
+ *
+ * 只校验形状：`enabled` 是布尔，其余是正整数。具体语义（探活周期如何叠加退避）
+ * 由 `src/gateway/watchdog.ts` 决定，这里不重复实现。
+ */
+function validateSuperviseSettings(
+  supervise: unknown,
+  errors: ConfigValidationError[] = [],
+): ConfigValidationError[] {
+  if (supervise === undefined) return errors;
+  if (!isPlainObject(supervise)) {
+    errors.push({ path: 'gateway.supervise', message: 'gateway.supervise must be an object' });
+    return errors;
+  }
+  for (const key of Object.keys(supervise)) {
+    if ((KNOWN_GATEWAY_SUPERVISE_KEYS as readonly string[]).includes(key)) continue;
+    const suggestion = closestKey(key, [...KNOWN_GATEWAY_SUPERVISE_KEYS]);
+    errors.push({
+      path: `gateway.supervise.${key}`,
+      message: suggestion
+        ? `Unknown configuration key "gateway.supervise.${key}". Did you mean "${suggestion}"?`
+        : `Unknown configuration key "gateway.supervise.${key}".`,
+      value: key,
+    });
+  }
+  const enabled = supervise.enabled;
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    errors.push({
+      path: 'gateway.supervise.enabled',
+      message: 'gateway.supervise.enabled must be a boolean',
+      value: enabled,
+    });
+  }
+  for (const [key, bounds] of Object.entries(SUPERVISE_NUMBER_BOUNDS)) {
+    const value = supervise[key];
+    if (value === undefined) continue;
+    if (
+      typeof value !== 'number' ||
+      !Number.isInteger(value) ||
+      value < bounds.min ||
+      value > bounds.max
+    ) {
+      errors.push({
+        path: `gateway.supervise.${key}`,
+        message: `gateway.supervise.${key} must be an integer between ${bounds.min} and ${bounds.max}`,
+        value,
+      });
+    }
+  }
+  const start = supervise.backoffStartMs;
+  const max = supervise.backoffMaxMs;
+  if (typeof start === 'number' && typeof max === 'number' && start > max) {
+    errors.push({
+      path: 'gateway.supervise.backoffStartMs',
+      message: 'gateway.supervise.backoffStartMs must not exceed gateway.supervise.backoffMaxMs',
+      value: start,
+    });
+  }
+  return errors;
+}
+
+/**
  * 0.49：校验平台 gateway 块（CONTRACT-0.49 §3.1）。
  * 与 `node:` 分区：不复用字段；origin 规则复用 `allowedOriginError`。
  * token 值永不写入 error / message。
@@ -1252,6 +1342,8 @@ function validateGatewaySettings(
     (gateway as Record<string, unknown>).proxySecretEnv,
     errors,
   );
+
+  validateSuperviseSettings((gateway as Record<string, unknown>).supervise, errors);
 
   if (allowedOrigins !== undefined) {
     if (!Array.isArray(allowedOrigins)) {
@@ -2977,7 +3069,15 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'proxySecretEnv',
   ],
   security: ['rootSecretEnv'],
-  gateway: ['port', 'hostname', 'token', 'tokenEnv', 'allowedOrigins', 'proxySecretEnv'],
+  gateway: [
+    'port',
+    'hostname',
+    'token',
+    'tokenEnv',
+    'allowedOrigins',
+    'proxySecretEnv',
+    'supervise',
+  ],
   // 0.56：WebUI 登录（嵌套 entries 由 validateAuthSettings 单独校验）。
   auth: ['enabled', 'publicOrigin', 'allowedHosts', 'trustedProxies', 'backends', 'session'],
   connect: ['token', 'tokenEnv', 'caFile'],
