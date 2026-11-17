@@ -28,6 +28,10 @@ export const messageRefSchema = {
   properties: {
     kind: { type: 'string', enum: ['file', 'image', 'document'] },
     path: { type: 'string', minLength: 1, maxLength: MESSAGE_REF_PATH_MAX },
+    // 0.56（additive）：内容地址（`<dataDir>/blobs/sha256/xx/<sha256>`）。
+    // 前端一般不带（它不知道 sha256）：**节点侧在上传即落那一步算并回填**；
+    // 但远端 / 重放 / 迁移方带过来时必须认，否则 blob 寻址退化成 path（跨机失效）。
+    sha256: { type: 'string', pattern: '^[0-9a-f]{64}$' },
     name: { type: 'string' },
     mime: { type: 'string' },
     bytes: { type: 'integer', minimum: 0 },
@@ -84,6 +88,11 @@ export function readRefsParam(value: unknown): MessageRef[] {
     const ref: MessageRef = { kind, path };
     if (typeof record.name === 'string') ref.name = record.name;
     if (typeof record.mime === 'string') ref.mime = record.mime;
+    // 0.56：内容地址（可选）。形状对才认：64 位小写十六进制；不对就**丢弃该字段**
+    // （与「坏引用整条丢」不同：path 仍然有效，退化成旧语义即可，不因此判整条非法）。
+    if (typeof record.sha256 === 'string' && /^[0-9a-f]{64}$/.test(record.sha256)) {
+      ref.sha256 = record.sha256;
+    }
     if (typeof record.bytes === 'number' && Number.isFinite(record.bytes) && record.bytes >= 0) {
       ref.bytes = Math.floor(record.bytes);
     }
@@ -351,6 +360,36 @@ export const projectionSummarySchema = {
  * （`content` / `tool_calls` / `timestamp` / `refs` …）由 core 的 `Message` 定义，旧数据
  * 缺字段是常态，**不写 required**，也不在这里重述它们的形状（重述只会漂移）。
  */
+/**
+ * 一张图的**投递事实**（additive 0.56；`sessions.get.session.messages[i].image_delivery[j]`）。
+ *
+ * **从事件派生**（`image.sent` / `context.image_dropped`），**不在 `refs` 里**：refs 上放
+ * `status`/`sent_at` 会改写历史前缀（前缀守卫逐条比字节）且被 `messageSignature` 无视
+ * （它只取 `kind:path`）—— 最坏的一类字段。这里只是投影，刷新页面仍然正确。
+ *
+ * 三态（决策 3 的 P0 要求）：
+ * - `sent`：真的随请求发出去了（附带 provider 名与每图 token 数 ⇒ 隐私知情）；
+ * - `dropped`：这一轮算过、决定不发（预算 / 格式 / 缺 blob / 占位 / 压缩）；
+ * - `not_sent`：根本没进条通路（kill switch / 无视觉后端 / 没入池）。
+ */
+export const imageDeliverySchema = {
+  type: 'object',
+  required: ['status'],
+  properties: {
+    status: { type: 'string', enum: ['sent', 'dropped', 'not_sent'] },
+    /** 稳定短标签（`over per-request budget` / `vision_disabled` / …），可操作。 */
+    reason: { type: 'string' },
+    /** 图的内容身份前 8 位（与事件里的 `sha8` 同一口径）。 */
+    sha8: { type: 'string' },
+    /** `sent` 时每图的 token 数（来自后端 `tokenCost(1)`，不是字符数）。 */
+    tokens: { type: 'integer', minimum: 0 },
+    /** `sent` 时用的后端 id（`openai-compat` …）。 */
+    backend: { type: 'string' },
+    /** 实际发给的模型（用户隐私知情：这一张去了哪家）。 */
+    model: { type: 'string' },
+  },
+};
+
 export const sessionMessageSchema = {
   type: 'object',
   properties: {
@@ -360,6 +399,9 @@ export const sessionMessageSchema = {
     truncated: messageTruncationSchema,
     // Additive（0.54）：投影（**sparse**，不出现 = 没被投射，UI 与今天完全一致）。
     projection: projectionViewSchema,
+    // Additive（0.56）：这条消息上每张图的投递状态（**sparse**，无图 = 不出现）。
+    // 独立小字段：与 `content` 的 8 KiB 裁剪**无关**（被裁是正文的事，chip 照旧能显示原因）。
+    image_delivery: { type: 'array', items: imageDeliverySchema },
   },
 };
 

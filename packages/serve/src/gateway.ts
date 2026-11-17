@@ -104,6 +104,7 @@ import {
   createSessionMethods,
   type SessionContextUsagePort,
   type SessionEventsPort,
+  type SessionImageDeliveryPort,
   type SessionSystemContextPort,
   type SessionTimelineHeadsPort,
 } from './gateway/methods/sessions.js';
@@ -371,6 +372,18 @@ export interface GatewayOptions {
    * 缺省 = `sessions.get` 不带该字段（旧行为一字不改、不抛错）。
    */
   systemContext?: SessionSystemContextPort;
+  /**
+   * 每张图的**投递状态**（additive 0.56：`sessions.get.session.messages[i].image_delivery`）。
+   *
+   * 与 `contextUsage` / `systemContext` 同一范式、同一个时间线读口：装配层用
+   * `src/image-delivery.ts` 折叠 `image.sent` / `context.image_dropped`，serve 只按
+   * 「session + 尾水位」缓存并挂到出站消息上。
+   * **为什么不是 `refs` 上的字段**：refs 里加 status 会改写历史前缀（前缀守卫逐条比字节），
+   * 且被 `messageSignature` 无视 —— 详见 `docs/dev/design/0.56-multimodal-input.md` §6.3。
+   *
+   * 缺省 = 不带该字段（旧行为一字不改、不抛错）。
+   */
+  imageDelivery?: SessionImageDeliveryPort;
   /**
    * 会话事件日志的读取面（additive 0.53：`sessions.events` + `sessions.get.event_cursor`，
    * asm 注入）。
@@ -2392,6 +2405,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ...(opts.contextUsage !== undefined ? { contextUsage: opts.contextUsage } : {}),
       // 「模型这一轮看到的系统消息」（additive）：缺省不带该字段，旧装配行为不变。
       ...(opts.systemContext !== undefined ? { systemContext: opts.systemContext } : {}),
+      // 每张图的投递状态（additive 0.56）：缺省不带该字段，旧装配行为不变。
+      ...(opts.imageDelivery !== undefined ? { imageDelivery: opts.imageDelivery } : {}),
       // 会话事件日志读取面（additive 0.53）：缺省 = `sessions.events` 返回 not_supported、
       // `sessions.get` 不带 `event_cursor`，旧装配行为一字不变。
       ...(opts.sessionEvents !== undefined ? { sessionEvents: opts.sessionEvents } : {}),
