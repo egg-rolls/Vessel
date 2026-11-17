@@ -182,6 +182,79 @@
   padding: 0 2px;
 }
 
+/* ── 本地待确认气泡（0.56 乐观渲染）──────────────────────────
+   「已经点发送、还没被服务端回显」的那一句：属性上它仍是用户气泡（同一套 .msg-user +
+   .msg-bubble 几何），但身份上它**还没落地**，所以底色与文字走 amber 家族而不是 accent。
+
+   为什么是 amber 而不是自定义灰/半透明：tokens.css 里 `--amber` 的定义就是「还没完成」
+   专用语义色，注释点名的两个用处之一正好是「未发送 / 排队中」；`--amber-soft` 是
+   **不透明**值，压在滚动区 / bg 上不会被底色带偏；`--amber-ink` 是正文级对比（≥7:1），
+   因为这张气泡里压的是用户自己刚写的输入 —— 不能为了「灰一点」牺牲可读性。
+
+   失败档（未发送）不换底色：那句话确实还没到位，仍是 amber 家族；出错的是**状态行**，
+   所以只有状态文字换成 `--danger`（与 .stream-notice.failed / .error-meta 同一支），
+   并给出「重试 / 删除」两颗小动作键 —— 两者都是文案而不是图标，窄屏靠 flex-wrap 换行，
+   不做省略号（这两颗键是唯一出口，不允许被裁掉）。 */
+
+.msg-pending {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.msg-bubble.msg-pending-bubble {
+  background: var(--amber-soft);
+  color: var(--amber-ink);
+}
+
+.msg-pending-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 78%;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.msg-pending-status {
+  color: var(--amber);
+}
+
+.msg-pending-status.is-failed {
+  color: var(--danger);
+}
+
+.msg-pending-reason {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.msg-pending-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font-size: 11px;
+  white-space: nowrap;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.msg-pending-action:hover {
+  background: var(--hover-tint);
+}
+
+.msg-pending-action:active {
+  background: var(--press-tint);
+}
+
 /* ── 附件引用 chip 行（输入框上方 / 用户气泡上方共用） ──
    只有路径与文件名：不显示正文、不显示大小。全路径只在 title 里。 */
 
