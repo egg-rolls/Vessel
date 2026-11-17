@@ -3,6 +3,7 @@
  * @module @vessel-agent/core/session
  */
 
+import type { CompactionIndexEntry } from '../context/compaction-index.js';
 import type { ContextAnchor, PromptContextFingerprint } from './context.js';
 import type { ContextProjectionAudit, ProjectionDeclaration } from './projection.js';
 import type { Message } from './provider.js';
@@ -138,6 +139,15 @@ export interface SessionState {
    * 审计行 ⇒ 缺省 = 还没有任何决策记录。
    */
   context_projection_audit?: ContextProjectionAudit | null;
+  /**
+   * 压缩索引（0.56 ctx-recall，additive）：这条会话每一段压缩各一条，按
+   * `compaction_id` 升序累积，**不覆盖历史**。
+   *
+   * 与事件的 `context.compacted.data.compaction` **同一份内容**（事件是事实源，这里是
+   * 缓存：重启后运行时不扫日志也知道 stub 里该列哪几段、下一个 id 是几）。缺省 = 老会话 /
+   * 还没压缩过 —— 读侧据此说「这段会话没有压缩索引」，不编。
+   */
+  compactions?: CompactionIndexEntry[];
 }
 
 /**

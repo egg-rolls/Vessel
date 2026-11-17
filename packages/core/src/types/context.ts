@@ -45,6 +45,17 @@ export interface CompactionReport {
   id: number;
   /** 本次移除的消息数 */
   removed: number;
+  /**
+   * 被移除消息在**压缩前窗口数组**里的下标（升序；0.56 ctx-recall，additive）。
+   *
+   * 存在的理由：压缩索引要回答「被替换的 766 条原来在哪」，而消息对象上没有 seq。
+   * 窗口消息与事件投影是同一批对象，runtime 在播种窗口时按内容对齐出一份平行的 seq 表
+   * （`alignMessageSeqs`），这里给出下标就是那条把两者接起来的线 —— 没有它，索引只能
+   * 报条数，不能报区间。
+   *
+   * 缺省 = 空（旧实现的报告 / 没有可移除的消息）。
+   */
+  removed_indices?: number[];
   /** 本次被替换为占位的 tool_call_id（空数组 = 没有可清空的工具结果） */
   cleared_tool_call_ids: string[];
   /** 摘要由占位符代替（失败/超时/空/无 summarizer） */

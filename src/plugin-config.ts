@@ -162,6 +162,7 @@ export function buildPluginConfigMap(
   configured: PluginConfig[] | undefined,
   declarative: PluginConfig[] = [],
   agentCwd?: string,
+  dataDir?: string,
 ): Record<string, Record<string, unknown>> {
   const map: Record<string, Record<string, unknown>> = {};
   for (const entry of declarative) {
@@ -176,7 +177,27 @@ export function buildPluginConfigMap(
     map['basic-tools'] = { ...(map['basic-tools'] ?? {}), cwd: agentCwd };
   }
   applyPathBoundaryFallback(map);
+  applyRecallDataDir(map, dataDir);
   return map;
+}
+
+/**
+ * `recall` 的数据目录回落到**应用层解析出来的那份**（0.56）。
+ *
+ * 为什么必须在装配层拼：`recall` 要读 `<data_dir>/sessions/<id>/`（时间线 + 压缩索引），
+ * 而数据目录的唯一权威是应用层的 `resolveDataDir(config)` —— 它能被 `config.data_dir` 与
+ * `VESSEL_DATA_DIR` 改写（本机就是 `openl-data`，不是 `~/.vessel/data`）。让插件自己去猜
+ * 目录，等于把「同一个进程有两套数据目录」这个 bug 装进工具里：它会稳定地回答「没有压缩
+ * 索引」。
+ *
+ * 优先级：**用户显式配置 > 应用层解析值**（两种拼写 `dataDir` / `data_dir` 都算显式）。
+ * 没有解析值（库用法 / 非 CLI 入口）⇒ 不动，插件用 `VESSEL_DATA_DIR` / `~/.vessel/data` 兜底。
+ */
+function applyRecallDataDir(map: Record<string, Record<string, unknown>>, dataDir?: string): void {
+  if (dataDir === undefined || dataDir === '') return;
+  const recall = map.recall ?? {};
+  if (recall.dataDir !== undefined || recall.data_dir !== undefined) return;
+  map.recall = { ...recall, data_dir: dataDir };
 }
 
 /**

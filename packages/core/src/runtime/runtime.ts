@@ -73,6 +73,13 @@ export interface ExecutionUnitRequest {
   events: EventStream;
   /** EU 只读历史（0.54 stop-write：类型上没有 `append`，读路径写不进去） */
   eventLog?: SessionEventReadPort;
+  /**
+   * 0.56 ctx-recall：会话目录根（`<dataDir>/sessions`），压缩索引的落点。
+   *
+   * 与 `eventLog` 并列而不是塞进 `overrides`：它不是「覆盖 profile 的某个配置」，
+   * 而是一个**路径事实**（索引文件写在哪）。
+   */
+  compactionIndexDir?: string;
   leaseService?: LeaseServicePort;
   bindingLease?: LeaseGrant;
   /** 成员 body 自有宿主（白名单工具/桥接 hook）；缺省用 profile 的工厂 */
@@ -255,6 +262,9 @@ export class Runtime {
         : {}),
       ...(req.cwd !== undefined ? { cwd: req.cwd } : {}),
       ...(req.eventLog !== undefined ? { eventLog: req.eventLog } : {}),
+      ...(req.compactionIndexDir !== undefined
+        ? { compactionIndexDir: req.compactionIndexDir }
+        : {}),
       ...(req.leaseService !== undefined ? { leaseService: req.leaseService } : {}),
       ...(req.bindingLease !== undefined ? { bindingLease: req.bindingLease } : {}),
     } satisfies ExecutionUnitOptions;

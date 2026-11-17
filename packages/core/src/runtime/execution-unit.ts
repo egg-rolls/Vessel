@@ -5,10 +5,13 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  appendCompactionStub,
   applyReadSideMaskers,
   archiveNoticeSignature,
   archiveReadbackAvailability,
   auditChainOf,
+  buildCompactionIndexEntry,
+  type CompactionIndexEntry,
   type ContextAnchor,
   ContextWindowExceededError,
   clampAnchorRatio,
@@ -16,6 +19,7 @@ import {
   estimateMessagesTokensUpperBound,
   estimateRequestViewTokens,
   estimateTokens,
+  formatCompactionStub,
   measureArchivedToolResults,
   measureToolResultPressure,
   NO_ANCHOR_SAFETY_MARGIN,
@@ -61,6 +65,8 @@ import {
 } from '../pii/index.js';
 // D2：跨模块只允许从 barrel 导入（不得直接引用 session 的内部文件）。
 import {
+  alignMessageSeqs,
+  appendCompactionIndex,
   createProjectionCursor,
   cursorFromProjectionSnapshot,
   deriveSessionMeta,
@@ -76,6 +82,7 @@ import {
   withMessageId,
   withRunIdentity,
 } from '../session/index.js';
+import { sessionDirPath } from '../tenant/index.js';
 import {
   type ContextCompactedReason,
   DEFAULT_COMPACT_THRESHOLD,
@@ -251,6 +258,17 @@ interface StoredHistory {
    * 来自已落盘的 `llm.response` 事实（per-request），不是 RunRecord 的累计 usage。
    */
   lastRequestTokens?: number;
+  /**
+   * 本次历史恢复用的投影游标（0.56 ctx-recall，可选）。
+   *
+   * 只在「确实折过事件」时存在。窗口里的消息与 `projection.messages` 是同一批对象
+   * （`ProjectionCursor` 的共享口径），而游标还带着一份平行的 seq 记录 —— 播种窗口时
+   * 用它对齐出「窗口第 i 条消息来自哪条事件」，压缩时才写得出 `removed_ranges`。
+   *
+   * 缺省 = legacy 回退（RunRecord / 会话壳缓存）⇒ 那一批消息没有 seq 映射，压缩索引如实
+   * 记 `unmapped_messages`，不猜。
+   */
+  projection?: ProjectionCursor;
 }
 
 /**
@@ -945,6 +963,13 @@ export class ExecutionUnit {
   private readonly eventLog?: SessionEventReadPort;
   /** 0.18：观察 harness 直接发布的交互事件（permission/ask response） */
   private readonly eventLogUnsubscribe?: Unsubscribe;
+  /**
+   * 会话目录根（`<dataDir>/sessions`，0.56 ctx-recall）。
+   *
+   * 只给压缩索引一个落点（`<sessionDir>/compactions.ndjson`）。缺省不注入 ⇒ 索引只活在
+   * 事件与内存里（读回仍可由 `deriveCompactionIndex` 重建）。
+   */
+  private readonly compactionIndexDir?: string;
   /** 0.51：opt-in 用量计价；缺省不注入 → `totalCost` 保持 0。 */
   private readonly pricing?: UsagePricing;
   /** ADR-098 C2：注入的租约服务；缺省 no-op（行为等同现状） */
@@ -993,6 +1018,7 @@ export class ExecutionUnit {
     this.includeReasoning = opts.includeReasoning === true;
     this.retryPolicy = normalizeRetryPolicy(opts.retry);
     this.eventLog = opts.eventLog;
+    this.compactionIndexDir = opts.compactionIndexDir;
     this.pricing = opts.pricing;
     this.leaseService = opts.leaseService;
     this.bindingLease = opts.bindingLease;
@@ -1204,6 +1230,8 @@ export class ExecutionUnit {
     // `context.image_dropped{reason:'compaction'}`（GUI 回看时看得见「这里曾有 5 张图」，
     // 而不是图凭空消失）。快照只取引用，不读字节。
     const imagesBefore = this.imageRefsOfWindow(window);
+    // 0.56 ctx-recall：压缩**之前**的窗口体积（索引里要记「前后各多少」；压缩之后就取不到了）。
+    const tokensBefore = window.tokenCount;
     try {
       removed = await autoCompact.call(window);
     } catch {
@@ -1215,7 +1243,15 @@ export class ExecutionUnit {
     // 否则压缩后的显示会卡在压缩前的数（地板只保证「不倒退」，不该阻止「正当缩小」）。
     const compactedState = removed > 0 ? this.accounting(execution) : undefined;
     if (removed > 0) this.reportCompactionImageDrops(execution, imagesBefore);
-    this.publishCompacted(window, execution.runId, execution.sessionId, removed, 'auto', decision);
+    this.publishCompacted(
+      window,
+      execution.runId,
+      execution.sessionId,
+      removed,
+      'auto',
+      decision,
+      tokensBefore,
+    );
     if (compactedState !== undefined) {
       // 压缩删掉了中段：本段从压缩后的视图开始，必须显式标段因，否则守卫会当成前缀重写。
       this.pendingPrefixReason ??= 'compaction';
@@ -1335,6 +1371,28 @@ export class ExecutionUnit {
    * 供 `saveSessionState` 写审计用；请求期只读 `windowProjectionMode(window)`。
    */
   private readonly segmentProjections = new WeakMap<object, FrozenProjectionDecision>();
+
+  /**
+   * 「窗口第 i 条消息由哪条事件产出」的平行表，按窗口对象索引（0.56 ctx-recall）。
+   *
+   * 与 `segmentClearPlans` 同一生命周期：窗口换了就失效。缺口 / 整份缺失都允许 ——
+   * 读它的人（压缩索引）把缺口记成 `unmapped_messages`，不猜一个相邻 seq。
+   *
+   * 值由 `rememberWindowSeqs` 在播种窗口时按内容对齐一次填好（对齐口径见
+   * `alignMessageSeqs`）。**只服务索引记账**，不参与任何判据。
+   */
+  private readonly windowSeqMaps = new WeakMap<object, (number | undefined)[]>();
+
+  /**
+   * 每条会话已产生的压缩索引（0.56 ctx-recall），按 sessionId 索引。
+   *
+   * 存在的理由：stub 与 `compaction_id` 都要「多段累积」（不覆盖历史），而这两个数都只在
+   * 追加时用得上。上界 = 该会话的压缩次数（真实会话个位数），随 EU 生命周期回收。
+   *
+   * 落盘有三份（见 `context/compaction-index.ts` 的条目注释）：事件（事实）、会话壳
+   * （缓存，`SessionState.compactions`）、`compactions.ndjson`（工具用的物化索引）。
+   */
+  private readonly sessionCompactions = new Map<string, CompactionIndexEntry[]>();
 
   /**
    * 本 run 的**上下文计数状态**（0.55 P0），按窗口对象索引。
@@ -3064,6 +3122,7 @@ export class ExecutionUnit {
       }
       this.addContext(message, execution.runId, { stampIdentity: false });
     };
+    let prependedBaseSystem = false;
     if (
       !history.messages.some(
         (message) => message.role === 'system' && message.compaction_summary !== true,
@@ -3071,10 +3130,38 @@ export class ExecutionUnit {
       this.runSystemPrompt
     ) {
       add({ role: 'system', content: this.runSystemPrompt });
+      prependedBaseSystem = true;
     }
     for (const message of history.messages) {
       add(message);
     }
+    this.rememberWindowSeqs(workingContext, history, prependedBaseSystem);
+  }
+
+  /**
+   * 把「窗口第 i 条消息来自哪条事件」记下来（0.56 ctx-recall）。
+   *
+   * 为什么现在就要做：压缩发生的时刻（段起点 / 用户显式压缩）正是窗口刚播种完的时刻，
+   * 而**过了那一刻**消息对象就开始被追加 / 被替换，再想回头对账只能靠猜。所以播种的同时
+   * 对齐一次，存在按窗口对象的弱表里；压缩时按 `CompactionReport.removed_indices` 查。
+   *
+   * 对齐永远**按内容**（`alignMessageSeqs`）：窗口里的消息可能是会话壳缓存的深拷贝，
+   * 对象身份对不上，只有内容签名对得上。对不上的记 `undefined` —— 不猜号。
+   *
+   * 不一致（窗口条数既不等于「历史 + 1」也不等于「历史」）时整份置空：错位的区间读出来
+   * 是别人的历史，比「这段读不回来」糟得多。
+   */
+  private rememberWindowSeqs(
+    workingContext: WorkingContext,
+    history: StoredHistory,
+    prependedBaseSystem: boolean,
+  ): void {
+    const projection = history.projection;
+    if (projection === undefined || history.messages.length === 0) return;
+    const aligned = alignMessageSeqs(history.messages, projection.messages, projection.messageSeqs);
+    const expected = aligned.length + (prependedBaseSystem ? 1 : 0);
+    if (workingContext.messages.length !== expected) return;
+    this.windowSeqMaps.set(workingContext, prependedBaseSystem ? [undefined, ...aligned] : aligned);
   }
 
   /**
@@ -3812,8 +3899,17 @@ export class ExecutionUnit {
     let messages: Message[];
     if (execution !== undefined) {
       const context = execution.workingContext;
+      const tokensBefore = context.tokenCount;
       removed = context.compactAsync ? await context.compactAsync() : context.compact();
-      this.publishCompacted(context, execution.runId, execution.sessionId, removed, 'manual');
+      this.publishCompacted(
+        context,
+        execution.runId,
+        execution.sessionId,
+        removed,
+        'manual',
+        undefined,
+        tokensBefore,
+      );
       remaining = context.messages.length;
       messages = context.messages;
       // C6：摘要事件必须落盘后才能返回；否则调用方 kill 后 resume 看不到压缩态。
@@ -3826,8 +3922,9 @@ export class ExecutionUnit {
       context.setSessionId(target);
       const history = await this.loadStoredHistory(target);
       this.seedTransientContext(context, history);
+      const tokensBefore = context.tokenCount;
       removed = context.compactAsync ? await context.compactAsync() : context.compact();
-      this.publishCompacted(context, 'manual', target, removed, 'manual');
+      this.publishCompacted(context, 'manual', target, removed, 'manual', undefined, tokensBefore);
       remaining = context.messages.length;
       messages = context.messages;
       const journal = this.transientJournal('manual', target);
@@ -3877,10 +3974,19 @@ export class ExecutionUnit {
       runId = 'manual';
     }
     try {
+      const tokensBefore = workingContext.tokenCount;
       const removed = workingContext.compactAsync
         ? await workingContext.compactAsync()
         : workingContext.compact();
-      this.publishCompacted(workingContext, runId, sessionId, removed, reason);
+      this.publishCompacted(
+        workingContext,
+        runId,
+        sessionId,
+        removed,
+        reason,
+        undefined,
+        tokensBefore,
+      );
       // overflow 重试会跳过下一次守卫检查；把原因留给后续请求消费。
       if (removed > 0) this.pendingPrefixReason ??= 'compaction';
       return removed;
@@ -3893,6 +3999,7 @@ export class ExecutionUnit {
   private seedTransientContext(workingContext: WorkingContext, history: StoredHistory): void {
     workingContext.clear();
     const baseSystem = this.runSystemPrompt ?? this.systemPrompt;
+    let prependedBaseSystem = false;
     if (
       !history.messages.some(
         (message) => message.role === 'system' && message.compaction_summary !== true,
@@ -3900,10 +4007,13 @@ export class ExecutionUnit {
       baseSystem
     ) {
       workingContext.add({ role: 'system', content: baseSystem, timestamp: Date.now() });
+      prependedBaseSystem = true;
     }
     for (const message of history.messages) {
       workingContext.add(message);
     }
+    // 0.56 ctx-recall：这条路径（idle 压缩）同样是段边界，同样要能写索引区间。
+    this.rememberWindowSeqs(workingContext, history, prependedBaseSystem);
   }
 
   /**
@@ -3945,7 +4055,18 @@ export class ExecutionUnit {
     });
   }
 
-  /** 0.15 E1：removed>0 时发布 `context.compacted`；0.32 同时把摘要落事件日志 */
+  /**
+   * 0.15 E1：removed>0 时发布 `context.compacted`；0.32 同时把摘要落事件日志。
+   *
+   * 0.56 ctx-recall：**同时写出压缩索引**（`data.compaction`）并在摘要正文末尾追加一条
+   * 极短 stub —— 于是「被替换的是哪些消息、原来在哪、被谁替换」这三件事都可查，模型也能
+   * 按 id 把原文读回来。见 `context/compaction-index.ts`。
+   *
+   * 为什么索引落盘是「发出即不管」：`publishCompacted` 被 run 内的同步发布点调用（loop 的
+   * `publishCompacted` 回调 / `add()` 内的补发），把它整条改成 async 会污染那条链路。
+   * 事件（事实）已经**同步**发出去，文件只是物化缓存 —— 写失败只记日志，读回不受影响
+   * （`deriveCompactionIndex` 可从事件重建）。
+   */
   private publishCompacted(
     workingContext: WorkingContext,
     runId: string,
@@ -3953,6 +4074,7 @@ export class ExecutionUnit {
     removed: number,
     reason: ContextCompactedReason,
     decision?: SegmentCompactionDecision,
+    tokensBefore = 0,
   ): void {
     if (removed <= 0) return;
     // C2：直发路径（loop 自动 / overflow / manual）发布后记录 id，
@@ -3960,6 +4082,22 @@ export class ExecutionUnit {
     const report = workingContext.lastCompaction;
     if (report !== undefined) this.lastReportedCompactionId.set(runId, report.id);
     const remaining = workingContext.messages.length;
+    const compaction =
+      workingContext.getSessionId() === sessionId
+        ? this.buildCompactionEntry(workingContext, sessionId, removed, reason, tokensBefore)
+        : undefined;
+    if (compaction !== undefined) {
+      // 先记账再渲染 stub：stub 要列出**含这一段在内**的全部段（多段累积），
+      // 顺序反过来会让最新那一段在 stub 里缺一行（真机验证抓到过：stub 只列到 id=1，
+      // 而当时已经是第 3 段）。
+      this.rememberCompaction(sessionId, compaction);
+      // stub 只在这里写**一次**：之后再也不会被改写（摘要正文也跟着冻结），所以同一会话
+      // 连续两次请求里这一段逐字节相同（`stub_prefix_stable` 的证据基础）。
+      appendCompactionStub(
+        workingContext.messages,
+        formatCompactionStub(this.sessionCompactions.get(sessionId) ?? []),
+      );
+    }
     this.publishEvent({
       type: 'context.compacted',
       run_id: runId,
@@ -3976,6 +4114,9 @@ export class ExecutionUnit {
         // 无锚点 = 1.15 保守边距）、跟哪条线比、多出来的那截是什么。
         ...(decision !== undefined ? { decision } : {}),
         ...(decision !== undefined ? { messages_before: decision.messages_before } : {}),
+        // 0.56 ctx-recall：这次替换的索引（被替换的区间 / 条数 / 摘要指纹 / 前后体积）。
+        // 缺省（降级 / 会话在 await 期间被切走）⇒ 不写，读侧就当「这一段没有索引」。
+        ...(compaction !== undefined ? { compaction } : {}),
       },
       ts: Date.now(),
     });
@@ -4014,6 +4155,134 @@ export class ExecutionUnit {
       },
       ts,
     });
+    // 索引落盘放在事件之后：事件是事实（丢了也能 `deriveCompactionIndex` 重建），
+    // 索引文件是**物化缓存**，晚一步没关系；写失败只记日志（见 appendCompactionIndex）。
+    if (compaction !== undefined) this.writeCompactionIndex(sessionId, compaction);
+  }
+
+  /**
+   * 把一条索引追加进会话目录（fire-and-forget；**永不抛**）。
+   *
+   * 为什么可以不 await：`context.compacted` 已经同步发出去了（事实在），这份文件只是给
+   * `recall` 无参列表用的物化索引；延迟一拍写进去不影响任何正确性。
+   */
+  private writeCompactionIndex(sessionId: string, entry: CompactionIndexEntry): void {
+    const dir = this.compactionDirOf(sessionId);
+    if (dir === undefined) return;
+    void appendCompactionIndex(dir, entry).then(
+      (written) => {
+        if (written) return;
+        this.logger.warn('compaction index write failed', {
+          session_id: sessionId,
+          compaction_id: entry.compaction_id,
+        });
+      },
+      () => undefined,
+    );
+  }
+
+  /**
+   * 由「窗口 + 报告」算出这次压缩的索引条目（0.56 ctx-recall）。
+   *
+   * 三件事都要如实：
+   * 1. **区间**：`CompactionReport.removed_indices` 给出被移除消息在压缩前窗口里的下标，
+   *    `windowSeqMaps` 把下标翻成事件 seq；对不上的**记 `undefined`**（→ `unmapped_messages`），
+   *    不猜一个相邻号；
+   * 2. **摘要指纹**：取摘要正文（**不含** stub —— stub 是索引的消费者），`summary_sha8`
+   *    因此可复算、可对账；
+   * 3. **前后体积**：`tokensBefore` 是压缩前窗口的估算（调用方在压缩**之前**取），
+   *    `tokensAfter` 取当下的窗口估算。
+   *
+   * 拿不到摘要消息（降级 / 会话被切走）⇒ `undefined`：宁可不写索引，也不写一条指向
+   * 不存在摘要的账。
+   */
+  private buildCompactionEntry(
+    workingContext: WorkingContext,
+    sessionId: string,
+    removed: number,
+    reason: ContextCompactedReason,
+    tokensBefore: number,
+  ): CompactionIndexEntry | undefined {
+    const messages = workingContext.messages;
+    let summaryIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const candidate = messages[index];
+      if (candidate?.role === 'system' && candidate.compaction_summary === true) {
+        summaryIndex = index;
+        break;
+      }
+    }
+    if (summaryIndex < 0) return undefined;
+    const summary = messages[summaryIndex] as Message;
+    const report = workingContext.lastCompaction;
+    const indices = report?.removed_indices ?? [];
+    const seqMap = this.windowSeqMaps.get(workingContext);
+    const removedSeqs: (number | undefined)[] = [];
+    for (let offset = 0; offset < removed; offset += 1) {
+      const index = indices[offset];
+      removedSeqs.push(index === undefined ? undefined : seqMap?.[index]);
+    }
+    const existing = this.sessionCompactions.get(sessionId) ?? [];
+    const nextId = existing.reduce((max, entry) => Math.max(max, entry.compaction_id), 0) + 1;
+    return buildCompactionIndexEntry({
+      compaction_id: nextId,
+      at: summary.timestamp ?? Date.now(),
+      reason,
+      summary: summary.content,
+      removedSeqs,
+      tokens_before: tokensBefore,
+      tokens_after: workingContext.tokenCount,
+    });
+  }
+
+  /** 记住一条索引（同 id 覆盖：重放 / 二次发布会走到这里）。 */
+  private rememberCompaction(sessionId: string, entry: CompactionIndexEntry): void {
+    const existing = this.sessionCompactions.get(sessionId) ?? [];
+    const next = existing.filter((item) => item.compaction_id !== entry.compaction_id);
+    next.push(entry);
+    next.sort((left, right) => left.compaction_id - right.compaction_id);
+    this.sessionCompactions.set(sessionId, next);
+  }
+
+  /**
+   * 把会话壳里已有的索引接进内存（0.56 ctx-recall）。
+   *
+   * 只做「补齐」：内存里已有的条目按 id 去重后保留（本进程写的更新鲜），再补上壳里的。
+   * 壳里没有（老会话 / 还没压缩过）⇒ 什么都不做。
+   */
+  private adoptStoredCompactions(sessionId: string, stored: SessionState | null): void {
+    const storedEntries = stored?.compactions;
+    if (storedEntries === undefined || storedEntries.length === 0) return;
+    const merged = new Map<number, CompactionIndexEntry>();
+    for (const entry of storedEntries) merged.set(entry.compaction_id, entry);
+    for (const entry of this.sessionCompactions.get(sessionId) ?? []) {
+      merged.set(entry.compaction_id, entry);
+    }
+    const sorted = [...merged.values()].sort(
+      (left, right) => left.compaction_id - right.compaction_id,
+    );
+    this.sessionCompactions.set(sessionId, sorted);
+  }
+
+  /**
+   * 某会话的索引文件所在目录。
+   *
+   * 两个来源，先显式后推导：
+   * 1. `compactionIndexDir`（装配层给的 `<dataDir>/sessions`）；
+   * 2. 读口自己知道会话目录时（`TimelineEventLog.sessionDir`）用它 —— 这样**任何**
+   *    已经装了时间线读口的装配（含成员侧那条路）都能写索引，不必每处都传一个目录。
+   *
+   * 两者都没有 ⇒ `undefined`：索引只留在事件与内存里（读回仍可由
+   * `deriveCompactionIndex` 重建），不假装写过。
+   */
+  private compactionDirOf(sessionId: string): string | undefined {
+    const sessionsDir = this.compactionIndexDir;
+    if (sessionsDir !== undefined && sessionsDir !== '') {
+      return sessionDirPath(sessionsDir, sessionId);
+    }
+    const port = this.eventLog as { sessionDir?: (id: string) => string } | undefined;
+    const derived = typeof port?.sessionDir === 'function' ? port.sessionDir(sessionId) : undefined;
+    return typeof derived === 'string' && derived !== '' ? derived : undefined;
   }
 
   /**
@@ -4973,6 +5242,9 @@ export class ExecutionUnit {
       sessionState = await this.session.load(sessionId);
     }
     const shellMs = performance.now() - startedAt;
+    // 0.56 ctx-recall：把会话壳里已有的压缩索引接回来（`compaction_id` 必须跨重启单调，
+    // 否则重启后第一段压缩又会叫 id=1，stub 与工具列表就自相矛盾）。
+    this.adoptStoredCompactions(sessionId, sessionState);
     let restoreMs = 0;
     let restore: { cursor: ProjectionCursor | undefined; timing: HistoryRestoreTiming } = {
       cursor: undefined,
@@ -5072,6 +5344,9 @@ export class ExecutionUnit {
         return {
           messages,
           ...(cursor !== undefined ? { cursor } : {}),
+          // 0.56 ctx-recall：投影游标随历史一起交出去 —— 压缩索引要按 seq 定位
+          // 「被替换的是哪几条」，而消息对象上没有 seq（平行记录在游标里）。
+          projection,
           sessionState,
           eventCount,
           ...usageField,
@@ -5352,6 +5627,9 @@ export class ExecutionUnit {
       ...(stored?.context_projection_audit !== undefined
         ? { context_projection_audit: stored.context_projection_audit }
         : {}),
+      // 0.56 ctx-recall：压缩索引也必须继承 —— 索引是**累积**的（多段压缩不覆盖历史），
+      // 漏这一行会让重启后 `compaction_id` 从 1 重来、stub 只列最新一段。
+      ...(stored?.compactions !== undefined ? { compactions: stored.compactions } : {}),
       status: 'running',
       last_run_id: runId,
     };
@@ -5403,6 +5681,12 @@ export class ExecutionUnit {
       if (projection?.changed === true && projection.audit !== null) {
         sessionState.context_projection_audit = projection.audit;
       }
+    }
+    // 0.56 ctx-recall：压缩索引随会话壳一起落盘（累积、按 id 去重）。继承来的旧条目 +
+    // 本进程新写的条目，都留 —— 索引是「历史每一段」的账，不是「最新一段」的快照。
+    const knownCompactions = this.sessionCompactions.get(sessionState.session_id);
+    if (knownCompactions !== undefined && knownCompactions.length > 0) {
+      sessionState.compactions = knownCompactions;
     }
     // 0.52：环境快照的发布指纹随 session 落盘（跨重启去重用）。
     // 只在本轮确实发布过卡时存在；没有就不动（保留继承来的旧值）。

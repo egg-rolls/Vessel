@@ -273,6 +273,16 @@
         "typescript": "^7.0.2",
       },
     },
+    "plugins/tools/recall": {
+      "name": "@vessel-agent/recall",
+      "version": "0.56.0",
+      "dependencies": {
+        "@vessel-agent/core": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^7.0.2",
+      },
+    },
     "plugins/tools/web-tools": {
       "name": "@vessel-agent/web-tools",
       "version": "0.54.0",
@@ -608,6 +618,8 @@
     "@vessel-agent/provider-anthropic": ["@vessel-agent/provider-anthropic@workspace:plugins/provider/anthropic"],
 
     "@vessel-agent/provider-openai": ["@vessel-agent/provider-openai@workspace:plugins/provider/openai"],
+
+    "@vessel-agent/recall": ["@vessel-agent/recall@workspace:plugins/tools/recall"],
 
     "@vessel-agent/redact-secrets": ["@vessel-agent/redact-secrets@workspace:plugins/security/redact-secrets"],
 

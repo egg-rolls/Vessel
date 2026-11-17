@@ -15,6 +15,7 @@ import {
 import { loadConfig } from '../packages/config/src/index';
 import { InProcessScheduler, MemoryPluginHost, Runtime } from '../packages/core/src/index';
 import { drainWebToolsWarnings } from '../plugins/tools/web-tools/src/index';
+import { resolveDataDir } from './data-paths';
 import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
@@ -51,7 +52,12 @@ export async function listTools(): Promise<ToolsListing> {
   warnExternalPluginsOnce(selection.external);
   const pluginNames = selection.names;
 
-  const pluginConfigs = buildPluginConfigMap(config.plugins, declarative, resolveAgentCwd(config));
+  const pluginConfigs = buildPluginConfigMap(
+    config.plugins,
+    declarative,
+    resolveAgentCwd(config),
+    resolveDataDir(config),
+  );
   const host = new MemoryPluginHost();
   for (const name of pluginNames) {
     const plugin = await loader.load(name);

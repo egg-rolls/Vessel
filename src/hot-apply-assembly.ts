@@ -21,6 +21,7 @@ import type {
   ToolDefinition,
 } from '../packages/core/src/index';
 import { MemoryPluginHost } from '../packages/core/src/index';
+import { resolveDataDir } from './data-paths';
 import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
@@ -129,6 +130,7 @@ export async function assemblePluginTools(options: {
     options.config.plugins,
     declarative,
     resolveAgentCwd(options.config),
+    resolveDataDir(options.config),
   );
   const exclude = options.excludePlugins ?? new Set<string>();
   const host: PluginHost = new MemoryPluginHost();
