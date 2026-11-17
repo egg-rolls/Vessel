@@ -237,6 +237,57 @@ export async function readCrcNdjsonFile<T extends object>(
   } catch {
     return { items: [], invalid: [], size: 0 };
   }
+  return parseCrcNdjsonBuffer(buffer, validate, skipLine);
+}
+
+/** 文件不存在（`ENOENT`）—— 对 append-only 流来说这是「还没有这个文件」，不是读失败。 */
+export function isNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
+
+/**
+ * {@link readCrcNdjsonFile} 的**严格版**：只把 `ENOENT` 当成空文件，其它读失败一律抛。
+ *
+ * ## 为什么必须有这一版（真实事故：同一段被归档两次）
+ *
+ * 宽容版把**任何** `readFile` 失败都折叠成「这个文件是空的」。对「读事实源」的调用方
+ * （读口、读回可用性）那是对的：读不出来就说读不出来，别装成有内容。但对**写路径**它是
+ * 一个反向谎言 —— `archiveNow()` 用「归档副本里最大的 seq」算「已经归档到哪」，把「读不到」
+ *（Windows 上真实的 `EPERM`/`EBUSY`/`EMFILE`，杀软或索引器短暂占用就够）当成「一条都没有」
+ * 之后，它会拿**内存里的 `timeline_head`** 当起点，把**已经落盘的整段再抄一遍**：
+ *
+ * - 现场三次（`09f82ac6` seq 71194–71198、`8f9d91e0` 604–695、`c52a29cc` 747–2134/2173）的
+ *   重复段都恰好是「已归档区间」的原样重抄，而 `wal.log` 一条重复都没有；
+ * - 读侧 `validateTimelineRange` 的第 1/4 条规则（严格递增、不得重复）因此整段拒绝该区间，
+ *   「往上加载更早」永久卡住（`merged=0`、`hasEarlier` 恒 true）。
+ *
+ * 于是写路径只许用这一版：**读不出来 ⇒ 这次归档失败（只影响空间回收），绝不重抄**。
+ * `holes` / `manifest` 这些「读不回来就登记成洞」的调用方也用同一套口径。
+ */
+export async function readCrcNdjsonFileStrict<T extends object>(
+  path: string,
+  validate: (parsed: unknown) => T | undefined = (parsed) => parseWithCrc<T>(parsed),
+): Promise<CrcLineReadResult<T>> {
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(path);
+  } catch (error) {
+    if (isNotFoundError(error)) return { items: [], invalid: [], size: 0 };
+    throw error;
+  }
+  return parseCrcNdjsonBuffer(buffer, validate);
+}
+
+/** 一份 ndjson 字节 → 行对象（{@link readCrcNdjsonFile} 的解析体，两个入口共用一份）。 */
+function parseCrcNdjsonBuffer<T extends object>(
+  buffer: Buffer,
+  validate: (parsed: unknown) => T | undefined = (parsed) => parseWithCrc<T>(parsed),
+  skipLine?: (buffer: Buffer, start: number, end: number) => boolean,
+): CrcLineReadResult<T> {
   const items: T[] = [];
   const invalid: NdjsonInvalid[] = [];
   let skipped = 0;
@@ -318,6 +369,23 @@ export async function readNdjsonFile(
     size: result.size,
     ...(result.truncateTo !== undefined ? { truncateTo: result.truncateTo } : {}),
     ...(result.skipped !== undefined ? { skipped: result.skipped } : {}),
+  };
+}
+
+/**
+ * {@link readNdjsonFile} 的严格版（写路径专用）：**读不出来就说读不出来**。
+ *
+ * 只有 `ENOENT` 算「文件还不存在」；`EPERM` / `EBUSY` / `EMFILE` / 任何其它读失败都抛给
+ * 调用方。理由见 {@link readCrcNdjsonFileStrict}：写路径拿这个结果当「已经落盘到哪」的
+ * 判据，把读失败当成空文件就是重抄整段（那正是重复 seq 的来路）。
+ */
+export async function readNdjsonFileStrict(path: string): Promise<NdjsonReadResult> {
+  const result = await readCrcNdjsonFileStrict<TimelineRecord>(path, validateRecord);
+  return {
+    records: result.items,
+    invalid: result.invalid,
+    size: result.size,
+    ...(result.truncateTo !== undefined ? { truncateTo: result.truncateTo } : {}),
   };
 }
 

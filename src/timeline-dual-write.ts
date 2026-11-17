@@ -848,6 +848,9 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
         // ADR-105 §3 I2 的端到端接线：**必须**把发布回调交给写者。
         // 写者只在「该 seq 的 WAL/块 fsync 返回之后」调它，所以它是唯一合规的发布点。
         publish: input.publish,
+        // 诊断口：写者打开会话时会用它报「归档副本里有重复 seq」（dup-seq 事故：
+        // 这类损坏不修、不自动改写，但**不许静默** —— 它让读侧整段拒绝、「加载更早」卡住）。
+        ...(options.logger !== undefined ? { logger: options.logger } : {}),
       }));
 
   /**

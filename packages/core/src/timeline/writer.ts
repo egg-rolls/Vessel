@@ -10,6 +10,14 @@
  * | I3 | 归档失败只影响空间回收 | `archiveNow()`：不推进 `timelineHead`、记 `tainted`、失败区间落洞 |
  * | I4 | 两个 head / holes / tainted 可上报；`published_head` 单调 | `heads()` / `publishedHead()` |
  *
+ * 不变量 I5（dup-seq 事故之后补上的一条，**归档侧**）：**同一个 `seq` 在 `timeline.ndjson`
+ * 里最多出现一次**。归档是 append-only 的副本，重复一次就足以让读侧
+ * （`validateTimelineRange` 的「严格递增 / 不得重复」）整段拒绝、「往上加载更早」永久卡住。
+ * 实现是四道闸门叠加：进程内只增的 `archiveWatermark`、严格读（读不出来不算空）、
+ * 追加前重读归档尾窗、逐条断言 payload（`assertAppendOnlyPayload`），外加 `archive-lock.ts`
+ * 把「读水位 → 追加 → 提交 manifest」串行化。损坏的存量数据**不修**，只在打开时报一条 warn
+ * （`archive-audit.ts`）。
+ *
  * 失败语义（ADR-105 §3 I3 补充条款）：
  * - **append 失败** ⇒ 回滚本次写入到写前偏移 → 在 `holes.ndjson` 登记该 seq → `tainted`；
  * - **chunk 块写失败** ⇒ 删除本次新建的半块 → 整个块区间登记成洞；
@@ -75,7 +83,11 @@
 
 import { type FileHandle, mkdir, open, stat, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { noopLogger } from '../logging.js';
 import { atomicWrite } from '../session/atomic-write.js';
+import type { Logger } from '../types/logging.js';
+import { auditArchiveDuplicates, describeArchiveDuplicates } from './archive-audit.js';
+import { withArchiveLock } from './archive-lock.js';
 import { type ChunkBlockSeal, ChunkBlockStore, isTransientChunkEvent } from './blocks.js';
 import { assertTimelineWritable } from './freeze.js';
 import { HoleRegistry, type HoleRetirementResult } from './holes.js';
@@ -106,6 +118,7 @@ import {
   parseWithCrc,
   readCrcNdjsonFile,
   readNdjsonFile,
+  readNdjsonFileStrict,
   readNdjsonTail,
   readTimelineEvents,
   stampRecord,
@@ -159,6 +172,14 @@ export interface TimelineWriterOptions {
   onArchiveFailed?: (info: { from_seq: number; to_seq: number; reason: string }) => void;
   /** 测试缝：时刻来源。 */
   now?: () => number;
+  /**
+   * 诊断日志口（缺省丢弃）。
+   *
+   * 只有一件事会往这里写：**打开时扫到归档副本里有重复 seq**（见
+   * `archive-audit.ts`）。那不是一个可以静默的损坏 —— 它让读侧整段拒绝、「往上加载更早」
+   * 永久卡住，而且不会自愈。写者只报警、**不修数据**（保留还是裁掉要人决定）。
+   */
+  logger?: Logger;
 }
 
 export interface ArchiveResult {
@@ -200,6 +221,19 @@ const OPEN_INDEX_SEED_MAX_BYTES = 32 * 1024 * 1024;
 const OPEN_TAIL_MAX_EXTENSION_RECORDS = 64 * 1024;
 const MANIFEST_TAIL_FIRST_BYTES = 64 * 1024;
 const MANIFEST_TAIL_MAX_BYTES = 1024 * 1024;
+
+/**
+ * `open()` 时扫「归档副本有没有重复 seq」的字节预算（**常量上界**，不是 O(会话)）。
+ *
+ * 为什么值得在启动路径上花这几十毫秒：重复 seq 是**永久性**损坏（读侧整段拒绝、「往上加载
+ * 更早」卡住、不会自愈、不会报错），现场三个会话躺了十几个小时没人知道。8 MiB 覆盖了
+ * 绝大多数会话的**整份**归档（实测量级：`09f82ac6` 5.0 MB 全扫到、`d813eaea` 6.9 MB 全扫到），
+ * 更大的会话只扫尾部 8 MiB —— 那也比「一条都不查」好得多，且 doctor 可以显式整份扫。
+ *
+ * 精度取 `fast`（只认行首 `{"v":1,"seq":N,`，不 `JSON.parse`、不算 CRC）：检测器要的是
+ * 「有没有」，不是「哪一份可信」；真到人工裁决时 doctor 会用 `strict` 再跑一遍。
+ */
+const OPEN_ARCHIVE_AUDIT_MAX_BYTES = 8 * 1024 * 1024;
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -411,6 +445,24 @@ export class TimelineWriter {
   private taintedFlag = false;
   private walSize = 0;
 
+  /**
+   * 归档水位的**进程内高水位**（只增不减）：`timeline.ndjson` 里已经有过记录的最大 seq。
+   *
+   * 它是「同一段绝不被抄两次」的第一道闸门，且**不依赖盘上那一读**：
+   *
+   * - `open()` 恢复时置成「归档副本 / manifest 里见过的最大 seq」；
+   * - 每次成功追加归档段之后推进到该段右端。
+   *
+   * 为什么必须有它（真实事故）：`archiveNow()` 的起点过去只由「重读归档副本」决定，而那一读
+   * 在宽容读法里**任何失败都等于「空文件」**（Windows 上 `EPERM`/`EBUSY` 就够）。一旦它返回
+   * 空，`writeFrom` 就退回内存里的 `timeline_head + 1`，把**已经落盘的整段再抄一遍**
+   * （现场：`09f82ac6` 的 71194–71198 就是被抄了两次）。水位是本进程亲眼看过的最大值，
+   * 读盘再怎么失败都拉不低它。
+   */
+  private archiveWatermark = 0;
+
+  private readonly logger: Logger;
+
   private queue: Promise<void> = Promise.resolve();
   private pendingChunks: PendingChunk[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -419,6 +471,7 @@ export class TimelineWriter {
 
   private constructor(options: TimelineWriterOptions) {
     this.options = options;
+    this.logger = options.logger ?? noopLogger;
     this.sessionId = options.sessionId;
     this.sessionDir = options.sessionDir;
     this.walPath = join(this.sessionDir, TIMELINE_LAYOUT.walLog);
@@ -662,11 +715,50 @@ export class TimelineWriter {
       now: this.options.now,
     });
 
-    if (!(await this.tryIncrementalRecovery())) await this.fullRecovery();
+    const incremental = await this.tryIncrementalRecovery();
+    if (!incremental) await this.fullRecovery();
 
     const info = await stat(this.walPath).catch(() => undefined);
     this.walSize = info?.size ?? 0;
     this.walHandle = await open(this.walPath, 'a', 0o600);
+
+    // 打开的最后一步：**看一眼归档副本有没有重复 seq**（不修、只 warn）。
+    //
+    // 为什么放在这里而不是读侧：重复 seq 是写侧留下的损坏，读侧看见它只会（正确地）整段拒绝；
+    // 让它「不静默」的唯一位置就是写者打开这个会话的那一刻 —— 那一刻之后，用户就能在日志里
+    // 看到「这个会话的哪一段被抄了两次、要人来决定保留还是裁掉」。
+    await this.reportArchiveDuplicates();
+  }
+
+  /**
+   * 启动时的重复 seq 巡检（有界、best-effort、**不改一个字节**）。
+   *
+   * 失败/超预算都不影响打开：它只回答「要不要 warn 一条」。
+   */
+  private async reportArchiveDuplicates(): Promise<void> {
+    try {
+      const audit = await auditArchiveDuplicates(this.sessionDir, {
+        maxBytes: OPEN_ARCHIVE_AUDIT_MAX_BYTES,
+      });
+      const described = describeArchiveDuplicates(audit);
+      if (described === undefined) {
+        // 只扫了尾部（大会话）：**不许**把「尾部没重复」说成「没有重复」，留一行 debug 记账。
+        if (audit.truncated) {
+          this.logger.debug('timeline archive duplicate scan covered tail only', {
+            session_id: this.sessionId,
+            scanned_bytes: audit.scanned_bytes,
+            bytes: audit.bytes,
+          });
+        }
+        return;
+      }
+      this.logger.warn(described.message, described.detail);
+    } catch (error) {
+      this.logger.debug('timeline archive duplicate scan failed', {
+        session_id: this.sessionId,
+        error: messageOf(error),
+      });
+    }
   }
 
   /**
@@ -799,6 +891,8 @@ export class TimelineWriter {
     this.published = this.walHead;
     const maxArchived = Math.max(manifest.archivedTo, maxRecordSeq(archivedRecords));
     this.timelineHead = Math.min(maxArchived, this.walHead);
+    // 归档水位只增不减：这是「同一段绝不抄两次」的起点（见字段注释）。
+    this.archiveWatermark = maxArchived;
     this.nextSeq = Math.max(knownMax, this.holes.maxSeq()) + 1;
     // 两个来源，任一为真即污点（与全量路径同一判据）。
     this.taintedFlag = this.holes.list().length > 0 || manifest.tainted;
@@ -883,6 +977,9 @@ export class TimelineWriter {
     this.published = this.walHead;
     const maxArchived = Math.max(manifest.archivedTo, maxRecordSeq(timelineRead.records));
     this.timelineHead = Math.min(maxArchived, this.walHead);
+    // 归档水位只增不减（同增量路径）。注意取的是**归档副本里见过的最大 seq**，不是
+    // `timelineHead`：后者会被 `wal_head` 夹小（有洞时），拿它当水位会允许重抄。
+    this.archiveWatermark = maxArchived;
     // 两个来源，任一为真即污点：盘上还有**未退役**的洞（真丢失），或 manifest 的
     // last-wins 状态是 `tainted`。`holes.list()` 已是存活口径，退役区间不再压制污点。
     // 打开时**不重读区间**：退役声明只在自证通过后才被写出（`retireHoles()`）。
@@ -967,16 +1064,55 @@ export class TimelineWriter {
     }
   }
 
+  /**
+   * 追加一行 manifest（**自带精确回滚**）。
+   *
+   * 回滚只截掉**这一行自己的字节**，而且仅在它确实还是文件末尾时：
+   *
+   * - 过去用的是「本次尝试开始时 `stat` 出来的文件长度」，那是调用方猜的偏移。两个写者
+   *   （或一次 fsync 失败后的重试）交错时，按那个偏移截断会**吃掉别人的行** ——
+   *   现场 `09f82ac6` 就出现过「归档段已经落了盘、对应的 `archive` 行却不在 manifest 里」
+   *   的组合（归档指针因此不前进，下一次归档又从头抄一遍：重复段正是这么来的）。
+   * - 现在偏移来自**自己的句柄**（`handle.stat()`），而且只在 `size === 起点 + 本行长度`
+   *   时才截断：后面已经有人追加过 ⇒ 一个字节都不动（宁可留半行让读者按 `truncateTo`
+   *   处理，也不删别人的事实）。
+   */
   private async appendManifest(line: TimelineManifestLine): Promise<void> {
     const stamped = withCrc(line);
     const buffer = Buffer.from(`${JSON.stringify(stamped)}\n`, 'utf8');
     const handle = await open(this.manifestPath, 'a', 0o600);
+    let start = -1;
     try {
+      start = (await handle.stat()).size;
       await writeAll(handle, buffer);
       this.options.beforeSync?.('manifest');
       await handle.sync();
-    } finally {
+    } catch (error) {
       await handle.close().catch(() => {});
+      await this.rollbackTrailingAppend(this.manifestPath, start, buffer.length);
+      throw error;
+    }
+    await handle.close().catch(() => {});
+  }
+
+  /**
+   * 回滚一次「追加」：只在磁盘上确实还是「起点 + 本次字节数」时截断到起点。
+   *
+   * 三个保守出口（都不截断）：没拿到起点、`stat` 读不出来、后面已经有人追加过。
+   * 回滚失败一律吞掉 —— 它只是尽力而为，判据在调用方（登记洞 / 报污点），不在这里。
+   */
+  private async rollbackTrailingAppend(
+    path: string,
+    start: number,
+    written: number,
+  ): Promise<void> {
+    if (start < 0) return;
+    const size = (await stat(path).catch(() => undefined))?.size;
+    if (size === undefined || size !== start + written) return;
+    try {
+      await truncateFile(path, start);
+    } catch {
+      // 留半行：下一次读按 `truncateTo` 处理（与崩溃后同一口径）。
     }
   }
 
@@ -1395,9 +1531,31 @@ export class TimelineWriter {
 
   // ---------------------------------------------------------------- archive
 
+  /**
+   * 归档：把 `wal.log` 里已 fsync 的事实行**抄一份**到 `timeline.ndjson`（I3：只做空间回收）。
+   *
+   * ## 「同一段绝不被抄两次」是这个方法的**首要不变量**（真实事故）
+   *
+   * 归档副本是 append-only 的：同一个 seq 出现两次，读侧 `validateTimelineRange` 的
+   * 「严格递增 / 不得重复」就会整段拒绝，用户侧是「往上加载更早」永久卡住
+   * （`merged=0`、`hasEarlier` 恒 true）。所以起点的判定**不许只依赖一次读盘**，也不许
+   * 让任何一个来源把水位往下拉。这里四道闸门，缺一不可：
+   *
+   * | # | 闸门 | 挡的是 |
+   * | --- | --- | --- |
+   * | 1 | `archiveWatermark`（进程内只增） | 读盘失败被当成「归档是空的」⇒ 重抄整段 |
+   * | 2 | `readNdjsonFileStrict`（只有 `ENOENT` 算空） | 同上（`EPERM`/`EBUSY`/`EMFILE` 一律失败） |
+   * | 3 | 追加前重读**归档尾窗**并取 max | 第二个写者（另一进程 / 另一实例）刚抄完的那一段 |
+   * | 4 | `assertAppendOnlyPayload`（逐条断言 `seq > 水位`、严格递增） | `wal.log` 自己带重复行等 |
+   *
+   * 另外两个写者之间靠 {@link withArchiveLock} 串行（闸门 3 的读 + 追加在锁内是原子的）。
+   * 拿不到锁 / 读不出来 / 断言不过 ⇒ **这一次归档失败**（`ok:false` + `tainted` + 回调），
+   * 事实一个字节都不动、`wal_head` 照常 —— 这正是 I3「归档失败只影响空间回收」。
+   */
   private async archiveNow(): Promise<ArchiveResult> {
     if (this.blocks.pendingCount() > 0) await this.sealPendingBlock();
-    const from = this.timelineHead + 1;
+    // 起点取「manifest 指针 + 自身水位」的大者：水位只增，所以它永远不会往回退。
+    const from = Math.max(this.timelineHead + 1, this.archiveWatermark + 1);
     const to = this.walHead;
     if (from > to) return { ok: true, from_seq: from, to_seq: to };
 
@@ -1405,65 +1563,15 @@ export class TimelineWriter {
     let advanced = false;
     for (const wait of [0, ...ARCHIVE_RETRY_DELAYS_MS]) {
       if (wait > 0) await delay(wait);
-      // 归档是「数据 + manifest 指针」的原子动作：任一步失败都回滚本次新增的段行，
-      // 保证重启后不会出现「manifest 说没归档、段文件里却有」的半成品。
-      const preSize = (await stat(this.timelinePath).catch(() => undefined))?.size ?? 0;
-      const preManifestSize = (await stat(this.manifestPath).catch(() => undefined))?.size ?? 0;
       try {
-        const existing = await readNdjsonFile(this.timelinePath);
-        const alreadyArchived = maxRecordSeq(existing.records);
-        const writeFrom = Math.max(from, alreadyArchived + 1);
-        if (writeFrom <= to) {
-          const wal = await readNdjsonFile(this.walPath);
-          const lines = wal.records
-            .filter((record) => record.seq >= writeFrom && record.seq <= to)
-            .sort((a, b) => a.seq - b.seq)
-            .map(encodeLine)
-            .join('');
-          if (lines.length > 0) {
-            const handle = await open(this.timelinePath, 'a', 0o600);
-            try {
-              await writeAll(handle, Buffer.from(lines, 'utf8'));
-              this.options.beforeSync?.('timeline');
-              await handle.sync();
-            } finally {
-              await handle.close().catch(() => {});
-            }
-          }
-        }
-        await this.appendManifest({
-          v: 1,
-          kind: 'archive',
-          from_seq: from,
-          to_seq: to,
-          at: this.now(),
-        });
+        // 事务体整体在归档锁内：读水位 → 追加段 → 提交 manifest 行，中间不许插进第二个写者。
+        await withArchiveLock(this.sessionDir, () => this.appendArchiveSegment(from, to));
         this.timelineHead = to;
         advanced = true;
         break;
       } catch (error) {
-        try {
-          const truncateHandle = await open(this.timelinePath, 'r+');
-          try {
-            await truncateHandle.truncate(preSize);
-          } finally {
-            await truncateHandle.close().catch(() => {});
-          }
-        } catch {
-          // 回滚失败：保留 lastError；下次重试会重新读段并只补 seq > max 的部分。
-        }
-        // manifest 的 archive 行是提交点：同步失败时它可能已写进页缓存，必须一并回滚，
-        // 否则重启后“段文件已截断、manifest 却声称归档成功”。
-        try {
-          const truncateManifest = await open(this.manifestPath, 'r+');
-          try {
-            await truncateManifest.truncate(preManifestSize);
-          } finally {
-            await truncateManifest.close().catch(() => {});
-          }
-        } catch {
-          // 同上：留给重启的 gap/timeline_head 计算兜底。
-        }
+        // 回滚在两个追加点各自完成（`appendArchiveSegment` / `appendManifest`），
+        // 这里不再按「尝试开始时的文件长度」截断文件 —— 那会吃掉别人的行。
         lastError = error;
       }
     }
@@ -1491,6 +1599,117 @@ export class TimelineWriter {
     }
     this.options.onArchiveFailed?.({ from_seq: from, to_seq: to, reason });
     return { ok: false, from_seq: from, to_seq: to, reason };
+  }
+
+  /**
+   * 一次归档尝试的**事务体**（只在 {@link withArchiveLock} 内跑）。
+   *
+   * 三个动作、一个提交点：① 算出「已经归档到哪」（四个来源取最大）；② 只抄
+   * `seq > 水位` 的那一段并**逐条断言**；③ 提交 manifest 的 `archive` 行。
+   *
+   * 抛错 ⇒ 本次尝试作废（回滚各自完成，见 `rollbackTrailingAppend`）。
+   */
+  private async appendArchiveSegment(from: number, to: number): Promise<void> {
+    // ① 已经归档到哪：**四个来源取最大**，任何一个都不许把水位往下拉。
+    //    读失败 ⇒ 抛（绝不能当「归档是空的」）。
+    const existing = await readNdjsonFileStrict(this.timelinePath);
+    if (existing.invalid.length > 0) {
+      // 归档副本里有读不回来的行 ⇒ 它说的「最大 seq」不可信，不猜、不抄（空间晚点回收）。
+      throw new TimelineError(
+        'timeline_archive_failed',
+        `archive has ${String(existing.invalid.length)} unreadable line(s)`,
+      );
+    }
+    const tail = (await fileExists(this.timelinePath))
+      ? await readNdjsonTail(this.timelinePath)
+      : { lines: [] as string[], fromStart: true, size: 0 };
+    if (tail === undefined) {
+      throw new TimelineError('timeline_archive_failed', 'archive tail window unreadable');
+    }
+    let tailMax = 0;
+    for (let index = tail.lines.length - 1; index >= 0; index -= 1) {
+      const text = tail.lines[index];
+      if (text === undefined) continue;
+      const record = parseRecordLine(text);
+      if (record === undefined) {
+        // 尾窗里有坏行：这一段的事实只剩 `wal.log` 一份 ⇒ 不猜（退回全量恢复的口径）。
+        throw new TimelineError('timeline_archive_failed', 'archive tail has unreadable line');
+      }
+      tailMax = record.seq;
+      break;
+    }
+    const alreadyArchived = Math.max(
+      this.archiveWatermark,
+      maxRecordSeq(existing.records),
+      tailMax,
+    );
+    const writeFrom = Math.max(from, alreadyArchived + 1);
+
+    // ② 只抄「水位之后」的那一段；断言它是严格递增且都在水位之上。
+    if (writeFrom > to) {
+      // 水位已经覆盖到本次右端（第二个写者刚抄完 / manifest 指针滞后）：**什么都不写**。
+      // 不写 payload、也不写 archive 行 —— 写一行「没有新段」的归档声明只会让审计更难读。
+      this.archiveWatermark = Math.max(this.archiveWatermark, to);
+      return;
+    }
+    {
+      const wal = await readNdjsonFileStrict(this.walPath);
+      const records = wal.records
+        .filter((record) => record.seq >= writeFrom && record.seq <= to)
+        .sort((a, b) => a.seq - b.seq);
+      this.assertAppendOnlyPayload(records, alreadyArchived);
+      if (records.length > 0) {
+        const buffer = Buffer.from(records.map(encodeLine).join(''), 'utf8');
+        const handle = await open(this.timelinePath, 'a', 0o600);
+        let start = -1;
+        try {
+          start = (await handle.stat()).size;
+          await writeAll(handle, buffer);
+          this.options.beforeSync?.('timeline');
+          await handle.sync();
+        } catch (error) {
+          await handle.close().catch(() => {});
+          await this.rollbackTrailingAppend(this.timelinePath, start, buffer.length);
+          throw error;
+        }
+        await handle.close().catch(() => {});
+        this.archiveWatermark = Math.max(
+          this.archiveWatermark,
+          records[records.length - 1]?.seq ?? alreadyArchived,
+        );
+      }
+    }
+    // ③ 提交点：manifest 的 `archive` 行（`to_seq` = 本次归档到的右端，读侧认这条）。
+    await this.appendManifest({
+      v: 1,
+      kind: 'archive',
+      from_seq: from,
+      to_seq: to,
+      at: this.now(),
+    });
+    this.archiveWatermark = Math.max(this.archiveWatermark, to);
+  }
+
+  /**
+   * 本次要抄的段必须是**严格递增**且**全部大于已经归档的水位**。
+   *
+   * 这是「同一 seq 在 append-only 流里最多出现一次」的最后一道断言：只要它成立，
+   * 追加本身就不可能造出重复。抛错 = 这一次归档失败（空间晚点回收），事实不动。
+   */
+  private assertAppendOnlyPayload(
+    records: readonly TimelineRecord[],
+    alreadyArchived: number,
+  ): void {
+    let previous = alreadyArchived;
+    for (const record of records) {
+      if (record.seq <= previous) {
+        throw new TimelineError(
+          'timeline_archive_failed',
+          `archive payload would duplicate seq ${String(record.seq)} (already archived up to ${String(alreadyArchived)})`,
+        );
+      }
+      previous = record.seq;
+    }
   }
 
   /**
