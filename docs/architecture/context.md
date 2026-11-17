@@ -48,7 +48,9 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 
 **不注入**：Team 日志不会自动进上下文；只有 `teams.post` 里被 `@` 的成员会收到一条普通 user 消息。权限请求 / ask 事件不进上下文，只有工具结果会。
 
-**一次请求的完整清单**（唯一口径；新增注入通道必须在本表落一行，否则就是第二套真相源 —— `vessel:subscription` 当初就是这么漏出去的）：`messages[]` = 上表各注入点 + 历史正文（user / assistant / **tool 结果**）+ 压缩摘要（`role: system` + `compaction_summary`，顶掉历史的那一份）+ 请求级工具结果占位（`context_trim`：只替换出网那份，落盘仍是原文）+ 回传的 `reasoning_content`；`tools[]` = `pluginHost.listTools()` 的 schema（**工具面的唯一来源**，Self Card 的 `tools:` 行只是展示）；provider 参数 = `model` / `max_tokens` / 温度等 / abort signal；**明确不进请求**：`Message.refs`（只有路径，正文靠 `[refs]` 让模型自己读）、事件流本身、`prompt.system_context`（审计事件）。
+**一次请求的完整清单**（唯一口径；新增注入通道必须在本表落一行，否则就是第二套真相源 —— `vessel:subscription` 当初就是这么漏出去的）：`messages[]` = 上表各注入点 + 历史正文（user / assistant / **tool 结果**）+ 压缩摘要（`role: system` + `compaction_summary`，顶掉历史的那一份）+ 请求级工具结果占位（`context_trim`：只替换出网那份，落盘仍是原文）+ 回传的 `reasoning_content`；`tools[]` = `pluginHost.listTools()` 的 schema（**工具面的唯一来源**，Self Card 的 `tools:` 行只是展示）；provider 参数 = `model` / `max_tokens` / 温度等 / abort signal / **`attachment_plan`（0.56：这一轮要发哪几张图，见下一条）**；**明确不进请求**：`Message.refs` 的**正文**（只有路径 + sha256，图的内容经视觉基座以块进入请求，见下一条）、事件流本身、`prompt.system_context`（审计事件）。
+
+**图片（0.56，决策：模型支持即直通）**：`Message.content` 仍是 `string`，图只有 `refs` 里的一条引用（`{kind:'image', path, sha256}`）；字节在**上传即落**时冻结进内容寻址 blob（`<dataDir>/blobs/sha256/xx/<sha256>`，写一次永不重写），请求期由 `vision/plan.ts` 解析成 `ChatRequest.attachment_plan`，再由**传输适配器**把那一条消息的 `content` 升成 `[{type:'text'}, {type:'image_url'}…]`（形状归插件，核心不认识任何一家）。于是：`refs` 仍不进正文、图永不进 `Message`（前缀守卫逐条比字节）、图片计价只认后端 `tokenCost()`（不按 base64 字符数）、投递状态（已发送 / 已丢弃 / 未发送）**只从事件**（`image.sent` / `context.image_dropped`）派生、不写进 `refs`。
 
 **Self Card 是构造期快照（0.52）**：`agents.update` 只改 registry 记录，模型看到的 `[Self Card]` 仍是 spawn 时那张（`selfCard` / `systemPrompt` / `model` 在 `ExecutionUnit` 构造期赋值、之后只读）。因此**不热替换**那张卡，而是把变化说成环境信息：`AgentService` 把新身份推进该 body 的「真值盒」，`self-card-delta` hook 每轮 diff「模型相信的值」与它，变了才注入一条 `vessel:notice`（同一变更只报一次；字段没变 / 没变更都不注入；回滚照样报）。改名 / team / parent 立即生效、只补一句说明，model / system prompt 如实写成「本具 body 仍是旧值，下一具 body 才用新的」。
 
