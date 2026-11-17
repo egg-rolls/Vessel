@@ -83,11 +83,64 @@ Error: EPIPE: broken pipe, write
 
 - **不是假 provider 特有**。provider 只决定「什么时候有日志要写」，跟自激无关。
   真 provider 一样踩 —— 只要 sink 断了、且之后还有一条日志。
-- **真线上会踩**，而且这是线上最常见的启动形态：后台启动 / `nohup` / 启动脚本退出 /
-  SSH 断开 / 父进程被杀 / systemd 管道断 —— 任何一个都会让 node 的 stderr 变成死管道。
-  症状就是「进程活着、CPU 100%、端口不响应、日志停在某一刻」，只能强杀。
-- 反过来说：只要 stdout/stderr 由一个长期存在的持有者持有（systemd 直接重定向到文件或
-  journal、容器日志驱动、前台运行），就不会踩。
+- **线上会不会踩取决于 sink 生命周期**，见 §3.2：重定向到真文件/journal/容器日志的不踩；
+  sink 是会消失的管道（父进程退出、`| head`、短命 supervisor 管道）就踩。
+  症状是「进程活着、CPU 100%、端口不响应、日志停在某一刻」，且 **SIGTERM 杀不掉**。
+
+## 3.1 Linux 原生复现（bun139）与 2×2 矩阵：**不是文件系统问题**
+
+环境：WSL2 Ubuntu，**Linux 原生 bun 1.3.9**（`~/.local/bin/bun139`，非 Windows 的 `bun.exe`）。
+方法：每个 case 用**独立端口**、**全新空数据目录**（不需要「毒化」数据），
+**先让 node 正常启动（health 200），再断开 sink**（`2> >(head -c 200 >/dev/null)`：head 读满退出 ⇒
+管道读端消失），然后连续发 3 次 `runs.start` 制造日志写。采样 10 s。
+
+| case | 代码 | 数据 fs | sink | 主线程 CPU/10s | health | 结论 |
+|---|---|---|---|---|---|---|
+| CP1 | 修前 | ext4 | 正常 | **0.2 %** | 200 | ALIVE |
+| **CP2** | 修前 | **ext4** | **断开** | **102.6 %** | -1 | **STUCK** |
+| CP3 | **修后** | ext4 | 断开 | **0.6 %** | 200 | **ALIVE** |
+| **CP4** | 修前 | **9p** | **断开** | **105.3 %** | -1 | **STUCK** |
+| CP5 | 修前 | **9p** | 正常 | **0.1 %** | 200 | ALIVE |
+| CP6 | 修后 | 9p | 断开 | 2.4 % | 200 | ALIVE |
+
+三条只变一个变量的读法：
+
+- **固定 fs、只改 sink**：ext4 上 `0.2 % → 102.6 %`，9p 上 `0.1 % → 105.3 %` ⇒ **sink 是决定因素**。
+- **固定 sink（断开）、只改 fs**：ext4 `102.6 %` 与 9p `105.3 %` 无差别 ⇒ **文件系统不是变量**。
+- **固定 sink（断开）、只改代码**：修前 `102.6 / 105.3 %` → 修后 `0.6 / 2.4 %` ⇒ **修复有效**。
+
+⇒ **「WSL2 9p/DrvFs 文件系统层卡住」这个假设被证伪**：僵死在 ext4 上照样发生，机制与 fs 无关。
+
+### `/proc` 三件套（Linux 原生僵死现场，无调试器）
+
+pid 35593（修前 + **ext4** + sink 断开）：
+
+| 观察 | 读数 | 判读 |
+|---|---|---|
+| VmRSS / Threads | 674 → **753 MB / 3 s**（≈26 MB/s） | 真实 RSS 无界增长 |
+| 主线程 `task/35593/stat` | utime+stime 增量 **299 ticks / 3 s**（HZ=100 ⇒ **100 %**），`state=R`，`wchan=0` | **用户态自旋**，不是阻塞在系统调用 |
+| 其余 25 线程 | 增量 0–2 ticks，`state=S`，`wchan=futex_wait_queue_me` | 全在等锁（陪绑） |
+
+「用户态自旋 + wchan=0」正是 `EPIPE → uncaughtException → 处理器写日志 → 再 EPIPE` 这条
+纯用户态自激链的签名；若是驱动/fs 卡住，应表现为 `state=D/S` 且 `wchan` 指向具体内核函数。
+
+### 一个运维事实：这种僵死 **SIGTERM 杀不掉**
+
+实测 `kill -TERM 35593` 后进程仍在（CPU 继续涨），只有 `kill -9` 有效。
+原因：信号处理需要事件循环，而事件循环正被自激饿死。
+⇒ 外部 watchdog 必须用 **SIGKILL**；`SIGTERM` 会静默失败，让人误以为「进程已经停了」。
+
+## 3.2 那线上 Linux 到底会不会踩
+
+精确回答：**取决于 sink 的生命周期，不取决于平台或 provider**。
+
+- **不会踩**：`… > file 2>&1 &`（重定向到**真文件**，Linux 下 fd 独立于 shell，shell 退出也不会断）、
+  systemd `StandardOutput=file:`/`journal`、容器日志驱动、前台运行。
+  （CP1/CP5 就是这种形态：9p 和 ext4 都是 CPU 0.1–0.2 %、ALIVE。）
+- **会踩**：stdout/stderr 是**会消失的管道**——`… | head`、父进程退出、
+  启动脚本/SSH 会话结束时把管道收走、某些 supervisor 的短命管道。
+  Windows/WSL interop 下 `nohup … > file &` 恰好就是这种（重定向由 WSL 侧转发成管道），
+  所以现场才「稳定复现」——但那是 **interop 的启动形态**，不是 9p 文件系统。
 
 ## 4. 修法（两处，都是「有界」修复）
 
@@ -128,6 +181,28 @@ Error: EPIPE: broken pipe, write
 | `keepalive.ts` | 正常路径验证（`Bun.spawn` + 文件句柄，父进程持有，sink 不断） |
 | `sample.ps1` / `threadlist.ps1` / `listp.ps1` / `killp.ps1` | 外部采样 / 线程级 CPU / 列 PID / 按 PID 杀 |
 
+**Linux 原生（bun139）这一轮**（`/mnt/d/tmp/vb`）：
+
+| 文件 | 作用 |
+|---|---|
+| `linux-launcher.ts` | Linux 隔离 launcher（数据目录/HOME/端口从 env 来，并自报 pid 以便采样 `/proc`） |
+| `matrix2.ts` | **§3.1 的 2×2 矩阵**：独立端口 + 先启动再断 sink（`2> >(head -c 200 >/dev/null)`）+ 连续 `runs.start`，采 CPU/RSS/health |
+| `probe.ts` | 对任意 pid 采 `/proc`：VmRSS + 每线程 utime/stime 增量 + state + wchan |
+| `cfg-<port>.yaml` | 每 case 独立端口配置（由 `matrix2.ts` 生成） |
+
+Linux 复现命令（一条跑完即得 §3.1 那一行）：
+
+```
+cd /mnt/d/tmp/vb
+~/.local/bin/bun139 run matrix2.ts CP2     # 修前 + ext4 + sink 断开 ⇒ 期望 STUCK
+~/.local/bin/bun139 run matrix2.ts CP3     # 修后 + ext4 + sink 断开 ⇒ 期望 ALIVE
+# 采样任何僵死进程
+~/.local/bin/bun139 run probe.ts <pid> 3
+```
+
+`matrix2.ts` 会在每个 case 前后 `git checkout` 对应版本，**跑完最后会把代码恢复到修后版本**；
+若中途被 kill，务必手动 `git checkout HEAD -- packages/core/src/logging.ts src/process-handlers.ts`。
+
 关键命令：
 
 ```
@@ -148,7 +223,8 @@ bun run D:/tmp/run-blowup/launcher-g5.ts node start \
 
 ## 7. 本单没做的事
 
-- 没有在 Linux / 真 provider 上跑过（本机 bun 是 Windows 二进制，WSL interop）。
-  但按 §3，触发条件是「sink 断开」而非平台，Linux 上同样成立。
+- 真 provider 没跑（只用假 provider，但按 §3.2 provider 不是变量：自激只跟 sink 有关）。
+- 没在 systemd / 容器里验过 sink 生命周期（按 §3.2 的判据，那两种形态不会踩，但没实测）。
 - 没有改 `apps/web/**`、`packages/core/src/timeline/**`、`packages/config/**`。
-- 仓库没有自动化测试文件，因此没有新增测试；验证走的是上面 §6 的实机复现。
+- 仓库没有自动化测试文件，因此没有新增测试；验证走的是 §3.1 的 2×2 矩阵与 §6 的实机复现。
+- Linux 侧只验了 bun 1.3.9（与 Windows 同版本）；`~/.local/bin/bun`（1.4.4）没做对照。
