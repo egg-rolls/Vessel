@@ -55,8 +55,10 @@ export interface RunTiming {
   readonly startedAt: number;
   /** 记录一个阶段收口时刻（同一名字后写覆盖） */
   mark(phase: string): void;
-  /** 记录一段耗时（同名累加） */
+  /** 记录一段耗时（同名累加，按毫秒渲染） */
   note(name: string, ms: number): void;
+  /** 记录一个计数（同名累加，按整数渲染 —— 不要拿毫秒格式化器去渲染条数） */
+  count(name: string, value: number): void;
   /** 记录一个文本读数（如 `history=tail` / `compact=yes`） */
   text(name: string, value: string | number | boolean): void;
   /** 一轮请求收口：打印 `run.llm.gap`（第一轮也打，gap 省略） */
@@ -67,6 +69,7 @@ export interface RunTiming {
   snapshot(): {
     marks: Record<string, number>;
     notes: Record<string, number>;
+    counts: Record<string, number>;
     texts: Record<string, string>;
   };
 }
@@ -117,6 +120,7 @@ export function createRunTiming(runId: string, options: RunTimingOptions = {}): 
   const startedAt = clock.now();
   const marks = new Map<string, number>();
   const notes = new Map<string, number>();
+  const counters = new Map<string, number>();
   const texts = new Map<string, string>();
   let finished = false;
 
@@ -133,6 +137,10 @@ export function createRunTiming(runId: string, options: RunTimingOptions = {}): 
     note(name: string, ms: number): void {
       if (!enabled || finished || !Number.isFinite(ms)) return;
       notes.set(name, (notes.get(name) ?? 0) + ms);
+    },
+    count(name: string, value: number): void {
+      if (!enabled || finished || !Number.isFinite(value)) return;
+      counters.set(name, (counters.get(name) ?? 0) + value);
     },
     text(name: string, value: string | number | boolean): void {
       if (!enabled || finished) return;
@@ -162,15 +170,15 @@ export function createRunTiming(runId: string, options: RunTimingOptions = {}): 
       const parts: string[] = [`run=${shortId(runId)}`];
       // 阶段按发生顺序；没发生的段不出现（不打 0，不编字段）。
       const order = [
-    'admit',
-    'spawn',
-    'history',
-    'compact',
-    'llm',
-    'first_token',
-    'tools',
-    'total',
-  ];
+        'admit',
+        'spawn',
+        'history',
+        'compact',
+        'llm',
+        'first_token',
+        'tools',
+        'total',
+      ];
       for (const phase of order) {
         if (phase === 'total') continue;
         const at = marks.get(phase);
@@ -183,6 +191,7 @@ export function createRunTiming(runId: string, options: RunTimingOptions = {}): 
         if (phase === 'admit' || phase === 'spawn') parts.push(`${phase}=—`);
       }
       for (const [name, ms] of notes) parts.push(`${name}=${formatTimingMs(ms)}`);
+      for (const [name, value] of counters) parts.push(`${name}=${Math.round(value)}`);
       for (const [name, value] of texts) parts.push(`${name}=${value}`);
       parts.push(`outcome=${result.outcome}`, `total=${formatTimingMs(totalMs)}`);
       print(`[vessel] run.timing ${parts.join(' ')}`);
@@ -191,6 +200,7 @@ export function createRunTiming(runId: string, options: RunTimingOptions = {}): 
       return {
         marks: Object.fromEntries(marks),
         notes: Object.fromEntries(notes),
+        counts: Object.fromEntries(counters),
         texts: Object.fromEntries(texts),
       };
     },

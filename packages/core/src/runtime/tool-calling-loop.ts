@@ -407,7 +407,9 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
     // 请求发出，正好是「用户感觉请求间隔变长」的那段时间。
     const requestStartedAt = Date.now();
     const gapMs =
-      previousResponseAt !== undefined ? Math.max(0, requestStartedAt - previousResponseAt) : undefined;
+      previousResponseAt !== undefined
+        ? Math.max(0, requestStartedAt - previousResponseAt)
+        : undefined;
     const response = await ctx.provider.chat({
       messages,
       tools: toolSchemas,
@@ -425,7 +427,7 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       ...(previousToolCalls !== undefined ? { toolCalls: previousToolCalls } : {}),
       ...(previousToolsMs !== undefined ? { toolsMs: previousToolsMs } : {}),
     });
-    ctx.timing?.note('llm', responseAt - requestStartedAt);
+    ctx.timing?.note('llm_total', responseAt - requestStartedAt);
 
     // 更新 token 使用量
     let requestCost: number | undefined;

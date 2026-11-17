@@ -77,6 +77,7 @@ import { createSessionControl, type SessionControl } from './session-control';
 import { createSessionStore } from './session-factory';
 import { withSessionWriteLock } from './session-lock-runtime';
 import { reportShutdownFailure } from './shutdown-report';
+import { noteStartup, noteStartupMax, timeStartup } from './startup-timing';
 import {
   createTimelineDualWrite,
   createTimelineLegacyBroadcastGate,
@@ -85,7 +86,6 @@ import {
   type TimelinePublication,
 } from './timeline-dual-write';
 import { createTimelineSessionLog, type TimelineSessionLog } from './timeline-session-log';
-import { noteStartup, noteStartupMax, timeStartup } from './startup-timing';
 import {
   composeTraceRedactors,
   installTrace,

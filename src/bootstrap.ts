@@ -123,10 +123,10 @@ import { createRunControl } from './run-control';
 import { createRuntimeNoticeBus, type RuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
-import { markStartup, timeStartup } from './startup-timing';
 import { createSessionEventsSource } from './session-events';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
 import { reportShutdownFailure } from './shutdown-report';
+import { markStartup, timeStartup } from './startup-timing';
 import { createSystemContextSource } from './system-context';
 import {
   createTeamHumanDelivery,
@@ -1050,12 +1050,32 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const sessionBackend = config.session?.backend ?? 'file';
 
   // 启动 prune：best-effort，失败只 warn（无写意图时不触碰磁盘）。
-  // 交互 REPL 的首帧不能被 prune 阻塞：留到 bootstrap 末尾用 timer 调度（S4 §2.2）。
-  // headless / serve 没有首帧指标，保持 await，避免改变其生命周期语义。
-  const pruneAfterFirstFrame = localWrites && options.interactive === true;
+  //
+  // 0.57（**真实事故**：node 启动 16.3s，其中 10~27s 全在这一段）：
+  // `trace.retention` 的缺省是 `max_runs: 1000`，而 `pruneTrace` 在「文件数 > max_runs」
+  // 时走**全量解析**（每个 trace 文件都要 readFile + 逐帧 JSON.parse 才能知道 lastTs）。
+  // 3000+ 个 run 的租户于是每次启动都要把整份 trace 目录重新读一遍 —— 这不是「启动需要
+  // 的活」，是**留存清理**，跟能不能接请求毫无关系。
+  //
+  // 所以判据改成「谁需要它先做完」：
+  // - headless（一次性进程）：`await`，否则进程退出时它可能还没跑（语义不变）；
+  // - REPL / serve / node：**不阻塞启动**，交给 timer（REPL 早就是这么做的，
+  //   S4 §2.2「首帧不能被 prune 阻塞」；这里只是把同一条政策推广到 serve/node）。
+  //   它的产物是「删掉过期的 trace」，晚几秒与早几秒对任何人都没有区别。
+  const pruneAfterFirstFrame = localWrites && options.headless !== true;
   const pruneTraceBestEffort = async (): Promise<void> => {
+    const startedAt = performance.now();
     try {
-      await pruneTenantTrace({ config, tenantPaths });
+      const result = await pruneTenantTrace({ config, tenantPaths });
+      // 一行结果（第十四条）：干完活必须留账，否则「prune 到底跑了没」只能靠猜。
+      if (result.deleted_runs > 0 || result.deleted_bytes > 0) {
+        logger.info('trace.prune.done', {
+          deleted_runs: result.deleted_runs,
+          kept_runs: result.kept_runs,
+          deleted_bytes: result.deleted_bytes,
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
+      }
     } catch (error) {
       console.warn(
         `⚠ Failed to prune trace: ${error instanceof Error ? error.message : String(error)}`,
@@ -1382,6 +1402,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       },
     });
     // 0.27：回填本机投递端口（federation 端口的 getter 在此之后才读得到）。
+    // 0.57：`agent` 段（1s 级）拆开记账：装配（TeamStore / AgentService）与派生 `main`
+    // 是两件不同的事，谁的代价大要能直接读出来。
+    markStartup('agent.wiring');
     localHuman = createTeamHumanDelivery(wiring.team);
     localMember = createTeamLocalMemberDelivery(wiring.team);
     // 0.28 F2：回填飞书成员复活用的 Team（默认 workspace 的 Team；缺省不复活）。
@@ -1396,6 +1419,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 顺序契约：`main` 的 ExecutionUnit 在 spawn 时快照父宿主工具列表，
     // 必须等 `agent` 工具注册完再派生 owner，否则 main 永久缺 `agent`。
     const owner = await wiring.startOwner();
+    markStartup('agent.owner');
 
     // 0.53：**启动即扫**。gateway / 本地 dispatcher 开始收 RPC 之前，把「进程死亡时还没
     // 变成 run input 的 human 输入」重新投递一次（判据、幂等、上限 8 会话见
@@ -1447,6 +1471,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
             warn: (event, meta) => logger.warn(event, meta),
           });
           const report = await restarted.beginResume();
+          markStartup('agent.resume');
           if (report.marked > 0 || report.replayed_inputs > 0) {
             logger.info('agent.resume.recover_done', {
               marked: report.marked,
@@ -2187,11 +2212,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     },
   };
 
-  // 交互模式：prune 在 bootstrap 返回后由 timer 执行，首帧写入不等待它（S4 D2）。
+  // REPL / serve / node：prune 在 bootstrap 返回后由 timer 执行，启动不等它（S4 D2）。
+  // `unref()`：清理任务不该把进程挂住（headless 仍然走上面的 await，语义不变）。
   if (pruneAfterFirstFrame) {
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       void pruneTraceBestEffort();
     }, 0);
+    (timer as { unref?: () => void }).unref?.();
   }
 
   // ── 0.56 P1：图片 blob 池 GC（第一趟 dry-run，之后定时真删）────────────────────

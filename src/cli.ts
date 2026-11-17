@@ -46,7 +46,9 @@ import {
   startGateway,
   type TenantEventHub,
 } from '../packages/serve/src/index';
-import { startInkRepl } from '../packages/tui/src/repl/ink-repl';
+// 0.57：**不**静态导入 Ink REPL。`ink-repl.tsx` 的传递闭包是 React + ink + 十几个组件，
+// 实测（本机）单是求值它就要数百毫秒到数秒 —— 而 `node start` / `gateway start` /
+// `--run` 永远不会进那个界面。它现在按需加载（见 {@link startInkRepl}）。
 import { createAskAnswerDelivery } from './ask-answer-delivery';
 import { createConfigAttachmentLister } from './attachments-list';
 import { type BootstrapResult, bootstrap } from './bootstrap';
@@ -202,6 +204,19 @@ function resolveGatewayAllowedOrigins(
  * --serve 启动 banner：对齐 box，含 gateway + 控制台提示。
  * 不打印任何 token（含前缀），也不在 URL 中拼接 token。
  */
+/**
+ * 进入 Ink REPL（**按需加载**，0.57）。
+ *
+ * 为什么不在模块顶部 `import`：`ink-repl.tsx` 的传递闭包是 React + ink + 十几个组件。
+ * 它只有「人类真的坐在终端里聊天」这一条路径需要；`node start`、`gateway start`、
+ * `--run`、`--serve` 全都是无界面的，却因为一条静态 import 白付这笔启动费。
+ * 这不是「把工作推后装作变快」——那些模式下这份代码**永远不会被执行**。
+ */
+async function startInkRepl(ctx: BootstrapResult['ctx']): Promise<void> {
+  const { startInkRepl: enter } = await import('../packages/tui/src/repl/ink-repl');
+  await enter(ctx);
+}
+
 // 启动分期第一段：模块图求值完、第一条语句即将执行。
 // 这一段 = 解释器启动 + 全部 import 的传递闭包求值（`performance.now()` 是进程启动
 // 以来的毫秒数，所以第一个语句读到多大的值，就是那件事花了多久）。
@@ -560,23 +575,23 @@ const initialResult = await timeStartup(
   bootstrap({
     useMock,
     mockScenario,
-  ...(demoRequested ? { dataDirSubdir: 'demo' } : {}),
-  sessionId: resolvedSessionId,
-  headless,
-  interactive,
-  registerAskUser: askUserClient,
-  cliOverrides,
-  ...(nodeConfigPath !== undefined ? { configPath: nodeConfigPath } : {}),
-  ...(continueLatest ? { continueLatest: true } : {}),
-  ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
-  ...(args.connectArg !== null
-    ? { connect: args.connectArg }
-    : process.env.VESSEL_CONNECT !== undefined
-      ? { connect: process.env.VESSEL_CONNECT }
-      : {}),
-  // `--feishu` 的配置错误按 Addendum C/D 使用 exit 2；0.3 入口保持 1。
-  configErrorExitCode: args.feishu ? 2 : 1,
-  logger,
+    ...(demoRequested ? { dataDirSubdir: 'demo' } : {}),
+    sessionId: resolvedSessionId,
+    headless,
+    interactive,
+    registerAskUser: askUserClient,
+    cliOverrides,
+    ...(nodeConfigPath !== undefined ? { configPath: nodeConfigPath } : {}),
+    ...(continueLatest ? { continueLatest: true } : {}),
+    ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
+    ...(args.connectArg !== null
+      ? { connect: args.connectArg }
+      : process.env.VESSEL_CONNECT !== undefined
+        ? { connect: process.env.VESSEL_CONNECT }
+        : {}),
+    // `--feishu` 的配置错误按 Addendum C/D 使用 exit 2；0.3 入口保持 1。
+    configErrorExitCode: args.feishu ? 2 : 1,
+    logger,
   }),
 );
 const { config } = initialResult;

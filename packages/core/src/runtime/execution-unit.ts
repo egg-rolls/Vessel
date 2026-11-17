@@ -2437,7 +2437,7 @@ export class ExecutionUnit {
     // 0.57：历史加载是一段独立的账。`history=` 给的是**读到了什么规模**，不是「用了多久」——
     // 两者一起才能回答「启动首条消息为什么慢」（消息多 / 每条大 / 投影没命中）。
     this.runTiming?.mark('history');
-    this.runTiming?.text('history.messages', history.messages.length);
+    this.runTiming?.count('history.messages', history.messages.length);
     const stored = history.sessionState;
     // Stage 4 parity：baseline 在同一 session + 窗口可复用时跳过播种（不发
     // context.changed）。per-Run 窗口必须重建，但“重建”不应变成可观察事件；

@@ -92,6 +92,47 @@ type FileStamp =
  */
 const LIST_RICH_CACHE_LIMIT = 512;
 
+/**
+ * `listRich()` 的读并发上限（0.57）。
+ *
+ * 16 这个数不是拍脑袋：一次 `listRich` 在 300+ 会话的租户上最坏要读几十份会话壳
+ * （每份几百 KB～几 MB），16 路并发既能把 drvfs 的逐次 stat 往返流水线化，又不会把
+ * 内存与文件句柄推到「一次几十份大 JSON」的程度。缓存命中路径（只 stat）同样受益。
+ */
+const LIST_RICH_CONCURRENCY = 16;
+
+/**
+ * 有界并发 map：最多 `limit` 个 `worker` 同时在飞，**结果按输入顺序返回**。
+ *
+ * 为什么手写而不是引入依赖：这里只要一件事——「并发上限 + 顺序稳定 + 一个都不漏」。
+ * 顺序稳定很重要：调用方（`listRich`）后面要按 `updated_at` 排序，但错误检查与
+ * 结果集合不能随完成顺序漂移（否则同一份数据两次读可能给出不同的第一个错误）。
+ */
+async function mapBounded<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const runners: Array<Promise<void>> = [];
+  const size = Math.max(1, Math.min(limit, items.length));
+  for (let i = 0; i < size; i += 1) {
+    runners.push(
+      (async () => {
+        while (true) {
+          const index = cursor;
+          cursor += 1;
+          if (index >= items.length) return;
+          results[index] = await worker(items[index] as T);
+        }
+      })(),
+    );
+  }
+  await Promise.all(runners);
+  return results;
+}
+
 /** 读侧会话壳快照缓存的一条（见 `FileSessionStore#stateCache`）。 */
 interface CachedState {
   /** 这份对象是从哪个路径 parse 出来的（正式路径 / legacy 路径必须分开） */
@@ -664,7 +705,6 @@ export class FileSessionStore implements SessionStore {
   async list(): Promise<string[]> {
     return this.scanIds();
   }
-
   /**
    * 列出会话摘要（含 title/preview/updated_at/message_count）
    *
@@ -685,15 +725,31 @@ export class FileSessionStore implements SessionStore {
   async listRich(): Promise<SessionInfo[]> {
     const ids = await this.scanIds();
     const results: SessionInfo[] = [];
-
-    for (const id of ids) {
+    // 0.57：**有界并发**读摘要。
+    //
+    // 为什么（真实读数）：drvfs（`/mnt/c`）上单次 `stat` ≈ 1.8ms，且这是**网络式**往返
+    // ——串行 700 次 stat 就是 1.2s 纯等待；会话壳未命中缓存时还要 `readFile` 整份
+    // （几百 KB～数 MB）。它是每个进程启动时 `sweep` 的主要成本，也是 `sessions.list`
+    // 的主要成本。这里只改**等待的排布**，不改做多少事：文件读的顺序、缓存键、
+    // 结果排序、错误语义全部照旧（结果最后统一排序，与先来后到无关）。
+    //
+    // 上限 16：文件句柄 / 内存都不至于失控（一次最多 16 份会话壳在解析），
+    // 又足够把「一次往返 1.8ms」的延迟流水线化。
+    const outcomes = await mapBounded(ids, LIST_RICH_CONCURRENCY, async (id) => {
       try {
-        const info = await this.listRichInfo(id);
-        if (info !== null) results.push(info);
+        return { ok: true as const, info: await this.listRichInfo(id) };
       } catch (error) {
-        if (error instanceof SessionCorruptError) continue;
-        throw error;
+        return { ok: false as const, error };
       }
+    });
+    for (const outcome of outcomes) {
+      if (outcome.ok) {
+        if (outcome.info !== null) results.push(outcome.info);
+        continue;
+      }
+      // 0.8.1：单个文件损坏只跳过该项，不让整张列表失败（与改造前同一口径）。
+      if (outcome.error instanceof SessionCorruptError) continue;
+      throw outcome.error;
     }
 
     // updated_at 倒序；同值用 session_id 升序，避免刷新时顺序抖动。

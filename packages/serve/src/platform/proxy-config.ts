@@ -255,7 +255,8 @@ export interface ProxyRejection {
  */
 export function isHealthProbePath(rest: string): boolean {
   const path = rest.length > 1 && rest.endsWith('/') ? rest.slice(0, -1) : rest;
-  const bare = path.startsWith('/v1/') ? path.slice(4) : path;
+  // `/v1/health` 与 `/health` 是同一个探活（strip 前缀时保留前导斜杠）。
+  const bare = path.startsWith('/v1/') ? path.slice(3) : path;
   return bare === '/health' || bare === '/healthz' || bare === '/readyz' || bare === '/livez';
 }
 
