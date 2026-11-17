@@ -23,9 +23,29 @@ import { platformUnauthorizedMessage, resolvePlatformAuth } from './auth.js';
 import { platformListenGuard } from './listen-guard.js';
 import { createPlatformRegistry } from './registry.js';
 import { handlePlatformRpc } from './rpc.js';
-import type { PlatformAuthOptions, PlatformGateway, PlatformGatewayOptions } from './types.js';
+import type {
+  PlatformAuthOptions,
+  PlatformGateway,
+  PlatformGatewayOptions,
+  WebDistProbe,
+  WebDistProbeResult,
+} from './types.js';
 
 const PLATFORM_RPC_PATH = '/platform/rpc';
+/** 0.57：静态构建戳 + 服务端现场判断（见 `buildJsonResponse`）。 */
+const BUILD_JSON_PATH = '/build.json';
+/** 0.57：产物变更推送（SSE）；`/build.json` 仍是唯一事实源。 */
+const BUILD_EVENTS_PATH = '/web/build/events';
+/** 长连接是资源：超过这个数直接 503，前端退回轮询。 */
+const BUILD_EVENTS_MAX_CONNECTIONS = 32;
+/** 判定节拍（与 probe 缓存 TTL 对齐：不存在更快的真相）。 */
+const BUILD_EVENTS_TICK_MS = 5_000;
+/** 每 N 个节拍发一帧注释保活（25s），防中间层掐断空闲连接。 */
+const BUILD_EVENTS_PING_TICKS = 5;
+/** 告诉浏览器断线后多久重连（毫秒）。 */
+const BUILD_EVENTS_RETRY_MS = 5_000;
+/** 现场判断要遍历源码树；多个标签页同时轮询不必各走一遍。 */
+const BUILD_PROBE_TTL_MS = 5_000;
 
 /** node 独占路径：平台入口一律 404（不代理、不转发）。 */
 function isNodeOnlyPath(path: string): boolean {
@@ -39,6 +59,228 @@ function isNodeOnlyPath(path: string): boolean {
     path === '/sse' ||
     path.startsWith('/sse/')
   );
+}
+
+/**
+ * 现场判断的缓存：TTL + 同一判定函数的并发请求共用一次遍历。
+ *
+ * 为什么缓存：`inspectWebDist` 会 stat 源码树里的每个文件（上限 5000），而
+ * `/build.json` 是**每个标签页每 10 秒**拉一次的。5 秒 TTL 让一次重建之后
+ * 的 `stale: false` 最迟 5 秒可见，同时把遍历频率压到与标签页数量无关。
+ *
+ * 判定失败 = 「未知」：返回 undefined，不缓存（下次重试）；调用方只省掉实时字段，
+ * 静态构建戳照发 —— 前端按「无法判断」处理，不误报过期。
+ */
+function createWebDistProbeCache(): (
+  probe: WebDistProbe,
+) => Promise<WebDistProbeResult | undefined> {
+  const cache = new WeakMap<WebDistProbe, { at: number; result: WebDistProbeResult }>();
+  const inFlight = new WeakMap<WebDistProbe, Promise<WebDistProbeResult | undefined>>();
+  return (probe) => {
+    const cached = cache.get(probe);
+    if (cached !== undefined && Date.now() - cached.at < BUILD_PROBE_TTL_MS) {
+      return Promise.resolve(cached.result);
+    }
+    const pending = inFlight.get(probe);
+    if (pending !== undefined) return pending;
+    const task = (async (): Promise<WebDistProbeResult | undefined> => {
+      try {
+        const result = await probe();
+        cache.set(probe, { at: Date.now(), result });
+        return result;
+      } catch {
+        return undefined;
+      } finally {
+        inFlight.delete(probe);
+      }
+    })();
+    inFlight.set(probe, task);
+    return task;
+  };
+}
+
+/**
+ * `/build.json` 的响应体：磁盘上的构建戳**原样保留**，再叠加服务端现场判断的
+ * `stale` / `newestSource`。
+ *
+ * 为什么必须现场算：产物过期（dist 比源码旧）时，浏览器里那份 bundle 与磁盘上的
+ * `build.json` 来自**同一次构建**，前端比对 `builtAt` 永远一致 —— 只有服务端把
+ * 「我知道 dist 落后于源码」说出来，顶部提示才可能响。
+ *
+ * 返回 null = 没有可用的构建戳（文件缺失 / 读坏 / JSON 非对象）：HTTP 端点交给静态
+ * 兜底，保住旧行为；任何读盘失败都**不 500**（页面不能被一个诊断文件打挂）。
+ */
+async function buildJsonPayload(
+  staticDir: string,
+  probe: WebDistProbe | undefined,
+  probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>,
+): Promise<Record<string, unknown> | null> {
+  let base: Record<string, unknown>;
+  try {
+    const file = Bun.file(resolve(staticDir, 'build.json'));
+    if (!(await file.exists())) return null;
+    const raw: unknown = await file.json();
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+    base = { ...(raw as Record<string, unknown>) };
+  } catch {
+    return null;
+  }
+  const live = probe === undefined ? undefined : await probeCached(probe);
+  const body: Record<string, unknown> = { ...base };
+  if (live !== undefined) {
+    body.stale = live.stale;
+    if (live.newestSource !== undefined) {
+      body.newestSource = {
+        path: live.newestSource.path,
+        mtime: new Date(live.newestSource.mtimeMs).toISOString(),
+      };
+    }
+  }
+  return body;
+}
+
+/** `/build.json` 的 HTTP 响应（`no-store`；HEAD 只要头）。 */
+async function buildJsonResponse(
+  staticDir: string,
+  method: string,
+  probe: WebDistProbe | undefined,
+  probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>,
+): Promise<Response | null> {
+  const body = await buildJsonPayload(staticDir, probe, probeCached);
+  if (body === null) return null;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json;charset=utf-8',
+    // 这个文件就是用来感知变化的：命中缓存等于没查（静态兜底那条是 immutable 一年）。
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  };
+  // HEAD 只要头：Bun 不会替我们吞掉 body。
+  if (method === 'HEAD') return new Response(null, { headers });
+  return new Response(JSON.stringify(body, null, 2), { headers });
+}
+
+/**
+ * 0.57：产物变更的**推送**通道（`GET /web/build/events`，SSE）。
+ *
+ * 为什么要有：轮询 `/build.json` 是「每个标签页每 10 秒一次」—— 一天 8,640 次请求、
+ * 最多 10 秒的感知延迟，而且日志与唤醒都被这些空请求泡着。推送只保留一条空闲长
+ * 连接，产物一变就是毫秒级送达；`/build.json` 仍是唯一事实源（这里推的就是它的
+ * 同一份 payload），SSE 断了前端退回轮询，不会因为推送挂掉而瞎。
+ *
+ * 有界：最多 {@link BUILD_EVENTS_MAX_CONNECTIONS} 条长连接，超了直接 503 让调用方
+ * 退回轮询；不接受请求体、不产生业务状态。判定由**一个**节拍器驱动（与 probe 缓存
+ * TTL 对齐），所以连接数再多，遍历源码树的频率也不变。
+ */
+interface BuildEventStream {
+  /** 打开一条流；超过上限返回 null（调用方回 503）。 */
+  open(): Promise<Response | null>;
+  /** 停服：断开全部连接并停掉节拍器。 */
+  close(): void;
+}
+
+function createBuildEventStream(options: {
+  staticDir: string;
+  probe: WebDistProbe | undefined;
+  probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>;
+}): BuildEventStream {
+  const encoder = new TextEncoder();
+  const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  let ticker: ReturnType<typeof setInterval> | undefined;
+  let lastBody: string | undefined;
+
+  const write = (controller: ReadableStreamDefaultController<Uint8Array>, chunk: string): void => {
+    try {
+      controller.enqueue(encoder.encode(chunk));
+    } catch {
+      // 客户端已经走了（反代断开 / 浏览器关闭）：悄悄摘掉，不抛给节拍器。
+      clients.delete(controller);
+    }
+  };
+
+  const broadcast = (chunk: string): void => {
+    for (const controller of [...clients]) write(controller, chunk);
+  };
+
+  const bodyNow = async (): Promise<string | undefined> => {
+    const payload = await buildJsonPayload(options.staticDir, options.probe, options.probeCached);
+    return payload === null ? undefined : JSON.stringify(payload);
+  };
+
+  const startTicker = (): void => {
+    if (ticker !== undefined) return;
+    let ticks = 0;
+    ticker = setInterval(() => {
+      void (async () => {
+        ticks += 1;
+        // 保活：中间层（反代 / 浏览器）会把长时间没有字节的流掐掉，注释帧零语义。
+        if (ticks % BUILD_EVENTS_PING_TICKS === 0) broadcast(': ping\n\n');
+        if (clients.size === 0) {
+          // 没人听了就停表：空转的遍历没有意义，下一条连接会重新拉起。
+          if (ticker !== undefined) {
+            clearInterval(ticker);
+            ticker = undefined;
+          }
+          return;
+        }
+        const body = await bodyNow();
+        if (body === undefined || body === lastBody) return;
+        lastBody = body;
+        broadcast(`data: ${body}\n\n`);
+      })();
+    }, BUILD_EVENTS_TICK_MS);
+    ticker.unref?.();
+  };
+
+  return {
+    async open(): Promise<Response | null> {
+      if (clients.size >= BUILD_EVENTS_MAX_CONNECTIONS) return null;
+      const initial = await bodyNow();
+      let self: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const stream = new ReadableStream<Uint8Array>({
+        start: (controller) => {
+          self = controller;
+          clients.add(controller);
+          startTicker();
+          // 首帧立刻给：连上就有当前真相，不必等下一次变化。
+          write(controller, `retry: ${BUILD_EVENTS_RETRY_MS}\n\n`);
+          if (initial !== undefined) {
+            // 只记第一次：别让后连上的客户端把它「回拨」成旧快照，否则同一份
+            // 内容会被重复推给所有人。
+            if (lastBody === undefined) lastBody = initial;
+            write(controller, `data: ${initial}\n\n`);
+          }
+        },
+        cancel: () => {
+          // 客户端断开（浏览器关闭 / 反代断流）：只摘掉自己，不惊动其它连接。
+          if (self !== undefined) clients.delete(self);
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-store, no-transform',
+          Connection: 'keep-alive',
+          // nginx 默认会缓冲上游响应：SSE 必须显式关掉，否则事件攒到连接结束才到。
+          'X-Accel-Buffering': 'no',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    },
+    close(): void {
+      if (ticker !== undefined) {
+        clearInterval(ticker);
+        ticker = undefined;
+      }
+      for (const controller of [...clients]) {
+        try {
+          controller.close();
+        } catch {
+          // 已经关掉的就不用再关。
+        }
+      }
+      clients.clear();
+    },
+  };
 }
 
 /**
@@ -174,9 +416,22 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
   const authCleanupTimer = setInterval(() => authService.cleanup(), 60_000);
   authCleanupTimer.unref?.();
 
+  // 0.57：`/build.json` 的现场判断缓存（每个 server 一份，判定函数由组合根注入）。
+  const probeWebDist = createWebDistProbeCache();
+  // 0.57：产物变更推送（SSE）。`/build.json` 仍是唯一事实源，这里只是加速通道。
+  const buildEvents = createBuildEventStream({
+    staticDir,
+    probe: opts.webDist,
+    probeCached: probeWebDist,
+  });
+
   const server = Bun.serve({
     port: opts.port,
     hostname: opts.hostname,
+    // 0.57：SSE 是长连接，Bun 默认 10 秒空闲就掐掉（只发保活帧也会被掐）。与
+    // node 侧 `/v1/events` / hub 同口径关掉空闲超时（`gateway.ts` 的 `idleTimeout: 0`），
+    // 连接的生命周期交给 SSE 自己的保活帧与客户端重连。
+    idleTimeout: 0,
     fetch: async (req, srv) => {
       const url = new URL(req.url);
       const path = url.pathname;
@@ -235,9 +490,62 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
         return errorJson('not_found', `Not found: ${path}`, 404, extra);
       }
 
+      // 0.57：产物变更推送。**必须在静态兜底之前** —— 它没有扩展名，serveStatic
+      // 会把它当成 SPA 路由、返回 index.html。
+      //
+      // 鉴权：EventSource 带不了 Authorization 头，所以走**会话 cookie**（浏览器
+      // 同源自动带上）或回环/Bearer。token 绝不进 URL（会落进反代与浏览器历史）。
+      // 没配登录后端的部署（`authEnabled:false`）与 `/build.json` 保持同等开放：
+      // 静态站点本身就是匿名可读的，这里没有比对静态文件更多的信息。
+      if (path === BUILD_EVENTS_PATH) {
+        if (req.method !== 'GET') {
+          return errorJson('method_not_allowed', 'Only GET is allowed', 405, {
+            ...extra,
+            Allow: 'GET',
+          });
+        }
+        const streamAllowed =
+          !authService.enabled ||
+          auth.loopback ||
+          auth.ok ||
+          authService.authorize(req, authCtx, { mutating: false }).ok;
+        if (!streamAllowed) {
+          return errorJson('platform_unauthorized', platformUnauthorizedMessage(auth), 401, extra);
+        }
+        const stream = await buildEvents.open();
+        if (stream === null) {
+          // 有界：长连接满了就让它退回轮询（前端按「推送不可用」处理）。
+          return errorJson(
+            'unavailable',
+            `Too many build event streams (max ${BUILD_EVENTS_MAX_CONNECTIONS}); poll /build.json instead.`,
+            503,
+            { ...extra, 'Retry-After': '30' },
+          );
+        }
+        for (const [key, value] of Object.entries(extra)) stream.headers.set(key, value);
+        return stream;
+      }
+
       // 静态宿主同样在闸之前：`index.html` 与 `/login` 是登录页本身，匿名也要拿得到
       // （否则「配了 token」⇒ 浏览器永远停在白屏）。数据面仍然要靠 RPC 鉴权。
       if (req.method === 'GET' || req.method === 'HEAD') {
+        // 0.57：`/build.json` 是**实时**响应（静态构建戳 + 服务端现场判断），必须
+        // 在 serveStatic 之前 —— 否则它会被当成普通静态文件，带着 `immutable`
+        // 一年缓存头原样吐出去，浏览器连轮询都省了。
+        if (path === BUILD_JSON_PATH) {
+          const buildResponse = await buildJsonResponse(
+            staticDir,
+            req.method,
+            opts.webDist,
+            probeWebDist,
+          );
+          if (buildResponse !== null) {
+            for (const [key, value] of Object.entries(extra)) {
+              buildResponse.headers.set(key, value);
+            }
+            return buildResponse;
+          }
+        }
         const staticResponse = await serveStatic(path, staticDir);
         if (staticResponse !== null) {
           const contentType = staticResponse.headers.get('content-type') ?? '';
@@ -320,6 +628,8 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
     // Bun 对 unix socket 返回 undefined；平台只走 TCP，回退到请求端口。
     port: server.port ?? opts.port,
     async stop(): Promise<void> {
+      // 先断开 SSE 长连接：`server.stop(true)` 会等活跃连接，长连接不关就等不完。
+      buildEvents.close();
       clearInterval(authCleanupTimer);
       await authService.flush();
       await server.stop(true);

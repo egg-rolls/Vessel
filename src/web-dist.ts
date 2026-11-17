@@ -200,6 +200,35 @@ export function webDistWarning(
   return null;
 }
 
+/**
+ * 平台 gateway 的 `/build.json` 实时字段来源（组合根注入给 `startPlatformGateway`）。
+ *
+ * 判据**完全复用** `inspectWebDist`：默认产物目录才比源码；`VESSEL_STATIC_DIR`
+ * 指向的外部产物只报存在性 —— 拿仓库内源码去比外部构建时间只会误报。
+ */
+export function webDistProbe(staticDir: string): () => Promise<WebDistStatus> {
+  const resolved = path.resolve(staticDir);
+  return resolved === path.resolve(DEFAULT_WEB_DIST_DIR)
+    ? () => inspectWebDist({})
+    : () => inspectWebDist({ staticDir: resolved });
+}
+
+/**
+ * `doctor` / `gateway status` 的一行诊断：产物落后于源码时**一定**说话，并给出
+ * 怎么修；不算落后返回 null。
+ *
+ * 和 `webDistWarning` 的区别：那个是**启动横幅**，自修复会接管时就该闭嘴；这里
+ * 是「用户主动来问现状」，自修复管不管都得如实回答 —— 这次的事故正是「机制在，
+ * 但只在启动时跑一次」，启动之后就再也没人说过 dist 已经旧了。
+ */
+export function webDistStaleLine(status: WebDistStatus): string | null {
+  if (!status.exists || !status.stale || status.newestSource === undefined) return null;
+  return t('gateway.webDistStaleLine', {
+    index: status.indexFile,
+    source: status.newestSource.path,
+  });
+}
+
 // biome-ignore lint/suspicious/noControlCharactersInRegex: 去 ANSI 转义必须匹配 ESC（\u001B），范围已收窄到 CSI 序列，不是任意控制字符
 const ANSI_ESCAPE = /\u001B\[[0-9;]*[A-Za-z]/g;
 

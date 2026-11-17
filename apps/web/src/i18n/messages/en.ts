@@ -42,6 +42,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.expandNav': 'Expand sidebar',
   'nav.jumpToMain': 'Skip to main content',
   'webBuild.outdated': 'The console was updated in the background; reload to load the new version.',
+  'webBuild.stale': 'Web sources changed but the served build was not rebuilt (the UI may be old).',
+  'webBuild.staleFix':
+    'Fix: restart the gateway (`vessel gateway restart` rebuilds on start), or run `bun run build:web`; reload this page once it is rebuilt.',
   'webBuild.reload': 'Reload',
   'nav.more': 'More',
   'nav.diagnostics': 'Diagnostics',

@@ -159,14 +159,18 @@ export function AppShell() {
       }
     : null;
 
-  const buildItem: MessageBarItem | null = outdated
-    ? {
-        id: 'web-build-outdated',
-        tone: 'warn',
-        text: t('webBuild.outdated'),
-        actions: [{ label: t('webBuild.reload'), onClick: () => window.location.reload() }],
-      }
-    : null;
+  const buildItem: MessageBarItem | null =
+    outdated === undefined
+      ? null
+      : {
+          id: 'web-build-outdated',
+          tone: 'warn',
+          // 两种原因两种说法：已重建 ⇒ 刷新就够；源码新、产物没重建 ⇒ 刷新没用，
+          // 怎么修写进悬停全文（胶囊里只留一句短的）。刷新永远由用户点，不自动 reload。
+          text: outdated === 'stale' ? t('webBuild.stale') : t('webBuild.outdated'),
+          ...(outdated === 'stale' ? { hint: t('webBuild.staleFix') } : {}),
+          actions: [{ label: t('webBuild.reload'), onClick: () => window.location.reload() }],
+        };
 
   const messageItems: MessageBarItem[] = [
     ...shellItems,

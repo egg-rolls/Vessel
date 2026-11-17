@@ -447,4 +447,41 @@ server {
 - 只想临时验证：`curl -H 'Host: egg-rolls.top' -H 'X-Forwarded-Proto: https' -H "X-Vessel-Proxy-Secret: <值>" http://127.0.0.1:8642/` 应 200 且 CSP 里是 `wss://egg-rolls.top`；去掉密钥头应 403。
 - 回滚：删掉 `auth` 块 + 反代的 `X-Vessel-Proxy-Secret`/`X-Forwarded-*`，行为立即回到 0.55（回环可用），不需要改代码。
 
+## 11. 0.57：产物变更推送（`/web/build/events`，SSE）与反代缓冲
+
+平台会用一条 **SSE 长连接**（`GET /web/build/events`）把「Web 产物变了」推给浏览器：
+产物重建 / 变成「源码比产物新」时，服务端在 5 秒内推一帧 `/build.json` 的内容（含
+`stale` / `newestSource`），前端据此在顶部提示。`/build.json` 仍是唯一事实源 ——
+推送断了、被缓冲住、或连接数满（上限 32 条，超了回 503），前端会**自动退回**
+自适应轮询（10s → 30s → 60s，连续失败到上限就停）。
+
+**反代必须关掉缓冲**，否则 SSE 帧会被攒在反代里、事件不即时（表现：提示要等到
+连接结束才出现，或者干脆不出现）：
+
+```nginx
+  # SSE：产物变更推送。缓冲一开，帧就不再即时。
+  location /web/build/events {
+    proxy_http_version 1.1;
+    proxy_set_header Connection '';
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Vessel-Proxy-Secret <VESSEL_PROXY_SECRET 的值>;
+    proxy_buffering     off;     # 关键：否则事件攒到连接结束才到
+    proxy_cache         off;
+    proxy_read_timeout  1h;     # 空闲连接有 25s 心跳，别让它被读超时掐掉
+    proxy_pass http://127.0.0.1:8642;
+  }
+```
+
+- 平台侧已发 `X-Accel-Buffering: no` 与 `Cache-Control: no-store, no-transform`，nginx
+  会据此不缓冲；但**显式写 `proxy_buffering off` 才是确定行为**（别的反代/CDN 不一定认这个头）。
+- **鉴权用 cookie，不要把 token 放进 URL**：`EventSource` 带不了 `Authorization` 头，所以这条
+  通道认「会话 cookie（登录后同源自动带）+ 回环 / Bearer」。token-in-URL 会落进反代日志
+  与浏览器历史，这条通道**不接受**它（`/v1/events` 的 token 例外仅限那一个端点）。
+- 没配登录后端（`authEnabled:false`）的部署：这条通道与 `/build.json`、静态站点同等开放
+  （匿名可读），它不比静态文件多泄漏任何东西。
+- 自检：`curl -N -H 'Host: egg-rolls.top' -H 'X-Vessel-Proxy-Secret: <值>' http://127.0.0.1:8642/web/build/events`
+  应立即看到 `retry: 5000` 与一帧 `data: {...}`，之后每 25s 一行 `: ping`。
+
+
 

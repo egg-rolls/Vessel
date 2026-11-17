@@ -42,6 +42,9 @@ export const messages = {
   'nav.expandNav': '展开侧栏',
   'nav.jumpToMain': '跳到主内容',
   'webBuild.outdated': 'Web 控制台已在后台更新，刷新以加载新版本。',
+  'webBuild.stale': 'Web 源码已更新，但产物未重建（界面可能还是旧的）。',
+  'webBuild.staleFix':
+    '修复：重启 gateway（`vessel gateway restart`，启动时会自动重建），或手动跑 `bun run build:web`；重建完成后再刷新本页。',
   'webBuild.reload': '刷新',
   'nav.more': '更多',
   'nav.diagnostics': '诊断',
