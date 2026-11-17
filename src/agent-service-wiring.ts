@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import {
   AgentError,
   type AgentService,
+  type AgentServiceOptions,
   type AgentTeamService,
   ConversationBudget,
   ConversationStore,
@@ -82,6 +83,11 @@ export interface AgentServiceWiringOptions {
   contextMaxTokens?: number;
   /** 0.34 S2 / C5：成员上下文的压缩阈值；装配层传 `config.context.compactThreshold`。 */
   contextCompactThreshold?: number;
+  /**
+   * 0.56：附件入池（上传即落 blob）。装配层传 `createConfigAttachmentIngest`。
+   * 缺省 = 不入池（图不内联，但不报错）。
+   */
+  attachIngest?: AgentServiceOptions['attachIngest'];
   permission?: RuntimePermissionConfig;
   /** deny 模式保留的只读工具（默认 ['read']） */
   readOnlyTools?: readonly string[];
@@ -439,6 +445,8 @@ export async function createAgentServiceWiring(
     ...(options.inboxMaxMessages !== undefined
       ? { inboxMaxMessages: options.inboxMaxMessages }
       : {}),
+    // 0.56：附件入池（上传即落 blob）。缺省不入池（图不内联，但不报错）。
+    ...(options.attachIngest !== undefined ? { attachIngest: options.attachIngest } : {}),
     ...(options.leaseService !== undefined ? { leaseService: options.leaseService } : {}),
     ...(options.summarizer !== undefined ? { summarizer: options.summarizer } : {}),
     // 0.34 S2：seeded create 的压缩预算与 tenant 上下文同源。

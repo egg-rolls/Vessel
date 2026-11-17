@@ -43,6 +43,12 @@ export interface TenantRuntimeProfile {
   includeReasoning?: boolean;
   /** 传输层 / 过载重试策略；缺省 = `DEFAULT_PROVIDER_RETRY_POLICY`（runtime/provider-retry.ts）。 */
   retry?: import('../types/provider.js').ProviderRetryPolicy;
+  /**
+   * 视觉的**运行期设置**（0.56；kill switch / 单请求张数 / 精度意图）。
+   *
+   * 能力不在这里：问 `provider.vision`（插件的 `VisionBackend`）。缺省 = 支持即直通。
+   */
+  vision?: import('../types/vision.js').VisionSettings;
   context: {
     maxTokens?: number;
     autoCompact?: boolean;
@@ -241,6 +247,8 @@ export class Runtime {
         : profile.retry !== undefined
           ? { retry: profile.retry }
           : {}),
+      // 0.56：视觉运行期设置（能力在 provider.vision 上，由插件挂）。
+      ...(profile.vision !== undefined ? { vision: profile.vision } : {}),
       ...(overrides?.selfCard !== undefined ? { selfCard: overrides.selfCard } : {}),
       ...(overrides?.contextPressureHint !== undefined
         ? { contextPressureHint: overrides.contextPressureHint }

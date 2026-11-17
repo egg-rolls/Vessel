@@ -71,6 +71,7 @@ import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import { createProvider } from './provider-factory';
 import { includeReasoningFor } from './reasoning';
+import { visionSettingsOf } from './vision-settings';
 import { closeRunRecordStore, createRunRecordStore } from './run-record-store-factory';
 import { ownerSelfCard } from './self-card';
 import { createSessionControl, type SessionControl } from './session-control';
@@ -909,7 +910,9 @@ export async function buildTenantRuntime(
     limits,
     termination,
     ...(pricing !== undefined ? { pricing } : {}),
-    // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
+    // 0.56：视觉的运行期设置（能力在 provider.vision 上，由 provider 插件挂）。
+    // 没有 `enable` 这个键：支持即直通；`disabled` 是出事时的 kill switch（不是默认门）。
+    ...(visionSettingsOf(config) !== undefined ? { vision: visionSettingsOf(config) } : {}),    // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
     includeReasoning: includeReasoningFor(config),
     context: {
       ...(config.context?.maxTokens !== undefined ? { maxTokens: config.context.maxTokens } : {}),
