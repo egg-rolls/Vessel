@@ -46,6 +46,7 @@ export const messages = {
   'webBuild.buildingHint':
     '新的前端版本正在后台准备，完成后这里会自动提示刷新 —— 现在刷新看到的还是旧界面。',
   'webBuild.stale': '前端更新失败 若要重试请重启',
+  'webBuild.autobuildOff': '前端更新已关闭（不会自动重建）',
   'webBuild.reload': '刷新',
   'nav.more': '更多',
   'nav.diagnostics': '诊断',
@@ -1104,6 +1105,8 @@ export const messages = {
   'chat.pendingSend.offline': '连不上网关，没发出',
   'chat.pendingSend.sending': '发送中…',
   'chat.pendingSend.queued': '已排队，前面还有一轮',
+  'chat.pendingSend.queuedLong': '已排队 {minutes} 分钟，前面还有一轮',
+  'chat.pendingSend.queueTimeout': '已排队超时',
   'chat.pendingSend.failed': '未发送',
   'chat.pendingSend.retry': '重试',
   'chat.pendingSend.dismiss': '删除这条',

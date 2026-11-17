@@ -46,6 +46,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'webBuild.buildingHint':
     'A new front-end version is being prepared in the background. This banner switches to a reload prompt when it is ready — reloading now still shows the old UI.',
   'webBuild.stale': 'Front-end update failed. Restart to retry',
+  'webBuild.autobuildOff': 'Front-end auto-rebuild is off (nothing will rebuild it)',
   'webBuild.reload': 'Reload',
   'nav.more': 'More',
   'nav.diagnostics': 'Diagnostics',
@@ -1150,6 +1151,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.pendingSend.offline': 'Offline — not sent',
   'chat.pendingSend.sending': 'Sending…',
   'chat.pendingSend.queued': 'Queued · one round ahead',
+  'chat.pendingSend.queuedLong': 'Queued {minutes} min · one round ahead',
+  'chat.pendingSend.queueTimeout': 'Queued too long — not sent',
   'chat.pendingSend.failed': 'Not sent',
   'chat.pendingSend.retry': 'Retry',
   'chat.pendingSend.dismiss': 'Discard',

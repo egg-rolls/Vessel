@@ -99,6 +99,7 @@ import { ui } from './ui-style';
 import { readPackageVersion } from './version';
 import {
   inspectWebDist,
+  webDistAutoBuildStatus,
   webDistBuildInFlight,
   webDistProbe,
   webDistStaleLine,
@@ -2679,6 +2680,9 @@ export async function runPlatformGatewayForeground(
         // 0.58：`/build.json` 的 `building` —— 后台重建在跑时前端提示「正在构建」，
         // 不给「刷新」按钮（刷新那一刻磁盘上还是旧产物）。
         webBuildInFlight: webDistBuildInFlight,
+        // 0.59：`/build.json` 的 `autobuild` —— 运行期**还会不会**自己重建。前端据此把
+        // 「马上就好」和「不会再有动作了（关掉 / 只在启动建 / 连续失败到顶）」分开说。
+        webBuildAuto: webDistAutoBuildStatus,
         nodes: nodes.map((node) => ({
           nodeId: node.entry.node_id,
           name: node.entry.name,

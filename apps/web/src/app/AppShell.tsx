@@ -159,11 +159,10 @@ export function AppShell() {
       }
     : null;
 
-  // 三态三种说法（0.58）：**正在构建**时不给「刷新」按钮 —— 磁盘上还是旧产物，刷新那
-  // 一刻什么都不会变，这正是用户被误导的地方（他照着点了刷新，看到的还是旧界面）。
-  // 已构建好 ⇒ 刷新就够；构建失败 / 被禁用 ⇒ 只剩「重启应用再试」这一条路（后端会在
-  // 启动时自己重建），文案里**不给任何命令** —— 用产品的不是程序员。刷新永远由用户点，
-  // 不自动 reload。
+  // 四态四种说法（0.58 三态 → 0.59 加「自动重建被关掉」）：**正在构建**时不给「刷新」
+  // 按钮 —— 磁盘上还是旧产物，刷新那一刻什么都不会变，这正是用户被误导的地方（他照着
+  // 点了刷新，看到的还是旧界面）。已构建好 ⇒ 刷新就够；连续失败 / 被禁用 ⇒ 不会有动作了。
+  // 后两种的文案里**不给任何命令** —— 用产品的不是程序员。刷新永远由用户点，不自动 reload。
   const buildItem: MessageBarItem | null = ((): MessageBarItem | null => {
     if (outdated === undefined) return null;
     const reload: MessageBarAction = {
@@ -179,12 +178,20 @@ export function AppShell() {
       };
     }
     if (outdated === 'stale') {
-      // 构建失败 / 被禁用：**不给命令**（用户不一定是程序员），只给结果与下一步动作。
+      // 连续失败到顶：**不给命令**（用户不一定是程序员），只给结果与下一步动作。
       return {
         id: 'web-build-outdated',
         tone: 'warn',
         text: t('webBuild.stale'),
         actions: [reload],
+      };
+    }
+    if (outdated === 'disabled') {
+      // 自动重建被显式关掉：它本来就不会自己好，说「失败」是错的，也不该叫人去刷新。
+      return {
+        id: 'web-build-outdated',
+        tone: 'warn',
+        text: t('webBuild.autobuildOff'),
       };
     }
     return {

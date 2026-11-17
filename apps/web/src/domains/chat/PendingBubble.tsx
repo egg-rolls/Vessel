@@ -6,7 +6,8 @@
  * 「还没完成」那一支，注释点名的用处之一正是「未发送 / 排队中」），右侧一行状态字说明
  * 它在哪一段：
  * - `sending`：`chat.pendingSend.sending`（「发送中…」）—— **点击那一帧就在屏上**；
- * - `queued`：`chat.pendingSend.queued`（「已排队，前面还有一轮」）—— 不按超时判失败；
+ * - `queued`：`chat.pendingSend.queued` / `chat.pendingSend.queuedLong`（「已排队，前面还有
+ *   一轮」；1 分钟起带分钟数）—— 不按 15 s 判失败，但 3 分钟仍未被认领就转「未发送 · 已排队超时」；
  * - `failed`：`chat.pendingSend.failed`（「未发送」）+ 原因 + 两颗小动作键（重试 / 删除）。
  *
  * 三条纪律（与 `pending-sends.ts` 的注释一一对应）
@@ -37,9 +38,20 @@ export function PendingBubble({
   onDismiss?: (pending: PendingSend) => void;
 }) {
   const failed = pending.state === 'failed';
-  // 超时自带一句人话（「15 秒没有回显」比 `timeout` 这个内部词有用）；RPC 失败带原始错误。
+  // 超时自带一句人话（「15 秒没有回显」比 `timeout` 这个内部词有用）；排队超时同理；
+  // RPC 失败带原始错误。
   const reason =
-    pending.failure === undefined || pending.failure === 'timeout' ? undefined : pending.failure;
+    pending.failure === undefined
+      ? undefined
+      : pending.failure === 'timeout'
+        ? undefined
+        : pending.failure === 'queued-timeout'
+          ? t('chat.pendingSend.queueTimeout')
+          : pending.failure;
+  // 排队**很久**要看得见：1 分钟起把「已排队 N 分钟」写在状态字里。节拍由
+  // `PendingSendStore.sweep` 按整分钟推一次渲染（排队本身不产生任何事件）。
+  const queuedMinutes =
+    pending.state === 'queued' ? Math.floor((Date.now() - pending.createdAt) / 60_000) : 0;
   return (
     <div className="msg-user msg-pending msg-enter">
       <div className="msg-bubble msg-pending-bubble">{pending.text}</div>
@@ -70,7 +82,9 @@ export function PendingBubble({
         ) : (
           <span className="msg-pending-status" role="status">
             {pending.state === 'queued'
-              ? t('chat.pendingSend.queued')
+              ? queuedMinutes >= 1
+                ? t('chat.pendingSend.queuedLong', { minutes: queuedMinutes })
+                : t('chat.pendingSend.queued')
               : t('chat.pendingSend.sending')}
           </span>
         )}
