@@ -71,10 +71,12 @@ function RefIcon({ kind }: { kind: MessageRef['kind'] }) {
 /**
  * 图片投递状态的文案（0.56）。
  *
- * 三态（决策 3）：
+ * 三态（决策 3）+ 一档「无记录」（0.56 P1）：
  * - `sent` ⇒「已发送 · <provider> · <tokens> tok」（隐私知情：图去了哪家、花了多少）；
  * - `dropped` ⇒「已丢弃 · <原因>」（预算 / 格式 / 缺 blob / 占位 / 压缩）；
- * - `not_sent` ⇒「未发送 · <原因>」（视觉被关 / 模型无视觉 / 没入池）。
+ * - `not_sent` ⇒「未发送 · <原因>」（视觉被关 / 模型无视觉 / 没入池）；
+ * - `unknown` ⇒「无记录」（派生覆盖不到那段历史）—— **不是**「未发送」：这两个在长会话里
+ *   是完全不同的事实，把后者写成前者就是显示错误。
  *
  * 原因走闭集 `chat.refs.image.reason.*`；服务端给的是稳定短标签（`over per-request budget`
  * 这种是日志口径），**UI 一律按 code 查词**，查不到就原样显示 —— 不显示 `error` 这种
@@ -89,6 +91,7 @@ export function imageDeliveryLabel(delivery: ImageDelivery | undefined): string 
     }
     return t('chat.refs.image.sentPlain');
   }
+  if (delivery.status === 'unknown') return t('chat.refs.image.noRecord');
   const reason = t(`chat.refs.image.reason.${reasonCodeOf(delivery.reason)}`);
   return delivery.status === 'dropped'
     ? t('chat.refs.image.dropped', { reason })
@@ -137,6 +140,8 @@ function reasonCodeOf(reason: string | undefined): string {
       return 'compaction';
     case 'no_delivery_event':
       return 'no_delivery_event';
+    case 'no_delivery_record':
+      return 'no_delivery_record';
     default:
       return 'unknown';
   }

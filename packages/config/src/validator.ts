@@ -27,6 +27,7 @@ import type {
   TraceConfig,
   UsageLimitsConfig,
   VesselConfig,
+  VisionConfig,
 } from './types.js';
 
 /** Agent/Node ID 字符集（DECISION-005 U1：不含 `:`） */
@@ -2242,6 +2243,55 @@ function validatePluginExpose(path: string, value: unknown, errors: ConfigValida
 }
 
 /**
+ * 校验 `vision` 段（0.56）。
+ *
+ * 这里**不判**「哪个模型支持视觉」（那张表注定与 provider 配置漂移，判据在
+ * `provider.vision`）。只判形状与范围：布尔 / 非负整数 / 小时与天数的上下界。
+ */
+export function validateVisionConfig(
+  vision: VisionConfig | undefined,
+  errors: ConfigValidationError[] = [],
+): ConfigValidationError[] {
+  if (vision === undefined) return errors;
+  for (const key of ['disabled', 'blobGcEnabled', 'blobGcDryRun'] as const) {
+    const value = vision[key];
+    if (value !== undefined && typeof value !== 'boolean') {
+      errors.push({ path: `vision.${key}`, message: `vision.${key} must be a boolean`, value });
+    }
+  }
+  for (const key of ['maxImagesPerRequest', 'orphanGraceHours', 'blobGcIntervalHours'] as const) {
+    const value = vision[key];
+    if (value === undefined) continue;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      errors.push({
+        path: `vision.${key}`,
+        message: `vision.${key} must be a non-negative finite number`,
+        value,
+      });
+    }
+  }
+  const ttl = vision.imageBlobTtlDays;
+  if (ttl !== undefined && (typeof ttl !== 'number' || !Number.isFinite(ttl) || ttl < 1)) {
+    errors.push({
+      path: 'vision.imageBlobTtlDays',
+      message: 'vision.imageBlobTtlDays must be a finite number >= 1',
+      value: ttl,
+    });
+  }
+  for (const key of ['detail', 'preprocess'] as const) {
+    const value = vision[key];
+    if (value !== undefined && (typeof value !== 'string' || value.trim() === '')) {
+      errors.push({
+        path: `vision.${key}`,
+        message: `vision.${key} must be a non-empty string`,
+        value,
+      });
+    }
+  }
+  return errors;
+}
+
+/**
  * 校验 Vessel 配置。所有字段为 camelCase（ADR-019）。
  * @param config 配置对象
  * @returns 校验结果
@@ -2300,6 +2350,9 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   }
 
   validateEnvName('apiKeyEnv', config.apiKeyEnv, errors);
+
+  // 0.56：视觉段（错误拼写的键不再静默失效；取值范围在这里夹一次，别让运行时各自夹）。
+  validateVisionConfig(config.vision, errors);
 
   // 校验 API Key
   if (config.apiKey !== undefined) {
@@ -3161,6 +3214,20 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   ],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
   timeline: ['dualWrite', 'chunkFlushMs', 'archiveIntervalMs'],
+  // 0.56：视觉（kill switch / 预算 / 精度 / 预处理 / blob 生命周期 / GC 定时）。
+  // 加进 KNOWN_BLOCK_KEYS 之前这里是个洞：`vision:` 段写什么都无人校验（错拼的键
+  // 静默不生效）。现在至少「不认识的键」会在启动时报出来。
+  vision: [
+    'disabled',
+    'maxImagesPerRequest',
+    'detail',
+    'preprocess',
+    'orphanGraceHours',
+    'imageBlobTtlDays',
+    'blobGcEnabled',
+    'blobGcIntervalHours',
+    'blobGcDryRun',
+  ],
 };
 
 /** `node.tls` / `hub.tls` 的已知键 */
@@ -3262,6 +3329,8 @@ export const KNOWN_CONFIG_KEYS = [
   'pricing',
   'session',
   'context',
+  // 0.56：视觉段（刻意没有 `enable` 键：支持即直通，`disabled` 是 kill switch）。
+  'vision',
   'permission',
   'plugins',
   'update',

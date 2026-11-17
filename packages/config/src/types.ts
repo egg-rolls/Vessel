@@ -165,6 +165,20 @@ export interface VisionConfig {
   orphanGraceHours?: number;
   /** 孤儿 blob 的死线（天）；缺省 30。 */
   imageBlobTtlDays?: number;
+  /**
+   * blob GC 的定时开关（0.56 P1）。**缺省开**：不开的话「没人用的图」永远占着磁盘，
+   * 而池上限（2 GiB）触顶会让新图不再内联 —— 那是静默降级。
+   *
+   * 显式 `false` 才关；关掉之后 `blobGc*` 其它键不生效。
+   */
+  blobGcEnabled?: boolean;
+  /** GC 间隔（小时，夹到 [1, 168]）；缺省 6。 */
+  blobGcIntervalHours?: number;
+  /**
+   * 只报不删（dry-run）。缺省 `false`：**进程启动后的第一趟无论如何都是 dry-run**
+   * （见 `image-blob-gc.ts`），这个键是「一直只看不删」的长期开关。
+   */
+  blobGcDryRun?: boolean;
 }
 
 /**

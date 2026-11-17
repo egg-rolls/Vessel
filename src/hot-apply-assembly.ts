@@ -25,7 +25,12 @@ import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
-import { createRefsNoticeHook, REFS_NOTICE_HOOK, readMediaSurface } from './refs-notice-hook';
+import {
+  createRefsNoticeHook,
+  REFS_NOTICE_HOOK,
+  readMediaSurface,
+  type VisionSurface,
+} from './refs-notice-hook';
 import type { RuntimeNoticeBus } from './runtime-notice';
 import { createRuntimeNoticeHook, RUNTIME_NOTICE_HOOK } from './runtime-notice-hook';
 import { resolveRuntimePermission } from './tenant-runtime-factory';
@@ -182,12 +187,18 @@ export function registerRuntimeNoticeHook(
  * 列表也在变（media 插件按实测后端决定 schema 里 `action` 的 enum），只有从同一份
  * `listTools()` 读，动作名才不会残留上一版后端的结果。
  */
-export function registerRefsNoticeHook(host: PluginHost): void {
+export function registerRefsNoticeHook(
+  host: PluginHost,
+  options: { vision?: () => VisionSurface } = {},
+): void {
   const existing = host.getHooks().some((hook) => hook.name === REFS_NOTICE_HOOK);
   if (existing) return;
   host.registerHook(
     createRefsNoticeHook({
       mediaSurface: () => readMediaSurface(host.listTools()),
+      // 0.56 P1：图会不会随本条消息内联（`inline` ⇒ 尾注改说「不要再读」）。
+      // 探针是**函数**不是快照：`vision.disabled` 热应用打开后，下一批引用立刻回落老文案。
+      ...(options.vision !== undefined ? { visionSurface: options.vision } : {}),
     }),
   );
 }

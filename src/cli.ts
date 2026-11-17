@@ -144,6 +144,7 @@ import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update/gateway-check';
 import { readPackageVersion } from './version';
+import { visionSurfaceOf } from './vision-settings';
 import { ensureWebDist, webDistWarning } from './web-dist';
 
 /**
@@ -957,7 +958,13 @@ async function runWithConfig(result: BootstrapResult) {
       });
     registerRuntimeNoticeHook(ctx.pluginHost, noticeBus);
     // 0.52：附件引用的环境信息行（同一 host、同一 BeforeLlm 阶段）。
-    registerRefsNoticeHook(ctx.pluginHost);
+    // 0.56 P1：视觉面探针——有 `provider.vision` 且没被 kill switch 关时，尾注改说
+    // 「图已随本条消息附上，不要再读」（否则模型会把图再读一遍 = 双倍花费）。
+    // 闭包每轮求值一次，读的是 `liveConfig`：热应用换掉 `vision.disabled` 后立刻生效。
+    registerRefsNoticeHook(ctx.pluginHost, {
+      vision: () =>
+        visionSurfaceOf({ config: liveConfig, backend: result.bundle?.provider?.vision }),
+    });
 
     /** 存活 runtime 的集合：单执行面的 owner（bundle / ctx）。 */
     const liveTargets = (): PermissionApplyTarget[] =>
@@ -1346,7 +1353,7 @@ async function runWithConfig(result: BootstrapResult) {
             // 每张图的投递状态（additive `sessions.get` 的 `image_delivery`，0.56）：
             // 同一个读口，取 `image.sent` / `context.image_dropped` 两类事件。
             imageDelivery: createImageDeliverySource({
-              tail: gatewayBundle.timelineLog,
+              log: gatewayBundle.timelineLog,
               watermark: (sessionId: string) => gatewayBundle.timelineLog!.watermark(sessionId),
             }),
             // `sessions.events` 回填 + `sessions.get.event_cursor`：同一个读口。

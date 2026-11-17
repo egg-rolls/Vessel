@@ -1164,6 +1164,10 @@ export const messages = {
   'chat.refs.image.sentPlain': '已发送',
   'chat.refs.image.dropped': '已丢弃 · {reason}',
   'chat.refs.image.notSent': '未发送 · {reason}',
+  // 0.56 P1：「无记录」——派生覆盖不到那段历史（长会话的旧图）。**不是**「未发送」：
+  // 把「没有记录」说成「未发送」就是显示错误（比不显示更坏）。
+  'chat.refs.image.noRecord': '无记录',
+  'chat.refs.image.reason.no_delivery_record': '没有留下投递记录',
   'chat.refs.image.reason.budget': '超出单次预算',
   'chat.refs.image.reason.bytes_budget': '超出单次字节预算',
   'chat.refs.image.reason.unsupported_format': '格式不支持',

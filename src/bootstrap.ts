@@ -22,6 +22,7 @@ import {
   type VesselConfig,
 } from '../packages/config/src/index';
 import {
+  imageBlobRoot,
   type Logger,
   MemoryPluginHost,
   MemorySessionStore,
@@ -79,6 +80,12 @@ import { createFederationSendPort } from './federation-send-port';
 import { registerRefsNoticeHook, registerRuntimeNoticeHook } from './hot-apply-assembly';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
+import {
+  formatImageBlobGcReport,
+  type ImageBlobGcRunner,
+  isBlobRootInsideDataDir,
+  startImageBlobGc,
+} from './image-blob-gc';
 import { createImageDeliverySource } from './image-delivery';
 import { resolveInteractionsDir } from './interactions-dir';
 import { normalizeLegacyToolName } from './legacy-tool-names';
@@ -135,6 +142,7 @@ import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from '
 import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
 import { readPackageVersion } from './version';
+import { visionSurfaceOf } from './vision-settings';
 
 /**
  * tui 0.6.1 冻结的权限控制面（本 worktree 的 tui 尚未导出该类型）。
@@ -1221,6 +1229,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   /** 成员停下通知的投递面（窗口合并 / 每轮一条 / 定向父 session）。 */
   let peerNotices: PeerNoticeRouter | undefined;
   /**
+   * 图片 blob 池的 GC 定时器（0.56 P1）。缺省开：孤儿 blob 不清会一直占着 2 GiB 池，
+   * 触顶之后新图不再内联（静默降级）。第一趟固定 dry-run（只报「将删 N / 共 M」）。
+   */
+  let imageBlobGc: ImageBlobGcRunner | undefined;
+  /**
    * 0.53 notice-rotate：成员停下通知要按**投递那一刻**父成员当前的 session 定向，而
    * router 建在 `createAgentServiceWiring` 之前 —— 同样晚绑定（与 `feishuAgentService`
    * 同口径），闭包在 flush 时求值；装配前为 undefined 时通知退回报告时刻的 session。
@@ -1277,7 +1290,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     });
     registerRuntimeNoticeHook(finalPluginHost, noticeBus, eventLog);
     // 0.52：附件引用的环境信息行（模型据此知道有附件、该用 media 工具读）。
-    registerRefsNoticeHook(finalPluginHost);
+    // 0.56 P1：带上视觉面探针——有 `provider.vision` 且没被 kill switch 关时，尾注改说
+    // 「图已随本条消息附上，不要再读」（避免模型把图再 media: read 一遍 = 双倍花费）。
+    registerRefsNoticeHook(finalPluginHost, {
+      vision: () => visionSurfaceOf({ config, backend: bundle.provider.vision }),
+    });
     peerNotices = createPeerNoticeRouter({
       bus: noticeBus,
       events: runtimeEvents,
@@ -1739,7 +1756,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           // 同一个读口，取的是另一类事件（`image.sent` / `context.image_dropped`）。
           // 从事件派生而不是写进 refs —— 后者会改写历史前缀且被 messageSignature 无视。
           imageDelivery: createImageDeliverySource({
-            tail: timelineLog,
+            log: timelineLog,
             watermark: (sessionId: string) => timelineLog.watermark(sessionId),
           }),
           // `sessions.events` 回填 + `sessions.get.event_cursor`：与上面两个同一个读口，
@@ -2005,6 +2022,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       // 退订 / 清定时器是 best-effort
     }
     peerNotices = undefined;
+    // 0.56 P1：blob GC 定时器（在飞的那一趟照旧跑完，不阻塞退出）。
+    imageBlobGc?.stop();
+    imageBlobGc = undefined;
     // 0.53 notice-rotate：重解析口的宿主一并摘掉（router 已停，flush 不会再发生）。
     noticeAgentService = undefined;
 
@@ -2167,6 +2187,76 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     setTimeout(() => {
       void pruneTraceBestEffort();
     }, 0);
+  }
+
+  // ── 0.56 P1：图片 blob 池 GC（第一趟 dry-run，之后定时真删）────────────────────
+  // 三条纪律：① 引用集合扫「会话壳 + 事件日志」两处（漏一处 = 删在用图）；
+  // ② 证明不了引用集合就整趟放弃（`aborted`，一个字节都不删）；
+  // ③ 超上限**不静默**（warn + 事件 + 一张通知卡）。
+  const blobGcEnabled = config.vision?.blobGcEnabled !== false;
+  // 安全闸：blob 池必须落在**这个数据目录**里。`VESSEL_BLOB_DIR` 可以把池指到别处
+  // （多节点 / 多租户共享一份池），而引用集合只能扫到本目录的会话 —— 那时删任何东西
+  // 都是「删别人还在用的图」。宁可不做（漏水），也不猜。
+  const blobPoolRoot = imageBlobRoot();
+  const blobPoolInside = isBlobRootInsideDataDir(tenantPaths.root, blobPoolRoot);
+  if (blobGcEnabled && localWrites && timelineLog !== undefined && !blobPoolInside) {
+    logger.warn('image blob gc skipped: blob root outside data dir', {
+      data_dir: tenantPaths.root,
+      blob_root: blobPoolRoot,
+    });
+  }
+  if (blobGcEnabled && localWrites && timelineLog !== undefined && blobPoolInside) {
+    const gcLog = timelineLog;
+    imageBlobGc = startImageBlobGc({
+      sessionsDir: tenantPaths.sessions_dir,
+      log: { read: (sessionId: string) => gcLog.read(sessionId) },
+      root: blobPoolRoot,
+      ...(config.vision?.orphanGraceHours !== undefined
+        ? { orphanGraceHours: config.vision.orphanGraceHours }
+        : {}),
+      ...(config.vision?.imageBlobTtlDays !== undefined
+        ? { ttlDays: config.vision.imageBlobTtlDays }
+        : {}),
+      ...(config.vision?.blobGcIntervalHours !== undefined
+        ? { intervalHours: config.vision.blobGcIntervalHours }
+        : {}),
+      ...(config.vision?.blobGcDryRun === true ? { dryRun: true } : {}),
+      onUnreadable: (sessionId: string, error: unknown) => {
+        // 旧格式会话（0.54 之前）没有 blob 池，读不出来是可声明的；**不是静默**。
+        logger.warn('image blob gc: session events unreadable', {
+          session_id: sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      },
+      onReport: (report) => {
+        const line = formatImageBlobGcReport(report);
+        if (report.aborted !== undefined) {
+          logger.warn('image blob gc aborted', {
+            reason: report.aborted.reason,
+            scanned: report.scanned,
+          });
+          return;
+        }
+        logger.info('image blob gc pass', { line, scanned: report.scanned });
+        // 报告进事件流：人（Web/TUI）能看到「将删 / 已删」，不必翻日志。
+        runtimeEvents.publish({
+          type: 'gc.image_blobs',
+          run_id: 'gc',
+          data: { line, dry_run: report.dryRun, scanned: report.scanned, result: report.result },
+          ts: Date.now(),
+        });
+        if (report.result?.overLimit === true) {
+          const summary = `Image pool over limit (${report.result.totalBytes} bytes): new images will not be inlined`;
+          console.warn(`⚠ ${summary}`);
+          noticeBus?.publish({
+            scope: 'config',
+            summary,
+            details: [line],
+            ok: false,
+          });
+        }
+      },
+    });
   }
 
   return {
