@@ -156,8 +156,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const nodeTokenRef = useRef(nodeToken);
   nodeTokenRef.current = nodeToken;
   // 0.58：代理模式下「能连」不再取决于有没有 node token —— 鉴权是平台会话语义。
-  const canConnect =
-    nodeUrl !== null && (proxyMode || nodeToken.trim() !== '' || anonymousNode);
+  const canConnect = nodeUrl !== null && (proxyMode || nodeToken.trim() !== '' || anonymousNode);
   const hasToken = canConnect;
 
   /**
