@@ -151,12 +151,28 @@ export interface SessionSystemContextPort {
  * **wire-only 派生**：`Message.refs` 一个字节都不多（那是「禁止项 1」）。
  */
 export interface ImageDeliveryView {
-  status: 'sent' | 'dropped' | 'not_sent';
+  /**
+   * `sent` 已发送 / `dropped` 这一轮算过但没发 / `not_sent` 根本没进这条通路 /
+   * `unknown` **没有记录**（派生不出来，不许猜——见 `SessionImageDeliveryPort`）。
+   */
+  status: 'sent' | 'dropped' | 'not_sent' | 'unknown';
   reason?: string;
   sha8?: string;
   tokens?: number;
   backend?: string;
   model?: string;
+}
+
+/**
+ * 一次查询的结果：事实 + **覆盖度**（决定「缺席」该怎么解释）。
+ *
+ * `coverage: 'partial'` 是 0.56 P1 加的：长会话里 `image.sent` 落在尾窗之外时，老实现
+ * 把「没扫到」说成「未发送」，而**显示错误比不显示更坏**。现在缺席只有在
+ * `coverage: 'complete'`（从 seq 1 折到日志尾）时才算「从未发送」，否则只报「无记录」。
+ */
+export interface ImageDeliveryFacts {
+  facts: ReadonlyMap<string, ImageDeliveryView>;
+  coverage: 'complete' | 'partial';
 }
 
 /**
@@ -169,7 +185,7 @@ export interface ImageDeliveryView {
  * 「已丢弃（压缩）」—— 这正是模型现在的真实视角）。
  */
 export interface SessionImageDeliveryPort {
-  lookup(sessionId: string): Promise<ReadonlyMap<string, ImageDeliveryView> | undefined>;
+  lookup(sessionId: string): Promise<ImageDeliveryFacts | undefined>;
   /** 事件日志尾水位（`大小:mtime`）；`undefined` = 没有日志文件。 */
   watermark(sessionId: string): Promise<string | undefined>;
 }
@@ -406,14 +422,18 @@ function attachProjections(
  *
  * 规则：
  * - 只给「`refs` 里有 image」的消息挂（**sparse**：没图 = 与今天逐字节相同）；
- * - 每条图片引用按 `sha256` 前 8 位查；查不到 = `not_sent / no_delivery_event`
- *   （**没记过就是没发过**，不是猜 —— 决策 1 的隐私知情不许靠猜）；
+ * - 每条图片引用按 `sha256` 前 8 位查：
+ *   - 命中 ⇒ 用那条事实（`sent` / `dropped` / `not_sent`）；
+ *   - 未命中且 `coverage: 'complete'`（整份日志都折过了）⇒ `not_sent / no_delivery_event`
+ *     —— **这才是「没发过」的证据**；
+ *   - 未命中且 `coverage: 'partial'` ⇒ `unknown / no_delivery_record`：只报「无记录」，
+ *     **不猜**（老实现把「尾窗没扫到」说成「未发送」，长会话里那是假读数）；
  * - 没 `sha256` 的旧引用 = `not_sent / not_ingested`（它们从没进过 blob 池，确实没被内联）；
  * - 一条都没命中 ⇒ 返回原数组（零分配）。
  */
 function attachImageDelivery(
   window: readonly ProjectedMessage[],
-  known: ReadonlyMap<string, ImageDeliveryView>,
+  known: ImageDeliveryFacts,
 ): ProjectedMessage[] {
   let changed = false;
   const out = window.map((message) => {
@@ -428,7 +448,16 @@ function attachImageDelivery(
         continue;
       }
       const sha8 = sha256.slice(0, 8);
-      entries.push(known.get(sha8) ?? { status: 'not_sent', reason: 'no_delivery_event', sha8 });
+      const hit = known.facts.get(sha8);
+      if (hit !== undefined) {
+        entries.push(hit);
+        continue;
+      }
+      entries.push(
+        known.coverage === 'complete'
+          ? { status: 'not_sent', reason: 'no_delivery_event', sha8 }
+          : { status: 'unknown', reason: 'no_delivery_record', sha8 },
+      );
     }
     if (entries.length === 0) return message;
     changed = true;
@@ -1523,21 +1552,27 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
 
   /** 图片投递状态（0.56）的收敛：只认闭集，坏载荷一律当「没有记录」。 */
   function normalizeImageDelivery(
-    raw: ReadonlyMap<string, ImageDeliveryView> | undefined,
-  ): ReadonlyMap<string, ImageDeliveryView> | undefined {
-    if (raw === undefined || raw.size === 0) return undefined;
+    raw: ImageDeliveryFacts | undefined,
+  ): ImageDeliveryFacts | undefined {
+    if (raw === undefined) return undefined;
     const out = new Map<string, ImageDeliveryView>();
-    for (const [sha8, view] of raw) {
+    for (const [sha8, view] of raw.facts) {
       if (typeof sha8 !== 'string' || sha8.length === 0) continue;
-      if (view.status !== 'sent' && view.status !== 'dropped' && view.status !== 'not_sent') {
+      if (
+        view.status !== 'sent' &&
+        view.status !== 'dropped' &&
+        view.status !== 'not_sent' &&
+        view.status !== 'unknown'
+      ) {
         continue;
       }
       out.set(sha8, view);
     }
-    return out.size > 0 ? out : undefined;
+    // 事实为空也算「有话要说」：`coverage` 才是判据（complete + 空 = 从来没发过）。
+    return { facts: out, coverage: raw.coverage === 'complete' ? 'complete' : 'partial' };
   }
 
-  const imageDeliveryOf = watermarkCached<ReadonlyMap<string, ImageDeliveryView>>({
+  const imageDeliveryOf = watermarkCached<ImageDeliveryFacts>({
     limit: DERIVED_CACHE_LIMIT,
     port: () => deps.imageDelivery,
     normalize: normalizeImageDelivery,
