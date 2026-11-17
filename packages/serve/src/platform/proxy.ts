@@ -384,6 +384,8 @@ export class PlatformProxy {
 
       const responseHeaders = this.downstreamResponseHeaders(upstream);
 
+      clearTimeout(timer);
+
       // HEAD / 204 / 304 没有正文：直接返回，不等流。
       if (req.method === 'HEAD' || upstream.body === null) {
         releaseSlot();

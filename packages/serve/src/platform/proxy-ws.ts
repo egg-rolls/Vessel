@@ -239,6 +239,9 @@ export class ProxyWsBridge {
     // 已鉴权：平台策略先判帧（`req` 的方法白名单，fail-closed），再决定是否转发。
     const sniffed = this.sniff(payload);
     if (sniffed !== null) {
+      // 浏览器带来的 `auth` 首帧**永不转发**：它装的是平台 token（或空串），
+      // 到了 node 侧要么无意义、要么等于把平台凭据交给 node。上游鉴权由平台自己发。
+      if (sniffed.kind === 'auth') return;
       const denied = this.options.frameDenied?.(sniffed);
       if (denied !== null && denied !== undefined) {
         this.sendResultError(sniffed, denied);
@@ -353,15 +356,33 @@ export class ProxyWsBridge {
     const size = payloadBytes(data);
     if (size === null) return;
     this.lastUpstreamActivity = (this.options.now ?? Date.now)();
-    // node 的心跳帧（应用层 ping/pong）原样透传：浏览器侧需要它维持既有语义。
     const sniffed = this.sniff(toPayload(data));
     if (sniffed !== null) {
+      // 平台**自己**回 node 的应用层 ping（设计 §2.2：上游存活是平台的责任）。
+      //
+      // 为什么不能只靠透传：node 每 15s 发一帧 `{kind:'ping'}`，只认客户端的
+      // `{kind:'pong'}`；而浏览器标签页休眠 / 被节流时根本不回帧 —— 那样 node 会认为
+      // 「客户端死了」并主动断开，用户看到的是「随机掉线」。这里平台代答，浏览器那一端
+      // 的存活由平台自己发起的 WS ping（`heartbeat_misses`）单独判定，两件事不混。
+      if (sniffed.kind === 'ping') this.pongUpstream();
       const sessionId = readSessionId(sniffed);
       if (sessionId !== undefined) this.sessionId = sessionId;
     }
+    // node 的心跳帧（应用层 ping/pong）仍然原样透传：浏览器侧需要它维持既有语义。
     this.framesOut += 1;
     this.bytesOut += size;
     this.sendDownstream(toPayload(data), size);
+  }
+
+  /** 代答 node 的应用层 ping（失败即上游已断，交给 close/error 收口）。 */
+  private pongUpstream(): void {
+    const upstream = this.upstream;
+    if (upstream === undefined || !this.upstreamOpen) return;
+    try {
+      upstream.send(JSON.stringify({ v: 1, kind: 'pong' }));
+    } catch {
+      // 已断：后续 close 事件会走唯一收口。
+    }
   }
 
   /** 写浏览器侧：高水位 → 进有界队列；硬阈值 → 1013。 */
@@ -441,58 +462,82 @@ export class ProxyWsBridge {
     unrefTimer(this.drainTimer);
   }
 
+  /**
+   * 排空两方向的**有界队列**。
+   *
+   * 关键一条（0.58 实测踩到）：上游握手期间排队的帧**必须在 `open` 后立刻发出**，
+   * 不能只等「暂停恢复」时才发 —— 否则浏览器在握手窗口里发的前几条 `req` 会一直躺在
+   * 队列里，直到下一次心跳才可能被带出去（症状：连上了但订阅/请求像没生效）。
+   */
   private flushQueues(): void {
     if (this.closed) {
       this.clearDrain();
       return;
     }
-    const { wsLowWaterBytes } = this.options.limits;
+    const { wsLowWaterBytes, wsHighWaterBytes } = this.options.limits;
     const client = this.client;
-    if (this.pausedDownstream && client !== undefined) {
-      if (client.getBufferedAmount() <= wsLowWaterBytes) {
-        this.pausedDownstream = false;
-        while (this.toClient.length > 0 && !this.pausedDownstream) {
-          const payload = this.toClient.shift();
-          if (payload === undefined) break;
-          const size = payloadBytes(payload) ?? 0;
-          this.toClientBytes -= size;
-          this.release(size);
-          try {
-            client.send(payload);
-          } catch {
-            this.finish(1011, 'client_gone', 'platform', false, true);
-            return;
-          }
-          if (client.getBufferedAmount() > this.options.limits.wsHighWaterBytes) {
-            this.pausedDownstream = true;
-          }
-        }
-      }
+    if (
+      this.pausedDownstream &&
+      client !== undefined &&
+      client.getBufferedAmount() <= wsLowWaterBytes
+    ) {
+      this.pausedDownstream = false;
     }
     const upstream = this.upstream;
-    if (this.pausedUpstream && upstream !== undefined) {
-      if (upstream.bufferedAmount <= wsLowWaterBytes) {
-        this.pausedUpstream = false;
-        while (this.toUpstream.length > 0 && !this.pausedUpstream) {
-          const payload = this.toUpstream.shift();
-          if (payload === undefined) break;
-          const size = payloadBytes(payload) ?? 0;
-          this.toUpstreamBytes -= size;
-          this.release(size);
-          try {
-            upstream.send(payload);
-          } catch {
-            this.finish(1011, 'upstream_error', 'platform', true, true);
-            return;
-          }
-          if (upstream.bufferedAmount > this.options.limits.wsHighWaterBytes) {
-            this.pausedUpstream = true;
-          }
+    if (
+      this.pausedUpstream &&
+      upstream !== undefined &&
+      upstream.bufferedAmount <= wsLowWaterBytes
+    ) {
+      this.pausedUpstream = false;
+    }
+
+    if (client !== undefined && !this.pausedDownstream) {
+      while (this.toClient.length > 0) {
+        const payload = this.toClient.shift();
+        if (payload === undefined) break;
+        const size = payloadBytes(payload) ?? 0;
+        this.toClientBytes -= size;
+        this.release(size);
+        try {
+          client.send(payload);
+        } catch {
+          this.finish(1011, 'client_gone', 'platform', false, true);
+          return;
+        }
+        if (client.getBufferedAmount() > wsHighWaterBytes) {
+          this.pausedDownstream = true;
+          break;
         }
       }
     }
-    // 握手期（上游未 open）排队的帧由上游 `open` 事件 flush；这里不动它。
-    if (!this.pausedDownstream && !this.pausedUpstream && this.toClient.length === 0) {
+
+    if (upstream !== undefined && this.upstreamOpen && !this.pausedUpstream) {
+      while (this.toUpstream.length > 0) {
+        const payload = this.toUpstream.shift();
+        if (payload === undefined) break;
+        const size = payloadBytes(payload) ?? 0;
+        this.toUpstreamBytes -= size;
+        this.release(size);
+        try {
+          upstream.send(payload);
+        } catch {
+          this.finish(1011, 'upstream_error', 'platform', true, true);
+          return;
+        }
+        if (upstream.bufferedAmount > wsHighWaterBytes) {
+          this.pausedUpstream = true;
+          break;
+        }
+      }
+    }
+
+    if (
+      !this.pausedDownstream &&
+      !this.pausedUpstream &&
+      this.toClient.length === 0 &&
+      this.toUpstream.length === 0
+    ) {
       this.clearDrain();
     }
   }
