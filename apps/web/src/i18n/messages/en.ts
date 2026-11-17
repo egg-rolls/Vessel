@@ -1153,6 +1153,15 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.pendingSend.queued': 'Queued · one round ahead',
   'chat.pendingSend.queuedLong': 'Queued {minutes} min · one round ahead',
   'chat.pendingSend.queueTimeout': 'Queued too long — not sent',
+  // 0.57: the server accepted it but this round will not start (deferred).
+  // Each reason must be literally true (an inbox archive is not "continues automatically").
+  'chat.pendingSend.deferred': 'Accepted · {reason}',
+  'chat.pendingSend.deferredLong': 'Accepted · {reason} · waiting {minutes} min',
+  'chat.pendingSend.deferred.draining': 'node is restarting, the message is in the inbox',
+  'chat.pendingSend.deferred.rotate': 'session is rotating, the message is in the inbox',
+  'chat.pendingSend.deferred.stopped': 'blocked by a hard error, continues after unblocking',
+  'chat.pendingSend.deferred.other': 'waiting for the server to pick it up',
+  'chat.pendingSend.deferTimeout': 'Accepted, but never picked up',
   'chat.pendingSend.failed': 'Not sent',
   'chat.pendingSend.retry': 'Retry',
   'chat.pendingSend.dismiss': 'Discard',
@@ -1182,6 +1191,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'The server did not release the hold; the strip was reloaded (the item may already be gone)',
   'chat.pending.unholdFailed': 'Could not release the hold: {detail}',
   'chat.toast.queued': 'Queued',
+  'chat.toast.deferred': 'Accepted — waiting to be picked up',
   'chat.toast.cancelRequested': 'Requested cancellation of the run',
   'chat.toast.queueCancelled': 'Removed from the queue',
   'chat.toast.cancelNotAccepted': 'The cancellation was not accepted; the run may have started',

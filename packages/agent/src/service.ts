@@ -85,6 +85,7 @@ import {
   SYSTEM_PRINCIPAL,
 } from './team-address.js';
 import {
+  type AdmitDeferredReason,
   type AdmitInput,
   type AdmitResult,
   type AgentClaimInput,
@@ -338,6 +339,20 @@ const TURN_DIMENSIONS: ReadonlySet<string> = new Set(['turns', 'tokens']);
  * 「一开机所有 agent 一起跑」。超出的会话条目保持 unread，下次启动顺延。
  */
 const RECOVER_MAX_SESSIONS = 8;
+
+/**
+ * `status: 'deferred'` 的建议重问间隔（毫秒，0.57）。
+ *
+ * 给的是「多久之后再问一次有没有接单」的量级，**不是**完成的承诺：
+ * - `rotate`：新 body 的 spawn 是秒级（真机最坏十几秒），10 s 后再问是安全的；
+ * - `draining`：进程要退出再起来，30 s 只是让调用方别在此期间空转；
+ * - `stopped`：**没有**时间答案 —— 要一条显式人工动作（人类投递 / interrupt / 换 body），
+ *   所以这里不给数字（`retry_after_ms` 缺省 = 别按时间重试）。
+ */
+const DEFERRED_RETRY_AFTER_MS: Readonly<Partial<Record<AdmitDeferredReason, number>>> = {
+  draining: 30_000,
+  rotate: 10_000,
+};
 
 /**
  * 临时 agent 空闲回收 TTL 缺省值（小时，D5）；0 = 关闭。
@@ -2809,10 +2824,12 @@ export class AgentServiceImpl implements AgentService {
       // 附件引用：只有路径，随消息进执行内核 → core Message.refs（不落 inbox 副本）。
       ...(refs.length > 0 ? { refs } : {}),
     };
-    // rotate 窗口内：旧 body 即将退役，消息只落 inbox（不进旧队列、不提交），
-    // 由新 body 的 hook 按「启动嘱托 → 旧队列 → 新队列」顺序注入。
+    // rotate 窗口内：旧 body 即将退役，消息只落 inbox（不进旧队列、不提交）。
     // 启动嘱托本身例外：它是新 body 的 run input，永不进 inbox。
-    // 投递模式 quiet：不唤醒、也不当作 run input（新 body 之后按需 read）。
+    // 投递模式 quiet：不唤醒、也不当作 run input —— 0.51 起正文不再自动注入，新 body 的
+    // notice hook 只报「N 条 unread」，模型自己 `inbox read` 取。所以这条消息**不会**
+    // 自动变成 run（这是既有语义，不是本次改动引入的）；deferred 的 `reason: 'rotate'`
+    // 说的就是这件事：收下了、这一轮没跑，正文在收件箱里。
     if (this.inbox !== undefined && internal?.startup !== true && this.rotations.has(record.id)) {
       const rotation = this.rotations.get(record.id);
       if (rotation !== undefined) {
@@ -2831,21 +2848,16 @@ export class AgentServiceImpl implements AgentService {
           },
           { delivery: 'quiet' },
         );
-        const runId = this.newId();
-        this.runMessageIds.set(runId, message.id);
         // quiet 投递：只落 inbox，不进旧队列 —— 不带 state（见 emitMessageQueued）。
         this.emitMessageQueued(record, rotation.toSessionId, 'quiet', {
           message_id: message.id,
           from,
           ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
         });
+        // 不编 run id：这条消息只落 inbox（quiet，正文由模型自己 read），永远不会有一个
+        // 与它对应的这一轮 run，回一个永不起跑的号只会让调用方等一个永不发生的事件。
         return {
-          result: {
-            run_id: runId,
-            agent_id: record.id,
-            session_id: rotation.toSessionId,
-            status: 'queued',
-          },
+          result: this.deferredResult(record, rotation.toSessionId, message, 'rotate'),
           message,
         };
       }
@@ -2859,8 +2871,6 @@ export class AgentServiceImpl implements AgentService {
         throw new AgentError('node_draining', 'node_draining: ' + record.id);
       }
       this.trackInbox(record.id, message, entry.bindingId);
-      const drainedRunId = this.newId();
-      this.runMessageIds.set(drainedRunId, message.id);
       this.emitMessageQueued(record, entry.bindingId, 'input', {
         state: record.state,
         message_id: message.id,
@@ -2868,13 +2878,9 @@ export class AgentServiceImpl implements AgentService {
         ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
       });
       this.scheduleSnapshot();
+      // 同上：正文已经落 durable inbox，但这一进程不会再起它 —— 不编 run id。
       return {
-        result: {
-          run_id: drainedRunId,
-          agent_id: record.id,
-          session_id: entry.bindingId,
-          status: 'queued',
-        },
+        result: this.deferredResult(record, entry.bindingId, message, 'draining'),
         message,
       };
     }
@@ -2897,17 +2903,11 @@ export class AgentServiceImpl implements AgentService {
     // 与上面 draining 那段同形：消息已经落 durable inbox 并 hold 成 pending（看得见、
     // 读得到、id 不变），只是不再开新 run。为什么不 throw：投递失败会让
     // `admitInternal` 的失败出口把消息 discard 掉（用户正文丢失），而这里要的恰恰是
-    // 「收下、留着、等一条显式动作」。status 仍是 queued，调用方拿到的语义是「排队了」。
+    // 「收下、留着、等一条显式动作」。所以回 `deferred`（不是 `queued`）：**没有 run**，
+    // 解闸后（`unblockBodies` → `retryHeldMessages`）才是一个新 run。
     if (entry.hardStop !== undefined) {
-      const blockedRunId = this.newId();
-      this.runMessageIds.set(blockedRunId, message.id);
       return {
-        result: {
-          run_id: blockedRunId,
-          agent_id: record.id,
-          session_id: entry.bindingId,
-          status: 'queued',
-        },
+        result: this.deferredResult(record, entry.bindingId, message, 'stopped'),
         message,
       };
     }
@@ -2944,10 +2944,55 @@ export class AgentServiceImpl implements AgentService {
         run_id: submitted.runId,
         agent_id: record.id,
         session_id: entry.bindingId,
+        message_id: message.id,
         status,
         ...(queuePosition !== undefined ? { queue_position: queuePosition } : {}),
       },
       message,
+    };
+  }
+
+  /**
+   * 「现在不能接」的统一出口（0.57）：**不编 run id**，用 `reason` 说清为什么。
+   *
+   * 以前这三条路（draining / rotate 静默窗口 / hardStop）各自 `newId()` 一个 run id 回
+   * `status: 'queued'`。那个号**永不执行**：消息留在 durable inbox / mailbox 里，真正起跑
+   * 时是**另一个** run（新 body 的 hook 注入、下次启动的 `recoverPendingInputs`、解闸后的
+   * `retryHeldMessages`）。调用方拿一个永不起跑的号 ⇒ 永远等不到带它的事件（前端气泡停在
+   * 「已排队」直到超时兜底）。这里改成「明确未接单」：`deferred` + `reason`
+   * + 建议的重问间隔 `retry_after_ms`，`message_id` 是真实身份（inbox 里看得到、撤得掉）。
+   *
+   * 消息本身三条路都**已经落盘**，但落到哪儿 / 之后会不会自己动，各有事实（不要互相套用）：
+   * - `draining`：held pending；进程存活期间不会再起 run。重启后 human 源的条目由
+   *   `recoverPendingInputs` 重投，agent 源的条目保持 unread（模型 `inbox read` 取）；
+   * - `rotate`：quiet 条目（不 hold、不带 session_id、**永不当 run input**）；新 body 的
+   *   notice hook 只报计数，正文由模型 `inbox read` 取 —— 它不会自动变成一轮 run；
+   * - `stopped`：held pending；解闸（`unblockBodies` → `retryHeldMessages`）后真的重投并起跑。
+   *
+   * 所以调用方**不要重发**（重发就是两份），而是按 `reason` 告诉用户接下来会发生什么。
+   */
+  private deferredResult(
+    record: MemberRecord,
+    sessionId: string,
+    message: AgentMessage,
+    reason: AdmitDeferredReason,
+  ): AdmitResult {
+    const retryAfterMs = DEFERRED_RETRY_AFTER_MS[reason];
+    // 单行观测：谁、哪条消息、为什么没接、多久后可以再问（排查「气泡为什么不动」）。
+    this.logger.info('session.input.deferred', {
+      agent_id: record.id,
+      session_id: sessionId,
+      message_id: message.id,
+      reason,
+      ...(retryAfterMs !== undefined ? { retry_after_ms: retryAfterMs } : {}),
+    });
+    return {
+      status: 'deferred',
+      reason,
+      message_id: message.id,
+      agent_id: record.id,
+      session_id: sessionId,
+      ...(retryAfterMs !== undefined ? { retry_after_ms: retryAfterMs } : {}),
     };
   }
 
@@ -4528,7 +4573,9 @@ export class AgentServiceImpl implements AgentService {
       ...(originRunId !== undefined ? { origin_run_id: originRunId } : {}),
       strict: true,
     });
-    const messageIdResult = this.runMessageIds.get(result.run_id) ?? result.run_id;
+    // 消息身份直接取 admit 回填的 `message_id`（0.57 起恒有）；`run_id` 只在真起跑时才有
+    // —— `deferred` 的投递没有 run，旧写法（runMessageIds 反查）在这里会空转。
+    const messageIdResult = result.message_id ?? result.run_id ?? '';
     return {
       queued: true,
       message_id: messageIdResult,
@@ -5363,7 +5410,7 @@ export class AgentServiceImpl implements AgentService {
       const result = await attempt(target.id, boundSession);
       return {
         status: 'queued',
-        message_id: this.runMessageIds.get(result.run_id) ?? result.run_id,
+        message_id: result.message_id ?? result.run_id ?? '',
         resolved_to: target.id,
         resolution: wasLive ? 'live' : 'resumed',
         conversation_id: conversationId,
@@ -5405,7 +5452,7 @@ export class AgentServiceImpl implements AgentService {
         const result = await attempt(derived.id);
         return {
           status: 'queued',
-          message_id: this.runMessageIds.get(result.run_id) ?? result.run_id,
+          message_id: result.message_id ?? result.run_id ?? '',
           resolved_to: derived.id,
           resolution: 'created',
           conversation_id: conversationId,
@@ -6785,7 +6832,7 @@ export class AgentServiceImpl implements AgentService {
     });
     return {
       queued: true,
-      message_id: this.runMessageIds.get(result.run_id) ?? result.run_id,
+      message_id: result.message_id ?? result.run_id ?? '',
       to: parent.id,
     };
   }

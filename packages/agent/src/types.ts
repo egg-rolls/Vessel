@@ -894,13 +894,44 @@ export interface AgentClaimResult {
   skipped: AgentClaimSkip[];
 }
 
-/** 统一准入结果；`session_id` 是 body id */
+/**
+ * 「现在不能接，稍后由新 body / 下次启动接管」的原因（`status: 'deferred'`）。
+ *
+ * 三条路都**没有起跑**，因此也**没有 run**（见 `AdmitResult.run_id` 的注释）：
+ * - `draining`：进程正在优雅退出；消息已落 durable inbox（held pending），重启后 human 源
+ *   由 `recoverPendingInputs` 重投，agent 源保持 unread 供模型 `inbox read`；
+ * - `rotate`：body 正在换代；消息只落 inbox（**quiet**：不唤醒、不当 run input），
+ *   新 body 的 notice 只报计数，正文由模型自己读 —— 它不会自动变成一轮 run；
+ * - `stopped`：body 被不可重试的 provider 硬错误闸住，等显式人工动作（解闸后自动重投并起跑）。
+ */
+export type AdmitDeferredReason = 'draining' | 'rotate' | 'stopped';
+
+/**
+ * 统一准入结果；`session_id` 是 body id。
+ *
+ * **`run_id` 只在真的起了一轮 run 时出现**（0.57）。`status: 'deferred'` 的三条路
+ * 从来没有 run —— 以前它们 `newId()` 一个永不执行的 run id 并回 `queued`，客户端
+ * 拿这个号永远等不到任何带它的事件（气泡永远停在「已排队」）。现在改成：
+ * 不编 run id，用 `reason` + `retry_after_ms` 说清「为什么现在接不了、多久后可以再问」。
+ *
+ * `message_id` 恒有：准入的第一件事就是写下这条消息，即使它这一轮没有 run。
+ */
 export interface AdmitResult {
-  run_id: string;
+  /** 本次投递的 run id；`status: 'deferred'` 时**没有**（不编造）。 */
+  run_id?: string;
   agent_id: string;
   session_id: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'deferred';
   queue_position?: number;
+  /** 这条消息的身份（inbox 里可读、可撤回）；任何 status 都有。 */
+  message_id?: string;
+  /** 仅 `deferred`：为什么现在不能接（稳定码）。 */
+  reason?: AdmitDeferredReason;
+  /**
+   * 仅 `deferred`：建议多久之后再问一次（毫秒）。缺省 = 这不是时间问题
+   * （`stopped` 要等人工动作，自动重试没有意义）。
+   */
+  retry_after_ms?: number;
 }
 
 /** resume 结果与 admit 同形 */

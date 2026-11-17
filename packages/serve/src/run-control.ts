@@ -74,9 +74,19 @@ export interface RunStartLikeInput {
 
 /** `runs.start` 的受理结果。 */
 export interface RunStartLikeResult {
-  run_id: string;
-  status: RunControlStatus;
+  /**
+   * 本次 run 的 id。**`status: 'deferred'` 时没有**（那条路不会起 run，见
+   * `packages/agent/src/types.ts` 的 `AdmitResult`）。调用方不得把它当成恒有字段。
+   */
+  run_id?: string;
+  status: RunControlStatus | 'deferred';
   queue_position?: number;
+  /** 这条消息的身份；任何 status 都有（deferred 时也没有 run，只能靠它追踪）。 */
+  message_id?: string;
+  /** 仅 `deferred`：`draining` / `rotate` / `stopped`（稳定码）。 */
+  reason?: string;
+  /** 仅 `deferred`：建议多久之后再问一次（毫秒）；缺省 = 要等人工动作。 */
+  retry_after_ms?: number;
 }
 
 /** 注入的 per-tenant run 控制面。 */
