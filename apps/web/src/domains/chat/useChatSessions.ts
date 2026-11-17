@@ -11,15 +11,16 @@ import { t } from '../../i18n';
 import type { PaletteItem } from '../../state/palette';
 import {
   filterSessions,
+  inflightFromScheduler,
   SESSION_PAGE_SIZE,
   sessionTitle,
-  sortSessions,
   takeSessions,
 } from '../../state/sessions';
 import { resourceData } from '../../state/useResource';
 import { useShowArchived } from '../../state/useShowArchived';
 import { useAgentStore } from '../../stores/agentStore';
 import { adoptNewChatDraft } from '../../stores/composerDraftStore';
+import { nodeHealthEntry, useNodeStore } from '../../stores/nodeStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 import { errorMessage } from './errors';
@@ -38,6 +39,7 @@ import {
   writeLastSession,
 } from './session-selection';
 import { useSessionDelete } from './useSessionDelete';
+import { useStableSessionOrder } from './useStableSessionOrder';
 
 /** Roster 与 Agents 域保持一致：会话行的 agent 地址来自同一份 store。 */
 const ROSTER_POLL_MS = 20_000;
@@ -382,14 +384,34 @@ export function useChatSessions({
   }, [sessions, selectedId, deleteApi.openDelete]);
   usePaletteEntities('chat-actions', paletteActions, { clearOnUnmount: true });
 
-  const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
+  // 0.56：会话卡片的排序键（在飞优先 + 最近活动）与**落屏闸门**。
+  //
+  // 权威在飞集合只认 `health.get` 的 `runtime.scheduler.running/queued`（调度器自己的
+  // 账本）；那份数据本来就由 NodeProvider 的 health 轮询拉回来了，不新增任何请求。
+  // 落屏顺序由 `useStableSessionOrder` 把住：run 起止不重排，只在显式时机收敛。
+  const healthByNode = useNodeStore((state) => state.health);
+  const currentNode = useMemo(() => nodes.find((node) => node.current) ?? nodes[0], [nodes]);
+  const sessionInflight = useMemo(
+    () =>
+      inflightFromScheduler(
+        (currentNode === undefined ? undefined : nodeHealthEntry(healthByNode, currentNode))?.health
+          ?.runtime?.scheduler,
+      ),
+    [healthByNode, currentNode],
+  );
+  const [orderTick, setOrderTick] = useState(0);
+  const orderedSessions = useStableSessionOrder(sessions, {
+    inflight: sessionInflight,
+    // 显式时机：换连接纪元 / 换搜索 / 切「显示归档」/ 手动刷新（orderTick）。
+    resetKey: [String(epoch), debouncedQuery, String(showArchived), String(orderTick)].join('|'),
+  });
   const searchQuery = debouncedQuery.trim();
   const activeServerSearch = serverSearch?.query === searchQuery ? serverSearch : null;
   const filteredSessions = useMemo(() => {
     // 服务端命中的会话可能只在消息正文里匹配，不能再叠加本地 title/preview 过滤。
     const matched = activeServerSearch
-      ? sortedSessions.filter((session) => activeServerSearch.ids.has(session.session_id))
-      : filterSessions(sortedSessions, { query: debouncedQuery });
+      ? orderedSessions.filter((session) => activeServerSearch.ids.has(session.session_id))
+      : filterSessions(orderedSessions, { query: debouncedQuery });
     // 归属到已停用 agent 的会话默认不列（0.52 用户裁决，改掉 0.51「只标不过滤」）：
     // 它们多数是 rotate / 注销后没被 prune 的残留，混在正常会话里只会让人以为还活着。
     // 打开「显示归档」后原样列回来、且**不**加任何徽标 —— 归档态本身已经由开关表达，
@@ -401,7 +423,7 @@ export function useChatSessions({
       (session) =>
         session.agent?.state !== 'closed' && !closedAgentSessions.has(session.session_id),
     );
-  }, [activeServerSearch, sortedSessions, debouncedQuery, showArchived, closedAgentSessions]);
+  }, [activeServerSearch, orderedSessions, debouncedQuery, showArchived, closedAgentSessions]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 查询变化时回到第一页
   useEffect(() => {
@@ -432,7 +454,14 @@ export function useChatSessions({
       allowMissing: selectedId ? pendingNewSessions.current.has(selectedId) : false,
     });
   }, [client, epoch, refreshSessions, selectedId]);
-  useRefreshSignal(refreshAll);
+  // 手动刷新（命令面板「刷新当前视图」）同时是**排序的显式时机**：用户点刷新就是要
+  // 「按现在的真实状态重排一次」——这也是 run 结束后卡片不跳的收敛点。
+  useRefreshSignal(
+    useCallback(() => {
+      refreshAll();
+      setOrderTick((value) => value + 1);
+    }, [refreshAll]),
+  );
 
   const retryLoad = () => {
     void loadSessions(client, { epoch, force: true });
@@ -472,6 +501,12 @@ export function useChatSessions({
     sessionDetailLoading,
     sessionDetailError,
     sessionWindow,
+    /**
+     * 0.56：`session_id → 在飞状态`（权威：`health.get.runtime.scheduler`）。
+     * 只给卡片上的「运行中」徽标用 —— 排序已被 `useStableSessionOrder` 冻结，
+     * 徽标实时、位置不实时，正是「禁止跳动」的取舍。
+     */
+    sessionInflight,
     query,
     setQuery,
     debouncedQuery,

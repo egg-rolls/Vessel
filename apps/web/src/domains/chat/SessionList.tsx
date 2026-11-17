@@ -55,6 +55,7 @@ export function SessionList({
   selectedId,
   draftActive,
   pendingBySession,
+  inflightBySession,
   pendingAskCount,
   onOpenPending,
   agentAddresses,
@@ -88,6 +89,13 @@ export function SessionList({
   draftActive: boolean;
   /** 每个会话的待处理权限/提问数量；其他会话只显示徽标，不渲染卡片。 */
   pendingBySession?: ReadonlyMap<string, number>;
+  /**
+   * 0.56：`session_id -> 'running' | 'queued'`，**权威**在飞状态
+   * （`health.get.runtime.scheduler`，见 `state/sessions.ts#inflightFromScheduler`）。
+   * 只用它画「运行中」标记；**不**参与排序 —— 排序由 `useStableSessionOrder` 冻结，
+   * 否则 run 起止会让卡片换位（跳动）。
+   */
+  inflightBySession?: ReadonlyMap<string, 'running' | 'queued'>;
   /** 当前会话待回答的 ask 条数（会话分区「待批」按钮的计数）。 */
   pendingAskCount?: number;
   /** 打开待批汇集页（带当前会话作为默认展开项）。 */
@@ -314,6 +322,7 @@ export function SessionList({
                 const editing = editingId === session.session_id;
                 const title = sessionTitle(session);
                 const pendingCount = pendingBySession?.get(session.session_id) ?? 0;
+                const inflight = inflightBySession?.get(session.session_id);
                 const agentAddress = agentAddresses?.get(session.session_id);
                 // 四级第二行（0.52）：
                 // 1) 节点地址（只有 roster 有 `node:team`，团队成员的显示一个字都不变）；
@@ -413,6 +422,29 @@ export function SessionList({
                                   aria-label={t('chat.sessionList.named')}
                                 >
                                   ✎
+                                </span>
+                              </Tooltip>
+                            )}
+                            {inflight !== undefined && (
+                              <Tooltip
+                                label={
+                                  inflight === 'running'
+                                    ? t('chat.session.running')
+                                    : t('chat.session.queued')
+                                }
+                              >
+                                <span
+                                  className={
+                                    inflight === 'running'
+                                      ? 'session-run-badge is-running'
+                                      : 'session-run-badge is-queued'
+                                  }
+                                  role="status"
+                                >
+                                  <span className="session-run-dot" aria-hidden="true" />
+                                  {inflight === 'running'
+                                    ? t('chat.session.running')
+                                    : t('chat.session.queued')}
                                 </span>
                               </Tooltip>
                             )}

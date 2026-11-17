@@ -215,6 +215,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.draft.pickSession': 'Pick a session on the left, or start a new one',
   'pending.queue.permission': 'Permission · {tool}',
   'pending.queue.ask': 'Question · Q{index}',
+  'chat.session.running': 'Running',
+  'chat.session.queued': 'Queued',
   'chat.session.pending': '{count} pending request(s)',
   'chat.session.copyId': 'Copy session ID',
   'chat.session.copiedId': 'Session ID copied',
