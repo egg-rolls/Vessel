@@ -106,6 +106,7 @@ import {
   interruptBuildOfStoppedHost,
   interruptWebBuild,
   readLatestWebBuildRecord,
+  recheckWebDist,
   webDistBuildState,
   webDistProbe,
   webDistStaleLine,
@@ -1245,6 +1246,18 @@ function printWatchdogEvent(
       );
       return;
   }
+}
+
+/**
+ * 运行中自查间隔（`VESSEL_WEB_AUTOBUILD_CHECK_MS`）。
+ *
+ * 只在显式配置时才返回数字：缺省 60s 与 5s 下限留在平台侧一处，别在这里复制第二份。
+ */
+function webBuildCheckIntervalMs(): number | undefined {
+  const raw = (process.env.VESSEL_WEB_AUTOBUILD_CHECK_MS ?? '').trim();
+  if (raw === '') return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 /**
@@ -2754,6 +2767,8 @@ export async function runPlatformGatewayForeground(
     }
 
     try {
+      // 0.61：自查间隔只在显式配置时透传 —— 缺省值（60s）与下限（5s）留在平台一处。
+      const webBuildCheckMs = webBuildCheckIntervalMs();
       platformGateway = startPlatformGateway({
         port: platformPort,
         hostname: platformHostname,
@@ -2776,6 +2791,10 @@ export async function runPlatformGatewayForeground(
         // 0.60：构建状态（在不在建 / 上次成没成 / 日志在哪）的唯一注入点 —— 平台不再
         // 自己拿一个布尔去拼「正在构建」，`/build.json` 与日志共用这一份快照。
         webBuild: webDistBuildState,
+        // 0.61：运行中自查（定时 60s + `/build.json` 探针）。判据/限频/互斥都在
+        // `recheckWebDist` 里，和启动时那次构建是同一套；这里只把「何时叫」交出去。
+        webBuildCheck: (trigger) => recheckWebDist(trigger),
+        ...(webBuildCheckMs !== undefined ? { webBuildCheckMs } : {}),
         nodes: nodes.map((node) => ({
           nodeId: node.entry.node_id,
           name: node.entry.name,

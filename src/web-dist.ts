@@ -168,13 +168,32 @@ function canAutoBuild(): boolean {
 }
 
 /**
+ * 自动构建的三档语义（**只有这一处解析**，判据与日志都从这里取）：
+
+ * - `off`：`VESSEL_NO_WEB_AUTOBUILD=1` —— 完全不自建（启动也不建）；
+ * - `startup`：`VESSEL_WEB_AUTOBUILD=startup` —— **只在启动时**建一次；运行中不再自查
+ *   （给「构建很贵 / 机器很慢」的部署留一条退路，语义与 0.61 之前一致）；
+ * - `always`（缺省）—— 启动时建 + 运行中定时自查。
+ *
+ * 「关掉」只有 `VESSEL_NO_WEB_AUTOBUILD=1` 一种写法：多写几种别名，两处代码就会
+ * 各自认一半，最后没人知道现在是哪档。
+ */
+export type WebAutoBuildMode = 'off' | 'startup' | 'always';
+
+export function webAutoBuildMode(): WebAutoBuildMode {
+  if ((process.env.VESSEL_NO_WEB_AUTOBUILD ?? '').trim() === '1') return 'off';
+  if ((process.env.VESSEL_WEB_AUTOBUILD ?? '').trim().toLowerCase() === 'startup') return 'startup';
+  return 'always';
+}
+
+/**
  * 「自修复」会不会接管这个静态目录（同步；提示函数用它决定要不要说话）。
  *
  * 三条同时成立才算接管：没被 `VESSEL_NO_WEB_AUTOBUILD=1` 关掉、用的是仓库内
  * 默认目录（`VESSEL_STATIC_DIR` 指向的产物不归我们管）、源码工程自带 node_modules。
  */
 export function autoBuildManaged(options: { staticDir?: string } = {}): boolean {
-  if ((process.env.VESSEL_NO_WEB_AUTOBUILD ?? '').trim() === '1') return false;
+  if (webAutoBuildMode() === 'off') return false;
   const explicitDir = options.staticDir ?? process.env.VESSEL_STATIC_DIR;
   if (explicitDir !== undefined && explicitDir.trim() !== '') return false;
   return canAutoBuild();
@@ -281,6 +300,15 @@ export interface WebBuildInterruption {
 /** 构建阶段。`idle` = 本进程还没建过（也可能根本不需要建）。 */
 export type WebBuildPhase = 'idle' | 'running' | 'done' | 'failed' | 'interrupted';
 
+/**
+ * 这次构建是被谁触发的（`web.build.start check=` 的值）。
+ *
+ * 为什么要区分：0.61 起有三条入口（启动、没人开浏览器时的定时自查、`/build.json`
+ * 探针），出问题时「谁把它叫起来的」是第一个要回答的问题，而这三条**共用同一套**
+ * 判据与同一个 `inFlightBuild`，不区分就查不出是哪条在反复触发。
+ */
+export type WebBuildTrigger = 'startup' | 'probe' | 'timer';
+
 /** 上一次构建的终态（`/build.json`、`gateway status` 都读它）。 */
 export interface WebBuildLast {
   phase: 'done' | 'failed' | 'interrupted';
@@ -301,6 +329,8 @@ export interface WebBuildState {
   startedAt?: number;
   /** 为什么建：产物缺失 / 落后于源码 */
   reason?: 'missing' | 'stale';
+  /** 谁叫起来的：启动 / 探针 / 定时自查（`web.build.start check=`） */
+  trigger?: WebBuildTrigger;
   pid?: number;
   logPath?: string;
   last?: WebBuildLast;
@@ -313,6 +343,8 @@ let inFlightBuild: Promise<void> | undefined;
 let activeChild: ChildProcess | undefined;
 /** 本次构建的临时目录（中断时要同步落终态，得知道写哪）。 */
 let activeBuildDir: string | undefined;
+/** 上一次「探测/定时自查」触发构建的时刻（60s 限频用）。 */
+let lastRecheckTriggerAt = 0;
 
 /**
  * 构建状态快照（**唯一**读取口）。
@@ -784,7 +816,11 @@ export async function interruptBuildOfStoppedHost(
  * 建、建成没成」，失败时才把最后 ≤15 行内联出来 —— 用户说的是「一眼看出为什么
  * 失败」，不是「去翻文件」。
  */
-async function runBuild(options: EnsureWebDistOptions, status: WebDistStatus): Promise<void> {
+async function runBuild(
+  options: EnsureWebDistOptions,
+  status: WebDistStatus,
+  trigger: WebBuildTrigger,
+): Promise<void> {
   const reason: 'missing' | 'stale' = status.exists ? 'stale' : 'missing';
   const startedAt = Date.now();
   const { dir, logPath } = await prepareBuildDir(startedAt);
@@ -795,6 +831,7 @@ async function runBuild(options: EnsureWebDistOptions, status: WebDistStatus): P
   buildState.phase = 'running';
   buildState.startedAt = startedAt;
   buildState.reason = reason;
+  buildState.trigger = trigger;
   buildState.logPath = logPath;
 
   let child: ChildProcess;
@@ -833,6 +870,7 @@ async function runBuild(options: EnsureWebDistOptions, status: WebDistStatus): P
   logEvent('warn', 'web.build.start', {
     reason,
     target: BUILD_TARGET,
+    check: trigger,
     ...(child.pid !== undefined ? { pid: child.pid } : {}),
     log: logPath,
   });
@@ -972,9 +1010,13 @@ async function runBuild(options: EnsureWebDistOptions, status: WebDistStatus): P
 }
 
 /** 起一次 `bun run build`（或复用在飞的那次）。 */
-function startBuild(options: EnsureWebDistOptions, status: WebDistStatus): Promise<void> {
+function startBuild(
+  options: EnsureWebDistOptions,
+  status: WebDistStatus,
+  trigger: WebBuildTrigger,
+): Promise<void> {
   if (inFlightBuild !== undefined) return inFlightBuild;
-  const task = runBuild(options, status)
+  const task = runBuild(options, status, trigger)
     .catch(() => undefined)
     .finally(() => {
       inFlightBuild = undefined;
@@ -1003,7 +1045,7 @@ function startBuild(options: EnsureWebDistOptions, status: WebDistStatus): Promi
  */
 export async function ensureWebDist(options: EnsureWebDistOptions = {}): Promise<WebDistStatus> {
   const status = await inspectWebDist(options);
-  const enabled = options.autoBuild ?? (process.env.VESSEL_NO_WEB_AUTOBUILD ?? '').trim() !== '1';
+  const enabled = options.autoBuild ?? webAutoBuildMode() !== 'off';
   if (!enabled) return status;
   if (status.exists && !status.stale) return status;
   // 只构建仓库内的默认产物；显式 staticDir / VESSEL_STATIC_DIR 指向的目录不归我们管。
@@ -1017,7 +1059,7 @@ export async function ensureWebDist(options: EnsureWebDistOptions = {}): Promise
     logEvent('warn', 'web.build.stale_artifact', { cleaned, dir: buildLogRoot() });
   }
 
-  const task = startBuild(options, status);
+  const task = startBuild(options, status, 'startup');
   if (options.waitWhenMissing === true && !status.exists) {
     await task;
     // 建完复核真实结果：成功 → `exists: true`；失败 → 仍是「缺失」，交给调用方
@@ -1025,4 +1067,39 @@ export async function ensureWebDist(options: EnsureWebDistOptions = {}): Promise
     return inspectWebDist(options);
   }
   return status;
+}
+
+/** 「探测 / 定时自查」两轮之间至少隔这么久（60s 限频，留 5s 抖动余量）。 */
+const RECHECK_MIN_INTERVAL_MS = 55_000;
+
+/**
+ * 运行中的**自查一轮**：没人开浏览器时，靠它把「源码改了但产物是旧的」自愈掉
+ * （0.61）。启动时的 `ensureWebDist` 只跑一次，撑不住「gateway 一直开着」的场景。
+ *
+ * 复用而不是另起一套：判据仍是 `inspectWebDist`、互斥仍是 `inFlightBuild`、
+ * 构建入口仍是 `startBuild`。这里只多两件事 —— **限频**（60s 内不重复触发）和
+ * **来源标记**（`web.build.start check=probe|timer`）。
+ *
+ * 自查本身**一行日志都不打**：60s 一次打一行会把日志刷满，而「没变化」本来就不是
+ * 事实。只有真的因此起了构建，才由 `web.build.start` 说话。
+ *
+ * 三档开关语义（见 `webAutoBuildMode`）：`off` / `startup` 都**不**自查 —— 只有
+ * `always`（缺省）才在运行中继续自愈。
+ */
+export async function recheckWebDist(trigger: 'probe' | 'timer'): Promise<void> {
+  if (webAutoBuildMode() !== 'always') return;
+  const explicitDir = process.env.VESSEL_STATIC_DIR;
+  if (explicitDir !== undefined && explicitDir.trim() !== '') return;
+  if (!canAutoBuild()) return;
+  // 正在建就别排队：这轮本来也只是「确认一下还旧不旧」。
+  if (inFlightBuild !== undefined) return;
+  const now = Date.now();
+  if (now - lastRecheckTriggerAt < RECHECK_MIN_INTERVAL_MS) return;
+
+  const status = await inspectWebDist({});
+  if (!status.exists || !status.stale) return;
+  // 复核期间可能刚起了一次构建（探针与定时器同时到）：再确认一次，别并发。
+  if (inFlightBuild !== undefined) return;
+  lastRecheckTriggerAt = now;
+  startBuild({}, status, trigger);
 }
