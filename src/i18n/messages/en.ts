@@ -110,6 +110,9 @@ export const en: Record<MessageKey, string> = {
     'query an allowlisted peer team directory (requires allowDirectory)',
   'help.cmd.help': 'show this help',
   'help.cmd.helpCommand': 'show one command in place (same as `vessel <command> -h`)',
+  'help.cmd.globalDataDir': 'data directory only (isolated instance); CLI > env > config',
+  'help.cmd.globalUserConfig':
+    'user config only (must exist); the project config and its precedence stay untouched',
   'help.cmd.agentCreate': 'create a member (name / model / visibility / system prompt / workspace)',
   'help.cmd.agentSend': 'deliver one message to a member; --interrupt preempts the active run',
   'help.cmd.agentInbox': 'show a member inbox (unread / pending counts and messages)',
@@ -304,7 +307,7 @@ export const en: Record<MessageKey, string> = {
   'gateway.started': 'Gateway started (pid {pid}): {url}',
   'gateway.logPath': 'Log: {path}',
   'gateway.webDistMissing':
-    'Web console assets are missing at {path}; build with `cd apps/web && npm run build`, or point VESSEL_STATIC_DIR at existing assets.',
+    'Web console assets are missing at {path}. Build them once (a fresh clone has none): `bun run build:web` (= `cd apps/web && bun run build`), or point VESSEL_STATIC_DIR at an existing build, then start again.',
   'gateway.webDistStale':
     'Web console assets may be stale: {index} is older than {source}; build with `cd apps/web && npm run build`.',
   'gateway.webDistBuilding':

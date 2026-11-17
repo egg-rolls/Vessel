@@ -460,6 +460,14 @@ export interface CliArgs {
   logsCommand: LogsCommandArgs | null;
   /** 0.15：全局 `--data-dir <path>`；null = 未指定 */
   dataDirArg: string | null;
+  /**
+   * 0.56.1：全局 `--user-config <path>`；null = 未指定（用 `~/.vessel/config.yaml`）。
+   *
+   * **只替换用户层**：项目 config / env / CLI 参数的原有优先级不变。
+   * 参数会被落到 `VESSEL_USER_CONFIG`，因此 daemon / node / hub 子进程一致生效；
+   * 显式给出但文件不存在 → 加载时报错（不静默回落，避免「以为在验空配置」）。
+   */
+  userConfigArg: string | null;
   /** 0.12：`vessel gateway ...` */
   gateway: GatewayCommand | null;
   /** 0.49 G3：`vessel gateway nodes ...`（registry 管理；与一次性 gateway 命令互斥） */
@@ -507,6 +515,43 @@ function parsePort(raw: string): number | null {
 }
 
 /**
+ * 把全局 `--user-config <path>` 从 argv 里摘出来（0.56.1）。
+ *
+ * 为什么先摘：它是**跨命令**的（gateway / node / doctor / token / config / status…），
+ * 放在每个子命令解析器里重复一遍既容易漏、又会和 `--data-dir` 的「按子命令语义」
+ * 混在一起。摘出来之后，参数由 `cli.ts` 落到 `VESSEL_USER_CONFIG`，spawn 出的
+ * daemon / node / hub 也一致携带。
+ *
+ * 只认 `--user-config <path>` 与 `--user-config=<path>` 两种写法；缺值 → 报错。
+ */
+function extractUserConfigFlag(
+  argv: readonly string[],
+): { ok: true; argv: string[]; value: string | null } | { ok: false; error: string } {
+  const rest: string[] = [];
+  let value: string | null = null;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i] ?? '';
+    if (a === '--user-config') {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith('-') || next.trim() === '') {
+        return { ok: false, error: 'Missing value for --user-config' };
+      }
+      value = next;
+      i++;
+      continue;
+    }
+    if (a.startsWith('--user-config=')) {
+      const inline = a.slice('--user-config='.length).trim();
+      if (inline === '') return { ok: false, error: 'Missing value for --user-config' };
+      value = inline;
+      continue;
+    }
+    rest.push(a);
+  }
+  return { ok: true, argv: rest, value };
+}
+
+/**
  * 解析 argv（不含 node/bun 与脚本路径）。
  * 未知参数一律报错，不静默忽略。
  */
@@ -543,6 +588,7 @@ export function parseArgs(argv: string[]): ParseResult {
     doctorCommand: null,
     logsCommand: null,
     dataDirArg: null,
+    userConfigArg: null,
     gateway: null,
     gatewayNodes: null,
     node: null,
@@ -557,6 +603,14 @@ export function parseArgs(argv: string[]): ParseResult {
     devCommand: null,
     prune: null,
   };
+
+  // `--user-config <path>` 是**全局**参数：先整体摘出来（不参与子命令解析），
+  // 这样 gateway/node/doctor/token/config/... 全部一致支持，也不会和任何子命令
+  // 自己的同名旗标打架。它只替换**用户层**路径（见 loadConfig）。
+  const userConfigScan = extractUserConfigFlag(argv);
+  if (!userConfigScan.ok) return userConfigScan;
+  argv = userConfigScan.argv;
+  args.userConfigArg = userConfigScan.value;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';

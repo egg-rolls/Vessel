@@ -102,6 +102,8 @@ export const zhCN = {
   'help.cmd.federationTeamInfo': '查询已 allowlist 的对端 Team 目录（需对端开启 allowDirectory）',
   'help.cmd.help': '显示本帮助',
   'help.cmd.helpCommand': '按位置查看某个命令的用法（等价 `vessel <command> -h`）',
+  'help.cmd.globalDataDir': '只换数据目录（隔离实例）；优先级 CLI > env > config',
+  'help.cmd.globalUserConfig': '只换用户配置（必须存在）；项目配置与其余优先级不变',
   'help.cmd.agentCreate': '创建成员（名字/模型/可见性/系统提示词/工作目录）',
   'help.cmd.agentSend': '给成员投递一条消息；--interrupt 打断当前 run 并优先处理',
   'help.cmd.agentInbox': '查看成员 inbox（未读/待处理计数与消息）',
@@ -291,7 +293,7 @@ export const zhCN = {
   'gateway.started': 'Gateway 已启动（pid {pid}）：{url}',
   'gateway.logPath': '日志：{path}',
   'gateway.webDistMissing':
-    'Web 控制台静态资源缺失：{path}。构建：`cd apps/web && npm run build`；或把 VESSEL_STATIC_DIR 指向已有产物。',
+    'Web 控制台静态资源缺失：{path}。新克隆的仓库必须先构建一次：`bun run build:web`（= `cd apps/web && bun run build`）；或把 VESSEL_STATIC_DIR 指向已有产物，然后重新 start。',
   'gateway.webDistStale':
     'Web 控制台产物可能已过期：{index} 旧于 {source}。构建：`cd apps/web && npm run build`。',
   'gateway.webDistBuilding': 'Web 控制台产物缺失或已过期，正在后台构建（{path}）……',
