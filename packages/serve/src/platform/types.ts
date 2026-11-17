@@ -114,6 +114,16 @@ export interface PlatformGatewayOptions {
    * 提示才有得响。省略 = 只发静态字段（老行为 + `no-store`）。
    */
   webDist?: WebDistProbe;
+  /**
+   * 0.58：后台重建**此刻**是否在进行（`/build.json` 的 `building` 字段）。
+   *
+   * 为什么单独一个同步回调，而不是塞进 `webDist` 的返回值：现场判断带 5 秒缓存
+   * （源码树遍历很贵），而「构建结束」必须**立刻**反映出去 —— 否则提示条会在构建
+   * 已经结束之后还继续说「正在构建」。这个回调只读一个内存状态，零成本。
+   *
+   * 省略 = 永远认为没有构建在进行（`building: false`），老行为。
+   */
+  webBuildInFlight?: () => boolean;
   /** registry 中全部本地 node（`auto_start:false` 也注入，只做健康展示）。 */
   nodes: PlatformNodeDescriptor[];
   /**

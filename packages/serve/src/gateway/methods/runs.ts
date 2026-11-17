@@ -18,6 +18,7 @@ import {
   isResumableStatus,
   previewOf,
 } from '../../durable.js';
+import { logEvent } from '../../log-event.js';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import type { LiveRunSnapshotLike, RunControlLike } from '../../run-control.js';
 import { mapTenantError } from '../../tenant.js';
@@ -375,7 +376,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
       await save.call(store, record);
     } catch (error) {
       // RunRecord 写入是 best-effort：取消已经生效，不得因此回 500。
-      console.warn('[vessel] runs.cancel: RunRecord save failed', {
+      logEvent('warn', 'runs.cancel.save_failed', {
         run_id: run.run_id,
         message: error instanceof Error ? error.message : String(error),
       });

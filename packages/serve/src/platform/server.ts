@@ -19,6 +19,7 @@ import {
   resolveRequestEdge,
 } from '../gateway/auth.js';
 import { serveStatic } from '../gateway/static.js';
+import { formatEventFields } from '../log-event.js';
 import { platformTokenMatches, platformUnauthorizedMessage, resolvePlatformAuth } from './auth.js';
 import { platformListenGuard } from './listen-guard.js';
 import { PlatformProxy } from './proxy.js';
@@ -138,11 +139,14 @@ function createWebDistProbeCache(): (
 
 /**
  * `/build.json` 的响应体：磁盘上的构建戳**原样保留**，再叠加服务端现场判断的
- * `stale` / `newestSource`。
+ * `stale` / `newestSource` / `building`。
  *
  * 为什么必须现场算：产物过期（dist 比源码旧）时，浏览器里那份 bundle 与磁盘上的
  * `build.json` 来自**同一次构建**，前端比对 `builtAt` 永远一致 —— 只有服务端把
  * 「我知道 dist 落后于源码」说出来，顶部提示才可能响。
+ *
+ * `building`（0.58）：后台重建**此刻**是否在跑。少了这一项，提示条会在构建进行中
+ * 让用户「刷新以加载新版本」—— 而刷新那一刻磁盘上还是旧产物，是句废话。
  *
  * 返回 null = 没有可用的构建戳（文件缺失 / 读坏 / JSON 非对象）：HTTP 端点交给静态
  * 兜底，保住旧行为；任何读盘失败都**不 500**（页面不能被一个诊断文件打挂）。
@@ -151,6 +155,7 @@ async function buildJsonPayload(
   staticDir: string,
   probe: WebDistProbe | undefined,
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>,
+  buildInFlight: (() => boolean) | undefined,
 ): Promise<Record<string, unknown> | null> {
   let base: Record<string, unknown>;
   try {
@@ -162,8 +167,11 @@ async function buildJsonPayload(
   } catch {
     return null;
   }
+  // 构建状态**不走缓存**：缓存里那份可能是构建开始前的快照，会让提示条在构建结束
+  // 之后继续说「正在构建」。
+  const building = buildInFlight?.() === true;
   const live = probe === undefined ? undefined : await probeCached(probe);
-  const body: Record<string, unknown> = { ...base };
+  const body: Record<string, unknown> = { ...base, building };
   if (live !== undefined) {
     body.stale = live.stale;
     if (live.newestSource !== undefined) {
@@ -182,8 +190,9 @@ async function buildJsonResponse(
   method: string,
   probe: WebDistProbe | undefined,
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>,
+  buildInFlight: (() => boolean) | undefined,
 ): Promise<Response | null> {
-  const body = await buildJsonPayload(staticDir, probe, probeCached);
+  const body = await buildJsonPayload(staticDir, probe, probeCached, buildInFlight);
   if (body === null) return null;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json;charset=utf-8',
@@ -219,6 +228,8 @@ function createBuildEventStream(options: {
   staticDir: string;
   probe: WebDistProbe | undefined;
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>;
+  /** 后台重建是否在进行（见 `PlatformGatewayOptions.webBuildInFlight`）。 */
+  buildInFlight: (() => boolean) | undefined;
 }): BuildEventStream {
   const encoder = new TextEncoder();
   const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
@@ -239,7 +250,12 @@ function createBuildEventStream(options: {
   };
 
   const bodyNow = async (): Promise<string | undefined> => {
-    const payload = await buildJsonPayload(options.staticDir, options.probe, options.probeCached);
+    const payload = await buildJsonPayload(
+      options.staticDir,
+      options.probe,
+      options.probeCached,
+      options.buildInFlight,
+    );
     return payload === null ? undefined : JSON.stringify(payload);
   };
 
@@ -458,11 +474,14 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
 
   // 0.57：`/build.json` 的现场判断缓存（每个 server 一份，判定函数由组合根注入）。
   const probeWebDist = createWebDistProbeCache();
+  // 0.58：`building` 的来源。**不进上面那份缓存**：构建一结束就必须说「结束了」。
+  const buildInFlight = opts.webBuildInFlight;
   // 0.57：产物变更推送（SSE）。`/build.json` 仍是唯一事实源，这里只是加速通道。
   const buildEvents = createBuildEventStream({
     staticDir,
     probe: opts.webDist,
     probeCached: probeWebDist,
+    buildInFlight,
   });
 
   /**
@@ -486,8 +505,8 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
     },
     ...(opts.proxy?.limits !== undefined ? { limits: opts.proxy.limits } : {}),
     log: (fields) => {
-      // 与 node 侧 `gateway.ws.closed` 同通道（结构化一行，便于 grep/聚合）。
-      console.warn('[vessel]', fields);
+      // 与 node 侧 `gateway.ws.closed` 同通道（单行 key=value，便于 grep/聚合）。
+      console.warn(formatEventFields(fields));
     },
   });
 
@@ -663,6 +682,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
           req.method,
           opts.webDist,
           probeWebDist,
+          buildInFlight,
         );
         if (buildResponse !== null) {
           for (const [key, value] of Object.entries(extra)) {

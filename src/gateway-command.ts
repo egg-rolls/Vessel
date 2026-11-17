@@ -97,7 +97,13 @@ import { effectiveNodeToken, effectivePlatformToken } from './token-derive';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
-import { inspectWebDist, webDistProbe, webDistStaleLine, webDistWarning } from './web-dist';
+import {
+  inspectWebDist,
+  webDistBuildInFlight,
+  webDistProbe,
+  webDistStaleLine,
+  webDistWarning,
+} from './web-dist';
 
 /** 依赖注入（CLI 只用默认值；测试注入平台/路径/命令执行） */
 export interface GatewayCommandDeps {
@@ -2653,6 +2659,9 @@ export async function runPlatformGatewayForeground(
         // 0.57：`/build.json` 的实时字段 —— 判据复用 `web-dist.ts`，平台不自己比 mtime。
         // 这是「产物过期但没人重建」时唯一能被浏览器看见的证据。
         webDist: webDistProbe(options.staticDir),
+        // 0.58：`/build.json` 的 `building` —— 后台重建在跑时前端提示「正在构建」，
+        // 不给「刷新」按钮（刷新那一刻磁盘上还是旧产物）。
+        webBuildInFlight: webDistBuildInFlight,
         nodes: nodes.map((node) => ({
           nodeId: node.entry.node_id,
           name: node.entry.name,
