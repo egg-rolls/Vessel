@@ -40,10 +40,10 @@ import {
   readKnownNodeId,
 } from './token-derive';
 import { resolveGatewayToken } from './transport-factory';
-// 0.56.1：Web 控制台产物缺失要在 doctor 就能看见（`gateway start` 的硬前置）。
-import { DEFAULT_WEB_DIST_DIR } from './web-dist';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
+// 0.56.1：Web 控制台产物缺失要在 doctor 就能看见（`gateway start` 的硬前置）。
+import { DEFAULT_WEB_DIST_DIR } from './web-dist';
 
 export interface DoctorCommandResult {
   exitCode: number;

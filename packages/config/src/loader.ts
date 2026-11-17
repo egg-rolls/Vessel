@@ -12,9 +12,9 @@
  * 单公司常量（C0），不再是用户可配置维度。
  */
 
+import { stat } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { stat } from 'node:fs/promises';
 import { parse as parseYaml } from 'yaml';
 import { DEFAULT_CONFIG, DEFAULT_TENANT_ID, defaultModelForProvider } from './defaults.js';
 import { resolveEnvRefsInLayer } from './secrets.js';
