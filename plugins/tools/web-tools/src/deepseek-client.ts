@@ -55,6 +55,15 @@ export interface DeepSeekCallOptions {
    * **重试/退避/错误映射/擦除仍然只有这一份实现**，不因为头不同而分叉。
    */
   authHeaders?: (key: string) => Record<string, string>;
+  /**
+   * 查询串鉴权（`auth.style: query`）：key 作为 URL 参数。
+   * 只给声明式自定义后端用；同样是共用这一份重试/映射实现。
+   */
+  authQuery?: (key: string) => Record<string, string>;
+  method?: 'POST' | 'GET';
+  query?: Record<string, string>;
+  /** 额外请求头（声明式后端的 `request.headers`；`authorization` 等鉴权头不许从这里覆盖） */
+  headers?: Record<string, string>;
   body: unknown;
   signal?: AbortSignal;
   deps?: DeepSeekDeps;
@@ -91,6 +100,14 @@ export function parseRetryAfterMs(raw: string | null, now: number): number | und
 
 function endpointFor(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/+$/, '')}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+/** 追加查询参数（值一律 `encodeURIComponent`；只给声明式后端的 query / query 鉴权用） */
+function appendQuery(endpoint: string, params: Record<string, string>): string {
+  const search = new URLSearchParams(params).toString();
+  if (search === '') return endpoint;
+  const separator = endpoint.includes('?') ? '&' : '?';
+  return `${endpoint}${separator}${search}`;
 }
 
 /** 上游错误体里的原因（JSON 或纯文本），只用于拼 message，且必先擦除 */
@@ -294,6 +311,13 @@ export async function callDeepSeekTool(options: DeepSeekCallOptions): Promise<De
   // 缺省是 Bearer：只因为 deepseek 是第一个后端，不代表其他家的鉴权风格
   const authHeaders =
     options.authHeaders ?? ((value: string) => ({ authorization: `Bearer ${value}` }));
+  const method = options.method ?? 'POST';
+  const queryParams: Record<string, string> = {
+    ...(options.query ?? {}),
+    ...(options.authQuery?.(key.value) ?? {}),
+  };
+  const target =
+    Object.keys(queryParams).length === 0 ? endpoint : appendQuery(endpoint, queryParams);
   const startedAt = now();
   const controller = new AbortController();
   let timedOut = false;
@@ -314,16 +338,17 @@ export async function callDeepSeekTool(options: DeepSeekCallOptions): Promise<De
       let mapping: StatusMapping | NetworkMapping;
       let retryAfterMs: number | undefined;
       try {
-        const response = await doFetch(endpoint, {
-          method: 'POST',
+        const response = await doFetch(target, {
+          method,
           redirect: 'manual',
           headers: {
             ...authHeaders(key.value),
-            'content-type': 'application/json',
+            ...(options.headers ?? {}),
+            ...(method === 'GET' ? {} : { 'content-type': 'application/json' }),
             accept: 'application/json',
             'user-agent': config.userAgent,
           },
-          body: JSON.stringify(options.body),
+          ...(method === 'GET' ? {} : { body: JSON.stringify(options.body) }),
           signal: controller.signal,
         });
         // body 读完之前不许清 timer：header 到了、body 挂住是最常见的「超时没生效」

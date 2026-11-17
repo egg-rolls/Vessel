@@ -34,6 +34,8 @@ export type WebToolExtraErrorCode =
   | 'provider_bad_request'
   | 'provider_rate_limited'
   | 'provider_unavailable'
+  /** 声明式自定义后端：响应形状与配置的 `response.results_path` / `field_map` 对不上 */
+  | 'provider_schema_mismatch'
   | 'endpoint_not_found'
   | 'max_uses_exceeded'
   | 'circuit_open';

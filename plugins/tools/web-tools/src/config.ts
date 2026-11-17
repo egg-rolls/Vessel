@@ -9,6 +9,7 @@
  * - 枚举/环境变量名/base_url：写错就抛（静默回落会让用户以为切了后端其实没切，R10）。
  */
 
+import { type CustomSearchSpec, parseCustomSearchSpec } from './search/custom';
 import type { FetchBackendId } from './types';
 
 export type WebFetchRenderer = 'none' | 'browser' | 'jina';
@@ -67,6 +68,11 @@ export interface WebToolsConfig extends WebFetchConfig {
    * 放进 `packages/config` 会让「配置包」知道某个插件的行为细节。
    */
   alwaysRegister: boolean;
+  /**
+   * 声明式自定义搜索后端（数组）。每项注册成 `custom:<id>`，
+   * 用 `search_provider: custom:<id>` 选中；不写就是空数组。
+   */
+  customSearch: CustomSearchSpec[];
   /** DeepSeek tools API 的 base_url（不含末尾斜杠） */
   baseUrl: string;
   /** **只存环境变量名**，绝不存值（设计 §6.1） */
@@ -268,8 +274,11 @@ function readBackend(raw: unknown): FetchBackendId {
   throw new Error(`web-tools: backend 只支持 local | deepseek，收到 ${String(raw)}`);
 }
 
-/** 搜索后端 id 的形态（`auto` 或注册表里的 id）；存在性在调用时判 */
-const SEARCH_PROVIDER_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+/**
+ * 搜索后端 id 的形态：内置后端（`tavily`）或声明式后端（`custom:<id>`）。
+ * 存在性在调用时判（注册表在插件内，让 config.ts 依赖注册表会形成环）。
+ */
+const SEARCH_PROVIDER_PATTERN = /^[a-z][a-z0-9_-]{0,31}(:[a-z0-9][a-z0-9_-]{0,31})?$/;
 
 function readSearchProvider(raw: unknown): string {
   if (raw === undefined || raw === null) return 'auto';
@@ -295,6 +304,18 @@ function readBaseUrl(raw: unknown): string {
     throw new Error(`web-tools: base_url 只允许 http/https，收到 ${parsed.protocol}`);
   }
   return value;
+}
+
+/**
+ * 声明式自定义后端：整段配置交给 `parseCustomSearchSpec` 校验。
+ *
+ * **配置错在这里抛**（非法 url / 非法占位符 / `field_map` 写了无处安放的字段 /
+ * `limits.requires` 声明了却没写占位符）——不留到运行期才炸。
+ */
+function readCustomSearch(raw: unknown): CustomSearchSpec[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new Error('web-tools: custom_search 必须是数组');
+  return raw.map((item, index) => parseCustomSearchSpec(item, `custom_search[${index}]`));
 }
 
 /** 注意：`max_bytes` 的默认值是 5 MiB（本单口径）；研究稿 §5.5 表里写的是 2 MiB，这里按本单执行。 */
@@ -332,6 +353,7 @@ export function parseWebToolsConfig(raw: unknown): WebToolsConfig {
     backend,
     searchProvider: readSearchProvider(cfg.search_provider),
     alwaysRegister: readBool(cfg.always_register, false),
+    customSearch: readCustomSearch(cfg.custom_search),
     baseUrl: readBaseUrl(cfg.base_url),
     keyEnv: readEnvName(cfg.key_env, DEFAULT_KEY_ENV, 'key_env'),
     searchKeyEnv: readEnvName(cfg.search_key_env, '', 'search_key_env'),

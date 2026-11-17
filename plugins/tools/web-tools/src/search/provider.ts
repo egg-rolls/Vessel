@@ -41,7 +41,14 @@ export type RawSearchEntry = Record<string, unknown>;
 
 export interface ProviderHttpRequest {
   path: string;
-  body: unknown;
+  /** 请求体（GET 或缺省时可省） */
+  body?: unknown;
+  /** 请求方法（缺省 POST）；自定义后端可能是 GET */
+  method?: 'POST' | 'GET';
+  /** 追加到 URL 的查询参数（`query_in: query` 的后端与 query 风格的 key 用它） */
+  query?: Record<string, string>;
+  /** 额外的请求头（声明式后端的 `request.headers`） */
+  headers?: Record<string, string>;
   /** 400 时给模型看的补充提示（各家错法不同） */
   hint?: string;
 }
@@ -136,6 +143,14 @@ export function registerSearchProvider(provider: SearchProvider): void {
 
 export function getSearchProvider(id: string): SearchProvider | undefined {
   return providers.get(id);
+}
+
+/**
+ * 注销（**只给配置驱动的自定义后端用**：改了 `custom_search` 之后旧的那家要退场，
+ * 否则「上一份配置注册的后端」会在 `auto` 里继续参与选择）。
+ */
+export function unregisterSearchProvider(id: string): void {
+  providers.delete(id);
 }
 
 /** 在册 id（**字典序**，只用于报错/展示；选择优先序见 `listSearchProviderEntries`） */
