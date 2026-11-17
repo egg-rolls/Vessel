@@ -10,6 +10,7 @@
 import type { EventStream, RunEvent, SessionEventReadPort } from './event.js';
 import type { LeaseKind } from './lease.js';
 import type { Logger } from './logging.js';
+import type { ProjectionCachePort } from './projection-cache.js';
 import type { RunRecord, RunRecordStore } from './run-record-store.js';
 import type { ResumeMarkerRegistry, SessionState, SessionStore } from './session.js';
 
@@ -58,6 +59,14 @@ export interface RunJournal {
 export interface RunJournalFactory {
   begin(identity: RunJournalIdentity): RunJournal;
   transient(identity: RunJournalTransientIdentity): RunJournal;
+  /**
+   * 0.56 send-first：投影续算快照端口（缺省 = 不持久化）。
+   *
+   * 由装配层在构造工厂时注入，`ExecutionUnit` 只读它。**不是** RunJournal 的方法：
+   * 快照不属于「一次 run」的写集合（它是读侧的恢复缓存），挂在这里只是因为它同样是
+   * 「写能力」，而工厂是 EU 唯一拿得到的写能力入口。
+   */
+  readonly projectionCache?: ProjectionCachePort;
 }
 
 /**
@@ -133,4 +142,16 @@ export interface RunJournalFactoryOptions {
    * （实现侧自吞，见 {@link TimelineDualWritePort}）。
    */
   timelineDualWrite?: TimelineDualWritePort;
+  /**
+   * 0.56 send-first：投影续算快照的读写端口。
+   *
+   * 缺省 = 不持久化（行为与 0.55 完全一致：进程一重启就整份读）。装上之后
+   * `ExecutionUnit.restoreProjection` 会「内存游标 → 落盘快照 → 整份读」三级回退，
+   * 于是**重启后的第一条消息**不再付那次整份读。
+   *
+   * 为什么挂在 journal 工厂上而不是 EU 的 options：它是**写**能力（落盘），而 EU 的
+   * 读路径只持只读的事件日志口（0.54 stop-write 的类型边界）。工厂是装配层唯一给出
+   * 「写口」的地方，缓存跟着它走就不用再往 EU options 上加一条持久化参数。
+   */
+  projectionCache?: ProjectionCachePort;
 }

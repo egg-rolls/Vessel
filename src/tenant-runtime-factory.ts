@@ -15,7 +15,7 @@
 
 import { join } from 'node:path';
 import { createInboxMemberBodyContribution } from '@vessel-agent/agent';
-import { deriveSessionMeta } from '@vessel-agent/core/session';
+import { deriveSessionMeta, FileProjectionCache } from '@vessel-agent/core/session';
 import {
   type ConfigSources,
   DEFAULT_TIMELINE_OPTIONS,
@@ -879,6 +879,13 @@ export async function buildTenantRuntime(
   // 装进工厂后，**任何一次**会话状态保存都会把标记合并回去（settle 期间终态保存不会
   // 把 drain 先写下的标记覆盖掉）。
   const resumeMarkers = createResumeMarkerRegistry();
+  // 0.56 send-first：投影续算快照的落盘口（`sessions/<id>.projection.json`）。
+  // 与事件日志同目录、与会话壳并列；它是**缓存**（写失败只记日志，读坏就当没有），
+  // 但它是「重启后第一条消息不再整份读」的唯一依据，所以必须由装配层给到 EU。
+  const projectionCache = new FileProjectionCache({
+    dir: tenantPaths.sessions_dir,
+    logger,
+  });
   const journalFactory = createRunJournalFactory({
     ...(eventLog !== undefined ? { eventLog } : {}),
     session,
@@ -888,6 +895,7 @@ export async function buildTenantRuntime(
       : {}),
     logger,
     resumeMarkers,
+    projectionCache,
     ...(timelineDualWrite !== undefined ? { timelineDualWrite } : {}),
   });
 

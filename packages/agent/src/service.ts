@@ -2394,6 +2394,28 @@ export class AgentServiceImpl implements AgentService {
     }
   }
 
+  /**
+   * 0.56 send-first：把 spawn 踢出去、**不等待**（`runs.start` 的冷态返回时间由此从
+   * 「秒级」回到「毫秒级」）。
+   *
+   * 三件事必须成立，否则这个方法就是错的：
+   * 1. **不能吞掉错误**：拒绝只在这里记一条 warn；真正的判定在
+   *    `startExecutionUnitRun` 的 `await this.ensureRuntime(entry)`（那一处会把 run 收成
+   *    `spawn_failed` 并保住消息）。这里再抛一次没有意义 —— 调用方已经返回了。
+   * 2. **不能并发 spawn 两具**：`ensureRuntime` 自己 single-flight（`entry.spawning`），
+   *    所以「这里踢一次 + 稍后 run 里等一次」只会跑一次 spawn。
+   * 3. **不能拦住别的东西**：`void` + catch 之后不留任何引用，事件循环不被挂住。
+   */
+  private startSpawn(entry: ExecutionUnitEntry): void {
+    void this.ensureRuntime(entry).catch((error: unknown) => {
+      this.logger.warn('agent.body.spawn_deferred_failed', {
+        member_id: entry.agentId,
+        session_id: entry.bindingId,
+        error: errorText(error),
+      });
+    });
+  }
+
   private async disposeEntry(entry: ExecutionUnitEntry): Promise<boolean> {
     let ok = true;
     if (entry.spawned) {
@@ -2682,11 +2704,18 @@ export class AgentServiceImpl implements AgentService {
       // send 不自动恢复 gone；但同 agent 其它 live body 存在时允许投递到该 body。
       if (entry.retired) throw new AgentError('member_closed', `member_closed: ${record.id}`);
     } else {
-      try {
-        await this.ensureRuntime(entry);
-      } catch (error) {
-        throw new AgentError('spawn_failed', `resume_failed: ${errorText(error)}`);
-      }
+      // 0.56 send-first：**body spawn 不进 runs.start 的关键路径**。
+      //
+      // 一具 body 的首次 spawn（插件安装 + 工具表拼装 + EU 构造 + Runtime 登记）在真机
+      // 上是秒级（0.55 §6.3 记的是 11.7 s），而它卡在「用户点发送」与「消息真的开始处理」
+      // 之间 —— 用户看到的就是「输入框清空了，消息列表里什么都没有」。
+      //
+      // spawn 仍然**必须**在「出队 + 消费」之前完成（D1 不变量：消息离开 mailbox 之前
+      // body 必须起得来），那一次等待在 `startExecutionUnitRun` 里，是唯一的一处。
+      // 这里只是不再等它：RPC 带着 run_id 立刻返回，spawn 同时进行。
+      // 失败也不会静默丢消息 —— 见 `startExecutionUnitRun` 里那条 catch（run 以明确的
+      // `spawn_failed` 终态收口，正文留在 mailbox / inbox 里可以读回、可以重投）。
+      this.startSpawn(entry);
     }
 
     // 0.55 硬错误闸的解闸动作（第一处，共三处）：
@@ -3087,7 +3116,27 @@ export class AgentServiceImpl implements AgentService {
     }
     // D1：ensureRuntime 可能抛错，必须在「出队 + 消费」之前完成 —— 否则 body 起不来时
     // 消息已经离开 mailbox 却仍是 unread+held（谁都不再投递它 = 黑洞）。
-    await this.ensureRuntime(entry);
+    //
+    // 0.56 send-first：这是 **spawn 的唯一等待点**（admit 只把它踢出去，不再等，见
+    // `startSpawn`）。失败必须「明确报错 + 留住消息」，两条都不许省：
+    // - 明确报错：handle 收成 failed 终态（`run.failed` 可见、`runs.get` 查得到）；
+    // - 留住消息：消息**不**出队、不消费，`unhold` 之后回到 unread —— 人能在收件箱里
+    //   读回原文，下一次准入会重投。绝不允许「静默丢掉用户刚发的那句话」。
+    try {
+      await this.ensureRuntime(entry);
+    } catch (error) {
+      const failure = `spawn_failed: ${errorText(error)}`;
+      this.logger.error('agent.body.spawn_failed', {
+        member_id: record.id,
+        session_id: entry.bindingId,
+        run_id: runId,
+        error: failure,
+      });
+      this.inbox?.unhold(record.id, [message.id]);
+      const failed = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
+      failed.fail(failure);
+      return failed;
+    }
     entry.state = 'running';
     entry.lastActiveAt = this.now();
     entry.active = {
