@@ -1762,10 +1762,11 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         // assistant 工具入参）。**在游标之后裁**：`next_before` 的 `length` 取自
         // 未裁剪的 `windowAnchor.content.length`，翻页校验才不会被裁剪改写。
         //
-        // 消息身份（additive `run_id` / `run_segment`）**原样透出**：它们由 core 在落盘前
-        // 盖上（`RunJournal.saveSessionState`），本方法只读库里的那一份，不派生、不回填。
-        // 缺这两个字段 = 旧数据 / 旧 gateway，客户端退回内容比较（见
-        // `apps/web/src/gateway/types/sessions.ts` 的 `Message` 注释）。
+        // 消息身份（additive `run_id` / `run_segment` / `message_id`）**原样透出**：它们由
+        // core 在写入时盖上（`withRunIdentity` / `withMessageId`），本方法只读库里的那一份，
+        // 不派生、不回填。`message_id` 是 0.56 的稳定 id：前端按它把「实时气泡」与「落盘
+        // 消息」归并成一条（不再靠正文相等猜）。缺这些字段 = 旧数据 / 旧 gateway，客户端
+        // 退回内容比较（见 `apps/web/src/gateway/types/sessions.ts` 的 `Message` 注释）。
         const bindings = await sessionAgentBindings();
         const owner = bindings.get(state.session_id);
         // 0.54（additive 投影卡）：两分支判定**在切片之前**对落盘全量 `all` 跑一遍 ——

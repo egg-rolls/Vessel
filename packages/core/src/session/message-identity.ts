@@ -23,6 +23,44 @@
 
 import type { Message } from '../types/provider.js';
 
+/**
+ * 用户输入的稳定 id（0.56）。
+ *
+ * 形状 `${runId}:user`：一次 run 只有一条用户输入，run id 又是服务端生成的 uuid，
+ * 所以这个字符串**确定、可复算、跨进程一致**。确定性是刻意的 —— 同一条输入被执行
+ * 两遍（重试 / 续跑 / 落盘写两次）拿到的是**同一个 id**，于是渲染层能把它当同一条
+ * 消息合并，而不必去猜「这两段正文是不是一回事」。
+ */
+export function userMessageIdOf(runId: string): string {
+  return `${runId}:user`;
+}
+
+/**
+ * 注入消息（`RunOptions.messages`：skill / 附件 / 引用文件……）的稳定 id（0.56）。
+ *
+ * 形状 `${runId}:inject:${index}`：`index` 是它在这一次注入批次里的下标。同一个批次
+ * 走两遍 ⇒ 同一个 id（同 `userMessageIdOf` 的理由）；不同批次的同名消息 ⇒ 不同 id。
+ */
+export function injectedMessageIdOf(runId: string, index: number): string {
+  return `${runId}:inject:${String(index)}`;
+}
+
+/**
+ * 给一条**正在进入会话**的消息盖 `message_id`（只补缺，不覆盖已有值）。
+ *
+ * 为什么只补缺：resume / 重放会把历史消息灌回来，那些 id 是当初落盘时的身份，改写就是
+ * 伪造身份（还会把「同一条消息的两个副本」变回两个身份）。已经带 id 的消息原样返回，
+ * 调用侧的引用身份不变。
+ *
+ * 与 `withRunIdentity` 的分工：`run_id` 是「归属哪次 run」（历史消息会被灌回上下文，
+ * 归属是原来那次）；`message_id` 是「这是哪一条消息」（一条消息一个，全局唯一）。
+ */
+export function withMessageId(message: Message, messageId: string): Message {
+  if (typeof message.message_id === 'string' && message.message_id.length > 0) return message;
+  if (messageId.length === 0) return message;
+  return { ...message, message_id: messageId };
+}
+
 /** 该消息是否占用一个正文段号（口径见文件头注释）。 */
 function occupiesSegment(message: Message): boolean {
   return message.role === 'assistant' && message.content.trim().length > 0;

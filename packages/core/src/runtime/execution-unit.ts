@@ -63,10 +63,13 @@ import {
   cursorFromProjectionSnapshot,
   deriveSessionMeta,
   extendProjection,
+  injectedMessageIdOf,
   PROJECTION_CURSOR_MAX_TOOL_CALLS,
   type ProjectionCursor,
   reconcileCachedProjection,
   serializeProjectionCursor,
+  userMessageIdOf,
+  withMessageId,
   withRunIdentity,
 } from '../session/index.js';
 import {
@@ -2499,14 +2502,22 @@ export class ExecutionUnit {
 
     try {
       // 注入消息（C5）：core 不解释其语义（skill / 附件 / 引用文件……），先于用户输入写入并持久化
-      for (const injected of opts?.messages ?? []) {
+      //
+      // 0.56：每条注入消息在**进入会话的这一处**拿一个稳定 id（`${runId}:inject:下标`），
+      // 事件流与上下文/落盘带的是同一个字符串。同一批注入被执行两遍 ⇒ 同一个 id ⇒
+      // 渲染层按 id 合并，而不是拿正文去猜（旧数据没有这个字段，退回 0.51 的判据）。
+      for (const [injectedIndex, injected] of (opts?.messages ?? []).entries()) {
+        const identifiedInjected = withMessageId(
+          injected,
+          injectedMessageIdOf(runId, injectedIndex),
+        );
         this.publishEvent({
           type: 'message.injected',
           run_id: runId,
-          data: { run_id: runId, session_id: sessionId, message: injected },
+          data: { run_id: runId, session_id: sessionId, message: identifiedInjected },
           ts: Date.now(),
         });
-        this.addContext(injected, runId);
+        this.addContext(identifiedInjected, runId);
       }
 
       // 应用输入 Guardrail（先于写上下文：replacement 要成为持久化的用户消息，C-05）
@@ -2526,14 +2537,19 @@ export class ExecutionUnit {
           : userMessage;
 
       // 添加（可能被 guardrail 改写后的）用户消息到上下文
-      this.addContext(effectiveUser, runId);
+      //
+      // 0.56：用户输入同样在进入会话的这一处拿稳定 id（`${runId}:user`）——
+      // 成本只有一行的原因见 `message-identity.ts`；收益是「这一轮的输入是哪条消息」
+      // 变成事实而不是推断（旧数据没有该字段时前端照旧退回 0.51 的两道判据）。
+      const identifiedUser = withMessageId(effectiveUser, userMessageIdOf(runId));
+      this.addContext(identifiedUser, runId);
 
       // 0.18：用户输入是唯一真相源的一部分（run.started.input 是改写前文本，
       // 不能单独用于恢复）。记录实际写入上下文的消息原文。
       this.publishEvent({
         type: 'user.message',
         run_id: runId,
-        data: { run_id: runId, session_id: sessionId, message: effectiveUser },
+        data: { run_id: runId, session_id: sessionId, message: identifiedUser },
         ts: Date.now(),
       });
 
