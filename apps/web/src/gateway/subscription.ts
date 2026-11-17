@@ -76,6 +76,13 @@ export interface SubscriptionFilter {
   run_id?: string;
   session_id?: string;
   types?: string[];
+  /**
+   * 0.60：进程级全局流的显式 opt-in（服务端 allow_global）。
+   *
+   * 只有「确实要全部事件族」的范围才配它（见 buildSubscription 的 none 分支）；会话 /
+   * run / types 订阅一律不要带 —— 带了就等于放弃服务端那道默认拒绝。
+   */
+  allow_global?: boolean;
 }
 
 export interface BuiltSubscription {
@@ -119,7 +126,14 @@ export function buildSubscription(
       // 详情页时间线要 llm / tool 事件，不能只收 run.*；按 run_id 收敛后回放有界。
       return { filter: { since: 0, run_id: scope.runId } };
     case 'none':
-      return { filter: { since: opts.currentSeq } };
+      // 0.60：服务端的默认已经变成「没有会话作用域就一条都不发」，所以这条范围必须**显式
+      // opt-in** 才拿得到原来的流。为什么仍然要全局流：「无明确范围」覆盖了 agents / pending
+      // 等页面，它们各自读的是不同的事件族（agent.* / team.* / session.* / tool.permission.*），
+      // 用一个 types 前缀表去猜只会漏 —— 漏掉的那一族在屏上表现为「状态不动」。
+      //
+      // 这条 opt-in 是**显式**的（写在代码里、可 review）：一旦有人把某个页面的订阅改成
+      // 不带 session_id 又没写这句，服务端会直接拒掉而不是静默全发。
+      return { filter: { since: opts.currentSeq, allow_global: true } };
   }
 }
 
@@ -406,6 +420,10 @@ export class SubscriptionController {
   onDisconnect(): void {
     this.pendingHello = null;
     this.appliedKey = null;
+    // 0.60：断线后服务端是**无过滤**连接（新连接在 `events.subscribe` 之前没有任何会话
+    // 作用域），所以作用域必须一起清掉：重连窗口期到达的帧不属于任何会话，不能被
+    // 盖上旧会话的章。订阅成功后由 `run()` 重新设置。
+    this.eventStore.setScopeSession(undefined);
     // 故意保留：断线重连回到同一路由时不应清空缓冲（会整页闪）。
   }
 
@@ -443,7 +461,7 @@ export class SubscriptionController {
     });
     const seqs = fetched.events.map((event) => event.seq);
     let effective = header;
-    let outcome = this.eventStore.applyTimelineRange(header, fetched.events);
+    let outcome = this.eventStore.applyTimelineRange(header, fetched.events, sessionId);
     // 「声明了一段、实收只是它的**连续前缀**」不是丢数据，是这一趟没发完（服务端撞背压
     // 会提前停）。这时按实收末 seq 收缩声明再并 —— 判缺口的时机推迟到「确认无法继续」
     // （回填循环里的 no-progress / epoch 的 stall），不在这里按每批到达即判。
@@ -459,7 +477,7 @@ export class SubscriptionController {
           holes: header.holes,
           tainted: header.tainted,
         });
-        outcome = this.eventStore.applyTimelineRange(effective, fetched.events);
+        outcome = this.eventStore.applyTimelineRange(effective, fetched.events, sessionId);
       }
     }
     return {
@@ -792,7 +810,16 @@ export class SubscriptionController {
       // 降级（客户端过滤）必须给 undefined，否则会把隔壁会话的事件也盖上这个章。
       const sessionScoped =
         scope.kind === 'chat' && this.supportsSessionFilter() ? scope.sessionId : undefined;
-      this.eventStore.setScopeSession(sessionScoped);
+      // 0.60：**确认之后才盖章**。作用域必须在服务端真的按这个会话过滤时才算数，
+      // 所以它跟订阅结果走，不跟路由意图走：
+      //
+      // - 订阅还没落地（WS 刚连上 / 刚换范围）时服务端是**无过滤**连接 —— 这段时间
+      //   到达的帧属于所有会话，先盖章就会把别的会话的增量挂到本会话上；
+      // - 订阅失败（旧 gateway / 断线 / 参数被拒）时连接同样是全量流，
+      //   旧的实现只清 `appliedKey` 而**保留**作用域 ⇒ 一直给别人的帧盖章。
+      //
+      // 于是这里先置空（进入「无归属」态，帧不会被误挂），订阅成功后再设。
+      if (this.eventStore.scopeSessionId !== undefined) this.eventStore.setScopeSession(undefined);
       // **作用域真的变了才清空**（换会话 / 换 Team / chat↔runs）：旧条目属于别的范围，
       // 留着会串台。同一作用域内的重新订阅（重连、gap 重对齐、换过滤参数）**不清空**：
       // 内容原地保留，由 `truncateAfter` + `push` 去重把窗口补回来，屏幕上不会出现空白帧。
@@ -847,6 +874,9 @@ export class SubscriptionController {
           legacyFilter,
           !useTimeline,
         );
+        // 0.60：订阅成功 = 服务端确实按 `session_id` 过滤了（或降级为显式无作用域），
+        // 现在盖章才与事实一致。
+        this.eventStore.setScopeSession(sessionScoped);
         // 新 gateway 的订阅级 hello 在 res 之前到达，`consumeHello` 已消费；
         // 旧 gateway 不发订阅级 hello，这里清掉在途标记，避免它吞掉下一次
         // 连接级 hello（会导致重连后漏 bump epoch / 漏刷新详情）。
@@ -855,6 +885,9 @@ export class SubscriptionController {
         // 旧 gateway / 断线：params 被忽略或请求失败。保留路由意图，
         // 重连后的连接级 hello 会重新 apply；期间订阅退回默认过滤。
         this.appliedKey = null;
+        // 0.60：订阅没成 ⇒ 服务端没有会话作用域 ⇒ 作用域必须一起清掉（否则会一直给
+        // 别的会话的帧盖本会话的章，见上）。
+        this.eventStore.setScopeSession(undefined);
         if (this.pendingHello === 'subscribe') this.pendingHello = null;
       }
       // ③ 服务端宣告了 `reset`（本地游标越过 `wal_head`）：刚才这一趟是从 seq 1 重放的

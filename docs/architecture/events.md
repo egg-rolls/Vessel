@@ -280,6 +280,8 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/trace
 
 **出站归属补齐**：订阅按 `session_id` 过滤时，`llm.stream.chunk` / `tool.call.*` 这类事件本体不带该字段（只靠 gateway 的 `run_id → session_id` 映射判断该不该发）。gateway 会把归属补进**出站副本**的 `data.session_id`（`??` 语义：事件自报的值永远优先，缓冲里的原始事件不被改写）；映射未知时仍然 fail-closed 丢弃，不补字段、不改任何 `events.subscribe` 参数或 result schema。LRU 未命中时会同步读一次执行面快照回填，拿不到就继续丢（发送路径不因此变成异步等待）。所以消费方可以放心把 `data.session_id` 当作事件归属的回退依据。 **一条不变量**：判定「发给这个订阅者」与「出站副本带 session_id」必须用同一份归属解析（事件自报 > 回放期局部映射 > 全局 LRU > 执行面快照回填），且所有出站路径（实时广播 / WS 回放 / WS 回填页 / SSE 回放与窗口外 pull）走同一个序列化点，否则会出现「过滤放行、帧里却没有 session_id」的静默丢事件。
 
+**全局流缺省拒绝（0.60）**：没有会话作用域的事件订阅（既不给 `session_id`、也不给 `run_id` / `types`）默认**一条都不发** —— 那是进程级全局流，等于把所有会话的正文与工具结果灌给这个连接。理由是一类实测事故：漏传 `session_id` 的订阅（旧客户端、代理丢了 query、降级路径，以及「连上了还没 `events.subscribe`」的那段时间）会让「打开 A 会话却看到 B 的事件」成为可能。三档口径：① `run_id` / `types` 是显式作用域，原语义不变；② 两者都没给 ⇒ 必须显式 opt-in（WS/RPC `allow_global: true`，SSE/连接级回放 `?allow_global=1`），否则零帧；③ 显式 opt-in 的连接按原语义全发（运维探针）。被拒**不静默**：服务端首次打一条 warn（只有 seq 与条数，无正文、无会话 id），`events.subscribe` 的 `stream_url` 也把本次订阅的过滤条件（`session_id` / `run_id` / `types` / `allow_global`）原样带给 SSE 客户端 —— 旧实现只回 `since`，照着它连就是一条串会话的全量流。**客户端还有一道同样的校验**（`EventStore#acceptOwner`）：会话订阅下，帧自报或 `runSessions` 已知的归属与当前会话不符 ⇒ 丢弃并计数（`droppedForeign`，首次 warn，不打印正文），这条同时覆盖实时帧与时间线回填页；回填页显式带 `expectedSessionId`，所以页里那些不自报归属的增量仍然挂得回会话（不会因为校验变成「刷新后什么都不显示」）。
+
 **事件不是 message：`sessions.get.system_context`（additive）**。`prompt.system_context`
 （**模型这一轮看到的系统消息**：基底 system prompt + Self Card 原文；`hash` =
 `sha256(system_prompt + '\0' + self_card)` 前 16 位，同一会话同一 hash 只发一次）只活在事件流里
