@@ -48,6 +48,60 @@
   的平铺形状一致。真机（`eecc5a48`，订阅 `after_timeline_seq: 7000`）：epoch 记账生效、`timeline-epoch-end` 收尾得到声明
   `[7001..7955] count=955 has_more=false`，四条校验通过、零缺口（此前同一路径不会有任何 epoch 结算）。
 
+### 破坏性（删除清单，逐项可直接回滚）
+
+- **`serve:` 段移除（0.55）**：`serve` 从此**不是配置块**，写它就**启动失败**（`exit 2`），整块一个键都不生效
+  —— 不是「警告 + 照旧生效」。文案逐键给出可照做的改名提示（`serve.token -> node.token`、
+  `serve.token_env -> node.token_env`、`serve.allowed_origins -> node.allowed_origins` …），
+  用户复制改名即可，字段名与语义一个都没变。为什么现在动：`serve:` 是 0.3 时代的名，`vessel serve`
+  命令 0.49 就没了；留着两个名字读同一份字段，`doctor` 和启动迟早会漂开。同步落地：loader 拦住并**丢弃**
+  该块（绝不静默生效）、验证错误路径一律写 `node.*`、脱敏路径 `serve.tokens.*` → `node.tokens.*`
+  （token 永不打印这条不变）、`vessel doctor` 的 `config` 一行直接显示这条错误（状态 `fail`）。
+  口径见 [operations/CONFIG §2.0](docs/operations/CONFIG.md)、[operations/REMOTE §3.1](docs/operations/REMOTE.md)。
+
+- **`events.ndjson` 的读写代码全删（0.55）：0.54 之前的会话格式不再支持**
+  - 删了什么：`packages/core/src/session/session-event-log.ts`（整文件，旧日志实现）、
+    `tenant-paths.ts#sessionEventsFilePath`、`timeline/freeze.ts`（只读冻结整块）、
+    `TimelineWriter` 的 `adoptLegacyShapedSession`、`src/session-migrate.ts` +
+    `src/session-migrate-command.ts` 与 CLI 的 `vessel session migrate`（含 help / completion /
+    i18n 条目）、双写旁路里的 `frozenSessions` / `counters.frozen_sessions` 与两层时间推断
+    （构造时快照 + 旧日志首条 `ts`）。
+  - 现在会怎么坏：**旧格式会话（只有 `events.ndjson`、无任何 timeline 标记）读不了**。
+    `sessions.get` / `sessions.events` / `events.subscribe{after_timeline_seq}` 会拿到
+    `legacy_session_unsupported`（取代 `session_frozen_readonly`，serve / rpc / core 三张错误码表同步），
+    文案写明「不读、不写、不迁移；用 0.54 导出后再用 0.55 打开」。**不静默降级成空会话**
+    —— 那会让人以为历史丢了却不给原因。写侧同样拒绝（避免造出半新半旧的目录）。
+    判据仍只有一处：`packages/core/src/timeline/legacy-format.ts#assertSessionFormatSupported`，
+    读口 / 写者 `open()` / 索引写回三处调用。
+  - 用户该怎么办：旧备份或老数据目录先用 **0.54** 跑一次 `vessel session migrate <id>|--all`
+    （或直接用 0.54 打开把会话导出来），再把产物交给 0.55；0.55 自己不读、不写、不迁移。
+    0.55 起**没有** `vessel session migrate` 这个命令了。
+  - 口径见 [event-log-policy §1](docs/architecture/event-log-policy.md)。
+  - **已知遗留（不在本单范围）**：`plugins/observability/usage` 仍依赖
+    `sessions/<id>/events.ndjson`（`src/store.ts` 的 `SESSION_LOG`）。它在 0.54 停写之后就已经
+    在读一个不再增长的文件；0.55 删掉这份文件之后其**数据面不再可用**（用量 / 请求日志页会是空的），
+    将单独迁移到时间线。
+
+- **`timeline_source` 四件一起删：帧字段 / 读源标记 / 老格式退回路径 / `gap` 帧（0.55）**
+  - 删了什么：① `hello.timeline_source` 帧字段（服务端 `frames.ts` / `protocol.ts` /
+    `events.subscribe` 的 result 都停发）；② `TimelineReadFrom` 类型与 `read_from` 残留口径
+    （`serve/gateway/timeline-protocol.ts`）；③ 老格式会话的退回路径（本单上一组删 `events.ndjson`
+    之后它已经没有活分支，客户端那侧剩下的是「没有 `timeline` 段 ⇒ 老 epoch」这一条，保留）；
+    ④ `gap` 帧整条链：`ServerFrame` 的 `kind:'gap'`、`frames.ts#gapFrame`、WS 背压补发 /
+    心跳补发 / 回放缺口 / SSE 的三处发送点，以及客户端的 `onGap` 订阅与 `offGap` 分支
+    （`GapFrame` 类型、`TimelineGapSource` 的 `'server'` 成员一起删）。
+  - 判据换成**形状**：客户端 `readHelloTimelineSegment` 只看 `hello` 上那六个键在不在
+    （`apps/web/src/gateway/node/protocol.ts` 的 wire → 内部形状映射仍只有一处）；服务端
+    `helloFrame` 只在有时间线段时才带那几个键。
+  - 现在会怎么坏（**用户视角，必须写在 CHANGELOG 里**）：**升级后请刷新页面**。48 小时内
+    没刷新的老前端还靠 `timeline_source` 判读：服务端停发该键之后它会把这趟当成老 epoch，
+    于是 ① 不做四条 count 校验、② 忽略 `timeline-epoch-end`、③ 看到假缺口（表现为时间线上
+    一条「这一段读不回」的污点条）。刷新页面即恢复（新前端判形状，不依赖该键）。
+  - 老服务端（0.54）不受影响：`timeline_source` 只是被当成未知键忽略，而新前端读的是同一批
+    形状键，四条校验照旧生效。
+  - 口径见 [gateway-rpc §订阅 epoch](docs/architecture/gateway-rpc.md)、
+    [events](docs/architecture/events.md)、[session-replay](docs/architecture/session-replay.md)。
+
 ## [0.54.0] - 2026-11-16
 
 > 本节按 0.54 迁移判据 B-4

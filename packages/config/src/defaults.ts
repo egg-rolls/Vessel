@@ -11,10 +11,10 @@ import type {
   GatewayConfig,
   LeaseConfig,
   McpServerConfig,
+  NodeConfig,
   ObservabilityConfig,
   PluginHttpLimitsConfig,
   SchedulerConfig,
-  ServeConfig,
   TimelineConfig,
   TraceConfig,
   TransportConfig,
@@ -90,11 +90,11 @@ export const DEFAULT_DURABLE_OPTIONS: Required<
 };
 
 /**
- * 0.3 serve 默认值（仅监听回环、明文）。
+ * `node:` 段的默认值（仅监听回环、明文）。
  * 不写入 DEFAULT_CONFIG：未配置时 gateway 仍走原有默认常量。
  */
 export const DEFAULT_SERVE_OPTIONS: Required<
-  Pick<ServeConfig, 'hostname' | 'port' | 'allowRemote'>
+  Pick<NodeConfig, 'hostname' | 'port' | 'allowRemote'>
 > = {
   hostname: '127.0.0.1',
   port: 8642,
@@ -114,7 +114,7 @@ export const DEFAULT_GATEWAY_OPTIONS: Required<Pick<GatewayConfig, 'hostname' | 
 
 /**
  * 0.48 M1：插件 HTTP 反代默认限额（CONTRACT-0.48 §3.4）。
- * 不写入 DEFAULT_CONFIG：未配置时由 serve 归一化时使用这些值。
+ * 不写入 DEFAULT_CONFIG：未配置时由 `node:` 段归一化时使用这些值。
  */
 export const DEFAULT_PLUGIN_HTTP_LIMITS: Required<PluginHttpLimitsConfig> = {
   maxBodyBytes: 1024 * 1024,

@@ -124,8 +124,9 @@ export class SessionRunJournal implements RunJournal {
    * 等到「已派出去的事实」真正落盘。
    *
    * 0.54 stop-write：写者自己排队 + fsync，journal 不再持有写入 Promise 链，所以这里
-   * 委托写者的 drain（`flushSession`）。冻结会话会抛 `session_frozen_readonly` ——
-   * 它不是故障（那个会话本就不该有 timeline），吞掉并记一条 debug 级日志。
+   * 委托写者的 drain（`flushSession`）。旧格式会话（0.55 不支持）会抛
+   * `legacy_session_unsupported` —— 它不是故障（那个会话本就不该有 timeline），
+   * 吞掉并记一条 debug 级日志。
    */
   async flush(): Promise<void> {
     const dualWrite = this.deps.timelineDualWrite;
@@ -134,7 +135,7 @@ export class SessionRunJournal implements RunJournal {
     try {
       await dualWrite.flushSession(sessionId);
     } catch (error) {
-      this.deps.logger?.warn('timeline flush failed (session may be frozen/read-only)', {
+      this.deps.logger?.warn('timeline flush failed (session has no writable timeline)', {
         session_id: sessionId,
         error: errorText(error),
       });

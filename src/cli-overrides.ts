@@ -42,21 +42,21 @@ function nonEmpty(value: string | null | undefined): string | undefined {
  * 从而让 env / project / user / default 正常生效。
  */
 export function buildCliConfigOverrides(input: CliConfigOverridesInput): Partial<VesselConfig> {
-  const serve: NonNullable<VesselConfig['serve']> = {};
+  const node: NonNullable<VesselConfig['node']> = {};
 
   if (input.servePortExplicit === true && input.servePort != null) {
-    serve.port = input.servePort;
+    node.port = input.servePort;
   }
   const hostname = nonEmpty(input.serveHost);
-  if (hostname !== undefined) serve.hostname = hostname;
-  if (input.allowRemote === true) serve.allowRemote = true;
+  if (hostname !== undefined) node.hostname = hostname;
+  if (input.allowRemote === true) node.allowRemote = true;
   const certFile = nonEmpty(input.tlsCert);
   const keyFile = nonEmpty(input.tlsKey);
   if (certFile !== undefined && keyFile !== undefined) {
-    serve.tls = { certFile, keyFile };
+    node.tls = { certFile, keyFile };
   }
   if (input.allowedOrigins !== undefined && input.allowedOrigins.length > 0) {
-    serve.allowedOrigins = [...input.allowedOrigins];
+    node.allowedOrigins = [...input.allowedOrigins];
   }
 
   const connect: NonNullable<VesselConfig['connect']> = {};
@@ -67,7 +67,7 @@ export function buildCliConfigOverrides(input: CliConfigOverridesInput): Partial
 
   const dataDir = nonEmpty(input.dataDir);
   return {
-    ...(Object.keys(serve).length > 0 ? { serve } : {}),
+    ...(Object.keys(node).length > 0 ? { node } : {}),
     ...(Object.keys(connect).length > 0 ? { connect } : {}),
     ...(dataDir !== undefined ? { dataDir } : {}),
   };

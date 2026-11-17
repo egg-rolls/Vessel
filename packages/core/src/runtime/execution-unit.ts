@@ -323,6 +323,20 @@ function errorText(error: unknown): string {
 }
 
 /**
+ * 这个错误是不是「0.54 之前的旧格式会话」（`legacy_session_unsupported`）。
+ *
+ * 只认冻结的错误码字符串，不用 `instanceof`：EU 与时间线读口都在 core 里，但错误可能被
+ * 包装过（journal / 装配层）。判据就是那个码，见 `timeline/types.ts`。
+ */
+function isLegacySessionUnsupported(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === 'legacy_session_unsupported'
+  );
+}
+
+/**
  * 一次 run 起点的历史恢复读数（`session history restored` 日志的载荷）。
  *
  * 为什么这条日志值得留：0.54 B3 之后「恢复历史」是发送路径上唯一 O(会话) 的动作，
@@ -4686,6 +4700,11 @@ export class ExecutionUnit {
           session_id: sessionId,
           error: errorText(error),
         });
+        // 0.55：**旧格式会话必须让这次恢复失败**，不能带着空历史继续跑。
+        // 吞掉它等于把「这套文件 0.55 读不了」说成「这个会话没有历史」：用户会在一个
+        // 看起来正常的空会话里继续对话，而他的旧逐字记录还在磁盘上。
+        // 其它读取失败仍是「尽力恢复」（少几条历史比开不动会话好），这条不是。
+        if (isLegacySessionUnsupported(error)) throw error;
       }
     }
 

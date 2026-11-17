@@ -53,7 +53,7 @@ export interface NodeInfo {
 }
 
 /**
- * hello 帧的时间线段（0.54 B1，ADR-105 §6；只有 `timeline_source === 'timeline'` 时给）。
+ * hello 帧的时间线段（0.54 B1，ADR-105 §6）。**它存在就是判据**（0.55）。
  *
  * **这是客户端的归一化形状，不是线上形状**：线上 `hello` 把这几个键**平铺**在帧上
  * （`packages/serve/src/gateway/frames.ts#helloFrame` 的 spread），映射发生在
@@ -88,29 +88,18 @@ export interface HelloInfo {
   /** 0.24 additive：进程 incarnation；仅当前 WS 节点可读。 */
   incarnation?: string;
   /**
-   * 0.54 B1：本 epoch 的读源。`'timeline'` ⇒ 帧带 `timeline_seq`、且 `timeline` 段一定在；
-   * `'legacy'`（回退期 / 旧订阅 / 旧服务端不发这个键）⇒ 帧带 hub seq，老行为。
+   * 时间线段（0.55：**在不在就是判据**）。
    *
-   * **P1 #4（`PLAN-0.55-backlog`）待决标记 —— 0.55 这一轮不删**：这个帧字段与三支伴生
-   * （`subscription.consumeHello` 的 legacy 分支 / `subscription.subscribeOnce` 退回
-   * `since` 的那一支 / `connection-handlers.offGap` 的 gap 帧处理）绑在一起，**必须同一个
-   * commit 删**。本轮做不到，判据有三条：
-   * 1. 生产方在 `packages/serve/**`（`frames.ts` 的 `timeline_source` 字段 + 两个 hello
-   *    构造点），不在本单边界内 —— 单删客户端只会让旧服务端的 hello 变成「形状不全」，
-   *    老 epoch 的重放帧被 `truncateAfter(from_seq - 1)` 之外的路径丢掉；
-   * 2. 老格式会话（冻结只读）仍会走 `session_frozen_readonly` → `legacyScopes` 那条退回
-   *    路径，它靠 `'legacy'` 判定「不要做四条校验、游标退到 `from_seq - 1`」；
-   * 3. 0.55 的 `timeline-epoch-end` 只在**时间线** epoch 发，客户端「可以依赖结束帧」的
-   *    判据就是这里（`timeline_source === 'timeline'` ⇒ `hello.timeline` 在 ⇒ 有 epoch）。
-   * 删的顺序应该是：先让服务端停发这个键、客户端改吃「`hello.timeline` 在不在」的形状
-   * 判据，再一起删掉三支伴生。
+   * 在 ⇒ 本 epoch 是时间线 epoch（帧带 `timeline_seq`、要做四条 count 校验、可以依赖
+   * `timeline-epoch-end` 结趟）；不在 ⇒ 老 epoch（帧带 hub seq，老行为：游标退到
+   * `from_seq - 1`、不发 `timeline_gap`）。
    *
-   * **现在删会怎么坏**（两步都是真的，不是理论）：① 老格式会话的重放帧会被当成时间线帧做四条例校验
-   * （每帧一条假缺口），且游标不再 `truncateAfter(from_seq - 1)` ⇒ 重放后游标停在远处、后续帧全被判重丢弃；
-   * ② 新会话的 hello 会被当成老 epoch ⇒ `timeline-epoch-end` 被静默忽略、`has_more` 失效，
-   * 续拉退回「订阅 `res` + 连续前缀」那条单腿（0.54 服务端的处境内核，能用但不是主判据）。
+   * 0.54 时代这里还有一个 `timeline_source: 'timeline' | 'legacy'` 显式标记，0.55 删了：
+   * 形状本身已经足够，多一个字段就多一处可能与形状不一致。老服务端（0.54）发的
+   * `timeline_source` 现在被当成未知键忽略 —— 它们的 `timeline` 段照旧被本形状读出来，
+   * 所以判据不变；唯一会退化的是「服务端不再发 `timeline_source`、客户端却还在读它」这种
+   * **反向**组合，也就是本次升级的方向，因此必须在 CHANGELOG 里写明「升级后刷新页面」。
    */
-  timeline_source?: 'timeline' | 'legacy';
   timeline?: HelloTimelineSegment;
 }
 
@@ -330,13 +319,6 @@ export interface CapabilityManifest {
   plugins: Array<{ name: string; enabled: boolean; contributions?: PluginContributions }>;
 }
 
-/** gap 帧 */
-export interface GapFrame {
-  kind: 'gap';
-  from_seq: number;
-  to_seq: number;
-}
-
 /** 服务端帧（前端只消费用到的字段） */
 export type ServerFrame =
   | ({
@@ -345,11 +327,10 @@ export type ServerFrame =
       node_id: string;
       ts: number;
     } & HelloInfo & {
-        timeline_source?: 'timeline' | 'legacy';
         /**
          * 0.54 B1 时间线段：**线上是平铺的**（不是嵌套对象），见 `HelloTimelineSegment` 的注释；
-         * 只有 `timeline_source === 'timeline'` 时才出现，形状见
-         * `packages/serve/src/protocol.ts` 的 hello 分支。
+         * 0.55 起**它的存在就是「这是时间线 epoch」的判据**（`timeline_source` 已删除），
+         * 形状见 `packages/serve/src/protocol.ts` 的 hello 分支。
          */
         start_seq?: number;
         end_seq?: number;
@@ -370,7 +351,6 @@ export type ServerFrame =
       job_id?: string;
       event: RunEvent;
     }
-  | ({ v: 1; kind: 'gap'; node_id: string; ts: number } & Omit<GapFrame, 'kind'>)
   /** 0.55：时间线 epoch 的显式结束标记（能力位 `timeline.epoch-end`；未知 kind 的老客户端静默忽略）。 */
   | ({
       v: 1;

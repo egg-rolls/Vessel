@@ -93,9 +93,9 @@ import type { Logger } from '../types/logging.js';
 import { auditArchiveDuplicates, describeArchiveDuplicates } from './archive-audit.js';
 import { withArchiveLock } from './archive-lock.js';
 import { type ChunkBlockSeal, ChunkBlockStore, isTransientChunkEvent } from './blocks.js';
-import { assertTimelineWritable } from './freeze.js';
 import { HoleRegistry, type HoleRetirementResult } from './holes.js';
 import { loadIndexSnapshot, TimelineIndexBuilder, writeIndexSnapshot } from './index.js';
+import { assertSessionFormatSupported } from './legacy-format.js';
 import {
   BLOCK_MAX_BYTES,
   CHUNK_FLUSH_LEAD_MS,
@@ -153,25 +153,6 @@ export interface TimelineWriterOptions {
   chunkFlushMs?: number;
   /** 测试缝：每次真正 fsync 之前调用；抛错 = 模拟 fsync/写失败。 */
   beforeSync?: (kind: TimelineSyncKind) => void;
-  /**
-   * 显式 adopt：调用方**断言**「这个会话是我自己刚建的，不是 0.53 遗留」。
-   *
-   * 唯一作用是**跳过旧格式冻结闸门**（{@link assertTimelineWritable}）；标记（`timeline.manifest`）
-   * 仍然由写者自己落 —— 所以「谁可以写 timeline 目录」这条纪律不变。
-   *
-   * ## 三条使用边界（违反任何一条都是后门，不是便利）
-   *
-   * 1. **判据不许在调用侧再写一份**：旧格式的定义只有 `freeze.ts` 一份。调用侧能提供的
-   *    额外信息只能是「这个会话在**本进程开始之前**是否存在过」这种时间事实；
-   *    一旦这里出现「有没有 `events.ndjson`」之类的第二套判定，就该判红。
-   * 2. **这个开关不许来自外部输入**：不许做成配置键（`config.timeline.*`）、不许读环境变量、
-   *    不许由 RPC 参数/请求体透传。它只能是装配层**自己算出来的结论**（当前唯一调用点：
-   *    `src/timeline-dual-write.ts`，条件是「core 判旧格式 ∧ 构造时快照说本进程才出现」）。
-   *    否则等于给了一个「客户端指定解冻任意旧会话」的入口。
-   * 3. **默认必须是 false**：不传 ⇒ 闸门照旧（有 `events.ndjson` 且无任何 timeline 标记 ⇒
-   *    `session_frozen_readonly`）。「忘了传」的方向必须是安全的。
-   */
-  adoptLegacyShapedSession?: boolean;
   /** 归档重试耗尽后的通知（ADR-105 §3 I3 ③；不进 timeline 自身）。 */
   onArchiveFailed?: (info: { from_seq: number; to_seq: number; reason: string }) => void;
   /** 测试缝：时刻来源。 */
@@ -487,8 +468,9 @@ export class TimelineWriter {
   /**
    * 打开（或创建）一个会话的写者并恢复状态。
    *
-   * 旧格式会话（有 `events.ndjson`、没有 timeline 标记）抛 `session_frozen_readonly`
-   * （ADR-105 D4：0.54 不做迁移）。
+   * **0.55**：旧格式会话（只有 `events.ndjson`、没有 timeline 标记）不写、不迁移，
+   * 直接抛 `legacy_session_unsupported`（`legacy-format.ts`）。0.54 时代的
+   * `session_frozen_readonly`（只读冻结）随之取消 —— 那套格式已经没有代码能解析。
    */
   static async open(options: TimelineWriterOptions): Promise<TimelineWriter> {
     if (typeof options.sessionId !== 'string' || options.sessionId.length === 0) {
@@ -702,16 +684,11 @@ export class TimelineWriter {
    */
   private async initialize(): Promise<void> {
     await mkdir(this.sessionDir, { recursive: true });
-    // 旧格式会话只读冻结（ADR-105 D4）。判据与错误码在 `freeze.ts` 一处定义：
-    // 索引写回、读器建索引也都走同一个闸门，所以「哪条写路径忘了判」在结构上不成立。
-    //
-    // 唯一的例外是调用方的**显式 adopt 断言**（`adoptLegacyShapedSession`）：装配层在
-    // 「core 判旧格式 ∧ 这个会话是本进程才出现的」时才会传 —— 因为新会话的第一次双写
-    // 发生时 `events.ndjson` 已经写好，形状与 0.53 遗留会话完全一样，只能靠时间分辨。
-    // 标记仍然由下面的 `ensureManifest()` 落（本类之外无人写 timeline 目录）。
-    if (this.options.adoptLegacyShapedSession !== true) {
-      await assertTimelineWritable(this.sessionDir, this.sessionId);
-    }
+    // 旧格式会话（0.54 之前）：**拒绝**，不是「只读」。判据与错误码在 `legacy-format.ts`
+    // 一处定义，索引写回（`writeIndexSnapshot`）走同一个闸门，所以「哪条写路径忘了判」
+    // 在结构上不成立。0.55 删掉 `events.ndjson` 的全部读写之后，这种目录既不能读也不能写，
+    // 唯一的出路是用 0.54 导出（文案里写着）。
+    await assertSessionFormatSupported(this.sessionDir, this.sessionId);
     await this.ensureManifest();
 
     this.holes = await HoleRegistry.open(this.sessionDir, {

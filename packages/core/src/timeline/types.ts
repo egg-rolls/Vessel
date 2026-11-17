@@ -251,7 +251,13 @@ export type TimelineErrorCode =
   | 'timeline_write_failed'
   | 'timeline_record_too_large'
   | 'timeline_event_type_excluded'
-  | 'session_frozen_readonly'
+  /**
+   * 0.55：**0.54 之前的旧格式会话不再被支持**（只有 `events.ndjson`、没有任何 timeline
+   * 标记）。读、写、索引三条路都抛它，**绝不**当成空会话 —— 那会让人以为历史丢了却查不出
+   * 原因。取代 0.54 的 `session_frozen_readonly`：那套文件格式已经没有代码能解析，
+   * 「只读」这个中间态不复存在。判据与出路（用 0.54 导出）见 `legacy-format.ts`。
+   */
+  | 'legacy_session_unsupported'
   | 'timeline_writer_closed'
   | 'timeline_index_invalid'
   /**

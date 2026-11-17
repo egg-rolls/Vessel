@@ -164,7 +164,9 @@ async function addSession(fixture: Fixture, sessionId: string): Promise<void> {
   });
   const dir = sessionDirPath(fixture.paths.sessions_dir, sessionId);
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, 'events.ndjson'), '');
+  // 0.55：会话目录里的时间线标记（新会话就是这个形状）。旧格式的 `events.ndjson`
+  // 已经没有任何代码会读，夹具也不该再造它。
+  await writeFile(join(dir, 'wal.log'), '');
 }
 
 async function addRun(

@@ -15,7 +15,7 @@
  * 而 EU 的读路径**必须不能写**。前者拿本对象（`SessionEventLogPort`），后者拿
  * `TimelineEventLog`（`SessionEventReadPort`）—— 权限差别在**类型**上，不靠自觉。
  *
- * ## 与旧 `SessionEventLog` 的三处语义差异（都是有意为之）
+ * ## 与旧的 `events.ndjson` 日志（`SessionEventLog`，0.55 已删除）的三处语义差异（都是有意为之）
  *
  * 1. **`append` 不再 fsync `events.ndjson`**：它落到时间线 WAL（非 chunk 行一行一条，
  *    chunk 进块），`seq` 是 `timeline_seq`（会话内单调、唯一分配点在写者）。
@@ -24,8 +24,8 @@
  * 3. **`appendMany` 是写者的一次批量 append**（一次 write + 一次 fsync），语义与逐条
  *    `append` 相同：同一个 seq 序列、同样的行字节。
  *
- * 冻结会话（旧格式，`freeze.ts` 判据）：`append` 抛 `session_frozen_readonly`，读侧返回
- * 「空时间线」（那个会话本来就没有 timeline）。
+ * 旧格式会话（0.54 之前，`legacy-format.ts` 判据）：`append` 抛 `legacy_session_unsupported`，
+ * 读侧同样抛（0.55 不把这种目录报成「空时间线」——那会让人以为历史丢了）。
  *
  * @module vessel/timeline-session-log
  */
@@ -66,7 +66,7 @@ export interface TimelineSessionLogOptions {
   dualWrite?: TimelineDualWrite;
 }
 
-/** 造一个「时间线实现的 `SessionEventLog`」：读走读口、写走写者。 */
+/** 造一个「时间线实现的 `SessionEventLogPort`」：读走读口、写走写者。 */
 export function createTimelineSessionLog(options: TimelineSessionLogOptions): TimelineSessionLog {
   const { read, dualWrite } = options;
   const writer = (): TimelineDualWrite => {

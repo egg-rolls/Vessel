@@ -317,7 +317,7 @@ export interface ObservabilityConfig {
   showProcessErrors?: boolean;
 }
 
-/** serve TLS 配置；cert/key 必须成对 */
+/** `node.tls` 配置；cert/key 必须成对 */
 export interface ServeTlsConfig {
   certFile?: string;
   keyFile?: string;
@@ -342,7 +342,7 @@ export interface Principal {
   hub_id?: string;
 }
 
-/** serve token 条目（A-3 §10.4；键为原始 token，永不打印） */
+/** `node.tokens` 的条目（A-3 §10.4；键为原始 token，永不打印） */
 export interface ServeTokenEntry {
   role?: PrincipalRole;
 }
@@ -407,8 +407,14 @@ export interface PluginHttpLimitsConfig {
   maxFrameBytes?: number | null;
 }
 
-/** serve 配置（0.3；默认回环 + 明文） */
-export interface ServeConfig {
+/**
+ * `node:` 段（0.55 定稿名；对应 `vessel node start`）。
+ *
+ * 0.55 起 **`serve:` 段整个不再接受**：loader 读到它就报错并要求改名（`serve.<x>` →
+ * `node.<x>`），所以用户层唯一的块名是 `node:`。类型名从 `ServeConfig` 改成 `NodeConfig`
+ * 是为了让错误 / 文档 / 类型三处说的是同一个词（0.3 时代它还叫 `serve`，那个命令 0.49 就没了）。
+ */
+export interface NodeConfig {
   /** 监听地址（默认 127.0.0.1） */
   hostname?: string;
   /**
@@ -444,7 +450,7 @@ export interface ServeConfig {
 }
 
 /**
- * 0.49：平台 Gateway 配置（与 `serve` 的 node 配置分区，不共享 token 键）。
+ * 0.49：平台 Gateway 配置（与 `node` 的 node 配置分区，不共享 token 键）。
  * YAML 键：`gateway.port / hostname / token / token_env / allowed_origins`。
  * 平台 token 是静态 bearer；G1 不铸造、不哈希、不落盘。
  */
@@ -457,7 +463,7 @@ export interface GatewayConfig {
   token?: string;
   /** 从该环境变量读取平台 token（token 未设置时生效） */
   tokenEnv?: string;
-  /** 平台静态宿主的浏览器 Origin allowlist（规则同 serve.allowedOrigins） */
+  /** 平台静态宿主的浏览器 Origin allowlist（规则同 node.allowedOrigins） */
   allowedOrigins?: string[];
   /**
    * 0.55 P0：反代共享密钥的环境变量名（opt-in）。
@@ -469,17 +475,6 @@ export interface GatewayConfig {
   proxySecretEnv?: string;
 }
 
-/**
- * 0.56：`node:` 段（对应 `vessel node start`），`serve:` 的**规范新名**。
- *
- * 为什么改名：0.55 之后已经没有 `vessel serve` 命令了，「serve:」这个名字会让
- * 用户以为它在配一个不存在的东西。字段形状与 `ServeConfig` 完全一致，
- * 由 loader 归一化后仍落到运行时的 `config.serve`（内部单一真源）。
- *
- * 优先级：两段同时出现时 **`node:` 赢**，被覆盖的 `serve:` 键逐项警告；
- * 只写 `serve:` → 仍然生效，但启动与 `doctor` 都会提示改成 `node:`（0.57 移除）。
- */
-export type NodeConfig = ServeConfig;
 /** 0.56：一个登录后端（目前只有 github_oauth）。 */
 export interface AuthBackendConfig {
   /** 后端种类；0.56 P0 只实现 github_oauth。 */
@@ -550,7 +545,7 @@ export interface ConnectConfig {
  * 多节点 attention 的节点（S9.4）。
  *
  * token 只从 `tokenEnv` 指向的环境变量读取，**不接受内联 token**；
- * 每节点独立凭据，不与 `connect` / `serve` 的 token 互相回退。
+ * 每节点独立凭据，不与 `connect` / `node` 的 token 互相回退。
  */
 export interface AttentionNodeConfig {
   /** `--node <name>` 选择器；同一配置内唯一 */
@@ -710,7 +705,7 @@ export interface HubConfig {
    *
    * 配置后，hub 只把「回环 peer **且** 带 `X-Vessel-Proxy-Secret`」的请求当成可信本机
    * （目录 / WS 目录流 / 删节点都走这条判定）。不配 = 旧行为（回环即可信）。
-   * 与 `serve.proxy_secret_env` / `gateway.proxy_secret_env` 同机制，密钥不要跨用途复用。
+   * 与 `node.proxy_secret_env` / `gateway.proxy_secret_env` 同机制，密钥不要跨用途复用。
    */
   proxySecretEnv?: string;
   allowFileSecrets?: boolean;
@@ -724,7 +719,7 @@ export type ConfigSource = 'cli' | 'env' | 'project' | 'user' | 'default';
 export type ConfigSources = Record<string, ConfigSource>;
 
 /**
- * 脱敏后的来源映射：敏感路径（`serve.tokens.*` / `*.apiKey` / `*.token`）
+ * 脱敏后的来源映射：敏感路径（`node.tokens.*` / `*.apiKey` / `*.token`）
  * 的值是 `<set>` 而不是来源标签。
  */
 export type RedactedConfigSources = Record<string, ConfigSource | '<set>'>;
@@ -882,18 +877,17 @@ export interface VesselConfig {
   mcpServers?: Record<string, McpServerConfig>;
   /** 0.3：durable run（checkpoint / resume） */
   durable?: DurableConfig;
-  /** 0.3：gateway 监听与 TLS（**deprecated**：0.56 起规范名是 `node:`） */
-  serve?: ServeConfig;
   /**
-   * 0.56：`node:` 段（规范新名；`serve:` 退化为兼容别名）。
+   * 0.55：`node:` 段（对应 `vessel node start`）—— gateway 监听、TLS、token、Origin allowlist。
    *
-   * loader 归一化后**不会**保留这个键：内容合并进 `serve`（node 优先），
-   * 运行时只有一份真源。这里保留类型是为了让用户层 / CLI 层能安全地写 `node:`。
+   * **`serve:` 段已移除**（0.55）：它是这个块的 0.3 时代旧名，而 `vessel serve` 命令
+   * 0.49 就没了。loader 读到 `serve:` 直接报错，并按 `serve.<x>` → `node.<x>` 逐项给出
+   * 改名提示 —— 绝不静默生效、也绝不静默丢弃。
    */
   node?: NodeConfig;
   /** 0.56：单一根密钥（派生 token 的来源） */
   security?: SecurityConfig;
-  /** 0.49：平台 Gateway（与 node 侧 serve 分区） */
+  /** 0.49：平台 Gateway（与 `node:` 段分区，不共享 token 键） */
   gateway?: GatewayConfig;
   /** S5：hub 控制面 */
   hub?: HubConfig;

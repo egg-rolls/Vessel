@@ -61,14 +61,8 @@ export {
   pruneRuns,
 } from './prune.js';
 export { FileRunRecordStore, MemoryRunRecordStore } from './run-record-store.js';
-export {
-  type ReadSessionEventsOptions,
-  removeLegacySessionTrace,
-  SessionEventLog,
-  type SessionEventLogOptions,
-  type SessionLogIndex,
-  sessionLogDirExists,
-} from './session-event-log.js';
+export type { SessionLogIndex } from './session-index.js';
+export { removeLegacySessionTrace, sessionLogDirExists } from './session-log-dir.js';
 export {
   compareSessionInfo,
   deriveSessionMeta,

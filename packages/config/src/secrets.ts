@@ -270,10 +270,10 @@ function resolveSimpleSecrets(
     );
   }
 
-  const serve = config.serve;
-  if (isRecord(serve)) {
-    const servePath = joinPath(prefix, 'serve');
-    resolvePair(serve, 'token', 'tokenEnv', servePath, env, errors, resolved);
+  const node = config.node;
+  if (isRecord(node)) {
+    const nodePath = joinPath(prefix, 'node');
+    resolvePair(node, 'token', 'tokenEnv', nodePath, env, errors, resolved);
   }
 
   // 0.6：connect.token_env → connect.token
@@ -306,7 +306,7 @@ function resolveMcpServers(
  * 按层解析 `_env` 间接引用，返回新 layer（入参不被修改）。
  *
  * 支持：
- * - `apiKey` / `provider.apiKey` / `feishu.appSecret` / `serve.token`
+ * - `apiKey` / `provider.apiKey` / `feishu.appSecret` / `node.token`
  * - `mcpServers.<name>.env.<KEY>` 与 `.headers.<Header>`
  */
 export function resolveEnvRefsInLayer(
@@ -345,7 +345,7 @@ const FIXED_SECRET_PATHS: readonly string[][] = [
   ['apiKey'],
   ['provider', 'apiKey'],
   ['feishu', 'appSecret'],
-  ['serve', 'token'],
+  ['node', 'token'],
   ['transport', 'token'],
   ['connect', 'token'],
 ];
@@ -384,7 +384,7 @@ function isSensitiveKey(key: string): boolean {
   );
 }
 
-/** serve.tokens 特例：永不输出 token 键或值，role 保留。 */
+/** `node.tokens` 特例：永不输出 token 键或值，role 保留。 */
 function redactServeTokens(value: unknown): unknown {
   if (!isRecord(value)) return '<unset>';
   const entries = Object.values(value);
@@ -413,7 +413,7 @@ function redactNode(node: unknown, path: string[]): unknown {
   for (const [key, value] of Object.entries(node)) {
     const fullPath = [...path, key];
 
-    if (endsWithPath(fullPath, ['serve', 'tokens'])) {
+    if (endsWithPath(fullPath, ['node', 'tokens'])) {
       result[key] = redactServeTokens(value);
       continue;
     }
@@ -443,9 +443,9 @@ function redactNode(node: unknown, path: string[]): unknown {
 /**
  * 返回脱敏后的配置副本。
  *
- * 固定字段（apiKey / provider.apiKey / feishu.appSecret / serve.token /
+ * 固定字段（apiKey / provider.apiKey / feishu.appSecret / node.token /
  * transport.token / MCP env+headers 值）输出 `<set>` / `<unset>`；
- * `serve.tokens` 输出按 entry 的 `<set>`，永不输出 token 键或值。
+ * `node.tokens` 输出按 entry 的 `<set>`，永不输出 token 键或值。
  */
 export function redactConfig(config: VesselConfig): VesselConfig {
   return redactNode(structuredClone(config), []) as VesselConfig;

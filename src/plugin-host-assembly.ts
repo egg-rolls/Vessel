@@ -172,7 +172,7 @@ export function createPluginHostManager(options: PluginHostAssemblyOptions): Plu
     // 懒激活（首次页面 / RPC 访问）时解析 settings；单执行面只用一份配置。
     settingsFor: (id) => options.settingsFor?.(id) ?? pluginSettingsFor(options.config, id),
     // 0.48 M1：serve.pluginHttp → 归一化宿主限额；manifest 只能收紧。
-    httpLimits: resolvePluginHttpLimits(options.config.serve?.pluginHttp),
+    httpLimits: resolvePluginHttpLimits(options.config.node?.pluginHttp),
     ...(logger !== undefined
       ? {
           logger: (level, message, meta) => {

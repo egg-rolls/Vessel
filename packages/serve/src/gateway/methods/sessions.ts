@@ -46,6 +46,8 @@ import {
 import { MethodError } from '../errors.js';
 import {
   EMPTY_TIMELINE_HEADS,
+  isLegacySessionUnsupported,
+  legacySessionUnsupportedMessage,
   selectTimelinePage,
   TIMELINE_PAGE_LIMIT,
   type TimelineReadPort,
@@ -942,11 +944,22 @@ async function readTimelineEventPage(
   let hasMore = false;
   while (scanned < SESSION_EVENTS_MAX_SCAN) {
     if (cursor >= effectiveEnd) break;
-    const page = await port.readPage(sessionId, {
-      afterSeq: cursor,
-      untilSeq: effectiveEnd,
-      limit: TIMELINE_PAGE_LIMIT,
-    });
+    let page: Awaited<ReturnType<TimelineReadPort['readPage']>>;
+    try {
+      page = await port.readPage(sessionId, {
+        afterSeq: cursor,
+        untilSeq: effectiveEnd,
+        limit: TIMELINE_PAGE_LIMIT,
+      });
+    } catch (error) {
+      // 0.55：旧格式会话在**页读**这一层被 core 拒绝（`legacy_session_unsupported`）。
+      // 必须把它升级成同一个协议码再抛 —— 让它落成 `internal` 等于把「这个会话是 0.54
+      // 之前的格式」说成「服务端内部错误」，用户拿不到那句可照做的修复提示。
+      if (isLegacySessionUnsupported(error)) {
+        throw new MethodError('legacy_session_unsupported', legacySessionUnsupportedMessage(error));
+      }
+      throw error;
+    }
     const ordered = selectTimelinePage(page, cursor + 1, effectiveEnd, TIMELINE_PAGE_LIMIT);
     if (ordered.length === 0) break;
     for (const record of ordered) {
@@ -1463,7 +1476,18 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         // 缓存口径与两个旧派生值相同（按**事件日志尾水位**失效）：有事件 ⇒ 水位变 ⇒ 重读。
         // 已知边界（照实写）：只发生归档、不写新事件时水位不动，`timeline_head` 可能比
         // 真值落后一次 `sessions.get`；它不是判据（ADR-105 §5：索引/派生物不得当判据）。
-        const timeline = await headsPort?.lookup(sessionId).catch(() => undefined);
+        // 0.55：旧格式会话**必须报错**，不能当成空会话。`lookup` 抛的
+        // `legacy_session_unsupported` 在这里升级成协议错误码（其它读取失败仍按
+        // 「观测值缺省」处理 —— 它们不该把 `sessions.get` 打成 internal）。
+        const timeline = await headsPort?.lookup(sessionId).catch((error: unknown) => {
+          if (isLegacySessionUnsupported(error)) {
+            throw new MethodError(
+              'legacy_session_unsupported',
+              legacySessionUnsupportedMessage(error),
+            );
+          }
+          return undefined;
+        });
         return {
           last_seq: lastSeq,
           ...(derived === undefined
@@ -1805,7 +1829,8 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         //
         // 0.54 C 删掉的两条回退（都是迁移窗口的过渡件，全库会话迁完之后没有读者）：
         // - `timeline.read_from = 'legacy'` 开关（回退上限 48 小时，已过期）；
-        // - 事件日志分支（旧格式会话只读冻结；写侧仍由 `freeze.ts` 防御性拒绝）。
+        // - 事件日志分支（0.55 起旧格式会话连读都不支持：`legacy-format.ts` 抛
+        //   `legacy_session_unsupported`，由 `deps.timelineHeads.lookup` 冒泡上来）。
         const timelinePort = deps.timelineRead;
         if (timelinePort === undefined) {
           // 与 `compact_unavailable` 同思路：能力没注入就是没注入，不假装空日志、
@@ -1813,8 +1838,20 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           throw new RpcError('not_supported', 'Session timeline is not configured');
         }
         // `heads` 缺省（新会话还没写过任何事件）⇒ 空段，不是错误：见
-        // `EMPTY_TIMELINE_HEADS` 的注释。
-        const timelineHeads = await deps.timelineHeads?.lookup(sessionId);
+        // `EMPTY_TIMELINE_HEADS` 的注释。旧格式会话在这里抛 `legacy_session_unsupported`
+        // （core 读口判的），原样升级成协议错误码 —— 不报空页。
+        let timelineHeads: Awaited<ReturnType<NonNullable<typeof deps.timelineHeads>['lookup']>>;
+        try {
+          timelineHeads = await deps.timelineHeads?.lookup(sessionId);
+        } catch (error) {
+          if (isLegacySessionUnsupported(error)) {
+            throw new MethodError(
+              'legacy_session_unsupported',
+              legacySessionUnsupportedMessage(error),
+            );
+          }
+          throw error;
+        }
         return readTimelineEventPage(
           timelinePort,
           sessionId,

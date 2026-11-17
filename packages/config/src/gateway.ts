@@ -35,7 +35,7 @@ export function resolvePlatformToken(
  * 0.55 P0：解析反代共享密钥。
  *
  * - 平台入口：`gateway.proxy_secret_env` 指向的环境变量；
- * - node 入口：`serve.proxy_secret_env` 指向的环境变量。
+ * - node 入口：`node.proxy_secret_env` 指向的环境变量。
  *
  * 只读环境变量名，**不接受 YAML 内联密钥**（避免密钥落盘到 config）。
  * 未配置 / 变量为空 → undefined，调用方据此逐字保持旧行为。
@@ -55,19 +55,19 @@ export function resolvePlatformProxySecret(
   return resolveProxySecret(config.gateway?.proxySecretEnv, env);
 }
 
-/** node 入口的反代密钥（`serve.proxy_secret_env`）。 */
+/** node 入口的反代密钥（`node.proxy_secret_env`）。 */
 export function resolveServeProxySecret(
   config: VesselConfig,
   env: EnvMap = process.env,
 ): string | undefined {
-  return resolveProxySecret(config.serve?.proxySecretEnv, env);
+  return resolveProxySecret(config.node?.proxySecretEnv, env);
 }
 
 /**
  * 平台 token 与 node 生效凭据的冲突检查。
  *
  * `nodeToken` 必须由调用方传入 `resolveGatewayToken(config, env)` 的结果
- * （不能只传 `serve.token`，否则只配 `serve.admin_token` 时会漏判）。
+ * （不能只传 `node.token`，否则只配了别的凭据来源时会漏判）。
  * 两者都非空且完全相同 → 返回错误码 `platform_token_conflict`；否则返回 null。
  */
 export function checkPlatformTokenConflict(input: {
@@ -85,8 +85,8 @@ export function checkPlatformTokenConflict(input: {
 /**
  * 默认端口映射（config resolver 级 oracle）。
  *
- * - `gateway` 模式：平台 8642；node 为 `serve.port`，未显式设置时 8644。
- * - `legacy` 模式：无独立平台端口；node 为 `serve.port`，未显式设置时 8642。
+ * - `gateway` 模式：平台 8642；node 为 `node.port`，未显式设置时 8644。
+ * - `legacy` 模式：无独立平台端口；node 为 `node.port`，未显式设置时 8642。
  *
  * 只读 `config`，不读 env、不启动监听。
  */
@@ -97,11 +97,11 @@ export function resolveGatewayNodePorts(
   if (mode === 'gateway') {
     return {
       platformPort: config.gateway?.port ?? DEFAULT_GATEWAY_OPTIONS.port,
-      nodePort: config.serve?.port ?? 8644,
+      nodePort: config.node?.port ?? 8644,
     };
   }
   return {
     platformPort: undefined,
-    nodePort: config.serve?.port ?? DEFAULT_GATEWAY_OPTIONS.port,
+    nodePort: config.node?.port ?? DEFAULT_GATEWAY_OPTIONS.port,
   };
 }

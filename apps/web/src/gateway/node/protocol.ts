@@ -23,7 +23,6 @@ function currentOrigin(): string {
 }
 
 import type {
-  GapFrame,
   GatewayErrorBody,
   HelloInfo,
   HelloTimelineSegment,
@@ -56,17 +55,17 @@ export interface EventMeta {
 /**
  * hello 帧的**平铺**时间线段 → 内部归一化对象（`HelloTimelineSegment`）。
  *
- * 线上形状由 `packages/serve/src/gateway/frames.ts#helloFrame` 决定：`timeline_source ===
- * 'timeline'` 时它把六个字段（+ `published_head` / `reset`）**平铺**在 hello 帧上，**没有**
- * 嵌套的 `timeline` 对象。0.54 B1 起线的两端就一直是这个形状；客户端早先按嵌套对象读，
- * 于是 `readTimelineHelloSegment(source, undefined)` 永远返回 `undefined` —— 四条校验与
+ * 线上形状由 `packages/serve/src/gateway/frames.ts#helloFrame` 决定：时间线 epoch 会把六个
+ * 字段（+ `published_head` / `reset`）**平铺**在 hello 帧上，**没有**嵌套的 `timeline` 对象。
+ * 0.54 B1 起线的两端就一直是这个形状；客户端早先按嵌套对象读，于是
+ * `readTimelineHelloSegment(source, undefined)` 永远返回 `undefined` —— 四条校验与
  * epoch 记账在真机上从未生效（一律退化成老 epoch 行为）。这个映射就是那处修复。
  *
- * 判据（不猜）：`timeline_source` 不是 `'timeline'` ⇒ 不给；时间线的键缺一个 / 不是非负整数
- * ⇒ 也不给（半截实现按老 epoch 处理，宁可不校验也不假校验）。
+ * 判据（不猜，0.55 只认形状）：时间线的键缺一个 / 不是非负整数 ⇒ 不给（半截实现按老 epoch
+ * 处理，宁可不校验也不假校验）。0.54 的 `timeline_source` 显式标记已删除 —— 它当初的用途
+ * 正是这个判据，而现在形状本身就是完整的判据（服务端同步停发该键）。
  */
 function readHelloTimelineSegment(frame: {
-  timeline_source?: 'timeline' | 'legacy';
   start_seq?: number;
   end_seq?: number;
   count?: number;
@@ -77,7 +76,6 @@ function readHelloTimelineSegment(frame: {
   tainted?: boolean;
   reset?: boolean;
 }): HelloTimelineSegment | undefined {
-  if (frame.timeline_source !== 'timeline') return undefined;
   const isSeq = (value: number | undefined): value is number =>
     typeof value === 'number' && Number.isInteger(value) && value >= 0;
   const {
@@ -119,7 +117,6 @@ export abstract class ProtocolClient {
   private readonly eventListeners = new Set<(event: RunEvent, meta: EventMeta) => void>();
   private readonly stateListeners = new Set<(state: ConnectionState) => void>();
   private readonly helloListeners = new Set<(info: HelloInfo) => void>();
-  private readonly gapListeners = new Set<(gap: GapFrame) => void>();
   /** 0.55：时间线 epoch 的显式结束标记（`timeline-epoch-end`）。 */
   private readonly epochEndListeners = new Set<(end: TimelineEpochEndFrame) => void>();
   private readonly closeListeners = new Set<(code: number) => void>();
@@ -173,11 +170,6 @@ export abstract class ProtocolClient {
   onHello(cb: (info: HelloInfo) => void): () => void {
     this.helloListeners.add(cb);
     return () => this.helloListeners.delete(cb);
-  }
-
-  onGap(cb: (gap: GapFrame) => void): () => void {
-    this.gapListeners.add(cb);
-    return () => this.gapListeners.delete(cb);
   }
 
   /**
@@ -347,21 +339,18 @@ export abstract class ProtocolClient {
 
     switch (frame.kind) {
       case 'hello': {
-        // 0.54 B1：时间线段在**线上是平铺的**（`start_seq` / `end_seq` / `count` / …），
+        // 时间线段在**线上是平铺的**（`start_seq` / `end_seq` / `count` / …），
         // 归一化成一个对象往下传。这里是唯一一处 wire → 内部形状的映射：下游
-        // （`readTimelineHelloSegment` / 四条校验 / `beginTimelineEpoch`）只认一个对象。
+        // （四条校验 / `beginTimelineEpoch`）只认一个对象。
         //
-        // 形状不全 ⇒ 不给 `timeline`（fail-closed 当成老 epoch）：`timeline_source` 说是
-        // 时间线、六个字段却缺一个，说明对端是半截实现，按「不做四条校验」处理。
+        // 形状不全 ⇒ 不给 `timeline`（fail-closed 当成老 epoch）：六个键缺一个，说明对端是
+        // 半截实现，按「不做四条校验」处理。0.55 起**没有**别的判据（`timeline_source` 已删）。
         const segment = readHelloTimelineSegment(frame);
         this.helloInfo = {
           protocol: frame.protocol,
           node: frame.node,
           from_seq: frame.from_seq,
           latest_seq: frame.latest_seq,
-          ...(frame.timeline_source !== undefined
-            ? { timeline_source: frame.timeline_source }
-            : {}),
           ...(segment !== undefined ? { timeline: segment } : {}),
         };
         this.setState('open');
@@ -379,10 +368,6 @@ export abstract class ProtocolClient {
             ...(frame.job_id ? { jobId: frame.job_id } : {}),
           });
         }
-        return;
-      }
-      case 'gap': {
-        for (const cb of [...this.gapListeners]) cb(frame);
         return;
       }
       case 'timeline-epoch-end': {

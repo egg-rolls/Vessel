@@ -95,7 +95,7 @@ function convertKeys(
  * 需要原样保留键名的 map 路径（0.5）：
  * - mcpServers 第一层：server 名
  * - mcpServers.<name>.env / .headers：环境变量 / HTTP 头名
- * - serve.tokens：token 原文
+ * - node.tokens：token 原文
  * - pricing.models：模型名（常含 `/`、`.`，不能按 snake_case 改写）
  */
 export function preserveConfigMapKeys(path: string[], _key: string): boolean {
@@ -103,7 +103,7 @@ export function preserveConfigMapKeys(path: string[], _key: string): boolean {
     if (path.length === 1) return true;
     return path.length === 3 && (path[2] === 'env' || path[2] === 'headers');
   }
-  if (path[0] === 'serve' && path.length === 2 && path[1] === 'tokens') return true;
+  if (path[0] === 'node' && path.length === 2 && path[1] === 'tokens') return true;
   if (path[0] === 'pricing' && path.length === 2 && path[1] === 'models') return true;
   return false;
 }
@@ -408,77 +408,56 @@ function applyLayerRecord(
   }
 }
 
-/**
- * 0.56：`node:` 段归一化。
- *
- * `node:` 是规范新名（对应 `vessel node start`；`vessel serve` 早已不存在），
- * `serve:` 退化为兼容别名。归一化规则（冻结）：
- *
- * - 两段都不在 → 什么都不做；
- * - 只有 `node:` → 内容搬到 `serve:`（**不警告**：这是规范写法）；
- * - 两段都在 → **`node:` 赢**，被覆盖的 `serve:` 键逐项列进 warning；
- * - 只有 `serve:` → 原样保留，并给一条弃用警告（0.57 移除）。
- *
- * 为什么在**每一层**归一化而不是合并后归一化：`_env` 解析（`node.token_env` →
- * `node.token`）与分层优先级都作用在层上；先归一化能让 `node:` 拿到与 `serve:`
- * 完全一致的语义，运行时也只有一份真源（`config.serve`）。
- */
-function normalizeNodeLayer(layer: Record<string, unknown>): {
-  layer: Record<string, unknown>;
-  shadowed: string[];
-  hadServe: boolean;
-  hadNode: boolean;
-} {
-  const hadServe = isRecord(layer.serve);
-  const hadNode = isRecord(layer.node);
-  if (!hadNode) return { layer, shadowed: [], hadServe, hadNode };
-
-  const nodeBlock = layer.node as Record<string, unknown>;
-  const serveBlock = hadServe ? (layer.serve as Record<string, unknown>) : {};
-  const shadowed = Object.keys(nodeBlock).filter((key) => key in serveBlock);
-  const merged: Record<string, unknown> = { ...serveBlock, ...nodeBlock };
-  const next: Record<string, unknown> = { ...layer, serve: merged };
-  // `node` 不进入运行时的配置对象：只保留一份真源，避免两处不一致。
-  delete next.node;
-  return {
-    layer: next,
-    shadowed: shadowed.filter((key) => nodeBlock[key] !== undefined),
-    hadServe,
-    hadNode,
-  };
+/** camelCase 键 → YAML snake_case。**只用于文案**（解析从不依赖它）。 */
+function yamlKeyOf(camel: string): string {
+  return camel.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`);
 }
 
 /**
- * 0.56：一层的 `node:` / `serve:` 相关警告（不回显任何 token 值）。
+ * 0.55：**`serve:` 段已移除** —— 读到就报错，绝不静默生效、也绝不静默丢弃。
  *
+ * 为什么是错误而不是警告：`serve:` 是 0.3 时代这个块的旧名（`vessel serve` 命令 0.49
+ * 就不存在了），0.55 起用户层唯一的块名是 `node:`。留着「照旧生效 + 一条警告」等于让同一
+ * 份字段有两个名字，而两条读法迟早会在某处漂开（`doctor` 看一个、启动看另一个）。
+ *
+ * 三条硬约束：
+ * 1. **失败，不是降级**：本函数把 `serve:` 整块从这一层**摘掉**（不让任何一条键生效），
+ *    同时返回一条 error —— 调用方把它并进 validation，启动直接结束；
+ * 2. **文案必须可照做**：逐键列出 `serve.<x> -> node.<x>`（snake_case，就是用户 YAML 里
+ *    写的那几个字），用户复制改名即可，不必来查文档；不回显任何 token 值（`serve.tokens`
+ *    的键就是 token 本身，所以**只列键名，不列内容**）；
+ * 3. **判据只在层上**：用户层 / 项目层各自判各自的那一份，报错文案带层名 —— 两层可能
+ *    都写了，用户需要知道去改哪个文件。
+ *
+ * @param layer snake→camel 之后的层（`serve` / `node` 都是块名，转换不影响它们）
  * @param label 人类可读的来源名（"user config" / "project config"），进文案。
  */
-function nodeAliasWarnings(
-  normalized: { shadowed: string[]; hadServe: boolean; hadNode: boolean },
+function rejectServeBlock(
+  layer: Record<string, unknown>,
   label: string,
-): ConfigValidationWarning[] {
-  if (!normalized.hadNode && !normalized.hadServe) return [];
-  if (normalized.hadNode && normalized.shadowed.length > 0) {
-    return [
-      {
-        path: 'node',
-        message:
-          `Both "node:" and "serve:" are set in the ${label}; "node:" wins and ` +
-          `serve.{${normalized.shadowed.join(',')}} is ignored. Delete the "serve:" block ` +
-          '(0.57 removes the "serve:" alias).',
-      },
-    ];
-  }
-  if (normalized.hadNode) return [];
-  return [
-    {
+): { layer: Record<string, unknown>; error?: ConfigValidationError } {
+  if (layer.serve === undefined) return { layer };
+  const block = isRecord(layer.serve) ? (layer.serve as Record<string, unknown>) : undefined;
+  const keys = block === undefined ? [] : Object.keys(block);
+  const renames =
+    keys.length === 0
+      ? 'serve -> node'
+      : keys.map((key) => `serve.${yamlKeyOf(key)} -> node.${yamlKeyOf(key)}`).join(', ');
+  const { serve: _dropped, ...rest } = layer;
+  return {
+    layer: rest,
+    error: {
       path: 'serve',
       message:
-        `The "serve:" block in the ${label} is deprecated: there is no "vessel serve" ` +
-        'command any more. Rename "serve:" to "node:" (same keys, same behaviour). ' +
-        '0.57 removes "serve:".',
+        `The "serve:" block in the ${label} was removed in 0.55 (the block is called "node:" ` +
+        'now, and there has been no "vessel serve" command since 0.49). This is an error, not ' +
+        'a warning: nothing from this block was applied. ' +
+        `Fix: in that file rename each key, values unchanged — ${renames}. ` +
+        'The keys and their meaning are identical (hostname / port / allow_remote / tls / ' +
+        'token / token_env / tokens / allowed_origins / plugin_http / proxy_secret_env), so ' +
+        'this is a pure rename of the block label.',
     },
-  ];
+  };
 }
 
 /** 用户配置中出现的 legacy provider 键（snake_case 名称，用于 warning）。 */
@@ -601,10 +580,10 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   }
 
   const fullUser = fullUserLayer(rawUser);
-  // 0.56：`node:`（规范名）→ `serve:`（运行时真源），并给出弃用 / 覆盖警告。
-  const userAlias = normalizeNodeLayer(fullUser);
-  preWarnings.push(...nodeAliasWarnings(userAlias, 'user config'));
-  const resolvedUser = resolveEnvRefsInLayer(userAlias.layer as Partial<VesselConfig>, env);
+  // 0.55：`serve:` 段已移除 —— 读到就报错并摘掉整块（详见 `rejectServeBlock`）。
+  const userLayer = rejectServeBlock(fullUser, 'user config');
+  if (userLayer.error !== undefined) preErrors.push(userLayer.error);
+  const resolvedUser = resolveEnvRefsInLayer(userLayer.layer as Partial<VesselConfig>, env);
   applyLayerWithSources(config, resolvedUser.layer, 'user', sources);
   for (const key of Object.keys(resolvedUser.resolved)) sources[key] = 'env';
   preErrors.push(...resolvedUser.errors);
@@ -613,13 +592,13 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   const projectFile = await loadRawConfig(projectPath);
   if (projectFile.error) preErrors.push(projectFile.error);
   const rawProject = projectFile.raw;
-  const projectAlias = normalizeNodeLayer(rawProject);
-  preWarnings.push(...nodeAliasWarnings(projectAlias, 'project config'));
-  const resolvedProject = resolveEnvRefsInLayer(projectAlias.layer as Partial<VesselConfig>, env);
+  const projectLayer = rejectServeBlock(rawProject, 'project config');
+  if (projectLayer.error !== undefined) preErrors.push(projectLayer.error);
+  const resolvedProject = resolveEnvRefsInLayer(projectLayer.layer as Partial<VesselConfig>, env);
   applyLayerWithSources(config, resolvedProject.layer, 'project', sources);
   for (const key of Object.keys(resolvedProject.resolved)) sources[key] = 'env';
   preErrors.push(...resolvedProject.errors);
-  preErrors.push(...projectSecretErrors(rawProject));
+  preErrors.push(...projectSecretErrors(projectLayer.layer));
 
   // 4. 单公司 id：T4 删除 tenant 块 / --tenant / VESSEL_TENANT 输入后，
   //    解析结果固定为内部常量（C0），仅供路径段与 principal 使用。

@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import type { EventStream } from '../types/event.js';
 import type { RunRecordStore } from '../types/run-record-store.js';
 import type { SessionStore } from '../types/session.js';
-import { removeLegacySessionTrace } from './session-event-log.js';
+import { removeLegacySessionTrace } from './session-log-dir.js';
 
 const PAGE_LIMIT = 200;
 const MAX_PAGES = 10_000;

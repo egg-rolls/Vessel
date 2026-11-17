@@ -8,7 +8,6 @@ export {
   encodeSessionDirName,
   resolveSingleTenantPaths,
   sessionDirPath,
-  sessionEventsFilePath,
   sessionIndexFilePath,
   type TenantPaths,
 } from './tenant-paths.js';

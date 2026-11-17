@@ -47,6 +47,7 @@ import { sessionDirPath } from '../tenant/index.js';
 import type { SessionEventRecord, SessionIndexPatch } from '../types/event.js';
 import type { Logger } from '../types/logging.js';
 import { lastBlockName } from './blocks.js';
+import { assertSessionFormatSupported } from './legacy-format.js';
 import { isTimelineBlobRef, TIMELINE_LAYOUT, type TimelineRecord } from './types.js';
 import {
   decodeChunkBlock,
@@ -93,7 +94,7 @@ export interface TimelineTailMatchOptions {
   maxBytes?: number;
 }
 
-/** 尾窗回扫口径：首窗 / 上限（与 `SessionEventLog.readTailMatches` 同一组数字）。 */
+/** 尾窗回扫口径：首窗 / 上限（与已删除的旧日志读口 `SessionEventLog.readTailMatches` 同一组数字）。 */
 const TAIL_FIRST_BYTES = 64 * 1024;
 const TAIL_MAX_BYTES = 4 * 1024 * 1024;
 
@@ -210,6 +211,9 @@ export class TimelineEventLog {
    *
    * 整份读那一路的三个口径不变：事实源是三处归并、按 seq 去重、外置 blob 取回，并且
    * **先事实后块**（`wal.ts` 的一致快照顺序），所以一次读的返回永远自洽。
+   *
+   * **0.55：旧格式会话在这里抛 `legacy_session_unsupported`**（`legacy-format.ts`）。
+   * 不报空数组：那等于把「这套文件没人能解析了」说成「这个会话没有事件」。
    */
   async read(sessionId: string, options: TimelineReadOptions = {}): Promise<SessionEventRecord[]> {
     const limit =
@@ -219,6 +223,7 @@ export class TimelineEventLog {
     if (limit === 0) return [];
     await this.settled(sessionId);
     const dir = this.sessionDir(sessionId);
+    await assertSessionFormatSupported(dir, sessionId);
     const since =
       typeof options.sinceSeq === 'number' && Number.isFinite(options.sinceSeq)
         ? Math.floor(options.sinceSeq)
@@ -386,7 +391,7 @@ export class TimelineEventLog {
    * 删掉整个会话目录（index + timeline + 块 + blob）。
    *
    * **不关写入句柄**：那是写入侧的职责（装配层先 `closeSession`）。这里只做目录删除，
-   * 与 `SessionEventLog.deleteSession` 的口径一致（目录不存在 ⇒ 返回 false）。
+   * 与已删除的旧日志读口 `SessionEventLog.deleteSession` 的口径一致（目录不存在 ⇒ false）。
    */
   async deleteSession(sessionId: string): Promise<boolean> {
     const existed = await this.hasSession(sessionId);

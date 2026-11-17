@@ -98,16 +98,22 @@ security:
 对象深合并、数组整体替换、map（`mcp_servers`）按 key 合并、`null` 拒绝。
 `plugins` 是**数组**，按整层替换，不按 `name` 合并。
 
-### 2.0 `serve:` → `node:`（0.56 改名，兼容 + 弃用）
+### 2.0 `serve:` 已移除（0.55）：写 `serve:` 就**启动失败**，改名 `node:`
 
-`serve:` 这个块名要改：`vessel serve` 命令早就不存在了（0.49 起是 `vessel node start`），
-继续叫 `serve:` 只会让人以为在配一个不存在的东西。
+这个块的唯一名字是 `node:`（对应 `vessel node start`；`vessel serve` 命令 0.49 就没了）。
+0.55 起 `serve:` 不是「弃用但还能用」——**读到就报错，整块一个键都不生效**：
+
+```text
+✗ serve: The "serve:" block in the user config was removed in 0.55 (the block is called
+  "node:" now, ...). Fix: in that file rename each key, values unchanged —
+  serve.token_env -> node.token_env, serve.allowed_origins -> node.allowed_origins.
+```
 
 | 写法 | 行为 |
 |---|---|
-| 只有 `node:` | 规范写法，**无警告** |
-| 只有 `serve:` | 照旧生效，启动 + `vessel doctor` 各打一条弃用警告 |
-| 两段都有 | **`node:` 逐键覆盖 `serve:`**，被覆盖的键逐项警告 |
+| 只有 `node:` | 唯一被接受的写法 |
+| 只有 `serve:` | **启动失败**（exit 2），整块被丢弃、逐键给出改名提示 |
+| 两段都有 | **启动失败**：`serve:` 存在就报错，不看 `node:` 写了什么 |
 
 ```diff
 -serve:
@@ -115,11 +121,14 @@ security:
    token_env: VESSEL_NODE_TOKEN
 ```
 
-- 字段完全相同（`hostname` / `port` / `allow_remote` / `tls` / `token` / `token_env` /
-  `tokens` / `allowed_origins` / `plugin_http` / `proxy_secret_env`）；
-- loader 会把 `node:` **归一化**进运行时的 `serve`，所以程序内部仍然只有一份真源；
-- **0.57 移除 `serve:`**。届时未改名会直接报错（未知块）。
-- 验证类错误提示里出现 `serve.*` 时，把它读成「你写的 `node:`」（同一字段）。
+- 字段名一个都不变（`hostname` / `port` / `allow_remote` / `tls` / `token` / `token_env` /
+  `tokens` / `allowed_origins` / `plugin_http` / `proxy_secret_env`），只是块标签改名；
+- 用户层与项目层各判各的：文案会说明是哪个文件里的 `serve:`；
+- 为什么不做「警告 + 照旧生效」：同一份字段有两个名字，两条读法迟早会漂开（`doctor` 看一个、
+  启动看另一个），而这正是这次要清掉的东西；
+- `vessel doctor` 的 `config` 一行会显示同一条错误（状态 `fail`），改名后自动恢复正常；
+- 验证类错误提示里的路径现在一律写 `node.*`（例如 `node.port must be an integer…`），
+  与你写的键名一致。
 
 ### 2.0.1 token：用户一个都不用写（0.56 根密钥派生）
 

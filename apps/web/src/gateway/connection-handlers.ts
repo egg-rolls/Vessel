@@ -230,33 +230,6 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     afterConnectionHello({ detector: reconnectDetector, onReconnected: recovery.onReconnected });
   });
 
-  const offGap = client.onGap((gap) => {
-    // gap = 该区间**服务端声明**读不回来。0.54 起它不再静默（ADR-105 §6：洞与缺口必须
-    // 可见）：① 记成缺口（UI 污点条 + console，带 expected/received）；② 重拉那段区间；
-    // ③ 页面快照与 pending 交互照旧重建。**不**退游标 —— 旧行为 `truncateAfter(to_seq)`
-    // 会把已经收到的更新内容截掉（刷新后尤其致命）。
-    //
-    // **P1 #4（`PLAN-0.55-backlog`）待决标记 —— 0.55 这一轮不删**：这一段与
-    // `timeline_source` 帧字段、`consumeHello` 的 legacy 分支、`subscribeOnce` 退回 `since`
-    // 的那一支**必须同一个 commit 删**（gap 帧只由 legacy epoch 发）。生产方在
-    // `packages/serve/**`，不在本单边界内，理由与顺序见 `types/protocol.ts#HelloInfo`。
-    const report = eventStore.reportTimelineGap({
-      from_seq: gap.from_seq,
-      to_seq: gap.to_seq,
-      source: 'server',
-      expected: `[${gap.from_seq}, ${gap.to_seq}] 可读`,
-      received: '服务端声明该区间丢失（gap 帧）',
-      at: Date.now(),
-    });
-    const sessionId = eventStore.scopeSessionId;
-    if (sessionId !== undefined) {
-      void subscription.fillTimelineGap(sessionId, report.from_seq, report.to_seq);
-    }
-    recovery.invalidateRouteSnapshot();
-    // pending 权限 / ask 不能只依赖连接级 epoch：gap 不重连，必须显式补 hydration。
-    recovery.hydrateInteractions();
-  });
-
   const offState = client.onState((state) => {
     if (!disposed) setConnectionState(state);
   });
@@ -291,7 +264,6 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     offEvent();
     offHello();
     offEpochEnd();
-    offGap();
     offState();
     offClose();
     window.clearTimeout(retryTimer);

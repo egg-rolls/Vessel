@@ -523,9 +523,6 @@ export const en: Record<MessageKey, string> = {
   // ── prune (0.51; the criterion is state, not time) ──
   'help.cmd.prune':
     'data cleanup: archived teams / closed agents with their sessions and records (dry-run unless --yes)',
-  // ── session migrate (0.54 C2: one-way migration to the timeline single source) ──
-  'help.cmd.sessionMigrate':
-    'migrate legacy sessions (events.ndjson only) to the timeline single source; one-way, re-entrant, source kept',
   'flag.olderThan':
     'optional extra filter: only prune objects archived/closed before this (e.g. 30d / 12h; bare number = days; omit to ignore time)',
   'prune.head.dryRun': 'dry-run: nothing deleted (re-run with --yes to delete)',

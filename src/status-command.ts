@@ -99,7 +99,7 @@ function instanceView(
       pid: record.pid,
       host: record.host,
       port: record.port,
-      url: gatewayBaseUrl(record, config.serve?.tls !== undefined),
+      url: gatewayBaseUrl(record, config.node?.tls !== undefined),
       started_at: record.started_at,
       uptime_seconds: Math.max(0, Math.floor((now() - Date.parse(record.started_at)) / 1000)),
       version: record.version,
