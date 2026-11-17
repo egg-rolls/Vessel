@@ -15,7 +15,9 @@ export function knownOwnerToolNames(
   config: VesselConfig,
   options: { askUser?: boolean } = {},
 ): string[] {
-  const names = ['bash', 'read', 'edit'];
+  // 0.55.1：`write` 与 bash/read/edit 同属能力工具（建文件/覆盖/追加，逐字节落盘不经 shell）。
+  // 这份清单是 Self Card 里「我有哪些工具」的真相源，加工具必须同步这里，否则模型不会想到用它。
+  const names = ['bash', 'read', 'edit', 'write'];
   if (config.agent?.enabled !== false) names.push('agent');
   if (options.askUser === true && config.ui?.askUser !== false) names.push('ask');
   return names;

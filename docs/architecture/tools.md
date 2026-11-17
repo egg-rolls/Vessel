@@ -42,7 +42,7 @@ interface ToolDefinition {
 
 ## 工具集：能力工具为什么这么少
 
-默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit`**；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；变更只发短通知，按需 `inspect`；未 add 不通知）。成员 body 在装配层 attach 收件箱后另有 `inbox`；`ask` 按入口注册。`team_*` / `delegate_task` 已删除。
+默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit` / `write`**（`write` 是建文件 / 整体替换 / 追加，**逐字节落盘、不经 shell**——heredoc 与重定向会把内容交给 shell，反引号与美元括号会被先展开）；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；变更只发短通知，按需 `inspect`；未 add 不通知）。成员 body 在装配层 attach 收件箱后另有 `inbox`；`ask` 按入口注册。`team_*` / `delegate_task` 已删除。
 
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
@@ -57,6 +57,7 @@ interface ToolDefinition {
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
 | `bash` | `{ command, cwd?, timeout_ms? }` | `ask`；cwd 命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `Bun.spawn(['bash','-c',command])`。超时默认 120s；输出超 2000 行时保留头 1000 + 尾 1000 并标注省略行数；超时返回明确错误文本而非抛异常 |
+| `write` | `{ path, content, mode? }` | `ask`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `mode` = `create`（缺省；目标已存在则**报错不覆盖**）/ `overwrite` / `append`。内容**逐字节落盘、不经 shell**，所以反引号、`$()`、`${…}`、中文、emoji 都不会被展开或吞掉。只自动创建**一级**父目录；单次上限 4 MiB；沿符号链接写到被指文件（链接本身不被替换）；覆盖沿用原文件权限位。与 `edit` 的分工：建文件 / 整体替换 / 追加用 `write`，**局部修改用 `edit`**（逐字符唯一匹配，改不中会报错） |
 | `read` | `{ path, offset?, limit? }` | `allow`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | 带行号返回（从 1 开始）。`limit` 默认 2000 行；截断时标注总行数与继续读的方式 |
 | `edit` | `{ path, old_string, new_string, replace_all? }` | `ask`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `old_string` 必须**精确匹配且唯一**；不唯一时报错并说明匹配次数，未匹配时报错；`replace_all: true` 才允许多处替换 |
 

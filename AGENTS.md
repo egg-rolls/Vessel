@@ -37,7 +37,9 @@
 
 - **可嵌入的多 agent 平台 runtime**：极简核心（稳定接口 + 1 个通用 tool-calling loop + 扩展插槽）、Provider 无关；TUI / CLI / Web / Gateway 是参考 harness 外壳。
 - TypeScript + Bun；bun workspaces monorepo：`packages/{core,agent,config,permission,tui,serve}` + `plugins/` + `apps/web`。`@vessel-agent/core` 是零 UI 依赖的库，`@vessel-agent/agent` 是成员能力层，TUI / serve / web 是应用层外壳。
-- **能力工具只有 `bash` / `read` / `edit`**，别急着加第四个（不提供 `grep` / 文件操作 / meta-tools）。插件工具 `subscribe`（显式文件订阅：变更只发短通知，按需 `inspect`）/ `agent` / `ask` 按入口注册，MCP 工具经插件注册；工具口径与动作表见 [docs/architecture/tools.md](docs/architecture/tools.md#tools)。
+- **能力工具是 `bash` / `read` / `edit` / `write`**（`write` 是 0.55.1 加的：建文件 / 整体替换 / 追加，**逐字节落盘、不经 shell**）。加第五个之前先证明它不能被现有四个表达出来。
+  - 按用途选：**建文件 / 追加 / 整体替换 ⇒ `write`**；**局部改代码 ⇒ `edit`**（逐字符唯一匹配，改不中会报错）；**执行命令 ⇒ `bash`**（不要用它写文件：heredoc 与重定向会把内容交给 shell，反引号和 `$(` 会被先展开）。
+  - 不提供 `grep` / 文件操作 / meta-tools。插件工具 `subscribe`（显式文件订阅：变更只发短通知，按需 `inspect`）/ `agent` / `ask` 按入口注册，MCP 工具经插件注册；工具口径与动作表见 [docs/architecture/tools.md](docs/architecture/tools.md#tools)。
 
 ## 硬安全规则（不可协商）
 
