@@ -15,6 +15,13 @@
 
 ### 性能 / 语义变更
 
+- **usage 插件迁到时间线**（`merge b006338d`）：数据源从 `sessions/<id>/events.ndjson`（0.54 起停写）改为
+  `wal.log` 的**事实行**（只对进合计的行做逐行 CRC32）。不读 `wal.blocks`（只有 chunk 帧、无用量字段）、
+  不读 `timeline.ndjson`（是 `wal.log` 前缀副本，两份会重复计数）。有界：单会话 ≤64 MiB（超了读尾部记
+  `partial_files`）、单次 ≤512 MiB / 4096 会话、保留 ≤192 MiB 按会话 LRU；峰值内存 = 索引行 + 至多一个会话的投影事件。
+  增量索引升 v2（按会话存 size+mtime，未变零字节）。实测 330 会话 / 425 MiB / 282k 行整目录 **5.7 s**。
+  真数据对账（同一拷贝、同一聚合、只换源）：2026-11-15 当天**逐项完全一致**（501 请求 / prompt 102,615,306 /
+  completion 293,052 / cache_read 101,152,640）；全期差异 2.0x **逐项可解释**——旧源停在 0.54 切版时刻。
 - **写者 `open()` 只读尾部**（`perf(core/timeline)`，commit `daa0b00a`）：`timeline.initialize()` 拆成两条路径 ——
   增量（缺省）：`timeline.idx` 打底 + `wal.log` / 归档 / `timeline.manifest` 尾窗（`readNdjsonTail`，首窗 256 KiB、
   上限 4 MiB）+ 只解**最后一个块** + `holes.ndjson` 全读；全量：老路径一条判定不改，任何自洽检查不成立就退回。
