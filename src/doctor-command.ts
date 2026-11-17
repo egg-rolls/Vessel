@@ -167,7 +167,10 @@ function collectTokenCheck(input: {
       rows.push(`${label}=none`);
       return;
     }
-    rows.push(`${label}=${value.source} fp=${tokenFingerprint(value.token)}`);
+    // 0.56 定稿口径：派生值 = 「远程必须带，回环匿名仍可用」。
+    // 显式配置才收紧回环（`tokenConfigured=true`）。这一行就是给运维看的判据。
+    const note = value.source === 'derived' ? ' — remote 需带该值，loopback 匿名仍可用' : '';
+    rows.push(`${label}=${value.source} fp=${tokenFingerprint(value.token)}${note}`);
   };
   push('platform', effectivePlatformToken(input));
   push('hub', effectiveHubToken(input));
@@ -180,7 +183,7 @@ function collectTokenCheck(input: {
     status: 'ok',
     message:
       `root ${rootOrigin} fp=${root.state.fingerprint} · ${rows.join(' · ')} ` +
-      '("explicit" = 你的配置赢了；"derived" = 由 root 现算，不用配)',
+      '("explicit" = 你的配置赢了并收紧回环；"derived" = 由 root 现算，远程仍必须带)',
   };
 }
 
@@ -226,10 +229,20 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
   });
 
   const dataStatus = writeTargetStatus(dataDir);
+  // 0.56.1：数据根**从哪来**也要说清 —— 一台机器跑多个实例（`--data-dir`）时，
+  // 「我看的是哪个实例」是第一件要确认的事，比路径本身更重要。
+  const dataDirSource =
+    env.VESSEL_DATA_DIR !== undefined && env.VESSEL_DATA_DIR !== ''
+      ? 'env VESSEL_DATA_DIR (or --data-dir)'
+      : config.dataDir !== undefined
+        ? 'config data_dir'
+        : 'default';
   checks.push({
     name: 'data_dir',
     status: dataStatus,
-    message: `${dataDir}${fs.existsSync(dataDir) ? '' : ' (will be created)'}`,
+    message: `${dataDir} (source: ${dataDirSource})${
+      fs.existsSync(dataDir) ? '' : ' (will be created)'
+    }`,
   });
 
   const backend = config.session?.backend ?? 'file';

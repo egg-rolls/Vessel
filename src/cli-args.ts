@@ -1711,9 +1711,28 @@ function readFlagValue(
   return { ok: true, value: next, next: index + 1 };
 }
 
+/**
+ * `--data-dir <path>`（0.56.1）：**只覆盖数据目录**，不改变任何其它配置语义。
+ *
+ * 统一写回 `args.dataDirArg`，由 `cli.ts` 转成进程内的 `VESSEL_DATA_DIR`：
+ *
+ * ```
+ * CLI 参数 > 环境变量 > 项目 config > 用户 config
+ * ```
+ *
+ * 这样 gateway / node 的每个子命令（含它们 spawn 的子进程）看到的都是同一个数据根，
+ * 一台机器上因此可以跑互不干扰的多个实例（各自的 pid/lock/logs、各自的 node 注册表、
+ * 各自的会话目录）。
+ */
+function readDataDirFlag(
+  rest: string[],
+  index: number,
+): { ok: true; value: string; next: number } | { ok: false; error: string } {
+  return readFlagValue(rest, index, '--data-dir');
+}
+
 /** gateway 实例名（与 gateway/pid 的校验一致；解析层只做语法） */
 const GATEWAY_INSTANCE_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-
 function parseInstanceName(raw: string): string | null {
   return GATEWAY_INSTANCE_RE.test(raw) ? raw : null;
 }
@@ -1826,6 +1845,13 @@ function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
       i = value.next;
       continue;
     }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for gateway start: ${a}` };
   }
 
@@ -1882,6 +1908,13 @@ function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
       i = selected.next;
       continue;
     }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for gateway stop: ${a}` };
   }
   if (args.help) return { ok: true, args };
@@ -1921,6 +1954,13 @@ function parseGatewayStatus(rest: string[], args: CliArgs): ParseResult {
       i = selected.next;
       continue;
     }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for gateway status: ${a}` };
   }
   if (args.help) return { ok: true, args };
@@ -1930,16 +1970,25 @@ function parseGatewayStatus(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `gateway list [--json]` */
+/** `gateway list [--json] [--data-dir <path>]` */
 function parseGatewayList(rest: string[], args: CliArgs): ParseResult {
   let json = false;
-  for (const a of rest) {
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === undefined) continue;
     if (a === '--help' || a === '-h') {
       args.help = true;
       continue;
     }
     if (a === '--json') {
       json = true;
+      continue;
+    }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
       continue;
     }
     return { ok: false, error: `Unknown argument for gateway list: ${a}` };
@@ -1986,6 +2035,13 @@ function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
     if (!selected.ok) return selected;
     if (selected.matched) {
       i = selected.next;
+      continue;
+    }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
       continue;
     }
     return { ok: false, error: `Unknown argument for gateway restart: ${a}` };
@@ -2035,6 +2091,13 @@ function parseGatewayReload(rest: string[], args: CliArgs): ParseResult {
       i = selected.next;
       continue;
     }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for gateway reload: ${a}` };
   }
   if (args.help) return { ok: true, args };
@@ -2053,13 +2116,22 @@ function parseGatewayReload(rest: string[], args: CliArgs): ParseResult {
 /** `gateway nodes list [--json]` */
 function parseGatewayNodesList(rest: string[], args: CliArgs): ParseResult {
   let json = false;
-  for (const a of rest) {
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === undefined) continue;
     if (a === '--help' || a === '-h') {
       args.help = true;
       continue;
     }
     if (a === '--json') {
       json = true;
+      continue;
+    }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
       continue;
     }
     return { ok: false, error: `Unknown argument for gateway nodes list: ${a}` };
@@ -2119,12 +2191,21 @@ function parseGatewayNodesAdd(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `gateway nodes remove <name>` */
+/** `gateway nodes remove <name> [--data-dir <path>]` */
 function parseGatewayNodesRemove(rest: string[], args: CliArgs): ParseResult {
   let name: string | undefined;
-  for (const a of rest) {
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === undefined) continue;
     if (a === '--help' || a === '-h') {
       args.help = true;
+      continue;
+    }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
       continue;
     }
     if (a.startsWith('-')) {
@@ -2265,6 +2346,13 @@ function parseNodeStart(rest: string[], args: CliArgs): ParseResult {
       i = value.next;
       continue;
     }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for node start: ${a}` };
   }
   if (args.help) return { ok: true, args };
@@ -2272,11 +2360,13 @@ function parseNodeStart(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `node status [--json] [--rpc]` */
+/** `node status [--json] [--rpc] [--data-dir <path>]` */
 function parseNodeStatus(rest: string[], args: CliArgs): ParseResult {
   let json = false;
   let rpc = false;
-  for (const a of rest) {
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === undefined) continue;
     if (a === '--help' || a === '-h') {
       args.help = true;
       continue;
@@ -2289,6 +2379,13 @@ function parseNodeStatus(rest: string[], args: CliArgs): ParseResult {
       rpc = true;
       continue;
     }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for node status: ${a}` };
   }
   if (args.help) return { ok: true, args };
@@ -2296,11 +2393,20 @@ function parseNodeStatus(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `node stop` */
+/** `node stop [--data-dir <path>]` */
 function parseNodeStop(rest: string[], args: CliArgs): ParseResult {
-  for (const a of rest) {
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === undefined) continue;
     if (a === '--help' || a === '-h') {
       args.help = true;
+      continue;
+    }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
       continue;
     }
     return { ok: false, error: `Unknown argument for node stop: ${a}` };
@@ -2330,6 +2436,13 @@ function parseNodeReload(rest: string[], args: CliArgs): ParseResult {
         };
       }
       scopes = [...new Set([...(scopes ?? []), ...parsed])];
+      i = value.next;
+      continue;
+    }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
       i = value.next;
       continue;
     }
@@ -2448,6 +2561,7 @@ function parseTokenArgs(rest: string[], args: CliArgs): ParseResult {
         if (next === undefined || next.startsWith('-') || next.trim() === '') {
           return { ok: false, error: 'Missing value for --data-dir' };
         }
+        args.dataDirArg = next;
         dataDir = next;
         i++;
         continue;
@@ -2483,6 +2597,7 @@ function parseTokenArgs(rest: string[], args: CliArgs): ParseResult {
         if (next === undefined || next.startsWith('-') || next.trim() === '') {
           return { ok: false, error: 'Missing value for --data-dir' };
         }
+        args.dataDirArg = next;
         dataDir = next;
         i++;
         continue;
@@ -2532,7 +2647,10 @@ function parseTokenArgs(rest: string[], args: CliArgs): ParseResult {
       if (a === '--purpose') purpose = next;
       else if (a === '--node') nodeId = next;
       else if (a === '--instance') instanceId = next;
-      else dataDir = next;
+      else {
+        args.dataDirArg = next;
+        dataDir = next;
+      }
       i++;
       continue;
     }
@@ -4320,7 +4438,9 @@ function parseErrorsArgs(rest: string[], args: CliArgs): ParseResult {
 function parseDoctorArgs(rest: string[], args: CliArgs): ParseResult {
   let json = false;
   let deep = false;
-  for (const a of rest) {
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === undefined) continue;
     if (a === '--help' || a === '-h') {
       args.help = true;
       continue;
@@ -4331,6 +4451,14 @@ function parseDoctorArgs(rest: string[], args: CliArgs): ParseResult {
     }
     if (a === '--deep') {
       deep = true;
+      continue;
+    }
+    // 0.56.1：和 gateway/node 同族命令一致，便于「我现在看的是哪个实例」。
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
       continue;
     }
     return { ok: false, error: `Unknown argument for doctor: ${a}` };

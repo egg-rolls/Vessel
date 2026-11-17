@@ -30,6 +30,24 @@ CLI > env > project > user > default
 
 0.49 起没有 tenant overlay，也没有 `tenant` 配置块。旧配置会被 fail-fast 并给出逐项 Fix：删除整个 `tenant:` 块、删除 `serve.tokens[*].tenantId`（只保留 `role`）、删除 `serve.adminToken` / `serve.adminTokenEnv`（改用 `serve.tokens` 的 `{ role: admin }`）。
 
+### 2.0.0 一台机器跑多个实例：`--data-dir`
+
+`gateway start|stop|restart|status|list`、`node start|status|stop|reload`、`doctor`、`token ...`
+都接受 `--data-dir <path>`。它**只覆盖数据目录**，不改变任何其它配置语义：
+
+```
+CLI 参数 > 环境变量 VESSEL_DATA_DIR > 项目 config(data_dir) > 用户 config
+```
+
+```bash
+vessel gateway start --daemon --instance b --port 18920 --data-dir /var/tmp/vessel-b
+vessel gateway list --data-dir /var/tmp/vessel-b     # 只看得到 b
+```
+
+隔离保证：各自的 `platform-<port>.pid` / `.lock` / `logs/`、各自的 `nodes.json`（注册表）、
+各自的 `sessions/` 与 `.locks/`、各自的 `root-secret`（派生 token 互不相同）。
+默认实例的 `8642/8644` 与它的数据目录完全不受影响。
+
 ## 2. 关键配置块
 
 ```yaml
@@ -116,7 +134,16 @@ vessel node token [--print]             # 本机 node 自己该用的 token
 ```
 
 - 显式配置**不算**被派生值覆盖：只配一部分用途完全正常，其余照旧派生。
-- 派生**不会**收紧回环匿名（否则又是一次「升级即掉线」）；要收紧就显式配 token。
+- **定稿口径（0.56）**：没有显式配置 ⇒ 用派生值；**远程必须带它**（缺/错一律 401）；
+  **回环匿名语义保持不变**。只有显式配置才会收紧回环。
+
+  | 情形 | 远程请求 | 回环请求 |
+  |---|---|---|
+  | 未配置（用派生值） | 必须带派生值，否则 401 | 匿名可用（不锁死本地 UI/CLI） |
+  | 显式配置 | 必须带该值 | 不匿名（必须带，旧行为） |
+
+  理由：派生值总是存在，「未配置」与「不鉴权」已经不是同一件事；远程从来拿不到匿名
+  通道，本地也不会因为「用户没写配置」而掉线。
 
 ### 2.1 0.6.1 新增配置（已实现，冻结契约见 DECISION-015）
 
