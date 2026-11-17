@@ -216,6 +216,8 @@ export const messages = {
   'chat.draft.pickSession': '从左侧选择会话，或新建一个',
   'pending.queue.permission': '权限 · {tool}',
   'pending.queue.ask': '提问 · 第 {index} 题',
+  'chat.session.running': '运行中',
+  'chat.session.queued': '排队中',
   'chat.session.pending': '有 {count} 个待处理请求',
   'chat.session.copyId': '复制会话 ID',
   'chat.session.copiedId': '已复制会话 ID',

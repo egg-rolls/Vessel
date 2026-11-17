@@ -395,6 +395,7 @@ export function ChatView({
           selectedId={selectedId}
           draftActive={draftActive}
           pendingBySession={sessionsApi.pendingBySession}
+          inflightBySession={sessionsApi.sessionInflight}
           pendingAskCount={sessionAskCount}
           onOpenPending={() =>
             navigate({ domain: 'pending', ...(selectedId ? { sessionId: selectedId } : {}) })

@@ -137,6 +137,38 @@
   line-height: 1;
 }
 
+/* 0.56：会话卡片上的「运行中」标记。
+   不刺眼 = 不占背景色、不加边框、只有一个小圆点 + 一行 10.5px 的字，走 `--amber`
+   （tokens.css 里「还没完成」那一支，与排队/待确认同一家族）。圆点用已有的 `pulse`
+   关键帧（1.6s，布局文件里睡眠态/在跑态共用）—— 动的是不透明度，不是位移，
+   所以它不属于「跳动」；`prefers-reduced-motion` 下由 base.css 统一关掉动画。
+   排队态用同一形状但**不加动画**：它没在跑，只是还没轮到。 */
+.session-run-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  line-height: 1;
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+.session-run-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+}
+
+.session-run-badge.is-running .session-run-dot {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.session-run-badge.is-queued {
+  color: var(--muted);
+}
+
 .session-rename {
   flex: 1;
   min-width: 0;

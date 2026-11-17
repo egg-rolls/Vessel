@@ -15,6 +15,7 @@ export function SessionRail({
   selectedId,
   draftActive,
   pendingBySession,
+  inflightBySession,
   pendingAskCount,
   onOpenPending,
   agentAddresses,
@@ -50,6 +51,8 @@ export function SessionRail({
   selectedId: string | null;
   draftActive: boolean;
   pendingBySession: ReadonlyMap<string, number>;
+  /** 0.56：权威在飞状态（只画徽标，不参与排序）。 */
+  inflightBySession?: ReadonlyMap<string, 'running' | 'queued'>;
   /** 当前会话待回答的 ask 条数；0 时不渲染「待批」入口。 */
   pendingAskCount?: number;
   onOpenPending?: () => void;
@@ -102,6 +105,7 @@ export function SessionRail({
           selectedId={selectedId}
           draftActive={draftActive}
           pendingBySession={pendingBySession}
+          inflightBySession={inflightBySession}
           {...(pendingAskCount !== undefined ? { pendingAskCount } : {})}
           {...(onOpenPending !== undefined ? { onOpenPending } : {})}
           agentAddresses={agentAddresses}
