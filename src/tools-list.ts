@@ -14,6 +14,7 @@ import {
 } from '@vessel-agent/agent';
 import { loadConfig } from '../packages/config/src/index';
 import { InProcessScheduler, MemoryPluginHost, Runtime } from '../packages/core/src/index';
+import { drainWebToolsWarnings } from '../plugins/tools/web-tools/src/index';
 import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
@@ -58,6 +59,11 @@ export async function listTools(): Promise<ToolsListing> {
       await installWithConfig(plugin, host, pluginConfigs[plugin.name]);
     }
   }
+
+  // 插件装配期的诊断要进 warnings：UI 侧未必显示 stderr，只留 stderr 会让用户
+  // 「找不到工具」且不知怎么恢复。用插件侧的 drain 出口，而不是往上加 core 的
+  // PluginHost API（PluginHost 不在本单边界内）。
+  warnings.push(...drainWebToolsWarnings());
 
   // `--tools` 是一次性只读命令：按 headless 口径；agent 缺省开启，
   // 显式 `agent.enabled: false` 才隐藏 canonical agent。
