@@ -93,6 +93,24 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 压缩摘要经 `RunJournal` 追加 `message.compaction` 事实事件（Run 内以当前 `runId`，两次 Run 之间的手动 `/compact` 用 `run_id='manual'`），恢复时从 session cache + 事件日志重建。
 **90% 与 threshold 分工**：`context.tokenCount / maxTokens` 到 90% 且未超过 `compactThreshold` 时不压缩，发 `context.pressure` + `vessel:limit` 推荐 `agent(rotate)`；超过阈值（默认 85%）由 `autoCompactAsync` 自动压缩，因此默认配置（自动压缩开启）下压力提示不会出现。`limits.inputTokensLimit` 是另一套机制：仅在显式配置后才做 90% usage 预警与硬上限判定，缺省不限。`rotate` 不自动触发；模型发起的 rotate 必须经人类权限确认。overflow 仍 `forceCompact` 后重试一次。
 
+### 压缩索引与按需读回（0.57）
+
+压缩是**可逆的视图变换**，不是单向丢信息：压缩当刻留下「被替换的是哪些消息」的索引，模型可按需读回原文。
+
+| 项 | 值 |
+|---|---|
+| 索引字段 | compaction_id（同会话单调、多段累积不覆盖）、removed_ranges[{from_seq,to_seq,messages}]、replaced_by{summary_chars,summary_sha8}、at、reason、tokens_before/after、unmapped_messages |
+| 三处同源落点 | context.compacted 的 data.compaction（事实）→ SessionState.compactions（壳缓存）→ 会话目录 compactions.ndjson（物化副本，可从事件重建） |
+| seq 从哪来 | ProjectionCursor.messageSeqs（与 messages 逐位对齐）+ CompactionReport.removed_indices；对不上不猜号，记 unmapped_messages |
+| 区间合并 | 空档 <=512、最多 8 段。766 条按 seq 严格连续本会切成 607 段，每段付一次范围读固定探针（约 250 ms），一次读回要 137 s；合并后 8 段、8.1 s |
+| 读回通道 | packages/core/src/session/compaction-recall.ts，走 readTimelineRange（不整份读），三条上界：<=200 条 / <=16k token / <=20000 事件扫描；分页给 next_offset 与更便宜的 next_from_seq |
+| 工具 | 插件 recall（plugins/tools/recall）：无参列段；给 compaction_id 或 from_seq/to_seq 读原文。描述开头写死 NOT files |
+| stub | 压缩当刻把一行 [compacted] N messages (seq a..b) were summarized; call recall with compaction_id=<id> to read them back. 追加进摘要正文，只写这一次（重放逐字节一致）；摘要器输入与指纹先 stripCompactionStub |
+
+诚实边界：**老会话可能有读不回来的条目**（事件日志里从未有对应事件，例如当时的运行时提示行）——索引用
+unmapped_messages 如实记录，不编区间；backfill 出来的老段 tokens_before/after 未知（显示 n/a）。
+真机验收：766 条那段全量读回与 oracle 逐条 sha256 0 mismatch（711 条 / 7 页 / 8.1 s）。
+
 <a id="prefix"></a>
 
 ## 前缀不变量
