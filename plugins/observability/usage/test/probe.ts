@@ -33,13 +33,15 @@ import {
   resolveLogsRange,
   summarizeRuns,
 } from '../src/aggregate.js';
-import type { RawEvent, Settings } from '../src/store.js';
+import type { RawEvent, RunSummary, Settings } from '../src/store.js';
 import {
   DEFAULT_LIMITS,
   EventStore,
+  type IndexedSession,
   type IndexSources,
   readSessionSources,
   readUsageIndex,
+  scanSessions,
   sourceSignature,
   USAGE_EVENT_TYPES,
   USAGE_INDEX_VERSION,
@@ -274,9 +276,9 @@ check(
   en('logs.truncated.files', { files: 47, total: 175 }),
 );
 check(
-  'partial-read copy counts the affected run files',
-  en('logs.truncated.partial', { files: 2 }).includes('2 run file') &&
-    zh('logs.truncated.partial', { files: 2 }).includes('2 个运行文件'),
+  'partial-read copy counts the affected session timelines',
+  en('logs.truncated.partial', { files: 2 }).includes('2 session timeline') &&
+    zh('logs.truncated.partial', { files: 2 }).includes('2 个会话时间线'),
   en('logs.truncated.partial', { files: 2 }),
 );
 check('the old single truncation copy is gone', !Object.keys(I18N.en).includes('logs.truncated'));
@@ -385,23 +387,80 @@ check('readable Self Card is no longer parsed', smuggled === 'unknown', smuggled
 // ── incremental reader ──────────────────────────────────────────────────────
 
 /**
- * The reader keeps one byte cursor per trace file and only reads what was
- * appended past the last complete line. These fixtures drive every branch of
- * that cursor: append, half-written line, truncate, delete, byte budget, and
+ * The reader caches one parsed event list per session timeline, keyed by the
+ * file's `(size, mtime)`: an unchanged session costs zero bytes, a changed one is
+ * re-read whole (it is bounded by `maxBytesPerFile`). These fixtures drive every
+ * branch of that: append, half-written line, truncate, delete, byte budget, and
  * repeated calls. Limits are injected so the budget paths stay cheap.
  */
 
-const scratch = await mkdtemp(join(tmpdir(), 'usage-tailread-'));
+// ── reader fixtures: a real timeline `wal.log` ──────────────────────────────
+
+/**
+ * The reader parses the session **timeline** (`sessions/<id>/wal.log`), one
+ * CRC-stamped JSON record per line. Fixtures have to be written in that format,
+ * so this block builds it: the checksum is implemented here rather than imported
+ * so a fixture proves the reader against the format, not against itself.
+ */
+
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) === 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+/** CRC32 (IEEE 802.3) as 8 lowercase hex digits — the timeline's per-line `crc`. */
+function crc32Hex(input: string): string {
+  const bytes = Buffer.from(input, 'utf8');
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc = (CRC_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
+  }
+  return ((crc ^ 0xffffffff) >>> 0).toString(16).padStart(8, '0');
+}
+
+let fixtureSeq = 0;
+
+/**
+ * One `wal.log` line as the writer stamps it: `v/seq/session_id/run_id/ts/type/
+ * data` plus the trailing `crc`. `seq` is unique across the fixtures, which is
+ * what `recordId` uses.
+ */
+function timelineLine(
+  type: string,
+  runId: string,
+  ts: number,
+  data: Record<string, unknown> = {},
+  sessionId = 'sess-1',
+): string {
+  fixtureSeq += 1;
+  const body = {
+    v: 1 as const,
+    seq: fixtureSeq,
+    session_id: sessionId,
+    run_id: runId,
+    ts,
+    type,
+    data: { run_id: runId, session_id: sessionId, ...data },
+  };
+  return `${JSON.stringify({ ...body, crc: crc32Hex(JSON.stringify(body)) })}\n`;
+}
+
+const scratch = await mkdtemp(join(tmpdir(), 'usage-timeline-'));
 const FIXTURE_MTIME = Date.UTC(2026, 0, 15, 9, 0, 0);
 
 let fixtureTs = BASE_TS;
 
-/** One trace line; `pad` inflates it so the byte budgets can be exercised. */
+/** One timeline line; `pad` inflates it so the byte budgets can be exercised. */
 function traceLine(type: string, runId: string, pad = 0): string {
   fixtureTs += 1_000;
-  const data: Record<string, unknown> = { run_id: runId, session_id: 'sess-1' };
-  if (pad > 0) data.pad = 'x'.repeat(pad);
-  return `${JSON.stringify({ type, ts: fixtureTs, run_id: runId, data })}\n`;
+  return timelineLine(type, runId, fixtureTs, pad > 0 ? { pad: 'x'.repeat(pad) } : {});
 }
 
 async function traceDir(name: string): Promise<string> {
@@ -410,12 +469,12 @@ async function traceDir(name: string): Promise<string> {
   return root;
 }
 
-/** The one log file a session owns: root/sessions/(sessionId)/events.ndjson. */
+/** The one file a session owns: root/sessions/(sessionId)/wal.log (the timeline). */
 function sessionFile(dir: string, name: string): string {
-  return join(dir, 'sessions', name, 'events.ndjson');
+  return join(dir, 'sessions', name, 'wal.log');
 }
 
-/** Write one session log, creating its directory. */
+/** Write one session timeline, creating its directory. */
 async function writeSession(dir: string, name: string, text: string): Promise<string> {
   const path = sessionFile(dir, name);
   await mkdir(dirname(path), { recursive: true });
@@ -448,7 +507,7 @@ function idsOf(events: RawEvent[]): string[] {
   );
 
   const warm = await store.loadEvents(dir);
-  check('an unchanged file re-reads zero bytes', warm.bytes_read === 0, String(warm.bytes_read));
+  check('an unchanged session re-reads zero bytes', warm.bytes_read === 0, String(warm.bytes_read));
 
   const appended = traceLine('llm.response', 'run-a');
   await appendFile(file, appended);
@@ -459,9 +518,9 @@ function idsOf(events: RawEvent[]): string[] {
     String(tail.events.length),
   );
   check(
-    'an appended line costs only its own bytes',
-    tail.bytes_read === Buffer.byteLength(appended),
-    `${tail.bytes_read} vs ${Buffer.byteLength(appended)}`,
+    'a changed session is re-read whole, never more than its own bytes',
+    tail.bytes_read === Buffer.byteLength(head) + Buffer.byteLength(appended),
+    `${tail.bytes_read} vs ${Buffer.byteLength(head) + Buffer.byteLength(appended)}`,
   );
   const ids = idsOf(tail.events);
   check('no line is parsed twice', new Set(ids).size === ids.length, ids.join(','));
@@ -495,7 +554,7 @@ function idsOf(events: RawEvent[]): string[] {
   );
 }
 
-// 3. Truncate/rotate: the offset is dropped and the file is read from the top.
+// 3. Truncate/rotate: the whole session is read again from the top.
 {
   const dir = await traceDir('truncate');
   await writeSession(
@@ -512,7 +571,7 @@ function idsOf(events: RawEvent[]): string[] {
   await writeSession(dir, 'session-c', replaced);
   const after = await store.loadEvents(dir);
   check(
-    'a shrunk file is re-read from scratch',
+    'a shrunk session is re-read from scratch',
     before.events.length === 3 && after.events.length === 1,
     `${before.events.length} -> ${after.events.length}`,
   );
@@ -523,7 +582,7 @@ function idsOf(events: RawEvent[]): string[] {
   );
 }
 
-// 4. Deleted file (trace pruning): cache entry dropped, no error.
+// 4. Deleted session (pruning): cache entry dropped, no error.
 {
   const dir = await traceDir('delete');
   const file = sessionFile(dir, 'session-d');
@@ -534,11 +593,11 @@ function idsOf(events: RawEvent[]): string[] {
   await rm(file);
   const after = await store.loadEvents(dir);
   check(
-    'a pruned trace file disappears from the result',
+    'a pruned session disappears from the result',
     before.events.length === 1 && after.events.length === 0 && after.files_total === 0,
     `${before.events.length} -> ${after.events.length}, total ${after.files_total}`,
   );
-  check('a pruned trace file is not an error', after.truncated === false && after.bytes_read === 0);
+  check('a pruned session is not an error', after.truncated === false && after.bytes_read === 0);
 }
 
 // 5. Byte budget: newest files only, unchanged cached files cost nothing.
@@ -613,7 +672,7 @@ function idsOf(events: RawEvent[]): string[] {
   );
 }
 
-// 7. Oversized file: only its newest bytes are read, and appends stay incremental.
+// 7. Oversized session: only its newest bytes are read, and the read stays bounded.
 {
   const dir = await traceDir('oversized');
   const file = sessionFile(dir, 'session-g');
@@ -626,20 +685,19 @@ function idsOf(events: RawEvent[]): string[] {
   const store = new EventStore({ ...DEFAULT_LIMITS, maxBytesPerFile: 1_024 });
   const tail = await store.loadEvents(dir);
   check(
-    'an oversized file is read from its newest bytes only',
+    'an oversized session is read from its newest bytes only',
     tail.bytes_read <= 1_025 && tail.bytes_read < size,
     `${tail.bytes_read} of ${size}`,
   );
-  check('an oversized file is reported as truncated', tail.truncated === true);
+  check('an oversized session is reported as truncated', tail.truncated === true);
 
   const appended = traceLine('llm.response', 'run-g');
   await appendFile(file, appended);
   const grown = await store.loadEvents(dir);
   check(
-    'appends to an oversized file stay incremental',
-    grown.bytes_read === Buffer.byteLength(appended) &&
-      grown.events.length === tail.events.length + 1,
-    `${grown.bytes_read} vs ${Buffer.byteLength(appended)}, ${tail.events.length} -> ${grown.events.length}`,
+    'an append to an oversized session stays inside the per-file cap',
+    grown.bytes_read <= 1_025 && grown.events.length === tail.events.length + 1,
+    `${grown.bytes_read} bytes, ${tail.events.length} -> ${grown.events.length}`,
   );
 }
 
@@ -662,13 +720,13 @@ function dayStart(offsetDays: number): number {
   return date.getTime();
 }
 
-/** One trace line with an explicit `ts` (`traceLine` owns its own clock). */
+/** One timeline line with an explicit `ts` (`traceLine` owns its own clock). */
 function lineAt(type: string, runId: string, ts: number, pad = 0): string {
-  const data: Record<string, unknown> = { run_id: runId, session_id: 'sess-1' };
+  const data: Record<string, unknown> = {};
   if (type === 'llm.request') data.model = MODEL;
   else data.usage = { prompt_tokens: 1_000, completion_tokens: 100 };
   if (pad > 0) data.pad = 'x'.repeat(pad);
-  return `${JSON.stringify({ type, ts, run_id: runId, data })}\n`;
+  return timelineLine(type, runId, ts, data);
 }
 
 async function writeTrace(dir: string, name: string, text: string, mtime: number): Promise<number> {
@@ -890,10 +948,9 @@ function runIds(events: RawEvent[]): string[] {
 
   const store = new EventStore({
     ...DEFAULT_LIMITS,
-    // Both budgets are tightened: this test is about running out *inside* a
-    // selected range, where `maxBytesPerWindowCall` would otherwise win.
+    // The per-call budget is the only read budget: it decides how many sessions
+    // of the range fit, and stopping short must be reported, not rounded off.
     maxBytesPerCall: Math.floor(fileBytes * 2.5),
-    maxBytesPerWindowCall: Math.floor(fileBytes * 2.5),
     maxBytesPerFile: fileBytes + 16,
   });
   const over = await loadDays(store, dir, 1);
@@ -941,8 +998,7 @@ function runIds(events: RawEvent[]): string[] {
   );
 }
 
-// 13. A selected range gets the larger window budget; "all time" keeps the small
-//     one. `same directory, same limits` — only the presence of a window differs.
+// 13. One budget bounds every call, and a roomy one covers the whole range.
 {
   const dir = await traceDir('window-budget-scale');
   let fileBytes = 0;
@@ -953,32 +1009,33 @@ function runIds(events: RawEvent[]): string[] {
     fileBytes = await writeTrace(dir, name, body, ts + 1_000);
   }
 
-  const store = new EventStore({
+  const tight = new EventStore({
     ...DEFAULT_LIMITS,
-    // One file per call when no window is selected...
     maxBytesPerCall: fileBytes + 8,
-    // ...and the whole three-file range when one is.
-    maxBytesPerWindowCall: fileBytes * 3 + 32,
     maxBytesPerFile: fileBytes + 16,
   });
-
-  const allTime = await store.loadEvents(dir);
+  const bounded = await tight.loadEvents(dir);
   check(
-    'without days the small per-call budget still applies',
-    allTime.files_covered === 1 && allTime.files_truncated === true,
-    `covered ${allTime.files_covered}, files_truncated=${allTime.files_truncated}`,
+    'a tight per-call budget is the same bound for a range and for all time',
+    bounded.files_covered === 1 && bounded.files_truncated === true,
+    `covered ${bounded.files_covered}, files_truncated=${bounded.files_truncated}`,
   );
 
-  const windowed = await loadDays(store, dir, 1);
+  const roomy = new EventStore({
+    ...DEFAULT_LIMITS,
+    maxBytesPerCall: fileBytes * 3 + 32,
+    maxBytesPerFile: fileBytes + 16,
+  });
+  const windowed = await loadDays(roomy, dir, 1);
   check(
-    'a selected range uses the larger window budget',
+    'a roomy budget covers the whole range',
     windowed.files_covered === 3 &&
       windowed.files_in_window === 3 &&
       windowed.files_truncated === false,
     `covered ${windowed.files_covered}/${windowed.files_in_window}, files_truncated=${windowed.files_truncated}`,
   );
   check(
-    'the window budget is actually spent, not sampled',
+    'the budget is actually spent, not sampled',
     windowed.events.length === 6,
     String(windowed.events.length),
   );
@@ -1002,7 +1059,6 @@ function runIds(events: RawEvent[]): string[] {
   const base = {
     ...DEFAULT_LIMITS,
     maxBytesPerCall: windowBytes,
-    maxBytesPerWindowCall: windowBytes,
     maxBytesPerFile: fileBytes + 16,
     maxRetainedBytesPerFile: fileBytes * 2,
     maxCachedFiles: 64,
@@ -1035,13 +1091,17 @@ function runIds(events: RawEvent[]): string[] {
       Number.isFinite(DEFAULT_LIMITS.maxRetainedBytesPerFile),
     `${DEFAULT_LIMITS.maxRetainedBytesTotal} / ${DEFAULT_LIMITS.maxRetainedBytesPerFile}`,
   );
+  // The timeline is read in windows and each session is bounded on its own, so
+  // every shipped limit has to be a real, finite bound — "off" would mean a
+  // 200k-seq session (real, today) could be read into memory whole.
   check(
-    'the shipped I/O gates are off: the reader runs in a worker, so nothing truncates',
-    DEFAULT_LIMITS.maxBytesPerCall === Number.POSITIVE_INFINITY &&
-      DEFAULT_LIMITS.maxBytesPerWindowCall === Number.POSITIVE_INFINITY &&
-      DEFAULT_LIMITS.maxBytesPerFile === Number.POSITIVE_INFINITY &&
-      DEFAULT_LIMITS.maxFilesPerCall === Number.POSITIVE_INFINITY,
-    `${DEFAULT_LIMITS.maxBytesPerCall}, ${DEFAULT_LIMITS.maxFilesPerCall}`,
+    'the shipped read budget is a finite bound, not a switched-off gate',
+    Number.isFinite(DEFAULT_LIMITS.maxBytesPerCall) &&
+      DEFAULT_LIMITS.maxBytesPerCall >= 64 * 1024 * 1024 &&
+      Number.isFinite(DEFAULT_LIMITS.maxBytesPerFile) &&
+      DEFAULT_LIMITS.maxBytesPerFile >= 8 * 1024 * 1024 &&
+      Number.isFinite(DEFAULT_LIMITS.maxFilesPerCall),
+    `${DEFAULT_LIMITS.maxBytesPerCall}, ${DEFAULT_LIMITS.maxBytesPerFile}, ${DEFAULT_LIMITS.maxFilesPerCall}`,
   );
 }
 
@@ -1246,41 +1306,33 @@ const rangeRecords = buildRecords(
   const oneFile = new EventStore({
     ...DEFAULT_LIMITS,
     maxBytesPerCall: fiveBytes + 8,
-    maxBytesPerWindowCall: fiveBytes + 8,
     maxBytesPerFile: fiveBytes + 16,
   });
   const until = dayStart(-4);
   const nearest = await oneFile.loadEvents(dir, { until });
   check(
-    'a budget for one file is spent on the file nearest the range end',
+    'a budget for one session is spent on the session nearest the range end',
     nearest.files_covered === 1 && nearest.events.every((event) => event.run_id === 'run-5d'),
     `covered ${nearest.files_covered}: ${runIds(nearest.events).join(',')}`,
   );
 
   const roomy = new EventStore({
     ...DEFAULT_LIMITS,
-    maxBytesPerCall: 64,
-    maxBytesPerWindowCall: fiveBytes * 4,
+    maxBytesPerCall: fiveBytes * 4,
     maxBytesPerFile: fiveBytes + 16,
   });
   const allThree = await roomy.loadEvents(dir, { until });
   check(
-    'an until-only range gets the window budget',
+    'an until-only range is bounded above and covers both older sessions',
     allThree.files_covered === 2 &&
       allThree.files_in_window === 2 &&
       allThree.files_truncated === false,
     `covered ${allThree.files_covered}/${allThree.files_in_window}`,
   );
   check(
-    'the run that starts after the range is not read at all',
+    'the session that starts after the range is not read at all',
     allThree.events.every((event) => event.run_id !== 'run-now'),
     runIds(allThree.events).join(','),
-  );
-  const unbounded = await roomy.loadEvents(dir);
-  check(
-    'without any bound the small per-call budget still applies',
-    unbounded.files_covered === 0 && unbounded.files_truncated === true,
-    `covered ${unbounded.files_covered}`,
   );
 }
 
@@ -1555,7 +1607,7 @@ const rangeRecords = buildRecords(
  * that can always be rebuilt from the session logs.
  */
 
-/** A session log line, as the host writes it (envelope + data). */
+/** A session timeline line, as the host writes it (envelope + data + crc). */
 function sessionEvent(
   type: string,
   runId: string,
@@ -1563,15 +1615,7 @@ function sessionEvent(
   data: Record<string, unknown> = {},
   sessionId = 'session-x',
 ): string {
-  return `${JSON.stringify({
-    v: 1,
-    session_id: sessionId,
-    run_id: runId,
-    seq: 0,
-    ts,
-    type,
-    data: { run_id: runId, session_id: sessionId, ...data },
-  })}\n`;
+  return timelineLine(type, runId, ts, data, sessionId);
 }
 
 const USAGE_1 = { prompt_tokens: 1_000, completion_tokens: 100, cache_read_input_tokens: 400 };
@@ -1680,8 +1724,9 @@ function sourceSignatureOf(sources: IndexSources | undefined): string {
   return sources === undefined ? 'none' : sourceSignature(sources);
 }
 
-// 28. The index is a cache: written, read back, invalidated by version or
-//     corruption, and rebuilt (so a deleted session disappears) from the logs.
+// 28. The index is a cache: written per session with its stamp, read back,
+//     invalidated by version or corruption, and rebuilt (so a deleted session
+//     disappears) from the timelines.
 {
   const dir = await traceDir('usage-index');
   await writeSession(
@@ -1697,35 +1742,57 @@ function sourceSignatureOf(sources: IndexSources | undefined): string {
       sessionEvent('llm.response', 'run-b', BASE_TS + 61_400, { usage: USAGE_1 }),
   );
 
+  /** The build the runtime does: one row group per session, stamped (size, mtime). */
   const build = async () => {
     const store = new EventStore();
-    const loaded = await store.loadEvents(dir);
-    const runs = repriceRuns(buildRunSummaries(buildRecords(loaded.events, NO_PRICES)), NO_PRICES);
-    const sources = await readSessionSources(dir);
-    return { loaded, runs, sources };
+    const scan = await scanSessions(dir);
+    const sessions: IndexedSession[] = [];
+    for (const file of scan.files) {
+      const read = await store.readSession(file);
+      sessions.push({
+        id: file.id,
+        size: file.size,
+        mtime: Math.floor(file.mtimeMs),
+        runs: repriceRuns(buildRunSummaries(buildRecords(read.events, NO_PRICES)), NO_PRICES),
+      });
+    }
+    return { sessions, sources: scan.sources, files: scan.files.length };
   };
+
+  const runCount = (sessions: IndexedSession[]): number =>
+    sessions.reduce((total, session) => total + session.runs.length, 0);
+  const allRuns = (sessions: IndexedSession[]): RunSummary[] =>
+    sessions.flatMap((session) => session.runs);
 
   const first = await build();
   check(
     'the index build covers every session',
-    first.loaded.files_covered === 2 && first.runs.length === 2 && first.sources.files === 2,
-    `${first.loaded.files_covered} sessions, ${first.runs.length} runs`,
+    first.files === 2 && runCount(first.sessions) === 2 && first.sources.files === 2,
+    `${first.files} sessions, ${runCount(first.sessions)} runs`,
   );
-  await writeUsageIndex(dir, first.runs, first.sources);
+  await writeUsageIndex(dir, first.sessions, first.sources);
 
   const readBack = await readUsageIndex(dir);
   check(
-    'the index reads back with its version, header and run rows',
+    'the index reads back with its version, header and per-session rows',
     readBack !== undefined &&
       readBack.header.v === USAGE_INDEX_VERSION &&
       readBack.header.generated_at > 0 &&
       readBack.header.sources.files === 2 &&
-      readBack.runs.length === 2,
+      readBack.sessions.length === 2 &&
+      allRuns(readBack.sessions).length === 2,
     JSON.stringify(readBack?.header),
   );
   check(
     'index rows keep the run totals',
-    readBack?.runs.every((run) => run.requests === 1 && run.prompt_tokens === 1_000) === true,
+    readBack?.sessions.every((session) =>
+      session.runs.every((run) => run.requests === 1 && run.prompt_tokens === 1_000),
+    ) === true,
+  );
+  check(
+    'each row group carries the stamp the next call compares against',
+    readBack?.sessions.every((session) => session.size > 0 && session.mtime > 0) === true,
+    JSON.stringify(readBack?.sessions.map((session) => [session.id, session.size, session.mtime])),
   );
   check(
     'a stored index is only trusted when the session fingerprint matches',
@@ -1737,18 +1804,39 @@ function sourceSignatureOf(sources: IndexSources | undefined): string {
   // Version bump: the reader must treat the file as absent, not as data.
   const path = usageIndexPath(dir);
   const original = await readFile(path, 'utf8');
-  const bumped = original.replace('"v":1', `"v":${USAGE_INDEX_VERSION + 1}`);
+  const bumped = original.replace('"v":2', `"v":${USAGE_INDEX_VERSION + 1}`);
   await writeFile(path, bumped);
   check('a different format version is not an index', (await readUsageIndex(dir)) === undefined);
 
   // Corruption: one torn line invalidates the whole file (a torn file is torn).
   const torn = original.split('\n');
-  torn[1] = '{"v":1,"kind":"run",';
+  torn[1] = '{"v":2,"kind":"run",';
   await writeFile(path, torn.join('\n'));
   check('a corrupt index line is not an index', (await readUsageIndex(dir)) === undefined);
 
+  // A session that grew invalidates only its own row group: the stamp is what
+  // makes a rebuild incremental instead of a full re-read.
+  await writeUsageIndex(dir, first.sessions, first.sources);
+  const beforeAppend = await readUsageIndex(dir);
+  const stampA = beforeAppend?.sessions.find((session) => session.id === 'session-a');
+  await appendFile(
+    sessionFile(dir, 'session-a'),
+    sessionEvent('llm.request', 'run-a2', BASE_TS + 120_000, { model: MODEL }) +
+      sessionEvent('llm.response', 'run-a2', BASE_TS + 121_400, { usage: USAGE_1 }),
+  );
+  const rescanned = await scanSessions(dir);
+  const changed = rescanned.files.filter((file) => {
+    const old = beforeAppend?.sessions.find((session) => session.id === file.id);
+    return old === undefined || old.size !== file.size || old.mtime !== Math.floor(file.mtimeMs);
+  });
+  check(
+    'an appended session is the only one that has to be re-read',
+    stampA !== undefined && changed.length === 1 && changed[0]?.id === 'session-a',
+    changed.map((file) => file.id).join(','),
+  );
+
   // A deleted session changes the fingerprint, so the index is not trusted…
-  await writeUsageIndex(dir, first.runs, first.sources);
+  await writeUsageIndex(dir, first.sessions, first.sources);
   await rm(join(dir, 'sessions', 'session-b'), { recursive: true, force: true });
   const afterDelete = await readSessionSources(dir);
   check(
@@ -1756,16 +1844,19 @@ function sourceSignatureOf(sources: IndexSources | undefined): string {
     sourceSignatureOf(afterDelete) !== sourceSignatureOf(first.sources) && afterDelete.files === 1,
     `${sourceSignatureOf(afterDelete)} vs ${sourceSignatureOf(first.sources)}`,
   );
-  // …and a rebuild from the logs drops its runs: the index is never the truth.
+  // …and a rebuild from the timelines drops its runs: the index is never the truth.
   const rebuilt = await build();
-  await writeUsageIndex(dir, rebuilt.runs, rebuilt.sources);
+  await writeUsageIndex(dir, rebuilt.sessions, rebuilt.sources);
   const afterRebuild = await readUsageIndex(dir);
+  const rebuiltRuns = rebuilt.sessions.flatMap((session) => session.runs);
   check(
     'a rebuild drops the deleted session runs',
-    rebuilt.runs.length === 1 &&
-      rebuilt.runs[0]?.run_id === 'run-a' &&
-      afterRebuild?.runs.length === 1,
-    rebuilt.runs.map((run) => run.run_id).join(','),
+    rebuiltRuns.length === 2 &&
+      rebuiltRuns.every((run) => run.run_id === 'run-a' || run.run_id === 'run-a2') &&
+      afterRebuild !== undefined &&
+      afterRebuild.sessions.flatMap((session) => session.runs).length === 2 &&
+      afterRebuild.sessions.some((session) => session.id === 'session-b') === false,
+    rebuiltRuns.map((run) => run.run_id).join(','),
   );
 }
 

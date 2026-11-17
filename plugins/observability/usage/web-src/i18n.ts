@@ -92,7 +92,7 @@ const EN = {
   'logs.th.cost': 'Cost',
   'logs.empty.title': 'No request logs yet',
   'logs.empty.filtered': 'No matching requests',
-  'logs.empty.description': 'Logs are read from the persisted tenant event files.',
+  'logs.empty.description': 'Logs are read from each session\u2019s timeline (wal.log).',
   'logs.state.range': 'Range: {range}',
   'logs.state.custom': 'Range: {from} to {to}',
   'logs.state.loaded': '{n} loaded',
@@ -100,13 +100,13 @@ const EN = {
   'logs.state.end': 'no more rows',
   'logs.state.conditions': 'Filters: {conditions}',
   'logs.truncated.files':
-    'Read cap reached: only the newest {files} of {total} run files in this range were counted. Older runs in the same range are missing, so this is a partial count, not the total.',
+    'Read cap reached: only {files} of {total} session timelines in this range were counted. Sessions in the same range that were not read are missing, so this is a partial count, not the total.',
   'logs.truncated.partial':
-    'Partial read: {files} run file(s) in this range were only counted partially (their oldest lines were dropped), so those runs may be missing requests.',
+    'Partial read: {files} session timeline(s) in this range were only counted partially (only their newest events were read), so those sessions may be missing requests.',
   'source.retired':
-    'Usage cannot be computed: this page reads the pre-0.54 session event log (sessions/<id>/events.ndjson), which Vessel stopped writing in 0.54. Numbers shown here are empty because the source is gone, not because there was no usage.',
-  'source.frozen':
-    'Data is frozen at {date}: the session event log this page reads stopped growing in 0.54 (the timeline is the only durable event sink now), so anything after that date is not counted.',
+    'Usage cannot be computed: this page reads the session timeline (sessions/<id>/wal.log), and no session on disk has one. Sessions from before 0.55 only carry events.ndjson, which Vessel can no longer read. The numbers here are empty because the source is unreadable, not because there was no usage.',
+  'source.unreadable':
+    'Not counted: {files} session(s) on disk have no readable timeline (pre-0.55 events.ndjson only). Their usage is missing from these totals, not zero.',
 
   'leaderboard.th.model': 'Model',
   'leaderboard.th.requests': 'Requests',
@@ -205,7 +205,7 @@ const ZH: Record<MessageKey, string> = {
   'logs.th.cost': '成本',
   'logs.empty.title': '暂无请求日志',
   'logs.empty.filtered': '没有匹配的请求',
-  'logs.empty.description': '日志来自已持久化的租户事件文件。',
+  'logs.empty.description': '日志来自每个会话的时间线（wal.log）。',
   'logs.state.range': '范围：{range}',
   'logs.state.custom': '范围：{from} 至 {to}',
   'logs.state.loaded': '已加载 {n} 条',
@@ -213,13 +213,13 @@ const ZH: Record<MessageKey, string> = {
   'logs.state.end': '已到底',
   'logs.state.conditions': '筛选：{conditions}',
   'logs.truncated.files':
-    '已触及读取上限：该范围内只统计了最新的 {files}/{total} 个运行文件，同一范围内更早的运行没有被计入 —— 这是真实截断后的部分合计，不是总量。',
+    '已触及读取上限：该范围内只统计了 {files}/{total} 个会话时间线，同一范围内未读取的会话没有计入 —— 这是真实截断后的部分合计，不是总量。',
   'logs.truncated.partial':
-    '部分读取：该范围内有 {files} 个运行文件只统计了尾部（更早的行被丢弃），这些运行可能缺少请求记录。',
+    '部分读取：该范围内有 {files} 个会话时间线只统计了尾部（更早的事件没读），这些会话可能缺少请求记录。',
   'source.retired':
-    '用量无法统计：本页读取的是 0.54 之前的会话事件日志（sessions/<id>/events.ndjson），Vessel 从 0.54 起已停止写入。这里的空数字是数据源没了，不是没有用量。',
-  'source.frozen':
-    '数据截至 {date}：本页读取的会话事件日志从 0.54 起不再增长（时间线已是唯一的事件落盘真源），此后发生的用量不计入。',
+    '用量无法统计：本页读取会话时间线（sessions/<id>/wal.log），而盘上没有任何会话带有它。0.55 之前的会话只有 events.ndjson，Vessel 已经无法解析。这里的空数字是数据源读不到，不是没有用量。',
+  'source.unreadable':
+    '未计入：盘上有 {files} 个会话没有可读的时间线（只有 0.55 之前的 events.ndjson）。它们的用量不在这些合计里 —— 不是 0。',
 
   'leaderboard.th.model': '模型',
   'leaderboard.th.requests': '请求数',

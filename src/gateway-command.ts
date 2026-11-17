@@ -2677,6 +2677,14 @@ export async function runPlatformGatewayForeground(
             : {}),
           backends: resolvedAuth.backends,
           session: resolvedAuth.session,
+          // 0.56 P2：口令 / TOTP / 恢复码都在这个文件里（0600）；锁定状态单独一份，
+          // 重启不清锁（否则攻击者只要让进程重启就能洗白失败计数）。
+          ...(resolvedAuth.credentialsFile !== undefined
+            ? { credentialsFile: resolvedAuth.credentialsFile }
+            : {}),
+          ...(resolvedAuth.lockoutFile !== undefined
+            ? { lockoutFile: resolvedAuth.lockoutFile }
+            : {}),
           env,
         },
       });

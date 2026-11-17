@@ -64,6 +64,7 @@ export {
   LOGIN_PATH,
   type SessionSnapshot,
   SessionStore,
+  unlockCommand,
 } from './auth/index.js';
 export {
   type BackpressureThresholds,

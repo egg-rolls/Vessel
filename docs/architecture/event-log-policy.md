@@ -32,10 +32,19 @@ paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.
 `legacy_session_unsupported`，文案写明「0.55 不读、不写、不迁移这种目录；用 0.54 导出后再用 0.55 打开」。
 **没有任何静默降级**：不把它当成空会话（那会让人以为历史丢了却不给原因）。
 
-**已知遗留（不在本单范围）**：`plugins/observability/usage` 仍把 `sessions/<id>/events.ndjson` 当数据源
-（`src/store.ts` 的 `SESSION_LOG`）。它在 0.54 停写之后就已经在读一个不再增长的文件 —— 删除
-`events.ndjson` 之后它的数据面彻底不可用，将单独一单迁到时间线。所以 `vessel 插件 → 用量 / 请求日志`
-页面在 0.55 里**是空的**，不是「新 bug」，是这条遗留的可见后果。
+**已迁移（0.55）**：`plugins/observability/usage` 不再读 `events.ndjson`，唯一数据源改为
+`sessions/<id>/wal.log` 的**事实行**（只对进合计的行做逐行 CRC32 校验）。刻意不读的四样与理由：
+`wal.blocks/` 只有 chunk 帧、不含任何用量字段；`timeline.ndjson` 是 `wal.log` 前缀的副本（两份都读会重复计数）；
+`timeline.idx/` 是派生物；`holes.ndjson` 只是「没落盘」的缺失声明。将来若用量字段落进 chunk 家族，
+必须改走 core 的 `readTimelineRange`，不自建块扫描。
+
+有界：单会话 ≤64 MiB（超了只读尾部并记 `partial_files`）、单次 ≤512 MiB / 4096 会话、保留 ≤192 MiB 按会话 LRU；
+峰值内存 = 索引行 + 至多一个会话的投影事件。增量：索引升 v2 按会话存 (size, mtime)，未变会话零字节读取。
+实测 330 会话 / 425 MiB / 282k 行整目录 5.7 s。
+
+可见后果：`vessel 插件 → 用量 / 请求日志` 在 0.55 里**有数据**（此前一版文档写的「0.55 里是空的」已作废）。
+降级路径仍明确：有会话目录但无可读时间线 ⇒ `source_retired`；0.55 之前只有 `events.ndjson` 的会话
+⇒ `unreadable_sessions=N`。
 
 <a id="not-persisted"></a>
 

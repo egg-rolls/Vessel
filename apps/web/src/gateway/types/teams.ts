@@ -65,6 +65,14 @@ export interface TeamMember {
   role?: AgentRole;
   /** v3 additive：member = self，temporary = 雇佣者；缺失时按旧语义推断。 */
   owner?: string;
+  /**
+   * 0.57 additive：该成员**最后一次活动**（epoch ms，服务端真值）。
+   *
+   * 来源是 registry 的 `AgentRecord.lastSeen`（`packages/agent/src/registry.ts`），
+   * Team 卡排序拿它当「最近活动」的主键；旧 gateway 不返回时回落到 body 的
+   * `last_active_at` / `created_at`（见 `state/team-order.ts#memberLastSeen`）。
+   */
+  last_seen?: number;
 }
 
 /** Team 日志条目；kind:'reply' 由 S3 R1 新增。 */

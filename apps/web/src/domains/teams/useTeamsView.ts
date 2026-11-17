@@ -16,15 +16,25 @@ import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
 import type { NodeTeams } from '../../gateway/team-roster';
-import type { TeamSummary } from '../../gateway/types';
+import type { TeamMember, TeamSummary } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import {
   filterArchivedTeams,
   hiddenPendingRemovalCount,
   isArchivedTeam,
 } from '../../state/archive-visibility';
+import {
+  runningAgentsFromScheduler,
+  type TeamMembersByTeam,
+  type TeamOrderCard,
+  teamAgentKey,
+  teamCardKey,
+  teamsWithRunningMember,
+} from '../../state/team-order';
+import { resourceData } from '../../state/useResource';
 import { useShowArchived } from '../../state/useShowArchived';
 import { useAgentStore } from '../../stores/agentStore';
+import { nodeHealthEntry, useNodeStore } from '../../stores/nodeStore';
 import { teamDetailKey, teamListData, useTeamStore } from '../../stores/teamStore';
 import { usePolledAction } from '../../stores/usePolledAction';
 import { useNodeNames } from '../nodes/useNodeNames';
@@ -39,6 +49,7 @@ import {
 } from '../team/team-selection';
 import { filterTeamResults } from './team-search';
 import { teamEditHash, teamNodeFilterFromHash } from './team-url';
+import { useStableTeamOrder } from './useStableTeamOrder';
 
 const TEAMS_POLL_MS = 20_000;
 
@@ -85,6 +96,12 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
    * 免得恢复跟上后闪一句假话。判完（restore / 清记录）立刻落地。
    */
   const [restorePending, setRestorePending] = useState(false);
+  /**
+   * 手动刷新的计数，只用来当**排序的显式时机**（同会话侧 `orderTick`）：
+   * 用户点「刷新」就是要「按现在的真实状态重排一次」，这也是成员 run 结束后卡片
+   * 归位的收敛点。
+   */
+  const [orderTick, setOrderTick] = useState(0);
   const isDetail = 'teamId' in route;
   // 当前连接可以没有 token，但额外节点各自带凭据：任一节点可用即进入列表。
   const anyNodeToken = nodes.some((node) => hasTokenFor(node));
@@ -274,6 +291,87 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
   const partial = failed.length > 0 && failed.length < data.length;
   const hasSearchOrFilter = query.trim() !== '' || nodeFilter !== '';
 
+  // ── Team 卡片排序（0.57）：有成员在跑优先 + 最近活动，落屏同会话侧那道闸门 ──
+  //
+  // 三份输入全是**已经在轮询的数据**，本单不新增任何请求：
+  // - 成员名单 / `last_seen`：`agentStore` 的 roster（外壳已经拉过，`teams.get` 带 members）；
+  // - 「正在跑」：`nodeStore` 的 health（`health.get.runtime.scheduler`，与会话卡同一份）；
+  // - 卡片本身：`teams.list`（本域自己的 20s 轮询）。
+  // roster / health 缺失时排序照常（活动时间回落 `created_at`、rank 全空闲），不会卡住。
+  const healthByNode = useNodeStore((state) => state.health);
+  const rosterState = useAgentStore((state) => state.roster);
+  const rosters = useMemo(() => resourceData(rosterState) ?? [], [rosterState]);
+  const membersByTeam = useMemo<TeamMembersByTeam>(() => {
+    const out = new Map<string, { nodeKey: string; members: readonly TeamMember[] }>();
+    for (const roster of rosters) {
+      const nodeKey = nodeKeyOf(roster.node);
+      for (const entry of roster.rosters) {
+        out.set(teamCardKey(nodeKey, entry.team.team_id), { nodeKey, members: entry.members });
+      }
+    }
+    return out;
+  }, [rosters]);
+  const runningAgents = useMemo(() => {
+    const out = new Set<string>();
+    for (const node of nodes) {
+      const nodeKey = nodeKeyOf(node);
+      for (const agentId of runningAgentsFromScheduler(
+        nodeHealthEntry(healthByNode, node)?.health?.runtime?.scheduler,
+      )) {
+        out.add(teamAgentKey(nodeKey, agentId));
+      }
+    }
+    return out;
+  }, [nodes, healthByNode]);
+  const runningTeamKeys = useMemo(
+    () => teamsWithRunningMember(membersByTeam, runningAgents),
+    [membersByTeam, runningAgents],
+  );
+  const teamCards = useMemo<TeamOrderCard[]>(
+    () =>
+      visible.flatMap((item) =>
+        item.ok ? item.teams.map((team) => ({ nodeKey: nodeKeyOf(item.node), team })) : [],
+      ),
+    [visible],
+  );
+  /**
+   * 显式时机（与会话侧同一串口径）：换连接纪元 / 改搜索 / 切节点过滤 / 切「显示归档」/
+   * 手动刷新（`orderTick`）。其余时候只有**新 Team** 会插到目标位，已有卡片一动不动。
+   */
+  const orderedCards = useStableTeamOrder(teamCards, {
+    runningTeams: runningTeamKeys,
+    membersByTeam,
+    resetKey: [String(epoch), query, nodeFilter, String(showArchived), String(orderTick)].join('|'),
+  });
+  /**
+   * 落屏顺序是**跨节点**串联的（闸门只有一条快照），但卡片按节点分组渲染：
+   * 这里按 `nodeKey` 分桶，桶内顺序 = 闸门顺序（同一节点内的相对顺序完全保留）。
+   */
+  const orderedTeamsByNode = useMemo(() => {
+    const out = new Map<string, TeamSummary[]>();
+    for (const card of orderedCards) {
+      const teams = out.get(card.nodeKey);
+      if (teams !== undefined) teams.push(card.team);
+      else out.set(card.nodeKey, [card.team]);
+    }
+    return out;
+  }, [orderedCards]);
+  const orderedVisible = useMemo(
+    () =>
+      visible.map((item) =>
+        item.ok
+          ? { ...item, teams: orderedTeamsByNode.get(nodeKeyOf(item.node)) ?? item.teams }
+          : item,
+      ),
+    [visible, orderedTeamsByNode],
+  );
+  /**
+   * 卡片徽标（实时，不走闸门）：与位置无关 —— run 结束时卡片**原地**失去「有成员在跑」，
+   * 位置留到下一次显式时机才归位（同会话侧）。
+   */
+  const isRunningTeam = (node: NodeView, team: TeamSummary) =>
+    runningTeamKeys.has(teamCardKey(nodeKeyOf(node), team.team_id));
+
   const nodeFor = (nodeKey: string) => nodes.find((node) => nodeKeyOf(node) === nodeKey);
 
   const reloadSummary = (node: NodeView, teamId: string) => {
@@ -292,6 +390,8 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
       const node = nodeFor(route.nodeKey);
       if (node && hasTokenFor(node)) reloadSummary(node, route.teamId);
     }
+    // 手动刷新同时是**排序的显式时机**：卡片按当前真实状态重排一次（run 结束后的收敛点）。
+    setOrderTick((value) => value + 1);
     // 详情内容（TeamChat / MemberDetail）按各自的窗口大小重拉。
     requestRefresh();
   };
@@ -476,7 +576,8 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
     anyNodeToken,
     loaded,
     data,
-    visible,
+    // 落屏顺序（闸门之后）；节点分组顺序仍是 `visible` 的顺序。
+    visible: orderedVisible,
     allFailed,
     allTeams,
     visibleTeams,
@@ -487,6 +588,7 @@ export function useTeamsView({ route, navigate }: TeamsViewProps) {
     refreshCurrent,
     openTeam,
     isActiveTeam,
+    isRunningTeam,
     menuItems,
     confirmArchive,
     reloadLists,

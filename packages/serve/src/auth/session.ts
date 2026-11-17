@@ -191,6 +191,24 @@ export class SessionStore {
     return removed;
   }
 
+  /**
+   * 按 `sha256(sid)` 撤销单个会话。
+   *
+   * 引导码重放场景只有哈希（记录里留的就是 `sha256(sid)`），没有 sid 明文，
+   * 所以这里直接按内部 key 删。
+   */
+  revokeByHash(sidHash: string): boolean {
+    if (typeof sidHash !== 'string' || sidHash.length !== 64) return false;
+    const removed = this.sessions.delete(sidHash);
+    if (removed) this.scheduleFlush();
+    return removed;
+  }
+
+  /** 是否还有这条（按 `sha256(sid)` 计）会话；引导码世代映射清理用。 */
+  hasHash(sidHash: string): boolean {
+    return this.sessions.has(sidHash);
+  }
+
   /** CSRF 校验：调用方给明文，服务端只存 sha256(明文)。 */
   csrfValid(snapshot: SessionSnapshot, token: string | null | undefined): boolean {
     if (typeof token !== 'string' || token === '') return false;

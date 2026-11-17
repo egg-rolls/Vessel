@@ -6,19 +6,28 @@
  * 工具运行→结束只改 item 的字段，不产生新 item、不重挂。
  *
  * 身份命名：
- * - msg:<绝对下标>            历史消息（绝对下标 = detailWindow.start + 窗口内下标，前插不变）
+ * - msg:<runId>:<role>:<ts>   历史消息（结构化身份：`run_id` + `role` + `timestamp`，见
+ *                             `structuredHistoryKey`；缺 `run_id` / 撞号时退回
+ *                             `msg:<绝对下标>`，形状与 0.55 之前相同）
  * - run:<runId>:text:<seq>    一次 run 的正文段（seq = 该段**首个** delta 的 wire seq；
  *                             流式尾巴与 flush 后是**同一个** seq，不因分段增多而换号）
  * - run:<runId>:reasoning:<seq> 第 n 段思考（同上，锚定首个 reasoning_delta 的 seq）
  * - tool:<callId>             工具调用（live 与 history 共用；无 callId 时 tool:run:<runId>:<key>）
- * - tool:orphan:<绝对下标>     只有结果、没有调用的历史 tool 消息
- * - notice:<item.key>         上下文 / 原始事件行
+ * - tool:orphan:<callId>:<ts> 只有结果、没有调用的历史 tool 消息（无 id 时退回绝对下标）
+ * - notice:<runId>:<role>:<ts> 上下文 / 原始事件行（同一个结构化身份；缺则绝对下标）
+ * - notice:<item.key>         事件流侧的上下文 / 原始事件行
  * - ask-answered:<requestId>  已答提问的答复卡（服务端 answered 记录；不是消息，没有绝对下标）
  * - run:<runId>:input         run 的输入：人的输入（气泡）/ agent 投递（agent 卡）/
  *                             运行时上下文输入（`vessel:*` → 环境信息卡）/
  *                             rotate 交接嘱托（`rotate:handoff[:<epoch>]` → 交接卡）；
  *                             落盘后一律让位给历史那份
  * - run:<runId>:failure       一次 run 的失败卡（事件流优先，会话记录快照兜底）
+ *
+ * 历史消息的 key 为什么不再锚绝对下标：下标 = `detailWindow.start + 窗口内下标`，只要历史
+ * 被裁一次（rewind / compact / 尾部重取换了起点）就整体错位 —— 键一换，React 会把原来的
+ * DOM 节点交给另一条消息，展开态 / 动画 / 滚动锚点全跟着错。改用消息自己带的结构化事实后，
+ * 窗口怎么移动都不换号。为什么不是 `seq`：`sessions.get` 不扫事件日志，手里没有 seq
+ * （理由与实测见 `structuredHistoryKey`）。
  *
  * 段 key 为什么锚 seq 而不是段序（`text:<n>`）：段序是「第几个段」，回填把更早的一段插进来
  * 会让后面所有段换号 → React 整段重挂（动画重播）+ 认领错位。seq 是段在 wire 上的坐标，
@@ -828,6 +837,30 @@ export function isCardInputMessage(message: Message): boolean {
   return rotateHandoffOf(message.name) !== undefined;
 }
 
+/**
+ * 历史消息的**结构化身份**（不依赖绝对下标）。
+ *
+ * 身份 = `run_id` + `role` + `timestamp`：三项都是消息自己带的事实，窗口前插更早的一页、
+ * 尾部重取、历史被裁之后都不变。绝对下标（`messageIndexOffset + 窗口内下标`）只要历史被
+ * 裁一次就整体错位 —— 键一换，React 就把原来那个 DOM 节点交给**另一条**消息（展开态 /
+ * 入场动画 / 滚动锚点跟着错到别人身上）。
+ *
+ * 真机校验（会话 `09f82ac6`，1359 条消息：387 user / 512 assistant / 458 tool / 2 system）：
+ * 三元组 **0 组碰撞**；唯一不带 `run_id` 的就是那 2 条 `system`（退回绝对下标）。
+ *
+ * 为什么不是 `seq`：`sessions.get` 只读 `SessionState.messages`、**不扫事件日志**（0.54
+ * 的读放大裁决：每次 `sessions.get` 一次全扫是明确不做的事），所以它手里没有任何 seq
+ * 事实；`Message` 也没有 `seq` 字段。真要按 seq 编号，得先在 core 落盘时给每条消息盖章
+ * （新增持久字段 + 迁移口径），那是另一件事，不在本键的替换范围内。
+ */
+function structuredHistoryKey(message: Message): string | undefined {
+  const runId = message.run_id;
+  if (typeof runId !== 'string' || runId.length === 0) return undefined;
+  const ts = message.timestamp;
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return undefined;
+  return `${runId}:${message.role}:${String(ts)}`;
+}
+
 /** 历史窗口 → item + 反查表（只依赖 messages 与 offset，调用侧可安全 memo）。 */
 export function buildHistoryIndex(
   messages: readonly Message[],
@@ -849,6 +882,28 @@ export function buildHistoryIndex(
   const inputsByRun = new Map<string, number[]>();
   /** 工具结果消息的时间（历史工具卡的权威 ts：结果落盘那一刻）。 */
   const toolResultTs = new Map<string, number>();
+
+  // 身份键碰撞计数：同一个结构化身份出现两条以上 ⇒ 那几条的身份不可信，退回绝对下标
+  // （与 `ambiguousSegments` 同一个口径：宁可某次换键，也不许两条消息共用一个 key）。
+  const identityCounts = new Map<string, number>();
+  for (const message of messages) {
+    const identity = structuredHistoryKey(message);
+    if (identity === undefined) continue;
+    identityCounts.set(identity, (identityCounts.get(identity) ?? 0) + 1);
+  }
+  /**
+   * 历史 item 的身份键（`msg:` / `notice:` 共用）。
+   *
+   * 能给结构化身份就给（窗口怎么移动都不变）；给不出（旧数据 / `system` / 撞号）才退回
+   * 绝对下标，形状与 0.55 之前逐字节相同。
+   */
+  const itemKeyOf = (message: Message, absIndex: number, prefix: string): string => {
+    const identity = structuredHistoryKey(message);
+    if (identity === undefined || (identityCounts.get(identity) ?? 0) > 1) {
+      return `${prefix}:${String(absIndex)}`;
+    }
+    return `${prefix}:${identity}`;
+  };
 
   // 可见性：隐藏的消息**不产生 item**，但仍要进 messageByIndex / contentByIndex
   // （绝对下标、认领、previous-user 都依赖它们）。
@@ -1057,7 +1112,7 @@ export function buildHistoryIndex(
     if (handoff !== undefined) {
       items.push({
         kind: 'rotate-handoff',
-        key: `msg:${absIndex}`,
+        key: itemKeyOf(message, absIndex, 'msg'),
         text: message.content,
         ...handoff,
         ...(messageTs !== undefined ? { ts: messageTs } : {}),
@@ -1070,7 +1125,7 @@ export function buildHistoryIndex(
     if (askAnswer !== undefined) {
       items.push({
         kind: 'ask-answer',
-        key: `msg:${absIndex}`,
+        key: itemKeyOf(message, absIndex, 'msg'),
         text: message.content,
         card: askAnswer,
         ...(messageTs !== undefined ? { ts: messageTs } : {}),
@@ -1089,7 +1144,7 @@ export function buildHistoryIndex(
       const env = isEnvNoticeKind(noticeKind) ? envNoticeCard(message.content) : undefined;
       items.push({
         kind: 'runtime-notice',
-        key: `notice:${absIndex}`,
+        key: itemKeyOf(message, absIndex, 'notice'),
         noticeKind,
         text: message.content,
         absIndex,
@@ -1100,7 +1155,7 @@ export function buildHistoryIndex(
     }
     items.push({
       kind: 'message',
-      key: `msg:${absIndex}`,
+      key: itemKeyOf(message, absIndex, 'msg'),
       absIndex,
       message,
       ...(sourceText !== undefined ? { sourceText } : {}),
@@ -1149,9 +1204,16 @@ export function buildHistoryIndex(
     // 孤立结果（窗口从中间切起 / 调用被截断）：投影照样按**它自己的** id 挂上 ——
     // 这正是「窗口里没有 owning assistant」的那条路径，按下标对齐在这里必错。
     const projection = item.callId === undefined ? undefined : projectionByCallId.get(item.callId);
+    // 孤立卡的身份同样不靠绝对下标：有 `tool_call_id` 就按它（同一个 id 在窗口里只会有一张
+    // 结果卡，撞号时退回下标），没有 id 才退回下标。
+    const orphanTs = messageByIndex.get(absIndex)?.timestamp;
+    const orphanKey =
+      item.callId !== undefined && item.callId.length > 0
+        ? `tool:orphan:${item.callId}:${String(orphanTs ?? 0)}`
+        : `tool:orphan:${String(absIndex)}`;
     items.push({
       kind: 'tool',
-      key: `tool:orphan:${absIndex}`,
+      key: orphanKey,
       // 孤立卡片也带上自己的 `tool_call_id`：它是这张卡的**身份**（读回 / 诊断 / 去重都按它），
       // 丢了它就只能靠 key 猜，而 key 里装的是绝对下标（换窗口就变）。
       ...(item.callId !== undefined ? { callId: item.callId } : {}),

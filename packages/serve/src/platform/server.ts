@@ -358,7 +358,7 @@ const DISABLED_AUTH: PlatformAuthOptions = {
 function sessionRequiredMessage(): string {
   return (
     'session_required: 这个部署启用了 WebUI 登录（auth.backends），经公网/反代的请求必须' +
-    '先登录。请打开站点根路径，用「用 GitHub 登录」获取会话 cookie 后再调用；' +
+    '先登录。请打开站点根路径，用登录页（口令 + TOTP，或 GitHub）获取会话 cookie 后再调用；' +
     '本机直连（127.0.0.1）仍可用 Bearer token 或回环匿名。'
   );
 }
@@ -445,8 +445,11 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
     ...authOptions,
     publicOrigin,
     env: authOptions.env ?? (process.env as Record<string, string | undefined>),
+    // 0.56 P2：`POST /auth/unlock` 要比对这个值（本机 + 平台 token 才能解锁登录限速）。
+    // 只比较、不回显、不落盘。
+    ...(platformToken !== undefined ? { platformToken } : {}),
     log: (message: string) => {
-      // 只打非敏感事实：会话 id / csrf / token / secret 都不进这行。
+      // 只打非敏感事实：会话 id / csrf / token / secret / 口令 / TOTP 密钥 / 恢复码都不进这行。
       console.warn(`[platform-auth] ${message}`);
     },
   });

@@ -72,8 +72,9 @@ export function platformUnauthorizedMessage(auth: PlatformAuthResult): string {
     );
   }
   return (
-    'platform_token_required: 需要 Authorization: Bearer <gateway.token>（浏览器可用 ' +
-    '#token=<同一个值> 导入）。令牌来自 gateway.token 或 gateway.token_env 指向的环境变量；' +
+    'platform_token_required: 需要 Authorization: Bearer <gateway.token>（浏览器请在连接设置里' +
+    '粘贴同一个值；0.56 P2 起 `#token=` 只用于一次性引导码）。令牌来自 gateway.token 或 ' +
+    'gateway.token_env 指向的环境变量；' +
     '生成: export VESSEL_PLATFORM_TOKEN=$(openssl rand -hex 32) 然后 gateway.token_env: ' +
     'VESSEL_PLATFORM_TOKEN。'
   );

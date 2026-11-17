@@ -9,7 +9,7 @@
  */
 
 import { lookup } from 'node:dns/promises';
-
+import { truncateText } from './budget';
 import { isAllowedContentType, type WebFetchConfig } from './config';
 import { extractDocument } from './extract';
 import {
@@ -372,8 +372,9 @@ export async function fetchPage(
         })
       : { text: bodyText, title: '', links: [] };
 
-    const truncated = extracted.text.length > config.maxChars;
-    const text = truncated ? extracted.text.slice(0, config.maxChars) : extracted.text;
+    // 截断标记统一（local 与 deepseek 用同一个函数）：`…（省略 N 字符）`
+    const truncatedText = truncateText(extracted.text, config.maxChars);
+    const text = truncatedText.text;
     if (text.trim() === '') {
       throw new WebFetchError(
         'extract_empty',
@@ -395,9 +396,17 @@ export async function fetchPage(
       fetched_at: new Date(now()).toISOString(),
       title: extracted.title,
       text,
-      truncated,
+      truncated: truncatedText.truncated,
       links: filterSameOriginLinks(extracted.links, checked.url, config.linksLimit),
       redirects,
+      // 0.56 如实标注（local 每一跳、每个字节都在我们眼里）
+      backend: 'local',
+      status_source: 'target',
+      format: 'text',
+      bytes_source: 'http-body',
+      links_source: 'backend',
+      redirects_known: true,
+      robots: config.respectRobots ? 'respected' : 'ignored (config)',
     };
   } finally {
     clearTimeout(timer);
