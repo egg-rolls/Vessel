@@ -295,6 +295,45 @@ connect-src 'self' https://node-b.example.com:8644 wss://node-b.example.com:8644
 
 Platform Gateway 同源托管 `dist` 时不需要 `allowed_origins`，CSP 由平台按 Host / allowlist 生成。
 
+### 4.1 平台代理 node（0.58）：浏览器只连平台
+
+注册进平台的 node 默认**由平台代理**，浏览器与 CLI 只需要平台端口：
+
+```text
+浏览器 ──平台会话（cookie / 平台 token）──▶ 平台 /nodes/<node_id>/** ──Bearer node token──▶ node /v1/**
+```
+
+- **路由**：`/nodes/:nodeId/health`、`/nodes/:nodeId/v1/rpc`、`/nodes/:nodeId/v1/events`（WS 同路径）。
+  只做前缀剥离，路径与查询原样转发；`node_id` 只从注册表解析，客户端**不能**指定 host/port。
+- **鉴权**：走平台会话语义（Bearer `gateway.token`、`/auth/*` 会话 cookie、回环匿名）。
+  node token 由平台在转发时注入，**永不出现在任何响应体 / 浏览器存储 / URL**。
+- **路径白名单**：只有 `/health` 与 `/v1/**` 经代理；`/v1/local/**`（会吐 node token）、
+  `/plugins/**`、静态资源一律 403/404。WS 只放行 `/v1/events`（`/ws` 为兼容别名）。
+- **RPC 方法白名单**：`POST /v1/rpc` 的 `method` 与 WS `req` 帧的方法名要过平台白名单
+  （已知命名空间 + 显式拒绝进程生死类方法），未知方法 fail-closed 并记 `gateway.proxy.rpc_denied`。
+- **有上限**：请求体 8 MiB、并发 64、响应头超时 30s（流式响应不受限）、WS 连接 32、
+  WS 水位 1 MiB / 256 KiB、单向硬阈值 8 MiB（超了 1013 `backpressure_overflow`）。
+- **记账**：每条代理 WS 关闭写一条 `gateway.ws.closed`（`via: 'proxy'`，含 `who` / 时长 /
+  `frames_*` / `bytes_*` / `backpressure_pauses` / `heartbeat_misses`）。
+- **反代只需转发平台端口**：不必再为浏览器直连 node 开洞（`REVERSE-PROXY.md` 里的 node 转发段可以退役）。
+
+验证（浏览器网络面板里出现的应当只有平台端口的请求）：
+
+```bash
+curl -s http://127.0.0.1:8642/nodes/<node_id>/health
+curl -s -X POST http://127.0.0.1:8642/nodes/<node_id>/v1/rpc \
+  -H 'content-type: application/json' \
+  -d '{"v":1,"id":"1","method":"sessions.list","params":{}}'
+```
+
+**回退开关**：`gateway.proxy_nodes: false` ⇒ 平台不提供 `/nodes/*`，前端据
+`platform.whoami.proxy.enabled === false` 回到「取 credentials 直连 node」的老路径
+（等于把 node token 交回浏览器；只在本机调试时用）。
+
+**`platform.nodes.credentials` 现在的使用方**（代理开启时降级为 CLI 专用）：
+`vessel token show --purpose node`、`doctor --deep`、federation / 运维脚本，
+以及 `gateway.proxy_nodes: false` 下的老前端。浏览器在代理模式下**不调用**它。
+
 ## 5. 故障排查
 
 | 现象 | 可能原因 | 处理 |

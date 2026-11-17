@@ -19,8 +19,11 @@ import {
   resolveRequestEdge,
 } from '../gateway/auth.js';
 import { serveStatic } from '../gateway/static.js';
-import { platformUnauthorizedMessage, resolvePlatformAuth } from './auth.js';
+import { platformTokenMatches, platformUnauthorizedMessage, resolvePlatformAuth } from './auth.js';
 import { platformListenGuard } from './listen-guard.js';
+import { PlatformProxy } from './proxy.js';
+import { PROXY_BASE_PATH, parseProxyRoute } from './proxy-config.js';
+import type { ProxyWsClient } from './proxy-ws.js';
 import { createPlatformRegistry } from './registry.js';
 import { handlePlatformRpc } from './rpc.js';
 import type {
@@ -47,6 +50,17 @@ const BUILD_EVENTS_RETRY_MS = 5_000;
 /** 现场判断要遍历源码树；多个标签页同时轮询不必各走一遍。 */
 const BUILD_PROBE_TTL_MS = 5_000;
 
+/**
+ * 0.58：平台入口的 WS 连接数据。目前只有一种：node 事件流代理。
+ *
+ * Bun 的 `websocket` handler 需要单一 `data` 类型；用 `kind` 判别便于将来加第二条通道
+ * （例如 hub 代理）时不用改类型。
+ */
+interface PlatformWsData {
+  kind: 'node-proxy';
+  bridge: import('./proxy-ws.js').ProxyWsBridge;
+}
+
 /** node 独占路径：平台入口一律 404（不代理、不转发）。 */
 function isNodeOnlyPath(path: string): boolean {
   return (
@@ -59,6 +73,29 @@ function isNodeOnlyPath(path: string): boolean {
     path === '/sse' ||
     path.startsWith('/sse/')
   );
+}
+
+/**
+ * 平台自己拥有的路径前缀：不参与 SPA 兜底。
+ *
+ * 0.58 修的是既有 bug：`/health` 曾经排在静态兜底之后，于是返回 `index.html`（200 HTML），
+ * `gateway status` 因此对平台实例恒显示「身份未确认」。判据用前缀而不是逐个端点：
+ * 兜底只该服务**前端路由**（`/sessions/xxx` 这种），任何平台路径拿到 HTML 都是错的。
+ */
+const RESERVED_PLATFORM_PREFIXES: readonly string[] = [
+  '/platform/',
+  `${PROXY_BASE_PATH}/`,
+  '/auth/',
+  '/web/',
+  '/health',
+  '/build.json',
+];
+
+function isReservedPlatformPath(path: string): boolean {
+  return RESERVED_PLATFORM_PREFIXES.some((prefix) => {
+    if (path === prefix) return true;
+    return path.startsWith(prefix.endsWith('/') ? prefix : `${prefix}/`);
+  });
 }
 
 /**
@@ -428,13 +465,112 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
     probeCached: probeWebDist,
   });
 
-  const server = Bun.serve({
+  /**
+   * 0.58：代理门面。省略 `opts.proxy` = 关闭（组合根没接线时行为与 0.57 逐字一致）。
+   *
+   * 目标地址只从 `registry` 取（节点表的唯一真相源），凭据只从
+   * `opts.resolveNodeCredential` 取（不缓存、不落盘、不进响应体）。
+   */
+  const proxy = new PlatformProxy({
+    enabled: opts.proxy !== undefined && opts.proxy.enabled !== false,
+    resolveNode: (nodeId) => registry.descriptor(nodeId),
+    resolveToken: (nodeId) => {
+      try {
+        // 0.58：`resolveNodeCredential` 从此是**内部**函数：只被代理层调用。
+        const credential = opts.resolveNodeCredential(nodeId);
+        return credential.found ? credential.token : undefined;
+      } catch {
+        // 读不到凭据 = 该 node 走回环匿名；不把底层错误带进响应。
+        return undefined;
+      }
+    },
+    ...(opts.proxy?.limits !== undefined ? { limits: opts.proxy.limits } : {}),
+    log: (fields) => {
+      // 与 node 侧 `gateway.ws.closed` 同通道（结构化一行，便于 grep/聚合）。
+      console.warn('[vessel]', fields);
+    },
+  });
+
+  /**
+   * 平台数据面闸（`/platform/rpc` 与 `/nodes/**` 的**同一套**权威判定）。
+   *
+   * 抽出来不是为了少写几行：两处一旦各写一套，代理就会成为「比 RPC 更松的那个入口」——
+   * 那正是「不能变成新的穿通面」要防的事。
+   */
+  type DataGate = { ok: true } | { ok: false; response: Response };
+  const dataGate = (
+    req: Request,
+    authCtx: AuthRequestContext,
+    auth: ReturnType<typeof resolvePlatformAuth>,
+    options: { mutating: boolean; localDirect: boolean },
+    extra: Record<string, string>,
+  ): DataGate => {
+    // 1. Bearer token 成立 → 放行（令牌优先，不需要 CSRF）。
+    if (auth.ok) return { ok: true };
+    const gate = authService.authorize(req, authCtx, { mutating: options.mutating });
+    // 2. 会话 cookie 在但 CSRF 缺失 / 不匹配 → 403（cookie 不是能力凭证）。
+    if (!gate.ok && (gate.reason === 'csrf_missing' || gate.reason === 'csrf_failed')) {
+      return {
+        ok: false,
+        response: errorJson('csrf_failed', csrfRejectedMessage(gate.reason), 403, extra),
+      };
+    }
+    // 3. 配了登录后端且不是本机直连（公网/经反代）→ 401，让前端回登录页。
+    if (!gate.ok && authService.enabled && !options.localDirect) {
+      return {
+        ok: false,
+        response: errorJson('session_required', sessionRequiredMessage(), 401, extra),
+      };
+    }
+    // 4. 非回环且未认证 → 401（旧行为）。
+    if (!gate.ok && !auth.loopback) {
+      return {
+        ok: false,
+        response: errorJson('platform_unauthorized', platformUnauthorizedMessage(auth), 401, extra),
+      };
+    }
+    // 5. 本机直连（未配 token 的回环）→ 匿名放行（旧行为，防锁死）。
+    return { ok: true };
+  };
+
+  /**
+   * WS 首帧里的 token 校验：浏览器 WS 带不了 `Authorization` 头，所以平台 token
+   * 允许走首帧（与 node 的 `{kind:'auth'}` 同形状）。**校验的是平台 token**，
+   * 平台 token 永远不会被转发给 node。
+   */
+  const verifyPlatformToken = (provided: string): boolean => {
+    if (platformToken === undefined || platformToken === '') {
+      // 未配置平台 token：这条连接本来只可能是回环匿名（闸已放行）。
+      return provided === '';
+    }
+    return provided !== '' && platformTokenMatches(provided, platformToken);
+  };
+
+  const server = Bun.serve<PlatformWsData>({
     port: opts.port,
     hostname: opts.hostname,
     // 0.57：SSE 是长连接，Bun 默认 10 秒空闲就掐掉（只发保活帧也会被掐）。与
     // node 侧 `/v1/events` / hub 同口径关掉空闲超时（`gateway.ts` 的 `idleTimeout: 0`），
     // 连接的生命周期交给 SSE 自己的保活帧与客户端重连。
     idleTimeout: 0,
+    // 0.58：代理 WS 的**唯一**入口。心跳、背压、close 记账都在 `ProxyWsBridge`，
+    // 这里只做分发（不在 handler 里加任何策略，避免两处判据漂移）。
+    websocket: {
+      data: {} as PlatformWsData,
+      open(ws: Bun.ServerWebSocket<PlatformWsData>) {
+        const { bridge } = ws.data;
+        proxy.wsOpen(bridge, ws as unknown as ProxyWsClient);
+      },
+      message(ws: Bun.ServerWebSocket<PlatformWsData>, message: string | Buffer) {
+        proxy.wsMessage(ws.data.bridge, message);
+      },
+      close(ws: Bun.ServerWebSocket<PlatformWsData>, code: number, reason: string) {
+        proxy.wsClose(ws.data.bridge, code, reason);
+      },
+      pong(ws: Bun.ServerWebSocket<PlatformWsData>) {
+        proxy.wsPong(ws.data.bridge);
+      },
+    },
     fetch: async (req, srv) => {
       const url = new URL(req.url);
       const path = url.pathname;
@@ -493,6 +629,49 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
         return errorJson('not_found', `Not found: ${path}`, 404, extra);
       }
 
+      // ---- 精确端点（全部在静态兜底之前；顺序判据：精确端点 → 明确 404 → SPA 兜底）----
+
+      // 0.55 口径不变：health 不放公网（回环或已认证才可读）。
+      // 0.58 修 bug：这一块原本排在静态兜底之后，于是 `/health` 被 SPA 回退成
+      // `index.html`（200 HTML），`gateway status` 对平台实例因此恒显示 unreachable。
+      if (path === '/health') {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          return errorJson('not_found', `Not found: ${path}`, 404, extra);
+        }
+        if (!auth.loopback && !auth.ok) {
+          return errorJson('platform_unauthorized', platformUnauthorizedMessage(auth), 401, extra);
+        }
+        // 平台健康：不含 node runtime 数据；`role` 供 CLI 确定性区分平台/node health。
+        // `proxy` 是能力位（前端据此选择数据面），不含地址与凭据。
+        return json(
+          {
+            status: 'ok',
+            role: 'platform',
+            version,
+            proxy: { enabled: proxy.enabled, base_path: PROXY_BASE_PATH },
+          },
+          200,
+          extra,
+        );
+      }
+
+      // 0.57：`/build.json` 是**实时**响应（静态构建戳 + 服务端现场判断），必须自己
+      // 处理：交给 serveStatic 会带着 `immutable` 一年缓存头原样吐出去。
+      if (path === BUILD_JSON_PATH && (req.method === 'GET' || req.method === 'HEAD')) {
+        const buildResponse = await buildJsonResponse(
+          staticDir,
+          req.method,
+          opts.webDist,
+          probeWebDist,
+        );
+        if (buildResponse !== null) {
+          for (const [key, value] of Object.entries(extra)) {
+            buildResponse.headers.set(key, value);
+          }
+          return buildResponse;
+        }
+      }
+
       // 0.57：产物变更推送。**必须在静态兜底之前** —— 它没有扩展名，serveStatic
       // 会把它当成 SPA 路由、返回 index.html。
       //
@@ -529,26 +708,114 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
         return stream;
       }
 
-      // 静态宿主同样在闸之前：`index.html` 与 `/login` 是登录页本身，匿名也要拿得到
-      // （否则「配了 token」⇒ 浏览器永远停在白屏）。数据面仍然要靠 RPC 鉴权。
-      if (req.method === 'GET' || req.method === 'HEAD') {
-        // 0.57：`/build.json` 是**实时**响应（静态构建戳 + 服务端现场判断），必须
-        // 在 serveStatic 之前 —— 否则它会被当成普通静态文件，带着 `immutable`
-        // 一年缓存头原样吐出去，浏览器连轮询都省了。
-        if (path === BUILD_JSON_PATH) {
-          const buildResponse = await buildJsonResponse(
-            staticDir,
-            req.method,
-            opts.webDist,
-            probeWebDist,
-          );
-          if (buildResponse !== null) {
-            for (const [key, value] of Object.entries(extra)) {
-              buildResponse.headers.set(key, value);
-            }
-            return buildResponse;
-          }
+      if (path === PLATFORM_RPC_PATH) {
+        if (req.method !== 'POST') {
+          return errorJson('method_not_allowed', 'Only POST is allowed', 405, {
+            ...extra,
+            Allow: 'POST',
+          });
         }
+        // 鉴权矩阵见 `dataGate`（与 `/nodes/**` 共用同一套：代理不许比 RPC 更松）。
+        const rpcGate = dataGate(
+          req,
+          authCtx,
+          auth,
+          { mutating: true, localDirect: edge.localDirect },
+          extra,
+        );
+        if (!rpcGate.ok) return rpcGate.response;
+        return handlePlatformRpc(
+          req,
+          {
+            auth,
+            registry,
+            resolveNodeCredential: opts.resolveNodeCredential,
+            version,
+            proxy: { enabled: proxy.enabled, basePath: PROXY_BASE_PATH },
+          },
+          extra,
+        );
+      }
+
+      // ---- 0.58：`/nodes/:nodeId/**` 代理（HTTP + WS 升级）----
+      //
+      // 目标只来自注册表；客户端只提供 node_id。鉴权走**平台会话语义**
+      // （Bearer / 会话 cookie / 回环匿名），node token 永不出网关。
+      if (path === PROXY_BASE_PATH || path.startsWith(`${PROXY_BASE_PATH}/`)) {
+        const route = parseProxyRoute(path);
+        if (route === null) {
+          // 形状不对（含 `..` / `//host` / 非法 id）：明确 404，不回落成 SPA。
+          return errorJson('not_found', `Not found: ${path}`, 404, extra);
+        }
+        if (!proxy.enabled) {
+          return errorJson(
+            'proxy_disabled',
+            'proxy_disabled: 这个部署关闭了 gateway.proxy_nodes（浏览器应直连 node）。',
+            404,
+            extra,
+          );
+        }
+        const isUpgrade = (req.headers.get('upgrade') ?? '').toLowerCase() === 'websocket';
+        // WS 升级不是变更类请求（握手时浏览器带不了 CSRF 头，带的是 cookie）。
+        const proxyGate = dataGate(
+          req,
+          authCtx,
+          auth,
+          { mutating: false, localDirect: edge.localDirect },
+          extra,
+        );
+        if (!isUpgrade && !proxyGate.ok) return proxyGate.response;
+        if (isUpgrade) {
+          if (req.method !== 'GET') {
+            return errorJson('method_not_allowed', 'WebSocket upgrade must be GET', 405, {
+              ...extra,
+              Allow: 'GET',
+            });
+          }
+          // 没有 cookie 也能升级的**唯一**情形：这个部署配了平台 token。
+          //
+          // 为什么必须留这条路：浏览器 WS 握手带不了 `Authorization` 头。远端用户
+          // （没有 OAuth 会话、只有 `gateway.token`）在代理模式下全靠首帧
+          // `{kind:'auth',token}` 证明身份 —— 直接 401 的话「HTTP 能用、WS 连不上」。
+          // 代价有界：连接仍受 wsMaxConnections 限制，且首帧鉴权窗口 wsHandshakeTimeoutMs
+          // （10s）内不通过就 4401 关闭。
+          const deferredAuth = typeof platformToken === 'string' && platformToken !== '';
+          if (!proxyGate.ok && !deferredAuth) return proxyGate.response;
+          const upgrade = proxy.upgrade(route, url, {
+            // 已在升级时通过平台鉴权（Bearer / 会话 cookie / 回环）⇒ 不必等首帧 token。
+            preAuthenticated: proxyGate.ok,
+            verifyPlatformToken,
+          });
+          if (!upgrade.ok) {
+            for (const [key, value] of Object.entries(extra)) {
+              upgrade.response.headers.set(key, value);
+            }
+            return upgrade.response;
+          }
+          const upgraded = srv.upgrade(req, {
+            data: { kind: 'node-proxy' as const, bridge: upgrade.bridge },
+          });
+          if (!upgraded) {
+            upgrade.bridge.failUpstream('upgrade_failed');
+            return errorJson('invalid_request', 'WebSocket upgrade failed', 400, extra);
+          }
+          return undefined;
+        }
+        const proxied = await proxy.handleHttp(req, route, url);
+        for (const [key, value] of Object.entries(extra)) proxied.headers.set(key, value);
+        return proxied;
+      }
+
+      // 平台自有路径（`/auth/**`、`/web/**` 等）没命中精确端点 ⇒ 明确 404，
+      // 绝不让 SPA 兜底把它们变成 index.html（那会让「路由写错」看起来像「页面正常」）。
+      if (isReservedPlatformPath(path)) {
+        return errorJson('not_found', `Not found: ${path}`, 404, extra);
+      }
+
+      // ---- 静态宿主（SPA 兜底）----
+      // 静态宿主在闸之前：`index.html` 与 `/login` 是登录页本身，匿名也要拿得到
+      // （否则「配了 token」⇒ 浏览器永远停在白屏）。数据面仍然要靠 RPC/代理鉴权。
+      if (req.method === 'GET' || req.method === 'HEAD') {
         const staticResponse = await serveStatic(path, staticDir);
         if (staticResponse !== null) {
           const contentType = staticResponse.headers.get('content-type') ?? '';
@@ -573,56 +840,6 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
         }
       }
 
-      if (path === '/health') {
-        if (req.method !== 'GET' && req.method !== 'HEAD') {
-          return errorJson('not_found', `Not found: ${path}`, 404, extra);
-        }
-        // 0.55 口径不变：health 不放公网（回环或已认证才可读）。
-        if (!auth.loopback && !auth.ok) {
-          return errorJson('platform_unauthorized', platformUnauthorizedMessage(auth), 401, extra);
-        }
-        // 平台健康：不含 node runtime 数据；`role` 供 CLI 确定性区分平台/node health。
-        return json({ status: 'ok', role: 'platform', version }, 200, extra);
-      }
-
-      if (path === PLATFORM_RPC_PATH) {
-        if (req.method !== 'POST') {
-          return errorJson('method_not_allowed', 'Only POST is allowed', 405, {
-            ...extra,
-            Allow: 'POST',
-          });
-        }
-        // 鉴权矩阵（0.56 只加「会话」这一项，其余逐字保持 0.55）：
-        //  1. Bearer token 成立 → 放行（旧行为，令牌优先，不需要 CSRF）；
-        //  2. 会话 cookie 成立 → 放行，但变更类请求必须带 CSRF；
-        //  3. 会话 cookie 在但 CSRF 缺失/不匹配 → 403；
-        //  4. 配了登录后端且请求不是本机直连（公网/经反代）→ 401 session_required；
-        //  5. 非回环且未认证 → 401 platform_unauthorized（旧行为）；
-        //  6. 本机直连（127.0.0.1 直连、未配 token）→ 匿名放行（旧行为，防锁死）。
-        if (!auth.ok) {
-          const gate = authService.authorize(req, authCtx, { mutating: true });
-          if (!gate.ok && (gate.reason === 'csrf_missing' || gate.reason === 'csrf_failed')) {
-            return errorJson('csrf_failed', csrfRejectedMessage(gate.reason), 403, extra);
-          }
-          if (!gate.ok && authService.enabled && !edge.localDirect) {
-            return errorJson('session_required', sessionRequiredMessage(), 401, extra);
-          }
-          if (!gate.ok && !auth.loopback) {
-            return errorJson(
-              'platform_unauthorized',
-              platformUnauthorizedMessage(auth),
-              401,
-              extra,
-            );
-          }
-        }
-        return handlePlatformRpc(
-          req,
-          { auth, registry, resolveNodeCredential: opts.resolveNodeCredential, version },
-          extra,
-        );
-      }
-
       return errorJson('not_found', `Not found: ${path}`, 404, extra);
     },
   });
@@ -633,6 +850,8 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
     async stop(): Promise<void> {
       // 先断开 SSE 长连接：`server.stop(true)` 会等活跃连接，长连接不关就等不完。
       buildEvents.close();
+      // 0.58：代理 WS 同理 —— 不让一条事件流把停服卡死；关闭时按 `who: 'platform'` 记账。
+      proxy.closeAll();
       clearInterval(authCleanupTimer);
       await authService.flush();
       await server.stop(true);

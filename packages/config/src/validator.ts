@@ -1344,6 +1344,15 @@ function validateGatewaySettings(
     errors,
   );
 
+  // 0.58：代理开关只能显式布尔（写字符串 "false" 会被当成真值，那种错必须当场报）。
+  const proxyNodes = (gateway as Record<string, unknown>).proxyNodes;
+  if (proxyNodes !== undefined && typeof proxyNodes !== 'boolean') {
+    errors.push({
+      path: 'gateway.proxyNodes',
+      message: 'gateway.proxyNodes must be a boolean (true = 平台代理 node；false = 直连回退)',
+    });
+  }
+
   validateSuperviseSettings((gateway as Record<string, unknown>).supervise, errors);
 
   if (allowedOrigins !== undefined) {
@@ -3163,6 +3172,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'tokenEnv',
     'allowedOrigins',
     'proxySecretEnv',
+    'proxyNodes',
     'supervise',
   ],
   // 0.56：WebUI 登录（嵌套 entries 由 validateAuthSettings 单独校验）。

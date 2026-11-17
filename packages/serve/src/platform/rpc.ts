@@ -44,6 +44,11 @@ export interface PlatformRpcContext {
   resolveNodeCredential: (nodeId?: string) => PlatformNodeCredential;
   /** 平台版本（`gateway.health.get` / `/health` 共用）。 */
   version: string;
+  /**
+   * 0.58：代理能力（`/nodes/:nodeId/**`）。打开时代理成为浏览器的唯一数据面，
+   * `platform.nodes.credentials` 因此**降级为 CLI 专用**（见该方法内的注释）。
+   */
+  proxy?: { enabled: boolean; basePath: string } | undefined;
 }
 
 function json(data: unknown, status: number, extra: Record<string, string>): Response {
@@ -153,21 +158,24 @@ export async function handlePlatformRpc(
       }
     }
     case 'platform.nodes.credentials': {
-      // 0.55 P0（拍板项 2）：只发给**已认证**的平台客户端（mode === 'token'）。
-      // 回环 socket 不再构成「可以下发 node token」的理由：反代与平台同机时它就是公网。
+      // 0.58：代理接管 browser→node 之后，下发 node token 只剩一个后果 —— 把长期凭据
+      // 交给最不可信的执行环境。所以**代理开启时这个端点降级为 CLI/本地自动化专用**：
+      // 必须出示平台 token（`mode === 'token'`），回环 socket 不再构成理由。
       //
-      // 0.55.1 迁移安全（用户实测踩到）：**完全没配置平台 token 的部署**如果也被这条挡住，
-      // 一次升级就会把本地 WebUI 锁死（前端拿不到 node token ⇒ 整页掉线），而症状只是
-      // 「连不上」。所以：未配置 token ⇒ 回环仍放行（doctor 报警 + 启动日志提示）；
-      // 一旦配置了 token，回环不再豁免。这条不是后门，是「配置存在才收紧」。
+      // 没有代理的部署保持逐字旧行为（含 0.55.1 的「未配置 token ⇒ 回环放行」迁移安全），
+      // 因为关掉代理就是一个应当完整可用的老形态（`gateway.proxy_nodes: false`）。
+      const proxyEnabled = ctx.proxy?.enabled === true;
       const unconfiguredLoopback = ctx.auth.loopback && !ctx.auth.tokenConfigured;
-      if (ctx.auth.mode !== 'token' && !unconfiguredLoopback) {
+      if (ctx.auth.mode !== 'token' && (proxyEnabled || !unconfiguredLoopback)) {
         return failure(
           id,
           'platform_unauthorized',
           'platform_token_required: platform.nodes.credentials 只发给带平台 token 的客户端。' +
-            '浏览器请在连接设置里粘贴平台 token，脚本用 Authorization: Bearer <平台 token>；' +
-            '令牌来自 gateway.token 或 gateway.token_env 指向的环境变量（不是 node token）。',
+            (proxyEnabled
+              ? '代理已开启（gateway.proxy_nodes），浏览器不需要也不应该拿 node token —— ' +
+                '数据面请走 /nodes/<node_id>/ 前缀；这个端点现在只服务 CLI / 本地自动化。'
+              : '浏览器请在连接设置里粘贴平台 token，脚本用 Authorization: Bearer <平台 token>；' +
+                '令牌来自 gateway.token 或 gateway.token_env 指向的环境变量（不是 node token）。'),
           401,
           extra,
         );
@@ -214,12 +222,33 @@ export async function handlePlatformRpc(
       return success(id, result, extra);
     }
     case 'platform.whoami': {
-      return success(id, { authenticated: ctx.auth.mode === 'token', mode: ctx.auth.mode }, extra);
+      // 0.58：`proxy` 是**能力位**：前端据此决定「数据面走平台代理」还是「直连 node」。
+      // 老前端忽略这个键，行为不变。
+      return success(
+        id,
+        {
+          authenticated: ctx.auth.mode === 'token',
+          mode: ctx.auth.mode,
+          proxy: {
+            enabled: ctx.proxy?.enabled === true,
+            base_path: ctx.proxy?.basePath ?? '/nodes',
+          },
+        },
+        extra,
+      );
     }
     case 'platform.health.get': {
       return success(
         id,
-        { status: 'ok', version: ctx.version, node_count: ctx.registry.count() },
+        {
+          status: 'ok',
+          version: ctx.version,
+          node_count: ctx.registry.count(),
+          proxy: {
+            enabled: ctx.proxy?.enabled === true,
+            base_path: ctx.proxy?.basePath ?? '/nodes',
+          },
+        },
         extra,
       );
     }

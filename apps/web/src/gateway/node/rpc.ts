@@ -32,15 +32,20 @@ export abstract class RpcClient extends ProtocolClient {
 
   protected async httpJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const token = this.token;
-    if (!token) {
+    if (!token && !this.proxyMode) {
       throw new GatewayHttpError('unauthorized', t('gateway.client.tokenRequiredHttp'));
     }
     const headers = new Headers(init.headers);
-    headers.set('Authorization', `Bearer ${token}`);
+    // 0.58：代理模式下鉴权是平台会话（cookie 同源自动带上）；浏览器不再持有 node token。
+    if (token) headers.set('Authorization', `Bearer ${token}`);
 
     let res: Response;
     try {
-      res = await fetch(`${this.httpBase()}${path}`, { ...init, headers });
+      res = await fetch(`${this.httpBase()}${path}`, {
+        ...init,
+        headers,
+        ...(this.proxyMode ? { credentials: 'same-origin' as const } : {}),
+      });
     } catch (error) {
       throw new GatewayHttpError('network', error instanceof Error ? error.message : String(error));
     }

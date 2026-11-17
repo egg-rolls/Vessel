@@ -97,6 +97,19 @@ function constantTimeEqual(a: string, b: string): boolean {
 }
 
 /**
+ * 0.58：平台 token 是否匹配（供**首帧** token 校验用）。
+ *
+ * 为什么需要单独一个函数：浏览器 WS 握手带不了 `Authorization` 头，平台代理因此接受
+ * 「首帧 `{kind:'auth',token}`」这种形状（与 node 同形）。校验的必须是**平台 token**，
+ * 而且比较要定长常量时间 —— 不能让这个入口成为比 HTTP 更松的那一处。
+ */
+export function platformTokenMatches(provided: string, expected: string): boolean {
+  if (expected === '') return false;
+  if (provided === '') return false;
+  return constantTimeEqual(provided, expected);
+}
+
+/**
  * 平台鉴权矩阵（契约 §3.2）：
  * - 配置了 `platformToken`：必须匹配，回环也不例外。
  * - 未配置：仅回环 socket → 匿名只读；非回环 → 拒绝（即使未配置）。

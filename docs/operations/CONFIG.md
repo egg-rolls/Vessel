@@ -603,6 +603,29 @@ gateway:
 - **可观测**：`gateway status` 显示每个节点的最近一次探活成功/失败时刻与重启计数；数据源是 `<dataDir>/platform-watchdog[-<instance>].json`（0600、不含 token）。启动输出也会打印一行 `supervise: 开/关 …`。
 - **关掉**：`enabled: false`，或环境变量 `VESSEL_GATEWAY_SUPERVISE=0`（显式覆盖配置文件）。关掉后不探活、不重启，`gateway status` 仍会显示「关」，避免下一个人误以为看门狗坏了。
 
+### 2.20 `gateway.proxy_nodes`（0.58：平台代理 node）
+
+```yaml
+gateway:
+  proxy_nodes: true    # 缺省 true；false = 回退到「浏览器取 credentials 直连 node」
+```
+
+- **默认开**：注册进平台的 node 由平台代理（`/nodes/:nodeId/**`，HTTP + WS），浏览器与 CLI
+  只连平台端口。node token 只在平台进程内使用，**不再下发到浏览器**。
+- **降级**：打开时 `platform.nodes.credentials` 只服务 CLI / 本地自动化（必须 `mode === 'token'`，
+  回环 socket 不再豁免）。浏览器在代理模式下**不调用**它 —— 这也是「node token 不出网关」的
+  前端那一半。使用方：`vessel token show --purpose node`、`doctor --deep`、federation / 运维脚本，
+  以及本键为 `false` 时的老前端。
+- **关掉**（`false`）：平台不提供 `/nodes/*`，前端据 `platform.whoami.proxy.enabled === false`
+  回到老路径（取凭据 + 直连 node）。等价于把 node token 交回浏览器，**只用于本机调试**。
+- **上限**（不可配，代理由 `DEFAULT_PLATFORM_PROXY_LIMITS` 定义）：请求体 8 MiB、并发 64、
+  响应头超时 30s（流式响应不受限）、WS 连接 32、WS 水位 1 MiB / 256 KiB、单向硬阈值 8 MiB。
+- **失败语义**：node 不可达 → `502 node_unreachable`；平台超时 → `504 node_timeout`；
+  代理并发满 → `503 proxy_busy`；被白名单拒绝 → `403 proxy_method_*` / `404 proxy_path_*`。
+  写操作不重试（幂等未知即不重试）。
+- **记账**：每条代理 WS 关闭写 `gateway.ws.closed`（`via: 'proxy'`）。node 侧同名日志保留，
+  统计口径按 `via` 区分，避免双写翻倍。
+
 ## 3. 密钥与 `_env`
 所有接受密钥的字段支持 `<field>_env`：
 
@@ -641,6 +664,9 @@ Platform Gateway token 独立，只读 `gateway.token` / `gateway.token_env`，�
 - `platform.nodes.credentials` 只认 `mode === 'token'`：浏览器需要平台 token
   （`#token=<值>` 导入），脚本需要 `Authorization: Bearer <platform-token>`。
   **纯本机安装也一样**：不配 `gateway.token` 时页面能列节点但连不上 node。
+  **0.58 起**：打开 `gateway.proxy_nodes`（缺省就是开）后浏览器不再取 node token，
+  数据面走 `/nodes/:nodeId/**`（回环匿名照旧可用）；这个端点只服务 CLI / 本地自动化。
+  关掉代理（`proxy_nodes: false`）时恢复上面这条完整收紧。
 - `hub.proxy_secret_env` 配置后，hub 的目录 / WS 目录流 / 删节点都要求密钥头。
 - `vessel doctor` 会对「回环 + 没有任何 token」给出 warning（只提示，不改变运行行为）。
 

@@ -51,6 +51,16 @@ export class PlatformClient {
     return trimmed !== '' ? trimmed : window.location.origin;
   }
 
+  /**
+   * 0.58：平台 origin（页面同源时就是 `window.location.origin`）。
+   *
+   * 代理数据面的 URL 由它拼出来（`<origin>/nodes/<node_id>`）：**同一个 origin**
+   * 意味着 CSP 仍然只需 `'self'`，浏览器也不需要知道 node 在哪台机器上。
+   */
+  originUrl(): string {
+    return this.origin();
+  }
+
   async rpc<T = unknown>(method: string, params?: unknown): Promise<T> {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), RPC_TIMEOUT_MS);

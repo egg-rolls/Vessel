@@ -27,6 +27,13 @@ export interface PlatformRegistry {
   get(nodeId?: string): Promise<PlatformNodeSummary>;
   /** 注入的 descriptor 数量（`platform.health.get` 用，不做探测）。 */
   count(): number;
+  /**
+   * 0.58：按 node_id 取**注入的 descriptor**（不做健康探测、不带状态）。
+   *
+   * 代理转发只用它：一跳代理不应该先花 1 秒探测 `/health` 再转发（那是延迟预算的
+   * 全部余量）。节点表仍然只有一份 —— 就是构造 registry 时注入的 `nodes`。
+   */
+  descriptor(nodeId: string): PlatformNodeDescriptor | undefined;
 }
 
 interface ProbeResult {
@@ -110,6 +117,9 @@ export function createPlatformRegistry(nodes: PlatformNodeDescriptor[]): Platfor
     },
     count(): number {
       return nodes.length;
+    },
+    descriptor(nodeId: string): PlatformNodeDescriptor | undefined {
+      return nodes.find((node) => node.nodeId === nodeId);
     },
   };
 }

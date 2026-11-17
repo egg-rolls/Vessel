@@ -106,8 +106,25 @@ function readHelloTimelineSegment(frame: {
 /** 请求超时（毫秒） */
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/** 0.58：客户端构造选项。 */
+export interface ProtocolClientOptions {
+  /**
+   * `true` = 数据面走**平台代理**（`<platform>/nodes/<node_id>`）。
+   *
+   * 两处不同（其余逐字不变）：
+   * - HTTP 不带 `Authorization` 也可以（鉴权靠平台会话 cookie / 平台 token）；
+   * - `/health` 预探要带 cookie（`credentials: 'same-origin'`），否则恒 401。
+   *
+   * 为什么不能让「空 token」在所有模式下都合法：直连 node 时空 token 曾经是
+   * 「node 回环匿名」的合法语义，放宽会掩盖真正的凭据缺失。
+   */
+  proxy?: boolean;
+}
+
 export abstract class ProtocolClient {
   private readonly baseUrl: string;
+  /** 0.58：代理数据面（见 {@link ProtocolClientOptions.proxy}）。 */
+  protected readonly proxyMode: boolean;
   protected token: string | null = null;
   private ws: WebSocket | null = null;
   protected state: ConnectionState = 'idle';
@@ -134,8 +151,9 @@ export abstract class ProtocolClient {
   private connectResolve: (() => void) | null = null;
   private connectReject: ((error: Error) => void) | null = null;
 
-  constructor(baseUrl = '') {
+  constructor(baseUrl = '', options: ProtocolClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.proxyMode = options.proxy === true;
   }
 
   get connectionState(): ConnectionState {
@@ -208,7 +226,8 @@ export abstract class ProtocolClient {
     try {
       const res = await fetch(`${this.httpBase()}/health`, {
         method: 'GET',
-        credentials: 'omit',
+        // 0.58：代理数据面靠平台会话 cookie 鉴权，`omit` 会把 cookie 丢掉 ⇒ 恒 401。
+        credentials: this.proxyMode ? 'same-origin' : 'omit',
         signal: controller.signal,
       });
       if (res.ok) return;

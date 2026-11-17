@@ -8,10 +8,22 @@
 /** 平台鉴权模式；匿名只在回环且未配置平台 token 时出现。 */
 export type PlatformAuthMode = 'token' | 'anonymous';
 
+/**
+ * 0.58：代理能力位。`enabled: true` 表示数据面走平台 `/nodes/:nodeId/**`，
+ * 浏览器**不需要也不应该**持有 node token（`platform.nodes.credentials` 已降级为 CLI 专用）。
+ */
+export interface PlatformProxyCapability {
+  enabled: boolean;
+  /** 代理前缀，缺省 `/nodes`。 */
+  base_path?: string;
+}
+
 /** `platform.whoami` 返回。匿名时 `authenticated: false`。 */
 export interface PlatformWhoAmI {
   authenticated: boolean;
   mode: PlatformAuthMode;
+  /** 0.58：老平台不带这个键 ⇒ 按 `enabled: false`（直连老路径）。 */
+  proxy?: PlatformProxyCapability;
 }
 
 export type PlatformNodeStatus = 'up' | 'down' | 'unknown';

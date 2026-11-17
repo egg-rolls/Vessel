@@ -487,6 +487,17 @@ export interface GatewayConfig {
    * 因此不会经同机反代被匿名取走。不配 = 旧行为（0.55 之前）。
    */
   proxySecretEnv?: string;
+  /**
+   * 0.58：平台是否代理 node（`/nodes/:nodeId/**`，HTTP + WS）。
+   *
+   * 缺省 `true`：注册进来的 node 由平台代理，浏览器**拿不到** node token。
+   * `false` = **保留的显式回退开关**：平台不提供 `/nodes/*`，前端据
+   * `platform.whoami.proxy.enabled === false` 回到「取 credentials 直连 node」的老路径。
+   *
+   * 只有一种情况该关它：本机调试时想让浏览器直连 node（例如用 devtools 直接看
+   * node 的 `/v1/events`）。关掉等于把 node token 交回浏览器 —— 那是有意为之的选择。
+   */
+  proxyNodes?: boolean;
   /** 0.58：父进程侧存活看门狗（探活 + 受限重启）；缺省开。 */
   supervise?: GatewaySuperviseConfig;
 }

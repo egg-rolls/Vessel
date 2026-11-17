@@ -124,6 +124,29 @@ export interface PlatformGatewayOptions {
   version?: string;
   /** 0.56：WebUI 登录；缺省 = 不启用（行为与 0.55 一致）。 */
   auth?: PlatformAuthOptions | undefined;
+  /**
+   * 0.58：平台代理 node（`/nodes/:nodeId/**`）。省略 = 关闭（老直连路径照旧）。
+   *
+   * 打开后浏览器/CLI 只连平台：node 的 HTTP 与 WS 都由平台按**平台会话语义**鉴权后转发，
+   * node token 只存在于平台进程内。关掉它 = 保留的显式回退开关
+   * （`gateway.proxy_nodes: false`），前端据 `platform.whoami.proxy.enabled` 自动改走直连。
+   */
+  proxy?: PlatformProxyOptions | undefined;
+}
+
+/**
+ * 0.58：代理的注入参数（组合根提供真相，平台只做路由/白名单/转发）。
+ *
+ * 三条硬约束在这里体现为参数形状：
+ * - 目标地址只能来自注册表（`nodes`），客户端只提供 `node_id`；
+ * - node 凭据只经 `resolveNodeCredential` 读，**不缓存、不落盘、不进响应体**；
+ * - 能力开关显式（`enabled`），关掉就是一个干净的老行为。
+ */
+export interface PlatformProxyOptions {
+  /** false = 不提供 `/nodes/*`（保留了的老直连路径）。缺省 true。 */
+  enabled?: boolean;
+  /** 可选的更严上限；缺省见 `DEFAULT_PLATFORM_PROXY_LIMITS`。 */
+  limits?: Partial<import('./proxy-config.js').PlatformProxyLimits>;
 }
 
 /** 已启动的平台监听。 */
