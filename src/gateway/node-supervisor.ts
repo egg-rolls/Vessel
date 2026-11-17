@@ -1040,6 +1040,12 @@ export class NodeSupervisor {
         env: {
           ...(this.options.env ?? process.env),
           VESSEL_DATA_DIR: spec.dataDir,
+          // 0.56：把该 node 的**生效 token**（显式或派生）注入子进程环境。
+          // node 侧「显式 > VESSEL_NODE_TOKEN > 现算派生」——所以独立启动的 node
+          // 不需要任何 token 配置，被 gateway 拉起的 node 更是零配置且值一致。
+          ...(spec.token !== undefined && spec.token !== ''
+            ? { VESSEL_NODE_TOKEN: spec.token }
+            : {}),
           ...(this.options.platformOrigins !== undefined && this.options.platformOrigins.length > 0
             ? { VESSEL_PLATFORM_ORIGINS: this.options.platformOrigins.join(',') }
             : {}),

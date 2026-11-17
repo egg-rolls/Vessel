@@ -52,15 +52,71 @@ durable:
   # path 缺省 <data_dir>/runs
   checkpoint_every: iteration
 
-serve:
-  token_env: VESSEL_GATEWAY_TOKEN
+node:
+  token_env: VESSEL_NODE_TOKEN
   # tokens:
   #   "<client-token>": { role: write }
+
+security:
+  # 0.56：单一根密钥（派生所有 token 的来源）。不配就用 <data_dir>/root-secret。
+  # root_secret_env: VESSEL_ROOT_SECRET
 ```
 
 0.49 起没有 tenant overlay，也没有 `tenant` 配置块；未知块直接报错。合并规则：
 对象深合并、数组整体替换、map（`mcp_servers`）按 key 合并、`null` 拒绝。
 `plugins` 是**数组**，按整层替换，不按 `name` 合并。
+
+### 2.0 `serve:` → `node:`（0.56 改名，兼容 + 弃用）
+
+`serve:` 这个块名要改：`vessel serve` 命令早就不存在了（0.49 起是 `vessel node start`），
+继续叫 `serve:` 只会让人以为在配一个不存在的东西。
+
+| 写法 | 行为 |
+|---|---|
+| 只有 `node:` | 规范写法，**无警告** |
+| 只有 `serve:` | 照旧生效，启动 + `vessel doctor` 各打一条弃用警告 |
+| 两段都有 | **`node:` 逐键覆盖 `serve:`**，被覆盖的键逐项警告 |
+
+```diff
+-serve:
++node:
+   token_env: VESSEL_NODE_TOKEN
+```
+
+- 字段完全相同（`hostname` / `port` / `allow_remote` / `tls` / `token` / `token_env` /
+  `tokens` / `allowed_origins` / `plugin_http` / `proxy_secret_env`）；
+- loader 会把 `node:` **归一化**进运行时的 `serve`，所以程序内部仍然只有一份真源；
+- **0.57 移除 `serve:`**。届时未改名会直接报错（未知块）。
+- 验证类错误提示里出现 `serve.*` 时，把它读成「你写的 `node:`」（同一字段）。
+
+### 2.0.1 token：用户一个都不用写（0.56 根密钥派生）
+
+优先级永远是「**显式配置赢，没配就现算**」，所以「未配置就挂」这种形状不再存在：
+
+| 用途 | 生效顺序 |
+|---|---|
+| 平台 | `gateway.token` > `gateway.token_env` > 派生 `vessel:platform` |
+| node | `node.token` > `node.token_env` > `VESSEL_GATEWAY_TOKEN` > 平台注入的 `VESSEL_NODE_TOKEN` > 派生 `vessel:node:<node_id>` |
+| hub | `hub.token_env` > `VESSEL_HUB_TOKEN` > 派生 `vessel:hub` |
+| 反代 | `gateway.proxy_secret_env`（**只认显式**，不会自动启用） |
+
+- 根密钥：`<data_dir>/root-secret`，32 字节，首次启动自动生成、权限 0600；
+  `security.root_secret_env` 指向的环境变量优先（容器 / 只注入密钥的部署）。
+  权限宽于 0600 → **拒绝启动**并给出 `chmod 600` 文案（不用可能已泄露的 root）。
+- 派生：`HKDF-SHA256(root, salt="vessel/v1", info="vessel:<purpose>[:<id>]")` → 32 字节，
+  base64url 加 `vsk_` 前缀；**不落盘、不缓存**，用的时候现算。
+- 命令：
+
+```bash
+vessel token list                       # 只列 purpose + 指纹前 8 位，永不打印值
+vessel token show --purpose platform    # 打印值：只回环 + 交互式终端
+vessel token show --purpose node --node node-b
+vessel token rotate --yes               # 新 root ⇒ 所有派生值一起换；显式配置不受影响
+vessel node token [--print]             # 本机 node 自己该用的 token
+```
+
+- 显式配置**不算**被派生值覆盖：只配一部分用途完全正常，其余照旧派生。
+- 派生**不会**收紧回环匿名（否则又是一次「升级即掉线」）；要收紧就显式配 token。
 
 ### 2.1 0.6.1 新增配置（已实现，冻结契约见 DECISION-015）
 

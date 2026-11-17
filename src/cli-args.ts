@@ -77,7 +77,31 @@ export type NodeCommand =
   | { kind: 'start'; daemon: boolean; configPath?: string }
   | { kind: 'status'; json: boolean; rpc: boolean }
   | { kind: 'stop' }
-  | { kind: 'reload'; scopes?: string[] };
+  | { kind: 'reload'; scopes?: string[] }
+  /**
+   * 0.56：`vessel node token [--print] [--json] [--node <id>]`。
+   * 不带 `--print` 只说明 token 来源；带 `--print` 才打印值（仅交互式终端）。
+   */
+  | { kind: 'token'; print: boolean; json: boolean; nodeId?: string };
+
+/**
+ * `vessel token ...` 子命令（0.56：单一根密钥 + 派生 token）。
+ *
+ * - `show --purpose <p> [--node <id>] [--json]`：打印**值**（仅回环 + 交互式）；
+ * - `list [--json]`：只给 purpose + 指纹前 8 位，永不打印值；
+ * - `rotate --yes [--json]`：新根密钥 ⇒ 所有派生 token 一起换。
+ */
+export type TokenCommand =
+  | {
+      kind: 'show';
+      purpose: string;
+      id?: string;
+      json: boolean;
+      allowNonInteractive: boolean;
+      dataDir?: string;
+    }
+  | { kind: 'list'; json: boolean; dataDir?: string }
+  | { kind: 'rotate'; yes: boolean; json: boolean; dataDir?: string };
 
 /**
  * `vessel gateway nodes` 子命令（0.49 G3a）。
@@ -442,6 +466,8 @@ export interface CliArgs {
   gatewayNodes: GatewayNodesCommand | null;
   /** 0.49 G1：`vessel node ...` */
   node: NodeCommand | null;
+  /** 0.56：`vessel token ...`（根密钥 / 派生 token） */
+  tokenCommand?: TokenCommand | null;
   /** 0.14：`vessel status [--json]` */
   statusCommand: { json: boolean } | null;
   /** 0.14：`vessel agents [--json]` */
@@ -520,6 +546,7 @@ export function parseArgs(argv: string[]): ParseResult {
     gateway: null,
     gatewayNodes: null,
     node: null,
+    tokenCommand: null,
     statusCommand: null,
     agentsCommand: null,
     agentCommand: null,
@@ -568,6 +595,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'node' && i === 0) {
       return parseNodeArgs(argv.slice(1), args);
+    }
+    if (a === 'token' && i === 0) {
+      return parseTokenArgs(argv.slice(1), args);
     }
     if (a === 'status' && i === 0) {
       return parseStatusArgs(argv.slice(1), args);
@@ -2334,9 +2364,194 @@ function parseNodeArgs(rest: string[], args: CliArgs): ParseResult {
       return parseNodeStop(tail, args);
     case 'reload':
       return parseNodeReload(tail, args);
+    case 'token':
+      return parseNodeToken(tail, args);
     default:
       return { ok: false, error: `Unknown node subcommand: ${sub}` };
   }
+}
+
+/** `node token [--print] [--json] [--node <id>]`（0.56） */
+function parseNodeToken(rest: string[], args: CliArgs): ParseResult {
+  let print = false;
+  let json = false;
+  let nodeId: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === undefined) continue;
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--print') {
+      print = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--node') {
+      const next = rest[i + 1];
+      if (next === undefined || next.startsWith('-') || next.trim() === '') {
+        return { ok: false, error: 'Missing value for --node' };
+      }
+      nodeId = next;
+      i++;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for node token: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.node = {
+    kind: 'token',
+    print,
+    json,
+    ...(nodeId !== undefined ? { nodeId } : {}),
+  };
+  return { ok: true, args };
+}
+
+/**
+ * `token show|list|rotate`（0.56）。
+ *
+ * `show` 打印 token **值**：默认只允许交互式终端；自动化必须显式
+ * `--allow-non-interactive`（仍然只在本机执行，不联网）。
+ */
+function parseTokenArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub === undefined) {
+    return { ok: false, error: 'Missing token subcommand (show|list|rotate)' };
+  }
+  const tail = rest.slice(1);
+
+  if (sub === 'list') {
+    let json = false;
+    let dataDir: string | undefined;
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i];
+      if (a === undefined) continue;
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--data-dir') {
+        const next = tail[i + 1];
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --data-dir' };
+        }
+        dataDir = next;
+        i++;
+        continue;
+      }
+      return { ok: false, error: `Unknown argument for token list: ${a}` };
+    }
+    if (args.help) return { ok: true, args };
+    args.tokenCommand = { kind: 'list', json, ...(dataDir !== undefined ? { dataDir } : {}) };
+    return { ok: true, args };
+  }
+
+  if (sub === 'rotate') {
+    let yes = false;
+    let json = false;
+    let dataDir: string | undefined;
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i];
+      if (a === undefined) continue;
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--yes' || a === '-y') {
+        yes = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--data-dir') {
+        const next = tail[i + 1];
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --data-dir' };
+        }
+        dataDir = next;
+        i++;
+        continue;
+      }
+      return { ok: false, error: `Unknown argument for token rotate: ${a}` };
+    }
+    if (args.help) return { ok: true, args };
+    args.tokenCommand = {
+      kind: 'rotate',
+      yes,
+      json,
+      ...(dataDir !== undefined ? { dataDir } : {}),
+    };
+    return { ok: true, args };
+  }
+
+  if (sub !== 'show') {
+    return { ok: false, error: `Unknown token subcommand: ${sub}` };
+  }
+
+  let purpose: string | undefined;
+  let nodeId: string | undefined;
+  let instanceId: string | undefined;
+  let json = false;
+  let allowNonInteractive = false;
+  let dataDir: string | undefined;
+  for (let i = 0; i < tail.length; i++) {
+    const a = tail[i];
+    if (a === undefined) continue;
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--allow-non-interactive') {
+      allowNonInteractive = true;
+      continue;
+    }
+    if (a === '--purpose' || a === '--node' || a === '--instance' || a === '--data-dir') {
+      const next = tail[i + 1];
+      if (next === undefined || next.startsWith('-') || next.trim() === '') {
+        return { ok: false, error: `Missing value for ${a}` };
+      }
+      if (a === '--purpose') purpose = next;
+      else if (a === '--node') nodeId = next;
+      else if (a === '--instance') instanceId = next;
+      else dataDir = next;
+      i++;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for token show: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  if (purpose === undefined) {
+    return { ok: false, error: 'token show requires --purpose <platform|hub|node|proxy>' };
+  }
+  const id = nodeId ?? instanceId;
+  args.tokenCommand = {
+    kind: 'show',
+    purpose,
+    ...(id !== undefined ? { id } : {}),
+    json,
+    allowNonInteractive,
+    ...(dataDir !== undefined ? { dataDir } : {}),
+  };
+  return { ok: true, args };
 }
 
 // ── 0.14 status / agents / errors ─────────────────────

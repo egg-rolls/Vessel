@@ -38,7 +38,9 @@ import {
 } from './gateway-command';
 import { t } from './i18n';
 import { createHttpRpcClient } from './rpc/http-client';
-import { resolveGatewayToken } from './transport-factory';
+// 0.56：`node token` 与「显式 > 注入 > 派生」的 node token 解析。
+import { nodeTokenCommand } from './token-command';
+import { effectiveNodeTokenAuto } from './token-derive';
 import { ui } from './ui-style';
 
 /** 依赖注入（CLI 只用默认值；测试注入配置/路径/RPC 目标） */
@@ -166,7 +168,13 @@ async function nodeStatusCommand(
   const print = deps.print ?? console.log;
   const printErr = deps.printErr ?? console.error;
   const listen = nodeListenFromConfig(context.config);
-  const token = resolveGatewayToken(context.config, context.env) ?? '';
+  // 0.56：显式配置 > gateway 注入的 VESSEL_NODE_TOKEN > 派生（本机身份已知时）。
+  const statusToken = effectiveNodeTokenAuto({
+    config: context.config,
+    dataDir: context.dataDir,
+    env: context.env,
+  });
+  const token = statusToken.ok ? (statusToken.value.token ?? '') : '';
 
   if (command.rpc) {
     const target = deps.rpcTarget ?? nodeRpcTarget(listen, token);
@@ -262,7 +270,12 @@ async function nodeStopCommand(deps: NodeCommandDeps): Promise<number> {
   const print = deps.print ?? console.log;
   const printErr = deps.printErr ?? console.error;
   const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const token = resolveGatewayToken(context.config, context.env);
+  const stopToken = effectiveNodeTokenAuto({
+    config: context.config,
+    dataDir: context.dataDir,
+    env: context.env,
+  });
+  const token = stopToken.ok ? stopToken.value.token : undefined;
   const snapshot = await collectGatewayState(context.dataDir, {
     ...(token !== undefined ? { token } : {}),
   });
@@ -323,7 +336,12 @@ async function nodeReloadCommand(
   const context = await resolveNodeContext(deps);
   const print = deps.print ?? console.log;
   const printErr = deps.printErr ?? console.error;
-  const token = resolveGatewayToken(context.config, context.env);
+  const reloadTokenResolution = effectiveNodeTokenAuto({
+    config: context.config,
+    dataDir: context.dataDir,
+    env: context.env,
+  });
+  const token = reloadTokenResolution.ok ? reloadTokenResolution.value.token : undefined;
   const entries = (
     await collectGatewayState(context.dataDir, {
       ...(token !== undefined ? { token } : {}),
@@ -380,6 +398,32 @@ export function isForegroundNodeCommand(command: NodeCommand): boolean {
   return command.kind === 'start' && command.daemon === false;
 }
 
+/**
+ * `node token [--print] [--json] [--node <id>]`（0.56）。
+ *
+ * 数据根用本进程解析出的 node dataDir（`--data-dir` / `VESSEL_DATA_DIR` / config），
+ * 这样独立启动的 node 也能拿到「它自己会用的那个 token」。
+ */
+async function nodeTokenSubcommand(
+  command: Extract<NodeCommand, { kind: 'token' }>,
+  deps: NodeCommandDeps,
+): Promise<number> {
+  const context = await resolveNodeContext(deps);
+  const print = deps.print ?? console.log;
+  const printErr = deps.printErr ?? console.error;
+  const result = await nodeTokenCommand(
+    {
+      print: command.print,
+      json: command.json,
+      ...(command.nodeId !== undefined ? { nodeId: command.nodeId } : {}),
+    },
+    { dataDir: context.dataDir, env: context.env, config: context.config },
+  );
+  if (result.stdout !== '') print(result.stdout);
+  if (result.stderr !== '') printErr(ui.err(result.stderr));
+  return result.exitCode;
+}
+
 /** 执行一次性 node 子命令，返回退出码 */
 export async function runNodeCommand(
   command: NodeCommand,
@@ -394,5 +438,7 @@ export async function runNodeCommand(
       return nodeStopCommand(deps);
     case 'reload':
       return nodeReloadCommand(command, deps);
+    case 'token':
+      return nodeTokenSubcommand(command, deps);
   }
 }

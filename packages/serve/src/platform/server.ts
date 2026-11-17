@@ -122,6 +122,8 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
         req,
         address,
         platformToken,
+        // 0.56：派生值不算「配置」——回环匿名必须保持（迁移安全）。
+        explicitPlatformToken: opts.platformTokenConfigured ?? true,
         ...(proxySecret !== undefined ? { proxySecret } : {}),
       });
 

@@ -136,6 +136,8 @@ import { createSystemContextSource } from './system-context';
 // 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
 // 0.54 C：`events.list` 的按 run 读端口（同一模块）。
 import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-write';
+// 0.56：派生 token（root-secret → HKDF；显式配置永远优先）。
+import { effectiveNodeToken } from './token-derive';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
@@ -748,9 +750,29 @@ async function runWithConfig(result: BootstrapResult) {
     }
 
     // 0.5：token → principal（A-3 §10.4）。无 token + 回环 = 匿名 default/admin。
+    // 0.56：**派生 token** 兜底 —— 用户一个 token 都不用写。显式配置永远优先；
+    // 只有派生值时 `resolveGatewayAuth` 仍保留回环匿名（不制造新的锁死形状）。
+    const nodeTokenResolution = effectiveNodeToken({
+      config,
+      dataDir: resolveDataDir(config),
+      nodeId: result.nodeId,
+      env: process.env,
+    });
+    if (!nodeTokenResolution.ok) {
+      console.error(`${nodeTokenResolution.code}: ${nodeTokenResolution.message}`);
+      await result.shutdown();
+      process.exit(1);
+    }
+    const nodeToken = nodeTokenResolution.value;
     const authResult = resolveGatewayAuth(config, {
       hostname: resolved.options.hostname,
       allowRemote: resolved.options.allowRemote,
+      ...(nodeToken.source === 'derived' && nodeToken.token !== undefined
+        ? {
+            derivedToken: nodeToken.token,
+            ...(nodeToken.detail !== undefined ? { derivedDetail: nodeToken.detail } : {}),
+          }
+        : {}),
     });
     if (!authResult.ok) {
       console.error(authResult.error);
@@ -758,12 +780,13 @@ async function runWithConfig(result: BootstrapResult) {
       process.exit(1);
     }
 
-    // 远程 + 无显式 token：gateway 会生成 token（仍强制鉴权），但重启即变——醒目提示。
+    // 远程监听：现在有**稳定的**派生 token，不再是一重启就变的临时值。
     const remote = !isLoopbackHostname(resolved.options.hostname);
-    if (remote && resolved.options.allowRemote && resolveGatewayToken(config) === undefined) {
+    if (remote && resolved.options.allowRemote && nodeToken.source !== 'explicit') {
       console.warn(
-        '⚠ Remote listening with an auto-generated gateway token; ' +
-          'set VESSEL_GATEWAY_TOKEN for stable authentication.',
+        '⚠ Remote listening with a derived gateway token (stable, from <dataDir>/root-secret). ' +
+          'Use "vessel token show --purpose node --node <id>" to read it, ' +
+          'or set node.token_env for an explicit value.',
       );
     }
 
@@ -1203,7 +1226,8 @@ async function runWithConfig(result: BootstrapResult) {
       nodeId: result.nodeId,
       nodeName: result.nodeName,
       auth: authResult.auth,
-      token: resolveGatewayToken(config),
+      // 0.56：显式配置优先，未配置则是派生值（稳定、可 `vessel token show` 读出）。
+      token: nodeToken.token ?? resolveGatewayToken(config),
       // 0.55 P0：反代共享密钥（opt-in）。未配置 = 不传 = 旧行为逐字不变。
       ...(serveProxySecret !== undefined ? { proxySecret: serveProxySecret } : {}),
       hostname: resolved.options.hostname,

@@ -46,6 +46,13 @@ export interface PlatformGatewayOptions {
   /** 未配置 = undefined；仅回环匿名只读。 */
   platformToken?: string;
   /**
+   * 0.56：`platformToken` 是否来自**显式配置**（缺省 true）。
+   *
+   * `false` = 这个值是根密钥派生的（用户什么都没配）：平台照旧要求远程客户端
+   * 出示它，但**回环匿名保持不变**，避免「没配 token ⇒ 升级即掉线」重演。
+   */
+  platformTokenConfigured?: boolean;
+  /**
    * 0.55 P0：反代共享密钥（opt-in；未配置 = 旧行为）。
    * 配置后，平台只在请求带 `x-vessel-proxy-secret` 时把 socket 回环当成可信来源 ——
    * 同机反代场景下这是唯一还能区分「本机浏览器」与「公网经反代」的信号。

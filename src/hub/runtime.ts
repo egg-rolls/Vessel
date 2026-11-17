@@ -26,6 +26,8 @@ import {
   readGatewayStateFile,
 } from '../gateway/pid';
 import { resolveNodeId } from '../node-identity';
+// 0.56：hub 的派生 token（显式 hub.token_env 仍优先）。
+import { effectiveHubToken } from '../token-derive';
 import { createHubJoinStore } from './join-store';
 import { createHubNodeCredentialStore } from './node-credential-store';
 import {
@@ -319,6 +321,8 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   const factories = options.factories ?? {};
 
   const dataDir = resolveHubDataDir(config, options.dataDir);
+  // 0.56：根密钥住在**全局 dataDir**（不是 hub 自己的子目录），与平台/node 同一份。
+  const rootSecretDataDir = path.resolve(expandHome(resolveDataDir(config)));
 
   const resolveHub =
     factories.resolveHubId ??
@@ -470,6 +474,16 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   };
 
   const createServer = factories.createServer ?? createHubServer;
+  // 0.56：派生 hub token（显式 `hub.token_env` 仍优先）。根密钥在**全局 dataDir**，
+  // 与平台/node 同一份 ⇒ 一个 root 管所有用途，用户什么都不用配。
+  const hubDerived = effectiveHubToken({
+    config,
+    dataDir: rootSecretDataDir,
+    env: process.env,
+  });
+  if (!hubDerived.ok) {
+    logger?.warn?.(`hub token derivation skipped: ${hubDerived.code} (${hubDerived.message})`);
+  }
   // `nodeControl` 由 M-I2 的 server 路由消费；此处按扩展选项传递，缺省为 undefined。
   const serverOptions: CreateHubServerOptions & {
     nodeControl?: HubNodeInboundDeps;
@@ -481,6 +495,16 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     now: clock,
     ...(options.version !== undefined ? { version: options.version } : {}),
     nodeControl,
+    ...(hubDerived.ok &&
+    hubDerived.value.token !== undefined &&
+    hubDerived.value.source === 'derived'
+      ? {
+          derivedToken: hubDerived.value.token,
+          ...(hubDerived.value.detail !== undefined
+            ? { derivedTokenDetail: hubDerived.value.detail }
+            : {}),
+        }
+      : {}),
   };
   // S10.2：同一 hub data dir 只允许一个活实例。锁先于监听端口获取，
   // 这样固定端口被既存实例占用时也能稳定返回 `hub_already_running`。

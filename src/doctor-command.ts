@@ -19,6 +19,8 @@ import {
   resolvePlatformProxySecret,
   resolvePlatformToken,
   resolveServeProxySecret,
+  rootSecretPath,
+  tokenFingerprint,
   type VesselConfig,
 } from '../packages/config/src/index';
 import { isLoopbackHostname } from '../packages/serve/src/index';
@@ -28,6 +30,14 @@ import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } fr
 import { declarativePluginEntries } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+// 0.56：派生 token 的现状（根密钥 / 指纹；doctor 从不说「必须配置 token」）。
+import {
+  effectiveHubToken,
+  effectiveNodeTokenAuto,
+  effectivePlatformToken,
+  loadRootSecret,
+  readKnownNodeId,
+} from './token-derive';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
@@ -109,6 +119,69 @@ function sessionStoragePath(config: VesselConfig, tenantRoot: string): string {
     return config.session?.storagePath ?? path.join(tenantRoot, 'sessions.db');
   }
   return config.session?.storagePath ?? path.join(tenantRoot, 'sessions');
+}
+
+/**
+ * 0.56：`tokens` 检查 —— 单一根密钥 + 派生 token 的现状。
+ *
+ * 用户目标：**一个 token 都不用记**。所以这里绝不再输出「必须配置 token」：
+ * - 根密钥在 `<dataDir>/root-secret`（首次启动自动生成，0600；`security.root_secret_env` 可覆盖）；
+ * - 每个用途要么 `explicit`（显式配置赢了），要么 `derived`（现算的，指纹可对账）；
+ * - **只给指纹，不给值**；值只有 `vessel token show` 在交互式终端里才打印。
+ * - 根密钥权限不安全 → `fail` 并给出 `chmod 600` 这种能照做的文案（启动同样会被拒）。
+ */
+function collectTokenCheck(input: {
+  config: VesselConfig;
+  env: Record<string, string | undefined>;
+  dataDir: string;
+}): Check {
+  const rootPath = rootSecretPath(input.dataDir);
+  const root = loadRootSecret({ ...input, create: false });
+
+  if (!root.ok) {
+    if (root.code === 'root_secret_missing') {
+      return {
+        name: 'tokens',
+        status: 'info',
+        message:
+          `root secret will be created on first start: ${rootPath} ` +
+          '(then every token is derived from it; nothing to configure)',
+      };
+    }
+    return {
+      name: 'tokens',
+      status: 'fail',
+      message: `${root.code}: ${root.message}`,
+    };
+  }
+
+  const nodeId = readKnownNodeId(input.dataDir);
+  const rows: string[] = [];
+  const push = (label: string, resolution: ReturnType<typeof effectivePlatformToken>): void => {
+    if (!resolution.ok) {
+      rows.push(`${label}=FAIL(${resolution.code})`);
+      return;
+    }
+    const value = resolution.value;
+    if (value.token === undefined) {
+      rows.push(`${label}=none`);
+      return;
+    }
+    rows.push(`${label}=${value.source} fp=${tokenFingerprint(value.token)}`);
+  };
+  push('platform', effectivePlatformToken(input));
+  push('hub', effectiveHubToken(input));
+  if (nodeId !== undefined) push(`node:${nodeId}`, effectiveNodeTokenAuto(input));
+
+  const rootOrigin =
+    root.state.source === 'env' ? `env ${root.state.envName ?? ''}`.trim() : root.state.path;
+  return {
+    name: 'tokens',
+    status: 'ok',
+    message:
+      `root ${rootOrigin} fp=${root.state.fingerprint} · ${rows.join(' · ')} ` +
+      '("explicit" = 你的配置赢了；"derived" = 由 root 现算，不用配)',
+  };
 }
 
 /** 执行 doctor */
@@ -253,31 +326,37 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
 
   // 0.55 P0：公开暴露面提醒（**只提示，不改任何运行语义**）。
   // 同机反代下 peer 恒为 127.0.0.1，所以「回环监听 + 完全没有凭据」= 局域网/公网也能进。
+  //
+  // 0.56：**凭据现在总是存在**（根密钥派生），所以这一段的口径从「你没配 token，
+  // 快配一个」改成「已自动派生 / 被显式配置覆盖，指纹 xxx；只有显式配置才会收紧回环」。
+  // 派生不算「配置」——这一点直接决定回环匿名是否保留（迁移安全）。
+  const tokensCheck = collectTokenCheck({ config, env, dataDir });
+  checks.push(tokensCheck);
+
   const exposure: string[] = [];
   const serveHost = config.serve?.hostname ?? '127.0.0.1';
   const serveTokens = Object.keys(config.serve?.tokens ?? {}).length > 0;
+  const explicitNodeToken = resolveGatewayToken(config, env) !== undefined || serveTokens;
   if (
     isLoopbackHostname(serveHost) &&
-    resolveGatewayToken(config, env) === undefined &&
-    !serveTokens &&
+    !explicitNodeToken &&
     resolveServeProxySecret(config, env) === undefined
   ) {
     const where =
       config.serve?.port !== undefined ? `${serveHost}:${String(config.serve.port)}` : serveHost;
     exposure.push(
-      `node ${where} 没有 serve.token / serve.tokens：同机反代下匿名请求会被当成 admin；` +
-        '配 serve.token_env（或 serve.proxy_secret_env）后重启',
+      `node ${where} 没有显式 token（已自动派生，见 tokens）：同机反代下匿名请求仍会被当成 admin；` +
+        '要关掉这条匿名通道，配 node.token_env（或 node.proxy_secret_env）后重启',
     );
   }
   const gatewayHost = config.gateway?.hostname ?? '127.0.0.1';
-  if (
-    isLoopbackHostname(gatewayHost) &&
-    resolvePlatformToken(config, env) === undefined &&
-    resolvePlatformProxySecret(config, env) === undefined
-  ) {
+  const explicitPlatformToken =
+    resolvePlatformToken(config, env) !== undefined ||
+    resolvePlatformProxySecret(config, env) !== undefined;
+  if (isLoopbackHostname(gatewayHost) && !explicitPlatformToken) {
     exposure.push(
-      `平台 ${gatewayHost} 没有 gateway.token：回环匿名仍可读平台面（node token 已需要凭据）；` +
-        '配 gateway.token_env（或 gateway.proxy_secret_env）',
+      `平台 ${gatewayHost} 没有显式 gateway.token（已自动派生，见 tokens）：` +
+        '回环匿名仍可读平台面（node token 已需要凭据）；要收紧就配 gateway.token_env',
     );
   }
   const hubHost = config.hub?.listen?.hostname ?? '127.0.0.1';
@@ -292,17 +371,17 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     nonEmpty(hubProxySecret) === undefined
   ) {
     exposure.push(
-      `hub ${hubHost} 没有 hub.token_env：回环匿名可读目录、可删节点（吊销 node token）；` +
-        '配 hub.token_env 或 hub.proxy_secret_env',
+      `hub ${hubHost} 没有显式 hub.token_env（已自动派生，见 tokens）：` +
+        '回环匿名可读目录、可删节点；要收紧就配 hub.token_env',
     );
   }
   checks.push({
     name: 'exposure',
-    status: exposure.length > 0 ? 'warn' : 'ok',
+    status: exposure.length > 0 ? 'info' : 'ok',
     message:
       exposure.length > 0
         ? `${exposure.join('; ')}（详见 docs/operations/REVERSE-PROXY.md §8）`
-        : 'loopback listeners are protected by a token or a proxy secret',
+        : 'loopback listeners have an explicit token or proxy secret',
   });
 
   // --deep：只读查询本地 gateway（连接 / runtime / MCP 实际状态）。

@@ -344,6 +344,14 @@ export function renderGlobalHelp(): string {
     ['vessel gateway reload [--scope config,plugins]', t('help.cmd.gatewayReload')],
     ['vessel gateway install-service', t('help.cmd.gatewayInstall')],
     ['vessel gateway uninstall-service', t('help.cmd.gatewayUninstall')],
+    // 0.56：单一根密钥 + 派生 token（列在 gateway/node 之后：是运维核对手段，不是日常命令）。
+    ['vessel token list [--json]', t('help.cmd.tokenList')],
+    [
+      'vessel token show --purpose <platform|hub|node|proxy> [--node <id>]',
+      t('help.cmd.tokenShow'),
+    ],
+    ['vessel token rotate --yes', t('help.cmd.tokenRotate')],
+    ['vessel node token [--print] [--json]', t('help.cmd.nodeToken')],
     ['vessel node start [--daemon] [--config <path>]', t('help.cmd.nodeStart')],
     ['vessel node status [--json] [--rpc]', t('help.cmd.nodeStatus')],
     ['vessel node stop', t('help.cmd.nodeStop')],

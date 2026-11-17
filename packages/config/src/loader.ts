@@ -384,6 +384,79 @@ function applyLayerRecord(
   }
 }
 
+/**
+ * 0.56：`node:` 段归一化。
+ *
+ * `node:` 是规范新名（对应 `vessel node start`；`vessel serve` 早已不存在），
+ * `serve:` 退化为兼容别名。归一化规则（冻结）：
+ *
+ * - 两段都不在 → 什么都不做；
+ * - 只有 `node:` → 内容搬到 `serve:`（**不警告**：这是规范写法）；
+ * - 两段都在 → **`node:` 赢**，被覆盖的 `serve:` 键逐项列进 warning；
+ * - 只有 `serve:` → 原样保留，并给一条弃用警告（0.57 移除）。
+ *
+ * 为什么在**每一层**归一化而不是合并后归一化：`_env` 解析（`node.token_env` →
+ * `node.token`）与分层优先级都作用在层上；先归一化能让 `node:` 拿到与 `serve:`
+ * 完全一致的语义，运行时也只有一份真源（`config.serve`）。
+ */
+function normalizeNodeLayer(layer: Record<string, unknown>): {
+  layer: Record<string, unknown>;
+  shadowed: string[];
+  hadServe: boolean;
+  hadNode: boolean;
+} {
+  const hadServe = isRecord(layer.serve);
+  const hadNode = isRecord(layer.node);
+  if (!hadNode) return { layer, shadowed: [], hadServe, hadNode };
+
+  const nodeBlock = layer.node as Record<string, unknown>;
+  const serveBlock = hadServe ? (layer.serve as Record<string, unknown>) : {};
+  const shadowed = Object.keys(nodeBlock).filter((key) => key in serveBlock);
+  const merged: Record<string, unknown> = { ...serveBlock, ...nodeBlock };
+  const next: Record<string, unknown> = { ...layer, serve: merged };
+  // `node` 不进入运行时的配置对象：只保留一份真源，避免两处不一致。
+  delete next.node;
+  return {
+    layer: next,
+    shadowed: shadowed.filter((key) => nodeBlock[key] !== undefined),
+    hadServe,
+    hadNode,
+  };
+}
+
+/**
+ * 0.56：一层的 `node:` / `serve:` 相关警告（不回显任何 token 值）。
+ *
+ * @param label 人类可读的来源名（"user config" / "project config"），进文案。
+ */
+function nodeAliasWarnings(
+  normalized: { shadowed: string[]; hadServe: boolean; hadNode: boolean },
+  label: string,
+): ConfigValidationWarning[] {
+  if (!normalized.hadNode && !normalized.hadServe) return [];
+  if (normalized.hadNode && normalized.shadowed.length > 0) {
+    return [
+      {
+        path: 'node',
+        message:
+          `Both "node:" and "serve:" are set in the ${label}; "node:" wins and ` +
+          `serve.{${normalized.shadowed.join(',')}} is ignored. Delete the "serve:" block ` +
+          '(0.57 removes the "serve:" alias).',
+      },
+    ];
+  }
+  if (normalized.hadNode) return [];
+  return [
+    {
+      path: 'serve',
+      message:
+        `The "serve:" block in the ${label} is deprecated: there is no "vessel serve" ` +
+        'command any more. Rename "serve:" to "node:" (same keys, same behaviour). ' +
+        '0.57 removes "serve:".',
+    },
+  ];
+}
+
 /** 用户配置中出现的 legacy provider 键（snake_case 名称，用于 warning）。 */
 function legacyProviderKeys(user: Record<string, unknown>): string[] {
   const keys: string[] = [];
@@ -484,7 +557,10 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   }
 
   const fullUser = fullUserLayer(rawUser);
-  const resolvedUser = resolveEnvRefsInLayer(fullUser, env);
+  // 0.56：`node:`（规范名）→ `serve:`（运行时真源），并给出弃用 / 覆盖警告。
+  const userAlias = normalizeNodeLayer(fullUser);
+  preWarnings.push(...nodeAliasWarnings(userAlias, 'user config'));
+  const resolvedUser = resolveEnvRefsInLayer(userAlias.layer as Partial<VesselConfig>, env);
   applyLayerWithSources(config, resolvedUser.layer, 'user', sources);
   for (const key of Object.keys(resolvedUser.resolved)) sources[key] = 'env';
   preErrors.push(...resolvedUser.errors);
@@ -493,7 +569,9 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   const projectFile = await loadRawConfig(projectPath);
   if (projectFile.error) preErrors.push(projectFile.error);
   const rawProject = projectFile.raw;
-  const resolvedProject = resolveEnvRefsInLayer(rawProject as Partial<VesselConfig>, env);
+  const projectAlias = normalizeNodeLayer(rawProject);
+  preWarnings.push(...nodeAliasWarnings(projectAlias, 'project config'));
+  const resolvedProject = resolveEnvRefsInLayer(projectAlias.layer as Partial<VesselConfig>, env);
   applyLayerWithSources(config, resolvedProject.layer, 'project', sources);
   for (const key of Object.keys(resolvedProject.resolved)) sources[key] = 'env';
   preErrors.push(...resolvedProject.errors);

@@ -16,6 +16,8 @@
  */
 
 import type { HubConfig } from '@vessel-agent/config';
+// 0.56：token 比较统一用定长摘要 + 常量时间（派生值也是凭据，不能按字节提前返回）。
+import { tokenEquals } from '@vessel-agent/config';
 import type { Logger } from '@vessel-agent/core';
 import {
   corsHeaders,
@@ -77,6 +79,16 @@ export interface CreateHubServerOptions {
   now?: () => number;
   /** app 版本；`hub start` 从根 `package.json` 传入，缺省 `'unknown'`。 */
   version?: string;
+  /**
+   * 0.56：**派生** hub token（`vessel:hub`，来自 `<dataDir>/root-secret`）。
+   *
+   * 显式 `hub.token_env` 永远优先；这里只是兜底，让「用户什么都没配」的部署
+   * 也有一个稳定的凭据可给远端客户端，而不是逼用户手写一个。
+   * 回环可信行为不变（派生值不改变匿名语义）。
+   */
+  derivedToken?: string;
+  /** 派生值来源说明（进日志/诊断，不含值）。 */
+  derivedTokenDetail?: string;
 }
 
 export interface HubServer {
@@ -277,7 +289,13 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
 
   const loopback = isLoopbackHostname(hostname);
   const tokenEnv = isNonEmptyString(config.tokenEnv) ? config.tokenEnv : undefined;
-  const hubToken = tokenEnv !== undefined ? process.env[tokenEnv] : undefined;
+  const explicitHubToken = tokenEnv !== undefined ? process.env[tokenEnv] : undefined;
+  // 0.56：显式 `hub.token_env` > `VESSEL_HUB_TOKEN`（gateway 注入）> 派生 `vessel:hub`。
+  const hubToken = isNonEmptyString(explicitHubToken)
+    ? explicitHubToken
+    : isNonEmptyString(process.env.VESSEL_HUB_TOKEN)
+      ? process.env.VESSEL_HUB_TOKEN
+      : options.derivedToken;
   // 0.55 P0：反代共享密钥（opt-in）。未配置 = undefined = 旧的「回环即可信」。
   const proxySecretEnv = isNonEmptyString(config.proxySecretEnv)
     ? config.proxySecretEnv
@@ -297,10 +315,11 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         'remote hub requires hub.tls.cert_file and hub.tls.key_file',
       );
     }
-    if (tokenEnv === undefined || !isNonEmptyString(hubToken)) {
+    if (!isNonEmptyString(hubToken)) {
       throw configError(
         'hub_remote_requires_token',
-        'remote hub requires a non-empty hub.token_env resolved from the environment',
+        'remote hub requires a non-empty hub.token_env resolved from the environment ' +
+          '(or run `vessel token show --purpose hub` to read the derived value and put it there)',
       );
     }
   }
@@ -384,7 +403,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
   function readAuthorized(srv: import('bun').Server<HubWsData>, request: Request): boolean {
     if (isTrustedLocalPeer(srv, request)) return true;
     if (!isNonEmptyString(hubToken)) return false;
-    return bearerToken(request) === hubToken;
+    return tokenEquals(bearerToken(request) ?? '', hubToken);
   }
 
   function send(ws: Ws, frame: unknown): void {
@@ -865,7 +884,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         // 0.55 P0：配了 `hub.proxy_secret_env` 后，回环还必须带反代密钥头。
         const token = typeof frame.token === 'string' ? frame.token : undefined;
         const isLocal = ws.data.local && ws.data.proxySecretOk;
-        if (!isLocal && (!isNonEmptyString(hubToken) || token !== hubToken)) {
+        if (!isLocal && (!isNonEmptyString(hubToken) || !tokenEquals(token ?? '', hubToken))) {
           // close reason 有 123 字节上限：用简短标记，正文提示走 HTTP 401。
           ws.close(4401, ws.data.local ? 'proxy_secret_missing' : 'unauthorized');
           return;
