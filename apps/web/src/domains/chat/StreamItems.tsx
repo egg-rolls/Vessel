@@ -718,6 +718,7 @@ export function QueuedNotice({
   onEdit,
   onClaim,
   onUnhold,
+  onRetry,
   label,
   identity,
   defaultOpen = false,
@@ -755,6 +756,15 @@ export function QueuedNotice({
    */
   onUnhold?: (id: string) => void;
   /**
+   * 重试：按**条目 id**（对客户端那条失败的 pending 就是它自己的 id）。
+   *
+   * 缺省 = 不给这颗键。只有「还没被服务端取用、且已经明确失败」的那一行才有——服务端
+   * 排队的条目没有「再发一次」的语义（它已经在队列里了，重发就是同一个 id 投两次）。
+   *
+   * 动作本身（先撤旧的那条、再重发同一句话）在调用方：本组件不知道 RPC 长什么样。
+   */
+  onRetry?: (id: string) => void;
+  /**
    * 卡头文案；缺省「等待中」（`chat.pending.waiting`）。
    *
    * 不编队列序号：条目落盘后没有权威顺序（`ts` 只保证「谁先到」），而 run 的
@@ -788,6 +798,7 @@ export function QueuedNotice({
   // 统一给（10px），这里再补 px 就是双重内衬，键会比正文多缩 10px。
   let controls: ReactNode = null;
   if (
+    onRetry !== undefined ||
     onCancel !== undefined ||
     onEdit !== undefined ||
     onClaim !== undefined ||
@@ -795,6 +806,20 @@ export function QueuedNotice({
   ) {
     controls = (
       <div className="flex items-center gap-1.5 pt-1.5">
+        {/* 重试排第一颗：失败那一行的第一件事就是「再发一次」，其余三颗是对这条的处置。
+            图标是 `retry`（与历史气泡的重发同一个图形），名字走 aria-label / title。 */}
+        {onRetry !== undefined && (
+          <Button
+            variant="plain"
+            className={controlClass}
+            aria-label={t('chat.pendingSend.retry')}
+            title={t('chat.pendingSend.retry')}
+            disabled={busy}
+            onClick={() => onRetry(item.id)}
+          >
+            <Icon name="retry" size={14} />
+          </Button>
+        )}
         {onEdit !== undefined && (
           <Button
             variant="plain"

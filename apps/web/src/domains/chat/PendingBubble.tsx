@@ -1,6 +1,12 @@
 /**
  * 一条「本地待确认」的用户气泡（0.56 乐观渲染）。
  *
+ * **0.56 排队生命周期之后，这一层只画 `sending`**（见 `TranscriptWindow` 的过滤与
+ * `pending-placement.ts#inConversationStream`）：`queued` 只在待处理条带、`failed` 回流到
+ * 条带（带「重试 / 编辑」）、`sent` 之后由服务端回显接管成正常用户气泡。所以下面这些状态
+ * 分支留在这里是**给直接渲染它的宿主**（设计预览 / 别的屏）用的，会话流不会走到
+ * `queued` / `failed` 那两支 —— 别把它们当成「还有第二处展示位置」。
+ *
  * 它与落盘后的用户气泡**同一个视觉家族**（`.msg-user` + `.msg-bubble`，几何完全一致），
  * 只是身份上「还没落地」，所以底色 / 文字走 amber（`tokens.css` 里 `--amber` 就是
  * 「还没完成」那一支，注释点名的用处之一正是「未发送 / 排队中」），右侧一行状态字说明
@@ -37,9 +43,15 @@ export function PendingBubble({
   onDismiss?: (pending: PendingSend) => void;
 }) {
   const failed = pending.state === 'failed';
-  // 超时自带一句人话（「15 秒没有回显」比 `timeout` 这个内部词有用）；RPC 失败带原始错误。
+  // 超时 / 断线自带一句人话：15 s 没有回显、排队 3 分钟没被取用、连不上网关，这三样
+  // 都比内部码有用；RPC 的原始错误照原样展示。
   const reason =
-    pending.failure === undefined || pending.failure === 'timeout' ? undefined : pending.failure;
+    pending.failure === undefined ||
+    pending.failure === 'timeout' ||
+    pending.failure === 'queue_timeout' ||
+    pending.failure === 'offline'
+      ? undefined
+      : pending.failure;
   return (
     <div className="msg-user msg-pending msg-enter">
       <div className="msg-bubble msg-pending-bubble">{pending.text}</div>

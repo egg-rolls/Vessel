@@ -15,12 +15,19 @@
  * 2. **不进 transcript 持久层。** 它只在内存里活（刷新即消失 ⇒ 「刷新后只剩一份」是
  *    结构性结论，不靠对账）；也**不进 `inputsByRun`** 的认领集合（那是 dup-hunt 的消息
  *    身份，pending 是另一类东西，混进去就会改变「谁认领谁」的语义）。
- * 3. **失败绝不静默消失。** 15 s 没有任何回显 ⇒ `failed`，气泡留在原地带「重试 / 删除」；
+ * 3. **失败绝不静默消失。** 15 s 没有任何回显 ⇒ `failed`；排队 3 min 没被取用 ⇒ `failed`。
+ *    失败态的落点是**待处理条带**（带「重试 / 编辑」，见 `pending-placement.ts`），
+ *    不是会话流里的一条灰气泡 —— 用户口径：入队消息的展示只有「inbox → 发出」这一段。
  *    重试**复用同一个 id**（不是新开一条 pending，也不是再画一条气泡）。
  *
  * 这一层**不碰** `EventStore` / `LiveItemStore` / `transcript-items.ts`：它只消费事件里
- * 的 `run_id` / `session_id`（`noteEvent`），产出「还该画几条灰气泡」。渲染侧的接缝只有
- * 两个：`TranscriptWindow` 里追加的节点，和 `usePendingSends` 的订阅。
+ * 的 `run_id` / `session_id` / `message_id`（`noteEvent` / `noteQueued`），产出「这条消息现在
+ * 在哪个状态」。渲染侧的接缝有两个：`pending-placement.ts`（**唯一**决定「画在哪」的地方）
+ * 与 `usePendingSends` 的订阅。
+ *
+ * 0.56 排队生命周期（用户口径）：`sending` 在会话里、`queued` 只在条带、`sent` 之后条带那条
+ * 必须消失、`failed` 回流到条带带「重试 / 编辑」。三个状态与三处展示的映射全部由
+ * `pending-placement.ts` 给出，本文件只负责**状态本身**怎么变。
  *
  * @module
  */
@@ -37,13 +44,25 @@ import type { MessageRef } from '../../gateway/types';
  */
 export const PENDING_ECHO_TIMEOUT_MS = 15_000;
 
-/** 扫超时的节拍：1 s 足够（判定阈值是 15 s 量级，不需要更细）。 */
+/** 扫超时的节拍：1 s 足够（判定阈值是 15 s / 3 min 量级，不需要更细）。 */
 export const PENDING_SWEEP_INTERVAL_MS = 1_000;
+
+/**
+ * 排队多久没被 run 取用就算「排队超时」（毫秒）：3 分钟。
+ *
+ * 依据是**排队这件事本身**：`queued` 的 pending 前面有一整轮在跑，15 s 那个回显口径对它
+ * 完全不适用（见 {@link PENDING_ECHO_TIMEOUT_MS}）。但「永远等下去」也不行 —— 一条消息在
+ * 队列里躺 3 分钟，用户需要的是「它没发出去」这个**结论**加一个出口（重试 / 编辑），
+ * 而不是一条永远转圈的排队卡。
+ *
+ * 3 分钟是用户给的数（「比如 3 分钟」）：比一次正常 run 长得多，又短到用户还在等这一刻。
+ */
+export const PENDING_QUEUE_TIMEOUT_MS = 180_000;
 
 export type PendingSendState =
   /** 已发出 `runs.start`（或还在等它返回）：正文在飞。 */
   | 'sending'
-  /** `runs.start` 说这条**排队**了：等服务端起跑，**不按 15 s 判失败**（前面还有一整轮）。 */
+  /** `runs.start` 说这条**排队**了：等服务端起跑，**不按 15 s 判失败**（前面还有一整轮）。超时口径是 {@link PENDING_QUEUE_TIMEOUT_MS}。 */
   | 'queued'
   /** 超时 / RPC 失败：带着原因留在原地，等「重试 / 删除」。 */
   | 'failed';
@@ -65,8 +84,23 @@ export interface PendingSend {
    * 有它就能精确对齐回显（`user.message` 的 `run_id` 与它同源），与正文是否被改写无关。
    */
   runId?: string;
+  /**
+   * 服务端那条**队列条目**的 id（`agent.message.queued` 事件的 `message_id`，0.56）。
+   *
+   * 它是「这条 pending」与「条带上那一行 / 服务端 inbox 里那一条」的**同一个身份**：
+   * 有了它，条带就能精确地让客户端那行顶替服务端那行（见 `pending-placement.ts` 的
+   * `claimsEntry`），而不用靠正文猜。
+   *
+   * 缺省 = 还没收到事件 / 旧 gateway 不带；此时按「同会话 + human 源 + 摘要同口径」兜底。
+   */
+  messageId?: string;
   state: PendingSendState;
-  /** `failed` 时的人话原因（RPC 错误 / 超时说明）；`sending` / `queued` 恒为 `undefined`。 */
+  /**
+   * `failed` 时的人话原因；`sending` / `queued` 恒为 `undefined`。
+   *
+   * `'timeout'` = 15 s 没有回显，`'queue_timeout'` = 排队 3 分钟没被取用（两者文案不同，
+   * 见 `PendingStrip` 的标签映射）；其余是 RPC / 断线的原始说明。
+   */
   failure?: string;
 }
 
@@ -81,6 +115,9 @@ export interface PendingEchoEvent {
   /** 回显正文（可选）：**只**用在没有 `run_id` 的兜底认领里，用来少认错一条。 */
   text?: string;
 }
+
+/** 记住多少个「已经发出去」的 `message_id`（见 `sentMessageIds`）。 */
+const SENT_MEMORY_MAX = 32;
 
 /** 只算「这条消息已经进了服务端时间线」的两类事件。 */
 const ECHO_EVENT_TYPES: readonly string[] = ['user.message', 'run.started'];
@@ -98,6 +135,8 @@ function sameText(left: string, right: string): boolean {
  */
 export class PendingSendStore {
   private items: PendingSend[] = [];
+  /** 已被服务端取用（回显到达）的 `message_id`，见 {@link sentMessageIds}。 */
+  private sentIds: string[] = [];
   private readonly listeners = new Set<() => void>();
   private nextSequence = 1;
   private readonly now: () => number;
@@ -181,7 +220,8 @@ export class PendingSendStore {
   /**
    * `runs.start` 返回：挂上**首选合并键**。
    *
-   * `queued` 的 run 前面还有一整轮在跑，回显本来就该晚 —— 这种 pending 不参与超时判定。
+   * `queued` 的 run 前面还有一整轮在跑，回显本来就该晚 —— 这种 pending 不按 15 s 判失败
+   * （它有自己的 3 min 排队口径，见 `sweep`）。
    */
   attachRun(id: string, runId: string, status: string): void {
     let changed = false;
@@ -196,6 +236,57 @@ export class PendingSendStore {
       };
     });
     if (changed) this.emit();
+  }
+
+  /**
+   * 服务端队列条目的 id 落定（`agent.message.queued` 事件，0.56）。
+   *
+   * 这是「客户端这一条」与「服务端 inbox 里那一条」共用的身份：条带据此精确顶替
+   * （`pending-placement.ts#claimsEntry`），「一条消息只在一处」就不再依赖正文比对。
+   * 缺省没有它时的兜底路径见那个文件。
+   */
+  attachMessage(id: string, messageId: string): void {
+    let changed = false;
+    this.items = this.items.map((item) => {
+      if (item.id !== id || item.messageId === messageId) return item;
+      changed = true;
+      return { ...item, messageId };
+    });
+    if (changed) this.emit();
+  }
+
+  /**
+   * 吃一条「消息进队列」的事件：把服务端 `message_id` 挂到**本会话最早的一条还没身份的
+   * pending** 上。
+   *
+   * 为什么按「最早」：`admit` 是顺序的（一条 pending 一次 `runs.start`），事件也是顺序的，
+   * 所以第 N 个 `agent.message.queued` 就属于第 N 条还没有身份的 pending。这也是
+   * `noteEvent` 兜底认领的那条「队首顺序」规则的同族写法。
+   *
+   * 只认人类来源（`from === 'human'`）：agent / ask / bash 作业的条目也走同一种事件，
+   * 把它们认成「我刚发的那句」会让条带顶替掉不该顶替的行。
+   *
+   * 返回被认领的 pending id（没有命中 ⇒ `undefined`），供驱动断言「到底认领了谁」。
+   */
+  noteQueued(claim: {
+    messageId: string;
+    sessionId?: string;
+    from?: string;
+    delivery?: string;
+  }): string | undefined {
+    // 只认人类的直接输入：其余投递不是「我按了发送」。
+    if (claim.from !== 'human' || claim.delivery !== 'input') return undefined;
+    const candidate = this.items.find(
+      (item) =>
+        item.messageId === undefined &&
+        item.state !== 'failed' &&
+        (item.sessionId === null ||
+          claim.sessionId === undefined ||
+          item.sessionId === claim.sessionId),
+    );
+    if (candidate === undefined) return undefined;
+    this.attachMessage(candidate.id, claim.messageId);
+    return candidate.id;
   }
 
   /** RPC 直接失败（断网 / 准入闸门拒绝）：立刻进失败态，**不**等 15 s。 */
@@ -250,6 +341,8 @@ export class PendingSendStore {
     if (event.runId !== undefined && event.runId !== '') {
       const byRun = candidates.find((item) => item.runId === event.runId);
       if (byRun === undefined) return undefined;
+      // 记住「这条真的发出去了」：条带那份缓存读数据此立刻滤掉旧行（不等下一次轮询）。
+      this.noteSent(byRun.messageId);
       this.remove(byRun.id);
       return byRun.id;
     }
@@ -262,27 +355,37 @@ export class PendingSendStore {
         (event.text === undefined || sameText(item.text, event.text)),
     );
     if (queueHead === undefined) return undefined;
+    this.noteSent(queueHead.messageId);
     this.remove(queueHead.id);
     return queueHead.id;
   }
 
   /**
-   * 扫超时：`sending` 超过 {@link PENDING_ECHO_TIMEOUT_MS} ⇒ `failed`。
+   * 扫超时：两个口径，**都往 `failed` 收**（失败态永远带着出口，永不静默消失）。
    *
-   * `queued` 不参与（排队本身就可能是几分钟）；`failed` 不重复标。
-   * 返回本次被标失败的条数，供驱动断言。
+   * - `sending` 超过 {@link PENDING_ECHO_TIMEOUT_MS}（15 s）⇒ `failure: 'timeout'`；
+   * - `queued` 超过 {@link PENDING_QUEUE_TIMEOUT_MS}（3 min）⇒ `failure: 'queue_timeout'`
+   *   —— 文案是「未发送 · 排队超时」，同样是可重试 / 可编辑的失败，不是另一种展示位置。
+   *
+   * `failed` 不重复标。返回本次被标失败的条数，供驱动断言。
    */
   sweep(now?: number): number {
     const at = now ?? this.now();
     let failed = 0;
     this.items = this.items.map((item) => {
-      if (item.state !== 'sending') return item;
-      if (at - item.createdAt < PENDING_ECHO_TIMEOUT_MS) return item;
+      const budget =
+        item.state === 'sending'
+          ? PENDING_ECHO_TIMEOUT_MS
+          : item.state === 'queued'
+            ? PENDING_QUEUE_TIMEOUT_MS
+            : undefined;
+      if (budget === undefined) return item;
+      if (at - item.createdAt < budget) return item;
       failed += 1;
       return {
         ...item,
         state: 'failed',
-        failure: 'timeout',
+        failure: item.state === 'queued' ? 'queue_timeout' : 'timeout',
       };
     });
     if (failed > 0) this.emit();
@@ -292,6 +395,25 @@ export class PendingSendStore {
   /** 只给驱动 / 调试：按条件挑一条（渲染侧用 `list()` 全量）。 */
   find(id: string): PendingSend | undefined {
     return this.items.find((item) => item.id === id);
+  }
+
+  /**
+   * 已经**被服务端取用**（回显到达）的那些服务端 `message_id`（最近 32 条）。
+   *
+   * 为什么 store 还要记住它们：pending 一被摘掉，条带那边就没有「认领者」了，而它手里那份
+   * `agents.inbox` 读数是**上一次轮询的缓存**（最长 2 s）—— 那段时间屏上会同时出现
+   * 「会话里的正常气泡」和「条带上那条旧的排队行」= 又是同一条消息两份。
+   * 所以「这条已经发出去过」这个事实要留在这里，让条带立刻把那条旧读数滤掉（不等下一次轮询）。
+   *
+   * 只留 id、有上限：这是抑制重复用的短期记忆，不是对账账本。
+   */
+  sentMessageIds = (): readonly string[] => this.sentIds;
+
+  /** 记一条「它已经发出去了」（只在真正被取用时；RPC 失败那条永远进不来）。 */
+  private noteSent(messageId: string | undefined): void {
+    if (messageId === undefined) return;
+    if (this.sentIds.includes(messageId)) return;
+    this.sentIds = [...this.sentIds, messageId].slice(-SENT_MEMORY_MAX);
   }
 
   private emit(): void {

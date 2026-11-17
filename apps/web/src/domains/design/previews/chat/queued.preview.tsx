@@ -1,11 +1,13 @@
 /**
- * 排队卡（chat/StreamItems 的 `QueuedNotice`）：琥珀档卡面 + 「等待中」胶囊。
- * 只读样例：两个写操作给空回调，不接触 inbox / gateway。
+ * 排队卡（chat/StreamItems 的 `QueuedNotice`）：琥珀档卡面 + 状态胶囊。
+ * 只读样例：写操作给空回调，不接触 inbox / gateway。
  *
- * 三张卡把「有没有写入口」的三态都摆出来：三颗图标键（human 源）/ 只有取消 + 已处理 /
- * 一颗都不给（agent 源 —— 它的 recall 只是 unhold 留档，不画成删除）。
+ * 四张卡把「有没有写入口」的几态都摆出来：三颗图标键（human 源）/ 只有取消 + 已处理 /
+ * 一颗都不给（agent 源 —— 它的 recall 只是 unhold 留档，不画成删除）；最后一张是 0.56 的
+ * **失败态**：卡头是「未发送 · 排队超时」而不是「等待中」，多一颗「重试」——
+ * 那是失败唯一的出口，且在图标行第一颗。
  *
- * **三张都默认展开**：写操作在卡片展开体里、正文**下面**一行，折叠态只能看到卡头 ——
+ * **四张都默认展开**：写操作在卡片展开体里、正文**下面**一行，折叠态只能看到卡头 ——
  * 这类样例要看的就是「键有哪几颗 + 落在哪 + 什么底色」，收起来就什么都验不到。
  * 底色是纯白 10% 半透明（`QUEUED_ICON_VEIL`），压在琥珀带上透出下层那条带色。
  */
@@ -64,6 +66,15 @@ export default function QueuedNoticePreview() {
         onClaim={() => undefined}
       />
       <QueuedNotice item={AGENT_SOURCE} identity="agent:helper" defaultOpen />
+      {/* 0.56 失败态：条带上的「未发送 · 排队超时」+「重试 / 编辑」。 */}
+      <QueuedNotice
+        item={{ ...WAITING, id: 'design-lab-queued-4' }}
+        identity={human}
+        label={`${t('chat.pendingSend.failed')} · ${t('chat.pendingSend.queueTimeout')}`}
+        defaultOpen
+        onRetry={() => undefined}
+        onEdit={() => undefined}
+      />
     </div>
   );
 }
