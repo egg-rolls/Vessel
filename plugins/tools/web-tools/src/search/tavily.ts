@@ -59,6 +59,18 @@ export const tavilySearchProvider: SearchProvider = {
 
   renderQuery: renderTavilyQuery,
 
+  /**
+   * Tavily 的 search 端点只有 `query` / `max_results` / `include_domains` / `include_raw_content`：
+   * `lang` 与日期**没有参数**（早先的实现是「渲染进 query 串」——那是骗自己）。
+   * 现在照常返回，并在信封里报 `filters_ignored`。
+   */
+  unsupportedFilters(query: SearchQuery): string[] {
+    const ignored: string[] = [];
+    if (query.lang !== undefined) ignored.push('lang');
+    if (query.after !== undefined || query.before !== undefined) ignored.push('after/before');
+    return ignored;
+  },
+
   // 固定 host + Bearer（Tavily 官方支持 Authorization: Bearer）；重试/映射仍走共用那份
   createHttp(options: ProviderHttpOptions): ProviderHttp {
     return createJsonHttp({

@@ -445,7 +445,7 @@ function renderEntry(
   entry: SearchCacheEntry,
   query: SearchQuery,
   config: WebToolsConfig,
-  options: { cached: boolean; cachedAgeMs?: number },
+  options: { cached: boolean; cachedAgeMs?: number; filtersIgnored?: string[] },
 ): RenderOutcome {
   // 上游一条都没有 ⇒ 0（这样头条是 `results: 0`，而不是「只渲染 0 条，预算限制」）
   //
@@ -463,6 +463,9 @@ function renderEntry(
     perItemChars: 0,
     cached: options.cached,
     ...(options.cachedAgeMs !== undefined ? { cachedAgeMs: options.cachedAgeMs } : {}),
+    ...(options.filtersIgnored !== undefined && options.filtersIgnored.length > 0
+      ? { filtersIgnored: options.filtersIgnored }
+      : {}),
     fetchedAt: entry.fetchedAt,
   };
   // 信封成本实测（头 + 定界 + hint），再分配条级预算
@@ -546,6 +549,9 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
     const selected: SearchProvider = selectSearchProvider(config, env);
     provider = selected;
     const keyEnvName = keyEnvNameFor(config, selected);
+    // 这家表达不了的过滤条件（纯本地判定）：信封里如实报 `filters_ignored:`，
+    // 因为底层是「占位符为空 ⇒ 键省略」——沉默地变宽比多一行字危险得多。
+    const filtersIgnored = selected.unsupportedFilters?.(query) ?? [];
     if (selected.requiresKey) {
       const key = readKey(config, 'search', env, keyEnvName);
       if (!key.present) {
@@ -573,6 +579,7 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
       const rendered = renderEntry(cached.value, query, config, {
         cached: true,
         cachedAgeMs: cached.ageMs,
+        filtersIgnored,
       });
       emitSearchMetric({
         provider: selected,
@@ -650,7 +657,7 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
     if (hits.length === 0) {
       // 空结果**不计费**、也不是 error
       ticket?.empty();
-      const rendered = renderEntry(entry, query, config, { cached: false });
+      const rendered = renderEntry(entry, query, config, { cached: false, filtersIgnored });
       emitSearchMetric({
         provider: selected,
         query,
@@ -667,7 +674,7 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
 
     // ⑧ 计费（结果非空）⑨ 预算 + 定界渲染
     ticket?.billed();
-    const rendered = renderEntry(entry, query, config, { cached: false });
+    const rendered = renderEntry(entry, query, config, { cached: false, filtersIgnored });
     emitSearchMetric({
       provider: selected,
       query,

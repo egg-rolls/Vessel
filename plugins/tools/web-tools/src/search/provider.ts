@@ -130,6 +130,16 @@ export interface SearchProvider {
   ): Promise<ProviderHttpResponse>;
   /** 从响应 JSON 里取条目数组（形状变化只影响这一处） */
   parseEntries(payload: unknown): RawSearchEntry[];
+
+  /**
+   * 这个后端**表达不了**的过滤条件（`site` / `lang` / `after` / `before`）。
+   *
+   * 只回答「用户给了、但我们没法应用」的那些；不实现 = 全都支持。
+   * 共用层把它渲染成信封里的 `filters_ignored: site` —— 纯省略是静默变宽，
+   * 硬报错又太脆（模型要多一轮往返才知道），所以「照常返回 + 显式披露」。
+   */
+  unsupportedFilters?(query: SearchQuery): string[];
+
   /** 原始条目 → `SearchHit`；返回 null 表示这条不可用（例如没有 url） */
   normalize(entry: RawSearchEntry): SearchHit | null;
 }
