@@ -50,12 +50,12 @@ import { lastBlockName } from './blocks.js';
 import { assertSessionFormatSupported } from './legacy-format.js';
 import { isTimelineBlobRef, TIMELINE_LAYOUT, type TimelineRecord } from './types.js';
 import {
-  decodeChunkBlock,
   hydrateRecordData,
   parseRecordLine,
   readFileWindow,
   readTimelineEvents,
   readTimelineRange,
+  summarizeChunkBlock,
   TimelineRangeUndecidable,
 } from './wal.js';
 
@@ -410,8 +410,10 @@ export class TimelineEventLog {
    *    条、零报错）；
    * 2. **降级必须留痕**：一次 `warn`（`reason` 是稳定 code）+ 一次进程内计数
    *    （{@link timelineRangeReadCounters}）—— 静默降级 = 下次没人知道范围读一直没生效；
-   * 3. **阈值不是降级**：块数 < `RANGE_READ_MIN_BLOCKS`、`limit` 不适用这类「设计好的直路」
-   *    只走整份读、不告警（否则每个小会话每页一条 warn，日志就成了噪音）。
+   * 3. **阈值不是降级**：小会话（0.57 起判据是**会话字节量** < `RANGE_READ_MIN_BYTES`
+   *    且块数 < `RANGE_READ_MIN_BLOCKS`，不再只看块数 —— 可追加块之后「块数」不再代表
+   *    「会话大小」）、`limit` 不适用这类「设计好的直路」只走整份读、不告警（否则每个
+   *    小会话每页一条 warn，日志就成了噪音）。
    */
   private async readRange(
     dir: string,
@@ -514,7 +516,7 @@ async function lastWalFactSeq(path: string): Promise<number> {
   }
 }
 
-/** 最后一个块文件里最后一个完整帧的 seq（含完整但坏 CRC 的帧：它已占 seq）；读不出 ⇒ 0。 */
+/** 最后一个块文件里最后一个完整帧的 seq（含坏帧与事实标记帧：它们同样占 seq）；读不出 ⇒ 0。 */
 async function lastBlockSeq(sessionDir: string): Promise<number> {
   // 0.56：最后一块的名字从 manifest 尾 + 块号探测拿（不 readdir 整个目录）。
   const last = await lastBlockName(sessionDir);
@@ -523,9 +525,7 @@ async function lastBlockSeq(sessionDir: string): Promise<number> {
     () => undefined,
   );
   if (buffer === undefined) return 0;
-  const decode = decodeChunkBlock(buffer);
-  let max = 0;
-  for (const record of decode.records) if (record.seq > max) max = record.seq;
-  for (const invalid of decode.invalid) if (invalid.to_seq > max) max = invalid.to_seq;
-  return max;
+  // 0.57：只需要「块里最大的 seq」这一个数 —— 走帧头就够（不解析载荷），而且块尾可能是
+  // **事实标记帧**（区间里最后一条是事实），所以必须连标记一起看。
+  return summarizeChunkBlock(buffer).coveredLast ?? 0;
 }

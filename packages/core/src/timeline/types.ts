@@ -58,8 +58,27 @@ export const TIMELINE_LAYOUT = {
   indexType: 'type.idx',
 } as const;
 
-/** 活动 chunk 块的封块阈值：块字节数达到它就封块（ADR-105 §3 I2 ①）。 */
-export const BLOCK_MAX_BYTES = 32 * 1024;
+/**
+ * 活动 chunk 块的封块阈值（ADR-105 §3 I2 ①）。
+ *
+ * **0.57 可追加块之后它换了含义**：块不再是「攒满 32 KiB 就封」的定长容器，而是一个
+ * run 的 chunk 流容器 —— 块在 run 存活期间一直往后追加（空闲定时器只触发落盘/发布，
+ * 不再封块），只有①撞到这个**硬上限**、②run 换人、③`flush()`/`close()` 才封块。
+ *
+ * 取值 4 MiB 的依据（`d813eaea` 真身实测：20 万 seq / 13,177 块 / 69 MB 块字节 / 106 个 run）：
+ * 一个 run 的 chunk 字节 p50 = 246 KiB、p90 = 1.6 MiB、max = 3.6 MiB。4 MiB 让 106 个 run
+ * 里**没有一个**被切开（块数 = 106），而上限本身仍远小于「一次范围读愿意碰的字节数」
+ * （一页只要 100 条时，整块读的上界就是这个数，见 `wal.ts#decodeChunkBlockWindow`）。
+ */
+export const BLOCK_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * 旧口径的块阈值（32 KiB）：**只用于读旧数据时的判断参考**，写路径不再用它。
+ *
+ * 存量会话（0.56 及以前）的块都是这个量级；读侧从不假定块大小，所以这个常量现在的唯一
+ * 用途是文档与自证脚本回答「改之前一个块多大」。
+ */
+export const LEGACY_BLOCK_MAX_BYTES = 32 * 1024;
 
 /** 空闲封块间隔（ADR-105 §3 I2 ③）；上限 1000 ms，超过按 1000 处理。 */
 export const CHUNK_FLUSH_MS = 150;

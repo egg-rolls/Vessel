@@ -1,15 +1,20 @@
 /**
- * timeline 的低层编解码与安全读（0.54 A 阶段，ADR-105 §4）。
+ * timeline 的低层编解码与安全读（0.54 A 阶段起步，0.57 加事实标记帧；ADR-105 §4）。
  *
  * 本模块只做三件事，不做调度、不做发布：
  *
  * 1. **行/帧格式**：非 chunk 一行一条 ndjson；chunk 是二进制帧 `[u64 seq][u32 len][utf8 payload]`。
  *    两种载荷都带行尾/记录尾 `crc` 字段（CRC32，8 位十六进制），读侧可逐条自证。
+ *    0.57 起块里还有**事实标记帧** `[u64 seq][u32 0xffffffff]`（12 B，无载荷）：它让一个
+ *    横跨事实行的块（可追加块）仍然**逐号自描述**，见 `blocks.ts` 顶部。
  * 2. **撕裂尾帧的识别**：`truncatePartialTail` 口径 —— 没有结尾换行的最后一行、或帧长越界，
  *    一律视为「从未完整写出」，由调用方截断；**已完整写出但 CRC 不符**的内行按坏行报告，
  *    由写者登记成 `holes`（ADR-105 §6：损坏必须可声明，不能静默跳过）。
  * 3. **可枚举读**：`readTimelineEvents()` 把 `timeline.ndjson` + `wal.log` + `wal.blocks/*.wblk`
  *    合成一份按 `seq` 升序的多重集；这是索引重建与自证脚本的唯一入口。
+ *    一页读（`readTimelineRange`）另有两条**按需**通道：`summarizeChunkBlock()` 只走帧头拿
+ *    块形状（不解析载荷）、`iterateChunkBlockRecords()` 懒解析窗口内的帧 —— 单块涨到 MiB 级
+ *    之后，这是「一页只付一页的钱」的关键。
  *
  * 不变量提醒：本模块不分配 seq、不发布事件；`seq` 的唯一分配点在 `writer.ts`。
  *
@@ -55,14 +60,62 @@ const CRC_TABLE = (() => {
   return table;
 })();
 
-/** CRC32（IEEE 802.3，与 zlib 同多项式）；返回 8 位小写十六进制。 */
-export function crc32Hex(input: string | Uint8Array): string {
-  const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : input;
-  let crc = 0xffffffff;
+/**
+ * CRC32 的**增量状态**（0.57 可追加块）。
+ *
+ * 块不再「攒满一次写出」，而是边流边追加（见 `blocks.ts` 顶部），于是「整块 crc」必须能
+ * 一段一段喂进去：{@link crc32State} 返回的 `crc` 就是累到当前字节为止的中途值，
+ * {@link crc32Final} 才把它收敛成 8 位十六进制。**与 {@link crc32Hex} 结果逐位相同** ——
+ * 两条路算出的块 crc 必须一模一样（写侧用增量、读侧校验时整块算一遍）。
+ */
+export interface Crc32State {
+  crc: number;
+}
+
+/** 新建一个 CRC32 累加状态。 */
+export function crc32State(): Crc32State {
+  return { crc: 0xffffffff };
+}
+
+/** 把一段字节喂进累加状态（原地更新并返回）。 */
+export function crc32Update(state: Crc32State, bytes: Uint8Array): Crc32State {
+  let crc = state.crc;
   for (const byte of bytes) {
     crc = (CRC_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
   }
-  return ((crc ^ 0xffffffff) >>> 0).toString(16).padStart(8, '0');
+  state.crc = crc;
+  return state;
+}
+
+/** 收敛成 8 位小写十六进制（与 {@link crc32Hex} 同口径）。 */
+export function crc32Final(state: Crc32State): string {
+  return ((state.crc ^ 0xffffffff) >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
+ * `node:zlib` 的原生 CRC32（Node ≥ 22.2 / Bun 都有；没有就退回本模块的表驱动实现）。
+ *
+ * 为什么值得这条缝：块从 2.6 KiB 涨到 MiB 级之后，范围读**每开一个块都要算一次整块
+ * crc32**。纯 JS 逐字节 4 MiB 实测 43 ms（一页的主要成本），原生实现 0.5 ms，
+ * 两者结果逐位相同（同一条 IEEE 802.3 多项式）。没有原生实现的环境照旧走表驱动 ——
+ * 慢一点，但判据一个字都不变。
+ */
+const nativeCrc32 = (() => {
+  try {
+    const zlib = require('node:zlib') as { crc32?: (data: Uint8Array) => number };
+    return typeof zlib.crc32 === 'function' ? zlib.crc32 : undefined;
+  } catch {
+    return undefined;
+  }
+})();
+
+/** CRC32（IEEE 802.3，与 zlib 同多项式）；返回 8 位小写十六进制。 */
+export function crc32Hex(input: string | Uint8Array): string {
+  const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : input;
+  if (nativeCrc32 !== undefined) {
+    return (nativeCrc32(bytes) >>> 0).toString(16).padStart(8, '0');
+  }
+  return crc32Final(crc32Update(crc32State(), bytes));
 }
 
 /** 给任意可序列化对象追加尾 `crc`（键顺序稳定：crc 放最后）。 */
@@ -128,6 +181,25 @@ export function parseRecordLine(line: string): TimelineRecord | undefined {
 /** chunk 帧头字节数：8B seq + 4B len。 */
 export const CHUNK_FRAME_HEADER_BYTES = 12;
 
+/**
+ * **事实标记帧**的 `len` 字段取值（0.57 可追加块）。
+ *
+ * 一个块只装 chunk；但块的覆盖区间 `[start_seq, end_seq]` 中间会夹着**事实行**
+ * （它们按 seq 交错地写进 `wal.log`，见 `writer.ts#factStep` 的严格交错）。为了让块
+ * 「自描述覆盖」——`[start,end]` 里每个 seq 都能在块文件里找到一句「它在这」——
+ * 每写一条落在这个区间里的事实行，就在块尾追加一个 12 字节标记帧：
+ *
+ * ```
+ * [u64 LE seq][u32 LE 0xffffffff]        ← 无载荷：这个 seq 是事实，本块故意不含它
+ * ```
+ *
+ * 于是：① 恢复路径不必再靠「块内 seq 连续」这个假设来判断丢帧（`missingRanges` 用标记帧
+ * 当「合法缺席」）；② 撕裂尾帧的识别不受影响（标记帧也是定长帧头，半截照样识别）；
+ * ③ 载荷长度字段本来就不可能是 4 GiB（一帧上限是 `MAX_INLINE_BYTES` 级），
+ * 用全 1 当哨兵不会撞上真实帧。
+ */
+export const FACT_MARKER_LENGTH = 0xffffffff;
+
 /** 一帧的编码：`[u64 LE seq][u32 LE payload length][utf8 JSON payload]`。 */
 export function encodeChunkFrame(record: TimelineRecord): Uint8Array {
   if (!Number.isSafeInteger(record.seq) || record.seq < 1) {
@@ -141,6 +213,17 @@ export function encodeChunkFrame(record: TimelineRecord): Uint8Array {
   return frame;
 }
 
+/** 事实标记帧的编码（12 B，见 {@link FACT_MARKER_LENGTH}）。 */
+export function encodeFactMarker(seq: number): Uint8Array {
+  if (!Number.isSafeInteger(seq) || seq < 1) {
+    throw new Error(`chunk_frame_invalid_seq: ${String(seq)}`);
+  }
+  const frame = Buffer.allocUnsafe(CHUNK_FRAME_HEADER_BYTES);
+  frame.writeBigUInt64LE(BigInt(seq), 0);
+  frame.writeUInt32LE(FACT_MARKER_LENGTH, CHUNK_FRAME_HEADER_BYTES - 4);
+  return frame;
+}
+
 /** 块内坏帧（完整帧头但载荷不可用）：seq 可读，必须登记成洞。 */
 export interface ChunkFrameInvalid {
   from_seq: number;
@@ -151,29 +234,200 @@ export interface ChunkFrameInvalid {
 export interface ChunkBlockDecode {
   records: TimelineRecord[];
   invalid: ChunkFrameInvalid[];
+  /** 事实标记帧的 seq（升序，按文件顺序）：本块故意不含这些 seq 的载荷。 */
+  markers: number[];
+  /** 本块覆盖的第一个 seq（帧 / 坏帧 / 标记，按文件顺序）；空块 ⇒ `undefined`。 */
+  coveredFirst?: number;
+  /** 本块覆盖的最后一个 seq（**含标记帧**）；空块 ⇒ `undefined`。 */
+  coveredLast?: number;
   /** 最后一个完整帧的结束偏移；< 块长度 ⇒ 撕裂尾帧。 */
   validBytes: number;
   torn: boolean;
+  /** 与 manifest 条目比对的「形状证据」（见 {@link summarizeChunkBlock}）。 */
+  evidence: BlockEvidence;
+}
+
+/**
+ * 一个块**只靠帧头**就能回答的形状（0.57 可追加块）。
+ *
+ * 为什么要有它：块从 2.6 KiB 涨到 MiB 级之后，「为了自证而整块 `JSON.parse`」成了范围读
+ * 一页的主要成本（实测 4 MiB 块：整块解六千多帧 ≈ 70 ms，而一页只要 100 条）。这些字段
+ * 全部来自 12 B 帧头（`seq` + `len`），一次顺序走过，**不解析任何载荷**：
+ *
+ * - `frames`：数据帧总数（载荷好坏要解析才知道，这一层不判）；
+ * - `markers`：事实标记帧数；
+ * - `coveredFirst` / `coveredLast`：块覆盖的首末 seq（含标记帧）；
+ * - `torn` / `validBytes`：撕裂尾帧口径与整块解码完全一致。
+ *
+ * `frames + markers` 就是 manifest 条目里的 `count`（同口径），所以「少了一帧 / 少了一个
+ * 标记」照样能被条数比对抓到 —— 不必解析载荷。
+ */
+export interface BlockEvidence {
+  frames: number;
+  markers: number;
+  coveredFirst?: number;
+  coveredLast?: number;
+  validBytes: number;
+  torn: boolean;
+}
+
+/**
+ * 只走帧头，得出一个块的形状证据；不解析载荷、不算 CRC。
+ *
+ * 与 {@link decodeChunkBlock} 的判据**逐字节一致**：帧头不完整 / 载荷越界 / `seq` 非法
+ * ⇒ 到此为止（`torn=true`，`validBytes` 停在最后一个完整帧之后）。
+ */
+export function summarizeChunkBlock(buffer: Uint8Array): BlockEvidence {
+  const buf = Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  let frames = 0;
+  let markers = 0;
+  let coveredFirst: number | undefined;
+  let coveredLast: number | undefined;
+  let offset = 0;
+  while (offset + CHUNK_FRAME_HEADER_BYTES <= buf.length) {
+    const seq = Number(buf.readBigUInt64LE(offset));
+    const length = buf.readUInt32LE(offset + 8);
+    if (length === FACT_MARKER_LENGTH) {
+      if (!Number.isSafeInteger(seq) || seq < 1) break; // 帧头不可信：按尾部截断
+      markers += 1;
+      coveredFirst ??= seq;
+      coveredLast = seq;
+      offset += CHUNK_FRAME_HEADER_BYTES;
+      continue;
+    }
+    const payloadEnd = offset + CHUNK_FRAME_HEADER_BYTES + length;
+    if (payloadEnd > buf.length) break; // 撕裂尾帧
+    if (!Number.isSafeInteger(seq) || seq < 1 || length === 0) break; // 帧头不可信
+    frames += 1;
+    coveredFirst ??= seq;
+    coveredLast = seq;
+    offset = payloadEnd;
+  }
+  return {
+    frames,
+    markers,
+    ...(coveredFirst !== undefined ? { coveredFirst } : {}),
+    ...(coveredLast !== undefined ? { coveredLast } : {}),
+    validBytes: offset,
+    torn: offset < buf.length,
+  };
+}
+
+/**
+ * 只走帧头，算出「从 `fromSeq` 起**连续接得上**的最后一个 seq」（0.57：跨边界块的尾链）。
+ *
+ * 为什么需要单独一遍：范围读的块解码只解窗口内的帧（`afterSeq = sinceSeq`），而「尾链」
+ * 判的是**每一个** `> factBoundary` 的 seq 是否紧接前一个 —— 起点在块中段时，窗口把
+ * 前面那些帧滤掉了，链就会**假断**（实测：`since` 落在活动块中段时整页读成 0 条，
+ * 而事实边界的另一侧明明还有 20 条可读 chunk）。所以链的判定放在帧头上做：不解析载荷，
+ * 一次顺序走过，代价是 O(块内帧数) 的 12 B 读。
+ *
+ * 口径：从 `fromSeq` 出发，沿块内升序帧走，遇到第一个「> 上一个 + 1」的 seq 就停；
+ * `fromSeq` 及更小的帧只跳过（它们本来就在快照之内，不推进链）。
+ */
+export function chunkBlockChainEnd(buffer: Uint8Array, fromSeq: number): number {
+  const buf = Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  let cursor = fromSeq;
+  let offset = 0;
+  while (offset + CHUNK_FRAME_HEADER_BYTES <= buf.length) {
+    const seq = Number(buf.readBigUInt64LE(offset));
+    const length = buf.readUInt32LE(offset + 8);
+    if (length === FACT_MARKER_LENGTH) {
+      if (!Number.isSafeInteger(seq) || seq < 1) break;
+      offset += CHUNK_FRAME_HEADER_BYTES;
+    } else {
+      const payloadEnd = offset + CHUNK_FRAME_HEADER_BYTES + length;
+      if (payloadEnd > buf.length) break; // 撕裂尾帧
+      if (!Number.isSafeInteger(seq) || seq < 1 || length === 0) break;
+      offset = payloadEnd;
+    }
+    if (seq <= cursor) continue;
+    if (seq > cursor + 1) return cursor; // 链断在这里
+    cursor = seq;
+  }
+  return cursor;
+}
+
+/**
+ * 逐个交出块里**落在窗口内**的记录（0.57：范围读按需解析）。
+ *
+ * 生成器是懒惰的：`(afterSeq, throughSeq]` 之外的帧只读 12 B 帧头就跳过，窗口内的帧才
+ * `JSON.parse` + 逐条 CRC；消费者（一页的归并循环）拿够 `limit` 条就不再往下拉，于是
+ * 「4 MiB 的块 + 100 条的页」不再解析上万帧。
+ *
+ * 判据与 {@link decodeChunkBlock} 同源：帧头/载荷越界 ⇒ 立刻停（撕裂尾帧）；
+ * 帧内 JSON/CRC/seq 不符 ⇒ 记进 `invalid` 并继续（内行损坏 = 洞，不是截断）。
+ * 调用方负责让「丢掉的 seq」出现在覆盖算术里（不能静默少给）。
+ */
+export function* iterateChunkBlockRecords(
+  buffer: Uint8Array,
+  window: { afterSeq: number; throughSeq: number; maxRecords?: number },
+  invalid: ChunkFrameInvalid[] = [],
+): Generator<TimelineRecord> {
+  const buf = Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const maxRecords = window.maxRecords ?? Number.MAX_SAFE_INTEGER;
+  let yielded = 0;
+  let offset = 0;
+  while (offset + CHUNK_FRAME_HEADER_BYTES <= buf.length) {
+    const seq = Number(buf.readBigUInt64LE(offset));
+    const length = buf.readUInt32LE(offset + 8);
+    if (length === FACT_MARKER_LENGTH) {
+      if (!Number.isSafeInteger(seq) || seq < 1) return; // 帧头不可信：按尾部截断
+      offset += CHUNK_FRAME_HEADER_BYTES;
+      if (seq > window.throughSeq) return;
+      continue;
+    }
+    const payloadStart = offset + CHUNK_FRAME_HEADER_BYTES;
+    const payloadEnd = payloadStart + length;
+    if (payloadEnd > buf.length) return; // 撕裂尾帧
+    if (!Number.isSafeInteger(seq) || seq < 1 || length === 0) return;
+    offset = payloadEnd;
+    if (seq <= window.afterSeq) continue;
+    if (seq > window.throughSeq) return;
+    const text = buf.subarray(payloadStart, payloadEnd).toString('utf8');
+    const record = parseRecordLine(text);
+    if (record === undefined || record.seq !== seq) {
+      invalid.push({ from_seq: seq, to_seq: seq, reason: 'chunk_frame_invalid' });
+      continue;
+    }
+    yield record;
+    yielded += 1;
+    // 一页最多要 maxRecords 条：够了就停，别把整块剩下的载荷也解析了。
+    if (yielded >= maxRecords) return;
+  }
 }
 
 /**
  * 解码一个 chunk 块。
  *
  * - 帧头不完整 / 载荷越界 ⇒ **撕裂尾帧**（`torn=true`，`validBytes` 之前的帧仍有效）；
- * - 帧完整但 JSON/CRC/seq 不符 ⇒ 记 `invalid`，跳过该帧继续（内行损坏 = 洞，不是截断）。
+ * - 帧完整但 JSON/CRC/seq 不符 ⇒ 记 `invalid`，跳过该帧继续（内行损坏 = 洞，不是截断）；
+ * - `len` 是 {@link FACT_MARKER_LENGTH} ⇒ **事实标记帧**（12 B，无载荷），记进 `markers`：
+ *   它占一个 seq、但本块故意不含它的载荷。
  */
 export function decodeChunkBlock(buffer: Uint8Array): ChunkBlockDecode {
   const buf = Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   const records: TimelineRecord[] = [];
   const invalid: ChunkFrameInvalid[] = [];
+  const markers: number[] = [];
+  let coveredFirst: number | undefined;
+  let coveredLast: number | undefined;
   let offset = 0;
   while (offset + CHUNK_FRAME_HEADER_BYTES <= buf.length) {
-    const seqBig = buf.readBigUInt64LE(offset);
+    const seq = Number(buf.readBigUInt64LE(offset));
     const length = buf.readUInt32LE(offset + 8);
+    if (length === FACT_MARKER_LENGTH) {
+      // 事实标记帧：定长 12 B，无载荷。
+      if (!Number.isSafeInteger(seq) || seq < 1) break; // 帧头不可信：按尾部截断
+      markers.push(seq);
+      coveredFirst ??= seq;
+      coveredLast = seq;
+      offset += CHUNK_FRAME_HEADER_BYTES;
+      continue;
+    }
     const payloadStart = offset + CHUNK_FRAME_HEADER_BYTES;
     const payloadEnd = payloadStart + length;
     if (payloadEnd > buf.length) break; // 撕裂尾帧
-    const seq = Number(seqBig);
     if (!Number.isSafeInteger(seq) || seq < 1 || length === 0) break; // 帧头不可信：按尾部截断
     const text = buf.subarray(payloadStart, payloadEnd).toString('utf8');
     const record = parseRecordLine(text);
@@ -182,9 +436,28 @@ export function decodeChunkBlock(buffer: Uint8Array): ChunkBlockDecode {
     } else {
       records.push(record);
     }
+    coveredFirst ??= seq;
+    coveredLast = seq;
     offset = payloadEnd;
   }
-  return { records, invalid, validBytes: offset, torn: offset < buf.length };
+  const torn = offset < buf.length;
+  return {
+    records,
+    invalid,
+    markers,
+    ...(coveredFirst !== undefined ? { coveredFirst } : {}),
+    ...(coveredLast !== undefined ? { coveredLast } : {}),
+    validBytes: offset,
+    torn,
+    evidence: {
+      frames: records.length + invalid.length,
+      markers: markers.length,
+      ...(coveredFirst !== undefined ? { coveredFirst } : {}),
+      ...(coveredLast !== undefined ? { coveredLast } : {}),
+      validBytes: offset,
+      torn,
+    },
+  };
 }
 
 /** 一行不可解析的 ndjson（可带从残缺行里捞到的 seq）。 */
@@ -608,17 +881,17 @@ export async function readAllBlocks(sessionDir: string): Promise<DecodedBlock[]>
     const buffer = await readFile(join(blocksDir, name)).catch(() => undefined);
     if (buffer === undefined) continue;
     const decode = decodeChunkBlock(buffer);
-    const first = decode.records[0];
-    const last = decode.records[decode.records.length - 1];
     out.push({
       name,
       entry: {
         block: name,
-        start_seq: first?.seq ?? 0,
-        end_seq: last?.seq ?? 0,
+        // 覆盖区间取「被覆盖的 seq」（含事实标记帧）：块区间横跨事实行之后，`end_seq`
+        // 可能落在一条事实行上，用最后一个**记录**当块尾会把它算成块外（多给/少给）。
+        start_seq: decode.coveredFirst ?? 0,
+        end_seq: decode.coveredLast ?? 0,
         offset: 0,
         bytes: buffer.length,
-        count: decode.records.length,
+        count: decode.evidence.frames + decode.evidence.markers,
         crc32: crc32Hex(buffer),
       },
       decode,
@@ -648,15 +921,18 @@ function factBoundaryOf(records: Iterable<TimelineRecord>): number {
  * 拿到「新的事实 + 旧的块」，中间凭空少掉一段时间里封的 chunk —— `count` 与实收不再
  * 相等，客户端只能判缺口，尾部终态事件永远等不到。
  *
- * 反过来（**先事实、后块**，即本模块现在的顺序）就有硬保证：写者 `factStep` 先封
- * 活动块再分配事实 seq（`writer.ts`），所以「`seq < B` 的 chunk 所在的块」必然在写
- * 第 `B` 行事实之前就已 fsync 落盘 —— 只要块目录是在读完事实之后列的，它们一定可见。
- * 于是 `end_seq <= B` 的块**无条件纳入**（这段区间属于本趟快照）。
+ * 反过来（**先事实、后块**，即本模块现在的顺序）就有硬保证：写者 `factStep` 先**落盘**
+ * 活动块里更早的 chunk（`flushActive` fsync），再分配事实 seq（`writer.ts`），所以
+ * 「`seq < B` 的 chunk 所在的块文件」必然在写第 `B` 行事实之前就已落盘且在目录里 ——
+ * 只要块目录是在读完事实之后列的，它们一定可见。于是 `end_seq <= B` 的块**无条件纳入**。
  *
- * `start_seq > B` 的块是「读事实之后才封的」：它前面那条事实（`B+1..start-1` 里那条）
- * 不在本趟快照里，整块纳入就会在 `count` 里造一个**读侧自己造的洞**。所以它只在
- * **紧接当前最大可读 `seq`**（`start_seq <= cursor + 1`）时纳入 —— 连续尾块，不造洞；
- * 一旦断链就停下（快照就到此为止，下一次读自然接上）。
+ * ## 0.57 可追加块带来的两处变化
+ *
+ * 1. **块可能横跨事实边界**：块在 run 存活期间一直追加，所以最后一个（活动）块的区间
+ *    可以是 `start <= B < end` —— 这是正常形状，不再是「写侧不变量被破坏」。它的
+ *    `seq <= B` 那部分照样属于本趟快照（写第 `B` 行事实之前已 fsync），`seq > B` 的那部分
+ *    不属于（见 {@link clipBlockToBoundary}）。
+ * 2. `start_seq > B` 的块仍然只认「紧接当前最大可读 `seq`」的连续尾块（下面那段原样保留）。
  *
  * 注意「纳入」不等于「挑好的」：这里不做全量一致性判定，会话真有的洞（坏帧、丢块）
  * 该出现还是会出现，由写者登记、由 `heads().holes` 声明。
@@ -672,7 +948,7 @@ function selectBlocksForSnapshot(
     const start = block.entry.start_seq;
     const end = block.entry.end_seq;
     if (start < 1 || end < start) continue;
-    // 边界之内的块：无条件纳入（封块早于边界那条事实，必然已完整落盘）。
+    // 边界之内的块：无条件纳入（chunk 落盘早于边界那条事实，必然已完整可见）。
     if (end <= factBoundary) {
       selected.push(block);
       if (end > cursor) cursor = end;
@@ -684,6 +960,35 @@ function selectBlocksForSnapshot(
     if (end > cursor) cursor = end;
   }
   return selected;
+}
+
+/**
+ * 把一个块里**属于本趟快照**的 chunk 记录交出去（边界裁剪 + 尾链）。
+ *
+ * 规则（与范围读 `wal.ts#iterateBlocksFrom` 逐条同一条）：
+ * - `seq <= factBoundary` 的帧全部放行：它们的 fsync 早于第 `factBoundary` 行事实；
+ * - `seq > factBoundary` 的帧只放行**紧接 `cursor + 1`** 的那一串（`cursor` 初值 =
+ *   `factBoundary`）。断链即止 —— 中间那条号要么是还没读到的事实行，要么是洞，
+ *   放行后面的帧就会在 `count` 里造一个读侧自己造的缺口。
+ *
+ * `cursor` 由调用方跨块维护（块按 seq 升序处理），所以「快照到此为止」与
+ * `selectBlocksForSnapshot` 的连续尾块规则是同一个判据的两种写法。
+ */
+function* clipBlockToBoundary(
+  block: DecodedBlock,
+  factBoundary: number,
+  cursor: { value: number },
+): Generator<TimelineRecord> {
+  for (const record of block.decode.records) {
+    if (record.seq <= factBoundary) {
+      if (record.seq > cursor.value) cursor.value = record.seq;
+      yield record;
+      continue;
+    }
+    if (record.seq > cursor.value + 1) return; // 边界之后断链：本趟快照到此为止
+    cursor.value = record.seq;
+    yield record;
+  }
 }
 
 /*
@@ -922,9 +1227,14 @@ export async function readTimelineEvents(sessionDir: string): Promise<TimelineRe
   for (const record of wal.records) bySeq.set(record.seq, record);
   const factBoundary = factBoundaryOf(bySeq.values());
 
-  // ② 块目录后列：此时「边界之内封的块」必然已经在目录里（见 selectBlocksForSnapshot）。
+  // ② 块目录后列：此时「边界之内落盘的块」必然已经在目录里（见 selectBlocksForSnapshot）。
+  const cursor = { value: factBoundary };
   for (const block of selectBlocksForSnapshot(await readAllBlocks(sessionDir), factBoundary)) {
-    for (const record of block.decode.records) bySeq.set(record.seq, record);
+    // 活动块可能横跨事实边界：`seq <= factBoundary` 全交，边界之后只交连续的尾链
+    // （见 clipBlockToBoundary 与 iterateBlocksFrom 的同一条判据）。
+    for (const record of clipBlockToBoundary(block, factBoundary, cursor)) {
+      bySeq.set(record.seq, record);
+    }
   }
 
   const hydrated: TimelineRecord[] = [];
@@ -1081,8 +1391,25 @@ export async function fsyncDirectory(path: string): Promise<void> {
  * 路径**都还用它。
  */
 
-/** 范围读的块数门槛：块数低于它时整份读只是 100 ms 量级，多一条分支只会多一处会漂的口径。 */
-export const RANGE_READ_MIN_BLOCKS = 256;
+/**
+ * 范围读的**小会话**门槛：块数低于它、且会话字节量也低于 {@link RANGE_READ_MIN_BYTES}
+ * 时整份读只是毫秒级，多一条会漂的路径不值得。
+ *
+ * 0.57 为什么要改（这是可追加块的必要配套）：旧口径是「块数 < 256 ⇒ 小会话」，那个判据
+ * 成立的前提是「一个块 ≈ 2.6 KiB」（256 块 ≈ 0.65 MB）。可追加块之后块数不再代表会话大小
+ * —— 69 MB 的真身只有 106 个块，按旧门槛它会被判成小会话、每页都整份读（实测 3.7 s/页，
+ * 而这正是本单要消灭的那类回归）。所以判据换成「**字节量**」，块数只留一个真·小会话的下限。
+ */
+export const RANGE_READ_MIN_BLOCKS = 8;
+
+/**
+ * 会话字节量门槛（`wal.log` 大小）：过了它就值得走范围读，块数多少不再作数。
+ *
+ * 1 MiB 的来由：整份读的成本 ≈ 0.1–0.3 s/MB（实测 116 MB 的真身 3.7 s），而范围读的固定
+ * 成本是「锚点二分 + 枚举一窗 + 一次洞文件读」≈ 10 ms 量级 —— 1 MiB 上下两个方向都够安全，
+ * 取的是「怎么选都不会错」的那条中间线。
+ */
+export const RANGE_READ_MIN_BYTES = 1024 * 1024;
 
 /**
  * 扩窗上界（`× limit`）：`sinceSeq` 之后可能夹着洞，`limit` 条记录要跨更多 seq。
@@ -1612,14 +1939,22 @@ interface BlockScanState {
 /**
  * 从 `source` 的 `startIndex` 起**顺序**开块，按 `selectBlocksForSnapshot` 的同一口径吐出窗口内的帧。
  *
- * 纳入规则逐条对齐 `wal.ts#selectBlocksForSnapshot`（全文最重要的两行）：
+ * 纳入规则逐条对齐 `wal.ts#selectBlocksForSnapshot`：
  *
- * - `end_seq <= factBoundary` 的块**无条件纳入**（封块早于那条事实，必然已完整落盘）；
+ * - `end_seq <= factBoundary` 的块**无条件纳入**（chunk 落盘早于那条事实，必然已完整可见）；
+ * - **横跨事实边界**的块（`start <= B < end`，0.57 可追加块下的活动块常态）只交
+ *   `seq <= B` 的那一段 —— 依据是 `flushActive` 的 fsync 先于事实行；交完之后本趟快照
+ *   就到头了（后面不可能再有 `seq <= B` 的块），`exhausted` 置真；
  * - `start_seq > factBoundary` 的块只认**紧接 `cursor + 1`** 的连续尾块，断链即止
  *   （否则会给出比事实还新的 chunk，破坏「先事实后块」的自洽快照，客户端当场报假缺口）。
  *
- * 与整份读的差别只有一处、且更严：块内帧必须 seq 升序、块的 `start_seq` 必须随文件名
+ * 与整份读的差别只有两处、且更严：块内帧必须 seq 升序、块的 `start_seq` 必须随文件名
  * 递增，否则抛 `order_broken` 降级（整份读对此不做判定，因为它本来就在读全部）。
+ *
+ * 0.57 的性能口径：块从 2.6 KiB 涨到 MiB 级之后，这里改用**窗口解码**
+ * （{@link decodeChunkBlockWindow}）—— 只把落在 `(sinceSeq, maxSeq]` 的帧送进
+ * `JSON.parse` + 逐条 CRC，其余帧只读 12 B 帧头就跳过。一页的成本从「整块帧数」降到
+ * 「整块字节 + 本页帧数」，不再随块大小线性放大到十几万条 JSON。
  *
  * 块的**名字从哪来**由 `source` 决定（0.56 manifest 快路径 / readdir 兜底）：
  * 这里只按下标要名字，不认识 manifest —— 「枚举」与「开块」是两件事，别混。
@@ -1633,12 +1968,16 @@ async function* iterateBlocksFrom(args: {
   factBoundary: number;
   /** 本次最多开几个块（第十一条：显式上界，见 `readTimelineRange`） */
   blockOpenMax: number;
+  /** 一页最多要几条（= `limit`）：单个块最多解析这么多条就够，见 `iterateChunkBlockRecords` */
+  maxRecordsPerBlock: number;
   reader: ManifestForwardReader | undefined;
   state: BlockScanState;
 }): AsyncGenerator<TimelineRecord> {
   const { blocksDir, source, sinceSeq, maxSeq, factBoundary, blockOpenMax, reader, state } = args;
   let cursor = factBoundary;
   let lastStart = 0;
+  /** 本页已经交出去的块帧数（= 消费者拉走的次数）：够了就不再往下开块。 */
+  let yielded = 0;
   for (let index = args.startIndex; ; index += 1) {
     const enumerated: EnumeratedBlock | undefined = await source.at(index);
     if (enumerated === undefined) {
@@ -1660,32 +1999,24 @@ async function* iterateBlocksFrom(args: {
       state.unverified.push(name);
       continue;
     }
-    const decode = decodeChunkBlock(buffer);
+    // 先只走帧头拿形状证据（`covered` / 条数 / 撕裂），载荷一条都不解析；
+    // 再把窗口里的记录**懒**地解出来（消费者拿够页就不再往下拉）。
+    const evidence = summarizeChunkBlock(buffer);
     state.opened += 1;
     state.bytes += buffer.length;
 
-    // 块内帧必须 seq 升序（解码序 = 写入序）。不升序 ⇒ 顺序不可信，不猜。
-    let previous = 0;
-    for (const record of decode.records) {
-      if (record.seq <= previous) {
-        throw new TimelineRangeUndecidable('order_broken', `块 ${name} 内帧 seq 不升序`);
-      }
-      previous = record.seq;
-    }
     // 逐块自证（①首末 seq ②条数 ③整块 crc ④完整性）：**证据，不是过滤条件**。
     //
     // 条目从两处来：manifest 快路径的条目由枚举顺手给（`enumerated.entry`）；
     // readdir 兜底路沿用 `ManifestForwardReader` 的顺序游标（锚点命中 manifest 时才有）。
     const entry =
       enumerated.entry ?? (reader === undefined ? undefined : await reader.entryFor(name));
-    if (entry !== undefined && !verifyBlockAgainstManifest(buffer, decode, entry).ok) {
+    if (entry !== undefined && !verifyBlockAgainstManifest(buffer, evidence, entry).ok) {
       state.unverified.push(name);
     }
 
-    const first = decode.records[0];
-    const last = decode.records[decode.records.length - 1];
-    const start = first?.seq ?? 0;
-    const end = last?.seq ?? 0;
+    const start = evidence.coveredFirst ?? 0;
+    const end = evidence.coveredLast ?? 0;
     if (start < 1 || end < start) continue; // 与 selectBlocksForSnapshot 同口径：空块/全坏块不参与
     if (lastStart > 0 && start <= lastStart) {
       throw new TimelineRangeUndecidable(
@@ -1693,35 +2024,78 @@ async function* iterateBlocksFrom(args: {
         `块 ${name} 的 start_seq 没有随文件名递增`,
       );
     }
-    if (start <= factBoundary && end > factBoundary) {
-      // 块跨越事实边界：写侧「先封块、再分配事实 seq」不成立 ⇒ 快照口径不可判。
-      throw new TimelineRangeUndecidable(
-        'block_spans_fact_boundary',
-        `块 ${name} 覆盖 ${String(start)}–${String(end)}，事实边界 ${String(factBoundary)} 落在其中`,
-      );
-    }
-    if (end <= factBoundary) {
-      // 边界之内：无条件纳入。
-    } else if (start <= cursor + 1) {
-      if (end > cursor) cursor = end;
-    } else {
-      // 连续尾块断链：后面都不参与本趟快照（与 selectBlocksForSnapshot 的 continue 等价）。
-      state.exhausted = true;
-      return;
-    }
-    lastStart = start;
     if (start > maxSeq) {
       throw new TimelineRangeUndecidable(
         'window_too_wide',
         `窗口右端已过（块 ${name} 从 ${String(start)} 起，上限 ${String(maxSeq)}）`,
       );
     }
-    for (const record of decode.records) {
+    // 窗口右端之外（一段块可以比窗口尾部多出几帧）：不再往下给，也不宣称「已到尾」。
+    const openWindow = {
+      afterSeq: Math.max(sinceSeq, 0),
+      throughSeq: maxSeq,
+      maxRecords: args.maxRecordsPerBlock,
+    };
+    const badFrames: ChunkFrameInvalid[] = [];
+    const records = iterateChunkBlockRecords(buffer, openWindow, badFrames);
+    if (end <= factBoundary) {
+      // 边界之内：无条件纳入。
+      lastStart = start;
+    } else if (start <= factBoundary) {
+      // 横跨事实边界（可追加块的活动块）：`seq <= factBoundary` 全交，边界之后只交
+      // **紧接事实边界**的连续尾链（与 `clipBlockToBoundary` 同一条判据）。
+      //
+      // 链的右端用**帧头**单独算（`chunkBlockChainEnd`）：本块的解码窗口从 `sinceSeq` 起，
+      // 窗口里没有「边界 → since」这一段，直接拿窗口里的第一条判链会假断（起点落在块中段
+      // 时整页读成 0 条）。判定放在帧头上还有一个好处：不解析任何窗口外的载荷。
+      const chainEnd = chunkBlockChainEnd(buffer, factBoundary);
+      lastStart = start;
+      for (const record of iterateChunkBlockRecords(
+        buffer,
+        {
+          afterSeq: Math.max(sinceSeq, 0),
+          throughSeq: Math.min(maxSeq, chainEnd),
+          maxRecords: args.maxRecordsPerBlock - yielded,
+        },
+        badFrames,
+      )) {
+        yielded += 1;
+        yield record;
+      }
+      // 链没走到块尾 ⇒ 本页到此为止，且**不**声称「已到尾」（覆盖算术会决定要不要降级）。
+      if (chainEnd < end) {
+        state.exhausted = true;
+        return;
+      }
+      // 块里还有窗口右端之外的帧 ⇒ 与「窗口右端已过」同一条出口：不再往下给。
+      if (chainEnd > maxSeq) return;
+      if (chainEnd > cursor) cursor = chainEnd;
+      if (yielded >= args.maxRecordsPerBlock) return;
+      continue;
+    } else if (start <= cursor + 1) {
+      if (end > cursor) cursor = end;
+      lastStart = start;
+    } else {
+      // 连续尾块断链：后面都不参与本趟快照（与 selectBlocksForSnapshot 的 continue 等价）。
+      state.exhausted = true;
+      return;
+    }
+    let previous = 0;
+    for (const record of records) {
+      // 块内帧必须 seq 升序（解码序 = 写入序）。不升序 ⇒ 顺序不可信，不猜。
+      if (record.seq <= previous) {
+        throw new TimelineRangeUndecidable('order_broken', `块 ${name} 内帧 seq 不升序`);
+      }
+      previous = record.seq;
       if (record.seq <= sinceSeq) continue;
-      // 窗口右端之外（一段块可以比窗口尾部多出几帧）：不再往下给，也不宣称「已到尾」。
+      // 窗口右端之外：不再往下给，也不宣称「已到尾」。
       if (record.seq > maxSeq) return;
+      yielded += 1;
       yield record;
     }
+    // 已经交出去一页的量 ⇒ 消费者不再需要后面的块了（**不能**继续往下开：那会为了
+    // 「看一眼下一个块」把整段会话读一遍，实测就是 `window_too_wide` 的来源）。
+    if (yielded >= args.maxRecordsPerBlock) return;
   }
 }
 
@@ -1745,6 +2119,11 @@ async function locateRangeBlocks(
   sessionDir: string,
   sinceSeq: number,
   factBoundary: number,
+  /**
+   * `wal.log` 的字节数（小会话门槛用：0.57 起判据是「会话字节量」而不是「块数」，
+   * 见 `RANGE_READ_MIN_BLOCKS` 的注释）。
+   */
+  walBytes: number,
   /** `true` = 跳过 manifest 快路径（manifest 已被判定不可信时的兜底重来） */
   forceReaddir = false,
 ): Promise<{
@@ -1754,13 +2133,15 @@ async function locateRangeBlocks(
   /** 快路径没走成的原因（稳定 code；只进 debug 日志） */
   fallback?: string;
 }> {
+  // 小会话门槛：会话字节量够大 ⇒ 块数多少都值得走范围读（口径见 RANGE_READ_MIN_BLOCKS 注释）。
+  const minBlocks = walBytes >= RANGE_READ_MIN_BYTES ? 1 : RANGE_READ_MIN_BLOCKS;
   const fast = forceReaddir
     ? ({ ok: false, reason: 'manifest_untrusted' } as const)
     : await openManifestNameSource({
         sessionDir,
         sinceSeq,
         factBoundary,
-        minBlocks: RANGE_READ_MIN_BLOCKS,
+        minBlocks,
       });
   if (fast.ok) {
     blockEnumerationCounters.manifest += 1;
@@ -1771,10 +2152,10 @@ async function locateRangeBlocks(
   const blocksDir = join(sessionDir, TIMELINE_LAYOUT.walBlocks);
   // 兜底：枚举**只走 readdir**（manifest 会落后于块目录，拿它枚举会静默丢掉尾部一整段 chunk）。
   const names = await listBlockFiles(blocksDir);
-  if (names.length < RANGE_READ_MIN_BLOCKS) {
+  if (names.length < minBlocks && walBytes < RANGE_READ_MIN_BYTES) {
     throw new TimelineRangeUndecidable(
       'blocks_below_threshold',
-      `${String(names.length)} < ${String(RANGE_READ_MIN_BLOCKS)}`,
+      `${String(names.length)} 块 < ${String(minBlocks)} 且 wal.log ${String(walBytes)} B < ${String(RANGE_READ_MIN_BYTES)} B`,
     );
   }
   const anchor = await locateRangeAnchor(sessionDir, names, sinceSeq);
@@ -1875,7 +2256,7 @@ async function readTimelineRangeAttempt(
   const factBoundary = tripline.walLastSeq;
 
   // ── 枚举 + 定位：manifest 快路径（**不 readdir**）→ readdir 兜底（今天的行为）
-  const located = await locateRangeBlocks(sessionDir, since, factBoundary, forceReaddir);
+  const located = await locateRangeBlocks(sessionDir, since, factBoundary, walSize, forceReaddir);
   const source = located.source;
   const startIndex = 0;
   const reader = located.reader;
@@ -1905,6 +2286,7 @@ async function readTimelineRangeAttempt(
     maxSeq,
     factBoundary,
     blockOpenMax,
+    maxRecordsPerBlock: limit,
     reader,
     state: blockState,
   });
