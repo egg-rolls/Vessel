@@ -13,8 +13,18 @@ import type { WebToolsConfig } from './config';
 
 export type KeyKind = 'search' | 'fetch';
 
-/** 解析出这次调用该看哪个环境变量（`*_key_env` 空则回落 `key_env`） */
-export function resolveKeyEnvName(config: WebToolsConfig, kind: KeyKind): string {
+/**
+ * 解析出这次调用该看哪个环境变量（`*_key_env` 空则回落 `key_env`）
+ *
+ * 搜索侧还有一层：所选后端自带 `keyEnv`（Tavily/Serper 各有自己的变量名），
+ * 由 `search/index.ts` 解析好后以 `envNameOverride` 传入——**优先级 配置 > provider > key_env**。
+ */
+export function resolveKeyEnvName(
+  config: WebToolsConfig,
+  kind: KeyKind,
+  envNameOverride?: string,
+): string {
+  if (envNameOverride !== undefined && envNameOverride !== '') return envNameOverride;
   const specific = kind === 'search' ? config.searchKeyEnv : config.fetchKeyEnv;
   return specific !== '' ? specific : config.keyEnv;
 }
@@ -33,8 +43,9 @@ export function readKey(
   config: WebToolsConfig,
   kind: KeyKind,
   env: EnvLike = process.env,
+  envNameOverride?: string,
 ): ResolvedKey {
-  const envName = resolveKeyEnvName(config, kind);
+  const envName = resolveKeyEnvName(config, kind, envNameOverride);
   const raw = env[envName];
   const value = typeof raw === 'string' ? raw.trim() : '';
   return { envName, value, present: value !== '' };

@@ -159,3 +159,10 @@ docker-compose.override.yml
 # Repo docs use .md; .txt is only transient/local, never tracked.
 # ----------------------------------------------------------
 *.txt
+
+# 配置键名误当重定向目标产生的空文件（历史上被误提交过，别再进库）
+node.token*
+node.tokens*
+node.allowed_origins
+serve.token*
+serve.allowed_origins
