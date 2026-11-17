@@ -3,7 +3,18 @@
  * @module @vessel-agent/core/runtime
  */
 
-export type { ExecutionUnitOptions, Plugin, PluginHost } from '../types/plugin.js';
+export type {
+  ExecutionUnitOptions,
+  Plugin,
+  PluginHost,
+  RegisterToolOptions,
+} from '../types/plugin.js';
+export type {
+  ToolNameAlias,
+  ToolNameAudit,
+  ToolNameEntry,
+  ToolNameViolation,
+} from '../types/tool-name.js';
 export { toErrorEnvelope } from './error-envelope.js';
 export { ExecutionUnit } from './execution-unit.js';
 export { PermissionTimeoutError } from './permission-policy.js';
@@ -36,6 +47,20 @@ export {
   type TimelineDualWritePort,
 } from './run-journal.js';
 export { type ExecutionUnitRequest, Runtime, type TenantRuntimeProfile } from './runtime.js';
+export {
+  assertToolNameLegality,
+  auditToolNames,
+  describeToolNameProblem,
+  findToolNameAlias,
+  isToolNameLegal,
+  MAX_TOOL_NAME_LENGTH,
+  PROVIDER_SAFE_TOOL_NAME,
+  resolveToolNameAlias,
+  suggestToolName,
+  TOOL_NAME_ALIASES,
+  TOOL_NAME_PATTERN,
+  TOOL_NAME_RULE,
+} from './tool-name.js';
 export {
   createToolPipeline,
   createToolPipelineFor,

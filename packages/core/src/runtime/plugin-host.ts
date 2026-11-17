@@ -6,18 +6,33 @@
 import type { Guardrail } from '../types/guardrail.js';
 import type { Hook } from '../types/hook.js';
 import type { MemberBodyContribution, PluginPortName } from '../types/member-port.js';
-import type { PluginHost, PluginInstallScope, ReadSideMasker } from '../types/plugin.js';
+import type {
+  PluginHost,
+  PluginInstallScope,
+  ReadSideMasker,
+  RegisterToolOptions,
+} from '../types/plugin.js';
 import type { ProviderFactory } from '../types/provider.js';
 import type { ToolDefinition } from '../types/tool.js';
+import type { ToolNameAlias, ToolNameAudit } from '../types/tool-name.js';
+import {
+  auditToolNames,
+  describeToolNameProblem,
+  findToolNameAlias,
+  PROVIDER_SAFE_TOOL_NAME,
+  TOOL_NAME_ALIASES,
+} from './tool-name.js';
 
 /**
- * Provider 对工具名的硬约束（OpenAI 兼容接口与 Anthropic 都是这个形状）。
+ * Provider 对工具名的硬约束（OpenAI 兼容接口与 Anthropic 都是这个形状）——
+ * 判据在 `./tool-name.ts`（单一真源，`PROVIDER_SAFE_TOOL_NAME`）。
  *
  * 工具名原样进 `tools[].function.name`；带 `.` 等字符会让**整个请求** 400
  * （不是调用时才失败）。所以在注册期就拒绝，把问题从「运行时 opaque 400」
  * 提前成「启动/门禁时的明确错误」，而不是依赖各 Provider 的错误信息。
+ *
+ * 0.55 起这条只是**下限**：本仓工具名还要满足 snake_case（`TOOL_NAME_RULE`）。
  */
-const PROVIDER_SAFE_TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
 
 /** 一次插件安装期间记录的注册条目（0.9）；回滚按身份匹配，不影响既有条目 */
 type PluginRegistration =
@@ -60,25 +75,103 @@ export class MemoryPluginHost implements PluginHost {
   private readSideMaskers: Map<string, ReadSideMasker> = new Map();
   /** 安装记录栈：栈顶是当前安装；每个 scope 独立回滚（0.9） */
   private installScopes: PluginRegistration[][] = [];
+  /**
+   * 0.55 别名表（旧名 → 现行名）。**唯一解析点**：`getTool` 命中别名时回落到现行名，
+   * `tool-pipeline` 据此在结果里附一行弃用提示（不静默）。
+   *
+   * 表内容是数据（`TOOL_NAME_ALIASES`），不是每个工具一份 if；改名的登记处只有一处。
+   */
+  private toolAliases: Map<string, ToolNameAlias> = new Map(
+    TOOL_NAME_ALIASES.map((entry) => [entry.alias, entry]),
+  );
+  /**
+   * 0.55：外部来源（MCP / 第三方通道）注册的工具名。它们同样过名字校验，但**只告警不阻断**
+   * —— 名字由外部系统决定，我们原样透传；这一集只用来区分「谁该 warning」。
+   */
+  private externalTools: Map<string, string> = new Map();
 
   /**
    * 注册工具
+   *
+   * 名字校验在这里就做（唯一入口，一处），两条口径：
+   * - 内置 / 本仓插件：必须 snake_case（`^[a-z][a-z0-9_]*$`），不合规**直接抛错**并给出建议名；
+   * - `options.external`（MCP 等外部来源）：同样校验，但只登记告警（装配期由
+   *   `auditToolNames()` 汇总写日志），不改写名字、不阻断。
+   *
    * @param def 工具定义
-   * @throws 如果工具名已存在则抛出错误
+   * @param options 注册选项（外部通道标记）
+   * @throws 工具名不合规 / 已存在
    */
-  registerTool(def: ToolDefinition): void {
-    if (!PROVIDER_SAFE_TOOL_NAME.test(def.name)) {
-      throw new Error(
-        `Tool name "${def.name}" is not provider-safe: it must match ${PROVIDER_SAFE_TOOL_NAME.source} ` +
-          '(letters, digits, underscore, hyphen; 1-64 chars). OpenAI-compatible APIs and Anthropic ' +
-          'reject other characters in tools[].function.name, which fails the whole request.',
-      );
+  registerTool(def: ToolDefinition, options?: RegisterToolOptions): void {
+    if (options?.external === true) {
+      this.externalTools.set(def.name, options.source ?? 'external');
+    } else {
+      const problem = describeToolNameProblem(def.name);
+      if (problem !== undefined) {
+        throw new Error(
+          `${problem}\n(工具名原样进 provider 的 tools[].function.name；不合规会让**整个请求**被拒，` +
+            '所以在注册期就拦，不等模型调用时才发现。)',
+        );
+      }
+      // provider 硬约束的兜底（snake_case 是它的子集，这里只兜长度 / 历史调用方）。
+      if (!PROVIDER_SAFE_TOOL_NAME.test(def.name)) {
+        throw new Error(
+          `Tool name "${def.name}" is not provider-safe: it must match ${PROVIDER_SAFE_TOOL_NAME.source} ` +
+            '(letters, digits, underscore, hyphen; 1-64 chars). OpenAI-compatible APIs and Anthropic ' +
+            'reject other characters in tools[].function.name, which fails the whole request.',
+        );
+      }
     }
     if (this.tools.has(def.name)) {
       throw new Error(`Tool "${def.name}" is already registered`);
     }
     this.tools.set(def.name, def);
     this.record({ kind: 'tool', name: def.name, def });
+  }
+
+  /**
+   * 0.55：登记一条改名别名（一般不需要调用 —— 默认表 `TOOL_NAME_ALIASES` 已在构造时装载；
+   * 这里给「插件自己改了个名、想临时保留旧名」以及驱动 / 校验用）。
+   */
+  registerToolAlias(alias: ToolNameAlias): void {
+    this.toolAliases.set(alias.alias, alias);
+  }
+
+  /**
+   * 0.55：按旧名查别名。**目标已注册**才算命中 —— 名字表里有、工具却没装（权限层
+   * 关掉了插件 / headless 口径不同）时不该假装能解析，否则失败原因会被藏起来。
+   */
+  getToolAlias(name: string): ToolNameAlias | undefined {
+    const found = this.toolAliases.get(name) ?? findToolNameAlias(name);
+    if (found === undefined) return undefined;
+    return this.tools.has(found.target) ? found : undefined;
+  }
+
+  /** 0.55：本宿主认识的全部别名（别名表 + 运行时补登的），按登记顺序 */
+  listToolAliases(): ToolNameAlias[] {
+    return [...this.toolAliases.values()];
+  }
+
+  /**
+   * 0.55：工具名审计（装配期调用）。
+   *
+   * 内置 / 插件工具不合规 ⇒ `violations`（装配方据此抛错）；
+   * 外部工具不合规 ⇒ `warnings`（装配方写日志，名字原样透传）。
+   */
+  auditToolNames(): ToolNameAudit {
+    return auditToolNames(
+      this.listTools().map((tool) => {
+        const source = this.externalTools.get(tool.name);
+        return source === undefined
+          ? { name: tool.name }
+          : { name: tool.name, external: true, source };
+      }),
+    );
+  }
+
+  /** 0.55：某个名字是否来自外部通道（MCP 等），用于工具面展示 / 诊断 */
+  isExternalTool(name: string): boolean {
+    return this.externalTools.has(name);
   }
 
   /**
@@ -251,11 +344,18 @@ export class MemoryPluginHost implements PluginHost {
 
   /**
    * 获取工具定义
-   * @param name 工具名称
+   *
+   * 0.55：旧名（`TOOL_NAME_ALIASES` 里登记的）也能查到 —— 别名解析只在这里做一处，
+   * 调用方（管道 / 权限 / 执行单元）不必各自 if。弃用提示由 `getToolAlias()` 取。
+   *
+   * @param name 工具名称（现行名或已登记的旧名）
    * @returns 工具定义或 undefined
    */
   getTool(name: string): ToolDefinition | undefined {
-    return this.tools.get(name);
+    const direct = this.tools.get(name);
+    if (direct !== undefined) return direct;
+    const alias = this.getToolAlias(name);
+    return alias === undefined ? undefined : this.tools.get(alias.target);
   }
 
   /**
@@ -296,6 +396,7 @@ export class MemoryPluginHost implements PluginHost {
    * 安装记录里的 tool 条目一并移除，避免安装失败回滚时把已删的工具“复活”。
    */
   unregisterTool(name: string): boolean {
+    this.externalTools.delete(name);
     if (!this.tools.delete(name)) return false;
     for (const scope of this.installScopes) {
       const index = scope.findIndex((entry) => entry.kind === 'tool' && entry.name === name);

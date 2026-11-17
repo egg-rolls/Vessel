@@ -79,8 +79,10 @@ paths:
 
 ## 4. 规则（可执行清单）
 
-1. **新增工具名只用** `[A-Za-z0-9_-]`，长度 ≤ 64。默认形态：小写 + 下划线分词或 camelCase
-   （`piiReveal` / `ask_user` / `mcp__server__tool`）。
+1. **新增工具名只用** `[a-z][a-z0-9_]*`（snake_case，长度 ≤ 64）。0.55 起这是硬判据
+   （`packages/core/src/runtime/tool-name.ts`，注册期抛错 + 装配期全量审计），
+   不再接受 camelCase（`piiReveal` 已改名 `pii_reveal`，旧名只作为一版别名存在）。
+   仍然 provider-safe 的子集关系不变：snake_case ⊂ `[A-Za-z0-9_-]{1,64}`。
 2. **不要为了「看着像命名空间」在工具名里加点**。工具名是给 provider 的**标识符**，不是给人看的
    分级路径；想表达归属就放进 `name` 的**前缀**（下划线）或工具描述里。
 3. **需要分层用前缀**：MCP 固定 `mcp__<server>__<tool>`（双下划线），长度超限交给
@@ -94,9 +96,9 @@ paths:
 5. **门禁靠注册期校验，不靠人记**。已经有的那道正则就是唯一可信的闸：
    新增工具后跑一次任何会 `registerTool` 的路径（启动、装配、探针、gates）即可，
    抛错信息里直接带正则和原因。**不要**再加一份「工具名白名单」之类的第二套真源。
-   反向扫描的判据是 `scripts/check-tool-name-aliases.ts`：它的工具清单从真实注册表 / 源码
-   里的 `ToolDefinition` 取（不手抄），所以加工具不用改探针；工具**改名**时才需要在
-   `src/legacy-tool-names.ts` 补一条旧名映射（并让探针 ①②④⑤ 继续绿）。
+   0.55 起判据收在 `packages/core/src/runtime/tool-name.ts`（snake_case `^[a-z][a-z0-9_]*$`
+   + `assertToolNameLegality` 装配期全量审计）；改名只需在 `TOOL_NAME_ALIASES` 补一条
+   旧名映射（别名解析 / 配置层换算 / `--tools` 的弃用清单都读这张表，一处改完全链路生效）。
 
 ## 5. 边界 / 未验证
 

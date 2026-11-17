@@ -1,5 +1,5 @@
 /**
- * `piiReveal`：审批解锁工具（0.52）。
+ * `pii_reveal`：审批解锁工具（0.52）。
  *
  * 为什么是工具而不是新 RPC：
  * - 工具自带的 `checkPermission()` 就是**现有 ask / permission 链**（
@@ -24,11 +24,13 @@ import { getPiiVault, type PiiVault } from './vault.js';
 /**
  * 工具名（唯一注册入口是 PluginHost，见 `plugins/security/guardrail-pii`）。
  *
- * 名字必须是 provider-safe 的 `[A-Za-z0-9_-]{1,64}`：OpenAI 兼容接口与 Anthropic
- * 都按这个形状校验 `tools[].function.name`，带 `.` 会被 400 拒掉整个请求（不只是
- * 调用它时）。别改回 `pii.reveal` 那种点号写法。
+ * 0.55 起本仓工具名统一 **snake_case**：`^[a-z][a-z0-9_]*$`（见
+ * `packages/core/src/runtime/tool-name.ts` 与 `docs/architecture/tools.md`「命名规则」）。
+ * 它同时满足 provider 的硬约束 `[A-Za-z0-9_-]{1,64}` —— 工具名原样进
+ * `tools[].function.name`，带 `.` 会被 400 拒掉**整个请求**（不只是调用它时）。
+ * 旧名 `piiReveal` / `pii.reveal` 作为别名保留一版（`TOOL_NAME_ALIASES`），下一版移除。
  */
-export const PII_REVEAL_TOOL_NAME = 'piiReveal';
+export const PII_REVEAL_TOOL_NAME = 'pii_reveal';
 
 /** 审批审计事件名（append-only 事件流；payload 无真值）。 */
 export const PII_REVEAL_AUDIT_EVENT = 'pii.reveal.audit';
@@ -42,8 +44,8 @@ export class PiiRevealNotApprovedError extends Error {
 
   constructor(sessionId: string | undefined, toolCallId: string | undefined) {
     super(
-      'piiReveal requires human approval and this call has none. ' +
-        'Nothing was revealed. Next: ask the user (the runtime shows a permission card for piiReveal) — ' +
+      'pii_reveal requires human approval and this call has none. ' +
+        'Nothing was revealed. Next: ask the user (the runtime shows a permission card for pii_reveal) — ' +
         'do not retry the same call expecting a different result, and never paste the placeholder to a user as if it were the value.',
     );
     this.name = 'PiiRevealNotApprovedError';
@@ -55,7 +57,7 @@ export class PiiRevealNotApprovedError extends Error {
   }
 }
 
-/** `piiReveal` 的入参（宽进：接受完整占位符或裸 id）。 */
+/** `pii_reveal` 的入参（宽进：接受完整占位符或裸 id）。 */
 interface RevealInput {
   handle?: unknown;
   reason?: unknown;
@@ -99,7 +101,7 @@ export function findApprovalId(
   return undefined;
 }
 
-/** 构造 `piiReveal` 工具。`vault` 缺省用进程单例（与请求 / 工具边界同源）。 */
+/** 构造 `pii_reveal` 工具。`vault` 缺省用进程单例（与请求 / 工具边界同源）。 */
 export function createPiiRevealTool(options: { vault?: PiiVault } = {}): ToolDefinition {
   const vaultOf = (): PiiVault => options.vault ?? getPiiVault();
 

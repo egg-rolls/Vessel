@@ -22,6 +22,7 @@ import {
   type VesselConfig,
 } from '../packages/config/src/index';
 import {
+  assertToolNameLegality,
   imageBlobRoot,
   type Logger,
   MemoryPluginHost,
@@ -1236,8 +1237,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         'agent.close',
         // 0.52：PII 真值解锁**永远**要人批。默认放行会让 reveal 因为拿不到审批 id 而永久拒绝，
         // 反而把「用户明确同意」这条路堵死；显式列入强制审批名单后语义才正确。
-        // 名字必须是 provider-safe 的驼峰（不能带点号），见 `packages/core/src/pii/reveal.ts`。
-        'piiReveal',
+        // 名字必须与注册表一致（0.55 起统一 snake_case `pii_reveal`，见
+        // `packages/core/src/pii/reveal.ts` 的 `PII_REVEAL_TOOL_NAME`）。
+        'pii_reveal',
       ]
     ).map(normalizeLegacyToolName),
   };
@@ -1416,6 +1418,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     registerBashJobDelivery({ service: wiring.service, logger });
     logger.info('agent.bash_job.delivery_ready', {});
     finalPluginHost.registerTool(wiring.tool);
+    // 0.55：装配收尾的工具名闸（`agent` 工具是插件装完之后才注册的，所以要在这一句之后）。
+    // 内置 / 插件工具名不合规 ⇒ 启动失败并列出全部违规项；外部（MCP）工具名只记 warning。
+    for (const warning of assertToolNameLegality(finalPluginHost, 'bootstrap.final').warnings) {
+      logger.warn('external tool name is not snake_case; passed through as-is', {
+        tool_name: warning.name,
+        suggestion: warning.suggestion,
+      });
+    }
     // 顺序契约：`main` 的 ExecutionUnit 在 spawn 时快照父宿主工具列表，
     // 必须等 `agent` 工具注册完再派生 owner，否则 main 永久缺 `agent`。
     const owner = await wiring.startOwner();

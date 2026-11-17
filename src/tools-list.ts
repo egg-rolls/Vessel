@@ -13,7 +13,13 @@ import {
   createMemberExecutionHost,
 } from '@vessel-agent/agent';
 import { loadConfig } from '../packages/config/src/index';
-import { InProcessScheduler, MemoryPluginHost, Runtime } from '../packages/core/src/index';
+import {
+  assertToolNameLegality,
+  InProcessScheduler,
+  MemoryPluginHost,
+  Runtime,
+  TOOL_NAME_ALIASES,
+} from '../packages/core/src/index';
 import { drainWebToolsWarnings } from '../plugins/tools/web-tools/src/index';
 import { resolveDataDir } from './data-paths';
 import { resolveAgentCwd } from './path-resolution';
@@ -30,6 +36,19 @@ export interface ToolsListing {
   tools: ToolSummary[];
   plugins: string[];
   warnings: string[];
+  /**
+   * 0.55：改名别名（旧名 → 现行名）。不是工具，但属于工具面契约 ——
+   * 旧名这一版还能调，命中时结果里会带一行弃用提示。
+   */
+  aliases: ToolAliasSummary[];
+}
+
+/** 一条改名别名（`--tools` / 文档同源，表见 core 的 `TOOL_NAME_ALIASES`） */
+export interface ToolAliasSummary {
+  alias: string;
+  target: string;
+  /** 计划移除的版本 */
+  removeIn: string;
 }
 
 /** 按当前配置加载插件并列出工具（只读，无副作用） */
@@ -99,5 +118,19 @@ export async function listTools(): Promise<ToolsListing> {
   // 不要在这里单独按字母序排，否则 --tools 与 /tools、Web 会给出两种顺序。
   const tools = host.listTools().map((t) => ({ name: t.name, description: t.description }));
 
-  return { tools, plugins: pluginNamesWithFactories, warnings };
+  // 0.55：装配期工具名审计（与 `installPluginsIntoHost` 同一道闸，判据同源）。
+  // `--tools` 这条路径不走插件安装循环（agent 工具是这里手工注册的），所以在这里补一次：
+  // 内置工具名不合规 ⇒ 直接抛错并列出全部违规项；外部（MCP）工具名不合规 ⇒ 只进 warnings。
+  const audit = assertToolNameLegality(host, 'vessel --tools');
+  warnings.push(...audit.warnings.map((warning) => warning.message));
+
+  // 0.55：改名别名不是「工具」，但它是工具面的**契约**（旧名还能调，且会带弃用提示），
+  // 所以要在这里列出来，而不是藏进代码里。
+  const aliases = TOOL_NAME_ALIASES.map((entry) => ({
+    alias: entry.alias,
+    target: entry.target,
+    removeIn: entry.removeIn,
+  }));
+
+  return { tools, plugins: pluginNamesWithFactories, warnings, aliases };
 }

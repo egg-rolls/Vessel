@@ -1,8 +1,8 @@
 ---
 title: 工具与权限边界
 kind: current
-triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask, mcp tool, 工具, 权限, 黑名单, 白名单, 根目录, 提问, 工具集]
-paths: [packages/core/src/types/tool.ts, plugins/tools/**, packages/agent/**]
+triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask, mcp tool, 工具, 权限, 黑名单, 白名单, 根目录, 提问, 工具集, 工具名, 命名规则, snake_case, 工具名校验, 别名, 弃用提示, pii_reveal]
+paths: [packages/core/src/types/tool.ts, packages/core/src/runtime/tool-name.ts, packages/core/src/runtime/plugin-host.ts, plugins/tools/**, packages/agent/**]
 ---
 
 # 工具与权限边界
@@ -37,6 +37,45 @@ interface ToolDefinition {
 工具是**自描述对象**：权限判定与超时随工具走，不集中在 runtime 的一张策略表里。core 里**没有 `ToolRegistry` 接口**——唯一的工具注册表是 `PluginHost` / `MemoryPluginHost`。
 
 工具的实际执行统一走 `ToolPipeline`（ADR-058）：`getTool` → ToolCall guardrail → BeforeTool hook → 权限（最终工具与参数）→ handler（timeout + signal）→ ToolResult guardrail → AfterTool hook（仅成功）。`ToolPipelineStages` 可关闭调用方已在外层处理的阶段；`ExecutionUnit`（含 delegate 子 runtime）关闭 guardrail/BeforeTool/AfterTool，只复用 permission / handler / ToolResult。
+
+<a id="tool-name-rule"></a>
+
+## 工具名命名规则：snake_case
+
+**判据（唯一真源 `packages/core/src/runtime/tool-name.ts`）**：本仓内置 / 插件工具名必须匹配
+
+```
+^[a-z][a-z0-9_]*$          // 且 ≤ 64 字符
+```
+
+即：小写字母开头，只含小写字母、数字、下划线。`web_search` / `web_fetch` / `pii_reveal` / `bash` / `read` / `edit` / `write` / `recall` / `subscribe` / `ask` / `agent` / `inbox` / `media` 都是这个形态。
+
+**为什么不是 camelCase**（`piiReveal` 这种虽然能被 provider 收下，但一律不合规）：
+
+1. **模型先验**：工具名是 prompt surface。生态里绝大多数工具名（以及模型见过的绝大多数函数名 / 表名 / JSON 字段）是 snake_case，拼错率与「同一个能力想出两种名字」的概率都更低。
+2. **与 MCP 生态一致**：MCP 的清洗层（`plugins/mcp/client/src/naming.ts`）把非 `[A-Za-z0-9_]` 一律换成 `_` 并加 `mcp__<server>__<tool>` 前缀 —— 也就是说外部工具的落地面本来就是下划线。内置工具跟它对齐，`grep` 一次就能找出「所有工具名」。
+3. **大小写不敏感环境的坑**：Windows / macOS 默认文件系统、部分注册表与环境变量都不区分大小写；`webSearch` 与 `webs_earch` 之流在大小写归一后可能撞名，而这类撞名在 Linux CI 上永远复现不出来。
+4. **grep 友好**：`piiReveal` 在日志 / 事件 / 配置 / 文档里会以 `piireveal` / `PIIReveal` / `pii_reveal` 三种形态出现，搜一个漏一个；统一后只有一种拼法。
+5. **provider 那条只是下限**：`tools[].function.name` 的硬约束是 `[a-zA-Z0-9_-]{1,64}`（点号会让**整个请求** 400）。snake_case 是它的子集，取交集的好处是：哪天接一个新 provider / 新网关，不用再回来查名字。
+
+**外部来源原样透传**：MCP server 提供的工具名是**对方的名字**，我们不改写、不转换（改写等于把「模型看到的工具」与「server 认的工具」拆成两个，出错时两头都对不上）。它们走注册表的**例外通道**：同样过同一道校验，但**只报 warning、不阻断装配**，并在装配日志 / `--tools` 的 warnings 里列出来 —— 名字我们管不了，但必须可见。注册时用 `registerTool(def, { external: true, source: 'mcp:<server>' })`。
+
+**改名必须带别名（至少一版）**：改名的登记处只有一处 —— `TOOL_NAME_ALIASES`（`alias` / `target` / `notice` / `removeIn`）。细则：
+
+- 别名解析在**注册表一处**（`MemoryPluginHost.getTool` → `getToolAlias`），不是每个工具各写一份 if；配置层（`permission.auto_approve` / `never_auto_approve`）的换算也读同一张表（`src/legacy-tool-names.ts` 只是适配层）。
+- 命中别名时**不静默**：`tool-pipeline` 把 `notice` 追加到回给模型的结果文本里（错误路径也带），例如
+  `piiReveal 已重命名为 pii_reveal（0.55 起工具名统一 snake_case）；旧名保留一版，下一版移除，请改用 pii_reveal。`
+- 别名只做**精确表查找**，禁止前缀 / 大小写归一 / 点号-下划线互换之类的模糊换算 —— 那等于允许任意别名，会把注册期的名字校验一起废掉。
+- 旧名**不写进** `listTools()` / `--tools` 的工具清单（工具面只有现行名），但 `--tools` 末尾会单列一段 `Deprecated tool-name aliases`，所以「旧名还能用、什么时候断」写在输出里，不靠口口相传。
+
+**校验落在哪（两道，都是运行时断言，不是靠人记）**：
+
+| 时机 | 判据 | 不合规的结果 |
+|---|---|---|
+| 注册期（`MemoryPluginHost.registerTool`） | snake_case + ≤64 | 内置 / 插件工具：**直接抛错**，文案带正则与建议名（`webSearch → web_search`） |
+| 装配期（`installPluginsIntoHost` 收尾 / `bootstrap` 收尾 / `--tools`） | `assertToolNameLegality(host)` 全量扫描 | 内置：抛错并**列出全部违规项**；外部：只写 warning（装配日志可见） |
+
+已知旧名（保留一版）：`piiReveal` / `pii.reveal` → `pii_reveal`；`ask_user` → `ask`。移除计划见 `TOOL_NAME_ALIASES` 的 `removeIn`。
 
 <a id="tools"></a>
 

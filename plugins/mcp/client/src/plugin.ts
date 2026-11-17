@@ -122,7 +122,12 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
         checkPermission: async () => (autoApprove.has(tool.name) ? 'allow' : 'ask'),
       };
 
-      pluginHost.registerTool(toolDefinition);
+      // 0.55：MCP 工具名是**外部名字**——原样透传，不改写；注册表照样校验它，
+      // 但不合规只记 warning（装配日志可见），不阻断装配。
+      pluginHost.registerTool(toolDefinition, {
+        external: true,
+        source: `mcp:${entry.config.name}`,
+      });
       entry.registered.push(exposed);
     }
   }
@@ -144,7 +149,11 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
         }
         return;
       }
-      pluginHost.registerTool(definition);
+      // 0.55：resources / prompts 辅助工具名同样是外部来源（server 报什么就是什么）。
+      pluginHost.registerTool(definition, {
+        external: true,
+        source: `mcp:${entry.config.name}`,
+      });
       entry.registered.push(definition.name);
     };
 

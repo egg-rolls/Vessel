@@ -9,6 +9,7 @@ import type { MemberBodyContribution, PluginPortName } from './member-port.js';
 import type { ProviderFactory } from './provider.js';
 import type { RunJournalFactory } from './run-journal.js';
 import type { ToolDefinition } from './tool.js';
+import type { ToolNameAlias, ToolNameAudit } from './tool-name.js';
 
 /**
  * Plugin 安装选项（0.6.1 E1）。
@@ -57,9 +58,23 @@ export interface ReadSideMasker {
   mask(text: string): string;
 }
 
+/**
+ * 注册工具的选项（0.55 工具名 snake_case）。
+ *
+ * `external: true` 是**外部来源通道**（MCP server / 第三方插件）：名字由对方决定，
+ * 我们原样透传、不改写，但注册表仍会校验它——不合规只报 warning（装配日志里可见），
+ * 不阻断装配。内置 / 本仓插件一律不要传它。
+ */
+export interface RegisterToolOptions {
+  /** 外部来源（MCP 等）：不合规只 warning，不阻断 */
+  external?: boolean;
+  /** 外部来源的可读标识（例如 `mcp:<server>`），只进告警文案 */
+  source?: string;
+}
+
 /** PluginHost 接口 */
 export interface PluginHost {
-  registerTool(def: ToolDefinition): void;
+  registerTool(def: ToolDefinition, options?: RegisterToolOptions): void;
   registerProvider(name: string, factory: ProviderFactory): void;
   registerGuardrail(guardrail: Guardrail): void;
   registerHook(hook: Hook): void;
@@ -108,6 +123,18 @@ export interface PluginHost {
   registerReadSideMasker?(masker: ReadSideMasker): void;
   /** 可选（0.52）：本宿主上已登记的读侧脱敏器，按登记顺序 */
   getReadSideMaskers?(): readonly ReadSideMasker[];
+  /**
+   * 可选（0.55 工具名 snake_case）：装配期审计已登记的全部工具名。
+   *
+   * 不实现的自定义宿主退化成「按 `listTools()` 全当内置工具校验」（见
+   * `assertToolNameLegality`）——外部工具的例外通道只是省掉误报，不是放宽校验。
+   */
+  auditToolNames?(): ToolNameAudit;
+  /**
+   * 可选（0.55）：按旧名查改名别名。命中且目标已注册时才有意义（表驱动，
+   * 单一真源 `TOOL_NAME_ALIASES`）。
+   */
+  getToolAlias?(name: string): ToolNameAlias | undefined;
 }
 
 /** 默认权限策略（ADR-029：未声明 checkPermission 的工具用此默认判定） */
@@ -236,7 +263,7 @@ export interface ExecutionUnitOptions {
    */
   contextPressureHint?: string;
   /**
-   * 0.18：会话事件**读口**（0.54 stop-write：只读子集，没有 `append`）。
+   * 0.18：会话事件**读口**（0.55 stop-write：只读子集，没有 `append`）。
    *
    * 提供时 runtime 用它读历史投影 / 读回判定 / 合并写 `index.json`。写入的唯一入口是
    * `RunJournal`（journal 经时间线写者落盘），EU 拿不到写权限。

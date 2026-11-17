@@ -37,6 +37,23 @@
   **尾部损坏的判定一个字节都没省**：坏行 / 坏帧 / manifest 说写完但帧缺 / 撕裂尾帧按原口径处理（尾窗里见到就整份退回）。
   口径见 [event-log-policy §7](docs/architecture/event-log-policy.md)，步骤见 [operations/GATEWAY §7](docs/operations/GATEWAY.md)。
 
+### 工具 / 运行时
+
+- **工具名统一 snake_case**（`^[a-z][a-z0-9_]*$`，≤64）：判据收在
+  `packages/core/src/runtime/tool-name.ts`（唯一真源）。之前只有 provider 那条下限
+  `[A-Za-z0-9_-]{1,64}`，所以 `piiReveal` 这种驼峰能跑但生态上不一致（模型先验、MCP 落地面、
+  大小写不敏感环境撞名、grep 搜不全）。本次改名：`piiReveal` / `pii.reveal` → **`pii_reveal`**；
+  `ask_user` → `ask`（早前遗留）。**旧名保留一版**：别名表 `TOOL_NAME_ALIASES`（一处），
+  `MemoryPluginHost.getTool` 统一解析，`tool-pipeline` 命中别名时把一行弃用提示追加进回给模型的
+  结果（错误路径也带），`--tools` 末尾单列 `Deprecated tool-name aliases`；`src/legacy-tool-names.ts`
+  改成从同一张表派生（配置层 `auto_approve` / `never_auto_approve` 的旧名换算与注册表不再各存一份）。
+  **机制级校验两道**：注册期 `registerTool` 不合规直接抛（文案带正则与建议名，`badName → bad_name`）；
+  装配期 `assertToolNameLegality` 全量扫描，挂在 `installPluginsIntoHost` 收尾、`bootstrap` 收尾、
+  `--tools` —— 内置工具违规**列出全部违规项后失败**，不再等模型调用时才炸。**外部来源（MCP）原样透传**：
+  走 `registerTool(def, { external: true, source: 'mcp:<server>' })`，同样过校验但只记 warning
+  （装配日志 + `--tools` 的 warnings 可见），名字我们改不了，但不能不可见。规则见
+  [docs/architecture/tools.md § 命名规则](docs/architecture/tools.md#tool-name-rule)。
+
 ### 客户端（WebUI）
 
 - **修：刷新/重连把整段聊天记录「从前往后」拉一遍直至 node 被看门狗重启**（2026-11-17 事故）。根因是
