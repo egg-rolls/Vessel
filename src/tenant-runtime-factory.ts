@@ -700,12 +700,11 @@ export async function buildTenantRuntime(
   });
   // 0.54 stop-write：**会话事件的唯一持久化落点 = 时间线**。
   //
-  // `sessions/<id>/events.ndjson` 从这一版起不再被写（旧格式会话仍只读冻结，见
-  // `timeline/freeze.ts`；`vessel session migrate` 是离线读，不受影响）。所以装配层
-  // **不再创建 `SessionEventLog`** —— 它在类型上还活着（旧格式会话的只读面 + 迁移工具），
-  // 但新会话一个字节都不会经过它。
+  // `sessions/<id>/events.ndjson` 从 0.54 起就不再被写；0.55 连它的读写代码一起删掉了
+  // （旧格式会话 = `legacy_session_unsupported`，见 `timeline/legacy-format.ts`），
+  // `SessionEventLog` 这份实现也不存在了。所以装配层没有任何旧日志对象可建。
   //
-  // 之前的 `timeline.dual_write` 开关没有意义了：时间线是**唯一**落盘口，关掉它就是关掉
+  // `timeline.dual_write` 开关同样没有意义：时间线是**唯一**落盘口，关掉它就是关掉
   // 整个事件的持久化。显式写 `false` 的安装会拿到一条警告（不是静默降级）。
   if (writesEventLog && timelineOptions.dualWrite === false) {
     logger.warn('timeline.dual_write=false is ignored (timeline is the only durable event sink)', {
@@ -746,8 +745,8 @@ export async function buildTenantRuntime(
    * 读；写入只有 `journalFactory`（经时间线写者）。
    *
    * `settle` 接双写旁路的 `flushSession`：块级 WAL 的活动块在内存里，不等它封块就读会
-   * 少一段在飞 chunk。冻结会话会抛 `session_frozen_readonly` —— 读口自己吞掉并降级为
-   * 「直接读磁盘」（旧格式会话的 timeline 本来就是空的，读不到是正确结果）。
+   * 少一段在飞 chunk。旧格式会话会抛 `legacy_session_unsupported` —— 读口自己吞掉并降级为
+   * 「直接读磁盘」，随后由 `read()` / `heads()` 自己把这条错误报给用户（不能当成空会话）。
    */
   const timelineLog: TimelineEventLog | undefined = writesEventLog
     ? new TimelineEventLog({

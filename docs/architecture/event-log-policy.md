@@ -1,8 +1,8 @@
 ---
 title: 会话事件日志落盘口径
 kind: current
-triggers: [event log, llm.request, stream summary, persist, resume, projection, ttft, chunk_count, 事件, 事件日志, 事件流, 落盘, 落盘策略, 裁剪, 回放, 体积上界, 投影, timeline, wal, 瞬时 chunk, 冻结, session_frozen_readonly, 旧格式, 迁移, events.ndjson]
-paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.ts, packages/core/src/timeline/freeze.ts, packages/core/src/runtime/run-journal.ts, packages/core/src/runtime/execution-unit.ts, apps/web/src/state/events.ts, apps/web/src/state/event-visibility.ts]
+triggers: [event log, llm.request, stream summary, persist, resume, projection, ttft, chunk_count, 事件, 事件日志, 事件流, 落盘, 落盘策略, 裁剪, 回放, 体积上界, 投影, timeline, wal, 瞬时 chunk, legacy_session_unsupported, 旧格式, events.ndjson]
+paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.ts, packages/core/src/timeline/legacy-format.ts, packages/core/src/runtime/run-journal.ts, packages/core/src/runtime/execution-unit.ts, apps/web/src/state/events.ts, apps/web/src/state/event-visibility.ts]
 ---
 
 # 会话事件日志落盘口径
@@ -12,27 +12,30 @@ paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.
 > 写盘那一份由写者决定 —— 新格式是 `packages/core/src/timeline/writer.ts`，旧链路时代是
 > `RunJournal` 的 `NON_PERSISTED_EVENT_TYPES` + `persistData` + `stripRequestContent`。
 
-## 1. 会话只有两种格式，旧格式是过渡件
+## 1. 会话只有一种格式：旧格式在 0.55 已经不存在
 
-时间序（目标态 = **全库只有一种格式**）：
+| 会话 | 事实源 | 怎么读 |
+|---|---|---|
+| **0.55 格式**（会话目录有 `timeline.manifest` / `wal.manifest` / `wal.log` 任一） | 只有 timeline：`wal.log`（非 chunk 一事件一行）、`wal.blocks/`（chunk 块）、归档段 `timeline.ndjson` | 单游标 + 单区间（[session-replay.md](session-replay.md)） |
+| **0.54 之前的旧格式**（只有 `events.ndjson`、无任何 timeline 标记） | `events.ndjson` | **不再支持**：读、写、迁移都抛 `legacy_session_unsupported` |
 
-| 阶段 | 会话 | 事实源 | 怎么读 |
-|---|---|---|---|
-| 现状 | **新格式**（会话目录有 `timeline.manifest`） | 只有 timeline：`wal.log`（非 chunk 一事件一行）、`wal.blocks/`（chunk 块）、归档段 `timeline.ndjson` | 单游标 + 单区间（[session-replay.md](session-replay.md)） |
-| 现状 | **旧格式**（只有 `events.ndjson`、无任何 timeline 标记） | `events.ndjson`（0.54 之前的唯一真相源） | **只读冻结**：写者开档即抛 `session_frozen_readonly` |
-| 目标 | 旧格式会话**一次性迁移**成新格式 | 迁移后同上 | 迁移跑完 ⇒ **旧读路径删除，全库只有一种格式** |
+0.55 把 `events.ndjson` 的**读写两条路全部删除**了（`packages/core/src/session/session-event-log.ts`
+整文件、`vessel session migrate` 命令、`timeline/freeze.ts` 的只读冻结）。旧格式的判据仍然只有一处：
+`packages/core/src/timeline/legacy-format.ts`（有 `events.ndjson` 且 `timeline.manifest` /
+`wal.manifest` / `wal.log` 三者皆无），闸门 `assertSessionFormatSupported` 在读口
+（`TimelineEventLog.read`）、写者 `open()`、索引写回（`writeIndexSnapshot`）三处调用，抛
+`legacy_session_unsupported`。**它不再是「只读冻结」**：那套文件已经没有任何代码能解析，
+「只读」这个中间态只会让人以为历史还在。错误码表（serve / rpc）同步改成
+`legacy_session_unsupported`，`session_frozen_readonly` 已删除。
 
-旧格式的判据只有一处：`packages/core/src/timeline/freeze.ts#isLegacyFrozenSessionDir`（有 `events.ndjson` 且
-`timeline.manifest` / `wal.manifest` / `wal.log` 三者皆无）；写前闸门 `assertTimelineWritable`（同文件 `:81`）抛
-`session_frozen_readonly`。**它计划被删除**，删除前提是「旧会话一次性迁移」完成 —— 迁移入口计划为
-`vessel session migrate`（**未实现**：`src/cli-help-spec.ts` 的 `CLI_HELP_COMMANDS` 里没有 `session` 组；
-ADR-105 D4 记的是「不做迁移、只读冻结到 0.55.0」，本文按迁移后的目标态写，ADR 正文不改）。
-迁移**不带来**流式增量：`llm.stream.chunk` 从不进 `events.ndjson`，只活在进程内环；正文与思考在
-`llm.response` 里，所以旧会话**可读性不受影响**，只是没有逐字回放。
+**用户看到什么**：`sessions.get` / `sessions.events` / `events.subscribe{after_timeline_seq}` 会拿到
+`legacy_session_unsupported`，文案写明「0.55 不读、不写、不迁移这种目录；用 0.54 导出后再用 0.55 打开」。
+**没有任何静默降级**：不把它当成空会话（那会让人以为历史丢了却不给原因）。
 
-新格式下 `events.ndjson` **停止增长**：它不是事实源，也不再被任何写路径追加；留着只为旧格式的只读读路径，
-随旧会话一起退出（判据同上，`TIMELINE_MARKERS` 三个标记任一存在即「有 timeline」；文件名常量见
-`packages/core/src/timeline/types.ts:22-42` 的 `TIMELINE_LAYOUT`）。
+**已知遗留（不在本单范围）**：`plugins/observability/usage` 仍把 `sessions/<id>/events.ndjson` 当数据源
+（`src/store.ts` 的 `SESSION_LOG`）。它在 0.54 停写之后就已经在读一个不再增长的文件 —— 删除
+`events.ndjson` 之后它的数据面彻底不可用，将单独一单迁到时间线。所以 `vessel 插件 → 用量 / 请求日志`
+页面在 0.55 里**是空的**，不是「新 bug」，是这条遗留的可见后果。
 
 <a id="not-persisted"></a>
 

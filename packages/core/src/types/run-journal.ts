@@ -98,7 +98,7 @@ export interface TimelineDualWritePort {
    * 等到该会话已派发的事件真正落盘（journal.flush 用）。
    *
    * 与 `record()` 不同，这里**允许**抛：调用方（journal）自己兜住并降级
-   * （冻结会话抛 `session_frozen_readonly`，那不是故障）。
+   * （旧格式会话抛 `legacy_session_unsupported`，那不是故障）。
    */
   flushSession?(sessionId: string): Promise<void>;
 }

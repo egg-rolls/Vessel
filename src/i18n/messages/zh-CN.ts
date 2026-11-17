@@ -497,9 +497,6 @@ export const zhCN = {
   // ── prune（0.51；判据是状态，不是时间）──
   'help.cmd.prune':
     '数据清理：已归档 team / 已停用 agent 及其会话与记录（缺省 dry-run，需 --yes 才删）',
-  // ── session migrate（0.54 C2：旧格式一次性迁移到时间线单源）──
-  'help.cmd.sessionMigrate':
-    '把旧格式会话（只有 events.ndjson）一次性迁移到时间线单源；单向、可重入，源文件保留不删',
   'flag.olderThan':
     '可选叠加：只清归档 / 停用时刻早于该值的对象（如 30d / 12h；裸数字按天；不传就不看时间）',
   'prune.head.dryRun': 'dry-run：未删除任何内容（确认后加 --yes 重试）',

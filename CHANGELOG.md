@@ -59,6 +59,29 @@
   （token 永不打印这条不变）、`vessel doctor` 的 `config` 一行直接显示这条错误（状态 `fail`）。
   口径见 [operations/CONFIG §2.0](docs/operations/CONFIG.md)、[operations/REMOTE §3.1](docs/operations/REMOTE.md)。
 
+- **`events.ndjson` 的读写代码全删（0.55）：0.54 之前的会话格式不再支持**
+  - 删了什么：`packages/core/src/session/session-event-log.ts`（整文件，旧日志实现）、
+    `tenant-paths.ts#sessionEventsFilePath`、`timeline/freeze.ts`（只读冻结整块）、
+    `TimelineWriter` 的 `adoptLegacyShapedSession`、`src/session-migrate.ts` +
+    `src/session-migrate-command.ts` 与 CLI 的 `vessel session migrate`（含 help / completion /
+    i18n 条目）、双写旁路里的 `frozenSessions` / `counters.frozen_sessions` 与两层时间推断
+    （构造时快照 + 旧日志首条 `ts`）。
+  - 现在会怎么坏：**旧格式会话（只有 `events.ndjson`、无任何 timeline 标记）读不了**。
+    `sessions.get` / `sessions.events` / `events.subscribe{after_timeline_seq}` 会拿到
+    `legacy_session_unsupported`（取代 `session_frozen_readonly`，serve / rpc / core 三张错误码表同步），
+    文案写明「不读、不写、不迁移；用 0.54 导出后再用 0.55 打开」。**不静默降级成空会话**
+    —— 那会让人以为历史丢了却不给原因。写侧同样拒绝（避免造出半新半旧的目录）。
+    判据仍只有一处：`packages/core/src/timeline/legacy-format.ts#assertSessionFormatSupported`，
+    读口 / 写者 `open()` / 索引写回三处调用。
+  - 用户该怎么办：旧备份或老数据目录先用 **0.54** 跑一次 `vessel session migrate <id>|--all`
+    （或直接用 0.54 打开把会话导出来），再把产物交给 0.55；0.55 自己不读、不写、不迁移。
+    0.55 起**没有** `vessel session migrate` 这个命令了。
+  - 口径见 [event-log-policy §1](docs/architecture/event-log-policy.md)。
+  - **已知遗留（不在本单范围）**：`plugins/observability/usage` 仍依赖
+    `sessions/<id>/events.ndjson`（`src/store.ts` 的 `SESSION_LOG`）。它在 0.54 停写之后就已经
+    在读一个不再增长的文件；0.55 删掉这份文件之后其**数据面不再可用**（用量 / 请求日志页会是空的），
+    将单独迁移到时间线。
+
 ## [0.54.0] - 2026-11-16
 
 > 本节按 0.54 迁移判据 B-4

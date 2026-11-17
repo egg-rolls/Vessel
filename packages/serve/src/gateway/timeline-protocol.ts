@@ -43,9 +43,10 @@
  * 与 session timeline_seq）绝不混在同一个 epoch 里（ADR-105 §9 R7）。
  *
  * **0.54 C：`timeline.read_from` 开关已删除。** 它只服务 B 阶段的 48 小时回退窗口；
- * 0.54 之后没有第二个读源可回退（旧格式会话已全部迁到时间线，`freeze.ts` 只剩写保护），
- * 留着这个开关就会留下一条"读旧源"的活路径。`timeline_source` 这个**帧字段**保留：
- * 它描述的是「本 epoch 是哪一种订阅」（时间线段 / 老环形），与开关不是一回事。
+ * 那之后没有第二个读源可回退，留着这个开关就会留下一条"读旧源"的活路径。
+ * `timeline_source` 这个**帧字段**在 0.54 保留过一版（描述「本 epoch 是哪一种订阅」），
+ * 0.55 也删掉了：客户端改判「`hello.timeline` 在不在」（见 `apps/web` 的
+ * `readHelloTimelineSegment`），线上帧不再有这个键。
  *
  * @module @vessel-agent/serve/gateway/timeline-protocol
  */
@@ -322,14 +323,14 @@ export interface TimelineSubscribeInput {
 /**
  * 「还没有任何 timeline 标记」的读面形状：空段 `[1..0]`、`wal_head = 0`、无洞。
  *
- * 0.54 C 之前这个情形被报成 `session_frozen_readonly`（理由是「有旧日志、没有时间线标记
- * ⇒ 旧格式会话」）。全库会话迁完之后这条推理不成立了：一个刚建好、还没写第一条事件的
- * 会话在磁盘上与「旧格式会话」形状相同，而把它报成"只读冻结"是一句**假事实**（用户看到
- * 的是「这个会话坏了」，实际只是还没开始）。所以这里给空段：客户端拿到的声明就是
- * 「0 条可读，等实时尾」，而 `(published_head, wal_head]` 的语义不受影响（都是 0）。
+ * 这个形状**只**表示「一个新会话，还没写第一条事件」：那种目录磁盘上就是空的，把它报成
+ * 「坏了」是假事实（用户看到的是「这个会话坏了」，实际只是还没开始）。客户端拿到的声明
+ * 就是「0 条可读，等实时尾」，`(published_head, wal_head]` 的语义不受影响（都是 0）。
  *
- * 真的旧格式会话怎么做：写路径仍由 `packages/core/src/timeline/freeze.ts` 拒绝
- * （`session_frozen_readonly`，防御性）；读路径不再有旧源可回退，这是 0.54 的已知取舍。
+ * **0.55：真正的旧格式会话不再走到这里。** 「有 `events.ndjson`、没有任何 timeline 标记」
+ * 由 `packages/core/src/timeline/legacy-format.ts` 判成 `legacy_session_unsupported`，
+ * 并在 `timelineHeads.lookup` 那一层**抛出来**（不再是 0.54 的「读面给空段、写面拒绝」）：
+ * 那套文件已经没有代码能解析，报成空会话等于告诉用户「历史没了」却不给原因。
  */
 export const EMPTY_TIMELINE_HEADS: TimelineHeadsLike = {
   timeline_head: 0,
@@ -341,6 +342,31 @@ export const EMPTY_TIMELINE_HEADS: TimelineHeadsLike = {
 
 /** 订阅裁决的错误码：两个都是协议里已有的稳定码，不新增同义码。 */
 export type TimelineSubscribeRejectCode = 'timeline_unavailable' | 'invalid_params';
+
+/**
+ * 这个错误是不是「0.54 之前的旧格式会话」（core 的 `legacy_session_unsupported`）。
+ *
+ * 为什么要在 serve 侧认这个码：`timelineHeads.lookup` 走的是 core 的读口，它会为旧格式目录
+ * 抛错；serve 必须把这条错误**原样升级成协议错误码**（`RpcError('legacy_session_unsupported')`），
+ * 而不是让它变成一个 `internal_error` —— 用户要看到的是「这个会话是 0.54 之前的格式，去用
+ * 0.54 导出」，不是「服务端内部错误」。
+ *
+ * 判据只认 `code` 字符串（不 `instanceof`）：serve 不 import core 的错误类，两边靠**冻结的
+ * 错误码**对齐，这也是 `packages/serve/src/protocol.ts` 里那个码的用途。
+ */
+export function isLegacySessionUnsupported(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === 'legacy_session_unsupported'
+  );
+}
+
+/** 旧格式会话错误的用户可读文案（`message` 原样透传，去掉 core 的 `<code>: ` 前缀）。 */
+export function legacySessionUnsupportedMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw.replace(/^legacy_session_unsupported:\s*/, '');
+}
 
 /**
  * 订阅时「这一趟读哪个源」的裁决（**纯函数**，由调用方负责那次 `lookup`）。
@@ -357,7 +383,8 @@ export type TimelineSubscribeRejectCode = 'timeline_unavailable' | 'invalid_para
  *    **不**回落到环形缓冲——那会让帧带另一套 seq，客户端四条校验必然全红。
  * 6. `lookup` 返回 `undefined` ⇒ 空段（{@link EMPTY_TIMELINE_HEADS}），**不是**拒绝：
  *    0.54 C 删掉了 `timeline.read_from` 回退开关，读路径只剩时间线一个源，而「没有标记」
- *    只意味着「还没有事件」。旧格式只读冻结只剩写路径（`freeze.ts`，防御性拒绝）。
+ *    只意味着「还没有事件」。（真正的旧格式会话不会走到这里：`timelineHeads.lookup` 自己
+ *    抛 `legacy_session_unsupported`，见 `packages/core/src/timeline/legacy-format.ts`。）
  */
 export function decideTimelineSubscribe(input: TimelineSubscribeInput): TimelineSubscribeDecision {
   if (input.afterTimelineSeq === undefined) return { kind: 'legacy' };
@@ -389,7 +416,7 @@ export function decideTimelineSubscribe(input: TimelineSubscribeInput): Timeline
       message: '服务端未装配 timeline 分页读端口（timelineRead 端口缺失）：拒绝回落到环形 seq',
     };
   }
-  // 「没有标记」⇒ 空段，不是拒绝（0.54 C：`session_frozen_readonly` 不再是读分支）。
+  // 「没有标记」⇒ 空段，不是拒绝（真旧格式会话由 `lookup` 抛 `legacy_session_unsupported`）。
   return { kind: 'timeline', heads: input.heads ?? EMPTY_TIMELINE_HEADS };
 }
 

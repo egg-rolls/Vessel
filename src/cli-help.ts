@@ -397,7 +397,6 @@ export function renderGlobalHelp(): string {
   const migrate: Array<[string, string]> = [
     ['vessel migrate --from sqlite --to file-v2', t('help.cmd.migrate')],
     ['vessel migrate --from file-v1 --to file-v2 --apply', t('help.cmd.migrateApply')],
-    ['vessel session migrate <session_id>|--all [--dry-run]', t('help.cmd.sessionMigrate')],
     ['vessel trace prune --dry-run', t('help.cmd.tracePrune')],
     ['vessel prune [--older-than <dur>] [--yes]', t('help.cmd.prune')],
   ];

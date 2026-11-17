@@ -66,8 +66,11 @@ import { type AttachmentLister, createAttachmentMethods } from './gateway/method
 import {
   decideTimelineSubscribe,
   declareEpochChunk,
+  isLegacySessionUnsupported,
+  legacySessionUnsupportedMessage,
   selectTimelinePage,
   TIMELINE_PAGE_LIMIT,
+  type TimelineHeadsLike,
   type TimelineHelloSegment,
   type TimelineReadPort,
   type TimelineRunEventsPort,
@@ -2465,6 +2468,23 @@ export function startGateway(opts: GatewayOptions): Gateway {
         if (afterTimelineSeq === undefined) {
           return legacyResult(typeof params.since === 'number' ? params.since : 0);
         }
+        // 0.55：旧格式会话（`events.ndjson` only）在这里**升级成协议错误码**，不降级成空段。
+        // `lookup` 是 core 的读口，它会抛 `legacy_session_unsupported`；原样变成
+        // `RpcError('legacy_session_unsupported')`，用户看到的是「去用 0.54 导出」。
+        const headsForSession = async (): Promise<TimelineHeadsLike | undefined> => {
+          if (opts.timelineHeads === undefined || sessionId === undefined) return undefined;
+          try {
+            return await opts.timelineHeads.lookup(sessionId);
+          } catch (error) {
+            if (isLegacySessionUnsupported(error)) {
+              throw new RpcError(
+                'legacy_session_unsupported',
+                legacySessionUnsupportedMessage(error),
+              );
+            }
+            throw error;
+          }
+        };
         const decision = decideTimelineSubscribe({
           afterTimelineSeq,
           sinceGiven:
@@ -2475,10 +2495,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
             (Array.isArray(params.types) && params.types.length > 0),
           sessionId,
           headsInjected: opts.timelineHeads !== undefined,
-          heads:
-            opts.timelineHeads !== undefined && sessionId !== undefined
-              ? await opts.timelineHeads.lookup(sessionId)
-              : undefined,
+          heads: await headsForSession(),
           readPortInjected: opts.timelineRead !== undefined,
         });
         if (decision.kind === 'legacy') {
