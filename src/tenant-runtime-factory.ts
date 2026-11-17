@@ -512,7 +512,8 @@ function contextConfigFor(config: VesselConfig, summarizer: ContextSummarizer | 
  * 老配置兼容：用户 YAML 的 `auto_approve` / `never_auto_approve` 里可能仍写着工具**旧名**
  * （`ask_user` / `pii.reveal`）—— 统一由 `normalizeLegacyToolName` 换算成现行名。
  *
- * 表在 `src/legacy-tool-names.ts`（单一真源，与 `scripts/check-tool-name-aliases.ts` 共用）。
+ * 表在 `src/legacy-tool-names.ts`（适配层），真源是 core 的
+ * `packages/core/src/runtime/tool-name.ts::TOOL_NAME_ALIASES`（注册表的别名解析与这里同源）。
  * 不换算的后果正是 L-011 那类事故的另一面：注册侧改了、选择侧不认，而且没有报错，
  * 用户当年选的「always / never」静默失效。
  */

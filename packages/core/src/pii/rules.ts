@@ -369,7 +369,7 @@ const PII_FAILURE_NEXT_STEP: Record<PiiHandleFailureReason, string> = {
   invalidated_handle:
     'PII handles were invalidated in bulk because the in-memory broker restarted; old placeholders from the ' +
     'previous process can never be resolved again. The call was rejected before it ran, nothing was forwarded. ' +
-    'Next: re-fetch the source data to obtain new handles; if a raw value must be surfaced, request piiReveal ' +
+    'Next: re-fetch the source data to obtain new handles; if a raw value must be surfaced, request pii_reveal ' +
     'again after the re-fetch (it needs human approval).',
 };
 

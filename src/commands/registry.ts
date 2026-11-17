@@ -91,12 +91,19 @@ async function resolveCommandContext(): Promise<{ dataDir: string; config: Vesse
 
 /** `--tools`：列出当前配置下的工具（headless 口径，不需要 Key） */
 async function printTools(): Promise<void> {
-  const { tools, warnings } = await listTools();
+  const { tools, warnings, aliases } = await listTools();
   for (const w of warnings) console.warn(`⚠ ${w}`);
   console.log(ui.section(`Tools (${tools.length}):`));
   for (const t of tools) console.log(`  - ${t.name}: ${t.description}`);
   // 0.33：headless 也注册 ask（请求落盘后挂起），这里仍不展开它的 schema。
   console.log('ask (interactive REPL / gateway / headless-async; not listed here)');
+  // 0.55：旧名不是工具，只在这一版还能用；列出来是为了「改名不静默」。
+  if (aliases.length > 0) {
+    console.log(ui.section('Deprecated tool-name aliases (still accepted, removed next version):'));
+    for (const a of aliases) {
+      console.log(`  - ${a.alias} → ${a.target} (deprecated, removed in ${a.removeIn})`);
+    }
+  }
 }
 
 /**

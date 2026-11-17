@@ -60,9 +60,14 @@ export interface ToolDisplay {
  */
 export interface ToolDefinition {
   /**
-   * 工具名：原样进 provider 的 `tools[].function.name`，所以必须是
-   * `^[a-zA-Z0-9_-]{1,64}$`（OpenAI 兼容接口与 Anthropic 的共同约束；
-   * 点号等字符会让整个请求 400）。`MemoryPluginHost.registerTool` 在注册期校验。
+   * 工具名：原样进 provider 的 `tools[].function.name`。
+   *
+   * 0.55 起本仓工具名统一 **snake_case**：`^[a-z][a-z0-9_]*$`（≤64 字符），判据的唯一真源是
+   * `packages/core/src/runtime/tool-name.ts`。它同时满足 provider 的硬约束
+   * `^[a-zA-Z0-9_-]{1,64}$`（OpenAI 兼容接口与 Anthropic 的共同约束；点号等字符会让整个
+   * 请求 400）。`MemoryPluginHost.registerTool` 在注册期校验，装配期还有一道全量审计
+   * （`assertToolNameLegality`）；外部来源（MCP）的名字原样透传，只告警不阻断。
+   * 规则见 `docs/architecture/tools.md`「命名规则」。
    */
   name: string;
   description: string;

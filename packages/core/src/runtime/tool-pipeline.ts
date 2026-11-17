@@ -168,13 +168,28 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
       };
 
       let toolCall = options.toolCall;
-      let toolName = toolCall.function.name;
+      /**
+       * 0.55：工具名别名（旧名 → 现行名）。
+       *
+       * 表在注册表里（`TOOL_NAME_ALIASES`，一处），这里只消费结果：
+       * - `toolName` 一律换成**现行名**再往下走（权限规则 / hook / 事件都对新名生效，
+       *   否则「改名后旧名还能绕开 auto_approve 之外的新规则」是很难查的一类问题）；
+       * - `aliasNotice` 在结果里附一行弃用提示 —— **不静默**，模型和人都能看见。
+       */
+      const requestedName = toolCall.function.name;
+      const requestedAlias = pluginHost.getToolAlias?.(requestedName);
+      let aliasNotice = requestedAlias?.notice;
+      let toolName = requestedAlias?.target ?? requestedName;
       let args = options.args;
+
+      /** 命中别名时把弃用提示追加到回给模型的文本（错误路径也带，免得「静默失败」）。 */
+      const withAliasNotice = (text: string): string =>
+        aliasNotice === undefined ? text : `${text}\n${aliasNotice}`;
 
       const fail = (error: string): ToolPipelineResult => ({
         ok: false,
         input: args,
-        content: error,
+        content: withAliasNotice(error),
         error,
       });
 
@@ -213,7 +228,10 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
           const argsChanged = replacement.function.arguments !== toolCall.function.arguments;
           toolCall = replacement;
           if (nameChanged || argsChanged) {
-            toolName = replacement.function.name;
+            // 0.55：改写后的名字重新过别名表（guardrail 可能写成旧名，语义同入口一次）。
+            const replacementAlias = pluginHost.getToolAlias?.(replacement.function.name);
+            toolName = replacementAlias?.target ?? replacement.function.name;
+            aliasNotice = replacementAlias?.notice;
             try {
               args = replacement.function.arguments
                 ? JSON.parse(replacement.function.arguments)
@@ -317,7 +335,7 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
       return {
         ok: true,
         input: args,
-        content: result,
+        content: withAliasNotice(result),
         ...(resultBounded
           ? { bounded: true as const, original_chars: resultOriginalChars ?? result.length }
           : {}),

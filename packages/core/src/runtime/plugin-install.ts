@@ -11,6 +11,7 @@
 import type { RunEvent } from '../types/event.js';
 import type { Logger } from '../types/logging.js';
 import type { Plugin, PluginHost } from '../types/plugin.js';
+import { assertToolNameLegality } from './tool-name.js';
 
 /** 一次安装的句柄：已安装插件（安装顺序）+ 逆序 dispose。 */
 export interface InstalledPlugins {
@@ -90,6 +91,23 @@ export async function installPluginsIntoHost(
         ts: Date.now(),
       });
     }
+  }
+
+  // 0.55 工具名审计（装配期的**唯一闸**：EU / Assembly / tenant 装配都经过这里）。
+  //
+  // 为什么在装配收尾而不是「等模型调错工具」：工具名原样进 provider 的
+  // `tools[].function.name`，不合规会让**整个请求** 400 —— 失败粒度是整条会话，
+  // 不是那一个工具。所以内置 / 插件工具名不合规一律在这里抛错，并列出全部违规项 + 建议名；
+  // 外部来源（MCP server 等）的名字由对方决定，我们原样透传，同样校验但只记 warning
+  // —— 判据一致，只是「我们改不了」这件事要在日志里看得见。
+  const audit = assertToolNameLegality(opts.host, 'plugin assembly');
+  for (const warning of audit.warnings) {
+    opts.logger?.warn('external tool name is not snake_case; passed through as-is', {
+      tool_name: warning.name,
+      suggestion: warning.suggestion,
+      source: warning.external ? 'external' : 'internal',
+      detail: warning.message,
+    });
   }
 
   return {
