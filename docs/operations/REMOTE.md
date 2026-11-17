@@ -88,12 +88,26 @@ connect:
 
 ### 3.1 node-b：暴露 Node API
 
+> **`serve:` 已改名为 `node:`（0.56）。** 旧键仍然生效（同一份字段、同一套行为），
+> 但启动会打一条弃用警告、`vessel doctor` 也会提示；**0.57 移除 `serve:`**。
+> 两段同时出现时 **`node:` 赢**，被覆盖的 `serve:` 键会被逐项警告。迁移就是改名：
+
+```diff
+-serve:
++node:
+   hostname: 0.0.0.0
+   port: 8644
+```
+
+理由：`vessel serve` 这个命令早就不存在了（0.49 起只有 `vessel node start`），
+`serve:` 这个名字会让人以为它在配一个不存在的东西。
+
 ```yaml
 # ~/.vessel/config.yaml（node-b）
 host:
   node_id: node-b
 
-serve:
+node:            # 等价于旧键 serve:
   hostname: 0.0.0.0
   port: 8644
   allow_remote: true
@@ -115,14 +129,23 @@ export VESSEL_NODE_TOKEN='<node-b-token>'
 vessel node start --config /etc/vessel/node-b.yaml
 ```
 
+**一个 token 都不用写**：不配 `node.token`: / `node.token_env` 时，node 会从
+`<dataDir>/root-secret`（首次启动自动生成，0600）派生 `vessel:node:<node_id>`。
+需要读出来填进别的系统时：
+
+```bash
+vessel token show --purpose node --node node-b     # 只回环 + 交互式终端才打印值
+```
+
 要点：
 
 - `host.node_id` 必须唯一；federation peer 的 `node_id` 必须与它一致。
-- 非回环必须 `allow_remote: true` + token + TLS；否则启动失败。
-- 节点 token 可用 `serve.tokens` 分角色（只含 `role`）：
+- 非回环必须 `allow_remote: true` + token + TLS；否则启动失败。**token 现在可以是派生值**
+  （派生值不是「没配」，非回环仍然要求客户端出示它）。
+- 节点 token 可用 `node.tokens` 分角色（只含 `role`）：
 
 ```yaml
-serve:
+node:
   tokens:
     "<node-b-read-token>": { role: read }
     "<node-b-write-token>": { role: write }

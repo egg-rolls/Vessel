@@ -1583,11 +1583,16 @@ export function findExplicitSecretPaths(config: Record<string, unknown>, prefix 
   check(config.provider, 'apiKey', 'provider.apiKey');
   check(config.feishu, 'appSecret', 'feishu.appSecret');
   check(config.serve, 'token', 'serve.token');
+  // 0.56：`node:` 是 `serve:` 的规范新名，同样是密钥（项目层只允许 `_env` 形式）。
+  check(config.node, 'token', 'node.token');
   check(config.gateway, 'token', 'gateway.token');
   check(config.transport, 'token', 'transport.token');
   check(config.connect, 'token', 'connect.token');
   if (isPlainObject(config.serve) && isPlainObject(config.serve.tokens)) {
     if (Object.keys(config.serve.tokens).length > 0) found.push(at('serve.tokens'));
+  }
+  if (isPlainObject(config.node) && isPlainObject(config.node.tokens)) {
+    if (Object.keys(config.node.tokens).length > 0) found.push(at('node.tokens'));
   }
   return found;
 }
@@ -2569,6 +2574,40 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     validateServeSettings(config.serve, errors);
   }
 
+  // 0.56：`node:` 段（`serve:` 的规范新名）。loader 已把它归一化进 `serve`，
+  // 这里兜住「直接构造 / CLI 覆盖层只写了 node:」的配置。错误路径改写成 node.*，
+  // 保证用户看到的键名和自己写的一致（否则会去改一个不存在的 serve 段）。
+  if (config.node !== undefined) {
+    if (!isPlainObject(config.node)) {
+      errors.push({ path: 'node', message: 'node must be an object' });
+    } else {
+      const nodeErrors: ConfigValidationError[] = [];
+      validateServeSettings(config.node as ServeConfig, nodeErrors);
+      for (const error of nodeErrors) {
+        errors.push({
+          ...error,
+          path: error.path.startsWith('serve.')
+            ? `node.${error.path.slice('serve.'.length)}`
+            : error.path,
+          message: error.message.replaceAll('serve.', 'node.'),
+        });
+      }
+    }
+  }
+
+  // 0.56：单一根密钥（只校验环境变量名形状，不读值）
+  if (config.security !== undefined) {
+    if (!isPlainObject(config.security)) {
+      errors.push({ path: 'security', message: 'security must be an object' });
+    } else {
+      validateEnvName(
+        'security.rootSecretEnv',
+        (config.security as Record<string, unknown>).rootSecretEnv,
+        errors,
+      );
+    }
+  }
+
   // 校验 gateway（0.49；平台侧，与 serve 分区）
   if (config.gateway !== undefined) {
     if (!isPlainObject(config.gateway)) {
@@ -2749,6 +2788,20 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'pluginHttp',
     'proxySecretEnv',
   ],
+  // 0.56：`node:` 与 `serve:` 同形（规范名 / 兼容别名）。
+  node: [
+    'hostname',
+    'allowedOrigins',
+    'port',
+    'allowRemote',
+    'tls',
+    'token',
+    'tokenEnv',
+    'tokens',
+    'pluginHttp',
+    'proxySecretEnv',
+  ],
+  security: ['rootSecretEnv'],
   gateway: ['port', 'hostname', 'token', 'tokenEnv', 'allowedOrigins', 'proxySecretEnv'],
   connect: ['token', 'tokenEnv', 'caFile'],
   attention: ['nodes'],
@@ -2910,6 +2963,10 @@ export const KNOWN_CONFIG_KEYS = [
   'mcpServers',
   'durable',
   'serve',
+  // 0.56：`node:` 是 `serve:` 的规范新名（loader 归一化；`serve` 为兼容别名）。
+  'node',
+  // 0.56：单一根密钥覆盖点（`security.root_secret_env`）。
+  'security',
   'gateway',
   'hub',
   'evals',

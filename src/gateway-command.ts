@@ -22,7 +22,6 @@ import {
   loadConfig,
   resolveGatewayNodePorts,
   resolvePlatformProxySecret,
-  resolvePlatformToken,
   type VesselConfig,
 } from '../packages/config/src/index';
 import { platformListenGuard, startPlatformGateway } from '../packages/serve/src/index';
@@ -86,6 +85,8 @@ import { readHubLockFile } from './hub/runtime';
 import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from './hub/server';
 import { t } from './i18n';
 import { createHttpRpcClient } from './rpc/http-client';
+// 0.56：派生 token（显式配置永远优先；未配置时自动派生，绝不再「未配置就挂」）。
+import { effectiveNodeToken, effectivePlatformToken } from './token-derive';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
@@ -133,7 +134,18 @@ interface ResolvedContext {
 }
 
 async function resolveContext(deps: GatewayCommandDeps): Promise<ResolvedContext> {
-  const config = deps.config ?? (await loadConfig()).config;
+  let config: VesselConfig;
+  if (deps.config !== undefined) {
+    config = deps.config;
+  } else {
+    const loaded = await loadConfig();
+    config = loaded.config;
+    // 0.56：配置层警告（`serve:` 已改名 `node:`、`node:`/`serve:` 同时出现等）
+    // 必须在 gateway 上也可见 —— 否则只有 REPL / `config show` 会提示，运维看不到。
+    for (const warning of loaded.validation.warnings) {
+      (deps.printErr ?? console.error)(ui.warn(`⚠ ${warning.message}`));
+    }
+  }
   const env = deps.env ?? process.env;
   return {
     dataDir: deps.dataDir ?? resolveDataDir(config, env),
@@ -249,11 +261,16 @@ function platformListenError(
   env: Record<string, string | undefined>,
   hostname: string | undefined,
   port: number | undefined,
+  dataDir: string,
 ): string | null {
+  // 0.56：先解析**生效**平台 token（显式 > 派生）。派生值让「非回环必须有 token」
+  // 这条前置自动成立；根密钥不可用（权限过宽等）时直接给出可操作原因。
+  const resolved = effectivePlatformToken({ config, dataDir, env });
+  if (!resolved.ok) return `${resolved.code}: ${resolved.message}`;
   return platformListenGuard({
     hostname: hostname ?? config.gateway?.hostname ?? DEFAULT_GATEWAY_OPTIONS.hostname,
     port: port ?? config.gateway?.port ?? DEFAULT_GATEWAY_OPTIONS.port,
-    platformToken: resolvePlatformToken(config, env),
+    platformToken: resolved.value.token,
   });
 }
 
@@ -1684,6 +1701,7 @@ async function startDaemonCommand(
       context.env,
       options.host,
       options.port,
+      context.dataDir,
     );
     if (listenError !== null) {
       printErr(ui.err(listenError));
@@ -2043,7 +2061,18 @@ async function resolveLocalNodes(options: {
     if (implicit) {
       // 隐式单节点：全局配置 + G1 同 token 行为（允许与平台同源）。
       nodeConfig = options.config;
-      token = resolveGatewayToken(options.config, options.env);
+      // 0.56：隐式节点的 data_dir 就是 gateway data_dir，「代算」与「node 自己现算」
+      // 用的是同一份 root + 同一个 node_id ⇒ 值必然一致。
+      const implicitToken = effectiveNodeToken({
+        config: options.config,
+        dataDir: entry.data_dir,
+        nodeId: entry.node_id,
+        env: options.env,
+      });
+      if (!implicitToken.ok) {
+        throw new LocalNodeStartError(implicitToken.code, implicitToken.message);
+      }
+      token = implicitToken.value.token;
       listen = nodeListenFromConfig(options.config);
     } else {
       const configPath = entry.config_path as string;
@@ -2083,7 +2112,18 @@ async function resolveLocalNodes(options: {
         }
         throw error;
       }
-      token = resolveGatewayToken(nodeConfig, options.env);
+      // 0.56：显式 `node.token*` 优先；否则派生 `vessel:node:<id>`（root 在该 node 的
+      // data_dir 里，所以独立启动的 node 现算也能得到同一个值）。
+      const nodeTokenResolution = effectiveNodeToken({
+        config: nodeConfig,
+        dataDir: entry.data_dir,
+        nodeId: entry.node_id,
+        env: options.env,
+      });
+      if (!nodeTokenResolution.ok) {
+        throw new LocalNodeStartError(nodeTokenResolution.code, nodeTokenResolution.message);
+      }
+      token = nodeTokenResolution.value.token;
       listen = nodeListenFromConfig(nodeConfig);
 
       // 仅显式 registry 节点受平台 token 冲突约束。
@@ -2229,7 +2269,7 @@ export async function runPlatformGatewayForeground(
       }
     }
     // 0.55 P0：restart 也必须在**停旧实例之前**过守卫 —— 配置不安全就别重启（免得白停）。
-    const restartListenError = platformListenError(config, env, targetHost, targetPort);
+    const restartListenError = platformListenError(config, env, targetHost, targetPort, dataDir);
     if (restartListenError !== null) {
       printErr(ui.err(restartListenError));
       return 1;
@@ -2269,7 +2309,7 @@ export async function runPlatformGatewayForeground(
   if (portError !== null) return portError;
 
   // 0.55 P0：fail-closed。非回环监听 + 没配 platform token ⇒ 在 spawn 之前就拒绝。
-  const listenError = platformListenError(config, env, targetHost, targetPort);
+  const listenError = platformListenError(config, env, targetHost, targetPort, dataDir);
   if (listenError !== null) {
     printErr(ui.err(listenError));
     return 1;
@@ -2293,7 +2333,8 @@ export async function runPlatformGatewayForeground(
     throw error;
   }
   if (implicitNode) {
-    const probeToken = resolvePlatformToken(config, env);
+    const probeResolution = effectivePlatformToken({ config, dataDir, env });
+    const probeToken = probeResolution.ok ? probeResolution.value.token : undefined;
     const snapshot = await collectGatewayState(dataDir, {
       kind: 'platform',
       ...(probeToken !== undefined ? { token: probeToken } : {}),
@@ -2331,7 +2372,22 @@ export async function runPlatformGatewayForeground(
       DEFAULT_GATEWAY_OPTIONS.hostname
     ).trim();
     const platformPort = targetPort ?? config.gateway?.port ?? DEFAULT_GATEWAY_OPTIONS.port;
-    const platformToken = resolvePlatformToken(config, env);
+    // 0.56：平台 token = 显式配置 ?? 派生（`vessel:platform`）。**永不为 undefined**，
+    // 除非根密钥不可用 —— 那种情况必须 fail-fast（宁可不启动，也不用弱权限根密钥）。
+    const platformTokenResolution = effectivePlatformToken({ config, dataDir, env });
+    if (!platformTokenResolution.ok) {
+      printErr(ui.err(`${platformTokenResolution.code}: ${platformTokenResolution.message}`));
+      return 1;
+    }
+    const platformToken = platformTokenResolution.value.token;
+    if (platformTokenResolution.value.source === 'derived') {
+      print(
+        ui.dim(
+          'platform token: derived from the root secret (no gateway.token configured) — ' +
+            'run "vessel token show --purpose platform" to read it',
+        ),
+      );
+    }
     // 0.55 P0：反代共享密钥（opt-in）。未配置 = undefined = 旧行为。
     const platformProxySecret = resolvePlatformProxySecret(config, env);
     // 0.50：本地 Hub 默认随 gateway 自动拉起（`hub.auto_start: false` 关闭）。
@@ -2436,6 +2492,8 @@ export async function runPlatformGatewayForeground(
         port: platformPort,
         hostname: platformHostname,
         ...(platformToken !== undefined ? { platformToken } : {}),
+        // 0.56：派生值不算「配置」⇒ 回环匿名保持（不重演「升级即掉线」）。
+        platformTokenConfigured: platformTokenResolution.value.source === 'explicit',
         ...(platformProxySecret !== undefined ? { proxySecret: platformProxySecret } : {}),
         ...(config.gateway?.allowedOrigins !== undefined
           ? { allowedOrigins: config.gateway.allowedOrigins }

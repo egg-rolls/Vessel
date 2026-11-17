@@ -50,6 +50,10 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.gatewayReload': 'hot-reload config/plugins without restarting',
   'help.cmd.gatewayInstall': 'register login autostart (systemd / launchd / schtasks)',
   'help.cmd.gatewayUninstall': 'remove the system service registration',
+  'help.cmd.tokenList': 'list token purposes with fingerprints only (never prints values)',
+  'help.cmd.tokenShow': 'print one token value (loopback + interactive terminal only)',
+  'help.cmd.tokenRotate': 'rotate the root secret: every derived token changes',
+  'help.cmd.nodeToken': 'show where this node token comes from; --print prints the value',
   'help.cmd.gatewayNodesList': 'list local nodes from nodes.json with health (never prints tokens)',
   'help.cmd.gatewayNodesAdd': 'register a local node; takes effect on the next gateway start',
   'help.cmd.gatewayNodesRemove':

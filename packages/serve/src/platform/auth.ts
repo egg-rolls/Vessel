@@ -46,6 +46,16 @@ export interface ResolvePlatformAuthInput {
    * 否则一律按「非回环」处理（`platform.nodes.credentials` 因此不再被匿名取走）。
    */
   proxySecret?: string;
+  /**
+   * 0.56：平台 token 是否来自**显式配置**（`gateway.token` / `gateway.token_env`）。
+   *
+   * 派生值（`root-secret` → `vessel:platform`）不算「配置」：用户什么都没写，
+   * 就不能因为他没写而收紧回环 —— 否则一次升级又会把本地 WebUI 锁死
+   * （前端拿不到 node token ⇒ 整页掉线，症状只表现为「连不上」）。
+   *
+   * 缺省 `true`：只有明确传 `false` 才走「未配置」语义（向后兼容）。
+   */
+  explicitPlatformToken?: boolean;
 }
 
 /**
@@ -95,10 +105,28 @@ export function resolvePlatformAuth(input: ResolvePlatformAuthInput): PlatformAu
   const proxySecretOk = proxySecretAllowed(input.req, input.proxySecret);
   const loopback = isLoopbackAddress(input.address) && proxySecretOk;
   const expected = input.platformToken;
+  const explicit = input.explicitPlatformToken ?? true;
   if (typeof expected === 'string' && expected !== '') {
     const provided = bearerToken(input.req);
-    const ok = provided !== null && constantTimeEqual(provided, expected);
-    return { ok, mode: ok ? 'token' : 'anonymous', loopback, proxySecretOk, tokenConfigured: true };
+    const matches = provided !== null && constantTimeEqual(provided, expected);
+    if (!explicit) {
+      // 派生 token（用户没配任何东西）：**回环匿名保持不变**（迁移安全），
+      // 非回环仍然必须带对这个值 —— 凭据存在，但不拿它去收紧本地。
+      return {
+        ok: matches || loopback,
+        mode: matches ? 'token' : 'anonymous',
+        loopback,
+        proxySecretOk,
+        tokenConfigured: false,
+      };
+    }
+    return {
+      ok: matches,
+      mode: matches ? 'token' : 'anonymous',
+      loopback,
+      proxySecretOk,
+      tokenConfigured: true,
+    };
   }
   return { ok: loopback, mode: 'anonymous', loopback, proxySecretOk, tokenConfigured: false };
 }
