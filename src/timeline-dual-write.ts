@@ -95,7 +95,7 @@
  * @module vessel/timeline-dual-write
  */
 
-import { readdir } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   EventStream,
@@ -795,6 +795,42 @@ async function readHeadsOnDisk(sessionDir: string): Promise<TimelineHeads | unde
 }
 
 /**
+ * `heads()` 磁盘口径的失效键：`holes.ndjson` / `timeline.manifest` / `wal.log` /
+ * `timeline.idx/session.idx` 的 `大小:mtime`（`-` = 文件不存在）。
+ *
+ * 这四份文件就是 {@link readHeadsOnDisk} 的全部输入：`timeline_head` 来自
+ * `timeline.manifest` 的归档行、`wal_head` 来自索引（没有索引时退回全量读，而全量读
+ * 的事实源只在 `wal.log` / 块 / 归档里，`wal.log` 一变即失效）、`holes` / `tainted`
+ * 来自 `holes.ndjson`。任一变化 ⇒ 重算；都没变 ⇒ 结果只可能相同（同一批文件、
+ * 同一段解析）。索引文件缺失（走全量读降级路）**不缓存**：那条路还依赖块目录里
+ * 新封的块，四份文件戳盖不住它。
+ */
+async function headsStampOf(sessionDir: string): Promise<string | undefined> {
+  const files = [
+    join(sessionDir, TIMELINE_LAYOUT.holes),
+    join(sessionDir, TIMELINE_LAYOUT.timelineManifest),
+    join(sessionDir, TIMELINE_LAYOUT.walLog),
+    join(sessionDir, TIMELINE_LAYOUT.indexDir, TIMELINE_LAYOUT.indexSession),
+  ];
+  const parts: string[] = [];
+  for (const file of files) {
+    try {
+      const info = await stat(file);
+      parts.push(`${String(info.size)}:${String(Math.floor(info.mtimeMs))}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return undefined;
+      parts.push('-');
+    }
+  }
+  // 索引缺失 ⇒ 走「全量读」降级路（块目录也可能变），不做缓存。
+  if (parts[3] === '-') return undefined;
+  return parts.join('|');
+}
+
+/** `heads()` 缓存的上限（条）：只放得下摘要（几十字节 + 洞列表），与目录里会话数无关。 */
+const HEADS_CACHE_LIMIT = 256;
+
+/**
  * 创建一个 tenant 的双写旁路。
  *
  * `dualWrite: false` 时不产生任何磁盘副作用、`record()` 直接返回 —— 这是「开关关」那
@@ -892,6 +928,13 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
 
   /** sessionId → 打开中的 writer（打开失败时 map 里留下 `undefined`，表示已标 broken）。 */
   const writers = new Map<string, Promise<TimelineWriter | undefined>>();
+  /**
+   * `heads()` 的磁盘口径缓存（sessionId → 文件戳 + 结果）。
+   *
+   * 只缓存「不是本进程在写的会话」（活会话走上方的 `writers` 快路径，永远是最新真值），
+   * 且只在 {@link headsStampOf} 拿到四份输入文件的戳时缓存/命中 —— 序号不变 ⇒ 结果不变。
+   */
+  const headsCache = new Map<string, { stamp: string; value: TimelineHeadsView | undefined }>();
   /**
    * 在飞的双写任务（`record()` 的 fire-and-forget 体）。
    *
@@ -1609,19 +1652,49 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
       }
     }
     try {
-      const onDisk = await readHeadsOnDisk(sessionDirOf(options.sessionsDir, sessionId));
+      const dir = sessionDirOf(options.sessionsDir, sessionId);
+      // 0.57（性能）：磁盘口径带**失效键缓存**。
+      //
+      // 为什么要：`readHeadsOnDisk` 每次要读 `holes.ndjson` + 校验 `timeline.manifest`
+      // 的 crc（`d813eaea` 级别 156 KB）+ 读索引，实测 **72 ms/次**；而 `sessions.events`
+      // 每翻一页都问一次 heads（首屏 2000 条 = 4 页 → 290 ms 纯重复解析）。键是那四份
+      // 输入文件的 `大小:mtime`（见 {@link headsStampOf}），文件不变 ⇒ 结果必然相同，
+      // 所以这是「少读一遍同一份文件」，不是「少给一个字段」。
+      //
+      // 进程内有写入者时**永远不走这里**（上面那条 `writers` 快路径才是活会话的真值）。
+      const stamp = await headsStampOf(dir);
+      if (stamp !== undefined) {
+        const hit = headsCache.get(sessionId);
+        if (hit !== undefined && hit.stamp === stamp) {
+          headsCache.delete(sessionId);
+          headsCache.set(sessionId, hit);
+          return hit.value === undefined
+            ? undefined
+            : // 洞列表是可变数组：给调用方一份新副本，缓存里的那份谁也别想改。
+              { ...hit.value, holes: hit.value.holes.slice() };
+        }
+      }
+      const onDisk = await readHeadsOnDisk(dir);
       if (onDisk === undefined) {
         // 0.55：**旧格式会话必须报错，不能当成空会话**。
         // 走 `readHeadsOnDisk` 的「没有标记」分支时，先问一句「这是不是 0.54 之前的目录」：
         // 是 ⇒ 抛 `legacy_session_unsupported`（`events.subscribe` / `sessions.get` 会把
         // 这条 code 原样交给用户）；不是 ⇒ 真的还没有任何事件，返回 `undefined`（空段）。
-        await assertSessionFormatSupported(sessionDirOf(options.sessionsDir, sessionId), sessionId);
+        await assertSessionFormatSupported(dir, sessionId);
         return undefined;
       }
       // 纯磁盘口径：没有进程内写入者 ⇒ 写者 open 时已把 `published` 折成 `wal_head`
       // （`writer.ts:486`），两者必然相等。这里**明确给值**，不留 `undefined` 让上层兜底
       // 假装是「未发布」。
-      return { ...onDisk, published_head: onDisk.wal_head };
+      const value: TimelineHeadsView = { ...onDisk, published_head: onDisk.wal_head };
+      if (stamp !== undefined) {
+        if (!headsCache.has(sessionId) && headsCache.size >= HEADS_CACHE_LIMIT) {
+          const oldest = headsCache.keys().next().value;
+          if (oldest !== undefined) headsCache.delete(oldest);
+        }
+        headsCache.set(sessionId, { stamp, value });
+      }
+      return { ...value, holes: value.holes.slice() };
     } catch (error) {
       // 旧格式错误必须冒泡（其余读取失败仍按「没有时间线读面」降级）。
       if (isLegacyUnsupported(error)) throw error;

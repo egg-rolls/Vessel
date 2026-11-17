@@ -96,6 +96,9 @@ const TAIL_MATCH_LIMIT = 64;
 /** 增量读的一页条数（范围读按块开窗；一页 512 条 ≈ 一屏历史）。 */
 const FOLD_PAGE = 512;
 
+/** 首次折叠允许「一次整份读」的日志规模上限（事件数口径；超出则退回分页，防内存爆）。 */
+const FOLD_BULK_MAX_EVENTS = 250_000;
+
 /** 一页都没折完就停下来的上限（防日志自增把这一趟拖成死循环）。 */
 const FOLD_MAX_PAGES = 400;
 
@@ -238,15 +241,34 @@ export function createImageDeliverySource(options: ImageDeliverySourceOptions): 
           entry = { coveredSeq: 0, facts: new Map() };
         }
         const foldInto = entry;
-        for (let page = 0; page < FOLD_MAX_PAGES; page += 1) {
-          const records = await log.read(sessionId, {
-            sinceSeq: foldInto.coveredSeq,
-            limit: FOLD_PAGE,
-          });
-          if (records.length === 0) break;
-          if (!foldPage(foldInto, records)) coverage = 'partial';
-          if (records.length < FOLD_PAGE) break;
-          if (page === FOLD_MAX_PAGES - 1) coverage = 'partial';
+        // 0.57（性能）：**首次折叠走一次整份读，不再按 512 条翻页**。
+        //
+        // 两条路输出逐条等价（`read()` 的整份口径就是分页口径的事实源：同一批记录、
+        // 同一个升序、同一套去重），差别只在往返次数：范围读每页有 ~90 ms 固定开销
+        // （`readRange` 的定位 + 开块），`d813eaea`（21 万事件 / 410 页）实测首次折叠
+        // 29.4 s，而一次整份读只要 1.6 s。分页留给**增量续折**（水位变化后只读新事件，
+        // 那一段本来就短，页开销摊得开），首次折叠没有「只读一小段」可言。
+        //
+        // 上限保护：日志规模超过 {@link FOLD_BULK_MAX_EVENTS} 时退回分页 —— 整份读会把
+        // 所有记录同时放进内存，几百万事件的会话不该为一张缩略图状态付这个峰值。
+        if (
+          foldInto.coveredSeq === 0 &&
+          foldInto.facts.size === 0 &&
+          (tailSeq ?? 0) <= FOLD_BULK_MAX_EVENTS
+        ) {
+          const records = await log.read(sessionId);
+          if (records.length > 0 && !foldPage(foldInto, records)) coverage = 'partial';
+        } else {
+          for (let page = 0; page < FOLD_MAX_PAGES; page += 1) {
+            const records = await log.read(sessionId, {
+              sinceSeq: foldInto.coveredSeq,
+              limit: FOLD_PAGE,
+            });
+            if (records.length === 0) break;
+            if (!foldPage(foldInto, records)) coverage = 'partial';
+            if (records.length < FOLD_PAGE) break;
+            if (page === FOLD_MAX_PAGES - 1) coverage = 'partial';
+          }
         }
         // 折完之后没走到开头看到的日志尾 ⇒ 中间有洞（归档/块不一致），覆盖不完整。
         if (tailSeq !== undefined && foldInto.coveredSeq < tailSeq) coverage = 'partial';

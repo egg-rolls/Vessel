@@ -1007,6 +1007,20 @@ async function readTimelineEventPage(
         continue;
       }
       events.push(toTimelineEventView(record));
+      // 0.57（性能）：**无过滤时拿满 `limit` 条就能判定 `has_more`**，不必再多读一页只为
+      // 确认「后面还有至少一条」。
+      //
+      // 旧口径靠多取一条（`events.length > limit`）来证明「还有更多」，于是每一页都多一次
+      // 范围读（`readPage` 一次 ~50-100 ms，首屏 2000 条 = 4 页 = 白读 4 次）。而 `cursor`
+      // 之后到 `effectiveEnd` 之间还有记录时，`has_more` 本来就该是 true —— 这与下面那句
+      // `if (!hasMore && cursor < effectiveEnd) hasMore = true` 同口径，只是提前下结论。
+      //
+      // 只在**没有类型 / tool_call_id 过滤**时这么做：有过滤时「后面还有记录」不等于
+      // 「后面还有**匹配的**事件」，仍要按旧路径多取一条来确认。
+      if (types === undefined && toolCallId === undefined && events.length >= limit) {
+        if (cursor < effectiveEnd) hasMore = true;
+        break;
+      }
       if (events.length > limit) {
         hasMore = true;
         break;
@@ -1746,18 +1760,10 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         }
 
         const windowAnchor = start > 0 ? all[start - 1] : undefined;
-        // Additive：会话级用量与「模型这一轮看到的系统消息」（历史会话 / rotate 后 /
-        // 重启后都可用）。两个派生值互不依赖，并发取；读不到 = 字段缺省（不抛错）。
-        const [contextUsage, systemContext] = await Promise.all([
-          contextUsageOf(state.session_id),
-          systemContextOf(state.session_id),
-        ]);
-        // 0.56（additive）：每张图的投递状态（从事件日志尾窗派生；缺省 = 不带这个字段）。
-        const imageDelivery = await imageDeliveryOf(state.session_id);
-        // Additive (0.53)：事件日志游标。与 `sessions.events` 配成一对 ——
-        // `derived_upto_seq < last_seq` ⇒ 有事件没进投影，客户端据此决定要不要补洞。
-        // 读不到（没有日志 / 端口未注入 / 索引坏了）= 字段缺省，**不抛错**。
-        const eventCursor = await eventCursorOf(state.session_id);
+        // 0.54（additive 投影卡）：两分支判定**在切片之前**对落盘全量 `all` 跑一遍 ——
+        // 窗口切掉 owning assistant 时，`formatClearedToolResult` 会丢掉工具名与首参摘要
+        //（spec §1.4 陷阱 3）。`projection_summary` 也由此累加（整会话口径，不是本窗口）。
+        const projections = scanProjections(all, state);
         // 0.52：出站窗口与实时流统一 8 KiB 口径（`role==='tool'` 的 content 与
         // assistant 工具入参）。**在游标之后裁**：`next_before` 的 `length` 取自
         // 未裁剪的 `windowAnchor.content.length`，翻页校验才不会被裁剪改写。
@@ -1767,15 +1773,36 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         // 不派生、不回填。`message_id` 是 0.56 的稳定 id：前端按它把「实时气泡」与「落盘
         // 消息」归并成一条（不再靠正文相等猜）。缺这些字段 = 旧数据 / 旧 gateway，客户端
         // 退回内容比较（见 `apps/web/src/gateway/types/sessions.ts` 的 `Message` 注释）。
-        const bindings = await sessionAgentBindings();
-        const owner = bindings.get(state.session_id);
-        // 0.54（additive 投影卡）：两分支判定**在切片之前**对落盘全量 `all` 跑一遍 ——
-        // 窗口切掉 owning assistant 时，`formatClearedToolResult` 会丢掉工具名与首参摘要
-        //（spec §1.4 陷阱 3）。`projection_summary` 也由此累加（整会话口径，不是本窗口）。
-        const projections = scanProjections(all, state);
+        // `bindings` / `owner` 在下面与其余派生值一起并发取（见 Promise.all）。
         const window = capToolMessages(all.slice(start, end));
         // 0.56：图片投递状态挂在**裁剪之后**的窗口上（独立小字段，与 8 KiB 裁剪无关）。
         const projected = attachProjections(window, projections, start);
+        // 0.57（性能）：**只有窗口里真有「要按 sha8 查事实」的图，才值得去折事件日志**。
+        //
+        // `imageDelivery` 的唯一去处是 `attachImageDelivery` 里的 `facts.get(sha8)`：
+        // 窗口里没有 `kind:'image'` + 有 `sha256` 的引用时，那个映射一个字段都产不出来
+        // （没有 `sha256` 的旧引用只用常量 `not_ingested`，同样不读 facts）。所以跳过的
+        // **输出逐字节相同**，而省掉的是「首次查要整份折一遍事件日志」：
+        // `09f82ac6`（12.6 万事件）实测 28.7 s，折完却是一张空表（该会话全日志里
+        // `image.sent` / `context.image_dropped` 记录为 0）。真实 338 个会话里 337 个
+        // 属于这种情况 —— 也就是说这条派生值此前对几乎每个会话都在做无用功。
+        const needsImageFacts = projected.some((message) =>
+          message.refs?.some((ref) => ref.kind === 'image' && typeof ref.sha256 === 'string'),
+        );
+        // Additive：会话级用量（历史会话 / rotate 后 / 重启后都可用）、「模型这一轮看到的
+        // 系统消息」、事件日志游标（0.53：与 `sessions.events` 配成一对 ——
+        // `derived_upto_seq < last_seq` ⇒ 有事件没进投影，客户端据此决定要不要补洞）三个
+        // 派生值互不依赖，并发取；读不到 = 字段缺省（不抛错）。图片投递状态按上一段的判据
+        // 才取（否则整段跳过）。
+        const [contextUsage, systemContext, imageDelivery, eventCursor, bindings] =
+          await Promise.all([
+            contextUsageOf(state.session_id),
+            systemContextOf(state.session_id),
+            needsImageFacts ? imageDeliveryOf(state.session_id) : undefined,
+            eventCursorOf(state.session_id),
+            sessionAgentBindings(),
+          ]);
+        const owner = bindings.get(state.session_id);
         const withImages =
           imageDelivery === undefined ? projected : attachImageDelivery(projected, imageDelivery);
         return {
