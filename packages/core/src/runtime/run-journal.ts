@@ -18,6 +18,7 @@ import { isTransientChunkEvent } from '../timeline/blocks.js';
 import { isChunkEventType, isNonFactEventType } from '../timeline/types.js';
 import type { RunEvent } from '../types/event.js';
 import { LeaseExpiredError } from '../types/lease.js';
+import type { ProjectionCachePort } from '../types/projection-cache.js';
 import type {
   RunJournal,
   RunJournalFactory,
@@ -322,7 +323,12 @@ export class SessionRunJournal implements RunJournal {
 
 /** 默认工厂：依赖按 tenant 注入，journal 的 events 由每次 begin/transient 携带。 */
 export class DefaultRunJournalFactory implements RunJournalFactory {
-  constructor(private readonly deps: RunJournalFactoryOptions) {}
+  /** 0.56 send-first：投影续算快照端口（缺省 = 不持久化，行为与 0.55 相同）。 */
+  readonly projectionCache?: ProjectionCachePort;
+
+  constructor(private readonly deps: RunJournalFactoryOptions) {
+    if (deps.projectionCache !== undefined) this.projectionCache = deps.projectionCache;
+  }
 
   begin(identity: RunJournalIdentity): RunJournal {
     return new SessionRunJournal(this.deps, identity);

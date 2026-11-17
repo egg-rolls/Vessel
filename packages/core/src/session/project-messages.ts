@@ -220,6 +220,17 @@ export interface ProjectionCursor {
   rewoundSeen: boolean;
 }
 
+/**
+ * 一条游标里最多记多少个 tool_call 的实参（`PROJECTION_CURSOR_MAX_TOOL_CALLS`）。
+ *
+ * 它与消息视图同阶（每条 assistant 的 tool_calls 本来就带同一份实参）；超过这个数
+ * （极端碎片会话）就不再缓存游标 —— 让内存与落盘快照都有界，代价只是下次整份读。
+ *
+ * 定义放在本模块（而不是 `runtime/execution-unit.ts`）：落盘快照的序列化也要按它判上界，
+ * 而 session 层不许反向依赖 runtime。
+ */
+export const PROJECTION_CURSOR_MAX_TOOL_CALLS = 20_000;
+
 /** 建一个空游标（`projectMessages` 的起点）。 */
 export function createProjectionCursor(options?: ProjectMessagesOptions): ProjectionCursor {
   return {

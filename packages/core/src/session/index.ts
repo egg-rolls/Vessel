@@ -3,6 +3,8 @@
  * @module @vessel-agent/core/session
  */
 
+export type { ProjectionCachePort, ProjectionCacheSnapshot } from '../types/projection-cache.js';
+export { PROJECTION_CACHE_VERSION } from '../types/projection-cache.js';
 export type {
   RunRecord,
   RunRecordStore,
@@ -38,6 +40,7 @@ export {
   createProjectionCursor,
   extendProjection,
   mergeHistoryProjection,
+  PROJECTION_CURSOR_MAX_TOOL_CALLS,
   type ProjectableEvent,
   type ProjectionCursor,
   type ProjectMessagesOptions,
@@ -45,6 +48,13 @@ export {
   projectMessages,
   reconcileCachedProjection,
 } from './project-messages.js';
+export {
+  cursorFromProjectionSnapshot,
+  FileProjectionCache,
+  PROJECTION_CACHE_MAX_BYTES,
+  PROJECTION_CACHE_SUFFIX,
+  serializeProjectionCursor,
+} from './projection-cache.js';
 export {
   type PruneRunsOptions,
   type PruneRunsResult,

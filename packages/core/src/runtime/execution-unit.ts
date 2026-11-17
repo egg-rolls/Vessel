@@ -60,10 +60,13 @@ import {
 // D2：跨模块只允许从 barrel 导入（不得直接引用 session 的内部文件）。
 import {
   createProjectionCursor,
+  cursorFromProjectionSnapshot,
   deriveSessionMeta,
   extendProjection,
+  PROJECTION_CURSOR_MAX_TOOL_CALLS,
   type ProjectionCursor,
   reconcileCachedProjection,
+  serializeProjectionCursor,
   withRunIdentity,
 } from '../session/index.js';
 import {
@@ -181,7 +184,8 @@ export const CONTEXT_PRESSURE_WARN_RATIO = 0.9;
  */
 export const PROJECTION_TAIL_MAX_EVENTS = 2000;
 export const PROJECTION_CURSOR_MAX_SESSIONS = 2;
-export const PROJECTION_CURSOR_MAX_TOOL_CALLS = 20_000;
+/** 0.56 send-first：定义搬到 `session/project-messages.ts`（落盘快照也要按它判上界）。 */
+export { PROJECTION_CURSOR_MAX_TOOL_CALLS };
 
 /**
  * 这段续读能不能直接折进已有游标（**判据全在这里，别在调用点再判一次**）。
@@ -324,7 +328,17 @@ interface HistoryRestoreTiming {
   read_ms: number;
   /** 折叠（`extendProjection`）耗时。 */
   fold_ms: number;
+  /**
+   * 0.56 send-first：这批折叠是从哪来的。
+   * - `memory`：本进程的游标（0.55 之前的唯一来源）；
+   * - `cache`：落盘快照（重启 / 换 body 后的第一条消息走这条）；
+   * - `full`：整份读（没有任何可用游标）。
+   */
+  source?: HistoryRestoreSource;
 }
+
+/** 投影的来源（留痕用：贴日志时一眼能看出「这次有没有吃到快照」）。 */
+type HistoryRestoreSource = 'memory' | 'cache' | 'full';
 
 /**
  * context-overflow 的通用文案 / 错误码（0.10 R2-17）。
@@ -2587,6 +2601,10 @@ export class ExecutionUnit {
       this.lastCoveredSessionId = sessionState.session_id;
       this.lastCoveredCursor = cursor;
     }
+    // 0.56 send-first：run 收尾顺手把投影快照推进到日志尾（详见 refreshProjectionSnapshot）。
+    // 成功 / 失败两条终态路径都走这里；`void` 是为了不把一次 JSON 序列化 + 后台写挂到
+    // run 收尾的返回路径上（用户体感的「那条消息发完了」不该等它）。
+    void this.refreshProjectionSnapshot(sessionState.session_id);
     try {
       await this.updateSessionIndex(sessionState);
     } catch (error) {
@@ -4417,6 +4435,7 @@ export class ExecutionUnit {
     this.logger.debug('session history restored', {
       session_id: sessionId,
       mode: restore.timing.mode,
+      source: restore.timing.source,
       shell_ms: Math.round(shellMs),
       event_read_ms: Math.round(restore.timing.read_ms),
       fold_ms: Math.round(restore.timing.fold_ms),
@@ -4424,6 +4443,13 @@ export class ExecutionUnit {
       events: projection?.count ?? 0,
       messages: projection?.messages.length ?? 0,
     });
+
+    // 0.56 send-first：整份读**刚**付过的代价不能白付 —— 立刻存一份快照，进程被硬杀
+    // （用户点「重启」/ 网关崩）之后的下一条消息就从它接上。其它两种 mode 不写：
+    // 它们的游标与已存在的快照内容等价（或是 tail 续读，收尾时还会再刷一次）。
+    if (restore.timing.mode === 'full' && projection !== undefined) {
+      this.persistProjectionSnapshot(sessionId, projection);
+    }
 
     if (projection !== undefined && projection.messages.length > 0) {
       // 0.54 B3：缓存覆盖到哪**只按内容算**（`reconcileCachedProjection`），不读会话壳里的
@@ -4486,11 +4512,17 @@ export class ExecutionUnit {
     const log = this.eventLog;
     if (log === undefined)
       return { cursor: undefined, timing: { mode: 'full', read_ms: 0, fold_ms: 0 } };
-    const folded = this.projectionCursors.get(sessionId);
+    // 0.56 send-first：三级回退 —— 内存游标（同进程热态）→ 落盘快照（重启 / 换 body）→
+    // 整份读。落盘那一级的判据与内存级**完全一样**（下面是同一段代码）：快照只是「上一
+    // 个进程的游标」，它没有豁免权。
+    const memory = this.projectionCursors.get(sessionId);
+    const folded = memory ?? (await this.loadPersistedProjection(sessionId));
+    const source: HistoryRestoreSource =
+      memory !== undefined ? 'memory' : folded !== undefined ? 'cache' : 'full';
     if (folded !== undefined) {
       if (head !== undefined && folded.seq !== undefined && head === folded.seq) {
         // 日志没长（同一段内再次组请求 / 上个 run 收尾后没有新事件）：一条都不用读。
-        return { cursor: folded, timing: { mode: 'reuse', read_ms: 0, fold_ms: 0 } };
+        return { cursor: folded, timing: { mode: 'reuse', read_ms: 0, fold_ms: 0, source } };
       }
       if (head !== undefined && folded.seq !== undefined && head > folded.seq) {
         const tTail = performance.now();
@@ -4504,15 +4536,26 @@ export class ExecutionUnit {
           extendProjection(folded, tail);
           const foldMs = performance.now() - tFold;
           if (folded.seq === head) {
-            return { cursor: folded, timing: { mode: 'tail', read_ms: readMs, fold_ms: foldMs } };
+            // 从快照接上的那一段也要进内存游标：下一次组请求（同进程）就走 reuse。
+            this.rememberProjection(sessionId, folded);
+            return {
+              cursor: folded,
+              timing: { mode: 'tail', read_ms: readMs, fold_ms: foldMs, source },
+            };
           }
         }
       }
       this.projectionCursors.delete(sessionId);
+      // 落盘那份也别留着：判据不成立说明它要么过期要么与日志对不上，下一次冷启动
+      // 再从它起读只会重演一遍「读 1.3 MB 再丢掉」。删掉之后由下一次整份读重新写。
+      if (memory === undefined) {
+        void this.journalFactory.projectionCache?.clear(sessionId).catch(() => undefined);
+      }
       this.logger.debug('session projection cursor dropped', {
         session_id: sessionId,
         folded_seq: folded.seq,
         head_seq: head,
+        source,
       });
     }
     const tFull = performance.now();
@@ -4523,7 +4566,77 @@ export class ExecutionUnit {
     extendProjection(cursor, events);
     const foldMs = performance.now() - tFold;
     this.rememberProjection(sessionId, cursor);
-    return { cursor, timing: { mode: 'full', read_ms: readMs, fold_ms: foldMs } };
+    return { cursor, timing: { mode: 'full', read_ms: readMs, fold_ms: foldMs, source: 'full' } };
+  }
+
+  /**
+   * 0.56 send-first：从**落盘快照**重建游标（重启 / 换 body 的第一条消息走这里）。
+   *
+   * 与内存游标同一条口径（`applyClearedReplacements: false`，原文），快照本身已经在
+   * `session/projection-cache.ts` 里逐字段校验过；这里只做形状到游标的搬运，
+   * **不做任何判定** —— 续读判据全部在 `restoreProjection` 里（快照没有豁免权）。
+   */
+  private async loadPersistedProjection(sessionId: string): Promise<ProjectionCursor | undefined> {
+    const cache = this.journalFactory.projectionCache;
+    if (cache === undefined) return undefined;
+    const snapshot = await cache.load(sessionId);
+    if (snapshot === undefined) return undefined;
+    return cursorFromProjectionSnapshot(snapshot);
+  }
+
+  /**
+   * 把当前游标写成落盘快照（**同步序列化 + 异步落盘**，永不抛、永不 await 在 run 路径上）。
+   *
+   * 两处调用：
+   * - 整份读刚成功（`mode === 'full'`）：先存一份，之后进程就算被硬杀，下一次启动也能
+   *   从这份接上；
+   * - run 收尾（`refreshProjectionSnapshot`）：把本轮新增的事件折进去再存，让「重启后
+   *   第一条消息」的尾巴尽可能短（尾巴长过 `PROJECTION_TAIL_MAX_EVENTS` 就得整份读了）。
+   */
+  private persistProjectionSnapshot(sessionId: string, cursor: ProjectionCursor): void {
+    const cache = this.journalFactory.projectionCache;
+    if (cache === undefined) return;
+    const payload = serializeProjectionCursor(sessionId, cursor);
+    if (payload === undefined) return;
+    void cache.save(sessionId, payload).catch((error: unknown) => {
+      this.logger.warn('session projection cache save failed', {
+        session_id: sessionId,
+        error: errorText(error),
+      });
+    });
+  }
+
+  /**
+   * run 收尾时刷新快照：把本轮追加的事件折进游标，再落盘。
+   *
+   * 为什么要折：持久化只在 run 起点写的话，尾巴 = 整个上一轮（工具密集的一轮可以超过
+   * `PROJECTION_TAIL_MAX_EVENTS`，下次重启就退回整份读）。折进来之后尾巴通常只剩几条。
+   * 折不动（读满预算 / 中间有洞）就存**旧游标**：它仍是某一段的合法折叠，下次照样能用
+   * 续读判据自证。
+   */
+  private async refreshProjectionSnapshot(sessionId: string): Promise<void> {
+    const cache = this.journalFactory.projectionCache;
+    if (cache === undefined) return;
+    const cursor = this.projectionCursors.get(sessionId);
+    if (cursor === undefined) return;
+    try {
+      const head = await this.resolveSessionCursor(sessionId);
+      if (head !== undefined && cursor.seq !== undefined && head > cursor.seq) {
+        const tail = await this.eventLog?.read(sessionId, {
+          sinceSeq: cursor.seq,
+          limit: PROJECTION_TAIL_MAX_EVENTS,
+        });
+        if (tail !== undefined && isContiguousTail(cursor.seq, tail, head)) {
+          extendProjection(cursor, tail);
+        }
+      }
+    } catch (error) {
+      this.logger.warn('session projection snapshot refresh failed', {
+        session_id: sessionId,
+        error: errorText(error),
+      });
+    }
+    this.persistProjectionSnapshot(sessionId, cursor);
   }
 
   /** 记住一条投影游标（超出条数 / 条目上界就干脆不留，下次整份读）。 */
