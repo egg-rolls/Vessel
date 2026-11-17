@@ -134,7 +134,18 @@ interface ResolvedContext {
 }
 
 async function resolveContext(deps: GatewayCommandDeps): Promise<ResolvedContext> {
-  const config = deps.config ?? (await loadConfig()).config;
+  let config: VesselConfig;
+  if (deps.config !== undefined) {
+    config = deps.config;
+  } else {
+    const loaded = await loadConfig();
+    config = loaded.config;
+    // 0.56：配置层警告（`serve:` 已改名 `node:`、`node:`/`serve:` 同时出现等）
+    // 必须在 gateway 上也可见 —— 否则只有 REPL / `config show` 会提示，运维看不到。
+    for (const warning of loaded.validation.warnings) {
+      (deps.printErr ?? console.error)(ui.warn(`⚠ ${warning.message}`));
+    }
+  }
   const env = deps.env ?? process.env;
   return {
     dataDir: deps.dataDir ?? resolveDataDir(config, env),
