@@ -70,10 +70,12 @@ export function isValidCnIdCard(value: string): boolean {
   if (!(day >= 1 && day <= 31)) return false;
   let sum = 0;
   for (let i = 0; i < 17; i += 1) {
-    sum += (s.charCodeAt(i) - 48) * CN_ID_WEIGHTS[i]!;
+    // 长度已在调用方校验为 18（见 `isChineseId`），这里的下标必然在界内；
+    // 用 `?? 0` 而不是非空断言，是为了让「界外」退化成校验失败而不是抛错。
+    sum += (s.charCodeAt(i) - 48) * (CN_ID_WEIGHTS[i] ?? 0);
   }
-  const expected = CN_ID_CHECK[sum % 11]!;
-  return expected === s[17]!.toUpperCase();
+  const expected = CN_ID_CHECK[sum % 11] ?? '';
+  return expected.length > 0 && expected === s[17]?.toUpperCase();
 }
 
 /** Shannon 熵（bits/char），熵启发用。 */

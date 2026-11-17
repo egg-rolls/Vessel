@@ -968,30 +968,29 @@ for (const [name, mutate] of [
       ?.registry_url === 'https://example.test/index.json',
   );
 }
-{
-  check(
-    'configure: https URL accepted',
-    assertSecureUrl('https://example.test/index.json', 'registry_url').protocol === 'https:',
-  );
-  check(
-    'configure: loopback http accepted',
-    assertSecureUrl('http://127.0.0.1:9000/index.json', 'registry_url').protocol === 'http:',
-  );
-  await expectCode(
-    'configure: non-https rejected',
-    async () => {
-      assertSecureUrl('http://example.test/index.json', 'registry_url');
-    },
-    'registry_url_insecure',
-  );
-  await expectCode(
-    'configure: malformed URL rejected',
-    async () => {
-      assertSecureUrl('not a url', 'registry_url');
-    },
-    'registry_url_insecure',
-  );
-}
+
+check(
+  'configure: https URL accepted',
+  assertSecureUrl('https://example.test/index.json', 'registry_url').protocol === 'https:',
+);
+check(
+  'configure: loopback http accepted',
+  assertSecureUrl('http://127.0.0.1:9000/index.json', 'registry_url').protocol === 'http:',
+);
+await expectCode(
+  'configure: non-https rejected',
+  async () => {
+    assertSecureUrl('http://example.test/index.json', 'registry_url');
+  },
+  'registry_url_insecure',
+);
+await expectCode(
+  'configure: malformed URL rejected',
+  async () => {
+    assertSecureUrl('not a url', 'registry_url');
+  },
+  'registry_url_insecure',
+);
 
 // ── cache TTL ───────────────────────────────────────────────────────────────
 

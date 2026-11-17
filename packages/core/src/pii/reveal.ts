@@ -87,7 +87,8 @@ export function findApprovalId(
   if (toolCallId === undefined) return undefined;
   const history: RunEvent[] = events.getHistory(runId);
   for (let i = history.length - 1; i >= 0; i -= 1) {
-    const event = history[i]!;
+    const event = history[i];
+    if (event === undefined) continue;
     if (event.type !== 'tool.permission.request') continue;
     const data = event.data as Record<string, unknown> | undefined;
     if (data === undefined) continue;

@@ -133,7 +133,8 @@ export function useAskCursorIndex(
     );
   });
   // 换一条请求（或同一条请求重启）时按存储重算 —— 这就是「刷新后停在上次那一题」。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 只在 requestId 变化时重算
+  // 依赖只有 requestId：`hydrateAskCursors` / `setIndex` 是 store 的稳定入口（zustand 保证引用不变），
+  // 列进依赖数组会让这个 effect 在每次渲染都重跑并写回 store（无限往返）。
   useEffect(() => {
     hydrateAskCursors();
     setIndex(

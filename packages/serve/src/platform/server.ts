@@ -664,26 +664,29 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
    * 只在能拿到代理统计时打（`proxy.stats()`），不拿网关自身的内存冒充代理开销。
    */
   const resourceSampleMs = Number(process.env.VESSEL_RESOURCE_SAMPLE_MS ?? 60_000);
-  const resourceTimer = setInterval(() => {
-    if (!Number.isFinite(resourceSampleMs) || resourceSampleMs <= 0) return;
-    const usage = process.memoryUsage();
-    const proxyStats = proxy.stats();
-    console.warn(
-      formatEventFields({
-        event: 'gateway.resources',
-        uptime_s: Math.round(process.uptime()),
-        rss_mb: Math.round(usage.rss / 1048576),
-        heap_mb: Math.round(usage.heapUsed / 1048576),
-        http_requests: proxyStats.http_requests,
-        http_failures: proxyStats.http_failures,
-        http_inflight: proxyStats.http_inflight,
-        passthrough: proxyStats.http_passthrough_streams,
-        mode: proxyStats.http_stream_mode,
-        ws_active: proxyStats.ws_active,
-        ws_pending: proxyStats.ws_pending_bytes,
-      }),
-    );
-  }, Number.isFinite(resourceSampleMs) && resourceSampleMs > 0 ? resourceSampleMs : 60_000);
+  const resourceTimer = setInterval(
+    () => {
+      if (!Number.isFinite(resourceSampleMs) || resourceSampleMs <= 0) return;
+      const usage = process.memoryUsage();
+      const proxyStats = proxy.stats();
+      console.warn(
+        formatEventFields({
+          event: 'gateway.resources',
+          uptime_s: Math.round(process.uptime()),
+          rss_mb: Math.round(usage.rss / 1048576),
+          heap_mb: Math.round(usage.heapUsed / 1048576),
+          http_requests: proxyStats.http_requests,
+          http_failures: proxyStats.http_failures,
+          http_inflight: proxyStats.http_inflight,
+          passthrough: proxyStats.http_passthrough_streams,
+          mode: proxyStats.http_stream_mode,
+          ws_active: proxyStats.ws_active,
+          ws_pending: proxyStats.ws_pending_bytes,
+        }),
+      );
+    },
+    Number.isFinite(resourceSampleMs) && resourceSampleMs > 0 ? resourceSampleMs : 60_000,
+  );
   resourceTimer.unref?.();
 
   const server = Bun.serve<PlatformWsData>({
