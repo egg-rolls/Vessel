@@ -252,4 +252,14 @@ export interface ExecutionUnitOptions {
    * EU 只续租 / 释放，不负责首次获取。
    */
   bindingLease?: import('./lease.js').LeaseGrant;
+  /**
+   * 视觉的**运行期设置**（0.56 P0；additive）。
+   *
+   * 能力不在这里：能发什么图问 `provider.vision`（`VisionBackend` 描述符，由插件挂上）。
+   * 这里只有「本轮要不要发、最多几张、精度意图」三件事，以及 kill switch
+   * （`disabled` / `VESSEL_DISABLE_VISION=1`）—— 缺省 = 支持即直通（决策 1：没有 enable 门）。
+   *
+   * 装配层从 `vision.*` 配置段解析；缺省不注入 ⇒ 用默认值（6 张 / 无精度偏好 / 不关闭）。
+   */
+  vision?: import('./vision.js').VisionSettings;
 }

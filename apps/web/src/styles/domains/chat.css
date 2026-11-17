@@ -319,6 +319,43 @@
   color: var(--danger);
 }
 
+/*
+ * 图片投递状态（0.56，三态 chip）。与文件名同一行、同字号，但**不抢名字的宽度**：
+ * 用一档更淡的颜色 + 一条竖直分隔，让「哪张图 / 发没发出去」在一眼里分得开。
+ * 三档：
+ *   .sent    —— 已发送（含 provider 与每图 token，隐私知情）
+ *   .dropped —— 已丢弃（预算 / 格式 / 缺 blob / 占位 / 压缩）
+ *   .not-sent—— 未发送（视觉被关 / 模型无视觉 / 没入池）
+ *   .pending —— 实时流的新消息还没有历史快照（**不猜**，显示发送中）
+ */
+.msg-ref-delivery {
+  flex: none;
+  padding-left: 6px;
+  border-left: 1px solid var(--line);
+  font-size: 10.5px;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  color: var(--faint);
+}
+
+.msg-ref-delivery.sent {
+  color: var(--faint);
+}
+
+.msg-ref-delivery.dropped {
+  color: var(--danger);
+}
+
+.msg-ref-delivery.not-sent {
+  color: var(--muted);
+}
+
+.msg-ref-delivery.pending {
+  color: var(--faint);
+  font-style: italic;
+}
+
 /* 角色切换比同角色消息多一档间距（16 + 8）。 */
 
 .msg-user + .msg-assistant,

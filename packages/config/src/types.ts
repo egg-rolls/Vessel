@@ -138,6 +138,36 @@ export interface ContextConfig {
 }
 
 /**
+ * 视觉配置（0.56，P0；全部可选）。
+ *
+ * **故意没有 `enable` 这个键**：决策 1 = 「模型支持视觉就直接发」，所以能力问
+ * `provider.vision`（插件的 `VisionBackend` 描述符），配置只提供**运行期**的三件事：
+ * 出事时一键退回（`disabled`）、预算（张数）、精度意图。`disabled` 是**闸**，不是默认门。
+ */
+export interface VisionConfig {
+  /**
+   * 全局 kill switch（等价于 `VESSEL_DISABLE_VISION=1`）：一律不内联、`[refs]` 尾注回落
+   * 0.55 老文案、记一条 `vision.disabled` 事件（**不是静默**）。默认 `false`。
+   */
+  disabled?: boolean;
+  /** 单请求最多几张图（与后端描述符取 `min`）；缺省 6。 */
+  maxImagesPerRequest?: number;
+  /** 精度意图（必须落在后端 `detailLevels()` 里，否则不带）；缺省不传。 */
+  detail?: string;
+  /**
+   * 上传后预处理：P0 = `none`（identity，交给 provider 自动缩到 ~1300²）。
+   *
+   * **一旦不等于 `none`**，「产出新字节必须写回 `refs.sha256`」立刻从建议变成硬约束
+   * （P1）：不写回 = 每轮重新编码 = 前缀守卫必报 `prompt.prefix_changed`。
+   */
+  preprocess?: string;
+  /** 孤儿 blob 的宽限窗（小时，上限 168）；缺省 24。 */
+  orphanGraceHours?: number;
+  /** 孤儿 blob 的死线（天）；缺省 30。 */
+  imageBlobTtlDays?: number;
+}
+
+/**
  * 0.48 M4：外部插件扩展面授权（CONTRACT-0.48 §5）。
  * 只做 allow/deny；路由 / 命令定义仍只来自 manifest。
  */
@@ -833,6 +863,8 @@ export interface VesselConfig {
   pricing?: PricingConfig;
   session?: SessionConfig;
   context?: ContextConfig;
+  /** 0.56：视觉（kill switch / 预算 / 精度 / 预处理 / blob 生命周期）；缺省全部走默认值。 */
+  vision?: VisionConfig;
   /** 0.6.1：工具权限免确认规则 */
   permission?: PermissionConfig;
   plugins?: PluginConfig[];

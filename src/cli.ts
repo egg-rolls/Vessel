@@ -104,6 +104,7 @@ import {
 } from './hot-apply-assembly';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
+import { createImageDeliverySource } from './image-delivery';
 import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-dir';
 import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
@@ -1339,6 +1340,12 @@ async function runWithConfig(result: BootstrapResult) {
             // 同一个读口，只是取的是另一类事件（`prompt.system_context`）。事件不是 message，
             // 回放窗口淘汰 / 进程重启之后只有重新派生才能把会话页那张卡找回来。
             systemContext: createSystemContextSource({
+              tail: gatewayBundle.timelineLog,
+              watermark: (sessionId: string) => gatewayBundle.timelineLog!.watermark(sessionId),
+            }),
+            // 每张图的投递状态（additive `sessions.get` 的 `image_delivery`，0.56）：
+            // 同一个读口，取 `image.sent` / `context.image_dropped` 两类事件。
+            imageDelivery: createImageDeliverySource({
               tail: gatewayBundle.timelineLog,
               watermark: (sessionId: string) => gatewayBundle.timelineLog!.watermark(sessionId),
             }),

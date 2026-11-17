@@ -306,8 +306,21 @@ export class OpenAICompatibleProvider implements LLMProvider {
   async chat(req: ChatRequest): Promise<LLMResponse> {
     const url = `${this.baseUrl}/chat/completions`;
 
+    // 0.56：图片计划（由 `ExecutionUnit` 在请求期算好，随 `chat()` 进来）。
+    // 命中某条消息 ⇒ 那条的 `content` 由 string 升成 `[{type:'text'}, {type:'image_url'}…]`；
+    // **没命中 ⇒ 下面的原分支一字不改**（无图旧路径的请求体逐字节不变，P0-13 的判据）。
+    // 文本块用的就是 `msg.content` 原文（不重排、不裁剪、不做任何 trim）。
+    const plan = req.attachment_plan;
+
     // 转换消息格式（正确处理工具返回）
-    const messages = req.messages.map((msg) => {
+    const messages = req.messages.map((msg, index) => {
+      const images = plan?.byMessageIndex.get(index);
+      if (images !== undefined && images.length > 0) {
+        return {
+          role: msg.role,
+          content: [{ type: 'text', text: msg.content }, ...images.map((image) => image.part)],
+        };
+      }
       if (msg.role === 'tool') {
         // 工具返回：使用正确的格式
         return {

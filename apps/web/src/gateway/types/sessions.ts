@@ -46,6 +46,35 @@ export interface MessageRef {
   name?: string;
   mime?: string;
   bytes?: number;
+  /**
+   * 内容地址（additive 0.56）：`<dataDir>/blobs/sha256/xx/<sha256>` 的文件名。
+   * 只用于「这张图有没有真的发出去」的对账（wire 上的 `image_delivery[].sha8`）；
+   * 前端不读文件、不拼 URL。
+   */
+  sha256?: string;
+}
+
+/**
+ * 一张图的投递状态（additive 0.56，`Message.image_delivery` 的一项）。
+ *
+ * **服务端从事件派生**（`image.sent` / `context.image_dropped`），不是 `refs` 上的字段 ——
+ * 所以刷新页面后仍然正确（前端不得把它存成本地状态）。
+ *
+ * 三态：`sent`（含 provider 名与每图 token）/ `dropped`（这一轮算过、决定不发）/
+ * `not_sent`（根本没进这条通路：视觉被关 / 模型无视觉 / 没入池）。
+ */
+export interface ImageDelivery {
+  status: 'sent' | 'dropped' | 'not_sent';
+  /** 稳定短标签（`over per-request budget` / `vision_disabled` …）。 */
+  reason?: string;
+  /** 内容身份前 8 位。 */
+  sha8?: string;
+  /** `sent` 时每图的 token 数（后端 `tokenCost(1)`，不是字符数）。 */
+  tokens?: number;
+  /** `sent` 时用的后端 id。 */
+  backend?: string;
+  /** `sent` 时实际发给的模型（隐私知情：这一张去了哪家）。 */
+  model?: string;
 }
 
 /** 工具调用（assistant 消息里的 tool_calls） */
@@ -182,6 +211,14 @@ export interface Message {
    * 旧 gateway / 旧 session 缺失该字段 → 前端按「无引用」渲染，不迁移。
    */
   refs?: MessageRef[];
+  /**
+   * 每张图的投递状态（additive 0.56；**sparse**，没有图之后端就不下发）。
+   *
+   * 与服务端 `sessions.get` 的 `image_delivery` 同形：与 `refs` 里的 image 引用
+   * **一一对应**（同序）。**只有历史快照带它** —— 实时流没有这个字段，前端对新消息
+   * 显示为「发送中」，刷新后拿到真实三态（状态只从事件派生，不猜）。
+   */
+  image_delivery?: ImageDelivery[];
   /**
    * 消息身份（additive）：这条消息属于哪个 run。
    *

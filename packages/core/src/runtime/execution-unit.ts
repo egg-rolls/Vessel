@@ -128,6 +128,15 @@ import type {
   SessionStatus,
   SessionStore,
 } from '../types/session.js';
+import type { AttachmentPlan, VisionSettings } from '../types/vision.js';
+import { EMPTY_ATTACHMENT_PLAN } from '../types/vision.js';
+import {
+  imageDropLabel,
+  imageDropStatus,
+  resolveAttachmentPlan,
+  sha8Of,
+  summarizeAttachmentPlan,
+} from '../vision/index.js';
 
 export type { RunOptions } from '../types/run.js';
 
@@ -877,6 +886,22 @@ export class ExecutionUnit {
   private renewingLeases?: Promise<void>;
   /** 租约丢失后 EU 不再接受新 run（ControlPlane 下次惰性重建） */
   private leaseLost = false;
+  /**
+   * 视觉的**运行期设置**（0.56）：kill switch / 单请求张数 / 精度意图。
+   * 能力在 `this.provider.vision`（插件的 `VisionBackend` 实例），不在这。
+   */
+  private readonly visionSettings?: VisionSettings;
+  /**
+   * 已报告过的图片投递事实（按 session：`sha8:kind`）。
+   *
+   * 为什么要去重：plan 是**每轮请求**重算的，同一条历史里的同一张图会被反复解析出来 ——
+   * 不去重的话 `image.sent` / `context.image_dropped` 会随着轮数线性增长，GUI 的「这张图
+   * 到底发没发出去」变成数数游戏，P1 的 TUI 也只能看到一堆重复事件。投递状态是**事实**
+   * （发生过一次就够了），所以每个 (session, sha8, 结果) 只记一条。
+   */
+  private readonly reportedImageDelivery = new Map<string, Set<string>>();
+  /** kill switch 已报告过的会话（每个会话一条 `vision.disabled`，不是静默） */
+  private readonly visionDisabledReported = new Set<string>();
 
   private constructor(opts: ExecutionUnitOptions) {
     this.provider = opts.provider;
@@ -898,6 +923,7 @@ export class ExecutionUnit {
     this.pricing = opts.pricing;
     this.leaseService = opts.leaseService;
     this.bindingLease = opts.bindingLease;
+    this.visionSettings = opts.vision;
     this.logger =
       opts.logger ??
       (process.env.VESSEL_DEBUG ? createStderrLogger({ level: 'debug' }) : noopLogger);
@@ -1016,6 +1042,53 @@ export class ExecutionUnit {
    * 段内不再压缩。旧行为是在 tool loop 的**每一轮**请求前压缩：同一段内请求前缀会被反复
    * 改形（删中段 + 插新摘要），「只有 append 或 pop」与 prefix cache 同时破。
    */
+  /**
+   * 0.56：压缩前后比较「还在窗里的图片 sha8」，被删掉的记一条 `context.image_dropped`
+   * （`reason: 'compaction'`）。
+   *
+   * 为什么按 sha 而不按消息下标：压缩会删中段 + 插摘要，下标全部重排；图片的身份是内容
+   * （sha256），**只有它能跨压缩对齐**。同一条图被压缩删掉一次就记一次（去重键含 session）。
+   */
+  private reportCompactionImageDrops(execution: Run, before: ReadonlySet<string>): void {
+    if (before.size === 0) return;
+    const after = new Set<string>();
+    for (const ref of this.imageRefsOfWindow(execution.workingContext)) after.add(ref);
+    if (after.size >= before.size) return;
+    const reported = this.reportedImageDelivery.get(execution.sessionId);
+    for (const sha8 of before) {
+      if (after.has(sha8)) continue;
+      const key = `drop:${sha8}:compaction`;
+      if (reported?.has(key) === true) continue;
+      reported?.add(key);
+      this.publishEvent({
+        type: 'context.image_dropped',
+        run_id: execution.runId,
+        data: {
+          run_id: execution.runId,
+          session_id: execution.sessionId,
+          count: 1,
+          reason: 'compaction',
+          label: imageDropLabel('compaction'),
+          status: imageDropStatus('compaction'),
+          sha8,
+        },
+        ts: Date.now(),
+      });
+    }
+  }
+
+  /** 窗口里所有图片引用的 sha8（读 `refs`，不读字节、不碰 base64）。 */
+  private imageRefsOfWindow(window: WorkingContext): Set<string> {
+    const out = new Set<string>();
+    for (const message of window.messages) {
+      for (const ref of message.refs ?? []) {
+        if (ref.kind !== 'image' || ref.sha256 === undefined) continue;
+        out.add(sha8Of(ref.sha256));
+      }
+    }
+    return out;
+  }
+
   private async compactAtSegmentStart(execution: Run): Promise<void> {
     const window = execution.workingContext;
     const autoCompact = window.autoCompactAsync;
@@ -1028,6 +1101,10 @@ export class ExecutionUnit {
       this.publishProjectionPressure(window, execution.runId);
     }
     let removed: number;
+    // 0.56：压缩前后各拍一份「带图消息」的快照 —— 被删掉的图要留一条
+    // `context.image_dropped{reason:'compaction'}`（GUI 回看时看得见「这里曾有 5 张图」，
+    // 而不是图凭空消失）。快照只取引用，不读字节。
+    const imagesBefore = this.imageRefsOfWindow(window);
     try {
       removed = await autoCompact.call(window);
     } catch {
@@ -1035,6 +1112,7 @@ export class ExecutionUnit {
       // 占位符压缩）。真撑爆时走「超限」卡 + 失败收尾那条路。
       return;
     }
+    if (removed > 0) this.reportCompactionImageDrops(execution, imagesBefore);
     this.publishCompacted(window, execution.runId, execution.sessionId, removed, 'auto');
     if (removed > 0) {
       // 压缩删掉了中段：本段从压缩后的视图开始，必须显式标段因，否则守卫会当成前缀重写。
@@ -3019,6 +3097,16 @@ export class ExecutionUnit {
     const { runId, stats } = execution;
     const messages = args.messages;
     let overflowRetried = false;
+
+    // ── 0.56：图片计划（请求期算一次，整条重试链复用）───────────────────────────
+    // 位置就是 design §3.3 的步 ②：在 `buildRequestMessages` 之后、发送前闸之前。
+    // **重试必须复用同一份 plan**：字节在入池时已冻结，重算只会重复 I/O；更重要的是
+    // plan 进请求体，重试换一份字节就是「同一条请求两次内容不同」。
+    // 无图（绝大多数会话）= 空计划，请求体与 0.55 逐字节相同。
+    const attachmentPlan = await this.resolveAttachmentPlanFor(messages);
+    this.reportImageDelivery(execution, args.sessionId, attachmentPlan);
+    const attachmentTokens = attachmentPlan.tokens;
+
     /** 重试链（传输层 / overflow）里的第几次真实请求（1 起；写进落盘元信息） */
     let attempt = 1;
     /** 本请求已用掉的传输层重试次数（跨 overflow 压缩不重置：同一条消息不该再多一轮） */
@@ -3056,7 +3144,11 @@ export class ExecutionUnit {
       //   3) 把同一个数写进 `llm.request.estimated_tokens`（显示 / `sessions.get` 的口径）。
       // 顺序不能反：闸先判定，判定通过才允许发事件与请求 —— 否则日志里会出现一条
       // 「请求已发出」但实际没发的假事实。
-      const requestViewTokens = estimateRequestViewTokens(messages, { tools: args.tools });
+      const requestViewTokens = estimateRequestViewTokens(messages, {
+        tools: args.tools,
+        // 0.56：图片 token **必填**（没有图也要显式传 0）。漏传 = 闸低估 = 必然 400。
+        attachments: { tokens: attachmentTokens },
+      });
 
       this.accounting(execution).requestView = {
         tokens: requestViewTokens,
@@ -3148,6 +3240,12 @@ export class ExecutionUnit {
             attempt,
             stream: true,
             ...(this.includeReasoning ? { include_reasoning: true } : {}),
+            // 0.56：图片的**计价读数**（只有数字与 sha8，没有 base64、没有字节）。
+            // 落盘的理由与 `estimated_tokens` 同一条：出问题时（涨了 40 万 token、
+            // 该发的没发）要能从日志里看出「这一轮算了几张、算成多少 token」。
+            ...(attachmentPlan.images > 0 || attachmentPlan.dropped.length > 0
+              ? { images: summarizeAttachmentPlan(attachmentPlan) }
+              : {}),
             // temperature / max_tokens：core 今天不设（沿用 provider 默认），因此不写；
             // 字段已在 `LlmRequestPayload` 里预留，harness 接上时在这里补。
           },
@@ -3175,6 +3273,9 @@ export class ExecutionUnit {
         signal: args.signal,
         // 0.11.1：仅在显式开启时要求 reasoning 流式增量；默认请求形状不变
         ...(this.includeReasoning ? { include_reasoning: true } : {}),
+        // 0.56：这一轮要发的图。**只有适配器读它**（`Message` 一个字节没变）；
+        // 一张都没发时缺省 ⇒ 请求体与 0.55 逐字节相同（P0-13）。
+        ...(attachmentPlan.images > 0 ? { attachment_plan: attachmentPlan } : {}),
         // 流式（ADR-007）：始终提供 stream + on_chunk。支持流式的 Provider 边收边经回调吐增量，
         // loop 在此发布 LlmStreamChunk 事件供 TUI 订阅渲染；不支持流式的 Provider 忽略字段、
         // 退化为整段返回（无 chunk 事件，无副作用）。chat() 仍返回完整 LLMResponse。
@@ -4097,6 +4198,163 @@ export class ExecutionUnit {
    * 读回来的也不是。搬到请求构建层之后：发出去的请求照旧省 token，落盘与读回的原文一个字
    * 不改。占位改变了请求消息序列 ⇒ 记一次显式的 `context_trim`，前缀守卫照旧有据可依。
    */
+  /**
+   * 0.56：为**这一次请求**算出图片计划（design §3.3 步 ②）。
+   *
+   * 三件事一次做完，顺序不能变：
+   * 1. 能力问 `this.provider.vision`（插件的 `VisionBackend`；`undefined` = 没有视觉）；
+   * 2. 设置问 `this.visionSettings` + env（kill switch 是**唯一**的回退通道，不是门）；
+   * 3. 字节只从 blob 读（`vision/plan.ts` 的 `readImageBlob`）——**永不**回源读
+   *    `refs[].path`（那就是「用户改了原图 ⇒ 前缀变化」的入口）。
+   *
+   * 无图时返回空计划（一次 `Map` 分配，没有 I/O），请求体与 0.55 逐字节相同。
+   */
+  private async resolveAttachmentPlanFor(messages: readonly Message[]): Promise<AttachmentPlan> {
+    const hasImageRef = messages.some((message) =>
+      (message.refs ?? []).some((ref) => ref.kind === 'image'),
+    );
+    if (!hasImageRef) return EMPTY_ATTACHMENT_PLAN;
+    return resolveAttachmentPlan({
+      messages,
+      ...(this.provider.vision !== undefined ? { backend: this.provider.vision } : {}),
+      ...(this.visionSettings !== undefined ? { settings: this.visionSettings } : {}),
+    });
+  }
+
+  /**
+   * 0.56：把图片投递事实写成事件（**GUI 三态 chip 的唯一数据源**）。
+   *
+   * 为什么是事件而不是 `refs` 上的字段（design §6.3 禁止项 1）：`refs[]` 里加
+   * `status` / `sent_at` 会 ① 改写历史前缀（前缀守卫逐条 `JSON.stringify(message)`）且
+   * ② 被 `messageSignature` 无视（它只取 `kind:path`）—— 最坏的一类字段：既不进签名、
+   * 又污染前缀。所以状态只从事件派生（`image.sent` / `context.image_dropped`），随 wire
+   * 投影下发。
+   *
+   * 去重：(session, sha8, 结果) 只记一条 —— plan 每轮重算，同一张历史里的图会被反复解析
+   * 出来，不去重就会随轮数线性增长（P0-09 的幂等性判据）。
+   */
+  private reportImageDelivery(execution: Run, sessionId: string, plan: AttachmentPlan): void {
+    const { runId } = execution;
+    if (plan.disabled === true && !this.visionDisabledReported.has(sessionId)) {
+      this.visionDisabledReported.add(sessionId);
+      this.publishEvent({
+        type: 'vision.disabled',
+        run_id: runId,
+        data: {
+          run_id: runId,
+          session_id: sessionId,
+          source: this.visionSettings?.disabled === true ? 'config' : 'env',
+          images_withheld: plan.dropped.length,
+        },
+        ts: Date.now(),
+      });
+    }
+    const reported =
+      this.reportedImageDelivery.get(sessionId) ??
+      ((): Set<string> => {
+        const fresh = new Set<string>();
+        this.reportedImageDelivery.set(sessionId, fresh);
+        return fresh;
+      })();
+    const perImageTokens = this.provider.vision?.tokenCost(1);
+    for (const [messageIndex, images] of plan.byMessageIndex) {
+      for (const image of images) {
+        const sha8 = sha8Of(image.sha256);
+        const key = `sent:${sha8}`;
+        if (reported.has(key)) continue;
+        reported.add(key);
+        this.publishEvent({
+          type: 'image.sent',
+          run_id: runId,
+          data: {
+            run_id: runId,
+            session_id: sessionId,
+            message_index: messageIndex,
+            sha8,
+            sha256: image.sha256,
+            media_type: image.media_type,
+            bytes: image.bytes,
+            ...(perImageTokens !== undefined ? { tokens: perImageTokens } : {}),
+            ...(plan.backend !== undefined
+              ? { backend: plan.backend.id, kind: plan.backend.kind }
+              : {}),
+            model: this.model,
+          },
+          ts: Date.now(),
+        });
+      }
+    }
+    for (const drop of plan.dropped) {
+      const sha8 = drop.sha256 !== undefined ? sha8Of(drop.sha256) : '';
+      const key = `drop:${sha8 !== '' ? sha8 : drop.path}:${drop.reason}`;
+      if (reported.has(key)) continue;
+      reported.add(key);
+      this.publishEvent({
+        type: 'context.image_dropped',
+        run_id: runId,
+        data: {
+          run_id: runId,
+          session_id: sessionId,
+          message_index: drop.message_index,
+          count: 1,
+          reason: drop.reason,
+          label: imageDropLabel(drop.reason),
+          status: imageDropStatus(drop.reason),
+          ...(sha8 !== '' ? { sha8 } : {}),
+          path: drop.path,
+        },
+        ts: Date.now(),
+      });
+    }
+  }
+
+  /**
+   * 0.56：占位替换顺带删掉图片引用时，把这件事写成事件（`reason: 'placeholder'`）。
+   *
+   * 为什么必须成对：占位的意义是「这条工具结果省掉」，而图在 `refs` 里 —— 只换文本不删
+   * 引用，就是「花了钱还看不到」（design §7.6 的第一行）。这条事件让 GUI 把那条消息的
+   * chip 从「已发送」改成「已丢弃（占位）」，同时给 P1 的 TUI 留下数据源。
+   *
+   * 去重键与 `reportImageDelivery` 同一套（session + sha8 + 结果）：请求视图每轮都重建，
+   * 不去重就会每轮重复记一条。
+   */
+  private reportPlaceholderImageDrops(before: readonly Message[], after: readonly Message[]): void {
+    const run = this.activeRun;
+    if (run === undefined) return;
+    const reported = this.reportedImageDelivery.get(run.sessionId);
+    for (let index = 0; index < before.length; index += 1) {
+      const was = before[index];
+      const now = after[index];
+      if (was === undefined || now === undefined || was === now) continue;
+      const imagesBefore = (was.refs ?? []).filter((ref) => ref.kind === 'image');
+      if (imagesBefore.length === 0) continue;
+      const imagesAfter = (now.refs ?? []).filter((ref) => ref.kind === 'image');
+      if (imagesAfter.length >= imagesBefore.length) continue;
+      for (const ref of imagesBefore) {
+        const sha8 = ref.sha256 !== undefined ? sha8Of(ref.sha256) : '';
+        const key = `drop:${sha8 !== '' ? sha8 : ref.path}:placeholder`;
+        if (reported?.has(key) === true) continue;
+        reported?.add(key);
+        this.publishEvent({
+          type: 'context.image_dropped',
+          run_id: run.runId,
+          data: {
+            run_id: run.runId,
+            session_id: run.sessionId,
+            message_index: index,
+            count: 1,
+            reason: 'placeholder',
+            label: imageDropLabel('placeholder'),
+            status: imageDropStatus('placeholder'),
+            ...(sha8 !== '' ? { sha8 } : {}),
+            path: ref.path,
+          },
+          ts: Date.now(),
+        });
+      }
+    }
+  }
+
   private buildRequestMessages(
     systemOverrideInput: unknown,
     workingContext: WorkingContext,
@@ -4114,6 +4372,9 @@ export class ExecutionUnit {
     if (prepared.some((message, index) => message !== normalized[index])) {
       // 占位替换是真实的（已声明）前缀变化：不标 reason 的话守卫会当成「莫名重写」。
       this.pendingPrefixReason ??= 'context_trim';
+      // 0.56：占位同时删掉了图片引用 ⇒ 写一条 `context.image_dropped{reason:'placeholder'}`
+      // （不是静默：GUI 的 chip 要能从「已发送」变「已丢弃（占位）」）。
+      this.reportPlaceholderImageDrops(normalized, prepared);
     }
     // 0.52（用户裁定两条不变量）：脱敏**不在这里**做。
     // - 可见性对等：UI 渲染的就是 store 里的字节 ⇒ 脱敏必须在 **append 侧**

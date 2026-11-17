@@ -4,6 +4,7 @@
  */
 
 import type { ToolCall, ToolSchema } from './tool.js';
+import type { AttachmentPlan, VisionBackend } from './vision.js';
 
 /** 消息角色 */
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
@@ -28,6 +29,17 @@ export interface MessageRef {
   kind: MessageRefKind;
   /** 绝对路径（宿主机本地文件）；唯一的定位信息 */
   path: string;
+  /**
+   * 内容地址（additive，0.56）：`<dataDir>/blobs/sha256/xx/<sha256>` 的文件名。
+   *
+   * 上传即落（决策 2）：附件在**到达节点那一刻**就算出 sha256、落 blob，并写回这条引用。
+   * 请求构造期只按它读 blob，**不再读 `path`** —— 这是「同一张图连续 3 次请求逐字节
+   * 相同」的实现基础（读路径 = 用户随时能改的文件；读 blob = 冻结的字节）。
+   *
+   * 缺省 = 旧数据 / 旧 gateway / 没入池：此时图**不内联**（`not_ingested`），
+   * 而不是回源读 path（那会让前缀随文件内容漂移）。
+   */
+  sha256?: string;
   /** 展示名（缺省取 path 的 basename） */
   name?: string;
   /** MIME（前端探测值，不可信，仅供展示 / 透传） */
@@ -126,6 +138,14 @@ export interface ChatRequest {
    * 非独立方法）。非流式 Provider 忽略本字段即退化为整段返回。
    */
   on_chunk?: (chunk: StreamChunk) => void;
+  /**
+   * 这一轮要发的图（additive，0.56）。**只有适配器读它**，`Message` 一个字节不变。
+   *
+   * 由 `ExecutionUnit` 在请求期算出来（`vision/plan.ts`），随 `chat()` 传下去；
+   * 缺省 = 旧行为（所有消息的 `content` 仍是 `string`，请求体逐字节相同）。
+   * 适配器命中 `byMessageIndex` 时才把那条消息的 `content` 升成块数组。
+   */
+  attachment_plan?: AttachmentPlan;
 }
 
 /** 流式 chunk：Provider 吐给 loop 的增量单元 */
@@ -182,6 +202,17 @@ export interface ProviderRetryPolicy {
 /** LLM Provider 接口 */
 export interface LLMProvider {
   chat(req: ChatRequest): Promise<LLMResponse>;
+  /**
+   * 视觉能力（additive，0.56；**可选**）。
+   *
+   * 挂在 provider 实例上而不是「模型名 → 能力」映射表上：能力是 `(provider, model)` 的
+   * 函数，而 provider 实例正是这个函数的求值结果 —— `agent.model` 覆盖因此自动生效，
+   * 不会与配置漂移（见 design §4.2）。
+   *
+   * `undefined` = 该模型**没有**视觉能力（不是「可能支持」）：图不内联、`[refs]` 尾注
+   * 回落旧文案。实例由**插件**在构造 provider 时挂上（宪法第十三条：核心只有形状）。
+   */
+  vision?: VisionBackend;
 }
 
 /** Provider 工厂 */
