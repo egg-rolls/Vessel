@@ -864,11 +864,22 @@ async function readTimelineEventPage(
   let hasMore = false;
   while (scanned < SESSION_EVENTS_MAX_SCAN) {
     if (cursor >= effectiveEnd) break;
-    const page = await port.readPage(sessionId, {
-      afterSeq: cursor,
-      untilSeq: effectiveEnd,
-      limit: TIMELINE_PAGE_LIMIT,
-    });
+    let page: Awaited<ReturnType<TimelineReadPort['readPage']>>;
+    try {
+      page = await port.readPage(sessionId, {
+        afterSeq: cursor,
+        untilSeq: effectiveEnd,
+        limit: TIMELINE_PAGE_LIMIT,
+      });
+    } catch (error) {
+      // 0.55：旧格式会话在**页读**这一层被 core 拒绝（`legacy_session_unsupported`）。
+      // 必须把它升级成同一个协议码再抛 —— 让它落成 `internal` 等于把「这个会话是 0.54
+      // 之前的格式」说成「服务端内部错误」，用户拿不到那句可照做的修复提示。
+      if (isLegacySessionUnsupported(error)) {
+        throw new MethodError('legacy_session_unsupported', legacySessionUnsupportedMessage(error));
+      }
+      throw error;
+    }
     const ordered = selectTimelinePage(page, cursor + 1, effectiveEnd, TIMELINE_PAGE_LIMIT);
     if (ordered.length === 0) break;
     for (const record of ordered) {

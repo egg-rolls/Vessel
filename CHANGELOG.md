@@ -82,6 +82,26 @@
     在读一个不再增长的文件；0.55 删掉这份文件之后其**数据面不再可用**（用量 / 请求日志页会是空的），
     将单独迁移到时间线。
 
+- **`timeline_source` 四件一起删：帧字段 / 读源标记 / 老格式退回路径 / `gap` 帧（0.55）**
+  - 删了什么：① `hello.timeline_source` 帧字段（服务端 `frames.ts` / `protocol.ts` /
+    `events.subscribe` 的 result 都停发）；② `TimelineReadFrom` 类型与 `read_from` 残留口径
+    （`serve/gateway/timeline-protocol.ts`）；③ 老格式会话的退回路径（本单上一组删 `events.ndjson`
+    之后它已经没有活分支，客户端那侧剩下的是「没有 `timeline` 段 ⇒ 老 epoch」这一条，保留）；
+    ④ `gap` 帧整条链：`ServerFrame` 的 `kind:'gap'`、`frames.ts#gapFrame`、WS 背压补发 /
+    心跳补发 / 回放缺口 / SSE 的三处发送点，以及客户端的 `onGap` 订阅与 `offGap` 分支
+    （`GapFrame` 类型、`TimelineGapSource` 的 `'server'` 成员一起删）。
+  - 判据换成**形状**：客户端 `readHelloTimelineSegment` 只看 `hello` 上那六个键在不在
+    （`apps/web/src/gateway/node/protocol.ts` 的 wire → 内部形状映射仍只有一处）；服务端
+    `helloFrame` 只在有时间线段时才带那几个键。
+  - 现在会怎么坏（**用户视角，必须写在 CHANGELOG 里**）：**升级后请刷新页面**。48 小时内
+    没刷新的老前端还靠 `timeline_source` 判读：服务端停发该键之后它会把这趟当成老 epoch，
+    于是 ① 不做四条 count 校验、② 忽略 `timeline-epoch-end`、③ 看到假缺口（表现为时间线上
+    一条「这一段读不回」的污点条）。刷新页面即恢复（新前端判形状，不依赖该键）。
+  - 老服务端（0.54）不受影响：`timeline_source` 只是被当成未知键忽略，而新前端读的是同一批
+    形状键，四条校验照旧生效。
+  - 口径见 [gateway-rpc §订阅 epoch](docs/architecture/gateway-rpc.md)、
+    [events](docs/architecture/events.md)、[session-replay](docs/architecture/session-replay.md)。
+
 ## [0.54.0] - 2026-11-16
 
 > 本节按 0.54 迁移判据 B-4

@@ -465,6 +465,11 @@ function mapExternalErrorCode(code: unknown): RpcErrorCode | null {
     case 'not_supported':
     case 'expired':
     case 'run_ended':
+    // 0.55：core 的读口为旧格式会话抛的是 `TimelineError`（不是 RpcError），
+    // 这里按冻结的错误码放行，让它以 `legacy_session_unsupported` 抵达客户端
+    // （否则会被折成 `internal`，用户拿不到「用 0.54 导出」那句修复提示）。
+    case 'legacy_session_unsupported':
+    case 'timeline_unavailable':
       return code;
     default:
       return null;

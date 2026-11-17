@@ -112,8 +112,9 @@ export const MAX_TRIM_SCAN = 512;
  * 事件循环里排好了序，不需要等待一段时间。
  *
  * 两条判据都只对**时间线** epoch 有效：没有 `hello.timeline` 段就没有 epoch（
- * `beginTimelineEpoch` 不会被调用），legacy epoch 上它们都是空操作 —— 这正是
- * `serve-epoch` 报告要求的「只在 `timeline_source === 'timeline'` 的 epoch 上依赖结束帧」。
+ * `beginTimelineEpoch` 不会被调用），老 epoch 上它们都是空操作 —— 这正是
+ * `serve-epoch` 报告要求的「只在带时间线段的 epoch 上依赖结束帧」（0.55 的判据是形状，
+ * `timeline_source` 已在 0.55 删除）。
  */
 
 /**
@@ -305,9 +306,9 @@ export class EventStore {
   /**
    * 本 epoch 由服务端**声明**的时间段（`timeline.hello` 的 `timeline` 字段）。
    *
-   * 只有 `timeline_source === 'timeline'` 时才有：那时帧带 `timeline_seq`，四条校验就能
+   * 只有 `hello.timeline` 段在时才有：那时帧带 `timeline_seq`，四条校验就能
    * 在**实时流**上做 —— 收到区间左端时开始记账，收到右端（或攒够 `count` 条）时一次核对。
-   * `undefined` = 老订阅（hub seq），不做四条校验（帧 seq 里有跳空是正常的）。
+   * `undefined` = 老 epoch（hub seq），不做四条校验（帧 seq 里有跳空是正常的）。
    */
   private epoch: { header: TimelineRangeHeader; seqs: number[] } | undefined;
   /**

@@ -38,21 +38,22 @@
  * ## 老客户端为什么不受影响（additive 的具体含义）
  * 新字段是**加**在同一个 `kind:'hello'` 帧上的：不改 `kind`、不改 `from_seq` /
  * `latest_seq` 的口径。老客户端按 `from_seq` 起、忽略不认识的键 ⇒ 行为一字节不变。
- * 另外 `timeline_source` 标出本次 epoch 的读源：只有 `'timeline'` 才做四条校验，
- * `'legacy'`（没给 `after_timeline_seq` 的旧订阅）仍是老行为 —— 两种编号（进程级 hub seq
- * 与 session timeline_seq）绝不混在同一个 epoch 里（ADR-105 §9 R7）。
+ * 两种编号（进程级 hub seq 与 session timeline_seq）绝不混在同一个 epoch 里
+ * （ADR-105 §9 R7）：带 `after_timeline_seq` 的订阅才是时间线 epoch，没带的仍是老行为。
  *
  * **0.54 C：`timeline.read_from` 开关已删除。** 它只服务 B 阶段的 48 小时回退窗口；
  * 那之后没有第二个读源可回退，留着这个开关就会留下一条"读旧源"的活路径。
- * `timeline_source` 这个**帧字段**在 0.54 保留过一版（描述「本 epoch 是哪一种订阅」），
- * 0.55 也删掉了：客户端改判「`hello.timeline` 在不在」（见 `apps/web` 的
- * `readHelloTimelineSegment`），线上帧不再有这个键。
+ *
+ * **0.55：`timeline_source` 帧字段也删了。** 它 0.54 的用途是让客户端知道「要不要做四条
+ * count 校验」，而**形状本身**已经是完整判据（`hello` 带 `start_seq` / `end_seq` / `count` /
+ * `timeline_head` / `wal_head` / `published_head` / `holes` 就是时间线 epoch）。多留一个
+ * 可能与形状不一致的字段，就是多一处要维护的真相。客户端（`apps/web` 的
+ * `readHelloTimelineSegment`）改成只看「时间线段在不在」。风险窗口只有一个：
+ * 升级前 48 小时内刷过页面的老客户端如果靠 `timeline_source` 判读，会看到「没有这个键」
+ * 而退回老 epoch 行为（假缺口报告）——刷新页面即恢复，CHANGELOG 里写明。
  *
  * @module @vessel-agent/serve/gateway/timeline-protocol
  */
-
-/** 本次 epoch 的读源标记（帧字段 `timeline_source` 的取值；不是可配置开关）。 */
-export type TimelineReadFrom = 'timeline' | 'legacy';
 
 /** 单页上限（ADR-105 §6：每页 ≤ 500 条，另有 8 MiB 字节上限在装配侧）。 */
 export const TIMELINE_PAGE_LIMIT = 500;

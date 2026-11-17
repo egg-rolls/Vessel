@@ -5,7 +5,6 @@
  */
 
 import type { RunEvent } from '@vessel-agent/core';
-import type { EventGap } from '../event-buffer.js';
 import {
   type NodeInfo,
   PROTOCOL_VERSION,
@@ -14,11 +13,7 @@ import {
   protocolError,
   type ServerFrame,
 } from '../protocol.js';
-import type {
-  TimelineEpochEndSegment,
-  TimelineHelloSegment,
-  TimelineReadFrom,
-} from './timeline-protocol.js';
+import type { TimelineEpochEndSegment, TimelineHelloSegment } from './timeline-protocol.js';
 
 /** camelCase key → snake_case */
 function toSnakeKey(key: string): string {
@@ -89,24 +84,21 @@ export interface HelloFrameInput {
   latestSeq: number;
   ts?: number;
   /**
-   * 0.54 B1：本次 epoch 的读源。缺省 `'legacy'`（老装配没这个概念时保持老形状）。
+   * 时间线段（0.55：**它的存在本身就是判据**）。
    *
-   * `timeline_source` **总是**出现在线上帧里（老客户端忽略未知键即可），
-   * 这样新客户端有一个确定的地方判断「该不该做四条 count 校验」，
-   * 不用靠「`count` 字段在不在」猜。
-   */
-  source?: TimelineReadFrom;
-  /**
-   * 0.54 B1：时间线段（只有 `source === 'timeline'` 时才给）。
+   * 给了 ⇒ 本 epoch 是时间线 epoch（帧的 `seq` 是会话内 `timeline_seq`，下面七个字段
+   * 一并给出）；不给 ⇒ 老 epoch（环形 hub seq，老行为）。
    *
-   * 给了就与 `from_seq` / `latest_seq` **并存**（不改它们的老口径）：
-   * 老客户端照样按 `from_seq` 起、`latest_seq` 判断追平；新客户端读这一段做校验。
+   * 0.54 时代这里还有一个 `timeline_source: 'timeline' | 'legacy'` 的**显式标记**，
+   * 0.55 删掉了：形状本身（`timeline` 在不在）已经是完整的判据，多一个字段就多一处
+   * 可能与形状不一致的地方。老客户端读的正是「`start_seq` 等在不在」，所以删它不会
+   * 让任何老客户端改变行为（它们本来就不认识 `timeline_source`）。
    */
   timeline?: TimelineHelloSegment;
 }
 
 export function helloFrame(input: HelloFrameInput): ServerFrame {
-  const timeline = input.source === 'timeline' ? input.timeline : undefined;
+  const timeline = input.timeline;
   return {
     v: PROTOCOL_VERSION,
     kind: 'hello',
@@ -117,7 +109,6 @@ export function helloFrame(input: HelloFrameInput): ServerFrame {
     incarnation: input.incarnation,
     from_seq: input.fromSeq,
     latest_seq: input.latestSeq,
-    timeline_source: input.source ?? 'legacy',
     ...(timeline !== undefined
       ? {
           start_seq: timeline.start_seq,
@@ -200,30 +191,5 @@ export function errorFrame(input: ErrorFrameInput): ServerFrame {
     id: input.id,
     ok: false,
     error: input.error ?? protocolError('internal', 'Unknown error'),
-  };
-}
-
-export interface GapFrameInput {
-  nodeId: string;
-  gap: EventGap;
-  ts?: number;
-}
-
-/**
- * 缺口帧（**过渡期字段，B2 落地即删**）。
- *
- * 调用方**只能**在 `timeline_source === 'legacy'` 的老 epoch 上用它；时间线 epoch 的
- * 连续性由 `hello.count` + `hello.holes` 表达，服务端不替客户端编区间
- * （ADR-105 §9 R4）。为什么过渡期还留：B2 上线前老客户端是生产客户端，
- * 它靠这一帧知道「慢消费跳过了 [from_seq, to_seq]」，删早了就退化为静默丢帧。
- */
-export function gapFrame(input: GapFrameInput): ServerFrame {
-  return {
-    v: PROTOCOL_VERSION,
-    kind: 'gap',
-    node_id: input.nodeId,
-    ts: input.ts ?? Date.now(),
-    from_seq: input.gap.from_seq,
-    to_seq: input.gap.to_seq,
   };
 }

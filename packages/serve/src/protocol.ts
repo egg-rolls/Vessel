@@ -137,14 +137,10 @@ export type ServerFrame =
       /** 服务端当前最新 seq；无事件时为 0 */
       latest_seq: number;
       // ── 0.54 B1：时间线段（**全部 additive**，老客户端忽略即旧行为）──────────
-      /**
-       * 本次 epoch 的读源。
-       * - `'timeline'`：下面六个字段都有效，帧的 `seq` 是会话内 `timeline_seq`；
-       * - `'legacy'`：老订阅 / `read_from = 'legacy'` 回退期，帧的 `seq` 仍是进程级
-       *   hub seq，客户端必须按老行为处理（**不做**四条 count 校验）。
-       * 缺省 = 老服务端，等价于 `'legacy'`。
-       */
-      timeline_source?: 'timeline' | 'legacy';
+      //
+      // 0.55：**这一段的「在不在」就是判据**（不再有 `timeline_source` 字段）。
+      // 在 ⇒ 本 epoch 是时间线 epoch：帧的 `seq` 是会话内 `timeline_seq`，下面七个字段
+      // 都有效，客户端做四条 count 校验；不在 ⇒ 老 epoch（进程级 hub seq，老行为）。
       /**
        * 声明区间的左端（闭）= `after_timeline_seq + 1`；`reset` 时为 1。
        * 可以落在 `holes` 里 ⇒ 客户端第一条实收是「该洞之后第一个非洞 seq」。
@@ -193,25 +189,6 @@ export type ServerFrame =
       event: RunEvent;
     }
   /**
-   * 缺口区间（**过渡期字段，B2 落地即删**）。
-   *
-   * 只由 `timeline_source === 'legacy'` 的**老 epoch** 发：B2 上线前老客户端就是
-   * 生产客户端，它靠这一帧知道「慢消费 / 预算跳过让我漏了 [from_seq, to_seq]」；
-   * 删早了就变成「静默丢帧变真静默」——那正是我们这半年在消灭的那类 bug。
-   *
-   * **时间线 epoch 永不发**这个帧：它的连续性由 `hello` 的 `count`（覆盖到
-   * `min(end_seq, published_head)`）与 `holes`（写者声明的不可读区间）表达，
-   * 缺一条就是客户端自己算错，由客户端报 `timeline.gap_reported`（ADR-105 §9 R4）。
-   */
-  | {
-      v: 1;
-      kind: 'gap';
-      node_id: string;
-      ts: number;
-      from_seq: number;
-      to_seq: number;
-    }
-  /**
    * 时间线 epoch 的**显式结束标记**（0.55，additive 新 kind）。
    *
    * 服务端把本趟声明区间（`hello.start_seq..end_seq`）的帧发完之后发这一帧，
@@ -219,7 +196,7 @@ export type ServerFrame =
    * （那个猜测在 0.55 已删除：`apps/web` 改吃本帧 + 订阅 `res` 两条显式事实）。
    *
    * 三条边界（都是判据，不是措辞）：
-   * - **只由时间线 epoch 发**（`timeline_source === 'timeline'`）。老 epoch 的环形 seq
+   * - **只由时间线 epoch 发**（`hello` 带时间线段的那种）。老 epoch 的环形 seq
    *   没有「本趟区间」的声明，给它一个结束标记等于凭空造第二个事实源。
    * - **只在整趟发完时发**。提前停（连接坏 / 撞 8 MiB 背压硬阈值）**不发**：
    *   那不是「发完了」。

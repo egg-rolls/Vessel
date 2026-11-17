@@ -37,7 +37,7 @@ import {
   toRunSummary,
 } from './durable.js';
 import type { EvalsGatewayOptions } from './evals.js';
-import type { EventGap, SeqEvent } from './event-buffer.js';
+import type { SeqEvent } from './event-buffer.js';
 import { createFederationRoute, type FederationGatewayOptions } from './federation.js';
 import type { FeishuGatewayOptions } from './feishu.js';
 import {
@@ -54,7 +54,6 @@ import {
 import { MethodError } from './gateway/errors.js';
 import {
   eventFrame as buildEventFrame,
-  gapFrame as buildGapFrame,
   helloFrame as buildHelloFrame,
   errorFrame,
   resultFrame,
@@ -112,8 +111,8 @@ import {
 } from './gateway/methods/sessions.js';
 import { createTeamMethods } from './gateway/methods/teams.js';
 import {
-  flushSseGap,
   pumpSseReplay,
+  resetSseDropState,
   SSE_HIGH_WATER_FRAMES,
   SSE_LOW_WATER_FRAMES,
   SSE_REPLAY_BATCH,
@@ -1454,14 +1453,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     });
   }
 
-  /**
-   * 缺口帧（**过渡期字段，B2 落地即删**）。只允许用在老 epoch 上：
-   * 时间线 epoch 的连续性由 `hello.count` / `holes` 表达，服务端不替客户端编区间。
-   */
-  function gapFrame(gap: EventGap): ServerFrame {
-    return buildGapFrame({ nodeId, gap });
-  }
-
   function helloFrame(fromSeq: number, timeline?: TimelineHelloSegment): ServerFrame {
     // fromSeq 由回放窗口解析后传入；这里只取同一时刻的 latest / node 快照。
     // 时间线 epoch 例外：`from_seq` / `latest_seq` 也换成时间线的区间两端（见 frames.ts）。
@@ -1476,7 +1467,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       fromSeq,
       latestSeq,
       ts,
-      source: timeline !== undefined ? 'timeline' : 'legacy',
       ...(timeline !== undefined ? { timeline } : {}),
     });
   }
@@ -1583,18 +1573,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (!wsAccepts(ws, item.event, replaySessions)) return;
     const inflight = ws.getBufferedAmount();
     if (!ws.data.backpressure.admit(item.seq, inflight)) {
-      // 0.55：这一帧进了丢弃记账。老 epoch 靠之后补发的 `gap` 帧告诉客户端
-      // （过渡期字段，B2 落地即删），但**断连那一刻**没有任何帧能说清丢了多少 ——
+      // 0.55：这一帧进了丢弃记账。0.54 的过渡期还会补发一帧 `gap` 把区间告诉客户端，
+      // 那一帧已随 `timeline_source` 一起删除；**断连那一刻**也没有帧能说清丢了多少 ——
       // 所以本连接自己留一份数（`backpressure_drops`），进断连日志。
       connStats(ws).backpressure_drops += 1;
       return;
     }
-    // 背压恢复：补发缺口帧（过渡期，B2 落地即删）。能走到这里的连接必然是**老 epoch**
-    // —— 时间线 epoch 在本函数开头就 return 了（它不发环形 seq、也不发 gap 帧）。
-    const recoveryGap = ws.data.backpressure.takeGap(inflight);
-    if (recoveryGap !== null) {
-      sendFrame(ws, gapFrame({ from_seq: recoveryGap.from_seq, to_seq: recoveryGap.to_seq }));
-    }
+    // 背压恢复：**只复位丢弃状态机**（`takeGap` 是复位点，不调用会让 `dropping` 永远为真）。
+    // 不再往线上写缺口帧：连续性由客户端按 seq 自己判断（时间线 epoch 用 `hello.count` /
+    // `holes`，老 epoch 用自己的 seq 连续性）。
+    ws.data.backpressure.takeGap(inflight);
     const sent = sendFrameText(ws, encoded ?? outboundEventFrame(item, replaySessions).encoded);
     // 0.55：`encoded` 走的是**文本捷径**（不为算大小再序列化一次），所以这里要自己
     // 补一次 `last_seq_sent` —— 否则老 epoch 的连接断连日志里永远是 0（实测踩到过）。
@@ -1602,18 +1590,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   /**
-   * 心跳时补发/复位背压缺口（**只对老 epoch**）。
+   * 心跳时复位背压丢弃记账（**不发任何帧**）。
    *
    * `takeGap` 同时是丢弃状态机的复位点：不调用会让 `dropping` 永远为真、
-   * 后续 `admit` 一直按「还在丢弃」处理。所以两个 epoch 都要调，
-   * 但**只有老 epoch 把缺口写到线上**（过渡期保留，B2 落地即删）；
-   * 时间线 epoch 的缺口由客户端按 `hello.count` / `holes` 自检并报
-   * `timeline.gap_reported`（ADR-105 §9 R4）。
+   * 后续 `admit` 一直按「还在丢弃」处理。0.55 起它**只**做这件事：
+   * 过渡期的 `gap` 帧已删除，缺口由客户端自己判断。
    */
   function drainWsGap(ws: Ws): void {
-    const gap = ws.data.backpressure.takeGap(ws.getBufferedAmount());
-    if (gap === null || ws.data.timelineEpoch === true) return;
-    sendFrame(ws, gapFrame({ from_seq: gap.from_seq, to_seq: gap.to_seq }));
+    ws.data.backpressure.takeGap(ws.getBufferedAmount());
   }
 
   function broadcastEvent(item: SeqEvent): void {
@@ -1660,7 +1644,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function tailReplayWindow(
     items: readonly SeqEvent[],
     encode: (item: SeqEvent) => string,
-  ): { frames: ReplayFrame[]; skippedTo?: number; budget: ReplayBudgetSelection } {
+  ): { frames: ReplayFrame[]; budget: ReplayBudgetSelection } {
     const count = items.length;
     const encoded: (string | undefined)[] = new Array(count);
     const sizes: number[] = new Array(count).fill(-1);
@@ -1691,13 +1675,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
       frames.push({ item, encoded: encoded[i] ?? encode(item) });
     }
     consoleNoteReplayBudget(budget);
-    // 预算跳过的最后一条（`skippedTo`）：只给**老 epoch** 组缺口帧用。
-    // 时间线 epoch 不用它 —— 那边的连续性由 `hello.count` / `holes` 表达。
-    const first = frames[0];
-    if (first === undefined) return { frames: [], budget };
-    const oldest = items[0]?.seq;
-    if (oldest === undefined || first.item.seq <= oldest) return { frames, budget };
-    return { frames, skippedTo: first.item.seq - 1, budget };
+    // 0.55：这里曾经还要算出「预算跳过的最后一条」（`skippedTo`）来组缺口帧。
+    // `gap` 帧删除之后它没有任何读者（客户端按 seq 连续性自己发现），所以一起删了。
+    return { frames, budget };
   }
 
   interface ReplayPlan {
@@ -1705,10 +1685,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     /** 本次 epoch 实际会发送的第一条 seq */
     fromSeq: number;
     replaySessions: Map<string, string>;
-    /** 预算跳过的最后一条 seq（**只给老 epoch 组 gap 帧用**，时间线 epoch 不用）。 */
-    skippedTo?: number;
-    /** 环形缓冲自身的缺口（保留区之前；同上，只给老 epoch）。 */
-    ringGap?: EventGap;
     /**
      * 本次预算分配的诊断（结构地板 / 动态预算 / 最大的那条事件）。
      *
@@ -1745,51 +1721,29 @@ export function startGateway(opts: GatewayOptions): Gateway {
       filtered,
       (item) => outboundEventFrame(item, replaySessions).encoded,
     );
-    const ringGap = boundGap(hub.gapFor(ws.data.since), until);
     return {
       frames: window.frames,
       fromSeq: window.frames[0]?.item.seq ?? emptyFromSeq(until),
       replaySessions,
       budget: window.budget,
-      ...(ringGap !== undefined ? { ringGap } : {}),
-      ...(window.skippedTo !== undefined ? { skippedTo: window.skippedTo } : {}),
     };
   }
 
   /**
-   * 把环形缺口裁进 `until` 以内：回填页只说明「本次请求区间里没发出去的那段」，
-   * 不重复上报更早（不在本次请求范围）的缺口。区间整个落在缺口里时返回 undefined
-   * （本页无内容），由 `fromSeq = until + 1` 告诉调用方「这里没有可拉取的事件」。
-   */
-  function boundGap(gap: EventGap | null, until: number | undefined): EventGap | undefined {
-    if (gap === null) return undefined;
-    if (until === undefined || gap.to_seq <= until) return gap;
-    if (gap.from_seq > until) return undefined;
-    return { from_seq: gap.from_seq, to_seq: until };
-  }
-
-  /**
-   * hello → 缺口帧 → 有界回放（hello 已由调用方按 epoch 语义先发）。
+   * hello → 有界回放（hello 已由调用方按 epoch 语义先发）。
    *
-   * **只在老 epoch 发缺口帧**（`timeline_source === 'legacy'`，即连接没走
-   * `after_timeline_seq`）：B2 上线前老客户端就是生产客户端，它靠这一帧知道
-   * 「慢消费 / 预算跳过了 [from_seq, to_seq]」；删早了就变成「静默丢帧变真静默」。
+   * **0.55：这里不再发缺口帧。** 过渡期的那一帧（只服务 `timeline_source: 'legacy'` 的
+   * 老 epoch）已经随 `timeline_source` 一起删除：
+   * - 时间线 epoch 从头到尾就没发过它：连续性由 `hello.count`（覆盖到
+   *   `min(end_seq, published_head)`）+ `hello.holes`（写者声明的不可读区间）表达，
+   *   缺一条就是客户端自己算错 → 客户端报 `timeline.gap_reported`（ADR-105 §9 R4）；
+   * - 老 epoch 的「慢消费丢帧」由客户端自己按 seq 连续性发现（它本来就这么做），
+   *   服务端不必再补一个自证的区间。
    *
-   * **时间线 epoch 永不发**：连续性由 `hello.count`（覆盖到
-   * `min(end_seq, published_head)`）+ `hello.holes`（写者声明的不可读区间）表达，
-   * 缺一条就是客户端自己算错 → 客户端报 `timeline.gap_reported`（ADR-105 §9 R4）。
-   * 过渡期保留 = 「B2 落地即删」。
+   * 代价（写在这里，别以后当成 bug）：老 epoch 在背压丢帧时**不再**有服务端补发的
+   * `gap` 帧；`gateway.ws.closed` 的 `backpressure_drops` 仍是那一帧的替代记账。
    */
   function sendReplay(ws: Ws, plan: ReplayPlan): void {
-    if (ws.data.timelineEpoch !== true) {
-      const gapTo = Math.max(plan.ringGap?.to_seq ?? 0, plan.skippedTo ?? 0);
-      if (gapTo > 0) {
-        sendFrame(
-          ws,
-          gapFrame({ from_seq: plan.ringGap?.from_seq ?? ws.data.since + 1, to_seq: gapTo }),
-        );
-      }
-    }
     for (const frame of plan.frames) {
       sendEventToWs(ws, frame.item, plan.replaySessions, frame.encoded);
     }
@@ -2446,8 +2400,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
           latest_seq: { type: 'integer' },
           mode: { type: 'string', enum: ['ws', 'stream'] },
           stream_url: { type: 'string' },
-          // 0.54 B1：读源标记 + 时间线段（都是 additive）。
-          timeline_source: { type: 'string', enum: ['timeline', 'legacy'] },
+          // 0.54 B1：时间线段（additive）。0.55 起它的**存在**就是「这是时间线 epoch」的
+          // 判据（`timeline_source` 字段已删除，见 `frames.ts#helloFrame` 的注释）。
           timeline: { type: 'object' },
         },
       },
@@ -2460,7 +2414,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
           from_seq: since + 1,
           latest_seq: hub.latestSeq,
           mode,
-          timeline_source: 'legacy' as const,
           ...(ctx.connection === 'http' ? { stream_url: `/v1/events?since=${since}` } : {}),
         });
         // WS 路径由 applyWsSubscribe 用本次 epoch 实际的 hello 覆盖后再发 res
@@ -2521,7 +2474,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
           from_seq: segment.start_seq,
           latest_seq: segment.end_seq,
           mode,
-          timeline_source: 'timeline' as const,
+          // 时间线 epoch 的判据就是这个 `timeline` 段（0.55 删掉了 `timeline_source`）。
           timeline: segment,
         };
       },
@@ -4094,8 +4047,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
                   low: SSE_LOW_WATER_FRAMES,
                 }),
                 unacked: 0,
-                // 缺口帧（过渡期，B2 落地即删）：SSE 只走老路径，老客户端靠它知道漏了哪段。
-                encodeGap: (gap) => `data: ${JSON.stringify(gapFrame(gap))}\n\n`,
                 onClose: () => sseClients.delete(ctrl),
                 accepts,
               };
@@ -4118,20 +4069,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
               const fromSeq = window.frames[0]?.item.seq ?? emptyFromSeq(until);
               writeSse(ctrl, clientState, 'retry: 3000\n\n');
               writeSse(ctrl, clientState, `data: ${JSON.stringify(helloFrame(fromSeq))}\n\n`);
-              // 缺口帧（过渡期，B2 落地即删）：SSE 只有老路径，老客户端靠它知道
-              // 「环形淘汰 / 预算跳过让我漏了 [a,b]」。时间线 epoch 不走 SSE（501）。
-              const sseRingGap = boundGap(hub.gapFor(since), until);
-              const sseGapTo = Math.max(sseRingGap?.to_seq ?? 0, window.skippedTo ?? 0);
-              if (sseGapTo > 0) {
-                writeSse(
-                  ctrl,
-                  clientState,
-                  clientState.encodeGap({
-                    from_seq: sseRingGap?.from_seq ?? since + 1,
-                    to_seq: sseGapTo,
-                  }),
-                );
-              }
+              // 0.55：这里不再补发缺口帧（那一帧已随 `timeline_source` 删除）。
+              // SSE 只有老路径，客户端按 seq 连续性自己判断漏了哪段。
 
               // 窗口内已序列化，pull 时直接复用；窗口外的新事件再按需序列化。
               const windowFrames = new Map<number, string>();
@@ -4156,7 +4095,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
               if (!controller || !state) return;
               state.unacked = 0;
               pumpSseReplay(controller, state, hub);
-              flushSseGap(controller, state);
+              resetSseDropState(controller, state);
             },
             cancel() {
               if (controller) sseClients.delete(controller);
@@ -4399,7 +4338,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
           drainWsGap(ws);
         }
         for (const [ctrl, state] of [...sseClients]) {
-          if (!flushSseGap(ctrl, state)) continue;
+          resetSseDropState(ctrl, state);
           writeSse(ctrl, state, ': ping\n\n');
         }
       }, heartbeatMs);

@@ -340,7 +340,7 @@ export interface SessionEventInput {
   durable?: boolean;
 }
 
-/** 落盘后的会话事件记录（`events.ndjson` 单行） */
+/** 落盘后的会话事件记录（timeline 一行 / 一个块帧，也是 `sessionEvents` 的返回形状） */
 export interface SessionEventRecord extends SessionEventInput {
   v: 1;
   seq: number;

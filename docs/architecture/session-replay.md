@@ -31,8 +31,9 @@ paths: [apps/web/src/gateway/timeline-protocol.ts, apps/web/src/gateway/subscrip
 - **两个事实两个字段，绝不合并**：`end_seq = wal_head` 是**可读性**（`[1..wal_head]` 每条可读或已声明成洞），
   `published_head` 是**推送**（`<= wal_head`）。`count` 只算有效右端 `min(end_seq, published_head)` 以内
   （`packages/serve/src/gateway/timeline-protocol.ts:20-30`；ADR-105 §11.1「落地后的精确口径」）。
-- 只有 `timeline_source === 'timeline'` 的段做四条校验（`apps/web/src/gateway/timeline-protocol.ts:117-151`、
-  `packages/serve/src/gateway.ts:1020-1027`）；`timeline_source` 缺省 = 老服务端，等价旧行为。
+- 只有带时间线段的 hello 做四条校验（`apps/web/src/gateway/timeline-protocol.ts:117-151`、
+  `packages/serve/src/gateway.ts:1020-1027`）；0.55 起判据是**形状**（`hello` 上这六个键在不在），
+  `timeline_source` 帧字段已删除；没有这几个键 = 老 epoch，等价旧行为。
 - 一次区间拉取 8 s 超时：超时按「缺失」处理，交给四条校验变成**可见**缺口（`subscription.ts:49-53`）。
 
 ## 3. 等式与四条校验（判据）
