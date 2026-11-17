@@ -1,12 +1,13 @@
 /**
- * The heavy half of the plugin: read the session logs, fold them into request
- * records and run summaries, aggregate, and report how much it all cost.
+ * The heavy half of the plugin: read the session timelines, fold them into
+ * request records and run summaries, aggregate, and report how much of the data
+ * that answer actually covers.
  *
  * It lives in its own module for one reason: it is what runs **inside the worker
- * thread** (worker.ts). Reading and parsing tens of megabytes of NDJSON blocks
- * whatever thread it happens on, so on the main thread it would freeze the host's
- * event loop; here it is off to the side and the host only ever sees the finished
- * DTO.
+ * thread** (worker.ts). Reading and parsing hundreds of megabytes of NDJSON
+ * blocks whatever thread it happens on, so on the main thread it would freeze the
+ * host's event loop; here it is off to the side and the host only ever sees the
+ * finished DTO.
  *
  * The same class is also the documented **fallback** path: some embedders cannot
  * spawn a worker (single-threaded runtime, restricted sandbox, load failure), and
@@ -14,9 +15,9 @@
  * crashes. worker-client.ts decides which path to use and says so in
  * SourceCoverage.worker.
  *
- * State kept here: the event store (its byte offsets, first-line cache and LRU
- * event cache are the whole point of "second request reads zero bytes") and the
- * run-index memo. The main thread keeps none of it.
+ * State kept here: the event store (its per-session cache is the whole point of
+ * "second request reads zero bytes") and the run-index memo. The main thread
+ * keeps none of it.
  */
 import {
   buildRecords,
@@ -33,10 +34,13 @@ import {
 } from './aggregate.js';
 import {
   EventStore,
+  type IndexedSession,
   type RunSummary,
-  readSessionSources,
   readUsageIndex,
+  type SessionFile,
+  type SessionScan,
   type Settings,
+  scanSessions,
   sourceSignature,
   writeUsageIndex,
 } from './store.js';
@@ -104,8 +108,8 @@ export class QueryRuntime {
   /** Point the runtime at a data dir and a price table (plugin.activate). */
   init(dataDir: string, settings: Settings): void {
     if (this.dataDir !== dataDir) {
-      // A different data dir means different logs: the offsets and the index
-      // memo describe files that are no longer the ones behind this path.
+      // A different data dir means different timelines: the cache and the index
+      // memo describe sessions that are no longer the ones behind this path.
       this.store.reset();
       this.memo = undefined;
     }
@@ -124,11 +128,15 @@ export class QueryRuntime {
     if (this.dataDir === undefined) throw new Error('plugin is not activated');
     const started = Date.now();
     if (query.kind === 'logs') return this.logs(query, started);
-    const snapshot = await this.loadRuns();
-    const degradation = await this.degradation();
+    const scan = await scanSessions(this.dataDir);
+    const snapshot = await this.loadRuns(scan);
     const withMetrics = (source: SourceCoverage): SourceCoverage => ({
       ...source,
-      ...degradation,
+      ...degradationOf({
+        dirs: scan.dirs,
+        legacy: scan.legacy,
+        readable: scan.files.length,
+      }),
       duration_ms: Date.now() - started,
     });
     if (query.kind === 'summary') {
@@ -156,12 +164,15 @@ export class QueryRuntime {
     });
     const records = buildRecords(loaded.events, this.settings);
     const dto = listLogs(records, query.params);
-    const degradation = await this.degradation();
     return {
       result: { kind: 'logs', dto },
       source: {
         ...coverageOf(loaded),
-        ...degradation,
+        ...degradationOf({
+          dirs: loaded.dirs_total,
+          legacy: loaded.legacy_files,
+          readable: loaded.files_total,
+        }),
         peeked: this.store.firstLinePeeks - peeksBefore,
         duration_ms: Date.now() - started,
       },
@@ -169,67 +180,88 @@ export class QueryRuntime {
   }
 
   /**
-   * 0.56: the source's state, shared by both read paths (see `SourceCoverage`).
-   * No session log ⇒ `source_retired`; files present ⇒ `frozen_at` = newest mtime.
-   */
-  private async degradation(): Promise<Pick<SourceCoverage, 'source_retired' | 'frozen_at'>> {
-    const sources = await readSessionSources(this.dataDir as string);
-    if (sources.files === 0) return { source_retired: true };
-    return sources.max_mtime > 0 ? { frozen_at: sources.max_mtime } : {};
-  }
-
-  /**
-   * Run summaries for summary/leaderboard: the persisted index when it is fresh,
-   * otherwise a rebuild from the session logs.
+   * Run summaries for summary/leaderboard: the persisted index when it still
+   * describes the sessions on disk, otherwise a rebuild — **per session**.
    *
-   * The index is a cache, not the truth: it is trusted only when its format
-   * version matches and its source fingerprint equals what is on disk right now.
-   * Anything else - missing file, older version, corrupt line, an appended
-   * session, a deleted session - falls back to the logs and rewrites the index. A
-   * rebuild that had to truncate is not persisted, so a partial view can never
-   * masquerade as complete later.
+   * The index is a cache, not the truth: each session row group is trusted only
+   * when its `(size, mtime)` stamp equals the timeline's right now. Anything else
+   * - missing file, older version, corrupt line, a newly appended session, a
+   * deleted session - is re-read from that session only, and the rest of the rows
+   * are carried over untouched. That is what keeps a query bounded: after the
+   * first build, a query reads the sessions that moved (typically one, <= its own
+   * timeline), not the whole corpus.
+   *
+   * A rebuild that had to truncate or partially read a session is **not**
+   * persisted, so a partial view can never masquerade as complete later.
    */
-  private async loadRuns(): Promise<RunSnapshot> {
+  private async loadRuns(scan: SessionScan): Promise<RunSnapshot> {
     const dataDir = this.dataDir as string;
-    const sources = await readSessionSources(dataDir);
-    const signature = sourceSignature(sources);
+    const signature = sourceSignature(scan.sources);
 
     const memo = this.memo;
     const fresh =
       memo !== undefined && memo.signature === signature && Date.now() - memo.at < INDEX_MEMO_MS;
-    if (fresh && memo !== undefined) return memo.snapshot;
-
-    const indexed = await readUsageIndex(dataDir);
-    if (indexed !== undefined && sourceSignature(indexed.header.sources) === signature) {
-      // The index covers every session on disk by construction, so its coverage
-      // is complete: nothing is left unread to warn about, and no event byte was
-      // touched. Prices are applied now, not taken from the stored rows.
-      const snapshot: RunSnapshot = {
-        runs: repriceRuns(indexed.runs, this.settings),
-        source: {
-          truncated: false,
-          files_truncated: false,
-          partial_files: 0,
-          files_read: sources.files,
-          files_in_window: sources.files,
-          files_total: sources.files,
-          bytes_read: 0,
-          peeked: 0,
-        },
-      };
-      this.memo = { at: Date.now(), signature, snapshot };
-      return snapshot;
+    if (fresh && memo !== undefined) {
+      // Answered from memory: this call touched no event byte. The rest of the
+      // coverage is structural (how many sessions the snapshot accounts for), so
+      // it stays true; `bytes_read` does not.
+      return { runs: memo.snapshot.runs, source: { ...memo.snapshot.source, bytes_read: 0 } };
     }
 
-    const loaded = await this.store.loadEvents(dataDir);
-    const runs = repriceRuns(
-      buildRunSummaries(buildRecords(loaded.events, this.settings)),
-      this.settings,
+    const indexed = await readUsageIndex(dataDir);
+    const previous = new Map<string, IndexedSession>(
+      (indexed?.sessions ?? []).map((session) => [session.id, session]),
     );
-    const snapshot: RunSnapshot = { runs, source: coverageOf(loaded) };
-    if (!loaded.truncated && !loaded.files_truncated) {
+
+    // Reuse everything whose stamp still matches; re-read the rest. Sessions in
+    // the index that are gone simply do not appear in `scan.files`, which is how
+    // a deleted session leaves the totals.
+    const merged: IndexedSession[] = [];
+    const stale: SessionFile[] = [];
+    for (const file of scan.files) {
+      const old = previous.get(file.id);
+      if (old !== undefined && old.size === file.size && old.mtime === Math.floor(file.mtimeMs)) {
+        merged.push(old);
+        continue;
+      }
+      stale.push(file);
+    }
+
+    let bytesRead = 0;
+    let partial = 0;
+    for (const file of stale) {
+      const read = await this.store.readSession(file);
+      bytesRead += read.bytes_read;
+      if (read.partial) partial += 1;
+      const runs = repriceRuns(
+        buildRunSummaries(buildRecords(read.events, this.settings)),
+        this.settings,
+      );
+      merged.push({ id: file.id, size: file.size, mtime: Math.floor(file.mtimeMs), runs });
+    }
+
+    const runs: RunSummary[] = [];
+    for (const session of merged) {
+      for (const run of session.runs) runs.push(run);
+    }
+
+    const complete = partial === 0;
+    const snapshot: RunSnapshot = {
+      runs,
+      source: {
+        truncated: !complete,
+        files_truncated: false,
+        partial_files: partial,
+        files_read: scan.files.length,
+        files_in_window: scan.files.length,
+        files_total: scan.files.length,
+        bytes_read: bytesRead,
+        peeked: 0,
+      },
+    };
+    if (complete && stale.length > 0) {
       try {
-        await writeUsageIndex(dataDir, runs, sources);
+        await writeUsageIndex(dataDir, merged, scan.sources);
       } catch (error) {
         // The index is an optimisation: failing to write it must not fail the RPC.
         if (!this.indexWarningLogged) {
@@ -242,6 +274,30 @@ export class QueryRuntime {
     this.memo = { at: Date.now(), signature, snapshot };
     return snapshot;
   }
+}
+
+/**
+ * The source's state, shared by both read paths (see `SourceCoverage`).
+ *
+ * The degradation probe: "there are session directories, but not one of them has
+ * a timeline I can read" is **not** "you have no usage". Pre-0.54 sessions (only
+ * `events.ndjson`) are exactly that case — Vessel cannot parse them any more —
+ * and they are counted so the pages can say what is missing instead of rendering
+ * a confident zero.
+ *
+ * `dirs` = session directories on disk, `readable` = how many have a timeline,
+ * `legacy` = how many are pre-0.54 leftovers.
+ */
+export function degradationOf(counts: {
+  dirs: number;
+  legacy: number;
+  readable: number;
+}): Pick<SourceCoverage, 'source_retired' | 'unreadable_sessions'> {
+  const retired = counts.readable === 0 && counts.dirs > 0;
+  return {
+    ...(retired ? { source_retired: true } : {}),
+    ...(counts.legacy > 0 ? { unreadable_sessions: counts.legacy } : {}),
+  };
 }
 
 /** Reader coverage in the DTO shape, without the metrics. */

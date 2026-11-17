@@ -271,8 +271,8 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       return activate(params);
     }
     case 'plugin.event':
-      // Live events are not duplicated into a second store. RPCs read the
-      // host's persisted trace, so nothing to do but acknowledge.
+      // Live events are not duplicated into a second store. RPCs read the host's
+      // session timelines (`wal.log`), so nothing to do but acknowledge.
       return { ok: true };
     case 'plugin.deactivate':
       activated = false;

@@ -17,19 +17,19 @@ export interface ViewProps {
 }
 
 /**
- * "How much of the trace is behind these numbers" — shared by Usage and Logs.
+ * "How much of the timeline is behind these numbers" — shared by Usage and Logs.
  *
  * Both pages are built from the same reader, so both can be looking at a partial
  * view; the two pages differ only in what they render, never in how coverage is
- * judged. Hence one component (and one pair of copy keys, `logs.truncated.*`:
- * usage records come from run files too, so "run files in this range" reads
- * correctly on both) instead of a copy per view.
+ * judged. Hence one component instead of a copy per view.
  *
- * Two notices, because the reader reports two kinds of incompleteness and only
- * one of them hides *runs*: `files_truncated` means some run files inside the
- * range were never read (read-budget / file-count cap), `partial_files` means
- * counted files whose oldest lines were dropped. A count that silently covers 43
- * of 176 runs of the selected range must never look like the total.
+ * Three notices, because the reader reports three different things and only one
+ * of them hides runs silently: `files_truncated` means some session timelines
+ * inside the range were never read (per-call budget / session cap),
+ * `partial_files` means counted sessions whose timeline was only partially read,
+ * and `unreadable_sessions` means sessions on disk that carry no readable
+ * timeline at all (pre-0.54 `events.ndjson` only). A count that silently covers
+ * 43 of 176 sessions of the selected range must never look like the total.
  */
 export function CoverageNotice({
   source,
@@ -40,22 +40,21 @@ export function CoverageNotice({
 }) {
   if (source === null || source === undefined) return null;
   // A payload from before the split only carried `truncated`; read it as "some
-  // run files were not counted".
+  // session timelines were not counted".
   const legacy = source.files_truncated === undefined && source.partial_files === undefined;
   const filesTruncated = source.files_truncated ?? (legacy ? source.truncated : false);
   const partial = source.partial_files ?? 0;
-  // 0.56: source stopped being written (see `SourceCoverage`). Different from
-  // "did not read everything": this one means there will never be more data.
+  const unreadable = source.unreadable_sessions ?? 0;
+  // 0.56: there are sessions, but none of them has a timeline this plugin can
+  // read. Different from "did not read everything": this one cannot be fixed by
+  // waiting for more data.
   const retired = source.source_retired === true;
-  const frozenAt = retired ? undefined : source.frozen_at;
-  if (!filesTruncated && partial === 0 && !retired && frozenAt === undefined) return null;
+  if (!filesTruncated && partial === 0 && !retired && unreadable === 0) return null;
   const total = source.files_in_window ?? source.files_total;
   return (
     <div className="flex flex-col gap-1 text-sm text-muted">
       {retired ? <p>{t('source.retired')}</p> : null}
-      {frozenAt !== undefined ? (
-        <p>{t('source.frozen', { date: new Date(frozenAt).toLocaleString() })}</p>
-      ) : null}
+      {unreadable > 0 ? <p>{t('source.unreadable', { files: unreadable })}</p> : null}
       {filesTruncated ? (
         <p>{t('logs.truncated.files', { files: source.files_read, total })}</p>
       ) : null}
