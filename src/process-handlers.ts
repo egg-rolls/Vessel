@@ -70,6 +70,21 @@ export function createProcessErrorHandler(
   let handling = false;
 
   return (kind, error) => {
+    // **先**判重入，再记事（顺序就是正确性，见下）。
+    //
+    // 旧实现是「先写日志 / 先发事件，最后才 `if (handling) return`」。故障处理路径本身
+    // 会写 stderr，而写一个已断的 sink（EPIPE；典型来源：后台启动后启动 shell 退出、
+    // 父进程/管道消失）会以流错误形式抛出，**绕过** `logging.ts` 里的 try/catch 变成
+    // `uncaughtException` → 再次进入本处理器 → 再次写日志 → 再次 EPIPE。每一轮都是能
+    // 同步完成的工作，于是主线程被这条自激链占满：事件循环不再转动（定时器全停、
+    // `/health` 超时、日志不再落地），而每轮都构造 Error + 栈字符串，RSS 持续上涨。
+    // 这是**无界**的：`handling` 只挡住了 shutdown，挡不住写日志。
+    //
+    // 现在把门闩挪到最前面：进入过一次之后，后续错误一律直接返回（**有界**：最多
+    // 1 次记录 + 1 次 shutdown）。进程此时已经在退出路径上，再记也没人看。
+    if (handling) return;
+    handling = true;
+
     // 同步设置退出码：即使 shutdown 卡住，调用方（测试 / shell）也能看到非 0。
     setExitCode(1);
 
@@ -91,9 +106,6 @@ export function createProcessErrorHandler(
     } catch {
       // 事件发布失败不阻断退出
     }
-
-    if (handling) return;
-    handling = true;
 
     const finish = (): void => {
       try {
