@@ -324,8 +324,11 @@ export function renderGlobalHelp(): string {
     ],
     ['vessel federation peers [--json]', t('help.cmd.federationPeers')],
     ['vessel errors [--json]', t('help.cmd.errors')],
-    ['vessel gateway start [--daemon] [--instance <name>]', t('help.cmd.gatewayStart')],
-    ['vessel gateway list [--json]', t('help.cmd.gatewayList')],
+    [
+      'vessel gateway start [--daemon] [--instance <name>] [--data-dir <path>]',
+      t('help.cmd.gatewayStart'),
+    ],
+    ['vessel gateway list [--json] [--data-dir <path>]', t('help.cmd.gatewayList')],
     ['vessel gateway nodes list [--json]', t('help.cmd.gatewayNodesList')],
     [
       'vessel gateway nodes add <name> --data-dir <dir> --config <path> [--no-auto-start]',
@@ -333,12 +336,12 @@ export function renderGlobalHelp(): string {
     ],
     ['vessel gateway nodes remove <name>', t('help.cmd.gatewayNodesRemove')],
     [
-      'vessel gateway stop [--instance <name>|--port N|--all] [--stop-nodes]',
+      'vessel gateway stop [--instance <name>|--port N|--all] [--stop-nodes] [--data-dir <path>]',
       t('help.cmd.gatewayStop'),
     ],
-    ['vessel gateway status [--json] [--rpc]', t('help.cmd.gatewayStatus')],
+    ['vessel gateway status [--json] [--rpc] [--data-dir <path>]', t('help.cmd.gatewayStatus')],
     [
-      'vessel gateway restart [--daemon] [--instance <name>|--all] [--stop-nodes]',
+      'vessel gateway restart [--daemon] [--instance <name>|--all] [--stop-nodes] [--data-dir <path>]',
       t('help.cmd.gatewayRestart'),
     ],
     ['vessel gateway reload [--scope config,plugins]', t('help.cmd.gatewayReload')],
@@ -352,10 +355,10 @@ export function renderGlobalHelp(): string {
     ],
     ['vessel token rotate --yes', t('help.cmd.tokenRotate')],
     ['vessel node token [--print] [--json]', t('help.cmd.nodeToken')],
-    ['vessel node start [--daemon] [--config <path>]', t('help.cmd.nodeStart')],
-    ['vessel node status [--json] [--rpc]', t('help.cmd.nodeStatus')],
-    ['vessel node stop', t('help.cmd.nodeStop')],
-    ['vessel node reload [--scope config,plugins]', t('help.cmd.nodeReload')],
+    ['vessel node start [--daemon] [--config <path>] [--data-dir <path>]', t('help.cmd.nodeStart')],
+    ['vessel node status [--json] [--rpc] [--data-dir <path>]', t('help.cmd.nodeStatus')],
+    ['vessel node stop [--data-dir <path>]', t('help.cmd.nodeStop')],
+    ['vessel node reload [--scope config,plugins] [--data-dir <path>]', t('help.cmd.nodeReload')],
   ];
   // hub 命令按 service / node client 分组。
   const hubService: Array<[string, string]> = [

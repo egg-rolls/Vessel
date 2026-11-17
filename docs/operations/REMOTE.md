@@ -137,6 +137,12 @@ vessel node start --config /etc/vessel/node-b.yaml
 vessel token show --purpose node --node node-b     # 只回环 + 交互式终端才打印值
 ```
 
+**定稿口径（0.56）**：未显式配置 ⇒ 用派生值；对**非回环**客户端，这个值就是必须出示的
+凭据（缺/错一律 401）——「没写配置」不等于「不鉴权」；而**回环匿名语义保持不变**，
+本地 UI/CLI 不会因为没人写配置而掉线。只有显式配置（`node.token` / `node.token_env`）才会
+收紧回环。`vessel doctor` 的 `tokens` 一行会直接标出来：
+`node:<id>=derived fp=xxxxxxxx — remote 需带该值，loopback 匿名仍可用`。
+
 要点：
 
 - `host.node_id` 必须唯一；federation peer 的 `node_id` 必须与它一致。
