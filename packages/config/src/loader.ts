@@ -416,7 +416,12 @@ function normalizeNodeLayer(layer: Record<string, unknown>): {
   const next: Record<string, unknown> = { ...layer, serve: merged };
   // `node` 不进入运行时的配置对象：只保留一份真源，避免两处不一致。
   delete next.node;
-  return { layer: next, shadowed: shadowed.filter((key) => nodeBlock[key] !== undefined), hadServe, hadNode };
+  return {
+    layer: next,
+    shadowed: shadowed.filter((key) => nodeBlock[key] !== undefined),
+    hadServe,
+    hadNode,
+  };
 }
 
 /**
@@ -566,10 +571,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   const rawProject = projectFile.raw;
   const projectAlias = normalizeNodeLayer(rawProject);
   preWarnings.push(...nodeAliasWarnings(projectAlias, 'project config'));
-  const resolvedProject = resolveEnvRefsInLayer(
-    projectAlias.layer as Partial<VesselConfig>,
-    env,
-  );
+  const resolvedProject = resolveEnvRefsInLayer(projectAlias.layer as Partial<VesselConfig>, env);
   applyLayerWithSources(config, resolvedProject.layer, 'project', sources);
   for (const key of Object.keys(resolvedProject.resolved)) sources[key] = 'env';
   preErrors.push(...resolvedProject.errors);

@@ -35,14 +35,29 @@ export {
   resolveServeProxySecret,
 } from './gateway.js';
 export {
+  applyLayerWithSources,
+  type ConfigLoadResult,
+  getUserConfigDir,
+  getUserConfigPath,
+  loadConfig,
+  loadConfigFromEnv,
+  loadConfigFromFile,
+  loadUserConfig,
+  mergeConfig,
+  preserveConfigMapKeys,
+  preserveMcpMapKeys,
+  type SnakeToCamelOptions,
+  snakeToCamel,
+} from './loader.js';
+export {
   DERIVE_INFO_PREFIX,
   DERIVED_TOKEN_PREFIX,
   derivePurposeToken,
   ensureRootSecret,
   isInsecureRootSecretMode,
+  type ParsedPurpose,
   parseRootSecretMaterial,
   parseTokenPurpose,
-  type ParsedPurpose,
   purposeInfo,
   purposeLabel,
   ROOT_SECRET_BYTES,
@@ -59,21 +74,6 @@ export {
   tokenEquals,
   tokenFingerprint,
 } from './root-secret.js';
-export {
-  applyLayerWithSources,
-  type ConfigLoadResult,
-  getUserConfigDir,
-  getUserConfigPath,
-  loadConfig,
-  loadConfigFromEnv,
-  loadConfigFromFile,
-  loadUserConfig,
-  mergeConfig,
-  preserveConfigMapKeys,
-  preserveMcpMapKeys,
-  type SnakeToCamelOptions,
-  snakeToCamel,
-} from './loader.js';
 export {
   type ResolveEnvRefsResult,
   redactConfig,

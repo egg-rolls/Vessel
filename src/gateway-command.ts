@@ -2481,6 +2481,8 @@ export async function runPlatformGatewayForeground(
         port: platformPort,
         hostname: platformHostname,
         ...(platformToken !== undefined ? { platformToken } : {}),
+        // 0.56：派生值不算「配置」⇒ 回环匿名保持（不重演「升级即掉线」）。
+        platformTokenConfigured: platformTokenResolution.value.source === 'explicit',
         ...(platformProxySecret !== undefined ? { proxySecret: platformProxySecret } : {}),
         ...(config.gateway?.allowedOrigins !== undefined
           ? { allowedOrigins: config.gateway.allowedOrigins }

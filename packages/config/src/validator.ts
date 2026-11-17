@@ -2586,7 +2586,9 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
       for (const error of nodeErrors) {
         errors.push({
           ...error,
-          path: error.path.startsWith('serve.') ? `node.${error.path.slice('serve.'.length)}` : error.path,
+          path: error.path.startsWith('serve.')
+            ? `node.${error.path.slice('serve.'.length)}`
+            : error.path,
           message: error.message.replaceAll('serve.', 'node.'),
         });
       }

@@ -22,6 +22,9 @@
  * @module vessel/token-derive
  */
 
+import { readFileSync } from 'node:fs';
+import * as nodePath from 'node:path';
+import type { VesselConfig } from '../packages/config/src/index';
 import {
   derivePurposeToken,
   ensureRootSecret,
@@ -33,9 +36,6 @@ import {
   type TokenPurpose,
   tokenFingerprint,
 } from '../packages/config/src/index';
-import type { VesselConfig } from '../packages/config/src/index';
-import { readFileSync } from 'node:fs';
-import * as nodePath from 'node:path';
 import { resolveDataDir } from './data-paths';
 import { resolveGatewayToken } from './transport-factory';
 
@@ -149,7 +149,8 @@ export function loadRootSecret(ctx: TokenContext): RootSecretLoad {
 /** 只读路径：文件必须已存在且权限正确；不生成。 */
 function ensureRootSecretNoCreate(path: string, platform?: string): RootSecretLoad {
   const existing = readRootSecret(path, platform);
-  if (!existing.ok) return { ok: false, code: existing.error.code, message: existing.error.message };
+  if (!existing.ok)
+    return { ok: false, code: existing.error.code, message: existing.error.message };
   return {
     ok: true,
     state: {
@@ -185,9 +186,7 @@ function derivedToken(
   const loaded = loadRootSecret(ctx);
   if (!loaded.ok) return loaded;
   const origin =
-    loaded.state.source === 'env'
-      ? `env ${loaded.state.envName ?? ''}`.trim()
-      : loaded.state.path;
+    loaded.state.source === 'env' ? `env ${loaded.state.envName ?? ''}`.trim() : loaded.state.path;
   return {
     ok: true,
     value: {
@@ -228,15 +227,13 @@ export function effectivePlatformToken(ctx: TokenContext): TokenResolution {
  * data root —— 这样「gateway 代算」与「node 自己现算」得到同一个值，
  * 独立启动的 node 不需要任何人给它 token。
  */
-export function effectiveNodeToken(
-  input: TokenContext & { nodeId: string },
-): TokenResolution {
+export function effectiveNodeToken(input: TokenContext & { nodeId: string }): TokenResolution {
   const env = input.env ?? process.env;
   const explicit = resolveGatewayToken(input.config, env);
   if (explicit !== undefined) {
     const detail =
       nonEmpty(input.config.serve?.token) !== undefined
-        ? 'node.token (serve.token alias)'
+        ? "node.token (or the legacy 'serve.token' alias)"
         : 'node.token_env / VESSEL_GATEWAY_TOKEN / transport.token';
     return { ok: true, value: { token: explicit, source: 'explicit', detail } };
   }
@@ -312,11 +309,7 @@ export function effectiveProxySecret(
     };
   }
   if (ctx.includeCandidate !== true) return { ok: true, value: { source: 'none' } };
-  return derivedToken(
-    ctx,
-    { kind: 'proxy', id: ctx.instanceId },
-    `vessel:proxy:${ctx.instanceId}`,
-  );
+  return derivedToken(ctx, { kind: 'proxy', id: ctx.instanceId }, `vessel:proxy:${ctx.instanceId}`);
 }
 
 /** `vessel token rotate` 的结果（不含任何 token 值）。 */
@@ -325,6 +318,8 @@ export interface RotateResult {
   fingerprint: string;
   /** 显式配置的 token 不受影响；true 时提示用户「在跑的 node 需要重启」。 */
   restartHint: string;
+  /** 同时轮换的其它 dataDir（登记的 node 各自一份 root），路径 + 指纹。 */
+  extra: Array<{ path: string; fingerprint: string; skipped?: string }>;
 }
 
 /**
@@ -332,9 +327,13 @@ export interface RotateResult {
  *
  * 不做「保留旧 root 一段时间」的双活：那会让「rotate」在用户眼里变成「没轮换」。
  * 显式配置的 token 不经过派生，因此完全不受影响。
+ *
+ * `extraDataDirs`：登记的 node 若跑在**自己的 dataDir**（root 也在那儿），这些 root
+ * 必须一起换 —— 否则「rotate 之后旧值一律 401」对 node 就不成立。缺失的 root 跳过
+ * （那里还没派生过任何值），并在结果里留 `skipped` 说明。
  */
 export function rotateRootSecret(
-  ctx: TokenContext,
+  ctx: TokenContext & { extraDataDirs?: string[] },
 ): { ok: true; value: RotateResult } | { ok: false; code: RootSecretFailureCode; message: string } {
   const env = ctx.env ?? process.env;
   const envName = nonEmpty(ctx.config.security?.rootSecretEnv);
@@ -353,11 +352,33 @@ export function rotateRootSecret(
   const path = rootSecretPath(ctx.dataDir);
   const rotated = rotateRootSecretFile(path, ctx.platform);
   if (!rotated.ok) return { ok: false, code: rotated.error.code, message: rotated.error.message };
+
+  const extra: RotateResult['extra'] = [];
+  const seen = new Set([nodePath.resolve(path)]);
+  for (const dir of ctx.extraDataDirs ?? []) {
+    const target = rootSecretPath(dir);
+    const key = nodePath.resolve(target);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const existing = readRootSecret(target, ctx.platform);
+    if (!existing.ok) {
+      extra.push({ path: target, fingerprint: '-', skipped: existing.error.code });
+      continue;
+    }
+    const next = rotateRootSecretFile(target, ctx.platform);
+    if (!next.ok) {
+      extra.push({ path: target, fingerprint: '-', skipped: next.error.code });
+      continue;
+    }
+    extra.push({ path: target, fingerprint: tokenFingerprint(next.value.secret.toString('base64')) });
+  }
+
   return {
     ok: true,
     value: {
       path,
       fingerprint: tokenFingerprint(rotated.value.secret.toString('base64')),
+      extra,
       restartHint:
         'All derived tokens changed. Running nodes hold the previous values in memory: ' +
         'restart them (`vessel gateway restart`) so the platform hands out the new ones.',
@@ -382,7 +403,9 @@ export function listTokens(input: {
   nodeIds: string[];
   instanceId: string;
   hubConfigured?: boolean;
-}): { ok: true; rows: TokenListRow[]; root: Omit<RootSecretState, 'secret'> } | { ok: false; code: string; message: string } {
+}):
+  | { ok: true; rows: TokenListRow[]; root: Omit<RootSecretState, 'secret'> }
+  | { ok: false; code: string; message: string } {
   const ctx: TokenContext = {
     config: input.config,
     dataDir: input.dataDir,
@@ -414,10 +437,7 @@ export function listTokens(input: {
 }
 
 /** 全局数据根（平台视角）：`config.dataDir` / `VESSEL_DATA_DIR` / 默认值。 */
-export function resolveRootSecretDataDir(
-  config: VesselConfig,
-  env: EnvMap = process.env,
-): string {
+export function resolveRootSecretDataDir(config: VesselConfig, env: EnvMap = process.env): string {
   return resolveDataDir(config, env);
 }
 

@@ -136,9 +136,9 @@ import { createSystemContextSource } from './system-context';
 // 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
 // 0.54 C：`events.list` 的按 run 读端口（同一模块）。
 import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-write';
-import { resolveGatewayToken } from './transport-factory';
 // 0.56：派生 token（root-secret → HKDF；显式配置永远优先）。
 import { effectiveNodeToken } from './token-derive';
+import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update/gateway-check';
@@ -768,7 +768,10 @@ async function runWithConfig(result: BootstrapResult) {
       hostname: resolved.options.hostname,
       allowRemote: resolved.options.allowRemote,
       ...(nodeToken.source === 'derived' && nodeToken.token !== undefined
-        ? { derivedToken: nodeToken.token, ...(nodeToken.detail !== undefined ? { derivedDetail: nodeToken.detail } : {}) }
+        ? {
+            derivedToken: nodeToken.token,
+            ...(nodeToken.detail !== undefined ? { derivedDetail: nodeToken.detail } : {}),
+          }
         : {}),
     });
     if (!authResult.ok) {

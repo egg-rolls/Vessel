@@ -91,7 +91,9 @@ export interface RootSecretValue {
   created: boolean;
 }
 
-export type RootSecretRead = { ok: true; value: RootSecretValue } | { ok: false; error: RootSecretError };
+export type RootSecretRead =
+  | { ok: true; value: RootSecretValue }
+  | { ok: false; error: RootSecretError };
 
 /** purpose id 形状：与 node_id / 实例名同一套字符集，避免 info 字符串出现分隔歧义。 */
 const PURPOSE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -225,7 +227,10 @@ export function parseRootSecretMaterial(raw: string | undefined): Buffer | undef
  * Windows 上 POSIX mode 是合成的（`statSync().mode` 恒为 0o666 附近），
  * 拿它判定只会误报，所以 Windows 跳过（由 NTFS ACL 负责）。
  */
-export function isInsecureRootSecretMode(mode: number, platform: string = process.platform): boolean {
+export function isInsecureRootSecretMode(
+  mode: number,
+  platform: string = process.platform,
+): boolean {
   if (platform === 'win32') return false;
   return (mode & 0o077) !== 0;
 }
@@ -347,7 +352,10 @@ function writeRootSecret(file: string, secret: Buffer): RootSecretError | null {
  * 生成后立即落盘 0600；返回值 `created: true` 让调用方能打一行「首次生成」提示
  * （只提示路径与指纹，不打印值）。
  */
-export function ensureRootSecret(file: string, platform: string = process.platform): RootSecretRead {
+export function ensureRootSecret(
+  file: string,
+  platform: string = process.platform,
+): RootSecretRead {
   const existing = readRootSecret(file, platform);
   if (existing.ok) return existing;
   // 只有「不存在」才自动生成；权限不安全 / 内容非法都要人介入（见 readRootSecret）。
@@ -371,7 +379,10 @@ export function ensureRootSecret(file: string, platform: string = process.platfo
  * 显式配置的 token 不受影响（它们本来就不走派生）。在跑的 node 需要重启才能
  * 拿到新值 —— 调用方负责提示。
  */
-export function rotateRootSecret(file: string, platform: string = process.platform): RootSecretRead {
+export function rotateRootSecret(
+  file: string,
+  platform: string = process.platform,
+): RootSecretRead {
   const secret = randomBytes(ROOT_SECRET_BYTES);
   const writeError = writeRootSecret(file, secret);
   if (writeError !== null) return { ok: false, error: writeError };

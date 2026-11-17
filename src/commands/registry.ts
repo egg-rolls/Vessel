@@ -36,9 +36,9 @@ import { runResumeList } from '../resume-command';
 import { sessionMigrateCommand } from '../session-migrate-command';
 import { statusCommand } from '../status-command';
 import { runTeamCommand } from '../team-command';
-import { listTools } from '../tools-list';
 // 0.56：`vessel token show|list|rotate`（根密钥 / 派生 token）。
 import { tokenListCommand, tokenRotateCommand, tokenShowCommand } from '../token-command';
+import { listTools } from '../tools-list';
 import { tracePruneCommand } from '../trace-command';
 import { ui } from '../ui-style';
 import { attentionCommand } from './attention';

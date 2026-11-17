@@ -15,8 +15,13 @@
  * @module vessel/token-command
  */
 
-import { loadConfig, parseTokenPurpose, purposeLabel, tokenFingerprint } from '../packages/config/src/index';
 import type { VesselConfig } from '../packages/config/src/index';
+import {
+  loadConfig,
+  parseTokenPurpose,
+  purposeLabel,
+  tokenFingerprint,
+} from '../packages/config/src/index';
 import { formatConfigErrors } from './config-error-format';
 import { resolveDataDir } from './data-paths';
 import { loadNodeRegistry } from './gateway/node-registry';
@@ -340,10 +345,23 @@ export async function tokenRotateCommand(
   const context = await loadContext(options);
   if (!context.ok) return context.result;
 
+  // 登记的 node 可能跑在自己的 dataDir（那儿的 root 也要一起换，否则「rotate 之后
+  // 旧值一律 401」对 node 不成立）。registry 读不到就不带 extra，不因此失败。
+  let extraDataDirs: string[] = [];
+  try {
+    const load = await loadNodeRegistry(context.dataDir);
+    if (load.kind === 'ready') {
+      extraDataDirs = load.registry.nodes.map((node) => node.data_dir).filter((dir) => dir !== '');
+    }
+  } catch {
+    // 忽略：主目标（全局 root）仍然要换成功。
+  }
+
   const rotated = rotateRootSecret({
     config: context.config,
     dataDir: context.dataDir,
     env: context.env,
+    extraDataDirs,
   });
   if (!rotated.ok) {
     return { exitCode: 1, stdout: '', stderr: `${rotated.code}: ${rotated.message}` };
@@ -353,22 +371,29 @@ export async function tokenRotateCommand(
     return {
       exitCode: 0,
       stdout: JSON.stringify(
-        { rotated: true, path: value.path, fingerprint: value.fingerprint, hint: value.restartHint },
+        {
+          rotated: true,
+          path: value.path,
+          fingerprint: value.fingerprint,
+          roots: value.extra,
+          hint: value.restartHint,
+        },
         null,
         2,
       ),
       stderr: '',
     };
   }
-  return {
-    exitCode: 0,
-    stdout: [
-      `rotated  ${value.path}`,
-      `fp       ${value.fingerprint}`,
-      `note     ${value.restartHint}`,
-    ].join('\n'),
-    stderr: '',
-  };
+  const lines = [`rotated  ${value.path}`, `fp       ${value.fingerprint}`];
+  for (const row of value.extra) {
+    lines.push(
+      row.skipped !== undefined
+        ? `skipped  ${row.path} (${row.skipped})`
+        : `rotated  ${row.path} fp=${row.fingerprint}`,
+    );
+  }
+  lines.push(`note     ${value.restartHint}`);
+  return { exitCode: 0, stdout: lines.join('\n'), stderr: '' };
 }
 
 /**
