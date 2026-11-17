@@ -58,6 +58,7 @@ interface ToolDefinition {
 |---|---|---|---|
 | `bash` | `{ command, cwd?, timeout_ms? }` | `ask`；cwd 命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `Bun.spawn(['bash','-c',command])`。超时默认 120s；输出超 2000 行时保留头 1000 + 尾 1000 并标注省略行数；超时返回明确错误文本而非抛异常 |
 | `write` | `{ path, content, mode? }` | `ask`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `mode` = `create`（缺省；目标已存在则**报错不覆盖**）/ `overwrite` / `append`。内容**逐字节落盘、不经 shell**，所以反引号、`$()`、`${…}`、中文、emoji 都不会被展开或吞掉。只自动创建**一级**父目录；单次上限 4 MiB；沿符号链接写到被指文件（链接本身不被替换）；覆盖沿用原文件权限位。与 `edit` 的分工：建文件 / 整体替换 / 追加用 `write`，**局部修改用 `edit`**（逐字符唯一匹配，改不中会报错） |
+| `recall` | `{ compaction_id?, from_seq?, to_seq?, offset?, limit?, query? }` | 无（只读本会话日志） | 读回**被压缩替换**的历史消息（0.57）。无参 ⇒ 列出本会话的压缩段（id / 原因 / 条数 / seq 区间 / 摘要首行）；给 `compaction_id`（或 `from_seq`/`to_seq`）⇒ 返回**原始消息**，一行一条。三条上界：≤200 条 / ≤16k token / ≤20000 事件扫描；分页给 `next_offset` 与更便宜的 `next_from_seq`。压缩当刻写进摘要正文的那行 `[compacted] N messages (seq a..b) …` 就是它的入口。老会话无索引时明说，不编造。**这不是读文件** |
 | `read` | `{ path, offset?, limit? }` | `allow`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | 带行号返回（从 1 开始）。`limit` 默认 2000 行；截断时标注总行数与继续读的方式 |
 | `edit` | `{ path, old_string, new_string, replace_all? }` | `ask`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `old_string` 必须**精确匹配且唯一**；不唯一时报错并说明匹配次数，未匹配时报错；`replace_all: true` 才允许多处替换 |
 
