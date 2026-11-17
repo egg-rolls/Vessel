@@ -367,16 +367,19 @@ export const projectionSummarySchema = {
  * `status`/`sent_at` 会改写历史前缀（前缀守卫逐条比字节）且被 `messageSignature` 无视
  * （它只取 `kind:path`）—— 最坏的一类字段。这里只是投影，刷新页面仍然正确。
  *
- * 三态（决策 3 的 P0 要求）：
+ * 四态（决策 3 的 P0 要求 + 0.56 P1 的「不猜」修正）：
  * - `sent`：真的随请求发出去了（附带 provider 名与每图 token 数 ⇒ 隐私知情）；
  * - `dropped`：这一轮算过、决定不发（预算 / 格式 / 缺 blob / 占位 / 压缩）；
- * - `not_sent`：根本没进条通路（kill switch / 无视觉后端 / 没入池）。
+ * - `not_sent`：根本没进条通路（kill switch / 无视觉后端 / 没入池）；
+ * - `unknown`：**没有记录**（派生覆盖不到那段历史）。0.56 P1 新增：长会话里 `image.sent`
+ *   落在尾窗之外时，老实现把它说成 `not_sent`——显示错误比不显示更坏，所以这里必须
+ *   有第四档「无记录」，而不是让客户端把缺席读成事实。
  */
 export const imageDeliverySchema = {
   type: 'object',
   required: ['status'],
   properties: {
-    status: { type: 'string', enum: ['sent', 'dropped', 'not_sent'] },
+    status: { type: 'string', enum: ['sent', 'dropped', 'not_sent', 'unknown'] },
     /** 稳定短标签（`over per-request budget` / `vision_disabled` / …），可操作。 */
     reason: { type: 'string' },
     /** 图的内容身份前 8 位（与事件里的 `sha8` 同一口径）。 */

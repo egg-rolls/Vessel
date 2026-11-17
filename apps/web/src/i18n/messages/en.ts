@@ -1213,6 +1213,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.refs.image.sentPlain': 'Sent',
   'chat.refs.image.dropped': 'Dropped · {reason}',
   'chat.refs.image.notSent': 'Not sent · {reason}',
+  // 0.56 P1: 「无记录」——派生覆盖不到那段历史（长会话的旧图）。**不是** Not sent：
+  // 把「没有记录」说成「未发送」就是显示错误（比不显示更坏）。
+  'chat.refs.image.noRecord': 'No record',
+  'chat.refs.image.reason.no_delivery_record': 'no delivery record kept',
   'chat.refs.image.reason.budget': 'over per-request budget',
   'chat.refs.image.reason.bytes_budget': 'over per-request byte budget',
   'chat.refs.image.reason.unsupported_format': 'unsupported format',

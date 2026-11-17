@@ -23,6 +23,8 @@
 
 import type { VesselConfig } from '../packages/config/src/index';
 import type { VisionSettings } from '../packages/core/src/index';
+import { visionDisabled } from '../packages/core/src/vision/index';
+import { VISION_SURFACE_INLINE, VISION_SURFACE_OFF, type VisionSurface } from './refs-notice-hook';
 
 /** 单请求张数的安全上界（夹取风格与 `temporaryTtlHours` 一类配置一致）。 */
 export const MAX_IMAGES_PER_REQUEST_LIMIT = 32;
@@ -50,4 +52,26 @@ export function visionSettingsOf(config: VesselConfig): VisionSettings | undefin
     settings.preprocess = vision.preprocess;
   }
   return Object.keys(settings).length > 0 ? settings : undefined;
+}
+
+/**
+ * 视觉面探针（0.56 P1）：`[refs]` 尾注该说「图已附上，别再读」还是 0.55 老文案。
+ *
+ * 两个判据都必须**同时**成立才算「会内联」：
+ * 1. provider 有 `VisionBackend`（`provider.vision`，插件挂的；`undefined` = 这家的模型
+ *    不支持看图）。装配层不认识「哪个模型支持视觉」，所以只透传这个存在性；
+ * 2. kill switch 没打开（`config.vision.disabled` / `VESSEL_DISABLE_VISION=1`）——
+ *    与 core 用**同一个**判据函数（`visionDisabled`），避免两处各判一次、漂移成
+ *    「尾注说附上了、请求里其实没有」。
+ *
+ * 任一不成立 ⇒ `off`（老文案逐字不变）。探针本身不抛错（抛错由调用方退化成 `off`）。
+ */
+export function visionSurfaceOf(input: {
+  config: VesselConfig;
+  /** provider 的 `vision`（`VisionBackend`）；只需要「有没有」 */
+  backend?: unknown;
+}): VisionSurface {
+  if (input.backend === undefined) return VISION_SURFACE_OFF;
+  if (visionDisabled(visionSettingsOf(input.config))) return VISION_SURFACE_OFF;
+  return VISION_SURFACE_INLINE;
 }

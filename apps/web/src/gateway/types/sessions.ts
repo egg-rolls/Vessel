@@ -60,11 +60,13 @@ export interface MessageRef {
  * **服务端从事件派生**（`image.sent` / `context.image_dropped`），不是 `refs` 上的字段 ——
  * 所以刷新页面后仍然正确（前端不得把它存成本地状态）。
  *
- * 三态：`sent`（含 provider 名与每图 token）/ `dropped`（这一轮算过、决定不发）/
- * `not_sent`（根本没进这条通路：视觉被关 / 模型无视觉 / 没入池）。
+ * 三态 + 一档「无记录」：`sent`（含 provider 名与每图 token）/ `dropped`（这一轮算过、
+ * 决定不发）/ `not_sent`（根本没进这条通路：视觉被关 / 模型无视觉 / 没入池）/
+ * `unknown`（**没有投递记录**：服务端覆盖不到那段历史）。最后一档是 0.56 P1 加的 ——
+ * 长会话里 `image.sent` 落在尾窗之外时宁可说「无记录」，也不能显示成「未发送」。
  */
 export interface ImageDelivery {
-  status: 'sent' | 'dropped' | 'not_sent';
+  status: 'sent' | 'dropped' | 'not_sent' | 'unknown';
   /** 稳定短标签（`over per-request budget` / `vision_disabled` …）。 */
   reason?: string;
   /** 内容身份前 8 位。 */
