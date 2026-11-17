@@ -51,8 +51,8 @@ export function registerBuiltinBackends(): void {
   registerSearchProvider(deepseekSearchProvider);
   registerSearchProvider(tavilySearchProvider);
   registerSearchProvider(serperSearchProvider);
-  // Bocha 不再有专用适配器：它是「声明式自定义后端」的内置预设（`custom:bocha`）
-  registerSearchProvider(createCustomProvider(BOCHA_PRESET));
+  // Bocha 不再有专用适配器：它是「声明式自定义后端」的内置预设（`search_provider: bocha`）
+  registerSearchProvider(createCustomProvider(BOCHA_PRESET, { id: 'bocha' }));
   registerFetchBackend(localFetchBackend);
   registerFetchBackend(deepseekFetchBackend);
 }

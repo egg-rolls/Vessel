@@ -173,8 +173,16 @@ export function parseCustomSearchSpec(raw: unknown, where: string): CustomSearch
   if (!CUSTOM_ID.test(id)) {
     throw new Error(`web-tools: ${where}.id 只允许小写字母/数字/-/_（≤32 字符），收到 ${id}`);
   }
-  if (id === 'deepseek' || id === 'tavily' || id === 'serper' || id === 'custom') {
-    throw new Error(`web-tools: ${where}.id=${id} 与内置后端重名，换个名字`);
+  if (
+    id === 'deepseek' ||
+    id === 'tavily' ||
+    id === 'serper' ||
+    id === 'custom' ||
+    id === 'bocha'
+  ) {
+    throw new Error(
+      `web-tools: ${where}.id=${id} 与内置后端重名（bocha 是内置预设，用 search_provider: bocha 选中它），换个名字`,
+    );
   }
 
   const request = asRecord(spec.request);
@@ -401,12 +409,13 @@ function specVersion(spec: CustomSearchSpec): string {
 }
 
 /** 把一段声明式配置变成普通 `SearchProvider`（闸/缓存/指标全部复用共用层） */
-export function createCustomProvider(spec: CustomSearchSpec): SearchProvider {
-  const used = collectPlaceholders({ body: spec.request.body, headers: spec.request.headers });
-  const supportsDates = used.has('after') || used.has('before') || used.has('freshness');
-
+export function createCustomProvider(
+  spec: CustomSearchSpec,
+  options: { id?: string } = {},
+): SearchProvider {
   return {
-    id: `${CUSTOM_PRESET_PREFIX}${spec.id}`,
+    // 内置预设用短名（`bocha`，用户不必记新名字）；用户自定义一律 `custom:<id>`
+    id: options.id ?? `${CUSTOM_PRESET_PREFIX}${spec.id}`,
     version: specVersion(spec),
     billed: true,
     requiresKey: true,
@@ -443,32 +452,11 @@ export function createCustomProvider(spec: CustomSearchSpec): SearchProvider {
       query: SearchQuery,
       renderedQuery: string,
     ): Promise<ProviderHttpResponse> {
-      // 过滤条件诚实处理：给了但映射不了 ⇒ 明确报错，不静默丢
-      const unmapped: string[] = [];
-      if (query.site !== undefined && !used.has('site')) unmapped.push('site');
-      if (query.lang !== undefined && !used.has('lang')) unmapped.push('lang');
-      if ((query.after !== undefined || query.before !== undefined) && !supportsDates) {
-        unmapped.push('after/before');
-      }
-      if (unmapped.length > 0) {
-        throw new WebFetchError(
-          'provider_bad_request',
-          `自定义后端 ${CUSTOM_PRESET_PREFIX}${spec.id} 的声明式映射表达不了 ${unmapped.join('、')}：` +
-            `去掉这些参数，或改用支持它们的后端（本次没有发出任何请求）`,
-        );
-      }
+      // 过滤条件：**映射不了就整条键不出现**（这是映射规则，不是逻辑分支）。
+      // 声明式没有表达式语言，所以「只给一端日期 ⇒ {{freshness}} 解析为空 ⇒ 键省略」
+      // 就是完整语义；`site`/`lang` 同理（body 里没有对应占位符 ⇒ 不会发出去）。
+      // 哪家支持哪些过滤写在工具描述里，让模型知道“这条过滤在这家等于没加”。
       const context = contextFor({ ...query, query: renderedQuery });
-      if (
-        (query.after !== undefined || query.before !== undefined) &&
-        context.freshness === undefined
-      ) {
-        // 只给一端，而 {{freshness}} 只认完整区间：同样明确报错，不悄悄放宽范围
-        throw new WebFetchError(
-          'provider_bad_request',
-          `自定义后端 ${CUSTOM_PRESET_PREFIX}${spec.id} 的 freshness 只支持 after+before 的完整区间；` +
-            '只给一端时无法表达（本次没有发出任何请求）',
-        );
-      }
 
       const resolvedBody = substitute(spec.request.body, context);
       const resolvedHeaders = substitute(spec.request.headers, context);

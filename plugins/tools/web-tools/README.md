@@ -61,7 +61,7 @@ provider 与 transport 写死（`DEFAULT_SEARCH_PROVIDER_ID` + `createDeepSeekHt
 | `deepseek` | `DEEPSEEK_API_KEY` | 上游 `summary` | `need_content` | `site:` / `lang:` / `after:` / `before:` 渲染进 query |
 | `tavily` | `VESSEL_TAVILY_API_KEY` | 上游 `content`（它自己的摘要口径） | `include_raw_content` | 只支持 `site`（走 `include_domains`）；**`lang` / `after` / `before` 没有对应参数，不做过滤**；结果上限 20 |
 | `serper` | `VESSEL_SERPER_API_KEY` | 上游 `snippet`（Google `organic[]` 里**没有** `summary` 字段） | **没有正文**（`need_content` 无效，要全文用 `web_fetch`） | `site:` 拼进 `q`；`lang` → `hl`/`gl`；`after`/`before` → `tbs` |
-| `custom:bocha` | `BOCHAAI_SEARCH_API_KEY` | 上游 `snippet`；长摘要 `summary` 归到正文 | `summary: true` 才回的**长摘要**（不是整页正文） | `after`+`before` **都给**才映射成 `freshness` 区间；只给一端**报错**；`site`/`lang` **表达不了就报错**（不静默丢）；上限 50 |
+| `bocha` | `BOCHAAI_SEARCH_API_KEY` | 上游 `snippet`；长摘要 `summary` 归到正文 | `summary: true` 才回的**长摘要**（不是整页正文） | **声明式预设**：`site`/`lang` 不发送（body 里没有对应占位符）；`after`+`before` 都给才映射成 `freshness` 区间，只给一端则整条键省略；上限 50 |
 
 `authority` 只有 `deepseek` 有；Tavily 的 `score` 是相关性、Serper 不给、Bocha 给的是 `siteName`
 （网站名不是权威度）——**都不冒充**，条目里就是「(未提供)」。
@@ -70,7 +70,7 @@ provider 与 transport 写死（`DEFAULT_SEARCH_PROVIDER_ID` + `createDeepSeekHt
 ### 选择顺序（写在工具描述里，模型也能看见）
 
 1. 配置优先：`search_provider: tavily` ⇒ 只用它（没注册就 `provider_unavailable`）；
-2. 否则 `auto`（缺省）⇒ **按 `src/backends.ts` 的注册顺序**取第一个 key 在位的：`deepseek → tavily → serper → custom:bocha`；
+2. 否则 `auto`（缺省）⇒ **按 `src/backends.ts` 的注册顺序**取第一个 key 在位的：`deepseek → tavily → serper → bocha`；
 3. 一个 key 都没有 ⇒ 工具**不注册**（见下节）；配了 `always_register: true` 时改为调用报
    `provider_auth_failed`，文案里列出每家要哪个环境变量（不发请求、不降级）。
 
@@ -93,7 +93,8 @@ provider 与 transport 写死（`DEFAULT_SEARCH_PROVIDER_ID` + `createDeepSeekHt
 
 同类 API 的差异只有三块：**URL / 怎么带 key / 请求体与响应字段的映射**。
 为每家写一个适配器不划算 ⇒ 这三块用配置描述，`custom_search` 里加一段就多一家。
-**Bocha 就是这条路的第一例**：不在代码里，而是内置预设 `custom:bocha`（配置里写同 id 可覆盖）。
+**Bocha 就是这条路的第一例**：不在代码里，而是内置预设——`search_provider: bocha` 直接用，
+名字跟以前一样（预设 id `bocha` 是保留名，用户自定义的 `id` 不许叫这个）。
 
 ```yaml
 plugins:
@@ -148,17 +149,26 @@ plugins:
 5. **可见性同等**：在 `--tools` 的可用性预检里与内置后端一视同仁（没 key 一样让
    `web_search` 不出现）。
 
-### 过滤条件：表达不了就报错，不静默丢
+### 过滤条件：**占位符解析为空 ⇒ 整条键省略**
 
-有 `{{site}}` 才支持 `site`，有 `{{lang}}` 才支持 `lang`，有 `{{after}}`/`{{before}}`/`{{freshness}}`
-才支持日期。**用户给了但映射不了 ⇒ `provider_bad_request` 说清「这家表达不了 site」**，
-并在发请求之前就拒——丢过滤比报错更坏：结果看着像过滤过。
+这是映射规则，不是逻辑分支（所以不需要表达式语言）：
+
+- 有 `{{site}}` 才会把站点发给上游；没有这个占位符 ⇒ body 里根本不会出现该键；
+- `{{freshness}}` = `after..before`（两端都给）／`noLimit`（都没给）／**只给一端 ⇒ 解析为空 ⇒ 键省略**
+  （Bocha 就是这样表达「单边日期没法映射」的，而不是报错或猜一个范围）；
+- 哪家支持哪些过滤写在工具描述里，让模型知道「这条过滤在这家等于没加」。
 
 ### `field_map` 只收 `SearchHit` **真有**的字段
 
 只允许 `title / url / summary / content / date`。`site` / `icon` 之类**直接拒绝**：
 要么没有 destination（写进来就是哑配置），要么只能塞进 `authority`——那是「拿域名冒充权威度」，
 比缺字段更坏。
+
+### 没 key 时工具消失，`--tools` 里会带一条「怎么恢复」
+
+`--tools` 的 warnings 里除了 stderr 那行，还会有一条可操作提示：
+列出每个后端要的环境变量 + `env_file` 这条路 + `always_register: true` 这个逃生阀，
+并说明**改完要重启**（可用性是装配时判定的）。
 
 ## 错误文案格式（加第四家后端时照抄这段）
 
@@ -168,9 +178,9 @@ plugins:
 **① 一个可用 key 都没有（`auto` 兜底）** → 缺省**不注册工具**（stderr 一行说明）；配 `always_register: true` 时是 `provider_auth_failed`
 
 ```text
-没有可用的搜索后端：按注册顺序（deepseek → tavily → serper → custom:bocha）都没有可用的 key。设置其一即可：
+没有可用的搜索后端：按注册顺序（deepseek → tavily → serper → bocha）都没有可用的 key。设置其一即可：
 deepseek → DEEPSEEK_API_KEY、tavily → VESSEL_TAVILY_API_KEY、serper → VESSEL_SERPER_API_KEY、
-custom:bocha → BOCHAAI_SEARCH_API_KEY；或用配置 search_provider 指定某一家（本次没有发出任何请求）
+bocha → BOCHAAI_SEARCH_API_KEY；或用配置 search_provider 指定某一家（本次没有发出任何请求）
 ```
 
 三个要素：**注册顺序**（解释为什么没选别家）、**每家 → 环境变量名**（可直接照抄）、
