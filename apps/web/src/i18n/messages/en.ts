@@ -902,6 +902,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'teams.card.copyId': 'Copy team ID',
   'teams.card.members': '{members} members',
   'teams.card.online': '{online} online',
+  'teams.card.running': 'Members running',
   'teams.card.open': 'Open chat',
   'teams.detail.emptyTitle': 'Open a team first',
   'teams.detail.emptyDesc': 'Pick a team from the list to chat with its members.',

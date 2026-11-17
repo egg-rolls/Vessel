@@ -31,7 +31,34 @@ const TABLE_SEPARATOR = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
 
 function splitTableRow(line: string): string[] {
   const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
-  return trimmed.split('|').map((cell) => cell.trim());
+  // 表格单元里的 `|` 有两种来源，都必须当成**内容**而不是分隔符：
+  //   1) GFM 转义的 `\|`（模型写 markdown 表格时，单元格里出现管道符的标准写法）；
+  //   2) 行内 code 里的 `|`（例如给 shell 管道符加反引号，这是模型最容易踩的写法）。
+  // 之前直接 split('|')，于是「`| head`」这类单元格会把后面的内容挤到下一列 —— 表格整体错位。
+  const cells: string[] = [];
+  let current = '';
+  let inCode = false;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const ch = trimmed[i];
+    if (ch === '\\' && trimmed[i + 1] === '|') {
+      current += '|';
+      i += 1;
+      continue;
+    }
+    if (ch === '`') {
+      inCode = !inCode;
+      current += ch;
+      continue;
+    }
+    if (ch === '|' && !inCode) {
+      cells.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  cells.push(current.trim());
+  return cells;
 }
 
 function startsBlock(lines: string[], index: number): boolean {

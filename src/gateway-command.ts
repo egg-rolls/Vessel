@@ -81,6 +81,12 @@ import {
   serviceStatus,
   uninstallService,
 } from './gateway/service';
+import {
+  readWatchdogSnapshot,
+  resolveStallWatchdogConfig,
+  type StallWatchdogConfig,
+  type WatchdogEvent,
+} from './gateway/watchdog';
 import { isHumanTerminal, type PlatformStartupHub, renderPlatformStartup } from './gateway-banner';
 import { readHubLockFile } from './hub/runtime';
 import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from './hub/server';
@@ -1138,6 +1144,109 @@ function formatEntryState(entry: GatewayStateEntry, config: VesselConfig): strin
   }
 }
 
+/**
+ * 0.58：看门狗事件 → 一行结构日志。
+ *
+ * 为什么是 `event=` + `key=value`：僵死现场**只有父进程**还能写日志，这一行要能被
+ * `grep 'event=supervisor.stall_restart'` 直接捞出来对时间线，也要能被人读懂。
+ * 事件名固定，附带 `consecutive_failures` / `last_ok_ms` / `probe_timeout_ms`。
+ */
+function printWatchdogEvent(
+  event: WatchdogEvent,
+  print: (line: string) => void,
+  printErr: (line: string) => void,
+): void {
+  const head = `event=${event.kind} node=${event.name} pid=${event.pid}`;
+  switch (event.kind) {
+    case 'supervisor.stall_restart':
+      printErr(
+        ui.warn(
+          `${head} consecutive_failures=${event.consecutiveFailures} ` +
+            `last_ok_ms=${event.lastOkMs === null ? 'null' : event.lastOkMs} ` +
+            `stalled_for_ms=${event.stalledForMs === null ? 'null' : event.stalledForMs} ` +
+            `probe_timeout_ms=${event.probeTimeoutMs} ` +
+            `attempt_in_hour=${event.attemptInHour}/${event.maxRestartsPerHour} ` +
+            `backoff_ms=${event.backoffMs} → kill + respawn`,
+        ),
+      );
+      return;
+    case 'supervisor.stall_restart_failed':
+      printErr(
+        ui.err(
+          `${head} consecutive_failures=${event.consecutiveFailures} ` +
+            `probe_timeout_ms=${event.probeTimeoutMs} error=${JSON.stringify(event.error)}`,
+        ),
+      );
+      return;
+    case 'supervisor.stall_restart_gave_up':
+      printErr(
+        ui.err(
+          `${head} restarts_last_hour=${event.restartsLastHour} ` +
+            `max_restarts_per_hour=${event.maxRestartsPerHour} ` +
+            `last_ok_ms=${event.lastOkMs === null ? 'null' : event.lastOkMs} ` +
+            `stalled_for_ms=${event.stalledForMs === null ? 'null' : event.stalledForMs} ` +
+            `reason=${JSON.stringify(event.reason)}`,
+        ),
+      );
+      return;
+    case 'supervisor.stall_recovered':
+      print(ui.dim(`${head} consecutive_ok=${event.consecutiveOk} (backoff cleared)`));
+      return;
+  }
+}
+
+/**
+ * 0.58：存活看门狗的一行摘要（启动输出与 `gateway status` 共用同一句话）。
+ *
+ * 「关」必须明说原因（`gateway.supervise.enabled: false`），否则下一单看到
+ * 「僵死了没人重启」会以为看门狗坏了。
+ */
+function superviseLine(config: StallWatchdogConfig): string {
+  if (!config.enabled) return t('gateway.status.superviseOff');
+  return t('gateway.status.superviseOn', {
+    probe: config.probeIntervalMs,
+    threshold: config.failureThreshold,
+    max: config.maxRestartsPerHour,
+    backoff: config.backoffStartMs,
+    backoffMax: config.backoffMaxMs,
+  });
+}
+
+/**
+ * 0.58：`gateway status` 的看门狗段（读 `<dataDir>/platform-watchdog*.json`）。
+ *
+ * 为什么读文件：`gateway status` 是**另一个进程**，看不到运行中平台的监督器内存；
+ * 这份快照就是「最近一次探活成功/失败时刻 + 重启计数」的对外可见面（0600、无 token）。
+ * 文件缺失（老版本 / 还没起过）就不占行，不编造状态。
+ */
+async function printSuperviseState(
+  dataDir: string,
+  instance: string,
+  print: (line: string) => void,
+): Promise<void> {
+  const snapshot = await readWatchdogSnapshot(dataDir, instance).catch(() => null);
+  if (snapshot === null) return;
+  print(ui.kv(t('gateway.status.supervise'), superviseLine(snapshot.config), 12));
+  for (const node of snapshot.nodes) {
+    print(
+      `  ${ui.dim(
+        t('gateway.status.superviseNode', {
+          name: node.name,
+          phase: node.phase,
+          lastOk: node.last_ok_at ?? '-',
+          lastFail: node.last_fail_at ?? '-',
+          restarts: node.restarts_total,
+          lastHour: node.restarts_last_hour,
+          error:
+            node.last_error === null
+              ? ''
+              : t('gateway.status.superviseError', { error: node.last_error }),
+        }),
+      )}`,
+    );
+  }
+}
+
 function serviceLine(service: Awaited<ReturnType<typeof serviceStatus>>): string {
   return service.supported
     ? `${service.target} (${service.installed ? 'installed' : 'not installed'})`
@@ -1237,6 +1346,12 @@ export async function gatewayStatus(
     for (const entry of selected) {
       print(ui.kv(entry.instance, formatEntryState(entry, context.config), 12));
       if (platforms.has(entry.instance)) printNodeViews();
+      // 0.58：探活/重启的可观测面（读平台落盘的看门狗快照）。
+      // 判据是「进程还在」（不是平台的 health 探测）：看门狗本身就是给「health
+      // 可能测不通」的场景做的，状态展示不能反过来依赖 health。
+      if (entryOccupied(entry)) {
+        await printSuperviseState(context.dataDir, entry.instance, print);
+      }
       const pidFile = entry.pidPath ?? entry.lockPath;
       if (pidFile !== undefined) print(`  ${ui.dim(pidFile)}`);
     }
@@ -1285,6 +1400,10 @@ export async function gatewayStatus(
   for (const entry of entries) {
     print(ui.kv(entry.instance, formatEntryState(entry, context.config), 12));
     if (platforms.has(entry.instance)) printNodeViews();
+    // 0.58：看门狗段看「进程还在」+ 它自己落盘的快照（不依赖平台 health 探测）。
+    if (entryOccupied(entry)) {
+      await printSuperviseState(context.dataDir, entry.instance, print);
+    }
     const pidFile = entry.pidPath ?? entry.lockPath;
     if (pidFile !== undefined) print(`  ${ui.dim(pidFile)}`);
   }
@@ -2438,12 +2557,15 @@ export async function runPlatformGatewayForeground(
       nodes.map((node) => [node.entry.node_id, node.token]),
     );
     const singleNodeId = nodes.length === 1 ? nodes[0]?.entry.node_id : undefined;
+    // 0.58：父进程侧存活看门狗（`gateway.supervise`；缺省开，环境变量可显式覆盖）。
+    const supervise = resolveStallWatchdogConfig(config.gateway?.supervise, env);
 
     supervisor = new NodeSupervisor({
       gatewayDataDir: dataDir,
       instance,
       env,
       platform,
+      supervise,
       // 0.50：平台始终 http 监听；把页面 Origin 注入本地子 Node 的 CORS 白名单。
       // 0.52：**必须先 spawn 子进程、再监听 8642**（见下面 startPlatformGateway 的注释）。
       // 这里用已知的 ，不再依赖 。
@@ -2462,6 +2584,9 @@ export async function runPlatformGatewayForeground(
         if (info.state === 'failed') printErr(ui.warn(line));
         else print(ui.dim(line));
       },
+      // 0.58：看门狗动作 → 结构日志行（`event=supervisor.stall_restart ...`）。
+      // 这一行是僵死时间线的唯一外部证据：子进程僵死时自己的日志一条都不会落地。
+      onWatchdogEvent: (event) => printWatchdogEvent(event, print, printErr),
     });
     const specs: LocalNodeSpec[] = nodes.map((node) => ({
       nodeId: node.entry.node_id,
@@ -2677,6 +2802,8 @@ export async function runPlatformGatewayForeground(
         }
       }
     }
+    // 0.58：看门狗开/关必须一眼可见 —— 「僵死了为什么没人重启」的答案就在这里。
+    print(ui.dim(`supervise: ${superviseLine(supervise)}`));
 
     await (options.waitForStop ?? waitForTerminationSignal)();
     // handoff（0.52）：停止方在发终止信号**之前**写了 marker ⇒ 这次退出只交出平台层，

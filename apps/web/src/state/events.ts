@@ -969,22 +969,72 @@ export function isVisibleForGrouping(
 }
 
 /**
- * 折 run 之前的**时间序**规整（0.54 order-bug：刷新后工具卡与思考段按类聚堆）。
+ * 折 run 之前的顺序规整：**默认原样交回（到达序 = seq 序），只有前提破了才按 `ts` 重排**。
  *
- * 为什么需要：事件可能来自三个 seq 频带（会话日志 / run trace / hub 环，见
- * `disk-replay.ts` 的带图）。频带顺序是「会话日志 → trace → 环」，**不是时间顺序**：
- * 同一条 run 的 `tool.call.*` 在会话日志带里，它的 `llm.stream.chunk`（正文 / 思考）
- * 却可能只在后一个带里（trace 只给最新的几个 run，环只给进程内还留着的 run）。
+ * ## 三频带已经不在了（0.55）
  *
- * 折叠是**顺序敏感**的：chunk 靠「相邻同 kind」成段，`buildLiveItems` 的组内时间还按
- * 插入序单调夹。于是按频带序折出来的结果是「工具卡按真实时间排好，思考段被并成一段、
- * 还被夹到 run 末尾」—— 用户看到的就是「上方全是工具卡片，下方全是思考过程」。
+ * 0.54 order-bug 当时的现象是「上方全是工具卡片，下方全是思考过程」，原因是事件来自
+ * **三个 seq 频带**（会话日志 / run trace / hub 环，旧 `disk-replay.ts` 的带图）：同一条
+ * run 的 `tool.call.*` 在前一带，它的 `llm.stream.chunk` 可能只在后一带，于是到达序 ≠
+ * 时间序。那时只能按 `ts` 重排一次来救场。
  *
- * 口径：**按事件自身的 `ts` 升序**；`ts` 相同或缺失时保持原插入序（`sort` 稳定），
+ * 0.55 起频带没了：单游标 + 单一 `timeline_seq` 空间（`event-store.ts` 头部），
+ * 回填区间与实时环共用同一套 seq，`applyTimelineRange` 并入更早的段后还会按 seq 重排
+ * 并保持「`entries` 按 seq 升序」（那是 `truncateAfter` 二分的前提）。所以**到达序就是
+ * seq 序**，没有第二个带可以插进来。
+ *
+ * ## 实测：`ts` 与 `seq` 同序 ⇒ 重排是恒等变换
+ *
+ * 真机会话 `09f82ac6`（105,667 条记录，含 101,736 条 chunk，读法
+ * `readTimelineEvents`）：按 seq 相邻逐对比较，`ts` **倒退 0 次**；`ts` 相等 71,280 次
+ * （同一毫秒内的流式增量，占 67%）。也就是说今天的 `ts` 排序一条都不换位，而那一万多条
+ * 相等对恰恰说明 **`ts` 不是全序**（68% 的相邻对靠稳定排序才分得开），`seq` 才是。
+ *
+ * ## 所以只剩一条退化路径（前提破了才走）
+ *
+ * `seq` 由 `TimelineWriter` 在写 WAL 那一刻分配，但派发链上有一次 `await`
+ * （`src/timeline-dual-write.ts#record` 先 `await writerFor(sessionId)` 再 `append`）：
+ * 取号顺序**理论上**可能被微任务顺序打乱，那时 `ts` 会先于 `seq` 倒退，折叠就会把
+ * 「后到的正文」折进「先到的段」里。这条不靠注释保证，靠**一次 O(n) 扫描 + 喊话**：
+ *
+ * - 扫描发现 `ts` 单调不减 ⇒ 原样返回（不排序、不分配）；
+ * - 发现倒退 ⇒ `console.warn` 报出倒退对数与首个样本，再退回按 `ts` 升序重排（旧行为）。
+ *
+ * 于是「频带」这件事从注释里的传说变成了一个**可观测的断言**：真机上它一次都没响过；
+ * 哪天响了，就是派发链真的换了序，而不是去翻老图猜。
+ *
+ * 口径（退化路径）：按事件自身的 `ts` 升序；`ts` 相同或缺失时保持原插入序（稳定排序），
  * 缺 `ts`（≤0 / 非有限）的排在最后、不猜它的位置。跨 run 的相对顺序不改（分组只看
  * `run_id`，组间顺序由 `startedAt` 决定）。
  */
 export function orderEntriesByEventTime(entries: readonly StoredEvent[]): StoredEvent[] {
+  // 一次扫描同时给出「要不要重排」与「断言该不该响」：正常路径唯一的一次 O(n)。
+  let previous = Number.NEGATIVE_INFINITY;
+  let previousKnown = false;
+  let inversions = 0;
+  let firstInversion: string | undefined;
+  for (const entry of entries) {
+    const ts = entry.event.ts;
+    const known = Number.isFinite(ts) && ts > 0;
+    // 缺 ts 的事件不参与判断：退化路径会把它们排到最后，扫描阶段不猜它们的相对位置。
+    if (!known) continue;
+    if (previousKnown && ts < previous) {
+      inversions += 1;
+      if (firstInversion === undefined) {
+        firstInversion = `seq ${String(entry.seq)} ts ${String(ts)} < ${String(previous)}`;
+      }
+    }
+    previous = ts;
+    previousKnown = true;
+  }
+  if (inversions === 0) return [...entries];
+  // 前提破了：seq 与事件时间不再同序。这不是静默可容忍的形状（同一 run 的段会被折错），
+  // 所以既要喊出来，也要退回旧行为（按 ts 重排一次）。
+  console.warn('[timeline] seq order != event time order', {
+    inversions,
+    entries: entries.length,
+    first: firstInversion,
+  });
   return entries
     .map((entry, index) => ({ entry, index }))
     .sort((left, right) => {
@@ -1009,7 +1059,8 @@ export function groupEvents(
   errorLevel: ErrorVisibility = 'user',
 ): RunGroup[] {
   const byRun = new Map<string, StoredEvent[]>();
-  // 按事件时间规整再折（跨 seq 频带时频带序 ≠ 时间序，见 `orderEntriesByEventTime`）。
+  // 按 run 分组前先规整一次顺序（口径见 `orderEntriesByEventTime`：单 seq 空间下到达序
+  // 就是时间序，这一步在真机上恒等；`seq` 与 `ts` 真的换序时才退回按 `ts` 重排并喊话）。
   for (const entry of orderEntriesByEventTime(entries)) {
     if (!isVisibleForGrouping(entry, showInternal, errorLevel)) continue;
     const runId = entry.event.run_id;

@@ -103,7 +103,8 @@ export function SetupPage({ username, passwordSet, onDone }: SetupPageProps) {
     }
   };
 
-  const primaryButton =    'mt-4 inline-flex w-full items-center justify-center rounded-full bg-ink px-4 py-2.5 text-sm font-medium text-page transition-opacity duration-150 hover:opacity-90 pointer-coarse:min-h-touch disabled:opacity-50';
+  const primaryButton =
+    'mt-4 inline-flex w-full items-center justify-center rounded-full bg-ink px-4 py-2.5 text-sm font-medium text-page transition-opacity duration-150 hover:opacity-90 pointer-coarse:min-h-touch disabled:opacity-50';
   const secondaryButton =
     'mt-3 inline-flex w-full items-center justify-center rounded-full border border-line px-4 py-2 text-sm text-muted transition-opacity duration-150 hover:opacity-90 disabled:opacity-50';
 

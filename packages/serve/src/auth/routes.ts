@@ -1091,11 +1091,9 @@ export class AuthService {
     this.setupBindings.set(newHash, key ?? '');
     if (key !== undefined && key !== '') this.bootstraps.bindSession(key, newHash);
     this.log('bootstrap: setup session completed and rotated into a password session');
-    return jsonResponse(
-      { ok: true, totpRequired: this.totpRequired },
-      200,
-      { 'set-cookie': buildSessionCookie(this.cookiePolicy(this.isSecureContext(ctx)), issued.sid) },
-    );
+    return jsonResponse({ ok: true, totpRequired: this.totpRequired }, 200, {
+      'set-cookie': buildSessionCookie(this.cookiePolicy(this.isSecureContext(ctx)), issued.sid),
+    });
   }
 
   /**

@@ -20,6 +20,7 @@ import {
   MemoryLLMProvider,
   MemoryPluginHost,
   OpenAICompatibleProvider,
+  writeStderrNotice,
 } from '../packages/core/src/index';
 import { createScenarioProvider, type MockScenarioName } from './mock/scenarios';
 import type { PluginLoader } from './plugin-loader';
@@ -55,7 +56,8 @@ export function resetUnknownProviderNotice(): void {
 function notifyUnknownProvider(providerName: string, baseUrl: string, model: string): void {
   if (unknownProviderNoticeShown) return;
   unknownProviderNoticeShown = true;
-  process.stderr.write(
+  // 走统一 sink 入口：sink 坏掉时静默丢弃，绝不因为「打不出提示」而影响进程。
+  writeStderrNotice(
     `[vessel] Provider "${providerName}" is not registered; using OpenAI-compatible endpoint ` +
       `"${baseUrl}" (model: ${model}).\n`,
   );
@@ -65,7 +67,7 @@ function notifyUnknownProvider(providerName: string, baseUrl: string, model: str
 function notifyBareFallback(providerName: string, baseUrl: string): void {
   if (bareFallbackNoticeShown) return;
   bareFallbackNoticeShown = true;
-  process.stderr.write(
+  writeStderrNotice(
     `[vessel] Provider "${providerName}" fallback uses a bare OpenAI-compatible client ` +
       `without retry/timeout (endpoint: "${baseUrl}"); install the provider-openai plugin ` +
       'to enable retries and the default 120s timeout.\n',

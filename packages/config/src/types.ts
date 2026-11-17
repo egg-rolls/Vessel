@@ -473,6 +473,42 @@ export interface GatewayConfig {
    * 因此不会经同机反代被匿名取走。不配 = 旧行为（0.55 之前）。
    */
   proxySecretEnv?: string;
+  /** 0.58：父进程侧存活看门狗（探活 + 受限重启）；缺省开。 */
+  supervise?: GatewaySuperviseConfig;
+}
+
+/**
+ * 0.58：外部存活看门狗（父进程替 node 子进程兜底）。
+ *
+ * 为什么需要：`runs.start` 之后的整段僵死（`docs/dev/research/run-start-stall.md`）
+ * 会让子进程**进程内所有定时器一起停摆**、`/health` 超时、日志无新行 —— 这个状态下
+ * 进程内部没有任何自救手段（连 setInterval 都不跑），只能由父进程强杀重起。
+ *
+ * 什么时候关掉：外面已经有 systemd / k8s 之类在做「探活 + 重启」时，
+ * `enabled: false` 让两层不要互相打架（关掉后父进程只探「子进程是否退出」，
+ * 不做周期性健康探测、也不重启）。
+ *
+ * YAML 键：`gateway.supervise.enabled / probe_interval_ms / probe_timeout_ms /
+ * failure_threshold / max_restarts_per_hour / backoff_start_ms / backoff_max_ms /
+ * recovery_probes`。
+ */
+export interface GatewaySuperviseConfig {
+  /** 缺省 true；false = 完全不探活、不重启（交给外部看护）。 */
+  enabled?: boolean;
+  /** 探活周期（毫秒，缺省 2000）。 */
+  probeIntervalMs?: number;
+  /** 单次探活超时（毫秒，缺省 2000）。 */
+  probeTimeoutMs?: number;
+  /** 连续失败多少次判僵死（缺省 3；**成功一次即清零**）。 */
+  failureThreshold?: number;
+  /** 每小时重启上限（缺省 5；超了停手并明确报错，不无限重启）。 */
+  maxRestartsPerHour?: number;
+  /** 重启后的退避起点（毫秒，缺省 1000；每次翻倍）。 */
+  backoffStartMs?: number;
+  /** 退避上限（毫秒，缺省 60000）。 */
+  backoffMaxMs?: number;
+  /** 连续成功探活多少次退出退避（缺省 5）。 */
+  recoveryProbes?: number;
 }
 
 /** 0.56：GitHub OAuth 登录后端。 */

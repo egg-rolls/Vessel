@@ -866,6 +866,7 @@ export const messages = {
   'teams.card.copyId': '复制团队 ID',
   'teams.card.members': '{members} 成员',
   'teams.card.online': '{online} 在线',
+  'teams.card.running': '有成员在跑',
   'teams.card.open': '打开群聊',
   'teams.detail.emptyTitle': '先打开一个 Team',
   'teams.detail.emptyDesc': '从团队列表选择一个 Team，进入群聊与成员详情。',

@@ -33,25 +33,53 @@
   "vessel": {
     "id": "web-tools",
     "name": "Web Tools",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "engines": {
       "vessel": ">=0.33.0 <1.0.0"
     },
-    "description": "web_fetch — SSRF-guarded HTTP fetch with local text extraction",
+    "description": "web_search（DeepSeek tools API）+ web_fetch（local SSRF 守卫 / 可选 deepseek 后端）",
     "side": "backend",
     "contributes": {
       "settings": {
+        "backend": {
+          "type": "string",
+          "description": "web_fetch 后端：local（缺省，免费且可离线）/ deepseek（服务端抓取，花钱 + 内容出网）"
+        },
+        "base_url": {
+          "type": "string",
+          "description": "tools API 的 base_url，缺省 https://api.deepseek.com（不含末尾斜杠）"
+        },
+        "key_env": {
+          "type": "string",
+          "description": "上游 key 的**环境变量名**（缺省 DEEPSEEK_API_KEY）。只写变量名，绝不写 key 本身"
+        },
+        "search_key_env": {
+          "type": "string",
+          "description": "搜索用的环境变量名（留空则回落 key_env）"
+        },
+        "fetch_key_env": {
+          "type": "string",
+          "description": "抓取用的环境变量名（留空则回落 key_env）"
+        },
+        "allow_model_backend_override": {
+          "type": "boolean",
+          "description": "是否允许模型用 backend 参数改后端，缺省 false（深抓花钱 + 外发，不该由模型单方面决定）"
+        },
+        "api_timeout_ms": {
+          "type": "number",
+          "description": "单次上游调用总 deadline（含重试与 body 读取），缺省 15000，clamp 1000~60000"
+        },
         "max_bytes": {
           "type": "number",
           "description": "响应体字节上限，默认 5 MiB（clamp 1 KiB ~ 8 MiB）"
         },
         "timeout_ms": {
           "type": "number",
-          "description": "整体抓取超时毫秒数（含所有重定向跳），默认 10000"
+          "description": "local 抓取的整体超时毫秒数（含所有重定向跳），默认 10000"
         },
         "max_chars": {
           "type": "number",
-          "description": "返回文本的字符预算，超出即截断并置 truncated=true，默认 8000"
+          "description": "返回文本的字符预算，超出即截断并置 truncated=true，默认 8000（上界 32000）"
         },
         "respect_robots": {
           "type": "boolean",
@@ -63,12 +91,98 @@
         },
         "renderer": {
           "type": "string",
-          "description": "M1 只支持 none；browser/jina 会返回 renderer_unavailable"
+          "description": "只支持 none；browser/jina 会返回 renderer_unavailable（与 backend=deepseek 冲突，安装时直接报错）"
+        },
+        "search_detail_default": {
+          "type": "string",
+          "description": "搜索输出的缺省预算档：brief（≈4000 tok）/ full（≈8000 tok）"
+        },
+        "search_budget_brief_tokens": {
+          "type": "number",
+          "description": "brief 档总输出 token 预算，缺省 4000，clamp 1000~12000（不得 ≥16000）"
+        },
+        "search_budget_full_tokens": {
+          "type": "number",
+          "description": "full 档总输出 token 预算，缺省 8000，clamp 1000~12000（不得 ≥16000）"
+        },
+        "search_summary_max_chars": {
+          "type": "number",
+          "description": "每条摘要字符上限，缺省 800，clamp 200~2000"
+        },
+        "search_content_max_chars": {
+          "type": "number",
+          "description": "每条正文片段字符上限（need_content=true 时），缺省 600，clamp 200~2000"
+        },
+        "search_count_max": {
+          "type": "number",
+          "description": "count 的服务端硬顶，缺省 50，clamp 1~50"
+        },
+        "search_cache_ttl_s": {
+          "type": "number",
+          "description": "搜索结果缓存 TTL（秒），缺省 600；0 = 关闭"
+        },
+        "search_cache_max_entries": {
+          "type": "number",
+          "description": "搜索结果缓存条数上限（LRU），缺省 128"
+        },
+        "fetch_cache_ttl_s": {
+          "type": "number",
+          "description": "抓取结果缓存 TTL（秒），缺省 local=0（关闭）、deepseek=1800"
+        },
+        "retry_max": {
+          "type": "number",
+          "description": "上游调用最大重试次数，缺省 2（总 3 attempts），clamp 0~3"
+        },
+        "retry_base_ms": {
+          "type": "number",
+          "description": "退避基础毫秒（指数 ×2 + ±30% 抖动），缺省 400"
+        },
+        "search_qps": {
+          "type": "number",
+          "description": "搜索自建限流（次/秒），缺省 5"
+        },
+        "fetch_qps": {
+          "type": "number",
+          "description": "deepseek 抓取自建限流（次/秒），缺省 3"
+        },
+        "fetch_host_min_interval_ms": {
+          "type": "number",
+          "description": "同一 host 的最小抓取间隔（毫秒），缺省 500"
+        },
+        "max_uses_search_per_run": {
+          "type": "number",
+          "description": "每 run 计费搜索次数上限，缺省 15（只数有结果的调用）"
+        },
+        "max_uses_fetch_per_run": {
+          "type": "number",
+          "description": "每 run 计费 deepseek 抓取次数上限，缺省 20（local 不计）"
+        },
+        "max_billed_calls_per_day": {
+          "type": "number",
+          "description": "每进程每日计费调用上限（跨 run 累积），缺省 500"
+        },
+        "breaker_failures": {
+          "type": "number",
+          "description": "连续失败多少次打开熔断（不含 4xx 客户端错），缺省 5"
+        },
+        "breaker_open_ms": {
+          "type": "number",
+          "description": "熔断打开时长（毫秒），缺省 60000"
+        },
+        "deepseek_fetch_block_query_string": {
+          "type": "boolean",
+          "description": "deepseek 抓取是否拦截带 query string 的 URL，缺省 true（缺省必须是安全方向）"
+        },
+        "deepseek_fetch_allow_query_string_hosts": {
+          "type": "array",
+          "description": "query string 放行白名单（主机名），显式列出才放行"
         }
       }
     },
     "permissions": {
-      "net": []
+      "net": [
+        "api.deepseek.com"
+      ]
     }
   }
 }
