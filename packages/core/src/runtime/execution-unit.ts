@@ -4019,7 +4019,16 @@ export class ExecutionUnit {
         ts: Date.now(),
       });
 
-      return { toolCall, input: result.input, ok: true, content: result.content };
+      return {
+        toolCall,
+        input: result.input,
+        ok: true,
+        content: result.content,
+        // 0.56 闸上移：handler 自己裁过的结果不再过 loop 的闸（否则省略标注会被裁掉）
+        ...(result.bounded === true
+          ? { bounded: true as const, original_chars: result.original_chars }
+          : {}),
+      };
     } catch (error) {
       // 权限超时是致命错误（DECISION-022 §2.2）：终止 run，不折回工具错误让模型重试。
       if (error instanceof PermissionTimeoutError) throw error;

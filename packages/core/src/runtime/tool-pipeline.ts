@@ -6,6 +6,10 @@
  * → 权限判定（最终工具与参数）→ handler（timeout/abort）
  * → ToolResult guardrail → AfterTool hook。
  *
+ * 0.56 闸上移：handler 自己裁过结果（`boundToolResult`）时会在 ctx 上登记一张回执，
+ * 管道认领后带成 `ToolPipelineResult.bounded` —— 出口闸本体在 loop（`tool-calling-loop.ts`），
+ * 管道只负责把「已经裁过」这个事实传上去，不重复实现裁剪 / 落盘。
+ *
  * 权限判定必须对 guardrail/hook 改写后的最终工具与参数执行，避免旧工具/旧参数放行；
  * PII 句柄替换也必须在权限判定**之前**，否则人批的是占位符而不是真实参数。
  *
@@ -28,6 +32,7 @@ import {
   PermissionPolicy,
   PermissionTimeoutError,
 } from './permission-policy.js';
+import { takeToolResultGateReceipt } from './tool-result-gate.js';
 
 export interface ToolPipelineDeps {
   pluginHost: PluginHost;
@@ -87,6 +92,14 @@ export interface ToolPipelineResult {
   content: string;
   /** 失败原因（成功时缺省）；调用方可据此决定是否加 `Error:` 前缀 */
   error?: string;
+  /**
+   * 结果**已过出口闸**（≤ 16k token）：handler 自己裁过并登记了回执
+   * （`markToolResultBounded`，见 `tool-result-gate.ts`）。
+   * loop 见到就原样写回，不再裁第二次 —— 否则省略标注行会被裁掉。
+   */
+  bounded?: true;
+  /** 裁剪前字符数（与 `bounded` 同时出现；仅供日志 / 事件参考） */
+  original_chars?: number;
 }
 
 export interface ToolPipeline {
@@ -263,6 +276,12 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
         return fail(errorText(error));
       }
 
+      // 5.5 出口闸回执（0.56 闸上移）：handler 自己裁过就在 ctx 上登记过一张回执。
+      //     结果字符串一旦被 ToolResult guardrail 改写，回执就失效（改写后的文本没裁过）。
+      const gateReceipt = takeToolResultGateReceipt(ctx);
+      let resultBounded = gateReceipt?.bounded === true;
+      let resultOriginalChars = gateReceipt?.originalChars;
+
       // 6. ToolResult guardrail：block 折回错误；字符串 replacement 改写结果
       if (stages.toolResultGuardrail) {
         const outcome = await guardrails.apply(
@@ -275,7 +294,13 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
           return fail(`Tool result blocked by guardrail: ${outcome.reason ?? 'blocked'}`);
         }
         if (typeof outcome.replacement === 'string') {
-          result = outcome.replacement;
+          // GuardrailRunner 无 guardrail / 未改写时也会回传**原值**，只有真改写才作数
+          // —— 否则每次工具调用都会把回执误判成失效。
+          if (outcome.replacement !== result) {
+            result = outcome.replacement;
+            resultBounded = false;
+            resultOriginalChars = undefined;
+          }
         }
       }
 
@@ -289,7 +314,14 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
         });
       }
 
-      return { ok: true, input: args, content: result };
+      return {
+        ok: true,
+        input: args,
+        content: result,
+        ...(resultBounded
+          ? { bounded: true as const, original_chars: resultOriginalChars ?? result.length }
+          : {}),
+      };
     },
   };
 }
