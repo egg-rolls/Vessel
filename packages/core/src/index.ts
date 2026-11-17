@@ -343,5 +343,8 @@ export {
 } from './tenant/index.js';
 // Transport（0.2 R3a-core：进程内实现）
 export { InProcessTransport, type InProcessTransportOptions } from './transport/index.js';
+// 视觉基座的机制（0.56）：内容寻址 blob（写一次永不重写）+ 上传即落 + 请求期计划。
+// 形状在 `types/vision.ts`；**第一份后端实现**在 `plugins/provider/openai/src/vision.ts`。
+export * from './vision/index.js';
 // 类型定义
 export * from './types/index.js';
