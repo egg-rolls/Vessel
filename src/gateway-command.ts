@@ -91,7 +91,7 @@ import { effectiveNodeToken, effectivePlatformToken } from './token-derive';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
-import { inspectWebDist, webDistWarning } from './web-dist';
+import { inspectWebDist, webDistProbe, webDistStaleLine, webDistWarning } from './web-dist';
 
 /** 依赖注入（CLI 只用默认值；测试注入平台/路径/命令执行） */
 export interface GatewayCommandDeps {
@@ -224,9 +224,9 @@ export function splitModePortError(
     mode === 'gateway'
       ? [
           { path: 'gateway.port', value: config.gateway?.port },
-          { path: 'serve.port', value: config.serve?.port },
+          { path: 'node.port', value: config.node?.port },
         ]
-      : [{ path: 'serve.port', value: config.serve?.port }];
+      : [{ path: 'node.port', value: config.node?.port }];
   for (const check of checks) {
     if (check.value === 0) {
       return splitModePortFailure(check.path, check.path);
@@ -320,7 +320,7 @@ export interface NodeListenInfo {
 }
 
 export function nodeListenFromConfig(config: VesselConfig): NodeListenInfo {
-  const host = (config.serve?.hostname ?? DEFAULT_SERVE_OPTIONS.hostname).trim();
+  const host = (config.node?.hostname ?? DEFAULT_SERVE_OPTIONS.hostname).trim();
   const { nodePort } = resolveGatewayNodePorts(config, 'gateway');
   const url = gatewayBaseUrl(
     {
@@ -330,7 +330,7 @@ export function nodeListenFromConfig(config: VesselConfig): NodeListenInfo {
       port: nodePort,
       version: '0',
     },
-    config.serve?.tls !== undefined,
+    config.node?.tls !== undefined,
   );
   return { host, port: nodePort, url };
 }
@@ -422,7 +422,7 @@ async function localNodeStatusViews(
             version: '0',
           },
           800,
-          loaded.config.serve?.tls !== undefined,
+          loaded.config.node?.tls !== undefined,
         );
         return {
           node_id: entry.node_id,
@@ -615,7 +615,7 @@ export async function prepareForegroundGatewayStart(
         ok: false,
         error: t('gateway.alreadyRunning', {
           pid: entry.record.pid,
-          url: gatewayBaseUrl(entry.record, config.serve?.tls !== undefined),
+          url: gatewayBaseUrl(entry.record, config.node?.tls !== undefined),
         }),
         ...(pid !== undefined ? { runningPid: pid } : {}),
       };
@@ -1076,8 +1076,8 @@ function instanceStatusJson(
 ): Record<string, unknown> {
   const record = entry.record;
   const pidFile = entry.pidPath ?? entry.lockPath ?? '';
-  // 平台监听只有 http；node 监听才可能带 serve.tls。
-  const tls = !platform && config.serve?.tls !== undefined;
+  // 平台监听只有 http；node 监听才可能带 node.tls。
+  const tls = !platform && config.node?.tls !== undefined;
   if (record !== undefined) {
     const uptimeSeconds = Math.floor((now() - Date.parse(record.started_at)) / 1000);
     return {
@@ -1109,7 +1109,7 @@ function instanceStatusJson(
 /** 人类可读的实例状态行（status / list / stop 共用）。 */
 function formatEntryState(entry: GatewayStateEntry, config: VesselConfig): string {
   const record = entry.record;
-  const tls = config.serve?.tls !== undefined;
+  const tls = config.node?.tls !== undefined;
   switch (entry.state) {
     case 'running':
       return `${ui.ok(t('gateway.running'))}  pid ${record?.pid ?? 0}  ${record ? gatewayBaseUrl(record, tls) : ''}`;
@@ -1174,6 +1174,14 @@ export async function gatewayStatus(
   // 0.49 G1：`gateway start` 的记录 host/port 是 platform 监听；附带 node 监听展示。
   const platforms = await platformInstances(entries);
   const stateKind = gatewayStateKind(options, context.env);
+  // 0.57：产物落后于源码要能「不开浏览器也发现」。自修复只在 gateway 启动时跑一次，
+  // 之后源码再变就没人说了 —— 所以这一行必须存在（不落后时为 null，不占行）。
+  // 判据与 `/build.json`、启动诊断共用 `inspectWebDist`（`VESSEL_STATIC_DIR` 指向的
+  // 外部产物不比源码，避免误报）。
+  const webDistStaticDir = (context.env.VESSEL_STATIC_DIR ?? '').trim();
+  const webDistLine = webDistStaleLine(
+    await inspectWebDist(webDistStaticDir !== '' ? { staticDir: webDistStaticDir } : {}),
+  );
   // 0.49 G3b：多节点投影只读 registry + 各 node 健康；不含 token。
   const nodeViews =
     stateKind === 'platform'
@@ -1232,6 +1240,7 @@ export async function gatewayStatus(
       const pidFile = entry.pidPath ?? entry.lockPath;
       if (pidFile !== undefined) print(`  ${ui.dim(pidFile)}`);
     }
+    if (webDistLine !== null) print(`  ${ui.warn(webDistLine)}`);
     return allLive ? 0 : 1;
   }
 
@@ -1283,6 +1292,7 @@ export async function gatewayStatus(
     print(ui.dim(t('gateway.status.selectHint', { count: entries.length })));
   }
   print(ui.kv(t('gateway.status.service'), serviceLine(service), 10));
+  if (webDistLine !== null) print(`  ${ui.warn(webDistLine)}`);
   return allLive ? 0 : 1;
 }
 
@@ -1305,7 +1315,7 @@ function legacyStatusJson(
       pid: record.pid,
       host: record.host,
       port: record.port,
-      url: gatewayBaseUrl(record, stateKind === 'node' && context.config.serve?.tls !== undefined),
+      url: gatewayBaseUrl(record, stateKind === 'node' && context.config.node?.tls !== undefined),
       started_at: record.started_at,
       uptime_seconds: Math.max(0, Math.floor((now() - Date.parse(record.started_at)) / 1000)),
       version: record.version,
@@ -1642,7 +1652,7 @@ export async function reloadGatewayCommand(
       record,
       token,
       ...(options.scopes !== undefined ? { scopes: options.scopes } : {}),
-      tls: context.config.serve?.tls !== undefined,
+      tls: context.config.node?.tls !== undefined,
     });
     if (!result.ok) {
       printErr(ui.err(`${prefix}${t('gateway.reloadFailed', { detail: result.error })}`));
@@ -1750,7 +1760,7 @@ async function startDaemonCommand(
     // 平台监听只有 http（platform server 不带 TLS）。
     const url = gatewayBaseUrl(
       result.record,
-      stateKind === 'node' && context.config.serve?.tls !== undefined,
+      stateKind === 'node' && context.config.node?.tls !== undefined,
     );
     if (result.unconfirmed === true) {
       print(ui.warn(t('gateway.startedUnconfirmed', { pid: result.record.pid })));
@@ -2173,7 +2183,7 @@ async function resolveLocalNodes(options: {
       config: nodeConfig,
       listen,
       ...(token !== undefined ? { token } : {}),
-      apiUrl: nodeOriginOf(listen.host, nodePort, nodeConfig.serve?.tls !== undefined),
+      apiUrl: nodeOriginOf(listen.host, nodePort, nodeConfig.node?.tls !== undefined),
     });
   }
 
@@ -2515,6 +2525,9 @@ export async function runPlatformGatewayForeground(
           ? { hubOrigins: platformBrowserOrigins(hubHostname, hubPort) }
           : {}),
         staticDir: options.staticDir,
+        // 0.57：`/build.json` 的实时字段 —— 判据复用 `web-dist.ts`，平台不自己比 mtime。
+        // 这是「产物过期但没人重建」时唯一能被浏览器看见的证据。
+        webDist: webDistProbe(options.staticDir),
         nodes: nodes.map((node) => ({
           nodeId: node.entry.node_id,
           name: node.entry.name,

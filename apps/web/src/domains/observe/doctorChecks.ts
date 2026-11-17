@@ -300,8 +300,13 @@ export function buildDoctorChecks(input: DoctorCheckInput): DoctorCheck[] {
       detail: pendingDetail(configError),
     });
   } else {
-    const serve = asRecord(configRoot.serve);
-    const port = serve?.port;
+    // 读 `node`：0.55 已把内部配置字段从 `serve` 改名为 `node`
+    // （`VesselConfig.serve`/`ServeConfig` → `node`/`NodeConfig`），loader 不再把
+    // `node:` 折叠进 `serve:`，所以 `config.get` 快照里的键就是 `node`。
+    // 历史教训：0.55 之前这里读 `serve` 是对的（当时 loader 会 `delete next.node`）；
+    // 两侧任何一侧改名都必须同步这一行，否则这一行会永远显示「未配置」。
+    const node = asRecord(configRoot.node);
+    const port = node?.port;
     const endpoint = input.health?.node.endpoint ?? input.nodeUrl;
     if (typeof port !== 'number') {
       checks.push({

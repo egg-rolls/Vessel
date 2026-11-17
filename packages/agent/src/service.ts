@@ -30,6 +30,7 @@ import {
   type LeaseServicePort,
   type Logger,
   type Message,
+  type MessageRef,
   noopLogger,
   PROJECTION_MODE_STRICTNESS,
   type ProjectionDeclaration,
@@ -857,6 +858,11 @@ export class AgentServiceImpl implements AgentService {
   private readonly deleteSessionData: AgentServiceOptions['deleteSessionData'];
   /** Stage 4：成员 run durable 记录；resumeRun 的加载端口 */
   private readonly runStore: RunRecordStore | undefined;
+  /**
+   * 附件入池（0.56）：注入时在 `admit` 里把图片引用算 sha256 + 落 blob。
+   * 缺省 = 不入池（图不内联，`not_ingested`）——fail-closed 且不静默。
+   */
+  private readonly attachIngest: AgentServiceOptions['attachIngest'];
   /** 0.32：持久化收件箱；有 `dataDir` 时唯一实例，否则 undefined（行为不变） */
   private readonly inbox: AgentInboxStore | undefined;
   /** AgentService 的 body registry：agentId → bindingId → ExecutionUnitEntry（含已退役直到清理） */
@@ -992,6 +998,7 @@ export class AgentServiceImpl implements AgentService {
     this.eventLog = options.eventLog;
     this.deleteSessionData = options.deleteSessionData;
     this.runStore = options.runStore;
+    this.attachIngest = options.attachIngest;
 
     const dataDir = options.dataDir;
     const snapshotEnabled = dataDir !== undefined && options.snapshot?.enabled !== false;
@@ -2650,7 +2657,12 @@ export class AgentServiceImpl implements AgentService {
     const fromBashJob = input.origin === 'bash_job';
     // 附件引用（0.52）：只收「绝对路径 + 已知 kind」，逐条丢弃其余；条数有上限。
     // 越界 / deny 目录的判定属于写侧闸门（runs.start 的 refs 闸门），这里只做形状归一。
-    const refs = normalizeRefs(input.refs);
+    //
+    // 0.56（决策 2：上传即落）：这是引用**到达节点的第一刻** —— 图片在这里就冻结成字节
+    // （sha256 + blob）。之后请求期只读 blob，不再碰这条路径（`refs[].path` 只留给
+    // 展示与人工排查）。失败（越界 / 读不到 / 太大）不报错：引用原样往下走，请求期
+    // 明确记 `not_ingested`，chip 显示「未发送」。
+    const refs = await this.ingestRefs(normalizeRefs(input.refs));
 
     // 0.52 S1a：node 退出期间的准入 fence —— 人类来源的写立刻拒绝。
     // 必须早于任何 inbox / body 副作用：「收下再假装成功」会让 UI 以为 run 真的起来了。
@@ -5391,6 +5403,28 @@ export class AgentServiceImpl implements AgentService {
       } catch (createError) {
         return this.rejectAdmit(createError);
       }
+    }
+  }
+
+  /**
+   * 附件入池（0.56 决策 2）：把图片引用换成带 `sha256` 的引用。
+   *
+   * 幂等：装配层没注入（`attachIngest === undefined`）就直接原样返回 —— 纯内存 /
+   * 工具清单 / 测试场景不会因为「没有 blob 池」而失败（图只是不内联）。
+   * 注入时吸入所有异常：入池失败**不该**让一条消息发不出去（文本仍然要送达），
+   * 代价只是那张图显示「未发送 · 未入池」。
+   */
+  private async ingestRefs(refs: MessageRef[]): Promise<MessageRef[]> {
+    if (this.attachIngest === undefined || refs.length === 0) return refs;
+    if (!refs.some((ref) => ref.kind === 'image' && ref.sha256 === undefined)) return refs;
+    try {
+      return await this.attachIngest(refs);
+    } catch (error) {
+      this.logger.warn('attachment.ingest.failed', {
+        error: error instanceof Error ? error.message : String(error),
+        refs: refs.length,
+      });
+      return refs;
     }
   }
 

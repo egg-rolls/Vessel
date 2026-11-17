@@ -212,7 +212,6 @@ type GatewayFrame =
   | { kind: 'notification'; notification: RpcEventNotification }
   | { kind: 'hello'; nodeId?: string; latestSeq?: number }
   | { kind: 'event'; seq?: number; event: unknown }
-  | { kind: 'gap'; toSeq?: number }
   | { kind: 'ping' };
 
 /**
@@ -251,11 +250,6 @@ export function parseGatewayFrame(data: unknown): GatewayFrame | undefined {
         kind: 'event',
         ...(typeof parsed.seq === 'number' ? { seq: parsed.seq } : {}),
         event: parsed.event,
-      };
-    case 'gap':
-      return {
-        kind: 'gap',
-        ...(typeof parsed.to_seq === 'number' ? { toSeq: parsed.to_seq } : {}),
       };
     case 'ping':
       return { kind: 'ping' };
@@ -369,11 +363,6 @@ export function createHttpRpcClient(options: HttpRpcClientOptions): HttpRpcClien
       case 'event':
         if (frame.seq !== undefined) lastSeq = Math.max(lastSeq, frame.seq);
         emit({ method: 'events.event', params: frame.event });
-        return;
-      case 'gap':
-        if (frame.toSeq !== undefined) lastSeq = Math.max(lastSeq, frame.toSeq);
-        // 历史缺失：以 to_seq 为新 since 重连，由 gateway 续放。
-        dropSocket(current, true);
         return;
       case 'ping':
         sendPong(current);

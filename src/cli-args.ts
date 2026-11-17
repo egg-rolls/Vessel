@@ -159,19 +159,6 @@ export interface MigrateCommandArgs {
   source?: string;
 }
 
-/**
- * `session` 子命令（0.54 C2）：旧格式会话 → 时间线单源的一次性迁移。
- *
- * `sessionId` 与 `all` 恰好二选一；`--dry-run` 只读（不建目录、不落 timeline）。
- */
-export type SessionCommandArgs = {
-  kind: 'migrate';
-  sessionId: string | null;
-  all: boolean;
-  dryRun: boolean;
-  json: boolean;
-};
-
 /** `trace` 子命令（0.5） */
 export type TraceCommandArgs = {
   kind: 'prune';
@@ -449,8 +436,6 @@ export interface CliArgs {
   /** 0.5 一次性本地命令 */
   configCommand: ConfigCommandArgs | null;
   migrate: MigrateCommandArgs | null;
-  /** 0.54 C2：`vessel session ...`（旧格式会话迁移） */
-  sessionCommand: SessionCommandArgs | null;
   trace: TraceCommandArgs | null;
   /** 0.6.1：`vessel plugin ...` */
   pluginCommand: PluginCommandArgs | null;
@@ -582,7 +567,6 @@ export function parseArgs(argv: string[]): ParseResult {
     allowedOrigins: [],
     configCommand: null,
     migrate: null,
-    sessionCommand: null,
     trace: null,
     pluginCommand: null,
     doctorCommand: null,
@@ -628,9 +612,6 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'migrate' && i === 0) {
       return parseMigrateArgs(argv.slice(1), args);
-    }
-    if (a === 'session' && i === 0) {
-      return parseSessionArgs(argv.slice(1), args);
     }
     if (a === 'trace' && i === 0) {
       return parseTraceArgs(argv.slice(1), args);
@@ -1293,81 +1274,6 @@ function parseMigrateArgs(rest: string[], args: CliArgs): ParseResult {
     json,
     ...(source !== undefined ? { source } : {}),
   };
-  return { ok: true, args };
-}
-
-/**
- * `session migrate <session_id>|--all [--dry-run] [--json]`（0.54 C2）。
- *
- * 子命令族目前只有 `migrate` 一个成员；将来加 `session export|list` 时在同一处扩分支。
- */
-function parseSessionArgs(rest: string[], args: CliArgs): ParseResult {
-  const sub = rest[0];
-  if (sub === undefined) {
-    return { ok: false, error: 'session requires a subcommand: migrate' };
-  }
-  if (sub === '--help' || sub === '-h') {
-    args.help = true;
-    return { ok: true, args };
-  }
-  if (sub !== 'migrate') {
-    return { ok: false, error: `Unknown subcommand for session: ${sub}` };
-  }
-
-  let sessionId: string | null = null;
-  let all = false;
-  let dryRun = false;
-  let json = false;
-
-  for (let i = 1; i < rest.length; i++) {
-    const a = rest[i] ?? '';
-    if (a === '--help' || a === '-h') {
-      args.help = true;
-      continue;
-    }
-    if (a === '--all') {
-      all = true;
-      continue;
-    }
-    if (a === '--dry-run') {
-      dryRun = true;
-      continue;
-    }
-    if (a === '--json') {
-      json = true;
-      continue;
-    }
-    if (a === '--data-dir') {
-      const value = rest[i + 1];
-      if (value === undefined || value.startsWith('-') || value.trim() === '') {
-        return { ok: false, error: 'Missing value for --data-dir' };
-      }
-      args.dataDirArg = value;
-      i++;
-      continue;
-    }
-    if (a.startsWith('-')) {
-      return { ok: false, error: `Unknown argument for session migrate: ${a}` };
-    }
-    if (sessionId !== null) {
-      return {
-        ok: false,
-        error: `session migrate takes at most one <session_id> (got ${sessionId} and ${a})`,
-      };
-    }
-    const trimmed = a.trim();
-    if (trimmed === '') {
-      return { ok: false, error: 'session migrate requires a non-empty <session_id>' };
-    }
-    sessionId = trimmed;
-  }
-
-  if (args.help) return { ok: true, args };
-  if (all === (sessionId !== null)) {
-    return { ok: false, error: 'session migrate requires exactly one of <session_id> or --all' };
-  }
-
-  args.sessionCommand = { kind: 'migrate', sessionId, all, dryRun, json };
   return { ok: true, args };
 }
 

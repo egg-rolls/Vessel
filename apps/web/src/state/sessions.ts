@@ -5,13 +5,144 @@ import type { SessionInfo } from '../gateway/types';
 export const MAX_SESSION_TITLE = 512;
 export const SESSION_PAGE_SIZE = 50;
 
-/** 会话排序：updated_at 倒序，同值 session_id 升序（与 TUI 一致）。 */
-export function sortSessions(list: readonly SessionInfo[]): SessionInfo[] {
-  return [...list].sort((a, b) => {
-    if (a.updated_at !== b.updated_at) return b.updated_at - a.updated_at;
-    if (a.session_id === b.session_id) return 0;
-    return a.session_id < b.session_id ? -1 : 1;
+/** 一条会话的「在飞」状态：`running` = 有 run 正在跑；`queued` = 有 run 在排队。 */
+export type SessionInflightState = 'running' | 'queued';
+
+/**
+ * `session_id → 在飞状态` 的**权威**快照。
+ *
+ * 唯一来源是 `health.get` 的 `runtime.scheduler.running` / `.queued`（调度器自己的账本，
+ * 每条带 `run_id` / `session_id` / `status`）。**不要**用 `SessionInfo.status`：那是会话壳里
+ * 上一次 run 的**镜像字段**，进程被杀后就停在 `running`，正是「假运行态」的来源；也不要用
+ * 前端从事件流推出来的 run 表（同一份错误换个地方）。见 `inflightFromScheduler`。
+ */
+export type SessionInflightMap = ReadonlyMap<string, SessionInflightState>;
+
+export interface SessionOrderInput {
+  /** 权威在飞状态；缺省 = 全部空闲（等价于纯 `updated_at` 排序）。 */
+  inflight?: SessionInflightMap;
+  /**
+   * 当前时刻，只用来**夹住未来时间戳**（服务端 / 客户端时钟偏移时 `updated_at` 可能
+   * 比 `now` 还新，不夹的话那张卡会被永久顶在最上面）。
+   */
+  now?: number;
+}
+
+/**
+ * 会话卡片的排序（**纯函数**，无 React / 无 IO）：
+ *
+ * 1. **在飞优先**：`running` 在前，其次 `queued`，其余最后 —— 状态来自服务端调度器账本
+ *    （`SessionInflightMap`），不猜、不推；
+ * 2. **最近活动降序**：用会话摘要里的服务端真值时间 `updated_at`（缺失时回落到创建时间
+ *    `started_at`，再缺失按 0），按 `now` 夹住未来值；
+ * 3. **完全并列兜底**：`session_id` 升序 —— 同一份输入两次调用结果完全一致。
+ *
+ * 「空会话 / 没有活动时间」不会掉到「看起来坏了」的位置：它按创建时间参与排序，而创建
+ * 时间同样缺失时才落到 0（与 0.55 之前 `updated_at` 单键排序的行为一致，只是多了一层在飞优先）。
+ *
+ * **它只决定「目标顺序」**：不许直接拿去每帧渲染 —— run 起止会让卡片换位（跳动）。
+ * 落屏顺序由 `mergeSessionOrder` 在**显式时机**（进入列表 / 手动刷新 / 切范围）才对
+ * 目标顺序收敛，见 `useStableSessionOrder`。
+ */
+export function orderSessions(
+  list: readonly SessionInfo[],
+  input: SessionOrderInput = {},
+): SessionInfo[] {
+  const inflight = input.inflight;
+  const now = input.now ?? Number.POSITIVE_INFINITY;
+  const ranked = list.map((session) => ({
+    session,
+    rank: rankOf(inflight?.get(session.session_id)),
+    activity: activityOf(session, now),
+  }));
+  ranked.sort((a, b) => {
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    if (a.activity !== b.activity) return b.activity - a.activity;
+    const left = a.session.session_id;
+    const right = b.session.session_id;
+    if (left === right) return 0;
+    return left < right ? -1 : 1;
   });
+  return ranked.map((entry) => entry.session);
+}
+
+/** 在飞优先级：`running` 0 < `queued` 1 < 空闲 2。 */
+function rankOf(state: SessionInflightState | undefined): number {
+  if (state === 'running') return 0;
+  if (state === 'queued') return 1;
+  return 2;
+}
+
+/** 最近活动时间（服务端真值）：`updated_at` → `started_at` → 0，并按 `now` 夹住未来值。 */
+function activityOf(session: SessionInfo, now: number): number {
+  const raw = session.updated_at || session.started_at || 0;
+  if (!Number.isFinite(raw)) return 0;
+  return raw > now ? now : raw;
+}
+
+/**
+ * 把「目标顺序」落到屏上，但不让**已经在列表里的卡片**换位（防跳动，纯函数）。
+ *
+ * 规则：`previous` 里还存在的项保持它们**原来的相对顺序**；新出现的项按 `target` 的位置
+ * 插到「它在 target 里排前面、且已经在 out 里」的最后一项之后；消失的项丢掉。
+ *
+ * 于是「某个 run 开始时把卡片顶到最前」这件事只会在下一次显式触发时发生（它等于
+ * `previous` 被整体重置为 `target`：调用方在触发点直接传空 `previous` 即可），
+ * 而**当前这一屏**永远不因为 run 起止而重排。
+ */
+export function mergeSessionOrder(
+  previous: readonly string[],
+  target: readonly string[],
+): string[] {
+  const targetRank = new Map<string, number>();
+  target.forEach((id, index) => {
+    targetRank.set(id, index);
+  });
+  const previousSet = new Set(previous);
+  const survivors = previous.filter((id) => targetRank.has(id));
+  const survivorSet = new Set(survivors);
+  const fresh = target.filter((id) => !survivorSet.has(id) && !previousSet.has(id));
+  if (fresh.length === 0) return survivors;
+  const out = [...survivors];
+  for (const id of fresh) {
+    const rank = targetRank.get(id) ?? Number.POSITIVE_INFINITY;
+    let at = 0;
+    for (let index = 0; index < out.length; index += 1) {
+      const existing = out[index];
+      if (existing === undefined) continue;
+      const other = targetRank.get(existing);
+      if (other !== undefined && other < rank) at = index + 1;
+    }
+    out.splice(at, 0, id);
+  }
+  return out;
+}
+
+/**
+ * `health.get.runtime.scheduler` → `session_id → 在飞状态`（权威账本，零推断）。
+ *
+ * 同一个会话同时有多个 run（排队 + 正在跑）时取**更强**的那个：`running` 覆盖 `queued`
+ * —— 徽标要说的是「它现在正在跑」。
+ */
+export function inflightFromScheduler(
+  scheduler:
+    | {
+        running?: readonly { session_id?: string }[];
+        queued?: readonly { session_id?: string }[];
+      }
+    | undefined,
+): SessionInflightMap {
+  const out = new Map<string, SessionInflightState>();
+  for (const run of scheduler?.queued ?? []) {
+    if (typeof run.session_id === 'string' && run.session_id !== '')
+      out.set(run.session_id, 'queued');
+  }
+  for (const run of scheduler?.running ?? []) {
+    if (typeof run.session_id === 'string' && run.session_id !== '') {
+      out.set(run.session_id, 'running');
+    }
+  }
+  return out;
 }
 
 /** 行标题回退：title > preview > session_id。 */

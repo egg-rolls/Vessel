@@ -5,6 +5,11 @@
  * 所有协作者（provider / 窗口 / 工具 / 事件 / run 控制）都经 `LoopContext` 注入；
  * 本模块不感知 durable 存储实现，也不从任何 barrel 导出。
  *
+ * 唯一的例外是**工具结果出口闸**（0.56 上移）：工具结果写回上下文之前统一过
+ * `boundToolResult`（≤ 16k token，超了先落盘全文再头 30% / 尾 70% 裁切，
+ * 见 `tool-result-gate.ts`）。闸放在这里而不是各个插件里，是为了让 web_fetch / MCP /
+ * 未来插件的返回值也受同一条约束；落盘路径仍由同一个 `toolOutputRoot()` 决定。
+ *
  * @module @vessel-agent/core/runtime
  */
 
@@ -28,6 +33,7 @@ import type { GuardrailRunner } from './guardrail-runner.js';
 import type { HookRunner } from './hook-runner.js';
 import type { PrefixChangeReason, PromptPrefixGuard } from './prompt-prefix-guard.js';
 import { isToolCall } from './tool-pipeline.js';
+import { boundToolResult, writeToolOutput } from './tool-result-gate.js';
 
 /** Loop 的最终结果；usage/facts 已通过 Run 拥有的 execution/context 原地写回。 */
 export type LoopResult = string;
@@ -139,6 +145,99 @@ export interface ToolExecutionOutcome {
   input: unknown;
   ok: boolean;
   content: string;
+  /**
+   * 结果**已过出口闸**（≤ 16k token，头部 30% / 尾部 70%，中间带落盘路径的省略标注）。
+   *
+   * 唯一的来源是 handler 自己裁完后登记的回执（`markToolResultBounded`，经
+   * `ToolPipelineResult.bounded` 传到这里）—— 例如 basic-tools 作为第二道闸先裁了一遍。
+   * loop 见到就原样写回：**已经裁过的结果不能再裁第二次**，否则第二轮会把
+   * 「… 省略 N 行 / M 字符 · 完整输出：<path>」那一行自己裁掉，落盘路径就丢了。
+   */
+  bounded?: true;
+  /** 裁剪前字符数（与 `bounded` 同时出现） */
+  original_chars?: number;
+}
+
+/**
+ * 工具结果出口闸（0.56 上移）：**所有**插件工具的返回值都在这里收口。
+ *
+ * 上移前闸是 `basic-tools` 的私有函数，于是只有 bash / read / edit 在闸内，
+ * web_fetch / MCP / 未来插件的返回值原样进上下文（一条 100k 字符就能挤爆窗口）。
+ * 现在统一在 loop 写回上下文之前过闸：裁切 + 落盘路径引用（见 `tool-result-gate.ts`）。
+ *
+ * 幂等：`outcome.bounded === true`（handler 自己裁过）直接原样返回，不再裁。
+ */
+async function gateToolResult(outcome: ToolExecutionOutcome, sessionId: string): Promise<string> {
+  if (outcome.bounded === true) return outcome.content;
+  const gated = await boundToolResult(outcome.content, {
+    // 落盘仍写在原来的 tool-output 目录（`toolOutputRoot()`），实现只有一份。
+    persist: () =>
+      writeToolOutput({
+        tool: outcome.toolCall.function.name,
+        body: outcome.content,
+        sessionId,
+      }),
+  });
+  return gated.content;
+}
+
+/**
+ * 「工具结果里疑似有 base64 图片」的信号（0.56 P0；**只报警、不修**）。
+ *
+ * 现状（今天就在流血）：MCP 的 `{type:'image', data:'<base64>'}` 块被
+ * `JSON.stringify` 成**文本**塞进工具结果（`plugins/mcp/client/src/server-connection.ts:543`），
+ * 于是 1 MiB 图 = 1,398,104 个 base64 字符，被字符级估算器按 ≈432k token 计
+ * （provider 只收 ≤1024 —— 420 倍）。P0 的边界很清楚：**把它从「静默」变成「有信号」**，
+ * 真正的修法（MCP image 块并入 `attach`）是 P1。
+ *
+ * 判据（刻意保守，宁可漏报也不误报）：出现 `"type":"image"` 附近的 `"data":"<长 base64>"`
+ * 或 `data:image/...;base64,` 前缀，且那一段 ≥ 4096 个 base64 字符。只回一个类名 + 长度，
+ * **不回内容**（事件里永远不出现 base64 本身，否则 8 KiB 裁剪会把它切成垃圾 —— P0-07）。
+ */
+export function detectBase64ImagePayload(
+  text: string,
+): { kind: string; bytes: number } | undefined {
+  const marker = text.indexOf('data:image/');
+  if (marker >= 0) {
+    const end = text.indexOf('base64,', marker);
+    if (end >= 0) {
+      let length = 0;
+      for (let index = end + 7; index < text.length; index += 1) {
+        const code = text.charCodeAt(index);
+        const isBase64 =
+          (code >= 0x41 && code <= 0x5a) ||
+          (code >= 0x61 && code <= 0x7a) ||
+          (code >= 0x30 && code <= 0x39) ||
+          code === 0x2b ||
+          code === 0x2f ||
+          code === 0x3d;
+        if (!isBase64) break;
+        length += 1;
+      }
+      if (length >= 4096) return { kind: 'data_url', bytes: length };
+    }
+  }
+  if (text.includes('"type":"image"') || text.includes('"type": "image"')) {
+    const dataAt = text.search(/"data"\s*:\s*"/);
+    if (dataAt >= 0) {
+      const quote = text.indexOf('"', text.indexOf(':', dataAt) + 1);
+      let length = 0;
+      for (let index = quote + 1; index < text.length; index += 1) {
+        const code = text.charCodeAt(index);
+        const isBase64 =
+          (code >= 0x41 && code <= 0x5a) ||
+          (code >= 0x61 && code <= 0x7a) ||
+          (code >= 0x30 && code <= 0x39) ||
+          code === 0x2b ||
+          code === 0x2f ||
+          code === 0x3d;
+        if (!isBase64) break;
+        length += 1;
+      }
+      if (length >= 4096) return { kind: 'mcp_image_block', bytes: length };
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -521,11 +620,40 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
               input: outcome.input,
             });
           }
+          // 0.56 P0：工具结果里疑似带 base64 图片 ⇒ 记一条信号（**只报警，不修**）。
+          //
+          // 位置在闸**之前**、用**原始**正文判：闸会按 token 裁切，把中间的 base64 切掉之后
+          // 就检测不到了；而「这条结果里有 1.4 MB base64」正是要留证的事实。
+          // 事件里只有类名与长度 —— base64 本身上下文字节数都不进事件（P0-07）。
+          const suspect = detectBase64ImagePayload(outcome.content);
+          if (suspect !== undefined) {
+            ctx.events.emit({
+              type: 'tool_result.base64_suspected',
+              run_id: runId,
+              data: {
+                run_id: runId,
+                session_id: sessionId,
+                tool: outcome.toolCall.function.name,
+                kind: suspect.kind,
+                base64_chars: suspect.bytes,
+                // 本地会把这段按字符计价（≈0.3/字符），而 provider 按图收 ≤1024 —— 差值留证。
+                estimated_chars: outcome.content.length,
+              },
+              ts: Date.now(),
+            });
+          }
           ctx.window.addMessage(
             {
               role: 'tool',
               tool_call_id: outcome.toolCall.id,
-              content: outcome.content,
+              // 出口闸：所有插件工具的返回值都在这里收口（≤ 16k token；超了先落盘再
+              // 头 30% / 尾 70% 裁切）。handler 自己裁过的（bounded）原样放行。
+              //
+              // 0.56：**图片 part 永不经过这道闸** —— 它不是文本，也不在 `content` 里
+              // （图只在 `refs` / `attachment_plan`，到适配器才变成请求块）。闸的分母
+              // （字符 / token）因此与图无关；这里也不需要「跳过图片」的特殊分支，
+              // 因为「图变成字符串」这条路径本身被设计禁止（§6.3 禁止项 2）。
+              content: await gateToolResult(outcome, sessionId),
             },
             runId,
           );

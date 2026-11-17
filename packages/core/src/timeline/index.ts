@@ -33,7 +33,7 @@
 import { mkdir, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { atomicWrite } from '../session/atomic-write.js';
-import { assertTimelineWritable } from './freeze.js';
+import { assertSessionFormatSupported } from './legacy-format.js';
 import { TIMELINE_LAYOUT, type TimelineRecord } from './types.js';
 import { parseWithCrc, readCrcNdjsonFile, withCrc } from './wal.js';
 
@@ -237,16 +237,16 @@ function indexPaths(sessionDir: string): {
  *
  * 三个文件都走 `atomicWrite`（临时文件 + rename），读者不会看到半截索引。
  *
- * **`timeline.idx/` 也是 timeline 文件**：用旧格式会话目录调用它，会在一个只读冻结的会话里
- * 凭空造出 `timeline.idx/`（C1 之前的真实口子：已删除的那个离线读器 `open` 建索引就走
- * 这条路，而它看起来「只是读」）。因此这里与写者用**同一个闸门** `assertTimelineWritable`：
- * 旧格式会话一律 `session_frozen_readonly`，不是「静默不写」——静默会让人以为索引已经建好。
+ * **`timeline.idx/` 也是 timeline 文件**：用旧格式会话目录调用它会在一个 0.55 不再支持的
+ * 目录里凭空造出 `timeline.idx/`（已删除的那个离线读器 `open` 建索引就走这条路，而它看起来
+ * 「只是读」）。因此这里与写者用**同一个闸门** `assertSessionFormatSupported`：
+ * 旧格式会话一律 `legacy_session_unsupported`，不是「静默不写」——静默会让人以为索引已经建好。
  */
 export async function writeIndexSnapshot(
   sessionDir: string,
   snapshot: TimelineIndexSnapshot,
 ): Promise<void> {
-  await assertTimelineWritable(sessionDir, basename(sessionDir));
+  await assertSessionFormatSupported(sessionDir, basename(sessionDir));
   const paths = indexPaths(sessionDir);
   await mkdir(paths.dir, { recursive: true });
 

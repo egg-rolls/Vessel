@@ -21,3 +21,5 @@ export * from './session.js';
 export * from './tenant.js';
 export * from './tool.js';
 export * from './trace.js';
+// 0.56：视觉基座的**形状**（`VisionBackend` / 规范部件 / 计划）。实现在插件里。
+export * from './vision.js';

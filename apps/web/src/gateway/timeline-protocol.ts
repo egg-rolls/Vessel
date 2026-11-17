@@ -72,7 +72,17 @@ export interface TimelineEvent {
 export type TimelineRule = 1 | 2 | 3 | 4;
 
 /** 缺口从哪来：四条校验 / RPC 拿不全 / 服务端 gap 帧（旧的混合语义，只能如实转记）。 */
-export type TimelineGapSource = 'range' | 'fetch' | 'server' | 'holes';
+/**
+ * 缺口的成因。
+ *
+ * - `range`：四条区间校验没过（声明与实收对不上）；
+ * - `fetch`：续拉 / 回填本身失败；
+ * - `holes`：命中了写者声明的洞（`hello.holes`）。
+ *
+ * 0.55 删掉了 `'server'`：它只来自服务端补发的 `gap` 帧，而那一帧（连同
+ * `timeline_source`）已经删除 —— 现在缺口的成因只有「客户端自己算出来」这一侧。
+ */
+export type TimelineGapSource = 'range' | 'fetch' | 'holes';
 
 /**
  * 一次**已声明**的缺口（`timeline_gap_reported` 的载荷）。
@@ -122,20 +132,19 @@ function readHoles(raw: unknown): TimelineHoleRange[] {
 }
 
 /**
- * `hello.timeline`（0.54 B1 的**真实帧**）→ 回填 / 校验的头。
+ * `hello` 的时间线段（**归一化形状**，见 `types/protocol.ts#HelloTimelineSegment`）→ 回填 /
+ * 校验的头。
  *
  * 与 `readTimelineCursor` + `planBackfill` 的分工：那条路是**没有 hello 时**的兜底
- * （`sessions.get.event_cursor` 四字段 + 客户端游标自己算区间）；proto-b1 合入后，区间与
+ * （`sessions.get.event_cursor` 四字段 + 客户端游标自己算区间）；有 hello 时区间与
  * `count` 由服务端**声明**，客户端只核对。两者产出同一个 `TimelineRangeHeader`，
  * 所以四条校验与 `applyTimelineRange` 一行都不用改 —— 这就是「不硬编码帧形状」的落点。
  *
- * 只认 `timeline_source === 'timeline'` 才有字段；形状不全 ⇒ `undefined`（不猜）。
+ * 形状不全 ⇒ `undefined`（不猜）。0.55 起判据只有形状本身：`gateway/node/protocol.ts`
+ * 已经把线上平铺的键归一化过一次（唯一一处 wire → 内部形状的映射），`timeline_source`
+ * 那个显式标记已删除。
  */
-export function readTimelineHelloSegment(
-  source: unknown,
-  raw: unknown,
-): TimelineRangeHeader | undefined {
-  if (source !== 'timeline') return undefined;
+export function readTimelineHelloSegment(raw: unknown): TimelineRangeHeader | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const record = raw as Record<string, unknown>;
   const start = record.start_seq;

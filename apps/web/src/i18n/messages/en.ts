@@ -42,6 +42,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.expandNav': 'Expand sidebar',
   'nav.jumpToMain': 'Skip to main content',
   'webBuild.outdated': 'The console was updated in the background; reload to load the new version.',
+  'webBuild.stale': 'Web sources changed but the served build was not rebuilt (the UI may be old).',
+  'webBuild.staleFix':
+    'Fix: restart the gateway (`vessel gateway restart` rebuilds on start), or run `bun run build:web`; reload this page once it is rebuilt.',
   'webBuild.reload': 'Reload',
   'nav.more': 'More',
   'nav.diagnostics': 'Diagnostics',
@@ -215,6 +218,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.draft.pickSession': 'Pick a session on the left, or start a new one',
   'pending.queue.permission': 'Permission · {tool}',
   'pending.queue.ask': 'Question · Q{index}',
+  'chat.session.running': 'Running',
+  'chat.session.queued': 'Queued',
   'chat.session.pending': '{count} pending request(s)',
   'chat.session.copyId': 'Copy session ID',
   'chat.session.copiedId': 'Session ID copied',
@@ -516,7 +521,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.diagnostics.doctor.mcp.disabled': 'MCP is not enabled on this gateway',
   'observe.diagnostics.doctor.mcp.unavailable': 'MCP status unavailable',
   'observe.diagnostics.doctor.servePort.notConfigured':
-    'serve.port is not configured; doctor skips this check',
+    'node.port is not configured; doctor skips this check',
   'observe.diagnostics.doctor.servePort.systemPort':
     '{host}:0 (system-assigned) · endpoint {endpoint}',
   'observe.diagnostics.doctor.servePort.detail': '{host}:{port} configured · endpoint {endpoint}',
@@ -1140,6 +1145,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.pending.identity.agent': 'agent:{name}',
   'chat.pending.sameSource': '{count} items',
   'chat.pending.more': '{count} more not shown',
+  'chat.pendingSend.offline': 'Offline — not sent',
+  'chat.pendingSend.sending': 'Sending…',
+  'chat.pendingSend.queued': 'Queued · one round ahead',
+  'chat.pendingSend.failed': 'Not sent',
+  'chat.pendingSend.retry': 'Retry',
+  'chat.pendingSend.dismiss': 'Discard',
   'chat.pending.waiting': 'Waiting',
   'chat.pending.edit': 'Take back to edit',
   'chat.pending.editTaken': 'Taken back into the input box',
@@ -1196,6 +1207,25 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.refs.kind.file': 'File',
   'chat.refs.kind.image': 'Image',
   'chat.refs.kind.document': 'Document',
+  // 0.56: image delivery state (three-state chip). Derived from events
+  // (image.sent / context.image_dropped), never stored on refs; survives refresh.
+  'chat.refs.image.sent': 'Sent · {provider} · {tokens} tok',
+  'chat.refs.image.sentPlain': 'Sent',
+  'chat.refs.image.dropped': 'Dropped · {reason}',
+  'chat.refs.image.notSent': 'Not sent · {reason}',
+  'chat.refs.image.reason.budget': 'over per-request budget',
+  'chat.refs.image.reason.bytes_budget': 'over per-request byte budget',
+  'chat.refs.image.reason.unsupported_format': 'unsupported format',
+  'chat.refs.image.reason.not_an_image': 'not an image',
+  'chat.refs.image.reason.too_large': 'image too large',
+  'chat.refs.image.reason.blob_missing': 'attachment bytes missing',
+  'chat.refs.image.reason.not_ingested': 'not ingested (no sha256)',
+  'chat.refs.image.reason.vision_disabled': 'vision disabled',
+  'chat.refs.image.reason.no_vision': 'model has no vision',
+  'chat.refs.image.reason.placeholder': 'placeholder cleanup',
+  'chat.refs.image.reason.compaction': 'compaction',
+  'chat.refs.image.reason.no_delivery_event': 'no delivery record',
+  'chat.refs.image.reason.unknown': 'unknown reason',
   // 0.52：引用加入 / 发送时的拒绝文案（服务端只给稳定码，人看到的在这里）
   'chat.refs.reject.absolute': 'Only absolute paths can be referenced: {path}',
   'chat.refs.reject.tooLong': 'The reference path is longer than {max} characters',
@@ -1674,7 +1704,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'connection.closeCodeForbidden': ' · no access',
   'connection.closeCodeProtocol': ' · incompatible protocol',
   'connection.failureHint':
-    'When connecting fails, check in order: the address is reachable, the Origin is in serve.allowed_origins, the token is valid, and non-loopback uses HTTPS.',
+    'When connecting fails, check in order: the address is reachable, the Origin is in node.allowed_origins, the token is valid, and non-loopback uses HTTPS.',
   'connection.connected': 'Connected to gateway',
   'config.noTokenReason': 'Connect to read config.',
   'config.disabledTitle': 'Config API is not enabled',
@@ -1762,9 +1792,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.connection.invalidUrl': 'Invalid gateway address',
   'gateway.connection.authFailed': 'Authentication failed: the token is invalid or expired',
   'gateway.connection.originRejected':
-    'The gateway rejected this Origin/Host: {detail}. For cross-origin deployments, add this site to serve.allowed_origins.',
+    'The gateway rejected this Origin/Host: {detail}. For cross-origin deployments, add this site to node.allowed_origins.',
   'gateway.connection.unreachable':
-    'Cannot reach the gateway (check the address/TLS/network): {detail}. Cross-origin deployments also need serve.allowed_origins.',
+    'Cannot reach the gateway (check the address/TLS/network): {detail}. Cross-origin deployments also need node.allowed_origins.',
   'gateway.connection.forbiddenTenant': 'Access denied (admin token required)',
   'gateway.connection.protocolMismatch':
     'Incompatible protocol version (vessel.gateway/1 required)',
@@ -1813,7 +1843,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.error.unauthorized':
     'The token is invalid or expired; enter it again in connection settings.',
   'gateway.error.forbidden': 'This token cannot perform the operation.',
-  'gateway.error.forbidden_origin': 'The request origin is not in serve.allowed_origins.',
+  'gateway.error.forbidden_origin': 'The request origin is not in node.allowed_origins.',
   'gateway.error.invalid_host': 'The Host header is not allowed by the gateway.',
   'gateway.error.not_found': 'The target does not exist or was deleted.',
   'gateway.error.invalid_params': 'The request parameters are invalid.',

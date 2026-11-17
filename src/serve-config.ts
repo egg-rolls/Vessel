@@ -38,7 +38,7 @@ function validHostname(host: string): boolean {
  * @param config 已校验的配置
  */
 export function resolveServeOptions(config: VesselConfig): ServeOptionsResult {
-  const hostname = (config.serve?.hostname ?? DEFAULT_SERVE_OPTIONS.hostname).trim();
+  const hostname = (config.node?.hostname ?? DEFAULT_SERVE_OPTIONS.hostname).trim();
 
   if (!validHostname(hostname)) {
     return {
@@ -47,25 +47,25 @@ export function resolveServeOptions(config: VesselConfig): ServeOptionsResult {
     };
   }
 
-  const port = config.serve?.port ?? DEFAULT_SERVE_OPTIONS.port;
-  const allowRemote = config.serve?.allowRemote === true;
+  const port = config.node?.port ?? DEFAULT_SERVE_OPTIONS.port;
+  const allowRemote = config.node?.allowRemote === true;
 
   if (!isLoopbackHostname(hostname) && !allowRemote) {
     return {
       ok: false,
       error:
         `Refusing to listen on non-loopback hostname "${hostname}": ` +
-        'set serve.allow_remote=true or pass --allow-remote to expose the gateway.',
+        'set node.allow_remote=true or pass --allow-remote to expose the gateway.',
     };
   }
 
   let tls: { certFile: string; keyFile: string } | undefined;
-  if (config.serve?.tls) {
-    const { certFile, keyFile } = config.serve.tls;
+  if (config.node?.tls) {
+    const { certFile, keyFile } = config.node.tls;
     if (!certFile || !keyFile) {
       return {
         ok: false,
-        error: 'serve.tls requires both cert_file and key_file (or pass --tls-cert/--tls-key)',
+        error: 'node.tls requires both cert_file and key_file (or pass --tls-cert/--tls-key)',
       };
     }
     tls = { certFile, keyFile };

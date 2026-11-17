@@ -44,10 +44,18 @@ export function CoverageNotice({
   const legacy = source.files_truncated === undefined && source.partial_files === undefined;
   const filesTruncated = source.files_truncated ?? (legacy ? source.truncated : false);
   const partial = source.partial_files ?? 0;
-  if (!filesTruncated && partial === 0) return null;
+  // 0.56: source stopped being written (see `SourceCoverage`). Different from
+  // "did not read everything": this one means there will never be more data.
+  const retired = source.source_retired === true;
+  const frozenAt = retired ? undefined : source.frozen_at;
+  if (!filesTruncated && partial === 0 && !retired && frozenAt === undefined) return null;
   const total = source.files_in_window ?? source.files_total;
   return (
     <div className="flex flex-col gap-1 text-sm text-muted">
+      {retired ? <p>{t('source.retired')}</p> : null}
+      {frozenAt !== undefined ? (
+        <p>{t('source.frozen', { date: new Date(frozenAt).toLocaleString() })}</p>
+      ) : null}
       {filesTruncated ? (
         <p>{t('logs.truncated.files', { files: source.files_read, total })}</p>
       ) : null}

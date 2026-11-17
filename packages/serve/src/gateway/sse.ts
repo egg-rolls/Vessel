@@ -33,11 +33,6 @@ export interface SseClientState {
   unacked: number;
   replay?: SseReplayState;
   onClose?: () => void;
-  /**
-   * 缺口帧编码（**过渡期，B2 落地即删**）：SSE 只走老路径，老客户端靠它知道
-   * 「慢消费漏了哪一段」。时间线 epoch 在 WS 侧，不走这里。
-   */
-  encodeGap: (gap: EventGap) => string;
   /** 可选事件过滤（events.subscribe run_id / types） */
   accepts?: (event: RunEvent) => boolean;
 }
@@ -71,31 +66,22 @@ export function writeSse(ctrl: SseController, state: SseClientState, chunk: stri
 }
 
 /**
- * 背压恢复时**清掉**丢弃记账，**不再**往线上发 `gap` 帧（0.54 B1）。
+ * 背压恢复时**清掉**丢弃记账（0.55 起它**只**做这件事，不再往线上发任何帧）。
  *
- * 为什么删帧而不是保留：`gap` 把两种成因（环形淘汰 / 回放预算跳过）压成同一个区间，
- * 而客户端无法区分（ADR-105 §9 R4）；新协议里缺口只有两种解释——写者声明的
- * `holes`，或客户端自己算错（[unacked-queue-closure.md] §3）。慢消费者丢的帧属于
- * 「客户端自己算错」那一侧：它按 `hello.count` 校验就会发现，并报 `timeline_gap_reported`。
+ * 为什么不再发帧：过渡期的 `gap` 帧把两种成因（环形淘汰 / 回放预算跳过）压成同一个区间，
+ * 客户端无法区分（ADR-105 §9 R4）；新协议里缺口只有两种解释——写者声明的 `holes`，
+ * 或客户端自己按 seq 连续性算出来（后者报 `timeline_gap_reported`）。那一帧已随
+ * `timeline_source` 在 0.55 删除，`SseClientState.encodeGap` 一起删掉了。
  *
- * 但**状态必须清**：`takeGap` 是那个状态机的复位点，不调用会让 `dropping` 永远为真，
+ * 但**状态必须清**：`takeGap` 是丢弃状态机的复位点，不调用会让 `dropping` 永远为真，
  * 之后的 `admit` 会一直按「还在丢弃」处理。
  */
-/**
- * 背压恢复时补发缺口帧（**过渡期保留，B2 落地即删**）。
- *
- * SSE 没有 epoch 概念、也永远读不到时间线（`?after_timeline_seq=` 直接 501），
- * 所以这里一律是**老路径**：老客户端靠这一帧知道「慢消费漏了 [from_seq, to_seq]」，
- * 删早了就退化成静默丢帧。时间线 epoch（WS）**不**走这条。
- */
-export function flushSseGap(
+export function resetSseDropState(
   ctrl: SseController,
   state: SseClientState,
   highWaterFrames = SSE_HIGH_WATER_FRAMES,
-): boolean {
-  const gap = state.backpressure.takeGap(sseInflight(ctrl, state, highWaterFrames));
-  if (gap === null) return true;
-  return writeSse(ctrl, state, state.encodeGap(gap));
+): void {
+  state.backpressure.takeGap(sseInflight(ctrl, state, highWaterFrames));
 }
 
 export function sendGatedSse(
@@ -111,7 +97,7 @@ export function sendGatedSse(
   }
   const inflight = sseInflight(ctrl, state, highWaterFrames);
   if (!state.backpressure.admit(seq, inflight)) return true;
-  if (!flushSseGap(ctrl, state, highWaterFrames)) return false;
+  resetSseDropState(ctrl, state, highWaterFrames);
   return writeSse(ctrl, state, chunk);
 }
 
@@ -124,11 +110,10 @@ export function pumpSseReplay(
 ): void {
   const replay = state.replay;
   if (!replay) return;
-  // 环形缓冲已经淘汰掉的那一段：游标前移，并把缺口**告诉老客户端**
-  // （过渡期保留，B2 落地即删）。
+  // 环形缓冲已经淘汰掉的那一段：游标前移（这一段**不再**往线上发任何帧 —— 见
+  // `resetSseDropState` 的注释：0.55 起客户端自己按 seq 连续性 / `holes` 判断缺口）。
   const historyGap = source.gapFor(replay.cursor - 1);
   if (historyGap) {
-    if (!writeSse(ctrl, state, state.encodeGap(historyGap))) return;
     replay.cursor = historyGap.to_seq + 1;
   }
   let sent = 0;

@@ -335,8 +335,8 @@ async function main(): Promise<void> {
   const loaded = await loadConfig();
   const config = loaded.config;
   const dataDir = resolveDataDir(config);
-  const configPort = config.serve?.port ?? DEFAULT_SERVE_OPTIONS.port;
-  const host = config.serve?.hostname ?? DEFAULT_SERVE_OPTIONS.hostname;
+  const configPort = config.node?.port ?? DEFAULT_SERVE_OPTIONS.port;
+  const host = config.node?.hostname ?? DEFAULT_SERVE_OPTIONS.hostname;
 
   const devToken = process.env.VESSEL_DEV_TOKEN?.trim();
   const token =

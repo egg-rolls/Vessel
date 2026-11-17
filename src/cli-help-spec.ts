@@ -334,12 +334,6 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   },
   { path: ['trace', 'prune'], summary: 'help.cmd.tracePrune', flags: ['--dry-run', '--json'] },
   {
-    path: ['session', 'migrate'],
-    summary: 'help.cmd.sessionMigrate',
-    usage: 'vessel session migrate <session_id> | --all [--dry-run] [--json]',
-    flags: ['--all', '--dry-run', '--json', '--data-dir'],
-  },
-  {
     path: ['prune'],
     summary: 'help.cmd.prune',
     flags: ['--older-than', '--dry-run', '--json', '--yes', '--data-dir'],

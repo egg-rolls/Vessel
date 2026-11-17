@@ -53,6 +53,7 @@ import { createAgentServiceWiring } from './agent-service-wiring';
 import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
 import { createAskAnswerDelivery } from './ask-answer-delivery';
 import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from './ask-channel';
+import { createConfigAttachmentIngest } from './attachment-ingest';
 import { createConfigAttachmentLister } from './attachments-list';
 import { registerBashJobDelivery } from './bash-job-delivery';
 import { formatConfigErrors } from './config-error-format';
@@ -78,6 +79,7 @@ import { createFederationSendPort } from './federation-send-port';
 import { registerRefsNoticeHook, registerRuntimeNoticeHook } from './hot-apply-assembly';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
+import { createImageDeliverySource } from './image-delivery';
 import { resolveInteractionsDir } from './interactions-dir';
 import { normalizeLegacyToolName } from './legacy-tool-names';
 import { createLocalRunAdapter } from './local-run-adapter';
@@ -1335,6 +1337,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       session,
       ...(eventLog !== undefined ? { eventLog } : {}),
       ...(bundle.leaseService !== undefined ? { leaseService: bundle.leaseService } : {}),
+      // 0.56（决策 2：上传即落）：引用到达节点的第一刻就算 sha256 + 落 blob。
+      // 边界从活的 basic-tools 配置来（与 `attachments.list` 同一份判定）。
+      attachIngest: createConfigAttachmentIngest({ getConfig: () => config }),
       ...(bundle.summarizer !== undefined ? { summarizer: bundle.summarizer } : {}),
       ...(bundle.summarizerForSession !== undefined
         ? { summarizerForSession: bundle.summarizerForSession }
@@ -1727,6 +1732,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           // 同一个读口，取的是另一类事件（`prompt.system_context`）。
           // 事件不是 message ⇒ 回放窗口淘汰 / 进程重启后只有重新派生才能把卡找回来。
           systemContext: createSystemContextSource({
+            tail: timelineLog,
+            watermark: (sessionId: string) => timelineLog.watermark(sessionId),
+          }),
+          // 每张图的投递状态（additive `sessions.get.session.messages[].image_delivery`，0.56）：
+          // 同一个读口，取的是另一类事件（`image.sent` / `context.image_dropped`）。
+          // 从事件派生而不是写进 refs —— 后者会改写历史前缀且被 messageSignature 无视。
+          imageDelivery: createImageDeliverySource({
             tail: timelineLog,
             watermark: (sessionId: string) => timelineLog.watermark(sessionId),
           }),

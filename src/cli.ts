@@ -104,6 +104,7 @@ import {
 } from './hot-apply-assembly';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
+import { createImageDeliverySource } from './image-delivery';
 import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-dir';
 import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
@@ -174,7 +175,7 @@ function resolveStaticDir(): string | undefined {
 
 /**
  * 0.50：合并平台 spawn 注入的 Origin（内部 env 契约，不是用户配置）与
- * `serve.allowed_origins`。注入值只接受合法 http(s) origin；解析失败时回落到
+ * `node.allowed_origins`。注入值只接受合法 http(s) origin；解析失败时回落到
  * 用户配置，避免内部 env 污染让 node 启动失败。
  */
 function resolveGatewayAllowedOrigins(
@@ -752,7 +753,7 @@ async function runWithConfig(result: BootstrapResult) {
   /** 0.18：事件流的唯一扇入面（shared 流已删除）。 */
   let eventHub: TenantEventHub | undefined;
   if (servePort !== null) {
-    // CLI flag 已由 loader 合并进 config.serve；这里只做补全与校验。
+    // CLI flag 已由 loader 合并进 config.node；这里只做补全与校验。
     const resolved = resolveServeOptions(config);
     if (!resolved.ok) {
       console.error(resolved.error);
@@ -1187,7 +1188,7 @@ async function runWithConfig(result: BootstrapResult) {
 
     // 0.50：平台 spawn 的子 Node 自动并入平台页面 Origin（内部 env 契约）。
     const allowedOrigins = resolveGatewayAllowedOrigins(
-      config.serve?.allowedOrigins,
+      config.node?.allowedOrigins,
       process.env.VESSEL_PLATFORM_ORIGINS,
     );
 
@@ -1339,6 +1340,12 @@ async function runWithConfig(result: BootstrapResult) {
             // 同一个读口，只是取的是另一类事件（`prompt.system_context`）。事件不是 message，
             // 回放窗口淘汰 / 进程重启之后只有重新派生才能把会话页那张卡找回来。
             systemContext: createSystemContextSource({
+              tail: gatewayBundle.timelineLog,
+              watermark: (sessionId: string) => gatewayBundle.timelineLog!.watermark(sessionId),
+            }),
+            // 每张图的投递状态（additive `sessions.get` 的 `image_delivery`，0.56）：
+            // 同一个读口，取 `image.sent` / `context.image_dropped` 两类事件。
+            imageDelivery: createImageDeliverySource({
               tail: gatewayBundle.timelineLog,
               watermark: (sessionId: string) => gatewayBundle.timelineLog!.watermark(sessionId),
             }),

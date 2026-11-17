@@ -340,7 +340,7 @@ export interface SessionEventInput {
   durable?: boolean;
 }
 
-/** 落盘后的会话事件记录（`events.ndjson` 单行） */
+/** 落盘后的会话事件记录（timeline 一行 / 一个块帧，也是 `sessionEvents` 的返回形状） */
 export interface SessionEventRecord extends SessionEventInput {
   v: 1;
   seq: number;
@@ -366,9 +366,9 @@ export interface SessionIndexPatch {
  * 0.54 C 之前读方拿的是完整的 `SessionEventLogPort`，于是「顺手 append 一条」既编译得过，
  * 又会在 `events.ndjson` 停写之后变成一个谁也不知道的旧源写入口。
  *
- * 两个实现：
- * - `TimelineEventLog`（`packages/core/src/timeline/read-port.ts`）—— 新会话的唯一读口；
- * - `SessionEventLog`（`session/session-event-log.ts`）—— 旧格式会话的只读面 + 迁移工具用。
+ * 一个实现：
+ * - `TimelineEventLog`（`packages/core/src/timeline/read-port.ts`）—— 0.55 起唯一的读口
+ *   （`SessionEventLog` 那份 `events.ndjson` 实现在这一版被删除：旧格式会话连读都不支持）。
  */
 export interface SessionEventReadPort {
   /** 读取事件（按 seq 升序）；`sinceSeq` 为排他游标 */
@@ -392,8 +392,8 @@ export interface SessionEventReadPort {
  * 事件日志的**写 + 读**端口（0.18 起是 runtime 的持久化端口）。
  *
  * 0.54 stop-write 之后装配层交给它的是「时间线实现」：`append` 落到时间线 WAL、
- * 读落到 `TimelineEventLog`。`SessionEventLog`（旧 `events.ndjson` 实现）仍满足本接口，
- * 但装配层**不再为任何新会话创建它**（ADR-105 D4：旧格式会话只读冻结）。
+ * 读落到 `TimelineEventLog`。0.55 删掉了旧 `events.ndjson` 实现（`SessionEventLog`），
+ * 所以本接口**只有一个实现**，旧格式会话连读都不支持（`legacy_session_unsupported`）。
  */
 export interface SessionEventLogPort extends SessionEventReadPort {
   /** 追加一条事件；返回已分配 seq 的记录 */

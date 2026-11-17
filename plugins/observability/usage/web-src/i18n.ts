@@ -103,6 +103,10 @@ const EN = {
     'Read cap reached: only the newest {files} of {total} run files in this range were counted. Older runs in the same range are missing, so this is a partial count, not the total.',
   'logs.truncated.partial':
     'Partial read: {files} run file(s) in this range were only counted partially (their oldest lines were dropped), so those runs may be missing requests.',
+  'source.retired':
+    'Usage cannot be computed: this page reads the pre-0.54 session event log (sessions/<id>/events.ndjson), which Vessel stopped writing in 0.54. Numbers shown here are empty because the source is gone, not because there was no usage.',
+  'source.frozen':
+    'Data is frozen at {date}: the session event log this page reads stopped growing in 0.54 (the timeline is the only durable event sink now), so anything after that date is not counted.',
 
   'leaderboard.th.model': 'Model',
   'leaderboard.th.requests': 'Requests',
@@ -212,6 +216,10 @@ const ZH: Record<MessageKey, string> = {
     '已触及读取上限：该范围内只统计了最新的 {files}/{total} 个运行文件，同一范围内更早的运行没有被计入 —— 这是真实截断后的部分合计，不是总量。',
   'logs.truncated.partial':
     '部分读取：该范围内有 {files} 个运行文件只统计了尾部（更早的行被丢弃），这些运行可能缺少请求记录。',
+  'source.retired':
+    '用量无法统计：本页读取的是 0.54 之前的会话事件日志（sessions/<id>/events.ndjson），Vessel 从 0.54 起已停止写入。这里的空数字是数据源没了，不是没有用量。',
+  'source.frozen':
+    '数据截至 {date}：本页读取的会话事件日志从 0.54 起不再增长（时间线已是唯一的事件落盘真源），此后发生的用量不计入。',
 
   'leaderboard.th.model': '模型',
   'leaderboard.th.requests': '请求数',

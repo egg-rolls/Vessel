@@ -37,8 +37,10 @@ export type RpcErrorCode =
   | 'compact_unavailable'
   // 0.52 S1a：node 正在 drain（优雅退出），请求应重试；与 serve 侧同步。
   | 'gateway_restarting'
-  // 0.54 B1：旧格式会话在时间线 epoch 下只读冻结（ADR-105 §7 A8）；与 serve 侧同步。
-  | 'session_frozen_readonly'
+  // 0.55：**0.54 之前的旧格式会话不再被支持**（只有 events.ndjson、没有 timeline 标记）。
+  // 「只读冻结」这个中间态随 events.ndjson 的读写一起删除；读面报这个码而不是给空会话
+  // （与 serve 侧逐字同步，见 packages/serve/src/protocol.ts）。
+  | 'legacy_session_unsupported'
   // 0.54 B1：时间线读端口未注入（装配层缺件），与「会话坏了」区分开（ADR-105 §6）。
   | 'timeline_unavailable';
 

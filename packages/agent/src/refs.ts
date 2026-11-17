@@ -33,6 +33,11 @@ export function normalizeRefs(value: unknown): MessageRef[] {
     const ref: MessageRef = { kind: kind as MessageRef['kind'], path };
     if (typeof record.name === 'string' && record.name.length > 0) ref.name = record.name;
     if (typeof record.mime === 'string' && record.mime.length > 0) ref.mime = record.mime;
+    // 0.56：内容地址原样保留（64 位小写十六进制）。丢了它 = 重放/恢复后 blob 寻址退化成
+    // path = 每次请求重新读文件 = 前缀守卫报 prompt.prefix_changed（design §10 风险 3）。
+    if (typeof record.sha256 === 'string' && /^[0-9a-f]{64}$/.test(record.sha256)) {
+      ref.sha256 = record.sha256;
+    }
     if (typeof record.bytes === 'number' && Number.isFinite(record.bytes) && record.bytes >= 0) {
       ref.bytes = Math.floor(record.bytes);
     }

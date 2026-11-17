@@ -209,6 +209,15 @@ export function estimateMessagesTokensUpperBound(messages: readonly Message[]): 
 export interface RequestViewEstimateInput {
   /** 本次请求会带上的工具声明（`ChatRequest.tools`）；provider 也把它算进 prompt。 */
   readonly tools?: readonly unknown[];
+  /**
+   * 本次请求的**图片计划**的计价（0.56）。
+   *
+   * **必填**（没有图就显式传 `{tokens: 0}`）：漏传就是「发送前闸低估」——静默低估的
+   * 代价是请求被 provider 400 打回（design §10 风险 5：只改了消息级估算、忘了请求级
+   * 调用方的那个经典 bug）。这个数只能来自 `VisionBackend.tokenCost(张数)`，
+   * **永远不许**把 base64 字符数喂进 `estimateTokensUpperBound`（420 倍误差）。
+   */
+  readonly attachments: { readonly tokens: number };
 }
 
 /**
@@ -223,9 +232,15 @@ export interface RequestViewEstimateInput {
  */
 export function estimateRequestViewTokens(
   messages: readonly Message[],
-  input: RequestViewEstimateInput = {},
+  input: RequestViewEstimateInput,
 ): number {
   let tokens = estimateMessagesTokensUpperBound(messages);
+  // 0.56：图片 token 走**后端描述符**算出的那一个数（design §8.1「一个数、一个出处」）。
+  // 不按 base64 字符数、不按字节数、不把 1024 写死在这里（那是 deepseek 的形状）。
+  const attachments = input.attachments.tokens;
+  if (Number.isFinite(attachments) && attachments > 0) {
+    tokens += Math.ceil(attachments);
+  }
   if (input.tools !== undefined && input.tools.length > 0) {
     // 工具声明是固定 JSON：序列化后走同一套上界口径（不解析、不挑字段 —— 少一次
     // 「哪些字段算不算」的判断，也就少一处会与 provider 口径漂移的地方）。

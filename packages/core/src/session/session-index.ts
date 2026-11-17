@@ -5,8 +5,10 @@
  *
  * | 持有者 | 用途 |
  * | --- | --- |
- * | `SessionEventLog`（旧链路，0.54 起只服务旧格式会话与迁移工具） | 写元数据 + 读回 |
  * | `TimelineEventLog`（时间线读口，0.54 起是新会话的唯一持有者） | 写元数据 + 读回 |
+ *
+ * （0.55 之前还有第二个持有者 `SessionEventLog`，它那份 `events.ndjson` 实现已随旧格式
+ * 一起删除，所以表格只剩一行。）
  *
  * 抄一份形状就等于多一个会漂移的口径（`SessionLogIndex` 里的 `messages_cached: true`、
  * 终态才有 `completed_at` 这两条都是**判据**，不是装饰）。所以读/写的实现只有这里一份。

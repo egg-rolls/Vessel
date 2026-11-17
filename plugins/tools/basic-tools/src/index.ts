@@ -16,9 +16,13 @@
  * 可选 `cwd`（0.11.1）提供默认工作目录：`bash` 未显式传 `cwd` 时使用它，
  * `read` / `edit` 的相对路径按它解析；边界仍按解析后的绝对路径判定。
  *
- * 输出预算（0.55）：任一工具的结果回给模型之前都过**同一个** token 闸
- * （`boundToolResult`：单条 ≤ 16k token，超了先落盘全文再按头 30% / 尾 70% + 一行省略标注
- * 裁切）。2000 行 / 2 MiB 两道旧闸保留作兜底，顺序是 token → 行 / 字节。
+ * 输出预算（0.55 / 0.56 闸上移）：任一工具的结果回给模型之前都过**同一个** token 闸
+ * （core 的 `boundToolResult`：单条 ≤ 16k token，超了先落盘全文再按头 30% / 尾 70% + 一行
+ * 省略标注裁切）。闸本体在 `packages/core/src/runtime/tool-result-gate.ts`，由 loop 一处
+ * 收口 —— 所以 web_fetch / MCP / 未来插件的返回值也在闸内。本模块保留**第二道闸**：
+ * bash / read / edit 自己先裁一遍并登记幂等回执（`markToolResultBounded`），loop 见到
+ * `bounded` 就不再裁（再裁一次会把「完整输出：<路径>」那一行裁掉）。
+ * 2000 行 / 2 MiB 两道旧闸保留作兜底，顺序是 token → 行 / 字节。
  * 事故校准：1,344 行 / 423 KB（≈106k token）的输出两道旧闸都没碰到，所以闸必须按 token 计。
  *
  * 异步（0.55）：`bash` 多一个 `async?: boolean`。缺省（不传）= 同步，行为与 0.54 逐字节相同；
@@ -26,6 +30,12 @@
  * 尾消息注入该会话的下一次模型请求（复用 runtime notice 那条既有通道，不新造 RPC）。
  * 为什么不单开一个 `bash_async` 工具名：bash 的权限判定（deny 命令文本 / cwd 边界 / ask）、
  * 输出闸、落盘目录都必须与同步路径**同一份实现**，同名同参最不容易漂成两套。
+ *
+ * 写文件警告（只警告、不阻断）：`bash` 结果文本**末尾**追加一行提示（一次调用最多一行），
+ * 覆盖 `sed -i` / `tee <file>` / 重定向到文件 / heredoc 带元字符 / 反引号。理由是这些写法
+ * bash **不校验内容**：写坏了不报错、退出码照样 0，模型没有任何反馈可以自纠（实测 74 个会话
+ * 1,700+ 次写文件，并且已经出过一次 heredoc 反引号被沙箱预处理掉的事故）。判定是纯文本
+ * 正则 / 字符扫描，不改权限、不改退出码与 stdout/stderr；`edit` / `read` 的输出一个字节都不动。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -49,7 +59,16 @@ import type {
   ToolContext,
   ToolDefinition,
 } from '@vessel-agent/core';
-import { estimateTokens, HookType } from '@vessel-agent/core';
+import {
+  boundToolResult,
+  cutToTokenBudget,
+  HookType,
+  markToolResultBounded,
+  omitMarker,
+  safeSegment,
+  toolOutputRoot,
+  writeToolOutput,
+} from '@vessel-agent/core';
 
 // ── 常量 ──────────────────────────────────────────
 
@@ -78,34 +97,17 @@ const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 /** 落盘时单方向最多保留的字节数（超出仍丢弃，防止无界输出撑爆内存） */
 const MAX_PERSIST_BYTES = 16 * 1024 * 1024;
 
-/**
- * 单条工具结果回给模型的 **token 上限**（第一道闸；2026-11 用户裁定：默认 ≤ 16k/次）。
- *
- * 取值理由：16k token ≈ 64k ASCII 字符，是「一轮完整问答」的量级；再高就会把对话历史、
- * 系统提示、self card 挤出去。事故校准：一条 bash 输出 1,344 行 / 423,386 字符
- * （平均每行 315 字符）≈ 106k token，**行数闸（2000 行）与字节闸（2 MiB）都没碰到**，
- * 于是原文整块进了上下文、直接撑爆 1M 窗口。所以闸必须按 token 计，不能只按行 / 字节计。
- */
-const MAX_RESULT_TOKENS = 16_000;
-
-/** 超预算时头部保留的预算比例（30%） */
-const RESULT_HEAD_SHARE = 0.3;
-
-/** 超预算时尾部保留的预算比例（70%）：错误信息、结论、汇总表通常压在尾部 */
-const RESULT_TAIL_SHARE = 0.7;
-
-/**
- * 省略标注行预留的 token（含落盘路径）。
- * 实测标注（中文 + 路径）< 150 token；取 256 是为了让「标注 + 头 + 尾」不越 MAX_RESULT_TOKENS。
- */
-const OMIT_MARKER_RESERVE_TOKENS = 256;
-
-/**
- * 标注重切的最大轮数。收敛条件是预算单调下降（每轮按实测溢出量收缩），
- * 正常情况下第 1 轮就够；留 4 轮是防御 CJK 占比极端 + 标注异常长的输入。
- * 每轮 O(n) 扫一遍，n 已被 MAX_PERSIST_BYTES 封在 16 MiB 内。
- */
-const RESULT_BUDGET_ATTEMPTS = 4;
+// ── 01. 预算口径：单条工具结果回给模型的 token 上限（第一道闸；2026-11 用户裁定 ≤ 16k/次）
+//
+// 0.56 闸上移后数值与实现都在 core（`runtime/tool-result-gate.ts` 的
+// `MAX_TOOL_RESULT_TOKENS`）：头 30% / 尾 70%、标注预留 256 token、重切收敛参数
+// 一并归那里，本模块**不存第二份数值**（口径漂移会让闸和上下文压缩打架）。
+//
+// 取值理由（留在原处，读代码的人不必跳文件）：16k token ≈ 64k ASCII 字符，是
+// 「一轮完整问答」的量级；再高就会把对话历史、系统提示、self card 挤出去。事故校准：
+// 一条 bash 输出 1,344 行 / 423,386 字符（平均每行 315 字符）≈ 106k token，
+// **行数闸（2000 行）与字节闸（2 MiB）都没碰到**，于是原文整块进了上下文、
+// 直接撑爆 1M 窗口。所以闸必须按 token 计，不能只按行 / 字节计。
 
 /** 取消时返回的固定文本 */
 const CANCELLED_TEXT = '错误：操作已取消（cancelled）。';
@@ -169,8 +171,8 @@ const MAX_ASYNC_NOTICES_PER_INJECTION = MAX_ASYNC_JOBS;
 
 /**
  * 完成通知里**输出预览**的 token 预算：1200。
- * 单条工具结果的总闸是 16k（`MAX_RESULT_TOKENS`），一条后台通知只该占它的 7.5% ——
- * 通知是「顺带告诉你一声」，不是又一次整块输出；剩下的量靠日志路径按需 read。
+ * 单条工具结果的总闸是 16k（core 的 `MAX_TOOL_RESULT_TOKENS`），一条后台通知只该占它的
+ * 7.5% —— 通知是「顺带告诉你一声」，不是又一次整块输出；剩下的量靠日志路径按需 read。
  */
 const MAX_ASYNC_PREVIEW_TOKENS = 1_200;
 
@@ -540,152 +542,20 @@ function truncateLines(text: string): string {
 
 // ── token 闸（单条工具结果预算；第一道，行 / 字节闸之前） ──────
 //
-// token 口径**只有一份**：直接用 core 的 `estimateTokens`（ASCII 0.25 / CJK 0.5 token
-// 每字符，`packages/core/src/context/context-manager.ts`）。这里不另写一份实现 ——
+// 0.56 **闸上移**：实现搬到了 core（`packages/core/src/runtime/tool-result-gate.ts`），
+// 由 loop 一处收口，覆盖所有插件工具（web_fetch / MCP / 未来插件）。这里保留的是
+// **第二道闸**（过渡期）：bash / read / edit 自己先裁一遍，好处是这几个工具的落盘
+// 文件名带工具名、且能省掉 loop 那次额外的全文拷贝。
+//
+// token 口径**只有一份**：core 的 `estimateTokens`（ASCII 0.25 / CJK 0.5 token 每字符）——
 // 口径漂移会让「上下文压缩」和「工具结果截断」互相打架（一个说装得下、一个说装不下）。
-// 所以下面所有切点搜索都**调用同一个函数**在切片上求值，不做第二套计数。
-
-/** 统计换行数（省略行数与行边界对齐共用；不 split，避免为计数复制整串） */
-function countNewlines(text: string): number {
-  let count = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) === 10) count += 1;
-  }
-  return count;
-}
-
-/**
- * 头部保留长度：求最大的 `end` 使 `estimateTokens(text.slice(0, end)) <= budget`。
- *
- * 搜索窗口 `maxChars = ceil(budget / 0.25)`：0.25 是每字符最便宜的计价（纯 ASCII），
- * 所以长度超过它的前缀必然超预算 —— 窗口把一次搜索的代价封在 O(budget) 字符内
- * （16k 预算 ≈ 64k 字符窗口 × log2 轮二分），与输出总长无关。
- */
-function fitHeadLength(text: string, budget: number): number {
-  const maxChars = Math.min(text.length, Math.ceil(budget / 0.25));
-  let low = 0;
-  let high = maxChars;
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    if (estimateTokens(text.slice(0, mid)) <= budget) low = mid;
-    else high = mid - 1;
-  }
-  return low;
-}
-
-/**
- * 尾部保留起点：求最小的 `start` 使 `estimateTokens(text.slice(start)) <= budget`。
- * 窗口同上，从尾部量。
- */
-function fitTailStart(text: string, budget: number): number {
-  const maxChars = Math.ceil(budget / 0.25);
-  const floor = Math.max(0, text.length - maxChars);
-  let low = floor;
-  let high = text.length;
-  while (low < high) {
-    const mid = Math.floor((low + high) / 2);
-    if (estimateTokens(text.slice(mid)) <= budget) high = mid;
-    else low = mid + 1;
-  }
-  return low;
-}
-
-/**
- * 头部切点退到行边界（丢掉被切断的半行）。
- * 只在新边界不低于「字符切点的一半」时才对齐 —— 否则（比如整份输出就是一行 200 万字符）
- * 退让会把头部退空，那还不如保留字符级切点。
- */
-function snapHeadToLine(text: string, end: number): number {
-  if (end <= 0 || end >= text.length) return end;
-  const newline = text.lastIndexOf('\n', end - 1);
-  if (newline < 0) return end;
-  return newline + 1 >= Math.floor(end / 2) ? newline + 1 : end;
-}
-
-/** 尾部切点前进到行边界（丢掉被切断的半行）；同样带「不超过一半」的退让保护 */
-function snapTailToLine(text: string, start: number): number {
-  if (start <= 0 || start >= text.length) return start;
-  const newline = text.indexOf('\n', start);
-  if (newline < 0) return start;
-  const room = text.length - start;
-  return newline + 1 - start <= Math.ceil(room / 2) ? newline + 1 : start;
-}
-
-/** 一次 token 裁剪的结果 */
-interface TokenCut {
-  /** 头部保留内容 */
-  head: string;
-  /** 尾部保留内容 */
-  tail: string;
-  /** 被省略的字符数 */
-  omittedChars: number;
-  /** 被省略的行数（切点落在行中时，那一行也算被省略） */
-  omittedLines: number;
-}
-
-/** 把文本按「头 30% / 尾 70%」的 token 预算切一刀（切点尽量对齐行边界） */
-function cutToTokenBudget(text: string, contentBudget: number): TokenCut {
-  const headEnd = snapHeadToLine(text, fitHeadLength(text, contentBudget * RESULT_HEAD_SHARE));
-  const fittedTail = snapTailToLine(text, fitTailStart(text, contentBudget * RESULT_TAIL_SHARE));
-  // 防御：两侧预算之和 < 100%（预留标注）时不该重叠；真重叠就退化成不留尾部
-  const tailStart = Math.max(fittedTail, headEnd);
-  const omitted = text.slice(headEnd, tailStart);
-  return {
-    head: text.slice(0, headEnd),
-    tail: text.slice(tailStart),
-    omittedChars: omitted.length,
-    omittedLines: countNewlines(omitted) + (omitted !== '' && !omitted.endsWith('\n') ? 1 : 0),
-  };
-}
-
-/** 省略标注行：行数 / 字符数 / 落盘路径（落盘失败也要说清，别让模型以为输出就这么多） */
-function omitMarker(cut: TokenCut, persistPath: string | undefined): string {
-  const counts = `省略 ${cut.omittedLines} 行 / ${cut.omittedChars} 字符`;
-  return persistPath !== undefined
-    ? `… ${counts} · 完整输出：${persistPath}`
-    : `… ${counts} · 完整输出落盘失败（写入不可用）`;
-}
-
-/** 预算收口时的落盘钩子：只有真的超预算才会被调用 */
-interface ResultBudgetOptions {
-  /** 触顶时把**完整**结果写盘；返回落盘路径，失败返回 undefined */
-  persist: () => Promise<string | undefined>;
-}
-
-/**
- * **唯一的出口闸**：所有工具结果回给模型之前都过这里（bash / read / edit 三个 handler 收敛于此）。
- *
- * 行为：
- * 1. 预算内（`estimateTokens <= MAX_RESULT_TOKENS`）**原样返回**，逐字节不变 —— 小输出零改动；
- * 2. 超预算 ⇒ 先落盘完整结果，再按「头 30% / 尾 70% + 中间一行省略标注（含路径）」裁切；
- * 3. 无论输入多畸形，返回值都 ≤ MAX_RESULT_TOKENS：标注预留 256 token，仍超就按实测溢出量
- *    收缩预算重切，最多 RESULT_BUDGET_ATTEMPTS 轮。
- *
- * 为什么尾部>头部：错误信息、失败原因、汇总行几乎总在末尾，砍掉尾部的代价远大于砍中间。
- */
-async function boundToolResult(text: string, options: ResultBudgetOptions): Promise<string> {
-  if (estimateTokens(text) <= MAX_RESULT_TOKENS) return text;
-
-  const persistPath = await options.persist();
-
-  let contentBudget = MAX_RESULT_TOKENS - OMIT_MARKER_RESERVE_TOKENS;
-  let bounded = text;
-  for (let attempt = 0; attempt < RESULT_BUDGET_ATTEMPTS; attempt += 1) {
-    const cut = cutToTokenBudget(text, contentBudget);
-    if (cut.omittedChars === 0) return text; // 理论上不可达（已确认超预算）
-    bounded = `${cut.head}\n${omitMarker(cut, persistPath)}\n${cut.tail}`;
-    const tokens = estimateTokens(bounded);
-    if (tokens <= MAX_RESULT_TOKENS) return bounded;
-    // 实测溢出（标注比预留的更贵 / 舍入）：按溢出量收缩内容预算再切
-    contentBudget -= tokens - MAX_RESULT_TOKENS;
-    if (contentBudget <= 1024) break;
-  }
-  return bounded;
-}
+//
+// 幂等：裁完必须 `markToolResultBounded(ctx, ...)` 登记回执，否则 loop 会再裁一次，
+// 第二轮会把「… 省略 N 行 / M 字符 · 完整输出：<path>」那一行自己裁掉。
 
 /** 把「某个工具的一次结果」按 token 预算收口，并按需落盘全文（read / edit 用） */
 async function boundToolOutput(ctx: ToolContext, tool: string, text: string): Promise<string> {
-  return boundToolResult(text, {
+  const gated = await boundToolResult(text, {
     persist: () =>
       writeToolOutput({
         tool,
@@ -693,6 +563,9 @@ async function boundToolOutput(ctx: ToolContext, tool: string, text: string): Pr
         ...(ctx.session_id !== undefined ? { sessionId: ctx.session_id } : {}),
       }),
   });
+  // 幂等回执：告诉 loop「这条已经裁过了」，别裁第二遍（见 core/tool-result-gate.ts）。
+  if (gated.bounded) markToolResultBounded(ctx, gated.originalChars);
+  return gated.content;
 }
 
 /**
@@ -778,6 +651,185 @@ function pumpStream(stream: ReadableStream<Uint8Array>, sink: OutputSink): Pump 
   };
 }
 
+// ── bash 写文件警告（只警告、不阻断）──────────────────
+//
+// 为什么要有这一段：实测 74 个会话 19,150 次工具调用里，bash 写文件 1,700+ 次
+// （`> file` 1,310 / heredoc 262 / `sed -i` 93 / `cat >` 69 / `tee` 9），而 bash
+// **不校验内容** —— 写坏了不报错、退出码照样 0，模型没有任何信号可以自纠。真机已经出过
+// 一次：heredoc 里的反引号被沙箱预处理掉，文件内容静默变形。
+// `edit` 不需要这类提醒：它逐字符匹配，匹配不中当场报错（实测失败率 2.8%，其中 54/106
+// 的路径随后改成功）—— 会失败的东西自带反馈，不会失败的东西才需要提示。
+//
+// 形态（硬约束）：
+// - **只追加一行**、固定在工具结果文本的**末尾**（`退出码 / stdout / stderr / 落盘提示`
+//   之后，`\n` + 一行）。放末尾的理由：既有输出格式逐字节不变（纯追加），而且模型读完
+//   输出、正好在最后一行拿到「下次别这么写」的动作建议；放开头会把首行的退出码顶掉。
+// - 一次调用最多一行：多命中合并成一句（命中 heredoc 元字符时不再叠一条反引号警告）。
+// - 命令照跑、退出码与输出不变，不动 `deny` / `ask` 权限逻辑，不动 `boundToolResult`；
+//   不新增事件 —— `tool.call.completed` 的 `result` 就是这段文本，自然带上。
+//
+// 成本：纯字符扫描 + 正则（命令文本通常 < 10 KB），不读盘、不 spawn、不 await。
+//
+// 判据刻意保守（宁可漏报，不许误报成灾）：
+//  1. 写文件类：`sed -i` / `tee <file>` / 重定向到像文件的目标。
+//     `/dev/null`、`/dev/stdout`、`/dev/stderr`、`/dev/fd/*`、`&1`、`&2` 这些
+//     「丢弃 / 接管输出」不算写文件（`cmd 2>/dev/null` 绝不能报）。
+//  2. heredoc 且正文可能被预处理：有 `<<` 起手式，且命令文本里同时出现反引号 / `$(` / `${`。
+//     这正是出事那一类（内容会被 shell 展开，沙箱也可能改写）。
+//     刻意不区分界定符是否加引号（`<<'EOF'`）：本次事故就是沙箱预处理这一层动的手，
+//     它不看 bash 的引号语义。
+//  3. 命令里出现反引号：单独命中也给一行（命令替换是最常见的「静默变形」来源）。
+//
+// 判定前的去噪（否则误报会成灾）：先抹掉 heredoc 正文，再抹掉单 / 双引号内的字面量，
+// 只拿**真正会被 bash 当命令解释的部分**去匹配重定向 / sed / tee —— 否则
+// `echo "a > b"`、写 commit message 里的 `->`、`awk '{print > f}'` 全都会触发。
+// 规则 2 / 3 仍扫**原文**：正文里的反引号正是要提醒的东西。
+
+/** 反引号（单独取出来，免得下面几个字面量里混着它不好读） */
+const BACKTICK = '\u0060';
+
+/** 警告行前缀：固定一个字符，方便一眼看到 / 也方便事后按它统计命中率 */
+const BASH_WRITE_WARN_PREFIX = '⚠ ';
+
+/**
+ * heredoc 起手式：`<<` / `<<-` + 可选引号 + 标识符。
+ * `<<<`（herestring）与 `1 << 2`（位运算）不算 —— 宁可漏报。
+ */
+const HEREDOC_START = /<<-?\s*(['"]?)([A-Za-z_]\w*)\1/;
+
+/** `sed` 原地改文件：`-i`、`-i.bak`、`-ibak`、`--in-place` */
+const SED_IN_PLACE = /\bsed\b[^|;&\n]*\s(?:-i[\w.]*|--in-place)\b/;
+
+/** `tee` 带文件参数（只给选项 = 仍写到 stdout，不算写文件） */
+const TEE_WITH_FILE = /\btee\b(?:\s+-{1,2}[\w-]+)*\s+[^\s|;&<>][^\s|;&<>]*/;
+
+/** 重定向：`> ` / `>>` / `2>` / `&>` ……；捕获组 1 就是目标（fd 复制形如 `&1` 由调用方排除） */
+const REDIRECT_TARGET = /(?:^|[\s;&|()])(?:[0-9]*>>?|&>>?)\s*([^\s;&|()<>]+)/g;
+
+/** 这些重定向目标不是「写文件」：丢弃输出 / 复制既有 fd */
+function isIgnoredRedirectTarget(target: string): boolean {
+  // `2>&1` / `>&2` / `>&-`：目标是 fd 复制或关闭，不落文件
+  if (target.startsWith('&') || target === '-') return true;
+  if (target === '/dev/null' || target === '/dev/tty') return true;
+  if (/^\/dev\/(?:fd\/\d+|stdout|stderr)$/.test(target)) return true;
+  if (/^\/proc\/self\/fd\/\d+$/.test(target)) return true;
+  return false;
+}
+
+/**
+ * 抹掉 heredoc 正文（`<<EOF` 的下一行到界定符那一行），只留「会被 bash 当命令读的行」。
+ * 正文里出现 `>` / `->` 是常态（写文档、写 commit message），拿它匹配重定向必然误报。
+ */
+function stripHeredocBodies(command: string): string {
+  if (!command.includes('<<')) return command;
+  const out: string[] = [];
+  let pending: { delimiter: string; stripTabs: boolean } | undefined;
+  for (const line of command.split('\n')) {
+    if (pending !== undefined) {
+      const candidate = pending.stripTabs ? line.replace(/^\t+/, '') : line;
+      // 界定符那一行本身是命令的一部分（它闭合 heredoc），保留
+      if (candidate.trimEnd() === pending.delimiter) {
+        pending = undefined;
+        out.push(line);
+      }
+      continue;
+    }
+    out.push(line);
+    const start = HEREDOC_START.exec(line);
+    if (start !== null && start[2] !== undefined) {
+      pending = { delimiter: start[2], stripTabs: line.includes('<<-') };
+    }
+  }
+  return out.join('\n');
+}
+
+/**
+ * 抹掉 shell 引号内的字面量（单 / 双引号 + 反斜杠转义），只留引号外的命令部分。
+ * 只为「写文件」判定去噪：`echo "a > b"` 里的 `>` 不是重定向。
+ * 引号不配对时（正文里的撇号很常见）该段一直吃到文本结尾 —— 那一段不参与判定，
+ * 属于「宁可漏报」。
+ */
+function stripShellQuotes(command: string): string {
+  const out: string[] = [];
+  let quote: '"' | "'" | undefined;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (ch === undefined) break;
+    if (quote === undefined) {
+      if (ch === '\\') {
+        i += 1; // 转义的字符一并丢掉
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        continue;
+      }
+      out.push(ch);
+      continue;
+    }
+    if (quote === '"' && ch === '\\') {
+      i += 1;
+      continue;
+    }
+    if (ch === quote) quote = undefined;
+  }
+  return out.join('');
+}
+
+/** 命令（去掉正文与引号后）是否会写文件：`sed -i` / `tee <file>` / 重定向到文件 */
+function commandWritesFile(command: string): boolean {
+  const code = stripShellQuotes(stripHeredocBodies(command));
+  if (SED_IN_PLACE.test(code)) return true;
+  if (TEE_WITH_FILE.test(code)) return true;
+  for (const match of code.matchAll(REDIRECT_TARGET)) {
+    const target = match[1];
+    if (target !== undefined && !isIgnoredRedirectTarget(target)) return true;
+  }
+  return false;
+}
+
+/** 命令原文里有没有会被 shell 展开的元字符：反引号 / `$(` / `${` */
+function hasExpandedMeta(command: string): boolean {
+  return command.includes(BACKTICK) || command.includes('$(') || command.includes('${');
+}
+
+const WRITE_FILE_WARN =
+  '这条命令会写文件（sed -i / 重定向 / tee / heredoc），而 bash 不会校验写进去的内容——' +
+  '写坏了也不报错、退出码照样是 0。要改代码请优先用 `edit`（逐字符唯一匹配，改不中会报错）；' +
+  '非得用 bash 写，写完用 `read` 复核一遍。';
+
+const HEREDOC_META_WARN =
+  'heredoc 内容里的反引号与 $ 开头的写法（$() 与 $' +
+  '{…}）会被 shell 先展开再写入，沙箱也可能改写正文，文件可能静默变形；' +
+  '建议改用 `edit`，或先把内容写到临时文件再 cp。';
+
+const BACKTICK_WARN =
+  '命令里的反引号会被 bash 当命令替换（先执行、再用输出替换成文本）；' +
+  '若只是想写反引号字面量（例如写 markdown），请用单引号包住，或用 `edit` 写文件。';
+
+/**
+ * 组装这条命令的写文件警告；无命中返回 `undefined`。
+ * 返回值是**一整行**（不含换行），多命中已合并 —— 一次调用只追加这一行。
+ */
+function bashWriteWarning(command: string): string | undefined {
+  if (command === '') return undefined;
+  const parts: string[] = [];
+  if (commandWritesFile(command)) parts.push(WRITE_FILE_WARN);
+  if (HEREDOC_START.test(command) && hasExpandedMeta(command)) {
+    // 这条已经说清「反引号会被预处理」，再叠一条反引号警告就是啰嗦
+    parts.push(HEREDOC_META_WARN);
+  } else if (command.includes(BACKTICK)) {
+    parts.push(BACKTICK_WARN);
+  }
+  if (parts.length === 0) return undefined;
+  return `${BASH_WRITE_WARN_PREFIX}${parts.join(' ')}`;
+}
+
+/** 把警告行追加到结果文本末尾（无警告时原样返回，逐字节不变） */
+function appendWriteWarning(text: string, warning: string | undefined): string {
+  return warning === undefined ? text : `${text}\n${warning}`;
+}
+
 // ── bash ─────────────────────────────────────────
 
 /** 把完整输出裁成模型可读预览（按字节上限） */
@@ -790,46 +842,9 @@ function toPreview(text: string): { text: string; truncated: boolean } {
   };
 }
 
-/** 输出落盘根目录：显式 env → data_dir → 默认数据目录 */
-function toolOutputRoot(): string {
-  const explicit = process.env.VESSEL_TOOL_OUTPUT_DIR;
-  if (typeof explicit === 'string' && explicit.trim() !== '') return path.resolve(explicit);
-  const dataDir = process.env.VESSEL_DATA_DIR;
-  if (typeof dataDir === 'string' && dataDir.trim() !== '') {
-    return path.join(path.resolve(dataDir), 'tool-output');
-  }
-  return path.join(os.homedir(), '.vessel', 'data', 'tool-output');
-}
-
-/** 目录名安全化：只保留字母数字与 ._- */
-function safeSegment(value: string | undefined): string {
-  const cleaned = (value ?? '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
-  return cleaned === '' ? 'no-session' : cleaned;
-}
-
-/**
- * 把一次工具结果的**全文**写进 `<输出根>/<session>/<tool>-<ts>-<rand>.log`。
- * 失败返回 undefined（调用方把标注降级成「落盘失败」，但截断照做 ——
- * 一次 IO 失败不能变成「那就把整块原文塞回模型」）。
- */
-async function writeToolOutput(payload: {
-  tool: string;
-  body: string;
-  sessionId?: string;
-}): Promise<string | undefined> {
-  try {
-    const dir = path.join(toolOutputRoot(), safeSegment(payload.sessionId));
-    await mkdir(dir, { recursive: true });
-    const file = path.join(
-      dir,
-      `${safeSegment(payload.tool)}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.log`,
-    );
-    await writeFile(file, payload.body, 'utf-8');
-    return file;
-  } catch {
-    return undefined;
-  }
-}
+// 落盘（`toolOutputRoot` / `safeSegment` / `writeToolOutput`）0.56 起只有 core 一份实现
+// （`runtime/tool-result-gate.ts`）：loop 为**所有**插件工具落盘全文，必须与这里同一个
+// 目录口径；两处各写一份迟早漂成两个目录。
 
 /** bash 落盘正文（同步与异步共用同一格式：头几行元数据 + `[stdout]` / `[stderr]` 两段）。 */
 function bashOutputBody(payload: {
@@ -1229,6 +1244,9 @@ async function startAsyncBash(options: {
     pruneAsyncJobs();
   });
 
+  // 写文件警告只挂在**起步文本**上：这是模型还能改主意的时刻；收口通知是「结果」，
+  // 同一条命令的同一句提醒不重复塞两遍。
+  const asyncWriteWarning = bashWriteWarning(options.command);
   return [
     `已启动（异步）：job ${id}`,
     `命令：${oneLineText(options.command, 400)}`,
@@ -1239,6 +1257,7 @@ async function startAsyncBash(options: {
     '命令结束时会有一条 runtime 消息（退出码 + 头尾输出 + 日志路径）注入你这个会话的下一轮上下文；',
     '若本轮已结束，它在该会话下一次 run 的第一轮到达。中途想看进度就直接 read 上面的日志文件。',
     '注意：本进程退出时仍在跑的后台命令会被一并终止。',
+    ...(asyncWriteWarning === undefined ? [] : [asyncWriteWarning]),
   ].join('\n');
 }
 
@@ -1304,10 +1323,14 @@ async function finalizeAsyncBash(job: AsyncBashJob): Promise<void> {
     `${ASYNC_NOTICE_DETAIL_MARK}output (head/tail; the log path has all of it):`,
   ].join('\n');
 
-  // 出口闸：与其它工具结果同一个（≤ MAX_RESULT_TOKENS；超了先落盘再头 30% / 尾 70% 裁切）
-  job.notice = await boundToolResult(`${head}\n${preview}`, {
-    persist: async () => saved ?? job.logPath,
-  });
+  // 出口闸：与其它工具结果同一个（≤ 16k token；超了先落盘再头 30% / 尾 70% 裁切）。
+  // 通知是一次投递的纯文本（不是某次工具调用的返回值），所以只取裁好的 content，
+  // 不登记幂等回执 —— 它不会经过 loop 的闸。
+  job.notice = (
+    await boundToolResult(`${head}\n${preview}`, {
+      persist: async () => saved ?? job.logPath,
+    })
+  ).content;
 
   // 二选一：装了唤醒出口就试它一次（成功 = 自己起一轮 run，hook 永不再注入这份通知）。
   // 失败不标记，hook 仍会兜底 —— 宁可晚到，不可不到，也不可送两遍。
@@ -1472,6 +1495,10 @@ async function runBash(
     (args.async === true ? DEFAULT_ASYNC_BASH_TIMEOUT_MS : DEFAULT_BASH_TIMEOUT_MS);
   if (timeoutMs <= 0) return '错误：timeout_ms 必须为正数';
 
+  // 写文件警告：只算一次（纯文本判定），命中的话在后面**每个返回点**末尾追加同一行。
+  // 放在校验之后：被拒绝的命令根本没执行，不该再提「写完要复核」。
+  const writeWarning = bashWriteWarning(command);
+
   const signal = ctx.signal;
   if (signal?.aborted) return CANCELLED_TEXT;
 
@@ -1563,9 +1590,14 @@ async function runBash(
     cancelled,
     lineGate: false,
   });
-  // 预算内时 boundToolResult 原样返回同一个字符串引用（不做任何拷贝/裁剪）。
+  // 预算内时 boundToolResult 原样返回同一个字符串（不做任何拷贝/裁剪）：`bounded` 为假
+  // 就继续走下面的行 / 字节闸，与 0.55 之前逐字节一致。
   const budgeted = await boundToolResult(full, { persist: persistRaw });
-  if (budgeted !== full) return budgeted;
+  if (budgeted.bounded) {
+    // 幂等回执：bash 自己裁过了，loop 别再裁第二遍（否则省略标注行会被裁掉）。
+    markToolResultBounded(ctx, budgeted.originalChars);
+    return appendWriteWarning(budgeted.content, writeWarning);
+  }
 
   // 第二 / 三道闸（行数 2000 / 字节 2 MiB）：语义与 0.4 起一致，作为兜底保留。
   // 按上面的顺序，它们实际只在「行很多但每行极短」的输出上生效（token 闸都放行了，
@@ -1582,11 +1614,14 @@ async function runBash(
     lineGate: true,
   });
   const shouldPersist = overLines || overBytes || stdoutSink.truncated || stderrSink.truncated;
-  if (!shouldPersist) return formatted;
+  if (!shouldPersist) return appendWriteWarning(formatted, writeWarning);
   const saved = await persistRaw();
-  return saved !== undefined
-    ? `${formatted}\n完整输出已写入：${saved}（${Buffer.byteLength(stdout) + Buffer.byteLength(stderr)} 字节）`
-    : `${formatted}\n完整输出落盘失败（预览已截断）。`;
+  return appendWriteWarning(
+    saved !== undefined
+      ? `${formatted}\n完整输出已写入：${saved}（${Buffer.byteLength(stdout) + Buffer.byteLength(stderr)} 字节）`
+      : `${formatted}\n完整输出落盘失败（预览已截断）。`,
+    writeWarning,
+  );
 }
 
 /** 构造 bash 工具（路径边界随配置固定；默认工作目录按调用期解析） */

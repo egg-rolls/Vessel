@@ -39,9 +39,12 @@ export const TIMELINE_LAYOUT = {
    *
    * 为什么需要它：归档是「先读盘上已经有到哪、再决定抄哪一段」，读和写之间若插进第二个
    * 写者（另一个进程：CLI / node / 第二个 gateway —— 或者同进程里第二个 writer 实例），
-   * 两个写者会各自按自己的快照把**同一段**抄进 `timeline.ndjson`，而 append-only 流里
-   * 同一个 seq 出现两次就足以让读侧（`validateTimelineRange` 的「严格递增 / 不得重复」）
-   * 整段拒绝，用户侧表现为「往上加载更早」永久卡住。
+   * 两个写者会各自按自己的快照把**同一段**抄进 `timeline.ndjson`，于是违反那条 append-only
+   * 副本不变量（归档不再是 `wal.log` 事实行的副本）。**当下读路径对重复 seq 免疫**：
+   * `readTimelineEvents` 的 `bySeq`、`timeline-dual-write#readPage` 的 `seen`、serve
+   * `selectTimelinePage` 的 `seen` 三处都按 seq 去重。但一旦归档成为唯一读源、或消费者按
+   * 物理顺序把行喂给 `validateTimelineRange`，第 4 条（不得重复）会整段拒收 —— 实测 10 行
+   * vs 声明 5 行 ⇒ `merged=0`、左缘不动、`hasEarlier` 恒 true。所以这道锁不该省。
    *
    * 锁文件只是一个**门槛**（`open(…, 'wx')`），不装数据、不参与读侧任何判据；
    * 崩溃留下的锁靠 mtime 过期回收（见 `archive-lock.ts`），过期回收失败只会让归档
@@ -248,7 +251,13 @@ export type TimelineErrorCode =
   | 'timeline_write_failed'
   | 'timeline_record_too_large'
   | 'timeline_event_type_excluded'
-  | 'session_frozen_readonly'
+  /**
+   * 0.55：**0.54 之前的旧格式会话不再被支持**（只有 `events.ndjson`、没有任何 timeline
+   * 标记）。读、写、索引三条路都抛它，**绝不**当成空会话 —— 那会让人以为历史丢了却查不出
+   * 原因。取代 0.54 的 `session_frozen_readonly`：那套文件格式已经没有代码能解析，
+   * 「只读」这个中间态不复存在。判据与出路（用 0.54 导出）见 `legacy-format.ts`。
+   */
+  | 'legacy_session_unsupported'
   | 'timeline_writer_closed'
   | 'timeline_index_invalid'
   /**

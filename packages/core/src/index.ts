@@ -227,16 +227,22 @@ export {
 } from './provider/index.js';
 // 运行时
 export {
+  type BoundedToolResult,
+  boundToolResult,
   classifyProviderRetry,
   createToolPipeline,
   createToolPipelineFor,
+  cutToTokenBudget,
   DEFAULT_PROVIDER_RETRY_POLICY,
   ExecutionUnit,
   type ExecutionUnitRequest,
   type InstalledPlugins,
   installPluginsIntoHost,
+  MAX_TOOL_RESULT_TOKENS,
   MemoryPluginHost,
+  markToolResultBounded,
   normalizeRetryPolicy,
+  omitMarker,
   PermissionTimeoutError,
   type PrefixChangeReason,
   PromptPrefixChangedError,
@@ -247,14 +253,21 @@ export {
   type ProviderRetryScope,
   Runtime,
   retryBackoffMs,
+  safeSegment,
   type TenantRuntimeProfile,
+  type TokenCut,
   type ToolPipeline,
   type ToolPipelineDeps,
   type ToolPipelineFactoryDeps,
   type ToolPipelineOptions,
   type ToolPipelineResult,
   type ToolPipelineStages,
+  type ToolResultGateOptions,
+  type ToolResultGateReceipt,
+  takeToolResultGateReceipt,
   toErrorEnvelope,
+  toolOutputRoot,
+  writeToolOutput,
 } from './runtime/index.js';
 // 0.52 S1a：进程退出时武装的续跑标记（纯内存注册表，额度见 graceful-restart）
 export {
@@ -305,12 +318,9 @@ export {
   projectedKeepCount,
   projectMessages,
   pruneRuns,
-  type ReadSessionEventsOptions,
   removeLegacySessionTrace,
   SessionCorruptError,
   SessionDeleteConflictError,
-  SessionEventLog,
-  type SessionEventLogOptions,
   type SessionLogDirectoryPort,
   type SessionLogIndex,
   SQLiteSessionStore,
@@ -324,7 +334,6 @@ export {
   encodeSessionDirName,
   resolveSingleTenantPaths,
   sessionDirPath,
-  sessionEventsFilePath,
   sessionIndexFilePath,
   type TenantPaths,
 } from './tenant/index.js';
@@ -332,3 +341,6 @@ export {
 export { InProcessTransport, type InProcessTransportOptions } from './transport/index.js';
 // 类型定义
 export * from './types/index.js';
+// 视觉基座的机制（0.56）：内容寻址 blob（写一次永不重写）+ 上传即落 + 请求期计划。
+// 形状在 `types/vision.ts`；**第一份后端实现**在 `plugins/provider/openai/src/vision.ts`。
+export * from './vision/index.js';

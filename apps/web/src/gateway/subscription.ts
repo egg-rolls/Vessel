@@ -308,9 +308,10 @@ export class SubscriptionController {
    * 所以这里只有两种答案。帧 seq 与游标同一空间，不需要任何"纪元对齐"。
    */
   consumeHello(info: HelloInfo): 'connection' | 'subscribe' {
-    // 0.54 B1：`timeline_source === 'timeline'` ⇒ 本 epoch 的帧带 `timeline_seq`，四条校验
-    // 在实时流上做（服务端**声明**了区间与 `count`）。`legacy` ⇒ 老行为，帧带 hub seq。
-    const header = readTimelineHelloSegment(info.timeline_source, info.timeline);
+    // 0.55：判据是**形状**（`hello.timeline` 在不在）。在 ⇒ 本 epoch 的帧带
+    // `timeline_seq`，四条校验在实时流上做（服务端**声明**了区间与 `count`）；
+    // 不在 ⇒ 老 epoch，帧带 hub seq，按老行为处理。
+    const header = readTimelineHelloSegment(info.timeline);
     if (header !== undefined) {
       // 本趟应到的右端：`(published_head, wal_head]` 允许不被推送，所以取 min。
       const published = info.timeline?.published_head;
@@ -322,7 +323,7 @@ export class SubscriptionController {
     } else {
       this.epochTarget = 0;
       this.eventStore.endTimelineEpoch();
-      // legacy 订阅（旧格式会话 / 旧 gateway）：帧 seq 是同一个计数空间的起点
+      // 老 epoch（旧 gateway / 没有时间线读面）：帧 seq 是同一个计数空间的起点
       // `from_seq`，游标退到它之前 —— 随后到达的重放帧才会被收下（`truncateAfter` 只动
       // 传输窗口，不动 item，I6）。
       if (info.from_seq > 0) this.eventStore.truncateAfter(Math.max(0, info.from_seq - 1));

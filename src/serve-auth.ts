@@ -2,12 +2,12 @@
  * gateway token → principal（0.5 E16 / A-3 §10.4、A-4 §11.5）
  *
  * 映射（0.49 T4：单执行面，principal 不再携带 tenant）：
- * - `serve.tokens` map → 条目 {role}（仅客户端凭据）
- * - `serve.token` → admin（0.4 兼容）
+ * - `node.tokens` map → 条目 {role}（仅客户端凭据）
+ * - `node.token` → admin（0.4 兼容）
  * - 无 token + 回环 → admin（anonymous）
  * - 已配置 token 但未带 → null（401）
- * - 非回环 + 无 gateway token → 拒绝启动（仅 serve.tokens 不够）
- * - 回环 + 仅 serve.tokens → 允许启动；in-process dispatcher 用第一个
+ * - 非回环 + 无 gateway token → 拒绝启动（仅 node.tokens 不够）
+ * - 回环 + 仅 node.tokens → 允许启动；in-process dispatcher 用第一个
  *   token 的 role（最小权限），HTTP 客户端仍必须带 token
  *
  * token 比较使用常量时间比较；错误信息与日志永不包含 token。
@@ -52,7 +52,7 @@ export interface ResolveGatewayAuthOptions {
    * 0.56：**派生** token（`vessel:node:<id>`，来自 `<dataDir>/root-secret`）。
    *
    * 它是**追加**凭据，不是替代品：
-   * - 显式配置（`node.token` / `node.token_env` / `serve.tokens` / `VESSEL_GATEWAY_TOKEN`）
+   * - 显式配置（`node.token` / `node.token_env` / `node.tokens` / `VESSEL_GATEWAY_TOKEN`）
    *   永远优先，并且照旧关闭回环匿名；
    * - 只有派生值时，回环匿名**保持不变** —— 这条是本单的「自愈」底线：
    *   任何本地 CLI / WebUI 都不会因为没有手写 token 而被锁在门外；
@@ -97,7 +97,7 @@ export function resolveGatewayAuth(
   const candidates: TokenCandidate[] = [];
 
   // 客户端 token map（键是原始 token，原样保留）
-  const tokens = config.serve?.tokens;
+  const tokens = config.node?.tokens;
   if (tokens) {
     for (const [token, entry] of Object.entries(tokens)) {
       if (token === '') continue;
@@ -108,12 +108,12 @@ export function resolveGatewayAuth(
     }
   }
 
-  // 旧单 token：serve.token > serve.token_env > VESSEL_GATEWAY_TOKEN。
+  // 旧单 token：node.token > node.token_env > VESSEL_GATEWAY_TOKEN。
   // `transport.token` 只服务 transport 层，不再作为 gateway admin 凭据
   // （DECISION-020 §R1.9）。
   const explicitToken =
-    nonEmpty(config.serve?.token) ??
-    nonEmpty(config.serve?.tokenEnv ? env[config.serve.tokenEnv] : undefined) ??
+    nonEmpty(config.node?.token) ??
+    nonEmpty(config.node?.tokenEnv ? env[config.node.tokenEnv] : undefined) ??
     nonEmpty(env.VESSEL_GATEWAY_TOKEN);
   if (explicitToken !== undefined) {
     candidates.push({
@@ -134,13 +134,13 @@ export function resolveGatewayAuth(
   // 非回环必须有 token：显式或派生都算（派生是自动生成的稳定值，不是「没有」）。
   const hasGatewayToken = legacyToken !== undefined;
 
-  // 非回环必须有 gateway token；serve.tokens 只是客户端凭据，
+  // 非回环必须有 gateway token；node.tokens 只是客户端凭据，
   // 不能让“仅客户端 token”的 remote gateway 启动。
   if (!loopback && !hasGatewayToken) {
     return {
       ok: false,
       error: configured
-        ? 'gateway_requires_token: non-loopback gateway requires serve.token; serve.tokens entries are client credentials only'
+        ? 'gateway_requires_token: non-loopback gateway requires node.token; node.tokens entries are client credentials only'
         : 'gateway_requires_token: refusing to start a non-loopback gateway without a token',
     };
   }
@@ -149,7 +149,7 @@ export function resolveGatewayAuth(
     !configured && loopback ? { role: 'admin' } : undefined;
 
   /**
-   * 回环 + 仅 serve.tokens：网关仍要求客户端带 token（anonymous 不设置），
+   * 回环 + 仅 node.tokens：网关仍要求客户端带 token（anonymous 不设置），
    * 但 in-process LocalRpcClient 没有凭据，按**第一个** token 的 principal
    * 解析（最小权限，避免退化成 admin）。该值只用于本地 dispatcher，不打印。
    */

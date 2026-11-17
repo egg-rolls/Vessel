@@ -11,12 +11,16 @@
  * | I4 | 两个 head / holes / tainted 可上报；`published_head` 单调 | `heads()` / `publishedHead()` |
  *
  * 不变量 I5（dup-seq 事故之后补上的一条，**归档侧**）：**同一个 `seq` 在 `timeline.ndjson`
- * 里最多出现一次**。归档是 append-only 的副本，重复一次就足以让读侧
- * （`validateTimelineRange` 的「严格递增 / 不得重复」）整段拒绝、「往上加载更早」永久卡住。
+ * 里最多出现一次**。重复一次就违反这条 append-only 副本不变量（归档不再是 `wal.log` 事实行的
+ * 副本）。**当下读路径对重复 seq 免疫**：`readTimelineEvents` 的 `bySeq`、
+ * `timeline-dual-write#readPage` 的 `seen`、serve `selectTimelinePage` 的 `seen` 三处都按
+ * seq 去重。但一旦归档成为唯一读源、或消费者按物理顺序把行喂给 `validateTimelineRange`，
+ * 第 4 条（不得重复）会整段拒收 —— 实测 10 行 vs 声明 5 行 ⇒ `merged=0`、左缘不动、
+ * `hasEarlier` 恒 true。所以这条不变量由闸门而不是读侧容错来守。
  * 实现是四道闸门叠加：进程内只增的 `archiveWatermark`、严格读（读不出来不算空）、
  * 追加前重读归档尾窗、逐条断言 payload（`assertAppendOnlyPayload`），外加 `archive-lock.ts`
- * 把「读水位 → 追加 → 提交 manifest」串行化。损坏的存量数据**不修**，只在打开时报一条 warn
- * （`archive-audit.ts`）。
+ * 把「读水位 → 追加 → 提交 manifest」串行化。损坏的存量数据**不自动修**，只在打开时报一条
+ * warn（`archive-audit.ts`）；人工裁的执行器是 `scripts/timeline-dedup-archive.ts`。
  *
  * 失败语义（ADR-105 §3 I3 补充条款）：
  * - **append 失败** ⇒ 回滚本次写入到写前偏移 → 在 `holes.ndjson` 登记该 seq → `tainted`；
@@ -89,9 +93,9 @@ import type { Logger } from '../types/logging.js';
 import { auditArchiveDuplicates, describeArchiveDuplicates } from './archive-audit.js';
 import { withArchiveLock } from './archive-lock.js';
 import { type ChunkBlockSeal, ChunkBlockStore, isTransientChunkEvent } from './blocks.js';
-import { assertTimelineWritable } from './freeze.js';
 import { HoleRegistry, type HoleRetirementResult } from './holes.js';
 import { loadIndexSnapshot, TimelineIndexBuilder, writeIndexSnapshot } from './index.js';
+import { assertSessionFormatSupported } from './legacy-format.js';
 import {
   BLOCK_MAX_BYTES,
   CHUNK_FLUSH_LEAD_MS,
@@ -149,25 +153,6 @@ export interface TimelineWriterOptions {
   chunkFlushMs?: number;
   /** 测试缝：每次真正 fsync 之前调用；抛错 = 模拟 fsync/写失败。 */
   beforeSync?: (kind: TimelineSyncKind) => void;
-  /**
-   * 显式 adopt：调用方**断言**「这个会话是我自己刚建的，不是 0.53 遗留」。
-   *
-   * 唯一作用是**跳过旧格式冻结闸门**（{@link assertTimelineWritable}）；标记（`timeline.manifest`）
-   * 仍然由写者自己落 —— 所以「谁可以写 timeline 目录」这条纪律不变。
-   *
-   * ## 三条使用边界（违反任何一条都是后门，不是便利）
-   *
-   * 1. **判据不许在调用侧再写一份**：旧格式的定义只有 `freeze.ts` 一份。调用侧能提供的
-   *    额外信息只能是「这个会话在**本进程开始之前**是否存在过」这种时间事实；
-   *    一旦这里出现「有没有 `events.ndjson`」之类的第二套判定，就该判红。
-   * 2. **这个开关不许来自外部输入**：不许做成配置键（`config.timeline.*`）、不许读环境变量、
-   *    不许由 RPC 参数/请求体透传。它只能是装配层**自己算出来的结论**（当前唯一调用点：
-   *    `src/timeline-dual-write.ts`，条件是「core 判旧格式 ∧ 构造时快照说本进程才出现」）。
-   *    否则等于给了一个「客户端指定解冻任意旧会话」的入口。
-   * 3. **默认必须是 false**：不传 ⇒ 闸门照旧（有 `events.ndjson` 且无任何 timeline 标记 ⇒
-   *    `session_frozen_readonly`）。「忘了传」的方向必须是安全的。
-   */
-  adoptLegacyShapedSession?: boolean;
   /** 归档重试耗尽后的通知（ADR-105 §3 I3 ③；不进 timeline 自身）。 */
   onArchiveFailed?: (info: { from_seq: number; to_seq: number; reason: string }) => void;
   /** 测试缝：时刻来源。 */
@@ -483,8 +468,9 @@ export class TimelineWriter {
   /**
    * 打开（或创建）一个会话的写者并恢复状态。
    *
-   * 旧格式会话（有 `events.ndjson`、没有 timeline 标记）抛 `session_frozen_readonly`
-   * （ADR-105 D4：0.54 不做迁移）。
+   * **0.55**：旧格式会话（只有 `events.ndjson`、没有 timeline 标记）不写、不迁移，
+   * 直接抛 `legacy_session_unsupported`（`legacy-format.ts`）。0.54 时代的
+   * `session_frozen_readonly`（只读冻结）随之取消 —— 那套格式已经没有代码能解析。
    */
   static async open(options: TimelineWriterOptions): Promise<TimelineWriter> {
     if (typeof options.sessionId !== 'string' || options.sessionId.length === 0) {
@@ -698,16 +684,11 @@ export class TimelineWriter {
    */
   private async initialize(): Promise<void> {
     await mkdir(this.sessionDir, { recursive: true });
-    // 旧格式会话只读冻结（ADR-105 D4）。判据与错误码在 `freeze.ts` 一处定义：
-    // 索引写回、读器建索引也都走同一个闸门，所以「哪条写路径忘了判」在结构上不成立。
-    //
-    // 唯一的例外是调用方的**显式 adopt 断言**（`adoptLegacyShapedSession`）：装配层在
-    // 「core 判旧格式 ∧ 这个会话是本进程才出现的」时才会传 —— 因为新会话的第一次双写
-    // 发生时 `events.ndjson` 已经写好，形状与 0.53 遗留会话完全一样，只能靠时间分辨。
-    // 标记仍然由下面的 `ensureManifest()` 落（本类之外无人写 timeline 目录）。
-    if (this.options.adoptLegacyShapedSession !== true) {
-      await assertTimelineWritable(this.sessionDir, this.sessionId);
-    }
+    // 旧格式会话（0.54 之前）：**拒绝**，不是「只读」。判据与错误码在 `legacy-format.ts`
+    // 一处定义，索引写回（`writeIndexSnapshot`）走同一个闸门，所以「哪条写路径忘了判」
+    // 在结构上不成立。0.55 删掉 `events.ndjson` 的全部读写之后，这种目录既不能读也不能写，
+    // 唯一的出路是用 0.54 导出（文案里写着）。
+    await assertSessionFormatSupported(this.sessionDir, this.sessionId);
     await this.ensureManifest();
 
     this.holes = await HoleRegistry.open(this.sessionDir, {
@@ -1536,10 +1517,13 @@ export class TimelineWriter {
    *
    * ## 「同一段绝不被抄两次」是这个方法的**首要不变量**（真实事故）
    *
-   * 归档副本是 append-only 的：同一个 seq 出现两次，读侧 `validateTimelineRange` 的
-   * 「严格递增 / 不得重复」就会整段拒绝，用户侧是「往上加载更早」永久卡住
-   * （`merged=0`、`hasEarlier` 恒 true）。所以起点的判定**不许只依赖一次读盘**，也不许
-   * 让任何一个来源把水位往下拉。这里四道闸门，缺一不可：
+   * 归档副本是 append-only 的：同一个 seq 出现两次就违反这条副本不变量（归档不再是
+   * `wal.log` 事实行的副本）。**当下读路径对重复 seq 免疫** —— `readTimelineEvents` 的
+   * `bySeq`、`timeline-dual-write#readPage` 的 `seen`、serve `selectTimelinePage` 的
+   * `seen` 三处都按 seq 去重；但一旦归档成为唯一读源、或消费者按物理顺序把行喂给
+   * `validateTimelineRange`，第 4 条（不得重复）会整段拒收（实测 10 行 vs 声明 5 行 ⇒
+   * `merged=0`、左缘不动、`hasEarlier` 恒 true）。所以起点的判定**不许只依赖一次读盘**，
+   * 也不许让任何一个来源把水位往下拉 —— 不能靠读侧去重兜这条账。这里四道闸门，缺一不可：
    *
    * | # | 闸门 | 挡的是 |
    * | --- | --- | --- |

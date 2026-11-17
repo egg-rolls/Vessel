@@ -3,10 +3,12 @@
  *
  * ## 它是干什么的
  *
- * 旧链路（`SessionEventLog` → `events.ndjson` + `FileTraceRecorder` → `events/<run>.jsonl`）
- * **一个字节都不改**；本模块只在旁边多写一份 timeline（`packages/core/src/timeline/**`，
- * 写入侧已冻结）。读路径、协议、UI 全部照旧 —— 这一阶段只证明「新链路写出来的东西和旧链路
- * 一样」，不切换任何读者。
+ * 会话事件的**唯一持久化出口**（0.54 stop-write 之后 `events.ndjson` 不再被写）：
+ * 本模块把 journal 派发的事实写进 timeline（`packages/core/src/timeline/**`，写入侧已冻结），
+ * 并在该 seq 的 WAL/块 fsync 之后才发布给 UI —— 于是「UI 看见什么」由持久化决定。
+ *
+ * 名字里的「双写」是历史包袱（0.54 A 阶段它确实是一份旁路副本）；保留这个名字是因为
+ * 装配层与文档里都用它指代「timeline 写入/读面的装配对象」，改名的收益抵不上全面换词的成本。
  *
  * ## 四条硬纪律（违反任何一条都应判红，不是「注意一下」）
  *
@@ -17,40 +19,23 @@
  * | 3 | 不改旧链路语义（**开关关**时） | `dual_write: false` ⇒ 本模块不装闸门、不传 `publish`、不碰事件流；开关开时旧链路广播降级为发送缓冲（见下节），落盘与 seq 语义仍逐字节不变 |
  * | 4 | 归档不上 publish 路径、失败只影响空间回收 | 归档（`timeline_head` 推进）走会话级串行队列 fire-and-forget：`record()` 只 `maybeArchive()` 派发，永不 await；失败 ⇒ `timeline_head` 冻结、`wal_head` 照常、**不写洞**、标 `tainted` |
  *
- * ## 旧格式会话只读冻结（0.54 C1 / ADR-105 D4）——本模块的 adopt 边界
+ * ## 旧格式会话（0.54 之前）：0.55 起**不支持**，也不再有 adopt 边界
  *
- * 判据**只有一份**：`packages/core/src/timeline/freeze.ts`（有 `<sid>/events.ndjson`、且
- * `timeline.manifest` / `wal.manifest` / `wal.log` 三者皆无）。本模块只负责回答
- * core 问不出来的那半个问题：**「这个会话是不是本进程刚建的？」**
+ * 判据**只有一份**：`packages/core/src/timeline/legacy-format.ts`（有 `<sid>/events.ndjson`、
+ * 且 `timeline.manifest` / `wal.manifest` / `wal.log` 三者皆无）。含义是「这个目录里只有
+ * 0.54 之前那套文件」——0.55 删掉 `events.ndjson` 的全部读写之后，它既不能读也不能写，
+ * 唯一出路是用 0.54 导出（文案在 core 里写着）。
  *
- * 因为 `RunJournal` 是**先写 events.ndjson、再调 `record()`**（fire-and-forget），所以
- * 「0.53 遗留会话」与「0.54 新会话的第一次双写」在磁盘上**形状完全一样**。分辨要靠两条事实：
+ * 本模块对它的处理只有一句：**写者 `open()` 抛 `legacy_session_unsupported`，把那次错误
+ * 记在 `openErrors` 里**（`appendFact` / `flushSession` 原样抛给调用方，让用户看到的 code 是
+ * 「格式不支持」而不是笼统的「写盘失败」；`record()` 与 run 终态钩子则安静跳过，因为它们
+ * 不该制造噪音）。
  *
- * 1. **快照**：manager 在**构造那一刻**对 `sessionsDir` 做一次快照（哪些会话已经带着日志）；
- * 2. **内容年龄**（0.54 cutover 补的）：旧日志里**第一条记录的 `ts`**（= 这个目录的出生时间）。
- *
- * ```
- * core 说「旧格式」 ∧ 快照说「进程之前就在」                    ⇒ 冻结（不 adopt、一个字节都不写）
- * core 说「旧格式」 ∧ 快照没有 ∧ 日志**第一条** ts < 启动时刻   ⇒ 冻结（事后才出现的旧目录）
- * core 说「旧格式」 ∧ 快照没有 ∧ 日志第一条 ts ≥ 启动时刻       ⇒ adopt（竞态窗口里我们自己写的）
- * core 说「旧格式」 ∧ 快照没有 ∧ 日志里没有完整记录（空/残行）  ⇒ adopt（没有任何事实可保护）
- * 有 timeline 标记                                             ⇒ plain（写者自己会放行）
- * ```
- *
- * ### 为什么必须有第 2 条（0.54 cutover 补的洞）
- *
- * 只看快照的话，**在 gateway 运行中把旧目录拷进来**（恢复备份 / 从别的机器搬一份
- * `sessions/`）会满足「快照没有」⇒ 被 adopt ⇒ 写者跳过冻结闸门并落下 `timeline.manifest`
- * ⇒ 这个旧会话被**解冻**，从此半新半旧。而 0.54 把旧读路径删干净之后，`freeze.ts` 是它
- * **唯一**的保护 —— 这条洞是不可逆事故，所以补。
- *
- * 为什么用「日志**第一条**的 ts」而不是文件 mtime、也不是「最后一条」：拷进来会重写 mtime
- * （Windows `copy` 甚至给当前时间），而内容里的 ts 不会被拷改；而**最后一条**会被"正在写"
- * 刷新（实测：`sessions.compact` 会先把旧日志追加一行再开时间线写者，用末条 ts 就等于拿
- * 「正在写」证明「是我建的」——保护当场失效）。日志开头是追加式写入永不改的部分。
- *
- * 残缺/空日志按「没有事实可保护」处理，正好也是 `RunJournal` 先落盘、`record()` 先到的
- * 那个竞态窗口（判成冻结会让每个新会话偶尔掉双写）。
+ * 0.54 时代那一整套「adopt 判据」——构造时快照 + 旧日志**第一条** `ts` 的两层时间推断，
+ * 以及写者的 `adoptLegacyShapedSession` 断言 —— 已经随 0.54 stop-write **全部删除**：
+ * 新会话根本不产生 `events.ndjson`，于是「旧格式」与「不是本进程生的」已经是同一件事。
+ * 留着它只会多一条把旧目录误当成新会话的路径，而 0.55 里那等于把一个读不出来的目录
+ * 再写坏一遍。
  *
  * ## 发布点：ADR-105 §3 I2 的端到端接线（0.54 B）
  *
@@ -58,8 +43,7 @@
  * 返回之后**调 `publish`。本模块把它接上，于是「UI 能看见什么」由这条链路决定：
  *
  * ```
- * journal.appendFact → 旧链路落盘 events.ndjson
- *                    → 旧链路广播  ………（闸门扣住，见下）
+ * journal.appendFact → journal 广播（闸门扣住，见下）
  *                    → 双写 record() → writer.append() → WAL fsync ✅
  *                                                     → publish(record)
  *                                                     → deliverPublication()
@@ -121,8 +105,8 @@ import type {
   TimelineDualWriteEvent,
 } from '../packages/core/src/index';
 import { encodeSessionDirName, sessionDirPath } from '../packages/core/src/index';
-import { isLegacyFrozenSessionDir, LEGACY_SESSION_LOG } from '../packages/core/src/timeline/freeze';
 import { loadIndexSnapshot } from '../packages/core/src/timeline/index';
+import { assertSessionFormatSupported } from '../packages/core/src/timeline/legacy-format';
 import { TimelineEventLog, toSessionEventRecord } from '../packages/core/src/timeline/read-port';
 import {
   CHUNK_FLUSH_MS,
@@ -297,14 +281,6 @@ export interface TimelineDualWriteStats {
   publishDeduped: number;
   /** 发布通道失败次数（`onPublish` 抛错/拒绝；数据已持久，只记不影响落盘）。 */
   publishFailed: number;
-  /**
-   * 因「旧格式会话只读冻结」而**跳过双写**的会话数（ADR-105 D4 / 0.54 C1）。
-   *
-   * 这不是失败：旧链路照常写、读路径一字节不变，只是新链路不 adopt 这个会话。
-   * 与 `broken_sessions` 分开计数，是因为两者的用户可见后果完全不同：
-   * 「写者坏了」是运行时故障（下一轮可恢复），「冻结」是**不该写**（永远不该）。
-   */
-  frozen_sessions: number;
 }
 
 export interface TimelineDualWriteOptions {
@@ -375,7 +351,7 @@ export interface TimelineDualWrite {
    * 可等待的一次落盘（`SessionEventLogPort.append` 的时间线实现）。
    *
    * journal 之外的直接写者（种子消息 / 通知注入 / 停摆会话的终态事件）用它：它们要
-   * 拿到 seq，或要按「失败就上报」处理。失败**会抛**（`session_frozen_readonly` /
+   * 拿到 seq，或要按「失败就上报」处理。失败**会抛**（`legacy_session_unsupported` /
    * `timeline_write_failed` / `timeline_event_type_excluded`）。
    */
   appendFact(
@@ -879,7 +855,6 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     published: 0,
     publishDeduped: 0,
     publishFailed: 0,
-    frozen_sessions: 0,
   };
 
   /** 发送缓冲闸门（装配层装了才有；不装 ⇒ 每条记录直接走 `onPublish`）。 */
@@ -900,12 +875,20 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
    */
   const publishListeners = new Set<(publication: TimelinePublication) => void>();
   /**
-   * 被判定为「旧格式 ⇒ 只读冻结」的会话（本进程内已裁决过，不再重复判、也不再试写）。
+   * 打不开写者的会话 → 那一次的真实错误（用于把原因原样抛给调用方）。
    *
-   * 命中它的会话：`record()` 一个字节都不写、`flushSession()` 抛 `session_frozen_readonly`、
-   * 生命周期钩子（`endRun`）安静跳过。
+   * 0.55 起这里的头号成因是**旧格式会话**（`legacy_session_unsupported`）：那种目录
+   * 不读、不写、不迁移（`packages/core/src/timeline/legacy-format.ts`）。把具体错误留着，
+   * 是为了让 `appendFact` / `flushSession` 抛出的 code 仍然是**原因**而不是笼统的
+   * `timeline_write_failed` —— 上层按 code 给用户看的是「这个会话是 0.54 之前的格式，
+   * 去用 0.54 导出」，不是「写盘失败」。
    */
-  const frozenSessions = new Set<string>();
+  const openErrors = new Map<string, unknown>();
+
+  /** 这条「打不开写者」的错误是不是「0.55 不支持的旧格式会话」。 */
+  function isLegacyUnsupported(error: unknown): boolean {
+    return error instanceof TimelineError && error.code === 'legacy_session_unsupported';
+  }
 
   /** sessionId → 打开中的 writer（打开失败时 map 里留下 `undefined`，表示已标 broken）。 */
   const writers = new Map<string, Promise<TimelineWriter | undefined>>();
@@ -970,41 +953,25 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   };
 
   /**
-   * 这个会话能不能写：**判据只有一处**（core 的 `freeze.ts#isLegacyFrozenSessionDir`）。
+   * 打开（或复用）一个会话的写者。
    *
-   * ## 0.54 stop-write 让这件事变简单了（写清楚，别再把它加回来）
+   * ## 旧格式会话在这里是什么（0.55 之后别再把它做复杂）
    *
-   * `freeze.ts` 的判据是「有 `events.ndjson` 且没有任何 timeline 标记」。在**双写时代**
-   * 这条判据对新会话也成立（`RunJournal` 先写 `events.ndjson`、`record()` 后到），所以
-   * 装配层不得不另外回答「这个会话是不是本进程刚建的」（构造时快照 + 旧日志首条 `ts`）。
+   * 「有 `events.ndjson` 且没有任何 timeline 标记」= 0.54 之前的格式，0.55 **不读不写
+   * 不迁移**。判据只在 core 一处（`packages/core/src/timeline/legacy-format.ts`），写者
+   * `open()` 会抛 `legacy_session_unsupported`；这里**不复制判据**，只把那次错误留下来
+   * （{@link openErrors}），并在返回 `undefined` 之前把闸门扣住的广播放出去（UI 一条都不少）。
    *
-   * 停写之后**新会话根本不产生 `events.ndjson`**，于是「旧格式」与「不是本进程生的」变成
-   * 同一件事 —— 那两层时间推断（快照 / 出生时间）连同 `adoptLegacyShapedSession` 断言
-   * 一起删掉。多留一天，它就多一天可能把某个旧目录误判成新会话（那是不可逆的解冻）。
+   * 双写时代那层「这个会话是不是本进程刚建的」的时间推断、以及
+   * `adoptLegacyShapedSession` 断言，都已经随 0.54 stop-write 删除 —— 新会话根本不产生
+   * `events.ndjson`，所以「旧格式」与「不是本进程生的」已经是同一件事。
    */
-  async function isFrozen(sessionDir: string): Promise<boolean> {
-    return isLegacyFrozenSessionDir(sessionDir);
-  }
-
   async function writerFor(sessionId: string): Promise<TimelineWriter | undefined> {
     const existing = writers.get(sessionId);
     if (existing !== undefined) return existing;
     const sessionDir = sessionDirOf(options.sessionsDir, sessionId);
     const opening = (async () => {
       try {
-        // 0.54 C1（ADR-105 D4）：旧格式会话**只读冻结** —— 不写一个字节、不抛。
-        if (await isFrozen(sessionDir)) {
-          counters.frozen_sessions += 1;
-          frozenSessions.add(sessionId);
-          warn('timeline write skipped (legacy session is frozen read-only)', {
-            session_id: sessionId,
-            reason: 'legacy_events_ndjson_without_timeline_marker',
-          });
-          // 这个会话不会再有 timeline 发布了 ⇒ 把闸门扣住的广播立刻放出去
-          // （UI 一条都不少）。
-          gate?.releaseSession(sessionId);
-          return undefined;
-        }
         const writer = await openWriter({
           sessionId,
           sessionDir,
@@ -1018,6 +985,7 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
       } catch (error) {
         counters.failed += 1;
         counters.broken_sessions += 1;
+        openErrors.set(sessionId, error);
         warn('timeline dual-write writer open failed (legacy path unaffected)', {
           session_id: sessionId,
           error: errorText(error),
@@ -1143,7 +1111,7 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
    *
    * 与 {@link record} 的差别只有两处，都是调用方要的：
    * - 这里的 Promise 在**该 seq 的 WAL/块 fsync 之后**才 resolve（调用方能拿到 seq）；
-   * - 失败**会抛**（`session_frozen_readonly` / `timeline_write_failed`），由调用方决定
+   * - 失败**会抛**（`legacy_session_unsupported` / `timeline_write_failed`），由调用方决定
    *   「best-effort 吞掉」还是「当成错误上报」。`record()` 那条 fire-and-forget 路径
    *   仍然永抛。
    *
@@ -1174,11 +1142,11 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     }
     const writer = await writerFor(sessionId);
     if (writer === undefined) {
-      // 只有两种成因：旧格式会话（已进 frozenSessions）或写者打不开。
-      const code = frozenSessions.has(sessionId)
-        ? 'session_frozen_readonly'
-        : 'timeline_write_failed';
-      throw new TimelineError(code, `${sessionId} has no writable timeline`);
+      // 原因原样抛出：旧格式会话是 `legacy_session_unsupported`（文案里写着去用 0.54 导出），
+      // 其它是 `timeline_write_failed`。上层按 code 区分「这个会话没法用」与「写盘失败」。
+      const cause = openErrors.get(sessionId);
+      if (cause instanceof TimelineError) throw cause;
+      throw new TimelineError('timeline_write_failed', `${sessionId} has no writable timeline`);
     }
     const record = await writer.append({
       run_id: input.run_id,
@@ -1217,10 +1185,9 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     }
     const writer = await writerFor(sessionId);
     if (writer === undefined) {
-      const code = frozenSessions.has(sessionId)
-        ? 'session_frozen_readonly'
-        : 'timeline_write_failed';
-      throw new TimelineError(code, `${sessionId} has no writable timeline`);
+      const cause = openErrors.get(sessionId);
+      if (cause instanceof TimelineError) throw cause;
+      throw new TimelineError('timeline_write_failed', `${sessionId} has no writable timeline`);
     }
     const records = await writer.appendMany(
       inputs.map((input) => ({
@@ -1240,7 +1207,7 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   async function closeSession(sessionId: string): Promise<void> {
     const pending = writers.get(sessionId);
     writers.delete(sessionId);
-    frozenSessions.delete(sessionId);
+    openErrors.delete(sessionId);
     if (pending === undefined) return;
     try {
       const writer = await pending;
@@ -1324,16 +1291,13 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
   async function flushSession(sessionId: string): Promise<void> {
     // 先等派出去的那几条真正 `writer.append()`（否则 flush 会「什么也没刷」）。
     await drainInflight();
-    // 旧格式会话（ADR-105 D4）：这里**明确拒绝**而不是「悄悄没有 writer」。
-    // 理由：静默返回会让调用方以为「刷完了」，而真相是「这个会话永远不会有 timeline」；
-    // 冻结状态必须能被上层稳定识别成 `session_frozen_readonly`（与写者、索引重建同一个码）。
-    if (frozenSessions.has(sessionId)) {
-      // 文案里不复述文件名（旧链路那次写只属于 core）：用 core 的常量拼，
-      // 免得同一句话在装配层变成第二份「文件名口径」。
-      throw new TimelineError(
-        'session_frozen_readonly',
-        `${sessionId} has legacy ${LEGACY_SESSION_LOG} and no timeline marker`,
-      );
+    // 旧格式会话：这里**明确拒绝**而不是「悄悄没有 writer」。静默返回会让调用方以为
+    // 「刷完了」，而真相是「这个会话 0.55 根本不读也不写」。错误码与文案都由 core 给
+    // （`legacy_session_unsupported` + 「用 0.54 导出」），装配层不再复述文件名，
+    // 免得同一句话在两处漂开。
+    const failure = openErrors.get(sessionId);
+    if (failure instanceof TimelineError && failure.code === 'legacy_session_unsupported') {
+      throw failure;
     }
     const pending = writers.get(sessionId);
     if (pending === undefined) return;
@@ -1539,9 +1503,10 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     const key = `${sessionId}\u0000${runId}`;
     if (finishedRuns.has(key)) return;
     finishedRuns.add(key);
-    // 旧格式会话：没有 timeline 可 flush/归档。生命周期钩子**安静跳过**
-    // （不记失败、不制造噪音）—— 冻结不是故障，是「这个会话不该有 timeline」。
-    if (frozenSessions.has(sessionId)) return;
+    // 旧格式会话（0.55 不支持）：没有 timeline 可 flush/归档。生命周期钩子**安静跳过**
+    // （不记失败、不制造噪音）—— 这不是故障，是「这个会话 0.55 不读也不写」。
+    // 判据用「打开时留下的是不是那个错误」，不另写一份目录判定。
+    if (isLegacyUnsupported(openErrors.get(sessionId))) return;
     await flushSession(sessionId);
     // run 终态（journal.close / endRun）触发一次归档：不 await（fire-and-forget），
     // 归档失败只影响空间回收 —— run 结果与旧链路都不看它。
@@ -1645,12 +1610,21 @@ export function createTimelineDualWrite(options: TimelineDualWriteOptions): Time
     }
     try {
       const onDisk = await readHeadsOnDisk(sessionDirOf(options.sessionsDir, sessionId));
-      if (onDisk === undefined) return undefined;
+      if (onDisk === undefined) {
+        // 0.55：**旧格式会话必须报错，不能当成空会话**。
+        // 走 `readHeadsOnDisk` 的「没有标记」分支时，先问一句「这是不是 0.54 之前的目录」：
+        // 是 ⇒ 抛 `legacy_session_unsupported`（`events.subscribe` / `sessions.get` 会把
+        // 这条 code 原样交给用户）；不是 ⇒ 真的还没有任何事件，返回 `undefined`（空段）。
+        await assertSessionFormatSupported(sessionDirOf(options.sessionsDir, sessionId), sessionId);
+        return undefined;
+      }
       // 纯磁盘口径：没有进程内写入者 ⇒ 写者 open 时已把 `published` 折成 `wal_head`
       // （`writer.ts:486`），两者必然相等。这里**明确给值**，不留 `undefined` 让上层兜底
       // 假装是「未发布」。
       return { ...onDisk, published_head: onDisk.wal_head };
-    } catch {
+    } catch (error) {
+      // 旧格式错误必须冒泡（其余读取失败仍按「没有时间线读面」降级）。
+      if (isLegacyUnsupported(error)) throw error;
       return undefined;
     }
   }

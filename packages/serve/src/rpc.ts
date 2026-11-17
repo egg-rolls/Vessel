@@ -39,13 +39,14 @@ export type RpcErrorCode =
   // 客户端按「稍后重试」处理，不要当终态错误展示。
   | 'gateway_restarting'
   // 0.54 B1（ADR-105 §6 / D4）：时间线订阅的两个稳定码。
-  // - `session_frozen_readonly`：旧格式会话**写**保护（与 core 写者同名同义，
-  //   `packages/core/src/timeline/types.ts`）。0.54 C 起**不是**读分支：订阅遇到"没有
-  //   时间线标记"给空段（新会话也是这个形状），`timeline.read_from` 开关已删除。
+  // - `legacy_session_unsupported`：**0.54 之前的旧格式会话**（只有 `events.ndjson`、
+  //   没有 timeline 标记）。0.55 起「只读冻结」不再是中间态：这种目录读、写、迁移全不支持，
+  //   读面必须报这个码（给空段 = 把「没人能解析」说成「没有事件」）。与 core 写者同名同义
+  //   （`packages/core/src/timeline/types.ts`）。
   // - `timeline_unavailable`：装配层没开 timeline 读面（端口缺失）。与上一条分开：
   //   「服务端没开这个能力」不是「这个会话坏了」，混成一个码会误导排障。
   // 两条与根 `src/rpc/types.ts` 逐字同步（main 已补），所以这里可以直接抛。
-  | 'session_frozen_readonly'
+  | 'legacy_session_unsupported'
   | 'timeline_unavailable';
 
 /** 方法权限（manifest 同名字段） */
@@ -464,6 +465,11 @@ function mapExternalErrorCode(code: unknown): RpcErrorCode | null {
     case 'not_supported':
     case 'expired':
     case 'run_ended':
+    // 0.55：core 的读口为旧格式会话抛的是 `TimelineError`（不是 RpcError），
+    // 这里按冻结的错误码放行，让它以 `legacy_session_unsupported` 抵达客户端
+    // （否则会被折成 `internal`，用户拿不到「用 0.54 导出」那句修复提示）。
+    case 'legacy_session_unsupported':
+    case 'timeline_unavailable':
       return code;
     default:
       return null;

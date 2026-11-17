@@ -4,7 +4,7 @@
  *   <data_dir>/
  *     sessions/<session_id>.json
  *     sessions/<session_id>/index.json      (0.18 会话元数据)
- *     sessions/<session_id>/events.ndjson   (0.18 会话事件日志，唯一真相源)
+ *     sessions/<session_id>/wal.log …       (0.54 起会话事件只落时间线，见 timeline/types.ts)
  *     runs/<run_id>.json
  *     events/<run_id>.jsonl
  *     tenant.json
@@ -69,16 +69,12 @@ export function encodeSessionDirName(sessionId: string): string {
 /**
  * 会话目录（0.18，additive）：`<sessions_dir>/<encodeURIComponent(session_id)>/`。
  *
- * 与旧版 `<sessions_dir>/<session_id>.json` 并存；目录只放 `index.json` 与
- * `events.ndjson`，不改变已有 `TenantPaths` 字段语义。
+ * 与旧版 `<sessions_dir>/<session_id>.json` 并存；目录里放 `index.json` 与时间线文件
+ * （`wal.log` / `wal.blocks/` / `timeline.ndjson` / `timeline.manifest` …，见
+ * `timeline/types.ts` 的 `TIMELINE_LAYOUT`）。0.55 起这里**不再有** `events.ndjson`。
  */
 export function sessionDirPath(sessionsDir: string, sessionId: string): string {
   return join(sessionsDir, encodeSessionDirName(sessionId));
-}
-
-/** 会话事件日志文件：`<sessions_dir>/<session_id>/events.ndjson` */
-export function sessionEventsFilePath(sessionsDir: string, sessionId: string): string {
-  return join(sessionDirPath(sessionsDir, sessionId), 'events.ndjson');
 }
 
 /** 会话元数据文件：`<sessions_dir>/<session_id>/index.json` */

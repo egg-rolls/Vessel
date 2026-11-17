@@ -296,6 +296,8 @@ export const zhCN = {
     'Web 控制台静态资源缺失：{path}。新克隆的仓库必须先构建一次：`bun run build:web`（= `cd apps/web && bun run build`）；或把 VESSEL_STATIC_DIR 指向已有产物，然后重新 start。',
   'gateway.webDistStale':
     'Web 控制台产物可能已过期：{index} 旧于 {source}。构建：`cd apps/web && npm run build`。',
+  'gateway.webDistStaleLine':
+    'Web 控制台产物落后于源码：{index} 旧于 {source}。修复：跑 `bun run build:web`；或重启 gateway（启动时会自动重建）。',
   'gateway.webDistBuilding': 'Web 控制台产物缺失或已过期，正在后台构建（{path}）……',
   'gateway.webDistBuilt': 'Web 控制台产物已重建。',
   'gateway.webDistBuildFailed': 'Web 控制台产物构建失败：{detail}',
@@ -497,9 +499,6 @@ export const zhCN = {
   // ── prune（0.51；判据是状态，不是时间）──
   'help.cmd.prune':
     '数据清理：已归档 team / 已停用 agent 及其会话与记录（缺省 dry-run，需 --yes 才删）',
-  // ── session migrate（0.54 C2：旧格式一次性迁移到时间线单源）──
-  'help.cmd.sessionMigrate':
-    '把旧格式会话（只有 events.ndjson）一次性迁移到时间线单源；单向、可重入，源文件保留不删',
   'flag.olderThan':
     '可选叠加：只清归档 / 停用时刻早于该值的对象（如 30d / 12h；裸数字按天；不传就不看时间）',
   'prune.head.dryRun': 'dry-run：未删除任何内容（确认后加 --yes 重试）',

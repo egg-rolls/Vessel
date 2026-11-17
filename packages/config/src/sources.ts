@@ -35,7 +35,7 @@ const SENSITIVE_SOURCE_LEAF = /(?:^|\.)(?:apiKey|token)$/;
 /**
  * 脱敏来源映射（DECISION-020 §R1.1）。
  *
- * - `serve.tokens.<token>.*`：token 段替换为 `<set>`（多个 token 依次 `<set#2>`），
+ * - `node.tokens.<token>.*`：token 段替换为 `<set>`（多个 token 依次 `<set#2>`），
  *   且整条来源值替换为 `<set>`；
  * - `*.apiKey` / `*.token`：来源值替换为 `<set>`；
  * - 其它路径原样返回。
@@ -50,7 +50,7 @@ export function redactSourcePaths(
 
   for (const [path, source] of Object.entries(sources)) {
     const segments = path.split('.');
-    const isServeTokens = segments[0] === 'serve' && segments[1] === 'tokens';
+    const isServeTokens = segments[0] === 'node' && segments[1] === 'tokens';
     let redactedPath = path;
 
     if (isServeTokens && segments.length >= 3) {

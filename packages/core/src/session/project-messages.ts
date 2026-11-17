@@ -94,6 +94,11 @@ function asRefs(value: unknown): MessageRef[] | undefined {
     const path = readString(entry.path);
     if (path === undefined || path.length === 0 || path.length > MESSAGE_REF_PATH_MAX) continue;
     const ref: MessageRef = { kind: kind as MessageRefKind, path };
+    // 0.56：内容地址必须活过重放（与 `packages/agent/src/refs.ts` 同一口径）。
+    // 丢在投影里 = 恢复后 refs 没有 sha256 ⇒ 图不内联（`not_ingested`）+ GC 把还在用的
+    // blob 当孤儿删掉（design §10 风险 3 的「最阴的一类 bug」）。
+    const sha256 = readString(entry.sha256);
+    if (sha256 !== undefined && /^[0-9a-f]{64}$/.test(sha256)) ref.sha256 = sha256;
     const name = readString(entry.name);
     if (name !== undefined) ref.name = name;
     const mime = readString(entry.mime);

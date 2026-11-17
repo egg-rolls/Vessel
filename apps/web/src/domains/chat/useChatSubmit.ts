@@ -17,6 +17,7 @@ import type { SessionLoadOptions } from '../../stores/sessionStore';
 import { ATTACH_PATH_MAX } from './attach-paths';
 import { errorMessage } from './errors';
 import { type StartInNewAgentResult, startInNewAgent } from './new-session';
+import { pendingSends } from './pending-sends';
 import { refsErrorText } from './refs-error';
 
 /** 两组引用是否同序同内容（只有 `path` / `kind` 参与比较，展示值不参与）。 */
@@ -107,6 +108,7 @@ export function useChatSubmit({
     raw: string,
     sessionIdOverride?: string,
     refsOverride?: readonly MessageRef[],
+    pendingId?: string,
   ): Promise<boolean> => {
     const text = raw.trim();
     if (!text || submitting || !connected) return false;
@@ -125,6 +127,20 @@ export function useChatSubmit({
     // 受理即贴底：不等 runs.start 往返、也不等新内容落地（排队 / held 同样贴底）。
     // 受理后的失败只会留下「已在底部」这个无害状态，不需要回滚。
     setSendTick((value) => value + 1);
+    // 0.56 乐观渲染：**点击的这一帧**就把灰态气泡画出来。
+    //
+    // 在此之前 chat 只有「等服务端回显」一条路，而回显排在 body spawn 与
+    // `loadStoredHistory` 之后 —— 重启后那两段加起来是秒级到几十秒，用户看到的就是
+    // 「输入框清空了、消息列表里什么都没有」。这条 pending 与 `runs.start` **同时**发出，
+    // 不等它返回；返回后再把 `run_id` 挂上来（回显的首选合并键，见 pending-sends.ts）。
+    //
+    // 重试走 `pendingId`：复用同一个 id，不新开第二条气泡（`reuseId`）。
+    const pendingKey = pendingSends.create({
+      sessionId: targetSessionId ?? null,
+      text,
+      ...(submitRefs !== undefined ? { refs: submitRefs } : {}),
+      ...(pendingId !== undefined ? { reuseId: pendingId } : {}),
+    });
     try {
       let nextSessionId: string | undefined;
       let run: StartInNewAgentResult['run'];
@@ -149,6 +165,11 @@ export function useChatSubmit({
         // 契约要求 runs.start 回填 session_id；缺失时停下，不本地兜底。
         throw new Error('runs.start returned no session_id');
       }
+      // 灰气泡的归属与合并键：草稿态到这里才知道 session id；run id 是首选合并键
+      // （正文会被 guardrail 改写，不能当身份）。queued 的 run 前面还有一整轮在跑，
+      // 回显本来就该晚 —— store 不让它参与 15 s 超时判定。
+      pendingSends.attachSession(pendingKey, nextSessionId);
+      pendingSends.attachRun(pendingKey, run.run_id, run.status);
       // 新会话可能尚未落盘：标记后 detail 404 可容忍（会话出现在列表即失效）。
       if (!targetSessionId) pendingNewSessions.current.add(nextSessionId);
       // 只在源草稿仍是被提交的文本时清空：重试不应吞掉用户新写的草稿。
@@ -176,6 +197,9 @@ export function useChatSubmit({
       // 界面上既没有回复、输入框也空了 —— 草稿其实还在 store 里，但用户看不到就以为是丢了。
       // 这里只在「输入框是空的」时把它填回去，绝不覆盖用户在等待期间新写的内容。
       writeDraft(sourceKey, (current) => (current.trim() === '' ? text : current));
+      // 灰气泡转失败态：**留在原位**（带重试 / 删除），不倒回「什么都没发生」——
+      // 用户刚看到它出现，它就不能自己消失。
+      pendingSends.markFailed(pendingKey, refsRejection ?? errorMessage(error));
       return false;
     } finally {
       setSubmitting(false);
@@ -226,6 +250,28 @@ export function useChatSubmit({
     await submitText(text, sessionId);
   };
 
+  /**
+   * 重试一条**未发送**的本地气泡（0.56 乐观渲染）：复用同一个 pending id。
+   *
+   * 为什么不是「再开一条 pending」：气泡是「那一句话」的替身，不是一次发送尝试的替身。
+   * 重试要让它原地回到 `sending`（`usePendingSends` 已经先复位了状态），而不是在旁边
+   * 再长出一条 —— 否则一次断网连点三次会出现三个一模一样的灰气泡。
+   */
+  const handleRetryPending = async (pending: {
+    id: string;
+    text: string;
+    sessionId: string | null;
+    refs?: readonly MessageRef[];
+  }) => {
+    // 断线时不要留下一个「看起来在飞、其实什么都没发」的灰气泡：`submitText` 在
+    // `!connected` 时直接早退（不抛错），所以这里自己把它钉成失败态（仍可再重试）。
+    if (!connected) {
+      pendingSends.markFailed(pending.id, t('chat.pendingSend.offline'));
+      return;
+    }
+    await submitText(pending.text, pending.sessionId ?? undefined, pending.refs, pending.id);
+  };
+
   // 引用保持稳定：memo(RunItems) 依赖这几个回调，避免每个 token 让全部实时项重渲染。
   const handleCancel = useCallback(
     async (group: { runId: string }) => {
@@ -270,6 +316,8 @@ export function useChatSubmit({
     cancelledJobs,
     handleSend,
     handleRetry,
+    /** 重试一条未发送的本地气泡（同一条 pending，不新开）。 */
+    handleRetryPending,
     handleCancel,
   };
 }

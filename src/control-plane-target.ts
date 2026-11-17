@@ -169,10 +169,10 @@ export async function resolveControlPlaneTarget(
 
   async function localTarget(instance: string, record: GatewayPidRecord) {
     const token = resolveGatewayToken(config, env) ?? '';
-    const tls = config.serve?.tls !== undefined;
+    const tls = config.node?.tls !== undefined;
     const baseUrl = gatewayBaseUrl(record, tls);
     const ca = tls
-      ? await readCa(nonEmpty(config.connect?.caFile) ?? nonEmpty(config.serve?.tls?.certFile))
+      ? await readCa(nonEmpty(config.connect?.caFile) ?? nonEmpty(config.node?.tls?.certFile))
       : undefined;
     const client: RpcClient & { close(): Promise<void> } = createHttpRpcClient({
       baseUrl,

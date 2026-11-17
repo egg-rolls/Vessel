@@ -9,6 +9,7 @@ import type { Plugin, PluginHost } from '@vessel-agent/core';
 import { OpenAICompatibleProvider } from '@vessel-agent/core';
 import { type RetryEvent, type RetryOptions, resolveRetryOptions, withRetry } from './retry.js';
 import { withTimeout } from './timeout.js';
+import { createOpenAiCompatVision } from './vision.js';
 
 /** E1：插件级配置（core Plugin 类型尚未声明第二参数时的窄类型） */
 export interface ProviderPluginOptions {
@@ -67,7 +68,11 @@ const plugin: Plugin = {
         const onRetry = readRetryHook(c);
         if (onRetry) retryOptions.onRetry = onRetry;
         // timeout 在外层：总时限覆盖全部重试与退避
-        return withTimeout(withRetry(provider, retryOptions), readTimeoutMs(c));
+        const wrapped = withTimeout(withRetry(provider, retryOptions), readTimeoutMs(c));
+        // 0.56：视觉能力挂在**实例**上（不是「模型名 → 能力」表）。所有 OpenAI 兼容端点
+        // （含 ollama / 公司内网 vLLM）共用同一个描述符 —— 加一个新视觉模型 = 加配置，0 行代码。
+        // 包一层 `vision` 赋值而不是改包装器签名：包装器只包 `chat`，能力是实例事实。
+        return Object.assign(wrapped, { vision: createOpenAiCompatVision() });
       });
     }
   },
