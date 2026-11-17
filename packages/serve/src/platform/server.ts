@@ -764,7 +764,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
           { mutating: false, localDirect: edge.localDirect },
           extra,
         );
-        if (!proxyGate.ok) return proxyGate.response;
+        if (!isUpgrade && !proxyGate.ok) return proxyGate.response;
         if (isUpgrade) {
           if (req.method !== 'GET') {
             return errorJson('method_not_allowed', 'WebSocket upgrade must be GET', 405, {
@@ -772,9 +772,18 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
               Allow: 'GET',
             });
           }
-          // 升级时已通过平台鉴权（Bearer / 会话 cookie / 回环）⇒ 不必等首帧 token。
+          // 没有 cookie 也能升级的**唯一**情形：这个部署配了平台 token。
+          //
+          // 为什么必须留这条路：浏览器 WS 握手带不了 `Authorization` 头。远端用户
+          // （没有 OAuth 会话、只有 `gateway.token`）在代理模式下全靠首帧
+          // `{kind:'auth',token}` 证明身份 —— 直接 401 的话「HTTP 能用、WS 连不上」。
+          // 代价有界：连接仍受 wsMaxConnections 限制，且首帧鉴权窗口 wsHandshakeTimeoutMs
+          // （10s）内不通过就 4401 关闭。
+          const deferredAuth = typeof platformToken === 'string' && platformToken !== '';
+          if (!proxyGate.ok && !deferredAuth) return proxyGate.response;
           const upgrade = proxy.upgrade(route, url, {
-            preAuthenticated: true,
+            // 已在升级时通过平台鉴权（Bearer / 会话 cookie / 回环）⇒ 不必等首帧 token。
+            preAuthenticated: proxyGate.ok,
             verifyPlatformToken,
           });
           if (!upgrade.ok) {
