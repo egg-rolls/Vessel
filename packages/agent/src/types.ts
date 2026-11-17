@@ -1413,6 +1413,19 @@ export interface AgentServiceOptions {
    * 只在有 `dataDir` 时可生效。
    */
   inboxMaxMessages?: number;
+  /**
+   * 附件**入池**（0.56 决策 2：上传即落 blob）。
+   *
+   * 调用时机 = 引用到达节点的第一刻（`admit` 里 `normalizeRefs` 之后、任何落盘之前）：
+   * 算 sha256、落 `<dataDir>/blobs/sha256/xx/<sha256>`、把 sha256 回填进引用。
+   * 之后请求期只按 sha256 读 blob —— 于是「同一张图第二次请求是同一串字节」是构造性
+   * 成立的（读的不是用户随时能改的文件）。
+   *
+   * 为什么由装配层注入：读文件前要过**路径边界**（`allowed_roots` / `deny_paths`），
+   * 那是 basic-tools 的口径，agent 包不认识配置。缺省（没注入）= 不入池：图不内联
+   * （`not_ingested`），但不报错 —— fail-closed 且**不静默**。
+   */
+  attachIngest?: (refs: readonly MessageRef[]) => Promise<MessageRef[]>;
   /** 两级租约服务（Stage 3）；缺省无锁（纯内存测试） */
   leaseService?: LeaseServicePort;
   /**
