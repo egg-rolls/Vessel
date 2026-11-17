@@ -1774,6 +1774,32 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.platform.noNodes': 'The platform gateway returned no nodes.',
   'gateway.platform.credentialsUnavailable':
     'Node credentials are unavailable; enter a node token manually.',
+  // 0.56: WebUI sign-in with GitHub (single user).
+  'auth.login.title': 'Sign in to Vessel',
+  'auth.login.subtitle':
+    'Sign in with GitHub to use this WebUI (single-user deployment: only the configured account is allowed).',
+  'auth.login.redirectHint':
+    'The GitHub OAuth App callback URL must be exactly: {uri} (no trailing slash).',
+  'auth.signedInAs': 'Signed in as {user}',
+  'auth.signedInAsTitle': 'Current session identity: {user}',
+  'auth.logout': 'Sign out',
+  'auth.sessionRequired': 'Session expired or missing: sign in with GitHub again.',
+  'auth.csrfRejected':
+    'The request had no valid CSRF token (another tab may have rotated it): reload and retry.',
+  'auth.error.state_invalid':
+    'Login state rejected (mismatched, expired or already used): sign in again.',
+  'auth.error.code_missing': 'GitHub returned no authorization code: sign in again.',
+  'auth.error.secret_missing':
+    'The server could not read the client secret env var VESSEL_GITHUB_OAUTH_SECRET: ask the operator to set it.',
+  'auth.error.token_exchange_failed':
+    'Exchanging the code for an access token failed: sign in again.',
+  'auth.error.user_fetch_failed': 'Reading the GitHub user failed: sign in again.',
+  'auth.error.not_allowlisted':
+    'This GitHub account is not on the allowlist (this deployment only allows a specific numeric user id).',
+  'auth.error.public_origin_missing':
+    'The server has no auth.publicOrigin configured; sign-in cannot start.',
+  'auth.error.backend_not_configured': 'The server has no GitHub login backend enabled.',
+  'auth.error.unknown': 'Sign-in failed: please retry.',
   'gateway.client.timeout': 'Timed out connecting to the gateway',
   'gateway.client.tokenRequired': 'The token cannot be empty',
   'gateway.client.tokenRequiredHttp': 'Missing gateway token',

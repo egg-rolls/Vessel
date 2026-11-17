@@ -6,6 +6,8 @@
  * @module @vessel-agent/serve/platform/types
  */
 
+import type { AuthSettings } from '../auth/routes.js';
+
 /** 平台侧注入的 node 描述；G3 起一个平台可注入多个本地 node。 */
 export interface PlatformNodeDescriptor {
   nodeId: string;
@@ -35,6 +37,22 @@ export interface PlatformNodeSummary {
   status: PlatformNodeStatus;
   last_seen?: number;
   version?: string;
+}
+
+/**
+ * 0.56：WebUI 登录（`auth.backends`）的运行参数。
+ *
+ * 缺省（不传 `PlatformGatewayOptions.auth`）= 完全禁用：没有任何登录后端，
+ * 回环匿名照旧，`/auth/status` 报 `authEnabled:false`，前端不出现登录入口。
+ */
+export interface PlatformAuthOptions extends AuthSettings {
+  /**
+   * 受信代理地址（精确地址或 `10.0.` 前缀）。缺省 = 只信回环 socket。
+   * 反代的 `Host` / `X-Forwarded-Proto` 只在这里列出的来源上才被采信。
+   */
+  trustedProxies?: string[];
+  /** client_secret 等环境变量解析来源；缺省 `process.env`。 */
+  env?: Record<string, string | undefined>;
 }
 
 /** 组合根解析后注入 Platform Gateway 的全部运行参数。 */
@@ -74,6 +92,8 @@ export interface PlatformGatewayOptions {
    */
   resolveNodeCredential: (nodeId?: string) => PlatformNodeCredential;
   version?: string;
+  /** 0.56：WebUI 登录；缺省 = 不启用（行为与 0.55 一致）。 */
+  auth?: PlatformAuthOptions | undefined;
 }
 
 /** 已启动的平台监听。 */

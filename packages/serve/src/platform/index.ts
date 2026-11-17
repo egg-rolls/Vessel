@@ -32,6 +32,7 @@ export {
 } from './rpc.js';
 export { startPlatformGateway } from './server.js';
 export type {
+  PlatformAuthOptions,
   PlatformGateway,
   PlatformGatewayOptions,
   PlatformNodeDescriptor,

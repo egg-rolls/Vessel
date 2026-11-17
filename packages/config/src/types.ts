@@ -450,6 +450,54 @@ export interface GatewayConfig {
  * 只写 `serve:` → 仍然生效，但启动与 `doctor` 都会提示改成 `node:`（0.57 移除）。
  */
 export type NodeConfig = ServeConfig;
+/** 0.56：一个登录后端（目前只有 github_oauth）。 */
+export interface AuthBackendConfig {
+  /** 后端种类；0.56 P0 只实现 github_oauth。 */
+  kind?: 'github_oauth';
+  /** GitHub OAuth App 的 client id（非密钥）。 */
+  clientId?: string;
+  /**
+   * client_secret 的**环境变量名**（不是值）。密钥永不进配置、日志、错误文案。
+   * 约定：VESSEL_GITHUB_OAUTH_SECRET。
+   */
+  clientSecretEnv?: string;
+  /** 单用户白名单：GitHub **数值 user id**（数字或十进制字符串）。 */
+  allowUserIds?: Array<number | string>;
+  /** 登录按钮文案；缺省「用 GitHub 登录」。 */
+  label?: string;
+}
+
+/** 0.56：WebUI 登录（`auth` 块）。未配置 = 不启用，行为与 0.55 一致。 */
+export interface AuthConfig {
+  /** 显式开关；false = 忽略 backends，退回今天的行为。 */
+  enabled?: boolean;
+  /**
+   * 公网 origin（如 `https://egg-rolls.top`），`redirect_uri` 的唯一来源。
+   * 只接受 scheme://host[:port]，不许带路径/查询/凭据。
+   */
+  publicOrigin?: string;
+  /** 额外允许的 Host（反代保留原始 Host 但域名与 publicOrigin 不同时用）。 */
+  allowedHosts?: string[];
+  /**
+   * 受信代理地址（精确地址或 `10.0.` 前缀）；缺省只信回环 socket。
+   * 只有来自这些地址的请求，其 Host / X-Forwarded-Proto 才被采信。
+   */
+  trustedProxies?: string[];
+  /** 登录后端列表。 */
+  backends?: AuthBackendConfig[];
+  /** 会话生命周期与落盘。 */
+  session?: AuthSessionConfig;
+}
+
+/** 0.56：会话基座的可配置项。 */
+export interface AuthSessionConfig {
+  /** 空闲超时（分钟，滑动）；缺省 30。 */
+  idleMinutes?: number;
+  /** 绝对超时（小时）；缺省 12。 */
+  absoluteHours?: number;
+  /** 会话摘要是否落盘（只存 sha256，重启后仍需重新登录才会换 id）；缺省 true。 */
+  persist?: boolean;
+}
 
 /** Transport 配置（0.2；0.22.1 只剩 in-process） */
 export interface TransportConfig {
@@ -829,6 +877,8 @@ export interface VesselConfig {
   teams?: TeamConfigInput[];
   /** S7：跨节点 team ↔ team；全局配置，tenant overlay 不允许 */
   federation?: FederationConfig;
+  /** 0.56：WebUI 登录（GitHub OAuth，单用户） */
+  auth?: AuthConfig;
 }
 
 /** 配置加载选项 */

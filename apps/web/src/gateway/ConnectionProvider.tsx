@@ -55,6 +55,9 @@ function normalizeNodeOrigin(raw: string): string {
 }
 
 function platformErrorMessage(error: PlatformRpcError): string {
+  // 0.56: 会话缺失/过期或被 CSRF 拒 → 回登录页，不要提示「填 token」。
+  if (error.code === 'session_required') return t('auth.sessionRequired');
+  if (error.code === 'csrf_failed') return t('auth.csrfRejected');
   if (error.status === 401 || error.code === 'platform_unauthorized') {
     return t('gateway.platform.tokenRequired');
   }

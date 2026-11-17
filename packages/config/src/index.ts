@@ -7,6 +7,12 @@
  */
 
 export {
+  type ResolvedAuthBackend,
+  type ResolvedAuthSession,
+  type ResolvedAuthSettings,
+  resolveAuthSettings,
+} from './auth.js';
+export {
   DEFAULT_CONFIG,
   DEFAULT_DATA_DIR,
   DEFAULT_DURABLE_OPTIONS,
@@ -107,6 +113,7 @@ export {
   KNOWN_CONFIG_KEYS,
   type RemovedTenantConfigKey,
   type UnknownNestedKey,
+  validateAuthSettings,
   validateConfig,
   validateHubSettings,
   validateServeSettings,

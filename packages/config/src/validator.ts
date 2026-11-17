@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import { validateTeamPolicy } from './team-policy.js';
 import type {
   AttentionConfig,
+  AuthConfig,
   ConfigValidationError,
   ConfigValidationResult,
   ConfigValidationWarning,
@@ -1270,6 +1271,204 @@ function validateGatewaySettings(
           });
         }
       });
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * 校验 `auth` 块（0.56 WebUI 登录）。
+ *
+ * 只校验形状与「配置是否自洽」；密钥（client_secret）永远不在这里出现 ——
+ * 配置里只有**环境变量名**，校验的是名字的形状。
+ */
+function publicOriginError(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim() === '') return 'must be a non-empty string';
+  const trimmed = value.trim();
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return 'must be an absolute URL like https://egg-rolls.top';
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'must use http or https';
+  if (url.username !== '' || url.password !== '') return 'must not carry credentials';
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+    return 'must be scheme://host[:port] only (no path, query or fragment)';
+  }
+  return null;
+}
+
+const AUTH_BACKEND_KINDS = ['github_oauth'] as const;
+
+export function validateAuthSettings(
+  auth: AuthConfig,
+  errors: ConfigValidationError[] = [],
+  warnings: ConfigValidationWarning[] = [],
+): ConfigValidationError[] {
+  const raw = auth as Record<string, unknown>;
+
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    errors.push({ path: 'auth.enabled', message: 'auth.enabled must be a boolean' });
+  }
+
+  if (raw.publicOrigin !== undefined) {
+    const message = publicOriginError(raw.publicOrigin);
+    if (message !== null) {
+      errors.push({
+        path: 'auth.publicOrigin',
+        message: `auth.publicOrigin ${message}`,
+        value: raw.publicOrigin,
+      });
+    } else if (
+      typeof raw.publicOrigin === 'string' &&
+      raw.publicOrigin.trim().startsWith('http://')
+    ) {
+      const host = new URL(raw.publicOrigin.trim()).hostname;
+      if (host !== '127.0.0.1' && host !== 'localhost' && host !== '[::1]') {
+        warnings.push({
+          path: 'auth.publicOrigin',
+          message:
+            'auth.publicOrigin uses http on a non-loopback host: session cookies will not be ' +
+            'Secure. Use https:// for a public deployment.',
+        });
+      }
+    }
+  }
+
+  const validateHostList = (path: string, value: unknown): void => {
+    if (value === undefined) return;
+    if (!Array.isArray(value)) {
+      errors.push({ path, message: `${path} must be an array of hosts` });
+      return;
+    }
+    value.forEach((entry, index) => {
+      const ok = typeof entry === 'string' && entry.trim() !== '' && !/\s/.test(entry);
+      if (!ok || (typeof entry === 'string' && entry.includes('://'))) {
+        errors.push({
+          path: `${path}[${index}]`,
+          message: `${path}[${index}] must be a bare host[:port] (no scheme)`,
+          value: entry,
+        });
+      }
+    });
+  };
+
+  validateHostList('auth.allowedHosts', raw.allowedHosts);
+  validateHostList('auth.trustedProxies', raw.trustedProxies);
+
+  if (raw.backends !== undefined) {
+    if (!Array.isArray(raw.backends)) {
+      errors.push({ path: 'auth.backends', message: 'auth.backends must be an array' });
+    } else {
+      raw.backends.forEach((entry, index) => {
+        const prefix = `auth.backends[${index}]`;
+        if (!isPlainObject(entry)) {
+          errors.push({ path: prefix, message: `${prefix} must be an object` });
+          return;
+        }
+        const kind = entry.kind;
+        if (kind !== undefined && !AUTH_BACKEND_KINDS.includes(kind as 'github_oauth')) {
+          errors.push({
+            path: `${prefix}.kind`,
+            message: `${prefix}.kind must be one of: ${AUTH_BACKEND_KINDS.join(', ')}`,
+            value: kind,
+          });
+        }
+        if (!isNonEmptyStringValue(entry.clientId)) {
+          errors.push({
+            path: `${prefix}.clientId`,
+            message: `${prefix}.clientId must be a non-empty string (GitHub OAuth App client id)`,
+          });
+        }
+        validateEnvName(`${prefix}.clientSecretEnv`, entry.clientSecretEnv, errors);
+        if (entry.clientSecretEnv === undefined) {
+          errors.push({
+            path: `${prefix}.clientSecretEnv`,
+            message: `${prefix}.clientSecretEnv is required: it holds the env var NAME of the client secret`,
+          });
+        }
+        if (entry.allowUserIds !== undefined) {
+          if (!Array.isArray(entry.allowUserIds) || entry.allowUserIds.length === 0) {
+            errors.push({
+              path: `${prefix}.allowUserIds`,
+              message: `${prefix}.allowUserIds must be a non-empty array of numeric GitHub user ids`,
+            });
+          } else {
+            entry.allowUserIds.forEach((id, idIndex) => {
+              const ok =
+                (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) ||
+                (typeof id === 'string' && /^[0-9]+$/.test(id.trim()));
+              if (!ok) {
+                errors.push({
+                  path: `${prefix}.allowUserIds[${idIndex}]`,
+                  message: `${prefix}.allowUserIds[${idIndex}] must be a numeric GitHub user id`,
+                  value: id,
+                });
+              }
+            });
+          }
+        }
+        if (entry.clientSecret !== undefined) {
+          // 密钥不入配置：给出可照做的修复提示（不回显值）。
+          errors.push({
+            path: `${prefix}.clientSecret`,
+            message:
+              `${prefix}.clientSecret must not be stored in config. ` +
+              `Fix: delete it, export the secret as an env var, and set ${prefix}.clientSecretEnv to that name ` +
+              '(e.g. VESSEL_GITHUB_OAUTH_SECRET).',
+          });
+        }
+      });
+
+      const backends = raw.backends.filter(isPlainObject);
+      const enabledBackends = raw.enabled === false ? [] : backends;
+      if (enabledBackends.length > 0 && raw.publicOrigin === undefined) {
+        errors.push({
+          path: 'auth.publicOrigin',
+          message:
+            'auth.publicOrigin is required when auth.backends is configured: it is the only ' +
+            'source of the OAuth redirect_uri (never derived from request headers).',
+        });
+      }
+      if (enabledBackends.length > 0 && raw.enabled === undefined) {
+        // 不是错误：只是让「我配了登录」这件事在启动日志里显式可见。
+        warnings.push({
+          path: 'auth',
+          message: 'WebUI login is enabled (auth.backends): public requests need a session cookie.',
+        });
+      }
+    }
+  }
+
+  if (raw.session !== undefined) {
+    if (!isPlainObject(raw.session)) {
+      errors.push({ path: 'auth.session', message: 'auth.session must be an object' });
+    } else {
+      const { idleMinutes, absoluteHours, persist } = raw.session;
+      const isPositiveInt = (value: unknown): boolean =>
+        typeof value === 'number' && Number.isInteger(value) && value > 0;
+      if (idleMinutes !== undefined && !isPositiveInt(idleMinutes)) {
+        errors.push({
+          path: 'auth.session.idleMinutes',
+          message: 'auth.session.idleMinutes must be a positive integer',
+          value: idleMinutes,
+        });
+      }
+      if (absoluteHours !== undefined && !isPositiveInt(absoluteHours)) {
+        errors.push({
+          path: 'auth.session.absoluteHours',
+          message: 'auth.session.absoluteHours must be a positive integer',
+          value: absoluteHours,
+        });
+      }
+      if (persist !== undefined && typeof persist !== 'boolean') {
+        errors.push({
+          path: 'auth.session.persist',
+          message: 'auth.session.persist must be a boolean',
+        });
+      }
     }
   }
 
@@ -2617,6 +2816,15 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
+  // 校验 auth（0.56；WebUI 登录：GitHub OAuth 单用户）
+  if (config.auth !== undefined) {
+    if (!isPlainObject(config.auth)) {
+      errors.push({ path: 'auth', message: 'auth must be an object' });
+    } else {
+      validateAuthSettings(config.auth as AuthConfig, errors, warnings);
+    }
+  }
+
   // 校验 hub（S5；data dir 必须独立）
   if (config.hub !== undefined) {
     if (!isPlainObject(config.hub)) {
@@ -2803,6 +3011,8 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   ],
   security: ['rootSecretEnv'],
   gateway: ['port', 'hostname', 'token', 'tokenEnv', 'allowedOrigins', 'proxySecretEnv'],
+  // 0.56：WebUI 登录（嵌套 entries 由 validateAuthSettings 单独校验）。
+  auth: ['enabled', 'publicOrigin', 'allowedHosts', 'trustedProxies', 'backends', 'session'],
   connect: ['token', 'tokenEnv', 'caFile'],
   attention: ['nodes'],
   hub: [
@@ -2968,6 +3178,7 @@ export const KNOWN_CONFIG_KEYS = [
   // 0.56：单一根密钥覆盖点（`security.root_secret_env`）。
   'security',
   'gateway',
+  'auth',
   'hub',
   'evals',
   'feishu',

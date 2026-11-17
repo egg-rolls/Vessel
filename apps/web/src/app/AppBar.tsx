@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { SessionChip } from '../auth/SessionChip';
 import { Tooltip } from '../components/Tooltip';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
@@ -79,6 +80,8 @@ export function AppBar({
       </span>
 
       <div className="flex min-w-0 flex-1 justify-center px-2 max-compact:px-1">{center}</div>
+
+      <SessionChip />
 
       <LanguageToggle />
 
