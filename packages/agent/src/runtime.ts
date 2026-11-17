@@ -14,6 +14,7 @@
 import { randomUUID } from 'node:crypto';
 import type { TeamPermissionPolicy } from '@vessel-agent/config';
 import {
+  type ContextAnchor,
   type ContextSummarizer,
   DEFAULT_COMPACT_THRESHOLD,
   type EventStream,
@@ -43,7 +44,6 @@ import {
   type ToolDefinition,
   type Usage,
   type UsageLimits,
-  type ContextAnchor,
   type WorkingContext,
 } from '@vessel-agent/core';
 import { type AgentInboxPort, createInboxNoticeHook, createInboxTool } from './inbox.js';
