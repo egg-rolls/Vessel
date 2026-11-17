@@ -1676,11 +1676,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'connection.connecting': 'Connecting to the gateway…',
   'connection.urlPlaceholder': 'Empty = same origin (recommended)',
   'connection.current': 'Current: {url}',
-  'connection.tokenPlaceholder': 'gateway token (or open via #token=…)',
+  'connection.tokenPlaceholder': 'gateway token',
   'connection.platformUrl': 'Platform URL',
   'connection.nodeUrl': 'Node URL',
   'connection.platformToken': 'Platform token',
-  'connection.platformTokenPlaceholder': 'platform token (or open via #token=…)',
+  'connection.platformTokenPlaceholder': 'platform token',
   'connection.nodeToken': 'Node token',
   'connection.nodeTokenOptional': 'Node token (optional; empty = use platform credentials)',
   'connection.nodeTokenPlaceholder': 'node token (empty = credentials / anonymous)',
@@ -1808,6 +1808,21 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'auth.login.title': 'Sign in to Vessel',
   'auth.login.subtitle':
     'Sign in with GitHub to use this WebUI (single-user deployment: only the configured account is allowed).',
+  'auth.login.passwordSubtitle':
+    'This WebUI requires a password (single-user deployment; TOTP adds a one-time code).',
+  'auth.login.username': 'Login name',
+  'auth.login.password': 'Password',
+  'auth.login.submit': 'Sign in',
+  'auth.login.codeLabel': 'Verification code / recovery code',
+  'auth.login.submitCode': 'Verify',
+  'auth.login.backToPassword': 'Enter the password again',
+  'auth.login.codeHint':
+    'Enter the 6-digit code from your authenticator; a one-time recovery code also works (it burns on use).',
+  'auth.login.codeHintNoRecovery':
+    'Enter the 6-digit code from your authenticator (no recovery codes left; issue new ones in settings).',
+  'auth.login.totpHint': 'A TOTP code is required after the password; clock drift tolerance ±30s.',
+  'auth.login.bootstrapHint':
+    'No password is set yet: open this page with the one-time bootstrap code printed at startup (#token=<code>, valid for 10 minutes, single use).',
   'auth.login.redirectHint':
     'The GitHub OAuth App callback URL must be exactly: {uri} (no trailing slash).',
   'auth.signedInAs': 'Signed in as {user}',
@@ -1829,7 +1844,54 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'auth.error.public_origin_missing':
     'The server has no auth.publicOrigin configured; sign-in cannot start.',
   'auth.error.backend_not_configured': 'The server has no GitHub login backend enabled.',
+  'auth.error.invalid_credentials': 'Wrong login name or password.',
+  'auth.error.invalid_code': 'Wrong or expired code: try the current 6-digit code again.',
+  'auth.error.code_replayed':
+    'That code was already used: the same code cannot be accepted twice — wait for the next 30-second step.',
+  'auth.error.ticket_invalid': 'The verification step expired: enter the password again.',
+  'auth.error.rate_limited': 'Too many failures: temporarily rate limited. Wait for the timer.',
+  'auth.error.password_not_set':
+    'No password is configured on the server: use the one-time bootstrap code from the startup log.',
+  'auth.error.password_unsupported':
+    'This runtime has no argon2id support, so the password cannot be verified.',
+  'auth.error.bootstrap_disabled':
+    'This deployment has no password backend, so bootstrap codes are not accepted.',
+  'auth.error.bootstrap_invalid': 'Invalid bootstrap code: restart the gateway for a fresh one.',
+  'auth.error.bootstrap_expired':
+    'The bootstrap code expired (10 minutes): restart the gateway for a fresh one.',
+  'auth.error.bootstrap_replayed':
+    'That bootstrap code was already used: the session it minted has been revoked. Sign in with the password.',
+  'auth.error.setup_session_required':
+    'This step needs a setup session: open the page with the one-time bootstrap code.',
+  'auth.error.password_too_short': 'Password too short: at least 10 characters.',
+  'auth.error.password_too_long': 'Password too long (200 characters max).',
+  'auth.error.password_from_env':
+    'The password hash comes from an environment variable: change it in the deployment config.',
+  'auth.error.totp_already_enrolled': 'TOTP is already enrolled.',
+  'auth.error.totp_not_enrolled': 'TOTP is not enrolled, so there are no recovery codes to issue.',
+  'auth.error.json_required': 'The login endpoints accept application/json only.',
+  'auth.error.forbidden_origin': 'This request origin is not allowed.',
   'auth.error.unknown': 'Sign-in failed: please retry.',
+  // 0.56 P2: setup session opened by a one-time bootstrap code.
+  'auth.setup.title': 'Set up sign-in credentials',
+  'auth.setup.subtitle':
+    'This session came from a one-time bootstrap code (already burned). Set a password, then enroll TOTP — both steps are short.',
+  'auth.setup.password': 'New password',
+  'auth.setup.passwordConfirm': 'Repeat it',
+  'auth.setup.passwordHint':
+    'At least 10 characters; stored as an argon2id hash, the plaintext never hits disk.',
+  'auth.setup.passwordMismatch': 'The two entries do not match.',
+  'auth.setup.savePassword': 'Save password',
+  'auth.setup.totpIntro':
+    'Next, enroll TOTP: the next step shows the pairing URI and a batch of one-time recovery codes.',
+  'auth.setup.enrollTotp': 'Generate a TOTP secret',
+  'auth.setup.skipTotp': 'Skip for now (enroll later in settings)',
+  'auth.setup.totpSecret': 'Add this otpauth URI to your authenticator:',
+  'auth.setup.secretFallback': 'Manual secret: {secret}',
+  'auth.setup.recoveryTitle': 'Recovery codes (shown once, each works once)',
+  'auth.setup.recoveryHint':
+    'Store them in a password manager now: after you leave this page only hashes remain and they cannot be shown again.',
+  'auth.setup.finish': 'Done',
   'gateway.client.timeout': 'Timed out connecting to the gateway',
   'gateway.client.tokenRequired': 'The token cannot be empty',
   'gateway.client.tokenRequiredHttp': 'Missing gateway token',

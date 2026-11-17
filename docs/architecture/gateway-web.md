@@ -26,7 +26,7 @@ paths: [apps/web/**, packages/serve/src/gateway/**]
 ### Web 控制台（`apps/web`）
 
 - React + Vite；`GatewayClient` 用 WS 收事件，`seq` 去重、断线重连（`since`）、gap 提示。
-- token 只存 `sessionStorage`；`#token=` 是**平台 token** 的种子。平台 token 与 node token 分槽；不写 `localStorage`、不进 URL query。
+- token 只存 `sessionStorage`（连接设置里手动填）；0.56 P2 起 `#token=` / `#bootstrap=` 只是**一次性引导码**（提交给 `POST /auth/bootstrap`，单次 + 10 分钟 TTL），不再是平台 token 的种子。平台 token 与 node token 分槽；不写 `localStorage`、不进 URL query。
 - **0.49 连接顺序**：平台 token 连 Gateway → `platform.whoami` → `platform.nodes.list` → `platform.nodes.credentials` → 用生效 node 凭据直连 Node API（`api_url` 的 `/v1/rpc`、`/v1/events`）。回环匿名时 `whoami` 返回 `anonymous`、credentials 返回 `{token:null,mode:'none'}`，node 按现有匿名语义连接。Web 不再调用 `/v1/local/token`。
 - **legacy 回退**：页面由 legacy `--serve` 托管、`/platform/rpc` 不存在时，回退到同源 node 连接与旧 `vessel.token` 槽；401 鉴权错误不静默回退。
 - **平台 URL**：`localStorage['vessel.gateway-url']` 语义 = 平台 origin；空串 = 页面同源。仅接受 `http(s)://host[:port]` origin；非回环必须 https。node URL 来自 registry，不由用户输入拼装。

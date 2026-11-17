@@ -53,6 +53,11 @@ export interface PlatformAuthOptions extends AuthSettings {
   trustedProxies?: string[];
   /** client_secret 等环境变量解析来源；缺省 `process.env`。 */
   env?: Record<string, string | undefined>;
+  /**
+   * 0.56 P2：生效的平台 token 值 —— **只**用于 `POST /auth/unlock` 的二次确认
+   * （锁定后本机一条命令解锁）。不落盘、不进日志。
+   */
+  platformToken?: string | undefined;
 }
 
 /**

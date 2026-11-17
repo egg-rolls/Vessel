@@ -30,6 +30,50 @@ export interface AuthStatus {
   loginBackends: AuthBackendInfo[];
   /** Cloud origin the OAuth App is registered with; shown as a login hint. */
   publicOrigin?: string | null;
+  /** 0.56 P2：口令后端的登录名（只用于预填输入框）。 */
+  username?: string;
+  /** 口令后端：是否已经设过口令（false = 需要一次性引导码）。 */
+  passwordSet?: boolean;
+  /** 口令 hash 来源：`env` 表示不能在界面里改。 */
+  passwordSource?: 'env' | 'file' | null;
+  /** 口令登录后是否还要一个 TOTP / 恢复码。 */
+  totpRequired?: boolean;
+  /** 剩余可用恢复码数量。 */
+  recoveryCodesLeft?: number;
+}
+
+/** 登录类接口的统一返回（`error` 是稳定错误码，不含凭据）。 */
+export interface LoginResult {
+  ok: boolean;
+  /** 口令已通过，还需要第二因子：把 `ticket` 交给 loginWithTotp。 */
+  totpRequired?: boolean;
+  ticket?: string;
+  expiresAt?: number;
+  recoveryAllowed?: boolean;
+  error?: string;
+  message?: string;
+  retryAfterSeconds?: number;
+  locked?: boolean;
+}
+
+/** 引导码换到的会话能力（前端据此决定渲染设置表单还是登录表单）。 */
+export interface BootstrapResult {
+  ok: boolean;
+  bootstrap?: boolean;
+  capabilities?: string[];
+  passwordSet?: boolean;
+  error?: string;
+  message?: string;
+}
+
+/** TOTP 绑定结果：`secret` 与 `recoveryCodes` **只在这一次**返回。 */
+export interface EnrollResult {
+  ok: boolean;
+  secret?: string;
+  otpauthUri?: string;
+  recoveryCodes?: string[];
+  error?: string;
+  message?: string;
 }
 
 /** Header carrying the synchronizer CSRF token. */
@@ -121,6 +165,15 @@ export async function fetchAuthStatus(baseUrl = ''): Promise<AuthStatus> {
     csrfToken: typeof body.csrfToken === 'string' ? body.csrfToken : null,
     loginBackends: Array.isArray(body.loginBackends) ? body.loginBackends : [],
     publicOrigin: typeof body.publicOrigin === 'string' ? body.publicOrigin : null,
+    ...(typeof body.username === 'string' ? { username: body.username } : {}),
+    ...(typeof body.passwordSet === 'boolean' ? { passwordSet: body.passwordSet } : {}),
+    ...(body.passwordSource === 'env' || body.passwordSource === 'file'
+      ? { passwordSource: body.passwordSource }
+      : { passwordSource: null }),
+    ...(typeof body.totpRequired === 'boolean' ? { totpRequired: body.totpRequired } : {}),
+    ...(typeof body.recoveryCodesLeft === 'number'
+      ? { recoveryCodesLeft: body.recoveryCodesLeft }
+      : {}),
   };
   setCsrfToken(status.csrfToken);
   return status;
@@ -165,4 +218,175 @@ export async function logout(baseUrl = ''): Promise<boolean> {
   );
   setCsrfToken(null);
   return response.ok;
+}
+
+/** 登录类 POST 的共同封装：JSON-only（服务端会拒绝非 JSON）、同源 cookie。 */
+async function postJson(
+  path: string,
+  body: Record<string, unknown>,
+  baseUrl = '',
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await withTimeout((signal) =>
+    fetch(authUrl(path, baseUrl), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+      signal,
+    }),
+  );
+  const parsed: unknown = await response.json().catch(() => null);
+  const record =
+    typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  return { status: response.status, body: record };
+}
+
+function toLoginResult(status: number, body: Record<string, unknown>): LoginResult {
+  const error = typeof body.error === 'string' ? body.error : undefined;
+  const ok = status === 200 && body.ok === true;
+  return {
+    ok,
+    ...(typeof body.totpRequired === 'boolean' ? { totpRequired: body.totpRequired } : {}),
+    ...(typeof body.ticket === 'string' ? { ticket: body.ticket } : {}),
+    ...(typeof body.expiresAt === 'number' ? { expiresAt: body.expiresAt } : {}),
+    ...(typeof body.recoveryAllowed === 'boolean' ? { recoveryAllowed: body.recoveryAllowed } : {}),
+    ...(error !== undefined ? { error } : {}),
+    ...(typeof body.message === 'string' ? { message: body.message } : {}),
+    ...(typeof body.retryAfterSeconds === 'number'
+      ? { retryAfterSeconds: body.retryAfterSeconds }
+      : {}),
+    ...(typeof body.locked === 'boolean' ? { locked: body.locked } : {}),
+  };
+}
+
+/** POST /auth/login：口令第一步（需要 TOTP 时拿票根去 loginWithTotp）。 */
+export async function loginWithPassword(
+  username: string,
+  password: string,
+  baseUrl = '',
+): Promise<LoginResult> {
+  const { status, body } = await postJson('/auth/login', { username, password }, baseUrl);
+  if (status === 200) setCsrfToken(null); // 新会话：旧 CSRF 立刻作废，refresh 会取新的。
+  return toLoginResult(status, body);
+}
+
+/** POST /auth/login/totp：第二因子（6 位码或一次性恢复码）。 */
+export async function loginWithTotp(
+  ticket: string,
+  code: string,
+  baseUrl = '',
+): Promise<LoginResult> {
+  const { status, body } = await postJson('/auth/login/totp', { ticket, code }, baseUrl);
+  if (status === 200) setCsrfToken(null);
+  return toLoginResult(status, body);
+}
+
+/** POST /auth/bootstrap：一次性引导码 → 引导会话（只能设口令 / 绑 TOTP）。 */
+export async function bootstrapSession(code: string, baseUrl = ''): Promise<BootstrapResult> {
+  const { status, body } = await postJson('/auth/bootstrap', { code }, baseUrl);
+  const error = typeof body.error === 'string' ? body.error : undefined;
+  return {
+    ok: status === 200 && body.ok === true,
+    ...(typeof body.bootstrap === 'boolean' ? { bootstrap: body.bootstrap } : {}),
+    ...(Array.isArray(body.capabilities)
+      ? {
+          capabilities: body.capabilities.filter(
+            (item): item is string => typeof item === 'string',
+          ),
+        }
+      : {}),
+    ...(typeof body.passwordSet === 'boolean' ? { passwordSet: body.passwordSet } : {}),
+    ...(error !== undefined ? { error } : {}),
+    ...(typeof body.message === 'string' ? { message: body.message } : {}),
+  };
+}
+
+/** POST /auth/password/set：引导会话里设首次口令。 */
+export async function setInitialPassword(password: string, baseUrl = ''): Promise<LoginResult> {
+  const token = getCsrfToken();
+  const response = await withTimeout((signal) =>
+    fetch(authUrl('/auth/password/set', baseUrl), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        ...(token !== '' ? { [CSRF_HEADER]: token } : {}),
+      },
+      body: JSON.stringify({ password }),
+      cache: 'no-store',
+      signal,
+    }),
+  );
+  const parsed: unknown = await response.json().catch(() => null);
+  const body =
+    typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  setCsrfToken(null); // 服务端轮换了 sid/CSRF
+  if (response.ok) {
+    // 轮换后旧 CSRF 立刻作废：紧接着的 /auth/totp/enroll 需要新的同步令牌。
+    await fetchCsrfToken(baseUrl).catch(() => null);
+  }
+  return toLoginResult(response.status, body);
+}
+
+/** POST /auth/setup/finish：把设置会话换成正常的口令会话（否则应用进不去）。 */
+export async function finishSetup(baseUrl = ''): Promise<LoginResult> {
+  const token = getCsrfToken();
+  const response = await withTimeout((signal) =>
+    fetch(authUrl('/auth/setup/finish', baseUrl), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        ...(token !== '' ? { [CSRF_HEADER]: token } : {}),
+      },
+      body: '{}',
+      cache: 'no-store',
+      signal,
+    }),
+  );
+  const parsed: unknown = await response.json().catch(() => null);
+  const body =
+    typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  setCsrfToken(null);
+  return toLoginResult(response.status, body);
+}
+
+/** POST /auth/totp/enroll：绑定 TOTP，拿 secret 与一次性恢复码。 */
+export async function enrollTotp(baseUrl = ''): Promise<EnrollResult> {
+  const token = getCsrfToken();
+  const response = await withTimeout((signal) =>
+    fetch(authUrl('/auth/totp/enroll', baseUrl), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        ...(token !== '' ? { [CSRF_HEADER]: token } : {}),
+      },
+      body: '{}',
+      cache: 'no-store',
+      signal,
+    }),
+  );
+  const parsed: unknown = await response.json().catch(() => null);
+  const body =
+    typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  const error = typeof body.error === 'string' ? body.error : undefined;
+  return {
+    ok: response.status === 200 && body.ok === true,
+    ...(typeof body.secret === 'string' ? { secret: body.secret } : {}),
+    ...(typeof body.otpauthUri === 'string' ? { otpauthUri: body.otpauthUri } : {}),
+    ...(Array.isArray(body.recoveryCodes)
+      ? {
+          recoveryCodes: body.recoveryCodes.filter(
+            (item): item is string => typeof item === 'string',
+          ),
+        }
+      : {}),
+    ...(error !== undefined ? { error } : {}),
+    ...(typeof body.message === 'string' ? { message: body.message } : {}),
+  };
 }

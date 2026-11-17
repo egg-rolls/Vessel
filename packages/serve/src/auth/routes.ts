@@ -15,18 +15,22 @@
  * @module @vessel-agent/serve/auth/routes
  */
 
-import { createHash } from 'node:crypto';
-import type { RequestEdge } from '../gateway/auth.js';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { isLoopbackAddress, type RequestEdge } from '../gateway/auth.js';
+import { BootstrapCodes, PendingLogins } from './bootstrap.js';
+import { CredentialStore, normalizeRecoveryCode } from './credentials.js';
 import {
-  type AuthBackendConfig,
   buildAuthorizeUrl,
   buildRedirectUri,
   completeGitHubLogin,
   GITHUB_CALLBACK_PATH,
   type GitHubEndpoints,
+  type GitHubOAuthBackendConfig,
   OAuthFlowStore,
   resolveClientSecret,
 } from './github-oauth.js';
+import { dummyPasswordCheck, passwordPolicyError, verifyPassword } from './password.js';
+import { accountKey, ipKey, LoginLimiter, retryAfterSeconds } from './ratelimit.js';
 import {
   type AuthSubject,
   buildClearedSessionCookie,
@@ -40,6 +44,7 @@ import {
   SessionStore,
   sessionCookieName,
 } from './session.js';
+import { buildOtpauthUri, generateTotpSecret, verifyTotp } from './totp.js';
 
 /** 同步令牌（CSRF）用的请求头。 */
 export const CSRF_HEADER = 'x-vessel-csrf';
@@ -50,6 +55,21 @@ export const CSRF_HEADER = 'x-vessel-csrf';
 const OAUTH_BINDER_COOKIE = 'vessel_oauth';
 const OAUTH_BINDER_COOKIE_SECURE = '__Host-vessel_oauth';
 const OAUTH_BINDER_MAX_AGE_S = 600;
+
+/** 登录表单 JSON 体的上限：口令不会超过这个长度。 */
+const MAX_LOGIN_BODY_BYTES = 4 * 1024;
+
+/** 口令后端的运行配置（口令 hash 只从 env 名 / 凭据文件取，不在配置里）。 */
+export interface PasswordBackendConfig {
+  kind: 'password';
+  username?: string | undefined;
+  passwordHashEnv?: string | undefined;
+  totpSecretEnv?: string | undefined;
+  label?: string | undefined;
+}
+
+/** 一个登录后端：GitHub OAuth 或口令（可叠加 TOTP）。 */
+export type AuthBackendConfig = GitHubOAuthBackendConfig | PasswordBackendConfig;
 
 export interface AuthSessionSettings {
   /** 空闲超时（分钟，滑动）；缺省 30。 */
@@ -66,9 +86,15 @@ export interface AuthSettings {
   publicOrigin: string | null;
   /** 额外允许的 Host（publicOrigin 与回环之外再放行的域名）。 */
   allowedHosts: string[];
-  /** 登录后端；空 = 未配置 OAuth，行为与今天一致。 */
+  /** 登录后端；空 = 未配置登录，行为与今天一致。 */
   backends: AuthBackendConfig[];
   session: AuthSessionSettings;
+  /** 凭据库文件（口令 hash / TOTP 密钥 / 恢复码 hash）；省略 = 纯内存。 */
+  credentialsFile?: string | undefined;
+  /** 登录限速状态文件；省略 = 纯内存（重启即清零）。 */
+  lockoutFile?: string | undefined;
+  /** 一次性引导码租期（毫秒）；缺省 10 分钟。 */
+  bootstrapTtlMs?: number | undefined;
 }
 
 export interface AuthServiceOptions extends AuthSettings {
@@ -78,7 +104,12 @@ export interface AuthServiceOptions extends AuthSettings {
   endpoints?: GitHubEndpoints | undefined;
   /** fetch 覆盖（验收桩）；缺省全局 fetch。 */
   fetchImpl?: typeof fetch | undefined;
-  /** 诊断输出；永不接收密钥。 */
+  /**
+   * 平台 token（本进程实际生效的那个值）：`POST /auth/unlock` 用它做「确实是本机主人」
+   * 的第二个凭据。**只比较、不回显、不落盘**。
+   */
+  platformToken?: string | undefined;
+  /** 诊断输出；永不接收口令 / TOTP 密钥 / 恢复码。 */
   log?: ((message: string) => void) | undefined;
   /** 可注入时钟。 */
   now?: (() => number) | undefined;
@@ -140,10 +171,23 @@ export class AuthService {
   readonly settings: AuthSettings;
   readonly sessions: SessionStore;
   readonly flows: OAuthFlowStore;
+  readonly credentials: CredentialStore;
+  readonly limiter: LoginLimiter;
+  readonly bootstraps: BootstrapCodes;
+  readonly pendingLogins: PendingLogins;
+  /**
+   * 引导会话的世代映射：`sha256(sid)` → 引导码记录 key。
+   *
+   * 为什么要跟：设口令时会把 sid 轮换（防会话固定），而「重放引导码要撤销它当初签发的
+   * 会话」必须撤销**活着的那个**（轮换后的后代），否则撤销的是已经不存在的旧 id。
+   */
+  private readonly setupBindings = new Map<string, string>();
   private readonly env: Record<string, string | undefined>;
   private readonly endpoints: GitHubEndpoints | undefined;
   private readonly fetchImpl: typeof fetch | undefined;
+  private readonly platformToken: string | undefined;
   private readonly log: (message: string) => void;
+  private readonly now: () => number;
 
   constructor(options: AuthServiceOptions) {
     const idleMinutes = Number.isFinite(options.session.idleMinutes)
@@ -161,11 +205,19 @@ export class AuthService {
         absoluteHours,
         storageFile: options.session.storageFile,
       },
+      credentialsFile: options.credentialsFile,
+      lockoutFile: options.lockoutFile,
+      bootstrapTtlMs: options.bootstrapTtlMs,
     };
     this.env = options.env ?? (process.env as Record<string, string | undefined>);
     this.endpoints = options.endpoints;
     this.fetchImpl = options.fetchImpl;
+    this.platformToken =
+      typeof options.platformToken === 'string' && options.platformToken !== ''
+        ? options.platformToken
+        : undefined;
     this.log = options.log ?? (() => {});
+    this.now = options.now ?? (() => Date.now());
     this.sessions = new SessionStore({
       idleMs: idleMinutes * 60_000,
       absoluteMs: absoluteHours * 3_600_000,
@@ -173,6 +225,105 @@ export class AuthService {
       now: options.now,
     });
     this.flows = new OAuthFlowStore({ now: options.now });
+    this.credentials = new CredentialStore({
+      file: options.credentialsFile,
+      now: options.now,
+      username: this.passwordBackend()?.username,
+    });
+    this.limiter = new LoginLimiter({ file: options.lockoutFile, now: options.now });
+    this.bootstraps = new BootstrapCodes({
+      ...(options.bootstrapTtlMs !== undefined ? { ttlMs: options.bootstrapTtlMs } : {}),
+      ...(options.now !== undefined ? { now: options.now } : {}),
+    });
+    this.pendingLogins = new PendingLogins(options.now !== undefined ? { now: options.now } : {});
+    this.warnAboutPasswordBackend();
+  }
+
+  /**
+   * 启动自检（口令后端）：把「现在到底靠什么登录」写进日志，并且在**没有任何凭据**时
+   * 打印一枚一次性引导码。绝不生成默认口令 —— 默认口令是「装完就被接管」的同义词。
+   */
+  private warnAboutPasswordBackend(): void {
+    const backend = this.passwordBackend();
+    if (backend === null) return;
+    const envHash = this.envPasswordHash(backend);
+    if (envHash !== null) {
+      this.log(
+        `password: using the hash from env ${backend.passwordHashEnv ?? '?'} (env wins over the credentials file)`,
+      );
+      return;
+    }
+    if (this.credentials.hasPassword()) {
+      this.log('password: using the hash from the credentials file');
+      return;
+    }
+    const hint = this.bootstraps.issue();
+    // 只打印一次：单次 + 短 TTL；用完后这个 URL 就没有任何作用了。
+    this.log(
+      'password: no credential configured yet — opening the WebUI with the one-time bootstrap code ' +
+        'mints a setup session (set the password, enroll TOTP). ' +
+        `Open http://127.0.0.1:<platform-port>/#token=${hint.code} within ` +
+        `${String(Math.round((this.settings.bootstrapTtlMs ?? 600_000) / 60_000))} min. ` +
+        'Alternatively set auth.backends[].passwordHashEnv to an argon2id hash and skip this step.',
+    );
+  }
+
+  /** 口令后端（单用户）；没配返回 null。 */
+  passwordBackend(): Extract<AuthBackendConfig, { kind: 'password' }> | null {
+    for (const backend of this.settings.backends) {
+      if (backend.kind === 'password') return backend;
+    }
+    return null;
+  }
+
+  /** env 里的口令 hash（显式配置，优先级最高）；没有返回 null。 */
+  private envPasswordHash(
+    backend: Extract<AuthBackendConfig, { kind: 'password' }>,
+  ): string | null {
+    const name = backend.passwordHashEnv;
+    if (name === undefined) return null;
+    const value = this.env[name];
+    if (typeof value !== 'string' || value.trim() === '') {
+      this.log(`password: env ${name} is empty — falling back to the credentials file`);
+      return null;
+    }
+    return value.trim();
+  }
+
+  /** 实际生效的口令 hash 来源；没有凭据返回 null。 */
+  private effectivePassword(): {
+    stored: { algorithm?: string; value: string };
+    source: 'env' | 'file';
+  } | null {
+    const backend = this.passwordBackend();
+    if (backend === null) return null;
+    const envHash = this.envPasswordHash(backend);
+    if (envHash !== null) return { stored: { value: envHash }, source: 'env' };
+    const snapshot = this.credentials.snapshot();
+    if (snapshot.password !== undefined) return { stored: snapshot.password, source: 'file' };
+    return null;
+  }
+
+  /** 口令后端是否已具备登录条件（有 hash）。 */
+  get passwordReady(): boolean {
+    return this.effectivePassword() !== null;
+  }
+
+  /** 是否要求 TOTP：env 给了密钥，或者已经绑过密钥。 */
+  get totpRequired(): boolean {
+    return this.totpSecret() !== null;
+  }
+
+  /** 生效的 TOTP 密钥（env 优先）；没有返回 null。 */
+  private totpSecret(): string | null {
+    const backend = this.passwordBackend();
+    if (backend === null) return null;
+    const envName = backend.totpSecretEnv;
+    if (envName !== undefined) {
+      const value = this.env[envName];
+      if (typeof value === 'string' && value.trim() !== '') return value.trim();
+    }
+    return this.credentials.snapshot().totp?.secret ?? null;
   }
 
   /** 至少配了一个交互式后端时为 true。 */
@@ -263,36 +414,63 @@ export class AuthService {
   private statusResponse(req: Request, ctx: AuthRequestContext): Response {
     const session = this.readSession(req, ctx);
     const user = session === null ? null : session.snapshot.subject;
+    const password = this.passwordBackend();
     return jsonResponse({
       authEnabled: this.enabled,
       authenticated: session !== null,
       user: user === null ? null : { id: user.id, backend: user.backend, username: user.username },
       csrfToken: session === null ? null : session.snapshot.csrfToken,
-      loginBackends: this.enabled ? [this.describeBackend()] : [],
+      loginBackends: this.enabled ? this.describeBackends() : [],
       // Ops hint for the login page: the exact redirect_uri to register on GitHub.
       publicOrigin: this.settings.publicOrigin,
+      // 口令后端的登录页提示（**不含**任何凭据值）：
+      // 还没设口令 ⇒ 登录页告诉用户「用启动日志里的引导码」；`totpRequired` 决定
+      // 表单是否要第二个输入框。
+      ...(password !== null
+        ? {
+            username: password.username ?? this.credentials.username,
+            passwordSet: this.passwordReady,
+            passwordSource: this.effectivePassword()?.source ?? null,
+            totpRequired: this.totpRequired,
+            recoveryCodesLeft: this.credentials.recoveryCodesLeft(),
+          }
+        : {}),
     });
   }
 
   /** 后端的公开描述（不含密钥、不含白名单）。 */
-  private describeBackend(): {
+  private describeBackends(): {
     id: string;
     kind: string;
     label: string;
     startPath: string;
-  } {
-    const backend = this.githubBackend();
-    return {
-      id: 'github',
-      kind: backend?.kind ?? 'github_oauth',
-      label: backend?.label ?? 'Sign in with GitHub',
-      startPath: '/auth/github/start',
-    };
+  }[] {
+    const list: { id: string; kind: string; label: string; startPath: string }[] = [];
+    const password = this.passwordBackend();
+    if (password !== null) {
+      list.push({
+        id: 'password',
+        kind: 'password',
+        label: password.label ?? 'Sign in with a password',
+        // 口令表单就在登录页本身：没有独立的 302 起步地址。
+        startPath: LOGIN_PATH,
+      });
+    }
+    const github = this.githubBackend();
+    if (github !== null) {
+      list.push({
+        id: 'github',
+        kind: 'github_oauth',
+        label: github.label ?? 'Sign in with GitHub',
+        startPath: '/auth/github/start',
+      });
+    }
+    return list;
   }
 
-  private githubBackend(): AuthBackendConfig | null {
+  private githubBackend(): GitHubOAuthBackendConfig | null {
     for (const backend of this.settings.backends) {
-      if (backend.kind === 'github_oauth') return backend;
+      if (backend.kind !== 'password') return backend;
     }
     return null;
   }
@@ -440,6 +618,545 @@ export class AuthService {
     return this.sessions.create(subject, meta);
   }
 
+  // ── 0.56 P2：口令登录 / TOTP / 一次性引导码 ─────────────────────────────
+
+  /**
+   * 登录类 POST 的共同前置：JSON-only + Origin 校验。
+   *
+   * 要求 `content-type: application/json` 有两个作用：跨站表单 post 发不出这个类型
+   * （会触发预检），而预检要过 CORS，所以我们顺手把「浏览器里第三方页面偷偷提交登录
+   * 表单」这条路堵死；Origin 命中受信边缘的 Host 则挡掉同源之外的 JSON 提交。
+   */
+  private async readLoginBody(
+    req: Request,
+    ctx: AuthRequestContext,
+  ): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; response: Response }> {
+    const origin = req.headers.get('origin');
+    if (origin !== null && !this.originMatchesEdge(origin, ctx)) {
+      return { ok: false, response: jsonResponse({ error: 'forbidden_origin' }, 403) };
+    }
+    const contentType = (req.headers.get('content-type') ?? '').toLowerCase();
+    if (!contentType.startsWith('application/json')) {
+      return { ok: false, response: jsonResponse({ error: 'json_required' }, 415) };
+    }
+    const text = await req.text().catch(() => '');
+    if (text.length > MAX_LOGIN_BODY_BYTES) {
+      return { ok: false, response: jsonResponse({ error: 'body_too_large' }, 413) };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text === '' ? '{}' : text);
+    } catch {
+      return { ok: false, response: jsonResponse({ error: 'invalid_json' }, 400) };
+    }
+    if (typeof parsed !== 'object' || parsed === null) {
+      return { ok: false, response: jsonResponse({ error: 'invalid_json' }, 400) };
+    }
+    return { ok: true, body: parsed as Record<string, unknown> };
+  }
+
+  /** 双维度限流的两个 key。 */
+  private limitDimensions(ctx: AuthRequestContext, username: string): string[] {
+    return [ipKey(ctx.address), accountKey(username)];
+  }
+
+  /** 限流拒绝的响应：429 + Retry-After（**不含**任何凭据信息）。 */
+  private rateLimitedResponse(
+    gate: { retryAfterMs: number; scope: 'ip' | 'account' | 'both'; locked: boolean },
+    ctx: AuthRequestContext,
+  ): Response {
+    const seconds = retryAfterSeconds(gate.retryAfterMs);
+    const base = {
+      error: 'rate_limited',
+      scope: gate.scope,
+      locked: gate.locked,
+      retryAfterSeconds: seconds,
+      message:
+        (gate.locked
+          ? 'Too many failed login attempts: this ' +
+            (gate.scope === 'both'
+              ? 'client and account are'
+              : gate.scope === 'ip'
+                ? 'client is'
+                : 'account is') +
+            ' locked until the timer runs out.'
+          : 'Slow down: wait for the timer before the next attempt.') +
+        ' On the machine that runs the gateway you can unlock immediately with: ' +
+        unlockCommand(ctx),
+    };
+    return jsonResponse(base, 429, { 'retry-after': String(seconds) });
+  }
+
+  /**
+   * POST /auth/login：口令第一步。
+   *
+   * 两种成功形态：`totpRequired: false`（已建会话，cookie 已下发）或
+   * `totpRequired: true`（拿到 5 分钟票根，去 `/auth/login/totp` 交验证码）。
+   * 任何失败都**不区分**「用户名不存在」与「口令错」—— 单用户部署里没有这个信息可言。
+   */
+  private async passwordLogin(req: Request, ctx: AuthRequestContext): Promise<Response> {
+    const backend = this.passwordBackend();
+    if (backend === null) return jsonResponse({ error: 'backend_not_configured' }, 404);
+    const parsed = await this.readLoginBody(req, ctx);
+    if (!parsed.ok) return parsed.response;
+    const username =
+      typeof parsed.body.username === 'string' && parsed.body.username.trim() !== ''
+        ? parsed.body.username.trim()
+        : (backend.username ?? this.credentials.username);
+    const password = typeof parsed.body.password === 'string' ? parsed.body.password : '';
+    const dimensions = this.limitDimensions(ctx, username);
+    const gate = this.limiter.gate(dimensions);
+    if (!gate.ok) return this.rateLimitedResponse(gate, ctx);
+
+    const expected = this.effectivePassword();
+    if (expected === null) {
+      // 还没有口令：登录页应当引导「用启动日志里的一次性引导码」。
+      return jsonResponse(
+        {
+          error: 'password_not_set',
+          message:
+            'No password is configured yet. Use the one-time bootstrap code printed at startup ' +
+            '(open the page with #token=<code>): it mints a setup session where you can set the password.',
+        },
+        409,
+      );
+    }
+    const outcome = await verifyPassword(password, expected.stored);
+    if (outcome === 'unsupported') {
+      this.log('password: argon2id verification is unavailable in this runtime (no Bun.password)');
+      return jsonResponse({ error: 'password_unsupported' }, 500);
+    }
+    if (outcome !== 'ok') {
+      // 恒定开销：口令错与「没设口令」在时间上也别分开。
+      if (username !== (backend.username ?? this.credentials.username)) {
+        await dummyPasswordCheck(password);
+      }
+      const failure = this.limiter.fail(dimensions);
+      this.log(
+        `password: login failed for ${username} from ${ctx.address ?? 'unknown'}` +
+          (failure.locked ? ' (locked)' : ''),
+      );
+      if (failure.locked) {
+        return this.rateLimitedResponse(
+          { retryAfterMs: failure.retryAfterMs, scope: 'both', locked: true },
+          ctx,
+        );
+      }
+      return jsonResponse({ error: 'invalid_credentials' }, 401);
+    }
+
+    if (this.totpRequired) {
+      const pending = this.pendingLogins.issue({
+        username,
+        ip: ctx.address,
+        userAgent: req.headers.get('user-agent'),
+      });
+      return jsonResponse({
+        ok: true,
+        totpRequired: true,
+        ticket: pending.ticket,
+        expiresAt: pending.expiresAt,
+        recoveryAllowed: this.credentials.recoveryCodesLeft() > 0,
+      });
+    }
+
+    this.limiter.reset(dimensions);
+    return this.completePasswordLogin(req, ctx, username, 'password login ok');
+  }
+
+  /** 口令通过（无 TOTP）后的收尾：轮换或新建会话 + 下发 cookie。 */
+  private completePasswordLogin(
+    req: Request,
+    ctx: AuthRequestContext,
+    username: string,
+    logLine: string,
+  ): Response {
+    const subject: AuthSubject = { id: `password:${username}`, backend: 'password', username };
+    const existing = this.readSession(req, ctx);
+    const issued = this.issueSession(subject, req, ctx, existing === null ? null : existing.sid);
+    this.log(`password: ${logLine} for ${subject.id}`);
+    return jsonResponse({ ok: true, totpRequired: false }, 200, {
+      'set-cookie': buildSessionCookie(this.cookiePolicy(this.isSecureContext(ctx)), issued.sid),
+    });
+  }
+
+  /**
+   * POST /auth/login/totp：口令第二步（验证码或恢复码）。
+   *
+   * 恢复码与 TOTP 共用一个入口：6 位纯数字走 TOTP（带重放闸），其它形状走恢复码
+   * （一次性，只存 hash）。两者都记同一个限流维度。
+   */
+  private async totpLogin(req: Request, ctx: AuthRequestContext): Promise<Response> {
+    if (this.passwordBackend() === null) {
+      return jsonResponse({ error: 'backend_not_configured' }, 404);
+    }
+    const parsed = await this.readLoginBody(req, ctx);
+    if (!parsed.ok) return parsed.response;
+    const ticket = typeof parsed.body.ticket === 'string' ? parsed.body.ticket : '';
+    const code = typeof parsed.body.code === 'string' ? parsed.body.code.trim() : '';
+    const pending = this.pendingLogins.peek(ticket);
+    if (pending === null) {
+      return jsonResponse(
+        { error: 'ticket_invalid', message: 'The login ticket expired: enter the password again.' },
+        401,
+      );
+    }
+    const dimensions = this.limitDimensions(ctx, pending.entry.username);
+    const gate = this.limiter.gate(dimensions);
+    if (!gate.ok) return this.rateLimitedResponse(gate, ctx);
+
+    const secret = this.totpSecret();
+    const lastStep = this.credentials.snapshot().totp?.lastStep ?? 0;
+    const looksLikeRecovery = normalizeRecoveryCode(code).length >= 10;
+    if (!looksLikeRecovery && secret !== null) {
+      const result = verifyTotp({ secret, code, nowMs: this.now(), lastStep });
+      if (result.ok) {
+        await this.credentials.noteTotpStep(result.step);
+        this.pendingLogins.consume(pending.key);
+        this.limiter.reset(dimensions);
+        return this.completePasswordLogin(req, ctx, pending.entry.username, 'totp login ok');
+      }
+      if (result.reason === 'replayed') {
+        // 同一个码第二次：算一次失败（可能是有人截了旧码），并明确告警。
+        const failure = this.limiter.fail(dimensions);
+        this.log(
+          `password: TOTP replay rejected for ${pending.entry.username} ` +
+            `(step already used); code not accepted twice`,
+        );
+        if (failure.locked) {
+          return this.rateLimitedResponse(
+            { retryAfterMs: failure.retryAfterMs, scope: 'both', locked: true },
+            ctx,
+          );
+        }
+        return jsonResponse({ error: 'code_replayed' }, 401);
+      }
+    }
+    if (looksLikeRecovery || secret === null) {
+      if (await this.credentials.consumeRecoveryCode(code)) {
+        this.pendingLogins.consume(pending.key);
+        this.limiter.reset(dimensions);
+        this.log(`password: recovery code accepted for ${pending.entry.username} (burned)`);
+        return this.completePasswordLogin(req, ctx, pending.entry.username, 'recovery login ok');
+      }
+    }
+    this.pendingLogins.failAttempt(pending.key);
+    const failure = this.limiter.fail(dimensions);
+    this.log(`password: second factor rejected for ${pending.entry.username}`);
+    if (failure.locked) {
+      return this.rateLimitedResponse(
+        { retryAfterMs: failure.retryAfterMs, scope: 'both', locked: true },
+        ctx,
+      );
+    }
+    return jsonResponse({ error: 'invalid_code' }, 401);
+  }
+
+  /**
+   * POST /auth/bootstrap：一次性引导码 → 引导会话（`#token=` 之后的唯一入口）。
+   *
+   * - 单次：认领即作废；
+   * - 短 TTL：过期即废；
+   * - **重放**：同一个码第二次提交 ⇒ 撤销它当初签发的会话 + 告警日志；
+   * - 拿到的会话只能设口令 / 绑 TOTP（`capabilities` 里写明，前端照此渲染）。
+   */
+  private async bootstrapLogin(req: Request, ctx: AuthRequestContext): Promise<Response> {
+    if (this.passwordBackend() === null) {
+      return jsonResponse(
+        {
+          error: 'bootstrap_disabled',
+          message:
+            'No password backend is configured, so bootstrap codes are not accepted. ' +
+            'Use the platform token (connection settings) or a bearer token instead.',
+        },
+        409,
+      );
+    }
+    const parsed = await this.readLoginBody(req, ctx);
+    if (!parsed.ok) return parsed.response;
+    const code = typeof parsed.body.code === 'string' ? parsed.body.code.trim() : '';
+    const dimensions = this.limitDimensions(ctx, 'bootstrap');
+    const gate = this.limiter.gate(dimensions);
+    if (!gate.ok) return this.rateLimitedResponse(gate, ctx);
+
+    const claim = this.bootstraps.claim(code);
+    if (!claim.ok) {
+      if (claim.status === 'replayed') {
+        // 告警 + 撤销：用过的码不该再出现，出现就是有人拿到了它。
+        const revoked =
+          claim.sessionSidHash === null ? 0 : this.revokeSessionByHash(claim.sessionSidHash);
+        this.log(
+          `bootstrap: REPLAYED bootstrap code rejected from ${ctx.address ?? 'unknown'}; ` +
+            `revoked ${String(revoked)} session(s) minted by it`,
+        );
+        this.limiter.fail(dimensions);
+        return jsonResponse(
+          {
+            error: 'bootstrap_replayed',
+            message:
+              'This bootstrap code was already used: the session it created has been revoked. ' +
+              'Sign in with the password, or restart the gateway to get a fresh code.',
+          },
+          409,
+        );
+      }
+      this.limiter.fail(dimensions);
+      this.log(`bootstrap: rejected an unknown or expired code from ${ctx.address ?? 'unknown'}`);
+      return jsonResponse(
+        {
+          error: claim.status === 'expired' ? 'bootstrap_expired' : 'bootstrap_invalid',
+          message:
+            'The bootstrap code is unknown or expired. Restart the gateway to print a fresh one.',
+        },
+        401,
+      );
+    }
+
+    const existing = this.readSession(req, ctx);
+    const issued = this.issueSession(
+      { id: 'bootstrap:local', backend: 'bootstrap', username: this.credentials.username },
+      req,
+      ctx,
+      existing === null ? null : existing.sid,
+    );
+    if (existing !== null) this.sessions.revoke(existing.sid);
+    this.bootstraps.bindSession(claim.key, sha256Hex(issued.sid));
+    this.setupBindings.set(sha256Hex(issued.sid), claim.key);
+    this.limiter.reset(dimensions);
+    this.log('bootstrap: one-time code consumed — setup session issued');
+    return jsonResponse(
+      {
+        ok: true,
+        bootstrap: true,
+        capabilities: ['set_password', 'enroll_totp'],
+        passwordSet: this.passwordReady,
+      },
+      200,
+      {
+        'set-cookie': buildSessionCookie(this.cookiePolicy(this.isSecureContext(ctx)), issued.sid),
+      },
+    );
+  }
+
+  /** 按 `sha256(sid)` 撤销（引导码重放用：我们只留哈希，拿不到 sid 明文）。 */
+  private revokeSessionByHash(sidHash: string): number {
+    const removed = this.sessions.revokeByHash(sidHash) ? 1 : 0;
+    this.setupBindings.delete(sidHash);
+    return removed;
+  }
+
+  /**
+   * 引导会话的能力闸：只允许 `set_password` / `enroll_totp`。
+   * 唯一判据是会话 subject —— 口令会话、GitHub 会话都不需要这些动作。
+   * 变更类请求照旧要过 CSRF（同步令牌），与其它用 cookie 鉴权的 POST 同口径。
+   */
+  private setupSession(
+    req: Request,
+    ctx: AuthRequestContext,
+  ): { sid: string; snapshot: SessionSnapshot } | null {
+    const session = this.readSession(req, ctx);
+    if (session === null) return null;
+    if (session.snapshot.subject.backend !== 'bootstrap') return null;
+    const origin = req.headers.get('origin');
+    if (origin !== null && !this.originMatchesEdge(origin, ctx)) return null;
+    const token = req.headers.get(CSRF_HEADER);
+    if (token === null || token === '') return null;
+    if (!this.sessions.csrfValid(session.snapshot, token)) return null;
+    return session;
+  }
+
+  /** POST /auth/password/set：用引导会话设首次口令（argon2id）。 */
+  private async setPassword(req: Request, ctx: AuthRequestContext): Promise<Response> {
+    const session = this.setupSession(req, ctx);
+    if (session === null) {
+      return jsonResponse(
+        {
+          error: 'setup_session_required',
+          message:
+            'Setting the password requires a setup session: open the page with the one-time ' +
+            'bootstrap code printed at startup (#token=<code>).',
+        },
+        403,
+      );
+    }
+    const backend = this.passwordBackend();
+    if (backend !== null && this.effectivePassword()?.source === 'env') {
+      return jsonResponse(
+        {
+          error: 'password_from_env',
+          message: `The password hash comes from env ${backend.passwordHashEnv ?? '?'}: change it there instead.`,
+        },
+        409,
+      );
+    }
+    const parsed = await this.readLoginBody(req, ctx);
+    if (!parsed.ok) return parsed.response;
+    const password = typeof parsed.body.password === 'string' ? parsed.body.password : '';
+    const policyError = passwordPolicyError(password);
+    if (policyError !== null) {
+      return jsonResponse(
+        {
+          error: policyError,
+          message: 'Choose a password with at least 10 characters (length is the only rule).',
+        },
+        400,
+      );
+    }
+    await this.credentials.setPassword(password);
+    // 防会话固定：设完口令立刻换一个新 sid（旧 cookie 立即失效）；世代映射跟着走，
+    // 这样「重放引导码」撤销的仍是活着的那个会话。
+    const rotated = this.sessions.rotate(session.sid);
+    if (rotated !== null) {
+      const key = this.setupBindings.get(sha256Hex(session.sid));
+      this.setupBindings.delete(sha256Hex(session.sid));
+      const newHash = sha256Hex(rotated.sid);
+      this.setupBindings.set(newHash, key ?? '');
+      if (key !== undefined && key !== '') this.bootstraps.bindSession(key, newHash);
+    }
+    this.log('password: initial password set from the setup session (argon2id)');
+    const headers: Record<string, string> = {};
+    if (rotated !== null) {
+      headers['set-cookie'] = buildSessionCookie(
+        this.cookiePolicy(this.isSecureContext(ctx)),
+        rotated.sid,
+      );
+    }
+    return jsonResponse({ ok: true, totpRequired: this.totpRequired }, 200, headers);
+  }
+
+  /**
+   * POST /auth/totp/enroll：引导会话里绑定 TOTP。
+   *
+   * 返回 `otpauth://` 配对 URI + 一批恢复码（**明文只在这一刻出现**；落盘只有 hash）。
+   * 这些值不进日志、不进事件。
+   */
+  private async enrollTotp(req: Request, ctx: AuthRequestContext): Promise<Response> {
+    const session = this.setupSession(req, ctx);
+    if (session === null) {
+      return jsonResponse(
+        {
+          error: 'setup_session_required',
+          message: 'TOTP enrollment requires the setup session opened with the bootstrap code.',
+        },
+        403,
+      );
+    }
+    if (this.credentials.snapshot().totp !== undefined && this.passwordReady) {
+      return jsonResponse({ error: 'totp_already_enrolled' }, 409);
+    }
+    const secret = generateTotpSecret();
+    await this.credentials.setTotpSecret(secret);
+    const recoveryCodes = await this.credentials.replaceRecoveryCodes();
+    this.log('password: TOTP enrolled (secret and recovery codes were not logged)');
+    return jsonResponse({
+      ok: true,
+      secret,
+      otpauthUri: buildOtpauthUri({ secret, account: this.credentials.username }),
+      recoveryCodes,
+      driftSteps: 1,
+      stepSeconds: 30,
+      message:
+        'Scan the URI, then store the recovery codes now: each one works once and they are not shown again.',
+    });
+  }
+
+  /**
+   * POST /auth/setup/finish：把设置会话换成正常的口令会话。
+   *
+   * 为什么需要：设置会话只放行「设口令 / 绑 TOTP」，如果它一直保持 `bootstrap` 身份，
+   * 用户设完后会被永久留在设置页（应用永远进不去）。这里把它轮换成一个普通的
+   * `password:<用户名>` 会话：旧 sid 立即失效，重放撤销仍然跟着这个后代会话走。
+   */
+  private async finishSetup(req: Request, ctx: AuthRequestContext): Promise<Response> {
+    const session = this.setupSession(req, ctx);
+    if (session === null) {
+      return jsonResponse({ error: 'setup_session_required' }, 403);
+    }
+    if (!this.passwordReady) {
+      return jsonResponse(
+        { error: 'password_not_set', message: 'Set the password before finishing setup.' },
+        409,
+      );
+    }
+    const username = this.passwordBackend()?.username ?? this.credentials.username;
+    const subject: AuthSubject = { id: `password:${username}`, backend: 'password', username };
+    this.sessions.revoke(session.sid);
+    const issued = this.sessions.create(subject, {
+      ip: ctx.address,
+      userAgent: req.headers.get('user-agent'),
+    });
+    const key = this.setupBindings.get(sha256Hex(session.sid));
+    this.setupBindings.delete(sha256Hex(session.sid));
+    const newHash = sha256Hex(issued.sid);
+    this.setupBindings.set(newHash, key ?? '');
+    if (key !== undefined && key !== '') this.bootstraps.bindSession(key, newHash);
+    this.log('bootstrap: setup session completed and rotated into a password session');
+    return jsonResponse(
+      { ok: true, totpRequired: this.totpRequired },
+      200,
+      { 'set-cookie': buildSessionCookie(this.cookiePolicy(this.isSecureContext(ctx)), issued.sid) },
+    );
+  }
+
+  /**
+   * POST /auth/recovery/rotate：重新签发一批恢复码。
+   *
+   * 需要**已认证会话 + CSRF**（走既有 `authorize(mutating)`），所以它不会变成
+   * 「谁都能把别人的恢复码换掉」。当 TOTP 密钥来自 env（没有引导会话可用的场景）时，
+   * 这是拿到恢复码的唯一通道。
+   */
+  private async rotateRecoveryCodes(req: Request, ctx: AuthRequestContext): Promise<Response> {
+    if (this.totpSecret() === null) {
+      return jsonResponse({ error: 'totp_not_enrolled' }, 409);
+    }
+    const gate = this.authorize(req, ctx, { mutating: true });
+    if (!gate.ok) {
+      const status = gate.reason === 'no_session' ? 401 : 403;
+      return jsonResponse({ error: gate.reason }, status);
+    }
+    const recoveryCodes = await this.credentials.replaceRecoveryCodes();
+    this.log(`password: recovery codes rotated for ${gate.snapshot.subject.id} (not logged)`);
+    return jsonResponse({ ok: true, recoveryCodes });
+  }
+
+  /**
+   * POST /auth/unlock：把锁定状态的登录限速清空。
+   *
+   * 两个条件同时成立才允许：**回环直连**（不是经反代的回环 peer）+ `Authorization:
+   * Bearer <平台 token>`。这样「把自己锁在外面」永远是本机一条命令能解决的事，
+   * 而公网拿不到这条捷径。
+   */
+  private unlock(req: Request, ctx: AuthRequestContext): Response {
+    if (!isLocalDirectish(ctx)) {
+      return jsonResponse(
+        {
+          error: 'forbidden',
+          message: 'Unlocking is only allowed from the loopback interface of the gateway host.',
+        },
+        403,
+      );
+    }
+    const expected = this.platformToken;
+    if (expected !== undefined) {
+      const provided = bearer(req);
+      if (provided === null || !constantTimeEqual(provided, expected)) {
+        return jsonResponse(
+          {
+            error: 'platform_unauthorized',
+            message:
+              'Unlock needs Authorization: Bearer <platform token>. ' +
+              'Run: ' +
+              unlockCommand(ctx),
+          },
+          401,
+        );
+      }
+    }
+    const cleared = this.limiter.resetAll();
+    this.log(`password: lockout cleared from loopback (${String(cleared)} entries)`);
+    return jsonResponse({ ok: true, cleared });
+  }
+
   /** 处理 /auth/*；不是本模块的路径返回 null，交给后面的静态 / RPC。 */
   async handle(req: Request, url: URL, ctx: AuthRequestContext): Promise<Response | null> {
     const path = url.pathname;
@@ -456,6 +1173,38 @@ export class AuthService {
       if (method !== 'POST') return methodNotAllowed('POST');
       return this.logoutResponse(req, ctx);
     }
+    if (path === '/auth/login') {
+      if (method !== 'POST') return methodNotAllowed('POST');
+      return await this.passwordLogin(req, ctx);
+    }
+    if (path === '/auth/login/totp') {
+      if (method !== 'POST') return methodNotAllowed('POST');
+      return await this.totpLogin(req, ctx);
+    }
+    if (path === '/auth/bootstrap') {
+      if (method !== 'POST') return methodNotAllowed('POST');
+      return await this.bootstrapLogin(req, ctx);
+    }
+    if (path === '/auth/password/set') {
+      if (method !== 'POST') return methodNotAllowed('POST');
+      return await this.setPassword(req, ctx);
+    }
+    if (path === '/auth/setup/finish') {
+      if (method !== 'POST') return methodNotAllowed('POST');
+      return await this.finishSetup(req, ctx);
+    }
+    if (path === '/auth/totp/enroll') {
+      if (method !== 'POST') return methodNotAllowed('POST');
+      return await this.enrollTotp(req, ctx);
+    }
+    if (path === '/auth/recovery/rotate') {
+      if (method !== 'POST') return methodNotAllowed('POST');
+      return await this.rotateRecoveryCodes(req, ctx);
+    }
+    if (path === '/auth/unlock') {
+      if (method !== 'POST') return methodNotAllowed('POST');
+      return this.unlock(req, ctx);
+    }
     if (path === '/auth/github/start') {
       if (method !== 'GET') return methodNotAllowed('GET');
       return this.githubStart(ctx);
@@ -471,6 +1220,14 @@ export class AuthService {
           '/auth/status',
           '/auth/csrf',
           '/auth/logout',
+          '/auth/login',
+          '/auth/login/totp',
+          '/auth/bootstrap',
+          '/auth/password/set',
+          '/auth/setup/finish',
+          '/auth/totp/enroll',
+          '/auth/recovery/rotate',
+          '/auth/unlock',
           '/auth/github/start',
           GITHUB_CALLBACK_PATH,
         ],
@@ -487,14 +1244,76 @@ export class AuthService {
   cleanup(): void {
     this.sessions.cleanup();
     this.flows.cleanup();
+    this.bootstraps.cleanup();
+    this.pendingLogins.cleanup();
+    // 会话没了，世代映射也没有意义：顺手回收（不清理只是内存泄漏，但没理由留着）。
+    for (const sidHash of this.setupBindings.keys()) {
+      if (!this.sessions.hasHash(sidHash)) this.setupBindings.delete(sidHash);
+    }
   }
 
   /** 等待挂起的落盘写入（关闭进程）。 */
   async flush(): Promise<void> {
     await this.sessions.flush();
+    await this.credentials.flush();
+    await this.limiter.flush();
   }
 }
 
 function methodNotAllowed(allowed: string): Response {
   return jsonResponse({ error: 'method_not_allowed' }, 405, { allow: allowed });
+}
+
+/** `Authorization: Bearer <token>` 的值；缺失返回 null。 */
+function bearer(req: Request): string | null {
+  const authorization = req.headers.get('authorization');
+  if (authorization === null || !authorization.toLowerCase().startsWith('bearer ')) return null;
+  const value = authorization.slice('bearer '.length).trim();
+  return value === '' ? null : value;
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a, 'utf8');
+  const right = Buffer.from(b, 'utf8');
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
+}
+
+/**
+ * 解锁命令（写进 429 / 401 的文案里，照抄就能跑）。
+ *
+ * 用 `vessel token show --purpose platform --allow-non-interactive` 现场取平台 token：
+ * 派生 token 也是这个命令（用户不需要先知道值），且命令本身只在本机可执行。
+ */
+export function unlockCommand(ctx?: { edge: Pick<RequestEdge, 'host'> }): string {
+  const host = ctx?.edge.host ?? '127.0.0.1:8642';
+  return (
+    'curl -fsS -X POST http://' +
+    host +
+    '/auth/unlock -H "Authorization: Bearer $(vessel token show --purpose platform --allow-non-interactive)"'
+  );
+}
+
+/** Host 是不是回环（`127.0.0.1:8642` / `localhost` / `[::1]:8642` 都算）。 */
+function loopbackHost(host: string | null): boolean {
+  if (host === null || host === '') return false;
+  const bare = host
+    .toLowerCase()
+    .replace(/:\d+$/, '')
+    .replace(/^\[|\]$/g, '');
+  return bare === '127.0.0.1' || bare === 'localhost' || bare === '::1';
+}
+
+/**
+ * 「本机直连」的判据（解锁用）。
+ *
+ * 不用 `edge.localDirect`：它要求「回环 socket ∧ 未经受信代理」，而**没配反代密钥时
+ * 回环必然被算成受信代理**（`proxySecretAllowed` 未配置恒 true）—— 拿它当闸，
+ * 默认部署（没配反代密钥）的解锁永远 403，正好是「把自己锁在外面」。
+ *
+ * 这里按真正的意图判：socket 对端是回环 **且** 生效 Host 指向回环。
+ * 同机反代把 Host 改写公网域名时，这一条不成立（那种场景另有平台 token 兜底）。
+ */
+function isLocalDirectish(ctx: AuthRequestContext): boolean {
+  return isLoopbackAddress(ctx.address) && loopbackHost(ctx.edge.host);
 }
