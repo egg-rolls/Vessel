@@ -7,6 +7,7 @@
  * - token 只在内存里；不写 localStorage / URL / 日志。
  */
 
+import { CSRF_HEADER, getCsrfToken, notifyAuthRequired } from '../../auth/auth-client';
 import type {
   PlatformNodeCredentials,
   PlatformNodeSummary,
@@ -53,12 +54,19 @@ export class PlatformClient {
   async rpc<T = unknown>(method: string, params?: unknown): Promise<T> {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), RPC_TIMEOUT_MS);
+    // 0.56: every mutating request carries the synchronizer CSRF token. It is
+    // ignored when the request authenticates with a bearer token instead.
+    const csrfToken = getCsrfToken();
     let response: Response;
     try {
       response = await fetch(`${this.origin()}/platform/rpc`, {
         method: 'POST',
+        // Same-origin cookies are sent by default; credentials is explicit so a
+        // future baseUrl change cannot silently drop the session cookie.
+        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
+          ...(csrfToken !== '' ? { [CSRF_HEADER]: csrfToken } : {}),
           ...(this.token !== '' ? { Authorization: `Bearer ${this.token}` } : {}),
         },
         body: JSON.stringify({
@@ -90,8 +98,12 @@ export class PlatformClient {
     }
 
     if (!response.ok) {
+      const code = body?.error?.code ?? `http_${response.status}`;
+      // 0.56: a missing/expired session or a rejected CSRF token means the shell
+      // must fall back to the login page instead of retrying forever.
+      if (code === 'session_required' || code === 'csrf_failed') notifyAuthRequired();
       throw new PlatformRpcError(
-        body?.error?.code ?? `http_${response.status}`,
+        code,
         body?.error?.message ?? `HTTP ${response.status}`,
         response.status,
       );
