@@ -538,6 +538,13 @@ interface WsData {
   sessionId?: string;
   types?: string[];
   /**
+   * 进程级全局事件流的显式 opt-in（events.subscribe 的 allow_global）。
+   *
+   * 没有 session_id 又没有 types 的订阅默认**一条都不发**（见 acceptsEvent）；
+   * 只有这条显式为 true 的连接才恢复旧的全量流语义。
+   */
+  allowGlobal?: boolean;
+  /**
    * 回填页上界（additive `until_seq`）：只对**下一次** subscribe epoch 生效。
    *
    * 有界回放从最新往回取，单次最多 1 MiB / 2000 条；客户端拿到
@@ -808,10 +815,26 @@ function acceptsEvent(
   event: RunEvent,
   filter: { runId?: string; sessionId?: string; types?: readonly string[] },
   resolveSession: (event: RunEvent) => string | undefined,
+  options: { allowGlobal?: boolean } = {},
 ): boolean {
   if (filter.runId !== undefined && event.run_id !== filter.runId) return false;
   if (!matchesTypeFilter(filter.types, event.type)) return false;
   if (filter.sessionId !== undefined) return resolveSession(event) === filter.sessionId;
+  // 0.60：**没有会话作用域时的默认拒绝**。旧口径是「不传 session_id ⇒ 全发」，
+  // 于是一个漏传 session_id 的订阅（旧客户端、代理丢了 query、降级路径、
+  // 或者只是「连上了还没 subscribe」的那段时间）会把**所有会话**的事件灌给这个连接；
+  // 客户端再按「当前会话」去盖章，就表现为「打开 A 会话看到 B 的事件」。
+  //
+  // 三档口径（可见面从窄到宽）：
+  // 1. run_id / types 是**显式**的作用域（只关心某轮 / 某类信号），保留原语义；
+  // 2. 两者都没给 = 进程级全局流（所有会话的正文与工具结果）：必须显式 opt-in
+  //    （allow_global），否则一条都不发；
+  // 3. 显式 opt-in 的连接按原语义全发（运维探针 / 单机调试）。
+  //
+  // 传了 session_id 的行为一个字不改：那是唯一能保证归属的订阅形态。
+  if (filter.types === undefined || filter.types.length === 0) {
+    if (options.allowGlobal !== true) return false;
+  }
   return true;
 }
 
@@ -823,6 +846,27 @@ function buildRunSessions(items: readonly SeqEvent[]): Map<string, string> {
     if (sessionId !== undefined) map.set(item.event.run_id, sessionId);
   }
   return map;
+}
+
+let globalReplayDeniedWarned = false;
+
+/**
+ * 全局回放被拒的一次性提示（0.60）。
+ *
+ * 只打一次：这条路径在每次重连 / 每次 epoch 都会命中，打多了就是刷屏。
+ * 值里只有 seq 与条数，没有会话 id，也没有事件正文。
+ */
+function noteGlobalReplayDenied(since: number, candidates: number): void {
+  if (globalReplayDeniedWarned) return;
+  globalReplayDeniedWarned = true;
+  console.warn(
+    '[vessel] events: 全局回放已默认拒绝（since=' +
+      String(since) +
+      ', ' +
+      String(candidates) +
+      ' 条候选）；' +
+      '要拿进程级全量流，客户端必须显式 opt-in：events.subscribe{allow_global:true} 或 ?allow_global=1。',
+  );
 }
 
 const DEFAULT_PORT = 8642;
@@ -850,6 +894,18 @@ function parseSince(value: string | null): number {
   if (value === null) return 0;
   const n = Number.parseInt(value, 10);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * 显式 opt-in 的布尔 query 参数（SSE 侧 allow_global）。
+ *
+ * 只认 truthy 的显式写法：缺省 / 空串 / 任意其它值都是 false —— 全局事件流是
+ * **例外**，不能靠一个拼错的参数名碰运气拿到（与 acceptsEvent 的缺省拒绝同口径）。
+ */
+function readAllowGlobal(value: string | null): boolean {
+  if (value === null) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true';
 }
 
 /**
@@ -1566,6 +1622,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       event,
       { runId: ws.data.runId, sessionId: ws.data.sessionId, types: ws.data.types },
       (target) => resolveEventSession(target, replaySessions),
+      { allowGlobal: ws.data.allowGlobal === true },
     );
   }
 
@@ -1729,6 +1786,17 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // 归属先按 seq 顺序扫描完整回放源：窗口裁剪后仍能识别 run.started。
     const replaySessions = buildRunSessions(source);
     const filtered = source.filter((item) => wsAccepts(ws, item.event, replaySessions));
+    // 0.60：全局回放被**按设计**拒掉了，但不能静默 —— 这是「客户端以为自己在裸连
+    // 全量流」的唯一可观测点（新的默认是缺省拒绝，见 acceptsEvent）。
+    if (
+      filtered.length === 0 &&
+      source.length > 0 &&
+      ws.data.sessionId === undefined &&
+      ws.data.types === undefined &&
+      ws.data.allowGlobal !== true
+    ) {
+      noteGlobalReplayDenied(ws.data.since, source.length);
+    }
     // 编码时顺手补会话归属：客户端拿不到归属就无法把增量挂回会话。补齐与过滤共用
     // `resolveEventSession`，与实时广播走同一个出站序列化点（`outboundEventFrame`）。
     const window = tailReplayWindow(
@@ -2397,6 +2465,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
           session_id: { type: 'string' },
           // 条目以 `*` 结尾 = 前缀匹配；空数组等价于未提供。
           types: { type: 'array', items: { type: 'string' } },
+          // 0.60：进程级全局流（不传 session_id、也不传 run_id / types）的显式 opt-in。
+          // 缺省拒绝：漏传 session_id 的订阅不能再拿到所有会话的事件。
+          allow_global: { type: 'boolean' },
           // 分段回放（additive）：只回放 `seq <= until_seq` 的区间，用于把有界窗口
           // 之外的更早历史分页拉回。缺省 = 原语义（从 since 到最新，仍有界）。
           until_seq: { type: 'integer', minimum: 0 },
@@ -2425,12 +2496,29 @@ export function startGateway(opts: GatewayOptions): Gateway {
         const afterTimelineSeq = optionalSeq(params.after_timeline_seq);
         const sessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
         const mode = ctx.connection === 'ws' ? 'ws' : 'stream';
+        // 0.60：SSE 的 stream_url 必须把**本次订阅的过滤条件**原样带上。
+        // 旧实现只回 since —— HTTP 客户端照着它连 /v1/events，会拿到一条没有
+        // session_id 的全量流（就是「串会话」最省事的那条路）。
+        const streamUrl = (since: number): string => {
+          const parts = [`since=${String(since)}`];
+          const sid = typeof params.session_id === 'string' ? params.session_id : undefined;
+          if (sid !== undefined && sid.length > 0)
+            parts.push(`session_id=${encodeURIComponent(sid)}`);
+          const rid = typeof params.run_id === 'string' ? params.run_id : undefined;
+          if (rid !== undefined && rid.length > 0) parts.push(`run_id=${encodeURIComponent(rid)}`);
+          const types = Array.isArray(params.types)
+            ? params.types.filter((item): item is string => typeof item === 'string')
+            : [];
+          if (types.length > 0) parts.push(`types=${encodeURIComponent(types.join(','))}`);
+          if (params.allow_global === true) parts.push('allow_global=1');
+          return `/v1/events?${parts.join('&')}`;
+        };
         const legacyResult = (since: number) => ({
           subscribed: true,
           from_seq: since + 1,
           latest_seq: hub.latestSeq,
           mode,
-          ...(ctx.connection === 'http' ? { stream_url: `/v1/events?since=${since}` } : {}),
+          ...(ctx.connection === 'http' ? { stream_url: streamUrl(since) } : {}),
         });
         // WS 路径由 applyWsSubscribe 用本次 epoch 实际的 hello 覆盖后再发 res
         // （窗口需要连接过滤，handler 里拿不到）；HTTP 路径没有 hello，返回下一期望序号。
@@ -2767,6 +2855,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ws.data.types = Array.isArray(params.types)
       ? params.types.filter((item): item is string => typeof item === 'string')
       : undefined;
+    // 0.60：进程级全局流必须显式 opt-in（缺省不发跨会话的正文 / 工具结果）。
+    ws.data.allowGlobal = params.allow_global === true;
     // 空数组等价于未提供：修正旧实现「空数组拒收一切」的歧义。
     if (ws.data.types !== undefined && ws.data.types.length === 0) ws.data.types = undefined;
     // 回填页上界（additive `until_seq`）：一次性，用完即清 —— 下一次 subscribe 不带
@@ -3873,6 +3963,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
           data: {
             authed: false,
             since: parseSince(url.searchParams.get('since')),
+            // 0.60：连接级回放也是「进程级全局流」，同样要显式 opt-in（?allow_global=1）。
+            allowGlobal: readAllowGlobal(url.searchParams.get('allow_global')),
             alive: true,
             // 0.55 P0：反代密钥在 upgrade 时定值（首帧才带 token，来不及再判）。
             proxyAuthed: proxySecretAllowed(req, opts.proxySecret),
@@ -4040,6 +4132,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
           .filter((item) => item.length > 0);
         // 空列表等价于未提供；条目以 `*` 结尾按前缀匹配。
         const sseTypes = typeList.length > 0 ? typeList : undefined;
+        // 0.60：进程级全局流必须显式 opt-in（同 WS 侧 allow_global）。
+        const sseAllowGlobal = readAllowGlobal(url.searchParams.get('allow_global'));
         // 回放期局部归属（在 start 里按 seq 顺序重建）；实时事件回落到全局 LRU。
         let sseReplaySessions: ReadonlyMap<string, string> = new Map();
         const accepts = (event: RunEvent): boolean => {
@@ -4049,6 +4143,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
             event,
             { runId: sseRunId, sessionId: sseSessionId, types: sseTypes },
             (target) => resolveEventSession(target, sseReplaySessions),
+            { allowGlobal: sseAllowGlobal },
           );
         };
         let controller: SseController | undefined;

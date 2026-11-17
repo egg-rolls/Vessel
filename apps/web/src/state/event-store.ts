@@ -356,6 +356,15 @@ export class EventStore {
    * 已随 `EventGroupCache` 一起删除，见 `check-live-items` 的 T1）。
    */
   private droppedNoiseCount = 0;
+  /**
+   * 被归属校验丢掉的跨会话帧条数（0.60，）。
+   *
+   * 与 droppedNoise 分开记：噪声是「不产时间线物品的增量」，这里丢的是**不该到**的帧。
+   * 两者都只增不减；getter 给探针 / 真机读数，UI 不渲染（用户不该为协议问题看到提示）。
+   */
+  private droppedForeignCount = 0;
+  /** 跨会话帧的第一条 warn 只打一次（否则慢客户端会被刷屏）。 */
+  private foreignWarned = false;
   private version = 0;
   private listeners = new Set<() => void>();
   private notifyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -435,6 +444,11 @@ export class EventStore {
    */
   get droppedNoise(): number {
     return this.droppedNoiseCount;
+  }
+
+  /** 被归属校验丢掉的跨会话帧条数（0.60）；正常订阅下恒为 0。 */
+  get droppedForeign(): number {
+    return this.droppedForeignCount;
   }
 
   /**
@@ -696,6 +710,8 @@ export class EventStore {
       this.droppedNoiseCount += 1;
       return true;
     }
+    // 0.60：归属校验（服务端已按会话过滤时，这里恒放行；不匹配的帧丢弃 + 记账）。
+    if (!this.acceptOwner(event)) return false;
     const runId = event.run_id;
     // 归属会话的字段最先记住：即使本 run 的 `run.started` 之后被裁掉，仍能归属会话。
     const sessionId = eventSessionId(event);
@@ -738,7 +754,18 @@ export class EventStore {
   applyTimelineRange(
     header: TimelineRangeHeader,
     events: readonly TimelineEvent[],
+    /**
+     * 这一页是**从哪个会话读的**（回填 / 缺口重拉由调用方给出）。
+     *
+     * 为什么必须显式传：页里的事件来自磁盘，流式增量与工具事件**不带** `session_id`，
+     * 而回填发生在实时订阅**之前**（那时 scopeSession 还是空的，见 SubscriptionController）。
+     * 不传的话这些条目就没有归属，被聊天窗口的会话过滤整段挡掉 —— 表现为「刷新后
+     * 运行中的内容一条都不显示」。
+     */
+    expectedSessionId?: string,
   ): TimelineRangeOutcome {
+    // 归属判据：本页声明的会话优先（它比实时作用域更具体）。
+    const pageScope = expectedSessionId ?? this.scopeSession;
     const ordered = [...events].sort((left, right) => left.seq - right.seq);
     const violation = validateTimelineRange(
       header,
@@ -769,8 +796,10 @@ export class EventStore {
         this.droppedNoiseCount += 1;
         continue;
       }
+      // 0.60：时间线 epoch 的帧同样要过归属校验（页读与实时尾共用同一条口径）。
+      if (!this.acceptOwner(runEvent, pageScope)) continue;
       if (event.seq <= this.clientTimelineSeq) insertedBefore = true;
-      this.appendEntry(runEvent, event.seq);
+      this.appendEntry(runEvent, event.seq, expectedSessionId);
       merged += 1;
     }
     // 单游标只前进：区间里的洞是**声明**，跳过它们不算缺口，游标照样推到右端。
@@ -835,12 +864,73 @@ export class EventStore {
     this.earliestSeq = Math.min(this.earliestSeq, start);
   }
 
+  /**
+   * 帧归属校验（0.60）：**作用域内的会话订阅只接受本会话的帧**。
+   *
+   * 为什么必须有这一道：服务端在没有会话作用域时是「全发」（见 acceptsEvent 的新默认），
+   * 而客户端拿到帧之后原先**不做任何归属校验**，只按
+   * 「事件自报 session_id > runSessions 映射 > scopeSession」盖章。于是任何一条
+   * 不带 session_id 的帧（llm.stream.chunk / tool.call.*，占实测流量的绝大多数；
+   * 或者 run.started 已被环裁掉的那些）都会落进 scopeSession 这个兜底 ——
+   * 结果是**别的会话的正文被挂到当前会话上显示**。
+   *
+   * 判据（三条，缺一不可）：
+   * 1. 没有会话作用域 ⇒ 无从判定，放行（UI 按自报 sessionId 过滤）；
+   * 2. 帧自报 session_id 且与作用域相同 ⇒ 放行；不同 ⇒ **丢弃并记账**；
+   * 3. 帧不自报 ⇒ 看 runSessions 里的已知归属，已知且不同 ⇒ 丢弃并记账；
+   *    未知 ⇒ 放行（它是本作用域的新 run，服务端已按会话过滤，见 scopeSession 的不变量）。
+   *
+   * 丢弃**不是静默**：计数进 droppedForeign（可查），首次打一条 warn（带两个会话 id 与
+   * 事件类型，不带事件正文）。
+   */
+  private acceptOwner(event: RunEvent, scopeOverride?: string): boolean {
+    const scope = scopeOverride ?? this.scopeSession;
+    if (scope === undefined) return true;
+    const claimed = eventSessionId(event);
+    if (claimed !== undefined) {
+      if (claimed === scope) return true;
+      // **先记住它属于谁**，再丢弃：这一帧之后还有同一 run 的增量（llm.stream.chunk /
+      // tool.call.*，它们都不自报归属），不记住就会落到 scopeSession 兜底、被盖上当前
+      // 会话的章 —— 那正是这一道校验本来要拦的东西。
+      this.runSessions.set(event.run_id, claimed);
+      this.noteForeignFrame(event.type, claimed, scope);
+      return false;
+    }
+    const known = this.runSessions.get(event.run_id);
+    if (known !== undefined && known !== scope) {
+      this.noteForeignFrame(event.type, known, scope);
+      return false;
+    }
+    return true;
+  }
+
+  /** 丢弃一条不属于当前会话作用域的帧：计数 + 首次 warn（不打印正文）。 */
+  private noteForeignFrame(type: string, claimed: string, scope: string): void {
+    this.droppedForeignCount += 1;
+    if (this.foreignWarned) return;
+    this.foreignWarned = true;
+    console.warn(
+      '[vessel] events: 丢弃不属于当前会话的帧（' +
+        'claimed=' +
+        claimed +
+        ', scope=' +
+        scope +
+        ', type=' +
+        type +
+        '）；跨会话帧累计计数见 EventStore#droppedForeign。',
+    );
+  }
+
   /** 一条已校验通过的事件进环（`push` 与 `applyTimelineRange` 共用；归属口径一致）。 */
-  private appendEntry(event: RunEvent, seq: number): void {
+  private appendEntry(event: RunEvent, seq: number, fallbackOwner?: string): void {
     const runId = event.run_id;
     const sessionId = eventSessionId(event);
     if (sessionId !== undefined) this.runSessions.set(runId, sessionId);
-    const owner = this.runSessions.get(runId) ?? this.scopeSession;
+    // fallbackOwner：**这次并入的段属于哪个会话**（回填页由调用方显式给出）。
+    // 它排在 scopeSession 之后：实时订阅的作用域是确认过的，页面的会话 id 只是
+    // 「这一段是从哪个会话读的」，两者一致时无差别；不一致说明这一页有问题，
+    // 由 acceptOwner 先拦掉，走不到这里。
+    const owner = this.runSessions.get(runId) ?? this.scopeSession ?? fallbackOwner;
     const entry: StoredEvent = {
       event,
       seq,
