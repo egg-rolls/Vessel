@@ -39,6 +39,18 @@
 
 ### 客户端（WebUI）
 
+- **修：刷新/重连把整段聊天记录「从前往后」拉一遍直至 node 被看门狗重启**（2026-11-17 事故）。根因是
+  **两套 seq 混进同一个游标**：连接级 hello 的回放帧是进程级 `hub seq`，客户端却把它写进时间线游标；
+  下一次 subscribe 带着这个越界的值，服务端按 `reset` 从 `seq 1` 堂堂正正重放，客户端的续拉循环便
+  `2000 → 4000 → …` 一路追到会话末尾（实测 30,061 帧 / 12.5 MB / 51 次订阅；`timeline.gap_reported`
+  13,854 条，node 探活连续 3 次超时后被 supervisor 重启）。同一路径在 `sessions.get` 读游标超时时也成立
+  —— 旧 fail-open 会发 `after_timeline_seq: 0`，而这是**合法请求**，服务端没有理由拒绝。修法五条：
+  ① 连接级 hello 用客户端内部标记 `connectionLevel` 判形，chat + timeline 下 hub 帧只隔离、不碰游标；
+  ② 游标读失败**本轮退到有界 hub 尾窗**（老订阅参数），绝不再发 0；③ 服务端声明 `reset` 时丢弃缓冲、
+  锚到尾部窗口（`seqFloor` 挡住 reset 段的 `1..2000`）；④ 重连 `since` 不再复用时间线游标，且连接级回放
+  改为不请求（路由订阅自己会收敛）；⑤ 环里只有 hub 帧（左缘 0）时，在时间线落位前先清空。顺带修掉
+  `subscribeOnce` 的「没有 `session_id` 也先试 `after_timeline_seq`」分支：服务端按 `invalid_params` 拒，
+  非 chat 范围（team / runs）会因此拿不到订阅；现在由调用方显式决定走老参数。
 - **删掉「400ms 没新帧 = 这趟发完了」的空闲猜测**（`EPOCH_IDLE_MS` 已删除）：结趟改吃两条**显式事实** ——
   ① 服务端整趟发完后补的 `timeline-epoch-end {end_seq, count, has_more}`（能力位 `timeline.epoch-end`）；
   ② 订阅 `res` 已回（老服务端 0.54 / 服务端撞背压提前停时的兜底，按连续前缀收口续拉）。为什么要删：网络慢一点或

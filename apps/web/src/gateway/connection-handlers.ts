@@ -16,6 +16,20 @@ interface Current<T> {
 }
 
 /**
+ * 建连时**不请求连接级回放**的 `since`（排他游标，取在 hub 头之后）。
+ *
+ * 连接级回放是进程级 hub seq 的环形尾窗（上限 1–4 MiB），而每个路由在 hello 之后都会
+ * 立刻用 `events.subscribe` 重新收敛：
+ * - chat：按时间线游标回填，hub 帧本来就不属于会话 seq 空间；
+ * - team / runs：订阅自己从 `seqOverride` / `0` 起回放。
+ *
+ * 所以这段回放是纯浪费：每次重连都可能把 4 MiB 历史塞给浏览器，客户端还要逐帧解析后
+ * 丢掉。取 `MAX_SAFE_INTEGER` 让 `hub.since()` 为空，`hello.from_seq` 自然落在 hub 头之后
+ * （服务端 `emptyFromSeq`），语义与「已追平」完全一致。
+ */
+const NO_CONNECTION_REPLAY = Number.MAX_SAFE_INTEGER;
+
+/**
  * gap / 历史改写后的数据层恢复钩子。
  * 职责留在 Provider：它才有 sessionStore / hydration 的入口。
  */
@@ -250,13 +264,17 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     setConnectionState('reconnecting');
     retryTimer = window.setTimeout(() => {
       if (disposed) return;
-      // 重连仍用本地当前 seq 作为 since；hello 会重新对齐 epoch。
-      void client.connect(token, eventStore.currentSeq).catch(reportConnectError);
+      // 重连的 `since` 是 **hub seq** 空间的入参，而 `currentSeq` 是时间线游标 ——
+      // 两者不可比（ADR-105 §9 R7）。把它交给连接级回放会让服务端从 hub 的尾部再回放
+      // 一遍，客户端还会把这段 hub seq 写进时间线游标。路由订阅随后会按自己的游标收敛：
+      // chat 走时间线回填，team / runs 从本地游标增量续订。所以重连也不请求连接级回放，
+      // 真正需要的增量由订阅层负责。
+      void client.connect(token, NO_CONNECTION_REPLAY).catch(reportConnectError);
     }, delay);
   });
 
   // 先探 /health：Origin 403 / TLS / 网络错误在 WS 之前给出可诊断提示。
-  probeThenConnect(client, token, () => ({ since: 0 }), reportConnectError);
+  probeThenConnect(client, token, () => ({ since: NO_CONNECTION_REPLAY }), reportConnectError);
 
   return () => {
     disposed = true;

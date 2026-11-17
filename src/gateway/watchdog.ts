@@ -44,11 +44,20 @@ export interface StallWatchdogConfig {
 }
 
 /**
- * 缺省：2s 探活 / 2s 超时 / 连续 3 次判死 / 每小时最多 5 次重启 /
+ * 缺省：**关**（0.55.1 起）/ 2s 探活 / 2s 超时 / 连续 3 次判死 / 每小时最多 5 次重启 /
  * 退避 1s 起翻倍到 60s / 连续 5 次成功退出退避。写在这里而不是散在调用点。
+ *
+ * 为什么默认关（真实事故）：这套探活**分不清「僵死」与「过载」**。2026-11-17 现场：
+ * 前端把会话游标写歪后从 seq 1 重放 11.7 万条（WS 一条连接发了 30,061 帧 / 12.5 MB），
+ * node 被打满 ⇒ `/health` 连续超时 ⇒ 看门狗 SIGKILL 重启 ⇒ 已加载状态丢掉、客户端从头再来
+ * ⇒ **重启循环放大器**，10 分钟内重启 5 次。
+ *
+ * 正确形态需要「是否有进展」这一维（事件循环延迟、WS 字节/帧速率、RPC 完成数），
+ * 在补齐之前**宁可让过载自己缓过来**，也不要杀它。要开就显式写 `gateway.supervise.enabled: true`
+ * 或 `VESSEL_GATEWAY_SUPERVISE=1`，并自己承担上面那个风险。
  */
 export const DEFAULT_STALL_WATCHDOG_CONFIG: StallWatchdogConfig = {
-  enabled: true,
+  enabled: false,
   probeIntervalMs: 2_000,
   probeTimeoutMs: 2_000,
   failureThreshold: 3,

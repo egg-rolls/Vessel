@@ -365,11 +365,15 @@ export abstract class ProtocolClient {
         // 形状不全 ⇒ 不给 `timeline`（fail-closed 当成老 epoch）：六个键缺一个，说明对端是
         // 半截实现，按「不做四条校验」处理。0.55 起**没有**别的判据（`timeline_source` 已删）。
         const segment = readHelloTimelineSegment(frame);
+        // `connectResolve` 非空 = 这条 hello 是 `connect()` 正在等的那条（连接级）。
+        // 必须在下面 `resolve` 之前取快照，否则重连 / 订阅交错时判不出来。
+        const connectionLevel = this.connectResolve !== null;
         this.helloInfo = {
           protocol: frame.protocol,
           node: frame.node,
           from_seq: frame.from_seq,
           latest_seq: frame.latest_seq,
+          ...(connectionLevel ? { connectionLevel: true as const } : {}),
           ...(segment !== undefined ? { timeline: segment } : {}),
         };
         this.setState('open');

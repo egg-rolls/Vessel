@@ -256,6 +256,18 @@ export class SubscriptionController {
    * 只在 chat 作用域用；由 `runTimelineBackfill` 每次读游标时重算（0 = 不知道，不夹）。
    */
   private tailWindowFloor = 0;
+  /**
+   * 本轮读不到时间线游标（`sessions.get.event_cursor` 超时 / 失败）。
+   *
+   * **绝不能**带着「游标 0」去订阅：`after_timeline_seq = 0` 是**合法请求**，服务端会从
+   * seq 1 开始堂堂正正地发，客户端的续拉循环于是从会话开头一路追到末尾 —— 2026-11-17
+   * 事故（30,061 帧 / 12.5 MB / node 探活失败被看门狗重启）。
+   *
+   * 本轮退到**有界 hub 尾窗**（老订阅参数），下一次 `apply` 再试时间线。
+   */
+  private timelineCursorUnavailable = false;
+  /** 服务端声明了 `reset`（本地游标越过了 `wal_head`）：本轮结束前重新锚到尾部窗口。 */
+  private resetReanchor = false;
 
   /**
    * 本趟收尾之后是否还要再订一次（服务端每趟 ≤ 2000 条，续拉到应到右端为止）。
@@ -312,6 +324,25 @@ export class SubscriptionController {
     // `timeline_seq`，四条校验在实时流上做（服务端**声明**了区间与 `count`）；
     // 不在 ⇒ 老 epoch，帧带 hub seq，按老行为处理。
     const header = readTimelineHelloSegment(info.timeline);
+    // `connectionLevel` 是客户端内部标记（`connect()` 等的那条 hello）。`pendingHello`
+    // 只能回答「有没有订阅在途」，在重连 / 订阅超时交错时会把连接级 hello 认成订阅级。
+    const connectionLevel = info.connectionLevel === true || this.pendingHello === null;
+    // 连接级回放的帧是**进程级 hub seq**，与时间线会话 seq 不可比。timeline-capable
+    // 服务的 chat 内容全部由「回填 + 时间线订阅」负责，所以这段回放对 chat 无价值：
+    // 只隔离，**不碰游标**（历史上这里把 hub 游标写进时间线游标，下一次订阅越过
+    // `wal_head`，服务端按 reset 从 seq 1 重放整段历史）。
+    if (
+      connectionLevel &&
+      header === undefined &&
+      this.supportsTimeline() &&
+      this.desired?.kind === 'chat'
+    ) {
+      // 上一连接留下的 epoch 已不可续（新连接的第一趟订阅会重新声明）。
+      this.epochTarget = 0;
+      this.eventStore.endTimelineEpoch();
+      this.eventStore.setSuppressLegacyFrames(true);
+      return 'connection';
+    }
     if (header !== undefined) {
       // 本趟应到的右端：`(published_head, wal_head]` 允许不被推送，所以取 min。
       const published = info.timeline?.published_head;
@@ -319,18 +350,37 @@ export class SubscriptionController {
         typeof published === 'number'
           ? Math.min(header.wal_head, Math.min(published, header.wal_head))
           : header.wal_head;
+      if (header.reset === true) {
+        // 本地游标越过了 `wal_head`（跨序号空间 / 时间线重开）：服务端的 reset 段是
+        // 「从 seq 1 重放」，不是用户要的内容。丢弃缓冲、锚到尾部窗口，下一轮重新回填。
+        this.eventStore.endTimelineEpoch();
+        this.eventStore.truncateAfter(0);
+        this.eventStore.setSuppressLegacyFrames(false);
+        this.tailWindowFloor = tailWindowStart(this.epochTarget) - 1;
+        this.eventStore.setSeqFloor(this.tailWindowFloor);
+        this.resetReanchor = true;
+        if (this.pendingHello === null) return 'connection';
+        this.pendingHello = null;
+        return 'subscribe';
+      }
       this.eventStore.beginTimelineEpoch(header);
     } else {
       this.epochTarget = 0;
       this.eventStore.endTimelineEpoch();
-      // 老 epoch（旧 gateway / 没有时间线读面）：帧 seq 是同一个计数空间的起点
-      // `from_seq`，游标退到它之前 —— 随后到达的重放帧才会被收下（`truncateAfter` 只动
-      // 传输窗口，不动 item，I6）。
+      // 订阅级老 epoch（旧 gateway / 回填失败降级 / 非 chat 范围）：帧 seq 是同一个
+      // 计数空间的起点 `from_seq`，游标退到它之前 —— 随后到达的重放帧才会被收下
+      // （`truncateAfter` 只动传输窗口，不动 item，I6）。
+      this.eventStore.setSuppressLegacyFrames(false);
       if (info.from_seq > 0) this.eventStore.truncateAfter(Math.max(0, info.from_seq - 1));
     }
     if (this.pendingHello === null) return 'connection';
     this.pendingHello = null;
     return 'subscribe';
+  }
+
+  /** 服务端是否真的装配了时间线读面（能力位是唯一判据，不做形状探测）。 */
+  private supportsTimeline(): boolean {
+    return this.client.protocol?.protocol.features.includes('timeline.cursor') ?? false;
   }
 
   /**
@@ -461,14 +511,29 @@ export class SubscriptionController {
       try {
         cursor = await this.readCursor(sessionId);
       } catch {
-        // 旧 gateway / 会话不存在：没有 timeline ⇒ fail-open 到「只有实时流」的今天。
+        // 读不到游标 = 现在不知道会话头在哪。**绝不能**退成 `after_timeline_seq = 0`：
+        // 那是合法请求，服务端会从 seq 1 发，续拉循环一路追到末尾（2026-11-17 事故）。
+        // 记下来，本轮退到「有界 hub 尾窗」，下一次 apply 再试时间线。
+        this.timelineCursorUnavailable = true;
         return;
       }
-      if (cursor === undefined) return;
+      if (cursor === undefined) {
+        // 旧 gateway（不带四字段）/ 会话不存在：本轮同样按「没有时间线」降级。
+        this.timelineCursorUnavailable = true;
+        return;
+      }
+      this.timelineCursorUnavailable = false;
       if (this.scopeChanged(scopeKey)) return;
       const target = cursorTarget(cursor);
       report.target = target;
       report.end = this.eventStore.currentSeq;
+      // 环里有事件但**没有任何已并入的区间**（左缘 0）⇒ 它们来自连接级 hub 回放
+      // （两套编号不可比）。在时间线落位前清掉，避免幽灵 item 与一个假的游标起点。
+      // 只在会话确实有时间线内容（`target > 0`）时做：空会话没有可落位的东西。
+      if (target > 0 && this.eventStore.earliestLoadedSeq === 0 && this.eventStore.currentSeq > 0) {
+        this.eventStore.truncateAfter(0);
+        report.end = this.eventStore.currentSeq;
+      }
       // **订阅起点也要服从同一个预算**（tail-window 的 (b)）：回填失败时单游标停在 0，
       // 订阅 `after_timeline_seq = 0` 会让服务端从 seq 1 回放最老的一批帧。夹到尾部窗口
       // 左端 ⇒ 首屏最多只有窗口内容，不会把会话开头当成首屏（见 `tailWindowFloor`）。
@@ -484,7 +549,10 @@ export class SubscriptionController {
       const floor = tailWindowStart(target) - 1;
       for (let index = 0; index < MAX_TIMELINE_SEGMENTS; index += 1) {
         let after = this.eventStore.currentSeq;
-        if (after < floor) after = floor;
+        // 游标可能来自刷新前的持久化值 / 别的 seq 空间：**环里没有任何已加载窗口**时
+        // （`earliestLoadedSeq === 0`）无条件锚到尾部窗口，否则首屏只有「游标之后」
+        // 那一小段，左边永远差一截。
+        if (after < floor || this.eventStore.earliestLoadedSeq === 0) after = floor;
         if (after >= target) break;
         const header = planBackfill(cursor, after);
         if (header === undefined) break;
@@ -674,11 +742,15 @@ export class SubscriptionController {
     sessionId: string | undefined,
     afterSeq: number,
     legacyFilter: SubscriptionFilter,
+    forceLegacy = false,
   ): Promise<void> {
     // 这一趟从哪个游标出发（`advanceEpoch` 判「有没有前进」要它；旧实现从未赋值，
     // 于是 stall 保护恒不触发 —— 0.55 一起修掉）。
     this.epochSubscribeFrom = afterSeq;
-    if (sessionId === undefined || !this.legacyScopes.has(scopeKey)) {
+    // `forceLegacy` = 调用方已经决定「这一轮不走时间线」（没有会话 / 游标读不到）。
+    // 不能靠「sessionId 为 undefined ⇒ 试一下」：`after_timeline_seq` 缺 `session_id`
+    // 会被服务端按 `invalid_params` 拒，非 chat 范围与降级路径都会因此拿不到订阅。
+    if (!forceLegacy && (sessionId === undefined || !this.legacyScopes.has(scopeKey))) {
       this.pendingHello = 'subscribe';
       try {
         await this.client.request('events.subscribe', {
@@ -702,6 +774,8 @@ export class SubscriptionController {
     await Promise.resolve();
     // 上一轮遗留的续订意图由**这次** run 覆盖（它本身就是那次续订），先清掉再跑。
     this.continuationPending = false;
+    // 每次 apply 都重新给时间线一次机会（上一轮可能只是 `sessions.get` 超时）。
+    this.timelineCursorUnavailable = false;
     for (;;) {
       const scope = this.desired;
       if (scope === null) return;
@@ -724,6 +798,10 @@ export class SubscriptionController {
       // 内容原地保留，由 `truncateAfter` + `push` 去重把窗口补回来，屏幕上不会出现空白帧。
       if (this.appliedScopeKey !== null && this.appliedScopeKey !== scopeKey) {
         this.eventStore.clear();
+        // 尾部窗口下限属于**上一个**会话/范围：留到新作用域会让 `after_timeline_seq`
+        // 越过新会话的 `wal_head`（服务端按 reset 处理，多走一轮）。
+        this.tailWindowFloor = 0;
+        this.timelineCursorUnavailable = false;
       }
       this.appliedScopeKey = scopeKey;
       if (this.appliedKey === scopeKey) return;
@@ -731,6 +809,14 @@ export class SubscriptionController {
       if (sessionScoped !== undefined) {
         await this.runTimelineBackfill(sessionScoped, scopeKey);
         if (this.desired !== scope) continue;
+      }
+      // ①.5 读不到时间线游标：本轮**不按 `after_timeline_seq` 订阅**（否则 0 会让服务端
+      //     从 seq 1 重放，续拉一路到末尾）。退到有界 hub 尾窗，并把本地游标归零 ——
+      //     hub seq 与时间线 seq 不可比，留着旧的只会让下一次订阅越过 `wal_head`。
+      const useTimeline = sessionScoped !== undefined && !this.timelineCursorUnavailable;
+      if (sessionScoped !== undefined && this.timelineCursorUnavailable) {
+        this.eventStore.endTimelineEpoch();
+        this.eventStore.truncateAfter(0);
       }
       // ② 回填追平之后才开实时订阅：`since` 取**当前游标**，所以实时流只送增量，
       //    与回填的区间不重叠（「边回填边追平」的形态从结构上不存在）。
@@ -747,11 +833,20 @@ export class SubscriptionController {
         scope.kind === 'chat'
           ? Math.max(this.eventStore.currentSeq, this.tailWindowFloor)
           : this.eventStore.currentSeq;
+      // 降级到老参数时 `since` 必须是 hub seq：从 0 起有界回放，不继承时间线游标。
+      const legacyFilter =
+        sessionScoped !== undefined && !useTimeline ? { ...built.filter, since: 0 } : built.filter;
       this.appliedKey = scopeKey;
       this.clientFilter = built.clientSessionFilter;
       this.pendingHello = 'subscribe';
       try {
-        await this.subscribeOnce(scopeKey, sessionScoped, afterSeq, built.filter);
+        await this.subscribeOnce(
+          scopeKey,
+          useTimeline ? sessionScoped : undefined,
+          afterSeq,
+          legacyFilter,
+          !useTimeline,
+        );
         // 新 gateway 的订阅级 hello 在 res 之前到达，`consumeHello` 已消费；
         // 旧 gateway 不发订阅级 hello，这里清掉在途标记，避免它吞掉下一次
         // 连接级 hello（会导致重连后漏 bump epoch / 漏刷新详情）。
@@ -762,7 +857,16 @@ export class SubscriptionController {
         this.appliedKey = null;
         if (this.pendingHello === 'subscribe') this.pendingHello = null;
       }
-      // ③ 本趟收尾（`res` 已回）：服务端**发自 0.55 就有** `timeline-epoch-end` 帧，
+      // ③ 服务端宣告了 `reset`（本地游标越过 `wal_head`）：刚才这一趟是从 seq 1 重放的
+      //    「空转」，已经丢弃 + 尾部窗口下限挡住。这里重跑一轮：回填会按尾部窗口落位，
+      //    再按新的游标订阅（而不是沿着 reset 的段继续往前追）。
+      if (this.resetReanchor) {
+        this.resetReanchor = false;
+        this.timelineCursorUnavailable = false;
+        this.appliedKey = null;
+        continue;
+      }
+      // ④ 本趟收尾（`res` 已回）：服务端**发自 0.55 就有** `timeline-epoch-end` 帧，
       //    上面已经结过趟；老服务端（0.54 不发结束帧）/ 服务端撞背压提前停时，`res`
       //    本身就是「这一趟不会再发帧了」的显式事实 —— 按连续前缀收口，需要续拉就在本轮
       //    循环里继续（`run()` 在跑时 `apply()` 会被幂等短路丢掉，所以不能靠它）。

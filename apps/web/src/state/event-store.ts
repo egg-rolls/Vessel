@@ -296,6 +296,25 @@ export class EventStore {
    */
   private earliestSeq = 0;
   /**
+   * 连接级回放（**hub seq**）的静默开关。
+   *
+   * 连接级 hello 之后的那段回放走的是进程级 hub seq，时间线订阅走的是会话 seq ——
+   * 两套编号不可比（ADR-105 §9 R7）。timeline-capable 服务端的 chat 内容一律由
+   * 「回填 + 时间线订阅」负责，所以这段时间的帧对聊天没有价值：只丢，不记账、不报缺口。
+   *
+   * **不静默吸收的例外**：这些帧本来就不该进这个 seq 空间（不是重复，也不是缺口），
+   * 因此也不许写 `timeline_gap_reported` —— 那会让服务端日志被每秒上千条假缺口淹没
+   * （2026-11-17 实测 13,854 条）。
+   */
+  private suppressLegacyFrames = false;
+  /**
+   * 时间线 seq 的**接受下限**（`reset` 之后只认尾部窗口）。
+   *
+   * 服务端按 `reset` 从 seq 1 重放时，那些帧属于**已作废的空转**：本地游标已经不可信，
+   * 正确动作是丢弃缓冲、重新锚到尾部窗口。比下限更早的帧一律丢（不是缺口，声明里就有）。
+   */
+  private seqFloor = 0;
+  /**
    * 缺口声明面（见 `TimelineGapState`）。
    *
    * 四条校验任一不成立、RPC 拿不全、服务端 gap 帧 —— 三条来源都记在这里。**界面不显示它**
@@ -455,6 +474,27 @@ export class EventStore {
   beginTimelineEpoch(header: TimelineRangeHeader): void {
     // 覆盖在途 epoch：一趟 epoch 只有一套声明（0.55 起没有定时器要清）。
     this.epoch = { header, seqs: [] };
+    // 时间线帧到了：连接级 hub 回放的静默窗口到此结束。
+    this.suppressLegacyFrames = false;
+  }
+
+  /**
+   * 连接级回放（hub seq）的静默开关，由订阅层在「连接级 hello 且无时间片段」时置位。
+   *
+   * 见 {@link suppressLegacyFrames}：这是**作用域事实**（不是错误），所以这里只丢帧，
+   * 不写缺口、不动游标。
+   */
+  setSuppressLegacyFrames(value: boolean): void {
+    this.suppressLegacyFrames = value;
+  }
+
+  /**
+   * 时间线 seq 的接受下限（`reset` 后锚到尾部窗口时调用）。
+   *
+   * 只影响实时 `push`：回填走 `applyTimelineRange`，用户滚到顶加载更早的段不受影响。
+   */
+  setSeqFloor(seq: number): void {
+    this.seqFloor = Number.isInteger(seq) && seq > 0 ? seq : 0;
   }
 
   /** 结束本 epoch 的记账（订阅换范围 / 断线 / 服务端回到 legacy）。 */
@@ -616,6 +656,14 @@ export class EventStore {
    */
   push(event: RunEvent, meta: EventMeta): boolean {
     if (!Number.isFinite(meta.seq)) return false;
+    // `reset` 之后只认尾部窗口：更早的帧是服务端从 1 重放的「空转」，本地游标已经作废。
+    // 它们既不该进环，也不是缺口（声明里本来就覆盖），所以在这里静默丢。
+    if (meta.seq < this.seqFloor) return false;
+    // 连接级 hub 回放（时间线 epoch 未建立）：与时间线不是同一套编号，chat 侧不需要。
+    if (this.suppressLegacyFrames && this.epoch === undefined) {
+      this.droppedNoiseCount += 1;
+      return false;
+    }
     // 服务端声明的时间线段（`timeline.hello`）：本帧也要进四条校验的记账。
     if (this.epoch !== undefined) this.recordEpochSeq(meta.seq);
     if (meta.seq <= this.clientTimelineSeq) {
@@ -1094,6 +1142,9 @@ export class EventStore {
     this.gap = emptyGapState();
     // 左缘归零：新作用域的窗口要从首屏的尾部窗口重新开始（见 `earliestSeq`）。
     this.earliestSeq = 0;
+    // 两个 seq 面的隔离状态属于**上一个**空间：新作用域从干净状态开始。
+    this.suppressLegacyFrames = false;
+    this.seqFloor = 0;
     // 作用域真变了：传输窗口清了，物化面必须一起清（否则串台 / 幽灵卡片）。
     this.sink.clear();
     // 在途 epoch 的声明属于**上一个** seq 空间：留着会让新作用域的帧被记进旧区间、

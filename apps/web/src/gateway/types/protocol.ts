@@ -85,6 +85,15 @@ export interface HelloInfo {
   node: NodeInfo;
   from_seq: number;
   latest_seq: number;
+  /**
+   * **客户端内部标记**（不上 wire）：这条 hello 是 `connect()` 等的那条**连接级** hello。
+   *
+   * 为什么需要它：连接级回放的帧是**进程级 hub seq**，时间线订阅的帧是**会话 seq**。两者
+   * 不可比，而 `pendingHello` 只表达「有一条订阅 hello 在途」，遇到「订阅请求超时 / 重连
+   * 与订阅交错」时它无法回答这条 hello 是谁的 —— 历史上正是这里把 hub 游标写进了时间线
+   * 游标，下一次订阅越过 `wal_head`，服务端按 reset 从 seq 1 重放整段历史。
+   */
+  connectionLevel?: true;
   /** 0.24 additive：进程 incarnation；仅当前 WS 节点可读。 */
   incarnation?: string;
   /**
