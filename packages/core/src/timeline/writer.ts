@@ -11,12 +11,16 @@
  * | I4 | 两个 head / holes / tainted 可上报；`published_head` 单调 | `heads()` / `publishedHead()` |
  *
  * 不变量 I5（dup-seq 事故之后补上的一条，**归档侧**）：**同一个 `seq` 在 `timeline.ndjson`
- * 里最多出现一次**。归档是 append-only 的副本，重复一次就足以让读侧
- * （`validateTimelineRange` 的「严格递增 / 不得重复」）整段拒绝、「往上加载更早」永久卡住。
+ * 里最多出现一次**。重复一次就违反这条 append-only 副本不变量（归档不再是 `wal.log` 事实行的
+ * 副本）。**当下读路径对重复 seq 免疫**：`readTimelineEvents` 的 `bySeq`、
+ * `timeline-dual-write#readPage` 的 `seen`、serve `selectTimelinePage` 的 `seen` 三处都按
+ * seq 去重。但一旦归档成为唯一读源、或消费者按物理顺序把行喂给 `validateTimelineRange`，
+ * 第 4 条（不得重复）会整段拒收 —— 实测 10 行 vs 声明 5 行 ⇒ `merged=0`、左缘不动、
+ * `hasEarlier` 恒 true。所以这条不变量由闸门而不是读侧容错来守。
  * 实现是四道闸门叠加：进程内只增的 `archiveWatermark`、严格读（读不出来不算空）、
  * 追加前重读归档尾窗、逐条断言 payload（`assertAppendOnlyPayload`），外加 `archive-lock.ts`
- * 把「读水位 → 追加 → 提交 manifest」串行化。损坏的存量数据**不修**，只在打开时报一条 warn
- * （`archive-audit.ts`）。
+ * 把「读水位 → 追加 → 提交 manifest」串行化。损坏的存量数据**不自动修**，只在打开时报一条
+ * warn（`archive-audit.ts`）；人工裁的执行器是 `scripts/timeline-dedup-archive.ts`。
  *
  * 失败语义（ADR-105 §3 I3 补充条款）：
  * - **append 失败** ⇒ 回滚本次写入到写前偏移 → 在 `holes.ndjson` 登记该 seq → `tainted`；
@@ -1536,10 +1540,13 @@ export class TimelineWriter {
    *
    * ## 「同一段绝不被抄两次」是这个方法的**首要不变量**（真实事故）
    *
-   * 归档副本是 append-only 的：同一个 seq 出现两次，读侧 `validateTimelineRange` 的
-   * 「严格递增 / 不得重复」就会整段拒绝，用户侧是「往上加载更早」永久卡住
-   * （`merged=0`、`hasEarlier` 恒 true）。所以起点的判定**不许只依赖一次读盘**，也不许
-   * 让任何一个来源把水位往下拉。这里四道闸门，缺一不可：
+   * 归档副本是 append-only 的：同一个 seq 出现两次就违反这条副本不变量（归档不再是
+   * `wal.log` 事实行的副本）。**当下读路径对重复 seq 免疫** —— `readTimelineEvents` 的
+   * `bySeq`、`timeline-dual-write#readPage` 的 `seen`、serve `selectTimelinePage` 的
+   * `seen` 三处都按 seq 去重；但一旦归档成为唯一读源、或消费者按物理顺序把行喂给
+   * `validateTimelineRange`，第 4 条（不得重复）会整段拒收（实测 10 行 vs 声明 5 行 ⇒
+   * `merged=0`、左缘不动、`hasEarlier` 恒 true）。所以起点的判定**不许只依赖一次读盘**，
+   * 也不许让任何一个来源把水位往下拉 —— 不能靠读侧去重兜这条账。这里四道闸门，缺一不可：
    *
    * | # | 闸门 | 挡的是 |
    * | --- | --- | --- |
