@@ -30,7 +30,10 @@ import { WebFetchError, type WebToolErrorCode } from '../types';
 import {
   DEFAULT_SEARCH_PROVIDER_ID,
   getSearchProvider,
+  listSearchProviderEntries,
+  listSearchProviders,
   type ProviderHttp,
+  type ProviderHttpOptions,
   type SearchHit,
   type SearchProvider,
   type SearchQuery,
@@ -269,6 +272,68 @@ export function renderHits(hits: readonly SearchHit[], budget: SearchBudget): Se
   return out;
 }
 
+// ---------------------------------------------------------------- 选后端
+
+type EnvLike = Record<string, string | undefined>;
+
+/**
+ * 这次调用读哪个环境变量名：**配置 `search_key_env` > provider 的 `keyEnv` > `key_env`**。
+ *
+ * 为什么不直接用 `provider.keyEnv`：用户的 key 可能挂在别的变量名下（CI、多账户），
+ * 显式配置必须能盖过 provider 的缺省值——这是「配置优先」在 key 上的同一条规则。
+ */
+function keyEnvNameFor(config: WebToolsConfig, provider: SearchProvider): string {
+  if (config.searchKeyEnv !== '') return config.searchKeyEnv;
+  if (provider.keyEnv !== undefined && provider.keyEnv !== '') return provider.keyEnv;
+  return config.keyEnv;
+}
+
+function providerHasKey(config: WebToolsConfig, provider: SearchProvider, env: EnvLike): boolean {
+  if (!provider.requiresKey) return true;
+  return readKey(config, 'search', env, keyEnvNameFor(config, provider)).present;
+}
+
+/**
+ * 选后端（**纯本地**，不发请求）：
+ * ① 配置 `search_provider` 显式指定 ⇒ 只用它（未注册 ⇒ `provider_unavailable`）；
+ * ② `auto`（缺省）⇒ 按**注册顺序**取第一个 key 在位的；
+ * ③ 一个 key 都没有 ⇒ `provider_auth_failed`，并把每家要哪个环境变量列出来
+ *    （不猜、不降级、不发请求）。
+ */
+function selectSearchProvider(config: WebToolsConfig, env: EnvLike): SearchProvider {
+  if (config.searchProvider !== 'auto') {
+    const explicit = getSearchProvider(config.searchProvider);
+    if (explicit === undefined) {
+      throw new WebFetchError(
+        'provider_unavailable',
+        `配置 search_provider=${config.searchProvider} 没有对应的搜索后端；已注册：${listSearchProviders().join(' | ')}`,
+      );
+    }
+    return explicit;
+  }
+
+  const candidates = listSearchProviderEntries();
+  if (candidates.length === 0) {
+    throw new WebFetchError(
+      'provider_unavailable',
+      `没有注册任何搜索后端（连 ${DEFAULT_SEARCH_PROVIDER_ID} 都没有）`,
+    );
+  }
+  for (const candidate of candidates) {
+    if (providerHasKey(config, candidate, env)) return candidate;
+  }
+
+  const order = candidates.map((provider) => provider.id).join(' → ');
+  const needs = candidates
+    .map((provider) => `${provider.id} → ${keyEnvNameFor(config, provider)}`)
+    .join('、');
+  throw new WebFetchError(
+    'provider_auth_failed',
+    `没有可用的搜索后端：按注册顺序（${order}）都没有可用的 key。设置其一即可：${needs}；` +
+      '或用配置 search_provider 指定某一家（本次没有发出任何请求）',
+  );
+}
+
 // ---------------------------------------------------------------- 主流程
 
 /** 本地拒绝（未发请求）：只释放半开探针，不计也不罚 */
@@ -310,7 +375,11 @@ function renderEntry(
   options: { cached: boolean; cachedAgeMs?: number },
 ): RenderOutcome {
   // 上游一条都没有 ⇒ 0（这样头条是 `results: 0`，而不是「只渲染 0 条，预算限制」）
-  const requestedCount = entry.upstreamCount > 0 ? Math.max(query.count, entry.upstreamCount) : 0;
+  //
+  // 否则如实报**上游条数**：只有 `rendered < 上游` 才是预算收缩。写成
+  // `max(count, upstream)` 会把「这家上游只给了 2 条」谎报成「我们压掉了预算」
+  // ——Tavily/Serper 对小众 query 经常少给，deepseek 也可能。
+  const requestedCount = entry.upstreamCount;
   const baseOptions = {
     providerId: entry.providerId,
     query: query.query,
@@ -391,23 +460,21 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
   const clock = run.deps.now ?? (() => Date.now());
   let ticket: CostTicket | undefined;
   let query: SearchQuery | undefined;
+  let provider: SearchProvider | undefined;
   let attempts: number | undefined;
   let upstreamMs: number | undefined;
 
   try {
     // ① 参数
     query = parseSearchArgs(args, config);
-    const provider = getSearchProvider(DEFAULT_SEARCH_PROVIDER_ID);
-    if (provider === undefined) {
-      throw new WebFetchError(
-        'provider_unavailable',
-        `没有注册搜索后端（${DEFAULT_SEARCH_PROVIDER_ID}）`,
-      );
-    }
-
-    // ② 缺 key：本地判，不发请求，不静默降级
-    if (provider.requiresKey) {
-      const key = readKey(config, 'search', run.deps.deepseek?.env ?? process.env);
+    // ② 选后端 + 缺 key：都在本地判，不发请求，不静默降级
+    //    （选中谁进指标行 `provider_id`，也进结果信封 `backend:`——用户能看见用了哪家）
+    const env = run.deps.deepseek?.env ?? process.env;
+    const selected: SearchProvider = selectSearchProvider(config, env);
+    provider = selected;
+    const keyEnvName = keyEnvNameFor(config, selected);
+    if (selected.requiresKey) {
+      const key = readKey(config, 'search', env, keyEnvName);
       if (!key.present) {
         throw new WebFetchError('provider_auth_failed', missingKeyMessage(key.envName));
       }
@@ -417,8 +484,8 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
     // provider_id + provider_version + normalized_query + count + need_content
     // + detail + site + lang + after + before
     const cacheKey = hashKey([
-      provider.id,
-      provider.version,
+      selected.id,
+      selected.version,
       query.query,
       query.count,
       query.needContent,
@@ -435,7 +502,7 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
         cachedAgeMs: cached.ageMs,
       });
       emitSearchMetric({
-        provider,
+        provider: selected,
         query,
         cached: true,
         cachedAgeMs: cached.ageMs,
@@ -448,8 +515,8 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
     }
 
     // ③④⑤ 熔断 / 每 run 配额 / 日上限（前五步拒绝都不产生网络往返）
-    if (provider.billed) ticket = await run.cost.acquire('search', run.runKey);
-    if (provider.billed) {
+    if (selected.billed) ticket = await run.cost.acquire('search', run.runKey);
+    if (selected.billed) {
       try {
         await run.cost.throttle('search');
       } catch (error) {
@@ -460,27 +527,47 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
     }
 
     // ⑥ 发请求（重试 / 退避 / 错误映射在 ProviderHttp 里）
-    const http: ProviderHttp = createDeepSeekHttp({
+    //    传输层：provider 自带 `createHttp`（鉴权风格不同，例如 Serper 的 X-API-KEY）就用它；
+    //    没带 ⇒ 回落 deepseek 的 Bearer 实现（第一个实现，不代表其他家也长这样）。
+    const backoff = (attempt: number, retryAfterMs?: number): number =>
+      run.cost.backoffMs(attempt, retryAfterMs);
+    const httpOptions: ProviderHttpOptions = {
       config,
-      keyKind: 'search',
+      keyEnvName,
       ...(run.signal !== undefined ? { signal: run.signal } : {}),
       ...(run.deps.deepseek !== undefined ? { deps: run.deps.deepseek } : {}),
-      backoff: (attempt, retryAfterMs) => run.cost.backoffMs(attempt, retryAfterMs),
-    });
-    const renderedQuery = provider.renderQuery(query);
+      backoff,
+    };
+    const http: ProviderHttp =
+      selected.createHttp !== undefined
+        ? selected.createHttp(httpOptions)
+        : createDeepSeekHttp({
+            config,
+            keyKind: 'search',
+            ...(run.signal !== undefined ? { signal: run.signal } : {}),
+            ...(run.deps.deepseek !== undefined ? { deps: run.deps.deepseek } : {}),
+            backoff,
+          });
+    const renderedQuery = selected.renderQuery(query);
+    // 上游条数上限（Tavily 只认 ≤20）：夹在 `call` 之前，body 与上游口径一致；
+    // 缓存键/预算仍按模型请求的 count，信封报上游真实条数。
+    const upstreamQuery: SearchQuery =
+      selected.maxCount !== undefined && query.count > selected.maxCount
+        ? { ...query, count: selected.maxCount }
+        : query;
     const callStart = Date.now();
-    const response = await provider.call(http, query, renderedQuery);
+    const response = await selected.call(http, upstreamQuery, renderedQuery);
     upstreamMs = Date.now() - callStart;
     attempts = response.attempts;
 
     // ⑦ 归一（缓存存条目，渲染每次现做）
-    const entries = provider.parseEntries(response.json);
+    const entries = selected.parseEntries(response.json);
     const hits = entries
-      .map((entry) => provider.normalize(entry))
+      .map((entry) => selected.normalize(entry))
       .filter((hit): hit is SearchHit => hit !== null);
     const entry: SearchCacheEntry = {
-      providerId: provider.id,
-      providerVersion: provider.version,
+      providerId: selected.id,
+      providerVersion: selected.version,
       hits,
       upstreamCount: entries.length,
       fetchedAt: new Date(clock()).toISOString(),
@@ -492,7 +579,7 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
       ticket?.empty();
       const rendered = renderEntry(entry, query, config, { cached: false });
       emitSearchMetric({
-        provider,
+        provider: selected,
         query,
         cached: false,
         results: 0,
@@ -509,7 +596,7 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
     ticket?.billed();
     const rendered = renderEntry(entry, query, config, { cached: false });
     emitSearchMetric({
-      provider,
+      provider: selected,
       query,
       cached: false,
       results: rendered.results,
@@ -527,12 +614,14 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
     else ticket?.failure();
 
     const snapshot = run.cost.snapshot('search', run.runKey);
+    // 失败也要写清试的是哪家：选了后端但没到发请求就失败时，用配置口径兜底
+    const backendId = provider?.id ?? config.searchProvider;
     emitMetric({
       tool: 'web_search',
-      backend: DEFAULT_SEARCH_PROVIDER_ID,
+      backend: backendId,
       ...(query !== undefined
         ? {
-            provider_id: DEFAULT_SEARCH_PROVIDER_ID,
+            provider_id: backendId,
             query_chars: query.query.length,
             query_sha8: sha8(query.query),
             count: query.count,

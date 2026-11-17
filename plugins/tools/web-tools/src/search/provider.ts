@@ -9,6 +9,8 @@
  * `provider_id` + `provider_version`，两个后端的结果不会串味）。
  */
 
+import type { WebToolsConfig } from '../config';
+
 /** 搜索输出的预算档（纯本地旋钮） */
 export type SearchDetail = 'brief' | 'full';
 
@@ -61,6 +63,25 @@ export interface ProviderHttp {
   postJson(request: ProviderHttpRequest): Promise<ProviderHttpResponse>;
 }
 
+/** 传输层注入点（替身 fetch / 时钟 / 睡眠 / env）——与 `DeepSeekDeps` 同形 */
+export interface ProviderTransportDeps {
+  fetch?: typeof fetch;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  env?: Record<string, string | undefined>;
+}
+
+/** `createHttp()` 拿到的参数：**已解析好的** key 环境变量名与共用的退避函数 */
+export interface ProviderHttpOptions {
+  config: WebToolsConfig;
+  /** 这次调用读哪个环境变量（已按 配置 > `provider.keyEnv` > `key_env` 解析） */
+  keyEnvName: string;
+  signal?: AbortSignal;
+  deps?: ProviderTransportDeps;
+  /** 退避毫秒（带抖动）；由 `CostController` 提供，重试策略本身仍在共用层 */
+  backoff: (attempt: number, retryAfterMs?: number) => number;
+}
+
 export interface SearchProvider {
   /** 稳定 id（进日志与缓存键） */
   readonly id: string;
@@ -70,6 +91,28 @@ export interface SearchProvider {
   readonly billed: boolean;
   /** 是否需要 key（true ⇒ 缺 key 时本地拒，不发请求） */
   readonly requiresKey: boolean;
+  /**
+   * 缺 key 时**缺省**读哪个环境变量名（只存名字）。
+   *
+   * 优先级：配置 `search_key_env` > 这里的 `keyEnv` > 配置 `key_env`。
+   * 不写 ⇒ 用配置口径（历史上只有 deepseek 一个后端时的行为）。
+   */
+  readonly keyEnv?: string;
+  /**
+   * 上游单次条数上限（Tavily=20、Serper num≤100）。
+   *
+   * 由**共用层**在发请求前把模型请求的 `count` 夹到它（见 `search/index.ts` ⑥），
+   * 缓存键与预算口径仍按模型请求的 `count`；信封里的 `results: N` 报的是
+   * **上游真实条数**，所以「你要 50、这家只肯给 20」是看得见的。
+   */
+  readonly maxCount?: number;
+  /**
+   * 传输层：**鉴权风格与本家不同**的后端在这里自带 `ProviderHttp` 实现。
+   *
+   * 不提供 ⇒ 复用 `deepseek-client.ts` 的 Bearer + `config.base_url` 实现
+   * （为什么默认是它：deepseek 是第一个后端，不是「大家都用 Bearer」）。
+   */
+  createHttp?(options: ProviderHttpOptions): ProviderHttp;
   /** 结构化过滤条件 → 该后端认的查询串（例如 deepseek 用 `site:` / `lang:`） */
   renderQuery(query: SearchQuery): string;
   /** 真正发请求：provider 只管线格式，重试/错误映射由 `http` 负责 */
@@ -86,7 +129,7 @@ export interface SearchProvider {
 
 const providers = new Map<string, SearchProvider>();
 
-/** 注册（或覆盖）一个搜索后端。幂等：同名后注册者胜。 */
+/** 注册（或覆盖）一个搜索后端。幂等：同名后注册者胜（Map 的插入顺序即注册顺序）。 */
 export function registerSearchProvider(provider: SearchProvider): void {
   providers.set(provider.id, provider);
 }
@@ -95,11 +138,21 @@ export function getSearchProvider(id: string): SearchProvider | undefined {
   return providers.get(id);
 }
 
+/** 在册 id（**字典序**，只用于报错/展示；选择优先序见 `listSearchProviderEntries`） */
 export function listSearchProviders(): string[] {
   return [...providers.keys()].sort();
 }
 
-/** 唯一在册的后端；新增后端时这里不动（配置里写它的 id 即可） */
+/** 在册后端本体，**保持注册顺序**（`search_provider=auto` 的优先序就是它） */
+export function listSearchProviderEntries(): SearchProvider[] {
+  return [...providers.values()];
+}
+
+/**
+ * 历史缺省后端；**选择已经不再只看它**：`search/index.ts` 按
+ * 配置 `search_provider` → `auto` 注册顺序选，这里只作为「一个都没注册」时的
+ * 报错锚点与既有导出点（真机脚本/上层装配仍在用）。
+ */
 export const DEFAULT_SEARCH_PROVIDER_ID = 'deepseek';
 
 /** 防御式取对象（上游 JSON 的形状不在我们控制内） */

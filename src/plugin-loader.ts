@@ -57,11 +57,15 @@ export const FACTORY_PLUGINS: ReadonlySet<string> = new Set(['mcp-client', 'eval
  */
 export const OPT_IN_PLUGINS: ReadonlySet<string> = new Set([
   'media',
-  // 0.52：（web_fetch）默认 **不加载** —— 它让 agent 能主动对外发起 HTTP，
-  // 而目前的暴露面（提示注入 + 无出站限制）还没配上票据/审批体系。等 P1 鉴权与
-  //  的 guarded/locked 档落地、并在真实站点上验过抽取质量后再转默认。
-  // 启用方式：config.yaml 的  里显式列 。
-  'web-tools',
+  // 0.56：`web-tools` 已**转默认加载**（任何会话都能用 web_search / web_fetch）。
+  // 转默认的依据（与 0.52 当时的顾虑逐条对上）：
+  // - `web_fetch` 缺省后端仍是 `local`：免费、每一跳都过 SSRF 与 robots，
+  //   `approval: guarded | locked` + `domain_allowlist` 已落地；
+  // - 会花钱/会外发内容的后端（deepseek 抓取、计费搜索）只在**显式配置或 key 在位**
+  //   时才被选中，且全程过三道闸（每 run 配额 / 日上限 / 熔断）与内容定界；
+  // - 缺 key 时工具**依然在**：调用时报 `provider_auth_failed` 并点名要设哪个
+  //   环境变量，而不是让模型以为「这个能力不存在」。
+  // 想关掉：config.yaml 的 `plugins:` 里写 `- name: web-tools` + `enabled: false`。
 ]);
 
 /** 插件来源 */

@@ -48,6 +48,14 @@ export interface WebFetchConfig {
 export interface WebToolsConfig extends WebFetchConfig {
   /** 抓取后端，缺省 `local`（R11：新后端不许悄悄变成默认，否则开始花钱 + 内容出网） */
   backend: FetchBackendId;
+  /**
+   * 搜索后端 id；缺省 `auto` = **按注册顺序**取第一个 key 在位的后端。
+   *
+   * 显式写 id（例如 `tavily`）就忽略顺序，只用它——这是「配置优先」的唯一含义。
+   * 这里只做形态校验；「这个 id 有没有注册」在调用时判（注册表在插件内，
+   * 让 config.ts 依赖注册表会形成环）。
+   */
+  searchProvider: string;
   /** DeepSeek tools API 的 base_url（不含末尾斜杠） */
   baseUrl: string;
   /** **只存环境变量名**，绝不存值（设计 §6.1） */
@@ -227,6 +235,21 @@ function readBackend(raw: unknown): FetchBackendId {
   throw new Error(`web-tools: backend 只支持 local | deepseek，收到 ${String(raw)}`);
 }
 
+/** 搜索后端 id 的形态（`auto` 或注册表里的 id）；存在性在调用时判 */
+const SEARCH_PROVIDER_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+
+function readSearchProvider(raw: unknown): string {
+  if (raw === undefined || raw === null) return 'auto';
+  const value = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  if (value === '') return 'auto';
+  if (!SEARCH_PROVIDER_PATTERN.test(value)) {
+    throw new Error(
+      `web-tools: search_provider 必须是 auto 或后端 id（小写字母/数字/-/_，例 tavily），收到 ${JSON.stringify(String(raw).slice(0, 40))}`,
+    );
+  }
+  return value;
+}
+
 function readBaseUrl(raw: unknown): string {
   const value = readString(raw, DEFAULT_BASE_URL).replace(/\/+$/, '');
   let parsed: URL;
@@ -274,6 +297,7 @@ export function parseWebToolsConfig(raw: unknown): WebToolsConfig {
     renderer,
 
     backend,
+    searchProvider: readSearchProvider(cfg.search_provider),
     baseUrl: readBaseUrl(cfg.base_url),
     keyEnv: readEnvName(cfg.key_env, DEFAULT_KEY_ENV, 'key_env'),
     searchKeyEnv: readEnvName(cfg.search_key_env, '', 'search_key_env'),
