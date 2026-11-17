@@ -48,9 +48,14 @@
  * 升级后**第一次健康归档之前仍是 `tainted = true`**，不会自动洗白。这是可接受的保守姿态
  * （安全方向：宁可多报一次脏，不可漏报一次真丢失）。
  *
- * 封块四个时机（I2 之内的延迟来源）：
- * ① 活动块 ≥ `BLOCK_MAX_BYTES`；② 非 chunk 事件先封块再写该行（严格交错）；
- * ③ 空闲 `chunk_flush_ms`；④ `flush()` / `close()`。
+ * 封块时机（I2 之内的延迟来源；**0.57 可追加块之后只剩四个**）：
+ * ① 活动块 ≥ `BLOCK_MAX_BYTES`（4 MiB 硬上限）；② run 换人（chunk 的 `run_id` 变了）；③
+ * `close()`；④ 崩溃后 `open()` 补记账。
+ *
+ * 与旧口径的差别（用户拍的那一刀）：**空闲 `chunk_flush_ms` 与非 chunk 事件都不再封块**，
+ * 它们只触发「落盘 + 发布」（`flushPendingChunks`）。发布延迟仍然 `≤ chunk_flush_ms`
+ * （ADR-105 的 P95 预算不变），块却从「150 ms 一刀」变成「一个 run 一个块」
+ * （真身实测 13,177 → 106）。
  *
  * ## 打开（`open()`）读多少（第十一条：启动路径不许 O(会话大小)）
  *
@@ -327,6 +332,36 @@ function parseTailRecords(lines: readonly string[]): TimelineRecord[] | undefine
   return records;
 }
 
+/**
+ * 把 `[from,to]` 里**已经在 `records` 里出现**的 seq 剔掉，剩下的按连续段切出来（升序）。
+ *
+ * 为什么需要：0.57 的块区间会横跨事实行（块只装 chunk，事实行在 `wal.log`）。块尾被截断
+ * 时，`missingRanges` 报出来的区间可能**夹着照样读得回来的事实行** —— 洞只许覆盖真的
+ * 读不回来的 seq，否则客户端会把可读记录算成洞（`count = 区间长度 - |holes|`）。
+ *
+ * 只在恢复路径上跑一次，区间长度就是单块覆盖的 seq 数（≤ 单块帧数），完全可接受。
+ */
+function subtractReadable(
+  from: number,
+  to: number,
+  records: ReadonlyMap<number, TimelineRecord>,
+): Array<{ from_seq: number; to_seq: number }> {
+  const out: Array<{ from_seq: number; to_seq: number }> = [];
+  let start: number | undefined;
+  for (let seq = from; seq <= to; seq += 1) {
+    if (records.has(seq)) {
+      if (start !== undefined) {
+        out.push({ from_seq: start, to_seq: seq - 1 });
+        start = undefined;
+      }
+      continue;
+    }
+    start ??= seq;
+  }
+  if (start !== undefined) out.push({ from_seq: start, to_seq: to });
+  return out;
+}
+
 /** 找出 `[1..maxKnown]` 里既没有记录、也没被洞覆盖的区间（恢复时补登记）。 */
 function findGaps(
   recordSeqs: readonly number[],
@@ -534,19 +569,26 @@ export class TimelineWriter {
     return this.enqueue(() => this.appendManyNow(inputs));
   }
 
-  /** 封活动块、落索引；返回后所有已 append 的事件都可枚举。 */
+  /** 把已 append 的东西都写成 durable、可枚举；**不封块**（块在 run 存活期间继续追加）。 */
   flush(): Promise<void> {
     return this.enqueue(async () => {
-      await this.sealPendingBlock();
+      await this.flushPendingChunks();
       await this.blocks.flushManifests();
       if (this.indexDirty) await this.persistIndex();
     });
   }
 
-  /** 关闭：flush → 关句柄。重复调用幂等。 */
+  /** 关闭：flush → 封块 → 关句柄。重复调用幂等。 */
   async close(): Promise<void> {
     if (this.closed) return;
     await this.flush();
+    // 关闭是「这个 run 的 chunk 流到此为止」的最后一个边界：把活动块收口并写下 manifest
+    // 条目（否则最后一个块要等下一次 `open()` 才补记账）。
+    await this.enqueue(async () => {
+      await this.sealPendingBlock();
+      await this.blocks.flushManifests();
+      if (this.indexDirty) await this.persistIndex();
+    });
     this.closed = true;
     this.clearIdleTimer();
     this.blocks.close();
@@ -942,9 +984,15 @@ export class TimelineWriter {
         });
       }
     }
+    // 洞只许覆盖**真的读不回来**的 seq：恢复出来的区间里可能夹着读得回来的记录
+    // （可追加块的块区间横跨事实行，事实行的载荷在 `wal.log` 里；块尾被截断时，被截掉的
+    // 标记帧后面那些事实行照样可读）。多报一个 seq 就等于让客户端少算一条可读记录 ——
+    // 那是「声明式少给」，与静默少给只差一层包装。所以逐号剔除可读的，再按连续段声明。
     for (const range of invalidRanges) {
-      if (records.has(range.from_seq) || this.holes.covers(range.from_seq)) continue;
-      await this.declareRecoveryHole(range.from_seq, range.to_seq, range.reason);
+      for (const sub of subtractReadable(range.from_seq, range.to_seq, records)) {
+        if (this.holes.covers(sub.from_seq)) continue;
+        await this.declareRecoveryHole(sub.from_seq, sub.to_seq, range.reason);
+      }
     }
 
     // 恢复出的空洞（既无记录也无洞）必须补声明，否则 wal_head 会停在一个说不出原因的洞里。
@@ -1182,8 +1230,12 @@ export class TimelineWriter {
   }
 
   private async factStep(input: TimelineAppendInput): Promise<TimelineRecord> {
-    // 严格交错：任何非 chunk 事件落盘前先封活动块（封块条件 ②）。
-    if (this.blocks.pendingCount() > 0) await this.sealPendingBlock();
+    // 严格交错（不动）：任何非 chunk 事件落盘前，先把活动块里**更早的** chunk 落盘并发布。
+    //
+    // 0.57 起这一步只是「落盘」而不是「封块」：块在 run 存活期间继续往后追加（一个 run
+    // 一个块），但 `seq` 更小的事实绝不会先于 `seq` 更大的 chunk 可见 —— 判据没变，
+    // 变的只是块边界（不再每条事实切一刀）。
+    if (this.blocks.pendingCount() > 0) await this.flushPendingChunks();
 
     const seq = this.nextSeq;
     this.nextSeq += 1;
@@ -1204,6 +1256,9 @@ export class TimelineWriter {
     }
     const record = this.buildRecord(seq, input, storedData);
     const line = encodeLine(record);
+    // 这条事实现落在活动块的覆盖区间里 ⇒ 先在块尾写一个**事实标记帧**
+    // （12 B，只声明「这个 seq 是事实、不在本块」，载荷仍然只进 `wal.log`）。
+    await this.noteFactInBlock(seq);
     try {
       await this.writeWal(line);
     } catch (error) {
@@ -1216,6 +1271,13 @@ export class TimelineWriter {
   }
 
   private async chunkStep(input: TimelineAppendInput): Promise<ChunkStep> {
+    // run 换人 ⇒ 上一个 run 的块收口（这就是「一个 run 一个块」的边界）。
+    // 先封块再分配 seq：封块失败时这一条还没占号（与 `appendMany` 里「seq 在批量写之后
+    // 才分配」同一条纪律）。
+    const currentRun = this.blocks.currentRun();
+    if (currentRun !== undefined && currentRun !== input.run_id) {
+      await this.sealPendingBlock();
+    }
     const seq = this.nextSeq;
     this.nextSeq += 1;
     if (this.dataBytes(input.data) > MAX_INLINE_BYTES) {
@@ -1290,7 +1352,8 @@ export class TimelineWriter {
             ),
           );
         } else {
-          if (this.blocks.pendingCount() > 0) await this.sealPendingBlock();
+          // 严格交错（不封块，只落盘 + 发布，见 `factStep`）。
+          if (this.blocks.pendingCount() > 0) await this.flushPendingChunks();
           const oversized = this.dataBytes(input.data) > MAX_INLINE_BYTES;
           if (oversized) {
             // 大事件打断批量（blob 必须先落盘），但 seq 顺序不变。
@@ -1316,6 +1379,8 @@ export class TimelineWriter {
             }
           }
           const record = this.buildRecord(seq, input, storedData);
+          // 与 `factStep` 同一件事：这条事实落在活动块区间里 ⇒ 块尾补一个事实标记帧。
+          await this.noteFactInBlock(seq);
           batchRecords.push(record);
           batchLines.push(encodeLine(record));
           if (oversized) await flushBatch();
@@ -1323,7 +1388,8 @@ export class TimelineWriter {
       }
 
       await flushBatch();
-      if (this.blocks.pendingCount() > 0) await this.sealPendingBlock();
+      // 批末只**落盘发布**、不封块：块留给 run 边界 / 硬上限 / flush / close 收口。
+      if (this.blocks.pendingCount() > 0) await this.flushPendingChunks();
       await Promise.all(chunkDurabilities);
     } catch (error) {
       // 中途异常：已经缓冲的合法记录照常落盘（不能留下“seq 已分配、记录未写、也没洞”）。
@@ -1333,9 +1399,9 @@ export class TimelineWriter {
         // flushBatch 自己会把整批登记成洞。
       }
       try {
-        if (this.blocks.pendingCount() > 0) await this.sealPendingBlock();
+        if (this.blocks.pendingCount() > 0) await this.flushPendingChunks();
       } catch {
-        // sealPendingBlock 自己会处理洞与拒绝。
+        // flushPendingChunks 自己会处理洞与拒绝。
       }
       throw error;
     }
@@ -1379,10 +1445,10 @@ export class TimelineWriter {
     this.publishRecord(record);
   }
 
-  /** 一个块已持久：按 seq 顺序发布块内全部 chunk，然后兑现等待中的 append。 */
+  /** 一个块切片已持久：按 seq 顺序发布其中的全部 chunk，然后兑现等待中的 append。 */
   private completeBlock(seal: ChunkBlockSeal): void {
     for (const record of seal.records) this.indexBuilder.add(record);
-    // 块的 seq 从 `walHead+1` 连续到 `end_seq`（封块条件 ② 保证块内不夹非 chunk），
+    // 切片里的 seq 从 `walHead+1` 连续到 `end_seq`（严格交错保证片内不夹事实行），
     // 常见路径 O(1)；只有异常序号才回落到区间合并计算。
     if (seal.entry.start_seq === this.walHead + 1) {
       this.walHead = seal.entry.end_seq;
@@ -1397,9 +1463,36 @@ export class TimelineWriter {
     this.indexDirty = true;
   }
 
+  /**
+   * 把活动块里**待落盘的 chunk** 追加进块文件并 fsync，然后发布（I2 的发布点）。
+   *
+   * 这是可追加块带来的第二个「发布点」（第一个是封块）：块不再攒满才发布，而是每次
+   * 「落盘一段」就发布这一段 —— 发布延迟仍然 ≤ `chunk_flush_ms`（空闲定时器触发），
+   * 但块文件不再因此被切碎。
+   */
+  private async flushPendingChunks(): Promise<void> {
+    if (this.blocks.pendingCount() === 0) return;
+    let seal: ChunkBlockSeal | undefined;
+    try {
+      seal = await this.blocks.flushActive();
+    } catch (error) {
+      await this.failPendingChunks(error);
+      return;
+    }
+    if (seal !== undefined) this.completeBlock(seal);
+  }
+
+  /**
+   * 封块（run 换人 / 撞硬上限 / `close()`）：把待落盘 chunk 追加落盘 → 发布 → 关块文件
+   * → 写 `wal.manifest` 条目。
+   *
+   * 注意它**不是** `flush()` 的语义：`flush()` 只要求「已 append 的都 durable、可枚举」，
+   * 那件事 `flushPendingChunks()` 就做到了。封块只在「这个 run 的 chunk 流到头了」时发生，
+   * 否则又会退回「一个 run 被切成几十个块」。
+   */
   private async sealPendingBlock(): Promise<void> {
     this.clearIdleTimer();
-    if (this.blocks.pendingCount() === 0) return;
+    if (!this.blocks.hasOpenBlock()) return;
     let seal: ChunkBlockSeal | undefined;
     try {
       seal = await this.blocks.seal();
@@ -1408,6 +1501,21 @@ export class TimelineWriter {
       return;
     }
     if (seal !== undefined) this.completeBlock(seal);
+  }
+
+  /**
+   * 让活动块「知道」有一条事实落到它的覆盖区间里（块尾补一个事实标记帧）。
+   *
+   * 失败 ⇒ **立刻封块**：这个块不能再追加（否则区间里有一件事实却没有标记，恢复时会把它
+   * 判成丢帧 = 假洞）。封块的区间停在最后一个已落盘帧，这条事实因此在区间之外 ——
+   * 一个标记都不缺。事实行本身照写（这里不抛）。
+   */
+  private async noteFactInBlock(seq: number): Promise<void> {
+    try {
+      await this.blocks.markFact(seq);
+    } catch {
+      await this.sealPendingBlock();
+    }
   }
 
   /**
@@ -1537,7 +1645,9 @@ export class TimelineWriter {
    * 事实一个字节都不动、`wal_head` 照常 —— 这正是 I3「归档失败只影响空间回收」。
    */
   private async archiveNow(): Promise<ArchiveResult> {
-    if (this.blocks.pendingCount() > 0) await this.sealPendingBlock();
+    // 归档只关心事实行（chunk 不进 `timeline.ndjson`）：chunk 只要 durable + 已发布就够，
+    // **不封块**（封块会把一个 run 的 chunk 流切碎，见 `sealPendingBlock` 的注释）。
+    if (this.blocks.pendingCount() > 0) await this.flushPendingChunks();
     // 起点取「manifest 指针 + 自身水位」的大者：水位只增，所以它永远不会往回退。
     const from = Math.max(this.timelineHead + 1, this.archiveWatermark + 1);
     const to = this.walHead;
@@ -1743,16 +1853,19 @@ export class TimelineWriter {
   }
 
   private scheduleIdleFlush(): void {
-    // 定时器从「活动块里第一条待封 chunk」起算，**不随每条 chunk 重置**。
-    // 重置会让持续流式（chunk 间隔 < chunk_flush_ms）永远等不到封块，发布延迟退化为
-    // 「填满 32 KiB 的时间」，直接违反 ADR-105 的 P95 ≤ chunk_flush_ms + 50ms。
+    // 定时器从「活动块里第一条待落盘 chunk」起算，**不随每条 chunk 重置**。
+    // 重置会让持续流式（chunk 间隔 < chunk_flush_ms）永远等不到落盘，发布延迟退化为
+    // 「填满块的时间」，直接违反 ADR-105 的 P95 ≤ chunk_flush_ms + 50ms。
+    //
+    // 0.57 起它触发的是 **flush**（落盘 + 发布）而不是**封块**：这正是「块从 150ms 一刀
+    // 变成 run 级」的那一处 —— 发布延迟不变（还是 ≤ chunk_flush_ms），块却不再被切碎。
     if (this.timer !== undefined) return;
     this.timer = setTimeout(
       () => {
         this.timer = undefined;
         if (this.closed) return;
         void this.enqueue(async () => {
-          await this.sealPendingBlock();
+          await this.flushPendingChunks();
         }).catch(() => {});
       },
       Math.max(1, this.chunkFlushMs - CHUNK_FLUSH_LEAD_MS),

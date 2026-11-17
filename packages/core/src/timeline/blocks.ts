@@ -1,18 +1,59 @@
 /**
- * chunk 块格式与写入（0.54 A 阶段，ADR-105 §4）。
+ * chunk 块格式与写入（0.54 A 阶段起步，0.57 改成**可追加块**；ADR-105 §4）。
  *
- * chunk 不逐条写 ndjson（一次长 run 上千条、~200 B/条编码开销），而是：
+ * chunk 不逐条写 ndjson（一次长 run 上千条、~200 B/条编码开销），而是进块：
  *
  * ```
- * wal.blocks/000007.wblk   [u64 LE seq][u32 LE len][utf8 JSON record] × N
+ * wal.blocks/000007.wblk   [u64 LE seq][u32 LE len][utf8 JSON record]  × N   ← chunk 帧
+ *                          [u64 LE seq][u32 LE 0xffffffff]             × M   ← 事实标记帧
  * wal.manifest            {"v":1,"kind":"block","block":"000007.wblk","start_seq":…,…}\n
  * ```
  *
- * 封块即 `fsync`（块文件是 chunk 的 WAL 本体）；manifest 是**目录**，扫描块文件即可
- * 恢复，因此 manifest 追加失败不阻断正确性（只记一次告警）。
+ * ## 0.57：块从「定长容器」变成「run 级容器（可追加）」
  *
- * 封块四个时机由 `writer.ts` 触发（块满 / 非 chunk 事件前 / 空闲 / 终态与 flush）；
- * 本模块只提供「加帧 / 封块 / 恢复」三件事，外加「**哪些 chunk 配进块**」的唯一判据
+ * 旧口径：块攒满 `BLOCK_MAX_BYTES`（32 KiB）/ 空闲 150 ms / 遇见非 chunk 事件就封，
+ * 于是一次长 run 被切成几十个块（实测真身 20 万 seq → **13,177 个块**，p50 只有 2.6 KiB）。
+ * 运行期开销全在「块数」上：一次范围读要枚举、定位、逐块开文件。
+ *
+ * 新口径：**一个 run 一个块**。第一条 chunk 到达时建块文件，之后每条 chunk 都往**块尾
+ * append**，只有四件事让它收口（{@link ChunkBlockStore.seal}）：
+ *
+ * | 时机 | 谁触发 | 为什么 |
+ * | --- | --- | --- |
+ * | run 换人（chunk 的 `run_id` 变了） | `writer.ts#chunkStep` | 「一个 run 一个块」的边界 |
+ * | 撞上硬上限 `BLOCK_MAX_BYTES`（4 MiB） | `writer.ts#chunkStep` | 单块读的上界（一个 run 写爆也要能读） |
+ * | `close()` | `writer.ts#close` | 关闭即收口 |
+ * | 崩溃后 `open()` 补记账 | {@link ChunkBlockStore.sealTrailingUnrecordedBlocks} | 「写了但没记账」的尾块 |
+ *
+ * 空闲定时器**不再封块**，只做「落盘 + 发布」（{@link ChunkBlockStore.flushActive}）：
+ * 发布延迟仍然是 `≤ chunk_flush_ms`（ADR-105 I2 的 P95 预算不变），块却不再被切碎。
+ *
+ * ## 块区间里为什么会夹着事实行（以及事实标记帧）
+ *
+ * 块只装 chunk，但每个 run 的 chunk 流中间夹着事实行（`llm.request` / `llm.response` /
+ * `tool.call.*` …），它们是 `wal.log` 的行、按 seq 与 chunk 交错分配。所以一个块的覆盖
+ * 区间 `[start_seq, end_seq]` 会横跨若干事实行。为了让块**自描述覆盖**——`[start,end]` 里
+ * 每个 seq 都能在块文件里找到一句「它在这」——写事实行的同时在块尾追加一个 12 字节的
+ * **事实标记帧**（`wal.ts#FACT_MARKER_LENGTH`）：它只声明「这个 seq 是事实、载荷不在这里」。
+ *
+ * 三件事因此不必改口径：
+ * 1. 恢复时 `missingRanges` 把标记帧当「合法缺席」，不会把段内事实判成丢帧（假洞）；
+ * 2. 撕裂尾帧的识别不变（标记帧也是定长帧头）；
+ * 3. 块区间仍然**逐号自描述**：`frames + markers == manifest.count`，少一个就是坏块。
+ *
+ * 「事实先于 chunk 可见」的顺序**没变**：事实内容仍然只写 `wal.log`，而且写它之前
+ * `flushActive` 已经把更早的 chunk fsync 过（严格交错只从「封块」降级成「落盘」，见
+ * `writer.ts#factStep`）。标记帧不带任何载荷，所以它不改变任何可见性。
+ *
+ * ## 前缀守卫（append-only）
+ *
+ * 块文件建好之后**只允许在块尾 append**：已发出的字节一个都不重写（`handle.write` 顺序追加，
+ * 从不 seek 回去）。manifest 条目只在最后一次 fsync 之后写一次，描述整块的
+ * `[start_seq,end_seq] / bytes / crc32 / count`；写失败 ⇒ 回滚到上次记账的长度
+ * （{@link ChunkBlockStore.rollbackFlush}），回滚不了就放弃这个块（不写条目 ⇒ 恢复按撕裂
+ * 尾帧截断），绝不把半截字节算进任何账。
+ *
+ * 本模块只提供「加帧 / 落盘 / 封块 / 恢复」四件事，外加「**哪些 chunk 配进块**」的唯一判据
  * （{@link isTransientChunkEvent}，0.54 chunk-slim）。
  *
  * @module @vessel-agent/core/timeline
@@ -31,12 +72,18 @@ import {
   type WalManifestLine,
 } from './types.js';
 import {
+  type BlockEvidence,
   blockNumber,
   CHUNK_FRAME_HEADER_BYTES,
   type ChunkBlockDecode,
+  type Crc32State,
+  crc32Final,
   crc32Hex,
+  crc32State,
+  crc32Update,
   decodeChunkBlock,
   encodeChunkFrame,
+  encodeFactMarker,
   findLineStartBefore,
   fsyncDirectory,
   type LineReadBudget,
@@ -138,6 +185,14 @@ export interface ChunkBlockSeal {
   records: TimelineRecord[];
 }
 
+/** 恢复时解出来的一个块文件（补记账用；不长期持有整个 buffer）。 */
+interface DecodedBlockFile {
+  name: string;
+  decode: ChunkBlockDecode;
+  /** 截断撕裂尾帧之后的字节数（= 盘上现在真实的前缀长度）。 */
+  bytes: number;
+}
+
 export interface ChunkBlockRecovery {
   records: TimelineRecord[];
   /** 完整但 CRC/形状不符的帧：seq 可读，写者必须登记成洞。 */
@@ -210,12 +265,43 @@ function missingRanges(
   return ranges;
 }
 
+/**
+ * **活动块**（0.57 可追加块）：一个块文件在「run 存活期间」一直开着，后面的 chunk 帧接着
+ * 往块尾追加，直到 run 换人 / 撞硬上限 / `flush()` / `close()` 才封。
+ *
+ * 字段全部是**已落盘**的账（`flushActive` 写成功之后才更新），用来在封块时一次性写出
+ * manifest 条目，以及交给 {@@link ChunkBlockStore.sealTrailingUnrecordedBlocks} 在崩溃
+ * 恢复时补记账。
+ */
+interface ActiveBlock {
+  readonly name: string;
+  readonly handle: FileHandle;
+  readonly runId: string;
+  /** 块首帧的 seq（块永远以一条 chunk 帧开头：只有 push() 才建块）。 */
+  readonly startSeq: number;
+  /** 最后一个被覆盖的 seq（帧或事实标记帧）。 */
+  endSeq: number;
+  /** 已落盘字节数。 */
+  bytes: number;
+  /** 已落盘字节的 CRC32 累加状态（封块时收敛成 `crc32` 字段）。 */
+  crc: Crc32State;
+  /** 落盘的帧数（chunk 帧）与标记帧数（事实 seq）。 */
+  frames: number;
+  markers: number;
+  /** 目录项是否已经 fsync 过（新块第一次落盘后做一次）。 */
+  dirSynced: boolean;
+}
+
 /** chunk 块写入器（每会话一个，串行队列由 `TimelineWriter` 保证）。 */
 export class ChunkBlockStore {
   private readonly pendingFrames: Buffer[] = [];
   private readonly pendingRecords: TimelineRecord[] = [];
   private readonly pendingManifests = new Set<Promise<void>>();
   private pendingBytes = 0;
+  /** 待落盘帧所属的 run（`pendingRecords` 为空时 `undefined`）。 */
+  private pendingRunId: string | undefined;
+  /** 可追加的活动块；`undefined` = 现在没有开着的块。 */
+  private active: ActiveBlock | undefined;
   private nextBlockNumber: number;
   private closed = false;
 
@@ -259,14 +345,23 @@ export class ChunkBlockStore {
     const records: TimelineRecord[] = [];
     const invalid: ChunkBlockRecovery['invalid'] = [];
     const truncated: string[] = [];
-    /** 每个块里「可读或已声明坏帧」的 seq（manifest 比对用）。 */
+    /** 每个块里「被覆盖」的 seq（chunk 帧 / 坏帧 / 事实标记帧）：manifest 比对用。 */
     const coveredByBlock = new Map<string, Set<number>>();
+    /** 解出来的尾部块（补记账用：见 {@link sealTrailingUnrecordedBlocks}）。 */
+    const decodedBlocks: DecodedBlockFile[] = [];
     let maxNumber = 0;
     for (const name of names) maxNumber = Math.max(maxNumber, blockNumber(name));
     for (const name of decodedNames) {
       const path = join(blocksDir, name);
       const buffer = await readFile(path).catch(() => undefined);
       if (buffer === undefined) continue;
+      // 空块文件（崩在「建文件」与「第一次落盘」之间）：一个字节的数据都没有，删掉它。
+      // 留着会让块号序列出现一个「空档」，而且 `lastBlockSeq` 会读到 0（尾部看起来像没有
+      // 任何数据）。删它不违反 append-only：里面从来没有过内容。
+      if (buffer.length === 0) {
+        await unlink(path).catch(() => {});
+        continue;
+      }
       const decode = decodeChunkBlock(buffer);
       records.push(...decode.records);
       invalid.push(...decode.invalid);
@@ -276,16 +371,25 @@ export class ChunkBlockStore {
       for (const item of decode.invalid) {
         for (let seq = item.from_seq; seq <= item.to_seq; seq += 1) covered.add(seq);
       }
+      // **事实标记帧**（0.57）：这些 seq 是故意不在本块里的事实行（载荷在 `wal.log`）。
+      // 不把它们算进覆盖集合，`missingRanges` 就会把块区间里每一件事实都判成丢帧
+      // （= 往 `holes.ndjson` 里写假洞，读侧会把可读的事实行当成不可读）。
+      for (const seq of decode.markers) covered.add(seq);
       coveredByBlock.set(name, covered);
+      let bytes = buffer.length;
       if (decode.torn) {
         await truncateFile(path, decode.validBytes);
         truncated.push(name);
+        bytes = decode.validBytes;
       }
+      decodedBlocks.push({ name, decode, bytes });
     }
 
     // manifest ↔ 块文件互相校验（I4 对块内丢帧同样适用）。
     const manifestPath = join(sessionDir, TIMELINE_LAYOUT.walManifest);
     let manifestCrossChecked = true;
+    /** manifest 里出现过的**最大块号**（补记账的边界：只补它之后的连续尾部块）。 */
+    let entryMaxNumber = 0;
     if (tailOnly) {
       const exists = await stat(manifestPath).catch(() => undefined);
       const last = decodedNames[decodedNames.length - 1];
@@ -306,6 +410,7 @@ export class ChunkBlockStore {
           for (const text of window.lines) {
             const entry = parseManifestText(text);
             if (entry === undefined) continue; // 坏行：与全量读同一口径忽略
+            entryMaxNumber = Math.max(entryMaxNumber, blockNumber(entry.block));
             const covered = coveredByBlock.get(entry.block);
             if (covered === undefined) {
               // 只对「比最后解出来的块更新」的条目下结论（更早的块本趟没解，留给显式修复）。
@@ -334,6 +439,7 @@ export class ChunkBlockStore {
         await truncateFile(manifestPath, manifest.truncateTo);
       }
       for (const entry of manifest?.items ?? []) {
+        entryMaxNumber = Math.max(entryMaxNumber, blockNumber(entry.block));
         const covered = coveredByBlock.get(entry.block);
         if (covered === undefined) {
           // manifest 说这个块写完了，块文件却不在 ⇒ 整段丢失（块只写一次、永不重写）。
@@ -358,92 +464,301 @@ export class ChunkBlockStore {
       options,
       maxNumber + 1,
     );
+    // 「写了、但 manifest 还没记上」的尾部块：在这里补一条条目。
+    //
+    // 这是可追加块的**崩溃平义**落点：块在 run 存活期间一直开着，封块（= 写 manifest 行）
+    // 只发生在 run 换人 / 撞硬上限 / flush / close。所以进程被杀之后，最后一个块几乎必然
+    // 处于「字节都在、目录没记」的状态。不补的话它会**永久**缺一条目录行，而
+    // `ManifestNameSource` 按行序枚举（只往前走），中间缺一条就会静默少枚举一个块 ——
+    // 覆盖算术随后报 `coverage_gap` 并降级整份读：正确但每次都慢。
+    //
+    // 补记账只补**尾部连续**的那一段（块号 > manifest 已有的最大块号）：行序必须跟着块号走。
+    await store.sealTrailingUnrecordedBlocks(decodedBlocks, entryMaxNumber);
     return { store, recovery: { records, invalid, truncated, manifestCrossChecked } };
   }
 
-  /** 当前活动块里的记录数（0 = 没有待封块）。 */
+  /** 当前待落盘的记录数。 */
   pendingCount(): number {
     return this.pendingRecords.length;
   }
 
-  /** 当前活动块的字节数。 */
+  /** 当前待落盘的字节数。 */
   pendingSize(): number {
     return this.pendingBytes;
   }
 
+  /** 有没有「开着的块」或「还没落盘的帧」（`false` = 封块无事可做）。 */
+  hasOpenBlock(): boolean {
+    return this.active !== undefined || this.pendingRecords.length > 0;
+  }
+
+  /** 活动块已落盘的字节数（封块上限判断 / 诊断用）。 */
+  activeBytes(): number {
+    return this.active?.bytes ?? 0;
+  }
+
+  /** 活动块（或待落盘帧）属于哪个 run；都没有 ⇒ `undefined`。 */
+  currentRun(): string | undefined {
+    return this.active?.runId ?? this.pendingRunId;
+  }
+
   /**
-   * 把一帧放进活动块缓冲（同步；不落盘）。
+   * 把一帧放进**待落盘缓冲**（同步；不落盘）。
    *
-   * 写者必须在**同一个串行队列里**接着检查 {@link shouldSeal} 并在需要时 `await seal()`，
-   * 这样不会有两个封块并发（`seal()` 本身不是可重入的）。
+   * 写者必须在**同一个串行队列里**接着调用 {@link flushActive}（让 chunk 变 durable、
+   * 之后才发布）或 {@link seal}（块收口），这样不会有两个追加并发。
    */
   push(record: TimelineRecord): void {
     if (this.closed) throw new Error('chunk_block_store_closed');
-    const frame = encodeChunkFrame(record);
-    this.pendingFrames.push(Buffer.from(frame));
+    const frame = Buffer.from(encodeChunkFrame(record));
+    this.pendingFrames.push(frame);
     this.pendingRecords.push(record);
     this.pendingBytes += frame.length;
-  }
-
-  /** 活动块是否达到 `BLOCK_MAX_BYTES`（封块时机 ①）。 */
-  shouldSeal(): boolean {
-    return this.pendingRecords.length > 0 && this.pendingBytes >= this.maxBytes;
+    this.pendingRunId ??= record.run_id;
   }
 
   /**
-   * 封块：写文件 + fsync（块数据是 WAL 本体），再尽力追加 manifest。
+   * 活动块（含待落盘帧）是否撞上硬上限（封块时机 ①）。
    *
-   * 写/fsync 失败：删除**本次新建**的块文件（避免“洞”与可读数据重叠），保留
-   * `pendingRecords` 供写者 `takePending()` 登记洞，然后把错误抛回。
+   * 可追加块之后这是**唯一**的尺寸类封块条件：空闲定时器不再封块，改成「落盘 + 发布」
+   * （见 {@link flushActive}），否则又会变回「每 150 ms 一个块」。
    */
-  async seal(): Promise<ChunkBlockSeal | undefined> {
+  shouldSeal(): boolean {
+    return (
+      this.pendingRecords.length > 0 &&
+      (this.active?.bytes ?? 0) + this.pendingBytes >= this.maxBytes
+    );
+  }
+
+  /**
+   * 把待落盘的帧**追加**到活动块尾 + fsync，返回这一批切片（供发布）。
+   *
+   * 这是可追加块的核心：块文件从第一条 chunk 起就开着（`open(..., 'wx')` 只创建一次），
+   * 之后每条 chunk 都只往后 append，**前面已经发出去的字节一个都不动**（前缀守卫）。
+   *
+   * 三条纪律：
+   * 1. **记账只在 `write` + `fsync` 成功之后**（I2：publish 只能在 WAL fsync 之后），
+   *    所以 `bytes` / `crc` / `endSeq` 永远描述「盘上真实存在的前缀」；
+   * 2. 失败 ⇒ 回滚到这次追加之前的长度（见 {@link rollbackFlush}）；回滚不了就放弃这个块
+   *    （不写条目 ⇒ 恢复时按撕裂尾帧截断），绝不把半截字节算进任何账；
+   * 3. 新块第一次落盘后 fsync 一次目录：**块文件先于事实行可见**是 `selectBlocksForSnapshot`
+   *    的快照前提（见 `wal.ts` 那段长注释）。
+   */
+  async flushActive(): Promise<ChunkBlockSeal | undefined> {
     if (this.closed) throw new Error('chunk_block_store_closed');
     if (this.pendingRecords.length === 0) return undefined;
-    const name = `${String(this.nextBlockNumber).padStart(6, '0')}.wblk`;
-    const path = join(this.blocksDir, name);
     const buffer = Buffer.concat(this.pendingFrames);
     const records = this.pendingRecords.slice();
-    const entry: TimelineBlockEntry = {
-      block: name,
-      start_seq: records[0]?.seq ?? 0,
-      end_seq: records[records.length - 1]?.seq ?? 0,
-      offset: 0,
-      bytes: buffer.length,
-      count: records.length,
-      crc32: crc32Hex(buffer),
-    };
-
-    let handle: FileHandle | undefined;
+    const previousBytes = this.active?.bytes ?? 0;
+    const created = this.active === undefined;
+    let active = this.active;
     try {
-      handle = await open(path, 'wx', 0o600);
+      if (active === undefined) {
+        const name = `${String(this.nextBlockNumber).padStart(6, '0')}.wblk`;
+        const handle = await open(join(this.blocksDir, name), 'wx', 0o600);
+        active = {
+          name,
+          handle,
+          runId: records[0]?.run_id ?? '',
+          startSeq: records[0]?.seq ?? 0,
+          endSeq: records[records.length - 1]?.seq ?? 0,
+          bytes: 0,
+          crc: crc32State(),
+          frames: 0,
+          markers: 0,
+          dirSynced: false,
+        };
+      }
       let offset = 0;
       while (offset < buffer.length) {
-        const { bytesWritten } = await handle.write(buffer, offset, buffer.length - offset);
+        const { bytesWritten } = await active.handle.write(buffer, offset, buffer.length - offset);
         if (bytesWritten <= 0) throw new Error('chunk_block_write_failed');
         offset += bytesWritten;
       }
       this.options.beforeSync?.('block');
-      await handle.sync();
+      await active.handle.sync();
+      if (!active.dirSynced) {
+        await fsyncDirectory(this.blocksDir);
+        active.dirSynced = true;
+      }
     } catch (error) {
-      await handle?.close().catch(() => {});
-      await unlink(path).catch(() => {});
+      await this.rollbackFlush(active, created, previousBytes);
       throw error;
     }
-    await handle.close().catch(() => {});
-    await fsyncDirectory(this.blocksDir);
 
+    crc32Update(active.crc, buffer);
+    active.bytes += buffer.length;
+    active.endSeq = records[records.length - 1]?.seq ?? active.endSeq;
+    active.frames += records.length;
+    this.active = active;
     this.pendingFrames.length = 0;
     this.pendingRecords.length = 0;
     this.pendingBytes = 0;
-    this.nextBlockNumber += 1;
-    // 注意：块文件是 `wx`（只写一次）；manifest 是目录、可扫描重建。
+    this.pendingRunId = undefined;
 
-    // manifest 是目录、可由扫描重建：**不进入发布关键路径**（否则每块多一次 fsync，
-    // 把 chunk 发布延迟顶到 chunk_flush_ms + 2×fsync）。追加失败不影响正确性。
+    const entry: TimelineBlockEntry = {
+      block: active.name,
+      start_seq: records[0]?.seq ?? 0,
+      end_seq: records[records.length - 1]?.seq ?? 0,
+      offset: previousBytes,
+      bytes: buffer.length,
+      count: records.length,
+      crc32: crc32Hex(buffer),
+    };
+    return { entry, records };
+  }
+
+  /**
+   * 在活动块尾追加一个**事实标记帧**（12 B，见 `wal.ts#FACT_MARKER_LENGTH`）。
+   *
+   * 为什么需要它：块只装 chunk，但块的覆盖区间会横跨事实行（同一个 run 的 chunk 之间夹着
+   * `llm.request` / `llm.response` / `tool.call.*` 这些事实）。标记帧就是「这个 seq 是事实，
+   * 本块故意不含它」的**自描述**声明 —— 恢复时据此把段内事实算作「合法缺席」，
+   * 而不是丢帧（否则每件事实都会被登记成一个假洞）。
+   *
+   * **不 fsync**：块在没封块之前没有 manifest 条目，没人会拿条目跟它对账；而任何一次
+   * 后续帧的 fsync 都会把这个标记一起刷下去。封块时（{@link seal}）此前必然还有一次
+   * fsync，所以条目描述的永远是「标记也在盘上」的那份字节。
+   *
+   * 写失败 ⇒ 抛；调用方必须**立刻封块**（封到最后一个已落盘帧为止，于是这条事实落在区间外），
+   * 不能再往这个块里追加。
+   */
+  async markFact(seq: number): Promise<void> {
+    if (this.closed) throw new Error('chunk_block_store_closed');
+    const active = this.active;
+    if (active === undefined) return; // 没有开着的块 ⇒ 这条事实不属于任何块区间
+    if (this.pendingRecords.length > 0) {
+      throw new Error('chunk_block_marker_with_pending_frames');
+    }
+    const frame = Buffer.from(encodeFactMarker(seq));
+    try {
+      let offset = 0;
+      while (offset < frame.length) {
+        const { bytesWritten } = await active.handle.write(frame, offset, frame.length - offset);
+        if (bytesWritten <= 0) throw new Error('chunk_block_write_failed');
+        offset += bytesWritten;
+      }
+    } catch (error) {
+      // 半截标记帧留在块尾：截回已记账的长度（截不动就只能放弃这个块）。
+      await this.rollbackFlush(active, false, active.bytes);
+      throw error;
+    }
+    crc32Update(active.crc, frame);
+    active.bytes += frame.length;
+    active.endSeq = seq;
+    active.markers += 1;
+  }
+
+  /**
+   * 封块：把待落盘帧追加落盘（若有）→ 关闭块文件 → 追加 manifest 条目。
+   *
+   * 条目描述**整个块**（首帧 seq … 最后一个覆盖到的 seq、总字节、总 crc、帧数 + 标记数），
+   * 只在最后一次 fsync 之后写；manifest 依旧是「目录」、可扫描重建，因此追加失败不影响
+   * 正确性（恢复会补记账，见 `open()` 里的 `sealTrailingUnrecordedBlocks`）。
+   *
+   * 返回**最后一次追加**的切片（供发布）；没有待落盘帧 ⇒ `undefined`。
+   */
+  async seal(): Promise<ChunkBlockSeal | undefined> {
+    if (this.closed) throw new Error('chunk_block_store_closed');
+    const tail = await this.flushActive();
+    const active = this.active;
+    if (active === undefined) return tail;
+    await active.handle.close().catch(() => {});
+    this.active = undefined;
+    this.nextBlockNumber += 1;
+    const entry: TimelineBlockEntry = {
+      block: active.name,
+      start_seq: active.startSeq,
+      end_seq: active.endSeq,
+      offset: 0,
+      bytes: active.bytes,
+      count: active.frames + active.markers,
+      crc32: crc32Final(active.crc),
+    };
     const manifestWrite = this.appendManifest(entry).catch(() => {});
     this.pendingManifests.add(manifestWrite);
     void manifestWrite.then(() => this.pendingManifests.delete(manifestWrite));
-    return { entry, records };
+    return tail;
+  }
+
+  /**
+   * 一次追加失败的回滚（把块文件恢复到这次追加之前的长度）。
+   *
+   * 为什么必须回滚：调用方会把这一批 seq 登记成洞；这些帧的字节若留在块里，洞就与
+   * 「可读记录」重叠（读侧看到「声明坏了却能读」的同一段）。回滚失败 ⇒ **放弃这个块**
+   * （`active = undefined`，也绝不写 manifest 条目）：下次恢复按撕裂尾帧截断它，
+   * 它不会被当成一个完好块。
+   */
+  private async rollbackFlush(
+    active: ActiveBlock | undefined,
+    created: boolean,
+    previousBytes: number,
+  ): Promise<void> {
+    if (active === undefined) return;
+    await active.handle.close().catch(() => {});
+    const path = join(this.blocksDir, active.name);
+    if (created) {
+      await unlink(path).catch(() => {});
+      return;
+    }
+    if (this.active !== undefined) {
+      // 已经落盘的那一段还完整 ⇒ 缩回原长度，块继续可用。
+      try {
+        const handle = await open(path, 'r+');
+        try {
+          await handle.truncate(previousBytes);
+        } finally {
+          await handle.close().catch(() => {});
+        }
+        this.active = {
+          ...this.active,
+          handle: await open(path, 'a', 0o600),
+        };
+        return;
+      } catch {
+        // 缩不回去：块尾留着半截帧，放弃它（条目缺失 ⇒ 恢复按撕裂尾帧截断）。
+      }
+    }
+    this.active = undefined;
+  }
+
+  /**
+   * 打开时给「写了、manifest 还没记账」的尾部块补一条条目（0.57 崩溃平义）。
+   *
+   * 只补块号 > `entryMaxNumber` 的**尾部连续块**：manifest 的行序必须跟着块号走
+   * （`ManifestNameSource` 只往前走），乱序补行等于往枚举里塞坏数据。条目的每一项都从
+   * 块文件本身算出来（`coveredFirst` / `coveredLast` / 字节数 / crc32 / 帧账），
+   * 所以它描述的是**盘上真实存在的那个块**，而不是谁的记忆。
+   */
+  private async sealTrailingUnrecordedBlocks(
+    decoded: readonly DecodedBlockFile[],
+    entryMaxNumber: number,
+  ): Promise<void> {
+    for (const item of decoded) {
+      const number = blockNumber(item.name);
+      if (!Number.isSafeInteger(number) || number <= entryMaxNumber) continue;
+      const start = item.decode.coveredFirst;
+      const end = item.decode.coveredLast;
+      if (start === undefined || end === undefined) continue; // 空块：没有可记的区间
+      // crc 必须覆盖**整个块文件字节**（与封块时同一口径）。这里重读一次：尾部块只有
+      // 一两个，字节数有界，不值得为了省这次读把全文缓冲留在内存里。
+      const bytes = await readFile(join(this.blocksDir, item.name)).catch(() => undefined);
+      if (bytes === undefined) continue;
+      const entry: TimelineBlockEntry = {
+        block: item.name,
+        start_seq: start,
+        end_seq: end,
+        offset: 0,
+        bytes: bytes.length,
+        count: item.decode.evidence.frames + item.decode.evidence.markers,
+        crc32: crc32Hex(bytes),
+      };
+      try {
+        await this.appendManifest(entry);
+      } catch {
+        // 补记账失败不影响正确性：块字节都在，读写都不靠这一行（只是枚举快路径要退一档）。
+      }
+    }
   }
 
   /** 等所有后台 manifest 追加落盘（flush / close 时调用）。 */
@@ -456,7 +771,7 @@ export class ChunkBlockStore {
   }
 
   /**
-   * 放弃当前活动块（写失败后调用）：返回尚未落盘的记录并清空缓冲。
+   * 放弃待落盘的帧（写失败后调用）：返回尚未落盘的记录并清空缓冲。
    *
    * 调用方负责把这些 seq 登记成洞、拒绝等待中的 append promise。
    */
@@ -465,12 +780,15 @@ export class ChunkBlockStore {
     this.pendingFrames.length = 0;
     this.pendingRecords.length = 0;
     this.pendingBytes = 0;
+    this.pendingRunId = undefined;
     return records;
   }
 
   /** 关闭（不再写；未封的块由调用方先 `seal()` 或 `takePending()`）。 */
   close(): void {
     this.closed = true;
+    void this.active?.handle.close().catch(() => {});
+    this.active = undefined;
   }
 
   private async appendManifest(entry: TimelineBlockEntry): Promise<void> {
@@ -736,21 +1054,28 @@ export interface BlockSelfCheck {
  * **它只是证据，不是过滤条件**：不通过的块照样要被读出来（整份读根本不看 manifest），
  * 是否降级由「窗口覆盖算术」决定 —— 见 `wal.ts#readTimelineRange`。把这里写成
  * `if (!ok) continue` 就是 0.56 设计 §9 点名的那个「变快了、少几条、零报错」的写法。
+ *
+ * 0.57 可追加块带来的两处口径变化：
+ * - 首末 seq 用「被覆盖的 seq」（含事实标记帧），不再只看最后一个**有效**记录 ——
+ *   否则「块尾是标记帧」会被误判成区间不符；
+ * - 条数把标记帧一起算（`frames + markers`），漏算标记帧就会把「标记丢了」误判成条数不符。
+ *
+ * `evidence` 来自 {@link summarizeChunkBlock}（只走帧头）或整块解码的 `decode.evidence`：
+ * 两种来源的口径**逐字段相同**，所以范围读不必为了自证去解析上万条载荷。
  */
 export function verifyBlockAgainstManifest(
   buffer: Uint8Array,
-  decode: ChunkBlockDecode,
+  evidence: BlockEvidence,
   entry: WalManifestLine,
 ): BlockSelfCheck {
   const failed: string[] = [];
-  const first = decode.records[0];
-  const last = decode.records[decode.records.length - 1];
-  if (first?.seq !== entry.start_seq || last?.seq !== entry.end_seq) failed.push('seq_range');
-  // 坏帧也占 seq：条数要连 `invalid` 一起算，否则「中间坏了一帧」会被误判成条数不符。
-  if (decode.records.length + decode.invalid.length !== entry.count) failed.push('count');
+  if (evidence.coveredFirst !== entry.start_seq || evidence.coveredLast !== entry.end_seq) {
+    failed.push('seq_range');
+  }
+  if (evidence.frames + evidence.markers !== entry.count) failed.push('count');
   if (crc32Hex(buffer) !== entry.crc32) failed.push('crc32');
   // 有 manifest 条目的块必须完整：条目只在块 fsync 之后才追加。
-  if (decode.torn) failed.push('torn');
+  if (evidence.torn) failed.push('torn');
   return { ok: failed.length === 0, failed };
 }
 
