@@ -21,7 +21,7 @@
  *
  * ## 注册顺序 = `search_provider=auto` 的优先级
  *
- * deepseek → tavily → serper → bocha。多个 key 同时在场时，按这个顺序取第一个 key 在位的。
+ * deepseek → tavily → serper → custom:bocha。多个 key 同时在场时，按这个顺序取第一个 key 在位的。
  * 想固定用某一家就显式配，别靠顺序：
  *
  * ```yaml
@@ -35,7 +35,7 @@
 import { deepseekFetchBackend } from './deepseek-fetch';
 import { localFetchBackend } from './fetch/local';
 import { registerFetchBackend } from './fetch/provider';
-import { bochaSearchProvider } from './search/bocha';
+import { BOCHA_PRESET, createCustomProvider } from './search/custom';
 import { deepseekSearchProvider } from './search/deepseek';
 import { registerSearchProvider } from './search/provider';
 import { serperSearchProvider } from './search/serper';
@@ -47,11 +47,12 @@ let registered = false;
 export function registerBuiltinBackends(): void {
   if (registered) return;
   registered = true;
-  // 顺序 = `search_provider=auto` 的优先级（见文件头）：deepseek → tavily → serper → bocha
+  // 顺序 = `search_provider=auto` 的优先级（见文件头）：deepseek → tavily → serper → custom:bocha
   registerSearchProvider(deepseekSearchProvider);
   registerSearchProvider(tavilySearchProvider);
   registerSearchProvider(serperSearchProvider);
-  registerSearchProvider(bochaSearchProvider);
+  // Bocha 不再有专用适配器：它是「声明式自定义后端」的内置预设（`custom:bocha`）
+  registerSearchProvider(createCustomProvider(BOCHA_PRESET));
   registerFetchBackend(localFetchBackend);
   registerFetchBackend(deepseekFetchBackend);
 }

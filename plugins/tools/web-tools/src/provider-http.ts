@@ -14,6 +14,8 @@ import { callDeepSeekTool, type DeepSeekDeps } from './deepseek-client';
 import type { ProviderHttp } from './search/provider';
 import type { KeyKind } from './secrets';
 
+export type { ProviderHttp };
+
 export interface DeepSeekHttpOptions {
   config: WebToolsConfig;
   keyKind: KeyKind;
@@ -61,7 +63,9 @@ export interface JsonHttpOptions {
   /** 绝对地址（固定 host 的后端用它，绕开 `config.baseUrl`） */
   endpoint: string;
   /** 鉴权头构造（值只在这一处出现，不进 URL/日志） */
-  authHeaders: (key: string) => Record<string, string>;
+  authHeaders?: (key: string) => Record<string, string>;
+  /** 查询串鉴权（`auth.style: query`）：key 进 URL 参数 */
+  authQuery?: (key: string) => Record<string, string>;
   signal?: AbortSignal;
   deps?: DeepSeekDeps;
   backoff: (attempt: number, retryAfterMs?: number) => number;
@@ -75,9 +79,13 @@ export function createJsonHttp(options: JsonHttpOptions): ProviderHttp {
         keyKind: options.keyKind,
         keyEnvName: options.keyEnvName,
         endpoint: options.endpoint,
-        authHeaders: options.authHeaders,
+        ...(options.authHeaders !== undefined ? { authHeaders: options.authHeaders } : {}),
+        ...(options.authQuery !== undefined ? { authQuery: options.authQuery } : {}),
         path: request.path,
         body: request.body,
+        ...(request.method !== undefined ? { method: request.method } : {}),
+        ...(request.query !== undefined ? { query: request.query } : {}),
+        ...(request.headers !== undefined ? { headers: request.headers } : {}),
         ...(request.hint !== undefined ? { badRequestHint: request.hint } : {}),
         ...(options.signal !== undefined ? { signal: options.signal } : {}),
         ...(options.deps !== undefined ? { deps: options.deps } : {}),
