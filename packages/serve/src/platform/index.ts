@@ -38,4 +38,6 @@ export type {
   PlatformNodeDescriptor,
   PlatformNodeStatus,
   PlatformNodeSummary,
+  WebDistProbe,
+  WebDistProbeResult,
 } from './types.js';

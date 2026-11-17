@@ -310,6 +310,8 @@ export const en: Record<MessageKey, string> = {
     'Web console assets are missing at {path}. Build them once (a fresh clone has none): `bun run build:web` (= `cd apps/web && bun run build`), or point VESSEL_STATIC_DIR at an existing build, then start again.',
   'gateway.webDistStale':
     'Web console assets may be stale: {index} is older than {source}; build with `cd apps/web && npm run build`.',
+  'gateway.webDistStaleLine':
+    'Web console assets are behind the sources: {index} is older than {source}. Fix: run `bun run build:web`, or restart the gateway (it rebuilds on start).',
   'gateway.webDistBuilding':
     'Web console assets are missing or stale; building in the background ({path})…',
   'gateway.webDistBuilt': 'Web console assets rebuilt.',

@@ -296,6 +296,8 @@ export const zhCN = {
     'Web 控制台静态资源缺失：{path}。新克隆的仓库必须先构建一次：`bun run build:web`（= `cd apps/web && bun run build`）；或把 VESSEL_STATIC_DIR 指向已有产物，然后重新 start。',
   'gateway.webDistStale':
     'Web 控制台产物可能已过期：{index} 旧于 {source}。构建：`cd apps/web && npm run build`。',
+  'gateway.webDistStaleLine':
+    'Web 控制台产物落后于源码：{index} 旧于 {source}。修复：跑 `bun run build:web`；或重启 gateway（启动时会自动重建）。',
   'gateway.webDistBuilding': 'Web 控制台产物缺失或已过期，正在后台构建（{path}）……',
   'gateway.webDistBuilt': 'Web 控制台产物已重建。',
   'gateway.webDistBuildFailed': 'Web 控制台产物构建失败：{detail}',

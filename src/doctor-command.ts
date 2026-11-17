@@ -43,7 +43,8 @@ import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
 // 0.56.1：Web 控制台产物缺失要在 doctor 就能看见（`gateway start` 的硬前置）。
-import { DEFAULT_WEB_DIST_DIR } from './web-dist';
+// 0.57：产物「落后于源码」同理 —— 它是「界面一直是旧的」最常见的真实原因。
+import { DEFAULT_WEB_DIST_DIR, inspectWebDist, webDistStaleLine } from './web-dist';
 
 export interface DoctorCommandResult {
   exitCode: number;
@@ -505,14 +506,19 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
   ].filter((value): value is string => value !== null);
   // 0.56.1：Web 控制台产物是 `gateway start` 的硬前置 —— 在这里先看出来，
   // 别等 start 才失败（新克隆必踩）。只判存在，不触发构建。
+  // 0.57：再加一条「产物落后于源码」——gateway 只在**启动时**自动重建，之后源码
+  // 再变就没有任何人会重建，也不会有任何提示。这里是用户能主动看到它的地方。
   {
     const staticDir = (env.VESSEL_STATIC_DIR ?? '').trim() || DEFAULT_WEB_DIST_DIR;
-    const present = fs.existsSync(path.join(staticDir, 'index.html'));
+    const status = await inspectWebDist(
+      (env.VESSEL_STATIC_DIR ?? '').trim() !== '' ? { staticDir } : {},
+    );
+    const staleLine = webDistStaleLine(status);
     checks.push({
       name: 'web',
-      status: present ? 'ok' : 'fail',
-      message: present
-        ? staticDir
+      status: status.exists ? (staleLine !== null ? 'warn' : 'ok') : 'fail',
+      message: status.exists
+        ? (staleLine ?? staticDir)
         : `missing at ${staticDir} — run "bun run build:web" (fresh clone has no assets), ` +
           'or point VESSEL_STATIC_DIR at an existing build',
     });

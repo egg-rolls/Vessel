@@ -12,6 +12,13 @@ export interface MessageBarItem {
   id: string;
   tone: 'neutral' | 'info' | 'success' | 'warn' | 'error';
   text: string;
+  /**
+   * 悬停显示的全文；缺省用 `text`。
+   *
+   * 单行胶囊里放长句会被截断，所以「怎么办」这类说明走这里：屏幕上只留一句短的，
+   * 想细看的人悬停就能读到完整做法。
+   */
+  hint?: string;
   /** 0..n 个可交互动作（跳转 / retry / reload）。 */
   actions?: readonly MessageBarAction[];
   /** 关闭按钮；缺省不显示。 */
@@ -78,7 +85,7 @@ export function MessageBar({ items }: { items: readonly MessageBarItem[] }): Rea
           <span className="size-1.5 flex-none rounded-full bg-current" aria-hidden="true" />
           <span
             className="max-w-search overflow-hidden text-ellipsis whitespace-nowrap max-compact:max-w-40"
-            title={item.text}
+            title={item.hint ?? item.text}
           >
             {item.text}
           </span>

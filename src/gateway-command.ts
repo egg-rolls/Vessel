@@ -91,7 +91,7 @@ import { effectiveNodeToken, effectivePlatformToken } from './token-derive';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
-import { inspectWebDist, webDistWarning } from './web-dist';
+import { inspectWebDist, webDistProbe, webDistStaleLine, webDistWarning } from './web-dist';
 
 /** 依赖注入（CLI 只用默认值；测试注入平台/路径/命令执行） */
 export interface GatewayCommandDeps {
@@ -1174,6 +1174,14 @@ export async function gatewayStatus(
   // 0.49 G1：`gateway start` 的记录 host/port 是 platform 监听；附带 node 监听展示。
   const platforms = await platformInstances(entries);
   const stateKind = gatewayStateKind(options, context.env);
+  // 0.57：产物落后于源码要能「不开浏览器也发现」。自修复只在 gateway 启动时跑一次，
+  // 之后源码再变就没人说了 —— 所以这一行必须存在（不落后时为 null，不占行）。
+  // 判据与 `/build.json`、启动诊断共用 `inspectWebDist`（`VESSEL_STATIC_DIR` 指向的
+  // 外部产物不比源码，避免误报）。
+  const webDistStaticDir = (context.env.VESSEL_STATIC_DIR ?? '').trim();
+  const webDistLine = webDistStaleLine(
+    await inspectWebDist(webDistStaticDir !== '' ? { staticDir: webDistStaticDir } : {}),
+  );
   // 0.49 G3b：多节点投影只读 registry + 各 node 健康；不含 token。
   const nodeViews =
     stateKind === 'platform'
@@ -1232,6 +1240,7 @@ export async function gatewayStatus(
       const pidFile = entry.pidPath ?? entry.lockPath;
       if (pidFile !== undefined) print(`  ${ui.dim(pidFile)}`);
     }
+    if (webDistLine !== null) print(`  ${ui.warn(webDistLine)}`);
     return allLive ? 0 : 1;
   }
 
@@ -1283,6 +1292,7 @@ export async function gatewayStatus(
     print(ui.dim(t('gateway.status.selectHint', { count: entries.length })));
   }
   print(ui.kv(t('gateway.status.service'), serviceLine(service), 10));
+  if (webDistLine !== null) print(`  ${ui.warn(webDistLine)}`);
   return allLive ? 0 : 1;
 }
 
@@ -2515,6 +2525,9 @@ export async function runPlatformGatewayForeground(
           ? { hubOrigins: platformBrowserOrigins(hubHostname, hubPort) }
           : {}),
         staticDir: options.staticDir,
+        // 0.57：`/build.json` 的实时字段 —— 判据复用 `web-dist.ts`，平台不自己比 mtime。
+        // 这是「产物过期但没人重建」时唯一能被浏览器看见的证据。
+        webDist: webDistProbe(options.staticDir),
         nodes: nodes.map((node) => ({
           nodeId: node.entry.node_id,
           name: node.entry.name,

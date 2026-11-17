@@ -55,6 +55,22 @@ export interface PlatformAuthOptions extends AuthSettings {
   env?: Record<string, string | undefined>;
 }
 
+/**
+ * 0.57：`/build.json` 的**现场判断**结果（组合根注入，判定逻辑不在这里）。
+ *
+ * 只描述平台侧需要的两件事：产物是否落后于源码、落后到什么程度（最新那个源文件）。
+ * 具体判据复用 `src/web-dist.ts#inspectWebDist`，平台不自己比 mtime —— 两套判据
+ * 一旦漂移，就会出现「`gateway status` 说旧、浏览器说新」这种没人能查的矛盾。
+ */
+export interface WebDistProbeResult {
+  stale: boolean;
+  /** 比产物新的最新源文件；`stale: true` 时给出 */
+  newestSource?: { path: string; mtimeMs: number };
+}
+
+/** 组合根注入的实时判定；省略 = `/build.json` 只发磁盘上的静态构建戳。 */
+export type WebDistProbe = () => Promise<WebDistProbeResult>;
+
 /** 组合根解析后注入 Platform Gateway 的全部运行参数。 */
 export interface PlatformGatewayOptions {
   /** 平台监听端口；由组合根解析（默认 8642）。 */
@@ -84,6 +100,15 @@ export interface PlatformGatewayOptions {
   hubOrigins?: string[];
   /** `apps/web/dist`；启动时必须存在 `index.html`。 */
   staticDir: string;
+  /**
+   * 0.57：`/build.json` 的实时增量字段（`stale` / `newestSource`）来源。
+   *
+   * 为什么需要：产物过期但**没人重建**时，浏览器里那份 bundle 与磁盘上的
+   * `build.json` 是同一次构建 —— 前端只看 `builtAt` 永远判不出「旧了」，屏幕上
+   * 也就永远没有提示。把「服务端知道 dist 落后于源码」这件事说进响应里，
+   * 提示才有得响。省略 = 只发静态字段（老行为 + `no-store`）。
+   */
+  webDist?: WebDistProbe;
   /** registry 中全部本地 node（`auto_start:false` 也注入，只做健康展示）。 */
   nodes: PlatformNodeDescriptor[];
   /**
