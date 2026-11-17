@@ -19,6 +19,9 @@
  *    失败态的落点是**待处理条带**（带「重试 / 编辑」，见 `pending-placement.ts`），
  *    不是会话流里的一条灰气泡 —— 用户口径：入队消息的展示只有「inbox → 发出」这一段。
  *    重试**复用同一个 id**（不是新开一条 pending，也不是再画一条气泡）。
+ *    0.57 起服务端还有第三种应答 `deferred`（**收下了、但这一轮不会起跑、没有 run id**，
+ *    见 `pending-placement.ts` 与 `AdmitResult`）：它同样只在条带上，同样有出口
+ *    （`defer_timeout` → 「未发送 · 等待接单超时」，重试会先撤回服务端那份）。
  *
  * 这一层**不碰** `EventStore` / `LiveItemStore` / `transcript-items.ts`：它只消费事件里
  * 的 `run_id` / `session_id` / `message_id`（`noteEvent` / `noteQueued`），产出「这条消息现在
@@ -59,13 +62,40 @@ export const PENDING_SWEEP_INTERVAL_MS = 1_000;
  */
 export const PENDING_QUEUE_TIMEOUT_MS = 180_000;
 
+/**
+ * `deferred` 多久还没被接单就转成「未发送 · 等待接单超时」（毫秒）：3 分钟（同排队口径）。
+ *
+ * `deferred` 的语义是「服务端**已收下**，只是这一轮没起跑」（draining / body 换代 /
+ * 硬错误闸）。三条路里前两条是秒级到分钟级，第三条（`stopped`）要等人工动作、**没有**
+ * 确定时刻。所以不能让它无限期停在「等待中」：到点就转失败态（条带上带「重试 / 编辑」），
+ * 让用户有一个出口。重试会**先撤回服务端那份**再重发（见 `PendingStrip` 的 `retryRow`），
+ * 不会变成两份。
+ */
+export const PENDING_DEFER_TIMEOUT_MS = 180_000;
+
 export type PendingSendState =
   /** 已发出 `runs.start`（或还在等它返回）：正文在飞。 */
   | 'sending'
   /** `runs.start` 说这条**排队**了：等服务端起跑，**不按 15 s 判失败**（前面还有一整轮）。超时口径是 {@link PENDING_QUEUE_TIMEOUT_MS}。 */
   | 'queued'
+  /**
+   * `runs.start` 回 `deferred`（0.57）：服务端**收下了**、但这一轮没起跑，**没有 run id**。
+   *
+   * 三条路：`draining`（进程在退出，消息留在收件箱）/ `rotate`（body 换代，消息落在收件箱，
+   * **不会**自动变成一轮 run）/ `stopped`（硬错误闸，解闸后自动重投）。这条 pending 没有
+   * run id 可对，所以靠「同会话 + 同一句正文」的 `run.started` 认领（见 `noteEvent`）；
+   * 认领不到就 {@link PENDING_DEFER_TIMEOUT_MS} 后转 `failed`（`defer_timeout`）。
+   */
+  | 'deferred'
   /** 超时 / RPC 失败：带着原因留在原地，等「重试 / 删除」。 */
   | 'failed';
+
+/**
+ * 为什么服务端没接单（`runs.start` 的 `reason`，稳定码）。
+ *
+ * 未知值也不崩：文案映射对未知 reason 走通用那一句（见 `deferReasonText`）。
+ */
+export type PendingSendDeferReason = 'draining' | 'rotate' | 'stopped';
 
 export interface PendingSend {
   /** 本条 pending 的稳定 id（重试复用同一个）。 */
@@ -96,10 +126,20 @@ export interface PendingSend {
   messageId?: string;
   state: PendingSendState;
   /**
-   * `failed` 时的人话原因；`sending` / `queued` 恒为 `undefined`。
+   * `deferred` 时服务端给的原因（`draining` / `rotate` / `stopped`，未知值原样保留）。
+   * 只在条带卡头的文案映射里用；其余状态恒为 `undefined`。
+   */
+  deferredReason?: string;
+  /**
+   * `deferred` 时服务端建议的重问间隔（毫秒）。缺省 = 不是时间问题（`stopped` 要人工动作）。
+   */
+  retryAfterMs?: number;
+  /**
+   * `failed` 时的人话原因；`sending` / `queued` / `deferred` 恒为 `undefined`。
    *
-   * `'timeout'` = 15 s 没有回显，`'queue_timeout'` = 排队 3 分钟没被取用（两者文案不同，
-   * 见 `PendingStrip` 的标签映射）；其余是 RPC / 断线的原始说明。
+   * `'timeout'` = 15 s 没有回显，`'queue_timeout'` = 排队 3 分钟没被取用，
+   * `'defer_timeout'` = 服务端收下了但 3 分钟没接单（三者文案不同，
+   * 见 `PendingStrip` / `PendingBubble` 的标签映射）；其余是 RPC / 断线的原始说明。
    */
   failure?: string;
 }
@@ -185,6 +225,12 @@ export class PendingSendStore {
               state: 'sending',
               failure: undefined,
               runId: undefined,
+              deferredReason: undefined,
+              retryAfterMs: undefined,
+              // 重试前 `PendingStrip` 已经把服务端那条旧消息撤掉了（`recall`），那个
+              // `messageId` 已经不存在；留着它会让新的 `agent.message.queued` 挂不上
+              // （`noteQueued` 只认还没有身份的那条），条带于是认领不到新行。
+              messageId: undefined,
             }
           : item,
       );
@@ -289,6 +335,39 @@ export class PendingSendStore {
     return candidate.id;
   }
 
+  /**
+   * `runs.start` 回 `status: 'deferred'`（0.57）：服务端**收下了**，但这一轮不会起跑。
+   *
+   * draining / rotate / stopped 三条路都**不回 run id**（以前那里是一个永不执行的假号）。
+   * 所以这里不挂 `runId`（挂了就永远等不到回显），只记原因 / 建议间隔 / 消息 id；
+   * 之后靠「同会话 + 同一句正文」的 `run.started` 认领（见 {@link noteEvent}）。
+   *
+   * `messageId` 只在服务端给了的时候写：它可能已经从 `agent.message.queued` 事件先到
+   * （`noteQueued`），那边写过的值不被覆盖成 `undefined`。
+   *
+   * 不重置 `createdAt`：条带上的「等了多久」是用户视角从点击那一刻算的。
+   */
+  attachDeferred(
+    id: string,
+    info: { reason?: string; retryAfterMs?: number; messageId?: string },
+  ): void {
+    let changed = false;
+    this.items = this.items.map((item) => {
+      if (item.id !== id) return item;
+      changed = true;
+      return {
+        ...item,
+        state: 'deferred',
+        runId: undefined,
+        failure: undefined,
+        ...(info.reason !== undefined ? { deferredReason: info.reason } : {}),
+        ...(info.retryAfterMs !== undefined ? { retryAfterMs: info.retryAfterMs } : {}),
+        ...(info.messageId !== undefined ? { messageId: info.messageId } : {}),
+      };
+    });
+    if (changed) this.emit();
+  }
+
   /** RPC 直接失败（断网 / 准入闸门拒绝）：立刻进失败态，**不**等 15 s。 */
   markFailed(id: string, reason: string): void {
     let changed = false;
@@ -332,15 +411,22 @@ export class PendingSendStore {
    * 1. `run_id` 精确命中 ⇒ 直接撤（正文被 guardrail 改写也照样命中，这是首选路径）；
    * 2. 没有 `run_id`（旧服务端 / 别名）：只在**同会话**里按**队首顺序**认领一条
    *    `sending` 且正文相同的 pending；认领即撤，所以同一条回显**不可能**认领第二次
-   *    （「认领只发生一次」是结构性的，不靠计数）。
+   *    （「认领只发生一次」是结构性的，不靠计数）；
+   * 3. 上面两条都不中时，再看有没有 `deferred` 的 pending 等这句话（0.57：服务端明确
+   *    不回 run id，见 {@link claimDeferred}）。
    */
   noteEvent(event: PendingEchoEvent): string | undefined {
     if (!ECHO_EVENT_TYPES.includes(event.type)) return undefined;
+    if (this.items.length === 0) return undefined;
     const candidates = this.items.filter((item) => item.state !== 'failed');
-    if (candidates.length === 0) return undefined;
     if (event.runId !== undefined && event.runId !== '') {
       const byRun = candidates.find((item) => item.runId === event.runId);
-      if (byRun === undefined) return undefined;
+      if (byRun === undefined) {
+        // 没有 pending 挂这个 run id。**先**看有没有 `deferred` 的 pending 等这句话
+        // （0.57）：服务端明确不回 run id，这条回显就是「它终于起跑了」的唯一信号
+        // （`run.started.input` 是改写前的原文，正好等于用户敲的字）。
+        return this.claimDeferred(event);
+      }
       // 记住「这条真的发出去了」：条带那份缓存读数据此立刻滤掉旧行（不等下一次轮询）。
       this.noteSent(byRun.messageId);
       this.remove(byRun.id);
@@ -354,18 +440,53 @@ export class PendingSendStore {
           item.sessionId === event.sessionId) &&
         (event.text === undefined || sameText(item.text, event.text)),
     );
-    if (queueHead === undefined) return undefined;
+    if (queueHead === undefined) return this.claimDeferred(event);
     this.noteSent(queueHead.messageId);
     this.remove(queueHead.id);
     return queueHead.id;
   }
 
   /**
-   * 扫超时：两个口径，**都往 `failed` 收**（失败态永远带着出口，永不静默消失）。
+   * 认领一条 `deferred` 的 pending：**同会话 + 同一句正文**，且事件必须真的带正文。
+   *
+   * 为什么必须有一条这样的退路：`deferred` 的 pending 没有 run id（服务端明确不回），
+   * 于是「按 run_id 精确认领」这条首选路径对它永远不成立；不按正文认领一次，这条 pending
+   * 就只能等到 3 分钟超时 —— 那时消息其实早就进了会话（用户会看到「未发送」+「那条真消息」）。
+   *
+   * 为什么安全：只认 `run.started` / `user.message`（`ECHO_EVENT_TYPES` 已限）、只认同会话、
+   * 正文相等，并且**认领即摘除** —— 「最多认领一次」是结构性的，不靠计数。正文相等这种弱
+   * 身份只在「没有强身份可用」时启用，与 0.56 的队首兜底认领是同一档。
+   *
+   * 也认 **`defer_timeout` 的失败态**：那条 pending 的正文确实被服务端收下了（`deferred`
+   * 的语义就是「收下了、还没跑」），所以「同会话 + 同一句正文」的 run 起来时它必须让位 ——
+   * 否则用户会同时看到「未发送」和一条真消息，再点重试就是两份（重试会先撤回服务端那份，
+   * 但已经落地的那条撤不回来）。别的原因的 `failed` 不认（RPC 失败那条服务端根本没收到）。
+   */
+  private claimDeferred(event: PendingEchoEvent): string | undefined {
+    if (event.text === undefined) return undefined;
+    const hit = this.items.find(
+      (item) =>
+        (item.state === 'deferred' ||
+          (item.state === 'failed' && item.failure === 'defer_timeout')) &&
+        (item.sessionId === null ||
+          event.sessionId === undefined ||
+          item.sessionId === event.sessionId) &&
+        sameText(item.text, event.text ?? ''),
+    );
+    if (hit === undefined) return undefined;
+    this.noteSent(hit.messageId);
+    this.remove(hit.id);
+    return hit.id;
+  }
+
+  /**
+   * 扫超时：三个口径，**都往 `failed` 收**（失败态永远带着出口，永不静默消失）。
    *
    * - `sending` 超过 {@link PENDING_ECHO_TIMEOUT_MS}（15 s）⇒ `failure: 'timeout'`；
    * - `queued` 超过 {@link PENDING_QUEUE_TIMEOUT_MS}（3 min）⇒ `failure: 'queue_timeout'`
-   *   —— 文案是「未发送 · 排队超时」，同样是可重试 / 可编辑的失败，不是另一种展示位置。
+   *   —— 文案是「未发送 · 排队超时」，同样是可重试 / 可编辑的失败，不是另一种展示位置；
+   * - `deferred` 超过 {@link PENDING_DEFER_TIMEOUT_MS}（3 min）⇒ `failure: 'defer_timeout'`
+   *   —— 服务端**收下了**但一直没接单（`stopped` 那条要等人工动作，可能永远等不到）。
    *
    * `failed` 不重复标。返回本次被标失败的条数，供驱动断言。
    */
@@ -378,14 +499,21 @@ export class PendingSendStore {
           ? PENDING_ECHO_TIMEOUT_MS
           : item.state === 'queued'
             ? PENDING_QUEUE_TIMEOUT_MS
-            : undefined;
+            : item.state === 'deferred'
+              ? PENDING_DEFER_TIMEOUT_MS
+              : undefined;
       if (budget === undefined) return item;
       if (at - item.createdAt < budget) return item;
       failed += 1;
       return {
         ...item,
         state: 'failed',
-        failure: item.state === 'queued' ? 'queue_timeout' : 'timeout',
+        failure:
+          item.state === 'queued'
+            ? 'queue_timeout'
+            : item.state === 'deferred'
+              ? 'defer_timeout'
+              : 'timeout',
       };
     });
     if (failed > 0) this.emit();

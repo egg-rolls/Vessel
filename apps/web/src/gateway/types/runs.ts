@@ -84,17 +84,29 @@ export interface RunStatus {
 }
 
 /**
- * `runs.start` 受理结果（0.27 additive）。
+ * `runs.start` 受理结果（0.27 additive；0.57 起 `run_id` 不再恒有）。
  *
  * 服务端解析 session → agent/body 后回填 `agent_id` / `session_id`（body id）；
  * 未传 `session_id` 时它就是 main primary body。旧 gateway 不返回，读侧按可选处理。
+ *
+ * **`deferred`（0.57）**：服务端有三条路「收下了但这一进程不会起跑」（draining /
+ * body 换代静默窗口 / 硬错误闸）。它们以前回一个**永不执行**的 `run_id` + `queued`，
+ * 客户端拿那个号永远等不到事件（灰气泡停在「已排队」）。现在回 `deferred` +
+ * `reason` + 可选 `retry_after_ms`，且**没有 `run_id`** —— 真起跑时是另一个 run。
  */
 export interface RunStartResult {
-  run_id: string;
-  status: RunStatus['status'];
+  /** 缺省 = 没有 run（`status: 'deferred'`）。 */
+  run_id?: string;
+  status: RunStatus['status'] | 'deferred';
   queue_position?: number;
   agent_id?: string;
   session_id?: string;
+  /** 这条消息的身份（0.57 additive）；deferred 时靠它追踪（inbox / 撤回都用它）。 */
+  message_id?: string;
+  /** 仅 `deferred`：`draining` / `rotate` / `stopped`（稳定码，见 `PendingSendDeferReason`）。 */
+  reason?: string;
+  /** 仅 `deferred`：建议多久之后再问一次（毫秒）；缺省 = 要等人工动作。 */
+  retry_after_ms?: number;
 }
 
 /** health.get 的 runtime.scheduler 条目（0.15 E6）。 */

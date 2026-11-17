@@ -169,7 +169,21 @@ export function useChatSubmit({
       // （正文会被 guardrail 改写，不能当身份）。queued 的 run 前面还有一整轮在跑，
       // 回显本来就该晚 —— store 不让它参与 15 s 超时判定。
       pendingSends.attachSession(pendingKey, nextSessionId);
-      pendingSends.attachRun(pendingKey, run.run_id, run.status);
+      // 0.57：`deferred` = 服务端收下了但这一轮不会起跑（draining / body 换代 / 硬错误闸），
+      // **没有 run_id**（以前那个号永不执行）。挂上去只会让气泡等一个不会来的事件，
+      // 所以这里分开走：记原因 + 消息 id，等「同会话 + 同一句正文」的 run.started 认领。
+      if (run.status === 'deferred') {
+        pendingSends.attachDeferred(pendingKey, {
+          ...(run.reason !== undefined ? { reason: run.reason } : {}),
+          ...(run.retry_after_ms !== undefined ? { retryAfterMs: run.retry_after_ms } : {}),
+          ...(run.message_id !== undefined ? { messageId: run.message_id } : {}),
+        });
+      } else if (run.run_id !== undefined) {
+        pendingSends.attachRun(pendingKey, run.run_id, run.status);
+      } else {
+        // 契约要求非 deferred 必须带 run_id；缺失时不本地编造，留在 `sending`
+        //（15 s 没有回显就走失败出口，用户至少能重试 / 删除）。
+      }
       // 新会话可能尚未落盘：标记后 detail 404 可容忍（会话出现在列表即失效）。
       if (!targetSessionId) pendingNewSessions.current.add(nextSessionId);
       // 只在源草稿仍是被提交的文本时清空：重试不应吞掉用户新写的草稿。
@@ -183,6 +197,9 @@ export function useChatSubmit({
       if (!targetSessionId) navigate({ domain: 'chat', sessionId: nextSessionId });
       // 排队态不在客户端记账：条带读 `agents.inbox`（按 session_id 过滤），这里只给反馈。
       if (run.status === 'queued') toast.info(t('chat.toast.queued'));
+      // deferred：收下了、还没有 run。给一句「不是失败」的提示 —— 消息已经在服务端队列里，
+      // 用户在这里该做的是等（或去条带撤回），不是重发。
+      if (run.status === 'deferred') toast.info(t('chat.toast.deferred'));
       void loadSessions(client, { epoch, force: true });
       // 新会话建了新 agent：roster（会话行的 agent 地址）要立刻反映它。
       if (!targetSessionId) void loadRoster(nodes, teamControl);

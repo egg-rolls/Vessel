@@ -218,16 +218,25 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
       },
       result_schema: {
         type: 'object',
-        required: ['run_id', 'status'],
+        // 0.57：`run_id` 不再是必需字段 —— `status: 'deferred'` 的三条路（draining /
+        // rotate 静默窗口 / 硬错误闸）**没有 run**，服务端不再编一个永不执行的号。
+        // 旧客户端看到缺 `run_id` 时只是拿不到合并键（不会崩），靠 `status` / `reason`
+        // 走各自的兜底出口。
+        required: ['status'],
         properties: {
           run_id: { type: 'string' },
           status: {
             type: 'string',
-            enum: ['queued', 'running', 'completed', 'failed', 'cancelled'],
+            enum: ['queued', 'running', 'completed', 'failed', 'cancelled', 'deferred'],
           },
           queue_position: { type: 'integer' },
           agent_id: { type: 'string' },
           session_id: { type: 'string' },
+          // 0.57（additive）：消息身份 + 未接单的原因 / 建议重问间隔。
+          // 只在 `status: 'deferred'` 时出现 reason（其余路径没有未接单这件事）。
+          message_id: { type: 'string' },
+          reason: { type: 'string', enum: ['draining', 'rotate', 'stopped'] },
+          retry_after_ms: { type: 'integer', minimum: 0 },
         },
       },
       handler: async (params) => {
@@ -251,11 +260,15 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
             ? returnedSession
             : requestedSession;
         return {
-          run_id: result.run_id,
+          ...(result.run_id !== undefined ? { run_id: result.run_id } : {}),
           status: result.status,
           ...(result.queue_position !== undefined ? { queue_position: result.queue_position } : {}),
           ...(agentId !== undefined ? { agent_id: agentId } : {}),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+          // deferred 的三件套原样透出（缺省不出现，旧路径 payload 一字不变）。
+          ...(result.message_id !== undefined ? { message_id: result.message_id } : {}),
+          ...(result.reason !== undefined ? { reason: result.reason } : {}),
+          ...(result.retry_after_ms !== undefined ? { retry_after_ms: result.retry_after_ms } : {}),
         };
       },
     },

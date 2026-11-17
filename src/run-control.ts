@@ -130,9 +130,14 @@ export function createRunControl(
         throw error;
       }
       const mapped: RunStartResultWithSession = {
-        run_id: result.run_id,
-        status: statusOf(result.status),
+        // 0.57：`run_id` 只在真起跑时才有 —— deferred 的三条路**不编** run id，
+        // 改用 message_id + reason + retry_after_ms 表达「收下了、还没起跑」。
+        ...(result.run_id !== undefined ? { run_id: result.run_id } : {}),
+        status: result.status === 'deferred' ? 'deferred' : statusOf(result.status),
         ...(result.queue_position !== undefined ? { queue_position: result.queue_position } : {}),
+        ...(result.message_id !== undefined ? { message_id: result.message_id } : {}),
+        ...(result.reason !== undefined ? { reason: result.reason } : {}),
+        ...(result.retry_after_ms !== undefined ? { retry_after_ms: result.retry_after_ms } : {}),
         // 新会话由服务端在本 agent 下建 body；不回填这个 session，Web 无法把草稿
         // 切到真实会话（没有本地兜底，缺失即视为契约失败）。
         ...(result.session_id ? { session_id: result.session_id } : {}),

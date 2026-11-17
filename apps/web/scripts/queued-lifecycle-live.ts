@@ -59,6 +59,17 @@ function log(line: string): void {
   console.log(`  ${line}`);
 }
 
+/**
+ * 0.57：`runs.start` 的 `run_id` 变成可选（`status: 'deferred'` 的三条路没有 run）。
+ * 这个驱动验的是「真的排上了队」的两轮，所以拿不到就当场停 —— 不拿 `undefined` 往下跑。
+ */
+function requireRunId(runId: string | undefined, label: string): string {
+  if (runId === undefined || runId === '') {
+    throw new Error(`${label} runs.start 没有返回 run_id（status=${label} 不是排队态？）`);
+  }
+  return runId;
+}
+
 async function main(): Promise<void> {
   if (token === '') throw new Error('VESSEL_LIVE_TOKEN is required');
   const client = new GatewayClient(url);
@@ -100,11 +111,13 @@ async function main(): Promise<void> {
 
   // 第一条：正在跑（它会占住这一轮）。
   const first = await client.submitRun('第一条：先占住这一轮', sessionId, agentId);
-  log(`第一条 runs.start → run=${first.run_id} status=${String(first.status)}`);
-
-  // 第二条：同一会话立刻再发一次 —— 控制面必须把它排成 queued。
+  log(`第一条 runs.start → run=${String(first.run_id)} status=${String(first.status)}`);
+  // 0.57：`run_id` 只在真起跑时才有（`deferred` 没有）。这个驱动验的正是「排上了队」的两轮，
+  // 拿不到 run id 就说明驱动的前提不成立 —— 当场停，不拿 `undefined` 往下跑。
+  const firstRunId = requireRunId(first.run_id, '第一条');
   const second = await client.submitRun('第二条：排队里的那条', sessionId, agentId);
-  log(`第二条 runs.start → run=${second.run_id} status=${String(second.status)}`);
+  log(`第二条 runs.start → run=${String(second.run_id)} status=${String(second.status)}`);
+  const secondRunId = requireRunId(second.run_id, '第二条');
 
   const statuses = [String(first.status), String(second.status)];
   if (!statuses.includes('queued')) {
@@ -122,7 +135,7 @@ async function main(): Promise<void> {
   }
   log(`排队中已收到的 user.message：${String(seen.userMessages.length)} 条（这条还没进会话）`);
   const queuedPhaseUserMessages = seen.userMessages.filter(
-    (entry) => entry.runId === second.run_id,
+    (entry) => entry.runId === secondRunId,
   ).length;
 
   // 等第二条被取用（这就是「sent」：inbox 那条消失、会话里出现 user.message）。
@@ -132,20 +145,20 @@ async function main(): Promise<void> {
   // 排队 → 被取用 这一段时序与真机完全一致（`user.message` 在模型调用之前就发布了）。
   let cancelledFirst = false;
   const deadline = Date.now() + SESSION_TIMEOUT_MS;
-  while (seen.userMessages.filter((entry) => entry.runId === second.run_id).length === 0) {
+  while (seen.userMessages.filter((entry) => entry.runId === secondRunId).length === 0) {
     if (Date.now() >= deadline) break;
     if (!cancelledFirst) {
-      const still = await client.getRunStatus(first.run_id).catch(() => undefined);
+      const still = await client.getRunStatus(firstRunId).catch(() => undefined);
       if (still?.status === 'running' || still?.status === 'queued') {
-        const result = await client.cancelRun(first.run_id).catch(() => ({ cancelled: false }));
+        const result = await client.cancelRun(firstRunId).catch(() => ({ cancelled: false }));
         cancelledFirst = result.cancelled;
-        log(`取消第一条（run=${first.run_id}）→ cancelled=${String(cancelledFirst)}`);
+        log(`取消第一条（run=${firstRunId}）→ cancelled=${String(cancelledFirst)}`);
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  const secondEchoes = seen.userMessages.filter((entry) => entry.runId === second.run_id);
+  const secondEchoes = seen.userMessages.filter((entry) => entry.runId === secondRunId);
   const after = await client.inbox({ agent_id: agentId, include_held: true });
   const afterRows = (after.entries ?? []).filter((entry) => entry.session_id === sessionId);
   log(`第二条被取用之后 agents.inbox{session_id} 读数：${String(afterRows.length)} 条（必须 0）`);

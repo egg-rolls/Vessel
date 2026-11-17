@@ -1107,6 +1107,15 @@ export const messages = {
   'chat.pendingSend.queued': '已排队，前面还有一轮',
   'chat.pendingSend.queuedLong': '已排队 {minutes} 分钟，前面还有一轮',
   'chat.pendingSend.queueTimeout': '已排队超时',
+  // 0.57：服务端收下了但这一轮没起跑（deferred）。{reason} 是三种原因的人话 ——
+  // 每句都必须**字面为真**（不要把「进了收件箱等模型读」说成「自动继续」）。
+  'chat.pendingSend.deferred': '服务端已收下 · {reason}',
+  'chat.pendingSend.deferredLong': '服务端已收下 · {reason} · 已等 {minutes} 分钟',
+  'chat.pendingSend.deferred.draining': '节点正在重启，消息已留在收件箱',
+  'chat.pendingSend.deferred.rotate': '会话正在换代，消息已落在收件箱',
+  'chat.pendingSend.deferred.stopped': '被硬错误闸住，解闸后自动继续',
+  'chat.pendingSend.deferred.other': '等待服务端接单',
+  'chat.pendingSend.deferTimeout': '服务端已收下，但一直没接单',
   'chat.pendingSend.failed': '未发送',
   'chat.pendingSend.retry': '重试',
   'chat.pendingSend.dismiss': '删除这条',
@@ -1132,6 +1141,7 @@ export const messages = {
   'chat.pending.unholdRejected': '服务端没有解除 hold，条带已重读对齐（这条可能已经不在了）',
   'chat.pending.unholdFailed': '取消 hold 失败：{detail}',
   'chat.toast.queued': '已排队',
+  'chat.toast.deferred': '服务端已收下，等待接单',
   'chat.toast.cancelRequested': '已请求取消 run',
   'chat.toast.queueCancelled': '已取消排队',
   'chat.toast.cancelNotAccepted': '取消请求未被受理，run 可能已经开始执行',

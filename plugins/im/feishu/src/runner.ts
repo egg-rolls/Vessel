@@ -184,7 +184,16 @@ export class ChatMemberRunner {
       // 只给 `agent_id`：`admit` 会解析到该 agent 的唯一 live ExecutionUnit。带 `from` 缺省
       // 是 `human`（消息发送者是人类，不是成员归属的默认 owner）。
       const admitted = await this.admitWithRevival(agentId, text);
-
+      // 0.57：`deferred` = 服务端收下了但这一轮没起跑（draining / body 换代 / 硬错误闸），
+      // **没有 run id**（以前那个号永不执行 ⇒ 这里会等到 abort / 超时）。IM 这条链路要的是
+      // 「这一轮的回答」，拿不到就当场说清楚，而不是挂在一个不存在的 run 上等。
+      if (admitted.run_id === undefined) {
+        throw new Error(
+          `admit_deferred: ${admitted.reason ?? 'unknown'} (message accepted, no run started)`,
+        );
+      }
+      // 收窄之后 run id 在闭包里是 `string`（上面那条 deferred 出口已经抛掉了）。
+      const runId = admitted.run_id;
       return await new Promise<string>((resolve, reject) => {
         let settled = false;
         const cleanup = (): void => {
@@ -206,14 +215,14 @@ export class ChatMemberRunner {
           });
         };
         onTerminal = (event: RunEvent): void => {
-          if (event.run_id === admitted.run_id) settleFromEvent(event);
+          if (event.run_id === runId) settleFromEvent(event);
         };
         const onAbort = (): void => {
           settle(() => {
             const error = abortError(signal);
             if (cancelRun !== undefined) {
               try {
-                cancelRun(admitted.run_id, error.message);
+                cancelRun(runId, error.message);
               } catch {
                 // 取消失败不掩盖原始 abort 原因。
               }

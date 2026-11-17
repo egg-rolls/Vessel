@@ -98,13 +98,17 @@ export function inConversationStream(pending: Pick<PendingSend, 'state'>): boole
 }
 
 /**
- * 条带上画不画这条**客户端** pending：`queued` / `failed`。
+ * 条带上画不画这条**客户端** pending：`queued` / `deferred` / `failed`。
  *
  * `sending` 不画（它在会话流里，画两处就是重复）。`queued` 虽然服务端条目也在条带上，
  * 但那条会被 {@link claimsEntry} 顶替 —— 所以「条带上这一条到底由谁画」始终只有一方。
+ *
+ * `deferred`（0.57：服务端收下了、这一轮没起跑、没有 run id）**只能**在条带上：会话流
+ * 只画 `sending`，而它已经过了那一档；它的行通常也认领着服务端 inbox 里那条
+ * （`message_id` 由 `runs.start` 的应答或 `agent.message.queued` 带来）。
  */
 export function inPendingStrip(pending: Pick<PendingSend, 'state'>): boolean {
-  return pending.state === 'queued' || pending.state === 'failed';
+  return pending.state === 'queued' || pending.state === 'deferred' || pending.state === 'failed';
 }
 
 /** 摘要与正文是否对得上（服务端摘要可能被截断成 `…`）。 */
@@ -246,6 +250,8 @@ export function stateLabel(state: PendingSendState): string {
       return 'sending（会话灰气泡）';
     case 'queued':
       return 'queued（只在条带）';
+    case 'deferred':
+      return 'deferred（只在条带：服务端收下了、这一轮没起跑，没有 run id）';
     case 'failed':
       return 'failed（只在条带，带重试/编辑）';
     default:

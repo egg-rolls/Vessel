@@ -53,11 +53,14 @@ export function PendingBubble({
     pending.failure === undefined ||
     pending.failure === 'timeout' ||
     pending.failure === 'queue_timeout' ||
+    pending.failure === 'defer_timeout' ||
     pending.failure === 'offline'
       ? undefined
       : pending.failure;
   const queuedMinutes =
-    pending.state === 'queued' ? Math.floor((Date.now() - pending.createdAt) / 60_000) : 0;
+    pending.state === 'queued' || pending.state === 'deferred'
+      ? Math.floor((Date.now() - pending.createdAt) / 60_000)
+      : 0;
   return (
     <div className="msg-user msg-pending msg-enter">
       <div className="msg-bubble msg-pending-bubble">{pending.text}</div>
@@ -87,14 +90,38 @@ export function PendingBubble({
           </>
         ) : (
           <span className="msg-pending-status" role="status">
-            {pending.state === 'queued'
-              ? queuedMinutes >= 1
-                ? t('chat.pendingSend.queuedLong', { minutes: queuedMinutes })
-                : t('chat.pendingSend.queued')
+            {pending.state === 'queued' || pending.state === 'deferred'
+              ? waitingStatusText(pending, queuedMinutes)
               : t('chat.pendingSend.sending')}
           </span>
         )}
       </div>
     </div>
   );
+}
+
+/**
+ * 「等」这一档的状态字（`queued` / `deferred`）。
+ *
+ * 会话流只画 `sending`（见 `pending-placement.ts`），所以这一支正常走不到这里；留着是为了
+ * 让**直接渲染气泡的宿主**（设计预览 / 别的屏）不会把 `deferred` 说成「发送中…」——
+ * 「服务端已收下、为什么还没跑」与「正在发」是两件事。
+ */
+function waitingStatusText(pending: PendingSend, minutes: number): string {
+  if (pending.state === 'deferred') {
+    const reason =
+      pending.deferredReason === 'draining'
+        ? t('chat.pendingSend.deferred.draining')
+        : pending.deferredReason === 'rotate'
+          ? t('chat.pendingSend.deferred.rotate')
+          : pending.deferredReason === 'stopped'
+            ? t('chat.pendingSend.deferred.stopped')
+            : t('chat.pendingSend.deferred.other');
+    return minutes >= 1
+      ? t('chat.pendingSend.deferredLong', { reason, minutes })
+      : t('chat.pendingSend.deferred', { reason });
+  }
+  return minutes >= 1
+    ? t('chat.pendingSend.queuedLong', { minutes })
+    : t('chat.pendingSend.queued');
 }

@@ -278,8 +278,8 @@ function clientRowOf(pending: PendingSend, cancelling: ReadonlySet<string>): Str
 /**
  * 失败 pending 的卡头结论句：`未发送 · <原因>`。
  *
- * 只给三种已知原因翻人话（`queue_timeout` / `timeout` / 断线文案），其余原样带出 ——
- * 给命令、给内部错误码都不是人该读的东西（宪法第十四条）。
+ * 只给四种已知原因翻人话（`queue_timeout` / `defer_timeout` / `timeout` / 断线文案），其余
+ * 原样带出 —— 给命令、给内部错误码都不是人该读的东西（宪法第十四条）。
  */
 function failureLabel(pending: PendingSend): string {
   const notSent = t('chat.pendingSend.failed');
@@ -287,9 +287,31 @@ function failureLabel(pending: PendingSend): string {
   if (pending.failure === 'queue_timeout') {
     return `${notSent} · ${t('chat.pendingSend.queueTimeout')}`;
   }
+  if (pending.failure === 'defer_timeout') {
+    return `${notSent} · ${t('chat.pendingSend.deferTimeout')}`;
+  }
   if (pending.failure === 'timeout') return `${notSent} · ${t('chat.pendingSend.echoTimeout')}`;
   if (pending.failure === 'offline') return `${notSent} · ${t('chat.pendingSend.offline')}`;
   return `${notSent} · ${pending.failure}`;
+}
+
+/**
+ * `deferred` pending 的卡头：`服务端已收下 · <为什么还没跑>`（0.57）。
+ *
+ * 为什么不能沿用「等待中」：`deferred` 与 `queued` 的用户动作不同 —— `stopped` 要人去
+ * 处理（重试 / 换 body），`draining` / `rotate` 只要等。用同一句话会把「等」和「需要你动手」
+ * 混成一档。未知 reason（服务端加了新的）走通用那句，不崩、也不谎称知道原因。
+ */
+function deferredLabel(pending: PendingSend): string {
+  return t('chat.pendingSend.deferred', { reason: deferReasonText(pending.deferredReason) });
+}
+
+/** 服务端 reason 码 → 人话；未知码落到「等待服务端接单」。 */
+export function deferReasonText(reason: string | undefined): string {
+  if (reason === 'draining') return t('chat.pendingSend.deferred.draining');
+  if (reason === 'rotate') return t('chat.pendingSend.deferred.rotate');
+  if (reason === 'stopped') return t('chat.pendingSend.deferred.stopped');
+  return t('chat.pendingSend.deferred.other');
 }
 
 /** 组内条目 → 条带行。对不上的（理论上不会发生）直接跳过：不渲染半张卡。 */
@@ -844,9 +866,16 @@ export function PendingStrip({
   };
   const unholdRow = (id: string) => void handleUnhold(id);
 
-  /** 行的卡头文案：失败的客户端行说「未发送 · 原因」，其余照旧「等待中」。 */
+  /**
+   * 行的卡头文案：失败的客户端行说「未发送 · 原因」，`deferred` 说「已收下 · 为什么还没跑」，
+   * 其余照旧「等待中」。
+   */
   const labelOf = (row: StripRow): string | undefined =>
-    row.pending?.state === 'failed' ? failureLabel(row.pending) : undefined;
+    row.pending?.state === 'failed'
+      ? failureLabel(row.pending)
+      : row.pending?.state === 'deferred'
+        ? deferredLabel(row.pending)
+        : undefined;
   /** 只有失败的客户端行给「重试」（服务端条目没有「再发一次」的语义）。 */
   const retryOf = (row: StripRow): ((id: string) => void) | undefined =>
     row.pending?.state === 'failed' ? retryRow : undefined;
