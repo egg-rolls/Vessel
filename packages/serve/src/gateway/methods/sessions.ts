@@ -49,7 +49,6 @@ import {
   isLegacySessionUnsupported,
   legacySessionUnsupportedMessage,
   selectTimelinePage,
-  TIMELINE_PAGE_LIMIT,
   type TimelineReadPort,
   type TimelineWireEvent,
 } from '../timeline-protocol.js';
@@ -757,15 +756,31 @@ const MESSAGE_CURSOR_VERSION = 1;
 
 /**
  * `sessions.events` 的分页（0.53）：与 `sessions.get.message_limit` / `events.list`
- * 同一个风格 —— 默认 100、硬顶 500，超限按游标翻页，不一次性把日志塞进一帧。
+ * 同一个风格 —— 默认 100、硬顶 2000，超限按游标翻页，不一次性把日志塞进一帧。
+ *
+ * 0.57：硬顶 500 → **2000**。首屏要的就是 2000 条（`TIMELINE_TAIL_WINDOW_EVENTS` 一段），
+ * 硬顶 500 时客户端必须**串行翻 4 页**（每页都要等上一页的 `next_seq`），而 4 页拿到的
+ * 数据与 1 页一样多。抬到 2000 不改变任何一帧的数据量上限（一段仍是 2000 条），只是让
+ * 「一段 = 一页」：真机 20.9 万事件的会话，读口 4×500 冷态 134 ms → 1×2000 冷态 55 ms，
+ * 客户端往返 4 → 1。
  */
 const DEFAULT_SESSION_EVENTS_LIMIT = 100;
-const MAX_SESSION_EVENTS_LIMIT = 500;
+const MAX_SESSION_EVENTS_LIMIT = 2000;
 /**
  * 单次请求最多扫多少条落盘事件（`types` 全不中时的安全阀）：
  * 到顶就 `has_more: true` 让客户端继续翻页，宁可变慢也不让一次 RPC 卡死读整份日志。
  */
 const SESSION_EVENTS_MAX_SCAN = 20_000;
+/**
+ * 一次 `readPage` 向时间线读口要多少条（内部翻页的页大小）。
+ *
+ * 这个数必须 **≤ 读口硬顶**（`src/timeline-dual-write.ts#TIMELINE_PAGE_MAX = 2000`）：
+ * 要多了端口会自己裁掉，白写一次 `limit`。取 2000 而不是老的 500 的理由是「同样的
+ * 数据量，开的块数差 4 倍」：一页 2000 条只定位一次块与索引，4 页要定位四次（实测
+ * 82–100 ms vs 46–47 ms）。`types` / `tool_call_id` 过滤时也一样——扫的条数不变，只是
+ * 少几趟定位。
+ */
+const SESSION_EVENTS_READ_CHUNK = 2000;
 /** `types` 过滤条数上限（防止有人拿它当全量枚举使）。 */
 const MAX_SESSION_EVENTS_TYPES = 64;
 /** `since_seq` 的硬上界：JS 安全整数（seq 是正整数计数，超过它就不可能是真的游标）。 */
@@ -971,6 +986,9 @@ async function readTimelineEventPage(
   let cursor = Math.max(0, Math.floor(sinceSeq));
   let scanned = 0;
   let hasMore = false;
+  // 一次内部读要多少条：**这一页还差多少**，封顶在读口硬顶。`limit` 缺省（旧调用方）
+  // 时就是读口硬顶本身，与老的「一页一页读」拿到的记录逐条相同，只是少几趟定位。
+  const chunk = Math.max(1, Math.min(limit, SESSION_EVENTS_READ_CHUNK));
   while (scanned < SESSION_EVENTS_MAX_SCAN) {
     if (cursor >= effectiveEnd) break;
     let page: Awaited<ReturnType<TimelineReadPort['readPage']>>;
@@ -978,7 +996,7 @@ async function readTimelineEventPage(
       page = await port.readPage(sessionId, {
         afterSeq: cursor,
         untilSeq: effectiveEnd,
-        limit: TIMELINE_PAGE_LIMIT,
+        limit: chunk,
       });
     } catch (error) {
       // 0.55：旧格式会话在**页读**这一层被 core 拒绝（`legacy_session_unsupported`）。
@@ -989,7 +1007,7 @@ async function readTimelineEventPage(
       }
       throw error;
     }
-    const ordered = selectTimelinePage(page, cursor + 1, effectiveEnd, TIMELINE_PAGE_LIMIT);
+    const ordered = selectTimelinePage(page, cursor + 1, effectiveEnd, chunk);
     if (ordered.length === 0) break;
     for (const record of ordered) {
       if (record.seq <= cursor) continue;
@@ -1728,10 +1746,13 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         const state = await loadSessionForRead(backend, stringParam(params, 'session_id'));
         if (!state) throw new RpcError('not_found', 'Session not found');
         const runStore = runStoreFor?.();
-        const latest =
+        // 最后一次 run 的检查点：**在这里起意、不 await**，与下面那批派生值一起收口
+        // （0.57）。早先是「先 await 一次 `runStore.load()`，再开那批并发」—— 那一次
+        // 往返（读 `runs/<id>.json`，冷态几十毫秒）白等在所有派生值前面。
+        const latestLoading: Promise<Awaited<ReturnType<NonNullable<typeof runStore>['load']>>> =
           runStore !== undefined && state.last_run_id !== undefined
-            ? await runStore.load(state.last_run_id)
-            : undefined;
+            ? runStore.load(state.last_run_id)
+            : Promise.resolve(undefined);
 
         const all = state.messages ?? [];
         const total = all.length;
@@ -1794,13 +1815,14 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         // `derived_upto_seq < last_seq` ⇒ 有事件没进投影，客户端据此决定要不要补洞）三个
         // 派生值互不依赖，并发取；读不到 = 字段缺省（不抛错）。图片投递状态按上一段的判据
         // 才取（否则整段跳过）。
-        const [contextUsage, systemContext, imageDelivery, eventCursor, bindings] =
+        const [contextUsage, systemContext, imageDelivery, eventCursor, bindings, latest] =
           await Promise.all([
             contextUsageOf(state.session_id),
             systemContextOf(state.session_id),
             needsImageFacts ? imageDeliveryOf(state.session_id) : undefined,
             eventCursorOf(state.session_id),
             sessionAgentBindings(),
+            latestLoading,
           ]);
         const owner = bindings.get(state.session_id);
         const withImages =
@@ -1844,7 +1866,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           // **排他**游标：只回 seq > since_seq；缺省 = 0（从头）。分页/补洞都靠它，
           // 客户端把上一页的 next_seq 原样传回来即可，不重不漏。
           since_seq: { type: 'integer', minimum: 0, maximum: MAX_SAFE_SEQ },
-          // 默认 100、硬顶 500（同 sessions.get.message_limit / events.list 风格）。
+          // 默认 100、硬顶 2000（0.57 起；同 sessions.get.message_limit / events.list 风格）。
           limit: { type: 'integer', minimum: 1, maximum: MAX_SESSION_EVENTS_LIMIT },
           // 事件类型过滤；`tool.*` 这种 `*` 后缀 = 前缀匹配（同 events.subscribe）。
           types: {

@@ -108,6 +108,9 @@ export async function collectBlobReferences(input: {
   for (const entry of entries) {
     const full = join(input.sessionsDir, entry.name);
     if (entry.isFile() && entry.name.endsWith('.json')) {
+      // 侧车不是会话壳：`<id>.json.info.json` 是 `listRich()` 的摘要缓存（0.57），
+      // 里面没有 `refs.sha256`。跳过它只省一次读、少算一份 `shells`，**不影响引用集合**。
+      if (entry.name.endsWith('.info.json')) continue;
       // 会话壳：`refs.sha256` 的出处。按**文本**扫而不是 `JSON.parse`：壳损坏 / 旧形状
       // 时也要能收到引用（解析失败就丢引用 = 删在用图）。
       const text = await readFile(full, 'utf8').catch(() => undefined);

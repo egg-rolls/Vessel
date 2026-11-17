@@ -39,6 +39,8 @@ import {
   collectTimelineRange,
   contiguousPrefixEnd,
   cursorTarget,
+  isInvalidParamsError,
+  LEGACY_TIMELINE_PAGE_LIMIT,
   MAX_TIMELINE_SEGMENTS,
   planBackfill,
   planEarlierRange,
@@ -46,7 +48,9 @@ import {
   readTimelineCursor,
   readTimelineHelloSegment,
   readTimelinePage,
+  TIMELINE_EVENTS_PAGE_LIMIT,
   type TimelineCursor,
+  type TimelinePage,
   type TimelineRangeHeader,
   tailWindowStart,
 } from './timeline-protocol';
@@ -436,6 +440,15 @@ export class SubscriptionController {
     return this.client.protocol?.protocol.features.includes(SESSION_FILTER_FEATURE) ?? false;
   }
 
+  /**
+   * 一次 `sessions.events` 要多少条（0.57）。一页 2000 = 一段 2000 条，首屏从 4 次
+   * 串行往返降到 1 次；旧 gateway（硬顶 500）会 `invalid_params`，那时**永久**退回 500。
+   *
+   * 为什么是「记住」而不是每次先试大页：退过一次就说明对端是旧版本，之后每条回填再白撞
+   * 一次失败 + 重试没有意义（首屏每滚一段都要付一次）。
+   */
+  private eventsPageLimit: number = TIMELINE_EVENTS_PAGE_LIMIT;
+
   /** 读 timeline 游标（`sessions.get.event_cursor` 四字段；旧 gateway 返回 undefined）。 */
   private async readCursor(sessionId: string): Promise<TimelineCursor | undefined> {
     const body = await this.client.request<{ session?: { event_cursor?: unknown } }>(
@@ -446,19 +459,47 @@ export class SubscriptionController {
     return readTimelineCursor(body?.session?.event_cursor);
   }
 
-  /** 拉一段区间（页只在区间内部）并交回 store 做四条校验。 */
-  private async pullRange(
+  /**
+   * 取一页 `sessions.events`。
+   *
+   * 大页被旧的 gateway 拒了（`invalid_params`：0.57 之前 `MAX_SESSION_EVENTS_LIMIT` 是
+   * 500）就**退回 500 再把这一页要一遍**，并把 {@link eventsPageLimit} 永久降级 ——
+   * 首屏数据不许因为「页要得太大」少一条，也不许因此报缺口。
+   */
+  private async fetchTimelinePage(
     sessionId: string,
-    header: TimelineRangeHeader,
-  ): Promise<{ ok: boolean; merged: number; duplicates: number; fetched: number; end: number }> {
-    const fetched = await collectTimelineRange(header, async (sinceSeq, limit) => {
+    sinceSeq: number,
+    limit: number,
+  ): Promise<TimelinePage> {
+    try {
       const body = await this.client.request<unknown>(
         'sessions.events',
         { session_id: sessionId, since_seq: sinceSeq, limit },
         TIMELINE_REQUEST_TIMEOUT_MS,
       );
       return readTimelinePage(body);
-    });
+    } catch (error) {
+      if (limit <= LEGACY_TIMELINE_PAGE_LIMIT || !isInvalidParamsError(error)) throw error;
+      this.eventsPageLimit = LEGACY_TIMELINE_PAGE_LIMIT;
+      const body = await this.client.request<unknown>(
+        'sessions.events',
+        { session_id: sessionId, since_seq: sinceSeq, limit: LEGACY_TIMELINE_PAGE_LIMIT },
+        TIMELINE_REQUEST_TIMEOUT_MS,
+      );
+      return readTimelinePage(body);
+    }
+  }
+
+  /** 拉一段区间（页只在区间内部）并交回 store 做四条校验。 */
+  private async pullRange(
+    sessionId: string,
+    header: TimelineRangeHeader,
+  ): Promise<{ ok: boolean; merged: number; duplicates: number; fetched: number; end: number }> {
+    const fetched = await collectTimelineRange(
+      header,
+      (sinceSeq, limit) => this.fetchTimelinePage(sessionId, sinceSeq, limit),
+      this.eventsPageLimit,
+    );
     const seqs = fetched.events.map((event) => event.seq);
     let effective = header;
     let outcome = this.eventStore.applyTimelineRange(header, fetched.events, sessionId);

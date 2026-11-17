@@ -475,7 +475,8 @@ export interface TimelinePage {
  * "把首屏上限抬到会话长度"的改动都在复现那次事故。
  *
  * 为什么按段而不是抬大 cap：服务端 `sendTimelineEpoch` 每趟最多 2000 条 / 2 MiB（背压时停、
- * 不推游标），`sessions.events` 也是 500/页 —— 客户端跟着按段续拉，每段都能过四条校验、
+ * 不推游标），`sessions.events` 也按段给（0.57 起一段 2000 条 = 一页，见
+ * {@link TIMELINE_EVENTS_PAGE_LIMIT}）—— 客户端跟着按段续拉，每段都能过四条校验、
  * 每段都能独立重试。把上限抬到"覆盖 17 万条"只是把问题推后（18 万、20 万照样炸），
  * 而 100,000 那种"单段吃满再报规则 3"是**假缺口**：真机上 176k 会话就撞在这里。
  */
@@ -536,6 +537,22 @@ export interface TimelineRangeFetch {
 }
 
 /**
+ * 客户端一次 `sessions.events` 要多少条（= 服务端 0.57 起的硬顶 `MAX_SESSION_EVENTS_LIMIT`）。
+ *
+ * 为什么是 2000 而不是 500：一段回填就是 `TIMELINE_TAIL_WINDOW_EVENTS = 2000` 条，而
+ * `limit = 500` 时这 2000 条必须**串行翻 4 页**（每一页都要等上一页的 `next_seq`，中间
+ * 还要各自过一遍四条校验）。数据一点没多、也没少，只是往返从 4 次降到 1 次。
+ *
+ * 旧 gateway（硬顶 500）会对 `limit > 500` 直接 `invalid_params`；调用方**必须**带
+ * 「退回 {@link LEGACY_TIMELINE_PAGE_LIMIT} 再来一次」的降级路（见
+ * `subscription.ts#pullRange`），否则远端旧 gateway 连首屏都拉不下来。
+ */
+export const TIMELINE_EVENTS_PAGE_LIMIT = 2000;
+
+/** 旧 gateway 的硬顶：降级时用的页大小（`MAX_SESSION_EVENTS_LIMIT` 0.57 之前的值）。 */
+export const LEGACY_TIMELINE_PAGE_LIMIT = 500;
+
+/**
  * 把**一个区间**的页拼齐（区间内部翻页，不改变区间）。
  *
  * 只认 `has_more` + 游标前进这两条停止条件；页游标不前进就停手（服务端异常 / 日志被截，
@@ -546,7 +563,7 @@ export interface TimelineRangeFetch {
 export async function collectTimelineRange(
   header: TimelineRangeHeader,
   fetchPage: (sinceSeq: number, limit: number) => Promise<TimelinePage>,
-  pageLimit = 500,
+  pageLimit = TIMELINE_EVENTS_PAGE_LIMIT,
 ): Promise<TimelineRangeFetch> {
   const events: TimelineEvent[] = [];
   let since = header.start_seq - 1;
@@ -600,6 +617,18 @@ export function toRunEvent(event: TimelineEvent): RunEvent {
         ? (data as Record<string, unknown>)
         : {},
   };
+}
+
+/**
+ * 这个错误是不是「参数不认」（`invalid_params`）。
+ *
+ * 唯一用途：0.57 把 `sessions.events` 的页大小抬到 2000 之后，**旧 gateway 会直接拒**
+ * （它的硬顶是 500）。两种传输都带稳定 `code`（WS 的 `res.error.code` 与 HTTP 的
+ * `GatewayHttpError.code`），所以只认这个字段，不解析文案。
+ */
+export function isInvalidParamsError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  return (error as { code?: unknown }).code === 'invalid_params';
 }
 
 /** `sessions.events` 的一页 → `TimelinePage`（形状不合的条目直接丢，不猜）。 */

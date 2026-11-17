@@ -469,8 +469,19 @@ export interface TimelinePageEvent {
   data?: unknown;
 }
 
-/** `readPage` 的单页硬顶（与 serve 的 `TIMELINE_PAGE_LIMIT` 同值；调用方可以更小）。 */
-export const TIMELINE_PAGE_MAX = 500;
+/**
+ * `readPage` 的单页硬顶（调用方可以更小）。
+ *
+ * 0.57：500 → **2000**。为什么：`sessions.events` 的客户端一页要 2000 条（首屏就是一段），
+ * 而 2000 条由 4 次 500 的读拼出来和 1 次 2000 的读拼出来，**读的字节一样多、开的块不一样多**：
+ * 真机 20.9 万事件的会话实测 4×500 冷态 134 ms / 稳态 82–100 ms，1×2000 冷态 55 ms /
+ * 稳态 46–47 ms（每次读都要重新定位块与索引，60% 的时间是重复定位）。上界仍是「一页
+ * 2000 条」，与 `TIMELINE_TAIL_WINDOW_EVENTS` 同量级，不改变任何调用方一次能要多少。
+ *
+ * 与 serve 的 `TIMELINE_PAGE_LIMIT`（epoch 帧仍按 500 一段发）**不再同值**：那是帧大小
+ * （受 2 MiB 预算约束），这是读口的硬顶，两者约束的不是同一件事。
+ */
+export const TIMELINE_PAGE_MAX = 2000;
 
 /**
  * 实时尾随的一条（`readPage` 的事件体 **+ `session_id`**）。
