@@ -89,6 +89,8 @@ export interface WebBuildSnapshot {
   startedAt?: number;
   /** 为什么建：产物缺失 / 落后于源码 */
   reason?: 'missing' | 'stale';
+  /** 谁叫起来的：startup / probe / timer（0.61） */
+  trigger?: 'startup' | 'probe' | 'timer';
   pid?: number;
   /** 构建输出文件（用户要照着去翻的那份） */
   logPath?: string;
@@ -157,6 +159,21 @@ export interface PlatformGatewayOptions {
    * 省略 = 永远认为没有构建在进行（`building: false`），老行为。
    */
   webBuild?: WebBuildProbe;
+  /**
+   * 0.61：**运行中自查**（低频定时 + `/build.json` 观测到 `stale` 时各叫一次）。
+   *
+   * 为什么需要：启动时的自建只跑一次，之后「源码改了、产物还是旧的」没人管 ——
+   * 只要没人开浏览器拉 `/build.json`，就永远不会重建。这个回调让组合根在**没有
+   * 浏览器**的时候也能自愈。
+   *
+   * 平台只管「什么时候叫」，判据、限频、互斥全部在组合根那一侧（复用启动时那一套，
+   * 不是第二套实现）。省略 = 平台不自查（老行为）。
+   */
+  webBuildCheck?: (trigger: 'probe' | 'timer') => void | Promise<void>;
+  /**
+   * 自查间隔（ms，缺省 60s）。下限 5s：再密就是在用 `tsc --noEmit` 烧 CPU。
+   */
+  webBuildCheckMs?: number;
   /** registry 中全部本地 node（`auto_start:false` 也注入，只做健康展示）。 */
   nodes: PlatformNodeDescriptor[];
   /**

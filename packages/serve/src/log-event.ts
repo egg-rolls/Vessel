@@ -213,6 +213,9 @@ const EVENT_FIELDS: Record<string, readonly FieldSpec[]> = {
   'web.build.start': [
     { key: 'reason' },
     { key: 'target' },
+    // 0.61：谁叫起来的构建（startup / probe / timer）—— 三条入口共用同一套判据与
+    // 同一个互斥，不标来源就查不出是哪条在反复触发。
+    { key: 'check' },
     { key: 'pid', kind: 'value' },
     { key: 'log', kind: 'path' },
   ],

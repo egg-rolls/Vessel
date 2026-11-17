@@ -51,6 +51,9 @@ const BUILD_EVENTS_PING_TICKS = 5;
 const BUILD_EVENTS_RETRY_MS = 5_000;
 /** 现场判断要遍历源码树；多个标签页同时轮询不必各走一遍。 */
 const BUILD_PROBE_TTL_MS = 5_000;
+/** 0.61：运行中自查的缺省间隔（60s）与下限（再密就是在烧 CPU 跑 tsc）。 */
+const WEB_BUILD_CHECK_DEFAULT_MS = 60_000;
+const WEB_BUILD_CHECK_MIN_MS = 5_000;
 
 /**
  * 0.58：平台入口的 WS 连接数据。目前只有一种：node 事件流代理。
@@ -190,6 +193,7 @@ async function buildJsonPayload(
         : {}),
       ...(build.pid !== undefined ? { pid: build.pid } : {}),
       ...(build.reason !== undefined ? { reason: build.reason } : {}),
+      ...(build.trigger !== undefined ? { check: build.trigger } : {}),
       ...(build.logPath !== undefined ? { log: build.logPath } : {}),
       ...(build.last !== undefined
         ? {
@@ -226,9 +230,13 @@ async function buildJsonResponse(
   probe: WebDistProbe | undefined,
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>,
   webBuild: WebBuildProbe | undefined,
+  onStale?: () => void,
 ): Promise<Response | null> {
   const body = await buildJsonPayload(staticDir, probe, probeCached, webBuild);
   if (body === null) return null;
+  // 0.61：观测到「产物旧了、又没在构建」就在这里叫一次自查（组合根那侧限频 + 互斥）。
+  // 这一行**不打日志**：真正起构建时才有 `web.build.start check=probe`。
+  if (body.stale === true && body.building !== true) onStale?.();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json;charset=utf-8',
     // 这个文件就是用来感知变化的：命中缓存等于没查（静态兜底那条是 immutable 一年）。
@@ -541,6 +549,22 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
   const probeWebDist = createWebDistProbeCache();
   // 0.60：构建状态的唯一来源。**不进上面那份缓存**：构建一结束就必须说「结束了」。
   const webBuild = opts.webBuild;
+  // 0.61：低频自查（缺省 60s）。**定时器本身不打日志** —— 每 60s 一行会把日志刷满；
+  // 只有「因此真的起了构建」时，组合根那侧才会打 `web.build.start check=timer`。
+  const webBuildCheck = opts.webBuildCheck;
+  const webBuildCheckTimer =
+    webBuildCheck === undefined
+      ? undefined
+      : setInterval(
+          () => {
+            // 自查失败不重要（下一轮还会再来），更不该冒泡成未处理拒绝。
+            void Promise.resolve()
+              .then(() => webBuildCheck('timer'))
+              .catch(() => undefined);
+          },
+          Math.max(WEB_BUILD_CHECK_MIN_MS, opts.webBuildCheckMs ?? WEB_BUILD_CHECK_DEFAULT_MS),
+        );
+  webBuildCheckTimer?.unref?.();
   // 0.57：产物变更推送（SSE）。`/build.json` 仍是唯一事实源，这里只是加速通道。
   const buildEvents = createBuildEventStream({
     staticDir,
@@ -748,6 +772,8 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
           opts.webDist,
           probeWebDist,
           webBuild,
+          // 0.61：探针看到 stale 就叫一次（限频在组合根）。没人开浏览器时靠定时器。
+          webBuildCheck === undefined ? undefined : () => void webBuildCheck('probe'),
         );
         if (buildResponse !== null) {
           for (const [key, value] of Object.entries(extra)) {
@@ -938,6 +964,8 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
       // 0.58：代理 WS 同理 —— 不让一条事件流把停服卡死；关闭时按 `who: 'platform'` 记账。
       proxy.closeAll();
       clearInterval(authCleanupTimer);
+      // 0.61：自查定时器跟着平台一起停（网关停了不该还在跑 tsc）。
+      if (webBuildCheckTimer !== undefined) clearInterval(webBuildCheckTimer);
       await authService.flush();
       await server.stop(true);
     },

@@ -39,7 +39,7 @@ paths: [src/web-dist.ts, src/gateway-command.ts, src/cli.ts, packages/serve/src/
 一次构建**最多 4 行**（start + 可选 progress + 终态 + 可选内联尾部）：
 
 ```
-[vessel] web.build.start reason=stale target=apps/web pid=64180 log=/tmp/vessel-web-build/1794910725789-41008/build.log
+[vessel] web.build.start reason=stale target=apps/web check=timer pid=64180 log=/tmp/vessel-web-build/1794910725789-41008/build.log
 [vessel] web.build.progress elapsed=30s rss=180MB        # 可选：<30s 的构建一条都不打，最多 2 条
 [vessel] web.build.done dur=17.2s assets=42 bytes=8.1MB
 [vessel] web.build.fail exit=2 dur=1.4s log=/tmp/vessel-web-build/…/build.log
@@ -51,6 +51,7 @@ paths: [src/web-dist.ts, src/gateway-command.ts, src/cli.ts, packages/serve/src/
 ```
 
 - `reason=missing|stale`：产物完全没有 / 落后于源码；
+- `check=startup|probe|timer`：谁叫起来的这次构建 —— 启动时 / 有人拉 `/build.json` 看到旧产物 / 运行中定时自查（0.61）。三条入口共用同一套判据与互斥，出问题先看这个字段；
 - 终态三种：`done`（成功）、`fail`（失败，附 ≤15 行尾部，每行 ≤160 字）、`interrupted`（被打断，子进程整树已杀）；
 - `progress` 的 `rss=` 只在能读到构建进程树的平台出现（Linux 读 `/proc`）；读不到就不打这个字段，绝不用网关自己的内存冒充；
 - `stale_artifact` 只出现在**启动**时：上一次是被硬杀（`SIGKILL` / 关窗口）留下的临时目录，清掉一行总账；
@@ -62,6 +63,26 @@ paths: [src/web-dist.ts, src/gateway-command.ts, src/cli.ts, packages/serve/src/
   [vessel] web.build.running elapsed=6.1s pid=64180 log=…
   [vessel] web.build.last phase=done dur=17.2s at=2026-11-17T10:23:34.409Z log=…
 ```
+
+### 3.1 运行中自愈（0.61）：没人开浏览器也会重建
+
+| 触发来源（`check=`） | 什么时候 | 说明 |
+|---|---|---|
+| `startup` | gateway 启动时 | 只跑一次；产物缺失时等它建完再起平台（fail-fast 不接受半成品） |
+| `probe` | 有人请求 `/build.json` 且判到 `stale` | 浏览器轮询/SSE 就会碰到；**请求本身不打日志** |
+| `timer` | 平台侧低频定时器（缺省 60s） | 完全不开浏览器时唯一能自愈的那条；**定时自查本身不打日志**，只有真起了构建才有日志 |
+
+三条入口**共用同一套判据**（`inspectWebDist`）、**同一个互斥**（`inFlightBuild`）与
+**60s 限频**；每次构建都记 `check=`，所以「谁在反复触发」查得出来。
+
+开关（**语义只有这一份**，见 `webAutoBuildMode`）：
+
+| 环境变量 | 效果 |
+|---|---|
+| `VESSEL_WEB_AUTOBUILD_CHECK_MS` | 自查间隔，缺省 60000，下限 5000（再密就是在反复跑 `tsc --noEmit`） |
+| `VESSEL_WEB_AUTOBUILD=startup` | **只在启动时**建；运行中不再自查（给慢机器/构建很贵的部署留退路） |
+| `VESSEL_NO_WEB_AUTOBUILD=1` | 全关：启动也不建、运行中也不查 |
+| `VESSEL_STATIC_DIR` | 指向外部产物时三档一律不接管（外部产物不归我们建） |
 
 ## 4. `console.*` 的判定（`grep` 后的逐个判断）
 
