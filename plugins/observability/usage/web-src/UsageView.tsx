@@ -119,6 +119,9 @@ interface UsageData {
 function UsageBody({ data, t }: { data: UsageData; t: Translator }) {
   const { summary, models } = data;
   if (!summary.has_data) {
+    // 0.56: with a retired source, do NOT say "no usage yet" — that turns "cannot be
+    // computed" into "you never used it". CoverageNotice above states the real reason.
+    if (summary.source?.source_retired === true) return null;
     return <EmptyState title={t('usage.empty.title')} description={t('usage.empty.description')} />;
   }
 

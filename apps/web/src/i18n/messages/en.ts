@@ -516,7 +516,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.diagnostics.doctor.mcp.disabled': 'MCP is not enabled on this gateway',
   'observe.diagnostics.doctor.mcp.unavailable': 'MCP status unavailable',
   'observe.diagnostics.doctor.servePort.notConfigured':
-    'serve.port is not configured; doctor skips this check',
+    'node.port is not configured; doctor skips this check',
   'observe.diagnostics.doctor.servePort.systemPort':
     '{host}:0 (system-assigned) · endpoint {endpoint}',
   'observe.diagnostics.doctor.servePort.detail': '{host}:{port} configured · endpoint {endpoint}',
@@ -1680,7 +1680,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'connection.closeCodeForbidden': ' · no access',
   'connection.closeCodeProtocol': ' · incompatible protocol',
   'connection.failureHint':
-    'When connecting fails, check in order: the address is reachable, the Origin is in serve.allowed_origins, the token is valid, and non-loopback uses HTTPS.',
+    'When connecting fails, check in order: the address is reachable, the Origin is in node.allowed_origins, the token is valid, and non-loopback uses HTTPS.',
   'connection.connected': 'Connected to gateway',
   'config.noTokenReason': 'Connect to read config.',
   'config.disabledTitle': 'Config API is not enabled',
@@ -1768,9 +1768,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.connection.invalidUrl': 'Invalid gateway address',
   'gateway.connection.authFailed': 'Authentication failed: the token is invalid or expired',
   'gateway.connection.originRejected':
-    'The gateway rejected this Origin/Host: {detail}. For cross-origin deployments, add this site to serve.allowed_origins.',
+    'The gateway rejected this Origin/Host: {detail}. For cross-origin deployments, add this site to node.allowed_origins.',
   'gateway.connection.unreachable':
-    'Cannot reach the gateway (check the address/TLS/network): {detail}. Cross-origin deployments also need serve.allowed_origins.',
+    'Cannot reach the gateway (check the address/TLS/network): {detail}. Cross-origin deployments also need node.allowed_origins.',
   'gateway.connection.forbiddenTenant': 'Access denied (admin token required)',
   'gateway.connection.protocolMismatch':
     'Incompatible protocol version (vessel.gateway/1 required)',
@@ -1819,7 +1819,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.error.unauthorized':
     'The token is invalid or expired; enter it again in connection settings.',
   'gateway.error.forbidden': 'This token cannot perform the operation.',
-  'gateway.error.forbidden_origin': 'The request origin is not in serve.allowed_origins.',
+  'gateway.error.forbidden_origin': 'The request origin is not in node.allowed_origins.',
   'gateway.error.invalid_host': 'The Host header is not allowed by the gateway.',
   'gateway.error.not_found': 'The target does not exist or was deleted.',
   'gateway.error.invalid_params': 'The request parameters are invalid.',
