@@ -90,8 +90,19 @@ type FileStamp =
  */
 const LIST_RICH_CACHE_LIMIT = 512;
 
-/** `FileSessionStore` 构造选项（additive；不传时行为与无参构造完全一致） */
-export interface FileSessionStoreOptions {
+/** 读侧会话壳快照缓存的一条（见 `FileSessionStore#stateCache`）。 */
+interface CachedState {
+  /** 这份对象是从哪个路径 parse 出来的（正式路径 / legacy 路径必须分开） */
+  path: string;
+  /** 文件字节数（失效键的一半） */
+  size: number;
+  /** 文件 mtime（毫秒，失效键的另一半） */
+  mtimeMs: number;
+  /** 那次 parse 出来的会话壳（**共享只读**：见 `SessionStore#loadForRead` 的契约） */
+  state: SessionState;
+}
+
+/** `FileSessionStore` 构造选项（additive；不传时行为与无参构造完全一致） */ export interface FileSessionStoreOptions {
   /**
    * `listRich()` 摘要缓存条数上限（LRU，缺省 {@link LIST_RICH_CACHE_LIMIT}）；0 = 关闭缓存。
    *
@@ -207,6 +218,24 @@ export class FileSessionStore implements SessionStore {
   private dirReady?: Promise<void>;
   /** 同一 session 的写入串行化；值为永不 reject 的 tail */
   private readonly pendingWrites = new Map<string, Promise<void>>();
+  /**
+   * 读侧会话壳快照（{@link FileSessionStore.loadForRead}）：
+   * 键 = session id，值 = (路径, size, mtimeMs, 那次 parse 出来的 `SessionState`)。
+   *
+   * 与上面的 `infoCache` 是同一个套路（stat 短路 + 键里带 mtime/size），只是缓存对象从
+   * 「列表摘要」换成「整份 `SessionState`」。**失效条件就是键本身**：
+   * 内容一变（写侧走 temp+rename 原子写 ⇒ mtime/size 必变）⇒ 键变了 ⇒ miss 重读重 parse。
+   * 没有 TTL、没有手工失效、没有「写缓存」（`save()` 每写一个新壳后顺手把旧条目丢掉）。
+   *
+   * 为什么值里要留 `path`：`legacyFilePath`（未编码路径）与正式路径是两份文件，同一
+   * session id 可能先命中 legacy 再切到正式，路径不同就绝不能复用同一份对象。
+   *
+   * 极端竞态与 `infoCache` 同口径：同一毫秒内两次写入且字节数完全相同 ⇒ 可能拿到上一版
+   * 快照，下一次任意长度变化即修正。ext4/NTFS 的 mtimeMs 有亚毫秒精度，这个窗口需要
+   * 「同长度改写 + 同 mtime 刻度」同时成立。所有需要**写**的路径都走 `load()`（读盘、
+   * 独占对象），不受这里影响。
+   */
+  private readonly stateCache = new Map<string, CachedState>();
 
   /**
    * @param basePath 会话文件存储目录，默认 `.vessel/sessions`
@@ -282,6 +311,95 @@ export class FileSessionStore implements SessionStore {
     const legacy = await this.readStateFile(legacyPath);
     if (!legacy.found) return null;
     return legacy.state;
+  }
+
+  /**
+   * 会话**存在**吗？（0.56：存在性校验不再 `load()` 整份会话壳）
+   *
+   * 口径与 {@link load} 的 `null` 分支一致，只是**不解析**：
+   * - 正式路径在 ⇒ `true`（一次 `stat`；1.8 MB 的壳 parse 一次，长寿进程实测 ~230 ms，
+   *   而存在性只值一次 stat）；
+   * - 正式路径 ENOENT ⇒ 看 legacy（未编码）路径，与 `load()` 同一个回退顺序；
+   * - stat 报 ENOENT 以外的错（EACCES / 路径是目录 / …）⇒ **退回 `load()`**，
+   *   让「不可读」继续走今天那条 `SessionCorruptError`，绝不把错误读成「不存在」。
+   *
+   * 已知差别（也写在 `SessionStore#exists` 的注释里）：壳在、但内容损坏时，`load()` 抛
+   * `SessionCorruptError`，`exists()` 只说「在」。所以只有**不需要壳**的调用方该用它。
+   */
+  async exists(sessionId: string): Promise<boolean> {
+    const primaryPath = this.filePath(sessionId);
+    const primary = await this.statForCache(primaryPath);
+    if (primary.kind === 'unknown') return (await this.load(sessionId)) !== null;
+    if (primary.kind === 'present') return true;
+
+    const legacyPath = this.legacyFilePath(sessionId);
+    if (legacyPath === undefined || legacyPath === primaryPath) return false;
+    const legacy = await this.statForCache(legacyPath);
+    if (legacy.kind === 'unknown') return (await this.load(sessionId)) !== null;
+    return legacy.kind === 'present';
+  }
+
+  /**
+   * 读一侧的会话壳快照：同一份文件（path + size + mtime 都没变）只 parse 一次。
+   *
+   * 返回的**字段与形状与 {@link load} 逐字段相同**（同一个 `toSessionState`、同一条
+   * legacy 回退、同样的 `SessionCorruptError`），唯一区别是它可能是**共享对象**：
+   * 调用方不得写它（见 `SessionStore#loadForRead` 的契约）。为了「误写当场炸而不是
+   * 悄悄污染缓存」，这里把壳对象与 `messages` 数组都冻上 —— 要写就用 `load()`。
+   *
+   * 不缓存的情形：正式路径不在（legacy / 缺失 / 未知错误）—— 那时只读一次就够快，
+   * 而且 legacy → 正式路径的切换不该被缓存粘住。
+   */
+  async loadForRead(sessionId: string): Promise<SessionState | null> {
+    const primaryPath = this.filePath(sessionId);
+    const stamp = await this.statForCache(primaryPath);
+    if (stamp.kind !== 'present') return this.load(sessionId);
+
+    const hit = this.stateCache.get(sessionId);
+    if (
+      hit !== undefined &&
+      hit.path === primaryPath &&
+      hit.size === stamp.size &&
+      hit.mtimeMs === stamp.mtimeMs
+    ) {
+      return hit.state;
+    }
+
+    const state = await this.load(sessionId);
+    if (state === null) return null;
+    // 只有「这份对象确实来自正式路径」才缓存：`load()` 可能回退到 legacy，
+    // 那时缓存会把 legacy 的内容挂在正式路径的键上（路径不同就该各算各的）。
+    const after = await this.statForCache(primaryPath);
+    if (after.kind === 'present') return this.cacheState(sessionId, primaryPath, after, state);
+    return state;
+  }
+
+  /** 冻结并写入快照缓存（LRU 上限与 `listRich` 同一个旋钮）。 */
+  private cacheState(
+    sessionId: string,
+    path: string,
+    stamp: { size: number; mtimeMs: number },
+    state: SessionState,
+  ): SessionState {
+    // 冻结**同一个对象**（不换形状：`messages` 缺省就仍然是缺省，与 `load()` 逐字段一致）。
+    // 冻的是壳对象与数组本身 —— 误写当场抛，而不是悄悄把缓存改成一份没人存过的状态。
+    if (state.messages !== undefined) Object.freeze(state.messages);
+    const frozen = Object.freeze(state);
+    if (this.listRichCacheLimit > 0) {
+      this.stateCache.delete(sessionId);
+      this.stateCache.set(sessionId, {
+        path,
+        size: stamp.size,
+        mtimeMs: stamp.mtimeMs,
+        state: frozen,
+      });
+      while (this.stateCache.size > this.listRichCacheLimit) {
+        const oldest = this.stateCache.keys().next();
+        if (oldest.done === true) break;
+        this.stateCache.delete(oldest.value);
+      }
+    }
+    return frozen;
   }
 
   /** 读取并解析单个状态文件；ENOENT 以外一律视为损坏 */
@@ -427,6 +545,9 @@ export class FileSessionStore implements SessionStore {
 
   private async writeSession(sessionId: string, state: SessionState): Promise<void> {
     await this.ensureDir();
+    // 写侧永远不读缓存；写完顺手丢掉旧快照（键里本来就有 mtime/size，这里只是省一次
+    // 「同长度同 mtime 刻度」的竞态窗口）。
+    this.stateCache.delete(sessionId);
 
     const messages = state.messages ?? [];
     const meta = deriveSessionMeta(messages);
@@ -490,6 +611,7 @@ export class FileSessionStore implements SessionStore {
   async delete(sessionId: string): Promise<void> {
     const previous = this.pendingWrites.get(sessionId);
     if (previous) await previous;
+    this.stateCache.delete(sessionId);
 
     // 先校验存在性与归属；损坏文件在此抛错，绝不 unlink。
     const state = await this.load(sessionId);

@@ -7,6 +7,7 @@
 import { createHash } from 'node:crypto';
 import {
   formatClearedToolResult,
+  indexToolCalls,
   isClearedToolResult,
   type Message,
   type ProjectionMode,
@@ -264,6 +265,8 @@ function projectionHash(text: string): string {
 function scanProjections(all: readonly Message[], state: SessionState): ProjectionScan {
   const clearedIds = new Set(state.cleared_tool_call_ids ?? []);
   const declarationId = state.context_projection?.declaration_id ?? null;
+  // 一次性建 tool_call 索引（懒建：没有分支 B 的条目就根本不建）。
+  let toolCallIndex: ReturnType<typeof indexToolCalls> | undefined;
   const byIndex = new Map<number, ProjectionView>();
   const summary: ProjectionSummary = {
     total: 0,
@@ -300,7 +303,11 @@ function scanProjections(all: readonly Message[], state: SessionState): Projecti
       // 分支 B：正文还是原文、id 在本段冻结集合里 ⇒ 用 core 的**同一个**函数现算。
       // 实参顺序照签名（`messages, toolCallId, originalContent`），原文用落盘完整正文
       // （不是 8 KiB 裁剪后的）—— 否则行数与 exit code 会算错。
-      const text = formatClearedToolResult(all, toolCallId, content);
+      // 第四个参数是**预建的 tool_call 索引**（语义与函数内部的线性查找逐条一致）：
+      // 否则每个已占位条目都要重扫一遍全部消息，`sessions.get` 一条消息的页会变成
+      // O(已占位条数 × 消息条数)（1,047 条 / 413 个 id 实测 6.3 ms，长寿进程 ~60 ms）。
+      if (toolCallIndex === undefined) toolCallIndex = indexToolCalls(all);
+      const text = formatClearedToolResult(all, toolCallId, content, toolCallIndex);
       const originalBytes = utf8ByteLength(content);
       view = {
         mode: 'placeholder',
@@ -1424,6 +1431,32 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
   }
 
   /**
+   * 取会话壳（**读侧快照**）：后端支持 `loadForRead()` 就按 (path, size, mtime) 短路，
+   * 否则退回 `load()`。逐字段相同，只是不再每次 parse 那份 1.8 MB 壳。
+   *
+   * 只许**读**这条返回值（见 `SessionStore#loadForRead` 的契约）：要写（rename / compact /
+   * fork 之后 save）的路径继续用 `backend.load()`。
+   */
+  async function loadSessionForRead(
+    backend: SessionStore,
+    sessionId: string,
+  ): Promise<SessionState | null> {
+    if (backend.loadForRead !== undefined) return backend.loadForRead(sessionId);
+    return backend.load(sessionId);
+  }
+
+  /**
+   * 存在性校验：后端支持 `exists()` 就只花一次 stat，否则退回 `load() !== null`。
+   *
+   * 这是「只想确认会话在、并不需要壳」的路径专用（0.56：一次 `sessions.events` 曾为了
+   * 存在性 parse 整份 1.8 MB 壳，长寿进程里 ~230 ms）。需要壳的路径不许用它。
+   */
+  async function sessionExists(backend: SessionStore, sessionId: string): Promise<boolean> {
+    if (backend.exists !== undefined) return backend.exists(sessionId);
+    return (await backend.load(sessionId)) !== null;
+  }
+
+  /**
    * 会话 → 归属映射（additive `agent`）。
    *
    * 一次 `agent.list()` 换一张表：现役 body（`session_id`）+ 已退役 body（`body_history[]`）。
@@ -1517,7 +1550,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
       },
       handler: async (params) => {
         const backend = requireSession();
-        const state = await backend.load(stringParam(params, 'session_id'));
+        const state = await loadSessionForRead(backend, stringParam(params, 'session_id'));
         if (!state) throw new RpcError('not_found', 'Session not found');
         const runStore = runStoreFor?.();
         const latest =
@@ -1647,8 +1680,9 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         const sessionId = stringParam(params, 'session_id');
         const backend = requireSession();
         // 存在性 / 授权与 sessions.get 走同一条口径（不额外开一个越权读盘口子）。
-        const state = await backend.load(sessionId);
-        if (!state) {
+        // 0.56：这条路径**不读壳**（时间线是唯一读源），存在性只值一次 stat。
+        const exists = await sessionExists(backend, sessionId);
+        if (!exists) {
           throw new RpcError('not_found', 'Session not found');
         }
         const sinceSeq = parseSinceSeq(params.since_seq);
@@ -1808,8 +1842,10 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
       handler: async (params) => {
         const backend = requireSession();
         const sessionId = stringParam(params, 'session_id');
-        const state = await backend.load(sessionId);
-        if (!state) throw new RpcError('session_not_found', 'Session not found');
+        // 0.56：这条路径拿到的 `state` 只用来判存在，压缩本身按 session id 干活
+        // ⇒ 不再 parse 整份壳（一次 stat 就够）。
+        const exists = await sessionExists(backend, sessionId);
+        if (!exists) throw new RpcError('session_not_found', 'Session not found');
 
         const runtime = compactRuntime?.() as { compactContext?: CompactContextFn } | undefined;
         const compactContext = runtime?.compactContext;

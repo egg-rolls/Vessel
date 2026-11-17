@@ -20,6 +20,7 @@
 
 import { type FileHandle, mkdir, open, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { blockEnumerationCounters } from './enum-stats.js';
 import {
   BLOCK_MAX_BYTES,
   isChunkEventType,
@@ -554,52 +555,8 @@ async function locateManifestAnchor(
   manifestPath: string,
   sinceSeq: number,
 ): Promise<ManifestAnchor | undefined> {
-  const size = (await stat(manifestPath).catch(() => undefined))?.size ?? 0;
-  if (size <= 0) return undefined;
-  // 不变式（`lo` / `hi` 都是**行首**的字节偏移）：
-  // - `[0, lo)` 里的行，`end_seq` 全部 `< sinceSeq`（太小）；
-  // - `[hi, size)` 里的行，`end_seq` 全部 `>= sinceSeq`（够大）。
-  // 每次探针都让区间**严格**收窄，不会有「同一个行首被反复探到」的空转 —— 第一版就死在
-  // 那里：命中候选后把 `hi` 收成行首、而中点仍落在同一条跨行的长行里，`hi` 再也不前进，
-  // 探针用尽后把第 3 行当成锚点，于是开头 1..49 那一段被静默跳过（只剩一个降级信号）。
-  const budget: LineReadBudget = { bytes: 0, maxBytes: MANIFEST_PROBE_BUDGET_BYTES };
-  let lo = 0;
-  let hi = size;
-  let probes = 0;
-  let best: ManifestAnchor | undefined;
-  while (lo < hi) {
-    if (probes >= ANCHOR_PROBE_LIMIT) return undefined; // 不猜：调用方换文件名二分
-    probes += 1;
-    const mid = lo + Math.floor((hi - lo) / 2);
-    // 探**中点所在的那一行**：往回找行首，再整行读出来（两半都严格推进）。
-    const lineStart = await findLineStartBefore(
-      manifestPath,
-      lo,
-      mid,
-      budget,
-      MANIFEST_LINE_MAX_BYTES,
-    );
-    if (lineStart === undefined) return undefined;
-    const line = await readNdjsonLineAt(
-      manifestPath,
-      lineStart,
-      size,
-      budget,
-      false,
-      MANIFEST_LINE_MAX_BYTES,
-    );
-    if (line === undefined) return undefined;
-    const entry = parseManifestText(line.text);
-    if (entry === undefined || entry.end_seq < sinceSeq) {
-      // 坏行 / 太小：跳过它继续往右找（坏行不是锚点，也不是判据）。
-      lo = Math.max(line.next, lo + 1);
-      continue;
-    }
-    best = { entry, lineStart: line.start, lineEnd: line.next };
-    if (line.start <= lo) return best; // 不可能再往左：它就是第一条
-    hi = line.start;
-  }
-  return best;
+  // 判据只有一份：{@link locateManifestEntry}（键 = `end_seq`，见那里的长注释）。
+  return locateManifestEntry(manifestPath, sinceSeq, 'end_seq');
 }
 
 /**
@@ -808,10 +765,27 @@ export class ManifestForwardReader {
   private position: number;
   private readonly queue: WalManifestLine[] = [];
   private finished = false;
+  /**
+   * 本次顺序读里**过不了校验**的行数（非空行 + `parseManifestText` 失败）。
+   *
+   * 只用来回答一个问题：「这条 manifest 在我读到的这一段里可信吗？」块名枚举
+   * （{@link ManifestNameSource}）据此整条退回 readdir —— 跳过一条坏行继续枚举等于
+   * 押注「那一条本来就不该有」，而这一点无法验证。
+   */
+  badLines = 0;
 
+  /**
+   * @param path `wal.manifest` 的路径
+   * @param position 起始字节偏移（必须是**一行行首**）
+   * @param size 文件字节数（可选）。给了就把窗口**夹到文件尾**：
+   *   `readFileWindow` 是「读不满就说不知道」的口径，而尾页的锚点往往落在最后 8 KiB 内 ——
+   *   不夹的话那里会读不满、被当成「读不动」，于是**尾页一条条目都拿不到**
+   *   （0.56 尾部读实测踩到：13,177 块的会话上，`since=209335` 的页拿不到任何条目）。
+   */
   constructor(
     private readonly path: string,
     position: number,
+    private readonly size?: number,
   ) {
     this.position = position;
   }
@@ -820,7 +794,15 @@ export class ManifestForwardReader {
   async peek(): Promise<WalManifestLine | undefined> {
     while (this.queue.length === 0) {
       if (this.finished) return undefined;
-      const buffer = await readFileWindow(this.path, this.position, MANIFEST_STREAM_WINDOW);
+      if (this.size !== undefined && this.position >= this.size) {
+        this.finished = true;
+        return undefined;
+      }
+      const length =
+        this.size === undefined
+          ? MANIFEST_STREAM_WINDOW
+          : Math.min(MANIFEST_STREAM_WINDOW, this.size - this.position);
+      const buffer = await readFileWindow(this.path, this.position, length);
       if (buffer === undefined) {
         this.finished = true;
         return undefined;
@@ -835,6 +817,7 @@ export class ManifestForwardReader {
         consumed = cursor;
         const entry = parseManifestText(text);
         if (entry !== undefined) this.queue.push(entry);
+        else if (text.trim().length > 0) this.badLines += 1;
       }
       if (consumed === 0) {
         // 一行比整窗还长（正常 manifest 一行 ≈ 150 B）：不猜，停止比对。
@@ -849,6 +832,18 @@ export class ManifestForwardReader {
   /** 消费一条（与 {@link peek} 成对使用）。 */
   take(): WalManifestLine | undefined {
     return this.queue.shift();
+  }
+
+  /**
+   * 取下一条（不按块名匹配）：读到文件尾 / 读不动 ⇒ `undefined`。
+   *
+   * 与 {@link entryFor} 共用同一份窗口与队列：`entryFor` 是「按名字对齐的消费」，
+   * 这里是「顺序消费」—— 块名枚举（`blocks.ts#ManifestNameSource`）用后者。
+   */
+  async takeNext(): Promise<WalManifestLine | undefined> {
+    const next = await this.peek();
+    if (next === undefined) return undefined;
+    return this.take();
   }
 
   /**
@@ -867,4 +862,438 @@ export class ManifestForwardReader {
     }
     return undefined;
   }
+}
+
+/*
+ * ── 块名枚举（0.56 尾部读的**固定定位**开销） ──────────────────────────────────
+ *
+ * ## 它解决什么
+ *
+ * 0.56 的范围读每读一页都先 `listBlockFiles()`（`readdir` 整个 `wal.blocks/`）：
+ * `d813eaea` 13,177 个块名 **10–13 ms**、`09f82ac6` 6,225 个 **3–4 ms**，而且这笔钱与
+ * 「这一页要几条」无关 —— 一页 100 条只开 6 个块，却先枚举了全部 13,177 个。
+ * 实测（同一台机器、同一份只读拷贝）：一页 100 条热态 27–37 ms，其中 13 ms 是枚举。
+ *
+ * ## 怎么省
+ *
+ * `wal.manifest` 本来就是「块号 → seq 区间 + 记账」，**行序 = 块号序 = seq 序**（写侧
+ * `seal()` 先 fsync 块再追加条目、块号取 `maxNumber + 1`）。所以只要：
+ *
+ * 1. 在 manifest 里二分出**第一条 `end_seq >= sinceSeq` 的条目**（{@link locateManifestEntry}）；
+ * 2. 从那里**顺序往前读**，每读一个条目就开那个块（{@link ManifestNameSource}）——
+ *    一页只需要窗口内那几个条目，最多读几个 8 KiB 窗，**不枚举全量**。
+ *
+ * 目录只在两种情况下被 `readdir`：
+ * - **兜底**：manifest 缺失 / 短到不像大会话 / 锚点定位不到 / 邻域不自洽 / 锚点块不在
+ *   目录里 ⇒ 整条回退今天的 `listBlockFiles + 文件名二分`（{@link ArrayNameSource}）；
+ * - **尾部核对**：manifest 读完、而这一页**没填满**（要声称「后面真的没有块了」）时，
+ *   按块号往后 `stat` 探测（`last+1…`，见 {@link ManifestNameSource.probeTail}）——
+ *   这一步只 stat 几个文件，不 readdir。
+ *
+ * ## 凭什么仍然「逐条等价」
+ *
+ * 枚举**不是**判据，覆盖算术才是（`wal.ts#readTimelineRange` 的
+ * `coverage_gap` / `window_incomplete`）。所以：
+ *
+ * - **少枚举**一个块 ⇒ 窗口里那条 seq 既不在结果里也没声明成洞 ⇒ `coverage_gap` ⇒ 降级整份读
+ *   （输出不变，只是慢）；若那一页在它之前就填满了，它的 seq 全在 `hi` 之外，本来也不该出现；
+ * - **多枚举**一个不存在的块 ⇒ 读文件失败 ⇒ 记 `unverified` 并跳过（与今天「目录里有但读不出来」同口径）；
+ * - **声称「到尾」太早** ⇒ `window_incomplete` ⇒ 降级整份读。
+ *
+ * 三条都只影响**快慢**，不影响**给了什么**。这与 0.56 §3 的纪律一致：只许放宽，绝不窄化。
+ */
+
+/** `wal.manifest` 一行的**长度下界**（字节）。
+ *
+ * 一个块条目的密钥全集固定（`v/kind/block/start_seq/end_seq/offset/bytes/count/crc32` + `crc`），
+ * 最短的真实写法仍 > 120 B；这里取 96 B（两成余量），只用它回答一个问题：
+ * 「这个 manifest 里**有没有可能**有 `RANGE_READ_MIN_BLOCKS` 条以上的条目」。
+ * 判大了的后果是「小会话也走 manifest 路」（快、且输出等价）；判小了只是退回 readdir。
+ */
+const MANIFEST_LINE_MIN_BYTES = 96;
+
+/** 尾部核对：连续这么多个块号都不存在 ⇒ 认为已经到目录尾（单写者每封一块才分配下一个块号）。 */
+const TAIL_PROBE_MISSES = 3;
+
+/** 尾部核对的探针总上限（超过就停止核对 ⇒ 这一页不许声称「到尾」⇒ 上层降级）。 */
+const TAIL_PROBE_MAX = 32;
+
+/** 读 manifest 尾巴找「最后一条块条目」的窗口（末尾 4 KiB ≈ 27 条；不够再放大）。 */
+const MANIFEST_TAIL_WINDOW_BYTES = 4 * 1024;
+const MANIFEST_TAIL_MAX_BYTES = 64 * 1024;
+
+/**
+ * 目录里**最后一块**的文件名 —— 不 `readdir`（0.56：`sessions.get` 每页两次整目录枚举）。
+ *
+ * 为什么只值这么点钱：`lastSeq()`（`event_cursor.last_seq`）与 `watermark()`（上下文用量 /
+ * 系统上下文的缓存键）都只要这一个名字，而它们每次 `sessions.get` 都要算一遍。6,225 个块名
+ * 的 `readdir` 实测 3–4 ms、13,177 个的 10–13 ms，长寿进程里还要再放大。
+ *
+ * 口径：**manifest 尾条目 + 按块号往后 `stat` 探测**（与 {@link ManifestNameSource} 的
+ * 尾部核对同一套纪律）——
+ * - 写侧封块时才分配下一个块号（`maxNumber + 1`），所以「manifest 没记上的块」只可能是
+ *   紧接其后的那几块；连续 {@link TAIL_PROBE_MISSES} 个块号都不存在 ⇒ 到头了；
+ * - 最后定位到的那个块**必须真的在**（`stat`），否则（manifest 领先于目录 / 块被删）
+ *   一律退回 `listBlockFiles`（今天的行为），绝不给一个不存在的名字；
+ * - manifest 缺失 / 尾条目读不出 / 探针预算用尽 ⇒ 同样退回 `listBlockFiles`。
+ *
+ * 也就是说：快路径只在「能证明」的时候用，证不了就回到那条慢而确定的老路。
+ */
+export async function lastBlockName(sessionDir: string): Promise<string | undefined> {
+  const blocksDir = join(sessionDir, TIMELINE_LAYOUT.walBlocks);
+  const manifestPath = join(sessionDir, TIMELINE_LAYOUT.walManifest);
+  const slow = async (): Promise<string | undefined> => {
+    const names = await listBlockFiles(blocksDir);
+    return names[names.length - 1];
+  };
+
+  const tail = await readNdjsonTail(
+    manifestPath,
+    MANIFEST_TAIL_WINDOW_BYTES,
+    MANIFEST_TAIL_MAX_BYTES,
+  ).catch(() => undefined);
+  if (tail === undefined) return slow();
+  let lastEntry: WalManifestLine | undefined;
+  for (let index = tail.lines.length - 1; index >= 0; index -= 1) {
+    lastEntry = parseManifestText(tail.lines[index] ?? '');
+    if (lastEntry !== undefined) break;
+  }
+  if (lastEntry === undefined) return slow();
+  const firstNumber = blockNumber(lastEntry.block);
+  if (!Number.isSafeInteger(firstNumber) || firstNumber <= 0) return slow();
+
+  let lastNumber = firstNumber;
+  let candidate = firstNumber;
+  let misses = 0;
+  let probes = 0;
+  while (misses < TAIL_PROBE_MISSES && probes < TAIL_PROBE_MAX) {
+    probes += 1;
+    const number = candidate + 1;
+    candidate = number;
+    blockEnumerationCounters.tailProbes += 1;
+    if (await blockFileExists(blocksDir, blockNameOf(number))) {
+      lastNumber = number;
+      misses = 0;
+      continue;
+    }
+    misses += 1;
+  }
+  if (misses < TAIL_PROBE_MISSES) return slow();
+  const name = blockNameOf(lastNumber);
+  if (!(await blockFileExists(blocksDir, name))) return slow();
+  return name;
+}
+
+/**
+ * manifest 在**被枚举到的那一段**里出现了过不了校验的行 ⇒ 这一份 manifest 不可信。
+ *
+ * 由 {@link ManifestNameSource} 抛、由 `wal.ts#readTimelineRange` 接住并**整条改走
+ * readdir 兜底重来一次**（不是降级整份读、也不是跳过着一条继续）。
+ */
+export class ManifestUntrustedError extends Error {
+  constructor(readonly block: string | undefined) {
+    super(
+      block === undefined
+        ? 'wal.manifest 里有坏行：块名枚举不可信'
+        : `wal.manifest 在 ${block} 附近有坏行：块名枚举不可信`,
+    );
+    this.name = 'ManifestUntrustedError';
+  }
+}
+
+/** 一次范围读的块名来源（按**下标**取名字：与今天的 `names[index]` 用法一一对应）。 */ export interface BlockNameSource {
+  /** `manifest` = 快路径（不枚举全量）；`readdir` = 兜底 / 本身就只有一份目录快照 */
+  readonly kind: 'manifest' | 'readdir';
+  /**
+   * 下标 `index` 处的块（`index` 从 0 起、按块名升序）；枚举到头 ⇒ `undefined`。
+   *
+   * `manifest` 源在「到手了」之前会把 manifest 往前读到够；读完了还要做一次尾部核对，
+   * 才允许返回 `undefined`（那才是「真的没有更多块」）。
+   */
+  at(index: number): Promise<EnumeratedBlock | undefined>;
+  /**
+   * 「后面没有更多块了」这个声称**有没有据**。
+   *
+   * `readdir` 源恒 `true`（它就是目录快照）。`manifest` 源只有在尾部核对**走完一整窗
+   * 都不存在的块号**之后才是 `true`；探针用尽仍在冒（很反常的形状）⇒ `false`，
+   * 上游按「窗口没盖满」降级整份读 —— 宁可慢一次，也不把「没枚举完」说成「没有块了」。
+   */
+  readonly tailProven: boolean;
+}
+
+/** 枚举出来的一个块（`entry` 是 manifest 记账；没有 = 这个块没有证据，照样读）。 */
+export interface EnumeratedBlock {
+  name: string;
+  /** manifest 条目（尾部核对/兜底补进来的块没有条目 ⇒ `undefined`） */
+  entry?: WalManifestLine;
+}
+
+/** `readdir` 快照里的块名（兜底路 / 小会话）：`at()` 就是数组下标。 */
+export class ArrayNameSource implements BlockNameSource {
+  readonly kind = 'readdir' as const;
+  /** `readdir` 拿到的就是目录快照 ⇒ 「后面没有了」永远有据。 */
+  readonly tailProven = true;
+  private readonly names: readonly string[];
+  private readonly offset: number;
+
+  /**
+   * @param names `listBlockFiles()` 的全量名字（升序）
+   * @param offset 从第几个名字开始给（今天的 `startIndex`）
+   */
+  constructor(names: readonly string[], offset: number) {
+    this.names = names;
+    this.offset = Math.max(0, Math.floor(offset));
+  }
+
+  at(index: number): Promise<EnumeratedBlock | undefined> {
+    const name = this.names[this.offset + index];
+    return Promise.resolve(name === undefined ? undefined : { name });
+  }
+}
+
+/** 块号 → 块文件名（`7` → `000007.wblk`，与写侧 `blockName()` 同一个格式）。 */
+function blockNameOf(number: number): string {
+  return `${String(number).padStart(6, '0')}.wblk`;
+}
+
+/** `wal.blocks/` 里有没有这个块文件（`stat`；失败一律当「没有」）。 */
+async function blockFileExists(blocksDir: string, name: string): Promise<boolean> {
+  try {
+    return (await stat(join(blocksDir, name))).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * manifest 驱动的块名源：从 `startPosition` 起**顺序**读 `wal.manifest`，一个条目一个块。
+ *
+ * 三条纪律：
+ * 1. **只往前走**：条目块名不严格递增 ⇒ 跳过（写侧块只写一次；重复条目是坏数据，
+ *    不能让它把同一块开两遍 —— 那会撞上今天的 `order_broken` 判定）；
+ * 2. **读不出就说不知道**：坏行跳过（与全量读同口径），但**不猜**「后面没有了」——
+ *    manifest 读完只代表 manifest 读完，{@link probeTail} 还要按块号核对目录尾；
+ * 3. **不新增落盘格式、不写任何文件**。
+ */
+export class ManifestNameSource implements BlockNameSource {
+  readonly kind = 'manifest' as const;
+  private readonly reader: ManifestForwardReader;
+  private readonly blocksDir: string;
+  private readonly collected: EnumeratedBlock[] = [];
+  private lastNumber = 0;
+  private manifestDone = false;
+  private tailChecked = false;
+  /** 尾部核对是否给出了结论（见 {@link tailProven}） */
+  private tailProvenFlag = false;
+
+  /**
+   * @param manifestPath `wal.manifest` 的路径
+   * @param blocksDir `wal.blocks/` 的目录（尾部核对 + 兜底 stat 用）
+   * @param startPosition 起始字节偏移（manifest **条目行的行首**；锚点或链首）
+   * @param size manifest 的字节数（窗口夹到文件尾；尾页锚点常落在最后 8 KiB 内）
+   */
+  constructor(manifestPath: string, blocksDir: string, startPosition: number, size?: number) {
+    this.reader = new ManifestForwardReader(manifestPath, startPosition, size);
+    this.blocksDir = blocksDir;
+  }
+
+  get tailProven(): boolean {
+    return this.tailProvenFlag;
+  }
+
+  async at(index: number): Promise<EnumeratedBlock | undefined> {
+    while (index >= this.collected.length) {
+      if (!this.manifestDone) {
+        const entry = await this.reader.takeNext();
+        if (this.reader.badLines > 0) {
+          // 这一段 manifest 有坏行 ⇒ 不猜它本来该覆盖哪些块，整条交给 readdir 兜底。
+          throw new ManifestUntrustedError(entry?.block);
+        }
+        if (entry === undefined) {
+          this.manifestDone = true;
+          continue;
+        }
+        const number = blockNumber(entry.block);
+        if (!Number.isSafeInteger(number) || number <= this.lastNumber) continue; // 只往前走
+        this.lastNumber = number;
+        this.collected.push({ name: entry.block, entry });
+        continue;
+      }
+      // manifest 读完了：还要一次尾部核对（页没填满时上游要能声称「后面真的没有块了」）。
+      if (this.tailChecked) return undefined;
+      this.tailChecked = true;
+      const extended = await this.probeTail();
+      if (extended) continue; // 核对补了块：回到上面接着给
+      return undefined;
+    }
+    return this.collected[index];
+  }
+
+  /**
+   * 尾部核对：manifest 的最后一条之后，按块号往后 `stat` 探测。
+   *
+   * 为什么是探测而不是 `readdir`：单写者封块时块号取 `maxNumber + 1`，所以「manifest
+   * 没记上的块」最多是**紧接其后的那一个**（活动块 / 追加失败的那一块）。
+   * 连续 {@link TAIL_PROBE_MISSES} 个块号都不存在 ⇒ `tailProven = true`（目录尾到了）；
+   * 探测到 {@link TAIL_PROBE_MAX} 个还在冒 ⇒ `tailProven = false`（**不声称**到尾，
+   * 上游按 `window_incomplete` 降级整份读）—— 宁可慢一次，也不许把「没枚举完」
+   * 说成「没有块了」。
+   */
+  private async probeTail(): Promise<boolean> {
+    let misses = 0;
+    let probes = 0;
+    let extended = false;
+    while (misses < TAIL_PROBE_MISSES && probes < TAIL_PROBE_MAX) {
+      probes += 1;
+      const number = this.lastNumber + 1;
+      const name = blockNameOf(number);
+      this.lastNumber = number;
+      blockEnumerationCounters.tailProbes += 1;
+      if (await blockFileExists(this.blocksDir, name)) {
+        misses = 0;
+        extended = true;
+        this.collected.push({ name });
+        continue;
+      }
+      misses += 1;
+    }
+    this.tailProvenFlag = misses >= TAIL_PROBE_MISSES;
+    if (extended) blockEnumerationCounters.tailExtended += 1;
+    return extended;
+  }
+}
+
+/** `wal.manifest` 二分的比较键：按块尾 `end_seq` 还是块首 `start_seq`。 */
+type ManifestOrderField = 'end_seq' | 'start_seq';
+
+/**
+ * 在 `wal.manifest` 里二分出**第一条 `field >= target` 的条目**（按字节行二分）。
+ *
+ * 为什么需要两个键：确定「从哪个块开始开」用 `end_seq >= sinceSeq`（`sinceSeq` 可能
+ * 落在一段**事实行**里，块不覆盖它）；确定「连续尾块链的链首」用
+ * `start_seq > factBoundary`（第一条**整块都在事实边界之后**的块）。
+ *
+ * 判据只有一份：`validateManifestLine`（坏行跳过，不当锚点也不当证据）；取不到
+ * （文件缺失 / 空 / 全无有效行 / 探针用尽）⇒ `undefined`，由调用方换退路。
+ */
+async function locateManifestEntry(
+  manifestPath: string,
+  target: number,
+  field: ManifestOrderField,
+): Promise<ManifestAnchor | undefined> {
+  const size = (await stat(manifestPath).catch(() => undefined))?.size ?? 0;
+  if (size <= 0) return undefined;
+  // 不变式（`lo` / `hi` 都是**行首**的字节偏移）：
+  // - `[0, lo)` 里的行，`field` 全部 `< target`（太小）；
+  // - `[hi, size)` 里的行，`field` 全部 `>= target`（够大）。
+  // 每次探针都让区间**严格**收窄，不会有「同一个行首被反复探到」的空转 —— 第一版就死在
+  // 那里：命中候选后把 `hi` 收成行首、而中点仍落在同一条跨行的长行里，`hi` 再也不前进，
+  // 探针用尽后把第 3 行当成锚点，于是开头 1..49 那一段被静默跳过（只剩一个降级信号）。
+  const budget: LineReadBudget = { bytes: 0, maxBytes: MANIFEST_PROBE_BUDGET_BYTES };
+  let lo = 0;
+  let hi = size;
+  let probes = 0;
+  let best: ManifestAnchor | undefined;
+  while (lo < hi) {
+    if (probes >= ANCHOR_PROBE_LIMIT) return undefined; // 不猜：调用方换文件名二分
+    probes += 1;
+    const mid = lo + Math.floor((hi - lo) / 2);
+    // 探**中点所在的那一行**：往回找行首，再整行读出来（两半都严格推进）。
+    const lineStart = await findLineStartBefore(
+      manifestPath,
+      lo,
+      mid,
+      budget,
+      MANIFEST_LINE_MAX_BYTES,
+    );
+    if (lineStart === undefined) return undefined;
+    const line = await readNdjsonLineAt(
+      manifestPath,
+      lineStart,
+      size,
+      budget,
+      false,
+      MANIFEST_LINE_MAX_BYTES,
+    );
+    if (line === undefined) return undefined;
+    const entry = parseManifestText(line.text);
+    if (entry === undefined || entry[field] < target) {
+      // 坏行 / 太小：跳过它继续往右找（坏行不是锚点，也不是判据）。
+      lo = Math.max(line.next, lo + 1);
+      continue;
+    }
+    best = { entry, lineStart: line.start, lineEnd: line.next };
+    if (line.start <= lo) return best; // 不可能再往左：它就是第一条
+    hi = line.start;
+  }
+  return best;
+}
+
+/** 一次范围读为什么走 / 不走 manifest 快路径（稳定 code；只进 debug 日志与计数）。 */
+export type BlockEnumerationFallbackReason =
+  | 'manifest_missing'
+  | 'manifest_too_small'
+  | 'manifest_untrusted'
+  | 'anchor_unavailable'
+  | 'neighborhood_broken'
+  | 'anchor_block_missing'
+  | 'chain_head_unavailable'
+  | 'probe_budget_exhausted';
+
+/** {@link openManifestNameSource} 的结果：要么给源，要么给「为什么退回 readdir」。 */
+export type ManifestNameSourceResult =
+  | { ok: true; source: ManifestNameSource; anchor: ManifestAnchor }
+  | { ok: false; reason: BlockEnumerationFallbackReason };
+
+/**
+ * 尝试给出 manifest 驱动的块名源（**不做任何 readdir**）；任何一条判据不成立 ⇒
+ * 返回 `{ ok:false }`，调用方整条回退到 `listBlockFiles + 文件名二分`（今天的行为）。
+ *
+ * 六条判据（全成立才用快路径）：
+ * 1. `wal.manifest` 存在且**不只是几行**（`size / MANIFEST_LINE_MIN_BYTES >= RANGE_READ_MIN_BLOCKS`
+ *    —— 小会话本来就走整份读，别让它们多一条会漂的路径）；
+ * 2. 二分定位得到「第一条 `end_seq >= sinceSeq`」；
+ * 3. 锚点邻域自洽（`上一条.end_seq < 本条.start_seq <= 本条.end_seq < 下一条.start_seq`）；
+ * 4. 锚点块**真的在目录里**（`stat`）—— manifest 是目录的 best-effort 副本，不能凭它认块存在；
+ * 5. 起点块的**首帧**读得出来（判断它是否已落在事实边界之后）；
+ * 6. 需要从连续尾块链链首重验时，链首定位得到（`start_seq > factBoundary` 的第一条）。
+ */
+export async function openManifestNameSource(args: {
+  sessionDir: string;
+  sinceSeq: number;
+  factBoundary: number;
+  /** 块数门槛（与 `wal.ts#RANGE_READ_MIN_BLOCKS` 同值；由调用方传，避免跨模块常量依赖） */
+  minBlocks: number;
+}): Promise<ManifestNameSourceResult> {
+  const blocksDir = join(args.sessionDir, TIMELINE_LAYOUT.walBlocks);
+  const manifestPath = join(args.sessionDir, TIMELINE_LAYOUT.walManifest);
+  const size = (await stat(manifestPath).catch(() => undefined))?.size ?? 0;
+  if (size <= 0) return { ok: false, reason: 'manifest_missing' };
+  if (size / MANIFEST_LINE_MIN_BYTES < args.minBlocks) {
+    return { ok: false, reason: 'manifest_too_small' };
+  }
+  const anchor = await locateManifestEntry(manifestPath, args.sinceSeq, 'end_seq');
+  if (anchor === undefined) return { ok: false, reason: 'anchor_unavailable' };
+  if (!(await manifestNeighborhoodOk(manifestPath, anchor, size))) {
+    return { ok: false, reason: 'neighborhood_broken' };
+  }
+  if (!(await blockFileExists(blocksDir, anchor.entry.block))) {
+    return { ok: false, reason: 'anchor_block_missing' };
+  }
+  const anchorFirstSeq = await readFirstFrameSeq(join(blocksDir, anchor.entry.block));
+  if (anchorFirstSeq === undefined) return { ok: false, reason: 'anchor_unavailable' };
+
+  let startPosition = anchor.lineStart;
+  if (anchorFirstSeq > args.factBoundary + 1) {
+    // 起点已经在事实边界之后的**尾链中段**：链必须从边界那一端重新验（否则会把
+    // 「链早就断了」的块当成可读 —— 那是多给，与整份读不等价）。
+    const chainHead = await locateManifestEntry(manifestPath, args.factBoundary + 1, 'start_seq');
+    if (chainHead === undefined) return { ok: false, reason: 'chain_head_unavailable' };
+    startPosition = Math.min(startPosition, chainHead.lineStart);
+  }
+  return {
+    ok: true,
+    source: new ManifestNameSource(manifestPath, blocksDir, startPosition, size),
+    anchor,
+  };
 }

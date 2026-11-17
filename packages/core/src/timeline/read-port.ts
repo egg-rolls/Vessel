@@ -46,11 +46,11 @@ import {
 import { sessionDirPath } from '../tenant/index.js';
 import type { SessionEventRecord, SessionIndexPatch } from '../types/event.js';
 import type { Logger } from '../types/logging.js';
+import { lastBlockName } from './blocks.js';
 import { isTimelineBlobRef, TIMELINE_LAYOUT, type TimelineRecord } from './types.js';
 import {
   decodeChunkBlock,
   hydrateRecordData,
-  listBlockFiles,
   parseRecordLine,
   readFileWindow,
   readTimelineEvents,
@@ -246,7 +246,7 @@ export class TimelineEventLog {
     const dir = this.sessionDir(sessionId);
     const [factSeq, blockSeq] = await Promise.all([
       lastWalFactSeq(join(dir, TIMELINE_LAYOUT.walLog)),
-      lastBlockSeq(join(dir, TIMELINE_LAYOUT.walBlocks)),
+      lastBlockSeq(dir),
     ]);
     const max = Math.max(factSeq, blockSeq);
     return max > 0 ? max : undefined;
@@ -340,8 +340,8 @@ export class TimelineEventLog {
   async watermark(sessionId: string): Promise<string | undefined> {
     const dir = this.sessionDir(sessionId);
     const wal = await stat(join(dir, TIMELINE_LAYOUT.walLog)).catch(() => undefined);
-    const blocks = await listBlockFiles(join(dir, TIMELINE_LAYOUT.walBlocks));
-    const lastBlock = blocks[blocks.length - 1];
+    // 0.56：只要「最后一块是谁」，不值得为它 readdir 整个块目录（见 `lastBlockName`）。
+    const lastBlock = await lastBlockName(dir);
     if (wal === undefined && lastBlock === undefined) return undefined;
     const size = wal?.size ?? 0;
     const mtime = wal === undefined ? 0 : Math.floor(wal.mtimeMs);
@@ -426,6 +426,10 @@ export class TimelineEventLog {
         block_bytes: stats.block_bytes,
         fact_bytes: stats.fact_bytes,
         anchor: stats.anchor_source,
+        enumerated_by: stats.enumeration_source,
+        ...(stats.enumeration_fallback === undefined
+          ? {}
+          : { enumeration_fallback: stats.enumeration_fallback }),
         window_to: stats.window_to,
         declared_holes: stats.declared_holes,
       });
@@ -506,11 +510,13 @@ async function lastWalFactSeq(path: string): Promise<number> {
 }
 
 /** 最后一个块文件里最后一个完整帧的 seq（含完整但坏 CRC 的帧：它已占 seq）；读不出 ⇒ 0。 */
-async function lastBlockSeq(blocksDir: string): Promise<number> {
-  const names = await listBlockFiles(blocksDir);
-  const last = names[names.length - 1];
+async function lastBlockSeq(sessionDir: string): Promise<number> {
+  // 0.56：最后一块的名字从 manifest 尾 + 块号探测拿（不 readdir 整个目录）。
+  const last = await lastBlockName(sessionDir);
   if (last === undefined) return 0;
-  const buffer = await readFile(join(blocksDir, last)).catch(() => undefined);
+  const buffer = await readFile(join(sessionDir, TIMELINE_LAYOUT.walBlocks, last)).catch(
+    () => undefined,
+  );
   if (buffer === undefined) return 0;
   const decode = decodeChunkBlock(buffer);
   let max = 0;
