@@ -515,16 +515,22 @@ lease:
 - **手动编辑不在锁内**：直接用编辑器改 `config.yaml` 不参与该协议，可能与进程内的读改写竞争；协议只能约束经由上述入口的写入。
 - 不新增配置键、CLI 命令、RPC 或事件；锁仅依赖本地文件系统语义，不做跨主机锁。
 
-### 2.18 `auth`（0.56：WebUI 用 GitHub 登录，单用户）
+### 2.18 `auth`（0.56：WebUI 登录，单用户；口令 / TOTP / GitHub）
 
 ```yaml
 auth:
   public_origin: https://egg-rolls.top        # redirect_uri 的唯一来源（无尾斜杠）
   backends:
+    # A. 口令后端（自建、离线可用；可选 TOTP 第二因子）
+    - kind: password
+      username: admin                                  # 单用户，只用于展示与按账户限流
+      password_hash_env: VESSEL_PASSWORD_HASH          # 可选：argon2id PHC 串（不写就不用它）
+      totp_secret_env: VESSEL_TOTP_SECRET              # 可选：base32 TOTP 密钥（不写就走绑定流程）
+    # B. GitHub OAuth
     - kind: github_oauth
       client_id: <GitHub OAuth App 的 client id>
       client_secret_env: VESSEL_GITHUB_OAUTH_SECRET   # 只写变量名，不写值
-      allow_user_ids: [174765587]                    # 数值 GitHub user id（不用 email）
+      allow_user_ids: [174765587]                     # 数值 GitHub user id（不用 email）
   allowed_hosts: []          # 额外放行的反代域名；一般留空
   trusted_proxies: []        # 受信代理地址；缺省只信回环 socket
   session:
@@ -534,13 +540,45 @@ auth:
 ```
 
 - **不配 `auth.backends`（或 `enabled: false`）= 功能不存在**：回环照旧可用，行为与 0.55 逐字一致，前端不出现登录入口（不锁死、不出现坏按钮）。
-- `public_origin` 是 `redirect_uri` 的**唯一**来源：`<public_origin>/auth/github/callback`，必须与 GitHub OAuth App 登记的地址逐字节一致。缺失或非法时登录后端被忽略并告警，gateway 照常启动。
+- `public_origin` 是 `redirect_uri` 的**唯一**来源：`<public_origin>/auth/github/callback`，必须与 GitHub OAuth App 登记的地址逐字节一致。缺失或非法时**只有 `github_oauth` 后端**被忽略并告警（口令后端不需要 redirect_uri），gateway 照常启动。
 - `client_secret` 只从 `client_secret_env` 指向的**环境变量**读；不要写进配置（validator 直接报错并给修复提示）。OAuth access token 用完即弃：不落盘、不进日志、不进错误文案。
 - 白名单只认 `allow_user_ids` 里的**数值** user id；email 会变，这里不作为身份。
-- 反代的 `Host` / `X-Forwarded-Host` / `X-Forwarded-Proto` 只在「请求来自 `trusted_proxies`（缺省回环）**且**带 `gateway.proxy_secret_env` 指向的密钥头」时才被采信；否则伪造 Host 一律 403，`public_origin` 也不能当通行证。
+
+#### 2.18.1 口令后端（0.56 P2）
+
+- **首次怎么有凭据**：不生成任何默认口令。两种合法路径 ——
+  1. 启动日志打印一枚**一次性引导码**（单次 + 10 分钟 TTL），用它打开
+     `http://127.0.0.1:<port>/#token=<引导码>` 会换到一个**设置会话**（只能设口令、绑 TOTP）；
+  2. 自己在部署里给一个 argon2id hash（`password_hash_env` 指向的环境变量），
+     生成命令：
+     `bun -e 'console.log(await Bun.password.hash(process.argv[1], { algorithm: "argon2id", memoryCost: 65536, timeCost: 3 }))' '<口令>'`
+- 口令 hash：**argon2id**，参数 `m=64MiB, t=3, p=1`（参数写在 PHC 串里，将来调参不会让老 hash 失效）。没有 `Bun.password` 的运行时退回 scrypt（fail-closed，不误判为通过）。明文不落盘、不进日志。
+- **限速（双维度）**：每次失败同时记 `ip:<addr>` 与 `acct:<用户名>`；第 n 次失败后下一次要等 `min(250ms × 2^(n-1), 8s)`；15 分钟窗口内累计 8 次失败 ⇒ 锁 15 分钟（两个维度任一锁定即拒绝）。状态落盘在 `<dataDir>/auth/lockout.json`，**重启不清锁**。
+- **不把自己锁死**：本来机回环 + 平台 token 一条命令解锁（429 文案里也带着这条命令）：
+  ```bash
+  curl -fsS -X POST http://127.0.0.1:8642/auth/unlock \
+    -H "Authorization: Bearer $(vessel token show --purpose platform --allow-non-interactive)"
+  ```
+  非回环、或没带平台 token ⇒ 403/401（公网拿不到这条捷径）。
+- 端点：`POST /auth/login`（口令）、`POST /auth/login/totp`（TOTP 或恢复码）、`POST /auth/bootstrap`（一次性引导码）、`POST /auth/password/set`、`POST /auth/totp/enroll`、`POST /auth/recovery/rotate`、`POST /auth/unlock`。全部只收 `application/json` 且校验 `Origin`；设口令 / 绑 TOTP 还要既有会话的 CSRF 同步令牌。
+- 凭据文件：`<dataDir>/auth/credentials.json`（0600）—— 口令 hash、TOTP base32 密钥（校验必须拿到密钥本身）、恢复码的 sha256、已用掉的 TOTP step。
+
+#### 2.18.2 TOTP 与恢复码
+
+- RFC 6238：HMAC-SHA1 / 6 位 / 30 秒一步（认证器缺省参数，QR 里照抄）。
+- **时钟漂移容忍 ±1 步**（服务端与本机认证器相差 ≤30 秒都能过），窗口不提供配置项。
+- **重放**：同一步只接受一次；上一次用掉的 step 持久化在凭据文件里，同一个码第二次提交返回 `code_replayed`（重启后仍然拒绝）。
+- **恢复码**：10 个，一次性，落盘只存 `sha256`，明文只在签发那一刻返回一次（页面明确要求当场存下）。用掉即废，重复使用返回 `invalid_code`。
+
+#### 2.18.3 `#token=` 退场（0.56 P2）
+
+- 网页**不再**用 `#token=` 做常规登录：URL 里的这个值只作为**一次性引导码**提交给 `POST /auth/bootstrap`，`#bootstrap=` 是等价写法。值不写进 sessionStorage、不进 history（hash 立刻被剥掉）。
+- 引导码单次 + 10 分钟 TTL；**重放**已用引导码 ⇒ 返回 409 `bootstrap_replayed`，并**撤销它当初签发的会话**（含设口令时轮换出来的后代会话）+ 打一行告警日志。
+- 之后一律走登录页；平台 token 仍然可以手动填在「连接设置」里当 Bearer 用（那条路没变）。
+
 - 会话：cookie 名 `__Host-vessel_sid`（https；http 退化为 `vessel_sid`），属性 `HttpOnly; SameSite=Strict; Secure`；登录成功即轮换 id（防会话固定），空闲/绝对双超时，登出立即撤销。落盘只写 `sha256(sid)` 与 subject，重启后会话仍有效但需重新取 CSRF。
 - CSRF：同步令牌。`GET /auth/status` 返回 `csrfToken`（`no-store`），所有变更类请求带 `X-Vessel-CSRF`；缺失/不匹配即 403。
-- 端点：`GET /auth/status`、`GET /auth/csrf`、`POST /auth/logout`、`GET /auth/github/start`、`GET /auth/github/callback`、`GET /login`（SPA 登录页）。静态资源与这些端点在鉴权闸**之前**，所以配了 `gateway.token` 也能打开登录页；`POST /platform/rpc` 仍然需要 Bearer token 或会话。
+- 端点：`GET /auth/status`、`GET /auth/csrf`、`POST /auth/logout`、`GET /auth/github/start`、`GET /auth/github/callback`、`GET /login`（SPA 登录页），以及 2.18.1/2.18.3 的口令 / TOTP / 引导码端点。静态资源与这些端点在鉴权闸**之前**，所以配了 `gateway.token` 也能打开登录页；`POST /platform/rpc` 仍然需要 Bearer token 或会话。
 - 公网部署还需要：反代保留原始 Host、注入 `X-Forwarded-Proto` 与反代密钥头；浏览器直连 node 的 `/v1`、`/ws` 也要转发到 node 端口（见 `REVERSE-PROXY.md`），否则登录后仍然连不上 node。
 
 ### 2.19 `gateway.supervise`（0.58：父进程侧存活看门狗）

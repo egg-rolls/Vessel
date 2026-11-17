@@ -166,7 +166,7 @@ export async function handlePlatformRpc(
           id,
           'platform_unauthorized',
           'platform_token_required: platform.nodes.credentials 只发给带平台 token 的客户端。' +
-            '浏览器用 #token=<平台 token 的值> 导入，脚本用 Authorization: Bearer <平台 token>；' +
+            '浏览器请在连接设置里粘贴平台 token，脚本用 Authorization: Bearer <平台 token>；' +
             '令牌来自 gateway.token 或 gateway.token_env 指向的环境变量（不是 node token）。',
           401,
           extra,

@@ -1393,7 +1393,7 @@ function publicOriginError(value: unknown): string | null {
   return null;
 }
 
-const AUTH_BACKEND_KINDS = ['github_oauth'] as const;
+const AUTH_BACKEND_KINDS = ['github_oauth', 'password'] as const;
 
 export function validateAuthSettings(
   auth: AuthConfig,
@@ -1462,66 +1462,100 @@ export function validateAuthSettings(
           return;
         }
         const kind = entry.kind;
-        if (kind !== undefined && !AUTH_BACKEND_KINDS.includes(kind as 'github_oauth')) {
+        if (
+          kind !== undefined &&
+          !AUTH_BACKEND_KINDS.includes(kind as 'github_oauth' | 'password')
+        ) {
           errors.push({
             path: `${prefix}.kind`,
             message: `${prefix}.kind must be one of: ${AUTH_BACKEND_KINDS.join(', ')}`,
             value: kind,
           });
         }
-        if (!isNonEmptyStringValue(entry.clientId)) {
-          errors.push({
-            path: `${prefix}.clientId`,
-            message: `${prefix}.clientId must be a non-empty string (GitHub OAuth App client id)`,
-          });
-        }
-        validateEnvName(`${prefix}.clientSecretEnv`, entry.clientSecretEnv, errors);
-        if (entry.clientSecretEnv === undefined) {
-          errors.push({
-            path: `${prefix}.clientSecretEnv`,
-            message: `${prefix}.clientSecretEnv is required: it holds the env var NAME of the client secret`,
-          });
-        }
-        if (entry.allowUserIds !== undefined) {
-          if (!Array.isArray(entry.allowUserIds) || entry.allowUserIds.length === 0) {
+        if (kind === 'password') {
+          // 口令后端：hash / TOTP 密钥都只给**环境变量名**，值永不入配置。
+          if (entry.username !== undefined && !isNonEmptyStringValue(entry.username)) {
             errors.push({
-              path: `${prefix}.allowUserIds`,
-              message: `${prefix}.allowUserIds must be a non-empty array of numeric GitHub user ids`,
-            });
-          } else {
-            entry.allowUserIds.forEach((id, idIndex) => {
-              const ok =
-                (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) ||
-                (typeof id === 'string' && /^[0-9]+$/.test(id.trim()));
-              if (!ok) {
-                errors.push({
-                  path: `${prefix}.allowUserIds[${idIndex}]`,
-                  message: `${prefix}.allowUserIds[${idIndex}] must be a numeric GitHub user id`,
-                  value: id,
-                });
-              }
+              path: `${prefix}.username`,
+              message: `${prefix}.username must be a non-empty string`,
             });
           }
-        }
-        if (entry.clientSecret !== undefined) {
-          // 密钥不入配置：给出可照做的修复提示（不回显值）。
-          errors.push({
-            path: `${prefix}.clientSecret`,
-            message:
-              `${prefix}.clientSecret must not be stored in config. ` +
-              `Fix: delete it, export the secret as an env var, and set ${prefix}.clientSecretEnv to that name ` +
-              '(e.g. VESSEL_GITHUB_OAUTH_SECRET).',
-          });
+          if (entry.passwordHashEnv !== undefined) {
+            validateEnvName(`${prefix}.passwordHashEnv`, entry.passwordHashEnv, errors);
+          }
+          if (entry.totpSecretEnv !== undefined) {
+            validateEnvName(`${prefix}.totpSecretEnv`, entry.totpSecretEnv, errors);
+          }
+          for (const forbidden of ['password', 'passwordHash', 'totpSecret', 'recoveryCodes']) {
+            if (entry[forbidden] === undefined) continue;
+            errors.push({
+              path: `${prefix}.${forbidden}`,
+              message:
+                `${prefix}.${forbidden} must not be stored in config. ` +
+                'Fix: delete it — either set the password through the one-time bootstrap code ' +
+                '(printed once at startup) or export an argon2id hash and point ' +
+                `${prefix}.passwordHashEnv at that env var.`,
+            });
+          }
+        } else {
+          if (!isNonEmptyStringValue(entry.clientId)) {
+            errors.push({
+              path: `${prefix}.clientId`,
+              message: `${prefix}.clientId must be a non-empty string (GitHub OAuth App client id)`,
+            });
+          }
+          validateEnvName(`${prefix}.clientSecretEnv`, entry.clientSecretEnv, errors);
+          if (entry.clientSecretEnv === undefined) {
+            errors.push({
+              path: `${prefix}.clientSecretEnv`,
+              message: `${prefix}.clientSecretEnv is required: it holds the env var NAME of the client secret`,
+            });
+          }
+          if (entry.allowUserIds !== undefined) {
+            if (!Array.isArray(entry.allowUserIds) || entry.allowUserIds.length === 0) {
+              errors.push({
+                path: `${prefix}.allowUserIds`,
+                message: `${prefix}.allowUserIds must be a non-empty array of numeric GitHub user ids`,
+              });
+            } else {
+              entry.allowUserIds.forEach((id, idIndex) => {
+                const ok =
+                  (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) ||
+                  (typeof id === 'string' && /^[0-9]+$/.test(id.trim()));
+                if (!ok) {
+                  errors.push({
+                    path: `${prefix}.allowUserIds[${idIndex}]`,
+                    message: `${prefix}.allowUserIds[${idIndex}] must be a numeric GitHub user id`,
+                    value: id,
+                  });
+                }
+              });
+            }
+          }
+          if (entry.clientSecret !== undefined) {
+            // 密钥不入配置：给出可照做的修复提示（不回显值）。
+            errors.push({
+              path: `${prefix}.clientSecret`,
+              message:
+                `${prefix}.clientSecret must not be stored in config. ` +
+                `Fix: delete it, export the secret as an env var, and set ${prefix}.clientSecretEnv to that name ` +
+                '(e.g. VESSEL_GITHUB_OAUTH_SECRET).',
+            });
+          }
         }
       });
 
       const backends = raw.backends.filter(isPlainObject);
       const enabledBackends = raw.enabled === false ? [] : backends;
-      if (enabledBackends.length > 0 && raw.publicOrigin === undefined) {
+      // 只有 OAuth 后端需要 publicOrigin（redirect_uri 的唯一来源）；口令后端不需要。
+      const oauthBackends = enabledBackends.filter(
+        (entry) => entry.kind === undefined || entry.kind === 'github_oauth',
+      );
+      if (oauthBackends.length > 0 && raw.publicOrigin === undefined) {
         errors.push({
           path: 'auth.publicOrigin',
           message:
-            'auth.publicOrigin is required when auth.backends is configured: it is the only ' +
+            'auth.publicOrigin is required when a github_oauth backend is configured: it is the only ' +
             'source of the OAuth redirect_uri (never derived from request headers).',
         });
       }

@@ -25,7 +25,7 @@ paths: [docs/operations/REMOTE.md]
 - **无逃生口**：不提供 `--insecure` / `-k` / “忽略证书错误”；失败信息区分 token 401、Origin 403、TLS 校验失败与网络错误。
 - **token 不进 URL**：WS 首帧 `{ kind: 'auth', token, since? }`；HTTP 用 `Authorization: Bearer`。token 不写入日志。
 - **Origin allowlist**：`node.allowed_origins` 只接受显式 `http(s)://host[:port]`，拒绝 `*`、path、query；HTTP 与 WS upgrade 共用同一 allowlist。命中时返回 CORS 头并带 `Vary: Origin`，永不使用 `Access-Control-Allow-Credentials`。
-- **浏览器凭据**：Web token 只放 `sessionStorage`（独立前端可用 `#token=` 首次导入）；不写 `localStorage`、不进 query。
+- **浏览器凭据**：Web token 只放 `sessionStorage`（连接设置里手动填）；`#token=` 在 0.56 P2 已退场为**一次性引导码**（单次 + 10 分钟 TTL，换设置会话后即废），不再导入长期 token。不写 `localStorage`、不进 query。
 - **per-node token**：Platform Gateway 的 `gateway.token` / `gateway.token_env` 与 Node API 的 `node.token(s)` / `node.token_env` 分开，互不回退；远端 `--connect` 使用节点 token。`node.tokens` 条目只含 `role`，不带 tenant。
 - **单公司**：一个 node 恰好一份执行面、一条事件流；数据直接位于 `<dataDir>/**`（`sessions` / `runs` / `events` / `agents` 等），没有 `tenants/<id>` 层；principal 由 token 决定（`role: read | write | admin`），没有跨 tenant 读取或 `forbidden` 语义。
 - **信任边界**：`node_id` 以 token + TLS 边界信任，没有逐事件签名；不要通过不可信第三方转发同 Origin 的节点事件。
@@ -284,7 +284,7 @@ npm run build            # 产物在 apps/web/dist
    - 运行时优先级：`localStorage['vessel.gateway-url']` > `VITE_GATEWAY_URL` > 同源；
    - 只接受 `http(s)://host[:port]`，非回环必须 `https`；
    - HTTPS 页面不能连接 `http://` node（mixed content 会被浏览器拦截）。
-4. 首次用 `#token=<node-token>` 导入 token；token 随后只存 `sessionStorage`。
+4. 首次凭据：在连接设置里粘贴 node / 平台 token（只存 `sessionStorage`）。配了 `auth.backends` 的部署改用登录页；`#token=` 只是一次性引导码（0.56 P2），不再是 token 导入方式。
 5. **界面语言**（0.11）：Web 壳层与 Settings 支持 zh-CN / en。初始 locale 取 `localStorage['vessel.ui.language']` > `navigator.language`，可在 Settings → Appearance 切换并立即生效；未收录的功能页回退中文。语言选择存本地，不影响 gateway。
 
 独立静态站点需要自行下发 CSP，至少允许连接目标 Node API：

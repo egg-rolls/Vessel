@@ -36,7 +36,7 @@ token 只存在于 `dev:web`/relay 进程，不写入前端 bundle、HTML、loca
 
 **显式凭据优先**：以下任一存在时，dev 代理模式关闭：
 
-- URL `#token=...`（作为平台 token 种子；legacy 回退时同时用于 node）
+- 手动输入的平台 token（`sessionStorage['vessel.platform-token']`）。0.56 P2：`#token=` / `#bootstrap=` 已退场为**一次性引导码**（只用于首次引导换设置会话，不是长期凭据），不再算「显式 token」来源
 - `sessionStorage['vessel.platform-token']`（平台 token 槽）
 - `localStorage['vessel.gateway-url']`（语义 = 平台 origin；空串 = 页面同源）
 

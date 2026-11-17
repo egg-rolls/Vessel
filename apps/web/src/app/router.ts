@@ -1,7 +1,8 @@
 /**
  * Hash 路由（纯函数，便于单测）。
  *
- * 先处理 `#token=`（由 ConnectionProvider 在初始化时消费），再解析路由。
+ * 先处理 `#token=` / `#bootstrap=`（一次性引导码，由登录层在初始化时消费），再解析路由。
+ * 0.56 P2：`#token=` 不再是长期凭据，只作为「首次引导」的一次性码。
  * 未知/非法路由回落到 Chat；无法解码的 id 保留原文，不丢深链。
  */
 
@@ -285,20 +286,27 @@ export function sameRoute(a: Route, b: Route): boolean {
 }
 
 export interface HashTokenResult {
-  /** 从 `#token=` 提取的 token；没有则为 undefined。 */
+  /**
+   * 0.56 P2：`#token=` / `#bootstrap=` 里的一次性引导码。
+   *
+   * 名字沿用 `token` 只是为了让路由层不必关心两种写法；它**不再**是平台 token
+   * （不再写进 sessionStorage，也不再当 Authorization 用），只用于换一个引导会话。
+   */
   token?: string;
-  /** 剥离 token 后剩余的 hash；token 模式下为空（保持旧行为）。 */
+  /** 剥离引导码后剩余的 hash；引导码模式下为空（保持旧行为）。 */
   restHash: string;
 }
 
 /**
- * 先于路由解析处理 `#token=...`：token 不进入历史、不发给服务端。
- * 只识别 hash 以 `token=` 开头的形式，避免把普通 query 误判为凭据。
+ * 先于路由解析处理 `#token=...` / `#bootstrap=...`：值不进历史、不发给服务端。
+ *
+ * 0.56 P2：`#token=` **退场**为「一次性引导码」的写法，与 `#bootstrap=` 等价；
+ * 它不再是长期有效的平台 token。
  */
 export function extractTokenFromHash(hash: string): HashTokenResult {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash;
-  if (!raw.startsWith('token=')) return { restHash: hash };
+  if (!raw.startsWith('token=') && !raw.startsWith('bootstrap=')) return { restHash: hash };
   const params = new URLSearchParams(raw);
-  const token = params.get('token') ?? undefined;
+  const token = params.get('token') ?? params.get('bootstrap') ?? undefined;
   return token ? { token, restHash: '' } : { restHash: hash };
 }

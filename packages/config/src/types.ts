@@ -511,9 +511,9 @@ export interface GatewaySuperviseConfig {
   recoveryProbes?: number;
 }
 
-/** 0.56：一个登录后端（目前只有 github_oauth）。 */
-export interface AuthBackendConfig {
-  /** 后端种类；0.56 P0 只实现 github_oauth。 */
+/** 0.56：GitHub OAuth 登录后端。 */
+export interface GitHubOAuthBackendConfig {
+  /** 后端种类。缺省即 github_oauth（兼容 0.56 P1 的写法）。 */
   kind?: 'github_oauth';
   /** GitHub OAuth App 的 client id（非密钥）。 */
   clientId?: string;
@@ -527,6 +527,30 @@ export interface AuthBackendConfig {
   /** 登录按钮文案；缺省「用 GitHub 登录」。 */
   label?: string;
 }
+
+/**
+ * 0.56 P2：口令后端（自建、离线可用；可选 TOTP 第二因子）。
+ *
+ * 口令 hash **不在配置里**，两条合法来源：
+ * 1. `passwordHashEnv` 指向的环境变量（argon2id PHC 串，适合 IaC / 容器）；
+ * 2. `<dataDir>/auth/credentials.json`，由一次性引导码在浏览器里设置。
+ *
+ * 两条都没有时，启动会打印**一次性引导码**（单次 + 10 分钟 TTL）；不生成任何默认口令。
+ */
+export interface PasswordBackendConfig {
+  kind: 'password';
+  /** 单用户登录名；缺省 `admin`。只用于展示与按账户限流。 */
+  username?: string;
+  /** 口令 hash（argon2id）所在环境变量名；设置后不需要引导码。 */
+  passwordHashEnv?: string;
+  /** TOTP base32 密钥所在环境变量名；设置后登录必须再给一个验证码。 */
+  totpSecretEnv?: string;
+  /** 登录按钮 / 表单文案覆盖。 */
+  label?: string;
+}
+
+/** 一个登录后端。 */
+export type AuthBackendConfig = GitHubOAuthBackendConfig | PasswordBackendConfig;
 
 /** 0.56：WebUI 登录（`auth` 块）。未配置 = 不启用，行为与 0.55 一致。 */
 export interface AuthConfig {
