@@ -43,6 +43,7 @@ import {
   type ToolDefinition,
   type Usage,
   type UsageLimits,
+  type ContextAnchor,
   type WorkingContext,
 } from '@vessel-agent/core';
 import { type AgentInboxPort, createInboxNoticeHook, createInboxTool } from './inbox.js';
@@ -213,6 +214,25 @@ class RoleAwareContext implements WorkingContext {
       if (this.inner.tokenCount <= max * threshold) return 0;
     }
     return this.inner.compactAsync(false);
+  }
+
+  /**
+   * 0.56：**转发锚点注入**。
+   *
+   * 缺这一行时，内层窗口永远拿不到按会话落盘的锚点，于是 `estimatedUpperTokens` 恒按
+   * `NO_ANCHOR_SAFETY_MARGIN`（×1.15）高报 —— 结果是「判据说超预算、账本说没超」，
+   * 重启后（锚点一度丢失）就会触发一次**不该发生的 compaction**，766 条消息被摘要替换、
+   * 模型再也看不到（ctx-drop 单的真实事故：−41% 请求体积）。
+   *
+   * `WorkingContext.setContextAnchor` 在接口里是**可选**的，所以少实现它不会报错，
+   * 只会安静地丢掉这个校正 —— 这类「可选成员被包装层吃掉」的坑，新增包装层时要一并检查。
+   */
+  setContextAnchor(anchor: ContextAnchor | undefined, model?: string): void {
+    this.inner.setContextAnchor?.(anchor, model);
+  }
+
+  get contextAnchor(): ContextAnchor | undefined {
+    return this.inner.contextAnchor;
   }
 
   clear(): void {
