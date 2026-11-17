@@ -1140,6 +1140,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.pending.identity.agent': 'agent:{name}',
   'chat.pending.sameSource': '{count} items',
   'chat.pending.more': '{count} more not shown',
+  'chat.pendingSend.offline': 'Offline — not sent',
   'chat.pendingSend.sending': 'Sending…',
   'chat.pendingSend.queued': 'Queued · one round ahead',
   'chat.pendingSend.failed': 'Not sent',

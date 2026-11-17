@@ -263,6 +263,12 @@ export function useChatSubmit({
     sessionId: string | null;
     refs?: readonly MessageRef[];
   }) => {
+    // 断线时不要留下一个「看起来在飞、其实什么都没发」的灰气泡：`submitText` 在
+    // `!connected` 时直接早退（不抛错），所以这里自己把它钉成失败态（仍可再重试）。
+    if (!connected) {
+      pendingSends.markFailed(pending.id, t('chat.pendingSend.offline'));
+      return;
+    }
     await submitText(pending.text, pending.sessionId ?? undefined, pending.refs, pending.id);
   };
 

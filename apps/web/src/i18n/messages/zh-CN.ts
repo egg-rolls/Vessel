@@ -1096,6 +1096,7 @@ export const messages = {
   'chat.pending.identity.agent': 'agent:{name}',
   'chat.pending.sameSource': '{count} 条',
   'chat.pending.more': '还有 {count} 条未展开',
+  'chat.pendingSend.offline': '连不上网关，没发出',
   'chat.pendingSend.sending': '发送中…',
   'chat.pendingSend.queued': '已排队，前面还有一轮',
   'chat.pendingSend.failed': '未发送',
