@@ -2678,7 +2678,7 @@ export class AgentServiceImpl implements AgentService {
     // 必须早于任何 inbox / body 副作用：「收下再假装成功」会让 UI 以为 run 真的起来了。
     // agent 来源的投递不在这里拦：走下面的「只落 durable inbox、返回 queued」（见 fence 段）。
     if (this.draining && this.isHumanPrincipal(from)) {
-      throw new AgentError('node_draining', 'node_draining: ' + from);
+      throw new AgentError('node_draining', `node_draining: from=${from}`);
     }
 
     // 1. session → agent/body 解析（绑定优先；矛盾输入 = invalid_input）
@@ -2856,7 +2856,7 @@ export class AgentServiceImpl implements AgentService {
     // pending_input_ids 接着处理。没有 durable inbox 就没有「排队」这回事，只能明确拒绝。
     if (this.draining) {
       if (this.inbox === undefined || internal?.startup === true) {
-        throw new AgentError('node_draining', 'node_draining: ' + record.id);
+        throw new AgentError('node_draining', 'node_draining: startup');
       }
       this.trackInbox(record.id, message, entry.bindingId);
       const drainedRunId = this.newId();
