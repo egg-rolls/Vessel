@@ -409,9 +409,15 @@ export function createWebFetchTool(runtime: WebToolsRuntime): ToolDefinition {
         // ③④⑤ 熔断 / 每 run 配额 / 日上限（local 不计费 ⇒ 不进闸）
         if (backend.billed) ticket = await runtime.cost.acquire('deepseek_fetch', runKey);
         if (backend.billed) {
-          await runtime.cost.throttle('deepseek_fetch');
-          const host = hostOf(url);
-          if (host !== '') await runtime.cost.throttleHost(host);
+          try {
+            await runtime.cost.throttle('deepseek_fetch');
+            const host = hostOf(url);
+            if (host !== '') await runtime.cost.throttleHost(host);
+          } catch (error) {
+            // 本地排队超时不是上游失败：不算进熔断
+            ticket?.skipped();
+            throw error;
+          }
         }
 
         // 缓存键：backend + normalized_url + max_chars 归桶 + format（顺序固定）
@@ -432,6 +438,18 @@ export function createWebFetchTool(runtime: WebToolsRuntime): ToolDefinition {
         const cached = runtime.fetchCache.get(cacheKey);
         if (cached !== undefined) {
           ticket?.empty();
+          // 缓存键只归到 max_chars 的上档 ⇒ 命中后仍要按**本次**预算再收一次口，
+          // 否则请求 4500 字符可能拿到按 8000 存的正文
+          const rebudgeted = applyOutputBudget(
+            cached.value.text,
+            effective.maxChars,
+            MAX_RESULT_TOKENS,
+          );
+          const cachedResult: WebFetchResult = {
+            ...cached.value,
+            text: rebudgeted.text,
+            truncated: cached.value.truncated || rebudgeted.truncated,
+          };
           emitMetric({
             tool: 'web_fetch',
             backend: backendId,
@@ -439,12 +457,12 @@ export function createWebFetchTool(runtime: WebToolsRuntime): ToolDefinition {
             url_sha8: sha8(normalizedUrl),
             cached: true,
             cached_age_s: Math.round(cached.ageMs / 1000),
-            out_tokens_est: applyOutputBudget(cached.value.text, effective.maxChars).tokens,
+            out_tokens_est: rebudgeted.tokens,
             latency_ms: Date.now() - startedAt,
             breaker_state: runtime.cost.snapshot('deepseek_fetch', runKey).breaker,
             quota_used: runtime.cost.snapshot('deepseek_fetch', runKey).dailyUsed,
           });
-          return renderFetchResult(cached.value);
+          return renderFetchResult(cachedResult);
         }
 
         const result = await backend.fetch(request);

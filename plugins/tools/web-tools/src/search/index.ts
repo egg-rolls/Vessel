@@ -449,7 +449,15 @@ export async function runWebSearch(args: unknown, run: WebSearchRun): Promise<st
 
     // ③④⑤ 熔断 / 每 run 配额 / 日上限（前五步拒绝都不产生网络往返）
     if (provider.billed) ticket = await run.cost.acquire('search', run.runKey);
-    if (provider.billed) await run.cost.throttle('search');
+    if (provider.billed) {
+      try {
+        await run.cost.throttle('search');
+      } catch (error) {
+        // 本地排队超时不是上游失败：不算进熔断（settle 幂等，外层再 settle 会被忽略）
+        ticket?.skipped();
+        throw error;
+      }
+    }
 
     // ⑥ 发请求（重试 / 退避 / 错误映射在 ProviderHttp 里）
     const http: ProviderHttp = createDeepSeekHttp({
