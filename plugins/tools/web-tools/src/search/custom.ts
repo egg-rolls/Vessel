@@ -429,18 +429,46 @@ export function createCustomProvider(
     renderQuery: (query: SearchQuery): string => query.query,
 
     /**
-     * 哪些过滤**这套配置表达不了**（用户给了才算）：共用的渲染层会把它写进
-     * 信封的 `filters_ignored:`。省略仍然发生（映射规则不变），但不再静默。
+     * 这套配置**表达不了**的过滤条件 ⇒ 在发请求前就报错（0 请求），文案带下一步。
+     *
+     * 为什么不「省略 + 在结果里提示」：丢过滤 = 用户要的约束被静默放宽，
+     * 而正文会被当成事实继续推理——正确性不该依赖「调用方一定读并一定在意那一行」。
+     * 判据始终是：**宁可难看（可操作的报错），不许看着对（悄悄变宽的结果）**。
      */
-    unsupportedFilters(query: SearchQuery): string[] {
-      const ignored: string[] = [];
-      if (query.site !== undefined && !used.has('site')) ignored.push('site');
-      if (query.lang !== undefined && !used.has('lang')) ignored.push('lang');
-      if (query.after !== undefined || query.before !== undefined) {
-        if (!supportsDates) ignored.push('after/before');
-        else if (contextFor(query).freshness === undefined) ignored.push('after/before 单边');
+    checkFilters(query: SearchQuery): void {
+      const refuse = (what: string, next: string): never => {
+        throw new WebFetchError(
+          'provider_bad_request',
+          `后端 ${providerId} 的声明式映射表达不了 ${what}。下一步：${next}（本次没有发出任何请求）`,
+        );
+      };
+      if (query.site !== undefined && !used.has('site')) {
+        refuse(
+          'site（request.body 里没有 {{site}} 占位符）',
+          '去掉 site，或改用支持站点过滤的后端（deepseek / serper），或在 custom_search 的 request.body 里加 "{{site}}"',
+        );
       }
-      return ignored;
+      if (query.lang !== undefined && !used.has('lang')) {
+        refuse(
+          'lang（request.body 里没有 {{lang}} 占位符）',
+          '去掉 lang，或改用支持它的后端，或在 request.body 里加 "{{lang}}"',
+        );
+      }
+      if ((query.after !== undefined || query.before !== undefined) && !supportsDates) {
+        refuse(
+          '按日期过滤（没有任何日期占位符）',
+          '去掉 after/before，或改用支持日期过滤的后端（deepseek / serper）',
+        );
+      }
+      if (
+        (query.after !== undefined || query.before !== undefined) &&
+        contextFor(query).freshness === undefined
+      ) {
+        refuse(
+          '单边日期（{{freshness}} 只接受完整的 after..before 区间）',
+          '同时给 after 和 before，或两个都不给',
+        );
+      }
     },
 
     createHttp(options: ProviderHttpOptions): ProviderHttp {
@@ -470,10 +498,8 @@ export function createCustomProvider(
       query: SearchQuery,
       renderedQuery: string,
     ): Promise<ProviderHttpResponse> {
-      // 过滤条件：**能表达就表达；表达不了照常返回，但如实报告**（信封 `filters_ignored:`）。
-      // 纯省略 = 静默变宽（用户以为过滤了、其实全网）；硬报错 = 太脆（模型得多一轮才知道）。
-      // 所以选「照常返回 + 显式披露」；底层仍然是「占位符解析为空 ⇒ 整条键省略」，
-      // 不需要表达式语言——披露是渲染层的一行事实，不是映射逻辑。
+      // 过滤条件已在 `checkFilters` 里判过（表达不了就在发请求前拒了）。
+      // 这里只做映射：占位符解析为空 ⇒ 整条键省略（映射规则，不需要表达式语言）。
       const context = contextFor({ ...query, query: renderedQuery });
 
       const resolvedBody = substitute(spec.request.body, context);

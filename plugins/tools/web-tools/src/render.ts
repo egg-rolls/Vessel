@@ -145,14 +145,6 @@ export interface SearchRenderOptions {
   cached: boolean;
   cachedAgeMs?: number;
   fetchedAt: string;
-  /**
-   * 这个后端**实际没有应用**的过滤条件（`site` / `lang` / `after` / `before`）。
-   *
-   * 为什么必须有这一行：纯省略是静默变宽（用户以为过滤了、其实全网），硬报错又太脆
-   * （模型得先知道这家不支持才能重试，多一轮往返）。所以照常返回 + **显式披露**。
-   * 一个都没有就**不出现这一行**（别让信封多一行恒定的噪音）。
-   */
-  filtersIgnored?: string[];
 }
 
 /** 结果块之后的固定收尾（也算信封成本） */
@@ -175,10 +167,6 @@ export function searchEnvelopeHead(options: SearchRenderOptions): string[] {
   ];
   if (options.cached && options.cachedAgeMs !== undefined) {
     lines.push(`cached_age_s: ${Math.max(0, Math.round(options.cachedAgeMs / 1000))}`);
-  }
-  // 被忽略的过滤条件：**只在真发生时出现**（纯省略是静默变宽，必须当场说出来）
-  if (options.filtersIgnored !== undefined && options.filtersIgnored.length > 0) {
-    lines.push(`filters_ignored: ${options.filtersIgnored.join(', ')}`);
   }
   lines.push(
     `fetched_at: ${options.fetchedAt}`,

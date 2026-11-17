@@ -17,6 +17,7 @@
  */
 
 import { createJsonHttp } from '../provider-http';
+import { WebFetchError } from '../types';
 import {
   asRecord,
   firstString,
@@ -61,14 +62,22 @@ export const tavilySearchProvider: SearchProvider = {
 
   /**
    * Tavily 的 search 端点只有 `query` / `max_results` / `include_domains` / `include_raw_content`：
-   * `lang` 与日期**没有参数**（早先的实现是「渲染进 query 串」——那是骗自己）。
-   * 现在照常返回，并在信封里报 `filters_ignored`。
+   * `lang` 与 `after`/`before` **没有参数**。用户传了就**发请求前报错**——
+   * 丢过滤 = 让用户以为过滤过，而结果会被当成事实继续推理。
    */
-  unsupportedFilters(query: SearchQuery): string[] {
-    const ignored: string[] = [];
-    if (query.lang !== undefined) ignored.push('lang');
-    if (query.after !== undefined || query.before !== undefined) ignored.push('after/before');
-    return ignored;
+  checkFilters(query: SearchQuery): void {
+    if (query.lang !== undefined) {
+      throw new WebFetchError(
+        'provider_bad_request',
+        'tavily 没有 lang 参数，无法按语言过滤。下一步：去掉 lang，或改用 serper / deepseek（本次没有发出任何请求）',
+      );
+    }
+    if (query.after !== undefined || query.before !== undefined) {
+      throw new WebFetchError(
+        'provider_bad_request',
+        'tavily 没有日期参数，无法按时间过滤。下一步：去掉 after/before，或改用 serper / deepseek（本次没有发出任何请求）',
+      );
+    }
   },
 
   // 固定 host + Bearer（Tavily 官方支持 Authorization: Bearer）；重试/映射仍走共用那份

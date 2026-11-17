@@ -132,13 +132,12 @@ export interface SearchProvider {
   parseEntries(payload: unknown): RawSearchEntry[];
 
   /**
-   * 这个后端**表达不了**的过滤条件（`site` / `lang` / `after` / `before`）。
+   * 这套配置**表达不了**用户给的过滤条件时，在这里抛（`provider_bad_request`）。
    *
-   * 只回答「用户给了、但我们没法应用」的那些；不实现 = 全都支持。
-   * 共用层把它渲染成信封里的 `filters_ignored: site` —— 纯省略是静默变宽，
-   * 硬报错又太脆（模型要多一轮往返才知道），所以「照常返回 + 显式披露」。
+   * 共用层在**发请求前、查缓存前**调用：丢过滤 = 用户要的约束被静默放宽，
+   * 而结果会被当成事实继续推理。缓存先命中会让「这条过滤没生效」看起来像生效了。
    */
-  unsupportedFilters?(query: SearchQuery): string[];
+  checkFilters?(query: SearchQuery): void;
 
   /** 原始条目 → `SearchHit`；返回 null 表示这条不可用（例如没有 url） */
   normalize(entry: RawSearchEntry): SearchHit | null;

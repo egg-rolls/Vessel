@@ -61,7 +61,7 @@ provider 与 transport 写死（`DEFAULT_SEARCH_PROVIDER_ID` + `createDeepSeekHt
 | `deepseek` | `DEEPSEEK_API_KEY` | 上游 `summary` | `need_content` | `site:` / `lang:` / `after:` / `before:` 渲染进 query |
 | `tavily` | `VESSEL_TAVILY_API_KEY` | 上游 `content`（它自己的摘要口径） | `include_raw_content` | 只支持 `site`（走 `include_domains`）；**`lang` / `after` / `before` 没有对应参数，不做过滤**；结果上限 20 |
 | `serper` | `VESSEL_SERPER_API_KEY` | 上游 `snippet`（Google `organic[]` 里**没有** `summary` 字段） | **没有正文**（`need_content` 无效，要全文用 `web_fetch`） | `site:` 拼进 `q`；`lang` → `hl`/`gl`；`after`/`before` → `tbs` |
-| `bocha` | `BOCHAAI_SEARCH_API_KEY` | 上游 `snippet`；长摘要 `summary` 归到正文 | `summary: true` 才回的**长摘要**（不是整页正文） | **声明式预设**：`site`/`lang` 无法表达（不发 + `filters_ignored`）；`after`+`before` 都给才映射成 `freshness` 区间，单边同样 `filters_ignored`；上限 50 |
+| `bocha` | `BOCHAAI_SEARCH_API_KEY` | 上游 `snippet`；长摘要 `summary` 归到正文 | `summary: true` 才回的**长摘要**（不是整页正文） | **声明式预设**：`site`/`lang` 表达不了 ⇒ **报错不发请求**；`after`+`before` 都给才映射成 `freshness` 区间，单边同样报错；上限 50 |
 
 `authority` 只有 `deepseek` 有；Tavily 的 `score` 是相关性、Serper 不给、Bocha 给的是 `siteName`
 （网站名不是权威度）——**都不冒充**，条目里就是「(未提供)」。
@@ -151,23 +151,33 @@ plugins:
 5. **可见性同等**：在 `--tools` 的可用性预检里与内置后端一视同仁（没 key 一样让
    `web_search` 不出现）。
 
-### 过滤条件：能表达就表达；表达不了 **照常返回 + 明说**
+### 过滤条件：表达不了就**发请求前报错**（0 请求，文案带下一步）
 
-底层是一条映射规则（**不需要表达式语言**）：占位符解析为空 ⇒ 整条键省略。
-但「省了却不吭声」等于**静默变宽**（用户以为过滤了、其实全网），而硬报错又太脆
-（模型得先知道这家不支持才能重试，多一轮往返）。所以选第三条路：
+> **结论句（最终，别再改）**：丢过滤 = 用户要的约束被静默放宽，而搜索结果会被当成事实继续
+> 推理；因此**一律在发请求前报错**。**不允许**「省略 + 在结果里提示」这种折中。
 
-**照常返回，并在信封里加一行 `filters_ignored: site, lang`**（只在真被忽略时出现；
-没有就不出现）。这是渲染层的一行事实，不是映射逻辑。
+为什么不是「省略 + 披露」：这两种失败模式**不对等**——
+
+- 报错版：模型拿到可操作错误 ⇒ 去掉参数重试一次 ⇒ 结果**正确**，代价是一轮往返；
+- 披露版：结果**静默变宽**，正确性依赖「调用方一定会读、且一定会在意那一行」——
+  我们保证不了这一点。判据始终是「**宁可难看，不许看着对**」。
+
+判据：**不看「这家后端支持什么」这张硬编码表，而是看 `request.body`/`headers` 里有没有对应占位符**
+——声明式后端的能力就写在配置里，配置没有的占位符就是它表达不了的过滤。
 
 | 情况 | 行为 |
 | --- | --- |
 | body 有 `{{site}}` 且用户传了 `site` | 正常映射 |
-| body **没有** `{{site}}` 且用户传了 `site` | 发请求（不带该项）+ `filters_ignored: site` |
+| body **没有** `{{site}}` 且用户传了 `site` | `provider_bad_request`，**0 请求** |
+| 同上（`lang`） | 同上 |
 | 有 `{{freshness}}`，after+before 都给 | `a..b` |
-| 有 `{{freshness}}`，只给一端 | 键省略 + `filters_ignored: after/before 单边` |
-| 完全无日期占位符但给了 after/before | + `filters_ignored: after/before` |
-| 用户没给该项 | 无此行（正常路径） |
+| 有 `{{freshness}}`，只给一端 | `provider_bad_request`（上游没有单边写法） |
+| 完全无日期占位符但给了 after/before | `provider_bad_request` |
+| 用户没给该项 | 占位符为空 ⇒ 键省略（正常路径，不报错） |
+
+`checkFilters()` 由共用层在**发请求前、查缓存前**调用——缓存先命中会让「这条过滤没生效」
+看起来像生效了。每条错误都带下一步（去掉参数 / 换后端 / 在 spec 里加占位符）。
+**Tavily 同理**：它的 search 端点没有 `lang`/日期 参数，用户传了就报同样的错（此前是静默丢弃）。
 
 各后端支持什么（也写进工具描述，模型每轮都看得见）：
 
@@ -175,8 +185,8 @@ plugins:
 | --- | --- | --- | --- |
 | `deepseek` | ✅ 渲染进 query | ✅ | ✅ 渲染进 query |
 | `serper` | ✅ 拼进 `q` | ✅ `hl`/`gl` | ✅ `tbs` |
-| `tavily` | ✅ `include_domains` | ❌ → `filters_ignored` | ❌ → `filters_ignored` |
-| `bocha`（声明式预设） | ❌ → `filters_ignored` | ❌ → `filters_ignored` | 仅完整区间，单边 → `filters_ignored` |
+| `tavily` | ✅ `include_domains` | ❌ → 报错 | ❌ → 报错 |
+| `bocha`（声明式预设） | ❌ → 报错 | ❌ → 报错 | 仅完整区间，单边 → 报错 |
 
 ### `field_map` 只收 `SearchHit` **真有**的字段
 
