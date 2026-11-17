@@ -1894,6 +1894,29 @@ export function validateHubSettings(
   return errors;
 }
 
+/** 校验 `env_file`：一个路径或非空路径数组；只校验形态，不读文件（读文件在 loader 里） */
+function validateEnvFile(value: unknown, errors: ConfigValidationError[]): void {
+  if (value === undefined) return;
+  const paths = Array.isArray(value) ? value : [value];
+  if (paths.length === 0) {
+    errors.push({
+      path: 'envFile',
+      message: 'envFile must be a path or a non-empty list of paths',
+    });
+    return;
+  }
+  for (const item of paths) {
+    if (typeof item !== 'string' || item.trim() === '') {
+      errors.push({ path: 'envFile', message: 'envFile entries must be non-empty strings' });
+      return;
+    }
+    if (item.includes('\0')) {
+      errors.push({ path: 'envFile', message: 'envFile must not contain NUL' });
+      return;
+    }
+  }
+}
+
 /** 校验 `_env` 字段：空串视为未设置（交给解析层），其余必须匹配环境变量名 */
 function validateEnvName(path: string, value: unknown, errors: ConfigValidationError[]): void {
   if (value === undefined || value === '') return;
@@ -2359,6 +2382,9 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   }
 
   validateEnvName('apiKeyEnv', config.apiKeyEnv, errors);
+
+  // 0.56：`env_file`（密钥文件路径；值不在这里，只有路径）
+  validateEnvFile(config.envFile, errors);
 
   // 0.56：视觉段（错误拼写的键不再静默失效；取值范围在这里夹一次，别让运行时各自夹）。
   validateVisionConfig(config.vision, errors);
@@ -3328,6 +3354,7 @@ export const KNOWN_CONFIG_KEYS = [
   'apiKey',
   'apiKeyEnv',
   'dataDir',
+  'envFile',
   'trace',
   'timeline',
   'provider',

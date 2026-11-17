@@ -56,6 +56,17 @@ export interface WebToolsConfig extends WebFetchConfig {
    * 让 config.ts 依赖注册表会形成环）。
    */
   searchProvider: string;
+  /**
+   * 逃生阀：**没有**任何搜索后端能解析到 key 时，仍然注册 `web_search`。
+   *
+   * 缺省 `false` ⇒ 无 key 时工具从列表里消失（用户明确要求：不可用的工具不要占位）。
+   * 设 `true` 时工具照旧出现，调用会返回 `provider_auth_failed` 并点名要设的环境变量——
+   * 给「想先看到工具、再配 key」的人留一条路。
+   *
+   * 为什么不叫 `web.tools.always_register`（顶层键）：这条语义只对 web-tools 有效，
+   * 放进 `packages/config` 会让「配置包」知道某个插件的行为细节。
+   */
+  alwaysRegister: boolean;
   /** DeepSeek tools API 的 base_url（不含末尾斜杠） */
   baseUrl: string;
   /** **只存环境变量名**，绝不存值（设计 §6.1） */
@@ -146,6 +157,28 @@ function asRecord(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : {};
+}
+
+/**
+ * 插件配置从 `packages/config` 送来时**已经被 snake→camel 转过**
+ * （`plugins[].config.search_provider` → `searchProvider`）。本文件的读法统一按
+ * snake_case 写（`search_provider`），所以这里补一层归一：两种拼写都认，
+ * **snake 优先**（显式按插件文档写的那个赢）。
+ *
+ * 为什么不在每个 read 里传两个名字：本文件有 40+ 个键，逐个写两遍必然漏。
+ * 一行归一把「漏一个键就静默失效」这类事故从根上关掉。
+ */
+function normalizeKeys(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const snake = key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+    out[snake] = value;
+  }
+  // 原样拼写也放进去（snake 优先：先写的不会被覆盖）
+  for (const [key, value] of Object.entries(raw)) {
+    if (!(key in out)) out[key] = value;
+  }
+  return out;
 }
 
 function readInt(raw: unknown, fallback: number, min: number, max: number): number {
@@ -266,7 +299,7 @@ function readBaseUrl(raw: unknown): string {
 
 /** 注意：`max_bytes` 的默认值是 5 MiB（本单口径）；研究稿 §5.5 表里写的是 2 MiB，这里按本单执行。 */
 export function parseWebToolsConfig(raw: unknown): WebToolsConfig {
-  const cfg = asRecord(raw);
+  const cfg = normalizeKeys(asRecord(raw));
   const backend = readBackend(cfg.backend);
   const renderer = readRenderer(cfg.renderer);
   if (backend === 'deepseek' && renderer !== 'none') {
@@ -298,6 +331,7 @@ export function parseWebToolsConfig(raw: unknown): WebToolsConfig {
 
     backend,
     searchProvider: readSearchProvider(cfg.search_provider),
+    alwaysRegister: readBool(cfg.always_register, false),
     baseUrl: readBaseUrl(cfg.base_url),
     keyEnv: readEnvName(cfg.key_env, DEFAULT_KEY_ENV, 'key_env'),
     searchKeyEnv: readEnvName(cfg.search_key_env, '', 'search_key_env'),
