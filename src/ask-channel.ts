@@ -12,7 +12,12 @@
  * @module vessel/ask-channel
  */
 
-import type { EventStream, RunEvent, SessionEventLogPort } from '../packages/core/src/index';
+import {
+  askAnswerMessageIdOf,
+  type EventStream,
+  type RunEvent,
+  type SessionEventLogPort,
+} from '../packages/core/src/index';
 import {
   createInteractionMethods,
   createInteractionsRegistry,
@@ -292,7 +297,14 @@ export async function deliverAnsweredAsksToSession(options: {
       data: {
         run_id: options.runId,
         session_id: options.sessionId,
-        message: { role: 'user', content },
+        // 0.56：这条通道**直写事件**（不经过 ExecutionUnit 的盖章点），所以身份只能在这里
+        // 拼出来。`requestId` 本来就是「这条答案投过没有」的幂等键 —— 同一条答案补投两次
+        // 得到同一个 `message_id`，渲染层按身份归并，不必猜正文。
+        message: {
+          role: 'user',
+          content,
+          message_id: askAnswerMessageIdOf(options.runId, record.requestId),
+        },
         source: ASK_RESUME_SOURCE,
         request_id: record.requestId,
       },

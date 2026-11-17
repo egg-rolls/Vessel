@@ -46,6 +46,123 @@ export function injectedMessageIdOf(runId: string, index: number): string {
 }
 
 /**
+ * BeforeLlm hook 注入（`ctx.messages`：环境卡 / 收件箱提示 / Self Card delta …）的稳定 id。
+ *
+ * 为什么与 `RunOptions.messages` 分开命名空间：同一个 run 里两条通道都会从下标 0 开始
+ * 数，共用一个前缀会让「第二批的第 0 条」与「第一批的第 0 条」撞成同一个身份 —— 撞号
+ * 在渲染层就是一条被静默丢掉的消息（`hook:` 段是唯一的分界）。
+ *
+ * `index` 是这条消息在**本 run** 里第几批 hook 注入里的位置（`injectedHookSeq`，单调递增）。
+ * 同一条 hook 消息在同一个 run 内只会写一次（`injectedMessageKeys` 去重），所以这个下标
+ * 对「同一条消息」是可复算的。
+ */
+export function injectedHookMessageIdOf(runId: string, index: number): string {
+  return `${runId}:inject:hook:${String(index)}`;
+}
+
+/**
+ * 运行时提示（`appendNotice` / `appendNoticeToSnapshot`，`vessel:notice`）的稳定 id。
+ *
+ * `timestamp` 是提示**被创建**的那一刻，创建时定死、之后不再改写（`addContext` 也遵守
+ * 「已有值不覆盖」）。用它与 run 段拼 id：同一条提示不论被谁来写（有 active run 的
+ * `addContext` 还是无 run 的快照追加）都得到同一个字符串。
+ */
+export function noticeMessageIdOf(owner: string, timestamp: number): string {
+  return `${owner}:notice:${String(timestamp)}`;
+}
+
+/**
+ * 会话种子（`sessions.create --seed` / fork：把父会话的前缀复制成新会话的
+ * `message.injected`）的稳定 id。
+ *
+ * 形状 `${sessionId}:seed:${index}`：新会话 id 是服务端生成的 uuid，种子批次在
+ * `writeSeedEvents` 里一次写定、下标即顺序 —— 同批次重写一遍拿到同一个 id。
+ * **已有 id 的种子消息原样保留**（`withMessageId` 只补缺）：从父会话复制来的消息
+ * 携带的是它当初的身份，改写就是伪造。
+ */
+export function seedMessageIdOf(sessionId: string, index: number): string {
+  return `${sessionId}:seed:${String(index)}`;
+}
+
+/**
+ * async ask 答案**接续投递**（`src/ask-channel.ts` 直写 `user.message`）的稳定 id。
+ *
+ * 形状 `${runId}:ask:${requestId}`：`requestId` 是那次提问的 id，投递侧本来就拿它
+ * 当「这条答案投过没有」的键 —— 同一条答案被补投两次拿到同一个 id。
+ */
+export function askAnswerMessageIdOf(runId: string, requestId: string): string {
+  return `${runId}:ask:${requestId}`;
+}
+
+/**
+ * 幂等守卫：同一 `message_id` 在一份 `messages` 里**最多一条**。
+ *
+ * 为什么需要它：`message_id` 是「同一条消息」的结构化事实（`${runId}:user` /
+ * `${runId}:inject:<下标>` 这类确定式字符串）。同一条输入被写进上下文两次 —— 不管
+ * 是哪条路径的锅 —— 在落盘这一处必然撞同一个 id。撞号就是**同一个身份的两份副本**，
+ * 留一份不是「吞消息」，是把同一条消息写一次（正文逐字节相同；不同则说明 id 生成
+ * 有 bug，所以只在正文相同的人才丢，并把这件事 warn 出来）。
+ *
+ * 口径（三条，缺一条就会误伤）：
+ * - **只处理带 id 的消息**：旧数据（0.56 之前落盘）没有 id，一条都不动；
+ * - **只丢**「同 id 且 role / name / content / tool_calls / refs 全同」的后者 ——
+ *   正文不同 = id 生成错，宁可两都留并报出来，也不静默删掉一条真实内容；
+ * - 返回新数组，**不动入参**：调用方传进来的往往是 live 窗口的 `messages`，
+ *   就地 `splice` 会把运行中的上下文也改掉。
+ *
+ * 纯函数、无日志（调用方决定怎么报）。返回 `dropped` 的样本 id 供 warn 带出来。
+ */
+export function dropDuplicateMessageIds(messages: readonly Message[]): {
+  messages: Message[];
+  dropped: number;
+  sample: string[];
+} {
+  const seen = new Map<string, Message>();
+  const kept: Message[] = [];
+  const sample: string[] = [];
+  let dropped = 0;
+  for (const message of messages) {
+    const id = message.message_id;
+    if (typeof id !== 'string' || id.length === 0) {
+      kept.push(message);
+      continue;
+    }
+    const previous = seen.get(id);
+    if (previous === undefined) {
+      seen.set(id, message);
+      kept.push(message);
+      continue;
+    }
+    if (sameMessageContent(previous, message)) {
+      dropped += 1;
+      if (sample.length < 5) sample.push(id);
+      continue;
+    }
+    // 同 id 不同正文：身份生成有问题，但不许因此吞掉一条真实内容。
+    kept.push(message);
+  }
+  return { messages: kept, dropped, sample };
+}
+
+/** 两条消息的**内容**是否相同（身份字段 `message_id` / `run_segment` 不参与比较）。 */
+function sameMessageContent(left: Message, right: Message): boolean {
+  if (left.role !== right.role) return false;
+  if (left.content !== right.content) return false;
+  if ((left.name ?? '') !== (right.name ?? '')) return false;
+  if ((left.tool_call_id ?? '') !== (right.tool_call_id ?? '')) return false;
+  const leftCalls = (left.tool_calls ?? [])
+    .map((call) => `${call.id}:${call.function.name}:${call.function.arguments}`)
+    .join('|');
+  const rightCalls = (right.tool_calls ?? [])
+    .map((call) => `${call.id}:${call.function.name}:${call.function.arguments}`)
+    .join('|');
+  if (leftCalls !== rightCalls) return false;
+  const leftRefs = (left.refs ?? []).map((ref) => `${ref.kind}:${ref.path}`).join('|');
+  const rightRefs = (right.refs ?? []).map((ref) => `${ref.kind}:${ref.path}`).join('|');
+  return leftRefs === rightRefs;
+}
+
+/**
  * 给一条**正在进入会话**的消息盖 `message_id`（只补缺，不覆盖已有值）。
  *
  * 为什么只补缺：resume / 重放会把历史消息灌回来，那些 id 是当初落盘时的身份，改写就是
