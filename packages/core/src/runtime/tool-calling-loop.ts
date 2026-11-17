@@ -32,6 +32,7 @@ import type { ToolCall } from '../types/tool.js';
 import type { GuardrailRunner } from './guardrail-runner.js';
 import type { HookRunner } from './hook-runner.js';
 import type { PrefixChangeReason, PromptPrefixGuard } from './prompt-prefix-guard.js';
+import type { RunTiming } from './run-timing.js';
 import { isToolCall } from './tool-pipeline.js';
 import { boundToolResult, writeToolOutput } from './tool-result-gate.js';
 
@@ -55,6 +56,13 @@ export interface LoopContext {
   readonly tools: ToolExecutor;
   readonly events: EventSink;
   readonly controls: RunControls;
+  /**
+   * 0.57：本轮 run 的分段耗时账本（可缺省 —— 缺省 = 不打 `run.llm.gap`）。
+   *
+   * loop 只负责把「模型耗时 / 两轮之间的间隔 / 上一轮工具耗时」交上去；输出格式与
+   * 开关在 `run-timing.ts` 一处定义（宪法第十四条：格式只有一处真相）。
+   */
+  readonly timing?: RunTiming;
 }
 
 /** WorkingContext / MessageWindowPort：只读写本次 run 的内存窗口。 */
@@ -247,7 +255,14 @@ export function detectBase64ImagePayload(
  */
 export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> {
   const { runId, sessionId, stats } = ctx.execution;
+  // 0.57 分段耗时：轮次从 1 起；`previous*` 是**上一轮**的读数（gap 那一行要用它把
+  // 「模型慢」和「我们中间那一小段慢」分开）。
+  let round = 0;
+  let previousResponseAt: number | undefined;
+  let previousToolCalls: number | undefined;
+  let previousToolsMs: number | undefined;
   while (true) {
+    round += 1;
     // AbortSignal 中断（Hermes/Claude Code 模式——外部 Esc）
     if (ctx.controls.signal?.aborted) {
       throw new Error(ctx.controls.signal.reason ?? 'Run cancelled');
@@ -387,6 +402,12 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
     });
 
     // 调用 LLM（context-overflow 时强制压缩一次并重试一次，0.10 R2-17）
+    //
+    // 0.57：请求发出的**这一刻**是 gap 的右端点 —— `gap` = 上一轮响应结束 → 这一次
+    // 请求发出，正好是「用户感觉请求间隔变长」的那段时间。
+    const requestStartedAt = Date.now();
+    const gapMs =
+      previousResponseAt !== undefined ? Math.max(0, requestStartedAt - previousResponseAt) : undefined;
     const response = await ctx.provider.chat({
       messages,
       tools: toolSchemas,
@@ -394,6 +415,17 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       ...(ctx.controls.signal !== undefined ? { signal: ctx.controls.signal } : {}),
       rebuildMessages: () => ctx.window.buildRequestMessages(baseSystemPrompt),
     });
+    const responseAt = Date.now();
+    previousResponseAt = responseAt;
+    // 一轮一条账：模型耗时（本次请求）+ 与上一轮之间的间隔（含上一轮工具耗时）。
+    ctx.timing?.round({
+      round,
+      modelMs: responseAt - requestStartedAt,
+      ...(gapMs !== undefined ? { gapMs } : {}),
+      ...(previousToolCalls !== undefined ? { toolCalls: previousToolCalls } : {}),
+      ...(previousToolsMs !== undefined ? { toolsMs: previousToolsMs } : {}),
+    });
+    ctx.timing?.note('llm', responseAt - requestStartedAt);
 
     // 更新 token 使用量
     let requestCost: number | undefined;
@@ -574,6 +606,9 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       // 其余按原顺序串行；结果始终按原调用顺序写回上下文。
       // 0.14 P0：工具阶段的失败（含管道错误）按 tool 归类。
       ctx.execution.phase = 'tool';
+      // 0.57：工具总耗时（含 BeforeTool/AfterTool hook 与结果闸）——它是 gap 的主要成分，
+      // 单独记一笔才能把 gap 拆成「工具真在跑」与「我们中间那一段」。
+      const toolsStartedAt = Date.now();
       let cursor = 0;
       while (cursor < prepared.length) {
         const first = prepared[cursor];
@@ -666,6 +701,10 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
 
       // durable 安全点：本轮 tool-call 结果已全部写入上下文
       await ctx.controls.onSafePoint();
+      // 0.57：本轮的「工具账」留给下一轮的 gap 行（gap 覆盖的正是这段时间）。
+      previousToolsMs = Date.now() - toolsStartedAt;
+      previousToolCalls = effectiveCalls.length;
+      ctx.timing?.note('tools', previousToolsMs);
     } else {
       // 其他完成原因（如 length），直接返回当前内容
       ctx.window.addMessage(

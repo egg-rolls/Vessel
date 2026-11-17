@@ -100,3 +100,36 @@ export function checkTlsFiles(
   }
   return null;
 }
+
+/**
+ * 平台 → node 代理的两个响应头超时（0.57）。
+ *
+ * 为什么用 env 而不是新配置键：`proxy.limits` 是 serve 的**部署参数**（组合根注入），
+ * 与 `serve.proxy_secret_env` 同一个套路——只读环境变量，不配就完全沿用缺省值。
+ * 这样既不新增配置面（不需要改 config schema / validator），也不给「写错一个键就静默
+ * 变慢」留口子。
+ *
+ * - `VESSEL_PROXY_TIMEOUT_MS`：普通 RPC 的响应头超时（缺省 30s，serve 侧定义）；
+ * - `VESSEL_PROXY_HEALTH_TIMEOUT_MS`：健康探测类路径（`/health` 等）的响应头超时
+ *   （缺省 1.5s）。node 没起来时它必须**快失败**，否则每个探活请求都白等 30s。
+ *
+ * 非法值（非有限正数）忽略——保持缺省，不让一个拼错的变量把超时变成 0 / NaN。
+ */
+export function resolveProxyTimeoutLimits(env: Record<string, string | undefined> = process.env): {
+  requestTimeoutMs?: number;
+  probeTimeoutMs?: number;
+} {
+  const positive = (raw: string | undefined): number | undefined => {
+    if (raw === undefined) return undefined;
+    const trimmed = raw.trim();
+    if (trimmed === '') return undefined;
+    const value = Number(trimmed);
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+  };
+  const requestTimeoutMs = positive(env.VESSEL_PROXY_TIMEOUT_MS);
+  const probeTimeoutMs = positive(env.VESSEL_PROXY_HEALTH_TIMEOUT_MS);
+  return {
+    ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+    ...(probeTimeoutMs !== undefined ? { probeTimeoutMs } : {}),
+  };
+}

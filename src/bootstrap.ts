@@ -123,6 +123,7 @@ import { createRunControl } from './run-control';
 import { createRuntimeNoticeBus, type RuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
+import { markStartup, timeStartup } from './startup-timing';
 import { createSessionEventsSource } from './session-events';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
 import { reportShutdownFailure } from './shutdown-report';
@@ -965,6 +966,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(cliOverrides !== undefined ? { cliOverrides } : {}),
   });
   const { config, validation, tenantId: configTenantId, paths: configPaths } = loaded;
+  markStartup('config');
 
   if (!useMock && validation.errors.length > 0) {
     console.error(formatConfigErrors(validation.errors, { paths: configPaths }));
@@ -1009,6 +1011,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
   const nodeId = nodeIdentity.nodeId;
   const nodeName = nodeIdentity.name;
+  markStartup('identity');
 
   // connect 模式：不获取写锁、不写本地 store/trace；配置仍加载用于 token 选择。
   if (connectMode) {
@@ -1060,8 +1063,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }
   };
   if (localWrites && !pruneAfterFirstFrame) {
-    await pruneTraceBestEffort();
+    await timeStartup('prune', pruneTraceBestEffort());
   }
+  markStartup('prune');
 
   // ── 每 tenant 执行面（0.5 A-6）──────────────────
   // 本地模式复用同一工厂，只构建当前 tenant；provider / 插件 / trace /
@@ -1159,6 +1163,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     console.error(`✗ ${error instanceof Error ? error.message : error}`);
     process.exit(configErrorExitCode);
   });
+  markStartup('runtime');
 
   const {
     providerName,

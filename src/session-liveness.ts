@@ -44,6 +44,7 @@ import {
   SessionLockedError,
   type SessionLockInspection,
 } from './session-lock';
+import { noteStartup, noteStartupMax, timeStartup } from './startup-timing';
 
 /** 崩溃 run 的统一错误文本（与优雅 shutdown 的 interrupted checkpoint 语义对齐） */
 const RUN_LOST_ERROR = 'run lost: owning process exited before completion';
@@ -288,7 +289,12 @@ export async function reconcileStaleSessions(
 ): Promise<{ checked: number; repaired: string[]; errors: string[] }> {
   let infos: SessionInfo[];
   try {
-    infos = await ctx.session.listRich();
+    // 这一段是「启动时是否在做 O(会话数) 的活」的关键读数：`listRich()` 会 stat 每个
+    // 会话的两个文件，未命中还要 `readFile + JSON.parse` 整份会话壳。它在 drvfs
+    // （`/mnt/c`）上单次 stat 就 ~1.8ms，所以会话数 × 文件数的代价必须显式记账。
+    infos = await timeStartup('sweep.listRich', ctx.session.listRich());
+    noteStartup('sessions.total', infos.length);
+    noteStartup('sessions.running', infos.filter((info) => info.status === 'running').length);
   } catch (error) {
     ctx.logger.warn(`session liveness: listRich failed: ${errorText(error)}`, {
       error: errorText(error),
@@ -303,7 +309,9 @@ export async function reconcileStaleSessions(
     if (info.status !== 'running') continue;
     checked += 1;
     try {
+      const repairStartedAt = performance.now();
       const outcome = await reconcileSession(info.session_id, ctx);
+      noteStartupMax('sweep.repair.max', performance.now() - repairStartedAt);
       if (outcome === 'repaired') repaired.push(info.session_id);
       else if (outcome === 'error') errors.push(info.session_id);
     } catch (error) {

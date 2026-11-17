@@ -133,6 +133,7 @@ import {
 } from './session-liveness';
 import { resolveContinueSessionId, resumeSession, runSessionList } from './session-resume';
 import { shutdownServeStack } from './shutdown-sequence';
+import { flushStartupTiming, markStartup, noteStartup, timeStartup } from './startup-timing';
 import { createSystemContextSource } from './system-context';
 // 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
 // 0.54 C：`events.list` 的按 run 读端口（同一模块）。
@@ -201,6 +202,11 @@ function resolveGatewayAllowedOrigins(
  * --serve 启动 banner：对齐 box，含 gateway + 控制台提示。
  * 不打印任何 token（含前缀），也不在 URL 中拼接 token。
  */
+// 启动分期第一段：模块图求值完、第一条语句即将执行。
+// 这一段 = 解释器启动 + 全部 import 的传递闭包求值（`performance.now()` 是进程启动
+// 以来的毫秒数，所以第一个语句读到多大的值，就是那件事花了多久）。
+markStartup('bun');
+
 // ── 入口环境（locale / logger / 未捕获兜底）────────
 // locale 先按环境变量解析，保证解析错误与 --help 也跟随 VESSEL_LANG；
 // bootstrap 后再用 config.ui.language 重新应用（完整优先级）。
@@ -225,6 +231,7 @@ installProcessErrorHandlers({
 // 它在首 token 是内置命令或 flag 时立即返回，因此下面的 help 早退仍然零 IO。
 const pluginCli = await runPluginCliCommand(process.argv.slice(2));
 if (pluginCli.handled) process.exit(pluginCli.exitCode);
+markStartup('plugin-cli');
 
 // 按位置 help：`vessel <cmd...> -h` / `vessel help <cmd...>`。
 // 必须早于 parseArgs —— `-h` 在任何位置（含跟在 flag 后面）都先于参数校验生效。
@@ -245,6 +252,7 @@ if (!parsed.ok) {
   process.exit(2);
 }
 const args = parsed.args;
+markStartup('args');
 // 0.15: one-shot commands call loadConfig() without cliOverrides; mirror the
 // explicit --data-dir into the env layer so they resolve the same data root.
 // The main bootstrap path still passes it through buildCliConfigOverrides().
@@ -442,6 +450,9 @@ if (foregroundGateway && args.gateway !== null) {
   process.once('exit', () => foregroundGatewayLock?.releaseSync());
   args.servePort = resolveGatewayNodePorts(nodeConfig, 'gateway').nodePort;
   args.servePortExplicit = true;
+  // `node start` 在进入 bootstrap 之前先读一遍配置（端口 / 实例锁）：这一笔算在
+  // `cli.config` 里，bootstrap 里的那次另算 `config`（两次读是既有行为，不合并）。
+  markStartup('cli.config');
 } else if (args.servePort !== null) {
   // `--serve` 是 default 实例的前台别名：先准备（运行中拒绝 + 实例锁），
   // 修复 0.12 直接覆盖 gateway.pid 的问题。
@@ -544,9 +555,11 @@ const cliOverrides = buildCliConfigOverrides({
 });
 
 // 引导应用启动
-const initialResult = await bootstrap({
-  useMock,
-  mockScenario,
+const initialResult = await timeStartup(
+  'bootstrap',
+  bootstrap({
+    useMock,
+    mockScenario,
   ...(demoRequested ? { dataDirSubdir: 'demo' } : {}),
   sessionId: resolvedSessionId,
   headless,
@@ -564,8 +577,10 @@ const initialResult = await bootstrap({
   // `--feishu` 的配置错误按 Addendum C/D 使用 exit 2；0.3 入口保持 1。
   configErrorExitCode: args.feishu ? 2 : 1,
   logger,
-});
+  }),
+);
 const { config } = initialResult;
+markStartup('agent');
 activeResult = initialResult;
 activeEvents = initialResult.ctx.events;
 // 完整 locale 优先级：VESSEL_LANG > config.ui.language > LANG > LC_ALL > zh-CN
@@ -847,17 +862,21 @@ async function runWithConfig(result: BootstrapResult) {
         logger,
         settingsFor: (id) => pluginSettingsFor(startupConfig, id),
       });
-      const activated = await activateStartupPlugins(pluginHostManager, {
-        loader: result.bundle.pluginLoader,
-        config: liveConfig,
-        tenantId: result.tenantId,
-        logger,
-      });
+      const activated = await timeStartup(
+        'plugin.activate',
+        activateStartupPlugins(pluginHostManager, {
+          loader: result.bundle.pluginLoader,
+          config: liveConfig,
+          tenantId: result.tenantId,
+          logger,
+        }),
+      );
       if (activated.length > 0) {
         logger.info('plugin.activated', {
           plugins: activated,
           tenant: result.tenantId,
         });
+        noteStartup('plugin.activated', activated.length);
       }
 
       // 0.43 E3：`plugins.reload` = 重新读配置 → rescan → manager.reload。
@@ -896,13 +915,16 @@ async function runWithConfig(result: BootstrapResult) {
       logger,
     };
     const livenessSession = withLivenessRepair(livenessContext.session, livenessContext);
-    const sweep = await reconcileStaleSessions(livenessContext);
+    const sweep = await timeStartup('sweep', reconcileStaleSessions(livenessContext));
     if (sweep.repaired.length > 0 || sweep.errors.length > 0) {
       logger.warn('session liveness sweep', {
         repaired: sweep.repaired.length,
         errors: sweep.errors.length,
       });
     }
+    noteStartup('sweep.checked', sweep.checked);
+    noteStartup('sweep.repaired', sweep.repaired.length);
+    markStartup('sweep');
     // 0.15：serve 的 config.set 写回面（对象变量避免对 ConfigGatewayOptionsLike 的
     // 多余属性检查；serve 合入 0.15 后该字段会被正式识别）。
     const gatewayConfigSet = createGatewayConfigSet({ defaultTenantId: result.tenantId });
@@ -1416,6 +1438,7 @@ async function runWithConfig(result: BootstrapResult) {
 
     try {
       gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);
+      markStartup('listen');
     } catch (error) {
       // node 没起来：停 watcher 并回收 plugin 子进程。
       pluginWatch?.close();
@@ -1469,6 +1492,18 @@ async function runWithConfig(result: BootstrapResult) {
       }
       console.warn(`⚠ ${message}`);
     }
+    // 「就绪」的判据 = 监听已在 + `gateway.pid` 已写（外部探活靠这两件事）：
+    // 到这里启动分期收口，之后的时间不再算启动。
+    markStartup('ready');
+    flushStartupTiming({
+      print: (line) => console.error(line),
+      // 明细行（逐段 + 逐插件 + 时间线打开次数）默认不打；`VESSEL_STARTUP_DETAIL=1`
+      // 或 debug 级别日志时给。理由：明细是归因用的，不是日常输出（宪法第十四条）。
+      debug:
+        (process.env.VESSEL_STARTUP_DETAIL ?? '').trim() !== '' ||
+        (process.env.VESSEL_DEBUG ?? '').trim() !== '' ||
+        (process.env.VESSEL_LOG_LEVEL ?? '').trim().toLowerCase() === 'debug',
+    });
 
     // S5.1：node → hub 出站。gateway 已在监听；出站只拨号，不新开入站端口。
     if (config.hub?.direction === 'node') {

@@ -110,6 +110,15 @@ export interface PlatformProxyLimits {
   maxConcurrentRequests: number;
   /** 上游响应头超时（毫秒）。流式响应在头到达后**不受**这个上限约束。 */
   requestTimeoutMs: number;
+  /**
+   * **健康探测类路径**的响应头超时（毫秒）。
+   *
+   * 为什么必须单独一条（0.57 真实事故）：`/health` 走的是 30s 的 RPC 超时，node 未就绪
+   * 时每个请求都白等 30s 才报 `node_unreachable`——用户看到的现象是「页面卡 30 秒，然后
+   * 说 node 连不上」。探活是**快失败 + 快重试**的语义，跟 RPC 的「慢但可能要跑很久」不是
+   * 一回事：健康探测 1.5s 拿不到响应头，结论就已经是「它还没起来」。
+   */
+  probeTimeoutMs: number;
   /** WS 上游握手超时（毫秒）：浏览器已连上但 node 迟迟不 open → 1011。 */
   wsHandshakeTimeoutMs: number;
   /** WS 心跳间隔（毫秒）：平台自己向浏览器发 ping，不借用 node 的心跳。 */
@@ -136,6 +145,9 @@ export const DEFAULT_PLATFORM_PROXY_LIMITS: PlatformProxyLimits = {
   maxConcurrentRequests: 64,
   // 30s：与 node 客户端自己的请求超时同量级（`REQUEST_TIMEOUT_MS`）。
   requestTimeoutMs: 30_000,
+  // 1.5s：探活只回答「node 在不在」，不该借 RPC 的 30s。1.5s 足够同机 / 同网段一次
+  // 三次握手 + 一次 `{"status":"ok"}`，慢于此的 node 在人类感知里就是「没起来」。
+  probeTimeoutMs: 1_500,
   // 10s：跨机 WS 握手给足时间，又不至于让半开连接长期占槽。
   wsHandshakeTimeoutMs: 10_000,
   // 25s / 60s：与 node 侧心跳同口径（设计 §3.2 的延迟预算表）。
@@ -232,6 +244,19 @@ export interface ProxyRejection {
   status: number;
   code: string;
   message: string;
+}
+
+/**
+ * 路径是不是**健康探测**：这类请求要快失败（{@link PlatformProxyLimits.probeTimeoutMs}），
+ * 不能借用 RPC 的 30s 响应头超时。
+ *
+ * 判据只认「探活」本身：`/health`、`/healthz`、`/readyz`、`/livez`（含 `/v1/` 前缀与尾斜杠）。
+ * 任何要读会话 / 跑 run 的路径都不在此列表——它们本来就可能要几十秒。
+ */
+export function isHealthProbePath(rest: string): boolean {
+  const path = rest.length > 1 && rest.endsWith('/') ? rest.slice(0, -1) : rest;
+  const bare = path.startsWith('/v1/') ? path.slice(4) : path;
+  return bare === '/health' || bare === '/healthz' || bare === '/readyz' || bare === '/livez';
 }
 
 /** 路径是否允许代理（HTTP）。 */
