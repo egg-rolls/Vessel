@@ -17,6 +17,7 @@ import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
 import { isStripCoveredInboxNotice } from './env-notice';
 import { PendingBubble } from './PendingBubble';
+import { inConversationStream } from './pending-placement';
 import type { PendingSend } from './pending-sends';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { RotateHandoffCard } from './RotateHandoffCard';
@@ -714,11 +715,14 @@ export function TranscriptWindow({
             />
           ) : null}
 
-          {/* 0.56 乐观渲染：本地已发出、还没被服务端回显的那几句。排在整条 item 流之后、
-              「正在思考」之前 —— 它们就是「还没有对应 run 内容的最后一段」。回显一到
-              pending-sends.ts 就把它们撤掉，屏上只剩服务端那份（不重复是结构性的：撤掉
-              之后本地没有第二份可画，渲染层不做去重）。 */}
-          {pendingSends.map((pending) => (
+          {/* 0.56 排队生命周期：**只有 `sending` 在会话流里**。
+              判据来自 `pending-placement.ts#inConversationStream`（唯一出处，条带与驱动用
+              同一份）：`queued` 只在待处理条带、`failed` 也只在条带（带「重试 / 编辑」）、
+              `sent` 之后服务端回显接管成正常用户气泡。
+              为什么 `queued` 必须在这里被跳过：它同时存在于服务端 inbox 与这条 pending 里，
+              两边都画就是用户点名要删的「同一条消息在会话里又出现一次」。所以这不是「先显示
+              再隐藏」，而是**状态一变成 queued 就不该由这一层渲染**。 */}
+          {pendingSends.filter(inConversationStream).map((pending) => (
             <PendingBubble
               key={pending.id}
               pending={pending}

@@ -1,6 +1,12 @@
 /**
  * 一条「本地待确认」的用户气泡（0.56 乐观渲染）。
  *
+ * **0.56 排队生命周期之后，这一层只画 `sending`**（见 `TranscriptWindow` 的过滤与
+ * `pending-placement.ts#inConversationStream`）：`queued` 只在待处理条带、`failed` 回流到
+ * 条带（带「重试 / 编辑」）、`sent` 之后由服务端回显接管成正常用户气泡。所以下面这些状态
+ * 分支留在这里是**给直接渲染它的宿主**（设计预览 / 别的屏）用的，会话流不会走到
+ * `queued` / `failed` 那两支 —— 别把它们当成「还有第二处展示位置」。
+ *
  * 它与落盘后的用户气泡**同一个视觉家族**（`.msg-user` + `.msg-bubble`，几何完全一致），
  * 只是身份上「还没落地」，所以底色 / 文字走 amber（`tokens.css` 里 `--amber` 就是
  * 「还没完成」那一支，注释点名的用处之一正是「未发送 / 排队中」），右侧一行状态字说明
@@ -38,18 +44,18 @@ export function PendingBubble({
   onDismiss?: (pending: PendingSend) => void;
 }) {
   const failed = pending.state === 'failed';
-  // 超时自带一句人话（「15 秒没有回显」比 `timeout` 这个内部词有用）；排队超时同理；
-  // RPC 失败带原始错误。
+  // 组装冲突解决（0.56）：两侧各有对方没有的东西，合并保留两者。
+  // - 来自 `queued-lifecycle`：`queue_timeout` / `offline` 也是**人话已覆盖**的失败原因
+  //   （条带里「未发送 · 排队超时 / 断线」由卡头统一给），不必再重复一行原始码；
+  // - 来自 HEAD（本轮其它单）：排队**很久**要看得见 —— 1 分钟起把「已排队 N 分钟」写进状态字，
+  //   节拍由 `PendingSendStore.sweep` 按整分钟推一次渲染（排队本身不产生事件）。
   const reason =
-    pending.failure === undefined
+    pending.failure === undefined ||
+    pending.failure === 'timeout' ||
+    pending.failure === 'queue_timeout' ||
+    pending.failure === 'offline'
       ? undefined
-      : pending.failure === 'timeout'
-        ? undefined
-        : pending.failure === 'queued-timeout'
-          ? t('chat.pendingSend.queueTimeout')
-          : pending.failure;
-  // 排队**很久**要看得见：1 分钟起把「已排队 N 分钟」写在状态字里。节拍由
-  // `PendingSendStore.sweep` 按整分钟推一次渲染（排队本身不产生任何事件）。
+      : pending.failure;
   const queuedMinutes =
     pending.state === 'queued' ? Math.floor((Date.now() - pending.createdAt) / 60_000) : 0;
   return (

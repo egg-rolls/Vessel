@@ -62,6 +62,8 @@ import type {
 } from '../../gateway/types';
 import { t } from '../../i18n';
 import { errorMessage } from './errors';
+import { claimedEntryIds, inboxSummaryOf, inPendingStrip } from './pending-placement';
+import type { PendingSend } from './pending-sends';
 import {
   canUnhold,
   groupSenderName,
@@ -155,10 +157,12 @@ function PendingRow({
   item,
   identity,
   human,
+  label,
   onCancel,
   onEdit,
   onClaim,
   onUnhold,
+  onRetry,
   fold,
 }: {
   item: QueuedSubmission;
@@ -166,6 +170,13 @@ function PendingRow({
   identity?: string;
   /** 是不是 human 源（只有它是真删，才有三颗写键）。 */
   human: boolean;
+  /**
+   * 卡头文案覆盖（`QueuedNotice` 的 `label`）；缺省「等待中」。
+   *
+   * 本文件只有一处用它：**客户端失败的 pending**——「未发送 · 排队超时」这种结论句必须
+   * 顶在卡头上（用户一眼就知道这条没发出去），而不是伪装成还在排队的「等待中」。
+   */
+  label?: string;
   onCancel: (id: string) => void;
   /** 缺省 = 这个宿主没有草稿槽可写（「收回编辑」不放一个点了没反应的键）。 */
   onEdit?: (id: string) => void;
@@ -176,6 +187,13 @@ function PendingRow({
    * `unread` 的条目本来就是留档态，再给一颗「取消 hold」是假承诺）。
    */
   onUnhold?: (id: string) => void;
+  /**
+   * 缺省 = 不给「重试」。
+   *
+   * 只有**客户端失败**的 pending 给：重试是「再发一次同一句话」（由 `useChatSubmit` 复用
+   * 同一个 pending id），而服务端条目上的重试会变成「同一个服务端 id 再投一次」，语义不同。
+   */
+  onRetry?: (id: string) => void;
   /** 组头才传：组内条数、开合状态与切换。 */
   fold?: { count: number; open: boolean; onToggle: () => void };
 }) {
@@ -191,6 +209,8 @@ function PendingRow({
         onEdit={human ? onEdit : undefined}
         onClaim={human ? onClaim : undefined}
         onUnhold={onUnhold}
+        onRetry={human ? onRetry : undefined}
+        {...(label !== undefined ? { label } : {})}
       />
       {fold && (
         <button
@@ -206,14 +226,77 @@ function PendingRow({
   );
 }
 
-/** 组内条目 → 排队项。对不上的（理论上不会发生）直接跳过：不渲染半张卡。 */
-function rowsOf(
-  group: PendingStripGroup,
-  byId: ReadonlyMap<string, QueuedSubmission>,
-): { entry: PendingStripEntry; item: QueuedSubmission }[] {
+/**
+ * 条带的一行：可能是**服务端条目**，也可能是**客户端 pending**（用户刚发、还没被 run 取用）。
+ *
+ * 两者统一成一行，是因为「一条消息在条带上只有一行」这个保证必须落在同一份排序 / 折叠 /
+ * 计数里；分成两个列表各画一遍，就会出现「服务端一条 + 客户端一条」的重复。
+ *
+ * `pending` 非空 = 这一行代表一条本地 pending：写操作除了 RPC 还要把那条 pending 收掉
+ * （否则它会在下一次渲染里继续认领同一行）。
+ */
+interface StripRow {
+  entry: PendingStripEntry;
+  item: QueuedSubmission;
+  pending?: PendingSend;
+}
+
+/** 客户端行的稳定 key：有服务端 id 就用它（写操作正好按它走），否则用本地 id。 */
+function clientKeyOf(pending: PendingSend): string {
+  return pending.messageId ?? `pending:${pending.id}`;
+}
+
+/**
+ * 客户端 pending → 一行。
+ *
+ * 为什么这些消息要由客户端画、而不是等 `agents.inbox` 那条：两者是**同一条消息**，服务端
+ * 那条会被 `claimedEntryIds` 顶替掉（见 `pending-placement.ts`）。客户端这行知道得更多 ——
+ * 失败原因、重试、编辑（内容就在本地，不需要 peek）。这也让 `queued` 从会话流里撤掉的
+ * 那一刻就有落点：同一帧里它从「会话气泡」变成「条带这一行」，中间没有空档。
+ */
+function clientRowOf(pending: PendingSend, cancelling: ReadonlySet<string>): StripRow {
+  const key = clientKeyOf(pending);
+  const summary = inboxSummaryOf(pending.text);
+  return {
+    entry: {
+      message_id: key,
+      from: HUMAN_SOURCE,
+      summary,
+      status: 'held',
+      ts: pending.createdAt,
+    },
+    item: {
+      id: key,
+      input: summary,
+      submittedAt: pending.createdAt,
+      cancelling: cancelling.has(key),
+    },
+    pending,
+  };
+}
+
+/**
+ * 失败 pending 的卡头结论句：`未发送 · <原因>`。
+ *
+ * 只给三种已知原因翻人话（`queue_timeout` / `timeout` / 断线文案），其余原样带出 ——
+ * 给命令、给内部错误码都不是人该读的东西（宪法第十四条）。
+ */
+function failureLabel(pending: PendingSend): string {
+  const notSent = t('chat.pendingSend.failed');
+  if (pending.failure === undefined) return notSent;
+  if (pending.failure === 'queue_timeout') {
+    return `${notSent} · ${t('chat.pendingSend.queueTimeout')}`;
+  }
+  if (pending.failure === 'timeout') return `${notSent} · ${t('chat.pendingSend.echoTimeout')}`;
+  if (pending.failure === 'offline') return `${notSent} · ${t('chat.pendingSend.offline')}`;
+  return `${notSent} · ${pending.failure}`;
+}
+
+/** 组内条目 → 条带行。对不上的（理论上不会发生）直接跳过：不渲染半张卡。 */
+function rowsOf(group: PendingStripGroup, byId: ReadonlyMap<string, StripRow>): StripRow[] {
   return group.entries.flatMap((entry) => {
-    const item = byId.get(entry.message_id);
-    return item === undefined ? [] : [{ entry, item }];
+    const row = byId.get(entry.message_id);
+    return row === undefined ? [] : [row];
   });
 }
 
@@ -222,7 +305,12 @@ export function PendingStrip({
   client,
   epoch,
   refreshKey,
+  pendings = [],
+  sentMessageIds = [],
   onRefillDraft,
+  onRetryPending,
+  onEditPending,
+  onDismissPending,
 }: {
   /** 当前会话（`selectedId`）：条带只显示归属它的待处理输入。 */
   sessionId: string | null;
@@ -232,6 +320,21 @@ export function PendingStrip({
   /** 外部触发器（本会话新受理一次发送 / run 数变化）：变一次读一次。 */
   refreshKey: number;
   /**
+   * 本会话的**客户端 pending**（`usePendingSends` 已按会话过滤）。
+   *
+   * 条带会把它里面的 `queued` / `failed` 画成行，并把被它们认领的服务端条目让位
+   * （`pending-placement.ts#claimsEntry`）—— 「一条消息在条带上只有一行」就是这样保证的。
+   */
+  pendings?: readonly PendingSend[];
+  /**
+   * 已经**发出去**（服务端取用、回显到达）的 `message_id`。
+   *
+   * 条带的 `agents.inbox` 读数是**上一次轮询的缓存**（非空时每 2 s 一次）：那条消息被取用
+   * 之后，缓存里还留着它，最长 2 s 内会与「会话里那条正常气泡」同时出现在屏上 ——
+   * 又是同一条消息两份。这份名单让条带立刻把旧读数滤掉（不等下一次轮询，也不用猜）。
+   */
+  sentMessageIds?: readonly string[];
+  /**
    * 把一条待处理输入的**全文**放回本会话的输入框草稿（「收回来编辑」的第二步）。
    *
    * 由页面给（草稿槽在 `useChatSubmit` 手里，条带只认这一条回调）：**只写草稿、
@@ -239,6 +342,21 @@ export function PendingStrip({
    * 那颗键不出现 —— 点了没反应的按钮比没有按钮更糟。
    */
   onRefillDraft?: (text: string) => void;
+  /**
+   * 重试一条**客户端失败的** pending（`useChatSubmit.handleRetryPending`：复用同一个 id 重发）。
+   *
+   * 与「取消排队」的区别：那个是把这条从队列里拿走，这个是把同一句话再发一次。
+   */
+  onRetryPending?: (pending: PendingSend) => void;
+  /**
+   * 「编辑」一条客户端失败的 pending：把内容放回输入框 + 把这条从条带上删掉。
+   *
+   * 两部分都由页面提供（草稿槽 + `pendingSends.remove`）：条带只负责**先撤掉服务端那份**
+   * （如果它已经在队列里），否则改完再发就会出现两条一模一样的消息。
+   */
+  onEditPending?: (pending: PendingSend) => void;
+  /** 删掉一条客户端 pending（它还没成为服务端条目时，「取消」就是纯本地删除）。 */
+  onDismissPending?: (pending: PendingSend) => void;
 }) {
   const toast = useToast();
   /** 服务端最近一次读数；带归属会话，切会话时旧响应不会串到新会话上。 */
@@ -297,6 +415,31 @@ export function PendingStrip({
   const entries = current?.entries ?? [];
   const hasPending = entries.length > 0;
 
+  /**
+   * 条带的**行**：未认领的服务端条目 + 客户端 pending 行，混成一份再排序 / 折叠。
+   *
+   * 认领（{@link claimedEntryIds}）在这里生效：客户端 pending 已经是同一条消息的另一个
+   * 表示，服务端那份就不再单独出现 —— 这是「一条消息在条带上只有一行」的唯一开关，
+   * 也是从会话流里撤掉 `queued` 气泡之后那条消息的落点。
+   */
+  const rows = useMemo(() => {
+    const claimed = claimedEntryIds(pendings, entries);
+    const sent = new Set(sentMessageIds);
+    const serverRows: StripRow[] = entries
+      .filter((entry) => !claimed.has(entry.message_id) && !sent.has(entry.message_id))
+      .map((entry) => ({
+        entry: toEntry(entry),
+        item: {
+          id: entry.message_id,
+          input: entry.summary,
+          submittedAt: entry.ts,
+          cancelling: cancelling.has(entry.message_id),
+        } satisfies QueuedSubmission,
+      }));
+    const clientRows = pendings.filter(inPendingStrip).map((item) => clientRowOf(item, cancelling));
+    return [...serverRows, ...clientRows];
+  }, [entries, pendings, sentMessageIds, cancelling]);
+
   // 非空时才轮询：空态零流量（条带绝大多数时间是空的）。
   useEffect(() => {
     if (sessionId === null || !hasPending) return;
@@ -304,23 +447,9 @@ export function PendingStrip({
     return () => window.clearInterval(id);
   }, [sessionId, hasPending, load]);
 
-  const view = useMemo(() => pendingStripView(entries.map(toEntry)), [entries]);
-  /** 条目 id → 卡片数据（`QueuedNotice` 要吃 `QueuedSubmission`，不能只给条目）。 */
-  const byId = useMemo(
-    () =>
-      new Map(
-        entries.map((entry) => [
-          entry.message_id,
-          {
-            id: entry.message_id,
-            input: entry.summary,
-            submittedAt: entry.ts,
-            cancelling: cancelling.has(entry.message_id),
-          } satisfies QueuedSubmission,
-        ]),
-      ),
-    [entries, cancelling],
-  );
+  const view = useMemo(() => pendingStripView(rows.map((row) => row.entry)), [rows]);
+  /** 条目 id → 条带行（`QueuedNotice` 要吃 `QueuedSubmission`，动作还要认出客户端那条）。 */
+  const byId = useMemo(() => new Map(rows.map((row) => [row.entry.message_id, row])), [rows]);
 
   /** 折叠组开合：纯本地状态，不触发任何 RPC。 */
   const toggleGroup = (key: string) => {
@@ -583,17 +712,150 @@ export function PendingStrip({
     [client, current?.agentId, toast],
   );
 
+  /**
+   * 只撤一条**服务端**队列条目（不带成功提示）：客户端行的「编辑 / 重试」在动手之前必须
+   * 先把它撤掉 —— 否则同一句话会在服务端队列里再跑一遍，用户看到的就是两份。
+   *
+   * 缺 `agentId`（还没读到过盘）时按失败处理：宁可这一次什么都不动，也不能在不知道往哪撤的
+   * 时候把本地那条删掉（正文就真的没了）。
+   */
+  const recallEntry = useCallback(
+    async (messageId: string): Promise<boolean> => {
+      const agentId = current?.agentId;
+      if (agentId === undefined) {
+        toast.error(t('chat.pendingSend.recallUnknown'));
+        return false;
+      }
+      try {
+        const result = await client.rpc<AgentRecallResponse>('agents.recall', {
+          agent_id: agentId,
+          message_ids: [messageId],
+        });
+        const deleted = Array.isArray(result?.deleted) ? result.deleted : [];
+        if (!deleted.includes(messageId)) {
+          toast.error(t('chat.pendingSend.recallRejected'));
+          setReloadTick((value) => value + 1);
+          return false;
+        }
+        setPending((prev) =>
+          prev === null
+            ? prev
+            : {
+                ...prev,
+                entries: prev.entries.filter((entry) => entry.message_id !== messageId),
+              },
+        );
+        return true;
+      } catch (error) {
+        toast.error(errorMessage(error));
+        setReloadTick((value) => value + 1);
+        return false;
+      }
+    },
+    [client, current?.agentId, toast],
+  );
+
+  /** 某一行代表的客户端 pending（服务端条目行没有它）。 */
+  const pendingOf = (id: string): PendingSend | undefined => byId.get(id)?.pending;
+
+  /** 把这一行对应的客户端 pending 从 store 里删掉（它已经不该在屏上了）。 */
+  const dropPending = (pending: PendingSend | undefined) => {
+    if (pending !== undefined) onDismissPending?.(pending);
+  };
+
   // 空列表整块不渲染（不占高度、不留空壳）。
   if (view.total === 0) return null;
 
   const label = t('chat.pending.title', { count: view.total });
-  // 三个写操作只在这里接一次：组头 / 组内 / 展开后的每条都走同一组回调。
-  // 「收回编辑」额外要宿主给草稿槽，没有就不给这颗键（点了没反应比没有更糟）。
-  const cancelRow = (id: string) => void handleCancel(id);
-  const takeBackRow = (id: string) => void handleTakeBack(id);
-  const editRow = onRefillDraft === undefined ? undefined : takeBackRow;
-  const claimRow = (id: string) => void handleClaim(id);
+
+  /**
+   * 取消：服务端条目走 `agents.recall`（真删）；**还没被服务端收下的** pending 是纯本地
+   * 删除（服务端什么都没收到，没有孤儿要清理）。客户端行有 `messageId` 时两者都要做。
+   */
+  const cancelRow = (id: string) => {
+    const pending = pendingOf(id);
+    if (pending === undefined) {
+      void handleCancel(id);
+      return;
+    }
+    if (pending.messageId === undefined) {
+      dropPending(pending);
+      return;
+    }
+    void handleCancel(pending.messageId).then(() => dropPending(pending));
+  };
+
+  /**
+   * 编辑（= 用户的「编辑」）：**先撤服务端那份，再把内容放回输入框并删掉这一行**。
+   *
+   * 顺序不能反：先回填再撤，撤失败时屏上会同时出现「输入框里那段字」和「队列里那条」，
+   * 用户一按发送就是两份。所以撤不下来就什么都不改（草稿原样、条带那行留着）。
+   *
+   * 服务端条目行仍然走老的「peek 全文 → 回填 → recall」（正文在服务端，本地没有副本）。
+   */
+  const editRow = (id: string) => {
+    const pending = pendingOf(id);
+    if (pending === undefined) {
+      void handleTakeBack(id);
+      return;
+    }
+    void (async () => {
+      if (pending.messageId !== undefined) {
+        const recalled = await recallEntry(pending.messageId);
+        if (!recalled) return;
+      }
+      if (onEditPending !== undefined) {
+        onEditPending(pending);
+        return;
+      }
+      // 没有 onEditPending 的宿主（设计预览）：只做能得到的那一半，绝不假装成功。
+      onRefillDraft?.(pending.text);
+      dropPending(pending);
+    })();
+  };
+
+  /**
+   * 重试：**先撤掉服务端那条排队中的旧消息**，再用同一个 pending id 重发同一句话。
+   *
+   * 不先撤就重发 = 同一句话执行两次（旧的还在队列里，新的又排一条）。撤不下来就不重发：
+   * 条带那行留着，「重试」随时可以再点。
+   */
+  const retryRow = (id: string) => {
+    const pending = pendingOf(id);
+    if (pending === undefined) return;
+    void (async () => {
+      if (pending.messageId !== undefined) {
+        const recalled = await recallEntry(pending.messageId);
+        if (!recalled) return;
+      }
+      onRetryPending?.(pending);
+    })();
+  };
+
+  /** 我已处理：不可逆，只给「服务端真的收下了」的那些行（本地 pending 没有可处理的东西）。 */
+  const claimRow = (id: string) => {
+    const pending = pendingOf(id);
+    if (pending === undefined) {
+      void handleClaim(id);
+      return;
+    }
+    if (pending.messageId === undefined) return;
+    void handleClaim(pending.messageId).then(() => dropPending(pending));
+  };
   const unholdRow = (id: string) => void handleUnhold(id);
+
+  /** 行的卡头文案：失败的客户端行说「未发送 · 原因」，其余照旧「等待中」。 */
+  const labelOf = (row: StripRow): string | undefined =>
+    row.pending?.state === 'failed' ? failureLabel(row.pending) : undefined;
+  /** 只有失败的客户端行给「重试」（服务端条目没有「再发一次」的语义）。 */
+  const retryOf = (row: StripRow): ((id: string) => void) | undefined =>
+    row.pending?.state === 'failed' ? retryRow : undefined;
+  /** 只有真的有服务端 id 的行给「我已处理」（否则它等价于删除，用取消那颗键就够）。 */
+  const claimOf = (row: StripRow): ((id: string) => void) | undefined =>
+    row.pending === undefined || row.pending.messageId !== undefined ? claimRow : undefined;
+  /** 「收回编辑」要宿主给草稿槽；客户端行只需要 pending 正文（本地就有）。 */
+  const editOf = (row: StripRow): ((id: string) => void) | undefined =>
+    row.pending !== undefined || onRefillDraft !== undefined ? editRow : undefined;
 
   return (
     <section className="flex-none pb-2" aria-label={label}>
@@ -622,10 +884,14 @@ export function PendingStrip({
                     item={head.item}
                     identity={identityOf(head.entry, senderName)}
                     human={head.entry.from === HUMAN_SOURCE}
+                    {...(labelOf(head) !== undefined ? { label: labelOf(head) } : {})}
                     onCancel={cancelRow}
-                    onEdit={editRow}
-                    onClaim={claimRow}
-                    onUnhold={canUnhold(head.entry) ? unholdRow : undefined}
+                    onEdit={editOf(head)}
+                    onClaim={claimOf(head)}
+                    onUnhold={
+                      head.pending === undefined && canUnhold(head.entry) ? unholdRow : undefined
+                    }
+                    onRetry={retryOf(head)}
                     fold={fold}
                   />
                   {/* 展开后逐条列出：仍是那些待处理条目，写操作按各自的条目 id 与来源判定。 */}
@@ -637,10 +903,16 @@ export function PendingStrip({
                             item={row.item}
                             identity={identityOf(row.entry, senderName)}
                             human={row.entry.from === HUMAN_SOURCE}
+                            {...(labelOf(row) !== undefined ? { label: labelOf(row) } : {})}
                             onCancel={cancelRow}
-                            onEdit={editRow}
-                            onClaim={claimRow}
-                            onUnhold={canUnhold(row.entry) ? unholdRow : undefined}
+                            onEdit={editOf(row)}
+                            onClaim={claimOf(row)}
+                            onUnhold={
+                              row.pending === undefined && canUnhold(row.entry)
+                                ? unholdRow
+                                : undefined
+                            }
+                            onRetry={retryOf(row)}
                           />
                         </li>
                       ))}

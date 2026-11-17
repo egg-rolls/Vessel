@@ -559,7 +559,20 @@ export function ChatView({
               client={client}
               epoch={epoch}
               refreshKey={submitApi.sendTick + transcriptApi.visibleGroups.length}
+              pendings={transcriptApi.activeAgent ? EMPTY_PENDING_SENDS : pendingSendsApi.pending}
+              sentMessageIds={pendingSendsApi.sentMessageIds}
               onRefillDraft={refillDraftFromStrip}
+              onRetryPending={(pending) => {
+                void submitApi.handleRetryPending(pending);
+              }}
+              // 「编辑」= 内容回输入框 + 条带那条消失（两步都在这里落地：草稿槽在
+              // `useChatSubmit`，store 在 `usePendingSends`）。条带已经先把服务端那份撤掉
+              // 了（见 PendingStrip.tsx 的 editRow），所以这里不会再冒出第二条一样的消息。
+              onEditPending={(pending) => {
+                refillDraftFromStrip(pending.text);
+                pendingSendsApi.dismiss(pending);
+              }}
+              onDismissPending={pendingSendsApi.dismiss}
             />
           </div>
 

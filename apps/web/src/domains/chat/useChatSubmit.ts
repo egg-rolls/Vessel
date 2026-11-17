@@ -192,13 +192,16 @@ export function useChatSubmit({
       // 其它错误保持原样展示。
       const refsRejection = submittedRefs.length > 0 ? refsErrorText(error) : null;
       toast.error(refsRejection ?? errorMessage(error));
-      // 0.52（F5）：**发不出去就把内容还给输入框**。
-      // 用户 2026-11-13 遇到「消息被吞」：runs.start 失败（当时是 lease_expired），
-      // 界面上既没有回复、输入框也空了 —— 草稿其实还在 store 里，但用户看不到就以为是丢了。
-      // 这里只在「输入框是空的」时把它填回去，绝不覆盖用户在等待期间新写的内容。
-      writeDraft(sourceKey, (current) => (current.trim() === '' ? text : current));
-      // 灰气泡转失败态：**留在原位**（带重试 / 删除），不倒回「什么都没发生」——
-      // 用户刚看到它出现，它就不能自己消失。
+      // 0.56（用户口径）：**发不出去就回流到待处理条带**，不回输入框。
+      //
+      // 0.52 的 F5 曾经在这里把正文塞回草稿槽（当时的问题是「消息被吞」）。现在的规矩变了：
+      // 失败的那条在条带上带着「重试 / 编辑」出现 —— 内容仍是那条消息本身，人不会看不见它。
+      // 同时**不能留着输入框里那份**：手上有草稿的人会看到同一段字出现在两个地方（输入框 +
+      // 条带），而这正是本需求要根除的重复。「编辑」那颗键才是把正文送回输入框的入口。
+      //
+      // 清空仍然只清「还是被提交的那段字」的槽（与成功路径同一条守卫）：等待期间新写的
+      // 草稿不是这条失败消息的一部分，不能顺手抹掉。
+      writeDraft(sourceKey, (current) => (current.trim() === text ? '' : current));
       pendingSends.markFailed(pendingKey, refsRejection ?? errorMessage(error));
       return false;
     } finally {
@@ -266,7 +269,7 @@ export function useChatSubmit({
     // 断线时不要留下一个「看起来在飞、其实什么都没发」的灰气泡：`submitText` 在
     // `!connected` 时直接早退（不抛错），所以这里自己把它钉成失败态（仍可再重试）。
     if (!connected) {
-      pendingSends.markFailed(pending.id, t('chat.pendingSend.offline'));
+      pendingSends.markFailed(pending.id, 'offline');
       return;
     }
     await submitText(pending.text, pending.sessionId ?? undefined, pending.refs, pending.id);

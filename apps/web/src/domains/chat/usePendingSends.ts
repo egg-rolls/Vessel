@@ -1,12 +1,15 @@
 /**
- * 把「本地待确认」接到真实的**事件流**上：订阅 store、扫超时、吃回显。
+ * 把「本地待确认」接到真实的**事件流**上：订阅 store、扫超时、吃回显、认领队列 id。
  *
- * 它只做三件事，且都不碰渲染树：
+ * 它只做四件事，且都不碰渲染树：
  * 1. `useSyncExternalStore` 订阅 `pendingSends`（渲染侧拿到一份稳定的数组快照）；
- * 2. 1 s 节拍调 `sweep()` —— 15 s 没回显 ⇒ 失败态（**永不静默消失**）；
+ * 2. 1 s 节拍调 `sweep()` —— 15 s 没回显 / 3 min 没被取用 ⇒ 失败态（**永不静默消失**）；
  * 3. 盯 `snapshot.entries` 的水位：新到的 `run.started` / `user.message` 交给
  *    `noteEvent()` 认领（首选 `run_id`，没有才按队首）。认领即从 store 摘除 ——
- *    「不重复」是结构性的（摘掉之后没有第二份可画），不是渲染层去重。
+ *    「不重复」是结构性的（摘掉之后没有第二份可画），不是渲染层去重；
+ * 4. 同一水位上吃 `agent.message.queued`：把服务端那条队列条目的 `message_id` 挂到
+ *    对应的 pending 上（`noteQueued`）。有了这个共享身份，条带才能让客户端那行**精确顶替**
+ *    服务端那行（`pending-placement.ts#claimsEntry`），而不是同一条消息在条带上画两遍。
  *
  * **为什么从 `entries` 读而不是直接订阅 WS**：`entries` 就是 `EventStore` 已经过
  * 去重 / 排序 / 归属判定之后的那份（锚点事件不参与裁剪），拿它当唯一输入口径与
@@ -18,6 +21,7 @@
 
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { StoredEvent } from '../../state/events';
+import { queuedMessageOf } from './pending-placement';
 import { PENDING_SWEEP_INTERVAL_MS, type PendingSend, pendingSends } from './pending-sends';
 
 /** 只认这两类事件（与 `pending-sends.ts` 的 `ECHO_EVENT_TYPES` 同一份口径）。 */
@@ -69,10 +73,17 @@ export function usePendingSends(options: {
   onRetry?: (pending: PendingSend) => void;
 }): {
   pending: readonly PendingSend[];
+  /** 已经被服务端取用（回显到达）的 `message_id`：条带据此立刻滤掉那份缓存读数。 */
+  sentMessageIds: readonly string[];
   retry: (pending: PendingSend) => void;
   dismiss: (pending: PendingSend) => void;
 } {
   const all = useSyncExternalStore(pendingSends.subscribe, pendingSends.list, pendingSends.list);
+  const sentMessageIds = useSyncExternalStore(
+    pendingSends.subscribe,
+    pendingSends.sentMessageIds,
+    pendingSends.sentMessageIds,
+  );
 
   // 只看当前会话的 pending：草稿态（sessionId 为 null）的 pending 在会话 id 落定前也要画，
   // 所以「null 会话」单独放行（它还没有归属，切走之前必然属于眼前这一屏）。
@@ -119,14 +130,20 @@ export function usePendingSends(options: {
       if (entry.seq <= watermark.current) continue;
       if (entry.seq > next) next = entry.seq;
       const echo = echoOf(entry);
-      if (echo === undefined) continue;
-      pendingSends.noteEvent(echo);
+      if (echo !== undefined) {
+        pendingSends.noteEvent(echo);
+        continue;
+      }
+      // 队列 id：与回显同一个水位、同一份 entries —— 认领一次就挂住（幂等）。
+      const queued = queuedMessageOf(entry);
+      if (queued !== undefined) pendingSends.noteQueued(queued);
     }
     watermark.current = next;
   }, [options.entries, options.sessionId]);
 
   return {
     pending,
+    sentMessageIds,
     retry: (item) => {
       // 真正的重发在 `useChatSubmit`（它手里有 client / 草稿 / refs）；这里只把状态复位。
       // 复位放在重发之前，避免「重发立刻失败」时气泡还停在 failed 一眼看不出在重试。
