@@ -23,6 +23,7 @@ import {
   PROJECTION_POLICY_VERSION,
   type ProjectionRuntimeMode,
   planClearedToolResults,
+  projectionVolumeDimensionApplies,
   renderArchiveNotice,
   renderContextOverflowNotice,
   renderContextTrimNotice,
@@ -30,6 +31,7 @@ import {
   renderSystemRevisionNotice,
   resolveProjection,
   setWindowProjectionMode,
+  shouldCompactForToolResultVolume,
   shouldPublishSystemContext,
   systemContextChangesFromFingerprint,
   type ToolResultPressureReport,
@@ -268,6 +270,46 @@ interface RunContextAccounting {
   providerPrompt?: number;
 }
 
+/** 段起点压缩的触发维度（`ContextManager.shouldCompact()` 的三个维度，按判定顺序）。 */
+type SegmentCompactionTrigger = 'token' | 'message_cap' | 'tool_result_volume';
+
+/**
+ * 段起点压缩判据的**输入快照**（0.56 ctx-drop）：跟着 `context.compacted` 一起落盘。
+ *
+ * 事件里带这些数的理由：压缩是「同一个会话的请求突然变短」的唯一正常原因，而旧事件只有
+ * `removed / remaining` —— 事后无法回答「为什么这次压缩了」（估算多少、用哪个系数校正、
+ * 跟哪条线比）。真实现场就是靠这几个数才定死「没有锚点 ⇒ 乘 1.15 ⇒ 越过阈值」。
+ */
+interface SegmentCompactionDecision {
+  /** 判据里先成立的那个维度。 */
+  trigger: SegmentCompactionTrigger;
+  /** 整窗上界估算（未校正；`estimateMessagesTokensUpperBound` 口径）。 */
+  estimate_upper: number;
+  /** 生效的锚点比值；`null` = 没有可用锚点（此时用 `factor` 那条保守边距）。 */
+  anchor_ratio: number | null;
+  /** 实际乘上去的系数（= `anchor_ratio`，或 `NO_ANCHOR_SAFETY_MARGIN`）。 */
+  factor: number;
+  /**
+   * 与阈值比较的那个数（估算 × 系数，再取 provider 地板）。
+   */
+  token_count: number;
+  /**
+   * 窗口自己算的那个数（`WorkingContext.tokenCount`）。
+   *
+   * 与 `token_count` 不等只有一种原因：包装层没有把锚点转发给窗口（
+   * `packages/agent` 的 `RoleAwareContext` 就是这样），于是窗口按
+   * `NO_ANCHOR_SAFETY_MARGIN`（×1.15）高报。这条差值本身就是「这次压缩是不是只由
+   * 保守边距推动」的判据，见 `compactionWouldBeMarginOnly`。
+   */
+  window_token_count: number;
+  /** 比较线 = `maxTokens × compactThreshold`。 */
+  threshold: number;
+  /** 压缩前的消息条数。 */
+  messages_before: number;
+  /** 窗口预算（`ContextConfig.maxTokens`）。 */
+  context_max: number;
+}
+
 /** 新建一次 run 的 usage 统计 */
 function createUsageStats(startTime: number): UsageStats {
   return {
@@ -320,6 +362,11 @@ function legacyRunFromRecord(record: RunRecord): LegacyRunSnapshot | undefined {
 /** 错误文本（事件/持久化统一口径） */
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** 事件 `data` 这类「键值容器」的窄化（只判形状，不解释语义）。 */
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -1114,6 +1161,25 @@ export class ExecutionUnit {
     if (windowProjectionMode(window) === 'passthrough') {
       this.publishProjectionPressure(window, execution.runId);
     }
+    // 0.56 ctx-drop：判据的**输入**先拍一份快照 —— 压缩一旦发生，请求长度会当场掉一大截，
+    // 而 `context.compacted` 以前只报 removed / remaining：为什么这次变小（估算多少、
+    // 乘了哪个系数、跟哪条线比）在事后的日志里查不到，只能靠推。现在跟着事件一起落盘。
+    const decision = this.segmentCompactionDecision(execution);
+    if (this.compactionWouldBeMarginOnly(decision)) {
+      // 只由「没有锚点 ⇒ ×1.15」推过线：不压缩，并留下可查的原因。
+      // 方向是安全的（少压不会撑爆：真超限由 provider overflow + 下一个段起点兜住），
+      // 而反方向的代价是**不可逆的信息损失**（摘要替换 766 条消息），不对称。
+      this.logger.warn('segment compaction skipped (no-anchor margin only)', {
+        session_id: execution.sessionId,
+        estimate_upper: decision.estimate_upper,
+        ledger_token_count: decision.token_count,
+        window_token_count: decision.window_token_count,
+        threshold: decision.threshold,
+        anchor_ratio: decision.anchor_ratio,
+        messages: decision.messages_before,
+      });
+      return;
+    }
     let removed: number;
     // 0.56：压缩前后各拍一份「带图消息」的快照 —— 被删掉的图要留一条
     // `context.image_dropped{reason:'compaction'}`（GUI 回看时看得见「这里曾有 5 张图」，
@@ -1126,17 +1192,88 @@ export class ExecutionUnit {
       // 占位符压缩）。真撑爆时走「超限」卡 + 失败收尾那条路。
       return;
     }
+    // 0.55 P0：窗口真的变小了 ⇒ 「上一次 provider 回报」这条地板必须撤掉，
+    // 否则压缩后的显示会卡在压缩前的数（地板只保证「不倒退」，不该阻止「正当缩小」）。
+    const compactedState = removed > 0 ? this.accounting(execution) : undefined;
     if (removed > 0) this.reportCompactionImageDrops(execution, imagesBefore);
-    this.publishCompacted(window, execution.runId, execution.sessionId, removed, 'auto');
-    if (removed > 0) {
+    this.publishCompacted(window, execution.runId, execution.sessionId, removed, 'auto', decision);
+    if (compactedState !== undefined) {
       // 压缩删掉了中段：本段从压缩后的视图开始，必须显式标段因，否则守卫会当成前缀重写。
       this.pendingPrefixReason ??= 'compaction';
-      // 0.55 P0：窗口真的变小了 ⇒ 「上一次 provider 回报」这条地板必须撤掉，
-      // 否则压缩后的显示会卡在压缩前的数（地板只保证「不倒退」，不该阻止「正当缩小」）。
-      const state = this.accounting(execution);
-      state.providerPrompt = undefined;
-      state.requestView = undefined;
+      compactedState.providerPrompt = undefined;
+      compactedState.requestView = undefined;
     }
+  }
+
+  /**
+   * 这次段起点压缩是不是**只由保守边距推动**的（0.56 ctx-drop）。
+   *
+   * 判据：账本口径（与显示同一个数、有锚点时就是实测比值）**没过线**，而窗口口径
+   * （`WorkingContext.tokenCount`）过线了。两者不等只可能因为窗口没拿到锚点
+   * （`RoleAwareContext` 不转发 `setContextAnchor`），于是它按 `NO_ANCHOR_SAFETY_MARGIN`
+   * ×1.15 高报 —— 真实现场就是 616,378 的真实 prompt（62%）被当成 867,898（87%）。
+   *
+   * 为什么要拦：高报 15% 换来的是**不可逆**的压缩（766 条消息 → 一条摘要），而它挡住的
+   * 「真超限」有别的兜底（provider overflow 卡 + 下一个段起点），代价可逆（多一次往返）。
+   * 量级不对称，所以宁可这一次不压，并把原因写进 warning。
+   *
+   * 体积维度 / 条数兜底不看 token 数，它们照旧生效（这里只在 token 维度过线时判）。
+   */
+  private compactionWouldBeMarginOnly(decision: SegmentCompactionDecision): boolean {
+    if (decision.trigger !== 'token') return false;
+    return decision.token_count <= decision.threshold;
+  }
+
+  /**
+   * 段起点压缩判据的**输入**（`context.compacted` 的事件载荷，0.56 ctx-drop）。
+   *
+   * 口径与 `ContextManager.shouldCompact()` 逐项对齐（它判的三个维度就是这三个）：
+   * `tokenCount`（估算 × 系数，再取 provider 地板）对 `maxTokens × compactThreshold`、
+   * 保留工具结果的体积、消息条数兜底。
+   *
+   * 为什么值得复述：同一条会话重启后请求突然短掉一大截，唯一可能的原因是这里某个输入
+   * 在段起点变了（最典型的是「没有锚点 ⇒ 乘 1.15」）。事件里没有这些数，就只能猜。
+   *
+   * 两个 `token_count` 都要报：`window_token_count` 是窗口自己算的那个（包装层没转发
+   * 锚点时它乘 1.15），`token_count` 是 runtime 账本口径（与显示 / `context_max` 快照
+   * 同一个数）。两者不等本身就是一条可查的事实（见 `compactionWouldBeMarginOnly`）。
+   */
+  private segmentCompactionDecision(execution: Run): SegmentCompactionDecision {
+    const window = execution.workingContext;
+    const accounting = this.accounting(execution);
+    const anchorRatio = accounting.anchor?.ratio;
+    const factor = anchorRatio ?? NO_ANCHOR_SAFETY_MARGIN;
+    // 端口上的这三个成员都是可选的（包装层不一定转发）；缺省值与
+    // `MemoryWorkingContext` 的构造缺省一致（`1_000_000` / `0.85`）。
+    const maxTokens = window.maxTokens ?? 1_000_000;
+    const threshold = maxTokens * (window.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD);
+    const windowTokenCount = window.tokenCount ?? 0;
+    const estimateUpper = estimateMessagesTokensUpperBound(window.messages);
+    // 账本口径：与显示同一个数（`correctedContextTokens`）。
+    const ledgerTokenCount = this.correctedContextTokens(execution, estimateUpper);
+    const volumeExceeded = projectionVolumeDimensionApplies(windowProjectionMode(window))
+      ? shouldCompactForToolResultVolume(window.messages, maxTokens)
+      : false;
+    // 判据只有三个维度（见 `shouldCompact`）：token 主阈值、条数兜底、体积维度。
+    // `trigger` 按**两个口径任一过线**报（窗口是实际判定方，账本是显示/回落的基准）；
+    // 「窗口过线而账本没过」这一种由 `compactionWouldBeMarginOnly` 拦下。
+    const trigger: SegmentCompactionTrigger =
+      windowTokenCount > threshold || ledgerTokenCount > threshold
+        ? 'token'
+        : volumeExceeded
+          ? 'tool_result_volume'
+          : 'message_cap';
+    return {
+      trigger,
+      estimate_upper: estimateUpper,
+      anchor_ratio: anchorRatio ?? null,
+      factor,
+      token_count: ledgerTokenCount,
+      window_token_count: windowTokenCount,
+      threshold: Math.round(threshold),
+      messages_before: window.messages.length,
+      context_max: maxTokens,
+    };
   }
 
   /**
@@ -1214,28 +1351,141 @@ export class ExecutionUnit {
    *
    * 为什么过滤模型：换模型的 tokenizer 不同，硬套别人的比值比不校正更糟
    * （与 `MemoryWorkingContext.setContextAnchor` 同一判据，两处必须一致）。
+   *
+   * ## 为什么还要「从事件日志复原」（0.56 ctx-drop）
+   *
+   * 锚点是**唯一**能让压缩判据（`shouldCompact`）与真实占有对上的东西：有锚点时
+   * `tokenCount = 估算 × ratio`（实测 ≈1.0），没有时退回 `NO_ANCHOR_SAFETY_MARGIN`
+   * （×1.15）。这个 15% 足以把一次「不该压缩」的段起点推过 0.85 阈值 —— 真实现场：
+   * 一条 1M 预算的会话，最后一条请求 provider 实测 prompt = 616,378（62%），
+   * 重启后的第一个段起点却把 1941 条消息压成了 1175 条（请求 1940 → 1179 条消息），
+   * 而**同一进程内**的下一个段起点什么都没发生。同一条会话、同一份落盘，
+   * 「模型看到什么」不该因为进程重启而变化 —— 这就是那个 bug。
+   *
+   * 锚点会丢的路径有两条，都不报错：会话壳里没有 `context_anchor` 字段（字段被别的
+   * 写者洗掉 / 壳落后于日志），或壳里的锚点记的是别的模型（换模型后按判据作废）。
+   * 而锚点的两个分量本来就躺在事件日志里：`llm.response.usage.prompt_tokens`（分子）与
+   * `llm.request.estimated_tokens`（分母，同一口径的请求视图上界估算）。所以壳丢了
+   * 就从日志尾部把这两个数读回来，比值与 `recordProviderPromptTokens` 算出来的**同一口径**，
+   * 段起点因此对「重启 / 不重启」等价。
    */
-  private adoptStoredAnchor(
+  private async adoptStoredAnchor(
     execution: Run,
     stored: SessionState | null,
     lastRequestTokens?: number,
-  ): void {
+  ): Promise<void> {
     const state = this.accounting(execution);
     const normalized = normalizeContextAnchor(stored?.context_anchor);
-    state.anchor =
-      normalized === undefined
-        ? undefined
-        : normalized.model !== undefined &&
-            this.model !== undefined &&
-            normalized.model !== this.model
-          ? undefined
-          : normalized;
+    const modelMismatch =
+      normalized !== undefined &&
+      normalized.model !== undefined &&
+      this.model !== undefined &&
+      normalized.model !== this.model;
+    state.anchor = normalized === undefined || modelMismatch ? undefined : normalized;
     // 地板：上一次 provider 回报的 per-request 用量（prompt + completion，`llm.response`）。
     // 只做 `max` 的下界，保证「run 起点数字不倒退」（合同 1）——**不是**现值。
     state.providerPrompt =
       lastRequestTokens !== undefined && lastRequestTokens > 0 ? lastRequestTokens : undefined;
+    if (state.anchor === undefined) {
+      // 不许静默：壳里的锚点为什么不可用、后果是什么，先记下来。
+      const reason =
+        stored?.context_anchor === undefined
+          ? 'absent'
+          : normalized === undefined
+            ? 'invalid'
+            : 'model_mismatch';
+      const recovered = await this.recoverAnchorFromLog(execution.sessionId);
+      if (recovered !== undefined) {
+        state.anchor = recovered;
+        this.logger.info('context anchor recovered from event log', {
+          session_id: execution.sessionId,
+          reason,
+          model: this.model,
+          ratio: recovered.ratio,
+          prompt_tokens: recovered.prompt_tokens,
+          request_estimate: recovered.request_estimate,
+        });
+      } else {
+        // 复原不出来（没有日志 / 尾部找不到配对）才真的没有锚点：这条 warning 是
+        // 「本次段起点的压缩判据用了 ×1.15 保守边距」的唯一痕迹。
+        this.logger.warn('context anchor unavailable at segment start', {
+          session_id: execution.sessionId,
+          reason,
+          model: this.model,
+          factor: NO_ANCHOR_SAFETY_MARGIN,
+          consequence:
+            'compaction threshold is compared against estimate*1.15 instead of the measured ratio',
+        });
+      }
+    }
     // 窗口也注入一份：直接持有 `MemoryWorkingContext` 的实现（TUI / 无包装层）据此校正。
     execution.workingContext.setContextAnchor?.(state.anchor, this.model);
+  }
+
+  /**
+   * 段起点复原锚点时回扫的事件条数。
+   *
+   * 一条 run 收尾时，最后一条 llm.request 之后还有 llm.response、工具事件、notice、
+   * run.completed —— 真实会话实测 239 条（125421 → 125660）。512 覆盖这种量级，
+   * 同时仍是一次范围读（几块），不扫整份会话；更长的尾巴就返回 undefined（宁可报
+   * warning 也不整份读）。
+   */
+  private static readonly ANCHOR_RECOVERY_TAIL_EVENTS = 512;
+
+  /**
+   * 从事件日志尾部复原锚点（`prompt_tokens ÷ 请求视图估算`，与 `recordProviderPromptTokens`
+   * 同一口径）。读的是范围读（`sinceSeq` + `limit`），不扫整份会话。
+   *
+   * 拿不到「配对的两个数」时返回 `undefined`：只有请求没有响应（run 在提供商那一步崩了）
+   * 就没有可用的真实用量，宁可报 warning 也不猜。
+   */
+  private async recoverAnchorFromLog(sessionId: string): Promise<ContextAnchor | undefined> {
+    const log = this.eventLog;
+    if (log === undefined) return undefined;
+    try {
+      await log.flush(sessionId);
+      const head = await log.lastSeq?.(sessionId);
+      if (head === undefined || head <= 0) return undefined;
+      const tailSize = ExecutionUnit.ANCHOR_RECOVERY_TAIL_EVENTS;
+      const tail = await log.read(sessionId, {
+        sinceSeq: Math.max(0, head - tailSize),
+        limit: tailSize,
+      });
+      let estimate: number | undefined;
+      let prompt: number | undefined;
+      let at = 0;
+      for (const event of tail) {
+        const data = isRecordValue(event.data) ? event.data : undefined;
+        if (data === undefined) continue;
+        if (event.type === 'llm.request') {
+          const value = data.estimated_tokens;
+          if (typeof value === 'number' && Number.isFinite(value) && value > 0) estimate = value;
+          continue;
+        }
+        if (event.type !== 'llm.response') continue;
+        const usage = isRecordValue(data.usage) ? data.usage : undefined;
+        const value = usage?.prompt_tokens;
+        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) continue;
+        prompt = value;
+        if (typeof event.ts === 'number' && Number.isFinite(event.ts)) at = event.ts;
+      }
+      if (estimate === undefined || prompt === undefined) return undefined;
+      const ratio = clampAnchorRatio(prompt / estimate);
+      if (ratio === undefined) return undefined;
+      return {
+        ratio,
+        prompt_tokens: prompt,
+        request_estimate: estimate,
+        ...(this.model !== undefined && this.model.length > 0 ? { model: this.model } : {}),
+        at,
+      };
+    } catch (error) {
+      this.logger.warn('context anchor recovery failed', {
+        session_id: sessionId,
+        error: errorText(error),
+      });
+      return undefined;
+    }
   }
 
   /**
@@ -2440,7 +2690,7 @@ export class ExecutionUnit {
     // 必须在 seed 之后注入：播种会 setSessionId，切会话时会把锚点清掉。
     // 落盘锚点同时进本段账本（`contextAccounting`）—— provider 的包装层
     // （`RoleAwareContext`）不转发 `setContextAnchor`，账本才是唯一权威。
-    this.adoptStoredAnchor(execution, stored, history.lastRequestTokens);
+    await this.adoptStoredAnchor(execution, stored, history.lastRequestTokens);
     // 0.52：恢复「上次发布过的环境快照指纹」，让重启后的第一条消息能正确去重。
     this.restorePromptContextFingerprint(stored);
 
@@ -2895,7 +3145,11 @@ export class ExecutionUnit {
       // 且必须在 seed 之后（seed 会 clear 窗口、切会话会清锚点）。
       this.seedWorkingContext(execution, history);
       this.seedRealTokensFromLastRequest(execution, history);
-      this.adoptStoredAnchor(execution, history.sessionState ?? null, history.lastRequestTokens);
+      await this.adoptStoredAnchor(
+        execution,
+        history.sessionState ?? null,
+        history.lastRequestTokens,
+      );
       // 0.53 U2：resume 同为段起点 —— 模式也要在压缩之前先钉住（同 run()）。
       this.primeSegmentProjectionMode(execution, history.sessionState ?? null);
       // 0.52 V2：resume 也是一个段起点 —— 压缩同样只在这里做一次。
@@ -3664,6 +3918,7 @@ export class ExecutionUnit {
     sessionId: string,
     removed: number,
     reason: ContextCompactedReason,
+    decision?: SegmentCompactionDecision,
   ): void {
     if (removed <= 0) return;
     // C2：直发路径（loop 自动 / overflow / manual）发布后记录 id，
@@ -3682,6 +3937,11 @@ export class ExecutionUnit {
         reason,
         // C1：摘要降级可观测（旧事件形状不变，字段缺省即不写）。
         ...(report?.degraded !== undefined ? { degraded: report.degraded } : {}),
+        // 0.56 ctx-drop：判据的输入（段起点那条路径才有）。请求长度掉一大截时，
+        // 这张表就是「为什么」：估算多少、乘了哪个系数（有锚点 = 实测比值，
+        // 无锚点 = 1.15 保守边距）、跟哪条线比、多出来的那截是什么。
+        ...(decision !== undefined ? { decision } : {}),
+        ...(decision !== undefined ? { messages_before: decision.messages_before } : {}),
       },
       ts: Date.now(),
     });
