@@ -365,6 +365,7 @@ function errorJson(
 /** 0.56：没有任何 auth 配置时的等价物 —— 空后端 = 行为退回 0.55。 */
 const DISABLED_AUTH: PlatformAuthOptions = {
   publicOrigin: null,
+  publicOrigins: [],
   allowedHosts: [],
   backends: [],
   session: { idleMinutes: 30, absoluteHours: 12 },
@@ -389,32 +390,57 @@ function csrfRejectedMessage(reason: 'csrf_missing' | 'csrf_failed'): string {
 }
 
 /**
- * 校验 `auth.publicOrigin`：只接受 `scheme://host[:port]`，不接受路径/查询/凭据。
+ * 校验单个 `auth.public_origin` / `auth.public_origins[i]`：只接受
+ * `scheme://host[:port]`，不接受路径/查询/凭据。
  *
- * 它是 `redirect_uri` 的**唯一**来源（不许从请求头推导），配错就是登录后 404，
+ * 来源是 `redirect_uri` 的**唯一**来源（不许从请求头推导），配错就是登录后 404，
  * 所以在启动时 fail-fast，而不是等用户点登录才发现。
  */
-function normalizePublicOrigin(raw: string | null | undefined): string | null {
+function normalizePublicOrigin(
+  raw: string | null | undefined,
+  label = 'auth.publicOrigin',
+): string | null {
   if (raw === null || raw === undefined || raw.trim() === '') return null;
   const trimmed = raw.trim();
   let url: URL;
   try {
     url = new URL(trimmed);
   } catch {
-    throw new Error(
-      `auth.publicOrigin "${trimmed}" is not an absolute URL (expected https://host).`,
-    );
+    throw new Error(`${label} "${trimmed}" is not an absolute URL (expected https://host).`);
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new Error(`auth.publicOrigin "${trimmed}" must be http(s).`);
+    throw new Error(`${label} "${trimmed}" must be http(s).`);
   }
   if (url.username !== '' || url.password !== '') {
-    throw new Error(`auth.publicOrigin "${trimmed}" must not carry credentials.`);
+    throw new Error(`${label} "${trimmed}" must not carry credentials.`);
   }
   if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
-    throw new Error(`auth.publicOrigin "${trimmed}" must be scheme://host[:port] only.`);
+    throw new Error(`${label} "${trimmed}" must be scheme://host[:port] only.`);
   }
   return url.origin;
+}
+
+/**
+ * 0.60：合并 `auth.public_origins`（并列白名单）与 `auth.public_origin`（单来源，兼容）。
+ *
+ * 顺序稳定（`public_origin` 在前、列表按配置顺序跟上）并去重。两条同时出现不是错误：
+ * `public_origin` 的语义就是「只有一个元素的 `public_origins`」，合并只是把这句话写实。
+ */
+export function resolvePlatformPublicOrigins(input: {
+  publicOrigin?: string | null | undefined;
+  publicOrigins?: readonly string[] | undefined;
+}): string[] {
+  const merged: string[] = [];
+  const push = (origin: string | null): void => {
+    if (origin === null || merged.includes(origin)) return;
+    merged.push(origin);
+  };
+  push(normalizePublicOrigin(input.publicOrigin));
+  const list = input.publicOrigins ?? [];
+  list.forEach((entry, index) => {
+    push(normalizePublicOrigin(entry, `auth.publicOrigins[${String(index)}]`));
+  });
+  return merged;
 }
 
 /**
@@ -449,17 +475,21 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
   // 0.56 登录基座。未配置 auth.backends 时后端列表为空 ⇒ AuthService 报
   // `enabled === false`，不拦任何人，行为与 0.55 逐字一致（不锁死回环）。
   const authOptions: PlatformAuthOptions = { ...DISABLED_AUTH, ...opts.auth };
-  const publicOrigin = normalizePublicOrigin(authOptions.publicOrigin);
-  const publicHosts = publicOrigin === null ? [] : [new URL(publicOrigin).host];
+  // 0.60：来源白名单（`public_origins` 并列 + `public_origin` 单来源，合并去重）。
+  // 一个来源都没有 ⇒ 空列表 ⇒ 公网/Host 白名单不启用（与今天逐字一致）。
+  const publicOrigins = resolvePlatformPublicOrigins(authOptions);
+  const publicHosts = [...new Set(publicOrigins.map((origin) => new URL(origin).host))];
   // 公网 origin 同时是合法 CORS Origin：反代后面板仍是同源页面，但 Origin 头会
-  // 是公网域名；把它并入 allowlist 才能过 Origin 闸且拿到正确的 CORS 头。
+  // 是公网域名；把它们并入 allowlist 才能过 Origin 闸、拿到正确的 CORS 头，
+  // 并让 CSP 的 `connect-src` 里出现每个来源的 `ws(s)://`。
   const httpAllowedOrigins =
-    publicOrigin === null
+    publicOrigins.length === 0
       ? allowedOrigins
-      : normalizeAllowedOrigins([...allowedOrigins, publicOrigin]);
+      : normalizeAllowedOrigins([...allowedOrigins, ...publicOrigins]);
   const authService = new AuthService({
     ...authOptions,
-    publicOrigin,
+    publicOrigin: publicOrigins[0] ?? null,
+    publicOrigins,
     env: authOptions.env ?? (process.env as Record<string, string | undefined>),
     // 0.56 P2：`POST /auth/unlock` 要比对这个值（本机 + 平台 token 才能解锁登录限速）。
     // 只比较、不回显、不落盘。

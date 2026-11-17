@@ -519,7 +519,12 @@ lease:
 
 ```yaml
 auth:
-  public_origin: https://egg-rolls.top        # redirect_uri 的唯一来源（无尾斜杠）
+  # 来源白名单（0.60）：redirect_uri 只能由这里的某一项 + 固定路径拼出来。
+  # 线上域名与回环直连可以**并列**（不是通配）；挑哪一个由受信边缘决定，见下。
+  public_origins:
+    - https://egg-rolls.top
+    - http://127.0.0.1:8642
+  public_origin: https://egg-rolls.top   # 兼容写法：等价于「只有一个元素的 public_origins」
   backends:
     # A. 口令后端（自建、离线可用；可选 TOTP 第二因子）
     - kind: password
@@ -540,7 +545,19 @@ auth:
 ```
 
 - **不配 `auth.backends`（或 `enabled: false`）= 功能不存在**：回环照旧可用，行为与 0.55 逐字一致，前端不出现登录入口（不锁死、不出现坏按钮）。
-- `public_origin` 是 `redirect_uri` 的**唯一**来源：`<public_origin>/auth/github/callback`，必须与 GitHub OAuth App 登记的地址逐字节一致。缺失或非法时**只有 `github_oauth` 后端**被忽略并告警（口令后端不需要 redirect_uri），gateway 照常启动。
+- **`public_origins` 的形状（0.60）**：数组，每项必须是**完整 origin** —— `scheme://host[:port]`，**无路径、无尾斜杠、无默认端口、无凭据**。
+  - 写成 `egg-rolls.top`（缺 scheme）、`https://egg-rolls.top/login`（带路径）、`https://egg-rolls.top/`（尾斜杠）都会被 `config validate` / 启动前的校验**直接拒绝**，并给出正确写法示例。
+  - 非 https 只有 **loopback / 私网**（`localhost`、`127.0.0.0/8`、`::1`、`10.x`、`172.16–31.x`、`192.168.x`、`169.254.x`、`fc00::/7`、`fe80::/10`）可以用 `http://`；公网明文是错误（会话 cookie 会丢掉 `Secure`）。
+- **与 `public_origin` 的关系**：`public_origin` 保留且不废弃，语义就是「只有一个元素的 `public_origins`」。两者同时出现时**合并去重**（`public_origin` 在前，列表按配置顺序跟上），不报错；启动日志会打一行「使用了 N 个公网来源」。只有单个 `public_origin` 的老配置行为**逐字不变**（redirect_uri 只由配置决定，不看请求）。
+- **来源选择规则（关键）**：来源只由**受信边缘**（`gateway/auth.ts#resolveRequestEdge`）决定，**绝不按 `Host` 头选**：
+  1. 只有 socket 属受信代理（回环，或列在 `trusted_proxies`）**且**反代密钥（`gateway.proxy_secret_env`）成立时，`X-Forwarded-Host` / `X-Forwarded-Proto` 才被采信；否则一律用请求自身；
+  2. 用生效 Host 去白名单里取**同一个 Host** 的那一条（Host 相同而 scheme 不同时按生效协议挑；挑不出唯一一条 ⇒ 拒绝，不给白名单外的值）；
+  3. 白名单只有一条时就是它（老行为）；一条都没配 ⇒ 不启用公网来源，`github_oauth` 后端降级并告警；
+  4. 本机直连（回环 socket ∧ 未经受信代理 ∧ Host 指回环）且 Host 对不上任何条目时，退回白名单里的那个回环来源（`localhost` / `[::1]` 访问不会被 500 挡住）。
+- **两条安全红线（改代码前必须对照）**：
+  1. `redirect_uri` **只能**由「选中的来源 + 固定路径 `/auth/github/callback`」拼出，且选中的来源必须来自白名单；拼好之后**不再受任何请求参数影响**（`Host` / `X-Forwarded-*` / 查询串都改不了它）。
+  2. **state 绑定本次来源**：`/auth/github/start` 把选中的来源与它拼出的 `redirect_uri` 一起写进在途流程；`/auth/github/callback` 用同一套受信边缘判定再选一次，**必须等于 state 里那个来源且仍在白名单内**，否则直接拒绝（回登录页 `state_invalid`，文案不含内部细节）。这是防开放重定向的关键一格。
+- `public_origin` / `public_origins` 是 `redirect_uri` 的**唯一**来源：必须与 GitHub OAuth App 登记的地址逐字节一致（多个来源 ⇒ OAuth App 里要把每个域名的回调地址都登记上，GitHub 允许一个 App 配多个 callback URL）。一条都没有时**只有 `github_oauth` 后端**被忽略并告警（口令后端不需要 redirect_uri），gateway 照常启动。
 - `client_secret` 只从 `client_secret_env` 指向的**环境变量**读；不要写进配置（validator 直接报错并给修复提示）。OAuth access token 用完即弃：不落盘、不进日志、不进错误文案。
 - 白名单只认 `allow_user_ids` 里的**数值** user id；email 会变，这里不作为身份。
 

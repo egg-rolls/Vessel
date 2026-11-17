@@ -582,10 +582,28 @@ export interface AuthConfig {
   /** 显式开关；false = 忽略 backends，退回今天的行为。 */
   enabled?: boolean;
   /**
-   * 公网 origin（如 `https://egg-rolls.top`），`redirect_uri` 的唯一来源。
+   * 公网 origin（如 `https://egg-rolls.top`），`redirect_uri` 的来源。
    * 只接受 scheme://host[:port]，不许带路径/查询/凭据。
+   *
+   * 0.60：语义等价于「只有一个元素的 `publicOrigins`」；两者同时出现时合并去重。
    */
   publicOrigin?: string;
+  /**
+   * 0.60：**并列**的公网来源白名单（不是通配）。线上域名与回环直连可以并存：
+   *
+   * ```yaml
+   * auth:
+   *   public_origins:
+   *     - https://egg-rolls.top
+   *     - http://127.0.0.1:8642
+   * ```
+   *
+   * 每条必须是完整 origin（scheme + host[:port]，无路径、无尾斜杠）；
+   * 非 https 的只允许 loopback / 私网地址。登录时选哪一个由**受信边缘**决定
+   * （`X-Forwarded-*` 只在反代密钥成立时被采信），`redirect_uri` 只能是
+   * 「选中的来源 + 固定路径」。
+   */
+  publicOrigins?: string[];
   /** 额外允许的 Host（反代保留原始 Host 但域名与 publicOrigin 不同时用）。 */
   allowedHosts?: string[];
   /**

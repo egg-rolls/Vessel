@@ -42,7 +42,17 @@ export interface ResolvedAuthSession {
 }
 
 export interface ResolvedAuthSettings {
-  /** Public origin, or null when not configured. */
+  /**
+   * 0.60：公网来源白名单（有序、已归一、去重）。空 = 不启用公网来源（旧行为）。
+   * `publicOrigin` 与 `publicOrigins` 合并后的结果。
+   */
+  publicOrigins: string[];
+  /**
+   * 单个公网 origin，或 null。
+   *
+   * 保留给老调用方（= `publicOrigins[0] ?? null`）；新代码一律读 `publicOrigins`
+   * 并按受信边缘选一个 —— 单读这个字段等于默认「只有一个来源」。
+   */
   publicOrigin: string | null;
   allowedHosts: string[];
   /** undefined = trust only loopback sockets. */
@@ -61,13 +71,32 @@ export interface ResolvedAuthSettings {
 const DEFAULT_IDLE_MINUTES = 30;
 const DEFAULT_ABSOLUTE_HOURS = 12;
 
-function normalizeOrigin(raw: string | undefined): string | null {
+function normalizeOrigin(raw: unknown): string | null {
   if (typeof raw !== 'string' || raw.trim() === '') return null;
   try {
     return new URL(raw.trim()).origin;
   } catch {
     return null;
   }
+}
+
+/**
+ * 0.60：合并 `public_origin`（单来源，兼容）与 `public_origins`（并列白名单）。
+ *
+ * 顺序：`public_origin` 在前、列表按配置顺序跟上；去重（同一个 origin 写两遍只算一个）。
+ * 两条同时出现**不是错误** —— `public_origin` 的语义就是「只有一个元素的
+ * `public_origins`」。非法条目在这里静默丢弃（validator 已经在前一步报过错）。
+ */
+function mergeOriginList(single: unknown, list: unknown): string[] {
+  const merged: string[] = [];
+  const push = (raw: unknown): void => {
+    const origin = normalizeOrigin(raw);
+    if (origin === null || merged.includes(origin)) return;
+    merged.push(origin);
+  };
+  push(single);
+  if (Array.isArray(list)) for (const entry of list) push(entry);
+  return merged;
 }
 
 function normalizeUserIds(raw: Array<number | string> | undefined): string[] {
@@ -148,7 +177,8 @@ export function resolveAuthSettings(input: {
 }): ResolvedAuthSettings {
   const warnings: string[] = [];
   const raw = input.auth;
-  const publicOrigin = normalizeOrigin(raw?.publicOrigin);
+  const publicOrigins = mergeOriginList(raw?.publicOrigin, raw?.publicOrigins);
+  const publicOrigin = publicOrigins[0] ?? null;
   const allowedHosts = Array.isArray(raw?.allowedHosts)
     ? raw.allowedHosts
         .filter((entry): entry is string => typeof entry === 'string')
@@ -198,15 +228,16 @@ export function resolveAuthSettings(input: {
     });
   }
 
-  if (backends.length > 0 && publicOrigin === null) {
-    // redirect_uri has exactly one source; without it the OAuth backend would point anywhere.
+  if (backends.length > 0 && publicOrigins.length === 0) {
+    // redirect_uri has exactly one source kind: the whitelist; without it the OAuth
+    // backend would point anywhere.
     // 口令后端不需要 redirect_uri，所以只摘掉 github_oauth 那一项 —— 配了口令后端却
     // 因为少一个 publicOrigin 就连登录一起关掉，就是又一次「配置半截 ⇒ 把自己锁在外」。
     const githubCount = backends.filter((backend) => backend.kind === 'github_oauth').length;
     if (githubCount > 0) {
       warnings.push(
-        'auth.publicOrigin is missing or invalid: github_oauth backends are disabled ' +
-          '(redirect_uri would be undefined). Password login and the loopback WebUI keep working.',
+        'auth.publicOrigin / auth.publicOrigins is missing or invalid: github_oauth backends are ' +
+          'disabled (redirect_uri would be undefined). Password login and the loopback WebUI keep working.',
       );
       const kept = backends.filter((backend) => backend.kind !== 'github_oauth');
       backends.length = 0;
@@ -220,6 +251,7 @@ export function resolveAuthSettings(input: {
       : undefined;
 
   return {
+    publicOrigins,
     publicOrigin,
     allowedHosts,
     ...(trustedProxies !== undefined ? { trustedProxies } : {}),

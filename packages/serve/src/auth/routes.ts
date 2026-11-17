@@ -29,6 +29,7 @@ import {
   OAuthFlowStore,
   resolveClientSecret,
 } from './github-oauth.js';
+import { mergePublicOrigins, selectPublicOrigin } from './origins.js';
 import { dummyPasswordCheck, passwordPolicyError, verifyPassword } from './password.js';
 import { accountKey, ipKey, LoginLimiter, retryAfterSeconds } from './ratelimit.js';
 import {
@@ -82,9 +83,19 @@ export interface AuthSessionSettings {
 
 /** 跑登录面需要的全部设置。 */
 export interface AuthSettings {
-  /** 公网 origin（如 https://egg-rolls.top）：redirect_uri 的唯一来源。 */
-  publicOrigin: string | null;
-  /** 额外允许的 Host（publicOrigin 与回环之外再放行的域名）。 */
+  /**
+   * 0.60：公网来源白名单（有序、已归一、去重）。空 / 省略 = 不启用公网来源。
+   *
+   * `redirect_uri` 只能由这里的某个来源 + 固定路径拼出；选哪一个由**受信边缘**决定
+   * （见 `./origins.js`）。与 `publicOrigin` 同时给出时合并去重。
+   */
+  publicOrigins?: string[] | undefined;
+  /**
+   * 单个公网 origin（如 https://egg-rolls.top）：语义等价于「只有一个元素的
+   * `publicOrigins`」，保留是为了向后兼容。
+   */
+  publicOrigin?: string | null;
+  /** 额外允许的 Host（publicOrigins 与回环之外再放行的域名）。 */
   allowedHosts: string[];
   /** 登录后端；空 = 未配置登录，行为与今天一致。 */
   backends: AuthBackendConfig[];
@@ -169,6 +180,13 @@ export function isAuthPublicPath(pathname: string): boolean {
  */
 export class AuthService {
   readonly settings: AuthSettings;
+  /**
+   * 0.60：公网来源白名单（有序、已归一、去重）。
+   *
+   * 所有「用哪个来源拼 redirect_uri」的判断都读这一份，不读单个 `publicOrigin`：
+   * 两处各读一个字段，迟早会漂移成「CSP 放行 A、登录跳 B」。
+   */
+  readonly publicOrigins: string[];
   readonly sessions: SessionStore;
   readonly flows: OAuthFlowStore;
   readonly credentials: CredentialStore;
@@ -196,8 +214,13 @@ export class AuthService {
     const absoluteHours = Number.isFinite(options.session.absoluteHours)
       ? Math.max(1, options.session.absoluteHours)
       : 12;
+    // 0.60：`publicOrigin` 等价于「只有一个元素的 publicOrigins」——两条配置合并去重，
+    // 顺序是 publicOrigin 在前、列表按配置顺序跟上（单来源部署因此逐字不变）。
+    const publicOrigins = mergePublicOrigins(options.publicOrigins, options.publicOrigin);
+    this.publicOrigins = publicOrigins;
     this.settings = {
-      publicOrigin: options.publicOrigin,
+      publicOrigins: [...publicOrigins],
+      publicOrigin: publicOrigins[0] ?? null,
       allowedHosts: [...options.allowedHosts],
       backends: [...options.backends],
       session: {
@@ -422,7 +445,9 @@ export class AuthService {
       csrfToken: session === null ? null : session.snapshot.csrfToken,
       loginBackends: this.enabled ? this.describeBackends() : [],
       // Ops hint for the login page: the exact redirect_uri to register on GitHub.
-      publicOrigin: this.settings.publicOrigin,
+      // 0.60：多来源时给出**本次请求**会用的那个（选不出来 = null，登录页就不显示这一行），
+      // 单来源时与今天逐字相同；来源清单本身不在这里回显（端点匿名可达）。
+      publicOrigin: selectPublicOrigin(ctx.edge, this.publicOrigins),
       // 口令后端的登录页提示（**不含**任何凭据值）：
       // 还没设口令 ⇒ 登录页告诉用户「用启动日志里的引导码」；`totpRequired` 决定
       // 表单是否要第二个输入框。
@@ -511,10 +536,13 @@ export class AuthService {
   private githubStart(ctx: AuthRequestContext): Response {
     const backend = this.githubBackend();
     if (backend === null) return jsonResponse({ error: 'backend_not_configured' }, 404);
-    const origin = this.settings.publicOrigin;
+    // 0.60：来源由**受信边缘**在白名单里挑一个；选不出来就拒绝。
+    // Never derive redirect_uri from Host / X-Forwarded-*: that is attacker input.
+    const origin = selectPublicOrigin(ctx.edge, this.publicOrigins);
     if (origin === null) {
-      // Never derive redirect_uri from Host / X-Forwarded-*: that is attacker input.
-      this.log('github_oauth: auth.publicOrigin missing, refusing to build a redirect_uri');
+      this.log(
+        'github_oauth: no whitelisted public origin matches this request, refusing to build a redirect_uri',
+      );
       return jsonResponse({ error: 'public_origin_missing' }, 500);
     }
     if (resolveClientSecret(backend, this.env) === null) {
@@ -523,12 +551,12 @@ export class AuthService {
     }
     const secure = this.isSecureContext(ctx);
     const binder = randomToken(32);
-    const redirectUri = buildRedirectUri(origin);
-    const flow = this.flows.issue({ redirectUri, binder: sha256Hex(binder) });
+    // 选中的来源与它拼出的 redirect_uri 一起进在途流程：回调时两样都要对得上。
+    const flow = this.flows.issue({ origin, binder: sha256Hex(binder) });
     const target = buildAuthorizeUrl({
       config: backend,
       flow,
-      redirectUri,
+      redirectUri: buildRedirectUri(origin),
       endpoints: this.endpoints,
     });
     return redirectResponse(target, [this.binderCookie(secure, binder)]);
@@ -571,6 +599,20 @@ export class AuthService {
     if (flow === null) {
       // Unknown / expired / replayed state, or a state minted for another browser.
       this.log('github_oauth: state rejected (unknown, expired, replayed or binder mismatch)');
+      return redirectResponse(`${LOGIN_PATH}?error=state_invalid`, [clearedBinder]);
+    }
+    // 0.60：state 绑定的是**发起时**选中的来源；回调必须落在同一个来源上 ——
+    // 同一套受信边缘判定再选一次，且两边都必须在白名单里。不一致 ⇒ 直接拒绝，
+    // 文案不解释原因（不让攻击者据此调参）。
+    const callbackOrigin = selectPublicOrigin(ctx.edge, this.publicOrigins);
+    if (
+      callbackOrigin === null ||
+      callbackOrigin !== flow.origin ||
+      !this.publicOrigins.includes(flow.origin)
+    ) {
+      this.log(
+        'github_oauth: state origin mismatch (start and callback resolved to different origins), rejected',
+      );
       return redirectResponse(`${LOGIN_PATH}?error=state_invalid`, [clearedBinder]);
     }
     const result = await completeGitHubLogin({

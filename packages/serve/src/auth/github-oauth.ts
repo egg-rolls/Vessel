@@ -4,8 +4,10 @@
  * 设计依据：`docs/dev/design/0.56-webui-auth.md`（附录 A，github_oauth）。
  *
  * 三条不变量：
- * - `redirect_uri` **只**由 `auth.publicOrigin` + 固定路径拼出，永不从请求头推导
- *   （`Host` / `X-Forwarded-*` 都是攻击者可控输入）。
+ * - `redirect_uri` **只**由「本次选中的来源（`auth.public_origins` /
+ *   `auth.public_origin` 白名单里的原值）+ 固定路径」拼出，永不从请求头推导
+ *   （`Host` / `X-Forwarded-*` 都是攻击者可控输入）；选中的来源同时写进在途流程，
+ *   回调来源不一致即拒绝。
  * - access token 用完即弃：不落盘、不进日志、不进错误文案。
  * - 白名单比对**数值** user id（十进制字符串）；login 只用于展示。
  *
@@ -60,6 +62,13 @@ export type GitHubAuthResult =
 interface PendingFlow {
   stateHash: string;
   codeVerifier: string;
+  /**
+   * 0.60：本次流程**使用的来源**（白名单里的原值）。
+   *
+   * 回调必须落在同一个来源上（同一套受信边缘判定再选一次）；不一致直接拒绝。
+   * 这是「state 绑定来源」那一格：光绑定 redirect_uri 不够，还要能说出它是谁。
+   */
+  origin: string;
   redirectUri: string;
   createdAt: number;
   /** 浏览器绑定值（回合内 cookie 的哈希）：光偷 state 不够。 */
@@ -97,13 +106,20 @@ export class OAuthFlowStore {
     this.now = options.now ?? (() => Date.now());
   }
 
-  issue(input: { redirectUri: string; binder: string | null }): IssuedFlow {
+  /**
+   * 签发一次性 state + PKCE verifier。
+   *
+   * `origin` 是**本次流程选中的来源**（必须来自白名单），`redirectUri` 由它 +
+   * 固定路径拼出，两者一起落进在途表 —— 回调时既不能改 redirect_uri，也不能改来源。
+   */
+  issue(input: { origin: string; binder: string | null }): IssuedFlow {
     const state = randomToken(32);
     const codeVerifier = randomToken(32);
     this.flows.set(sha256Hex(state), {
       stateHash: sha256Hex(state),
       codeVerifier,
-      redirectUri: input.redirectUri,
+      origin: input.origin,
+      redirectUri: buildRedirectUri(input.origin),
       createdAt: this.now(),
       binder: input.binder,
     });
@@ -115,7 +131,7 @@ export class OAuthFlowStore {
   consume(
     state: string | null,
     binder: string | null,
-  ): { codeVerifier: string; redirectUri: string } | null {
+  ): { codeVerifier: string; redirectUri: string; origin: string } | null {
     if (state === null || state === '') return null;
     const key = sha256Hex(state);
     const flow = this.flows.get(key);
@@ -123,7 +139,7 @@ export class OAuthFlowStore {
     this.flows.delete(key);
     if (this.now() - flow.createdAt > this.ttlMs) return null;
     if (flow.binder !== binder) return null;
-    return { codeVerifier: flow.codeVerifier, redirectUri: flow.redirectUri };
+    return { codeVerifier: flow.codeVerifier, redirectUri: flow.redirectUri, origin: flow.origin };
   }
 
   size(): number {

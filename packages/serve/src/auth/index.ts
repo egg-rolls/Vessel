@@ -37,6 +37,12 @@ export {
   resolveClientSecret,
 } from './github-oauth.js';
 export {
+  mergePublicOrigins,
+  normalizeOriginOrNull,
+  type OriginEdge,
+  selectPublicOrigin,
+} from './origins.js';
+export {
   ARGON2_PARAMS,
   detectAlgorithm,
   hashPassword,

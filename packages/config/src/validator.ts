@@ -3,6 +3,7 @@
  * @module @vessel-agent/config
  */
 
+import { isIP } from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { validateTeamPolicy } from './team-policy.js';
@@ -1403,6 +1404,72 @@ function publicOriginError(value: unknown): string | null {
   return null;
 }
 
+/**
+ * 回环 / 私网地址：`http://`（明文）只允许这些来源。
+ *
+ * 口子口径与 `serve/gateway/auth.ts` 的 `isLoopbackHostname` 一致（localhost /
+ * 127.0.0.0/8 / ::1），再补上 RFC1918 私网与 IPv6 ULA / link-local —— 内网明文
+ * 部署是常态，公网明文（cookie 不带 Secure、可被链路层篡改）不是。
+ */
+function isLoopbackOrPrivateHostname(hostname: string): boolean {
+  const host =
+    hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+  const lower = host.toLowerCase();
+  if (lower === 'localhost') return true;
+  const version = isIP(lower);
+  if (version === 4) {
+    if (lower.startsWith('127.') || lower.startsWith('10.') || lower.startsWith('192.168.')) {
+      return true;
+    }
+    if (lower.startsWith('169.254.')) return true;
+    const parts = lower.split('.');
+    const second = Number(parts[1]);
+    if (parts[0] === '172' && Number.isInteger(second) && second >= 16 && second <= 31) return true;
+    return false;
+  }
+  if (version === 6) {
+    if (lower === '::1') return true;
+    // fc00::/7（ULA）与 fe80::/10（link-local）
+    return (
+      lower.startsWith('fc') ||
+      lower.startsWith('fd') ||
+      lower.startsWith('fe8') ||
+      lower.startsWith('fe9') ||
+      lower.startsWith('fea') ||
+      lower.startsWith('feb')
+    );
+  }
+  return false;
+}
+
+/**
+ * 0.60：校验 `auth.public_origins` 的单个条目。
+ *
+ * 比 `public_origin` 更严（新键没有历史包袱）：
+ * - 必须是完整 origin，**尾斜杠也报错**（`https://host/` 与 `https://host` 归一化后
+ *   一样，但写错的人会以为它们不同，禁掉比替人猜更安全）；
+ * - 非 https 只允许 loopback / 私网（公网明文会让会话 cookie 丢掉 Secure）。
+ */
+function publicOriginsEntryError(value: unknown): string | null {
+  const base = publicOriginError(value);
+  if (base !== null) return base;
+  const trimmed = (value as string).trim();
+  const url = new URL(trimmed);
+  if (trimmed.toLowerCase() !== url.origin) {
+    return (
+      'must be a bare origin without a trailing slash or default port ' +
+      '(write https://egg-rolls.top, not https://egg-rolls.top/)'
+    );
+  }
+  if (url.protocol === 'http:' && !isLoopbackOrPrivateHostname(url.hostname)) {
+    return (
+      'uses http on a public host: only loopback/private hosts may use http ' +
+      '(use https:// for a public deployment)'
+    );
+  }
+  return null;
+}
+
 const AUTH_BACKEND_KINDS = ['github_oauth', 'password'] as const;
 
 export function validateAuthSettings(
@@ -1437,6 +1504,38 @@ export function validateAuthSettings(
             'Secure. Use https:// for a public deployment.',
         });
       }
+    }
+  }
+
+  if (raw.publicOrigins !== undefined) {
+    if (!Array.isArray(raw.publicOrigins)) {
+      errors.push({
+        path: 'auth.publicOrigins',
+        message:
+          'auth.publicOrigins must be an array of origins, e.g. ["https://egg-rolls.top", ' +
+          '"http://127.0.0.1:8642"]',
+        value: raw.publicOrigins,
+      });
+    } else {
+      if (raw.publicOrigins.length === 0) {
+        warnings.push({
+          path: 'auth.publicOrigins',
+          message:
+            'auth.publicOrigins is empty: no public origin is whitelisted ' +
+            '(GitHub login needs at least one).',
+        });
+      }
+      raw.publicOrigins.forEach((entry, index) => {
+        const message = publicOriginsEntryError(entry);
+        if (message === null) return;
+        errors.push({
+          path: `auth.publicOrigins[${index}]`,
+          message:
+            `auth.publicOrigins[${index}] ${message}. ` +
+            'Example: auth.publicOrigins: ["https://egg-rolls.top", "http://127.0.0.1:8642"]',
+          value: entry,
+        });
+      });
     }
   }
 
@@ -1557,16 +1656,20 @@ export function validateAuthSettings(
 
       const backends = raw.backends.filter(isPlainObject);
       const enabledBackends = raw.enabled === false ? [] : backends;
-      // 只有 OAuth 后端需要 publicOrigin（redirect_uri 的唯一来源）；口令后端不需要。
+      // 只有 OAuth 后端需要来源白名单（redirect_uri 的唯一来源）；口令后端不需要。
       const oauthBackends = enabledBackends.filter(
         (entry) => entry.kind === undefined || entry.kind === 'github_oauth',
       );
-      if (oauthBackends.length > 0 && raw.publicOrigin === undefined) {
+      const hasPublicOrigins =
+        raw.publicOrigin !== undefined ||
+        (Array.isArray(raw.publicOrigins) && raw.publicOrigins.length > 0);
+      if (oauthBackends.length > 0 && !hasPublicOrigins) {
         errors.push({
-          path: 'auth.publicOrigin',
+          path: 'auth.publicOrigins',
           message:
-            'auth.publicOrigin is required when a github_oauth backend is configured: it is the only ' +
-            'source of the OAuth redirect_uri (never derived from request headers).',
+            'auth.publicOrigins (or auth.publicOrigin) is required when a github_oauth backend is ' +
+            'configured: it is the only source of the OAuth redirect_uri (never derived from request ' +
+            'headers). Example: auth.publicOrigins: ["https://egg-rolls.top", "http://127.0.0.1:8642"]',
         });
       }
       if (enabledBackends.length > 0 && raw.enabled === undefined) {
@@ -3202,7 +3305,15 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'supervise',
   ],
   // 0.56：WebUI 登录（嵌套 entries 由 validateAuthSettings 单独校验）。
-  auth: ['enabled', 'publicOrigin', 'allowedHosts', 'trustedProxies', 'backends', 'session'],
+  auth: [
+    'enabled',
+    'publicOrigin',
+    'publicOrigins',
+    'allowedHosts',
+    'trustedProxies',
+    'backends',
+    'session',
+  ],
   connect: ['token', 'tokenEnv', 'caFile'],
   attention: ['nodes'],
   hub: [
