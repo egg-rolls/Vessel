@@ -29,6 +29,8 @@ import type {
   SessionStore,
 } from '../types/session.js';
 import { atomicWrite } from './atomic-write.js';
+// 侧车文件名常量：`scanIds()` 必须跳过它，否则同一个会话会被当成两个（见那处注释）。
+import { PROJECTION_CACHE_SUFFIX } from './projection-cache.js';
 import {
   compareSessionInfo,
   deriveSessionMeta,
@@ -637,6 +639,11 @@ export class FileSessionStore implements SessionStore {
       const ids: string[] = [];
       for await (const f of glob.scan(this.basePath)) {
         if (f.startsWith('.')) continue;
+        // 会话目录里同时存在 `<id>.json`（会话壳）与 `<id>.projection.json`（投影游标快照，
+        // 0.56 引入）。`*.json` 会把后者也当成一个会话 ⇒ 同一个会话在列表里出现两次：
+        // 一张有真实 updated_at、另一张变成 1970-01-01（因为它是快照、没有时间字段）。
+        // 以后再加任何 `<id>.<kind>.json` 侧车文件，都要登记到这里。
+        if (f.endsWith(PROJECTION_CACHE_SUFFIX)) continue;
         const raw = f.replace(/\.json$/, '');
         try {
           ids.push(decodeURIComponent(raw));
