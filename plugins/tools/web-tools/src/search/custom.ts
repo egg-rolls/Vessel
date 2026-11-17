@@ -413,9 +413,12 @@ export function createCustomProvider(
   spec: CustomSearchSpec,
   options: { id?: string } = {},
 ): SearchProvider {
+  const providerId = options.id ?? `${CUSTOM_PRESET_PREFIX}${spec.id}`;
+  const used = collectPlaceholders({ body: spec.request.body, headers: spec.request.headers });
+  const supportsDates = used.has('after') || used.has('before') || used.has('freshness');
   return {
     // 内置预设用短名（`bocha`，用户不必记新名字）；用户自定义一律 `custom:<id>`
-    id: options.id ?? `${CUSTOM_PRESET_PREFIX}${spec.id}`,
+    id: providerId,
     version: specVersion(spec),
     billed: true,
     requiresKey: true,
@@ -452,11 +455,45 @@ export function createCustomProvider(
       query: SearchQuery,
       renderedQuery: string,
     ): Promise<ProviderHttpResponse> {
-      // 过滤条件：**映射不了就整条键不出现**（这是映射规则，不是逻辑分支）。
-      // 声明式没有表达式语言，所以「只给一端日期 ⇒ {{freshness}} 解析为空 ⇒ 键省略」
-      // 就是完整语义；`site`/`lang` 同理（body 里没有对应占位符 ⇒ 不会发出去）。
-      // 哪家支持哪些过滤写在工具描述里，让模型知道“这条过滤在这家等于没加”。
+      // 过滤条件：**能表达就表达，表达不了就在发请求前明确拒**（宁可难看，不许看着对）。
+      //
+      // 底层仍是「占位符解析为空 ⇒ 整条键省略」这条映射规则（不需要表达式语言），
+      // 但省略一旦意味着「用户要的过滤被静默丢掉」，就必须升级成错误：
+      // 用户拿到一份「看起来过滤过、其实全网」的结果，比拿一条报错危险得多。
+      // 每条错误都要写清**下一步怎么做**，否则模型会反复重试同一个调用。
       const context = contextFor({ ...query, query: renderedQuery });
+      if (query.site !== undefined && !used.has('site')) {
+        throw new WebFetchError(
+          'provider_bad_request',
+          `后端 ${providerId} 的声明式映射里没有 {{site}}，无法按站点过滤。` +
+            '下一步：去掉 site 参数，或改用支持站点过滤的后端（deepseek / serper），' +
+            '或在 custom_search 的 request.body 里加一个 "{{site}}"（本次没有发出任何请求）',
+        );
+      }
+      if (query.lang !== undefined && !used.has('lang')) {
+        throw new WebFetchError(
+          'provider_bad_request',
+          `后端 ${providerId} 的声明式映射里没有 {{lang}}，无法按语言过滤。` +
+            '下一步：去掉 lang 参数，或改用支持它的后端，或在 request.body 里加 "{{lang}}"（本次没有发出任何请求）',
+        );
+      }
+      if ((query.after !== undefined || query.before !== undefined) && !supportsDates) {
+        throw new WebFetchError(
+          'provider_bad_request',
+          `后端 ${providerId} 的声明式映射里没有任何日期占位符（{{after}}/{{before}}/{{freshness}}），无法按日期过滤。` +
+            '下一步：去掉 after/before，或改用支持日期过滤的后端（本次没有发出任何请求）',
+        );
+      }
+      if (
+        (query.after !== undefined || query.before !== undefined) &&
+        context.freshness === undefined
+      ) {
+        throw new WebFetchError(
+          'provider_bad_request',
+          `后端 ${providerId} 的 {{freshness}} 只接受完整的 after+before 区间（上游没有「某天之后」的单边写法）。` +
+            '下一步：同时给 after 和 before，或两个都不给（本次没有发出任何请求）',
+        );
+      }
 
       const resolvedBody = substitute(spec.request.body, context);
       const resolvedHeaders = substitute(spec.request.headers, context);
