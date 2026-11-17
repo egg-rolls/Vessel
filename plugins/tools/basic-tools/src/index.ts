@@ -1,26 +1,33 @@
 /**
- * @vessel-agent/basic-tools - 基础工具插件（bash / read / edit）
+ * @vessel-agent/basic-tools - 基础工具插件（bash / read / edit / write）
  * @module @vessel-agent/basic-tools
  *
- * 本项目唯一的工具包，只提供三个互不可替代的工具：
+ * 本项目唯一的工具包，只提供四个互不可替代的工具：
  * - `bash`：执行任意 shell 命令（grep / cat / ls / mkdir / curl …… 全部由它承担），权限 ask
  * - `read`：带行号读文件（支持 offset/limit），权限 allow
  * - `edit`：精确且唯一匹配的字符串替换，权限 ask
+ * - `write`：整文件创建 / 整体替换 / 追加（内容逐字节落盘，不经 shell），权限 ask
  *
- * 危险操作（bash / edit）经 `checkPermission` 返回 `ask`，由 core `PermissionPolicy`
+ * 为什么 `write` 必须存在（0.56 真机事故）：`edit` 只能替换**已有文件里的精确文本**，
+ * 于是「建文件」和「追加」只剩 bash heredoc / 重定向 —— 而那条路**不校验内容**，
+ * 沙箱还会先把反引号 / `$(` / `${…}` 展开掉，模型连续三次把内容写变形且毫无反馈
+ * （写架构文档时整段代码块直接消失）。`write` 把内容当**数据**收，不经 shell，
+ * 于是「用 bash 写文件」这条路不再是必需项。
+ *
+ * 危险操作（bash / edit / write）经 `checkPermission` 返回 `ask`，由 core `PermissionPolicy`
  * 统一发出一次权限请求并等待用户授权（ADR-029 / ADR-079）。
- * `read` / `edit` / `bash` 额外受路径边界约束（0.8 E1）：内置敏感路径 denylist 直接拒绝；
+ * `read` / `edit` / `write` / `bash` 额外受路径边界约束（0.8 E1）：内置敏感路径 denylist 直接拒绝；
  * 可选 `allowed_roots` 把越界访问降级为 ask。`..` 与符号链接按真实路径判定。
  * `bash` 另在命令文本里匹配内置 denylist 与配置 `deny_paths`（0.14.2 F2 / 0.15）：命中即拒绝。
  * 这不是沙箱——只做字符串/规范化路径匹配，变量拼接、`cd`、符号链接等仍可能绕过。
  * 可选 `cwd`（0.11.1）提供默认工作目录：`bash` 未显式传 `cwd` 时使用它，
- * `read` / `edit` 的相对路径按它解析；边界仍按解析后的绝对路径判定。
+ * `read` / `edit` / `write` 的相对路径按它解析；边界仍按解析后的绝对路径判定。
  *
  * 输出预算（0.55 / 0.56 闸上移）：任一工具的结果回给模型之前都过**同一个** token 闸
  * （core 的 `boundToolResult`：单条 ≤ 16k token，超了先落盘全文再按头 30% / 尾 70% + 一行
  * 省略标注裁切）。闸本体在 `packages/core/src/runtime/tool-result-gate.ts`，由 loop 一处
  * 收口 —— 所以 web_fetch / MCP / 未来插件的返回值也在闸内。本模块保留**第二道闸**：
- * bash / read / edit 自己先裁一遍并登记幂等回执（`markToolResultBounded`），loop 见到
+ * bash / read / edit / write 自己先裁一遍并登记幂等回执（`markToolResultBounded`），loop 见到
  * `bounded` 就不再裁（再裁一次会把「完整输出：<路径>」那一行裁掉）。
  * 2000 行 / 2 MiB 两道旧闸保留作兜底，顺序是 token → 行 / 字节。
  * 事故校准：1,344 行 / 423 KB（≈106k token）的输出两道旧闸都没碰到，所以闸必须按 token 计。
@@ -35,13 +42,23 @@
  * 覆盖 `sed -i` / `tee <file>` / 重定向到文件 / heredoc 带元字符 / 反引号。理由是这些写法
  * bash **不校验内容**：写坏了不报错、退出码照样 0，模型没有任何反馈可以自纠（实测 74 个会话
  * 1,700+ 次写文件，并且已经出过一次 heredoc 反引号被沙箱预处理掉的事故）。判定是纯文本
- * 正则 / 字符扫描，不改权限、不改退出码与 stdout/stderr；`edit` / `read` 的输出一个字节都不动。
+ * 正则 / 字符扫描，不改权限、不改退出码与 stdout/stderr；`edit` / `read` / `write` 的输出一个字节都不动。
+ * 文案 0.56 订正：以前只说「建议改用 edit」，而 **edit 干不了建文件 / 追加** —— 那条建议本身
+ * 就把模型推回 heredoc（今天连续三次写变形的直接原因）。现在按用途分流：
+ * **建文件 / 追加用 `write`，局部改代码用 `edit`**。
  */
 
 import { randomUUID } from 'node:crypto';
 import {
+  closeSync,
   existsSync,
+  fchmodSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   statSync,
@@ -124,6 +141,24 @@ const PATH_DENIED_TEXT =
 
 /** read 允许的最大文件字节数（超过直接拒绝，提示用 bash 分块） */
 const MAX_READ_BYTES = 8 * 1024 * 1024;
+
+/**
+ * write 单次内容上限（字节）：4 MiB。
+ *
+ * 取 4 MiB 而不是跟 read 的 8 MiB 对齐：写是有副作用的，超出「一个人能用工具手写的文本」
+ * 一个数量级就该换别的路（分段写、或确实要用 bash / cp 搬大文件）。这条闸挡的是
+ * 「把整个仓库 / 日志灌进一个 content 参数」——那种调用既撑上下文，又必然写错。
+ */
+const MAX_WRITE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * append 回执里「共 N 行」的最大扫描体积：64 MiB。
+ *
+ * 数总行数要流式读一遍文件。对普通文件无所谓，但「往日志文件追加」是合法用法，
+ * 让一次 append 顺带读 2 GB 就成了新的隐性成本。超过这个体积就只报字节数、不报总行数
+ * （回执里那一项省略），不阻塞、不猜。
+ */
+const MAX_LINE_SCAN_BYTES = 64 * 1024 * 1024;
 
 /**
  * 进程已退出后，最多再等管道排空多久（毫秒）。
@@ -795,17 +830,17 @@ function hasExpandedMeta(command: string): boolean {
 
 const WRITE_FILE_WARN =
   '这条命令会写文件（sed -i / 重定向 / tee / heredoc），而 bash 不会校验写进去的内容——' +
-  '写坏了也不报错、退出码照样是 0。要改代码请优先用 `edit`（逐字符唯一匹配，改不中会报错）；' +
-  '非得用 bash 写，写完用 `read` 复核一遍。';
+  '写坏了也不报错、退出码照样是 0。建文件 / 追加请用 `write`（内容逐字节落盘，不经 shell），' +
+  '局部改代码用 `edit`（逐字符唯一匹配，改不中会报错）；非得用 bash 写，写完用 `read` 复核一遍。';
 
 const HEREDOC_META_WARN =
   'heredoc 内容里的反引号与 $ 开头的写法（$() 与 $' +
   '{…}）会被 shell 先展开再写入，沙箱也可能改写正文，文件可能静默变形；' +
-  '建议改用 `edit`，或先把内容写到临时文件再 cp。';
+  '建文件 / 追加请改用 `write`（内容逐字节落盘，不经 shell），或先把内容写到临时文件再 cp。';
 
 const BACKTICK_WARN =
   '命令里的反引号会被 bash 当命令替换（先执行、再用输出替换成文本）；' +
-  '若只是想写反引号字面量（例如写 markdown），请用单引号包住，或用 `edit` 写文件。';
+  '若只是想写反引号字面量（例如写 markdown），请用单引号包住，或用 `write` / `edit` 写文件。';
 
 /**
  * 组装这条命令的写文件警告；无命中返回 `undefined`。
@@ -1632,7 +1667,9 @@ function createBashTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
       'Run a shell command in bash and return merged stdout/stderr with the exit code. ' +
       'Use it for shell-level work only: git, builds, tests, HTTP requests, process management, ' +
       'and finding/listing files. Do NOT use it to read file contents: use the `read` tool ' +
-      'instead of cat/sed/head/tail/awk. Do NOT use it to modify files: use the `edit` tool. ' +
+      'instead of cat/sed/head/tail/awk. Do NOT use it to write file contents (heredocs, ' +
+      'redirection, sed -i, tee): use `write` to create/append/replace a whole file and `edit` ' +
+      'for a partial change — shell expansion silently mangles backticks and $(...). ' +
       'Commands that spell out built-in or configured sensitive paths (~/.ssh, ~/.aws, ' +
       '~/.gnupg, ~/.vessel/config.yaml and extra deny_paths) are rejected. That check matches ' +
       'the command text only; it is best-effort, not a sandbox. ' +
@@ -1931,15 +1968,409 @@ function createEditTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
   };
 }
 
+// ── write ────────────────────────────────────────
+//
+// 存在理由：`edit` 只能替换**已有文件里的精确文本**，所以「建文件 / 追加」只能走
+// `bash` 的 heredoc / 重定向 —— 而那条路内容要过一遍 shell + 沙箱预处理，反引号 / `$(`
+// / `${…}` 会被先展开，写坏了 bash 退出码照样 0（0.56 真机事故：写架构文档时整段代码块
+// 静默消失）。`write` 把 content 当**数据**收：不经过 shell、不做任何转义或展开，
+// 落盘字节 = 入参字节。
+//
+// 契约（宁可不便利，不许静默）：
+// - `create`（缺省）：文件已存在则**报错**，不静默覆盖 —— 覆盖是破坏性操作，
+//   必须由调用方显式说 `overwrite`。
+// - `overwrite`：整体替换；目标不存在时等价于建文件（语义是「把这个路径的内容变成这段」，
+//   不把「文件本来不存在」当成错误，但会在回执里说清）。
+// - `append`：追加到末尾；目标不存在时创建（与 `>>` 一致）。
+// - 父目录：**只自动创建一级**不存在的父目录。更深的不猜 —— 猜错目录是「写到一个
+//   你以为不存在的地方」这类事故的源头，模型该自己先说清路径（`mkdir` 在 bash 里）。
+// - 上限 4 MiB（`MAX_WRITE_BYTES`），超了报错并给字节数，不截断。
+//
+// 原子性：create / overwrite 先写**同目录**临时文件 + fsync，再落位（同目录是为了 rename
+// 不会跨设备）。create 落位用 `link` 而不是 `rename`：rename 会静默覆盖，link 在目标已存在时
+// 报 EEXIST —— 这样「检查已存在」和「落盘」之间没有 TOCTOU 窗口。append 走 `O_APPEND` + fsync。
+
+/** write 的三种模式 */
+type WriteMode = 'create' | 'overwrite' | 'append';
+
+/** 千分位格式化（只用于回执 / 报错里的读数，不用 locale，保证确定性） */
+function groupThousands(value: number): string {
+  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/** 按 `splitLines` 同一口径数行数（末尾换行不额外算一行） */
+function countTextLines(text: string): number {
+  return splitLines(text).length;
+}
+
+/** errno 码判定（`code` 是 Node 错误对象上的稳定字段） */
+function isErrnoCode(error: unknown, code: string): boolean {
+  return isRecord(error) && (error as { code?: unknown }).code === code;
+}
+
+/** 不支持硬链接的 errno（create 的排他落盘在这些盘上退回 rename） */
+const LINK_UNSUPPORTED_CODES = new Set([
+  'ENOSYS',
+  'EPERM',
+  'EOPNOTSUPP',
+  'ENOTSUP',
+  'EXDEV',
+  'EMLINK',
+]);
+
+/** 同目录临时文件路径（create / overwrite 共用；pid + 时间戳 + 随机段，避免并发撞名） */
+function tempPathFor(absolutePath: string): string {
+  const nonce = randomUUID().slice(0, 8);
+  return `${absolutePath}.vessel-tmp-${process.pid}-${Date.now()}-${nonce}`;
+}
+
+/**
+ * 原子整体写（overwrite 用）：临时文件 → fsync → rename。
+ * fsync 在 rename **之前**：否则崩溃可能留下「名字对了、内容是空的」文件。
+ */
+function writeFileAtomicDurable(absolutePath: string, content: string, mode?: number): void {
+  const tempPath = tempPathFor(absolutePath);
+  try {
+    const fd = openSync(tempPath, 'w');
+    try {
+      writeFileSync(fd, content, 'utf-8');
+      // 覆盖时沿用原文件的权限位：临时文件的默认 0644 会把可执行脚本 / 0600 的密钥文件降级，
+      // 而「内容对了、权限变了」这种副作用同样不会被任何工具报出来。
+      if (mode !== undefined) fchmodSync(fd, mode);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tempPath, absolutePath);
+  } catch (error) {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // 临时文件可能未创建，忽略
+    }
+    throw error;
+  }
+}
+
+/**
+ * 排他落盘（create 用）：临时文件 → fsync → link。
+ * link 在目标已存在时抛 EEXIST，不会像 rename 那样静默覆盖 —— 这是「create 绝不覆盖」的
+ * 最后一道保证（前面的 existsSync 只用于给出更好的报错文案）。
+ *
+ * 回退：极少数文件系统不支持硬链接（exFAT / 部分网络盘）。那时退回「二次确认不存在 + rename」，
+ * 与前面的 existsSync 检查之间留一个极窄的窗口 —— 但在不支持硬链接的盘上，「工具直接坏掉」
+ * 是更糟的结果，而且窗口只在多人同时写同一路径时才可能被踩到。
+ */
+function createFileExclusiveDurable(absolutePath: string, content: string): void {
+  const tempPath = tempPathFor(absolutePath);
+  try {
+    const fd = openSync(tempPath, 'w');
+    try {
+      writeFileSync(fd, content, 'utf-8');
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    try {
+      linkSync(tempPath, absolutePath);
+    } catch (error) {
+      if (!LINK_UNSUPPORTED_CODES.has(String((error as { code?: unknown }).code))) throw error;
+      if (existsSync(absolutePath)) {
+        const conflict = new Error(`文件已存在：${absolutePath}`) as NodeJS.ErrnoException;
+        conflict.code = 'EEXIST';
+        throw conflict;
+      }
+      renameSync(tempPath, absolutePath);
+    }
+  } finally {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // 未创建 / 已清理，忽略
+    }
+  }
+}
+
+/** 追加（append 用）：O_APPEND 一次写入并 fsync */
+function appendToFileDurable(absolutePath: string, content: string): void {
+  const fd = openSync(absolutePath, 'a');
+  try {
+    writeFileSync(fd, content, 'utf-8');
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** 流式扫一遍文件的行数 / 字节数（append 的「共 N 行」读数用；不整读进内存） */
+function scanFileStats(absolutePath: string): { lines: number; bytes: number } | undefined {
+  // 先看体积：超过扫描上限就干脆不数（见 `MAX_LINE_SCAN_BYTES`），别让一次 append 顺带读 GB 级文件
+  try {
+    if (Number(statSync(absolutePath).size) > MAX_LINE_SCAN_BYTES) return undefined;
+  } catch {
+    return undefined;
+  }
+  let fd: number | undefined;
+  const chunk = Buffer.allocUnsafe(64 * 1024);
+  let newlines = 0;
+  let bytes = 0;
+  let lastByte = -1;
+  try {
+    fd = openSync(absolutePath, 'r');
+    for (;;) {
+      const read = readSync(fd, chunk, 0, chunk.length, null);
+      if (read <= 0) break;
+      for (let i = 0; i < read; i += 1) {
+        if (chunk[i] === 0x0a) newlines += 1;
+      }
+      lastByte = chunk[read - 1] ?? lastByte;
+      bytes += read;
+    }
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  if (bytes === 0) return { lines: 0, bytes: 0 };
+  return { lines: lastByte === 0x0a ? newlines : newlines + 1, bytes };
+}
+
+/** 文件最后一个字节（判断追加是否接在「没有换行的最后一行」后面；空文件返回 undefined） */
+function lastByteOf(absolutePath: string): number | undefined {
+  let fd: number | undefined;
+  try {
+    const size = statSync(absolutePath).size;
+    if (size === 0) return undefined;
+    fd = openSync(absolutePath, 'r');
+    const one = Buffer.allocUnsafe(1);
+    const read = readSync(fd, one, 0, 1, size - 1);
+    return read === 1 ? one[0] : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** create 撞已有文件时的报错：说清三条出路，别让模型猜 */
+function existingFileMessage(inputPath: string): string {
+  return (
+    `错误：文件已存在：${inputPath}（未做任何改动）。` +
+    '要整体替换用 mode=overwrite；要局部修改用 edit（逐字符唯一匹配，找不到会报错）；' +
+    '要追加用 mode=append。'
+  );
+}
+
+/** 单次内容超过上限的报错（不截断、不静默写半截） */
+function tooLargeMessage(bytes: number): string {
+  return (
+    `错误：内容过大（${groupThousands(bytes)} 字节，单次上限 ${groupThousands(MAX_WRITE_BYTES)} 字节 = 4 MiB），未写入。` +
+    '请拆成多次 write（create + append），或改用 bash 搬运大文件。'
+  );
+}
+
+/**
+ * 建文件 / 整体替换 / 追加。
+ * 路径解析与边界判定与 read / edit **同一条实现**（`resolveToolPath` + `evaluatePath`），
+ * 所以 deny_paths / 内置 denylist / symlink 逃逸 / 成员 cwd 的语义与它们逐条一致。
+ */
+function writeFileText(
+  args: unknown,
+  ctx: ToolContext,
+  boundary: PathBoundary,
+  config: BasicToolsConfig,
+): string {
+  const signal = ctx.signal;
+  if (signal?.aborted) return CANCELLED_TEXT;
+  if (!isRecord(args)) return '错误：write 需要 { path, content, mode? }';
+  const inputPath = readString(args, 'path');
+  if (inputPath === '') return '错误：path 不能为空';
+  // content 用 typeof 判而不是 readString：空字符串是合法内容（建空文件），不能和「没传」混淆
+  if (typeof args.content !== 'string') {
+    return '错误：content 必须是字符串（UTF-8 文本）；要建空文件请显式传 content: ""';
+  }
+  const content = args.content;
+
+  const rawMode = args.mode;
+  let mode: WriteMode;
+  if (rawMode === undefined || rawMode === 'create') mode = 'create';
+  else if (rawMode === 'overwrite' || rawMode === 'append') mode = rawMode;
+  else {
+    return `错误：mode 只能是 create / overwrite / append（收到 ${JSON.stringify(rawMode)}）；缺省是 create。`;
+  }
+
+  const bytes = Buffer.byteLength(content, 'utf-8');
+  if (bytes > MAX_WRITE_BYTES) return tooLargeMessage(bytes);
+
+  const baseCwd = resolveCallCwd(config, ctx.cwd);
+  const absolute = resolveToolPath(baseCwd.path, inputPath);
+  // 防御性检查：与 read / edit 同一条边界；绕过 checkPermission 也不得写敏感路径。
+  // symlink 逃逸同样在这里被拦：evaluatePath 按 canonicalPath（realpath）判定。
+  if (evaluatePath(absolute, boundary) === 'deny') return PATH_DENIED_TEXT;
+  if (dependsOnBaseCwd(inputPath) && baseCwd.issue !== undefined) return baseCwd.issue;
+
+  // 目标现状：只区分「不存在 / 普通文件 / 别的」。硬链接与符号链接的**指向**已由边界判定处理。
+  let existing: ReturnType<typeof statSync> | undefined;
+  if (existsSync(absolute)) {
+    try {
+      existing = statSync(absolute);
+    } catch (error) {
+      return `错误：无法访问 ${inputPath}：${String(error)}`;
+    }
+    if (existing.isDirectory()) return `错误：${inputPath} 是目录，不是文件`;
+    if (!existing.isFile()) return `错误：${inputPath} 不是普通文件`;
+  }
+
+  if (mode === 'create' && existing !== undefined) return existingFileMessage(inputPath);
+
+  // 父目录：只自动建一级（见本节顶部注释）。目标已存在时父目录必然存在，跳过。
+  let createdDir = false;
+  if (existing === undefined) {
+    const parent = path.dirname(absolute);
+    if (!isDirectory(parent)) {
+      if (existsSync(parent)) {
+        return `错误：${path.dirname(inputPath)} 已存在但不是目录，无法在其下建文件。`;
+      }
+      if (!isDirectory(path.dirname(parent))) {
+        return (
+          `错误：父目录不存在：${path.dirname(inputPath)}（write 只自动创建**一级**不存在的父目录，` +
+          '更深的路径请先用 bash 进入目标目录再写，或先 mkdir 建好）。'
+        );
+      }
+      try {
+        mkdirSync(parent);
+        createdDir = true;
+      } catch (error) {
+        return `错误：创建父目录失败：${String(error)}`;
+      }
+    }
+  }
+
+  // 落盘前再查一次取消：不允许「取消后留下半次写入」
+  if (signal?.aborted) return CANCELLED_TEXT;
+
+  const dirNote = createdDir ? ` · 新建父目录 ${path.dirname(inputPath)}` : '';
+
+  // 落盘目标：目标已存在时按 realpath 写**指到的那个文件**（符号链接不被替换成普通文件）。
+  // 边界判定用的也是 canonicalPath，所以在「链接指向 deny 目录」这种情况下早就在上面被拒了；
+  // 这里只解决「链接指向允许目录」时的写入语义，与 bash 的 `>` 一致。
+  const writeTarget = existing === undefined ? absolute : canonicalPath(absolute);
+
+  if (mode === 'append') {
+    // 追加前记一下原文件末尾：没有换行的文件直接追加会把内容接到最后一行后面，值得说一句
+    const previousSize = existing === undefined ? 0 : Number(existing.size);
+    const tailByte =
+      existing === undefined || previousSize === 0 ? undefined : lastByteOf(writeTarget);
+    try {
+      appendToFileDurable(writeTarget, content);
+    } catch (error) {
+      return `错误：写入失败：${String(error)}`;
+    }
+    const stats = scanFileStats(writeTarget);
+    const totalBytes = stats === undefined ? previousSize + bytes : stats.bytes;
+    const totalLinesPart = stats === undefined ? '' : ` · 共 ${groupThousands(stats.lines)} 行`;
+    // 原文件末尾没有换行时，追加的第一行会**接到最后一行后面**（净增行数比 content 行数少 1）。
+    // 不替调用方补换行（content 必须逐字节落盘），但把这件事和真实净增行数说清楚。
+    const merged = tailByte !== undefined && tailByte !== 0x0a && content !== '';
+    const contentLines = countTextLines(content);
+    const addedLines = merged ? Math.max(0, contentLines - 1) : contentLines;
+    const mergeNote = merged ? '（原文件末尾没有换行，追加内容接在最后一行之后）' : '';
+    const createdNote = existing === undefined ? ' · 文件原先不存在，已创建' : '';
+    return (
+      `已追加 ${inputPath}（append · +${groupThousands(addedLines)} 行${totalLinesPart} · ` +
+      `${groupThousands(totalBytes)} 字节${createdNote}${dirNote}）${mergeNote}`
+    );
+  }
+
+  try {
+    if (mode === 'create') createFileExclusiveDurable(absolute, content);
+    else
+      writeFileAtomicDurable(
+        writeTarget,
+        content,
+        existing === undefined ? undefined : Number(existing.mode) & 0o7777,
+      );
+  } catch (error) {
+    // 并发下 existsSync 可能漏判（另一进程刚好建成）：link 的 EEXIST 是准确答案
+    if (isErrnoCode(error, 'EEXIST')) return existingFileMessage(inputPath);
+    return `错误：写入失败：${String(error)}`;
+  }
+
+  const lines = countTextLines(content);
+  if (mode === 'overwrite' && existing !== undefined) {
+    // statSync 的 size 在 bigint 模式下是 bigint；这里统一按 number 展示（回执只用于读数）
+    const previousBytes = Number(existing.size);
+    return `已写入 ${inputPath}（overwrite · ${groupThousands(lines)} 行 · ${groupThousands(bytes)} 字节 · 原 ${groupThousands(previousBytes)} 字节${dirNote}）`;
+  }
+  const createdNote = mode === 'overwrite' ? ' · 文件原先不存在，已创建' : '';
+  return `已写入 ${inputPath}（${mode} · ${groupThousands(lines)} 行 · ${groupThousands(bytes)} 字节${createdNote}${dirNote}）`;
+}
+
+/** 构造 write 工具（相对路径按调用期默认目录解析；路径边界与 read / edit 相同） */
+function createWriteTool(boundary: PathBoundary, config: BasicToolsConfig): ToolDefinition {
+  return {
+    name: 'write',
+    description:
+      'Write a whole file: create, replace entirely, or append. Use this — not bash heredocs / ' +
+      'redirection — whenever the content is text you already have: it is stored byte-for-byte ' +
+      '(no shell expansion, so backticks, $(...), ' +
+      // `\${...}` 是字面量（说给模型看的 shell 展开写法），不是插值
+      `\${...} and quotes are safe). ` +
+      'mode=create (default) creates a new file and ERRORS if the path already exists (never a ' +
+      'silent overwrite); mode=overwrite replaces the whole file; mode=append adds to the end. ' +
+      'For a partial change inside an existing file use `edit` instead (exact, unique match; it ' +
+      'fails loudly when the text does not match). Only ONE missing parent directory is created ' +
+      'automatically. Max content 4 MiB per call. Returns line/byte counts.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path' },
+        content: {
+          type: 'string',
+          description: 'UTF-8 text written verbatim (no escaping, no shell expansion)',
+        },
+        mode: {
+          type: 'string',
+          enum: ['create', 'overwrite', 'append'],
+          description:
+            'create (default; error if the file exists) | overwrite (replace whole content) | ' +
+            'append (add at the end)',
+        },
+      },
+      required: ['path', 'content'],
+    },
+    // 写有副作用，与 bash / edit 同口径：默认 ask，由 core PermissionPolicy 统一定夺；
+    // deny 直接拒绝，allowed_roots 越界返回 ask（与 read / edit 完全同一条解析路径）。
+    checkPermission: async (input, ctx) => {
+      if (isRecord(input)) {
+        const inputPath = readString(input, 'path');
+        if (inputPath !== '') {
+          const decision = evaluatePath(
+            resolveToolPath(resolveCallCwd(config, ctx.cwd).path, inputPath),
+            boundary,
+          );
+          if (decision !== 'allow') return decision;
+        }
+      }
+      return 'ask';
+    },
+    handler: async (args, ctx) =>
+      boundToolOutput(ctx, 'write', writeFileText(args, ctx, boundary, config)),
+  };
+}
+
 // ── 插件导出 ──────────────────────────────────────
 
 /**
- * 创建三个基础工具。
+ * 创建四个基础工具。
  * 不传配置时只启用内置 denylist（不限制根）、默认工作目录按调用期解析，与旧行为兼容。
  *
  * 0.51：三个工具都**不再**在 install 期固定工作目录 —— 那是全 tenant 一份的常量，
  * 成员 cwd 无处可传（Bug 1）。默认目录在每次 handler / checkPermission 调用时由
  * `resolveCallCwd` 算出（配置 cwd > `ctx.cwd` > 进程 cwd）。
+ *
+ * 0.56 加入 `write`：它和 read / edit 共用同一个 `boundary`，所以路径语义（deny_paths /
+ * 内置 denylist / allowed_roots / symlink）四件工具是同一套，不新增第二份实现。
  */
 export function createBasicTools(config: BasicToolsConfig = {}): ToolDefinition[] {
   const boundary = buildPathBoundary(config);
@@ -1947,11 +2378,12 @@ export function createBasicTools(config: BasicToolsConfig = {}): ToolDefinition[
     createBashTool(boundary, config),
     createReadTool(boundary, config),
     createEditTool(boundary, config),
+    createWriteTool(boundary, config),
   ];
 }
 
 /**
- * basic-tools 插件——唯一工具包，install 时把三个工具注册进 PluginHost。
+ * basic-tools 插件——唯一工具包，install 时把四个工具注册进 PluginHost。
  *
  * 0.55：install 还要注册**一个** BeforeLlm hook（异步 bash 的完成通知）。按名字幂等：
  * 热应用的旁路 host 会为算目标工具集反复 install 同一个插件，重复注册会让同一条通知被注入两次。
@@ -1959,7 +2391,7 @@ export function createBasicTools(config: BasicToolsConfig = {}): ToolDefinition[
 export const basicToolsPlugin: Plugin = {
   name: 'basic-tools',
   version: '0.1.0',
-  description: 'bash / read / edit — the minimal tool set everything else composes from',
+  description: 'bash / read / edit / write — the minimal tool set everything else composes from',
   install(host: PluginHost, options?: { config?: Record<string, unknown> }) {
     const config = parseBasicToolsConfig(options?.config);
     for (const tool of createBasicTools(config)) {
