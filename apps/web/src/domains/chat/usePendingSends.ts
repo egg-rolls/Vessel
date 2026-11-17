@@ -87,7 +87,8 @@ export function usePendingSends(options: {
     [all, options.sessionId],
   );
 
-  // 超时扫描：`queued` 不参与（排队本身可能就是几分钟），判定在 store 里。
+  // 超时扫描：`sending` 15 s、`queued` 3 分钟各有出口（判定在 store 里）；排队跨分钟时
+  // 它会发一次通知，让气泡上的「已排队 N 分钟」跟着走。
   useEffect(() => {
     const timer = window.setInterval(() => {
       pendingSends.sweep();

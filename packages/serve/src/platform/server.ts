@@ -31,6 +31,7 @@ import type {
   PlatformAuthOptions,
   PlatformGateway,
   PlatformGatewayOptions,
+  WebAutoBuildState,
   WebDistProbe,
   WebDistProbeResult,
 } from './types.js';
@@ -156,6 +157,7 @@ async function buildJsonPayload(
   probe: WebDistProbe | undefined,
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>,
   buildInFlight: (() => boolean) | undefined,
+  buildAuto: (() => WebAutoBuildState) | undefined,
 ): Promise<Record<string, unknown> | null> {
   let base: Record<string, unknown>;
   try {
@@ -172,6 +174,9 @@ async function buildJsonPayload(
   const building = buildInFlight?.() === true;
   const live = probe === undefined ? undefined : await probeCached(probe);
   const body: Record<string, unknown> = { ...base, building };
+  // 0.59：`autobuild` 同理不进缓存 —— 三连失败之后必须**立刻**能说「不会再有动作了」。
+  const auto = buildAuto?.();
+  if (auto !== undefined) body.autobuild = auto;
   if (live !== undefined) {
     body.stale = live.stale;
     if (live.newestSource !== undefined) {
@@ -191,8 +196,9 @@ async function buildJsonResponse(
   probe: WebDistProbe | undefined,
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>,
   buildInFlight: (() => boolean) | undefined,
+  buildAuto: (() => WebAutoBuildState) | undefined,
 ): Promise<Response | null> {
-  const body = await buildJsonPayload(staticDir, probe, probeCached, buildInFlight);
+  const body = await buildJsonPayload(staticDir, probe, probeCached, buildInFlight, buildAuto);
   if (body === null) return null;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json;charset=utf-8',
@@ -230,6 +236,8 @@ function createBuildEventStream(options: {
   probeCached: (probe: WebDistProbe) => Promise<WebDistProbeResult | undefined>;
   /** 后台重建是否在进行（见 `PlatformGatewayOptions.webBuildInFlight`）。 */
   buildInFlight: (() => boolean) | undefined;
+  /** 0.59：运行期自动重建的现场状态（见 `PlatformGatewayOptions.webBuildAuto`）。 */
+  buildAuto: (() => WebAutoBuildState) | undefined;
 }): BuildEventStream {
   const encoder = new TextEncoder();
   const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
@@ -255,6 +263,7 @@ function createBuildEventStream(options: {
       options.probe,
       options.probeCached,
       options.buildInFlight,
+      options.buildAuto,
     );
     return payload === null ? undefined : JSON.stringify(payload);
   };
@@ -476,12 +485,15 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
   const probeWebDist = createWebDistProbeCache();
   // 0.58：`building` 的来源。**不进上面那份缓存**：构建一结束就必须说「结束了」。
   const buildInFlight = opts.webBuildInFlight;
+  // 0.59：`autobuild`（运行期还会不会自己重建）同样不进缓存：三连失败要立刻可见。
+  const buildAuto = opts.webBuildAuto;
   // 0.57：产物变更推送（SSE）。`/build.json` 仍是唯一事实源，这里只是加速通道。
   const buildEvents = createBuildEventStream({
     staticDir,
     probe: opts.webDist,
     probeCached: probeWebDist,
     buildInFlight,
+    buildAuto,
   });
 
   /**
@@ -683,6 +695,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
           opts.webDist,
           probeWebDist,
           buildInFlight,
+          buildAuto,
         );
         if (buildResponse !== null) {
           for (const [key, value] of Object.entries(extra)) {

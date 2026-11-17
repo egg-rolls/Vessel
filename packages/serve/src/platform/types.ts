@@ -73,6 +73,26 @@ export interface WebDistProbeResult {
   newestSource?: { path: string; mtimeMs: number };
 }
 
+/**
+ * 0.59：运行期自动重建的现场状态（`/build.json` 的 `autobuild` 字段）。
+ *
+ * 为什么需要它：0.58 之前「产物过期」只有一种含义 —— 没人再建了，提示条只能说
+ * 「失败，重启重试」。0.59 起 gateway 在运行期也会自己重建，于是 `stale: true` 分裂成
+ * 两件事：**马上就会自己好**（`enabled: true`）和**不会再有动作了**（`enabled: false`：
+ * 被关掉、只在启动时建、或连续失败到顶）。前端据此决定说「正在构建」还是说「失败/已关闭」。
+ *
+ * 判定逻辑不在这里：组合根注入（`src/web-dist.ts#webDistAutoBuildStatus`）。
+ */
+export interface WebAutoBuildState {
+  /** 运行期还会不会自己重建。 */
+  enabled: boolean;
+  mode: 'live' | 'startup' | 'off';
+  /** 连续失败次数（成功一次清零）。 */
+  failures: number;
+  /** 最后一次失败的一句话原因；没失败过则省略。 */
+  lastError?: string;
+}
+
 /** 组合根注入的实时判定；省略 = `/build.json` 只发磁盘上的静态构建戳。 */
 export type WebDistProbe = () => Promise<WebDistProbeResult>;
 
@@ -124,6 +144,15 @@ export interface PlatformGatewayOptions {
    * 省略 = 永远认为没有构建在进行（`building: false`），老行为。
    */
   webBuildInFlight?: () => boolean;
+  /**
+   * 0.59：运行期自动重建的现场状态（`/build.json` 的 `autobuild` 字段）。
+   *
+   * 与 `webBuildInFlight` 分开的理由相同：它是**内存事实**（失败次数 / 是否停手），
+   * 混进 5 秒缓存的现场判断里会让「刚失败」这件事晚 5 秒才说出去。
+   *
+   * 省略 = 响应体里没有 `autobuild`：前端按「不知道」处理，沿用 0.58 的文案（老行为）。
+   */
+  webBuildAuto?: () => WebAutoBuildState;
   /** registry 中全部本地 node（`auto_start:false` 也注入，只做健康展示）。 */
   nodes: PlatformNodeDescriptor[];
   /**
