@@ -41,10 +41,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.collapseNav': 'Collapse sidebar',
   'nav.expandNav': 'Expand sidebar',
   'nav.jumpToMain': 'Skip to main content',
-  'webBuild.outdated': 'The console was updated in the background; reload to load the new version.',
-  'webBuild.stale': 'Web sources changed but the served build was not rebuilt (the UI may be old).',
-  'webBuild.staleFix':
-    'Fix: restart the gateway (`vessel gateway restart` rebuilds on start), or run `bun run build:web`; reload this page once it is rebuilt.',
+  'webBuild.outdated': 'Front-end update available, reload to load the new version',
+  'webBuild.building': 'Front-end update is being built…',
+  'webBuild.buildingHint':
+    'A new front-end version is being prepared in the background. This banner switches to a reload prompt when it is ready — reloading now still shows the old UI.',
+  'webBuild.stale': 'Front-end update failed. Restart to retry',
   'webBuild.reload': 'Reload',
   'nav.more': 'More',
   'nav.diagnostics': 'Diagnostics',
@@ -484,9 +485,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.diagnostics.overlayKeys': 'Overlay keys',
   'observe.diagnostics.notAvailable': 'Not available',
   // 0.33 D: doctor --deep checks
-  'observe.diagnostics.doctorTitle': 'Doctor checks (--deep)',
+  'observe.diagnostics.doctorTitle': 'Self-check',
   'observe.diagnostics.doctorHint':
-    'The same nine checks as `vessel doctor --deep`, read from existing RPC data. Checks the gateway cannot observe state why instead of guessing.',
+    'Nine self-checks read from existing RPC data. Checks the gateway cannot observe state why instead of guessing.',
   'observe.diagnostics.doctorColCheck': 'Check',
   'observe.diagnostics.doctorColStatus': 'Status',
   'observe.diagnostics.doctorColSource': 'Source',
@@ -501,19 +502,19 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.diagnostics.doctor.unset': '<unset>',
   'observe.diagnostics.doctor.config.detail': 'user={user} · project={project}',
   'observe.diagnostics.doctor.config.unverified':
-    'Config validation errors/warnings are not exposed by gateway RPC; run `vessel doctor`',
+    'Config validation errors/warnings are not exposed by gateway RPC; run a self-check on the machine hosting the app',
   'observe.diagnostics.doctor.provider.detail': '{provider} / {model} / api key {key}',
   'observe.diagnostics.doctor.dataDir.configured': '{path} (source: {source})',
   'observe.diagnostics.doctor.dataDir.gatewayDecided':
     'decided by the gateway (not reported; remote or older gateway)',
   'observe.diagnostics.doctor.session.relative': 'relative to the gateway data dir',
   'observe.diagnostics.doctor.dataDir.unverified':
-    'Writability is checked by `vessel doctor` on the host',
+    'Writability can only be confirmed by a self-check on the host',
   'observe.diagnostics.doctor.session.memory': 'backend=memory (no persistence)',
   'observe.diagnostics.doctor.session.detail': 'backend={backend} · path={path}',
   'observe.diagnostics.doctor.session.derived':
-    'derived from data_dir; run `vessel doctor` for the resolved path',
-  'observe.diagnostics.doctor.writability': 'writability not verified (needs `vessel doctor`)',
+    'derived from the data dir; the resolved path was not confirmed on the host',
+  'observe.diagnostics.doctor.writability': 'writability not verified (needs a host self-check)',
   'observe.diagnostics.doctor.plugins.ok': '{enabled} enabled / {total} discovered',
   'observe.diagnostics.doctor.plugins.missing': 'unknown configured plugin(s): {names}',
   'observe.diagnostics.doctor.mcp.invalid': 'invalid server config: {names}',
@@ -526,7 +527,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     '{host}:0 (system-assigned) · endpoint {endpoint}',
   'observe.diagnostics.doctor.servePort.detail': '{host}:{port} configured · endpoint {endpoint}',
   'observe.diagnostics.doctor.servePort.unverified':
-    'Port bindability is checked by `vessel doctor`; the browser cannot bind',
+    'Port bindability needs a host self-check; the browser cannot bind',
   'observe.diagnostics.doctor.attach.disconnected': 'Gateway is not attached',
   'observe.diagnostics.doctor.feishu.disabled': 'Feishu is not enabled',
   'observe.diagnostics.doctor.feishu.detail': 'app id {appId}, app secret {appSecret}',
@@ -773,7 +774,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'hub.directory.description': 'Hub {hub} at {url}. Metadata only; the Hub does not proxy content.',
   'hub.directory.empty': 'No nodes in this Hub directory yet',
   'hub.directory.emptyHint':
-    'Join a node with `vessel hub join`; this page only displays the directory.',
+    'This node has not joined any Hub yet; the directory appears here once it does.',
   'hub.directory.connecting': 'Connecting to the Hub for live updates…',
   'hub.directory.reconnecting': 'Hub connection lost; reconnecting…',
   'hub.directory.pointer': 'Node {node} has updates.',
@@ -1628,7 +1629,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.metrics.stat.avgDuration': 'Average duration (max {max}ms)',
   'observe.metrics.stat.updatedAt': 'Updated at',
   'observe.metrics.sourceDesc':
-    'Current source: {source}. Metrics are in-process counters, not a time series; retained usage history is available via `vessel metrics`.',
+    'Current source: {source}. Metrics are in-process counters, not a time series; usage history lives in usage stats.',
   'observe.evals.noTokenReason': 'Connect to read eval reports.',
   'observe.evals.disabledTitle': 'Evals are not enabled',
   'observe.evals.disabledReason': 'This gateway has no evals runner.',

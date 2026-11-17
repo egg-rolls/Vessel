@@ -125,6 +125,7 @@ import {
 import { serveStatic } from './gateway/static.js';
 import { createInteractionsRegistry } from './interactions-registry.js';
 import type { StoredInteraction } from './interactions-store.js';
+import { logEvent } from './log-event.js';
 import type { McpGatewayOptions } from './mcp.js';
 import type { MetricsProvider, MetricsSnapshot } from './metrics.js';
 import {
@@ -699,7 +700,7 @@ function logWsClosed(ws: Ws, code: number, reason: string): void {
   } catch {
     // 已关的连接不保证还能读积压：读不到就报 0，别让日志自己抛。
   }
-  console.warn('[vessel] gateway.ws.closed', {
+  logEvent('warn', 'gateway.ws.closed', {
     conn_id: ws.data.connId ?? '-',
     close_by: cause?.by ?? 'client',
     close_code: code,
@@ -2034,7 +2035,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const now = Date.now();
       if (now - timelineTailHoldOverflowLoggedAt >= 1_000) {
         timelineTailHoldOverflowLoggedAt = now;
-        console.warn('[vessel] gateway.timeline_tail.hold_overflow', {
+        logEvent('warn', 'gateway.timeline_tail.hold_overflow', {
           session_id: record.session_id,
           seq: record.seq,
           held: hold.length,
@@ -2145,7 +2146,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const now = Date.now();
       if (now - timelineTailOverflowLoggedAt >= 1_000) {
         timelineTailOverflowLoggedAt = now;
-        console.warn('[vessel] gateway.timeline_tail.cut_short', {
+        logEvent('warn', 'gateway.timeline_tail.cut_short', {
           batch: batch.length,
           ...timelineTailStats,
         });
@@ -2156,7 +2157,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     } catch (error) {
       // 扇出路径上的意外不许冒泡回发布点（那里连着写者的 fsync）——记录已持久，
       // 客户端按游标续拉即可。
-      console.error('[vessel] gateway.timeline_tail.flush', {
+      logEvent('error', 'gateway.timeline_tail.flush', {
         batch: batch.length,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -2561,7 +2562,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // 结果校验只在 VESSEL_VALIDATE_RESULTS=1 时触发；事件 payload 只含 method/path。
     onResultInvalid: ({ method, path }) => {
       // 可观测性（DECISION-020 §R1.8）：只记 method/path，绝不打印结果 payload。
-      console.warn('[vessel] rpc.result_invalid', { method, path });
+      logEvent('warn', 'rpc.result_invalid', { method, path });
       publishDiagnostic('rpc.result_invalid', 'rpc', { method, path });
     },
   });
@@ -3128,7 +3129,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ...(frame.check !== undefined ? { check: frame.check } : {}),
       at: Date.now(),
     };
-    console.warn('[vessel] timeline.gap_reported', report);
+    logEvent('warn', 'timeline.gap_reported', report);
     // `run_id` 用诊断伪 run（与 `rpc.result_invalid` 的 `'rpc'` / 联邦事件的 `'federation'`
     // 同一范式）：它不是某次 run 的事件，绝不能混进会话里任何一个真实 run 的事件列表。
     // 会话归属靠 `data.session_id`（gateway 的出站归属以「事件自报」优先），所以它仍然
@@ -3240,7 +3241,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       try {
         checkpoint = await durableStore.store.load(runId);
       } catch (error) {
-        console.warn('[vessel] ask.respond: checkpoint load failed; answer recorded only', {
+        logEvent('warn', 'ask.respond.checkpoint_load_failed', {
           run_id: runId,
           message: error instanceof Error ? error.message : String(error),
         });
@@ -3257,7 +3258,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       return true;
     } catch (error) {
       // fail-closed：答案已经落定，续跑失败不得冒泡到 RPC（也不重试）。
-      console.warn('[vessel] ask.respond: resume failed; answer recorded only', {
+      logEvent('warn', 'ask.respond.resume_failed', {
         run_id: runId,
         message: error instanceof Error ? error.message : String(error),
       });
@@ -3305,7 +3306,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         delivered =
           (await deliver(target, batchId === undefined ? undefined : { batchId })) === true;
       } catch (error) {
-        console.warn('[vessel] ask answer delivery failed; answer recorded only', {
+        logEvent('warn', 'ask.answer.delivery_failed', {
           request_id: target.requestId,
           message: error instanceof Error ? error.message : String(error),
         });

@@ -245,6 +245,12 @@ export {
   type LocalRpcOptions,
 } from './local.js';
 export {
+  type EventFieldKind,
+  formatEventFields,
+  formatEventLine,
+  logEvent,
+} from './log-event.js';
+export {
   MCP_SERVER_STATES,
   type McpGatewayOptions,
   type McpServerState,

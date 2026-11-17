@@ -101,6 +101,11 @@ export type ProxyWsClosedBy = 'downstream' | 'upstream' | 'platform';
 
 export interface ProxyWsBridgeOptions {
   nodeId: string;
+  /**
+   * node 的显示名（日志里打 `node=<名字>`，没有名字才退回 id 前 8 位）。
+   * 只用于可读性，不参与任何判定。
+   */
+  nodeName?: string;
   /** `ws(s)://<node origin>/<ws path>`；origin 只来自注册表。 */
   wsUrl: string;
   /** node 生效 token（只在平台进程内使用）；undefined = 该 node 走回环匿名。 */
@@ -662,6 +667,7 @@ export class ProxyWsBridge {
       via: 'proxy',
       conn_id: this.connId,
       node_id: this.options.nodeId,
+      ...(this.options.nodeName !== undefined ? { node_name: this.options.nodeName } : {}),
       who,
       code: mapped,
       reason: safeReason,

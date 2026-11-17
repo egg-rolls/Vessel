@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageBar, type MessageBarItem } from '../components/MessageBar';
+import { MessageBar, type MessageBarAction, type MessageBarItem } from '../components/MessageBar';
 import { PaletteEntitiesProvider } from '../components/PaletteEntities';
 import { useToast, useToastFeed } from '../components/ToastProvider';
 import {
@@ -159,18 +159,41 @@ export function AppShell() {
       }
     : null;
 
-  const buildItem: MessageBarItem | null =
-    outdated === undefined
-      ? null
-      : {
-          id: 'web-build-outdated',
-          tone: 'warn',
-          // 两种原因两种说法：已重建 ⇒ 刷新就够；源码新、产物没重建 ⇒ 刷新没用，
-          // 怎么修写进悬停全文（胶囊里只留一句短的）。刷新永远由用户点，不自动 reload。
-          text: outdated === 'stale' ? t('webBuild.stale') : t('webBuild.outdated'),
-          ...(outdated === 'stale' ? { hint: t('webBuild.staleFix') } : {}),
-          actions: [{ label: t('webBuild.reload'), onClick: () => window.location.reload() }],
-        };
+  // 三态三种说法（0.58）：**正在构建**时不给「刷新」按钮 —— 磁盘上还是旧产物，刷新那
+  // 一刻什么都不会变，这正是用户被误导的地方（他照着点了刷新，看到的还是旧界面）。
+  // 已构建好 ⇒ 刷新就够；构建失败 / 被禁用 ⇒ 只剩「重启应用再试」这一条路（后端会在
+  // 启动时自己重建），文案里**不给任何命令** —— 用产品的不是程序员。刷新永远由用户点，
+  // 不自动 reload。
+  const buildItem: MessageBarItem | null = ((): MessageBarItem | null => {
+    if (outdated === undefined) return null;
+    const reload: MessageBarAction = {
+      label: t('webBuild.reload'),
+      onClick: () => window.location.reload(),
+    };
+    if (outdated === 'building') {
+      return {
+        id: 'web-build-outdated',
+        tone: 'warn',
+        text: t('webBuild.building'),
+        hint: t('webBuild.buildingHint'),
+      };
+    }
+    if (outdated === 'stale') {
+      // 构建失败 / 被禁用：**不给命令**（用户不一定是程序员），只给结果与下一步动作。
+      return {
+        id: 'web-build-outdated',
+        tone: 'warn',
+        text: t('webBuild.stale'),
+        actions: [reload],
+      };
+    }
+    return {
+      id: 'web-build-outdated',
+      tone: 'warn',
+      text: t('webBuild.outdated'),
+      actions: [reload],
+    };
+  })();
 
   const messageItems: MessageBarItem[] = [
     ...shellItems,

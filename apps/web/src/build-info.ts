@@ -31,20 +31,25 @@ export const WEB_BUILD: WebBuildInfo = (() => {
  *   唯一能知道「我跑的是旧代码、而且还没人重建」的证据：这种情况下磁盘上的
  *   `builtAt` 与页面自己那份 bundle 是**同一次构建**，比对永远一致。
  * - `newestSource`：落后到什么程度（哪个源文件比产物新），只用于提示的诊断文案。
+ * - `building`：0.58 新增 —— 后台重建**此刻**在跑。判断顺序里它最优先：构建中刷新
+ *   只会拿到正在被改写的旧产物，提示条必须说「等一等」，不能叫人去刷新。
  */
 export interface ServedBuildInfo extends WebBuildInfo {
   stale?: boolean;
   newestSource?: { path: string; mtime: string };
+  building?: boolean;
 }
 
 /**
- * 「页面该刷新了」的两种原因：
+ * 「页面该刷新了」的三种原因：
+ * - `building`：后台正在重建 ⇒ 现在刷新没用（磁盘上还是旧的），等它说完事；
  * - `rebuilt`：服务端已经重建过产物（`builtAt` 变了）⇒ 刷新就能拿到新版本；
- * - `stale`：源码比产物新、**还没人重建** ⇒ 刷新也没用，得先重建。
+ * - `stale`：源码比产物新、**还没人重建**（或重建失败/被禁用）⇒ 刷新也没用，只能重启重试。
  *
- * 分开是因为「怎么办」不同：前者一句话「刷新」，后者必须告诉人怎么把产物建出来。
+ * 分开是因为「怎么办」不同：一个叫用户等，一个叫他刷新，最后一个必须告诉人怎么把
+ * 产物建出来。混成一句话就会出现「构建中让人刷新」这种误导。
  */
-export type OutdatedReason = 'rebuilt' | 'stale';
+export type OutdatedReason = 'building' | 'rebuilt' | 'stale';
 
 /**
  * 把「服务端说的一份构建」解析成 `ServedBuildInfo`；不认识的形状一律 `undefined`。
@@ -64,6 +69,7 @@ export function parseServedBuild(raw: unknown): ServedBuildInfo | undefined {
     commit: typeof record.commit === 'string' ? record.commit : 'unknown',
     // 只有明确的 `true` 才算证据：缺字段 / 类型不对都当「不知道」，宁可沉默。
     ...(record.stale === true ? { stale: true } : {}),
+    ...(record.building === true ? { building: true } : {}),
     ...(typeof newest === 'object' &&
     newest !== null &&
     typeof newest.path === 'string' &&
@@ -105,12 +111,16 @@ export async function fetchServedBuild(signal?: AbortSignal): Promise<ServedBuil
 /**
  * 页面为什么该刷新了；不该刷新返回 `undefined`。
  *
- * 顺序有讲究：`builtAt` 不一致说明服务端**已经**有更新的产物，刷新立刻见效，
- * 比「源码又变了」更值得先说。`stale === true` 是「源码新、产物没重建」——
- * 这种时候刷新不会变好，提示必须带上修复办法（见 AppShell 的 hint 文案）。
+ * 顺序有讲究：
+ * 1. `building === true` **最先** —— 构建进行中磁盘上还是旧产物，此时叫用户刷新是
+ *    句废话（真机上就是这么被骂的）；先让他等，构建完了下一帧自然会变成 `rebuilt`；
+ * 2. `builtAt` 不一致说明服务端**已经**有更新的产物，刷新立刻见效；
+ * 3. `stale === true` 是「源码新、产物没重建」（构建失败 / 被禁用）—— 这种时候刷新
+ *    不会变好，提示只能说「重启重试」（见 AppShell 的三态文案）。
  */
 export function outdatedReason(served: ServedBuildInfo | undefined): OutdatedReason | undefined {
   if (served === undefined) return undefined;
+  if (served.building === true) return 'building';
   if (WEB_BUILD.builtAt !== 'unknown' && served.builtAt !== WEB_BUILD.builtAt) return 'rebuilt';
   if (served.stale === true) return 'stale';
   return undefined;

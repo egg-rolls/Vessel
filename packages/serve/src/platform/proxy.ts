@@ -11,6 +11,7 @@
  * @module @vessel-agent/serve/platform/proxy
  */
 
+import { formatEventFields } from '../log-event.js';
 import {
   checkProxyHttpPath,
   checkProxyMethod,
@@ -218,7 +219,8 @@ export class PlatformProxy {
     this.log =
       deps.log ??
       ((fields) => {
-        console.warn('[vessel]', fields);
+        // 0.58：单行 key=value（见 `log-event.ts`）；VESSEL_LOG_JSON=1 时退单行 JSON。
+        console.warn(formatEventFields(fields));
       });
     this.fetchImpl = deps.fetchImpl ?? fetch;
   }
@@ -343,6 +345,7 @@ export class PlatformProxy {
               {
                 event: 'gateway.proxy.rpc_denied',
                 node_id: node.nodeId,
+                node_name: node.name,
                 method: typeof method === 'string' ? method : null,
                 code: denial.code,
               },
@@ -374,6 +377,7 @@ export class PlatformProxy {
         this.logThrottled(`${aborted ? 'timeout' : 'unreachable'}|${node.nodeId}|${route.rest}`, {
           event: aborted ? 'gateway.proxy.node_timeout' : 'gateway.proxy.node_unreachable',
           node_id: node.nodeId,
+          node_name: node.name,
           path: route.rest,
           timeout_ms: this.limits.requestTimeoutMs,
         });
@@ -438,6 +442,7 @@ export class PlatformProxy {
       this.logThrottled(`failed|${node.nodeId}|${route.rest}`, {
         event: 'gateway.proxy.failed',
         node_id: node.nodeId,
+        node_name: node.name,
         path: route.rest,
         error: error instanceof Error ? error.name : 'unknown',
       });
@@ -516,6 +521,7 @@ export class PlatformProxy {
 
     const options: ProxyWsBridgeOptions = {
       nodeId: node.nodeId,
+      nodeName: node.name,
       wsUrl,
       token: this.deps.resolveToken(node.nodeId),
       preAuthenticated: auth.preAuthenticated,
@@ -531,6 +537,7 @@ export class PlatformProxy {
           {
             event: 'gateway.proxy.rpc_denied',
             node_id: node.nodeId,
+            node_name: node.name,
             method: typeof frame.method === 'string' ? frame.method : null,
             via: 'ws',
             code: denial.code,

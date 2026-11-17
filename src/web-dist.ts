@@ -276,6 +276,17 @@ function summarizeBuildFailure(error: unknown): string {
 /** 进行中的构建；重复调用共用同一个 promise，避免并发起两份。 */
 let inFlightBuild: Promise<void> | undefined;
 
+/**
+ * 后台重建**此刻**是否在跑（`/build.json` 的 `building` 字段来源，0.58）。
+ *
+ * 存在的理由：构建要 19 秒，而「构建中」和「构建完了但失败了」对用户是**两件事** ——
+ * 前者让他等（刷新也没用，磁盘上还是旧的），后者才该让他重启重试。只看 `stale` 分不出
+ * 这两种，所以把「在跑」这个内存事实直接说出去。
+ */
+export function webDistBuildInFlight(): boolean {
+  return inFlightBuild !== undefined;
+}
+
 /** 起一次 `bun run build`（或复用在飞的那次）；输出全部捕获，只报一行进度/结果。 */
 function startBuild(options: EnsureWebDistOptions, warn: (line: string) => void): Promise<void> {
   if (inFlightBuild !== undefined) return inFlightBuild;
