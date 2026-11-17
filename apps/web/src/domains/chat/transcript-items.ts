@@ -6,6 +6,7 @@
  * 工具运行→结束只改 item 的字段，不产生新 item、不重挂。
  *
  * 身份命名：
+ * - msg:id:<message_id>       历史消息（**服务端盖的稳定 id**，一条消息一个；0.56）
  * - msg:<runId>:<role>:<ts>   历史消息（结构化身份：`run_id` + `role` + `timestamp`，见
  *                             `structuredHistoryKey`；缺 `run_id` / 撞号时退回
  *                             `msg:<绝对下标>`，形状与 0.55 之前相同）
@@ -20,7 +21,8 @@
  * - run:<runId>:input         run 的输入：人的输入（气泡）/ agent 投递（agent 卡）/
  *                             运行时上下文输入（`vessel:*` → 环境信息卡）/
  *                             rotate 交接嘱托（`rotate:handoff[:<epoch>]` → 交接卡）；
- *                             落盘后一律让位给历史那份
+ *                             落盘后一律让位给历史那份（有 `messageId` 时按**身份**让位，
+ *                             否则走 0.51 的认领判据）
  * - run:<runId>:failure       一次 run 的失败卡（事件流优先，会话记录快照兜底）
  *
  * 历史消息的 key 为什么不再锚绝对下标：下标 = `detailWindow.start + 窗口内下标`，只要历史
@@ -39,6 +41,15 @@
  * `segmentIndex`）优先 —— 它不受「正文被 Output guardrail 改写」影响，内容不同也让位，
  * 屏上以落盘那份为准；身份缺失（旧数据）或不唯一时才退回**内容相等**，那时认不出来
  * 就两边都渲染 —— 宁可重复，绝不吞消息。
+ *
+ * 0.56 起在这两层**之上**加了一道结构性的：`message_id`。
+ * - 服务端把消息写进上下文与事件流时盖同一个字符串（core `message-identity.ts`），
+ *   历史 item 的 key 直接是 `msg:id:<message_id>`，live 输入项带 `messageId`；
+ * - 装配面于是只做一件事：**同一个 id ⇒ 只渲染一次**（历史那份胜，位置/操作按钮都是
+ *   历史的）。不再需要「该 run 恰好一条输入」这种唯一性假设，也不再看正文是否被改写；
+ * - 同一条消息落盘两份（真机有实例，见 `noteDuplicateIdentity`）时，历史侧丢弃后者 +
+ *   计数 + 首次 warn —— 重复从「靠内容猜不出来」变成「可观测的一个数字」；
+ * - 旧数据没有该字段时**逐字节**走上面那两层，一个行为都不变。
  */
 import type { Message, MessageRef, ProjectionView, RunEvent } from '../../gateway/types';
 import type { SessionDetail } from '../../gateway/types/sessions';
@@ -124,6 +135,13 @@ export interface RuntimeNoticeItem extends ItemMeta {
   runId?: string;
   /** 环境信息卡的解析结果（scope / 摘要 / 展开行 / 折叠条数）；非 notice 没有。 */
   env?: EnvNoticeCard;
+  /**
+   * live 侧独有：这条消息的稳定 id（0.56）。
+   *
+   * 与历史那份**同一个字符串**（服务端落盘时盖的）⇒ 装配面按 id 让位，不必再看内容
+   * 有没有被 guardrail 改写、也不必看该 run 有几条输入。缺省 = 旧数据。
+   */
+  messageId?: string;
 }
 
 export interface RunInputItem extends ItemMeta {
@@ -142,6 +160,13 @@ export interface RunInputItem extends ItemMeta {
    * 有值 ⇒ 渲染 agent 卡；无值 ⇒ 用户气泡。渲染层不再自己判身份。
    */
   sender?: string;
+  /**
+   * 这条输入消息的稳定 id（0.56）：服务端落盘时盖的同一个字符串。
+   *
+   * 装配面**只看这一个字段**决定「live 气泡让位给历史那条」—— 不看内容相等，也不看
+   * 该 run 有几条输入消息（那两道判据是 0.51 的兜底，旧数据没有 id 时才走）。
+   */
+  messageId?: string;
 }
 
 /**
@@ -158,6 +183,8 @@ export interface AskAnswerItem extends ItemMeta {
   /** 这条消息的完整正文（回退展示 / 复制用，与用户气泡同一份数据）。 */
   text: string;
   card: AskAnswerData;
+  /** 这条消息的稳定 id（0.56；服务端盖的，与历史那份同一个值）。缺省 = 旧数据。 */
+  messageId?: string;
 }
 
 /**
@@ -178,6 +205,8 @@ export interface RotateHandoffItem extends ItemMeta, RotateHandoff {
   runId?: string;
   /** 这条消息的完整正文（与 `Message.content` 一字不差）。 */
   text: string;
+  /** 这条消息的稳定 id（0.56；服务端盖的，与历史那份同一个值）。缺省 = 旧数据。 */
+  messageId?: string;
 }
 
 /**
@@ -707,6 +736,14 @@ export interface HistoryIndex {
    */
   inputsByRun: Map<string, number[]>;
   /**
+   * 历史里出现过的消息稳定 id（0.56）：`message_id` → 该条消息的 item key。
+   *
+   * 用途只有一个：live 侧的输入项（`run-input` / `runtime-notice` / `ask-answer` /
+   * `rotate-handoff`）如果带着**同一个** `message_id`，说明历史上已经有这条消息 ——
+   * 让位（丢弃 live 那份）。这是身份相等，不是内容相等，也不用管该 run 有几条输入。
+   */
+  messageIds: Map<string, string>;
+  /**
    * 认领结论（`ClaimLedger` 一次性判定 + 单调粘住的结果）。
    *
    * 为什么挂在索引上：认领**就是**「历史消息 ⇄ live run」的配对，`buildHistoryIndex`
@@ -848,17 +885,94 @@ export function isCardInputMessage(message: Message): boolean {
  * 真机校验（会话 `09f82ac6`，1359 条消息：387 user / 512 assistant / 458 tool / 2 system）：
  * 三元组 **0 组碰撞**；唯一不带 `run_id` 的就是那 2 条 `system`（退回绝对下标）。
  *
+ * `message_id`（0.56）优先：服务端在消息进入会话时盖的稳定 id，一条消息一个。
+ * 有它时「实时那份」与「落盘那份」拿到**同一个 key 前缀**（`id:<message_id>`），
+ * 于是这两份是不是一回事不必再猜（见 `buildTranscriptItems` 的 `byIdentity` 统计）。
+ * 缺它（旧数据 / 旧 gateway）= 今天的行为，一个字节都不变。
+ *
  * 为什么不是 `seq`：`sessions.get` 只读 `SessionState.messages`、**不扫事件日志**（0.54
  * 的读放大裁决：每次 `sessions.get` 一次全扫是明确不做的事），所以它手里没有任何 seq
  * 事实；`Message` 也没有 `seq` 字段。真要按 seq 编号，得先在 core 落盘时给每条消息盖章
  * （新增持久字段 + 迁移口径），那是另一件事，不在本键的替换范围内。
  */
 function structuredHistoryKey(message: Message): string | undefined {
+  const messageId = message.message_id;
+  if (typeof messageId === 'string' && messageId.length > 0) return `id:${messageId}`;
   const runId = message.run_id;
   if (typeof runId !== 'string' || runId.length === 0) return undefined;
   const ts = message.timestamp;
   if (typeof ts !== 'number' || !Number.isFinite(ts)) return undefined;
   return `${runId}:${message.role}:${String(ts)}`;
+}
+
+/**
+ * 消息的稳定 id（0.56）：服务端盖的那个字符串，缺省 = 旧数据。
+ *
+ * 与 `structuredHistoryKey` 的分工：那个是**item key**（必须唯一，撞号要退回下标），
+ * 这个是**身份**（同一条消息的两个副本必须是同一个值，撞号说明真的重复）。
+ */
+function messageIdOf(message: Message): string | undefined {
+  const messageId = message.message_id;
+  if (typeof messageId !== 'string' || messageId.length === 0) return undefined;
+  return messageId;
+}
+
+/**
+ * 渲染层的**身份审计**（0.56）：同一条消息只能产生一个 item。
+ *
+ * 两个计数器，口径不同，都必须可观测（不许静默）：
+ * - `duplicates`：**同一来源内**同一条消息出现两次（落盘写了两遍 / 事件重复）。这是
+ *   数据侧的重复，渲染层丢弃后者并把计数 + 首次 warn 叫出来 —— 它一旦不是 0，说明
+ *   上游有 bug，绝不能靠前端「猜内容」悄悄抹平。
+ * - `byIdentity`：**跨来源**同一身份合并（live 气泡让位给历史那条）。这是设计要点，
+ *   正常会话里必然 > 0（每轮一次），不是异常。
+ *
+ * 计数是进程级累加（跨会话不重置）：`resetTranscriptIdentityAudit()` 只在诊断 / 校准
+ * 时调用，产品路径不调 —— 「第一次 warn」的语义就是**整个进程只喊一次**。
+ */
+export interface TranscriptIdentityAudit {
+  /** 同一来源内的重复条数（正常会话：0）。 */
+  duplicates: number;
+  /** 跨来源按 id 合并的条数（正常会话：= 有 id 的轮数）。 */
+  byIdentity: number;
+  /** 第一份重复样本（`来源:身份`），供排查；没有重复时 undefined。 */
+  sample?: string;
+}
+
+const identityAudit: TranscriptIdentityAudit = { duplicates: 0, byIdentity: 0 };
+let identityAuditWarned = false;
+
+/** 读当前审计计数（只读快照；诊断 / 门禁用）。 */
+export function transcriptIdentityAudit(): TranscriptIdentityAudit {
+  return { ...identityAudit };
+}
+
+/** 清零审计计数（只给诊断与校准用；产品路径不调用）。 */
+export function resetTranscriptIdentityAudit(): void {
+  identityAudit.duplicates = 0;
+  identityAudit.byIdentity = 0;
+  identityAudit.sample = undefined;
+  identityAuditWarned = false;
+}
+
+/**
+ * 记一次「同一来源内的重复」：丢弃后者 + 计数 + 首次 warn（不许静默）。
+ *
+ * 为什么是 warn 而不是只有一个计数：重复意味着上游（落盘 / 事件通道）把同一条消息写了
+ * 两遍，症状一旦只剩「计数 +1」，没人会去看那个计数器 —— 那正是过去几轮「修了还犯」的
+ * 形状（判据在猜内容，问题藏在不响的地方）。
+ */
+function noteDuplicateIdentity(source: 'history' | 'live', messageId: string): void {
+  identityAudit.duplicates += 1;
+  if (identityAudit.sample !== undefined) return;
+  identityAudit.sample = `${source}:${messageId}`;
+  if (identityAuditWarned) return;
+  identityAuditWarned = true;
+  console.warn(
+    '[transcript] 同一条消息出现两次（已丢弃后者，不影响渲染）：' +
+      `来源 ${source}，message_id ${messageId}。` +
+      '这是上游重复写入的信号，不是渲染层该猜的事。',
+  );
 }
 
 /** 历史窗口 → item + 反查表（只依赖 messages 与 offset，调用侧可安全 memo）。 */
@@ -880,28 +994,43 @@ export function buildHistoryIndex(
   const ambiguousSegments = new Set<string>();
   /** `run_id` → 该 run 的用户消息绝对下标（认领时要求唯一，见 `HistoryIndex.inputsByRun`）。 */
   const inputsByRun = new Map<string, number[]>();
+  /** 消息稳定 id → 它的 item key（0.56，见 `HistoryIndex.messageIds`）。 */
+  const messageIds = new Map<string, string>();
+  /** 已产出的消息 id：同一条消息的第二个副本不再产出 item（见 `noteDuplicateIdentity`）。 */
+  const emittedMessageIds = new Set<string>();
   /** 工具结果消息的时间（历史工具卡的权威 ts：结果落盘那一刻）。 */
   const toolResultTs = new Map<string, number>();
 
   // 身份键碰撞计数：同一个结构化身份出现两条以上 ⇒ 那几条的身份不可信，退回绝对下标
   // （与 `ambiguousSegments` 同一个口径：宁可某次换键，也不许两条消息共用一个 key）。
+  //
+  // `id:` 身份不参与这套退回：`message_id` 撞号的含义与三元组撞号**相反** ——
+  // 三元组撞号是「两条不同的消息恰好同毫秒」（必须都能渲染），id 撞号是「同一条消息
+  // 落了两份」（只该渲染一份，见 `noteDuplicateIdentity`）。把 id 交给同一个退回逻辑，
+  // 就正好把「重复」翻译成「两个不同的 key、两条都画」—— 那正是这次要根除的形状。
   const identityCounts = new Map<string, number>();
   for (const message of messages) {
     const identity = structuredHistoryKey(message);
-    if (identity === undefined) continue;
+    if (identity === undefined || identity.startsWith('id:')) continue;
     identityCounts.set(identity, (identityCounts.get(identity) ?? 0) + 1);
   }
   /**
    * 历史 item 的身份键（`msg:` / `notice:` 共用）。
    *
    * 能给结构化身份就给（窗口怎么移动都不变）；给不出（旧数据 / `system` / 撞号）才退回
-   * 绝对下标，形状与 0.55 之前逐字节相同。
+   * 绝对下标，形状与 0.55 之前逐字节相同。`message_id` 恒直接用（理由见上）。
    */
   const itemKeyOf = (message: Message, absIndex: number, prefix: string): string => {
     const identity = structuredHistoryKey(message);
-    if (identity === undefined || (identityCounts.get(identity) ?? 0) > 1) {
-      return `${prefix}:${String(absIndex)}`;
+    if (identity === undefined) return `${prefix}:${String(absIndex)}`;
+    if (identity.startsWith('id:')) {
+      // 只有真正产出 item 的消息才登记进 `messageIds`（`itemKeyOf` 只在 push 分支里调）：
+      // 隐藏消息 / 被折叠的来源行不该让 live 那份让位。
+      const messageId = messageIdOf(message);
+      if (messageId !== undefined) messageIds.set(messageId, `${prefix}:${identity}`);
+      return `${prefix}:${identity}`;
     }
+    if ((identityCounts.get(identity) ?? 0) > 1) return `${prefix}:${String(absIndex)}`;
     return `${prefix}:${identity}`;
   };
 
@@ -1103,6 +1232,18 @@ export function buildHistoryIndex(
     if (message.role === 'assistant' && !hasContent && ids.length > 0 && !hasReasoning) return;
     if (!hasContent && message.role !== 'user' && !isAgentMessage && !hasReasoning) return;
 
+    // 稳定身份（0.56）：同一条消息（同一个 `message_id`）在历史里只产出一个 item。
+    // 落盘被写了两遍时在这里丢弃后者并计数（`transcriptIdentityAudit().duplicates`）——
+    // 不再靠「key 撞号退回绝对下标」把两份都画出来（那正是用户看到的两个气泡）。
+    const messageId = messageIdOf(message);
+    if (messageId !== undefined) {
+      if (emittedMessageIds.has(messageId)) {
+        noteDuplicateIdentity('history', messageId);
+        return;
+      }
+      emittedMessageIds.add(messageId);
+    }
+
     const sourceText = foldedSourceByAgent.get(absIndex);
     // 「rotate 交接」：新身体的第一条启动嘱托是**发起 rotate 的 agent** 写的
     // 交接书（内置 rotate 工具 → `input_name = rotate:handoff:<epoch>`），不是人打的字。
@@ -1242,6 +1383,7 @@ export function buildHistoryIndex(
     textBySegment,
     ambiguousSegments,
     inputsByRun,
+    messageIds,
   };
 }
 
@@ -1316,6 +1458,10 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
       // 运行时合成输入（idle 唤醒等）带 vessel:* 身份：渲成运行时提示卡（环境信息卡），
       // 绝不画成用户气泡。
       const noticeKind = runtimeContextKindOfName(group.inputName);
+      // 稳定 id（0.56）：与服务端落盘那条消息同一个字符串，装配面按它让位（见
+      // `HistoryIndex.messageIds`）。缺省 = 旧数据 / 旧 gateway ⇒ 退回 0.51 的判据。
+      const messageIdPart =
+        group.inputMessageId !== undefined ? { messageId: group.inputMessageId } : {};
       if (handoff !== undefined) {
         items.push({
           kind: 'rotate-handoff',
@@ -1323,6 +1469,7 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           runId: group.runId,
           text,
           ...handoff,
+          ...messageIdPart,
           ...tsPart,
           ...seqMeta,
         });
@@ -1333,6 +1480,7 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           runId: group.runId,
           text,
           card: askAnswer,
+          ...messageIdPart,
           ...tsPart,
           ...seqMeta,
         });
@@ -1346,6 +1494,7 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           noticeKind,
           text,
           ...(env !== undefined ? { env } : {}),
+          ...messageIdPart,
           ...tsPart,
           ...seqMeta,
         });
@@ -1359,6 +1508,7 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           ...(sender !== undefined ? { sender } : {}),
           // 运行态气泡上方的 chip：与历史侧同一行组件，refs 到了就渲染。
           ...(group.inputRefs !== undefined ? { refs: group.inputRefs } : {}),
+          ...messageIdPart,
           ...tsPart,
           ...seqMeta,
         });
@@ -2253,8 +2403,30 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
       ? input.windowStartTs
       : undefined;
 
+  /** live 侧已经产出过的消息 id（同一帧内 live 自己重复 ⇒ 也是重复，不是合并）。 */
+  const emittedLiveMessageIds = new Set<string>();
   for (const item of live) {
     const runId = 'runId' in item ? item.runId : undefined;
+
+    // 稳定身份（0.56）：历史已经有这条消息（同一个 `message_id`）⇒ live 这份让位。
+    //
+    // 这是「同一条消息只能有一个稳定身份」的最后一道结构保证，判据只有 id 相等：
+    // 不看正文（guardrail 改写不影响）、不看该 run 有几条输入（落盘重复不影响）。
+    // 计数进 `byIdentity`（正常会话里每轮一次，是设计要点，不是异常）；同一帧内 live
+    // 自己出现同一个 id 才是真重复，走 `duplicates` + 首次 warn。
+    const liveMessageId = 'messageId' in item ? item.messageId : undefined;
+    if (liveMessageId !== undefined) {
+      if (history.messageIds.has(liveMessageId)) {
+        identityAudit.byIdentity += 1;
+        continue;
+      }
+      if (emittedLiveMessageIds.has(liveMessageId)) {
+        noteDuplicateIdentity('live', liveMessageId);
+        continue;
+      }
+      emittedLiveMessageIds.add(liveMessageId);
+    }
+
     if (unloadedBefore !== undefined && item.ts !== undefined && item.ts < unloadedBefore) {
       continue;
     }

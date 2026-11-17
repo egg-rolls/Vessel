@@ -35,7 +35,13 @@ export {
   type SessionLogDirectoryPort,
 } from './delete-session.js';
 export { FileSessionStore, SessionCorruptError } from './file-backend.js';
-export { assignMessageIdentities, withRunIdentity } from './message-identity.js';
+export {
+  assignMessageIdentities,
+  injectedMessageIdOf,
+  userMessageIdOf,
+  withMessageId,
+  withRunIdentity,
+} from './message-identity.js';
 export {
   createProjectionCursor,
   extendProjection,

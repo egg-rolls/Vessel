@@ -96,6 +96,25 @@ export interface Message {
    */
   run_segment?: number;
   /**
+   * 消息身份（additive，可缺省）：**这条消息唯一的稳定 id**（0.56）。
+   *
+   * 为什么不是 `run_id + run_segment` 就够了：`run_segment` 只数 assistant 正文段
+   * （`occupiesSegment` 的口径），用户输入 / 注入消息一段都不占 —— 于是「这一轮的输入
+   * 是哪条」在 web 侧只能靠启发式重建：先是内容相等（guardrail 一改写就失效），
+   * 后来是「`inputsByRun` 里恰好一条」（同一 run 落盘两条就失效）。两者都是猜。
+   * 这条字段把猜去掉：消息写入**上下文**与写入**事件流**时带同一个字符串，前端按它归并。
+   *
+   * 生成口径（`message-id.ts`）：只在消息**进入会话**的那一处生成，确定式、可复算
+   * （`${runId}:user` / `${runId}:inject:<下标>`）—— 同一条输入被执行两遍得到同一个 id，
+   * 于是「落盘两份」在渲染层是**结构性**的同一条，而不是两条要猜的内容。
+   * 幂等：已有值一律不覆盖（resume / 重放 / 续跑都保留原 id）。
+   *
+   * 缺失 = 旧数据 / 旧 gateway / 其它注入通道 —— 消费端退回 0.51 的身份 + 内容判据，
+   * 不回填（回填会让同一条消息在两个出口拿到两个 id，比没有 id 更糟）。
+   * Provider 适配层逐字段挑（`providers.ts` 的两处 message map），该字段不进请求体。
+   */
+  message_id?: string;
+  /**
    * 附件引用（additive，可缺省）：只有路径与元信息，**不存正文 / base64**。
    *
    * 旧 session / 旧 gateway 没有这个字段，消费者一律按「无引用」降级；

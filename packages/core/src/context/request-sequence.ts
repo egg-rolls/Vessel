@@ -39,6 +39,7 @@ export const NON_PAYLOAD_FIELDS = [
   'timestamp',
   'run_id',
   'run_segment',
+  'message_id',
   'compaction_summary',
   'refs',
 ] as const;

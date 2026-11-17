@@ -124,6 +124,16 @@ export interface RunGroup {
    * `sessions.get` 的 `messages[].refs` 接管，两条路径渲染同一行 chip。
    */
   inputRefs?: MessageRef[];
+  /**
+   * 输入消息的稳定身份（additive 0.56；来自 `user.message` 的 `message.message_id`）。
+   *
+   * 有它时「实时气泡」与「落盘历史里那条消息」共享同一个 id，渲染层按 id 归并成一条
+   * （见 `transcript-items.ts` 的 `messageIdOf`）—— 不再靠「该 run 恰好一条输入」
+   * 或「正文相等」来猜这两份是不是一回事。
+   *
+   * 缺省 = 旧数据 / 旧 gateway / 非 `user.message` 通道：退回 0.51 的判据，行为不变。
+   */
+  inputMessageId?: string;
   output?: string;
   error?: string;
   /** 0.14 additive：run.failed 的结构化错误元数据（缺字段时 undefined）。 */
@@ -479,6 +489,14 @@ export function createFold(runId: string): RunFold {
         if (group.inputRefs === undefined && message !== undefined) {
           const refs = refsOf(message.refs);
           if (refs.length > 0) group.inputRefs = refs;
+        }
+        // 消息身份（0.56）：实时流与落盘那份**同一个字符串**，渲染层按它归并。
+        // 与 `group.input` 同一条「最后一份落盘文本为准」的口径（两者同一次发布）。
+        if (group.inputMessageId === undefined && message !== undefined) {
+          const messageId = message.message_id;
+          if (typeof messageId === 'string' && messageId.length > 0) {
+            group.inputMessageId = messageId;
+          }
         }
         if (group.sessionId === undefined && typeof d.session_id === 'string') {
           group.sessionId = d.session_id;

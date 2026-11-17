@@ -135,6 +135,10 @@ function asMessage(value: unknown): Message | null {
   // `run_segment` 一律由投影末尾的 `assignMessageIdentities` 统一补，不从载荷里信。
   const runId = readString(value.run_id);
   if (runId !== undefined && runId.length > 0) message.run_id = runId;
+  // 消息身份（additive，0.56）：`message_id` 是写入侧盖的**事实**，投影必须原样带出去 ——
+  // 丢在这里，历史那份就永远没有 id，前端只能退回内容比较（正是要根除的那件事）。
+  const messageId = readString(value.message_id);
+  if (messageId !== undefined && messageId.length > 0) message.message_id = messageId;
   return message;
 }
 
