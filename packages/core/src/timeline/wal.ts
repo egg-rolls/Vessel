@@ -77,11 +77,19 @@ export function crc32State(): Crc32State {
   return { crc: 0xffffffff };
 }
 
-/** 把一段字节喂进累加状态（原地更新并返回）。 */
+/**
+ * 把一段字节喂进累加状态（原地更新并返回）。
+ *
+ * 用**下标循环**而不是 `for (const byte of bytes)`：调用点拿到的常常是 `readFile()`
+ * 返回的 `Buffer`，对它做迭代器遍历会走「逐元素装箱 + next() 调用」的慢路径。实测同一份
+ * 302.8 MB / 1894 块的数据，同一条表驱动实现两种写法相差 7 倍（7.99 ms/块 → 1.1 ms/块，
+ * 见 `scripts/crash-hunt/stress-a-blocks.ts --verify-dir`）。算法与结果一个字没变。
+ */
 export function crc32Update(state: Crc32State, bytes: Uint8Array): Crc32State {
   let crc = state.crc;
-  for (const byte of bytes) {
-    crc = (CRC_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
+  const length = bytes.length;
+  for (let index = 0; index < length; index += 1) {
+    crc = (CRC_TABLE[(crc ^ (bytes[index] ?? 0)) & 0xff] ?? 0) ^ (crc >>> 8);
   }
   state.crc = crc;
   return state;
@@ -100,7 +108,33 @@ export function crc32Final(state: Crc32State): string {
  * 两者结果逐位相同（同一条 IEEE 802.3 多项式）。没有原生实现的环境照旧走表驱动 ——
  * 慢一点，但判据一个字都不变。
  */
+const CRC32_NATIVE_ENV = 'VESSEL_CRC32_NATIVE';
+
+/**
+ * 走不走原生 crc32。**显式开关 + 平台缺省**（0.58 崩溃排查的加固）。
+ *
+ * 缺省规则：`win32` 一律走表驱动，其它平台仍走原生。
+ *
+ * 为什么把 Windows 单独摘出来：0.54 真机（Bun 1.3.9 win32-x64）在 102 分钟处
+ * `panic(main thread): Segmentation fault at address 0xFFFFFFFFFFFFFFFF`，而同一天
+ * 另外两次崩溃（`0x0`、`0x121AA240000`）也都出在原生模块上。原生 crc32 是热路径里
+ * **唯一**的 `node:` 内建调用（`require('node:zlib')`），一块 MiB 级数据就要进一次原生
+ * 代码；表驱动完全不进原生栈。代价实测 +0.98 ms / 159 KB 块（见
+ * `scripts/crash-hunt/probe-crc32.ts`）—— 用一秒里的一毫秒换「进程不崩」，划算。
+ *
+ * 开关取值：`1|true|on` 强制原生；`0|false|off` 强制表驱动；其它（含未设置）按平台缺省。
+ * 环境变量在模块加载时读一次（热路径上不查 env）。
+ */
+export function crc32Implementation(): 'native' | 'table' {
+  const raw = (process.env[CRC32_NATIVE_ENV] ?? '').trim().toLowerCase();
+  if (raw === '1' || raw === 'true' || raw === 'on') return 'native';
+  if (raw === '0' || raw === 'false' || raw === 'off') return 'table';
+  return process.platform === 'win32' ? 'table' : 'native';
+}
+
 const nativeCrc32 = (() => {
+  // 关掉时**连 require 都不发**：`node:zlib` 不该为了「反正用不上」被装进进程。
+  if (crc32Implementation() === 'table') return undefined;
   try {
     const zlib = require('node:zlib') as { crc32?: (data: Uint8Array) => number };
     return typeof zlib.crc32 === 'function' ? zlib.crc32 : undefined;
@@ -108,6 +142,16 @@ const nativeCrc32 = (() => {
     return undefined;
   }
 })();
+
+/**
+ * 本进程**实际**在用的 crc32 实现（诊断一行用）。
+ *
+ * 打印它是为了让「这次的崩溃到底是哪条路」永远有答案：日志里没有这一行，
+ * 就只能凭平台猜。`native` 等于 `undefined`（zlib 没有 crc32）时如实报 `table`。
+ */
+export function crc32ActiveImplementation(): 'native' | 'table' {
+  return nativeCrc32 === undefined ? 'table' : 'native';
+}
 
 /** CRC32（IEEE 802.3，与 zlib 同多项式）；返回 8 位小写十六进制。 */
 export function crc32Hex(input: string | Uint8Array): string {

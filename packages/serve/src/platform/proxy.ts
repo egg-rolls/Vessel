@@ -39,6 +39,41 @@ export { PROXY_BASE_PATH, parseProxyRoute };
 const LOG_THROTTLE_MS = 5_000;
 const LOG_THROTTLE_MAX_KEYS = 256;
 
+/**
+ * HTTP 流式转发的实现（0.58 崩溃加固）。
+ *
+ * - `passthrough`（**win32 缺省**）：把上游 `body` 原样交给 Bun 的原生泵
+ *   （`new Response(upstream.body)`），并用 `req.signal → controller.abort()` 在客户端
+ *   断开时取消上游 fetch；
+ * - `pump`：手写 `ReadableStream` 包 `upstream.body.getReader()`（0.58 原实现）。
+ *
+ * 为什么换：Bun 1.3.9 win32-x64 上，`pump` 形状（手写泵 + 浏览器中途取消 + 上游流还活着）
+ * 会 **稳定复现** gateway 那次崩溃——同一个地址 `0xFFFFFFFFFFFFFFFF`、同一份 bun.report
+ * 指纹（`ea1cf6cdbb…`），0.4–1.5 s 内必崩。取证与最小触发见
+ * `scripts/crash-hunt/probe-stream-crash.ts` 与 `docs/operations/BUN-WIN32-SEGFAULT.md`。
+ *
+ * 开关：`VESSEL_PROXY_HTTP_STREAM=passthrough|pump`（`1`/`native` 同 passthrough，
+ * `0` 同 pump）。其它平台缺省仍是 `pump`：这条崩溃只在 Windows 上取证到，不在别处
+ * 顺手改行为。
+ */
+export type HttpStreamMode = 'pump' | 'passthrough';
+
+/**
+ * `passthrough` 下「整份读完」的上界。
+ *
+ * 1 MiB：代理流量的大头是 `/v1/*` 的 JSON RPC（实测 p99 远小于这个数），而超过 1 MiB 的
+ * 响应几乎都是流（事件流 / 下载），整份读会把「慢消费者」变成「平台内存」。
+ */
+const STREAM_BUFFER_MAX_BYTES = 1024 * 1024;
+
+/** 本进程实际使用的流式转发实现。 */
+export function httpStreamMode(): HttpStreamMode {
+  const raw = (process.env.VESSEL_PROXY_HTTP_STREAM ?? '').trim().toLowerCase();
+  if (raw === 'pump' || raw === '0') return 'pump';
+  if (raw === 'passthrough' || raw === 'native' || raw === '1') return 'passthrough';
+  return process.platform === 'win32' ? 'passthrough' : 'pump';
+}
+
 /** 逐跳头（RFC 7230 §6.1）：转发任一侧都必须剔除。 */
 const HOP_BY_HOP_HEADERS: ReadonlySet<string> = new Set([
   'connection',
@@ -112,6 +147,10 @@ export interface PlatformProxyStats {
   ws_active: number;
   ws_rejected: number;
   ws_pending_bytes: number;
+  /** 走原生直通的流式响应条数（`passthrough` 模式下的累计值）。 */
+  http_passthrough_streams: number;
+  /** 本进程的流式转发实现（`pump` / `passthrough`）：排障第一眼看这一项。 */
+  http_stream_mode: HttpStreamMode;
 }
 
 /** WS 升级的裁决结果：要么给出桥接器，要么给一个可直接返回的响应。 */
@@ -211,6 +250,7 @@ export class PlatformProxy {
   private httpRequests = 0;
   private httpFailures = 0;
   private wsPendingBytes = 0;
+  private transparentStreams = 0;
   private closed = false;
 
   constructor(deps: PlatformProxyDeps) {
@@ -238,6 +278,8 @@ export class PlatformProxy {
       ws_active: this.bridges.size,
       ws_rejected: this.wsRejected,
       ws_pending_bytes: this.wsPendingBytes,
+      http_passthrough_streams: this.transparentStreams,
+      http_stream_mode: httpStreamMode(),
     };
   }
 
@@ -356,9 +398,22 @@ export class PlatformProxy {
       }
 
       // 响应头超时：流式响应在头到达后不再受这个定时器约束（否则 SSE 必被 30s 掐断）。
+      const streamMode = httpStreamMode();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.limits.requestTimeoutMs);
       (timer as { unref?: () => void }).unref?.();
+      /**
+       * 客户端断开 → 取消上游 fetch。
+       *
+       * 只在 `passthrough` 下挂：那时 body 归 Bun 的原生泵，我们没有 `cancel()` 可写，
+       * 唯一能收口上游的地方就是这条 signal。`pump` 下由流的 `cancel()` 负责 —— 两条路
+       * 都不能「没人管」，否则一条被放弃的上游流会一直产生数据（实测：无限流 + 客户端
+       * 反复放弃 ⇒ 约 30 轮之后所有新请求挂住）。
+       */
+      const abortUpstream = (): void => controller.abort();
+      if (streamMode === 'passthrough') {
+        req.signal.addEventListener('abort', abortUpstream, { once: true });
+      }
       let upstream: Response;
       try {
         upstream = await this.fetchImpl(upstreamUrl, {
@@ -371,6 +426,7 @@ export class PlatformProxy {
         });
       } catch (error) {
         clearTimeout(timer);
+        req.signal.removeEventListener('abort', abortUpstream);
         releaseSlot();
         this.httpFailures += 1;
         const aborted = error instanceof Error && error.name === 'AbortError';
@@ -397,10 +453,9 @@ export class PlatformProxy {
 
       const responseHeaders = this.downstreamResponseHeaders(upstream);
 
-      clearTimeout(timer);
-
       // HEAD / 204 / 304 没有正文：直接返回，不等流。
       if (req.method === 'HEAD' || upstream.body === null) {
+        req.signal.removeEventListener('abort', abortUpstream);
         releaseSlot();
         return new Response(upstream.body, {
           status: upstream.status,
@@ -409,21 +464,81 @@ export class PlatformProxy {
         });
       }
 
+      // ── passthrough（win32 缺省）：先尽量「整份读完」，剩下的一律交给原生泵 ──────
+      //
+      // 为什么不手写泵：见 `httpStreamMode()` 的注释。
+      //
+      // 两步：
+      // 1. **声明了长度且 ≤ 1 MiB**（代理流量的大头：`/v1/*` 的 JSON RPC）→ 整份读成
+      //    字节再返回。这条路没有「流」也就没有取消竞态，且顺手把「原生泵会不计背压地
+      //    把上游读空」这件事挡在门外（实测放弃一条无限流时，原生泵会多读约 126 块）。
+      // 2. 其余（SSE、chunked、大响应）→ `new Response(upstream.body)`：body 归 Bun 的
+      //    原生泵，客户端断开由 `req.signal → controller.abort()` 收口上游。
+      //
+      // 槽位统一在这里归还：原生泵接管 body 之后我们既没有 `cancel()` 也没有「流结束」
+      // 的钩子，继续占着槽位只会让 `maxConcurrentRequests` 变成一条永远不归还的泄漏。
+      if (streamMode === 'passthrough') {
+        const contentType = upstream.headers.get('content-type') ?? '';
+        const declared = Number(upstream.headers.get('content-length') ?? Number.NaN);
+        const bufferable =
+          !contentType.includes('text/event-stream') &&
+          Number.isFinite(declared) &&
+          declared >= 0 &&
+          declared <= STREAM_BUFFER_MAX_BYTES;
+        if (bufferable) {
+          try {
+            const whole = new Uint8Array(await upstream.arrayBuffer());
+            releaseSlot();
+            req.signal.removeEventListener('abort', abortUpstream);
+            return new Response(whole, {
+              status: upstream.status,
+              ...(upstream.statusText !== '' ? { statusText: upstream.statusText } : {}),
+              headers: responseHeaders,
+            });
+          } catch {
+            // 读失败（连接被掐 / 上游半路死）：退回 502，别把它伪装成「空 200」。
+            releaseSlot();
+            req.signal.removeEventListener('abort', abortUpstream);
+            this.httpFailures += 1;
+            this.logThrottled(`body|${node.nodeId}|${route.rest}`, {
+              event: 'gateway.proxy.node_body_failed',
+              node_id: node.nodeId,
+              node_name: node.name,
+              path: route.rest,
+            });
+            return jsonError(
+              'node_stream_failed',
+              `node_stream_failed: node ${node.nodeId} 的响应体读到一半断了。`,
+              502,
+            );
+          }
+        }
+        releaseSlot();
+        this.transparentStreams += 1;
+        return new Response(upstream.body, {
+          status: upstream.status,
+          ...(upstream.statusText !== '' ? { statusText: upstream.statusText } : {}),
+          headers: responseHeaders,
+        });
+      }
+      req.signal.removeEventListener('abort', abortUpstream);
+
+      // ── pump：手写泵（非 Windows 缺省；`VESSEL_PROXY_HTTP_STREAM=pump` 可回退） ──
       // 流式转发：一次只 enqueue 一块，槽位在流结束 / 取消时归还 —— 流不会被整体缓存。
       const reader = upstream.body.getReader();
       const bodyStream = new ReadableStream<Uint8Array>({
-        async pull(controller) {
+        async pull(streamController) {
           try {
             const { done, value } = await reader.read();
             if (done) {
               releaseSlot();
-              controller.close();
+              streamController.close();
               return;
             }
-            if (value !== undefined) controller.enqueue(value);
+            if (value !== undefined) streamController.enqueue(value);
           } catch (error) {
             releaseSlot();
-            controller.error(error);
+            streamController.error(error);
           }
         },
         cancel(reason) {

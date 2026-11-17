@@ -511,6 +511,47 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
   });
 
   /**
+   * 0.58 崩溃排查：**周期性资源采样**（`VESSEL_RESOURCE_SAMPLE_MS`，缺省 60000；0 = 关）。
+   *
+   * 为什么必须加：0.54 那次 `panic(main thread): Segmentation fault` 之后，能拿到的只有
+   * Bun 自己的死后读数（RSS/Peak/Commit/Faults），**崩之前一条都没有** —— 于是「是持续
+   * 泄漏还是瞬时踩空」这个问题永远答不了。一行 60 秒的成本可以忽略，缺的是有人记。
+   *
+   * 字段刻意选「一眼能判断形状」的那几个：
+   * - `rss` / `heap`：持续单向上升 = 泄漏；窄带抖动 = 正常；
+   * - `ws_active` / `ws_pending`：WS 桥的连接数与待发字节（背压是否在涨）；
+   * - `http_inflight` / `passthrough`：代理 HTTP 的并发与本次加固后新增的直通计数；
+   * - `mode`：代理流式转发实现（`pump` / `passthrough`）——下次崩了先看这一项，
+   *   因为 `pump` 在本机（win32）有可复现的段错误（见 `proxy.ts#httpStreamMode`）。
+   *
+   * 这里**不报** crc32 实现：本进程（平台网关）不写时间线，把 core 拉进来只为打一行诊断
+   * 不值得；时间线那条 crc32 的实况由 `scripts/crash-hunt/stress-a-blocks.ts` 的读数给出。
+   */
+  const resourceSampleMs = Number(process.env.VESSEL_RESOURCE_SAMPLE_MS ?? 60_000);
+  if (Number.isFinite(resourceSampleMs) && resourceSampleMs > 0) {
+    const resourceTimer = setInterval(() => {
+      const usage = process.memoryUsage();
+      const proxyStats = proxy.stats();
+      console.warn(
+        formatEventFields({
+          event: 'gateway.resources',
+          uptime_s: Math.round(process.uptime()),
+          rss_mb: Math.round(usage.rss / 1048576),
+          heap_mb: Math.round(usage.heapUsed / 1048576),
+          http_requests: proxyStats.http_requests,
+          http_failures: proxyStats.http_failures,
+          http_inflight: proxyStats.http_inflight,
+          passthrough: proxyStats.http_passthrough_streams,
+          mode: proxyStats.http_stream_mode,
+          ws_active: proxyStats.ws_active,
+          ws_pending: proxyStats.ws_pending_bytes,
+        }),
+      );
+    }, resourceSampleMs);
+    resourceTimer.unref?.();
+  }
+
+  /**
    * 平台数据面闸（`/platform/rpc` 与 `/nodes/**` 的**同一套**权威判定）。
    *
    * 抽出来不是为了少写几行：两处一旦各写一套，代理就会成为「比 RPC 更松的那个入口」——
