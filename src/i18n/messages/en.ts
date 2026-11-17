@@ -340,6 +340,10 @@ export const en: Record<MessageKey, string> = {
   'gateway.status.starting': 'Starting (pid {pid}); not yet confirmed.',
   'gateway.status.degraded': 'Process alive but identity not confirmed (pid {pid}): {reason}',
   'gateway.status.unknown': 'Unable to confirm the gateway state; no files were deleted.',
+  'gateway.status.nodesAliveWithoutPlatform':
+    'The platform layer is not listening, but {count} node process(es) are still running ({pids}) — ' +
+    'nodes are kept across a platform restart/handoff and the next platform adopts them (usually ' +
+    'within a second); stop them too with: vessel gateway stop --stop-nodes',
   'gateway.status.foreignHost': 'Lock belongs to another host ({host}); no files were deleted.',
   // ── stall watchdog (0.58) ──
   'gateway.status.supervise': 'Watchdog',

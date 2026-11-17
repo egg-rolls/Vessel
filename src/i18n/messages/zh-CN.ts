@@ -325,6 +325,9 @@ export const zhCN = {
   'gateway.status.starting': '启动中（pid {pid}），尚未确认。',
   'gateway.status.degraded': '进程存活但身份未确认（pid {pid}）：{reason}',
   'gateway.status.unknown': '无法确认 gateway 状态，未删除任何文件。',
+  'gateway.status.nodesAliveWithoutPlatform':
+    '平台层没在监听，但仍有 {count} 个 node 进程在跑（{pids}）—— 平台重启/交接期间 node 会保留，' +
+    '新平台起来会接管它们（通常一秒内）；要连 node 一起停：vessel gateway stop --stop-nodes',
   'gateway.status.foreignHost': '锁属于其它主机（{host}），未删除任何文件。',
   // ── 存活看门狗（0.58）──
   'gateway.status.supervise': '存活看门狗',

@@ -356,6 +356,55 @@ export function nodeListenFromConfig(config: VesselConfig): NodeListenInfo {
 }
 
 /**
+ * 「活进程自己写的地址」优先于「配置推出来的地址」。
+ *
+ * 依据：`<nodeDataDir>/gateway.pid` 是那个**正在跑的进程自己**落的监听地址。
+ * adopt 探活、`gateway status` 的节点投影、平台代理的 `api_url` 都必须打「实际在跑的
+ * 那一个」，否则配置与记录不一致时（换过 `node.port`、换过 cwd/project 配置重启、
+ * 端口被系统分配过）会出现两个后果：
+ * - 探活打到**别人的进程**上，健康回包里的 `node_id` 不是本节点 ⇒ supervisor 把活着
+ *   的节点标 `node_identity_mismatch` / `failed`，平台在却没有任何可用节点（用户看到
+ *   的就是「进程还在，但什么都不动」）；
+ * - 状态页把别人的 node 显示成「自己的 node up」。
+ *
+ * 只在记录**活着**且 `node_id` 不冲突时采用；其余一律回落到配置（不猜、不改记录）。
+ */
+export async function preferLiveNodeListen(
+  nodeDataDir: string,
+  fallback: NodeListenInfo,
+  options: { nodeId?: string; tls?: boolean } = {},
+): Promise<{ listen: NodeListenInfo; source: 'record' | 'config'; pid?: number }> {
+  const record = await readGatewayPidRecord(nodeDataDir).catch(() => null);
+  if (record === null || !isProcessAlive(record.pid)) {
+    return { listen: fallback, source: 'config' };
+  }
+  if (
+    options.nodeId !== undefined &&
+    record.node_id !== undefined &&
+    record.node_id !== options.nodeId
+  ) {
+    // 记录属于另一个 node（身份冲突）：不采用，留给既有 node_identity_mismatch 判据。
+    return { listen: fallback, source: 'config' };
+  }
+  if (!Number.isInteger(record.port) || record.port <= 0) {
+    return { listen: fallback, source: 'config' };
+  }
+  const host = record.host.trim() === '' ? fallback.host : record.host;
+  return {
+    listen: {
+      host,
+      port: record.port,
+      url: gatewayBaseUrl(
+        { pid: record.pid, started_at: record.started_at, host, port: record.port, version: '0' },
+        options.tls === true,
+      ),
+    },
+    source: 'record',
+    pid: record.pid,
+  };
+}
+
+/**
  * 读取任意 PID 记录指向端口的 `/health`（GET，不发送 token）。
  * 0.49 G1：gateway 拆分模式的记录 host/port 是 **platform** 监听。
  */
@@ -411,7 +460,11 @@ async function localNodeStatusViews(
     entries.map(async (entry): Promise<LocalNodeStatusView> => {
       const autoStart = entry.auto_start;
       if (entry.config_path === undefined) {
-        const listen = nodeListenFromConfig(config);
+        const live = await preferLiveNodeListen(entry.data_dir, nodeListenFromConfig(config), {
+          ...(entry.node_id !== undefined ? { nodeId: entry.node_id } : {}),
+          tls: config.node?.tls !== undefined,
+        });
+        const listen = live.listen;
         const health = await probeHttpHealth({
           pid: 0,
           started_at: new Date(0).toISOString(),
@@ -432,7 +485,15 @@ async function localNodeStatusViews(
           configPath: entry.config_path,
           env: { ...env, VESSEL_DATA_DIR: entry.data_dir },
         });
-        const listen = nodeListenFromConfig(loaded.config);
+        const live = await preferLiveNodeListen(
+          entry.data_dir,
+          nodeListenFromConfig(loaded.config),
+          {
+            ...(entry.node_id !== undefined ? { nodeId: entry.node_id } : {}),
+            tls: loaded.config.node?.tls !== undefined,
+          },
+        );
+        const listen = live.listen;
         const health = await probeHttpHealth(
           {
             pid: 0,
@@ -462,6 +523,63 @@ async function localNodeStatusViews(
       }
     }),
   );
+}
+
+/**
+ * 平台层不在监听时，「还有谁在跑」的唯一可信来源：各 node 自己的 `gateway.pid`。
+ *
+ * 为什么需要：`gateway restart`（缺省 handoff）会先停平台层、node/hub 原样留着等新平台
+ * adopt。这段时间里 `collectGatewayState` 只有 **0 个条目**（旧平台已释放、新平台还没建
+ * 锁），于是 `gateway status` 会说「未运行」—— 事实是「平台层在换手，会话还在 node 上跑」。
+ * 一句话说反了，用户就会以为整个 gateway 没了/卡死了（0.59 事故口径）。
+ *
+ * 只读既有运行时文件（`gateway.pid` / `hub.lock` / `nodes.json`），不新增状态实体。
+ */
+export interface LiveNodeSurvivor {
+  name: string;
+  pid: number;
+  url: string;
+  auto_start: boolean;
+}
+
+async function liveNodeSurvivors(options: {
+  config: VesselConfig;
+  gatewayDataDir: string;
+}): Promise<LiveNodeSurvivor[]> {
+  let entries: NodeRegistryEntry[];
+  try {
+    const load = await loadNodeRegistry(options.gatewayDataDir);
+    entries =
+      load.kind === 'ready'
+        ? load.registry.nodes
+        : [
+            await synthesizeImplicitNode({
+              config: options.config,
+              dataDir: options.gatewayDataDir,
+            }),
+          ];
+  } catch {
+    return [];
+  }
+  const survivors: LiveNodeSurvivor[] = [];
+  for (const entry of entries) {
+    const record = await readGatewayPidRecord(entry.data_dir).catch(() => null);
+    if (record === null || !isProcessAlive(record.pid)) continue;
+    if (
+      entry.node_id !== undefined &&
+      record.node_id !== undefined &&
+      record.node_id !== entry.node_id
+    ) {
+      continue;
+    }
+    survivors.push({
+      name: entry.name,
+      pid: record.pid,
+      url: gatewayBaseUrl(record, false),
+      auto_start: entry.auto_start,
+    });
+  }
+  return survivors;
 }
 
 /**
@@ -1394,6 +1512,29 @@ export async function gatewayStatus(
     stateKind === 'platform'
       ? await localNodeStatusViews(context.config, context.env, context.dataDir)
       : [];
+  // 0.59：平台层「不在」时不许只说「未运行」——还要交代仍在跑的 node（见
+  // `liveNodeSurvivors`）。惰性求值：只有真的落到「0 个实例」分支才读一次。
+  let survivorsPromise: Promise<LiveNodeSurvivor[]> | undefined;
+  const printPlatformDownSurvivors = async (): Promise<void> => {
+    if (stateKind !== 'platform') return;
+    survivorsPromise ??= liveNodeSurvivors({
+      config: context.config,
+      gatewayDataDir: context.dataDir,
+    });
+    const survivors = await survivorsPromise;
+    if (survivors.length === 0) return;
+    print(
+      ui.warn(
+        t('gateway.status.nodesAliveWithoutPlatform', {
+          count: survivors.length,
+          pids: survivors.map((node) => `${node.name}=${node.pid}`).join('、'),
+        }),
+      ),
+    );
+    for (const survivor of survivors) {
+      print(`  ${ui.dim(`node ${survivor.name}  ${survivor.url}  pid ${survivor.pid}`)}`);
+    }
+  };
   let printedNodeViews = false;
   const printNodeViews = (): void => {
     if (printedNodeViews || nodeViews.length === 0) return;
@@ -1439,6 +1580,7 @@ export async function gatewayStatus(
     print(ui.rule(48));
     if (selected.length === 0) {
       print(ui.kv(t('gateway.status.status'), t('gateway.notRunning'), 10));
+      await printPlatformDownSurvivors();
       return 1;
     }
     for (const entry of selected) {
@@ -1487,6 +1629,7 @@ export async function gatewayStatus(
   print(ui.rule(48));
   if (entries.length === 0) {
     print(ui.kv(t('gateway.status.status'), t('gateway.notRunning'), 10));
+    await printPlatformDownSurvivors();
     print(
       `  ${ui.dim(
         t('gateway.status.pidFile', {
@@ -2369,11 +2512,19 @@ async function resolveLocalNodes(options: {
       }
     }
 
+    // 0.59：「已经在跑的那个进程」自己写的地址优先于配置端口（见 `preferLiveNodeListen`）。
+    // adopt 探活与平台代理都用这一份，配置与记录不一致时不会打到别人的进程上。
+    const live = await preferLiveNodeListen(entry.data_dir, listen, {
+      ...(entry.node_id !== undefined ? { nodeId: entry.node_id } : {}),
+      tls: nodeConfig.node?.tls !== undefined,
+    });
+    listen = live.listen;
+
     const nodePort = listen.port;
     if (!Number.isInteger(nodePort) || nodePort <= 0) {
       throw new LocalNodeStartError(
         'node_port_conflict',
-        `node "${entry.name}": serve.port must be a fixed non-zero port`,
+        `node "${entry.name}": node.port must be a fixed non-zero port`,
       );
     }
     if (options.platformPort !== 0 && nodePort === options.platformPort) {
