@@ -11,7 +11,7 @@
  */
 
 import { mkdir, readFile, stat, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   normalizeClearedToolCallIds,
   normalizeContextAnchor,
@@ -92,6 +92,44 @@ type FileStamp =
  */
 const LIST_RICH_CACHE_LIMIT = 512;
 
+/**
+ * `listRich()` 摘要侧车（`.<壳文件名>.info.json`，与壳同目录）的后缀。
+ *
+ * 为什么需要它：`listRich()` 只要元数据（title / preview / status / 时间戳 / 条数），
+ * 而壳里 99% 的字节是 `messages` —— 进程刚起（内存缓存空）时实测 **349 个会话 / 267 MB
+ * 壳 ⇒ 整份 parse ~900 ms**，而真正要看的那几个字段加起来不到 1 KiB。侧车把这份摘要
+ * 摊成一个独立小文件，**唯一失效键 = 壳的 (size, mtimeMs)**：壳一变（写侧 temp+rename
+ * ⇒ mtime/size 必变）侧车当场作废，退回整份 parse，并顺手把侧车补回最新。
+ *
+ * 命名是「**壳文件路径** + 后缀」而不是「按会话 id」：它描述的是**这一个文件**（正式路径
+ * 与 legacy 未编码路径是两份文件，同一 session id 可能两个都在），也因此不必再造一份 id
+ * 编码/解码口径。
+ *
+ * **开头必须有点**（`.<id>.json.info.json`）：老版本（0.56 及以前）的 `scanIds()` 用
+ * `Bun.Glob('*.json')` 枚举会话，不认这个后缀 —— 带点则 glob 不匹配（实测
+ * `Bun.Glob('*.json')` 不返回点开头的文件），于是**滚动升级期间老进程也不会把它当成
+ * 一个会话**（否则列表里会多出 349 张 1970-01-01 的幽灵会话）。新代码这一侧另有
+ * `scanIds()` 的后缀登记做第二道保险。
+ */
+const INFO_CACHE_SUFFIX = '.info.json';
+
+/**
+ * 摘要侧车的磁盘形状。
+ *
+ * `v` 不认识就**当没有这个文件**（回退整份 parse）：这份缓存是派生物，读不懂的版本
+ * 绝不猜；`info === null` 是「这份壳没有消息」的**结论**也要一起缓存 —— 否则空会话
+ * 每次都还要 parse 一遍（而它照样不进列表，输出不受影响）。
+ */
+interface InfoCacheFile {
+  v: 1;
+  /** 壳的字节数（与 `shell_mtime_ms` 一起构成唯一失效键） */
+  shell_size: number;
+  /** 壳的 mtime（同 `stat().mtimeMs`，含小数） */
+  shell_mtime_ms: number;
+  /** 那一刻 `toSessionInfo()` 的结果；`null` = 空会话（不进列表） */
+  info: SessionInfo | null;
+}
+
 /** 读侧会话壳快照缓存的一条（见 `FileSessionStore#stateCache`）。 */
 interface CachedState {
   /** 这份对象是从哪个路径 parse 出来的（正式路径 / legacy 路径必须分开） */
@@ -116,6 +154,50 @@ interface CachedState {
    * `scripts/check-listrich-cache.ts` 用它数「这一趟到底 parse 了几个文件」。
    */
   parseJson?: (text: string) => unknown;
+}
+
+/**
+ * `listRich()` 的**有界并发**度（一次同时在途的会话数）。
+ *
+ * 每个会话只做两次独立的文件系统调用（stat 壳 + 读侧车），并发在这里买的是「重叠等待」，
+ * 不是 CPU：8 路对一块本地盘既不抢带宽，也不会把 349 个句柄同时打开。真机 349 个会话
+ * 实测串行 45–70 ms、8 路 18–28 ms（Windows/NTFS，含杀软）；再往上加没有增量收益，
+ * 因为瓶颈是每次调用的固定开销而不是排队。
+ */
+const LIST_RICH_CONCURRENCY = 8;
+
+/**
+ * 有界并发的遍历（顺序无关的场景专用）。
+ *
+ * 语义：`run` 至多 `limit` 个同时在途；**第一个错误按原样抛出**（其余在途任务跑完即止），
+ * 与串行版「遇到错误就中断」对外等价 —— 调用方不依赖「跑了多少个」。
+ */
+async function forEachBounded<T>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<void>,
+): Promise<void> {
+  const width = Math.max(1, Math.min(limit, items.length));
+  let cursor = 0;
+  let failure: { error: unknown } | undefined;
+  const lane = async (): Promise<void> => {
+    for (;;) {
+      if (failure !== undefined) return;
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      const item = items[index];
+      if (item === undefined) return;
+      try {
+        await run(item);
+      } catch (error) {
+        failure ??= { error };
+        return;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: width }, lane));
+  if (failure !== undefined) throw failure.error;
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -216,6 +298,16 @@ export class FileSessionStore implements SessionStore {
    * 需要「同长度改写 + 同 mtime 刻度」同时成立，比缓存省下的 parse 便宜得多。
    */
   private readonly infoCache = new Map<string, SessionInfo>();
+  /**
+   * 本轮 `listRich()` 里排队的摘要侧车写入（自愈写回）。
+   *
+   * 为什么排队而不是直接 `void`：这个进程可能**说完就走**（CLI / TUI 冷启动只列一次就
+   * 退出），fire-and-forget 的写会跟着进程一起消失 —— 于是每一次冷启动都重新 parse 整份壳，
+   * 侧车永远建不起来。所以 `listRich()` 返回之前把它们收口（`Promise.allSettled`）：
+   * 多花的是**第一次**那一趟的写盘（实测 +几十 ms），换的是此后每次冷启动 10–15 ms。
+   * 失败一律吞掉（`writeInfoCache` 内部已 catch），不影响本次结果。
+   */
+  private infoWriteQueue: Promise<void>[] = [];
   /** 目录创建只做一次（失败后可重试） */
   private dirReady?: Promise<void>;
   /** 同一 session 的写入串行化；值为永不 reject 的 tail */
@@ -453,15 +545,90 @@ export class FileSessionStore implements SessionStore {
     }
   }
 
+  /** 摘要侧车的路径：壳路径 + `.info.json`（与壳同目录、同前缀，删会话时一起删） */
+  private infoPathOf(shellPath: string): string {
+    return join(dirname(shellPath), `.${basename(shellPath)}${INFO_CACHE_SUFFIX}`);
+  }
+
   /**
-   * 单个状态文件 → `listRich()` 需要的摘要（带缓存）。
+   * 读侧车：戳对不上 / 文件不在 / 形状不认 ⇒ `undefined`（= 没命中，回退整份 parse）。
    *
-   * 命中只花一次 `stat`；未命中才 `readFile + JSON.parse(整份文件)`。返回值：
+   * **绝不抛**：侧车是派生物，坏了、没权限、被截断都只意味着「这一条慢一点」，不许让
+   * 一次列表读取失败。里面的 `JSON.parse` 走全局实现，不经过 `parseJson` 注入点 ——
+   * 那个注入点是「这一次到底 parse 了几份**壳**」的量尺，侧车不是壳。
+   */
+  private async readInfoCache(
+    shellPath: string,
+    stamp: { size: number; mtimeMs: number },
+  ): Promise<SessionInfo | null | undefined> {
+    let text: string;
+    try {
+      text = await readFile(this.infoPathOf(shellPath), 'utf8');
+    } catch {
+      return undefined;
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text) as unknown;
+    } catch {
+      return undefined;
+    }
+    if (typeof raw !== 'object' || raw === null) return undefined;
+    const cache = raw as Partial<InfoCacheFile>;
+    if (cache.v !== 1) return undefined;
+    if (cache.shell_size !== stamp.size || cache.shell_mtime_ms !== stamp.mtimeMs) return undefined;
+    if (cache.info === null) return null;
+    const info = cache.info;
+    if (typeof info !== 'object' || info === null) return undefined;
+    // 只认「一份摘要」该有的形状：缺字段的当脏数据（宁可多 parse 一次，也不许编一条假会话）。
+    if (
+      typeof info.session_id !== 'string' ||
+      typeof info.updated_at !== 'number' ||
+      typeof info.message_count !== 'number'
+    ) {
+      return undefined;
+    }
+    return info;
+  }
+
+  /**
+   * 落侧车（best-effort）：写失败只当「下次还得 parse 一遍」，**绝不影响本次结果**。
+   *
+   * `durable: false`：派生数据不值得一次 fsync —— 丢了就是退化回整份 parse，没有正确性。
+   */
+  private async writeInfoCache(
+    shellPath: string,
+    stamp: { size: number; mtimeMs: number },
+    info: SessionInfo | null,
+  ): Promise<void> {
+    const payload: InfoCacheFile = {
+      v: 1,
+      shell_size: stamp.size,
+      shell_mtime_ms: stamp.mtimeMs,
+      info,
+    };
+    try {
+      await atomicWrite(this.infoPathOf(shellPath), JSON.stringify(payload), { durable: false });
+    } catch {
+      // 侧车是派生数据：写不进去就让它下次再算一遍。
+    }
+  }
+
+  /**
+   * 单个状态文件 → `listRich()` 需要的摘要（三档，命中即返回）。
+   *
+   * 1. **内存缓存**（同一进程内同一份文件只算一次，键含 size + mtime）；
+   * 2. **摘要侧车**（跨进程：进程刚起时也只读一个小文件 + 一次 `stat`，不碰 254 MB 的壳）；
+   * 3. 都没有 ⇒ `readFile + JSON.parse(整份文件)`，算完把侧车补上（自愈，无需迁移）。
+   *
+   * 返回值：
    * - `SessionInfo`：会话非空，进列表；
-   * - `null`：文件在 stat 之后消失，或会话没有消息（空会话不进列表，**不缓存**——
-   *   空文件很小，缓存收益不值得为它放宽「值 = SessionInfo」的口径）；
+   * - `null`：文件在 stat 之后消失，或会话没有消息（空会话不进列表）；
    * - 损坏：抛 `SessionCorruptError`（与 `load()` 同一口径，调用方按单文件跳过处理；
    *   异常路径**不写缓存**，坏文件不会污染缓存）。
+   *
+   * 三档**输出逐字节相同**：侧车存的就是 `toSessionInfo()` 的返回值，而它只在
+   * (size, mtime) 与壳对得上时才作数。
    */
   private async infoForPath(
     path: string,
@@ -473,10 +640,17 @@ export class FileSessionStore implements SessionStore {
     // `SessionInfo` 全是原始类型，浅拷贝即完整拷贝。
     if (cached !== undefined) return { ...cached };
 
+    const sidecar = await this.readInfoCache(path, stamp);
+    if (sidecar !== undefined) {
+      if (sidecar === null) return null;
+      this.infoCacheSet(key, sidecar);
+      return { ...sidecar };
+    }
+
     const state = await this.readStateFile(path);
     if (!state.found) return null;
-    if ((state.state.messages?.length ?? 0) === 0) return null;
-    const info = toSessionInfo(state.state);
+    const empty = (state.state.messages?.length ?? 0) === 0;
+    const info = empty ? null : toSessionInfo(state.state);
 
     // 读与 stat 之间文件可能被原子写替换：这份内容不能挂在旧键下（否则下一次
     // 同一 (path,size,mtime) 会命中内容不一致的条目）。戳不一致就放弃缓存这一条。
@@ -486,7 +660,13 @@ export class FileSessionStore implements SessionStore {
       confirm.size === stamp.size &&
       confirm.mtimeMs === stamp.mtimeMs
     ) {
-      this.infoCacheSet(key, info);
+      if (info !== null) this.infoCacheSet(key, info);
+      // 自愈：这次 parse 是白读的，把结论记下来，下一次冷启动就不必再读整份壳。
+      // **排队**（不是 `void`）：`listRich()` 结束前会统一收口，否则「列一次就退出」的
+      // 进程会让这些写跟着进程一起消失（见 `infoWriteQueue`）。
+      this.infoWriteQueue.push(
+        this.writeInfoCache(path, { size: stamp.size, mtimeMs: stamp.mtimeMs }, info),
+      );
     }
     return info;
   }
@@ -597,6 +777,13 @@ export class FileSessionStore implements SessionStore {
     };
 
     await atomicWrite(this.filePath(sessionId), JSON.stringify(disk, null, 2));
+    // 0.57：写了壳**不动摘要侧车**。它按 (size, mtime) 自校验 ⇒ 这一份侧车当场作废，
+    // 下一次列表读会重算并补回最新（读侧自愈），不需要写侧多付一次 stat + 写盘。
+    //
+    // 量过：写侧顺带刷新（stat 壳 + 写侧车）让一次保存 3.7–5.3 ms → 12.4–12.7 ms
+    // （400 条消息的会话，20/40 轮中位数），而它省下的只是**别的进程**下一次冷启动对
+    // 这一份壳的一次整份 parse（~1–15 ms，且只对「刚写过的那几个会话」）。2–3 倍的写
+    // 代价换一次性的读收益，不划算 —— 热路径（每次 run 都要保存）尤其不划算。
   }
 
   /**
@@ -622,10 +809,14 @@ export class FileSessionStore implements SessionStore {
     const candidates = [this.filePath(sessionId), this.legacyFilePath(sessionId)];
     for (const candidate of candidates) {
       if (candidate === undefined) continue;
-      try {
-        await unlink(candidate);
-      } catch {
-        // 文件不存在则静默忽略
+      // 壳与它的摘要侧车一起删：侧车只描述壳，壳没了它就是垃圾文件
+      // （`scanIds()` 虽然会跳过它，但留着会让目录越长越乱）。
+      for (const path of [candidate, this.infoPathOf(candidate)]) {
+        try {
+          await unlink(path);
+        } catch {
+          // 文件不存在则静默忽略
+        }
       }
     }
   }
@@ -639,11 +830,14 @@ export class FileSessionStore implements SessionStore {
       const ids: string[] = [];
       for await (const f of glob.scan(this.basePath)) {
         if (f.startsWith('.')) continue;
-        // 会话目录里同时存在 `<id>.json`（会话壳）与 `<id>.projection.json`（投影游标快照，
-        // 0.56 引入）。`*.json` 会把后者也当成一个会话 ⇒ 同一个会话在列表里出现两次：
-        // 一张有真实 updated_at、另一张变成 1970-01-01（因为它是快照、没有时间字段）。
+        // 会话目录里同时存在 `<id>.json`（会话壳）、`<id>.projection.json`（投影游标快照，
+        // 0.56 引入）与 `.<id>.json.info.json`（`listRich()` 摘要侧车，0.57 引入；带点 ⇒
+        // 这个 glob 本来就不返回它，下面那行是第二道保险）。
+        // `*.json` 会把它们也当成一个会话 ⇒ 同一个会话在列表里出现两次：
+        // 一张有真实 updated_at、另一张变成 1970-01-01（因为它是侧车、没有时间字段）。
         // 以后再加任何 `<id>.<kind>.json` 侧车文件，都要登记到这里。
         if (f.endsWith(PROJECTION_CACHE_SUFFIX)) continue;
+        if (f.endsWith(INFO_CACHE_SUFFIX)) continue;
         const raw = f.replace(/\.json$/, '');
         try {
           ids.push(decodeURIComponent(raw));
@@ -686,18 +880,29 @@ export class FileSessionStore implements SessionStore {
     const ids = await this.scanIds();
     const results: SessionInfo[] = [];
 
-    for (const id of ids) {
+    // 0.57：**有界并发**（不是多线程）。每个会话是「stat + 读侧车」两次独立的文件系统
+    // 调用，串行 349 次就等于 349 个来回排在一行里（真机 ~45–70 ms）；8 路并发只是把
+    // 等待重叠起来，不增加任何工作、不改变任何一条结果 —— 顺序由下面那次全序 sort
+    // （`updated_at` 倒序 + `session_id` 升序）决定，与 push 的先后无关。
+    await forEachBounded(ids, LIST_RICH_CONCURRENCY, async (id) => {
       try {
         const info = await this.listRichInfo(id);
         if (info !== null) results.push(info);
       } catch (error) {
-        if (error instanceof SessionCorruptError) continue;
+        // 0.8.1：单个文件损坏只跳过这一项（与串行版同一口径）；其它错误照原样抛。
+        if (error instanceof SessionCorruptError) return;
         throw error;
       }
-    }
+    });
 
     // updated_at 倒序；同值用 session_id 升序，避免刷新时顺序抖动。
     results.sort(compareSessionInfo);
+    // 收口本轮的自愈写回（见 `infoWriteQueue`）：让「列过一次就退出」的进程也把侧车落下。
+    if (this.infoWriteQueue.length > 0) {
+      const pending = this.infoWriteQueue;
+      this.infoWriteQueue = [];
+      await Promise.allSettled(pending);
+    }
     return results;
   }
 
