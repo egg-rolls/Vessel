@@ -687,7 +687,15 @@ export interface HistoryIndex {
    * 因为按身份让位会让其中一段被永久隐藏 —— 那是唯一不可恢复的方向。
    */
   ambiguousSegments: Set<string>;
-  /** `run_id` → 该 run 的用户消息绝对下标（同一 run 可能有多条：注入消息 + 真实输入）。 */
+  /**
+   * `run_id` → 该 run 的**人类输入**消息绝对下标（`vessel:*` runtime 上下文不在内）。
+   *
+   * 为什么把 runtime 上下文排掉：它们是 BeforeLlm 尾消息注入的「输入副本」，也带同一个
+   * `run_id`，混进来就等于每个带注入的 run 都有 ≥2 条输入消息 ⇒ 身份认领的唯一性判据
+   * 恒不成立（见 `buildHistoryIndex` 里那条注释与 `uniqueInputOfRun`）。
+   * 摘掉之后这个数组只可能因为「真的一位用户消息 + 一份注入」以外的情况变长；
+   * 不唯一（≥2）仍然安全地退回内容认领。
+   */
   inputsByRun: Map<string, number[]>;
   /**
    * 认领结论（`ClaimLedger` 一次性判定 + 单调粘住的结果）。
@@ -985,8 +993,21 @@ export function buildHistoryIndex(
       const list = userByContent.get(text);
       if (list === undefined) userByContent.set(text, [absIndex]);
       else list.push(absIndex);
-      // 身份：该 run 的用户消息下标（同一 run 可能有多条：注入消息 + 真实输入）。
-      const userRunId = identityRunId(message);
+      // 身份：该 run 的**人类输入**下标（唯一的「这一轮的输入是哪条消息」）。
+      //
+      // 为什么必须排除 runtime 上下文（`vessel:*`）：它们也是 `role:'user'`、也带同一个
+      // `run_id`（BeforeLlm 的尾消息注入，见 `runtime-notice-hook.ts` / `inbox.ts` 的
+      // `createInboxNoticeHook`）。混进来之后 `inputsByRun.get(run).length` 恒 > 1，
+      // `uniqueInputOfRun` 的唯一性判据全线失效 ⇒ 每一轮都退回「正文相等」的内容认领，
+      // 而内容认领唯一的软肋正是这条链路要解决的那件事：落盘前的 guardrail 会改写正文
+      // （PII 打码，真机样本：`ID+vessel-agent@users.noreply.github.com` → `«pii:neutralized»`）。改写过的那一轮
+      // 内容对不上 ⇒ 认领失败 ⇒ live 的气泡 + 历史的气泡**两个都渲染**（用户看到的
+      // 「我自己的消息出现两次」；正文侧同理，靠段身份兜住）。
+      // 实测 main 会话 09f82ac6：88 轮里 79 轮带 `vessel:*` 注入，79/79 走不进身份路径。
+      //
+      // `vessel:*` 消息本身**不**从 `userByContent` 摘掉：idle 唤醒这类 run 的输入
+      // **就是**一条 `vessel:notice`（`input_name` 带前缀），那条路继续按内容认领。
+      const userRunId = isRuntimeContextMessage(message) ? undefined : identityRunId(message);
       if (userRunId !== undefined) {
         const indexes = inputsByRun.get(userRunId);
         if (indexes === undefined) inputsByRun.set(userRunId, [absIndex]);
@@ -1695,7 +1716,8 @@ interface ClaimCore {
  * `run_id` + `run_segment`（服务端盖章，见 core `assignMessageIdentities`），live 段带
  * `segmentIndex`（fold 的计数器）。同一身份 ⇒ 同一段 ⇒ **内容不同也让位**（落盘权威，
  * 被 guardrail 打码过就展示打码后的），差异记进 `stats.rewrittenSegments` 留痕。
- * 身份缺失 / 不唯一（旧数据、注入消息与真实输入并存、撞号）⇒ 退回内容路径，**不猜**。
+ * 身份缺失 / 不唯一（旧数据、`RunOptions.messages` 注入与真实输入并存、撞号）⇒ 退回内容
+ * 路径，**不猜**。runtime 上下文（`vessel:*`）不算输入，见 `inputsByRun`。
  */
 function computeClaimCore(
   history: HistoryIndex,
@@ -1707,9 +1729,11 @@ function computeClaimCore(
   let cursor = -Infinity;
   for (const fact of facts) {
     if (fact.input.length === 0) continue;
-    // ① 身份认领：历史里属于**这个 run** 的用户消息只有一条时，它就是这一轮的输入。
+    // ① 身份认领：历史里属于**这个 run** 的人类输入只有一条时，它就是这一轮的输入。
     //    为什么要求唯一：一次 run 可以有多条 user 消息（`RunOptions.messages` 注入 +
     //    真实输入），拿错一条就会把真正的输入藏起来，而历史那条渲染的是别的内容。
+    //    runtime 上下文（`vessel:*`）已经不在这张表里（见 `inputsByRun`），所以「注入消息
+    //    与真实输入并存」不再把每一轮的身份认领都判死。
     const byIdentity = uniqueInputOfRun(history, fact.runId, claimedUser);
     if (byIdentity !== undefined) {
       claimedUser.add(byIdentity);

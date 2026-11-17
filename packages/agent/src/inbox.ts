@@ -1081,6 +1081,18 @@ export function createInboxNoticeHook(options: {
   /** 每个 hook（= 每个 body）独立；body 重建时重新开始提示。 */
   // `undefined` = 这具 body 还没注入过（或计数已归零），下次非零计数必注入。
   let lastCounts: string | undefined;
+  /**
+   * 最近一次注入的 `(run_id, 正文)`：**同一次 run 内同文只提示一次**。
+   *
+   * 为什么需要：`lastCounts` 判的是三个计数，而「pending 1 → 被取走（0）→ 又来一条（1）」
+   * 会让签名变化、正文却一字不差 —— 模型在同一轮的上下文里已经看着同一行
+   * `[inbox] 1 pending`，再插一条是纯重复。实测 main 会话 09f82ac6：20 条 inbox 卡里
+   * 3 对是同一 run 内的同文重复（run f9d02983 / 5a8fb2e4 / 960a5215）。
+   *
+   * **只按 run 去重**，不做会话级内容去重：换 body（新 run）必须照常收到这条提示，
+   * 否则「新身体不知道自己有未读」，那正是这条提示存在的理由。
+   */
+  let lastInjection: { runId: string; content: string } | undefined;
   return {
     name: 'vessel:inbox-notice',
     type: HookType.BeforeLlm,
@@ -1101,14 +1113,28 @@ export function createInboxNoticeHook(options: {
       }
       const counts = `${unread}:${pending}:${held}`;
       if (counts === lastCounts) return;
+      const content = noticeContent(unread, pending);
+      const runId = typeof ctx.run_id === 'string' ? ctx.run_id : '';
+      // 同一次 run 内正文没变 ⇒ 模型已经在上下文里看到过同一行，不再插一条（见 lastInjection）。
+      // 计数签名仍然更新：这样「同一 run 内再来一次同样的计数」不会反复走判定。
+      if (
+        runId !== '' &&
+        lastInjection !== undefined &&
+        lastInjection.runId === runId &&
+        lastInjection.content === content
+      ) {
+        lastCounts = counts;
+        return;
+      }
       const message: Message = {
         role: 'user',
         name: 'vessel:notice',
-        content: noticeContent(unread, pending),
+        content,
         timestamp: Date.now(),
       };
       ctx.messages = [...(ctx.messages ?? []), message];
       lastCounts = counts;
+      lastInjection = { runId, content };
       try {
         options.onNotified?.({
           runId: ctx.run_id,

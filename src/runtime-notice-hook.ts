@@ -142,13 +142,48 @@ export function formatNotices(notices: readonly FormattableNotice[]): string {
 
 export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook {
   const limit = options.limit ?? NOTICE_INJECT_LIMIT;
+  /**
+   * run → 已经注入过的通知正文（一条通知的完整多行块，见 `formatNoticeLine`）。
+   *
+   * 为什么按 run 记而不是按 session 记：同一次 run 里第二次注入**一字不差**的通知对模型
+   * 没有新信息（它已经在上下文里读到了），只会让会话时间线上多一张一模一样的卡；
+   * 而换 run（新 body）必须照常收到 —— 那正是「新身体要知道环境变了」的通道。
+   * **会话级内容去重是错的**：实测 main 会话 09f82ac6 里 9 张 PII 失效卡对应 9 条
+   * `pii.handles.invalidated`、9 个不同 run（每次 broker 重启一张），按内容去重会吞掉
+   * 真实的第二次重启。
+   */
+  const injectedByRun = new Map<string, Set<string>>();
+  const RUNS_REMEMBERED_MAX = 64;
   return {
     name: RUNTIME_NOTICE_HOOK,
     type: HookType.BeforeLlm,
     async run(ctx): Promise<void> {
       const stored = options.bus.takeStored(ctx.session_id, limit);
       if (stored.length === 0) return;
-      const text = formatNotices(stored.map((entry) => entry.notice));
+      const runId = typeof ctx.run_id === 'string' ? ctx.run_id : '';
+      let seen = runId === '' ? undefined : injectedByRun.get(runId);
+      if (runId !== '' && seen === undefined) {
+        seen = new Set<string>();
+        injectedByRun.set(runId, seen);
+        // 环形上限：只留最近 N 个 run 的记帐（长时间运行的进程不无界增长）。
+        while (injectedByRun.size > RUNS_REMEMBERED_MAX) {
+          const oldest = injectedByRun.keys().next();
+          if (oldest.done === true) break;
+          injectedByRun.delete(oldest.value);
+        }
+      }
+      const kept: StoredNotice[] = [];
+      for (const entry of stored) {
+        // 正文就是身份：同一次 run 里同样的块只注入一次（多行 details 全等才算同一条）。
+        const block = formatNoticeLine(entry.notice);
+        if (seen !== undefined) {
+          if (seen.has(block)) continue;
+          seen.add(block);
+        }
+        kept.push(entry);
+      }
+      if (kept.length === 0) return;
+      const text = formatNotices(kept.map((entry) => entry.notice));
       if (text === '') return;
       const message: Message = {
         role: 'user',
@@ -158,7 +193,7 @@ export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook
       };
       ctx.messages = [...(ctx.messages ?? []), message];
       // 顺序固定：先挂消息（模型的输入已经在手），再 best-effort 落事件。
-      await recordInjection(options.eventLog, ctx, stored);
+      await recordInjection(options.eventLog, ctx, kept);
     },
   };
 }
