@@ -5,6 +5,11 @@
  * 所有协作者（provider / 窗口 / 工具 / 事件 / run 控制）都经 `LoopContext` 注入；
  * 本模块不感知 durable 存储实现，也不从任何 barrel 导出。
  *
+ * 唯一的例外是**工具结果出口闸**（0.56 上移）：工具结果写回上下文之前统一过
+ * `boundToolResult`（≤ 16k token，超了先落盘全文再头 30% / 尾 70% 裁切，
+ * 见 `tool-result-gate.ts`）。闸放在这里而不是各个插件里，是为了让 web_fetch / MCP /
+ * 未来插件的返回值也受同一条约束；落盘路径仍由同一个 `toolOutputRoot()` 决定。
+ *
  * @module @vessel-agent/core/runtime
  */
 
@@ -28,6 +33,7 @@ import type { GuardrailRunner } from './guardrail-runner.js';
 import type { HookRunner } from './hook-runner.js';
 import type { PrefixChangeReason, PromptPrefixGuard } from './prompt-prefix-guard.js';
 import { isToolCall } from './tool-pipeline.js';
+import { boundToolResult, writeToolOutput } from './tool-result-gate.js';
 
 /** Loop 的最终结果；usage/facts 已通过 Run 拥有的 execution/context 原地写回。 */
 export type LoopResult = string;
@@ -139,6 +145,40 @@ export interface ToolExecutionOutcome {
   input: unknown;
   ok: boolean;
   content: string;
+  /**
+   * 结果**已过出口闸**（≤ 16k token，头部 30% / 尾部 70%，中间带落盘路径的省略标注）。
+   *
+   * 唯一的来源是 handler 自己裁完后登记的回执（`markToolResultBounded`，经
+   * `ToolPipelineResult.bounded` 传到这里）—— 例如 basic-tools 作为第二道闸先裁了一遍。
+   * loop 见到就原样写回：**已经裁过的结果不能再裁第二次**，否则第二轮会把
+   * 「… 省略 N 行 / M 字符 · 完整输出：<path>」那一行自己裁掉，落盘路径就丢了。
+   */
+  bounded?: true;
+  /** 裁剪前字符数（与 `bounded` 同时出现） */
+  original_chars?: number;
+}
+
+/**
+ * 工具结果出口闸（0.56 上移）：**所有**插件工具的返回值都在这里收口。
+ *
+ * 上移前闸是 `basic-tools` 的私有函数，于是只有 bash / read / edit 在闸内，
+ * web_fetch / MCP / 未来插件的返回值原样进上下文（一条 100k 字符就能挤爆窗口）。
+ * 现在统一在 loop 写回上下文之前过闸：裁切 + 落盘路径引用（见 `tool-result-gate.ts`）。
+ *
+ * 幂等：`outcome.bounded === true`（handler 自己裁过）直接原样返回，不再裁。
+ */
+async function gateToolResult(outcome: ToolExecutionOutcome, sessionId: string): Promise<string> {
+  if (outcome.bounded === true) return outcome.content;
+  const gated = await boundToolResult(outcome.content, {
+    // 落盘仍写在原来的 tool-output 目录（`toolOutputRoot()`），实现只有一份。
+    persist: () =>
+      writeToolOutput({
+        tool: outcome.toolCall.function.name,
+        body: outcome.content,
+        sessionId,
+      }),
+  });
+  return gated.content;
 }
 
 /**
@@ -525,7 +565,9 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
             {
               role: 'tool',
               tool_call_id: outcome.toolCall.id,
-              content: outcome.content,
+              // 出口闸：所有插件工具的返回值都在这里收口（≤ 16k token；超了先落盘再
+              // 头 30% / 尾 70% 裁切）。handler 自己裁过的（bounded）原样放行。
+              content: await gateToolResult(outcome, sessionId),
             },
             runId,
           );
