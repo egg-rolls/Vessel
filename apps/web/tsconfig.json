@@ -7,7 +7,9 @@
     "moduleResolution": "bundler",
     "moduleDetection": "force",
     // 共享 UI 包按 workspace 源码消费，不经过 node_modules 复制。
-    "baseUrl": ".",
+    // 这里**不写 `baseUrl`**（TS 7 已删除该选项，写了会在 `apps/web` 被根 7.x 编到时报
+    // TS5102）：没有 baseUrl 时 `paths` 以**本文件所在目录**为基准解析，与写 `"baseUrl": "."`
+    // 完全等价 —— 下面的映射不需要改一个字符。
     "paths": {
       "@vessel-agent/plugin-ui": ["../../packages/plugin-ui/src/index.ts"],
       "@vessel-agent/plugin-ui/*": ["../../packages/plugin-ui/src/*"]
