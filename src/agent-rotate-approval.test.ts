@@ -210,6 +210,40 @@ async function main(): Promise<void> {
     check('人类拒绝：不带 timeout_ms', result?.timeout_ms === undefined);
   }
 
+  // ---- 4b. 人类拒绝后 signal 随即 abort：仍报 denied_by_human（取消不许遮住业务结论） ----
+  {
+    const tool = createAgentTool(stubService(), {
+      ownerSessionId: 's-owner',
+      humanApproval: true,
+      rotateApprovalTimeoutMs: 60_000,
+    });
+    const controller = new AbortController();
+    const { ctx, events } = makeContext(controller.signal);
+    // 拒绝应答一到就 abort：这一步必须**不**把结论改写成 cancelled。
+    events.subscribe((event) => {
+      if (event.type !== 'tool.permission.request') return;
+      const requestId = (event.data as { requestId?: unknown }).requestId;
+      if (typeof requestId !== 'string') return;
+      setTimeout(() => {
+        events.publish({
+          type: 'tool.permission.response',
+          run_id: 'run-1',
+          data: { requestId, decision: 'deny', answered_by: 'human' },
+          ts: Date.now(),
+        });
+        controller.abort('user');
+      }, 0);
+    });
+    const { text } = await runRotate(tool, ctx);
+    const result = parseRotateResult(text);
+    check(
+      '拒绝后紧接 abort：仍是 denied_by_human（取消优先只对异常路径生效）',
+      result?.reason === 'denied_by_human',
+      `${text.slice(0, 80)}`,
+    );
+    check('拒绝后紧接 abort：不变成 cancelled', !text.includes('cancelled'));
+  }
+
   // ---- 5. 人类允许：仍然走 createSession（超时逻辑不误伤正常路径） ----
   {
     let created = 0;

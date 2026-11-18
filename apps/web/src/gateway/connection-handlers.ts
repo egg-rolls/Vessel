@@ -7,6 +7,7 @@ import type { ConnectionState, GatewayClient } from './client';
 import { askFromEvent, interactionExpiredMessage, permissionFromEvent } from './interactions';
 import { afterConnectionHello, createReconnectDetector } from './link-status';
 import { classifyCloseCode, probeThenConnect } from './reconnect';
+import { beginRpcEpoch } from './session-invalid';
 import type { SubscriptionController } from './subscription';
 import { gapWireFrame } from './timeline-protocol';
 import type { HelloInfo, RunEvent } from './types';
@@ -236,6 +237,9 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
     setReconnectAttempt(0);
     setHello(info);
     setEpoch((value) => value + 1);
+    // 「连不上」提示的**唯一** epoch 重置点：这里才是真正建立新连接（含重连成功）的地方。
+    // 不要挪到任何请求路径里 —— 每请求重置的话连续失败计数永远攒不到阈值。
+    beginRpcEpoch();
     // 重连后服务端回到无过滤连接：按当前路由重新收敛。
     subscription.onConnectionHello(info.latest_seq);
     // S1d：重连成功（非首次）立刻强制 hydrate，不等用户点设置页 / 刷新。

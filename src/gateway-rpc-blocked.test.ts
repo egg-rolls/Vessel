@@ -12,12 +12,16 @@
  * 3. **不许风暴**：同一条事实连续出现只抬一次，冷却后才再抬（401 会成串出现）；
  * 4. **pending 失败 ≠ 空**：`resolvePendingFetch` 把失败标成 `failed`（带原因分类），
  *    旧 gateway 的 `method_not_allowed` 标成 `unsupported`（界面不出提示），并且
- *    失败那一轮**不做** stale 收敛（不误删本地卡片）；恢复那一轮把卡片补回来。
+ *    失败那一轮**不做** stale 收敛（不误删本地卡片）；恢复那一轮把卡片补回来；
+ * 5. **连不通也算被拒**：真跨源被挡时浏览器只抛 `TypeError`（没有状态码可分类）⇒
+ *    连续 N 次、窗口内、本 epoch 从未成功过才抬 `{kind:'connection'}`，成功一次即自愈、
+ *    此后本 epoch 永不抬；它压掉网络类提示但绝不吞鉴权提示。
  *
  * 直接跑：`bun run src/gateway-rpc-blocked.test.ts`（看输出文本判定；本机 bun 是
  * Windows 版，退出码不可信）。
  */
 
+import { shellNoticeItems } from '../apps/web/src/app/shellNoticeItems';
 import {
   buildHydrationSnapshot,
   type InteractionState,
@@ -30,12 +34,15 @@ import {
 } from '../apps/web/src/gateway/interaction-hydration';
 import { GatewayClient } from '../apps/web/src/gateway/node/index';
 import {
+  beginRpcEpoch,
   classifyRpcFailure,
   createRpcBlockTracker,
+  type GatewayRpcBlock,
   isUnsupportedMethodError,
   rpcBlockTracker,
   setSessionReauthHandler,
 } from '../apps/web/src/gateway/session-invalid';
+import { t } from '../apps/web/src/i18n';
 
 let passed = 0;
 const failures: string[] = [];
@@ -46,6 +53,25 @@ function check(name: string, ok: boolean, got?: string): void {
     return;
   }
   failures.push(got === undefined ? name : `${name} | got: ${got}`);
+}
+
+/** `shellNoticeItems` 的入参缺省值：只有被测字段才覆盖。 */
+function noticeInput(
+  overrides: Partial<Parameters<typeof shellNoticeItems>[0]> = {},
+): Parameters<typeof shellNoticeItems>[0] {
+  return {
+    lastError: null,
+    tokenError: null,
+    stale: false,
+    connectionState: 'open',
+    reconnectAttempt: 0,
+    sessionInvalid: null,
+    onRelogin: () => {},
+    onDismissError: () => {},
+    onRetry: () => {},
+    onOpenConnection: () => {},
+    ...overrides,
+  };
 }
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -336,6 +362,193 @@ async function main(): Promise<void> {
     const before = tracker.snapshot();
     tracker.observe({ code: 'unauthorized', status: 401, message: 'x' }, { method: 'a' });
     check('同一事实重复观察不换快照对象', tracker.snapshot() === before);
+  }
+
+  // ---- 6. connection 档：一次都没连通过 ⇒ 抬一次；成功过就永不抬；成功即自愈 ----
+  {
+    let clock = 1_000;
+    const tracker = createRpcBlockTracker({ now: () => clock });
+
+    // 两次不够阈值（单次抖动 / 短时抖动不报警）。
+    check('network 失败 1 次不抬', tracker.observeNetworkFailure({ now: clock }) === null);
+    clock += 1_000;
+    check(
+      'network 失败 2 次不抬（阈值 3）',
+      tracker.observeNetworkFailure({ now: clock }) === null,
+    );
+    clock += 1_000;
+    const raised = tracker.observeNetworkFailure({ now: clock, method: 'interactions.list' });
+    check(
+      '30s 内连续 3 次且从未成功 ⇒ 抬 connection 档',
+      raised?.kind === 'connection',
+      JSON.stringify(raised),
+    );
+    check('connection 档带失败次数', raised?.attempts === 3, String(raised?.attempts));
+    check('connection 档不写 HTTP 状态', raised?.status === undefined);
+    check(
+      'connection 档进快照（顶栏/待批页都读它）',
+      tracker.snapshot().block?.kind === 'connection',
+    );
+    // 抬过就不再刷（每 epoch 一次）。
+    clock += 1_000;
+    check('同 epoch 再失败不重复抬', tracker.observeNetworkFailure({ now: clock }) === null);
+
+    // 自愈：一次成功 ⇒ 已经抬出来的那条自动消失。
+    clock += 1_000;
+    tracker.noteSuccess();
+    check('抬升后 success ⇒ connection 提示自动消失', tracker.snapshot().block === null);
+
+    // 成功过一次 ⇒ 本 epoch 内再失败多少次都不抬（否则断网会疯狂误报）。
+    for (let i = 0; i < 10; i += 1) {
+      clock += 100;
+      tracker.observeNetworkFailure({ now: clock });
+    }
+    check(
+      '成功过一次后不再抬（断网/抖动不误报）',
+      tracker.snapshot().block === null,
+      JSON.stringify(tracker.snapshot().block),
+    );
+  }
+
+  // ---- 7. connection 档：窗口与 epoch 重置 ----
+  {
+    let clock = 10_000;
+    const tracker = createRpcBlockTracker({ now: () => clock });
+    // 每次间隔 > 30s ⇒ 每次都在新窗口里当第 1 次，永远攒不到 3。
+    for (let i = 0; i < 3; i += 1) {
+      tracker.observeNetworkFailure({ now: clock });
+      clock += 31_000;
+    }
+    check('失败跨越 30s 窗口 ⇒ 不抬（只累计窗口内的连续失败）', tracker.snapshot().block === null);
+
+    // 新连接 = 新 epoch：抬过的那条作废，计数归零，可以重新判定。
+    clock += 1_000;
+    const fresh = createRpcBlockTracker({ now: () => clock });
+    fresh.observeNetworkFailure({ now: clock });
+    fresh.observeNetworkFailure({ now: clock + 1 });
+    fresh.observeNetworkFailure({ now: clock + 2 });
+    check('新 tracker 三次即抬', fresh.snapshot().block?.kind === 'connection');
+    fresh.beginEpoch();
+    check('beginEpoch 清掉上 epoch 的 connection 提示', fresh.snapshot().block === null);
+    const afterEpoch = [
+      fresh.observeNetworkFailure({ now: clock + 10 }),
+      fresh.observeNetworkFailure({ now: clock + 11 }),
+      fresh.observeNetworkFailure({ now: clock + 12 }),
+    ];
+    check(
+      '新 epoch 可以重新判定（第三次再抬）',
+      afterEpoch[2]?.kind === 'connection',
+      JSON.stringify(afterEpoch.map((block) => block?.kind ?? null)),
+    );
+  }
+
+  // ---- 8. 真实传输层：三次 fetch 直接抛（CORS 挡死）⇒ connection 档，且不触发重登 ----
+  {
+    // 这一节要一个干净的 epoch：上面几节的成功响应已经置了「本 epoch 成功过」。
+    beginRpcEpoch();
+    let reauth = 0;
+    setSessionReauthHandler(() => {
+      reauth += 1;
+    });
+    const client = new GatewayClient('http://127.0.0.1:8643', { proxy: true });
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new TypeError('Failed to fetch');
+    }) as unknown as typeof fetch;
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        await client.rpc('interactions.list', { status: 'pending' }).catch(() => null);
+      }
+    } finally {
+      globalThis.fetch = original;
+    }
+    const block = rpcBlockTracker.snapshot().block;
+    check(
+      '三次 TypeError（真跨源被挡的形状）⇒ connection 档',
+      block?.kind === 'connection',
+      JSON.stringify(block),
+    );
+    check('connection 档带上次的浏览器原话', (block?.message ?? '').includes('Failed to fetch'));
+    check('connection 档**不**触发重新登录', reauth === 0, String(reauth));
+    check('connection 档不带方法名以外的假状态码', block?.status === undefined);
+
+    // 之后一次成功 ⇒ 自动消失（自愈，走真实传输层）。
+    await withFetch(
+      () => jsonResponse(200, { ok: true, result: { interactions: [] } }),
+      async () => {
+        await client.rpc('interactions.list', { status: 'pending' });
+      },
+    );
+    check('真实 RPC 成功一次 ⇒ connection 提示消失', rpcBlockTracker.snapshot().block === null);
+    setSessionReauthHandler(null);
+  }
+
+  // ---- 9. 顶栏去重：connection 档压掉网络类提示，但绝不吞鉴权类 ----
+  {
+    const connectionBlock: GatewayRpcBlock = {
+      kind: 'connection',
+      code: 'unreachable',
+      message: 'Failed to fetch',
+      method: 'interactions.list',
+      at: 1,
+      attempts: 3,
+    };
+    const connectionOnly = shellNoticeItems(
+      noticeInput({ sessionInvalid: connectionBlock, lastError: '连不上', stale: true }),
+    );
+    check(
+      'connection 档存在 ⇒ 网络类条目只剩一条',
+      connectionOnly.length === 1 && connectionOnly[0]?.id === 'shell-rpc-unreachable',
+      JSON.stringify(connectionOnly.map((item) => item.id)),
+    );
+    check(
+      'connection 档的动作指向连接设置',
+      connectionOnly[0]?.actions?.[0]?.label === t('app.openConnection'),
+    );
+    const connectionText = `${connectionOnly[0]?.text ?? ''} ${connectionOnly[0]?.hint ?? ''}`;
+    check(
+      'connection 文案给的是人话，不含命令行操作',
+      !/(npm|pnpm|yarn|sudo|\$ |`|重启|restart|vessel )/i.test(connectionText),
+      connectionText,
+    );
+
+    const withAuth = shellNoticeItems(
+      noticeInput({
+        sessionInvalid: connectionBlock,
+        tokenError: '鉴权失败',
+        lastError: '连不上',
+        stale: true,
+      }),
+    );
+    check(
+      '鉴权提示永不被吞（且 connection 档让位）',
+      withAuth.some((item) => item.id === 'shell-token-error') &&
+        !withAuth.some((item) => item.id === 'shell-rpc-unreachable'),
+      JSON.stringify(withAuth.map((item) => item.id)),
+    );
+
+    const sessionBlock: GatewayRpcBlock = {
+      kind: 'session',
+      code: 'unauthorized',
+      message: 'no token',
+      at: 1,
+    };
+    const sessionAndAuth = shellNoticeItems(
+      noticeInput({ sessionInvalid: sessionBlock, tokenError: '鉴权失败' }),
+    );
+    check(
+      '会话档与鉴权提示同时在场时两条都在',
+      sessionAndAuth.some((item) => item.id === 'shell-rpc-session') &&
+        sessionAndAuth.some((item) => item.id === 'shell-token-error'),
+      JSON.stringify(sessionAndAuth.map((item) => item.id)),
+    );
+
+    const plain = shellNoticeItems(noticeInput({ lastError: 'boom', stale: true }));
+    check(
+      '没有 connection 档时既有 lastError/stale 照旧（不误伤）',
+      plain.map((item) => item.id).join(',') === 'shell-error,shell-stale',
+      plain.map((item) => item.id).join(','),
+    );
   }
 
   const total = passed + failures.length;

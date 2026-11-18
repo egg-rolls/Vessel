@@ -1838,6 +1838,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.rpc.originBlocked': 'The gateway rejected this page Origin/Host: {detail}',
   'gateway.rpc.originBlockedHint':
     'Cross-origin access needs this site in the allowlist (node.allowed_origins / auth.public_origins); otherwise every RPC is rejected and permission cards never reach the UI.',
+  // 0.59: no request has ever succeeded (CORS blocked / node not running). No CLI text in the UI.
+  'gateway.rpc.unreachable':
+    'Cannot reach the node: the origin may be rejected, or the service is not running',
+  'gateway.rpc.unreachableHint':
+    'No request from this page has ever succeeded ({count} consecutive failures: {detail}), so pending requests and permission cards cannot arrive. This clears itself once a request succeeds.',
   'gateway.platform.tokenRequired':
     'Platform token required: /platform/rpc returned 401. Enter the platform token in connection settings.',
   'gateway.platform.noNodes': 'The platform gateway returned no nodes.',

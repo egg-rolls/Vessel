@@ -6,7 +6,11 @@
  * 移除同 id pending；settled id 不复活；list 缺席不删除现有卡片。
  */
 
-import { classifyRpcFailure, isUnsupportedMethodError } from './session-invalid';
+import {
+  classifyRpcFailure,
+  type GatewayRpcBlockKind,
+  isUnsupportedMethodError,
+} from './session-invalid';
 import type { AskUserQuestion, AskUserRequest, PermissionRequest, PermissionScope } from './types';
 
 /** 镜像 serve `ListedInteraction` 的 answer（packages/serve/src/gateway/methods/interactions.ts）。 */
@@ -89,8 +93,8 @@ export type PendingFetchStatus = 'unknown' | 'ok' | 'unsupported' | 'failed';
 
 export interface PendingFetchState {
   status: PendingFetchStatus;
-  /** failed 的原因分类；其它状态恒 null。 */
-  kind: 'session' | 'origin' | 'other' | null;
+  /** failed 的原因分类（`connection` = 一次都没连通过）；其它状态恒 null。 */
+  kind: GatewayRpcBlockKind | 'other' | null;
   /** 一句话原因（错误消息；gateway 的错误体从不回显 token）。 */
   message: string | null;
   /** 本轮判定的时刻（ms epoch）；0 = 从未判定。 */

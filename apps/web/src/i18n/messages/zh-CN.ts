@@ -1754,6 +1754,10 @@ export const messages = {
   'gateway.rpc.originBlocked': 'gateway 拒绝了这个页面的 Origin/Host：{detail}',
   'gateway.rpc.originBlockedHint':
     '跨 Origin 访问时要把本站加入白名单（node.allowed_origins / auth.public_origins），否则所有 RPC 都会被拒、权限卡到不了界面。',
+  // 0.59：一次都没连通过（CORS 挡死 / node 没起）。文案不给命令行操作（宪法十四条）。
+  'gateway.rpc.unreachable': '连不上 node：可能是来源被拒，或服务没在运行',
+  'gateway.rpc.unreachableHint':
+    '这个页面发出的请求一次都没成功过（最近 {count} 次全部失败：{detail}），所以待批与权限卡都到不了界面。网络或配置恢复正常、有请求成功之后，这条会自己消失。',
   'gateway.platform.tokenRequired':
     '需要平台 token：/platform/rpc 返回 401；请在连接设置中输入平台 token。',
   'gateway.platform.noNodes': '平台 gateway 没有返回任何节点。',

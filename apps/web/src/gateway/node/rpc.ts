@@ -5,7 +5,7 @@
  */
 
 import { t } from '../../i18n';
-import { noteRpcFailure, noteRpcSuccess } from '../session-invalid';
+import { noteRpcFailure, noteRpcNetworkFailure, noteRpcSuccess } from '../session-invalid';
 import type { GatewayErrorBody, Message, RpcResponseEnvelope } from '../types';
 import { GatewayHttpError, ProtocolClient } from './protocol';
 
@@ -58,7 +58,15 @@ export abstract class RpcClient extends ProtocolClient {
         ...(this.proxyMode ? { credentials: 'same-origin' as const } : {}),
       });
     } catch (error) {
-      throw new GatewayHttpError('network', error instanceof Error ? error.message : String(error));
+      const failure = new GatewayHttpError(
+        'network',
+        error instanceof Error ? error.message : String(error),
+      );
+      // 0.59：连响应都没拿到也是**被拒**的一种 —— 真跨源被挡时浏览器只抛 TypeError，
+      // 没有 401/403 可分类（CORS 不回 ACAO 就连 status 都读不到）。按连接 epoch 计数，
+      // 攒够阈值且本 epoch 从未成功过 ⇒ 抬一条「连不上」提示（不触发重新登录）。
+      noteRpcNetworkFailure(failure, label ?? path);
+      throw failure;
     }
     if (!res.ok) {
       let code = 'internal';
