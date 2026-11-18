@@ -653,6 +653,11 @@ gateway:
 | `auth.public_origins` | 登录**回跳**到哪个 origin（`redirect_uri` 的来源） | **不允许**（必须是具体 origin） |
 | `http.allowed_origins` | **浏览器能不能发 RPC**（Origin 白名单 + CORS） | 允许，但只限回环 host 的端口通配 |
 
+> **`http.allowed_origins` 只管访问控制**：它**不会**给 OAuth 提供 `redirect_uri`。配了 OAuth
+> 后端仍必须有 `auth.public_origins`，缺了 `config validate` 直接报
+> `auth.publicOrigins (or auth.publicOrigin) is required when an OAuth backend is configured`；
+> 只有口令后端可以只靠 `http.allowed_origins`（那时 OAuth 后端会被降级并留一条告警）。
+
 ```yaml
 http:
   allowed_origins:
