@@ -2930,6 +2930,12 @@ export async function runPlatformGatewayForeground(
         ...(config.gateway?.allowedOrigins !== undefined
           ? { allowedOrigins: config.gateway.allowedOrigins }
           : {}),
+        // 0.61：`http.allowed_origins`（访问控制）与 `auth.public_origins`（redirect_uri
+        // 来源）是两件事，这里只传前者；缺省（undefined）由平台回落成
+        // 「public_origins + 三条回环通配」。
+        ...(config.http?.allowedOrigins !== undefined
+          ? { httpAllowedOrigins: config.http.allowedOrigins }
+          : {}),
         nodeOrigins: [...new Set(nodes.map((node) => node.apiUrl))],
         // 0.50：Hub 页浏览器直连 Hub，CSP `connect-src` 必须放行 Hub origin。
         ...(Number.isInteger(hubPort) && hubPort > 0

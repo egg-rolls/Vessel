@@ -3869,7 +3869,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (!hostAllowed(req, hostname)) {
         return errorJson('invalid_host', 'Host header is not allowed', 403, extra);
       }
-      if (!originAllowed(req, allowedOrigins)) {
+      // 0.61：显式凭据（Bearer token 与真实 token 比对通过）⇒ 跳过 Origin 白名单。
+      // 依据是「谁在担保这个请求」：平台代理会为浏览器请求覆写 `Authorization`
+      // （node token 不出网关），受信反代则由它自己校验来源；两者都不构成 CSRF 面 ——
+      // 浏览器不会自动附加 Authorization。**cookie 路径没有这条豁免**（node 侧也不认 cookie）。
+      if (!originAllowed(req, allowedOrigins, { credentialVerified: authorized(req) })) {
         return errorJson('forbidden_origin', 'Origin is not allowed', 403, extra);
       }
 

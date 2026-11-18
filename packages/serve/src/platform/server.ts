@@ -14,8 +14,13 @@ import {
   buildContentSecurityPolicy,
   corsHeaders,
   hostAllowed,
+  LOOPBACK_WILDCARD_ORIGINS,
   normalizeAllowedOrigins,
+  normalizeOriginPattern,
+  type OriginPattern,
   originAllowed,
+  parseOriginPattern,
+  resolveHttpAllowedOrigins,
   resolveRequestEdge,
 } from '../gateway/auth.js';
 import { serveStatic } from '../gateway/static.js';
@@ -445,6 +450,10 @@ function normalizePublicOrigin(
 ): string | null {
   if (raw === null || raw === undefined || raw.trim() === '') return null;
   const trimmed = raw.trim();
+  // 0.61：回环端口通配（`http://127.0.0.1:*`）是合法来源 —— 归一化口径与运行时同源
+  // （`gateway/auth.ts#parseOriginPattern`），这里只做 fail-fast。
+  const pattern = normalizeOriginPattern(trimmed);
+  if (pattern !== null) return pattern;
   let url: URL;
   try {
     url = new URL(trimmed);
@@ -521,14 +530,28 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
   // 0.60：来源白名单（`public_origins` 并列 + `public_origin` 单来源，合并去重）。
   // 一个来源都没有 ⇒ 空列表 ⇒ 公网/Host 白名单不启用（与今天逐字一致）。
   const publicOrigins = resolvePlatformPublicOrigins(authOptions);
-  const publicHosts = [...new Set(publicOrigins.map((origin) => new URL(origin).host))];
-  // 公网 origin 同时是合法 CORS Origin：反代后面板仍是同源页面，但 Origin 头会
-  // 是公网域名；把它们并入 allowlist 才能过 Origin 闸、拿到正确的 CORS 头，
-  // 并让 CSP 的 `connect-src` 里出现每个来源的 `ws(s)://`。
-  const httpAllowedOrigins =
-    publicOrigins.length === 0
-      ? allowedOrigins
-      : normalizeAllowedOrigins([...allowedOrigins, ...publicOrigins]);
+  // 0.61：回环端口通配条目（`http://127.0.0.1:*`）没有确定的 Host，进不了 Host 白名单
+  // （`hostAllowed` 本来就直接放行回环 hostname）；其余条目照旧按 host 登记。
+  const publicHosts = [
+    ...new Set(
+      publicOrigins
+        .map((origin) => parseOriginPattern(origin))
+        .filter((parts): parts is OriginPattern => parts !== null && !parts.wildcardPort)
+        .map((parts) => parts.host),
+    ),
+  ];
+  // 0.61：`http.allowed_origins`（访问控制）与 `auth.public_origins`（redirect_uri 来源）
+  // 分开：前者回答「浏览器能不能发 RPC」，后者回答「登录回跳到哪」。
+  // - `gateway.allowed_origins` / `public_origins` 永远生效（本部署自己的来源总能调 API）；
+  // - `http.allowed_origins` 未配置 ⇒ 只补回环通配三条（老配置一字不改，本地任意端口的
+  //   WebUI 立刻能用）；显式配置 ⇒ 就是它（`[]` = 不再自动补通配）。
+  const httpAllowedOrigins = normalizeAllowedOrigins([
+    ...allowedOrigins,
+    ...publicOrigins,
+    ...(opts.httpAllowedOrigins === undefined
+      ? [...LOOPBACK_WILDCARD_ORIGINS]
+      : resolveHttpAllowedOrigins({ allowedOrigins: opts.httpAllowedOrigins })),
+  ]);
   const authService = new AuthService({
     ...authOptions,
     publicOrigin: publicOrigins[0] ?? null,
@@ -748,7 +771,21 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
       ) {
         return errorJson('forbidden', 'Host header is not allowed', 403, extra);
       }
-      if (!originAllowed(req, httpAllowedOrigins)) {
+
+      // 0.61：鉴权先于 Origin 闸（Origin 闸需要一个「凭据是否验过」的事实）。
+      // `mode === 'token'` 不是配置开关：它只在 bearer 与平台 token **常量时间比较通过**
+      // 时出现（见 `resolvePlatformAuth`），也就是一次真校验的结果。
+      const auth = resolvePlatformAuth({
+        req,
+        address,
+        platformToken,
+        // 0.56：派生值不算「配置」——回环匿名必须保持（迁移安全）。
+        explicitPlatformToken: opts.platformTokenConfigured ?? true,
+        ...(proxySecret !== undefined ? { proxySecret } : {}),
+      });
+      // cookie 会话路径**不**传 `credentialVerified`：浏览器会自动带 cookie，
+      // 那条路必须照旧过白名单（CSRF 面一点不放宽；写操作另有 CSRF 同步令牌）。
+      if (!originAllowed(req, httpAllowedOrigins, { credentialVerified: auth.mode === 'token' })) {
         return errorJson('forbidden', 'Origin is not allowed', 403, extra);
       }
 
@@ -758,15 +795,6 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
       // 浏览器必须能先打开登录页、走 OAuth 回来，才谈得上带 cookie 调 RPC。
       const authRoute = await authService.handle(req, url, authCtx);
       if (authRoute !== null) return authRoute;
-
-      const auth = resolvePlatformAuth({
-        req,
-        address,
-        platformToken,
-        // 0.56：派生值不算「配置」——回环匿名必须保持（迁移安全）。
-        explicitPlatformToken: opts.platformTokenConfigured ?? true,
-        ...(proxySecret !== undefined ? { proxySecret } : {}),
-      });
 
       if (isNodeOnlyPath(path)) {
         return errorJson('not_found', `Not found: ${path}`, 404, extra);
