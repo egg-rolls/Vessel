@@ -102,24 +102,35 @@ export function deriveTrustedOrigins(input: DerivedOriginsInput): string[];
 `src/gateway-command.ts` 里给 `startPlatformGateway` 的入参从
 `nodeOrigins: [...nodes.map(n => n.apiUrl)]`（只喂 CSP）改为：
 
-- `nodeOrigins: D_platform`（CSP `frameSrc`/`connectSrc`，含 registry 里的远端 loopback/私网 node）；
-- 新增 `derivedOrigins: D_platform`，平台内部把它并入 `httpAllowedOrigins`（**只并入 CORS/`originAllowed`，不并入 C 的 session 判定**）。
+- `nodeOrigins: D`（CSP `frameSrc`/`connectSrc`，含 registry 里的 private 部分）；
+- `derivedOrigins: D_loopback`（**只含 D 里的 loopback 部分**），平台内部把它并入 `httpAllowedOrigins`。
 
-> 注意现态：`packages/serve/src/platform/server.ts:528` 的 `httpAllowedOrigins` 只含 `gateway.allowed_origins + auth.public_origins`；`nodeOrigins` 只进 CSP。所以今天"平台页面能调 node"和"node 页面能调平台"是两套各自为政的白名单——正是本单要合并的。
+**三行规则（拍板收窄，实现时必须逐条对上）**：
+
+| 消费点 | 用哪一部分 D | 理由 |
+|---|---|---|
+| 平台 `httpAllowedOrigins`（CORS / `originAllowed`） | **只 loopback** | 平台是浏览器主入口，CORS 面要最小；本机私网来源不该让平台回显 ACAO |
+| 平台 CSP `connectSrc` / `frameSrc` | **全量 D**（loopback + 本机网卡验证过的 private） | CSP 只限制"页面能发到哪"，不放行就等于局域网 node 用不了 |
+| node `serve.allowed_origins` | **全量 D** | node 才是需要局域网访问的那一侧 |
+
+> 注意现态：`packages/serve/src/platform/server.ts` 的 `httpAllowedOrigins` 只含 `gateway.allowed_origins + auth.public_origins`；`nodeOrigins` 只进 CSP。所以今天"平台页面能调 node"和"node 页面能调平台"是两套各自为政的白名单——正是本单要合并的。
+>
+> **该消费点由 `origins-core` 先改**（`1ca21971` 起 `httpAllowedOrigins = allowed_origins ∪ public_origins ∪ (http.allowed_origins ?? 回环通配)`）。本单不平行改这一处：等它合并后 rebase，再把 `derivedOrigins` 接上（见 §10）。
 
 ### 4.4 消费点 B：node
 
-node 的 `allowedOrigins` 现由 `src/cli.ts:1228 resolveGatewayAllowedOrigins(config.node.allowedOrigins, VESSEL_PLATFORM_ORIGINS)` 算出。目标态：
+node 的 `allowedOrigins` 由 `src/cli.ts` 的 `resolveGatewayAllowedOrigins(configured, injected, derived?)` 算出。目标态：
 
 ```
 node.allowed_origins  (显式)
   ∪ VESSEL_PLATFORM_ORIGINS (平台注入，现状)
-  ∪ D_node (hub 在 join 响应里下发的派生集)
+  ∪ D_node (hub 在 join 响应里下发的派生集，**全量**)
 ```
 
-- 下发通道（**最小闭环**）：`POST /v1/hub/join` 响应新增 `trusted_origins: string[]`（`vessel.hub/2` additive；旧 node 忽略）。node 把它写进 `<dataDir>/hub-node.json`（非秘密字段，0600，与现有 `HubNodeState` 同文件），启动时并入。
-- 实时刷新（**不在最小闭环内**，见 §10 决策 4）：hub 在 `hello` 帧加 `trusted_origins`，node 收到后调 `gateway.reconfigure({ allowedOrigins })`。需要改 `packages/serve/src/hub-protocol.ts` / `hub-frames.ts`（本单文件边界外）。
-- 没连上 hub / 从没 join 过 ⇒ 只有本地两项，**不降级放行**。
+- 下发通道（**本单已实现**）：`POST /v1/hub/join` 响应新增 `trusted_origins: string[]`（`vessel.hub/2` additive；旧 node 忽略）。`vessel hub join` 把它写进 `<dataDir>/hub-node.json` 的 `trusted_origins`（非秘密字段，0600），gateway 启动时读出来并入。
+- 第三个参数缺省 `undefined` ⇒ 与今天逐字一致；派生集解析失败时**退回 `配置 ∪ 注入`**，不因为一条坏 origin 少放行别的。
+- 实时刷新（**未做**）：hub 在 `hello` 帧加 `trusted_origins`，node 收到后调 `gateway.reconfigure({ allowedOrigins })`。需要改 `packages/serve/src/hub-protocol.ts` / `hub-frames.ts`（本单文件边界外）。**现状代价**：D 在 join 那一刻定格，新 node 加入后老 node 要等到下次 join 才认识它。
+- 没连上 hub / 从没 join 过 / 文件损坏 ⇒ 只有本地两项，**不降级放行**（`readHubNodeTrustedOrigins` 永不抛）。
 
 ### 4.5 消费点 C：浏览器
 
@@ -154,7 +165,9 @@ node.allowed_origins  (显式)
 - **`kind` 只是声明，hub 会用自己的 `classifyOrigin()` 重新分类**；声明与事实不一致 ⇒ 整条请求 400 `node_registration_invalid`（例：`kind: "loopback"` 但 host 是 `node.example.com`）。
 - `capabilities[]` 只接受已知枚举（`gateway.rpc` / `web.ui` / `hub.control` / `federation.in`），去重、上限 8。
 - `version` 只接受 `\d+\.\d+\.\d+` 形状（不比较大小，只落库给人看）。
-- 旧字段 `public_url` 继续支持：等价于 `entries` 里 `kind: "public"` 那条；两者同时出现且冲突 ⇒ 400（不替用户猜）。
+- 错误码：`invalid_node_id` / `invalid_alias` / `invalid_version` / `invalid_capabilities` / `invalid_entries` / `entry_kind_mismatch` / `invalid_request`；全部 400。
+- 旧字段 `public_url` **保持原语义**（"浏览器可达的 origin"，不是"公网 origin"）：局域网 http 仍允许，只有真正的公网域名强制 https；形状不合法才 400。老客户端因此完全不受影响。
+- 校验发生在**消费邀请码之前**：400 不烧 code。
 
 ### 5.2 邀请码：怎么发、怎么过期、能不能重放
 
@@ -168,7 +181,7 @@ node.allowed_origins  (显式)
 | 绑定 | 码里存 `hub_id`；消费时校验，A hub 的码不能给 B hub 用 | 已有 |
 | 跨 node 复用 | 不能：`used_at` 之后任何 node 再来都是 `pairing_used` | 已有 |
 
-需要补的一条（**新增**）：`consume()` 现在把 `node_id` 写进 `hub-join.json`，但**不校验**"这个 node_id 是否已有有效 token"。补规则见 5.3。
+需要补的一条（**新增，已实现**）：`consume()` 把 `node_id` 写进 `hub-join.json` 但**不校验**"这个 node_id 是否已有有效 token"。补的判定放在 `src/hub/join-policy.ts`（纯函数 `decideJoinRegistration`），由 `handleJoin` 在 `consume()` **之前**调用。见 5.3。
 
 ### 5.3 首注 / 重注册 / 轮转
 
@@ -180,12 +193,17 @@ node.allowed_origins  (显式)
 | 该 node_id 的 token 全过期/全吊销 | **要** | 同首次注册（不允许"凭猜到的 node_id 自助复活"） |
 | 已 join 的 node 断线重连 | 不要 | 用 token 走 WS，**根本不走 join** |
 
-落地：`/v1/hub/join` 在 `consume()` 之前加一次判定：
+落地（**已实现**）：`/v1/hub/join` 在 `consume()` 之前调 `decideJoinRegistration({ hasCode, hasLiveToken, loopbackPeer })`：
 
-```
-exists = registry.get(node_id) && credentials.list() 里有该 node_id 且未吊销未过期
-if (exists && !loopbackPeer && code 为空) → 409 node_exists
-```
+| 输入 | 结果 |
+|---|---|
+| 带 code | 放行；`rotate = hasLiveToken`（签发后 `revokeNode(nodeId, newTokenId)`） |
+| 无 code + 无有效 token | 400 `code_required` |
+| 无 code + 有有效 token + 回环 peer | 放行并轮转 |
+| 无 code + 有有效 token + 非回环 | 409 `node_exists` |
+
+`loopbackPeer` 来自 `srv.requestIP()`（`isLoopbackPeer`，`::ffff:127.x` 已归一）。
+`hasLiveToken` 来自 `credentials.list()` 里该 node 未吊销未过期的记录。
 
 > 关键取舍：**"证明持有旧 token" 不作为续期凭据**。token 是 WS 凭据，不上 join 请求体，避免它出现在 HTTP 日志/代理链里；续期一律靠"一次性邀请码或同机回环"。代价：token 过期的跨机 node 需要人去 hub 敲一次 `vessel hub join-code`——这是有意的（30 天 TTL 到期本来就该有人看一眼）。
 
@@ -198,7 +216,7 @@ if (exists && !loopbackPeer && code 为空) → 409 node_exists
 | 心跳 | hub→node `ping` 15s；30s 无任何帧判 `unreachable`（已有）。node 收到 hello 即 `healthy` |
 | 断线重连 | node 侧指数退避（已有 `outbound-client`）；hub 侧同 node 新连接接管旧连接（已有） |
 | `last_seen` | 由 `snapshot` / 状态回调更新（已有） |
-| 过期节点 | **只标记，不自动删**。`healthy` → `unreachable`（心跳）；`unreachable` 超过 `hub.retention_days`（默认 7）⇒ `status: unreachable` + `last_error: 'stale'`，仅此而已 |
+| 过期节点 | **只标记，不自动删**。`healthy` → `unreachable`（心跳，已有）。"超过 N 天标 `stale`" 与 `hub.retention_days` **本单没做**（拍板结论：prune 不做）；现状是可从 `last_seen` 判断陈旧，不做额外状态 |
 | 删除 | 只有显式动作：`vessel hub nodes rm <node_id>`（已有，走 DELETE，先吊销 token 再删目录）。**绝不后台自动删 token 有效的记录**：派生白名单 D 依赖目录，自动删会让"新 node 不用手写白名单"随时间和在线状态漂移 |
 | 一致性 | registry 变更（`registry.subscribe`，已有）⇒ 重算 D ⇒ 平台侧 `publishDirectory`（已有）+ 平台 CSP/CORS 更新 |
 
@@ -211,9 +229,10 @@ if (exists && !loopbackPeer && code 为空) → 409 node_exists
 | 下发 | join 响应里明文一次（`token` + `token_id` + `expires_at`） | 已有 |
 | 落盘 | hub 只存 `sha256(token)`；node 存 SecretStore（文件回退需 `hub.allow_file_secrets: true`） | 已有 |
 | 轮转 | 重新 join（带 code）= 新 token + 吊销该 node 其余 token + 关旧 WS | 已有 `revokeNode(nodeId, except)` + `onRevoke` |
-| 吊销 | `vessel hub nodes rm`；或 token 到期（默认 30 天） | 已有 |
+| 吊销 | `vessel hub nodes rm`；或 token 到期（`hub.token_ttl_days`，缺省 30 天，1–365） | 已有 + 本单新增配置项 |
 | 浏览器 | **默认拿不到**：`gateway.proxy_nodes`（默认 true）下数据面走平台 `/nodes/<node_id>/**`，`platform.nodes.credentials` 只服务带平台 token 的 CLI | 已有（0.58） |
 | 浏览器（代理关闭的保留形态） | `platform.nodes.credentials` → `vessel.node-token.<node_id>` 写 **sessionStorage** | 已有，本单不动 |
+| 有效期 | `hub.token_ttl_days`（1–365，缺省 30）：只影响**新签发**的 token，已有记录不改写 | 本单新增 |
 | 不做 | 不把 token 写进 `vessel.nodes` JSON、不进 localStorage、不进 URL、不进日志（含新加的 `hub.origins.*` 日志行——只打 `node_id` / host / 错误码） | 硬约束 |
 
 ## 8. 三条安全底线如何落到代码点
@@ -222,7 +241,7 @@ if (exists && !loopbackPeer && code 为空) → 409 node_exists
 |---|---|---|
 | **B1 非回环 origin 永不自动加入** | `deriveTrustedOrigins`：只有 `loopback`（+ §4.2 的本机网卡验证 private）能进 D；`public` 永远只读显式配置 | 不存在 `if (isPrivate(host)) return true` 这种"看前缀就信"的分支 |
 | **B2 cookie 路径仍必须过白名单** | `packages/serve/src/platform/server.ts` 的 `dataGate` 顺序不变：Bearer → CSRF → session → `localDirect` 匿名。D **不进** `auth.public_origins`，因此不改变 `session_required` 判定；`/auth/*` 的 `selectPublicOrigin` 输入不变 | 不允许出现"来自 D 的 Origin ⇒ 视为已登录" |
-| **B3 token 不进 localStorage / 日志** | 新代码新增的日志只有 `hub.origins.derived` / `hub.origins.skipped_public` / `hub.registration.*`，字段限定 `node_id` / `count` / `host` / 稳定错误码 | 不打印 `token` / `token_hash` / `code` / `hub-join.json` 内容 |
+| **B3 token 不进 localStorage / 日志** | 本单新增的日志只有 `hub.origins.derived`（count 等计数）/ `hub.origins.skipped_hosts`（debug，只有 host）/ `hub.origins.derive_failed`（错误信息）；join 侧沿用既有 `hub.server.*`（只有 `node_id` + 稳定错误码）。**没有**任何日志打印 `token` / `token_hash` / `code` / `hub-node.json` 内容 | 不出现"为排查方便打一下 token/邀请码"的代码 |
 
 补充两条本单自己加的：
 
@@ -240,36 +259,66 @@ if (exists && !loopbackPeer && code 为空) → 409 node_exists
 | `hub-node.json` 损坏 | `hub_node_state_corrupt`（已有）fail-closed；不静默重建（否则会丢掉 token 身份） |
 | 派生集为空 | 平台 CSP/CORS 退回"只有显式配置"（与今天一致），一行 `hub.origins.derived count=0` 日志 |
 
-## 10. 最小闭环（第二个 commit 的范围）
+## 10. 实现现状（本单已落 / 等 origins-core 合完再接）
 
-**只做**：注册字段 + 校验 + 目录落库 + 平台侧派生 + node 侧 join 时下发。
+### 10.1 已实现
 
-1. `packages/config/src/node-registration.ts`（新建）：`classifyOrigin` / `normalizeEntryOrigin` / `validateNodeRegistration` / `deriveTrustedOrigins`（全纯函数，零依赖既有 origins/backends 校验）。
-2. `src/hub/types.ts`：`HubNodeRecord` 加可选 `entries` / `capabilities` / `version` / `registered_at`；`HubNodeJoinedInput` 同步；`HubNodeState` 加可选 `trusted_origins`。
-3. `src/hub/join-store.ts`（仅新增判定，不改既有语义）：`consume()` 的入参已含 `node_id`，落库字段不变；409 判定放在 `server.ts`（见 4）。
-4. `src/hub/server.ts`：`handleJoin` 解析新字段 → `validateNodeRegistration` → 5.3 的 409 判定 → 原有 consume/issue 流程 → 响应加 `trusted_origins`。
-5. `src/hub/runtime.ts`：`onJoined` 落新字段；订阅 registry 变化重算 D 并缓存；把 D 传给 `createServer` 与 join 响应。
-6. `src/hub/derive-origins.ts`（新建，薄壳）：`os.networkInterfaces()` → `localAddresses`，调 `deriveTrustedOrigins`，缓存 + 日志。
-7. `src/gateway-command.ts`：`startPlatformGateway` 的 `nodeOrigins` 改 D；`packages/serve/src/platform/server.ts` 的 `httpAllowedOrigins` 并入 `opts.derivedOrigins`。
-8. 测试（`bun test`，新建文件，与现有 colocated 风格一致）：
-   - `packages/config/src/node-registration.test.ts`：分类（回环/私网/CGNAT/IPv6/域名）、schema（kind 与事实冲突、超过 3 条、public 非 https、未知键丢弃）、派生（回环自动 / 非本机私网不自动 / 公网永不 / 上限 / 空输入 / 顺序稳定）。
-   - `src/hub/derive-origins.test.ts`：网卡注入下的 private 行为两态。
-   - `src/hub/join-registration.test.ts`：新字段 → registry 记录；409 `node_exists`；回环 peer 免 code。
-   - `src/hub/hello-trusted-origins.test.ts`（若做 §4.4 实时刷新才需要）。
+| 文件 | 内容 |
+|---|---|
+| `packages/config/src/node-registration.ts`（新建） | `parseOrigin` / `classifyOrigin` / `classifyHost` / `addressKey` / `validateNodeRegistration` / `deriveTrustedOrigins`；全纯函数，零依赖既有 origins/backends 校验 |
+| `src/hub/derive-origins.ts`（新建） | `readLocalAddresses()`（`os.networkInterfaces()`）+ `createOriginDeriver()`（缓存 + `invalidate()` 懒失效 + `hub.origins.derived` 日志） |
+| `src/hub/join-policy.ts`（新建） | `decideJoinRegistration` / `hasLiveNodeToken`（§5.3 的四条判定） |
+| `src/hub/types.ts` | `HubNodeRecord` + `entries` / `capabilities` / `version` / `registered_at`；`HubNodeJoinedInput` 同步；`HubNodeState.trusted_origins`；`HubNodeInboundDeps.derivedOrigins` |
+| `src/hub/registry.ts` | 解析新的可选字段（坏条目单独丢弃，不判 corrupt） |
+| `src/hub/server.ts` | join：载荷校验 → 邀请码判定 → 落目录 → 响应带 `trusted_origins` |
+| `src/hub/runtime.ts` | `onJoined` 落新字段（`registered_at` 只写一次）；建派生器并订阅 registry 失效；`hub.token_ttl_days` 接线 |
+| `src/hub/node-credential-store.ts` | `defaultTtlMs` 选项（只影响新签发） |
+| `src/hub/node-state.ts` | `hub-node.json` 收 `trusted_origins`；`readHubNodeTrustedOrigins()` **永不抛错** |
+| `src/cli.ts` | `resolveGatewayAllowedOrigins(configured, injected, derived?)` + 启动时读 `hub-node.json`（批准过的改动；缺省 `undefined` ⇒ 行为与今天逐字一致） |
+| `src/hub-command.ts` | join 响应解析 `trusted_origins` 并写进 `hub-node.json`（**边界外 2 处同构小改，见 §11.5**） |
+| `packages/config/src/{types,validator}.ts` | `hub.token_ttl_days`（1–365）+ 已知键登记 |
 
-**不做（下一步/另单）**：hello 帧实时下发 + `reconfigure`（需要改 `packages/serve/src/hub-protocol.ts`）、`hub nodes prune`、web 端展示、`hub nodes rotate` 独立命令。
+测试（`bun test`，colocated 风格）：
 
-## 11. 待拍板
+- `packages/config/src/node-registration.test.ts`：分类（含 `::ffff:7f00:1` / `[fe80::1%25eth0]` / CGNAT / 域名）、schema、派生（回环自动 / 非本机私网不自动 / 公网永不 / 上限 / 顺序 / fail-closed）。
+- `src/hub/derive-origins.test.ts`：缓存与 `invalidate`、`count=0` 日志、派生抛错 fail-closed。
+- `src/hub/join-policy.test.ts`：四条判定 + `hasLiveNodeToken`。
+- `src/hub/join-registration.test.ts`：真 HTTP + 真 join store / credential store / registry（code 重放、无码回环重注册、`entry_kind_mismatch` 不烧 code、未知字段被丢弃）。
+- `src/hub/registration-persistence.test.ts`：`hub-node.json` 与 `registry.json` 新字段往返 + 坏条目容错。
 
-1. **private 自动的口径**（§4.2）。任务书里"私网入口自动进白名单"与"非回环 origin 永不自动加入"字面上冲突。我的取舍：自动集只收"可证明本机"的 origin（回环 + 本机网卡上的私网地址），其它私网声明与全部公网声明一律要显式配置。若你要求**严格只回环**，把 `allowPrivate` 默认改成 false 即可（一行）。
-2. **`src/cli.ts` 的一行改动**：node 侧把 join 下发的 `trusted_origins` 接到启动参数，必须在 `src/cli.ts:1228` 那处 `resolveGatewayAllowedOrigins(...)` 多传一个参数。`src/cli.ts` 不在我的文件边界内，需要你批准这处（约 3 行）。
-3. **token 过期后的跨机续期**（§5.3）：我按"必须再来一次 join-code"设计，接受"30 天到期要人介入"。若你要"旧 token 自助续期"，需要把 token 放进 join 请求体（凭据进 HTTP 面），我不建议。
-4. **`hub nodes prune`**：本单不做（只标 stale）。需要的话是独立小单。
+### 10.2 未做（等 origins-core 合并后再接）
+
+1. `src/gateway-command.ts` 的 `nodeOrigins` / `derivedOrigins` 注入 + `packages/serve/src/platform/server.ts` 的 `httpAllowedOrigins` —— **同一处 origins-core 正在改（`1ca21971`），本单不平行改**。接法按 §4.3 的三行规则：`derivedOrigins` 只给 loopback 部分，CSP 给全量 D。
+2. `hello` 帧实时下发 + `gateway.reconfigure`（需改 `packages/serve/src/hub-protocol.ts` / `hub-frames.ts`）⇒ 现状是"D 在 join 那一刻定格"。
+3. `hub nodes prune`（只标 stale）、`hub nodes rotate` 独立命令、web 端展示。
+
+## 11. 拍板结论（已确认）
+
+1. **private 口径**：按 §4.2 —— `allowPrivate` 默认 `true` + 本机网卡验证。语义 = "自动集只收可证明本机的 origin"。
+2. **`src/cli.ts`**：批准。新参数可选、缺省 `undefined`、不传时行为与今天逐字一致。
+3. **token 续期**：过期必须重走 join-code（不把 token 放进 join 请求体）；TTL 做成 `hub.token_ttl_days`（缺省 30，回环/本机节点可写长）。
+4. **`hub nodes prune`**：不做，只标 stale。
+5. **§10.1 里 `src/hub-command.ts` 的 2 处小改**（解析 join 响应的 `trusted_origins` + 写进 state）：这是 `hub-node.json` 唯一的写入点，不改这里就没有持久化通道；`HubNodeState` 里已有 3 个同形字段，改动同构。若不允许，退回"join 不下发、node 侧等 hello 帧扩展"。
 
 ## 12. 未验证 / 风险
 
-- **未跑过真机**：本文档阶段没有实现，也没有起过新 hub/node 来验证派生集在真实网卡（Windows + WSL 双栈、`::ffff:127.0.0.1`）上的分类结果。`os.networkInterfaces()` 在 Bun/Windows 下返回的地址形状（是否含 `fe80::` 带 scope id、是否含虚拟网卡如 vEthernet/WSL）**没有实测**。
-- **没验证**：`registry.json` 加可选字段后与旧 hub 进程的互操作。parser 只按白名单解析（`src/hub/registry.ts` 的 `parseRecord` 末尾自己重建对象），未知键被丢弃而**不会**判 `hub_registry_corrupt`；但反过来，**旧 hub 进程重写文件会静默抹掉 `entries` 等新字段**（派生集随之退化到"只有 loopback 的 url"）。这条没跑过，且需要你决定是否接受"降级安装 = 白名单退化为现状"。
-- **没验证**：旧 node（不认识 `trusted_origins`）与新 hub 的兼容，预期忽略；反过来新 node + 旧 hub 预期无该字段 ⇒ 退回现状。
-- 风险：`deriveTrustedOrigins` 的输入包含**远端 node 自我声明的 entries**。本设计用"本机网卡验证"挡住任意私网声明，但**回环声明无法挡住**（任何 node 都能声明 `http://127.0.0.1:1`）。影响面：D 只用于 CORS/CSP 与 node 侧 `allowed_origins`，且 `localhost` 类 origin 只有本机代码能提供，所以可接受——但这条要你确认接受。
-- 风险：把 D 并入平台 `httpAllowedOrigins` 会让"任何本机回环 origin"都能过 Origin 闸。与今天的 `localDirect`/回环匿名语义同向，但**扩大了 CORS 表面积**（ACAO 回显）。如果觉得过宽，可把 D 只用于 CSP、`httpAllowedOrigins` 维持现状（§4.3 里一行开关）。
+### 12.1 真机读数（Windows 11 / bun 1.3.9，本机实测）
+
+`os.networkInterfaces()` 的实际形状：
+
+- zone id **不在** `address` 字符串里，而是独立数字字段 `scopeid`（如 `scopeid=25`）；`address` 形如 `fe80::4bf9:bd5:2d05:7c91`。
+- 虚拟网卡全部出现：`VMware Network Adapter VMnet1/8`（`192.168.190.1` / `192.168.71.1`）、`ZeroTier One`（`172.22.171.39` / `10.29.194.189`）、`wt0`（`100.76.117.207` CGNAT + `fd37:...` ULA）、`WLAN`（`172.16.60.48` + 公网 IPv6 `2001:da8:...`）。**它们都是本机网卡** ⇒ 判定为"可证明本机"符合语义。
+- `internal=true` 只出现在回环（`Loopback Pseudo-Interface 1`）：不能拿它代替地址分类。
+- `new URL('http://[fe80::1%eth0]/')` 在 bun 里**直接抛错** ⇒ 手写 origin 解析（`parseOrigin`）是必须的。
+- WHATWG 规范化把 `::ffff:127.0.0.1` 序列化成 `::ffff:7f00:1` ⇒ 分类器必须还原成 IPv4 再判断（已实现并有单测）。
+
+### 12.2 仍未验证
+
+- **没起过真 hub + 真 node 做端到端 join / 重连**。`join-registration.test.ts` 用的是真 HTTP + 真 store，但 hub 在测试进程里 `Bun.serve` 起；`vessel hub join` / 出站客户端 / gateway 启动合并 `allowed_origins` 这一整条**没端到端跑过**。
+- **没验证降级读盘**：旧 hub 进程重写 `registry.json` 会静默抹掉 `entries`（parser 只按白名单重建）⇒ 派生集退化到"只有 url"。拍板接受（= 白名单退回现状）。
+- **没验证** `readLocalAddresses()` 在 macOS / Linux / WSL 里的形状（只有 Windows 实测）。
+- **没验证** 平台侧接入后的实际效果 —— 那一处还没接（§10.2），因此"浏览器连新 node"的完整闭环目前**只到 node 自己的 `allowed_origins` 为止**。
+
+### 12.3 风险（已接受）
+
+- 回环声明无法挡住（任何 node 都能声明 `http://127.0.0.1:1`）。接受的前提是 **cookie 写操作仍必须带 CSRF 同步令牌**（另一单在验）；该前提已写进 `packages/config/src/node-registration.ts` 的注释，不只写在文档里。

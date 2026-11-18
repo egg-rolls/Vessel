@@ -1758,6 +1758,7 @@ export function validateHubSettings(
     proxySecretEnv,
     allowFileSecrets,
     pairingTtlSeconds,
+    tokenTtlDays,
   } = hub as unknown as Record<string, unknown>;
 
   if (dataDir !== undefined) {
@@ -1964,6 +1965,21 @@ export function validateHubSettings(
       path: 'hub.pairingTtlSeconds',
       message: 'hub.pairingTtlSeconds must be an integer between 60 and 3600',
       value: pairingTtlSeconds,
+    });
+  }
+
+  // 0.61：node token 有效期（天）。区间只挡笔误：0 天会让 token 立刻过期。
+  if (
+    tokenTtlDays !== undefined &&
+    (typeof tokenTtlDays !== 'number' ||
+      !Number.isInteger(tokenTtlDays) ||
+      tokenTtlDays < 1 ||
+      tokenTtlDays > 365)
+  ) {
+    errors.push({
+      path: 'hub.tokenTtlDays',
+      message: 'hub.tokenTtlDays must be an integer between 1 and 365',
+      value: tokenTtlDays,
     });
   }
 
@@ -3331,6 +3347,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'proxySecretEnv',
     'allowFileSecrets',
     'pairingTtlSeconds',
+    'tokenTtlDays',
   ],
   federation: ['enabled', 'maxHops', 'rateLimitPerMinute', 'peers'],
   evals: ['enabled', 'dir', 'outDir', 'allowNetwork'],

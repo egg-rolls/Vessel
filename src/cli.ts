@@ -104,6 +104,7 @@ import {
   registerRefsNoticeHook,
   registerRuntimeNoticeHook,
 } from './hot-apply-assembly';
+import { readHubNodeTrustedOrigins } from './hub/node-state';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { createImageDeliverySource } from './image-delivery';
@@ -181,22 +182,37 @@ function resolveStaticDir(): string | undefined {
  * 0.50：合并平台 spawn 注入的 Origin（内部 env 契约，不是用户配置）与
  * `node.allowed_origins`。注入值只接受合法 http(s) origin；解析失败时回落到
  * 用户配置，避免内部 env 污染让 node 启动失败。
+ *
+ * 0.61：`derived` 是 hub 注册表派生的来源集（loopback ∪ 已证明本机的私网）。
+ * 缺省 `undefined` ⇒ 与今天逐字一致；传入时同样走 `normalizeAllowedOrigins`，
+ * 非法条目整批回落到 `configured ∪ injected`（不因为一条坏 origin 就少放行别的）。
  */
 function resolveGatewayAllowedOrigins(
   configured: readonly string[] | undefined,
   injected: string | undefined,
+  derived?: readonly string[] | undefined,
 ): string[] {
   const base = configured !== undefined ? [...configured] : [];
-  if (injected === undefined || injected.trim() === '') return base;
-  const extra = injected
-    .split(',')
-    .map((value) => value.trim())
-    .filter((value) => value !== '');
-  if (extra.length === 0) return base;
+  const derivedOrigins = derived !== undefined ? [...derived] : [];
+  const injectedOrigins: string[] = [];
+  if (injected !== undefined && injected.trim() !== '') {
+    injectedOrigins.push(
+      ...injected
+        .split(',')
+        .map((value) => value.trim())
+        .filter((value) => value !== ''),
+    );
+  }
+  if (derivedOrigins.length === 0 && injectedOrigins.length === 0) return base;
   try {
-    return normalizeAllowedOrigins([...base, ...extra]);
+    return normalizeAllowedOrigins([...base, ...injectedOrigins, ...derivedOrigins]);
   } catch {
-    return base;
+    // 派生集坏了不能连累注入值；注入值也坏了就退回用户配置。
+    try {
+      return normalizeAllowedOrigins([...base, ...injectedOrigins]);
+    } catch {
+      return base;
+    }
   }
 }
 
@@ -1096,6 +1112,11 @@ async function runWithConfig(result: BootstrapResult) {
       });
     }
 
+    // 0.61：hub 派生的来源集（join 时下发并存档）。读盘失败 / 旧 hub / 未 join
+    // ⇒ undefined，行为与今天逐字一致：node 绝不因为 hub 不可达而拒绝启动或放宽白名单。
+    // 声明在这里（reload 闭包也要用），只读一次：热重载沿用同一份，直到下次 join。
+    const hubDerivedOrigins = await readHubNodeTrustedOrigins(dataDir);
+
     const reloadRunner = createGatewayReloadRunner({
       // web 尚未合入 reconfigure 时该字段不存在；按结构化可选入口处理。
       // 0.50：config reload 重建 allowedOrigins 时仍并入平台注入的 Origin，
@@ -1112,6 +1133,7 @@ async function runWithConfig(result: BootstrapResult) {
               allowedOrigins: resolveGatewayAllowedOrigins(
                 options.allowedOrigins,
                 process.env.VESSEL_PLATFORM_ORIGINS,
+                hubDerivedOrigins,
               ),
             }),
         };
@@ -1228,6 +1250,7 @@ async function runWithConfig(result: BootstrapResult) {
     const allowedOrigins = resolveGatewayAllowedOrigins(
       config.node?.allowedOrigins,
       process.env.VESSEL_PLATFORM_ORIGINS,
+      hubDerivedOrigins,
     );
 
     // 0.55 P0：反代共享密钥（opt-in）。只读环境变量；不配 = undefined = 旧行为。

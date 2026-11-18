@@ -35,6 +35,12 @@ export interface CreateHubNodeCredentialStoreOptions {
   dataDir: string;
   /** 可注入时钟（测试用）；缺省 `Date.now` */
   now?: () => number;
+  /**
+   * 0.61：未显式给 `ttl_ms` 时的有效期（`hub.token_ttl_days`，缺省 30 天）。
+   *
+   * 只影响**新签发**的 token；已有记录的 `expires_at` 不会被改写。
+   */
+  defaultTtlMs?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -152,6 +158,12 @@ export async function createHubNodeCredentialStore(
 ): Promise<HubNodeCredentialStoreLike> {
   const path = hubNodeTokensPath(options.dataDir);
   const now = options.now ?? Date.now;
+  const defaultTtlMs =
+    typeof options.defaultTtlMs === 'number' &&
+    Number.isFinite(options.defaultTtlMs) &&
+    options.defaultTtlMs > 0
+      ? Math.floor(options.defaultTtlMs)
+      : DEFAULT_TOKEN_TTL_MS;
   let records = await readTokensFile(path);
   let queue: Promise<unknown> = Promise.resolve();
   const listeners = new Set<(tokenId: string) => void>();
@@ -198,7 +210,7 @@ export async function createHubNodeCredentialStore(
   }): Promise<IssuedHubNodeToken> {
     return enqueue(async () => {
       const issuedAt = now();
-      const expiresAt = issuedAt + (input.ttl_ms ?? DEFAULT_TOKEN_TTL_MS);
+      const expiresAt = issuedAt + (input.ttl_ms ?? defaultTtlMs);
       const token = randomBytes(32).toString('base64url');
       const record: HubNodeTokenRecord = {
         token_id: randomUUID(),

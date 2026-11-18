@@ -31,6 +31,7 @@ import type {
   HubDataPlane,
   HubNodeDirection,
   HubNodeRecord,
+  HubNodeRegistrationEntryRecord,
   HubNodeStatus,
   HubRegistryFile,
 } from './types.js';
@@ -257,7 +258,52 @@ function parseNodeRecord(value: unknown): HubNodeRecord | undefined {
     if (!isFiniteNumber(value.revision) || value.revision < 0) return undefined;
     record.revision = Math.floor(value.revision);
   }
+  // 0.61：注册入口 / 能力 / 版本 / 注册时间。坏条目单独丢弃，不整条判 corrupt
+  // （旧 hub 抹掉这些字段时也会走到这里：缺失即缺省，不影响目录可用性）。
+  const entries = parseRegistrationEntries(value.entries);
+  if (entries !== undefined) record.entries = entries;
+  const capabilities = parseRegistrationCapabilities(value.capabilities);
+  if (capabilities !== undefined) record.capabilities = capabilities;
+  if (value.version !== undefined) {
+    if (!isNonEmptyString(value.version)) return undefined;
+    record.version = value.version;
+  }
+  if (value.registered_at !== undefined) {
+    if (!isFiniteNumber(value.registered_at)) return undefined;
+    record.registered_at = value.registered_at;
+  }
   return record;
+}
+
+const REGISTRATION_KINDS = new Set(['loopback', 'private', 'public']);
+
+/** 解析落库的注册入口；结构坏了就整段丢弃（白名单派生会 fail-closed）。 */
+function parseRegistrationEntries(value: unknown): HubNodeRegistrationEntryRecord[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
+  const entries: HubNodeRegistrationEntryRecord[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const kind = item.kind;
+    const url = item.url;
+    if (typeof kind !== 'string' || !REGISTRATION_KINDS.has(kind)) continue;
+    if (!isNonEmptyString(url) || url.length > 512) continue;
+    entries.push({ kind: kind as HubNodeRegistrationEntryRecord['kind'], url });
+    if (entries.length >= 3) break;
+  }
+  return entries.length > 0 ? entries : undefined;
+}
+
+function parseRegistrationCapabilities(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
+  const capabilities: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || item === '' || item.length > 64) continue;
+    if (!capabilities.includes(item)) capabilities.push(item);
+    if (capabilities.length >= 8) break;
+  }
+  return capabilities.length > 0 ? capabilities : undefined;
 }
 
 /** 强制数组上限；counts 保留节点报告的总数。 */
