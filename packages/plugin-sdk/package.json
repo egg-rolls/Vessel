@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/plugin-sdk",
-  "version": "0.54.0",
+  "version": "1.0.0",
   "description": "Host API contract and minimal runtime for embedded Vessel plugins",
   "type": "module",
   "license": "MIT",

@@ -56,7 +56,7 @@
         "css": "embed/index.css",
         "runtime": {
           "react": "^19",
-          "sdk": "^0.54"
+          "sdk": "^1"
         }
       }
     },

@@ -56,8 +56,9 @@ tags: [plugin, extension, contribution, trust, ui, web, isolation]
   7. **版本契约**：manifest `ui.embed.runtime = { react, sdk }`（semver range）。宿主加载前
      校验，不满足 fail-closed 渲染明确错误卡片（`plugin_ui_incompatible`）并提供 iframe
      回落，不白屏。宿主 React 主版本升级视为破坏性变更：sdk 主版本同步提升并写
-     CHANGELOG。sdk 包（`@vessel-agent/plugin-sdk`）版本跟随仓库版本；0.x 阶段每个 minor
-     允许破坏，range 应钉住 minor。
+     CHANGELOG。sdk 包（`@vessel-agent/plugin-sdk`）走**独立版本线**（起 1.0.0，与仓库
+     release 版本解耦，`scripts/version.ts` 不写不查）：仅 SDK 契约变更时 bump，仓库
+     0.x minor 发版不影响插件 `runtime.sdk` range。
   8. **同源前提（改变平台代理边界，用户已批准）**：平台代理新增**只读、仅 GET/HEAD** 的
      `/plugins/<id>/ui/**` 静态白名单（位于 `/nodes/<node_id>/` 代理前缀之下，只代理静态
      资源，不含插件 contributes.http 动态路由）。平台根路径 `/plugins/*` 仍然一律 404。

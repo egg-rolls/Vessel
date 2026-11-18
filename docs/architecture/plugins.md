@@ -30,7 +30,7 @@ paths: [plugins/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, app
     // ui.embed 可选（plugin-embed 契约 §2）：声明内嵌 React UI；entry 必填 .mjs，
     // css 可选 .css，runtime 是 semver range（支持 ^ / ~）。
     "ui": { "dir": "web", "embed": { "entry": "embed/index.mjs", "css": "embed/index.css",
-      "runtime": { "react": "^19", "sdk": "^0.54" } } },
+      "runtime": { "react": "^19", "sdk": "^1" } } },
     "activationEvents": ["onPage:usage", "onCommand:summary"],
     "contributes": {
       // component 是 embed 模块的具名导出（声明它必须有 ui.embed）；entry 仍是必填的 iframe 回退。

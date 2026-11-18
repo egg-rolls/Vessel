@@ -40,7 +40,7 @@ paths: [src/plugin-manifest.ts, packages/serve/src/plugin-host/**, packages/serv
   "embed": {
     "entry": "embed/index.mjs",          // 必填，相对 ui.dir，必须 .mjs 结尾
     "css": "embed/index.css",            // 可选，相对 ui.dir，必须 .css 结尾
-    "runtime": { "react": "^19", "sdk": "^0.54" }  // 必填，semver range
+    "runtime": { "react": "^19", "sdk": "^1" }  // 必填，semver range
   }
 },
 "contributes": {
@@ -149,9 +149,13 @@ ui_embed?: { entry: string; css?: string; runtime: { react: string; sdk: string 
 
 ## 7. SDK（packages/plugin-sdk，一期最小面）
 
-- 新包 `@vessel-agent/plugin-sdk`，version 跟随仓库（当前 0.54.0），exports `"." →
-  ./src/index.ts`，peerDependencies react >= 19（照 plugin-ui 模式，按源码消费：apps/web
-  vite alias + tsconfig paths；插件构建 external 化）。根 package.json 加 workspace 依赖。
+- 新包 `@vessel-agent/plugin-sdk`，**独立版本线**（起 1.0.0，与仓库 release 版本解耦；
+  `scripts/version.ts` 的写模式与 --check 都跳过它），exports `"." → ./src/index.ts`，
+  peerDependencies react >= 19（照 plugin-ui 模式，按源码消费：apps/web vite alias +
+  tsconfig paths；插件构建 external 化）。根 package.json 加 workspace 依赖。
+  **bump 策略**：仅 SDK 契约变更时 bump（additive → minor，破坏 → major）；宿主 React
+  主版本升级 = SDK major 提升并写 CHANGELOG。仓库 0.x minor 发版（0.55 / 0.56…）不改
+  SDK 版本，插件 `runtime.sdk: "^1"` 跨仓库发版恒成立。
 - **semver 工具搬家 + 扩语法**：src/plugin-manifest.ts 的纯 semver 函数（parseSemver /
   isValidSemver / parseRangeVersion / compareSemver / parseVersionRange /
   satisfiesComparator / satisfiesVersionRange 及相关类型）移入
@@ -235,7 +239,7 @@ export function createPluginHost(adapter: PluginHostAdapter): VesselPluginHost;
 ## 10. 样本插件（plugins/observability/usage）
 
 - manifest：`ui.embed = { entry: "embed/index.mjs", css: "embed/index.css",
-  runtime: { react: "^19", sdk: "^0.54" } }`；pages usage / logs 加 component
+  runtime: { react: "^19", sdk: "^1" } }`；pages usage / logs 加 component
   `UsageView` / `LogsView`（iframe entry 保留）。
 - `web-src/embed.tsx`：具名导出 `UsageView` / `LogsView`（`PluginMountProps` 组件），
   数据走 `host.rpc('summary' | 'logs' | 'leaderboard')`，复用现有展示组件；不用
