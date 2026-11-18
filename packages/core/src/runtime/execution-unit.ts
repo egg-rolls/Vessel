@@ -35,6 +35,7 @@ import {
   renderContextWindowExceededNotice,
   renderModelChangeNotice,
   renderSystemRevisionNotice,
+  renderToolSurfaceNotice,
   resolveProjection,
   setWindowProjectionMode,
   shouldCompactForToolResultVolume,
@@ -910,6 +911,19 @@ export class ExecutionUnit {
   private lastRealTokens?: number;
   private lastBranch?: string;
   private readonly lastRunSystemPrompts = new Map<string, string>();
+  /**
+   * tools-body-snapshot：本会话请求 tools[] 的快照（message-invariants §3：工具集会话内不可变）。
+   * 懒捕获于该会话在本 EU 的第一条 LLM 请求（此时 MCP 异步建连的注册通常已完成）；
+   * 新 EU / session_switch / 段起点压缩成功 ⇒ 重 pin；同会话新 run / branch / pop 不重建。
+   * 执行侧不受影响：toolPipeline 仍 live `getTool`（新增可执行、移除稳定 tool_not_found）。
+   */
+  private pinnedTools?: {
+    sessionId: string;
+    schemas: NonNullable<ChatRequest['tools']>;
+    names: string[];
+  };
+  /** 模型此刻相信的工具面（tools 卡去重：注入后推进；同一变更只报一次，回滚照报）。 */
+  private reportedToolSurface?: { sessionId: string; names: string[] };
   private permissionPolicy: PermissionPolicy;
   private guardrails: GuardrailRunner;
   private hooks: HookRunner;
@@ -1269,6 +1283,12 @@ export class ExecutionUnit {
       this.pendingPrefixReason ??= 'compaction';
       compactedState.providerPrompt = undefined;
       compactedState.requestView = undefined;
+      // tools-body-snapshot（D1）：压缩 = 开新会话 ⇒ 作废本会话的 tools[] 快照与卡基线，
+      // 下一轮请求重 pin。整段前缀已因摘要失效，重建 tools[] 零额外缓存代价。
+      if (this.pinnedTools?.sessionId === execution.sessionId) {
+        this.pinnedTools = undefined;
+        this.reportedToolSurface = undefined;
+      }
     }
   }
 
@@ -2273,6 +2293,90 @@ export class ExecutionUnit {
         })),
       ),
     );
+  }
+
+  /**
+   * tools-body-snapshot：请求 tools[] 的唯一来源 —— 会话起点快照，不再每轮 live 读宿主。
+   *
+   * 懒捕获于该会话的第一条 LLM 请求（卡端口在 loop 里先于 `listToolSchemas` 被调，
+   * 首轮由它完成 pin）：比构造期捕获更准 —— MCP 异步建连可能在 EU 创建后才注册完，
+   * 首请求前注册完的工具直接进列表，不算「中途新增」。pin=live ⇒ 首轮无卡。
+   *
+   * 重 pin 只发生在：新 EU（新会话 / rotate / 重启续接天然重建）、sessionId 不符
+   * （session_switch，本就是 `new` 段）、段起点压缩成功（D1，见 compactAtSegmentStart）。
+   * 同会话新 run / branch / pop 不重建。中途 register/unregister 只进 PluginHost，
+   * 不触碰 pin —— 请求侧不再读 live，无需任何拦截代码。
+   */
+  private ensureToolPin(sessionId: string): {
+    schemas: NonNullable<ChatRequest['tools']>;
+    names: string[];
+  } {
+    const existing = this.pinnedTools;
+    if (existing !== undefined && existing.sessionId === sessionId) return existing;
+    const tools = this.pluginHost.listTools();
+    const pin = {
+      sessionId,
+      // 映射形状与旧每轮 live 读逐字相同（type:'function' + name/description/parameters），
+      // 只是时机从每轮现算变成每会话一次。包装对象是 pin 时新建的：宿主同名更新走
+      // unregister+register 新定义对象，不改写旧对象 ⇒ 快照内容稳定。
+      schemas: tools.map((tool) => ({
+        type: 'function' as const,
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.inputSchema,
+        },
+      })),
+      names: [...new Set(tools.map((tool) => tool.name))].sort(),
+    };
+    this.pinnedTools = pin;
+    this.reportedToolSurface = { sessionId, names: pin.names };
+    return pin;
+  }
+
+  /**
+   * tools-body-snapshot：工具面变更卡的唯一生产者（owner / member / MCP 同一通道）。
+   *
+   * 每轮请求前 diff「模型相信的面」（reportedToolSurface）与 live 宿主名字集：
+   * 空 ⇒ 不注入；非空 ⇒ 先推进 reported 再经 `appendInjectedMessages` 追加一张
+   * `vessel:notice`（scope `tools`）—— 进本次请求、落 `message.injected` 事实、
+   * UI 同见（可见性对等），不改 system、不发 prefix reason、tools[] 本身不动。
+   * 新增工具 best-effort 可执行（live getTool 命中）；移除工具稳定报 tool_not_found，
+   * 卡里已解释。MCP toggle / 热应用 / refreshTools / 权限档 / inbox 都改同一个宿主，
+   * 下一轮 diff 自动出卡，零新触发代码。agent 侧旧 createToolSurfaceDeltaHook 已撤
+   * （否则双卡）；热应用既有的 scope `config` 摘要卡保留（语义不同，D5）。
+   */
+  private appendToolSurfaceNotice(execution: Run): void {
+    const pin = this.ensureToolPin(execution.sessionId);
+    const reported = this.reportedToolSurface;
+    const reportedNames =
+      reported !== undefined && reported.sessionId === execution.sessionId
+        ? reported.names
+        : pin.names;
+    const liveTools = this.pluginHost.listTools();
+    const liveNames = [...new Set(liveTools.map((tool) => tool.name))].sort();
+    const before = new Set(reportedNames);
+    const after = new Set(liveNames);
+    const added = liveNames.filter((name) => !before.has(name));
+    const removed = reportedNames.filter((name) => !after.has(name));
+    if (added.length === 0 && removed.length === 0) return;
+    // 先推进再注入（self-card-delta 同族）：同一 run 后续轮 diff 为空，不另存已报签名；
+    // 回滚（A→B→A）与相信的集合不同，照样报。timestamp 让同文卡不被注入键去重吞掉。
+    this.reportedToolSurface = { sessionId: execution.sessionId, names: liveNames };
+    this.appendInjectedMessages(execution, execution.runId, [
+      {
+        role: 'user',
+        name: 'vessel:notice',
+        content: renderToolSurfaceNotice(
+          added.map((name) => ({
+            name,
+            description: liveTools.find((tool) => tool.name === name)?.description,
+          })),
+          removed,
+        ),
+        timestamp: Date.now(),
+      },
+    ]);
   }
 
   /**
@@ -3449,6 +3553,7 @@ export class ExecutionUnit {
         buildRequestMessages: (o) => this.buildRequestMessages(o, execution.workingContext),
         appendInjectedMessages: (id, m) => this.appendInjectedMessages(execution, id, m),
         appendPiiDeadNotice: () => this.appendPiiDeadNotice(execution.sessionId),
+        appendToolSurfaceNotice: () => this.appendToolSurfaceNotice(execution),
         updateRealTokens: (t) => {
           this.lastRealTokens = t;
           execution.workingContext.updateRealTokens(t);
@@ -3459,15 +3564,9 @@ export class ExecutionUnit {
         chat: (args) => this.chatWithOverflowRetry(execution, args),
       },
       tools: {
-        listToolSchemas: () =>
-          this.pluginHost.listTools().map((tool) => ({
-            type: 'function' as const,
-            function: {
-              name: tool.name,
-              description: tool.description,
-              parameters: tool.inputSchema,
-            },
-          })),
+        // tools-body-snapshot：请求面读会话快照（ensureToolPin），不再每轮 live 读宿主；
+        // 执行侧（runToolCall → toolPipeline.getTool）保持 live 不变。
+        listToolSchemas: () => this.ensureToolPin(execution.sessionId).schemas,
         isConcurrencySafe: (e) => this.isConcurrencySafe(e),
         runToolCall: (e, s) => this.runToolCall(e, execution, s),
       },

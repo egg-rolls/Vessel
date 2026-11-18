@@ -127,16 +127,6 @@ export {
 } from './team-store.js';
 export { type AgentToolOptions, createAgentTool } from './tool.js';
 export {
-  createToolSurfaceDeltaHook,
-  diffToolSurface,
-  formatToolSurfaceDelta,
-  isEmptyToolSurfaceChange,
-  TOOL_SURFACE_DELTA_HOOK,
-  TOOL_SURFACE_DELTA_MESSAGE_NAME,
-  type ToolSurfaceChange,
-  type ToolSurfaceDeltaHookOptions,
-} from './tool-surface-delta.js';
-export {
   type AdmitInput,
   type AdmitResult,
   type AgentDrainOptions,

@@ -25,9 +25,11 @@ loop:
     hookCtx = { run_id, session_id, systemPrompt: <会话基底> }
     await hooks.run(BeforeLlm, hookCtx)
     appendInjectedMessages(hookCtx.messages)   # 每 run 去重
+    appendPiiDeadNotice()                      # 句柄失效 env 卡（进本次请求）
+    appendToolSurfaceNotice()                  # diff live 工具面 vs 已报面，非空 ⇒ 追加 tools env 卡；首请求完成懒 pin
     messages = buildRequestMessages(<会话基底>)
     # 归一化：丢弃孤儿 role:tool；残缺 tool_calls 降级；缺 system 时补回基底（ADR-035）
-    tools = pluginHost.listTools()
+    tools = ensureToolPin(sessionId).schemas   # 会话起点快照（首请求懒捕获；session_switch / 压缩成功重 pin）；执行侧仍 live getTool
     PrefixGuard.check({ system, tools, messages, reason? })
     # 非纯追加且无 reason → prompt.prefix_changed；STRICT 抛 PromptPrefixChangedError
     发 llm.request（messages 在发布前剥离 reasoning_content，ADR-038）

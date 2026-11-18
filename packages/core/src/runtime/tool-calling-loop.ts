@@ -74,6 +74,12 @@ export interface MessageWindowPort {
    * 只能在发请求前**追加一张 env 卡**（不许回改历史）。缺省实现 = 不追加。
    */
   appendPiiDeadNotice?(): Promise<void>;
+  /**
+   * tools-body-snapshot：请求 tools[] 是会话起点快照；会话中途宿主工具面变化只以
+   * **追加一张 env 卡**（scope `tools`）表达。必须在 buildRequestMessages 之前调用
+   * （卡要进本次请求）；首请求同时完成懒 pin（pin=live ⇒ 无卡）。缺省实现 = 不追加。
+   */
+  appendToolSurfaceNotice?(): void;
   appendInjectedMessages(runId: string, messages: readonly Message[] | undefined): void;
   updateRealTokens(total: number): void;
   /**
@@ -380,11 +386,15 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
     // 必须在组装请求**之前**：卡要进本次请求，UI 也读同一份 store（可见性对等）。
     await ctx.window.appendPiiDeadNotice?.();
 
+    // tools-body-snapshot：工具面变化同样以追加一张 env 卡表达（scope `tools`）；
+    // 请求 tools[] 本身保持会话快照不变。也在组装请求之前（卡进本次请求）。
+    ctx.window.appendToolSurfaceNotice?.();
+
     // 组装本次请求的消息：system 只来自会话级基底（含 Self Card），
     // 不接受每轮拼接的 additionalContext（CONTRACT-prefix-invariant §2）。
     const messages = ctx.window.buildRequestMessages(baseSystemPrompt);
 
-    // 统一工具来源：PluginHost（插件在 install() 里 registerTool）。
+    // 工具来源：会话起点快照（ExecutionUnit.ensureToolPin；注册表仍是执行唯一真相）。
     const toolSchemas = ctx.tools.listToolSchemas();
 
     // §4：请求前检查 system / tools / messages 是否保持前缀；显式 reason 消费后清空。

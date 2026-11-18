@@ -93,6 +93,7 @@ export {
   renderContextOverflowNotice,
   renderContextWindowExceededNotice,
   renderSystemRevisionNotice,
+  renderToolSurfaceNotice,
 } from './context-notice.js';
 export {
   MODEL_CHANGE_DETAIL_MARK,
