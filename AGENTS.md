@@ -39,7 +39,7 @@
 - TypeScript + Bun；bun workspaces monorepo：`packages/{core,agent,config,permission,tui,serve}` + `plugins/` + `apps/web`。`@vessel-agent/core` 是零 UI 依赖的库，`@vessel-agent/agent` 是成员能力层，TUI / serve / web 是应用层外壳。
 - **能力工具是 `bash` / `read` / `edit` / `write`**（`write` 是 0.55.1 加的：建文件 / 整体替换 / 追加，**逐字节落盘、不经 shell**）。加第五个之前先证明它不能被现有四个表达出来。
   - 按用途选：**建文件 / 追加 / 整体替换 ⇒ `write`**；**局部改代码 ⇒ `edit`**（逐字符唯一匹配，改不中会报错）；**执行命令 ⇒ `bash`**（不要用它写文件：heredoc 与重定向会把内容交给 shell，反引号和 `$(` 会被先展开）。
-  - 不提供 `grep` / 文件操作 / meta-tools。插件工具 `subscribe`（显式文件订阅：变更只发短通知，按需 `inspect`）/ `agent` / `ask` 按入口注册，MCP 工具经插件注册；工具口径与动作表见 [docs/architecture/tools.md](docs/architecture/tools.md#tools)。
+  - 不提供 `grep` / 文件操作 / 注册型 meta-tools。插件工具 `subscribe`（显式文件订阅：变更只发短通知，按需 `inspect`）/ `agent` / `ask` 按入口注册，MCP 工具经插件注册；装配层常驻 `vessel` 控制面桥（单工具面，不注册工具，只桥接既有注册表与 RPC，见 [tools.md](docs/architecture/tools.md#vessel-bridge)）。工具口径与动作表见 [docs/architecture/tools.md](docs/architecture/tools.md#tools)。
   - **工具名一律 snake_case**（`^[a-z][a-z0-9_]*$`，≤64）：`web_search` / `pii_reveal` / `bash`，不要 `webSearch` / `piiReveal`。判据唯一真源是 `packages/core/src/runtime/tool-name.ts`，注册期不合规直接抛错（带 `badName → bad_name` 建议），装配期还有一道全量审计；MCP 等**外部名字原样透传**、只告警不阻断。改名必须登记进 `TOOL_NAME_ALIASES`（旧名保留一版别名，命中时结果里附一行弃用提示，不静默）。规则见 [docs/architecture/tools.md](docs/architecture/tools.md#tool-name-rule)。
 
 ## 硬安全规则（不可协商）

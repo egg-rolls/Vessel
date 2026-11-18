@@ -1,8 +1,8 @@
 /**
  * `--tools` 的工具清单——不构造 ExecutionUnit、不需要 API Key。
  *
- * 输出口径固定为 headless 口径：默认 4 个（bash / edit / read / agent）；
- * 显式 `agent.enabled: false` 时只列出 3 个能力工具。
+ * 输出口径固定为 headless 口径：能力工具 + vessel 控制面桥，
+ * agent 缺省开启时再加 `agent`；显式 `agent.enabled: false` 不列 `agent`。
  * `ask` 在交互 REPL（TTY）、gateway / serve 与 headless（落盘后挂起）都注册
  * （见 cli.ts / bootstrap.ts），但一次性命令里不展开它的 schema，由调用方在末尾注明。
  */
@@ -26,6 +26,7 @@ import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { createVesselMetaSurface } from './vessel-meta';
 
 export interface ToolSummary {
   name: string;
@@ -89,6 +90,11 @@ export async function listTools(): Promise<ToolsListing> {
   // 「找不到工具」且不知怎么恢复。用插件侧的 drain 出口，而不是往上加 core 的
   // PluginHost API（PluginHost 不在本单边界内）。
   warnings.push(...drainWebToolsWarnings());
+
+  // vessel 元工具：与 bootstrap 同一注册口径（装配层注册，先于 agent）。
+  // 只读列举不执行任何调用，RPC 端口恒不可用（rpc/set_config 此时 fail-closed）。
+  const vesselMeta = createVesselMetaSurface({ getLocalRpc: () => undefined });
+  host.registerTool(vesselMeta.vessel);
 
   // `--tools` 是一次性只读命令：按 headless 口径；agent 缺省开启，
   // 显式 `agent.enabled: false` 才隐藏 canonical agent。

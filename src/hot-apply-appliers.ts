@@ -23,6 +23,7 @@ import type {
   ToolDefinition,
 } from '../packages/core/src/index';
 import type { McpControl, McpServerSummary } from './mcp-wiring';
+import { VESSEL_TOOL_NAME } from './vessel-meta';
 
 /** 一条差异摘要（`scope: <detail>` 的一行文本） */
 export type ApplierSummaryLine = string;
@@ -148,6 +149,7 @@ export interface ToolsApplyResult {
  *
  * 宿主上还有非插件来源的工具，必须排除：
  * - `agent` / `ask` 由入口按能力注册，不属于插件配置；
+ * - `vessel` 由装配层注册（控制面桥，P1 单工具面），同属入口注册；
  * - MCP 工具由 `mcp` applier 管理（`toolSource` 非 null）。
  *
  * 用它们初始化管辖域，之后的 tools reload 才不会把自己的工具判成 `removed`。
@@ -166,6 +168,7 @@ export function pluginManagedToolNames(
         // 外部插件或旧装配仍可能带着旧名，一并排除，免得被当成插件工具管理。
         name !== 'ask' &&
         name !== 'ask_user' &&
+        name !== VESSEL_TOOL_NAME &&
         (mcp?.toolSource(name) ?? null) === null,
     );
 }

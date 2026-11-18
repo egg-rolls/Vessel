@@ -1,8 +1,8 @@
 ---
 title: 工具与权限边界
 kind: current
-triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask, mcp tool, 工具, 权限, 黑名单, 白名单, 根目录, 提问, 工具集, 工具名, 命名规则, snake_case, 工具名校验, 别名, 弃用提示, pii_reveal]
-paths: [packages/core/src/types/tool.ts, packages/core/src/runtime/tool-name.ts, packages/core/src/runtime/plugin-host.ts, plugins/tools/**, packages/agent/**]
+triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask, mcp tool, vessel, bridge, guardrail, rpc, 工具, 权限, 黑名单, 白名单, 根目录, 提问, 工具集, 工具名, 命名规则, snake_case, 工具名校验, 别名, 弃用提示, pii_reveal, 控制面, 桥, 元工具]
+paths: [packages/core/src/types/tool.ts, packages/core/src/runtime/tool-name.ts, packages/core/src/runtime/plugin-host.ts, plugins/tools/**, packages/agent/**, src/vessel-meta.ts]
 ---
 
 # 工具与权限边界
@@ -81,7 +81,7 @@ interface ToolDefinition {
 
 ## 工具集：能力工具为什么这么少
 
-默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit` / `write`**（`write` 是建文件 / 整体替换 / 追加，**逐字节落盘、不经 shell**——heredoc 与重定向会把内容交给 shell，反引号与美元括号会被先展开）；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；变更只发短通知，按需 `inspect`；未 add 不通知）。成员 body 在装配层 attach 收件箱后另有 `inbox`；`ask` 按入口注册。`team_*` / `delegate_task` 已删除。
+默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit` / `write`**（`write` 是建文件 / 整体替换 / 追加，**逐字节落盘、不经 shell**——heredoc 与重定向会把内容交给 shell，反引号与美元括号会被先展开）；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；变更只发短通知，按需 `inspect`；未 add 不通知）。成员 body 在装配层 attach 收件箱后另有 `inbox`；`ask` 按入口注册。装配层另常驻注册 **`vessel`** 控制面桥（P1 单工具面，见下「vessel 控制面桥」）。`team_*` / `delegate_task` 已删除。
 
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
@@ -89,9 +89,10 @@ interface ToolDefinition {
 | `agent` | 默认注册；显式 `agent.enabled: false` 关闭。root owner 动作 `hire` / `send` / `close` / `list` / `rotate` / `read`（root 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `send` / `list` / `read`。写 Team 日志不是本工具的职责：`agent post` 已移除（只追加日志、不投递、不唤醒，0.50 实测导致成员报告静默丢失），需要时走 CLI `vessel team post`。`create` 建同 Team peer，`hire` 建调用者拥有的 contractor；close 审批在权限层（成员关 peer 需人类批准），每 Team present 上限与冻结见 ADR-095；权限模式与成员配置见 `agent.*`。`read` 是只读会话读取（`to` + `limit` 默认 20 / 封顶 50，返回最近 N 条消息的 role + 截断正文），数据源与 `sessions.get` 同一个 `SessionStore`，不新增 RPC；收口不再自动回传正文之后，父级要成员原文用它或 `inbox` |
 | `inbox` | 成员 body 由装配层 attach 收件箱后注册（`deny` 模式也注册，只读本地队列）：`list` 是**唯一的廉价偷看**——unread / pending 计数 + 每条只给 `id` / 来源 / **前 40 字符**前缀 / `more_chars`（还有多少字符没给），永不吐正文；`read` **就等于拿走**——取原文 + 消费，`unread` 与 `held` 一视同仁（held 的那几条先取消其 queued run 再消费，所以同一段正文不会进两次上下文），不可逆；`delete` 删除未读且非 held 的消息（「不看就丢」）；`insert` 给自己追加一条消息，不启动 run、不唤醒自己。`unread` = 该自己读，`pending` = 已排程、会自动作为下一轮输入送达（同一口径由 `counts()` 派生）。0.51 的 `claim` 动作已并入 `read`：老会话仍发 `action:'claim'` 时按 `read` 的别名执行并在结果里附一行 `note`（`agents.claim` RPC 与 web 条带仍然存在，模型侧不再有这个动作）；`includeHeld` 参数已删除。返回 JSON；非法参数返回 `{ error: 'invalid_input: ...' }`，不抛错 |
 | `ask` | 交互 REPL、`gateway start` / `--serve` 与 headless（`--run` / 管道）都注册；`ui.askUser: false` 可关闭。两种语义见下「ask 的 sync / async」 |
+| `vessel` | 装配层常驻注册（bootstrap，先于 owner 派生；`--tools` 同口径）。单工具面控制面桥：调用本会话不可直调的已注册工具 / 既有 RPC 方法 / 经 `config.set` 改配置。见下「vessel 控制面桥」 |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
-口径：默认 root 工具面 = 能力工具 + `agent` + `subscribe`；显式 `agent.enabled: false` 去掉 `agent`；交互 REPL 或 gateway-serve 再加 `ask`。**只有一份工具面**：成员用的就是节点有的这一份（0.51 用户裁定），所以 `tools.list` 无论传不传 `agent_id` 都是 `{ tools }` 一个形状，没有 `surface` / `source` / `unavailable`（见 [gateway-rpc](gateway-rpc.md)）。仅剩两条**行为**差异：deny（只读）档只留 `read` / `media` / `subscribe`，需要父级应答的 `ask` / `ask_user` 要求 bridge —— 判据见 [agent-structure](agent-structure.md) 的「工具面」。`inbox` 仍是成员运行期注入（节点面上暂时没有它，待 inbox 插件化后自然归位）；配置 MCP 后在基础上加 MCP 工具（数量由 server 提供）。实际清单以 `bun run src/cli.ts --tools` 输出为准，本文不写死数量。`--tools` 一次性命令按 headless 口径列出，且**不连接 MCP、不展开 `ask` 与成员侧 `inbox`**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
+口径：默认 root 工具面 = 能力工具 + `agent` + `subscribe` + `vessel`（控制面桥）；显式 `agent.enabled: false` 去掉 `agent`；交互 REPL 或 gateway-serve 再加 `ask`。**只有一份工具面**：成员用的就是节点有的这一份（0.51 用户裁定），所以 `tools.list` 无论传不传 `agent_id` 都是 `{ tools }` 一个形状，没有 `surface` / `source` / `unavailable`（见 [gateway-rpc](gateway-rpc.md)）。仅剩两条**行为**差异：deny（只读）档只留 `read` / `media` / `subscribe`，需要父级应答的 `ask` / `ask_user` 要求 bridge —— 判据见 [agent-structure](agent-structure.md) 的「工具面」。`inbox` 仍是成员运行期注入（节点面上暂时没有它，待 inbox 插件化后自然归位）；配置 MCP 后在基础上加 MCP 工具（数量由 server 提供）。实际清单以 `bun run src/cli.ts --tools` 输出为准，本文不写死数量。`--tools` 一次性命令按 headless 口径列出，且**不连接 MCP、不展开 `ask` 与成员侧 `inbox`**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
@@ -100,6 +101,42 @@ interface ToolDefinition {
 | `recall` | `{ compaction_id?, from_seq?, to_seq?, offset?, limit?, query? }` | 无（只读本会话日志） | 读回**被压缩替换**的历史消息（0.57）。无参 ⇒ 列出本会话的压缩段（id / 原因 / 条数 / seq 区间 / 摘要首行）；给 `compaction_id`（或 `from_seq`/`to_seq`）⇒ 返回**原始消息**，一行一条。三条上界：≤200 条 / ≤16k token / ≤20000 事件扫描；分页给 `next_offset` 与更便宜的 `next_from_seq`。压缩当刻写进摘要正文的那行 `[compacted] N messages (seq a..b) …` 就是它的入口。老会话无索引时明说，不编造。**这不是读文件** |
 | `read` | `{ path, offset?, limit? }` | `allow`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | 带行号返回（从 1 开始）。`limit` 默认 2000 行；截断时标注总行数与继续读的方式 |
 | `edit` | `{ path, old_string, new_string, replace_all? }` | `ask`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `old_string` 必须**精确匹配且唯一**；不唯一时报错并说明匹配次数，未匹配时报错；`replace_all: true` 才允许多处替换 |
+
+<a id="vessel-bridge"></a>
+
+### vessel 控制面桥（P1，单工具面）
+
+`vessel` 是**结构化控制面桥**（`src/vessel-meta.ts`，装配层注册；用户裁定 2026-11-18：**模型面只有
+vessel 一个工具**，不设独立执行器）：让模型在**不改会话 tools[] 前缀**的前提下够到 live 注册表里的
+新工具与 Vessel 自身的 RPC 控制面。它不是注册型 meta-tool（不注册/发现工具，注册权威仍是 PluginHost），
+也不占能力工具名额——与 MCP 注册面同理。正当性：工具是进程内函数不是 CLI 命令，`bash` 表达不了；
+本地模式不监听端口，`bash` + RPC over HTTP 无端点可达且暴露 token；严格 provider 下旧会话的生成
+被约束在冻结 tools[] 内，新工具只能经桥调用。
+
+**两种执行边界（混用口径）**：
+
+| op | 执行路径 | 鉴权落点 |
+|---|---|---|
+| `call_tool`（tool_name + args） | `vessel-bridge` guardrail（ToolCall 阶段，priority 40 先于 tool-policy 的 50）改写成目标 ToolCall（**保留原 tool_call.id**），目标 = live 注册表任意工具含 MCP | 管道对**最终目标工具 + args** authorize（ADR-058 决策 2）：auto_approve / never_auto_approve / checkPermission 按目标键控原样命中，零新鉴权逻辑。目标不存在 → 管道重 getTool 的标准 `tool_not_found`（retryable:false） |
+| `rpc`（method + params） | guardrail 校验形状后原样放行，**vessel 自执行**（handler 经本地 dispatcher） | **vessel.checkPermission 按方法分层**（下表）；ask / auto_approve / remember 走既有 PermissionPolicy |
+| `set_config`（key + value） | 同上，固定翻译为 `config.set` 调用 | config.set 既有白名单 / 值校验（permission.* 不可写，无自升级）+ write 审批 |
+
+**方法级分层**（rpc / set_config；唯一真源 = dispatcher.manifest 的方法 `permission` 声明，与分发表同源）：
+read→allow（RPC 层已脱敏）/ write→ask / admin→deny / 未知方法→deny；另硬禁
+`permission.respond` / `ask.respond` / `permissions.setToolPolicy`（自审批/自改策略禁止，ADR-077/079/091）。
+方法清单经 `op=rpc, method=capabilities.list` 发现。判定对**最终 args** 生效（BeforeTool 改写 op 也逃不过对应门）。
+
+**fail-closed（call_tool）**：vessel 对 call_tool 与未知 op 的 checkPermission=deny、handler 永不转发——
+关闭 guardrail 阶段的入口（EU delegate 等）直达 vessel 时 deny 先挡，任何入口组合都不能绕过桥校验
+直达任意工具。rpc/set_config 是有界执行（启动期冻结方法表 + 逐方法门），checkPermission 在所有入口
+都先于 handler 判定，故自执行不构成旁路。
+
+**递归与准入**：单跳——call_tool 目标不得是 `vessel` 自身；其余 live 注册表工具默认可桥
+（桥不放宽目标自身任何权限规则，高危分级由目标自己的 checkPermission / 默认 ask 继承）。
+配置层 bridge_eligible 策略与 tool.call.* transport 溯源字段尚未引入（待裁决）。
+历史与 tool.call.*：call_tool 记改写后的目标名（loop 既有语义），rpc/set_config 记 vessel 本身；
+UI 按 tool_call_id 配对，用户与模型同见。RPC 执行经 bootstrap 的本地 dispatcher（与 gateway 同一方法表 /
+同一权限语义，晚绑定回填）；失败折稳定错误文本回模型（run 继续），不产生新 WAL 洞。
 
 <a id="ask-sync-async"></a>
 
@@ -137,13 +174,13 @@ interface ToolDefinition {
 |---|---|
 | `grep` / `ls` / `cat` / `find` | `bash` 就能干，且组合能力更强 |
 | file-ops（`write_file` / `create_dir` / `path_exists` / …） | `edit` 写、`bash` 建目录与判定存在 |
-| meta-tools（`register_tool` / `search_assets` / `inspect_asset` / …） | 写文件即等于建工具：模型用 `bash` 落一个插件目录，下次启动被 `PluginLoader` 扫到 |
+| meta-tools（`register_tool` / `search_assets` / `inspect_asset` / …） | 写文件即等于建工具：模型用 `bash` 落一个插件目录，下次启动被 `PluginLoader` 扫到。注意 `vessel` 不是这类——它不注册/发现工具，只是既有注册表与 RPC 控制面的结构化桥（见上「vessel 控制面桥」） |
 | skills-loader（scanner + CRUD + 文件监听） | skills 就是文件；前端引用、core 只收消息 |
 | memory 插件 | 项目约定写在 `AGENTS.md`，模型自己读；跨会话笔记是 markdown 文件，模型自己读写 |
 
 > MCP 不是「能力工具」，而是把外部工具接进 `PluginHost` 的插件（ADR-039）；它不占基础工具名额，也不改变能力工具的判据。
 
-**evals / feishu 不注册模型工具**；工具口径：默认 = 能力工具 + `agent` + `subscribe`；交互模式再加 `ask`；另有 N 个 MCP 工具。
+**evals / feishu 不注册模型工具**；工具口径：默认 = 能力工具 + `agent` + `subscribe` + `vessel`；交互模式再加 `ask`；另有 N 个 MCP 工具。
 
 判据只有一条：**能被其他工具替代的工具，就不该存在**。工具越多，模型的选错空间越大；真正的通用原语只有"执行一条命令"，其余都是它的特化。
 

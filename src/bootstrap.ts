@@ -144,6 +144,7 @@ import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from '
 import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
 import { readPackageVersion } from './version';
+import { createVesselMetaSurface, type VesselRpcPort } from './vessel-meta';
 import { visionSurfaceOf } from './vision-settings';
 
 /**
@@ -1253,6 +1254,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ).map(normalizeLegacyToolName),
   };
 
+  // ── vessel 元工具（P1，单工具面）：结构化控制面桥 ─────────────────────
+  // call_tool 经 vessel-bridge guardrail 改写成目标工具，鉴权落最终目标 + args（ADR-058 决策 2）；
+  // rpc/set_config 由 vessel 自执行，方法级鉴权在 vessel.checkPermission（用户裁定 2026-11-18：
+  // 不设第二执行器工具）。注册必须先于 wiring.startOwner()——main EU spawn 时快照父宿主
+  // 工具列表（spawn 顺序不变式）。dispatcher 建在 agent 装配之后，晚绑定回填（与 feishuTeamId
+  // 同口径）；local / serve 共用这一个 localDispatcher。
+  let vesselRpcPort: VesselRpcPort | undefined;
+  const vesselMeta = createVesselMetaSurface({ getLocalRpc: () => vesselRpcPort });
+  finalPluginHost.registerTool(vesselMeta.vessel);
+  finalPluginHost.registerGuardrail(vesselMeta.bridgeGuardrail);
+
   // ── AgentService + REPL owner 端点（0.17 Phase A）──
   let agentControl: BootstrapResult['agent'];
   /**
@@ -1971,6 +1983,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // basic-tools 配置（allowed_roots / deny_paths）—— 面板列出来的路径必须与读侧判定同源。
     listAttachments: createConfigAttachmentLister({ getConfig: () => config }),
   });
+  // vessel 元工具的 RPC 端口回填：与 gateway 同一方法表 / 同一权限语义（本地 principal）。
+  vesselRpcPort = localDispatcher;
   // A1：本地 RPC ← runtimeEvents 的只读桥接。TUI 的 `/runs resume`
   // 只靠 `rpc.subscribe` 等待终态；缺少 onEvent 时订阅是 no-op，命令会一直挂起。
   // 通知只再分发，不写回事件流。
