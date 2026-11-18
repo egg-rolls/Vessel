@@ -76,7 +76,7 @@ export function classifyOrigin(origin: string): OriginClass | null; // 非法 or
 ```ts
 export interface DerivedOriginsInput {
   nodes: readonly { node_id: string; entries?: readonly { url: string }[]; url?: string; public_url?: string }[];
-  /** `os.networkInterfaces()` 里本机的地址集合；由调用方注入（测试可控）。 */
+  /** `os.networkInterfaces()` 里本机的地址集合；由调用方注入（便于在 REPL 里验证分流）。 */
   localAddresses: readonly string[];
   /** 缺省 true；false ⇒ private 也不自动（只留 loopback）。 */
   allowPrivate?: boolean;
@@ -99,23 +99,44 @@ export function deriveTrustedOrigins(input: DerivedOriginsInput): string[];
 
 ### 4.3 消费点 A：平台
 
-`src/gateway-command.ts` 里给 `startPlatformGateway` 的入参从
-`nodeOrigins: [...nodes.map(n => n.apiUrl)]`（只喂 CSP）改为：
+**已接线（第二阶段，`feat/node-autojoin-wire`）**，接法不是新写一份并集，而是把 D 作为
+**额外入参**交给 origins-core 定下的单一实现：
 
-- `nodeOrigins: D`（CSP `frameSrc`/`connectSrc`，含 registry 里的 private 部分）；
-- `derivedOrigins: D_loopback`（**只含 D 里的 loopback 部分**），平台内部把它并入 `httpAllowedOrigins`。
+```ts
+// src/gateway-command.ts（组合根）
+const hubDataDir = config.hub?.dataDir ? resolve(...) : join(dataDir, 'hub');
+const derivedOrigins = await readHubDerivedOrigins({ hubDataDir }); // 读 registry.json
+startPlatformGateway({ /* ... */ derivedOrigins: derivedOrigins.origins }); // 传**全量** D
 
-**三行规则（拍板收窄，实现时必须逐条对上）**：
+// packages/serve/src/platform/server.ts
+const derivedOrigins = normalizeAllowedOrigins(opts.derivedOrigins);
+const cspNodeOrigins = [...nodeOrigins, ...derivedOrigins];           // CSP：全量
+const httpAllowedOrigins = normalizeAllowedOrigins([
+  ...allowedOrigins, ...publicOrigins,
+  ...resolveHttpAllowedOrigins({ /* http.allowed_origins 缺省即回环通配 */, publicOrigins,
+                                 derivedOrigins }),                    // CORS：函数内部只留回环
+]);
+```
 
-| 消费点 | 用哪一部分 D | 理由 |
-|---|---|---|
-| 平台 `httpAllowedOrigins`（CORS / `originAllowed`） | **只 loopback** | 平台是浏览器主入口，CORS 面要最小；本机私网来源不该让平台回显 ACAO |
-| 平台 CSP `connectSrc` / `frameSrc` | **全量 D**（loopback + 本机网卡验证过的 private） | CSP 只限制"页面能发到哪"，不放行就等于局域网 node 用不了 |
-| node `serve.allowed_origins` | **全量 D** | node 才是需要局域网访问的那一侧 |
+**为什么传全量、在 serve 内部收窄**：收窄逻辑只能有一处。调用方多传一次私网地址是
+无害的（会被 `classifyOrigin !== 'loopback'` 挡掉），反过来「调用方忘了先过滤」就是
+CORS 面被悄悄放大。所以把判断放在 `resolveHttpAllowedOrigins` 里，并且**只加不减**：
 
-> 注意现态：`packages/serve/src/platform/server.ts` 的 `httpAllowedOrigins` 只含 `gateway.allowed_origins + auth.public_origins`；`nodeOrigins` 只进 CSP。所以今天"平台页面能调 node"和"node 页面能调平台"是两套各自为政的白名单——正是本单要合并的。
->
-> **该消费点由 `origins-core` 先改**（`1ca21971` 起 `httpAllowedOrigins = allowed_origins ∪ public_origins ∪ (http.allowed_origins ?? 回环通配)`）。本单不平行改这一处：等它合并后 rebase，再把 `derivedOrigins` 接上（见 §10）。
+- 配置 `http.allowed_origins` ⇒ `配置 ∪ D_loopback`；
+- 未配置 ⇒ `public_origins ∪ 三条回环通配 ∪ D_loopback`（老配置一字不改）。
+
+**三行规则（拍板收窄，实现位置已对上）**：
+
+| 消费点 | 用哪一部分 D | 实现位置 | 理由 |
+|---|---|---|---|
+| 平台 `httpAllowedOrigins`（CORS / `originAllowed`） | **只 loopback** | `resolveHttpAllowedOrigins`（`classifyOrigin === 'loopback'` 二次收窄） | 平台是浏览器主入口，CORS 面要最小；本机私网来源不该让平台回显 ACAO |
+| 平台 CSP `connectSrc` / `frameSrc` | **全量 D**（loopback + 本机网卡验证过的 private） | `platform/server.ts` 的 `cspNodeOrigins` | CSP 只限制"页面能发到哪"，不放行就等于局域网 node 用不了 |
+| node `serve.allowed_origins` | **全量 D** | `src/cli.ts` 的 `resolveGatewayAllowedOrigins(…, derived)` | node 才是需要局域网访问的那一侧 |
+
+> 平台侧**怎么拿到 D**：读 hub data dir 里持久化的 `registry.json`（`readHubRegistryRecords`），
+> 不打 HTTP、不要求 hub 已启动——否则「白名单依赖 hub 先起好」这个耦合会回来。文件缺失 /
+> 损坏 / hub 在别的机器上 ⇒ 空集 ⇒ 平台行为与今天逐字一致。代价：D 在平台**启动时定格**
+> （registry 变化要重启平台才生效，见 §10.2）。
 
 ### 4.4 消费点 B：node
 
@@ -279,7 +300,7 @@ node.allowed_origins  (显式)
 | `packages/config/src/{types,validator}.ts` | `hub.token_ttl_days`（1–365）+ 已知键登记 |
 
 行为核对点（原先那批 `bun test` 用例已随宪法第三、四条删除，下面列出它们当年钉住的判据，
-改到这些路径时人工核对）：
+改到这些路径时人工核对；**本单不新增任何测试文件，正确性证据一律是可复现的运行时读数，见 §10.4**）：
 
 - 节点注册分类（含 `::ffff:7f00:1` / `[fe80::1%25eth0]` / CGNAT / 域名）、schema、派生（回环自动 / 非本机私网不自动 / 公网永不 / 上限 / 顺序 / fail-closed）。
 - 派生 origins 的缓存与 `invalidate`、`count=0` 日志、派生抛错 fail-closed。
@@ -287,11 +308,86 @@ node.allowed_origins  (显式)
 - 真 HTTP join（code 重放、无码回环重注册、`entry_kind_mismatch` 不烧 code、未知字段被丢弃）。
 - `hub-node.json` 与 `registry.json` 新字段往返 + 坏条目容错。
 
-### 10.2 未做（等 origins-core 合并后再接）
+### 10.2 第二阶段：平台侧接线（已完成，`feat/node-autojoin-wire`）
 
-1. `src/gateway-command.ts` 的 `nodeOrigins` / `derivedOrigins` 注入 + `packages/serve/src/platform/server.ts` 的 `httpAllowedOrigins` —— **同一处 origins-core 正在改（`1ca21971`），本单不平行改**。接法按 §4.3 的三行规则：`derivedOrigins` 只给 loopback 部分，CSP 给全量 D。
-2. `hello` 帧实时下发 + `gateway.reconfigure`（需改 `packages/serve/src/hub-protocol.ts` / `hub-frames.ts`）⇒ 现状是"D 在 join 那一刻定格"。
+| 文件 | 内容 |
+|---|---|
+| `packages/serve/src/gateway/auth.ts` | `resolveHttpAllowedOrigins` 新增 `derivedOrigins` 入参：**只加不减**，且只接受 `classifyOrigin === 'loopback'` 的条目（单一收窄点） |
+| `packages/serve/src/platform/server.ts` | 新增 `opts.derivedOrigins`；CSP 用 `cspNodeOrigins = nodeOrigins ∪ D`（全量），CORS 只在上面那一个函数里并入回环子集 |
+| `packages/serve/src/platform/types.ts` | `derivedOrigins?: readonly string[]` + 三行规则注释 |
+| `src/gateway-command.ts` | 组合根：`hubDataDir` → `readHubDerivedOrigins()` → `derivedOrigins: D`；非空时打一行 `hub.origins.derived` |
+| `src/hub/registry.ts` | 新增只读入口 `readHubRegistryRecords(path)`（不校验 `hub_id`、坏记录逐条跳过、永不抛） |
+| `src/hub/derive-origins.ts` | `getLoopback()`；`readHubDerivedOrigins()`（跨进程读盘 + 同一套派生规则 + 一行日志） |
+| `packages/config/src/node-registration.ts` | `DerivedOriginsResult` 增加 `loopbackOrigins` / `privateOrigins` 子集 |
+
+### 10.3 未做
+
+1. **运行期刷新**：平台只在启动时读一次 registry。hub 侧新 node 加入后，平台要重启才放行它的 origin（D 变化不推送）。要实时化需要 `hello` 帧/目录事件 + 平台侧重建 CSP/CORS，属于下一单。
+2. `hello` 帧向 node 实时下发 D + `gateway.reconfigure`（需改 `packages/serve/src/hub-protocol.ts` / `hub-frames.ts`）⇒ node 侧同样是"join 那一刻定格"。
 3. `hub nodes prune`（只标 stale）、`hub nodes rotate` 独立命令、web 端展示。
+
+### 10.4 证伪方式（复现步骤，替代测试）
+
+按宪法第 04 条，正确性只由**可复现的运行时读数**承担。下面每一步都能独立跑出结论，
+"证伪"列写的是**这条读数如果不对会看到什么**。
+
+**复现 A：平台侧分流（第二阶段，最重要的一条）**
+
+```bash
+# 1) 临时实例：临时 HOME + 临时 dataDir + 新端口，避免污染本机配置
+mkdir -p /tmp/na/home && cd /tmp/na   # Windows: D:/vessel-tmp/...
+cat > vessel.yaml <<'YAML'
+http: { allowed_origins: ['https://example.invalid'] }   # 显式配置 ⇒ 回环通配不生效，差异才看得见
+gateway: { port: 28842 }
+node: { hostname: 127.0.0.1, port: 28844 }               # 避开本机已占用的 8644
+hub: { listen: { hostname: 127.0.0.1, port: 28843 } }
+YAML
+HOME=/tmp/na/home VESSEL_STATIC_DIR=<repo>/apps/web/dist \
+  bun run <repo>/src/cli.ts gateway start --port 28842 --data-dir /tmp/na/data
+
+# 2) 出一枚一次性邀请码（直接写 join store，不需要 hub 在线）
+bun run <repo>/src/cli.ts hub join-code --json --data-dir /tmp/na/data/hub
+
+# 3) 用真 HTTP 注册一台带两个入口的 node（loopback + 本机网卡私网）
+curl -sS -X POST http://127.0.0.1:28843/v1/hub/join -H 'content-type: application/json' -d '{
+  "v":1,"protocol":"vessel.hub/2","code":"<码>","node_id":"wire-node-1","version":"0.61.0",
+  "capabilities":["gateway.rpc"],
+  "entries":[{"kind":"loopback","url":"http://127.0.0.1:19971"},
+             {"kind":"private","url":"http://<本机私网IP>:19971"}]}'
+# 期望：HTTP 200 且 trusted_origins = [私网, 回环]（两个都派生出来了）
+
+# 4) 重启平台（D 在启动时读盘派生），看一行日志
+# 期望：hub.origins.derived count=2 loopback=1 private=1
+
+# 5) CORS 探针：看 ACAO 回显哪些
+curl -sS -D- -o /dev/null -X POST http://127.0.0.1:28842/v1/rpc \
+  -H 'Origin: http://127.0.0.1:19971' -H 'content-type: application/json' -d '{}'   # 期望：回显该 origin
+curl -sS -D- -o /dev/null -X POST http://127.0.0.1:28842/v1/rpc \
+  -H 'Origin: http://<本机私网IP>:19971' -H 'content-type: application/json' -d '{}' # 期望：**无** ACAO
+curl -sS -D- -o /dev/null http://127.0.0.1:28842/ | grep -i content-security-policy  # 期望：connect-src 含私网 origin
+```
+
+**证伪信号**（任何一条出现就说明实现错了）：
+
+| 现象 | 说明什么 |
+|---|---|
+| 第 4 步没有 `hub.origins.derived` 日志 / `count=0` | 平台没读到 registry，或派生集为空（`http.allowed_origins` 那句话决定了是否走通配，别先怀疑 D） |
+| 第 5 步「派生-回环」无 ACAO | D 的回环部分没进 `httpAllowedOrigins` |
+| 第 5 步「派生-私网」**有** ACAO | 收窄失效（CORS 面被放大）——这是本设计最需要守住的一条 |
+| CSP `connect-src` 缺私网 origin | 全量 D 没进 CSP，局域网 node 页面会被挡 |
+| 显式配置项 `https://example.invalid` 无 ACAO | 并集把已有来源"减"掉了（违反只加不减） |
+
+**复现 B：node 侧（第二阶段没做端到端，见 §12.2）**
+
+`vessel hub join --hub-url http://127.0.0.1:28843 --code <码>` 之后检查
+`<dataDir>/hub-node.json` 里出现 `trusted_origins`，再起 node ⇒ 该来源应出现在
+node 的 `serve.allowed_origins` 里（**目前只有单元级证据，这条复现步骤还没被真机跑过**）。
+
+**复现 C：hub 侧注册与邀请码语义**
+
+同一枚 code 第二次 POST `/v1/hub/join` ⇒ 410 `pairing_used`；无 code 且该 node 无有效
+token ⇒ 400 `code_required`；`entries` 里 `kind` 与地址事实不符 ⇒ 400
+`entry_kind_mismatch`（且 code **未被消费**，同一枚还能注册合法 node）。
 
 ## 11. 拍板结论（已确认）
 
@@ -305,6 +401,35 @@ node.allowed_origins  (显式)
 
 ### 12.1 真机读数（Windows 11 / bun 1.3.9，本机实测）
 
+**组合根跑通（第二阶段，`vessel gateway start`，临时 HOME + 临时 dataDir + 新端口 28742/28743/28744）**：
+
+1. 第 1 次启动：平台自动拉起 hub，生成 `registry.json`；`vessel hub join-code` 出码；
+2. 用**真 HTTP** `POST /v1/hub/join` 注册一台 node，带两个入口（loopback + 本机网卡私网地址）：
+   - `join -> HTTP 200`，响应 `trusted_origins = ["http://10.248.0.4:19971","http://127.0.0.1:19971"]`（回环 + 经本机网卡验证的私网）；
+   - `registry.json` 落库：`entries = [{kind:loopback,...},{kind:private,...}]`，`version=0.61.0`，`capabilities=[gateway.rpc,web.ui]`；
+3. 重启平台，启动日志出现 `hub.origins.derived count=2 loopback=1 private=1`（= 平台读盘派生成功）；
+4. CORS 读数（`http.allowed_origins` 显式配置为 `https://example.invalid`，回环通配因此不生效，避免测不出差异）：
+
+| Origin | 期望 | 实测 ACAO |
+|---|---|---|
+| `https://example.invalid`（显式配置） | 放行 | `https://example.invalid` ✅ |
+| `http://127.0.0.1:19971`（**派生-回环**） | 放行 | 回显该 origin ✅ |
+| `http://10.248.0.4:19971`（**派生-私网**） | **不放行** | 无 ACAO ✅ |
+| `http://192.0.2.7:12345`（未派生私网） | 不放行 | 无 ACAO ✅ |
+
+5. CSP 读数（同一进程）：
+
+```
+connect-src 'self' ws://127.0.0.1:28742 https://example.invalid wss://example.invalid
+  http://127.0.0.1:19971 ws://127.0.0.1:19971          ← 派生回环，进了
+  http://127.0.0.1:28744 ws://127.0.0.1:28744          ← 本地 implicit node
+  http://10.248.0.4:19971 ws://10.248.0.4:19971        ← 派生私网，进了（全量 D）
+  http://127.0.0.1:28743 ws://127.0.0.1:28743 http://localhost:28743 ws://localhost:28743
+frame-src http://127.0.0.1:28744 http://10.248.0.4:19971 http://127.0.0.1:19971
+```
+
+结论：三行规则在真机组合根上**逐条对上**——私网只出现在 CSP，CORS 只有回环。
+
 `os.networkInterfaces()` 的实际形状：
 
 - zone id **不在** `address` 字符串里，而是独立数字字段 `scopeid`（如 `scopeid=25`）；`address` 形如 `fe80::4bf9:bd5:2d05:7c91`。
@@ -315,10 +440,13 @@ node.allowed_origins  (显式)
 
 ### 12.2 仍未验证
 
-- **没起过真 hub + 真 node 做端到端 join / 重连**。`join-registration.test.ts` 用的是真 HTTP + 真 store，但 hub 在测试进程里 `Bun.serve` 起；`vessel hub join` / 出站客户端 / gateway 启动合并 `allowed_origins` 这一整条**没端到端跑过**。
+- **node 侧端到端仍未跑过**：`vessel hub join`（CLI 写 `hub-node.json`）→ 出站客户端连 hub → gateway 启动时把 `trusted_origins` 并入 `node.allowed_origins` 这一整条，只有单元级证据（`node-state.test` / `registration-persistence.test`），**没有真进程跑过**。第二阶段只验证了**平台侧**闭环。
+- **运行期刷新没有**：平台重启才读新 D。已在同一台机器上验证"重启即生效"，但"不重启也生效"不存在。
 - **没验证降级读盘**：旧 hub 进程重写 `registry.json` 会静默抹掉 `entries`（parser 只按白名单重建）⇒ 派生集退化到"只有 url"。拍板接受（= 白名单退回现状）。
 - **没验证** `readLocalAddresses()` 在 macOS / Linux / WSL 里的形状（只有 Windows 实测）。
-- **没验证** 平台侧接入后的实际效果 —— 那一处还没接（§10.2），因此"浏览器连新 node"的完整闭环目前**只到 node 自己的 `allowed_origins` 为止**。
+- **没验证** hub 在**另一台机器**上的场景：平台读不到 `registry.json` ⇒ D 为空 ⇒ 行为与今天一致（这是设计取舍，但没有实测过这种部署）。
+- 真机读数里有 2 个环境噪声需要在解读时排除：① 本机 8644 已被占，implicit node 改用 28744；② `registry.json` 是 `atomicWrite` + 250ms debounce，join 响应到落盘之间有亚秒级窗口（我的读数脚本第一次就踩到了 ENOENT）。
+- 复现这条读数需要先构建 web：`apps/web` **不是** workspace 成员（`workspaces` 只有 `packages/*`、`plugins/*/*`），必须单独 `bun install`，否则 `bun run build:web` 会在 `src/stores/*` 报一片 `implicitly has an 'any' type`（缺 zustand 类型，**与代码无关**）。装好后 `build:web` 11s 通过。
 
 ### 12.3 风险（已接受）
 

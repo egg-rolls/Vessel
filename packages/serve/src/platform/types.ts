@@ -148,6 +148,17 @@ export interface PlatformGatewayOptions {
   allowLoopbackAnonymous?: boolean;
   /** 用于 CSP `frame-src` / `connect-src` 的 node origin。 */
   nodeOrigins: string[];
+  /**
+   * 0.61：注册表派生的来源集 D（loopback ∪ 经本机网卡验证的私网地址）。
+   *
+   * 平台侧**分流消费**（设计稿 §4.3 三行规则）：
+   * - CORS（`httpAllowedOrigins`）**只吃回环子集**——平台是浏览器主入口，CORS 面最小化；
+   * - CSP（`frame-src` / `connect-src`）吃**全量 D**——否则局域网 node 页面用不了。
+   *
+   * 收窄在 `resolveHttpAllowedOrigins` 里**再判一次**（`classifyOrigin`），所以调用方
+   * 传全量 D 也是安全的：这里只会加、不会减，也不会把私网地址放进 CORS。
+   */
+  derivedOrigins?: readonly string[];
   /** 0.50：Hub 页浏览器直连的 Hub origin；只并入 CSP `connect-src`。 */
   hubOrigins?: string[];
   /** `apps/web/dist`；启动时必须存在 `index.html`。 */

@@ -14,7 +14,6 @@ import {
   buildContentSecurityPolicy,
   corsHeaders,
   hostAllowed,
-  LOOPBACK_WILDCARD_ORIGINS,
   normalizeAllowedOrigins,
   normalizeOriginPattern,
   type OriginPattern,
@@ -542,6 +541,12 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
   const allowedOrigins = normalizeAllowedOrigins(opts.allowedOrigins);
   const nodeOrigins = normalizeAllowedOrigins(opts.nodeOrigins);
   const hubOrigins = normalizeAllowedOrigins(opts.hubOrigins);
+  // 0.61：派生来源集 D 的**全量**（回环 + 本机网卡验证过的私网）只进 CSP ——
+  // 否则「局域网 node 的页面调本机平台」会被 CSP 挡掉；CORS 侧只取回环子集（见下）。
+  const derivedOrigins = normalizeAllowedOrigins(
+    opts.derivedOrigins !== undefined ? [...opts.derivedOrigins] : undefined,
+  );
+  const cspNodeOrigins = [...new Set([...nodeOrigins, ...derivedOrigins])];
   const registry = createPlatformRegistry(opts.nodes);
   const version = opts.version ?? 'unknown';
   const platformToken = opts.platformToken;
@@ -568,12 +573,18 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
   // - `gateway.allowed_origins` / `public_origins` 永远生效（本部署自己的来源总能调 API）；
   // - `http.allowed_origins` 未配置 ⇒ 只补回环通配三条（老配置一字不改，本地任意端口的
   //   WebUI 立刻能用）；显式配置 ⇒ 就是它（`[]` = 不再自动补通配）。
+  // 0.61：访问控制生效值 = `gateway.allowed_origins` ∪ `auth.public_origins` ∪
+  // (`http.allowed_origins` ?? 三条回环通配) ∪ **派生来源集 D 的回环部分**。
+  // 前两项在这里展开，后两项由 `resolveHttpAllowedOrigins` 这**一个实现**给出
+  // （派生集只加不减；私网部分在函数内部被挡在 CORS 之外，调用方传全量 D 也安全）。
   const httpAllowedOrigins = normalizeAllowedOrigins([
     ...allowedOrigins,
     ...publicOrigins,
-    ...(opts.httpAllowedOrigins === undefined
-      ? [...LOOPBACK_WILDCARD_ORIGINS]
-      : resolveHttpAllowedOrigins({ allowedOrigins: opts.httpAllowedOrigins })),
+    ...resolveHttpAllowedOrigins({
+      ...(opts.httpAllowedOrigins !== undefined ? { allowedOrigins: opts.httpAllowedOrigins } : {}),
+      publicOrigins,
+      ...(opts.derivedOrigins !== undefined ? { derivedOrigins: opts.derivedOrigins } : {}),
+    }),
   ]);
   const authService = new AuthService({
     ...authOptions,
@@ -1032,8 +1043,8 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
                 req,
                 httpAllowedOrigins,
                 {
-                  frameSrc: nodeOrigins,
-                  connectSrc: [...nodeOrigins, ...hubOrigins],
+                  frameSrc: cspNodeOrigins,
+                  connectSrc: [...cspNodeOrigins, ...hubOrigins],
                 },
                 { host: edge.host, protocol: edge.protocol },
               ),

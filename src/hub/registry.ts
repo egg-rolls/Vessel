@@ -536,3 +536,40 @@ class HubRegistryImpl implements HubRegistry {
 export function createHubRegistry(options: CreateHubRegistryOptions): HubRegistry {
   return new HubRegistryImpl(options);
 }
+
+/**
+ * 只读快照：把 `registry.json` 读成记录数组，**不校验 `hub_id`、不加锁、不写盘**。
+ *
+ * 用途只有一个（0.61）：同一个 data dir 上的**另一个进程**（平台 gateway）要在自己
+ * 启动时拿到「派生来源集 D」，而 hub 可能是独立进程、也可能还没起来。读权威落盘物
+ * 比打 HTTP 更稳（不引入启动顺序耦合），代价是只读、不感知后续变更。
+ *
+ * 与 `load()` 的差别（都是有意为之）：
+ * - 不校验 `hub_id`：读的人不是这个目录的拥有者；目录归属由 `hub.lock` 证明。
+ * - 坏记录**逐条跳过**而不是抛 `hub_registry_corrupt`：调用方要的是「能用多少算多少」，
+ *   只有整份文件坏了才返回空数组。
+ * - 文件缺失 / 非法 JSON / 版本不认识 ⇒ 返回空数组（fail-closed），绝不抛。
+ */
+export async function readHubRegistryRecords(path: string): Promise<HubNodeRecord[]> {
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!isRecord(parsed) || parsed.v !== 1 || !Array.isArray(parsed.nodes)) return [];
+  const records: HubNodeRecord[] = [];
+  for (const item of parsed.nodes) {
+    const record = parseNodeRecord(item);
+    if (record === undefined) continue;
+    if (records.some((existing) => existing.node_id === record.node_id)) continue;
+    records.push(record);
+  }
+  return records;
+}
