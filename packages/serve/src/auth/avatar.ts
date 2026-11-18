@@ -21,6 +21,7 @@
  */
 
 import type { AuthAvatarRef, OAuthCredentials } from '@vessel-agent/config';
+import { startDeadline } from '@vessel-agent/core';
 
 /** 取头像失败的原因；调用方一律当「没有头像」处理（404 + 前端兜底）。 */
 export type AvatarFailure =
@@ -75,23 +76,8 @@ type CacheEntry =
   | { kind: 'image'; bytes: Uint8Array; contentType: string; expiresAt: number }
   | { kind: 'none'; expiresAt: number };
 
-/**
- * 超时信号：**显式** `AbortController` + `setTimeout`，不用 `AbortSignal.timeout`。
- *
- * 为什么要这么写：`AbortSignal.timeout()` 的定时器是 unref 的，在「只有一次挂起的
- * await、没有其它定时器」的场景里（比如接了一个不响应的 fetch 桩）**不会触发** ——
- * 本仓库的 bun 1.3.9 上实测会直接把调用挂死。这里用自己的 timer，并且一定在 finally 里
- * `dispose()`，既保证超时成立，也不留悬挂定时器。
- */
-function startTimeout(ms: number): { signal: AbortSignal; dispose: () => void } {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  return { signal: controller.signal, dispose: () => clearTimeout(timer) };
-}
-
-/** 内网 / 保留地址：代取时一律拒绝（provider 给什么都不打内网）。 */ function isPrivateHostname(
-  hostname: string,
-): boolean {
+/** 内网 / 保留地址：代取时一律拒绝（provider 给什么都不打内网）。 */
+function isPrivateHostname(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal'))
     return true;
@@ -231,17 +217,17 @@ export class AvatarService {
       return { ok: false, reason: 'unsafe_url' };
     }
     try {
-      const timeout = startTimeout(this.timeoutMs);
+      const deadline = startDeadline(this.timeoutMs);
       let response: Response;
       try {
         response = await this.fetchImpl(url, {
           method: 'GET',
           headers: { accept: 'image/*', 'user-agent': 'vessel-agent' },
-          signal: timeout.signal,
+          signal: deadline.signal,
           redirect: 'follow',
         });
       } finally {
-        timeout.dispose();
+        deadline.dispose();
       }
       if (!response.ok) {
         this.log(
@@ -289,16 +275,16 @@ export class AvatarService {
         : { kind: 'retry' };
     }
     try {
-      const timeout = startTimeout(this.timeoutMs);
+      const deadline = startDeadline(this.timeoutMs);
       let response: Response;
       try {
         response = await this.fetchImpl(`${this.graphBase}/me/photo/$value`, {
           method: 'GET',
           headers: { authorization: `Bearer ${source.accessToken}`, 'user-agent': 'vessel-agent' },
-          signal: timeout.signal,
+          signal: deadline.signal,
         });
       } finally {
-        timeout.dispose();
+        deadline.dispose();
       }
       if (response.status === 401) {
         // access token 失效：如果有刷新能力就换一次，否则当没有头像。

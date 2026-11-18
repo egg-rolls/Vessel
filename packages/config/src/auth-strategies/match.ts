@@ -32,9 +32,10 @@ export function normalizeAllowUserIds(
     }
     const folded = fold(strategy, value);
     if (folded === null) {
-      // 形状声明说「合法」，但它给回来的不是可用字符串：当成不可用条目。
-      // 宁可少一个白名单项（登录时判定不命中），也不要在这里塞进一个占位字符串 ——
-      // 那可能让某个身份意外命中。
+      // 这是**类型收敛层面**的防御：`fold()` 的签名是 `string | null`，因为非字符串必须
+      // 不参与比较（否则 `undefined` 会被强转成 "undefined" 而误命中白名单）。
+      // 当前的 `allowUserIdsShape.normalize` 承诺「非 null 即 string」，所以这条分支
+      // 实际上不可达 —— 保留它只是让类型与「不命中」的语义在代码里显式成立。
       rejected.push(entry);
       continue;
     }
