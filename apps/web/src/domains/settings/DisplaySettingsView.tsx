@@ -19,7 +19,10 @@ import {
   confirmedDisplayKeys,
   DISPLAY_SETTINGS,
   type DisplaySettingDef,
+  LOG_SETTING_PREFIX,
   readDisplayValue,
+  readLogEnvOverrides,
+  readLogModules,
   resolveDisplayValues,
   toConfigValue,
 } from '../../state/display-settings';
@@ -53,17 +56,24 @@ function isUnavailable(error: unknown): boolean {
 export function DisplaySettingsFields({
   display,
   disabledFor,
+  hintFor,
   onChange,
+  settings,
 }: {
   display: Record<string, string>;
   disabledFor?: (setting: DisplaySettingDef) => boolean;
+  /** 额外提示（如「被环境变量覆盖」）；返回 undefined 不渲染。 */
+  hintFor?: (setting: DisplaySettingDef) => string | undefined;
   onChange: (setting: DisplaySettingDef, raw: string) => void;
+  /** 要渲染的键子集；缺省全量（Display 页拆「显示」与「日志」两个分组用）。 */
+  settings?: readonly DisplaySettingDef[];
 }) {
   return (
     <div className="mt-2.5 grid grid-cols-1 gap-3 sm:grid-cols-2">
-      {DISPLAY_SETTINGS.map((setting) => {
+      {(settings ?? DISPLAY_SETTINGS).map((setting) => {
         const current = display[setting.key] ?? '';
         const disabled = disabledFor?.(setting) ?? false;
+        const extraHint = hintFor?.(setting);
         return (
           <fieldset
             key={setting.key}
@@ -88,6 +98,9 @@ export function DisplaySettingsFields({
               <div className="mt-0.5 text-sm text-muted">
                 {t('settings.display.field.showArchived.hint')}
               </div>
+            )}
+            {extraHint !== undefined && (
+              <div className="mt-0.5 text-sm text-muted">{extraHint}</div>
             )}
             {setting.type === 'boolean' ? (
               <label className="mt-2.5 flex items-center gap-2 text-md">
@@ -148,6 +161,9 @@ export function DisplaySettingsView() {
 
   // 服务端快照是唯一真相；本地只叠一层按 key 的乐观 overlay。
   const display = useMemo(() => resolveDisplayValues(data, pending), [data, pending]);
+  // 日志中枢：环境变量覆盖（被压住的键只读 + 提示）与 modules 只读展示。
+  const logOverrides = useMemo(() => readLogEnvOverrides(data), [data]);
+  const logModules = useMemo(() => readLogModules(data), [data]);
 
   // 服务端确认后清除 overlay；旧快照（值与 pending 不同）不会覆盖用户选择。
   useEffect(() => {
@@ -187,6 +203,13 @@ export function DisplaySettingsView() {
       </div>
     );
   }
+
+  // 被环境变量压住的日志键（config.get 的 logEnvOverrides）：只读 + 提示。
+  const logOverrideFor = (setting: DisplaySettingDef) => {
+    if (!setting.key.startsWith(LOG_SETTING_PREFIX)) return undefined;
+    const field = setting.key.slice(LOG_SETTING_PREFIX.length);
+    return logOverrides.find((override) => override.key === field);
+  };
 
   const change = async (setting: DisplaySettingDef, raw: string) => {
     const value = toConfigValue(setting, raw);
@@ -264,10 +287,55 @@ export function DisplaySettingsView() {
         }
       >
         <DisplaySettingsFields
+          settings={DISPLAY_SETTINGS.filter(
+            (setting) => !setting.key.startsWith(LOG_SETTING_PREFIX),
+          )}
           display={display}
           disabledFor={(setting) => !connected || saving === setting.key || readOnly}
           onChange={(setting, raw) => void change(setting, raw)}
         />
+      </Section>
+      <Section
+        title={t('settings.display.log.title')}
+        description={t('settings.display.log.description')}
+      >
+        <DisplaySettingsFields
+          settings={DISPLAY_SETTINGS.filter((setting) =>
+            setting.key.startsWith(LOG_SETTING_PREFIX),
+          )}
+          display={display}
+          disabledFor={(setting) =>
+            !connected ||
+            saving === setting.key ||
+            readOnly ||
+            logOverrideFor(setting) !== undefined
+          }
+          hintFor={(setting) => {
+            const override = logOverrideFor(setting);
+            return override !== undefined
+              ? t('settings.display.log.overridden', { env: override.env })
+              : undefined;
+          }}
+          onChange={(setting, raw) => void change(setting, raw)}
+        />
+        <div className="mt-3 rounded-md bg-raised p-3">
+          <div className="font-mono text-xs tracking-wide text-faint">
+            observability.log.modules
+          </div>
+          <div className="text-md text-ink">{t('settings.display.log.modules')}</div>
+          <div className="mt-0.5 text-sm text-muted">{t('settings.display.log.modulesHint')}</div>
+          {logModules.length === 0 ? (
+            <div className="mt-2 text-sm text-muted">{t('settings.display.log.modulesEmpty')}</div>
+          ) : (
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-sm">
+              {logModules.map(([prefix, level]) => (
+                <span key={prefix}>
+                  {prefix}={level}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       </Section>
     </div>
   );

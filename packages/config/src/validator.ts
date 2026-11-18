@@ -637,12 +637,72 @@ function validateFeishu(feishu: FeishuConfig, errors: ConfigValidationError[]): 
   }
 }
 
-/** 校验 observability 块（0.4；0.14 showProcessErrors） */
+/** observability.log 允许值（与 core log-hub / ObservabilityLogConfig 一致） */
+const LOG_LEVELS: readonly string[] = ['debug', 'info', 'warn', 'error'];
+const LOG_COLORS: readonly string[] = ['auto', 'always', 'never'];
+const LOG_FORMATS: readonly string[] = ['pretty', 'json'];
+const LOG_TIMES: readonly string[] = ['auto', 'none', 'clock', 'iso'];
+/** modules 的键是事件名前缀（小写域段；连字符等不合法，最长前缀匹配按点分段）。 */
+const LOG_MODULE_PREFIX = /^[a-z][a-z0-9_.]*$/;
+
+/** 校验 observability.log（枚举 + modules 映射；未知键由 findUnknownNestedKeys 报） */
+function validateObservabilityLog(log: unknown, errors: ConfigValidationError[]): void {
+  if (!isPlainObject(log)) {
+    errors.push({
+      path: 'observability.log',
+      message: 'observability.log must be an object',
+      value: log,
+    });
+    return;
+  }
+  const enumField = (key: string, allowed: readonly string[]): void => {
+    const value = log[key];
+    if (value !== undefined && (typeof value !== 'string' || !allowed.includes(value))) {
+      errors.push({
+        path: `observability.log.${key}`,
+        message: `observability.log.${key} must be one of ${allowed.join(' | ')}`,
+        value,
+      });
+    }
+  };
+  enumField('level', LOG_LEVELS);
+  enumField('color', LOG_COLORS);
+  enumField('format', LOG_FORMATS);
+  enumField('time', LOG_TIMES);
+  if (log.modules === undefined) return;
+  if (!isPlainObject(log.modules)) {
+    errors.push({
+      path: 'observability.log.modules',
+      message: 'observability.log.modules must be a map of event-name prefix to level',
+      value: log.modules,
+    });
+    return;
+  }
+  for (const [prefix, level] of Object.entries(log.modules)) {
+    if (!LOG_MODULE_PREFIX.test(prefix)) {
+      errors.push({
+        path: `observability.log.modules.${prefix}`,
+        message:
+          'observability.log.modules keys must be lowercase event-name prefixes matching ^[a-z][a-z0-9_.]*$',
+        value: prefix,
+      });
+    }
+    if (typeof level !== 'string' || !LOG_LEVELS.includes(level)) {
+      errors.push({
+        path: `observability.log.modules.${prefix}`,
+        message: `observability.log.modules.${prefix} must be one of ${LOG_LEVELS.join(' | ')}`,
+        value: level,
+      });
+    }
+  }
+}
+
+/** 校验 observability 块（0.4；0.14 showProcessErrors；日志中枢 log） */
 function validateObservability(
   observability: ObservabilityConfig,
   errors: ConfigValidationError[],
 ): void {
-  const { eventHistory, metrics, showProcessErrors } = observability;
+  const { eventHistory, metrics, showProcessErrors, log } = observability;
 
   if (eventHistory !== undefined && (!Number.isInteger(eventHistory) || eventHistory < 0)) {
     errors.push({
@@ -665,6 +725,7 @@ function validateObservability(
       value: showProcessErrors,
     });
   }
+  if (log !== undefined) validateObservabilityLog(log, errors);
 }
 
 /** `ui.statusBars` 允许值（0.13） */
@@ -3566,7 +3627,8 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'maxReplyChars',
     'maxMembers',
   ],
-  observability: ['eventHistory', 'metrics', 'showProcessErrors'],
+  observability: ['eventHistory', 'metrics', 'showProcessErrors', 'log'],
+  'observability.log': ['level', 'modules', 'color', 'format', 'time'],
   ui: [
     'language',
     'clearOnStart',
@@ -3630,6 +3692,17 @@ export function findUnknownNestedKeys(config: Record<string, unknown>): UnknownN
     for (const key of Object.keys(tls)) {
       if (!KNOWN_TLS_KEYS.includes(key as (typeof KNOWN_TLS_KEYS)[number])) {
         unknown.push({ path: `node.tls.${key}`, key, block: 'node.tls' });
+      }
+    }
+  }
+
+  // observability.log 子块（modules 的键是事件名前缀，属数据不属配置键，不查未知）。
+  const logBlock = isPlainObject(config.observability) ? config.observability.log : undefined;
+  if (isPlainObject(logBlock)) {
+    const knownLog = KNOWN_BLOCK_KEYS['observability.log'] ?? [];
+    for (const key of Object.keys(logBlock)) {
+      if (!knownLog.includes(key)) {
+        unknown.push({ path: `observability.log.${key}`, key, block: 'observability.log' });
       }
     }
   }

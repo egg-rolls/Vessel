@@ -318,6 +318,26 @@ export interface FeishuConfig {
   maxMembers?: number;
 }
 
+/**
+ * 日志中枢配置（observability.log；对应 core 的 LoggingConfig）。
+ * 环境变量覆盖优先：VESSEL_DEBUG > VESSEL_LOG_LEVEL > VESSEL_LOG_JSON > 本配置。
+ */
+export interface ObservabilityLogConfig {
+  /** 全局最低输出级别；默认 info */
+  level?: 'debug' | 'info' | 'warn' | 'error';
+  /**
+   * 事件名前缀 → 级别（最长前缀匹配，按点分段，如 `gateway.ws` 命中
+   * `gateway.ws.closed`）。**键是事件名**，loader 不做 snake→camel 改写。
+   */
+  modules?: Record<string, 'debug' | 'info' | 'warn' | 'error'>;
+  /** 着色；默认 auto（TTY 才着色；NO_COLOR / FORCE_COLOR 仍可覆盖） */
+  color?: 'auto' | 'always' | 'never';
+  /** 输出格式；默认 pretty（vite 式单行），json = 单行 JSON（机器接口） */
+  format?: 'pretty' | 'json';
+  /** 时间显示；默认 auto（TTY 用 clock，落盘用 iso） */
+  time?: 'auto' | 'none' | 'clock' | 'iso';
+}
+
 /** 可观测性配置（0.4；块存在时才启用 metrics） */
 export interface ObservabilityConfig {
   /** 事件历史容量：默认 1000；显式 0 = 不限制；>0 = 环形缓冲 */
@@ -329,6 +349,8 @@ export interface ObservabilityConfig {
    * （0.14；默认 false，仅 logger + trace）。
    */
   showProcessErrors?: boolean;
+  /** 日志中枢（级别 / 模块级别 / 颜色 / 格式 / 时间；热应用） */
+  log?: ObservabilityLogConfig;
 }
 
 /** `node.tls` 配置；cert/key 必须成对 */

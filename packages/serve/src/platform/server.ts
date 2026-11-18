@@ -23,7 +23,7 @@ import {
   resolveRequestEdge,
 } from '../gateway/auth.js';
 import { serveStatic } from '../gateway/static.js';
-import { formatEventFields } from '../log-event.js';
+import { logEvent } from '../log-event.js';
 import { platformTokenMatches, platformUnauthorizedMessage, resolvePlatformAuth } from './auth.js';
 import { platformListenGuard } from './listen-guard.js';
 import { PlatformProxy } from './proxy.js';
@@ -654,10 +654,8 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
       }
     },
     ...(opts.proxy?.limits !== undefined ? { limits: opts.proxy.limits } : {}),
-    log: (fields) => {
-      // 与 node 侧 `gateway.ws.closed` 同通道（单行 key=value，便于 grep/聚合）。
-      console.warn(formatEventFields(fields));
-    },
+    // 记账出口不注入：用 PlatformProxy 的缺省（logEvent + 与 node 侧同一套
+    // ws.closed 级别规则），规则只有一份。
   });
 
   /**
@@ -732,21 +730,18 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
       if (!Number.isFinite(resourceSampleMs) || resourceSampleMs <= 0) return;
       const usage = process.memoryUsage();
       const proxyStats = proxy.stats();
-      console.warn(
-        formatEventFields({
-          event: 'gateway.resources',
-          uptime_s: Math.round(process.uptime()),
-          rss_mb: Math.round(usage.rss / 1048576),
-          heap_mb: Math.round(usage.heapUsed / 1048576),
-          http_requests: proxyStats.http_requests,
-          http_failures: proxyStats.http_failures,
-          http_inflight: proxyStats.http_inflight,
-          passthrough: proxyStats.http_passthrough_streams,
-          mode: proxyStats.http_stream_mode,
-          ws_active: proxyStats.ws_active,
-          ws_pending: proxyStats.ws_pending_bytes,
-        }),
-      );
+      logEvent('warn', 'gateway.resources', {
+        uptime_s: Math.round(process.uptime()),
+        rss_mb: Math.round(usage.rss / 1048576),
+        heap_mb: Math.round(usage.heapUsed / 1048576),
+        http_requests: proxyStats.http_requests,
+        http_failures: proxyStats.http_failures,
+        http_inflight: proxyStats.http_inflight,
+        passthrough: proxyStats.http_passthrough_streams,
+        mode: proxyStats.http_stream_mode,
+        ws_active: proxyStats.ws_active,
+        ws_pending: proxyStats.ws_pending_bytes,
+      });
     },
     Number.isFinite(resourceSampleMs) && resourceSampleMs > 0 ? resourceSampleMs : 60_000,
   );

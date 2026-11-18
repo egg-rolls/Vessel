@@ -125,7 +125,7 @@ import {
 import { serveStatic } from './gateway/static.js';
 import { createInteractionsRegistry } from './interactions-registry.js';
 import type { StoredInteraction } from './interactions-store.js';
-import { logEvent } from './log-event.js';
+import { logEvent, wsClosedLevel } from './log-event.js';
 import type { McpGatewayOptions } from './mcp.js';
 import type { MetricsProvider, MetricsSnapshot } from './metrics.js';
 import {
@@ -684,11 +684,12 @@ function closeWsBy(ws: Ws, code: number, reason: string, by: WsCloseBy): void {
 }
 
 /**
- * 断连的**唯一账目出口**（0.55）—— 每条事件 WS 连接关闭时打一行结构化 warn。
+ * 断连的**唯一账目出口**（0.55）—— 每条事件 WS 连接关闭时打一行结构化事件。
  *
- * 为什么是 `warn` 而不是 `debug/info`：这次事故里最贵的一句话是「连接断了，然后呢」，
- * 而 WebUI 断连本就是异常线索（正常页面关闭也带得上 `close_by: 'client'` + code，
- * 一行即可判定是否需要追）。一条连接一行，不做采样 —— 采样掉的那一条往往就是事故那条。
+ * 级别按 `wsClosedLevel` 分档：正常关闭（客户端 1000/1001）debug，异常（1006/1011
+ * 或服务端发起）warn，其余 info。事故里最贵的一句话是「连接断了，然后呢」——
+ * 异常档保持 warn 保证它显眼；正常关闭是高频审计账，降 debug 不丢记录。
+ * 一条连接一行，不做采样 —— 采样掉的那一条往往就是事故那条。
  *
  * 为什么不用新 RPC 方法查：第十条「勿增实体」。每条连接的生命周期在进程里只有一次，
  * 日志是它唯一自然的位置；事后要查就 grep `gateway.ws.closed` + `conn_id`。
@@ -715,7 +716,7 @@ function logWsClosed(ws: Ws, code: number, reason: string): void {
   } catch {
     // 已关的连接不保证还能读积压：读不到就报 0，别让日志自己抛。
   }
-  logEvent('warn', 'gateway.ws.closed', {
+  logEvent(wsClosedLevel(code, cause?.by ?? 'client'), 'gateway.ws.closed', {
     conn_id: ws.data.connId ?? '-',
     close_by: cause?.by ?? 'client',
     close_code: code,
@@ -3223,6 +3224,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
     publishDiagnostic(type, 'federation', data);
   }
 
+  // gap 日志的同 session 60s 窗口折叠：客户端会自愈，窗口内的重复上报合并成
+  // suppressed=N（丢的是重复，不是事实）。只折叠日志行；publishDiagnostic 不折叠，
+  // 诊断面板保留每一次上报。key 没有 session 时退回连接 id。
+  const gapLogFold = new Map<string, { at: number; suppressed: number }>();
+  const GAP_LOG_FOLD_WINDOW_MS = 60_000;
+  const GAP_LOG_FOLD_MAX_KEYS = 1_000;
+
   /**
    * 0.54 B1：接收客户端自报的时间线缺口（`timeline.gap_reported`）。
    *
@@ -3268,7 +3276,22 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ...(frame.check !== undefined ? { check: frame.check } : {}),
       at: Date.now(),
     };
-    logEvent('warn', 'timeline.gap_reported', report);
+    const foldKey = sessionId ?? ws.data.connId ?? '-';
+    const now = Date.now();
+    const previous = gapLogFold.get(foldKey);
+    if (previous !== undefined && now - previous.at < GAP_LOG_FOLD_WINDOW_MS) {
+      previous.suppressed += 1;
+    } else {
+      // 无界 Map 是隐患：key 随 session 增长，超限整体清空（与 proxy 节流同策）。
+      if (gapLogFold.size > GAP_LOG_FOLD_MAX_KEYS) gapLogFold.clear();
+      gapLogFold.set(foldKey, { at: now, suppressed: 0 });
+      logEvent('debug', 'timeline.gap_reported', {
+        ...report,
+        ...(previous !== undefined && previous.suppressed > 0
+          ? { suppressed: previous.suppressed }
+          : {}),
+      });
+    }
     // `run_id` 用诊断伪 run（与 `rpc.result_invalid` 的 `'rpc'` / 联邦事件的 `'federation'`
     // 同一范式）：它不是某次 run 的事件，绝不能混进会话里任何一个真实 run 的事件列表。
     // 会话归属靠 `data.session_id`（gateway 的出站归属以「事件自报」优先），所以它仍然

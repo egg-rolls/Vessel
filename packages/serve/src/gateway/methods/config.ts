@@ -5,7 +5,7 @@
  */
 
 import { redactConfig, redactSourcePaths, type VesselConfig } from '@vessel-agent/config';
-import type { PluginHost } from '@vessel-agent/core';
+import { loggingEnvOverrides, type PluginHost } from '@vessel-agent/core';
 import type { AgentControlLike } from '../../agent-control.js';
 import type { PluginCatalogItem } from '../../plugin-host/catalog.js';
 import type {
@@ -40,6 +40,12 @@ const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
   'ui.statusBars': ['top', 'bottom', 'both', 'none'],
   'ui.verbosity': ['minimal', 'normal', 'debug'],
   'ui.errorLevel': ['user', 'all'],
+  // 日志中枢（与 src/ui-settings.ts LOG_ENUM_VALUES / config validator 一致）。
+  // modules 是 map，一期只进 yaml、WebUI 只读，不走 config.set。
+  'observability.log.level': ['debug', 'info', 'warn', 'error'],
+  'observability.log.color': ['auto', 'always', 'never'],
+  'observability.log.format': ['pretty', 'json'],
+  'observability.log.time': ['auto', 'none', 'clock', 'iso'],
 };
 
 const SETTABLE_KEYS: ReadonlySet<string> = new Set([
@@ -279,6 +285,19 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
               project: { type: 'string' },
             },
           },
+          // 日志中枢的环境变量覆盖（可选；WebUI 据此把被压住的键置只读并提示）。
+          logEnvOverrides: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['env', 'key', 'value'],
+              properties: {
+                env: { type: 'string' },
+                key: { type: 'string' },
+                value: { type: 'string' },
+              },
+            },
+          },
         },
       },
       handler: async () => {
@@ -290,6 +309,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
           // DECISION-020 §R1.1：防御性二次脱敏（asm snapshot 已先脱敏）；
           // 复用 @vessel-agent/config#redactConfig，不在 serve 维护副本。
           config: redactConfig(snapshot.config as VesselConfig),
+          logEnvOverrides: loggingEnvOverrides(),
           // A-5 §12.2：TUI 需要展示 user/project 路径
           paths: snapshot.paths ?? { user: '', project: '' },
         };

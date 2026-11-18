@@ -52,7 +52,7 @@ import {
   LIMIT_WARNING_THRESHOLD,
   MemoryLimitChecker,
 } from '../limits/index.js';
-import { createStderrLogger, noopLogger } from '../logging.js';
+import { createStderrLogger } from '../logging.js';
 import {
   findHandles as findPiiHandleOccurrences,
   getPiiVault,
@@ -1033,9 +1033,8 @@ export class ExecutionUnit {
     this.leaseService = opts.leaseService;
     this.bindingLease = opts.bindingLease;
     this.visionSettings = opts.vision;
-    this.logger =
-      opts.logger ??
-      (process.env.VESSEL_DEBUG ? createStderrLogger({ level: 'debug' }) : noopLogger);
+    // 缺省走中枢薄封装：级别跟随进程级配置（不再以 VESSEL_DEBUG 定死 debug/noop）。
+    this.logger = opts.logger ?? createStderrLogger();
     // 空闲 EU 也必须续租 BindingLease：仅靠 acquireSessionLease/ensureSessionLease
     // 启动计时器会让“已 join、尚未跑过 run”的 body 在 TTL（默认 30s）后丢租约。
     if (this.leaseService !== undefined && this.bindingLease !== undefined) {

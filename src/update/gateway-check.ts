@@ -119,6 +119,10 @@ export function startGatewayUpdateCheck(
   let inFlight = false;
   let tickHandle: TimerHandle | undefined;
   let initialHandle: TimerHandle | undefined;
+  // 网络失败按 1 小时窗口折叠：窗口内至多一条 warn，其余降 debug 并累计 suppressed，
+  // 下一条 warn 带上合并数（丢的是重复，不是事实）。
+  let lastFailureWarnAt = 0;
+  let failuresSuppressed = 0;
 
   const enabled =
     options.config.update?.autoCheck !== false && env.VESSEL_NO_UPDATE_CHECK === undefined;
@@ -176,8 +180,22 @@ export function startGatewayUpdateCheck(
       // 404 = 清单还没发布（首次发布前 / beta 尚无预发布）属正常状态 -> debug，
       // 否则常驻进程每小时一条 warn 噪音；其它网络失败仍是 warn。
       const fields = { error: error instanceof Error ? error.message : String(error) };
-      if (isUpdateSourceMissing(error)) logger?.debug('update.check.failed', fields);
-      else logger?.warn('update.check.failed', fields);
+      if (isUpdateSourceMissing(error)) {
+        logger?.debug('update.check.failed', fields);
+      } else {
+        const at = now();
+        if (at - lastFailureWarnAt >= GATEWAY_UPDATE_TICK_MS) {
+          lastFailureWarnAt = at;
+          logger?.warn('update.check.failed', {
+            ...fields,
+            ...(failuresSuppressed > 0 ? { suppressed: failuresSuppressed } : {}),
+          });
+          failuresSuppressed = 0;
+        } else {
+          failuresSuppressed += 1;
+          logger?.debug('update.check.failed', fields);
+        }
+      }
     } finally {
       inFlight = false;
     }

@@ -91,7 +91,7 @@ import { createImageDeliverySource } from './image-delivery';
 import { resolveInteractionsDir } from './interactions-dir';
 import { normalizeLegacyToolName } from './legacy-tool-names';
 import { createLocalRunAdapter } from './local-run-adapter';
-import { createCliLogger } from './logging';
+import { configureLoggingFromConfig, createCliLogger } from './logging';
 import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import { createNodeDrainer } from './node-drain';
@@ -983,6 +983,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     for (const w of validation.warnings) console.warn(`⚠ ${w.message}`);
   }
 
+  // 日志中枢：配置加载后立即应用 observability.log（环境变量覆盖在中枢内仍优先）。
+  // 此前（import / 配置加载阶段）的日志按环境变量与默认值输出，量很少，可接受。
+  configureLoggingFromConfig(config);
+
   // ── data_dir / connect（0.5；0.49 T4 删除 tenant 块）───────────
   const resolvedDataDir = options.dataDir ?? resolveDataDir(config);
   const dataDir = options.dataDirSubdir
@@ -1421,7 +1425,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.53 notice-rotate：回填通知的重解析口（router 早在上面就建好了，flush 时才读）。
     noticeAgentService = wiring.service;
     registerBashJobDelivery({ service: wiring.service, logger });
-    logger.info('agent.bash_job.delivery_ready', {});
+    logger.debug('agent.bash_job.delivery_ready', {});
     finalPluginHost.registerTool(wiring.tool);
     // 0.55：装配收尾的工具名闸（`agent` 工具是插件装完之后才注册的，所以要在这一句之后）。
     // 内置 / 插件工具名不合规 ⇒ 启动失败并列出全部违规项；外部（MCP）工具名只记 warning。

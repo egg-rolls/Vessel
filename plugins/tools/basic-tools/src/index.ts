@@ -78,6 +78,7 @@ import type {
 } from '@vessel-agent/core';
 import {
   boundToolResult,
+  createStderrLogger,
   cutToTokenBudget,
   HookType,
   markToolResultBounded,
@@ -1104,6 +1105,9 @@ interface AsyncBashJob {
  */
 const asyncJobs = new Map<string, AsyncBashJob>();
 
+/** 后台作业的过程日志（debug 级，一条作业一行起步）；阈值跟随进程级日志中枢。 */
+const jobLog = createStderrLogger();
+
 /** 进程退出兜底是否已武装（只装一次，避免多次 install 叠加监听器） */
 let asyncExitSweepInstalled = false;
 
@@ -1259,11 +1263,10 @@ async function startAsyncBash(options: {
   installAsyncExitSweep();
   // 一条起步日志：事后能回答「这条作业当时走的是哪条交付通道」（装配层的唤醒投递
   // 注册在 src/，插件看不到它是否成功；这里只读出口槽本身）。
-  console.error(
-    `[vessel] basic-tools: bash job ${id} started in background (wake delivery: ${
-      asyncSinkSlot().sink === undefined ? 'hook-only' : 'wired'
-    })`,
-  );
+  jobLog.debug('basic_tools.bash_job.started', {
+    job_id: id,
+    delivery: asyncSinkSlot().sink === undefined ? 'hook-only' : 'wired',
+  });
 
   // 定时器**不** unref：作业在跑的时候我们就要求进程别退出（否则输出会被丢在半路）。
   job.timer = setTimeout(() => {

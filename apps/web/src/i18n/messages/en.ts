@@ -577,6 +577,19 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Tool, system and queued cards start expanded; permission and ask cards always do. A manual toggle on a card wins over the default.',
   'settings.display.field.statusBars': 'Status bar position',
   'settings.display.field.language': 'UI language',
+  'settings.display.field.logLevel': 'Log level',
+  'settings.display.field.logColor': 'Log color',
+  'settings.display.field.logFormat': 'Log format',
+  'settings.display.field.logTime': 'Log time',
+  'settings.display.log.title': 'Logs (gateway)',
+  'settings.display.log.description':
+    'Controls the gateway process log hub (level, color, format, time). Changes hot-apply without a restart.',
+  'settings.display.log.overridden':
+    'Overridden by environment variable {env}; changes here have no effect until it is unset.',
+  'settings.display.log.modules': 'Per-module levels (modules)',
+  'settings.display.log.modulesHint':
+    'Read-only here for now; set event-name prefixes in config to override the global level.',
+  'settings.display.log.modulesEmpty': 'Not configured.',
 
   // Team (0.19 S6). Technical terms (agent / run / session / gateway / token /
   // @ / Team / workspace) and error codes stay untranslated.

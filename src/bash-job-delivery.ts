@@ -95,7 +95,7 @@ async function deliver(
   // 之后 admit 会跳过 canView，所以不需要谁来「代表」它。
   const from = member.id;
   try {
-    deps.logger?.info('agent.bash_job.delivering', {
+    deps.logger?.debug('agent.bash_job.delivering', {
       job_id: completion.jobId,
       session_id: completion.sessionId,
       from,
@@ -109,7 +109,7 @@ async function deliver(
       channel: 'direct',
       origin: 'bash_job',
     });
-    deps.logger?.info('agent.bash_job.delivered', {
+    deps.logger?.debug('agent.bash_job.delivered', {
       job_id: completion.jobId,
       session_id: completion.sessionId,
       agent_id: member.id,

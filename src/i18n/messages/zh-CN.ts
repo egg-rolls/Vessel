@@ -260,6 +260,7 @@ export const zhCN = {
   'config.set.invalidStatusBars': 'ui.statusBars 只支持 "top"、"bottom"、"both" 或 "none"',
   'config.set.invalidVerbosity': 'ui.verbosity 只支持 "minimal"、"normal" 或 "debug"',
   'config.set.invalidErrorLevel': 'ui.errorLevel 只支持 "user" 或 "all"',
+  'config.set.invalidEnum': '{key} 只支持：{allowed}',
   'config.set.invalidPath': 'agent.cwd 必须是非空路径',
   'config.set.failed': '写入用户配置失败：{detail}',
 

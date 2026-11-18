@@ -54,6 +54,35 @@
   （装配日志 + `--tools` 的 warnings 可见），名字我们改不了，但不能不可见。规则见
   [docs/architecture/tools.md § 命名规则](docs/architecture/tools.md#tool-name-rule)。
 
+### 日志中枢（gateway 降噪 / 着色 / config / WebUI）
+
+- **进程级日志中枢**（`feat/gateway-log` P1–P6，commits `d64fa589` / `4d371234` / `f2e3d4d7` /
+  `bbb97652` / `ff90d071`）：core 新增 `log-hub.ts`（级别阈值 / 按模块级别 / 格式 / 时间 / 颜色，
+  运行时可改）与 `log-format.ts`（排版唯一来源，自 `serve/log-event.ts` 搬入 `EVENT_FIELDS`）。
+  core Logger、serve `logEvent`、插件注入 Logger 三路汇流 `emitLogLine`：过滤 → 脱敏 → 排版 →
+  `writeStderrNotice`（EPIPE 自激防护不变量保留，无裸 `process.stderr.write`）；`logEvent` 首次纳入
+  redactor。`createStderrLogger` 改薄封装、阈值实时读取（模块级单例自动跟随配置）。
+- **降噪**（降 debug 不删除，`modules` 可单独打开）：`timeline.gap_reported` warn→debug +
+  同 session 60s 窗口折叠（`suppressed=N`，诊断面板不折叠）；`gateway.ws.closed` 正常关闭
+  （客户端 1000/1001）debug、异常（1006/1011 / 服务端发起）warn、其余 info（审计账不折叠，
+  node 与平台代理共用 `wsClosedLevel`）；`agent.bash_job.delivering/delivered/delivery_ready`、
+  `basic_tools.bash_job.started`、`run.timing` / `run.llm.gap` 降 debug（`VESSEL_RUN_TIMING=1`
+  仍可强制开，`0/false/off` 强制关）；`agent.snapshot.duplicate_name` 每 name 进程内首次 warn；
+  provider retry 第 1 次 debug、≥2 次 warn；`update.check.failed` 网络失败 1h 窗口折叠。
+  basic-tools 起步行 / plugin-host 默认 logger / proxy 记账出口收口事件行，消灭第三种格式。
+- **着色**：`shouldColor`（`NO_COLOR`/`TERM=dumb`/`color:never` 优先关；`always`/`FORCE_COLOR≠0`
+  强制开；auto=`stderr.isTTY`）；`COLORTERM` truecolor/16 色两档。配色：INF 海洋绿 `#1EFFC7`、
+  WRN 品红+BOLD（不用黄）、ERR RED+BOLD、时间/DBG/事件域/key= DIM、ERR 行 error/reason 值 RED。
+  daemon 落盘天然无 ANSI、时间 iso。配色表进宪法第十四条 §2.1。
+- **config 热应用**：`observability.log.{level,modules,color,format,time}`（schema / 校验 /
+  默认值 / `modules` 键 snake→camel 豁免）；启动应用 + config-watch 热应用（log applier，差异行
+  `log: level info→debug` 进 `runtime.notice`，不新增 RPC scope）；优先级 `VESSEL_DEBUG` >
+  `VESSEL_LOG_LEVEL` > `VESSEL_RUN_TIMING` 强制 > config > 默认；`config show` / `config.get`
+  （新增可选 `logEnvOverrides`）/ WebUI 标注环境覆盖。
+- **WebUI**：Settings 新增「日志（gateway）」分组（4 个枚举键走既有 `config.set` write 权限，
+  `ui-settings` 支持三层键嵌套写）；`modules` 一期只读展示；被环境变量覆盖的键只读 + 提示。
+  口径见 [operations/LOGS §1.1](docs/operations/LOGS.md)、[architecture/config](docs/architecture/config.md)。
+
 ### 客户端（WebUI）
 
 - **修：刷新/重连把整段聊天记录「从前往后」拉一遍直至 node 被看门狗重启**（2026-11-17 事故）。根因是
@@ -85,6 +114,18 @@
   `[7001..7955] count=955 has_more=false`，四条校验通过、零缺口（此前同一路径不会有任何 epoch 结算）。
 
 ### 破坏性（删除清单，逐项可直接回滚）
+
+- **日志行格式变更（日志中枢，`feat/gateway-log`）**：
+  - **去掉 `[vessel]` 前缀**（pretty 与 json 都去）。pretty 改 `时间 LVL 事件名 k=v` 单行
+    （TTY clock / 落盘 iso）。grep `[vessel]` 的运维脚本请改 grep 事件名；`vessel logs tail`
+    只读行、不依赖前缀，不受影响。
+  - **json 逃生阀形状统一**为单行 `{time, level, event, ...fields}`：原 core Logger 的
+    `{time,level,message,fields:{...}}` 与 logEvent 的 `[vessel] {"event":...}` 两种形状合并
+    （Logger 的 message 进 `event` 位）。`VESSEL_LOG_JSON=1` 或 `observability.log.format: json` 开启。
+  - **info 级事件行从 stdout 改到 stderr**（诊断只走 stderr 红线）：只抓 stdout 的管道会少这部分行。
+  - **`createStderrLogger` 不再接受 options**（`LoggerOptions` 的 level/redact 移除，仓内无调用方受损）：
+    阈值与脱敏由进程级中枢统一控制；嵌入方要自定义 sink 仍注入自己的 Logger 端口（ADR-069 不变）。
+  - 回滚方式：revert 对应 commit 即恢复旧格式（前缀 / 双 JSON 形状 / console.info 通道）。
 
 - **`serve:` 段移除（0.55）**：`serve` 从此**不是配置块**，写它就**启动失败**（`exit 2`），整块一个键都不生效
   —— 不是「警告 + 照旧生效」。文案逐键给出可照做的改名提示（`serve.token -> node.token`、

@@ -11,7 +11,7 @@
  * @module @vessel-agent/serve/platform/proxy
  */
 
-import { formatEventFields } from '../log-event.js';
+import { logEvent, wsClosedLevel } from '../log-event.js';
 import {
   checkProxyHttpPath,
   checkProxyMethod,
@@ -130,7 +130,7 @@ export interface PlatformProxyDeps {
   /** 能力开关：false = 平台不提供 `/nodes/*`（老直连路径照旧）。 */
   enabled?: boolean | undefined;
   limits?: Partial<PlatformProxyLimits> | undefined;
-  /** 记账出口；缺省 `console.warn`（与 node 侧 `gateway.ws.closed` 同通道）。 */
+  /** 记账出口；缺省走 `logEvent`（与 node 侧 `gateway.ws.closed` 同一套级别规则）。 */
   log?: ((fields: Record<string, unknown>) => void) | undefined;
   /** 可注入 fetch（探针用）；缺省全局 fetch。 */
   fetchImpl?: typeof fetch | undefined;
@@ -260,8 +260,14 @@ export class PlatformProxy {
     this.log =
       deps.log ??
       ((fields) => {
-        // 0.58：单行 key=value（见 `log-event.ts`）；VESSEL_LOG_JSON=1 时退单行 JSON。
-        console.warn(formatEventFields(fields));
+        // 统一走 logEvent（单行 key=value；VESSEL_LOG_JSON=1 时退单行 JSON）。
+        // ws.closed 与 node 侧同一套级别规则；其余失败类保持 warn。
+        const event = typeof fields.event === 'string' ? fields.event : '';
+        const level =
+          event === 'gateway.ws.closed'
+            ? wsClosedLevel(Number(fields.code ?? 0), String(fields.who ?? ''))
+            : 'warn';
+        logEvent(level, event, fields);
       });
     this.fetchImpl = deps.fetchImpl ?? fetch;
   }

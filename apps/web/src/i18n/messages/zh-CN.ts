@@ -553,6 +553,17 @@ export const messages = {
     '工具 / 系统消息 / 排队卡片默认展开；权限与提问卡片始终展开。某张卡片手动开合后以手动状态为准。',
   'settings.display.field.statusBars': '状态栏位置',
   'settings.display.field.language': '界面语言',
+  'settings.display.field.logLevel': '日志级别',
+  'settings.display.field.logColor': '日志颜色',
+  'settings.display.field.logFormat': '日志格式',
+  'settings.display.field.logTime': '日志时间',
+  'settings.display.log.title': '日志（gateway）',
+  'settings.display.log.description':
+    '控制 gateway 进程的日志中枢（级别 / 颜色 / 格式 / 时间）。保存后热应用，无需重启。',
+  'settings.display.log.overridden': '被环境变量 {env} 覆盖，取消该变量前此处修改不生效。',
+  'settings.display.log.modules': '按模块级别（modules）',
+  'settings.display.log.modulesHint': '此处暂只读；按事件名前缀在配置中设置，可覆盖全局级别。',
+  'settings.display.log.modulesEmpty': '未配置。',
 
   // Team（0.19 S6）。技术词 agent / run / session / gateway / token / @ / Team /
   // workspace 与错误码保持原文。
