@@ -1831,6 +1831,34 @@ function httpAllowedOriginsEntryError(value: unknown): string | null {
 }
 
 /**
+ * 0.62：`gateway.proxy_nodes: false` 与「启用了 WebUI 登录」是一对互相拆台的组合。
+ *
+ * 关掉平台代理后，浏览器只能靠 `platform.nodes.credentials` 去拿 node token —— 而那个端点
+ * **只发给持平台 token 的客户端**（`mode === 'token'`），浏览器拿到的是
+ * `platform_token_required`。于是它要么连不上 node，要么得有人在连接设置里手工粘平台 token。
+ *
+ * 这不是**错误**（关代理是受支持的老形态），所以只告警；但部署者必须知道代价是
+ * 「WebUI 数据面默认不可用」。文案刻意不给命令行：说清代价与出路即可。
+ */
+function validateProxyNodesAgainstAuth(
+  config: VesselConfig,
+  warnings: ConfigValidationWarning[],
+): void {
+  if (config.gateway?.proxyNodes !== false) return;
+  const auth = config.auth;
+  if (auth === undefined || auth.enabled === false) return;
+  if (!Array.isArray(auth.backends) || auth.backends.length === 0) return;
+  warnings.push({
+    path: 'gateway.proxyNodes',
+    message:
+      'gateway.proxyNodes: false 关掉了平台代理：浏览器拿不到 node token' +
+      '（platform.nodes.credentials 只发给持平台 token 的客户端），WebUI 的数据面请求会 401，' +
+      '除非有人在连接设置里手工粘平台 token。删掉这一行（或设为 true）之后，浏览器才会走 ' +
+      '/nodes/<node_id>/ 前缀。',
+  });
+}
+
+/**
  * 0.61：校验 `http` 块。
  *
  * 目前只有 `allowed_origins`（**访问控制**：浏览器能不能发 RPC）。它与
@@ -3249,7 +3277,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
-  // 校验 auth（0.56；WebUI 登录：GitHub OAuth 单用户）
+  // 校验 auth（0.56；WebUI 登录：多 provider，见 auth-strategies）
   if (config.auth !== undefined) {
     if (!isPlainObject(config.auth)) {
       errors.push({ path: 'auth', message: 'auth must be an object' });
@@ -3257,6 +3285,9 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
       validateAuthSettings(config.auth as AuthConfig, errors, warnings);
     }
   }
+
+  // 0.62：跨分区检查 —— `gateway.proxy_nodes: false` 与「启用了 WebUI 登录」互相拆台。
+  validateProxyNodesAgainstAuth(config, warnings);
 
   // 0.61：`http:` 段（浏览器能不能发 RPC 的访问控制，与 `auth.public_origins` 的
   // redirect_uri 来源选择分开）。缺省 = 回落 `auth.public_origins` + 回环通配。
