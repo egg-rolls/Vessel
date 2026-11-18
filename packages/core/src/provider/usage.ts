@@ -33,7 +33,10 @@ export interface OpenAiRawUsage {
   completion_tokens?: number;
   total_tokens?: number;
   /** OpenAI / Gemini(OpenAI 兼容) 的缓存命中明细 */
-  prompt_tokens_details?: { cached_tokens?: number };
+  prompt_tokens_details?: { cached_tokens?: number; cache_creation_tokens?: number };
+  /** Anthropic 风格网关（LiteLLM / 中转）透传的顶层缓存字段 */
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
   /** DeepSeek 的命中字段（与 prompt_tokens_details.cached_tokens 同义） */
   prompt_cache_hit_tokens?: number;
 }
@@ -86,6 +89,14 @@ export function fromOpenAiUsage(raw: OpenAiRawUsage): Usage {
       ? details.cached_tokens
       : typeof raw.prompt_cache_hit_tokens === 'number'
         ? raw.prompt_cache_hit_tokens
+        : typeof raw.cache_read_input_tokens === 'number'
+          ? raw.cache_read_input_tokens
+          : undefined;
+  const created =
+    typeof raw.cache_creation_input_tokens === 'number'
+      ? raw.cache_creation_input_tokens
+      : typeof details?.cache_creation_tokens === 'number'
+        ? details.cache_creation_tokens
         : undefined;
 
   const prompt = raw.prompt_tokens ?? 0;
@@ -96,5 +107,6 @@ export function fromOpenAiUsage(raw: OpenAiRawUsage): Usage {
     total_tokens: consistentTotal(raw.total_tokens, prompt, completion),
   };
   if (cached !== undefined) usage.cache_read_input_tokens = cached;
+  if (created !== undefined) usage.cache_creation_input_tokens = created;
   return usage;
 }

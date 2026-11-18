@@ -41,6 +41,12 @@ function readTimeoutMs(config: Record<string, unknown>): number | undefined {
   return typeof value === 'number' ? value : undefined;
 }
 
+/** 兼容 snake_case / camelCase；缺省 undefined = 由 core 按模型名自动判定（claude 才开） */
+function readPromptCache(config: Record<string, unknown>): boolean | undefined {
+  const value = config.prompt_cache ?? config.promptCache;
+  return typeof value === 'boolean' ? value : undefined;
+}
+
 /** 程序化注入的重试观测回调（YAML 配置无法携带函数） */
 function readRetryHook(config: Record<string, unknown>): ((event: RetryEvent) => void) | undefined {
   const hook = config.on_retry ?? config.onRetry;
@@ -63,6 +69,7 @@ const plugin: Plugin = {
           model,
           temperature: c.temperature as number | undefined,
           max_tokens: c.max_tokens as number | undefined,
+          prompt_cache: readPromptCache(c),
         });
         const retryOptions: RetryOptions = { ...resolveRetryOptions(c), provider: p.name };
         const onRetry = readRetryHook(c);

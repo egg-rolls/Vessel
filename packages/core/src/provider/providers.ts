@@ -162,6 +162,83 @@ function addToolsCacheBreakpoint(tools: AnthropicTool[]): void {
 }
 
 /**
+ * OpenAI 兼容端点的 prompt cache 开关解析。
+ *
+ * - 显式 `true` / `false` 直接生效；
+ * - 缺省（undefined）按模型名自动判定：名字里含 `claude` 才开 —— 经 OpenAI 兼容网关
+ *   （LiteLLM / OpenRouter / 自建中转）转发到 Anthropic 时，网关只透传 `cache_control`，
+ *   **不会自动打断点**；不加就永远 0 命中。对真 OpenAI / DeepSeek 等自动缓存的厂商不加，
+ *   避免未知字段被严格端点拒绝。
+ */
+export function resolveOpenAiPromptCache(explicit: boolean | undefined, model: string): boolean {
+  if (typeof explicit === 'boolean') return explicit;
+  return /claude/i.test(model);
+}
+
+/** OpenAI 兼容请求消息（宽类型：只读写缓存断点需要的字段） */
+type OpenAiWireMessage = Record<string, unknown> & { role?: unknown; content?: unknown };
+
+/** 把一条 OpenAI 兼容消息的内容末尾标成缓存断点；成功返回 true。 */
+function markOpenAiMessage(msg: OpenAiWireMessage): boolean {
+  const content = msg.content;
+  if (typeof content === 'string') {
+    if (content.length === 0) return false;
+    msg.content = [{ type: 'text', text: content, cache_control: EPHEMERAL_CACHE }];
+    return true;
+  }
+  if (Array.isArray(content)) {
+    for (let i = content.length - 1; i >= 0; i -= 1) {
+      const part = content[i] as { type?: unknown; cache_control?: unknown } | undefined;
+      if (part && part.type === 'text') {
+        part.cache_control = EPHEMERAL_CACHE;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * 给 OpenAI 兼容请求打 Anthropic 风格的缓存断点（最多 3 个，Anthropic 上限 4）：
+ *  1. 最后一个工具定义（缓存 tools 前缀）；
+ *  2. 最后一条 system 消息（缓存 tools + system）；
+ *  3. 最后一条可标记的消息（system / user / tool，带 tool_calls 的 assistant 跳过）——
+ *     缓存整个对话前缀；下一轮请求断点后移，上一轮的前缀按 Anthropic 20 block 回看命中。
+ *
+ * 断点只是**附加**字段，不改文本、不重排消息（请求 messages append-only 不变量不受影响）；
+ * 断点位置移动不影响命中：缓存键只看内容前缀，不含 `cache_control` 本身。
+ * 只改传入的 wire 对象（调用方每次请求新建），不碰会话里的 Message。
+ */
+export function addOpenAiCacheBreakpoints(
+  messages: OpenAiWireMessage[],
+  tools: Array<Record<string, unknown>> | undefined,
+): void {
+  if (tools && tools.length > 0) {
+    const last = tools[tools.length - 1];
+    if (last) last.cache_control = EPHEMERAL_CACHE;
+  }
+
+  let lastSystem = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'system') {
+      lastSystem = i;
+      break;
+    }
+  }
+  if (lastSystem >= 0) {
+    const sys = messages[lastSystem];
+    if (sys) markOpenAiMessage(sys);
+  }
+
+  for (let i = messages.length - 1; i > lastSystem; i -= 1) {
+    const msg = messages[i];
+    if (!msg) continue;
+    if (msg.role === 'assistant') continue;
+    if (markOpenAiMessage(msg)) return;
+  }
+}
+
+/**
  * 内存 Provider 实现
  * 用于测试和开发，不实际调用 LLM API
  */
@@ -283,6 +360,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
   private model: string;
   private temperature?: number;
   private maxTokens?: number;
+  /** 显式配置；undefined = 按（请求）模型名自动判定，见 resolveOpenAiPromptCache */
+  private promptCache?: boolean;
 
   constructor(config: {
     api_key: string;
@@ -290,12 +369,29 @@ export class OpenAICompatibleProvider implements LLMProvider {
     model?: string;
     temperature?: number;
     max_tokens?: number;
+    prompt_cache?: boolean;
   }) {
     this.apiKey = config.api_key;
     this.baseUrl = config.base_url ?? 'https://api.openai.com/v1';
     this.model = config.model ?? 'gpt-4';
     this.temperature = config.temperature;
     this.maxTokens = config.max_tokens;
+    this.promptCache = config.prompt_cache;
+  }
+
+  /**
+   * 请求期打缓存断点：返回（可能被克隆过的）tools。
+   * tools 来自共享的 ToolSchema，必须克隆最后一项再加 cache_control，不能污染共享对象。
+   */
+  private applyPromptCache(
+    model: string,
+    messages: Array<Record<string, unknown>>,
+    tools: ChatRequest['tools'],
+  ): ChatRequest['tools'] {
+    if (!resolveOpenAiPromptCache(this.promptCache, model)) return tools;
+    const wireTools = tools?.map((t) => ({ ...t })) as Array<Record<string, unknown>> | undefined;
+    addOpenAiCacheBreakpoints(messages, wireTools);
+    return wireTools as ChatRequest['tools'];
   }
 
   /**
@@ -359,16 +455,18 @@ export class OpenAICompatibleProvider implements LLMProvider {
       };
     });
 
+    const tools = this.applyPromptCache(req.model ?? this.model, messages, req.tools);
+
     // 流式分支：stream=true 且提供 on_chunk 时走 SSE，边收边回调，最终返回拼装好的 LLMResponse。
     // 非流式（无 on_chunk 或 stream=false）落入下方既有整段逻辑，行为不变。
     if (req.stream && req.on_chunk) {
-      return await this.streamChat(url, messages, req, req.on_chunk);
+      return await this.streamChat(url, messages, tools, req, req.on_chunk);
     }
 
     const body = {
       model: req.model ?? this.model,
       messages,
-      tools: req.tools,
+      tools,
       temperature: req.temperature ?? this.temperature,
       max_tokens: req.max_tokens ?? this.maxTokens,
       stream: false,
@@ -452,13 +550,14 @@ export class OpenAICompatibleProvider implements LLMProvider {
   private async streamChat(
     url: string,
     messages: Array<Record<string, unknown>>,
+    tools: ChatRequest['tools'],
     req: ChatRequest,
     onChunk: (chunk: StreamChunk) => void,
   ): Promise<LLMResponse> {
     const streamBody = {
       model: req.model ?? this.model,
       messages,
-      tools: req.tools,
+      tools,
       temperature: req.temperature ?? this.temperature,
       max_tokens: req.max_tokens ?? this.maxTokens,
       stream: true,

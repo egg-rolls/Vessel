@@ -56,6 +56,7 @@ paths: [docs/architecture/message-invariants.md]
 | 真值获取 | 审批解锁（人批 + 一次性 + 审计） | 模型默认可见真值 |
 | 引用失效 | 追加一条环境信息消息（去重、讲状态） | 回改旧消息 / 逐调用发卡片 |
 | token 预算 / 上下文压缩 | **追加**摘要消息或新 run 的裁剪视图 | 改写既有消息内容 |
+| prompt cache 断点 | provider adapter 在**每次请求新建的 wire 对象**上附加 `cache_control`（Anthropic 原生：tools / system / 末条消息；OpenAI 兼容：模型名含 `claude` 或 `provider.promptCache: true` 时同样三处）；缓存键不含 `cache_control`，断点随轮次后移不影响命中 | 为打断点改写文本、重排消息，或把 `cache_control` 写回会话里的 Message / 共享 ToolSchema |
 
 ## 门禁
 
