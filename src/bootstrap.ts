@@ -1779,6 +1779,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     tenantId,
     logger,
   });
+  // P1-w2d（D3）：install 后登记 in-process 能力插件的 RPC / 贡献面（w1a 接缝）；
+  // 返回的基础行并入下方 plugins 数据源（provider 类不在 bundle.plugins 里）。
+  const inProcessPluginRows = bundle.registerInProcessPlugins(localPluginHostManager, config);
   const reloadLocalPlugins = createPluginReloader({
     loader: bundle.pluginLoader,
     manager: localPluginHostManager,
@@ -1876,7 +1879,18 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           tenantId,
         }) as unknown as ConfigSnapshotLike,
     },
-    plugins: () => plugins.map((plugin) => ({ name: plugin.name, enabled: true })),
+    plugins: () => {
+      const listed = plugins.map((plugin) => ({ name: plugin.name, enabled: true }));
+      // P1-w2d：已登记 in-process 能力插件补基础行（契约 §1），按 name 去重。
+      const seen = new Set(listed.map((plugin) => plugin.name));
+      for (const row of inProcessPluginRows) {
+        if (!seen.has(row.name)) {
+          listed.push(row);
+          seen.add(row.name);
+        }
+      }
+      return listed;
+    },
     ...(metrics ? { metrics: () => metrics.snapshot() } : {}),
     metricsControl: {
       ...(typeof (metrics as unknown as { reset?: unknown })?.reset === 'function'

@@ -5,12 +5,13 @@
  * 真的能热应用：
  * - `plugins`：清空插件扫描缓存（下次 `list()` 重新扫描；已安装插件与 active run 不受影响）；
  * - `config`：重新 `loadConfig()`；`node.allowed_origins` 通过 web 的
- *   `gateway.reconfigure({ allowedOrigins })` 生效；`provider.model` 经注入的
- *   `applyProviderModel` 热应用（P0-1 D4）——只替换**节点缺省模型**（owner profile +
- *   成员宿主缺省）：新 body / 新 EU 立即用新值，live body / EU 的 model 是构造期只读
- *   快照（前缀不变量），本具仍旧值、下一具才生效；未注入 applier 或新配置缺显式 model
- *   时 `model` 进 `requires_restart`，不假装生效。`config.agent.model` 仍属 `agent` 域，
- *   需重启；其余字段一律进 `requires_restart`；
+ *   `gateway.reconfigure({ allowedOrigins })` 生效；`provider.*` / `models.*` 经注入的
+ *   `applyProviderModel` 热应用（P0-1 D4 → P1-w2d 泛化，D5）——重建 registry 快照 +
+ *   清 provider 缓存 + 替换**节点缺省模型**（owner profile + 成员宿主缺省）：新 body /
+ *   新 EU 立即用新值，live body / EU 的 model 是构造期只读快照（前缀不变量），本具仍旧
+ *   值、下一具才生效；凭证轮换经 delegating wrapper 下一请求生效。未注入 applier 或
+ *   新配置解析不出有效缺省模型时，变化域进 `requires_restart`，不假装生效。
+ *   `config.agent.model` 仍属 `agent` 域，需重启；其余字段一律进 `requires_restart`；
  * - `permission` / `tools` / `mcp`：由 `src/cli.ts` 注入 applier（见下）。
  *
  * ## applier 注册面
@@ -29,7 +30,11 @@
  * @module vessel/gateway-reload-wiring
  */
 
-import type { VesselConfig } from '../packages/config/src/index';
+import {
+  resolveModelRef,
+  synthesizeLegacyRegistry,
+  type VesselConfig,
+} from '../packages/config/src/index';
 import type { GatewayReloadResult } from '../packages/serve/src/index';
 
 /** web gateway 的可选热重配置入口（尚未合入时缺省） */
@@ -56,15 +61,19 @@ export interface GatewayReloadWiringOptions {
    */
   appliers?: Readonly<Record<string, GatewayReloadApplier>>;
   /**
-   * `provider.model` 热应用（P0-1 D4 批准的注入字段；config scope 内部，不新增 reload scope）。
-   * 仅在 model 变化**且新值为非空字符串**时调用；返回要广播的差异摘要行（并入
+   * `provider.*` / `models.*` 热应用（P0-1 D4 批准的注入字段，P1-w2d 泛化；config scope
+   * 内部，不新增 reload scope）。仅在 provider / models 块变化**且新配置能解析出非空
+   * 有效缺省模型**时调用；`from` / `to` = 变化前后的有效缺省 wire model（env 优先级
+   * 冻结：VESSEL_MODEL 赢 models.default），`next` = 校验通过的重载配置（装配层据此
+   * 重建 registry 快照 + 清 provider 缓存）。返回要广播的差异摘要行（并入
    * `summaries.config`）。生效点 = 节点缺省模型：新 body / 新 EU 用新值，live body / EU
-   * 构造期只读、下一具才生效（前缀不变量）。未注入或新值缺省 ⇒ `model` 进
+   * 构造期只读、下一具才生效（前缀不变量）。未注入或解析不出有效缺省 ⇒ 变化域进
    * `requires_restart`（不猜 provider 缺省模型，不假装生效）。
    */
   applyProviderModel?: (
     from: string | undefined,
     to: string | undefined,
+    next?: VesselConfig,
   ) => Promise<string[]> | string[];
 }
 
@@ -74,16 +83,11 @@ interface RestartField {
   read: (config: VesselConfig) => unknown;
 }
 
-function withoutModel(provider: VesselConfig['provider']): unknown {
-  if (!provider) return undefined;
-  const { model: _model, ...rest } = provider;
-  return rest;
-}
-
-// `provider.model` 不在这里：它走 config scope 的 `applyProviderModel` 热应用分支
-// （P0-1 D4）；未注入 applier / 新值缺省时由该分支补 push `model` 进 requires_restart。
+// `provider.*` / `models.*` 不在这里：它们走 config scope 的 `applyProviderModel`
+// 热应用分支（P0-1 D4 → P1-w2d 泛化，D5）；未注入 applier / 解析不出有效缺省模型时
+// 由该分支补 push 变化域进 requires_restart。新增 provider 插件目录仍 restart
+// （loader 启动扫描一次，plugins scope 的 in-process 指纹判定）。
 const RESTART_FIELDS: readonly RestartField[] = [
-  { name: 'provider', read: (config) => withoutModel(config.provider) },
   { name: 'agent', read: (config) => config.agent },
   // CONTRACT-hot-apply §1：permission 走 applier，不再进 requires_restart。
   { name: 'tls', read: (config) => config.node?.tls },
@@ -126,6 +130,17 @@ export function allowedOriginsChanged(current: VesselConfig, next: VesselConfig)
   const left = normalize(current.node?.allowedOrigins);
   const right = normalize(next.node?.allowedOrigins);
   return left.length !== right.length || left.some((origin, index) => origin !== right[index]);
+}
+
+/**
+ * 有效缺省 wire model（env 优先级冻结 §2.6：VESSEL_MODEL 赢 models.default）：
+ * 与 wiring.resolveModel(undefined) 同一 resolver 口径，只读解析、不构造 provider。
+ */
+function effectiveDefaultModel(config: VesselConfig): string | undefined {
+  const envModel = process.env.VESSEL_MODEL;
+  const snapshot = synthesizeLegacyRegistry(config);
+  return resolveModelRef(snapshot, envModel !== undefined && envModel !== '' ? envModel : undefined)
+    ?.wireModel;
 }
 
 /** 缺省 scopes（`gateway.reload({})` 时跑）：与 serve 的 `RELOAD_SCOPES` 同序。 */
@@ -192,23 +207,27 @@ export function createGatewayReloadRunner(
           }
 
           const restartFields = diffRestartFields(current, next);
-          // provider.model 热应用（P0-1 D4）：与 diffRestartFields 同一 stableValue 口径。
-          // 变化且新值为非空字符串且注入了 applier ⇒ 应用并把摘要行并入 summaries.config；
-          // 否则（未注入 / 新配置缺显式 model）补进 requires_restart —— 不猜 provider
-          // 缺省模型，不假装生效。生效点由 applier 的摘要行写清（节点缺省，live 下一具才换）。
-          const modelFrom = current.provider?.model;
-          const modelTo = next.provider?.model;
+          // provider.* / models.* 热应用（P0-1 D4 → P1-w2d 泛化，D5）：与 diffRestartFields
+          // 同一 stableValue 口径。块变化且新配置能解析出非空有效缺省模型且注入了 applier
+          // ⇒ 应用（重建快照 + 清缓存 + 原地改节点缺省）并把摘要行并入 summaries.config；
+          // 否则变化域补进 requires_restart —— 不猜 provider 缺省模型，不假装生效。
+          // 生效点由 applier 的摘要行写清（节点缺省，live 下一具才换）。
+          const providerChanged = stableValue(current.provider) !== stableValue(next.provider);
+          const modelsChanged = stableValue(current.models) !== stableValue(next.models);
           const modelLines: string[] = [];
-          if (stableValue(modelFrom) !== stableValue(modelTo)) {
+          if (providerChanged || modelsChanged) {
+            const modelFrom = effectiveDefaultModel(current);
+            const modelTo = effectiveDefaultModel(next);
             if (
               typeof modelTo === 'string' &&
               modelTo !== '' &&
               options.applyProviderModel !== undefined
             ) {
-              const lines = await options.applyProviderModel(modelFrom, modelTo);
+              const lines = await options.applyProviderModel(modelFrom, modelTo, next);
               if (Array.isArray(lines)) modelLines.push(...lines);
             } else {
-              restartFields.push('model');
+              if (providerChanged) restartFields.push('provider');
+              if (modelsChanged) restartFields.push('models');
             }
           }
           if (allowedOriginsChanged(current, next)) {
