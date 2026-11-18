@@ -414,12 +414,27 @@ const DISABLED_AUTH: PlatformAuthOptions = {
   session: { idleMinutes: 30, absoluteHours: 12 },
 };
 
-/** 配置了登录后端、但请求来自公网（或经反代）且没有会话。 */
-function sessionRequiredMessage(): string {
+/**
+ * 配置了登录后端、但本次数据面请求没有会话。
+ *
+ * 文案刻意做成「可照做」的 —— 因为它就是 8644 那类 401 的自解释入口：
+ * - 指到**当前这个来源**的 `/login`。会话 cookie 按 host 区分，换 origin 就换会话 ——
+ *   「在 127.0.0.1 登录过、又打开公网域名」看起来就是「突然全部 401」；
+ * - 不再承诺「本机直连可以免登录」：`localDirect` 要求「回环 socket ∧ 未经受信代理
+ *   ∧ Host 指回环」，而**没配反代密钥**时 `proxySecretAllowed()` 恒真 ⇒ `viaProxy`
+ *   为真 ⇒ `localDirect` 恒假（见 gateway/auth.ts 的 `resolveRequestEdge`）。
+ *   承诺一个当前不成立的放行条件，只会让排障方向跑偏。
+ *
+ * 只给可点击的入口与事实，不给命令行。
+ */
+export function sessionRequiredMessage(origin: string | null): string {
+  const where = origin === null ? '本站根路径' : origin;
   return (
-    'session_required: 这个部署启用了 WebUI 登录（auth.backends），经公网/反代的请求必须' +
-    '先登录。请打开站点根路径，用登录页（口令 + TOTP，或 GitHub）获取会话 cookie 后再调用；' +
-    '本机直连（127.0.0.1）仍可用 Bearer token 或回环匿名。'
+    'session_required: 这个部署启用了 WebUI 登录（auth.backends），数据面请求必须带会话。' +
+    `请在**当前这个来源**打开登录页（${where}/login）登录后再调用 —— ` +
+    '会话 cookie 按 host 区分，在 127.0.0.1 与公网域名之间切换会丢会话，' +
+    '表现就是「登录过、却突然全部 401」。' +
+    '浏览器不会自动带着平台会话去访问 node 自己的端口（那也是同一种 401）。'
   );
 }
 
@@ -629,9 +644,11 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
     }
     // 3. 配了登录后端且不是本机直连（公网/经反代）→ 401，让前端回登录页。
     if (!gate.ok && authService.enabled && !options.localDirect) {
+      const origin =
+        authCtx.edge.host === null ? null : `${authCtx.edge.protocol}://${authCtx.edge.host}`;
       return {
         ok: false,
-        response: errorJson('session_required', sessionRequiredMessage(), 401, extra),
+        response: errorJson('session_required', sessionRequiredMessage(origin), 401, extra),
       };
     }
     // 4. 非回环且未认证 → 401（旧行为）。
