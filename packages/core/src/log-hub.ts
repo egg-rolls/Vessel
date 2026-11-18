@@ -148,6 +148,36 @@ const state: LoggingConfig = {
   color: 'auto',
 };
 
+/** 一条环境变量覆盖（config show / config.get / WebUI 提示「被环境变量 X 覆盖」用）。 */
+export interface LogEnvOverride {
+  /** 环境变量名 */
+  env: string;
+  /** 被覆盖的配置键 */
+  key: 'level' | 'format' | 'modules';
+  /** 环境强制的值（渲染用文本） */
+  value: string;
+}
+
+/**
+ * 当前生效的环境变量覆盖（模块加载时确定，进程内不变）。
+ * 只报告真实设置了的环境变量；config 值不被修改，只是被压住。
+ */
+export function loggingEnvOverrides(): LogEnvOverride[] {
+  const overrides: LogEnvOverride[] = [];
+  if ((process.env.VESSEL_DEBUG ?? '').trim() !== '') {
+    overrides.push({ env: 'VESSEL_DEBUG', key: 'level', value: 'debug' });
+  } else if (ENV_LEVEL !== undefined) {
+    overrides.push({ env: 'VESSEL_LOG_LEVEL', key: 'level', value: ENV_LEVEL });
+  }
+  if (ENV_FORMAT !== undefined) {
+    overrides.push({ env: 'VESSEL_LOG_JSON', key: 'format', value: 'json' });
+  }
+  if (Object.keys(ENV_MODULES).length > 0) {
+    overrides.push({ env: 'VESSEL_RUN_TIMING', key: 'modules', value: 'run.*=debug' });
+  }
+  return overrides;
+}
+
 /**
  * 设置进程级日志配置（增量合并；未给出的键保持原值）。
  * 环境变量覆盖仍然优先（排障临时覆盖不被 config 冲掉）。

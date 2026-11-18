@@ -91,7 +91,7 @@ import { createImageDeliverySource } from './image-delivery';
 import { resolveInteractionsDir } from './interactions-dir';
 import { normalizeLegacyToolName } from './legacy-tool-names';
 import { createLocalRunAdapter } from './local-run-adapter';
-import { createCliLogger } from './logging';
+import { configureLoggingFromConfig, createCliLogger } from './logging';
 import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import { createNodeDrainer } from './node-drain';
@@ -977,6 +977,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   if (validation.warnings.length > 0) {
     for (const w of validation.warnings) console.warn(`⚠ ${w.message}`);
   }
+
+  // 日志中枢：配置加载后立即应用 observability.log（环境变量覆盖在中枢内仍优先）。
+  // 此前（import / 配置加载阶段）的日志按环境变量与默认值输出，量很少，可接受。
+  configureLoggingFromConfig(config);
 
   // ── data_dir / connect（0.5；0.49 T4 删除 tenant 块）───────────
   const resolvedDataDir = options.dataDir ?? resolveDataDir(config);

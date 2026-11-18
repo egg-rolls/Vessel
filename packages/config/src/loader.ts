@@ -103,6 +103,7 @@ function convertKeys(
  * - mcpServers.<name>.env / .headers：环境变量 / HTTP 头名
  * - node.tokens：token 原文
  * - pricing.models：模型名（常含 `/`、`.`，不能按 snake_case 改写）
+ * - observability.log.modules：事件名前缀（`bash_job` 这类下划线是名字的一部分）
  */
 export function preserveConfigMapKeys(path: string[], _key: string): boolean {
   if (path[0] === 'mcpServers') {
@@ -111,6 +112,14 @@ export function preserveConfigMapKeys(path: string[], _key: string): boolean {
   }
   if (path[0] === 'node' && path.length === 2 && path[1] === 'tokens') return true;
   if (path[0] === 'pricing' && path.length === 2 && path[1] === 'models') return true;
+  if (
+    path[0] === 'observability' &&
+    path.length === 3 &&
+    path[1] === 'log' &&
+    path[2] === 'modules'
+  ) {
+    return true;
+  }
   return false;
 }
 

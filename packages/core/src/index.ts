@@ -162,7 +162,14 @@ export {
 } from './limits/index.js';
 export { type EventFieldKind, formatEventFields, formatEventLine } from './log-format.js';
 // 进程级日志中枢（P2）：配置 / 级别判定 / 唯一写出口；排版在 log-format
-export { configureLogging, emitLogLine, isLevelEnabled, shouldColor } from './log-hub.js';
+export {
+  configureLogging,
+  emitLogLine,
+  isLevelEnabled,
+  type LogEnvOverride,
+  loggingEnvOverrides,
+  shouldColor,
+} from './log-hub.js';
 // 日志端口（0.10 R2-14）：Logger / LogLevel / LogFields / LoggingConfig 经 ./types 导出
 export { createStderrLogger, noopLogger, writeStderrNotice } from './logging.js';
 // Observability（0.4 C2 聚合 + 0.5 F2 trace）

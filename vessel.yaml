@@ -1,3 +1,16 @@
 timeline:
   dual_write: true
   chunk_flush_ms: 150
+
+# 日志中枢（可选；缺省 level=info / color=auto / format=pretty / time=auto）。
+# 环境变量覆盖优先：VESSEL_DEBUG > VESSEL_LOG_LEVEL > VESSEL_LOG_JSON=1。
+# 改 level / modules 等字段热应用（无需重启），回执进 runtime.notice。
+# observability:
+#   log:
+#     level: info            # debug | info | warn | error
+#     modules:               # 事件名前缀 -> 级别（最长前缀匹配，按点分段）
+#       gateway.ws: debug
+#       timeline: warn
+#     color: auto            # auto | always | never（NO_COLOR / FORCE_COLOR 仍可覆盖）
+#     format: pretty         # pretty | json（json = 单行 JSON，机器接口）
+#     time: auto             # auto | none | clock | iso（auto：TTY clock / 落盘 iso）

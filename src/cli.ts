@@ -33,7 +33,13 @@ import {
   resolveServeProxySecret,
   type VesselConfig,
 } from '../packages/config/src/index';
-import { type EventStream, pruneTrace, rebuildMetrics } from '../packages/core/src/index';
+import {
+  configureLogging,
+  type EventStream,
+  type LoggingConfig,
+  pruneTrace,
+  rebuildMetrics,
+} from '../packages/core/src/index';
 import {
   buildPluginCatalog,
   type ConfigSnapshotLike,
@@ -109,7 +115,7 @@ import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outboun
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { createImageDeliverySource } from './image-delivery';
 import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-dir';
-import { createCliLogger } from './logging';
+import { createCliLogger, diffLogOptions, resolveLogOptions } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 import { isForegroundNodeCommand } from './node-command';
 import { setToolPolicy } from './permission-store';
@@ -1089,6 +1095,20 @@ async function runWithConfig(result: BootstrapResult) {
       },
     };
 
+    // 日志中枢热应用（observability.log）：由 config-watch 的 scopes 列表触发，
+    // 不新增 RPC scope（ADR-075：config 类改动走 config 通路）。只有 log 字段变化
+    // 才产差异行（`log: level info→debug`），避免每次热应用多一条 notice。
+    const logOptionsState: { current: LoggingConfig } = { current: resolveLogOptions(config) };
+    reloadAppliers.log = async () => {
+      const next = await reloadVesselConfig();
+      const desired = resolveLogOptions(next);
+      const lines = diffLogOptions(logOptionsState.current, desired);
+      if (lines.length === 0) return [];
+      configureLogging(desired);
+      logOptionsState.current = desired;
+      return lines;
+    };
+
     // MCP：没有控制面时不注册该 scope（请求即 `unknown reload scope`）。
     const mcpPlugin = result.bundle?.mcpPlugin;
     if (result.mcp !== undefined && mcpPlugin !== undefined) {
@@ -1159,7 +1179,7 @@ async function runWithConfig(result: BootstrapResult) {
       apply: async () => {
         // 只请求已注册的 applier：没有 MCP 的部署不该因为 mcp scope 失败。
         const registered = new Set(reloadRunner.registeredScopes());
-        const scopes = ['config', 'permission', 'tools', 'mcp'].filter(
+        const scopes = ['config', 'log', 'permission', 'tools', 'mcp'].filter(
           (scope) => scope === 'config' || registered.has(scope),
         );
         const outcome = await reloadRunner.reloadWithSummaries(scopes);

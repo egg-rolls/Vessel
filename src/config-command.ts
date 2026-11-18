@@ -18,6 +18,7 @@ import {
   loadConfig,
   redactSourcePaths,
 } from '../packages/config/src/index';
+import { loggingEnvOverrides } from '../packages/core/src/index';
 import { formatConfigError, formatConfigErrors } from './config-error-format';
 import { resolveDataDir } from './data-paths';
 import { t } from './i18n';
@@ -303,15 +304,26 @@ export async function configShowCommand(
     tenantId: result.tenantId,
   });
 
+  // 日志中枢的环境变量覆盖提示：config 值仍在，但运行时被环境压住（排障临时覆盖）。
+  const logOverrideNote = loggingEnvOverrides()
+    .map(
+      (override) =>
+        `observability.log.${override.key} overridden by ${override.env} (${override.value})`,
+    )
+    .join('; ');
+
   if (options.json) {
     return {
       exitCode: 0,
       stdout: JSON.stringify(snapshot, null, 2),
-      stderr: warningText,
+      stderr: [warningText, logOverrideNote === '' ? '' : `log: ${logOverrideNote}`]
+        .filter((part) => part !== '')
+        .join('\n'),
     };
   }
 
   let stdout = stringifyYaml(snapshot.config);
+  if (logOverrideNote !== '') stdout += `\n# log: ${logOverrideNote}\n`;
   if (options.sources) {
     // 快照构造已脱敏；这里再走一次导出函数，保证 web/TUI 复用同一语义。
     const lines = Object.entries(redactSourcePaths(snapshot.sources))

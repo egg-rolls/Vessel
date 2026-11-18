@@ -13,6 +13,7 @@ import type {
   McpServerConfig,
   NodeConfig,
   ObservabilityConfig,
+  ObservabilityLogConfig,
   PluginHttpLimitsConfig,
   SchedulerConfig,
   TimelineConfig,
@@ -159,10 +160,23 @@ export const DEFAULT_FEISHU_OPTIONS: Required<FeishuConfig> = {
  * 不写入 DEFAULT_CONFIG：块缺省时不创建 collector、不暴露 /v1/metrics。
  * event_history 缺省 1000 与 core MemoryEventStream 默认一致；显式 0 = 不限制。
  */
+/**
+ * 日志中枢默认值（与 core log-hub 的缺省一致）。
+ * 不写入 DEFAULT_CONFIG：observability 块缺省时日志仍按这些值 + 环境变量生效。
+ */
+export const DEFAULT_LOG_OPTIONS: Required<ObservabilityLogConfig> = {
+  level: 'info',
+  modules: {},
+  color: 'auto',
+  format: 'pretty',
+  time: 'auto',
+};
+
 export const DEFAULT_OBSERVABILITY_OPTIONS: Required<ObservabilityConfig> = {
   eventHistory: 1000,
   metrics: true,
   showProcessErrors: false,
+  log: DEFAULT_LOG_OPTIONS,
 };
 
 /** 全局数据根（0.5；不写入 DEFAULT_CONFIG，保持 0.4 配置形状） */
