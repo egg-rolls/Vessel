@@ -10,7 +10,10 @@
  *   - 值仍然只写在 styles/tokens.css；@theme inline 只做别名映射，
  *     因此暗色主题（tokens 里的 var 覆盖）继续生效。
  */
-@layer theme, base, legacy, utilities;
+/* plugin-embed 契约 §9：`plugin` 是插件层的保留槽位（plugin.<id> 嵌套其下），
+ * 必须位于 utilities 之前——层序按首次声明排定，插件样式后加载，只有宿主先
+ * 声明槽位才能保证插件层不盖过宿主 utilities。 */
+@layer theme, base, legacy, plugin, utilities;
 
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);

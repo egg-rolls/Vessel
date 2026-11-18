@@ -68,6 +68,9 @@ function toServeDescriptor(
   }
   const pluginDir = descriptor.dir;
   const uiDir = manifest.ui !== undefined ? path.resolve(pluginDir, manifest.ui.dir) : undefined;
+  // plugin-embed 契约 §1/§3：embed 声明与 trust_ui 确认透传给 manager 计算信任态。
+  const uiEmbed = manifest.ui?.embed;
+  const trustUi = config.plugins?.find((candidate) => candidate.name === manifest.id)?.trust_ui;
   const contributes = manifest.contributes ?? {};
   // 0.48 M1：manifest 已校验 http 声明（含宿主保留路由）；serve 侧再做一次
   // 结构复检 + 限额收紧 + 跨插件冲突判定。
@@ -81,6 +84,8 @@ function toServeDescriptor(
     entry: descriptor.entry,
     pluginDir,
     ...(uiDir !== undefined ? { uiDir } : {}),
+    ...(uiEmbed !== undefined ? { uiEmbed } : {}),
+    ...(trustUi !== undefined ? { trustUi } : {}),
     activationEvents: manifest.activationEvents,
     // 内置插件（repo 源）可信；外部插件默认只能 auth: required。
     builtin: descriptor.source === 'repo',
@@ -97,6 +102,7 @@ function toServeDescriptor(
               ...(page.icon !== undefined ? { icon: page.icon } : {}),
               ...(page.order !== undefined ? { order: page.order } : {}),
               entry: page.entry,
+              ...(page.component !== undefined ? { component: page.component } : {}),
             })),
           }
         : {}),

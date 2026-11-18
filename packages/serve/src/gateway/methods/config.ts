@@ -478,6 +478,10 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
                   type: 'string',
                   enum: ['inactive', 'active', 'unhealthy', 'disabled', 'invalid'],
                 },
+                // plugin-embed 契约 §3：additive；没有 ui.embed 的插件缺省。
+                ui_trust: { type: 'string', enum: ['embedded', 'isolated'] },
+                ui_bundle_hash: { type: 'string' },
+                ui_embed: { type: 'object' },
                 // 0.43 E1：additive；能力插件 / 无渲染贡献不返回。
                 contributions: {
                   type: 'object',

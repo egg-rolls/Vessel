@@ -1,6 +1,6 @@
 ---
 title: 插件内嵌 React UI（embed 档）契约
-kind: target
+kind: current
 triggers: [plugin embed, ui_trust, ui_bundle_hash, ui.embed, plugin-sdk, import map, vendor shim, PluginEmbed, PluginErrorBoundary, embedded, isolated, trust_ui, 内嵌, 插件 UI, 信任档, 哈希锁, 同源]
 paths: [src/plugin-manifest.ts, packages/serve/src/plugin-host/**, packages/serve/src/platform/proxy-config.ts, packages/serve/src/gateway/auth.ts, packages/plugin-sdk/**, apps/web/src/domains/plugins/**, plugins/observability/usage/**]
 ---
@@ -58,7 +58,9 @@ paths: [src/plugin-manifest.ts, packages/serve/src/plugin-host/**, packages/serv
     声明 `component` 必须同时有 `ui.embed`。
   - `pages[].entry` 保持必填（iframe 回退入口，用户已拍板）。
   - **保留段**：`contributes.http` 的 path 在 `/plugins/<id>/` 之后的第一段不得为 `ui`
-    （embed 静态命名空间保留，防动态路由遮蔽 / 被代理误转发）。
+    （embed 静态命名空间保留，防动态路由遮蔽 / 被代理误转发）。运行期双保险：gateway
+    对 `/plugins/<id>/ui/**`（解码后判定）**跳过动态路由匹配**，即使首段是可能绑定
+    `ui` 的 `:param`，静态命名空间也永远优先。
 - `mounts[]` 一期不解析（P3）。
 
 ## 3. wire 字段（plugins.list / plugin.changed，additive）
@@ -80,9 +82,10 @@ ui_embed?: { entry: string; css?: string; runtime: { react: string; sdk: string 
   `ui_bundle_hash`（string）/ `ui_embed`（object）（pages items 本就是裸 object，component
   无需改 schema）。
 - **ui_bundle_hash 算法**：embedRoot = `resolve(uiDir, dirname(entry))`；递归收集其下所有
-  文件，按相对路径（`/` 分隔）排序，逐文件 `sha256Hex(bytes)`，再对
-  `concat(relpath + "\0" + fileHash + "\n")` 取 `sha256Hex`。embedRoot 不存在 / 不可读 →
-  视同无 embed（字段缺省，fail-closed）。哈希覆盖 entry + chunks + css，防 TOFU 后换包。
+  常规文件，按相对路径（`/` 分隔）排序，逐文件 `sha256Hex(bytes)`，再对
+  `concat(relpath + "\0" + fileHash + "\n")` 取 `sha256Hex`。embedRoot 不存在 / 不可读 /
+  **含 symlink**（目标可被无痕替换，绕过哈希锁）→ 视同无 embed（字段缺省，fail-closed）。
+  哈希覆盖 entry + chunks + css，防 TOFU 后换包。
 
 ## 4. 资源 URL 与同源（硬前提）
 
@@ -97,7 +100,8 @@ ui_embed?: { entry: string; css?: string; runtime: { react: string; sdk: string 
   - `checkProxyHttpPath(rest, method)`：rest 形如 `/plugins/<id>/ui/<...>`（`<id>` 合法段、
     后续段非空）时**仅 GET / HEAD** 放行；其他方法 → 405。 traversal 防护（safeRestPath）
     不变。proxy.ts 调用点传入 `req.method`。
-  - 只代理静态资源：动态 http 路由不在 `/ui/` 命名空间（§2 保留段），不会被转发。
+  - 只代理静态资源：动态 http 路由不在 `/ui/` 命名空间（§2 保留段 + gateway 运行期
+    静态优先），不会被转发。
   - 平台根 `/plugins/*` 仍一律 404（isNodeOnlyPath 不变）；server.ts 边界注释更新。
   - 拒绝文案更新：embed 静态已可代理，iframe 页仍请直连 node。
 - **已知限制**：代理模式下 iframe 页（`/nodes/<id>/plugins/<id>/*.html`）仍被白名单拒绝
@@ -154,7 +158,9 @@ ui_embed?: { entry: string; css?: string; runtime: { react: string; sdk: string 
   `packages/plugin-sdk/src/semver.ts`；plugin-manifest.ts 改为 import + re-export
   （scripts/version.ts 等消费方不变）。`COMPARATOR_RE` 扩展支持 `^` / `~`（标准语义：
   `^x.y.z` = `>=x.y.z <(x+1).0.0`（x>0）；`^0.y.z` = `>=0.y.z <0.(y+1).0`（y>0）；
-  `^0.0.z` = `>=0.0.z <0.0.(z+1)`；`~x.y.z` = `>=x.y.z <x.(y+1).0`；缺位补 0 规则不变）。
+  `^0.0.z` = `>=0.0.z <0.0.(z+1)`；`~x.y.z` = `>=x.y.z <x.(y+1).0`；缺位补 0 规则不变。
+  上界按**书写精度**定：`^0` = `<1.0.0`、`^0.0` = `<0.1.0`、`~x` = `<(x+1).0.0`，
+  与 node-semver 一致）。
   不支持的语法仍返回 null / false（fail-closed）。
 - **P2 类型契约**（P3 再加 router / dialog / actions / iframe transport / vesselEmbedGuard）：
 
@@ -214,9 +220,16 @@ export function createPluginHost(adapter: PluginHostAdapter): VesselPluginHost;
 ## 9. 样式契约（一期：约定 + review，构建期 guard 在 P3）
 
 - 宿主渲染作用域根 `<div data-vessel-plugin={id} data-mount={name}>`。
-- 插件 CSS 包在 `@layer plugin.<id>`（位于宿主 utilities 之前）；选择器以
-  `[data-vessel-plugin="<id>"]` 或 `.vp-<id>-` 开头；禁 `:root` / `html` / `body` / `*` /
-  未作用域元素选择器；禁定义 `--color-*` 宿主 token。
+- **层序槽位（宿主侧保证）**：层序按首次声明排定，后加载的插件样式无法自行插队。
+  宿主 index.css 声明 `@layer theme, base, legacy, plugin, utilities;`——`plugin` 是
+  保留槽位，`plugin.<id>` 嵌套其下，天然位于宿主 utilities 之前。插件 CSS 必须包在
+  `@layer plugin.<id>`。
+- **选择器约定**：插件自定义 CSS 的选择器以 `[data-vessel-plugin="<id>"]` 或
+  `.vp-<id>-` 开头；禁 `:root` / `html` / `body` / `*` / 未作用域元素选择器；禁定义
+  `--color-*` 宿主 token。**Tailwind utilities 例外**：与 iframe 档共用同一份 web-src
+  的内置插件允许无前缀 utilities，但必须整体落在 `plugin.<id>` 层（低于宿主 utilities，
+  同名 class 宿主优先），且只作用于作用域根内的元素；第三方独立模板（P3）仍走
+  `prefix(vp)` 约定。构建期 guard 在 P3。
 - 主题消费宿主 CSS 变量（tokens.css）；暗色自动生效。插件不自建 portal，统一 host.toast。
 
 ## 10. 样本插件（plugins/observability/usage）

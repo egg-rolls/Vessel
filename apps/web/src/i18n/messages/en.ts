@@ -402,6 +402,15 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'plugins.frame.loading': 'Loading plugin UI…',
   'plugins.frame.loadError': 'Plugin UI failed to load',
   'plugins.frame.invalidEntry': 'Invalid plugin page entry',
+  'plugins.embed.loading': 'Loading plugin component…',
+  'plugins.embed.errorTitle': 'Plugin component failed to render',
+  'plugins.embed.errorBody': '{plugin}: {error}',
+  'plugins.embed.useIsolated': 'Switch to isolated mode',
+  'plugins.embed.incompatibleTitle': 'Plugin version incompatible',
+  'plugins.embed.incompatibleBody':
+    'Host runtime does not satisfy the plugin declaration: {detail}',
+  'plugins.embed.failedTitle': 'Plugin component failed to load',
+  'plugins.embed.failedBody': 'Could not load the embedded component: {detail}',
   'plugins.panel.label': '{title} (plugin {plugin})',
   // 0.15: observe diagnostics
   'observe.title': 'Observe',

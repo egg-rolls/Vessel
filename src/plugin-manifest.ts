@@ -7,22 +7,41 @@
  *
  * 校验失败一律 fail-closed（不加载代码），错误码见 {@link PluginErrorCode}。
  *
- * 版本范围只支持 `>=x` / `>x.y` / `<=x.y.z` 这类比较符（端点缺位补 0），
- * 空格分隔为 AND、`||` 分隔为 OR；`x` 单独出现等同 `=x.0.0`。
- * 不支持 `^` / `~` / 预发布排序（`1.0.0-beta`）——这些会报
- * `plugin_manifest_invalid`。
+ * 版本范围支持 `>=x` / `>x.y` / `<=x.y.z` 这类比较符（端点缺位补 0）与
+ * `^` / `~`（标准语义）；空格分隔为 AND、`||` 分隔为 OR；`x` 单独出现等同
+ * `=x.0.0`。不支持预发布排序（`1.0.0-beta`）——这些会报
+ * `plugin_manifest_invalid`。semver 实现住在 @vessel-agent/plugin-sdk
+ * （plugin-embed 契约 §7），这里 import + re-export，消费方不变。
  *
  * @module vessel/plugin-manifest
  */
 
 import * as path from 'node:path';
+import {
+  isValidSemver,
+  parseSemver,
+  parseVersionRange,
+  satisfiesComparator,
+} from '@vessel-agent/plugin-sdk';
 import type { PluginPortName, PluginScope } from '../packages/core/src/index';
 import { readPackageVersion } from './version';
+
+export {
+  compareSemver,
+  isValidSemver,
+  parseRangeVersion,
+  parseSemver,
+  parseVersionRange,
+  satisfiesComparator,
+  satisfiesVersionRange,
+} from '@vessel-agent/plugin-sdk';
 
 /** 清单 id：`[a-z0-9][a-z0-9-]{1,63}` */
 export const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 /** `contributes.rpc[].name`：宿主注册为 `plugin.<id>.<name>`，不允许带点 */
 export const PLUGIN_RPC_NAME_RE = /^[a-z][a-z0-9_-]*$/;
+/** `contributes.pages[].component`：embed 模块的具名导出（JS 标识符形状） */
+export const PLUGIN_COMPONENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 export type PluginSide = 'backend' | 'ui' | 'both';
 
@@ -84,8 +103,13 @@ export interface PluginPageContribution {
   /** 0.45：导航图标，必须在 {@link PLUGIN_ICON_NAMES} 白名单内 */
   icon?: PluginIconName;
   order?: number;
-  /** 相对 `ui.dir` 的静态入口 */
+  /** 相对 `ui.dir` 的静态入口（iframe 回退，必填） */
   entry: string;
+  /**
+   * plugin-embed 契约 §2：embed 模块的具名导出组件（embedded 档渲染它）。
+   * 声明它必须同时有 `ui.embed`；isolated 档仍走 `entry` iframe。
+   */
+  component?: string;
 }
 
 export interface PluginCommandContribution {
@@ -247,6 +271,18 @@ export interface PluginDependency {
   ordering: { after: string[]; before: string[] };
 }
 
+/**
+ * plugin-embed 契约 §2：内嵌 React UI 声明（additive）。
+ * entry / css 相对 `ui.dir`；runtime 是 semver range（支持 `^` / `~`）。
+ */
+export interface PluginUiEmbed {
+  /** 必填；相对 ui.dir，必须 `.mjs` 结尾 */
+  entry: string;
+  /** 可选；相对 ui.dir，必须 `.css` 结尾 */
+  css?: string;
+  runtime: { react: string; sdk: string };
+}
+
 /** 规范化后的清单（缺省值已补齐） */
 export interface PluginManifest {
   id: string;
@@ -268,7 +304,7 @@ export interface PluginManifest {
    * `package.json` 的 `exports` / `main` 解析，清单不重复声明。
    */
   entry: string;
-  ui?: { dir: string };
+  ui?: { dir: string; embed?: PluginUiEmbed };
   activationEvents: string[];
   contributes?: PluginContributions;
   permissions: PluginPermissions;
@@ -388,103 +424,6 @@ function stringArray(value: unknown, field: string): string[] {
     fail('plugin_manifest_invalid', `${field} must be an array of strings`);
   }
   return value.map((item, index) => requireString(item, `${field}[${index}]`));
-}
-
-// ── semver（最小实现） ──────────────────────────────────────────────────────
-
-interface SemverParts {
-  major: number;
-  minor: number;
-  patch: number;
-}
-
-type ComparatorOperator = '>=' | '<=' | '>' | '<' | '=';
-
-interface VersionComparator {
-  op: ComparatorOperator;
-  version: SemverParts;
-}
-
-const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)$/;
-/** 范围端点允许 `x` / `x.y` / `x.y.z`（缺位补 0，契约示例 `>=0.43 <0.45`） */
-const RANGE_VERSION_RE = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?$/;
-const COMPARATOR_RE = /^(>=|<=|>|<|=)?(\d+(?:\.\d+)?(?:\.\d+)?)$/;
-
-function parseSemver(value: string): SemverParts | null {
-  const match = SEMVER_RE.exec(value.trim());
-  if (!match) return null;
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-  };
-}
-
-/** 范围端点解析：`0.43` → 0.43.0 */
-function parseRangeVersion(value: string): SemverParts | null {
-  const match = RANGE_VERSION_RE.exec(value.trim());
-  if (!match) return null;
-  return {
-    major: Number(match[1]),
-    minor: match[2] !== undefined ? Number(match[2]) : 0,
-    patch: match[3] !== undefined ? Number(match[3]) : 0,
-  };
-}
-
-/** 是否为支持的完整 semver（`x.y.z`） */
-export function isValidSemver(value: string): boolean {
-  return parseSemver(value) !== null;
-}
-
-function compareSemver(a: SemverParts, b: SemverParts): number {
-  if (a.major !== b.major) return a.major - b.major;
-  if (a.minor !== b.minor) return a.minor - b.minor;
-  return a.patch - b.patch;
-}
-
-/** 解析版本范围；不支持的语法返回 null（调用方报 plugin_manifest_invalid） */
-export function parseVersionRange(range: string): VersionComparator[][] | null {
-  const alternatives: VersionComparator[][] = [];
-  for (const alternative of range.split('||')) {
-    const trimmed = alternative.trim();
-    if (trimmed === '') return null;
-    const comparators: VersionComparator[] = [];
-    for (const token of trimmed.split(/\s+/)) {
-      const match = COMPARATOR_RE.exec(token);
-      if (!match) return null;
-      const version = parseRangeVersion(match[2] ?? '');
-      if (!version) return null;
-      comparators.push({ op: (match[1] as ComparatorOperator | undefined) ?? '=', version });
-    }
-    alternatives.push(comparators);
-  }
-  return alternatives.length > 0 ? alternatives : null;
-}
-
-function satisfiesComparator(version: SemverParts, comparator: VersionComparator): boolean {
-  const delta = compareSemver(version, comparator.version);
-  switch (comparator.op) {
-    case '>=':
-      return delta >= 0;
-    case '<=':
-      return delta <= 0;
-    case '>':
-      return delta > 0;
-    case '<':
-      return delta < 0;
-    default:
-      return delta === 0;
-  }
-}
-
-/** `version` 是否满足 `range`；范围语法不支持时返回 false */
-export function satisfiesVersionRange(version: string, range: string): boolean {
-  const parsedVersion = parseSemver(version);
-  const parsedRange = parseVersionRange(range);
-  if (!parsedVersion || !parsedRange) return false;
-  return parsedRange.some((alternative) =>
-    alternative.every((comparator) => satisfiesComparator(parsedVersion, comparator)),
-  );
 }
 
 // ── 路径与事件白名单 ────────────────────────────────────────────────────────
@@ -660,7 +599,11 @@ function readNavGroups(value: unknown, pluginId: string): PluginNavGroup[] {
   });
 }
 
-function readPages(value: unknown, pluginId: string): PluginPageContribution[] {
+function readPages(
+  value: unknown,
+  pluginId: string,
+  hasUiEmbed: boolean,
+): PluginPageContribution[] {
   if (!Array.isArray(value)) fail('plugin_manifest_invalid', 'contributes.pages must be an array');
   const seen = new Set<string>();
   return value.map((item, index) => {
@@ -672,6 +615,19 @@ function readPages(value: unknown, pluginId: string): PluginPageContribution[] {
     const entry = requireString(item.entry, `${field}.entry`);
     if (!isSafeRelativePath(entry)) {
       fail('plugin_manifest_invalid', `${field}.entry must stay inside ui.dir`);
+    }
+    // plugin-embed 契约 §2：component 是 embed 模块的具名导出；声明它必须有 ui.embed。
+    const component = optionalString(item.component, `${field}.component`);
+    if (component !== undefined) {
+      if (!PLUGIN_COMPONENT_RE.test(component)) {
+        fail(
+          'plugin_manifest_invalid',
+          `${field}.component must match ${PLUGIN_COMPONENT_RE.source}`,
+        );
+      }
+      if (!hasUiEmbed) {
+        fail('plugin_manifest_invalid', `${field}.component requires ui.embed`);
+      }
     }
     const title = optionalString(item.title, `${field}.title`);
     const titleKey =
@@ -688,6 +644,7 @@ function readPages(value: unknown, pluginId: string): PluginPageContribution[] {
       ...(icon !== undefined ? { icon } : {}),
       ...(order !== undefined ? { order } : {}),
       entry,
+      ...(component !== undefined ? { component } : {}),
     };
   });
 }
@@ -1091,6 +1048,15 @@ function readHttp(
         `${field}.path "${routePath}" conflicts with a reserved host route`,
       );
     }
+    // plugin-embed 契约 §2：`/plugins/<id>/ui/**` 是 embed 静态资源保留命名空间，
+    // 动态路由不得占用首段 `ui`（防遮蔽静态服务 / 被平台代理误转发）。
+    const ownUiPrefix = `/plugins/${pluginId}/ui`;
+    if (shape === ownUiPrefix || shape.startsWith(`${ownUiPrefix}/`)) {
+      fail(
+        'plugin_manifest_invalid',
+        `${field}.path "${routePath}" must not use the reserved "ui" segment under /plugins/${pluginId}/`,
+      );
+    }
 
     const auth =
       item.auth === undefined
@@ -1337,6 +1303,7 @@ function readContributions(
   permissions: PluginPermissions,
   pluginId: string,
   options: PluginManifestOptions,
+  hasUiEmbed: boolean,
 ): PluginContributions | undefined {
   if (raw === undefined) return undefined;
   if (!isRecord(raw)) fail('plugin_manifest_invalid', 'contributes must be an object');
@@ -1344,7 +1311,7 @@ function readContributions(
   const out: PluginContributions = {};
   if (raw.navGroups !== undefined) out.navGroups = readNavGroups(raw.navGroups, pluginId);
   if (raw.i18n !== undefined) out.i18n = readI18n(raw.i18n);
-  if (raw.pages !== undefined) out.pages = readPages(raw.pages, pluginId);
+  if (raw.pages !== undefined) out.pages = readPages(raw.pages, pluginId, hasUiEmbed);
   if (raw.commands !== undefined) out.commands = readCommands(raw.commands);
   if (raw.settings !== undefined) out.settings = readSettings(raw.settings);
   if (raw.rpc !== undefined) out.rpc = readRpc(raw.rpc);
@@ -1453,7 +1420,7 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
   if (!parsedRange) {
     fail(
       'plugin_manifest_invalid',
-      `engines.vessel "${vesselRange}" is unsupported (use >=x.y / >=x.y.z comparator forms)`,
+      `engines.vessel "${vesselRange}" is unsupported (use >=x.y / >=x.y.z comparators or ^x.y / ~x.y)`,
     );
   }
   const currentVersion = options.vesselVersion ?? readPackageVersion();
@@ -1482,7 +1449,7 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
 
   const description = optionalString(raw.description, 'description');
 
-  let ui: { dir: string } | undefined;
+  let ui: { dir: string; embed?: PluginUiEmbed } | undefined;
   if (raw.ui !== undefined) {
     if (!isRecord(raw.ui)) fail('plugin_manifest_invalid', 'ui must be an object');
     const dir = requireString(raw.ui.dir, 'ui.dir');
@@ -1490,6 +1457,39 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
       fail('plugin_manifest_invalid', 'ui.dir must stay inside the plugin directory');
     }
     ui = { dir };
+    // plugin-embed 契约 §2：ui.embed 声明内嵌 React UI（additive，fail-closed）。
+    if (raw.ui.embed !== undefined) {
+      if (!isRecord(raw.ui.embed)) fail('plugin_manifest_invalid', 'ui.embed must be an object');
+      const entry = requireString(raw.ui.embed.entry, 'ui.embed.entry');
+      if (!entry.endsWith('.mjs') || !isSafeRelativePath(entry)) {
+        fail(
+          'plugin_manifest_invalid',
+          'ui.embed.entry must be a relative .mjs path inside ui.dir',
+        );
+      }
+      const css = optionalString(raw.ui.embed.css, 'ui.embed.css');
+      if (css !== undefined && (!css.endsWith('.css') || !isSafeRelativePath(css))) {
+        fail('plugin_manifest_invalid', 'ui.embed.css must be a relative .css path inside ui.dir');
+      }
+      if (!isRecord(raw.ui.embed.runtime)) {
+        fail('plugin_manifest_invalid', 'ui.embed.runtime must be an object');
+      }
+      const react = requireString(raw.ui.embed.runtime.react, 'ui.embed.runtime.react');
+      const sdk = requireString(raw.ui.embed.runtime.sdk, 'ui.embed.runtime.sdk');
+      if (parseVersionRange(react) === null) {
+        fail(
+          'plugin_manifest_invalid',
+          `ui.embed.runtime.react "${react}" is not a supported semver range`,
+        );
+      }
+      if (parseVersionRange(sdk) === null) {
+        fail(
+          'plugin_manifest_invalid',
+          `ui.embed.runtime.sdk "${sdk}" is not a supported semver range`,
+        );
+      }
+      ui.embed = { entry, ...(css !== undefined ? { css } : {}), runtime: { react, sdk } };
+    }
   }
 
   const activationEvents =
@@ -1501,7 +1501,13 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
   }
 
   const permissions = readPermissions(raw.permissions);
-  const contributes = readContributions(raw.contributes, permissions, id, options);
+  const contributes = readContributions(
+    raw.contributes,
+    permissions,
+    id,
+    options,
+    ui?.embed !== undefined,
+  );
   const dependencies = readDependencies(raw.dependencies);
 
   // 0.51：宿主作用域与端口。三条交叉校验都是 fail-closed，失败即不加载代码。

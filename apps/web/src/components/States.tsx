@@ -46,24 +46,26 @@ export function LoadingState({ label, rows = 3 }: { label?: string; rows?: numbe
   );
 }
 
-/** 错误：摘要 + Retry；role=alert 但不抢焦点。 */
+/** 错误：摘要 + Retry；role=alert 但不抢焦点。title 缺省是通用加载失败文案。 */
 export function ErrorState({
   message,
   onRetry,
   retryLabel,
   action,
+  title,
 }: {
   message: string;
   onRetry?: () => void;
   retryLabel?: string;
   action?: ReactNode;
+  title?: string;
 }) {
   return (
     <div className={cn('state-error', stateShell, 'bg-danger-soft text-danger')} role="alert">
       <span className={cn(stateIcon, 'text-danger')} aria-hidden="true">
         !
       </span>
-      <p className={cn(stateTitle, 'text-danger')}>{t('common.loadFailed')}</p>
+      <p className={cn(stateTitle, 'text-danger')}>{title ?? t('common.loadFailed')}</p>
       <p className={cn(stateDesc, 'font-mono text-sm text-danger')}>{message}</p>
       {(onRetry || action) && (
         <div className={stateAction}>

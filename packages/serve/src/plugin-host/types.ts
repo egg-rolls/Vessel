@@ -104,12 +104,26 @@ export interface PluginNavGroup {
   order?: number;
 }
 
+/**
+ * plugin-embed 契约 §2：`ui.embed` 声明（manifest 侧已校验，这里结构镜像）。
+ * entry / css 相对 `ui.dir`；runtime 是 semver range。
+ */
+export interface PluginUiEmbed {
+  entry: string;
+  css?: string;
+  runtime: { react: string; sdk: string };
+}
+
 /** 静态 UI 挂载点 */
 export interface PluginStaticMount {
   /** manifest id */
   id: string;
   /** 已解析的绝对路径；资产只从这里向下取。 */
   uiDir: string;
+  /** plugin-embed 契约 §5：embed 入口（相对 uiDir）；响应 no-cache。 */
+  embedEntry?: string;
+  /** plugin-embed 契约 §5：embed CSS（相对 uiDir）；响应 no-cache。 */
+  embedCss?: string;
 }
 
 /** `contributes.pages[]` */
@@ -123,6 +137,8 @@ export interface PluginPageContribution {
   order?: number;
   /** 相对 `ui.dir` 的入口文件。 */
   entry: string;
+  /** plugin-embed 契约 §2：embed 模块的具名导出组件（embedded 档）。 */
+  component?: string;
 }
 
 /** `contributes.panels[]` */
@@ -213,6 +229,13 @@ export interface PluginDescriptor {
   pluginDir: string;
   /** 静态 UI 目录（绝对路径，可选）。 */
   uiDir?: string;
+  /** plugin-embed 契约 §2：manifest `ui.embed`（assembly 透传，可选）。 */
+  uiEmbed?: PluginUiEmbed;
+  /**
+   * plugin-embed 契约 §1：config `plugins[].trust_ui`（assembly 透传）。
+   * 缺省 = isolated；builtin 不看它（descriptor.builtin 直接 embedded）。
+   */
+  trustUi?: 'embedded';
   activationEvents?: string[];
   contributes?: PluginManifestContributions;
   permissions?: PluginPermissions;
@@ -244,6 +267,8 @@ export interface PluginRenderContributions {
     order: number;
     entry: string;
     route: string;
+    /** plugin-embed 契约 §3：embed 具名导出组件（additive）。 */
+    component?: string;
   }>;
   panels: Array<{
     slot: string;
@@ -301,11 +326,18 @@ export type PluginMode = 'in-process' | 'child';
 /** `plugins.list[].status` 允许的对外值（不含瞬态 starting/stopped）。 */
 export type PluginListStatus = 'inactive' | 'active' | 'unhealthy' | 'disabled' | 'invalid';
 
+/** plugin-embed 契约 §1：UI 信任档（服务端计算，前端只消费）。 */
+export type PluginUiTrust = 'embedded' | 'isolated';
+
 /** `plugins.list` 每项的运行时元数据（additive）。 */
 export interface PluginListMetadata {
   version?: string;
   mode?: PluginMode;
   status?: PluginListStatus;
+  /** plugin-embed 契约 §3：没有 ui.embed 的插件三字段缺省。 */
+  ui_trust?: PluginUiTrust;
+  ui_bundle_hash?: string;
+  ui_embed?: PluginUiEmbed;
 }
 
 /** 单个 plugin 的可观测状态 */
@@ -325,6 +357,14 @@ export interface PluginStatusEntry {
   events_dropped: number;
   /** 当前 restart 窗口内已重启次数。 */
   restarts: number;
+  /**
+   * plugin-embed 契约 §3：descriptor 加载 / reload 时计算的 embed 信任态
+   * （内部字段；pluginListMetadata 映射到 wire）。无 ui.embed / embedRoot
+   * 不可读时缺省（fail-closed）。
+   */
+  ui_trust?: PluginUiTrust;
+  ui_bundle_hash?: string;
+  ui_embed?: PluginUiEmbed;
 }
 
 /** 已脱敏、已 DTO 化的事件（`plugin.event` 的 params） */

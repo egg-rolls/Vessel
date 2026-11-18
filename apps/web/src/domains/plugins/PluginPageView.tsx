@@ -10,6 +10,7 @@ import type { Route } from '../../app/router';
 import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
+import { PluginEmbed } from './PluginEmbed';
 import { PluginFrame } from './PluginFrame';
 import { usePluginContributions } from './usePluginContributions';
 
@@ -28,6 +29,30 @@ export function PluginPageView({ route }: { route: PluginsRoute }) {
     (item) =>
       item.pluginId === pluginId && (route.entry === undefined || item.entry === route.entry),
   );
+
+  // plugin-embed 契约 §8：component && ui_trust === 'embedded' && ui_embed →
+  // PluginEmbed；否则 PluginFrame（现状不变）。信任档服务端计算，前端只消费。
+  const renderMount = (className: string) => {
+    if (plugin === undefined || page === undefined) return null;
+    const methods = methodsByPlugin.get(plugin.name) ?? EMPTY_METHODS;
+    if (
+      page.component !== undefined &&
+      plugin.ui_trust === 'embedded' &&
+      plugin.ui_embed !== undefined &&
+      plugin.ui_bundle_hash !== undefined
+    ) {
+      return <PluginEmbed plugin={plugin} page={page} methods={methods} className={className} />;
+    }
+    return (
+      <PluginFrame
+        pluginId={plugin.name}
+        entry={page.entry}
+        title={page.title}
+        methods={methods}
+        className={className}
+      />
+    );
+  };
 
   const body = (() => {
     if (!hasToken) {
@@ -50,29 +75,16 @@ export function PluginPageView({ route }: { route: PluginsRoute }) {
     if (plugin === undefined || page === undefined) {
       return <EmptyState title={t('plugins.page.notFound')} />;
     }
-    return (
-      <PluginFrame
-        pluginId={plugin.name}
-        entry={page.entry}
-        title={page.title}
-        methods={methodsByPlugin.get(plugin.name) ?? EMPTY_METHODS}
-        className="flex-1 min-h-0"
-      />
-    );
+    return renderMount('flex-1 min-h-0');
   })();
 
-  // 有可用插件页面时，整块内容区交给 iframe：宿主不加 padding / max-width /
-  // PageHeader，插件自己决定布局与滚动。空态 / 错误态才用带 padding 的容器。
+  // 有可用插件页面时，整块内容区交给插件挂载（embedded 组件或 iframe）：宿主不加
+  // padding / max-width / PageHeader，插件自己决定布局与滚动。空态 / 错误态才用
+  // 带 padding 的容器。
   if (plugin !== undefined && page !== undefined) {
     return (
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden focus:outline-none">
-        <PluginFrame
-          pluginId={plugin.name}
-          entry={page.entry}
-          title={page.title}
-          methods={methodsByPlugin.get(plugin.name) ?? EMPTY_METHODS}
-          className="min-h-0 w-full flex-1"
-        />
+        {renderMount('min-h-0 w-full flex-1')}
       </div>
     );
   }

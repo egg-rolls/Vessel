@@ -70,7 +70,12 @@ interface PlatformWsData {
   bridge: import('./proxy-ws.js').ProxyWsBridge;
 }
 
-/** node 独占路径：平台入口一律 404（不代理、不转发）。 */
+/**
+ * node 独占路径：平台**根**入口一律 404（不代理、不转发）。
+ * plugin-embed 契约 §4 的唯一例外走 `/nodes/<nodeId>/` 代理前缀：
+ * `/plugins/<id>/ui/**` 的 embed 静态资源仅 GET / HEAD 经代理同源转发
+ * （proxy-config.ts 白名单）；根 `/plugins/*` 仍然 404。
+ */
 function isNodeOnlyPath(path: string): boolean {
   return (
     path === '/v1' ||
