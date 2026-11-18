@@ -1462,16 +1462,22 @@ function isStrictLoopbackHostname(hostname: string): boolean {
  * 0.60：校验 `auth.public_origins` 的单个条目。
  *
  * 比 `public_origin` 更严（新键没有历史包袱）：
- * - 必须是完整 origin，**尾斜杠也报错**（`https://host/` 与 `https://host` 归一化后
+ * - 必须是**具体** origin，**尾斜杠也报错**（`https://host/` 与 `https://host` 归一化后
  *   一样，但写错的人会以为它们不同，禁掉比替人猜更安全）；
  * - 非 https 只允许 loopback / 私网（公网明文会让会话 cookie 丢掉 Secure）。
  *
- * 0.61：`scheme://<loopback>:*` 这种**回环端口通配**是合法条目（访问控制那侧要用），
- * 但 `:*` 只能出现在回环 host 上 —— 公网域名写 `*` 仍然报错。
+ * 0.61：**端口通配（`host:*`）在这里一律拒绝** —— 它只属于 `http.allowed_origins`。
+ * 理由：`public_origins` 是 OAuth `redirect_uri` 的来源，`redirect_uri` 必须是具体
+ * origin；`http://127.0.0.1:*` 拼不出回跳地址，接受它只会让人以为「写了就能登」。
  */
 function publicOriginsEntryError(value: unknown): string | null {
   if (typeof value === 'string' && value.trim().endsWith(':*')) {
-    return wildcardOriginEntryError(value.trim());
+    return (
+      'uses a port wildcard ("host:*"): a port wildcard is only allowed in ' +
+      'http.allowed_origins (access control), not in auth.public_origins, because ' +
+      'redirect_uri needs a concrete origin. List each port explicitly, ' +
+      'e.g. http://127.0.0.1:8642'
+    );
   }
   const base = publicOriginError(value);
   if (base !== null) return base;
@@ -1492,7 +1498,12 @@ function publicOriginsEntryError(value: unknown): string | null {
   return null;
 }
 
-/** 回环端口通配条目（`http://127.0.0.1:*`）的校验；口径同 `parseOriginPattern`。 */
+/**
+ * 回环端口通配条目（`http://127.0.0.1:*`）的校验 —— 只有 `http.allowed_origins` 用。
+ *
+ * 口径与 `packages/serve/src/gateway/auth.ts#parseOriginPattern` 逐条对齐：
+ * `:*` 只能给回环 host（`127.0.0.0/8` / `localhost` / `[::1]`），且不能再带具体端口。
+ */
 function wildcardOriginEntryError(trimmed: string): string | null {
   const base = trimmed.slice(0, -':*'.length);
   const baseError = publicOriginError(base);
@@ -1779,12 +1790,23 @@ function isNonEmptyStringValue(value: unknown): value is string {
 }
 
 /**
+ * `http.allowed_origins` 的单条校验：非通配条目与 `public_origins` **完全同一套**；
+ * 只有端口通配这一处分叉（这里收，`public_origins` 拒）—— 见两处函数上的注释。
+ */
+function httpAllowedOriginsEntryError(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim().endsWith(':*')) {
+    return wildcardOriginEntryError(value.trim());
+  }
+  return publicOriginsEntryError(value);
+}
+
+/**
  * 0.61：校验 `http` 块。
  *
  * 目前只有 `allowed_origins`（**访问控制**：浏览器能不能发 RPC）。它与
- * `auth.public_origins`（`redirect_uri` 的来源选择）是两件事，但**条目口径相同**：
- * 复用 `publicOriginsEntryError`，允许 `http://127.0.0.1:*` 这类回环端口通配，
- * 非回环通配一律报错 —— 一个放宽一个拒绝是最坏的结果。
+ * `auth.public_origins`（`redirect_uri` 的来源选择）是两件事：
+ * - 非通配条目的判定**完全相同**（同一份 `publicOriginsEntryError`）；
+ * - **只有这一处**接受回环端口通配 `http://127.0.0.1:*`（`public_origins` 拒）。
  *
  * 未配置不是错误：缺省回落到 `auth.public_origins` + 回环通配三条。
  */
@@ -1805,7 +1827,7 @@ export function validateHttpSettings(
     return errors;
   }
   allowedOrigins.forEach((entry, index) => {
-    const message = publicOriginsEntryError(entry);
+    const message = httpAllowedOriginsEntryError(entry);
     if (message === null) return;
     errors.push({
       path: `http.allowedOrigins[${index}]`,

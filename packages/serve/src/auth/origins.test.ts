@@ -183,9 +183,16 @@ eq(
   ['https://egg-rolls.top', 'http://127.0.0.1:8642'],
 );
 eq(
-  'platform: loopback port wildcard survives the fail-fast normalizer',
-  resolvePlatformPublicOrigins({ publicOrigins: ['https://egg-rolls.top', 'http://127.0.0.1:*'] }),
-  ['https://egg-rolls.top', 'http://127.0.0.1:*'],
+  'platform: loopback port wildcard now fails fast (通配只属于 http.allowed_origins)',
+  (() => {
+    try {
+      resolvePlatformPublicOrigins({ publicOrigins: ['http://127.0.0.1:*'] });
+      return false;
+    } catch (error) {
+      return String(error).includes('http.allowed_origins');
+    }
+  })(),
+  true,
 );
 let platformThrew = false;
 try {

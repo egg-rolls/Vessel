@@ -439,10 +439,13 @@ function csrfRejectedMessage(reason: 'csrf_missing' | 'csrf_failed'): string {
 
 /**
  * 校验单个 `auth.public_origin` / `auth.public_origins[i]`：只接受
- * `scheme://host[:port]`，不接受路径/查询/凭据。
+ * `scheme://host[:port]`（**具体** origin），不接受路径/查询/凭据。
  *
  * 来源是 `redirect_uri` 的**唯一**来源（不许从请求头推导），配错就是登录后 404，
  * 所以在启动时 fail-fast，而不是等用户点登录才发现。
+ *
+ * 0.61：**端口通配（`host:*`）在这里也 fail-fast** —— 它只属于 `http.allowed_origins`。
+ * `redirect_uri` 必须是具体 origin，接受通配只会让人以为「写了就能登」。
  */
 function normalizePublicOrigin(
   raw: string | null | undefined,
@@ -450,8 +453,13 @@ function normalizePublicOrigin(
 ): string | null {
   if (raw === null || raw === undefined || raw.trim() === '') return null;
   const trimmed = raw.trim();
-  // 0.61：回环端口通配（`http://127.0.0.1:*`）是合法来源 —— 归一化口径与运行时同源
-  // （`gateway/auth.ts#parseOriginPattern`），这里只做 fail-fast。
+  if (trimmed.endsWith(':*')) {
+    throw new Error(
+      `${label} "${trimmed}" uses a port wildcard: a port wildcard is only allowed in ` +
+        'http.allowed_origins (access control), not in auth.public_origins — redirect_uri ' +
+        'needs a concrete origin.',
+    );
+  }
   const pattern = normalizeOriginPattern(trimmed);
   if (pattern !== null) return pattern;
   let url: URL;
@@ -751,7 +759,7 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
           ? { trustedProxies: authOptions.trustedProxies }
           : {}),
       });
-      const extra = corsHeaders(req, httpAllowedOrigins);
+      const extra = corsHeaders(req, httpAllowedOrigins, { credentials: true });
 
       if (req.method === 'OPTIONS') {
         return new Response(null, {

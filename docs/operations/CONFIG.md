@@ -545,8 +545,9 @@ auth:
 ```
 
 - **不配 `auth.backends`（或 `enabled: false`）= 功能不存在**：回环照旧可用，行为与 0.55 逐字一致，前端不出现登录入口（不锁死、不出现坏按钮）。
-- **`public_origins` 的形状（0.60）**：数组，每项必须是**完整 origin** —— `scheme://host[:port]`，**无路径、无尾斜杠、无默认端口、无凭据**。
+- **`public_origins` 的形状（0.60）**：数组，每项必须是**完整具体 origin** —— `scheme://host[:port]`，**无路径、无尾斜杠、无默认端口、无凭据**。
   - 写成 `egg-rolls.top`（缺 scheme）、`https://egg-rolls.top/login`（带路径）、`https://egg-rolls.top/`（尾斜杠）都会被 `config validate` / 启动前的校验**直接拒绝**，并给出正确写法示例。
+  - **端口通配（`http://127.0.0.1:*`）在 0.61 起也被拒绝**：它只属于 `http.allowed_origins`（访问控制）。`public_origins` 是 `redirect_uri` 的来源，回跳地址必须是具体 origin —— 详见 [2.21](#221-httpallowed_origins061访问控制与-redirect_uri-分开)。
   - 非 https 只有 **loopback / 私网**（`localhost`、`127.0.0.0/8`、`::1`、`10.x`、`172.16–31.x`、`192.168.x`、`169.254.x`、`fc00::/7`、`fe80::/10`）可以用 `http://`；公网明文是错误（会话 cookie 会丢掉 `Secure`）。
 - **与 `public_origin` 的关系**：`public_origin` 保留且不废弃，语义就是「只有一个元素的 `public_origins`」。两者同时出现时**合并去重**（`public_origin` 在前，列表按配置顺序跟上），不报错；启动日志会打一行「使用了 N 个公网来源」。只有单个 `public_origin` 的老配置行为**逐字不变**（redirect_uri 只由配置决定，不看请求）。
 - **来源选择规则（关键）**：来源只由**受信边缘**（`gateway/auth.ts#resolveRequestEdge`）决定，**绝不按 `Host` 头选**：
@@ -643,7 +644,59 @@ gateway:
 - **记账**：每条代理 WS 关闭写 `gateway.ws.closed`（`via: 'proxy'`）。node 侧同名日志保留，
   统计口径按 `via` 区分，避免双写翻倍。
 
+### 2.21 `http.allowed_origins`（0.61：访问控制，与 `redirect_uri` 来源分开）
+
+两件事，别再混：
+
+| 键 | 回答的问题 | 允许通配？ |
+|---|---|---|
+| `auth.public_origins` | 登录**回跳**到哪个 origin（`redirect_uri` 的来源） | **不允许**（必须是具体 origin） |
+| `http.allowed_origins` | **浏览器能不能发 RPC**（Origin 白名单 + CORS） | 允许，但只限回环 host 的端口通配 |
+
+```yaml
+http:
+  allowed_origins:
+    - http://127.0.0.1:*      # 回环端口通配：本机任意端口的 WebUI 都能发 RPC
+    - http://localhost:*      # 三个回环别名是三个不同的 Origin，逐个别名写
+    - http://[::1]:*
+    - https://egg-rolls.top   # 具体 origin 照常写
+```
+
+**生效集合（并集，不可收窄）**：`gateway.allowed_origins` ∪ `auth.public_origins` ∪
+`http.allowed_origins`。
+
+- `gateway.allowed_origins` 与 `auth.public_origins` **永远**生效 —— 后者是本部署自己的
+  来源，挡掉它等于反代面板自己不能用；
+- `http.allowed_origins` 只能**往上加**，不能减（没有「只允许这些」的模式，也没有开关）；
+- 不写 `http:` 这一块 = 回落 `auth.public_origins` + 三条回环通配（`http://127.0.0.1:*`、
+  `http://localhost:*`、`http://[::1]:*`）⇒ 老配置一字不改，本机任意端口的 WebUI 直接能用；
+- **显式写了** `http.allowed_origins` 就是它自己（不再自动补回环通配）；写 `[]` 也**不会**
+  把 `public_origins` 挡掉，只是不额外加来源。
+
+**条目规则**：
+
+- 非通配条目与 `auth.public_origins` **完全同一套判定**（完整 origin、无路径/尾斜杠/默认端口/
+  凭据；公网必须 https）；
+- **端口通配只在这里合法**，且 `:*` 只能给回环 host（`127.0.0.0/8` / `localhost` / `[::1]`）。
+  公网域名写 `https://egg-rolls.top:*`、私网写 `http://192.168.1.10:*`、或写
+  `http://127.0.0.1:8642:*`（端口 + 通配自相矛盾）都会在 `config validate` / 启动前被拒绝；
+- 通配匹配该 hostname 的**任意端口，含默认端口**（`http://127.0.0.1` 命中 `http://127.0.0.1:*`），
+  但**不跨别名**（`localhost` 不命中 `127.0.0.1:*`）。
+
+**与凭据的关系（CSRF 面）**：
+
+- 请求带 `Authorization: Bearer <token>` 且**校验通过** ⇒ 跳过 Origin 白名单（浏览器不会自动
+  附加 `Authorization`，跨源请求连预检都带不了凭据，所以这条不是 CSRF 面）；
+- **cookie 会话路径永远过白名单**：变更类请求另需 `x-vessel-csrf`（见 2.18），origin 与 CSRF
+  是两道独立的闸，任何一道都不因为另一道放宽而放宽；
+- 「受信反代」这条豁免**按反代密钥**判定，不按「回环 socket」（回环不能证明来源）。
+
+**CORS**：命中白名单（含通配）时**回显该请求的 Origin**（绝不 `*`）并带 `Vary: Origin`；
+`Access-Control-Allow-Credentials: true` 只在 cookie 会话路径（平台）给出，node 侧（纯 bearer）
+不给；预检允许头包含 `Authorization` 与 `X-Vessel-CSRF`。
+
 ## 3. 密钥与 `_env`
+
 所有接受密钥的字段支持 `<field>_env`：
 
 - `api_key_env`

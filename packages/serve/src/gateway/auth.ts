@@ -311,8 +311,51 @@ export function resolveHttpAllowedOrigins(input: {
 export interface OriginGateFacts {
   /** 显式凭据（Bearer token）已校验通过。 */
   credentialVerified?: boolean;
-  /** 请求来自受信反代（`resolveRequestEdge().viaProxy`）。 */
+  /**
+   * 请求来自受信反代（`resolveRequestEdge().viaProxy`）。
+   *
+   * TODO(0.61)：**故意未接线**。平台的 `viaProxy` 把「回环 socket」默认当归受信代理
+   * （`resolveRequestEdge` 的 trusted-proxy 判定），所以本机直连请求天然是 `viaProxy: true`；
+   * 若拿它当 bypass，本机流量会整段绕过 Origin 闸。要真正启用这一条，条件不是「回环」，
+   * 而是 **反代密钥成立**：node 侧需要先有 `auth.trustedProxies` + proxy secret 的边缘解析
+   * （目前 node 路径没有 `resolveRequestEdge`），再把 `edge.viaProxy` 传进来。未接线前
+   * 这个字段保持 `undefined`，行为与 0.60 一致。
+   */
   viaProxy?: boolean;
+}
+
+/**
+ * 「浏览器 Origin 是否等于生效边缘 host」的判定 —— 受信边缘声明的**形参入口**（未接线）。
+ *
+ * 现网 `AuthService.originMatchesEdge` 只比 `Origin` 的 host 与 `ctx.edge.host`；在
+ * 「页面 origin 是 8644、Host 是平台端口」的 dev relay 场景下会不匹配（→ `csrf_failed`）。
+ * 正确解法**不是**把 relay 端口加进受信同源名单（那样本机任何进程开的页面都能伪造），
+ * 而是让受信 relay 带**自己的密钥** + 声明「页面真实 origin 是 X」，平台在密钥成立时
+ * 才采信这个声明参与比较（与 `X-Forwarded-*` + 反代密钥同一套模式）。
+ *
+ * 这里只把入口形参化：调用方拿不到密钥证据时**必须**传 `undefined`，行为与旧逻辑逐字一致。
+ *
+ * @param input.origin 浏览器发来的 `Origin` 头原值
+ * @param input.edgeHost 受信边缘解析出的 `host`（`null` ⇒ 判不过）
+ * @param input.trustedOriginClaim 受信 relay 声明的页面真实 origin；**仅密钥成立时**可传
+ */
+export function originMatchesEdgeHost(input: {
+  origin: string;
+  edgeHost: string | null;
+  trustedOriginClaim?: string | null;
+}): boolean {
+  if (input.edgeHost === null) return false;
+  const candidate =
+    input.trustedOriginClaim === undefined || input.trustedOriginClaim === null
+      ? input.origin
+      : input.trustedOriginClaim;
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return false;
+  }
+  return parsed.host.toLowerCase() === input.edgeHost.toLowerCase();
 }
 
 /**
@@ -617,23 +660,56 @@ export function originAllowed(
  * allowlist 非空时所有响应都带 Vary: Origin，避免共享缓存把 A 的 ACAO 复用给 B。
  * 不使用 Access-Control-Allow-Credentials：鉴权走 Authorization，不依赖 cookie。
  */
-export function corsHeaders(req: Request, allowedOrigins: string[]): Record<string, string> {
+/** CORS 预检允许的头：浏览器跨源发 RPC 会带 `Authorization`（显式凭据）或 CSRF 同步令牌。 */
+const CORS_ALLOW_HEADERS = 'Content-Type, Authorization, X-Vessel-Protocol, X-Vessel-CSRF';
+
+/** `corsHeaders` 的可选事实；不传时与 0.60 行为一致（只是不再回 `*`，本来也没回过）。 */
+export interface CorsOptions {
+  /**
+   * 该服务是否用 **cookie 会话**（平台 `true` / node `false`）。
+   *
+   * 只有 cookie 会话才需要 `Access-Control-Allow-Credentials: true`：
+   * - 带凭据的跨源响应必须逐个 origin 授权（不能 `*`），这里回显的是**命中白名单的
+   *   那个请求 Origin**；
+   * - 纯 bearer 的 node 侧不需要它 —— 给它只会扩大「站点能读到响应」的面，
+   *   而 bearer 请求本身就要求调用方已经持有 token。
+   *
+   * 命中白名单是前提：不命中连 `Access-Control-Allow-Origin` 都不给，凭据头更不给。
+   */
+  credentials?: boolean;
+}
+
+/**
+ * CORS 头：**只回显命中的请求 Origin**（绝不 `*`），并带 `Vary: Origin`。
+ *
+ * 0.61：命中判定改用 `originMatchesAllowlist`，因此 `http://127.0.0.1:*` 这类
+ * 回环端口通配也生效 —— 否则「Origin 闸放行了、浏览器却读不到响应」，第 2 层是半成品。
+ */
+export function corsHeaders(
+  req: Request,
+  allowedOrigins: string[],
+  options: CorsOptions = {},
+): Record<string, string> {
   if (allowedOrigins.length === 0) return {};
   const headers: Record<string, string> = { Vary: 'Origin' };
   const origin = req.headers.get('origin');
   if (!origin) return headers;
   let normalized: string;
   try {
-    normalized = new URL(origin).origin;
+    const parsed = new URL(origin);
+    // 只对浏览器 http(s) origin 回 CORS 头；`file://` / opaque origin 一律不给。
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return headers;
+    normalized = parsed.origin;
   } catch {
     return headers;
   }
-  if (!allowedOrigins.includes(normalized)) return headers;
+  if (!originMatchesAllowlist(normalized, allowedOrigins)) return headers;
   return {
     ...headers,
     'Access-Control-Allow-Origin': normalized,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Vessel-Protocol',
+    'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS,
     'Access-Control-Max-Age': '600',
+    ...(options.credentials === true ? { 'Access-Control-Allow-Credentials': 'true' } : {}),
   };
 }

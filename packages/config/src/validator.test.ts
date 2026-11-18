@@ -48,29 +48,35 @@ check(
     .length === 0,
 );
 check(
-  'public_origins: loopback port wildcards accepted',
-  pathsFor({
-    auth: { publicOrigins: ['http://127.0.0.1:*', 'http://localhost:*', 'http://[::1]:*'] },
-  }).length === 0,
-  JSON.stringify(
-    pathsFor({
-      auth: { publicOrigins: ['http://127.0.0.1:*', 'http://localhost:*', 'http://[::1]:*'] },
-    }),
+  'public_origins: 0.61 端口通配一律拒绝（三条回环逐条）',
+  ['http://127.0.0.1:*', 'http://localhost:*', 'http://[::1]:*'].every(
+    (entry) => pathsFor({ auth: { publicOrigins: [entry] } }).length === 1,
   ),
 );
 check(
-  'public_origins: 127.0.0.0/8 wildcard accepted',
-  pathsFor({ auth: { publicOrigins: ['http://127.0.0.9:*'] } }).length === 0,
+  'public_origins: 通配错误文案指向 http.allowed_origins',
+  (() => {
+    const [first] = errorsFor({ auth: { publicOrigins: ['http://127.0.0.1:*'] } });
+    return (
+      first?.message.includes('only allowed in http.allowed_origins') === true &&
+      first.message.includes('redirect_uri') === true
+    );
+  })(),
+  errorsFor({ auth: { publicOrigins: ['http://127.0.0.1:*'] } })[0]?.message,
+);
+check(
+  'public_origins: 127.0.0.0/8 通配同样拒绝',
+  pathsFor({ auth: { publicOrigins: ['http://127.0.0.9:*'] } }).length === 1,
 );
 const publicNonLoopback = errorsFor({ auth: { publicOrigins: ['https://egg-rolls.top:*'] } });
 check(
-  'public_origins: non-loopback wildcard rejected',
+  'public_origins: 公网 host 的 :* 报在 auth.publicOrigins[0]',
   publicNonLoopback.length === 1 && publicNonLoopback[0]?.path === 'auth.publicOrigins[0]',
   JSON.stringify(publicNonLoopback),
 );
 check(
-  'public_origins: non-loopback wildcard message says why',
-  publicNonLoopback[0]?.message.includes('non-loopback') === true,
+  'public_origins: 公网 :* 也是同一个「只属于 http.allowed_origins」文案',
+  publicNonLoopback[0]?.message.includes('only allowed in http.allowed_origins') === true,
   publicNonLoopback[0]?.message,
 );
 check(
@@ -124,26 +130,44 @@ check(
     1,
 );
 
-// ---- 同口径（同一条目两处判定一致）---------------------------------------
+// ---- 口径分离（0.61 的语义定死）------------------------------------------
 
-const sameEntry = (entry: string): boolean => {
-  const authOk = pathsFor({ auth: { publicOrigins: [entry] } }).length === 0;
-  const httpOk = pathsFor({ http: { allowedOrigins: [entry] } }).length === 0;
-  return authOk === httpOk;
-};
+/**
+ * 0.61 起两处**故意不同口径**：
+ * - `auth.public_origins` = `redirect_uri` 来源 ⇒ 必须是具体 origin，通配**拒**；
+ * - `http.allowed_origins` = 访问控制 ⇒ 回环 host 的端口通配**收**，非回环**拒**。
+ *
+ * 共同点必须保持一致：非通配条目的判定完全相同（同一份 `publicOriginsEntryError`）。
+ */
+const publicOk = (entry: string): boolean =>
+  pathsFor({ auth: { publicOrigins: [entry] } }).length === 0;
+const httpOk = (entry: string): boolean =>
+  pathsFor({ http: { allowedOrigins: [entry] } }).length === 0;
+
 for (const entry of [
-  'http://127.0.0.1:*',
-  'http://localhost:*',
-  'http://[::1]:*',
   'https://egg-rolls.top',
-  'https://egg-rolls.top:*',
-  'http://10.0.0.5:*',
+  'http://127.0.0.1:8642',
+  'http://10.0.0.5',
   '*',
   'https://egg-rolls.top/',
-  'http://127.0.0.1:8642:*',
+  'https://egg-rolls.top/api',
+  'https://u:p@egg-rolls.top',
+  'http://egg-rolls.top',
 ]) {
-  check(`same 口径 on "${entry}"`, sameEntry(entry));
+  check(`two lists agree on non-wildcard "${entry}"`, publicOk(entry) === httpOk(entry));
 }
+for (const entry of ['http://127.0.0.1:*', 'http://localhost:*', 'http://[::1]:*']) {
+  check(`wildcard "${entry}": public_origins 拒`, publicOk(entry) === false);
+  check(`wildcard "${entry}": http.allowed_origins 收`, httpOk(entry) === true);
+}
+check(
+  'wildcard on non-loopback host: 两处都拒',
+  publicOk('https://egg-rolls.top:*') === false && httpOk('https://egg-rolls.top:*') === false,
+);
+check(
+  'wildcard with explicit port: 两处都拒',
+  publicOk('http://127.0.0.1:8642:*') === false && httpOk('http://127.0.0.1:8642:*') === false,
+);
 
 // ---- 未知键 / 形状 --------------------------------------------------------
 

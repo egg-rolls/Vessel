@@ -18,10 +18,12 @@
  */
 
 import {
+  corsHeaders,
   LOOPBACK_WILDCARD_ORIGINS,
   normalizeAllowedOrigins,
   originAllowed,
   originMatchesAllowlist,
+  originMatchesEdgeHost,
   resolveHttpAllowedOrigins,
 } from './auth';
 
@@ -231,6 +233,131 @@ eq(
   'resolve: public non-loopback wildcard dropped (validator errors first)',
   resolveHttpAllowedOrigins({ publicOrigins: ['https://egg-rolls.top:*'] }),
   [...LOOPBACK_WILDCARD_ORIGINS],
+);
+
+// ---- corsHeaders（跨源读响应 / 预检）-------------------------------------
+
+const corsReq = (origin: string): Request =>
+  new Request('http://127.0.0.1:8642/v1/rpc', { headers: { origin } });
+
+{
+  // 命中回环通配：回显请求 Origin（绝不 `*`）+ Vary: Origin
+  const headers = corsHeaders(corsReq('http://127.0.0.1:8644'), ['http://127.0.0.1:*']);
+  eq(
+    'cors: wildcard hit echoes the request origin',
+    headers['Access-Control-Allow-Origin'],
+    'http://127.0.0.1:8644',
+  );
+  eq('cors: wildcard hit carries Vary: Origin', headers.Vary, 'Origin');
+  check(
+    'cors: 预检允许头含 Authorization 与 CSRF 头',
+    headers['Access-Control-Allow-Headers']?.includes('Authorization') === true &&
+      headers['Access-Control-Allow-Headers']?.includes('X-Vessel-CSRF') === true,
+    headers['Access-Control-Allow-Headers'],
+  );
+  eq(
+    'cors: 未开 credentials 时不给 Allow-Credentials',
+    headers['Access-Control-Allow-Credentials'],
+    undefined,
+  );
+
+  // 显式 origin 命中：同样回显，不是 `*`
+  const exact = corsHeaders(corsReq('https://egg-rolls.top'), ['https://egg-rolls.top']);
+  eq(
+    'cors: exact hit echoes origin',
+    exact['Access-Control-Allow-Origin'],
+    'https://egg-rolls.top',
+  );
+
+  // 不命中：连 ACAO 都不给（更不给 credentials）
+  const miss = corsHeaders(corsReq('http://192.0.2.7:9999'), ['https://egg-rolls.top']);
+  eq('cors: miss → no Access-Control-Allow-Origin', miss['Access-Control-Allow-Origin'], undefined);
+  eq(
+    'cors: miss → no Access-Control-Allow-Headers',
+    miss['Access-Control-Allow-Headers'],
+    undefined,
+  );
+  eq('cors: miss still varies on origin', miss.Vary, 'Origin');
+
+  // 通配不越界：另一个回环别名不命中
+  const alias = corsHeaders(corsReq('http://localhost:8644'), ['http://127.0.0.1:*']);
+  eq(
+    'cors: wildcard does not cover another alias',
+    alias['Access-Control-Allow-Origin'],
+    undefined,
+  );
+
+  // cookie 会话路径（平台）才给 Allow-Credentials，且必须命中白名单
+  const withCredentials = corsHeaders(corsReq('http://127.0.0.1:8644'), ['http://127.0.0.1:*'], {
+    credentials: true,
+  });
+  eq(
+    'cors: credentials=true + hit → Allow-Credentials true',
+    withCredentials['Access-Control-Allow-Credentials'],
+    'true',
+  );
+  const credentialsMiss = corsHeaders(corsReq('http://192.0.2.7:9999'), ['http://127.0.0.1:*'], {
+    credentials: true,
+  });
+  eq(
+    'cors: credentials=true + miss → 仍然不给 Allow-Credentials',
+    credentialsMiss['Access-Control-Allow-Credentials'],
+    undefined,
+  );
+
+  // 非 http(s) / 无 Origin：不发 CORS 头
+  eq(
+    'cors: file:// origin gets nothing',
+    corsHeaders(corsReq('file:///tmp/x.html'), ['http://127.0.0.1:*'])[
+      'Access-Control-Allow-Origin'
+    ],
+    undefined,
+  );
+  eq(
+    'cors: no Origin header → only Vary',
+    corsHeaders(new Request('http://127.0.0.1:8642/v1/rpc'), ['http://127.0.0.1:*']),
+    { Vary: 'Origin' },
+  );
+  eq('cors: empty allowlist → {}', corsHeaders(corsReq('http://127.0.0.1:8644'), []), {});
+}
+
+// ---- originMatchesEdgeHost（受信 relay 声明的形参入口，未接线）------------
+
+check(
+  'edge-host: 同 host 通过',
+  originMatchesEdgeHost({ origin: 'http://127.0.0.1:8642', edgeHost: '127.0.0.1:8642' }),
+);
+check(
+  'edge-host: relay 场景（Origin 8644 / Host 8642）不通过 —— 这就是待 auth-strategy 接的格子',
+  !originMatchesEdgeHost({ origin: 'http://127.0.0.1:8644', edgeHost: '127.0.0.1:8642' }),
+);
+check(
+  'edge-host: 受信声明可以覆盖比较用的 origin',
+  originMatchesEdgeHost({
+    origin: 'http://127.0.0.1:8644',
+    edgeHost: '127.0.0.1:8642',
+    trustedOriginClaim: 'http://127.0.0.1:8642',
+  }),
+);
+check(
+  'edge-host: 声明不匹配仍然拒绝',
+  !originMatchesEdgeHost({
+    origin: 'http://127.0.0.1:8644',
+    edgeHost: '127.0.0.1:8642',
+    trustedOriginClaim: 'https://evil.example',
+  }),
+);
+check(
+  'edge-host: 声明不可解析 ⇒ fail-closed',
+  !originMatchesEdgeHost({
+    origin: 'http://127.0.0.1:8642',
+    edgeHost: '127.0.0.1:8642',
+    trustedOriginClaim: 'not a url',
+  }),
+);
+check(
+  'edge-host: edgeHost=null 一律拒绝',
+  !originMatchesEdgeHost({ origin: 'http://127.0.0.1:8642', edgeHost: null }),
 );
 
 // ---- summary --------------------------------------------------------------
