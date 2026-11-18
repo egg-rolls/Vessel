@@ -2,10 +2,14 @@
  * Agent 编辑整页（canonical `agents.update`，单条批量形状）。
  *
  * name 立即生效；model / system_prompt 从下一个 Body 生效。Web 没有读取当前
- * model / system prompt 的稳定字段，因此这两项留空表示不修改，不伪造现值。
+ * model / system prompt 的稳定字段（agents.* 读 DTO 不含 record.model），因此这两项
+ * 留空表示不修改，不伪造现值。model 走 ModelPicker：空值项文案「不修改」，括号里
+ * 展示节点当前有效默认（占位）；存量 pin 若经 value 传入则原样显示 + 未注册标记，
+ * 不静默丢（当前 wire 拿不到 pin，预填取决于调用方）。
  */
 import { PageScaffold, TableToolbar } from '@vessel-agent/plugin-ui';
 import { type FormEvent, useState } from 'react';
+import { ModelPicker } from '../../components/ModelPicker';
 import { useToast } from '../../components/ToastProvider';
 import { Button, Field, Input, Section, Textarea } from '../../components/ui';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
@@ -106,14 +110,13 @@ export function AgentEditView({
                 htmlFor="agent-edit-model"
                 hint={t('agents.form.modelHint')}
               >
-                <Input
+                <ModelPicker
                   id="agent-edit-model"
-                  className="font-mono"
+                  node={node}
                   value={draft.model}
-                  onChange={(event) => set('model')(event.target.value)}
-                  placeholder="—"
-                  spellCheck={false}
-                  autoComplete="off"
+                  onChange={set('model')}
+                  emptyLabel={t('modelPicker.keepUnchanged')}
+                  aria-label={t('agents.form.model')}
                 />
               </Field>
 
