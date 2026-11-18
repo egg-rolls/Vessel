@@ -9,9 +9,15 @@
  * @module @vessel-agent/config/auth-strategies/gitee
  */
 
+import { avatarRefFrom } from './avatar-ref.js';
 import { authorizeUrlWith, exchangeCodeForIdentity } from './oauth-exchange.js';
 import { GITEE_ID_OR_LOGIN_SHAPE } from './shapes.js';
-import type { AuthStrategy, AuthStrategyEndpoints, AuthStrategyIdentity } from './types.js';
+import type {
+  AuthAvatarRef,
+  AuthStrategy,
+  AuthStrategyEndpoints,
+  AuthStrategyIdentity,
+} from './types.js';
 
 const GITEE_ENDPOINTS: AuthStrategyEndpoints = {
   authorize: 'https://gitee.com/oauth/authorize',
@@ -27,11 +33,18 @@ export function normalizeGiteeUser(raw: unknown): AuthStrategyIdentity | null {
   const login = typeof item.login === 'string' && item.login !== '' ? item.login : null;
   const display = login ?? (typeof item.name === 'string' && item.name !== '' ? item.name : null);
   const userId = String(item.id);
+  const avatar = giteeAvatarOf(raw);
   return {
     userId,
     username: display ?? `gitee-${userId}`,
     ...(login !== null ? { aliases: [login] } : {}),
+    ...(avatar !== null ? { avatar } : {}),
   };
+}
+
+/** Gitee 的 `avatar_url` 是公开地址（同样由服务端代取）。 */
+export function giteeAvatarOf(raw: unknown): AuthAvatarRef | null {
+  return avatarRefFrom(raw, 'avatar_url');
 }
 
 export const GITEE_STRATEGY: AuthStrategy = {
@@ -55,4 +68,5 @@ export const GITEE_STRATEGY: AuthStrategy = {
       identityOf: normalizeGiteeUser,
     }),
   identityOf: normalizeGiteeUser,
+  avatarOf: giteeAvatarOf,
 };

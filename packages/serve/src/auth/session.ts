@@ -11,6 +11,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { type AuthAvatarRef, publicAvatarRef } from '@vessel-agent/config';
 import { atomicWrite } from '@vessel-agent/core';
 
 /** 后端限定的身份；内容只由后端决定（如 `github:174765587`）。 */
@@ -21,6 +22,22 @@ export interface AuthSubject {
   backend: string;
   /** 后端返回的展示名；只用于界面，**不**参与身份判定。 */
   username: string | null;
+  /**
+   * 0.63 头像引用。**可安全落盘**：要么是一个公开地址，要么只是个 `graph-photo` 标记
+   * —— 令牌不在里面（令牌在进程内存里，见 `AvatarService`）。
+   */
+  avatar?: AuthAvatarRef;
+}
+
+/** 只认两种形状：公开 http(s) 地址，或 Graph 照片标记。 */
+function sanitizeAvatar(value: unknown): AuthAvatarRef | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const entry = value as Record<string, unknown>;
+  if (entry.kind === 'graph-photo') return { kind: 'graph-photo' };
+  if (entry.kind === 'url' && typeof entry.url === 'string') {
+    return publicAvatarRef(entry.url);
+  }
+  return null;
 }
 
 /** 审计用的请求元数据；落盘前先哈希。 */
@@ -322,6 +339,9 @@ function sanitizeRecord(value: unknown): PersistedSession | null {
       id: subject.id,
       backend: subject.backend,
       username: typeof subject.username === 'string' ? subject.username : null,
+      ...(sanitizeAvatar(subject.avatar) !== null
+        ? { avatar: sanitizeAvatar(subject.avatar) as AuthAvatarRef }
+        : {}),
     },
     createdAt: item.createdAt as number,
     lastSeenAt: item.lastSeenAt as number,

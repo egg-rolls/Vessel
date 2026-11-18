@@ -27,6 +27,13 @@ export interface AuthStrategyIdentity {
    * GitHub / Microsoft 的 `username` 仍然只是展示。
    */
   aliases?: string[];
+  /**
+   * 头像引用（0.63）。`undefined` = 这个 provider 没给可用头像。
+   *
+   * 与 `AuthAvatarRef` 一样是**可落盘**的：公开地址不是秘密，`graph-photo` 只是个标记
+   * （token 不在里面）。
+   */
+  avatar?: AuthAvatarRef;
 }
 
 /** 稳定失败码：只用于分支与文案，永不携带密钥。 */
@@ -37,6 +44,42 @@ export type AuthStrategyFailure =
   | 'token_exchange_failed'
   | 'user_fetch_failed'
   | 'not_allowlisted';
+
+/**
+ * 头像引用：**只描述「怎么拿到」**，不携带任何秘密，所以可以安全地落盘。
+ *
+ * 两种真实形状（0.63）：
+ * - `url`：provider 给了公开地址（GitHub / Gitee 的 `avatar_url`）。**浏览器不直连它** ——
+ *   平台用自己的 `/auth/avatar` 代取，公开地址只在服务端之间流转（前端因此不必放开
+ *   `img-src` 到外域）；
+ * - `graph-photo`：没有公开地址，必须服务端带 access token 去 Graph
+ *   `GET /me/photo/$value` 取二进制（Microsoft）。用户**没设头像**时 Graph 返回 **404**，
+ *   那是常态、不是错误。
+ */
+export type AuthAvatarRef = { kind: 'url'; url: string } | { kind: 'graph-photo' };
+
+/**
+ * OAuth 令牌（只在内存里传递，**永不**进会话文件 / 日志 / 响应体）。
+ *
+ * 为什么需要它：Microsoft 的头像必须在登录**之后**仍然能代表用户去取一次图片。这是
+ * 「token 用完即弃」的**唯一**例外，出口只有一个 —— `HandleCallbackParams.onCredentials`
+ * 交给内存级 `AvatarService`，由它按需刷新。
+ */
+export interface OAuthCredentials {
+  accessToken: string;
+  /** 刷新用；没有 `offline_access` 时不存在。 */
+  refreshToken?: string;
+  /** epoch ms；provider 没给就省略（按「不知道过期」处理）。 */
+  expiresAt?: number;
+  scope?: string;
+  /**
+   * 换新令牌用的 token 端点（由策略的端点表带出来）。
+   *
+   * 放在这里而不是往策略接口上再加一个成员：端点本来就只属于「那次登录」的上下文，
+   * 而且它在内存里传递，不进任何持久化。
+   */
+  tokenEndpoint?: string;
+}
 
 export type AuthStrategyLoginResult =
   | { ok: true; identity: AuthStrategyIdentity }
@@ -78,6 +121,13 @@ export interface HandleCallbackParams {
   timeoutMs?: number | undefined;
   /** 诊断输出；只接收非敏感事实（状态码 / provider 错误码 / user id）。 */
   log?: ((message: string) => void) | undefined;
+  /**
+   * 令牌逃生口（**全仓唯一一处**，见 `OAuthCredentials` 的注释）。
+   *
+   * 策略在丢弃 token **之前**调用一次；通用流程把它交给内存级 `AvatarService`
+   * （不落盘、不进日志）。GitHub / Gitee 永远不会调用它。
+   */
+  onCredentials?: ((credentials: OAuthCredentials) => void) | undefined;
 }
 
 /**
@@ -124,6 +174,16 @@ export interface AuthStrategy {
   handleCallback(params: HandleCallbackParams): Promise<AuthStrategyLoginResult>;
   /** 归一 provider 返回的用户对象；没有可用身份返回 null。 */
   identityOf(profile: unknown): AuthStrategyIdentity | null;
+  /**
+   * 头像引用（0.63）：**只回答「怎么拿到」**，不去取。
+   *
+   * 返回 `url` 的平台侧会代取并缓存；返回 `graph-photo` 的平台侧会带 access token 去取二进制；
+   * `null` = 这个 provider 没给可用头像（前端走兜底首字母）。
+   *
+   * 与 `identityOf` 分开是刻意的：取头像可能失败（404 / 超时 / 没设头像），但那**不是**
+   * 登录失败，绝不能让头像问题把登录带下水。
+   */
+  avatarOf(profile: unknown): AuthAvatarRef | null;
 }
 
 /** 口令后端的 kind：**唯一**需要在策略之外特殊对待的字面量（见 registry）。 */

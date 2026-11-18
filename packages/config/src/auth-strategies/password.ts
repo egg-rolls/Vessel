@@ -30,4 +30,5 @@ export const PASSWORD_STRATEGY: AuthStrategy = {
   },
   // 口令后端没有 provider 返回的 profile。
   identityOf: () => null,
+  avatarOf: () => null,
 };

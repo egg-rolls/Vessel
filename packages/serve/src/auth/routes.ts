@@ -20,10 +20,12 @@ import {
   type AuthStrategy,
   authStrategies,
   getAuthStrategy,
+  type OAuthCredentials,
   PASSWORD_STRATEGY_KIND,
   redirectAuthStrategies,
 } from '@vessel-agent/config';
 import { isLoopbackAddress, type RequestEdge } from '../gateway/auth.js';
+import { AvatarService, type AvatarServiceOptions } from './avatar.js';
 import { BootstrapCodes, PendingLogins } from './bootstrap.js';
 import { CredentialStore, normalizeRecoveryCode } from './credentials.js';
 import {
@@ -35,6 +37,7 @@ import {
   OAuthFlowStore,
   oauthCallbackPath,
   oauthStartPath,
+  refreshOAuthToken,
   resolveClientSecret,
 } from './oauth.js';
 import { mergePublicOrigins, selectPublicOrigin } from './origins.js';
@@ -121,6 +124,8 @@ export interface AuthServiceOptions extends AuthSettings {
   env?: Record<string, string | undefined> | undefined;
   /** OAuth 端点覆盖（验收桩 / 私有部署）；省略 = 用策略自带的正式端点。 */
   endpoints?: OAuthEndpoints | undefined;
+  /** 0.63：头像代取/缓存参数（TTL、体积上限、超时、fetch 覆盖）。 */
+  avatar?: AvatarServiceOptions | undefined;
   /** fetch 覆盖（验收桩）；缺省全局 fetch。 */
   fetchImpl?: typeof fetch | undefined;
   /**
@@ -172,7 +177,18 @@ export interface WhoamiBackend {
 
 /** `GET /auth/whoami` 的返回体（契约见 0.62 前端单子 C）。 */
 export interface AuthWhoami {
-  identity: { name: string; id: string; role: string } | null;
+  identity: {
+    name: string;
+    id: string;
+    role: string;
+    /**
+     * 0.63：头像地址，**同源**（`/auth/avatar?v=<会话指纹>`）；
+     * 没有头像或取不到时为 null（前端用首字母兜底）。
+     *
+     * 永远不返回第三方地址：浏览器不需要、也不应该去直连各家 CDN。
+     */
+    avatarUrl: string | null;
+  } | null;
   node: { id: string; name: string; state: string } | null;
   team: { id: string; name: string } | null;
   backends: WhoamiBackend[];
@@ -228,6 +244,21 @@ function sha256Hex(value: string): string {
 /** 登录页路径（SPA 路由）；失败一律回到这里并带 ?error=...。 */
 export const LOGIN_PATH = '/login';
 
+/** 0.63：头像代理路径（同源，浏览器只认这个）。 */
+export const AVATAR_PATH = '/auth/avatar';
+
+/**
+ * 头像的「没有」响应：**404**，永远不是 401。
+ *
+ * 理由：头像是纯装饰。让它返回 401/403 会把「没有头像」变成又一个「会话失效」提示源，
+ * 于是前端每次登录都要先安抚一个假故障。
+ */
+function avatarMiss(reason: string): Response {
+  return jsonResponse({ error: 'avatar_unavailable', reason }, 404, {
+    'cache-control': 'no-store',
+  });
+}
+
 /** 登出状态下也必须可达的路径。 */
 export function isAuthPublicPath(pathname: string): boolean {
   if (pathname === LOGIN_PATH) return true;
@@ -250,6 +281,8 @@ export class AuthService {
    */
   readonly publicOrigins: string[];
   readonly sessions: SessionStore;
+  /** 0.63：头像代取 + 缓存（含内存级 Graph 令牌来源）。 */
+  readonly avatars: AvatarService;
   readonly flows: OAuthFlowStore;
   readonly credentials: CredentialStore;
   readonly limiter: LoginLimiter;
@@ -317,6 +350,16 @@ export class AuthService {
       absoluteMs: absoluteHours * 3_600_000,
       storageFile: options.session.storageFile,
       now: options.now,
+    });
+    this.avatars = new AvatarService({
+      ...(options.avatar ?? {}),
+      log: options.avatar?.log ?? options.log ?? (() => {}),
+      ...(options.now !== undefined && options.avatar?.now === undefined
+        ? { now: options.now }
+        : {}),
+      ...(options.fetchImpl !== undefined && options.avatar?.fetchImpl === undefined
+        ? { fetchImpl: options.fetchImpl }
+        : {}),
     });
     this.flows = new OAuthFlowStore({ now: options.now });
     this.credentials = new CredentialStore({
@@ -587,6 +630,8 @@ export class AuthService {
               id: subject.id,
               // 单用户部署：能拿到会话的人就是本部署的主人，与平台 token 同侧。
               role: 'admin',
+              // 只在真有可能出图时给地址：否则前端每次都要打一次 404。
+              avatarUrl: this.avatarUrlFor(subject),
             },
       node: runtime.node ?? null,
       team: runtime.team ?? null,
@@ -597,8 +642,78 @@ export class AuthService {
   }
 
   /**
-   * 本次请求是**怎么被认出来的**：
-   * - 会话 cookie（`cookie`）；
+   * 把这次登录拿到的 Graph 令牌挂到内存里的头像服务上（**不落盘**）。
+   *
+   * `refresh` 闭包在这里闭上：它握着 client id/secret 与 token 端点，所以 `AvatarService`
+   * 不需要认识任何 provider。令牌过期时换一次；换不到就当没有头像。
+   */
+  private rememberGraphCredentials(
+    subjectId: string,
+    kind: string,
+    backend: OAuthBackendConfig,
+    credentials: OAuthCredentials,
+  ): void {
+    const refreshToken = credentials.refreshToken;
+    const tokenEndpoint = credentials.tokenEndpoint;
+    this.avatars.rememberCredentials(subjectId, {
+      accessToken: credentials.accessToken,
+      ...(credentials.expiresAt !== undefined ? { expiresAt: credentials.expiresAt } : {}),
+      ...(refreshToken !== undefined && tokenEndpoint !== undefined
+        ? {
+            refresh: async () => {
+              const clientSecret = resolveClientSecret(backend, this.env);
+              if (clientSecret === null) return null;
+              this.log(`${kind}: refreshing access token for avatar`);
+              return await refreshOAuthToken({
+                tokenEndpoint,
+                clientId: backend.clientId,
+                clientSecret,
+                refreshToken,
+                ...(this.fetchImpl !== undefined ? { fetchImpl: this.fetchImpl } : {}),
+                log: this.log,
+              });
+            },
+          }
+        : {}),
+    });
+  }
+
+  /**
+   * `/auth/avatar` 的地址（同源）+ 按身份变化的缓存键。
+   *
+   * `v` 取 `sha256(subject.id)` 前缀：换人换地址，浏览器缓存不会把上一个人的头像给下一个人。
+   * 它不是会话 id，也不可逆推出任何凭据。
+   */
+  private avatarUrlFor(subject: AuthSubject): string | null {
+    if (subject.avatar === undefined) return null;
+    return `${AVATAR_PATH}?v=${sha256Hex(subject.id).slice(0, 8)}`;
+  }
+
+  /** GET /auth/avatar：代取 + 缓存。**未登录一律 404**（不是 401）。 */
+  private async avatarResponse(req: Request, ctx: AuthRequestContext): Promise<Response> {
+    const session = this.readSession(req, ctx);
+    const subject = session === null ? null : session.snapshot.subject;
+    // 404 而不是 401：头像失败不该变成「会话失效」的又一个提示源（前端直接走兜底）。
+    if (subject === null) return avatarMiss('no_session');
+    const result = await this.avatars.get(subject.id, subject.avatar ?? null);
+    if (!result.ok) return avatarMiss(result.reason);
+    const body = new Uint8Array(result.bytes);
+    return new Response(body, {
+      status: 200,
+      headers: {
+        'content-type': result.contentType,
+        'content-length': String(body.byteLength),
+        // 私有缓存 10min：服务端还有一层 1h 缓存，浏览器这层只为少打几次请求。
+        'cache-control': 'private, max-age=600',
+        'x-content-type-options': 'nosniff',
+        // 头像也是个人信息：别让中间缓存按 URL 存到共享层。
+        vary: 'cookie',
+      },
+    });
+  }
+
+  /**
+   * 本次请求是**怎么被认出来的**：   * - 会话 cookie（`cookie`）；
    * - 平台 token（`bearer`）；
    * - 都没有（`none`）：回环匿名也是这一种（旧行为，不锁死本机）。
    */
@@ -850,6 +965,9 @@ export class AuthService {
           (description === '' ? '' : ` (${description})`),
       );
     }
+    // 0.63：只有需要「登录之后还代表用户取头像」的 provider 才会调用它（Microsoft）。
+    // 令牌只进内存（AvatarService），不落盘、不进日志；这里先接住，等身份确定后再挂到 subject 上。
+    let oauthCredentials: OAuthCredentials | null = null;
     const result = await completeOAuthLogin({
       strategy,
       config: backend,
@@ -860,6 +978,9 @@ export class AuthService {
       fetchImpl: this.fetchImpl,
       endpoints: this.endpoints,
       log: this.log,
+      onCredentials: (credentials) => {
+        oauthCredentials = credentials;
+      },
     });
     if (!result.ok) {
       return redirectResponse(`${LOGIN_PATH}?error=${result.failure}`, [clearedBinder]);
@@ -868,7 +989,12 @@ export class AuthService {
       id: `${strategy.id}:${result.userId}`,
       backend: strategy.id,
       username: result.username,
+      ...(result.avatar !== undefined ? { avatar: result.avatar } : {}),
     };
+    // Graph 令牌只活在内存里：头像过期就消失，登录状态不受影响。
+    if (oauthCredentials !== null) {
+      this.rememberGraphCredentials(subject.id, strategy.kind, backend, oauthCredentials);
+    }
     const existing = this.readSession(req, ctx);
     const issued = this.issueSession(subject, req, ctx, existing === null ? null : existing.sid);
     const policy = this.cookiePolicy(secure);
@@ -1493,6 +1619,11 @@ export class AuthService {
       if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed('GET');
       return await this.whoamiResponse(req, ctx);
     }
+    if (path === AVATAR_PATH) {
+      // 只读、同源；HEAD 也放行（浏览器/代理做探测时用）。
+      if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed('GET');
+      return await this.avatarResponse(req, ctx);
+    }
     const oauthRoute = matchOAuthRoute(path);
     if (oauthRoute !== null) {
       if (method !== 'GET') return methodNotAllowed('GET');
@@ -1516,6 +1647,7 @@ export class AuthService {
           '/auth/recovery/rotate',
           '/auth/unlock',
           '/auth/whoami',
+          AVATAR_PATH,
           ...redirectAuthStrategies().flatMap((strategy) => [
             oauthStartPath(strategy),
             oauthCallbackPath(strategy),

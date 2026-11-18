@@ -119,6 +119,22 @@ export async function exchangeCodeForIdentity(
       return { ok: false, failure: 'token_exchange_failed' };
     }
     accessToken = tokenField;
+    // 令牌逃生口（唯一一处）：只给「登录之后还要代表用户去取头像」的 provider。
+    // 通用流程把它交给内存级 AvatarService；这里不判断是谁，也不写日志。
+    if (params.onCredentials !== undefined) {
+      const refreshToken = readField(tokenPayload, 'refresh_token');
+      const expiresIn = readField(tokenPayload, 'expires_in');
+      const scopeField = readField(tokenPayload, 'scope');
+      params.onCredentials({
+        accessToken: tokenField,
+        tokenEndpoint: endpoints.token,
+        ...(typeof refreshToken === 'string' && refreshToken !== '' ? { refreshToken } : {}),
+        ...(typeof expiresIn === 'number' && Number.isFinite(expiresIn) && expiresIn > 0
+          ? { expiresAt: Date.now() + expiresIn * 1000 }
+          : {}),
+        ...(typeof scopeField === 'string' && scopeField !== '' ? { scope: scopeField } : {}),
+      });
+    }
 
     let userResponse: Response;
     try {
