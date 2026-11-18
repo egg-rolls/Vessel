@@ -395,6 +395,17 @@ export interface EdgeTrustInput {
    * 缺省 = 只信回环 socket。显式配置后**替换**缺省，不再自动包含回环。
    */
   trustedProxies?: string[] | undefined;
+  /**
+   * 0.63：`auth.allow_loopback_anonymous`（缺省 **false**）。
+   *
+   * 只有它为 `true` 时，`localDirect` 才可能为真 —— 没有这个开关，`localDirect`
+   * 在「没配反代密钥」的机器上恒假（`proxySecretAllowed()` 恒真 ⇒ `viaProxy` 恒真），
+   * 于是文档承诺过的「本机直连免登录」是一条走不到的死路。
+   *
+   * 打开它的代价写清楚：**同一台机器上的任何进程**都能不经登录访问数据面
+   * （单机开发可接受；共享机 / 公网部署不要开）。
+   */
+  allowLoopbackAnonymous?: boolean | undefined;
 }
 
 /** 一次请求的边缘事实：Host 与协议的生效值 + 可信度。 */
@@ -408,8 +419,11 @@ export interface RequestEdge {
   /** 生效协议（受信时代理说了算）。 */
   protocol: 'http' | 'https';
   /**
-   * 本机直连：回环 socket ∧ 未经受信代理 ∧ Host 指向回环。
+   * 本机直连：**显式开关 `auth.allow_loopback_anonymous` 打开** ∧ 回环 socket ∧
+   * 未被证明是受信反代（没配反代密钥就不算证明）∧ Host 指向回环。
    * 反代同机时客户端 peer 也是回环，所以只靠地址无法区分；Host 是最后一个信号。
+   *
+   * 开关缺省 false ⇒ 这个字段恒假（0.62 及以前的行为）。
    */
   localDirect: boolean;
 }
@@ -456,6 +470,9 @@ function addressInTrustedProxies(address: string, trustedProxies: string[]): boo
  * 规则（fail-closed）：`X-Forwarded-Host` / `X-Forwarded-Proto` **只在**请求来自
  * 受信代理时被采信 —— 受信 = socket 在受信代理列表内（缺省回环）∧ 反代密钥成立。
  * 其它情况一律用请求自身（`Host` / `req.url`），因此伪造 Host 不会拿到公网身份。
+ *
+ * 0.63：`localDirect` 只由 `allowLoopbackAnonymous` 显式打开时才可能为真；
+ * 该开关**只影响「是否要求身份」**，不参与 origin 闸 / 凭据闸 / 会话闸的判定。
  */
 export function resolveRequestEdge(req: Request, trust: EdgeTrustInput = {}): RequestEdge {
   const proxySecretOk = proxySecretAllowed(req, trust.proxySecret);
@@ -491,15 +508,23 @@ export function resolveRequestEdge(req: Request, trust: EdgeTrustInput = {}): Re
       hostname = '';
     }
   }
+  // 「被证明是受信反代」= 配了反代密钥 ∧ 这次带对了。未配密钥时 `proxySecretAllowed()`
+  // 恒真、`viaProxy` 只是「看起来像代理」的默认假设，**不构成证据**（否则同机反代与
+  // 本机直连永远不可区分，回环匿名就成了死代码）。
+  const proxyProven = viaProxy && typeof trust.proxySecret === 'string' && trust.proxySecret !== '';
   return {
     viaProxy,
     proxySecretOk,
     host,
     protocol,
-    // 直连 = 回环 socket ∧ 未经受信代理 ∧ Host 指回环。反代与浏览器同机时
-    // 两者都是回环 socket，只有 Host 能区分；不满足任一条就不算直连。
+    // 直连 = 显式开关 ∧ 回环 socket ∧ 未被证明是受信反代 ∧ Host 指回环。
+    // 开关缺省 false ⇒ 这里恒假，与 0.62 行为逐字一致。
     localDirect:
-      isLoopbackAddress(address) && !viaProxy && hostname !== '' && isLoopbackHostname(hostname),
+      trust.allowLoopbackAnonymous === true &&
+      isLoopbackAddress(address) &&
+      !proxyProven &&
+      hostname !== '' &&
+      isLoopbackHostname(hostname),
   };
 }
 

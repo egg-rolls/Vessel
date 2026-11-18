@@ -138,6 +138,14 @@ export interface PlatformGatewayOptions {
    * `auth.public_origins` + 三条回环通配；显式配置 = 就是它（空数组 = 不再补通配）。
    */
   httpAllowedOrigins?: string[];
+  /**
+   * 0.63：`auth.allow_loopback_anonymous`（缺省 **false**）。
+   *
+   * `true` 时「回环 socket + 回环 Host + 未被证明是受信反代」的请求算本机直连
+   * （`edge.localDirect`），数据面不再要求身份 —— 同机任何进程都能免登录访问。
+   * 只影响**是否要求身份**，不绕过 origin 闸 / 凭据闸 / CSRF。
+   */
+  allowLoopbackAnonymous?: boolean;
   /** 用于 CSP `frame-src` / `connect-src` 的 node origin。 */
   nodeOrigins: string[];
   /** 0.50：Hub 页浏览器直连的 Hub origin；只并入 CSP `connect-src`。 */

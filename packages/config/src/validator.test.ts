@@ -182,6 +182,61 @@ check(
   pathsFor({ http: 'nope' as unknown as { allowedOrigins?: string[] } }).length === 1,
 );
 
+// ---- 0.63：auth.allow_loopback_anonymous ----------------------------------
+
+function warningsFor(config: Partial<VesselConfig>): { path: string; message: string }[] {
+  return validateConfig(config as VesselConfig).warnings.map((warning) => ({
+    path: warning.path,
+    message: warning.message,
+  }));
+}
+
+check(
+  'allow_loopback_anonymous: 缺省不报错也不出 warning（安全默认）',
+  validateConfig({} as VesselConfig).errors.length === 0 &&
+    warningsFor({}).every((warning) => warning.path !== 'auth.allowLoopbackAnonymous'),
+);
+check(
+  'allow_loopback_anonymous: true 合法',
+  pathsFor({ auth: { allowLoopbackAnonymous: true } }).length === 0,
+);
+check(
+  'allow_loopback_anonymous: false 合法且不出 warning',
+  pathsFor({ auth: { allowLoopbackAnonymous: false } }).length === 0 &&
+    warningsFor({ auth: { allowLoopbackAnonymous: false } }).length === 0,
+);
+check(
+  'allow_loopback_anonymous: 非 boolean 报错（auth.allowLoopbackAnonymous）',
+  pathsFor({ auth: { allowLoopbackAnonymous: 'true' as unknown as boolean } }).includes(
+    'auth.allowLoopbackAnonymous',
+  ),
+);
+{
+  const warnings = warningsFor({ auth: { allowLoopbackAnonymous: true } });
+  const ours = warnings.filter((warning) => warning.path === 'auth.allowLoopbackAnonymous');
+  check(
+    'allow_loopback_anonymous: 开启时出恰好一条 warning',
+    ours.length === 1,
+    String(ours.length),
+  );
+  const text = ours[0]?.message ?? '';
+  check(
+    'allow_loopback_anonymous: warning 点明「任何本机进程都免登录」',
+    text.includes('any process on this machine') && text.includes('without logging in'),
+    text,
+  );
+  check(
+    'allow_loopback_anonymous: warning 点明单机可接受/共享与公网不要开',
+    text.includes('local development') && text.includes('do not enable'),
+    text,
+  );
+  check(
+    'allow_loopback_anonymous: warning 不写命令行文本',
+    !text.includes('vessel ') && !text.includes('命令'),
+    text,
+  );
+}
+
 // ---- summary --------------------------------------------------------------
 
 for (const failure of failures) console.error(`FAIL config-validator: ${failure}`);

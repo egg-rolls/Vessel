@@ -695,6 +695,49 @@ http:
 `Access-Control-Allow-Credentials: true` 只在 cookie 会话路径（平台）给出，node 侧（纯 bearer）
 不给；预检允许头包含 `Authorization` 与 `X-Vessel-CSRF`。
 
+### 2.22 `auth.allow_loopback_anonymous`（0.63：本机直连免登录，缺省 false）
+
+```yaml
+auth:
+  allow_loopback_anonymous: true   # 缺省 false；单机开发可接受，共享机/公网部署不要开
+```
+
+**它回答的问题只有一个：这个请求要不要** *身份*。打开后，「回环 socket + 回环 Host +
+未被证明是受信反代」的请求算**本机直连**（`edge.localDirect`），平台数据面
+（`/platform/rpc`、`/nodes/**`）不再要求登录；否则维持今天的严格行为 —— 配了登录后端就
+`401 session_required`。
+
+为什么需要这个开关（曾经是一条死路）：判定「是不是受信反代」用的是
+`proxySecretAllowed()`，而**没配**反代密钥时它恒真 ⇒ `viaProxy` 恒真 ⇒ 旧判据下
+`localDirect` 永远为假。也就是说 0.62 及以前，文档承诺过的「本机直连免登录」在任何一台
+没配 `gateway.proxy_secret_env` 的机器上都走不到。0.63 起改成**显式开关**：
+
+| 事实 | `localDirect` |
+|---|---|
+| 开关缺省 / `false` | **恒 false**（与 0.62 逐字一致） |
+| 开关 `true` + 回环 socket + 回环 Host + 没配反代密钥 | `true` |
+| 开关 `true` + 反代密钥**配了且带对**（`X-Forwarded-Host` 生效） | `false`（反代已证明，按反代路径走） |
+| 开关 `true` + 非回环 socket（或 Host 不是回环） | `false` |
+
+**代价（开之前先读这句）**：同一台机器上的**任何进程**（任何本地用户、任何脚本、任何
+浏览器页面）都能不经登录读写数据面。单机开发可接受；共享主机、多用户机器、公网部署
+不要开。开启时 `vessel config validate` / 启动前的配置校验会出一条 warning 复述这句话。
+
+**它还救不了「配了反代密钥却没带对」的请求**：数据面第 4 步要求 `proxySecretOk` 成立，
+这类请求会被 `401 platform_unauthorized`（`platform_unauthorized: proxy_secret_missing`）
+拒掉 —— 真机实测如此，比 `localDirect` 更严。反过来说，这个开关只对「没配密钥的回环
+直连」生效，不会给一条绕过反代密钥的路。
+
+**与 §2.21 的关系**：无关。这个开关**只**影响「是否要求身份」，不改变任何一道闸的次序与
+严格性 —— `http.allowed_origins` / `auth.public_origins` 的 Origin 白名单（§2.21）、Bearer
+凭据闸、cookie 会话的 CSRF 闸照旧逐条生效：开了这个开关，`Origin` 不在白名单里的浏览器
+请求仍然是 `403 Origin is not allowed`，变更类 cookie 请求仍然要 `x-vessel-csrf`。
+
+**顺带影响的一处**：`redirect_uri` 的来源选择在「只有多个来源且 Host 对不上」时会退回
+白名单里的回环来源，而它用的正是 `edge.localDirect`（§2.20）。所以打开这个开关也把
+「本机用 `localhost` 访问、白名单只写了 `127.0.0.1`」那格救活了 —— 回退值仍是**白名单里的
+原值**，不是请求里的字符串。
+
 ## 3. 密钥与 `_env`
 
 所有接受密钥的字段支持 `<field>_env`：

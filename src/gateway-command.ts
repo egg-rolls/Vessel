@@ -2936,6 +2936,9 @@ export async function runPlatformGatewayForeground(
         ...(config.http?.allowedOrigins !== undefined
           ? { httpAllowedOrigins: config.http.allowedOrigins }
           : {}),
+        // 0.63：`auth.allow_loopback_anonymous`（缺省 false）。只影响「回环匿名要不要
+        // 身份」，与上面两道 origin 白名单无关。
+        ...(config.auth?.allowLoopbackAnonymous === true ? { allowLoopbackAnonymous: true } : {}),
         nodeOrigins: [...new Set(nodes.map((node) => node.apiUrl))],
         // 0.50：Hub 页浏览器直连 Hub，CSP `connect-src` 必须放行 Hub origin。
         ...(Number.isInteger(hubPort) && hubPort > 0

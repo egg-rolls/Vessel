@@ -630,6 +630,22 @@ export interface AuthConfig {
   backends?: AuthBackendConfig[];
   /** 会话生命周期与落盘。 */
   session?: AuthSessionConfig;
+  /**
+   * 0.63：**本机直连免登录**开关（缺省 `false`，安全默认）。
+   *
+   * `true` 时，「回环 socket + 回环 Host + 未被证明是受信反代」的请求算作本机直连，
+   * 平台数据面不再要求身份（`/platform/rpc`、`/nodes/**`）。
+   *
+   * ```yaml
+   * auth:
+   *   allow_loopback_anonymous: true   # 单机开发可接受；共享机 / 公网部署不要开
+   * ```
+   *
+   * 代价：**同一台机器上的任何进程**都能不经登录读写数据。它只影响「是否要求身份」，
+   * 不参与 Origin 白名单（`http.allowed_origins`）、Bearer 凭据闸与 CSRF 闸的判定 ——
+   * 那三道闸的次序与严格性不变。
+   */
+  allowLoopbackAnonymous?: boolean;
 }
 
 /** 0.56：会话基座的可配置项。 */

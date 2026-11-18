@@ -425,10 +425,10 @@ const DISABLED_AUTH: PlatformAuthOptions = {
  * 文案刻意做成「可照做」的 —— 因为它就是 8644 那类 401 的自解释入口：
  * - 指到**当前这个来源**的 `/login`。会话 cookie 按 host 区分，换 origin 就换会话 ——
  *   「在 127.0.0.1 登录过、又打开公网域名」看起来就是「突然全部 401」；
- * - 不再承诺「本机直连可以免登录」：`localDirect` 要求「回环 socket ∧ 未经受信代理
- *   ∧ Host 指回环」，而**没配反代密钥**时 `proxySecretAllowed()` 恒真 ⇒ `viaProxy`
- *   为真 ⇒ `localDirect` 恒假（见 gateway/auth.ts 的 `resolveRequestEdge`）。
- *   承诺一个当前不成立的放行条件，只会让排障方向跑偏。
+ * - 不再承诺「本机直连可以免登录」：`localDirect` 只在显式打开
+ *   `auth.allow_loopback_anonymous` 后才可能为真（缺省 false）。没打开时它是**恒假**的
+ *   —— 不看配置就承诺免登录，只会让排障方向跑偏。
+ *   见 gateway/auth.ts 的 `resolveRequestEdge`。
  *
  * 只给可点击的入口与事实，不给命令行。
  */
@@ -779,6 +779,9 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
         ...(authOptions.trustedProxies !== undefined
           ? { trustedProxies: authOptions.trustedProxies }
           : {}),
+        // 0.63：`auth.allow_loopback_anonymous`（缺省 false）。只影响 `edge.localDirect`
+        // —— 也就是「回环匿名要不要身份」，不影响任何一道闸的次序。
+        ...(opts.allowLoopbackAnonymous === true ? { allowLoopbackAnonymous: true } : {}),
       });
       const extra = corsHeaders(req, httpAllowedOrigins, { credentials: true });
 

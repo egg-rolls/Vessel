@@ -1551,6 +1551,26 @@ export function validateAuthSettings(
     errors.push({ path: 'auth.enabled', message: 'auth.enabled must be a boolean' });
   }
 
+  // 0.63：本机直连免登录。缺省 false 是安全默认；打开时出一句 warning 把代价说清楚
+  // （单机开发可接受、共享机/公网部署不要开）。
+  if (raw.allowLoopbackAnonymous !== undefined && typeof raw.allowLoopbackAnonymous !== 'boolean') {
+    errors.push({
+      path: 'auth.allowLoopbackAnonymous',
+      message:
+        'auth.allowLoopbackAnonymous must be a boolean (auth.allow_loopback_anonymous: true|false)',
+      value: raw.allowLoopbackAnonymous,
+    });
+  } else if (raw.allowLoopbackAnonymous === true) {
+    warnings.push({
+      path: 'auth.allowLoopbackAnonymous',
+      message:
+        'auth.allow_loopback_anonymous is on: any process on this machine can reach the data ' +
+        'plane without logging in (loopback socket + loopback Host, no proxy secret proof). ' +
+        'Acceptable for single-user local development; do not enable on a shared host or a ' +
+        'public deployment.',
+    });
+  }
+
   if (raw.publicOrigin !== undefined) {
     const message = publicOriginError(raw.publicOrigin);
     if (message !== null) {
@@ -3461,6 +3481,8 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'trustedProxies',
     'backends',
     'session',
+    // 0.63：本机直连免登录（缺省 false）。
+    'allowLoopbackAnonymous',
   ],
   connect: ['token', 'tokenEnv', 'caFile'],
   // 0.61：`http.allowed_origins`（访问控制；缺省回落 auth.public_origins）。

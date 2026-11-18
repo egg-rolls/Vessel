@@ -25,6 +25,7 @@ import {
   originMatchesAllowlist,
   originMatchesEdgeHost,
   resolveHttpAllowedOrigins,
+  resolveRequestEdge,
 } from './auth';
 
 let passed = 0;
@@ -359,6 +360,127 @@ check(
   'edge-host: edgeHost=null 一律拒绝',
   !originMatchesEdgeHost({ origin: 'http://127.0.0.1:8642', edgeHost: null }),
 );
+
+// ---- 0.63：auth.allow_loopback_anonymous → edge.localDirect -----------------
+//
+// 这四组就是验收单上的四条。背景（auth-strategy 的代码+实测双证）：
+// 没配 `proxySecret` 时 `proxySecretAllowed()` 恒真 ⇒ `viaProxy` 恒真 ⇒ 旧判据下
+// `localDirect` 恒假，文档承诺的「本机直连免登录」是死代码。现在改成显式开关。
+
+const loopbackReq = (headers: Record<string, string> = {}): Request =>
+  new Request('http://127.0.0.1:8642/platform/rpc', {
+    method: 'POST',
+    headers: { host: '127.0.0.1:8642', ...headers },
+  });
+
+// ① 开关关（缺省）+ 回环 + 回环 Host ⇒ false
+check(
+  'localDirect ①: 缺省（开关关）⇒ false',
+  resolveRequestEdge(loopbackReq(), { address: '127.0.0.1' }).localDirect === false,
+);
+check(
+  'localDirect ①: 显式 false ⇒ false',
+  resolveRequestEdge(loopbackReq(), { address: '127.0.0.1', allowLoopbackAnonymous: false })
+    .localDirect === false,
+);
+check(
+  'localDirect ①: 开关关时配了/没配密钥都一样 false',
+  resolveRequestEdge(loopbackReq(), { address: '127.0.0.1', proxySecret: 's3cret' }).localDirect ===
+    false,
+);
+
+// ② 开关开 + 回环 + 回环 Host + 未配密钥 ⇒ true
+check(
+  'localDirect ②: 开关开 + 回环 socket + 回环 Host + 没配密钥 ⇒ true',
+  resolveRequestEdge(loopbackReq(), { address: '127.0.0.1', allowLoopbackAnonymous: true })
+    .localDirect === true,
+);
+check(
+  'localDirect ②: [::1] 与 ::ffff:127.0.0.1 同样算回环',
+  resolveRequestEdge(loopbackReq({ host: '[::1]:8642' }), {
+    address: '::1',
+    allowLoopbackAnonymous: true,
+  }).localDirect === true &&
+    resolveRequestEdge(loopbackReq(), {
+      address: '::ffff:127.0.0.1',
+      allowLoopbackAnonymous: true,
+    }).localDirect === true,
+);
+check(
+  'localDirect ②: localhost Host 也算回环',
+  resolveRequestEdge(loopbackReq({ host: 'localhost:8642' }), {
+    address: '127.0.0.1',
+    allowLoopbackAnonymous: true,
+  }).localDirect === true,
+);
+
+// ③ 开关开 + 密钥配了并带对 + X-Forwarded-Host: egg-rolls.top ⇒ false
+const proxyReq = loopbackReq({
+  host: '127.0.0.1:8642',
+  'x-forwarded-host': 'egg-rolls.top',
+  'x-vessel-proxy-secret': 'right-secret',
+});
+check(
+  'localDirect ③: 开关开 + 密钥带对 + X-Forwarded-Host ⇒ false（受信反代不算直连）',
+  resolveRequestEdge(proxyReq, {
+    address: '127.0.0.1',
+    proxySecret: 'right-secret',
+    allowLoopbackAnonymous: true,
+  }).localDirect === false,
+);
+check(
+  // 只是边缘事实：平台数据面还有第 4 步（`auth.loopback` 要求 proxySecretOk），密钥带错
+  // 会在那一步被 `platform_unauthorized / proxy_secret_missing` 拒掉 —— 真机实测 401。
+  'localDirect ③b: 密钥带错 ⇒ 未证明是反代 ⇒ 边缘事实仍算直连（数据面第 4 步另兜底）',
+  resolveRequestEdge(loopbackReq({ 'x-vessel-proxy-secret': 'wrong' }), {
+    address: '127.0.0.1',
+    proxySecret: 'right-secret',
+    allowLoopbackAnonymous: true,
+  }).localDirect === true,
+);
+
+// ④ 开关开 + 非回环 socket ⇒ false
+check(
+  'localDirect ④: 开关开 + 非回环 socket ⇒ false',
+  resolveRequestEdge(loopbackReq(), { address: '203.0.113.9', allowLoopbackAnonymous: true })
+    .localDirect === false,
+);
+check(
+  'localDirect ④: 开关开 + 非回环 Host ⇒ false',
+  resolveRequestEdge(loopbackReq({ host: 'egg-rolls.top' }), {
+    address: '127.0.0.1',
+    allowLoopbackAnonymous: true,
+  }).localDirect === false,
+);
+check(
+  'localDirect ④: 开关开 + 没有 Host ⇒ false',
+  resolveRequestEdge(new Request('http://127.0.0.1:8642/platform/rpc'), {
+    address: '127.0.0.1',
+    allowLoopbackAnonymous: true,
+  }).localDirect === false,
+);
+check(
+  'localDirect ④: 开关开 + trustedProxies 不含本地址 ⇒ false',
+  resolveRequestEdge(loopbackReq(), {
+    address: '10.1.2.3',
+    trustedProxies: ['10.1.2.'],
+    allowLoopbackAnonymous: true,
+  }).localDirect === false,
+);
+
+// 开关只影响 localDirect，不改 origin/凭据两道闸的判定（同一份 edge 事实喂进去）
+{
+  const edge = resolveRequestEdge(loopbackReq({ origin: 'http://192.0.2.7:9999' }), {
+    address: '127.0.0.1',
+    allowLoopbackAnonymous: true,
+  });
+  check(
+    'localDirect 开关不放过非白名单 Origin（origin 闸照旧）',
+    !originAllowed(loopbackReq({ host: '127.0.0.1:8642', origin: 'http://192.0.2.7:9999' }), [
+      'https://egg-rolls.top',
+    ]) && edge.localDirect === true,
+  );
+}
 
 // ---- summary --------------------------------------------------------------
 
