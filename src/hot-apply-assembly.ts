@@ -175,8 +175,9 @@ export function registerRuntimeNoticeHook(
  *
  * 尾注会告诉模型「怎么读图片/文档、能点哪些 action」，所以必须只说真话。判据是
  * **`host.listTools()` 里那个 `media` 工具的 schema**：
- * - 这正是模型看到的工具面的来源（`execution-unit` 的 `listToolSchemas()`
- *   就是 `pluginHost.listTools()`），断言与事实同源；
+ * - 请求 tools[] 是这份宿主面的会话起点快照（`execution-unit` 的 `ensureToolPin`），
+ *   执行侧仍 live `getTool` —— 尾注跟 live 面走：中途新增的 media 工具 best-effort
+ *   可调用（工具面变更卡会告知），移除则尾注如实降级，断言与可执行事实同源；
  * - 插件选择名单（`PluginSelection.names`）**不够**：media 进了加载集也会因为
  *   `enabled: false` 或「零可用后端」而在 `install()` 里**一个工具都不注册**
  *   （`plugins/media/media/src/index.ts`），名单说「加载了」而模型其实没有工具；

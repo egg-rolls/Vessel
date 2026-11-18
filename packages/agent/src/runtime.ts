@@ -51,7 +51,6 @@ import { resolveMemberCwd } from './member-cwd.js';
 import { buildMemberBodyPorts } from './member-ports.js';
 import { createSelfCardDeltaHook, selfCardIdentityOf } from './self-card-delta.js';
 import { HUMAN_PRINCIPAL, SYSTEM_PRINCIPAL } from './team-address.js';
-import { createToolSurfaceDeltaHook } from './tool-surface-delta.js';
 import type {
   AgentMessage,
   AgentRole,
@@ -1041,16 +1040,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
           ),
       }),
     );
-    // 0.52：工具面变更同样只追加一条环境信息（scope `tools`），不重建 body、不动 system。
-    // 基线 = 这具 body spawn 时注册进宿主的清单（模型第一次请求看到的就是它）；真值每轮从
-    // **同一个** `pluginHost` 现读 —— `applyToolsToEntry` 在轮边界原地替换的就是它，
-    // 所以热刷新、权限档切换、inbox 开关变化都会被如实 diff 出来。
-    pluginHost.registerHook(
-      createToolSurfaceDeltaHook({
-        baseline: surface.tools.map((tool) => tool.name),
-        current: () => pluginHost.listTools().map((tool) => tool.name),
-      }),
-    );
+    // tools-body-snapshot：工具面变更卡改由 core EU 生产（ExecutionUnit.appendToolSurfaceNotice，
+    // 对会话 tools[] 快照 diff live 宿主）—— 旧 createToolSurfaceDeltaHook 在此撤注册防双卡。
     const events = new MemoryEventStream();
     if (inbox !== undefined && inboxState !== undefined) {
       pluginHost.registerHook(

@@ -4,6 +4,9 @@
  * 与 `pii/notice.ts` 同一套路：core 直接写出一张 `vessel:notice` 尾消息（追加，不改历史），
  * 正文首行是 `scope: summary`，明细行以 `  · ` 开头。作用域词 `context` 的定义是
  * 「系统提示词 / Self Card / 上下文本身变了」，见 `packages/agent/src/env-info-scope.ts`。
+ * 本文件也产出 scope `tools` 的卡（tools-body-snapshot：请求 tools[] 是会话起点快照，
+ * 中途工具面变化只追加卡）——线格式是 agent `formatEnvInfo` 的**字面量副本**，
+ * 对拍义务见 `renderToolSurfaceNotice` 的注释（core 不能 import agent，依赖方向反了）。
  *
  * 语言：模型侧默认 en，UI 侧按用户语言渲染同一份文案。
  *
@@ -100,4 +103,65 @@ export function renderContextWindowExceededNotice(
     DETAIL_MARK +
       'if it is still over after compaction: start a new session or pop that huge output',
   ].join('\n');
+}
+
+/**
+ * 明细行数上限。**字面量副本**：必须与 agent `ENV_INFO_DETAILS_MAX`（env-info-scope.ts）
+ * 及 Web `ENV_NOTICE_DETAILS_MAX`（apps/web/src/domains/chat/env-notice.ts）相同（10）。
+ */
+const TOOL_SURFACE_DETAILS_MAX = 10;
+
+/** 新增工具 description 的最大长度（D3：一句用法，压成一行；防脏数据撑爆行）。 */
+const TOOL_DESCRIPTION_MAX = 80;
+
+/** description → 行内文本：压成一行 + 裁长（同 model-change-notice `modelValueText` 的口径）。 */
+function toolDescriptionText(description: string): string {
+  const flat = description.replace(/\s+/g, ' ').trim();
+  return flat.length <= TOOL_DESCRIPTION_MAX ? flat : `${flat.slice(0, TOOL_DESCRIPTION_MAX)}…`;
+}
+
+/**
+ * 工具面变更环境信息卡（tools-body-snapshot，唯一生产者 = core EU 的
+ * `ExecutionUnit.appendToolSurfaceNotice`）。
+ *
+ * 请求 tools[] 是会话起点快照、会话内不变；中途宿主工具面增删只以本卡告知。
+ * 首行摘要写清生效点（新会话 / 新 body 才进请求列表）；新增行带一句 description
+ * 讲用法（≤80 字符，不带 inputSchema —— 参数靠 best-effort 调用 + 校验错误反馈）；
+ * 移除行明说「调用会被拒绝」（执行侧 live getTool miss ⇒ tool_not_found，run 继续）。
+ *
+ * **对拍义务**（原 C3 对拍脚本已按宪法删除，改动本函数时人工核对，
+ * 口径见 `docs/architecture/env-info-append-only.md`）：
+ * - 首词 `tools` 必须在 agent `ENV_INFO_SCOPES` 与 Web `ENV_NOTICE_SCOPES` 里都认得
+ *   （卡头标签走 i18n `chat.env.scope.tools`，en / zh-CN）；
+ * - {@link DETAIL_MARK} 必须与 `ENV_INFO_DETAIL_MARK` 及 Web 明细标记逐字相同（两空格 + `·`）；
+ * - {@link TOOL_SURFACE_DETAILS_MAX} 行收口 + 「and N more」与 `formatEnvInfo` 同形。
+ *
+ * 文案 en（模型侧默认，与 renderModelChangeNotice 一致）；名字集合由调用方排序，
+ * 同一批变更永远拼出同一个字符串（去重的前提）。
+ */
+export function renderToolSurfaceNotice(
+  added: readonly { name: string; description?: string }[],
+  removed: readonly string[],
+): string {
+  const parts: string[] = [];
+  if (added.length > 0) parts.push(`${String(added.length)} added`);
+  if (removed.length > 0) parts.push(`${String(removed.length)} removed`);
+  const head =
+    `tools: ${parts.join(', ')}; ` +
+    'the request tool list is a session-start snapshot and stays fixed until a new session/body';
+  const details = [
+    ...added.map((tool) => {
+      const description =
+        tool.description !== undefined && tool.description.trim() !== ''
+          ? ` — ${toolDescriptionText(tool.description)}`
+          : '';
+      return `+ ${tool.name}${description}`;
+    }),
+    ...removed.map((name) => `- ${name} (removed; calls will be rejected)`),
+  ];
+  const kept = details.slice(0, TOOL_SURFACE_DETAILS_MAX);
+  const dropped = details.length - kept.length;
+  const lines = kept.map((detail) => `${DETAIL_MARK}${detail}`);
+  if (dropped > 0) lines.push(`${DETAIL_MARK}and ${String(dropped)} more`);
+  return [head, ...lines].join('\n');
 }

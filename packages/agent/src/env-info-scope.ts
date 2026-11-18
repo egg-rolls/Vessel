@@ -7,7 +7,7 @@
  * （Web 的 `env-notice.ts` → `EnvCard`），只用 **scope** 区分种类。
  *
  * 为什么词表要收在一个零依赖的叶模块里：
- * - 生产者有三个（`self-card-delta` / `tool-surface-delta` / 以后的 restart），各自拼字符串
+ * - 生产者有三个（`self-card-delta` / core EU 的工具面快照卡 / 以后的 restart），各自拼字符串
  *   就会各自拼出不同的首词 —— Web 的 scope 判定按**行首 token** 做，一个词对不上，那条卡
  *   静默掉回兜底的「上下文」，正文看着正常、标签是错的（最难发现的那种坏）。
  * - Web 侧（`apps/web/src/domains/chat/env-notice.ts`）必须认得这里的每一个词。两边分属

@@ -131,8 +131,9 @@ function actionEnumOf(schema: Record<string, unknown>): string[] {
 /**
  * 宿主工具面 → 媒体三档（纯函数，装配层只负责把 `host.listTools()` 递进来）。
  *
- * 判据是**模型看到的同一份工具面**：`ExecutionUnit.listToolSchemas()` 也是
- * `pluginHost.listTools()`，所以断言与事实同源（插件名单、插件目录都不算数）。
+ * 判据是**可执行的 live 工具面**：请求 tools[] 是它的会话起点快照
+ * （`ExecutionUnit.ensureToolPin`），执行侧仍 live `getTool`，所以尾注跟 live 面走
+ * 与 best-effort 可调用事实同源（插件名单、插件目录都不算数）。
  */
 export function readMediaSurface(tools: readonly ToolDefinition[]): MediaSurface {
   try {

@@ -97,4 +97,4 @@ rotate 之后，前三种机制的基准全部归零（新 body ⇒ 新 session 
 1. ADR-104 D6 与现码不一致（见决策 B 末条）：`context_projection` / `projection_pressure` 是否有在途实现。
 2. rotate 失败（spawn / 交接失败）时的回滚与用户可见文案。
 3. 投射替换链路上的异常降级：本文按 `withClearedToolResults` 默认形态推断为「一条都不清」，未找到显式 catch。
-4. 工具层现状（`read` 的 `has_more`/`next_offset`、`bash` 限长、`grep` 限匹配数）**不在本仓库**：packages 里没有内置 read/bash/grep 实现，工具面由 harness 注入（`packages/agent/src/tool-surface-delta.ts`）。
+4. 工具层现状（`read` 的 `has_more`/`next_offset`、`bash` 限长、`grep` 限匹配数）**不在本仓库**：packages 里没有内置 read/bash/grep 实现，工具面由 harness 注入；工具面变更卡由 core EU 生产（`packages/core/src/runtime/execution-unit.ts` 的 `ensureToolPin` / `appendToolSurfaceNotice`）。
