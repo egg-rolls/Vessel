@@ -450,7 +450,13 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
         });
         const status = node.status ?? record.status;
         const provider = record.provider ?? config.provider?.name;
-        const model = record.model ?? config.provider?.model;
+        // model 读远端节点自报的 capabilities.model；本地 config 只作兜底
+        // （health 响应没有顶层 model，旧写法显示的其实是本地配置）。
+        const capabilities =
+          typeof node.capabilities === 'object' && node.capabilities !== null
+            ? (node.capabilities as Record<string, unknown>)
+            : {};
+        const model = capabilities.model ?? config.provider?.model;
         checks.push({
           name: 'runtime',
           status: status === 'error' ? 'fail' : 'ok',

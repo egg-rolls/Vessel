@@ -117,7 +117,7 @@ unmapped_messages 如实记录，不编区间；backfill 出来的老段 tokens_
 
 1. **system 冻结**：hook 写 `ctx.systemPrompt` 被忽略，发 `hook.system_prompt_ignored`。
 2. **只能追加**：`PromptPrefixGuard` 对比上一次请求；无 reason 的中间重写发 `prompt.prefix_changed`；`VESSEL_STRICT_PREFIX=1` 时抛 `PromptPrefixChangedError`。
-3. **合法 reason**：`compaction` / `resume` / `branch` / `session_switch` / `system_revision` / `tools_changed` / `model_changed` / `context_trim`。
+3. **合法 reason**：`compaction` / `branch` / `session_switch` / `context_trim`。`system_revision` / `tools_changed` / `model_changed` / `resume` 已从词表删除（见 [message-invariants](message-invariants.md)）：这些语义只能靠「追加环境卡」或「`new` 开新会话」表达，resume 是续段不是新段。
 4. 动态元数据全部是尾部 `vessel:*` 消息，不改 system；Web 默认隐藏，Settings → Display 可按类打开。
 5. 静态审计：`bun run check:prompt-prefix` 禁止新增 `additionalContext:` 与 `ctx.systemPrompt =`。
 

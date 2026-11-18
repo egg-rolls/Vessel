@@ -1016,12 +1016,15 @@ export class MemberExecutionHost implements MemberExecutionPort {
     const selfCardIdentity = { member };
     pluginHost.registerHook(
       createSelfCardDeltaHook({
-        baseline: selfCardIdentityOf(member, mode),
+        // 基线 / 真值都用**有效 model**（显式 pin ?? 宿主缺省），与 Self Card 同口径：
+        // 记录缺省跟随 config 后 record.model 多为 undefined，若按记录值做基线，
+        // 卡显示 X 而相信值是 (none)，之后设 pin 会误报「(none) → X」。
+        baseline: selfCardIdentityOf({ ...member, model }, mode),
         // 权限档每轮现算：Team 成员在 `forceBridgeForTeams` 下会被强制 bridge，是「进队 /
         // 转正」直接改出来的身份变化，不能只报 team 那一行。
         current: () =>
           selfCardIdentityOf(
-            selfCardIdentity.member,
+            { ...selfCardIdentity.member, model: selfCardIdentity.member.model ?? this.model },
             this.effectivePermissionMode(selfCardIdentity.member),
           ),
       }),
@@ -1788,7 +1791,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
   noteSelfCardIdentity(member: MemberExecutionMember): number {
     const entry = this.entries.get(member.session_id);
     if (entry === undefined || entry.memberId !== member.id) return 0;
-    entry.selfCardIdentity.member = member;
+    // 真值盒存入有效 model（显式 pin ?? 宿主缺省），与 delta 基线 / Self Card 同口径。
+    entry.selfCardIdentity.member = { ...member, model: member.model ?? this.model };
     return 1;
   }
 

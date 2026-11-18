@@ -159,7 +159,7 @@ export interface MemberStatus {
 }
 
 /**
- * 快照持久化记录（v4）。
+ * 快照持久化记录（v5）。
  *
  * `bodies[]` 是唯一真相；`current_body` / `body_history` 保留为旧数据的兼容视图。
  * 与 MemberStatus 分离：不把 model / system_prompt 等配置泄漏进对外 DTO。
@@ -181,6 +181,7 @@ export interface PersistedAgentRecord {
   membership: MemberMembership;
   /** 所属 Team（0.19 S3；unbound 时缺省） */
   team_id?: string;
+  /** 显式 pin；缺省跟随当前 config（v5 起只在用户显式指定时落库） */
   model?: string;
   system_prompt?: string;
   /**
@@ -1482,8 +1483,6 @@ export interface AgentServiceOptions {
   snapshot?: AgentSnapshotOptions;
   /** 可选的进程内事件流出口；同时仍可 subscribe */
   events?: EventStream;
-  /** 创建成员未显式指定 model 时使用的“有效 model”（落库，供 resume 使用） */
-  defaultModel?: string;
   /** 创建成员未显式指定 owner 时的默认 owner；不持久化 */
   ownerId?: string;
   /**

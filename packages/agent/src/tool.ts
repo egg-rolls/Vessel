@@ -462,7 +462,10 @@ export function createAgentTool(
           description: 'hire | send | close | list | rotate | read',
         },
         name: { type: 'string', description: 'create/hire: display name' },
-        model: { type: 'string', description: 'create/hire: model override' },
+        model: {
+          type: 'string',
+          description: 'create/hire: explicit model pin (omit to follow the node default model)',
+        },
         system_prompt: { type: 'string', description: 'create/hire: optional system prompt' },
         visibility: {
           type: 'string',
@@ -474,7 +477,8 @@ export function createAgentTool(
         members: {
           type: 'array',
           description:
-            'create/hire: [{name?, model?, system_prompt?, visibility?}]; ' +
+            'create/hire: [{name?, model?, system_prompt?, visibility?}] ' +
+            '(model = explicit pin, omit to follow the node default model); ' +
             'close: [member id or session id]',
         },
         to: {

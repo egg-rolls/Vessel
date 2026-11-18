@@ -961,7 +961,6 @@ export class AgentServiceImpl implements AgentService {
   private readonly rotations = new Map<string, RotationState>();
   private readonly listeners = new Set<AgentEventListener>();
   private readonly eventStream: EventStream | undefined;
-  private readonly defaultModel: string | undefined;
   /** `create` 未显式指定 owner 时的默认 owner；不持久化 */
   private readonly defaultOwner: string;
   /** `new` 未显式传 workspace 时的默认 workspace；无配置声明时为 undefined */
@@ -995,7 +994,6 @@ export class AgentServiceImpl implements AgentService {
     this.newId = options.newId ?? randomUUID;
     this.logger = options.logger ?? noopLogger;
     this.eventStream = options.events;
-    this.defaultModel = options.defaultModel;
     this.defaultOwner = options.ownerId ?? DEFAULT_OWNER;
     this.defaultWorkspace = nonEmpty(options.defaultWorkspace)
       ? options.defaultWorkspace
@@ -1442,8 +1440,9 @@ export class AgentServiceImpl implements AgentService {
     const memberCwd = this.createMemberCwd(chosenTeam);
     if (memberCwd !== undefined) record.cwd = memberCwd;
     if (parentId !== undefined) record.parentId = parentId;
-    // 落“有效 model”：未显式指定时用 wiring 默认值，resume 才不会回流到空
-    const model = optionalString(input.model) ?? this.defaultModel;
+    // 只存显式 pin；缺省跟随当前 config（宿主 model），不把默认值烧进记录 ——
+    // 烧死默认值会让 config 换模型后旧记录永远优先。
+    const model = optionalString(input.model);
     if (model !== undefined) record.model = model;
     const systemPrompt = optionalString(input.systemPrompt);
     if (systemPrompt !== undefined) record.systemPrompt = systemPrompt;
@@ -1592,7 +1591,8 @@ export class AgentServiceImpl implements AgentService {
           ? source.visibility
           : resolveVisibility(input.visibility, source.visibility);
     }
-    const model = optionalString(input.model) ?? source.model ?? this.defaultModel;
+    // 只存显式 pin：input 显式 > 源的显式 pin（派生 = 身份拷贝，pin 随源）；缺省跟随 config。
+    const model = optionalString(input.model) ?? source.model;
     const systemPrompt = optionalString(input.systemPrompt) ?? source.systemPrompt;
     const spawnedBy = optionalString(input.spawnedBy);
 
@@ -2176,8 +2176,8 @@ export class AgentServiceImpl implements AgentService {
     };
     if (source.systemPrompt !== undefined) record.systemPrompt = source.systemPrompt;
     if (source.parentId !== undefined) record.parentId = source.parentId;
+    // 只继承源的显式 pin；缺省跟随当前 config，不落库。
     if (source.model !== undefined) record.model = source.model;
-    else if (this.defaultModel !== undefined) record.model = this.defaultModel;
     // 派生成员与源同一个 Team ⇒ 同一个成员 cwd（0.51 Bug 1：cwd 也是身份快照的一部分）
     if (source.cwd !== undefined) record.cwd = source.cwd;
 

@@ -23,20 +23,21 @@ import {
   type PersistedBindingRecord,
 } from './types.js';
 
-/** 快照文件版本；当前写入 4，读取兼容 1 / 2 / 3 */
-export const AGENT_SNAPSHOT_VERSION = 4;
+/** 快照文件版本；当前写入 5，读取兼容 1 / 2 / 3 / 4 */
+export const AGENT_SNAPSHOT_VERSION = 5;
 
-/** 快照文件形状（v4；v1 / v2 的 members 读时按 owner 推断 role） */
+/** 快照文件形状（v5；v1 / v2 的 members 读时按 owner 推断 role） */
 export interface AgentSnapshotFile {
   version: number;
   updated_at: number;
   members: PersistedAgentRecord[];
 }
 
-/** 旧版本备份后缀（首次写 v4 前创建，供旧二进制回滚） */
+/** 旧版本备份后缀（首次写新版前创建，供旧二进制回滚） */
 const V1_BACKUP_SUFFIX = '.v1.bak';
 const V2_BACKUP_SUFFIX = '.v2.bak';
 const V3_BACKUP_SUFFIX = '.v3.bak';
+const V4_BACKUP_SUFFIX = '.v4.bak';
 
 /**
  * 快照里合法的 role 字面量。
@@ -270,7 +271,9 @@ function parseMember(value: unknown, version: number): PersistedAgentRecord | un
   if (teamId !== undefined) record.team_id = teamId;
   const parentId = optionalString(value.parent_id);
   if (parentId !== undefined) record.parent_id = parentId;
-  const model = optionalString(value.model);
+  // model 仅在显式 pin 时存在（v5 语义）。v1–v4 把「有效 model」烧进记录，无法区分
+  // 显式 pin 与旧默认值 → 读侧一次性全清（D2 批准）；写回即 v5，之后不再丢。
+  const model = version >= AGENT_SNAPSHOT_VERSION ? optionalString(value.model) : undefined;
   if (model !== undefined) record.model = model;
   const systemPrompt = optionalString(value.system_prompt);
   if (systemPrompt !== undefined) record.system_prompt = systemPrompt;
@@ -327,7 +330,7 @@ export class AgentSnapshotStore {
   /** 写入串行链；值表示该次 write 是否成功 */
   private chain: Promise<boolean> = Promise.resolve(true);
   /** 读到旧版且尚未成功备份时置位；write 前必须补做，否则放弃写入（避免无回滚） */
-  private backupPendingFor: 1 | 2 | 3 | undefined;
+  private backupPendingFor: 1 | 2 | 3 | 4 | undefined;
   /** 是否已探测过现有文件版本（未 load 直接 write 时也要补备份） */
   private backupChecked = false;
   /** 损坏文件隔离失败时置位：write 直接放弃，避免覆盖唯一恢复副本 */
@@ -352,7 +355,7 @@ export class AgentSnapshotStore {
     return this.filePath;
   }
 
-  /** 读取；缺失返回空列表；损坏 / 版本不符先隔离再返回空列表；v1 / v2 可读并在首次写 v3 前备份 */
+  /** 读取；缺失返回空列表；损坏 / 版本不符先隔离再返回空列表；v1–v4 可读并在首次写 v5 前备份 */
   async load(): Promise<PersistedAgentRecord[]> {
     let raw: string;
     try {
@@ -387,6 +390,7 @@ export class AgentSnapshotStore {
       (parsed.version !== 1 &&
         parsed.version !== 2 &&
         parsed.version !== 3 &&
+        parsed.version !== 4 &&
         parsed.version !== AGENT_SNAPSHOT_VERSION)
     ) {
       const detail = `unsupported snapshot version: ${String(isRecord(parsed) ? parsed.version : 'n/a')}`;
@@ -408,24 +412,44 @@ export class AgentSnapshotStore {
       return [];
     }
 
-    // 旧二进制无法读 v4；首次写 v4 前先留一份对应版本的备份。
-    if (parsed.version === 1 || parsed.version === 2 || parsed.version === 3) {
+    // 旧二进制无法读 v5；首次写 v5 前先留一份对应版本的备份。
+    if (
+      parsed.version === 1 ||
+      parsed.version === 2 ||
+      parsed.version === 3 ||
+      parsed.version === 4
+    ) {
       this.backupPendingFor = parsed.version;
       await this.ensureBackup(parsed.version);
     }
 
     const members: PersistedAgentRecord[] = [];
     let skipped = 0;
+    let modelFollowMigrated = 0;
     for (const entry of parsed.members) {
       const member = parseMember(entry, parsed.version);
       if (member === undefined) {
         skipped += 1;
         continue;
       }
+      // v5 迁移计数：旧快照里带 model 的条目（parseMember 已按版本丢弃）。
+      if (
+        parsed.version < AGENT_SNAPSHOT_VERSION &&
+        isRecord(entry) &&
+        optionalString(entry.model) !== undefined
+      ) {
+        modelFollowMigrated += 1;
+      }
       members.push(member);
     }
     if (skipped > 0) {
       this.logger.warn('agent.snapshot.members_skipped', { path: this.filePath, count: skipped });
+    }
+    if (modelFollowMigrated > 0) {
+      this.logger.warn('agent.snapshot.model_follow_migrated', {
+        path: this.filePath,
+        count: modelFollowMigrated,
+      });
     }
     return members;
   }
@@ -461,13 +485,19 @@ export class AgentSnapshotStore {
   }
 
   /**
-   * 确保旧版本备份存在。返回 false 表示备份失败；调用方据此决定是否放弃写 v3。
+   * 确保旧版本备份存在。返回 false 表示备份失败；调用方据此决定是否放弃写新版。
    * 备份已存在视为完成（幂等）。
    */
-  private async ensureBackup(version: 1 | 2 | 3): Promise<boolean> {
+  private async ensureBackup(version: 1 | 2 | 3 | 4): Promise<boolean> {
     if (this.backupPendingFor !== version) return true;
     const suffix =
-      version === 1 ? V1_BACKUP_SUFFIX : version === 2 ? V2_BACKUP_SUFFIX : V3_BACKUP_SUFFIX;
+      version === 1
+        ? V1_BACKUP_SUFFIX
+        : version === 2
+          ? V2_BACKUP_SUFFIX
+          : version === 3
+            ? V3_BACKUP_SUFFIX
+            : V4_BACKUP_SUFFIX;
     const backupPath = `${this.filePath}${suffix}`;
     try {
       if (!(await fileExists(backupPath))) {
@@ -500,7 +530,7 @@ export class AgentSnapshotStore {
     } catch {
       return true;
     }
-    if (version !== 1 && version !== 2 && version !== 3) return true;
+    if (version !== 1 && version !== 2 && version !== 3 && version !== 4) return true;
     this.backupPendingFor = version;
     return this.ensureBackup(version);
   }

@@ -426,7 +426,6 @@ export async function createAgentServiceWiring(
     // 0.27（spec §5.1）：执行只经 tenant scheduler 的 executor，不再有第二套队列。
     scheduler: options.scheduler,
     ...(options.runStore !== undefined ? { runStore: options.runStore } : {}),
-    defaultModel: options.model,
     ownerId,
     // 成员生命周期事件与父入口同源；缺省时只有 subscribe，不进入父流。
     ...(options.parentEvents !== undefined ? { events: options.parentEvents } : {}),

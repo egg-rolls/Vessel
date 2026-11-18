@@ -175,6 +175,7 @@ import type { LiveRunSnapshotLike, RunControlLike, RunControlSnapshotLike } from
 import type { TeamControlLike } from './team-control.js';
 import {
   type ConfigGatewayOptionsLike,
+  type ConfigSnapshotLike,
   DEFAULT_TENANT_ID,
   extractToken,
   type GatewayAuthLike,
@@ -1462,10 +1463,45 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const pluginHost = (): PluginHost | undefined => opts.pluginHost ?? runtime?.pluginHost;
 
   /**
+   * config 视图里的当前 provider/model（`nodeInfo.capabilities` 的可选槽，doctor 等
+   * 远端读侧据此显示节点实际模型）。nodeInfo 是同步的，而 `opts.config.snapshot`
+   * 可能异步（bootstrap 注入）：构造时预热一次，每次 nodeInfo 再刷新；异步结果落缓存
+   * 供下一次读，同步注入（cli serve）则恒读活值。未注入 config / 读取失败不填槽。
+   * 值与 config.get 同源（snapshot 已脱敏；provider.name/model 非敏感键，不被掩码）。
+   */
+  let configProvider: string | undefined;
+  let configModel: string | undefined;
+  const refreshConfigCapabilities = (): void => {
+    if (opts.config === undefined) return;
+    const apply = (snapshot: ConfigSnapshotLike): void => {
+      const provider = (snapshot.config as { provider?: { name?: unknown; model?: unknown } })
+        .provider;
+      configProvider =
+        typeof provider?.name === 'string' && provider.name !== '' ? provider.name : undefined;
+      configModel =
+        typeof provider?.model === 'string' && provider.model !== '' ? provider.model : undefined;
+    };
+    try {
+      const result = opts.config.snapshot(defaultTenantId);
+      if (result instanceof Promise) {
+        void result.then(apply, () => {
+          // 读取失败保留上一次的值（槽可选，不影响 health 形状）。
+        });
+      } else {
+        apply(result);
+      }
+    } catch {
+      // 同步抛错同样只保留旧值。
+    }
+  };
+  refreshConfigCapabilities();
+
+  /**
    * 节点公开信息（单执行面）：运行态与工具面都来自本进程唯一 runtime /
    * plugin host。`node_id` / `pid` / `started_at` / `endpoint` / `role` 是进程级字段。
    */
   const nodeInfo = (): NodeInfo => {
+    refreshConfigCapabilities();
     const snapshot = runtimeSnapshot();
     const scheduler =
       typeof snapshot?.scheduler === 'object' && snapshot.scheduler !== null
@@ -1505,6 +1541,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ...(currentSessionId !== undefined ? { current_session_id: currentSessionId } : {}),
       capabilities: {
         tools,
+        // 可选槽：当前 config 的 provider/model（未注入 config 时不填）。
+        ...(configProvider !== undefined ? { provider: configProvider } : {}),
+        ...(configModel !== undefined ? { model: configModel } : {}),
         max_concurrency: 1,
         protocol: PROTOCOL_VERSION,
       },
