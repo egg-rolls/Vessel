@@ -1,0 +1,96 @@
+/*
+ * Embed 档样式（plugin-embed 契约 §9）。
+ *
+ * - 包在 @layer plugin.model-registry：宿主 index.css 预留了 `plugin` 槽位
+ *   （legacy 与 utilities 之间），plugin.model-registry 嵌套其下，层序天然位于
+ *   宿主 utilities 之前（层序按首次声明排定，槽位必须由宿主声明）；
+ * - 只产 Tailwind utilities（class 选择器，天然只作用于挂了的元素）；不写
+ *   :root / html / body / * / 未作用域元素选择器；
+ * - @theme inline 只做别名映射，不发射变量（不定义 --color-* 宿主 token）；
+ *   utility 直接引用宿主 tokens（var(--ink) 等），暗色自动生效；
+ * - theme.css 落 theme 层（与宿主同层同值）；plugin-ui 组件的 utilities 由宿主
+ *   扫描生成，不重复。
+ */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(plugin.model-registry);
+@layer theme, base, legacy, plugin.model-registry, utilities;
+@source "./";
+
+@theme inline {
+  /* 间距：tokens 的 4px 基准；p-1 = 4px，p-4 = 16px。 */
+  --spacing: var(--space-1);
+  --spacing-control: var(--control-h);
+  --spacing-touch: var(--touch-target);
+
+  /* 颜色：值全部来自宿主 tokens。 */
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-raised: var(--surface-raised);
+  --color-surface-hover: var(--surface-hover);
+  --color-sunken: var(--surface-sunken);
+  --color-deep: var(--surface-deep);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--ok);
+  --color-success-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-amber: var(--amber);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-hover: var(--hover-tint);
+  --color-press: var(--press-tint);
+  --color-scrim: var(--scrim);
+
+  /* 圆角 / 字号：values 仍来自宿主 tokens。 */
+  --radius-xs: var(--shape-xs);
+  --radius-sm: var(--shape-sm);
+  --radius-md: var(--shape-md);
+  --radius-lg: var(--shape-lg);
+  --radius-xl: var(--shape-xl);
+
+  --text-2xs: var(--size-2xs);
+  --text-2xs--line-height: 1.5;
+  --text-xs: var(--size-xs);
+  --text-xs--line-height: 1.45;
+  --text-sm: var(--size-sm);
+  --text-sm--line-height: 1.5;
+  --text-md: var(--size-md);
+  --text-md--line-height: 1.5;
+  --text-base: var(--size-base);
+  --text-base--line-height: 1.6;
+  --text-lg: var(--size-lg);
+  --text-lg--line-height: 1.4;
+  --text-xl: var(--size-xl);
+  --text-xl--line-height: 1.35;
+  --text-2xl: var(--size-2xl);
+  --text-2xl--line-height: 1.3;
+  --text-body: var(--size-base);
+  --text-body--line-height: 1.6;
+  --text-title: var(--size-2xl);
+  --text-title--line-height: 1.3;
+
+  /* 阴影 / 焦点环 */
+  --shadow-elev-1: var(--elev-1);
+  --shadow-elev-2: var(--elev-2);
+  --shadow-elev-3: var(--elev-3);
+  --shadow-elev-4: var(--elev-4);
+  --shadow-elev-inset: var(--elev-inset);
+  --shadow-focus: var(--focus-ring);
+
+  /* 断点：与宿主 legacy 的 680px 小屏 / 1023px 宽屏断点对齐。 */
+  --breakpoint-compact: 680px;
+  --breakpoint-wide: 1023px;
+
+  /* 语义宽度 */
+  --container-search: var(--search-max-w);
+  --container-prose: 72ch;
+}
