@@ -215,15 +215,6 @@ export function TeamsListColumn({ state, panes }: TeamsListColumnProps) {
             : undefined
         }
       >
-        {hiddenArchivedTeams > 0 && (
-          // 提示而不是静默：隐藏是「默认视图的选择」，用户必须能知道东西还在、去哪打开。
-          <p
-            className="m-0 rounded-sm border border-line-strong bg-sunken px-3 py-2 text-sm text-muted"
-            role="status"
-          >
-            {t('archive.hidden.teams', { count: hiddenArchivedTeams })}
-          </p>
-        )}
         {body}
       </SidebarShell>
       {!compact && !panes.disabled('teamList') && (
