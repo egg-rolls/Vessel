@@ -88,6 +88,12 @@
 
 ## 怎么跑与门禁
 
+> **本仓无门禁 / 无测试 / 无探针**（宪法第三、四条）。**权威顺序**：**不做什么以个人侧宪法为准**；
+> **做什么 / 怎么做以本文件（共享侧）为准**；两者冲突时**以「不干」为准** —— 共享侧任何条款若授予
+> 宪法**禁止**的能力（例如允许存在测试 / 探针 / 门禁脚本），该条款**当场失效并删除**，不留「待补」、
+> 不留作历史。自检：能改写成「不许 X」的是禁止条款（个人侧优先）；只能写成「要 X / 用 X」的是
+> 操作条款（本文件优先）。
+
 ```bash
 bun install
 bun run build                                # = typecheck + lint（biome ci .）
@@ -102,12 +108,12 @@ bun run scripts/version.ts --check                        # 版本一致性（�
 bun run scripts/docs-find.ts --goal "add RPC method"      # 按目标检索文档
 ```
 
-**本仓没有 gate / test / probe。** 宪法第三、四条：废除全部 gate / test / probe；`*.test.*` /
-`*.spec.*` / `__tests__/` / 测试夹具一律不进仓库，存量随触碰删除、不补等价物；AI 自写的验证
-脚本不作为正确性依据。**「把某条命令跑一遍、全绿」不构成验收**；也不要再往仓库里加测试、探针
-或 `check:*` 条目 —— 2026-11-16 那 83 个 `scripts/check-*.ts` 已按宪法删除，别照旧文档重建。
+**本仓没有 gate / test / probe，也不要再造。** 宪法第三、四条：废除全部 gate / test / probe；
+`*.test.*` / `*.spec.*` / `__tests__/` / 测试夹具一律不进仓库，存量随触碰删除、不补等价物；
+AI 自写的验证脚本不作为正确性依据。**「把某条命令跑一遍、全绿」不构成验收**；也不要往仓库里加
+测试、探针或静态断言脚本 —— 别照旧文档重建（旧文档里那些条目已经作废）。
 上面清单里 `bun run build` 是**唯一**的构建期检查（`typecheck` 覆盖根 + `examples/`，`lint` 是
-`bunx @biomejs/biome ci .`）；其余都是工具 / 手工冒烟，不是门禁。CI 异步，不作为 push 前置。
+`bunx @biomejs/biome ci .`）；其余都是工具 / 手工冒烟。CI 异步，不作为 push 前置。
 完整命令见 [README.md](README.md) 的「快速开始」；CI / 发布见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md) 与 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。
 
 ### 验收形态（唯一正确的做法）
@@ -122,8 +128,8 @@ verifier 的硬约束：
   **绝不碰** `~/.vessel`、8642、8644 与用户真实数据。
 - **只覆盖用户可见行为与真实数据形态**：验「用户看到什么、真实文件长什么样」，不验内部调用
   序列；不追覆盖率、不造 fixture 树。
-- **反例只在 verifier 的临时副本里做**：要证明「改坏必须红」，在临时副本里改坏再跑一次，
-  **不许把改坏的副本或测试文件留在仓库**。
+- **反例只在 verifier 的临时副本里做**：要证明「改坏确实会被发现」，在临时副本里改坏再跑一次
+  构建 / 冒烟；**不许把改坏的副本、也不许把任何测试文件留在仓库**。
 - **别只信退出码**：本机（WSL → Windows bun）实测 `process.exit(3)` 与未捕获异常都可能返回
   `0`。所以除了 exit code，还要贴**失败摘要或产物读数**（构建类要有产物证据，例如
   `apps/web/dist` 存在且非空）。CI 的 Linux bun 才稳定按退出码生效。
@@ -132,7 +138,7 @@ verifier 的硬约束：
   形态、用户可见行为），不在仓库里落成脚本。
 - **Web 时间线可见性的唯一判定点**：`apps/web/src/domains/chat/chat-visibility.ts`（`minimal / normal / debug`），live 与 history 必须共用同一份判定（旧 bug：live 藏、history 落盘后又冒出来）。
 - **历史工具配对的唯一表示层**：`apps/web/src/domains/chat/history-tools.ts` 按 `tool_call_id` 把 assistant 的 `tool_calls[]` 与 `role:'tool'` 配对；「有调用无结果不得空白」「孤立结果不丢输出」是既有约定。时间线卡片的唯一表示层是 `domains/chat/StreamCard.tsx`（运行态与终止态共用）。
-- **不变量分两级**：硬不变量零容忍；软不变量用 baseline + delta，只要求不新增；例外必须有 owner 与到期日，不做永久 allowlist。
+- **不变量分两级**：硬不变量零容忍；软不变量只许收敛、不许新增，每一项都要有 owner 与到期日，不做永久 allowlist（不落 baseline 脚本，比对靠 verifier 的读数）。
 - **模型审查是 search，不是 gate**：review 产出证据与契约修正；验收结论必须落在可复现的读数上（构建产物、真实数据形态、用户可见行为），不能落在「我跑过一遍」上。
 - **工具版本以锁文件为准**：`bun install --frozen-lockfile` 或 `bunx <pkg>@<lock 版本>`，不用漂移的本地版本定义基线。
 
