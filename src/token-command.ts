@@ -164,6 +164,18 @@ export async function tokenShowCommand(
   const parsed = parseTokenPurpose(command.purpose, command.id);
   if (!parsed.ok) return { exitCode: 2, stdout: '', stderr: parsed.error };
   const purpose = parsed.purpose;
+  // model-registry：credentials 是插件内部用途（凭证库 AES key，进程内从 root-secret
+  // 派生），没有 config/env token 源。显式拒绝，避免落进下方 platform 兜底把平台
+  // token 误标成 credentials 回显。
+  if (purpose.kind === 'credentials') {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr:
+        'purpose "credentials" is plugin-internal (model-registry credential-store key, ' +
+        'derived in-process from the root secret); there is no config/env token to show here.',
+    };
+  }
   let resolution: TokenResolution;
   let extraNote: string | undefined;
 
