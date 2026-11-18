@@ -46,6 +46,12 @@
  * 文案 0.56 订正：以前只说「建议改用 edit」，而 **edit 干不了建文件 / 追加** —— 那条建议本身
  * 就把模型推回 heredoc（今天连续三次写变形的直接原因）。现在按用途分流：
  * **建文件 / 追加用 `write`，局部改代码用 `edit`**。
+ *
+ * 传输层（WSL 启动器修复）：Windows 宿主上 `bash` 若解析到 system32 的 WSL 启动器，`-c` 的
+ * 字符串会先被外层 shell 在 spawn cwd 解析一遍 —— 单引号里的反引号 / `$()` 也被提前展开，
+ * 还在 cwd（多为仓库根）留下 0 字节垃圾文件。spawnBash 对此改走 base64 传输（编码后超长则
+ * 落系统临时目录随机名脚本、进程退出后立即删除），命令文本逐字节到达内层 bash、只解析一次；
+ * 已修复路径不再追加反引号 / heredoc 元字符那两条警告。非 Windows 与 Git Bash 的 argv 逐字节不变。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -846,16 +852,21 @@ const BACKTICK_WARN =
 /**
  * 组装这条命令的写文件警告；无命中返回 `undefined`。
  * 返回值是**一整行**（不含换行），多命中已合并 —— 一次调用只追加这一行。
+ * WSL 启动器已走修复传输（base64 / 临时脚本，单次解析）时，反引号 / heredoc 元字符不再被
+ * 外层提前展开，BACKTICK_WARN / HEREDOC_META_WARN 不追加；WRITE_FILE_WARN（bash 不校验
+ * 写进去的内容）与传输无关，仍然保留。
  */
 function bashWriteWarning(command: string): string | undefined {
   if (command === '') return undefined;
   const parts: string[] = [];
   if (commandWritesFile(command)) parts.push(WRITE_FILE_WARN);
-  if (HEREDOC_START.test(command) && hasExpandedMeta(command)) {
-    // 这条已经说清「反引号会被预处理」，再叠一条反引号警告就是啰嗦
-    parts.push(HEREDOC_META_WARN);
-  } else if (command.includes(BACKTICK)) {
-    parts.push(BACKTICK_WARN);
+  if (!isWslBashLauncher()) {
+    if (HEREDOC_START.test(command) && hasExpandedMeta(command)) {
+      // 这条已经说清「反引号会被预处理」，再叠一条反引号警告就是啰嗦
+      parts.push(HEREDOC_META_WARN);
+    } else if (command.includes(BACKTICK)) {
+      parts.push(BACKTICK_WARN);
+    }
   }
   if (parts.length === 0) return undefined;
   return `${BASH_WRITE_WARN_PREFIX}${parts.join(' ')}`;
@@ -994,26 +1005,147 @@ function formatBashResult(result: {
   return parts.join('\n');
 }
 
-/** 启动 `bash -c`；返回类型交给 Bun.spawn 推导（手写 Subprocess 泛型参数极易踩错） */
+// ── bash 传输层（WSL 启动器修复）──────────────────────
+//
+// Windows 宿主上 'bash' 可能解析到 C:\Windows\System32\bash.exe（WSL 启动器）。启动器会把
+// -c 后面的字符串先在 spawn 的 cwd 过一遍外层 shell 解析，再交给 WSL 里的 /bin/bash：
+// 反引号 / $() / ${} 即使写在单引号里也被提前展开，命令替换里的 `> f` 还会在 cwd（多为
+// 仓库根）留下 0 字节垃圾文件。Linux/mac 原生 bash 与 Git Bash 的 bash.exe 只解析一次，
+// 没有这个问题 —— 所以只修 WSL 启动器这一条路径，其余 argv 逐字节不变。
+//
+// 修法只改传输、不改命令文本：整条命令 base64 后交给内层 bash 解码 source，逐字节到达、
+// 只解析一次（等同原生 Linux bash -c）；base64 字母表不含 shell 元字符，外层解析动不了它。
+// 编码后超过 BASH_B64_MAX 字节时，命令文本落系统临时目录的随机名脚本（绝不落仓库），
+// 内层 bash source 它，进程退出后立即删除。检测失败 / 临时文件写失败一律回退原 argv，不抛错。
+
+/** WSL 启动器判定缓存：第一次探测后不再重复（非 win32 恒 false，不探测） */
+let wslBashLauncher: boolean | undefined;
+
+/** bash 是否解析到 WSL 启动器：判据是 Bun.which('bash') 的路径含 system32；探测失败按非启动器处理 */
+function isWslBashLauncher(): boolean {
+  if (process.platform !== 'win32') return false;
+  if (wslBashLauncher === undefined) {
+    try {
+      const bashPath = Bun.which('bash');
+      wslBashLauncher = (bashPath ?? '').toLowerCase().includes('system32');
+    } catch {
+      wslBashLauncher = false;
+    }
+  }
+  return wslBashLauncher;
+}
+
+/** base64 传输的编码后长度上限：超过改走临时脚本（Windows 命令行约 32k，留足余量） */
+const BASH_B64_MAX = 8000;
+
+/** C:\foo\bar → /mnt/c/foo/bar；非盘符路径（UNC 等）返回 undefined，调用方回退现状 */
+function windowsToWslPath(p: string): string | undefined {
+  const match = /^([A-Za-z]):[\\/](.*)$/.exec(p);
+  const drive = match?.[1];
+  const rest = match?.[2];
+  if (drive === undefined || rest === undefined) return undefined;
+  return `/mnt/${drive.toLowerCase()}/${rest.replace(/\\/g, '/')}`;
+}
+
+/** POSIX 单引号包裹（内部撇号按 '\'' 拼接）：临时目录路径里的用户名可能带空格 / 撇号 */
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+interface BashTransport {
+  cmd: string[];
+  /** 超长回退落盘的临时脚本；进程退出后立即删除 */
+  scriptPath?: string;
+}
+
+/** 选命令传输：WSL 启动器走 base64 / 临时脚本，其余保持原 argv 逐字节不变 */
+function buildBashTransport(command: string): BashTransport {
+  const plain: BashTransport = { cmd: ['bash', '-c', command] };
+  if (!isWslBashLauncher()) return plain;
+  const encoded = Buffer.from(command, 'utf-8').toString('base64');
+  if (encoded.length <= BASH_B64_MAX) {
+    return { cmd: ['bash', '-c', `source <(printf %s ${encoded} | base64 -d)`] };
+  }
+  // 超长：命令文本落系统临时目录随机名脚本。source 指令本身很短，仍走 base64 包装，
+  // 脚本路径转成 /mnt/… 并单引号包住 —— 不依赖启动器对脚本路径参数的未验证行为。
+  try {
+    const scriptPath = path.join(os.tmpdir(), `vessel-bash-${randomUUID().slice(0, 8)}.sh`);
+    const wslPath = windowsToWslPath(scriptPath);
+    if (wslPath === undefined) return plain;
+    writeFileSync(scriptPath, command, { encoding: 'utf-8', mode: 0o600 });
+    const sourceLine = `source ${shellSingleQuote(wslPath)}`;
+    const sourceEncoded = Buffer.from(sourceLine, 'utf-8').toString('base64');
+    return {
+      cmd: ['bash', '-c', `source <(printf %s ${sourceEncoded} | base64 -d)`],
+      scriptPath,
+    };
+  } catch {
+    // 临时目录不可写等：回退现状，不抛错
+    return plain;
+  }
+}
+
+/** 待清理的临时脚本（进程退出时同步兜底扫一遍，命令文本别滞留临时目录） */
+const pendingTempScripts = new Set<string>();
+let tempScriptSweepInstalled = false;
+
+function cleanupTempScript(scriptPath: string): void {
+  pendingTempScripts.delete(scriptPath);
+  try {
+    unlinkSync(scriptPath);
+  } catch {
+    // 已删除
+  }
+}
+
+/** bash 退出（正常 / 被杀 / 异常）后立即删脚本；另挂进程退出兜底（'exit' 里 Promise 不再跑） */
+function watchTempScript(scriptPath: string, exited: Promise<number>): void {
+  pendingTempScripts.add(scriptPath);
+  if (!tempScriptSweepInstalled) {
+    tempScriptSweepInstalled = true;
+    process.once('exit', () => {
+      for (const pending of pendingTempScripts) {
+        try {
+          unlinkSync(pending);
+        } catch {
+          // 退出路径 best-effort
+        }
+      }
+    });
+  }
+  const cleanup = (): void => cleanupTempScript(scriptPath);
+  void exited.then(cleanup, cleanup);
+}
+
+/** 启动 bash（WSL 启动器时传输走 buildBashTransport）；返回类型交给 Bun.spawn 推导（手写 Subprocess 泛型参数极易踩错） */
 function spawnBash(command: string, cwd: string | undefined, options?: { ignoreStdin?: boolean }) {
-  return Bun.spawn({
-    cmd: ['bash', '-c', command],
-    cwd,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    /**
-     * 异步作业**不**继承父进程 stdin。
-     *
-     * 它活过工具调用，继承下来的 stdin 就是宿主（TUI / gateway）那一个 —— 一条会读 stdin 的
-     * 命令会把宿主的输入流吃掉，真机里的表现是「起了后台作业后 REPL 立刻退出」（stdin 被
-     * 子进程共享后父侧读到 EOF）。同步路径保持继承：那是 0.54 的行为，不传 async 时不变。
-     */
-    ...(options?.ignoreStdin === true ? { stdin: 'ignore' as const } : {}),
-    // Windows + WSL bash 默认会弹出控制台窗口；隐藏它（POSIX 忽略该选项）
-    windowsHide: true,
-    // POSIX 下建独立进程组，取消时能连同孙进程一起杀
-    detached: process.platform !== 'win32',
-  });
+  const transport = buildBashTransport(command);
+  try {
+    const proc = Bun.spawn({
+      cmd: transport.cmd,
+      cwd,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      /**
+       * 异步作业**不**继承父进程 stdin。
+       *
+       * 它活过工具调用，继承下来的 stdin 就是宿主（TUI / gateway）那一个 —— 一条会读 stdin 的
+       * 命令会把宿主的输入流吃掉，真机里的表现是「起了后台作业后 REPL 立刻退出」（stdin 被
+       * 子进程共享后父侧读到 EOF）。同步路径保持继承：那是 0.54 的行为，不传 async 时不变。
+       */
+      ...(options?.ignoreStdin === true ? { stdin: 'ignore' as const } : {}),
+      // Windows + WSL bash 默认会弹出控制台窗口；隐藏它（POSIX 忽略该选项）
+      windowsHide: true,
+      // POSIX 下建独立进程组，取消时能连同孙进程一起杀
+      detached: process.platform !== 'win32',
+    });
+    if (transport.scriptPath !== undefined) watchTempScript(transport.scriptPath, proc.exited);
+    return proc;
+  } catch (error) {
+    // 进程没起来：已落盘的临时脚本立即删，别滞留命令文本
+    if (transport.scriptPath !== undefined) cleanupTempScript(transport.scriptPath);
+    throw error;
+  }
 }
 
 /** 杀掉 bash 及其派生的孙进程（POSIX 用进程组；Windows 用 taskkill /T） */
