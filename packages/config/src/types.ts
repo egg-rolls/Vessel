@@ -21,6 +21,47 @@ export interface ProviderConfig {
   promptCache?: boolean;
 }
 
+/**
+ * models 注册表里的每模型配置（model-registry §2.1）。
+ * 唯一可选字段是 promptCache 三态；不加 temperature/maxTokens（请求参数沿用全局 provider.*）。
+ */
+export interface ModelEntry {
+  /** true 强开 / false 强关 / 缺省 auto（openai 兼容按模型名含 claude；anthropic 默认 true） */
+  promptCache?: boolean;
+}
+
+/**
+ * models.vendors.<id> 条目：protocol + 端点 + 凭证引用 + 模型清单。
+ * id 即名称（kebab-case，同插件 id 形状），不加 display-name；鉴权由 protocol 蕴含，
+ * 不另设 auth 字段；不给 vendor 新增明文 api_key（legacy provider.apiKey 原样保留）。
+ */
+export interface VendorEntry {
+  /** 已注册的 provider 工厂名（openai / anthropic / google / ... 或自定义 provider 插件名） */
+  protocol: string;
+  /** 可选；缺省用 protocol 工厂的默认 baseUrl */
+  baseUrl?: string;
+  /** credentials.json 凭证引用 id（值不进 yaml）；与 apiKeyEnv 互斥 */
+  credential?: string;
+  /** 环境变量间接引用（ADR-050 §4）；与 credential 互斥 */
+  apiKeyEnv?: string;
+  /** wire model id（可含 `/`）→ 每模型配置；至少 1 条 */
+  models: Record<string, ModelEntry>;
+}
+
+/**
+ * models 块：模型 / 厂商 / 别名元数据（无密钥值，user/project 层可叠）。
+ * 缺省 = 纯 legacy provider.* 行为；旧配置由 synthesizeLegacyRegistry 折成
+ * `legacy:<provider.name>` 隐式条目，不改也能跑。
+ */
+export interface ModelsConfig {
+  /** 有效默认 ref（别名或 vendor/model）；必须命中注册条目（P0 起严格） */
+  default?: string;
+  /** vendor id（^[a-z0-9][a-z0-9-]{0,63}$；`legacy:` 前缀保留）→ 厂商条目 */
+  vendors?: Record<string, VendorEntry>;
+  /** 扁平别名：alias → vendor/model；别名 key 不含 `/`，不允许别名 → 别名 */
+  aliases?: Record<string, string>;
+}
+
 /** Guardrail 配置 */
 export interface GuardrailConfig {
   name: string;
@@ -1029,6 +1070,8 @@ export interface VesselConfig {
    */
   timeline?: TimelineConfig;
   provider?: ProviderConfig;
+  /** models 注册表（厂商 / 模型 / 别名元数据，无密钥值）；缺省 = 纯 legacy provider.* 行为 */
+  models?: ModelsConfig;
   agent?: AgentConfig;
   guardrails?: GuardrailConfig[];
   hooks?: HookConfig[];
@@ -1135,6 +1178,8 @@ export interface UserConfig {
   defaultModel?: string;
   /** 多 provider Key */
   providers?: Record<string, { apiKey: string; baseUrl?: string; model?: string }>;
+  /** models 注册表（元数据，无密钥值；与项目层深合并） */
+  models?: ModelsConfig;
 }
 
 /** 配置校验结果 */

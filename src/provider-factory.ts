@@ -8,11 +8,15 @@
  * - 未注册 provider：有 `provider.baseUrl` → OpenAI 兼容 + 一次性 stderr info；
  *   无 baseUrl → `ProviderConfigError`（fail-fast）；
  * - 已知 provider 缺 model 时 fail-fast（不全局回退 gpt-4）。
+ *
+ * model-registry P0：默认 model 解析经 registry resolver（legacy 合成 → 同实例同 model，
+ * 无 models 块的存量配置行为字节等价）；路由 / 多厂商 / 实例缓存属 P1，不在这里。
  */
 
 import {
-  defaultModelForProvider,
   resolveEffectiveApiKey,
+  resolveModelRef,
+  synthesizeLegacyRegistry,
   type VesselConfig,
 } from '../packages/config/src/index';
 import {
@@ -98,13 +102,19 @@ export async function createProvider(
   }
 
   const providerName = config.provider?.name ?? 'openai';
-  const providerModel = config.provider?.model ?? defaultModelForProvider(providerName);
-  if (!providerModel) {
+  // 默认解析经 resolver（P0 接缝）：legacy 合成 → 同实例同 model。env 优先级（契约 §2.6
+  // 冻结）：VESSEL_MODEL 与 models.default 并存时 env 赢——env 层已把 VESSEL_MODEL 写进
+  // provider.model，这里把 env model 值作为 ref 解析即实现该优先级。
+  const envModel = process.env.VESSEL_MODEL;
+  const registry = synthesizeLegacyRegistry(config);
+  const resolved = resolveModelRef(registry, envModel ? envModel : undefined);
+  if (!resolved?.wireModel) {
     throw new ProviderConfigError(
       `Provider "${providerName}" has no model configured. ` +
         'Set provider.model in vessel.yaml or ~/.vessel/config.yaml.',
     );
   }
+  const providerModel = resolved.wireModel;
 
   const providerBaseUrl = config.provider?.baseUrl ?? '';
   const apiKey = resolveEffectiveApiKey(config);
@@ -118,7 +128,7 @@ export async function createProvider(
         temperature: config.provider?.temperature,
         max_tokens: config.provider?.maxTokens,
         timeout_ms: config.provider?.timeoutMs,
-        prompt_cache: config.provider?.promptCache,
+        prompt_cache: resolved.promptCache,
       }),
       providerName,
       providerModel,
@@ -146,7 +156,7 @@ export async function createProvider(
         temperature: config.provider?.temperature,
         max_tokens: config.provider?.maxTokens,
         timeout_ms: config.provider?.timeoutMs,
-        prompt_cache: config.provider?.promptCache,
+        prompt_cache: resolved.promptCache,
       }),
       providerName,
       providerModel,
@@ -163,7 +173,7 @@ export async function createProvider(
       model: providerModel,
       temperature: config.provider?.temperature,
       max_tokens: config.provider?.maxTokens,
-      prompt_cache: config.provider?.promptCache,
+      prompt_cache: resolved.promptCache,
     }),
     providerName,
     providerModel,

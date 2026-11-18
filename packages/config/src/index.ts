@@ -109,6 +109,15 @@ export {
   snakeToCamel,
 } from './loader.js';
 export {
+  ModelRefError,
+  type ModelRefErrorCode,
+  type ModelRegistrySnapshot,
+  type RegistryVendor,
+  type ResolvedModel,
+  resolveModelRef,
+  synthesizeLegacyRegistry,
+} from './model-registry.js';
+export {
   addressKey,
   classifyHost,
   classifyOrigin,
