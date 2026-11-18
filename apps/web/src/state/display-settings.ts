@@ -31,7 +31,64 @@ export const DISPLAY_SETTINGS: readonly DisplaySettingDef[] = [
     options: ['top', 'bottom', 'both', 'none'],
   },
   { id: 'language', key: 'ui.language', type: 'enum', options: ['zh-CN', 'en'] },
+  // 日志中枢（gateway）：与 observability.showProcessErrors 同属 observability，
+  // 但单独一个分组。modules 是 map，一期只读（不走 config.set）。
+  {
+    id: 'logLevel',
+    key: 'observability.log.level',
+    type: 'enum',
+    options: ['debug', 'info', 'warn', 'error'],
+  },
+  {
+    id: 'logColor',
+    key: 'observability.log.color',
+    type: 'enum',
+    options: ['auto', 'always', 'never'],
+  },
+  { id: 'logFormat', key: 'observability.log.format', type: 'enum', options: ['pretty', 'json'] },
+  {
+    id: 'logTime',
+    key: 'observability.log.time',
+    type: 'enum',
+    options: ['auto', 'none', 'clock', 'iso'],
+  },
 ];
+
+/** 日志分组键前缀（Display 页据此拆出「日志（gateway）」分组）。 */
+export const LOG_SETTING_PREFIX = 'observability.log.';
+
+/** config.get 回报的一条日志环境变量覆盖（与 core LogEnvOverride 同形）。 */
+export interface LogEnvOverrideInfo {
+  env: string;
+  key: string;
+  value: string;
+}
+
+/** 读 config.get 的 logEnvOverrides（可选字段；缺失 / 形状不对返回空）。 */
+export function readLogEnvOverrides(source: unknown): LogEnvOverrideInfo[] {
+  if (!isRecord(source) || !Array.isArray(source.logEnvOverrides)) return [];
+  const overrides: LogEnvOverrideInfo[] = [];
+  for (const entry of source.logEnvOverrides) {
+    if (
+      isRecord(entry) &&
+      typeof entry.env === 'string' &&
+      typeof entry.key === 'string' &&
+      typeof entry.value === 'string'
+    ) {
+      overrides.push({ env: entry.env, key: entry.key, value: entry.value });
+    }
+  }
+  return overrides;
+}
+
+/** 读 observability.log.modules（只读展示；键是事件名前缀，值是级别）。 */
+export function readLogModules(source: unknown): [string, string][] {
+  const value = readPath(source, 'observability.log.modules');
+  if (!isRecord(value)) return [];
+  return Object.entries(value)
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    .sort(([a], [b]) => a.localeCompare(b));
+}
 
 const BY_KEY = new Map(DISPLAY_SETTINGS.map((setting) => [setting.key, setting]));
 

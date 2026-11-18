@@ -28,6 +28,7 @@ import {
   isUiLanguage,
   isUiStatusBars,
   isUiVerbosity,
+  LOG_ENUM_VALUES,
   setUserConfigValue,
 } from './ui-settings';
 import { ui } from './ui-style';
@@ -242,6 +243,15 @@ export async function configSetCommand(
       };
     }
     parsed = value === 'true';
+  } else if (LOG_ENUM_VALUES[key] !== undefined) {
+    const allowed = LOG_ENUM_VALUES[key] ?? [];
+    if (!allowed.includes(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidEnum', { key, allowed: allowed.join(' | ') }),
+      };
+    }
   } else if (value.trim() === '') {
     return {
       exitCode: 2,

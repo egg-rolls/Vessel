@@ -274,6 +274,7 @@ export const en: Record<MessageKey, string> = {
   'config.set.invalidStatusBars': 'ui.statusBars must be "top", "bottom", "both" or "none"',
   'config.set.invalidVerbosity': 'ui.verbosity must be "minimal", "normal" or "debug"',
   'config.set.invalidErrorLevel': 'ui.errorLevel must be "user" or "all"',
+  'config.set.invalidEnum': '{key} must be one of: {allowed}',
   'config.set.invalidPath': 'agent.cwd must be a non-empty path',
   'config.set.failed': 'Failed to write user config: {detail}',
 

@@ -41,6 +41,17 @@ const SUPPORTED_VERBOSITY: ReadonlySet<string> = new Set(['minimal', 'normal', '
 /** `ui.errorLevel` 允许值（0.14） */
 const SUPPORTED_ERROR_LEVELS: ReadonlySet<string> = new Set(['user', 'all']);
 
+/**
+ * `observability.log.*` 允许值（日志中枢；与 config validator / serve ENUM_KEYS 一致）。
+ * CLI / RPC / Web 共用这一份枚举，避免三处各写一套漂移。
+ */
+export const LOG_ENUM_VALUES: Readonly<Record<string, readonly string[]>> = {
+  'observability.log.level': ['debug', 'info', 'warn', 'error'],
+  'observability.log.color': ['auto', 'always', 'never'],
+  'observability.log.format': ['pretty', 'json'],
+  'observability.log.time': ['auto', 'none', 'clock', 'iso'],
+};
+
 /** 存储选项 */
 export interface UiSettingsStoreOptions {
   /** 用户配置文件路径；缺省 `~/.vessel/config.yaml` */
@@ -177,6 +188,10 @@ export type SettableConfigKey =
   | 'ui.askUser'
   | 'ui.expandCards'
   | 'observability.showProcessErrors'
+  | 'observability.log.level'
+  | 'observability.log.color'
+  | 'observability.log.format'
+  | 'observability.log.time'
   | 'agent.cwd';
 
 interface ConfigSetTarget {
@@ -184,6 +199,8 @@ interface ConfigSetTarget {
   block: string;
   /** 块内的 YAML 键（snake_case） */
   yamlKey: string;
+  /** 中间子块（三层键，如 observability.log.level 的 `log`）；缺省 = 两层 */
+  subBlock?: string;
 }
 
 const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> = {
@@ -200,6 +217,10 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
     block: 'observability',
     yamlKey: 'show_process_errors',
   },
+  'observability.log.level': { block: 'observability', subBlock: 'log', yamlKey: 'level' },
+  'observability.log.color': { block: 'observability', subBlock: 'log', yamlKey: 'color' },
+  'observability.log.format': { block: 'observability', subBlock: 'log', yamlKey: 'format' },
+  'observability.log.time': { block: 'observability', subBlock: 'log', yamlKey: 'time' },
   'agent.cwd': { block: 'agent', yamlKey: 'cwd' },
 };
 
@@ -248,6 +269,10 @@ export async function setUserConfigValue(
   if (key === 'observability.showProcessErrors' && typeof value !== 'boolean') {
     throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
   }
+  const logEnum = LOG_ENUM_VALUES[key];
+  if (logEnum !== undefined && (typeof value !== 'string' || !logEnum.includes(value))) {
+    throw new Error(`invalid_enum: ${key}=${JSON.stringify(value)}`);
+  }
   if (key === 'agent.cwd' && (typeof value !== 'string' || value.trim() === '')) {
     throw new Error(`invalid_path: ${JSON.stringify(value)}`);
   }
@@ -259,7 +284,20 @@ export async function setUserConfigValue(
     if (existing !== undefined && existing !== null && !isRecord(existing)) {
       throw new Error(`ui_settings_invalid_config: ${target.block} must be a YAML object`);
     }
-    root[target.block] = { ...(existing ?? {}), [target.yamlKey]: value };
+    const blockMap: Record<string, unknown> = { ...(existing ?? {}) };
+    if (target.subBlock !== undefined) {
+      // 三层键（observability.log.*）：子块不存在就建，存在但非对象则报错（不吞用户数据）。
+      const sub = blockMap[target.subBlock];
+      if (sub !== undefined && sub !== null && !isRecord(sub)) {
+        throw new Error(
+          `ui_settings_invalid_config: ${target.block}.${target.subBlock} must be a YAML object`,
+        );
+      }
+      blockMap[target.subBlock] = { ...(sub ?? {}), [target.yamlKey]: value };
+    } else {
+      blockMap[target.yamlKey] = value;
+    }
+    root[target.block] = blockMap;
     await writeUserConfigRoot(configPath, root);
   });
 }
