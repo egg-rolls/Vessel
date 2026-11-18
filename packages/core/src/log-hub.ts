@@ -39,11 +39,13 @@
  *
  * 环境变量在模块加载时读一次（排障临时覆盖）；config 可运行时反复设置。
  * `VESSEL_LOG_JSON=1` 等价 format=json（机器接口）。
+ * `NO_COLOR` / `FORCE_COLOR` / `TERM=dumb` 只影响颜色（见 {@link shouldColor}）；
+ * `COLORTERM=truecolor/24bit` 决定 truecolor，否则退化 16 色。
  *
  * @module @vessel-agent/core/log-hub
  */
 
-import { formatJsonLine, formatLogLine } from './log-format.js';
+import { formatJsonLine, formatLogLine, type LogColorDepth } from './log-format.js';
 import { createDefaultTraceRedactor } from './observability/trace-redactor.js';
 import type { LogFields, LoggingConfig, LogLevel } from './types/logging.js';
 import type { TraceRedactor } from './types/trace.js';
@@ -107,7 +109,7 @@ function redactValue(redactor: TraceRedactor, value: unknown): unknown {
 }
 
 // 脱敏统一在 emitLogLine 里做（先脱敏再排版）：pretty 与 json 同一路径，
-// logEvent 也由此第一次纳入 redactor。ANSI 只在排版之后添加（P3），规则看不到 ANSI。
+// logEvent 也由此第一次纳入 redactor。ANSI 只在排版时添加，规则看不到 ANSI。
 const redactor = createDefaultTraceRedactor();
 
 /** `VESSEL_LOG_LEVEL` → LogLevel；缺省 / 非法返回 undefined（不阻断启动）。 */
@@ -202,6 +204,28 @@ function resolveTime(): 'none' | 'clock' | 'iso' {
 }
 
 /**
+ * 着色判定（config color + 环境 + stream.isTTY），顺序写死：
+ * 1. `color: never`，或 `NO_COLOR`（任意值，no-color.org），或 `TERM=dumb` → 不着色；
+ * 2. `color: always`，或 `FORCE_COLOR` 非 0 → 着色（docker logs 等非 TTY 场景）；
+ * 3. auto → 看 stream.isTTY。daemon 落盘的 stderr 不是 TTY，日志文件天然没有 ANSI。
+ */
+export function shouldColor(stream: { isTTY?: boolean } = process.stderr): boolean {
+  if (state.color === 'never') return false;
+  if (process.env.NO_COLOR !== undefined || process.env.TERM === 'dumb') return false;
+  if (state.color === 'always') return true;
+  const force = (process.env.FORCE_COLOR ?? '').trim();
+  if (force !== '' && force !== '0') return true;
+  return stream.isTTY === true;
+}
+
+/** truecolor 判定：COLORTERM=truecolor/24bit 才上 24bit，否则退化 16 色。 */
+function resolveColorDepth(): LogColorDepth {
+  if (!shouldColor()) return 'none';
+  const colorterm = (process.env.COLORTERM ?? '').trim().toLowerCase();
+  return colorterm === 'truecolor' || colorterm === '24bit' ? 'truecolor' : 'ansi16';
+}
+
+/**
  * 唯一的日志写出口：过滤 → 脱敏 → 排版（pretty / json）→ writeStderrNotice。
  *
  * 不新增裸 `process.stderr.write`（EPIPE 自激防护见文件头不变量）。
@@ -215,7 +239,7 @@ export function emitLogLine(level: LogLevel, event: string, fields?: LogFields):
     const line =
       (ENV_FORMAT ?? state.format) === 'json'
         ? formatJsonLine(level, safeEvent, safeFields)
-        : formatLogLine(level, safeEvent, safeFields, resolveTime());
+        : formatLogLine(level, safeEvent, safeFields, resolveTime(), resolveColorDepth());
     writeStderrNotice(`${line}\n`);
   } catch {
     // 日志排版/脱敏故障不得影响调用方；sink 写失败由 writeStderrNotice 自行报废。

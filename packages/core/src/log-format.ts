@@ -53,6 +53,58 @@ const LEVEL_TAGS: Record<LogLevel, string> = {
   error: 'ERR',
 };
 
+/** 着色档位：none = 纯文本；ansi16 = 16 色退化；truecolor = 24bit。 */
+export type LogColorDepth = 'none' | 'ansi16' | 'truecolor';
+
+// 零依赖 ANSI（与 src/ui-style.ts 同一套约定：warn 不用黄色）。
+// 只在排版之后添加 —— 脱敏规则看不到 ANSI，不会被转义序列绕过。
+const ANSI_RESET = '\x1b[0m';
+const ANSI_DIM = '\x1b[2m';
+const ANSI_BOLD = '\x1b[1m';
+const ANSI_RED = '\x1b[31m';
+const ANSI_MAGENTA = '\x1b[35m';
+const ANSI_CYAN = '\x1b[36m';
+/** INF 品牌色：海洋绿 #1EFFC7（truecolor）；16 色退化 CYAN。 */
+const ANSI_OCEAN_GREEN = '\x1b[38;2;30;255;199m';
+/** WRN：品红 + BOLD（用户裁定：不用黄色）；16 色退化 MAGENTA + BOLD。 */
+const ANSI_MAGENTA_TRUE = '\x1b[38;2;255;95;215m';
+
+/** 级别标记着色：DBG dim；INF 海洋绿/CYAN；WRN 品红+BOLD；ERR RED+BOLD。 */
+function levelTag(level: LogLevel, depth: LogColorDepth): string {
+  const tag = LEVEL_TAGS[level];
+  if (depth === 'none') return tag;
+  switch (level) {
+    case 'debug':
+      return `${ANSI_DIM}${tag}${ANSI_RESET}`;
+    case 'info':
+      return `${depth === 'truecolor' ? ANSI_OCEAN_GREEN : ANSI_CYAN}${tag}${ANSI_RESET}`;
+    case 'warn':
+      return `${ANSI_BOLD}${depth === 'truecolor' ? ANSI_MAGENTA_TRUE : ANSI_MAGENTA}${tag}${ANSI_RESET}`;
+    case 'error':
+      return `${ANSI_BOLD}${ANSI_RED}${tag}${ANSI_RESET}`;
+  }
+}
+
+/** 事件名着色：域部分（最后一个点之前）dim，末段默认前景。 */
+function colorEventName(name: string, depth: LogColorDepth): string {
+  if (depth === 'none') return name;
+  const dot = name.lastIndexOf('.');
+  if (dot < 0) return name;
+  return `${ANSI_DIM}${name.slice(0, dot + 1)}${ANSI_RESET}${name.slice(dot + 1)}`;
+}
+
+/** 字段着色：key= dim，value 默认；ERR 行的 error/reason 值染 RED。 */
+function colorFieldPart(part: string, level: LogLevel, depth: LogColorDepth): string {
+  if (depth === 'none') return part;
+  const eq = part.indexOf('=');
+  if (eq < 0) return part;
+  const key = part.slice(0, eq);
+  const value = part.slice(eq + 1);
+  const valueColor = level === 'error' && (key === 'error' || key === 'reason') ? ANSI_RED : '';
+  const valueText = valueColor === '' ? value : `${valueColor}${value}${ANSI_RESET}`;
+  return `${ANSI_DIM}${key}=${ANSI_RESET}${valueText}`;
+}
+
 /** 字段的渲染方式；决定单位、精度与省略规则。 */
 export type EventFieldKind =
   /** 普通文本：压成一行、超长截断、含空白时加引号 */
@@ -555,8 +607,8 @@ function payloadOf(fields: Record<string, unknown>): Record<string, unknown> {
   return payload;
 }
 
-/** 字段部分：定义表字段序 + 未定义键追加（不丢信息）。 */
-function renderFieldsBody(name: string, payload: Record<string, unknown>): string {
+/** 字段部分：定义表字段序 + 未定义键追加（不丢信息）；每项是一个 `key=value`。 */
+function renderFieldParts(name: string, payload: Record<string, unknown>): string[] {
   const parts: string[] = [];
   const used = new Set<string>();
   for (const spec of EVENT_FIELDS[name] ?? DEFAULT_FIELDS) {
@@ -571,7 +623,7 @@ function renderFieldsBody(name: string, payload: Record<string, unknown>): strin
     if (text === null) continue;
     parts.push(`${key}=${text}`);
   }
-  return parts.join(' ');
+  return parts;
 }
 
 /**
@@ -585,8 +637,8 @@ function renderFieldsBody(name: string, payload: Record<string, unknown>): strin
  */
 export function formatEventLine(event: string, fields: Record<string, unknown>): string {
   const name = eventName(event, fields);
-  const body = renderFieldsBody(name, payloadOf(fields));
-  return body === '' ? name : `${name} ${body}`;
+  const parts = renderFieldParts(name, payloadOf(fields));
+  return parts.length === 0 ? name : `${name} ${parts.join(' ')}`;
 }
 
 /** 平台代理那类「fields 里自带 event」的调用点用这个。 */
@@ -605,7 +657,9 @@ function clockTime(at: Date): string {
  * 日志中枢的 pretty 行：`时间 LVL 事件名(列宽24) key=value...`（vite 式单行）。
  *
  * 时间三档：none（不打）/ clock（HH:MM:SS）/ iso（完整 ISO，落盘 grep 用）。
- * 着色在 P3 接入（配色表见 docs/constitution/14-output-style.md）；这里先产纯文本。
+ * 着色三档：none / ansi16 / truecolor（配色表见 docs/constitution/14-output-style.md：
+ * 时间 dim、DBG dim、INF 海洋绿、WRN 品红+BOLD、ERR RED+BOLD、事件域 dim、key= dim、
+ * ERR 行 error/reason 值 RED）。ANSI 只在这里（排版）添加，脱敏在排版之前。
  * 字段值必须已过脱敏（中枢负责先脱敏再排版）。
  */
 export function formatLogLine(
@@ -613,15 +667,20 @@ export function formatLogLine(
   event: string,
   fields: Record<string, unknown>,
   time: 'none' | 'clock' | 'iso',
+  color: LogColorDepth = 'none',
 ): string {
   const name = eventName(event, fields);
   const payload = payloadOf(fields);
   const at = new Date();
-  const timeText =
-    time === 'none' ? '' : time === 'clock' ? `${clockTime(at)} ` : `${at.toISOString()} `;
-  const head = `${timeText}${LEVEL_TAGS[level]} ${name.padEnd(EVENT_COL)}`;
-  const body = renderFieldsBody(name, payload);
-  return body === '' ? head.trimEnd() : `${head} ${body}`;
+  const timeRaw = time === 'none' ? '' : time === 'clock' ? clockTime(at) : at.toISOString();
+  const timePart =
+    timeRaw === '' ? '' : color === 'none' ? `${timeRaw} ` : `${ANSI_DIM}${timeRaw}${ANSI_RESET} `;
+  const pad = name.length < EVENT_COL ? ' '.repeat(EVENT_COL - name.length) : '';
+  const head = `${timePart}${levelTag(level, color)} ${colorEventName(name, color)}${pad}`;
+  const parts = renderFieldParts(name, payload);
+  if (parts.length === 0) return head.trimEnd();
+  const body = parts.map((part) => colorFieldPart(part, level, color)).join(' ');
+  return `${head} ${body}`;
 }
 
 /**
