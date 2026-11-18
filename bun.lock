@@ -233,6 +233,17 @@
         "typescript": "^7.0.2",
       },
     },
+    "plugins/provider/model-registry": {
+      "name": "@vessel-agent/model-registry",
+      "version": "0.54.0",
+      "dependencies": {
+        "@vessel-agent/config": "workspace:*",
+        "@vessel-agent/core": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^7.0.2",
+      },
+    },
     "plugins/provider/openai": {
       "name": "@vessel-agent/provider-openai",
       "version": "0.54.0",
@@ -617,6 +628,8 @@
     "@vessel-agent/mcp-client": ["@vessel-agent/mcp-client@workspace:plugins/mcp/client"],
 
     "@vessel-agent/media": ["@vessel-agent/media@workspace:plugins/media/media"],
+
+    "@vessel-agent/model-registry": ["@vessel-agent/model-registry@workspace:plugins/provider/model-registry"],
 
     "@vessel-agent/permission": ["@vessel-agent/permission@workspace:packages/permission"],
 
