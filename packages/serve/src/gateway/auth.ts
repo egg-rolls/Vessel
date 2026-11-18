@@ -84,9 +84,157 @@ export function loadTlsMaterial(tls: { certFile: string; keyFile: string }): {
   return { cert: read(tls.certFile, 'cert_file'), key: read(tls.keyFile, 'key_file') };
 }
 
+/** 端口通配后缀：`http://127.0.0.1:*`（只有回环 host 允许）。 */
+const PORT_WILDCARD_SUFFIX = ':*';
+
+/**
+ * 缺省回环通配集合：本机任意端口的 WebUI（Vite dev relay、临时端口）都能发 RPC。
+ *
+ * 为什么是三条：三个回环别名各自是**不同的** Origin（`localhost` 与 `127.0.0.1`
+ * 在浏览器里不同源），只写一条会留下「换个别名访问就 403」的坑。
+ */
+export const LOOPBACK_WILDCARD_ORIGINS: readonly string[] = [
+  'http://127.0.0.1:*',
+  'http://localhost:*',
+  'http://[::1]:*',
+];
+
+/** 解析后的来源形状（通配端口时 `host` 形如 `127.0.0.1:*`）。 */
+export interface OriginPattern {
+  /** 带冒号，与 `URL#protocol` 一致。 */
+  protocol: 'http:' | 'https:';
+  /** 小写 hostname（IPv6 带方括号，与 `URL#hostname` 一致）。 */
+  hostname: string;
+  /** 小写 `host[:port]`；通配端口时是 `host:*`。 */
+  host: string;
+  /** true = 端口是通配符，**只有回环 host 可能**为 true。 */
+  wildcardPort: boolean;
+}
+
+/** `parseOriginUrl` 只放行 http(s)，这里把类型收窄成字面量联合。 */
+function originProtocol(url: URL): 'http:' | 'https:' {
+  return url.protocol === 'https:' ? 'https:' : 'http:';
+}
+
+/** 只接受 http(s)、无凭据、无 path/query/hash 的绝对 URL。 */
+function parseOriginUrl(raw: string): URL | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  if (url.username !== '' || url.password !== '') return null;
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') return null;
+  return url;
+}
+
+/**
+ * 解析单个来源条目；非法 ⇒ `null`。
+ *
+ * 两种合法形状：
+ * - 完整 origin：`scheme://host[:port]`（无 path/query/hash/凭据）；
+ * - **回环通配端口**：`scheme://<loopback>:*`（`127.0.0.0/8` / `localhost` / `[::1]`）。
+ *   非回环 host 写 `:*` 一律拒绝 —— 公网域名不能因为一个 `*` 就整段放开。
+ */
+export function parseOriginPattern(raw: unknown): OriginPattern | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  if (trimmed.endsWith(PORT_WILDCARD_SUFFIX)) {
+    const base = trimmed.slice(0, -PORT_WILDCARD_SUFFIX.length);
+    const url = parseOriginUrl(base);
+    if (url === null) return null;
+    // `http://127.0.0.1:8642:*` 这种写法不认（端口已经写死了，再加 `*` 是自相矛盾）。
+    if (url.port !== '' || url.hostname === '') return null;
+    const hostname = url.hostname.toLowerCase();
+    if (!isLoopbackHostname(hostname)) return null;
+    return {
+      protocol: originProtocol(url),
+      hostname,
+      host: `${hostname}:*`,
+      wildcardPort: true,
+    };
+  }
+  const url = parseOriginUrl(trimmed);
+  if (url === null) return null;
+  return {
+    protocol: originProtocol(url),
+    hostname: url.hostname.toLowerCase(),
+    host: url.host.toLowerCase(),
+    wildcardPort: false,
+  };
+}
+
+/** 归一化来源条目：合法 ⇒ 规范字符串（小写 host、去默认端口），非法 ⇒ `null`。 */
+export function normalizeOriginPattern(raw: unknown): string | null {
+  const parts = parseOriginPattern(raw);
+  return parts === null ? null : `${parts.protocol}//${parts.host}`;
+}
+
+/**
+ * Origin 是否命中 allowlist（逐条：完整 origin 精确比对，回环通配按 hostname + 协议）。
+ *
+ * 通配条目匹配该 hostname 的**任意端口，含默认端口**（`http://127.0.0.1` 也命中
+ * `http://127.0.0.1:*`）—— 回环 host 上多一个端口不是新的信任边界。
+ */
+export function originMatchesAllowlist(origin: string, allowlist: readonly string[]): boolean {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  const hostname = url.hostname.toLowerCase();
+  const host = url.host.toLowerCase();
+  for (const entry of allowlist) {
+    const pattern = parseOriginPattern(entry);
+    if (pattern === null) continue;
+    if (pattern.protocol !== url.protocol) continue;
+    if (pattern.wildcardPort) {
+      if (pattern.hostname === hostname) return true;
+      continue;
+    }
+    if (pattern.host === host) return true;
+  }
+  return false;
+}
+
+/** `normalizeAllowedOrigins` 的逐条错误文案（尽量说清「错哪个字」）。 */
+function allowedOriginError(trimmed: string): string {
+  const wildcard = trimmed.endsWith(PORT_WILDCARD_SUFFIX);
+  const base = wildcard ? trimmed.slice(0, -PORT_WILDCARD_SUFFIX.length) : trimmed;
+  let url: URL | null = null;
+  try {
+    url = new URL(base);
+  } catch {
+    return 'expected an absolute URL like https://egg-rolls.top';
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return 'only http(s) origins are allowed';
+  }
+  if (url.username !== '' || url.password !== '') return 'credentials are not allowed';
+  if (wildcard && url.port === '' && !isLoopbackHostname(url.hostname.toLowerCase())) {
+    return (
+      'a port wildcard ("host:*") is only allowed on loopback hosts ' +
+      '(127.0.0.1 / localhost / [::1])'
+    );
+  }
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+    return 'use scheme://host[:port] only';
+  }
+  if (wildcard) return 'a port wildcard ("host:*") must carry no other port';
+  return 'expected an absolute URL like https://egg-rolls.top';
+}
+
 /**
  * 归一化 CORS/WS Origin allowlist：只接受显式 http(s) origin。
  * 拒绝 `*`、path/query/hash/userinfo；保存 `URL.origin`（小写 host、去默认端口）。
+ *
+ * 0.61：额外接受**回环端口通配**（`http://127.0.0.1:*` 等），归一后原样保留；
+ * 非回环 host 的 `:*` 仍然报错（与 config validator 同口径）。
  */
 export function normalizeAllowedOrigins(raw: string[] | undefined): string[] {
   if (raw === undefined) return [];
@@ -101,27 +249,113 @@ export function normalizeAllowedOrigins(raw: string[] | undefined): string[] {
     const trimmed = value.trim();
     if (trimmed === '' || trimmed === '*') {
       throw new Error(
-        'allowedOrigins must contain explicit origins; wildcard ("*") is not allowed.',
+        'allowedOrigins must contain explicit origins; wildcard ("*") is not allowed ' +
+          '(only a loopback port wildcard such as "http://127.0.0.1:*" is accepted).',
       );
     }
-    let url: URL;
-    try {
-      url = new URL(trimmed);
-    } catch {
-      throw new Error(`Invalid allowed origin "${trimmed}": expected an absolute URL.`);
+    const origin = normalizeOriginPattern(trimmed);
+    if (origin === null) {
+      throw new Error(`Invalid allowed origin "${trimmed}": ${allowedOriginError(trimmed)}.`);
     }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      throw new Error(`Invalid allowed origin "${trimmed}": only http(s) origins are allowed.`);
-    }
-    if (url.username !== '' || url.password !== '') {
-      throw new Error(`Invalid allowed origin "${trimmed}": credentials are not allowed.`);
-    }
-    if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
-      throw new Error(`Invalid allowed origin "${trimmed}": use scheme://host[:port] only.`);
-    }
-    normalized.add(url.origin);
+    normalized.add(origin);
   }
   return [...normalized];
+}
+
+/**
+ * 0.61：`http.allowed_origins` 的生效值（**访问控制**：浏览器能不能发 RPC）。
+ *
+ * 与 `auth.public_origins`（`redirect_uri` 的来源选择）是两件事，别再合并语义：
+ * 前者回答「谁能调这个 API」，后者回答「登录回跳到哪个 origin」。
+ *
+ * - 未配置（`undefined`）⇒ 回落到 `auth.public_origins`，再补上
+ *   {@link LOOPBACK_WILDCARD_ORIGINS}（本机任意端口的 WebUI 因此可用，而线上
+ *   部署的既有配置一字不改）；
+ * - 显式配置 ⇒ 就是它（**不再**自动补回环通配：显式即全权，`[]` = 只允许同源）。
+ *
+ * 非法条目静默丢弃（validator 已在前一步报错；运行时不为一个错字拒绝启动）。
+ */
+export function resolveHttpAllowedOrigins(input: {
+  /** `http.allowed_origins`；`undefined` = 未配置。 */
+  allowedOrigins?: readonly unknown[] | undefined;
+  /** `auth.public_origins`（已合并归一）；未配置时为回落基线。 */
+  publicOrigins?: readonly unknown[] | undefined;
+}): string[] {
+  const out: string[] = [];
+  const push = (raw: unknown): void => {
+    const origin = normalizeOriginPattern(raw);
+    if (origin === null || out.includes(origin)) return;
+    out.push(origin);
+  };
+  if (input.allowedOrigins !== undefined) {
+    for (const entry of input.allowedOrigins) push(entry);
+    return out;
+  }
+  for (const entry of input.publicOrigins ?? []) push(entry);
+  for (const entry of LOOPBACK_WILDCARD_ORIGINS) push(entry);
+  return out;
+}
+
+/**
+ * Origin 闸的「谁在担保这个请求」事实。
+ *
+ * 依据是**担保者**，不是配置里开着什么模式：
+ * - {@link credentialVerified}：`Authorization: Bearer` 已与真实 token 比对通过
+ *   （是一次校验结果，不是「配了 token」这个开关）；
+ * - {@link viaProxy}：请求来自受信反代（`resolveRequestEdge().viaProxy`），
+ *   origin 校验已在该层做完。
+ *
+ * 两条都**不放宽 cookie 会话**：浏览器不会自动附加 `Authorization`（跨站请求连
+ * CORS 预检都带不了凭据），所以显式凭据不是 CSRF 面；cookie 路径必须照旧过白名单。
+ */
+export interface OriginGateFacts {
+  /** 显式凭据（Bearer token）已校验通过。 */
+  credentialVerified?: boolean;
+  /**
+   * 请求来自受信反代（`resolveRequestEdge().viaProxy`）。
+   *
+   * TODO(0.61)：**故意未接线**。平台的 `viaProxy` 把「回环 socket」默认当归受信代理
+   * （`resolveRequestEdge` 的 trusted-proxy 判定），所以本机直连请求天然是 `viaProxy: true`；
+   * 若拿它当 bypass，本机流量会整段绕过 Origin 闸。要真正启用这一条，条件不是「回环」，
+   * 而是 **反代密钥成立**：node 侧需要先有 `auth.trustedProxies` + proxy secret 的边缘解析
+   * （目前 node 路径没有 `resolveRequestEdge`），再把 `edge.viaProxy` 传进来。未接线前
+   * 这个字段保持 `undefined`，行为与 0.60 一致。
+   */
+  viaProxy?: boolean;
+}
+
+/**
+ * 「浏览器 Origin 是否等于生效边缘 host」的判定 —— 受信边缘声明的**形参入口**（未接线）。
+ *
+ * 现网 `AuthService.originMatchesEdge` 只比 `Origin` 的 host 与 `ctx.edge.host`；在
+ * 「页面 origin 是 8644、Host 是平台端口」的 dev relay 场景下会不匹配（→ `csrf_failed`）。
+ * 正确解法**不是**把 relay 端口加进受信同源名单（那样本机任何进程开的页面都能伪造），
+ * 而是让受信 relay 带**自己的密钥** + 声明「页面真实 origin 是 X」，平台在密钥成立时
+ * 才采信这个声明参与比较（与 `X-Forwarded-*` + 反代密钥同一套模式）。
+ *
+ * 这里只把入口形参化：调用方拿不到密钥证据时**必须**传 `undefined`，行为与旧逻辑逐字一致。
+ *
+ * @param input.origin 浏览器发来的 `Origin` 头原值
+ * @param input.edgeHost 受信边缘解析出的 `host`（`null` ⇒ 判不过）
+ * @param input.trustedOriginClaim 受信 relay 声明的页面真实 origin；**仅密钥成立时**可传
+ */
+export function originMatchesEdgeHost(input: {
+  origin: string;
+  edgeHost: string | null;
+  trustedOriginClaim?: string | null;
+}): boolean {
+  if (input.edgeHost === null) return false;
+  const candidate =
+    input.trustedOriginClaim === undefined || input.trustedOriginClaim === null
+      ? input.origin
+      : input.trustedOriginClaim;
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return false;
+  }
+  return parsed.host.toLowerCase() === input.edgeHost.toLowerCase();
 }
 
 /**
@@ -392,8 +626,19 @@ export function hostAllowed(req: Request, policy: string | HostPolicy): boolean 
   return false;
 }
 
-/** Origin 校验：无 Origin（curl / peer）放行；浏览器必须同源或在允许列表 */
-export function originAllowed(req: Request, allowedOrigins: string[]): boolean {
+/**
+ * Origin 校验：无 Origin（curl / peer）放行；浏览器必须同源或在允许列表。
+ *
+ * 0.61：`facts` 给出「谁在担保这个请求」（见 {@link OriginGateFacts}）时可跳过白名单；
+ * 不传 `facts` 时行为与 0.60 逐字一致（cookie 路径必须走这条）。
+ */
+export function originAllowed(
+  req: Request,
+  allowedOrigins: string[],
+  facts: OriginGateFacts = {},
+): boolean {
+  // 显式凭据 / 受信反代：来源已由担保者负责，白名单不再是这一跳的门。
+  if (facts.credentialVerified === true || facts.viaProxy === true) return true;
   const origin = req.headers.get('origin');
   if (!origin) return true;
   let parsed: URL;
@@ -404,7 +649,7 @@ export function originAllowed(req: Request, allowedOrigins: string[]): boolean {
   }
   // 只接受浏览器 http(s) origin；file:// / opaque origin 一律拒绝。
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-  if (allowedOrigins.includes(parsed.origin)) return true;
+  if (originMatchesAllowlist(parsed.origin, allowedOrigins)) return true;
   const host = req.headers.get('host');
   if (!host) return false;
   return parsed.host.toLowerCase() === host.toLowerCase();
@@ -415,23 +660,56 @@ export function originAllowed(req: Request, allowedOrigins: string[]): boolean {
  * allowlist 非空时所有响应都带 Vary: Origin，避免共享缓存把 A 的 ACAO 复用给 B。
  * 不使用 Access-Control-Allow-Credentials：鉴权走 Authorization，不依赖 cookie。
  */
-export function corsHeaders(req: Request, allowedOrigins: string[]): Record<string, string> {
+/** CORS 预检允许的头：浏览器跨源发 RPC 会带 `Authorization`（显式凭据）或 CSRF 同步令牌。 */
+const CORS_ALLOW_HEADERS = 'Content-Type, Authorization, X-Vessel-Protocol, X-Vessel-CSRF';
+
+/** `corsHeaders` 的可选事实；不传时与 0.60 行为一致（只是不再回 `*`，本来也没回过）。 */
+export interface CorsOptions {
+  /**
+   * 该服务是否用 **cookie 会话**（平台 `true` / node `false`）。
+   *
+   * 只有 cookie 会话才需要 `Access-Control-Allow-Credentials: true`：
+   * - 带凭据的跨源响应必须逐个 origin 授权（不能 `*`），这里回显的是**命中白名单的
+   *   那个请求 Origin**；
+   * - 纯 bearer 的 node 侧不需要它 —— 给它只会扩大「站点能读到响应」的面，
+   *   而 bearer 请求本身就要求调用方已经持有 token。
+   *
+   * 命中白名单是前提：不命中连 `Access-Control-Allow-Origin` 都不给，凭据头更不给。
+   */
+  credentials?: boolean;
+}
+
+/**
+ * CORS 头：**只回显命中的请求 Origin**（绝不 `*`），并带 `Vary: Origin`。
+ *
+ * 0.61：命中判定改用 `originMatchesAllowlist`，因此 `http://127.0.0.1:*` 这类
+ * 回环端口通配也生效 —— 否则「Origin 闸放行了、浏览器却读不到响应」，第 2 层是半成品。
+ */
+export function corsHeaders(
+  req: Request,
+  allowedOrigins: string[],
+  options: CorsOptions = {},
+): Record<string, string> {
   if (allowedOrigins.length === 0) return {};
   const headers: Record<string, string> = { Vary: 'Origin' };
   const origin = req.headers.get('origin');
   if (!origin) return headers;
   let normalized: string;
   try {
-    normalized = new URL(origin).origin;
+    const parsed = new URL(origin);
+    // 只对浏览器 http(s) origin 回 CORS 头；`file://` / opaque origin 一律不给。
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return headers;
+    normalized = parsed.origin;
   } catch {
     return headers;
   }
-  if (!allowedOrigins.includes(normalized)) return headers;
+  if (!originMatchesAllowlist(normalized, allowedOrigins)) return headers;
   return {
     ...headers,
     'Access-Control-Allow-Origin': normalized,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Vessel-Protocol',
+    'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS,
     'Access-Control-Max-Age': '600',
+    ...(options.credentials === true ? { 'Access-Control-Allow-Credentials': 'true' } : {}),
   };
 }

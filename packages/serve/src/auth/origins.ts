@@ -26,56 +26,34 @@
  *   （`edge.localDirect`：回环 socket ∧ 未经受信代理 ∧ Host 指回环）时才退回
  *   白名单里的回环来源，否则 `null`（fail-closed，绝不给白名单外的值）。
  *
+ * 0.61：回环端口通配（`http://127.0.0.1:*`）只进**访问控制**（`http.allowed_origins`），
+ * **永远不参与 redirect_uri 选择**（见 `selectPublicOrigin` 的注释）。
+ *
  * @module @vessel-agent/serve/auth/origins
  */
 
-import { isLoopbackHostname, type RequestEdge } from '../gateway/auth.js';
+import {
+  isLoopbackHostname,
+  normalizeOriginPattern,
+  parseOriginPattern,
+  type RequestEdge,
+} from '../gateway/auth.js';
 
 /** 选择来源只需要这三点边缘事实；单独成型便于调用方只传它需要的东西。 */
 export type OriginEdge = Pick<RequestEdge, 'host' | 'protocol' | 'localDirect'>;
-
-/** 解析后的单个来源：`protocol` 带冒号（与 `URL#protocol` 一致）。 */
-interface OriginParts {
-  protocol: 'http:' | 'https:';
-  host: string;
-  hostname: string;
-}
-
-function originParts(origin: string): OriginParts | null {
-  if (typeof origin !== 'string' || origin.trim() === '') return null;
-  let url: URL;
-  try {
-    url = new URL(origin.trim());
-  } catch {
-    return null;
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
-  return {
-    protocol: url.protocol,
-    host: url.host.toLowerCase(),
-    hostname: url.hostname.toLowerCase(),
-  };
-}
 
 /**
  * 宽松归一：非法 / 空 ⇒ `null`（调用方丢弃该条）。
  *
  * 只接受完整 origin（`scheme://host[:port]`，无路径 / 查询 / 凭据），与启动期
  * 的严格校验同口径 —— 能进白名单的字符串，`buildRedirectUri` 拼出来就是它自己 + 固定路径。
+ *
+ * 0.61：额外接受**回环端口通配**（`http://127.0.0.1:*` / `http://localhost:*` /
+ * `http://[::1]:*`），归一后原样保留。它只对**访问控制**（`http.allowed_origins`）
+ * 有意义；`redirect_uri` 那侧见 {@link selectPublicOrigin} —— 通配条目永远不会被选中。
  */
 export function normalizeOriginOrNull(raw: unknown): string | null {
-  if (typeof raw !== 'string' || raw.trim() === '') return null;
-  const trimmed = raw.trim();
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
-  if (url.username !== '' || url.password !== '') return null;
-  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') return null;
-  return url.origin;
+  return normalizeOriginPattern(raw);
 }
 
 /**
@@ -116,30 +94,43 @@ function canonicalHost(protocol: 'http' | 'https', host: string | null): string 
  *
  * 参数只有两样：受信边缘事实（`resolveRequestEdge` 的结果）与白名单。
  * **没有** `Request`、没有 `Host` 头 —— 这条签名本身就是第一道防线。
+ *
+ * 0.61：**回环通配条目永远不参与选择**（`http://127.0.0.1:*` 拼不出 `redirect_uri`；
+ * 把请求里的端口填进去就是「拼接」，违反本模块红线 2）。白名单里只有通配 ⇒ `null`，
+ * 也就是 gitHub 登录仍然 fail-closed —— 通配只服务于访问控制那一侧。
  */
 export function selectPublicOrigin(edge: OriginEdge, whitelist: readonly string[]): string | null {
-  const list = whitelist
-    .map((entry) => normalizeOriginOrNull(entry))
-    .filter((entry): entry is string => entry !== null);
+  // 先归一（字符串保持来自白名单），通配条目在这里就被剔掉。
+  const list: Array<{ origin: string; protocol: string; host: string; hostname: string }> = [];
+  for (const entry of whitelist) {
+    const parts = parseOriginPattern(entry);
+    if (parts === null || parts.wildcardPort) continue;
+    list.push({
+      origin: `${parts.protocol}//${parts.host}`,
+      protocol: parts.protocol,
+      host: parts.host,
+      hostname: parts.hostname,
+    });
+  }
   if (list.length === 0) return null;
   // 单来源：redirect_uri 只由配置决定，不看请求（与 0.56 逐字一致）。
   if (list.length === 1) {
     const only = list[0];
-    return only === undefined ? null : only;
+    return only === undefined ? null : only.origin;
   }
 
   const host = canonicalHost(edge.protocol, edge.host);
   if (host !== null) {
-    const sameHost = list.filter((entry) => originParts(entry)?.host === host);
+    const sameHost = list.filter((entry) => entry.host === host);
     if (sameHost.length === 1) {
       const match = sameHost[0];
-      return match === undefined ? null : match;
+      return match === undefined ? null : match.origin;
     }
     if (sameHost.length > 1) {
       // 同一个 Host 配了 http 与 https 两条：按生效协议挑，挑不出就拒绝（歧义 ⇒ fail-closed）。
       const wanted = `${edge.protocol}:`;
-      const match = sameHost.find((entry) => originParts(entry)?.protocol === wanted);
-      return match ?? null;
+      const match = sameHost.find((entry) => entry.protocol === wanted);
+      return match === undefined ? null : match.origin;
     }
   }
 
@@ -147,11 +138,8 @@ export function selectPublicOrigin(edge: OriginEdge, whitelist: readonly string[
   // 用 `localhost` / `[::1]` 访问而白名单只写了 `127.0.0.1` 时不必报 500。
   // 退回的仍然是**白名单里的原值**，不是请求里的任何字符串。
   if (edge.localDirect) {
-    const loopback = list.find((entry) => {
-      const parts = originParts(entry);
-      return parts !== null && isLoopbackHostname(parts.hostname);
-    });
-    return loopback ?? null;
+    const loopback = list.find((entry) => isLoopbackHostname(entry.hostname));
+    return loopback === undefined ? null : loopback.origin;
   }
   return null;
 }

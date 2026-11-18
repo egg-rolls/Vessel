@@ -1019,6 +1019,22 @@ export interface VesselConfig {
   security?: SecurityConfig;
   /** 0.49：平台 Gateway（与 `node:` 段分区，不共享 token 键） */
   gateway?: GatewayConfig;
+  /**
+   * 0.61：浏览器侧 **HTTP 访问控制**（谁能发 RPC），与 `auth.public_origins`
+   * （`redirect_uri` 的来源选择）是两件事。
+   *
+   * ```yaml
+   * http:
+   *   allowed_origins:
+   *     - http://127.0.0.1:*      # 回环通配端口（本机任意端口的 WebUI）
+   *     - https://egg-rolls.top
+   * ```
+   *
+   * 缺省（不写这一块）= 回落 `auth.public_origins` + 三条回环通配，老配置一字不改。
+   * 条目口径与 `auth.public_origins` 相同：完整 origin，或回环 host 的端口通配；
+   * 非回环写 `:*` 报错。
+   */
+  http?: { allowedOrigins?: string[] };
   /** S5：hub 控制面 */
   hub?: HubConfig;
   /** 0.4：eval harness */

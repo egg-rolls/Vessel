@@ -133,6 +133,11 @@ export interface PlatformGatewayOptions {
   proxySecret?: string;
   /** `gateway.allowed_origins`；已由组合根解析。 */
   allowedOrigins?: string[];
+  /**
+   * 0.61：`http.allowed_origins`（**访问控制**）。未配置（`undefined`）= 回落到
+   * `auth.public_origins` + 三条回环通配；显式配置 = 就是它（空数组 = 不再补通配）。
+   */
+  httpAllowedOrigins?: string[];
   /** 用于 CSP `frame-src` / `connect-src` 的 node origin。 */
   nodeOrigins: string[];
   /** 0.50：Hub 页浏览器直连的 Hub origin；只并入 CSP `connect-src`。 */

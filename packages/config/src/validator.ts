@@ -1449,14 +1449,42 @@ function isLoopbackOrPrivateHostname(hostname: string): boolean {
 }
 
 /**
+ * 严格回环判定：`localhost` / `127.0.0.0/8` / `::1`。
+ *
+ * 与 `packages/serve/src/gateway/auth.ts` 的 `isLoopbackHostname` **同口径**
+ * （config 包不能依赖 serve，所以这条判据在这里有一份拷贝；改一处必须改两处）。
+ * 注意与下面的 `isLoopbackOrPrivateHostname` 不同：那段是「明文 http 允许谁」，
+ * 这段是「端口通配允许谁」，后者**不含**私网。
+ */
+function isStrictLoopbackHostname(hostname: string): boolean {
+  const host =
+    hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+  const lower = host.toLowerCase();
+  if (lower === 'localhost' || lower === '::1') return true;
+  return isIP(lower) === 4 && lower.startsWith('127.');
+}
+
+/**
  * 0.60：校验 `auth.public_origins` 的单个条目。
  *
  * 比 `public_origin` 更严（新键没有历史包袱）：
- * - 必须是完整 origin，**尾斜杠也报错**（`https://host/` 与 `https://host` 归一化后
+ * - 必须是**具体** origin，**尾斜杠也报错**（`https://host/` 与 `https://host` 归一化后
  *   一样，但写错的人会以为它们不同，禁掉比替人猜更安全）；
  * - 非 https 只允许 loopback / 私网（公网明文会让会话 cookie 丢掉 Secure）。
+ *
+ * 0.61：**端口通配（`host:*`）在这里一律拒绝** —— 它只属于 `http.allowed_origins`。
+ * 理由：`public_origins` 是 OAuth `redirect_uri` 的来源，`redirect_uri` 必须是具体
+ * origin；`http://127.0.0.1:*` 拼不出回跳地址，接受它只会让人以为「写了就能登」。
  */
 function publicOriginsEntryError(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim().endsWith(':*')) {
+    return (
+      'uses a port wildcard ("host:*"): a port wildcard is only allowed in ' +
+      'http.allowed_origins (access control), not in auth.public_origins, because ' +
+      'redirect_uri needs a concrete origin. List each port explicitly, ' +
+      'e.g. http://127.0.0.1:8642'
+    );
+  }
   const base = publicOriginError(value);
   if (base !== null) return base;
   const trimmed = (value as string).trim();
@@ -1481,6 +1509,36 @@ function publicOriginsEntryError(value: unknown): string | null {
  * （`./auth-strategies/`）。加一个 provider = 加一个策略文件 + 注册一行，
  * 这里一行都不用改。
  */
+
+/**
+ * 回环端口通配条目（`http://127.0.0.1:*`）的校验 —— 只有 `http.allowed_origins` 用。
+ *
+ * 口径与 `packages/serve/src/gateway/auth.ts#parseOriginPattern` 逐条对齐：
+ * `:*` 只能给回环 host（`127.0.0.0/8` / `localhost` / `[::1]`），且不能再带具体端口。
+ */
+function wildcardOriginEntryError(trimmed: string): string | null {
+  const base = trimmed.slice(0, -':*'.length);
+  const baseError = publicOriginError(base);
+  if (baseError !== null) return baseError;
+  const url = new URL(base);
+  if (url.port !== '') {
+    return 'must not combine an explicit port with the wildcard (write http://127.0.0.1:*, not :8642:*)';
+  }
+  if (base.toLowerCase() !== url.origin) {
+    return (
+      'must be a bare origin without a trailing slash or default port ' +
+      '(write http://127.0.0.1:*, not http://127.0.0.1/:*)'
+    );
+  }
+  if (!isStrictLoopbackHostname(url.hostname)) {
+    return (
+      'uses a port wildcard on a non-loopback host: "host:*" is only allowed on loopback ' +
+      '(127.0.0.1 / localhost / [::1]). List each port explicitly instead, ' +
+      'e.g. https://egg-rolls.top'
+    );
+  }
+  return null;
+}
 
 export function validateAuthSettings(
   auth: AuthConfig,
@@ -1759,6 +1817,55 @@ function comparablePath(value: string): string {
 
 function isNonEmptyStringValue(value: unknown): value is string {
   return typeof value === 'string' && value.trim() !== '';
+}
+
+/**
+ * `http.allowed_origins` 的单条校验：非通配条目与 `public_origins` **完全同一套**；
+ * 只有端口通配这一处分叉（这里收，`public_origins` 拒）—— 见两处函数上的注释。
+ */
+function httpAllowedOriginsEntryError(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim().endsWith(':*')) {
+    return wildcardOriginEntryError(value.trim());
+  }
+  return publicOriginsEntryError(value);
+}
+
+/**
+ * 0.61：校验 `http` 块。
+ *
+ * 目前只有 `allowed_origins`（**访问控制**：浏览器能不能发 RPC）。它与
+ * `auth.public_origins`（`redirect_uri` 的来源选择）是两件事：
+ * - 非通配条目的判定**完全相同**（同一份 `publicOriginsEntryError`）；
+ * - **只有这一处**接受回环端口通配 `http://127.0.0.1:*`（`public_origins` 拒）。
+ *
+ * 未配置不是错误：缺省回落到 `auth.public_origins` + 回环通配三条。
+ */
+export function validateHttpSettings(
+  http: Record<string, unknown>,
+  errors: ConfigValidationError[] = [],
+): ConfigValidationError[] {
+  const allowedOrigins = http.allowedOrigins;
+  if (allowedOrigins === undefined) return errors;
+  if (!Array.isArray(allowedOrigins)) {
+    errors.push({
+      path: 'http.allowedOrigins',
+      message:
+        'http.allowedOrigins must be an array of origins, e.g. ["http://127.0.0.1:*", ' +
+        '"http://localhost:*", "https://egg-rolls.top"]',
+      value: allowedOrigins,
+    });
+    return errors;
+  }
+  allowedOrigins.forEach((entry, index) => {
+    const message = httpAllowedOriginsEntryError(entry);
+    if (message === null) return;
+    errors.push({
+      path: `http.allowedOrigins[${index}]`,
+      message: `http.allowedOrigins[${index}] ${message}`,
+      value: entry,
+    });
+  });
+  return errors;
 }
 
 /**
@@ -3151,6 +3258,17 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
+  // 0.61：`http:` 段（浏览器能不能发 RPC 的访问控制，与 `auth.public_origins` 的
+  // redirect_uri 来源选择分开）。缺省 = 回落 `auth.public_origins` + 回环通配。
+  const httpBlock = (config as unknown as Record<string, unknown>).http;
+  if (httpBlock !== undefined) {
+    if (!isPlainObject(httpBlock)) {
+      errors.push({ path: 'http', message: 'http must be an object' });
+    } else {
+      validateHttpSettings(httpBlock, errors);
+    }
+  }
+
   // 校验 hub（S5；data dir 必须独立）
   if (config.hub !== undefined) {
     if (!isPlainObject(config.hub)) {
@@ -3345,6 +3463,8 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'session',
   ],
   connect: ['token', 'tokenEnv', 'caFile'],
+  // 0.61：`http.allowed_origins`（访问控制；缺省回落 auth.public_origins）。
+  http: ['allowedOrigins'],
   attention: ['nodes'],
   hub: [
     'dataDir',
@@ -3526,6 +3646,8 @@ export const KNOWN_CONFIG_KEYS = [
   'security',
   'gateway',
   'auth',
+  // 0.61：访问控制（浏览器能不能发 RPC），与 `auth.public_origins` 的 redirect_uri 来源分开。
+  'http',
   'hub',
   'evals',
   'feishu',
