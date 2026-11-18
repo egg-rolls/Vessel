@@ -149,6 +149,7 @@
       "name": "@vessel-agent/plugin-marketplace",
       "version": "0.54.0",
       "dependencies": {
+        "@vessel-agent/core": "workspace:*",
         "@vessel-agent/plugin-ui": "workspace:*",
         "react": "^19.1.0",
         "react-dom": "^19.1.0",
