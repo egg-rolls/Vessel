@@ -32,6 +32,12 @@ export interface TenantRuntimeProfile {
   tenantId: string;
   providerFactory: () => LLMProvider;
   model: string;
+  /**
+   * model-registry D4 接缝：把 ModelRef（undefined = 默认模型）解析成 provider +
+   * wire model。注入时 materializeOptions 的 provider/model 取解析结果；缺省走
+   * legacy providerFactory() + model 路径。core 只调注入函数，不解析厂商语义。
+   */
+  resolveModel?: (ref: string | undefined) => { provider: LLMProvider; model: string };
   /** 引用；安装仍发生在 EU 构造（装配层可用 wrapper 绑定插件配置） */
   plugins: readonly Plugin[];
   /** 默认 MemoryPluginHost；tenant 策略宿主由 Assembly 提供 */
@@ -223,9 +229,12 @@ export class Runtime {
     const agentId = req.agentId ?? overrides?.agentId;
     const systemPrompt = overrides?.systemPrompt ?? profile.systemPrompt;
     const permission = overrides?.permission ?? profile.permission;
+    // model-registry D4：注入 resolveModel 时 provider/model 取解析结果；
+    // 缺省时下面两行与 legacy 路径逐字等价。
+    const resolved = profile.resolveModel?.(overrides?.model);
     return {
-      provider: profile.providerFactory(),
-      model: overrides?.model ?? profile.model,
+      provider: resolved !== undefined ? resolved.provider : profile.providerFactory(),
+      model: resolved !== undefined ? resolved.model : (overrides?.model ?? profile.model),
       contextFactory: req.contextFactory ?? this.defaultContextFactory(profile),
       events: req.events,
       limits: req.limits ?? profile.limits ?? {},
