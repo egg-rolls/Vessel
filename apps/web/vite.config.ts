@@ -84,6 +84,58 @@ function relayConfigure(secret: string): NonNullable<ProxyOptions['configure']> 
   };
 }
 
+/** 平台反代密钥头（与 `packages/serve/src/gateway/auth.ts` 的 `PROXY_SECRET_HEADER` 同名）。 */
+const PROXY_SECRET_HEADER = 'x-vessel-proxy-secret';
+/** 受信 relay 声明的页面真实 origin（与 `auth/routes.ts` 的 `TRUSTED_ORIGIN_HEADER` 同名）。 */
+const TRUSTED_ORIGIN_HEADER = 'x-vessel-origin';
+
+/**
+ * 平台侧 `POST /platform/rpc` 带 cookie 的变更请求要过 CSRF 闸：`Origin` 的 host 必须等于
+ * 网关看到的生效 Host。dev 下页面跑在 Vite origin、网关在平台端口，这条判据落空 ⇒ 403
+ * `csrf_failed`。
+ *
+ * 解法**不是**把 Vite 端口加进同源名单（那样本机任何进程开的页面都能伪造），而是让这个
+ * 我们自己的 dev 边缘带**密钥**并声明页面真实 origin —— 只有密钥成立时网关才采信声明
+ * （与 `X-Forwarded-*` + 反代密钥同一套模式）。
+ *
+ * 密钥取自环境变量：`VESSEL_PLATFORM_PROXY_SECRET`（显式）优先，否则沿用
+ * `VESSEL_DEV_RELAY_SECRET`（`bun run dev:web` 已经在用）。**两者都没设 ⇒ 什么都不发**，
+ * 行为与今天逐字一致。
+ */
+const PLATFORM_PROXY_SECRET =
+  process.env.VESSEL_PLATFORM_PROXY_SECRET ?? process.env.VESSEL_DEV_RELAY_SECRET;
+
+/**
+ * 声明值：缺省「浏览器发来的 Origin」（忠实转发）。若 dev 边缘改写了 Host
+ * （`changeOrigin: true` 或 relay 转发到别的端口），就用这个变量显式声明
+ * 「网关是以哪个 origin 被访问的」—— 声明必须是 edge 的事实，不能猜。
+ */
+const TRUSTED_ORIGIN_CLAIM = process.env.VESSEL_TRUSTED_ORIGIN_CLAIM;
+
+function platformProxyConfigure(): NonNullable<ProxyOptions['configure']> | undefined {
+  if (PLATFORM_PROXY_SECRET === undefined || PLATFORM_PROXY_SECRET === '') return undefined;
+  return (proxy) => {
+    proxy.on(
+      'proxyReq',
+      (
+        proxyReq: { setHeader(name: string, value: string): void },
+        req: { headers: Record<string, string | string[] | undefined> },
+      ) => {
+        proxyReq.setHeader(PROXY_SECRET_HEADER, PLATFORM_PROXY_SECRET);
+        const fromEnv = TRUSTED_ORIGIN_CLAIM;
+        const claimed =
+          typeof fromEnv === 'string' && fromEnv !== '' ? fromEnv : req.headers.origin;
+        // 没有声明值就不发：让网关按老规则判（声明必须是「我看到的事实」，不是猜的）。
+        if (typeof claimed === 'string' && claimed !== '') {
+          proxyReq.setHeader(TRUSTED_ORIGIN_HEADER, claimed);
+        }
+      },
+    );
+  };
+}
+
+const platformConfigure = platformProxyConfigure();
+
 const relay =
   RELAY_URL !== undefined && RELAY_URL !== '' && RELAY_SECRET !== undefined && RELAY_SECRET !== ''
     ? { url: RELAY_URL, secret: RELAY_SECRET }
@@ -156,7 +208,13 @@ export default defineConfig({
     port: 5173,
     proxy: {
       // 平台入口：独立监听；不经过 dev relay（平台 token 是静态 bearer）。
-      '/platform': { target: PLATFORM, changeOrigin: false },
+      // `configure` 只在设了平台反代密钥时才有：带上密钥头 + 页面 origin 声明，
+      // 让带 cookie 的变更请求能过 CSRF 闸（见 platformProxyConfigure 的注释）。
+      '/platform': {
+        target: PLATFORM,
+        changeOrigin: false,
+        ...(platformConfigure !== undefined ? { configure: platformConfigure } : {}),
+      },
       // node 入口：WS + legacy 回退。
       '/v1': { target: nodeTarget, ws: true, changeOrigin: false, configure },
       '/health': { target: nodeTarget, changeOrigin: false, configure },

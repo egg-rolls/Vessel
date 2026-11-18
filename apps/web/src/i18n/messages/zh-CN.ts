@@ -1746,7 +1746,8 @@ export const messages = {
   'gateway.platform.credentialsUnavailable': '无法读取节点凭据；请手动输入节点 token。',
   // 0.56：WebUI 用 GitHub 登录（单用户）。
   'auth.login.title': '登录 Vessel',
-  'auth.login.subtitle': '用 GitHub 登录后即可使用这个 WebUI（单用户部署，只允许指定的账号）。',
+  'auth.login.subtitle':
+    '用已配置的登录方式登录后即可使用这个 WebUI（单用户部署，只允许指定的账号）。',
   'auth.login.passwordSubtitle':
     '这个 WebUI 需要口令登录（单用户部署；配了 TOTP 时还要一次性验证码）。',
   'auth.login.username': '登录名',
@@ -1760,22 +1761,22 @@ export const messages = {
   'auth.login.totpHint': '口令通过后还要 TOTP 验证码；时钟漂移容忍 ±30 秒。',
   'auth.login.bootstrapHint':
     '还没有设置口令：请用启动日志里打印的一次性引导码打开这个页面（#token=<引导码>，10 分钟内有效、只能用一次）。',
-  'auth.login.redirectHint': 'GitHub OAuth App 的回调地址必须是：{uri}（逐字节一致，无尾斜杠）。',
+  'auth.login.redirectHint': 'OAuth 应用的回调地址必须是：{uri}（逐字节一致，无尾斜杠）。',
   'auth.signedInAs': '已登录为 {user}',
   'auth.signedInAsTitle': '当前会话身份：{user}',
   'auth.logout': '登出',
-  'auth.sessionRequired': '会话已失效或未登录：请重新用 GitHub 登录。',
+  'auth.sessionRequired': '会话已失效或未登录：请重新登录。',
   'auth.csrfRejected': '请求缺少有效的 CSRF 令牌（可能是另一个标签页轮换了它）：请刷新页面后重试。',
   'auth.error.state_invalid': '登录状态校验失败（state 不匹配、已过期或已被使用）：请重新登录。',
-  'auth.error.code_missing': 'GitHub 没有返回授权码：请重新登录。',
+  'auth.error.code_missing': '登录服务没有返回授权码：请重新登录。',
   'auth.error.secret_missing':
-    '服务端没有读到 client secret 环境变量 VESSEL_GITHUB_OAUTH_SECRET：请让部署者设置它。',
+    '服务端没有读到登录后端的 client secret 环境变量（auth.backends[].clientSecretEnv）：请让部署者设置它。',
   'auth.error.token_exchange_failed': '用授权码换 access token 失败：请重新登录。',
-  'auth.error.user_fetch_failed': '读取 GitHub 用户信息失败：请重新登录。',
-  'auth.error.not_allowlisted':
-    '这个 GitHub 账号不在允许登录的名单里（本部署只允许指定的数值 user id）。',
-  'auth.error.public_origin_missing': '服务端没有配置 auth.publicOrigin，无法发起登录。',
-  'auth.error.backend_not_configured': '服务端没有启用 GitHub 登录后端。',
+  'auth.error.user_fetch_failed': '读取登录用户信息失败：请重新登录。',
+  'auth.error.not_allowlisted': '这个账号不在允许登录的名单里（本部署只允许指定的账号 / id）。',
+  'auth.error.public_origin_missing':
+    '服务端没有配置 auth.publicOrigin / auth.publicOrigins，无法发起登录。',
+  'auth.error.backend_not_configured': '服务端没有启用这个登录后端。',
   'auth.error.invalid_credentials': '登录名或口令不对。',
   'auth.error.invalid_code': '验证码不对（或已过期）：请用当前 6 位码再试一次。',
   'auth.error.code_replayed': '这个验证码已经用过了：同一个码不能重复使用，请等下一个 30 秒。',

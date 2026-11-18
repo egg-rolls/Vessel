@@ -21,21 +21,28 @@ export {
   type TotpRecord,
 } from './credentials.js';
 export {
-  type AuthBackendConfig,
   type AuthLogFn,
   buildAuthorizeUrl,
   buildRedirectUri,
+  type CompleteOAuthLoginInput,
   completeGitHubLogin,
+  completeOAuthLogin,
   GITHUB_CALLBACK_PATH,
   type GitHubAuthFailure,
   type GitHubAuthResult,
   type GitHubEndpoints,
   type GitHubOAuthBackendConfig,
   isAllowlisted,
-  normalizeGitHubUser,
+  normalizeProviderUser,
+  type OAuthAuthFailure,
+  type OAuthAuthResult,
+  type OAuthBackendConfig,
+  type OAuthEndpoints,
   OAuthFlowStore,
+  oauthCallbackPath,
+  oauthStartPath,
   resolveClientSecret,
-} from './github-oauth.js';
+} from './oauth.js';
 export {
   mergePublicOrigins,
   normalizeOriginOrNull,
@@ -67,10 +74,13 @@ export {
   type AuthServiceOptions,
   type AuthSessionSettings,
   type AuthSettings,
+  type AuthWhoami,
   CSRF_HEADER,
   isAuthPublicPath,
   LOGIN_PATH,
   unlockCommand,
+  type WhoamiBackend,
+  type WhoamiRuntimeInfo,
 } from './routes.js';
 export {
   type AuthSubject,

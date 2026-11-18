@@ -1831,7 +1831,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // 0.56: WebUI sign-in with GitHub (single user).
   'auth.login.title': 'Sign in to Vessel',
   'auth.login.subtitle':
-    'Sign in with GitHub to use this WebUI (single-user deployment: only the configured account is allowed).',
+    'Sign in with a configured backend to use this WebUI (single-user deployment: only the configured account is allowed).',
   'auth.login.passwordSubtitle':
     'This WebUI requires a password (single-user deployment; TOTP adds a one-time code).',
   'auth.login.username': 'Login name',
@@ -1848,26 +1848,26 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'auth.login.bootstrapHint':
     'No password is set yet: open this page with the one-time bootstrap code printed at startup (#token=<code>, valid for 10 minutes, single use).',
   'auth.login.redirectHint':
-    'The GitHub OAuth App callback URL must be exactly: {uri} (no trailing slash).',
+    'The OAuth app callback URL must be exactly: {uri} (no trailing slash).',
   'auth.signedInAs': 'Signed in as {user}',
   'auth.signedInAsTitle': 'Current session identity: {user}',
   'auth.logout': 'Sign out',
-  'auth.sessionRequired': 'Session expired or missing: sign in with GitHub again.',
+  'auth.sessionRequired': 'Session expired or missing: sign in again.',
   'auth.csrfRejected':
     'The request had no valid CSRF token (another tab may have rotated it): reload and retry.',
   'auth.error.state_invalid':
     'Login state rejected (mismatched, expired or already used): sign in again.',
-  'auth.error.code_missing': 'GitHub returned no authorization code: sign in again.',
+  'auth.error.code_missing': 'The login provider returned no authorization code: sign in again.',
   'auth.error.secret_missing':
-    'The server could not read the client secret env var VESSEL_GITHUB_OAUTH_SECRET: ask the operator to set it.',
+    'The server could not read the client secret env var of this login backend (auth.backends[].clientSecretEnv): ask the operator to set it.',
   'auth.error.token_exchange_failed':
     'Exchanging the code for an access token failed: sign in again.',
-  'auth.error.user_fetch_failed': 'Reading the GitHub user failed: sign in again.',
+  'auth.error.user_fetch_failed': 'Reading the signed-in user failed: sign in again.',
   'auth.error.not_allowlisted':
-    'This GitHub account is not on the allowlist (this deployment only allows a specific numeric user id).',
+    'This account is not on the allowlist (this deployment only allows specific accounts / ids).',
   'auth.error.public_origin_missing':
-    'The server has no auth.publicOrigin configured; sign-in cannot start.',
-  'auth.error.backend_not_configured': 'The server has no GitHub login backend enabled.',
+    'The server has no auth.publicOrigin / auth.publicOrigins configured; sign-in cannot start.',
+  'auth.error.backend_not_configured': 'The server has this login backend disabled.',
   'auth.error.invalid_credentials': 'Wrong login name or password.',
   'auth.error.invalid_code': 'Wrong or expired code: try the current 6-digit code again.',
   'auth.error.code_replayed':

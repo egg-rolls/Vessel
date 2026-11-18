@@ -536,22 +536,37 @@ export interface GatewaySuperviseConfig {
   recoveryProbes?: number;
 }
 
-/** 0.56：GitHub OAuth 登录后端。 */
-export interface GitHubOAuthBackendConfig {
-  /** 后端种类。缺省即 github_oauth（兼容 0.56 P1 的写法）。 */
-  kind?: 'github_oauth';
-  /** GitHub OAuth App 的 client id（非密钥）。 */
+/**
+ * 0.62：OAuth 登录后端（`github_oauth` / `microsoft_oauth` / `gitee_oauth` /
+ * 以后新增的 provider 共用同一字段形状）。
+ *
+ * `kind` 是**开放取值**：合法值由登录策略注册表决定
+ * （`packages/config/src/auth-strategies/`），不在这里枚举 —— 加一个 provider
+ * 只加一个策略文件 + 注册一行，不改这个文件，也不改校验器的白名单。
+ */
+export interface OAuthBackendConfig {
+  /** 后端种类。缺省即 github_oauth（兼容 0.56 P1 的写法）。未知值在校验期报错。 */
+  kind?: string;
+  /** OAuth App 的 client id（非密钥）。 */
   clientId?: string;
   /**
    * client_secret 的**环境变量名**（不是值）。密钥永不进配置、日志、错误文案。
-   * 约定：VESSEL_GITHUB_OAUTH_SECRET。
+   * 约定：github 用 VESSEL_GITHUB_OAUTH_SECRET，microsoft 可用 MS_CLIENT_SECRET。
    */
   clientSecretEnv?: string;
-  /** 单用户白名单：GitHub **数值 user id**（数字或十进制字符串）。 */
+  /**
+   * 单用户白名单（**语义按 kind 走**，见策略的 `allowUserIdsShape`）：
+   * - github：数值 user id；
+   * - microsoft：Graph `/v1.0/me` 的 `id`（GUID，大小写不敏感）；
+   * - gitee：数值 id 或用户名。
+   */
   allowUserIds?: Array<number | string>;
-  /** 登录按钮文案；缺省「用 GitHub 登录」。 */
+  /** 登录按钮文案；缺省按 provider 给（如「Sign in with GitHub」）。 */
   label?: string;
 }
+
+/** 0.56 名称的兼容别名。 */
+export type GitHubOAuthBackendConfig = OAuthBackendConfig;
 
 /**
  * 0.56 P2：口令后端（自建、离线可用；可选 TOTP 第二因子）。
@@ -575,7 +590,7 @@ export interface PasswordBackendConfig {
 }
 
 /** 一个登录后端。 */
-export type AuthBackendConfig = GitHubOAuthBackendConfig | PasswordBackendConfig;
+export type AuthBackendConfig = OAuthBackendConfig | PasswordBackendConfig;
 
 /** 0.56：WebUI 登录（`auth` 块）。未配置 = 不启用，行为与 0.55 一致。 */
 export interface AuthConfig {

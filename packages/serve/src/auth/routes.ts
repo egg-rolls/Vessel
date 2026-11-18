@@ -16,19 +16,27 @@
  */
 
 import { createHash, timingSafeEqual } from 'node:crypto';
+import {
+  type AuthStrategy,
+  authStrategies,
+  getAuthStrategy,
+  PASSWORD_STRATEGY_KIND,
+  redirectAuthStrategies,
+} from '@vessel-agent/config';
 import { isLoopbackAddress, type RequestEdge } from '../gateway/auth.js';
 import { BootstrapCodes, PendingLogins } from './bootstrap.js';
 import { CredentialStore, normalizeRecoveryCode } from './credentials.js';
 import {
   buildAuthorizeUrl,
   buildRedirectUri,
-  completeGitHubLogin,
-  GITHUB_CALLBACK_PATH,
-  type GitHubEndpoints,
-  type GitHubOAuthBackendConfig,
+  completeOAuthLogin,
+  type OAuthBackendConfig,
+  type OAuthEndpoints,
   OAuthFlowStore,
+  oauthCallbackPath,
+  oauthStartPath,
   resolveClientSecret,
-} from './github-oauth.js';
+} from './oauth.js';
 import { mergePublicOrigins, selectPublicOrigin } from './origins.js';
 import { dummyPasswordCheck, passwordPolicyError, verifyPassword } from './password.js';
 import { accountKey, ipKey, LoginLimiter, retryAfterSeconds } from './ratelimit.js';
@@ -69,8 +77,8 @@ export interface PasswordBackendConfig {
   label?: string | undefined;
 }
 
-/** 一个登录后端：GitHub OAuth 或口令（可叠加 TOTP）。 */
-export type AuthBackendConfig = GitHubOAuthBackendConfig | PasswordBackendConfig;
+/** 一个登录后端：任意已注册的 OAuth 策略或口令（可叠加 TOTP）。 */
+export type AuthBackendConfig = OAuthBackendConfig | PasswordBackendConfig;
 
 export interface AuthSessionSettings {
   /** 空闲超时（分钟，滑动）；缺省 30。 */
@@ -111,10 +119,30 @@ export interface AuthSettings {
 export interface AuthServiceOptions extends AuthSettings {
   /** 解析密钥用的环境变量；缺省 process.env。 */
   env?: Record<string, string | undefined> | undefined;
-  /** GitHub 端点覆盖（验收桩 / GHE）。 */
-  endpoints?: GitHubEndpoints | undefined;
+  /** OAuth 端点覆盖（验收桩 / 私有部署）；省略 = 用策略自带的正式端点。 */
+  endpoints?: OAuthEndpoints | undefined;
   /** fetch 覆盖（验收桩）；缺省全局 fetch。 */
   fetchImpl?: typeof fetch | undefined;
+  /**
+   * `GET /auth/whoami` 的运行期事实（node / team）。
+   *
+   * 登录层只认识请求与会话，不认识 node 注册表与 team；这两样由组合根注入。
+   * 不注入时 whoami 只报 `identity` / `backends` / `auth_mode`，`node` 与 `team`
+   * 一律 null（前端据此降级），**不猜**。
+   */
+  runtimeInfo?: ((req: Request) => WhoamiRuntimeInfo | Promise<WhoamiRuntimeInfo>) | undefined;
+  /**
+   * 平台的反代密钥**值**（`gateway.proxy_secret_env` 指向的那个）。
+   *
+   * 用途**只有一个**：判断「受信 relay 的页面 origin 声明」能不能采信。
+   * 不比较、不回显、不进日志 —— 比较由受信边缘（`resolveRequestEdge`）完成，这里只关心
+   * 「到底配没配」。
+   *
+   * 为什么需要它：`proxySecretAllowed()` 在**未配置**时恒返回 true（旧部署兼容），
+   * 所以 `edge.proxySecretOk === true` 并不能证明「密钥成立」。没配密钥的部署里任何本机
+   * 进程都能连上来，此时采信 origin 声明就是把 CSRF 闸拆了。
+   */
+  proxySecret?: string | undefined;
   /**
    * 平台 token（本进程实际生效的那个值）：`POST /auth/unlock` 用它做「确实是本机主人」
    * 的第二个凭据。**只比较、不回显、不落盘**。
@@ -125,6 +153,40 @@ export interface AuthServiceOptions extends AuthSettings {
   /** 可注入时钟。 */
   now?: (() => number) | undefined;
 }
+
+/** `GET /auth/whoami` 里 node / team 的形状（组合根注入）。 */
+export interface WhoamiRuntimeInfo {
+  node: { id: string; name: string; state: string } | null;
+  team: { id: string; name: string } | null;
+}
+
+/** 一个可发起登录的后端（`/auth/whoami` 的 `backends`）。 */
+export interface WhoamiBackend {
+  id: string;
+  label: string;
+  kind: string;
+  /** 缺 secret / 缺 clientId 时为 true，并给出 `reason`。 */
+  disabled?: boolean;
+  reason?: string;
+}
+
+/** `GET /auth/whoami` 的返回体（契约见 0.62 前端单子 C）。 */
+export interface AuthWhoami {
+  identity: { name: string; id: string; role: string } | null;
+  node: { id: string; name: string; state: string } | null;
+  team: { id: string; name: string } | null;
+  backends: WhoamiBackend[];
+  auth_mode: 'cookie' | 'bearer' | 'none';
+}
+
+/**
+ * 受信 relay 声明的「页面真实 origin」头。
+ *
+ * 只对**持有 relay 密钥**的 dev 边缘有意义：Vite dev relay 把浏览器的 Origin 转发到这里，
+ * 平台在密钥成立时才拿它参与 `Origin` 比较。没有密钥的请求写了这个头等于没写
+ * （见 `trustedOriginClaim`）。
+ */
+export const TRUSTED_ORIGIN_HEADER = 'x-vessel-origin';
 
 /** 登录层需要的请求事实（全部取自受信边缘）。 */
 export interface AuthRequestContext {
@@ -201,8 +263,12 @@ export class AuthService {
    */
   private readonly setupBindings = new Map<string, string>();
   private readonly env: Record<string, string | undefined>;
-  private readonly endpoints: GitHubEndpoints | undefined;
+  private readonly endpoints: OAuthEndpoints | undefined;
+  private readonly runtimeInfo:
+    | ((req: Request) => WhoamiRuntimeInfo | Promise<WhoamiRuntimeInfo>)
+    | undefined;
   private readonly fetchImpl: typeof fetch | undefined;
+  private readonly proxySecret: string | undefined;
   private readonly platformToken: string | undefined;
   private readonly log: (message: string) => void;
   private readonly now: () => number;
@@ -234,7 +300,12 @@ export class AuthService {
     };
     this.env = options.env ?? (process.env as Record<string, string | undefined>);
     this.endpoints = options.endpoints;
+    this.runtimeInfo = options.runtimeInfo;
     this.fetchImpl = options.fetchImpl;
+    this.proxySecret =
+      typeof options.proxySecret === 'string' && options.proxySecret !== ''
+        ? options.proxySecret
+        : undefined;
     this.platformToken =
       typeof options.platformToken === 'string' && options.platformToken !== ''
         ? options.platformToken
@@ -292,9 +363,9 @@ export class AuthService {
   }
 
   /** 口令后端（单用户）；没配返回 null。 */
-  passwordBackend(): Extract<AuthBackendConfig, { kind: 'password' }> | null {
+  passwordBackend(): PasswordBackendConfig | null {
     for (const backend of this.settings.backends) {
-      if (backend.kind === 'password') return backend;
+      if (backend.kind === PASSWORD_STRATEGY_KIND) return backend as PasswordBackendConfig;
     }
     return null;
   }
@@ -403,7 +474,10 @@ export class AuthService {
     const mutating = options.mutating ?? false;
     if (mutating) {
       const origin = req.headers.get('origin');
-      if (origin !== null && !this.originMatchesEdge(origin, ctx)) {
+      if (
+        origin !== null &&
+        !this.originMatchesEdge(origin, ctx, this.trustedOriginClaim(req, ctx))
+      ) {
         return { ok: false, reason: 'csrf_failed' };
       }
       const token = req.headers.get(CSRF_HEADER);
@@ -422,15 +496,39 @@ export class AuthService {
   }
 
   /** Origin 头必须与受信边缘解析出的 host 一致。 */
-  private originMatchesEdge(origin: string, ctx: AuthRequestContext): boolean {
+  private originMatchesEdge(
+    origin: string,
+    ctx: AuthRequestContext,
+    trustedOriginClaim: string | null,
+  ): boolean {
+    // 受信 relay 的声明优先（只有密钥成立时调用方才会给出非 null）。
+    const candidate = trustedOriginClaim ?? origin;
     let parsed: URL;
     try {
-      parsed = new URL(origin);
+      parsed = new URL(candidate);
     } catch {
       return false;
     }
     if (ctx.edge.host === null) return false;
     return parsed.host.toLowerCase() === ctx.edge.host.toLowerCase();
+  }
+
+  /**
+   * 受信 relay 声明的页面 origin；**不满足三个条件一律 null**（等于没声明）。
+   *
+   * 1. 平台**确实配置了**反代密钥（否则 `proxySecretOk` 是「未配置 ⇒ 恒 true」的假象）；
+   * 2. 边缘判定认为密钥成立且来自受信地址（`viaProxy && proxySecretOk`）；
+   * 3. 请求带了声明头。
+   *
+   * 这就是「无密钥请求永不采信」：伪造 `x-vessel-origin` 拿不到任何好处。
+   */
+  private trustedOriginClaim(req: Request, ctx: AuthRequestContext): string | null {
+    if (this.proxySecret === undefined || this.proxySecret === '') return null;
+    if (!ctx.edge.viaProxy || !ctx.edge.proxySecretOk) return null;
+    const claim = req.headers.get(TRUSTED_ORIGIN_HEADER);
+    if (claim === null) return null;
+    const trimmed = claim.trim();
+    return trimmed === '' ? null : trimmed;
   }
 
   /** GET /auth/status：我是谁、有哪些登录后端、CSRF 令牌。 */
@@ -463,7 +561,69 @@ export class AuthService {
     });
   }
 
-  /** 后端的公开描述（不含密钥、不含白名单）。 */
+  /**
+   * GET /auth/whoami：前端渲染外壳需要的**一屏事实**（与 `platform.whoami` 区分：
+   * 后者讲平台 token 与代理能力，这个讲「我是谁、能用哪个后端登录」）。
+   *
+   * 三条约束：
+   * - **未登录也允许调用**：`identity: null`，`backends` 照旧 —— 登录页正是靠它
+   *   渲染按钮的，要求先登录才能问「怎么登录」就是死锁；
+   * - 只报本人：`identity` 只有自己的 id / 展示名 / 角色，**不**回显 `allow_user_ids`
+   *   名单，也永不回显 client secret；
+   * - `node` / `team` 由组合根注入（登录层不认识它们）；注入方没给就是 null，
+   *   前端据此降级 —— 不猜、不编。
+   */
+  private async whoamiResponse(req: Request, ctx: AuthRequestContext): Promise<Response> {
+    const session = this.readSession(req, ctx);
+    const subject = session === null ? null : session.snapshot.subject;
+    const runtime = (await this.runtimeInfo?.(req)) ?? { node: null, team: null };
+    const body: AuthWhoami = {
+      identity:
+        subject === null
+          ? null
+          : {
+              // 展示名缺省用 id（口令后端只有登录名）。
+              name: subject.username ?? subject.id,
+              id: subject.id,
+              // 单用户部署：能拿到会话的人就是本部署的主人，与平台 token 同侧。
+              role: 'admin',
+            },
+      node: runtime.node ?? null,
+      team: runtime.team ?? null,
+      backends: this.enabled ? this.whoamiBackends() : [],
+      auth_mode: this.authModeOf(req, session),
+    };
+    return jsonResponse(body);
+  }
+
+  /**
+   * 本次请求是**怎么被认出来的**：
+   * - 会话 cookie（`cookie`）；
+   * - 平台 token（`bearer`）；
+   * - 都没有（`none`）：回环匿名也是这一种（旧行为，不锁死本机）。
+   */
+  private authModeOf(
+    req: Request,
+    session: { snapshot: SessionSnapshot } | null,
+  ): 'cookie' | 'bearer' | 'none' {
+    if (session !== null) return 'cookie';
+    const provided = bearer(req);
+    if (
+      this.platformToken !== undefined &&
+      provided !== null &&
+      constantTimeEqual(provided, this.platformToken)
+    ) {
+      return 'bearer';
+    }
+    return 'none';
+  }
+
+  /**
+   * 后端的公开描述（不含密钥、不含白名单）。
+   *
+   * 顺序 = 配置顺序；provider 差异（id / 文案 / 起步路径）全部来自策略注册表，
+   * 这里没有任何 provider 名字面量。
+   */
   private describeBackends(): {
     id: string;
     kind: string;
@@ -471,31 +631,83 @@ export class AuthService {
     startPath: string;
   }[] {
     const list: { id: string; kind: string; label: string; startPath: string }[] = [];
-    const password = this.passwordBackend();
-    if (password !== null) {
+    for (const backend of this.settings.backends) {
+      if (backend.kind === PASSWORD_STRATEGY_KIND) {
+        const password = this.passwordBackend();
+        if (password === null) continue;
+        list.push({
+          id: 'password',
+          kind: 'password',
+          label: password.label ?? 'Sign in with a password',
+          // 口令表单就在登录页本身：没有独立的 302 起步地址。
+          startPath: LOGIN_PATH,
+        });
+        continue;
+      }
+      const strategy = getAuthStrategy(backend.kind);
+      if (strategy === null) continue;
       list.push({
-        id: 'password',
-        kind: 'password',
-        label: password.label ?? 'Sign in with a password',
-        // 口令表单就在登录页本身：没有独立的 302 起步地址。
-        startPath: LOGIN_PATH,
-      });
-    }
-    const github = this.githubBackend();
-    if (github !== null) {
-      list.push({
-        id: 'github',
-        kind: 'github_oauth',
-        label: github.label ?? 'Sign in with GitHub',
-        startPath: '/auth/github/start',
+        id: strategy.id,
+        kind: strategy.kind,
+        label: backend.label ?? strategy.label,
+        startPath: oauthStartPath(strategy),
       });
     }
     return list;
   }
 
-  private githubBackend(): GitHubOAuthBackendConfig | null {
+  /**
+   * `/auth/whoami` 的 `backends`：**当前配置里启用、且现在真能发起**的策略。
+   *
+   * 缺 client secret 的后端照样列出来，但带 `disabled: true` + `reason` ——
+   * 「登录按钮点了没反应」必须能自己解释，而不是要人去翻服务端日志。
+   */
+  private whoamiBackends(): WhoamiBackend[] {
+    const list: WhoamiBackend[] = [];
+    for (const strategy of authStrategies()) {
+      if (strategy.kind === PASSWORD_STRATEGY_KIND) {
+        const password = this.passwordBackend();
+        if (password === null) continue;
+        list.push({
+          id: 'password',
+          kind: 'password',
+          label: password.label ?? strategy.label,
+        });
+        continue;
+      }
+      const backend = this.oauthBackend(strategy.kind);
+      if (backend === null) continue;
+      const entry: WhoamiBackend = {
+        id: strategy.id,
+        kind: strategy.kind,
+        label: backend.label ?? strategy.label,
+      };
+      const reason = this.oauthBackendBlocker(backend);
+      if (reason !== null) {
+        entry.disabled = true;
+        entry.reason = reason;
+      }
+      list.push(entry);
+    }
+    return list;
+  }
+
+  /** 后端现在发起不了的原因；能发起返回 null。 */
+  private oauthBackendBlocker(backend: OAuthBackendConfig): string | null {
+    if (backend.clientId.trim() === '') return 'client_id_missing';
+    if (resolveClientSecret(backend, this.env) === null) {
+      return `secret_missing: env ${backend.clientSecretEnv} is not set`;
+    }
+    return null;
+  }
+
+  /** 按 kind 取已配置的 OAuth 后端；没配返回 null。 */
+  private oauthBackend(kind: string): OAuthBackendConfig | null {
     for (const backend of this.settings.backends) {
-      if (backend.kind !== 'password') return backend;
+      if (backend.kind === PASSWORD_STRATEGY_KIND) continue;
+      // `kind` 是开放取值（策略注册表决定），TypeScript 无法据此收窄，所以显式断言：
+      // 走到这里已经排除了口令后端，剩下的形状就是 OAuth 后端。
+      if (backend.kind === kind) return backend as OAuthBackendConfig;
     }
     return null;
   }
@@ -516,7 +728,10 @@ export class AuthService {
     const session = this.readSession(req, ctx);
     if (session !== null) {
       const origin = req.headers.get('origin');
-      if (origin !== null && !this.originMatchesEdge(origin, ctx)) {
+      if (
+        origin !== null &&
+        !this.originMatchesEdge(origin, ctx, this.trustedOriginClaim(req, ctx))
+      ) {
         return jsonResponse({ error: 'csrf_failed' }, 403, { 'set-cookie': cleared });
       }
       const token = req.headers.get(CSRF_HEADER);
@@ -532,31 +747,33 @@ export class AuthService {
     return jsonResponse({ ok: true }, 200, { 'set-cookie': cleared });
   }
 
-  /** GET /auth/github/start：一次性 state + PKCE，然后 302 去 GitHub。 */
-  private githubStart(ctx: AuthRequestContext): Response {
-    const backend = this.githubBackend();
+  /** GET /auth/<provider>/start：一次性 state + PKCE，然后 302 去 provider。 */
+  private oauthStart(strategy: AuthStrategy, ctx: AuthRequestContext): Response {
+    const backend = this.oauthBackend(strategy.kind);
     if (backend === null) return jsonResponse({ error: 'backend_not_configured' }, 404);
     // 0.60：来源由**受信边缘**在白名单里挑一个；选不出来就拒绝。
     // Never derive redirect_uri from Host / X-Forwarded-*: that is attacker input.
     const origin = selectPublicOrigin(ctx.edge, this.publicOrigins);
     if (origin === null) {
       this.log(
-        'github_oauth: no whitelisted public origin matches this request, refusing to build a redirect_uri',
+        `${strategy.kind}: no whitelisted public origin matches this request, refusing to build a redirect_uri`,
       );
       return jsonResponse({ error: 'public_origin_missing' }, 500);
     }
     if (resolveClientSecret(backend, this.env) === null) {
-      this.log(`github_oauth: env ${backend.clientSecretEnv} is not set`);
+      this.log(`${strategy.kind}: env ${backend.clientSecretEnv} is not set`);
       return redirectResponse(`${LOGIN_PATH}?error=secret_missing`);
     }
     const secure = this.isSecureContext(ctx);
     const binder = randomToken(32);
+    const redirectUri = buildRedirectUri(origin, oauthCallbackPath(strategy));
     // 选中的来源与它拼出的 redirect_uri 一起进在途流程：回调时两样都要对得上。
-    const flow = this.flows.issue({ origin, binder: sha256Hex(binder) });
+    const flow = this.flows.issue({ origin, binder: sha256Hex(binder), redirectUri });
     const target = buildAuthorizeUrl({
+      strategy,
       config: backend,
       flow,
-      redirectUri: buildRedirectUri(origin),
+      redirectUri,
       endpoints: this.endpoints,
     });
     return redirectResponse(target, [this.binderCookie(secure, binder)]);
@@ -581,11 +798,16 @@ export class AuthService {
     return `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`;
   }
 
-  /** GET /auth/github/callback：校验 state + code、比对白名单、建会话。 */
-  private async githubCallback(req: Request, url: URL, ctx: AuthRequestContext): Promise<Response> {
+  /** GET /auth/<provider>/callback：校验 state + code、比对白名单、建会话。 */
+  private async oauthCallback(
+    strategy: AuthStrategy,
+    req: Request,
+    url: URL,
+    ctx: AuthRequestContext,
+  ): Promise<Response> {
     const secure = this.isSecureContext(ctx);
     const clearedBinder = this.clearedBinderCookie(secure);
-    const backend = this.githubBackend();
+    const backend = this.oauthBackend(strategy.kind);
     if (backend === null) {
       return jsonResponse({ error: 'backend_not_configured' }, 404, {
         'set-cookie': clearedBinder,
@@ -598,7 +820,7 @@ export class AuthService {
     );
     if (flow === null) {
       // Unknown / expired / replayed state, or a state minted for another browser.
-      this.log('github_oauth: state rejected (unknown, expired, replayed or binder mismatch)');
+      this.log(`${strategy.kind}: state rejected (unknown, expired, replayed or binder mismatch)`);
       return redirectResponse(`${LOGIN_PATH}?error=state_invalid`, [clearedBinder]);
     }
     // 0.60：state 绑定的是**发起时**选中的来源；回调必须落在同一个来源上 ——
@@ -611,11 +833,25 @@ export class AuthService {
       !this.publicOrigins.includes(flow.origin)
     ) {
       this.log(
-        'github_oauth: state origin mismatch (start and callback resolved to different origins), rejected',
+        `${strategy.kind}: state origin mismatch (start and callback resolved to different origins), rejected`,
       );
       return redirectResponse(`${LOGIN_PATH}?error=state_invalid`, [clearedBinder]);
     }
-    const result = await completeGitHubLogin({
+    // Provider 侧拒绝（用户取消 / 管理员未批准 / 应用配错）不带 code，只带 `error`
+    // （+ `error_description`）。不记下来的话，排障时只剩一个 code_missing，
+    // 分不清「用户点了取消」和「应用没配好」。
+    const providerError = url.searchParams.get('error');
+    if (providerError !== null && providerError !== '') {
+      const description = (url.searchParams.get('error_description') ?? '')
+        .replace(/\s+/g, ' ')
+        .slice(0, 200);
+      this.log(
+        `${strategy.kind}: provider returned error=${providerError}` +
+          (description === '' ? '' : ` (${description})`),
+      );
+    }
+    const result = await completeOAuthLogin({
+      strategy,
       config: backend,
       env: this.env,
       code: url.searchParams.get('code'),
@@ -629,14 +865,14 @@ export class AuthService {
       return redirectResponse(`${LOGIN_PATH}?error=${result.failure}`, [clearedBinder]);
     }
     const subject: AuthSubject = {
-      id: `github:${result.userId}`,
-      backend: 'github',
+      id: `${strategy.id}:${result.userId}`,
+      backend: strategy.id,
       username: result.username,
     };
     const existing = this.readSession(req, ctx);
     const issued = this.issueSession(subject, req, ctx, existing === null ? null : existing.sid);
     const policy = this.cookiePolicy(secure);
-    this.log(`github_oauth: login ok for ${subject.id}`);
+    this.log(`${strategy.kind}: login ok for ${subject.id}`);
     return redirectResponse('/', [buildSessionCookie(policy, issued.sid), clearedBinder]);
   }
 
@@ -674,7 +910,10 @@ export class AuthService {
     ctx: AuthRequestContext,
   ): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; response: Response }> {
     const origin = req.headers.get('origin');
-    if (origin !== null && !this.originMatchesEdge(origin, ctx)) {
+    if (
+      origin !== null &&
+      !this.originMatchesEdge(origin, ctx, this.trustedOriginClaim(req, ctx))
+    ) {
       return { ok: false, response: jsonResponse({ error: 'forbidden_origin' }, 403) };
     }
     const contentType = (req.headers.get('content-type') ?? '').toLowerCase();
@@ -1000,7 +1239,12 @@ export class AuthService {
     if (session === null) return null;
     if (session.snapshot.subject.backend !== 'bootstrap') return null;
     const origin = req.headers.get('origin');
-    if (origin !== null && !this.originMatchesEdge(origin, ctx)) return null;
+    if (
+      origin !== null &&
+      !this.originMatchesEdge(origin, ctx, this.trustedOriginClaim(req, ctx))
+    ) {
+      return null;
+    }
     const token = req.headers.get(CSRF_HEADER);
     if (token === null || token === '') return null;
     if (!this.sessions.csrfValid(session.snapshot, token)) return null;
@@ -1245,13 +1489,16 @@ export class AuthService {
       if (method !== 'POST') return methodNotAllowed('POST');
       return this.unlock(req, ctx);
     }
-    if (path === '/auth/github/start') {
-      if (method !== 'GET') return methodNotAllowed('GET');
-      return this.githubStart(ctx);
+    if (path === '/auth/whoami') {
+      if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed('GET');
+      return await this.whoamiResponse(req, ctx);
     }
-    if (path === GITHUB_CALLBACK_PATH) {
+    const oauthRoute = matchOAuthRoute(path);
+    if (oauthRoute !== null) {
       if (method !== 'GET') return methodNotAllowed('GET');
-      return await this.githubCallback(req, url, ctx);
+      return oauthRoute.phase === 'start'
+        ? this.oauthStart(oauthRoute.strategy, ctx)
+        : await this.oauthCallback(oauthRoute.strategy, req, url, ctx);
     }
     if (path === '/auth' || path === '/auth/') {
       return jsonResponse({
@@ -1268,8 +1515,11 @@ export class AuthService {
           '/auth/totp/enroll',
           '/auth/recovery/rotate',
           '/auth/unlock',
-          '/auth/github/start',
-          GITHUB_CALLBACK_PATH,
+          '/auth/whoami',
+          ...redirectAuthStrategies().flatMap((strategy) => [
+            oauthStartPath(strategy),
+            oauthCallbackPath(strategy),
+          ]),
         ],
       });
     }
@@ -1302,6 +1552,22 @@ export class AuthService {
 
 function methodNotAllowed(allowed: string): Response {
   return jsonResponse({ error: 'method_not_allowed' }, 405, { allow: allowed });
+}
+
+/**
+ * `/auth/<provider>/(start|callback)` 的路由匹配。
+ *
+ * provider 清单来自策略注册表（`redirectAuthStrategies()`），不是这里的一份硬编码表 ——
+ * 新 provider 注册后路由自动存在。
+ */
+function matchOAuthRoute(
+  path: string,
+): { strategy: AuthStrategy; phase: 'start' | 'callback' } | null {
+  for (const strategy of redirectAuthStrategies()) {
+    if (path === oauthStartPath(strategy)) return { strategy, phase: 'start' };
+    if (path === oauthCallbackPath(strategy)) return { strategy, phase: 'callback' };
+  }
+  return null;
 }
 
 /** `Authorization: Bearer <token>` 的值；缺失返回 null。 */
