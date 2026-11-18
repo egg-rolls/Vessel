@@ -86,15 +86,15 @@
   `const EN = {...} as const; type MessageKey = keyof typeof EN;`
 - 其它语言必须 `Record<MessageKey, string>`；缺 key 由 typecheck 拦截。
 - `t()` 的 key 参数收紧为 `MessageKey`；动态 key 先证明来源再放宽。
-- 仓库门禁 `bun run scripts/check-i18n.ts` 同时校验 Web catalog 与
-  `plugins/**/web-src/i18n.ts`：
+- 文案落地靠评审（原 `bun run scripts/check-i18n.ts` 已按宪法删除），评审项与它当年校验的
+  完全一致 —— Web catalog 与 `plugins/**/web-src/i18n.ts` 都要过一遍：
   - key 集合双向相等；
   - `{placeholder}` 集合相等；
-  - 译文与英文相同的 key 报告为 warn（专有名词进脚本内显式 allowlist，并写明理由）。
+  - 译文与英文相同的 key 视为可疑（专有名词需在白名单里写明理由）。
 - zh 文案不得保留 `Marketplace` / `Registry` 等未翻译标签；确需保留英文的专有名词
-  必须进 allowlist。
+  必须在评审时说明理由。
 
-路径：`scripts/check-i18n.ts`、`plugins/**/web-src/i18n.ts`。
+路径：`plugins/**/web-src/i18n.ts`、`apps/web/src/i18n/`。
 
 ## 6. Design Lab
 

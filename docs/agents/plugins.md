@@ -21,8 +21,9 @@ applies_to: [N, M]
 - `package.json.vessel.contributes.rpc[].name` 必须是裸名，匹配
   `^[a-z][a-z0-9_-]*$`（宿主注册为 `plugin.<id>.<name>`）；清单的 engines / entry /
   contributes / permissions 错误同样 fail-closed。
-- 提交前跑 `bun run scripts/check-rpc-methods.ts`：扫描 `plugins/**/package.json`
-  （跳过 `node_modules` / `dist` / `web`），非法清单 exit 1；gateway 方法表检查同时执行。
+- 提交前人工核对 `plugins/**/package.json` 的清单（跳过 `node_modules` / `dist` / `web`）：
+  非法清单不许进仓，`rpc[].name` 必须是裸名等规则见上；gateway 方法表以
+  `docs/architecture/gateway-rpc.md` 的 canonical 表为准（原 `check-rpc-methods` 脚本已按宪法删除，改为评审项）。
   不要为历史非法名加 allowlist——改清单本身。
 - 0.48 M4：外部插件（`source !== 'repo'`）的 HTTP path 必须是 `/plugins/<own-id>/<段>`；
   route / CLI command 需 `plugins[].expose` 显式授权（builtin 忽略），CLI 未授权 / config

@@ -147,7 +147,7 @@ Vessel\                                    # 共享侧（git）
 ### 3.3 代码
 
 - 代码按事业部独占（见 §5）。
-- **仓库没有自动化测试文件**：不存在 `__tests__/`、`*.test.ts`、`fixtures/` 目录，也不要新增。改动的证据是 typecheck + biome + `scripts/check-*.ts` + 端到端烟测（`VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`）。
+- **仓库没有自动化测试文件**：不存在 `__tests__/`、`*.test.ts`、`fixtures/` 目录，也不要新增（宪法第三、四条）。改动的证据是 `bun run build`（typecheck + biome）+ 手工端到端冒烟（`VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`）+ verifier 线程的读数。
 - 新增包必须进入根 `package.json` 的 workspaces（`packages/*`、`plugins/*/*`）。
 - 新增插件放 `plugins/<category>/<name>/`，目录即注册；进程启动时扫描一次。
 
@@ -288,7 +288,7 @@ N 在自己的分支提交（只含共享侧成品）
 
 `.github/workflows/ci.yml` 已删除（原因与替代方案见 [operations/CI-CD.md](operations/CI-CD.md) §1）。
 现在只有两个 workflow：`release.yml`（tag → CD）与 `sync-labels.yml`（PR 标签同步）。
-本地门禁是唯一权威：`bun run gates`（biome → typecheck → build → `scripts/check-*` → 离线集成）。
+本地检查是唯一权威：`bun run build`（typecheck + biome ci）+ 手工端到端冒烟。仓库里没有 gate / test / probe 脚本（`scripts/check-*` 已于 2026-11-16 按宪法删除）。
 `.github/actions/quality` 仍被 `release.yml` 使用，**不要删**。
 ### 9.2 Release（`.github/workflows/release.yml`）
 

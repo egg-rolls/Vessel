@@ -83,7 +83,7 @@ export function crc32State(): Crc32State {
  * 用**下标循环**而不是 `for (const byte of bytes)`：调用点拿到的常常是 `readFile()`
  * 返回的 `Buffer`，对它做迭代器遍历会走「逐元素装箱 + next() 调用」的慢路径。实测同一份
  * 302.8 MB / 1894 块的数据，同一条表驱动实现两种写法相差 7 倍（7.99 ms/块 → 1.1 ms/块，
- * 见 `scripts/crash-hunt/stress-a-blocks.ts --verify-dir`）。算法与结果一个字没变。
+ * 读数存档见 `docs/operations/BUN-WIN32-SEGFAULT.md` §8.4）。算法与结果一个字没变。
  */
 export function crc32Update(state: Crc32State, bytes: Uint8Array): Crc32State {
   let crc = state.crc;
@@ -119,8 +119,8 @@ const CRC32_NATIVE_ENV = 'VESSEL_CRC32_NATIVE';
  * `panic(main thread): Segmentation fault at address 0xFFFFFFFFFFFFFFFF`，而同一天
  * 另外两次崩溃（`0x0`、`0x121AA240000`）也都出在原生模块上。原生 crc32 是热路径里
  * **唯一**的 `node:` 内建调用（`require('node:zlib')`），一块 MiB 级数据就要进一次原生
- * 代码；表驱动完全不进原生栈。代价实测 +0.98 ms / 159 KB 块（见
- * `scripts/crash-hunt/probe-crc32.ts`）—— 用一秒里的一毫秒换「进程不崩」，划算。
+ * 代码；表驱动完全不进原生栈。代价实测 +0.98 ms / 159 KB 块（对照读数存档见
+ * `docs/operations/BUN-WIN32-SEGFAULT.md` §8.4）—— 用一秒里的一毫秒换「进程不崩」，划算。
  *
  * 开关取值：`1|true|on` 强制原生；`0|false|off` 强制表驱动；其它（含未设置）按平台缺省。
  * 环境变量在模块加载时读一次（热路径上不查 env）。

@@ -2,7 +2,7 @@
 title: un-acked 队列结案（0.54：它是空集，不是待实现）
 kind: current
 triggers: [un-acked 队列, 未确认队列, unacked, 未确认落盘, 已发布未落盘, 不遗漏判据, 双指针, timeline_head, wal_head, published_head, 发布早于 WAL, 洞, holes, 对账, 结案, 0.53 四问]
-paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.ts, packages/core/src/timeline/holes.ts, packages/core/src/timeline/types.ts, packages/serve/src/gateway/methods/sessions.ts, src/timeline-dual-write.ts, packages/config/src/defaults.ts, scripts/check-timeline-holes.ts, scripts/check-timeline-archive.ts, scripts/check-timeline-conformance.ts]
+paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.ts, packages/core/src/timeline/holes.ts, packages/core/src/timeline/types.ts, packages/serve/src/gateway/methods/sessions.ts, src/timeline-dual-write.ts, packages/config/src/defaults.ts]
 ---
 
 # un-acked 队列结案（0.54：空集）
@@ -57,19 +57,24 @@ paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.
 - 但那段**还没有 seq、还没有发布**：`chunkStep` 分配 seq 后先进块，块 fsync 后 `completeBlock` 才发布（`writer.ts:600-624`、`:757-772`）。所以它**不在等式里**，也**不构成「UI 丢了一条」**。
 - 因此写清：**这不是「un-acked 队列」，这是「还没进入事实源」。** 反过来，凡已发布的 chunk 一定已在磁盘 —— 这就是「延迟上界 = 150 ms」而不是「已发布可丢」的原因。
 
-## 5. 机器断言（A5 两条的实际探针）
+## 5. 机器断言（A5 两条当年的探针；脚本已按宪法删除）
 
-| 断言 | 位置 | 断言名 |
+> 2026-11-16 起 `scripts/check-*.ts` 全部删除，下表只是**历史存档**：说明这几条不变量当年被
+> 哪些断言钉住过。现在它们**没有自动断言**，改到 timeline 写入 / 归档路径时人工核对。
+
+| 断言 | 当年位置 | 断言名 |
 | --- | --- | --- |
-| `published_head` 跨重启不下降 | `scripts/check-timeline-holes.ts:85-89` | `A5 published_head 跨重启不下降` |
-| 重启后 `timeline_head` / `wal_head` 不回退（纯磁盘口径） | `scripts/check-timeline-archive.ts:353-358` | `② 重启后（无 writer，纯磁盘口径）timeline_head 不回退`、`② 重启后 wal_head 也不回退` |
-| 归档不移动发布游标 | `scripts/check-timeline-archive.ts:303-309` | `① published_head 不变（归档不改发布游标）` |
-| 发布严格升序 + seq 无空洞（合成夹具） | `scripts/check-timeline-conformance.ts:380-401` | `I2 synthetic publish 严格升序`、`A-6 synthetic seq 严格升序且无空洞` |
-| 写失败落成可声明的洞、重启仍在 | `scripts/check-timeline-holes.ts:72-84` | `I3 失败区间已登记成洞`、`I3 重启后洞仍在` |
+| `published_head` 跨重启不下降 | `check-timeline-holes` | `A5 published_head 跨重启不下降` |
+| 重启后 `timeline_head` / `wal_head` 不回退（纯磁盘口径） | `check-timeline-archive` | `② 重启后（无 writer，纯磁盘口径）timeline_head 不回退`、`② 重启后 wal_head 也不回退` |
+| 归档不移动发布游标 | `check-timeline-archive` | `① published_head 不变（归档不改发布游标）` |
+| 发布严格升序 + seq 无空洞（合成夹具） | `check-timeline-conformance` | `I2 synthetic publish 严格升序`、`A-6 synthetic seq 严格升序且无空洞` |
+| 写失败落成可声明的洞、重启仍在 | `check-timeline-holes` | `I3 失败区间已登记成洞`、`I3 重启后洞仍在` |
 
-都在 `gates` 链里（`package.json:61` 尾段：`check:timeline-conformance` / `-holes` / `-index` / `-dualwrite` / `-archive`）。
+这些脚本当年都在 `gates` 链里（`check:timeline-conformance` / `-holes` / `-index` / `-dualwrite` / `-archive`）；
+`gates` 条目本身也随宪法删除了。
 
-**未实现的门禁**（ADR-105 §7 / §11 点名，本仓没有）：`check-timeline-equality`（A1–A8 等式套餐）、`check-timeline-publish-after-wal`、`check-timeline-write-contract`。现有 timeline 门禁只有 reference / conformance / holes / index / dualwrite / archive / perf。
+**从未实现的断言**（ADR-105 §7 / §11 点名）：`check-timeline-equality`（A1–A8 等式套餐）、
+`check-timeline-publish-after-wal`、`check-timeline-write-contract`。
 
 ## 6. 生效范围（2026-11-16 更新：B 阶段已完成，本文等式已是运行时事实）
 

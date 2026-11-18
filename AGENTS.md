@@ -61,7 +61,7 @@
 
 - **core 保持小**：不出现业务概念（skills、记忆、资产、文档、代码审查、OCR、PDF、图片、向量、浏览器、IAM、计费）；`dependencies` 保持为空；重依赖只进插件包。
 - **唯一 plugin 机制**：只有一个 plugin loader / manifest / 生命周期，一切经 `Plugin` + `PluginHost`；贡献面（pages / commands / settings / rpc / events / panels）由 harness 层扩展，不属于第二套扩展机制；Module 是构造期边界，禁止 `ModuleHost` / `ModuleRegistry`（[ADR-099](docs/adr/ADR-099-plugin-contribution-surfaces-and-trust.md)）。
-- 依赖方向单向 `core ← 其它`，由 `scripts/check-deps.ts` 检查；不引入 LangChain / LangGraph。
+- 依赖方向单向 `core ← 其它`（评审时人工核对各包 `package.json` 的层间依赖，仓库里没有自动脚本）；不引入 LangChain / LangGraph。
 - 事件名一律开放字符串 `<domain>.<action>.<event>`，不新增常量 / 枚举；全异步，不写 sync-in-async；不留半成品 stub。
 - **诊断**：走 Logger（stderr），不得 `console.log` 到 stdout（stdout 只留命令结果 / JSON / UX）。
 - 别为了加能力去改 loop 或扩接口——先证明 Tool / Hook / Guardrail / 事件都做不到。
@@ -83,40 +83,64 @@
 
 - 共享侧 / 个人侧分工、目录结构、角色独占路径、分支与发布规则见 [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)。共享侧只放源码、长期文档与 CI。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。引用路径前先确认存在（`docs/role/`、`docs/api/`、`docs/guides/`、`processes/`、`legacy/` 已删除）；当前版本见 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)。
-- **文档就是 prompt**：写意图与允许的例外，不写会被字面执行的绝对禁令；ADR 的 `status` 与 `supersedes` / `related` 由 `check-docs` 校验，不能只写在正文。
+- **文档就是 prompt**：写意图与允许的例外，不写会被字面执行的绝对禁令；ADR 的 `status` 与 `supersedes` / `related` 必须写在 frontmatter（没有脚本校验，靠评审），不能只写在正文。
 - **提交可追溯**：squash / revert 提交带 `Squash-of:` / `Reverts:` / `Contract:` / `Decision:` trailer；合并以 tree-sha 为证据，不用“看起来一致”。
 
 ## 怎么跑与门禁
 
+> **本仓无门禁 / 无测试 / 无探针**（宪法第三、四条）。**权威顺序**：**不做什么以个人侧宪法为准**；
+> **做什么 / 怎么做以本文件（共享侧）为准**；两者冲突时**以「不干」为准** —— 共享侧任何条款若授予
+> 宪法**禁止**的能力（例如允许存在测试 / 探针 / 门禁脚本），该条款**当场失效并删除**，不留「待补」、
+> 不留作历史。自检：能改写成「不许 X」的是禁止条款（个人侧优先）；只能写成「要 X / 用 X」的是
+> 操作条款（本文件优先）。
+
 ```bash
 bun install
-bun run typecheck
-bunx @biomejs/biome ci .
-VESSEL_MOCK=1 bun run src/cli.ts
+bun run build                                # = typecheck + lint（biome ci .）
+VESSEL_MOCK=1 bun run src/cli.ts             # 本地 mock 起来看看，不连模型
 VESSEL_MOCK=1 bun run src/cli.ts --run "hello"
 bun run src/cli.ts --tools
 bun run src/cli.ts doctor --deep
-bun run src/cli.ts gateway start --daemon
+bun run src/cli.ts gateway start --daemon    # status --json / stop 同理
 bun run src/cli.ts gateway status --json
 bun run src/cli.ts gateway stop
-bun run scripts/version.ts --check
-bun run scripts/release-dry-run.ts
+bun run scripts/version.ts --check                        # 版本一致性（发版检查点）
+bun run scripts/docs-find.ts --goal "add RPC method"      # 按目标检索文档
 ```
 
-仓库默认不维护通用测试套件：纯核心窄属性测试与有状态探针属于验证纪律的例外（见下）。**当前没有自动 test gate**，接入前只能一次性 / 定向运行验证；门禁只有 `bun run typecheck` + `bunx @biomejs/biome ci .`（加 `scripts/check-*.ts` 静态断言），运行时正确性靠一条端到端烟测 `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`。
-改完代码至少跑 typecheck 与 biome；CI 异步，不作为 push 前置。收口额外门禁 `check-deps` / `smoke-subpaths` / `check-docs` / `version --check` / `release-dry-run` 只在用户要求或发布检查点。
+**本仓没有 gate / test / probe，也不要再造。** 宪法第三、四条：废除全部 gate / test / probe；
+`*.test.*` / `*.spec.*` / `__tests__/` / 测试夹具一律不进仓库，存量随触碰删除、不补等价物；
+AI 自写的验证脚本不作为正确性依据。**「把某条命令跑一遍、全绿」不构成验收**；也不要往仓库里加
+测试、探针或静态断言脚本 —— 别照旧文档重建（旧文档里那些条目已经作废）。
+上面清单里 `bun run build` 是**唯一**的构建期检查（`typecheck` 覆盖根 + `examples/`，`lint` 是
+`bunx @biomejs/biome ci .`）；其余都是工具 / 手工冒烟。CI 异步，不作为 push 前置。
 完整命令见 [README.md](README.md) 的「快速开始」；CI / 发布见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md) 与 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。
 
-- **能机械判定的规则写成门禁**：不变量要有 owner（谁守）、oracle（怎么判真）与门禁层级；没有门禁的只能标成建议。
-- **不要只看退出码**：本机（WSL → Windows bun）实测 `process.exit(3)` 与未捕获异常都返回 `0`。判定一律看输出文本（`Found N error` / `FAIL` / `passed`），或把断言写进输出里；CI 的 Linux bun 才会按退出码生效。历史上因此漏过 `check-docs` 的「文档行数超上限」。
-- **Web 时间线可见性门禁**：`bun run check:chat-visibility`（`scripts/check-chat-visibility.ts`）。`minimal / normal / debug` 的判定唯一在 `apps/web/src/domains/chat/chat-visibility.ts`，live 与 history 必须共用；fixture 断言「运行中与已终态判定一致」（旧 bug 是 live 藏、history 落盘后冒出来）。
-- **历史工具配对门禁**：`bun run check:history-tools`（`scripts/check-history-tools.ts`）。`apps/web/src/domains/chat/history-tools.ts` 按 `tool_call_id` 把 assistant 的 `tool_calls[]` 与 `role:'tool'` 配对；fixture 钉死「有调用无结果不得空白」「孤立结果不丢输出」。时间线卡片的唯一表示层是 `domains/chat/StreamCard.tsx`（运行态与终止态共用）。它是**唯一被批准能进 gates 的测试形态**（纯函数 + 可机械判定的不变量 + 能进 CI）：不要照着扩成浏览器测试，也不要为它追覆盖率。
-  另一类允许存在的证据是 `src/*.test.ts` 的**窄属性测试**（`refs-notice-hook` / `member-cwd` / `self-card-delta` / `ask-attribution`）：定向运行、**不进 gates**、不追覆盖率 —— 它证明「某个行为变更确实被验过」，不是回归套件的起点。
-- **不变量分两级**：硬不变量零容忍；软不变量用 baseline + delta，只要求不新增；例外必须有 owner 与到期日，不做永久 allowlist。
-- **验证分两层**：纯核心用窄属性测试；有状态外壳用不变量探针（状态矩阵 / 失败注入 / replay 等价）。不追覆盖率；“当前没有 test gate”不是不写验证的理由——每项行为变更要有针对它的证据。
-- **模型审查是 search，不是 gate**：review 产出证据、探针与契约修正；合并 / 验收结论必须落在确定性门禁上。
-- **门禁断言产物与反例**：exit 0 不够——构建类门禁还要断言产物存在（如 `apps/web/dist`），并至少做一次“改坏必须红”的负向验证。
-- **门禁分级并钉版本**：阻断级与观测级分开，warnings 收紧只在 CI 生效；工具版本以锁文件为准（`bun install --frozen-lockfile` 或 `bunx <pkg>@<lock 版本>`），不用漂移的本地版本定义基线。
+### 验收形态（唯一正确的做法）
+
+**main 线程不亲自跑构建 / 验收。** 派一个独立会话的 verifier 子 agent 去跑，main 只收两样：
+**exit code + 失败摘要**（摘要必须含首个错误的原文，不许只说「红了」）。
+
+verifier 的硬约束：
+
+- **独立线程 / 独立进程**：不复用 main 的会话与内存状态；要跑起来就用临时进程。
+- **临时端口 + 临时 data dir**：端口取 0（系统分配）或高位随机，数据目录落系统临时目录，
+  **绝不碰** `~/.vessel`、8642、8644 与用户真实数据。
+- **只覆盖用户可见行为与真实数据形态**：验「用户看到什么、真实文件长什么样」，不验内部调用
+  序列；不追覆盖率、不造 fixture 树。
+- **反例只在 verifier 的临时副本里做**：要证明「改坏确实会被发现」，在临时副本里改坏再跑一次
+  构建 / 冒烟；**不许把改坏的副本、也不许把任何测试文件留在仓库**。
+- **别只信退出码**：本机（WSL → Windows bun）实测 `process.exit(3)` 与未捕获异常都可能返回
+  `0`。所以除了 exit code，还要贴**失败摘要或产物读数**（构建类要有产物证据，例如
+  `apps/web/dist` 存在且非空）。CI 的 Linux bun 才稳定按退出码生效。
+
+- **不变量要有 owner 与 oracle**：谁守、怎么判真；判真落在 verifier 的读数里（产物、真实数据
+  形态、用户可见行为），不在仓库里落成脚本。
+- **Web 时间线可见性的唯一判定点**：`apps/web/src/domains/chat/chat-visibility.ts`（`minimal / normal / debug`），live 与 history 必须共用同一份判定（旧 bug：live 藏、history 落盘后又冒出来）。
+- **历史工具配对的唯一表示层**：`apps/web/src/domains/chat/history-tools.ts` 按 `tool_call_id` 把 assistant 的 `tool_calls[]` 与 `role:'tool'` 配对；「有调用无结果不得空白」「孤立结果不丢输出」是既有约定。时间线卡片的唯一表示层是 `domains/chat/StreamCard.tsx`（运行态与终止态共用）。
+- **不变量分两级**：硬不变量零容忍；软不变量只许收敛、不许新增，每一项都要有 owner 与到期日，不做永久 allowlist（不落 baseline 脚本，比对靠 verifier 的读数）。
+- **模型审查是 search，不是 gate**：review 产出证据与契约修正；验收结论必须落在可复现的读数上（构建产物、真实数据形态、用户可见行为），不能落在「我跑过一遍」上。
+- **工具版本以锁文件为准**：`bun install --frozen-lockfile` 或 `bunx <pkg>@<lock 版本>`，不用漂移的本地版本定义基线。
 
 ## 消息不变量（2026-11-14 用户裁定，**产品核心设计，两条都不得违反**）
 
@@ -129,7 +153,8 @@ bun run scripts/release-dry-run.ts
 - 脱敏（PII/密钥）**不能在请求构造时改写历史**——那违反第 2 条；**必须在「消息 append 的那一刻」完成**，让存档与请求永远逐字一致。
 - 真值保留在内存句柄仓库，UI 与模型看到**同一个占位符**；要真值走**审批解锁**（第 1 条允许的「多看到」必须由用户显式触发，而不是默认不对称）。
 - 「引用已失效」这类状态变化**只能以「追加一条新消息」的方式表达**，不许回改旧消息；且按 session 去重、只讲状态、不含真值。
-- 门禁方向（待补）：`check:request-append-only` —— 断言「本次请求 messages 是上一版的前缀延伸」，任何中间差异都必须红。
+- 验收方向（不是仓库里的脚本）：由 verifier 线程对真实会话断言「本次请求 messages 是上一版
+  的前缀延伸」，任何中间差异都算违反第 2 条。
 
 ## 分层与能力准入
 

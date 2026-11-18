@@ -371,10 +371,7 @@ VESSEL_CONNECT_TOKEN='<token>' vessel \
 
 # 3. 跨节点 agent 传输已于 0.22.1 删除；验证 federation 见 docs/versions/0.20.0.md 与 ADR-094
 
-# 4. 离线门禁（仓库无自动化测试套件：typecheck + biome + check-* 脚本 + 一条端到端烟测）
-bun run typecheck
-bunx @biomejs/biome ci .
-bun run scripts/check-config-sources.ts
-bun run scripts/check-trace.ts
+# 4. 离线检查（仓库无 gate / test / probe：只有 build + 一条端到端冒烟）
+bun run build
 VESSEL_MOCK=1 bun run src/cli.ts --run "hello"
 ```

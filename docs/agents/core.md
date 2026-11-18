@@ -14,7 +14,7 @@ applies_to: [N, M]
 
 - 不引入 LangChain / LangGraph（ADR-009）。core 的 `dependencies` 保持为空，重依赖只能进插件包。
 - core 不出现业务概念（skills、记忆、资产、文档、代码审查、OCR、PDF、图片、向量、浏览器、IAM、计费）。
-- Module 是编译期/构造期边界（provider / context / session / policy / transport / observability），不是第二套运行期机制；禁止 `ModuleHost` / `ModuleRegistry`。依赖方向单向 `core ← 其它`，由 `scripts/check-deps.ts` 检查。
+- Module 是编译期/构造期边界（provider / context / session / policy / transport / observability），不是第二套运行期机制；禁止 `ModuleHost` / `ModuleRegistry`。依赖方向单向 `core ← 其它`（评审时人工核对各包 `package.json`，仓库里没有自动脚本）。
 - 事件名一律开放字符串 `<domain>.<action>.<event>`，不新增常量 / 枚举（ADR-030）；事件形状见 [events.md](../architecture/events.md)。
 - 全异步，不写 sync-in-async；不留半成品 stub。
 

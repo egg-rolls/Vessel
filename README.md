@@ -334,7 +334,7 @@ cd apps/web && bun run build
 | [CHANGELOG.md](CHANGELOG.md)                                 | 变更记录                                               |
 | [AGENTS.md](AGENTS.md)                                       | AI 行为约定：风格、硬规矩、怎么跑、红线                |
 
-> `docs/operations/` 没有独立 `INDEX.md`，本表即其索引；新增 operations 文档必须在此登记（`check-docs` 校验）。
+> `docs/operations/` 没有独立 `INDEX.md`，本表即其索引；新增 operations 文档必须在此登记（人工守，原 `check-docs` 脚本已按宪法删除）。
 
 ## 状态
 

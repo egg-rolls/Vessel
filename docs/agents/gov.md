@@ -1,7 +1,7 @@
 ---
-title: 文档、角色与发布门禁
+title: 文档、角色与发布
 kind: advisory
-triggers: [docs, doc management, frontmatter, check-docs, release, release dry run, dry run, dry, publish, tag, smoke-install, smoke install, version check, changelog, ci, pr, roles, worktree, 文档门禁, 发布, 版本, 变更日志, 角色, 工作区, 冒烟安装, 干跑, 元信息]
+triggers: [docs, doc management, frontmatter, release, publish, tag, version check, changelog, ci, pr, roles, worktree, 发布, 版本, 变更日志, 角色, 工作区, 干跑, 元信息]
 paths: [docs/**, AGENTS.md, README.md, .github/**, scripts/**]
 applies_to: [N, M]
 ---
@@ -25,14 +25,15 @@ applies_to: [N, M]
 - 已删除目录：`docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`processes/`、`legacy/`；不要再链接。
 - 共享/个人分工、分支与 PR 流程见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
 
-## 门禁
+## 检查与冒烟
 
-- 改完代码：`bun run typecheck` + `bunx @biomejs/biome ci .` 必须过。仓库无自动化测试套件；运行时正确性只有一条端到端烟测 `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`。
-- 收口还要求：`check-deps` / `smoke-subpaths` / `check-docs` / `version --check` / `release-dry-run`。
-- 纯文档改动至少跑 `check-docs` 与 `version --check`；不跑全量 typecheck / 构建。
-- **职责边界**：biome 只看代码与配置，markdown 排版归 `scripts/check-docs.ts`（行数上限、
-  frontmatter、链接、INDEX）。`**/*.md` 已在 `biome.json` 的 `files.includes` 里显式排除，理由是
-  **防止将来 biome 升级（2.6.x 起 Markdown 进入 formatter）时行为漂移**，不是因为当前 md 被 biome 管。
+- 改完代码：`bun run build`（= `typecheck` + `bunx @biomejs/biome ci .`）必须过。仓库无 gate / test / probe
+  （宪法第三、四条）；运行时正确性只靠手工端到端冒烟 `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`。
+- 发版检查点：`bun run scripts/version.ts --check`（版本一致性 + CHANGELOG）。
+- 纯文档改动**没有自动检查**（`check-docs` 已按宪法删除）：靠评审按
+  [DOC-MANAGEMENT.md](../DOC-MANAGEMENT.md) 守行数 / frontmatter / 链接 / INDEX；不跑全量 typecheck / 构建。
+- **职责边界**：biome 只看代码与配置，markdown 不在任何格式化工具里。`**/*.md` 已在 `biome.json` 的
+  `files.includes` 里显式排除，理由是 **防止将来 biome 升级（2.6.x 起 Markdown 进入 formatter）时行为漂移**。
 - 本地无 `node_modules` 时 `bunx <pkg>` 会拉最新版；`git archive` 副本没有 `.git`，`vcs.useIgnoreFile`
   失效——先按 [AGENTS.md](../../AGENTS.md) 的锁版本规则准备环境，再判红绿。
 - 规则→门禁、两级不变量、文档即 prompt、tree-sha 可追溯等工程规则 canonical 见
