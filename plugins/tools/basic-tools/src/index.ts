@@ -54,6 +54,7 @@
  * 已修复路径不再追加反引号 / heredoc 元字符那两条警告。非 Windows 与 Git Bash 的 argv 逐字节不变。
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import {
   closeSync,
@@ -96,8 +97,8 @@ import {
 
 // ── 常量 ──────────────────────────────────────────
 
-/** bash 缺省超时（毫秒） */
-const DEFAULT_BASH_TIMEOUT_MS = 120_000;
+/** bash 缺省超时（毫秒）；导出供 host 转发工厂算信封预算（单实现，禁第二份常量） */
+export const DEFAULT_BASH_TIMEOUT_MS = 120_000;
 
 /**
  * 单方向输出超过该行数即触发截断（**第二道闸**，token 闸之后的兜底）。
@@ -344,7 +345,7 @@ function expandHome(entry: string): string {
 }
 
 /** 解析后的默认工作目录；`issue` 只在配置了 cwd 且不可用时存在 */
-interface BaseCwd {
+export interface BaseCwd {
   path: string;
   issue?: string;
 }
@@ -391,7 +392,7 @@ function resolveBaseCwd(config: BasicToolsConfig): BaseCwd {
  * 终点是 `process.cwd()`；真正「降级了」这件事由 `packages/agent` 在 spawn 侧 warn 一次。
  * **显式配置**的 `agent.cwd` 维持原有硬错：那是用户亲手写的值，静默回退只会掩盖配置错误。
  */
-function resolveCallCwd(config: BasicToolsConfig, ctxCwd: string | undefined): BaseCwd {
+export function resolveCallCwd(config: BasicToolsConfig, ctxCwd: string | undefined): BaseCwd {
   if (config.cwd !== undefined) return resolveBaseCwd(config);
   if (ctxCwd !== undefined && ctxCwd.trim() !== '') {
     const resolved = path.resolve(expandHome(ctxCwd));
@@ -531,6 +532,62 @@ function buildDeniedCommandPatterns(entries: readonly string[]): DeniedCommandPa
       pattern: new RegExp(`${escapeRegExp(spelling)}(?![\\w.-])`),
     })),
   );
+}
+
+// ── 调用期边界注入 + 边界序列化（tools-engine P2，契约 §5 / §3） ──
+//
+// worker 执行**同一份** handler 源码，但 boundary 来自信封（host 权威），不是安装期闭包：
+// engine 入口逐调用包一层 `runWithBasicToolsCallScope`。host in-process 路径没有 scope
+// → 回退安装期闭包，行为逐字不变。**不加 ToolContext 字段、core 零改动。**
+// cwd 不走 scope：信封 cwd 进 ctx.cwd，worker 侧 config 为空 ⇒ resolveCallCwd 自然落到它。
+
+/** 调用期注入 scope：只带 boundary（单权威 host，worker 不持久化 / 不自决）。 */
+export interface BasicToolsCallScope {
+  boundary: PathBoundary;
+}
+
+const callScopeStorage = new AsyncLocalStorage<BasicToolsCallScope>();
+
+/** 以给定边界 scope 包裹一次工具调用（worker 入口用；host in-process 路径不调用）。 */
+export function runWithBasicToolsCallScope<T>(scope: BasicToolsCallScope, fn: () => T): T {
+  return callScopeStorage.run(scope, fn);
+}
+
+/** handler 取边界：调用期注入优先；无 scope 回退安装期闭包（host 路径一字不改）。 */
+function activeBoundary(installed: PathBoundary): PathBoundary {
+  return callScopeStorage.getStore()?.boundary ?? installed;
+}
+
+/** 边界序列化形状（wire JSON）：RegExp 不可直传，存 source + flags，worker 重建。 */
+export interface SerializedBoundary {
+  allowedRoots: string[];
+  denyRoots: string[];
+  commandPatterns: { entry: string; source: string; flags: string }[];
+}
+
+/** 序列化边界（host 转发工厂用）。单实现 —— 禁复制第二套（契约 §8）。 */
+export function serializeBoundary(boundary: PathBoundary): SerializedBoundary {
+  return {
+    allowedRoots: [...boundary.allowedRoots],
+    denyRoots: [...boundary.denyRoots],
+    commandPatterns: boundary.commandPatterns.map(({ entry, pattern }) => ({
+      entry,
+      source: pattern.source,
+      flags: pattern.flags,
+    })),
+  };
+}
+
+/** 从序列化形状重建边界（worker 用）：`new RegExp(source, flags)` 逐条重建。 */
+export function deserializeBoundary(serialized: SerializedBoundary): PathBoundary {
+  return {
+    allowedRoots: [...serialized.allowedRoots],
+    denyRoots: [...serialized.denyRoots],
+    commandPatterns: serialized.commandPatterns.map(({ entry, source, flags }) => ({
+      entry,
+      pattern: new RegExp(source, flags),
+    })),
+  };
 }
 
 /**
@@ -1854,7 +1911,8 @@ function createBashTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
       // 统一由 core PermissionPolicy 发一次请求；autoApprove / neverAutoApprove / always 在那里生效
       return 'ask';
     },
-    handler: async (args, ctx) => runBash(args, ctx, boundary, resolveCallCwd(config, ctx.cwd)),
+    handler: async (args, ctx) =>
+      runBash(args, ctx, activeBoundary(boundary), resolveCallCwd(config, ctx.cwd)),
   };
 }
 
@@ -1967,7 +2025,7 @@ function createReadTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
     // 出口闸（token 预算）：2000 行 × 每行几千字符的文件同样能一次灌满窗口，
     // 所以 read 也必须过同一个 boundToolResult，而不是只靠「文件 ≤ 8 MiB」这一道闸。
     handler: async (args, ctx) =>
-      boundToolOutput(ctx, 'read', readFileSlice(args, ctx, boundary, config)),
+      boundToolOutput(ctx, 'read', readFileSlice(args, ctx, activeBoundary(boundary), config)),
   };
 }
 
@@ -2099,7 +2157,7 @@ function createEditTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
       return 'ask';
     },
     handler: async (args, ctx) =>
-      boundToolOutput(ctx, 'edit', editFile(args, ctx, boundary, config)),
+      boundToolOutput(ctx, 'edit', editFile(args, ctx, activeBoundary(boundary), config)),
   };
 }
 
@@ -2490,7 +2548,7 @@ function createWriteTool(boundary: PathBoundary, config: BasicToolsConfig): Tool
       return 'ask';
     },
     handler: async (args, ctx) =>
-      boundToolOutput(ctx, 'write', writeFileText(args, ctx, boundary, config)),
+      boundToolOutput(ctx, 'write', writeFileText(args, ctx, activeBoundary(boundary), config)),
   };
 }
 

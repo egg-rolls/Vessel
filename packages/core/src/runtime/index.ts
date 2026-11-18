@@ -71,6 +71,14 @@ export {
   type ToolPipelineResult,
   type ToolPipelineStages,
 } from './tool-pipeline.js';
+// tools-engine P2（O4）：执行位置 / 桥溯源回执槽（与 gate receipt 同形；打标方在装配层）。
+export {
+  isBridgeCall,
+  markBridgeCall,
+  markToolTransport,
+  type ToolTransport,
+  takeToolTransport,
+} from './tool-provenance.js';
 // 0.56 闸上移：工具结果出口闸（≤ 16k token / 头 30% 尾 70% / 落盘路径）。
 // 插件作者用 `boundToolResult` + `markToolResultBounded` 自己先裁一遍（第二道闸）时，
 // 凭回执让 loop 跳过重裁；`writeToolOutput` / `toolOutputRoot` 是落盘的唯一实现。
