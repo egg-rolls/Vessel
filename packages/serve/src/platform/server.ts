@@ -537,6 +537,10 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
     // 0.56 P2：`POST /auth/unlock` 要比对这个值（本机 + 平台 token 才能解锁登录限速）。
     // 只比较、不回显、不落盘。
     ...(platformToken !== undefined ? { platformToken } : {}),
+    // 0.62：受信 relay 的「页面真实 origin」声明，只有在**反代密钥真的配了**时才可以
+    // 采信 —— 登录层因此需要知道「配没配」。这个值只用于那一个判断：不比较、不回显、
+    // 不进日志（比较本身由受信边缘 `resolveRequestEdge` 完成）。
+    ...(proxySecret !== undefined ? { proxySecret } : {}),
     log: (message: string) => {
       // 只打非敏感事实：会话 id / csrf / token / secret / 口令 / TOTP 密钥 / 恢复码都不进这行。
       console.warn(`[platform-auth] ${message}`);

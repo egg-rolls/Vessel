@@ -132,6 +132,18 @@ export interface AuthServiceOptions extends AuthSettings {
    */
   runtimeInfo?: ((req: Request) => WhoamiRuntimeInfo | Promise<WhoamiRuntimeInfo>) | undefined;
   /**
+   * 平台的反代密钥**值**（`gateway.proxy_secret_env` 指向的那个）。
+   *
+   * 用途**只有一个**：判断「受信 relay 的页面 origin 声明」能不能采信。
+   * 不比较、不回显、不进日志 —— 比较由受信边缘（`resolveRequestEdge`）完成，这里只关心
+   * 「到底配没配」。
+   *
+   * 为什么需要它：`proxySecretAllowed()` 在**未配置**时恒返回 true（旧部署兼容），
+   * 所以 `edge.proxySecretOk === true` 并不能证明「密钥成立」。没配密钥的部署里任何本机
+   * 进程都能连上来，此时采信 origin 声明就是把 CSRF 闸拆了。
+   */
+  proxySecret?: string | undefined;
+  /**
    * 平台 token（本进程实际生效的那个值）：`POST /auth/unlock` 用它做「确实是本机主人」
    * 的第二个凭据。**只比较、不回显、不落盘**。
    */
@@ -166,6 +178,15 @@ export interface AuthWhoami {
   backends: WhoamiBackend[];
   auth_mode: 'cookie' | 'bearer' | 'none';
 }
+
+/**
+ * 受信 relay 声明的「页面真实 origin」头。
+ *
+ * 只对**持有 relay 密钥**的 dev 边缘有意义：Vite dev relay 把浏览器的 Origin 转发到这里，
+ * 平台在密钥成立时才拿它参与 `Origin` 比较。没有密钥的请求写了这个头等于没写
+ * （见 `trustedOriginClaim`）。
+ */
+export const TRUSTED_ORIGIN_HEADER = 'x-vessel-origin';
 
 /** 登录层需要的请求事实（全部取自受信边缘）。 */
 export interface AuthRequestContext {
@@ -247,6 +268,7 @@ export class AuthService {
     | ((req: Request) => WhoamiRuntimeInfo | Promise<WhoamiRuntimeInfo>)
     | undefined;
   private readonly fetchImpl: typeof fetch | undefined;
+  private readonly proxySecret: string | undefined;
   private readonly platformToken: string | undefined;
   private readonly log: (message: string) => void;
   private readonly now: () => number;
@@ -280,6 +302,10 @@ export class AuthService {
     this.endpoints = options.endpoints;
     this.runtimeInfo = options.runtimeInfo;
     this.fetchImpl = options.fetchImpl;
+    this.proxySecret =
+      typeof options.proxySecret === 'string' && options.proxySecret !== ''
+        ? options.proxySecret
+        : undefined;
     this.platformToken =
       typeof options.platformToken === 'string' && options.platformToken !== ''
         ? options.platformToken
@@ -448,7 +474,10 @@ export class AuthService {
     const mutating = options.mutating ?? false;
     if (mutating) {
       const origin = req.headers.get('origin');
-      if (origin !== null && !this.originMatchesEdge(origin, ctx)) {
+      if (
+        origin !== null &&
+        !this.originMatchesEdge(origin, ctx, this.trustedOriginClaim(req, ctx))
+      ) {
         return { ok: false, reason: 'csrf_failed' };
       }
       const token = req.headers.get(CSRF_HEADER);
@@ -467,15 +496,39 @@ export class AuthService {
   }
 
   /** Origin 头必须与受信边缘解析出的 host 一致。 */
-  private originMatchesEdge(origin: string, ctx: AuthRequestContext): boolean {
+  private originMatchesEdge(
+    origin: string,
+    ctx: AuthRequestContext,
+    trustedOriginClaim: string | null,
+  ): boolean {
+    // 受信 relay 的声明优先（只有密钥成立时调用方才会给出非 null）。
+    const candidate = trustedOriginClaim ?? origin;
     let parsed: URL;
     try {
-      parsed = new URL(origin);
+      parsed = new URL(candidate);
     } catch {
       return false;
     }
     if (ctx.edge.host === null) return false;
     return parsed.host.toLowerCase() === ctx.edge.host.toLowerCase();
+  }
+
+  /**
+   * 受信 relay 声明的页面 origin；**不满足三个条件一律 null**（等于没声明）。
+   *
+   * 1. 平台**确实配置了**反代密钥（否则 `proxySecretOk` 是「未配置 ⇒ 恒 true」的假象）；
+   * 2. 边缘判定认为密钥成立且来自受信地址（`viaProxy && proxySecretOk`）；
+   * 3. 请求带了声明头。
+   *
+   * 这就是「无密钥请求永不采信」：伪造 `x-vessel-origin` 拿不到任何好处。
+   */
+  private trustedOriginClaim(req: Request, ctx: AuthRequestContext): string | null {
+    if (this.proxySecret === undefined || this.proxySecret === '') return null;
+    if (!ctx.edge.viaProxy || !ctx.edge.proxySecretOk) return null;
+    const claim = req.headers.get(TRUSTED_ORIGIN_HEADER);
+    if (claim === null) return null;
+    const trimmed = claim.trim();
+    return trimmed === '' ? null : trimmed;
   }
 
   /** GET /auth/status：我是谁、有哪些登录后端、CSRF 令牌。 */
@@ -675,7 +728,10 @@ export class AuthService {
     const session = this.readSession(req, ctx);
     if (session !== null) {
       const origin = req.headers.get('origin');
-      if (origin !== null && !this.originMatchesEdge(origin, ctx)) {
+      if (
+        origin !== null &&
+        !this.originMatchesEdge(origin, ctx, this.trustedOriginClaim(req, ctx))
+      ) {
         return jsonResponse({ error: 'csrf_failed' }, 403, { 'set-cookie': cleared });
       }
       const token = req.headers.get(CSRF_HEADER);
@@ -854,7 +910,10 @@ export class AuthService {
     ctx: AuthRequestContext,
   ): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; response: Response }> {
     const origin = req.headers.get('origin');
-    if (origin !== null && !this.originMatchesEdge(origin, ctx)) {
+    if (
+      origin !== null &&
+      !this.originMatchesEdge(origin, ctx, this.trustedOriginClaim(req, ctx))
+    ) {
       return { ok: false, response: jsonResponse({ error: 'forbidden_origin' }, 403) };
     }
     const contentType = (req.headers.get('content-type') ?? '').toLowerCase();
@@ -1180,7 +1239,12 @@ export class AuthService {
     if (session === null) return null;
     if (session.snapshot.subject.backend !== 'bootstrap') return null;
     const origin = req.headers.get('origin');
-    if (origin !== null && !this.originMatchesEdge(origin, ctx)) return null;
+    if (
+      origin !== null &&
+      !this.originMatchesEdge(origin, ctx, this.trustedOriginClaim(req, ctx))
+    ) {
+      return null;
+    }
     const token = req.headers.get(CSRF_HEADER);
     if (token === null || token === '') return null;
     if (!this.sessions.csrfValid(session.snapshot, token)) return null;

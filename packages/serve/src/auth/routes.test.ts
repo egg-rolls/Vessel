@@ -8,8 +8,14 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import type { AuthRequestContext, AuthServiceOptions, AuthWhoami } from './routes.js';
-import { AuthService } from './routes.js';
+import {
+  type AuthRequestContext,
+  AuthService,
+  type AuthServiceOptions,
+  type AuthWhoami,
+  CSRF_HEADER,
+  TRUSTED_ORIGIN_HEADER,
+} from './routes.js';
 
 const GUID_LOWER = '8f3c1f4e-2b7a-4c1d-9a55-0f1e2d3c4b5a';
 
@@ -335,5 +341,133 @@ describe('完整往返（start → callback → 会话 → whoami）', () => {
       `/auth/microsoft/callback?code=c&state=${encodeURIComponent(state)}`,
     )) as Response;
     expect(response.headers.get('location')).toBe('/login?error=state_invalid');
+  });
+});
+
+describe('受信 relay 的 origin 声明（dev 边缘，解决跨源页面的 CSRF 拒绝）', () => {
+  /** 登录一次，拿到会话 cookie + CSRF 令牌。 */
+  async function loggedIn(svc: AuthService): Promise<{ cookie: string; csrf: string }> {
+    const start = (await get(svc, '/auth/microsoft/start')) as Response;
+    const state = new URL(start.headers.get('location') ?? '').searchParams.get('state') ?? '';
+    const binder = cookieNamed(start, '__Host-vessel_oauth') ?? '';
+    const callback = (await get(
+      svc,
+      `/auth/microsoft/callback?code=c&state=${encodeURIComponent(state)}`,
+      binder,
+    )) as Response;
+    const cookie = cookieNamed(callback, '__Host-vessel_sid') ?? '';
+    const status = (await (await get(svc, '/auth/status', cookie))?.json()) as {
+      csrfToken: string;
+    };
+    return { cookie, csrf: status.csrfToken };
+  }
+
+  function mutatingRequest(input: {
+    cookie: string;
+    csrf: string;
+    origin: string;
+    claim?: string;
+  }): Request {
+    const headers: Record<string, string> = {
+      cookie: input.cookie,
+      origin: input.origin,
+      [CSRF_HEADER]: input.csrf,
+    };
+    if (input.claim !== undefined) headers[TRUSTED_ORIGIN_HEADER] = input.claim;
+    return new Request('https://egg-rolls.top/platform/rpc', { method: 'POST', headers });
+  }
+
+  const PROXY_CTX: AuthRequestContext = {
+    edge: {
+      viaProxy: true,
+      proxySecretOk: true,
+      host: 'egg-rolls.top',
+      protocol: 'https',
+      localDirect: false,
+    },
+    address: '127.0.0.1',
+  };
+
+  function service(proxySecret?: string): AuthService {
+    return makeService({
+      backends: [MICROSOFT_BACKEND],
+      env: { MS_CLIENT_SECRET: 'x' },
+      fetchImpl: stubFetch({ id: GUID_LOWER }),
+      ...(proxySecret !== undefined ? { proxySecret } : {}),
+    });
+  }
+
+  test('页面 origin 与边缘 host 不一致、又没有声明 ⇒ csrf_failed（旧行为不变）', async () => {
+    const svc = service('relay-secret');
+    const { cookie, csrf } = await loggedIn(svc);
+    const gate = svc.authorize(
+      mutatingRequest({ cookie, csrf, origin: 'http://127.0.0.1:8644' }),
+      PROXY_CTX,
+      { mutating: true },
+    );
+    expect(gate.ok).toBe(false);
+    expect(gate.ok === false ? gate.reason : null).toBe('csrf_failed');
+  });
+
+  test('密钥成立 + 声明与边缘 host 一致 ⇒ 放行', async () => {
+    const svc = service('relay-secret');
+    const { cookie, csrf } = await loggedIn(svc);
+    const gate = svc.authorize(
+      mutatingRequest({
+        cookie,
+        csrf,
+        origin: 'http://127.0.0.1:8644',
+        claim: 'https://egg-rolls.top',
+      }),
+      PROXY_CTX,
+      { mutating: true },
+    );
+    expect(gate.ok).toBe(true);
+  });
+
+  test('没配反代密钥 ⇒ 声明一律不采信（本机任何进程都伪造不出来）', async () => {
+    const svc = service(); // 不传 proxySecret = 未配置
+    const { cookie, csrf } = await loggedIn(svc);
+    const gate = svc.authorize(
+      mutatingRequest({
+        cookie,
+        csrf,
+        origin: 'http://127.0.0.1:8644',
+        claim: 'https://egg-rolls.top',
+      }),
+      PROXY_CTX,
+      { mutating: true },
+    );
+    expect(gate.ok).toBe(false);
+    expect(gate.ok === false ? gate.reason : null).toBe('csrf_failed');
+  });
+
+  test('配了密钥但这次请求的密钥不成立 ⇒ 声明不采信', async () => {
+    const svc = service('relay-secret');
+    const { cookie, csrf } = await loggedIn(svc);
+    const gate = svc.authorize(
+      mutatingRequest({
+        cookie,
+        csrf,
+        origin: 'http://127.0.0.1:8644',
+        claim: 'https://egg-rolls.top',
+      }),
+      { ...PROXY_CTX, edge: { ...PROXY_CTX.edge, proxySecretOk: false, viaProxy: false } },
+      { mutating: true },
+    );
+    expect(gate.ok).toBe(false);
+    expect(gate.ok === false ? gate.reason : null).toBe('csrf_failed');
+  });
+
+  test('声明本身也要过 host 判据：拿它去冒名另一个 host 无效', async () => {
+    const svc = service('relay-secret');
+    const { cookie, csrf } = await loggedIn(svc);
+    const gate = svc.authorize(
+      mutatingRequest({ cookie, csrf, origin: 'https://evil.test', claim: 'https://evil.test' }),
+      PROXY_CTX,
+      { mutating: true },
+    );
+    expect(gate.ok).toBe(false);
+    expect(gate.ok === false ? gate.reason : null).toBe('csrf_failed');
   });
 });

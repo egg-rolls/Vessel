@@ -16,6 +16,10 @@ export {
   resolveAuthSettings,
 } from './auth.js';
 export {
+  authOriginRejectReason,
+  parseAuthOrigin,
+} from './auth-origins.js';
+export {
   type AllowUserIdsShape,
   type AuthorizeUrlParams,
   type AuthStrategy,

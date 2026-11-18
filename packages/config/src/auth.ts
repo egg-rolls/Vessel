@@ -12,6 +12,7 @@
  */
 
 import * as path from 'node:path';
+import { authOriginRejectReason, parseAuthOrigin } from './auth-origins.js';
 import {
   describeRegisteredAuthKinds,
   getAuthStrategy,
@@ -86,32 +87,42 @@ export interface ResolvedAuthSettings {
 const DEFAULT_IDLE_MINUTES = 30;
 const DEFAULT_ABSOLUTE_HOURS = 12;
 
-function normalizeOrigin(raw: unknown): string | null {
-  if (typeof raw !== 'string' || raw.trim() === '') return null;
-  try {
-    return new URL(raw.trim()).origin;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * 0.60：合并 `public_origin`（单来源，兼容）与 `public_origins`（并列白名单）。
  *
  * 顺序：`public_origin` 在前、列表按配置顺序跟上；去重（同一个 origin 写两遍只算一个）。
  * 两条同时出现**不是错误** —— `public_origin` 的语义就是「只有一个元素的
- * `public_origins`」。非法条目在这里静默丢弃（validator 已经在前一步报过错）。
+ * `public_origins`」。
+ *
+ * 非法条目**不静默**：每条都带着「哪个字段、写的是什么、为什么不行」进 `rejected`，
+ * 由调用方转成告警。静默丢弃过一次的后果是「白名单为空 ⇒ 谁都登录不了」，而配置看上去
+ * 是写了的。
  */
-function mergeOriginList(single: unknown, list: unknown): string[] {
-  const merged: string[] = [];
-  const push = (raw: unknown): void => {
-    const origin = normalizeOrigin(raw);
-    if (origin === null || merged.includes(origin)) return;
-    merged.push(origin);
+function collectOrigins(
+  single: unknown,
+  list: unknown,
+): { origins: string[]; rejected: Array<{ field: string; value: unknown; reason: string }> } {
+  const origins: string[] = [];
+  const rejected: Array<{ field: string; value: unknown; reason: string }> = [];
+  const push = (field: string, raw: unknown): void => {
+    if (raw === undefined || raw === null) return;
+    const reason = authOriginRejectReason(raw);
+    const origin = reason === null ? parseAuthOrigin(raw) : null;
+    if (origin === null) {
+      rejected.push({ field, value: raw, reason: reason ?? 'not a usable origin' });
+      return;
+    }
+    if (!origins.includes(origin)) origins.push(origin);
   };
-  push(single);
-  if (Array.isArray(list)) for (const entry of list) push(entry);
-  return merged;
+  push('auth.publicOrigin', single);
+  if (Array.isArray(list)) {
+    list.forEach((entry, index) => {
+      push(`auth.publicOrigins[${String(index)}]`, entry);
+    });
+  } else if (list !== undefined) {
+    push('auth.publicOrigins', list);
+  }
+  return { origins, rejected };
 }
 
 /** 读取一个「可能是任何东西」的配置值（YAML 进来时没有类型保证）。 */
@@ -208,7 +219,13 @@ export function resolveAuthSettings(input: {
 }): ResolvedAuthSettings {
   const warnings: string[] = [];
   const raw = input.auth;
-  const publicOrigins = mergeOriginList(raw?.publicOrigin, raw?.publicOrigins);
+  const originScan = collectOrigins(raw?.publicOrigin, raw?.publicOrigins);
+  const publicOrigins = originScan.origins;
+  // 非法条目**不静默**：写错的来源 + 原因进告警（静默丢过的后果是「白名单为空 ⇒
+  // 谁都登录不了」，而配置看上去是写了的）。
+  for (const item of originScan.rejected) {
+    warnings.push(`${item.field} (${JSON.stringify(item.value)}) is ignored: ${item.reason}`);
+  }
   const publicOrigin = publicOrigins[0] ?? null;
   const allowedHosts = Array.isArray(raw?.allowedHosts)
     ? raw.allowedHosts
