@@ -2,7 +2,7 @@
 title: 环境信息与 append-only 上下文
 kind: current
 triggers: [append-only, context, message, notice, env info, environment, self card, tool surface, model change, scope, files, doc-subscription, prompt.system_context, changed, compaction, cleared tool result, 环境信息, 环境块, 增量视图, 占位, 旧工具结果, 追加写]
-paths: [packages/core/src/runtime/execution-unit.ts, packages/core/src/context/context-manager.ts, packages/core/src/pii/notice.ts, packages/agent/src/env-info-scope.ts, packages/agent/src/self-card-delta.ts, packages/agent/src/tool-surface-delta.ts, plugins/context/doc-subscription/src/notice.ts, apps/web/src/domains/chat/env-notice.ts, scripts/check-append-only-context.ts]
+paths: [packages/core/src/runtime/execution-unit.ts, packages/core/src/context/context-manager.ts, packages/core/src/pii/notice.ts, packages/agent/src/env-info-scope.ts, packages/agent/src/self-card-delta.ts, packages/agent/src/tool-surface-delta.ts, plugins/context/doc-subscription/src/notice.ts, apps/web/src/domains/chat/env-notice.ts]
 ---
 
 # 环境信息与 append-only 上下文
@@ -15,9 +15,9 @@ paths: [packages/core/src/runtime/execution-unit.ts, packages/core/src/context/c
 鉴于此，**身份 / 工具 / 模型 / 提示词 / 重启**这些变更一律以「追加一条环境信息」表达，
 不得改写已落盘消息。
 
-判据与挂接点：`scripts/check-append-only-context.ts`（挂进 `bun run gates`）。三层：
+判据与挂接点（**原来那份校验脚本已按宪法删除，下面是它当年守的四层判据，改动此处时人工核对**）：
 C0 判据自检（证伪用）、C1 真 core 端到端（抓每一次 `SessionState` 落盘逐对比）、
-C2 静态钉住（生产者只许尾部追加）、C3 scope 词表对拍。通过时打印跑过的路径。
+C2 静态钉住（生产者只许尾部追加）、C3 scope 词表对拍。
 
 ## 环境信息（唯一一类卡）
 

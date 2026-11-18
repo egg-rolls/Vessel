@@ -278,13 +278,14 @@ node.allowed_origins  (显式)
 | `src/hub-command.ts` | join 响应解析 `trusted_origins` 并写进 `hub-node.json`（**边界外 2 处同构小改，见 §11.5**） |
 | `packages/config/src/{types,validator}.ts` | `hub.token_ttl_days`（1–365）+ 已知键登记 |
 
-测试（`bun test`，colocated 风格）：
+行为核对点（原先那批 `bun test` 用例已随宪法第三、四条删除，下面列出它们当年钉住的判据，
+改到这些路径时人工核对）：
 
-- `packages/config/src/node-registration.test.ts`：分类（含 `::ffff:7f00:1` / `[fe80::1%25eth0]` / CGNAT / 域名）、schema、派生（回环自动 / 非本机私网不自动 / 公网永不 / 上限 / 顺序 / fail-closed）。
-- `src/hub/derive-origins.test.ts`：缓存与 `invalidate`、`count=0` 日志、派生抛错 fail-closed。
-- `src/hub/join-policy.test.ts`：四条判定 + `hasLiveNodeToken`。
-- `src/hub/join-registration.test.ts`：真 HTTP + 真 join store / credential store / registry（code 重放、无码回环重注册、`entry_kind_mismatch` 不烧 code、未知字段被丢弃）。
-- `src/hub/registration-persistence.test.ts`：`hub-node.json` 与 `registry.json` 新字段往返 + 坏条目容错。
+- 节点注册分类（含 `::ffff:7f00:1` / `[fe80::1%25eth0]` / CGNAT / 域名）、schema、派生（回环自动 / 非本机私网不自动 / 公网永不 / 上限 / 顺序 / fail-closed）。
+- 派生 origins 的缓存与 `invalidate`、`count=0` 日志、派生抛错 fail-closed。
+- join 四条判定 + `hasLiveNodeToken`。
+- 真 HTTP join（code 重放、无码回环重注册、`entry_kind_mismatch` 不烧 code、未知字段被丢弃）。
+- `hub-node.json` 与 `registry.json` 新字段往返 + 坏条目容错。
 
 ### 10.2 未做（等 origins-core 合并后再接）
 

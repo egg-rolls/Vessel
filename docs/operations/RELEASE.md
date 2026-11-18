@@ -16,8 +16,8 @@ paths: [docs/operations/RELEASE.md]
 > 发布前置**必须先构建 Web 控制台**（`apps/web` 的 `npm ci` + `npm run build`）——`dist/` 被
 > `.gitignore` 忽略，根 tarball 的 `files` 包含 `apps/web/dist`，不构建就会发出缺少
 > Web 控制台的根包。smoke 会断言根 tarball 含 `apps/web/dist/index.html`。
-> 可发布子包为 **`@vessel-agent/*`**（含库包与插件包，具体数量以 `scripts/smoke-install.ts`
-> 实际输出为准）；`apps/web` 是 private，不发布。根 CLI 的发布名是 **`vessel-agent`**
+> 可发布子包为 **`@vessel-agent/*`**（含库包与插件包，具体清单以各 workspace 的 `package.json`
+> 为准 —— 原先用来枚举它的 `smoke-install` 脚本已按宪法删除）；`apps/web` 是 private，不发布。根 CLI 的发布名是 **`vessel-agent`**
 > （bin 仍是 `vessel`），必须在所有子包之后发布。发布账号需要对 `vessel-agent` npm 组织有写权限。
 
 ## 1. 版本语义
@@ -29,33 +29,28 @@ paths: [docs/operations/RELEASE.md]
 ## 2. 发布前置条件
 
 - [ ] 目标改动已合并到 `release/<major>.<minor>`。
-- [ ] `bun run typecheck` / `bunx @biomejs/biome ci .` 全绿，端到端烟测
-      `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"` exit 0（仓库无自动化测试套件）。
+- [ ] `bun run build`（typecheck + biome ci）全绿，端到端烟测
+      `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"` exit 0（仓库无 gate / test / probe）。
 - [ ] `cd apps/web && npm ci && npm run build` 成功，且 `apps/web/dist/index.html` 存在。
-      这一步必须早于 `release-dry-run` / `smoke-install`：`dist/` 被 `.gitignore` 忽略，
-      不构建时根 tarball 会缺少 Web 控制台（smoke 会直接失败）。
+      这一步必须早于打包：`dist/` 被 `.gitignore` 忽略，不构建时根 tarball 会缺少 Web 控制台。
 - [ ] `CHANGELOG.md` 已更新（Unreleased → `## [<version>] - YYYY-MM-DD`）。
-- [ ] 根 `package.json` 与所有可发布 workspace `package.json` 版本一致（子包清单与数量以
-      `scripts/smoke-install.ts` 实际枚举为准）。
+- [ ] 根 `package.json` 与所有可发布 workspace `package.json` 版本一致（子包清单 = 各 workspace
+      里非 `private` 的 `package.json`）。
 - [ ] 根包 `package.json` 的 `name` 为 **`vessel-agent`**（bin 仍是 `vessel`）。
 - [ ] 所有可发布子包的 `name` 以 **`@vessel-agent/`** 开头，包间依赖均为 `@vessel-agent/*` 的精确版本；不得残留旧 `@vessel` scope（历史 ADR / CHANGELOG 除外）。
 - [ ] `release/*` 已合并到 `main`，且 `main` CI 绿。
 - [ ] 仓库 Secrets 已配置 `NPM_TOKEN`。
-- [ ] 发布干跑通过：`bun run scripts/release-dry-run.ts`（见 §2.1）。
-- [ ] 安装解析 smoke 通过：`bun run scripts/smoke-install.ts`（见 §2.2；仅 POSIX）。
+- [ ] tarball 内容 / 包名 / 内部版本 / 安装解析**人工核对一遍**（原先的
+      `release-dry-run` / `smoke-install` 两个脚本已按宪法删除，没有自动入口）。
 
-## 2.1 发布干跑
+## 2.1 发布干跑（脚本已删，只留检查项）
 
-干跑不执行 §4 的真实发布步骤，只运行干跑脚本（安装解析 smoke 见 §2.2）：
+> 原先跑这件事的 `scripts/release-dry-run.ts` **已按宪法删除**，没有可执行入口。下面这份清单
+> 是它当年逐条检查的内容，现在发布前**人工核对**（或由 1 决定重写替代物）。
 
-```bash
-bun run scripts/release-dry-run.ts
-```
-
-- **目标版本 = 当时的根 `package.json` 版本**；脚本不硬编码版本。
-- 枚举所有非 `private` workspace 包；文件清单用 `npm pack --dry-run --json`，
-  tarball manifest 用实际 `bun pm pack` 到 OS 临时目录后解析；结束后清理。
-  临时文件不进入仓库，也不上传 CI artifact。
+- **目标版本 = 当时的根 `package.json` 版本**。
+- 枚举所有非 `private` workspace 包；文件清单可用 `npm pack --dry-run` 自己看，
+  tarball 落到 OS 临时目录、结束即清理，不进入仓库。
 - 检查项：
   1. 包版本与根版本一致；
   2. tarball manifest 的任何依赖字段不含 `workspace:*` / `file:`；
@@ -63,7 +58,7 @@ bun run scripts/release-dry-run.ts
   4. 必填字段 `name` / `version` / `main` 或 `exports` / `types`；
   5. tarball 不含 `.env`、密钥、数据库、日志、覆盖率/测试产物；
   6. `CHANGELOG.md` 含 `## [<根版本>]`。
-- 退出码：`0` 通过；`1` 检查失败；`2` 用法/根配置错误。
+- 通过标准（人工）：上面 6 条逐条核对无偏差。
 - **不做**：不创建 tag、不 push、不调用 `npm publish`、不合并 `main`、不上传 artifact。
 
 **收口顺序（DECISION-009 §12.3）**：
@@ -73,34 +68,27 @@ bun run scripts/release-dry-run.ts
 3. **在 bump 之后用普通 `bun install` 刷新 `bun.lock`（不要 `--frozen-lockfile`）**，
    确保 lock 记录同一版本；
 4. gov 写 `CHANGELOG.md` 的 `## [<version>]`；
-5. 复跑 `version --check`、`release-dry-run`、typecheck + biome 与 qa 最终门禁；
+5. 复跑 `version --check`、`bun run build` 与 qa 最终确认（没有干跑脚本可跑）；
 6. 仍然**不 tag、不 push、不 publish、不合并 `main`**。
 
-若干跑报 `internal_dependency_version`，说明 `bun.lock` 与 manifest 版本不一致
-（`bun pm pack` 会按 lock 改写 `workspace:*`）；由 ext 在 bump 后刷新 lock，不要改干跑脚本绕过。
+若 `bun pm pack` 打出的 manifest 里内部依赖版本与根版本不一致，说明 `bun.lock` 与 manifest 不同步
+（`bun pm pack` 会按 lock 改写 `workspace:*`）；由 ext 在 bump 后刷新 lock，不要手改 manifest 绕过。
 
-## 2.2 安装解析 smoke（发布前置）
+## 2.2 安装解析 smoke（脚本已删，只留核对口径）
 
-干跑只检查 tarball 内容；smoke 进一步验证「发布后的包能被 npm 装上并运行」：
-
-```bash
-bun run scripts/smoke-install.ts          # POSIX / CI
-bun run scripts/smoke-install.ts --force  # Windows 上强制尝试（默认跳过）
-```
-
-- **前置**：`apps/web/dist/index.html` 必须存在（先 `cd apps/web && npm ci && npm run build`）。
-  脚本在打包根包前检查该文件，并断言根 tarball 的文件清单包含
-  `apps/web/dist/index.html`；缺失时 smoke 失败（exit 1），不会静默发出缺 Web 的包。
-- 对全部可发布子包与根包执行 `npm pack` 到 OS 临时目录。
-- 临时工程写入与 `overrides` 完全一致的 `file:` 依赖，`npm install --no-save`
-  根 tarball + 全部子包；根包对 `@vessel-agent/*` 的精确版本依赖全部指向本地 tarball，
-  因此**不需要这些版本已经发布到 npm**。
-- 运行 `vessel --version`（等于根版本）与 `VESSEL_MOCK=1 vessel --tools`
-  （断言 `bash` / `read` / `edit`），不需要 API Key。
-- 任一检查失败返回非 0；结束后清理临时目录（`--keep` 可保留）。
-- Windows 默认跳过（npm `.cmd` bin shim 与 `file:` override 语义未验证），
-  只在 ubuntu / CI 作为门禁；`--force` 仅供本地排查。
-- **不做**：不创建 tag、不 push、不 `npm publish`、不上传 artifact。
+> 原先跑这件事的 `scripts/smoke-install.ts` **已按宪法删除**，没有可执行入口。它当年验的是
+> 「发布后的包能被 npm 装上并运行」，现在发布前**人工按下面几条核对**：
+>
+> - **前置**：`apps/web/dist/index.html` 必须存在（先 `cd apps/web && npm ci && npm run build`）；
+>   缺失就等于会发出缺 Web 控制台的根包。
+> - 根 tarball 的文件清单必须包含 `apps/web/dist/index.html`（`npm pack` 后看清单即可）。
+> - 全部可发布子包 + 根包都能 `npm pack` 出 tarball；根包对 `@vessel-agent/*` 的精确版本依赖
+>   必须指向即将发布的版本（不是 `workspace:*`、不是 `file:`）。
+> - 装完能跑：`vessel --version`（等于根版本）与 `VESSEL_MOCK=1 vessel --tools`
+>   （可见 `bash` / `read` / `edit`），不需要 API Key。
+> - Windows 上 npm `.cmd` bin shim 与 `file:` override 语义未验证，核对应在 POSIX 侧做。
+>
+> **不做**：不创建 tag、不 push、不 `npm publish`、不上传 artifact。
 
 发布顺序在 `.github/workflows/release.yml` 中固定为：
 **先全部子包**（core → permission → config → agent → serve → tui → plugins），
@@ -173,9 +161,10 @@ git push origin v<version>
 推送 tag 后由 `.github/workflows/release.yml` 自动完成：
 
 1. `verify`：校验 tag 在 `main` 上、版本一致、CHANGELOG 有该版本；
-   先执行 Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再运行
-   `scripts/release-dry-run.ts` 与 `scripts/smoke-install.ts`。
-   **任一步失败即停止，不会进入 publish。**
+   先执行 Node 22 + `apps/web` 的 `npm ci` / `npm run build`。
+   **注意**：workflow 里仍在调用已删除的 `scripts/release-dry-run.ts` 与
+   `scripts/smoke-install.ts`，这两步现在会直接红 —— 在 1 决定删掉或重写之前，
+   发布不能靠这个 workflow 判定，只能人工核对 §2.1 / §2.2。
 2. 复跑 quality。
 3. `npm publish`：`publish-npm` 是独立 checkout，会再次构建 Web 控制台；
    **先全部子包**

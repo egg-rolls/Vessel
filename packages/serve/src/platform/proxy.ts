@@ -50,8 +50,8 @@ const LOG_THROTTLE_MAX_KEYS = 256;
  *
  * 为什么换：Bun 1.3.9 win32-x64 上，`pump` 形状（手写泵 + 浏览器中途取消 + 上游流还活着）
  * 会 **稳定复现** gateway 那次崩溃——同一个地址 `0xFFFFFFFFFFFFFFFF`、同一份 bun.report
- * 指纹（`ea1cf6cdbb…`），0.4–1.5 s 内必崩。取证与最小触发见
- * `scripts/crash-hunt/probe-stream-crash.ts` 与 `docs/operations/BUN-WIN32-SEGFAULT.md`。
+ * 指纹（`ea1cf6cdbb…`），0.4–1.5 s 内必崩。取证读数与最小触发的形状见
+ * `docs/operations/BUN-WIN32-SEGFAULT.md` §5。
  *
  * 开关：`VESSEL_PROXY_HTTP_STREAM=passthrough|pump`（`1`/`native` 同 passthrough，
  * `0` 同 pump）。其它平台缺省仍是 `pump`：这条崩溃只在 Windows 上取证到，不在别处

@@ -10,7 +10,9 @@ paths: [docs/operations/CI-CD.md]
 > 维护者：`gov`。分支模型与发布规则见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
 > 当前开发线与版本以 [docs/versions/CURRENT.md](../versions/CURRENT.md) 为准。
 > 1.0 前只做发布干跑；**不发布独立二进制**（ADR-006 继续有效）。
-> **仓库没有自动化测试套件**：CI 只跑 `bun run lint` / `bun run typecheck` / `bun run build`、`scripts/check-*.ts` 静态断言与 `main` / `release/**` push 后的 CLI 端到端烟测。测试运行命令与 `"test"` script 已从仓库和 workflow 中移除，不要再按旧口径查找或调用。
+> **仓库没有 gate / test / probe**（宪法第三、四条）：只有 `bun run build`（typecheck + biome ci）、
+> `apps/web` 构建与手工 CLI 端到端冒烟。`scripts/check-*.ts` 已于 2026-11-16 全部删除，
+> `release-dry-run` / `smoke-install` 两个脚本同样不在仓库里了 —— 别再按旧口径查找或调用。
 
 ## 1. CI：**已移除**（2026-11）
 
@@ -24,33 +26,31 @@ paths: [docs/operations/CI-CD.md]
 
 保留的两个 workflow：`release.yml`（tag → CD）、`sync-labels.yml`（PR 标签同步）。
 
-### 1.2 本地门禁：`bun run gates`（唯一权威）
+### 1.2 本地检查（唯一权威）
+
+**仓库里没有 gate / test / probe 脚本**（宪法第三、四条：2026-11-16 删掉了 83 个 `scripts/check-*.ts`，
+`bun run gates` 这个脚本条目也已不存在）。现在只有两类检查：
 
 | 步骤 | 命令 | 拦什么 |
 |---|---|---|
-| 格式 | `bunx @biomejs/biome ci .` | 格式 / import 顺序 / lint |
-| 类型 | `bun run typecheck`（含 `typecheck:examples`） | 跨包类型 |
-| 构建 | `bun run build` + `cd apps/web && bun run build` | 产物可构建；**`apps/web` 的跨包类型错误只有它报**（根 typecheck 不覆盖它） |
-| 静态契约 | `scripts/check-*.ts`（下段清单） | 依赖方向、文档、i18n、样式契约、RPC 方法表、事件可见性、时间线不变量、回放预算 |
-| 离线集成 | `check-config-sources`、`check-trace` | 配置来源与 trace 口径（不依赖外网） |
+| 构建（含格式 / 类型） | `bun run build`（= `bun run typecheck` + `bunx @biomejs/biome ci .`） | 格式 / import 顺序 / lint / 跨包类型（含 `examples/`） |
+| Web 前端 | `cd apps/web && bun run build` | 产物可构建；**`apps/web` 的跨包类型错误只有它报**（根 typecheck 不覆盖它，且它不在根 workspaces 里，需先 `bun install` / `npm ci`） |
 
-静态契约清单：`check-deps` / `check-docs` / `check-web-styles` / `check-i18n` / `check-rpc-methods` /
-`check-event-visibility` / `check-chat-visibility` / `check-transcript-items` / `check-live-items` /
-`check-replay-budget` / `check-history-tools` / `check-prompt-prefix` / `check-config-sources` / `check-trace`。
+架构硬边界（依赖方向、i18n 对齐、RPC 方法表、事件可见性、时间线不变量…）**不再有脚本断言**，
+改为评审项：改到相关路径时由人按对应架构页逐条核对，并在回报里写清核对了哪几条。
 
-**新增门禁的纪律**：加 `check:<name>` script 的同时**必须**让它进 `bun run gates` —— 没有 CI 之后，
-`gates` 是唯一会让它真的被跑到的地方。
+### 1.3 提交纪律
 
-### 1.3 提交纪律（替代 required checks）
+`main` 是发布基线：**禁止**把没跑过 `bun run build` 的改动 push 到 `main`。分支上的提交可以随便推（不触发任何 CI）。
+PR 没有 required checks，把关靠人 + 构建输出 + verifier 线程的读数。
 
-`main` 是发布基线：**禁止**把没跑过 `bun run gates` 的改动 push 到 `main`。分支上的提交可以随便推（不触发任何 CI）。
-PR 不再有 required checks，把关靠人 + 本地门禁输出。
+### 1.4 提示词前缀的审计口径
 
-### 1.4 提示词前缀静态审计
+没有脚本了，改到 hook / system 注入路径时人工过一遍：
 
-- 命令：`bun run check:prompt-prefix`（已含在 `bun run gates` 里）。
-- 规则：报告 HookResult 构造/返回 `additionalContext:`（system 注入）与 `ctx.systemPrompt =` 赋值。前者只允许 `packages/core/src/types/hook.ts`、`packages/core/src/runtime/hook-runner.ts`、`packages/core/src/runtime/execution-unit.ts` 的旧字段兼容层；后者不允许任何例外。
-- 过去这里写「属于手动门禁、尚未接入 CI」；现在整个 CI 都没了，口径统一为 `bun run gates`。
+- 报告 `HookResult` 构造/返回的 `additionalContext:`（system 注入）与 `ctx.systemPrompt =` 赋值。
+- 前者只允许 `packages/core/src/types/hook.ts`、`packages/core/src/runtime/hook-runner.ts`、
+  `packages/core/src/runtime/execution-unit.ts` 的旧字段兼容层；后者不允许任何例外。
 
 ### 1.5 历史记录（2026-11 移除前的 ci.yml，仅供追溯）
 
@@ -96,39 +96,22 @@ PR 不再有 required checks，把关靠人 + 本地门禁输出。
 - 分支保护 required checks：`Quality Checks`、`Web Build`、`Examples`、`Cross Platform (ubuntu-latest)`；0.5 建议把 `Architecture`、`Offline Integration` 与 `Release Dry Run` 也设为 required（由 1 / 仓库管理员在 GitHub 设置）。
 - `tls-ca` / `frontend-cors` 是占位 job，只做依赖安装、不设 required。TLS / CORS 的真实行为（证书信任、跨源访问）**没有自动断言**，只能人工验收（见 [REMOTE.md](REMOTE.md)）。
 
-### 1.1 门禁口径：只有静态检查与烟测
+### 1.1 检查口径：只有构建与手工冒烟
 
-- **代码门禁**：`bun run typecheck` + `bunx @biomejs/biome ci .`（+ CI 里的 `bun run build`）。仓库没有测试框架，不存在可用的测试门禁。
-- **结构门禁**：`check-deps` / `smoke-subpaths` / `check-docs` / `check-web-styles` / `check-i18n` / `check-rpc-methods` / `check-config-sources` / `check-trace` / `version --check` / `release-dry-run`。这些是脚本断言，守架构硬边界，不是测试套件。
-- **运行时正确性**：唯一自动证据是 `smoke` job 的 CLI 端到端路径（`VESSEL_MOCK=1 bun run src/cli.ts --run "hello"` 等），只在 `main` / `release/**` push 后跑。PR 不跑运行时行为。
-- 行为变更（权限、持久化、远程、Web 交互）**没有自动回归**，合并前必须人工验证并给出 `file:line` 证据；不要因为「CI 绿」就认为行为正确。
+- **构建**：`bun run build`（= `typecheck` + `biome ci`）+ `apps/web` 的 `bun run build`。仓库没有测试框架，也不允许有。
+- **运行时正确性**：唯一证据是手工 CLI 端到端冒烟（`VESSEL_MOCK=1 bun run src/cli.ts --run "hello"` 等）。
+- 行为变更（权限、持久化、远程、Web 交互）**没有自动回归**，合并前必须人工验证并给出 `file:line` 证据；不要因为「构建绿」就认为行为正确。
 - 两条不变量仍必须人工守：诊断只走 Logger / stderr，不 `console.log` 到 stdout；新增用户可见文案同时改 zh-CN / en 两份 catalog。
 
-### 1.2 发布干跑 job（0.5）
+### 1.2 发布前校验（已随脚本删除而失效）
 
-- 触发：`pull_request` + `release/**` push；不覆盖 `main` push。
-- 命令：`bun run scripts/release-dry-run.ts`（详细检查项与退出码见
-  [RELEASE.md §2.1](RELEASE.md)）。
-- 目标版本 = 根 `package.json` 版本（manifest 由 1 在收口时统一 bump；文档不维护版本副本）。
-- 可发布子包名为 `@vessel-agent/*`，数量以 `scripts/smoke-install.ts` 实际输出为准；`release-dry-run` 会校验包名与内部精确版本。
-- 打包到 runner 的 OS 临时目录并在结束后清理；**不上传 artifact、不登录 npm、
-  不创建 tag、不发布**。
-- 若报 `internal_dependency_version`，说明 `bun.lock` 与 manifest 版本不一致；
-  由 ext 在 1 bump 之后用普通 `bun install` 刷新 lock（不要 `--frozen-lockfile`）。
-
-### 1.2.1 安装解析 smoke job（0.10）
-
-- 触发：与 `release-dry-run` 相同（`pull_request` + `release/**` push）。
-- 命令：`bun run scripts/smoke-install.ts`（详见 [RELEASE.md §2.2](RELEASE.md)）。
-- 覆盖：全部可发布包 + 根 tarball 的 `npm pack`、本地 `file:` `overrides`
-  安装解析、`vessel --version`、`VESSEL_MOCK=1 vessel --tools`，以及根 tarball
-  必须包含 `apps/web/dist/index.html`。
-- **前置构建**：`dist/` 被 `.gitignore` 忽略，job 必须先执行 Node 22 +
-  `apps/web` 的 `npm ci` / `npm run build`；未构建时 smoke 失败（exit 1）。
-- 运行在 ubuntu + Node 22（`npm`）；Windows 跳过（`.cmd` bin shim 未验证），
-  不作为 `cross-platform` 的一部分。
-- 只写 OS 临时目录；**不上传 artifact、不登录 npm、不创建 tag、不发布**。
-- CI 异步；失败不阻塞 push，发布前人工确认。
+- 原来的 `scripts/release-dry-run.ts` 与 `scripts/smoke-install.ts` **已按宪法删除**：
+  tarball 内容 / 包名 / 内部版本 / 安装解析这些检查**不再有自动入口**。
+- `.github/workflows/release.yml` 里仍留着调用这两者的两步，tag 时会红；恢复方式只有两种 ——
+  把这两步删掉（发布改为人工核对），或由 1 决定重写它们的替代物。**在这之前不要靠 release workflow 判定可发布。**
+- 发布前现在必须人工核对的项目见 [RELEASE.md](RELEASE.md) 的发布清单：
+  `bun run scripts/version.ts --check`（版本一致性 + CHANGELOG）、`bun run build`、
+  `apps/web` 构建产物含 `dist/index.html`、可发布包名与内部依赖恒为 `workspace:*`。
 
 ### 1.3 人工验收清单（没有自动化回归）
 
@@ -146,17 +129,15 @@ PR 不再有 required checks，把关靠人 + 本地门禁输出。
 - **Web**：权限卡片在 run 卡片内联、跨 session 用顶部待处理条；不得重新引入全局权限遮罩。
 - **状态栏**：CJK / emoji 按显示列计算，不用 `.length` 代替。
 - **插件生命周期**：`init` 失败隔离、`dispose` 逆序、幂等与安装回滚。
-- **结果形状**：canonical RPC 的 `result_schema` 与实现漂移不再由 CI 自动发现；改 canonical 方法时必须同步 `docs/architecture/gateway-rpc.md`。`check-rpc-methods` 只守方法名表，不守结果形状。
-- **trace**：`includeStreamChunks` 默认关闭，trace 文件 `0600`；发布前用 `release-dry-run` + `smoke-install` 双门禁。
+- **结果形状**：canonical RPC 的 `result_schema` 与实现漂移**没有任何自动发现机制**；改 canonical 方法时必须同步 `docs/architecture/gateway-rpc.md`。
+- **trace**：`includeStreamChunks` 默认关闭，trace 文件 `0600`；发布前人工核对 tarball 内容与安装解析（原双门禁脚本已按宪法删除）。
 
-结构门禁本身仍有自动断言：`check-docs`（ADR 索引 / 链接 / 文档一致性）、`check-web-styles`、`check-deps`（依赖方向）、`smoke-subpaths`（子路径导出）、`version --check`（版本与 CHANGELOG 一致）。
+架构硬边界（ADR 索引 / 链接 / 文档一致性、样式契约、依赖方向、子路径导出、版本一致性）**没有自动断言**：
+2026-11-16 起 `check-*` 脚本已按宪法删除，这些边界改为评审项，改到相关路径时人工核对。
 
-#### 提示词前缀静态审计（历史条目；口径已并入 §1.4）
+#### 提示词前缀的审计（并入 §1.4）
 
-- 命令：`bun run check:prompt-prefix`（`scripts/check-prompt-prefix.ts`）。
-- 范围：`packages/`、`plugins/`、`src/` 下的非测试 `.ts` / `.tsx` 源码；跳过 `__tests__`、`*.test.ts`、`node_modules`、`dist`。
-- 规则：报告 HookResult 构造/返回 `additionalContext:`（system 注入）与 `ctx.systemPrompt =` / `context.systemPrompt =` 赋值。前者只允许 `packages/core/src/types/hook.ts`、`packages/core/src/runtime/hook-runner.ts`、`packages/core/src/runtime/execution-unit.ts` 的旧字段兼容层；后者不允许任何例外。
-- 输出 `path:line: <pattern>`；有命中 exit 1，无命中 exit 0。当前为手动门禁，尚未接入 `.github/workflows/ci.yml`；改 hook 或 system 注入路径后本地跑一次。
+口径见 §1.4：没有脚本，改到 hook / system 注入路径时人工按那两条规则过一遍。
 
 ## 2. Release（`.github/workflows/release.yml`）
 
@@ -172,13 +153,13 @@ PR 不再有 required checks，把关靠人 + 本地门禁输出。
    - 从 tag 提取版本（去掉 `v`）。
    - `bun run scripts/version.ts --check <version>`：所有可发布包版本一致，且 `CHANGELOG.md` 含 `## [<version>]`。
    - Node 22 + `apps/web` 的 `npm ci` / `npm run build`：根 tarball 的 `files` 含 `apps/web/dist`，而 `dist/` 被忽略，必须先构建。
-   - `bun run scripts/release-dry-run.ts`：tarball 内容 / 版本 / 禁止文件检查。
-   - `bun run scripts/smoke-install.ts`：全部可发布子包 + 根 tarball 的安装解析与运行 smoke，并断言根 tarball 含 `apps/web/dist/index.html`。
+   - **tarball 内容与安装解析：原来的 `release-dry-run` / `smoke-install` 脚本已按宪法删除，
+     这两步现在没有执行体** —— 要么由 1 决定重写替代物，要么从 workflow 里删掉、改为人工核对。
    - **任一步失败即停止，`publish-npm` 不会执行。**
 2. `quality`：复用 `.github/actions/quality`，发布前再验一次。
 3. `publish-npm`
    - 独立 checkout，先执行 Node 22 + `apps/web` 的 `npm ci` / `npm run build`，确保根 tarball 含 Web 控制台。
-   - **先发布全部可发布子包**，顺序固定：`core` → `permission` → `config` → `agent` → `serve` → `tui` → `plugins`；具体列表以 `scripts/smoke-install.ts` 输出为准。
+   - **先发布全部可发布子包**，顺序固定：`core` → `permission` → `config` → `agent` → `serve` → `tui` → `plugins`；具体列表以各 workspace 的 `package.json`（非 `private`）为准。
    - **最后发布根 CLI `vessel-agent`**（依赖全部子包的精确版本；bin 仍是 `vessel`）。
      根 `package.json` 的 `name` 不是 `vessel-agent` 时 fail-fast。
    - 稳定版 dist-tag `latest`；预发布（tag 含 `-`）dist-tag `beta`。

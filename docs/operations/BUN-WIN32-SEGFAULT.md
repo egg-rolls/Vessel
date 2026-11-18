@@ -2,7 +2,7 @@
 title: Bun 段错误（win32）取证 runbook：gateway 崩了之后收集什么、先看哪一行
 kind: current
 triggers: [segfault, 段错误, panic, bun.report, gateway 崩溃, 崩溃, crash, runbook, 取证, Segmentation fault, 0xFFFFFFFFFFFFFFFF, 资源采样, gateway.resources, VESSEL_RESOURCE_SAMPLE_MS, proxy, passthrough, pump, crc32]
-paths: [docs/operations/**, packages/serve/src/platform/proxy.ts, packages/core/src/timeline/wal.ts, scripts/crash-hunt/**]
+paths: [docs/operations/**, packages/serve/src/platform/proxy.ts, packages/core/src/timeline/wal.ts]
 ---
 
 # Bun 段错误（win32）取证 runbook
@@ -48,8 +48,9 @@ stdout/stderr 不落盘，这段文字**只存在于那个终端滚动缓冲里*
    `<dataDir>/platform-watchdog.json`、`<dataDir>/gateway.pid`。用来对齐 panic 里的
    `Elapsed:`（例如 `Elapsed: 6158418ms` = 该进程活了 102 分 38 秒）。
 
-**别做的事**：不要为了「复现」直接拿真实数据目录起实例。用只读拷贝 + 隔离端口
-（`scripts/crash-hunt/*.ts` 会自己起 127.0.0.1 随机端口，不碰 8642/8644/真实数据）。
+**别做的事**：不要为了「复现」直接拿真实数据目录起实例。0.58 那批复现 / 压测探针一律只监听
+`127.0.0.1` 的随机端口、数据只落系统临时目录，从不碰 8642/8644/真实数据 —— 将来要重新验证也
+得守同一条边界（探针本身已按宪法删除，结论见 §6）。
 
 ## 3. 资源采样（0.58 新）
 
@@ -76,22 +77,14 @@ http_inflight=4 passthrough=12 mode=passthrough ws_active=2 ws_pending=0
 | `VESSEL_PROXY_HTTP_STREAM` | `passthrough`（win32 缺省）/ `pump` | 代理 HTTP 流式转发走「原生直通」还是「手写泵」。`pump` 在 win32 上有可复现段错误 |
 | `VESSEL_CRC32_NATIVE` | `0`（win32 缺省）/ `1` | 时间线块 crc32 走表驱动还是 `node:zlib` 原生实现。两者结果逐位相同 |
 
-**在 WSL 里设环境变量对 `bun` 无效**（`bun` 是 Windows 进程，看到的是 Windows 的进程环境）：
-
-```bash
-FOO=bar bun -e 'console.log(process.env.FOO)'   # → undefined
-```
-
-要么在 **Windows 侧**设（`set VAR=1` / `$env:VAR=1` / 系统环境变量），要么用
-`scripts/crash-hunt/run-env.ts` 显式传：
-
-```bash
-bun scripts/crash-hunt/run-env.ts VESSEL_PROXY_HTTP_STREAM=pump -- bun scripts/crash-hunt/check-stream-semantics.ts
-```
+**在 WSL 里设环境变量对 `bun` 无效**：`bun` 是 Windows 进程，它看到的是 Windows 的进程环境，
+WSL 那边 export 的变量读不到（实测传进去是 `undefined`）。要么在 **Windows 侧**设
+（`set` / `$env:` / 系统环境变量面板），要么在启动那个 Windows 进程之前，把变量显式写进它
+自己的进程环境（0.58 当时用一层透传包装做过这件事，那个包装脚本已按宪法删除）。
 
 ## 5. 已知崩溃：代理 HTTP 流式转发（win32，Bun 1.3.9）
 
-**最小触发**（`scripts/crash-hunt/probe-stream-crash.ts`，0.4–1.5 秒必崩）：
+**最小触发**（形态描述；当年那份最小复现探针已按宪法删除，跑起来 0.4–1.5 秒必崩）：
 
 1. `Bun.serve` 的 fetch 处理器返回一个**手写 `ReadableStream`**，它的数据源是
    `(await fetch(url)).body.getReader()`；
@@ -110,35 +103,34 @@ bun scripts/crash-hunt/run-env.ts VESSEL_PROXY_HTTP_STREAM=pump -- bun scripts/c
 | 原生直通 + `req.signal → controller.abort()` | 不崩（本次采用） |
 
 **加固（0.58）**：win32 缺省改为原生直通，并先把「声明了长度且 ≤ 1 MiB」的响应整份读完
-（代理流量的绝大多数是 JSON），把竞态窗口压到最小。语义自证：
+（代理流量的绝大多数是 JSON），把竞态窗口压到最小。加固后做过一次语义自证，读数是：
+SSE 仍逐步到达（首条 <400ms、5 条摊在 ~800ms 上）、JSON 与上游逐字节相同、3 MiB 响应仍是
+分 50+ 块到达（不是整份缓冲）—— 这三条就是「换成原生直通没有把流式语义弄丢」的证据。
+（自证探针已按宪法删除，读数留在这里。）
 
-```bash
-bun scripts/crash-hunt/check-stream-semantics.ts
-# 期望：SSE 逐步到达（首条 <400ms、5 条摊在 ~800ms）、JSON 逐字节相同、
-#       3 MiB 响应分 50+ 块到达（不是整份缓冲）
-```
+## 6. 复现与读数：只留结论
 
-## 6. 复现与读数（脚本都在 `scripts/crash-hunt/`）
+> 0.58 当时用来取证 / 压测的那批探针与脚本，已按宪法第三、四条（测试与探针一律不进仓库）
+> 删除，**不再提供任何可执行的复现入口**。这一节只留它们跑出来的结论，让后人知道
+> 「哪些形状已经被证过、读数是什么」，而不是重新造一套探针从零再证一遍。
 
-| 脚本 | 压什么 | 一句话读数 |
-| --- | --- | --- |
-| `probe-stream-crash.ts` | 代理流式转发（7 种写法） | 哪种写法崩、崩在哪 |
-| `probe-crc32.ts` | `node:zlib` crc32 vs 表驱动 | 逐位相同（含 subarray/byteOffset） |
-| `stress-a-blocks.ts` | 时间线块写入 + 校验 | 见 §8 读数表 |
-| `stress-b-ws-proxy.ts` | 平台 WS 桥 1 MiB 帧 | 见 §8 读数表 |
-| `stress-c-write-tool.ts` | `write` 工具 create/overwrite/append | 见 §8 读数表 |
-| `stress-d-http-stream.ts` | 代理 HTTP 流 + 下游中止 | 改前 10 秒内崩，改后不再崩 |
-| `check-stream-semantics.ts` | 加固后的语义自证 | 见 §5 |
-| `run-env.ts` | 给 Windows 侧 bun 传环境变量 | WSL 里设 env 的唯一可行通道（§4） |
+- **代理流式转发**：把「手写泵当 `Bun.serve` 响应体 + 下游中途取消」这个形状单独压到
+  0.4–1.5 秒必崩（§5）；同一形状改成原生直通后不再崩。
+- **crc32 两条实现**：`node:zlib` 原生与表驱动对同一份数据逐位相同（含 `subarray` /
+  `byteOffset` 的切片），差异只在耗时（§8.4）。
+- **时间线块写入 + 校验**、**平台 WS 桥 1 MiB 帧**、**`write` 工具三态写入**：各 5 分钟
+  单独压，一次都没崩，读数见 §8.3（含 RSS 曲线与 per-connection 成本）。
+- **代理 HTTP 流 + 下游中止**：改前 10 秒内 `panic`，改后不再崩（§8.3 表格 D 行）。
 
-所有脚本只监听 `127.0.0.1` 随机端口，数据只落 `%TEMP%/crash-hunt/**`，不碰
-`~/.vessel`、8642、8644。
+当年那批脚本的运行约束（将来要重做验证也得守）：只监听 `127.0.0.1` 随机端口、数据只落
+系统临时目录，不碰 `~/.vessel`、8642、8644。
 
 ## 7. 交给 Bun 那边时需要什么
 
-一个 issue 需要三样：`bun.report` 链接（就是 panic 最后那行）、**最小复现脚本**（用
-`probe-stream-crash.ts --mode pump` 即可，不依赖本仓业务代码）、以及
-`bun --version` + `uname`/`ver`。本仓这次的对应 issue 类型是
+一个 issue 需要三样：`bun.report` 链接（就是 panic 最后那行）、**一份不依赖本仓业务代码的
+最小复现**（§5 的两步形状自己写十几行就能重造：`Bun.serve` 的 fetch 处理器返回一个源自
+`(await fetch(url)).body.getReader()` 的手写 `ReadableStream`，再让客户端中途取消 —— 本仓
+当年那份探针已按宪法删除）、以及 `bun --version` + `uname`/`ver`。本仓这次的对应 issue 类型是
 「`Bun.serve` served `ReadableStream` sourced from `fetch().body` + downstream cancel
 ⇒ segfault at 0xFFFFFFFFFFFFFFFF」。
 

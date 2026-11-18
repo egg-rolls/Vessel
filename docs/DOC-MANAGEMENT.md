@@ -73,7 +73,7 @@
 `current` 文档超过 **300 行**或 **100 KB** 时，必须按模块拆分到 `docs/architecture/**` 或 `docs/agents/**`，不得继续整篇常驻（`target` 不适用本句，见下）。
 
 - 目录必须有 `INDEX.md`：`docs/architecture/INDEX.md` 与 `docs/agents/INDEX.md` 各 ≤60 行，列为「模块（含链接）| 一句话 | triggers | paths」；target 模块在模块名后标注 `kind: target`。
-- `current` 模块 ≤110 行（`advisory` ≤60 行）；`target` 允许长文档，`check-docs` 上限 600 行；一个事实只有一个家，其余位置用链接，不复制。
+- `current` 模块 ≤110 行（`advisory` ≤60 行）；`target` 允许长文档（上限 600 行，人工守）；一个事实只有一个家，其余位置用链接，不复制。
 - frontmatter 必填 `title` / `kind` / `triggers` / `paths`；`kind` 只允许 `current` / `advisory` / `target`，`advisory` 另加 `applies_to`（`N` / `M`）。`triggers` 写任务里会出现的词，`paths` 是 glob，命中优先于关键词。
 
 ```yaml
@@ -92,13 +92,13 @@ paths: [packages/serve/**, apps/web/src/gateway/**]
 1. 顶部必须有 banner：声明「目标 / 迁移态，非现态」，并链接决策 ADR（如 ADR-098）。
 2. 只写目标模型与迁移分期；不得把目标态写成「已实现」，也不得替代架构页正文。
 3. 随 Stage 更新，git 历史即版本；Stage 落地后由对应 `current` 架构页承接。
-4. 允许长文档：`check-docs` 上限 600 行，不按 `current` 的 100 行模块规则拆分。
+4. 允许长文档（上限 600 行，人工守），不按 `current` 的 100 行模块规则拆分。
 5. `INDEX.md` 仍为 `current`；target 模块在索引行的模块名后标注 `kind: target`。
 
 `current` 的 110 行模块规则与 300 行拆分规则不变。
 
 - 未拆分的存量文档在迁移完成前 grandfather；新增或重构的 `current` 文档立即适用。
-- `check-docs` 校验 frontmatter、INDEX 覆盖、行数与链接；新增/重构文档立即生效，存量在迁移完成前 grandfather。
+- frontmatter、INDEX 覆盖、行数与链接**没有自动校验**（`check-docs` 已按宪法删除），reviewer 逐项核对；新增/重构文档立即生效，存量在迁移完成前 grandfather。
 
 ## 4. O(n)：历史记录
 
@@ -134,7 +134,7 @@ docs/
 - `docs/versions/INDEX.md`：一行一条，版本 | 日期 | 主题 | 状态（merged / unreleased）| 链接；
   新的在前。
 - `docs/adr/README.md`：一行一条，编号 | 标题 | 状态（proposed / accepted / superseded）| 链接；
-  编号升序，`scripts/check-docs.ts` 会校验索引与文件一致。
+  编号升序；索引与文件是否一致靠 reviewer 逐条核对（原校验脚本已按宪法删除）。
 - **没有索引的 O(n) 目录视为违规**：读者只能靠列目录猜，等于没有组织。
 
 ## 5. 临时产物（TTL）

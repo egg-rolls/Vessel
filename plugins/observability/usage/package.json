@@ -22,8 +22,7 @@
   },
   "scripts": {
     "build:ui": "tsc -p tsconfig.web.json --noEmit && vite build",
-    "typecheck:ui": "tsc -p tsconfig.web.json --noEmit",
-    "probe": "bun run test/probe.ts"
+    "typecheck:ui": "tsc -p tsconfig.web.json --noEmit"
   },
   "dependencies": {
     "@vessel-agent/core": "workspace:*",
