@@ -911,7 +911,8 @@ const DERIVED_BODY: {
 
 /** 进程内成员执行内核 */
 export class MemberExecutionHost implements MemberExecutionPort {
-  private readonly model?: string;
+  /** 宿主缺省 model；`provider.model` 热应用会经 `updateDefaultModel` 整体替换（非 readonly） */
+  private model?: string;
   private readonly pluginHost?: PluginHost;
   private readonly readOnlyTools: ReadonlySet<string>;
   private readonly permissionMode: MemberExecutionPermissionMode;
@@ -984,6 +985,17 @@ export class MemberExecutionHost implements MemberExecutionPort {
         fallback: 'ask_denied',
       });
     }
+  }
+
+  /**
+   * 替换宿主缺省 model（`provider.model` 热应用的写入口，P0-1 D4 批准）。
+   *
+   * 只影响**此后 spawn** 的成员 body（`member.model ?? this.model` 的回落端）；
+   * live body 的 model 是构造期只读快照（system 前缀不变量），本具仍旧值、
+   * 下一具才用新值。不触碰任何 live ExecutionUnit，也不改显式 pin（record.model）。
+   */
+  updateDefaultModel(model: string): void {
+    this.model = model;
   }
 
   async spawn(member: MemberExecutionMember): Promise<void> {
@@ -2151,9 +2163,12 @@ export class MemberExecutionHost implements MemberExecutionPort {
   }
 }
 
-/** 工厂：入口层只依赖 MemberExecutionPort */
+/**
+ * 工厂：执行消费面仍只依赖 MemberExecutionPort（createAgentService 的 runtime 选项）；
+ * 返回具体宿主类型，装配层据此可达 `updateDefaultModel`（provider.model 热应用写入口）。
+ */
 export function createMemberExecutionHost(
   options: MemberExecutionHostOptions,
-): MemberExecutionPort {
+): MemberExecutionHost {
   return new MemberExecutionHost(options);
 }

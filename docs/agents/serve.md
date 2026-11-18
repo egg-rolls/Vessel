@@ -58,7 +58,7 @@ applies_to: [N, M]
 ## 关闭与 gateway 生命周期
 
 - 关闭顺序固定：`await gateway.stop()` → 取消订阅 / 关闭 transport → `beforeClose` → `closeAll` → `shutdown`；后两步 `{ drain: false }`，不二次 drain。中断 active run 用 `interrupt('shutdown'|'timeout'|'user')`，不得只 abort signal 丢原因；headless 不得提前 `process.exit` 跳过清理（ADR-070）。
-- 运行态以 `<dataDir>/gateway.pid` 为唯一来源；`stop` 只删本进程持有的 PID；服务注册只在显式 `install-service` / `uninstall-service` 时执行。`gateway.reload` 只热更新 plugins 扫描缓存与 `serve.allowed_origins`，其余如实进 `requires_restart`（ADR-074/075）。
+- 运行态以 `<dataDir>/gateway.pid` 为唯一来源；`stop` 只删本进程持有的 PID；服务注册只在显式 `install-service` / `uninstall-service` 时执行。`gateway.reload` 热更新 plugins 扫描缓存、`serve.allowed_origins`、permission / tools / mcp（注入 applier）与 `provider.model`（节点缺省模型：新 body / 新 EU 立即用新值，live body 构造期只读、下一具才生效）；其余配置域（含 `agent.model`）如实进 `requires_restart`（ADR-074/075）。
 
 ## 节点与 attention
 
