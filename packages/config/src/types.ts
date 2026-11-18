@@ -17,7 +17,7 @@ export interface ProviderConfig {
   maxTokens?: number;
   /** 请求超时毫秒；<=0 关闭。缺省由 provider 插件决定（当前 120s） */
   timeoutMs?: number;
-  /** 是否启用 Anthropic 显式提示词缓存（默认 true；其他 provider 忽略） */
+  /** 显式提示词缓存断点。anthropic 默认 true；OpenAI 兼容端点缺省按模型名自动（含 claude 才开），显式值覆盖 */
   promptCache?: boolean;
 }
 
