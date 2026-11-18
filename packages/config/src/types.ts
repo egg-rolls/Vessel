@@ -828,6 +828,13 @@ export interface HubConfig {
   proxySecretEnv?: string;
   allowFileSecrets?: boolean;
   pairingTtlSeconds?: number;
+  /**
+   * 0.61：hub 签发的 node token 有效期（天，1–365，缺省 30）。
+   *
+   * 只影响**新签发**的 token（已有记录不会被改写）。开发机上的 node 可以写长，
+   * 免得每 30 天回去敲一次 `vessel hub join-code`。
+   */
+  tokenTtlDays?: number;
 }
 
 /** 配置来源（叶子级追踪） */

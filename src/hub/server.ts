@@ -17,7 +17,7 @@
 
 import type { HubConfig } from '@vessel-agent/config';
 // 0.56：token 比较统一用定长摘要 + 常量时间（派生值也是凭据，不能按字节提前返回）。
-import { tokenEquals } from '@vessel-agent/config';
+import { tokenEquals, validateNodeRegistration } from '@vessel-agent/config';
 import type { Logger } from '@vessel-agent/core';
 import {
   corsHeaders,
@@ -40,6 +40,7 @@ import {
   type HubNodeInbound,
   type HubNodeInboundConnection,
 } from './inbound-control.js';
+import { decideJoinRegistration, hasLiveNodeToken } from './join-policy.js';
 import { normalizeNodeUrl } from './node-url.js';
 import type { HubRegistry } from './registry.js';
 import type { HubNodeInboundDeps, IssuedHubNodeToken } from './types.js';
@@ -543,7 +544,11 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
     return jsonResponse(200, { ok: true, node_id: nodeId }, extra);
   }
 
-  async function handleJoin(request: Request, extra: Record<string, string>): Promise<Response> {
+  async function handleJoin(
+    request: Request,
+    extra: Record<string, string>,
+    loopbackPeer: boolean,
+  ): Promise<Response> {
     if (nodeControl === undefined) {
       return errorResponse('not_found', 'not found', 404, extra);
     }
@@ -559,21 +564,30 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
 
     const code = body.value.code;
     const nodeId = body.value.node_id;
-    if (!isNonEmptyString(code) || !isNonEmptyString(nodeId)) {
-      return errorResponse('invalid_request', 'code and node_id are required', 400, extra);
+    if (code !== undefined && !isNonEmptyString(code)) {
+      return errorResponse('invalid_request', 'code must be a non-empty string', 400, extra);
+    }
+    if (!isNonEmptyString(nodeId)) {
+      return errorResponse('invalid_request', 'node_id is required', 400, extra);
     }
     const alias = body.value.alias;
     if (alias !== undefined && !isNonEmptyString(alias)) {
       return errorResponse('invalid_request', 'alias must be a non-empty string', 400, extra);
     }
-    const rawPublicUrl = body.value.public_url;
-    if (rawPublicUrl !== undefined && !isNonEmptyString(rawPublicUrl)) {
-      return errorResponse('invalid_request', 'public_url must be a non-empty string', 400, extra);
+
+    // 0.61：注册载荷里的 entries / capabilities / version 由纯函数校验；
+    // node 声明的 kind 与地址事实不一致会在这里被拒（声明不可信）。
+    const registration = validateNodeRegistration(body.value);
+    if (!registration.ok) {
+      return errorResponse(registration.code, registration.message, 400, extra);
     }
+
+    const rawPublicUrl = body.value.public_url;
     let publicUrl: string | undefined;
     if (rawPublicUrl !== undefined) {
+      // 沿用既有严格口径（非回环必须 https），不因新增注册字段而放宽。
       try {
-        publicUrl = normalizeNodeUrl(rawPublicUrl);
+        publicUrl = normalizeNodeUrl(String(rawPublicUrl));
       } catch (error) {
         return errorResponse(
           'invalid_request',
@@ -584,16 +598,33 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
       }
     }
 
-    try {
-      await nodeControl.joinStore.consume({
-        code,
-        hub_id: hubId,
-        node_id: nodeId,
-      });
-    } catch (error) {
-      const raw = isRecord(error) ? error.code : undefined;
-      const mapped = joinErrorCode(raw);
-      return errorResponse(mapped, joinMessage(mapped), joinStatus(raw), extra);
+    // 已存在的身份要证明被授权才能接管：一次性邀请码，或「同机回环 + 仍有有效 token」。
+    const decision = decideJoinRegistration({
+      hasCode: code !== undefined,
+      hasLiveToken: hasLiveNodeToken(nodeControl.credentials.list(), nodeId, clock()),
+      loopbackPeer,
+    });
+    if (!decision.ok) {
+      return errorResponse(
+        decision.code,
+        decision.message,
+        decision.code === 'node_exists' ? 409 : 400,
+        extra,
+      );
+    }
+
+    if (code !== undefined) {
+      try {
+        await nodeControl.joinStore.consume({
+          code,
+          hub_id: hubId,
+          node_id: nodeId,
+        });
+      } catch (error) {
+        const raw = isRecord(error) ? error.code : undefined;
+        const mapped = joinErrorCode(raw);
+        return errorResponse(mapped, joinMessage(mapped), joinStatus(raw), extra);
+      }
     }
 
     let issued: IssuedHubNodeToken;
@@ -626,6 +657,13 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         node_token_id: issued.token_id,
         ...(publicUrl !== undefined ? { public_url: publicUrl } : {}),
         ...(alias !== undefined ? { alias } : {}),
+        ...(registration.value.entries.length > 0 ? { entries: registration.value.entries } : {}),
+        ...(registration.value.capabilities.length > 0
+          ? { capabilities: [...registration.value.capabilities] }
+          : {}),
+        ...(registration.value.version !== undefined
+          ? { version: registration.value.version }
+          : {}),
       });
     } catch (error) {
       // 目录落盘失败：撤销刚签发的 token，避免“有凭据没目录”的半成品。
@@ -641,6 +679,10 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
       return errorResponse('join_failed', 'Join failed', 500, extra);
     }
 
+    // 0.61：把派生来源集下发一次，node 存档后在启动时并入自己的 allowed_origins。
+    // 派生是纯计算（registry 变化时已刷新），这里不会阻塞 I/O。
+    const trustedOrigins = nodeControl.derivedOrigins?.();
+
     return jsonResponse(
       200,
       {
@@ -650,6 +692,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         token_id: issued.token_id,
         scope: 'node',
         expires_at: issued.expires_at,
+        ...(trustedOrigins !== undefined ? { trusted_origins: [...trustedOrigins] } : {}),
       },
       extra,
     );
@@ -673,7 +716,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         { ...extra, 'Retry-After': String(retryAfter) },
       );
     }
-    const response = await handleJoin(request, extra);
+    const response = await handleJoin(request, extra, isLoopbackPeer(srv, request));
     if (response.status >= 400) recordJoinFailure(ip, clock());
     else joinFailures.delete(ip);
     return response;

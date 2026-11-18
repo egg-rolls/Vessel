@@ -28,6 +28,7 @@ import {
 import { resolveNodeId } from '../node-identity';
 // 0.56：hub 的派生 token（显式 hub.token_env 仍优先）。
 import { effectiveHubToken } from '../token-derive';
+import { createOriginDeriver, readLocalAddresses } from './derive-origins';
 import { createHubJoinStore } from './join-store';
 import { createHubNodeCredentialStore } from './node-credential-store';
 import {
@@ -62,6 +63,9 @@ export function defaultHubDataDir(config: VesselConfig): string {
 
 /** 单实例独占锁文件名（S10.2，位于 hub data dir 根）。 */
 export const HUB_LOCK_FILE = 'hub.lock';
+
+/** 0.61：`hub.token_ttl_days` 的缺省值（与 `node-credential-store` 的常量同口径）。 */
+const DEFAULT_NODE_TOKEN_TTL_DAYS = 30;
 
 /** 不可解析 hub.lock 的宽限（E3）。 */
 const HUB_UNPARSEABLE_GRACE_MS = 5_000;
@@ -339,6 +343,17 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   });
   await registry.load();
 
+  // 0.61：派生来源集 D（注册表 → 浏览器来源）。只在 registry 变化时重算：
+  // 错误的方向是「定期重扫网卡」，那会让白名单随时间漂移且无法解释。
+  const originDeriver = createOriginDeriver({
+    nodes: () => registry.list(),
+    localAddresses: readLocalAddresses(),
+    ...(logger ? { logger } : {}),
+  });
+  registry.subscribe(() => {
+    originDeriver.invalidate();
+  });
+
   let server: HubServer | undefined;
   let lock: HubLockHandle | undefined;
   let stopped = false;
@@ -412,6 +427,7 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
 
   /** join 成功：建立（或覆盖）direction:'node' 目录记录；data_plane 由 registry 派生。 */
   function onJoined(input: HubNodeJoinedInput): void {
+    const existing = registry.get(input.node_id);
     const record: HubNodeRecord = {
       node_id: input.node_id,
       direction: 'node',
@@ -421,12 +437,22 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
       counts: { teams: 0, agents: 0, live_agents: 0 },
       teams: [],
       agents: [],
+      // 首次注册时间只写一次：重新 join 不该把「这台机器什么时候进来的」改掉。
+      registered_at: existing?.registered_at ?? clock(),
     };
     if (input.public_url !== undefined) {
       record.url = input.public_url;
       record.public_url = input.public_url;
     }
     if (input.alias !== undefined) record.alias = input.alias;
+    // 0.61：注册入口 / 能力 / 版本（只在下发时带；老 hub 记录可缺省）。
+    if (input.entries !== undefined && input.entries.length > 0) {
+      record.entries = input.entries.map((entry) => ({ kind: entry.kind, url: entry.url }));
+    }
+    if (input.capabilities !== undefined && input.capabilities.length > 0) {
+      record.capabilities = [...input.capabilities];
+    }
+    if (input.version !== undefined) record.version = input.version;
     registry.upsert(record);
     server?.publishDirectory();
   }
@@ -458,9 +484,17 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   // 默认装配真实 join / credential 端口；测试可注入 fake。
   const createJoinStore =
     factories.createJoinStore ?? (() => createHubJoinStore({ dataDir, hubId, now: clock }));
+  // 0.61：node token 有效期可配（`hub.token_ttl_days`，缺省 30 天）。开发机上的
+  // node 可以把它写长，不必每 30 天回去敲一次 join-code。
+  const tokenTtlDays = config.hub?.tokenTtlDays ?? DEFAULT_NODE_TOKEN_TTL_DAYS;
   const createNodeCredentials =
     factories.createNodeCredentials ??
-    (() => createHubNodeCredentialStore({ dataDir, now: clock }));
+    (() =>
+      createHubNodeCredentialStore({
+        dataDir,
+        now: clock,
+        defaultTtlMs: tokenTtlDays * 24 * 60 * 60 * 1000,
+      }));
 
   const joinStore = createJoinStore();
   const credentials = await createNodeCredentials();
@@ -469,6 +503,8 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     joinStore,
     credentials,
     hooks: inboundHooks,
+    // join 响应里下发派生来源集（node 存档后在启动时并入自己的 allowed_origins）。
+    derivedOrigins: () => originDeriver.get(),
     ...(logger ? { logger } : {}),
     now: clock,
   };

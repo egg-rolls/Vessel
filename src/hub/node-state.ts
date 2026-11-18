@@ -14,6 +14,7 @@
 
 import { readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { normalizeEntryOrigin } from '@vessel-agent/config';
 import { atomicWrite } from '@vessel-agent/core';
 import type { HubNodeState, HubNodeStatus } from './types.js';
 
@@ -118,7 +119,26 @@ function parseState(value: unknown): HubNodeState | undefined {
     if (!isNonEmptyString(fieldValue)) return undefined;
     state[field] = fieldValue;
   }
+  // 0.61：hub 下发的派生来源集。坏条目单独丢弃（不判 corrupt）：它只是放行清单，
+  // 丢一条的后果是「某个来源要等到下次 join 才生效」，不是安全问题。
+  const trustedOrigins = parseTrustedOrigins(value.trusted_origins);
+  if (trustedOrigins !== undefined) state.trusted_origins = trustedOrigins;
   return state;
+}
+
+const MAX_TRUSTED_ORIGINS = 32;
+
+function parseTrustedOrigins(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const origins: string[] = [];
+  for (const item of value) {
+    const origin = normalizeEntryOrigin(item);
+    if (origin === null) continue;
+    if (origins.includes(origin)) continue;
+    origins.push(origin);
+    if (origins.length >= MAX_TRUSTED_ORIGINS) break;
+  }
+  return origins.length > 0 ? origins : undefined;
 }
 
 /** 写入时同样只保留白名单字段，避免把调用方对象的额外属性（如 token）落盘。 */
@@ -135,6 +155,7 @@ function toFileState(state: HubNodeState): HubNodeState {
   if (state.ca_file !== undefined) out.ca_file = state.ca_file;
   if (state.public_url !== undefined) out.public_url = state.public_url;
   if (state.alias !== undefined) out.alias = state.alias;
+  if (state.trusted_origins !== undefined) out.trusted_origins = [...state.trusted_origins];
   return out;
 }
 
@@ -177,6 +198,21 @@ export async function deleteHubNodeState(dataDir: string): Promise<void> {
   } catch (error) {
     if (errnoCode(error) === 'ENOENT') return;
     throw error;
+  }
+}
+
+/**
+ * 读取 hub 在 join 时下发的派生来源集（0.61）。
+ *
+ * **永不抛错**：这是启动路径上的一次"锦上添花"读盘，文件缺失 / 损坏 / 旧版本
+ * 没这个字段都只意味着"没有额外来源"，绝不能让 gateway 起不来。
+ */
+export async function readHubNodeTrustedOrigins(dataDir: string): Promise<string[] | undefined> {
+  try {
+    const state = await readHubNodeState(dataDir);
+    return state?.trusted_origins;
+  } catch {
+    return undefined;
   }
 }
 

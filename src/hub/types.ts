@@ -18,6 +18,12 @@ export type HubNodeStatus =
   | 'unauthorized'
   | 'identity_mismatch';
 
+/** 0.61：注册入口的落库形状（`kind` 已由 hub 重算校验过）。 */
+export interface HubNodeRegistrationEntryRecord {
+  kind: 'loopback' | 'private' | 'public';
+  url: string;
+}
+
 /** 连接的发起方向：`hub` = hub 拨号 node；`node` = node 拨号 hub（S5.1）。 */
 export type HubNodeDirection = 'hub' | 'node';
 
@@ -34,6 +40,19 @@ export interface HubNodeRecord {
   url?: string;
   /** 浏览器可达的节点 origin；NAT 场景由隧道 / 反代提供。 */
   public_url?: string;
+  /**
+   * 0.61：node 注册时声明的入口（loopback / private / public）。
+   *
+   * 只是**声明**：白名单派生会用 `classifyOrigin` 重算并只接受「可证明本机」的条目
+   * （见 `packages/config/src/node-registration.ts`）。旧记录 / 旧 hub 可缺省。
+   */
+  entries?: HubNodeRegistrationEntryRecord[];
+  /** 0.61：node 能力枚举（已校验，不含自由文本）。 */
+  capabilities?: string[];
+  /** 0.61：node 版本（只展示，不比较）。 */
+  version?: string;
+  /** 0.61：首次注册时间（重新 join 不覆盖）。 */
+  registered_at?: number;
   /** 由 `public_url ?? url` 派生；客户端据此区分控制面与正文可达性。 */
   data_plane?: HubDataPlane;
   ca_file?: string;
@@ -151,6 +170,13 @@ export interface HubNodeState {
   ca_file?: string;
   public_url?: string;
   alias?: string;
+  /**
+   * 0.61：hub 在 join 时下发的「派生来源集」D（loopback ∪ 已证明本机的私网）。
+   *
+   * 只是**放行清单**，不含凭据；gateway 启动时并入 `node.allowed_origins`。
+   * 旧 hub 不带这个字段 ⇒ 行为与今天逐字相同。
+   */
+  trusted_origins?: string[];
 }
 
 /** 入站 receiver 接受的 snapshot（与 `HubControlSnapshot` 同形）。 */
@@ -184,6 +210,14 @@ export interface HubNodeJoinedInput {
   /** 已归一化的浏览器可达 origin；缺省表示数据面不可达。 */
   public_url?: string;
   alias?: string;
+  /** 0.61：已校验的注册入口（含 loopback / private / public 三类）。 */
+  entries?: HubNodeRegistrationEntryRecord[];
+  /** 0.61：已校验的能力枚举。 */
+  capabilities?: string[];
+  /** 0.61：node 版本。 */
+  version?: string;
+  /** 0.61：注册时刻（首次写入，后续不覆盖）。 */
+  registered_at?: number;
 }
 
 /** 入站 auth 成功；用于确保目录里存在该节点（registry 丢失时重建）。 */
@@ -209,6 +243,13 @@ export interface HubNodeInboundDeps {
   joinStore: HubJoinStoreLike;
   credentials: HubNodeCredentialStoreLike;
   hooks: HubNodeInboundHooks;
+  /**
+   * 0.61：派生来源集 D（由 runtime 维护，registry 变化后刷新）。
+   *
+   * join 响应里下发给 node，node 写进 `hub-node.json` 并在启动时并入自己的
+   * `allowed_origins`。缺省 `undefined` ⇒ 响应不带该字段（旧行为）。
+   */
+  derivedOrigins?: () => readonly string[];
   authTimeoutMs?: number;
   pingIntervalMs?: number;
   idleTimeoutMs?: number;

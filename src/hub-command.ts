@@ -9,7 +9,12 @@
 
 import * as path from 'node:path';
 import { HUB_PROTOCOL, normalizeAllowedOrigins } from '@vessel-agent/serve';
-import { isLoopbackHostname, loadConfig, type VesselConfig } from '../packages/config/src/index';
+import {
+  isLoopbackHostname,
+  loadConfig,
+  normalizeEntryOrigin,
+  type VesselConfig,
+} from '../packages/config/src/index';
 import type { HubCommand } from './cli-args';
 import { expandHome, resolveDataDir } from './data-paths';
 import { collectGatewayState } from './gateway/pid';
@@ -614,6 +619,8 @@ interface JoinResponse {
   token: string;
   token_id: string;
   expires_at: number;
+  /** 0.61 additive：hub 派生的来源集；旧 hub 不带。 */
+  trusted_origins?: string[];
 }
 
 /** 校验 join 响应白名单字段。 */
@@ -627,13 +634,26 @@ function parseJoinResponse(body: unknown, nodeId: string): JoinResponse {
   if (typeof token !== 'string' || token === '') throw invalidResponse();
   if (typeof tokenId !== 'string' || tokenId === '') throw invalidResponse();
   if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) throw invalidResponse();
-  return {
+  const response: JoinResponse = {
     hub_id: hubId,
     node_id: nodeId,
     token,
     token_id: tokenId,
     expires_at: expiresAt,
   };
+  // 0.61 additive：只收合法 origin；坏条目丢弃（不能让一个放行清单把 join 变成失败）。
+  const rawTrusted = body.trusted_origins;
+  if (Array.isArray(rawTrusted)) {
+    const trusted: string[] = [];
+    for (const item of rawTrusted) {
+      const origin = normalizeEntryOrigin(item);
+      if (origin === null || trusted.includes(origin)) continue;
+      trusted.push(origin);
+      if (trusted.length >= 32) break;
+    }
+    if (trusted.length > 0) response.trusted_origins = trusted;
+  }
+  return response;
 }
 
 async function readNodeStatusSafe(
@@ -757,6 +777,8 @@ async function joinCommand(
     joined_at: (deps.now ?? Date.now)(),
     ...(command.caFile !== undefined ? { ca_file: command.caFile } : {}),
     ...(publicUrl !== undefined ? { public_url: publicUrl } : {}),
+    // 0.61：hub 派生的来源集（旧 hub 不给 ⇒ 不写这个字段，行为与今天一致）。
+    ...(joined.trusted_origins !== undefined ? { trusted_origins: joined.trusted_origins } : {}),
   };
   try {
     await writeHubNodeState(dataDir, state);
