@@ -108,7 +108,6 @@ export async function listTools(): Promise<ToolsListing> {
       tenantId,
       runtime,
       scheduler: new InProcessScheduler(),
-      defaultModel: model,
     });
     host.registerTool(createAgentTool(service, { ownerId: 'main' }));
     pluginNamesWithFactories.push('agent');

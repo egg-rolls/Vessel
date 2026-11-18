@@ -1144,6 +1144,23 @@ async function runWithConfig(result: BootstrapResult) {
         gatewayBundle.pluginLoader.refresh();
       },
       appliers: reloadAppliers,
+      // provider.model 热应用（P0-1 D4）：只替换节点缺省模型 —— owner profile（新 EU
+      // 创建时读）+ 成员宿主缺省（此后 spawn 的 body 读）。live EU / body 的 model 是
+      // 构造期只读快照（前缀不变量），本具仍旧值、下一具才生效；live 会话换模型须
+      // rotate / 重启。config.agent.model 仍属 agent 域需重启，不在这里处理。
+      // to 的口径对照 provider-factory：config.provider?.model ?? 厂商缺省；next 无显式
+      // model 时 runner 已走 requires_restart 兜底，这里不猜。
+      applyProviderModel: (from, to) => {
+        if (to === undefined || to === '') {
+          // runner 只在非空字符串时调用；兜底失败进 scope 摘要，不假装生效。
+          throw new Error('provider.model is empty');
+        }
+        gatewayBundle.applyProviderModel(to);
+        result.agent?.applyDefaultModel(to);
+        return [
+          `model: ${from ?? '(unset)'} → ${to} (node default; live bodies keep the old model until next body)`,
+        ];
+      },
     });
 
     // 配置监听（CONTRACT-hot-apply §2）：校验通过才应用，失败只记日志 + 发失败 notice。

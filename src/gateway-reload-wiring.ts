@@ -5,8 +5,12 @@
  * 真的能热应用：
  * - `plugins`：清空插件扫描缓存（下次 `list()` 重新扫描；已安装插件与 active run 不受影响）；
  * - `config`：重新 `loadConfig()`；`node.allowed_origins` 通过 web 的
- *   `gateway.reconfigure({ allowedOrigins })` 生效；其余字段一律进 `requires_restart`，
- *   不假装已经生效；
+ *   `gateway.reconfigure({ allowedOrigins })` 生效；`provider.model` 经注入的
+ *   `applyProviderModel` 热应用（P0-1 D4）——只替换**节点缺省模型**（owner profile +
+ *   成员宿主缺省）：新 body / 新 EU 立即用新值，live body / EU 的 model 是构造期只读
+ *   快照（前缀不变量），本具仍旧值、下一具才生效；未注入 applier 或新配置缺显式 model
+ *   时 `model` 进 `requires_restart`，不假装生效。`config.agent.model` 仍属 `agent` 域，
+ *   需重启；其余字段一律进 `requires_restart`；
  * - `permission` / `tools` / `mcp`：由 `src/cli.ts` 注入 applier（见下）。
  *
  * ## applier 注册面
@@ -51,6 +55,17 @@ export interface GatewayReloadWiringOptions {
    * 请求一个本表没有、也不是 `config` / `plugins` 的 scope → `unknown reload scope`。
    */
   appliers?: Readonly<Record<string, GatewayReloadApplier>>;
+  /**
+   * `provider.model` 热应用（P0-1 D4 批准的注入字段；config scope 内部，不新增 reload scope）。
+   * 仅在 model 变化**且新值为非空字符串**时调用；返回要广播的差异摘要行（并入
+   * `summaries.config`）。生效点 = 节点缺省模型：新 body / 新 EU 用新值，live body / EU
+   * 构造期只读、下一具才生效（前缀不变量）。未注入或新值缺省 ⇒ `model` 进
+   * `requires_restart`（不猜 provider 缺省模型，不假装生效）。
+   */
+  applyProviderModel?: (
+    from: string | undefined,
+    to: string | undefined,
+  ) => Promise<string[]> | string[];
 }
 
 /** 需要重启才能生效的配置域（DECISION-023 §2.3；`permission` 已可热应用）。 */
@@ -65,9 +80,10 @@ function withoutModel(provider: VesselConfig['provider']): unknown {
   return rest;
 }
 
+// `provider.model` 不在这里：它走 config scope 的 `applyProviderModel` 热应用分支
+// （P0-1 D4）；未注入 applier / 新值缺省时由该分支补 push `model` 进 requires_restart。
 const RESTART_FIELDS: readonly RestartField[] = [
   { name: 'provider', read: (config) => withoutModel(config.provider) },
-  { name: 'model', read: (config) => config.provider?.model },
   { name: 'agent', read: (config) => config.agent },
   // CONTRACT-hot-apply §1：permission 走 applier，不再进 requires_restart。
   { name: 'tls', read: (config) => config.node?.tls },
@@ -176,6 +192,25 @@ export function createGatewayReloadRunner(
           }
 
           const restartFields = diffRestartFields(current, next);
+          // provider.model 热应用（P0-1 D4）：与 diffRestartFields 同一 stableValue 口径。
+          // 变化且新值为非空字符串且注入了 applier ⇒ 应用并把摘要行并入 summaries.config；
+          // 否则（未注入 / 新配置缺显式 model）补进 requires_restart —— 不猜 provider
+          // 缺省模型，不假装生效。生效点由 applier 的摘要行写清（节点缺省，live 下一具才换）。
+          const modelFrom = current.provider?.model;
+          const modelTo = next.provider?.model;
+          const modelLines: string[] = [];
+          if (stableValue(modelFrom) !== stableValue(modelTo)) {
+            if (
+              typeof modelTo === 'string' &&
+              modelTo !== '' &&
+              options.applyProviderModel !== undefined
+            ) {
+              const lines = await options.applyProviderModel(modelFrom, modelTo);
+              if (Array.isArray(lines)) modelLines.push(...lines);
+            } else {
+              restartFields.push('model');
+            }
+          }
           if (allowedOriginsChanged(current, next)) {
             const target = options.gateway();
             const reconfigure = target?.reconfigure;
@@ -192,7 +227,10 @@ export function createGatewayReloadRunner(
             reloaded.push('config');
           }
           requiresRestart.push(...restartFields);
-          summaries.config = restartFields.map((field) => `config: ${field} requires restart`);
+          summaries.config = [
+            ...restartFields.map((field) => `config: ${field} requires restart`),
+            ...modelLines,
+          ];
           continue;
         }
 

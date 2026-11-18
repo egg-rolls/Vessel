@@ -39,6 +39,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 | 附件引用（`Message.refs`） | `[refs] N attachments: kind path, …`（只有路径与种类；>3 条折 `+N more`；尾注按 media 工具是否可用分三档：`(use media: action=…)` / 未启用时说明需启用插件 / 纯 file 批次不加尾注） | `refs-notice-hook`（BeforeLlm，读 `ctx.refs`）→ `vessel:notice` | 尾部 | 是（同一批引用只注入一次，变化才再注入） |
 | 文档订阅 | `files: N changed …` + 每文件一行 `  · <file path id rev bytes />`（只有元数据，无正文） | doc-subscription → `vessel:notice`（Web scope `files`，默认可见） | 尾部 | 是（同一路径去重；**不再**用 `vessel:subscription` 这个第二套通道） |
 | 工具面变更（`applyToolsToEntry` 热刷新） | `tools: 2 added; …` + `· + ask` | `tool-surface-delta`（BeforeLlm，每具 body 一个实例）→ `vessel:notice`（scope `tools`） | 尾部 | 是（同一变更只注入一次；回滚照样报） |
+| 跨重启 / 换 body 的模型变更 | `model: A → B` + 生效点（之前的轮次用 A，本次 run 用 B） | core EU 首 run 比较（目标会话存档 `prompt_context` 指纹 vs 当前 model）→ `appendInjectedMessages` → `vessel:notice`（scope `model`） | 尾部 | 是（同一过渡只注入一次；回滚照样报；指纹缺省不发） |
 | 90% 预算预警（`limits.*` / `termination.*`） | `[runtime] input_tokens_limit: 900k/1M ...` | core `publishLimitWarnings` → `vessel:limit` | 尾部 | 是 |
 | 90%–`compactThreshold` 上下文压力（默认 0.85 且自动压缩开启时不出现） | `[runtime] context_window: 900k/1M ...` 推荐 rotate | core `publishContextPressureWarning` → `vessel:limit` | 尾部 | 是 |
 | 旧 `additionalContext` | 任意 hook | 自动转 `vessel:hook` | 尾部 | 是 |
@@ -117,7 +118,7 @@ unmapped_messages 如实记录，不编区间；backfill 出来的老段 tokens_
 
 1. **system 冻结**：hook 写 `ctx.systemPrompt` 被忽略，发 `hook.system_prompt_ignored`。
 2. **只能追加**：`PromptPrefixGuard` 对比上一次请求；无 reason 的中间重写发 `prompt.prefix_changed`；`VESSEL_STRICT_PREFIX=1` 时抛 `PromptPrefixChangedError`。
-3. **合法 reason**：`compaction` / `resume` / `branch` / `session_switch` / `system_revision` / `tools_changed` / `model_changed` / `context_trim`。
+3. **合法 reason**：`compaction` / `branch` / `session_switch` / `context_trim`。`system_revision` / `tools_changed` / `model_changed` / `resume` 已从词表删除（见 [message-invariants](message-invariants.md)）：这些语义只能靠「追加环境卡」或「`new` 开新会话」表达，resume 是续段不是新段。
 4. 动态元数据全部是尾部 `vessel:*` 消息，不改 system；Web 默认隐藏，Settings → Display 可按类打开。
 5. 静态审计：`bun run check:prompt-prefix` 禁止新增 `additionalContext:` 与 `ctx.systemPrompt =`。
 

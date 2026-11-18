@@ -198,6 +198,12 @@ export interface AgentServiceWiring {
    * TTL=0（关闭）时是 no-op。
    */
   stopSweep: () => void;
+  /**
+   * `provider.model` 热应用（P0-1 D4 批准）：替换成员宿主的缺省 model。
+   * 只影响此后 spawn 的 body；live body 构造期只读，本具仍旧值、下一具才用新值
+   * （前缀不变量）。装配内部入口，不上 wire。
+   */
+  applyDefaultModel: (model: string) => void;
 }
 
 /** 构造成员 runtime 选项（导出便于测试选项传递，不直接构造 runtime） */
@@ -426,7 +432,6 @@ export async function createAgentServiceWiring(
     // 0.27（spec §5.1）：执行只经 tenant scheduler 的 executor，不再有第二套队列。
     scheduler: options.scheduler,
     ...(options.runStore !== undefined ? { runStore: options.runStore } : {}),
-    defaultModel: options.model,
     ownerId,
     // 成员生命周期事件与父入口同源；缺省时只有 subscribe，不进入父流。
     ...(options.parentEvents !== undefined ? { events: options.parentEvents } : {}),
@@ -553,5 +558,7 @@ export async function createAgentServiceWiring(
     ...(budget !== undefined ? { budget } : {}),
     ...(conversationStore !== undefined ? { conversationStore } : {}),
     stopSweep,
+    // provider.model 热应用的配套管线：只替换宿主缺省，不动 live body（见接口注释）。
+    applyDefaultModel: (model) => innerRuntime.updateDefaultModel(model),
   };
 }

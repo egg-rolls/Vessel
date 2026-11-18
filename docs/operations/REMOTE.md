@@ -217,7 +217,7 @@ vessel node stop
 - `gateway start`：Platform Gateway 缺省 `127.0.0.1:8642`（UI / 静态宿主 / `/platform/rpc` 只读 allowlist）+ Node API 缺省 `8644`（`/v1/*`、WS/SSE、插件 HTTP）。两者认证链与路由表分离。`hub.auto_start`（默认 true）时同时拉起本地 Hub 8643；已有实例 adopt，Web Hub 页回环自动连接。
 - `vessel node start --config <path>`：用独立配置启动 standalone Node API；`gateway nodes add` 把本地 node 写入 `nodes.json`（0600 原子写，不含 token），`auto_start` 节点由 gateway 拉起。
 - 运行态以 `<dataDir>/gateway.pid`（node，G1 兼容名）与 `<dataDir>/platform.pid`（平台）为准，均 `0600`；daemon 日志在 `<dataDir>/logs/`。`status --json` 只输出 JSON。
-- 修改 TLS 证书、token、端口或 provider / model 后必须 `restart`；`reload` 会在 `requires_restart` 中列出这些字段，不能把 reload 成功当成新证书 / 新 token 已生效。
+- 修改 TLS 证书、token、端口或 provider（不含 model）后必须 `restart`；`reload` 会在 `requires_restart` 中列出这些字段，不能把 reload 成功当成新证书 / 新 token 已生效。`provider.model` 可经 `reload` 热应用：节点缺省模型立即更新（新 body / 新 EU 用新值），live 会话仍旧模型直到 rotate / 重启；`agent.model` 仍需重启。
 - 跨 Origin 的 `node.allowed_origins` 是少数可热更新项：改配置后执行 `vessel gateway reload --scope config`（或 `node reload`）即可，无需重启。token 仍在配置解析时读取，热重载不替换已建立的鉴权状态。
 - PID 文件与 daemon 日志权限为 `0600`；节点升级用 `vessel update`（npm / bun 全局安装）或 `--check` 仅检查；源码部署只提示 `git pull && bun install`。
 - 常驻与开机自启交给 `install-service`（当前平台的用户级服务）；daemon 自身不做崩溃重启。

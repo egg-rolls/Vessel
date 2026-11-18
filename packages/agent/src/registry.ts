@@ -72,6 +72,7 @@ export interface MemberRecord {
   /** 归属 principal；member = self，temporary = 雇佣者 */
   owner: string;
   visibility: MemberVisibility;
+  /** 显式 pin；缺省跟随当前 config（只在用户显式指定时落库） */
   model?: string;
   systemPrompt?: string;
   state: MemberState;
@@ -260,6 +261,7 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
     ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
     ...(record.name !== undefined ? { name: record.name } : {}),
     ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
+    // model 仅在显式 pin 时存在；缺省跟随 config，不写键。
     ...(record.model !== undefined ? { model: record.model } : {}),
     ...(record.systemPrompt !== undefined ? { system_prompt: record.systemPrompt } : {}),
     // 0.51：成员 cwd 快照（additive：旧二进制会忽略未知键，本版读取时缺省即「没有」）
@@ -299,6 +301,7 @@ export function toRuntimeMember(record: MemberRecord): MemberExecutionMember {
     ...(record.owner !== undefined ? { owner: record.owner } : {}),
     visibility: record.visibility,
     ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
+    // model 仅在显式 pin 时传；缺省时由执行内核回落宿主缺省（跟随 config）。
     ...(record.model !== undefined ? { model: record.model } : {}),
     ...(record.systemPrompt !== undefined ? { system_prompt: record.systemPrompt } : {}),
     ...(record.cwd !== undefined ? { cwd: record.cwd } : {}),

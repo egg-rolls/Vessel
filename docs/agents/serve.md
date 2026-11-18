@@ -59,7 +59,7 @@ applies_to: [N, M]
 
 - 关闭顺序固定：`await gateway.stop()` → 取消订阅 / 关闭 transport → `beforeClose` → `closeAll` → `shutdown`；后两步 `{ drain: false }`，不二次 drain。中断 active run 用 `interrupt('shutdown'|'timeout'|'user')`，不得只 abort signal 丢原因；headless 不得提前 `process.exit` 跳过清理（ADR-070）。
 - **停止侧 graceful-first（P0-run-stops P1）**：Windows 上外部 `process.kill` 是无条件终止（进程内信号处理器跑不到），所以 `node stop` / `gateway stop`（legacy 单进程与 node 子进程）先经 Node API 的 `gateway.shutdown`（admin）请进程自己跑 `shutdownServeStack`（drain 写 resume 标记），等死 ≤10s；**超时/失败必须回退既有强杀 + 补偿清理**，并代打 `node.drain.skipped`。契约见 [gateway-rpc.md](../architecture/gateway-rpc.md#rpc-methods) 的 `gateway.shutdown` addendum。headless 退出不打 resume 标记；启动恢复清理「no_member + 已完成」的僵尸标记（单写口）。
-- 运行态以 `<dataDir>/gateway.pid` 为唯一来源；`stop` 只删本进程持有的 PID；服务注册只在显式 `install-service` / `uninstall-service` 时执行。`gateway.reload` 只热更新 plugins 扫描缓存与 `serve.allowed_origins`，其余如实进 `requires_restart`（ADR-074/075）。
+- 运行态以 `<dataDir>/gateway.pid` 为唯一来源；`stop` 只删本进程持有的 PID；服务注册只在显式 `install-service` / `uninstall-service` 时执行。`gateway.reload` 热更新 plugins 扫描缓存、`serve.allowed_origins`、permission / tools / mcp（注入 applier）与 `provider.model`（节点缺省模型：新 body / 新 EU 立即用新值，live body 构造期只读、下一具才生效）；其余配置域（含 `agent.model`）如实进 `requires_restart`（ADR-074/075）。
 
 ## 节点与 attention
 

@@ -60,6 +60,7 @@ import {
   sessionDirPath,
   startDeadline,
   type TenantPaths,
+  type TenantRuntimeProfile,
   type TraceRedactor,
 } from '../packages/core/src/index';
 import { TimelineEventLog } from '../packages/core/src/timeline/read-port';
@@ -180,8 +181,16 @@ export interface TenantRuntimeBundle {
   tenantOverlayKeys: string[];
   provider: LLMProvider;
   providerName: string;
+  /** 启动时的 provider 模型快照（装配期一次性消费；热应用后的活值读 config / profile） */
   providerModel: string;
   providerBaseUrl: string;
+  /**
+   * `provider.model` 热应用入口（P0-1 D4 批准；装配层内部字段，不上 wire、不进 core）。
+   * 原地改已注册 owner profile 的 `.model`：**新 EU** 创建时即用新值；live EU 的 model
+   * 是构造期只读快照（前缀不变量），续接 run 仍用旧值，换模型须 rotate / 重启。
+   * 不同步 `providerModel` 字段：它只在装配期被解构一次（bootstrap），无运行期消费者。
+   */
+  applyProviderModel: (model: string) => void;
   /** tenant 独立事件流（trace / metrics 只订阅它） */
   events: EventStream;
   /** runtime 事件出口；与 tenant 流同一实例 */
@@ -931,7 +940,11 @@ export async function buildTenantRuntime(
     ...(timelineDualWrite !== undefined ? { timelineDualWrite } : {}),
   });
 
-  options.runtime.registerProfile({
+  // profile 提成 const 引用：core `registerProfile` 存的就是这个对象，`materializeOptions`
+  // 在 **EU 创建时**读 `profile.model`。`provider.model` 热应用（P0-1 D4）只能**原地改**
+  // 它的 `.model`（见 bundle.applyProviderModel）——同 tenant 重新注册不同 profile 会抛
+  // `tenant_profile_conflict`。live EU 的 model 是构造期快照，改 profile 只影响新 EU。
+  const ownerProfile: TenantRuntimeProfile = {
     tenantId,
     providerFactory: () => provider,
     model: providerModel,
@@ -955,7 +968,8 @@ export async function buildTenantRuntime(
     systemPrompt,
     permission,
     journalFactory,
-  });
+  };
+  options.runtime.registerProfile(ownerProfile);
 
   // 0.15 E9：主 agent 的 Self Card（成员由 AgentService 注入）。
   const selfCard = ownerSelfCard(config, providerModel, {
@@ -1483,6 +1497,10 @@ export async function buildTenantRuntime(
     providerName,
     providerModel,
     providerBaseUrl,
+    // 原地改引用（不能重新注册：同 tenant 不同 profile 会抛 tenant_profile_conflict）。
+    applyProviderModel: (model) => {
+      ownerProfile.model = model;
+    },
     events,
     runtimeEvents: events,
     session,

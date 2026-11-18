@@ -2,7 +2,7 @@
 title: 环境信息与 append-only 上下文
 kind: current
 triggers: [append-only, context, message, notice, env info, environment, self card, tool surface, model change, scope, files, doc-subscription, prompt.system_context, changed, compaction, cleared tool result, 环境信息, 环境块, 增量视图, 占位, 旧工具结果, 追加写]
-paths: [packages/core/src/runtime/execution-unit.ts, packages/core/src/context/context-manager.ts, packages/core/src/pii/notice.ts, packages/agent/src/env-info-scope.ts, packages/agent/src/self-card-delta.ts, packages/agent/src/tool-surface-delta.ts, plugins/context/doc-subscription/src/notice.ts, apps/web/src/domains/chat/env-notice.ts]
+paths: [packages/core/src/runtime/execution-unit.ts, packages/core/src/context/context-manager.ts, packages/core/src/context/model-change-notice.ts, packages/core/src/pii/notice.ts, packages/agent/src/env-info-scope.ts, packages/agent/src/self-card-delta.ts, packages/agent/src/tool-surface-delta.ts, plugins/context/doc-subscription/src/notice.ts, apps/web/src/domains/chat/env-notice.ts]
 ---
 
 # 环境信息与 append-only 上下文
@@ -30,7 +30,7 @@ C2 静态钉住（生产者只许尾部追加）、C3 scope 词表对拍。
 | `restart` | 系统 / body 重启 | （词表已留位） |
 | `identity` | 改名 / Team / parent | `self-card-delta` |
 | `fields` | 其它基础字段 | `self-card-delta` |
-| `model` | 模型变更 | `self-card-delta` |
+| `model` | 模型变更 | `self-card-delta`、core EU（`ExecutionUnit` 首 run 指纹比较） |
 | `tools` | 工具面变更（含权限档） | `tool-surface-delta`、`self-card-delta` |
 | `files` | 文件变更（订阅文件改了；只报 path/id/rev/bytes，不报正文） | `doc-subscription`（插件包） |
 | `context` | 系统提示词 / 自卡本身变了 | `self-card-delta`、`prompt.system_context` 的增量视图 |

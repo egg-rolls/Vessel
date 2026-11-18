@@ -280,6 +280,11 @@ export interface BootstrapResult {
     hubControl?: HubControlLike;
     /** 0.25：canonical `agents.create|update|close` 注入面（gateway / 未来 owner 端点共用）。 */
     control: AgentControlLike;
+    /**
+     * `provider.model` 热应用（P0-1 D4）：替换成员宿主缺省 model，只影响此后 spawn
+     * 的 body（live body 构造期只读，下一具才生效）。透传 wiring 的同名入口。
+     */
+    applyDefaultModel: (model: string) => void;
     dispose: () => Promise<void>;
   };
   /**
@@ -1583,6 +1588,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(ownerServer !== undefined ? { ownerServer } : {}),
       hubControl: hubRuntime.hubControl,
       control: agentControlLike,
+      applyDefaultModel: wiring.applyDefaultModel,
       dispose: async () => {
         await ownerServer?.stop();
         // 回收定时器必须先停：否则 drain 期间 sweep 仍可能回收正要收口的 agent。
