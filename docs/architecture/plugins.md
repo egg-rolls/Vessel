@@ -106,3 +106,45 @@ tool loop ── capability tools (prompt surface = token tax)
 ## 版本兼容
 
 - `engines.vessel` 是 semver range，必须覆盖运行中的 Vessel 版本（根 `package.json` 的 `version`），否则 `plugin_version_incompatible` 且不加载代码。`side` 不兼容、缺依赖、依赖循环同样拒绝激活；错误码见 `vessel plugin list` 与 `<dataDir>/plugins/<id>/logs/`。
+
+## 插件与宿主的模块边界（0.64）
+
+插件是按普通动态 `import()` 加载的源码树（`src/plugin-loader.ts`）：全仓没有 import map、没有 `bunfig.toml`、没有自定义 loader。于是「插件能不能 import 到宿主的东西」只由 **ESM 上溯规则**决定，而这件事在两种作用域下**不对称**：
+
+| 作用域 | 插件目录 | 上溯链里有没有宿主的 `node_modules` |
+|---|---|---|
+| project / 源码检出 | `<cwd>/.vessel/plugins/<id>/` 或仓内 `plugins/<category>/<name>/` | **有**（在仓库根就碰到了 workspace 符号链接）⇒ 裸导入能跑 |
+| user / `.tgz` 装出来的 | `~/.vessel/plugins/<id>/` | **没有** ⇒ 裸导入必挂 |
+
+市场安装器只做 `download → verify → extract → rename`，从不起包管理器；所以 user 作用域的插件**不会**自带宿主依赖。这个不对称最容易漏测：在源码检出里怎么写都对，装成 `.tgz` 就炸。
+
+### 裁定（二选一）：`.tgz` 插件**不需要**自带 `@vessel-agent/*`，由宿主转发
+
+- 宿主提供一段**裸指定符解析缝**：加载插件前，在插件目录下补一小段 `node_modules`，把白名单包软链到**宿主自己的包根**（`src/plugin-loader.ts` 的 `ensureSpecifierFarm`）。
+- 为什么是软链而不是打包：插件保持可读源码、发布链不动；内联打包会把 core 复制 N 份，跟「插件优先 + 单点收口」直接冲突。
+- 为什么是**加载前**建而不是失败后重试：bun 1.3.9 会缓存一次解析失败，同一进程里重试同一入口仍然 `Cannot find module`（实测）。
+- 单实例由「两边 realpath 相同」保证：`import()` 解析软链，插件拿到的是宿主同一个模块对象 —— 枚举对象同一引用、`instanceof` 成立、单例注册表不分裂。
+- 仓库内插件（`source === 'repo'`）**不建**这段缝：它的上溯链本来就通，不该往源码树里写 `node_modules`。
+- 第三方依赖不转发。插件 `import` 一个宿主没有的包时，报错会点名 **「plugin X depends on Y, which the host does not provide」**（附宿主提供的白名单与底层错误），不是裸的 `Cannot find module`。**`.tgz` 插件必须自带第三方依赖。**
+
+白名单（`HOST_SHARED_PACKAGES`）：`@vessel-agent/core`、`@vessel-agent/agent`、`@vessel-agent/basic-tools`。入选标准只有一条 —— 插件拿到第二个副本会出事（`instanceof`、单例、枚举/事件字符串常量、类型守卫）。`@vessel-agent/plugin-ui` 不在表里：它只进浏览器侧打包，不走宿主 ESM 解析。加包先回答「第二个副本会不会出问题」。
+
+### 反向纪律：插件不得从 core 做**运行时值**导入
+
+```ts
+// ✅ 允许：类型擦除，运行时不产生 import
+import type { Hook, HookContext } from '@vessel-agent/core';
+
+// ❌ 禁止：运行时要 core 的枚举对象 / 常量 / 类
+import { HookType } from '@vessel-agent/core';
+```
+
+需要常量或枚举值时，插件**自己声明字面量**，用 core 的类型把它钉住（core 改值会在这里报错）：
+
+```ts
+const BEFORE_LLM = 'before_llm' as Hook['type'];   // 等价于 HookType.BeforeLlm
+```
+
+示范：`plugins/context/doc-subscription/src/hook.ts`（0.64 起）。这条纪律的意义不是「转发缝坏了怎么办」，而是让插件在**没有宿主转发**的场合（被别处复用、被静态分析、被将来某种沙箱加载）也不会崩。
+
+已知遗留：`plugins/marketplace/marketplace/src/{install,registry}.ts` 仍从 core 运行时导入 `startDeadline`（0.63 的超时清扫引入）。它靠白名单转发正常工作，但按本纪律应改为插件内自带实现，留待后续清理。

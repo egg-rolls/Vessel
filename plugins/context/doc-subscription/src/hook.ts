@@ -24,7 +24,6 @@ import type { Stats } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { evaluatePath, type PathBoundary } from '@vessel-agent/basic-tools';
 import type { Hook, HookContext, HookResult } from '@vessel-agent/core';
-import { HookType } from '@vessel-agent/core';
 import type { DocSubscriptionConfig } from './config.js';
 import {
   formatSubscriptionNotice,
@@ -163,7 +162,10 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
 
   return {
     name: 'doc-subscription',
-    type: HookType.BeforeLlm,
+    // 插件不做 core 的**运行时值**导入（见 docs/architecture/plugins.md「插件与宿主的模块边界」）：
+    // 这里用字面量 + `Hook['type']` 保住类型一致性 —— core 里 HookType 改了值这里会报错，
+    // 但运行时不再从 core 取枚举对象（.tgz 插件不共享宿主模块实例时也不会崩）。
+    type: 'before_llm' as Hook['type'],
     priority: 150,
     run: async (ctx: HookContext): Promise<HookResult | undefined> => {
       const runId = ctx.run_id;
