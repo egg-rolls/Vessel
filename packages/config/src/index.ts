@@ -205,5 +205,6 @@ export {
   validateAuthSettings,
   validateConfig,
   validateHubSettings,
+  validateModels,
   validateServeSettings,
 } from './validator.js';

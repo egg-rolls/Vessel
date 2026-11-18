@@ -202,7 +202,7 @@ function checkRegisteredRef(
  * 元数据无密钥值：credential 是加密库引用 id，apiKeyEnv 是 env 间接引用，两者互斥。
  * 块缺省时 validateConfig 根本不进本分节（legacy 配置零误报）。
  */
-function validateModels(
+export function validateModels(
   models: Record<string, unknown>,
   provider: ProviderConfig | undefined,
   errors: ConfigValidationError[],
