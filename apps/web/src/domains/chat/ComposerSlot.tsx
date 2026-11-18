@@ -1,9 +1,40 @@
+import { MessageBar, type MessageBarItem } from '../../components/MessageBar';
+import type { PendingFetchState } from '../../gateway/interaction-hydration';
 import type { AskUserAnswer, MessageRef, PermissionScope } from '../../gateway/types';
+import { t } from '../../i18n';
 import type { AttachBrowseClient } from './AttachDialog';
 import { Composer } from './Composer';
 import type { ComposerContextUsage } from './ComposerChrome';
 import { AskPrompt, PermissionPrompt, type PromptQueueChip } from './PromptSlots';
 import type { PendingQueueItem } from './pending-permissions';
+
+/**
+ * `interactions.list` 拉取失败的可见条（0.59）。
+ *
+ * 为什么要在 Composer 槽位里也说一遍：这里正是「本来该出现权限卡」的位置 ——
+ * 拉不到时它是空的，而空输入框会让用户以为「没有请求等我」，于是去按停止。
+ * 拉取恢复后条自然消失（`pendingFetch.status` 回到 `ok`），卡片由 hydration 补回。
+ */
+function PendingFetchNotice({
+  pendingFetch,
+  onRetry,
+}: {
+  pendingFetch: PendingFetchState;
+  onRetry?: () => void;
+}) {
+  if (pendingFetch.status !== 'failed') return null;
+  const blocked = pendingFetch.kind === 'session' || pendingFetch.kind === 'origin';
+  const item: MessageBarItem = {
+    id: 'composer-pending-fetch',
+    tone: 'error',
+    text: blocked
+      ? t('pending.fetch.blocked', { detail: pendingFetch.message ?? '' })
+      : t('pending.fetch.failed', { detail: pendingFetch.message ?? '' }),
+    hint: t('pending.fetch.failedHint'),
+    ...(onRetry ? { actions: [{ label: t('pending.fetch.retry'), onClick: onRetry }] } : {}),
+  };
+  return <MessageBar items={[item]} />;
+}
 
 /**
  * Composer 槽位：权限卡 / ask 卡 / 输入框三选一（0.18）。
@@ -32,6 +63,8 @@ export function ComposerSlot({
   onAddRef,
   client,
   contextUsage,
+  pendingFetch,
+  onRetryPendingFetch,
 }: {
   pendingItem: PendingQueueItem | null;
   pendingItems: readonly PendingQueueItem[];
@@ -60,9 +93,19 @@ export function ComposerSlot({
   client?: AttachBrowseClient;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
   contextUsage?: ComposerContextUsage;
+  /** `interactions.list` 本轮状态（0.59）：failed ⇒ 这里出一条可见提示。 */
+  pendingFetch?: PendingFetchState;
+  /** 重新拉 pending（提示条上的「重新拉取」）。 */
+  onRetryPendingFetch?: () => void;
 }) {
-  if (pendingItem && pendingItem.kind === 'permission') {
-    return (
+  // 提示条在**三种槽位之上**：权限卡 / ask 卡 / 输入框。拉不到 pending 时正是这三种
+  // 都可能「什么都没有」的时刻，提示必须跟着槽位一起在。
+  const notice = pendingFetch ? (
+    <PendingFetchNotice pendingFetch={pendingFetch} onRetry={onRetryPendingFetch} />
+  ) : null;
+
+  const body =
+    pendingItem && pendingItem.kind === 'permission' ? (
       <PermissionPrompt
         key={pendingItem.request.requestId}
         request={pendingItem.request}
@@ -74,10 +117,7 @@ export function ComposerSlot({
         queue={queueChips}
         onDecide={(decision, scope) => onDecide(pendingItem.request.requestId, decision, scope)}
       />
-    );
-  }
-  if (pendingItem && pendingItem.kind === 'ask') {
-    return (
+    ) : pendingItem && pendingItem.kind === 'ask' ? (
       <AskPrompt
         key={pendingItem.request.requestId}
         request={pendingItem.request}
@@ -93,26 +133,32 @@ export function ComposerSlot({
         onSubmit={(answers) => onRespondAsk(pendingItem.request.requestId, answers)}
         onCancel={() => onRespondAsk(pendingItem.request.requestId, [])}
       />
+    ) : (
+      <Composer
+        value={value}
+        onChange={onChange}
+        onSubmit={onSubmit}
+        submitting={submitting}
+        targetLabel={targetLabel}
+        hasToken={hasToken}
+        connected={connected}
+        onOpenConnection={onOpenConnection}
+        focusSignal={focusSignal}
+        onStop={onStop}
+        stopping={stopping}
+        refs={refs}
+        onRemoveRef={onRemoveRef}
+        onAddRef={onAddRef}
+        client={client}
+        contextUsage={contextUsage}
+      />
     );
-  }
+
+  if (notice === null) return body;
   return (
-    <Composer
-      value={value}
-      onChange={onChange}
-      onSubmit={onSubmit}
-      submitting={submitting}
-      targetLabel={targetLabel}
-      hasToken={hasToken}
-      connected={connected}
-      onOpenConnection={onOpenConnection}
-      focusSignal={focusSignal}
-      onStop={onStop}
-      stopping={stopping}
-      refs={refs}
-      onRemoveRef={onRemoveRef}
-      onAddRef={onAddRef}
-      client={client}
-      contextUsage={contextUsage}
-    />
+    <>
+      {notice}
+      {body}
+    </>
   );
 }

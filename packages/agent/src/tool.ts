@@ -61,6 +61,27 @@ const READ_MESSAGE_LIMIT_MAX = 50;
 /** `read` 单条正文的截断长度（字符）：只够看清结论 / 摘要，不搬整段工具输出。 */
 const READ_MESSAGE_MAX_CHARS = 1000;
 
+/**
+ * rotate 人工批准等待的**上限**（毫秒）。
+ *
+ * 为什么必须有：这条等待原本没有时限。权限卡要是根本到不了人（浏览器 `POST /v1/rpc`
+ * 401、待批页拉不到 pending、TUI 没接 bridge），`waitFor` 就永远不返回 —— 模型这一轮
+ * 挂死，人类只看到「卡住」然后按停止。到点按「批准不可用 / 超时」收口，模型拿到明确的
+ * `rotate_not_needed` + reason 就能按原计划继续，而不是等一个不会来的应答。
+ *
+ * 2 分钟的量级：够人看清一张卡再点（页面要重连、还要读上下文）；比这更久说明通道
+ * 有问题，继续等没有价值（人类随时可以再让模型 rotate 一次）。
+ */
+const ROTATE_APPROVAL_TIMEOUT_MS = 120_000;
+
+/**
+ * 超时档的 reason：与 `approval_unavailable`（等待被别的错误打断）分开。
+ *
+ * 两者要做的事不同：`approval_timeout` = 人在时限内没答（卡可能没送到）；
+ * `approval_unavailable` = 这次等待本身出了别的问题。
+ */
+const ROTATE_APPROVAL_TIMEOUT_REASON = 'approval_timeout';
+
 const MEMBER_STATES: readonly MemberState[] = [
   'created',
   'idle',
@@ -95,8 +116,65 @@ function isCodedError(error: unknown): error is Error & { code: string } {
   );
 }
 
-/** 错误串形状固定；message 已带 code 前缀时去重 */
-function errorResult(error: unknown): string {
+/**
+ * 取消（run 被中止）判定。
+ *
+ * 三条来源，缺一条都会把「用户按了停止」说成别的事：
+ * - `signal.aborted`：最权威 —— 工具等待时 run 已经中止；
+ * - `name === 'AbortError'`：core 的 `EventStream#waitFor` 在 `signal.reason` 是字符串时
+ *   把它包成 `Error(reason)` 并置这个 name（`reason === 'user'` 就走这条路）；
+ * - `code`：`PermissionAbortedError`（`permission_cancelled`）等自带稳定码的取消错误。
+ */
+function isCancellation(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted === true) return true;
+  if (typeof error !== 'object' || error === null) return false;
+  const { name, code } = error as { name?: unknown; code?: unknown };
+  return name === 'AbortError' || code === 'cancelled' || code === 'permission_cancelled';
+}
+
+/**
+ * 取消原因的**可读文本**。
+ *
+ * 取 `signal.reason` 优先：`waitFor` 把字符串 reason 包成 `Error(reason)`、Error reason
+ * 则原样抛，只有 signal 两种都拿得到（真机上中断原因是字符串 `'user'`）。
+ */
+function cancellationReason(error: unknown, signal?: AbortSignal): string {
+  const reason: unknown = signal?.aborted === true ? signal.reason : undefined;
+  const text =
+    typeof reason === 'string' && reason.length > 0
+      ? reason
+      : reason instanceof Error && reason.message.length > 0
+        ? reason.message
+        : errorText(error);
+  return text.trim() === '' ? 'cancelled' : text.trim();
+}
+
+/**
+ * 批准等待**超时**判定。
+ *
+ * core 的 `EventStream#waitFor` 超时只抛一种错误：`Timed out after <ms>ms waiting for
+ * event "<name>"`（且 `name !== 'AbortError'`）。取消走的是另一条路（AbortError / 取消码），
+ * 所以这里只认这条前缀；别的错误仍归 `approval_unavailable`。
+ */
+function isApprovalTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.name !== 'AbortError' &&
+    error.message.startsWith('Timed out after ')
+  );
+}
+
+/**
+ * 错误串形状固定；message 已带 code 前缀时去重。
+ *
+ * 取消必须走 `cancelled` 码，不能落到下面的 `invalid_input` 兜底：兜底会把中断原因
+ * （`user`）当成参数错误报给模型，模型据此以为「我的输入有问题」而重试 ——
+ * 正确结论是「这一轮被取消了，不要再重试同一件事」。
+ */
+function errorResult(error: unknown, signal?: AbortSignal): string {
+  if (isCancellation(error, signal)) {
+    return `Error: cancelled: ${cancellationReason(error, signal)}`;
+  }
   if (!isCodedError(error)) {
     return `Error: invalid_input: ${errorText(error)}`;
   }
@@ -330,6 +408,13 @@ export interface AgentToolOptions {
    * `rotate_not_needed`，避免 bridge 收不到人类应答而挂死。
    */
   humanApproval?: boolean;
+  /**
+   * rotate 批准等待的上限（毫秒）；缺省 {@link ROTATE_APPROVAL_TIMEOUT_MS}。
+   *
+   * `0` / 负数 = 不设上限（旧行为，只适合「通道确定通」的宿主）。装配层要给**别的**值
+   * 就走这里；测试用它把 2 分钟压到几十毫秒。
+   */
+  rotateApprovalTimeoutMs?: number;
 }
 
 /** 构造内置 `agent` 工具；生命周期全部委托给 AgentService */
@@ -570,11 +655,14 @@ export function createAgentTool(
 
           let approved = false;
           let denial = 'no_human_channel';
+          /** 只在超时档有值：写进结果让调用方知道等了多少（不是「人拒绝了」）。 */
+          let approvalTimeoutMs: number | undefined;
           // 入口有人类 + 该 body 真有 bridge，两个条件都成立才发请求；否则
           // fail-closed。只检查入口标志会在 permissionMode=allow 的无 team body
           // 上把请求发进无人订阅的事件流并永久等待。
           if (options.humanApproval === true && service.canConfirm(callerSession)) {
             const requestId = randomUUID();
+            const waitLimitMs = options.rotateApprovalTimeoutMs ?? ROTATE_APPROVAL_TIMEOUT_MS;
             ctx.events.publish({
               type: 'tool.permission.request',
               run_id: ctx.run_id,
@@ -598,6 +686,9 @@ export function createAgentTool(
             try {
               const response = await ctx.events.waitFor('tool.permission.response', {
                 requestId,
+                // 超时兜底：卡片到不了人时不能无限挂（见 ROTATE_APPROVAL_TIMEOUT_MS）。
+                // `waitLimitMs <= 0` = 显式要求不设上限（旧行为）。
+                ...(waitLimitMs > 0 ? { timeout: waitLimitMs } : {}),
                 ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
               });
               const data = isRecord(response) ? response : {};
@@ -609,8 +700,13 @@ export function createAgentTool(
               if (!human) denial = 'no_human_channel';
               else if (!approved) denial = 'denied_by_human';
             } catch (error) {
+              // 取消优先：run 被中止时原样抛出（由兜底包装成 `cancelled` 码），
+              // 不能被下面的「批准不可用」吞掉。
               if (ctx.signal?.aborted) throw error;
-              denial = 'approval_unavailable';
+              if (isApprovalTimeout(error)) {
+                denial = ROTATE_APPROVAL_TIMEOUT_REASON;
+                approvalTimeoutMs = waitLimitMs;
+              } else denial = 'approval_unavailable';
             }
           }
 
@@ -623,11 +719,14 @@ export function createAgentTool(
             service.noteAgentEvent('agent.rotate.denied', callerSession, {
               ...decisionData,
               reason: denial,
+              ...(approvalTimeoutMs !== undefined ? { timeout_ms: approvalTimeoutMs } : {}),
             });
             return JSON.stringify({
               status: 'failed',
               code: 'rotate_not_needed',
               reason: denial,
+              // 超时档把等过的时限写结果里：调用方据此分辨「人点了拒绝」与「根本没人答」。
+              ...(approvalTimeoutMs !== undefined ? { timeout_ms: approvalTimeoutMs } : {}),
               ...decisionData,
             });
           }
@@ -998,7 +1097,7 @@ export function createAgentTool(
 
         throw invalid(`unknown action "${String(action)}" (expected ${ACTIONS.join('|')})`);
       } catch (error) {
-        return errorResult(error);
+        return errorResult(error, ctx?.signal);
       }
     },
   };

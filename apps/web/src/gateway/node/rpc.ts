@@ -5,22 +5,28 @@
  */
 
 import { t } from '../../i18n';
+import { noteRpcFailure, noteRpcNetworkFailure, noteRpcSuccess } from '../session-invalid';
 import type { GatewayErrorBody, Message, RpcResponseEnvelope } from '../types';
 import { GatewayHttpError, ProtocolClient } from './protocol';
 
 export abstract class RpcClient extends ProtocolClient {
   /** 统一 RPC 入口；失败抛 GatewayHttpError（携带冻结 code） */
   async rpc<T = unknown>(method: string, params?: unknown): Promise<T> {
-    const response = await this.httpJson<RpcResponseEnvelope<T>>('/v1/rpc', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        v: 1,
-        id: crypto.randomUUID(),
-        method,
-        ...(params !== undefined ? { params } : {}),
-      }),
-    });
+    const response = await this.httpJson<RpcResponseEnvelope<T>>(
+      '/v1/rpc',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          v: 1,
+          id: crypto.randomUUID(),
+          method,
+          ...(params !== undefined ? { params } : {}),
+        }),
+      },
+      // 方法名进「被拒」状态：顶部提示能说清是哪一类请求被挡住的。
+      method,
+    );
     if (!response.ok) {
       throw new GatewayHttpError(
         response.error?.code ?? 'internal',
@@ -30,7 +36,12 @@ export abstract class RpcClient extends ProtocolClient {
     return response.result as T;
   }
 
-  protected async httpJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  protected async httpJson<T>(
+    path: string,
+    init: RequestInit = {},
+    /** 诊断标签（RPC 方法名）；缺省用路径。 */
+    label?: string,
+  ): Promise<T> {
     const token = this.token;
     if (!token && !this.proxyMode) {
       throw new GatewayHttpError('unauthorized', t('gateway.client.tokenRequiredHttp'));
@@ -47,7 +58,15 @@ export abstract class RpcClient extends ProtocolClient {
         ...(this.proxyMode ? { credentials: 'same-origin' as const } : {}),
       });
     } catch (error) {
-      throw new GatewayHttpError('network', error instanceof Error ? error.message : String(error));
+      const failure = new GatewayHttpError(
+        'network',
+        error instanceof Error ? error.message : String(error),
+      );
+      // 0.59：连响应都没拿到也是**被拒**的一种 —— 真跨源被挡时浏览器只抛 TypeError，
+      // 没有 401/403 可分类（CORS 不回 ACAO 就连 status 都读不到）。按连接 epoch 计数，
+      // 攒够阈值且本 epoch 从未成功过 ⇒ 抬一条「连不上」提示（不触发重新登录）。
+      noteRpcNetworkFailure(failure, label ?? path);
+      throw failure;
     }
     if (!res.ok) {
       let code = 'internal';
@@ -63,8 +82,14 @@ export abstract class RpcClient extends ProtocolClient {
       } catch {
         // 非 JSON 错误体：保留 HTTP 状态
       }
-      throw new GatewayHttpError(code, message, res.status, details);
+      const error = new GatewayHttpError(code, message, res.status, details);
+      // 0.59：401 / Origin 被拒**不许静默** —— 记进全局「被拒」状态（顶部提示 + 重新登录
+      // 入口都读它）。这就是「待批权限卡永远拿不到、界面毫无表示」那条 bug 的收口点。
+      noteRpcFailure(error, label ?? path);
+      throw error;
     }
+    // 能拿到响应 = 会话 / Origin 都通了：清掉失效状态（幂等，平时是一次 null 判断）。
+    noteRpcSuccess();
     return (await res.json()) as T;
   }
 }

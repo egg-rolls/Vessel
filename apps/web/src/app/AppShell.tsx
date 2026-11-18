@@ -58,6 +58,8 @@ export function AppShell() {
     epoch,
     retry,
     dismissError,
+    sessionInvalid,
+    relogin,
   } = useConnection();
 
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -124,6 +126,8 @@ export function AppShell() {
     stale,
     connectionState,
     reconnectAttempt,
+    sessionInvalid,
+    onRelogin: relogin,
     onDismissError: dismissError,
     onRetry: retry,
     onOpenConnection: () => navigate({ domain: 'gateway' }),

@@ -1,7 +1,12 @@
 import { useCallback } from 'react';
 import { useInteractionStore } from '../stores/interactionStore';
 import type { GatewayClient } from './client';
-import { buildHydrationSnapshot, stalePendingIds } from './interaction-hydration';
+import {
+  buildHydrationSnapshot,
+  type PendingFetchState,
+  resolvePendingFetch,
+  stalePendingIds,
+} from './interaction-hydration';
 
 interface Current<T> {
   current: T;
@@ -13,6 +18,11 @@ export interface InteractionHydrationDeps {
   settledRef: Current<Map<string, number>>;
   tokenRef: Current<string>;
   hydrationGenerationRef: Current<number>;
+  /**
+   * 本轮结果回报（0.59）。**成功也回报** —— 界面要能区分「真的没有待批」与「拉不到」，
+   * 也要在恢复后自己把提示收回去。
+   */
+  onFetchState?: (state: PendingFetchState) => void;
 }
 
 /**
@@ -20,7 +30,7 @@ export interface InteractionHydrationDeps {
  *
  * 并行拉 pending + orphaned；orphaned 只作终态集合移除旧卡片，不再渲染本地列表，
  * 也不弹 toast（历史失效只在 Observe → Attention）。任何失败都只影响本轮
- * hydration，不阻塞。
+ * hydration，不阻塞 —— 但失败**会被如实上报**（`onFetchState`），不再冒充空列表。
  */
 export function useInteractionHydration({
   client,
@@ -28,6 +38,7 @@ export function useInteractionHydration({
   settledRef,
   tokenRef,
   hydrationGenerationRef,
+  onFetchState,
 }: InteractionHydrationDeps): () => Promise<void> {
   // biome-ignore lint/correctness/useExhaustiveDependencies: refs 与 useRef 一样稳定
   return useCallback(async (): Promise<void> => {
@@ -53,17 +64,16 @@ export function useInteractionHydration({
       client.listInteractionsPage({ status: 'pending', limit: 100 }),
       client.listInteractions({ status: 'orphaned', limit: 100 }),
     ]);
+    // 归一化（含「失败 ≠ 空列表」的判定）是纯函数，可单独测。
+    const resolved = resolvePendingFetch(pendingResult, orphanedResult);
     if (!stillCurrent()) return;
 
-    // 旧 gateway（method_not_allowed / not_found）与其他失败都按空结果处理。
-    const pendingPage = pendingResult.status === 'fulfilled' ? pendingResult.value : null;
-    const pending = pendingPage?.interactions ?? [];
-    const orphanedListed = orphanedResult.status === 'fulfilled' ? orphanedResult.value : [];
+    onFetchState?.(resolved.state);
 
     // 服务端 orphaned 去重后只用于移除旧卡片；orphaned 历史在 Observe → Attention 查看。
     const orphanIds = [
       ...new Set(
-        orphanedListed
+        resolved.orphaned
           .filter((item) => item.status === 'orphaned' && item.request_id.length > 0)
           .map((item) => item.request_id),
       ),
@@ -72,15 +82,20 @@ export function useInteractionHydration({
     const settled = new Set(settledRef.current.keys());
     // 只有拿到“完整”的 pending 列表才能据此删除本地卡片：RPC 失败或还有下一页时
     // 列表不是全集，仍按“只增不减”合并。
-    const pendingComplete = pendingPage !== null && pendingPage.next_cursor === undefined;
     const snapshot = {
-      ...buildHydrationSnapshot({ pending, orphaned: orphanedListed, settled }),
-      ...(pendingComplete ? { staleIds: stalePendingIds(localIds, pending, settled) } : {}),
+      ...buildHydrationSnapshot({
+        pending: resolved.pending,
+        orphaned: resolved.orphaned,
+        settled,
+      }),
+      ...(resolved.pendingComplete
+        ? { staleIds: stalePendingIds(localIds, resolved.pending, settled) }
+        : {}),
     };
     if (!stillCurrent()) return;
     // 终态 id 写进 settled：之后重放的事件 / 迟到的 pending 列表都不能复活卡片。
     for (const requestId of snapshot.terminalIds) recordSettled(requestId);
     for (const requestId of snapshot.staleIds ?? []) recordSettled(requestId);
     useInteractionStore.getState().hydrate(snapshot, new Set(settledRef.current.keys()), orphanIds);
-  }, [client, recordSettled]);
+  }, [client, recordSettled, onFetchState]);
 }

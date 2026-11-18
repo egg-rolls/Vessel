@@ -5,6 +5,12 @@
  * 合并约束：按 `requestId` 去重且事件先到者优先；`answered` / `orphaned` 为终态，
  * 移除同 id pending；settled id 不复活；list 缺席不删除现有卡片。
  */
+
+import {
+  classifyRpcFailure,
+  type GatewayRpcBlockKind,
+  isUnsupportedMethodError,
+} from './session-invalid';
 import type { AskUserQuestion, AskUserRequest, PermissionRequest, PermissionScope } from './types';
 
 /** 镜像 serve `ListedInteraction` 的 answer（packages/serve/src/gateway/methods/interactions.ts）。 */
@@ -70,6 +76,105 @@ export const emptyInteractionState: InteractionState = {
   permissions: [],
   asks: [],
 };
+
+/**
+ * `interactions.list` 本轮结果 + 「拉不到」的可见状态（0.59）。
+ *
+ * 为什么要有：失败原先被一律当成「空列表」—— 于是 RPC 401 时待批页显示「没有待批的
+ * 提问」，用户以为没人找他，实际上请求全在服务端排着（rotate 的权限卡就是这样永远
+ * 到不了界面）。状态分四档，UI 只对 `failed` 说话：
+ *
+ * - `unknown`：本轮还没拉过（首帧 / 还没连上）；
+ * - `ok`：拿到了（可能是空列表，那是真的没有）；
+ * - `unsupported`：旧 gateway 没有这个方法（不是失败，界面不出提示）；
+ * - `failed`：拉取失败 —— 必须让用户看见，否则「空」是假的。
+ */
+export type PendingFetchStatus = 'unknown' | 'ok' | 'unsupported' | 'failed';
+
+export interface PendingFetchState {
+  status: PendingFetchStatus;
+  /** failed 的原因分类（`connection` = 一次都没连通过）；其它状态恒 null。 */
+  kind: GatewayRpcBlockKind | 'other' | null;
+  /** 一句话原因（错误消息；gateway 的错误体从不回显 token）。 */
+  message: string | null;
+  /** 本轮判定的时刻（ms epoch）；0 = 从未判定。 */
+  at: number;
+}
+
+export const PENDING_FETCH_UNKNOWN: PendingFetchState = {
+  status: 'unknown',
+  kind: null,
+  message: null,
+  at: 0,
+};
+
+export interface PendingFetchResult {
+  /** 本轮拿到的 pending 列表；拉不到时为空数组（调用方靠 `pendingUsable` 区分）。 */
+  pending: readonly ListedInteraction[];
+  orphaned: readonly ListedInteraction[];
+  /** pending 列表可用（false = 失败 / 不支持，只能「只增不减」地合并）。 */
+  pendingUsable: boolean;
+  /** pending 是**全集**（可据此删本地已失效卡片）；失败 / 还有下一页时 false。 */
+  pendingComplete: boolean;
+  state: PendingFetchState;
+}
+
+function errorMessageOf(error: unknown): string {
+  if (error instanceof Error && error.message.length > 0) return error.message;
+  const message = (error as { message?: unknown } | null)?.message;
+  return typeof message === 'string' && message.length > 0 ? message : String(error);
+}
+
+/**
+ * 把 `interactions.list` 的两路 settle 结果归一化。
+ *
+ * 纯函数（不含 RPC / 不含 React），这样「失败不当作没有」「失败要说清是哪一类」这两条
+ * 判据可以被一条一条钉在测试里。
+ */
+export function resolvePendingFetch(
+  pending: PromiseSettledResult<ListedInteractionPage>,
+  orphaned: PromiseSettledResult<readonly ListedInteraction[]>,
+  now = Date.now(),
+): PendingFetchResult {
+  const orphanedListed = orphaned.status === 'fulfilled' ? orphaned.value : [];
+
+  if (pending.status === 'fulfilled') {
+    const page = pending.value;
+    const listed = Array.isArray(page?.interactions) ? page.interactions : [];
+    return {
+      pending: listed,
+      orphaned: orphanedListed,
+      pendingUsable: true,
+      pendingComplete: page?.next_cursor === undefined,
+      state: { status: 'ok', kind: null, message: null, at: now },
+    };
+  }
+
+  // 旧 gateway 没有这个方法：语义是「这个服务端不支持」，不是「拉取失败」。
+  if (isUnsupportedMethodError(pending.reason)) {
+    return {
+      pending: [],
+      orphaned: orphanedListed,
+      pendingUsable: false,
+      pendingComplete: false,
+      state: { status: 'unsupported', kind: null, message: null, at: now },
+    };
+  }
+
+  const block = classifyRpcFailure(pending.reason);
+  return {
+    pending: [],
+    orphaned: orphanedListed,
+    pendingUsable: false,
+    pendingComplete: false,
+    state: {
+      status: 'failed',
+      kind: block?.kind ?? 'other',
+      message: errorMessageOf(pending.reason),
+      at: now,
+    },
+  };
+}
 
 export interface HydrationSnapshot {
   permissions: readonly PermissionRequest[];
