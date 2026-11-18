@@ -6,4 +6,5 @@
  * @module @vessel-agent/engine-client
  */
 
+export * from './client.js';
 export * from './protocol.js';
