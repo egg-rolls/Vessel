@@ -103,6 +103,9 @@ export const CLI_FLAG_VALUE = {
   '--cursor': '<cursor>',
   '--tls-cert': '<path>',
   '--tls-key': '<path>',
+  '--entry': '<json>',
+  '--value-env': '<ENV>',
+  '--value-stdin': null,
 } as const;
 
 export type CliFlag = keyof typeof CLI_FLAG_VALUE;
@@ -188,6 +191,9 @@ export const CLI_FLAG_HELP: Readonly<Record<CliFlag, MessageKey>> = {
   '--cursor': 'flag.cursor',
   '--tls-cert': 'flag.tlsCert',
   '--tls-key': 'flag.tlsKey',
+  '--entry': 'flag.entry',
+  '--value-env': 'flag.valueEnv',
+  '--value-stdin': 'flag.valueStdin',
 };
 
 /** 一条命令级 help 规格 */
@@ -221,12 +227,16 @@ export const CLI_HELP_GROUPS: Readonly<Record<string, MessageKey>> = {
   hub: 'help.group.hub',
   'hub node': 'help.group.hubNode',
   logs: 'help.group.logs',
+  model: 'help.group.model',
   node: 'help.group.node',
   plugin: 'help.group.plugin',
   session: 'help.group.session',
   team: 'help.group.team',
   trace: 'help.group.trace',
 };
+
+/** model 子命令共用的输出 / 连接 flag（与 status / agents / errors 同形）。 */
+const MODEL_FLAGS = ['--json', '--connect', '--connect-token', '--ca'] as const;
 
 /**
  * 全部命令级规格。顺序决定 group 页里子命令的排列顺序。
@@ -256,6 +266,63 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     path: ['errors'],
     summary: 'help.cmd.errors',
     flags: ['--json', '--limit', '--connect', '--connect-token', '--ca'],
+  },
+
+  // ── model（model-registry RPC 包装；连接 flag 与 status / agents 同形）──
+  { path: ['model', 'list'], summary: 'help.cmd.modelList', flags: MODEL_FLAGS },
+  {
+    path: ['model', 'vendor-set'],
+    summary: 'help.cmd.modelVendorSet',
+    args: '<id>',
+    flags: [...MODEL_FLAGS, '--entry'],
+    required: ['--entry'],
+  },
+  {
+    path: ['model', 'vendor-remove'],
+    summary: 'help.cmd.modelVendorRemove',
+    args: '<id>',
+    flags: MODEL_FLAGS,
+  },
+  {
+    path: ['model', 'alias-set'],
+    summary: 'help.cmd.modelAliasSet',
+    args: '<alias> <ref>',
+    flags: MODEL_FLAGS,
+  },
+  {
+    path: ['model', 'alias-remove'],
+    summary: 'help.cmd.modelAliasRemove',
+    args: '<alias>',
+    flags: MODEL_FLAGS,
+  },
+  {
+    path: ['model', 'set-default'],
+    summary: 'help.cmd.modelSetDefault',
+    args: '<ref>',
+    flags: MODEL_FLAGS,
+  },
+  {
+    path: ['model', 'credential-set'],
+    summary: 'help.cmd.modelCredentialSet',
+    usage: 'vessel model credential-set <id> [--value-env <ENV> | --value-stdin] [options]',
+    flags: [...MODEL_FLAGS, '--value-env', '--value-stdin'],
+  },
+  {
+    path: ['model', 'credential-remove'],
+    summary: 'help.cmd.modelCredentialRemove',
+    args: '<id>',
+    flags: MODEL_FLAGS,
+  },
+  {
+    path: ['model', 'credentials-list'],
+    summary: 'help.cmd.modelCredentialsList',
+    flags: MODEL_FLAGS,
+  },
+  {
+    path: ['model', 'test'],
+    summary: 'help.cmd.modelTest',
+    args: '<vendor>',
+    flags: [...MODEL_FLAGS, '--model'],
   },
 
   // ── attention（列表是命令，respond 是其子命令）──
