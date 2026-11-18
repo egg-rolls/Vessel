@@ -424,7 +424,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
           </div>
         </TableToolbar>
 
-        {(failed.length > 0 || partialErrors > 0 || hiddenClosedAgents > 0) && (
+        {(failed.length > 0 || partialErrors > 0) && (
           <div className="flex flex-col gap-2">
             {failed.map((roster) => (
               <p
@@ -447,15 +447,6 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
                 role="status"
               >
                 {t('agents.partialErrors', { count: partialErrors })}
-              </p>
-            )}
-            {hiddenClosedAgents > 0 && (
-              // 提示而不是静默：隐藏只是默认视图的选择，用户要能知道人还在、去哪打开。
-              <p
-                className="m-0 rounded-sm border border-line-strong bg-sunken px-3 py-2 text-sm text-muted"
-                role="status"
-              >
-                {t('archive.hidden.agents', { count: hiddenClosedAgents })}
               </p>
             )}
           </div>
