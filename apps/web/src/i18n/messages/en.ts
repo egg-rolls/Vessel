@@ -1866,10 +1866,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.platform.noNodes': 'The platform gateway returned no nodes.',
   'gateway.platform.credentialsUnavailable':
     'Node credentials are unavailable; enter a node token manually.',
-  // 0.56: WebUI sign-in with GitHub (single user).
-  'auth.login.title': 'Sign in to Vessel',
-  'auth.login.subtitle':
-    'Sign in with a configured backend to use this WebUI (single-user deployment: only the configured account is allowed).',
+  // 0.56: WebUI sign-in (password / OAuth).
+  'auth.login.title': 'Sign in to VESSEL',
   'auth.login.passwordSubtitle':
     'This WebUI requires a password (single-user deployment; TOTP adds a one-time code).',
   'auth.login.username': 'Login name',
@@ -1885,8 +1883,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'auth.login.totpHint': 'A TOTP code is required after the password; clock drift tolerance ±30s.',
   'auth.login.bootstrapHint':
     'No password is set yet: open this page with the one-time bootstrap code printed at startup (#token=<code>, valid for 10 minutes, single use).',
-  'auth.login.redirectHint':
-    'The OAuth app callback URL must be exactly: {uri} (no trailing slash).',
   'auth.signedInAs': 'Signed in as {user}',
   'auth.signedInAsTitle': 'Current session identity: {user}',
   'auth.logout': 'Sign out',

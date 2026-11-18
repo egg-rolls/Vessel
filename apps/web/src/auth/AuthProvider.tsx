@@ -50,8 +50,6 @@ export interface AuthContextValue {
   user: AuthUser | null;
   loginLabel: string;
   startPath: string;
-  /** Redirect URI the OAuth App must register (publicOrigin + fixed path). */
-  redirectUri: string | null;
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -65,7 +63,6 @@ export function useAuth(): AuthContextValue {
 }
 
 const FALLBACK_LOGIN_LABEL = 'GitHub';
-const CALLBACK_PATH = '/auth/github/callback';
 
 function phaseFor(status: AuthStatus): AuthPhase {
   if (!status.authEnabled) return 'disabled';
@@ -153,7 +150,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user: status?.user ?? null,
       loginLabel: backend?.label ?? FALLBACK_LOGIN_LABEL,
       startPath: backend?.startPath ?? '/auth/github/start',
-      redirectUri: status?.publicOrigin != null ? status.publicOrigin + CALLBACK_PATH : null,
       refresh,
       logout,
     }),
@@ -170,7 +166,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           totpRequired={status?.totpRequired === true}
           recoveryCodesLeft={status?.recoveryCodesLeft ?? 0}
           bootstrapError={bootstrapError}
-          redirectUri={value.redirectUri}
           onDone={() => {
             setBootstrapError(null);
             void refresh();
@@ -197,7 +192,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   if (phase === 'loading') {
     // One short probe: a splash avoids flashing the app shell then swapping it out.
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-page" aria-busy="true">
+      <div className="flex min-h-dvh items-center justify-center bg-bg" aria-busy="true">
         <span className="text-sm text-faint">…</span>
       </div>
     );

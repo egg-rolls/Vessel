@@ -1779,10 +1779,8 @@ export const messages = {
     '需要平台 token：/platform/rpc 返回 401；请在连接设置中输入平台 token。',
   'gateway.platform.noNodes': '平台 gateway 没有返回任何节点。',
   'gateway.platform.credentialsUnavailable': '无法读取节点凭据；请手动输入节点 token。',
-  // 0.56：WebUI 用 GitHub 登录（单用户）。
-  'auth.login.title': '登录 Vessel',
-  'auth.login.subtitle':
-    '用已配置的登录方式登录后即可使用这个 WebUI（单用户部署，只允许指定的账号）。',
+  // 0.56：WebUI 登录（口令 / OAuth）。
+  'auth.login.title': '登录 VESSEL',
   'auth.login.passwordSubtitle':
     '这个 WebUI 需要口令登录（单用户部署；配了 TOTP 时还要一次性验证码）。',
   'auth.login.username': '登录名',
@@ -1796,7 +1794,6 @@ export const messages = {
   'auth.login.totpHint': '口令通过后还要 TOTP 验证码；时钟漂移容忍 ±30 秒。',
   'auth.login.bootstrapHint':
     '还没有设置口令：请用启动日志里打印的一次性引导码打开这个页面（#token=<引导码>，10 分钟内有效、只能用一次）。',
-  'auth.login.redirectHint': 'OAuth 应用的回调地址必须是：{uri}（逐字节一致，无尾斜杠）。',
   'auth.signedInAs': '已登录为 {user}',
   'auth.signedInAsTitle': '当前会话身份：{user}',
   'auth.logout': '登出',
