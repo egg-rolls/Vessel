@@ -40,7 +40,7 @@ function deepen(hue: string, keep: number): string {
 }
 
 /** 5 组：3 个语义色族 × 深浅两档（`--danger` 只留一档，红在暗色主题里已经足够亮）。 */
-export const AVATAR_PALETTES: readonly AvatarPalette[] = [
+const AVATAR_PALETTES: readonly AvatarPalette[] = [
   {
     id: 'accent',
     solid: 'var(--accent)',
@@ -72,7 +72,7 @@ export const AVATAR_PALETTES: readonly AvatarPalette[] = [
  * FNV-1a 32 位：跨引擎逐位一致（`Math.imul` 保证 32 位乘法不丢精度）。
  * 不用 `String#hashCode` 这类非标准实现，也不加盐 —— 加盐就会随会话变。
  */
-export function stableHash(input: string): number {
+function stableHash(input: string): number {
   let hash = 0x811c9dc5;
   for (let index = 0; index < input.length; index += 1) {
     hash ^= input.charCodeAt(index);
@@ -85,7 +85,7 @@ export function stableHash(input: string): number {
  * 参与哈希的身份键：**先用 id，没有再退 name**（name 会改，id 不会；但降级态里
  * 可能只有名字）。两者都没有 ⇒ `null`，调用方走中性色，不要凭空造一个键。
  */
-export function avatarPaletteKey(
+function avatarPaletteKey(
   id: string | null | undefined,
   name: string | null | undefined,
 ): string | null {

@@ -12,7 +12,7 @@
  */
 
 /** 同源头像端点：未登录或没设头像时返回 **404**（不是 401），所以失败是常态。 */
-export const AVATAR_ENDPOINT = '/auth/avatar';
+const AVATAR_ENDPOINT = '/auth/avatar';
 
 /**
  * 只放行能安全塞进 `<img src>` 的地址：
@@ -22,7 +22,7 @@ export const AVATAR_ENDPOINT = '/auth/avatar';
  *
  * 丢掉不等于报错：它只是不进候选列表，头像继续往下落到下一层。
  */
-export function safeAvatarUrl(raw: string | null | undefined): string | null {
+function safeAvatarUrl(raw: string | null | undefined): string | null {
   const value = (raw ?? '').trim();
   if (value === '') return null;
   if (value.startsWith('//')) return null;

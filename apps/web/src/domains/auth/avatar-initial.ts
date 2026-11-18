@@ -9,7 +9,7 @@
  * - 没有 name 时退 id（降级态里可能只有 id）；两者都没有 ⇒ `null`，组件画通用人形，
  *   而不是显示 `?` 那种像报错的东西。
  *
- * 纯函数、单独模块：浮层组件不该为了这个规则带上 React，也便于单测。
+ * 纯函数、单独模块：浮层组件不该为了这个规则带上 React。
  *
  * @module web/domains/auth/avatar-initial
  */
@@ -17,13 +17,11 @@
 const LATIN = /^[a-zA-Z]$/;
 const WORD_SEPARATORS = /[\s._-]+/;
 
-/** 取第一个**字**（码点）；空串 ⇒ `?`。 */
-export function avatarInitial(name: string | null | undefined): string {
-  const trimmed = (name ?? '').trim();
-  const first = Array.from(trimmed)[0];
+/** 单字：取第一个**字**（码点）并尽量大写；`ß` → `S`（`SS` 只取首字，宽度才稳）。 */
+function singleChar(source: string): string {
+  const first = Array.from(source)[0];
   if (first === undefined) return '?';
-  // `ß`.toUpperCase() → `SS`：只取结果的第一个字，宽度才稳定。
-  return Array.from(first.toUpperCase())[0] ?? '?';
+  return Array.from(first.toUpperCase())[0] ?? first;
 }
 
 /**
@@ -36,16 +34,15 @@ export function avatarMonogram(name: string | null | undefined, id?: string | nu
   const first = Array.from(source)[0];
   if (first === undefined) return null;
   // 非拉丁开头（中文 / 日文 / emoji …）：只取第一个字，不拼第二个。
-  if (!LATIN.test(first)) {
-    return Array.from(first.toUpperCase())[0] ?? first;
-  }
+  if (!LATIN.test(first)) return singleChar(source);
   const words = source.split(WORD_SEPARATORS).filter((word) => word !== '');
   const second = words[1];
   if (second !== undefined) {
     const secondFirst = Array.from(second)[0];
+    // 第二个词不是字母（`u_1`）时退回单字母：`U1` 像型号，不像人。
     if (secondFirst !== undefined && LATIN.test(secondFirst)) {
       return `${first}${secondFirst}`.toUpperCase();
     }
   }
-  return Array.from(first.toUpperCase())[0] ?? first;
+  return singleChar(source);
 }
