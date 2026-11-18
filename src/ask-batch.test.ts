@@ -48,12 +48,13 @@ function same(actual: unknown, expected: unknown): boolean {
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
 /**
- * core / config 的运行时替身。
+ * core 的**透传式**替身：先把真实模块整体拿进来，再只覆盖本测试真正需要隔离的出口。
+ * 被测的仍是真实的注册表 / 存储 / 投放 / 工具。
  *
- * 清单 = `packages/serve` + `packages/agent` + `src/ask-*` 这条 import 链上**运行时**取用
- * 的全部出口（`import type` 的不算，编译后被抹掉）：少一个会在 import 期就报「缺命名
- * 导出」，多一个没有意义。被测的是真实的注册表 / 存储 / 投放 / 工具，这些替身只提供
- * 「存在且不炸」的语义。
+ * 为什么不再手工列清单：以前这份清单是按「这条 import 链上运行时取用的全部出口」逐项
+ * 维护的，core 加了 `indexToolCalls` / `classifyProviderRetry` 之后清单没跟上，四个测试
+ * 一起挂在 `SyntaxError: Export named ... not found`。`...real` 之后 core 再怎么加导出
+ * 都不会在 import 期炸，只有「真的要替身」的出口才写在这里。
  */
 const atomicWriteStub = async (path: string, data: string) => {
   const { mkdir, writeFile } = await import('node:fs/promises');
@@ -62,76 +63,17 @@ const atomicWriteStub = async (path: string, data: string) => {
   await writeFile(path, data, 'utf8');
 };
 
+const realCore = await import('@vessel-agent/core');
 mock.module('@vessel-agent/core', () => ({
+  ...realCore,
+  // 只覆盖这两处：
+  // - `atomicWrite`：夹具直接落盘就够，不必经 core 的按路径写队列（少一层跨用例耦合）；
+  // - `noopLogger`：静音，判定只看末尾的 check 汇总。
   atomicWrite: atomicWriteStub,
-  createDefaultTraceRedactor: () => (event: unknown) => event,
-  projectedKeepCount: () => 0,
-  summarizeBroadcastEvent: () => ({}),
-  compareSessionInfo: () => 0,
-  toSessionInfo: () => ({}),
-  projectMessages: () => [],
-  compactMessagesForSeed: () => [],
-  assertTenantId: () => {},
-  SessionCorruptError: class extends Error {},
-  LeaseExpiredError: class extends Error {},
-  LeaseConflictError: class extends Error {},
-  RunResumeError: class extends Error {},
-  MemoryEventStream: class {},
-  MemoryPluginHost: class {},
-  MemoryWorkingContext: class {},
-  HookType: { BeforeLlm: 'before_llm', AfterLlm: 'after_llm' },
-  MESSAGE_REFS_MAX: 8,
-  MESSAGE_REF_PATH_MAX: 4096,
-  BROADCAST_PREVIEW_LIMIT: 10,
-  DEFAULT_COMPACT_THRESHOLD: 0.8,
-  LIMIT_WARNING_THRESHOLD: 0.9,
   noopLogger: quietLogger,
-  // 0.53 U1（ADR-104）：会话投射声明的出口（agent 服务 + sessions.get/create 用）。
-  // 本测试不碰投射：口径给成 core 的缺省解析（旧会话 ⇒ placeholder），
-  // declareProjection 一旦被调用就抛，说明测试真的走到那条路了。
-  PROJECTION_MODE_STRICTNESS: {
-    passthrough: 0,
-    placeholder: 1,
-    archive_notice: 1,
-    externalize: Number.POSITIVE_INFINITY,
-  },
-  declareProjection: (input: { mode?: string; source?: string } = {}) => ({
-    mode: input.mode ?? 'placeholder',
-    declaration_id: '01MOCKDECLARATION0000000000',
-    source: input.source ?? 'session_created',
-    policy: 'core.context_projection',
-    policy_version: 1,
-    params: { keepRecentTokenRatio: 0.05, keepRecentMax: 10, volumeRatio: 0.2 },
-    excluded_tools: [],
-    declared_at: 0,
-  }),
-  armProjectionDeclaration: (_sessionId: string, declaration: unknown) => declaration,
-  assertProjectionModeAllowedForChild: () => {},
-  knownProjectionMode: () => undefined,
-  forgetProjectionDeclaration: () => {},
-  resolveProjection: () => ({
-    mode: 'placeholder',
-    source: 'legacy',
-    declaration: null,
-    error: null,
-    audit: null,
-    locked: true,
-  }),
-  resolveProjectionMode: (value: unknown) => value as string,
-  ProjectionPolicyError: class extends Error {},
 }));
 
-/** `@vessel-agent/config` 同理（serve 装配在 import 期取用这四个）。 */
-mock.module('@vessel-agent/config', () => ({
-  redactConfig: (config: unknown) => config,
-  redactSourcePaths: (config: unknown) => config,
-  DEFAULT_PLUGIN_HTTP_LIMITS: { body_bytes: 0, timeout_ms: 0 },
-  DEFAULT_LEASE_OPTIONS: {},
-  // 传输层在 import 期就会用到它（`agent-owner-server` 的 loopback 判定）；mock 少了它
-  // 会在**加载模块**这一步炸「Export named … not found」，而不是某个断言失败 —— 补桩即可。
-  isLoopbackHostname: (host: string) =>
-    host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '',
-}));
+// `@vessel-agent/config` 不再需要替身：透传真实模块即可（以前那五个桩纯属清单维护惯例）。
 
 const { createInteractionsRegistry } = await import('../packages/serve/src/interactions-registry');
 const { InteractionsStore } = await import('../packages/serve/src/interactions-store');
@@ -544,14 +486,20 @@ function makeDelivery() {
 // ── 来源：inbox 条目的 source 写成 ask（跨包写入点，按源码断言） ──
 
 {
-  // 这条落在 `packages/agent/src/service.ts` 的 `trackInbox` 里（写 inbox 的唯一入口）。
-  // 本 worktree 装不了 `packages/agent` 的依赖链，所以按仓库既有做法用源码断言钉住
-  // 「ask 答复的条目来源不是 human」这条不变量（同 `src/ask-attribution.test.ts`）。
+  // 这条落在 `packages/agent/src/service.ts` 的 `inboxSourceOf` / `trackInbox` 里（写 inbox
+  // 的唯一入口），所以按仓库既有做法用源码断言钉住「ask 答复的条目来源不是 human」这条
+  // 不变量（同 `src/ask-attribution.test.ts`）。
+  //
+  // 0.55 起 `inboxSourceOf` 里多了 `bash_job` 这一支，三元表达式被拆成了 if / return
+  // （`origin === 'ask_answer'` ⇒ `ASK_ANSWER_INBOX_SOURCE`，其余 ⇒ `message.from`）。
+  // 断言的对象没变（同一个映射），只是把 pattern 跟着函数体形状重写；同一文件末尾那组
+  // 真跑 `AgentService` 的用例（`⑦ 条目来源是 ask`）是这条不变量的运行时交叉验证。
   const source = await readFile('packages/agent/src/service.ts', 'utf8');
   const inboxSource = /const ASK_ANSWER_INBOX_SOURCE = 'ask'/.test(source);
-  const byOrigin = /origin === 'ask_answer' \? ASK_ANSWER_INBOX_SOURCE : message\.from/.test(
-    source,
-  );
+  const byOrigin =
+    /function inboxSourceOf\(message: AgentMessage\): string \{[\s\S]*?origin === 'ask_answer'\) return ASK_ANSWER_INBOX_SOURCE;[\s\S]*?return message\.from;/.test(
+      source,
+    );
   const wired = (source.match(/source: inboxSourceOf\(message\)/g) ?? []).length >= 2;
   check(
     '来源：inbox 条目对 ask 答复写 ask（不是 human）',

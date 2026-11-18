@@ -538,9 +538,33 @@ async function main(): Promise<void> {
 
   // ── 9. 命令口径：缺省 dry-run，data-lock 被占就整体拒绝、零删除 ──
   const cli = await seedWorld();
+  // 这一段会真跑 `pruneCommand` ⇒ 真跑 `loadConfig`。配置必须**显式注入**：项目层与用户层
+  // 都指到临时文件，绝不允许落到 `~/.vessel/config.yaml`（那台机器上的真配置可能正处于
+  // rejected 状态 —— 那样测到的就变成「用户 config 的校验结果」，而不是 prune 的口径）。
+  const configDir = await mkdtemp(join(tmpdir(), 'vessel-prune-config-'));
   try {
+    const projectConfig = join(configDir, 'vessel.yaml');
+    const userConfig = join(configDir, 'user-config.yaml');
+    // 项目层：与本文件其余用例的 `CONFIG` 保持一致（同一套后端 / 留存），避免默认值漂移。
+    await writeFile(
+      projectConfig,
+      [
+        'session:',
+        '  backend: file',
+        'durable:',
+        '  enabled: true',
+        '  backend: file',
+        'trace:',
+        '  enabled: false',
+        '  retentionDays: 36500',
+        '',
+      ].join('\n'),
+    );
+    // 用户层：空文件即可（显式给出路径，`loadConfig` 不会再去读 HOME）。
+    await writeFile(userConfig, '');
     const env = { VESSEL_DATA_DIR: cli.root };
-    const dry = await pruneCommand({ env });
+    const configOpts = { configPath: projectConfig, userConfigPath: userConfig };
+    const dry = await pruneCommand({ env, ...configOpts });
     check(
       '⑤ 缺省就是 dry-run（exit 0）',
       dry.exitCode === 0,
@@ -566,7 +590,7 @@ async function main(): Promise<void> {
       join(cli.root, '.lock'),
       `${JSON.stringify({ pid: process.pid, started_at: NOW, host: hostname() })}\n`,
     );
-    const blocked = await pruneCommand({ yes: true, env });
+    const blocked = await pruneCommand({ yes: true, env, ...configOpts });
     check('⑨ 锁被占：exit 1', blocked.exitCode === 1, String(blocked.exitCode));
     check(
       '⑤ 锁被占：报 data_locked',
@@ -581,6 +605,7 @@ async function main(): Promise<void> {
       String((await remainingAgents(cli)).length),
     );
   } finally {
+    await rm(configDir, { recursive: true, force: true });
     await cli.dispose();
   }
 

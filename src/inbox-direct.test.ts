@@ -51,46 +51,26 @@ function check(name: string, ok: boolean, got?: string): void {
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
 /**
- * core 的运行时替身。只列 `packages/agent/src` 真正会在运行时取用的出口：少一个就会在
- * import 时炸（缺命名导出），多一个没有意义。
+ * core 的**透传式**替身：先把真实模块整体拿进来，再只覆盖本测试真正需要隔离的出口。
+ *
+ * 为什么不再手工列清单：这份清单以前是逐项维护的，core 加了 `indexToolCalls` /
+ * `classifyProviderRetry` 之后清单没跟上，四个测试一起挂在
+ * `SyntaxError: Export named ... not found`。`...real` 之后 core 再怎么加导出都不会
+ * 在 import 期炸，只有「真的要替身」的出口才写在这里。
  */
+const realCore = await import('@vessel-agent/core');
 mock.module('@vessel-agent/core', () => ({
-  assertTenantId: () => {},
-  compactMessagesForSeed: () => [],
-  LeaseExpiredError: class extends Error {},
-  RunResumeError: class extends Error {},
-  noopLogger: quietLogger,
-  projectMessages: () => [],
+  ...realCore,
+  // 只覆盖这两处：
+  // - `atomicWrite`：夹具直接落盘就够，不必经 core 的按路径写队列（少一层跨用例耦合）；
+  // - `noopLogger`：静音，判定只看末尾的 check 汇总。
   atomicWrite: async (path: string, data: string) => {
     const { mkdir, writeFile } = await import('node:fs/promises');
     const { dirname } = await import('node:path');
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, data, 'utf8');
   },
-  HookType: { BeforeLlm: 'before_llm', AfterLlm: 'after_llm' },
-  MESSAGE_REFS_MAX: 8,
-  MESSAGE_REF_PATH_MAX: 4096,
-  // 0.53 U1（ADR-104）：会话投射声明的出口（agent 服务创建路径用）。
-  PROJECTION_MODE_STRICTNESS: {
-    passthrough: 0,
-    placeholder: 1,
-    archive_notice: 1,
-    externalize: Number.POSITIVE_INFINITY,
-  },
-  declareProjection: (input: { mode?: string; source?: string } = {}) => ({
-    mode: input.mode ?? 'placeholder',
-    declaration_id: '01MOCKDECLARATION0000000000',
-    source: input.source ?? 'session_created',
-    policy: 'core.context_projection',
-    policy_version: 1,
-    params: { keepRecentTokenRatio: 0.05, keepRecentMax: 10, volumeRatio: 0.2 },
-    excluded_tools: [],
-    declared_at: 0,
-  }),
-  armProjectionDeclaration: (_sessionId: string, declaration: unknown) => declaration,
-  assertProjectionModeAllowedForChild: () => {},
-  knownProjectionMode: () => undefined,
-  forgetProjectionDeclaration: () => {},
+  noopLogger: quietLogger,
 }));
 
 const { AgentInboxStore, inboxPath } = await import('../packages/agent/src/inbox');
