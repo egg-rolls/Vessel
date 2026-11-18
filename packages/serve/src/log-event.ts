@@ -19,8 +19,9 @@
  * 4. **机器可读逃生阀**：VESSEL_LOG_JSON=1 时退回**单行** JSON（一行，不是多行），
  *    需要 jq/grep 精读或要拿全量原值时用它。
  *
- * 不在这里做的事：不加时间戳前缀、不写文件、不做级别过滤 —— 那些属于终端输出的上层
- * （`ui.*`），事件日志只负责「这条事件怎么排成一行」。
+ * 不在这里做的事：不加时间戳前缀、不写文件 —— 那些属于终端输出的上层（`ui.*`），
+ * 事件日志只负责「这条事件怎么排成一行」。级别过滤只有 debug 一道临时闸
+ * （环境变量，见 `debugEnabled`）；完整的级别/模块控制由 core 日志中枢接管。
  *
  * @module @vessel-agent/serve/log-event
  */
@@ -163,6 +164,12 @@ const EVENT_FIELDS: Record<string, readonly FieldSpec[]> = {
     { key: 'after', from: ['after_timeline_seq'], kind: 'value' },
     { key: 'check', kind: 'value' },
     { key: 'at', kind: 'time' },
+    { key: 'suppressed', kind: 'count' },
+  ],
+  /** 后台 bash 作业起步（basic-tools 插件；纯过程信息，debug）。 */
+  'basic_tools.bash_job.started': [
+    { key: 'job', from: ['job_id'], kind: 'id' },
+    { key: 'delivery' },
   ],
   /** 尾随时间线：建 epoch 期间按住的记录撞上硬上界。 */
   'gateway.timeline_tail.hold_overflow': [
@@ -545,18 +552,43 @@ export function formatEventFields(fields: Record<string, unknown>): string {
 }
 
 /**
+ * `gateway.ws.closed` 的级别判定（node 侧与平台代理共用同一份规则）。
+ *
+ * 正常关闭（客户端发起的 1000/1001）= debug；异常（1006/1011，或服务端发起）= warn；
+ * 其余码 = info。审计账**不折叠**（第十四条）：只改级别，不丢记录 —— 每条连接仍是一行。
+ * `by` 兼容两侧口径：node 侧 `close_by`（client / server_*），代理侧 `who`
+ * （downstream / upstream / platform）。
+ */
+export function wsClosedLevel(code: number, by: string): 'debug' | 'info' | 'warn' {
+  if (by !== 'client' && by !== 'downstream') return 'warn';
+  if (code === 1006 || code === 1011) return 'warn';
+  if (code === 1000 || code === 1001) return 'debug';
+  return 'info';
+}
+
+/**
+ * debug 闸（P1 临时）：`VESSEL_DEBUG` 非空或 `VESSEL_LOG_LEVEL=debug` 才输出 debug。
+ * P2 起由 core 日志中枢统一接管级别过滤，这里只留转发。
+ */
+function debugEnabled(): boolean {
+  if ((process.env.VESSEL_DEBUG ?? '').trim() !== '') return true;
+  return (process.env.VESSEL_LOG_LEVEL ?? '').trim().toLowerCase() === 'debug';
+}
+
+/**
  * 打一条事件日志。
  *
  * 级别只影响走哪个 console 通道（warn/error），**不影响**排版 —— 同一条事件不该因为
- * 级别不同就换一套格式。
+ * 级别不同就换一套格式。debug 缺省不输出（临时由环境变量控制，见 debugEnabled）。
  */
 export function logEvent(
-  level: 'warn' | 'error' | 'info',
+  level: 'debug' | 'warn' | 'error' | 'info',
   event: string,
   fields: Record<string, unknown> = {},
 ): void {
+  if (level === 'debug' && !debugEnabled()) return;
   const line = formatEventLine(event, fields);
-  if (level === 'error') console.error(line);
+  if (level === 'error' || level === 'debug') console.error(line);
   else if (level === 'info') console.info(line);
   else console.warn(line);
 }

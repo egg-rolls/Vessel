@@ -1416,7 +1416,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.53 notice-rotate：回填通知的重解析口（router 早在上面就建好了，flush 时才读）。
     noticeAgentService = wiring.service;
     registerBashJobDelivery({ service: wiring.service, logger });
-    logger.info('agent.bash_job.delivery_ready', {});
+    logger.debug('agent.bash_job.delivery_ready', {});
     finalPluginHost.registerTool(wiring.tool);
     // 0.55：装配收尾的工具名闸（`agent` 工具是插件装完之后才注册的，所以要在这一句之后）。
     // 内置 / 插件工具名不合规 ⇒ 启动失败并列出全部违规项；外部（MCP）工具名只记 warning。

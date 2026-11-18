@@ -12,6 +12,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
+import { logEvent } from '../log-event.js';
 import { type ChildExitInfo, ChildPluginProcess, type PLUGIN_TIMEOUTS } from './child.js';
 import { jsonDtoViolation } from './dto.js';
 import { PluginHostError, pluginError, pluginErrorCodeOf } from './errors.js';
@@ -616,9 +617,8 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     this.logger =
       options.logger ??
       ((level, message, meta) => {
-        const suffix = meta !== undefined ? ` ${JSON.stringify(meta)}` : '';
-        if (level === 'error') console.error(`[vessel] ${message}${suffix}`);
-        else console.warn(`[vessel] ${message}${suffix}`);
+        // 统一走事件行排版（消灭 `[vessel] 自由文本 + JSON.stringify` 第三种格式）。
+        logEvent(level, message, meta ?? {});
       });
     this.now = options.now ?? Date.now;
     this.eventsPerSecond = options.eventsPerSecond ?? 200;

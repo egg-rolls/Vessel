@@ -16,8 +16,9 @@
  *
  * 于是「模型慢」看 `model=`，「我们中间慢」看 `us=`，不用猜。
  *
- * 开关：`VESSEL_RUN_TIMING=0` 关掉（默认开）。默认开是因为它是**账**不是噪声：
- * 一次 run 一条，一轮工具一条。
+ * 开关：默认降为 **debug**（性能剖析数据，不是必须给人看的账）——只在
+ * `VESSEL_DEBUG` 非空或 `VESSEL_LOG_LEVEL=debug` 时输出；`VESSEL_RUN_TIMING=1`
+ * 强制开启（保留取数习惯），`=0/false/off` 强制关闭。
  *
  * @module @vessel-agent/core/runtime/run-timing
  */
@@ -91,10 +92,17 @@ function defaultPrint(line: string): void {
   console.error(line);
 }
 
-/** `VESSEL_RUN_TIMING=0` 关闭；其它任何值（含未设）都开。 */
+/**
+ * 默认跟随 debug 档（`VESSEL_DEBUG` / `VESSEL_LOG_LEVEL=debug`）；
+ * `VESSEL_RUN_TIMING=1/true/on` 强制开，`0/false/off` 强制关。
+ * 日志中枢落地后这里改读进程级阈值，强制开关语义不变。
+ */
 function defaultEnabled(): boolean {
-  const raw = (process.env.VESSEL_RUN_TIMING ?? '').trim();
-  return raw !== '0' && raw.toLowerCase() !== 'false' && raw.toLowerCase() !== 'off';
+  const raw = (process.env.VESSEL_RUN_TIMING ?? '').trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'off') return false;
+  if (raw === '1' || raw === 'true' || raw === 'on') return true;
+  if ((process.env.VESSEL_DEBUG ?? '').trim() !== '') return true;
+  return (process.env.VESSEL_LOG_LEVEL ?? '').trim().toLowerCase() === 'debug';
 }
 
 export interface RunTimingOptions {

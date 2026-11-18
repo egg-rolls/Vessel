@@ -60,7 +60,9 @@ function recordRetry(options: RetryOptions, event: RetryEvent): void {
       options.onRetry(event);
       return;
     }
-    retryLogger.warn('provider retry', {
+    // 偶发 429 不打扰人：第 1 次重试 debug，≥2 次才 warn（最终失败由调用方报错）。
+    const log = event.attempt >= 2 ? retryLogger.warn : retryLogger.debug;
+    log('provider retry', {
       attempt: event.attempt,
       max_retries: event.maxRetries,
       delay_ms: event.delayMs,

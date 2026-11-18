@@ -167,6 +167,13 @@ import {
 
 const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
 
+/**
+ * `agent.snapshot.duplicate_name` 的进程级首次 warn 记账：同一个 name 只在进程内
+ * 第一次快照发现时 warn，之后降 debug（事实没变，不该每次快照都重复打扰）。
+ * key 是成员名（≤64 字符），数量随名集合有界。
+ */
+const duplicateNameWarned = new Set<string>();
+
 /** Team 内 present 成员上限（peer + contractor 都计入；后续可配置） */
 const TEAM_MEMBER_LIMIT = 20;
 
@@ -1097,7 +1104,12 @@ export class AgentServiceImpl implements AgentService {
     }
     for (const [name, ids] of idsByName) {
       if (ids.length > 1) {
-        this.logger.warn('agent.snapshot.duplicate_name', { name, ids });
+        if (duplicateNameWarned.has(name)) {
+          this.logger.debug('agent.snapshot.duplicate_name', { name, ids });
+        } else {
+          duplicateNameWarned.add(name);
+          this.logger.warn('agent.snapshot.duplicate_name', { name, ids });
+        }
       }
     }
     if (migrated > 0) {
