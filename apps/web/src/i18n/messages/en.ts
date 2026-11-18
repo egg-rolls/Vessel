@@ -2188,4 +2188,28 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'integrations.channels.subtitle': 'External channel connectivity and message delivery status.',
   'visual.subtitle': 'Theme, language, motion, and display preferences for this browser.',
   'settings.subtitle': 'The resolved configuration and where each value comes from.',
+
+  // ── account.* (web-avatar job): account popover in the header ───────────────
+  // Identity / current node / sign-in method / settings / sign out. Append new keys
+  // at the end of the file only; never reorder or touch the namespaces above.
+  // No command-line text in the popover (constitution §14): only what happened and
+  // what can be clicked.
+  'account.trigger.signedIn': 'Account menu: {user}',
+  'account.trigger.anonymous': 'Not signed in: open sign-in',
+  'account.panel': 'Account',
+  'account.anonymous': 'Not signed in',
+  'account.role': 'Role: {role}',
+  'account.team': 'Team: {team}',
+  'account.node.title': 'Current node',
+  'account.node.none': 'No node connected yet',
+  'account.node.switch': 'Switch node',
+  'account.node.state.up': 'online',
+  'account.node.state.connecting': 'connecting',
+  'account.node.state.down': 'offline',
+  'account.node.state.unknown': 'state unknown',
+  'account.auth.title': 'Sign-in method',
+  'account.auth.relogin': 'Sign in again / switch account',
+  'account.auth.empty': 'This deployment has no sign-in method enabled.',
+  'account.auth.signOutFirst': 'signs you out first',
+  'account.settings': 'Settings',
 };

@@ -2066,4 +2066,27 @@ export const messages = {
   'integrations.channels.subtitle': '外部渠道的连接状态与消息投递情况。',
   'visual.subtitle': '本浏览器的主题、语言、动效与显示偏好。',
   'settings.subtitle': '解析后的配置，以及每个值的来源。',
+
+  // ── account.*（单子 web-avatar）：头部账号浮层 ──────────────────────────────
+  // 身份 / 当前节点 / 登录方式 / 设置 / 登出。新 key 只在文件尾部追加，
+  // 不重排、不动上面的命名空间。浮层里**不出现命令行文本**（宪法十四条）：
+  // 只说「发生了什么 + 能点什么」。
+  'account.trigger.signedIn': '账号菜单：{user}',
+  'account.trigger.anonymous': '未登录：打开登录入口',
+  'account.panel': '账号',
+  'account.anonymous': '未登录',
+  'account.role': '角色：{role}',
+  'account.team': '团队：{team}',
+  'account.node.title': '当前节点',
+  'account.node.none': '还没有连接节点',
+  'account.node.switch': '切换节点',
+  'account.node.state.up': '在线',
+  'account.node.state.connecting': '连接中',
+  'account.node.state.down': '离线',
+  'account.node.state.unknown': '状态未知',
+  'account.auth.title': '登录方式',
+  'account.auth.relogin': '重新登录 / 切换账号',
+  'account.auth.empty': '这个部署没有启用登录方式。',
+  'account.auth.signOutFirst': '会先登出',
+  'account.settings': '设置',
 } as const;

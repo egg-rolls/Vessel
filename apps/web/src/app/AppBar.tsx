@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import { SessionChip } from '../auth/SessionChip';
 import { Tooltip } from '../components/Tooltip';
+import { AccountMenu } from '../domains/auth/AccountMenu';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
 import { connectionLabel } from './connection-label';
@@ -81,8 +81,6 @@ export function AppBar({
 
       <div className="flex min-w-0 flex-1 justify-center px-2 max-compact:px-1">{center}</div>
 
-      <SessionChip />
-
       <LanguageToggle />
 
       <Tooltip label="Ctrl/Cmd+K">
@@ -114,6 +112,10 @@ export function AppBar({
           <span className="max-compact:hidden">{connLabel}</span>
         </button>
       </Tooltip>
+
+      {/* 0.6x：最右侧的账号入口（头像浮层：身份 / 节点 / 登录方式 / 设置 / 登出）。
+          取代原来的 SessionChip：登录与登出只留这一个入口。 */}
+      <AccountMenu navigate={navigate} />
     </header>
   );
 }
