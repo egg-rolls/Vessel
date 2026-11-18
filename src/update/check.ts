@@ -3,6 +3,7 @@
  * 0.1.0 不下载、不校验、不自替换（二进制分发尚未定稿）。
  */
 
+import { withDeadline } from '@vessel-agent/core';
 import {
   DEFAULT_UPDATE_SOURCE,
   parseManifest,
@@ -102,10 +103,14 @@ async function fetchJson(
   url: string,
   timeoutMs: number,
 ): Promise<unknown> {
-  const response = await fetchImpl(url, {
-    headers: { Accept: 'application/json', 'User-Agent': 'vessel-agent' },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
+  // 0.64：`vessel update --check` 是一条「只被一次挂起的 await 等待」的 CLI 路径 ——
+  // `AbortSignal.timeout` 在 bun 1.3.9 上可能不触发，网络卡住时命令就永远不动了。
+  const response = await withDeadline(timeoutMs, async (signal) =>
+    fetchImpl(url, {
+      headers: { Accept: 'application/json', 'User-Agent': 'vessel-agent' },
+      signal,
+    }),
+  );
   if (!response.ok) {
     const rateLimited =
       response.status === 429 ||

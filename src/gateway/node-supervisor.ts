@@ -22,7 +22,7 @@
 
 import { mkdir, open, readdir, readFile, unlink } from 'node:fs/promises';
 import * as path from 'node:path';
-import { atomicWrite } from '@vessel-agent/core';
+import { atomicWrite, withDeadline } from '@vessel-agent/core';
 import { readHubLockFile } from '../hub/runtime';
 import { buildDaemonArgv } from './daemon';
 import {
@@ -299,11 +299,11 @@ async function fetchHealthJson(
   timeoutMs: number = HEALTH_TIMEOUT_MS,
 ): Promise<{ status: number; body?: unknown }> {
   try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    // 0.64：node 启动探活是一条「只被一次挂起的 await 等待」的路径 —— 用会真正触发的
+    // 截止时间，别让 `vessel gateway start` 卡在等 node 健康检查上。
+    const response = await withDeadline(timeoutMs, async (signal) =>
+      fetch(url, { method: 'GET', headers, signal }),
+    );
     let body: unknown;
     try {
       body = await response.json();
