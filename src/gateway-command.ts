@@ -92,6 +92,7 @@ import {
   type WatchdogEvent,
 } from './gateway/watchdog';
 import { isHumanTerminal, type PlatformStartupHub, renderPlatformStartup } from './gateway-banner';
+import { readHubDerivedOrigins } from './hub/derive-origins';
 import { readHubLockFile } from './hub/runtime';
 import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from './hub/server';
 import { t } from './i18n';
@@ -2893,6 +2894,29 @@ export async function runPlatformGatewayForeground(
       }
     }
 
+    // 0.61：注册表派生来源集 D（loopback ∪ 经本机网卡验证的私网）。
+    //
+    // 读的是 hub data dir 里的 `registry.json`，不打 HTTP：hub 是独立进程、且本进程
+    // 刚 spawn 的 hub 可能还没起来；若改成问 hub，「白名单依赖 hub 先起好」这个耦合
+    // 就回来了。文件缺失 / 损坏 / hub 在别的机器上 ⇒ 空集，行为与今天逐字一致。
+    const hubDataDir =
+      hubConfig?.dataDir !== undefined
+        ? path.resolve(expandHome(hubConfig.dataDir))
+        : path.join(dataDir, 'hub');
+    const derivedOrigins = await readHubDerivedOrigins({ hubDataDir });
+    if (derivedOrigins.origins.length > 0) {
+      // 只在真的有派生来源时打，老配置的启动输出逐字不变。
+      printErr(
+        ui.dim(
+          formatEventLine('hub.origins.derived', {
+            count: derivedOrigins.origins.length,
+            loopback: derivedOrigins.loopback,
+            private: derivedOrigins.private,
+          }),
+        ),
+      );
+    }
+
     // 0.56：WebUI 登录（GitHub OAuth，单用户）。未配置 auth.backends 时
     // backends 为空 ⇒ 平台行为与 0.55 逐字一致（回环可用，不锁死）。
     // 配错（缺 publicOrigin / 缺白名单 / 缺 clientId）只降级为「登录未启用」+ 告警，
@@ -2940,6 +2964,10 @@ export async function runPlatformGatewayForeground(
         // 身份」，与上面两道 origin 白名单无关。
         ...(config.auth?.allowLoopbackAnonymous === true ? { allowLoopbackAnonymous: true } : {}),
         nodeOrigins: [...new Set(nodes.map((node) => node.apiUrl))],
+        // 0.61：派生来源集 D 全量传入 —— 平台内部按三行规则分流：
+        // CORS 只取回环子集（收窄在 `resolveHttpAllowedOrigins` 的单一实现里），
+        // CSP `connect-src`/`frame-src` 取全量。
+        ...(derivedOrigins.origins.length > 0 ? { derivedOrigins: derivedOrigins.origins } : {}),
         // 0.50：Hub 页浏览器直连 Hub，CSP `connect-src` 必须放行 Hub origin。
         ...(Number.isInteger(hubPort) && hubPort > 0
           ? { hubOrigins: platformBrowserOrigins(hubHostname, hubPort) }

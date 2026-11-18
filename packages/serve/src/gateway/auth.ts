@@ -7,6 +7,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
+import { classifyOrigin } from '@vessel-agent/config';
 
 /** 回环判定：localhost / 127.0.0.0/8 / ::1（可带方括号） */
 export function isLoopbackHostname(hostname: string): boolean {
@@ -280,6 +281,14 @@ export function resolveHttpAllowedOrigins(input: {
   allowedOrigins?: readonly unknown[] | undefined;
   /** `auth.public_origins`（已合并归一）；未配置时为回落基线。 */
   publicOrigins?: readonly unknown[] | undefined;
+  /**
+   * 0.61：注册表派生的来源集 D（见 `deriveTrustedOrigins`）。
+   *
+   * **只加不减**：参与并集，永远不参与「去掉某个来源」。
+   * **只认回环**：私网地址（哪怕是本机网卡验证过的）在这里被丢掉——平台是浏览器
+   * 主入口，CORS 面要最小；那部分只进 CSP（设计稿 §4.3 三行规则）。
+   */
+  derivedOrigins?: readonly unknown[] | undefined;
 }): string[] {
   const out: string[] = [];
   const push = (raw: unknown): void => {
@@ -287,12 +296,21 @@ export function resolveHttpAllowedOrigins(input: {
     if (origin === null || out.includes(origin)) return;
     out.push(origin);
   };
+  const pushDerived = (): void => {
+    for (const entry of input.derivedOrigins ?? []) {
+      // 二次防线：调用方就算传了全量 D，也不会把 private/public 放进 CORS。
+      if (classifyOrigin(entry) !== 'loopback') continue;
+      push(entry);
+    }
+  };
   if (input.allowedOrigins !== undefined) {
     for (const entry of input.allowedOrigins) push(entry);
+    pushDerived();
     return out;
   }
   for (const entry of input.publicOrigins ?? []) push(entry);
   for (const entry of LOOPBACK_WILDCARD_ORIGINS) push(entry);
+  pushDerived();
   return out;
 }
 

@@ -16,7 +16,7 @@
  *   声明的字符串，不加这一层「任何 node 都能把某段私网拉进白名单」。
  * - `public`：**永不进 D**，想要生效只能写显式配置。
  *
- * 纯函数、零 I/O：网卡列表由调用方注入，测试可完全控制。
+ * 纯函数、零 I/O：网卡列表由调用方注入，便于在 REPL 里直接验分流。
  *
  * @module @vessel-agent/config/node-registration
  */
@@ -429,7 +429,7 @@ export function validateNodeRegistration(raw: unknown): ValidateNodeRegistration
 
 // ── 派生白名单 ──────────────────────────────────────────────────────────
 
-/** 派生输入里的单个 node 视图（registry 记录的子集，便于用字面量写测试）。 */
+/** 派生输入里的单个 node 视图（registry 记录的子集，便于用字面量复现）。 */
 export interface DerivedOriginsNodeView {
   node_id?: string;
   entries?: readonly { kind?: string; url?: string }[];
@@ -450,6 +450,15 @@ export interface DeriveTrustedOriginsInput {
 export interface DerivedOriginsResult {
   /** 派生白名单（顺序稳定：先按 node_id，再按 origin）。 */
   origins: string[];
+  /**
+   * `origins` 里的回环子集（顺序同 `origins`）。
+   *
+   * 0.61 平台侧：CORS（`httpAllowedOrigins`）**只吃这一份**——平台是浏览器主入口，
+   * CORS 面要最小；私网部分只进 CSP（见设计稿 §4.3 的三行规则）。
+   */
+  loopbackOrigins: string[];
+  /** `origins` 里的（本机网卡验证过的）私网子集（顺序同 `origins`）。 */
+  privateOrigins: string[];
   /** 进了集合的回环条数。 */
   loopback: number;
   /** 进了集合的（本机网卡验证过的）私网条数。 */
@@ -546,15 +555,24 @@ export function deriveTrustedOrigins(input: DeriveTrustedOriginsInput): DerivedO
     return left.origin < right.origin ? -1 : left.origin > right.origin ? 1 : 0;
   });
   const origins: string[] = [];
+  const loopbackOrigins: string[] = [];
+  const privateOrigins: string[] = [];
   for (const item of ordered) {
     if (origins.length >= maxOrigins) break;
     origins.push(item.origin);
-    if (item.originClass === 'loopback') loopback += 1;
-    else privateCount += 1;
+    if (item.originClass === 'loopback') {
+      loopback += 1;
+      loopbackOrigins.push(item.origin);
+    } else {
+      privateCount += 1;
+      privateOrigins.push(item.origin);
+    }
   }
 
   return {
     origins,
+    loopbackOrigins,
+    privateOrigins,
     loopback,
     private: privateCount,
     skipped_public: skippedPublic,
