@@ -28,6 +28,7 @@ import {
   isAllowlisted as isIdentityAllowlisted,
   type OAuthCredentials,
 } from '@vessel-agent/config';
+import { startDeadline } from '@vessel-agent/core';
 import { randomToken } from './session.js';
 
 /** 一个 OAuth 后端的运行配置（camelCase，ADR-019）；所有 kind 字段形状一致。 */
@@ -338,16 +339,25 @@ export async function refreshOAuthToken(input: {
   body.set('grant_type', 'refresh_token');
   body.set('refresh_token', input.refreshToken);
   try {
-    const response = await (input.fetchImpl ?? fetch)(input.tokenEndpoint, {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/x-www-form-urlencoded',
-        'user-agent': 'vessel-agent',
-      },
-      body: body.toString(),
-      signal: AbortSignal.timeout(input.timeoutMs ?? 3000),
-    });
+    // 0.64：截止时间用 core 的 `startDeadline`（普通 ref 定时器 + AbortController）。
+    // `AbortSignal.timeout` 在 bun 1.3.9 的空闲事件循环里可能根本不触发 —— 而「换 token」
+    // 正好是「一次挂起 await、没有别的定时器陪着」的形状，超时会变成永久挂起。
+    const deadline = startDeadline(input.timeoutMs ?? 3000);
+    let response: Response;
+    try {
+      response = await (input.fetchImpl ?? fetch)(input.tokenEndpoint, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/x-www-form-urlencoded',
+          'user-agent': 'vessel-agent',
+        },
+        body: body.toString(),
+        signal: deadline.signal,
+      });
+    } finally {
+      deadline.dispose();
+    }
     const payload: unknown = await response.json().catch(() => null);
     const access = readField(payload, 'access_token');
     if (typeof access !== 'string' || access === '') {

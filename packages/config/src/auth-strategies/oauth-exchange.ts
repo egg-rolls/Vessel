@@ -14,6 +14,7 @@
  * @module @vessel-agent/config/auth-strategies/oauth-exchange
  */
 
+import { startDeadline } from '@vessel-agent/core';
 import type {
   AuthorizeUrlParams,
   AuthStrategyEndpoints,
@@ -78,7 +79,6 @@ export async function exchangeCodeForIdentity(
   const fetchImpl = params.fetchImpl ?? fetch;
   const endpoints = params.endpoints ?? source.endpointsOverride ?? source.endpoints;
   const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const signal = (): AbortSignal => AbortSignal.timeout(timeoutMs);
 
   let accessToken: string | null = null;
   try {
@@ -90,6 +90,8 @@ export async function exchangeCodeForIdentity(
     body.set('code_verifier', params.codeVerifier);
     body.set('grant_type', 'authorization_code');
     let tokenResponse: Response;
+    // 每条腿各自一个截止时间：令牌端点挂住不能把用户腿的预算也吃掉。
+    const tokenDeadline = startDeadline(timeoutMs);
     try {
       tokenResponse = await fetchImpl(endpoints.token, {
         method: 'POST',
@@ -99,12 +101,15 @@ export async function exchangeCodeForIdentity(
           'user-agent': 'vessel-agent',
         },
         body: body.toString(),
-        signal: signal(),
+        signal: tokenDeadline.signal,
       });
     } catch (error) {
       // 不内插 thrown value：它可能带上请求细节。
       log(`${prefix}: token exchange request failed (${errorName(error)})`);
       return { ok: false, failure: 'token_exchange_failed' };
+    } finally {
+      // 不清掉就是悬挂定时器（core/timeout.ts 的约定）。
+      tokenDeadline.dispose();
     }
     const tokenPayload: unknown = await tokenResponse.json().catch(() => null);
     const tokenField = readField(tokenPayload, 'access_token');
@@ -137,6 +142,7 @@ export async function exchangeCodeForIdentity(
     }
 
     let userResponse: Response;
+    const userDeadline = startDeadline(timeoutMs);
     try {
       userResponse = await fetchImpl(endpoints.user, {
         method: 'GET',
@@ -145,11 +151,13 @@ export async function exchangeCodeForIdentity(
           authorization: `Bearer ${accessToken}`,
           'user-agent': 'vessel-agent',
         },
-        signal: signal(),
+        signal: userDeadline.signal,
       });
     } catch (error) {
       log(`${prefix}: ${source.userRequestLabel} request failed (${errorName(error)})`);
       return { ok: false, failure: 'user_fetch_failed' };
+    } finally {
+      userDeadline.dispose();
     }
     if (!userResponse.ok) {
       log(`${prefix}: ${source.userRequestLabel} failed status=${String(userResponse.status)}`);
