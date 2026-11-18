@@ -6,6 +6,12 @@
 import { isIP } from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import {
+  describeRegisteredAuthKinds,
+  getAuthStrategy,
+  PASSWORD_STRATEGY_KIND,
+  requiresPublicOrigin,
+} from './auth-strategies/index.js';
 import { validateTeamPolicy } from './team-policy.js';
 import type {
   AttentionConfig,
@@ -1470,7 +1476,11 @@ function publicOriginsEntryError(value: unknown): string | null {
   return null;
 }
 
-const AUTH_BACKEND_KINDS = ['github_oauth', 'password'] as const;
+/**
+ * 登录后端种类**不在校验器里枚举**：合法值只由策略注册表决定
+ * （`./auth-strategies/`）。加一个 provider = 加一个策略文件 + 注册一行，
+ * 这里一行都不用改。
+ */
 
 export function validateAuthSettings(
   auth: AuthConfig,
@@ -1571,17 +1581,21 @@ export function validateAuthSettings(
           return;
         }
         const kind = entry.kind;
-        if (
-          kind !== undefined &&
-          !AUTH_BACKEND_KINDS.includes(kind as 'github_oauth' | 'password')
-        ) {
+        // kind 缺省 = 缺省策略（github_oauth，0.56 P1 的写法）。
+        const strategy = getAuthStrategy(typeof kind === 'string' ? kind : undefined);
+        if (strategy === null) {
           errors.push({
             path: `${prefix}.kind`,
-            message: `${prefix}.kind must be one of: ${AUTH_BACKEND_KINDS.join(', ')}`,
+            message:
+              `${prefix}.kind: ${JSON.stringify(kind)} is not a registered login backend. ` +
+              `Registered kinds: ${describeRegisteredAuthKinds()}. ` +
+              "Fix: change this backend's kind; to support a new provider add one strategy file " +
+              'under packages/config/src/auth-strategies/ and register it in registry.ts ' +
+              '(no change to this validator).',
             value: kind,
           });
         }
-        if (kind === 'password') {
+        if (strategy !== null && strategy.kind === PASSWORD_STRATEGY_KIND) {
           // 口令后端：hash / TOTP 密钥都只给**环境变量名**，值永不入配置。
           if (entry.username !== undefined && !isNonEmptyStringValue(entry.username)) {
             errors.push({
@@ -1595,22 +1609,35 @@ export function validateAuthSettings(
           if (entry.totpSecretEnv !== undefined) {
             validateEnvName(`${prefix}.totpSecretEnv`, entry.totpSecretEnv, errors);
           }
-          for (const forbidden of ['password', 'passwordHash', 'totpSecret', 'recoveryCodes']) {
-            if (entry[forbidden] === undefined) continue;
+          for (const field of ['password', 'passwordHash', 'totpSecret', 'recoveryCodes']) {
+            if (entry[field] === undefined) continue;
             errors.push({
-              path: `${prefix}.${forbidden}`,
+              path: `${prefix}.${field}`,
               message:
-                `${prefix}.${forbidden} must not be stored in config. ` +
+                `${prefix}.${field} must not be stored in config. ` +
                 'Fix: delete it — either set the password through the one-time bootstrap code ' +
                 '(printed once at startup) or export an argon2id hash and point ' +
                 `${prefix}.passwordHashEnv at that env var.`,
             });
           }
-        } else {
+          if (entry.allowUserIds !== undefined) {
+            // 口令后端的身份是登录名，没有白名单；配了就是误解了字段语义。
+            errors.push({
+              path: `${prefix}.allowUserIds`,
+              message:
+                `${prefix}.allowUserIds (kind: ${strategy.kind}): ${strategy.allowUserIdsShape.describe}. ` +
+                'Fix: delete this field — the password backend allows exactly one login name ' +
+                `(${prefix}.username)` +
+                '; use an OAuth backend if you want an id allowlist.',
+              value: entry.allowUserIds,
+            });
+          }
+        } else if (strategy !== null) {
+          const shape = strategy.allowUserIdsShape;
           if (!isNonEmptyStringValue(entry.clientId)) {
             errors.push({
               path: `${prefix}.clientId`,
-              message: `${prefix}.clientId must be a non-empty string (GitHub OAuth App client id)`,
+              message: `${prefix}.clientId must be a non-empty string (the ${strategy.label} OAuth app client id)`,
             });
           }
           validateEnvName(`${prefix}.clientSecretEnv`, entry.clientSecretEnv, errors);
@@ -1624,20 +1651,22 @@ export function validateAuthSettings(
             if (!Array.isArray(entry.allowUserIds) || entry.allowUserIds.length === 0) {
               errors.push({
                 path: `${prefix}.allowUserIds`,
-                message: `${prefix}.allowUserIds must be a non-empty array of numeric GitHub user ids`,
+                message:
+                  `${prefix}.allowUserIds (kind: ${strategy.kind}): must be a non-empty array of ` +
+                  `${shape.describe}. Example: ${shape.examples[0] ?? 'n/a'}`,
               });
             } else {
               entry.allowUserIds.forEach((id, idIndex) => {
-                const ok =
-                  (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) ||
-                  (typeof id === 'string' && /^[0-9]+$/.test(id.trim()));
-                if (!ok) {
-                  errors.push({
-                    path: `${prefix}.allowUserIds[${idIndex}]`,
-                    message: `${prefix}.allowUserIds[${idIndex}] must be a numeric GitHub user id`,
-                    value: id,
-                  });
-                }
+                const reason = shape.rejectReason(id);
+                if (reason === null) return;
+                errors.push({
+                  path: `${prefix}.allowUserIds[${idIndex}]`,
+                  message:
+                    `${prefix}.allowUserIds[${idIndex}] (kind: ${strategy.kind}): ` +
+                    `${JSON.stringify(id)} is not valid there — ${reason}. ` +
+                    `Expected ${shape.describe}. Example: ${shape.examples[0] ?? 'n/a'}`,
+                  value: id,
+                });
               });
             }
           }
@@ -1647,8 +1676,7 @@ export function validateAuthSettings(
               path: `${prefix}.clientSecret`,
               message:
                 `${prefix}.clientSecret must not be stored in config. ` +
-                `Fix: delete it, export the secret as an env var, and set ${prefix}.clientSecretEnv to that name ` +
-                '(e.g. VESSEL_GITHUB_OAUTH_SECRET).',
+                `Fix: delete it, export the secret as an env var, and set ${prefix}.clientSecretEnv to that name.`,
             });
           }
         }
@@ -1657,9 +1685,11 @@ export function validateAuthSettings(
       const backends = raw.backends.filter(isPlainObject);
       const enabledBackends = raw.enabled === false ? [] : backends;
       // 只有 OAuth 后端需要来源白名单（redirect_uri 的唯一来源）；口令后端不需要。
-      const oauthBackends = enabledBackends.filter(
-        (entry) => entry.kind === undefined || entry.kind === 'github_oauth',
-      );
+      // 判据来自注册表，不是这里的一份 kind 清单。
+      const oauthBackends = enabledBackends.filter((entry) => {
+        const strategy = getAuthStrategy(typeof entry.kind === 'string' ? entry.kind : undefined);
+        return strategy !== null && requiresPublicOrigin(strategy.kind);
+      });
       const hasPublicOrigins =
         raw.publicOrigin !== undefined ||
         (Array.isArray(raw.publicOrigins) && raw.publicOrigins.length > 0);
@@ -1667,7 +1697,7 @@ export function validateAuthSettings(
         errors.push({
           path: 'auth.publicOrigins',
           message:
-            'auth.publicOrigins (or auth.publicOrigin) is required when a github_oauth backend is ' +
+            'auth.publicOrigins (or auth.publicOrigin) is required when an OAuth backend is ' +
             'configured: it is the only source of the OAuth redirect_uri (never derived from request ' +
             'headers). Example: auth.publicOrigins: ["https://egg-rolls.top", "http://127.0.0.1:8642"]',
         });

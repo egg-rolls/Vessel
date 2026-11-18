@@ -4,21 +4,36 @@
  * 本解析器不抛错、也不读密钥：配置写了一半只会降级成「未启用登录」并给告警 ——
  * 把运维锁在一个本来能用的本地 WebUI 外面，比少一个功能更糟。
  *
+ * 0.62：后端种类与 `allow_user_ids` 的语义**全部来自策略注册表**
+ * （`./auth-strategies/`），这里不再有 `kind` 白名单，也不再有「GitHub 专用」的
+ * id 归一规则。
+ *
  * @module @vessel-agent/config/auth
  */
 
 import * as path from 'node:path';
-import type { AuthBackendConfig, AuthConfig } from './types.js';
+import {
+  describeRegisteredAuthKinds,
+  getAuthStrategy,
+  normalizeAllowUserIds,
+  PASSWORD_STRATEGY_KIND,
+  requiresPublicOrigin,
+} from './auth-strategies/index.js';
+import type { AuthConfig } from './types.js';
 
-/** Resolved backend: allowlist ids normalized to decimal strings. */
-export interface ResolvedGitHubBackend {
-  kind: 'github_oauth';
+/** Resolved OAuth backend: allowlist ids normalized by the strategy's shape. */
+export interface ResolvedOAuthBackend {
+  /** `auth.backends[].kind` 的生效值（缺省已填成 `github_oauth`）。 */
+  kind: string;
   clientId: string;
   /** Env var NAME of the client secret (never the value). */
   clientSecretEnv: string;
   allowUserIds: string[];
   label?: string;
 }
+
+/** 0.56 名称的兼容别名。 */
+export type ResolvedGitHubBackend = ResolvedOAuthBackend;
 
 /**
  * Resolved password backend。值（口令 hash / TOTP 密钥）**不在这里**：
@@ -32,7 +47,7 @@ export interface ResolvedPasswordBackend {
   label?: string;
 }
 
-export type ResolvedAuthBackend = ResolvedGitHubBackend | ResolvedPasswordBackend;
+export type ResolvedAuthBackend = ResolvedOAuthBackend | ResolvedPasswordBackend;
 
 export interface ResolvedAuthSession {
   idleMinutes: number;
@@ -99,70 +114,86 @@ function mergeOriginList(single: unknown, list: unknown): string[] {
   return merged;
 }
 
-function normalizeUserIds(raw: Array<number | string> | undefined): string[] {
-  if (!Array.isArray(raw)) return [];
-  const ids: string[] = [];
-  for (const entry of raw) {
-    const value = typeof entry === 'number' ? String(entry) : entry.trim();
-    // Numeric ids only: /user emails are mutable and NOT an identity here.
-    if (/^[0-9]+$/.test(value)) ids.push(value);
-  }
-  return ids;
+/** 读取一个「可能是任何东西」的配置值（YAML 进来时没有类型保证）。 */
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
+/**
+ * 单条 backend 的解析。入参是**未校验的原始记录**：YAML 里什么都可能写，
+ * 这里只降级 + 告警，不抛错（校验器负责把错误说清楚）。
+ */
 function resolveBackend(
-  raw: AuthBackendConfig,
+  entry: Record<string, unknown>,
   warnings: string[],
   index: number,
 ): ResolvedAuthBackend | null {
-  const label =
-    typeof raw.label === 'string' && raw.label.trim() !== '' ? raw.label.trim() : undefined;
-  if (raw.kind === 'password') {
-    const username =
-      typeof raw.username === 'string' && raw.username.trim() !== ''
-        ? raw.username.trim()
-        : 'admin';
-    const hashEnv =
-      typeof raw.passwordHashEnv === 'string' && raw.passwordHashEnv.trim() !== ''
-        ? raw.passwordHashEnv.trim()
-        : undefined;
-    const totpEnv =
-      typeof raw.totpSecretEnv === 'string' && raw.totpSecretEnv.trim() !== ''
-        ? raw.totpSecretEnv.trim()
-        : undefined;
-    return {
-      kind: 'password',
-      username,
-      ...(hashEnv !== undefined ? { passwordHashEnv: hashEnv } : {}),
-      ...(totpEnv !== undefined ? { totpSecretEnv: totpEnv } : {}),
-      ...(label !== undefined ? { label } : {}),
-    };
+  const where = `auth.backends[${String(index)}]`;
+  const kindRaw = entry.kind;
+  if (kindRaw !== undefined && typeof kindRaw !== 'string') {
+    warnings.push(`${where}: kind must be a string, backend ignored`);
+    return null;
   }
-  const clientId = typeof raw.clientId === 'string' ? raw.clientId.trim() : '';
-  const secretEnv = typeof raw.clientSecretEnv === 'string' ? raw.clientSecretEnv.trim() : '';
-  if (clientId === '' || secretEnv === '') {
+  const kind = typeof kindRaw === 'string' ? kindRaw.trim() : undefined;
+  const strategy = getAuthStrategy(kind === '' ? undefined : kind);
+  if (strategy === null) {
+    // 校验器会把这条报成错误；这里只是让「没有校验器」的调用方也能读懂。
     warnings.push(
-      `auth.backends[${String(index)}]: clientId / clientSecretEnv missing, backend ignored`,
+      `${where}: unknown kind "${String(kindRaw)}", backend ignored. ` +
+        `Registered kinds: ${describeRegisteredAuthKinds()}`,
     );
     return null;
   }
-  const allowUserIds = normalizeUserIds(raw.allowUserIds);
+  const label = asString(entry.label);
+  if (strategy.kind === PASSWORD_STRATEGY_KIND) {
+    const username = asString(entry.username);
+    const hashEnv = asString(entry.passwordHashEnv);
+    const totpEnv = asString(entry.totpSecretEnv);
+    return {
+      kind: 'password',
+      username: username === '' ? 'admin' : username,
+      ...(hashEnv !== '' ? { passwordHashEnv: hashEnv } : {}),
+      ...(totpEnv !== '' ? { totpSecretEnv: totpEnv } : {}),
+      ...(label !== '' ? { label } : {}),
+    };
+  }
+  const clientId = asString(entry.clientId);
+  const secretEnv = asString(entry.clientSecretEnv);
+  if (clientId === '' || secretEnv === '') {
+    warnings.push(
+      `${where} (kind: ${strategy.kind}): clientId / clientSecretEnv missing, backend ignored`,
+    );
+    return null;
+  }
+  const rawIds = Array.isArray(entry.allowUserIds) ? entry.allowUserIds : undefined;
+  const { ids: allowUserIds, rejected } = normalizeAllowUserIds(strategy, rawIds);
+  if (rejected.length > 0) {
+    const shape = strategy.allowUserIdsShape;
+    warnings.push(
+      `${where} (kind: ${strategy.kind}): ignoring ${String(rejected.length)} unusable ` +
+        `allowUserIds entr${rejected.length === 1 ? 'y' : 'ies'} ` +
+        `(expected ${shape.describe}` +
+        (shape.examples.length > 0 ? `, e.g. ${shape.examples[0] ?? ''}` : '') +
+        ')',
+    );
+  }
   if (allowUserIds.length === 0) {
     // Nothing to allow = nobody could log in; say so instead of silently refusing.
+    const shape = strategy.allowUserIdsShape;
     warnings.push(
-      'auth.backends[' +
-        String(index) +
-        ']: allowUserIds is empty, login backend ignored ' +
-        '(set the numeric GitHub user id, e.g. 174765587)',
+      `${where} (kind: ${strategy.kind}): allowUserIds is empty, login backend ignored ` +
+        `(set ${shape.describe}` +
+        (shape.examples.length > 0 ? `, e.g. ${shape.examples[0] ?? ''}` : '') +
+        ')',
     );
     return null;
   }
   return {
-    kind: 'github_oauth',
+    kind: strategy.kind,
     clientId,
     clientSecretEnv: secretEnv,
     allowUserIds,
-    ...(label !== undefined ? { label } : {}),
+    ...(label !== '' ? { label } : {}),
   };
 }
 
@@ -209,37 +240,26 @@ export function resolveAuthSettings(input: {
   const backends: ResolvedAuthBackend[] = [];
   if (raw?.enabled !== false && Array.isArray(raw?.backends)) {
     raw.backends.forEach((entry, index) => {
-      if (typeof entry !== 'object' || entry === null) {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
         warnings.push(`auth.backends[${String(index)}]: not an object, ignored`);
         return;
       }
-      if (entry.kind !== undefined && entry.kind !== 'github_oauth' && entry.kind !== 'password') {
-        warnings.push(
-          'auth.backends[' +
-            String(index) +
-            ']: unsupported kind ' +
-            String(entry.kind) +
-            ', ignored',
-        );
-        return;
-      }
-      const resolved = resolveBackend(entry, warnings, index);
+      const resolved = resolveBackend(entry as Record<string, unknown>, warnings, index);
       if (resolved !== null) backends.push(resolved);
     });
   }
 
   if (backends.length > 0 && publicOrigins.length === 0) {
-    // redirect_uri has exactly one source kind: the whitelist; without it the OAuth
+    // redirect_uri has exactly one source: the whitelist; without it the OAuth
     // backend would point anywhere.
-    // 口令后端不需要 redirect_uri，所以只摘掉 github_oauth 那一项 —— 配了口令后端却
+    // 口令后端不需要 redirect_uri，所以只摘掉 OAuth 项 —— 配了口令后端却
     // 因为少一个 publicOrigin 就连登录一起关掉，就是又一次「配置半截 ⇒ 把自己锁在外」。
-    const githubCount = backends.filter((backend) => backend.kind === 'github_oauth').length;
-    if (githubCount > 0) {
+    if (backends.some((backend) => requiresPublicOrigin(backend.kind))) {
       warnings.push(
-        'auth.publicOrigin / auth.publicOrigins is missing or invalid: github_oauth backends are ' +
+        'auth.publicOrigin / auth.publicOrigins is missing or invalid: OAuth backends are ' +
           'disabled (redirect_uri would be undefined). Password login and the loopback WebUI keep working.',
       );
-      const kept = backends.filter((backend) => backend.kind !== 'github_oauth');
+      const kept = backends.filter((backend) => !requiresPublicOrigin(backend.kind));
       backends.length = 0;
       backends.push(...kept);
     }
