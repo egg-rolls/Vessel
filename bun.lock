@@ -239,9 +239,19 @@
       "dependencies": {
         "@vessel-agent/config": "workspace:*",
         "@vessel-agent/core": "workspace:*",
+        "@vessel-agent/plugin-sdk": "workspace:*",
+        "@vessel-agent/plugin-ui": "workspace:*",
+        "react": "^19.1.0",
+        "react-dom": "^19.1.0",
       },
       "devDependencies": {
+        "@tailwindcss/vite": "^4.3.3",
+        "@types/react": "^19.1.0",
+        "@types/react-dom": "^19.1.0",
+        "@vitejs/plugin-react": "^4.6.0",
+        "tailwindcss": "^4.3.3",
         "typescript": "^7.0.2",
+        "vite": "^7.0.0",
       },
     },
     "plugins/provider/openai": {

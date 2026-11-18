@@ -9,7 +9,8 @@
     ".": "./src/index.ts"
   },
   "files": [
-    "src"
+    "src",
+    "web"
   ],
   "license": "MIT",
   "repository": {
@@ -21,14 +22,26 @@
     "bun": ">=1.3.9"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:ui": "tsc -p tsconfig.web.json --noEmit && vite build && vite build --config vite.config.embed.ts",
+    "typecheck:ui": "tsc -p tsconfig.web.json --noEmit"
   },
   "dependencies": {
     "@vessel-agent/config": "workspace:*",
-    "@vessel-agent/core": "workspace:*"
+    "@vessel-agent/core": "workspace:*",
+    "@vessel-agent/plugin-sdk": "workspace:*",
+    "@vessel-agent/plugin-ui": "workspace:*",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
-    "typescript": "^7.0.2"
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.6.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^7.0.0"
   },
   "vessel": {
     "id": "model-registry",
@@ -37,9 +50,67 @@
     "engines": {
       "vessel": ">=0.54.0 <1.0.0"
     },
-    "description": "模型管理：厂商 / 别名 / 默认模型注册表 + 加密凭证库 + 连通性测试（管理 API，P1 无 UI 贡献）",
-    "side": "backend",
+    "description": "模型管理：厂商 / 别名 / 默认模型注册表 + 加密凭证库 + 连通性测试（管理 API + vendors/credentials 管理页）",
+    "side": "both",
+    "ui": {
+      "dir": "web",
+      "embed": {
+        "entry": "embed/index.mjs",
+        "css": "embed/index.css",
+        "runtime": {
+          "react": "^19",
+          "sdk": "^1"
+        }
+      }
+    },
+    "activationEvents": [
+      "onPage:vendors",
+      "onPage:credentials"
+    ],
     "contributes": {
+      "i18n": {
+        "en": {
+          "nav.group": "Model Registry",
+          "nav.vendors": "Vendors",
+          "nav.credentials": "Credentials"
+        },
+        "zh-CN": {
+          "nav.group": "模型管理",
+          "nav.vendors": "厂商与模型",
+          "nav.credentials": "凭证"
+        }
+      },
+      "navGroups": [
+        {
+          "id": "plugin:model-registry",
+          "title": "Model Registry",
+          "titleKey": "nav.group",
+          "icon": "settings",
+          "order": 45
+        }
+      ],
+      "pages": [
+        {
+          "id": "vendors",
+          "title": "Vendors",
+          "titleKey": "nav.vendors",
+          "nav": "plugin:model-registry",
+          "icon": "hub",
+          "order": 10,
+          "entry": "vendors.html",
+          "component": "VendorsView"
+        },
+        {
+          "id": "credentials",
+          "title": "Credentials",
+          "titleKey": "nav.credentials",
+          "nav": "plugin:model-registry",
+          "icon": "settings",
+          "order": 11,
+          "entry": "credentials.html",
+          "component": "CredentialsView"
+        }
+      ],
       "rpc": [
         {
           "name": "list",
