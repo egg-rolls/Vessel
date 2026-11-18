@@ -217,6 +217,8 @@ export function toMemberStatus(record: MemberRecord): MemberStatus {
     ...(record.currentTool !== undefined ? { current_tool: record.currentTool } : {}),
     ...(record.lastSeen !== undefined ? { last_seen: record.lastSeen } : {}),
     ...(record.usage !== undefined ? { usage: record.usage } : {}),
+    // 显式 pin 只读外露（model-registry A+B）；缺省跟随默认，不写键。
+    ...(record.model !== undefined ? { model: record.model } : {}),
   };
 }
 

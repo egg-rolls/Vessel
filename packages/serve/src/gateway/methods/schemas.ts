@@ -555,6 +555,8 @@ export const agentInfoSchema = {
     team_id: { type: 'string' },
     epoch: { type: 'integer', minimum: 0 },
     last_seen: { type: 'number' },
+    // 显式模型 pin（只读 additive，model-registry A+B）；缺省 = 跟随节点默认。
+    model: { type: 'string' },
     /**
      * 0.55 additive：这具 body 的硬错误闸（不可重试的 provider 错误之后停摆）。
      *
@@ -817,6 +819,8 @@ export const teamMemberSchema = {
     epoch: { type: 'integer', minimum: 0 },
     // 0.21：epoch ms；旧数据 / 从未活跃时缺失。
     last_seen: { type: 'number' },
+    // 显式模型 pin（只读 additive，model-registry A+B）；缺省 = 跟随节点默认。
+    model: { type: 'string' },
     body_history: { type: 'array', items: agentBodyHistoryEntrySchema },
   },
 };
@@ -1033,8 +1037,9 @@ export const teamDetailSchema = {
 // ── 0.25：canonical agent 生命周期（agents.create|update|close） ──
 
 /**
- * 成员对外状态（MemberStatus）。只声明对外字段；
- * model / system_prompt 不进入 DTO（只落快照，由下一次 spawn 使用）。
+ * 成员对外状态（MemberStatus）。只声明对外字段；system_prompt 不进 DTO。
+ * model 例外：显式 pin 只读外露（model-registry A+B 用户批准），缺省 = 跟随默认；
+ * 写路径仍只走 agents.create/update，live body 实际用的模型由 system_context 表达。
  */
 export const agentStatusSchema = {
   type: 'object',
@@ -1068,6 +1073,8 @@ export const agentStatusSchema = {
     epoch: { type: 'integer', minimum: 0 },
     current_tool: { type: 'string' },
     last_seen: { type: 'number' },
+    // 显式模型 pin（只读 additive，model-registry A+B）；缺省 = 跟随节点默认。
+    model: { type: 'string' },
     usage: usageSchema,
     body_history: { type: 'array', items: agentBodyHistoryEntrySchema },
   },

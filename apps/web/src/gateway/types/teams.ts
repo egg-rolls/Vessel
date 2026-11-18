@@ -57,6 +57,8 @@ export interface TeamMember {
   visibility: 'private' | 'team' | 'tenant';
   state?: string;
   epoch?: number;
+  /** 显式模型 pin（只读 additive，model-registry A+B）；缺省 = 跟随节点默认。 */
+  model?: string;
   /** S3 R1：已退役 Body，≤20；缺失时回退到事件累积。 */
   body_history?: TeamBodyHistoryEntry[];
   /** 0.27 additive：live body 列表；缺失时只有 `session_id` 一个 body。 */

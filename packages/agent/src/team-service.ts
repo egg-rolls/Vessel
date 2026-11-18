@@ -1694,6 +1694,8 @@ function toMemberSummary(status: MemberStatus): TeamMemberSummary {
     state: status.state,
     epoch: status.epoch ?? 0,
     ...(status.last_seen !== undefined ? { last_seen: status.last_seen } : {}),
+    // 显式 pin 只读外露（model-registry A+B）；缺省跟随默认，不写键。
+    ...(status.model !== undefined ? { model: status.model } : {}),
     ...(blocked !== undefined ? { blocked } : {}),
     ...(status.body_history !== undefined && status.body_history.length > 0
       ? { body_history: status.body_history }

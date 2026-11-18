@@ -7,10 +7,11 @@
  * 文案写明生效点。空 = 不修改（wire 拒空串 model；unpin 属另行批准的语义变更，本期不做）。
  *
  * 入口挂在 SessionHeader 标题行：会话带归属成员（`session.agent`）才显示；
- * 「当前模型」读 `sessions.get.system_context.model`（这具 body 最后看到的模型），
- * 不是成员 pin —— 当前 gateway 的 agents.* 读 DTO 不返回 record.model，不伪造 pin 现值。
+ * chip「当前模型」读 `sessions.get.system_context.model`（这具 body 最后看到的模型）。
+ * 打开弹窗时经 `agents.get` 读显式 pin（model-registry A+B 用户批准，只读 DTO），
+ * 有 pin 则预填选择器并展示「当前固定」；读失败诚实降级（不显示 pin、不预填）。
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ModalShell } from '../../components/Modal';
 import { ModelPicker } from '../../components/ModelPicker';
 import { useToast } from '../../components/ToastProvider';
@@ -37,14 +38,37 @@ export function MemberModelSwitch({
   const { current } = useNodes();
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
+  const [pin, setPin] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 打开序号：防止上一次打开的迟到 fetch 覆盖本次状态。
+  const openSeq = useRef(0);
   const name = agentName?.trim() || agentId;
   const canWrite = hasToken && connectionState === 'open';
   const knownModel = currentModel !== undefined && currentModel !== '' ? currentModel : undefined;
 
+  const openModal = () => {
+    const seq = ++openSeq.current;
+    setValue('');
+    setPin(undefined);
+    setError(null);
+    setOpen(true);
+    // 显式 pin 只读回显（A+B）；agents.get 不可用 / 旧 gateway 无字段 → 静默降级。
+    client
+      .rpc<{ agent?: { model?: string } }>('agents.get', { agent_id: agentId })
+      .then((result) => {
+        if (seq !== openSeq.current) return;
+        const model = result.agent?.model;
+        if (typeof model === 'string' && model !== '') {
+          setPin(model);
+          setValue(model);
+        }
+      })
+      .catch(() => {});
+  };
+
   const submit = async () => {
-    if (busy || value === '') return;
+    if (busy || value === '' || value === pin) return;
     setBusy(true);
     setError(null);
     try {
@@ -67,11 +91,7 @@ export function MemberModelSwitch({
           size="small"
           disabled={!canWrite}
           aria-label={t('chat.memberModel.tooltip')}
-          onClick={() => {
-            setValue('');
-            setError(null);
-            setOpen(true);
-          }}
+          onClick={openModal}
         >
           {t('chat.memberModel.button')}
           {knownModel !== undefined && (
@@ -91,6 +111,11 @@ export function MemberModelSwitch({
         >
           <h2 className="modal-title">{t('chat.memberModel.title', { name })}</h2>
           <div className="flex flex-col gap-2">
+            {pin !== undefined && (
+              <p className="mt-1 mb-0 text-sm text-muted">
+                {t('chat.memberModel.currentPin', { model: pin })}
+              </p>
+            )}
             <p className="mt-1 mb-0 text-sm text-muted">
               {knownModel !== undefined
                 ? t('chat.memberModel.currentBody', { model: knownModel })
@@ -120,7 +145,7 @@ export function MemberModelSwitch({
               </Button>
               <Button
                 variant="primary"
-                disabled={busy || value === ''}
+                disabled={busy || value === '' || value === pin}
                 onClick={() => void submit()}
               >
                 {busy ? t('common.processing') : t('team.form.submitEdit')}

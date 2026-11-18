@@ -8,12 +8,13 @@ export interface ModelEntryDto {
   promptCache?: boolean;
 }
 
-/** list.vendors[] 投影（注意：P1 list 不回显 apiKeyEnv，编辑表单须披露）。 */
+/** list.vendors[] 投影（apiKeyEnv = 环境变量名，非密钥值；A+B 用户批准只读回显）。 */
 export interface VendorDto {
   id: string;
   protocol: string;
   baseUrl?: string;
   credentialRef?: string;
+  apiKeyEnv?: string;
   models: Record<string, ModelEntryDto>;
   inUse: boolean;
 }

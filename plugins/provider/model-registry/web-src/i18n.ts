@@ -66,8 +66,6 @@ const EN = {
   'vendors.form.credentialIdHint':
     'Add the value on the Credentials page; only the reference is stored here, never the value',
   'vendors.form.apiKeyEnvName': 'Environment variable name',
-  'vendors.form.apiKeyEnvGap':
-    'Note: list does not return apiKeyEnv. Saving uses this form as-is — leaving the field empty clears any previously configured value.',
   'vendors.form.models': 'Models',
   'vendors.form.modelsHint':
     'At least one model; wire model ids may contain / (e.g. dashscope/qwen4-max)',
@@ -191,8 +189,6 @@ const ZH: Record<MessageKey, string> = {
   'vendors.form.credentialId': '凭证 ID',
   'vendors.form.credentialIdHint': '值在「凭证」页添加；这里只存引用，绝不存值',
   'vendors.form.apiKeyEnvName': '环境变量名',
-  'vendors.form.apiKeyEnvGap':
-    '注意：list 不回显 apiKeyEnv。保存以本表单为准——留空保存会清除原先配置的值。',
   'vendors.form.models': '模型清单',
   'vendors.form.modelsHint': '至少 1 个模型；wire model id 可含 /（如 dashscope/qwen4-max）',
   'vendors.form.modelId': 'wire model id',

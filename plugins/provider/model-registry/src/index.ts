@@ -125,6 +125,8 @@ async function handleList(): Promise<Record<string, unknown>> {
     protocol: vendor.protocol,
     ...(vendor.baseUrl !== undefined ? { baseUrl: vendor.baseUrl } : {}),
     ...(vendor.credentialRef !== undefined ? { credentialRef: vendor.credentialRef } : {}),
+    // apiKeyEnv 是环境变量名（非密钥值），只读回显供编辑表单预填（A+B 用户批准）。
+    ...(vendor.apiKeyEnv !== undefined ? { apiKeyEnv: vendor.apiKeyEnv } : {}),
     models: vendor.models,
     inUse: vendorReferences(snapshot, vendor.id).length > 0,
   }));
