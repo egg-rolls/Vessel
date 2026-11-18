@@ -142,6 +142,17 @@ verifier 的硬约束：
 - **模型审查是 search，不是 gate**：review 产出证据与契约修正；验收结论必须落在可复现的读数上（构建产物、真实数据形态、用户可见行为），不能落在「我跑过一遍」上。
 - **工具版本以锁文件为准**：`bun install --frozen-lockfile` 或 `bunx <pkg>@<lock 版本>`，不用漂移的本地版本定义基线。
 
+## 工作区（git worktree）
+
+一个任务一个 worktree，做完立刻删 —— 单个 `node_modules` 是 259 MB / 11,287 个文件，而源码加起来只有 18 MB；留 N 个废弃 worktree 就是 260 MB × N / 百万文件。细节与沙箱实测见 docs 仓的 `docs/lessons/L-048-no-shared-node-modules-in-worktrees.md`（本仓 `docs/` 下没有 lessons 目录）。
+
+- **位置与分支**：`worktrees/<topic>`（仓库目录**之外**的同级目录，与现有 `worktrees/*` 一致；别建在仓库里），分支名 `feat|fix|chore/<topic>`，从**本地 `main`** 起。
+- **不共享依赖**：worktree 里自己 `bun install`（`apps/web` 另需 `bun install --cwd apps/web`）。**不得**用 junction / 硬链接 /「共享副本」把 `node_modules` 指回主仓：worktree 里写 `.cache` 或装包会改**主仓**，而 `git status` 仍然是干净的（node_modules 被 gitignore）⇒ 静默污染，等下次构建报错才发现；并且 `import.meta.resolve('@vessel-agent/core')` 会解析到**主仓的 `packages/core`** ⇒ 在分支里跑的验证验的是 main 的代码。
+- **收尾必删**：任务结束立刻 `git worktree remove --force <path>`（实测连 `node_modules` 一起删，是该场景下安全的删法）。
+- **删 worktree 的禁区**：不要用 `rm -rf <wt>/node_modules/`（**尾斜杠**）或 `rm -rf <wt>/node_modules/*`（**glob**）—— 这两个会**清空主仓 `node_modules`**。只用这四种：`git worktree remove --force <path>`、`Remove-Item <wt>/node_modules -Recurse -Force`、`cmd rd /s /q <wt>/node_modules`、`git clean -xdff`（后三种只删链接本体）。
+- **批量清理废弃 worktree**：先按「分支是否已合进 main」分类（`git branch --merged main`），已合的直接删；对不上分支的先把源码打包（**排除 `node_modules`**）再删。**不要用文件 mtime 判断** —— `git checkout` 会刷新 mtime，实测会把全部误判成「要保留」。
+- **大量删除别在 WSL / git-bash 里跑**：`/mnt/d` 上的海量小文件（`node_modules`）比原生慢几十倍，用原生 Windows（`cmd /c rd /s /q` 或 `robocopy <空目录> <目标> /MIR`）。
+
 ## 消息不变量（2026-11-14 用户裁定，**产品核心设计，两条都不得违反**）
 
 1. **可见性对等**：用户在 UI 看到的消息，必须包含**会话中 agent 看到的全部消息**（不许有「agent 知道、用户看不见」的信息）。
