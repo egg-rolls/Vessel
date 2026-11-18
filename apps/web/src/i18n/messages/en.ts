@@ -1853,6 +1853,28 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'auth.signedInAsTitle': 'Current session identity: {user}',
   'auth.logout': 'Sign out',
   'auth.sessionRequired': 'Session expired or missing: sign in with GitHub again.',
+
+  // Account popover in the header: identity / current node / sign-in method / settings / sign out.
+  // No command-line text in here (constitution §14): only what happened and what can be clicked.
+  'account.trigger.signedIn': 'Account menu: {user}',
+  'account.trigger.anonymous': 'Not signed in: open sign-in',
+  'account.panel': 'Account',
+  'account.anonymous': 'Not signed in',
+  'account.role': 'Role: {role}',
+  'account.team': 'Team: {team}',
+  'account.node.title': 'Current node',
+  'account.node.none': 'No node connected yet',
+  'account.node.switch': 'Switch node',
+  'account.node.state.up': 'online',
+  'account.node.state.connecting': 'connecting',
+  'account.node.state.down': 'offline',
+  'account.node.state.unknown': 'state unknown',
+  'account.auth.title': 'Sign-in method',
+  'account.auth.relogin': 'Sign in again / switch account',
+  'account.auth.empty': 'This deployment has no sign-in method enabled.',
+  'account.auth.signOutFirst': 'signs you out first',
+  'account.settings': 'Settings',
+
   'auth.csrfRejected':
     'The request had no valid CSRF token (another tab may have rotated it): reload and retry.',
   'auth.error.state_invalid':

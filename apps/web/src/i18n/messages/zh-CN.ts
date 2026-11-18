@@ -1765,6 +1765,28 @@ export const messages = {
   'auth.signedInAsTitle': '当前会话身份：{user}',
   'auth.logout': '登出',
   'auth.sessionRequired': '会话已失效或未登录：请重新用 GitHub 登录。',
+
+  // 头部账号浮层（0.6x）：身份 / 当前节点 / 登录方式 / 设置 / 登出。
+  // 这里**不出现命令行文本**（宪法十四条）：只说「发生了什么 + 能点什么」。
+  'account.trigger.signedIn': '账号菜单：{user}',
+  'account.trigger.anonymous': '未登录：打开登录入口',
+  'account.panel': '账号',
+  'account.anonymous': '未登录',
+  'account.role': '角色：{role}',
+  'account.team': '团队：{team}',
+  'account.node.title': '当前节点',
+  'account.node.none': '还没有连接节点',
+  'account.node.switch': '切换节点',
+  'account.node.state.up': '在线',
+  'account.node.state.connecting': '连接中',
+  'account.node.state.down': '离线',
+  'account.node.state.unknown': '状态未知',
+  'account.auth.title': '登录方式',
+  'account.auth.relogin': '重新登录 / 切换账号',
+  'account.auth.empty': '这个部署没有启用登录方式。',
+  'account.auth.signOutFirst': '会先登出',
+  'account.settings': '设置',
+
   'auth.csrfRejected': '请求缺少有效的 CSRF 令牌（可能是另一个标签页轮换了它）：请刷新页面后重试。',
   'auth.error.state_invalid': '登录状态校验失败（state 不匹配、已过期或已被使用）：请重新登录。',
   'auth.error.code_missing': 'GitHub 没有返回授权码：请重新登录。',
