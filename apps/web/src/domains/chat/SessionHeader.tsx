@@ -12,6 +12,7 @@ import {
   agentTree,
 } from '../../state/agents';
 import { sessionTitle } from '../../state/sessions';
+import { MemberModelSwitch } from './MemberModelSwitch';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -205,6 +206,15 @@ export function SessionHeader({
               {session ? title : truncate(title, 42)}
             </h2>
           </Tooltip>
+          {/* 成员模型切换入口（model-registry P2）：会话带归属成员才显示；
+              当前模型读 system_context.model（这具 body 最后看到的），不是 pin。 */}
+          {session?.agent && (
+            <MemberModelSwitch
+              agentId={session.agent.id}
+              agentName={session.agent.name}
+              currentModel={detail?.system_context?.model}
+            />
+          )}
         </div>
         {activeAgentId && (
           <nav className="subagent-breadcrumb" aria-label={t('chat.subagents.title')}>

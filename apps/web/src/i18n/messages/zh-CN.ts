@@ -224,6 +224,16 @@ export const messages = {
   'chat.session.copyId': '复制会话 ID',
   'chat.session.copiedId': '已复制会话 ID',
   'chat.session.copyIdTitle': '复制会话 ID：{title}',
+  // 成员模型切换入口（model-registry P2）：成员级 pin，下一具 body / 续接 run 生效
+  'chat.memberModel.button': '模型',
+  'chat.memberModel.tooltip': '切换成员模型（下一具 body 生效）',
+  'chat.memberModel.title': '切换模型 · {name}',
+  'chat.memberModel.currentBody': '本具 body 当前使用：{model}',
+  'chat.memberModel.currentUnknown': '本具 body 当前模型未知（尚未跑过 run 或旧 gateway）。',
+  'chat.memberModel.hint':
+    '选择注册模型 = 为该成员固定（pin）：活体 body 与当前 run 不变，下一具 body / 续接 run 生效，届时会话会追加一条环境信息卡。留空 = 不修改。',
+  'chat.memberModel.saved': '已更新 {name} 的模型，下一具 body / 续接 run 生效',
+  'chat.memberModel.failed': '模型切换失败',
   // 0.18 UX3：会话列表相对时间与会话头上下文长度
   'time.today': '今天',
   'time.yesterday': '昨天',
@@ -975,6 +985,8 @@ export const messages = {
   'agents.form.model': '模型',
   'agents.form.modelHint':
     '下一具 body 才用新值（rotate 或重启后）；当前 body 仍是旧值，只会收到一条环境信息告知。留空表示不修改。',
+  'agents.form.modelCreateHint':
+    '留空 = 跟随节点默认模型；显式选择 = 为该成员固定模型，从第一具 body 起使用。',
   'agents.form.systemPrompt': '系统提示词',
   'agents.form.systemPromptHint':
     '下一具 body 才用新值（rotate 或重启后）；当前 body 仍是旧值，只会收到一条环境信息告知。留空表示不修改。',
@@ -989,6 +1001,13 @@ export const messages = {
   'agents.form.updated': '已更新智能体 {name}',
   'agents.form.createFailed': '创建失败',
   'agents.form.updateFailed': '更新失败',
+  // ModelPicker（native 共享组件，数据源 = plugin.model-registry.list）
+  'modelPicker.followDefault': '跟随默认',
+  'modelPicker.keepUnchanged': '不修改',
+  'modelPicker.emptyWithCurrent': '{label}（当前：{model}）',
+  'modelPicker.unregistered': '未注册',
+  'modelPicker.groupAliases': '别名',
+  'modelPicker.unavailable': '模型注册表不可用（插件未加载或请求失败），暂无法选择。',
   'agents.detail.title': '智能体',
   'agents.detail.advanced': '高级信息',
   'agents.detail.agentId': '智能体 ID',
