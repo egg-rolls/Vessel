@@ -61,6 +61,12 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 true（0.24；显式 false 关闭）/ `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
 | `feishu.enabled` / `app_id` / `app_secret` / `domain` / `allowed_chat_ids` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝** |
 | `observability.event_history` / `metrics` | `event_history` 缺省 1000，显式 0 = 不限制，>0 = 环形缓冲；块缺省时不注入 metrics，块存在时 `metrics` 默认 true |
+| `observability.log.level` / `modules` / `color` / `format` / `time` | 进程级日志中枢（core `log-hub.ts`）：`level` 缺省 info；`modules` 是事件名前缀→级别（最长前缀匹配，按点分段；**键是事件名**，loader 不做 snake→camel 改写）；`color` auto/always/never（缺省 auto）；`format` pretty/json（缺省 pretty）；`time` auto/none/clock/iso（缺省 auto：TTY clock、落盘 iso）。启动应用 + config-watch 热应用（差异行进 `runtime.notice`，不新增 RPC scope）；WebUI Settings「日志（gateway）」分组经 `config.set` 写四个标量键，`modules` 一期只读。日志口径见 [operations/LOGS](../operations/LOGS.md) |
+
+`observability.log` 的优先级（高→低）：`VESSEL_DEBUG`（非空强制 debug）> `VESSEL_LOG_LEVEL` >
+`VESSEL_RUN_TIMING=1`（仅 `run.timing` / `run.llm.gap` 强制 debug）> config > 默认。
+`VESSEL_LOG_JSON=1` 等价 `format: json`；`NO_COLOR` / `FORCE_COLOR` / `TERM=dumb` 只影响颜色。
+被环境覆盖时 `config show` 与 `config.get`（`logEnvOverrides`）/ WebUI 都给出提示。
 
 `permission.auto_approve`（TS 字段 `autoApprove`）、`permission.never_auto_approve`（TS 字段 `neverAutoApprove`，未配置时有效值 `['agent.close']`）、`plugins[].config` 消费与 `VESSEL_PLUGINS` / `VESSEL_SESSION_BACKEND` / `VESSEL_MODEL` 覆盖（见 `docs/versions/0.6.1.md`）。
 

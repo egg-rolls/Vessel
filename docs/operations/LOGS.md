@@ -1,8 +1,8 @@
 ---
 title: 运维日志口径（一件事只有一种说法）
 kind: current
-triggers: [日志, log, 日志一致性, web.build, 构建, 构建日志, build.json, gateway status, 看门狗, supervisor, hub, console.log, logEvent, 事件行, key=value]
-paths: [src/web-dist.ts, src/gateway-command.ts, src/cli.ts, packages/serve/src/log-event.ts, packages/serve/src/platform/**, packages/serve/src/gateway/**]
+triggers: [日志, log, 日志一致性, web.build, 构建, 构建日志, build.json, gateway status, 看门狗, supervisor, hub, console.log, logEvent, 事件行, key=value, 日志级别, 颜色, 降噪, log-hub]
+paths: [src/web-dist.ts, src/gateway-command.ts, src/cli.ts, src/logging.ts, packages/core/src/log-hub.ts, packages/core/src/log-format.ts, packages/serve/src/log-event.ts, packages/serve/src/platform/**, packages/serve/src/gateway/**]
 ---
 
 # 运维日志口径：一件事只有一种说法
@@ -15,11 +15,35 @@ paths: [src/web-dist.ts, src/gateway-command.ts, src/cli.ts, packages/serve/src/
 
 **每个事实只有一个权威来源；其它地方只能从它派生，不许各自拼文案。**
 
-- 权威 = 一条事件行（`log-event.ts` 的 `EVENT_FIELDS` 定字段序）或一份内存态；
+- 权威 = 一条事件行（`log-format.ts` 的 `EVENT_FIELDS` 定字段序）或一份内存态；
 - 派生 = 读同一份状态，再用**同一个** `formatEventLine` 排版；
-- 排版只有一处：`packages/serve/src/log-event.ts`（单行 key=value，`VESSEL_LOG_JSON=1` 退单行 JSON）。
+- 排版只有一处：`packages/core/src/log-format.ts`（单行 key=value；`serve/log-event.ts`
+  只是 re-export + 转发）；
+- 级别 / 脱敏 / 格式 / 时间 / 颜色只有一处：`packages/core/src/log-hub.ts`（进程级日志中枢）。
+  core Logger、serve `logEvent`、插件注入的 Logger 三路都经 `emitLogLine`
+  （过滤 → 脱敏 → 排版 → `writeStderrNotice`）；**不新增裸 `process.stderr.write`**
+  （EPIPE 自激防护不变量见该文件头）。
 
 「措辞」不指语言（中英各有 i18n），指**同一条事实在日志/接口/UI 上的字段与说法**。
+
+### 1.1 日志级别与颜色（日志中枢）
+
+- 行格式（pretty，vite 式单行）：`时间 LVL 事件名(列宽24) key=value...`，
+  如 `12:03:41 WRN gateway.ws.closed node=Soulkiller who=upstream code=1011 dur=202s`。
+  `[vessel]` 前缀已去除；json 格式（`format: json` / `VESSEL_LOG_JSON=1`）为单行
+  `{time, level, event, ...fields}`（机器接口）。
+- 级别：`observability.log.level`（debug|info|warn|error，缺省 info）+
+  `modules`（事件名前缀→级别，最长前缀匹配）。优先级：`VESSEL_DEBUG` >
+  `VESSEL_LOG_LEVEL` > `VESSEL_RUN_TIMING=1`（仅 run.* 强制）> config > 默认。
+  热应用：改 config 不重启即生效，差异行进 `runtime.notice`。
+- 颜色：`color` auto/always/never；`NO_COLOR`（任意值）/ `TERM=dumb` 优先关闭，
+  `FORCE_COLOR` 非 0 强制开；auto 看 `stderr.isTTY`（daemon 落盘天然无 ANSI）。
+  `COLORTERM=truecolor/24bit` 上 24bit，否则 16 色。配色表见宪法第十四条。
+- 时间：`time` auto/none/clock/iso；auto = TTY 用 clock（HH:MM:SS）、落盘用 iso。
+- 脱敏统一在 `emitLogLine`（先脱敏再排版，pretty/json 同一路径）；`logEvent` 也在内。
+  不提供 trace 级或「显示原值」开关。
+- 降噪口径：高频过程事件降 debug（不删除）；审计账（`gateway.ws.closed`）不折叠、只分级；
+  同类重复按窗口折叠带 `suppressed=N`（gap_reported 60s / update.check.failed 1h）。
 
 ## 2. 盘点表（2026-11-17，0.60 之前 → 之后）
 
@@ -33,22 +57,26 @@ paths: [src/web-dist.ts, src/gateway-command.ts, src/cli.ts, packages/serve/src/
 | **节点就绪状态** | ①`node <name>: <state> (原因/耗时)` ②启动摘要的 `(starting)`/`(adopted)` ③`gateway status` 的 `node <name> <url> <up/down>` | supervisor 状态机（`SupervisedNodeInfo`）；`up/down` 是**健康探测**，与 supervisor 生命周期是两个事实 | 未改；`describeNodeState` 是这两处的单一口径。**已知**：状态词表按视图不同（生命周期 vs 健康）——这是两个事实，不是两种说法 |
 | **平台/节点 token** | 不打印（安全规则）；派生值只进 `/health` 的布尔 | `src/token-derive.ts` | 不新增任何 token 日志（`AGENTS.md` 硬安全规则） |
 | **拦截类诊断**（replay 预算截断 / 全局回放拒绝 / interactions 持久化与隔离 / tenant 事件扇出 / 停机清理失败） | 各文件自己拼 `[vessel] xxx: detail`（有的还把对象直接丢给 `console.warn`，终端里展开成多行 JSON） | `gateway.replay.budget_truncated`、`gateway.events.global_replay_denied`、`gateway.stop.failed`、`gateway.tenant_hub.failed`、`interactions.store.*`、`interactions.registry.reload_failed` | 全部改走 `logEvent`（`path` / `error` 用结构化字段，不再是自由文本） |
+| **日志级别与颜色**（gateway 进程太吵 / 三套格式交替 / 无法按模块调级别） | core Logger 每行 JSON、`logEvent` `[vessel] event k=v`、散落 `console.*` 自由文本，三种格式写进同一个 node-*.log；级别只有环境变量且只管 Logger 一路 | core 日志中枢 `log-hub.ts`（级别/模块/格式/时间/颜色，config `observability.log` 热应用）+ 排版唯一来源 `log-format.ts` | 三路汇流 `emitLogLine`；去 `[vessel]` 前缀；pretty=vite 式单行（时间 LVL 事件名 k=v）、json=单行 `{time,level,event,...fields}`；高频过程事件降 debug、审计账分级不折叠、重复按窗口折叠带 suppressed；配色见第十四条；WebUI Settings「日志（gateway）」分组 |
 
 ## 3. 怎么读一次构建（`web.build.*`）
 
 一次构建**最多 4 行**（start + 可选 progress + 终态 + 可选内联尾部）：
 
 ```
-[vessel] web.build.start reason=stale target=apps/web check=timer pid=64180 log=/tmp/vessel-web-build/1794910725789-41008/build.log
-[vessel] web.build.progress elapsed=30s rss=180MB        # 可选：<30s 的构建一条都不打，最多 2 条
-[vessel] web.build.done dur=17.2s assets=42 bytes=8.1MB
-[vessel] web.build.fail exit=2 dur=1.4s log=/tmp/vessel-web-build/…/build.log
+12:03:41 WRN web.build.start    reason=stale target=apps/web check=timer pid=64180 log=/tmp/vessel-web-build/1794910725789-41008/build.log
+12:04:11 WRN web.build.progress elapsed=30s rss=180MB    # 可选：<30s 的构建一条都不打，最多 2 条
+12:04:28 WRN web.build.done     dur=17.2s assets=42 bytes=8.1MB
+12:04:28 WRN web.build.fail     exit=2 dur=1.4s log=/tmp/vessel-web-build/…/build.log
 | … 省略前 6 行（完整输出见上面的 log= 路径）
 | src/main.tsx(21,26): error TS1109: Expression expected.
 …
-[vessel] web.build.interrupted signal=stop elapsed=6.1s log=/tmp/vessel-web-build/…/build.log
-[vessel] web.build.stale_artifact cleaned=1 dir=/tmp/vessel-web-build
+12:04:28 WRN web.build.interrupted signal=stop elapsed=6.1s log=/tmp/vessel-web-build/…/build.log
+12:04:28 WRN web.build.stale_artifact cleaned=1 dir=/tmp/vessel-web-build
 ```
+
+（pretty 行 = 时间 + 级别标记 + 事件名 + 字段；`web.build.*` 全部 warn 是既有口径。
+TTY 才有 clock 时间与颜色，落盘是 iso 时间、无 ANSI。）
 
 - `reason=missing|stale`：产物完全没有 / 落后于源码；
 - `check=startup|probe|timer`：谁叫起来的这次构建 —— 启动时 / 有人拉 `/build.json` 看到旧产物 / 运行中定时自查（0.61）。三条入口共用同一套判据与互斥，出问题先看这个字段；
@@ -60,9 +88,11 @@ paths: [src/web-dist.ts, src/gateway-command.ts, src/cli.ts, packages/serve/src/
 `gateway status` 的构建段（跨进程读同一份 `meta.json`）：
 
 ```
-  [vessel] web.build.running elapsed=6.1s pid=64180 log=…
-  [vessel] web.build.last phase=done dur=17.2s at=2026-11-17T10:23:34.409Z log=…
+  web.build.running elapsed=6.1s pid=64180 log=…
+  web.build.last phase=done dur=17.2s at=2026-11-17T10:23:34.409Z log=…
 ```
+
+（`gateway status` 是命令结果面，走 `formatEventLine` 的事件行本体：无时间/级别前缀、无颜色。）
 
 ### 3.1 运行中自愈（0.61）：没人开浏览器也会重建
 
@@ -97,11 +127,15 @@ grep -rn "console\.\(log\|warn\|error\|info\)" src packages/serve/src --include=
 1. **短命命令的结果通道** —— `print` / `printErr` 的缺省实现（`console.log` / `console.error`），
    是命令的最终输出（`gateway status` 的表格、`update` 的提示、`resume` 的列表……），
    这些不是日志事件，收口到 `logEvent` 反而会毁掉给人读的表格；
-2. **`logEvent` 自己的出口**（`log-event.ts` 末尾三行 `console.warn/error/info`）；
+2. **日志中枢自己的出口**（`log-hub.ts` 的 `writeStderrNotice`，全进程唯一 stderr 写点，
+   带 EPIPE 报废保护）—— `logEvent` / core Logger 都转发到这里，不再各自 console；
 3. **外来文本的转发** —— 插件子进程 stdout（`plugin-host/manager.ts`）、auth 后端告警
    （`platform/server.ts` 的 `[platform-auth]`）：正文不归我们控制，加前缀只会重复；
 4. **构建失败的内联尾部**（`web-dist.ts` 的 `console.error("| …")`）：它是**证据**不是事件，
    用户要的是「一眼看出为什么失败」。
+
+**外部插件自己写的 console 不在级别控制之内**（插件信任边界，不拦截）：它们仍会原样
+出现在进程输出里，不受 `observability.log` 约束；内置插件的过程日志已改走注入的 Logger。
 
 2026-11-17 收口掉的具体行：`gateway.ts`（3 处手拼诊断）、`interactions-store.ts`（6 处）、
 `interactions-registry.ts`（1 处，原来把对象丢给 `console.warn`）、`tenant-event-hub.ts`（1 处）、
@@ -122,6 +156,9 @@ grep -rn "console\.\(log\|warn\|error\|info\)" src packages/serve/src --include=
 
 1. 这个事实在本文的表里有行吗？没有先加一行（权威来源是谁）；
 2. 只改权威来源；派生方读状态，不复制字符串；
-3. 新事件名进 `EVENT_FIELDS`（字段序写死），值走 `logEvent`；
+3. 新事件名进 `EVENT_FIELDS`（`packages/core/src/log-format.ts`，字段序写死），值走 `logEvent`；
 4. 耗时用 `_ms`（渲染成 `1.2s`）、字节用 `_bytes`（渲染成 `8.1MB`）、路径用 `kind: 'path'`；
-5. 不给用户命令（正文里不写「请执行 xxx」），日志只陈述事实。
+5. 不给用户命令（正文里不写「请执行 xxx」），日志只陈述事实；
+6. 级别选档：纯过程信息 debug、用户操作回执 info、异常 warn、失败 error；
+   审计账不折叠；同类重复用窗口折叠带 `suppressed=N`；
+7. 不新增裸 `process.stderr.write`（走 `writeStderrNotice` / Logger），不新增打印密钥的日志。
