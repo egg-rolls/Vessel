@@ -38,6 +38,18 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.status': 'local runtime / attach / gateway instances at a glance',
   'help.cmd.agents': 'list agents via agents.list (local gateway or --connect)',
   'help.cmd.errors': 'recent run/tool errors (diagnostics in errorLevel: all)',
+  'help.cmd.modelList': 'list the model registry (vendors / aliases / default / effective)',
+  'help.cmd.modelVendorSet': 'create or replace a vendor entry (--entry is the vendor JSON)',
+  'help.cmd.modelVendorRemove': 'remove a vendor (refused while aliases / default reference it)',
+  'help.cmd.modelAliasSet': 'create or replace an alias (alias -> vendor/model)',
+  'help.cmd.modelAliasRemove': 'remove an alias',
+  'help.cmd.modelSetDefault': 'set the default model ref (models.default)',
+  'help.cmd.modelCredentialSet':
+    'store or rotate an encrypted credential (value via env / stdin / hidden prompt; never echoed)',
+  'help.cmd.modelCredentialRemove': 'remove a credential (refused while vendors reference it)',
+  'help.cmd.modelCredentialsList': 'list credential metadata (no values)',
+  'help.cmd.modelTest':
+    'connectivity test against a saved vendor (sends a real request; may incur cost)',
   'help.cmd.gatewayStart':
     'start in the foreground; --daemon detaches to gateway.log; --instance names it',
   'help.cmd.gatewayList': 'list gateway instances and PID files',
@@ -137,6 +149,8 @@ export const en: Record<MessageKey, string> = {
   'help.group.hub': 'hub service and node joining',
   'help.group.hubNode': 'hub-side node pairings',
   'help.group.logs': 'log reading',
+  'help.group.model':
+    'model registry: vendors / aliases / default / credentials / connectivity test',
   'help.group.node': 'node API lifecycle',
   'help.group.plugin': 'plugin install / enable / disable',
   'help.group.team': 'team messages, members and budgets',
@@ -225,6 +239,9 @@ export const en: Record<MessageKey, string> = {
   'flag.cursor': 'pagination cursor',
   'flag.tlsCert': 'TLS certificate PEM',
   'flag.tlsKey': 'TLS private key PEM',
+  'flag.entry': 'vendor entry (JSON object: protocol / baseUrl / credential / apiKeyEnv / models)',
+  'flag.valueEnv': 'read the credential value from this environment variable (never in argv)',
+  'flag.valueStdin': 'read the credential value from stdin (never in argv)',
   'flag.help': 'show usage for this command',
 
   // ── common ──
@@ -399,6 +416,27 @@ export const en: Record<MessageKey, string> = {
   'agents.empty': 'No agents registered.',
   'agents.list': 'Agents ({count})',
   'agents.unexpectedResult': 'Gateway returned an unexpected agents.list shape:',
+  'model.title': 'Vessel Model Registry',
+  'model.empty': 'Registry is empty: no vendors, aliases or default model.',
+  'model.vendors': 'Vendors ({count})',
+  'model.aliases': 'Aliases ({count})',
+  'model.default': 'Default',
+  'model.effective': 'Effective',
+  'model.legacyPresent':
+    'legacy provider config still present: {ref} (migrate to the models block)',
+  'model.credentials': 'Credentials ({count})',
+  'model.credentialsEmpty': 'No stored credentials.',
+  'model.savedNote': 'Saved; takes effect on the next body/run.',
+  'model.testCost': 'test sends a real minimal request to the vendor; it may incur cost.',
+  'model.testFailed': 'connectivity test failed (unexpected result shape)',
+  'model.unavailable':
+    'model-registry RPC is not available on this gateway (requires the model-registry plugin).',
+  'model.secretPrompt': 'Credential value (input hidden, Enter to submit): ',
+  'model.secretRequired':
+    'Cannot read a credential value in a non-interactive terminal: use --value-env <ENV> or --value-stdin.',
+  'model.secretEnvEmpty': 'Environment variable {name} is not set or empty.',
+  'model.secretEmpty': 'The credential value is empty.',
+  'model.secretAborted': 'Credential input aborted (Ctrl+C).',
   'errors.title': 'Vessel Errors',
   'errors.level': 'Level',
   'errors.empty': 'No recent errors.',

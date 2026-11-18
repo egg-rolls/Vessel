@@ -327,6 +327,31 @@ export type FederationCommand =
     }
   | { kind: 'peers'; json: boolean };
 
+/**
+ * `vessel model ...` 子命令：model-registry 插件 canonical RPC 的 CLI 包装。
+ *
+ * kind 与 `plugin.model-registry.<name>` 一一对应（kebab → snake 在命令层映射）。
+ * credential-set 的 value 不在 argv 出现：只经 `--value-env` / `--value-stdin` /
+ * 交互隐藏输入三条路（命令层解析），这里只携带来源声明。
+ */
+export type ModelCommand =
+  | { kind: 'list'; json: boolean }
+  | { kind: 'vendor-set'; id: string; entry: unknown; json: boolean }
+  | { kind: 'vendor-remove'; id: string; json: boolean }
+  | { kind: 'alias-set'; alias: string; ref: string; json: boolean }
+  | { kind: 'alias-remove'; alias: string; json: boolean }
+  | { kind: 'set-default'; ref: string; json: boolean }
+  | {
+      kind: 'credential-set';
+      id: string;
+      valueEnv?: string;
+      valueStdin: boolean;
+      json: boolean;
+    }
+  | { kind: 'credential-remove'; id: string; json: boolean }
+  | { kind: 'credentials-list'; json: boolean }
+  | { kind: 'test'; vendor: string; model?: string; json: boolean };
+
 /** `vessel hub ...` 子命令（S5） */
 export type HubCommand =
   | {
@@ -479,6 +504,8 @@ export interface CliArgs {
   completionCommand: CompletionCommandArgs | null;
   /** 0.22 S9.1：`vessel attention [respond]` */
   attentionCommand: AttentionCommandArgs | null;
+  /** `vessel model ...`（model-registry RPC 包装） */
+  modelCommand: ModelCommand | null;
   /** 0.49：`vessel dev reset [--yes] [--dry-run] [--json]` */
   devCommand: DevCommandArgs | null;
   /** 0.51：`vessel prune [--yes] [--dry-run] [--json] [--older-than <dur>]` */
@@ -584,6 +611,7 @@ export function parseArgs(argv: string[]): ParseResult {
     errorsCommand: null,
     completionCommand: null,
     attentionCommand: null,
+    modelCommand: null,
     devCommand: null,
     prune: null,
   };
@@ -651,6 +679,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'federation' && i === 0) {
       return parseFederationArgs(argv.slice(1), args);
+    }
+    if (a === 'model' && i === 0) {
+      return parseModelArgs(argv.slice(1), args);
     }
     if (a === 'hub' && i === 0) {
       return parseHubArgs(argv.slice(1), args);
@@ -3968,6 +3999,195 @@ function parseFederationArgs(rest: string[], args: CliArgs): ParseResult {
     ...(conversationId !== undefined ? { conversationId } : {}),
     json,
   };
+  return { ok: true, args };
+}
+
+// ── model 子命令（model-registry RPC 包装）─────────────────────────
+
+/** 位置参数规格：个数 + 缺参错误里的用法提示。 */
+const MODEL_POSITIONAL_SPEC: Readonly<Record<string, { count: number; usage: string }>> = {
+  list: { count: 0, usage: '' },
+  'vendor-set': { count: 1, usage: '<id>' },
+  'vendor-remove': { count: 1, usage: '<id>' },
+  'alias-set': { count: 2, usage: '<alias> <ref>' },
+  'alias-remove': { count: 1, usage: '<alias>' },
+  'set-default': { count: 1, usage: '<ref>' },
+  'credential-set': { count: 1, usage: '<id>' },
+  'credential-remove': { count: 1, usage: '<id>' },
+  'credentials-list': { count: 0, usage: '' },
+  test: { count: 1, usage: '<vendor>' },
+};
+
+/**
+ * `model <sub> ...`。连接参数在这里自行接受（top-level parser 对 `model` 在
+ * i===0 提前返回，不进全局 `--connect` switch）；写回全局 connectArg /
+ * connectTokenArg / caArg，registry 透传给命令层（与 status / agents / errors 同形）。
+ *
+ * 解析层只做语法与必填；vendor entry 的字段 / 语义校验在插件 handler（parseVendorEntry）。
+ */
+function parseModelArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === undefined || sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  const spec = MODEL_POSITIONAL_SPEC[sub];
+  if (spec === undefined) {
+    return { ok: false, error: `Unknown model subcommand: ${sub}` };
+  }
+  const tail = rest.slice(1);
+
+  let json = false;
+  let entry: unknown;
+  let entrySeen = false;
+  let valueEnv: string | undefined;
+  let valueStdin = false;
+  let model: string | undefined;
+  const positional: string[] = [];
+
+  for (let i = 0; i < tail.length; i++) {
+    const a = tail[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--connect' || a === '--connect-token' || a === '--ca') {
+      const value = readFlagValue(tail, i, a);
+      if (!value.ok) return value;
+      if (a === '--connect') args.connectArg = value.value;
+      else if (a === '--connect-token') args.connectTokenArg = value.value;
+      else args.caArg = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--entry' && sub === 'vendor-set') {
+      const value = readFlagValue(tail, i, '--entry');
+      if (!value.ok) return value;
+      try {
+        entry = JSON.parse(value.value);
+      } catch (error) {
+        return {
+          ok: false,
+          error: `Invalid --entry JSON: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+        return { ok: false, error: '--entry must be a JSON object (vendor entry)' };
+      }
+      entrySeen = true;
+      i = value.next;
+      continue;
+    }
+    if (a === '--value-env' && sub === 'credential-set') {
+      const value = readFlagValue(tail, i, '--value-env');
+      if (!value.ok) return value;
+      // 与 hub --token-env 同口径的环境变量名形状。
+      if (!HUB_ENV_NAME_RE.test(value.value)) {
+        return { ok: false, error: 'Invalid --value-env: expected an environment variable name' };
+      }
+      valueEnv = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--value-stdin' && sub === 'credential-set') {
+      valueStdin = true;
+      continue;
+    }
+    if (a === '--model' && sub === 'test') {
+      const value = readFlagValue(tail, i, '--model');
+      if (!value.ok) return value;
+      model = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for model ${sub}: ${a}` };
+    }
+    positional.push(a);
+  }
+  if (args.help) return { ok: true, args };
+
+  // 与全局 parser 同口径：connect 专属参数只能用于连接（--connect 或 VESSEL_CONNECT）。
+  const connectOnly =
+    args.connectTokenArg !== null ? '--connect-token' : args.caArg !== null ? '--ca' : null;
+  if (
+    connectOnly !== null &&
+    args.connectArg === null &&
+    (process.env.VESSEL_CONNECT ?? '').trim() === ''
+  ) {
+    return { ok: false, error: `${connectOnly} requires --connect` };
+  }
+
+  if (positional.length !== spec.count) {
+    return {
+      ok: false,
+      error:
+        spec.count === 0
+          ? `model ${sub} takes no positional arguments`
+          : `model ${sub} requires ${spec.usage}`,
+    };
+  }
+
+  switch (sub) {
+    case 'list':
+      args.modelCommand = { kind: 'list', json };
+      break;
+    case 'vendor-set': {
+      if (!entrySeen) {
+        return { ok: false, error: 'model vendor-set requires --entry <json>' };
+      }
+      args.modelCommand = { kind: 'vendor-set', id: positional[0] ?? '', entry, json };
+      break;
+    }
+    case 'vendor-remove':
+      args.modelCommand = { kind: 'vendor-remove', id: positional[0] ?? '', json };
+      break;
+    case 'alias-set':
+      args.modelCommand = {
+        kind: 'alias-set',
+        alias: positional[0] ?? '',
+        ref: positional[1] ?? '',
+        json,
+      };
+      break;
+    case 'alias-remove':
+      args.modelCommand = { kind: 'alias-remove', alias: positional[0] ?? '', json };
+      break;
+    case 'set-default':
+      args.modelCommand = { kind: 'set-default', ref: positional[0] ?? '', json };
+      break;
+    case 'credential-set': {
+      if (valueEnv !== undefined && valueStdin) {
+        return { ok: false, error: '--value-env and --value-stdin are mutually exclusive' };
+      }
+      args.modelCommand = {
+        kind: 'credential-set',
+        id: positional[0] ?? '',
+        ...(valueEnv !== undefined ? { valueEnv } : {}),
+        valueStdin,
+        json,
+      };
+      break;
+    }
+    case 'credential-remove':
+      args.modelCommand = { kind: 'credential-remove', id: positional[0] ?? '', json };
+      break;
+    case 'credentials-list':
+      args.modelCommand = { kind: 'credentials-list', json };
+      break;
+    case 'test':
+      args.modelCommand = {
+        kind: 'test',
+        vendor: positional[0] ?? '',
+        ...(model !== undefined ? { model } : {}),
+        json,
+      };
+      break;
+  }
   return { ok: true, args };
 }
 

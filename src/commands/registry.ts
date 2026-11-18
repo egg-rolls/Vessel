@@ -42,6 +42,7 @@ import { tracePruneCommand } from '../trace-command';
 import { ui } from '../ui-style';
 import { attentionCommand } from './attention';
 import { runFederationCommand } from './federation';
+import { modelCommand } from './model';
 
 export interface CliCommandContext {
   /** `VESSEL_MOCK=1|true` */
@@ -413,6 +414,21 @@ export const cliCommands: readonly CliCommand[] = [
         await errorsCommand({
           json: command.json,
           ...(command.limit !== undefined ? { limit: command.limit } : {}),
+          connectUrl: args.connectArg,
+          connectToken: args.connectTokenArg,
+          caFile: args.caArg,
+        }),
+      );
+    },
+  },
+  {
+    name: 'model',
+    match: (args) => args.modelCommand !== null,
+    run: async (args) => {
+      const command = args.modelCommand;
+      if (command === null) return 1;
+      return printCommandResult(
+        await modelCommand(command, {
           connectUrl: args.connectArg,
           connectToken: args.connectTokenArg,
           caFile: args.caArg,

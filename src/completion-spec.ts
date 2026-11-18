@@ -145,6 +145,8 @@ export const DYNAMIC_VALUE_FLAGS: readonly string[] = [
   '--cursor',
   '--select',
   '--answers',
+  '--entry',
+  '--value-env',
 ];
 
 /** 预算维度（teams.budget / `vessel team budget`） */
@@ -400,6 +402,22 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       },
       { name: 'team-info', flags: ['--json', '--to', '--members', '--help'] },
       { name: 'peers', flags: ['--json', '--help'] },
+    ],
+  },
+  {
+    token: 'model',
+    registryName: 'model',
+    subcommands: [
+      { name: 'list', flags: ['--json', '--help'] },
+      { name: 'vendor-set', flags: ['--json', '--entry', '--help'] },
+      { name: 'vendor-remove', flags: ['--json', '--help'] },
+      { name: 'alias-set', flags: ['--json', '--help'] },
+      { name: 'alias-remove', flags: ['--json', '--help'] },
+      { name: 'set-default', flags: ['--json', '--help'] },
+      { name: 'credential-set', flags: ['--json', '--value-env', '--value-stdin', '--help'] },
+      { name: 'credential-remove', flags: ['--json', '--help'] },
+      { name: 'credentials-list', flags: ['--json', '--help'] },
+      { name: 'test', flags: ['--json', '--model', '--help'] },
     ],
   },
   { token: 'errors', registryName: 'errors', flags: ['--json', '--limit'] },
