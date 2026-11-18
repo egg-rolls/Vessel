@@ -31,6 +31,13 @@ export function normalizeAllowUserIds(
       continue;
     }
     const folded = fold(strategy, value);
+    if (folded === null) {
+      // 形状声明说「合法」，但它给回来的不是可用字符串：当成不可用条目。
+      // 宁可少一个白名单项（登录时判定不命中），也不要在这里塞进一个占位字符串 ——
+      // 那可能让某个身份意外命中。
+      rejected.push(entry);
+      continue;
+    }
     if (!ids.includes(folded)) ids.push(folded);
   }
   return { ids, rejected };
