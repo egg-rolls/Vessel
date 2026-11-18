@@ -181,6 +181,175 @@ function warnManifestFailure(base: string, error: PluginManifestValidationError)
 }
 
 /**
+ * 宿主向插件转发的裸指定符白名单（0.64）。白名单之外的裸导入一律不给转发，
+ * 走标准 ESM 解析（找不到就是找不到，不许由宿主悄悄兜底）。
+ *
+ * 入选标准只有一条：**插件拿到第二个副本会出事**（`instanceof`、单例注册表、事件/枚举
+ * 字符串常量、类型守卫），或者插件在 user 作用域下**必然**需要它。当前三项：
+ * - `@vessel-agent/core`：枚举/常量/类身份（`HookType`、事件名、`AgentError` 一类）；
+ * - `@vessel-agent/agent`：`AgentError` 等运行时类的 `instanceof` 判定；
+ * - `@vessel-agent/basic-tools`：路径边界工具（`evaluatePath` / `buildPathBoundary`），
+ *   仓内多个插件在运行时直接用，且要跟宿主同一套边界语义。
+ *
+ * 加新包之前先回答「第二个副本会不会出问题」；会才加。`@vessel-agent/plugin-ui` 不在此列：
+ * 它只被 web 产物（浏览器侧打包）使用，不走宿主的 ESM 解析。
+ */
+export const HOST_SHARED_PACKAGES: readonly string[] = [
+  '@vessel-agent/core',
+  '@vessel-agent/agent',
+  '@vessel-agent/basic-tools',
+];
+
+/** 待转发包的宿主侧包根目录（包名 → 绝对路径）；解析过一次就缓存。 */
+const hostPackageRoots = new Map<string, string | null>();
+/** 已经建好转发缝的插件目录（避免重复 stat） */
+const specifierFarmReady = new Set<string>();
+
+/**
+ * 解析宿主自己的包根目录：从**本模块**出发解析包的入口，再上溯到最近的 package.json。
+ *
+ * 「从本模块出发」是关键：插件目录不在宿主的 `node_modules` 上溯链里，但宿主自己在，
+ * 所以这里拿到的一定是宿主真正加载的那份；交给插件同一路径 ⇒ 同一模块实例。
+ */
+function hostPackageRoot(pkgName: string): string | null {
+  const cached = hostPackageRoots.get(pkgName);
+  if (cached !== undefined) return cached;
+
+  let resolved: string | null = null;
+  try {
+    resolved = fileURLToPath(import.meta.resolve(pkgName));
+  } catch {
+    resolved = null;
+  }
+  if (resolved === null) {
+    hostPackageRoots.set(pkgName, null);
+    return null;
+  }
+  let dir = path.dirname(resolved);
+  for (let depth = 0; depth < 8; depth += 1) {
+    const pkgJson = path.join(dir, 'package.json');
+    if (fs.existsSync(pkgJson)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(pkgJson, 'utf-8')) as { name?: unknown };
+        if (parsed.name === pkgName) {
+          hostPackageRoots.set(pkgName, dir);
+          return dir;
+        }
+      } catch {
+        // 继续上溯
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  hostPackageRoots.set(pkgName, null);
+  return null;
+}
+
+/**
+ * 从错误里抠出「找不到的裸指定符」。
+ *
+ * bun / node 的 `ERR_MODULE_NOT_FOUND` 文案不同，但都带着那个 specifier 的引号形式；
+ * 抠不出来就返回 null（调用方按原错误抛出，不做二次包装）。
+ */
+function missingSpecifierOf(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : String(error);
+  const match =
+    /(?:Cannot find module|Cannot find package|Cannot resolve)[^\n]*?['"]([^'"]+)['"]/.exec(
+      message,
+    );
+  return match?.[1] ?? null;
+}
+
+/** `spec` 是否在白名单包（含其子路径，如 `@vessel-agent/core/session`）之内 */
+function hostSharedPackageOf(spec: string): string | null {
+  for (const pkg of HOST_SHARED_PACKAGES) {
+    if (spec === pkg || spec.startsWith(`${pkg}/`)) return pkg;
+  }
+  return null;
+}
+
+/**
+ * 在插件目录下建**裸指定符转发缝**：`<pluginDir>/node_modules/<pkg>` → 宿主的包根。
+ *
+ * 为什么是文件系统软链而不是 loader hook / import map：插件由普通动态 `import()` 加载，
+ * 全仓没有 import map、没有 bunfig、没有自定义 loader；而 ESM 解析天生会从发起模块
+ * 逐级上溯 `node_modules`。把宿主那份包挂在插件目录的 `node_modules` 下，等于给这个
+ * 插件补了一段「上溯链」，**零运行时钩子**，且因为两边 realpath 相同 ⇒ 同一模块实例
+ * （`import()` 会解析软链，不会加载第二份）。
+ *
+ * **必须在第一次 `import()` 之前建**（不能「失败后再补」）：bun 1.3.9 会缓存一次解析
+ * 失败，同一进程里重试同一个入口仍然抛 `Cannot find module` —— 实测如此。
+ *
+ * `source === 'repo'` 时跳过：仓库内插件上溯一定能碰到 `<repo>/node_modules`，不需要、
+ * 也不该往源码树里写 `node_modules`。
+ */
+function ensureSpecifierFarm(descriptor: PluginDescriptor): void {
+  if (descriptor.source === 'repo') return;
+  if (specifierFarmReady.has(descriptor.dir)) return;
+  const farmDir = path.join(descriptor.dir, 'node_modules');
+  for (const pkg of HOST_SHARED_PACKAGES) {
+    const linkPath = path.join(farmDir, ...pkg.split('/'));
+    if (fs.existsSync(linkPath)) continue;
+    const target = hostPackageRoot(pkg);
+    if (target === null) continue;
+    try {
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      // Windows 上目录软链要特权，junction 不需要；POSIX 上 'junction' 等价于 'dir'。
+      fs.symlinkSync(target, linkPath, 'junction');
+    } catch {
+      // 插件目录只读等情况下静默放弃：import 会失败，错误文案由 pluginDependencyError 给出。
+    }
+  }
+  specifierFarmReady.add(descriptor.dir);
+}
+
+/**
+ * 加载插件入口，带**裸指定符解析缝**（0.64）。
+ *
+ * 两种结果：
+ * 1. 正常：直接返回模块空间；
+ * 2. 缺包：抛一个**说人话**的错误，点名「插件 X 依赖 Y，宿主未提供」，而不是把
+ *    bun 的 `Cannot find module` 原样丢给用户。白名单包会先补转发缝（这就是
+ *    「.tgz 插件不自带 core」能跑起来的唯一机制）。
+ */
+async function importPluginEntry(descriptor: PluginDescriptor): Promise<unknown> {
+  ensureSpecifierFarm(descriptor);
+  const href = pathToFileURL(descriptor.entry).href;
+  try {
+    return await import(href);
+  } catch (error) {
+    const missing = missingSpecifierOf(error);
+    if (missing === null) throw error;
+    throw pluginDependencyError(descriptor, missing, error);
+  }
+}
+
+/** 「插件依赖宿主没提供的东西」——把 bun 的裸错误换成可归因的说明。 */
+function pluginDependencyError(descriptor: PluginDescriptor, spec: string, cause: unknown): Error {
+  const shared = hostSharedPackageOf(spec);
+  const where = `plugin "${descriptor.name}" (${descriptor.source}: ${descriptor.dir})`;
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  if (shared !== null) {
+    const provided = HOST_SHARED_PACKAGES.join(', ');
+    return new Error(
+      `${where} depends on "${spec}", which the host does not provide. ` +
+        `Host-provided (shared single instance): ${provided}. ` +
+        `Underlying error: ${detail}`,
+      { cause },
+    );
+  }
+  return new Error(
+    `${where} depends on "${spec}", which the host does not provide. ` +
+      'A .tgz plugin must ship its own runtime dependencies; only ' +
+      `${HOST_SHARED_PACKAGES.join(', ')} are forwarded by the host. ` +
+      `Underlying error: ${detail}`,
+    { cause },
+  );
+}
+
+/**
  * in-process 包的清单校验（0.51 期 0.5）。
  *
  * 补的是这样一个洞：`readPlugin` 此前只在 `vessel.entry` 非空（child 分支）时调
@@ -432,7 +601,7 @@ export class PluginLoader {
     if (!descriptor || descriptor.mode === 'child') return null;
 
     try {
-      return await import(pathToFileURL(descriptor.entry).href);
+      return await importPluginEntry(descriptor);
     } catch (e) {
       console.warn(`Failed to load plugin module "${name}": ${e instanceof Error ? e.message : e}`);
       return null;
@@ -449,7 +618,7 @@ export class PluginLoader {
     if (descriptor.mode === 'child') return undefined;
 
     try {
-      const mod = (await import(pathToFileURL(descriptor.entry).href)) as { default?: unknown };
+      const mod = (await importPluginEntry(descriptor)) as { default?: unknown };
       const plugin = mod.default as Plugin | undefined;
       if (!plugin || typeof plugin.install !== 'function') {
         console.warn(`Plugin "${name}" has no default export with install(). Skipping.`);
