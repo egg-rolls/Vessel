@@ -5,6 +5,13 @@
  */
 
 export {
+  type AvatarCredentialSource,
+  type AvatarFailure,
+  AvatarService,
+  type AvatarServiceOptions,
+  isPublicHttpUrl,
+} from './avatar.js';
+export {
   type BootstrapClaim,
   BootstrapCodes,
   DEFAULT_BOOTSTRAP_TTL_MS,
@@ -75,6 +82,7 @@ export {
   type AuthSessionSettings,
   type AuthSettings,
   type AuthWhoami,
+  AVATAR_PATH,
   CSRF_HEADER,
   isAuthPublicPath,
   LOGIN_PATH,

@@ -19,12 +19,14 @@
 
 import { createHash } from 'node:crypto';
 import {
+  type AuthAvatarRef,
   type AuthStrategy,
   type AuthStrategyEndpoints,
   type AuthStrategyFailure,
   type AuthStrategyIdentity,
   GITHUB_STRATEGY,
   isAllowlisted as isIdentityAllowlisted,
+  type OAuthCredentials,
 } from '@vessel-agent/config';
 import { randomToken } from './session.js';
 
@@ -58,7 +60,13 @@ export type OAuthAuthFailure = AuthStrategyFailure;
 export type GitHubAuthFailure = OAuthAuthFailure;
 
 export type OAuthAuthResult =
-  | { ok: true; userId: string; username: string }
+  | {
+      ok: true;
+      userId: string;
+      username: string;
+      /** 0.63：头像引用（可落盘、不含秘密）；undefined = 没有头像。 */
+      avatar?: AuthAvatarRef | undefined;
+    }
   | { ok: false; failure: OAuthAuthFailure };
 
 /** 0.56 名称的兼容别名。 */
@@ -251,6 +259,11 @@ export interface CompleteOAuthLoginInput {
   endpoints?: OAuthEndpoints | undefined;
   log?: AuthLogFn | undefined;
   timeoutMs?: number | undefined;
+  /**
+   * 0.63：令牌逃生口。仅当 provider 需要「登录之后还代表用户去取头像」时才会被调用
+   * （目前只有 Microsoft）。调用方负责把它塞进内存级 `AvatarService` —— 不落盘。
+   */
+  onCredentials?: ((credentials: OAuthCredentials) => void) | undefined;
 }
 
 /**
@@ -276,6 +289,7 @@ export async function completeOAuthLogin(input: CompleteOAuthLoginInput): Promis
     ...(input.fetchImpl !== undefined ? { fetchImpl: input.fetchImpl } : {}),
     ...(input.endpoints !== undefined ? { endpoints: input.endpoints } : {}),
     ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+    ...(input.onCredentials !== undefined ? { onCredentials: input.onCredentials } : {}),
     log,
   });
   if (!result.ok) return { ok: false, failure: result.failure };
@@ -285,7 +299,12 @@ export async function completeOAuthLogin(input: CompleteOAuthLoginInput): Promis
     log(`${prefix}: user id ${identity.userId} (${identity.username}) is not allowlisted`);
     return { ok: false, failure: 'not_allowlisted' };
   }
-  return { ok: true, userId: identity.userId, username: identity.username };
+  return {
+    ok: true,
+    userId: identity.userId,
+    username: identity.username,
+    ...(identity.avatar !== undefined ? { avatar: identity.avatar } : {}),
+  };
 }
 
 /** 0.56 导出名：GitHub 的等价调用。 */
@@ -293,4 +312,72 @@ export function completeGitHubLogin(
   input: Omit<CompleteOAuthLoginInput, 'strategy'>,
 ): Promise<OAuthAuthResult> {
   return completeOAuthLogin({ ...input, strategy: GITHUB_STRATEGY });
+}
+
+/**
+ * 用 refresh token 换一个新 access token（0.63 头像需要：登录一小时之后仍要能取一次照片）。
+ *
+ * 只在内存里流转：调用方（`/auth/avatar` 的代取）用完即弃，失败返回 null ——
+ * 头像消失是可接受的降级，登录状态不受影响。
+ *
+ * 日志只写状态码与 provider 错误码，**永不**写 token。
+ */
+export async function refreshOAuthToken(input: {
+  tokenEndpoint: string;
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+  fetchImpl?: typeof fetch | undefined;
+  timeoutMs?: number | undefined;
+  log?: AuthLogFn | undefined;
+}): Promise<OAuthCredentials | null> {
+  const log = input.log ?? (() => {});
+  const body = new URLSearchParams();
+  body.set('client_id', input.clientId);
+  body.set('client_secret', input.clientSecret);
+  body.set('grant_type', 'refresh_token');
+  body.set('refresh_token', input.refreshToken);
+  try {
+    const response = await (input.fetchImpl ?? fetch)(input.tokenEndpoint, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/x-www-form-urlencoded',
+        'user-agent': 'vessel-agent',
+      },
+      body: body.toString(),
+      signal: AbortSignal.timeout(input.timeoutMs ?? 3000),
+    });
+    const payload: unknown = await response.json().catch(() => null);
+    const access = readField(payload, 'access_token');
+    if (typeof access !== 'string' || access === '') {
+      const code = readField(payload, 'error');
+      log(
+        `refresh: failed status=${String(response.status)} error=${
+          typeof code === 'string' ? code : 'unknown'
+        }`,
+      );
+      return null;
+    }
+    const expiresIn = readField(payload, 'expires_in');
+    const nextRefresh = readField(payload, 'refresh_token');
+    return {
+      accessToken: access,
+      tokenEndpoint: input.tokenEndpoint,
+      ...(typeof nextRefresh === 'string' && nextRefresh !== ''
+        ? { refreshToken: nextRefresh }
+        : { refreshToken: input.refreshToken }),
+      ...(typeof expiresIn === 'number' && Number.isFinite(expiresIn) && expiresIn > 0
+        ? { expiresAt: Date.now() + expiresIn * 1000 }
+        : {}),
+    };
+  } catch (error) {
+    log(`refresh: request failed (${error instanceof Error ? error.name : 'unknown'})`);
+    return null;
+  }
+}
+
+function readField(payload: unknown, key: string): unknown {
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  return (payload as Record<string, unknown>)[key];
 }

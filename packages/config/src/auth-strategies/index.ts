@@ -4,10 +4,11 @@
  * @module @vessel-agent/config/auth-strategies
  */
 
-export { GITEE_STRATEGY, normalizeGiteeUser } from './gitee.js';
-export { GITHUB_STRATEGY, normalizeGitHubUser } from './github.js';
+export { avatarRefFrom, publicAvatarRef } from './avatar-ref.js';
+export { GITEE_STRATEGY, giteeAvatarOf, normalizeGiteeUser } from './gitee.js';
+export { GITHUB_STRATEGY, githubAvatarOf, normalizeGitHubUser } from './github.js';
 export { isAllowlisted, type NormalizedAllowUserIds, normalizeAllowUserIds } from './match.js';
-export { MICROSOFT_STRATEGY, normalizeMicrosoftUser } from './microsoft.js';
+export { MICROSOFT_STRATEGY, microsoftAvatarOf, normalizeMicrosoftUser } from './microsoft.js';
 export {
   authorizeUrlWith,
   exchangeCodeForIdentity,
@@ -33,6 +34,7 @@ export {
 } from './shapes.js';
 export {
   type AllowUserIdsShape,
+  type AuthAvatarRef,
   type AuthorizeUrlParams,
   type AuthStrategy,
   type AuthStrategyEndpoints,
@@ -40,5 +42,6 @@ export {
   type AuthStrategyIdentity,
   type AuthStrategyLoginResult,
   type HandleCallbackParams,
+  type OAuthCredentials,
   PASSWORD_STRATEGY_KIND,
 } from './types.js';

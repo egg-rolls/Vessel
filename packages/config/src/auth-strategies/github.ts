@@ -7,9 +7,15 @@
  * @module @vessel-agent/config/auth-strategies/github
  */
 
+import { avatarRefFrom } from './avatar-ref.js';
 import { authorizeUrlWith, exchangeCodeForIdentity } from './oauth-exchange.js';
 import { NUMERIC_USER_ID_SHAPE } from './shapes.js';
-import type { AuthStrategy, AuthStrategyEndpoints, AuthStrategyIdentity } from './types.js';
+import type {
+  AuthAvatarRef,
+  AuthStrategy,
+  AuthStrategyEndpoints,
+  AuthStrategyIdentity,
+} from './types.js';
 
 const GITHUB_ENDPOINTS: AuthStrategyEndpoints = {
   authorize: 'https://github.com/login/oauth/authorize',
@@ -23,7 +29,17 @@ export function normalizeGitHubUser(raw: unknown): AuthStrategyIdentity | null {
   const item = raw as { id?: unknown; login?: unknown };
   if (typeof item.id !== 'number' || !Number.isSafeInteger(item.id) || item.id <= 0) return null;
   const username = typeof item.login === 'string' && item.login !== '' ? item.login : null;
-  return { userId: String(item.id), username: username ?? `github-${String(item.id)}` };
+  const avatar = githubAvatarOf(raw);
+  return {
+    userId: String(item.id),
+    username: username ?? `github-${String(item.id)}`,
+    ...(avatar !== null ? { avatar } : {}),
+  };
+}
+
+/** GitHub 的 `avatar_url` 是公开地址（CDN 由服务端代取，前端不直连）。 */
+export function githubAvatarOf(raw: unknown): AuthAvatarRef | null {
+  return avatarRefFrom(raw, 'avatar_url');
 }
 
 export const GITHUB_STRATEGY: AuthStrategy = {
@@ -44,4 +60,5 @@ export const GITHUB_STRATEGY: AuthStrategy = {
       identityOf: normalizeGitHubUser,
     }),
   identityOf: normalizeGitHubUser,
+  avatarOf: githubAvatarOf,
 };
