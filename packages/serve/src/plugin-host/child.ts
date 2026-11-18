@@ -35,7 +35,6 @@ export const PLUGIN_TIMEOUTS = {
 } as const;
 
 const MAX_LOG_BYTES = 1024 * 1024;
-const MAX_PENDING_LINE_CHARS = MAX_PLUGIN_MESSAGE_BYTES;
 
 /** 子进程状态 */
 export type ChildStatus = 'new' | 'starting' | 'active' | 'stopping' | 'stopped';
@@ -59,6 +58,14 @@ export interface ChildProcessHooks {
   onPermissionDenied?(api: string): void;
   /** 非预期退出（manager 据此决定重启 / 禁用）。 */
   onExit?(info: ChildExitInfo): void;
+  /**
+   * tools-engine P2：child 协议首个受限反向请求 `tool.callback`（只带关联 id）。
+   * host 按在途记录执行原 handler，fail-closed；未注入时按未知方法拒绝。
+   * 回包由本类写（resolve → result；reject → -32000）。
+   */
+  onToolCallback?(params: unknown): Promise<unknown>;
+  /** tools-engine P2：engine→host 两类通知（engine.impl.swapped / engine.health）。 */
+  onEngineNotification?(method: string, params: unknown): void;
 }
 
 export interface ChildProcessOptions {
@@ -80,13 +87,19 @@ export interface ChildProcessOptions {
    * 不进 env（env 会被插件的子进程继承）。
    */
   httpToken?: string;
+  /**
+   * tools-engine P2：单行消息上限（出站 / 入站）。缺省 = 体验插件 1 MiB；
+   * engine 通道放宽到 8 MiB（4 MiB write 内容 + JSON 开销，契约 §3）。
+   */
+  maxMessageBytes?: number;
 }
 
 interface PendingRequest {
   method: string;
   resolve(value: unknown): void;
   reject(error: Error): void;
-  timer: ReturnType<typeof setTimeout>;
+  /** tools-engine P2：缺省 = 无 per-request timer（心跳守活）。 */
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 interface JsonRpcMessage {
@@ -205,6 +218,7 @@ export class ChildPluginProcess {
   private readonly timeouts: typeof PLUGIN_TIMEOUTS;
   private readonly logFile: PluginLogFile;
   private readonly httpToken?: string;
+  private readonly maxMessageBytes: number;
   /** 插件在 `plugin.activate` 回包里自报的 loopback endpoint。 */
   private reportedHttpEndpoint?: string;
 
@@ -229,6 +243,7 @@ export class ChildPluginProcess {
     this.timeouts = { ...PLUGIN_TIMEOUTS, ...options.timeouts };
     this.logFile = new PluginLogFile(options.dataDir);
     this.httpToken = options.httpToken;
+    this.maxMessageBytes = options.maxMessageBytes ?? MAX_PLUGIN_MESSAGE_BYTES;
   }
 
   /** 插件自报的 loopback endpoint；未声明 / 未上报时为 undefined。 */
@@ -437,27 +452,51 @@ export class ChildPluginProcess {
     return result;
   }
 
-  private request(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+  /**
+   * tools-engine P2：engine 通道请求（逐调用预算；缺省不设 per-request timer，
+   * 心跳守活）。DTO 校验按本进程的消息上限（engine 8 MiB / 体验插件 1 MiB）。
+   */
+  engineRequest(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
+    this.assertActive();
+    ensurePayload(params, `${method}.params`, this.maxMessageBytes);
+    return this.request(method, params, timeoutMs).then((result) => {
+      ensurePayload(result, `${method}.result`, this.maxMessageBytes);
+      return result;
+    });
+  }
+
+  /** tools-engine P2：engine 通道 notification（fire-and-forget；不在跑时静默丢弃）。 */
+  engineNotify(method: string, params: unknown): void {
+    if (this.status !== 'active') return;
+    if (jsonByteLength(params) > this.maxMessageBytes) return;
+    this.write({ jsonrpc: '2.0', method, params });
+  }
+
+  private request(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
     if (this.status === 'stopped') {
       return Promise.reject(pluginError('plugin_crashed', 'Plugin process is stopped.'));
     }
     const id = this.nextId++;
     return new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(String(id));
-        const error = pluginError(
-          'plugin_timeout',
-          `plugin.${method === 'ping' ? 'heartbeat' : method} timed out after ${timeoutMs}ms.`,
-          { method },
-        );
-        void this.fail(error);
-        reject(error);
-      }, timeoutMs);
+      // timeoutMs 缺省 = 不设 timer（engine 无预算工具；心跳仍守活）。
+      const timer =
+        timeoutMs === undefined
+          ? undefined
+          : setTimeout(() => {
+              this.pending.delete(String(id));
+              const error = pluginError(
+                'plugin_timeout',
+                `plugin.${method === 'ping' ? 'heartbeat' : method} timed out after ${timeoutMs}ms.`,
+                { method },
+              );
+              void this.fail(error);
+              reject(error);
+            }, timeoutMs);
       this.pending.set(String(id), { method, resolve, reject, timer });
       try {
         this.write({ jsonrpc: '2.0', id, method, params });
       } catch (error) {
-        clearTimeout(timer);
+        if (timer !== undefined) clearTimeout(timer);
         this.pending.delete(String(id));
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -468,8 +507,11 @@ export class ChildPluginProcess {
     const stdin = this.stdin;
     if (stdin === undefined) throw new Error('Plugin stdin is not available.');
     const line = JSON.stringify(message);
-    if (new TextEncoder().encode(line).byteLength > MAX_PLUGIN_MESSAGE_BYTES) {
-      throw pluginError('plugin_payload_too_large', 'Outgoing plugin message exceeds 1 MiB.');
+    if (new TextEncoder().encode(line).byteLength > this.maxMessageBytes) {
+      throw pluginError(
+        'plugin_payload_too_large',
+        `Outgoing plugin message exceeds ${this.maxMessageBytes} bytes.`,
+      );
     }
     stdin.write(`${line}\n`);
     void stdin.flush?.();
@@ -534,9 +576,14 @@ export class ChildPluginProcess {
       if (line.trim().length > 0) this.handleLine(line);
       index = this.stdoutBuffer.indexOf('\n');
     }
-    if (this.stdoutBuffer.length > MAX_PENDING_LINE_CHARS) {
+    if (this.stdoutBuffer.length > this.maxMessageBytes) {
       this.stdoutBuffer = '';
-      void this.fail(pluginError('plugin_payload_too_large', 'Plugin message line exceeds 1 MiB.'));
+      void this.fail(
+        pluginError(
+          'plugin_payload_too_large',
+          `Plugin message line exceeds ${this.maxMessageBytes} bytes.`,
+        ),
+      );
     }
   }
 
@@ -605,6 +652,28 @@ export class ChildPluginProcess {
     }
     if (method === 'plugin.ready') {
       this.hooks.onReady?.();
+      return;
+    }
+    // tools-engine P2：首个受限反向请求（只带关联 id；host 按在途记录 fail-closed 执行）。
+    // 未注入 hook 时按未知方法拒绝 —— engine 不能注入任意调用。
+    if (method === 'tool.callback') {
+      if (id === null) return;
+      const hook = this.hooks.onToolCallback;
+      if (hook === undefined) {
+        this.writeError(id, -32601, `Unknown method: ${method}`);
+        return;
+      }
+      void Promise.resolve()
+        .then(() => hook(params))
+        .then((result) => this.writeResult(id, result))
+        .catch((error: unknown) =>
+          this.writeError(id, -32000, error instanceof Error ? error.message : String(error)),
+        );
+      return;
+    }
+    // tools-engine P2：engine→host 只限两类通知（C1）；其余入站方法处理一字不改。
+    if (method === 'engine.impl.swapped' || method === 'engine.health') {
+      this.hooks.onEngineNotification?.(method, params);
       return;
     }
     if (isDeniedHostApi(method)) {
