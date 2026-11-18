@@ -7,7 +7,8 @@
  * `run.timing`，每一轮请求之间一行 `run.llm.gap`。
  *
  * 输出遵守宪法第十四条：**单行 key=value**、数值降噪（12082ms → 12.1s）、
- * 空字段省略（没发生的段打 `—` 而不是编一个 0）、不许把对象交给 console 打成多行。
+ * 空字段省略（没发生的段打 `—` 而不是编一个 0）。P2 起经 core 日志中枢以
+ * **debug 级**写出（字段序进 EVENT_FIELDS），不再自己拼 console 行。
  *
  * 归因口径（gap 那一行是重点）：
  *
@@ -23,7 +24,10 @@
  * @module @vessel-agent/core/runtime/run-timing
  */
 
-/** 计时器的最小面（便于测试注入 clock） */
+import { formatEventLine } from '../log-format.js';
+import { emitLogLine, isLevelEnabled } from '../log-hub.js';
+
+/** 计时器的最小面（便于注入 clock） */
 export interface RunTimingClock {
   now(): number;
 }
@@ -87,28 +91,22 @@ function shortId(runId: string): string {
   return runId.length > 8 ? runId.slice(0, 8) : runId;
 }
 
-/** 默认出口：stderr（stdout 留给命令结果 / JSON）。 */
-function defaultPrint(line: string): void {
-  console.error(line);
-}
-
 /**
- * 默认跟随 debug 档（`VESSEL_DEBUG` / `VESSEL_LOG_LEVEL=debug`）；
- * `VESSEL_RUN_TIMING=1/true/on` 强制开，`0/false/off` 强制关。
- * 日志中枢落地后这里改读进程级阈值，强制开关语义不变。
+ * 默认跟随中枢 debug 档（config / `VESSEL_DEBUG` / `VESSEL_LOG_LEVEL=debug`）；
+ * `VESSEL_RUN_TIMING=1/true/on` 强制开（中枢侧同步登记 run.* 的模块级强制），
+ * `0/false/off` 强制关。
  */
 function defaultEnabled(): boolean {
   const raw = (process.env.VESSEL_RUN_TIMING ?? '').trim().toLowerCase();
   if (raw === '0' || raw === 'false' || raw === 'off') return false;
   if (raw === '1' || raw === 'true' || raw === 'on') return true;
-  if ((process.env.VESSEL_DEBUG ?? '').trim() !== '') return true;
-  return (process.env.VESSEL_LOG_LEVEL ?? '').trim().toLowerCase() === 'debug';
+  return isLevelEnabled('debug', 'run.timing');
 }
 
 export interface RunTimingOptions {
-  /** 打印出口；缺省 console.error */
+  /** 打印出口（接收排好版的事件行）；缺省经日志中枢以 debug 级写 stderr */
   print?: (line: string) => void;
-  /** 是否启用；缺省读 `VESSEL_RUN_TIMING` */
+  /** 是否启用；缺省读 `VESSEL_RUN_TIMING` 与中枢 debug 档 */
   enabled?: boolean;
   /** 时钟；缺省 Date.now */
   clock?: RunTimingClock;
@@ -123,8 +121,17 @@ export interface RunTimingOptions {
  */
 export function createRunTiming(runId: string, options: RunTimingOptions = {}): RunTiming {
   const clock = options.clock ?? { now: () => Date.now() };
-  const print = options.print ?? defaultPrint;
+  const print = options.print;
   const enabled = options.enabled ?? defaultEnabled();
+  // 字段序由 EVENT_FIELDS 钉住（run.timing / run.llm.gap）；值在这里预渲染
+  // （`1.2s` / `—`），动态键（notes/counts/texts）与 outcome/total 按插入序追加。
+  const emit = (event: string, fields: Record<string, unknown>): void => {
+    if (print !== undefined) {
+      print(formatEventLine(event, fields));
+      return;
+    }
+    emitLogLine('debug', event, fields);
+  };
   const startedAt = clock.now();
   const marks = new Map<string, number>();
   const notes = new Map<string, number>();
@@ -156,53 +163,46 @@ export function createRunTiming(runId: string, options: RunTimingOptions = {}): 
     },
     round(timing: RoundTiming): void {
       if (!enabled || finished) return;
-      // 字段序固定（宪法第十四条：按事件定义，不按对象字面量顺序）。
-      const parts = [`round=${timing.round}`, `model=${formatTimingMs(timing.modelMs)}`];
-      if (timing.gapMs !== undefined) parts.push(`gap=${formatTimingMs(timing.gapMs)}`);
-      if (timing.toolCalls !== undefined) parts.push(`tools=${timing.toolCalls}`);
-      if (timing.toolsMs !== undefined) parts.push(`tools_ms=${formatTimingMs(timing.toolsMs)}`);
+      const fields: Record<string, unknown> = {
+        run: shortId(runId),
+        round: timing.round,
+        model: formatTimingMs(timing.modelMs),
+      };
+      if (timing.gapMs !== undefined) fields.gap = formatTimingMs(timing.gapMs);
+      if (timing.toolCalls !== undefined) fields.tools = timing.toolCalls;
+      if (timing.toolsMs !== undefined) fields.tools_ms = formatTimingMs(timing.toolsMs);
       if (timing.gapMs !== undefined) {
         // `us` = 我们自己那一段（组请求 / hook / 前缀校验 / 权限），把工具时间扣掉。
-        const ours = Math.max(0, timing.gapMs - (timing.toolsMs ?? 0));
-        parts.push(`us=${formatTimingMs(ours)}`);
+        fields.us = formatTimingMs(Math.max(0, timing.gapMs - (timing.toolsMs ?? 0)));
       }
       if (timing.firstTokenMs !== undefined) {
-        parts.push(`first_token=${formatTimingMs(timing.firstTokenMs)}`);
+        fields.first_token = formatTimingMs(timing.firstTokenMs);
       }
-      print(`[vessel] run.llm.gap run=${shortId(runId)} ${parts.join(' ')}`);
+      emit('run.llm.gap', fields);
     },
     finish(result: RunTimingFinish): void {
       if (!enabled || finished) return;
       finished = true;
       const totalMs = result.totalMs ?? clock.now() - startedAt;
-      const parts: string[] = [`run=${shortId(runId)}`];
+      const fields: Record<string, unknown> = { run: shortId(runId) };
       // 阶段按发生顺序；没发生的段不出现（不打 0，不编字段）。
-      const order = [
-        'admit',
-        'spawn',
-        'history',
-        'compact',
-        'llm',
-        'first_token',
-        'tools',
-        'total',
-      ];
+      const order = ['admit', 'spawn', 'history', 'compact', 'llm', 'first_token', 'tools'];
       for (const phase of order) {
-        if (phase === 'total') continue;
         const at = marks.get(phase);
         if (at !== undefined) {
-          parts.push(`${phase}=${formatTimingMs(at)}`);
+          fields[phase] = formatTimingMs(at);
           continue;
         }
         // `admit` / `spawn` 是**上游**才知道的两段（准入排队、成员身体派生）。没测到不等于
         // 没发生——打 `—` 明确表达「这一段这次没有」，而不是让读者以为被吞了。
-        if (phase === 'admit' || phase === 'spawn') parts.push(`${phase}=—`);
+        if (phase === 'admit' || phase === 'spawn') fields[phase] = '—';
       }
-      for (const [name, ms] of notes) parts.push(`${name}=${formatTimingMs(ms)}`);
-      for (const [name, value] of counters) parts.push(`${name}=${Math.round(value)}`);
-      for (const [name, value] of texts) parts.push(`${name}=${value}`);
-      parts.push(`outcome=${result.outcome}`, `total=${formatTimingMs(totalMs)}`);
-      print(`[vessel] run.timing ${parts.join(' ')}`);
+      for (const [name, ms] of notes) fields[name] = formatTimingMs(ms);
+      for (const [name, value] of counters) fields[name] = Math.round(value);
+      for (const [name, value] of texts) fields[name] = value;
+      fields.outcome = result.outcome;
+      fields.total = formatTimingMs(totalMs);
+      emit('run.timing', fields);
     },
     snapshot() {
       return {

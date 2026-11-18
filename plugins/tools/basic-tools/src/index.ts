@@ -1105,18 +1105,8 @@ interface AsyncBashJob {
  */
 const asyncJobs = new Map<string, AsyncBashJob>();
 
-/**
- * 后台作业的过程日志（debug 级，一条作业一行起步）。
- * 阈值暂读环境变量（VESSEL_DEBUG / VESSEL_LOG_LEVEL=debug）；
- * 日志中枢落地后 createStderrLogger 跟随进程级配置，这里无需再改。
- */
-const jobLog = createStderrLogger({
-  level:
-    (process.env.VESSEL_DEBUG ?? '').trim() !== '' ||
-    (process.env.VESSEL_LOG_LEVEL ?? '').trim().toLowerCase() === 'debug'
-      ? 'debug'
-      : 'info',
-});
+/** 后台作业的过程日志（debug 级，一条作业一行起步）；阈值跟随进程级日志中枢。 */
+const jobLog = createStderrLogger();
 
 /** 进程退出兜底是否已武装（只装一次，避免多次 install 叠加监听器） */
 let asyncExitSweepInstalled = false;
