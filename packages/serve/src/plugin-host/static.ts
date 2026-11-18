@@ -5,6 +5,10 @@
  * 根目录内（防 symlink 逃逸）。拒绝 `.` / `..` / 反斜杠 / 空段；未知 plugin
  * 或未知 entry 一律 404，不回落主 Web 的 index.html。
  *
+ * plugin-embed 契约 §4：`/plugins/<id>/ui/<path>` 是 embed 静态命名空间，
+ * parsePath 剥掉首段 `ui` 后服务 `uiDir/<path>`；`ui` 段对 contributes.http
+ * 保留（manifest 校验），动态路由不会遮蔽这里。
+ *
  * @module @vessel-agent/serve/plugin-host
  */
 
@@ -75,17 +79,32 @@ function parsePath(pathname: string): { id: string; segments: string[] } | null 
   if (segments.length === 1 && segments[0] === '') return { id, segments: ['index.html'] };
   if (segments.some((segment) => segment === '')) return null;
   if (!segments.every(isSafeSegment)) return null;
+  // plugin-embed 契约 §4：`/plugins/<id>/ui/<path>` → `uiDir/<path>`。
+  // 只剥首段 `ui`（`/plugins/<id>/ui` 本身仍是 iframe 命名空间的普通文件路径）。
+  if (segments.length > 1 && segments[0] === 'ui') return { id, segments: segments.slice(1) };
   return { id, segments };
 }
 
-function headersFor(path: string): Record<string, string> {
+/**
+ * 缓存头（plugin-embed 契约 §5）：HTML no-cache + PLUGIN_CSP；embed 入口 /
+ * CSS no-cache（入口必须带 `?v=<hash>` 加载，双保险）；其余非 HTML 保持
+ * immutable（chunk 文件名带哈希）。
+ */
+function headersFor(
+  path: string,
+  relativePath: string,
+  mount: PluginStaticMount,
+): Record<string, string> {
   const extension = extname(path).toLowerCase();
   const contentType = MIME[extension] ?? 'application/octet-stream';
   const isHtml = extension === '.html' || extension === '.htm';
+  const isEmbedEntry =
+    relativePath === mount.embedEntry ||
+    (mount.embedCss !== undefined && relativePath === mount.embedCss);
   return {
     'Content-Type': contentType,
     'X-Content-Type-Options': 'nosniff',
-    'Cache-Control': isHtml ? 'no-cache' : 'public, max-age=31536000, immutable',
+    'Cache-Control': isHtml || isEmbedEntry ? 'no-cache' : 'public, max-age=31536000, immutable',
     ...(isHtml ? { 'Content-Security-Policy': PLUGIN_CSP } : {}),
   };
 }
@@ -134,5 +153,10 @@ export async function servePluginAsset(
     return null;
   }
   if (isDirectory) return null;
-  return new Response(file, { headers: headersFor(resolvedTarget) });
+  // 相对 uiDir realpath 根的路径（`/` 分隔）；与 mount 的 embedEntry/embedCss 比对。
+  const relativePath = resolvedTarget
+    .slice(root.length + 1)
+    .split(sep)
+    .join('/');
+  return new Response(file, { headers: headersFor(resolvedTarget, relativePath, mount) });
 }

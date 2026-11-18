@@ -55,6 +55,14 @@ const ALLOWED_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'POST']);
 const NODE_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
+ * plugin-embed 契约 §4：embed 静态命名空间 `/plugins/<id>/ui/<...>`。
+ * id 规则与 manifest 一致（`[a-z0-9][a-z0-9-]{1,63}`）；`ui` 段对
+ * contributes.http 保留（manifest 校验），所以这里只会命中静态资源，
+ * 动态路由不在该命名空间内。traversal 防护由 safeRestPath 负责。
+ */
+const PLUGIN_EMBED_STATIC_RE = /^\/plugins\/[a-z0-9][a-z0-9-]{1,63}\/ui\/(.+)$/;
+
+/**
  * RPC 方法白名单的**命名空间**（0.55 方法表的全部前缀）。
  *
  * 为什么按命名空间而不是逐条列方法：逐条列会随 node 加方法而静默失效（新方法一律被拒
@@ -260,8 +268,11 @@ export function isHealthProbePath(rest: string): boolean {
   return bare === '/health' || bare === '/healthz' || bare === '/readyz' || bare === '/livez';
 }
 
-/** 路径是否允许代理（HTTP）。 */
-export function checkProxyHttpPath(rest: string): ProxyRejection | null {
+/**
+ * 路径是否允许代理（HTTP）。plugin-embed 契约 §4：`/plugins/<id>/ui/<...>`
+ * 的 embed 静态资源**仅 GET / HEAD** 放行（其他方法 405）；其余形状不变。
+ */
+export function checkProxyHttpPath(rest: string, method: string): ProxyRejection | null {
   for (const denied of DENIED_PATH_PREFIXES) {
     if (rest.startsWith(denied)) {
       return {
@@ -277,12 +288,29 @@ export function checkProxyHttpPath(rest: string): ProxyRejection | null {
   for (const allowed of ALLOWED_PATH_PREFIXES) {
     if (rest.startsWith(allowed)) return null;
   }
+  const embedStatic = PLUGIN_EMBED_STATIC_RE.exec(rest);
+  if (embedStatic !== null) {
+    // 后续段至少一个非空（`/plugins/<id>/ui/` 本身不算资源路径）。
+    const hasSegment = (embedStatic[1] ?? '').split('/').some((segment) => segment.length > 0);
+    if (hasSegment) {
+      const upper = method.toUpperCase();
+      if (upper === 'GET' || upper === 'HEAD') return null;
+      return {
+        status: 405,
+        code: 'proxy_method_not_allowed',
+        message:
+          `proxy_method_not_allowed: embed 静态资源（/plugins/<id>/ui/**）只代理 GET / HEAD` +
+          `（收到 ${upper}）。`,
+      };
+    }
+  }
   return {
     status: 404,
     code: 'proxy_path_not_allowed',
     message:
-      `proxy_path_not_allowed: 平台只代理 node 的数据面路径（/health、/v1/**）；` +
-      `"${rest}" 不在白名单内。插件 UI / 静态资源请直连 node 或走 node 自己的入口。`,
+      `proxy_path_not_allowed: 平台只代理 node 的数据面路径（/health、/v1/**）与 embed 静态资源` +
+      `（/plugins/<id>/ui/**，仅 GET / HEAD）；"${rest}" 不在白名单内。` +
+      '插件 iframe 页仍请直连 node 或走 node 自己的入口。',
   };
 }
 

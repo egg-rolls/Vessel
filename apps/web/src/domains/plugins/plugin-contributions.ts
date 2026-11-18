@@ -47,6 +47,8 @@ export interface PluginPageItem {
   icon?: PluginNavIcon;
   order: number;
   entry: string;
+  /** plugin-embed 契约 §3：embed 具名导出组件；非法形状丢弃（iframe 仍可用）。 */
+  component?: string;
 }
 
 /** CONTRACT-0.43 §2.9 E5：已校验的自定义导航分组。 */
@@ -112,6 +114,8 @@ const PANEL_SLOTS: ReadonlySet<string> = new Set(['run-detail', 'session-detail'
 const TOOLBAR_SLOTS: ReadonlySet<string> = new Set(['composer']);
 const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const RPC_METHOD = /^[a-z][a-z0-9_-]*$/;
+/** embed 具名导出组件形状（与 manifest 侧同一规则）。 */
+const COMPONENT_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const I18N_KEY = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const I18N_FORBIDDEN = new Set(['__proto__', 'constructor', 'prototype']);
 const I18N_MAX_ENTRIES = 200;
@@ -232,6 +236,15 @@ export function safeEntryPath(entry: string): string | null {
  * 0.49：第一个参数是 **node origin**（`/plugins/*` 由 node 宿主提供），不再使用
  * 平台 origin；空串 = 页面同源（legacy `--serve`）。
  */
+/** node origin 归一化：空串 = 页面同源（legacy `--serve`）；无法解析返回 ''。 */
+function resolveNodeOrigin(nodeOrigin: string): string {
+  return nodeOrigin.trim() !== ''
+    ? nodeOrigin.trim().replace(/\/+$/, '')
+    : typeof window === 'undefined'
+      ? ''
+      : window.location.origin;
+}
+
 export function pluginFrameUrl(
   nodeOrigin: string,
   pluginId: string,
@@ -246,12 +259,7 @@ export function pluginFrameUrl(
   if (!isValidPluginId(pluginId)) return null;
   const safeEntry = safeEntryPath(entry);
   if (safeEntry === null) return null;
-  const origin =
-    nodeOrigin.trim() !== ''
-      ? nodeOrigin.trim().replace(/\/+$/, '')
-      : typeof window === 'undefined'
-        ? ''
-        : window.location.origin;
+  const origin = resolveNodeOrigin(nodeOrigin);
   if (origin === '') return null;
   const url = new URL(`/plugins/${encodeURIComponent(pluginId)}/${safeEntry}`, origin);
   if (context?.run) url.searchParams.set('run', context.run);
@@ -259,6 +267,25 @@ export function pluginFrameUrl(
   if (context?.lang) url.searchParams.set('lang', context.lang);
   if (context?.theme) url.searchParams.set('theme', context.theme);
   return url.toString();
+}
+
+/**
+ * plugin-embed 契约 §4：embed 静态资源 URL `${nodeUrl}/plugins/<id>/ui/<path>`。
+ * 直连模式 nodeUrl = node origin；代理模式 nodeUrl = `<platform>/nodes/<nodeId>`
+ * （ConnectionProvider 已给出）——两种模式下模块都与 WebUI 同源。
+ * 非法输入返回 null（调用方渲染错误态）。
+ */
+export function pluginEmbedAssetUrl(
+  nodeOrigin: string,
+  pluginId: string,
+  relPath: string,
+): string | null {
+  if (!isValidPluginId(pluginId)) return null;
+  const safePath = safeEntryPath(relPath);
+  if (safePath === null) return null;
+  const origin = resolveNodeOrigin(nodeOrigin);
+  if (origin === '') return null;
+  return new URL(`/plugins/${encodeURIComponent(pluginId)}/ui/${safePath}`, origin).toString();
 }
 
 /**
@@ -299,6 +326,7 @@ function pageOf(
   const icon = navIconOf(page.icon);
   if (icon === null) return null;
   const titleKey = text(page.titleKey);
+  const component = text(page.component);
   return {
     pluginId: plugin.name,
     pluginName: plugin.name,
@@ -309,6 +337,7 @@ function pageOf(
     ...(icon !== undefined ? { icon } : {}),
     order: orderOf(page.order),
     entry: pageEntry(page),
+    ...(component !== '' && COMPONENT_NAME.test(component) ? { component } : {}),
   };
 }
 

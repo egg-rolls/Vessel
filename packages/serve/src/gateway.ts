@@ -4056,7 +4056,17 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
       // 0.48 M1：插件 HTTP 路由。插入点在 Host/Origin/protocol 与宿主路由之后、
       // 静态 SPA 之前；插件路径永不进入 serveStatic。冲突时路由表为空。
-      if (opts.pluginHttp !== undefined) {
+      // plugin-embed 契约 §4：`/plugins/<id>/ui/**` 是 embed 静态保留命名空间，
+      // 动态路由永不命中这里（即使首段是可能绑定 `ui` 的 `:param`），保证平台
+      // 代理白名单只会转发到静态服务。解码后再判，与 parsePath 的逐段解码一致。
+      let pluginNamespacePath = path;
+      try {
+        pluginNamespacePath = decodeURIComponent(path);
+      } catch {
+        // 非法编码：保留原样，静态侧 parsePath 会拒。
+      }
+      const isPluginEmbedStaticPath = /^\/plugins\/[^/]+\/ui\//.test(pluginNamespacePath);
+      if (opts.pluginHttp !== undefined && !isPluginEmbedStaticPath) {
         const pluginMatch = opts.pluginHttp.match(req.method, path);
         if (pluginMatch.kind === 'invalid') {
           return errorJson('invalid_request', 'Invalid request path', 400, extra);

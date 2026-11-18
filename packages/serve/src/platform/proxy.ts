@@ -313,7 +313,7 @@ export class PlatformProxy {
     }
     const methodRejection = checkProxyMethod(req.method);
     if (methodRejection !== null) return rejectionResponse(methodRejection);
-    const pathRejection = checkProxyHttpPath(route.rest);
+    const pathRejection = checkProxyHttpPath(route.rest, req.method);
     if (pathRejection !== null) return rejectionResponse(pathRejection);
 
     const upstreamUrl = this.buildUpstreamUrl(node, route.rest, url.search);

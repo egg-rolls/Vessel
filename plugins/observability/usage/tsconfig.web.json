@@ -8,7 +8,8 @@
     "moduleDetection": "force",
     "paths": {
       "@vessel-agent/plugin-ui": ["../../../packages/plugin-ui/src/index.ts"],
-      "@vessel-agent/plugin-ui/*": ["../../../packages/plugin-ui/src/*"]
+      "@vessel-agent/plugin-ui/*": ["../../../packages/plugin-ui/src/*"],
+      "@vessel-agent/plugin-sdk": ["../../../packages/plugin-sdk/src/index.ts"]
     },
     "jsx": "react-jsx",
     "strict": true,
@@ -24,5 +25,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["bun"]
   },
-  "include": ["web-src", "vite.config.ts"]
+  "include": ["web-src", "vite.config.ts", "vite.config.embed.ts"]
 }

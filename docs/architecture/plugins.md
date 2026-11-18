@@ -7,7 +7,7 @@ paths: [plugins/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, app
 
 # Plugin 架构：能力插件与体验插件
 
-> 决策见 [ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)；接口与发现细节见 [extensions](extensions.md)；操作与生命周期见 [agents/plugins](../agents/plugins.md)。
+> 决策见 [ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)；接口与发现细节见 [extensions](extensions.md)；操作与生命周期见 [agents/plugins](../agents/plugins.md)；内嵌 React UI（embed 档）见 [ADR-102](../adr/ADR-102-host-level-ui-mount.md) 与 [plugin-embed](plugin-embed.md) 契约。
 
 ## 一个机制，两种形态
 
@@ -16,7 +16,7 @@ paths: [plugins/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, app
 - **体验插件**（experience）：独立子进程，只经换行分隔的 JSON-RPC / DTO 与宿主通信，贡献 pages / commands / settings / rpc / events / panels / toolbar；UI 在独立 origin 的 iframe 中运行。
 - 两者同名 plugin、同一份清单与发现规则；差别只在执行位置与贡献面，不在扩展机制。贡献面由 harness（`packages/serve`、`apps/web`、CLI 装配层）收集，core 不感知。
 - **归属级**：默认 Workspace plugin（一家公司）；Platform plugin 仅服务所有公司的基础设施（Hub / registry / marketplace 后端）。Team 是使用范围，不拥有插件。Workspace 插件独立包与 Workspace=公司数据目录仍未实现（target），见 [topology](topology.md) 的「未实现 / target」表与[插件归属](topology.md#插件归属)。
-- **宿主面（0.49）**：插件 HTTP/WS 只注册在 **Node API**（`serve.port`；拆分模式缺省 8644，legacy `--serve` 仍 8642）。Platform Gateway 不承载、不反代插件路由，平台 `/plugins/*` 一律 404；插件 iframe 走 `nodeUrl`。settings 与 catalog 只有单份（不按 tenant 合并）。
+- **宿主面（0.49）**：插件 HTTP/WS 只注册在 **Node API**（`serve.port`；拆分模式缺省 8644，legacy `--serve` 仍 8642）。Platform Gateway 不承载、不反代插件动态路由，平台根 `/plugins/*` 一律 404；插件 iframe 走 `nodeUrl`。唯一例外（plugin-embed 契约 §4）：`/nodes/<nodeId>/plugins/<id>/ui/**` 的 **embed 静态资源**经代理白名单仅 GET / HEAD 同源转发（`ui` 首段对 `contributes.http` 保留，动态路由进不来）；iframe 页在代理模式仍被白名单拒绝，embed 是代理模式可用路径。settings 与 catalog 只有单份（不按 tenant 合并）。
 
 ## Manifest（`package.json.vessel`）
 
@@ -26,10 +26,15 @@ paths: [plugins/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, app
 {
   "vessel": {
     "id": "usage", "name": "Usage", "version": "0.1.0", "engines": { "vessel": ">=0.43 <0.45" },
-    "side": "both", "entry": "src/index.ts", "ui": { "dir": "web" },
+    "side": "both", "entry": "src/index.ts",
+    // ui.embed 可选（plugin-embed 契约 §2）：声明内嵌 React UI；entry 必填 .mjs，
+    // css 可选 .css，runtime 是 semver range（支持 ^ / ~）。
+    "ui": { "dir": "web", "embed": { "entry": "embed/index.mjs", "css": "embed/index.css",
+      "runtime": { "react": "^19", "sdk": "^1" } } },
     "activationEvents": ["onPage:usage", "onCommand:summary"],
     "contributes": {
-      "pages": [{ "id": "usage", "title": "Usage", "nav": "observe", "entry": "usage.html" }],
+      // component 是 embed 模块的具名导出（声明它必须有 ui.embed）；entry 仍是必填的 iframe 回退。
+      "pages": [{ "id": "usage", "title": "Usage", "nav": "observe", "entry": "usage.html", "component": "UsageView" }],
       "commands": [{ "name": "summary", "title": "Usage summary" }],
       "settings": { "prices": { "type": "object" } }, "rpc": [{ "name": "summary" }],
       "events": ["llm.response", "run.failed"],
@@ -42,7 +47,7 @@ paths: [plugins/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, app
 }
 ```
 
-- `id` 全仓库唯一；`contributes.events` 必须是 `permissions.events` 的子集；`rpc[].name` 只能是裸名，宿主注册为 `plugin.<id>.<name>`。`entry` / `ui.dir` 必须在 plugin 目录内（realpath containment）；覆盖内置插件需 `vessel.override: true`。
+- `id` 全仓库唯一；`contributes.events` 必须是 `permissions.events` 的子集；`rpc[].name` 只能是裸名，宿主注册为 `plugin.<id>.<name>`。`entry` / `ui.dir` 必须在 plugin 目录内（realpath containment）；覆盖内置插件需 `vessel.override: true`。`contributes.http` 的 path 在 `/plugins/<id>/` 之后的首段不得为 `ui`（embed 静态命名空间保留，plugin-embed 契约 §2）。
 
 ## 发现与激活
 
@@ -51,6 +56,7 @@ paths: [plugins/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, app
 ## 信任与能力边界
 
 - 内置插件可信；外部插件默认不可信，安装时展示声明的 `permissions`（`fs` / `net` / `process` / `secrets` / `events` / `rpc` / `ports`），未声明能力默认拒绝；显式 `plugins:` 条目视为信任确认。子进程只做到崩溃 / 生命周期隔离（约束 cwd / env、回收与重启、宿主 API 调用点检查权限），**不是 OS 沙箱**。
+- **UI 信任档（plugin-embed 契约 §1）**：声明了 `ui.embed` 的插件，`plugins.list`  additive 返回 `ui_trust: 'embedded' | 'isolated'` / `ui_bundle_hash` / `ui_embed`，**服务端计算，前端只消费**。builtin → embedded；其他来源需 `config.yaml` `plugins[].trust_ui: "embedded"`（独立于进程权限的单独确认，缺省 isolated）且 TOFU 哈希锁一致：锁文件 `<dataDir>/plugins/<id>/ui-bundle.lock.json`，无锁钉住当前哈希，锁不等 / 写锁失败 → isolated（fail-closed，不自动更新锁）。embedded 等同授予该插件对 Web 控制台的全部权限（含会话凭据）；SDK 白名单只防误用，**不是沙箱**。确认流程 UI / 签名在 P4。
 - **宿主作用域（0.51 期 0）**：`vessel.scope: 'node' | 'member'` 决定插件装在节点宿主还是成员身体上；只有 `member` 的 in-process 能力插件能申请 `permissions.ports`（闭集，当前只有 `inbox`），child 插件本期不给端口。端口是「宿主算好、按 body 切好、声明过才给」的值，不是句柄：`agentId` 绑死在端口上，投递状态机留在宿主。契约见 [extensions](extensions.md#plugin-ports)。
 - 不做 monkey-patch / 运行时改写 core 或其它 plugin；扩展点不够时先加贡献点。
 
@@ -100,7 +106,7 @@ tool loop ── capability tools (prompt surface = token tax)
 
 - 命令：`vessel plugin list`、`vessel plugin install <path>`、`vessel plugin enable <id>`、`vessel plugin disable <id>`。Marketplace：浏览 / 安装 / 更新 / 删除走 `marketplace` 体验插件；registry、校验和与发布流程见 [plugin-registry](plugin-registry.md)。
 - 配置与数据：`config.yaml` 的 `plugins[].config` 作为 settings 在激活时下发，只保留 manifest `contributes.settings` 声明过的键（未声明告警丢弃，类型不符 → `plugin_config_invalid`）；plugin 私有目录 `<dataDir>/plugins/<id>/`，stderr 写 `<dataDir>/plugins/<id>/logs/plugin.log`（1 MiB 轮转）；全局 dataDir 只读，仅在 `permissions.fs` 含 `data-dir` 时下发。
-- 编写：子进程入口用 Bun 直接跑 TS，处理 `plugin.hello` / `plugin.activate` / `plugin.event` / `plugin.rpc` / `plugin.deactivate`，只写 stdout 协议帧；Web 资源放 `ui.dir`，iframe `sandbox="allow-scripts allow-forms"` + CSP，经 `vessel.plugin.rpc` postMessage 调宿主桥，不接触 gateway token。
+- 编写：子进程入口用 Bun 直接跑 TS，处理 `plugin.hello` / `plugin.activate` / `plugin.event` / `plugin.rpc` / `plugin.deactivate`，只写 stdout 协议帧；Web 资源放 `ui.dir`，iframe `sandbox="allow-scripts allow-forms"` + CSP，经 `vessel.plugin.rpc` postMessage 调宿主桥，不接触 gateway token。声明 `ui.embed` 的插件另出 ESM 产物（React / SDK external，经宿主 import map + vendor shim 共用同一份实例），embedded 档由宿主直接 import 渲染（`@vessel-agent/plugin-sdk` 的 `createPluginHost`），isolated 档回落 iframe；样本见 `plugins/observability/usage`（`build:ui` 双产线）。
 - 调试：`vessel plugin list` 的 status / error / events_dropped / restarts；崩溃 10 分钟内最多重启 3 次，超出禁用并保留诊断；`plugins.reload` 的 `errors[]` 只影响单个 plugin。
 
 ## 版本兼容

@@ -34,6 +34,16 @@ const MANIFEST_PATTERNS = [
   'apps/web/package.json',
 ];
 
+/**
+ * 版本线独立于仓库 release 版本的 manifest：写模式不改、--check 不查。
+ * plugin-sdk 是对外 SDK 契约包（plugin-embed 契约 §7 / ADR-102）：只在 SDK
+ * 契约变更时 bump，宿主 React 主版本升级才升 major；仓库 0.x minor 发版
+ * 不得打破插件声明的 runtime.sdk range（^1 跨仓库 minor 恒成立）。
+ */
+const INDEPENDENT_VERSION_MANIFESTS: ReadonlySet<string> = new Set([
+  'packages/plugin-sdk/package.json',
+]);
+
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 export interface Manifest {
@@ -64,6 +74,7 @@ export async function collectManifests(root = ROOT): Promise<Manifest[]> {
   const manifests: Manifest[] = [];
   for (const path of [...paths].sort()) {
     if (!existsSync(join(root, path))) continue;
+    if (INDEPENDENT_VERSION_MANIFESTS.has(path)) continue;
 
     const raw = await readFile(join(root, path), 'utf8');
     const pkg = JSON.parse(raw) as { version?: unknown };

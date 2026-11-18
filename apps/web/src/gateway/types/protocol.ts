@@ -214,6 +214,8 @@ export interface PluginContributionPage {
   entry?: string;
   /** 宿主可选的完整路由；仅用于从旧数据推导 entry。 */
   route?: string;
+  /** plugin-embed 契约 §3：embed 模块的具名导出组件（additive）。 */
+  component?: string;
 }
 
 export interface PluginContributionPanel {
@@ -301,6 +303,16 @@ export interface PluginCatalogResponse {
   items: PluginCatalogItem[];
 }
 
+/** plugin-embed 契约 §1：UI 信任档（服务端计算，前端只消费，不自行推断）。 */
+export type PluginUiTrust = 'embedded' | 'isolated';
+
+/** plugin-embed 契约 §3：`ui.embed` 声明的 wire 形状。 */
+export interface PluginUiEmbed {
+  entry: string;
+  css?: string;
+  runtime: { react: string; sdk: string };
+}
+
 export interface PluginListItem {
   name: string;
   enabled: boolean;
@@ -312,6 +324,10 @@ export interface PluginListItem {
   config?: Record<string, unknown>;
   /** additive（CONTRACT-0.43 §2.7）；能力插件不返回。 */
   contributions?: PluginContributions;
+  /** plugin-embed 契约 §3：没有 ui.embed 的插件三字段缺省（旧 gateway 同）。 */
+  ui_trust?: PluginUiTrust;
+  ui_bundle_hash?: string;
+  ui_embed?: PluginUiEmbed;
 }
 
 /** capability manifest（0.5） */

@@ -1,17 +1,19 @@
-import {
-  Button,
-  type PluginRpcClient,
-  Section,
-  SegmentedTabs,
-  type TabOption,
-} from '@vessel-agent/plugin-ui';
+import { Button, Section, SegmentedTabs, type TabOption } from '@vessel-agent/plugin-ui';
 import type { ReactNode } from 'react';
 import type { SourceCoverage } from '../src/aggregate.js';
 import type { Translator } from './i18n';
 
+/**
+ * 视图需要的最小 RPC 调用面：iframe 档的 PluginRpcClient 与 embed 档的
+ * host.rpc 适配器都满足它（同一份展示组件，两种档位共用）。
+ */
+export interface RpcCaller {
+  call<T = unknown>(method: string, params?: unknown): Promise<T>;
+}
+
 export interface ViewProps {
-  client: PluginRpcClient;
-  /** Bumped by `vessel.plugin.refresh`; views refetch when it changes. */
+  client: RpcCaller;
+  /** Bumped by `vessel.plugin.refresh` (iframe) or host events (embed). */
   refreshKey: number;
   t: Translator;
 }

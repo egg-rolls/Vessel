@@ -9,9 +9,10 @@
  * @module @vessel-agent/serve/plugin-host
  */
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { logEvent } from '../log-event.js';
 import { type ChildExitInfo, ChildPluginProcess, type PLUGIN_TIMEOUTS } from './child.js';
 import { jsonDtoViolation } from './dto.js';
@@ -52,6 +53,7 @@ import type {
   PluginRuntimeStatus,
   PluginStaticMount,
   PluginStatusEntry,
+  PluginUiTrust,
 } from './types.js';
 import {
   PLUGIN_BUILTIN_NAV,
@@ -144,6 +146,8 @@ interface Entry {
   settings: Record<string, unknown>;
   /** 本次 spawn 的插件 HTTP endpoint + 内部 token；非 active 时清空。 */
   httpEndpoint?: PluginHttpTarget;
+  /** plugin-embed 契约 §3：加载 / reload 时计算的信任态；无 embed 时缺省。 */
+  embedState?: { trust: PluginUiTrust; hash: string };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -253,6 +257,101 @@ function eventSubsetOfPermissions(
   );
 }
 
+// ── plugin-embed（契约 §1 / §3）：信任档 + 哈希锁 ──────────────────────────
+
+/** `pages[].component` 形状（与 manifest 侧同一规则；serve 不 import src/）。 */
+const PLUGIN_COMPONENT_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+function sha256Hex(value: string | Uint8Array): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+/**
+ * 递归收集常规文件（相对路径 `/` 分隔）。symlink → 抛错（契约 §3 fail-closed）：
+ * 符号链接目标可以在不改变哈希的情况下被换掉，会绕过 TOFU 哈希锁；
+ * 整个 embed 视同不可读（字段缺省，前端回落 iframe）。
+ */
+function collectEmbedFiles(root: string, prefix: string, out: string[]): void {
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+    if (entry.isSymbolicLink()) throw new Error(`symlink in embed dir: ${rel}`);
+    if (entry.isDirectory()) collectEmbedFiles(join(root, entry.name), rel, out);
+    else if (entry.isFile()) out.push(rel);
+  }
+}
+
+/**
+ * ui_bundle_hash（契约 §3）：embedRoot 下全部文件按相对路径排序，逐文件
+ * sha256，再对 `concat(relpath + "\0" + fileHash + "\n")` 取 sha256。
+ * embedRoot 不存在 / 不可读 → null（视同无 embed，fail-closed）。
+ */
+function computeEmbedHash(embedRoot: string): string | null {
+  try {
+    const files: string[] = [];
+    collectEmbedFiles(embedRoot, '', files);
+    files.sort();
+    let listing = '';
+    for (const rel of files) {
+      listing += `${rel}\0${sha256Hex(readFileSync(resolve(embedRoot, rel)))}\n`;
+    }
+    return sha256Hex(listing);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 信任档判定（契约 §1）：builtin → embedded；其他来源需 config `trust_ui:
+ * embedded` 且 TOFU 哈希锁一致。无锁 → 钉住当前哈希（写锁失败 → isolated）；
+ * 锁不等 / 损坏 / 读错误 → isolated，**不自动更新锁**（P4 重新确认）。
+ */
+function resolveUiTrust(
+  descriptor: PluginDescriptor,
+  hash: string,
+  dataDir: string,
+  logger: PluginLogger,
+): PluginUiTrust {
+  if (descriptor.builtin === true) return 'embedded';
+  if (descriptor.trustUi !== 'embedded') return 'isolated';
+  const lockPath = join(dataDir, 'plugins', descriptor.id, 'ui-bundle.lock.json');
+  let raw: string;
+  try {
+    raw = readFileSync(lockPath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'isolated';
+    // 无锁 → TOFU 钉住当前哈希。宿主侧写（不经插件子进程）；tmp + rename 防半写。
+    try {
+      mkdirSync(dirname(lockPath), { recursive: true, mode: 0o700 });
+      const record = `${JSON.stringify({ sha256: hash, recordedAt: new Date().toISOString() })}\n`;
+      const tmpPath = `${lockPath}.tmp`;
+      writeFileSync(tmpPath, record, { mode: 0o600 });
+      renameSync(tmpPath, lockPath);
+      return 'embedded';
+    } catch {
+      logger('warn', 'plugin ui trust lock write failed; staying isolated', {
+        plugin: descriptor.id,
+      });
+      return 'isolated';
+    }
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return 'isolated';
+  }
+  if (isRecord(parsed) && parsed.sha256 === hash) return 'embedded';
+  return 'isolated';
+}
+
+/** 相对 uiDir 的 embed 路径归一化（`/` 分隔，去 `./` 与空段），供缓存头比对。 */
+function normalizeEmbedRelPath(value: string): string {
+  return value
+    .split('/')
+    .filter((segment) => segment !== '' && segment !== '.')
+    .join('/');
+}
+
 /** descriptor 复检；loader 已校验过一遍，这里 fail-closed 防注入。 */
 function validateDescriptor(
   input: PluginDescriptor,
@@ -281,6 +380,43 @@ function validateDescriptor(
   const uiDir = input.uiDir !== undefined ? resolve(pluginDir, input.uiDir) : undefined;
   if (uiDir !== undefined && !isWithin(pluginDir, uiDir)) {
     throw pluginError('plugin_manifest_invalid', 'ui.dir must stay inside pluginDir.', {
+      id: input.id,
+    });
+  }
+  // plugin-embed 契约 §2：ui.embed 结构复检（manifest 已校验过一遍，防注入）。
+  const uiEmbed = input.uiEmbed;
+  if (uiEmbed !== undefined) {
+    if (uiDir === undefined) {
+      throw pluginError('plugin_manifest_invalid', 'ui.embed requires ui.dir.', { id: input.id });
+    }
+    if (!isSafeRelativeEntry(uiEmbed.entry) || !uiEmbed.entry.endsWith('.mjs')) {
+      throw pluginError('plugin_manifest_invalid', 'ui.embed.entry must be a relative .mjs path.', {
+        id: input.id,
+      });
+    }
+    if (
+      uiEmbed.css !== undefined &&
+      (!isSafeRelativeEntry(uiEmbed.css) || !uiEmbed.css.endsWith('.css'))
+    ) {
+      throw pluginError('plugin_manifest_invalid', 'ui.embed.css must be a relative .css path.', {
+        id: input.id,
+      });
+    }
+    if (
+      typeof uiEmbed.runtime?.react !== 'string' ||
+      uiEmbed.runtime.react.length === 0 ||
+      typeof uiEmbed.runtime?.sdk !== 'string' ||
+      uiEmbed.runtime.sdk.length === 0
+    ) {
+      throw pluginError(
+        'plugin_manifest_invalid',
+        'ui.embed.runtime requires react and sdk ranges.',
+        { id: input.id },
+      );
+    }
+  }
+  if (input.trustUi !== undefined && input.trustUi !== 'embedded') {
+    throw pluginError('plugin_manifest_invalid', 'trustUi must be "embedded" when present.', {
       id: input.id,
     });
   }
@@ -368,6 +504,18 @@ function validateDescriptor(
       throw pluginError('plugin_manifest_invalid', 'pages[].entry must be relative.', {
         id: input.id,
       });
+    }
+    if (page.component !== undefined) {
+      if (typeof page.component !== 'string' || !PLUGIN_COMPONENT_PATTERN.test(page.component)) {
+        throw pluginError('plugin_manifest_invalid', 'pages[].component must be a JS identifier.', {
+          id: input.id,
+        });
+      }
+      if (uiEmbed === undefined) {
+        throw pluginError('plugin_manifest_invalid', 'pages[].component requires ui.embed.', {
+          id: input.id,
+        });
+      }
     }
     if (page.nav !== undefined && !isValidPageNav(page.nav, input.id, hasOwnGroup)) {
       throw pluginError('plugin_manifest_invalid', 'pages[].nav is invalid.', {
@@ -538,6 +686,8 @@ function descriptorFingerprint(descriptor: PluginDescriptor): string {
     permissions: descriptor.permissions ?? {},
     enabled: descriptor.enabled ?? true,
     builtin: descriptor.builtin ?? false,
+    uiEmbed: descriptor.uiEmbed ?? null,
+    trustUi: descriptor.trustUi ?? null,
   });
 }
 
@@ -790,6 +940,12 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
         continue;
       }
       if (descriptorFingerprint(existing.descriptor) === descriptorFingerprint(descriptor)) {
+        // plugin-embed 契约 §8：descriptor 没变但 bundle 内容可能变了（热更新）。
+        // 重算 hash / trust，让 plugins.list 对账拿到新 ui_bundle_hash；
+        // 子进程代码未变，不重启。
+        const previousHash = existing.embedState?.hash;
+        this.refreshEmbedState(existing);
+        if (existing.embedState?.hash !== previousHash) changed.push(id);
         continue;
       }
       changed.push(id);
@@ -797,6 +953,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
       try {
         await this.deactivate(id);
         existing.descriptor = descriptor;
+        this.refreshEmbedState(existing);
         existing.enabled = descriptor.enabled ?? true;
         existing.status = existing.enabled ? 'inactive' : 'disabled';
         existing.error = undefined;
@@ -926,7 +1083,19 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     for (const entry of this.entries.values()) {
       if (!entry.enabled || entry.status === 'invalid') continue;
       const uiDir = entry.descriptor.uiDir;
-      if (uiDir !== undefined) mounts.push({ id: entry.descriptor.id, uiDir });
+      if (uiDir === undefined) continue;
+      const embed = entry.descriptor.uiEmbed;
+      mounts.push({
+        id: entry.descriptor.id,
+        uiDir,
+        // plugin-embed 契约 §5：入口 / CSS 走 no-cache，其余资产保持 immutable。
+        ...(embed !== undefined
+          ? {
+              embedEntry: normalizeEmbedRelPath(embed.entry),
+              ...(embed.css !== undefined ? { embedCss: normalizeEmbedRelPath(embed.css) } : {}),
+            }
+          : {}),
+      });
     }
     return mounts;
   }
@@ -1113,7 +1282,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
 
   private makeEntry(descriptor: PluginDescriptor): Entry {
     const enabled = descriptor.enabled ?? true;
-    return {
+    const entry: Entry = {
       descriptor,
       enabled,
       status: enabled ? 'inactive' : 'disabled',
@@ -1122,6 +1291,31 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
       denials: 0,
       restarts: [],
       settings: {},
+    };
+    this.refreshEmbedState(entry);
+    return entry;
+  }
+
+  /**
+   * plugin-embed 契约 §3：descriptor 加载 / reload 时计算 trust + hash。
+   * 无 ui.embed / embedRoot 不可读 → 字段缺省（视同无 embed，fail-closed）。
+   */
+  private refreshEmbedState(entry: Entry): void {
+    const descriptor = entry.descriptor;
+    const embed = descriptor.uiEmbed;
+    if (embed === undefined || descriptor.uiDir === undefined) {
+      entry.embedState = undefined;
+      return;
+    }
+    const embedRoot = resolve(descriptor.uiDir, dirname(embed.entry));
+    const hash = computeEmbedHash(embedRoot);
+    if (hash === null) {
+      entry.embedState = undefined;
+      return;
+    }
+    entry.embedState = {
+      trust: resolveUiTrust(descriptor, hash, this.dataDir, this.logger),
+      hash,
     };
   }
 
@@ -1361,6 +1555,13 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
       ...(entry.message !== undefined ? { message: entry.message } : {}),
       events_dropped: entry.dropped,
       restarts: restarts.length,
+      ...(entry.embedState !== undefined && entry.descriptor.uiEmbed !== undefined
+        ? {
+            ui_trust: entry.embedState.trust,
+            ui_bundle_hash: entry.embedState.hash,
+            ui_embed: entry.descriptor.uiEmbed,
+          }
+        : {}),
     };
   }
 
@@ -1403,6 +1604,10 @@ export function pluginListMetadata(
       ...(status.version !== undefined ? { version: status.version } : {}),
       ...(status.mode !== undefined ? { mode: status.mode } : {}),
       status: toPluginListStatus(status.status),
+      // plugin-embed 契约 §3：embed 信任态（无 ui.embed 的插件缺省）。
+      ...(status.ui_trust !== undefined ? { ui_trust: status.ui_trust } : {}),
+      ...(status.ui_bundle_hash !== undefined ? { ui_bundle_hash: status.ui_bundle_hash } : {}),
+      ...(status.ui_embed !== undefined ? { ui_embed: status.ui_embed } : {}),
     };
   }
   return output;
@@ -1433,6 +1638,7 @@ export function renderContributions(
       order: page.order ?? 100,
       entry: safeEntry(page.entry),
       route: routeFor(descriptor.id, page.entry),
+      ...(page.component !== undefined ? { component: page.component } : {}),
     }))
     // E5：分组内页面按 order 升序；同 order 保持 manifest 顺序。
     .sort((a, b) => a.order - b.order);

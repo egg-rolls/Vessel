@@ -144,6 +144,8 @@ export type {
   PluginSide,
   PluginStaticMount,
   PluginStatusEntry,
+  PluginUiEmbed,
+  PluginUiTrust,
 } from './types.js';
 export {
   PLUGIN_BUILTIN_NAV,

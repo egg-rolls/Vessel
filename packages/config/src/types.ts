@@ -199,6 +199,11 @@ export interface PluginConfig {
   config?: Record<string, unknown>;
   /** 0.48 M4：manifest 声明面的显式授权；内置插件忽略，外部插件缺省全关。 */
   expose?: PluginExposeConfig;
+  /**
+   * plugin-embed 契约 §1：内嵌 UI 的显式信任确认（独立于进程权限）。
+   * 缺省 = isolated；`embedded` 还需哈希锁（TOFU）一致才生效。builtin 忽略。
+   */
+  trust_ui?: 'embedded';
 }
 
 /** 自动更新配置 */

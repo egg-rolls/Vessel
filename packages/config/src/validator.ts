@@ -3109,6 +3109,14 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         if (plugin.expose !== undefined) {
           validatePluginExpose(`${prefix}.expose`, plugin.expose, errors);
         }
+        // plugin-embed 契约 §1：trust_ui 只接受显式 'embedded'（缺省 = isolated）。
+        if (plugin.trust_ui !== undefined && plugin.trust_ui !== 'embedded') {
+          errors.push({
+            path: `${prefix}.trust_ui`,
+            message: 'plugin trust_ui must be "embedded" (omit for isolated)',
+            value: plugin.trust_ui,
+          });
+        }
       }
     }
   }

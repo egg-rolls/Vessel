@@ -12,7 +12,8 @@
     // 完全等价 —— 下面的映射不需要改一个字符。
     "paths": {
       "@vessel-agent/plugin-ui": ["../../packages/plugin-ui/src/index.ts"],
-      "@vessel-agent/plugin-ui/*": ["../../packages/plugin-ui/src/*"]
+      "@vessel-agent/plugin-ui/*": ["../../packages/plugin-ui/src/*"],
+      "@vessel-agent/plugin-sdk": ["../../packages/plugin-sdk/src/index.ts"]
     },
     "skipLibCheck": true,
     "resolveJsonModule": true,

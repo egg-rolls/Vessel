@@ -145,6 +145,151 @@ const nodeTarget = relay?.url ?? NODE;
 const configure = relay ? relayConfigure(relay.secret) : undefined;
 
 const PLUGIN_UI_SRC = resolve(__dirname, '../../packages/plugin-ui/src');
+const PLUGIN_SDK_SRC = resolve(__dirname, '../../packages/plugin-sdk/src');
+
+/** SDK 版本只有一份真源（plugin-sdk package.json）；构建期 define 注入运行时。 */
+const PLUGIN_SDK_VERSION = (
+  JSON.parse(readFileSync(resolve(PLUGIN_SDK_SRC, '../package.json'), 'utf8')) as {
+    version: string;
+  }
+).version;
+
+// ── plugin-embed 契约 §6：React 单例 vendor shim + 冻结 import map ─────────
+//
+// 宿主 bundle 与插件 ESM 必须共用同一份 React 实例：main.tsx 在 createRoot 前
+// 把 namespace import 挂到 globalThis.__VESSEL_SHARED__，下面的 shim 只做静态
+// 具名导出 + default，全部取自该注册表（未注册时 throw，fail-closed）。
+// import map 把裸说明符映射到稳定路径的 shim；JSON 逐字冻结，它的 sha256 与
+// gateway/auth.ts buildContentSecurityPolicy 的 script-src 哈希互为契约
+// （docs/architecture/plugin-embed.md §6）：改一处必须同步改另一处并重算。
+
+const IMPORT_MAP_JSON =
+  '{"imports":{"react":"/assets/vendor/react.mjs","react-dom":"/assets/vendor/react-dom.mjs","react-dom/client":"/assets/vendor/react-dom-client.mjs","react/jsx-runtime":"/assets/vendor/jsx-runtime.mjs","@vessel-agent/plugin-sdk":"/assets/vendor/plugin-sdk.mjs"}}';
+
+/** 生成一个 vendor shim：静态具名导出 + default，全部取自 __VESSEL_SHARED__。 */
+function vendorShim(namespace: string, names: readonly string[]): string {
+  return [
+    'const shared = globalThis.__VESSEL_SHARED__;',
+    `if (!shared || !shared.${namespace}) throw new Error('[vessel] __VESSEL_SHARED__.${namespace} is not registered; embedded plugin vendor shim cannot load.');`,
+    `const mod = shared.${namespace};`,
+    ...names.map((name) => `export const ${name} = mod.${name};`),
+    // default 取模块自身的 default（react / react-dom 有）；没有 default 的
+    // 模块（jsx-runtime / plugin-sdk）回落到 namespace 对象。
+    'export default mod.default ?? mod;',
+    '',
+  ].join('\n');
+}
+
+/** React 19 导出面（契约 §6 冻结清单）。 */
+const REACT_EXPORTS = [
+  'Children',
+  'Component',
+  'Fragment',
+  'Profiler',
+  'PureComponent',
+  'StrictMode',
+  'Suspense',
+  'cloneElement',
+  'createContext',
+  'createElement',
+  'createRef',
+  'forwardRef',
+  'isValidElement',
+  'lazy',
+  'memo',
+  'startTransition',
+  'use',
+  'useActionState',
+  'useCallback',
+  'useContext',
+  'useDebugValue',
+  'useDeferredValue',
+  'useEffect',
+  'useId',
+  'useImperativeHandle',
+  'useInsertionEffect',
+  'useLayoutEffect',
+  'useMemo',
+  'useOptimistic',
+  'useReducer',
+  'useRef',
+  'useState',
+  'useSyncExternalStore',
+  'useTransition',
+  'version',
+] as const;
+
+const VENDOR_SHIMS: Readonly<Record<string, string>> = {
+  'react.mjs': vendorShim('React', REACT_EXPORTS),
+  'react-dom.mjs': vendorShim('ReactDOM', [
+    'createPortal',
+    'flushSync',
+    'preload',
+    'preinit',
+    'prefetchDNS',
+    'preconnect',
+    'version',
+  ]),
+  'react-dom-client.mjs': vendorShim('ReactDOMClient', ['createRoot', 'hydrateRoot']),
+  'jsx-runtime.mjs': vendorShim('JsxRuntime', ['Fragment', 'jsx', 'jsxs']),
+  'plugin-sdk.mjs': vendorShim('PluginSdk', [
+    'createPluginHost',
+    'compareSemver',
+    'isValidSemver',
+    'parseRangeVersion',
+    'parseSemver',
+    'parseVersionRange',
+    'satisfiesComparator',
+    'satisfiesVersionRange',
+  ]),
+};
+
+const VENDOR_PATH_PREFIX = '/assets/vendor/';
+
+/**
+ * vendor shim 的稳定路径服务：构建期 emitFile 到 `assets/vendor/*.mjs`，
+ * dev 用 configureServer 中间件同路径服务；transformIndexHtml 在 <head> 最前
+ * （第一个 module script 之前）注入冻结 import map（tag 内无任何附加空白）。
+ */
+function vesselPluginEmbed(): Plugin {
+  return {
+    name: 'vessel-plugin-embed',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const pathname = (req.url ?? '').split('?')[0] ?? '';
+        const name = pathname.startsWith(VENDOR_PATH_PREFIX)
+          ? pathname.slice(VENDOR_PATH_PREFIX.length)
+          : '';
+        const source = Object.hasOwn(VENDOR_SHIMS, name) ? VENDOR_SHIMS[name] : undefined;
+        if (source === undefined) {
+          next();
+          return;
+        }
+        res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.end(source);
+      });
+    },
+    transformIndexHtml(html) {
+      return {
+        html,
+        tags: [
+          {
+            tag: 'script',
+            attrs: { type: 'importmap' },
+            children: IMPORT_MAP_JSON,
+            injectTo: 'head-prepend',
+          },
+        ],
+      };
+    },
+    generateBundle() {
+      for (const [name, source] of Object.entries(VENDOR_SHIMS)) {
+        this.emitFile({ type: 'asset', fileName: `assets/vendor/${name}`, source });
+      }
+    },
+  };
+}
 
 export default defineConfig({
   // 品牌资源只有一份：仓库根 `assets/`。Web 直接把它当 public 目录，
@@ -161,9 +306,15 @@ export default defineConfig({
         find: '@vessel-agent/plugin-ui',
         replacement: resolve(PLUGIN_UI_SRC, 'index.ts'),
       },
+      // plugin-sdk 同样按源码消费（plugin-embed 契约 §7）：宿主 bundle 与
+      // vendor shim 共用同一份模块实例。
+      {
+        find: '@vessel-agent/plugin-sdk',
+        replacement: resolve(PLUGIN_SDK_SRC, 'index.ts'),
+      },
     ],
   },
-  plugins: [react(), tailwindcss(), writeBuildStamp()],
+  plugins: [react(), tailwindcss(), writeBuildStamp(), vesselPluginEmbed()],
   build: {
     // 500 kB 是给「公网 CDN 上的多页应用」定的阈值：首屏之外的 chunk 可以慢慢拉，
     // 单块太大才值得拆。这个站不是那个形状 —— 单页应用、dist 由本地 gateway
@@ -203,6 +354,9 @@ export default defineConfig({
     // 页面把「我是哪一次构建」编进 bundle，运行时与 `dist/build.json` 比对，
     // 不一致就提示刷新 —— 后台重建完成后用户能立刻知道。
     __VESSEL_WEB_BUILD__: JSON.stringify(STAMP),
+    // embed loader 的运行时版本核对用（plugin-embed 契约 §7/§8）；
+    // 真源是 plugin-sdk package.json，不在源码硬编码第二份。
+    __VESSEL_PLUGIN_SDK_VERSION__: JSON.stringify(PLUGIN_SDK_VERSION),
   },
   server: {
     port: 5173,

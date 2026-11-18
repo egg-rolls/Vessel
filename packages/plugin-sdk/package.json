@@ -1,0 +1,17 @@
+{
+  "name": "@vessel-agent/plugin-sdk",
+  "version": "1.0.0",
+  "description": "Host API contract and minimal runtime for embedded Vessel plugins",
+  "type": "module",
+  "license": "MIT",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "peerDependencies": {
+    "react": ">=19"
+  }
+}
