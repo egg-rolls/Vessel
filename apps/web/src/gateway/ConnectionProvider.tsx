@@ -22,6 +22,7 @@ import {
 } from './connection-context';
 import { type ConnectionRecoveryHooks, createConnectionHandlers } from './connection-handlers';
 import { computeInitialConnection, LEGACY_TOKEN_KEY } from './connection-initial';
+import { readExpiredRequestIds } from './expired-interactions';
 import { PENDING_FETCH_UNKNOWN, type PendingFetchState } from './interaction-hydration';
 import { SubmitGuard } from './interactions';
 import { type ConnectionState, GatewayClient } from './node';
@@ -136,8 +137,15 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const responding = useInteractionStore((state) => state.responding);
   const [connectSeq, setConnectSeq] = useState(0);
   const submitGuard = useRef(new SubmitGuard());
-  /** 已结算 id：应答成功 / 终态事件 / run 终态 / dismiss；有界 Map（上限 500）。 */
-  const settledRef = useRef(new Map<string, number>());
+  /**
+   * 已结算 id：应答成功 / 终态事件 / run 终态 / dismiss；有界 Map（上限 500）。
+   *
+   * 初始值来自 {@link readExpiredRequestIds}：上一次会话里**确知已失效**的 id 要带过来，
+   * 否则刷新后 `interactions.list` 会把那张没人等的卡再补回来（0.59）。
+   */
+  const settledRef = useRef(
+    new Map<string, number>(readExpiredRequestIds().map((id) => [id, Date.now()])),
+  );
   /** hydration 世代：只有最新一次请求能落地。 */
   const hydrationGenerationRef = useRef(0);
   /** legacy 回退候选 token：旧 `vessel.token` 槽。 */
@@ -529,6 +537,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       pendingFetch,
       sessionInvalid: sessionInvalid.block,
       relogin: sessionInvalid.relogin,
+      canRelogin: sessionInvalid.canRelogin,
       hydrateInteractions,
       responding,
       connect,
@@ -570,6 +579,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       pendingFetch,
       sessionInvalid.block,
       sessionInvalid.relogin,
+      sessionInvalid.canRelogin,
       hydrateInteractions,
       responding,
       connect,

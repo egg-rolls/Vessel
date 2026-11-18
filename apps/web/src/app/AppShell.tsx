@@ -60,6 +60,7 @@ export function AppShell() {
     dismissError,
     sessionInvalid,
     relogin,
+    canRelogin,
   } = useConnection();
 
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -127,6 +128,7 @@ export function AppShell() {
     connectionState,
     reconnectAttempt,
     sessionInvalid,
+    canRelogin,
     onRelogin: relogin,
     onDismissError: dismissError,
     onRetry: retry,

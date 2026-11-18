@@ -38,6 +38,13 @@ export interface ShellNoticeInput {
    * 点不了，用户只能按停止。所以只要它成立，就先把它说出来。
    */
   sessionInvalid?: GatewayRpcBlock | null;
+  /**
+   * 「重新登录」这颗按钮在当前部署里有没有目标（0.59）。
+   *
+   * `authEnabled === false`（没配登录）/ `/auth/status` 打不通时，重新登录**不会**回登录页，
+   * 点了等于什么都没发生 —— 那种情况下按钮要降级成「打开连接设置」，而不是留一颗假按钮。
+   */
+  canRelogin?: boolean;
   onRelogin: () => void;
   onDismissError: () => void;
   onRetry: () => void;
@@ -79,15 +86,20 @@ export function shellNoticeItems(input: ShellNoticeInput): ShellNoticeItem[] {
       tone: 'error',
       text: t('gateway.rpc.sessionInvalid'),
       hint: t('gateway.rpc.sessionInvalidHint'),
-      // 重新登录走既有的 notifyAuthRequired 通道（AuthProvider 已经在听）。
-      actions: [{ label: t('gateway.rpc.relogin'), onClick: input.onRelogin }],
+      // 重新登录走既有的 notifyAuthRequired 通道（AuthProvider 已经在听）；
+      // auth 没启用时这颗按钮没有目标，降级成连接设置（见 canRelogin）。
+      actions: [
+        input.canRelogin === false
+          ? { label: t('gateway.rpc.connectInstead'), onClick: input.onOpenConnection }
+          : { label: t('gateway.rpc.relogin'), onClick: input.onRelogin },
+      ],
     });
   } else if (blocked?.kind === 'origin') {
     items.push({
       id: 'shell-rpc-origin',
       tone: 'error',
-      text: t('gateway.rpc.originBlocked', { detail: blocked.message }),
-      hint: t('gateway.rpc.originBlockedHint'),
+      text: t('gateway.rpc.originBlocked'),
+      hint: t('gateway.rpc.originBlockedHint', { detail: blocked.message }),
       // Origin 被拒不是会话问题：给连接设置（那里有地址/白名单的诊断）。
       actions: [{ label: t('app.openConnection'), onClick: input.onOpenConnection }],
     });

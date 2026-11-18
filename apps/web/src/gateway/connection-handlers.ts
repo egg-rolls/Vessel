@@ -4,6 +4,7 @@ import type { EventStore } from '../state/event-store';
 import { useInteractionStore } from '../stores/interactionStore';
 import { nextReconnectDelay } from './backoff';
 import type { ConnectionState, GatewayClient } from './client';
+import { rememberExpiredRequestId } from './expired-interactions';
 import { askFromEvent, interactionExpiredMessage, permissionFromEvent } from './interactions';
 import { afterConnectionHello, createReconnectDetector } from './link-status';
 import { classifyCloseCode, probeThenConnect } from './reconnect';
@@ -136,6 +137,9 @@ export function createConnectionHandlers(deps: ConnectionHandlerDeps): () => voi
       .getState()
       .permissions.some((item) => item.requestId === requestId);
     recordSettled(requestId);
+    // 过期要**跨刷新**记住：服务端在 run 结束前仍把这条记为 pending，刷新后
+    // interactions.list 会把它带回来（点「允许」发进没人订阅的事件流 = 静默无效）。
+    if (expired) rememberExpiredRequestId(requestId);
     useInteractionStore.getState().dispatch({ type: 'settle', requestId });
     if (expired && wasPending) toast.info(interactionExpiredMessage());
   };

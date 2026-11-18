@@ -83,12 +83,32 @@ export function MessageBar({ items }: { items: readonly MessageBarItem[] }): Rea
           )}
         >
           <span className="size-1.5 flex-none rounded-full bg-current" aria-hidden="true" />
-          <span
-            className="max-w-search overflow-hidden text-ellipsis whitespace-nowrap max-compact:max-w-40"
-            title={item.hint ?? item.text}
-          >
-            {item.text}
-          </span>
+          {/*
+            0.59：错误档的 chip 要能说清「为什么」，而 hint 之前只喂给原生 `title`
+            （悬停 1s 才出现、不可样式化、触屏没有 hover）—— 于是最需要解释的三条
+            （会话失效 / 来源被拒 / 连不上）在真机上等于没有解释。
+            这里**只对 error tone** 把 hint 展开成第二行小字：主文本仍是单行截断，
+            hint 去掉 nowrap/truncate 自由换行（宽度仍受 chip 轨道约束，不撑宽 AppBar）。
+            其余 tone 一字不改（它们的 hint 是补充说明，不值得占两行）。
+          */}
+          {item.tone === 'error' && item.hint !== undefined && item.hint !== '' ? (
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span
+                className="max-w-search overflow-hidden text-ellipsis whitespace-nowrap max-compact:max-w-40"
+                title={item.text}
+              >
+                {item.text}
+              </span>
+              <span className="max-w-search text-xs leading-tight opacity-80">{item.hint}</span>
+            </span>
+          ) : (
+            <span
+              className="max-w-search overflow-hidden text-ellipsis whitespace-nowrap max-compact:max-w-40"
+              title={item.hint ?? item.text}
+            >
+              {item.text}
+            </span>
+          )}
           {item.actions && item.actions.length > 0 && (
             <>
               <span className="h-3 w-px flex-none bg-line-strong" aria-hidden="true" />
