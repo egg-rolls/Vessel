@@ -345,6 +345,9 @@ export const messages = {
   'pending.fetch.failedHint':
     '这里的「空」不代表没有待批请求 —— 列表根本没拉到。重新登录 / 修好连接后会自动补回。',
   'pending.fetch.blocked': '请求被 gateway 拒绝，待批列表拉不到：{detail}',
+  // 单行 chip 用的自足短句（长解释放 hint / 第二行）。
+  'pending.fetch.shortFailed': '待批列表拉不到',
+  'pending.fetch.shortBlocked': '待批列表拉不到（请求被拒）',
   'pending.fetch.retry': '重新拉取',
   'pending.entry': '待批',
   'pending.entry.label': '本会话有 {count} 个待批提问',
@@ -1747,17 +1750,20 @@ export const messages = {
   'gateway.connection.protocolMismatch': '协议版本不兼容（需要 vessel.gateway/1）',
   'gateway.connection.tokenRequired': '请输入 gateway token',
   // 0.59：RPC 被拒（401 / Origin）必须显式，不能静默
-  'gateway.rpc.sessionInvalid': '请求被拒绝（401）：这个页面没有有效的登录会话',
+  // 0.59：提示条的 text 要**自足**（单行 chip 会截断，长解释只能作为第二行 / title）。
+  'gateway.rpc.sessionInvalid': '会话已失效（401）',
   'gateway.rpc.sessionInvalidHint':
-    '所有 RPC 都被拒，待批与权限卡因此拿不到。点「重新登录」；若登录后仍然是 401，请确认当前页面地址在 auth.public_origins 白名单里。',
+    '这个页面发出的请求都被拒，待批与权限卡因此拿不到。点「重新登录」；登录后仍是 401 的话，确认当前页面地址在 http.allowed_origins 里。',
   'gateway.rpc.relogin': '重新登录',
-  'gateway.rpc.originBlocked': 'gateway 拒绝了这个页面的 Origin/Host：{detail}',
+  // auth 没启用时这颗按钮降级成「打开连接设置」（重新登录没有目标）。
+  'gateway.rpc.connectInstead': '打开连接设置',
+  'gateway.rpc.originBlocked': '来源被拒（Origin 不在白名单）',
   'gateway.rpc.originBlockedHint':
-    '跨 Origin 访问时要把本站加入白名单（node.allowed_origins / auth.public_origins），否则所有 RPC 都会被拒、权限卡到不了界面。',
+    'gateway 的回应是「{detail}」。跨 Origin 访问要把本站加进 http.allowed_origins，否则所有 RPC 都被拒、权限卡到不了界面。',
   // 0.59：一次都没连通过（CORS 挡死 / node 没起）。文案不给命令行操作（宪法十四条）。
-  'gateway.rpc.unreachable': '连不上 node：可能是来源被拒，或服务没在运行',
+  'gateway.rpc.unreachable': '连不上 node（来源被拒或服务未运行）',
   'gateway.rpc.unreachableHint':
-    '这个页面发出的请求一次都没成功过（最近 {count} 次全部失败：{detail}），所以待批与权限卡都到不了界面。网络或配置恢复正常、有请求成功之后，这条会自己消失。',
+    '这个页面发出的请求一次都没成功过（最近 {count} 次全部失败：{detail}），待批与权限卡都到不了界面。若 node 其实在跑，多半是本站没进 http.allowed_origins。网络或配置恢复、有请求成功之后，这条会自己消失。',
   'gateway.platform.tokenRequired':
     '需要平台 token：/platform/rpc 返回 401；请在连接设置中输入平台 token。',
   'gateway.platform.noNodes': '平台 gateway 没有返回任何节点。',

@@ -23,6 +23,13 @@
 
 import { shellNoticeItems } from '../apps/web/src/app/shellNoticeItems';
 import {
+  clearExpiredRequestIds,
+  EXPIRED_REQUESTS_MAX,
+  EXPIRED_REQUESTS_STORAGE_KEY,
+  readExpiredRequestIds,
+  rememberExpiredRequestId,
+} from '../apps/web/src/gateway/expired-interactions';
+import {
   buildHydrationSnapshot,
   type InteractionState,
   interactionReducer,
@@ -53,6 +60,29 @@ function check(name: string, ok: boolean, got?: string): void {
     return;
   }
   failures.push(got === undefined ? name : `${name} | got: ${got}`);
+}
+
+/** 内存版 `Storage`：只实现 `expired-interactions` 用到的那几个方法。 */
+class FakeStorage implements Storage {
+  private readonly map = new Map<string, string>();
+  get length(): number {
+    return this.map.size;
+  }
+  clear(): void {
+    this.map.clear();
+  }
+  getItem(key: string): string | null {
+    return this.map.get(key) ?? null;
+  }
+  key(index: number): string | null {
+    return [...this.map.keys()][index] ?? null;
+  }
+  removeItem(key: string): void {
+    this.map.delete(key);
+  }
+  setItem(key: string, value: string): void {
+    this.map.set(key, value);
+  }
 }
 
 /** `shellNoticeItems` 的入参缺省值：只有被测字段才覆盖。 */
@@ -369,6 +399,20 @@ async function main(): Promise<void> {
     let clock = 1_000;
     const tracker = createRpcBlockTracker({ now: () => clock });
 
+    // hello 之前不计数（冷启动那几下是正常现象，不该算「连不上」）。
+    tracker.observeNetworkFailure({ now: clock });
+    clock += 1_000;
+    tracker.observeNetworkFailure({ now: clock });
+    clock += 1_000;
+    check(
+      'hello 之前连续失败也不抬（冷启动不算连不上）',
+      tracker.observeNetworkFailure({ now: clock }) === null,
+      JSON.stringify(tracker.snapshot().block),
+    );
+    // 真正建立连接之后才开始计数。
+    clock += 1_000;
+    tracker.beginEpoch();
+
     // 两次不够阈值（单次抖动 / 短时抖动不报警）。
     check('network 失败 1 次不抬', tracker.observeNetworkFailure({ now: clock }) === null);
     clock += 1_000;
@@ -414,6 +458,7 @@ async function main(): Promise<void> {
   {
     let clock = 10_000;
     const tracker = createRpcBlockTracker({ now: () => clock });
+    tracker.beginEpoch();
     // 每次间隔 > 30s ⇒ 每次都在新窗口里当第 1 次，永远攒不到 3。
     for (let i = 0; i < 3; i += 1) {
       tracker.observeNetworkFailure({ now: clock });
@@ -424,6 +469,7 @@ async function main(): Promise<void> {
     // 新连接 = 新 epoch：抬过的那条作废，计数归零，可以重新判定。
     clock += 1_000;
     const fresh = createRpcBlockTracker({ now: () => clock });
+    fresh.beginEpoch();
     fresh.observeNetworkFailure({ now: clock });
     fresh.observeNetworkFailure({ now: clock + 1 });
     fresh.observeNetworkFailure({ now: clock + 2 });
@@ -548,6 +594,135 @@ async function main(): Promise<void> {
       '没有 connection 档时既有 lastError/stale 照旧（不误伤）',
       plain.map((item) => item.id).join(',') === 'shell-error,shell-stale',
       plain.map((item) => item.id).join(','),
+    );
+
+    // 单行 chip：text 必须自足（长的解释只能进 hint，error 档由 MessageBar 渲成第二行）。
+    const labels = [
+      ...connectionOnly,
+      ...sessionAndAuth.filter((item) => item.id !== 'shell-token-error'),
+    ];
+    for (const item of labels) {
+      if (item === undefined) continue;
+      check(
+        `chip 文案是自足短句（${item.id}）`,
+        item.text.length <= 40 && (item.hint ?? '').length > item.text.length,
+        `${item.text} / ${item.hint ?? ''}`,
+      );
+    }
+
+    // auth 没启用（phase=disabled/unknown）：「重新登录」没有目标，按钮降级。
+    let openedByDowngrade = 0;
+    const noAuth = shellNoticeItems(
+      noticeInput({
+        sessionInvalid: sessionBlock,
+        canRelogin: false,
+        onOpenConnection: () => {
+          openedByDowngrade += 1;
+        },
+      }),
+    );
+    check(
+      'auth 未启用 ⇒ 会话档按钮降级为「打开连接设置」',
+      noAuth[0]?.actions?.[0]?.label === t('gateway.rpc.connectInstead'),
+      noAuth[0]?.actions?.[0]?.label,
+    );
+    noAuth[0]?.actions?.[0]?.onClick();
+    check('降级后的按钮真的走连接设置', openedByDowngrade === 1, String(openedByDowngrade));
+
+    let reloginCalls = 0;
+    const reloginable = shellNoticeItems(
+      noticeInput({
+        sessionInvalid: sessionBlock,
+        onRelogin: () => {
+          reloginCalls += 1;
+        },
+      }),
+    );
+    check(
+      '能重登时按钮仍是「重新登录」',
+      reloginable[0]?.actions?.[0]?.label === t('gateway.rpc.relogin'),
+      reloginable[0]?.actions?.[0]?.label,
+    );
+    reloginable[0]?.actions?.[0]?.onClick();
+    check('「重新登录」按钮走 onRelogin', reloginCalls === 1);
+
+    // 文案不许把用户引到错的白名单：origins-core 之后是 http.allowed_origins。
+    const originHint = shellNoticeItems(
+      noticeInput({
+        sessionInvalid: {
+          kind: 'origin',
+          code: 'forbidden_origin',
+          message: 'Origin is not allowed',
+          at: 1,
+        },
+      }),
+    )[0]?.hint;
+    check(
+      'Origin 档 hint 指向 http.allowed_origins',
+      (originHint ?? '').includes('http.allowed_origins'),
+      originHint,
+    );
+    check(
+      'Origin 档 hint 没把用户引到 auth.public_origins',
+      !(originHint ?? '').includes('auth.public_origins'),
+      originHint,
+    );
+  }
+
+  // ---- 10. 过期卡跨刷新记住：刷新后不再把「没人等的卡」补回来 ----
+  {
+    const store = new FakeStorage();
+    check('空 storage ⇒ 空列表', readExpiredRequestIds(store).length === 0);
+    rememberExpiredRequestId('req-expired-1', store);
+    rememberExpiredRequestId('req-expired-1', store);
+    check(
+      '记住并去重',
+      readExpiredRequestIds(store).join(',') === 'req-expired-1',
+      readExpiredRequestIds(store).join(','),
+    );
+    store.setItem(EXPIRED_REQUESTS_STORAGE_KEY, '{not json');
+    check('坏数据当空（不让它拖垮启动）', readExpiredRequestIds(store).length === 0);
+    check('没有 storage 时不抛', readExpiredRequestIds(null).length === 0);
+    rememberExpiredRequestId('x', null);
+    check('没有 storage 时写入也安全', readExpiredRequestIds(null).length === 0);
+
+    // 上限：超出后只留最近的 EXPIRED_REQUESTS_MAX 条。
+    const capped = new FakeStorage();
+    for (let i = 0; i < EXPIRED_REQUESTS_MAX + 10; i += 1) {
+      rememberExpiredRequestId(`req-${String(i)}`, capped);
+    }
+    const kept = readExpiredRequestIds(capped);
+    check('上限截断不增长', kept.length === EXPIRED_REQUESTS_MAX, String(kept.length));
+    check(
+      '截断保留最新的（最早的被丢掉）',
+      kept[kept.length - 1] === `req-${String(EXPIRED_REQUESTS_MAX + 9)}` &&
+        !kept.includes('req-0'),
+    );
+    clearExpiredRequestIds(capped);
+    check('clear 后清空', readExpiredRequestIds(capped).length === 0);
+
+    // 真正的效果：把记住的 id 当作 settled 喂给 hydration ⇒ 服务端仍 pending 也不补回来。
+    const persisted = new FakeStorage();
+    rememberExpiredRequestId('req-expired-1', persisted);
+    const settled = new Set(readExpiredRequestIds(persisted));
+    const snapshot = buildHydrationSnapshot({
+      pending: [
+        {
+          kind: 'permission',
+          request_id: 'req-expired-1',
+          run_id: 'run-1',
+          session_id: 's1',
+          status: 'pending',
+          created_at: 5,
+        },
+      ] as ListedInteraction[],
+      orphaned: [],
+      settled,
+    });
+    check(
+      '刷新后已过期的那张卡不会被 hydration 补回来',
+      snapshot.permissions.length === 0,
+      JSON.stringify(snapshot.permissions.map((item) => item.requestId)),
     );
   }
 

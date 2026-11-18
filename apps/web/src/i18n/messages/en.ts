@@ -355,6 +355,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Empty here does not mean nothing is pending — the list never arrived. It is restored automatically after you sign in again or fix the connection.',
   'pending.fetch.blocked':
     'The gateway rejected the request, so the pending list is unavailable: {detail}',
+  // Short self-sufficient form for the one-line chip (long form goes to hint / line 2).
+  'pending.fetch.shortFailed': 'Pending list unavailable',
+  'pending.fetch.shortBlocked': 'Pending list unavailable (request rejected)',
   'pending.fetch.retry': 'Retry',
   'pending.entry': 'Pending',
   'pending.entry.label': '{count} pending question(s) in this session',
@@ -1831,18 +1834,20 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Incompatible protocol version (vessel.gateway/1 required)',
   'gateway.connection.tokenRequired': 'Enter a gateway token',
   // 0.59: a rejected RPC (401 / Origin) must be visible, never silent.
-  'gateway.rpc.sessionInvalid': 'Requests are rejected (401): this page has no valid session',
+  // 0.59: the chip text must stand alone (one line, truncated); the long explanation is line 2 / title.
+  'gateway.rpc.sessionInvalid': 'Session expired (401)',
   'gateway.rpc.sessionInvalidHint':
-    'Every RPC is rejected, so pending requests and permission cards never arrive. Use "Sign in again"; if it still returns 401, check that this page origin is listed in auth.public_origins.',
+    'Every request from this page is rejected, so pending requests and permission cards never arrive. Use "Sign in again"; if it still returns 401, check that this page origin is listed in http.allowed_origins.',
   'gateway.rpc.relogin': 'Sign in again',
-  'gateway.rpc.originBlocked': 'The gateway rejected this page Origin/Host: {detail}',
+  // Downgraded when auth is not enabled (there is no login target).
+  'gateway.rpc.connectInstead': 'Open connection settings',
+  'gateway.rpc.originBlocked': 'Origin rejected (not in the allowlist)',
   'gateway.rpc.originBlockedHint':
-    'Cross-origin access needs this site in the allowlist (node.allowed_origins / auth.public_origins); otherwise every RPC is rejected and permission cards never reach the UI.',
+    'The gateway answered "{detail}". Cross-origin access needs this site in http.allowed_origins, otherwise every RPC is rejected and permission cards never reach the UI.',
   // 0.59: no request has ever succeeded (CORS blocked / node not running). No CLI text in the UI.
-  'gateway.rpc.unreachable':
-    'Cannot reach the node: the origin may be rejected, or the service is not running',
+  'gateway.rpc.unreachable': 'Cannot reach the node (origin rejected or service not running)',
   'gateway.rpc.unreachableHint':
-    'No request from this page has ever succeeded ({count} consecutive failures: {detail}), so pending requests and permission cards cannot arrive. This clears itself once a request succeeds.',
+    'No request from this page has ever succeeded ({count} consecutive failures: {detail}), so pending requests and permission cards cannot arrive. If the node is actually running, the usual cause is this site missing from http.allowed_origins. This clears itself once a request succeeds.',
   'gateway.platform.tokenRequired':
     'Platform token required: /platform/rpc returned 401. Enter the platform token in connection settings.',
   'gateway.platform.noNodes': 'The platform gateway returned no nodes.',

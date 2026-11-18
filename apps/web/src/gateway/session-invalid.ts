@@ -145,6 +145,7 @@ export interface RpcBlockTracker {
    * `TypeError`，没有任何 401/403 可分类，于是它既不会进 `observe`、也就永远不上报。
    *
    * 抬升规则（全部是**为了不误报**）：
+   * - **本 epoch 还没真正建立过连接（hello 之前）不计数** —— 冷启动那几下是正常现象；
    * - 本 epoch **从未成功过**才可能抬；成功过一次就永不抬（否则断网会疯狂误报）；
    * - 计数窗口内（缺省 30s）连续失败达到阈值（缺省 3）才抬，单次抖动不报；
    * - 每个 epoch 最多抬一次（抬过就不再刷）；
@@ -211,6 +212,13 @@ export function createRpcBlockTracker(options: RpcBlockTrackerOptions = {}): Rpc
   let networkWindowStart: number | undefined;
   let raisedConnectionThisEpoch = false;
   let succeededThisEpoch = false;
+  /**
+   * 本 epoch 是否已经**真的建立过连接**（`beginEpoch` = 连接级 hello）。
+   *
+   * 0.59：hello 之前不计数。冷启动那三下（页面比 node 先起来 / relay 还在热身）
+   * 是正常现象，不该算「连不上」—— 调高阈值只能让误报变少，不能消除；这里直接不算。
+   */
+  let connectedThisEpoch = false;
 
   const emit = (): void => {
     for (const listener of [...listeners]) listener();
@@ -260,6 +268,8 @@ export function createRpcBlockTracker(options: RpcBlockTrackerOptions = {}): Rpc
     },
 
     observeNetworkFailure(failureOptions = {}) {
+      // ⓪ hello 之前不计数（冷启动的失败不算「连不上」，见 connectedThisEpoch）。
+      if (!connectedThisEpoch) return null;
       // ① 本 epoch 成功过 ⇒ 永不抬。这一条是防误报的关键：断网、node 重启这些
       //    「本来就连得上」的场景由既有 network 提示（lastError / stale）负责，
       //    这里再多说一遍就是重复报警。
@@ -309,6 +319,8 @@ export function createRpcBlockTracker(options: RpcBlockTrackerOptions = {}): Rpc
       networkWindowStart = undefined;
       raisedConnectionThisEpoch = false;
       succeededThisEpoch = false;
+      // 走到这里 = 连接真的建立了（连接级 hello 才调 beginEpoch）⇒ 之后才允许计「连不上」。
+      connectedThisEpoch = true;
       if (snapshot.block?.kind === 'connection') clearBlock();
     },
 

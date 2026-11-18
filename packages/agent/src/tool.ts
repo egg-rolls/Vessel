@@ -706,6 +706,21 @@ export function createAgentTool(
               if (isApprovalTimeout(error)) {
                 denial = ROTATE_APPROVAL_TIMEOUT_REASON;
                 approvalTimeoutMs = waitLimitMs;
+                // 超时后这张卡在界面上已经**没有意义**了：请求还在服务端 pending，
+                // 用户看到的是一张「能点」的卡 —— 点下去要么无人订阅（静默无效），
+                // 要么报 expired。这里显式发过期事件，让界面把卡收起来并说清原因。
+                ctx.events.publish({
+                  type: 'tool.permission.expired',
+                  run_id: ctx.run_id,
+                  data: {
+                    requestId,
+                    reason: ROTATE_APPROVAL_TIMEOUT_REASON,
+                    tool: 'agent.rotate',
+                    session_id: callerSession,
+                    wait_ms: waitLimitMs,
+                  },
+                  ts: Date.now(),
+                });
               } else denial = 'approval_unavailable';
             }
           }

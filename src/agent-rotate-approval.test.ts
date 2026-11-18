@@ -72,6 +72,16 @@ function watchRequests(events: MemoryEventStream): { requestIds: string[] } {
   return { requestIds };
 }
 
+/** 收集 `tool.permission.expired`（超时后界面据此把卡收起来）。 */
+function watchExpired(events: MemoryEventStream): { events: Array<Record<string, unknown>> } {
+  const seen: Array<Record<string, unknown>> = [];
+  events.subscribe((event) => {
+    if (event.type !== 'tool.permission.expired') return;
+    seen.push(event.data as Record<string, unknown>);
+  });
+  return { events: seen };
+}
+
 /**
  * 「请求一出现就应答」：订阅 `tool.permission.request`，收到后推迟一个宏任务再 publish
  * 应答 —— 那个时刻 `waitFor` 已经注册好订阅了（工具分支是 publish → waitFor 同步相连）。
@@ -133,9 +143,23 @@ async function main(): Promise<void> {
     });
     const { ctx, events } = makeContext();
     const watch = watchRequests(events);
+    const expiredWatch = watchExpired(events);
     const { text, elapsedMs } = await runRotate(tool, ctx);
     const result = parseRotateResult(text);
     check('超时：请求真的发出去了（同一条 401 事故形状）', watch.requestIds.length === 1);
+    // 超时后卡片必须进终态：发过期事件让界面收卡（否则「看着能点、点了报 expired」）。
+    check('超时：发了 tool.permission.expired 让卡片进终态', expiredWatch.events.length === 1);
+    check(
+      '超时：过期事件带同一个 requestId',
+      expiredWatch.events[0]?.requestId === watch.requestIds[0],
+      `${String(expiredWatch.events[0]?.requestId)} vs ${String(watch.requestIds[0])}`,
+    );
+    check(
+      '超时：过期事件带原因与等待时限',
+      expiredWatch.events[0]?.reason === 'approval_timeout' &&
+        expiredWatch.events[0]?.wait_ms === 40,
+      JSON.stringify(expiredWatch.events[0]),
+    );
     check(
       '超时：返回 rotate_not_needed 形状',
       result?.code === 'rotate_not_needed',
@@ -199,6 +223,7 @@ async function main(): Promise<void> {
       rotateApprovalTimeoutMs: 60_000,
     });
     const { ctx, events } = makeContext();
+    const expiredWatch = watchExpired(events);
     answerWhenRequested(events, { decision: 'deny', answered_by: 'human' });
     const { text } = await runRotate(tool, ctx);
     const result = parseRotateResult(text);
@@ -208,6 +233,7 @@ async function main(): Promise<void> {
       String(result?.reason),
     );
     check('人类拒绝：不带 timeout_ms', result?.timeout_ms === undefined);
+    check('人类拒绝：不发过期事件（卡是被人答掉的，不是过期）', expiredWatch.events.length === 0);
   }
 
   // ---- 4b. 人类拒绝后 signal 随即 abort：仍报 denied_by_human（取消不许遮住业务结论） ----

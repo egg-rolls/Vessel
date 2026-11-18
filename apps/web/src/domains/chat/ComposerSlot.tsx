@@ -27,10 +27,11 @@ function PendingFetchNotice({
   const item: MessageBarItem = {
     id: 'composer-pending-fetch',
     tone: 'error',
-    text: blocked
+    // 单行 chip：text 必须自足（长句会被截断），完整原因放 hint（error 档渲染成第二行）。
+    text: blocked ? t('pending.fetch.shortBlocked') : t('pending.fetch.shortFailed'),
+    hint: blocked
       ? t('pending.fetch.blocked', { detail: pendingFetch.message ?? '' })
       : t('pending.fetch.failed', { detail: pendingFetch.message ?? '' }),
-    hint: t('pending.fetch.failedHint'),
     ...(onRetry ? { actions: [{ label: t('pending.fetch.retry'), onClick: onRetry }] } : {}),
   };
   return <MessageBar items={[item]} />;

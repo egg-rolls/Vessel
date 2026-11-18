@@ -88,6 +88,14 @@ export interface ConnectionContextValue {
   sessionInvalid: GatewayRpcBlock | null;
   /** 走既有 `notifyAuthRequired()` 通道重新鉴权（不新造通道）。 */
   relogin: () => void;
+  /**
+   * 「重新登录」在当前部署里有没有目标（0.59）。
+   *
+   * `phase === 'disabled'`（没配任何登录后端）/ `'unknown'`（`/auth/status` 打不通）时为
+   * false：那时 `AuthProvider.refresh()` 不会切到登录页，按钮点下去像没反应 ——
+   * 界面要把它降级成「打开连接设置」。
+   */
+  canRelogin: boolean;
   /** 从 `interactions.list` 补回 pending，并把 orphaned 记为终态；失败会写进 `pendingFetch`。 */
   hydrateInteractions: () => Promise<void>;
   /** 正在提交应答的 requestId；UI 据此禁用按钮，避免双击重复提交。 */
