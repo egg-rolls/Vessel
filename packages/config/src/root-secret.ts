@@ -19,7 +19,8 @@
  *   → base64url → "vsk_<43 字符>"
  * ```
  *
- * `purpose` ∈ `platform` / `hub` / `node:<nodeId>` / `proxy:<instanceId>`。
+ * `purpose` ∈ `platform` / `hub` / `credentials` / `node:<nodeId>` / `proxy:<instanceId>`。
+ * `credentials` 派生值用作 model-registry `credentials.json` 的 AES-256-GCM key（info `vessel:credentials`）。
  * 同一个 root + 同一个 purpose 恒等；换 root（`vessel token rotate`）则全部一起换。
  *
  * ## 安全约定
@@ -66,6 +67,7 @@ export const DERIVED_TOKEN_PREFIX = 'vsk_';
 export type TokenPurpose =
   | { kind: 'platform' }
   | { kind: 'hub' }
+  | { kind: 'credentials' }
   | { kind: 'node'; id: string }
   | { kind: 'proxy'; id: string };
 
@@ -98,11 +100,17 @@ export type RootSecretRead =
 /** purpose id 形状：与 node_id / 实例名同一套字符集，避免 info 字符串出现分隔歧义。 */
 const PURPOSE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
-/** 平台 / hub 不需要 id。 */
-const IDLESS_KINDS = new Set(['platform', 'hub']);
+/** 平台 / hub / credentials 不需要 id。 */
+const IDLESS_KINDS = new Set(['platform', 'hub', 'credentials']);
 
 function isPurposeKind(value: string): value is TokenPurpose['kind'] {
-  return value === 'platform' || value === 'hub' || value === 'node' || value === 'proxy';
+  return (
+    value === 'platform' ||
+    value === 'hub' ||
+    value === 'credentials' ||
+    value === 'node' ||
+    value === 'proxy'
+  );
 }
 
 export type ParsedPurpose = { ok: true; purpose: TokenPurpose } | { ok: false; error: string };
@@ -110,7 +118,7 @@ export type ParsedPurpose = { ok: true; purpose: TokenPurpose } | { ok: false; e
 /**
  * 解析 CLI / 配置里的用途写法。
  *
- * 接受 `platform` / `hub` / `node` / `node:<id>` / `proxy` / `proxy:<id>`；
+ * 接受 `platform` / `hub` / `credentials` / `node` / `node:<id>` / `proxy` / `proxy:<id>`；
  * `node` / `proxy` 缺 id 时从 `id` 参数补齐（`--node <id>`）。
  */
 export function parseTokenPurpose(raw: string, id?: string): ParsedPurpose {
@@ -124,7 +132,7 @@ export function parseTokenPurpose(raw: string, id?: string): ParsedPurpose {
   if (!isPurposeKind(kindPart)) {
     return {
       ok: false,
-      error: `unknown purpose "${kindPart}"; expected platform | hub | node[:<id>] | proxy[:<instance>]`,
+      error: `unknown purpose "${kindPart}"; expected platform | hub | credentials | node[:<id>] | proxy[:<instance>]`,
     };
   }
   const kind = kindPart;
@@ -132,7 +140,9 @@ export function parseTokenPurpose(raw: string, id?: string): ParsedPurpose {
     if ((idPart !== undefined && idPart !== '') || (id !== undefined && id !== '')) {
       return { ok: false, error: `purpose "${kind}" does not take an id` };
     }
-    return { ok: true, purpose: kind === 'platform' ? { kind: 'platform' } : { kind: 'hub' } };
+    if (kind === 'platform') return { ok: true, purpose: { kind: 'platform' } };
+    if (kind === 'hub') return { ok: true, purpose: { kind: 'hub' } };
+    return { ok: true, purpose: { kind: 'credentials' } };
   }
 
   // node / proxy：id 必须恰好一个来源（`node:<id>` 或 `--node <id>`，不能既给又不同）。

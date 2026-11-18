@@ -54,6 +54,7 @@ export {
   registeredAuthKinds,
   requiresPublicOrigin,
 } from './auth-strategies/index.js';
+export { type ConfigLockOptions, withConfigLock } from './config-lock.js';
 export {
   DEFAULT_CONFIG,
   DEFAULT_DATA_DIR,
@@ -188,6 +189,7 @@ export {
   validateTeamPolicy,
 } from './team-policy.js';
 export * from './types.js';
+export { readUserConfigRoot, writeUserConfigRoot } from './user-config.js';
 export { deepMerge } from './utils.js';
 export {
   allowedOriginError,
