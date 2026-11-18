@@ -2,20 +2,20 @@
 import { jsx as n, jsxs as y, Fragment as yr } from "react/jsx-runtime";
 import { forwardRef as fe, useState as M, useRef as Ce, useId as kr, useImperativeHandle as wr, useCallback as Le, useEffect as ue, useLayoutEffect as Cr, isValidElement as Nr, Fragment as Ar, useMemo as Ae } from "react";
 import { createPortal as zr } from "react-dom";
-function Ke(e) {
+function $e(e) {
   var o, r, t = "";
   if (typeof e == "string" || typeof e == "number") t += e;
   else if (typeof e == "object") if (Array.isArray(e)) {
     var a = e.length;
-    for (o = 0; o < a; o++) e[o] && (r = Ke(e[o])) && (t && (t += " "), t += r);
+    for (o = 0; o < a; o++) e[o] && (r = $e(e[o])) && (t && (t += " "), t += r);
   } else for (r in e) e[r] && (t && (t += " "), t += r);
   return t;
 }
-function $e() {
-  for (var e, o, r = 0, t = "", a = arguments.length; r < a; r++) (e = arguments[r]) && (o = Ke(e)) && (t && (t += " "), t += o);
+function Ke() {
+  for (var e, o, r = 0, t = "", a = arguments.length; r < a; r++) (e = arguments[r]) && (o = $e(e)) && (t && (t += " "), t += o);
   return t;
 }
-const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Ye = (e, o) => (r) => {
+const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = Ke, Ye = (e, o) => (r) => {
   var t;
   if (o?.variants == null) return je(e, r?.class, r?.className);
   const { variants: a, defaultVariants: s } = o, i = Object.keys(a).map((m) => {
@@ -58,7 +58,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
   nextPart: e,
   validators: o,
   classGroupId: r
-}), ze = "-", Ue = [], Er = "arbitrary..", Rr = (e) => {
+}), ze = "-", Ue = [], Rr = "arbitrary..", Er = (e) => {
   const o = Tr(e), {
     conflictingClassGroups: r,
     conflictingClassGroupModifiers: t
@@ -97,7 +97,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
   }
 }, Mr = (e) => e.slice(1, -1).indexOf(":") === -1 ? void 0 : (() => {
   const o = e.slice(1, -1), r = o.indexOf(":"), t = o.slice(0, r);
-  return t ? Er + t : void 0;
+  return t ? Rr + t : void 0;
 })(), Tr = (e) => {
   const {
     theme: o,
@@ -175,7 +175,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
       s in r ? r[s] = i : a(s, i);
     }
   };
-}, Re = "!", _e = ":", Ur = [], Fe = (e, o, r, t, a) => ({
+}, Ee = "!", _e = ":", Ur = [], Fe = (e, o, r, t, a) => ({
   modifiers: e,
   hasImportantModifier: o,
   baseClassName: r,
@@ -206,12 +206,12 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
     }
     const N = s.length === 0 ? a : a.slice(h);
     let A = N, O = !1;
-    N.endsWith(Re) ? (A = N.slice(0, -1), O = !0) : (
+    N.endsWith(Ee) ? (A = N.slice(0, -1), O = !0) : (
       /**
        * In Tailwind CSS v3 the important modifier was at the start of the base class name. This is still supported for legacy reasons.
        * @see https://github.com/dcastil/tailwind-merge/issues/513#issuecomment-2614029864
        */
-      N.startsWith(Re) && (A = N.slice(1), O = !0)
+      N.startsWith(Ee) && (A = N.slice(1), O = !0)
     );
     const P = m && m > h ? m - h : void 0;
     return Fe(s, O, A, P);
@@ -246,7 +246,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
   parseClassName: _r(e),
   sortModifiers: Fr(e),
   postfixLookupClassGroupIds: Br(e),
-  ...Rr(e)
+  ...Er(e)
 }), Br = (e) => {
   const o = /* @__PURE__ */ Object.create(null), r = e.postfixLookupClassGroups;
   if (r)
@@ -293,19 +293,19 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
       }
       L = !1;
     }
-    const W = O.length === 0 ? "" : O.length === 1 ? O[0] : s(O).join(":"), R = P ? W + Re : W, b = R + I;
+    const W = O.length === 0 ? "" : O.length === 1 ? O[0] : s(O).join(":"), E = P ? W + Ee : W, b = E + I;
     if (d.indexOf(b) > -1)
       continue;
     d.push(b);
     const z = a(I, L);
     for (let S = 0; S < z.length; ++S) {
       const u = z[S];
-      d.push(R + u);
+      d.push(E + u);
     }
     m = N + (m.length > 0 ? " " + m : m);
   }
   return m;
-}, Kr = (...e) => {
+}, $r = (...e) => {
   let o = 0, r, t, a = "";
   for (; o < e.length; )
     (r = e[o++]) && (t = Qe(r)) && (a && (a += " "), a += t);
@@ -317,7 +317,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
   for (let t = 0; t < e.length; t++)
     e[t] && (o = Qe(e[t])) && (r && (r += " "), r += o);
   return r;
-}, $r = (e, ...o) => {
+}, Kr = (e, ...o) => {
   let r, t, a, s;
   const i = (h) => {
     const m = o.reduce((v, N) => N(v), e());
@@ -329,11 +329,11 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
     const v = qr(h, r);
     return a(h, v), v;
   };
-  return s = i, (...h) => s(Kr(...h));
+  return s = i, (...h) => s($r(...h));
 }, Yr = [], H = (e) => {
   const o = (r) => r[e] || Yr;
   return o.isThemeGetter = !0, o.themeKey = e, o;
-}, er = /^\[(?:(\w[\w-]*):)?(.+)\]$/i, rr = /^\((?:(\w[\w-]*):)?(.+)\)$/i, Xr = /^\d+(?:\.\d+)?\/\d+(?:\.\d+)?$/, Zr = /^(\d+(\.\d+)?)?(xs|sm|md|lg|xl)$/, Jr = /\d+(%|px|r?em|[sdl]?v([hwib]|min|max)|pt|pc|in|cm|mm|cap|ch|ex|r?lh|cq(w|h|i|b|min|max))|\b(calc|min|max|clamp)\(.+\)|^0$/, Qr = /^(rgba?|hsla?|hwb|(ok)?(lab|lch)|color-mix|color|light-dark)\(.+\)$/, et = /^(inset_)?-?((\d+)?\.?(\d+)[a-z]+|0)_-?((\d+)?\.?(\d+)[a-z]+|0)/, rt = /^(url|image|image-set|cross-fade|element|(repeating-)?(linear|radial|conic)-gradient)\(.+\)$/, ne = (e) => Xr.test(e), C = (e) => !!e && !Number.isNaN(Number(e)), Q = (e) => !!e && Number.isInteger(Number(e)), Ee = (e) => e.endsWith("%") && C(e.slice(0, -1)), ee = (e) => Zr.test(e), tr = () => !0, tt = (e) => (
+}, er = /^\[(?:(\w[\w-]*):)?(.+)\]$/i, rr = /^\((?:(\w[\w-]*):)?(.+)\)$/i, Xr = /^\d+(?:\.\d+)?\/\d+(?:\.\d+)?$/, Zr = /^(\d+(\.\d+)?)?(xs|sm|md|lg|xl)$/, Jr = /\d+(%|px|r?em|[sdl]?v([hwib]|min|max)|pt|pc|in|cm|mm|cap|ch|ex|r?lh|cq(w|h|i|b|min|max))|\b(calc|min|max|clamp)\(.+\)|^0$/, Qr = /^(rgba?|hsla?|hwb|(ok)?(lab|lch)|color-mix|color|light-dark)\(.+\)$/, et = /^(inset_)?-?((\d+)?\.?(\d+)[a-z]+|0)_-?((\d+)?\.?(\d+)[a-z]+|0)/, rt = /^(url|image|image-set|cross-fade|element|(repeating-)?(linear|radial|conic)-gradient)\(.+\)$/, ne = (e) => Xr.test(e), C = (e) => !!e && !Number.isNaN(Number(e)), Q = (e) => !!e && Number.isInteger(Number(e)), Re = (e) => e.endsWith("%") && C(e.slice(0, -1)), ee = (e) => Zr.test(e), tr = () => !0, tt = (e) => (
   // `colorFunctionRegex` check is necessary because color functions can have percentages in them which which would be incorrectly classified as lengths.
   // For example, `hsl(0 0% 0%)` would be classified as a length without this check.
   // I could also use lookbehind assertion in `lengthUnitRegex` but that isn't supported widely enough.
@@ -345,7 +345,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
   const t = rr.exec(e);
   return t ? t[1] ? o(t[1]) : r : !1;
 }, or = (e) => e === "position" || e === "percentage", nr = (e) => e === "image" || e === "url", sr = (e) => e === "length" || e === "size" || e === "bg-size", ar = (e) => e === "length", ht = (e) => e === "number", lr = (e) => e === "family-name", ir = (e) => e === "number" || e === "weight", dr = (e) => e === "shadow", bt = () => {
-  const e = H("color"), o = H("font"), r = H("text"), t = H("font-weight"), a = H("tracking"), s = H("leading"), i = H("breakpoint"), d = H("container"), h = H("spacing"), m = H("radius"), v = H("shadow"), N = H("inset-shadow"), A = H("text-shadow"), O = H("drop-shadow"), P = H("blur"), g = H("perspective"), T = H("aspect"), L = H("ease"), I = H("animate"), W = () => ["auto", "avoid", "all", "avoid-page", "page", "left", "right", "column"], R = () => [
+  const e = H("color"), o = H("font"), r = H("text"), t = H("font-weight"), a = H("tracking"), s = H("leading"), i = H("breakpoint"), d = H("container"), h = H("spacing"), m = H("radius"), v = H("shadow"), N = H("inset-shadow"), A = H("text-shadow"), O = H("drop-shadow"), P = H("blur"), g = H("perspective"), T = H("aspect"), L = H("ease"), I = H("animate"), W = () => ["auto", "avoid", "all", "avoid-page", "page", "left", "right", "column"], E = () => [
     "center",
     "top",
     "bottom",
@@ -363,15 +363,15 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
     "bottom-left",
     // Deprecated since Tailwind CSS v4.1.0, see https://github.com/tailwindlabs/tailwindcss/pull/17378
     "left-bottom"
-  ], b = () => [...R(), p, f], z = () => ["auto", "hidden", "clip", "visible", "scroll"], S = () => ["auto", "contain", "none"], u = () => [p, f, h], U = () => [ne, "full", "auto", ...u()], k = () => [Q, "none", "subgrid", p, f], F = () => ["auto", {
+  ], b = () => [...E(), p, f], z = () => ["auto", "hidden", "clip", "visible", "scroll"], S = () => ["auto", "contain", "none"], u = () => [p, f, h], U = () => [ne, "full", "auto", ...u()], k = () => [Q, "none", "subgrid", p, f], F = () => ["auto", {
     span: ["full", Q, p, f]
-  }, Q, p, f], _ = () => [Q, "auto", p, f], B = () => ["auto", "min", "max", "fr", p, f], $ = () => ["start", "end", "center", "between", "around", "evenly", "stretch", "baseline", "center-safe", "end-safe"], E = () => ["start", "end", "center", "stretch", "center-safe", "end-safe"], G = () => ["auto", ...u()], K = () => [ne, "auto", "full", "dvw", "dvh", "lvw", "lvh", "svw", "svh", "min", "max", "fit", ...u()], Z = () => [d, ne, "screen", "full", "dvw", "lvw", "svw", "min", "max", "fit", ...u()], x = () => [ne, "screen", "full", "lh", "dvh", "lvh", "svh", "min", "max", "fit", ...u()], c = () => [e, p, f], V = () => [...R(), We, Be, {
+  }, Q, p, f], _ = () => [Q, "auto", p, f], B = () => ["auto", "min", "max", "fr", p, f], K = () => ["start", "end", "center", "between", "around", "evenly", "stretch", "baseline", "center-safe", "end-safe"], R = () => ["start", "end", "center", "stretch", "center-safe", "end-safe"], G = () => ["auto", ...u()], $ = () => [ne, "auto", "full", "dvw", "dvh", "lvw", "lvh", "svw", "svh", "min", "max", "fit", ...u()], Z = () => [d, ne, "screen", "full", "dvw", "lvw", "svw", "min", "max", "fit", ...u()], x = () => [ne, "screen", "full", "lh", "dvh", "lvh", "svh", "min", "max", "fit", ...u()], c = () => [e, p, f], V = () => [...E(), We, Be, {
     position: [p, f]
   }], J = () => ["no-repeat", {
     repeat: ["", "x", "y", "space", "round"]
   }], ae = () => ["auto", "cover", "contain", ut, lt, {
     size: [p, f]
-  }], oe = () => [Ee, he, ie], l = () => [
+  }], oe = () => [Re, he, ie], l = () => [
     // Deprecated since Tailwind CSS v4.0.0
     "",
     "none",
@@ -379,7 +379,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
     m,
     p,
     f
-  ], w = () => ["", C, he, ie], Y = () => ["solid", "dashed", "dotted", "double"], le = () => ["normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color", "luminosity"], j = () => [C, Ee, We, Be], pe = () => [
+  ], w = () => ["", C, he, ie], Y = () => ["solid", "dashed", "dotted", "double"], le = () => ["normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color", "luminosity"], j = () => [C, Re, We, Be], pe = () => [
     // Deprecated since Tailwind CSS v4.0.0
     "",
     "none",
@@ -827,35 +827,35 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
        * @see https://tailwindcss.com/docs/justify-content
        */
       "justify-content": [{
-        justify: [...$(), "normal"]
+        justify: [...K(), "normal"]
       }],
       /**
        * Justify Items
        * @see https://tailwindcss.com/docs/justify-items
        */
       "justify-items": [{
-        "justify-items": [...E(), "normal"]
+        "justify-items": [...R(), "normal"]
       }],
       /**
        * Justify Self
        * @see https://tailwindcss.com/docs/justify-self
        */
       "justify-self": [{
-        "justify-self": ["auto", ...E()]
+        "justify-self": ["auto", ...R()]
       }],
       /**
        * Align Content
        * @see https://tailwindcss.com/docs/align-content
        */
       "align-content": [{
-        content: ["normal", ...$()]
+        content: ["normal", ...K()]
       }],
       /**
        * Align Items
        * @see https://tailwindcss.com/docs/align-items
        */
       "align-items": [{
-        items: [...E(), {
+        items: [...R(), {
           baseline: ["", "last"]
         }]
       }],
@@ -864,7 +864,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
        * @see https://tailwindcss.com/docs/align-self
        */
       "align-self": [{
-        self: ["auto", ...E(), {
+        self: ["auto", ...R(), {
           baseline: ["", "last"]
         }]
       }],
@@ -873,21 +873,21 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
        * @see https://tailwindcss.com/docs/place-content
        */
       "place-content": [{
-        "place-content": $()
+        "place-content": K()
       }],
       /**
        * Place Items
        * @see https://tailwindcss.com/docs/place-items
        */
       "place-items": [{
-        "place-items": [...E(), "baseline"]
+        "place-items": [...R(), "baseline"]
       }],
       /**
        * Place Self
        * @see https://tailwindcss.com/docs/place-self
        */
       "place-self": [{
-        "place-self": ["auto", ...E()]
+        "place-self": ["auto", ...R()]
       }],
       // Spacing
       /**
@@ -1076,7 +1076,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
        * @see https://tailwindcss.com/docs/width#setting-both-width-and-height
        */
       size: [{
-        size: K()
+        size: $()
       }],
       /**
        * Inline Size
@@ -1125,7 +1125,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
        * @see https://tailwindcss.com/docs/width
        */
       w: [{
-        w: [d, "screen", ...K()]
+        w: [d, "screen", ...$()]
       }],
       /**
        * Min-Width
@@ -1137,7 +1137,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
           "screen",
           /** Deprecated. @see https://github.com/tailwindlabs/tailwindcss.com/issues/2027#issuecomment-2620152757 */
           "none",
-          ...K()
+          ...$()
         ]
       }],
       /**
@@ -1155,7 +1155,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
           {
             screen: [i]
           },
-          ...K()
+          ...$()
         ]
       }],
       /**
@@ -1163,21 +1163,21 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
        * @see https://tailwindcss.com/docs/height
        */
       h: [{
-        h: ["screen", "lh", ...K()]
+        h: ["screen", "lh", ...$()]
       }],
       /**
        * Min-Height
        * @see https://tailwindcss.com/docs/min-height
        */
       "min-h": [{
-        "min-h": ["screen", "lh", "none", ...K()]
+        "min-h": ["screen", "lh", "none", ...$()]
       }],
       /**
        * Max-Height
        * @see https://tailwindcss.com/docs/max-height
        */
       "max-h": [{
-        "max-h": ["screen", "lh", "none", ...K()]
+        "max-h": ["screen", "lh", "none", ...$()]
       }],
       // ------------------
       // --- Typography ---
@@ -1211,7 +1211,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
        * @see https://tailwindcss.com/docs/font-stretch
        */
       "font-stretch": [{
-        "font-stretch": ["ultra-condensed", "extra-condensed", "condensed", "semi-condensed", "normal", "semi-expanded", "expanded", "extra-expanded", "ultra-expanded", Ee, f]
+        "font-stretch": ["ultra-condensed", "extra-condensed", "condensed", "semi-condensed", "normal", "semi-expanded", "expanded", "extra-expanded", "ultra-expanded", Re, f]
       }],
       /**
        * Font Family
@@ -2132,7 +2132,7 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
         }]
       }],
       "mask-image-radial-pos": [{
-        "mask-radial-at": R()
+        "mask-radial-at": E()
       }],
       "mask-image-conic-pos": [{
         "mask-conic": [C]
@@ -3032,9 +3032,9 @@ const Ge = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, je = $e, Y
     postfixLookupClassGroups: ["container-type"],
     orderSensitiveModifiers: ["*", "**", "after", "backdrop", "before", "details-content", "file", "first-letter", "first-line", "marker", "placeholder", "selection"]
   };
-}, vt = /* @__PURE__ */ $r(bt);
+}, vt = /* @__PURE__ */ Kr(bt);
 function q(...e) {
-  return vt($e(e));
+  return vt(Ke(e));
 }
 const gt = {
   neutral: "",
@@ -3253,9 +3253,9 @@ const At = typeof window > "u" ? ue : Cr, Se = fe(function({
 }, P) {
   const g = Ct(s), [T, L] = M(
     () => d != null ? String(d) : ""
-  ), I = i !== void 0 ? String(i) : T, W = g.find((x) => x.value === I), [R, b] = M(!1), [z, S] = M(-1), [u, U] = M(null), k = Ce(null), F = Ce(null), _ = Ce([]), B = kr(), $ = (x) => `${B}-option-${x}`;
+  ), I = i !== void 0 ? String(i) : T, W = g.find((x) => x.value === I), [E, b] = M(!1), [z, S] = M(-1), [u, U] = M(null), k = Ce(null), F = Ce(null), _ = Ce([]), B = kr(), K = (x) => `${B}-option-${x}`;
   wr(P, () => k.current, []);
-  const E = Le((x) => {
+  const R = Le((x) => {
     b(!1), S(-1), x && k.current?.focus();
   }, []), G = (x) => {
     x.disabled || (i === void 0 && L(x.value), b(!1), S(-1), k.current?.focus(), x.value !== I && h?.({
@@ -3264,7 +3264,7 @@ const At = typeof window > "u" ? ue : Cr, Se = fe(function({
     }));
   };
   At(() => {
-    if (!R) {
+    if (!E) {
       U(null);
       return;
     }
@@ -3277,37 +3277,37 @@ const At = typeof window > "u" ? ue : Cr, Se = fe(function({
     return x(), window.addEventListener("scroll", x, !0), window.addEventListener("resize", x), () => {
       window.removeEventListener("scroll", x, !0), window.removeEventListener("resize", x);
     };
-  }, [R, g.length]), ue(() => {
-    !R || z < 0 || _.current[z]?.scrollIntoView({ block: "nearest" });
-  }, [R, z]), ue(() => {
-    if (!R) return;
+  }, [E, g.length]), ue(() => {
+    !E || z < 0 || _.current[z]?.scrollIntoView({ block: "nearest" });
+  }, [E, z]), ue(() => {
+    if (!E) return;
     const x = (c) => {
       const V = c.target;
-      V instanceof Node && (k.current?.contains(V) || F.current?.contains(V) || E(!1));
+      V instanceof Node && (k.current?.contains(V) || F.current?.contains(V) || R(!1));
     };
     return document.addEventListener("mousedown", x), () => document.removeEventListener("mousedown", x);
-  }, [R, E]);
-  const K = () => {
+  }, [E, R]);
+  const $ = () => {
     m || g.length === 0 || (S(Nt(g, I)), b(!0));
   }, Z = (x) => {
     if (m) return;
     const c = x.key;
-    if (!R) {
-      (c === "ArrowDown" || c === "ArrowUp") && (x.preventDefault(), K());
+    if (!E) {
+      (c === "ArrowDown" || c === "ArrowUp") && (x.preventDefault(), $());
       return;
     }
     if (c === "Escape") {
-      x.preventDefault(), x.stopPropagation(), E(!0);
+      x.preventDefault(), x.stopPropagation(), R(!0);
       return;
     }
     if (c === "Tab") {
-      E(!1);
+      R(!1);
       return;
     }
     if (c === "Enter" || c === " ") {
       x.preventDefault();
       const V = g[z];
-      V ? G(V) : E(!0);
+      V ? G(V) : R(!0);
       return;
     }
     if (c === "ArrowDown" || c === "ArrowUp") {
@@ -3332,9 +3332,9 @@ const At = typeof window > "u" ? ue : Cr, Se = fe(function({
         type: "button",
         role: "combobox",
         "aria-haspopup": "listbox",
-        "aria-expanded": R,
-        "aria-controls": R ? B : void 0,
-        "aria-activedescendant": R && z >= 0 ? $(z) : void 0,
+        "aria-expanded": E,
+        "aria-controls": E ? B : void 0,
+        "aria-activedescendant": E && z >= 0 ? K(z) : void 0,
         "aria-invalid": o ? !0 : t,
         "aria-required": v || void 0,
         "aria-label": a,
@@ -3346,7 +3346,7 @@ const At = typeof window > "u" ? ue : Cr, Se = fe(function({
           r
         ),
         onClick: () => {
-          R ? E(!0) : K();
+          E ? R(!0) : $();
         },
         onKeyDown: Z,
         children: [
@@ -3356,7 +3356,7 @@ const At = typeof window > "u" ? ue : Cr, Se = fe(function({
             {
               "aria-hidden": "true",
               viewBox: "0 0 12 12",
-              className: q("size-3 flex-none text-faint transition-transform", R && "rotate-180"),
+              className: q("size-3 flex-none text-faint transition-transform", E && "rotate-180"),
               fill: "none",
               stroke: "currentColor",
               strokeWidth: "1.5",
@@ -3368,7 +3368,7 @@ const At = typeof window > "u" ? ue : Cr, Se = fe(function({
         ]
       }
     ),
-    R && u !== null ? zr(
+    E && u !== null ? zr(
       /* @__PURE__ */ n(
         "div",
         {
@@ -3396,7 +3396,7 @@ const At = typeof window > "u" ? ue : Cr, Se = fe(function({
                   ref: (J) => {
                     _.current[c] = J;
                   },
-                  id: $(c),
+                  id: K(c),
                   role: "option",
                   "aria-selected": V,
                   "aria-disabled": x.disabled || void 0,
@@ -3591,7 +3591,7 @@ function zt({ client: e, refreshKey: o, t: r }) {
         retryLabel: r("common.retry")
       }
     ) });
-  const R = [
+  const E = [
     {
       key: "id",
       header: r("credentials.th.id"),
@@ -3732,7 +3732,7 @@ function zt({ client: e, refreshKey: o, t: r }) {
             title: r("credentials.empty.title"),
             description: r("credentials.empty.description")
           }
-        ) : /* @__PURE__ */ n("div", { className: "overflow-hidden rounded-md", children: /* @__PURE__ */ n(Me, { columns: R, rows: t.data, rowKey: (b) => b.id }) })
+        ) : /* @__PURE__ */ n("div", { className: "overflow-hidden rounded-md", children: /* @__PURE__ */ n(Me, { columns: E, rows: t.data, rowKey: (b) => b.id }) })
       }
     )
   ] });
@@ -3788,7 +3788,6 @@ const hr = {
   "vendors.form.credentialId": "Credential id",
   "vendors.form.credentialIdHint": "Add the value on the Credentials page; only the reference is stored here, never the value",
   "vendors.form.apiKeyEnvName": "Environment variable name",
-  "vendors.form.apiKeyEnvGap": "Note: list does not return apiKeyEnv. Saving uses this form as-is — leaving the field empty clears any previously configured value.",
   "vendors.form.models": "Models",
   "vendors.form.modelsHint": "At least one model; wire model ids may contain / (e.g. dashscope/qwen4-max)",
   "vendors.form.modelId": "Wire model id",
@@ -3896,7 +3895,6 @@ const hr = {
   "vendors.form.credentialId": "凭证 ID",
   "vendors.form.credentialIdHint": "值在「凭证」页添加；这里只存引用，绝不存值",
   "vendors.form.apiKeyEnvName": "环境变量名",
-  "vendors.form.apiKeyEnvGap": "注意：list 不回显 apiKeyEnv。保存以本表单为准——留空保存会清除原先配置的值。",
   "vendors.form.models": "模型清单",
   "vendors.form.modelsHint": "至少 1 个模型；wire model id 可含 /（如 dashscope/qwen4-max）",
   "vendors.form.modelId": "wire model id",
@@ -3957,7 +3955,7 @@ const hr = {
 function It(e) {
   return e?.trim().toLowerCase().startsWith("zh") === !0 ? "zh-CN" : "en";
 }
-function Et(e, o) {
+function Rt(e, o) {
   if (o === void 0) return e;
   let r = e;
   for (const [t, a] of Object.entries(o))
@@ -3965,10 +3963,10 @@ function Et(e, o) {
   return r;
 }
 function br(e) {
-  const o = Rt[It(e)];
-  return (r, t) => Et(o[r] ?? hr[r] ?? r, t);
+  const o = Et[It(e)];
+  return (r, t) => Rt(o[r] ?? hr[r] ?? r, t);
 }
-const Rt = {
+const Et = {
   en: hr,
   "zh-CN": St
 }, Mt = "legacy:";
@@ -3987,8 +3985,8 @@ function Lt(e, o) {
 }
 function Ot({ initial: e, importModels: o, busy: r, onSave: t, onCancel: a, t: s }) {
   const i = e !== null, d = Ce(0), [h, m] = M(e?.id ?? ""), [v, N] = M(e?.protocol ?? "openai"), [A, O] = M(e?.baseUrl ?? ""), [P, g] = M(
-    e?.credentialRef !== void 0 ? "credential" : "none"
-  ), [T, L] = M(e?.credentialRef ?? ""), [I, W] = M(""), [R, b] = M(() => {
+    e?.credentialRef !== void 0 ? "credential" : e?.apiKeyEnv !== void 0 ? "env" : "none"
+  ), [T, L] = M(e?.credentialRef ?? ""), [I, W] = M(e?.apiKeyEnv ?? ""), [E, b] = M(() => {
     const k = Tt(e?.models ?? {});
     return (o !== void 0 ? Lt(k, o) : k).map((_) => ({ ..._, key: d.current++ }));
   }), [z, S] = M(null);
@@ -4015,14 +4013,14 @@ function Ot({ initial: e, importModels: o, busy: r, onSave: t, onCancel: a, t: s
       return;
     }
     const _ = {};
-    for (const $ of R) {
-      const E = $.id.trim();
-      if (E !== "") {
-        if (Object.hasOwn(_, E)) {
-          S(s("vendors.form.dupModel", { id: E }));
+    for (const K of E) {
+      const R = K.id.trim();
+      if (R !== "") {
+        if (Object.hasOwn(_, R)) {
+          S(s("vendors.form.dupModel", { id: R }));
           return;
         }
-        _[E] = $.cache === "auto" ? {} : { promptCache: $.cache === "on" };
+        _[R] = K.cache === "auto" ? {} : { promptCache: K.cache === "on" };
       }
     }
     if (Object.keys(_).length === 0) {
@@ -4117,9 +4115,8 @@ function Ot({ initial: e, importModels: o, busy: r, onSave: t, onCancel: a, t: s
             }
           ) }) : null
         ] }),
-        i && e.credentialRef === void 0 ? /* @__PURE__ */ n("p", { className: "text-xs text-warn", children: s("vendors.form.apiKeyEnvGap") }) : null,
         /* @__PURE__ */ n(X, { label: s("vendors.form.models"), hint: s("vendors.form.modelsHint"), required: !0, children: /* @__PURE__ */ y("div", { className: "flex flex-col gap-2", children: [
-          R.map((k) => /* @__PURE__ */ y("div", { className: "flex flex-wrap items-center gap-2", children: [
+          E.map((k) => /* @__PURE__ */ y("div", { className: "flex flex-wrap items-center gap-2", children: [
             /* @__PURE__ */ n(
               re,
               {
@@ -4202,7 +4199,7 @@ function Dt(e, o) {
 function Pt({ client: e, refreshKey: o, t: r }) {
   const [t, a] = M({ status: "loading" }), [s, i] = M(null), [d, h] = M(!1), [m, v] = M(
     null
-  ), [N, A] = M(null), [O, P] = M(null), [g, T] = M(null), [L, I] = M(null), [W, R] = M(null), [b, z] = M(null), S = Le(async () => {
+  ), [N, A] = M(null), [O, P] = M(null), [g, T] = M(null), [L, I] = M(null), [W, E] = M(null), [b, z] = M(null), S = Le(async () => {
     a({ status: "loading" });
     try {
       const l = await e.call("list");
@@ -4260,9 +4257,9 @@ function Pt({ client: e, refreshKey: o, t: r }) {
     await u(() => e.call("alias_set", { alias: l, ref: L.ref })) && I(null);
   }
   async function B(l) {
-    await u(() => e.call("alias_remove", { alias: l })) && R(null);
+    await u(() => e.call("alias_remove", { alias: l })) && E(null);
   }
-  function $(l, w) {
+  function K(l, w) {
     if (t.status !== "ready") return;
     const Y = t.data.vendors.find((le) => le.id === l);
     Y === void 0 || be(l) || v({ vendor: Y, importModels: [...w] });
@@ -4281,7 +4278,7 @@ function Pt({ client: e, refreshKey: o, t: r }) {
         retryLabel: r("common.retry")
       }
     ) });
-  const E = t.data, G = g !== null && "result" in g ? g.result : void 0, K = g !== null && "error" in g ? g.error : void 0, Z = G?.models, x = vr(E), c = b ?? E.default ?? "", V = L !== null && L.ref !== "" && !x.some((l) => l.value === L.ref) ? [{ value: L.ref, label: L.ref }, ...x] : x, J = [
+  const R = t.data, G = g !== null && "result" in g ? g.result : void 0, $ = g !== null && "error" in g ? g.error : void 0, Z = G?.models, x = vr(R), c = b ?? R.default ?? "", V = L !== null && L.ref !== "" && !x.some((l) => l.value === L.ref) ? [{ value: L.ref, label: L.ref }, ...x] : x, J = [
     {
       key: "id",
       header: r("vendors.th.id"),
@@ -4347,7 +4344,7 @@ function Pt({ client: e, refreshKey: o, t: r }) {
         )
       ] })
     }
-  ], ae = Object.entries(E.aliases).map(([l, w]) => ({ alias: l, ref: w })), oe = [
+  ], ae = Object.entries(R.aliases).map(([l, w]) => ({ alias: l, ref: w })), oe = [
     {
       key: "alias",
       header: r("aliases.th.alias"),
@@ -4370,7 +4367,7 @@ function Pt({ client: e, refreshKey: o, t: r }) {
           onConfirm: () => {
             B(l.alias);
           },
-          onCancel: () => R(null)
+          onCancel: () => E(null)
         }
       ) : /* @__PURE__ */ y("span", { className: "inline-flex flex-wrap items-center gap-1.5", children: [
         /* @__PURE__ */ n(
@@ -4388,7 +4385,7 @@ function Pt({ client: e, refreshKey: o, t: r }) {
             size: "small",
             variant: "dangerGhost",
             disabled: d,
-            onClick: () => R(l.alias),
+            onClick: () => E(l.alias),
             children: r("common.delete")
           }
         )
@@ -4402,12 +4399,12 @@ function Pt({ client: e, refreshKey: o, t: r }) {
         r("default.current"),
         ":",
         " ",
-        /* @__PURE__ */ n("span", { className: "font-mono text-ink", children: E.effective !== void 0 ? `${E.effective.vendorId}/${E.effective.wireModel}` : r("default.none") })
+        /* @__PURE__ */ n("span", { className: "font-mono text-ink", children: R.effective !== void 0 ? `${R.effective.vendorId}/${R.effective.wireModel}` : r("default.none") })
       ] }),
-      E.legacy.present ? /* @__PURE__ */ y("p", { className: "text-xs text-faint", children: [
+      R.legacy.present ? /* @__PURE__ */ y("p", { className: "text-xs text-faint", children: [
         r("default.legacy"),
         ": ",
-        /* @__PURE__ */ n("span", { className: "font-mono", children: E.legacy.ref ?? "—" })
+        /* @__PURE__ */ n("span", { className: "font-mono", children: R.legacy.ref ?? "—" })
       ] }) : null,
       /* @__PURE__ */ y("div", { className: "flex flex-wrap items-end gap-2.5", children: [
         /* @__PURE__ */ n(X, { label: r("default.ref"), className: "min-w-64 flex-1", children: /* @__PURE__ */ y(
@@ -4418,7 +4415,7 @@ function Pt({ client: e, refreshKey: o, t: r }) {
             disabled: d,
             children: [
               /* @__PURE__ */ n("option", { value: "", children: r("default.choose") }),
-              Dt(E, c).map((l) => /* @__PURE__ */ n("option", { value: l.value, children: l.label }, l.value))
+              Dt(R, c).map((l) => /* @__PURE__ */ n("option", { value: l.value, children: l.label }, l.value))
             ]
           }
         ) }),
@@ -4469,13 +4466,13 @@ function Pt({ client: e, refreshKey: o, t: r }) {
             }
           )
         ] }),
-        children: E.vendors.length === 0 ? /* @__PURE__ */ n(
+        children: R.vendors.length === 0 ? /* @__PURE__ */ n(
           ur,
           {
             title: r("vendors.empty.title"),
             description: r("vendors.empty.description")
           }
-        ) : /* @__PURE__ */ n("div", { className: "overflow-hidden rounded-md", children: /* @__PURE__ */ n(Me, { columns: J, rows: E.vendors, rowKey: (l) => l.id }) })
+        ) : /* @__PURE__ */ n("div", { className: "overflow-hidden rounded-md", children: /* @__PURE__ */ n(Me, { columns: J, rows: R.vendors, rowKey: (l) => l.id }) })
       }
     ),
     g !== null ? /* @__PURE__ */ n(te, { title: r("vendors.testResult"), children: /* @__PURE__ */ y("div", { className: "flex flex-col gap-2 text-sm", children: [
@@ -4484,7 +4481,7 @@ function Pt({ client: e, refreshKey: o, t: r }) {
         /* @__PURE__ */ n(ve, { tone: G?.ok === !0 ? "success" : "danger", children: G?.ok === !0 ? r("vendors.testOk") : r("vendors.testFailed") }),
         G !== void 0 ? /* @__PURE__ */ n("span", { className: "text-muted", children: r("vendors.latency", { ms: G.latencyMs }) }) : null
       ] }),
-      K !== void 0 ? /* @__PURE__ */ n("p", { role: "alert", className: "text-danger wrap-anywhere", children: K }) : null,
+      $ !== void 0 ? /* @__PURE__ */ n("p", { role: "alert", className: "text-danger wrap-anywhere", children: $ }) : null,
       G?.error !== void 0 ? /* @__PURE__ */ y("p", { role: "alert", className: "text-danger wrap-anywhere", children: [
         G.error.code,
         ": ",
@@ -4498,7 +4495,7 @@ function Pt({ client: e, refreshKey: o, t: r }) {
           {
             size: "small",
             disabled: d,
-            onClick: () => $(g.vendorId, Z),
+            onClick: () => K(g.vendorId, Z),
             children: r("vendors.importModels")
           }
         ) })

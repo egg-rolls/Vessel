@@ -45,7 +45,7 @@ export interface VendorFormProps {
 /**
  * 厂商增改表单（vendor_set 整条替换）。凭证来源二选一（credential / apiKeyEnv
  * 互斥，validator 同口径）；models 至少 1 条；promptCache 三态。
- * apiKeyEnv 读回缺口：P1 list 不返回该字段，编辑时以表单为准并显式披露。
+ * apiKeyEnv 经 list 只读回显（A+B 用户批准）：编辑时预填来源与变量名，不再静默清除。
  */
 export function VendorForm({ initial, importModels, busy, onSave, onCancel, t }: VendorFormProps) {
   const editing = initial !== null;
@@ -54,10 +54,14 @@ export function VendorForm({ initial, importModels, busy, onSave, onCancel, t }:
   const [protocol, setProtocol] = useState(initial?.protocol ?? 'openai');
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? '');
   const [source, setSource] = useState<'none' | 'credential' | 'env'>(
-    initial?.credentialRef !== undefined ? 'credential' : 'none',
+    initial?.credentialRef !== undefined
+      ? 'credential'
+      : initial?.apiKeyEnv !== undefined
+        ? 'env'
+        : 'none',
   );
   const [credentialId, setCredentialId] = useState(initial?.credentialRef ?? '');
-  const [envName, setEnvName] = useState('');
+  const [envName, setEnvName] = useState(initial?.apiKeyEnv ?? '');
   const [rows, setRows] = useState<ModelRow[]>(() => {
     const base = rowsOf(initial?.models ?? {});
     const merged = importModels !== undefined ? withImported(base, importModels) : base;
@@ -188,9 +192,6 @@ export function VendorForm({ initial, importModels, busy, onSave, onCancel, t }:
             </Field>
           ) : null}
         </div>
-        {editing && initial.credentialRef === undefined ? (
-          <p className="text-xs text-warn">{t('vendors.form.apiKeyEnvGap')}</p>
-        ) : null}
         <Field label={t('vendors.form.models')} hint={t('vendors.form.modelsHint')} required>
           <div className="flex flex-col gap-2">
             {rows.map((row) => (

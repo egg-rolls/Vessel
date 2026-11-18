@@ -139,6 +139,12 @@ export interface MemberStatus {
   current_tool?: string;
   last_seen?: number;
   usage?: Usage;
+  /**
+   * 显式模型 pin（model-registry A+B 用户批准，只读 additive）：仅 record.model
+   * 有值（显式 pin）时出现；缺省 = 跟随节点默认，不写键。不是 live body 正在用的
+   * 模型（那由 system_context.model 表达）；写路径仍只走 agents.create/update。
+   */
+  model?: string;
   /** 进程内 presence（DTO 派生，不落盘） */
   presence?: MemberPresence;
   /** 归属（DTO 派生，持久化在 PersistedAgentRecord） */
@@ -162,7 +168,8 @@ export interface MemberStatus {
  * 快照持久化记录（v5）。
  *
  * `bodies[]` 是唯一真相；`current_body` / `body_history` 保留为旧数据的兼容视图。
- * 与 MemberStatus 分离：不把 model / system_prompt 等配置泄漏进对外 DTO。
+ * 与 MemberStatus 分离：system_prompt 等配置不进对外 DTO；model 例外——显式 pin
+ * 经 MemberStatus.model 只读外露（model-registry A+B 用户批准），供 UI 预填。
  * presence / rotation 不持久化（进程内可重建）。
  */
 export interface PersistedAgentRecord {
@@ -1964,6 +1971,8 @@ export interface TeamMemberSummary {
   epoch: number;
   /** 最后活跃时间（0.21 additive；epoch ms） */
   last_seen?: number;
+  /** 显式模型 pin（只读 additive，model-registry A+B）；缺省 = 跟随节点默认。 */
+  model?: string;
   /** 已退役 Binding 历史（0.19 S6 additive；可选，旧数据缺失不报错） */
   body_history?: BindingHistoryEntry[];
   /**

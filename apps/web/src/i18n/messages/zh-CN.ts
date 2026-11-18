@@ -228,6 +228,7 @@ export const messages = {
   'chat.memberModel.button': '模型',
   'chat.memberModel.tooltip': '切换成员模型（下一具 body 生效）',
   'chat.memberModel.title': '切换模型 · {name}',
+  'chat.memberModel.currentPin': '当前固定（pin）：{model}',
   'chat.memberModel.currentBody': '本具 body 当前使用：{model}',
   'chat.memberModel.currentUnknown': '本具 body 当前模型未知（尚未跑过 run 或旧 gateway）。',
   'chat.memberModel.hint':

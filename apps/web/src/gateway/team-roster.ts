@@ -145,6 +145,8 @@ function memberFromList(entry: AgentSummary): TeamMember | undefined {
     ...(entry.state !== undefined ? { state: entry.state } : {}),
     ...(entry.role !== undefined ? { role: entry.role } : {}),
     ...(entry.owner !== undefined ? { owner: entry.owner } : {}),
+    // 显式 pin 只读（model-registry A+B）；旧 gateway 缺失时不写键。
+    ...(entry.model !== undefined ? { model: entry.model } : {}),
   };
 }
 

@@ -230,6 +230,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.memberModel.button': 'Model',
   'chat.memberModel.tooltip': 'Switch member model (applies to the next body)',
   'chat.memberModel.title': 'Switch model · {name}',
+  'chat.memberModel.currentPin': 'Currently pinned: {model}',
   'chat.memberModel.currentBody': 'This body currently runs: {model}',
   'chat.memberModel.currentUnknown':
     'Current model of this body is unknown (no run yet, or older gateway).',

@@ -158,6 +158,8 @@ function publicMember(entry: AgentStatusLike): Record<string, unknown> {
     ...(entry.team_id !== undefined ? { team_id: entry.team_id } : {}),
     ...(entry.epoch !== undefined ? { epoch: entry.epoch } : {}),
     ...(entry.last_seen !== undefined ? { last_seen: entry.last_seen } : {}),
+    // 显式 pin 只读外露（model-registry A+B）；缺省跟随默认，不写键。
+    ...(entry.model !== undefined ? { model: entry.model } : {}),
     // 0.55 additive：硬错误闸（body 因为不可重试的 provider 错误停摆，为何、何时）。
     // 没有闸时不写这个键 —— 列表里「没这个键」= 能接活。
     ...(entry.blocked !== undefined ? { blocked: entry.blocked } : {}),

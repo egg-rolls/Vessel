@@ -1,11 +1,10 @@
 /**
  * Agent 编辑整页（canonical `agents.update`，单条批量形状）。
  *
- * name 立即生效；model / system_prompt 从下一个 Body 生效。Web 没有读取当前
- * model / system prompt 的稳定字段（agents.* 读 DTO 不含 record.model），因此这两项
- * 留空表示不修改，不伪造现值。model 走 ModelPicker：空值项文案「不修改」，括号里
- * 展示节点当前有效默认（占位）；存量 pin 若经 value 传入则原样显示 + 未注册标记，
- * 不静默丢（当前 wire 拿不到 pin，预填取决于调用方）。
+ * name 立即生效；model / system_prompt 从下一个 Body 生效。model 走 ModelPicker：
+ * 存量 pin 经读 DTO 预填（model-registry A+B 用户批准，agents.* 只读回显 record.model），
+ * 未注册 pin 原样显示 + 标记，不静默丢；空值项 = 不修改（保留现 pin）。
+ * system_prompt 仍无读字段，留空表示不修改，不伪造现值。
  */
 import { PageScaffold, TableToolbar } from '@vessel-agent/plugin-ui';
 import { type FormEvent, useState } from 'react';
@@ -40,7 +39,8 @@ export function AgentEditView({
   const displayName = agentDisplayName(member);
   const [draft, setDraft] = useState<AgentDraft>({
     name: member.name?.trim() ?? '',
-    model: '',
+    // 预填显式 pin（A+B）；缺省 '' = 跟随默认（空值项语义 = 不修改）。
+    model: member.model ?? '',
     systemPrompt: '',
     teamId: '',
   });
@@ -57,7 +57,8 @@ export function AgentEditView({
     if (busy) return;
     const result = buildAgentUpdateInput(
       member.agent_id,
-      { name: member.name ?? '', model: '', systemPrompt: '' },
+      // baseline 含现 pin：未触碰的 pin 不算变更、不重发（A+B）。
+      { name: member.name ?? '', model: member.model ?? '', systemPrompt: '' },
       draft,
     );
     if (!result.ok || !result.input) {

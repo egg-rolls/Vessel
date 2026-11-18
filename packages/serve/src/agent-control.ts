@@ -47,6 +47,8 @@ export interface AgentStatusLike {
   epoch?: number;
   current_tool?: string;
   last_seen?: number;
+  /** 显式模型 pin（只读 additive，model-registry A+B）；缺省 = 跟随节点默认。 */
+  model?: string;
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
