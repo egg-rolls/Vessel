@@ -66,6 +66,12 @@ export interface NodeDrainSources {
    * fence 的语义由装配层实现（AgentService.beginDrain + runs.start 闸门）。
    */
   beginFence(): boolean;
+  /**
+   * 是否写 resume 标记（缺省 true）。P0-run-stops P3：headless 一次性进程传 false——
+   * 它的会话没有 agent 绑定，标记永远不可能被准入/清除，写了只会变成只增不减的
+   * 僵尸标记（掩盖真正的恢复信号）。interrupt / settle / flush 不受影响。
+   */
+  armMarkers?: boolean;
   /** 时钟（探针注入；缺省 Date.now）。 */
   now?(): number;
   /** settle 预算覆盖（探针用；缺省 NODE_DRAIN_SETTLE_MS）。 */
@@ -151,7 +157,8 @@ export function createNodeDrainer(sources: NodeDrainSources): NodeDrainer {
     const interruptedAt = now();
     const marks: NodeDrainMark[] = [];
     const writes: Array<Promise<void>> = [];
-    for (const [sessionId, entry] of snapped) {
+    // P3：armMarkers=false（headless）跳过写标记；打断与收尾照旧。
+    for (const [sessionId, entry] of sources.armMarkers === false ? [] : snapped) {
       const marker: ResumeAfterRestart = {
         run_id: entry.run_id,
         interrupted_at: interruptedAt,

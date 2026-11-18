@@ -1265,6 +1265,19 @@ async function runWithConfig(result: BootstrapResult) {
       // 0.12 / CONTRACT-hot-apply：`gateway.reload` 的唯一热应用入口。
       // serve 只做 scope 枚举校验；这里注入 `scope -> applier`。
       reload: reloadRunner.reload,
+      // P0-run-stops P1：`gateway.shutdown` 的优雅退出序列。Windows 上外部 stop 是
+      // 无条件强杀（信号处理器跑不到），停止侧 CLI 先经本 RPC 触发进程内 drain
+      // （写 resume 标记 + interrupt('shutdown')），再等进程自死；超时仍强杀。
+      // 走与 SIGTERM 完全相同的 activeCleanup（shutdownServeStack），不另造退出路径。
+      shutdown: async () => {
+        try {
+          if (activeCleanup) await activeCleanup();
+          else await result.shutdown();
+        } catch {
+          // 退出序列各步已自带日志（shutdown.failed / node.drain.failed）；失败不阻断退出。
+        }
+        process.exit(0);
+      },
       // CONTRACT-hot-apply §7：permissions.setToolPolicy 的写盘面（用户 YAML）。
       permissions: {
         setToolPolicy: ({ tool, policy }) => {

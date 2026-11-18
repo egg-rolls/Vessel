@@ -78,7 +78,7 @@ import {
   readGatewayPidRecord,
   writeGatewayPid,
 } from './gateway/pid';
-import { gatewayBaseUrl, reloadGateway } from './gateway/reload';
+import { gatewayBaseUrl, reloadGateway, shutdownGateway } from './gateway/reload';
 import {
   installService,
   resolveServiceTarget,
@@ -917,6 +917,17 @@ export async function stopGateway(
         ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
         ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+        // P0-run-stops P4：node 没 drain 成被强杀时，停止方代打一行结构化日志。
+        onDrainSkipped: (info) =>
+          printErr(
+            ui.warn(
+              formatEventLine('node.drain.skipped', {
+                name: info.name,
+                pid: info.pid,
+                reason: info.reason,
+              }),
+            ),
+          ),
       });
       if (result.failed > 0) failed = true;
       keptNodes += result.kept?.nodes ?? 0;
@@ -1033,7 +1044,41 @@ export async function stopGateway(
           await clearHandoffMarker(context.dataDir, entry.instance).catch(() => undefined);
         }
       }
-      terminateProcess(pid, context.platform);
+      // P0-run-stops P1：legacy 单进程（stateKind='node'）本身就是 Node API ——
+      // 强杀前先请它进程内 drain（写 resume 标记 + interrupt('shutdown')），等它自死；
+      // 超时/失败回退既有强杀。platform entry 没有 run 面，不试（node 子进程由
+      // stopSpawnedChildren 各自优雅关闭）。
+      let drained = false;
+      if (stateKind === 'node' && entry.record !== undefined) {
+        const graceful = await shutdownGateway({
+          record: entry.record,
+          token: token ?? '',
+          tls: context.config.node?.tls !== undefined,
+          requestTimeoutMs: 3_000,
+        });
+        if (graceful.ok) {
+          const graceDeadline = Date.now() + 10_000;
+          while (Date.now() < graceDeadline) {
+            if (!isProcessAlive(pid)) {
+              drained = true;
+              break;
+            }
+            await sleep(100);
+          }
+        }
+        if (!drained) {
+          // P4：强杀回退代打一行（宿主来不及自己说）——这次停止没有 drain。
+          printErr(
+            ui.warn(
+              formatEventLine('node.drain.skipped', {
+                pid,
+                reason: graceful.ok ? 'timeout' : (graceful.code ?? 'error'),
+              }),
+            ),
+          );
+        }
+      }
+      if (!drained) terminateProcess(pid, context.platform);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
         printErr(ui.err(t('gateway.stopFailed', { pid, detail: errorMessage(error) })));
@@ -2848,6 +2893,17 @@ export async function runPlatformGatewayForeground(
       // 0.58：看门狗动作 → 结构日志行（`event=supervisor.stall_restart ...`）。
       // 这一行是僵死时间线的唯一外部证据：子进程僵死时自己的日志一条都不会落地。
       onWatchdogEvent: (event) => printWatchdogEvent(event, print, printErr),
+      // P0-run-stops P4：node 优雅关闭失败回退强杀 → 代打 node.drain.skipped。
+      onDrainSkipped: (info) =>
+        printErr(
+          ui.warn(
+            formatEventLine('node.drain.skipped', {
+              name: info.name,
+              pid: info.pid,
+              reason: info.reason,
+            }),
+          ),
+        ),
     });
     const specs: LocalNodeSpec[] = nodes.map((node) => ({
       nodeId: node.entry.node_id,

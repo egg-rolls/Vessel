@@ -14,6 +14,7 @@
 
 import * as path from 'node:path';
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
+import { formatEventLine } from '../packages/serve/src/index';
 import type { NodeCommand } from './cli-args';
 import type { ControlPlaneTarget } from './control-plane-target';
 import { expandHome, resolveDataDir } from './data-paths';
@@ -27,7 +28,7 @@ import {
   isProcessAlive,
   readGatewayPidRecord,
 } from './gateway/pid';
-import { gatewayBaseUrl, reloadGateway } from './gateway/reload';
+import { gatewayBaseUrl, reloadGateway, shutdownGateway } from './gateway/reload';
 import {
   gatewayStatus,
   isPlatformRecord,
@@ -302,6 +303,37 @@ async function nodeStopCommand(deps: NodeCommandDeps): Promise<number> {
     return 1;
   }
 
+  // P0-run-stops P1：强杀前先请 node 进程内 drain（写 resume 标记 + interrupt('shutdown')），
+  // 等它自死（≤10s）；失败/超时回退既有强杀。Windows 上外部 process.kill 是无条件终止，
+  // 不先走这一步，在跑 run 的恢复标记一条都写不出来。
+  const graceful = await shutdownGateway({
+    record,
+    token: token ?? '',
+    tls: context.config.node?.tls !== undefined,
+    requestTimeoutMs: 3_000,
+  });
+  if (graceful.ok) {
+    const graceDeadline = Date.now() + 10_000;
+    while (Date.now() < graceDeadline) {
+      if (!isProcessAlive(record.pid)) {
+        if (entry !== undefined) {
+          await cleanupGatewayStateEntry(context.dataDir, entry).catch(() => undefined);
+        }
+        print(ui.ok(t('node.stopped', { pid: record.pid })));
+        return 0;
+      }
+      await sleep(100);
+    }
+  }
+  // P4：回退强杀 = 这次停止没有 drain，代打一行（宿主来不及自己说）。
+  printErr(
+    ui.warn(
+      formatEventLine('node.drain.skipped', {
+        pid: record.pid,
+        reason: graceful.ok ? 'timeout' : (graceful.code ?? 'error'),
+      }),
+    ),
+  );
   try {
     if (context.platform === 'win32') process.kill(record.pid);
     else process.kill(record.pid, 'SIGTERM');
