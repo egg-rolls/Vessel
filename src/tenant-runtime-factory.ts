@@ -64,6 +64,7 @@ import {
   type TraceRedactor,
 } from '../packages/core/src/index';
 import { TimelineEventLog } from '../packages/core/src/timeline/read-port';
+import type { PluginHostManager } from '../packages/serve/src/index';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
 import { createFeishuFromConfig, stopFeishuChannel } from './feishu-wiring';
@@ -79,7 +80,8 @@ import {
 } from './observability-wiring';
 import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, withPluginConfig } from './plugin-config';
-import { PluginLoader } from './plugin-loader';
+import { registerInProcessPlugin } from './plugin-host-assembly';
+import { type PluginDescriptor, PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import { createProvider } from './provider-factory';
 import { includeReasoningFor } from './reasoning';
@@ -185,12 +187,28 @@ export interface TenantRuntimeBundle {
   providerModel: string;
   providerBaseUrl: string;
   /**
-   * `provider.model` 热应用入口（P0-1 D4 批准；装配层内部字段，不上 wire、不进 core）。
-   * 原地改已注册 owner profile 的 `.model`：**新 EU** 创建时即用新值；live EU 的 model
-   * 是构造期只读快照（前缀不变量），续接 run 仍用旧值，换模型须 rotate / 重启。
+   * 节点缺省模型热应用入口（P0-1 D4 批准；P1-w2d 泛化到 provider/models 全域，
+   * 装配层内部字段，不上 wire、不进 core）。原地改已注册 owner profile 的 `.model`：
+   * **新 EU** 创建时即用新值；live EU 的 model 是构造期只读快照（前缀不变量），
+   * 续接 run 仍用旧值，换模型须 rotate / 重启。`next` = 校验通过的重载配置：
+   * 提供时同步重建 registry 快照 + 清 provider 缓存（多厂商路由 / 凭证 / promptCache
+   * 随下一具 body/EU/run 生效）；缺省时只改 profile.model（兼容旧调用点）。
    * 不同步 `providerModel` 字段：它只在装配期被解构一次（bootstrap），无运行期消费者。
    */
-  applyProviderModel: (model: string) => void;
+  applyProviderModel: (model: string, next?: VesselConfig) => void;
+  /**
+   * P1-w2d（w1a 接缝）：install 之后对 capabilityManifest 非空的 in-process 插件调
+   * `registerInProcessPlugin`，把 RPC / 贡献面登记进宿主 PluginRpcRegistry。
+   * 由装配层在 `createPluginHostManager` 之后调用（cli gateway / bootstrap local）；
+   * generic 接线，不依赖具体插件包存在。`config` 用于 enabled / trust_ui 判定。
+   * 返回已登记插件的 `plugins.list` 基础行（name = descriptor.name，与 contributions
+   * 键 manifest.id 一致是契约 §1 承重）：provider 类能力插件不在 bundle.plugins 里，
+   * 调用方须把这些行并入 base 列表并按 name 去重，否则贡献面没有行可合并。
+   */
+  registerInProcessPlugins: (
+    manager: PluginHostManager,
+    config: VesselConfig,
+  ) => Array<{ name: string; enabled: boolean }>;
   /** tenant 独立事件流（trace / metrics 只订阅它） */
   events: EventStream;
   /** runtime 事件出口；与 tenant 流同一实例 */
@@ -436,8 +454,13 @@ function withPreviousSummary(system: string, previous: string | undefined): stri
  * 分块失败写占位标记继续；reduce 失败拼接部分摘要；全部失败返回空串，
  * 由 core 回退占位摘要。
  */
-export function createContextSummarizer(provider: LLMProvider, model: string): ContextSummarizer {
+export function createContextSummarizer(
+  resolve: () => { provider: LLMProvider; model: string },
+): ContextSummarizer {
   const summarize = async (system: string, user: string, maxTokens: number): Promise<string> => {
+    // P1-w2d：消费与 EU 同一 resolveModel 结果（mock 为常量闭包）——默认模型热应用
+    // 后压缩跟随同一厂商，不加独立压缩模型字段（契约 §2.5）。
+    const { provider, model } = resolve();
     // 0.64：摘要调用很可能发生在「只有这一次挂起的 await」的时刻（上下文压缩期间
     // 没有别的定时器），`AbortSignal.timeout` 在这种空闲事件循环里可能不触发 ⇒ 挂死。
     const deadline = startDeadline(SUMMARIZER_TIMEOUT_MS);
@@ -666,11 +689,17 @@ export async function buildTenantRuntime(
     'runtime.provider',
     createProvider(config, loader, useMock, options.mockScenario),
   );
-  const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
+  const { provider, providerName, providerModel, providerBaseUrl, registry } = resolvedProvider;
   // 0.51：opt-in 计价；无配置时为 undefined，total_cost 保持 0。
   const pricing = createUsagePricing(config.pricing);
 
-  const summarizer = createContextSummarizer(provider, providerModel);
+  // P1-w2d：summarizer 与 EU 消费同一 resolveModel（默认热应用后压缩跟随）；
+  // mock 无 registry → 常量闭包，与今天逐字等价。
+  const summarizer = createContextSummarizer(
+    registry !== undefined
+      ? () => registry.resolveModel(undefined)
+      : () => ({ provider, model: providerModel }),
+  );
   // R7：熔断按 session 分桶；owner / 成员共享同一份计数，`force` 由 core 传入。
   const summarizerForSession =
     summarizer !== undefined ? createSessionBreaker(summarizer) : undefined;
@@ -836,6 +865,9 @@ export async function buildTenantRuntime(
   const defaultPluginNames = pluginSelection.names;
 
   const plugins: Plugin[] = [];
+  // P1-w2d：capabilityManifest 非空的 in-process 插件（非 provider 类；provider 类由
+  // wiring 收集）——install 后经 bundle.registerInProcessPlugins 登记 RPC / 贡献面。
+  const inProcessCapabilityPlugins: Array<{ descriptor: PluginDescriptor; plugin: Plugin }> = [];
   const pluginLoadEvents: Array<{
     type: 'plugin.loaded' | 'plugin.failed';
     data: Record<string, unknown>;
@@ -851,6 +883,10 @@ export async function buildTenantRuntime(
     if (plugin) {
       // E1：配置在 install 时透传（host 路径直接传；非 host 路径见 ExecutionUnit）。
       plugins.push(plugin);
+      // 收集原始 plugin（withPluginConfig 包装不透传 rpc）；登记发生在 manager 创建后。
+      if (descriptor?.mode === 'in-process' && descriptor.capabilityManifest !== undefined) {
+        inProcessCapabilityPlugins.push({ descriptor, plugin });
+      }
       pluginLoadEvents.push({
         type: 'plugin.loaded',
         data: {
@@ -948,6 +984,10 @@ export async function buildTenantRuntime(
     tenantId,
     providerFactory: () => provider,
     model: providerModel,
+    // P1-w2d（w1a D4 接缝）：注入 resolveModel 后 materializeOptions 的 provider/model
+    // 取解析结果（多厂商路由 + delegating wrapper）；mock 无 registry → 不注入，
+    // 走 legacy providerFactory() + model 路径，与今天逐字等价。
+    ...(registry !== undefined ? { resolveModel: registry.resolveModel } : {}),
     // 插件已由装配层安装到共享 host；EU 不重复安装。
     plugins: [],
     pluginHostFactory: () => finalPluginHost,
@@ -1498,8 +1538,27 @@ export async function buildTenantRuntime(
     providerModel,
     providerBaseUrl,
     // 原地改引用（不能重新注册：同 tenant 不同 profile 会抛 tenant_profile_conflict）。
-    applyProviderModel: (model) => {
+    // next 提供时同步重建 registry 快照 + 清缓存（P1-w2d 泛化；live EU 不动，下一具生效）。
+    applyProviderModel: (model, next) => {
       ownerProfile.model = model;
+      if (next !== undefined) registry?.applyConfig(next);
+    },
+    registerInProcessPlugins: (manager, pluginConfig) => {
+      const rows: Array<{ name: string; enabled: boolean }> = [];
+      const seen = new Set<string>();
+      for (const entry of [...inProcessCapabilityPlugins, ...(registry?.inProcessPlugins ?? [])]) {
+        registerInProcessPlugin({
+          manager,
+          descriptor: entry.descriptor,
+          plugin: entry.plugin,
+          config: pluginConfig,
+        });
+        if (!seen.has(entry.descriptor.name)) {
+          seen.add(entry.descriptor.name);
+          rows.push({ name: entry.descriptor.name, enabled: true });
+        }
+      }
+      return rows;
     },
     events,
     runtimeEvents: events,
