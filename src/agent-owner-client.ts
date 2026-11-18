@@ -8,6 +8,7 @@
  * @module vessel/agent-owner-client
  */
 
+import { withDeadline } from '@vessel-agent/core';
 import {
   type AgentOwnerMethod,
   type AgentOwnerRecord,
@@ -103,15 +104,19 @@ export async function callAgentOwner(
   const fetchImpl = options.fetchImpl ?? fetch;
   let response: Response;
   try {
-    response = await fetchImpl(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${record.token}`,
-      },
-      body: JSON.stringify({ method, params }),
-      signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
-    });
+    // 0.64：不用 `AbortSignal.timeout`（bun 1.3.9 上空闲事件循环里它可能不触发，
+    // 这条路径正是「只被一次挂起的 await 等待」的典型形状 ⇒ 会无限挂起）。
+    response = await withDeadline(options.timeoutMs ?? 10_000, async (signal) =>
+      fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${record.token}`,
+        },
+        body: JSON.stringify({ method, params }),
+        signal,
+      }),
+    );
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new AgentOwnerUnavailableError(`cannot reach agent owner at ${url}: ${detail}`);

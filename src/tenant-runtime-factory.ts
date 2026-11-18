@@ -58,6 +58,7 @@ import {
   type Scheduler,
   type SessionStore,
   sessionDirPath,
+  startDeadline,
   type TenantPaths,
   type TraceRedactor,
 } from '../packages/core/src/index';
@@ -428,17 +429,24 @@ function withPreviousSummary(system: string, previous: string | undefined): stri
  */
 export function createContextSummarizer(provider: LLMProvider, model: string): ContextSummarizer {
   const summarize = async (system: string, user: string, maxTokens: number): Promise<string> => {
-    const response = await provider.chat({
-      model,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0,
-      signal: AbortSignal.timeout(SUMMARIZER_TIMEOUT_MS),
-    });
-    return typeof response.content === 'string' ? response.content : '';
+    // 0.64：摘要调用很可能发生在「只有这一次挂起的 await」的时刻（上下文压缩期间
+    // 没有别的定时器），`AbortSignal.timeout` 在这种空闲事件循环里可能不触发 ⇒ 挂死。
+    const deadline = startDeadline(SUMMARIZER_TIMEOUT_MS);
+    try {
+      const response = await provider.chat({
+        model,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0,
+        signal: deadline.signal,
+      });
+      return typeof response.content === 'string' ? response.content : '';
+    } finally {
+      deadline.dispose();
+    }
   };
 
   return async (messages, options) => {
@@ -1283,16 +1291,23 @@ export async function buildTenantRuntime(
       if (state.title !== undefined && state.title !== derivedTitle) return;
       const input = firstUserInputForTitle(messages);
       if (input === undefined) return;
-      const response = await provider.chat({
-        model: providerModel,
-        messages: [
-          { role: 'system', content: SESSION_TITLE_SYSTEM_PROMPT },
-          { role: 'user', content: input },
-        ],
-        max_tokens: 64,
-        temperature: 0.2,
-        signal: AbortSignal.timeout(5000),
-      });
+      // 0.64：AI 起标题是后台补的，触发时事件循环经常是空的 —— 用会真正触发的截止时间。
+      const deadline = startDeadline(5000);
+      let response: Awaited<ReturnType<LLMProvider['chat']>>;
+      try {
+        response = await provider.chat({
+          model: providerModel,
+          messages: [
+            { role: 'system', content: SESSION_TITLE_SYSTEM_PROMPT },
+            { role: 'user', content: input },
+          ],
+          max_tokens: 64,
+          temperature: 0.2,
+          signal: deadline.signal,
+        });
+      } finally {
+        deadline.dispose();
+      }
       const title = sanitizeGeneratedTitle(response.content);
       if (title === '') return;
       // 生成窗口内可能人工 rename / 已有另一次命名：写前重读，保住人工标题。

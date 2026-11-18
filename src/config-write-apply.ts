@@ -59,9 +59,11 @@ export function createWrittenConfigApplier(
       applied.catch((error: unknown) => {
         warn('config.set.apply_failed', error);
       }),
+      // 0.64：这个定时器**不能** unref。`Promise.race` 靠它兜底——如果 `applied`
+      // 永不 settle 而事件循环又空了（bun 1.3.9 上 unref 定时器可能根本不触发），
+      // 这里的 await 就会永久挂住。bounded 的 ref 定时器最多让进程多活 timeoutMs。
       new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, timeoutMs);
-        (timer as { unref?: () => void }).unref?.();
+        setTimeout(resolve, timeoutMs);
       }),
     ]);
 

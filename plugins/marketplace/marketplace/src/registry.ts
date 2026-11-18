@@ -14,6 +14,7 @@
 
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { startDeadline } from '@vessel-agent/core';
 import { errorCodeOf, MarketplaceError, messageOf } from './errors.js';
 import { compareVersionStrings, isFullSemver, parseVersionRange } from './semver.js';
 import { DEFAULT_REGISTRY_URL, type MarketplaceSettings } from './settings.js';
@@ -316,11 +317,11 @@ async function readCapped(response: Response, maxBytes: number): Promise<Uint8Ar
   return output;
 }
 
-function buildRequest(proxy: string | undefined): RequestInit {
+function buildRequest(proxy: string | undefined, signal: AbortSignal): RequestInit {
   const init: RequestInit & { proxy?: string } = {
     headers: { accept: 'application/json' },
     redirect: 'follow',
-    signal: AbortSignal.timeout(15_000),
+    signal,
   };
   if (proxy !== undefined) init.proxy = proxy;
   return init;
@@ -371,46 +372,53 @@ async function fetchIndex(
   }
 
   const fetchImpl = options.fetchImpl ?? fetch;
-  let response: Response;
+  // 0.64：拉 registry 是「只被一次挂起的 await 等待」的路径 —— 截止时间要盖住
+  // fetch 与读 body（`readCapped`），并且必须 dispose（不然悬挂定时器会把进程多留）。
+  const deadline = startDeadline(15_000);
   try {
-    response = await fetchImpl(url, buildRequest(options.proxy));
-  } catch (error) {
-    if (cached !== null) return { index: cached.index, fetchedAt: cached.fetched_at };
-    throw new MarketplaceError(
-      'registry_fetch_failed',
-      `could not fetch registry: ${messageOf(error)}`,
-    );
-  }
-
-  if (!response.ok) {
-    if (cached !== null) return { index: cached.index, fetchedAt: cached.fetched_at };
-    throw new MarketplaceError(
-      'registry_fetch_failed',
-      `registry returned HTTP ${response.status}`,
-    );
-  }
-  if (response.url) assertSecureUrl(response.url, 'registry redirect');
-
-  let parsed: unknown;
-  try {
-    const bytes = await readCapped(response, MAX_INDEX_BYTES);
-    parsed = JSON.parse(new TextDecoder().decode(bytes));
-  } catch (error) {
-    if (error instanceof MarketplaceError && cached !== null) {
-      return { index: cached.index, fetchedAt: cached.fetched_at };
+    let response: Response;
+    try {
+      response = await fetchImpl(url, buildRequest(options.proxy, deadline.signal));
+    } catch (error) {
+      if (cached !== null) return { index: cached.index, fetchedAt: cached.fetched_at };
+      throw new MarketplaceError(
+        'registry_fetch_failed',
+        `could not fetch registry: ${messageOf(error)}`,
+      );
     }
-    if (cached !== null) return { index: cached.index, fetchedAt: cached.fetched_at };
-    throw new MarketplaceError(
-      'registry_fetch_failed',
-      `could not read registry: ${messageOf(error)}`,
-    );
-  }
 
-  const index = parseRegistryIndex(parsed);
-  const fetchedAt = now();
-  // The cache is an optimization: a read-only data dir must not block installs.
-  await writeCache(options.cachePath, { url, fetched_at: fetchedAt, index }).catch(() => {});
-  return { index, fetchedAt };
+    if (!response.ok) {
+      if (cached !== null) return { index: cached.index, fetchedAt: cached.fetched_at };
+      throw new MarketplaceError(
+        'registry_fetch_failed',
+        `registry returned HTTP ${response.status}`,
+      );
+    }
+    if (response.url) assertSecureUrl(response.url, 'registry redirect');
+
+    let parsed: unknown;
+    try {
+      const bytes = await readCapped(response, MAX_INDEX_BYTES);
+      parsed = JSON.parse(new TextDecoder().decode(bytes));
+    } catch (error) {
+      if (error instanceof MarketplaceError && cached !== null) {
+        return { index: cached.index, fetchedAt: cached.fetched_at };
+      }
+      if (cached !== null) return { index: cached.index, fetchedAt: cached.fetched_at };
+      throw new MarketplaceError(
+        'registry_fetch_failed',
+        `could not read registry: ${messageOf(error)}`,
+      );
+    }
+
+    const index = parseRegistryIndex(parsed);
+    const fetchedAt = now();
+    // The cache is an optimization: a read-only data dir must not block installs.
+    await writeCache(options.cachePath, { url, fetched_at: fetchedAt, index }).catch(() => {});
+    return { index, fetchedAt };
+  } finally {
+    deadline.dispose();
+  }
 }
 
 export interface LoadRegistryOptions {

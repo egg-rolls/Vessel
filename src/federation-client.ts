@@ -11,6 +11,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { startDeadline } from '@vessel-agent/core';
 import {
   type FederationAddress,
   formatFederationAddress,
@@ -262,14 +263,25 @@ export function buildFederationMessage(
 }
 
 /**
- * 单次请求的信号：单次超时与调用方总预算取先到者。
+ * 单次请求的截止时间：单次超时与调用方总预算取先到者。
  *
  * `AbortSignal.any` 让一个 peer 的请求不会活过整批的 deadline —— 否则 N 个不可达
  * peer 会各等一次 `timeoutMs`，总耗时变成 N 倍。
+ *
+ * 0.64：底层定时器改用 `startDeadline`（普通 ref 定时器）。`AbortSignal.timeout` 在
+ * bun 1.3.9 的空闲事件循环里可能不触发 —— 联邦投递正是「一次挂起的 await、没有别的
+ * 定时器」的形状。调用方**必须**在 `finally` 里 `dispose()`。
  */
-function requestSignal(io: Pick<FederationClientIo, 'timeoutMs' | 'signal'>): AbortSignal {
-  const perRequest = AbortSignal.timeout(io.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  return io.signal === undefined ? perRequest : AbortSignal.any([io.signal, perRequest]);
+function requestDeadline(io: Pick<FederationClientIo, 'timeoutMs' | 'signal'>): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const deadline = startDeadline(io.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  return {
+    signal:
+      io.signal === undefined ? deadline.signal : AbortSignal.any([io.signal, deadline.signal]),
+    dispose: deadline.dispose,
+  };
 }
 
 function errorDetail(body: unknown): { code?: string; message?: string } {
@@ -327,6 +339,9 @@ export async function postFederation(
 
   const message = buildFederationMessage(options, input, io);
   const endpoint = resolveEndpoint(peer);
+  // 0.64：截止时间用 startDeadline（`AbortSignal.timeout` 在 bun 1.3.9 空闲事件循环里
+  // 可能不触发），并且每条退出路径都要 dispose。
+  const deadline = requestDeadline(io);
 
   const init: FetchInit = {
     method: 'POST',
@@ -335,13 +350,14 @@ export async function postFederation(
       authorization: `Bearer ${peer.token}`,
     },
     body: JSON.stringify(message),
-    signal: requestSignal(io),
+    signal: deadline.signal,
   };
   if (peer.caFile !== undefined) {
     let ca: string;
     try {
       ca = await readFile(peer.caFile, 'utf8');
     } catch {
+      deadline.dispose();
       throw new FederationClientError(
         'federation_invalid_config',
         `cannot read CA file for ${peer.nodeId}:${peer.teamId}`,
@@ -355,6 +371,7 @@ export async function postFederation(
   try {
     response = await fetchImpl(endpoint, init);
   } catch (error) {
+    deadline.dispose();
     const detail = error instanceof Error ? error.message : String(error);
     return {
       status: 'rejected',
@@ -364,6 +381,7 @@ export async function postFederation(
   }
 
   const body = await readJson(response);
+  deadline.dispose();
 
   if (!response.ok) {
     const detail = errorDetail(body);
@@ -491,6 +509,8 @@ export async function postFederationTeamInfo(
     ...(input.members_limit !== undefined ? { members_limit: input.members_limit } : {}),
   };
 
+  // 0.64：同 `postFederationMessage` —— 用 startDeadline，且每条退出路径 dispose。
+  const deadline = requestDeadline(io);
   const init: FetchInit = {
     method: 'POST',
     headers: {
@@ -498,13 +518,14 @@ export async function postFederationTeamInfo(
       authorization: `Bearer ${peer.token}`,
     },
     body: JSON.stringify(payload),
-    signal: requestSignal(io),
+    signal: deadline.signal,
   };
   if (peer.caFile !== undefined) {
     let ca: string;
     try {
       ca = await readFile(peer.caFile, 'utf8');
     } catch {
+      deadline.dispose();
       throw new FederationClientError(
         'federation_invalid_config',
         `cannot read CA file for ${peer.nodeId}:${peer.teamId}`,
@@ -518,6 +539,7 @@ export async function postFederationTeamInfo(
   try {
     response = await fetchImpl(endpoint, init);
   } catch (error) {
+    deadline.dispose();
     const detail = error instanceof Error ? error.message : String(error);
     return {
       status: 'rejected',
@@ -527,6 +549,7 @@ export async function postFederationTeamInfo(
   }
 
   const body = await readJson(response);
+  deadline.dispose();
   if (!response.ok) {
     const detail = errorDetail(body);
     const result: FederationTeamInfoResult = {

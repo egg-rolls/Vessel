@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { startDeadline, withDeadline } from '@vessel-agent/core';
 import { isLoopbackHostname } from '../../packages/config/src/index';
 import { createHttpRpcClient } from '../rpc/http-client';
 export interface GatewayPidRecord {
@@ -68,12 +69,16 @@ export const COMMAND_TIMEOUT_MS = 3000;
 export const PROCESS_PROBE_TIMEOUT_MS = 2_000;
 export function createCommandRunner(timeoutMs: number = COMMAND_TIMEOUT_MS): CommandRunner {
   return async (argv) => {
+    // 0.64：`Bun.spawn` 的 signal 之前用的是 `AbortSignal.timeout` —— bun 1.3.9 上这个
+    // 定时器在空闲事件循环里可能不触发，子进程不退出时 `await proc.exited` 会一直挂着
+    // （pid 文件读写、`gateway stop` 都会卡在这里）。
+    const deadline = startDeadline(timeoutMs);
     try {
       const proc = Bun.spawn(argv, {
         stdin: 'ignore',
         stdout: 'pipe',
         stderr: 'pipe',
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: deadline.signal,
       });
       const [stdout, stderr, exitCode] = await Promise.all([
         new Response(proc.stdout).text(),
@@ -83,6 +88,8 @@ export function createCommandRunner(timeoutMs: number = COMMAND_TIMEOUT_MS): Com
       return { exitCode, stdout, stderr };
     } catch {
       return { exitCode: 1, stdout: '', stderr: '' };
+    } finally {
+      deadline.dispose();
     }
   };
 }
@@ -309,9 +316,11 @@ function createPlatformProbe(fetchImpl?: typeof fetch): GatewayPlatformProbe {
   return async (target) => {
     try {
       const impl = fetchImpl ?? fetch;
-      const response = await impl(`${target.baseUrl}/health`, {
-        signal: AbortSignal.timeout(target.timeoutMs),
-      });
+      // 0.64：`gateway stop` / `status` 的探针路径上没有别的定时器陪着 ⇒ 换掉
+      // `AbortSignal.timeout`，否则一个不响应的端口会让命令挂死。
+      const response = await withDeadline(target.timeoutMs, async (signal) =>
+        impl(`${target.baseUrl}/health`, { signal }),
+      );
       if (!response.ok) return false;
       const body: unknown = await response.json();
       return isRecord(body) && body.role === 'platform' && body.status === 'ok';

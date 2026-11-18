@@ -402,6 +402,8 @@ export {
   sessionIndexFilePath,
   type TenantPaths,
 } from './tenant/index.js';
+// 0.64：可取消的截止时间（替代 `AbortSignal.timeout()` —— bun 1.3.9 上它可能不触发）。
+export { type Deadline, startDeadline, withDeadline } from './timeout.js';
 // Transport（0.2 R3a-core：进程内实现）
 export { InProcessTransport, type InProcessTransportOptions } from './transport/index.js';
 // 类型定义

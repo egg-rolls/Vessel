@@ -16,6 +16,7 @@ import { type Dirent, existsSync, realpathSync } from 'node:fs';
 import { lstat, mkdir, readdir, rm, unlink } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { withDeadline } from '@vessel-agent/core';
 import {
   loadConfig,
   resolveGatewayNodePorts,
@@ -144,9 +145,11 @@ async function probeHealth(port: number | undefined, ctx: DevCommandContext): Pr
   if (port === undefined || !Number.isInteger(port) || port <= 0 || port > 65535) return false;
   const impl = ctx.fetchImpl ?? fetch;
   try {
-    const response = await impl(`http://127.0.0.1:${port}/health`, {
-      signal: AbortSignal.timeout(ctx.healthTimeoutMs ?? HEALTH_TIMEOUT_MS),
-    });
+    // 0.64：探活必须真的会超时 —— `AbortSignal.timeout` 在 bun 1.3.9 的空闲事件循环里
+    // 可能不触发，`vessel dev` 会卡在「探测旧实例」这一步上不动。
+    const response = await withDeadline(ctx.healthTimeoutMs ?? HEALTH_TIMEOUT_MS, async (signal) =>
+      impl(`http://127.0.0.1:${port}/health`, { signal }),
+    );
     return response.status === 200;
   } catch {
     return false;

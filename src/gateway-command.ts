@@ -14,6 +14,7 @@
 
 import { existsSync } from 'node:fs';
 import * as path from 'node:path';
+import { withDeadline } from '@vessel-agent/core';
 import {
   type ConfigValidationError,
   checkPlatformTokenConflict,
@@ -414,9 +415,11 @@ export async function probeHttpHealth(
   tls = false,
 ): Promise<Record<string, unknown> | undefined> {
   try {
-    const response = await fetch(`${gatewayBaseUrl(record, tls)}/health`, {
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    // 0.64：探活/停服的 CLI 路径没有别的定时器陪着，`AbortSignal.timeout` 在 bun 1.3.9
+    // 上可能不触发 ⇒ 换会真正触发的截止时间。
+    const response = await withDeadline(timeoutMs, async (signal) =>
+      fetch(`${gatewayBaseUrl(record, tls)}/health`, { signal }),
+    );
     if (!response.ok) return undefined;
     const body: unknown = await response.json();
     return isRecordValue(body) ? body : undefined;

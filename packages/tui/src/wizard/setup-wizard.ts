@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import * as readline from 'node:readline';
 import type { ProviderConfig, UserConfig } from '@vessel-agent/config';
 import { getUserConfigPath } from '@vessel-agent/config';
+import { withDeadline } from '@vessel-agent/core';
 import { parse as fromYaml, stringify as toYaml } from 'yaml';
 import { resolveLocale, setLocale, t } from '../i18n/index.js';
 
@@ -175,10 +176,9 @@ async function fetchModels(
   } else {
     headers.Authorization = `Bearer ${apiKey}`;
   }
-  const res = await fetch(url, {
-    headers,
-    signal: AbortSignal.timeout(15000),
-  });
+  // 0.64：交互式向导里「拉模型列表」是唯一的挂起 await（旁边的 UI 定时器不保证存在），
+  // `AbortSignal.timeout` 不触发时用户看到的是向导卡死 ⇒ 换成会真正触发的截止时间。
+  const res = await withDeadline(15000, async (signal) => fetch(url, { headers, signal }));
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');

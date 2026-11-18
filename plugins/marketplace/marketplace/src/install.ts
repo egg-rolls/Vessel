@@ -22,6 +22,7 @@ import { cp, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { gunzipSync } from 'node:zlib';
+import { startDeadline } from '@vessel-agent/core';
 import {
   type ConfigRemoveResult,
   type ConfigUpdateResult,
@@ -352,88 +353,98 @@ async function downloadAsset(
   const init: RequestInit & { proxy?: string } = {
     headers: { accept: 'application/octet-stream', 'user-agent': 'vessel-marketplace/0.1' },
     redirect: 'follow',
-    signal: AbortSignal.timeout(120_000),
   };
   if (context.settings.proxy !== undefined) init.proxy = context.settings.proxy;
 
+  // 0.64：下载是「只被一次挂起的 await 等待」的路径（安装脚本里没有别的定时器），
+  // `AbortSignal.timeout` 在 bun 1.3.9 上可能不触发 ⇒ 卡在下载里永不返回。
+  // 截止时间要盖住 fetch **和** 读 body 的整段（大包下载），所以用 startDeadline，
+  // 并在下面 `finally` 里 dispose。
+  const deadline = startDeadline(120_000);
+  init.signal = deadline.signal;
+
   const fetchImpl = context.fetchImpl ?? fetch;
-  let response: Response;
   try {
-    response = await fetchImpl(asset.url, init);
-  } catch (error) {
-    throw new MarketplaceError(
-      'registry_fetch_failed',
-      `could not download ${version.version}: ${messageOf(error)}`,
-    );
-  }
-  if (!response.ok) {
-    throw new MarketplaceError(
-      'registry_fetch_failed',
-      `asset download returned HTTP ${response.status}`,
-    );
-  }
-  if (response.url) assertSecureUrl(response.url, 'asset redirect');
-
-  const declared = Number(response.headers.get('content-length') ?? Number.NaN);
-  if (Number.isFinite(declared) && declared > limits.maxDownloadBytes) {
-    throw new MarketplaceError(
-      'asset_too_large',
-      `asset is larger than ${limits.maxDownloadBytes} bytes`,
-    );
-  }
-
-  const chunks: Uint8Array[] = [];
-  const hash = createHash('sha256');
-  let total = 0;
-  if (response.body !== null) {
-    const reader = response.body.getReader();
+    let response: Response;
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        total += value.byteLength;
-        if (total > limits.maxDownloadBytes) {
-          await reader.cancel().catch(() => {});
-          throw new MarketplaceError(
-            'asset_too_large',
-            `asset is larger than ${limits.maxDownloadBytes} bytes`,
-          );
-        }
-        hash.update(value);
-        chunks.push(value);
-        progress?.('downloading', total, asset.size);
-      }
-    } finally {
-      reader.releaseLock();
+      response = await fetchImpl(asset.url, init);
+    } catch (error) {
+      throw new MarketplaceError(
+        'registry_fetch_failed',
+        `could not download ${version.version}: ${messageOf(error)}`,
+      );
     }
-  }
+    if (!response.ok) {
+      throw new MarketplaceError(
+        'registry_fetch_failed',
+        `asset download returned HTTP ${response.status}`,
+      );
+    }
+    if (response.url) assertSecureUrl(response.url, 'asset redirect');
 
-  progress?.('verifying', total, asset.size);
-  if (total !== asset.size) {
-    throw new MarketplaceError(
-      'size_mismatch',
-      `asset size mismatch: expected ${asset.size}, received ${total}`,
-      { data: { expected: asset.size, actual: total } },
-    );
-  }
-  const digest = hash.digest('hex').toLowerCase();
-  if (digest !== asset.sha256.toLowerCase()) {
-    throw new MarketplaceError(
-      'checksum_mismatch',
-      'asset sha256 does not match the registry index',
-      { data: { expected: asset.sha256, actual: digest } },
-    );
-  }
+    const declared = Number(response.headers.get('content-length') ?? Number.NaN);
+    if (Number.isFinite(declared) && declared > limits.maxDownloadBytes) {
+      throw new MarketplaceError(
+        'asset_too_large',
+        `asset is larger than ${limits.maxDownloadBytes} bytes`,
+      );
+    }
 
-  const output = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    output.set(chunk, offset);
-    offset += chunk.byteLength;
+    const chunks: Uint8Array[] = [];
+    const hash = createHash('sha256');
+    let total = 0;
+    if (response.body !== null) {
+      const reader = response.body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          total += value.byteLength;
+          if (total > limits.maxDownloadBytes) {
+            await reader.cancel().catch(() => {});
+            throw new MarketplaceError(
+              'asset_too_large',
+              `asset is larger than ${limits.maxDownloadBytes} bytes`,
+            );
+          }
+          hash.update(value);
+          chunks.push(value);
+          progress?.('downloading', total, asset.size);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+
+    progress?.('verifying', total, asset.size);
+    if (total !== asset.size) {
+      throw new MarketplaceError(
+        'size_mismatch',
+        `asset size mismatch: expected ${asset.size}, received ${total}`,
+        { data: { expected: asset.size, actual: total } },
+      );
+    }
+    const digest = hash.digest('hex').toLowerCase();
+    if (digest !== asset.sha256.toLowerCase()) {
+      throw new MarketplaceError(
+        'checksum_mismatch',
+        'asset sha256 does not match the registry index',
+        { data: { expected: asset.sha256, actual: digest } },
+      );
+    }
+
+    const output = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      output.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    const path = join(directory, `${sanitizeFileName(version.version)}.tgz`);
+    await writeFile(path, output, { mode: 0o600 });
+    return { path, size: total, sha256: digest };
+  } finally {
+    deadline.dispose();
   }
-  const path = join(directory, `${sanitizeFileName(version.version)}.tgz`);
-  await writeFile(path, output, { mode: 0o600 });
-  return { path, size: total, sha256: digest };
 }
 
 function sanitizeFileName(value: string): string {

@@ -7,6 +7,7 @@
  * @module @vessel-agent/serve/platform/registry
  */
 
+import { withDeadline } from '@vessel-agent/core';
 import type { PlatformNodeDescriptor, PlatformNodeStatus, PlatformNodeSummary } from './types.js';
 
 /** 单次健康探测上限（契约 §4：≤1s）。 */
@@ -58,11 +59,15 @@ async function probeHealth(descriptor: PlatformNodeDescriptor): Promise<ProbeRes
   const url = healthUrl(descriptor.apiUrl);
   if (url === null) return { status: 'down' };
   try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    });
+    // 0.64：node 注册探活是平台的定时任务，但「探一个不响应的 node」那一刻外部没有别的
+    // 定时器帮忙 ⇒ 用会真正触发的截止时间，避免探针永久挂在 in-flight 里。
+    const response = await withDeadline(PROBE_TIMEOUT_MS, async (signal) =>
+      fetch(url, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+        signal,
+      }),
+    );
     if (response.status < 200 || response.status >= 300) return { status: 'down' };
     // `/health` 不保证返回 JSON 或 version；解析失败不影响 up。
     let version = descriptor.version;

@@ -15,6 +15,7 @@ import * as fs from 'node:fs';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { Logger, SessionStore } from '@vessel-agent/core';
+import { withDeadline } from '@vessel-agent/core';
 import { isLoopbackHostname } from '../packages/config/src/index';
 import { createSessionMethods } from '../packages/serve/src/gateway/methods/sessions';
 import {
@@ -152,15 +153,19 @@ async function probeAgentOwnerEndpoint(
   timeoutMs: number,
 ): Promise<boolean> {
   try {
-    const response = await fetch(`http://127.0.0.1:${record.port}/`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${record.token}`,
-      },
-      body: JSON.stringify({ method: 'agents.list', params: {} }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    // 0.64：`AbortSignal.timeout` 换掉 —— bun 1.3.9 上它的定时器在空闲事件循环里可能
+    // 不触发，而这里正是「一次挂起的 await、没有别的定时器」的形状。
+    const response = await withDeadline(timeoutMs, async (signal) =>
+      fetch(`http://127.0.0.1:${record.port}/`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${record.token}`,
+        },
+        body: JSON.stringify({ method: 'agents.list', params: {} }),
+        signal,
+      }),
+    );
     await response.text().catch(() => '');
     return true;
   } catch {
