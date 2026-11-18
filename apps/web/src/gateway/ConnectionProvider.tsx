@@ -22,6 +22,7 @@ import {
 } from './connection-context';
 import { type ConnectionRecoveryHooks, createConnectionHandlers } from './connection-handlers';
 import { computeInitialConnection, LEGACY_TOKEN_KEY } from './connection-initial';
+import { PENDING_FETCH_UNKNOWN, type PendingFetchState } from './interaction-hydration';
 import { SubmitGuard } from './interactions';
 import { type ConnectionState, GatewayClient } from './node';
 import {
@@ -41,6 +42,7 @@ import { useInteractionHydration } from './use-interaction-hydration';
 import { useInteractionResponses } from './use-interaction-responses';
 import { useLinkStatus } from './use-link-status';
 import { useReportConnectError } from './use-report-connect-error';
+import { useSessionInvalid } from './use-session-invalid';
 
 export type { PermissionRequest, PermissionScope } from './types';
 export type { ConnectionContextValue, ConnectionOptions };
@@ -121,6 +123,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [hello, setHello] = useState<HelloInfo | null>(null);
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [epoch, setEpoch] = useState(0);
+  /**
+   * `interactions.list` 本轮的结果（0.59）：`failed` 要在界面上说出来 ——
+   * 「没有待批」和「拉不到待批」是两件事，混在一起就是这次那个真 bug 的观感。
+   */
+  const [pendingFetch, setPendingFetch] = useState<PendingFetchState>(PENDING_FETCH_UNKNOWN);
+  // 401 / Origin 被拒的显式状态（顶部提示 + 重新登录入口都读它）。
+  const sessionInvalid = useSessionInvalid();
   // 交互的唯一真相源：本 Provider 只写 store，面板直接或经 context 读同一份数据。
   const permissions = useInteractionStore((state) => state.permissions);
   const asks = useInteractionStore((state) => state.asks);
@@ -350,6 +359,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     settledRef,
     tokenRef: nodeTokenRef,
     hydrationGenerationRef,
+    onFetchState: setPendingFetch,
   });
 
   const reportConnectError = useReportConnectError(
@@ -516,6 +526,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       closeCode: client.closedWithCode,
       permissions,
       asks,
+      pendingFetch,
+      sessionInvalid: sessionInvalid.block,
+      relogin: sessionInvalid.relogin,
       hydrateInteractions,
       responding,
       connect,
@@ -554,6 +567,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       epoch,
       permissions,
       asks,
+      pendingFetch,
+      sessionInvalid.block,
+      sessionInvalid.relogin,
       hydrateInteractions,
       responding,
       connect,

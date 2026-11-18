@@ -349,6 +349,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Every pending ask question in one place. Questions from the same agent are grouped, and each question is answered on its own — reply to just the ones you mean.',
   'pending.empty': 'No pending questions',
   'pending.empty.hint': 'New ask questions show up here as soon as an agent asks.',
+  // 0.59: a failed fetch must be visible (empty != nothing pending)
+  'pending.fetch.failed': 'Could not load the pending list: {detail}',
+  'pending.fetch.failedHint':
+    'Empty here does not mean nothing is pending — the list never arrived. It is restored automatically after you sign in again or fix the connection.',
+  'pending.fetch.blocked':
+    'The gateway rejected the request, so the pending list is unavailable: {detail}',
+  'pending.fetch.retry': 'Retry',
   'pending.entry': 'Pending',
   'pending.entry.label': '{count} pending question(s) in this session',
   'pending.cluster.agent': 'Agent {id}',
@@ -1823,6 +1830,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.connection.protocolMismatch':
     'Incompatible protocol version (vessel.gateway/1 required)',
   'gateway.connection.tokenRequired': 'Enter a gateway token',
+  // 0.59: a rejected RPC (401 / Origin) must be visible, never silent.
+  'gateway.rpc.sessionInvalid': 'Requests are rejected (401): this page has no valid session',
+  'gateway.rpc.sessionInvalidHint':
+    'Every RPC is rejected, so pending requests and permission cards never arrive. Use "Sign in again"; if it still returns 401, check that this page origin is listed in auth.public_origins.',
+  'gateway.rpc.relogin': 'Sign in again',
+  'gateway.rpc.originBlocked': 'The gateway rejected this page Origin/Host: {detail}',
+  'gateway.rpc.originBlockedHint':
+    'Cross-origin access needs this site in the allowlist (node.allowed_origins / auth.public_origins); otherwise every RPC is rejected and permission cards never reach the UI.',
   'gateway.platform.tokenRequired':
     'Platform token required: /platform/rpc returned 401. Enter the platform token in connection settings.',
   'gateway.platform.noNodes': 'The platform gateway returned no nodes.',

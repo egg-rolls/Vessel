@@ -340,6 +340,12 @@ export const messages = {
     '所有待回答的 ask 提问汇集在这里；同一个 Agent 的提问聚在一起，每题独立作答，可以只回复其中几题。',
   'pending.empty': '没有待批的提问',
   'pending.empty.hint': 'Agent 一提问，这里就会出现。',
+  // 0.59：拉不到列表时必须说出来（空 ≠ 没有待批）
+  'pending.fetch.failed': '待批列表拉取失败：{detail}',
+  'pending.fetch.failedHint':
+    '这里的「空」不代表没有待批请求 —— 列表根本没拉到。重新登录 / 修好连接后会自动补回。',
+  'pending.fetch.blocked': '请求被 gateway 拒绝，待批列表拉不到：{detail}',
+  'pending.fetch.retry': '重新拉取',
   'pending.entry': '待批',
   'pending.entry.label': '本会话有 {count} 个待批提问',
   'pending.cluster.agent': 'Agent {id}',
@@ -1740,6 +1746,14 @@ export const messages = {
   'gateway.connection.forbiddenTenant': '无权访问（需要 admin token）',
   'gateway.connection.protocolMismatch': '协议版本不兼容（需要 vessel.gateway/1）',
   'gateway.connection.tokenRequired': '请输入 gateway token',
+  // 0.59：RPC 被拒（401 / Origin）必须显式，不能静默
+  'gateway.rpc.sessionInvalid': '请求被拒绝（401）：这个页面没有有效的登录会话',
+  'gateway.rpc.sessionInvalidHint':
+    '所有 RPC 都被拒，待批与权限卡因此拿不到。点「重新登录」；若登录后仍然是 401，请确认当前页面地址在 auth.public_origins 白名单里。',
+  'gateway.rpc.relogin': '重新登录',
+  'gateway.rpc.originBlocked': 'gateway 拒绝了这个页面的 Origin/Host：{detail}',
+  'gateway.rpc.originBlockedHint':
+    '跨 Origin 访问时要把本站加入白名单（node.allowed_origins / auth.public_origins），否则所有 RPC 都会被拒、权限卡到不了界面。',
   'gateway.platform.tokenRequired':
     '需要平台 token：/platform/rpc 返回 401；请在连接设置中输入平台 token。',
   'gateway.platform.noNodes': '平台 gateway 没有返回任何节点。',

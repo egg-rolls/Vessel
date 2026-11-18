@@ -10,7 +10,8 @@
  * - 本页：所有来源的总汇集，带聚类与**逐题回复**（每题独立勾选，可只回复其中几题）。
  */
 import { useMemo, useState } from 'react';
-import { EmptyState } from '../../components/States';
+import { EmptyState, ErrorState } from '../../components/States';
+import { Button } from '../../components/ui/Button';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import { resourceData } from '../../state/useResource';
@@ -26,7 +27,8 @@ const COLLAPSED = '';
 
 export function PendingView({ sessionId }: { sessionId?: string }) {
   useLocale();
-  const { asks, connectionState, hasToken } = useConnection();
+  const { asks, connectionState, hasToken, pendingFetch, hydrateInteractions, relogin } =
+    useConnection();
   // 请求一旦落定（本端或别的端答的）就从 pending 集合里消失 ⇒ 它的草稿一起清，
   // 否则草稿会跟着这个标签页一直留在 sessionStorage 里。
   // 断线期间不算「消失」（reset 会清空集合，重连后 hydration 还没回来时也是空的）。
@@ -57,9 +59,39 @@ export function PendingView({ sessionId }: { sessionId?: string }) {
 
   const expandedKey = override ?? focusKey;
 
+  /**
+   * 0.59：拉不到 ≠ 没有。
+   *
+   * 原先失败静默 —— 待批页显示「没有待批的提问」，用户以为没人找他，实际上请求全在
+   * 服务端排着（rotate 的权限卡就这样永远到不了界面）。现在失败单独一条可见状态，
+   * 并且**不会**在黑屏上假装空态。
+   */
+  const fetchFailed = pendingFetch.status === 'failed';
+  const failureText =
+    pendingFetch.kind === 'session' || pendingFetch.kind === 'origin'
+      ? t('pending.fetch.blocked', { detail: pendingFetch.message ?? '' })
+      : t('pending.fetch.failed', { detail: pendingFetch.message ?? '' });
+
   return (
     <PageFrame title={t('pending.title')} subtitle={t('pending.subtitle')}>
-      {clusters.length === 0 ? (
+      {fetchFailed && (
+        <div className="mb-3">
+          <ErrorState
+            message={failureText}
+            onRetry={() => {
+              void hydrateInteractions();
+            }}
+            retryLabel={t('pending.fetch.retry')}
+            action={
+              pendingFetch.kind === 'session' ? (
+                // 会话失效只有一条出路：走既有通道重新登录（AuthProvider 会重新探测）。
+                <Button onClick={relogin}>{t('gateway.rpc.relogin')}</Button>
+              ) : undefined
+            }
+          />
+        </div>
+      )}
+      {clusters.length === 0 && !fetchFailed ? (
         // 空态：内容在页内水平 + 垂直居中（复用既有 EmptyState，不自建一套）。
         // `text-center` 由外壳继承到标题 / 说明，`min-h-60` 给出垂直居中的高度基准
         // （与 `NotEnabledState variant="page"` 同一口径）。

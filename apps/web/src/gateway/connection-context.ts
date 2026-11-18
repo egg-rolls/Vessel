@@ -1,7 +1,9 @@
 import { createContext } from 'react';
 import type { EventStore } from '../state/event-store';
+import type { PendingFetchState } from './interaction-hydration';
 import type { ConnectionState, GatewayClient } from './node';
 import type { NodeSelectionFallback } from './node-selection';
+import type { GatewayRpcBlock } from './session-invalid';
 import type { SubscriptionController } from './subscription';
 import type {
   AskUserAnswer,
@@ -72,7 +74,21 @@ export interface ConnectionContextValue {
   closeCode: number | null;
   permissions: readonly PermissionRequest[];
   asks: readonly AskUserRequest[];
-  /** 从 `interactions.list` 补回 pending，并把 orphaned 记为终态；失败静默。 */
+  /**
+   * 最近一次 `interactions.list` 的结果（0.59）：`failed` 时界面必须明说
+   * 「待批列表拉取失败」，不能拿空列表冒充「没有待批」。
+   */
+  pendingFetch: PendingFetchState;
+  /**
+   * 最近一次被拒的 RPC 事实（401 会话失效 / 403 Origin 被拒）；null = 当前没有。
+   *
+   * 这条状态存在的唯一理由：**不许静默**。它的来源是传输层（`node/rpc.ts` 的
+   * `httpJson`），不是连接探测 —— 探测成功但 RPC 全 401 正是那次真 bug 的形状。
+   */
+  sessionInvalid: GatewayRpcBlock | null;
+  /** 走既有 `notifyAuthRequired()` 通道重新鉴权（不新造通道）。 */
+  relogin: () => void;
+  /** 从 `interactions.list` 补回 pending，并把 orphaned 记为终态；失败会写进 `pendingFetch`。 */
   hydrateInteractions: () => Promise<void>;
   /** 正在提交应答的 requestId；UI 据此禁用按钮，避免双击重复提交。 */
   responding: ReadonlySet<string>;

@@ -103,6 +103,7 @@ export function ChatView({
     features,
     permissions,
     asks,
+    pendingFetch,
     hydrateInteractions,
     responding,
     respondPermission,
@@ -599,6 +600,10 @@ export function ChatView({
             onAddRef={submitApi.addRef}
             client={client}
             contextUsage={transcriptApi.contextUsage}
+            pendingFetch={pendingFetch}
+            onRetryPendingFetch={() => {
+              void hydrateInteractions();
+            }}
           />
         </section>
 
