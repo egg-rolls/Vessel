@@ -95,6 +95,11 @@ export {
   renderSystemRevisionNotice,
 } from './context-notice.js';
 export {
+  MODEL_CHANGE_DETAIL_MARK,
+  modelChangeAlreadyAnnounced,
+  renderModelChangeNotice,
+} from './model-change-notice.js';
+export {
   applyDeclaredProjection,
   armProjectionDeclaration,
   assertProjectionImmutable,

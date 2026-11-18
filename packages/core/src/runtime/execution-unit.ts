@@ -22,6 +22,7 @@ import {
   formatCompactionStub,
   measureArchivedToolResults,
   measureToolResultPressure,
+  modelChangeAlreadyAnnounced,
   NO_ANCHOR_SAFETY_MARGIN,
   normalizeContextAnchor,
   PROJECTION_POLICY_VERSION,
@@ -32,6 +33,7 @@ import {
   renderContextOverflowNotice,
   renderContextTrimNotice,
   renderContextWindowExceededNotice,
+  renderModelChangeNotice,
   renderSystemRevisionNotice,
   resolveProjection,
   setWindowProjectionMode,
@@ -1351,6 +1353,36 @@ export class ExecutionUnit {
    */
   private appendSystemRevisionNotice(): void {
     this.appendNotice(renderSystemRevisionNotice());
+  }
+
+  /**
+   * model-follow Step D：跨重启 / 换 body 的模型变更通知（owner 与成员同一套）。
+   *
+   * EU 的 model 是构造期只读快照，config 换模型在（重）建 EU 的续接 run 才生效。
+   * 事实源 = 目标会话存档恢复的指纹 `SessionState.prompt_context.model`（调用前已由
+   * `restorePromptContextFingerprint` 按本次 run 的会话复原，session_switch 拿到的就是
+   * 目标会话的值，不是 EU 上别的会话的旧值）。与 `this.model` 不同 ⇒ 经
+   * `appendInjectedMessages` 追加一张 `vessel:notice`（scope `model`）：落
+   * `message.injected` 事实事件、进本次请求、UI 同见（可见性对等），不改 system 前缀、
+   * 不发 prefix-change reason、不动 `publishSystemContext` 的去重 / 推进逻辑。
+   *
+   * 只在（重）建 EU 的首个 run 实际触发：首个 run 发布后指纹推进到当前 model，后续 run
+   * 恢复出的指纹相等即跳过；指纹缺省（老会话无 prompt_context）= 无比较基础 ⇒ 不发
+   * （未知 ≠ 变更）。指纹只在 run 发布时推进，「连续两次重启、中间没跑 run」与
+   * 「注入了卡但没走到发布就终止」由文本键去重兜住（同一过渡只报一次，回滚照报）。
+   */
+  private appendModelChangeNotice(execution: Run): void {
+    const from = this.promptContextFingerprint?.model;
+    // 空串与缺省同义：没有可比的旧模型就不发（normalize 允许空串落盘）。
+    if (from === undefined || from === '' || from === this.model) return;
+    if (modelChangeAlreadyAnnounced(execution.workingContext.messages, from, this.model)) return;
+    this.appendInjectedMessages(execution, execution.runId, [
+      {
+        role: 'user',
+        name: 'vessel:notice',
+        content: renderModelChangeNotice(from, this.model),
+      },
+    ]);
   }
 
   /**
@@ -2855,6 +2887,11 @@ export class ExecutionUnit {
     });
 
     try {
+      // model-follow Step D：跨重启 / 换 body 的模型变更通知。历史播种 / 压缩 / 指纹恢复
+      // 都已完成、首次 LLM 请求尚未发出；放在 run.started 之后，与下面的注入消息同段，
+      // message.injected 归属于已开始的 run。指纹相等 / 已宣告过时是 no-op。
+      this.appendModelChangeNotice(execution);
+
       // 注入消息（C5）：core 不解释其语义（skill / 附件 / 引用文件……），先于用户输入写入并持久化
       //
       // 0.56：每条注入消息在**进入会话的这一处**拿一个稳定 id（`${runId}:inject:下标`），
@@ -3330,6 +3367,10 @@ export class ExecutionUnit {
         },
         ts: Date.now(),
       });
+
+      // model-follow Step D：resume 同为（重）建 EU 的续接 run —— 重启后换模型接管时
+      // 同样在首次请求前宣告（指纹已在上方按本会话恢复；播种 / 压缩之后，进初始保存）。
+      this.appendModelChangeNotice(execution);
 
       // 标记已被接管（唯一写者：Run）。先 RunRecord，再 SessionState 投影。
       sessionState.messages = execution.workingContext.messages;
