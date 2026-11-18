@@ -172,7 +172,12 @@ export function AccountMenu({ navigate }: { navigate: (route: Route) => void }) 
             setOpen((value) => !value);
           }}
         >
-          <AccountAvatar name={displayName} avatarUrl={identity.avatarUrl} muted={!signedIn} />
+          <AccountAvatar
+            name={identity.name}
+            id={identity.id}
+            avatarUrl={identity.avatarUrl}
+            endpoint={signedIn}
+          />
         </button>
       </Tooltip>
       {open && position !== null
