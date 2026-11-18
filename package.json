@@ -46,7 +46,7 @@
     "build:web:watch": "bun run --cwd apps/web build:watch",
     "build": "bun run scripts/build.ts",
     "lint": "bunx @biomejs/biome ci .",
-    "typecheck": "tsc --noEmit && tsc -p examples --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p examples --noEmit && bun run --cwd apps/web typecheck",
     "typecheck:examples": "tsc -p examples --noEmit",
     "format": "bunx @biomejs/biome format --write .",
     "check": "bunx @biomejs/biome check ."
