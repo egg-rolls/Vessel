@@ -36,8 +36,17 @@ export function normalizeAllowUserIds(
   return { ids, rejected };
 }
 
-function fold(strategy: AuthStrategy, value: string): string {
+/**
+ * 归一成比较用的字符串；**非字符串一律 null**（不是 `String(value)`）。
+ *
+ * 这里必须拒绝而不是强转：万一有调用方手搓配置把数字塞进 `allowUserIds`，
+ * 强转会得到 "174765587" 这种「看起来对」的值，而 `undefined` 强转成 "undefined"
+ * 更会让一个本来该拒绝的身份命中白名单。宁可这条配置项不参与比较。
+ */
+function fold(strategy: AuthStrategy, value: unknown): string | null {
+  if (typeof value !== 'string') return null;
   const trimmed = value.trim();
+  if (trimmed === '') return null;
   return strategy.allowUserIdsShape.caseSensitive ? trimmed : trimmed.toLowerCase();
 }
 
@@ -52,11 +61,14 @@ export function isAllowlisted(
   allowUserIds: readonly string[],
   identity: Pick<AuthStrategyIdentity, 'userId' | 'username' | 'aliases'>,
 ): boolean {
-  const candidates = [identity.userId, ...(identity.aliases ?? [])]
-    .map((value) => fold(strategy, value))
-    .filter((value) => value !== '');
+  const candidates = new Set(
+    [identity.userId, ...(identity.aliases ?? [])]
+      .map((value) => fold(strategy, value))
+      .filter((value): value is string => value !== null),
+  );
+  if (candidates.size === 0) return false;
   return allowUserIds.some((entry) => {
     const folded = fold(strategy, entry);
-    return folded !== '' && candidates.includes(folded);
+    return folded !== null && candidates.has(folded);
   });
 }
