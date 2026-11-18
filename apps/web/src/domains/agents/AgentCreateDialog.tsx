@@ -3,9 +3,11 @@
  *
  * 选择节点 → 可选绑定该节点已有 Team（或 unbound）→ 名称 / model / system prompt。
  * model 与 system prompt 从下一个 Body 生效；文案不承诺立即生效。
+ * model 走 ModelPicker：空 = 跟随节点默认（不发送 model），只存显式 pin（P0-1 语义不变）。
  */
 import { type FormEvent, useState } from 'react';
 import { ModalShell } from '../../components/Modal';
+import { ModelPicker } from '../../components/ModelPicker';
 import { useToast } from '../../components/ToastProvider';
 import { Button, Field, Input, Select, Textarea } from '../../components/ui';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
@@ -166,14 +168,17 @@ export function AgentCreateDialog({
             />
           </Field>
 
-          <Field label={t('agents.form.model')} htmlFor="agent-create-model">
-            <Input
+          <Field
+            label={t('agents.form.model')}
+            htmlFor="agent-create-model"
+            hint={t('agents.form.modelCreateHint')}
+          >
+            <ModelPicker
               id="agent-create-model"
-              className="font-mono"
+              node={node}
               value={draft.model}
-              onChange={(event) => set('model')(event.target.value)}
-              spellCheck={false}
-              autoComplete="off"
+              onChange={set('model')}
+              aria-label={t('agents.form.model')}
             />
           </Field>
 

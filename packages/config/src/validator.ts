@@ -28,6 +28,7 @@ import type {
   NodeConfig,
   ObservabilityConfig,
   PricingConfig,
+  ProviderConfig,
   TeamConfigInput,
   TerminationConfig,
   TimelineConfig,
@@ -45,6 +46,9 @@ const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
 /** MCP server 名字符集（用于 `mcp__<server>__<tool>`） */
 const MCP_SERVER_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** models vendor id 字符集（model-registry §2.1：同插件 id 形状；`legacy:` 前缀保留） */
+const VENDOR_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /** 允许的 loopback 主机名 */
 
@@ -149,6 +153,198 @@ function validatePricing(pricing: PricingConfig, errors: ConfigValidationError[]
           value,
         });
       }
+    }
+  }
+}
+
+/**
+ * models.default / 别名目标必须命中注册条目（model-registry P0 起严格）：
+ * 别名、已注册 vendor 下的 model、或 `legacy:<provider.name>/<model>` 隐式条目。
+ * 与 model-registry.ts resolveRegistered 的严格面同口径（legacy 条目 model 字符串透传）。
+ */
+function checkRegisteredRef(
+  ref: string,
+  path: string,
+  vendors: Record<string, unknown> | undefined,
+  aliases: Record<string, unknown> | undefined,
+  provider: ProviderConfig | undefined,
+  errors: ConfigValidationError[],
+): void {
+  // 别名命中即算注册条目（别名目标自身的合法性在 aliases 分节逐条校验）。
+  if (aliases !== undefined && Object.hasOwn(aliases, ref)) return;
+  const slash = ref.indexOf('/');
+  const vendorId = slash === -1 ? '' : ref.slice(0, slash);
+  const wireModel = slash === -1 ? '' : ref.slice(slash + 1);
+  const entry =
+    vendors !== undefined && Object.hasOwn(vendors, vendorId) ? vendors[vendorId] : undefined;
+  if (isPlainObject(entry)) {
+    const entryModels = isPlainObject(entry.models) ? entry.models : {};
+    if (wireModel !== '' && Object.hasOwn(entryModels, wireModel)) return;
+    errors.push({
+      path,
+      message: `Ref "${ref}" does not hit a registered model under vendor "${vendorId}" (registered models: ${Object.keys(entryModels).join(', ') || '<none>'}).`,
+      value: ref,
+    });
+    return;
+  }
+  const legacyId = `legacy:${provider?.name ?? 'openai'}`;
+  if (vendorId === legacyId && wireModel !== '') return;
+  const vendorIds = vendors !== undefined ? Object.keys(vendors) : [];
+  errors.push({
+    path,
+    message: `Ref "${ref}" does not hit a registered entry; expected an alias or "vendor/model" (registered vendors: ${vendorIds.join(', ') || '<none>'}; legacy entry: ${legacyId}).`,
+    value: ref,
+  });
+}
+
+/**
+ * 校验 models 块（model-registry P0）：vendors / aliases / default。
+ * 元数据无密钥值：credential 是加密库引用 id，apiKeyEnv 是 env 间接引用，两者互斥。
+ * 块缺省时 validateConfig 根本不进本分节（legacy 配置零误报）。
+ */
+export function validateModels(
+  models: Record<string, unknown>,
+  provider: ProviderConfig | undefined,
+  errors: ConfigValidationError[],
+): void {
+  const vendors = isPlainObject(models.vendors) ? models.vendors : undefined;
+  const aliases = isPlainObject(models.aliases) ? models.aliases : undefined;
+  if (models.vendors !== undefined && vendors === undefined) {
+    errors.push({
+      path: 'models.vendors',
+      message: 'models.vendors must be an object (vendor id -> entry)',
+    });
+  }
+  if (vendors !== undefined) {
+    for (const [id, raw] of Object.entries(vendors)) {
+      const prefix = `models.vendors.${id}`;
+      if (id.startsWith('legacy:')) {
+        errors.push({
+          path: prefix,
+          message: `Vendor id "${id}" uses the reserved "legacy:" prefix (only implicit legacy provider entries may use it).`,
+        });
+        continue;
+      }
+      if (!VENDOR_ID_RE.test(id)) {
+        errors.push({
+          path: prefix,
+          message: `Vendor id "${id}" must match ^[a-z0-9][a-z0-9-]{0,63}$ (kebab-case, same shape as plugin ids).`,
+        });
+      }
+      if (!isPlainObject(raw)) {
+        errors.push({ path: prefix, message: 'Vendor entry must be an object', value: raw });
+        continue;
+      }
+      if (typeof raw.protocol !== 'string' || raw.protocol.trim() === '') {
+        errors.push({
+          path: `${prefix}.protocol`,
+          message:
+            'protocol must be a non-empty string (a registered provider factory name, e.g. "openai" / "anthropic")',
+          value: raw.protocol,
+        });
+      }
+      if (
+        raw.baseUrl !== undefined &&
+        (typeof raw.baseUrl !== 'string' || raw.baseUrl.trim() === '')
+      ) {
+        errors.push({
+          path: `${prefix}.baseUrl`,
+          message:
+            'baseUrl must be a non-empty string when set (omit it to use the protocol factory default)',
+          value: raw.baseUrl,
+        });
+      }
+      if (raw.credential !== undefined && raw.apiKeyEnv !== undefined) {
+        errors.push({
+          path: prefix,
+          message:
+            'credential and apiKeyEnv are mutually exclusive; set only one credential source',
+        });
+      }
+      if (
+        raw.credential !== undefined &&
+        (typeof raw.credential !== 'string' || raw.credential.trim() === '')
+      ) {
+        errors.push({
+          path: `${prefix}.credential`,
+          message:
+            'credential must be a non-empty string (a credentials.json reference id; the value never goes in yaml)',
+          value: raw.credential,
+        });
+      }
+      if (raw.apiKeyEnv !== undefined)
+        validateEnvName(`${prefix}.apiKeyEnv`, raw.apiKeyEnv, errors);
+      const entryModels = isPlainObject(raw.models) ? raw.models : undefined;
+      if (entryModels === undefined || Object.keys(entryModels).length === 0) {
+        errors.push({
+          path: `${prefix}.models`,
+          message: 'Vendor must register at least one model (models: { <wire model id>: {} })',
+        });
+        continue;
+      }
+      for (const [modelId, modelRaw] of Object.entries(entryModels)) {
+        const modelPath = `${prefix}.models.${modelId}`;
+        if (modelId.trim() === '') {
+          errors.push({ path: modelPath, message: 'Model id must be a non-empty string' });
+        }
+        if (!isPlainObject(modelRaw)) {
+          errors.push({
+            path: modelPath,
+            message: 'Model entry must be an object (use {} for defaults)',
+            value: modelRaw,
+          });
+          continue;
+        }
+        if (modelRaw.promptCache !== undefined && typeof modelRaw.promptCache !== 'boolean') {
+          errors.push({
+            path: `${modelPath}.promptCache`,
+            message:
+              'promptCache must be a boolean (true = force on, false = force off, omit = auto)',
+            value: modelRaw.promptCache,
+          });
+        }
+      }
+    }
+  }
+  if (models.aliases !== undefined && aliases === undefined) {
+    errors.push({
+      path: 'models.aliases',
+      message: 'models.aliases must be an object (alias -> vendor/model)',
+    });
+  }
+  if (aliases !== undefined) {
+    for (const [alias, target] of Object.entries(aliases)) {
+      const path = `models.aliases.${alias}`;
+      if (alias.trim() === '' || alias.includes('/')) {
+        errors.push({ path, message: 'Alias keys must be non-empty and must not contain "/"' });
+      }
+      if (typeof target !== 'string' || target === '') {
+        errors.push({
+          path,
+          message: 'Alias target must be a non-empty ref string (vendor/model)',
+          value: target,
+        });
+        continue;
+      }
+      if (Object.hasOwn(aliases, target)) {
+        errors.push({
+          path,
+          message: `Alias "${alias}" points at another alias ("${target}"); aliases must be flat (alias -> vendor/model).`,
+        });
+        continue;
+      }
+      checkRegisteredRef(target, path, vendors, aliases, provider, errors);
+    }
+  }
+  if (models.default !== undefined) {
+    if (typeof models.default !== 'string' || models.default === '') {
+      errors.push({
+        path: 'models.default',
+        message: 'models.default must be a non-empty ref string (alias or vendor/model)',
+        value: models.default,
+      });
+    } else {
+      checkRegisteredRef(models.default, 'models.default', vendors, aliases, provider, errors);
     }
   }
 }
@@ -2830,6 +3026,15 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     });
   }
 
+  // 校验 models 注册表（model-registry P0；块缺省不进分节，legacy 配置零误报）
+  if (config.models !== undefined) {
+    if (!isPlainObject(config.models)) {
+      errors.push({ path: 'models', message: 'models must be an object' });
+    } else {
+      validateModels(config.models as unknown as Record<string, unknown>, config.provider, errors);
+    }
+  }
+
   // 校验 agent
   if (config.agent) {
     const { name, systemPrompt, temperature, maxTokens } = config.agent;
@@ -3536,6 +3741,11 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'timeoutMs',
     'promptCache',
   ],
+  // model-registry P0：models 块。vendors / aliases 是用户自定义 map（键是 vendor id /
+  // 别名 / wire model id，属数据不属配置键），未知键检查在 findUnknownNestedKeys 逐层做。
+  models: ['default', 'vendors', 'aliases'],
+  'models.vendors': ['protocol', 'baseUrl', 'credential', 'apiKeyEnv', 'models'],
+  'models.vendors.models': ['promptCache'],
   agent: [
     'name',
     'systemPrompt',
@@ -3758,6 +3968,40 @@ export function findUnknownNestedKeys(config: Record<string, unknown>): UnknownN
     }
   }
 
+  // models.vendors.<id> 与 models.vendors.<id>.models.<model>（键是用户自定义 id，
+  // 属数据不属配置键；只查条目内的字段名，与 mcpServers / pricing.models 同形）。
+  const modelsBlock = isPlainObject(config.models) ? config.models : undefined;
+  const modelVendors =
+    modelsBlock !== undefined && isPlainObject(modelsBlock.vendors)
+      ? modelsBlock.vendors
+      : undefined;
+  if (modelVendors !== undefined) {
+    const knownVendor = KNOWN_BLOCK_KEYS['models.vendors'] ?? [];
+    const knownModel = KNOWN_BLOCK_KEYS['models.vendors.models'] ?? [];
+    for (const [vendorId, entry] of Object.entries(modelVendors)) {
+      if (!isPlainObject(entry)) continue;
+      for (const key of Object.keys(entry)) {
+        if (!knownVendor.includes(key)) {
+          unknown.push({ path: `models.vendors.${vendorId}.${key}`, key, block: 'models.vendors' });
+        }
+      }
+      const entryModels = isPlainObject(entry.models) ? entry.models : undefined;
+      if (entryModels === undefined) continue;
+      for (const [modelId, modelEntry] of Object.entries(entryModels)) {
+        if (!isPlainObject(modelEntry)) continue;
+        for (const key of Object.keys(modelEntry)) {
+          if (!knownModel.includes(key)) {
+            unknown.push({
+              path: `models.vendors.${vendorId}.models.${modelId}.${key}`,
+              key,
+              block: 'models.vendors.models',
+            });
+          }
+        }
+      }
+    }
+  }
+
   return unknown;
 }
 
@@ -3770,6 +4014,8 @@ export const KNOWN_CONFIG_KEYS = [
   'trace',
   'timeline',
   'provider',
+  // model-registry P0：models 注册表（厂商 / 模型 / 别名元数据，无密钥值）。
+  'models',
   'agent',
   'guardrails',
   'hooks',

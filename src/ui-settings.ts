@@ -5,20 +5,24 @@
  * 0.11 只有 `ui.language`；0.11.1 增加 `ui.showReasoning` 与 `agent.cwd`；
  * 0.13 增加 `ui.statusBars`（YAML `ui.status_bars`）；0.14 增加可见性键；
  * 0.15 增加 `ui.askUser`（YAML `ui.ask_user`）。
- * 复用 `permission-store` 的写入风格：YAML parse/stringify、同目录临时文件 + rename、
- * 临时文件 0600；只改目标键，根对象与目标块的其它键保留。
+ * 写入风格：YAML parse/stringify、同目录临时文件 + rename、临时文件 0600；
+ * 只改目标键，根对象与目标块的其它键保留。读写原语（readUserConfigRoot /
+ * writeUserConfigRoot）与跨进程写锁（withConfigLock）位于 `@vessel-agent/config`
+ * （model-registry P1 前置重构移入）；本模块只保留 UI settings 业务函数。
  *
- * 本模块属于应用层：core / config 不感知文件写入；TUI 的 `/settings`
+ * 本模块属于应用层；TUI 的 `/settings`
  * 经 `ReplContext.settings.setLanguage()` 调用这里，返回后由调用方 `setLocale()`。
  *
  * @module vessel/ui-settings
  */
 
-import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
-import * as path from 'node:path';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { getUserConfigPath, type UiStatusBars } from '../packages/config/src/index';
-import { withConfigLock } from './config-lock';
+import {
+  getUserConfigPath,
+  readUserConfigRoot,
+  type UiStatusBars,
+  withConfigLock,
+  writeUserConfigRoot,
+} from '../packages/config/src/index';
 import { type Locale, resolveLocale } from './i18n';
 
 /** 支持的 UI 语言（与 CLI / TUI catalog 一致） */
@@ -116,64 +120,6 @@ export function isUiErrorLevel(value: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/** 读取 YAML 根对象；不存在/空文档返回 {}；根不是对象时抛错 */
-export async function readUserConfigRoot(configPath: string): Promise<Record<string, unknown>> {
-  let content: string;
-  try {
-    content = await readFile(configPath, 'utf-8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    throw new Error(`ui_settings_read_failed: ${configPath}: ${messageOf(error)}`);
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(content);
-  } catch (error) {
-    // 不回显文件内容（可能含密钥）。
-    throw new Error(`ui_settings_parse_failed: ${configPath}: ${messageOf(error)}`);
-  }
-  if (parsed === null || parsed === undefined) return {};
-  if (!isRecord(parsed)) {
-    throw new Error(`ui_settings_invalid_config: ${configPath} must contain a YAML object`);
-  }
-  return parsed;
-}
-
-/** 原子写入（同目录临时文件 + rename）；保留文件其它内容 */
-export async function writeUserConfigRoot(
-  configPath: string,
-  root: Record<string, unknown>,
-): Promise<void> {
-  await mkdir(path.dirname(configPath), { recursive: true });
-  const body = stringifyYaml(root, { lineWidth: 0 });
-  const tmp = `${configPath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, body, { encoding: 'utf-8', mode: 0o600 });
-  try {
-    await rename(tmp, configPath);
-  } catch (error) {
-    // Windows 上目标被占用时 rename 可能失败：清理临时文件后显式替换。
-    try {
-      await unlink(tmp);
-    } catch {
-      // 忽略清理失败
-    }
-    try {
-      await writeFile(configPath, body, { encoding: 'utf-8', mode: 0o600 });
-    } catch {
-      throw new Error(`ui_settings_write_failed: ${configPath}: ${messageOf(error)}`);
-    }
-  }
-  // POSIX：rename 后保持 0600；Windows 上 best-effort。
-  await chmod(configPath, 0o600).catch(() => {
-    // 平台不保证 mode：忽略
-  });
 }
 
 /** `vessel config set` 支持的键（0.11.1 扩展；0.13 statusBars；0.14 可见性） */

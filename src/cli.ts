@@ -864,6 +864,9 @@ async function runWithConfig(result: BootstrapResult) {
       await result.shutdown();
       process.exit(1);
     }
+    // P1-w2d：已登记 in-process 能力插件的 plugins.list 基础行（provider 类不在
+    // bundle.plugins 里）；manager 创建后赋值，bundlePluginEntries 按 name 去重并入。
+    let inProcessPluginRows: Array<{ name: string; enabled: boolean }> = [];
 
     // 0.18：单流是唯一事件面；live hub 与 trace 同源（bundle.redactor 已组合 ext）。
     eventHub = createGatewayEventHub({
@@ -893,6 +896,8 @@ async function runWithConfig(result: BootstrapResult) {
         logger,
         settingsFor: (id) => pluginSettingsFor(startupConfig, id),
       });
+      // P1-w2d（D3）：install 后登记 in-process 能力插件的 RPC / 贡献面（w1a 接缝）。
+      inProcessPluginRows = gatewayBundle.registerInProcessPlugins(pluginHostManager, liveConfig);
       const activated = await timeStartup(
         'plugin.activate',
         activateStartupPlugins(pluginHostManager, {
@@ -1170,15 +1175,19 @@ async function runWithConfig(result: BootstrapResult) {
       // rotate / 重启。config.agent.model 仍属 agent 域需重启，不在这里处理。
       // to 的口径对照 provider-factory：config.provider?.model ?? 厂商缺省；next 无显式
       // model 时 runner 已走 requires_restart 兜底，这里不猜。
-      applyProviderModel: (from, to) => {
+      applyProviderModel: (from, to, next) => {
         if (to === undefined || to === '') {
           // runner 只在非空字符串时调用；兜底失败进 scope 摘要，不假装生效。
           throw new Error('provider.model is empty');
         }
-        gatewayBundle.applyProviderModel(to);
+        // P1-w2d 泛化（D5）：next 转发 → 重建 registry 快照 + 清 provider 缓存；
+        // 缺 next 的旧调用点只改 profile.model（兼容）。
+        gatewayBundle.applyProviderModel(to, next);
         result.agent?.applyDefaultModel(to);
         return [
-          `model: ${from ?? '(unset)'} → ${to} (node default; live bodies keep the old model until next body)`,
+          from === to
+            ? `provider/models: hot-applied (node default unchanged: ${to}; registry snapshot rebuilt + provider cache cleared; live bodies keep old routing until next body)`
+            : `model: ${from ?? '(unset)'} → ${to} (node default; registry snapshot rebuilt + provider cache cleared; live bodies keep the old model until next body)`,
         ];
       },
     });
@@ -1251,6 +1260,14 @@ async function runWithConfig(result: BootstrapResult) {
     const bundlePluginEntries = (): Array<{ name: string; enabled: boolean }> => {
       const loaded = new Set(gatewayBundle.plugins.map((plugin) => plugin.name));
       const listed = gatewayBundle.plugins.map((plugin) => ({ name: plugin.name, enabled: true }));
+      // P1-w2d：已登记 in-process 能力插件补基础行（provider 类不在 bundle.plugins），
+      // 否则 plugins.list 的 contributions 没有行可合并（契约 §1）；按 name 去重。
+      for (const row of inProcessPluginRows) {
+        if (!loaded.has(row.name)) {
+          listed.push(row);
+          loaded.add(row.name);
+        }
+      }
       // 配置里显式 disabled 的插件不加载，但仍要出现在 plugins.list 中。
       for (const configured of gatewayBundle.config.plugins ?? []) {
         if (configured.enabled === false && !loaded.has(configured.name)) {

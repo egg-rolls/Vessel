@@ -12,7 +12,7 @@
 
 import * as path from 'node:path';
 import type { VesselConfig } from '../packages/config/src/index';
-import type { Logger } from '../packages/core/src/index';
+import type { Logger, Plugin } from '../packages/core/src/index';
 import {
   PluginHostManager,
   type PluginHostManagerOptions,
@@ -21,6 +21,7 @@ import {
   type PluginDescriptor as ServePluginDescriptor,
 } from '../packages/serve/src/index';
 import type { PluginDescriptor as LoaderPluginDescriptor, PluginLoader } from './plugin-loader';
+import type { PluginManifest } from './plugin-manifest';
 
 export interface PluginHostAssemblyOptions {
   /** 默认 tenant 的插件扫描器（`result.bundle.pluginLoader`） */
@@ -66,6 +67,18 @@ function toServeDescriptor(
   if (manifest === undefined) {
     throw new Error(`child plugin "${descriptor.name}" has no manifest`);
   }
+  return manifestToServeDescriptor(descriptor, manifest, config);
+}
+
+/**
+ * loader descriptor + 清单 → serve 宿主描述。child（manifest）与 in-process
+ * （capabilityManifest）共用同一映射；运行模式差异由调用方决定。
+ */
+function manifestToServeDescriptor(
+  descriptor: LoaderPluginDescriptor,
+  manifest: PluginManifest,
+  config: VesselConfig,
+): ServePluginDescriptor {
   const pluginDir = descriptor.dir;
   const uiDir = manifest.ui !== undefined ? path.resolve(pluginDir, manifest.ui.dir) : undefined;
   // plugin-embed 契约 §1/§3：embed 声明与 trust_ui 确认透传给 manager 计算信任态。
@@ -190,6 +203,35 @@ export function createPluginHostManager(options: PluginHostAssemblyOptions): Plu
     ...(options.execPath !== undefined ? { execPath: options.execPath } : {}),
     ...(options.timeouts !== undefined ? { timeouts: options.timeouts } : {}),
   });
+}
+
+/**
+ * model-registry D3：install 之后登记 in-process 能力插件的 RPC / 贡献面。
+ *
+ * 判据与 readPlugin 一致：package.json 声明 vessel 清单但无 entry → in-process
+ * （descriptor.capabilityManifest）。child 插件仍走 createPluginHostManager 的
+ * descriptor 路径，不经这里；未声明清单的 in-process 插件无贡献面，no-op。
+ * handler 用插件自己的 `Plugin.rpc`（与 child dispatch 同形），经
+ * manager.registerInProcess 进同一个 PluginRpcRegistry / canonical 名 / DTO 校验；
+ * pages / navGroups / rpc 白名单由 contributionsFor 覆盖进 plugins.list。
+ */
+export function registerInProcessPlugin(options: {
+  manager: PluginHostManager;
+  descriptor: LoaderPluginDescriptor;
+  plugin: Plugin;
+  config: VesselConfig;
+}): void {
+  const { manager, descriptor, plugin, config } = options;
+  if (descriptor.mode !== 'in-process') {
+    throw new Error(`plugin "${descriptor.name}" is not in-process`);
+  }
+  const manifest = descriptor.capabilityManifest;
+  if (manifest === undefined) return;
+  const rpc = plugin.rpc;
+  manager.registerInProcess(
+    manifestToServeDescriptor(descriptor, manifest, config),
+    typeof rpc === 'function' ? rpc.bind(plugin) : undefined,
+  );
 }
 
 /** 重新扫描的 loader 端口（`rescan()` 返回最新描述符） */

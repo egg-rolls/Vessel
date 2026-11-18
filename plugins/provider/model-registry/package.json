@@ -1,0 +1,180 @@
+{
+  "name": "@vessel-agent/model-registry",
+  "version": "0.54.0",
+  "description": "Model registry management — vendors, aliases, encrypted credentials and connectivity tests",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "web"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/egg-rolls/Vessel.git",
+    "directory": "plugins/provider/model-registry"
+  },
+  "engines": {
+    "bun": ">=1.3.9"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:ui": "tsc -p tsconfig.web.json --noEmit && vite build && vite build --config vite.config.embed.ts",
+    "typecheck:ui": "tsc -p tsconfig.web.json --noEmit"
+  },
+  "dependencies": {
+    "@vessel-agent/config": "workspace:*",
+    "@vessel-agent/core": "workspace:*",
+    "@vessel-agent/plugin-sdk": "workspace:*",
+    "@vessel-agent/plugin-ui": "workspace:*",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.6.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^7.0.0"
+  },
+  "vessel": {
+    "id": "model-registry",
+    "name": "Model Registry",
+    "version": "0.1.0",
+    "engines": {
+      "vessel": ">=0.54.0 <1.0.0"
+    },
+    "description": "模型管理：厂商 / 别名 / 默认模型注册表 + 加密凭证库 + 连通性测试（管理 API + vendors/credentials 管理页）",
+    "side": "both",
+    "ui": {
+      "dir": "web",
+      "embed": {
+        "entry": "embed/index.mjs",
+        "css": "embed/index.css",
+        "runtime": {
+          "react": "^19",
+          "sdk": "^1"
+        }
+      }
+    },
+    "activationEvents": [
+      "onPage:vendors",
+      "onPage:credentials"
+    ],
+    "contributes": {
+      "i18n": {
+        "en": {
+          "nav.group": "Model Registry",
+          "nav.vendors": "Vendors",
+          "nav.credentials": "Credentials"
+        },
+        "zh-CN": {
+          "nav.group": "模型管理",
+          "nav.vendors": "厂商与模型",
+          "nav.credentials": "凭证"
+        }
+      },
+      "navGroups": [
+        {
+          "id": "plugin:model-registry",
+          "title": "Model Registry",
+          "titleKey": "nav.group",
+          "icon": "settings",
+          "order": 45
+        }
+      ],
+      "pages": [
+        {
+          "id": "vendors",
+          "title": "Vendors",
+          "titleKey": "nav.vendors",
+          "nav": "plugin:model-registry",
+          "icon": "hub",
+          "order": 10,
+          "entry": "vendors.html",
+          "component": "VendorsView"
+        },
+        {
+          "id": "credentials",
+          "title": "Credentials",
+          "titleKey": "nav.credentials",
+          "nav": "plugin:model-registry",
+          "icon": "settings",
+          "order": 11,
+          "entry": "credentials.html",
+          "component": "CredentialsView"
+        }
+      ],
+      "rpc": [
+        {
+          "name": "list",
+          "description": "Registry snapshot: vendors / aliases / default / effective / legacy",
+          "permission": "read"
+        },
+        {
+          "name": "vendor_set",
+          "description": "Create or replace a vendor entry (whole-entry replace)",
+          "permission": "write"
+        },
+        {
+          "name": "vendor_remove",
+          "description": "Remove a vendor; refuses while aliases / default reference it",
+          "permission": "write"
+        },
+        {
+          "name": "alias_set",
+          "description": "Create or replace a flat alias (alias -> vendor/model)",
+          "permission": "write"
+        },
+        {
+          "name": "alias_remove",
+          "description": "Remove an alias",
+          "permission": "write"
+        },
+        {
+          "name": "default_set",
+          "description": "Set models.default ref; returns the effective model",
+          "permission": "write"
+        },
+        {
+          "name": "credential_set",
+          "description": "Store or rotate an encrypted credential (value is write-only, never echoed)",
+          "permission": "write"
+        },
+        {
+          "name": "credential_remove",
+          "description": "Remove a credential; refuses while vendors reference it",
+          "permission": "write"
+        },
+        {
+          "name": "credentials_list",
+          "description": "Credential metadata only: id / createdAt / updatedAt / usedBy (no values)",
+          "permission": "read"
+        },
+        {
+          "name": "test",
+          "description": "User-triggered connectivity test against a saved vendor (sends a real minimal request)",
+          "permission": "write"
+        }
+      ]
+    },
+    "permissions": {
+      "fs": [
+        "data-dir",
+        "user-config"
+      ],
+      "net": [
+        "*"
+      ],
+      "process": false,
+      "secrets": false,
+      "events": []
+    }
+  }
+}

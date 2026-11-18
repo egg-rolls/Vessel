@@ -226,6 +226,17 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.session.copyId': 'Copy session ID',
   'chat.session.copiedId': 'Session ID copied',
   'chat.session.copyIdTitle': 'Copy session ID: {title}',
+  // Member model switch entry (model-registry P2): member-level pin, next body / resumed run
+  'chat.memberModel.button': 'Model',
+  'chat.memberModel.tooltip': 'Switch member model (applies to the next body)',
+  'chat.memberModel.title': 'Switch model · {name}',
+  'chat.memberModel.currentBody': 'This body currently runs: {model}',
+  'chat.memberModel.currentUnknown':
+    'Current model of this body is unknown (no run yet, or older gateway).',
+  'chat.memberModel.hint':
+    'Picking a registered model pins it for this member: the live body and current run stay unchanged; it applies to the next body / resumed run, when an environment notice is appended to the session. Empty = no change.',
+  'chat.memberModel.saved': 'Model updated for {name}; applies to the next body / resumed run',
+  'chat.memberModel.failed': 'Model switch failed',
   // 0.18 UX3: relative time + context length
   'time.today': 'Today',
   'time.yesterday': 'Yesterday',
@@ -1021,6 +1032,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'agents.form.model': 'Model',
   'agents.form.modelHint':
     'Takes effect in the next body (after rotate or a restart); the current body keeps the old value and only gets an environment notice. Leave blank to keep unchanged.',
+  'agents.form.modelCreateHint':
+    'Empty = follow the node default model; picking one pins it for this member, used from its first body.',
   'agents.form.systemPrompt': 'System prompt',
   'agents.form.systemPromptHint':
     'Takes effect in the next body (after rotate or a restart); the current body keeps the old value and only gets an environment notice. Leave blank to keep unchanged.',
@@ -1036,6 +1049,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'agents.form.updated': 'Updated agent {name}',
   'agents.form.createFailed': 'Create failed',
   'agents.form.updateFailed': 'Update failed',
+  // ModelPicker (native shared component, data source = plugin.model-registry.list)
+  'modelPicker.followDefault': 'Follow default',
+  'modelPicker.keepUnchanged': 'Keep unchanged',
+  'modelPicker.emptyWithCurrent': '{label} (current: {model})',
+  'modelPicker.unregistered': 'unregistered',
+  'modelPicker.groupAliases': 'Aliases',
+  'modelPicker.unavailable':
+    'Model registry unavailable (plugin not loaded or request failed); selection is disabled.',
   'agents.detail.title': 'Agent',
   'agents.detail.advanced': 'Advanced details',
   'agents.detail.agentId': 'Agent id',

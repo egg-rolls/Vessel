@@ -35,6 +35,13 @@ export interface Plugin {
   init?(ctx: PluginInitContext): void | Promise<void>;
   /** `ExecutionUnit.dispose()` 时按逆安装顺序调用；best-effort（0.9） */
   dispose?(): void | Promise<void>;
+  /**
+   * in-process RPC handler 入口（model-registry D3）：与 child dispatch 同形
+   * （bare 方法名 + JSON DTO params，返回 JSON DTO）。装配层在 install 后把它
+   * 注册进宿主 PluginRpcRegistry（canonical `plugin.<id>.<name>`，同一 DTO 校验）；
+   * child 插件经子进程协议 dispatch，不实现它。
+   */
+  rpc?(name: string, params: Record<string, unknown>): Promise<unknown>;
 }
 
 /**

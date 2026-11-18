@@ -1,0 +1,317 @@
+/**
+ * model-registry P1-w2d：多厂商路由 + 热应用装配（CONTRACT-model-registry-internal §3/§4）。
+ *
+ * - registry 快照（`synthesizeLegacyRegistry`）+ provider 实例缓存：
+ *   键 = vendorId + 凭证信封 updatedAt（只读元数据，不解密）+ promptCache flag；
+ * - `resolveModel` 返回 **delegating wrapper**（实现 LLMProvider）：每请求按当前键取/建
+ *   实例 → 凭证轮换后 live EU **下一请求**即用新 key，不需要插件→装配通知通道；
+ * - 构造唯一路径：`providerHost.getProvider(protocol)` 工厂（snake_case 参数同
+ *   provider-factory 今天）；未注册 protocol + baseUrl → 复用 openai 工厂；
+ *   openai 插件缺失 → 裸 provider；未注册 + 无 baseUrl → `ProviderConfigError` fail-fast；
+ * - `applyConfig(next)`：重建快照 + 清缓存（config scope applier 调用）。live EU/body 的
+ *   model 是构造期只读快照（前缀不变量），热应用只影响下一具 body/EU/run。
+ *
+ * 明文纪律：凭证值只在实例构造瞬间短暂解密，绝不进快照 / 缓存键 / 日志 / RPC。
+ * 信封形状真源 = 上位契约 §2.2（M1c 写 / M1d 读）：`{v:1, entries:{id:{iv,tag,data,
+ * createdAt,updatedAt}}}`，iv/tag/data base64；AES-256-GCM key = credentials purpose
+ * 派生 token 去 `vsk_` 前缀后 base64url 解码（32B）。
+ *
+ * @module vessel/model-registry-wiring
+ */
+
+import { createDecipheriv } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+import {
+  DERIVED_TOKEN_PREFIX,
+  derivePurposeToken,
+  type ResolvedModel,
+  ROOT_SECRET_BYTES,
+  readRootSecret,
+  resolveEffectiveApiKey,
+  resolveModelRef,
+  rootSecretPath,
+  synthesizeLegacyRegistry,
+  type VesselConfig,
+} from '../packages/config/src/index';
+import {
+  type LLMProvider,
+  MemoryPluginHost,
+  OpenAICompatibleProvider,
+  type Plugin,
+  writeStderrNotice,
+} from '../packages/core/src/index';
+import { resolveDataDir } from './data-paths';
+import type { PluginDescriptor, PluginLoader } from './plugin-loader';
+
+/** provider 配置错误（调用方决定退出码：0.3 入口 1 / 新子命令 2） */
+export class ProviderConfigError extends Error {
+  readonly code = 'provider_invalid';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProviderConfigError';
+  }
+}
+
+/** 未知 provider 的 OpenAI 兼容提示只打一次（进程内）。 */
+let unknownProviderNoticeShown = false;
+/** openai 插件缺失时的裸 fallback warning 只打一次（进程内）。 */
+let bareFallbackNoticeShown = false;
+
+function notifyUnknownProvider(providerName: string, baseUrl: string, model: string): void {
+  if (unknownProviderNoticeShown) return;
+  unknownProviderNoticeShown = true;
+  // 走统一 sink 入口：sink 坏掉时静默丢弃，绝不因为「打不出提示」而影响进程。
+  writeStderrNotice(
+    `[vessel] Provider "${providerName}" is not registered; using OpenAI-compatible endpoint ` +
+      `"${baseUrl}" (model: ${model}).\n`,
+  );
+}
+
+/** 裸 fallback 没有 withRetry/withTimeout；文案只含 provider 名与端点，不含密钥。 */
+function notifyBareFallback(providerName: string, baseUrl: string): void {
+  if (bareFallbackNoticeShown) return;
+  bareFallbackNoticeShown = true;
+  writeStderrNotice(
+    `[vessel] Provider "${providerName}" fallback uses a bare OpenAI-compatible client ` +
+      `without retry/timeout (endpoint: "${baseUrl}"); install the provider-openai plugin ` +
+      'to enable retries and the default 120s timeout.\n',
+  );
+}
+
+/** 凭证信封条目（形状冻结于上位契约 §2.2；与插件写侧同形）。 */
+interface CredentialEnvelopeEntry {
+  iv: string;
+  tag: string;
+  data: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** install 后待登记 RPC / 贡献面的 in-process 能力插件（descriptor + 原始 plugin）。 */
+export interface InProcessPluginEntry {
+  descriptor: PluginDescriptor;
+  plugin: Plugin;
+}
+
+/** 多厂商路由装配面（每 bundle 一份；mock 模式不构造）。 */
+export interface ModelRegistryWiring {
+  /**
+   * ModelRef → provider + wire model（w1a 接缝 `TenantRuntimeProfile.resolveModel`）。
+   * ref 非空 = 成员 pin；ref 空 → env `VESSEL_MODEL` 赢 models.default（§2.6 冻结），
+   * 再走默认链。返回的 provider 是 delegating wrapper（凭证轮换下一请求生效）。
+   */
+  resolveModel: (ref: string | undefined) => { provider: LLMProvider; model: string };
+  /** config scope 热应用：重建快照 + 清缓存；下一具 body/EU/run 生效，不动 live 请求。 */
+  applyConfig: (next: VesselConfig) => void;
+  /** provider 类 in-process 插件中声明 capabilityManifest 的（装配层 install 后登记）。 */
+  readonly inProcessPlugins: readonly InProcessPluginEntry[];
+}
+
+/**
+ * 构造多厂商路由装配面：加载 provider 插件 → 合成快照 → 缓存 + delegating wrapper。
+ * provider 插件只 registerProvider（与今天 createProvider 同一装配 loop）；声明
+ * capabilityManifest 的（如 model-registry 管理插件）顺带收集，交装配层登记 RPC。
+ */
+export async function createModelRegistryWiring(options: {
+  config: VesselConfig;
+  loader: Pick<PluginLoader, 'getProviders' | 'load' | 'list'>;
+}): Promise<ModelRegistryWiring> {
+  let config = options.config;
+  let dataDir = resolveDataDir(config);
+
+  // provider 类插件单独装配（不进 plugins 列表）：它们只 registerProvider，贡献工厂。
+  const providerHost = new MemoryPluginHost();
+  const inProcessPlugins: InProcessPluginEntry[] = [];
+  for (const name of options.loader.getProviders()) {
+    const plugin = await options.loader.load(name);
+    if (!plugin) continue;
+    plugin.install(providerHost);
+    const descriptor = options.loader.list().find((candidate) => candidate.name === name);
+    if (descriptor?.mode === 'in-process' && descriptor.capabilityManifest !== undefined) {
+      inProcessPlugins.push({ descriptor, plugin });
+    }
+  }
+
+  let snapshot = synthesizeLegacyRegistry(config);
+  /** 实例缓存：键 = vendorId + 凭证 updatedAt + promptCache flag（不含 model：req.model 逐请求透传）。 */
+  const cache = new Map<string, LLMProvider>();
+
+  /** 读信封条目（只读元数据路径；不存在 / 损坏 → undefined，请求侧按缺凭证处理）。 */
+  function readCredentialEntry(id: string): CredentialEnvelopeEntry | undefined {
+    let raw: string;
+    try {
+      raw = readFileSync(path.join(dataDir, 'credentials.json'), 'utf-8');
+    } catch {
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(raw) as { v?: unknown; entries?: Record<string, unknown> };
+      if (parsed.v !== 1 || typeof parsed.entries !== 'object' || parsed.entries === null) {
+        return undefined;
+      }
+      const entry = parsed.entries[id] as CredentialEnvelopeEntry | undefined;
+      return entry !== undefined && typeof entry.updatedAt === 'string' ? entry : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** 解密取明文：只在实例构造瞬间存在；失败（root-secret 轮换，D10 需重录）→ undefined。 */
+  function decryptCredential(entry: CredentialEnvelopeEntry): string | undefined {
+    const read = readRootSecret(rootSecretPath(dataDir));
+    if (!read.ok) return undefined;
+    const token = derivePurposeToken(read.value.secret, { kind: 'credentials' });
+    const key = Buffer.from(token.slice(DERIVED_TOKEN_PREFIX.length), 'base64url');
+    if (key.length !== ROOT_SECRET_BYTES) return undefined;
+    try {
+      const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(entry.iv, 'base64'));
+      decipher.setAuthTag(Buffer.from(entry.tag, 'base64'));
+      return Buffer.concat([
+        decipher.update(Buffer.from(entry.data, 'base64')),
+        decipher.final(),
+      ]).toString('utf8');
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** 凭证解析：legacy 走 resolveEffectiveApiKey（今天口径）；注册 vendor 走信封 / env 间接。 */
+  function apiKeyFor(resolved: ResolvedModel, entry: CredentialEnvelopeEntry | undefined): string {
+    // 用保留前缀判定而非当前快照 legacyVendorId：provider.name 热切换后，live EU 的
+    // wrapper 仍持旧 legacy vendorId，凭证来源仍是全局 provider.*（live 凭证语义）。
+    if (resolved.vendorId.startsWith('legacy:')) {
+      return resolveEffectiveApiKey(config) ?? '';
+    }
+    if (resolved.credentialRef !== undefined) {
+      // fail-loud（D10）：引用了凭证却缺失 / 不可解密 → 明确本地错误，不发空 key 拿 401。
+      if (entry === undefined) {
+        throw new ProviderConfigError(
+          `Credential "${resolved.credentialRef}" is missing or unreadable in credentials.json; ` +
+            're-record it via the model-registry credential store.',
+        );
+      }
+      const value = decryptCredential(entry);
+      if (value === undefined) {
+        throw new ProviderConfigError(
+          `Credential "${resolved.credentialRef}" cannot be decrypted ` +
+            '(the root secret may have been rotated; re-record the credential).',
+        );
+      }
+      return value;
+    }
+    if (resolved.apiKeyEnv !== undefined) {
+      const value = process.env[resolved.apiKeyEnv];
+      return typeof value === 'string' && value.trim() !== '' ? value : '';
+    }
+    return '';
+  }
+
+  function cacheKeyOf(resolved: ResolvedModel, updatedAt: string | undefined): string {
+    const promptCache =
+      resolved.promptCache === undefined ? 'auto' : resolved.promptCache ? 'on' : 'off';
+    // 分隔符 '|' 安全：vendorId 限 kebab-case / legacy: 前缀，updatedAt 是 ISO 字符串。
+    return `${resolved.vendorId}|${updatedAt ?? ''}|${promptCache}`;
+  }
+
+  /** 唯一构造路径：工厂 → 未注册 + baseUrl 复用 openai → 裸 fallback（P0 兜底保留）。 */
+  function buildInstance(
+    resolved: ResolvedModel,
+    entry: CredentialEnvelopeEntry | undefined,
+  ): LLMProvider {
+    const apiKey = apiKeyFor(resolved, entry);
+    const baseUrl = resolved.baseUrl ?? '';
+    const params = {
+      api_key: apiKey,
+      base_url: baseUrl,
+      model: resolved.wireModel,
+      temperature: config.provider?.temperature,
+      max_tokens: config.provider?.maxTokens,
+      timeout_ms: config.provider?.timeoutMs,
+      prompt_cache: resolved.promptCache,
+    };
+    const factory = providerHost.getProvider(resolved.protocol);
+    if (factory) return factory(params);
+
+    // 未注册 + 无显式端点：不能猜厂商默认（DECISION-020 §R1.5）。
+    if (baseUrl.trim() === '') {
+      throw new ProviderConfigError(
+        `Provider "${resolved.protocol}" is not registered and has no provider.baseUrl. ` +
+          'Use a registered provider or set provider.base_url for an OpenAI-compatible endpoint.',
+      );
+    }
+
+    notifyUnknownProvider(resolved.protocol, baseUrl, resolved.wireModel);
+    // 复用 openai 工厂，让未知 provider 与已知 provider 走同一层 withRetry/withTimeout。
+    const openaiFactory = providerHost.getProvider('openai');
+    if (openaiFactory) return openaiFactory(params);
+
+    // 损坏安装（provider-openai 缺失）：保留裸构造，但没有 retry/timeout。
+    notifyBareFallback(resolved.protocol, baseUrl);
+    return new OpenAICompatibleProvider({
+      api_key: apiKey,
+      base_url: baseUrl,
+      model: resolved.wireModel,
+      temperature: config.provider?.temperature,
+      max_tokens: config.provider?.maxTokens,
+      prompt_cache: resolved.promptCache,
+    });
+  }
+
+  /** 按当前键取/建实例：凭证信封 updatedAt 每请求只读元数据，轮换 → 键变 → 重建。 */
+  function currentInstance(resolved: ResolvedModel): LLMProvider {
+    const entry =
+      resolved.credentialRef !== undefined
+        ? readCredentialEntry(resolved.credentialRef)
+        : undefined;
+    const key = cacheKeyOf(resolved, entry?.updatedAt);
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    const instance = buildInstance(resolved, entry);
+    cache.set(key, instance);
+    return instance;
+  }
+
+  /**
+   * delegating wrapper：chat 逐请求转发到当前键实例（req 原样透传，messages 一个字节
+   * 不改——前缀不变量）；vision 读当前实例能力。model 由 EU 构造期快照经 req.model 传入。
+   */
+  function delegatingProvider(resolved: ResolvedModel): LLMProvider {
+    return {
+      chat: (req) => currentInstance(resolved).chat(req),
+      get vision() {
+        return currentInstance(resolved).vision;
+      },
+    };
+  }
+
+  const resolveModel = (ref: string | undefined): { provider: LLMProvider; model: string } => {
+    // env 优先级（§2.6 冻结）：ref 空时 VESSEL_MODEL 非空以其为 ref，否则 undefined
+    // → 默认链（models.default ?? legacy model ?? defaultModelForProvider）。
+    const envModel = process.env.VESSEL_MODEL;
+    const effectiveRef =
+      ref !== undefined && ref !== ''
+        ? ref
+        : envModel !== undefined && envModel !== ''
+          ? envModel
+          : undefined;
+    const resolved = resolveModelRef(snapshot, effectiveRef);
+    if (!resolved?.wireModel) {
+      throw new ProviderConfigError(
+        `Provider "${config.provider?.name ?? 'openai'}" has no model configured. ` +
+          'Set provider.model in vessel.yaml or ~/.vessel/config.yaml.',
+      );
+    }
+    return { provider: delegatingProvider(resolved), model: resolved.wireModel };
+  };
+
+  const applyConfig = (next: VesselConfig): void => {
+    config = next;
+    dataDir = resolveDataDir(next);
+    snapshot = synthesizeLegacyRegistry(next);
+    cache.clear();
+  };
+
+  return { resolveModel, applyConfig, inProcessPlugins };
+}

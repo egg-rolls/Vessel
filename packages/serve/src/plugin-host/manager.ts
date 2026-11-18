@@ -37,7 +37,12 @@ import {
   type PluginWebSocketHandle,
   resolvePluginHttpLimits,
 } from './http.js';
-import { PLUGIN_ID_PATTERN, PluginRpcRegistry, pluginRpcName } from './registry.js';
+import {
+  PLUGIN_ID_PATTERN,
+  type PluginRpcHandler,
+  PluginRpcRegistry,
+  pluginRpcName,
+} from './registry.js';
 import type {
   PluginContributionsSnapshot,
   PluginDescriptor,
@@ -699,6 +704,15 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
   readonly rpc = new PluginRpcRegistry();
 
   private readonly entries = new Map<string, Entry>();
+  /**
+   * model-registry D3：已登记的 in-process 能力插件（descriptor + enabled）。
+   * 不进 `entries`：reload diff / 懒激活 spawn / 重启上限都是 child 语义；
+   * in-process 与进程同寿命，RPC 注销由 stopAll 的 rpc.clear() 覆盖。
+   */
+  private readonly inProcess = new Map<
+    string,
+    { descriptor: PluginDescriptor; enabled: boolean }
+  >();
   private readonly dataDir: string;
   private readonly logger: PluginLogger;
   private readonly now: () => number;
@@ -995,10 +1009,10 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     return result;
   }
 
-  /** `plugin.changed` 的 `plugins.list` 形状快照。 */
+  /** `plugin.changed` 的 `plugins.list` 形状快照（child + 已登记的 in-process）。 */
   contributionsSnapshot(): PluginContributionsSnapshot {
-    const plugins = [...this.entries.values()]
-      .map((entry) => {
+    const plugins: PluginContributionsSnapshot['plugins'] = [...this.entries.values()].map(
+      (entry) => {
         const item: PluginContributionsSnapshot['plugins'][number] = {
           name: entry.descriptor.id,
           enabled: entry.enabled,
@@ -1008,8 +1022,20 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
           if (contributions !== undefined) item.contributions = contributions;
         }
         return item;
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
+      },
+    );
+    for (const record of this.inProcess.values()) {
+      const item: PluginContributionsSnapshot['plugins'][number] = {
+        name: record.descriptor.id,
+        enabled: record.enabled,
+      };
+      if (record.enabled) {
+        const contributions = renderContributions(record.descriptor);
+        if (contributions !== undefined) item.contributions = contributions;
+      }
+      plugins.push(item);
+    }
+    plugins.sort((a, b) => a.name.localeCompare(b.name));
     return { plugins };
   }
 
@@ -1066,13 +1092,50 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     }
   }
 
-  /** id → 渲染字段（单视图）；只含 enabled 的体验型 plugin。 */
+  /**
+   * model-registry D3：登记 in-process 能力插件（additive；install 之后由装配层调用）。
+   *
+   * 与 child 共用同一个 PluginRpcRegistry / canonical 名 / DTO 校验；handler 是
+   * 插件自己的 `Plugin.rpc`（传输无关），不经子进程 dispatch。声明了
+   * contributes.rpc 却没有 handler 时 fail-closed，不产生半注册。
+   */
+  registerInProcess(descriptor: PluginDescriptor, handler?: PluginRpcHandler): void {
+    const validated = validateDescriptor(
+      descriptor,
+      this.httpLimits,
+      this.options.httpReservedPath ?? isHostReservedPath,
+    );
+    const id = validated.id;
+    if (this.entries.has(id) || this.inProcess.has(id)) {
+      throw pluginError('plugin_id_conflict', `Plugin already registered: ${id}`, { id });
+    }
+    const enabled = validated.enabled ?? true;
+    const methods = validated.contributes?.rpc ?? [];
+    if (enabled && methods.length > 0) {
+      if (handler === undefined) {
+        throw pluginError(
+          'plugin_manifest_invalid',
+          `In-process plugin "${id}" declares contributes.rpc but provides no rpc handler.`,
+          { id },
+        );
+      }
+      this.rpc.register(id, methods, handler);
+    }
+    this.inProcess.set(id, { descriptor: validated, enabled });
+  }
+
+  /** id → 渲染字段（单视图）；只含 enabled 的插件（child + 已登记的 in-process）。 */
   contributionsFor(): Record<string, PluginRenderContributions> {
     const output: Record<string, PluginRenderContributions> = {};
     for (const entry of this.entries.values()) {
       if (!entry.enabled || entry.status === 'invalid') continue;
       const contributions = renderContributions(entry.descriptor);
       if (contributions !== undefined) output[entry.descriptor.id] = contributions;
+    }
+    for (const record of this.inProcess.values()) {
+      if (!record.enabled) continue;
+      const contributions = renderContributions(record.descriptor);
+      if (contributions !== undefined) output[record.descriptor.id] = contributions;
     }
     return output;
   }

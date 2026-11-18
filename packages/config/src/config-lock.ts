@@ -1,7 +1,9 @@
 /**
  * `config.yaml` 跨进程写锁（CONTRACT-0.47 §1–§2）。
  *
- * 主机与插件各有一份逐字一致的实现：锁文件 `${configPath}.lock`，
+ * 主机侧实现位于本包（model-registry P1 前置重构，自 src/config-lock.ts 移入）；
+ * marketplace 插件保留逐字一致的独立副本（plugins/marketplace/marketplace/src/config-lock.ts）。
+ * 锁文件 `${configPath}.lock`，
  * `open(..., 'wx', 0o600)` 原子创建，内容 `{ token, pid, acquiredAt }`。
  * 持锁超过 `staleMs`（默认 15s）视为进程崩溃遗留，可被接管；等待超过
  * `timeoutMs`（默认 5s）抛 `config_locked`。
@@ -10,7 +12,7 @@
  * 抢文件锁；同一异步上下文内递归进入同一路径则直接抛 `config_locked: nested lock`，
  * 不排队等成死锁。包裹点只应覆盖「读 → 改 → 写」，不得嵌套。
  *
- * @module vessel/config-lock
+ * @module @vessel-agent/config
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';

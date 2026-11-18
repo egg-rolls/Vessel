@@ -42,6 +42,7 @@
       "version": "0.54.0",
       "dependencies": {
         "@vessel-agent/core": "workspace:*",
+        "yaml": "^2.9.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
@@ -230,6 +231,27 @@
       },
       "devDependencies": {
         "typescript": "^7.0.2",
+      },
+    },
+    "plugins/provider/model-registry": {
+      "name": "@vessel-agent/model-registry",
+      "version": "0.54.0",
+      "dependencies": {
+        "@vessel-agent/config": "workspace:*",
+        "@vessel-agent/core": "workspace:*",
+        "@vessel-agent/plugin-sdk": "workspace:*",
+        "@vessel-agent/plugin-ui": "workspace:*",
+        "react": "^19.1.0",
+        "react-dom": "^19.1.0",
+      },
+      "devDependencies": {
+        "@tailwindcss/vite": "^4.3.3",
+        "@types/react": "^19.1.0",
+        "@types/react-dom": "^19.1.0",
+        "@vitejs/plugin-react": "^4.6.0",
+        "tailwindcss": "^4.3.3",
+        "typescript": "^7.0.2",
+        "vite": "^7.0.0",
       },
     },
     "plugins/provider/openai": {
@@ -616,6 +638,8 @@
     "@vessel-agent/mcp-client": ["@vessel-agent/mcp-client@workspace:plugins/mcp/client"],
 
     "@vessel-agent/media": ["@vessel-agent/media@workspace:plugins/media/media"],
+
+    "@vessel-agent/model-registry": ["@vessel-agent/model-registry@workspace:plugins/provider/model-registry"],
 
     "@vessel-agent/permission": ["@vessel-agent/permission@workspace:packages/permission"],
 

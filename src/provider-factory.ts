@@ -8,21 +8,18 @@
  * - 未注册 provider：有 `provider.baseUrl` → OpenAI 兼容 + 一次性 stderr info；
  *   无 baseUrl → `ProviderConfigError`（fail-fast）；
  * - 已知 provider 缺 model 时 fail-fast（不全局回退 gpt-4）。
+ *
+ * model-registry P0：默认 model 解析经 registry resolver（legacy 合成 → 同实例同 model，
+ * 无 models 块的存量配置行为字节等价）。
+ * P1-w2d：多厂商构造 / 实例缓存 / delegating wrapper 归 `model-registry-wiring`
+ * （唯一构造路径）；本文件只做 mock 分支 + 默认解析适配，返回 wiring 句柄供装配层
+ * 注入 resolveModel / 热应用 / in-process RPC 登记。
  */
 
-import {
-  defaultModelForProvider,
-  resolveEffectiveApiKey,
-  type VesselConfig,
-} from '../packages/config/src/index';
-import {
-  type LLMProvider,
-  MemoryLLMProvider,
-  MemoryPluginHost,
-  OpenAICompatibleProvider,
-  writeStderrNotice,
-} from '../packages/core/src/index';
+import type { VesselConfig } from '../packages/config/src/index';
+import { type LLMProvider, MemoryLLMProvider } from '../packages/core/src/index';
 import { createScenarioProvider, type MockScenarioName } from './mock/scenarios';
+import { createModelRegistryWiring, type ModelRegistryWiring } from './model-registry-wiring';
 import type { PluginLoader } from './plugin-loader';
 
 export interface ResolvedProvider {
@@ -30,54 +27,17 @@ export interface ResolvedProvider {
   providerName: string;
   providerModel: string;
   providerBaseUrl: string;
-}
-
-/** provider 配置错误（调用方决定退出码：0.3 入口 1 / 新子命令 2） */
-export class ProviderConfigError extends Error {
-  readonly code = 'provider_invalid';
-
-  constructor(message: string) {
-    super(message);
-    this.name = 'ProviderConfigError';
-  }
-}
-
-/** 未知 provider 的 OpenAI 兼容提示只打一次（进程内）。 */
-let unknownProviderNoticeShown = false;
-/** openai 插件缺失时的裸 fallback warning 只打一次（进程内）。 */
-let bareFallbackNoticeShown = false;
-
-/** 测试重置一次性提示状态。 */
-export function resetUnknownProviderNotice(): void {
-  unknownProviderNoticeShown = false;
-  bareFallbackNoticeShown = false;
-}
-
-function notifyUnknownProvider(providerName: string, baseUrl: string, model: string): void {
-  if (unknownProviderNoticeShown) return;
-  unknownProviderNoticeShown = true;
-  // 走统一 sink 入口：sink 坏掉时静默丢弃，绝不因为「打不出提示」而影响进程。
-  writeStderrNotice(
-    `[vessel] Provider "${providerName}" is not registered; using OpenAI-compatible endpoint ` +
-      `"${baseUrl}" (model: ${model}).\n`,
-  );
-}
-
-/** 裸 fallback 没有 withRetry/withTimeout；文案只含 provider 名与端点，不含密钥。 */
-function notifyBareFallback(providerName: string, baseUrl: string): void {
-  if (bareFallbackNoticeShown) return;
-  bareFallbackNoticeShown = true;
-  writeStderrNotice(
-    `[vessel] Provider "${providerName}" fallback uses a bare OpenAI-compatible client ` +
-      `without retry/timeout (endpoint: "${baseUrl}"); install the provider-openai plugin ` +
-      'to enable retries and the default 120s timeout.\n',
-  );
+  /**
+   * P1-w2d：多厂商 wiring 句柄（mock 模式缺省）。装配层据此注入
+   * `TenantRuntimeProfile.resolveModel`、config scope 热应用与 in-process RPC 登记。
+   */
+  registry?: ModelRegistryWiring;
 }
 
 /** 构造 provider；`useMock` 时不需要 Key、不加载 provider 插件 */
 export async function createProvider(
   config: VesselConfig,
-  loader: Pick<PluginLoader, 'getProviders' | 'load'>,
+  loader: Pick<PluginLoader, 'getProviders' | 'load' | 'list'>,
   useMock: boolean,
   scenario?: MockScenarioName,
 ): Promise<ResolvedProvider> {
@@ -90,83 +50,16 @@ export async function createProvider(
     };
   }
 
-  // provider 类插件单独装配（不进 plugins 列表）：它们只 registerProvider，贡献工厂。
-  const providerHost = new MemoryPluginHost();
-  for (const name of loader.getProviders()) {
-    const plugin = await loader.load(name);
-    if (plugin) plugin.install(providerHost);
-  }
-
-  const providerName = config.provider?.name ?? 'openai';
-  const providerModel = config.provider?.model ?? defaultModelForProvider(providerName);
-  if (!providerModel) {
-    throw new ProviderConfigError(
-      `Provider "${providerName}" has no model configured. ` +
-        'Set provider.model in vessel.yaml or ~/.vessel/config.yaml.',
-    );
-  }
-
-  const providerBaseUrl = config.provider?.baseUrl ?? '';
-  const apiKey = resolveEffectiveApiKey(config);
-  const factory = providerHost.getProvider(providerName);
-  if (factory) {
-    return {
-      provider: factory({
-        api_key: apiKey ?? '',
-        base_url: providerBaseUrl,
-        model: providerModel,
-        temperature: config.provider?.temperature,
-        max_tokens: config.provider?.maxTokens,
-        timeout_ms: config.provider?.timeoutMs,
-        prompt_cache: config.provider?.promptCache,
-      }),
-      providerName,
-      providerModel,
-      providerBaseUrl,
-    };
-  }
-
-  // 未注册 + 无显式端点：不能猜厂商默认（DECISION-020 §R1.5）。
-  if (providerBaseUrl.trim() === '') {
-    throw new ProviderConfigError(
-      `Provider "${providerName}" is not registered and has no provider.baseUrl. ` +
-        'Use a registered provider or set provider.base_url for an OpenAI-compatible endpoint.',
-    );
-  }
-
-  notifyUnknownProvider(providerName, providerBaseUrl, providerModel);
-  // 复用 openai 工厂，让未知 provider 与已知 provider 走同一层 withRetry/withTimeout。
-  const openaiFactory = providerHost.getProvider('openai');
-  if (openaiFactory) {
-    return {
-      provider: openaiFactory({
-        api_key: apiKey ?? '',
-        base_url: providerBaseUrl,
-        model: providerModel,
-        temperature: config.provider?.temperature,
-        max_tokens: config.provider?.maxTokens,
-        timeout_ms: config.provider?.timeoutMs,
-        prompt_cache: config.provider?.promptCache,
-      }),
-      providerName,
-      providerModel,
-      providerBaseUrl,
-    };
-  }
-
-  // 损坏安装（provider-openai 缺失）：保留裸构造，但没有 retry/timeout。
-  notifyBareFallback(providerName, providerBaseUrl);
+  const registry = await createModelRegistryWiring({ config, loader });
+  // 默认解析经 resolver（P0 接缝）：legacy 合成 → 同实例同 model。env 优先级（契约 §2.6
+  // 冻结）：VESSEL_MODEL 与 models.default 并存时 env 赢——wiring.resolveModel 把 env
+  // model 值作为 ref 解析即实现该优先级。无 model 时抛 ProviderConfigError（fail-fast）。
+  const resolved = registry.resolveModel(undefined);
   return {
-    provider: new OpenAICompatibleProvider({
-      api_key: apiKey ?? '',
-      base_url: providerBaseUrl,
-      model: providerModel,
-      temperature: config.provider?.temperature,
-      max_tokens: config.provider?.maxTokens,
-      prompt_cache: config.provider?.promptCache,
-    }),
-    providerName,
-    providerModel,
-    providerBaseUrl,
+    provider: resolved.provider,
+    providerName: config.provider?.name ?? 'openai',
+    providerModel: resolved.model,
+    providerBaseUrl: config.provider?.baseUrl ?? '',
+    registry,
   };
 }

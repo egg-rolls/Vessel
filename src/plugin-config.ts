@@ -14,11 +14,12 @@ import {
   getUserConfigPath,
   type HookConfig,
   type PluginConfig,
+  readUserConfigRoot,
   type VesselConfig,
+  withConfigLock,
+  writeUserConfigRoot,
 } from '../packages/config/src/index';
 import type { Plugin, PluginHost, PluginInitContext } from '../packages/core/src/index';
-import { withConfigLock } from './config-lock';
-import { readUserConfigRoot, writeUserConfigRoot } from './ui-settings';
 
 /** core 0.6.1 的 install 形状；旧签名只用第一个参数也能工作 */
 export type PluginInstallOptions = { config?: Record<string, unknown> };
