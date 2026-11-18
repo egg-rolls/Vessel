@@ -126,6 +126,7 @@ import {
   DEFAULT_OWNER,
   type DispatchInput,
   type DispatchResult,
+  type EnvironmentCardAnnouncement,
   type ExecutionUnitStatus,
   type ListFilter,
   MAX_BINDING_HISTORY,
@@ -3702,17 +3703,27 @@ export class AgentServiceImpl implements AgentService {
    * 返回 false = 这个会话现在收不了卡（不在册 / 已 left / 已 closed / 没有可重建的
    * binding）：调用方（启动恢复）据此记 `skipped`，留给下次启动，不编一条假输入。
    */
-  async announceEnvironmentCard(sessionId: string, text: string): Promise<boolean> {
-    if (typeof text !== 'string' || text.length === 0) return false;
+  async announceEnvironmentCard(
+    sessionId: string,
+    text: string,
+  ): Promise<EnvironmentCardAnnouncement> {
+    // P0-run-stops P4：每个 false 出口带原因（装配层聚合进 recover_done 日志；
+    // `no_member` 还是僵尸标记清理判据的一半，见 node-resume / bootstrap）。
+    if (typeof text !== 'string' || text.length === 0) {
+      return { announced: false, reason: 'empty_text' };
+    }
     await this.ready;
     const notice = this.runtime.notice;
-    if (notice === undefined) return false;
+    if (notice === undefined) return { announced: false, reason: 'no_notice' };
     const record = this.registry.getBySession(sessionId);
-    if (record === undefined) return false;
-    if (record.membership === 'left' || record.state === 'closed') return false;
+    if (record === undefined) return { announced: false, reason: 'no_member' };
+    if (record.membership === 'left') return { announced: false, reason: 'left' };
+    if (record.state === 'closed') return { announced: false, reason: 'closed' };
     // 与 `recoverPendingInputs` 同一套「可投递」判据：退役 / 未知会话不做声。
-    if (this.registry.isRetiredSession(sessionId)) return false;
-    if (!liveBindings(record).some((body) => body.bindingId === sessionId)) return false;
+    if (this.registry.isRetiredSession(sessionId)) return { announced: false, reason: 'retired' };
+    if (!liveBindings(record).some((body) => body.bindingId === sessionId)) {
+      return { announced: false, reason: 'no_binding' };
+    }
     try {
       // 卡片的 timestamp ＝ 产生时刻（启动），不是注入时刻：
       // 它必须在被重放的那条输入所在 run 之前（探针 d 的断言口径）。
@@ -3722,14 +3733,14 @@ export class AgentServiceImpl implements AgentService {
         agent_id: record.id,
         session_id: sessionId,
       });
-      return true;
+      return { announced: true };
     } catch (error) {
       this.logger.warn('agent.env_card.announce_failed', {
         agent_id: record.id,
         session_id: sessionId,
         error: errorText(error),
       });
-      return false;
+      return { announced: false, reason: 'failed' };
     }
   }
 

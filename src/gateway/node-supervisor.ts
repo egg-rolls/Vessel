@@ -34,6 +34,7 @@ import {
   normalizeGatewayInstance,
   readGatewayPidRecord,
 } from './pid';
+import { shutdownGateway } from './reload';
 import {
   DEFAULT_STALL_WATCHDOG_CONFIG,
   NodeWatchdog,
@@ -53,6 +54,10 @@ import {
  */
 const DEFAULT_READINESS_TIMEOUT_MS = 180_000;
 const DEFAULT_STOP_TIMEOUT_MS = 5_000;
+/** P0-run-stops P1：优雅关闭受理后的等死预算；超时回退既有强杀。 */
+const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 10_000;
+/** P0-run-stops P1：`gateway.shutdown` 请求本身的超时（只受理，不等退出）。 */
+const GRACEFUL_SHUTDOWN_REQUEST_MS = 3_000;
 const POLL_MS = 100;
 const HEALTH_TIMEOUT_MS = 1_000;
 const ADOPT_WAIT_MS = 2_000;
@@ -177,6 +182,11 @@ export interface NodeSupervisorOptions {
    * 那是状态机，这是外部看护的动作记录（一行一条结构日志）。抛错不影响判定。
    */
   onWatchdogEvent?: (event: WatchdogEvent) => void;
+  /**
+   * P0-run-stops P4：node 子进程优雅关闭失败、回退强杀时通知一次（代打
+   * `node.drain.skipped` 的通道）。I/O 由调用方决定；抛错不影响终止。
+   */
+  onDrainSkipped?: (info: DrainSkippedInfo) => void;
 }
 
 /** Manifest 中的一条：只记录本平台 spawn 的子进程。 */
@@ -415,6 +425,42 @@ async function recordOwnsPid(record: SpawnedChildRecord): Promise<boolean> {
   return true;
 }
 
+/** P0-run-stops P4：一次「没 drain 成」的强杀回退（停止方据此代打 node.drain.skipped）。 */
+export interface DrainSkippedInfo {
+  name: string;
+  pid: number;
+  /** no_record / unauthorized / not_found / network / timeout / …（不含 token）。 */
+  reason: string;
+}
+
+/**
+ * 终止 node 子进程前先试优雅关闭（P0-run-stops P1）。
+ *
+ * Windows 上外部 `process.kill` 是无条件终止，进程内 drain（写 resume 标记 +
+ * interrupt('shutdown')）永远跑不到 —— 这里先经 `gateway.shutdown` 请 node 自己跑
+ * 现成的 shutdownServeStack，再在预算内等它自死。**只有确认死亡才返回 dead=true**；
+ * 其余一律交回调用方走既有强杀回退（失败模式是「停不掉」，不是「没杀成」）。
+ *
+ * 寻址用子进程自己 dataDir 的 `gateway.pid`（host/port，归属已由调用方复核）；
+ * token 用回环匿名口径（与 `gateway reload` 一致）；本机 spawn 的 node 恒回环 http，
+ * 显式 token / TLS 部署下请求被拒 → 回退强杀，不假装成功。hub 没有 run 面，不试。
+ */
+async function tryGracefulNodeShutdown(
+  child: SpawnedChildRecord,
+  sleep: (ms: number) => Promise<void>,
+): Promise<{ dead: boolean; reason?: string }> {
+  const record = await readGatewayPidRecord(child.data_dir);
+  if (record === null || record.pid !== child.pid) return { dead: false, reason: 'no_record' };
+  const result = await shutdownGateway({
+    record,
+    token: '',
+    requestTimeoutMs: GRACEFUL_SHUTDOWN_REQUEST_MS,
+  });
+  if (!result.ok) return { dead: false, reason: result.code ?? 'error' };
+  const dead = await waitUntilDead(child.pid, GRACEFUL_SHUTDOWN_TIMEOUT_MS, sleep);
+  return dead ? { dead: true } : { dead: false, reason: 'timeout' };
+}
+
 async function waitUntilDead(
   pid: number,
   timeoutMs: number,
@@ -483,6 +529,11 @@ export interface StopSpawnedChildrenOptions {
    * 的 node/hub 一起杀掉。缺省 undefined = 不过滤（整体关闭要停全部）。
    */
   startedSince?: number;
+  /**
+   * P0-run-stops P4：node 子进程优雅关闭失败、回退强杀时通知一次（停止方代打
+   * `node.drain.skipped`）。缺省 = 不打（库本身不打印）。
+   */
+  onDrainSkipped?: (info: DrainSkippedInfo) => void;
 }
 
 /** manifest 条目的启动时刻（node 写 ISO 8601；hub lock 写 epoch 毫秒字符串）。 */
@@ -574,8 +625,27 @@ export async function stopSpawnedChildren(
         remaining.push(child);
         continue;
       }
-      const ok =
-        options.terminate !== undefined
+      // P0-run-stops P1：node 子进程先试优雅关闭（进程内 drain 写 resume 标记），
+      // 确认自死才算停成；否则回退既有强杀。hub 没有 run 面，不试。
+      let gracefulDead = false;
+      if (child.kind !== 'hub') {
+        const graceful = await tryGracefulNodeShutdown(child, sleep);
+        gracefulDead = graceful.dead;
+        if (!graceful.dead) {
+          try {
+            options.onDrainSkipped?.({
+              name: child.name,
+              pid: child.pid,
+              reason: graceful.reason ?? 'unknown',
+            });
+          } catch {
+            // 观察者抛错不影响终止。
+          }
+        }
+      }
+      const ok = gracefulDead
+        ? true
+        : options.terminate !== undefined
           ? await options.terminate(child.pid)
           : await terminateChild(child.pid, { platform, runCommand, sleep, timeoutMs });
       const kind: 'node' | 'hub' = child.kind === 'hub' ? 'hub' : 'node';
@@ -1465,7 +1535,24 @@ export class NodeSupervisor {
         }
         // keep 路径下走到这里 = 还没就绪的子进程：没有归属证据、也还没接管端口，
         // 留着只会变孤儿（下次启动还可能撞端口），所以照样终止。
-        const ok = await this.terminatePid(child.pid);
+        // P0-run-stops P1：node 子进程先试优雅关闭（未就绪的通常 no_record → 直接强杀）。
+        let gracefulDead = false;
+        if (child.kind !== 'hub') {
+          const graceful = await tryGracefulNodeShutdown(child, this.sleep);
+          gracefulDead = graceful.dead;
+          if (!graceful.dead) {
+            try {
+              this.options.onDrainSkipped?.({
+                name: child.name,
+                pid: child.pid,
+                reason: graceful.reason ?? 'unknown',
+              });
+            } catch {
+              // 观察者抛错不影响终止。
+            }
+          }
+        }
+        const ok = gracefulDead || (await this.terminatePid(child.pid));
         const kind: 'node' | 'hub' = child.kind === 'hub' ? 'hub' : 'node';
         if (ok) {
           stopped += 1;

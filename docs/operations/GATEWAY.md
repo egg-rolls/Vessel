@@ -110,6 +110,12 @@ vessel gateway uninstall-service
   `gateway stop` / `restart` 会先写保留标记 ⇒ 平台层退出时保留子进程。
 - 0.55 起：还没就绪（没有 `gateway.pid` 归属证据）的子进程在停机时**会被终止**——它们
   既没接管端口也没人认识，留着就是孤儿。
+- **P0-run-stops P1：停 node 先优雅、后强杀**。终止 node 前先经 Node API `gateway.shutdown`
+  请它进程内 drain（写在跑 run 的 resume 标记 + interrupt('shutdown')），等它自死 ≤10s；
+  超时/失败回退强杀 + 补偿清理，并打一行 `node.drain.skipped`（pid + 原因）。
+  Windows 上外部 `process.kill` 是无条件终止——没有这一步，重启后在跑 run 的恢复标记
+  一条都写不出来（事故复盘见个人侧 `docs/dev/issues/P0-run-stops.md`）。平台层与 hub
+  没有 run 面，不走优雅关闭。
 
 ## 5. 节点缺席怎么诊断
 

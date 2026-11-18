@@ -1478,6 +1478,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
               const recovered = await wiring.service.recoverPendingInputs();
               return { recovered: recovered.recovered, sessions: recovered.sessions };
             },
+            // P0-run-stops P3 僵尸标记判据的另一半：会话已完成。与 announce 的
+            // `no_member` 原因联合成立时，node-resume 经 clearMarker（单写口）清掉
+            // 永远不可能准入的标记（headless CLI 会话遗留），不再只增不减。
+            unrecoverable: async (sessionId) => {
+              const state = await session.load(sessionId);
+              return state !== null && state.status === 'completed';
+            },
             warn: (event, meta) => logger.warn(event, meta),
           });
           const report = await restarted.beginResume();
@@ -1490,6 +1497,18 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
               skipped: report.skipped,
               replayed_inputs: report.replayed_inputs,
               replayed_sessions: report.replayed_sessions,
+              // P0-run-stops P4：per-session skip 原因聚合（只扩日志内容）——
+              // skipped=9 这种读数必须能直接看出「为什么」，不用回去翻代码。
+              ...(report.skipped > 0
+                ? {
+                    skipped_sessions: report.marks
+                      .filter((mark) => mark.card === 'skipped')
+                      .map((mark) => ({
+                        session_id: mark.session_id,
+                        reason: mark.skip_reason ?? 'unknown',
+                      })),
+                  }
+                : {}),
             });
           }
           // 准入是异步的（要等下一轮请求真的发出）：不阻塞启动，只在后台收尾清标记。
@@ -2005,6 +2024,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 所以它挂在 BootstrapResult.beginDrain 上，由 CLI 的退出路径先调。
   const nodeDrainer = createNodeDrainer({
     units: () => executionRuntime.listExecutionUnits(),
+    // P0-run-stops P3：headless 一次性进程不打 resume 标记——它的会话没有 agent
+    // 绑定，标记永远收不了卡、清不掉，只会累积成僵尸（与启动侧「headless 不替
+    // 别的会话恢复」对称）。interrupt / settle / flush 照旧。
+    armMarkers: !headless,
     // 没有 AgentService（agent 关闭 / 极简入口）就没有 agent→agent 投递要排队：
     // 空 Map + beginFence 返回 false（fence 由 runs.start 闸门之后的调用方兜底判断）。
     pendingInboxIdsBySession: () => agentControl?.service.pendingInboxIdsBySession() ?? new Map(),

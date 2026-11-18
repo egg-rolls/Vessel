@@ -341,6 +341,13 @@ export interface GatewayOptions {
    */
   reload?: (scopes: string[]) => Promise<GatewayReloadResult>;
   /**
+   * P0-run-stops P1：`gateway.shutdown` 的优雅退出序列（asm 注入）。
+   * 缺省 = 方法仍进 manifest，但 handler 返回 `not_supported`。
+   * 注入实现 = 现成 shutdownServeStack（drain 写 resume 标记 → 关栈）+ 进程退出；
+   * handler 先回 `{stopping:true}` 再 defer 一拍执行，停止侧超时仍会强杀。
+   */
+  shutdown?: () => Promise<void>;
+  /**
    * CONTRACT-hot-apply §7：`permissions.setToolPolicy` 的写盘面（asm 注入）。
    * 缺省 = 方法仍进 manifest，但 handler 返回 `not_supported`。
    */
@@ -2611,7 +2618,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createEvalMethods({ evals: opts.evals }),
     ...createFeishuMethods({ requireFeishu }),
     // 0.12：追加在表尾，不改变既有方法顺序（DECISION-023 §2.3）。
-    ...createAdminMethods({ reload: opts.reload }),
+    ...createAdminMethods({
+      reload: opts.reload,
+      ...(opts.shutdown !== undefined ? { shutdown: opts.shutdown } : {}),
+    }),
     // 0.14 P0：agents 注册表（additive，排在表尾）。
     ...createAgentMethods({
       registry: agentRegistry,

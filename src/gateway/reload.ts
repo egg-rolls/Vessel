@@ -6,6 +6,10 @@
  * 使用本地 HTTP RPC（token 来自配置，不经 URL）；web 尚未合入该方法时
  * 返回明确错误，不假装成功。
  *
+ * P0-run-stops P1：同模块提供 `gateway.shutdown` 客户端（`shutdownGateway`）——
+ * 停止侧在强杀前先请求进程内优雅退出（drain 写 resume 标记）；老服务端没有该方法
+ * 时返回 `not_found`，调用方据此回退强杀，不假装成功。
+ *
  * @module vessel/gateway/reload
  */
 
@@ -101,6 +105,63 @@ export async function reloadGateway(options: ReloadGatewayOptions): Promise<Relo
       const hint =
         error.code === 'not_found'
           ? ' (this gateway build does not expose gateway.reload yet)'
+          : '';
+      return { ok: false, error: `${error.code}: ${error.message}${hint}`, code: error.code };
+    }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      code: 'network',
+    };
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
+
+export interface ShutdownGatewayOptions {
+  record: GatewayPidRecord;
+  token: string;
+  /** gateway 是否启用 TLS（来自 config.node.tls） */
+  tls?: boolean;
+  requestTimeoutMs?: number;
+  createClient?: (options: { baseUrl: string; token: string; timeoutMs: number }) => ReloadClient;
+}
+
+export type ShutdownGatewayResult = { ok: true } | { ok: false; error: string; code?: string };
+
+/**
+ * 调用 `gateway.shutdown`：只受理「退出序列已启动」（`{stopping:true}`），
+ * **不等待进程退出**——等死由调用方按自己的预算轮询，超时回退强杀。
+ */
+export async function shutdownGateway(
+  options: ShutdownGatewayOptions,
+): Promise<ShutdownGatewayResult> {
+  const baseUrl = gatewayBaseUrl(options.record, options.tls === true);
+  const timeoutMs = options.requestTimeoutMs ?? 5_000;
+  const client =
+    options.createClient?.({ baseUrl, token: options.token, timeoutMs }) ??
+    createHttpRpcClient({
+      baseUrl,
+      token: options.token,
+      subscribe: false,
+      requestTimeoutMs: timeoutMs,
+    });
+
+  try {
+    const raw = await client.request('gateway.shutdown', {});
+    if (!isRecord(raw) || raw.stopping !== true) {
+      return {
+        ok: false,
+        error: 'gateway.shutdown returned an unexpected result shape',
+        code: 'invalid_result',
+      };
+    }
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof RpcClientError) {
+      const hint =
+        error.code === 'not_found'
+          ? ' (this gateway build does not expose gateway.shutdown yet)'
           : '';
       return { ok: false, error: `${error.code}: ${error.message}${hint}`, code: error.code };
     }

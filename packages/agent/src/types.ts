@@ -844,6 +844,26 @@ export interface AgentRecoverResult {
   failed: number;
 }
 
+/**
+ * 重启恢复卡收不了的原因（P0-run-stops P4：per-session skip 原因，只用于日志）。
+ * `no_member` = 会话没有任何成员记录（headless CLI 会话的典型形态）——装配层据此
+ * 联合「会话已完成」判定僵尸标记并清理；其余原因保守保留标记。
+ */
+export type EnvironmentCardSkipReason =
+  | 'empty_text'
+  | 'no_notice'
+  | 'no_member'
+  | 'left'
+  | 'closed'
+  | 'retired'
+  | 'no_binding'
+  | 'failed';
+
+/** `announceEnvironmentCard` 的结果：发成了，或为什么没发成。 */
+export type EnvironmentCardAnnouncement =
+  | { announced: true }
+  | { announced: false; reason: EnvironmentCardSkipReason };
+
 /** `agents.recall` 的单条跳过原因（与 inbox 的 discard 口径同族）。 */
 export interface AgentRecallSkip {
   message_id: string;
@@ -1652,10 +1672,11 @@ export interface AgentService {
    * 所以同一份文本既进模型上下文、也作为 `vessel:notice` 消息落进会话流（web 渲染成
    * EnvCard）。用户裁定：重启恢复不该只让模型知道、用户看不见 ⇒ 不造隐藏输入。
    *
-   * 返回 false = 该会话现在收不了卡（不在册 / 已 left / 已 closed / 无 binding），
-   * 调用方据此记 skipped 并保留标记，等下次启动再判（幂等）。
+   * 返回 `{announced:false, reason}` = 该会话现在收不了卡（不在册 / 已 left /
+   * 已 closed / 无 binding …），调用方据此记 skipped（带原因）并保留标记，
+   * 等下次启动再判（幂等）；唯一例外见装配层的僵尸标记清理判据。
    */
-  announceEnvironmentCard(sessionId: string, text: string): Promise<boolean>;
+  announceEnvironmentCard(sessionId: string, text: string): Promise<EnvironmentCardAnnouncement>;
   /**
    * 更新名字 / model / systemPrompt；名字立即生效且保持同 Team（unbound 为 tenant）
    * 内 present 成员唯一。model / systemPrompt 只影响下一次 spawn 的 ExecutionUnit。

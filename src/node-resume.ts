@@ -104,9 +104,17 @@ export interface NodeResumeSources {
   };
   /**
    * 发卡：把这条文本排进该会话的下一次请求（用户输入之前）。
-   * 返回 false = 这具 body 现在收不了卡（没在册 / 已退役 / 已关闭）。
+   * `announced:false` = 这具 body 现在收不了卡；`reason` 是收不了的原因
+   * （没在册 / 已退役 / 已关闭 …，只用于日志与僵尸判定，不上 wire）。
    */
-  announce(sessionId: string, text: string): boolean | Promise<boolean>;
+  announce(sessionId: string, text: string): Promise<{ announced: boolean; reason?: string }>;
+  /**
+   * 僵尸标记判据的另一半（P0-run-stops P3，可选）：该会话是否**已完成**。
+   * 与 `skip_reason === 'no_member'` 联合成立时，标记永远不可能被准入
+   * （典型：headless CLI 会话），装配层授权经单写口清掉，不再留给下次启动。
+   * 缺省 = 不做僵尸清理（所有 skipped 照旧 kept）。
+   */
+  unrecoverable?(sessionId: string): Promise<boolean>;
   /**
    * 清标记：走 RunJournal 单写口，且**只清还是同一份标记**的那一个。
    *
@@ -132,6 +140,8 @@ export interface NodeResumeMark {
   interrupted_at: number;
   /** announced＝这次发了新卡；deduped＝上一轮已经发过（不重复发）；skipped＝没有可收卡的 body */
   card: 'announced' | 'deduped' | 'skipped';
+  /** skipped 的原因（announce 给的口径；仅报告/日志，不落盘）。 */
+  skip_reason?: string;
   /** 卡后面排着的已接受输入条数（标记里记的那一份） */
   pending_inputs: number;
   /** pending＝还在等准入；cleared＝准入后已清；kept＝准入不了/标记已变，留给下次启动 */
@@ -288,8 +298,11 @@ export function createNodeResumer(sources: NodeResumeSources): NodeResumer {
       const text = restartCardText(marker, { pending_inputs: pendingInputs }, sources.locale);
       let announced = false;
       try {
-        announced = (await sources.announce(candidate.session_id, text)) === true;
+        const outcome = await sources.announce(candidate.session_id, text);
+        announced = outcome.announced === true;
+        if (!announced) mark.skip_reason = outcome.reason ?? 'unknown';
       } catch (error) {
+        mark.skip_reason = 'announce_failed';
         warn('node.resume.announce_failed', {
           session_id: candidate.session_id,
           error: error instanceof Error ? error.message : String(error),
@@ -324,8 +337,30 @@ export function createNodeResumer(sources: NodeResumeSources): NodeResumer {
   /** 4 步：等到准入，然后清标记（准入不了就留着，下次启动再判）。 */
   async function awaitAdmission(report: NodeResumeReport): Promise<NodeResumeReport> {
     // 没有 body 收卡的（skipped）等不到准入：直接记 kept，留着标记给下次启动。
+    // 例外（P0-run-stops P3 僵尸清理）：no_member + 会话已完成 ⇒ 这份标记永远不可能
+    // 被准入（headless CLI 会话没有 agent 绑定），经单写口清掉——否则 marked 只增不减，
+    // 真正的恢复信号被僵尸标记掩盖。清除仍走 clearMarker（同一份标记才清）。
     for (const mark of report.marks) {
-      if (mark.marker === 'pending' && mark.card === 'skipped') mark.marker = 'kept';
+      if (mark.marker !== 'pending' || mark.card !== 'skipped') continue;
+      if (
+        mark.skip_reason === 'no_member' &&
+        sources.unrecoverable !== undefined &&
+        (await sources.unrecoverable(mark.session_id))
+      ) {
+        const key: RestartCardKey = { run_id: mark.run_id, interrupted_at: mark.interrupted_at };
+        let cleared = false;
+        try {
+          cleared = await sources.clearMarker(mark.session_id, key);
+        } catch (error) {
+          warn('node.resume.clear_failed', {
+            session_id: mark.session_id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        mark.marker = cleared ? 'cleared' : 'kept';
+        continue;
+      }
+      mark.marker = 'kept';
     }
     const waiting = report.marks.filter((mark) => mark.marker === 'pending');
     if (waiting.length === 0) {
