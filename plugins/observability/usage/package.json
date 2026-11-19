@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/plugin-usage",
-  "version": "0.54.0",
+  "version": "0.56.0",
   "description": "Usage, logs and model leaderboard for Vessel",
   "type": "module",
   "types": "./src/index.ts",
