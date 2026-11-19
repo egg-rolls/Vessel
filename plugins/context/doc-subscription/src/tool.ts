@@ -18,6 +18,7 @@ import { canonicalPath, evaluatePath, type PathBoundary } from '@vessel-agent/ba
 import type { ToolContext, ToolDefinition } from '@vessel-agent/core';
 import type { DocSubscriptionConfig } from './config.js';
 import { unifiedDiff } from './diff.js';
+import { observeEntry } from './hook.js';
 import {
   type SessionSubscriptionState,
   type SubscriptionEntry,
@@ -442,8 +443,10 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
   return {
     name: 'subscribe',
     description:
-      'Manage explicit per-session file subscriptions. add/remove/list/inspect concrete files; ' +
-      'changes produce a short notice, and inspect returns the diff (full content on first read).',
+      'Manage per-session file subscriptions. add/remove/list/inspect concrete files; ' +
+      'changes produce a short notice, and inspect returns the diff (full content on first read). ' +
+      'edit/write auto-subscribe the files they touch (subscribe:false on those tools opts out); ' +
+      'use remove to clear subscriptions you no longer need (e.g. when switching tasks).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -559,4 +562,50 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
       return lines.join('\n');
     },
   };
+}
+
+/**
+ * 自动订阅入口（edit/write AfterTool hook 用，蜂群 Phase 1 第二重保险）。
+ * 复用 prepareEntry（边界 / 大小 / 敏感判定与手动 add 同口径）；成功后把当前观察记为
+ * **基线**（rev = notified_rev）：自己刚做的改动不出卡，只有他人再改（rev 不同）才通知。
+ * seen_rev 保持 ''（模型尚未 inspect）。任何拒绝（deny / 越界 / 不存在 / 过大 / 敏感）静默跳过。
+ * 返回是否写入了状态（无变化不写盘）。
+ */
+export async function autoSubscribePath(
+  deps: SubscribeToolDeps,
+  sessionId: string,
+  rawPath: string,
+): Promise<boolean> {
+  const trimmed = rawPath.trim();
+  if (trimmed === '') return false;
+  const canonical = canonicalPath(resolveInput(deps.config, trimmed));
+  const state = await deps.store.load(sessionId);
+  const existing = state.subscriptions[canonical] ?? undefined;
+  const outcome = await prepareEntry(trimmed, deps, existing);
+  if (outcome.entry === undefined) return false;
+  const entry = outcome.entry;
+
+  const observation = await observeEntry(entry, deps);
+  if (observation !== undefined) {
+    entry.rev = observation.rev;
+    entry.size = observation.size;
+    entry.mtime_ms = observation.mtime_ms;
+    // 基线抑制：该 rev 视为「已通知」，自己刚做的改动不出卡；他人再改时 BeforeLlm 才通知。
+    entry.notified_rev = observation.rev;
+    entry.notified_at = Date.now();
+  }
+
+  if (
+    existing !== undefined &&
+    existing.rev === entry.rev &&
+    existing.notified_rev === entry.notified_rev &&
+    existing.seen_rev === entry.seen_rev &&
+    existing.size === entry.size &&
+    existing.mtime_ms === entry.mtime_ms
+  ) {
+    return false;
+  }
+  state.subscriptions[entry.path] = entry;
+  await deps.store.save(state);
+  return true;
 }

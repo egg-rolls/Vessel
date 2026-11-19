@@ -108,7 +108,7 @@ function buildNotice(lines: string[], total: number): string {
  * 观察一个条目：边界、stat、大小、二进制、hash。
  * `undefined` = 跳过（边界拒绝 / 非普通文件 / 读取失败），不推进任何游标。
  */
-async function observeEntry(
+export async function observeEntry(
   entry: SubscriptionEntry,
   deps: BeforeLlmHookDeps,
 ): Promise<Observation | undefined> {

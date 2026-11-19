@@ -47,6 +47,15 @@
  * 就把模型推回 heredoc（今天连续三次写变形的直接原因）。现在按用途分流：
  * **建文件 / 追加用 `write`，局部改代码用 `edit`**。
  *
+ * 写协调（蜂群 Phase 1，个人侧研究草案 swarm-shared-workspace-collaboration §3.4/§3.5/§3.6）：
+ * - `write` mode=overwrite 可选 `expected_content`：写临界区内与当前内容逐字节比对，不符报错不写
+ *   （逼重读，防陈旧 read 后静默抹除）；不传 = 旧行为零回归。「好设计省重试」。
+ * - edit/write 写临界区前持 `<baseCwd>/.vessel/write.lock` 全工作区单锁（./write-lock.ts，
+ *   data-lock 已验证原语），跨进程串行化**写动作**（毫秒级，非任务级 lease）；合作式协议，
+ *   bash/IDE/git 非合作写入者不受约束（诚实边界，Windows 强制锁加固另批）。
+ * - edit/write 可选 `subscribe:false`：缺省自动订阅所改文件（doc-subscription AfterTool hook，
+ *   host 侧，覆盖两条执行路），opt-out 省 token；感知只在 run 边界（append-only）。
+ *
  * 传输层（WSL 启动器修复）：Windows 宿主上 `bash` 若解析到 system32 的 WSL 启动器，`-c` 的
  * 字符串会先被外层 shell 在 spawn cwd 解析一遍 —— 单引号里的反引号 / `$()` 也被提前展开，
  * 还在 cwd（多为仓库根）留下 0 字节垃圾文件。spawnBash 对此改走 base64 传输（编码后超长则
@@ -94,6 +103,7 @@ import {
   toolOutputRoot,
   writeToolOutput,
 } from '@vessel-agent/core';
+import { acquireWriteLock, type WriteLock, WriteLockError } from './write-lock.js';
 
 // ── 常量 ──────────────────────────────────────────
 
@@ -2121,6 +2131,34 @@ function editFile(
   return `已替换 ${count} 处（${inputPath}）`;
 }
 
+/**
+ * edit/write 共用：写临界区前持工作区写锁，临界区后释放（蜂群 Phase 1 第三重保险）。
+ * action 是同步临界区（读→比对→写），在锁内求值；锁获取/释放是异步边缘，不阻塞事件循环。
+ * 锁失败折稳定错误文本（run 继续）；取消优先（与 editFile/writeFileText 内部口径一致）。
+ */
+async function runWithWriteLock(
+  config: BasicToolsConfig,
+  ctx: ToolContext,
+  tool: string,
+  action: () => string,
+): Promise<string> {
+  const baseCwd = resolveCallCwd(config, ctx.cwd);
+  let lock: WriteLock;
+  try {
+    lock = await acquireWriteLock(baseCwd.path, ctx.signal);
+  } catch (error) {
+    if (ctx.signal?.aborted) return CANCELLED_TEXT;
+    return error instanceof WriteLockError
+      ? error.message
+      : `错误：写入锁获取失败：${String(error)}`;
+  }
+  try {
+    return await boundToolOutput(ctx, tool, action());
+  } finally {
+    await lock.release();
+  }
+}
+
 /** 构造 edit 工具（相对路径按调用期默认目录解析；路径边界与 read 相同） */
 function createEditTool(boundary: PathBoundary, config: BasicToolsConfig): ToolDefinition {
   return {
@@ -2137,6 +2175,12 @@ function createEditTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
         replace_all: {
           type: 'boolean',
           description: 'Replace every occurrence instead of requiring a unique match',
+        },
+        subscribe: {
+          type: 'boolean',
+          description:
+            'Auto-subscribe this file for change notices (default true). Set false when confident ' +
+            'the edit is final and you want to save tokens; you will not be notified if others change it.',
         },
       },
       required: ['path', 'old_string', 'new_string'],
@@ -2157,7 +2201,9 @@ function createEditTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
       return 'ask';
     },
     handler: async (args, ctx) =>
-      boundToolOutput(ctx, 'edit', editFile(args, ctx, activeBoundary(boundary), config)),
+      runWithWriteLock(config, ctx, 'edit', () =>
+        editFile(args, ctx, activeBoundary(boundary), config),
+      ),
   };
 }
 
@@ -2449,6 +2495,29 @@ function writeFileText(
   // 这里只解决「链接指向允许目录」时的写入语义，与 bash 的 `>` 一致。
   const writeTarget = existing === undefined ? absolute : canonicalPath(absolute);
 
+  // expected_content（可选，仅 overwrite；蜂群 Phase 1 第一重保险）：临界区内逐字节比对，
+  // 不符 → 稳定错误不写，逼重读（防 L-010 类陈旧 read 后 overwrite 静默抹除）。
+  // 不传 = 今天行为零回归。比对在写锁临界区内完成（handler 层持锁，见 runWithWriteLock）。
+  if (mode === 'overwrite' && args.expected_content !== undefined) {
+    if (typeof args.expected_content !== 'string') {
+      return '错误：expected_content 必须是字符串（UTF-8 文本，你最近一次读到的当前全文）。';
+    }
+    let current: Buffer;
+    try {
+      current = existing === undefined ? Buffer.alloc(0) : readFileSync(writeTarget);
+    } catch (error) {
+      return `错误：读取当前内容失败（expected_content 比对）：${String(error)}`;
+    }
+    if (!current.equals(Buffer.from(args.expected_content, 'utf-8'))) {
+      const currentLines = countTextLines(current.toString('utf-8'));
+      return (
+        `错误：expected_content 与当前文件内容不符，未写入（当前 ${groupThousands(current.byteLength)} 字节 / ` +
+        `${groupThousands(currentLines)} 行）。文件在你读取后已被改动：请用 read 重读最新内容，` +
+        '更新 expected_content 后重试，或改用 edit 做局部修改。'
+      );
+    }
+  }
+
   if (mode === 'append') {
     // 追加前记一下原文件末尾：没有换行的文件直接追加会把内容接到最后一行后面，值得说一句
     const previousSize = existing === undefined ? 0 : Number(existing.size);
@@ -2513,7 +2582,10 @@ function createWriteTool(boundary: PathBoundary, config: BasicToolsConfig): Tool
       'silent overwrite); mode=overwrite replaces the whole file; mode=append adds to the end. ' +
       'For a partial change inside an existing file use `edit` instead (exact, unique match; it ' +
       'fails loudly when the text does not match). Only ONE missing parent directory is created ' +
-      'automatically. Max content 4 MiB per call. Returns line/byte counts.',
+      'automatically. Max content 4 MiB per call. Returns line/byte counts. ' +
+      'Good design saves retries: pass expected_content (the exact current content you last read) ' +
+      'with mode=overwrite so a concurrent change is caught before you clobber it. ' +
+      'edit/write auto-subscribe the touched file for change notices; subscribe:false opts out.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2528,6 +2600,19 @@ function createWriteTool(boundary: PathBoundary, config: BasicToolsConfig): Tool
           description:
             'create (default; error if the file exists) | overwrite (replace whole content) | ' +
             'append (add at the end)',
+        },
+        expected_content: {
+          type: 'string',
+          description:
+            'Optional, mode=overwrite only: the exact current content you last read. The write is ' +
+            'rejected (nothing written) if the file bytes differ — detects concurrent changes instead ' +
+            'of silently clobbering them. Omit for legacy behavior.',
+        },
+        subscribe: {
+          type: 'boolean',
+          description:
+            'Auto-subscribe this file for change notices (default true). Set false when confident ' +
+            'the write is final and you want to save tokens.',
         },
       },
       required: ['path', 'content'],
@@ -2548,7 +2633,9 @@ function createWriteTool(boundary: PathBoundary, config: BasicToolsConfig): Tool
       return 'ask';
     },
     handler: async (args, ctx) =>
-      boundToolOutput(ctx, 'write', writeFileText(args, ctx, activeBoundary(boundary), config)),
+      runWithWriteLock(config, ctx, 'write', () =>
+        writeFileText(args, ctx, activeBoundary(boundary), config),
+      ),
   };
 }
 
