@@ -3,7 +3,7 @@
  * @module @vessel-agent/basic-tools/write-lock
  *
  * edit/write 的写临界区（读→比对→写）前持有一把**全工作区单锁**，临界区后释放。
- * 锁文件 `<baseCwd>/.vessel/write.lock`；跨进程 / 跨 engine / 跨 node 同机有效。
+ * 锁文件 `<realpath(baseCwd)>/.vessel/write.lock`；跨进程 / 跨 engine / 跨 node 同机有效。
  * 锁的是**写动作**（毫秒级临界区），不是任务 / 文件所有权——无分钟级 checkout，
  * 不重演按文件分工的堵塞（研究草案 §3.6）。
  *
@@ -20,12 +20,17 @@
  * bash / IDE / git 等非合作写入者不受此锁约束（Windows 目标文件强制锁加固另批）。
  * 这不是沙箱，不解析 bash 命令的文件写（ADR-055/083）。
  *
- * **锁权威边界 = baseCwd（工作区代理）**：共享同一 baseCwd 的写入者见同一把锁；
- * 成员 cwd 不同则锁不同（Phase 1 已知局限，见研究草案 §3.6）。
- * 基础设施失败（目录不可写等）**fail-closed**：折稳定错误，不静默降级为无锁写。
+ * **锁权威边界 = 规范化工作区路径**：baseCwd 在锁原语内部经 `realpathSync.native` 归一
+ * （单实现在 {@link writeLockPath}，acquire 与表面记录同源）——symlink / junction、
+ * Windows 大小写变体、8.3 短名等不同拼写指向同一工作区时见同一把锁，
+ * host in-process / 任意 engine 执行都走同一份归一，跨 node / 跨 engine 一致。
+ * 共享同一规范化工作区的写入者见同一把锁；成员 cwd 不同则锁不同
+ * （Phase 1 已知局限，见研究草案 §3.6）。归一不改变信封 cwd 的路径解析语义。
+ * 基础设施失败（路径不可解析 / 目录不可写等）**fail-closed**：折稳定错误，不静默降级为无锁写。
  */
 
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { link, mkdir, open, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -36,9 +41,13 @@ export const WRITE_LOCK_WAIT_MS = 10_000;
 /**
  * 锁文件路径（唯一产地）：获取锁与写协调表面记录（lock scope 明细）共用同一份字面量，
  * 避免两处各拼一遍 `.vessel/write.lock` 后静默漂移。
+ * baseCwd 先经 `realpathSync.native` 归一（展开 symlink / junction、统一 Windows 大小写、
+ * 展开 8.3 短名）：锁权威 = 规范化工作区路径，跨 node / 跨 engine 一致。
+ * 归一失败（路径不存在 / 不可访问）原样抛出，由调用方折 fail-closed 稳定错误。
  */
 export function writeLockPath(baseCwd: string): string {
-  return path.join(baseCwd, '.vessel', 'write.lock');
+  const real = realpathSync.native(baseCwd);
+  return path.join(real, '.vessel', 'write.lock');
 }
 
 /** 争用轮询间隔（毫秒） */
@@ -282,11 +291,20 @@ function sleep(ms: number): Promise<void> {
 /**
  * 获取工作区写锁（edit/write 写临界区前调用）。
  * 争用短轮询等待至 {@link WRITE_LOCK_WAIT_MS}；stale 锁按 data-lock 协议回收。
- * @throws WriteLockError 争用超时 / 基础设施失败 / signal 取消（message 即稳定错误文本）
+ * @throws WriteLockError 争用超时 / 路径归一或基础设施失败 / signal 取消（message 即稳定错误文本）
  */
 export async function acquireWriteLock(baseCwd: string, signal?: AbortSignal): Promise<WriteLock> {
-  const dir = path.join(baseCwd, '.vessel');
-  const lockPath = writeLockPath(baseCwd);
+  // 归一单实现在 writeLockPath（内部 realpathSync.native）：顶部一次取得规范化锁路径，
+  // dir 由同一路径派生，mkdir 与锁发布同锚于规范化 base；归一失败 fail-closed，不静默无锁写。
+  let lockPath: string;
+  try {
+    lockPath = writeLockPath(baseCwd);
+  } catch (error) {
+    throw new WriteLockError(
+      `错误：无法解析工作区规范路径 ${baseCwd}：${String(error)}。写入锁 fail-closed，请确认工作目录存在后重试。`,
+    );
+  }
+  const dir = path.dirname(lockPath);
   try {
     await mkdir(dir, { recursive: true });
   } catch (error) {

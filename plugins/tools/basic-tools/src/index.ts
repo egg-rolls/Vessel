@@ -102,6 +102,7 @@ import {
   HookType,
   markToolResultBounded,
   omitMarker,
+  runWithToolOutputScope,
   safeSegment,
   toolOutputRoot,
   writeToolOutput,
@@ -574,18 +575,34 @@ function buildDeniedCommandPatterns(entries: readonly string[]): DeniedCommandPa
 //
 // worker 执行**同一份** handler 源码，但 boundary 来自信封（host 权威），不是安装期闭包：
 // engine 入口逐调用包一层 `runWithBasicToolsCallScope`。host in-process 路径没有 scope
-// → 回退安装期闭包，行为逐字不变。**不加 ToolContext 字段、core 零改动。**
+// → 回退安装期闭包，行为逐字不变。**不加 ToolContext 字段**（core 仅增 S11 输出作用域机制，
+// 见个人侧 CONTRACT-engine-pool.md；boundary 注入本身仍零 core 改动）。
 // cwd 不走 scope：信封 cwd 进 ctx.cwd，worker 侧 config 为空 ⇒ resolveCallCwd 自然落到它。
 
-/** 调用期注入 scope：只带 boundary（单权威 host，worker 不持久化 / 不自决）。 */
+/**
+ * 调用期注入 scope：boundary 单权威 host（worker 不持久化 / 不自决）。
+ * engine 池 S12 增可选 dirs：host 装配权威的落盘根 / 数据目录，逐调用注入；
+ * 缺省（child 模式 / host in-process）不带 → env fallback 逐字不变（零回归）。
+ */
 export interface BasicToolsCallScope {
   boundary: PathBoundary;
+  toolOutputDir?: string;
+  dataDir?: string;
 }
 
 const callScopeStorage = new AsyncLocalStorage<BasicToolsCallScope>();
 
-/** 以给定边界 scope 包裹一次工具调用（worker 入口用；host in-process 路径不调用）。 */
+/**
+ * 以给定边界 scope 包裹一次工具调用（worker 入口用；host in-process 路径不调用）。
+ * scope 带 dirs 时复合 core 输出作用域（S11）：writeToolOutput / asyncLogDir 经
+ * toolOutputRoot() 自动作用域化；不带 dirs 走现态逐字。
+ */
 export function runWithBasicToolsCallScope<T>(scope: BasicToolsCallScope, fn: () => T): T {
+  if (scope.toolOutputDir !== undefined || scope.dataDir !== undefined) {
+    return callScopeStorage.run(scope, () =>
+      runWithToolOutputScope({ toolOutputDir: scope.toolOutputDir, dataDir: scope.dataDir }, fn),
+    );
+  }
   return callScopeStorage.run(scope, fn);
 }
 
@@ -1214,10 +1231,18 @@ function watchTempScript(scriptPath: string, exited: Promise<number>): void {
 /** 启动 bash（WSL 启动器时传输走 buildBashTransport）；返回类型交给 Bun.spawn 推导（手写 Subprocess 泛型参数极易踩错） */
 function spawnBash(command: string, cwd: string | undefined, options?: { ignoreStdin?: boolean }) {
   const transport = buildBashTransport(command);
+  // engine 池 S12：调用期 scope 的 dirs 注入子进程 env（池内多 node 共进程，进程级 env 不够）；
+  // 无 scope（host in-process / child 模式）= 逐字继承 process.env，行为不变。
+  const scope = callScopeStorage.getStore();
   try {
     const proc = Bun.spawn({
       cmd: transport.cmd,
       cwd,
+      env: {
+        ...process.env,
+        ...(scope?.dataDir ? { VESSEL_DATA_DIR: scope.dataDir } : {}),
+        ...(scope?.toolOutputDir ? { VESSEL_TOOL_OUTPUT_DIR: scope.toolOutputDir } : {}),
+      },
       stdout: 'pipe',
       stderr: 'pipe',
       /**
@@ -2367,7 +2392,14 @@ async function runWithWriteLock(
     if (ctx.signal?.aborted) return CANCELLED_TEXT;
     // 表面记录（additive）：锁争用 / 不可用是环境事实，下次请求前注入 lock 卡；
     // 工具失败语义不变，仍返回原错误文本。holder 身份不在 WriteLockError 上，不可得则不写。
-    const lockPath = writeLockPath(baseCwd.path);
+    // S14：writeLockPath 含 realpath 归一，可能失败（如目录不存在）——表面记录 best-effort：
+    // 失败时记原始 baseCwd（仅诊断）；锁仲裁路径恒走 writeLockPath 单产地，此处不拼第二份字面量。
+    let lockPath: string;
+    try {
+      lockPath = writeLockPath(baseCwd.path);
+    } catch {
+      lockPath = baseCwd.path;
+    }
     const errorClass = error instanceof Error ? error.name : 'Error';
     recordCoordNotice(ctx.session_id, {
       scope: WRITE_LOCK_SCOPE,
