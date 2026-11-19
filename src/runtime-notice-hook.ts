@@ -22,7 +22,13 @@
  * @module vessel/runtime-notice-hook
  */
 
-import type { Hook, HookContext, Message, SessionEventLogPort } from '../packages/core/src/index';
+import type {
+  EnvCadence,
+  Hook,
+  HookContext,
+  Message,
+  SessionEventLogPort,
+} from '../packages/core/src/index';
 import { HookType } from '../packages/core/src/index';
 import {
   NOTICE_DETAILS_MAX,
@@ -74,6 +80,14 @@ export interface RuntimeNoticeHookOptions {
    * 端口缺失（CLI 兜底装配 / 测试）时静默跳过，不阻断注入。
    */
   eventLog?: SessionEventLogPort;
+  /**
+   * 检测节奏（注入粒度框架轴 A；缺省 'request' = 今天行为，零回归）。
+   *
+   * 'run' ⇒ 每 run 只在首次请求取通知（`request_index > 0` 早退）。gate 在
+   * `takeStored` **之前**：游标不推进，通知留在总线，下一 run 首请求照常取（不丢）。
+   * 整 hook 取最细：装配层传 `finestCadence(['config','permission','tools','mcp','update','peer'], …)`。
+   */
+  cadence?: EnvCadence;
 }
 
 /** 注入落盘的事件类型（`runtime.*` 命名风格，与 `runtime.notice` 同族）。 */
@@ -140,6 +154,38 @@ export function formatNotices(notices: readonly FormattableNotice[]): string {
   return lines.join('\n');
 }
 
+/**
+ * 合并卡内的 scope **显示序**优先级（只排序，不改选择 / 游标）。
+ *
+ * 字面量副本：peer 最高（关键协调事实），其余按 agent `ENV_INFO_SCOPES` 词表顺序
+ * （restart → identity → fields → model → tools → lock → conflict → files →
+ * context → trim → pii）。**与 agent `env-info-scope.ts` 词表人工同步**（插件 / asm
+ * 不引词表实体，避免耦合；词表变了这里要跟着改）。
+ *
+ * 不在表里的 bus legacy 词（config / permission / mcp / update / selfcard …）同落
+ * 最低 rank，稳定排序保持彼此的原游标序。目的：关键卡（peer / tools）不被热应用
+ * 摘要挤出 `NOTICE_LINES_MAX` 的 24 行预算（details 先存活）。
+ */
+const NOTICE_SCOPE_PRIORITY: readonly string[] = [
+  'peer',
+  'restart',
+  'identity',
+  'fields',
+  'model',
+  'tools',
+  'lock',
+  'conflict',
+  'files',
+  'context',
+  'trim',
+  'pii',
+];
+
+function noticeScopeRank(scope: string): number {
+  const index = NOTICE_SCOPE_PRIORITY.indexOf(scope);
+  return index >= 0 ? index : NOTICE_SCOPE_PRIORITY.length;
+}
+
 export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook {
   const limit = options.limit ?? NOTICE_INJECT_LIMIT;
   /**
@@ -158,6 +204,9 @@ export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook
     name: RUNTIME_NOTICE_HOOK,
     type: HookType.BeforeLlm,
     async run(ctx): Promise<void> {
+      // 节奏 gate 在 takeStored 之前：游标不推进 ⇒ 通知不丢，下一 run 首请求照常取。
+      // request_index 缺省 0（旧 caller）⇒ 恒放行，零回归。
+      if (options.cadence === 'run' && (ctx.request_index ?? 0) > 0) return;
       const stored = options.bus.takeStored(ctx.session_id, limit);
       if (stored.length === 0) return;
       const runId = typeof ctx.run_id === 'string' ? ctx.run_id : '';
@@ -183,6 +232,9 @@ export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook
         kept.push(entry);
       }
       if (kept.length === 0) return;
+      // 只对**已取出的那批**按 scope 优先级稳定排序（同 rank 保持游标序），再合并。
+      // takeStored 的 FIFO 选择与游标推进不动：低优先级通知不丢，只是在合并卡里排后。
+      kept.sort((a, b) => noticeScopeRank(a.notice.scope) - noticeScopeRank(b.notice.scope));
       const text = formatNotices(kept.map((entry) => entry.notice));
       if (text === '') return;
       const message: Message = {

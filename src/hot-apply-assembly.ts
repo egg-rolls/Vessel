@@ -13,7 +13,11 @@
  * @module vessel/hot-apply-assembly
  */
 
-import type { VesselConfig } from '../packages/config/src/index';
+import {
+  type EnvInjectionConfig,
+  finestCadence,
+  type VesselConfig,
+} from '../packages/config/src/index';
 import type {
   PluginHost,
   RuntimePermissionConfig,
@@ -131,6 +135,7 @@ export async function assemblePluginTools(options: {
     declarative,
     resolveAgentCwd(options.config),
     resolveDataDir(options.config),
+    options.config.envInjection,
   );
   const exclude = options.excludePlugins ?? new Set<string>();
   const host: PluginHost = new MemoryPluginHost();
@@ -155,11 +160,21 @@ export function registerRuntimeNoticeHook(
   host: PluginHost,
   bus: RuntimeNoticeBus,
   eventLog?: SessionEventLogPort,
+  envInjection?: EnvInjectionConfig,
 ): void {
   const existing = host.getHooks().some((hook) => hook.name === RUNTIME_NOTICE_HOOK);
   if (existing) return;
   host.registerHook(
-    createRuntimeNoticeHook({ bus, ...(eventLog !== undefined ? { eventLog } : {}) }),
+    createRuntimeNoticeHook({
+      bus,
+      ...(eventLog !== undefined ? { eventLog } : {}),
+      // bus 整体取最细（不做 per-scope 分裂）：任一 request ⇒ request；
+      // 缺省配置全 request = 今天行为。要整体推迟须六个词全配 run。
+      cadence: finestCadence(
+        ['config', 'permission', 'tools', 'mcp', 'update', 'peer'],
+        envInjection,
+      ),
+    }),
   );
 }
 

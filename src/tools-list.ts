@@ -77,6 +77,7 @@ export async function listTools(): Promise<ToolsListing> {
     declarative,
     resolveAgentCwd(config),
     resolveDataDir(config),
+    config.envInjection,
   );
   const host = new MemoryPluginHost();
   for (const name of pluginNames) {

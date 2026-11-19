@@ -8,6 +8,7 @@
 
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { EnvCadence } from '@vessel-agent/core';
 
 /** 插件配置（解析后形态） */
 export interface DocSubscriptionConfig {
@@ -34,6 +35,12 @@ export interface DocSubscriptionConfig {
   maxTotalBytesPerRun: number;
   /** false 时 install 直接返回，不注册工具与 hook */
   enabled: boolean;
+  /**
+   * 注入粒度（env_injection 框架轴 A）：scope → 检测节奏，由装配层按 `env_injection` 配置
+   * 解析后注入（doc-subscription 只产 files）。缺省 undefined = 内置默认（files='run'，
+   * 每 run 首请求观察一次）。
+   */
+  envGranularity?: Record<string, EnvCadence>;
 }
 
 /** 默认值 */
@@ -120,6 +127,20 @@ function readBoolean(
   return undefined;
 }
 
+/**
+ * 读取 envGranularity 字段（scope → cadence；只认 'request' / 'run'）。
+ * 非法值 / 未知键忽略 —— 缺省回落到 hook 的内置字面量节奏（files='run'，零回归）。
+ */
+function readEnvGranularity(record: Record<string, unknown>): Record<string, EnvCadence> | undefined {
+  const value = record.envGranularity ?? record.env_granularity;
+  if (!isRecord(value)) return undefined;
+  const granularity: Record<string, EnvCadence> = {};
+  for (const [scope, cadence] of Object.entries(value)) {
+    if (cadence === 'request' || cadence === 'run') granularity[scope] = cadence;
+  }
+  return Object.keys(granularity).length > 0 ? granularity : undefined;
+}
+
 /** 把 YAML 配置解析成已知字段（未知键忽略） */
 export function parseDocSubscriptionConfig(value: unknown): DocSubscriptionConfig {
   const source = isRecord(value) ? value : {};
@@ -144,6 +165,8 @@ export function parseDocSubscriptionConfig(value: unknown): DocSubscriptionConfi
       : DEFAULT_CONFIG.dataDir);
   const dataDir = path.resolve(expandHomePrefix(dataDirRaw));
 
+  const envGranularity = readEnvGranularity(source);
+
   return {
     stateDir,
     dataDir,
@@ -160,5 +183,6 @@ export function parseDocSubscriptionConfig(value: unknown): DocSubscriptionConfi
       readPositiveNumber(source, 'maxTotalBytesPerRun', 'max_total_bytes_per_run') ??
       DEFAULT_CONFIG.maxTotalBytesPerRun,
     enabled: readBoolean(source, 'enabled', 'enabled') ?? DEFAULT_CONFIG.enabled,
+    ...(envGranularity !== undefined ? { envGranularity } : {}),
   };
 }

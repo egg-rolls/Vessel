@@ -27,7 +27,7 @@
  * @module @vessel-agent/agent
  */
 
-import type { Hook, HookType, Message } from '@vessel-agent/core';
+import type { EnvCadence, Hook, HookType, Message } from '@vessel-agent/core';
 import {
   ENV_INFO_DETAIL_MARK,
   ENV_INFO_MESSAGE_NAME,
@@ -319,6 +319,15 @@ export interface SelfCardDeltaHookOptions {
    * 探针抛错按「这一轮不报」处理，绝不让一条提示拖垮一轮 LLM 请求。
    */
   current: () => SelfCardIdentity;
+  /**
+   * 检测节奏（注入粒度框架轴 A；缺省 'request' = 今天行为，零回归）。
+   *
+   * 'run' ⇒ 每 run 只在首次请求观察 / diff（`request_index > 0` 早退）。
+   * **整 hook 取最细**：装配层传 `finestCadence(['identity','fields','model','tools','context'], …)`，
+   * 任一 scope 是 request ⇒ 整 hook request。不做 per-kind 分裂（避免 per-kind reported
+   * 跟踪复杂度）：混合配置整 hook 取 request，要整体推迟须把五个 scope 全配 run。
+   */
+  cadence?: EnvCadence;
 }
 
 /**
@@ -334,6 +343,9 @@ export function createSelfCardDeltaHook(options: SelfCardDeltaHookOptions): Hook
     name: SELF_CARD_DELTA_HOOK,
     type: BEFORE_LLM,
     async run(ctx): Promise<void> {
+      // 节奏 gate 在观察 / diff 之前：否则 reported 已推进而卡被吞 = 变更永丢。
+      // request_index 缺省 0（旧 caller）⇒ 恒放行，零回归。
+      if (options.cadence === 'run' && (ctx.request_index ?? 0) > 0) return;
       let current: SelfCardIdentity;
       try {
         current = options.current();

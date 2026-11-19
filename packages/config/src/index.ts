@@ -87,6 +87,12 @@ export {
   parseEnvFile,
 } from './env-file.js';
 export {
+  DEFAULT_ENV_CADENCE,
+  finestCadence,
+  PINNED_REQUEST_SCOPES,
+  resolveEnvCadence,
+} from './env-injection.js';
+export {
   checkPlatformTokenConflict,
   resolveGatewayNodePorts,
   resolvePlatformProxySecret,

@@ -34,6 +34,7 @@ import {
   type TeamRecord,
   type TeamStore,
 } from '@vessel-agent/agent';
+import type { EnvInjectionConfig } from '@vessel-agent/config';
 import type {
   ContextSummarizer,
   EventStream,
@@ -83,6 +84,8 @@ export interface AgentServiceWiringOptions {
   contextMaxTokens?: number;
   /** 0.34 S2 / C5：成员上下文的压缩阈值；装配层传 `config.context.compactThreshold`。 */
   contextCompactThreshold?: number;
+  /** 注入粒度框架：装配层传 `config.envInjection`；self-card hook 取最细节奏。 */
+  envInjection?: EnvInjectionConfig;
   /**
    * 0.56：附件入池（上传即落 blob）。装配层传 `createConfigAttachmentIngest`。
    * 缺省 = 不入池（图不内联，但不报错）。
@@ -244,6 +247,7 @@ export function buildMemberExecutionOptions(
     ...(options.contextCompactThreshold !== undefined
       ? { contextCompactThreshold: options.contextCompactThreshold }
       : {}),
+    ...(options.envInjection !== undefined ? { envInjection: options.envInjection } : {}),
     ...(options.summarizer !== undefined ? { summarizer: options.summarizer } : {}),
     ...(options.summarizerForSession !== undefined
       ? { summarizerForSession: options.summarizerForSession }

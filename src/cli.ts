@@ -1019,7 +1019,7 @@ async function runWithConfig(result: BootstrapResult) {
         events: result.bundle?.runtimeEvents ?? ctx.events,
         tenantId: result.tenantId,
       });
-    registerRuntimeNoticeHook(ctx.pluginHost, noticeBus);
+    registerRuntimeNoticeHook(ctx.pluginHost, noticeBus, undefined, liveConfig.envInjection);
     // 0.52：附件引用的环境信息行（同一 host、同一 BeforeLlm 阶段）。
     // 0.56 P1：视觉面探针——有 `provider.vision` 且没被 kill switch 关时，尾注改说
     // 「图已随本条消息附上，不要再读」（否则模型会把图再读一遍 = 双倍花费）。
@@ -1046,7 +1046,15 @@ async function runWithConfig(result: BootstrapResult) {
     // 插件安装配置基线（用于识别「定义没变但行为配置变了」）：
     // `computeTargetTools` 每次读到的配置写入 `lastToolsConfigKey`，`targetKey` 读它。
     const pluginConfigKeyOf = (value: VesselConfig): string =>
-      JSON.stringify(buildPluginConfigMap(value.plugins, declarativePluginEntries(value)));
+      JSON.stringify(
+        buildPluginConfigMap(
+          value.plugins,
+          declarativePluginEntries(value),
+          undefined,
+          undefined,
+          value.envInjection,
+        ),
+      );
     const lastToolsConfigKey: { current?: string } = { current: pluginConfigKeyOf(config) };
     const toolsConfigKey: { value?: string } = { value: lastToolsConfigKey.current };
     // tools-engine P2：computeTargetTools 读到的最新配置（接线与装配同一份 buildPluginConfigMap）。
@@ -1121,6 +1129,7 @@ async function runWithConfig(result: BootstrapResult) {
             declarativePluginEntries(next),
             resolveAgentCwd(next),
             resolveDataDir(next),
+            next.envInjection,
           );
           syncBasicToolsEngineWiring(
             result.toolsEngine.client,

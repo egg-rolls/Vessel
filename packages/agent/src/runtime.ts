@@ -12,7 +12,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { TeamPermissionPolicy } from '@vessel-agent/config';
+import {
+  type EnvInjectionConfig,
+  finestCadence,
+  type TeamPermissionPolicy,
+} from '@vessel-agent/config';
 import {
   type ContextAnchor,
   type ContextSummarizer,
@@ -418,6 +422,12 @@ export interface MemberExecutionHostOptions {
    * 缺省时内层 `MemoryWorkingContext` 用 core 兜底值。
    */
   contextCompactThreshold?: number;
+  /**
+   * 环境信息注入节奏配置（YAML `env_injection`）。装配层传入 `config.envInjection`；
+   * self-card-delta hook 的 cadence 取 identity/fields/model/tools/context 的最细值。
+   * 缺省 ⇒ 内置默认表（全 request）= 今天行为，零回归。
+   */
+  envInjection?: EnvInjectionConfig;
   /** 成员上下文的真实摘要器；缺省时压缩退回占位摘要。 */
   summarizer?: ContextSummarizer;
   /**
@@ -938,6 +948,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
   private readonly termination: TerminationPolicy;
   private readonly contextMaxTokens: number;
   private readonly contextCompactThreshold: number | undefined;
+  private readonly envInjection: EnvInjectionConfig | undefined;
   private readonly summarizer: ContextSummarizer | undefined;
   private readonly summarizerForSession: ((sessionId: string) => ContextSummarizer) | undefined;
   private readonly depth: number;
@@ -974,6 +985,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
     this.termination = options.termination ?? DEFAULT_TERMINATION;
     this.contextMaxTokens = options.contextMaxTokens ?? DEFAULT_CONTEXT_MAX_TOKENS;
     this.contextCompactThreshold = options.contextCompactThreshold;
+    this.envInjection = options.envInjection;
     this.summarizer = options.summarizer;
     this.summarizerForSession = options.summarizerForSession;
     this.depth = options.depth ?? 1;
@@ -1046,6 +1058,12 @@ export class MemberExecutionHost implements MemberExecutionPort {
             { ...selfCardIdentity.member, model: selfCardIdentity.member.model ?? this.model },
             this.effectivePermissionMode(selfCardIdentity.member),
           ),
+        // 整 hook 取最细（不做 per-kind 分裂，见 SelfCardDeltaHookOptions.cadence）：
+        // 五个 scope 任一 request ⇒ request；缺省配置全 request = 今天行为。
+        cadence: finestCadence(
+          ['identity', 'fields', 'model', 'tools', 'context'],
+          this.envInjection,
+        ),
       }),
     );
     // tools-body-snapshot：工具面变更卡改由 core EU 生产（ExecutionUnit.appendToolSurfaceNotice，

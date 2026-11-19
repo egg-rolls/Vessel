@@ -87,6 +87,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type {
+  EnvCadence,
   Hook,
   HookContext,
   Plugin,
@@ -105,7 +106,7 @@ import {
   toolOutputRoot,
   writeToolOutput,
 } from '@vessel-agent/core';
-import { acquireWriteLock, type WriteLock, WriteLockError } from './write-lock.js';
+import { acquireWriteLock, type WriteLock, WriteLockError, writeLockPath } from './write-lock.js';
 
 // ── 常量 ──────────────────────────────────────────
 
@@ -304,6 +305,11 @@ export interface BasicToolsConfig {
   denyPaths?: string[];
   /** 默认工作目录（支持 `~`；相对路径按进程 cwd 解析）。bash 未传 cwd、read/edit 相对路径使用 */
   cwd?: string;
+  /**
+   * 注入粒度（env_injection 框架轴 A）：scope → 检测节奏，由装配层按 `env_injection` 配置
+   * 解析后注入（basic-tools 只产 lock / conflict）。缺省 = 内置字面量默认（lock/conflict=request）。
+   */
+  envGranularity?: Record<string, EnvCadence>;
 }
 
 /** 从记录读取字符串数组字段（camelCase 优先，兼容 snake_case） */
@@ -329,16 +335,32 @@ function readStringField(
   return undefined;
 }
 
+/**
+ * 读取 envGranularity 字段（scope → cadence；只认 'request' / 'run'）。
+ * 非法值 / 未知键忽略 —— 缺省回落到 producer 的内置字面量节奏（零回归）。
+ */
+function readEnvGranularity(record: Record<string, unknown>): Record<string, EnvCadence> | undefined {
+  const value = record.envGranularity ?? record.env_granularity;
+  if (!isRecord(value)) return undefined;
+  const granularity: Record<string, EnvCadence> = {};
+  for (const [scope, cadence] of Object.entries(value)) {
+    if (cadence === 'request' || cadence === 'run') granularity[scope] = cadence;
+  }
+  return Object.keys(granularity).length > 0 ? granularity : undefined;
+}
+
 /** 把 YAML 里的插件配置解析成已知字段（未知键忽略） */
 export function parseBasicToolsConfig(value: unknown): BasicToolsConfig {
   if (!isRecord(value)) return {};
   const allowedRoots = readStringArray(value, 'allowedRoots', 'allowed_roots');
   const denyPaths = readStringArray(value, 'denyPaths', 'deny_paths');
   const cwd = readStringField(value, 'cwd', 'working_dir');
+  const envGranularity = readEnvGranularity(value);
   return {
     ...(allowedRoots !== undefined ? { allowedRoots } : {}),
     ...(denyPaths !== undefined ? { denyPaths } : {}),
     ...(cwd !== undefined ? { cwd } : {}),
+    ...(envGranularity !== undefined ? { envGranularity } : {}),
   };
 }
 
@@ -1703,6 +1725,189 @@ export function createAsyncBashNoticeHook(): Hook {
   };
 }
 
+// ── 写协调表面记录（lock / conflict） ────────────────────────────────
+//
+// 注入粒度框架 M3：写锁争用 / expected_content 并发冲突这两类「写协调事实」除了照旧折进
+// 工具错误文本，还额外记一条表面条目，在下一次 LLM 请求前以 `vessel:notice` 环境卡注入
+// （与 async bash / doc-subscription 同一条通道）。**工具失败语义不变**：记录点仍返回原
+// 错误文本，卡是 additive 表面（今天这两类事实没有卡 ⇒ 非回归）。
+//
+// scope 词与明细标记是跨包契约的字面量副本（插件不 import agent）：必须与
+// `packages/agent/src/env-info-scope.ts` 的 ENV_INFO_SCOPES / ENV_INFO_DETAIL_MARK 逐字相同，
+// Web 的 `env-notice.ts` 按行首 token 认 scope、按行首标记认明细行。改任一侧人工核对另一侧。
+
+/** 环境信息 scope 词：工作区写锁争用 / 超时 / 不可用 */
+const WRITE_LOCK_SCOPE = 'lock';
+
+/** 环境信息 scope 词：expected_content 并发修改冲突 */
+const WRITE_CONFLICT_SCOPE = 'conflict';
+
+/** 明细行标记：两个空格 + `·`（与 agent ENV_INFO_DETAIL_MARK 逐字同） */
+const ENV_DETAIL_MARK = '  · ';
+
+/** 写协调通知的 hook 注册名（幂等注册用，口径同 ASYNC_BASH_NOTICE_HOOK） */
+export const WRITE_COORD_NOTICE_HOOK = 'write-coord-notice';
+
+/** 一张卡最多带几条明细（与 agent ENV_INFO_DETAILS_MAX 同）；超出折 `+N more` */
+const WRITE_COORD_DETAILS_MAX = 10;
+
+/** 未注入条目的保留时长（ASYNC_RECORD_TTL_MS 同口径）：会话不再跑时事实仍在工具结果里，丢内存副本不算丢事实 */
+const COORD_RECORD_TTL_MS = 60 * 60_000;
+
+/** 已注入条目每会话只留最近这么多条（MAX_ASYNC_RECORDS 同口径）——它们是签名去重记忆，上限只淘汰已送达的 */
+const MAX_COORD_RECORDS = 16;
+
+/** lock 卡摘要（统一字面量；具体锁路径 / 错误进明细行） */
+const WRITE_LOCK_SUMMARY = 'write lock contention or lock unavailable; write not performed';
+
+/** conflict 卡摘要（统一字面量；具体路径 / 字节数进明细行） */
+const WRITE_CONFLICT_SUMMARY =
+  'concurrent modification conflict; write not performed (expected_content mismatch)';
+
+/** 一条待注入的写协调事实 */
+interface PendingCoordNotice {
+  scope: typeof WRITE_LOCK_SCOPE | typeof WRITE_CONFLICT_SCOPE;
+  summary: string;
+  details: string[];
+  /** 去重签名（同签名只注入一次） */
+  signature: string;
+  ts: number;
+  /** 已注入过；announced 条目留在缓冲里作签名去重记忆，受 MAX_COORD_RECORDS 裁剪 */
+  announced?: boolean;
+}
+
+/**
+ * 待注入条目的唯一持有者：**进程级**（asyncJobs 同理）——热应用用旁路 host 反复 install，
+ * 状态跟安装实例走会让记录落在 hook 永远看不到的表里。键 = session_id ?? '_'。
+ */
+const pendingCoordNotices = new Map<string, PendingCoordNotice[]>();
+
+function coordSessionKey(sessionId: string | undefined): string {
+  return sessionId ?? '_';
+}
+
+/**
+ * 裁剪（pruneAsyncJobs 同形，两条常量上界）：
+ * 1) 未注入条目超过 COORD_RECORD_TTL_MS 过期；
+ * 2) 已注入（announced）条目每会话只留最近 MAX_COORD_RECORDS 条。
+ * 未注入条目不受 MAX 裁剪 —— 「事实还没送到模型」不因保留上限而丢。
+ */
+function pruneCoordNotices(): void {
+  const now = Date.now();
+  for (const [key, entries] of pendingCoordNotices) {
+    const announced = entries.filter((entry) => entry.announced === true);
+    let droppedOldest: Set<PendingCoordNotice> | undefined;
+    const excess = announced.length - MAX_COORD_RECORDS;
+    if (excess > 0) {
+      announced.sort((left, right) => left.ts - right.ts);
+      droppedOldest = new Set(announced.slice(0, excess));
+    }
+    const kept = entries.filter((entry) => {
+      if (droppedOldest?.has(entry) === true) return false;
+      if (entry.announced === true) return true;
+      return now - entry.ts <= COORD_RECORD_TTL_MS;
+    });
+    if (kept.length === 0) pendingCoordNotices.delete(key);
+    else if (kept.length !== entries.length) pendingCoordNotices.set(key, kept);
+  }
+}
+
+/** 记一条写协调事实（工具失败点调用；不改工具返回值）。 */
+function recordCoordNotice(
+  sessionId: string | undefined,
+  entry: Pick<PendingCoordNotice, 'scope' | 'summary' | 'details' | 'signature'>,
+): void {
+  const key = coordSessionKey(sessionId);
+  const entries = pendingCoordNotices.get(key) ?? [];
+  entries.push({ ...entry, ts: Date.now() });
+  pendingCoordNotices.set(key, entries);
+  pruneCoordNotices();
+}
+
+/** 一张卡的草稿（drain 时按 scope 聚合；每 scope 一条消息，混 scope 不合并） */
+interface CoordCardDraft {
+  summary: string;
+  details: string[];
+  events: number;
+}
+
+/**
+ * 排空本会话待注入条目：**按条目 scope 的 cadence 过滤**（cadence 缺省 request）——
+ * `cadence==='run' && requestIndex>0` 的条目跳过、留在缓冲（下个 run 首请求再 drain），
+ * 其余 drain。gate 在 drain 而不是记录点：记录是工具侧事实，节奏只决定何时上表面，不丢事实。
+ *
+ * 签名去重：同签名只注入一次（announced 标记；缓冲里的 announced 条目是去重记忆）。
+ * 返回的每张卡是一个 scope 的完整正文（formatEnvInfo 形状字面量拼）。
+ */
+function takeWriteCoordNotices(
+  sessionId: string | undefined,
+  granularity: Record<string, EnvCadence> | undefined,
+  requestIndex: number,
+): string[] {
+  const entries = pendingCoordNotices.get(coordSessionKey(sessionId));
+  if (entries === undefined || entries.length === 0) return [];
+  const announcedSignatures = new Set<string>();
+  for (const entry of entries) {
+    if (entry.announced === true) announcedSignatures.add(entry.signature);
+  }
+  const byScope = new Map<string, CoordCardDraft>();
+  for (const entry of entries) {
+    if (entry.announced === true) continue;
+    const cadence = granularity?.[entry.scope] ?? 'request';
+    if (cadence === 'run' && requestIndex > 0) continue;
+    entry.announced = true;
+    if (announcedSignatures.has(entry.signature)) continue;
+    announcedSignatures.add(entry.signature);
+    const draft = byScope.get(entry.scope) ?? { summary: entry.summary, details: [], events: 0 };
+    draft.details.push(...entry.details);
+    draft.events += 1;
+    byScope.set(entry.scope, draft);
+  }
+  const cards: string[] = [];
+  for (const [scope, draft] of byScope) {
+    // 首行 `scope: 摘要`（多事件带计数），明细行 `  · `；明细超预算折 `+N more`。
+    const head =
+      draft.events > 1
+        ? `${scope}: ${draft.summary} (${draft.events} events)`
+        : `${scope}: ${draft.summary}`;
+    const kept = draft.details.slice(0, WRITE_COORD_DETAILS_MAX);
+    const dropped = draft.details.length - kept.length;
+    const lines = kept.map((detail) => `${ENV_DETAIL_MARK}${detail}`);
+    if (dropped > 0) lines.push(`${ENV_DETAIL_MARK}+${dropped} more`);
+    cards.push([head, ...lines].join('\n'));
+  }
+  pruneCoordNotices();
+  return cards;
+}
+
+/**
+ * 写协调通知的 BeforeLlm hook：把 lock / conflict 表面记录作为 `vessel:notice` 环境卡
+ * 追加到本次请求（每 scope 一条消息）。**每请求都跑**，cadence 过滤在 drain 内按条目
+ * scope 生效（lock / conflict 可各配不同节奏，整 hook 早退会吞掉另一 scope 的卡）。
+ * priority 165：排在 async bash（160）之后 —— 写协调是更近的工具侧事实，更靠近本轮请求。
+ */
+export function createWriteCoordNoticeHook(granularity?: Record<string, EnvCadence>): Hook {
+  return {
+    name: WRITE_COORD_NOTICE_HOOK,
+    type: HookType.BeforeLlm,
+    priority: 165,
+    run: async (ctx: HookContext): Promise<void> => {
+      const cards = takeWriteCoordNotices(ctx.session_id, granularity, ctx.request_index ?? 0);
+      if (cards.length === 0) return;
+      const timestamp = Date.now();
+      ctx.messages = [
+        ...(ctx.messages ?? []),
+        ...cards.map((content) => ({
+          role: 'user' as const,
+          name: ASYNC_NOTICE_MESSAGE_NAME,
+          content,
+          timestamp,
+        })),
+      ];
+    },
+  };
+}
+
 /** 执行 bash 命令；超时/取消返回错误文本，不抛异常 */
 async function runBash(
   args: unknown,
@@ -2158,6 +2363,19 @@ async function runWithWriteLock(
     lock = await acquireWriteLock(baseCwd.path, ctx.signal);
   } catch (error) {
     if (ctx.signal?.aborted) return CANCELLED_TEXT;
+    // 表面记录（additive）：锁争用 / 不可用是环境事实，下次请求前注入 lock 卡；
+    // 工具失败语义不变，仍返回原错误文本。holder 身份不在 WriteLockError 上，不可得则不写。
+    const lockPath = writeLockPath(baseCwd.path);
+    const errorClass = error instanceof Error ? error.name : 'Error';
+    recordCoordNotice(ctx.session_id, {
+      scope: WRITE_LOCK_SCOPE,
+      summary: WRITE_LOCK_SUMMARY,
+      details: [
+        `lock: ${lockPath}`,
+        `error: ${errorClass}: ${oneLineText(error instanceof Error ? error.message : String(error))}`,
+      ],
+      signature: `${WRITE_LOCK_SCOPE}|${lockPath}|${errorClass}`,
+    });
     return error instanceof WriteLockError
       ? error.message
       : `错误：写入锁获取失败：${String(error)}`;
@@ -2520,6 +2738,17 @@ function writeFileText(
     }
     if (!current.equals(Buffer.from(args.expected_content, 'utf-8'))) {
       const currentLines = countTextLines(current.toString('utf-8'));
+      // 表面记录（additive）：并发修改冲突是环境事实，下次请求前注入 conflict 卡；
+      // 工具失败语义不变，仍返回原错误文本。签名按绝对路径（同一文件的不同拼写去重）。
+      recordCoordNotice(ctx.session_id, {
+        scope: WRITE_CONFLICT_SCOPE,
+        summary: WRITE_CONFLICT_SUMMARY,
+        details: [
+          `path: ${inputPath}`,
+          `current: ${groupThousands(current.byteLength)} bytes / ${groupThousands(currentLines)} lines`,
+        ],
+        signature: `${WRITE_CONFLICT_SCOPE}|${absolute}`,
+      });
       return (
         `错误：expected_content 与当前文件内容不符，未写入（当前 ${groupThousands(current.byteLength)} 字节 / ` +
         `${groupThousands(currentLines)} 行）。文件在你读取后已被改动：请用 read 重读最新内容，` +
@@ -2675,8 +2904,9 @@ export function createBasicTools(config: BasicToolsConfig = {}): ToolDefinition[
 /**
  * basic-tools 插件——唯一工具包，install 时把四个工具注册进 PluginHost。
  *
- * 0.55：install 还要注册**一个** BeforeLlm hook（异步 bash 的完成通知）。按名字幂等：
- * 热应用的旁路 host 会为算目标工具集反复 install 同一个插件，重复注册会让同一条通知被注入两次。
+ * 0.55：install 还要注册 BeforeLlm hook（异步 bash 的完成通知；M3 起又加写协调 lock/conflict
+ * 通知）。按名字幂等：热应用的旁路 host 会为算目标工具集反复 install 同一个插件，重复注册
+ * 会让同一条通知被注入两次。
  */
 export const basicToolsPlugin: Plugin = {
   name: 'basic-tools',
@@ -2690,6 +2920,11 @@ export const basicToolsPlugin: Plugin = {
     // 幂等注册：同一个 host 上只留一个（`RUNTIME_NOTICE_HOOK` / `REFS_NOTICE_HOOK` 同口径）
     if (!host.getHooks().some((hook) => hook.name === ASYNC_BASH_NOTICE_HOOK)) {
       host.registerHook(createAsyncBashNoticeHook());
+    }
+    // 写协调通知（lock/conflict）：cadence 从 install config 的 envGranularity 读，
+    // 缺省不注入 ⇒ producer 用内置字面量默认（request）。
+    if (!host.getHooks().some((hook) => hook.name === WRITE_COORD_NOTICE_HOOK)) {
+      host.registerHook(createWriteCoordNoticeHook(config.envGranularity));
     }
   },
   /**

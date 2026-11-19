@@ -92,6 +92,7 @@ import {
   type PromptContextFingerprint,
   type WorkingContext,
 } from '../types/context.js';
+import type { EnvCadence } from '../types/env-cadence.js';
 import type { ErrorEnvelope } from '../types/error.js';
 import type {
   EventStream,
@@ -1025,6 +1026,16 @@ export class ExecutionUnit {
   private readonly reportedImageDelivery = new Map<string, Set<string>>();
   /** kill switch 已报告过的会话（每个会话一条 `vision.disabled`，不是静默） */
   private readonly visionDisabledReported = new Set<string>();
+  /**
+   * 环境信息检测节奏端口（注入粒度框架轴 A）：装配层注入，缺省 undefined ⇒
+   * `envCadenceAllows` 恒 true（恒按 request 观察，零回归）。core 不认识 scope 业务词。
+   */
+  private readonly envCadence?: (scope: string) => EnvCadence;
+  /**
+   * cadence='run' 的 per-run 首请求守卫：runId → 本 run 已观察过的 scope 集。
+   * 环形上限 64（仿 runtime-notice-hook 的 injectedByRun）：长进程不无界增长。
+   */
+  private readonly envRunGated = new Map<string, Set<string>>();
 
   private constructor(opts: ExecutionUnitOptions) {
     this.provider = opts.provider;
@@ -1048,6 +1059,7 @@ export class ExecutionUnit {
     this.leaseService = opts.leaseService;
     this.bindingLease = opts.bindingLease;
     this.visionSettings = opts.vision;
+    this.envCadence = opts.envCadence;
     // 缺省走中枢薄封装：级别跟随进程级配置（不再以 VESSEL_DEBUG 定死 debug/noop）。
     this.logger = opts.logger ?? createStderrLogger();
     // 空闲 EU 也必须续租 BindingLease：仅靠 acquireSessionLease/ensureSessionLease
@@ -2207,6 +2219,35 @@ export class ExecutionUnit {
   }
 
   /**
+   * 检测节奏 gate（轴 A）：`cadence='run'` 时每 run 只放行**首次观察**。
+   *
+   * 端口未注入 / cadence='request' ⇒ 恒 true（缺省零回归）。必须在 producer 的
+   * **观察 / diff 之前**调用：否则 believed-value 已推进而卡被吞 = 变更永丢。
+   * 去重（轴 B：believed-value / 游标 / 签名 / 预算）恒开，与本 gate 正交。
+   * model / trim 的自然节奏钉死（前缀不变量 / EU 生命周期），不经此 gate。
+   */
+  private envCadenceAllows(scope: string, runId: string): boolean {
+    if (this.envCadence?.(scope) !== 'run') return true;
+    // runId 未知（无 active run）：无法 per-run 记帐，放行（退化为 request，不吞卡）。
+    if (runId === '') return true;
+    const RUNS_REMEMBERED_MAX = 64;
+    let seen = this.envRunGated.get(runId);
+    if (seen === undefined) {
+      seen = new Set<string>();
+      this.envRunGated.set(runId, seen);
+      // 环形上限：只留最近 N 个 run 的记帐（长时间运行的进程不无界增长）。
+      while (this.envRunGated.size > RUNS_REMEMBERED_MAX) {
+        const oldest = this.envRunGated.keys().next();
+        if (oldest.done === true) break;
+        this.envRunGated.delete(oldest.value);
+      }
+    }
+    if (seen.has(scope)) return false;
+    seen.add(scope);
+    return true;
+  }
+
+  /**
    * 发请求前扫一遍已经 append 的消息，把**已经解不开**的占位符集合追加成一条 env 卡。
    *
    * append-only 决定了「失效」只能以**追加**表达（不能回改成新的标记形状）。
@@ -2214,6 +2255,8 @@ export class ExecutionUnit {
    * 整批失效（broker 重启）与个别失效共用同一张卡的额度（每 session 至多一张）。
    */
   private async appendPiiDeadNotice(sessionId: string): Promise<void> {
+    // 节奏 gate 在扫消息之前（run 级配置下后续请求不观察；去重轴不受影响）。
+    if (!this.envCadenceAllows('pii', this.activeRun?.runId ?? '')) return;
     const vault = this.piiVault();
     if (!vault.isEnabled) return;
     const seen = new Set<string>();
@@ -2348,6 +2391,9 @@ export class ExecutionUnit {
    * （否则双卡）；热应用既有的 scope `config` 摘要卡保留（语义不同，D5）。
    */
   private appendToolSurfaceNotice(execution: Run): void {
+    // 节奏 gate 在 diff 之前（run 级配置下后续请求不观察）。工具面 pin 不受影响：
+    // ensureToolPin 另由 listToolSchemas 每请求独立调用。
+    if (!this.envCadenceAllows('tools', execution.runId)) return;
     const pin = this.ensureToolPin(execution.sessionId);
     const reported = this.reportedToolSurface;
     const reportedNames =

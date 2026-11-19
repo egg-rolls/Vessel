@@ -6,12 +6,14 @@
 import { isIP } from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { ENV_CADENCE_VALUES } from '@vessel-agent/core';
 import {
   describeRegisteredAuthKinds,
   getAuthStrategy,
   PASSWORD_STRATEGY_KIND,
   requiresPublicOrigin,
 } from './auth-strategies/index.js';
+import { DEFAULT_ENV_CADENCE, PINNED_REQUEST_SCOPES } from './env-injection.js';
 import { validateTeamPolicy } from './team-policy.js';
 import type {
   AttentionConfig,
@@ -20,6 +22,7 @@ import type {
   ConfigValidationResult,
   ConfigValidationWarning,
   ContextConfig,
+  EnvInjectionConfig,
   EvalsConfig,
   FederationConfig,
   FeishuConfig,
@@ -419,6 +422,61 @@ function validateContext(context: ContextConfig, errors: ConfigValidationError[]
       message: 'context.compactThreshold must be a number between 0 (exclusive) and 1 (inclusive)',
       value: compactThreshold,
     });
+  }
+}
+
+/**
+ * 校验 env_injection 块（注入节奏框架）：
+ * - `default` 若存在必须 ∈ ENV_CADENCE_VALUES；
+ * - `scopes` 每键：值 ∈ ENV_CADENCE_VALUES；键必须在 DEFAULT_ENV_CADENCE（拒未知词，防 typo）；
+ * - 键 ∈ PINNED_REQUEST_SCOPES 且值 === 'request' ⇒ 报错拒绝（不静默钳制）。
+ */
+function validateEnvInjection(
+  envInjection: EnvInjectionConfig,
+  errors: ConfigValidationError[],
+): void {
+  const { default: defaultCadence, scopes } = envInjection;
+
+  if (
+    defaultCadence !== undefined &&
+    !(ENV_CADENCE_VALUES as readonly string[]).includes(defaultCadence)
+  ) {
+    errors.push({
+      path: 'envInjection.default',
+      message: 'envInjection.default must be one of "request", "run"',
+      value: defaultCadence,
+    });
+  }
+
+  if (scopes === undefined) return;
+  for (const [scope, cadence] of Object.entries(scopes)) {
+    const scopePath = `envInjection.scopes.${scope}`;
+    if (!(scope in DEFAULT_ENV_CADENCE)) {
+      errors.push({
+        path: scopePath,
+        message: `envInjection.scopes.${scope} is not a known scope (see DEFAULT_ENV_CADENCE)`,
+        value: cadence,
+      });
+    }
+    if (cadence === undefined) continue;
+    if (typeof cadence !== 'string' || !(ENV_CADENCE_VALUES as readonly string[]).includes(cadence)) {
+      errors.push({
+        path: scopePath,
+        message: 'envInjection.scopes values must be one of "request", "run"',
+        value: cadence,
+      });
+      continue;
+    }
+    if (cadence === 'request' && (PINNED_REQUEST_SCOPES as readonly string[]).includes(scope)) {
+      errors.push({
+        path: scopePath,
+        message:
+          scope === 'trim'
+            ? 'envInjection.scopes.trim is pinned to "run" (segment-start freezing is a prefix invariant); "request" is not configurable'
+            : 'envInjection.scopes.model is pinned to "run" (model notice follows the EU first-run lifecycle); "request" is not configurable',
+        value: cadence,
+      });
+    }
   }
 }
 
@@ -3216,6 +3274,11 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     validateContext(config.context, errors);
   }
 
+  // 校验 env_injection（注入节奏框架；缺省 = 内置默认表，零回归）
+  if (config.envInjection) {
+    validateEnvInjection(config.envInjection, errors);
+  }
+
   // 校验 session
   if (config.session) {
     const { backend, storagePath } = config.session;
@@ -3765,6 +3828,9 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'inboxMaxMessages',
   ],
   session: ['backend', 'storagePath', 'maxHistory'],
+  // 注入节奏框架：scopes 的键是 scope 词（数据不属配置键），未知词拒绝在
+  // validateEnvInjection 里按 DEFAULT_ENV_CADENCE 做。
+  envInjection: ['default', 'scopes'],
   pricing: ['models'],
   permission: ['autoApprove', 'neverAutoApprove'],
   update: ['autoCheck', 'channel', 'source'],
@@ -4024,6 +4090,8 @@ export const KNOWN_CONFIG_KEYS = [
   'pricing',
   'session',
   'context',
+  // 注入节奏框架（YAML `env_injection`）；缺省 = 内置默认表，零回归。
+  'envInjection',
   // 0.56：视觉段（刻意没有 `enable` 键：支持即直通，`disabled` 是 kill switch）。
   'vision',
   'permission',

@@ -55,6 +55,11 @@ export interface TenantRuntimeProfile {
    * 能力不在这里：问 `provider.vision`（插件的 `VisionBackend`）。缺省 = 支持即直通。
    */
   vision?: import('../types/vision.js').VisionSettings;
+  /**
+   * 环境信息检测节奏端口（见 `ExecutionUnitOptions.envCadence`）；
+   * 缺省不注入 ⇒ producer 恒按 request 观察（零回归）。
+   */
+  envCadence?: (scope: string) => import('../types/env-cadence.js').EnvCadence;
   context: {
     maxTokens?: number;
     autoCompact?: boolean;
@@ -265,6 +270,8 @@ export class Runtime {
           : {}),
       // 0.56：视觉运行期设置（能力在 provider.vision 上，由插件挂）。
       ...(profile.vision !== undefined ? { vision: profile.vision } : {}),
+      // 注入粒度框架：notice producer 的检测节奏端口（缺省不注入 ⇒ 恒 request）。
+      ...(profile.envCadence !== undefined ? { envCadence: profile.envCadence } : {}),
       ...(overrides?.selfCard !== undefined ? { selfCard: overrides.selfCard } : {}),
       ...(overrides?.contextPressureHint !== undefined
         ? { contextPressureHint: overrides.contextPressureHint }

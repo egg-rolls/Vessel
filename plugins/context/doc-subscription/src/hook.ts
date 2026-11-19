@@ -2,7 +2,8 @@
  * @vessel-agent/doc-subscription - BeforeLlm 变更通知
  * @module @vessel-agent/doc-subscription/hook
  *
- * 每个 run 的第一次 BeforeLlm 检查一次订阅文件，向 `ctx.messages` 追加一条
+ * 默认每个 run 的第一次 BeforeLlm 检查一次订阅文件（`envGranularity.files='request'` 时
+ * 每请求检查），向 `ctx.messages` 追加一条
  * **只含元数据**的持久化尾部消息（`role: user` + `name: 'vessel:notice'`，正文首行
  * `files: …`，明细行 `  · …`），不改写 system、不再经 `HookResult.additionalContext` 注入。
  *
@@ -262,9 +263,15 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
     priority: 150,
     run: async (ctx: HookContext): Promise<HookResult | undefined> => {
       const runId = ctx.run_id;
-      if (processedRuns.has(runId)) return;
-      if (processedRuns.size >= MAX_TRACKED_RUNS) processedRuns.clear();
-      processedRuns.add(runId);
+      // files 检测节奏（env_injection 框架轴 A）：装配层经 envGranularity.files 注入，
+      // 缺省 'run' = 原 processedRuns gate（每 run 首请求观察一次，零回归）；
+      // 'request' 跳过该 gate，每请求观察（去重轴 notified_rev 不动，不会重复发卡）。
+      const filesCadence = deps.config.envGranularity?.files ?? 'run';
+      if (filesCadence === 'run') {
+        if (processedRuns.has(runId)) return;
+        if (processedRuns.size >= MAX_TRACKED_RUNS) processedRuns.clear();
+        processedRuns.add(runId);
+      }
 
       const sessionId = ctx.session_id ?? 'default';
 
