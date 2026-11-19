@@ -101,7 +101,7 @@ import {
   type TimelinePublication,
 } from './timeline-dual-write';
 import { createTimelineSessionLog, type TimelineSessionLog } from './timeline-session-log';
-import { syncBasicToolsEngineWiring } from './tools-engine/wiring';
+import { syncBasicToolsEngineWiring, syncCallbackToolsEngineWiring } from './tools-engine/wiring';
 import {
   composeTraceRedactors,
   installTrace,
@@ -963,6 +963,8 @@ export async function buildTenantRuntime(
   // pushRegistry 失败只记日志：engine disabled 时工具 fail-closed，不静默回退 in-process。
   if (options.engineClient !== undefined) {
     syncBasicToolsEngineWiring(options.engineClient, finalPluginHost, pluginConfigs['basic-tools']);
+    // 批次 3：ask（ask-user 插件）/ recall / pii_reveal（guardrail-pii 插件）恒 callback。
+    syncCallbackToolsEngineWiring(options.engineClient, finalPluginHost);
     try {
       await options.engineClient.pushRegistry();
     } catch (error) {

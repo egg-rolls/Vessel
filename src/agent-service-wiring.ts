@@ -165,6 +165,11 @@ export interface AgentServiceWiringOptions {
    * 缺省 = 不报（纯内存 / 无通知总线的入口）。
    */
   peerStops?: PeerStopSink;
+  /**
+   * tools-engine P2 批次 3：inbox 转发接线端口（透传执行内核；装配层注入
+   * engine-client wireTool + 喂账本）。缺省 = 不接线（in-process 直执行）。
+   */
+  wireInboxTool?: MemberExecutionHostOptions['wireInboxTool'];
 }
 
 export interface AgentServiceWiring {
@@ -257,6 +262,7 @@ export function buildMemberExecutionOptions(
     ...(options.session !== undefined ? { session: options.session } : {}),
     ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
     ...(options.leaseService !== undefined ? { leaseService: options.leaseService } : {}),
+    ...(options.wireInboxTool !== undefined ? { wireInboxTool: options.wireInboxTool } : {}),
     ...(cwdFor !== undefined ? { cwdFor } : {}),
     tenantId: options.tenantId,
     // 来源行的 node 段：与 federation 端口同源（bootstrap 的 nodeIdentity），
