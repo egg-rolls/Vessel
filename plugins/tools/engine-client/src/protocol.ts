@@ -16,6 +16,13 @@
 
 import { createHash } from 'node:crypto';
 import type { SerializedBoundary } from '@vessel-agent/basic-tools';
+import type {
+  McpPromptDef,
+  McpResourceDef,
+  McpServerConfig,
+  McpServerStatus,
+  McpToolDef,
+} from '@vessel-agent/mcp-client';
 
 /** 单行上限（engine 通道）：4 MiB write 内容 + JSON 开销；与 gateway 8 MiB 背压同量级。 */
 export const ENGINE_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
@@ -29,6 +36,8 @@ export const ENGINE_WIRE = {
   implSwapped: 'engine.impl.swapped',
   implReject: 'engine.impl.reject',
   health: 'engine.health',
+  /** 批次 2（修正案 r2 已批）：MCP 控制面（非 canonical RPC，零 prompt surface）。 */
+  mcpControl: 'engine.mcp.control',
 } as const;
 
 /** 执行类（host 转发工厂逐调用计算；engine 机械路由，不做业务决策）。 */
@@ -110,7 +119,43 @@ export interface ImplRejectParams {
 export interface EngineHealthParams {
   status: 'ok' | 'degraded';
   loaded: string[];
+  /**
+   * 批次 2 additive：MCP server 状态快照（被动变化 notification；host 缓存读面）。
+   * 缺省 = 无 MCP server，旧行为零变化。形状单实现 = @vessel-agent/mcp-client types。
+   */
+  mcp?: McpServerStatus[];
 }
+
+/**
+ * host→engine `engine.mcp.control`（request；批次 2 修正案 r2 已批，6 action）。
+ * 连接配置按 server 喂一次（configure）；注册权威在 host——configure/reconnect 回包
+ * 带工具集，host 走既有增删注册流程，engine 不驱动注册（C1）。
+ */
+export type McpControlParams =
+  | { action: 'configure'; servers: McpServerConfig[] }
+  | { action: 'reconnect'; server: string }
+  | { action: 'listTools'; server: string }
+  | { action: 'listResources'; server: string }
+  | { action: 'readResource'; server: string; uri: string }
+  | { action: 'listPrompts'; server: string };
+
+/** configure 逐 server 结果（部分失败逐 server 报，不整请求失败）。 */
+export interface McpConfigureServerResult {
+  name: string;
+  status: McpServerStatus;
+  tools: McpToolDef[];
+  error?: string;
+}
+
+/** control 回包：ok:true 按 action 判别；ok:false = 业务失败（McpPluginErrorCode 稳定码）。 */
+export type McpControlResult =
+  | { ok: true; action: 'configure'; results: McpConfigureServerResult[] }
+  | { ok: true; action: 'reconnect'; status: McpServerStatus; tools: McpToolDef[] }
+  | { ok: true; action: 'listTools'; tools: McpToolDef[] }
+  | { ok: true; action: 'listResources'; resources: McpResourceDef[] }
+  | { ok: true; action: 'readResource'; content: string }
+  | { ok: true; action: 'listPrompts'; prompts: McpPromptDef[] }
+  | { ok: false; code: string; message: string };
 
 /** host 侧对外健康报告（supervisor 补重启计数）。 */
 export interface EngineHealthReport extends EngineHealthParams {

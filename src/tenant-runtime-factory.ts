@@ -71,6 +71,7 @@ import { resolveDataDir } from './data-paths';
 import { createFeishuFromConfig, stopFeishuChannel } from './feishu-wiring';
 import { FileLeaseService } from './lease-service';
 import { normalizeLegacyToolName } from './legacy-tool-names';
+import { createMcpEngineFromConfig, type McpEngineShell } from './mcp-engine-wiring';
 import { installMcp, type McpControl, type McpPluginLike } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import {
@@ -284,6 +285,8 @@ export interface TenantRuntimeBundle {
   plugins: Plugin[];
   mcpPlugin?: McpPluginLike;
   mcp?: McpControl;
+  /** tools-engine P2 批次 2：engine 模式 host shell（bootstrap onReady 重启对账用）。 */
+  mcpShell?: McpEngineShell;
   feishu?: FeishuChannelLike;
   /**
    * 幂等关闭。`drain: false` 用于调用方已先 `await gateway.stop()` 的场景：
@@ -1309,20 +1312,41 @@ export async function buildTenantRuntime(
   // ── MCP ───────────────────────────────────────
   let mcpPlugin: McpPluginLike | undefined;
   let mcpControl: McpControl | undefined;
+  let mcpShell: McpEngineShell | undefined;
   if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
-    const wiring = await installMcp(
-      {
+    if (options.engineClient !== undefined) {
+      // tools-engine P2 批次 2：连接/传输/pending 在 engine worker；host 壳 = 注册权威 +
+      // 控制面代理（createMcpControl 单实现不变，cli applier/toggle 零改动）。
+      const wiring = await createMcpEngineFromConfig({
         config,
         events,
         tenantId,
         loader,
         ...(options.loadMcpModule ? { loadModule: options.loadMcpModule } : {}),
-      },
-      finalPluginHost,
-    );
-    if (wiring) {
-      mcpPlugin = wiring.plugin;
-      mcpControl = wiring.control;
+        client: options.engineClient,
+        host: finalPluginHost,
+        logger,
+      });
+      if (wiring) {
+        mcpPlugin = wiring.plugin;
+        mcpControl = wiring.control;
+        mcpShell = wiring.plugin;
+      }
+    } else {
+      const wiring = await installMcp(
+        {
+          config,
+          events,
+          tenantId,
+          loader,
+          ...(options.loadMcpModule ? { loadModule: options.loadMcpModule } : {}),
+        },
+        finalPluginHost,
+      );
+      if (wiring) {
+        mcpPlugin = wiring.plugin;
+        mcpControl = wiring.control;
+      }
     }
   }
 
@@ -1608,6 +1632,7 @@ export async function buildTenantRuntime(
     plugins,
     ...(mcpPlugin ? { mcpPlugin } : {}),
     ...(mcpControl ? { mcp: mcpControl } : {}),
+    ...(mcpShell ? { mcpShell } : {}),
     ...(feishuChannel ? { feishu: feishuChannel } : {}),
     close,
   };

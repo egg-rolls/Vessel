@@ -11,12 +11,15 @@
 
 import {
   canonicalJSON,
+  type McpControlParams,
   type RegistryEntry,
   type RegistrySyncParams,
   type ToolCancelParams,
   type ToolInvokeParams,
   type ToolInvokeResult,
 } from '@vessel-agent/engine-client';
+// MCP 配置形状单实现（type-only）。
+import type { McpServerConfig } from '@vessel-agent/mcp-client';
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -119,6 +122,130 @@ export function parseImplReject(params: unknown): { name: string } {
     throw new Error('engine.impl.reject requires a non-empty name');
   }
   return { name: params.name };
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((item) => typeof item === 'string');
+}
+
+function isPositiveNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * configure.servers 逐条机械形状（字段类型；值合法性——transport 枚举 / command / url——
+ * 留给 validateConfig 单实现标 failed，部分失败不整请求失败）。未知键丢弃。
+ */
+function parseServerConfig(raw: unknown, index: number): McpServerConfig {
+  if (!isRecord(raw)) throw new Error(`mcp configure servers[${index}] must be an object`);
+  const {
+    name,
+    transport,
+    command,
+    args,
+    env,
+    url,
+    headers,
+    enabled,
+    connectTimeoutMs,
+    toolTimeoutMs,
+    toolPrefix,
+    autoApproveTools,
+  } = raw;
+  if (typeof name !== 'string') {
+    throw new Error(`mcp configure servers[${index}] name must be a string`);
+  }
+  if (typeof transport !== 'string') {
+    throw new Error(`mcp configure servers[${index}] transport must be a string`);
+  }
+  if (command !== undefined && typeof command !== 'string') {
+    throw new Error(`mcp configure servers[${index}] command must be a string`);
+  }
+  if (args !== undefined && !isStringArray(args)) {
+    throw new Error(`mcp configure servers[${index}] args must be a string array`);
+  }
+  if (env !== undefined && !isStringRecord(env)) {
+    throw new Error(`mcp configure servers[${index}] env must be a string record`);
+  }
+  if (url !== undefined && typeof url !== 'string') {
+    throw new Error(`mcp configure servers[${index}] url must be a string`);
+  }
+  if (headers !== undefined && !isStringRecord(headers)) {
+    throw new Error(`mcp configure servers[${index}] headers must be a string record`);
+  }
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    throw new Error(`mcp configure servers[${index}] enabled must be a boolean`);
+  }
+  if (connectTimeoutMs !== undefined && !isPositiveNumber(connectTimeoutMs)) {
+    throw new Error(`mcp configure servers[${index}] connectTimeoutMs must be a positive number`);
+  }
+  if (toolTimeoutMs !== undefined && !isPositiveNumber(toolTimeoutMs)) {
+    throw new Error(`mcp configure servers[${index}] toolTimeoutMs must be a positive number`);
+  }
+  if (toolPrefix !== undefined && typeof toolPrefix !== 'boolean') {
+    throw new Error(`mcp configure servers[${index}] toolPrefix must be a boolean`);
+  }
+  if (autoApproveTools !== undefined && !isStringArray(autoApproveTools)) {
+    throw new Error(`mcp configure servers[${index}] autoApproveTools must be a string array`);
+  }
+  return {
+    name,
+    // 枚举值合法性由 validateConfig 判（不过标 failed，不 throw）。
+    transport: transport as McpServerConfig['transport'],
+    ...(command !== undefined ? { command } : {}),
+    ...(args !== undefined ? { args } : {}),
+    ...(env !== undefined ? { env } : {}),
+    ...(url !== undefined ? { url } : {}),
+    ...(headers !== undefined ? { headers } : {}),
+    ...(enabled !== undefined ? { enabled } : {}),
+    ...(connectTimeoutMs !== undefined ? { connectTimeoutMs } : {}),
+    ...(toolTimeoutMs !== undefined ? { toolTimeoutMs } : {}),
+    ...(toolPrefix !== undefined ? { toolPrefix } : {}),
+    ...(autoApproveTools !== undefined ? { autoApproveTools } : {}),
+  };
+}
+
+/** `engine.mcp.control` 形状校验（action 枚举 / servers 逐条机械形状 / server / uri 非空）。 */
+export function parseMcpControl(params: unknown): McpControlParams {
+  if (!isRecord(params)) throw new Error('engine.mcp.control params must be an object');
+  const { action } = params;
+  switch (action) {
+    case 'configure': {
+      const { servers } = params;
+      if (!Array.isArray(servers)) {
+        throw new Error('engine.mcp.control configure requires a servers array');
+      }
+      return { action, servers: servers.map((raw, index) => parseServerConfig(raw, index)) };
+    }
+    case 'reconnect':
+    case 'listTools':
+    case 'listResources':
+    case 'listPrompts': {
+      const { server } = params;
+      if (!isNonEmptyString(server)) {
+        throw new Error(`engine.mcp.control ${action} requires a non-empty server`);
+      }
+      return { action, server };
+    }
+    case 'readResource': {
+      const { server, uri } = params;
+      if (!isNonEmptyString(server)) {
+        throw new Error('engine.mcp.control readResource requires a non-empty server');
+      }
+      if (!isNonEmptyString(uri)) {
+        throw new Error('engine.mcp.control readResource requires a non-empty uri');
+      }
+      return { action, server, uri };
+    }
+    default:
+      throw new Error(
+        'engine.mcp.control action must be configure / reconnect / listTools / listResources / readResource / listPrompts',
+      );
+  }
 }
 
 /** callback 回包结果形状校验（{content: string}，bounded / original_chars 可选）。 */

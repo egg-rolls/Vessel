@@ -63,8 +63,8 @@ export class McpPluginUnavailableError extends Error {
   }
 }
 
-/** 生成带 code 的稳定错误（TUI/gateway 直接读 code） */
-function mcpError(code: string, message: string): Error {
+/** 生成带 code 的稳定错误（TUI/gateway 直接读 code；批次 2 host shell 共用） */
+export function mcpError(code: string, message: string): Error {
   return Object.assign(new Error(message), { code });
 }
 

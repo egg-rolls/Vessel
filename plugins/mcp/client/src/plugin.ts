@@ -4,10 +4,15 @@
  * 只注册 ToolDefinition；单 server 失败不阻塞启动；控制面按 Addendum B §9.1。
  */
 
-import type { EventStream, PluginHost, ToolDefinition } from '@vessel-agent/core';
+import type { EventStream, PluginHost } from '@vessel-agent/core';
+import { validateConfig } from './config-validate.js';
 import { formatError } from './json-rpc.js';
 import { sanitizeLogText, warnMcp } from './logging.js';
-import { exposedToolName } from './naming.js';
+import {
+  type McpRegistrationPorts,
+  registerMcpResourceTools,
+  registerMcpTools,
+} from './registration.js';
 import { McpServerConnection } from './server-connection.js';
 import {
   type McpClientPlugin,
@@ -25,34 +30,6 @@ interface ServerEntry {
   configError?: string;
   /** 已成功注册的暴露工具名 */
   registered: string[];
-}
-
-/** 配置预检；返回错误文本或 undefined */
-function validateConfig(config: McpServerConfig): string | undefined {
-  if (typeof config.name !== 'string' || config.name === '') {
-    return 'server name is required';
-  }
-  if (config.transport !== 'stdio' && config.transport !== 'http') {
-    return `unsupported transport "${String(config.transport)}"`;
-  }
-  if (config.transport === 'stdio') {
-    if (typeof config.command !== 'string' || config.command === '') {
-      return 'stdio transport requires "command"';
-    }
-    return undefined;
-  }
-  if (typeof config.url !== 'string' || config.url === '') {
-    return 'http transport requires "url"';
-  }
-  try {
-    const parsed = new URL(config.url);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return 'http url must use http or https';
-    }
-  } catch {
-    return `invalid url "${config.url}"`;
-  }
-  return undefined;
 }
 
 export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
@@ -87,115 +64,51 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
     });
   }
 
+  /** 注册端口由 connection 实例构造；callTool 晚绑定 entry.connection（reconnect 后
+   *  旧定义命中新连接——换连接不换定义），资源/prompts 面按注册期捕获（与原实现一致）。 */
+  function registrationPorts(
+    entry: ServerEntry,
+    connection: McpServerConnection,
+  ): McpRegistrationPorts {
+    return {
+      callTool: async (originalName, exposedName, args, signal, runId) => {
+        const current = entry.connection;
+        if (!current) {
+          throw new Error(`MCP server "${entry.config.name}" is not connected`);
+        }
+        return current.callTool(originalName, exposedName, args, signal, runId);
+      },
+      readResource: (uri, signal) => connection.readResource(uri, signal),
+      resources: () => connection.resources,
+      prompts: () => connection.prompts,
+      supportsResources: connection.supportsResources,
+      supportsPrompts: connection.supportsPrompts,
+      warn: (message, fields) => warn(entry.config.name, message, fields),
+    };
+  }
+
   function registerTools(pluginHost: PluginHost, entry: ServerEntry): void {
     const connection = entry.connection;
     if (!connection) return;
-
-    const autoApprove = new Set(entry.config.autoApproveTools ?? []);
-    const toolPrefix = entry.config.toolPrefix !== false;
-    for (const tool of connection.tools) {
-      const exposed = exposedToolName(entry.config.name, tool.name, toolPrefix);
-      if (pluginHost.getTool(exposed) !== undefined) {
-        // 同一插件的重复重连不算冲突；与既有工具（含其它 server）碰撞才告警
-        if (!entry.registered.includes(exposed)) {
-          warn(
-            entry.config.name,
-            'Skipping MCP tool: a tool with this name is already registered; the existing tool is kept',
-            { tool: exposed },
-          );
-        }
-        continue;
-      }
-
-      const toolDefinition: ToolDefinition = {
-        name: exposed,
-        description: tool.description ?? `MCP tool "${entry.config.name}/${tool.name}"`,
-        inputSchema: tool.inputSchema ?? { type: 'object', properties: {} },
-        handler: async (args, ctx) => {
-          const current = entry.connection;
-          if (!current) {
-            throw new Error(`MCP server "${entry.config.name}" is not connected`);
-          }
-          return current.callTool(tool.name, exposed, args, ctx.signal, ctx.run_id);
-        },
-        // Addendum A §5：原始工具名、大小写敏感、精确匹配
-        checkPermission: async () => (autoApprove.has(tool.name) ? 'allow' : 'ask'),
-      };
-
-      // 0.55：MCP 工具名是**外部名字**——原样透传，不改写；注册表照样校验它，
-      // 但不合规只记 warning（装配日志可见），不阻断装配。
-      pluginHost.registerTool(toolDefinition, {
-        external: true,
-        source: `mcp:${entry.config.name}`,
-      });
-      entry.registered.push(exposed);
-    }
+    registerMcpTools(
+      pluginHost,
+      entry.config,
+      connection.tools,
+      registrationPorts(entry, connection),
+      entry.registered,
+    );
   }
 
   /** 注册 resources/prompts 辅助工具；能力未广告时不注册 */
   function registerResourceTools(pluginHost: PluginHost, entry: ServerEntry): void {
     const connection = entry.connection;
     if (!connection) return;
-
-    const toolPrefix = entry.config.toolPrefix !== false;
-    const register = (definition: ToolDefinition): void => {
-      if (pluginHost.getTool(definition.name) !== undefined) {
-        if (!entry.registered.includes(definition.name)) {
-          warn(
-            entry.config.name,
-            'Skipping MCP tool: a tool with this name is already registered; the existing tool is kept',
-            { tool: definition.name },
-          );
-        }
-        return;
-      }
-      // 0.55：resources / prompts 辅助工具名同样是外部来源（server 报什么就是什么）。
-      pluginHost.registerTool(definition, {
-        external: true,
-        source: `mcp:${entry.config.name}`,
-      });
-      entry.registered.push(definition.name);
-    };
-
-    if (connection.supportsResources) {
-      register({
-        name: exposedToolName(entry.config.name, 'list_resources', toolPrefix),
-        description: `List resources exposed by MCP server "${entry.config.name}"`,
-        inputSchema: { type: 'object', properties: {} },
-        handler: async () => JSON.stringify(connection.resources),
-        checkPermission: async () => 'ask',
-      });
-      register({
-        name: exposedToolName(entry.config.name, 'read_resource', toolPrefix),
-        description: `Read a resource (by uri) from MCP server "${entry.config.name}"`,
-        inputSchema: {
-          type: 'object',
-          properties: { uri: { type: 'string', description: 'Resource uri' } },
-          required: ['uri'],
-        },
-        handler: async (args, ctx) => {
-          if (typeof args !== 'object' || args === null) {
-            return 'Error: read_resource requires { uri: string }';
-          }
-          const uri = (args as Record<string, unknown>).uri;
-          if (typeof uri !== 'string' || uri === '') {
-            return 'Error: read_resource requires a non-empty uri';
-          }
-          return connection.readResource(uri, ctx.signal);
-        },
-        checkPermission: async () => 'ask',
-      });
-    }
-
-    if (connection.supportsPrompts) {
-      register({
-        name: exposedToolName(entry.config.name, 'list_prompts', toolPrefix),
-        description: `List prompts exposed by MCP server "${entry.config.name}"`,
-        inputSchema: { type: 'object', properties: {} },
-        handler: async () => JSON.stringify(connection.prompts),
-        checkPermission: async () => 'ask',
-      });
-    }
+    registerMcpResourceTools(
+      pluginHost,
+      entry.config,
+      registrationPorts(entry, connection),
+      entry.registered,
+    );
   }
 
   async function install(pluginHost: PluginHost): Promise<void> {
