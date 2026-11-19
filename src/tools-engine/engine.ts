@@ -15,17 +15,22 @@ import {
   ENGINE_ERROR,
   ENGINE_WIRE,
   type EngineHealthParams,
+  type McpControlResult,
   type RegistryEntry,
   type RegistrySyncResult,
   type ToolInvokeParams,
   type ToolInvokeResult,
 } from '@vessel-agent/engine-client';
+// 业务错误判别（McpPluginError → ok:false 稳定码；共享模块单实现，相对路径同 mcp.ts）。
+import { McpPluginError } from '../../plugins/mcp/client/src/index.js';
+import type { McpConnectionManager } from './mcp.js';
 import {
   firstSchemaViolation,
   parseCancelParams,
   parseImplReject,
   parseInvokeEnvelope,
   parseInvokeResult,
+  parseMcpControl,
   parseRegistrySync,
 } from './validate.js';
 import { executeWorker } from './worker.js';
@@ -60,7 +65,10 @@ export class ToolsEngine {
   private readonly inFlight = new Map<string, InFlightCall>();
   private disposed = false;
 
-  constructor(private readonly hostChannel: EngineHostChannel) {}
+  constructor(
+    private readonly hostChannel: EngineHostChannel,
+    private readonly mcp: McpConnectionManager,
+  ) {}
 
   /** 注册表增量喂入（host 权威）；形状不过 → throw。 */
   handleRegistrySync(params: unknown): RegistrySyncResult {
@@ -96,6 +104,51 @@ export class ToolsEngine {
     if (entry !== undefined) entry.rejected = true;
   }
 
+  /**
+   * MCP 控制面（批次 2）：形状不过 → throw（entry 折 -32000）；
+   * 业务 McpPluginError → { ok:false, code, message }（不 throw）；成功按 action 回包。
+   * 注册权威在 host：回包带工具集，host 走既有增删注册流程。
+   */
+  async handleMcpControl(params: unknown): Promise<McpControlResult> {
+    if (this.disposed) throw new Error('tools engine is disposed');
+    const control = parseMcpControl(params);
+    try {
+      switch (control.action) {
+        case 'configure':
+          return {
+            ok: true,
+            action: 'configure',
+            results: await this.mcp.configure(control.servers),
+          };
+        case 'reconnect': {
+          const { status, tools } = await this.mcp.reconnect(control.server);
+          return { ok: true, action: 'reconnect', status, tools };
+        }
+        case 'listTools':
+          return { ok: true, action: 'listTools', tools: this.mcp.listTools(control.server) };
+        case 'listResources':
+          return {
+            ok: true,
+            action: 'listResources',
+            resources: this.mcp.listResources(control.server),
+          };
+        case 'readResource':
+          return {
+            ok: true,
+            action: 'readResource',
+            content: await this.mcp.readResource(control.server, control.uri),
+          };
+        case 'listPrompts':
+          return { ok: true, action: 'listPrompts', prompts: this.mcp.listPrompts(control.server) };
+      }
+    } catch (error) {
+      if (error instanceof McpPluginError) {
+        return { ok: false, code: error.code, message: error.message };
+      }
+      throw error;
+    }
+  }
+
   /** 信封形状校验 → 注册表 / rejected / schema 子集 → 按 exec 机械路由。 */
   async handleInvoke(params: unknown): Promise<ToolInvokeResult> {
     if (this.disposed) throw new Error('tools engine is disposed');
@@ -105,7 +158,7 @@ export class ToolsEngine {
     if (entry.rejected) return { content: ENGINE_ERROR.implRejected(envelope.tool_name) };
     const violation = firstSchemaViolation(envelope.args, entry.inputSchema, '$');
     if (violation !== undefined) return { content: ENGINE_ERROR.invalidParams(violation) };
-    return this.dispatch(envelope);
+    return this.dispatch(envelope, entry);
   }
 
   /** worker：abort 折 cancelled；callback：清 in-flight（host 迟到回包忽略）。 */
@@ -118,19 +171,20 @@ export class ToolsEngine {
   }
 
   health(): EngineHealthParams {
-    return { status: 'ok', loaded: [...this.registry.keys()] };
+    return { status: 'ok', loaded: [...this.registry.keys()], mcp: this.mcp.status() };
   }
 
-  /** abort 全部 in-flight（child 退出路径）。 */
-  dispose(): void {
+  /** abort 全部 in-flight + 关全部 MCP 连接（杀 server 孙进程；child 退出路径）。 */
+  async dispose(): Promise<void> {
     this.disposed = true;
     for (const call of this.inFlight.values()) {
       call.controller.abort();
       call.finish({ content: ENGINE_ERROR.cancelled });
     }
+    await this.mcp.dispose();
   }
 
-  private dispatch(envelope: ToolInvokeParams): Promise<ToolInvokeResult> {
+  private dispatch(envelope: ToolInvokeParams, entry: RegistryEntry): Promise<ToolInvokeResult> {
     const key = callKey(envelope.run_id, envelope.tool_call_id);
     if (this.inFlight.has(key)) {
       throw new Error(`duplicate in-flight tool call: ${key}`);
@@ -164,12 +218,27 @@ export class ToolsEngine {
     this.inFlight.set(key, call);
 
     if (envelope.exec === 'worker') {
+      // 背停 timer 仅 timeout_ms 有值时设（+5s 同批次 1）；MCP def 无 timeout → 缺省不设，
+      // connection 内部 toolTimeoutMs timer 在先。
       const timeoutMs = envelope.timeout_ms;
       if (timeoutMs !== undefined) {
         call.timer = setTimeout(() => {
           controller.abort();
           call.finish({ content: ENGINE_ERROR.timeout(envelope.tool_name, timeoutMs) });
         }, timeoutMs + WORKER_BACKSTOP_GRACE_MS);
+      }
+      if (entry.source.startsWith('mcp:')) {
+        // MCP 路由：per-call signal + in-flight 同 worker 口径；错误折 content（run 继续）；
+        // 无 bounded——MCP handler 不自裁，出口闸在 host loop。
+        void this.mcp
+          .callTool(envelope.tool_name, envelope.args, controller.signal, envelope.run_id)
+          .then(
+            (content) => call.finish({ content }),
+            (error: unknown) => {
+              call.finish({ content: error instanceof Error ? error.message : String(error) });
+            },
+          );
+        return promise;
       }
       void executeWorker(envelope, controller.signal).then(call.finish, call.fail);
       return promise;
