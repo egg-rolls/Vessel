@@ -65,10 +65,13 @@ function createEventStreamShim(signal: AbortSignal): EventStream {
 /**
  * 执行一次 worker 调用。per-call signal 驱动取消（bash abort → killProcessTree）；
  * 出口闸回执经 takeToolResultGateReceipt 认领，bounded / original_chars 跨进程不丢。
+ * dirs（engine 池 S13，additive 可选）：pool entry 传 NodeScope 的 host 装配 dirs，
+ * 经 scope 注入落盘作用域与 bash 子进程 env；child 模式不传 → env fallback 零回归。
  */
 export async function executeWorker(
   envelope: ToolInvokeParams,
   signal: AbortSignal,
+  dirs?: { dataDir?: string; toolOutputDir?: string },
 ): Promise<ToolInvokeResult> {
   const def = workerTools.get(envelope.tool_name);
   if (def === undefined) return { content: ENGINE_ERROR.notRegistered(envelope.tool_name) };
@@ -82,7 +85,7 @@ export async function executeWorker(
       return { content: ENGINE_ERROR.invalidParams('boundary required') };
     }
     try {
-      scope = { boundary: deserializeBoundary(envelope.boundary) };
+      scope = { boundary: deserializeBoundary(envelope.boundary), ...dirs };
     } catch {
       return { content: ENGINE_ERROR.invalidParams('boundary malformed') };
     }

@@ -30,6 +30,7 @@
  * 4. loop 见到 `bounded === true` 就原样写回，不再进闸。
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdir, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -257,8 +258,37 @@ export function takeToolResultGateReceipt(ctx: ToolContext): ToolResultGateRecei
 
 // ── 落盘（唯一实现；loop 与 basic-tools 共用同一份） ──────────
 
-/** 输出落盘根目录：显式 env → data_dir → 默认数据目录 */
+// 调用级输出作用域（engine 池 Q9 / S11）：池化后同一 engine 进程服务多个 node，
+// 落盘根目录不能只靠进程级 env —— 派发方逐调用注入 scope，ALS 随异步上下文传播，
+// writeToolOutput 经 toolOutputRoot() 自动作用域化。领域无关机制：core 不解释 dirs
+// 来源（host 装配权威）；无 scope 的调用点走下方 env 链，逐字不变（零回归）。
+
+/** 工具输出落盘的调用级作用域：显式输出根优先，其次 dataDir/tool-output，再落 env 链。 */
+export interface ToolOutputScope {
+  /** 显式输出根目录（优先于 dataDir 与 env） */
+  toolOutputDir?: string;
+  /** 数据目录；提供时输出根 = <dataDir>/tool-output */
+  dataDir?: string;
+}
+
+const toolOutputScopeStorage = new AsyncLocalStorage<ToolOutputScope>();
+
+/** 在给定输出作用域内执行 fn（派发方逐调用包裹；作用域随异步上下文传播，无需显式传参）。 */
+export function runWithToolOutputScope<T>(scope: ToolOutputScope, fn: () => T): T {
+  return toolOutputScopeStorage.run(scope, fn);
+}
+
+/** 输出落盘根目录：调用级作用域（ALS）→ 显式 env → data_dir → 默认数据目录 */
 export function toolOutputRoot(): string {
+  const scope = toolOutputScopeStorage.getStore();
+  const scopedOutputDir = scope?.toolOutputDir;
+  if (typeof scopedOutputDir === 'string' && scopedOutputDir.trim() !== '') {
+    return path.resolve(scopedOutputDir);
+  }
+  const scopedDataDir = scope?.dataDir;
+  if (typeof scopedDataDir === 'string' && scopedDataDir.trim() !== '') {
+    return path.join(path.resolve(scopedDataDir), 'tool-output');
+  }
   const explicit = process.env.VESSEL_TOOL_OUTPUT_DIR;
   if (typeof explicit === 'string' && explicit.trim() !== '') return path.resolve(explicit);
   const dataDir = process.env.VESSEL_DATA_DIR;
