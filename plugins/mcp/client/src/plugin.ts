@@ -5,6 +5,7 @@
  */
 
 import type { EventStream, PluginHost, ToolDefinition } from '@vessel-agent/core';
+import { validateConfig } from './config-validate.js';
 import { formatError } from './json-rpc.js';
 import { sanitizeLogText, warnMcp } from './logging.js';
 import { exposedToolName } from './naming.js';
@@ -25,34 +26,6 @@ interface ServerEntry {
   configError?: string;
   /** 已成功注册的暴露工具名 */
   registered: string[];
-}
-
-/** 配置预检；返回错误文本或 undefined */
-function validateConfig(config: McpServerConfig): string | undefined {
-  if (typeof config.name !== 'string' || config.name === '') {
-    return 'server name is required';
-  }
-  if (config.transport !== 'stdio' && config.transport !== 'http') {
-    return `unsupported transport "${String(config.transport)}"`;
-  }
-  if (config.transport === 'stdio') {
-    if (typeof config.command !== 'string' || config.command === '') {
-      return 'stdio transport requires "command"';
-    }
-    return undefined;
-  }
-  if (typeof config.url !== 'string' || config.url === '') {
-    return 'http transport requires "url"';
-  }
-  try {
-    const parsed = new URL(config.url);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return 'http url must use http or https';
-    }
-  } catch {
-    return `invalid url "${config.url}"`;
-  }
-  return undefined;
 }
 
 export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {

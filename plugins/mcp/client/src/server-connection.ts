@@ -22,6 +22,9 @@ import type {
 /** tools/list 最大分页数 */
 const MAX_TOOL_PAGES = 50;
 
+/** 建连超时缺省（host 请求预算与 worker 共用同源；tools-engine P2 批次 2 导出） */
+export const DEFAULT_MCP_CONNECT_TIMEOUT_MS = 10_000;
+
 /** initialize 协商的协议版本（请求值） */
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 
@@ -76,7 +79,7 @@ export class McpServerConnection {
   }
 
   get connectTimeoutMs(): number {
-    return this.config.connectTimeoutMs ?? 10000;
+    return this.config.connectTimeoutMs ?? DEFAULT_MCP_CONNECT_TIMEOUT_MS;
   }
 
   get toolTimeoutMs(): number {
