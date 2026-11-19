@@ -53,8 +53,10 @@
  * - edit/write 写临界区前持 `<baseCwd>/.vessel/write.lock` 全工作区单锁（./write-lock.ts，
  *   data-lock 已验证原语），跨进程串行化**写动作**（毫秒级，非任务级 lease）；合作式协议，
  *   bash/IDE/git 非合作写入者不受约束（诚实边界，Windows 强制锁加固另批）。
- * - edit/write 可选 `subscribe:false`：缺省自动订阅所改文件（doc-subscription AfterTool hook，
- *   host 侧，覆盖两条执行路），opt-out 省 token；感知只在 run 边界（append-only）。
+ * - edit/write/read 可选 `subscribe:false`：缺省自动订阅（edit/write 所改文件、read 所读行范围；
+ *   doc-subscription AfterTool hook，host 侧，覆盖两条执行路），opt-out 省 token；
+ *   感知只在 run 边界（append-only）。read 行范围订阅为 line-level（蜂群协作增强）：
+ *   追踪所读行，那几行变了推范围 diff，锚歧义回落整文件 rev。
  *
  * 传输层（WSL 启动器修复）：Windows 宿主上 `bash` 若解析到 system32 的 WSL 启动器，`-c` 的
  * 字符串会先被外层 shell 在 spawn cwd 解析一遍 —— 单引号里的反引号 / `$()` 也被提前展开，
@@ -2008,7 +2010,8 @@ function createReadTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
     description:
       'Read a text file and return its content with line numbers (1-based, `<line>\\t<content>`). ' +
       `Use offset/limit to page through large files (limit defaults to ${DEFAULT_READ_LIMIT} lines). ` +
-      'Prefer this tool over bash commands such as cat/sed/head/tail/awk for reading file contents.',
+      'Prefer this tool over bash commands such as cat/sed/head/tail/awk for reading file contents. ' +
+      'The line ranges you read are auto-subscribed for change notices; subscribe:false opts out.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2017,6 +2020,12 @@ function createReadTool(boundary: PathBoundary, config: BasicToolsConfig): ToolD
         limit: {
           type: 'number',
           description: `How many lines to read (default ${DEFAULT_READ_LIMIT})`,
+        },
+        subscribe: {
+          type: 'boolean',
+          description:
+            'Auto-subscribe the line ranges you read for change notices (default true). Set false ' +
+            'for a one-off look to save tokens; you will not be notified if others change those lines.',
         },
       },
       required: ['path'],

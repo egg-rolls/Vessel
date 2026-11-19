@@ -5,7 +5,7 @@
  * 提供三件东西：
  * - `subscribe` 工具：显式 add / remove / list / inspect 具体文件（无 glob、无目录、无自动发现）。
  * - `AfterTool` hook：edit/write 自动订阅所改文件（subscribe:false 可 opt-out；蜂群 Phase 1 第二重）；
- *   read 自动订阅所读行范围（line-level，无 opt-out；蜂群协作增强）。
+ *   read 自动订阅所读行范围（line-level，subscribe:false 可 opt-out；蜂群协作增强）。
  * - `BeforeLlm` hook：每个 run 第一次 LLM 请求前先消费会话壳清除集合（read 引用释放 / 过期，
  *   lifecycle.ts），再检查订阅文件，向 `ctx.messages` 追加一条持久化尾部消息
  *   （`role: user` + `name: 'vessel:notice'` + 首行 `files: …`，不改写 system）；
