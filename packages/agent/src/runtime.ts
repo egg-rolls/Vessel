@@ -457,6 +457,12 @@ export interface MemberExecutionHostOptions {
    * 缺省时 EU 侧租约为 no-op。
    */
   leaseService?: ExecutionUnitOptions['leaseService'];
+  /**
+   * tools-engine P2 批次 3：inbox 逐 body 创建后的转发接线端口（装配层注入
+   * engine-client wireTool；成员身份在 handler 闭包，callback 经 pending 关联执行）。
+   * spawn 与工具热刷新都经 inboxTool() 触发；缺省 = 不接线（in-process 直执行）。
+   */
+  wireInboxTool?: (tool: ToolDefinition, memberId: string) => void;
 }
 
 interface MemberExecutionEntry {
@@ -944,6 +950,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
   private readonly session?: ExecutionUnitOptions['session'];
   private readonly eventLog?: ExecutionUnitOptions['eventLog'];
   private readonly leaseService?: ExecutionUnitOptions['leaseService'];
+  private readonly wireInboxTool?: (tool: ToolDefinition, memberId: string) => void;
   private readonly runtime: Runtime;
   private readonly entries = new Map<string, MemberExecutionEntry>();
   /** 未 spawn / 未开跑成员的待注入 notice（member id → 有界队列） */
@@ -978,6 +985,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
     this.session = options.session;
     this.eventLog = options.eventLog;
     this.leaseService = options.leaseService;
+    this.wireInboxTool = options.wireInboxTool;
     this.runtime = options.runtime;
     if (this.permissionMode === 'bridge' && this.parentEvents === undefined) {
       this.logger.warn('agent.member.permission_bridge_unavailable', {
@@ -1613,7 +1621,15 @@ export class MemberExecutionHost implements MemberExecutionPort {
   ): ToolDefinition | undefined {
     const inbox = this.inbox;
     if (inbox === undefined) return undefined;
-    return this.restrictPermissions(createInboxTool({ inbox, agentId: memberId }), memberId, mode);
+    const tool = this.restrictPermissions(
+      createInboxTool({ inbox, agentId: memberId }),
+      memberId,
+      mode,
+    );
+    // tools-engine P2：接线端口（缺省 no-op）。就地换 handler，def 身份不变 ⇒
+    // spawn 注册 / 快照不受影响；callback 执行的是本 body 的原闭包（agentId 在内）。
+    this.wireInboxTool?.(tool, memberId);
+    return tool;
   }
 
   /** 本内核能拿到的成员面贡献。老宿主 / 纯内存构造没实现这两个可选方法 ⇒ 空数组。 */

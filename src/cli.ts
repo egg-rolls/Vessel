@@ -150,7 +150,7 @@ import { createSystemContextSource } from './system-context';
 import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-write';
 // 0.56：派生 token（root-secret → HKDF；显式配置永远优先）。
 import { effectiveNodeToken } from './token-derive';
-import { syncBasicToolsEngineWiring } from './tools-engine/wiring';
+import { syncBasicToolsEngineWiring, syncCallbackToolsEngineWiring } from './tools-engine/wiring';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
@@ -1125,6 +1125,9 @@ async function runWithConfig(result: BootstrapResult) {
             ctx.pluginHost,
             configMap['basic-tools'],
           );
+          // 批次 3：recall / pii_reveal 是插件管辖工具（热应用可能换 def）；ask 入口注册
+          // 不被 applier 触碰，sync 幂等 no-op。agent / inbox 不在插件管辖域，无需在此重接。
+          syncCallbackToolsEngineWiring(result.toolsEngine.client, ctx.pluginHost);
           try {
             await result.toolsEngine.client.pushRegistry();
           } catch (error) {

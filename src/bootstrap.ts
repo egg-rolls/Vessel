@@ -143,6 +143,7 @@ import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-f
 // 0.54 C：`events.list` 的按 run 读端口（同一模块，共用 timeline 的读面与路径口径）。
 import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-write';
 import { createEngineSupervisor, type EngineSupervisor } from './tools-engine/supervisor';
+import { callbackRoute } from './tools-engine/wiring';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
@@ -1451,6 +1452,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(config.agent?.ownerId !== undefined ? { ownerId: config.agent.ownerId } : {}),
       // 成员停下 / 被关闭 → 定向到父 session 的一条 runtime.notice（scope peer）。
       ...(peerNotices !== undefined ? { peerStops: peerNotices.report } : {}),
+      // tools-engine P2 批次 3：inbox 逐 body 接线（原闭包含 agentId，callback 经 pending
+      // 关联执行，成员身份不由 engine 提供）。spawn / 热刷新都经 inboxTool() 触发；喂账本
+      // 幂等全量（指纹不变 engine 侧 no-op），失败只记日志。
+      wireInboxTool: (tool) => {
+        engineClient.wireTool(tool, callbackRoute('inbox'));
+        void engineClient.pushRegistry().catch((error: unknown) => {
+          logger.warn('tools-engine registry push failed (inbox)', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        });
+      },
       logger,
       // 成员 ExecutionUnit 与父级共用 tenant 存储：同 session_id 可在新进程恢复历史。
       session,
@@ -1493,6 +1505,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     registerBashJobDelivery({ service: wiring.service, logger });
     logger.debug('agent.bash_job.delivery_ready', {});
     finalPluginHost.registerTool(wiring.tool);
+    // tools-engine P2 批次 3：agent 恒 callback（Team 注册表 / body spawn / SessionStore
+    // 状态留 host；内部端点 = 原 handler 闭包）。注册后立即接线，先于 startOwner（spawn
+    // 顺序不变式）；喂账本失败只记日志（engine disabled → fail-closed）。
+    engineClient.wireTool(wiring.tool, callbackRoute('agent'));
+    try {
+      await engineClient.pushRegistry();
+    } catch (error) {
+      logger.warn('tools-engine registry push failed (agent)', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
     // 0.55：装配收尾的工具名闸（`agent` 工具是插件装完之后才注册的，所以要在这一句之后）。
     // 内置 / 插件工具名不合规 ⇒ 启动失败并列出全部违规项；外部（MCP）工具名只记 warning。
     for (const warning of assertToolNameLegality(finalPluginHost, 'bootstrap.final').warnings) {
