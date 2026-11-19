@@ -6,7 +6,8 @@
  * - pushRegistry：host→engine `engine.registry.sync` 增量；
  * - handleToolCallback：child.ts onToolCallback hook 落点（关联-only fail-closed）；
  * - handleEngineNotification：impl.swapped 指纹对拍 / health 自报（**校验权在 host，
- *   不信 engine 自报**）。
+ *   不信 engine 自报**；批次 2 additive：health.mcp 快照逐条机械校验后透传）；
+ * - mcpControl：批次 2 `engine.mcp.control` 请求端口（装配层 host shell 用）。
  *
  * getTransport 晚绑定：supervisor 未 start ⇒ undefined ⇒ 转发 fail-closed（unavailable）。
  *
@@ -15,13 +16,17 @@
 
 import type { BasicToolsConfig, PathBoundary } from '@vessel-agent/basic-tools';
 import type { Logger, ToolDefinition } from '@vessel-agent/core';
+import type { McpServerStatus } from '@vessel-agent/mcp-client';
 import { createPendingTable, isRecord } from './pending.js';
 import {
+  ENGINE_ERROR,
   ENGINE_WIRE,
   type EngineHealthParams,
   type EngineTransport,
   type ExecClass,
   type ImplRejectParams,
+  type McpControlParams,
+  type McpControlResult,
 } from './protocol.js';
 import { createToolLedger } from './registry.js';
 
@@ -57,6 +62,8 @@ export interface EngineClient {
   handleEngineNotification(method: string, params: unknown): void;
   /** 最近一次 engine 健康自报（supervisor 补 restarts 后对外）。 */
   lastHealth(): EngineHealthParams | undefined;
+  /** engine.mcp.control 请求端口（装配层 host shell 用）；transport 缺省 → throw unavailable。 */
+  mcpControl(params: McpControlParams, timeoutMs?: number): Promise<McpControlResult>;
   dispose(): void;
 }
 
@@ -112,7 +119,18 @@ export function createEngineClient(options: EngineClientOptions): EngineClient {
           if (typeof item !== 'string') return;
           loaded.push(item);
         }
-        health = { status: params.status, loaded };
+        // 批次 2 additive：mcp 可选数组逐条机械形状校验，不过整条忽略；
+        // 缺省 = 无 MCP server（批次 1 行为零变化）。
+        const rawMcp = params.mcp;
+        let mcp: McpServerStatus[] | undefined;
+        if (Array.isArray(rawMcp)) {
+          mcp = [];
+          for (const item of rawMcp) {
+            const status = parseMcpServerStatus(item);
+            if (status !== undefined) mcp.push(status);
+          }
+        }
+        health = { status: params.status, loaded, ...(mcp !== undefined ? { mcp } : {}) };
         logger?.info('engine health', { status: params.status, loaded: loaded.length });
         return;
       }
@@ -121,8 +139,124 @@ export function createEngineClient(options: EngineClientOptions): EngineClient {
     lastHealth() {
       return health;
     },
+    async mcpControl(params, timeoutMs) {
+      const transport = getTransport();
+      if (transport === undefined || !transport.active) {
+        throw new Error(ENGINE_ERROR.unavailable);
+      }
+      const result = await transport.request(ENGINE_WIRE.mcpControl, params, timeoutMs);
+      // 回包形状机械校验（判别联合）；不过 = engine 协议违规，折稳定 unavailable。
+      // ok:false 原样返回（host shell 折 McpPluginError 语义）。
+      if (!isMcpControlResult(result)) {
+        throw new Error(ENGINE_ERROR.unavailable);
+      }
+      return result;
+    },
     dispose() {
       pending.dispose();
     },
   };
+}
+
+/** McpServerStatus 机械形状校验（校验权在 host）：name/status/transport/tools 必备，
+ *  不过整条忽略；可选字段仅在类型相符时保留（重建，不信 engine 自报的多余字段）。 */
+function parseMcpServerStatus(value: unknown): McpServerStatus | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.name !== 'string') return undefined;
+  if (value.status !== 'connected' && value.status !== 'failed' && value.status !== 'disabled') {
+    return undefined;
+  }
+  if (value.transport !== 'stdio' && value.transport !== 'http') return undefined;
+  if (!Array.isArray(value.tools)) return undefined;
+  const tools: string[] = [];
+  for (const item of value.tools) {
+    if (typeof item !== 'string') return undefined;
+    tools.push(item);
+  }
+  const status: McpServerStatus = {
+    name: value.name,
+    status: value.status,
+    transport: value.transport,
+    tools,
+  };
+  if (typeof value.error === 'string') status.error = value.error;
+  if (typeof value.protocolVersion === 'string') status.protocolVersion = value.protocolVersion;
+  if (isRecord(value.serverInfo) && typeof value.serverInfo.name === 'string') {
+    status.serverInfo = {
+      name: value.serverInfo.name,
+      ...(typeof value.serverInfo.version === 'string'
+        ? { version: value.serverInfo.version }
+        : {}),
+    };
+  }
+  if (typeof value.resources === 'number') status.resources = value.resources;
+  if (typeof value.prompts === 'number') status.prompts = value.prompts;
+  return status;
+}
+
+/** McpControlResult 判别联合机械校验：ok:false 只查 code/message；ok:true 按 action 查回包。 */
+function isMcpControlResult(value: unknown): value is McpControlResult {
+  if (!isRecord(value)) return false;
+  if (value.ok === false) {
+    return typeof value.code === 'string' && typeof value.message === 'string';
+  }
+  if (value.ok !== true) return false;
+  switch (value.action) {
+    case 'configure':
+      return Array.isArray(value.results) && value.results.every(isMcpConfigureServerResult);
+    case 'reconnect':
+      return parseMcpServerStatus(value.status) !== undefined && isMcpToolDefArray(value.tools);
+    case 'listTools':
+      return isMcpToolDefArray(value.tools);
+    case 'listResources':
+      return Array.isArray(value.resources) && value.resources.every(isMcpResourceDef);
+    case 'readResource':
+      return typeof value.content === 'string';
+    case 'listPrompts':
+      return Array.isArray(value.prompts) && value.prompts.every(isMcpPromptDef);
+    default:
+      return false;
+  }
+}
+
+/** configure 逐 server 结果：{name, status, tools, error?}。 */
+function isMcpConfigureServerResult(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.name !== 'string') return false;
+  if (parseMcpServerStatus(value.status) === undefined) return false;
+  if (!isMcpToolDefArray(value.tools)) return false;
+  return value.error === undefined || typeof value.error === 'string';
+}
+
+function isMcpToolDefArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every(isMcpToolDef);
+}
+
+/** McpToolDef：{name, description?, inputSchema?}。 */
+function isMcpToolDef(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.name !== 'string') return false;
+  if (value.description !== undefined && typeof value.description !== 'string') return false;
+  return value.inputSchema === undefined || isRecord(value.inputSchema);
+}
+
+/** McpResourceDef：{uri, name?, description?, mimeType?}。 */
+function isMcpResourceDef(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.uri !== 'string') return false;
+  if (value.name !== undefined && typeof value.name !== 'string') return false;
+  if (value.description !== undefined && typeof value.description !== 'string') return false;
+  return value.mimeType === undefined || typeof value.mimeType === 'string';
+}
+
+/** McpPromptDef：{name, description?, arguments?: [{name, description?, required?}]}。 */
+function isMcpPromptDef(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.name !== 'string') return false;
+  if (value.description !== undefined && typeof value.description !== 'string') return false;
+  if (value.arguments === undefined) return true;
+  if (!Array.isArray(value.arguments)) return false;
+  return value.arguments.every((argument) => {
+    if (!isRecord(argument) || typeof argument.name !== 'string') return false;
+    if (argument.description !== undefined && typeof argument.description !== 'string') {
+      return false;
+    }
+    return argument.required === undefined || typeof argument.required === 'boolean';
+  });
 }
