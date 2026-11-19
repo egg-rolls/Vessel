@@ -31,6 +31,8 @@ import {
   type Guardrail,
   type GuardrailResult,
   GuardrailStage,
+  markBridgeCall,
+  resolveToolNameAlias,
   type ToolCall,
   type ToolDefinition,
 } from '../packages/core/src/index';
@@ -58,6 +60,21 @@ export interface VesselRpcPort {
 export interface VesselMetaOptions {
   /** 晚绑定：装配完成前为 undefined（此时 rpc/set_config fail-closed）。 */
   getLocalRpc: () => VesselRpcPort | undefined;
+  /**
+   * O2：`permission.bridge_deny` 的活引用（热应用经 permission applier 更新）。
+   * 缺省 = []（P1 行为零变化）；只影响桥可达性，不影响新会话直调。
+   */
+  getBridgeDeny?: () => readonly string[];
+}
+
+/** O2 配置归一：只留非空字符串，去重（别名解析在匹配时做，表唯一真源 core）。 */
+export function normalizeBridgeDeny(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const names = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry === 'string' && entry.trim() !== '') names.add(entry.trim());
+  }
+  return [...names];
 }
 
 export interface VesselMetaSurface {
@@ -74,13 +91,18 @@ function readString(value: unknown): string | undefined {
 }
 
 /**
- * bridge 准入（P1 默认策略）：vessel 自身不可桥（单跳递归防护），其余 live 注册表工具全部可桥。
- * 安全性不靠准入名单，而靠「鉴权落在目标自身规则」——高危分级由目标自己的
- * checkPermission / 默认 ask 继承，桥不放宽任何一条。配置层 bridge_eligible 策略（O2）
- * 未裁决前不新增配置键；裁决后只改这一处。
+ * bridge 准入：vessel 自身不可桥（单跳递归防护，代码层硬排除，config 不可覆盖）；
+ * 其余 live 注册表工具默认可桥，安全性靠「鉴权落在目标自身规则」——高危分级由目标自己的
+ * checkPermission / 默认 ask 继承，桥不放宽任何一条。
+ * O2（permission.bridge_deny，缺省 [] = P1 行为零变化）：精确工具名匹配，别名经同一
+ * TOOL_NAME_ALIASES 表解析（core resolveToolNameAlias，单实现）；命中 → 拦 call_tool，
+ * 只影响桥可达性，不影响新会话直调。
  */
-function isBridgeEligible(toolName: string): boolean {
-  return toolName !== VESSEL_TOOL_NAME;
+function isBridgeEligible(toolName: string, bridgeDeny: readonly string[]): boolean {
+  if (toolName === VESSEL_TOOL_NAME) return false;
+  if (bridgeDeny.length === 0) return true;
+  const resolved = resolveToolNameAlias(toolName);
+  return !bridgeDeny.some((entry) => resolveToolNameAlias(entry) === resolved);
 }
 
 /**
@@ -139,6 +161,8 @@ function replace(id: string, name: string, args: Record<string, unknown>): Guard
     type: 'function',
     function: { name, arguments: JSON.stringify(args) },
   };
+  // O4 溯源：打标 replacement 对象（WeakMap 随对象回收）；loop started / EU completed/failed 读。
+  markBridgeCall(replacement);
   return { allowed: true, replacement };
 }
 
@@ -147,7 +171,7 @@ function replace(id: string, name: string, args: Record<string, unknown>): Guard
  * 原样放行（vessel 自执行，鉴权在 vessel.checkPermission）。非 vessel 的值一律放行。
  * arguments JSON 解析失败也放行——落 loop 的标准 `Invalid JSON in tool arguments` 路径。
  */
-function translateVesselCall(value: unknown): GuardrailResult {
+function translateVesselCall(value: unknown, bridgeDeny: readonly string[]): GuardrailResult {
   if (!isRecord(value)) return { allowed: true };
   const fn = value.function;
   if (!isRecord(fn) || fn.name !== VESSEL_TOOL_NAME) return { allowed: true };
@@ -166,10 +190,13 @@ function translateVesselCall(value: unknown): GuardrailResult {
   if (op === 'call_tool') {
     const toolName = readString(args.tool_name);
     if (toolName === undefined) return block('vessel call_tool requires a non-empty tool_name');
-    if (!isBridgeEligible(toolName)) {
+    if (toolName === VESSEL_TOOL_NAME) {
       return block(
         `vessel call_tool target "${toolName}" is not bridge-eligible (vessel itself is excluded; recursion guard)`,
       );
+    }
+    if (!isBridgeEligible(toolName, bridgeDeny)) {
+      return block(`vessel call_tool target "${toolName}" is denied by permission.bridge_deny`);
     }
     if (args.args !== undefined && !isRecord(args.args)) {
       return block('vessel call_tool args must be an object');
@@ -269,7 +296,7 @@ export function createVesselMetaSurface(options: VesselMetaOptions): VesselMetaS
     stage: GuardrailStage.ToolCall,
     // 先于 tool-policy（50）：允许/禁止策略落在改写后的最终工具上。
     priority: 40,
-    check: async (value) => translateVesselCall(value),
+    check: async (value) => translateVesselCall(value, options.getBridgeDeny?.() ?? []),
   };
 
   return { vessel, bridgeGuardrail };

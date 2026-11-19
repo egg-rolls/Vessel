@@ -7,8 +7,10 @@
       "dependencies": {
         "@promptctl/rich-js": "^0.10.0",
         "@vessel-agent/agent": "workspace:*",
+        "@vessel-agent/basic-tools": "workspace:*",
         "@vessel-agent/config": "workspace:*",
         "@vessel-agent/core": "workspace:*",
+        "@vessel-agent/engine-client": "workspace:*",
         "@vessel-agent/permission": "workspace:*",
         "@vessel-agent/plugin-sdk": "workspace:*",
         "@vessel-agent/serve": "workspace:*",

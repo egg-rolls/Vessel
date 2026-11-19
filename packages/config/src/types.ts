@@ -973,6 +973,13 @@ export interface PermissionConfig {
    * 由 loader 的 snake_case → camelCase 映射自动转换。
    */
   neverAutoApprove?: string[];
+  /**
+   * 桥可达性拒绝名单（tools-engine P2 O2）：精确工具名（别名经同一 TOOL_NAME_ALIASES
+   * 表解析）。命中 → vessel call_tool 桥拦截（稳定 reason，run 继续）；**只影响桥可达性，
+   * 不影响新会话直调**。vessel 自身在代码层硬排除，config 不可覆盖；缺省 [] = 无拒绝。
+   * YAML 别名 `bridge_deny` 由 loader 的 snake_case → camelCase 映射自动转换。
+   */
+  bridgeDeny?: string[];
 }
 
 /** 状态栏位置（0.13）：top / bottom / both / none */

@@ -32,6 +32,7 @@ import {
   PermissionPolicy,
   PermissionTimeoutError,
 } from './permission-policy.js';
+import { type ToolTransport, takeToolTransport } from './tool-provenance.js';
 import { takeToolResultGateReceipt } from './tool-result-gate.js';
 
 export interface ToolPipelineDeps {
@@ -100,6 +101,12 @@ export interface ToolPipelineResult {
   bounded?: true;
   /** 裁剪前字符数（与 `bounded` 同时出现；仅供日志 / 事件参考） */
   original_chars?: number;
+  /**
+   * 执行位置（tools-engine P2 O4 additive）：转发 handler 派发前在 ctx 登记，
+   * 管道认领后带出，由调用方写进 `tool.call.completed/failed` 的 data。
+   * 缺省（无回执）= in_process / 旧事件，逐字节不变。
+   */
+  transport?: ToolTransport;
 }
 
 export interface ToolPipeline {
@@ -186,13 +193,6 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
       const withAliasNotice = (text: string): string =>
         aliasNotice === undefined ? text : `${text}\n${aliasNotice}`;
 
-      const fail = (error: string): ToolPipelineResult => ({
-        ok: false,
-        input: args,
-        content: withAliasNotice(error),
-        error,
-      });
-
       const ctx: ToolContext = {
         run_id: options.runId,
         session_id: options.sessionId,
@@ -204,6 +204,19 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
         ...(options.signal ? { signal: options.signal } : {}),
         // 0.51：成员 cwd 只做默认起点；工具级显式参数与路径边界都不受影响。
         ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+      };
+
+      const fail = (error: string): ToolPipelineResult => {
+        // O4：handler 派发前打的 transport 回执在失败路径同样认领（派发后失败 ≠ 没派发）；
+        // 派发前的失败（guardrail/hook/权限）无回执 → 缺省 = 旧事件语义。
+        const transport = takeToolTransport(ctx);
+        return {
+          ok: false,
+          input: args,
+          content: withAliasNotice(error),
+          error,
+          ...(transport !== undefined ? { transport } : {}),
+        };
       };
 
       // 1. 工具查找（唯一来源：PluginHost）
@@ -332,6 +345,10 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
         });
       }
 
+      // O4：执行位置回执（转发 handler 派发前登记；取走即删，与 gate receipt 同口径）。
+      // 刻意在 ToolResult guardrail 之后认领：block 折 fail() 时回执仍在 ctx 上，
+      // 失败事件同样带执行位置（派发后失败 ≠ 没派发）。
+      const transport = takeToolTransport(ctx);
       return {
         ok: true,
         input: args,
@@ -339,6 +356,7 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
         ...(resultBounded
           ? { bounded: true as const, original_chars: resultOriginalChars ?? result.length }
           : {}),
+        ...(transport !== undefined ? { transport } : {}),
       };
     },
   };
