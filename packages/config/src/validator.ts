@@ -459,7 +459,10 @@ function validateEnvInjection(
       });
     }
     if (cadence === undefined) continue;
-    if (typeof cadence !== 'string' || !(ENV_CADENCE_VALUES as readonly string[]).includes(cadence)) {
+    if (
+      typeof cadence !== 'string' ||
+      !(ENV_CADENCE_VALUES as readonly string[]).includes(cadence)
+    ) {
       errors.push({
         path: scopePath,
         message: 'envInjection.scopes values must be one of "request", "run"',

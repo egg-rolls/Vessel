@@ -339,7 +339,9 @@ function readStringField(
  * 读取 envGranularity 字段（scope → cadence；只认 'request' / 'run'）。
  * 非法值 / 未知键忽略 —— 缺省回落到 producer 的内置字面量节奏（零回归）。
  */
-function readEnvGranularity(record: Record<string, unknown>): Record<string, EnvCadence> | undefined {
+function readEnvGranularity(
+  record: Record<string, unknown>,
+): Record<string, EnvCadence> | undefined {
   const value = record.envGranularity ?? record.env_granularity;
   if (!isRecord(value)) return undefined;
   const granularity: Record<string, EnvCadence> = {};
