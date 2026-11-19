@@ -2,8 +2,9 @@
  * @vessel-agent/doc-subscription - 显式文档订阅插件
  * @module @vessel-agent/doc-subscription
  *
- * 提供两件东西：
- * - `subscribe` 工具：显式 add / remove / list / inspect 具体文件（无 glob、无自动订阅）。
+ * 提供三件东西：
+ * - `subscribe` 工具：显式 add / remove / list / inspect 具体文件（无 glob、无目录、无自动发现）。
+ * - `AfterTool` hook：edit/write 自动订阅所改文件（subscribe:false 可 opt-out；蜂群 Phase 1 第二重）。
  * - `BeforeLlm` hook：每个 run 第一次 LLM 请求前检查订阅文件，向 `ctx.messages`
  *   追加一条只含 path / id / rev / bytes 的持久化尾部消息
  *   （`role: user` + `name: 'vessel:notice'` + 首行 `files: …`，不改写 system）；
@@ -14,11 +15,13 @@
 
 import { buildPathBoundary } from '@vessel-agent/basic-tools';
 import type { Plugin, PluginHost } from '@vessel-agent/core';
+import { createAutoSubscribeHook } from './auto-sub.js';
 import { type DocSubscriptionConfig, parseDocSubscriptionConfig } from './config.js';
 import { createBeforeLlmHook } from './hook.js';
 import { SubscriptionStore } from './store.js';
 import { createSubscribeTool } from './tool.js';
 
+export { AUTO_SUBSCRIBE_HOOK, createAutoSubscribeHook } from './auto-sub.js';
 export type { DocSubscriptionConfig } from './config.js';
 export { parseDocSubscriptionConfig } from './config.js';
 export { type UnifiedDiffOptions, type UnifiedDiffResult, unifiedDiff } from './diff.js';
@@ -37,7 +40,12 @@ export {
   SubscriptionStore,
   subscriptionId,
 } from './store.js';
-export { createSubscribeTool, MAX_SUBSCRIBE_BYTES, type SubscribeToolDeps } from './tool.js';
+export {
+  autoSubscribePath,
+  createSubscribeTool,
+  MAX_SUBSCRIBE_BYTES,
+  type SubscribeToolDeps,
+} from './tool.js';
 
 /** 插件构造选项（与 install 的第二参数同形） */
 export interface DocSubscriptionPluginOptions {
@@ -57,7 +65,8 @@ export function createDocSubscriptionPlugin(options: DocSubscriptionPluginOption
     name: DOC_SUBSCRIPTION_PLUGIN_NAME,
     version: '0.26.2',
     description:
-      'Explicit per-session file subscriptions: `subscribe` tool + BeforeLlm change notices',
+      'Per-session file subscriptions: `subscribe` tool + edit/write auto-subscribe ' +
+      '(subscribe:false opt-out) + BeforeLlm change notices',
     install(host: PluginHost, installOptions?: { config?: Record<string, unknown> }): void {
       const config: DocSubscriptionConfig = parseDocSubscriptionConfig(
         installOptions?.config ?? options.config,
@@ -73,6 +82,7 @@ export function createDocSubscriptionPlugin(options: DocSubscriptionPluginOption
 
       host.registerTool(createSubscribeTool({ boundary, store, config }));
       host.registerHook(createBeforeLlmHook({ boundary, store, config }));
+      host.registerHook(createAutoSubscribeHook({ boundary, store, config }));
     },
   };
 }

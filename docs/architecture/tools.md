@@ -81,11 +81,11 @@ interface ToolDefinition {
 
 ## 工具集：能力工具为什么这么少
 
-默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit` / `write`**（`write` 是建文件 / 整体替换 / 追加，**逐字节落盘、不经 shell**——heredoc 与重定向会把内容交给 shell，反引号与美元括号会被先展开）；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；变更只发短通知，按需 `inspect`；未 add 不通知）。成员 body 在装配层 attach 收件箱后另有 `inbox`；`ask` 按入口注册。装配层另常驻注册 **`vessel`** 控制面桥（P1 单工具面，见下「vessel 控制面桥」）。`team_*` / `delegate_task` 已删除。
+默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit` / `write`**（`write` 是建文件 / 整体替换 / 追加，**逐字节落盘、不经 shell**——heredoc 与重定向会把内容交给 shell，反引号与美元括号会被先展开）；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；edit/write 自动订阅所改文件，`subscribe:false` 可 opt-out；变更只发短通知，按需 `inspect`；未订阅不通知）。成员 body 在装配层 attach 收件箱后另有 `inbox`；`ask` 按入口注册。装配层另常驻注册 **`vessel`** 控制面桥（P1 单工具面，见下「vessel 控制面桥」）。`team_*` / `delegate_task` 已删除。
 
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
-| `subscribe` | 默认注册（`doc-subscription` 插件）；agent 显式 add 文件后，变更只在下个 run 的系统提示里发一条短通知（path / id / rev / bytes），模型调用 `subscribe inspect` 才取 diff（首次全文）；正文不自动进历史。只接受具体文件，无 glob / 目录 / 自动发现 |
+| `subscribe` | 默认注册（`doc-subscription` 插件）；显式 add 或 edit/write 自动订阅（AfterTool hook，host 侧，attempt-based；`subscribe:false` opt-out；自动订阅以当前内容为基线，自己刚做的改动不出卡）后，变更只在下个 run 边界发一条短通知（path / id / rev / bytes），模型调用 `subscribe inspect` 才取 diff（首次全文）；正文不自动进历史。只接受具体文件，无 glob / 目录 / 自动发现；换任务用 remove 清旧订阅 |
 | `agent` | 默认注册；显式 `agent.enabled: false` 关闭。root owner 动作 `hire` / `send` / `close` / `list` / `rotate` / `read`（root 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `send` / `list` / `read`。写 Team 日志不是本工具的职责：`agent post` 已移除（只追加日志、不投递、不唤醒，0.50 实测导致成员报告静默丢失），需要时走 CLI `vessel team post`。`create` 建同 Team peer，`hire` 建调用者拥有的 contractor；close 审批在权限层（成员关 peer 需人类批准），每 Team present 上限与冻结见 ADR-095；权限模式与成员配置见 `agent.*`。`read` 是只读会话读取（`to` + `limit` 默认 20 / 封顶 50，返回最近 N 条消息的 role + 截断正文），数据源与 `sessions.get` 同一个 `SessionStore`，不新增 RPC；收口不再自动回传正文之后，父级要成员原文用它或 `inbox` |
 | `inbox` | 成员 body 由装配层 attach 收件箱后注册（`deny` 模式也注册，只读本地队列）：`list` 是**唯一的廉价偷看**——unread / pending 计数 + 每条只给 `id` / 来源 / **前 40 字符**前缀 / `more_chars`（还有多少字符没给），永不吐正文；`read` **就等于拿走**——取原文 + 消费，`unread` 与 `held` 一视同仁（held 的那几条先取消其 queued run 再消费，所以同一段正文不会进两次上下文），不可逆；`delete` 删除未读且非 held 的消息（「不看就丢」）；`insert` 给自己追加一条消息，不启动 run、不唤醒自己。`unread` = 该自己读，`pending` = 已排程、会自动作为下一轮输入送达（同一口径由 `counts()` 派生）。0.51 的 `claim` 动作已并入 `read`：老会话仍发 `action:'claim'` 时按 `read` 的别名执行并在结果里附一行 `note`（`agents.claim` RPC 与 web 条带仍然存在，模型侧不再有这个动作）；`includeHeld` 参数已删除。返回 JSON；非法参数返回 `{ error: 'invalid_input: ...' }`，不抛错 |
 | `ask` | 交互 REPL、`gateway start` / `--serve` 与 headless（`--run` / 管道）都注册；`ui.askUser: false` 可关闭。两种语义见下「ask 的 sync / async」 |
@@ -97,10 +97,10 @@ interface ToolDefinition {
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
 | `bash` | `{ command, cwd?, timeout_ms? }` | `ask`；cwd 命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `Bun.spawn(['bash','-c',command])`。超时默认 120s；输出超 2000 行时保留头 1000 + 尾 1000 并标注省略行数；超时返回明确错误文本而非抛异常 |
-| `write` | `{ path, content, mode? }` | `ask`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `mode` = `create`（缺省；目标已存在则**报错不覆盖**）/ `overwrite` / `append`。内容**逐字节落盘、不经 shell**，所以反引号、`$()`、`${…}`、中文、emoji 都不会被展开或吞掉。只自动创建**一级**父目录；单次上限 4 MiB；沿符号链接写到被指文件（链接本身不被替换）；覆盖沿用原文件权限位。与 `edit` 的分工：建文件 / 整体替换 / 追加用 `write`，**局部修改用 `edit`**（逐字符唯一匹配，改不中会报错） |
+| `write` | `{ path, content, mode?, expected_content?, subscribe? }` | `ask`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `mode` = `create`（缺省；目标已存在则**报错不覆盖**）/ `overwrite` / `append`。内容**逐字节落盘、不经 shell**，所以反引号、`$()`、`${…}`、中文、emoji 都不会被展开或吞掉。只自动创建**一级**父目录；单次上限 4 MiB；沿符号链接写到被指文件（链接本身不被替换）；覆盖沿用原文件权限位。`expected_content`（可选，仅 overwrite）：写临界区内与当前内容逐字节比对，不符**报错不写**逼重读（防并发静默抹除）；不传 = 旧行为。`subscribe:false` opt-out 自动订阅。与 `edit` 的分工：建文件 / 整体替换 / 追加用 `write`，**局部修改用 `edit`**（逐字符唯一匹配，改不中会报错）。edit/write 写临界区前持 `<baseCwd>/.vessel/write.lock` 全工作区单锁（跨进程串行化写动作；合作式协议，bash/IDE/git 非合作写入者不受约束） |
 | `recall` | `{ compaction_id?, from_seq?, to_seq?, offset?, limit?, query? }` | 无（只读本会话日志） | 读回**被压缩替换**的历史消息（0.57）。无参 ⇒ 列出本会话的压缩段（id / 原因 / 条数 / seq 区间 / 摘要首行）；给 `compaction_id`（或 `from_seq`/`to_seq`）⇒ 返回**原始消息**，一行一条。三条上界：≤200 条 / ≤16k token / ≤20000 事件扫描；分页给 `next_offset` 与更便宜的 `next_from_seq`。压缩当刻写进摘要正文的那行 `[compacted] N messages (seq a..b) …` 就是它的入口。老会话无索引时明说，不编造。**这不是读文件** |
 | `read` | `{ path, offset?, limit? }` | `allow`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | 带行号返回（从 1 开始）。`limit` 默认 2000 行；截断时标注总行数与继续读的方式 |
-| `edit` | `{ path, old_string, new_string, replace_all? }` | `ask`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `old_string` 必须**精确匹配且唯一**；不唯一时报错并说明匹配次数，未匹配时报错；`replace_all: true` 才允许多处替换 |
+| `edit` | `{ path, old_string, new_string, replace_all?, subscribe? }` | `ask`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `old_string` 必须**精确匹配且唯一**；不唯一时报错并说明匹配次数，未匹配时报错；`replace_all: true` 才允许多处替换。`subscribe:false` opt-out 自动订阅（缺省自动订阅所改文件）。写临界区持工作区写锁（同 write 行） |
 
 <a id="vessel-bridge"></a>
 
