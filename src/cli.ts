@@ -128,6 +128,7 @@ import {
   createPluginReloader,
   pluginSettingsFor,
 } from './plugin-host-assembly';
+import { FACTORY_PLUGINS } from './plugin-loader';
 import { type PluginWatchHandle, startPluginWatch } from './plugin-watch';
 import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
@@ -162,9 +163,10 @@ import { ensureWebDist, interruptWebBuild, webDistWarning } from './web-dist';
 
 /**
  * 由专用装配路径管理的工厂式插件：tools applier 不能把它们当普通插件装
- * （MCP 建连 / evals 报告 / feishu 渠道各有自己的 applier 或启动面）。
+ * （MCP 建连 / evals 报告 / feishu 渠道 / engine-client 各有自己的 applier 或启动面）。
+ * 唯一真源 = plugin-loader 的 FACTORY_PLUGINS（不再维护第二份名单）。
  */
-const MCP_FACTORY_PLUGINS: ReadonlySet<string> = new Set(['mcp-client', 'evals', 'feishu']);
+const MCP_FACTORY_PLUGINS: ReadonlySet<string> = FACTORY_PLUGINS;
 
 /**
  * Web UI 构建产物目录（不判断是否存在）。`VESSEL_STATIC_DIR` 覆盖默认路径；
