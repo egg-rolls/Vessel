@@ -9,8 +9,8 @@
  * - **attempt-based**（edit/write）：业务错误（edit 未匹配 / write EEXIST）也订阅——尝试改 X = 关心 X；
  *   AfterTool 不带结果文本（tool-calling-loop.ts:667-672），无法区分业务成功，既有面零新管道。
  * - **read 分支自然成功近似**：clamp/offset/limit 校验天然滤掉失败 read（readSubscribePath，tool.ts），
- *   ≈ 仅成功订阅，零新回执管道。read 无 subscribe:false opt-out（模型面新字段待批）。
- * - **subscribe:false opt-out**（edit/write，用户已批）：自信一次成型可跳过订阅省 token。
+ *   ≈ 仅成功订阅，零新回执管道。
+ * - **subscribe:false opt-out**（edit/write/read，用户已批）：自信一次成型 / 一次性查看可跳过订阅省 token。
  * - **基线抑制**：订阅时把当前观察记为 notified_rev，自己刚做的改动不出卡，
  *   只有他人再改（rev 不同）才通知（autoSubscribePath / readSubscribePath，tool.ts）。
  * - **覆盖两条执行路**：hook 在 host 侧跑，与 handler 在 in-process 还是 engine worker 无关。
@@ -35,6 +35,8 @@ export function createAutoSubscribeHook(deps: SubscribeToolDeps): Hook {
       const input = ctx.input;
       if (typeof input !== 'object' || input === null) return;
       const record = input as Record<string, unknown>;
+      // opt-out 对 edit/write/read 同口径（用户已批）：缺省自动订阅，显式 false 跳过。
+      if (record.subscribe === false) return;
       if (ctx.tool === 'read') {
         try {
           await readSubscribePath(deps, ctx.session_id ?? 'default', record);
@@ -44,7 +46,6 @@ export function createAutoSubscribeHook(deps: SubscribeToolDeps): Hook {
         return;
       }
       if (ctx.tool !== 'edit' && ctx.tool !== 'write') return;
-      if (record.subscribe === false) return;
       const rawPath = typeof record.path === 'string' ? record.path : '';
       if (rawPath.trim() === '') return;
       try {

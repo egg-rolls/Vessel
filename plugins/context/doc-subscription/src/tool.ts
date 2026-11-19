@@ -445,7 +445,7 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
       'Manage per-session file subscriptions. add/remove/list/inspect concrete files; ' +
       'changes produce a short notice, and inspect returns the diff (full content on first read). ' +
       'edit/write auto-subscribe the files they touch (subscribe:false on those tools opts out); ' +
-      'read auto-subscribes the line ranges it reads (no opt-out). ' +
+      'read auto-subscribes the line ranges it reads (subscribe:false on read opts out). ' +
       'use remove to clear subscriptions you no longer need (e.g. when switching tasks).',
     inputSchema: {
       type: 'object',
