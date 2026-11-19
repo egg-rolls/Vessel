@@ -9,11 +9,35 @@
  * 两个游标：
  * - `notified_rev`：短通知已返回给模型的最新 rev；推进后同一 rev 不再通知。
  * - `seen_rev`：`inspect` 成功返回正文后的最新 rev；失败 / 超限不推进。
+ *
+ * line-level 阅读订阅（蜂群协作增强）additive：
+ * - `origin`：创建/升级来源（升级梯 manual > edit > read）；旧条目缺省 'manual'（永不自过期）。
+ * - `reads`：read 引用记录，`reads.length` 即引用计数；清除按规范化请求值 (offset, limit)
+ *   匹配删一条（相同请求的多次 read 记录可互换，删任一条语义等价）。
+ * - `cleared_consumed`：单调增长的已消费清除 id ledger（段重置/pop 后同 id 再现不重复释放）。
+ * 过期只由清除驱动：origin='read' 且 reads 归零才过期；压缩/pop 导致输出离开窗口不触发过期。
  */
 
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
+
+/**
+ * 一条 read 引用（line-level 订阅）。不存 tool_call_id（AfterTool 拿不到）：
+ * 每次 read 订阅追加一条，清除释放按规范化请求值匹配删一条。
+ */
+export interface ReadRef {
+  /** 规范化请求值：offset ?? 1（1-based；非法值的 read 整个不订阅） */
+  offset: number;
+  /** 规范化请求值：limit ?? DEFAULT_READ_LIMIT */
+  limit: number;
+  /** 订阅时 clamp 后的 1-based 闭区间起始行（请求范围 ∩ 文件实际行数） */
+  start?: number;
+  /** 订阅时 clamp 后的 1-based 闭区间结束行 */
+  end?: number;
+  /** 订阅时该范围内容（仅字节数 ≤ maxFullBytes 才存；缺省 ⇒ 观察时整文件兜底） */
+  text?: string;
+}
 
 /** 一个订阅条目 */
 export interface SubscriptionEntry {
@@ -39,6 +63,10 @@ export interface SubscriptionEntry {
   seen_at: number;
   /** 上一版 `seen_rev` 对应的全文（仅文本且 <= maxFullBytes 时保留） */
   snapshot?: string;
+  /** 创建/升级来源；旧条目缺省 'manual'（安全：永不自过期）。升级梯 manual > edit > read */
+  origin: 'manual' | 'read' | 'edit';
+  /** read 引用记录（缺省 []）；origin='read' 且归零时条目过期 */
+  reads: ReadRef[];
 }
 
 /** 一个 session 的订阅状态 */
@@ -47,11 +75,13 @@ export interface SessionSubscriptionState {
   session_id: string;
   /** key = canonicalPath */
   subscriptions: Record<string, SubscriptionEntry>;
+  /** 单调增长的已消费清除 id ledger（缺省 []）；边缘触发释放，同 id 再现不重复释放 */
+  cleared_consumed: string[];
 }
 
 /** 空状态 */
 export function emptyState(sessionId: string): SessionSubscriptionState {
-  return { v: 1, session_id: sessionId, subscriptions: {} };
+  return { v: 1, session_id: sessionId, subscriptions: {}, cleared_consumed: [] };
 }
 
 /** 订阅 id：canonicalPath 的 sha256 前 12 个 hex 字符 */
@@ -74,6 +104,43 @@ function readNumber(record: Record<string, unknown>, key: string, fallback: numb
 function readString(record: Record<string, unknown>, key: string, fallback: string): string {
   const value = record[key];
   return typeof value === 'string' ? value : fallback;
+}
+
+/** reads 防御解析：只保留规范化请求值合法的 ref；start/end/text 缺失或非法即省略 */
+function normalizeReads(value: unknown): ReadRef[] {
+  if (!Array.isArray(value)) return [];
+  const refs: ReadRef[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const offset = item.offset;
+    const limit = item.limit;
+    if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 1) continue;
+    if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) continue;
+    const ref: ReadRef = { offset, limit };
+    const start = item.start;
+    const end = item.end;
+    if (
+      typeof start === 'number' &&
+      Number.isInteger(start) &&
+      start >= 1 &&
+      typeof end === 'number' &&
+      Number.isInteger(end) &&
+      end >= start
+    ) {
+      ref.start = start;
+      ref.end = end;
+    }
+    if (typeof item.text === 'string') ref.text = item.text;
+    refs.push(ref);
+  }
+  return refs;
+}
+
+/** cleared_consumed 防御解析：只留非空字符串并去重（ledger 单调增长，去重不改语义） */
+function normalizeConsumedIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const ids = value.filter((id): id is string => typeof id === 'string' && id.length > 0);
+  return [...new Set(ids)];
 }
 
 /** 把磁盘上的 JSON 规整成状态；任何结构问题都降级为空状态 */
@@ -99,12 +166,20 @@ function normalizeState(sessionId: string, parsed: unknown): SessionSubscription
       mtime_ms: readNumber(value, 'mtime_ms', 0),
       notified_at: readNumber(value, 'notified_at', readNumber(value, 'delivered_at', 0)),
       seen_at: readNumber(value, 'seen_at', 0),
+      // 旧条目缺省 'manual'：永不自过期（安全方向）；非法值同样回落。
+      origin: value.origin === 'read' || value.origin === 'edit' ? value.origin : 'manual',
+      reads: normalizeReads(value.reads),
     };
     if (typeof value.snapshot === 'string') entry.snapshot = value.snapshot;
     // 以 canonical path 为唯一键，避免手改/旧文件里的键与 path 漂移造成重复条目。
     subscriptions[canonical] = entry;
   }
-  return { v: 1, session_id: sessionId, subscriptions };
+  return {
+    v: 1,
+    session_id: sessionId,
+    subscriptions,
+    cleared_consumed: normalizeConsumedIds(parsed.cleared_consumed),
+  };
 }
 
 /** per-session JSON 状态存储 */

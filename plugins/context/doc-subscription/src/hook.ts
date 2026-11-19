@@ -13,24 +13,37 @@
  * 现在默认可见、渲染成「文件变更」环境卡 —— 这是有意的（订阅是用户自己开的）。老会话里的
  * `vessel:subscription` 消息不做特判，走「未登记 kind」的兜底渲染，仍是可读卡。
  *
- * - 通知不含正文 / diff，只列 path、id、rev、bytes；
- * - 通知写入后推进 `notified_rev`，同一 rev 不再重复通知；
- * - 正文只在模型显式调用 `subscribe inspect` 时返回，届时才推进 `seen_rev`。
+ * - 通知默认只列 path、id、rev、bytes；**有 read 引用的条目**走 line-level 观察：
+ *   内容锚重定位 + 范围 diff，第一个（path 序）line-level 变化条目可带 `  · <diff line>`
+ *   明细行（行/字节预算见 notice.ts）；任一 ref 无 text / 锚歧义 / diff 超限 ⇒ 整文件兜底。
+ * - 通知写入后推进 `notified_rev`，同一 rev 不再重复通知；全部 ref 未变 ⇒ 只刷新观察值，
+ *   notified_rev 不动（下 run 幂等重查）。
+ * - 整文件正文只在模型显式调用 `subscribe inspect` 时返回，届时才推进 `seen_rev`。
+ * - 观察循环前先消费会话壳清除集合（lifecycle.ts，每 run 一次）：read 引用释放 / 过期；
+ *   与观察循环合并落盘（每 run 一次 load/save）。
  * - 文件正文不进入 trace / 日志（插件不主动写）。
  */
 
 import { createHash } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
-import { evaluatePath, type PathBoundary } from '@vessel-agent/basic-tools';
+import { evaluatePath, type PathBoundary, splitLines } from '@vessel-agent/basic-tools';
 import type { Hook, HookContext, HookResult } from '@vessel-agent/core';
 import type { DocSubscriptionConfig } from './config.js';
+import { unifiedDiff } from './diff.js';
+import { consumeClearedToolResults } from './lifecycle.js';
 import {
   formatSubscriptionNotice,
   SUBSCRIPTION_NOTICE_DETAILS_MAX,
   SUBSCRIPTION_NOTICE_MESSAGE_NAME,
+  type SubscriptionNoticeContent,
 } from './notice.js';
-import type { SessionSubscriptionState, SubscriptionEntry, SubscriptionStore } from './store.js';
+import type {
+  ReadRef,
+  SessionSubscriptionState,
+  SubscriptionEntry,
+  SubscriptionStore,
+} from './store.js';
 
 /** 与 read 工具同口径的单文件上限 */
 export const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -53,6 +66,8 @@ interface Observation {
   rev: string;
   size: number;
   mtime_ms: number;
+  /** 文件文本（仅文本、≤8MiB 且本次真正读了文件；便宜路径 / deleted / 超限 / 二进制不带） */
+  text?: string;
 }
 
 /** 内容 hash */
@@ -79,14 +94,15 @@ function shortRev(rev: string): string {
   return `sha256:${rev.slice(0, 12)}`;
 }
 
-/** 单文件通知行：只含元数据 */
-function noticeLine(entry: SubscriptionEntry, observation: Observation): string {
+/** 单文件通知行：元数据；line-level 变化条目 additive 带 `lines="a-b"`（变化 ref 重定位范围并集） */
+function noticeLine(entry: SubscriptionEntry, observation: Observation, lines?: string): string {
   const attrs = [
     `path="${escapeXmlAttr(entry.path)}"`,
     `id="${escapeXmlAttr(entry.id)}"`,
     `rev="${escapeXmlAttr(shortRev(observation.rev))}"`,
     `bytes="${observation.size}"`,
   ];
+  if (lines !== undefined) attrs.push(`lines="${lines}"`);
   if (observation.rev === 'deleted') attrs.push('status="deleted"');
   else if (observation.rev.startsWith('too_large:')) attrs.push('status="too_large"');
   else if (observation.rev.startsWith('binary:')) attrs.push('status="binary"');
@@ -94,14 +110,79 @@ function noticeLine(entry: SubscriptionEntry, observation: Observation): string 
 }
 
 /**
- * 组装短通知（不含任何文件正文 / diff）。
+ * 组装短通知。
  *
  * 「报哪几条」是本 hook 的事（边界 / 大小 / 二进制判定都在这边）；线格式交给 `notice.ts`：
  * 首行 `files: …` + 明细行 `  · …`，与 `tools:` / `identity:` 同形，Web 才认得出这是
- * 「文件变更」环境卡。
+ * 「文件变更」环境卡。`content` = 第一个 line-level 变化条目的 diff 明细（可缺省）。
  */
-function buildNotice(lines: string[], total: number): string {
-  return formatSubscriptionNotice(lines, total);
+function buildNotice(lines: string[], total: number, content?: SubscriptionNoticeContent): string {
+  return formatSubscriptionNotice(lines, total, content);
+}
+
+/** 有 reads 条目的 line-level 分析结果 */
+type ReadsAnalysis =
+  | { kind: 'unchanged'; reads: ReadRef[] }
+  | { kind: 'line'; reads: ReadRef[]; diffLines: string[]; start: number; end: number }
+  | { kind: 'fallback' };
+
+/**
+ * 逐 ref 内容锚重定位 + 范围 diff（CONTRACT-swarm-subscribe §4）。
+ *
+ * - oldLines = splitLines(ref.text)，在新文件行中找首尾行都匹配的候选；**恰 1 个**才重定位
+ *   成功，0 或 >1 ⇒ 歧义 ⇒ 整条目整文件兜底（重复行多的文件漂移率待实测）。
+ * - diff.text==='' ⇒ 范围未变：只更新 start/end；truncated ⇒ 整文件兜底；
+ *   否则收集 diff 行并更新 ref.text/start/end。
+ * - 任一 ref 无 text / 歧义 / truncated ⇒ fallback；ref 更新是**全有或全无**（兜底时不动 refs，
+ *   旧锚仍是下次重定位的基准）。
+ * - 全部 ref 未变 ⇒ unchanged（notified_rev 不动，下 run 幂等重查）。
+ */
+function analyzeReads(
+  reads: readonly ReadRef[],
+  text: string | undefined,
+  config: DocSubscriptionConfig,
+): ReadsAnalysis {
+  if (text === undefined) return { kind: 'fallback' };
+  const newLines = splitLines(text);
+  const updated: ReadRef[] = [];
+  const diffLines: string[] = [];
+  let minStart = Number.POSITIVE_INFINITY;
+  let maxEnd = 0;
+  for (const ref of reads) {
+    if (ref.text === undefined) return { kind: 'fallback' };
+    const oldLines = splitLines(ref.text);
+    const len = oldLines.length;
+    if (len === 0 || len > newLines.length) return { kind: 'fallback' };
+    let found = -1;
+    let count = 0;
+    for (let i = 0; i + len <= newLines.length; i += 1) {
+      if (newLines[i] === oldLines[0] && newLines[i + len - 1] === oldLines[len - 1]) {
+        count += 1;
+        if (count > 1) break;
+        found = i;
+      }
+    }
+    if (count !== 1) return { kind: 'fallback' };
+    const start = found + 1;
+    const end = found + len;
+    const newRangeText = newLines.slice(found, found + len).join('\n');
+    const diff = unifiedDiff(ref.text, newRangeText, {
+      maxBytes: config.maxDiffBytes,
+      maxLines: config.maxDiffLines,
+    });
+    if (diff.text === '') {
+      // 范围未变：只刷新位置；ref 对象尽量复用（调用方按引用判 reads 是否变化）。
+      updated.push(start === ref.start && end === ref.end ? ref : { ...ref, start, end });
+      continue;
+    }
+    if (diff.truncated) return { kind: 'fallback' };
+    updated.push({ ...ref, text: newRangeText, start, end });
+    diffLines.push(...diff.text.split('\n'));
+    if (start < minStart) minStart = start;
+    if (end > maxEnd) maxEnd = end;
+  }
+  if (diffLines.length === 0) return { kind: 'unchanged', reads: updated };
+  return { kind: 'line', reads: updated, diffLines, start: minStart, end: maxEnd };
 }
 
 /**
@@ -126,8 +207,15 @@ export async function observeEntry(
   }
   if (!info.isFile()) return undefined;
 
-  // 便宜路径：status 不变且 stat 未变，不读文件。
-  if (entry.rev !== '' && info.mtimeMs === entry.mtime_ms && info.size === entry.size) {
+  // 便宜路径：stat 未变且**无待发通知**，不读文件。
+  // rev ≠ notified_rev 意味着待处理的 line-level 重查（上次全部 ref 未变、notified_rev 没动），
+  // 必须读内容才能重定位锚点 —— 走便宜路径会缺 text，被误判成整文件兜底通知。
+  if (
+    entry.rev !== '' &&
+    entry.rev === entry.notified_rev &&
+    info.mtimeMs === entry.mtime_ms &&
+    info.size === entry.size
+  ) {
     return { rev: entry.rev, size: entry.size, mtime_ms: entry.mtime_ms };
   }
 
@@ -146,10 +234,15 @@ export async function observeEntry(
     return undefined;
   }
   const hash = sha256Hex(buffer);
+  if (buffer.includes(0)) {
+    return { rev: `binary:${hash}`, size: buffer.byteLength, mtime_ms: info.mtimeMs };
+  }
+  // 顺手给出文本（line-level 观察用；仅文本且 ≤8MiB —— 超限在上面已走 too_large）。
   return {
-    rev: buffer.includes(0) ? `binary:${hash}` : hash,
+    rev: hash,
     size: buffer.byteLength,
     mtime_ms: info.mtimeMs,
+    text: buffer.toString('utf-8'),
   };
 }
 
@@ -182,15 +275,24 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
         return;
       }
 
+      let dirty = false;
+      // 生命周期消费在观察循环前（每 run 一次）：清除驱动的引用释放 / 过期。
+      // subscriptions 为空也要消费 ledger —— 否则「remove 清空 → 同段再 read」后，
+      // 旧 cleared id 会误释放新引用（见 lifecycle.ts）。
+      try {
+        dirty = await consumeClearedToolResults(state, sessionId, deps.config);
+      } catch {
+        // best-effort：生命周期失败不打断观察 / 通知。
+      }
+
       const entries = Object.values(state.subscriptions).sort((a, b) =>
         a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
       );
-      if (entries.length === 0) return;
 
       const now = Date.now();
       const lines: string[] = [];
       let changedCount = 0;
-      let dirty = false;
+      let content: SubscriptionNoticeContent | undefined;
 
       for (const entry of entries) {
         let observation: Observation | undefined;
@@ -219,8 +321,52 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
           continue;
         }
 
+        // 有 reads 的条目走 line-level 分析；无 reads ⇒ 既有整文件路径逐字节不变。
+        let lineLevel: Extract<ReadsAnalysis, { kind: 'line' }> | undefined;
+        if (entry.reads.length > 0) {
+          const analysis = analyzeReads(entry.reads, observation.text, deps.config);
+          if (analysis.kind === 'unchanged') {
+            // 全部 ref 未变：只刷新观察值（及重定位后的 start/end），notified_rev 不动，
+            // 下 run 幂等重查。无变化不写盘。
+            const readsChanged = analysis.reads.some((ref, i) => ref !== entry.reads[i]);
+            if (
+              readsChanged ||
+              entry.rev !== observation.rev ||
+              entry.size !== observation.size ||
+              entry.mtime_ms !== observation.mtime_ms
+            ) {
+              state.subscriptions[entry.path] = {
+                ...entry,
+                rev: observation.rev,
+                size: observation.size,
+                mtime_ms: observation.mtime_ms,
+                reads: analysis.reads,
+              };
+              dirty = true;
+            }
+            continue;
+          }
+          if (analysis.kind === 'line') lineLevel = analysis;
+          // kind === 'fallback' ⇒ 整文件通知（既有 noticeLine 语义），refs 不动。
+        }
+
         changedCount += 1;
-        if (lines.length < MAX_NOTICE_ENTRIES) lines.push(noticeLine(entry, observation));
+        if (lines.length < MAX_NOTICE_ENTRIES) {
+          if (lineLevel !== undefined) {
+            lines.push(noticeLine(entry, observation, `${lineLevel.start}-${lineLevel.end}`));
+            // 内容行只跟第一个（path 序）line-level 变化条目；其元数据行被 8 条上限
+            // 裁掉时没有插入点，content 保持缺省。
+            if (content === undefined) {
+              content = {
+                afterIndex: lines.length - 1,
+                diffLines: lineLevel.diffLines,
+                maxBytes: deps.config.maxTotalBytesPerRun,
+              };
+            }
+          } else {
+            lines.push(noticeLine(entry, observation));
+          }
+        }
         state.subscriptions[entry.path] = {
           ...entry,
           rev: observation.rev,
@@ -228,6 +374,7 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
           mtime_ms: observation.mtime_ms,
           notified_rev: observation.rev,
           notified_at: now,
+          ...(lineLevel !== undefined ? { reads: lineLevel.reads } : {}),
         };
         dirty = true;
       }
@@ -244,7 +391,7 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       const message = {
         role: 'user' as const,
         name: SUBSCRIPTION_NOTICE_MESSAGE_NAME,
-        content: buildNotice(lines, changedCount),
+        content: buildNotice(lines, changedCount, content),
         timestamp: now,
       };
       ctx.messages = [...(ctx.messages ?? []), message];

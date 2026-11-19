@@ -13,6 +13,11 @@ import * as path from 'node:path';
 export interface DocSubscriptionConfig {
   /** 订阅状态目录；per-session JSON 写在 `<stateDir>/sessions/` */
   stateDir: string;
+  /**
+   * 数据目录（生命周期消费读会话壳用；会话根 = `resolveSingleTenantPaths(dataDir).sessions_dir`）。
+   * 缺省 `VESSEL_DATA_DIR` → `~/.vessel/data`（recall 同口径）；装配层会显式注入 `data_dir`。
+   */
+  dataDir: string;
   /** 相对路径解析基准 */
   cwd: string;
   /** 允许的根；空 = 不限制根（内置 denylist 仍生效） */
@@ -34,6 +39,7 @@ export interface DocSubscriptionConfig {
 /** 默认值 */
 export const DEFAULT_CONFIG: Readonly<DocSubscriptionConfig> = {
   stateDir: path.join(os.homedir(), '.vessel', 'subscriptions'),
+  dataDir: path.join(os.homedir(), '.vessel', 'data'),
   cwd: process.cwd(),
   allowedRoots: [],
   denyPaths: [],
@@ -56,6 +62,15 @@ function expandHomePrefix(entry: string): string {
     return path.join(os.homedir(), entry.slice(2));
   }
   return entry;
+}
+
+/**
+ * 用户输入按配置 cwd 解析为绝对路径。
+ * subscribe / edit-write 自动订阅 / read 订阅 / 生命周期释放共用同一口径
+ * （已知局限：AfterTool 无成员 cwd，成员 cwd 相对路径可能漏订/漏释放）。
+ */
+export function resolveInput(config: DocSubscriptionConfig, input: string): string {
+  return path.resolve(config.cwd, expandHomePrefix(input));
 }
 
 /** 读取字符串数组字段（camelCase 优先，兼容 snake_case） */
@@ -119,8 +134,19 @@ export function parseDocSubscriptionConfig(value: unknown): DocSubscriptionConfi
   const cwd =
     cwdValue !== undefined ? path.resolve(expandHomePrefix(cwdValue)) : DEFAULT_CONFIG.cwd;
 
+  // dataDir 优先级（recall 同口径）：用户显式（两拼写）> VESSEL_DATA_DIR > ~/.vessel/data。
+  const dataDirValue = readStringField(source, 'dataDir', 'data_dir');
+  const fromEnv = process.env.VESSEL_DATA_DIR;
+  const dataDirRaw =
+    dataDirValue ??
+    (typeof fromEnv === 'string' && fromEnv.trim() !== ''
+      ? fromEnv.trim()
+      : DEFAULT_CONFIG.dataDir);
+  const dataDir = path.resolve(expandHomePrefix(dataDirRaw));
+
   return {
     stateDir,
+    dataDir,
     cwd,
     allowedRoots: readStringArray(source, 'allowedRoots', 'allowed_roots') ?? [],
     denyPaths: readStringArray(source, 'denyPaths', 'deny_paths') ?? [],
