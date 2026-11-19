@@ -41,11 +41,10 @@
  *   `noticeContent`，事件侧见 `packages/agent/src/runtime.ts`）。它过去既不在 `ENV_INFO_SCOPES`
  *   里、也没有卡头标签 ⇒ 只能落进兜底「上下文」，用户在杂项里扫不到。
  *
- * 生产者加了词而这里没加，`scripts/check-append-only-context.ts` 的 C3 会直接红——**但只对
- * `ENV_INFO_SCOPES` 认识的词成立**：C3 比的是「模型侧分节词表 ⊂ Web 词表」，一个生产者若发的是
- * 分节词表里没有的字面量（0.53 的 `inbox` 就是这样），C3 看不见它，卡头静默退化成「上下文」。
- * 补这道缝的是 `scripts/check-env-scope-parity.ts`：它扫生产源代码里真实的 scope 字面量，
- * 断言每一个都在本词表里、都有非空标签、且解析器真的认得出（词表登记了却解析不出来 = 标签是死代码）。
+ * 词表联动为**人工核对**（旧 C3/parity 脚本已按宪法删除，不重建）：生产者加词时同步
+ * agent `ENV_INFO_SCOPES` + 本数组 + i18n 标签（`chat.env.scope.*`）+ config
+ * `DEFAULT_ENV_CADENCE` + 插件字面量副本。这里漏了词，卡头静默退化成「上下文」；
+ * 登记了词却没有标签 / 解析器认不出，标签就是死代码。
  */
 export const ENV_NOTICE_SCOPES = [
   'config',
@@ -59,6 +58,8 @@ export const ENV_NOTICE_SCOPES = [
   'model',
   'identity',
   'fields',
+  'lock',
+  'conflict',
   'files',
   'context',
   'trim',

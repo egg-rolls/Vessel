@@ -20,6 +20,7 @@ import type { EngineClient } from '@vessel-agent/engine-client';
 import {
   type ConfigSources,
   DEFAULT_TIMELINE_OPTIONS,
+  resolveEnvCadence,
   type VesselConfig,
 } from '../packages/config/src/index';
 import {
@@ -863,6 +864,7 @@ export async function buildTenantRuntime(
     declarativePlugins,
     resolveAgentCwd(config),
     resolveDataDir(config),
+    config.envInjection,
   );
   const pluginSelection = resolvePluginSelection(
     loader,
@@ -1023,7 +1025,11 @@ export async function buildTenantRuntime(
     ...(pricing !== undefined ? { pricing } : {}),
     // 0.56：视觉的运行期设置（能力在 provider.vision 上，由 provider 插件挂）。
     // 没有 `enable` 这个键：支持即直通；`disabled` 是出事时的 kill switch（不是默认门）。
-    ...(visionSettingsOf(config) !== undefined ? { vision: visionSettingsOf(config) } : {}), // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
+    ...(visionSettingsOf(config) !== undefined ? { vision: visionSettingsOf(config) } : {}),
+    // 注入粒度框架：EU notice producer（tools / pii）的检测节奏端口。缺省配置走
+    // 内置默认表（全 request）⇒ gate 恒放行，零回归；model / trim 钉死不经此端口。
+    envCadence: (scope) => resolveEnvCadence(scope, config.envInjection),
+    // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
     includeReasoning: includeReasoningFor(config),
     context: {
       ...(config.context?.maxTokens !== undefined ? { maxTokens: config.context.maxTokens } : {}),

@@ -308,4 +308,13 @@ export interface ExecutionUnitOptions {
    * 装配层从 `vision.*` 配置段解析；缺省不注入 ⇒ 用默认值（6 张 / 无精度偏好 / 不关闭）。
    */
   vision?: import('./vision.js').VisionSettings;
+  /**
+   * 环境信息检测节奏端口（注入粒度框架轴 A；additive）。
+   *
+   * 装配层注入 `scope => resolveEnvCadence(scope, config.envInjection)`；EU 的
+   * notice producer（tools / pii）在**观察 / diff 之前**问它：`run` ⇒ 每 run 只观察
+   * 首次请求。core 不认识 scope 业务词，只调注入函数。缺省不注入 ⇒ 恒按 request
+   * 观察（今天行为，零回归）。model / trim 的自然节奏钉死，不经此端口。
+   */
+  envCadence?: (scope: string) => import('./env-cadence.js').EnvCadence;
 }

@@ -37,6 +37,12 @@ export interface HookContext {
    * 只能由 runtime 告诉它，hook 自己无法从 `messages` 里反查。
    */
   refs?: readonly MessageRef[];
+  /**
+   * BeforeLlm：本 run 第几次 LLM 请求（**0 起**，首请求 = 0）。
+   * run 级节奏 gate 用（`cadence === 'run' && request_index > 0 ⇒ 跳过观察`）。
+   * 缺省 = 旧 caller 未传，按 0 处理。
+   */
+  request_index?: number;
   /** BeforeTool / AfterTool：当前工具名（0.6.1 P2） */
   tool?: string;
   /** BeforeTool / AfterTool：当前工具输入；BeforeTool 可经 HookResult.updatedInput 改写 */

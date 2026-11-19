@@ -334,6 +334,7 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
     const hookCtx: HookContext = {
       run_id: runId,
       session_id: sessionId,
+      request_index: round - 1,
       ...(inputRefs !== undefined && inputRefs.length > 0 ? { refs: inputRefs } : {}),
     };
     const baseSystemPrompt = ctx.controls.getBaseSystemPrompt();

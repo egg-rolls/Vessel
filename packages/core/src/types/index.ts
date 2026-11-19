@@ -4,6 +4,7 @@
  */
 
 export * from './context.js';
+export * from './env-cadence.js';
 export * from './error.js';
 export * from './event.js';
 export * from './guardrail.js';

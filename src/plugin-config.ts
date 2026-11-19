@@ -10,16 +10,18 @@
  */
 
 import {
+  type EnvInjectionConfig,
   type GuardrailConfig,
   getUserConfigPath,
   type HookConfig,
   type PluginConfig,
   readUserConfigRoot,
+  resolveEnvCadence,
   type VesselConfig,
   withConfigLock,
   writeUserConfigRoot,
 } from '../packages/config/src/index';
-import type { Plugin, PluginHost, PluginInitContext } from '../packages/core/src/index';
+import type { EnvCadence, Plugin, PluginHost, PluginInitContext } from '../packages/core/src/index';
 
 /** core 0.6.1 的 install 形状；旧签名只用第一个参数也能工作 */
 export type PluginInstallOptions = { config?: Record<string, unknown> };
@@ -164,6 +166,7 @@ export function buildPluginConfigMap(
   declarative: PluginConfig[] = [],
   agentCwd?: string,
   dataDir?: string,
+  envInjection?: EnvInjectionConfig,
 ): Record<string, Record<string, unknown>> {
   const map: Record<string, Record<string, unknown>> = {};
   for (const entry of declarative) {
@@ -179,7 +182,43 @@ export function buildPluginConfigMap(
   }
   applyPathBoundaryFallback(map);
   applyDataDirFallback(map, dataDir);
+  applyEnvGranularity(map, envInjection);
   return map;
+}
+
+/**
+ * 插件产哪些 env scope（asm 知道，插件自己不声明）：doc-subscription → files，
+ * basic-tools → lock / conflict（写协调 producer）。
+ */
+const ENV_GRANULARITY_SCOPES: Readonly<Record<string, readonly string[]>> = {
+  'doc-subscription': ['files'],
+  'basic-tools': ['lock', 'conflict'],
+};
+
+/**
+ * 把解析好的 per-scope 检测节奏注入插件安装配置，键 `envGranularity`
+ * （`Record<string, EnvCadence>`；注入粒度框架轴 A）。
+ *
+ * 为什么在装配层拼：插件包不 import config 的 resolver（依赖方向），只读 install
+ * config 里的字面量；缺省（无 `env_injection` 配置）**不注入**，插件用内置字面量
+ * 默认（= 今天节奏，零回归）。显式插件配置里已有 `envGranularity` 时不覆盖
+ * （用户显式配置优先，与 cwd / dataDir 回落同口径）。
+ *
+ * 生效链路：本函数是 `pluginConfigs` 的唯一产地 —— 运行时装配、热应用、`--tools`
+ * 吃同一份结果；插件 install 时读 `envGranularity.<scope>` 决定 producer 的 gate。
+ */
+function applyEnvGranularity(
+  map: Record<string, Record<string, unknown>>,
+  envInjection?: EnvInjectionConfig,
+): void {
+  if (envInjection === undefined) return;
+  for (const [name, scopes] of Object.entries(ENV_GRANULARITY_SCOPES)) {
+    const config = map[name] ?? {};
+    if (config.envGranularity !== undefined) continue;
+    const granularity: Record<string, EnvCadence> = {};
+    for (const scope of scopes) granularity[scope] = resolveEnvCadence(scope, envInjection);
+    map[name] = { ...config, envGranularity: granularity };
+  }
 }
 
 /**
@@ -238,7 +277,7 @@ const PATH_BOUNDARY_KEY_GROUPS: readonly (readonly [string, string])[] = [
  */
 function applyPathBoundaryFallback(map: Record<string, Record<string, unknown>>): void {
   const basicTools = map['basic-tools'];
-  const media = map['media'];
+  const media = map.media;
   if (basicTools === undefined || media === undefined) return;
   const merged: Record<string, unknown> = { ...media };
   let inherited = false;
@@ -251,7 +290,7 @@ function applyPathBoundaryFallback(map: Record<string, Record<string, unknown>>)
     inherited = true;
   }
   // 没有回退到任何键时保持原对象引用，避免制造无意义的新对象（配置指纹按 JSON 比）
-  if (inherited) map['media'] = merged;
+  if (inherited) map.media = merged;
 }
 
 /**

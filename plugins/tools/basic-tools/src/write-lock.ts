@@ -33,6 +33,14 @@ import * as path from 'node:path';
 /** 争用等待上限（毫秒）；超时折稳定错误 */
 export const WRITE_LOCK_WAIT_MS = 10_000;
 
+/**
+ * 锁文件路径（唯一产地）：获取锁与写协调表面记录（lock scope 明细）共用同一份字面量，
+ * 避免两处各拼一遍 `.vessel/write.lock` 后静默漂移。
+ */
+export function writeLockPath(baseCwd: string): string {
+  return path.join(baseCwd, '.vessel', 'write.lock');
+}
+
 /** 争用轮询间隔（毫秒） */
 const WRITE_LOCK_POLL_MS = 25;
 
@@ -278,7 +286,7 @@ function sleep(ms: number): Promise<void> {
  */
 export async function acquireWriteLock(baseCwd: string, signal?: AbortSignal): Promise<WriteLock> {
   const dir = path.join(baseCwd, '.vessel');
-  const lockPath = path.join(dir, 'write.lock');
+  const lockPath = writeLockPath(baseCwd);
   try {
     await mkdir(dir, { recursive: true });
   } catch (error) {

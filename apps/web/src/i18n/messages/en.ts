@@ -1401,6 +1401,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.scope.restart': 'Restart',
   'chat.env.scope.identity': 'Identity',
   'chat.env.scope.fields': 'Fields',
+  // Write coordination (swarm): lock contention / expected_content conflict, produced by basic-tools.
+  'chat.env.scope.lock': 'Write lock',
+  'chat.env.scope.conflict': 'Write conflict',
   'chat.env.scope.files': 'File changes',
   'chat.env.scope.model': 'Model',
   'chat.env.scope.selfcard': 'Base info',

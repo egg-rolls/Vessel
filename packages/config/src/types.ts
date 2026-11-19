@@ -5,6 +5,8 @@
  * 所有字段使用 camelCase（ADR-019）。config loader 自动将 YAML 的 snake_case 映射过来。
  */
 
+import type { EnvCadence } from '@vessel-agent/core';
+
 /** Provider 配置 */
 export interface ProviderConfig {
   name: string;
@@ -176,6 +178,21 @@ export interface ContextConfig {
   maxMessages?: number;
   autoCompact?: boolean;
   compactThreshold?: number;
+}
+
+/**
+ * 环境信息注入节奏框架（YAML 键 `env_injection`，loader 自动映射为 camelCase）。
+ *
+ * 轴 A 检测节奏：`request` = 每 LLM 请求前检测；`run` = 每 run 首次请求前检测。
+ * 抑制去重（轴 B）恒开，与本配置无关。缺省 = 内置默认表（`DEFAULT_ENV_CADENCE`，
+ * = 今天节奏，零回归）。`trim` / `model` 由前缀不变量 / EU 生命周期钉死为 run，
+ * 配 `request` 会被校验拒绝（不静默钳制）。
+ */
+export interface EnvInjectionConfig {
+  /** 内置默认表未收录的 scope 的兜底节奏；都缺省时回落 'run'。 */
+  default?: EnvCadence;
+  /** 按 scope 覆盖节奏；键必须在 DEFAULT_ENV_CADENCE 里（拒未知词，防 typo）。 */
+  scopes?: Partial<Record<string, EnvCadence>>;
 }
 
 /**
@@ -1088,6 +1105,11 @@ export interface VesselConfig {
   pricing?: PricingConfig;
   session?: SessionConfig;
   context?: ContextConfig;
+  /**
+   * 注入节奏框架（YAML `env_injection`）；缺省 = 内置默认表，零回归。
+   * 字段名按 ADR-019 用 camelCase，loader 把 YAML 的 `env_injection` 映射过来。
+   */
+  envInjection?: EnvInjectionConfig;
   /** 0.56：视觉（kill switch / 预算 / 精度 / 预处理 / blob 生命周期）；缺省全部走默认值。 */
   vision?: VisionConfig;
   /** 0.6.1：工具权限免确认规则 */

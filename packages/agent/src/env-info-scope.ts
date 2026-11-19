@@ -11,15 +11,19 @@
  *   就会各自拼出不同的首词 —— Web 的 scope 判定按**行首 token** 做，一个词对不上，那条卡
  *   静默掉回兜底的「上下文」，正文看着正常、标签是错的（最难发现的那种坏）。
  * - Web 侧（`apps/web/src/domains/chat/env-notice.ts`）必须认得这里的每一个词。两边分属
- *   packages 与应用层，不能互相 import，所以 `scripts/check-append-only-context.ts` 的 C3
- *   做词表对拍：生产者加了词而 Web 没加，门禁直接红。
+ *   packages 与应用层，不能互相 import，词表对拍为**人工核对**（旧 C3/parity 脚本已按宪法
+ *   删除，不重建）：加词时同步 Web `ENV_NOTICE_SCOPES`、i18n 标签（`chat.env.scope.*`）、
+ *   config `DEFAULT_ENV_CADENCE` 与插件字面量副本。生产者加了词而 Web 没加，卡头会静默
+ *   退化成「上下文」。
  * - 还有一类生产者在**插件包**里（`plugins/context/doc-subscription`）：插件依赖 core、
  *   不依赖本包（依赖方向反了），因此它的首词只能是**字面量副本**
- *   （`plugins/context/doc-subscription/src/notice.ts`）。C3 对拍那份副本，不靠人记。
+ *   （`plugins/context/doc-subscription/src/notice.ts`）。那份副本同样在人工对拍范围内。
  *
  * 词义（决定卡头标签，不决定可见性）：
  * - `restart`：系统 / body 重启（换了一具 body，之前的上下文不再是「现在」）；
  * - `tools`：工具面变更（增减工具、权限档切换导致的可用工具变化）；
+ * - `lock`：工作区写锁争用 / 超时（basic-tools 产）；
+ * - `conflict`：expected_content 并发修改冲突（文件被他人改动导致写入拒绝，basic-tools 产）；
  * - `model`：模型变更；
  * - `identity`：身份变更（改名 / Team / parent）；
  * - `fields`：其它基础字段变更；
@@ -40,7 +44,9 @@
  * - 同轮多条环境信息的**落盘顺序**（一批变更跨种类时按它依次注入）；
  * - 一条消息里明细行的分组顺序（`formatSelfCardDeltas`）。
  *
- * 排列按「模型最该先知道」而非字母序：重启 → 身份 → 其它字段 → 模型 → 工具 → 文件 → 上下文。
+ * 排列按「模型最该先知道」而非字母序：重启 → 身份 → 其它字段 → 模型 → 工具 →
+ * 写协调（lock/conflict）→ 文件 → 上下文。lock/conflict 在 tools 后、files 前：
+ * 写协调事实（锁争用 / 并发冲突）先于文件变更本身。
  */
 export const ENV_INFO_SCOPES = [
   'restart',
@@ -48,6 +54,8 @@ export const ENV_INFO_SCOPES = [
   'fields',
   'model',
   'tools',
+  'lock',
+  'conflict',
   'files',
   'context',
   'trim',
@@ -71,7 +79,7 @@ export const ENV_INFO_MESSAGE_NAME = 'vessel:notice';
  * **必须**与 `src/runtime-notice-hook.ts` 的 `NOTICE_DETAIL_MARK` 逐字相同 —— Web 的
  * `env-notice.ts` 按这个标记认「这一行是明细」；对不上时整条消息会被读成一整行（明细全挤进
  * 卡头的单行 ellipsis，展开区空着）。两边分属 packages 与应用层，不能互相 import，
- * `src/self-card-delta.test.ts` 断言两者相等，防止哪天单边改动。
+ * 改动任一侧时人工核对另一侧逐字相同，防止哪天单边改动。
  */
 export const ENV_INFO_DETAIL_MARK = '  · ';
 

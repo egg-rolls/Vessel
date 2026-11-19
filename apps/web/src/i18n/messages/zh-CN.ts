@@ -1332,6 +1332,9 @@ export const messages = {
   'chat.env.scope.restart': '重启',
   'chat.env.scope.identity': '身份',
   'chat.env.scope.fields': '字段',
+  // 写协调（蜂群）：写锁争用 / expected_content 并发修改冲突，basic-tools 产。
+  'chat.env.scope.lock': '写锁争用',
+  'chat.env.scope.conflict': '写冲突',
   'chat.env.scope.files': '文件变更',
   'chat.env.scope.model': '模型',
   'chat.env.scope.selfcard': '基础信息',
