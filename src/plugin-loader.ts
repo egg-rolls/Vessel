@@ -45,8 +45,15 @@ const NON_PLUGIN_PACKAGES: ReadonlySet<string> = new Set([
 /**
  * 默认导出是**工厂函数**而非 Plugin 实例的插件——它们需要装配层注入运行时依赖，
  * 由 bootstrap 自行构造。
+ * `engine-client`（tools-engine P2）：无 install 注册面，工厂即插件面
+ * （createEngineClient 由 bootstrap 构造；转发 handler 写回既有定义，不注册自有工具）。
  */
-export const FACTORY_PLUGINS: ReadonlySet<string> = new Set(['mcp-client', 'evals', 'feishu']);
+export const FACTORY_PLUGINS: ReadonlySet<string> = new Set([
+  'mcp-client',
+  'evals',
+  'feishu',
+  'engine-client',
+]);
 
 /**
  * 只能显式启用的插件（opt-in）：`plugins:` 缺省时的默认集**不含**它们。
