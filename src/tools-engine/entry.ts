@@ -13,6 +13,7 @@ import * as readline from 'node:readline';
 import { createStderrLogger } from '@vessel-agent/core';
 import { ENGINE_ERROR, ENGINE_MAX_MESSAGE_BYTES, ENGINE_WIRE } from '@vessel-agent/engine-client';
 import { ToolsEngine } from './engine.js';
+import { McpConnectionManager } from './mcp.js';
 
 const logger = createStderrLogger();
 
@@ -114,7 +115,12 @@ function settleCallback(id: unknown, frame: Record<string, unknown>): void {
   pending.resolve(frame.result);
 }
 
-const engine = new ToolsEngine({ request: sendRequest, notify: sendNotification });
+// MCP 连接在 worker 侧；被动断开 → health notification（带 mcp 快照，host 缓存读面）。
+const mcp = new McpConnectionManager({
+  notifyHealth: () => sendNotification(ENGINE_WIRE.health, engine.health()),
+  logger,
+});
+const engine = new ToolsEngine({ request: sendRequest, notify: sendNotification }, mcp);
 
 // ── 入站分发 ─────────────────────────────────────────────────
 
@@ -154,8 +160,20 @@ function handleLine(line: string): void {
       if (isRequest) writeResult(id, { pong: true });
       return;
     case 'plugin.deactivate':
-      engine.dispose();
-      if (isRequest) writeResult(id, { ok: true });
+      void (async () => {
+        await engine.dispose();
+        if (isRequest) writeResult(id, { ok: true });
+      })();
+      return;
+    case ENGINE_WIRE.mcpControl:
+      if (!isRequest) return;
+      void (async () => {
+        try {
+          writeResult(id, await engine.handleMcpControl(parsed.params));
+        } catch (error) {
+          writeError(id, -32000, errorMessage(error));
+        }
+      })();
       return;
     case ENGINE_WIRE.toolInvoke:
       if (!isRequest) return;
@@ -205,12 +223,15 @@ let shuttingDown = false;
 function shutdown(): void {
   if (shuttingDown) return;
   shuttingDown = true;
-  engine.dispose();
-  for (const pending of pendingCallbacks.values()) {
-    pending.reject(new Error(ENGINE_ERROR.unavailable));
-  }
-  pendingCallbacks.clear();
-  process.exit(0);
+  void (async () => {
+    // dispose 含 mcp.dispose：关全部 server 连接（杀孙进程）后再退出。
+    await engine.dispose();
+    for (const pending of pendingCallbacks.values()) {
+      pending.reject(new Error(ENGINE_ERROR.unavailable));
+    }
+    pendingCallbacks.clear();
+    process.exit(0);
+  })();
 }
 
 const lines = readline.createInterface({ input: process.stdin, terminal: false });
