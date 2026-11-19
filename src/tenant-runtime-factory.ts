@@ -16,6 +16,7 @@
 import { join } from 'node:path';
 import { createInboxMemberBodyContribution } from '@vessel-agent/agent';
 import { deriveSessionMeta, FileProjectionCache } from '@vessel-agent/core/session';
+import type { EngineClient } from '@vessel-agent/engine-client';
 import {
   type ConfigSources,
   DEFAULT_TIMELINE_OPTIONS,
@@ -100,6 +101,7 @@ import {
   type TimelinePublication,
 } from './timeline-dual-write';
 import { createTimelineSessionLog, type TimelineSessionLog } from './timeline-session-log';
+import { syncBasicToolsEngineWiring } from './tools-engine/wiring';
 import {
   composeTraceRedactors,
   installTrace,
@@ -171,6 +173,11 @@ export interface BuildTenantRuntimeOptions {
    * 缺省时渠道 `start()` 保持显式失败（禁止静默降级）。
    */
   resolveFeishuService?: () => unknown;
+  /**
+   * tools-engine P2：engine-client（装配层注入）。installPluginsIntoHost 之后按白名单
+   * 就地换转发 handler + 喂注册表；缺省 = 不接线（in-process 直执行，库用法零变化）。
+   */
+  engineClient?: EngineClient;
 }
 
 /** 一个 tenant 的完整执行面 */
@@ -949,6 +956,21 @@ export async function buildTenantRuntime(
   // spawn 直接 `getMemberBodyContributions()` 读，零新增透传（报告 §3.2）。
   // 期 1 由 `plugins/inbox/inbox` 用自己的 install() 注册同名贡献，这里那行随之删掉。
   finalPluginHost.registerMemberBodyContribution(createInboxMemberBodyContribution());
+
+  // ── tools-engine P2：白名单转发接线（install 之后；seams 契约 §3.4）──────────
+  // wireTool 就地换 handler（def 身份不变），不注册新工具 ⇒ spawn 顺序不变式不受影响
+  // （vessel / agent 注册与 body spawn 都在其后）。boundary/config 用本次安装配置重建。
+  // pushRegistry 失败只记日志：engine disabled 时工具 fail-closed，不静默回退 in-process。
+  if (options.engineClient !== undefined) {
+    syncBasicToolsEngineWiring(options.engineClient, finalPluginHost, pluginConfigs['basic-tools']);
+    try {
+      await options.engineClient.pushRegistry();
+    } catch (error) {
+      logger.warn('tools-engine registry push failed at assembly', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   // 铁律 1：持久端口只到 Runtime 工厂层；EU 经 journal 写入。
   // 成员 run 与 tenant run 共用同一工厂 → 成员 run 同样写 RunRecord。

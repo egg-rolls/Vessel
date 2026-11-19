@@ -183,6 +183,7 @@ import {
   type ToolExecutionOutcome,
 } from './tool-calling-loop.js';
 import { createToolPipeline, type ToolPipeline } from './tool-pipeline.js';
+import { isBridgeCall, type ToolTransport } from './tool-provenance.js';
 
 /**
  * Context pressure warning ratio：达到该比例但未到自动压缩阈值时，
@@ -4735,6 +4736,10 @@ export class ExecutionUnit {
       /** 本次调用实际使用的参数（additive，便于日志还原工具卡） */
       arguments?: unknown;
       details?: Record<string, unknown>;
+      /** O4 additive：执行位置（管道认领的转发回执；缺省 = in_process 旧语义）。 */
+      transport?: ToolTransport;
+      /** O4 additive：vessel-bridge 改写溯源（replacement 对象打标）。 */
+      viaBridge?: boolean;
     },
   ): Promise<string> {
     // OnError hook 已由 HookRunner 隔离；这里再兜底，工具失败不得升级为 run 失败（C2）。
@@ -4776,6 +4781,9 @@ export class ExecutionUnit {
         ...(opts.arguments !== undefined ? { arguments: opts.arguments } : {}),
         error: opts.errorMessage,
         duration_ms: Date.now() - opts.startTime,
+        // O4 additive：缺省不写 = 旧事件逐字节不变。
+        ...(opts.transport !== undefined ? { transport: opts.transport } : {}),
+        ...(opts.viaBridge === true ? { via_bridge: true } : {}),
         ...envelope,
         error_envelope: envelope,
       },
@@ -4817,6 +4825,7 @@ export class ExecutionUnit {
           errorMessage: entry.failureMessage,
           error: entry.failureMessage,
           arguments: entry.args,
+          viaBridge: isBridgeCall(toolCall),
         }),
       };
     }
@@ -4854,6 +4863,8 @@ export class ExecutionUnit {
             errorMessage: result.error ?? result.content,
             error: result.error ?? result.content,
             arguments: result.input,
+            transport: result.transport,
+            viaBridge: isBridgeCall(toolCall),
           }),
         };
       }
@@ -4870,6 +4881,9 @@ export class ExecutionUnit {
           arguments: entry.args,
           result: result.content,
           duration_ms: Date.now() - entry.startedAt,
+          // O4 additive：缺省不写 = 旧事件逐字节不变。
+          ...(result.transport !== undefined ? { transport: result.transport } : {}),
+          ...(isBridgeCall(toolCall) ? { via_bridge: true } : {}),
         },
         ts: Date.now(),
       });
@@ -4900,6 +4914,7 @@ export class ExecutionUnit {
           errorMessage: errorText(error),
           error,
           arguments: entry.args,
+          viaBridge: isBridgeCall(toolCall),
         }),
       };
     }

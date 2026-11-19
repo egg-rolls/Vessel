@@ -14,6 +14,7 @@ import {
   type TeamDeclaration,
   workspaceKey,
 } from '@vessel-agent/agent';
+import { createEngineClient, type EngineClient } from '@vessel-agent/engine-client';
 import {
   buildConfigSnapshot,
   getUserConfigPath,
@@ -39,6 +40,7 @@ import {
   sameRestartMarker,
   type TenantPaths,
   type TraceRedactor,
+  toolOutputRoot,
 } from '../packages/core/src/index';
 import type { AgentControlLike } from '../packages/serve/src/index';
 import {
@@ -140,11 +142,12 @@ import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-f
 // 只有双写开关开时才有 `timelineDualWrite`，此时才传；关闭路径与 0.53 逐字节相同。
 // 0.54 C：`events.list` 的按 run 读端口（同一模块，共用 timeline 的读面与路径口径）。
 import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-write';
+import { createEngineSupervisor, type EngineSupervisor } from './tools-engine/supervisor';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
 import { readPackageVersion } from './version';
-import { createVesselMetaSurface, type VesselRpcPort } from './vessel-meta';
+import { createVesselMetaSurface, normalizeBridgeDeny, type VesselRpcPort } from './vessel-meta';
 import { visionSurfaceOf } from './vision-settings';
 
 /**
@@ -266,6 +269,16 @@ export interface BootstrapResult {
   remote?: { tenantId: string; nodeId?: string; endpoint: string };
   /** 0.5 A-6：本地 tenant 的执行面；connect 模式为 undefined */
   bundle?: TenantRuntimeBundle;
+  /**
+   * tools-engine P2：engine 接入面（本地 bootstrap 才有；connect 模式无本地执行面）。
+   * client = 转发/喂账本/回调关联（tools 热应用 applier 重接线用）；
+   * bridgeDeny = O2 活引用（permission 热应用 applier 更新，guardrail 逐调用读）。
+   */
+  toolsEngine?: {
+    client: EngineClient;
+    supervisor: EngineSupervisor;
+    bridgeDeny: { current: string[] };
+  };
   /**
    * 0.17 Phase A：AgentService / TeamService（默认开启）。
    * loopback owner 端点只在交互 REPL / serve 启动；headless 不监听端口。
@@ -1161,6 +1174,41 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 0.28：渠道执行面所需的 AgentService 同样晚绑定 —— 渠道随 bundle 构造，
   // `createAgentServiceWiring` 之后才存在；插件在 `start()` 时求值。
   let feishuAgentService: AgentService | undefined;
+  // ── tools-engine P2：engine child（装配层基础设施，与 gateway 同级；seams 契约 §3）──
+  // 每 host 一个 engine child（B 形态）；合成 descriptor 不进 PluginLoader / catalog。
+  // getTransport 晚绑定：supervisor 未 start / disabled ⇒ 转发 fail-closed（不静默回退）。
+  const engineSupervisorRef: { current?: EngineSupervisor } = {};
+  const engineClient = createEngineClient({
+    getTransport: () => engineSupervisorRef.current?.transport,
+    logger,
+  });
+  const engineSupervisor = createEngineSupervisor({
+    entryPath: path.join(import.meta.dir, 'tools-engine', 'entry.ts'),
+    rootDir: path.join(import.meta.dir, '..'),
+    dataDir: path.join(dataDir, 'tools-engine'),
+    // 落盘 env 与 host 同源：dataDir = 本入口解析后的数据目录；toolOutputDir = host 生效根。
+    settings: { dataDir, toolOutputDir: toolOutputRoot() },
+    logger,
+    onToolCallback: (params) => engineClient.handleToolCallback(params),
+    onEngineNotification: (method, params) => engineClient.handleEngineNotification(method, params),
+    // 每次 start / 重启成功后对账喂账本（重启不改注册表身份；失败只记日志）。
+    onReady: () => {
+      void engineClient.pushRegistry().catch((error: unknown) => {
+        logger.warn('tools-engine registry push failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    },
+  });
+  engineSupervisorRef.current = engineSupervisor;
+  // 预算内失败自动重试；预算尽 disabled（start 抛最后一次错误）→ 工具 fail-closed，
+  // 启动不崩：用户可见稳定 engine_unavailable 错误（行为验证点：启动诊断）。
+  await engineSupervisor.start().catch((error: unknown) => {
+    logger.error('tools-engine start failed; whitelisted tools are fail-closed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+
   // Stage 4：每 node 每进程一个 Runtime；tenant bundle 与成员 host 共用。
   const executionRuntime = new Runtime({ logger });
   const bundle = await buildTenantRuntime({
@@ -1190,6 +1238,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(options.feishuTransport !== undefined ? { feishuTransport: options.feishuTransport } : {}),
     resolveFeishuTeamId: () => feishuTeamId,
     resolveFeishuService: () => feishuAgentService,
+    engineClient,
   }).catch((error: unknown) => {
     console.error(`✗ ${error instanceof Error ? error.message : error}`);
     process.exit(configErrorExitCode);
@@ -1261,7 +1310,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 工具列表（spawn 顺序不变式）。dispatcher 建在 agent 装配之后，晚绑定回填（与 feishuTeamId
   // 同口径）；local / serve 共用这一个 localDispatcher。
   let vesselRpcPort: VesselRpcPort | undefined;
-  const vesselMeta = createVesselMetaSurface({ getLocalRpc: () => vesselRpcPort });
+  // O2：bridge_deny 活引用（缺省 [] = P1 行为零变化）；permission 热应用 applier 更新。
+  const bridgeDenyRef = { current: normalizeBridgeDeny(config.permission?.bridgeDeny) };
+  const vesselMeta = createVesselMetaSurface({
+    getLocalRpc: () => vesselRpcPort,
+    getBridgeDeny: () => bridgeDenyRef.current,
+  });
   finalPluginHost.registerTool(vesselMeta.vessel);
   finalPluginHost.registerGuardrail(vesselMeta.bridgeGuardrail);
 
@@ -2160,6 +2214,21 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       });
     }
 
+    // tools-engine P2：expectedExit 停 engine child（不触发重启）+ 清 pending 关联。
+    // run 已在 beginDrain 打断，在途转发经 abort → tool.cancel 收口。
+    try {
+      await engineSupervisor.stop();
+      engineClient.dispose();
+    } catch (error) {
+      reportShutdownFailure({
+        events: bundle.events,
+        logger,
+        step: 'tools-engine.stop',
+        error,
+        tenantId,
+      });
+    }
+
     try {
       localDispatcher.dispose();
     } catch (error) {
@@ -2370,6 +2439,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     tenantId,
     tenantPaths,
     bundle,
+    toolsEngine: { client: engineClient, supervisor: engineSupervisor, bridgeDeny: bridgeDenyRef },
     ...(agentControl !== undefined ? { agent: agentControl } : {}),
     // 运行期通知总线：serve 壳复用它（配置热应用 / 版本检查 / 成员停下同一条通路）。
     ...(noticeBus !== undefined ? { notice: noticeBus } : {}),

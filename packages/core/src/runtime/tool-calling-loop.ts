@@ -34,6 +34,7 @@ import type { HookRunner } from './hook-runner.js';
 import type { PrefixChangeReason, PromptPrefixGuard } from './prompt-prefix-guard.js';
 import type { RunTiming } from './run-timing.js';
 import { isToolCall } from './tool-pipeline.js';
+import { isBridgeCall } from './tool-provenance.js';
 import { boundToolResult, writeToolOutput } from './tool-result-gate.js';
 
 /** Loop 的最终结果；usage/facts 已通过 Run 拥有的 execution/context 原地写回。 */
@@ -601,6 +602,9 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
             tool_call_id: toolCall.id,
             tool_name: toolName,
             arguments: failureMessage !== undefined ? toolCall.function.arguments : args,
+            // O4 additive：桥改写溯源（guardrail replacement 对象打标）；started 在 handler
+            // 前发，transport 缺省（= in_process 旧语义），completed/failed 才带全量。
+            ...(isBridgeCall(toolCall) ? { via_bridge: true } : {}),
           },
           ts: Date.now(),
         });

@@ -118,6 +118,7 @@ import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-di
 import { createCliLogger, diffLogOptions, resolveLogOptions } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 import { isForegroundNodeCommand } from './node-command';
+import { resolveAgentCwd } from './path-resolution';
 import { setToolPolicy } from './permission-store';
 import { runPluginCliCommand } from './plugin-cli-command';
 import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
@@ -149,11 +150,13 @@ import { createSystemContextSource } from './system-context';
 import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-write';
 // 0.56：派生 token（root-secret → HKDF；显式配置永远优先）。
 import { effectiveNodeToken } from './token-derive';
+import { syncBasicToolsEngineWiring } from './tools-engine/wiring';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update/gateway-check';
 import { readPackageVersion } from './version';
+import { normalizeBridgeDeny } from './vessel-meta';
 import { visionSurfaceOf } from './vision-settings';
 import { ensureWebDist, interruptWebBuild, webDistWarning } from './web-dist';
 
@@ -1044,11 +1047,19 @@ async function runWithConfig(result: BootstrapResult) {
       JSON.stringify(buildPluginConfigMap(value.plugins, declarativePluginEntries(value)));
     const lastToolsConfigKey: { current?: string } = { current: pluginConfigKeyOf(config) };
     const toolsConfigKey: { value?: string } = { value: lastToolsConfigKey.current };
+    // tools-engine P2：computeTargetTools 读到的最新配置（接线与装配同一份 buildPluginConfigMap）。
+    let lastReloadedToolsConfig: VesselConfig | undefined;
+    // O2：bridge_deny 随 permission applier 热应用（apply 成功才更新，与规则基线同口径）。
+    let pendingBridgeDeny: string[] | undefined;
 
     const reloadAppliers: Record<string, GatewayReloadApplier> = {
       permission: createPermissionApplier(
         {
-          loadPermission: async () => permissionConfigFor(await reloadVesselConfig(), headless),
+          loadPermission: async () => {
+            const next = await reloadVesselConfig();
+            pendingBridgeDeny = normalizeBridgeDeny(next.permission?.bridgeDeny);
+            return permissionConfigFor(next, headless);
+          },
           apply: async (rules) => {
             let applied = 0;
             for (const runtime of liveTargets()) {
@@ -1067,6 +1078,11 @@ async function runWithConfig(result: BootstrapResult) {
             if (result.agent !== undefined) {
               applied += await result.agent.service.applyPermissionRules(rules);
             }
+            // O2：规则应用成功后同步 bridge_deny 活引用（guardrail 逐调用读，下一调用生效）。
+            if (result.toolsEngine !== undefined && pendingBridgeDeny !== undefined) {
+              result.toolsEngine.bridgeDeny.current = pendingBridgeDeny;
+            }
+            pendingBridgeDeny = undefined;
             return applied;
           },
         },
@@ -1079,6 +1095,7 @@ async function runWithConfig(result: BootstrapResult) {
           computeTargetTools: async () => {
             const next = await reloadVesselConfig();
             lastToolsConfigKey.current = pluginConfigKeyOf(next);
+            lastReloadedToolsConfig = next;
             const assembled = await assemblePluginTools({
               config: next,
               tenantId: result.tenantId,
@@ -1092,6 +1109,30 @@ async function runWithConfig(result: BootstrapResult) {
           targetKey: () => lastToolsConfigKey.current ?? '',
           previousKey: toolsConfigKey,
         });
+        // tools-engine P2（seams §3.5）：applyTools 之后、refreshTools 之前重接线——
+        // 热应用产生新 def 对象 → 重新 wireTool（新指纹覆盖）；移除的工具 unwire；
+        // boundary/config 用本次 reload 的安装配置重建（与装配同一份 buildPluginConfigMap）。
+        if (result.toolsEngine !== undefined && lastReloadedToolsConfig !== undefined) {
+          const next = lastReloadedToolsConfig;
+          const configMap = buildPluginConfigMap(
+            next.plugins,
+            declarativePluginEntries(next),
+            resolveAgentCwd(next),
+            resolveDataDir(next),
+          );
+          syncBasicToolsEngineWiring(
+            result.toolsEngine.client,
+            ctx.pluginHost,
+            configMap['basic-tools'],
+          );
+          try {
+            await result.toolsEngine.client.pushRegistry();
+          } catch (error) {
+            logger.warn('tools-engine registry push failed after hot apply', {
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
         // 成员 ExecutionUnit 的工具面是 spawn 时快照：owner 宿主更新后在同一具 body 上刷新，
         // 不重建 session / context（有 active run 时由执行内核延迟到轮边界）。
         // 传入应用后的全量工具面（含 agent / ask / MCP），成员侧再按白名单过滤。

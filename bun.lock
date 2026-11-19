@@ -7,8 +7,10 @@
       "dependencies": {
         "@promptctl/rich-js": "^0.10.0",
         "@vessel-agent/agent": "workspace:*",
+        "@vessel-agent/basic-tools": "workspace:*",
         "@vessel-agent/config": "workspace:*",
         "@vessel-agent/core": "workspace:*",
+        "@vessel-agent/engine-client": "workspace:*",
         "@vessel-agent/permission": "workspace:*",
         "@vessel-agent/plugin-sdk": "workspace:*",
         "@vessel-agent/serve": "workspace:*",
@@ -300,6 +302,17 @@
       "dependencies": {
         "@vessel-agent/core": "workspace:*",
         "@vessel-agent/permission": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^7.0.2",
+      },
+    },
+    "plugins/tools/engine-client": {
+      "name": "@vessel-agent/engine-client",
+      "version": "0.54.0",
+      "dependencies": {
+        "@vessel-agent/basic-tools": "workspace:*",
+        "@vessel-agent/core": "workspace:*",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
@@ -626,6 +639,8 @@
     "@vessel-agent/core": ["@vessel-agent/core@workspace:packages/core"],
 
     "@vessel-agent/doc-subscription": ["@vessel-agent/doc-subscription@workspace:plugins/context/doc-subscription"],
+
+    "@vessel-agent/engine-client": ["@vessel-agent/engine-client@workspace:plugins/tools/engine-client"],
 
     "@vessel-agent/evals": ["@vessel-agent/evals@workspace:plugins/evals/harness"],
 
