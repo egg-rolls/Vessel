@@ -123,8 +123,8 @@ const KEEP_HEAD_LINES = 1000;
 /** 截断后保留的尾行数 */
 const KEEP_TAIL_LINES = 1000;
 
-/** read 缺省读取行数 */
-const DEFAULT_READ_LIMIT = 2000;
+/** read 缺省读取行数（导出供 doc-subscription read 订阅规范化同口径，单一真源） */
+export const DEFAULT_READ_LIMIT = 2000;
 
 /** 返回给模型的单方向预览字节数（**第三道闸**，超出即标注） */
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -626,8 +626,9 @@ function deniedCommandMessage(entry: string): string {
 /**
  * 按 `\n` 切分文本，去掉每行尾部的 `\r`（CRLF 显示归一），
  * 并丢掉末尾换行产生的空元素。「a\nb\nc\n」= 3 行、「」= 0 行。
+ * 导出供 doc-subscription line-level 订阅：行号必须与 read 工具逐字同源。
  */
-function splitLines(text: string): string[] {
+export function splitLines(text: string): string[] {
   if (text === '') return [];
   const lines = text.split('\n').map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line));
   if (lines[lines.length - 1] === '') lines.pop();

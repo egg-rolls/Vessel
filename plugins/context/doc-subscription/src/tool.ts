@@ -5,21 +5,30 @@
  * 显式订阅：add / remove / list / inspect。只接受具体文件（无 glob、无目录），
  * 权限与路径边界在 handler 内复用 read 工具的同一条 `evaluatePath` 判定。
  *
- * - BeforeLlm 只发短通知（无正文）；正文只在模型显式 `inspect` 时返回。
+ * - BeforeLlm 发短通知；有 read 引用的条目可带 line-level diff 明细行（hook.ts），
+ *   其余正文只在模型显式 `inspect` 时返回。
  * - `inspect` 成功才推进 `seen_rev`；失败 / 超限不推进。
  * - 工具不写日志，不主动把正文写进 trace；正文随工具结果进入上下文。
+ * - 自动订阅入口：autoSubscribePath（edit/write，Phase 1）与 readSubscribePath
+ *   （read line-level，蜂群协作增强）；origin 升级梯 manual > edit > read。
  */
 
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import * as os from 'node:os';
 import * as path from 'node:path';
-import { canonicalPath, evaluatePath, type PathBoundary } from '@vessel-agent/basic-tools';
+import {
+  canonicalPath,
+  DEFAULT_READ_LIMIT,
+  evaluatePath,
+  type PathBoundary,
+  splitLines,
+} from '@vessel-agent/basic-tools';
 import type { ToolContext, ToolDefinition } from '@vessel-agent/core';
-import type { DocSubscriptionConfig } from './config.js';
+import { type DocSubscriptionConfig, resolveInput } from './config.js';
 import { unifiedDiff } from './diff.js';
 import { observeEntry } from './hook.js';
 import {
+  type ReadRef,
   type SessionSubscriptionState,
   type SubscriptionEntry,
   type SubscriptionStore,
@@ -52,20 +61,6 @@ interface InspectOutcome {
 /** 类型守卫：值是否为对象记录 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-/** 只展开开头的 `~` */
-function expandHomePrefix(entry: string): string {
-  if (entry === '~') return os.homedir();
-  if (entry.startsWith('~/') || entry.startsWith('~\\')) {
-    return path.join(os.homedir(), entry.slice(2));
-  }
-  return entry;
-}
-
-/** 用户输入按配置 cwd 解析为绝对路径 */
-function resolveInput(config: DocSubscriptionConfig, input: string): string {
-  return path.resolve(config.cwd, expandHomePrefix(input));
 }
 
 /** XML 属性值转义（& < > "） */
@@ -140,6 +135,10 @@ async function prepareEntry(
       mtime_ms: info.mtimeMs,
       notified_at: existing?.notified_at ?? 0,
       seen_at: existing?.seen_at ?? 0,
+      // origin/reads 像 snapshot 一样携带 existing：重复订阅不丢引用计数；
+      // 来源升级由各入口决定（manual add 恒 manual / edit-write 升 edit / read 只在新建时置 read）。
+      origin: existing?.origin ?? 'manual',
+      reads: existing?.reads ?? [],
       ...(existing?.snapshot !== undefined ? { snapshot: existing.snapshot } : {}),
     },
   };
@@ -446,6 +445,7 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
       'Manage per-session file subscriptions. add/remove/list/inspect concrete files; ' +
       'changes produce a short notice, and inspect returns the diff (full content on first read). ' +
       'edit/write auto-subscribe the files they touch (subscribe:false on those tools opts out); ' +
+      'read auto-subscribes the line ranges it reads (no opt-out). ' +
       'use remove to clear subscriptions you no longer need (e.g. when switching tasks).',
     inputSchema: {
       type: 'object',
@@ -537,6 +537,8 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
           rejected.push({ input: outcome.input, reason: outcome.reason ?? 'invalid' });
           continue;
         }
+        // manual add 恒置 'manual'（升级梯顶端：永不自过期）；reads 引用计数保留。
+        outcome.entry.origin = 'manual';
         state.subscriptions[outcome.entry.path] = outcome.entry;
         added.push(outcome.entry);
       }
@@ -584,6 +586,9 @@ export async function autoSubscribePath(
   const outcome = await prepareEntry(trimmed, deps, existing);
   if (outcome.entry === undefined) return false;
   const entry = outcome.entry;
+  // 升级梯 manual > edit > read：manual 不降级；read 条目被 edit/write 触碰升为 'edit'
+  // （清除后不再自过期）；新建置 'edit'。
+  entry.origin = existing?.origin === 'manual' ? 'manual' : 'edit';
 
   const observation = await observeEntry(entry, deps);
   if (observation !== undefined) {
@@ -601,10 +606,105 @@ export async function autoSubscribePath(
     existing.notified_rev === entry.notified_rev &&
     existing.seen_rev === entry.seen_rev &&
     existing.size === entry.size &&
-    existing.mtime_ms === entry.mtime_ms
+    existing.mtime_ms === entry.mtime_ms &&
+    // origin 升级（read → edit）也算变化；reads 原样携带不改，无需比较。
+    existing.origin === entry.origin
   ) {
     return false;
   }
+  state.subscriptions[entry.path] = entry;
+  await deps.store.save(state);
+  return true;
+}
+
+/** 从记录读取有限数字（镜像 basic-tools readNumber：非有限数字 ⇒ undefined ⇒ 走缺省） */
+function readRequestNumber(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * read 自动订阅入口（line-level，蜂群协作增强；AfterTool hook 用）。
+ *
+ * 口径（CONTRACT-swarm-subscribe §0/§2）：
+ * - **attempt-based + 自然成功近似**：offset/limit 校验镜像 read 工具，clamp 校验天然滤掉
+ *   失败 read（不存在 / 目录 / 二进制 / 超 8MiB / offset>total / 非法 offset、limit ⇒ 不订阅）。
+ * - **clamp 范围 = 请求范围 ∩ 文件实际行数**，是实际返回范围的超集（token 闸只裁不增）⇒
+ *   只会多通知不会漏通知。诚实标注：clamp 用 AfterTool 时刻的文件行数，read 执行与 hook
+ *   之间文件被改有小竞态，由观察期内容锚重定位兜底。
+ * - 行切分用 basic-tools 导出的 splitLines（与 read 工具行号逐字同源）。
+ * - 已有条目：只追加 ReadRef，**不动 rev/notified_rev/seen_rev 任何游标**（保留待发通知；
+ *   ref.text = 当前内容 ⇒ 范围级天然基线抑制）。
+ * - 新条目：prepareEntry 全套边界/敏感校验 + origin='read' + 基线抑制（notified_rev=当前
+ *   观察 rev，autoSubscribePath 同款）；seen_rev=''。
+ * - best-effort：任何失败静默跳过；无变化不写盘。
+ * - 已知局限：相对路径按 config.cwd 解析（AfterTool 无成员 cwd），成员 cwd 相对路径可能漏订。
+ * 返回是否写入了状态。
+ */
+export async function readSubscribePath(
+  deps: SubscribeToolDeps,
+  sessionId: string,
+  args: Record<string, unknown>,
+): Promise<boolean> {
+  const rawPath = typeof args.path === 'string' ? args.path.trim() : '';
+  if (rawPath === '') return false;
+
+  // offset/limit 校验镜像 read（basic-tools readFileSlice）：非法 ⇒ 该 read 本身已失败，不订阅。
+  const offset = readRequestNumber(args, 'offset') ?? 1;
+  if (!Number.isInteger(offset) || offset < 1) return false;
+  const limit = readRequestNumber(args, 'limit') ?? DEFAULT_READ_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1) return false;
+
+  const canonical = canonicalPath(resolveInput(deps.config, rawPath));
+  // 边界前置（observeEntry / prepareEntry 同口径）：deny/ask 的 read 本身已失败，不订阅；
+  // 也避免热应用收紧边界后仍把已拒路径的字节读进引用。
+  if (evaluatePath(canonical, deps.boundary) !== 'allow') return false;
+
+  let info: Awaited<ReturnType<typeof stat>>;
+  try {
+    info = await stat(canonical);
+  } catch {
+    return false;
+  }
+  if (!info.isFile()) return false;
+  if (info.size > MAX_SUBSCRIBE_BYTES) return false;
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(canonical);
+  } catch {
+    return false;
+  }
+  if (buffer.includes(0)) return false;
+
+  const lines = splitLines(buffer.toString('utf-8'));
+  const total = lines.length;
+  if (offset > total) return false; // 含空文件（total=0）
+  const slice = lines.slice(offset - 1, offset - 1 + limit);
+  const ref: ReadRef = { offset, limit, start: offset, end: offset - 1 + slice.length };
+  const rangeText = slice.join('\n');
+  // 仅当字节数 ≤ maxFullBytes 才存 text；存不下 ⇒ 无 text 的 ref（仍计引用，观察时整文件兜底）。
+  if (Buffer.byteLength(rangeText, 'utf-8') <= deps.config.maxFullBytes) ref.text = rangeText;
+
+  const state = await deps.store.load(sessionId);
+  const existing = state.subscriptions[canonical];
+  if (existing !== undefined) {
+    existing.reads.push(ref);
+    await deps.store.save(state);
+    return true;
+  }
+
+  const outcome = await prepareEntry(rawPath, deps, undefined);
+  if (outcome.entry === undefined) return false;
+  const entry = outcome.entry;
+  entry.origin = 'read';
+  entry.reads = [ref];
+  // 基线抑制：订阅时的观察视为「已通知」，read 本身不出卡；他人再改才通知。
+  // rev 直接用刚读 buffer 的 hash（与 observeEntry 同口径），避免二次整文件读。
+  entry.rev = sha256Hex(buffer);
+  entry.notified_rev = entry.rev;
+  entry.notified_at = Date.now();
+  entry.size = buffer.byteLength;
+  entry.mtime_ms = info.mtimeMs;
   state.subscriptions[entry.path] = entry;
   await deps.store.save(state);
   return true;
