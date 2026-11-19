@@ -18,8 +18,8 @@ import {
   type ToolInvokeParams,
   type ToolInvokeResult,
 } from '@vessel-agent/engine-client';
-// MCP 配置形状单实现（type-only；根 package.json 无该 specifier，相对路径同 mcp.ts）。
-import type { McpServerConfig } from '../../plugins/mcp/client/src/index.js';
+// MCP 配置形状单实现（type-only）。
+import type { McpServerConfig } from '@vessel-agent/mcp-client';
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

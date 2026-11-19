@@ -25,8 +25,7 @@ import {
   ENGINE_ERROR,
   type McpConfigureServerResult,
 } from '@vessel-agent/engine-client';
-// 共享模块单实现（mcp-client index 共享导出）。根 package.json 无 @vessel-agent/mcp-client
-// 依赖（该 specifier 仅 engine-client 包内可解析），故按 src/ 既有先例相对路径导入同一份源码。
+// 共享模块单实现（mcp-client index 共享导出；根 package.json 已声明 workspace 依赖）。
 import {
   exposedToolName,
   McpPluginError,
@@ -39,7 +38,7 @@ import {
   type McpToolDef,
   sanitizeLogText,
   validateConfig,
-} from '../../plugins/mcp/client/src/index.js';
+} from '@vessel-agent/mcp-client';
 
 export interface McpConnectionManagerOptions {
   /** 被动状态变化 → engine 发 health notification（带 mcp）。 */

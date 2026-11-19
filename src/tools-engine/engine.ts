@@ -21,8 +21,8 @@ import {
   type ToolInvokeParams,
   type ToolInvokeResult,
 } from '@vessel-agent/engine-client';
-// 业务错误判别（McpPluginError → ok:false 稳定码；共享模块单实现，相对路径同 mcp.ts）。
-import { McpPluginError } from '../../plugins/mcp/client/src/index.js';
+// 业务错误判别（McpPluginError → ok:false 稳定码；共享模块单实现）。
+import { McpPluginError } from '@vessel-agent/mcp-client';
 import type { McpConnectionManager } from './mcp.js';
 import {
   firstSchemaViolation,

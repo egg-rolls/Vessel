@@ -94,6 +94,7 @@ import { resolveInteractionsDir } from './interactions-dir';
 import { normalizeLegacyToolName } from './legacy-tool-names';
 import { createLocalRunAdapter } from './local-run-adapter';
 import { configureLoggingFromConfig, createCliLogger } from './logging';
+import type { McpEngineShell } from './mcp-engine-wiring';
 import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import { createNodeDrainer } from './node-drain';
@@ -1179,6 +1180,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 每 host 一个 engine child（B 形态）；合成 descriptor 不进 PluginLoader / catalog。
   // getTransport 晚绑定：supervisor 未 start / disabled ⇒ 转发 fail-closed（不静默回退）。
   const engineSupervisorRef: { current?: EngineSupervisor } = {};
+  // 批次 2：MCP host shell 晚绑定（factory 装配后才存在；engine 重启 onReady 对账用）。
+  const mcpShellRef: { current?: McpEngineShell } = {};
   const engineClient = createEngineClient({
     getTransport: () => engineSupervisorRef.current?.transport,
     logger,
@@ -1192,13 +1195,19 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     logger,
     onToolCallback: (params) => engineClient.handleToolCallback(params),
     onEngineNotification: (method, params) => engineClient.handleEngineNotification(method, params),
-    // 每次 start / 重启成功后对账喂账本（重启不改注册表身份；失败只记日志）。
+    // 每次 start / 重启成功后对账（重启不改注册表身份；失败只记日志）。
+    // 批次 2：MCP 重喂 configure 重建连接 + 注册对账（换连接不换定义，透明）。
     onReady: () => {
-      void engineClient.pushRegistry().catch((error: unknown) => {
-        logger.warn('tools-engine registry push failed', {
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
+      void (async () => {
+        try {
+          await mcpShellRef.current?.reconcile();
+          await engineClient.pushRegistry();
+        } catch (error) {
+          logger.warn('tools-engine registry push failed', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })();
     },
   });
   engineSupervisorRef.current = engineSupervisor;
@@ -1245,6 +1254,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     process.exit(configErrorExitCode);
   });
   markStartup('runtime');
+  // 批次 2：MCP host shell 回填（engine 重启 onReady 对账；初始 configure 已在 factory 完成）。
+  mcpShellRef.current = bundle.mcpShell;
 
   const {
     providerName,

@@ -11,6 +11,7 @@
         "@vessel-agent/config": "workspace:*",
         "@vessel-agent/core": "workspace:*",
         "@vessel-agent/engine-client": "workspace:*",
+        "@vessel-agent/mcp-client": "workspace:*",
         "@vessel-agent/permission": "workspace:*",
         "@vessel-agent/plugin-sdk": "workspace:*",
         "@vessel-agent/serve": "workspace:*",
