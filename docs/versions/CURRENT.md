@@ -5,227 +5,56 @@
 
 ## 版本
 
-**0.53.0 已收口（2026-11-13）** — 收口线 `0.53-closeout`，基线 `main @ c698471a`；
-manifest 根 `package.json` = `0.53.0`（`packages/**` / `apps/web` / `plugins/**` 的
-package.json 仍是 `0.52.0`，本版有意只动根）；未 tag、未 publish（tag 等 1.0.0）；
-版本号以根 `package.json` 为唯一来源。
-完整变更见 [0.53.0](0.53.0.md)；**0.53 收口结论与 0.54 边界**见
-移交清单（个人侧 handoff，不入共享仓）（含移交 0.54 的四项与
-「仍需用户做的一件」）。**0.52 开发线随本版并入**（未单独收口）。
+**0.56.0 未发布** — 0.54.0 收口（基线 `main @ c31dba42`，2026-11-16）后的开发线；
+2026-11-18 用户拍板全线升 0.56.0。manifest 根 `package.json` = `0.56.0`
+（workspace manifests 同线；`packages/plugin-sdk` 独立版本线 `1.0.0`，仅 SDK 契约变更时 bump）。
+版本号以根 `package.json` 为唯一来源。未 tag、未 publish（tag 等 1.0.0）。
+当前变更摘要见 [CHANGELOG](../../CHANGELOG.md)；版本记录见 [INDEX.md](INDEX.md)。
 
-## 已合入（现态）
+## 已合入（现态，均在 main）
 
-- **0.53 本版已合**（详见 [0.53.0](0.53.0.md)）：
-  - **上下文投射四模式落地运行期（ADR-104）**：`passthrough` / `placeholder` /
-    `externalize` / `archive_notice`，默认 **placeholder**；声明不可变、读侧唯一入口
-    `resolveProjection`；模式与冻结集合在 **run 起点**定一次，请求期只读；`passthrough`
-    与「完全没有投射机制」逐字节相同；未实现档 fail-open 到 `passthrough` 并留审计；
-    `archive_notice` 只登记不替换（归档卡 + `sessions.events` 按 `tool_call_id` 读回）。
-  - **trim 卡分层 + 占位幂等**：折叠态只说本轮新增、展开给会话内累计、同载荷不重复发；
-    `withClearedToolResults` 对已是占位的正文原样透传。
-  - **判据收口**：C1g 按模式分档（passthrough=0 / placeholder=审计集合 ∩ 落盘）；**C1h
-    改成按豁免事实判定**（声明 + 审计 + 集合逐条相等 + 每条确实是占位，四真才 `EXEMPT`，
-    任一不满足即 FAIL），`pending()` 灰度机制删除，`--phase=1` 与默认模式结论相同。
-  - **前端第一次真读磁盘（可观测与回放）**：`sessions.events` + `event_cursor`、环 1 万→5 万；
-    刷新/重连两阶段回填（`sessions.events` + `events.list` 逐 run 拉 trace-only）；
-    `EventStore#diskBackfill` 观测面；内容 id 补 payload 摘要。
-  - **通知与可见性**：peer 停下真能通知父会话、投递前重解析父 session（rotate 窗口内也落
-    新 body）、inbox 卡头 + `check:env-scope-parity` 可见性对等。
-  - **工具与配置**：`pii.reveal` → `piiReveal` + 注册期 fail-fast 校验；旧工具名换算表驱动。
-  - **成员与历史**：`agent list includeReleases` + `closed_at` / `close_reason` 落盘。
-- **0.52 本日已合**：
-  - **「数字不该错」三件**：上下文估算接**真实用量锚点**（`ratio = prompt_tokens / 未校正估算`，
-    按会话持久化在 `SessionState.context_anchor`，`realTokens==0` 回 `round(estimate*ratio)`，
-    记录夹紧 0.5–3、越界丢弃、换 model 不校正；副作用是**压缩阈值提前**，已写进 context.md）；
-    上下文占用**单一真相源**（`src/context-ratio-source.ts` 订阅父事件流，分子 `context.changed.token_count`、
-    分母 `context.pressure.max`/`prompt.system_context.context_max`，`withLiveContextRatio` 原型委托只覆盖
-    端口，`percent` 统一 `Math.round`）；ask 答案**先归一再去重**（`planAskAnswers`：题号 → 正文 → header →
-    题序位置，已答一律 `skipped`，归不到的丢弃，记录里不存在没有题号的答案）。
-  - **ask 已答 = 立刻上锁**：提交动作发出即本端记「已答」（4s TTL 自愈）+ 载荷只交未落定行；
-    **浏览位跨刷新保留**（`askCursor.v1`，记题号不记下标）。
-  - **「已答」分组（待批页 / 团队页）**：已落定的题不再混在未答里 —— 每请求一个默认折叠的
-    「已答 (n)」分组，未答置顶；分组判据就是载荷剔除用的同一个 `settled`
-    （`askRowGroups` / `askSettledRows`，不另造一套），分组去掉的只是「一眼看到多少」，
-    已答行的输入照旧锁住；`check:ask-groups` 钉住「已答归组 / 未答在前 / 幂等 / 与载荷同口径」。
-  - **条带 agent 源的「取消 hold / 留档」**：agent 源被 hold 住的消息原来一个写入口都没有。
-    现在 `canUnhold`（非 human 源 + held，与服务端 recall 的 `source === human` 分档同一判据）
-    给一颗「归档」键，调既有 `agents.recall`（**没加 RPC**）；本地乐观翻成 unread、
-    服务端没受理 / 抛错两条路径都按 id 翻回 held + toast + 重读对齐 —— 成功**不**把卡抹掉
-    （unhold 不是删除）；`check:inbox-unhold` 钉住判据 / RPC 名 / 双分支回滚 / 不伪装删除。
-  - **会话 ↔ agent 补成双向**（additive）：`sessions.list` 每项 / `sessions.get` 结果带
-    `agent: { id, name, state, presence, primary }`；`primary=false` = 已退役 body 的会话。
-    前端据此不再反查三份名单（`SessionList` 四级回退：节点地址 > 会话自带归属 > roster 反查 > primary 徽标），
-    旧 body 显示 `名字（旧身体）` 灰色、现役 `名字@primary` 主题色、归属到停用 agent 的会话默认归档。
-    老 gateway 缺字段 ⇒ 自动回落。
-  - **成员停用后 UI 不再假装在干活**：`agent.closed`（**只认它**，`retired`/`stale` 不是终态）与
-    会话快照终态都收口 run（共用 `RunFold.close` 的 flush，live 思考/正文落地成带 `endedAt` 的 item，
-    不冒充 completed；晚到 delta 不复活）。
-  - **卡片排版/配色**：环境信息卡「事实进缩略卡、展开只留证据」，标题主题色 + 类型正文色 + 值灰色；
-    工具卡不铺底色（与环境信息卡同底色，共享 token 未动）；会话卡片非 team 成员补 `名字@primary`。
-  - **主题以存储为准自愈**：视觉设置页采样暗色 token 的临时 `data-theme` 加 try/finally 还原；
-    `pageshow`/`visibilitychange`/`storage` 时按存储重放，`data-theme` 被改脏会自愈。
-- **0.51 已收口**（完整变更见 [0.51.0](0.51.0.md)）：
-  - **归档 / 停用就是「等待被移除」**：`vessel prune` 判据从「时间」改成**状态**（归档 team 下的
-    agent ∪ 停用 agent，连记录本身一并删；**未归档一律不删**）；`--older-than` 只作可选叠加
-    （判归档/停用时刻）；Web 默认隐藏归档/停用对象 + `ui.showArchived` 开关（detail 层仍可达）；
-    `vessel team show|mine`。
-  - **工具面只有一份**：成员用的就是节点那一份（删掉白名单、`source`/`surface`/`unavailable`
-    二层区分与死名 `delegate_task`/`team_*`）；成员工具面 = 节点全量 − 父级应答闸；deny 档 =
-    `read`/`media`/`subscribe`。
-  - **成员 cwd 层**：`agent.cwd` > 显式 Team.workspace > `process.cwd()`（锚点 Team 排除），
-    basic-tools 改调用期解析；目录安全闸不动。
-  - **ask 交互重做**：每题独立 + **可分批提交**（未答的留队列）+ 一次提交一条 inbox 消息、
-    来源 `ask`；多选升级成 `selected: string[]`；草稿持久化（sessionStorage）；已答记录**按时间
-    落进时间线**（不再堆在末尾）。
-  - **落盘 append-only 是硬门禁**：`check:append-only-context` 实测抓出「压缩就地改写幸存工具
-    结果」，修法是把占位替换搬到请求级视图（落盘仍是原文）；身份/模型/工具变更一律走
-    「环境信息」增量（`env-info-scope.ts` 七个 scope），Self Card 构造期只读、不热替换。
-  - **插件端口面期 0**：`MemberInboxPort`（agentId 绑死、不给 hold/markConsumed）+ 空壳贡献
-    + in-process 清单校验 + `check:plugin-ports`。
-  - **四条新门禁**：`check:conflict-markers`（冲突标记落在 JSDoc/接口时 tsc+biome 都不红）、
-    `check:archived-visibility`、`check:ask-drafts`、`check:append-only-context`（并入既有链）。
-  - **rotate 交接卡 + rotate 文案说真话**：`startup_prompt` 带
-    `Message.name = 'rotate:handoff:<epoch>'` ⇒ Web 渲成默认展开的「⟳ rotate 交接」卡、TUI 渲成
-    可读块（不再伪装成人类气泡）；工具结果不再写假的 `finish the current turn`，改为说明
-    「新身体已开跑、本轮剩余输出按旧 epoch 被 fence、`startup_prompt` 是唯一交接通道」。
-    同时删掉 `agent.rotating` / `agent.rotated` / `agent.rotate.failed` 三条**死类型**
-    （无生产者），ADR-092 走 Errata。
-  - **结尾正文重复（根因）**：给消息补结构化身份 `run_id` + `run_segment`（落盘漏斗与事件投影
-    共用一个幂等、续编的盖章函数），认领改成「身份优先、内容兜底」；命中同身份时 live 让位且
-    **内容不同也照让**（屏上以落盘为准）。触发源是 Output guardrail 的 PII 打码改写了落盘正文
-    （本机 652 run 中 7 个命中 ⇒ 所以是「有概率」）。
-  - **待处理条带**：放开 agent 源（只展示；0.53 起给一颗「取消 hold / 留档」，
-    `canUnhold` = 非 human 源 + held，unhold 不退条带）；
-    human 源操作改图标键，新增「收回来编辑」（peek 全文 → 写回草稿 → 再真删）。
-  - **`vessel prune`**：默认 dry-run、`--yes` 才真删、真删走 `data-lock` exclusive（锁被占
-    即拒绝，零删除）。三类桶互斥（trace / 终态 runs / 老且非活跃 sessions —— 锁、租约、
-    可 resume 的 run 任一成立即保留），dry-run 与真删同序同集合；
-    `--older-than <n><ms|s|m|h|d>`（裸数字按天，缺省 30d）；`--json` 出 `PruneReport`。
-    `--archived` / `sessions.archive` 未做（sessions 没有归档概念）。
-  - **`[refs]` 尾注 action 收窄**：从 `host.listTools()` 里 `media` 工具 schema 的 `action`
-    enum 读真实动作（`readMediaSurface`），三档语义不变（有真动作 / 无工具 / 读不到⇒中性）。
-  - **设计实验室两缺口**：`CHIP_TONES` / `COMPOSER_ICON_TONES` 补 preview；`EntityHeader`
-    尺寸档进运行时表（`ENTITY_HEADER_SIZES` + `satisfies Record<...>` 双向钉住）。
-  - **`tools.list { agent_id }`**：成员用的就是节点那一份工具面（0.51 用户裁定「不要区分
-    成员工具面和节点工具面，插件也是」），所以响应只有一个形状 `{ tools }`，没有
-    `surface` / `source` / `unavailable`；`agent_id` 降级为仅诊断（决定按哪具身体读同一份
-    清单，`inbox` 仍是成员运行期注入、待插件化后归位）。数据唯一来源仍是
-    `MemberExecutionHost.toolSurface()`，spawn / 热刷新 / 按身体读共用一份 `buildSurface`。
-    Web 侧工具面板删掉成员选择器与全部来源/取值徽标，只留一份平铺清单。
-
-- **Platform Gateway / Node API 已拆分**：Gateway 8642（平台入口、UI 宿主、`platform.*`
-  只读 RPC），Node API 8644（公司 runtime/数据）；平台 token 与 per-node token 分离；
-  `vessel gateway` / `vessel node` CLI。
-- **多本地 Node（G3）**：每个 Node 独立子进程，各自 dataDir/config/token；`nodes.json`
-  registry；`platform.nodes.credentials({node_id?})`；`gateway nodes list|add|remove`。
-- **Hub 是独立 Platform 服务**：独立进程、仅 node→hub、Hub 持 token broker；旧
-  hub→node / 节点入站 / `auth.*` / `hub pair` 已删除。0.50 起 `gateway start` 在
-  `hub.auto_start`（默认 true）时自动拉起本地 Hub，已有实例 adopt；Web Hub 页回环自动连接 8643。
-- **tenant 抽象已移除（T0–T5）**：一个 node = 一家公司；无 tenant 选择/隔离维度；
-  根布局 `<dataDir>/**`；写意图锁为 `src/data-lock.ts`，错误码 `data_locked`；
-  `tenant.json` 只读持久化单 id；`AgentVisibility='tenant'` 作为正交可见性保留。
-- **本地 Node CORS**：平台 spawn 的本地 Node 自动放行平台 Origin（内部
-  `VESSEL_PLATFORM_ORIGINS`），Web 不再因 `forbidden_origin` 连不上 Node。
-- **Team**：默认 Team 锚点统一为 `<dataDir>/default`（TUI/gateway 共用）；成员列表
-  是右侧常驻栏（≤1023px 抽屉）+ 顶部搜索，入口在 Team 卡 `⋯` 的「查看 / 收起成员列表」；
-  页头不再有刷新按钮（刷新走卡片菜单）；Team 列表宽度可拖拽（220–420，持久化）。
-- **Web 外壳**：DataTable 可排序列（透明表头、激活箭头主题色）；暗色表头/内容底色
-  互换；AppBar 去掉 Vessel 字标、路由改用字标样式。
-- **信息层级（Web）**：系统 / 内部事件默认关闭，唯一开关是 config 的
-  `ui.showInternalEvents`（`verbosity: debug` 按既有「或」语义一并放开）；会话里的
-  `vessel:*` 运行期上下文消息跟随同一个键，不再写浏览器 localStorage。默认只显式
-  展示正文、思考、工具调用与错误 / 权限交互；`run.checkpoint`、`runtime.notice`、
-  hook 与上下文生命周期通知归为内部事件。
-- **事件可见性三档（Web）**：`apps/web/src/state/event-visibility.ts` 是**唯一分类表**
-  （`content` / `internal` / `observe`），判据从「不在黑名单 ⇒ 可见」翻成「只有
-  `content` 恒可见」；**未登记的类型 ⇒ 按 `internal` 折叠**，渲染成一条「未知事件类型 ·
-  已折叠」notice（展开是原始载荷），**绝不落裸 JSON 卡**。`agent.retired` → `internal`
-  + typed notice（`reason` / `body_id` / `epoch` 直接取自事件 data，不加跨包 DTO）；
-  `agent.reply.stale` → `content` + typed notice；`agent.rotate.approved|denied`、
-  插件与渠道事件 → `observe`（聊天永不出现）。失败类不得进 `observe`。门禁
-  `bun run check:event-visibility`：未分类 / 表腐烂 / 事件名非字面量 / 渲染 fixture
-  （含影子对拍）/ 团队日志双链 / 文档 marker 对拍。
-- **Web 消息流**：历史消息与实时事件按权威时间戳合并成一条时间线（不再把 live 组
-  整块追加在末尾）；单 run 事件裁剪保留 `run.started` 等锚点，长 run 运行中可见；
-  历史窗口触顶静默前插一页并保持滚动锚点（会话与 Team 一致）。
-- **时间线顺序不变量**：一条 run 的节点不得排在触发它的那条 user 消息之前
-  （`run.started` 早于 user 消息落盘，只按 run 起始时间排会把本轮输出顶到消息上方）；
-  伪 run 组（`session` / `runtime` 等常量 run_id）按 item 各自的事件时间落位，
-  不再整组锚在首个事件上。
-- **A2A 消息**：投给成员的 user 消息带 `Message.name = agent:<alias>`（人类/系统不带），
-  Web 渲染成可折叠的「来自 agent X」卡片；老消息无该标记时仍按普通气泡渲染。
-- **AI 内容**：默认系统提示词完全由用户掌握；未配置 `agent.systemPrompt` 时只注入
-  Self Card，不注入内置文本。
-- **开发期清库**：`vessel dev reset [--yes] [--dry-run] [--json]`。
-- **0.48 插件扩展面同线合入**：manifest HTTP/CLI/WS 扩展点、外部 `expose`、catalog
-  declared/effective 两视图；插件面只注册在 Node API，平台 `/plugins/*` 404。
-- **0.50 收口（事件可见性）**：两张黑名单 → 三档白名单（`content`/`internal`/`observe`，
-  114 条），未登记类型折叠成 notice；门禁 `check:event-visibility`（含影子对拍）。
-- **0.50 收口（时间线）**：`LiveItemStore` 物化 item（渲染不再读事件缓冲）+ `ClaimLedger`
-  认领账本 + 交棒释放；删 `coalesceDelta` / `truncatedSince` / `group-cache.ts`；缓冲裁剪
-  不再让屏上内容消失（顺便根治「结尾正文重复」）。
-- **0.50 收口（回放）**：固定 1 MiB → 按「最新一轮地板」动态（实测 4 个真实会话覆盖率
-  47%→100%），门禁 `check:replay-budget`。
-- **0.50 收口（等待消息）**：inbox 条目加 `session_id`/`refs`；待处理条带改读盘（删时间线
-  排队卡）；`agents.recall`；启动即扫恢复孤儿输入（重启不再丢排队消息）；修 `runs.cancel`
-  后 `queuedRuns` 永不清导致 agent 不被 wake 的僵尸 bug。
-- **0.50 收口（上下文用量）**：`sessions.get.context_usage`（尾窗派生 + 水位缓存）；
-  `llm.request` 落盘 `context_max`；用量环随比例连续变色（60–80 转琥珀、80–90 转危险），
-  `plugin-ui` 补 `--amber` 三主题档。
-- **0.50 收口（模型可见性）**：`prompt.system_context` 事件（hash 去重）+ 会话页「模型上下文」
-  可展开卡 + `sessions.get.system_context`（刷新/重启后仍可见）；`llm.request` 发布副本带
-  `model`，删掉「从 Self Card 抠 model」的死代码。
-- **0.50 收口（`ask` 工具）**：`ask_user` → `ask` + 重写描述（任何需要人说一句的场景），
-  读侧双认旧名；`ui.askUser` / `ask:answer` / `ask.user.*` 未动。
-- **0.50 收口（用量插件）**：数据源从 trace 增量追读换到会话日志 + 持久化索引 + worker 线程
-  聚合 + 取消硬截断（「全部时间」不再采样）；`logs` 加 `days`/`since-until` 半开区间 +
-  游标分页 + 默认 7 天。
-- **0.50 收口（设计实验室）**：token 运行时枚举 + `*.preview.tsx` 自动发现 + 变体表运行时化
-  （加 token/组件/变体都只改一处）；颜色 token 固定左亮右暗。
-- **0.50 收口（导航）**：四档状态色统一（accent/amber/danger/muted，删 ok/warn）；插件宿主
-  `inactive` 不再误判为断开；Hub 打开即自动探测。
-- **0.50 收口（构建/DX）**：`gateway start` 就地自修复 dist；拆 react-vendor/plugin-ui chunk
-  （无 500kB 警告）；种子 `appendMany`（0.81s→0.008s）；`listRich` mtime 缓存（19.3ms→1.95ms）；
-  移除 GitHub CI（`bun run gates` 成唯一门禁，`release.yml` 的 CD 保留）；输入框整块
-  `cursor: text`；思考卡复制/时间改 hover+键盘聚焦显示。
+- **认证与登录**：口令 argon2id + TOTP + 一次性引导码（`#token=` 退场）；单一根密钥 HKDF
+  派生 token + `--data-dir`/`--user-config` 全族；github/microsoft/gitee 多 provider 登录页 + 策略注册表
+  + `/auth/whoami`；头像三级降级 + `/auth/avatar` 代取缓存；node 自动加入 + 注册表派生来源集；
+  `http.allowed_origins` 与 `auth.public_origins` 拆职；回环匿名改 opt-in。
+- **模型管理**：models 注册表（vendors/aliases/default，legacy 字节等价）+ 官方 in-process 插件
+  + AES-256-GCM 凭证库 + 多厂商路由/热应用；`plugin.model-registry.*` 十方法 + `vessel model` CLI
+  + WebUI 管理页/ModelPicker/成员模型切换；record.model 只存显式 pin（快照 v5 一次性全清）
+  + 跨重启模型变更通知；OpenAI 兼容端点 claude prompt cache 断点。
+- **工具与运行时**：核心工具/MCP engine 子进程外置执行（有状态工具 callback 留 host，
+  permission/session 留 host）；vessel 元工具（call_tool/rpc/set_config，fail-closed + guardrail 改写按目标授权）；
+  tools[] per-session 冻结快照 + 工具面变更环境卡；write 工具；compaction 可逆视图 + recall；
+  bash 异步 opt-in + 作业自己起 run 送结果；工具结果出口闸 ≤16k token 上移 core。
+- **蜂群协作与订阅**：write expected_content 逐字节比对 + edit/write 自动订阅（subscribe:false opt-out）
+  + `.vessel/write.lock` 工作区写锁（合作式）；read line-level 订阅 + placeholder 引用归零过期
+  （origin 梯 manual>edit>read）；env_injection per-scope request/run 可配 + lock/conflict 环境卡。
+- **插件面**：ADR-102 插件内嵌 React UI（embed/iframe 双档 + 信任哈希锁 + plugin-sdk 独立版本线）；
+  宿主裸指定符解析缝（白名单软链单实例）。
+- **搜索与多模态**：web-tools 默认加载，web_search/web_fetch 声明式 custom 后端
+  （deepseek/tavily/serper/bocha 预设 + filters_ignored 披露 + 缺凭据三形态文案）；原生视觉直通
+  （内容寻址 blob）+ image_delivery 四态 + blob GC + [refs] 三档。
+- **时间线与性能**：run 级可追加块 + 范围读（manifest 锚点）+ 发送路径增量投影游标落盘
+  + sessions.list 摘要侧车 + 打开会话 33.2s→1.37s；node 启动 16.3s→2.3s + gateway 分段启动
+  + 外部存活看门狗 + run-stops 优雅 drain；win32 代理原生直通 + EPIPE 自激僵死修复。
+- **会话与消息正确性**：上下文计数改下一次请求视图上界 + 发送前闸；message_id 身份
+  + 重复输入/重复气泡根因修；假运行态收口 + 总量裁剪保锚点；硬错误立闸 + blocked 露出；
+  假 queued run_id 改 deferred；inbox read 即拿走；事件订阅缺省作用域收紧（全局流显式 allow_global）。
+- **客户端**：乐观渲染 + 排队消息生命周期 + 401/Origin 可见化 + rotate 批准超时终态；
+  前端自动重建（SSE 推送 + 定时自查）+ 构建进日志；会话/team 运行中优先稳定排序；
+  usage 迁时间线 + 诚实降级；日志中枢（降噪/着色/config 热应用/WebUI）+ 工具名 snake_case。
+- **治理**：宪法第三/四条全部测试/探针/门禁废除（行为验证归用户）；build.ts rc+证据双判；
+  AGENTS worktree 规范与非对称权威顺序。
 
 ## 未实现 / 下一步
 
-- **移交 0.54（0.53 收口时明确移交，见 移交清单（个人侧 handoff，不入共享仓））**：
-  投影卡实现（PC-1/2/3）、gap 协议 + 两侧计数、un-acked 队列（0.54 直接消灭该概念）、
-  AB-1 三模式对比（需预算批准）。**仍需用户做的一件**：真机刷新验证（重启后刷几次，
-  看 `diskBackfill` 六字段）。另有三条已知边界（chunk 不落盘 / 三套 seq / trace-only 不交错）
-  由 0.54 timeline 迁移兼并。
-- **0.52 遗留（仍未做）**：**B′ rotate 收口解耦**（下一单首选，见下）；TUI 答 async ask；
-  工具卡交棒（需历史侧 `duration_ms`）；位置认领（前置已具备：消息身份 `run_id` + `run_segment`
-  已落盘）；`sessions.search` 读侧投影缓存；用量 43% unpriced；`guardrail PII 误伤`（13 位时间戳
-  被当手机号打码，且在改写落盘正文）；
-  `claimStats.rewrittenSegments` 接 diagnostics；未覆盖的历史会话 → 工具卡描述需
-  `sessions.get` 透出 `agent_id`；`restart` 类环境信息在词表里留位但**仍无生产者**。
-- **rotate 交棒缺口（C 已做，B′ 待排）**：self-rotate 那一轮被当成「迟到的旧轮」做 epoch
-  fencing（正文落盘但不记账、notice 只带消息 id）。C 已落地（交接卡 + 文案说真话）；B′ 只做两件
-  小事 —— 收口侧 `retiredDuringRunId` 判据让交棒轮正常记账，以及**空正文不静默**（rotate 后旧轮
-  failed / 无正文也要发明确 notice）。**不再投递「结束语」**：交接由 `startup_prompt` 承担。
-- **G4 分布式 Node / G5 清理**未排期；`gateway reload` 不重载 registry。
-- **Workspace 插件独立包未实现**；Workspace = 公司数据目录仍是 target；当前 workspace 仍是 Team 目录键。
-- **T5 残留 71 行**（`tenant_id`=60 / text=11；keep=34 / defer-2=15 / defer-3=22），
-  见 `docs/dev/reports/0.49/tenant-id-residual.tsv`；defer-2/3 的清理需独立兼容迁移。
-- **浏览器 14 条目视走查**未做（`docs/dev/reports/0.49/e2e-verify.md` §6）。
-- **0.50 已知限制**：Hub 自动连接只认缺省 8643；Team 成员搜索只覆盖已加载窗口；
-  存量 cwd Team 不自动删除/迁移；暗色表格互换仅在暗色生效。Chat 历史走
-  `sessions.get` 的 `message_limit` / `before` 分页（首屏 50 条）；Team 走
-  `teams.get` 的 `before` 游标（首屏 100 条，`messages_has_more` 驱动翻页，
-  超出 64 MiB 回扫窗口时提示一次后停止）。事件订阅按路由收敛到当前会话 / Team / Runs。
-  Chat 的 `hideInput` 去重只比对「已加载窗口内是否存在内容完全相同的 user 消息」：
-  同一句话在窗口里出现过两次时该轮 live 气泡会被误隐藏；该轮 user 消息尚未进入窗口时
-  气泡改由 live 卡渲染、位置跟随 live 卡。影响面仅限那一轮用户气泡，不动正文/工具卡/排序。
-- **待手测**：`config.set` 写后热应用（0.50 新增 `src/config-write-apply.ts`）需要
-  新代码在跑的 gateway 才能测「写后立即 `config.get`」的收敛延迟；实现侧已单测
-  单飞行 / 上界 / 失败只 warn / 去重，真实 gateway 的 5 次 `set→get` 中位延迟待重启后补测。
+- 本版无真机读数的条目：行为验证归用户本人（宪法第四条）；不派 verifier/QA、不起临时服务。
+- 已知边界：write.lock 是合作式协议（bash/IDE/git 不受约束）；run-stops P2 重启自动续跑按用户裁决暂缓；
+  model-registry P3 解析收紧待用户 P2 验证后另批；plugin-embed 代理模式 iframe 回退先存不可用；
+  Anthropic/Responses VisionBackend 适配与 Files API 未做；env_injection bus cadence 热更需重启。
 - tag / publish 等 **1.0.0**（用户决定：0.x 一律不 tag、不 publish）。
 
 ## 入口
 
 - 版本历史：[INDEX.md](INDEX.md)
 - 变更摘要：[../../CHANGELOG.md](../../CHANGELOG.md)
-- 版本记录：[0.53.0](0.53.0.md)、[0.50.0](0.50.0.md)、[0.49.0](0.49.0.md)、[0.48.0](0.48.0.md)
+- 版本记录：[0.54.0](0.54.0.md)、[0.53.0](0.53.0.md)、[0.51.0](0.51.0.md)、[0.50.0](0.50.0.md)

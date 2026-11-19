@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/model-registry",
-  "version": "0.54.0",
+  "version": "0.56.0",
   "description": "Model registry management — vendors, aliases, encrypted credentials and connectivity tests",
   "type": "module",
   "main": "src/index.ts",
