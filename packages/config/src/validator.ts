@@ -3866,6 +3866,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'proxySecretEnv',
     'proxyNodes',
     'supervise',
+    'enginePool',
   ],
   // 0.56：WebUI 登录（嵌套 entries 由 validateAuthSettings 单独校验）。
   auth: [
@@ -4113,6 +4114,7 @@ export const KNOWN_CONFIG_KEYS = [
   // 0.56：单一根密钥覆盖点（`security.root_secret_env`）。
   'security',
   'gateway',
+  'toolsEngine',
   'auth',
   // 0.61：访问控制（浏览器能不能发 RPC），与 `auth.public_origins` 的 redirect_uri 来源分开。
   'http',

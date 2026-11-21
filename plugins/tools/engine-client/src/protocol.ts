@@ -40,6 +40,23 @@ export const ENGINE_WIRE = {
   mcpControl: 'engine.mcp.control',
 } as const;
 
+/**
+ * 池 S2：连接级首行 auth 帧（NDJSON 首行；非 ENGINE_WIRE 方法，零 prompt surface）。
+ * 回包 `{ ok: true }`；失败 close，不返回错误帧（4401/4400/4409 为诊断标签，只进 engine
+ * 日志；TCP 无 close code）。incarnation = node 进程启动时刻 ms（重启递增）；dirs 权威 =
+ * host 装配，engine 只透传至 NodeScope（不解析/不自决/不持久化）。形状先例 hub-protocol.ts。
+ */
+export type EngineAuthFrame =
+  | { kind: 'auth'; role: 'control'; token: string }
+  | {
+      kind: 'auth';
+      role: 'data';
+      token: string;
+      node_id: string;
+      incarnation: number;
+      dirs: { data_dir: string; tool_output_dir: string };
+    };
+
 /** 执行类（host 转发工厂逐调用计算；engine 机械路由，不做业务决策）。 */
 export type ExecClass = 'worker' | 'callback';
 
@@ -124,6 +141,14 @@ export interface EngineHealthParams {
    * 缺省 = 无 MCP server，旧行为零变化。形状单实现 = @vessel-agent/mcp-client types。
    */
   mcp?: McpServerStatus[];
+  /**
+   * 池 S4 additive：进程级字段，仅控制连接 engine.health 回包携带
+   * （{status, inflight_total, rss_bytes, scopes}）；数据连接 per-scope 回包缺省（数据面形状不变）。
+   * busy ≠ 故障：不触发熔断/重启；校验权 gateway/host 机械（形状不过忽略）。
+   */
+  inflight_total?: number;
+  rss_bytes?: number;
+  scopes?: number;
 }
 
 /**
@@ -162,6 +187,11 @@ export interface EngineHealthReport extends EngineHealthParams {
   restarts: number;
 }
 
+/** 池 S3：engine_busy 快拒稳定码（JSON-RPC error.code；-32000 generic 已占，取 distinct）。 */
+export const ENGINE_BUSY_CODE = -32005;
+/** 池 S3：快拒 error.message 前缀（无 'Error:' 前缀）；PoolTransport 按 code 拦截换家重试，不进模型。 */
+export const ENGINE_BUSY_PREFIX = 'engine_busy';
+
 /**
  * 稳定错误文本（折回模型的工具错误；error-envelope 默认 tool_error / retryable:false）。
  * 取消文本与 basic-tools CANCELLED_TEXT 逐字一致；超时文本命中既有 tool_timeout 分类。
@@ -174,6 +204,8 @@ export const ENGINE_ERROR = {
   cancelled: '错误：操作已取消（cancelled）。',
   timeout: (name: string, ms: number): string => `Error: tool "${name}" timed out after ${ms}ms`,
   implRejected: (name: string): string => `Error: engine_impl_rejected: ${name}`,
+  /** 池 S3：重试耗尽（全池 busy）折工具错误（进模型；error-envelope 现态 retryable:false，Q5）。 */
+  busy: 'Error: engine_busy: tool engine pool is at capacity',
 } as const;
 
 /** canonicalJSON：键排序稳定序列化（指纹用；实现细节）。 */

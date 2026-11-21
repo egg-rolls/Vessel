@@ -280,6 +280,7 @@ export {
 } from './platform/index.js';
 // 0.43：体验型 plugin 宿主（CONTRACT-0.43）。
 export {
+  attachNdjsonReader,
   buildPluginCatalog,
   buildPluginEnv,
   buildPluginHttpRouteTable,
@@ -289,6 +290,7 @@ export {
   type ChildProcessOptions,
   type ChildStatus,
   createHubPluginEventSource,
+  createNdjsonWriter,
   DEFAULT_EVENTS_PER_SECOND,
   EventRateLimiter,
   ensureJsonDto,
@@ -303,6 +305,7 @@ export {
   MAX_PLUGIN_MESSAGE_BYTES,
   matchesEventFilter,
   matchPluginHttpRoute,
+  type NdjsonOptions,
   normalizePluginEventDto,
   normalizePluginHttpDeclarations,
   normalizePluginHttpEndpoint,

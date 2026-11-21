@@ -5,12 +5,14 @@
  * （type / required / properties / items / enum / additionalProperties===false），
  * 未知关键字一律忽略。形状不过 → throw（entry 折 JSON-RPC error 回包）；
  * schema 子集违规 → 首个违规描述（engine 折 invalidParams 稳定文本，不派发）。
+ * 池 S2 连接级 auth 帧形状校验亦在此（fail-closed：不过 → entry close 连接，4400 诊断标签）。
  *
  * @module tools-engine/validate
  */
 
 import {
   canonicalJSON,
+  type EngineAuthFrame,
   type McpControlParams,
   type RegistryEntry,
   type RegistrySyncParams,
@@ -122,6 +124,53 @@ export function parseImplReject(params: unknown): { name: string } {
     throw new Error('engine.impl.reject requires a non-empty name');
   }
   return { name: params.name };
+}
+
+/**
+ * 池 S2：连接级首行 auth 帧形状校验（control / data 两形状；未知键丢弃）。
+ * 不过 → throw（entry close 连接，4400 诊断标签只进日志）；token 匹配 / incarnation
+ * fencing 是值判定，在 entry 鉴权处做（形状与权威分离）。dirs 只校机械形状，
+ * 权威 = host 装配，engine 不解析 / 不自决 / 不持久化。
+ */
+export function parseAuthFrame(frame: unknown): EngineAuthFrame {
+  if (!isRecord(frame) || frame.kind !== 'auth') {
+    throw new Error('auth frame must be an object with kind "auth"');
+  }
+  const { role, token } = frame;
+  if (role === 'control') {
+    if (!isNonEmptyString(token)) {
+      throw new Error('auth control frame requires a non-empty token');
+    }
+    return { kind: 'auth', role: 'control', token };
+  }
+  if (role === 'data') {
+    if (!isNonEmptyString(token)) {
+      throw new Error('auth data frame requires a non-empty token');
+    }
+    const { node_id, incarnation, dirs } = frame;
+    if (!isNonEmptyString(node_id)) {
+      throw new Error('auth data frame requires a non-empty node_id');
+    }
+    if (typeof incarnation !== 'number' || !Number.isFinite(incarnation)) {
+      throw new Error('auth data frame incarnation must be a finite number');
+    }
+    if (!isRecord(dirs)) {
+      throw new Error('auth data frame dirs must be an object');
+    }
+    const { data_dir, tool_output_dir } = dirs;
+    if (!isNonEmptyString(data_dir) || !isNonEmptyString(tool_output_dir)) {
+      throw new Error('auth data frame dirs requires non-empty data_dir / tool_output_dir');
+    }
+    return {
+      kind: 'auth',
+      role: 'data',
+      token,
+      node_id,
+      incarnation,
+      dirs: { data_dir, tool_output_dir },
+    };
+  }
+  throw new Error('auth frame role must be control or data');
 }
 
 function isStringArray(value: unknown): value is string[] {

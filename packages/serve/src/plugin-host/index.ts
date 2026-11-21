@@ -103,6 +103,11 @@ export {
   toPluginListStatus,
 } from './manager.js';
 export {
+  attachNdjsonReader,
+  createNdjsonWriter,
+  type NdjsonOptions,
+} from './ndjson.js';
+export {
   type PluginHttpProxyOptions,
   proxyPluginHttpRequest,
 } from './proxy.js';

@@ -25,7 +25,8 @@
   "dependencies": {
     "@vessel-agent/basic-tools": "workspace:*",
     "@vessel-agent/core": "workspace:*",
-    "@vessel-agent/mcp-client": "workspace:*"
+    "@vessel-agent/mcp-client": "workspace:*",
+    "@vessel-agent/serve": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^7.0.2"

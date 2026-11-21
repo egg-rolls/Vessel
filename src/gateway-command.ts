@@ -20,6 +20,7 @@ import {
   checkPlatformTokenConflict,
   DEFAULT_GATEWAY_OPTIONS,
   DEFAULT_SERVE_OPTIONS,
+  getUserConfigDir,
   loadConfig,
   resolveAuthSettings,
   resolveGatewayNodePorts,
@@ -78,6 +79,7 @@ import {
   readGatewayPidRecord,
   writeGatewayPid,
 } from './gateway/pid';
+import { createPoolSupervisor, type PoolSupervisor } from './gateway/pool-supervisor';
 import { gatewayBaseUrl, reloadGateway, shutdownGateway } from './gateway/reload';
 import {
   installService,
@@ -2806,6 +2808,8 @@ export async function runPlatformGatewayForeground(
 
   let platformGateway: ReturnType<typeof startPlatformGateway> | undefined;
   let supervisor: NodeSupervisor | undefined;
+  // 池 S20：engine 池监督（size>0 才建）；声明在 try 外供 finally 读（同 supervisor 口径）。
+  let poolSupervisor: PoolSupervisor | undefined;
   // handoff（0.52）：命中「保留子进程」时，成功/失败/退出路径都不能把它们停掉。
   // 声明必须在 try 之外 —— 下面的 finally 也要读它（否则 keep 会被回滚）。
   let handoffKept = false;
@@ -2921,6 +2925,62 @@ export async function runPlatformGatewayForeground(
     await supervisor.begin(specs);
     // phase B 在监听/写 PID 之后启动（见下面的 `settlePromise`）：就绪等待离开
     // 启动关键路径，慢节点不拖住「我能接请求」。
+
+    // 池 S20：gateway.engine_pool.size > 0 → createPoolSupervisor（detached engine 池，
+    // routing.json 唯一写者）。size=1 fail-fast（S1 装配层裁决：开时 ≥2，Q1）。spawn 必须
+    // 先于 8642 监听（node/hub 同款硬前置：detached 子进程继承监听 socket）；start() 含
+    // adopt + spawn 就绪（上界 30s），是 opt-in 启动成本。start 失败不崩启动（child supervisor
+    // 先例 bootstrap.ts:1216-1220）：池工具 fail-closed 可见，平台/node 照常服务。
+    const enginePool = config.gateway?.enginePool;
+    if (enginePool !== undefined && (enginePool.size ?? 0) > 0) {
+      const poolSize = enginePool.size ?? 0;
+      if (poolSize === 1) {
+        printErr(
+          ui.err('engine_pool_invalid_size: gateway.engine_pool.size must be >= 2 when enabled'),
+        );
+        return 1;
+      }
+      // poolDir 与 node 侧同源（bootstrap 解释 (d)）：用户全局配置目录 + engine-pool[-instance]。
+      const poolInstance = enginePool.instance;
+      const poolDir = path.join(
+        getUserConfigDir(),
+        poolInstance !== undefined && poolInstance !== ''
+          ? `engine-pool-${poolInstance}`
+          : 'engine-pool',
+      );
+      const poolSettings: Record<string, unknown> = {
+        dataDir: path.join(dataDir, 'engine-pool'),
+      };
+      if (enginePool.maxInflight !== undefined) poolSettings.maxInflight = enginePool.maxInflight;
+      if (enginePool.rssSoftLimitMb !== undefined) {
+        poolSettings.rssSoftLimitMb = enginePool.rssSoftLimitMb;
+      }
+      const poolLogLine = (message: string, fields?: Record<string, unknown>): string =>
+        fields === undefined
+          ? `engine pool: ${message}`
+          : `engine pool: ${message} ${JSON.stringify(fields)}`;
+      poolSupervisor = createPoolSupervisor({
+        poolDir,
+        // entryPath/rootDir 与 bootstrap child descriptor 同源（bootstrap.ts:1190-1191 口径）。
+        entryPath: path.join(import.meta.dir, 'tools-engine', 'entry.ts'),
+        rootDir: path.join(import.meta.dir, '..'),
+        size: poolSize,
+        settings: poolSettings,
+        // 前台无 Logger 实例：桥 print/printErr（NodeSupervisor onNodeState 同通道）；
+        // 预算尽 escalate 必须可见，不接受 noopLogger 静默。
+        logger: {
+          debug: (message, fields) => print(ui.dim(poolLogLine(message, fields))),
+          info: (message, fields) => print(ui.dim(poolLogLine(message, fields))),
+          warn: (message, fields) => printErr(ui.warn(poolLogLine(message, fields))),
+          error: (message, fields) => printErr(ui.err(poolLogLine(message, fields))),
+        },
+      });
+      await poolSupervisor.start().catch((error: unknown) => {
+        printErr(
+          ui.err(`engine pool start failed; pool tools are fail-closed: ${errorMessage(error)}`),
+        );
+      });
+    }
 
     // 0.52（handoff 的硬前置）：**监听必须晚于 spawn 子进程**。
     //
@@ -3218,8 +3278,15 @@ export async function runPlatformGatewayForeground(
         print(ui.info(t('gateway.stopKeptNodes', { count: result.kept?.nodes ?? 0 })));
         if ((result.kept?.hubs ?? 0) > 0) print(ui.info(t('gateway.stopKeptHub')));
       }
+      // 池 S20：handoff 不杀 detached engine（新前台 adopt，S7）；只清点可见，不静默。
+      if (poolSupervisor !== undefined) {
+        const keptEngines = poolSupervisor.members().filter((member) => member.owned).length;
+        print(ui.dim(`engine pool: kept ${keptEngines} owned engine(s) for adopt`));
+      }
     } else {
       await supervisor.stop().catch(() => undefined);
+      // 池 S20：非 handoff 停止 terminate owned（adopt/external 永不杀，S7）；node 先停再停 engine。
+      await poolSupervisor?.stop().catch(() => undefined);
     }
     await platformGateway?.stop().catch(() => undefined);
     platformGateway = undefined;
@@ -3228,6 +3295,8 @@ export async function runPlatformGatewayForeground(
     // 失败路径也必须释放平台实例锁；PID 只在全部就绪后写入。
     // handoff 命中后这里也绝不能回滚子进程（否则前面的 keep 白做）。
     await supervisor?.stop(handoffKept ? { keep: true } : undefined).catch(() => undefined);
+    // 池 S20：失败路径同口径 terminate owned；handoff 命中绝不杀（stop 幂等，成功路径已停过）。
+    if (!handoffKept) await poolSupervisor?.stop().catch(() => undefined);
     await platformGateway?.stop().catch(() => undefined);
     await lock.release().catch(() => undefined);
   }

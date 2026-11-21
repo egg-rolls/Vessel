@@ -13,12 +13,15 @@
  * @module @vessel-agent/serve/plugin-host
  */
 
+import { EventEmitter } from 'node:events';
 import { appendFile, mkdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import type { FileSink } from 'bun';
 import { ensurePayload, jsonByteLength, MAX_PLUGIN_MESSAGE_BYTES } from './dto.js';
 import { type PluginHostError, pluginError, pluginErrorCodeOf } from './errors.js';
 import { normalizePluginHttpEndpoint } from './http.js';
+import { attachNdjsonReader, createNdjsonWriter } from './ndjson.js';
 import type { PluginDescriptor, PluginErrorCode, PluginEventDto } from './types.js';
 
 /** 协议版本（contract §3） */
@@ -203,6 +206,54 @@ class PluginLogFile {
 }
 
 /**
+ * Bun FileSink → NodeJS.WritableStream 薄适配（S10 codec 消费桥，PLAN §5(c)）。
+ * write 直达 sink.write + flush，不经 Node Writable 内部缓冲（保留现态直写时序）；
+ * end 仅为接口完备——回收路径仍直接走 `this.stdin.end()`。
+ */
+class FileSinkWritable extends EventEmitter implements NodeJS.WritableStream {
+  writable = true;
+
+  constructor(private readonly sink: FileSink) {
+    super();
+  }
+
+  write(chunk: Uint8Array | string, cb?: (err?: Error | null) => void): boolean;
+  write(str: string, encoding?: BufferEncoding, cb?: (err?: Error | null) => void): boolean;
+  write(
+    chunk: Uint8Array | string,
+    encodingOrCb?: BufferEncoding | ((err?: Error | null) => void),
+    cb?: (err?: Error | null) => void,
+  ): boolean {
+    this.sink.write(chunk);
+    void this.sink.flush();
+    const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb;
+    callback?.();
+    return true;
+  }
+
+  end(cb?: () => void): this;
+  end(data: string | Uint8Array, cb?: () => void): this;
+  end(str: string, encoding?: BufferEncoding, cb?: () => void): this;
+  end(
+    dataOrCb?: string | Uint8Array | (() => void),
+    encodingOrCb?: BufferEncoding | (() => void),
+    cb?: () => void,
+  ): this {
+    if (typeof dataOrCb === 'string' || dataOrCb instanceof Uint8Array) {
+      this.sink.write(dataOrCb);
+    }
+    this.writable = false;
+    this.sink.end();
+    let callback: (() => void) | undefined;
+    if (typeof dataOrCb === 'function') callback = dataOrCb;
+    else if (typeof encodingOrCb === 'function') callback = encodingOrCb;
+    else callback = cb;
+    callback?.();
+    return this;
+  }
+}
+
+/**
  * 子进程句柄。`start()` 完成 handshake + activate 后 `status === 'active'`。
  * 所有退出都经 `hooks.onExit` 上报一次；manager 负责重启策略。
  */
@@ -224,9 +275,9 @@ export class ChildPluginProcess {
 
   private proc?: ReturnType<typeof Bun.spawn>;
   private stdin?: FileSink;
+  private ndjsonWriter?: { writeFrame(frame: Record<string, unknown>): boolean };
   private nextId = 1;
   private readonly pending = new Map<string, PendingRequest>();
-  private stdoutBuffer = '';
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private expectedExit = false;
   private exitCode: PluginErrorCode | undefined;
@@ -273,9 +324,31 @@ export class ChildPluginProcess {
     }
 
     const stdin = this.proc.stdin;
-    if (typeof stdin !== 'number') this.stdin = stdin;
+    if (stdin !== undefined && typeof stdin !== 'number') {
+      this.stdin = stdin;
+      this.ndjsonWriter = createNdjsonWriter(new FileSinkWritable(stdin), {
+        maxBytes: this.maxMessageBytes,
+        // 写端不产生入站帧；出站超限由 write() 把 false 折回原 throw（现态语义）。
+        onFrame: () => {},
+        onViolation: () => {},
+      });
+    }
     const stdout = this.proc.stdout;
-    if (typeof stdout !== 'number') void this.pumpStdout(stdout);
+    if (stdout !== undefined && typeof stdout !== 'number') {
+      attachNdjsonReader(Readable.fromWeb(stdout), {
+        maxBytes: this.maxMessageBytes,
+        onFrame: (frame) => this.handleLine(frame),
+        // 残留 buffer 超限：codec 已清 buffer；这里保留现态 fail + 稳定文本。
+        onViolation: () => {
+          void this.fail(
+            pluginError(
+              'plugin_payload_too_large',
+              `Plugin message line exceeds ${this.maxMessageBytes} bytes.`,
+            ),
+          );
+        },
+      });
+    }
     const stderr = this.proc.stderr;
     if (typeof stderr !== 'number') void this.pumpStderr(stderr);
     void this.proc.exited.then(
@@ -504,17 +577,14 @@ export class ChildPluginProcess {
   }
 
   private write(message: Record<string, unknown>): void {
-    const stdin = this.stdin;
-    if (stdin === undefined) throw new Error('Plugin stdin is not available.');
-    const line = JSON.stringify(message);
-    if (new TextEncoder().encode(line).byteLength > this.maxMessageBytes) {
+    const writer = this.ndjsonWriter;
+    if (writer === undefined) throw new Error('Plugin stdin is not available.');
+    if (!writer.writeFrame(message)) {
       throw pluginError(
         'plugin_payload_too_large',
         `Outgoing plugin message exceeds ${this.maxMessageBytes} bytes.`,
       );
     }
-    stdin.write(`${line}\n`);
-    void stdin.flush?.();
   }
 
   private writeResult(id: unknown, result: unknown): void {
@@ -523,22 +593,6 @@ export class ChildPluginProcess {
 
   private writeError(id: unknown, code: number, message: string): void {
     this.write({ jsonrpc: '2.0', id, error: { code, message } });
-  }
-
-  private async pumpStdout(stream: ReadableStream<Uint8Array> | undefined): Promise<void> {
-    if (stream === undefined) return;
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value !== undefined) this.onStdout(decoder.decode(value, { stream: true }));
-      }
-      this.onStdout(decoder.decode());
-    } catch {
-      // 进程退出时流可能抛错
-    }
   }
 
   private async pumpStderr(stream: ReadableStream<Uint8Array> | undefined): Promise<void> {
@@ -566,38 +620,8 @@ export class ChildPluginProcess {
     }
   }
 
-  private onStdout(chunk: string): void {
-    this.stdoutBuffer += chunk;
-    let index = this.stdoutBuffer.indexOf('\n');
-    while (index >= 0) {
-      let line = this.stdoutBuffer.slice(0, index);
-      this.stdoutBuffer = this.stdoutBuffer.slice(index + 1);
-      if (line.endsWith('\r')) line = line.slice(0, -1);
-      if (line.trim().length > 0) this.handleLine(line);
-      index = this.stdoutBuffer.indexOf('\n');
-    }
-    if (this.stdoutBuffer.length > this.maxMessageBytes) {
-      this.stdoutBuffer = '';
-      void this.fail(
-        pluginError(
-          'plugin_payload_too_large',
-          `Plugin message line exceeds ${this.maxMessageBytes} bytes.`,
-        ),
-      );
-    }
-  }
-
-  private handleLine(line: string): void {
-    let message: JsonRpcMessage;
-    try {
-      const parsed: unknown = JSON.parse(line);
-      if (!isRecord(parsed)) return;
-      message = parsed;
-    } catch {
-      this.logFile.append('[host] ignored non-JSON line on stdout');
-      return;
-    }
-
+  /** S10 codec 已解析并过滤非对象帧；分发逻辑逐字保留。 */
+  private handleLine(message: JsonRpcMessage): void {
     const id = messageId(message.id);
     const method = typeof message.method === 'string' ? message.method : undefined;
 

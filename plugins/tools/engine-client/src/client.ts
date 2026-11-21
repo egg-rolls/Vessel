@@ -17,7 +17,7 @@
 import type { BasicToolsConfig, PathBoundary } from '@vessel-agent/basic-tools';
 import type { Logger, ToolDefinition } from '@vessel-agent/core';
 import type { McpServerStatus } from '@vessel-agent/mcp-client';
-import { createPendingTable, isRecord } from './pending.js';
+import { createPendingTable, isRecord, type PendingState } from './pending.js';
 import {
   ENGINE_ERROR,
   ENGINE_WIRE,
@@ -60,6 +60,8 @@ export interface EngineClient {
   handleToolCallback(params: unknown): Promise<unknown>;
   /** child.ts onEngineNotification hook 落点（impl.swapped / health）。 */
   handleEngineNotification(method: string, params: unknown): void;
+  /** S9 host 侧读面：callback 续上 oracle（S8 pendingState 注入参数接线用）。 */
+  pendingState(runId: string, toolCallId: string): PendingState | undefined;
   /** 最近一次 engine 健康自报（supervisor 补 restarts 后对外）。 */
   lastHealth(): EngineHealthParams | undefined;
   /** engine.mcp.control 请求端口（装配层 host shell 用）；transport 缺省 → throw unavailable。 */
@@ -135,6 +137,9 @@ export function createEngineClient(options: EngineClientOptions): EngineClient {
         return;
       }
       // 其余 method 忽略。
+    },
+    pendingState(runId, toolCallId) {
+      return pending.state(runId, toolCallId);
     },
     lastHealth() {
       return health;

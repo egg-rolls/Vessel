@@ -46,6 +46,8 @@ export interface PendingTable {
   register(record: Omit<PendingRecord, 'state'>): void;
   /** 置 settled 并删记录（转发 handler finally / abort 监听；幂等）。 */
   settle(runId: string, toolCallId: string): void;
+  /** 池 S9：只读状态查询（callback 续上 oracle）；记录已删（settled/disposed）→ undefined。 */
+  state(runId: string, toolCallId: string): PendingState | undefined;
   /** child.ts onToolCallback hook 落点：关联-only fail-closed 执行原 handler。 */
   handleCallback(params: unknown): Promise<ToolInvokeResult>;
   /** dispose：全部 pending 置 settled（迟到 callback 一律拒）。 */
@@ -64,6 +66,9 @@ export function createPendingTable(): PendingTable {
       if (record === undefined) return;
       record.state = 'settled';
       records.delete(key);
+    },
+    state(runId, toolCallId) {
+      return records.get(pendingKey(runId, toolCallId))?.state;
     },
     async handleCallback(params) {
       if (

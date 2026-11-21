@@ -585,6 +585,28 @@ export interface GatewayConfig {
   proxyNodes?: boolean;
   /** 0.58：父进程侧存活看门狗（探活 + 受限重启）；缺省开。 */
   supervise?: GatewaySuperviseConfig;
+  /** engine 池 S1：gateway 监督的共享 engine 池；缺省不建池（零回归）。 */
+  enginePool?: GatewayEnginePoolConfig;
+}
+
+/**
+ * engine 池 S1（DECISION-engine-pool Q1/Q7 已批）：gateway 监督的共享 engine 池配置。
+ * YAML 键：`gateway.engine_pool.size / max_inflight / rss_soft_limit_mb / instance`
+ * （loader snake_case → camelCase 自动映射）。缺省值即零回归：size=0/缺省不建池。
+ */
+export interface GatewayEnginePoolConfig {
+  /** 池规模；0/缺省 = 不建池（零回归）。开时 ≥2（Q1）；size=1 装配期 fail-fast。 */
+  size?: number;
+  /** 每 engine 进程在途上限；缺省 os.cpus().length × 4（Q1 调参项，物理资源保护非 run 限制）。 */
+  maxInflight?: number;
+  /** rss 软阈值（MB）；缺省 unset = 不启用。 */
+  rssSoftLimitMb?: number;
+  /**
+   * 多平台实例名；缺省 → 目录 engine-pool；设 → engine-pool-<instance>（Q7）。
+   * 隔离告诫：poolDir 在用户全局目录（~/.vessel）下，**不随 --data-dir / VESSEL_DATA_DIR 移动**；
+   * 隔离实例必须设本键，否则与主实例共用同一池目录（同 platform-watchdog-<instance> 词汇）。
+   */
+  instance?: string;
 }
 
 /**
@@ -1141,6 +1163,12 @@ export interface VesselConfig {
   security?: SecurityConfig;
   /** 0.49：平台 Gateway（与 `node:` 段分区，不共享 token 键） */
   gateway?: GatewayConfig;
+  /**
+   * engine 池 S1：本 node 的 tools-engine 形态（YAML `tools_engine.mode`）。
+   * 缺省 child = 现态 per-node child supervisor（零回归）；pool = 共享池直连
+   * （需 gateway.engine_pool.size>0 的池存在；双开关缺省关，回退 = 翻配置 + 重启）。
+   */
+  toolsEngine?: { mode?: 'child' | 'pool' };
   /**
    * 0.61：浏览器侧 **HTTP 访问控制**（谁能发 RPC），与 `auth.public_origins`
    * （`redirect_uri` 的来源选择）是两件事。

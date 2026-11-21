@@ -4,6 +4,8 @@
  * 不判权限、不管会话、不独立发现工具：注册表内容只来自 host 喂的 registry.sync；
  * 派发前只做机械 schema 校验（不是权限判定）；按信封 exec 机械路由 worker / callback。
  * 并发到达直接派发（内存 in-flight 表 = 排队；无并发上限、无 durable 队列）。
+ * 池模式进程级上限在 entry 层派发前准入（S18）；本类只 additive inFlightCount 只读面
+ * （准入 / 控制 health 聚合用；in-flight 唯一真源仍是本表）与可选 dirs 透传（S13/§5(f)）。
  *
  * 错误口径：业务错误一律折 { content: 稳定文本 }（工具错误口径，run 继续）；
  * 只有形状校验不过 / 意外异常才 throw（entry 折 JSON-RPC error 回包）。
@@ -68,6 +70,11 @@ export class ToolsEngine {
   constructor(
     private readonly hostChannel: EngineHostChannel,
     private readonly mcp: McpConnectionManager,
+    /**
+     * 池 S13/§5(f) additive：NodeScope dirs（auth 帧 host 装配权威，只透传至 executeWorker）。
+     * child 构造不传 → executeWorker 调用逐字（env fallback 零回归）。
+     */
+    private readonly dirs?: { dataDir?: string; toolOutputDir?: string },
   ) {}
 
   /** 注册表增量喂入（host 权威）；形状不过 → throw。 */
@@ -174,6 +181,11 @@ export class ToolsEngine {
     return { status: 'ok', loaded: [...this.registry.keys()], mcp: this.mcp.status() };
   }
 
+  /** 池 S18/S4 additive 只读面：本 scope 在途数（进程级准入 / 控制 health 聚合用）。 */
+  inFlightCount(): number {
+    return this.inFlight.size;
+  }
+
   /** abort 全部 in-flight + 关全部 MCP 连接（杀 server 孙进程；child 退出路径）。 */
   async dispose(): Promise<void> {
     this.disposed = true;
@@ -240,7 +252,12 @@ export class ToolsEngine {
           );
         return promise;
       }
-      void executeWorker(envelope, controller.signal).then(call.finish, call.fail);
+      // child 不传 dirs → 两参调用逐字（零回归）；pool 透传 NodeScope dirs（S13）。
+      void (
+        this.dirs === undefined
+          ? executeWorker(envelope, controller.signal)
+          : executeWorker(envelope, controller.signal, this.dirs)
+      ).then(call.finish, call.fail);
       return promise;
     }
 

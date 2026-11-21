@@ -14,9 +14,15 @@ import {
   type TeamDeclaration,
   workspaceKey,
 } from '@vessel-agent/agent';
-import { createEngineClient, type EngineClient } from '@vessel-agent/engine-client';
+import {
+  createEngineClient,
+  createPoolTransport,
+  type EngineClient,
+  type PoolTransport,
+} from '@vessel-agent/engine-client';
 import {
   buildConfigSnapshot,
+  getUserConfigDir,
   getUserConfigPath,
   loadConfig,
   resolveEffectiveApiKey,
@@ -278,7 +284,8 @@ export interface BootstrapResult {
    */
   toolsEngine?: {
     client: EngineClient;
-    supervisor: EngineSupervisor;
+    /** 池 S20：pool 模式无 child supervisor（缺省 undefined）；全仓零消费点（N grep 核）。 */
+    supervisor?: EngineSupervisor;
     bridgeDeny: { current: string[] };
   };
   /**
@@ -1180,44 +1187,96 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 每 host 一个 engine child（B 形态）；合成 descriptor 不进 PluginLoader / catalog。
   // getTransport 晚绑定：supervisor 未 start / disabled ⇒ 转发 fail-closed（不静默回退）。
   const engineSupervisorRef: { current?: EngineSupervisor } = {};
+  // 池 S20：mode=pool 时 ref 持 PoolTransport（getTransport 晚绑定形状不变，fail-closed 语义不变）。
+  const poolTransportRef: { current?: PoolTransport } = {};
   // 批次 2：MCP host shell 晚绑定（factory 装配后才存在；engine 重启 onReady 对账用）。
   const mcpShellRef: { current?: McpEngineShell } = {};
   const engineClient = createEngineClient({
-    getTransport: () => engineSupervisorRef.current?.transport,
+    getTransport: () => engineSupervisorRef.current?.transport ?? poolTransportRef.current,
     logger,
   });
-  const engineSupervisor = createEngineSupervisor({
-    entryPath: path.join(import.meta.dir, 'tools-engine', 'entry.ts'),
-    rootDir: path.join(import.meta.dir, '..'),
-    dataDir: path.join(dataDir, 'tools-engine'),
-    // 落盘 env 与 host 同源：dataDir = 本入口解析后的数据目录；toolOutputDir = host 生效根。
-    settings: { dataDir, toolOutputDir: toolOutputRoot() },
-    logger,
-    onToolCallback: (params) => engineClient.handleToolCallback(params),
-    onEngineNotification: (method, params) => engineClient.handleEngineNotification(method, params),
-    // 每次 start / 重启成功后对账（重启不改注册表身份；失败只记日志）。
-    // 批次 2：MCP 重喂 configure 重建连接 + 注册对账（换连接不换定义，透明）。
-    onReady: () => {
-      void (async () => {
-        try {
-          await mcpShellRef.current?.reconcile();
-          await engineClient.pushRegistry();
-        } catch (error) {
-          logger.warn('tools-engine registry push failed', {
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
-      })();
-    },
-  });
-  engineSupervisorRef.current = engineSupervisor;
-  // 预算内失败自动重试；预算尽 disabled（start 抛最后一次错误）→ 工具 fail-closed，
-  // 启动不崩：用户可见稳定 engine_unavailable 错误（行为验证点：启动诊断）。
-  await engineSupervisor.start().catch((error: unknown) => {
-    logger.error('tools-engine start failed; whitelisted tools are fail-closed', {
-      message: error instanceof Error ? error.message : String(error),
+  let engineSupervisor: EngineSupervisor | undefined;
+  if (config.toolsEngine?.mode === 'pool') {
+    // 池 S20：node 数据面 = PoolTransport 直连 gateway 监督的 engine 池（替代 child supervisor）。
+    // poolDir = 用户全局配置目录 + engine-pool[-<instance>]（解释 (d)：--data-dir 不移动 poolDir，
+    // 隔离实例必须设 gateway.engine_pool.instance）。双开关缺省关：本分支仅 mode=pool 显式 opt-in。
+    const poolInstance = config.gateway?.enginePool?.instance;
+    const poolDir = path.join(
+      getUserConfigDir(),
+      poolInstance !== undefined && poolInstance !== ''
+        ? `engine-pool-${poolInstance}`
+        : 'engine-pool',
+    );
+    poolTransportRef.current = createPoolTransport({
+      poolDir,
+      nodeId,
+      incarnation: Date.now(),
+      // 与 child settings 同源：dataDir = 本入口解析后的数据目录；toolOutputDir = host 生效根。
+      dirs: { dataDir, toolOutputDir: toolOutputRoot() },
+      // 解释 (e)：host 注册权威 = mcpShell.listServers()（与账本 route.source 喂入同源）；
+      // 命中 → mcp:<server>，否则 undefined → 全候选。shell 未就绪 → undefined（晚绑定现态）。
+      getSource: (toolName) => {
+        const server = mcpShellRef.current
+          ?.listServers?.()
+          .find((item) => item.tools.includes(toolName));
+        return server !== undefined ? `mcp:${server.name}` : undefined;
+      },
+      // 修正案 R1.1：callback 续上 oracle = EngineClient.pendingState（委托 pending.state()）。
+      pendingState: (runId, toolCallId) => engineClient.pendingState(runId, toolCallId),
+      logger,
+      // 修正案 R1.2：连接转健康（含重连 / respawn 恢复）→ reconcile + pushRegistry，
+      // 与 child onReady 同语义（两处调用点，宪法 10.7 复制不抽取，child 分支保持逐字）。
+      onConnectionReady: () => {
+        void (async () => {
+          try {
+            await mcpShellRef.current?.reconcile();
+            await engineClient.pushRegistry();
+          } catch (error) {
+            logger.warn('tools-engine registry push failed', {
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        })();
+      },
+      onToolCallback: (params) => engineClient.handleToolCallback(params),
+      onEngineNotification: (method, params) =>
+        engineClient.handleEngineNotification(method, params),
     });
-  });
+  } else {
+    engineSupervisor = createEngineSupervisor({
+      entryPath: path.join(import.meta.dir, 'tools-engine', 'entry.ts'),
+      rootDir: path.join(import.meta.dir, '..'),
+      dataDir: path.join(dataDir, 'tools-engine'),
+      // 落盘 env 与 host 同源：dataDir = 本入口解析后的数据目录；toolOutputDir = host 生效根。
+      settings: { dataDir, toolOutputDir: toolOutputRoot() },
+      logger,
+      onToolCallback: (params) => engineClient.handleToolCallback(params),
+      onEngineNotification: (method, params) =>
+        engineClient.handleEngineNotification(method, params),
+      // 每次 start / 重启成功后对账（重启不改注册表身份；失败只记日志）。
+      // 批次 2：MCP 重喂 configure 重建连接 + 注册对账（换连接不换定义，透明）。
+      onReady: () => {
+        void (async () => {
+          try {
+            await mcpShellRef.current?.reconcile();
+            await engineClient.pushRegistry();
+          } catch (error) {
+            logger.warn('tools-engine registry push failed', {
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        })();
+      },
+    });
+    engineSupervisorRef.current = engineSupervisor;
+    // 预算内失败自动重试；预算尽 disabled（start 抛最后一次错误）→ 工具 fail-closed，
+    // 启动不崩：用户可见稳定 engine_unavailable 错误（行为验证点：启动诊断）。
+    await engineSupervisor.start().catch((error: unknown) => {
+      logger.error('tools-engine start failed; whitelisted tools are fail-closed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
 
   // Stage 4：每 node 每进程一个 Runtime；tenant bundle 与成员 host 共用。
   const executionRuntime = new Runtime({ logger });
@@ -2252,8 +2311,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
     // tools-engine P2：expectedExit 停 engine child（不触发重启）+ 清 pending 关联。
     // run 已在 beginDrain 打断，在途转发经 abort → tool.cancel 收口。
+    // 池 S20：pool 模式 dispose PoolTransport（关连接/定时器；detached engine 归 gateway 生命周期，
+    // node 退出不杀池）；child 模式语义不变（engineSupervisor 有值时 optional chain 等价原调用）。
     try {
-      await engineSupervisor.stop();
+      await engineSupervisor?.stop();
+      poolTransportRef.current?.dispose();
       engineClient.dispose();
     } catch (error) {
       reportShutdownFailure({
