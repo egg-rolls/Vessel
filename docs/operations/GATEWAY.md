@@ -105,6 +105,10 @@ vessel gateway uninstall-service
 | `vessel stop --connect <url>` | 远程平台停 | 远程舰队（registry 级清点，读不到 manifest/池文件） | 需 `gateway.remote_shutdown` opt-in + 平台 token + 已配置反代密钥；**远程不强杀**，超时如实 exit 1 |
 
 - `--no-keep-nodes`（0.55 写法）与 `--keep-nodes`（0.52 写法）都保留为别名，分别等价于 `--stop-nodes` 与缺省。
+- **restart 缺省保持运行模式**：读目标实例 pid record 的 `daemon` 标记（`start --daemon`
+  的分离子进程写 `true`，前台写 `false`），不带 `--daemon` 时按原模式重启；显式
+  `--daemon` 强制后台。旧记录无标记 / 无运行实例 → 前台（历史行为）。`restart --all`
+  仍要求显式 `--daemon`。
 - **`vessel stop` = 舰队级**（scope 跟名词走）：缺省停 resolved data root 内**所有实例**的舰队；
   `--instance`/`--port` 收窄单实例（`--all` 复用选择器，等价缺省）；`--timeout` 缺省 10s。
   远程只认显式 `--connect` flag（不认 `VESSEL_CONNECT` env）；未开 opt-in → 401 提示 SSH 到主机跑

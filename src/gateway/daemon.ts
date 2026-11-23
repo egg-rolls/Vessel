@@ -15,6 +15,7 @@ import {
   type CommandRunner,
   cleanupGatewayStateEntry,
   collectGatewayState,
+  GATEWAY_DAEMON_ENV,
   type GatewayPidRecord,
   type GatewayStateKind,
   type GatewayStateSnapshot,
@@ -242,7 +243,9 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
       stdout: handle.fd,
       stderr: handle.fd,
       detached: true,
-      env: process.env,
+      // 子进程 argv 与前台 start 相同，只靠这个标记让它在 pid record 里记
+      // `daemon: true`（`gateway restart` 缺省据此保持后台模式）。
+      env: { ...process.env, [GATEWAY_DAEMON_ENV]: '1' },
     });
   } catch (error) {
     await handle.close().catch(() => undefined);

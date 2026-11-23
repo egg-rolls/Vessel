@@ -14,7 +14,18 @@ export interface GatewayPidRecord {
   version: string;
   node_id?: string;
   instance?: string;
+  /**
+   * 运行模式标记：true = `start --daemon` 分离出的后台子进程；false = 前台。
+   * `gateway restart` 缺省读它保持原模式。旧记录无此字段 → 按前台处理（历史行为）。
+   */
+  daemon?: boolean;
 }
+/**
+ * 分离子进程标记 env：`startGatewayDaemon` spawn 时置 '1'，前台 PID 写入方读它
+ * 把 `daemon: true` 记进 pid record（restart 保持模式的唯一可靠来源——子进程
+ * argv 与前台 start 完全相同，无法从命令行区分）。
+ */
+export const GATEWAY_DAEMON_ENV = 'VESSEL_GATEWAY_DAEMON';
 export interface CommandResult {
   exitCode: number;
   stdout: string;
@@ -100,7 +111,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 export function parseGatewayPid(raw: unknown): GatewayPidRecord | null {
   if (!isRecord(raw)) return null;
-  const { pid, started_at, host, port, version, node_id, instance } = raw;
+  const { pid, started_at, host, port, version, node_id, instance, daemon } = raw;
   if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return null;
   if (typeof started_at !== 'string' || Number.isNaN(Date.parse(started_at))) return null;
   if (typeof host !== 'string' || host.trim() === '') return null;
@@ -110,6 +121,7 @@ export function parseGatewayPid(raw: unknown): GatewayPidRecord | null {
   if (instance !== undefined) {
     if (typeof instance !== 'string' || !isValidGatewayInstance(instance)) return null;
   }
+  if (daemon !== undefined && typeof daemon !== 'boolean') return null;
   return {
     pid,
     started_at,
@@ -118,6 +130,7 @@ export function parseGatewayPid(raw: unknown): GatewayPidRecord | null {
     version,
     ...(node_id !== undefined ? { node_id } : {}),
     ...(instance !== undefined ? { instance } : {}),
+    ...(daemon !== undefined ? { daemon } : {}),
   };
 }
 export function isProcessAlive(pid: number): boolean {
@@ -208,6 +221,7 @@ export async function writeGatewayPid(
     port: record.port,
     version: record.version,
     ...(record.node_id !== undefined ? { node_id: record.node_id } : {}),
+    ...(record.daemon !== undefined ? { daemon: record.daemon } : {}),
   };
   const stored: GatewayPidRecord =
     name === DEFAULT_GATEWAY_INSTANCE ? base : { ...base, instance: name };

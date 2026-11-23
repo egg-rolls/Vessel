@@ -69,7 +69,7 @@ import type { FeishuChannelLike } from './control-plane-types';
 import { expandHome, resolveDataDir } from './data-paths';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
 import type { GatewayInstanceLock } from './gateway/instance-lock';
-import { collectGatewayState, DEFAULT_GATEWAY_INSTANCE } from './gateway/pid';
+import { collectGatewayState, DEFAULT_GATEWAY_INSTANCE, GATEWAY_DAEMON_ENV } from './gateway/pid';
 import { renderGatewayBanner, renderGatewayBannerOneLine, wantsBoxBanner } from './gateway-banner';
 import {
   deriveGatewayInstance,
@@ -77,6 +77,7 @@ import {
   prepareForegroundGatewayStart,
   printSplitModePortError,
   resolveGatewayTargets,
+  resolveRestartDaemonMode,
   stopGateway,
   writeForegroundGatewayPid,
 } from './gateway-command';
@@ -361,6 +362,19 @@ if (demoRequested) {
       t('demo.line.isolated'),
     ].join('\n'),
   );
+}
+// restart 保持运行模式：未显式 --daemon 时，按目标实例 pid record 的 daemon
+// 标记决定前台/后台。必须在注册表与前台分支之前解析（两条路由都按
+// `daemon === false` 分流）；旧记录无标记 / 无运行实例 → 前台（历史行为）。
+{
+  const gatewayCommand = args.gateway;
+  if (
+    gatewayCommand !== null &&
+    gatewayCommand.kind === 'restart' &&
+    gatewayCommand.daemon === undefined
+  ) {
+    gatewayCommand.daemon = await resolveRestartDaemonMode(gatewayCommand);
+  }
 }
 // 一次性命令注册表：按注册顺序命中第一个，执行后直接退出。
 // 命中后不进入 bootstrap / REPL / serve / headless 主流程。
@@ -1634,6 +1648,7 @@ async function runWithConfig(result: BootstrapResult) {
           ? { startedAt: foregroundGatewayLock.startedAt }
           : {}),
         ...(result.nodeId ? { nodeId: result.nodeId } : {}),
+        daemon: process.env[GATEWAY_DAEMON_ENV] === '1',
       });
     } catch (error) {
       const message =

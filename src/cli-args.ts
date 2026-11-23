@@ -56,7 +56,12 @@ export type GatewayCommand =
   | { kind: 'list'; json: boolean }
   | ({
       kind: 'restart';
-      daemon: boolean;
+      /**
+       * 运行模式：true = 显式 `--daemon`（强制后台）；缺省（undefined）= 保持
+       * 当前实例的运行模式，由 cli.ts 分发前读 pid record 的 `daemon` 标记解析
+       * （`resolveRestartDaemonMode`）；旧记录无标记时回落前台。
+       */
+      daemon?: boolean;
       /**
        * 0.55.1：缺省只换平台层（handoff），node/hub 留活并被新平台 adopt（不杀会话）。
        * 要连 node/hub 一起冷重启，显式写 `--stop-nodes`；`--keep-nodes` / `--no-keep-nodes`
@@ -1999,9 +2004,13 @@ function parseGatewayList(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `gateway restart [--daemon] [--instance N|--port N|--all] [--stop-nodes]` */
+/**
+ * `gateway restart [--daemon] [--instance N|--port N|--all] [--stop-nodes]`
+ * 缺省保持当前实例的运行模式（daemon/前台）；显式 `--daemon` 强制后台。
+ */
 function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
-  let daemon = false;
+  // undefined = 未显式给 --daemon：保持运行模式，cli.ts 分发前按 pid record 解析。
+  let daemon: boolean | undefined;
   // 0.55.1：缺省只换平台层，node/hub 留活并被新平台 adopt（不杀会话）。
   // 与 `stop` 同口径：要连 node 一起冷重启，显式写 `--stop-nodes`。
   // 注意：留活意味着 node 仍跑旧代码 —— 命令结尾会打印一行可复制的提示。

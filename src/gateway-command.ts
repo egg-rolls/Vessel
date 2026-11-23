@@ -66,6 +66,7 @@ import {
   createCommandRunner,
   DEFAULT_GATEWAY_INSTANCE,
   deleteRecordIfOwnedSync,
+  GATEWAY_DAEMON_ENV,
   type GatewayPidRecord,
   type GatewayStateEntry,
   type GatewayStateKind,
@@ -699,6 +700,34 @@ export async function resolveGatewayTargets(
   return { ok: true, entries, all: false };
 }
 
+/**
+ * restart 保持运行模式：未显式 `--daemon` 时，读目标实例 pid record 的 `daemon`
+ * 标记决定本次 restart 走前台还是后台。**必须在 cli.ts 分发之前调用**（前台 /
+ * daemon 两条路由按 `daemon === false` 分流）。
+ *
+ * 缺省回落前台（false）：无匹配实例 / lock-only 无 record / 旧记录无标记 /
+ * 配置或状态读取失败 —— 与历史行为一致，旧 gateway restart 不炸。
+ * 这里不打印配置警告（随后真正执行的命令会打印），也不做 health 探测
+ * （模式只取决于 record 字段，与实例是否 running 无关）。
+ */
+export async function resolveRestartDaemonMode(
+  command: Extract<GatewayCommand, { kind: 'restart' }>,
+  deps: GatewayCommandDeps = {},
+): Promise<boolean> {
+  try {
+    const env = deps.env ?? process.env;
+    const config = deps.config ?? (await loadConfig()).config;
+    const dataDir = deps.dataDir ?? resolveDataDir(config, env);
+    const collect = deps.collectState ?? collectGatewayState;
+    const entries = (await collect(dataDir, { kind: gatewayStateKind(deps, env) })).entries;
+    const targets = await resolveGatewayTargets(dataDir, command, { entries });
+    if (!targets.ok) return false;
+    return targets.entries[0]?.record?.daemon === true;
+  } catch {
+    return false;
+  }
+}
+
 /** 运行中的目标实例（身份已确认，可直接 RPC / reload） */
 function runningTargets(entries: GatewayStateEntry[]): GatewayStateEntry[] {
   return entries.filter((entry) => entry.state === 'running');
@@ -827,6 +856,8 @@ export async function writeForegroundGatewayPid(options: {
   kind?: GatewayStateKind;
   /** 与实例锁共享的 started_at（epoch ms）；缺省取当前时间。 */
   startedAt?: number;
+  /** 运行模式：本进程是否 `start --daemon` 分离出的后台子进程（restart 保持模式用）。 */
+  daemon?: boolean;
 }): Promise<void> {
   const instance = normalizeGatewayInstance(options.instance);
   const kind = options.kind ?? 'node';
@@ -838,6 +869,7 @@ export async function writeForegroundGatewayPid(options: {
     version: options.version ?? readPackageVersion(),
     ...(options.nodeId !== undefined ? { node_id: options.nodeId } : {}),
     ...(instance !== DEFAULT_GATEWAY_INSTANCE ? { instance } : {}),
+    ...(options.daemon !== undefined ? { daemon: options.daemon } : {}),
   };
   await writeGatewayPid(options.dataDir, record, instance, kind);
   process.once('exit', () =>
@@ -3261,6 +3293,7 @@ export async function runPlatformGatewayForeground(
         instance,
         kind: 'platform',
         startedAt: lock.startedAt,
+        daemon: env[GATEWAY_DAEMON_ENV] === '1',
       });
     } catch (error) {
       printErr(
