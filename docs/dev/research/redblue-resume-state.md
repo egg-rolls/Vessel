@@ -22,7 +22,7 @@
 
 ## 三、拉起后的续工清单（按序）
 
-1. **q-modes**：拉起 agent（id `8f7edd39-4058-483d-8c71-336d4a66e21b`），让它基于已保全的 WIP 继续完成 S5/S6/S7 模式矩阵审计 + apps/web 同类扫描，跑 `bun run build`，完成后合入 redblue-dev。WIP 含：ConnectionProvider/NodeProvider/nodes.ts/auth.ts + mode-matrix-audit.md。
+1. **q-modes**（大部分已完成，剩收尾）：拉起 agent（id `8f7edd39-4058-483d-8c71-336d4a66e21b`）。**续工入口：读 `docs/dev/research/mode-matrix-audit.md` + `git show 53811383` 即恢复全部上下文。** 已完成：S5 restart 模式保持全链核通（--foreground 设计内拒绝）；S6 三模式核通+修 1 处同类缺口（NodeProvider.fetchAllAttention 改逐节点委托）；S7 全链追踪完；同类扫描基本完成（除已修 1 处无新缺口，G1/G2 留档另批）；注释更正 3 处。**剩余**：① 审计文档收尾 §3 模式矩阵/§4 扫描汇总表/§5 缺口 owner+oracle/§6 门禁读数（现 126 行，§1/§2 完整）；② 跑 `bun run build`（日志落个人侧 docs/dev/tmp/q-modes/gates.log + dist 产物回读）；③ 发最终完成报告。完成后合入 redblue-dev。
 2. **q-pool-design（O4）**：两次大文档生成空输出失败。改策略——降阶为最小交付（先只写机制清单表+判定，~40 行，立即提交），或由 main 直接基于已有证据撰写 `pool-complexity-review.md`。agent id `e680abf4-ca08-41a4-8868-877f08a6f4f8`。
 3. **新设计/调研单（关机前已建工作树，未雇 agent）**——拉起后雇并派单：
    - `design/q-cli`：CLI 规范架构文档 `docs/architecture/cli-conventions.md`（命令分层/动词契约/生命周期依赖序/输出契约 human+--json/退出码/错误格式/颜色无障碍/单一渲染模块）。
