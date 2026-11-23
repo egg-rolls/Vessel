@@ -1,13 +1,31 @@
 /**
  * JSON DTO 边界（CONTRACT-0.43 §2.4）：只允许 JSON 值，单条消息 ≤ 1 MiB。
+ * 所有校验失败都抛 `PluginHostError`。
  *
- * 拒绝函数 / 类实例 / Date / Map / 循环引用 / 非有限数；深度有上限，
- * 避免宿主被恶意嵌套拖垮。所有校验失败都抛 `PluginHostError`。
+ * 语义基线（O1）：校验 rigor 匹配信任边界。host↔engine 同信任域（同机同用户，
+ * 数据出自自己代码），校验语义对齐 JSON.stringify 的实际序列化；故意比 JSON
+ * 更严的项在下表标注「更严」并给出理由——理由为资源保护 / 掩盖编程错误，
+ * 适用于使用本 DTO 的所有边界（含外部不可信插件边界），不是按调用方分档。
  *
- * undefined 对象属性跳过校验：JSON.stringify 序列化时丢弃它们，线上收到的
- * 就是「键不存在」，与可选字段语义一致（如 tool.invoke 的 boundary /
- * timeout_ms）。顶层 undefined 与数组元素 undefined 仍拒绝（后者序列化
- * 会变成 null，是值变形而非丢弃，不属于可选字段语义）。
+ * 语义对照表（jsonDtoViolation vs JSON.stringify）：
+ *
+ * | 输入                          | JSON.stringify         | 本校验 | 理由 |
+ * |-------------------------------|------------------------|--------|------|
+ * | null / string / boolean / 有限数 | 原样                  | 放行   | 对齐 |
+ * | undefined 对象属性            | 丢弃键                 | 跳过   | 对齐：可选字段语义（如 tool.invoke 的 boundary / timeout_ms） |
+ * | undefined 数组元素            | → null                 | 放行   | 对齐：确定的值变形，接收端拿到 null（db69c381 后续补全） |
+ * | 顶层 undefined                | → undefined（非字符串）| 拒绝   | 消息体本身必须是 JSON 值 |
+ * | function / symbol（任何位置） | 对象丢弃 / 数组 → null | 拒绝   | 更严：跨 wire 必是编程错误，静默丢弃 / null 化掩盖 bug |
+ * | bigint                        | throw TypeError        | 拒绝   | 对齐：不可序列化 |
+ * | NaN / ±Infinity               | → null                 | 拒绝   | 更严：数值计算 bug 信号，null 化掩盖错误 |
+ * | Date / Map / 类实例等非 plain object | toJSON / 可枚举属性 | 拒绝 | 更严：DTO 必须纯数据，拒绝隐式序列化魔法 |
+ * | 循环引用                      | throw TypeError        | 拒绝   | 对齐 |
+ * | 深度 > MAX_DEPTH (32)         | 无限制（栈溢出风险）   | 拒绝   | 更严：资源保护，防恶意嵌套拖垮宿主 |
+ *
+ * 本表即契约文档（不写测试文件，宪法第三/四条）。不变量 owner = 本文件
+ * visit / ensurePayload（host 出口单实现）；oracle = 用户行为验证 + 构建产物读数 +
+ * 只读真实日志。分层职责、去重判定与逐条 owner/oracle 登记见
+ * docs/dev/research/validation-layering.md。
  *
  * @module @vessel-agent/serve/plugin-host
  */
@@ -68,7 +86,8 @@ function visit(value: unknown, path: string, depth: number, seen: Set<object>): 
     case 'object':
       break;
     default:
-      // undefined / function / symbol / bigint
+      // 顶层 undefined / function / symbol / bigint：见头部语义对照表。
+      // bigint 对齐 JSON.stringify（throw）；function / symbol 故意更严（跨 wire 必是编程错误）。
       return `${path} is not a JSON value`;
   }
   if (depth >= MAX_DEPTH) return `${path} is nested too deeply`;
@@ -78,6 +97,9 @@ function visit(value: unknown, path: string, depth: number, seen: Set<object>): 
   try {
     if (Array.isArray(value)) {
       for (let index = 0; index < value.length; index += 1) {
+        // undefined 数组元素被 JSON.stringify 序列化为 null：确定的值变形，
+        // 对齐 wire 语义放行（区别于 undefined 对象属性的「丢弃键」）。
+        if (value[index] === undefined) continue;
         const failure = visit(value[index], `${path}[${index}]`, depth + 1, seen);
         if (failure !== null) return failure;
       }
