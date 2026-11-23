@@ -335,7 +335,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }, [platformUrl, platformToken, bootstrapSeq, urlInvalid, selectionSeq]);
 
   /**
-   * 平台模式显式切换节点：持久化 node_id → 重新走 list/credentials → 直连。
+   * 平台模式显式切换节点：持久化 node_id → 重新走 list/credentials（代理模式
+   * 不取凭据，只换代理基路径）→ 数据面随 bootstrap 结果切换。
    * URL / token / 健康随同一次 bootstrap 结果切换；不回退到旧节点。
    */
   const selectPlatformNode = useCallback((nodeId: string) => {
