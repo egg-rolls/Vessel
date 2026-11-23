@@ -261,7 +261,10 @@ export function pluginFrameUrl(
   if (safeEntry === null) return null;
   const origin = resolveNodeOrigin(nodeOrigin);
   if (origin === '') return null;
-  const url = new URL(`/plugins/${encodeURIComponent(pluginId)}/${safeEntry}`, origin);
+  // 字符串拼接而非 new URL('/plugins/...', origin)：代理模式 origin 带路径
+  // （<platform>/nodes/<nodeId>），根绝对路径会替换掉 base 整个路径（/nodes/<id>
+  // 丢失）→ 落到平台根 /plugins/*（一律 404）。与 RPC `${httpBase()}${path}` 同口径。
+  const url = new URL(`${origin}/plugins/${encodeURIComponent(pluginId)}/${safeEntry}`);
   if (context?.run) url.searchParams.set('run', context.run);
   if (context?.session) url.searchParams.set('session', context.session);
   if (context?.lang) url.searchParams.set('lang', context.lang);
@@ -272,7 +275,8 @@ export function pluginFrameUrl(
 /**
  * plugin-embed 契约 §4：embed 静态资源 URL `${nodeUrl}/plugins/<id>/ui/<path>`。
  * 直连模式 nodeUrl = node origin；代理模式 nodeUrl = `<platform>/nodes/<nodeId>`
- * （ConnectionProvider 已给出）——两种模式下模块都与 WebUI 同源。
+ * （ConnectionProvider 已给出）——代理模式下模块经平台同源转发（动态 import
+ * 必须同源，不能改指 node origin）。拼接保留 base 路径，理由同 pluginFrameUrl。
  * 非法输入返回 null（调用方渲染错误态）。
  */
 export function pluginEmbedAssetUrl(
@@ -285,7 +289,7 @@ export function pluginEmbedAssetUrl(
   if (safePath === null) return null;
   const origin = resolveNodeOrigin(nodeOrigin);
   if (origin === '') return null;
-  return new URL(`/plugins/${encodeURIComponent(pluginId)}/ui/${safePath}`, origin).toString();
+  return `${origin}/plugins/${encodeURIComponent(pluginId)}/ui/${safePath}`;
 }
 
 /**
