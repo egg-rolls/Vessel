@@ -4,6 +4,11 @@
  * 拒绝函数 / 类实例 / Date / Map / 循环引用 / 非有限数；深度有上限，
  * 避免宿主被恶意嵌套拖垮。所有校验失败都抛 `PluginHostError`。
  *
+ * undefined 对象属性跳过校验：JSON.stringify 序列化时丢弃它们，线上收到的
+ * 就是「键不存在」，与可选字段语义一致（如 tool.invoke 的 boundary /
+ * timeout_ms）。顶层 undefined 与数组元素 undefined 仍拒绝（后者序列化
+ * 会变成 null，是值变形而非丢弃，不属于可选字段语义）。
+ *
  * @module @vessel-agent/serve/plugin-host
  */
 
@@ -80,6 +85,8 @@ function visit(value: unknown, path: string, depth: number, seen: Set<object>): 
     }
     if (!isPlainObject(value)) return `${path} must be a plain object`;
     for (const [key, child] of Object.entries(value)) {
+      // undefined 对象属性被 JSON.stringify 丢弃，跳过以对齐 wire 语义。
+      if (child === undefined) continue;
       const failure = visit(child, `${path}.${key}`, depth + 1, seen);
       if (failure !== null) return failure;
     }
