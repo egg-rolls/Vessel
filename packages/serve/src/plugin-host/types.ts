@@ -347,7 +347,7 @@ export interface PluginStatusEntry {
   enabled: boolean;
   /** manifest version（E10）。 */
   version?: string;
-  /** 体验型 plugin 在宿主内始终是 child（E10）。 */
+  /** 运行模式（E10）：体验型 child 条目 = 'child'；in-process 能力插件 = 'in-process'。 */
   mode?: PluginMode;
   /** 最近一次失败码；成功启动 / 停止后清理。 */
   error?: PluginErrorCode;
@@ -385,7 +385,10 @@ export interface PluginEventSource {
  */
 export interface PluginHostManagerLike {
   readonly rpc: RpcDynamicMethodSource;
-  /** 运行时状态；gateway 用 version/mode/status 填充 plugins.list 元数据。 */
+  /**
+   * 运行时状态；gateway 用 version/mode/status 填充 plugins.list 元数据。
+   * 双轨：child entries + 已登记的 in-process 能力插件。
+   */
   statuses(): PluginStatusEntry[];
   /**
    * 懒激活：首次页面 / RPC 访问时调用；active 时 no-op，

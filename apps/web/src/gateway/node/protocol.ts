@@ -6,22 +6,6 @@
  */
 
 import { t } from '../../i18n';
-
-/**
- * 当前 origin，**不直接引用 **（0.52）。
- *
- * 原因：这个文件被零依赖探针（）间接 import，
- * 而根 tsconfig 没有 DOM lib ⇒ 任何  都会在根 typecheck 里报
- * “Property 'x' does not exist on type 'Window'”。这里用  的结构化读取，
- * 浏览器与 Node 两侧都能编过（Node 侧只是拿不到 origin，回落到默认值）。
- */
-function currentOrigin(): string {
-  const location = (globalThis as { location?: { origin?: string } }).location;
-  return typeof location?.origin === 'string' && location.origin !== ''
-    ? location.origin
-    : 'http://127.0.0.1';
-}
-
 import type {
   GatewayErrorBody,
   HelloInfo,
@@ -30,7 +14,7 @@ import type {
   ServerFrame,
   TimelineEpochEndFrame,
 } from '../types';
-import { toWebSocketBase } from '../url';
+import { joinBaseUrl, normalizeBaseUrl, pageOrigin, toWebSocketBase } from '../url';
 
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error';
 
@@ -152,7 +136,8 @@ export abstract class ProtocolClient {
   private connectReject: ((error: Error) => void) | null = null;
 
   constructor(baseUrl = '', options: ProtocolClientOptions = {}) {
-    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    // S4 单实现：与插件资产 URL 共用 normalizeBaseUrl（代理 base 可带路径）。
+    this.baseUrl = normalizeBaseUrl(baseUrl);
     this.proxyMode = options.proxy === true;
   }
 
@@ -208,11 +193,12 @@ export abstract class ProtocolClient {
   }
 
   protected httpBase(): string {
-    return this.baseUrl || currentOrigin();
+    // 空 base = 页面同源；Node 探针拿不到 location 时回落回环（既有语义）。
+    return this.baseUrl || pageOrigin() || 'http://127.0.0.1';
   }
 
   private wsUrl(since: number): string {
-    return `${toWebSocketBase(this.httpBase())}/v1/events?since=${since}`;
+    return joinBaseUrl(toWebSocketBase(this.httpBase()), `/v1/events?since=${since}`);
   }
 
   /**
@@ -224,7 +210,7 @@ export abstract class ProtocolClient {
     const controller = new AbortController();
     const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(`${this.httpBase()}/health`, {
+      const res = await fetch(joinBaseUrl(this.httpBase(), '/health'), {
         method: 'GET',
         // 0.58：代理数据面靠平台会话 cookie 鉴权，`omit` 会把 cookie 丢掉 ⇒ 恒 401。
         credentials: this.proxyMode ? 'same-origin' : 'omit',

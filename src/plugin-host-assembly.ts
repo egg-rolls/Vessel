@@ -234,6 +234,40 @@ export function registerInProcessPlugin(options: {
   );
 }
 
+/**
+ * 双路登记单实现（S8 / 332fd2e7 的收口）：wiring 收集的 provider 类能力插件
+ * 与通用装载名单可能各持同一 descriptor/plugin（同 loader 缓存 + ESM 单实例）。
+ * 按 name 去重只登记一次，否则第二次 manager.registerInProcess 抛
+ * plugin_id_conflict，node 启动崩溃。
+ *
+ * 返回 plugins.list 基础行；enabled 与登记口径一致（config `plugins[].enabled`，
+ * 缺省 true），不谎报 enabled。
+ */
+export function registerInProcessPluginEntries(options: {
+  manager: PluginHostManager;
+  entries: ReadonlyArray<{ descriptor: LoaderPluginDescriptor; plugin: Plugin }>;
+  config: VesselConfig;
+}): Array<{ name: string; enabled: boolean }> {
+  const rows: Array<{ name: string; enabled: boolean }> = [];
+  const seen = new Set<string>();
+  for (const entry of options.entries) {
+    if (seen.has(entry.descriptor.name)) continue;
+    seen.add(entry.descriptor.name);
+    registerInProcessPlugin({
+      manager: options.manager,
+      descriptor: entry.descriptor,
+      plugin: entry.plugin,
+      config: options.config,
+    });
+    const manifestId = entry.descriptor.capabilityManifest?.id ?? entry.descriptor.name;
+    rows.push({
+      name: entry.descriptor.name,
+      enabled: pluginEnabledInConfig(options.config, manifestId),
+    });
+  }
+  return rows;
+}
+
 /** 重新扫描的 loader 端口（`rescan()` 返回最新描述符） */
 export interface PluginReloaderOptions {
   loader: Pick<PluginLoader, 'rescan' | 'list'>;

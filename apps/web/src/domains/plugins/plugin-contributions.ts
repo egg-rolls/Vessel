@@ -13,6 +13,7 @@ import type {
   PluginPanelSlot,
   PluginToolbarSlot,
 } from '../../gateway/types';
+import { joinBaseUrl, normalizeBaseUrl, pageOrigin } from '../../gateway/url';
 import { t } from '../../i18n';
 
 /** 图标白名单（与 DomainIcon 的领域名一致；不接受任意 SVG / 任意名字）。 */
@@ -236,13 +237,12 @@ export function safeEntryPath(entry: string): string | null {
  * 0.49：第一个参数是 **node origin**（`/plugins/*` 由 node 宿主提供），不再使用
  * 平台 origin；空串 = 页面同源（legacy `--serve`）。
  */
-/** node origin 归一化：空串 = 页面同源（legacy `--serve`）；无法解析返回 ''。 */
+/**
+ * node origin 归一化：空串 = 页面同源（legacy `--serve`）；无法解析返回 ''。
+ * S4 单实现：与 RPC（ProtocolClient）共用 normalizeBaseUrl / pageOrigin。
+ */
 function resolveNodeOrigin(nodeOrigin: string): string {
-  return nodeOrigin.trim() !== ''
-    ? nodeOrigin.trim().replace(/\/+$/, '')
-    : typeof window === 'undefined'
-      ? ''
-      : window.location.origin;
+  return normalizeBaseUrl(nodeOrigin) || pageOrigin();
 }
 
 export function pluginFrameUrl(
@@ -261,10 +261,11 @@ export function pluginFrameUrl(
   if (safeEntry === null) return null;
   const origin = resolveNodeOrigin(nodeOrigin);
   if (origin === '') return null;
-  // 字符串拼接而非 new URL('/plugins/...', origin)：代理模式 origin 带路径
-  // （<platform>/nodes/<nodeId>），根绝对路径会替换掉 base 整个路径（/nodes/<id>
-  // 丢失）→ 落到平台根 /plugins/*（一律 404）。与 RPC `${httpBase()}${path}` 同口径。
-  const url = new URL(`${origin}/plugins/${encodeURIComponent(pluginId)}/${safeEntry}`);
+  // S4 单实现 joinBaseUrl（字符串拼接）：代理模式 origin 带路径
+  // （<platform>/nodes/<nodeId>），new URL(path, base) 的根绝对路径会替换掉
+  // base 整个路径（/nodes/<id> 丢失）→ 落到平台根 /plugins/*（一律 404）。
+  // 这里 new URL 只用于追加 query，第一个参数已是完整绝对 URL。
+  const url = new URL(joinBaseUrl(origin, `/plugins/${encodeURIComponent(pluginId)}/${safeEntry}`));
   if (context?.run) url.searchParams.set('run', context.run);
   if (context?.session) url.searchParams.set('session', context.session);
   if (context?.lang) url.searchParams.set('lang', context.lang);
@@ -289,7 +290,7 @@ export function pluginEmbedAssetUrl(
   if (safePath === null) return null;
   const origin = resolveNodeOrigin(nodeOrigin);
   if (origin === '') return null;
-  return `${origin}/plugins/${encodeURIComponent(pluginId)}/ui/${safePath}`;
+  return joinBaseUrl(origin, `/plugins/${encodeURIComponent(pluginId)}/ui/${safePath}`);
 }
 
 /**
