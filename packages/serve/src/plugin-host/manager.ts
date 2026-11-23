@@ -867,8 +867,18 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
    * 懒激活入口（v1）：首次页面访问 / 首次 `plugin.<id>.*` 调用触发 spawn。
    * `activationEvents.onPage:*` / `onCommand:*` 是声明元数据，v1 不做预激活；
    * active 时 no-op，disabled / invalid 抛契约错误。
+   * in-process 能力插件与进程同寿命、登记即激活，无 child 可 spawn：
+   * enabled 直接放行，disabled 抛同款契约错误；不走 requireEntry（只查
+   * child entries，会把已登记的 in-process 当未知插件拒掉）。
    */
   async ensureActive(id: string): Promise<void> {
+    const inProcessRecord = this.inProcess.get(id);
+    if (inProcessRecord !== undefined) {
+      if (!inProcessRecord.enabled) {
+        throw pluginError('plugin_activation_failed', `Plugin ${id} is disabled.`, { id });
+      }
+      return;
+    }
     const entry = this.requireEntry(id);
     if (!entry.enabled || entry.status === 'disabled') {
       throw pluginError('plugin_activation_failed', `Plugin ${id} is disabled.`, { id });

@@ -390,6 +390,7 @@ export interface PluginHostManagerLike {
   /**
    * 懒激活：首次页面 / RPC 访问时调用；active 时 no-op，
    * disabled / invalid 抛契约错误。v1 不做预激活。
+   * in-process 插件登记即激活：enabled no-op，disabled 抛契约错误。
    */
   ensureActive(id: string): Promise<void>;
   /** plugin id → 渲染字段；只含 enabled 的体验型 plugin。 */
