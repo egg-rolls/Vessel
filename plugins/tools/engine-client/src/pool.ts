@@ -327,7 +327,7 @@ export function createPoolTransport(options: PoolTransportOptions): PoolTranspor
     }
   }
 
-  // ── 请求发送（half-open 单探测 gate + 传输层分类；熔断记账单点） ──
+  // ── 请求发送（half-open 单探测 gate + 传输层分类；invoke/ping/health/非 configure mcpControl 记账在此，sync/configure 语义记账在 route S16） ──
 
   function sendRequest(
     slot: EngineSlot,
@@ -350,15 +350,19 @@ export function createPoolTransport(options: PoolTransportOptions): PoolTranspor
       }
       breaker.probeInFlight = true;
     }
+    // S16：sync/configure 的语义记账在 route（好/坏 ack），sendRequest 不在此预记账，避免与 route 双重记账（0↔1 振荡）。
+    const routeAccounted =
+      method === ENGINE_WIRE.registrySync ||
+      (method === ENGINE_WIRE.mcpControl && isRecord(params) && params.action === 'configure');
     return link.request(method, params, timeoutMs).then(
       (value) => {
-        recordSuccess(slot);
+        if (!routeAccounted) recordSuccess(slot);
         return value;
       },
       (error: unknown) => {
         if (error instanceof RpcResponseError) {
-          // engine 应答 error 回包 = 传输层健康（busy 是背压不是故障，S3/Q6）。
-          recordSuccess(slot);
+          // engine 应答 error 回包 = 传输层健康（busy 是背压不是故障，S3/Q6）；sync/configure 语义失败例外见 routeAccounted。
+          if (!routeAccounted) recordSuccess(slot);
         } else if (!(error instanceof TransportError) && slot.breaker.state === 'half-open') {
           // NotDispatched / 出站超限：探测无结论，保持 half-open（失联已由 close 记账）。
           slot.breaker.probeInFlight = false;
@@ -847,7 +851,7 @@ export function createPoolTransport(options: PoolTransportOptions): PoolTranspor
         if (failed instanceof RpcResponseError && failed.code === ENGINE_BUSY_CODE) {
           // busy 快拒（派发前准入，S18）：不计熔断（sendRequest 已按应答记健康）。
           lastBusy = true;
-          if (attempt >= budget) throw new Error(ENGINE_ERROR.busy);
+          if (attempt >= budget) return { content: ENGINE_ERROR.busy };
           await retryBackoff();
           current = nextTarget(slot);
           continue;
@@ -863,8 +867,8 @@ export function createPoolTransport(options: PoolTransportOptions): PoolTranspor
         await retryBackoff();
         current = nextTarget(slot);
       }
-      // 预算耗尽 / 无下一候选：全池 busy 折稳定文本（S3/Q5）；其余折最后结果/错误。
-      if (lastBusy) throw new Error(ENGINE_ERROR.busy);
+      // 预算耗尽 / 无下一候选：全池 busy 折稳定文本 content（S3/Q5，error-envelope retryable:false）；其余折最后结果/错误。
+      if (lastBusy) return { content: ENGINE_ERROR.busy };
       if (hasResult) return lastResult;
       throw lastError ?? new Error(ENGINE_ERROR.unavailable);
     } finally {
@@ -901,6 +905,7 @@ export function createPoolTransport(options: PoolTransportOptions): PoolTranspor
         allOk = false;
         continue;
       }
+      recordSuccess(slot);
       if (Array.isArray(outcome.value.loaded)) {
         for (const name of outcome.value.loaded) {
           if (typeof name === 'string') loaded.add(name);
@@ -1054,13 +1059,15 @@ export function createPoolTransport(options: PoolTransportOptions): PoolTranspor
     }
     const settled = await Promise.allSettled(sends.map((send) => send.promise));
     const results: McpConfigureServerResult[] = [];
+    let allOk = true;
     for (const [index, outcome] of settled.entries()) {
       const send = sends[index];
       if (send === undefined) continue;
       if (outcome.status === 'rejected') {
         // 传输层失联已由 close 记账；任一 engine 失败 → fail-closed（装配层 reconcile 重试）。
         if (outcome.reason instanceof RpcResponseError) recordFailure(send.slot);
-        throw new Error(ENGINE_ERROR.unavailable);
+        allOk = false;
+        continue;
       }
       const value = outcome.value;
       if (
@@ -1069,10 +1076,15 @@ export function createPoolTransport(options: PoolTransportOptions): PoolTranspor
         value.action !== 'configure' ||
         !Array.isArray(value.results)
       ) {
-        throw new Error(ENGINE_ERROR.unavailable);
+        recordFailure(send.slot);
+        allOk = false;
+        continue;
       }
+      recordSuccess(send.slot);
       for (const item of value.results) results.push(item as McpConfigureServerResult);
     }
+    // 遍历记账完再 throw（与 routeRegistrySync 一致）：早 throw 会跳过后续 slot 记账，留 half-open 探测卡死。
+    if (!allOk) throw new Error(ENGINE_ERROR.unavailable);
     const merged: McpControlResult = { ok: true, action: 'configure', results };
     return merged;
   }

@@ -499,7 +499,11 @@ function startPoolMode(poolDir: string, engineId: string): void {
       };
       // MCP 被动断开 → 本 scope health notification（per-scope，不跨连接）。
       const mcp = new McpConnectionManager({
-        notifyHealth: () => sendNotification(ENGINE_WIRE.health, engine.health()),
+        notifyHealth: () =>
+          sendNotification(ENGINE_WIRE.health, {
+            ...engine.health(),
+            status: processHealth().status,
+          }),
         logger,
       });
       // dirs 权威 = host 装配（S2）：只透传至 executeWorker（S13），不解析/不自决/不持久化/不设进程 env。
@@ -581,8 +585,9 @@ function startPoolMode(poolDir: string, engineId: string): void {
               }
               return;
             case ENGINE_WIRE.health:
-              // S4：数据连接 = per-scope 形状（进程字段缺省）。
-              if (isRequest) writeResult(id, engine.health());
+              // S4：数据连接 = per-scope 形状（进程字段缺省）；status 透传进程级 degraded（S16 any-degraded 合并）。
+              if (isRequest)
+                writeResult(id, { ...engine.health(), status: processHealth().status });
               return;
             case ENGINE_WIRE.toolCancel:
               try {
