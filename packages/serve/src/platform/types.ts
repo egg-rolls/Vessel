@@ -216,6 +216,13 @@ export interface PlatformGatewayOptions {
    * （`gateway.proxy_nodes: false`），前端据 `platform.whoami.proxy.enabled` 自动改走直连。
    */
   proxy?: PlatformProxyOptions | undefined;
+  /**
+   * Q4-C：`gateway.shutdown` 的进程内优雅退出序列（组合根注入）。
+   * 省略 = 方法不暴露（RPC 回 not_found，零表面）。`handle` 跑与 SIGTERM 完全相同的
+   * 退出序列（含实例锁释放与 process.exit）；受理 defer 由 RPC 层保证。
+   * `remoteAllowed` = config `gateway.remote_shutdown === true`（缺省 false）。
+   */
+  shutdown?: { handle: () => Promise<void>; remoteAllowed: boolean };
 }
 
 /**

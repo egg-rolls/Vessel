@@ -34,6 +34,7 @@ import { runPluginCommand } from '../plugin-command';
 import { pruneCommand } from '../prune-command';
 import { runResumeList } from '../resume-command';
 import { statusCommand } from '../status-command';
+import { stopFleetCommand } from '../stop-command';
 import { runTeamCommand } from '../team-command';
 // 0.56：`vessel token show|list|rotate`（根密钥 / 派生 token）。
 import { tokenListCommand, tokenRotateCommand, tokenShowCommand } from '../token-command';
@@ -333,6 +334,22 @@ export const cliCommands: readonly CliCommand[] = [
           caFile: args.caArg,
         }),
       );
+    },
+  },
+  {
+    name: 'stop',
+    match: (args) => args.stopCommand !== null,
+    run: async (args) => {
+      const command = args.stopCommand;
+      if (command === null) return 1;
+      return stopFleetCommand({
+        yes: command.yes,
+        selector: command.selector,
+        timeoutMs: command.timeoutMs,
+        connectUrl: args.connectArg,
+        connectToken: args.connectTokenArg,
+        caFile: args.caArg,
+      });
     },
   },
   {

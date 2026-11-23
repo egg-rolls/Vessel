@@ -27,10 +27,14 @@ Node API 与本地 Hub **拉起来**；平台**不拥有**它们的生命周期�
 | `vessel gateway restart` | 重启 | **不动**（重启后 adopt 回来） | 不动 | 短暂中断 |
 | `vessel gateway stop` | 停 | **不动**（继续跑） | 不动 | 不可访问 |
 | `vessel gateway stop --no-keep-nodes` | 停 | **停掉本机注册并属于本机的** | 停 | 停 |
+| `vessel stop`（舰队级，Q4-C） | 停 | **停掉归属可复核的**（manifest 三元复核，同 --no-keep-nodes 口径） | 停（manifest 内） | 不可访问 |
 | gateway 被强杀 / 崩溃 | 死 | 存活 | 存活 | 不可访问 |
 
 「整体关闭」= `vessel gateway stop --no-keep-nodes`（`--all` 只表示**所有 gateway 实例**，
 不表示连 node 一起停）。两种停止都要打印「谁还在跑 / 停了谁、哪个没停下来及原因」。
+`vessel stop` = 舰队级名词命令：缺省停 resolved data root 内所有实例的舰队，停前只读清点 +
+y/N 确认（`--yes` 跳过；非交互无 `--yes` 拒绝）；`--connect` 远程停需 opt-in（见
+[REVERSE-PROXY.md §12](../operations/REVERSE-PROXY.md)）。standalone hub / external node 只报告不动。
 
 ## 职责边界
 
@@ -41,7 +45,7 @@ Node API 与本地 Hub **拉起来**；平台**不拥有**它们的生命周期�
 - **Hub 拥有**：`<hubDataDir>/hub.lock`。手工/外部启动的 Hub 永远只 adopt，不被杀。
 - **不越界**：Gateway 只终止「拿得出归属证据」的子进程（pid + started_at + node_id / hub lock
   三元复核）；adopt / external 一律不动。判据**只收紧不放松**。
-- **Engine 池（`gateway.engine_pool.size>0` 时）**：gateway 监督的 detached engine 进程（不是 node/hub）；routing.json 由 gateway 唯一写者，缺省 stop/restart（handoff）保池待新平台 adopt，`--stop-nodes` 才 terminate owned（adopt/external 永不杀）。见 [ADR-106](../adr/ADR-106-engine-pool.md) 与 [tools.md](tools.md#engine-exec)。
+- **Engine 池（`gateway.engine_pool.size>0` 时）**：gateway 监督的 detached engine 进程（不是 node/hub）；routing.json 由 gateway 唯一写者，缺省 stop/restart（handoff）保池待新平台 adopt，`--stop-nodes` 才 terminate owned（adopt/external 永不杀）。Q4-C 起平台层 graceful-first：停止方先经 `/platform/rpc gateway.shutdown` 让平台进程内跑到 `poolSupervisor.stop()`（owned-only）再退，**Windows owned engine 孤儿缺口关闭**；强杀回退仍在（`platform.drain.skipped`），极端残留由停止方逐条提示。见 [ADR-106](../adr/ADR-106-engine-pool.md) 与 [tools.md](tools.md#engine-exec)。
 
 ## 分段启动与错误域隔离（0.55）
 

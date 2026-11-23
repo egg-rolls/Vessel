@@ -644,6 +644,20 @@ gateway:
 - **记账**：每条代理 WS 关闭写 `gateway.ws.closed`（`via: 'proxy'`）。node 侧同名日志保留，
   统计口径按 `via` 区分，避免双写翻倍。
 
+### 2.20.1 `gateway.remote_shutdown`（Q4-C：远程停 opt-in，缺省 false）
+
+```yaml
+gateway:
+  remote_shutdown: true   # 缺省 false；true = 允许非回环 gateway.shutdown（仍三重闸 fail-closed）
+```
+
+- **管什么**：只管网关平台 RPC `gateway.shutdown` 的**远程（非回环）**受理；本机停止不受本键影响。
+- **开了也还要**：平台 token 恒要求（`gateway.token` / `gateway.token_env` 的值；浏览器会话 cookie
+  不构成停止能力）+ 必须经**已配置共享密钥**的 TLS 反代（`proxy_secret_env` + 反代注入密钥头）。
+  非回环而未配置反代密钥 ⇒ 一律拒（fail-closed，防「opt-in = 裸公网停」误配）。
+- **没开**：远程停回 401 `remote_shutdown_disabled`，提示 SSH 到主机跑 `vessel stop`（零实体兜底）。
+- 远程停完整形态见 [REVERSE-PROXY.md §12](REVERSE-PROXY.md)；命令面见 [GATEWAY.md §4](GATEWAY.md)。
+
 ### 2.21 `http.allowed_origins`（0.61：访问控制，与 `redirect_uri` 来源分开）
 
 两件事，别再混：

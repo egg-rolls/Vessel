@@ -62,6 +62,8 @@ export interface HttpRpcClientOptions {
   ca?: string;
   /** 单次 RPC 超时（默认 10000ms） */
   requestTimeoutMs?: number;
+  /** RPC 路径（缺省 '/v1/rpc'；平台入口传 '/platform/rpc'，Q4-C additive） */
+  rpcPath?: string;
   /** WS 重连参数 */
   reconnect?: {
     /** 默认 1000ms */
@@ -271,7 +273,7 @@ export function createHttpRpcClient(options: HttpRpcClientOptions): HttpRpcClien
 
   const fetchImpl = options.fetch ?? fetch;
   const baseUrl = normalized.replace(/\/+$/, '');
-  const rpcUrl = `${baseUrl}/v1/rpc`;
+  const rpcUrl = `${baseUrl}${options.rpcPath ?? '/v1/rpc'}`;
   const wsUrl = toWsUrl(baseUrl);
   const subscribeEnabled = options.subscribe !== false;
   const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;

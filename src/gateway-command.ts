@@ -80,7 +80,12 @@ import {
   writeGatewayPid,
 } from './gateway/pid';
 import { createPoolSupervisor, type PoolSupervisor } from './gateway/pool-supervisor';
-import { gatewayBaseUrl, reloadGateway, shutdownGateway } from './gateway/reload';
+import {
+  gatewayBaseUrl,
+  reloadGateway,
+  type ShutdownGatewayResult,
+  shutdownGateway,
+} from './gateway/reload';
 import {
   installService,
   resolveServiceTarget,
@@ -1048,8 +1053,11 @@ export async function stopGateway(
       }
       // P0-run-stops P1：legacy 单进程（stateKind='node'）本身就是 Node API ——
       // 强杀前先请它进程内 drain（写 resume 标记 + interrupt('shutdown')），等它自死；
-      // 超时/失败回退既有强杀。platform entry 没有 run 面，不试（node 子进程由
-      // stopSpawnedChildren 各自优雅关闭）。
+      // 超时/失败回退既有强杀。node 子进程由 stopSpawnedChildren 各自优雅关闭。
+      // Q4-C：platform entry 同样 graceful-first —— 经 /platform/rpc 的 gateway.shutdown
+      // 让平台进程内跑退出序列（跑到 owned 池 stop，关闭 Windows owned engine 孤儿缺口）。
+      // marker 写/清已在上面发生（keep 语义单一权威，先于任何终止触发）；老平台没有
+      // 该方法 → not_found → 立即强杀回退，不假成功。
       let drained = false;
       if (stateKind === 'node' && entry.record !== undefined) {
         const graceful = await shutdownGateway({
@@ -1073,6 +1081,51 @@ export async function stopGateway(
           printErr(
             ui.warn(
               formatEventLine('node.drain.skipped', {
+                pid,
+                reason: graceful.ok ? 'timeout' : (graceful.code ?? 'error'),
+              }),
+            ),
+          );
+        }
+      } else if (stateKind === 'platform' && entry.record !== undefined) {
+        // R1.1：平台 bearer 走**平台链**（gateway.token/token_env 显式 > 根密钥派生），
+        // 不是 node 链的 resolveGatewayToken（两 token 同配时必不同）；解析失败 →
+        // 跳优雅直接强杀，reason 记解析 code（下方 drain 行统一出口）。
+        const platformTokenResolution = effectivePlatformToken({
+          config: context.config,
+          dataDir: context.dataDir,
+          env: context.env,
+        });
+        const graceful: ShutdownGatewayResult = platformTokenResolution.ok
+          ? await shutdownGateway({
+              record: entry.record,
+              token: platformTokenResolution.value.token ?? '',
+              // 平台无原生 TLS（TLS 在反代终结）；本机停止直连回环 http。
+              tls: false,
+              rpcPath: '/platform/rpc',
+              requestTimeoutMs: 3_000,
+            })
+          : {
+              ok: false,
+              error: platformTokenResolution.message,
+              code: platformTokenResolution.code,
+            };
+        if (graceful.ok) {
+          // 等死预算 = 停止方 timeoutMs（K5：等待预算在停止方，RPC 不带 timeout params）。
+          const graceDeadline = Date.now() + timeoutMs;
+          while (Date.now() < graceDeadline) {
+            if (!isProcessAlive(pid)) {
+              drained = true;
+              break;
+            }
+            await sleep(100);
+          }
+        }
+        if (!drained) {
+          // 强杀回退代打一行（镜像 node.drain.skipped）：这次停止没走成优雅路径。
+          printErr(
+            ui.warn(
+              formatEventLine('platform.drain.skipped', {
                 pid,
                 reason: graceful.ok ? 'timeout' : (graceful.code ?? 'error'),
               }),
@@ -3060,6 +3113,39 @@ export async function runPlatformGatewayForeground(
       );
     }
 
+    // Q4-C：退出序列**单实现** —— SIGTERM/SIGINT 分支与 `gateway.shutdown` RPC 注入共用
+    // 这个闭包，不另造退出路径（node 先例 cli.ts：「走与 SIGTERM 完全相同的 activeCleanup」）。
+    // 停止方（stopGateway 优雅步）经 RPC 触发它，让平台进程内跑到 owned 池 stop 再退，
+    // 关闭 Windows owned engine 孤儿缺口；keep 语义零变化（handoff marker 单一权威）。
+    const performPlatformShutdown = async (): Promise<void> => {
+      // 构建中被叫停（`gateway stop` / Ctrl-C / 外部 SIGTERM）：**真的**杀掉构建子进程，
+      // 并留一行 `web.build.interrupted` —— 用户要的是「知道这次构建被中断了」，
+      // 而不是下次发现 dist 半新半旧却查不到痕迹。
+      interruptWebBuild(lastStopSignal ?? 'SIGTERM');
+      // handoff（0.52）：停止方在发终止信号**之前**写了 marker ⇒ 这次退出只交出平台层，
+      // 自己 spawn 的 node/hub 原样留着，等新平台按 `gateway.pid` 三元组 / hub lock 接管；
+      // 没有 marker（Ctrl-C、`gateway stop`、外部 SIGTERM）就照旧连子进程一起停。
+      handoffKept = await consumeHandoffMarker(dataDir, instance, process.pid).catch(() => false);
+      if (handoffKept) {
+        const result = await supervisor?.stop({ keep: true }).catch(() => undefined);
+        if (result !== undefined) {
+          print(ui.info(t('gateway.stopKeptNodes', { count: result.kept?.nodes ?? 0 })));
+          if ((result.kept?.hubs ?? 0) > 0) print(ui.info(t('gateway.stopKeptHub')));
+        }
+        // 池 S20：handoff 不杀 detached engine（新前台 adopt，S7）；只清点可见，不静默。
+        if (poolSupervisor !== undefined) {
+          const keptEngines = poolSupervisor.members().filter((member) => member.owned).length;
+          print(ui.dim(`engine pool: kept ${keptEngines} owned engine(s) for adopt`));
+        }
+      } else {
+        await supervisor?.stop().catch(() => undefined);
+        // 池 S20：非 handoff 停止 terminate owned（adopt/external 永不杀，S7）；node 先停再停 engine。
+        await poolSupervisor?.stop().catch(() => undefined);
+      }
+      await platformGateway?.stop().catch(() => undefined);
+      platformGateway = undefined;
+    };
+
     try {
       // 0.61：自查间隔只在显式配置时透传 —— 缺省值（60s）与下限（5s）留在平台一处。
       const webBuildCheckMs = webBuildCheckIntervalMs();
@@ -3117,6 +3203,17 @@ export async function runPlatformGatewayForeground(
         // `gateway.proxy_nodes: false` 是保留的显式回退：平台不提供 `/nodes/*`，
         // 前端据 `platform.whoami.proxy.enabled` 自动回到「取 credentials 直连 node」。
         proxy: { enabled: config.gateway?.proxyNodes !== false },
+        // Q4-C：gateway.shutdown 优雅退出注入 —— handle 跑与 SIGTERM 完全相同的退出序列
+        // （performPlatformShutdown），再**显式**释放实例锁并退出：process.exit 不跑 finally，
+        // 锁必须显式释放；pid 经既有 process.once('exit') 条件清理（writeForegroundGatewayPid）。
+        shutdown: {
+          handle: async () => {
+            await performPlatformShutdown().catch(() => undefined);
+            await lock.release().catch(() => undefined);
+            process.exit(0);
+          },
+          remoteAllowed: config.gateway?.remoteShutdown === true,
+        },
         version,
         auth: {
           publicOrigin: resolvedAuth.publicOrigin,
@@ -3264,32 +3361,9 @@ export async function runPlatformGatewayForeground(
     print(ui.dim(`supervise: ${superviseLine(supervise)}`));
 
     await (options.waitForStop ?? waitForTerminationSignal)();
-    // 构建中被叫停（`gateway stop` / Ctrl-C / 外部 SIGTERM）：**真的**杀掉构建子进程，
-    // 并留一行 `web.build.interrupted` —— 用户要的是「知道这次构建被中断了」，
-    // 而不是下次发现 dist 半新半旧却查不到痕迹。
-    interruptWebBuild(lastStopSignal ?? 'SIGTERM');
-    // handoff（0.52）：停止方在发终止信号**之前**写了 marker ⇒ 这次退出只交出平台层，
-    // 自己 spawn 的 node/hub 原样留着，等新平台按 `gateway.pid` 三元组 / hub lock 接管；
-    // 没有 marker（Ctrl-C、`gateway stop`、外部 SIGTERM）就照旧连子进程一起停。
-    handoffKept = await consumeHandoffMarker(dataDir, instance, process.pid).catch(() => false);
-    if (handoffKept) {
-      const result = await supervisor.stop({ keep: true }).catch(() => undefined);
-      if (result !== undefined) {
-        print(ui.info(t('gateway.stopKeptNodes', { count: result.kept?.nodes ?? 0 })));
-        if ((result.kept?.hubs ?? 0) > 0) print(ui.info(t('gateway.stopKeptHub')));
-      }
-      // 池 S20：handoff 不杀 detached engine（新前台 adopt，S7）；只清点可见，不静默。
-      if (poolSupervisor !== undefined) {
-        const keptEngines = poolSupervisor.members().filter((member) => member.owned).length;
-        print(ui.dim(`engine pool: kept ${keptEngines} owned engine(s) for adopt`));
-      }
-    } else {
-      await supervisor.stop().catch(() => undefined);
-      // 池 S20：非 handoff 停止 terminate owned（adopt/external 永不杀，S7）；node 先停再停 engine。
-      await poolSupervisor?.stop().catch(() => undefined);
-    }
-    await platformGateway?.stop().catch(() => undefined);
-    platformGateway = undefined;
+    // Q4-C：SIGTERM/SIGINT 与 gateway.shutdown RPC 走**同一**退出序列（单实现，
+    // 见上方 performPlatformShutdown）；不另造退出路径。finally 兜底不变且幂等。
+    await performPlatformShutdown();
     return 0;
   } finally {
     // 失败路径也必须释放平台实例锁；PID 只在全部就绪后写入。

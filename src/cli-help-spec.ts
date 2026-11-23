@@ -258,6 +258,20 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     flags: ['--json', '--connect', '--connect-token', '--ca'],
   },
   {
+    path: ['stop'],
+    summary: 'help.cmd.stop',
+    flags: [
+      '--yes',
+      '--timeout',
+      '--instance',
+      '--port',
+      '--all',
+      '--connect',
+      '--connect-token',
+      '--ca',
+    ],
+  },
+  {
     path: ['agents'],
     summary: 'help.cmd.agents',
     flags: ['--json', '--connect', '--connect-token', '--ca'],

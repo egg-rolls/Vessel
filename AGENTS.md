@@ -105,6 +105,7 @@ bun run src/cli.ts doctor --deep
 bun run src/cli.ts gateway start --daemon    # status --json / stop 同理
 bun run src/cli.ts gateway status --json
 bun run src/cli.ts gateway stop
+bun run src/cli.ts stop --yes               # 舰队级停（清点 + 确认；--yes 跳过；--connect 远程）
 bun run scripts/version.ts --check                        # 版本一致性（发版检查点）
 bun run scripts/docs-find.ts --goal "add RPC method"      # 按目标检索文档
 ```

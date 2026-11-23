@@ -14,6 +14,7 @@ import {
   buildContentSecurityPolicy,
   corsHeaders,
   hostAllowed,
+  isLoopbackAddress,
   normalizeAllowedOrigins,
   normalizeOriginPattern,
   type OriginPattern,
@@ -949,6 +950,11 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
             resolveNodeCredential: opts.resolveNodeCredential,
             version,
             proxy: { enabled: proxy.enabled, basePath: PROXY_BASE_PATH },
+            // Q4-C：优雅退出注入 + 反代密钥「已配置」位（远程闸 4 fail-closed 用）。
+            shutdown: opts.shutdown,
+            proxySecretConfigured: opts.proxySecret !== undefined && opts.proxySecret !== '',
+            // R1.2：原始 socket 回环（与 resolvePlatformAuth 同源 address；先于 proxySecretOk 合取）。
+            socketLoopback: isLoopbackAddress(address),
           },
           extra,
         );

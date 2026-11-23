@@ -101,8 +101,14 @@ vessel gateway uninstall-service
 | `vessel gateway restart` | 重启 | 不动（新平台 adopt 回来，**仍跑旧代码** —— 命令会打印提示） | 结尾提示：`to restart them too: vessel gateway restart --stop-nodes` |
 | `vessel gateway restart --stop-nodes` | 重启 | 一起冷重启 | 重新 spawn |
 | `vessel gateway stop --all` | 停**所有实例**的平台层 | 按缺省（不动） | `--all` 仍是实例选择器，不是「连 node 一起停」的同义词 |
+| `vessel stop` | 停 | **一起停**（manifest 内归属可复核的 node/hub；owned 池 engine 由平台进程内 terminate） | 全根清点 + 警示 + y/N 确认；`--yes` 跳过；非交互无 `--yes` 拒绝 exit 1；取消 exit 0 |
+| `vessel stop --connect <url>` | 远程平台停 | 远程舰队（registry 级清点，读不到 manifest/池文件） | 需 `gateway.remote_shutdown` opt-in + 平台 token + 已配置反代密钥；**远程不强杀**，超时如实 exit 1 |
 
 - `--no-keep-nodes`（0.55 写法）与 `--keep-nodes`（0.52 写法）都保留为别名，分别等价于 `--stop-nodes` 与缺省。
+- **`vessel stop` = 舰队级**（scope 跟名词走）：缺省停 resolved data root 内**所有实例**的舰队；
+  `--instance`/`--port` 收窄单实例（`--all` 复用选择器，等价缺省）；`--timeout` 缺省 10s。
+  远程只认显式 `--connect` flag（不认 `VESSEL_CONNECT` env）；未开 opt-in → 401 提示 SSH 到主机跑
+  `vessel stop`。standalone hub / external node 只报告不动；池残留逐条提示（停止方不 terminate engine）。
 
 - 判别依据仍是归属：pid + `started_at` + `node_id`（node）/ `hub.lock`（hub）三元复核；
   adopt / 外部启动的进程**永远**不在终止名单里。
@@ -114,8 +120,15 @@ vessel gateway uninstall-service
   请它进程内 drain（写在跑 run 的 resume 标记 + interrupt('shutdown')），等它自死 ≤10s；
   超时/失败回退强杀 + 补偿清理，并打一行 `node.drain.skipped`（pid + 原因）。
   Windows 上外部 `process.kill` 是无条件终止——没有这一步，重启后在跑 run 的恢复标记
-  一条都写不出来（事故复盘见个人侧 `docs/dev/issues/P0-run-stops.md`）。平台层与 hub
-  没有 run 面，不走优雅关闭。
+  一条都写不出来（事故复盘见个人侧 `docs/dev/issues/P0-run-stops.md`）。hub 没有 run 面，
+  不走优雅关闭。
+- **Q4-C：平台层同样 graceful-first**。终止平台 entry 前先经平台自己的 `/platform/rpc`
+  `gateway.shutdown`（params `{}`，回包 `{stopping:true}` 只受理）请进程跑**与 SIGTERM 完全相同**
+  的退出序列（含 `poolSupervisor.stop()` 只 terminate owned engine），等自死 ≤ `--timeout`
+  （缺省 10s）；超时/拒绝/老版本 `not_found` 回退强杀 + 一行 `platform.drain.skipped`（pid + 原因）。
+  这关闭了 **Windows owned engine 孤儿缺口**（外部强杀跑不到进程内池 stop）。平台没有 run 面：
+  不写 resume 标记；keep/保活语义仍由 handoff marker 单一权威（`gateway stop` 缺省保活不变，
+  只是平台层退出也走优雅路径，最多多等一个 timeout 预算）。
 
 ## 5. 节点缺席怎么诊断
 

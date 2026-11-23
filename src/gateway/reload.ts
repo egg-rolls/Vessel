@@ -123,6 +123,8 @@ export interface ShutdownGatewayOptions {
   token: string;
   /** gateway 是否启用 TLS（来自 config.node.tls） */
   tls?: boolean;
+  /** RPC 路径（缺省 '/v1/rpc'；平台 entry 传 '/platform/rpc'，Q4-C additive 透传） */
+  rpcPath?: string;
   requestTimeoutMs?: number;
   createClient?: (options: { baseUrl: string; token: string; timeoutMs: number }) => ReloadClient;
 }
@@ -145,6 +147,7 @@ export async function shutdownGateway(
       token: options.token,
       subscribe: false,
       requestTimeoutMs: timeoutMs,
+      ...(options.rpcPath !== undefined ? { rpcPath: options.rpcPath } : {}),
     });
 
   try {

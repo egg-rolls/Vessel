@@ -36,6 +36,8 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.continueRun': 'continue the latest session and run one turn',
   'help.cmd.resumeRun': 'resume an interrupted durable run',
   'help.cmd.status': 'local runtime / attach / gateway instances at a glance',
+  'help.cmd.stop':
+    'stop the fleet (platform + manifest node/hub + owned pool engines); --connect for remote stop',
   'help.cmd.agents': 'list agents via agents.list (local gateway or --connect)',
   'help.cmd.errors': 'recent run/tool errors (diagnostics in errorLevel: all)',
   'help.cmd.modelList': 'list the model registry (vendors / aliases / default / effective)',
@@ -398,6 +400,45 @@ export const en: Record<MessageKey, string> = {
   'gateway.list.empty': 'No gateway instances found.',
   'logs.notFound': 'No gateway log files under {dir}.',
   'logs.tailFailed': 'Failed to read {path}: {error}',
+
+  // ── stop (fleet stop; CONTRACT-stop-semantics S2-S7) ──
+  'stop.inventory.title': 'Fleet inventory (data root: {dataDir})',
+  'stop.inventory.platform': 'platform {instance}: {state} (pid {pid}) {url}',
+  'stop.inventory.child': '{kind} {name} (pid {pid}, instance {instance})',
+  'stop.inventory.registryNode': 'registry node {name} ({nodeId})',
+  'stop.inventory.implicitNode': 'no nodes.json — implicit single node',
+  'stop.inventory.externalNode': 'node {name} ({nodeId}) not in the spawn manifest — left running',
+  'stop.inventory.hub': 'standalone hub (pid {pid}) — out of stop scope, left running',
+  'stop.inventory.pool':
+    'engine pool state files: {count} ({dir}); adopt/external engines are never touched',
+  'stop.warning.activeSessions':
+    'warning: nodes may hold active sessions; killing them is not recoverable.',
+  'stop.nothingRunning': 'No running fleet in the stop scope.',
+  'stop.confirm.prompt': 'Stop the fleet above? [y/N] ',
+  'stop.cancelled': 'Cancelled; no process was killed.',
+  'stop.nonInteractive':
+    'refusing to stop: non-interactive terminal and no --yes; pass --yes to stop the fleet.',
+  'stop.poolResidue.line': 'engine {id}: state pid {pid} may still be running — clean up manually',
+  'stop.poolResidue.unreadable':
+    'engine {id}: state file remains (pid unreadable) — clean up manually',
+  'stop.poolResidue.count': '{count} engine state file(s) remain in {dir}',
+  'stop.done': 'Fleet stop complete.',
+  'stop.failed': 'Fleet stop did not fully succeed (see reasons above).',
+  'stop.remote.title': 'Remote platform inventory: {url}',
+  'stop.remote.health': 'platform: {status} (version {version}, node_count {count})',
+  'stop.remote.node': 'node {name} ({nodeId}): {status} {apiUrl}',
+  'stop.remote.limitation':
+    'remote inventory is registry-level: manifest children and engine pool files on the host are not visible from here.',
+  'stop.remote.inventoryFailed': 'remote inventory failed: {detail}',
+  'stop.remote.accepted': 'shutdown accepted; waiting for the platform to become unreachable...',
+  'stop.remote.unreachable': 'platform is no longer reachable (shutdown accepted).',
+  'stop.remote.timeout':
+    'shutdown accepted but not confirmed within budget ({timeout} ms); check the host.',
+  'stop.remote.disabled':
+    'remote shutdown is disabled on the host (gateway.remote_shutdown); SSH to the host and run `vessel stop` there.',
+  'stop.remote.tokenHint':
+    'hint: the token must be the platform token (the gateway.token value), not a node token.',
+  'stop.remote.failed': 'remote shutdown failed: {detail}',
 
   // ── status / agents / errors (0.14) ──
   'status.title': 'Vessel Status',

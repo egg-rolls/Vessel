@@ -583,6 +583,12 @@ export interface GatewayConfig {
    * node 的 `/v1/events`）。关掉等于把 node token 交回浏览器 —— 那是有意为之的选择。
    */
   proxyNodes?: boolean;
+  /**
+   * Q4-C：是否允许非回环 `gateway.shutdown`（YAML `gateway.remote_shutdown`；缺省 **false**）。
+   * 开启后非回环仍必须经已配置共享密钥的 TLS 反代 + 平台 token（平台 RPC 内 fail-closed）；
+   * 回环停止不受本键影响。loader snake→camel 自动映射（enginePool 先例）。
+   */
+  remoteShutdown?: boolean;
   /** 0.58：父进程侧存活看门狗（探活 + 受限重启）；缺省开。 */
   supervise?: GatewaySuperviseConfig;
   /** engine 池 S1：gateway 监督的共享 engine 池；缺省不建池（零回归）。 */

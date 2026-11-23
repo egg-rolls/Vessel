@@ -1678,6 +1678,16 @@ function validateGatewaySettings(
     });
   }
 
+  // Q4-C：远程停止开关同口径只认显式布尔（缺省 false；消费端 === true 判定）。
+  const remoteShutdown = (gateway as Record<string, unknown>).remoteShutdown;
+  if (remoteShutdown !== undefined && typeof remoteShutdown !== 'boolean') {
+    errors.push({
+      path: 'gateway.remoteShutdown',
+      message:
+        'gateway.remoteShutdown must be a boolean (true = 允许非回环 gateway.shutdown；缺省 false)',
+    });
+  }
+
   validateSuperviseSettings((gateway as Record<string, unknown>).supervise, errors);
 
   if (allowedOrigins !== undefined) {
@@ -3865,6 +3875,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'allowedOrigins',
     'proxySecretEnv',
     'proxyNodes',
+    'remoteShutdown',
     'supervise',
     'enginePool',
   ],

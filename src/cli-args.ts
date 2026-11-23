@@ -46,9 +46,9 @@ export type GatewayCommand =
       kind: 'stop';
       timeoutMs: number;
       /**
-       * 0.55.1：缺省 **全停**（平台 + hub + node，与 `stop` 这个字面一致）。
-       * `--keep-nodes` 置 true = 只停平台层（node/hub 继续跑，下次 start adopt 回来）；
-       * `--no-keep-nodes` 保留解析作兼容别名（等价于缺省）。
+       * 0.55.1：缺省只停平台层，**不动 node/hub**（它们身上可能跑着会话，杀掉不可恢复）。
+       * 破坏性动作要显式：`--stop-nodes` 才连 node/hub 一起停（整舰队真停）；
+       * `--keep-nodes` / `--no-keep-nodes` 保留解析作兼容别名（前者等价缺省，后者等价 --stop-nodes）。
        */
       keepNodes?: boolean;
     } & GatewaySelector)
@@ -58,8 +58,9 @@ export type GatewayCommand =
       kind: 'restart';
       daemon: boolean;
       /**
-       * 0.55.1：缺省 **全重启**（node/hub 一起冷重启）；`--keep-nodes` 置 true = 只换平台层
-       * （handoff，新平台 adopt 接管节点）；`--no-keep-nodes` 保留作兼容别名（等价于缺省）。
+       * 0.55.1：缺省只换平台层（handoff），node/hub 留活并被新平台 adopt（不杀会话）。
+       * 要连 node/hub 一起冷重启，显式写 `--stop-nodes`；`--keep-nodes` / `--no-keep-nodes`
+       * 保留作兼容别名（前者等价缺省，后者等价 --stop-nodes）。
        */
       keepNodes?: boolean;
     } & GatewaySelector)
@@ -488,6 +489,11 @@ export interface CliArgs {
   tokenCommand?: TokenCommand | null;
   /** 0.14：`vessel status [--json]` */
   statusCommand: { json: boolean } | null;
+  /**
+   * 舰队级 `vessel stop`（CONTRACT-stop-semantics S1）。
+   * 远程参数复用全局字段 connectArg/connectTokenArg/caArg（零新解析实体）。
+   */
+  stopCommand: { yes: boolean; timeoutMs: number; selector: GatewaySelector } | null;
   /** 0.14：`vessel agents [--json]` */
   agentsCommand: { json: boolean } | null;
   /** 0.17：`vessel agent create|send|inbox|close|list|dispatch` */
@@ -605,6 +611,7 @@ export function parseArgs(argv: string[]): ParseResult {
     node: null,
     tokenCommand: null,
     statusCommand: null,
+    stopCommand: null,
     agentsCommand: null,
     agentCommand: null,
     teamCommand: null,
@@ -664,6 +671,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'status' && i === 0) {
       return parseStatusArgs(argv.slice(1), args);
+    }
+    if (a === 'stop' && i === 0) {
+      return parseStopArgs(argv.slice(1), args);
     }
     if (a === 'agents' && i === 0) {
       return parseAgentsArgs(argv.slice(1), args);
@@ -2659,6 +2669,97 @@ function parseTokenArgs(rest: string[], args: CliArgs): ParseResult {
     json,
     allowNonInteractive,
     ...(dataDir !== undefined ? { dataDir } : {}),
+  };
+  return { ok: true, args };
+}
+
+/**
+ * `stop [--yes] [--instance <name> | --port <N> | --all] [--timeout <dur>]`
+ * `stop --connect <url> [--connect-token <t>] [--ca <file>] [--yes] [--timeout <dur>]`
+ *
+ * 舰队级 stop（CONTRACT-stop-semantics S1）：本地缺省 = resolved data root 内所有实例的舰队；
+ * `--instance`/`--port` 收窄单实例舰队（`--all` 按选择器复用接受，等价缺省）。
+ * `--connect` = 远程单平台实例舰队，与任何本地选择器互斥（远程无 --all）。
+ * 破坏性命令只认显式 `--connect` flag，不认 VESSEL_CONNECT env；
+ * `--connect-token`/`--ca` 必须伴显式 `--connect`（比 model 先例更严）。
+ * connect 三旗写回既有全局字段（parseModelArgs 先例，零新解析实体）。
+ */
+function parseStopArgs(rest: string[], args: CliArgs): ParseResult {
+  let yes = false;
+  let timeoutMs = DEFAULT_STOP_TIMEOUT_MS;
+  const selector: GatewaySelector = {};
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--yes') {
+      yes = true;
+      continue;
+    }
+    if (a === '--timeout') {
+      const value = readFlagValue(rest, i, '--timeout');
+      if (!value.ok) return value;
+      const parsed = parseTimeoutMs(value.value);
+      if (parsed === null) {
+        return { ok: false, error: `Invalid --timeout: ${value.value} (expected e.g. 10s)` };
+      }
+      timeoutMs = parsed;
+      i = value.next;
+      continue;
+    }
+    if (a === '--connect' || a === '--connect-token' || a === '--ca') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--connect') args.connectArg = value.value;
+      else if (a === '--connect-token') args.connectTokenArg = value.value;
+      else args.caArg = value.value;
+      i = value.next;
+      continue;
+    }
+    const selected = parseGatewaySelectorArg(rest, i, selector, 'stop');
+    if (!selected.ok) return selected;
+    if (selected.matched) {
+      i = selected.next;
+      continue;
+    }
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for stop: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  const selectorError = gatewaySelectorError(selector, 'stop');
+  if (selectorError !== null) return { ok: false, error: selectorError };
+  if (
+    args.connectArg !== null &&
+    (selector.instance !== undefined || selector.port !== undefined || selector.all === true)
+  ) {
+    return {
+      ok: false,
+      error: 'stop --connect cannot be combined with --instance, --port, or --all',
+    };
+  }
+  // 比 model/全局先例更严：不认 VESSEL_CONNECT env 兜底（破坏性命令不静默跟随环境）。
+  const connectOnly =
+    args.connectTokenArg !== null ? '--connect-token' : args.caArg !== null ? '--ca' : null;
+  if (connectOnly !== null && args.connectArg === null) {
+    return { ok: false, error: `${connectOnly} requires --connect` };
+  }
+  // 本地缺省 = 全实例舰队（S1）：空选择器归一成 { all: true }（与显式 --all 等价）。
+  // 注意不能把空 {} 透传给 stopGateway —— 那里 {} 是「default 实例」语义。
+  // 远程（--connect）不带选择器（与 connectUrl 互斥）。
+  const hasSelector =
+    selector.instance !== undefined || selector.port !== undefined || selector.all === true;
+  args.stopCommand = {
+    yes,
+    timeoutMs,
+    selector: args.connectArg === null && !hasSelector ? { all: true } : selector,
   };
   return { ok: true, args };
 }

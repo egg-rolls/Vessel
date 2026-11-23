@@ -488,5 +488,22 @@ server {
 - 自检：`curl -N -H 'Host: egg-rolls.top' -H 'X-Vessel-Proxy-Secret: <值>' http://127.0.0.1:8642/web/build/events`
   应立即看到 `retry: 5000` 与一帧 `data: {...}`，之后每 25s 一行 `: ping`。
 
+## 12. 远程停（Q4-C，2026-11-23：`vessel stop --connect`）
+
+- **形态**：CLI **直连**平台 `/platform/rpc` 的 `gateway.shutdown`（params `{}` → `{stopping:true}`
+  只受理），不经浏览器→node 代理。代理 DENIED 闸门**零改动**：经代理转发 `gateway.shutdown`
+  到 node 仍 403；平台 RPC 绝不透传 node。
+- **三重闸（fail-closed）**：`gateway.remote_shutdown: true`（opt-in，缺省 false）+ 平台 token
+  （`gateway.token` / `gateway.token_env` 的值，恒要求；回环匿名 / 浏览器会话 cookie 一律拒）
+  + **已配置**反代共享密钥且头匹配（`proxy_secret_env`；TLS 在反代终结，平台保持回环）。
+  非回环而未配置反代密钥 ⇒ 一律拒（防「opt-in = 裸公网停」误配）。回环判定用原始 socket 地址
+  与「经已配置反代」两个信号，不用合取后的 auth.loopback（否则经反代的远程会被判成回环绕过 opt-in）。
+- **等死确认**：停止方轮询 `platform.health.get` 至请求失败（不再可达）≤ `--timeout`；措辞是
+  「平台已不可达（shutdown 已受理）」，**不声称进程已死**（反代自身故障不可区分）。超时如实 exit 1。
+- **远程不强杀**（生命周期强杀恒本机）；未开 opt-in → 401 `remote_shutdown_disabled` → 提示
+  **SSH 到主机跑 `vessel stop`**（零实体兜底）。
+- 本机停止不受 `remote_shutdown` 影响；平台优雅路径同时关闭 Windows owned engine 孤儿缺口
+  （见 [GATEWAY.md §4](GATEWAY.md)）；配置键见 [CONFIG.md §2.20.1](CONFIG.md)。
+
 
 
