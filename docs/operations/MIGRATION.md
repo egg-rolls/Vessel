@@ -2,7 +2,7 @@
 title: 迁移指南
 kind: current
 triggers: [迁移, 数据迁移, 升级, 迁移命令, sqlite, file-v1, file-v2, 存储布局, 会话库, 旧数据, legacy, 干跑, apply]
-paths: [docs/operations/MIGRATION.md]
+paths: [src/migrate.ts, src/migrate-command.ts, src/data-lock.ts, src/data-paths.ts, packages/core/src/session/atomic-write.ts, packages/core/src/session/file-backend.ts, packages/core/src/session/sqlite-backend.ts, packages/core/src/session/run-record-store.ts]
 ---
 
 # 迁移指南（sqlite / file-v1 → file-v2）

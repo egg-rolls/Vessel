@@ -2,7 +2,7 @@
 title: Gateway 单点启动与进程生命周期（职责与边界）
 kind: current
 triggers: [gateway, lifecycle, 生命周期, 单点启动, adopt, 接管, 分段启动, readiness, 错误域, 隔离, node, hub, 重启, 停机, stop, detached, 孤儿, engine 池, engine_pool]
-paths: [src/gateway/**, src/gateway-command.ts, docs/operations/GATEWAY.md]
+paths: [src/gateway/**, src/gateway-command.ts, src/gateway-wiring.ts, src/node-drain.ts, docs/operations/GATEWAY.md]
 ---
 
 # Gateway 单点启动与进程生命周期

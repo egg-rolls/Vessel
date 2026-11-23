@@ -2,7 +2,7 @@
 title: Trace 留存与隐私
 kind: current
 triggers: [trace, 追踪, 事件落盘, 事件日志, 留存, 保留期, 隐私, 脱敏, 重放, 级别, jsonl]
-paths: [docs/operations/TRACE.md]
+paths: [packages/core/src/observability/**, packages/core/src/events/summarize-event.ts, packages/core/src/events/file-event-store.ts, packages/core/src/events/replay.ts, packages/core/src/session/delete-session.ts, packages/core/src/types/run-record-store.ts, packages/core/src/runtime/execution-unit.ts, packages/config/src/types.ts, packages/config/src/defaults.ts, src/trace-wiring.ts, src/data-lock.ts, src/data-paths.ts, packages/tui/src/commands/trace-command.ts, packages/serve/src/gateway/methods/observability.ts, packages/serve/src/event-buffer.ts, plugins/security/redact-secrets/src/redactor.ts, src/trace-command.ts]
 ---
 
 # Trace 留存与隐私

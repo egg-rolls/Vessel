@@ -2,7 +2,7 @@
 title: 公网暴露与同机反代的安全边界（0.55 P0 审计）
 kind: current
 triggers: [公网, 反代, 反向代理, nginx, 暴露, 威胁模型, loopback, 回环, 安全边界, P0, proxy_secret]
-paths: [docs/operations/REVERSE-PROXY.md]
+paths: [packages/serve/src/platform/proxy-config.ts, packages/serve/src/platform/auth.ts, packages/serve/src/platform/server.ts, packages/serve/src/platform/rpc.ts, packages/serve/src/platform/listen-guard.ts, packages/serve/src/gateway/auth.ts, packages/serve/src/gateway.ts, packages/serve/src/tenant.ts, packages/serve/src/plugin-host/proxy.ts, packages/serve/src/auth/oauth.ts, packages/serve/src/auth/origins.ts, packages/serve/src/auth/github-oauth.ts, src/serve-auth.ts, src/gateway-command.ts, src/hub/server.ts, src/stop-command.ts, packages/config/src/gateway.ts, packages/config/src/auth.ts, packages/config/src/auth-origins.ts]
 ---
 
 # 公网暴露与同机反代的安全边界

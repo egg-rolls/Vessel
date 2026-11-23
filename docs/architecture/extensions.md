@@ -2,7 +2,7 @@
 title: 扩展机制与插件发现
 kind: current
 triggers: [plugin, plugin host, loader, discovery, trust, external, mcp, skill, config, 扩展, 扩展模型, 插件, 插件发现, 插件端口, 外部插件, 技能, 扩展面]
-paths: [packages/core/src/types/plugin.ts, packages/core/src/types/member-port.ts, src/plugin-loader.ts, src/plugin-selection.ts, plugins/**]
+paths: [packages/core/src/types/plugin.ts, packages/core/src/types/member-port.ts, src/plugin-loader.ts, src/plugin-selection.ts, src/plugin-manifest.ts, packages/agent/src/runtime.ts, packages/agent/src/member-ports.ts, plugins/mcp/client/**, src/feishu-wiring.ts]
 ---
 
 # 扩展机制与插件发现

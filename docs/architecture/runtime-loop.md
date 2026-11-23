@@ -2,7 +2,7 @@
 title: Tool-Calling Loop
 kind: current
 triggers: [loop, tool call, iteration, guardrail, hook, tool_calls, reasoning, 运行时循环, 主循环, 循环, 工具调用, 步进, 迭代, 推理]
-paths: [packages/core/src/runtime/**, packages/core/src/types/tool.ts]
+paths: [packages/core/src/runtime/tool-calling-loop.ts, packages/core/src/runtime/provider-retry.ts, packages/core/src/runtime/error-envelope.ts, packages/core/src/types/tool.ts, packages/permission/src/index.ts]
 ---
 
 # Tool-Calling Loop

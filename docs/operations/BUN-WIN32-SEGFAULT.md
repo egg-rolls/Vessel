@@ -2,7 +2,7 @@
 title: Bun 段错误（win32）取证 runbook：gateway 崩了之后收集什么、先看哪一行
 kind: current
 triggers: [segfault, 段错误, panic, bun.report, gateway 崩溃, 崩溃, crash, runbook, 取证, Segmentation fault, 0xFFFFFFFFFFFFFFFF, 资源采样, gateway.resources, VESSEL_RESOURCE_SAMPLE_MS, proxy, passthrough, pump, crc32]
-paths: [docs/operations/**, packages/serve/src/platform/proxy.ts, packages/core/src/timeline/wal.ts]
+paths: [docs/operations/BUN-WIN32-SEGFAULT.md, packages/serve/src/platform/proxy.ts, packages/serve/src/platform/server.ts, packages/core/src/timeline/wal.ts]
 ---
 
 # Bun 段错误（win32）取证 runbook

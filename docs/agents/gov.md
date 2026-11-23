@@ -2,7 +2,7 @@
 title: 文档、角色与发布
 kind: advisory
 triggers: [docs, doc management, frontmatter, release, publish, tag, version check, changelog, ci, pr, roles, worktree, 发布, 版本, 变更日志, 角色, 工作区, 干跑, 元信息]
-paths: [docs/**, AGENTS.md, README.md, .github/**, scripts/**]
+paths: [docs/DOC-MANAGEMENT.md, docs/FILE-MANAGEMENT.md, AGENTS.md, README.md, .github/**, scripts/**, biome.json]
 applies_to: [N, M]
 ---
 

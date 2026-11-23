@@ -72,9 +72,9 @@
 
 `current` 文档超过 **300 行**或 **100 KB** 时，必须按模块拆分到 `docs/architecture/**` 或 `docs/agents/**`，不得继续整篇常驻（`target` 不适用本句，见下）。
 
-- 目录必须有 `INDEX.md`：`docs/architecture/INDEX.md` 与 `docs/agents/INDEX.md` 各 ≤60 行，列为「模块（含链接）| 一句话 | triggers | paths」；target 模块在模块名后标注 `kind: target`。
-- `current` 模块 ≤110 行（`advisory` ≤60 行）；`target` 允许长文档（上限 600 行，人工守）；一个事实只有一个家，其余位置用链接，不复制。
-- frontmatter 必填 `title` / `kind` / `triggers` / `paths`；`kind` 只允许 `current` / `advisory` / `target`，`advisory` 另加 `applies_to`（`N` / `M`）。`triggers` 写任务里会出现的词，`paths` 是 glob，命中优先于关键词。
+- 目录必须有 `INDEX.md`：`docs/architecture/INDEX.md` 与 `docs/agents/INDEX.md` 各 ≤60 行，列为「模块（含链接）| 一句话 | triggers | paths」；`INDEX.md` 自身为 **guide**（`kind: guide` + `children`）；guide / target 模块在模块名后标注 kind。
+- `current` 模块 ≤110 行（`advisory` ≤60 行，`guide` ≤60 行只导航不落事实）；`target` 允许长文档（上限 600 行，人工守）；一个事实只有一个家，其余位置用链接，不复制。
+- frontmatter 必填 `title` / `kind` / `triggers`；`kind` 只允许 `current` / `advisory` / `target` / `guide`。leaf（`current` / `advisory`）必填 `paths`（代码锚点）；`guide` 必填 `children`（下层文档相对路径），**children 与 paths 互斥**；`advisory` 另加 `applies_to`（`N` / `M`）。`triggers` 写任务里会出现的词，`paths` 是 glob，命中优先于关键词。
 
 ```yaml
 ---
@@ -93,20 +93,22 @@ paths: [packages/serve/**, apps/web/src/gateway/**]
 2. 只写目标模型与迁移分期；不得把目标态写成「已实现」，也不得替代架构页正文。
 3. 随 Stage 更新，git 历史即版本；Stage 落地后由对应 `current` 架构页承接。
 4. 允许长文档（上限 600 行，人工守），不按 `current` 的 100 行模块规则拆分。
-5. `INDEX.md` 仍为 `current`；target 模块在索引行的模块名后标注 `kind: target`。
+5. `INDEX.md` 为 `guide`；target 模块在索引行的模块名后标注 `kind: target`。
 
 `current` 的 110 行模块规则与 300 行拆分规则不变。
 
 - 未拆分的存量文档在迁移完成前 grandfather；新增或重构的 `current` 文档立即适用。
 - frontmatter、INDEX 覆盖、行数与链接**没有自动校验**（`check-docs` 已按宪法删除），reviewer 逐项核对；新增/重构文档立即生效，存量在迁移完成前 grandfather。
 
-### 3.5 同步契约（current/advisory ↔ 代码）
+### 3.5 同步契约（绑代码叶子 ↔ 代码）
 
-- `kind: current / advisory`（含各 INDEX）= **需同步文档**；frontmatter `paths` = 同步范围。`kind: target`、历史容器（`versions/`、`adr/`）与 `specs/`（冻结定稿）不需同步。根 O(1) 文件（AGENTS/README/CHANGELOG）需同步，范围 = 全仓命令/路径/版本事实（无 frontmatter 是设计如此，§3.1）。
+- **需同步文档 = 绑代码叶子**：`kind: current / advisory` 且有代码 `paths`。`paths` = 同步范围，**收窄到事实锚点**（具体文件优先，单一子系统 glob 次之；禁包根/全仓宽 glob）；共享锚点（如 `execution-unit.ts`）允许多叶同挂，各管一个侧面。
+- **guide 排除代码同步**：`kind: guide` 只有 `children`（下层文档相对路径），无 paths、无 churn；正文只导航不落事实（事实在叶子），≤60 行。义务 = 叶子增删时维护 children 登记；`INDEX.md` 即根/目录 guide。导航允许多父，**事实家唯一**。
+- **自绑稳定页（快照类）**：无代码锚点的稳定知识/裁定规则 `paths: [自身]`，churn 恒 0，不需同步不管。`kind: target`、历史容器（`versions/`、`adr/`）与 `specs/`（冻结定稿）同样排除。根 O(1) 文件（AGENTS/README/CHANGELOG）需同步，范围 = 全仓命令/路径/版本事实（无 frontmatter 是设计如此，§3.1）。
 - **同步基线 = 最近一次触碰该文档的 commit**（git 历史是唯一记录；不加字段、不存状态文件）。文档同步 commit 带 `Synced-to: <sha>` trailer，供 `git log --grep=Synced-to -- <doc>` 查验证基线。
-- **检测**：`bun run scripts/doc-sync.ts [--threshold N] [--json] [--doc <path>] [--all]`。原理 = `git log -1 --format=%h -- <doc>` 取基线 + `git diff <sha>..HEAD -- <paths>` 列变更；churn 只是上界，语义确认与更新判断归人。
+- **检测**：`bun run scripts/doc-sync.ts [--threshold N] [--json] [--doc <path>] [--all]`。原理 = `git log -1 --format=%h -- <doc>` 取基线 + `git diff <sha>..HEAD -- <paths>` 列变更；churn 只是上界，语义确认与更新判断归人。`treeGaps` 信息性浮现未登记叶子 / children 死链。
 - **工具分类**：信息性 sync 检测工具（docs-find 类）允许；gate/test/probe 仍禁（宪法第三/四条）。被删的 check-docs 是正确性校验器（断言合规、红绿阻塞）；doc-sync 是 churn 信息辅助（浮现候选、不校验对错、不阻塞、exit 恒 0），不同类——不重造 check-docs，不接 CI / pre-commit。
-- **义务**：合并某文档 paths 下的代码变更时，同切片同步受影响的 current/advisory 文档，或显式向 1 报告滞后由 1 裁决延期；检查点跑 doc-sync 复核。
+- **义务落叶子**：合并某叶子 paths 下代码变更时，同切片同步该叶子或显式向 1 报告滞后由 1 裁决延期；guide 不因代码合并触发；检查点跑 doc-sync 复核。
 - **specs 容器**：`docs/specs` = 定稿规格（实现前读、实现后冻结；允许 `kind: design` + `status`；退场转历史按宪法 09）；不需同步。
 - 引用优先 `file:symbol`；行号仅在必要时写，同步时重锚。
 

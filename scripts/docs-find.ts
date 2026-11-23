@@ -10,7 +10,7 @@
  *   下含上述任一目录的祖先作为 personal base，只扫该 base 下实际存在的目录。
  *   CI 只 clone 共享仓库，找不到时静默跳过。
  *
- * 发现：排除 INDEX.md（INDEX 只做导航，不参与检索）。
+ * 发现：排除 INDEX.md 与 kind: guide（导航页只做导航，不参与检索）。
  * 打分：paths glob 命中 +5（每模块一次）、trigger 每命中 +1、title 命中 +2（每模块一次）。
  * 排序：分数 → paths 命中 → trigger 命中数 → title → glob 具体度 → 文档类型权重 → 路径字典序。
  * 类型权重由「目录类别 + frontmatter 的 kind / status」推出（见 docTypeWeight），同分时
@@ -409,6 +409,8 @@ async function loadModules(dirs: DocDir[]): Promise<LoadResult> {
         const relative = `${dir.displayBase}${relativeDir}/${file}`;
         const text = await readFile(join(full, file), 'utf8');
         const frontmatter = parseFrontmatter(text);
+        // guide 只做导航（镜像 INDEX.md 排除）：不参与发现与打分。
+        if (frontmatter.kind === 'guide') continue;
         if (!frontmatter) {
           if (fallback) {
             modules.push(fallbackModule(relative, file, text, null, category));

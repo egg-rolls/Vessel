@@ -2,7 +2,7 @@
 title: 数据面 401 分流（两种来源，一眼定案）
 kind: current
 triggers: [401, 401 Unauthorized, session_required, unauthorized, Missing or invalid token, 会话, cookie, 登录, 数据面, 直连, 8644, 8642, node 端口, host]
-paths: [docs/operations/TROUBLESHOOTING-401.md]
+paths: [packages/serve/src/gateway.ts, packages/serve/src/gateway/auth.ts, src/serve-auth.ts, packages/serve/src/platform/auth.ts, packages/serve/src/platform/server.ts, packages/serve/src/platform/rpc.ts, packages/serve/src/platform/proxy.ts, packages/serve/src/auth/routes.ts, packages/serve/src/auth/session.ts, packages/config/src/validator.ts]
 ---
 
 # 数据面 401 分流

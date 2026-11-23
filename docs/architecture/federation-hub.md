@@ -2,7 +2,7 @@
 title: Hub 控制面与跨节点 Federation
 kind: current
 triggers: [hub, federation, control plane, data plane, node, peer, pairing, join code, auto join, registration, derive origins, token, directory, attention, allowlist, hop, cross-node, 联邦, 中枢, 配对, 加入码, 自动加入, 注册表, 派生来源, 目录, 控制面, 数据面, 跨机, 节点互联]
-paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/config/src/node-registration.ts, packages/serve/src/gateway/**]
+paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/config/src/node-registration.ts, packages/serve/src/federation.ts, src/gateway-command.ts, src/cli.ts, src/node-identity.ts]
 ---
 
 # Hub 控制面与跨节点 Federation

@@ -2,7 +2,7 @@
 title: 工具与权限边界
 kind: current
 triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask, mcp tool, vessel, bridge, guardrail, rpc, 工具, 权限, 黑名单, 白名单, 根目录, 提问, 工具集, 工具名, 命名规则, snake_case, 工具名校验, 别名, 弃用提示, pii_reveal, 控制面, 桥, 元工具, engine, pool, tools_engine, child, bridge_deny, transport, 执行位置, 双路]
-paths: [packages/core/src/types/tool.ts, packages/core/src/runtime/tool-name.ts, packages/core/src/runtime/plugin-host.ts, plugins/tools/**, packages/agent/**, src/vessel-meta.ts, src/tools-engine/**]
+paths: [packages/core/src/types/tool.ts, packages/core/src/runtime/tool-name.ts, packages/core/src/runtime/plugin-host.ts, packages/core/src/runtime/tool-pipeline.ts, packages/core/src/runtime/tool-provenance.ts, packages/core/src/runtime/permission-policy.ts, plugins/tools/**, plugins/context/doc-subscription/**, plugins/mcp/client/src/naming.ts, packages/agent/src/tool.ts, packages/agent/src/inbox.ts, packages/agent/src/service.ts, packages/agent/src/member-cwd.ts, src/vessel-meta.ts, src/tools-engine/**, src/legacy-tool-names.ts, src/bootstrap.ts, src/gateway-command.ts, src/plugin-config.ts, src/ask-channel.ts, src/ask-answer-delivery.ts, packages/serve/src/interactions-registry.ts, apps/web/src/domains/pending/ask-submit-plan.ts, packages/tui/src/renderer/ask-user.ts, src/mcp-engine-wiring.ts]
 ---
 
 # 工具与权限边界

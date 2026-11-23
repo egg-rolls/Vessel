@@ -1,8 +1,8 @@
 ---
 title: Agent 领域告诫索引
-kind: current
+kind: guide
 triggers: [agents, advisory, core, agent, serve, web, tui, plugins, gov]
-paths: [docs/agents/**]
+children: [core.md, agent.md, serve.md, web.md, tui.md, plugins.md, gov.md]
 ---
 
 # Agent 领域告诫索引

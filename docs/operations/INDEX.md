@@ -1,8 +1,8 @@
 ---
 title: 运维索引
-kind: current
+kind: guide
 triggers: [operations, 运维, index, 索引, runbook, gateway, 配置, 迁移, 发布, 远程, trace, ci]
-paths: [docs/operations/**]
+children: [LOGS.md, GATEWAY.md, TROUBLESHOOTING-401.md, BUN-WIN32-SEGFAULT.md, BUN-QUIRKS.md, TIMEOUTS.md, CONFIG.md, MIGRATION.md, version-isolation-blue-green.md, REMOTE.md, REVERSE-PROXY.md, TRACE.md, RELEASE.md, CI-CD.md]
 ---
 
 # 运维索引

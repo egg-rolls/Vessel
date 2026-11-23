@@ -1,18 +1,19 @@
 ---
 title: 架构索引
-kind: current
+kind: guide
 triggers: [architecture, runtime, gateway, config, event, tool, plugin, session, rpc, web, host, scheduler, member, team, federation, hub, topology, company, workspace, platform, owner, guest]
-paths: [docs/architecture/**]
+children: [overview.md, assembly.md, layering.md, cli-wiring.md, runtime-lifecycle.md, runtime-loop.md, runtime-api.md, host.md, context.md, session-length.md, env-info-append-only.md, interfaces.md, state.md, tools.md, guardrails-hooks.md, extensions.md, plugins.md, plugin-registry.md, plugin-embed.md, config.md, events.md, event-log-policy.md, session-replay.md, unacked-queue-closure.md, gateway.md, gateway-lifecycle.md, gateway-rpc.md, gateway-web.md, gateway-capabilities.md, member-team.md, agent-structure.md, federation-hub.md, topology.md, message-invariants.md]
 ---
 
 # 架构索引
 > Stage 4 已落地：正文描述的是 `Assembly → Runtime → ExecutionUnit → Run → Loop` 的已实现状态；目标/迁移决策仍见 [0.34-target.md](0.34-target.md) 与 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)（accepted；tenant 部分已被 ADR-100/T0–T5 取代）。
 
-> 本表 current/advisory 模块均为需同步文档（契约见 [DOC-MANAGEMENT §3.5](../DOC-MANAGEMENT.md)）；target 模块不需同步。检索 `bun run scripts/docs-find.ts --goal "<目标>" --paths <路径>`，命中后只读模块；未命中回落 `AGENTS.md`。历史见 `docs/versions/INDEX.md` 与 `docs/adr/README.md`。
+> 本表 current/advisory 叶子均为需同步文档；guide/target 不需代码同步（契约见 [DOC-MANAGEMENT §3.5](../DOC-MANAGEMENT.md)）。检索 `bun run scripts/docs-find.ts --goal "<目标>" --paths <路径>`，命中后只读模块；未命中回落 `AGENTS.md`。历史见 `docs/versions/INDEX.md` 与 `docs/adr/README.md`。
 
 | 模块 | 一句话 | triggers | paths |
 |---|---|---|---|
-| [overview](overview.md) | 三层结构、依赖方向、两个适配器与 core 边界 | layering, dependency, kernel, module, adapter, core | `packages/core/**`, `plugins/**` |
+| [overview](overview.md)（kind: guide） | 架构总览导航：分层与域入口指针（事实在 layering 等叶子） | architecture, overview, 总览, 导航 | children: layering / assembly / 域叶 |
+| [layering](layering.md) | 三层结构、依赖方向、Module≠Plugin 边界、core 哲学与两个插槽 | layering, dependency, kernel, module, adapter, core, philosophy, 分层, 依赖, 哲学 | `packages/*/package.json`, `packages/core/src/index.ts` |
 | [runtime-lifecycle](runtime-lifecycle.md) | `Runtime` / per-session `ExecutionUnit`、`run()` / `resumeRun()` 外壳、单 run 占位、`finalizeRun` 终态与 `RunJournal` 唯一写者 | run, resume, finalize, execution, checkpoint, cancel, run_already_running, runtime, execution unit, journal | `packages/core/src/runtime/**` |
 | [runtime-loop](runtime-loop.md) | `toolCallingLoop` 骨架、关键约束与 provider 重试 | loop, tool call, iteration, guardrail, hook, reasoning, retry, provider error | `packages/core/src/runtime/**` |
 | [runtime-api](runtime-api.md) | `RunOptions.messages` 注入语义、`Runtime` / `TenantRuntimeProfile` / `ExecutionUnitRequest` 与 `ExecutionUnit` 公开面 | RunOptions, messages, injection, runtime, tenant profile, execution unit, context, at-path | `packages/core/src/runtime/**`, `packages/core/src/types/**` |
@@ -32,7 +33,8 @@ paths: [docs/architecture/**]
 | [event-log-policy](event-log-policy.md) | 会话事件日志落盘口径：只有一种格式（timeline：`wal.log` / `wal.blocks/` / 归档段）、0.54 之前的旧格式在 0.55 不再支持（`legacy_session_unsupported`，不读不写不迁移）、瞬时 chunk 不占 `timeline_seq`、`llm.stream.summary` / `llm.request` 只落骨架 | event log, timeline, wal, 落盘, 瞬时 chunk, legacy_session_unsupported, 旧格式, llm.request, stream summary | `packages/core/src/timeline/writer.ts`, `packages/core/src/timeline/blocks.ts`, `packages/core/src/timeline/legacy-format.ts` |
 | [session-replay](session-replay.md) | 会话重放总架构：唯一读路径（单游标 + 单区间回填 + 四条硬校验）、`timeline.hello` 声明与 `count`、等式与 `published_head`、污点条与 `timeline.gap_reported`、单区间封顶与按段续拉 | replay, session replay, 单游标, client_timeline_seq, timeline_seq, 区间回填, 四条校验, timeline.hello, published_head, holes, tainted, 污点条, 无洞, 回填 | `apps/web/src/gateway/timeline-protocol.ts`, `apps/web/src/gateway/subscription.ts`, `apps/web/src/state/event-store.ts`, `packages/serve/src/protocol.ts`, `packages/serve/src/gateway/timeline-protocol.ts` |
 | [unacked-queue-closure](unacked-queue-closure.md) | 0.53 不遗漏判据里「已发布、未落盘」那个集合在 0.54 的结案：I2 令其为空集、等式退化为 `timeline ∪ WAL` 两段、0.53 四问逐条「不需要」、chunk 的 150 ms 内存窗口边界、A5 断言探针与「契约 ≠ 现状」 | unacked, 未确认队列, 未落盘, 已发布未落盘, timeline_head, wal_head, published_head, 发布早于 WAL, holes, 对账, 结案 | `packages/core/src/timeline/writer.ts`, `packages/core/src/timeline/blocks.ts`, `packages/core/src/timeline/holes.ts`, `src/timeline-dual-write.ts` |
-| [assembly](assembly.md) | `src/` 装配层、CLI/TUI 入口与职责边界 | bootstrap, cli, args, wiring, repl, headless | `src/**` |
+| [assembly](assembly.md)（kind: guide） | 装配域导航：src/ 域叶指针（CLI/工厂事实在 cli-wiring） | bootstrap, cli, wiring, 装配, 导航 | children: cli-wiring / gateway-lifecycle / federation-hub 等 |
+| [cli-wiring](cli-wiring.md) | CLI 入口分发/参数互斥/headless 退出码/REPL 边界/bootstrap 装配序/工厂 wiring | bootstrap, cli, args, wiring, repl, headless, resume, 装配, 命令行 | `src/cli*.ts`, `src/bootstrap.ts`, `src/*-factory.ts` |
 | [gateway](gateway.md) | 帧/端点、静态托管与安全、TLS、远程控制面 | gateway, websocket, sse, tls, origin, csp, remote | `packages/serve/src/**`, `src/rpc/**` |
 | [gateway-lifecycle](gateway-lifecycle.md) | 单点启动与进程生命周期**职责边界**：gateway / node / hub 谁拥有谁、五行动作表、分段启动与错误域隔离（细节见 operations/GATEWAY.md） | gateway, lifecycle, 生命周期, 单点启动, adopt, 分段启动, 错误域, 隔离, detached, 孤儿, stop, engine 池, engine_pool | `src/gateway/**`, `src/gateway-command.ts`, `docs/operations/GATEWAY.md` |
 | [gateway-rpc](gateway-rpc.md) | 统一 RPC 方法表与 canonical agent 生命周期契约 | rpc, method, canonical, envelope, agents.create, sessions.create, sessions.restart, sessions.activate, plugins.catalog | `packages/serve/src/gateway/methods/**` |

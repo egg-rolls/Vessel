@@ -2,7 +2,7 @@
 title: AgentService、Body 与 Team
 kind: current
 triggers: [agent, member, team, body, session, dispatch, send, rotate, create, spawn, peer, contractor, owner, freeze, presence, membership, visibility, roster, budget, 成员, 团队, 派生, 冻结, 预算, 投递, 轮换, 花名册, 可见性]
-paths: [packages/agent/**, src/agent-service-wiring.ts, src/team-command.ts]
+paths: [packages/agent/src/service.ts, packages/agent/src/tool.ts, packages/agent/src/types.ts, packages/agent/src/team*.ts, packages/agent/src/inbox.ts, packages/agent/src/registry.ts, packages/agent/src/runtime.ts, packages/agent/src/conversation-budget.ts, packages/agent/src/conversation-store.ts, packages/agent/src/refs.ts, src/agent-service-wiring.ts, src/team-command.ts, src/peer-notices.ts, src/federation-address.ts, src/agent-control.ts, src/run-control.ts, src/team-human-delivery.ts]
 ---
 
 # AgentService、Body 与 Team

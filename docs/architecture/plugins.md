@@ -2,7 +2,7 @@
 title: Plugin 架构：能力插件与体验插件
 kind: current
 triggers: [plugin, plugin host, manifest, contribution, capability plugin, experience plugin, activation, reload, child process, trust, catalog, vessel.catalog, 插件, 插件清单, 插件端口, 扩展, 插件宿主, 清单, 激活, 热重载, 信任, engine-client, in-process rpc, specifier farm]
-paths: [plugins/**, src/plugin-loader.ts, packages/serve/src/plugin-host/**, apps/web/src/domains/plugins/**]
+paths: [src/plugin-loader.ts, src/plugin-manifest.ts, packages/serve/src/plugin-host/**, plugins/*/*/package.json, src/plugin-watch.ts, src/plugin-command.ts, apps/web/src/domains/plugins/plugin-catalog.ts, src/plugin-cli-command.ts, src/plugin-host-assembly.ts]
 ---
 
 # Plugin 架构：能力插件与体验插件

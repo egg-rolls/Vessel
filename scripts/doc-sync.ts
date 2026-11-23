@@ -2,9 +2,10 @@
 
 /**
  * doc-sync —— 按需信息工具：读 frontmatter + git 历史，浮现 sync 候选
- * （滞后 / 漏覆盖 / INDEX 缺行 / 孤儿候选）。零存储零状态零依赖（Bun 内置 + git）。
+ * （滞后 / 漏覆盖 / 树缺口 / 孤儿候选）。零存储零状态零依赖（Bun 内置 + git）。
  *
- * 契约：DOC-MANAGEMENT §3.5（kind: current/advisory = 需同步文档，paths = 同步范围）；
+ * 契约：DOC-MANAGEMENT §3.5（kind: current/advisory + paths = 需同步叶子；kind: guide
+ * 只有 children，免代码同步；树约定见个人侧 docs/dev/plans/doc-tree-impl.md §2）；
  * 机制与边界见个人侧 docs/dev/plans/doc-sync-impl.md §9。每次运行全派生：基线 = 末次触碰
  * 该文档的 commit，按基线 sha 分组派生 churn/滞后，Bun.Glob 过滤（不用 git pathspec）。
  * 信息性非 gate：churn 只是上界，语义确认与更新判断归人；不写 synced/正确，永不 exit 1，
@@ -17,7 +18,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { parseFrontmatter, parseStringArray } from './docs-find';
 
 const ROOT = join(import.meta.dir, '..');
@@ -51,9 +52,15 @@ interface RangeData {
   commits: { sha: string; files: string[] }[];
 }
 
-interface IndexGap {
-  index: string;
-  missing: string[];
+/** guide 只导航不绑代码：children 已解析为 repo root 相对路径；无 paths/baseline/churn。 */
+interface GuideDoc {
+  path: string;
+  children: string[];
+}
+
+interface TreeGaps {
+  unregistered: string[];
+  dead: string[];
 }
 
 function git(...args: string[]): string {
@@ -126,8 +133,10 @@ function rangeData(sha: string): RangeData {
   return { changed, commits };
 }
 
-async function loadSyncDocs(): Promise<SyncDoc[]> {
+/** 扫描集：leaf = current/advisory（无 paths = 空 globs，churn 0）；guide 只读 children。 */
+async function scanDocs(): Promise<{ docs: SyncDoc[]; guides: GuideDoc[] }> {
   const docs: SyncDoc[] = [];
+  const guides: GuideDoc[] = [];
   for (const dir of SCAN_DIRS) {
     const full = join(ROOT, dir);
     if (!existsSync(full)) throw new Error(`缺少扫描目录: ${dir}`);
@@ -136,8 +145,15 @@ async function loadSyncDocs(): Promise<SyncDoc[]> {
       const text = await readFile(join(full, file), 'utf8');
       const frontmatter = parseFrontmatter(text);
       const kind = frontmatter.kind ?? '';
-      if (!SYNC_KINDS.has(kind)) continue;
       const path = `${dir}/${file}`;
+      if (kind === 'guide') {
+        const children = parseStringArray(frontmatter.children).map((child) =>
+          posix.join(posix.dirname(path), child),
+        );
+        guides.push({ path, children: [...new Set(children)] });
+        continue;
+      }
+      if (!SYNC_KINDS.has(kind)) continue;
       const globs = resolvePaths(parseStringArray(frontmatter.paths));
       const matchers = globs
         .map((glob) => compileGlob(glob))
@@ -156,7 +172,7 @@ async function loadSyncDocs(): Promise<SyncDoc[]> {
       });
     }
   }
-  return docs;
+  return { docs, guides };
 }
 
 /** 按基线 sha 分组派生 churn/滞后；git 调用数 = 唯一基线数，非文档数。 */
@@ -184,21 +200,13 @@ function computeLag(docs: SyncDoc[], threshold: number): Map<string, RangeData> 
   return ranges;
 }
 
-async function findIndexGaps(): Promise<IndexGap[]> {
-  const gaps: IndexGap[] = [];
-  for (const dir of SCAN_DIRS) {
-    const files = (await readdir(join(ROOT, dir))).filter((file) => file.endsWith('.md')).sort();
-    const indexPath = join(ROOT, dir, 'INDEX.md');
-    const text = existsSync(indexPath) ? await readFile(indexPath, 'utf8') : '';
-    const linked = new Set<string>();
-    for (const match of text.matchAll(/\]\(([^)\s]+)\)/g)) {
-      const target = (match[1] ?? '').split('#')[0] ?? '';
-      if (target.endsWith('.md')) linked.add(target.split('/').pop() ?? '');
-    }
-    const missing = files.filter((file) => file !== 'INDEX.md' && !linked.has(file));
-    if (missing.length > 0) gaps.push({ index: `${dir}/INDEX.md`, missing });
-  }
-  return gaps;
+/** 树缺口（信息性）：leaf 未登记进任何 guide children / children 指向不存在的文件。 */
+function findTreeGaps(docs: SyncDoc[], guides: GuideDoc[]): TreeGaps {
+  const registered = new Set(guides.flatMap((guide) => guide.children));
+  return {
+    unregistered: docs.filter((doc) => !registered.has(doc.path)).map((doc) => doc.path),
+    dead: [...registered].filter((child) => !existsSync(join(ROOT, child))),
+  };
 }
 
 /** CJK 按 2 列宽对齐（状态词汇是中文，padEnd 数码元会歪）。 */
@@ -253,6 +261,17 @@ function formatCoverage(uncovered: string[], all: boolean): string[] {
     });
 }
 
+function formatTreeGaps(gaps: TreeGaps): string[] {
+  if (gaps.unregistered.length === 0 && gaps.dead.length === 0) return ['(none)'];
+  const display = (path: string): string => path.replace(/^docs\//, '');
+  const out: string[] = [];
+  if (gaps.unregistered.length > 0) {
+    out.push(`unregistered: ${gaps.unregistered.map(display).join(', ')}`);
+  }
+  if (gaps.dead.length > 0) out.push(`dead children: ${gaps.dead.map(display).join(', ')}`);
+  return out;
+}
+
 function docFields(doc: SyncDoc) {
   const { path, kind, baseline, globs, churnFiles, lagCommits, status } = doc;
   return { path, kind, baseline, globs, churnFiles, lagCommits, status };
@@ -279,6 +298,15 @@ function formatDocDetail(doc: SyncDoc, detail: { files: string[]; commits: strin
     out.push(`churn files (${detail.files.length}):`, ...detail.files.map((file) => `  ${file}`));
     out.push(`lag commits (${detail.commits.length}):`, ...detail.commits.map((sha) => `  ${sha}`));
   }
+  return `${out.join('\n')}\n`;
+}
+
+function formatGuideDetail(guide: GuideDoc): string {
+  const out = [
+    `guide: ${guide.path}  kind: guide`,
+    `children (${guide.children.length}):`,
+    ...guide.children.map((child) => `  ${child}`),
+  ];
   return `${out.join('\n')}\n`;
 }
 
@@ -324,16 +352,24 @@ async function runDocSync(argv: string[]): Promise<RunResult> {
   }
 
   const head = git('rev-parse', '--short', 'HEAD').trim();
-  const docs = await loadSyncDocs();
+  const { docs, guides } = await scanDocs();
   const ranges = computeLag(docs, threshold);
 
   if (docPath !== null) {
+    const guide = guides.find((item) => item.path === docPath);
+    if (guide !== undefined) {
+      if (json) {
+        const payload = { head, threshold, guide };
+        return { exitCode: 0, stdout: `${JSON.stringify(payload, null, 2)}\n`, stderr: '' };
+      }
+      return { exitCode: 0, stdout: formatGuideDetail(guide), stderr: '' };
+    }
     const doc = docs.find((item) => item.path === docPath);
     if (doc === undefined) {
       return {
         exitCode: 2,
         stdout: '',
-        stderr: `--doc 不在需同步扫描集（current/advisory）: ${docPath}\n`,
+        stderr: `--doc 不在扫描集（current/advisory/guide）: ${docPath}\n`,
       };
     }
     let range: RangeData | null = null;
@@ -358,15 +394,16 @@ async function runDocSync(argv: string[]): Promise<RunResult> {
   const allMatchers = [...globCache.values()].filter((m): m is Bun.Glob => m !== null);
   const uncovered = codeFiles.filter((file) => !matchesAny(allMatchers, file));
   const orphans = docs.filter((doc) => !tracked.some((file) => matchesAny(doc.matchers, file)));
-  const indexGaps = await findIndexGaps();
+  const treeGaps = findTreeGaps(docs, guides);
 
   if (json) {
     const payload = {
       head,
       threshold,
       docs: docs.map(docFields),
+      guides,
       coverage: uncovered,
-      indexGaps,
+      treeGaps,
       orphans: orphans.map((doc) => doc.path),
     };
     return { exitCode: 0, stdout: `${JSON.stringify(payload, null, 2)}\n`, stderr: '' };
@@ -381,10 +418,8 @@ async function runDocSync(argv: string[]): Promise<RunResult> {
     all ? '== coverage gaps (all files) ==' : '== coverage gaps (grouped) ==',
     ...formatCoverage(uncovered, all),
     '',
-    '== INDEX missing rows ==',
-    ...(indexGaps.length === 0
-      ? ['(none)']
-      : indexGaps.map((gap) => `${gap.index.replace(/^docs\//, '')}: ${gap.missing.join(', ')}`)),
+    '== tree gaps ==',
+    ...formatTreeGaps(treeGaps),
     '',
     '== orphan candidates ==',
     ...(orphans.length === 0 ? ['(none)'] : orphans.map((doc) => doc.display)),

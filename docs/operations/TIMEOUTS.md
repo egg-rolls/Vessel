@@ -2,7 +2,7 @@
 title: 超时不可信（bun 1.3.9 的 AbortSignal.timeout 可能不触发）
 kind: current
 triggers: [超时, timeout, 挂起, 卡住, 不动, 假超时, AbortSignal.timeout, AbortController, setDeadline, 不报错, hung, deadlock, 60s, 探针, 安装卡住]
-paths: [docs/operations/TIMEOUTS.md, packages/core/src/timeout.ts]
+paths: [docs/operations/TIMEOUTS.md, packages/core/src/timeout.ts, src/config-write-apply.ts, src/dev-command.ts]
 ---
 
 # 超时不可信：`AbortSignal.timeout()` 在 bun 1.3.9 上可能根本不触发

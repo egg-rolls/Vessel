@@ -2,7 +2,7 @@
 title: 消息与运行时 API
 kind: current
 triggers: [RunOptions, messages, injection, agent runtime, context, at-path, skills, 运行时接口, 消息组装, 注入, 运行选项, 技能, 附件路径]
-paths: [packages/core/src/runtime/**, packages/core/src/types/**]
+paths: [packages/core/src/runtime/runtime.ts, packages/core/src/runtime/index.ts, packages/core/src/runtime/tool-result-gate.ts, packages/core/src/types/run.ts, packages/core/src/types/context.ts, packages/core/src/types/plugin.ts, packages/core/src/types/provider.ts, packages/core/src/types/event.ts, packages/core/src/types/lease.ts, packages/core/src/types/limits.ts, packages/core/src/types/run-journal.ts, packages/core/src/types/run-record-store.ts, packages/core/src/types/session.ts, packages/core/src/types/vision.ts, packages/core/src/types/env-cadence.ts, src/model-registry-wiring.ts, src/reasoning.ts, src/vision-settings.ts]
 ---
 
 # 消息与运行时 API

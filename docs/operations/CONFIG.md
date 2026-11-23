@@ -2,7 +2,7 @@
 title: 配置与密钥
 kind: current
 triggers: [配置, 配置项, 配置文件, 配置优先级, 密钥, 令牌, 环境变量, 用户级配置, 项目级配置, 默认值, vessel.yaml, 数据目录, 覆盖, secrets]
-paths: [docs/operations/CONFIG.md]
+paths: [packages/config/**, src/config-command.ts, src/token-command.ts, src/token-derive.ts, src/agent-command.ts, src/agent-inbox-command.ts, src/attention-client.ts, src/attention-nodes.ts, src/config-error-format.ts, src/doctor-command.ts, src/errors-command.ts, src/gateway-config-control.ts, src/gateway-reload-wiring.ts, src/hot-apply-appliers.ts, src/hot-apply-assembly.ts, src/interactions-dir.ts, src/logs-command.ts, src/port-in-use.ts, src/prune-command.ts, src/prune-wiring.ts, src/session-lock.ts, src/session-lock-runtime.ts, src/ui-settings.ts, src/usage-pricing.ts]
 ---
 
 # 配置与密钥

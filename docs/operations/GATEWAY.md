@@ -2,7 +2,7 @@
 title: Gateway 运维：单点启动、节点独立运行与停止
 kind: current
 triggers: [gateway, 运维, operations, 单点启动, node 独立启动, node start, daemon, systemd, launchd, schtasks, 计划任务, stop, keep-nodes, 整体关闭, 端口占用, 句柄继承, readiness, 20s, adopt, 缺席, 诊断, 日志, 时间线修复, timeline.idx, 索引重建, 中段损坏]
-paths: [src/gateway/**, src/gateway-command.ts, docs/architecture/gateway-lifecycle.md]
+paths: [src/gateway/**, src/gateway-command.ts, docs/architecture/gateway-lifecycle.md, src/gateway-nodes-command.ts, src/shutdown-sequence.ts]
 ---
 
 # Gateway 运维：单点启动、节点独立运行与停止

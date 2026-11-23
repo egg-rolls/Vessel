@@ -2,7 +2,7 @@
 title: 运维日志口径（一件事只有一种说法）
 kind: current
 triggers: [日志, log, 日志一致性, web.build, 构建, 构建日志, build.json, gateway status, 看门狗, supervisor, hub, console.log, logEvent, 事件行, key=value, 日志级别, 颜色, 降噪, log-hub]
-paths: [src/web-dist.ts, src/gateway-command.ts, src/cli.ts, src/logging.ts, packages/core/src/log-hub.ts, packages/core/src/log-format.ts, packages/serve/src/log-event.ts, packages/serve/src/platform/**, packages/serve/src/gateway/**]
+paths: [src/web-dist.ts, src/gateway-command.ts, src/cli.ts, src/logging.ts, packages/core/src/log-hub.ts, packages/core/src/log-format.ts, packages/serve/src/log-event.ts, packages/serve/src/platform/proxy.ts, packages/serve/src/platform/proxy-config.ts, packages/serve/src/platform/proxy-ws.ts, packages/serve/src/platform/server.ts, packages/serve/src/gateway.ts, src/provider-factory.ts]
 ---
 
 # 运维日志口径：一件事只有一种说法
