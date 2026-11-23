@@ -5,6 +5,7 @@ import { t } from '../../i18n';
 import type { AttachBrowseClient } from './AttachDialog';
 import { Composer } from './Composer';
 import type { ComposerContextUsage } from './ComposerChrome';
+import type { MemberModelSwitchProps } from './MemberModelSwitch';
 import { AskPrompt, PermissionPrompt, type PromptQueueChip } from './PromptSlots';
 import type { PendingQueueItem } from './pending-permissions';
 
@@ -64,6 +65,7 @@ export function ComposerSlot({
   onAddRef,
   client,
   contextUsage,
+  memberModel,
   pendingFetch,
   onRetryPendingFetch,
 }: {
@@ -94,6 +96,8 @@ export function ComposerSlot({
   client?: AttachBrowseClient;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
   contextUsage?: ComposerContextUsage;
+  /** 会话归属成员的模型切换入口；透传给 Composer 工具栏（权限 / ask 卡替换输入框时不显示）。 */
+  memberModel?: MemberModelSwitchProps;
   /** `interactions.list` 本轮状态（0.59）：failed ⇒ 这里出一条可见提示。 */
   pendingFetch?: PendingFetchState;
   /** 重新拉 pending（提示条上的「重新拉取」）。 */
@@ -152,6 +156,7 @@ export function ComposerSlot({
         onAddRef={onAddRef}
         client={client}
         contextUsage={contextUsage}
+        memberModel={memberModel}
       />
     );
 

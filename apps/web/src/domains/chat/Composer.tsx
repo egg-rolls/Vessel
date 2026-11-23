@@ -15,6 +15,7 @@ import {
   refIndexForId,
   refsToAttachments,
 } from './ComposerChrome';
+import { MemberModelSwitch, type MemberModelSwitchProps } from './MemberModelSwitch';
 
 /**
  * 会话输入框卡片：卡片 > 引用区 > 字段容器 > (textarea + 工具栏)。
@@ -44,6 +45,7 @@ export function Composer({
   onAddRef,
   client,
   contextUsage,
+  memberModel,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -78,6 +80,11 @@ export function Composer({
   client?: AttachBrowseClient;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
   contextUsage?: ComposerContextUsage;
+  /**
+   * 会话归属成员的模型切换入口（工具栏紧凑 pill，model-registry P2）。
+   * 缺省（会话无归属成员 / 草稿态）不渲染；数据由 ChatView 从选中会话喂入。
+   */
+  memberModel?: MemberModelSwitchProps;
 }) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const mountedRef = useRef(true);
@@ -169,6 +176,7 @@ export function Composer({
         <ComposerField
           contextUsage={contextUsage}
           attach={attach}
+          slot={memberModel !== undefined ? <MemberModelSwitch {...memberModel} /> : undefined}
           primary={
             !hasToken || !connected ? (
               <Button variant="primary" onClick={onOpenConnection}>

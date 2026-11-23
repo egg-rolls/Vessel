@@ -600,6 +600,17 @@ export function ChatView({
             onAddRef={submitApi.addRef}
             client={client}
             contextUsage={transcriptApi.contextUsage}
+            memberModel={
+              // 成员模型切换入口（model-registry P2）：会话带归属成员才显示；
+              // 当前模型读 system_context.model（这具 body 最后看到的），不是 pin。
+              sessionsApi.selectedSession?.agent
+                ? {
+                    agentId: sessionsApi.selectedSession.agent.id,
+                    agentName: sessionsApi.selectedSession.agent.name,
+                    currentModel: sessionsApi.sessionDetail?.system_context?.model,
+                  }
+                : undefined
+            }
             pendingFetch={pendingFetch}
             onRetryPendingFetch={() => {
               void hydrateInteractions();

@@ -6,8 +6,9 @@
  * 机制在会话追加一条环境信息卡（scope=model，只一次）。前端不造「立即生效」假象，
  * 文案写明生效点。空 = 不修改（wire 拒空串 model；unpin 属另行批准的语义变更，本期不做）。
  *
- * 入口挂在 SessionHeader 标题行：会话带归属成员（`session.agent`）才显示；
- * chip「当前模型」读 `sessions.get.system_context.model`（这具 body 最后看到的模型）。
+ * 入口挂在会话输入框工具栏（`Composer` → `ComposerField` 扩展槽）：会话带归属成员
+ * （`session.agent`）才显示；紧凑 pill 显示当前模型，读 `sessions.get.system_context.model`
+ * （这具 body 最后看到的模型）。pill 窄宽（max-w-36）+ 截断，完整模型名进 Tooltip。
  * 打开弹窗时经 `agents.get` 读显式 pin（model-registry A+B 用户批准，只读 DTO），
  * 有 pin 则预填选择器并展示「当前固定」；读失败诚实降级（不显示 pin、不预填）。
  */
@@ -16,22 +17,33 @@ import { ModalShell } from '../../components/Modal';
 import { ModelPicker } from '../../components/ModelPicker';
 import { useToast } from '../../components/ToastProvider';
 import { Tooltip } from '../../components/Tooltip';
-import { Button, Field } from '../../components/ui';
+import { Button, cn, Field, Icon } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
 import { t, useLocale } from '../../i18n';
+import { composerQuietIconTone } from './composer-controls';
 import { errorMessage } from './errors';
 
-export function MemberModelSwitch({
-  agentId,
-  agentName,
-  currentModel,
-}: {
+export interface MemberModelSwitchProps {
   agentId: string;
   agentName?: string;
   /** 这具 body 最后看到的模型（system_context.model）；缺省 = 未知，不显示假值。 */
   currentModel?: string;
-}) {
+}
+
+/**
+ * 工具栏紧凑 pill（文本控件）：与回形针 / 发送键同族 —— 同一个 --control-h 高度、
+ * rounded-full、--surface-sunken 底、--line-strong 描边，色调复用次要动作 quiet 档
+ * （静止 --muted、hover --ink、禁用 --faint 且形状不塌）。不是正圆所以不套
+ * composerIconControlClass（那是 32px 方盒），只共享高度 / 底色 / 描边 token。
+ * 宽度收窄到 max-w-36，模型名超长由内部 span 截断（ellipsis）。
+ */
+const memberModelPillClass = cn(
+  'h-control max-w-36 flex-none gap-1 rounded-full border border-line-strong bg-sunken px-2.5 py-0 text-xs disabled:opacity-100',
+  composerQuietIconTone,
+);
+
+export function MemberModelSwitch({ agentId, agentName, currentModel }: MemberModelSwitchProps) {
   useLocale();
   const toast = useToast();
   const { client, hasToken, connectionState } = useConnection();
@@ -46,6 +58,11 @@ export function MemberModelSwitch({
   const name = agentName?.trim() || agentId;
   const canWrite = hasToken && connectionState === 'open';
   const knownModel = currentModel !== undefined && currentModel !== '' ? currentModel : undefined;
+  // Tooltip / 无障碍名：动作说明 + 完整模型名（pill 内截断，悬浮看全名）。
+  const label =
+    knownModel !== undefined
+      ? `${t('chat.memberModel.tooltip')} · ${knownModel}`
+      : t('chat.memberModel.tooltip');
 
   const openModal = () => {
     const seq = ++openSeq.current;
@@ -85,18 +102,20 @@ export function MemberModelSwitch({
 
   return (
     <>
-      <Tooltip label={t('chat.memberModel.tooltip')}>
+      <Tooltip label={label}>
         <Button
-          variant="chip"
-          size="small"
+          variant="plain"
           disabled={!canWrite}
-          aria-label={t('chat.memberModel.tooltip')}
+          aria-label={label}
+          aria-haspopup="dialog"
+          aria-expanded={open}
           onClick={openModal}
+          className={memberModelPillClass}
         >
-          {t('chat.memberModel.button')}
-          {knownModel !== undefined && (
-            <span className="max-w-40 truncate font-mono">· {knownModel}</span>
-          )}
+          <span className="min-w-0 truncate font-mono">
+            {knownModel ?? t('chat.memberModel.button')}
+          </span>
+          <Icon name="chevron" size={12} className="rotate-90 text-faint" />
         </Button>
       </Tooltip>
       {open && (
