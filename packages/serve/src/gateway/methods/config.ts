@@ -455,14 +455,24 @@ export interface PluginListEntry extends PluginListMetadata {
   contributions?: PluginRenderContributions;
 }
 
-/** 合并 plugins.list 条目、E1 贡献与 E10 元数据；`plugin.changed` 也用它。 */
+/**
+ * 合并 plugins.list 条目、E1 贡献与 E10 元数据；`plugin.changed` 也用它。
+ * 按 name 去重（首见优先）：基础行可能来自装配层（in-process 登记行）与
+ * manager.statuses()（双轨后也含 in-process）两处，单视图不得出现同名双份。
+ */
 export function mergePluginList(
   plugins: Array<{ name: string; enabled: boolean }>,
   contributions: Record<string, PluginRenderContributions> | undefined,
   metadata: Record<string, PluginListMetadata> | undefined,
 ): PluginListEntry[] {
-  if (contributions === undefined && metadata === undefined) return plugins;
-  return plugins.map((plugin) => {
+  const seen = new Set<string>();
+  const unique = plugins.filter((plugin) => {
+    if (seen.has(plugin.name)) return false;
+    seen.add(plugin.name);
+    return true;
+  });
+  if (contributions === undefined && metadata === undefined) return unique;
+  return unique.map((plugin) => {
     const extraMeta = metadata?.[plugin.name];
     const base =
       extraMeta !== undefined ? { ...plugin, ...extraMeta } : (plugin as PluginListEntry);

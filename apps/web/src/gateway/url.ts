@@ -95,6 +95,36 @@ export function resolveInitialGatewayUrl(
   return { ok: true, value: '' };
 }
 
+/**
+ * base 归一化单实现（S4）：trim + 去尾部斜杠。base 可以是纯 origin
+ * （直连 `http://node:port`），也可以带路径（平台代理 `<platform>/nodes/<id>`）。
+ * RPC（ProtocolClient.baseUrl）与插件资产 URL（pluginFrameUrl /
+ * pluginEmbedAssetUrl）共用，避免两套归一化各自漂移。
+ */
+export function normalizeBaseUrl(raw: string): string {
+  return raw.trim().replace(/\/+$/, '');
+}
+
+/**
+ * 页面同源 origin；结构化读 `globalThis.location`（不直接引用 `window`，
+ * 根 tsconfig 无 DOM lib，Node 侧探针也要能编过）。拿不到 → 空串，
+ * 由调用方决定回落语义（RPC 回落 http://127.0.0.1；资产 URL 返回 null）。
+ */
+export function pageOrigin(): string {
+  const location = (globalThis as { location?: { origin?: string } }).location;
+  return typeof location?.origin === 'string' && location.origin !== '' ? location.origin : '';
+}
+
+/**
+ * base + 根相对 path 拼接单实现（S4）：**字符串拼接，不是
+ * `new URL(path, base)`** —— 代理模式 base 带路径（`/nodes/<id>`），
+ * URL 规范的根绝对路径会替换 base 整个路径 → 代理前缀丢失 → 平台根 404。
+ * path 必须以 `/` 开头（调用方保证）。
+ */
+export function joinBaseUrl(base: string, path: string): string {
+  return `${normalizeBaseUrl(base)}${path}`;
+}
+
 /** http(s) origin → WS base（空串保持空串，交给同源推导）。 */
 export function toWebSocketBase(url: string): string {
   if (url === '') return '';

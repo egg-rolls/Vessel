@@ -155,6 +155,20 @@ interface Entry {
   embedState?: { trust: PluginUiTrust; hash: string };
 }
 
+/**
+ * in-process 能力插件登记项（双轨中的另一轨）。
+ * 没有 child / status 维度：登记即激活，与进程同寿命；
+ * handler 留存以支持 disable → enable 的 RPC 重注册。
+ */
+interface InProcessRecord {
+  descriptor: PluginDescriptor;
+  enabled: boolean;
+  /** 插件自己的 `Plugin.rpc`（传输无关）；未声明 contributes.rpc 时缺省。 */
+  handler?: PluginRpcHandler;
+  /** plugin-embed 契约 §3：登记时计算的信任态（与 child 同一算法）。 */
+  embedState?: { trust: PluginUiTrust; hash: string };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -705,14 +719,17 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
 
   private readonly entries = new Map<string, Entry>();
   /**
-   * model-registry D3：已登记的 in-process 能力插件（descriptor + enabled）。
+   * model-registry D3：已登记的 in-process 能力插件。
    * 不进 `entries`：reload diff / 懒激活 spawn / 重启上限都是 child 语义；
    * in-process 与进程同寿命，RPC 注销由 stopAll 的 rpc.clear() 覆盖。
+   *
+   * 双轨口径（S8）：凡「面向插件整体」的读面（statuses / status /
+   * contributionsFor / contributionsSnapshot / staticMounts / ensureActive /
+   * enable / disable / activate）必须同时遍历 entries 与本 map；
+   * 凡「child 机制」的面（spawn / 重启 / 事件管道 / 动态 HTTP 代理 / WS 代理）
+   * 只作用于 entries，见各方法注释。
    */
-  private readonly inProcess = new Map<
-    string,
-    { descriptor: PluginDescriptor; enabled: boolean }
-  >();
+  private readonly inProcess = new Map<string, InProcessRecord>();
   private readonly dataDir: string;
   private readonly logger: PluginLogger;
   private readonly now: () => number;
@@ -845,8 +862,19 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     this.rebuildHttpRoutes();
   }
 
-  /** 按需激活（activationEvents 命中后由 loader 调用）；settings 单份。 */
+  /**
+   * 按需激活（activationEvents 命中后由 loader 调用）；settings 单份。
+   * 双轨：in-process 登记即激活，enabled no-op（settings 在 install 时已给定，
+   * 这里不再下发）；disabled 抛同款契约错误。child 走 spawn。
+   */
   async activate(id: string, options: { settings?: Record<string, unknown> } = {}): Promise<void> {
+    const inProcessRecord = this.inProcess.get(id);
+    if (inProcessRecord !== undefined) {
+      if (!inProcessRecord.enabled) {
+        throw pluginError('plugin_activation_failed', `Plugin ${id} is disabled.`, { id });
+      }
+      return;
+    }
     const entry = this.requireEntry(id);
     if (!entry.enabled) {
       throw pluginError('plugin_activation_failed', `Plugin ${id} is disabled.`, { id });
@@ -902,6 +930,12 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
    * 原先 active 的立即重新激活；删除 → deactivate、注销 RPC / 静态挂载、删条目。
    * 单个 plugin 的失败只进 `errors[]`，不抛出、不影响其它 plugin。
    * 不扫描目录 / 不读 config —— discovery 由 N-loader 负责。
+   *
+   * child-only（S8 边界）：diff 只作用于 child entries。in-process 登记由装配层
+   * 负责（registerInProcess），不参与热重载（变化 → 装配层报 restart_required）；
+   * 删除循环不会误删 in-process。若 reload 列表混入已登记的 in-process id，
+   * fail-closed 报 plugin_id_conflict，绝不建影子 child 条目（否则贡献面 /
+   * 静态挂载会出现同 id 双份）。
    */
   async reload(descriptors: readonly PluginDescriptor[]): Promise<PluginReloadResult> {
     const errors: PluginReloadError[] = [];
@@ -957,6 +991,15 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     for (const [id, descriptor] of normalized) {
       const existing = this.entries.get(id);
       if (existing === undefined) {
+        // in-process 已登记的 id 不得再建 child 条目（影子双注册）；fail-closed。
+        if (this.inProcess.has(id)) {
+          errors.push({
+            id,
+            code: 'plugin_id_conflict',
+            message: `Plugin already registered in-process: ${id}`,
+          });
+          continue;
+        }
         const entry = this.makeEntry(descriptor);
         this.entries.set(id, entry);
         this.registerRpc(entry);
@@ -1001,14 +1044,20 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     // 路由表在每次 reload 后重建；冲突时整体 fail-closed。
     this.rebuildHttpRoutes();
 
+    // active 是「当前活跃插件」单视图：child active + enabled in-process（登记即激活）。
+    const activeIds = [
+      ...[...this.entries.values()]
+        .filter((entry) => entry.status === 'active')
+        .map((entry) => entry.descriptor.id),
+      ...[...this.inProcess.values()]
+        .filter((record) => record.enabled)
+        .map((record) => record.descriptor.id),
+    ];
     const result: PluginReloadResult = {
       added,
       removed,
       changed,
-      active: [...this.entries.values()]
-        .filter((entry) => entry.status === 'active')
-        .map((entry) => entry.descriptor.id)
-        .sort(),
+      active: activeIds.sort(),
       errors,
     };
     try {
@@ -1049,7 +1098,11 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     return { plugins };
   }
 
-  /** 停用但保持 enabled；RPC 定义保留，下次访问会再次懒激活。 */
+  /**
+   * 停用但保持 enabled；RPC 定义保留，下次访问会再次懒激活。
+   * child-only 机制：in-process 与进程同寿命，没有可停的子进程 —— no-op
+   * （卸载模块需要重启，装配层以 restart_required 表达）。
+   */
   async deactivate(id: string): Promise<void> {
     const entry = this.entries.get(id);
     if (entry === undefined) return;
@@ -1069,8 +1122,19 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     this.publishState(entry);
   }
 
-  /** 禁用：停止子进程、取消订阅与 RPC，下次启动不加载。 */
+  /**
+   * 禁用：停止子进程、取消订阅与 RPC，下次启动不加载。
+   * 双轨：in-process 无子进程可停，只翻 enabled + 注销 RPC（静态挂载 /
+   * 贡献面 / ensureActive 随 enabled 立即收口）；handler 留存供 enable 恢复。
+   */
   async disable(id: string): Promise<void> {
+    const inProcessRecord = this.inProcess.get(id);
+    if (inProcessRecord !== undefined) {
+      inProcessRecord.enabled = false;
+      this.rpc.unregister(id);
+      this.publishInProcessState(inProcessRecord);
+      return;
+    }
     const entry = this.requireEntry(id);
     entry.enabled = false;
     await this.deactivate(id);
@@ -1079,8 +1143,18 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     this.rebuildHttpRoutes();
   }
 
-  /** 启用但保持懒激活。 */
+  /**
+   * 启用但保持懒激活。双轨：in-process 登记即激活，翻 enabled + 重注册 RPC；
+   * child 恢复 inactive 等首次访问 spawn。
+   */
   enable(id: string): void {
+    const inProcessRecord = this.inProcess.get(id);
+    if (inProcessRecord !== undefined) {
+      inProcessRecord.enabled = true;
+      this.registerInProcessRpc(inProcessRecord);
+      this.publishInProcessState(inProcessRecord);
+      return;
+    }
     const entry = this.requireEntry(id);
     if (entry.status === 'invalid') return;
     entry.enabled = true;
@@ -1092,7 +1166,11 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     this.publishState(entry);
   }
 
-  /** 注入 / 替换事件源；active plugin 重新订阅。 */
+  /**
+   * 注入 / 替换事件源；active plugin 重新订阅。
+   * child-only 机制：事件经 `plugin.event` NDJSON 管道发给子进程；
+   * in-process 插件的事件面由 core 运行时装配接线，不经这里。
+   */
   attachEventSource(source: PluginEventSource): void {
     this.eventSource = source;
     for (const entry of this.entries.values()) {
@@ -1108,6 +1186,12 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
    * 与 child 共用同一个 PluginRpcRegistry / canonical 名 / DTO 校验；handler 是
    * 插件自己的 `Plugin.rpc`（传输无关），不经子进程 dispatch。声明了
    * contributes.rpc 却没有 handler 时 fail-closed，不产生半注册。
+   *
+   * 机制边界（S8）：动态 HTTP 面（contributes.http）是 child-only —— 代理目标
+   * 是子进程自报的 loopback endpoint，in-process 没有这个机制。声明了 http
+   * 的 in-process 插件在这里 fail-closed 拒绝，而不是登记后静默 404。
+   * 事件管道（attachEventSource → child.notifyEvent）同为 child-only；
+   * in-process 插件的事件面由 core 运行时装配直接接线，不经本 manager。
    */
   registerInProcess(descriptor: PluginDescriptor, handler?: PluginRpcHandler): void {
     const validated = validateDescriptor(
@@ -1119,19 +1203,40 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     if (this.entries.has(id) || this.inProcess.has(id)) {
       throw pluginError('plugin_id_conflict', `Plugin already registered: ${id}`, { id });
     }
-    const enabled = validated.enabled ?? true;
-    const methods = validated.contributes?.rpc ?? [];
-    if (enabled && methods.length > 0) {
-      if (handler === undefined) {
-        throw pluginError(
-          'plugin_manifest_invalid',
-          `In-process plugin "${id}" declares contributes.rpc but provides no rpc handler.`,
-          { id },
-        );
-      }
-      this.rpc.register(id, methods, handler);
+    if ((validated.contributes?.http ?? []).length > 0) {
+      throw pluginError(
+        'plugin_manifest_invalid',
+        `In-process plugin "${id}" cannot declare contributes.http: dynamic HTTP requires a child process endpoint.`,
+        { id },
+      );
     }
-    this.inProcess.set(id, { descriptor: validated, enabled });
+    const enabled = validated.enabled ?? true;
+    const record: InProcessRecord = {
+      descriptor: validated,
+      enabled,
+      ...(handler !== undefined ? { handler } : {}),
+    };
+    // plugin-embed 契约 §3：与 child 同一算法计算 trust + hash，
+    // plugins.list 元数据（ui_trust / ui_bundle_hash / ui_embed）双轨同口径。
+    const embedState = this.embedStateFor(validated);
+    if (embedState !== undefined) record.embedState = embedState;
+    if (enabled) this.registerInProcessRpc(record);
+    this.inProcess.set(id, record);
+  }
+
+  /** in-process RPC 注册（enable / 登记共用）；未声明 rpc → no-op，声明了却无 handler → fail-closed。 */
+  private registerInProcessRpc(record: InProcessRecord): void {
+    const id = record.descriptor.id;
+    const methods = record.descriptor.contributes?.rpc ?? [];
+    if (methods.length === 0 || this.rpc.hasPlugin(id)) return;
+    if (record.handler === undefined) {
+      throw pluginError(
+        'plugin_manifest_invalid',
+        `In-process plugin "${id}" declares contributes.rpc but provides no rpc handler.`,
+        { id },
+      );
+    }
+    this.rpc.register(id, methods, record.handler);
   }
 
   /** id → 渲染字段（单视图）；只含 enabled 的插件（child + 已登记的 in-process）。 */
@@ -1191,16 +1296,25 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     return mounts;
   }
 
-  /** 状态列表（`vessel plugin list`）。 */
+  /**
+   * 状态列表（`vessel plugin list` / plugins.list E10 元数据）。
+   * 双轨：child entries + 已登记的 in-process（mode: 'in-process'，
+   * 登记即激活 → enabled ? 'active' : 'disabled'）。漏掉 in-process 会让
+   * plugins.list 缺 version/mode/status/ui_*，web embed 档直接回落 iframe。
+   */
   statuses(): PluginStatusEntry[] {
-    return [...this.entries.values()]
-      .map((entry) => this.statusOf(entry))
-      .sort((a, b) => a.id.localeCompare(b.id));
+    return [
+      ...[...this.entries.values()].map((entry) => this.statusOf(entry)),
+      ...[...this.inProcess.values()].map((record) => this.inProcessStatusOf(record)),
+    ].sort((a, b) => a.id.localeCompare(b.id));
   }
 
+  /** 单插件状态；双轨（child + in-process），未知 id → undefined。 */
   status(id: string): PluginStatusEntry | undefined {
     const entry = this.entries.get(id);
-    return entry !== undefined ? this.statusOf(entry) : undefined;
+    if (entry !== undefined) return this.statusOf(entry);
+    const record = this.inProcess.get(id);
+    return record !== undefined ? this.inProcessStatusOf(record) : undefined;
   }
 
   /** 0.48 M1：插件 HTTP 路由匹配；冲突 / 无路由 → `none`。 */
@@ -1218,7 +1332,11 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     return this.httpConflicts.some((conflict) => conflict.scope === 'surface');
   }
 
-  /** 本次 spawn 的 endpoint + token；仅 active 时可用。 */
+  /**
+   * 本次 spawn 的 endpoint + token；仅 active 时可用。
+   * child-only 机制：动态 HTTP 代理目标是子进程 loopback endpoint；
+   * in-process 无此面（registerInProcess 拒绝 contributes.http）。
+   */
   httpEndpointFor(id: string): PluginHttpTarget | undefined {
     const entry = this.entries.get(id);
     if (entry === undefined || entry.status !== 'active') return undefined;
@@ -1228,6 +1346,8 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
   /**
    * 0.48 M1：解析插件 HTTP 目标。首次访问按需激活（与页面 / RPC 一致）。
    * disabled → 404；invalid / unhealthy / 无 endpoint → 503；只有 active → ready。
+   * child-only 机制（S8 边界）：只查 child entries —— 动态 HTTP 需要子进程
+   * endpoint；in-process 的 UI 走 staticMounts 静态面，不进这里。
    */
   async resolve(pluginId: string): Promise<PluginHttpResolution> {
     const entry = this.entries.get(pluginId);
@@ -1247,7 +1367,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     return { kind: 'ready', target };
   }
 
-  /** 被 deny 的宿主 API 次数（探针 / 诊断）。 */
+  /** 被 deny 的宿主 API 次数（探针 / 诊断）。child-only：deny 发生在子进程 RPC 面。 */
   denialsFor(id: string): number {
     return this.entries.get(id)?.denials ?? 0;
   }
@@ -1258,7 +1378,11 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     return stats !== undefined ? { ...stats } : undefined;
   }
 
-  /** 幂等关闭全部子进程与订阅。 */
+  /**
+   * 幂等关闭全部子进程与订阅。
+   * in-process 无子进程 / 订阅可关：其 RPC 由末尾 rpc.clear() 统一注销；
+   * 登记记录保留（本方法是终态关闭，之后不应再服务请求）。
+   */
   async stopAll(): Promise<void> {
     const tasks: Array<Promise<void>> = [];
     for (const entry of this.entries.values()) {
@@ -1306,6 +1430,8 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
    * 0.48 M1/M4：按当前 descriptor + `expose` 重建 effective HTTP 路由表。
    * - invalid / disabled 插件不进入；
    * - plugin 级冲突只排除该插件，surface 级冲突整体 fail-closed。
+   * child-only 机制（S8 边界）：路由代理到子进程 endpoint；in-process 声明
+   * contributes.http 已在 registerInProcess fail-closed，不会出现在这里。
    */
   private rebuildHttpRoutes(): void {
     // invalid 条目的 descriptor 可能是校验失败后的兜底值（保留原始 http 声明），
@@ -1392,19 +1518,19 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
    * 无 ui.embed / embedRoot 不可读 → 字段缺省（视同无 embed，fail-closed）。
    */
   private refreshEmbedState(entry: Entry): void {
-    const descriptor = entry.descriptor;
+    entry.embedState = this.embedStateFor(entry.descriptor);
+  }
+
+  /** embed trust + hash 单实现（child 与 in-process 共用同一算法 / TOFU 锁）。 */
+  private embedStateFor(
+    descriptor: PluginDescriptor,
+  ): { trust: PluginUiTrust; hash: string } | undefined {
     const embed = descriptor.uiEmbed;
-    if (embed === undefined || descriptor.uiDir === undefined) {
-      entry.embedState = undefined;
-      return;
-    }
+    if (embed === undefined || descriptor.uiDir === undefined) return undefined;
     const embedRoot = resolve(descriptor.uiDir, dirname(embed.entry));
     const hash = computeEmbedHash(embedRoot);
-    if (hash === null) {
-      entry.embedState = undefined;
-      return;
-    }
-    entry.embedState = {
+    if (hash === null) return undefined;
+    return {
       trust: resolveUiTrust(descriptor, hash, this.dataDir, this.logger),
       hash,
     };
@@ -1633,6 +1759,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     this.options.onEventDropped?.(entry.descriptor.id, entry.dropped);
   }
 
+  /** child 条目状态（child-only：restart / dropped / error 都是子进程语义）。 */
   private statusOf(entry: Entry): PluginStatusEntry {
     const now = this.now();
     const restarts = entry.restarts.filter((timestamp) => now - timestamp < this.restartWindowMs);
@@ -1656,10 +1783,35 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     };
   }
 
+  /** in-process 状态（双轨另一轨）：登记即激活，无 restart / dropped 维度。 */
+  private inProcessStatusOf(record: InProcessRecord): PluginStatusEntry {
+    return {
+      id: record.descriptor.id,
+      status: record.enabled ? 'active' : 'disabled',
+      enabled: record.enabled,
+      ...(record.descriptor.version.length > 0 ? { version: record.descriptor.version } : {}),
+      mode: 'in-process',
+      events_dropped: 0,
+      restarts: 0,
+      ...(record.embedState !== undefined && record.descriptor.uiEmbed !== undefined
+        ? {
+            ui_trust: record.embedState.trust,
+            ui_bundle_hash: record.embedState.hash,
+            ui_embed: record.descriptor.uiEmbed,
+          }
+        : {}),
+    };
+  }
+
   private publishState(entry: Entry): void {
     this.options.onStateChange?.(this.statusOf(entry));
   }
 
+  private publishInProcessState(record: InProcessRecord): void {
+    this.options.onStateChange?.(this.inProcessStatusOf(record));
+  }
+
+  /** child-only 查找（S8 边界）：in-process 走 this.inProcess，不经过这里。 */
   private requireEntry(id: string): Entry {
     const entry = this.entries.get(id);
     if (entry === undefined) {

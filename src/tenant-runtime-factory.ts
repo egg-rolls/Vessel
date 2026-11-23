@@ -83,7 +83,7 @@ import {
 } from './observability-wiring';
 import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, withPluginConfig } from './plugin-config';
-import { registerInProcessPlugin } from './plugin-host-assembly';
+import { registerInProcessPluginEntries } from './plugin-host-assembly';
 import { type PluginDescriptor, PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import { createProvider } from './provider-factory';
@@ -1597,26 +1597,16 @@ export async function buildTenantRuntime(
       ownerProfile.model = model;
       if (next !== undefined) registry?.applyConfig(next);
     },
-    registerInProcessPlugins: (manager, pluginConfig) => {
-      const rows: Array<{ name: string; enabled: boolean }> = [];
-      const seen = new Set<string>();
-      for (const entry of [...inProcessCapabilityPlugins, ...(registry?.inProcessPlugins ?? [])]) {
-        // provider 类能力插件（model-registry）由 wiring 收集；显式启用时 selection 的
-        // 显式分支不排除 provider 类，同一插件会再进通用装载名单——两条路各持同一
-        // descriptor/plugin（同 loader 缓存 + ESM 单实例）。按 name 去重只登记一次，
-        // 否则第二次 manager.registerInProcess 抛 plugin_id_conflict，node 启动崩溃。
-        if (seen.has(entry.descriptor.name)) continue;
-        seen.add(entry.descriptor.name);
-        registerInProcessPlugin({
-          manager,
-          descriptor: entry.descriptor,
-          plugin: entry.plugin,
-          config: pluginConfig,
-        });
-        rows.push({ name: entry.descriptor.name, enabled: true });
-      }
-      return rows;
-    },
+    // provider 类能力插件（model-registry）由 wiring 收集；显式启用时 selection 的
+    // 显式分支不排除 provider 类，同一插件会再进通用装载名单——两条路各持同一
+    // descriptor/plugin（同 loader 缓存 + ESM 单实例）。去重单实现在装配层
+    // registerInProcessPluginEntries（按 name 只登记一次，防 plugin_id_conflict 崩溃）。
+    registerInProcessPlugins: (manager, pluginConfig) =>
+      registerInProcessPluginEntries({
+        manager,
+        entries: [...inProcessCapabilityPlugins, ...(registry?.inProcessPlugins ?? [])],
+        config: pluginConfig,
+      }),
     events,
     runtimeEvents: events,
     session,

@@ -7,6 +7,7 @@
 import { t } from '../../i18n';
 import { noteRpcFailure, noteRpcNetworkFailure, noteRpcSuccess } from '../session-invalid';
 import type { GatewayErrorBody, Message, RpcResponseEnvelope } from '../types';
+import { joinBaseUrl } from '../url';
 import { GatewayHttpError, ProtocolClient } from './protocol';
 
 export abstract class RpcClient extends ProtocolClient {
@@ -52,7 +53,8 @@ export abstract class RpcClient extends ProtocolClient {
 
     let res: Response;
     try {
-      res = await fetch(`${this.httpBase()}${path}`, {
+      // S4 单实现：与插件资产 URL 同一 joinBaseUrl（保留代理前缀 /nodes/<id>）。
+      res = await fetch(joinBaseUrl(this.httpBase(), path), {
         ...init,
         headers,
         ...(this.proxyMode ? { credentials: 'same-origin' as const } : {}),
