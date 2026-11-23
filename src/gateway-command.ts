@@ -2223,10 +2223,9 @@ async function startDaemonCommand(
   });
 
   if (result.ok) {
-    // 平台监听只有 http（platform server 不带 TLS）。
-    const url = gatewayBaseUrl(
-      result.record,
-      stateKind === 'node' && context.config.node?.tls !== undefined,
+    // 平台监听只有 http（platform server 不带 TLS）。url 只用于启动消息显示。
+    const url = localhostDisplayUrl(
+      gatewayBaseUrl(result.record, stateKind === 'node' && context.config.node?.tls !== undefined),
     );
     if (result.unconfirmed === true) {
       print(ui.warn(t('gateway.startedUnconfirmed', { pid: result.record.pid })));
@@ -2420,6 +2419,14 @@ function normalizeOriginHost(host: string): string {
 
 function nodeOriginOf(host: string, port: number, tls: boolean): string {
   return `${tls ? 'https' : 'http'}://${normalizeOriginHost(host)}:${port}`;
+}
+
+/**
+ * 仅显示层：启动消息里的回环 host（127.0.0.1 / [::1]）显示为 localhost，方便浏览器
+ * 直接打开；非回环绑定原样保留。不改 gatewayBaseUrl / nodeOriginOf 的连接语义。
+ */
+function localhostDisplayUrl(url: string): string {
+  return url.replace(/^(https?:\/\/)(?:127\.0\.0\.1|\[::1\])(?=[:/?#]|$)/, '$1localhost');
 }
 
 /**
@@ -3268,7 +3275,10 @@ export async function runPlatformGatewayForeground(
       return 1;
     }
 
-    const platformUrl = nodeOriginOf(platformHostname, platformGateway.port, false);
+    // 仅显示（TTY 摘要 + 非 TTY 启动消息）；实际连接仍走 nodeOriginOf / gatewayBaseUrl。
+    const platformUrl = localhostDisplayUrl(
+      nodeOriginOf(platformHostname, platformGateway.port, false),
+    );
     // 0.55 分段启动 phase B：节点/Hub 就绪等待**离开关键路径**——平台已经在监听、
     // `platform.pid` 已写好，这里只是后台收尾：谁先好谁先报，失败只更新那个节点的
     // 状态（`onNodeState` 打日志），绝不回滚平台、也不阻塞「我能接请求」。
