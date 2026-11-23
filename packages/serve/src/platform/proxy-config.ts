@@ -85,6 +85,10 @@ const ALLOWED_RPC_NAMESPACES: ReadonlySet<string> = new Set([
   'metrics',
   'permission',
   'permissions',
+  // 插件数据面 RPC（plugin.<id>.<method>）：embed 契约 §11 承诺代理模式可用，
+  // picker / embed 数据 / iframe 桥都走它（2026-11-23 用户裁决加入）。只加这一个
+  // 命名空间；DENIED_RPC_METHODS 与插件自身的方法白名单仍然生效。
+  'plugin',
   'plugins',
   'runs',
   'sessions',

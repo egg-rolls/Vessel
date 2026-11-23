@@ -67,7 +67,7 @@ export function PluginFrame({
     return () => query.removeEventListener('change', sync);
   }, []);
   const effectiveTheme = resolvedTheme(theme, systemDark);
-  const { client, nodeUrl, eventStore } = useConnection();
+  const { client, nodeUrl, eventStore, mode, platformNodes, selectedNodeId } = useConnection();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [loaded, setLoaded] = useState(false);
@@ -75,18 +75,30 @@ export function PluginFrame({
 
   const contextRun = context?.run;
   const contextSession = context?.session;
+  // iframe 页直连 node origin（plugin-embed 契约 §4，2026-11-23 用户裁决）：
+  // 代理白名单只转发 embed 静态资源（/ui/**），iframe HTML 不经代理；node 静态页
+  // 免鉴权（GET/HEAD 不进鉴权链），frame-src 已含 node origin。平台模式取选中节点
+  // 的 api_url（直连/代理子模式同口径）；legacy 保持 nodeUrl（页面同源 = node）。
+  // embed 模块 URL 不变（PluginEmbed 仍用 nodeUrl，同源才能动态 import）。
+  const frameNodeOrigin = useMemo(() => {
+    if (mode === 'platform') {
+      const apiUrl = platformNodes.find((item) => item.node_id === selectedNodeId)?.api_url ?? '';
+      if (apiUrl.trim() !== '') return apiUrl;
+    }
+    return nodeUrl;
+  }, [mode, platformNodes, selectedNodeId, nodeUrl]);
   // 初始值进 URL；后续主题 / 语言变化只发消息，不重载 iframe。
   const initialLang = useRef(locale);
   const initialTheme = useRef(effectiveTheme);
   const src = useMemo(
     () =>
-      pluginFrameUrl(nodeUrl, pluginId, entry, {
+      pluginFrameUrl(frameNodeOrigin, pluginId, entry, {
         run: contextRun,
         session: contextSession,
         lang: initialLang.current,
         theme: initialTheme.current,
       }),
-    [nodeUrl, pluginId, entry, contextRun, contextSession],
+    [frameNodeOrigin, pluginId, entry, contextRun, contextSession],
   );
 
   const postToFrame = useCallback((message: unknown) => {

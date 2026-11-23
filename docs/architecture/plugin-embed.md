@@ -104,8 +104,12 @@ ui_embed?: { entry: string; css?: string; runtime: { react: string; sdk: string 
     静态优先），不会被转发。
   - 平台根 `/plugins/*` 仍一律 404（isNodeOnlyPath 不变）；server.ts 边界注释更新。
   - 拒绝文案更新：embed 静态已可代理，iframe 页仍请直连 node。
-- **已知限制**：代理模式下 iframe 页（`/nodes/<id>/plugins/<id>/*.html`）仍被白名单拒绝
-  （先于本契约存在）；iframe 回退在代理模式不可用，embed 是代理模式可用路径。
+- **iframe 页（2026-11-23 用户裁决）**：iframe HTML 不经代理（白名单只转发 embed 静态
+  资源，`/nodes/<id>/plugins/<id>/*.html` 仍被拒）；代理模式下 PluginFrame 的 iframe 源
+  取选中节点的 `api_url`（node origin）——node 静态页免鉴权（GET/HEAD 不进鉴权链），
+  frame-src 已含 node origin；桥 RPC 经平台代理（`plugin` 命名空间已入白名单，
+  DENIED_RPC_METHODS 仍生效）。平台根 `/plugins/*` 仍一律 404。embed 模块 URL 不变
+  （仍 `${nodeUrl}/plugins/<id>/ui/<path>`，同源才能动态 import）。
 
 ## 5. 静态缓存（static.ts）
 

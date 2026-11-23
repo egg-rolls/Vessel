@@ -134,9 +134,15 @@ export function NodeProvider({ children }: { children: ReactNode }) {
     return readNodeToken(nodeTokenIdentity(node)) ?? undefined;
   }, []);
 
+  // 当前节点走活连接（与 teamControl 同口径）：代理模式下浏览器没有 node token，
+  // 直连 api_url 必然 401；数据面必须经 GatewayClient（直连 = node origin，
+  // 代理 = <platform>/nodes/<id>）。额外节点才读 sessionStorage 直连。
   const fetchHealth = useCallback(
-    (node: NodeView) => fetchNodeRpc<HealthResponse>(node, 'health.get', {}, tokenFor(node)),
-    [tokenFor],
+    (node: NodeView) =>
+      node.current
+        ? client.getHealth()
+        : fetchNodeRpc<HealthResponse>(node, 'health.get', {}, tokenFor(node)),
+    [tokenFor, client],
   );
 
   // 平台模式 Nodes 页只在当前节点上做 health.get；其它节点的健康来自
@@ -192,8 +198,10 @@ export function NodeProvider({ children }: { children: ReactNode }) {
 
   const fetchAttention = useCallback(
     (node: NodeView, params: NodeAttentionParams = {}) =>
-      fetchNodeAttention(node, params, tokenFor(node)),
-    [tokenFor],
+      node.current
+        ? client.listInteractionsPage(params)
+        : fetchNodeAttention(node, params, tokenFor(node)),
+    [tokenFor, client],
   );
 
   const fetchAllAttention = useCallback(

@@ -16,7 +16,7 @@ paths: [src/plugin-loader.ts, src/plugin-manifest.ts, packages/serve/src/plugin-
 - **体验插件**（experience）：独立子进程，只经换行分隔的 JSON-RPC / DTO 与宿主通信，贡献 pages / commands / settings / rpc / events / panels / toolbar；UI 在独立 origin 的 iframe 中运行。
 - 两者同名 plugin、同一份清单与发现规则；差别只在执行位置与贡献面，不在扩展机制。贡献面由 harness（`packages/serve`、`apps/web`、CLI 装配层）收集，core 不感知。
 - **归属级**：默认 Workspace plugin（一家公司）；Platform plugin 仅服务所有公司的基础设施（Hub / registry / marketplace 后端）。Team 是使用范围，不拥有插件。Workspace 插件独立包与 Workspace=公司数据目录仍未实现（target），见 [topology](topology.md) 的「未实现 / target」表与[插件归属](topology.md#插件归属)。
-- **宿主面（0.49）**：插件 HTTP/WS 只注册在 **Node API**（`serve.port`；拆分模式缺省 8644，legacy `--serve` 仍 8642）。Platform Gateway 不承载、不反代插件动态路由，平台根 `/plugins/*` 一律 404；插件 iframe 走 `nodeUrl`。唯一例外（plugin-embed 契约 §4）：`/nodes/<nodeId>/plugins/<id>/ui/**` 的 **embed 静态资源**经代理白名单仅 GET / HEAD 同源转发（`ui` 首段对 `contributes.http` 保留，动态路由进不来）；iframe 页在代理模式仍被白名单拒绝，embed 是代理模式可用路径。settings 与 catalog 只有单份（不按 tenant 合并）。
+- **宿主面（0.49）**：插件 HTTP/WS 只注册在 **Node API**（`serve.port`；拆分模式缺省 8644，legacy `--serve` 仍 8642）。Platform Gateway 不承载、不反代插件动态路由，平台根 `/plugins/*` 一律 404；插件 iframe 走 node origin（平台模式取选中节点 `api_url`，legacy 即页面同源）。唯一例外（plugin-embed 契约 §4）：`/nodes/<nodeId>/plugins/<id>/ui/**` 的 **embed 静态资源**经代理白名单仅 GET / HEAD 同源转发（`ui` 首段对 `contributes.http` 保留，动态路由进不来）；iframe HTML 不经代理——代理模式 iframe 源直连 node origin（静态页免鉴权，frame-src 已含 node origin），桥 RPC 经代理 `plugin` 命名空间（2026-11-23 用户裁决）。settings 与 catalog 只有单份（不按 tenant 合并）。
 
 ## Manifest（`package.json.vessel`）
 
