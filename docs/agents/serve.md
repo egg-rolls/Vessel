@@ -39,8 +39,8 @@ applies_to: [N, M]
 
 ## Hub 控制面（独立服务）
 
-- Hub 是独立前台进程 `vessel hub start`（`src/hub/**`）；gateway 不启动本地 hub。唯一方向 node → hub：节点出站拨号 `${hub.url}/v1/hub/node-control`，只监听回环；节点侧无 `/v1/hub/control` / `/v1/hub/pair`。保留 `vessel hub join-code` / `vessel hub join`、`POST /v1/hub/join`、`/v1/hub/directory`、`/v1/hub/events`；Hub 只存 node token 的 `sha256`，节点明文进 SecretStore（`hub.allow_file_secrets` 属节点侧）。
-- `auth.exchange|revoke|tokens`、`hub pair` / `hub node add` / `hub token *` / `hub data-token`、`hub.autoStart` 与 `hub.direction: 'hub'` 已删除（只保留 `hub.direction: 'node'`）；ADR-093 的 hub → node 方向已移除，见 [ADR-093 0.49 Errata](../adr/ADR-093-hub-control-plane.md)。细节见 [federation-hub.md](../architecture/federation-hub.md)。
+- Hub 是独立进程 `vessel hub start`（`src/hub/**`）；`gateway start` 缺省自动拉起本地 hub 子进程（`hub.auto_start` 缺省 true；`direction: 'node'` 不启动；已有活实例 adopt；stop 只停本次 gateway spawn 的 hub），见 [federation-hub.md](../architecture/federation-hub.md)。唯一方向 node → hub：节点出站拨号 `${hub.url}/v1/hub/node-control`，只监听回环；节点侧无 `/v1/hub/control` / `/v1/hub/pair`。保留 `vessel hub join-code` / `vessel hub join`、`POST /v1/hub/join`、`/v1/hub/directory`、`/v1/hub/events`；Hub 只存 node token 的 `sha256`，节点明文进 SecretStore（`hub.allow_file_secrets` 属节点侧）。
+- `auth.exchange|revoke|tokens`、`hub pair` / `hub node add` / `hub token *` / `hub data-token` 与 `hub.direction: 'hub'` 已删除（只保留 `hub.direction: 'node'`）；`hub.autoStart` 存在且缺省 true（见上条）。ADR-093 的 hub → node 方向已移除，见 [ADR-093 0.49 Errata](../adr/ADR-093-hub-control-plane.md)。细节见 [federation-hub.md](../architecture/federation-hub.md)。
 
 ## 事件与权限应答
 

@@ -1,8 +1,8 @@
 ---
 title: 工具与权限边界
 kind: current
-triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask, mcp tool, vessel, bridge, guardrail, rpc, 工具, 权限, 黑名单, 白名单, 根目录, 提问, 工具集, 工具名, 命名规则, snake_case, 工具名校验, 别名, 弃用提示, pii_reveal, 控制面, 桥, 元工具]
-paths: [packages/core/src/types/tool.ts, packages/core/src/runtime/tool-name.ts, packages/core/src/runtime/plugin-host.ts, plugins/tools/**, packages/agent/**, src/vessel-meta.ts]
+triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask, mcp tool, vessel, bridge, guardrail, rpc, 工具, 权限, 黑名单, 白名单, 根目录, 提问, 工具集, 工具名, 命名规则, snake_case, 工具名校验, 别名, 弃用提示, pii_reveal, 控制面, 桥, 元工具, engine, pool, tools_engine, child, bridge_deny, transport, 执行位置, 双路]
+paths: [packages/core/src/types/tool.ts, packages/core/src/runtime/tool-name.ts, packages/core/src/runtime/plugin-host.ts, plugins/tools/**, packages/agent/**, src/vessel-meta.ts, src/tools-engine/**]
 ---
 
 # 工具与权限边界
@@ -37,6 +37,14 @@ interface ToolDefinition {
 工具是**自描述对象**：权限判定与超时随工具走，不集中在 runtime 的一张策略表里。core 里**没有 `ToolRegistry` 接口**——唯一的工具注册表是 `PluginHost` / `MemoryPluginHost`。
 
 工具的实际执行统一走 `ToolPipeline`（ADR-058）：`getTool` → ToolCall guardrail → BeforeTool hook → 权限（最终工具与参数）→ handler（timeout + signal）→ ToolResult guardrail → AfterTool hook（仅成功）。`ToolPipelineStages` 可关闭调用方已在外层处理的阶段；`ExecutionUnit`（含 delegate 子 runtime）关闭 guardrail/BeforeTool/AfterTool，只复用 permission / handler / ToolResult。
+
+<a id="engine-exec"></a>
+
+### 工具执行位置：engine 双路（child / pool）
+
+管道的 handler 被装配层就地替换为转发 handler（def 对象身份不变 ⇒ tools[] 快照 / 前缀缓存 / install 回滚不受影响）：白名单 `read` / `edit` / `write` / `bash`（同步）恒走 engine worker（与 host 同一份 basic-tools 包源码）；`bash`（`async:true`）/ `ask` / `recall` / `pii_reveal` / `agent` / `inbox` 是 callback——engine 只回关联 id，host 查 pending 表执行原 handler（at-most-once，零 ctx 序列化）；MCP 工具 exec=worker（连接在 engine 内，per-server 硬亲和）；`subscribe` / `media` / `vessel` 不 wire，留 in-process（`src/tools-engine/wiring.ts`）。权限判定、注册权威（PluginHost）、PII、事件与 WAL 全留 host；执行位置对模型不可见。
+
+传输双路由 `tools_engine.mode` 选择（缺省 `child`）：**child** = 每 node 一个 stdio 子进程（supervisor 重启预算 ≤3 次/10min，预算尽 disabled → 工具 fail-closed `engine_unavailable`，不静默回退 in-process）；**pool** = 显式 opt-in，node 的 PoolTransport 直连 gateway 监督的 detached engine 池（亲和 → 健康 → P2C 三步选择；进程级准入快拒 `engine_busy`，LB 换家重试，无队列）。池需 `gateway.engine_pool.size>0`（0=不建；1=fail-fast；开时 ≥2），双开关缺省关零回归；poolDir = `~/.vessel/engine-pool[-<instance>]`，**不随 `--data-dir` 移动**（`src/bootstrap.ts` / `src/gateway-command.ts`）。结果出口闸仍只在 core：worker 用同一份闸自裁 → 信封 `bounded:true` → host ctx re-mark，loop 不重裁。决策与拓扑细节见 [ADR-106](../adr/ADR-106-engine-pool.md)（accepted）；目标态设计史见 [0.57-tool-host](0.57-tool-host.md)（kind: target，部分被取代）。
 
 <a id="tool-name-rule"></a>
 
@@ -81,11 +89,11 @@ interface ToolDefinition {
 
 ## 工具集：能力工具为什么这么少
 
-默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit` / `write`**（`write` 是建文件 / 整体替换 / 追加，**逐字节落盘、不经 shell**——heredoc 与重定向会把内容交给 shell，反引号与美元括号会被先展开）；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；edit/write 自动订阅所改文件、read 自动订阅所读行范围（line-level），`subscribe:false` 可 opt-out；变更只发短通知（read 订阅可带范围 diff 明细），按需 `inspect`；未订阅不通知）。成员 body 在装配层 attach 收件箱后另有 `inbox`；`ask` 按入口注册。装配层另常驻注册 **`vessel`** 控制面桥（P1 单工具面，见下「vessel 控制面桥」）。`team_*` / `delegate_task` 已删除。
+默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit` / `write`**（`write` 是建文件 / 整体替换 / 追加，**逐字节落盘、不经 shell**——heredoc 与重定向会把内容交给 shell，反引号与美元括号会被先展开）；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；edit/write 自动订阅所改文件、read 自动订阅所读行范围（line-level），`subscribe:false` 可 opt-out 该次调用的自动订阅；订阅变更只发短通知（read 订阅可带范围 diff 明细），按需 `inspect`；未订阅不通知）。成员 body 在装配层 attach 收件箱后另有 `inbox`；`ask` 按入口注册。装配层另常驻注册 **`vessel`** 控制面桥（P1 单工具面，见下「vessel 控制面桥」）。`team_*` / `delegate_task` 已删除。
 
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
-| `subscribe` | 默认注册（`doc-subscription` 插件）；显式 add 或 edit/write/read 自动订阅（AfterTool hook，host 侧，attempt-based；`subscribe:false` opt-out；自动订阅以当前内容为基线，自己刚做的改动不出卡）后，变更只在下个 run 边界发一条短通知（path / id / rev / bytes），模型调用 `subscribe inspect` 才取 diff（首次全文）。read 订阅追踪所读行范围（line-level）：那几行变了，第一个变化条目的卡带范围 diff 明细行（行/字节预算，超限折 inspect 提示）；锚歧义回落整文件 rev。read 引用随 placeholder 清除释放（引用归零才过期；edit/manual 订阅永不自过期；passthrough 档不动）。正文不自动进历史。只接受具体文件，无 glob / 目录 / 自动发现；换任务用 remove 清旧订阅 |
+| `subscribe` | 默认注册（`doc-subscription` 插件）；订阅状态在插件磁盘 JSON（`<stateDir>/sessions/<session_id>.json`），不在 core runtime。显式 add 或 edit/write/read 自动订阅（AfterTool hook，host 侧，attempt-based，与 handler 在哪执行无关；`subscribe:false` = 该调用完全退出自动订阅；自动订阅以当前内容为基线，自己刚做的改动不出卡）。变更感知 = host 侧 BeforeLlm polling（缺省每 run 首次 BeforeLlm 查一次；`envGranularity.files='request'` 时每请求），**不是 engine 实时推送**（engine→host 通知只有 impl.swapped / health 两类）；变化追加一条短通知（path / id / rev / bytes），模型调用 `subscribe inspect` 才取 diff（首次全文）——短通知 + 按需 inspect 是所有订阅的默认形态，与 opt-out 无关。read 订阅追踪所读行范围（line-level）：那几行变了，第一个变化条目的卡带范围 diff 明细行（行/字节预算，超限折 inspect 提示）；锚歧义回落整文件 rev。read 引用随 placeholder 清除释放（引用归零才过期；edit/manual 订阅永不自过期；passthrough 档不动；生命周期读 file backend 会话壳 JSON，sqlite 跳过）。正文不自动进历史。只接受具体文件，无 glob / 目录 / 自动发现；换任务用 remove 清旧订阅 |
 | `agent` | 默认注册；显式 `agent.enabled: false` 关闭。root owner 动作 `hire` / `send` / `close` / `list` / `rotate` / `read`（root 无 Team，不暴露 `create`）；成员 Body 动作 `create` / `hire` / `close` / `rotate` / `send` / `list` / `read`。写 Team 日志不是本工具的职责：`agent post` 已移除（只追加日志、不投递、不唤醒，0.50 实测导致成员报告静默丢失），需要时走 CLI `vessel team post`。`create` 建同 Team peer，`hire` 建调用者拥有的 contractor；close 审批在权限层（成员关 peer 需人类批准），每 Team present 上限与冻结见 ADR-095；权限模式与成员配置见 `agent.*`。`read` 是只读会话读取（`to` + `limit` 默认 20 / 封顶 50，返回最近 N 条消息的 role + 截断正文），数据源与 `sessions.get` 同一个 `SessionStore`，不新增 RPC；收口不再自动回传正文之后，父级要成员原文用它或 `inbox` |
 | `inbox` | 成员 body 由装配层 attach 收件箱后注册（`deny` 模式也注册，只读本地队列）：`list` 是**唯一的廉价偷看**——unread / pending 计数 + 每条只给 `id` / 来源 / **前 40 字符**前缀 / `more_chars`（还有多少字符没给），永不吐正文；`read` **就等于拿走**——取原文 + 消费，`unread` 与 `held` 一视同仁（held 的那几条先取消其 queued run 再消费，所以同一段正文不会进两次上下文），不可逆；`delete` 删除未读且非 held 的消息（「不看就丢」）；`insert` 给自己追加一条消息，不启动 run、不唤醒自己。`unread` = 该自己读，`pending` = 已排程、会自动作为下一轮输入送达（同一口径由 `counts()` 派生）。0.51 的 `claim` 动作已并入 `read`：老会话仍发 `action:'claim'` 时按 `read` 的别名执行并在结果里附一行 `note`（`agents.claim` RPC 与 web 条带仍然存在，模型侧不再有这个动作）；`includeHeld` 参数已删除。返回 JSON；非法参数返回 `{ error: 'invalid_input: ...' }`，不抛错 |
 | `ask` | 交互 REPL、`gateway start` / `--serve` 与 headless（`--run` / 管道）都注册；`ui.askUser: false` 可关闭。两种语义见下「ask 的 sync / async」 |
@@ -133,7 +141,7 @@ read→allow（RPC 层已脱敏）/ write→ask / admin→deny / 未知方法→
 
 **递归与准入**：单跳——call_tool 目标不得是 `vessel` 自身；其余 live 注册表工具默认可桥
 （桥不放宽目标自身任何权限规则，高危分级由目标自己的 checkPermission / 默认 ask 继承）。
-配置层 bridge_eligible 策略与 tool.call.* transport 溯源字段尚未引入（待裁决）。
+桥准入经配置 `permission.bridge_deny`（缺省 `[]` = 行为零变化）：精确工具名，别名经同一 `TOOL_NAME_ALIASES` 表解析；命中只拦 `call_tool` 桥可达性，不影响新会话直调；`vessel` 自身硬排除（config 不可覆盖）；列表是活引用，permission 热应用 applier 更新（`src/vessel-meta.ts` / `src/bootstrap.ts`）。`tool.call.completed/failed` 带 additive 溯源字段：`transport`（`in_process` / `engine_worker` / `engine_callback`，缺省不写 = 旧事件逐字节不变）与 `via_bridge`（vessel-bridge guardrail 改写时打标，按对象身份读取）；机制在 core `tool-provenance.ts`，打标方在装配层 / 插件。
 历史与 tool.call.*：call_tool 记改写后的目标名（loop 既有语义），rpc/set_config 记 vessel 本身；
 UI 按 tool_call_id 配对，用户与模型同见。RPC 执行经 bootstrap 的本地 dispatcher（与 gateway 同一方法表 /
 同一权限语义，晚绑定回填）；失败折稳定错误文本回模型（run 继续），不产生新 WAL 洞。

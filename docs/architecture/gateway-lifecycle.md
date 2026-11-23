@@ -1,7 +1,7 @@
 ---
 title: Gateway 单点启动与进程生命周期（职责与边界）
 kind: current
-triggers: [gateway, lifecycle, 生命周期, 单点启动, adopt, 接管, 分段启动, readiness, 错误域, 隔离, node, hub, 重启, 停机, stop, detached, 孤儿]
+triggers: [gateway, lifecycle, 生命周期, 单点启动, adopt, 接管, 分段启动, readiness, 错误域, 隔离, node, hub, 重启, 停机, stop, detached, 孤儿, engine 池, engine_pool]
 paths: [src/gateway/**, src/gateway-command.ts, docs/operations/GATEWAY.md]
 ---
 
@@ -41,6 +41,7 @@ Node API 与本地 Hub **拉起来**；平台**不拥有**它们的生命周期�
 - **Hub 拥有**：`<hubDataDir>/hub.lock`。手工/外部启动的 Hub 永远只 adopt，不被杀。
 - **不越界**：Gateway 只终止「拿得出归属证据」的子进程（pid + started_at + node_id / hub lock
   三元复核）；adopt / external 一律不动。判据**只收紧不放松**。
+- **Engine 池（`gateway.engine_pool.size>0` 时）**：gateway 监督的 detached engine 进程（不是 node/hub）；routing.json 由 gateway 唯一写者，缺省 stop/restart（handoff）保池待新平台 adopt，`--stop-nodes` 才 terminate owned（adopt/external 永不杀）。见 [ADR-106](../adr/ADR-106-engine-pool.md) 与 [tools.md](tools.md#engine-exec)。
 
 ## 分段启动与错误域隔离（0.55）
 

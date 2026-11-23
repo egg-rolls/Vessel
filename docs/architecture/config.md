@@ -1,7 +1,7 @@
 ---
 title: 配置模型
 kind: current
-triggers: [config, yaml, vessel.yaml, precedence, env, data root, gateway token, node token, secrets, 配置, 配置项, 优先级, 数据目录, 密钥, 令牌, 环境变量]
+triggers: [config, yaml, vessel.yaml, precedence, env, data root, gateway token, node token, secrets, 配置, 配置项, 优先级, 数据目录, 密钥, 令牌, 环境变量, tools_engine, engine_pool, 双开关]
 paths: [packages/config/**, src/cli-overrides.ts, src/serve-config.ts]
 ---
 
@@ -58,6 +58,7 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `transport.kind` / `transport.token` | 只剩 `in-process`；`transport.token` 是 gateway token 的末位回退。`loopback` / `remote` / `transport.nodes[]` 已于 0.22.1 删除 |
 | `serve.token` / `serve.token_env` / `serve.tokens` | node token：`serve.tokens` 为 token → `{ role }`；`serve.token` / `token_env` 是 legacy 单 token 回退；`serve.adminToken` / `adminTokenEnv` 已删除，admin 用 `{ role: admin }`。解析顺序见 ADR-050 |
 | `gateway.token` / `gateway.token_env` / `gateway.port` | Platform Gateway token 与端口（缺省 8642）；token 独立读取，不与 node token 互相回退。本地多 Node 由 `gateway nodes list\|add\|remove` 写 `<dataDir>/nodes.json`，各 Node 独立子进程；`node start --config` 可覆盖配置 |
+| `tools_engine.mode` / `gateway.engine_pool.*` | 工具执行双路双开关（[ADR-106](../adr/ADR-106-engine-pool.md)，缺省关零回归）：`mode: child`（缺省，per-node stdio 子进程）\| `pool`（共享池直连，需池存在）；`engine_pool.size`（0/缺省=不建池；1=fail-fast；开时 ≥2）/ `max_inflight`（缺省 cpus×4）/ `rss_soft_limit_mb` / `instance`（poolDir = `~/.vessel/engine-pool[-<instance>]`，**不随 data_dir 移动**，隔离实例必设）。执行现态见 [tools.md](tools.md#engine-exec) |
 | `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 true（0.24；显式 false 关闭）/ `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
 | `feishu.enabled` / `app_id` / `app_secret` / `domain` / `allowed_chat_ids` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝** |
 | `observability.event_history` / `metrics` | `event_history` 缺省 1000，显式 0 = 不限制，>0 = 环形缓冲；块缺省时不注入 metrics，块存在时 `metrics` 默认 true |
