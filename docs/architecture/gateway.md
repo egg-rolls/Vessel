@@ -9,19 +9,19 @@ paths: [packages/serve/src/**, packages/serve/src/gateway/**, src/serve-auth.ts,
 > Stage 4 已落地：目标模型见 [0.34-target.md](0.34-target.md)，决策见 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)（accepted）；本文正文描述现态。
 <a id="protocol"></a>
 
-`packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。gateway 只读取注入的单一事件面（单公司单流，无 tenant 过滤；ADR-089/100）。`apps/web` 是配套的浏览器控制台；它可连接多个 node 并直接调各 node 的 `/v1/rpc`（per-node token），这是 Console 聚合，不是平台级 gateway（[topology](topology.md)）。
-**0.49 G1/G3 → 0.52 现态**：`vessel gateway start` **只跑平台进程** —— Platform Gateway（默认 `127.0.0.1:8642`；静态宿主 + `/health` + `/platform/rpc` 只读 allowlist）+ **每节点子进程监督**；它**不进 bootstrap / serve 管线**，因此不加载 node runtime / tenant 锁 / plugin host / node 监听（`src/cli.ts:314-318`）。**Node API**（`serve.port`，缺省 `8644`；`/v1/*`、WS/SSE、插件 HTTP/静态）在**独立子进程**里：由 platform 托管并注册于 `<dataDir>/nodes.json`（`gateway nodes list|add|remove`，已删除最后一项则回隐式单节点）；`node start --config` 可单独启动（此时 gateway 只做 **adopt**，永不杀非自己 spawn 的 node）。「同一进程双监听」是 **G1 legacy** 形态（`VESSEL_LEGACY_SERVE=1` / 旧 `vessel --serve`），不再是默认路径。平台路由表 / 认证链与 Node API 物理分离；平台 token 与 per-node token 互不通用，平台侧不 import node runtime，node 不 import platform（`check-deps` D7–D9）。`vessel node start/status/stop/reload` 只操作 Node API。legacy `vessel --serve` 仍是单监听 8642、node 宿主 UI（保留至 G5）。边界契约见 `CONTRACT-0.49-gateway-node.md`；目标态见 [ADR-101](../adr/ADR-101-platform-gateway-and-node-api.md)。Hub 控制面不在 gateway 内：独立 `vessel hub start` 进程与节点出站拨号见 [federation-hub](federation-hub.md)；G4 分布式与 legacy 清理（G5）未排期。
+`packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。gateway 只读取注入的单一事件面（单公司单流，无 tenant 过滤；ADR-089/100）。`apps/web` 是配套的浏览器控制台；数据面**默认经平台代理** `/nodes/:nodeId/**`（node token 不出网关），直连 node 只是 `gateway.proxyNodes: false` 的回退形态（现态与策略表见 [topology](topology.md)）。
+**0.49 G1/G3 → 0.52 现态**：`vessel gateway start` **只跑平台进程** —— Platform Gateway（默认 `127.0.0.1:8642`；静态宿主 + `/health` + `/platform/rpc` allowlist：5 个只读 `platform.*` + `gateway.shutdown` 唯一非只读）+ **每节点子进程监督** + `/auth/*` 登录端点（`AuthService`，在鉴权闸**之前**处理；配了 `auth.backends` 才启用，见 `platform/server.ts`）；它**不进 bootstrap / serve 管线**，因此不加载 node runtime / tenant 锁 / plugin host / node 监听（`src/cli.ts` gateway 前台分支）。**Node API**（`serve.port`，缺省 `8644`；`/v1/*`、WS/SSE、插件 HTTP/静态）在**独立子进程**里：由 platform 托管并注册于 `<dataDir>/nodes.json`（`gateway nodes list|add|remove`，已删除最后一项则回隐式单节点）；`node start --config` 可单独启动（此时 gateway 只做 **adopt**，永不杀非自己 spawn 的 node）。「同一进程双监听」是 **G1 legacy** 形态（`VESSEL_LEGACY_SERVE=1` / 旧 `vessel --serve`），不再是默认路径。平台路由表 / 认证链与 Node API 物理分离；平台 token 与 per-node token 互不通用，平台侧不 import node runtime，node 不 import platform（评审人工核对依赖方向）。`vessel node start/status/stop/reload` 只操作 Node API。legacy `vessel --serve` 仍是单监听 8642、node 宿主 UI（保留至 G5）。边界契约见 `CONTRACT-0.49-gateway-node.md`；目标态见 [ADR-101](../adr/ADR-101-platform-gateway-and-node-api.md)。Hub 控制面不在 gateway 内：独立 `vessel hub start` 进程与节点出站拨号见 [federation-hub](federation-hub.md)；G4 分布式与 legacy 清理（G5）未排期。
 
 ### 协议 `vessel.gateway/1`
 
-- 服务端帧：`hello`（协议/节点信息 + `from_seq` / `latest_seq`）、`event`（带 `seq`、可选 `job_id` 与 `node_id`）、`gap`（历史被截断）、`res`（方法应答）、`ping`。
-- `hello.from_seq` 是本次 epoch **实际会发送的第一条** seq：有回放窗口时为窗口首条；已追平为 `latest_seq + 1`；空缓冲为 `0`。`latest_seq` 是当前最新 seq（空缓冲为 `0`）。每次成功的 `events.subscribe` 都会先发一个新的 `hello`（订阅 epoch），再发可选 `gap`、有界回放，最后发 `res`；连接级 `hello` 只在首连 / 重连出现。
+- 服务端帧：`hello`（协议/节点信息 + `from_seq` / `latest_seq`；时间线 epoch 另带 `start_seq` / `end_seq` / `count` / `holes` 等段）、`event`（带 `seq`、可选 `job_id` 与 `node_id`）、`res`（方法应答）、`ping`、`timeline-epoch-end`（时间线 epoch 整趟发完的结束标记）。**没有 `gap` 帧**（已删除，见下）。
+- `hello.from_seq` 是本次 epoch **实际会发送的第一条** seq：有回放窗口时为窗口首条；已追平为 `latest_seq + 1`；空缓冲为 `0`。`latest_seq` 是当前最新 seq（空缓冲为 `0`）。每次成功的 `events.subscribe` 都会先发一个新的 `hello`（订阅 epoch），再发有界回放，最后发 `res`；时间线 epoch 整趟发完时在 `res` 前补发 `timeline-epoch-end`（字段口径见 [gateway-rpc](gateway-rpc.md#rpc-methods)）；连接级 `hello` 只在首连 / 重连出现。
 - 客户端帧：`auth`（首帧，`{ kind: 'auth', token, since? }`）、`req`（`id` + `method` + `params`）、`pong`。
 - **首帧鉴权**：token 不进 WS URL / query；连接后 5s 内未收到合法 `auth` → 关闭码 4401。auth 不接受 `tenant_id`。
 - `seq` 由 gateway 分配；环形缓冲默认保留 10000 条（只是抖动缓冲，不是历史）。客户端记录 `lastSeq`，重连用 `?since=` 或 `auth.since` 续订。
-- **有界回放与 gap**：单次回放对**过滤后**的事件从最新往回取，≤ 1 MiB / 2000 条；更早区间与环形缺口合并成一个 `gap`（`to_seq = max(环形缺口.to_seq, 窗口 skippedTo)`）。`gap` 表示该区间无法从实时流恢复；新客户端按 `eventStore.truncateAfter(to_seq)` + RPC 快照处理，不为此重连。窗口之外但仍在环形缓冲里的更早区间可带 `until_seq`（能力位 `events.replay-range`）逐页回退，每页同样受上面的预算约束。TUI / 旧 Web 仍用 `to_seq` 重连，有界窗口下会收敛，不会形成重连风暴。
+- **有界回放与缺口**：单次回放对**过滤后**的事件从最新往回取，≤ 1 MiB / 2000 条；更早区间可带 `until_seq`（能力位 `events.replay-range`）逐页回退，每页同样受上面的预算约束。**跳过的区间不再编码成 `gap` 帧**（0.55 删除）：缺口只有两种解释——写者声明的 `holes`（时间线 epoch 的 `hello.count` / `holes`），或客户端自己按 seq 连续性算出来；对不上就发客户端帧 `{kind:'timeline_gap'}`，服务端记录为 `timeline.gap_reported`（不改事实源）。背压丢弃同样不上线成帧，进本连接 `backpressure_drops` 计数、断连时随 `gateway.ws.closed` 落账。
 - **会话级订阅**：`events.subscribe` 支持 `session_id`，SSE 支持 `?session_id=`；事件满足 `data.session_id` 或 gateway 维护的 `run_id → session_id` 归属（内存 LRU 5000，回放期按 seq 顺序重建）才发送，归属不到则不发（fail-closed）。`types` 条目以 `*` 结尾按前缀匹配，空数组等价于未提供。空字符串 `session_id`（同空 `run_id`）按「过滤掉一切」处理，**不**等同于未提供。能力位 `events.session-filter` 用于新客户端对旧 gateway 降级。
-- **since / pong / seq 回退**：客户端收到 `ping` 回 `pong`；收到 `gap` 后重置本地事件库并按上述语义恢复；`hello.latest_seq < lastSeq` 时从 `since=0` 重新对齐。重连指数退避 1s → 30s 加 jitter；10s 未收到 `hello` 视为失败并重连；`close()` 清理全部定时器。
+- **since / pong / seq 回退**：客户端收到 `ping` 回 `pong`；`hello.latest_seq < lastSeq` 时从 `since=0` 重新对齐；时间线缺口按 `count` / `holes` 自检（见上）。重连指数退避 1s → 30s 加 jitter；10s 未收到 `hello` 视为失败并重连；`close()` 清理全部定时器。
 - **跨节点事件**：`event.node_id` 优先于顶层 `node_id`；远端事件由 `(node_id, wire seq)` 去重后回灌。wire seq 按各节点 / 连接分配，**没有全局序**。
 - `RunStatus.run_id` 是网关级 id；`core_run_id` 在 `run.started` 后可知；事件帧的 `job_id` 用于把 core run 与网关 run 对齐。
 
@@ -67,7 +67,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - token 来源优先级：`config > VESSEL_GATEWAY_TOKEN > gateway 自动生成`。生成值 32B 随机 base64url，恒定时间比较；WS 5s 未鉴权关闭 4401。
 - 事件流是长连接：`Bun.serve` 的 `idleTimeout` 默认 `0`（禁用，可用 `GatewayOptions.idleTimeout` 覆盖）；heartbeat 默认 15s，SSE 发 `: ping` 注释、WS 发 `ping` 帧，用于穿透代理与检测死客户端。
 - 请求体上限 1 MiB（RPC / legacy REST / 跨节点消息端点一致）；慢客户端 `bufferedAmount > 4 MiB` 断开（1013）。
-- **背压**：gateway `SeqEventBuffer` 缺省 10000，**永不无界**，与 core `observability.event_history` 的 `0 = unlimited` 语义独立、不被覆盖。WS high 2 MiB / low 512 KiB / 硬关闭 4 MiB；SSE high 256 帧 / low 64 帧；超过阈值先丢事件并标记 `gap`，4 MiB 硬断开作为最后手段。gateway `stop()` 不关闭 asm 注入的 collector / channel，生命周期归 asm。
+- **背压**：gateway `SeqEventBuffer` 缺省 10000，**永不无界**，与 core `observability.event_history` 的 `0 = unlimited` 语义独立、不被覆盖。WS high 2 MiB / low 512 KiB / 硬关闭 4 MiB；SSE high 256 帧 / low 64 帧；超过阈值先丢事件并计数（`backpressure_drops`，断连时进 `gateway.ws.closed`），4 MiB 硬断开作为最后手段。gateway `stop()` 不关闭 asm 注入的 collector / channel，生命周期归 asm。
 
 <a id="tls"></a>
 
@@ -91,9 +91,10 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 > 决策见 ADR-051 / ADR-052 / ADR-053。
 
 - `--connect` / `VESSEL_CONNECT` 指向 gateway origin；非回环强制 HTTPS，token 缺失在发起网络请求前失败。
-- WS 首帧 `auth` 带 token + `since`；解析 `hello` / `event` / `gap` / `ping`，`ping` → `pong`，`gap.to_seq` 触发 `since` 重连，`hello.latest_seq < lastSeq` 从 0 重新对齐；退避 1s → 30s + jitter，10s hello 超时。
+- WS 首帧 `auth` 带 token + `since`；解析 `hello` / `event` / `ping`（未知 kind 静默忽略），`ping` → `pong`，`hello.latest_seq < lastSeq` 从 0 重新对齐；退避 1s → 30s + jitter，10s hello 超时。
 - `health.get` 返回远端 `node_id`；CLI 在 stderr（headless）或 TUI 状态行展示；TUI 不污染 stdout。
 - connect 模式不获取本地 data-dir 写意图锁、不写本地 store / trace；交互回路由事件流转为 `permission.respond` / `ask.respond` RPC。
+- **远程舰队停**：`vessel stop --connect <url>` 只认显式 `--connect`（绝不读 `VESSEL_CONNECT` env）——registry 级清点 → 确认 → `/platform/rpc gateway.shutdown` → 轮询 health 至不可达；**远程不强杀**（生命周期强杀恒本机）。非回环三门控（`gateway.remote_shutdown` opt-in + 已配置共享密钥的 TLS 反代 + 平台 token）与本地停止语义见 [gateway-lifecycle](gateway-lifecycle.md) / [GATEWAY](../operations/GATEWAY.md)。
 
 **安全收紧**：durable 端点校验 `write`，按单 node（非 tenant）返回；事件回灌丢弃本机来源帧。见 `docs/versions/0.6.1.md`。
 

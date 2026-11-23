@@ -53,7 +53,7 @@ paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.
 ## 4. 已知边界（契约，不是缺陷）
 
 - chunk 的**未持久化段只在内存里（活动块缓冲，未进任何磁盘），进程重启即失**：活动块在 `ChunkBlockStore` 的内存 pending 里（`writer.ts:617`），直到封块（`writer.ts:774-785` → `blocks.ts:150-197`）才 fsync。
-- `chunk_flush_ms` 默认 **150**（`packages/config/src/defaults.ts:198`；写入侧常量 `types.ts:48`，上限 1000 `types.ts:51`，定时器提前 25 ms 触发 `types.ts:54-60`、`writer.ts:970-985`）⇒ 最坏约 150 ms 的窗口里，那段正文只在内存。
+- `chunk_flush_ms` 默认 **150**（`packages/config/src/defaults.ts:217`；写入侧常量 `types.ts` 的 `CHUNK_FLUSH_MS` / `CHUNK_FLUSH_MS_MAX`（上限 1000），定时器提前 `CHUNK_FLUSH_LEAD_MS` = 25 ms 触发，`writer.ts` 的 `scheduleIdleFlush`）⇒ 最坏约 150 ms 的窗口里，那段正文只在内存。
 - 但那段**还没有 seq、还没有发布**：`chunkStep` 分配 seq 后先进块，块 fsync 后 `completeBlock` 才发布（`writer.ts:600-624`、`:757-772`）。所以它**不在等式里**，也**不构成「UI 丢了一条」**。
 - 因此写清：**这不是「un-acked 队列」，这是「还没进入事实源」。** 反过来，凡已发布的 chunk 一定已在磁盘 —— 这就是「延迟上界 = 150 ms」而不是「已发布可丢」的原因。
 
@@ -83,12 +83,13 @@ paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.
 | UI 帧的 seq 一定 ≤ `wal_head` | **端到端已接线**：装配层 `TimelineWriter.open` 传了 `publish`（`src/timeline-dual-write.ts:919-929`），旧链路广播**降级为发送缓冲**（fsync 之后才放行）；「未发布尾部」由 `published_head` 显式表达 |
 | 握手报 `{start_seq,end_seq,count,timeline_head,wal_head,published_head}` | **已落地**（`packages/serve/src/protocol.ts:145-181`）：`end_seq=wal_head` 是**可读性**事实，`min(end_seq, published_head)` 是**推送**事实，两者绝不合并 |
 | `sessions.get.event_cursor` 四字段 | **已落地** `{timeline_head, wal_head, holes, tainted}` + `published_head`（`packages/serve/src/gateway/methods/sessions.ts`） |
-| timeline 双写开 | **默认仍关**（`packages/config/src/defaults.ts:197`）——这是**配置默认值**，不是"没做"；开的时候整条链（写者 → 操作 → 单游标读 → 按段续拉）已可用 |
+| timeline 双写开 | **默认开**（`packages/config/src/defaults.ts:216` `dualWrite: true`，理由见 `:202` 注释）——只有显式写 `dual_write: false` 的安装才退回旧链路；整条链（写者 → 操作 → 单游标读 → 按段续拉）已可用 |
 | 前端读路径 | **只剩一条**：单游标 `client_timeline_seq` + 单区间回填 + **按段续拉** + 四条校验 + 污点条（`apps/web/src/gateway/timeline-protocol.ts`、`state/event-store.ts`）；`disk-replay.ts` / `replay-source.ts` **已删除** |
 
 **一句话**：本文等式（`UI == timeline(≤timeline_head) ∪ WAL(≤wal_head)`，其中只有 `published_head` 以内的会被推送）
 对 timeline 链路已**端到端成立**。仍成立的前提是「写者内部 fsync 之后才 publish」这条不变量——
-它由 `check:timeline-publish-after-wal`（唯一保留的断言）兜住。
+它**没有自动断言兜底**（`check-timeline-publish-after-wal` 从未实现，脚本已按宪法删除）：
+改到 timeline 写入 / 发布路径时按 §5 的人工核对口径逐条核对。
 
 ## 7. 一句话结论
 

@@ -1,7 +1,7 @@
 ---
 title: 状态与持久化接口
 kind: current
-triggers: [session, run store, checkpoint, durable, limits, corruption, prune, 状态, 存储, 检查点, 持久化, 损坏, 裁剪, 上界, 会话存储]
+triggers: [session, run store, checkpoint, durable, limits, corruption, prune, 状态, 存储, 检查点, 持久化, 损坏, 裁剪, 上界, 会话存储, message_id, 消息身份, 去重, loadForRead, exists]
 paths: [packages/core/src/types/session.ts, packages/core/src/types/limits.ts, packages/core/src/types/run-record-store.ts, packages/core/src/session/message-identity.ts]
 ---
 
@@ -18,13 +18,19 @@ interface SessionStore {
   delete(sessionId: string): Promise<void>;
   list(): Promise<string[]>;
   listRich(): Promise<SessionInfo[]>;
+  /** 存在性校验（可选；文件后端 = 一次 stat，不 parse 会话壳） */
+  exists?(sessionId: string): Promise<boolean>;
+  /** 读侧共享只读快照（可选；与 load 逐字段相同，写必须走 load） */
+  loadForRead?(sessionId: string): Promise<SessionState | null>;
   close?(): void;
 }
 ```
 
 （ADR-056）：`FileSessionStore.load()` 只在主路径 `ENOENT` 时回退 legacy；文件存在但不可读或 JSON 损坏 → 抛 `SessionCorruptError`（`code: 'session_corrupt'`，含 `path`），不再静默当成“无会话”。`delete()` 同样先 `load()`，损坏时抛错不删除；`listRich()` 对损坏文件降级跳过，单文件损坏不拖垮列表。
 
-`SessionState.messages` 的消息可以带两个 additive 身份字段（0.51）：`run_id`（这条消息属于哪个 run；用户消息归属它开启的那次 run）与 `run_segment`（同一次 run 内第几段正文，0 起，只数非空 assistant 正文）。`run_id` 在 `ExecutionUnit.addContext`（唯一同时看见消息与 runId 的写入点）盖章；`run_segment` 由 `assignMessageIdentities`（`session/message-identity.ts`）在 `RunJournal.saveSessionState` —— SessionState 的唯一写口 —— 统一补：幂等、压缩删段后不重编号、resume 由事件投影（`projectMessages`）同一函数补齐。缺字段 = 旧数据，`sessions.get` 原样透出、读侧退回按内容比较（Web 时间线据此把「实时流那段正文」与「落盘那条消息」认成同一个对象，正文被 Output guardrail 改写过也认得出）。
+`exists?` / `loadForRead?` 是可选的读侧优化：`exists` 只答「在 / 不在」，口径与 `load` 的 null 分支一致（主路径与 legacy 都不在 ⇒ false）；**壳存在但内容损坏仍算「在」**，需要壳的路径必须继续走 `load()`。`loadForRead` 返回**共享只读快照**——与 `load` 逐字段相同（同一个 `toSessionState`、同样的 `SessionCorruptError`），实现方可按 (路径, size, mtime) 短路复用上一次 parse，无 TTL、无手工失效；调用方不许改字段、不许 push/splice `messages`、不许给 message 挂属性，要写（rename / compact / fork 后 save）必须走 `load()` 拿独占对象。未实现的后端由调用方退回 `load()`。
+
+`SessionState.messages` 的消息带 additive 身份字段，分两层（字段形状见 [interfaces](interfaces.md#provider)）。**归属层（0.51）**：`run_id`（这条消息属于哪个 run；用户消息归属它开启的那次 run）在 `ExecutionUnit.addContext`（唯一同时看见消息与 runId 的写入点）盖章；`run_segment`（同一次 run 内第几段正文，0 起，只数非空 assistant 正文）由 `assignMessageIdentities`（`session/message-identity.ts`）在 `RunJournal.saveSessionState` —— SessionState 的唯一写口 —— 统一补：幂等、压缩删段后不重编号、resume 由事件投影（`projectMessages`）同一函数补齐。**身份层（0.56，主判据）**：`message_id` 是这条消息唯一的稳定 id，只在消息**进入会话**的那一处生成（`userMessageIdOf` / `injectedMessageIdOf` 等，确定式可复算：`${runId}:user` / `${runId}:inject:<下标>`，同一条输入执行两遍得同一个 id）；`withMessageId` 只补缺、绝不覆盖已有值（resume / 重放 / 续跑保留原 id）。写上下文与写事件流带同一个字符串，前端按它归并（Web `transcript-items.ts` 给历史与 live 同一个 key 前缀）。落盘时 `dropDuplicateMessageIds` 做幂等守卫：同 id 且 role / name / content / tool_calls / refs 全同 ⇒ 丢后者；同 id 不同正文 ⇒ 两条都留并 warn（id 生成有 bug，不许静默吞真实内容）；无 id 消息一条不动；返回新数组、不改入参。缺 id = 旧数据 / 旧 gateway，`sessions.get` 原样透出、**不回填**（回填会让同一条消息在两个出口拿到两个 id）；读侧先退回归属层，**内容比对只是最后手段**（Web 时间线据此把「实时流那段正文」与「落盘那条消息」认成同一个对象，正文被 Output guardrail 改写过也认得出）。
 
 <a id="limits"></a>
 

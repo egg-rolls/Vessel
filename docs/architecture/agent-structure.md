@@ -14,13 +14,12 @@ paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/
 | `member` | self | 无 | **必需** | visibility 强制 `team`；close 需人类审批 |
 | `temporary` | 雇佣者（缺省 `human`） | 默认 owner | 可选 | close 由 owner 或自己决定 |
 
-- 同一个 `PersistedAgentRecord`；区别是 `role` / `owner` / `parent` / `team` 的组合。
-- UI：`member` = 成员，`temporary` = 临时。
+- 同一个 `PersistedAgentRecord`；区别是 `role` / `owner` / `parent` / `team` 的组合。UI：`member` = 成员，`temporary` = 临时。
 - `main` 是普通 `member`（owner=self、必须有 Team、visibility `team`），用 `kind:'peer'` + `workspace` 创建；没有外部 owner，也不由父 turn 驱动。
 - 所有 agent 都属于某个 Team（无 unbound member）；`main` 不例外。
 - `parent_id` 是回复/投递父节点；`spawnedBy` 只进 `agent.spawned` 审计事件。
 
-## 数据模型 v4
+## 数据模型 v5
 
 | 字段 | 含义 |
 |---|---|
@@ -31,16 +30,20 @@ paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/
 | `bodies[]` | 全部 Body（含已退役）；唯一真相 |
 | `primary_body_id` | 缺省投递目标（primary body 的 body_id） |
 | `current_body` / `body_history` | 兼容视图：旧 primary 指针 / 已退役 primary（≤20）；只读、不回写 |
-| `model` / `system_prompt` | 下一个 Body 生效 |
+| `model` | **仅显式 pin 才持久化**（v5 model-follow）；缺省不写，有效 model 跟随节点 config；下一具 Body 生效 |
+| `system_prompt` | 下一个 Body 生效 |
 | `cwd`（0.51） | 成员默认工作目录：create 时**显式选中** Team 的基础路径快照（锚点 Team 与 `defaultWorkspace` 不写入）；下一个 Body 生效；缺省 = 工具退回 `agent.cwd` / `process.cwd()` |
 
-- `AGENT_SNAPSHOT_VERSION = 4`；v1 / v2 / v3 可读，不回写旧版本。
-- v3 → v4：`current_body` 迁成唯一 live body + primary，旧 `body_history` 迁入 `bodies[]`；
-  首次写 v4 前备份 `.v3.bak`（v1 / v2 各保留 `.v1.bak` / `.v2.bak`）。
-- v2 → v3：`owner===id` → member；`owner` 缺省 → member；`owner≠id` → temporary；
-  成员的 owner 补成 id。旧 `owner===undefined` / `owner===id` 判定全部改按 `role`。
-- v3 及更早写出的 `role:'single'`（旧 `main`）在**读取时**降级为 `member`，并补绑
-  default Team；写回时不再出现 `single`。
+- `AGENT_SNAPSHOT_VERSION = 5`（`snapshot.ts`）；v1–v4 可读，不回写旧版本。
+- **v4 → v5（model-follow）**：v1–v4 把「有效 model」烧进记录，分不清显式 pin 与旧默认值 ⇒
+  读侧一次性全清（记 `agent.snapshot.model_follow_migrated`），写回即 v5，之后不再丢。
+  首次写 v5 前备份 `.v4.bak`（v1–v3 各保留 `.v1.bak` / `.v2.bak` / `.v3.bak`），备份失败放弃本次写。
+- **model-follow 语义**：缺省 model 跟随节点 config（`provider.model` 热应用经
+  `MemberExecutionHost.updateDefaultModel`，只影响此后 spawn 的 body）；live body 的 model 是构造期
+  只读快照（本具仍旧值、下一具才用新值）；显式 pin 不被 config 变更覆盖。spawn 取 `member.model ?? this.model`（`runtime.ts`）。
+- v3 → v4：`current_body` 迁成唯一 live body + primary，旧 `body_history` 迁入 `bodies[]`。
+- v2 → v3：`owner===id` / 缺省 → member，`owner≠id` → temporary；成员的 owner 补成 id；旧 owner 判定全部改按 `role`。
+- v3 及更早的 `role:'single'`（旧 `main`）**读取时**降级为 `member` 并补绑 default Team；写回不再出现 `single`。
 - 每 agent **恰好一具 live body**（`body_id ≡ session_id`）；唯一例外是 `rotation === 'rotating'`
   期间允许两具（新 + 待退役），窗口结束回到一具。
 - `bodyHistory` 只追加，上限 `MAX_BODY_HISTORY = 20`。
@@ -59,8 +62,7 @@ paths: [packages/agent/**, apps/web/src/domains/agents/**, apps/web/src/domains/
 | `teams.members add` | temporary → member |
 | Web 新会话 | 首条消息时 `agents.create{name}` → `runs.start{agent_id}`（不复用、不传固定名） |
 
-- **创建第一个成员**：先建 Team，再 `agents.create { kind:'peer', team_id, name }`。
-  空 Team 也可以创建 member。
+- **创建第一个成员**：先建 Team，再 `agents.create { kind:'peer', team_id, name }`；空 Team 也可以创建 member。
 - `role` 参数只做一致性校验：与 `kind` / `owner` 推导出的角色冲突即 `invalid_input`，
   不能用它覆盖 peer 推导。
 - **有来源创建（0.39）**：`agents.create{from_session_id}` 要求源 Session 是 primary、源 agent 非 `private`、源空闲且属于 Team；新 agent 落同一 Team，owner / parent / role / kind 由源推导。

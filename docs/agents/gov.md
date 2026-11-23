@@ -22,7 +22,7 @@ applies_to: [N, M]
 ## 角色与路径
 
 - 每个角色只写自己的独占路径；跨路径改动先协商。
-- 已删除目录：`docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`processes/`、`legacy/`；不要再链接。
+- 已删除目录：`docs/role/`、`docs/api/`、`docs/guides/`、`processes/`、`legacy/`；不要再链接。
 - 共享/个人分工、分支与 PR 流程见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
 
 ## 检查与冒烟

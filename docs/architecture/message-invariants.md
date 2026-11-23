@@ -58,12 +58,11 @@ paths: [docs/architecture/message-invariants.md]
 | token 预算 / 上下文压缩 | **追加**摘要消息或新 run 的裁剪视图 | 改写既有消息内容 |
 | prompt cache 断点 | provider adapter 在**每次请求新建的 wire 对象**上附加 `cache_control`（Anthropic 原生：tools / system / 末条消息；OpenAI 兼容：模型名含 `claude` 或 `provider.promptCache: true` 时同样三处）；缓存键不含 `cache_control`，断点随轮次后移不影响命中 | 为打断点改写文本、重排消息，或把 `cache_control` 写回会话里的 Message / 共享 ToolSchema |
 
-## 门禁
+## 验证口径（用户行为验证，仓库无脚本）
 
-- 已有：`check:append-only-context`（落盘只追加）。
-- 待补：`check:request-append-only`
-  - 段内：「本次请求的 messages 是上一次的前缀延伸」（长度不减、逐字相同）；
-  - 分段类型白名单**恰好两种**：`new`（换会话 / 压缩）与 `pop`（回退 / 裁剪）；
-  - **系统提示词 / 环境块 / 工具集会话内不可变**：`PrefixChangeReason` 里不许出现 `system_revision` / `tools_changed` / `model_changed` / `resume`（这些语义只能靠「追加环境卡」或「`new` 开新会话」实现）；
-  - **resume 必须是续段**（追加），不是新段。
+原 `check:append-only-context` / `check:request-append-only` 已按宪法删除；本仓无 gate / test / probe，也不补等价物。上述不变量由**用户对真实会话断言**（对齐 [AGENTS.md](../../AGENTS.md)「验收形态」），判据：
+
+- **前缀延伸**：本次请求的 messages 是上一版的前缀延伸（长度不减、逐字相同）；任何中间差异都算违反 §2。
+- **分段白名单恰好两种**：`new`（换会话 / 压缩）与 `pop`（回退 / 裁剪）。现态词表 `PrefixChangeReason` 只有 `compaction` / `session_switch` / `branch` / `context_trim`（`packages/core/src/runtime/prompt-prefix-guard.ts`）；`system_revision` / `tools_changed` / `model_changed` / `resume` 不许出现（`packages/core/src/context/request-sequence.ts` 的 `BANNED_PREFIX_REASONS` 逐条写了理由），这些语义只能靠「追加环境卡」或「`new` 开新会话」实现。
+- **系统提示词 / 环境块 / 工具集会话内不可变**；**resume 必须是续段**（追加），不是新段。
 

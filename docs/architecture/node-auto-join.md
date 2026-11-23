@@ -7,8 +7,8 @@ paths: [src/hub/**, src/gateway-command.ts, packages/config/src/node-registratio
 
 # node 自动加入与注册表派生白名单
 
-> **状态：设计稿（待拍板）。** 本文描述目标态与最小闭环，不含实现。拍板后才落实现提交。
-> 现态见 [federation-hub](federation-hub.md)（join code / node token / hub 目录）与 [0.55-gateway-proxies-node](0.55-gateway-proxies-node.md)（平台代理 node 数据面）。
+> **状态：部分落地。** auto-join（无码回环重 join / 轮转判定）与注册表派生来源（注册校验 / 派生白名单 / 平台 + node 接线）**已实现**——现态事实家见 [federation-hub](federation-hub.md#auto-join)（实现清单见本文 §10.1 / §10.2）；运行期刷新等剩余项仍是 target（§10.3）。平台代理现态见 [topology](topology.md)。
+> 本文保留设计稿正文与拍板记录；新事实写事实家，不写这里。
 
 ## 1. 要解决的问题
 

@@ -23,7 +23,7 @@ paths: [src/hub/**, src/gateway/**, src/plugin-loader.ts, packages/serve/src/pla
 | 数据布局 | 根布局 `<dataDir>/**`；`tenants/` 非空 fail-fast（`non_root_layout`）；`tenant.json` 仅内部持久 id | T2/T5 |
 | 写锁 | 单公司 data-dir 写意图锁 `<dataDir>/.lock`；冲突 `data_locked`；运行时不再取写者锁 | T3/T5 |
 | 访问模型 | 双 token：平台 token（Gateway）与 per-node token（Node API）；不区分 guest | ADR-100 / ADR-101 |
-| 多节点视图 | UI 经 Gateway node registry + 各 Node API 聚合；Gateway 不反代 Node | G1/G3 |
+| 多节点视图 | UI 经 Gateway node registry 聚合；node 数据面**默认经平台代理** `/nodes/:nodeId/**`（HTTP+WS，node token 不出网关），`gateway.proxyNodes:false` 显式回退直连 | `platform/proxy.ts` / `proxy-config.ts`；`gateway-command.ts`（`proxyNodes !== false`） |
 
 ## 未实现 / target
 
@@ -50,12 +50,12 @@ code + 平台 state；Node API = Platform code + Company runtime + Company state
 - 多公司 = 多 Node，不是同一 Node 里的多个客户 tenant；Team 是使用范围，不是所有权。
 - Connection 是 workspace 级外部账号 / 资源绑定（OAuth / token / 配置），员工与部门引用，不复制 token。
 
-## Console（Gateway 的 UI surface）
+## Console 与平台代理（Gateway 的 UI surface）
 
-- **WebUI / TUI 由 Platform Gateway 提供宿主**；它们不是独立的归属层。
-- Gateway 提供 node registry / 平台认证；UI 用平台 token 访问 Gateway，用 per-node token 访问各 Node API。
-- 多节点数据来自 Gateway 的 node registry + 各 Node API；Gateway 不代理 Node 请求，也不拥有公司 runtime 数据。
-- 不在某个 Node 的进程里挂平台 UI；UI 宿主属于 Gateway（legacy `--serve` 是 G5 前的兼容例外）。
+- **WebUI / TUI 由 Platform Gateway 提供宿主**；它们不是独立的归属层。不在某个 Node 的进程里挂平台 UI（legacy `--serve` 是 G5 前的兼容例外）。
+- Gateway 提供 node registry / 平台认证；UI 用平台 token 访问 Gateway。**数据面默认经平台代理**：`/nodes/:nodeId/<node 路径>`（HTTP）与 `/nodes/:nodeId/v1/events`（WS），平台把 `Authorization` 覆写为 node token，**node token 不出网关**；代理开启时 `platform.nodes.credentials` 降级为 CLI 专用（回环不豁免），前端据 `platform.whoami.proxy` 能力位切换。Gateway 不拥有公司 runtime 数据。
+- 代理策略唯一来源 `platform/proxy-config.ts`：目标地址只来自注册表（客户端只提供 `node_id`）；路径 / 方法 / RPC 命名空间白名单 fail-closed（`/v1/local/**`、`/v1/federation/**` 永远拒绝，`gateway.shutdown` 等进程生死方法拒绝）；每项有上限（`DEFAULT_PLATFORM_PROXY_LIMITS`）；鉴权与 `/platform/rpc` 共用同一 `dataGate`。WS 代理（`proxy-ws.ts`）自打心跳 + 双端有界水位，每次关闭恰一条 `gateway.ws.closed {via:'proxy'}`。
+- `gateway.proxyNodes: false` = 保留的显式回退：平台不提供 `/nodes/*`，前端取 credentials 直连 node（老路径，node token 交回浏览器）。默认 ON 证据：`gateway-command.ts`（`config.gateway?.proxyNodes !== false`）。
 
 ## 实体映射
 
@@ -93,7 +93,7 @@ code + 平台 state；Node API = Platform code + Company runtime + Company state
 - **Hub** = 公司间通讯录 / 邮局前台：目录、配对、发现、token；只传元数据，不代理正文。
 - **Federation** = 信件投递：节点到节点直接转发，正文不经 Hub；授权权威在节点。
 - Hub 服务多家公司，属于 Platform；公司可独立运行，需要跨公司协作时才接入。
-- 现态：`vessel hub start` 独立进程（`src/hub/**`）；`gateway start` 缺省自动拉起本地 hub 子进程（`hub.auto_start` 缺省 true，`direction: node` 不启动，已有活实例 adopt）；节点只出站拨号 Hub。见 [federation-hub](federation-hub.md)。
+- 现态：`vessel hub start` 独立进程（`src/hub/**`）；`gateway start` 缺省自动拉起本地 hub 子进程（`hub.autoStart` 缺省 true，`direction: node` 不启动，已有活实例 adopt）；节点只出站拨号 Hub。见 [federation-hub](federation-hub.md)。
 - **重启/停止语义**：`vessel gateway restart` / `gateway stop` 缺省 = 只换/停平台层（handoff）——旧 Gateway 退出时**不终止**自己 spawn 的 node/hub（engine 池同理保池），新 Gateway 按 `gateway.pid` 三元组 / hub lock adopt 接管，故改平台层 / Web / registry 不打断在跑的 run；`--stop-nodes`（`--no-keep-nodes` 别名）才是整舰队真停/真重启的显式开关。node 自身重启不在本语义内（需 marker + resume，待做）。
 
 ## 非目标

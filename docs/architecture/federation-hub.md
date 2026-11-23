@@ -1,8 +1,8 @@
 ---
 title: Hub 控制面与跨节点 Federation
 kind: current
-triggers: [hub, federation, control plane, data plane, node, peer, pairing, join code, token, directory, attention, allowlist, hop, cross-node, 联邦, 中枢, 配对, 加入码, 目录, 控制面, 数据面, 跨机, 节点互联]
-paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gateway/**]
+triggers: [hub, federation, control plane, data plane, node, peer, pairing, join code, auto join, registration, derive origins, token, directory, attention, allowlist, hop, cross-node, 联邦, 中枢, 配对, 加入码, 自动加入, 注册表, 派生来源, 目录, 控制面, 数据面, 跨机, 节点互联]
+paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/config/src/node-registration.ts, packages/serve/src/gateway/**]
 ---
 
 # Hub 控制面与跨节点 Federation
@@ -24,7 +24,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 
 ## Hub 进程与连接方向
 
-- hub 是 **app 层独立前台进程**（`vessel hub start`），实现在 `src/hub/`，不新增可发布 package，也不进 `packages/core` / `packages/agent` / `packages/serve`。0.50 起 `gateway start` 在 `hub.auto_start`（默认 true）时自动 spawn 本地 hub 子进程；已有活实例 adopt、不重复起；`gateway stop` 只停本次 gateway spawn 的 hub；`direction: node` 不启动。节点侧不提供 `/v1/hub/control` 与 `POST /v1/hub/pair`。
+- hub 是 **app 层独立前台进程**（`vessel hub start`），实现在 `src/hub/`，不新增可发布 package，也不进 `packages/core` / `packages/agent` / `packages/serve`。0.50 起 `gateway start` 在 `hub.autoStart`（默认 true）时自动 spawn 本地 hub 子进程；已有活实例 adopt、不重复起；`gateway stop` / `restart` 缺省**只停平台层**，node/hub 保留交给下一次 `gateway start` adopt（`--stop-nodes` 才是真停的显式开关；语义见 [gateway-lifecycle](gateway-lifecycle.md) / [GATEWAY](../operations/GATEWAY.md)）；`direction: node` 不启动。节点侧不提供 `/v1/hub/control` 与 `POST /v1/hub/pair`。
 - 只有 **node → hub** 一个方向：节点作为 WSS 客户端主动拨号 `${hub.url}/v1/hub/node-control`，hub 是 acceptor；协议 `vessel.hub/1` 帧内 `dialer: 'node'` 标明发起方。节点只需监听回环，不必开放入站端口。
 - 同一 pairing 只保留一条活动连接，新连接接管；hub 重启时等待节点重连，不反向拨号节点。
 - 默认 data dir 仍是 `<dataDir>/hub`；独立部署 / 多公司必须显式设 `hub.dataDir`，且必须与 gateway 的 `dataDir` 不同。只有 Hub 进程读写 `<hubDataDir>/**`。
@@ -33,11 +33,22 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 
 ## 配对、join code 与 token
 
-- `vessel hub join-code`：hub 生成一次性 join code（默认 300 秒、只存 hash），节点用 `vessel hub join <hub-url> --code` 经 `POST /v1/hub/join` 换 hub 签发的 token。
+- `vessel hub join-code`：hub 生成一次性 join code（默认 300 秒、只存 hash），节点用 `vessel hub join <hub-url> --code` 经 `POST /v1/hub/join` 换 hub 签发的 token。token 有效期 `hub.tokenTtlDays`（1–365，缺省 30 天）只影响新签发，已有记录不改写。
 - token 只有 `scope: node`，绑定 `hub_id` / `node_id`；首帧身份或绑定不一致一律 4401 关闭，防止 A hub 的 token 被 B hub 复用。
 - 明文只在签发响应出现一次；hub 只持久化 `sha256(token)` 到 `<hubDataDir>/node-tokens.json`，节点把明文 token 存入 SecretStore；任何文件 / 日志 / 事件不出现 token。
-- 节点侧 SecretStore 的文件回退适配器只有 `hub.allow_file_secrets: true` 才启用，否则 fail-closed；Hub 自身的读 token 由 `hub.tokenEnv` 提供，不回显。
+- 节点侧 SecretStore 的文件回退适配器只有 `hub.allowFileSecrets: true` 才启用，否则 fail-closed；Hub 自身的读 token 由 `hub.tokenEnv` 提供，不回显。
 - 旧 hub → node 拨号、节点侧 hub 入站路由与 scoped `view` / `exchange` token 已移除；调用 `hub pair` / `hub node add` / `hub token *` / `hub data-token` 会失败并提示改用 `vessel hub join-code` / `vessel hub join`。
+
+<a id="auto-join"></a>
+
+## 自动加入与注册表派生来源（事实家）
+
+- **join 判定**（`src/hub/join-policy.ts:decideJoinRegistration`，在 `consume()` 之前调用，400 不烧码）：带 code → 签发（已有有效 token 则轮转并吊销旧 token）；无 code + 无有效 token → 400 `code_required`；无 code + 有效 token + **回环 peer** → 同机自助重 join 并轮转；无 code + 有效 token + 非回环 → 409 `node_exists`。「有效」= 未吊销且未过期（`hasLiveNodeToken`）；token 本身不进 join 请求体，续期一律靠邀请码或同机回环。
+- **注册校验**（`packages/config/src/node-registration.ts:validateNodeRegistration`，纯函数）：`entries` ≤ 3；`kind` 只是声明，hub 用 `classifyOrigin` 重分类，声明与事实不符 → 400 `entry_kind_mismatch`；未知键丢弃。
+- **派生来源集 D**（`deriveTrustedOrigins`）：loopback 无条件进；private 仅经本机网卡验证（`readLocalAddresses`，`os.networkInterfaces()`）才进；public **永不**自动进（只认显式配置）；异常 fail-closed 返回空集。
+- **node 侧消费**：join 响应带 `trusted_origins` → 写 `<dataDir>/hub-node.json`（`node-state.ts:readHubNodeTrustedOrigins` 永不抛）→ gateway 启动时 `src/cli.ts:resolveGatewayAllowedOrigins` 并入 node allowlist；未 join / 损坏 ⇒ 只有配置 ∪ 平台注入，不降级放行。
+- **平台侧消费**：组合根（`gateway-command.ts`）启动时经 `readHubDerivedOrigins` 读 `<hubDataDir>/registry.json`（不打 HTTP、不要求 hub 在线）；CSP 取全量 D，CORS 只取回环子集（`resolveHttpAllowedOrigins` 单一收窄点，只加不减）。
+- **未做**：运行期刷新（D 在 join / 平台启动那一刻定格，新 node 要重启才被认识）等剩余项仍是 target，见 [node-auto-join](node-auto-join.md) §10.3。
 
 <a id="directory"></a>
 
@@ -78,8 +89,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/serve/src/gatewa
 | `name` | 配置 > 文件 > hostname | 否，可重名 | 只给人看；**只作本机别名** |
 
 1. **`name` 指不到别人**：匹配不上本机就当远端，远端必须 `node_id`；多台机器同名在协议层无害。
-2. **同名不同层，不许为「看起来一致」而统一**：`resolveAddress()`（agent 输入侧）宽松，
-   认 `human` / `human@<team>`；`parseFederationAddress()`（报文侧）严格，必须三段（`L-011`）。
+2. **同名不同层，不许为「看起来一致」而统一**：`resolveAddress()`（agent 输入侧）宽松，认 `human` / `human@<team>`；`parseFederationAddress()`（报文侧）严格，必须三段（`L-011`）。
 3. **跨节点地址里只允许 `node_id`**；`name` 出现即视为本机引用。
 
 **不做全局 DNS**：需协调机构的命名与「无中心、可嵌入」冲突。Petname 让每个节点

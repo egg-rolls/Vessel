@@ -28,7 +28,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 /** 最小 frontmatter 解析（原来在 `check-docs` 里；按新政策门禁已删，这里保留检索需要的那一点）。 */
-function parseFrontmatter(text: string): Record<string, string> {
+export function parseFrontmatter(text: string): Record<string, string> {
   if (!text.startsWith('---\n')) return {};
   const end = text.indexOf('\n---', 4);
   if (end < 0) return {};
@@ -42,7 +42,7 @@ function parseFrontmatter(text: string): Record<string, string> {
 }
 
 /** `[a, b]` 或 `- a` 列表 → string[]；解析不出来就给空数组（检索兜底，不是门禁）。 */
-function parseStringArray(raw: string | undefined): string[] {
+export function parseStringArray(raw: string | undefined): string[] {
   if (raw === undefined) return [];
   const trimmed = raw.trim();
   if (trimmed.startsWith('[')) {

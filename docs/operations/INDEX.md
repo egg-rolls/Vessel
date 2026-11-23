@@ -9,6 +9,8 @@ paths: [docs/operations/**]
 
 按目标或故障现象命中；命中后只读对应页。架构事实见 [architecture/INDEX.md](../architecture/INDEX.md)。
 
+> 本表 current 模块均为需同步文档（契约见 [DOC-MANAGEMENT §3.5](../DOC-MANAGEMENT.md)）。
+
 | 文档 | 一句话 |
 |---|---|
 | [LOGS](LOGS.md) | **日志口径**：一件事只有一种说法（同一事实的权威来源表）、`web.build.*` 构建日志怎么读、`console.*` 判定标准 |

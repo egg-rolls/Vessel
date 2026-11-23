@@ -61,8 +61,8 @@ run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<str
 
 | API | 语义 |
 |---|---|
-| `registerProfile(profile)` | 同内部单 id 幂等；冲突抛错。profile：`tenantId`（内部单 id）/ `providerFactory` / `model` / `plugins` / `pluginHostFactory?` / `limits?` / `termination?` / `includeReasoning?` / `context{maxTokens?,autoCompact?,summarizer?}` / `systemPrompt?` / `permission?` / `journalFactory` |
-| `getOrCreateExecutionUnit(req)` | 请求：`tenantId`（内部单 id）/ `sessionId` / `agentId?` / `session?` / `events` / `eventLog?` / `leaseService?` / `bindingLease?` / `pluginHost?` / `plugins?` / `contextFactory?` / `overrides?` |
+| `registerProfile(profile)` | 同内部单 id 幂等；冲突抛错。profile：`tenantId`（内部单 id）/ `providerFactory` / `model` / `resolveModel?`（ModelRef → provider + wire model，缺省走 legacy `providerFactory()` + `model`）/ `plugins` / `pluginHostFactory?` / `limits?` / `termination?` / `includeReasoning?` / `retry?`（传输层重试策略，缺省 `DEFAULT_PROVIDER_RETRY_POLICY`）/ `vision?`（运行期设置；能力本身问 `provider.vision`）/ `envCadence?`（环境检测节奏端口，缺省恒按 request 观察）/ `context{maxTokens?,autoCompact?,summarizer?}` / `systemPrompt?` / `permission?` / `journalFactory` |
+| `getOrCreateExecutionUnit(req)` | 请求：`tenantId`（内部单 id）/ `sessionId` / `agentId?` / `session?` / `events` / `eventLog?` / `compactionIndexDir?`（会话目录根 `<dataDir>/sessions`，压缩索引物化落点，供 recall 无参列表；缺省索引只留事件与内存，通过 `deriveCompactionIndex` 重建）/ `leaseService?` / `bindingLease?` / `pluginHost?` / `plugins?` / `contextFactory?` / `overrides?` |
 | `getExecutionUnit` / `retireExecutionUnit` / `listExecutionUnits` / `profileCount` | 诊断与 ControlPlane 生命周期；retire 幂等 |
 
 ```ts
@@ -85,12 +85,14 @@ interface ExecutionUnitOptions {
   session?: SessionStore;
   journalFactory: RunJournalFactory;   // 事实事件 / RunRecord / SessionState 唯一写端口
   agentId?: string; systemPrompt?: string; permission?: RuntimePermissionConfig;
-  eventLog?: SessionEventLogPort;      // 只读；写由 journal 承担
+  eventLog?: SessionEventReadPort;     // 只读子集（0.54 stop-write，类型上没有 append）；写由 journal 承担
   leaseService?: LeaseServicePort;     // EU 持有/续租，Run 不持
 }
 ```
 
 `create()` 是异步静态工厂（插件安装 fail-fast，ADR-023）；装配层不再直接调用，单 bundle 与成员 host 都经 `Runtime`。
+
+**工具输出调用级作用域（engine 池 Q9）**：core 公开导出 `runWithToolOutputScope(scope, fn)` / `toolOutputRoot()`（`runtime/tool-result-gate.ts`）——池化后同一 engine 进程服务多个 node，落盘根不能只靠进程级 env：派发方逐调用包裹，ALS 随异步上下文传播，`writeToolOutput` 经 `toolOutputRoot()` 自动作用域化（`scope.toolOutputDir` → `<scope.dataDir>/tool-output` → `VESSEL_TOOL_OUTPUT_DIR` → `VESSEL_DATA_DIR/tool-output` → 默认数据目录）；无 scope 的调用点走原 env 链，零回归。
 
 run 级状态收敛在 `Run`（`runId` / `sessionId` / `branch` / 计时 / `stats` / `workingContext`）。`run()` / `resumeRun()` 共用 `activeRun` 槽位并在首个 await 前同步占位；已有 active run 抛 `RunAlreadyRunningError`。公开 `RunnableAgent.resumeRun?(runId)` 仍是门面签名，per-session 门面负责 `runStore.load` 后调 `EU.resumeRun(record)`。
 

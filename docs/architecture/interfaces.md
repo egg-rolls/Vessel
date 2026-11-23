@@ -1,7 +1,7 @@
 ---
 title: 核心接口
 kind: current
-triggers: [LLMProvider, ChatRequest, WorkingContext, EventStream, interface, types, 接口, 类型, 契约, 提供者, 聊天请求, 工作上下文, 事件流]
+triggers: [LLMProvider, ChatRequest, WorkingContext, EventStream, interface, types, 接口, 类型, 契约, 提供者, 聊天请求, 工作上下文, 事件流, vision, attachment_plan, message_id]
 paths: [packages/core/src/types/provider.ts, packages/core/src/types/context.ts, packages/core/src/types/event.ts]
 ---
 
@@ -15,6 +15,8 @@ paths: [packages/core/src/types/provider.ts, packages/core/src/types/context.ts,
 ```ts
 interface LLMProvider {
   chat(req: ChatRequest): Promise<LLMResponse>;
+  /** 视觉能力（可选）：undefined = 该模型没有视觉；插件构造 provider 时挂上 VisionBackend */
+  vision?: VisionBackend;
 }
 
 interface ChatRequest {
@@ -27,6 +29,8 @@ interface ChatRequest {
   session_id?: string;
   signal?: AbortSignal;
   on_chunk?: (chunk: StreamChunk) => void;
+  /** 这一轮要发的图：只有适配器读它，Message 逐字节不变；EU 请求期算出（vision/plan.ts） */
+  attachment_plan?: AttachmentPlan;
 }
 
 interface LLMResponse {
@@ -46,8 +50,12 @@ interface Message {
   name?: string;
   /** thinking 模式思维链（仅 assistant；保存并随下一轮请求回传，ADR-038） */
   reasoning_content?: string;
+  /** 稳定身份 id（可选）：消息进入会话时盖章；身份语义与去重口径见 [state](state.md#session) */
+  message_id?: string;
 }
 ```
+
+`VisionBackend` / `AttachmentPlan` 形状在 `types/vision.ts`。`message_id` 只进会话壳与事件流，**不进请求体**（Provider 适配层逐字段挑）；`attachment_plan` 缺省 = 旧行为，适配器命中时才把对应消息的 `content` 升成块数组。
 
 流式不是独立方法：`stream: true` + `on_chunk` 回调，loop 把增量发成 `llm.stream.chunk` 事件（ADR-007）。不支持的 Provider 忽略 `on_chunk` 即退化为整段返回。
 

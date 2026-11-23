@@ -757,6 +757,25 @@ auth:
 「本机用 `localhost` 访问、白名单只写了 `127.0.0.1`」那格救活了 —— 回退值仍是**白名单里的
 原值**，不是请求里的字符串。
 
+### 2.23 `tools_engine.mode` + `gateway.engine_pool`（engine 双路双开关，缺省关）
+
+```yaml
+tools_engine:
+  mode: pool            # 缺省 child = per-node stdio 子进程；pool = 共享池直连（需池存在）
+gateway:
+  engine_pool:
+    size: 2             # 0/缺省 = 不建池（零回归）；1 = 装配期 fail-fast；开时 ≥2
+    # max_inflight: 32        # 每 engine 进程在途上限；缺省 os.cpus().length × 4
+    # rss_soft_limit_mb: 512  # rss 软阈值（MB）；缺省 unset = 不启用
+    # instance: alt           # 多平台实例名；poolDir = ~/.vessel/engine-pool[-<instance>]
+```
+
+- **双开关缺省关**：`tools_engine.mode` 缺省 `child`、`gateway.engine_pool.size` 缺省不建池，两个都显式打开才走池路径（node 侧仅 `mode: pool` 显式 opt-in 进 bootstrap 的池分支，池由 gateway 按 `size ≥ 2` 建并监督）。回退 = 翻配置 + 重启。
+- **无静默回落**：池候选全不可用 ⇒ 抛 `ENGINE_ERROR.unavailable`，不回退 in-process / child（supervisor 纪律）；busy 在派发前快拒、不计熔断。
+- **poolDir 不随 data_dir 移动**：池目录在用户全局配置目录下（`~/.vessel/engine-pool[-<instance>]`），`--data-dir` / `VESSEL_DATA_DIR` 都不移动它——隔离实例必须设 `engine_pool.instance`，否则与主实例共用同一池目录。
+- **max_inflight 是物理资源保护，不是 run 累计限制**：缺省 `cpus × 4`（engine 进程 `readPoolLimits` 读取，经 spawn env 下发）；`rss_soft_limit_mb` 缺省不启用。
+- 键语义的家在 [architecture/config.md](../architecture/config.md)；执行现态与路由语义见 [tools.md#engine-exec](../architecture/tools.md#engine-exec) 与 [ADR-106](../adr/ADR-106-engine-pool.md)。
+
 ## 3. 密钥与 `_env`
 
 所有接受密钥的字段支持 `<field>_env`：

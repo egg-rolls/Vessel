@@ -100,6 +100,16 @@ paths: [packages/serve/**, apps/web/src/gateway/**]
 - 未拆分的存量文档在迁移完成前 grandfather；新增或重构的 `current` 文档立即适用。
 - frontmatter、INDEX 覆盖、行数与链接**没有自动校验**（`check-docs` 已按宪法删除），reviewer 逐项核对；新增/重构文档立即生效，存量在迁移完成前 grandfather。
 
+### 3.5 同步契约（current/advisory ↔ 代码）
+
+- `kind: current / advisory`（含各 INDEX）= **需同步文档**；frontmatter `paths` = 同步范围。`kind: target`、历史容器（`versions/`、`adr/`）与 `specs/`（冻结定稿）不需同步。根 O(1) 文件（AGENTS/README/CHANGELOG）需同步，范围 = 全仓命令/路径/版本事实（无 frontmatter 是设计如此，§3.1）。
+- **同步基线 = 最近一次触碰该文档的 commit**（git 历史是唯一记录；不加字段、不存状态文件）。文档同步 commit 带 `Synced-to: <sha>` trailer，供 `git log --grep=Synced-to -- <doc>` 查验证基线。
+- **检测**：`bun run scripts/doc-sync.ts [--threshold N] [--json] [--doc <path>] [--all]`。原理 = `git log -1 --format=%h -- <doc>` 取基线 + `git diff <sha>..HEAD -- <paths>` 列变更；churn 只是上界，语义确认与更新判断归人。
+- **工具分类**：信息性 sync 检测工具（docs-find 类）允许；gate/test/probe 仍禁（宪法第三/四条）。被删的 check-docs 是正确性校验器（断言合规、红绿阻塞）；doc-sync 是 churn 信息辅助（浮现候选、不校验对错、不阻塞、exit 恒 0），不同类——不重造 check-docs，不接 CI / pre-commit。
+- **义务**：合并某文档 paths 下的代码变更时，同切片同步受影响的 current/advisory 文档，或显式向 1 报告滞后由 1 裁决延期；检查点跑 doc-sync 复核。
+- **specs 容器**：`docs/specs` = 定稿规格（实现前读、实现后冻结；允许 `kind: design` + `status`；退场转历史按宪法 09）；不需同步。
+- 引用优先 `file:symbol`；行号仅在必要时写，同步时重锚。
+
 ## 4. O(n)：历史记录
 
 ### 4.1 只追加，不改写
@@ -209,6 +219,7 @@ docs/
 - [ ] `AGENTS.md` / `README.md` / `docs/FILE-MANAGEMENT.md` / `docs/DESIGN.md` / `docs/WEB-UI.md` 无版本状态
 - [ ] `current` 文档无 `## 0.x` / `### 0.x`、无逐版本“已实现 / 未发布”章节与“自 0.x 起”叙事
 - [ ] 拆分后的模块有 INDEX 与 frontmatter：模块 ≤110 行、INDEX ≤60 行、链接无死链
+- [ ] current/advisory 文档与 paths 下代码同步（doc-sync 检测 + 语义确认；滞后已报 1 裁决）
 - [ ] 检索走 INDEX 的 `triggers` / `paths`，未整读 >300 行的 `current` 文档
 - [ ] 任务开工跑过 `docs-find`（有命中读 top 3；无命中已回落 AGENTS.md 并记录）
 - [ ] 本批次版本事实已写入 `docs/versions/<version>.md`，并有一行 `INDEX.md`

@@ -8,9 +8,7 @@ paths: [docs/architecture/**]
 # 架构索引
 > Stage 4 已落地：正文描述的是 `Assembly → Runtime → ExecutionUnit → Run → Loop` 的已实现状态；目标/迁移决策仍见 [0.34-target.md](0.34-target.md) 与 [ADR-098](../adr/ADR-098-terminology-and-layering-agent-session-runtime-loop-run.md)（accepted；tenant 部分已被 ADR-100/T0–T5 取代）。
 
-按目标或路径命中；命中后只读对应模块，不整读全部。未命中时回落 `AGENTS.md` 硬规则，不把“没搜到”当“没规则”。历史见 `docs/versions/INDEX.md` 与 `docs/adr/README.md`。
-
-> 检索：`bun run scripts/docs-find.ts --goal "<目标>" --paths <路径>`；本索引只做导航，命中后只读模块。
+> 本表 current/advisory 模块均为需同步文档（契约见 [DOC-MANAGEMENT §3.5](../DOC-MANAGEMENT.md)）；target 模块不需同步。检索 `bun run scripts/docs-find.ts --goal "<目标>" --paths <路径>`，命中后只读模块；未命中回落 `AGENTS.md`。历史见 `docs/versions/INDEX.md` 与 `docs/adr/README.md`。
 
 | 模块 | 一句话 | triggers | paths |
 |---|---|---|---|
@@ -49,13 +47,13 @@ paths: [docs/architecture/**]
 | [0.34-target](0.34-target.md)（kind: target） | 目标/迁移态：五词、附属词、分层、10 边界、C1–C4、10 裁决、4 连线、3 铁律、Stage 0–4、5 图 | target, migration, layering, agent, session, runtime, loop, run, control plane, execution unit, lease, federation | `docs/architecture/**`, `packages/core/**`, `packages/agent/**`, `src/**` |
 | [0.57-tool-host](0.57-tool-host.md)（kind: target） | 目标/迁移态（设计史，部分被 ADR-106 取代）：工具执行与 runtime 解耦；动机已由 P2+池以不同路线落地（TCP loopback/四工具全搬/准入替代队列/跨进程 bounded 回执/YAML 双开关），本页协议未直接实施；尖刺读数与风险判据保留 | tool host, sidecar, 工具解耦, 热重载, 热更新, 崩溃隔离, ipc, 消息队列, 配额, 背压, tool.call.request, VESSEL_TOOL_HOST, 混合态, engine 池, tools_engine, 准入, engine_busy | `packages/core/src/runtime/**`, `src/hot-apply-appliers.ts`, `plugins/tools/**`, `src/tools-engine/**` |
 | [0.55-gateway-proxies-node](0.55-gateway-proxies-node.md)（kind: target） | 目标/迁移态：WebUI/CLI 只连 gateway，由平台代理 node 的 HTTP + WS；`platform.nodes.credentials` 退化为 CLI 专用；延迟预算、方法白名单、WS 背压/半开/心跳与 `gateway.ws.closed` 唯一口径、`node_id` 缺省规则、7 条风险 | gateway proxy, node 代理, 直连, platform.nodes.credentials, node token, ws, 背压, 半开, 心跳, csp, 延迟预算, 多节点, 鉴权, 白名单 | `packages/serve/src/platform/**`, `src/gateway-command.ts`, `src/gateway/**`, `apps/web/src/gateway/**` |
+| [node-auto-join](node-auto-join.md)（kind: target） | 目标/迁移态（部分落地：auto-join 与注册表派生来源已实现，见 federation-hub）：邀请码 / 派生白名单 / 心跳与过期节点 | node auto join, 自动加入, registration, invite code, 白名单, derive, node token, heartbeat | `src/hub/**`, `src/gateway-command.ts`, `packages/config/src/node-registration.ts` |
 
 ## 主题入口
 
 - **host / scheduler / checkpoint** → [host](host.md) · [runtime-lifecycle](runtime-lifecycle.md#run) · [state](state.md#run-store)
 - **member / team / agent / body** → [member-team](member-team.md) · [gateway-rpc](gateway-rpc.md#agent-lifecycle) · [docs/agents/agent.md](../agents/agent.md)
 - **federation / hub / attention / 跨节点** → [federation-hub](federation-hub.md) · [gateway](gateway.md#remote) · [REMOTE.md](../operations/REMOTE.md)
-- **拓扑 / 公司 / 插件归属 / Hub 边界** → [topology](topology.md) · [plugins](plugins.md)
+- **拓扑 / 公司 / 插件归属 / Hub 边界 / node 代理** → [topology](topology.md) · [plugins](plugins.md) · [0.55-gateway-proxies-node](0.55-gateway-proxies-node.md)
 - **gateway 职责 / 票据 / 单点预算** → [gateway-capabilities](gateway-capabilities.md) · [ADR-103](../adr/ADR-103-gateway-responsibilities.md) · [gateway-plan](../dev/research/gateway-plan.md)
-- **node 代理 / 不再直连 node / node token 不出平台** → [0.55-gateway-proxies-node](0.55-gateway-proxies-node.md) · [topology](topology.md)
 - **工具热更新 / 崩溃隔离 / 工具并发配额 / 工具进程拆不拆** → [0.57-tool-host](0.57-tool-host.md) · [tools](tools.md) · [plugins](plugins.md)

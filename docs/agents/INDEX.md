@@ -10,6 +10,7 @@ paths: [docs/agents/**]
 改对应路径前读一篇即可；未命中时以 [AGENTS.md](../../AGENTS.md) 的硬安全规则为准。本索引只做下一跳，不写规则正文。
 
 > 检索：`bun run scripts/docs-find.ts --goal "<目标>" --paths <路径>`；本索引只做导航，命中后只读模块。
+> 本表模块均为需同步文档（advisory；契约见 [DOC-MANAGEMENT §3.5](../DOC-MANAGEMENT.md)）。
 
 | 模块 | 一句话 | triggers | paths |
 |---|---|---|---|

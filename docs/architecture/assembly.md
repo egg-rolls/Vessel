@@ -22,25 +22,32 @@ paths: [src/**]
 | `src/bootstrap.ts` | config → provider → plugins → `Runtime` → `ReplContext`；每 node 构造一次 `Runtime`，单 bundle 与成员 host 共用；按配置构造 delegate / team / MCP，装配 session backend 与 RunRecordStore；进程退出时关闭 MCP / Runtime 目录 / RunRecordStore。0.8：`LocalRpcClient` 的 `onEvent` 订阅 `runtimeEvents`，以只读方式转发 `events.event`。0.8.1：接受 `cliOverrides` 并传给 loader；connect token / CA 只读 `config.connect`。Stage 4：`runs.resume` 按 `RunRecord.agent_id` 路由到成员 `AgentService`，否则按 session 取 EU |
 | `src/plugin-loader.ts` | 插件发现（见 [extensions.md](extensions.md#discovery)） |
 | `src/plugin-selection.ts` | bootstrap 与 `--tools` 共用的插件选择策略，避免默认集漂移 |
-| `src/agent-service-wiring.ts` / `src/agent-owner-injection.ts` | 0.17：把父 provider / PluginHost / 限额 / 事件流交给 AgentService；owner 队列经 `BeforeLlm` 注入 |
+| `src/agent-service-wiring.ts` | 把 provider / 工具面 / 限额 / 事件流 / scheduler 交给 AgentService：交互入口 `permissionMode:'bridge'` + 父事件流（成员 ask 弹到现有权限卡片），headless 传 `allow`；`main` 走普通 create，不再有 owner 特例 |
 | `src/agent-owner-server.ts` / `src/agent-owner-client.ts` | 0.17：REPL owner loopback 控制端点与 CLI attach；0.19 S3 增加 `team.list|get|post|members` 私有方法 |
 | `src/team-command.ts` | 0.19 S3：`vessel team list|get|post|members [--json]` 的参数映射与渲染；成员名在 CLI 层解析为 agent id |
 | `src/hub-command.ts` | `vessel hub start|directory|watch|join-code|join` 的参数映射与渲染；`hub pair` / `node add` / `token *` / `data-token` 已删除 |
-| `src/hub/` | Hub 独立前台进程（`runtime` / `server` / `registry` / `control-client` / `secret-store` / `token-broker` / `client-protocol` / `types`）；不在 gateway 内 |
-| `src/hub-wiring.ts` / `src/node-token-control.ts` | `HubControlLike` / `TeamScopeLike` 投影与节点 token 表（只存 hash）；保留 node → hub 出站控制面 |
-| `src/gateway-wiring.ts` / `src/gateway/` | G1/G3 组合根：`buildGatewayControlPlane` 透传 `teams` / `hubControl` / `teamScope`；`src/gateway/` 的 `node-registry` / `node-supervisor` / `daemon` 管理本地多 Node 与 `nodes.json` |
+| `src/hub/` | Hub 独立前台进程（`runtime` / `server` / `registry` / `inbound-control` / `outbound-client` / `outbound-wiring` / `join-store` / `join-policy` / `pairing-code` / `node-credential-store` / `node-state` / `secret-store` / `derive-origins` / `snapshot-policy` / `client-protocol` / `node-url` / `types`）；不在 gateway 内。见 [federation-hub](federation-hub.md) |
+| `src/hub-wiring.ts` | 节点侧 hub 控制面装配：把 `AgentService` 投影成 `HubControlLike`（snapshot 只白名单元数据，成员生命周期事件映射成 `agent.state` 指针）；node → hub 出站拨号 |
+| `src/gateway-wiring.ts` / `src/gateway/` | 控制面注入：`buildGatewayControlPlane` 按启用透传 `metrics` / `feishu` / `teams` / `agentControl` / `federation`（未注入时 handler 回 `not_found`）；`src/gateway/` 的 `node-registry` / `node-supervisor` / `daemon` / `instance-lock` / `pid` / `handoff` / `service` 管理本地多 Node 与 `nodes.json` |
+| `src/gateway/pool-supervisor.ts` | gateway 监督的 detached tools-engine 池：spawn / 探测 / 重启预算 / adopt / stop，`routing.json` 唯一写者；缺省 stop/restart 保池待新平台 adopt。见 [gateway-lifecycle](gateway-lifecycle.md) |
+| `src/gateway/watchdog.ts` | 父进程侧存活看门狗：探活超时 × 连续失败才判僵死 → 强杀 + respawn + 退避（宁可漏杀不误杀）；子进程僵死时进程内无自救手段，唯一外部证据 |
+| `src/gateway/reload.ts` | `gateway.reload` / `gateway.shutdown` 的停止侧客户端：`shutdownGateway` 只受理「退出序列已启动」，不等待进程退出（等死与强杀回退归调用方） |
 | `src/tenant-runtime-factory.ts` | 单 bundle 工厂 `buildTenantRuntime`（名称保留，`tenantId` 是内部单 id）：构造 config / provider / session / run store / PluginHost / trace 的单份执行面，把 profile 注册到注入的 `Runtime`，插件只安装一次；`bundle.runtime` 是 per-session 门面（按 session 解析 EU），`bundle.pluginHost` 是共享 host。没有多 tenant bundle 缓存，`TenantRuntimeFactory` 已删除 |
 | `src/session-factory.ts` | `session.backend` → sqlite / file / memory |
 | `src/run-record-store-factory.ts` | `durable.backend/path` → `FileRunRecordStore` / `MemoryRunRecordStore`；未启用返回 null。单公司根布局，不透传 tenant 字段 |
 | `src/durable-wiring.ts` | checkpoint / resume 的装配适配：Host 成员优先，其次单 agent runtime |
 | `src/mcp-wiring.ts` | 读取 `mcp_servers` → `createMcpPlugin`；构造 TUI / gateway 需要的状态适配器 |
 | `src/serve-config.ts` | `serve.*` 默认值补全、远程/TLS 校验、证书文件检查；0.8.1 起不再接收 argv，CLI 层已由 loader 合并 |
-| `src/rpc/http-client.ts` | `HttpRpcClient`：`POST /v1/rpc`、Bearer、可选 CA、WS 首帧 auth 与 `since` / `pong` / `gap` / 重连 |
+| `src/rpc/http-client.ts` | `HttpRpcClient`：`POST /v1/rpc`（`rpcPath` 可指 `/platform/rpc`）、Bearer、可选 CA、WS 首帧 auth 与 `since` / `pong` / 重连；未知帧 kind 静默忽略 |
 | `src/transport-factory.ts` | gateway / connect token 解析；0.22.1 删除 loopback / remote transport 装配 |
 | `src/hub/node-url.ts` | hub 节点 URL 归一化（非回环必须 https） |
 | `src/resume-command.ts` | `--resume-run` 无参：列出 interrupted run（只读，不需要 Key）。0.8：读根布局 `<dataDir>/runs`（与执行面一致） |
 | `src/tools-list.ts` | `--tools` 的工具清单（不构造 runtime、不需要 Key） |
 | `src/headless-runner.ts` | headless 运行器 |
+| `src/stop-command.ts` | `vessel stop` 舰队级停：本地 = 只读清点 → 确认 → `stopGateway({keepNodes:false})`；远程只认显式 `--connect`（绝不读 `VESSEL_CONNECT`），经 `/platform/rpc gateway.shutdown`，远程不强杀。语义见 [gateway-lifecycle](gateway-lifecycle.md) / [GATEWAY](../operations/GATEWAY.md) |
+| `src/node-drain.ts` | node 优雅退出第一段：fence 准入 → 写在跑 run 的 resume 标记（RunJournal 单写口）→ `interrupt('shutdown')` → settle ≤2s → flush |
+| `src/token-command.ts` / `src/token-derive.ts` | 根密钥 `<dataDir>/root-secret` HKDF 派生 platform / node / hub token，显式配置永远优先；`token show\|list\|rotate`（show 只回环 + 交互式才打印值，list 永不打印值，rotate 须 `--yes`）与 `node token --print` |
+| `src/tools-engine/` | 工具执行引擎（`engine` 调度 / `entry` child+pool 双模式入口 / `worker` / `mcp` / `supervisor` / `validate` / `wiring`）：白名单工具转发执行，有状态工具留 host callback；池模式 TCP loopback + 进程级准入。见 [tools](tools.md#engine-exec) |
 
 **0.4 CLI / TUI 入口**：
 

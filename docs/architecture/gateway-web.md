@@ -19,7 +19,7 @@ paths: [apps/web/**, packages/serve/src/gateway/**]
 
 ### 会话切换
 
-`GatewayOptions.context` 存在且目标 session 与当前不同时：先 `context.setSessionId(target)` 再 `context.clear()`，随后 `runtime.run` 从 `SessionStore` 重载目标会话历史。没有 `context` 时无法保证隔离（需装配层传入）。
+会话切换**不经 gateway 共享 context**：`GatewayOptions.context`（`packages/serve/src/gateway.ts`）是残留选项，serve 已不消费它（全域零 `setSessionId` 调用点）。现态是 **per-session ExecutionUnit 隔离**：`Runtime.getOrCreateExecutionUnit` 按 `(tenantId, sessionId)` 取或建 EU（单飞创建；已有 EU 而 `agentId` 不一致时拒绝复用，不静默串台），带目标 `session_id` 的运行路由到该会话自己的 EU。每个 Run 新建 `WorkingContext`（`contextFactory`；缺省 `defaultContextFactory` 按 session 新建 `MemoryWorkingContext` 并 `setSessionId`），run 起点由 `seedWorkingContext` 用目标会话的历史投影播种——先 `setSessionId(target)` 再 `clear()`，然后逐条追加历史（`packages/core/src/runtime/runtime.ts` 的 `defaultContextFactory`、`execution-unit.ts` 的 `seedWorkingContext`）。切会话 = 换 EU + 从历史播种的新窗口，不存在需要 gateway 清空的共享上下文。
 
 <a id="web"></a>
 
