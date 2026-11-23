@@ -1140,7 +1140,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     return output;
   }
 
-  /** enabled 且声明 ui.dir 的静态挂载。 */
+  /** enabled 且声明 ui.dir 的静态挂载（child + 已登记的 in-process）。 */
   staticMounts(): PluginStaticMount[] {
     const mounts: PluginStaticMount[] = [];
     for (const entry of this.entries.values()) {
@@ -1152,6 +1152,24 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
         id: entry.descriptor.id,
         uiDir,
         // plugin-embed 契约 §5：入口 / CSS 走 no-cache，其余资产保持 immutable。
+        ...(embed !== undefined
+          ? {
+              embedEntry: normalizeEmbedRelPath(embed.entry),
+              ...(embed.css !== undefined ? { embedCss: normalizeEmbedRelPath(embed.css) } : {}),
+            }
+          : {}),
+      });
+    }
+    // in-process 与 child 同口径（镜像 contributionsFor 的双遍历）；
+    // descriptor 登记时已 fail-closed 复检，无 status 维度。
+    for (const record of this.inProcess.values()) {
+      if (!record.enabled) continue;
+      const uiDir = record.descriptor.uiDir;
+      if (uiDir === undefined) continue;
+      const embed = record.descriptor.uiEmbed;
+      mounts.push({
+        id: record.descriptor.id,
+        uiDir,
         ...(embed !== undefined
           ? {
               embedEntry: normalizeEmbedRelPath(embed.entry),
