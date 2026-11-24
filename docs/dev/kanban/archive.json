@@ -136,6 +136,186 @@
       "progress": "merge 517a220f；139移动/16批全绿/944import重写/5文件11暗礁修正(抓出gateway-command3级4级炸点)；src顶层cli.ts+19目录；src-layout.md管理规范+领域关键词；历史文档有意不动(时点快照)；合并树门禁验证中",
       "archivedAt": "2026-11-24T04:20:00+08:00",
       "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-node-target",
+      "title": "CLI 指定 node 操作（--connect/--node targeting，任意 node 建 agent）",
+      "owner": "q-node-target",
+      "branch": "fix/q-node-target",
+      "progress": "merge 4041e57c；--connect/--node targeting实现缺省零破坏；canary建agent正确姿势--connect http://127.0.0.1:8652 --node 7377657b(回环匿名)，--node单独走PID探测找生产是坑",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-runtime-fix",
+      "title": "runtime修复：issue-0 plugins[]热应用剥离活体工具 + issue-1 工具输出隔离缺口",
+      "owner": "q-runtime-fix",
+      "branch": "fix/q-runtime-fix",
+      "progress": "merge 17d6f44c；issue-0保留opt-in语义+引擎registry窗口超集retain+成员面轮边界原子收敛(消除广告却执行不了窗口)；issue-1 bootstrap设VESSEL_DATA_DIR落本舰队dataDir；issue-2注记遗留；金丝雀验收过，随批晋升main 38ee0aec",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-settings-impl",
+      "title": "VSCode式设置实施+插件设置域自动发现+默认视觉方案(8642为默认)",
+      "owner": "q-settings-impl",
+      "branch": "feat/q-settings-impl",
+      "progress": "merge 79f818e4，S1-S6全落地24提交(自雇q-settings-finish分担S5/S6树状拆分)；插件contributes.settings自动发现+plugins.config.set写+showInternalEvents缺省false契约；已快进main备重启；待用户行为验收",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-session-fix",
+      "title": "修复WebUI默认main会话加载失败(会话壳缺失)",
+      "owner": "q-session-fix",
+      "branch": "fix/q-session-fix",
+      "progress": "merge 8216e3af；根因成员首会话id=成员id(main真实初始会话)，壳只首轮run落盘，金丝雀main从未跑→无壳；ensureSessionShell在create/rotate/快照恢复补壳，重启自愈；已入main(be718c7e)金丝雀rebuild重启验证过",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-msg-timeout",
+      "title": "修复消息超时重复回inbox(agent仍跑不该回退+回退去重)",
+      "owner": "q-msg-timeout",
+      "branch": "fix/q-msg-timeout",
+      "progress": "merge入main；根因①sweep纯计时不看调度器在飞②failed行不被迟到回显认领→双份；修:sweep按busySessions闸(agent在跑不超时)+超时失败行可被回显认领单一真相；build绿待用户行为验收",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-bash-source",
+      "title": "复查async bash来源(用户确认已显示来自bash,无需修)",
+      "owner": "q-bash-source",
+      "branch": "fix/q-bash-source",
+      "progress": "用户确认async bash已正确显示「来自bash」(q-display 6e15df06生效)，任务取消，agent已close+worktree/分支清理",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-ui-style",
+      "title": "设置弹窗+chunk日志去灰底+系统卡去重+导航置底+截图验收",
+      "owner": "q-ui-style",
+      "branch": "fix/q-ui-style",
+      "progress": "merge入main；GHOST_*覆盖透黑底细线(设置弹窗/chunk日志)+系统卡单一表示去重去薄荷绿+导航core组置底默认折叠+ButtonFace灰板根因修；playwright computed-style客观核对全过；media ocr/describe缺口(无tesseract/多模态provider)用computed-style替代,截图留用户终验",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-log-refactor",
+      "title": "日志metrics/events分离+Prometheus /metrics+日志档位勾选态",
+      "owner": "q-log-refactor",
+      "branch": "fix/q-log-refactor",
+      "progress": "merge入main；删gateway.resources周期WRN→Prometheus registry+/metrics端点(8642,回环匿名/远端token,vessel_前缀gauge/counter)；日志档位补fallback回显默认档；usage插件各自暴露不冲突；build绿待用户curl /metrics验收",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-session-naming",
+      "title": "create/hire/rotate会话命名(子agent会话名截断→有意义命名)",
+      "owner": "q-session-naming",
+      "branch": "fix/q-session-naming",
+      "progress": "merge入main；调查:检查两字是AI摘要非截断；create/hire/rotate首会话显式title+spawnedBy缺省成员名(manual口径,派生截断/AI不覆盖)；成员侧schema补title+agents.create透传；main首会话AI命名不回归；build绿待用户hire验证",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-scroll-fix",
+      "title": "修复会话定时闪现+滚动跳位(冗余轮询重渲染/SSE已推送)",
+      "owner": "q-scroll-fix",
+      "branch": "fix/q-scroll-fix",
+      "progress": "merge入main；三根因:R1终态effect重复全量刷新(加seq水位每条一次)R2 mergeTailPage新数组引用作废memo(逐条全等复用引用)R3 followKey贴底失明(追加items.length+末项key)；store轮询各有兜底职责未删；build绿待用户验收不再闪现",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-skills-impl",
+      "title": "SKILLS插件实施P1(in-process+TOFU信任门+三来源+skills工具+UI)",
+      "owner": "q-skills-impl",
+      "branch": "feat/q-skills-impl",
+      "progress": "merge入main；plugins/context/skills in-process能力插件,默认集自动装载；TOFU哈希锁信任门(load重读重算+TOCTOU闸)+扫描fail-closed；skills单工具list/search/load+管理RPC+embed/iframe UI+设置七键自动发现；core零改动；P2导入/注入/P3marketplace留分期；build绿待用户放md验收",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-media-view",
+      "title": "media图片surfaced到模型上下文(模型本身多模态,直接看图)",
+      "owner": "q-media-view",
+      "branch": "feat/q-media-view",
+      "progress": "merge入main；media action=view复用0.56视觉基座(refs→vision/plan→适配器图块),工具结果图附件通路attachToolImages→appendInjectedMessages追加user图消息→主模型原生看图,零新provider；enabled即注册无需CLI后端；build绿待用户启用media+view验收",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-tool-perm",
+      "title": "工具权限统一规范(inbox等通用成员工具纳入全局权限列表)",
+      "owner": "q-tool-perm",
+      "branch": "fix/q-tool-perm",
+      "progress": "merge入redblue-dev；commonMemberTools描述符→gateway聚合tools.list→权限UI,inbox可查可设auto/ask/never+scoped键；保留始终可用语义(never=强制确认非禁用)+专门注记；运行期判定零改动；build绿；金丝雀验收过，随批晋升main 38ee0aec",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-naming-fix",
+      "title": "修复会话名undefined/Untitled(命名逻辑:已命名不走AI,未命名走AI)",
+      "owner": "q-naming-fix",
+      "branch": "fix/q-naming-fix",
+      "progress": "merge入redblue-dev；根因AI命名守卫把占位Untitled误判已命名→永不触发；isPlaceholderTitle占位=未命名走AI+manual/generated保留+sanitize拒undefined/null+显示侧cleanSessionTitle兜底；不迁移旧数据下次run补名；build绿；金丝雀验收过，随批晋升main 38ee0aec",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-skills-ui",
+      "title": "SkillsView重构工具页面样式(紧凑工具栏+表格卡片+错误优雅)",
+      "owner": "q-skills-ui",
+      "branch": "fix/q-skills-ui",
+      "progress": "merge入redblue-dev；TableToolbar单行紧凑(来源w-36/标签w-40/搜索grow+计数胶囊)+DataTable卡片透黑底细线+unknown_id MissingSkill降级卡+内联告警；GHOST局部覆盖不动共享token；build:ui双档绿；金丝雀验收过，随批晋升main 38ee0aec",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-fed-simple",
+      "title": "节点互联简化(自动配对握手+自动写配置热应用+回环自动发现)",
+      "owner": "q-fed-simple",
+      "branch": "feat/q-fed-simple",
+      "progress": "merge入redblue-dev；federation join握手(一次性码/回环免码)→token存SecretStore(DPAPI/keychain+AES-GCM)→自动写两侧peer热应用零重启零env_file；discover读hub registry回环发现；失败明确分流；token绝不进配置/日志；build绿；金丝雀验收过，随批晋升main 38ee0aec",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-config-delegate",
+      "title": "设计:agent配置权限有限让渡(安全子集白名单+审计,敏感键禁开)",
+      "owner": "q-config-delegate",
+      "branch": "design/q-config-delegate",
+      "progress": "merge入redblue-dev；384行设计:三级键T0展示auto/T1行为ask/T2敏感硬deny+permission.config_delegation默认关+审计jsonl；关键发现2026-11-16裁定config.yaml出denylist旁门可自我解限需治理；D2旁门治理须用户裁定(见板design-adjudication)；P1正门+审计→P2旁门→P3视图",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-thinking-plugin",
+      "title": "设计:思考强度控制插件(core extra headers钩子+插件设置+UI)",
+      "owner": "q-thinking-plugin",
+      "branch": "design/q-thinking-plugin",
+      "progress": "merge入redblue-dev；904行设计:ChatRequest extra_headers/params透传(危险头denylist+上限)+BeforeLlm hook注入requestExtras+插件contributes.settings6键自动发现+工具栏声明式菜单契约+provider映射effort/budget/toggle；auto=不注入零回归；Q1-Q5待用户裁(见板design-adjudication)；P1core透传→P2插件→P3菜单UI→P4experimental",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-plugin-scaffold",
+      "title": "设计:插件开发自动化脚手架(vessel plugin create+约定优于配置+自动注册)",
+      "owner": "q-plugin-scaffold",
+      "branch": "design/q-plugin-scaffold",
+      "progress": "merge入redblue-dev；816行设计:manifest自动注册已存在,真阻力=手写样板+装配硬编码；vessel plugin create脚手架(tool/capability/ui)+SDK助手defineRpcHandlers/parseSettings+sync生成器+共享UI构建工厂+manifest defaultEnabled/inherit；授权必须显式不能猜；P1脚手架零运行时→P5；宪法对齐零测试用VERIFY.md；实施待用户裁(见板design-adjudication)",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-verify-fix",
+      "title": "修金丝雀终验两问题(skills装载名不一致+AI命名max_tokens=64被reasoning耗尽)",
+      "owner": "q-verify-fix",
+      "branch": "fix/q-verify-fix",
+      "progress": "merge入redblue-dev；①in-process描述符名=manifest.id??包短名(同child口径)+aliases兼容存量,config名skills正确；②AI命名max_tokens64→2048+截止15s+派生标题兜底(任何模型不卡Untitled)+warn不静默；build绿；canary-verify4复验两项全过(别名探针15/15+命名探针20/20+live双路径~3s获AI名)，随批晋升main 38ee0aec",
+      "archivedAt": "2026-11-24T23:10:00+08:00",
+      "cycle": "redblue-feature-round-2"
     }
   ]
 }
