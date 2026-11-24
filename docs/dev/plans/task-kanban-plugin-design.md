@@ -223,11 +223,120 @@ interface BoardDTO {
 
 ## 5. 设置贡献与多路径配置
 
-（待扩充：contributes.settings 键表、config.yaml 示例、路径解析与读边界、写路径 P1/P2）
+### 5.1 contributes.settings 键表（manifest 声明，q-settings 的 schema 源）
+
+| 键 | 类型 | 缺省 | 说明 |
+| --- | --- | --- | --- |
+| `boards` | `array`（items: object `{path: string, title?: string, id?: string}`） | `[]` | 展示文件路径列表（多路径）。`path` 必填；`title` 缺省取文件内 `board` 字段；`id` 缺省由 path 派生（basename 去扩展名，冲突加序号） |
+| `refreshIntervalMs` | `integer`（minimum 0） | `10000` | 页面可见期自动轮询间隔；`0` = 纯手动刷新 |
+| `showArchive` | `boolean` | `true` | 是否显示归档 tab（板内有 archive 指针时才有内容） |
+
+兼容别名：`paths: string[]`（只给路径的简写）在解析时归一化为 `boards`；两者同时存在时 `boards` 优先。settings 声明只写 `boards`（别名不进 manifest schema，避免 q-settings 渲染出两个入口）。
+
+manifest 片段（JSON Schema 子集，宿主 v1 不自动渲染表单，渲染是 q-settings 的事）：
+
+```jsonc
+"settings": {
+  "boards": {
+    "type": "array",
+    "description": "看板文件路径列表（只读展示）。每项 {path, title?, id?}；path 支持绝对路径或相对项目根的路径",
+    "default": [],
+    "items": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "看板文件路径（.json；.md 二期）" },
+        "title": { "type": "string", "description": "展示名（缺省取文件内 board 字段）" },
+        "id": { "type": "string", "description": "板标识（缺省由文件名派生）" }
+      },
+      "required": ["path"]
+    }
+  },
+  "refreshIntervalMs": { "type": "integer", "description": "自动刷新间隔（毫秒），0 = 手动", "default": 10000 },
+  "showArchive": { "type": "boolean", "description": "显示归档视图", "default": true }
+}
+```
+
+### 5.2 config.yaml 示例（设置真相源）
+
+```yaml
+plugins:
+  - name: kanban
+    enabled: true
+    config:
+      boards:
+        - id: redblue
+          title: 红蓝开发看板
+          path: D:/Application/APP/Vessel/Vessel/docs/dev/kanban/board.json
+        - path: ./docs/dev/kanban/board.json     # 相对项目根（node 宿主 cwd）
+      refreshIntervalMs: 10000
+      showArchive: true
+```
+
+- 下发链路（现成机制，零新缝）：in-process 经 `buildPluginConfigMap` → `install(host, {config})`；contributions/settings 快照经 `pluginSettingsFor(config, 'kanban')`。未声明键告警丢弃、类型不符 `plugin_config_invalid`（现有校验）。
+- **运行期改配置不重启**：kanban 的 rpc handler 每次调用经 `loadConfig()` 读当前合并配置（model-registry `readRegistry` 同模式），config-watch 触发后下一次 RPC 即用新路径；不依赖 install 时的一次性快照。install config 只作缺省兜底。
+
+### 5.3 路径解析与读边界（安全核心）
+
+1. **绝对路径**原样用；**相对路径**相对 node 宿主项目根（`process.cwd()`，与 basic-tools 缺省 cwd 同口径）解析。路径是**宿主 OS 路径**（Windows 节点写 `D:/…`，WSL 里跑节点写 `/mnt/d/…`）；不做跨 OS 路径翻译（风险见 §13）。
+2. 规范化：`path.resolve` + 去重（同一 realpath 只留一个板 id）；**不支持 glob / 目录扫描 / `~` 展开**（一期显式文件路径，避免误配目录把一堆文件拉进 UI）。
+3. **读白名单 = 配置的 boards 路径集合**。`board.get` 只接受板 `id` 参数，不接受自由路径；id 未命中 → `invalid_params`。插件代码内再校验一次解析后路径 ∈ 白名单（防配置热更与缓存错位）。
+4. **archive 指针 containment**：`archive.path` 来自**文件内容**（不可信输入），必须解析后落在 board.json 所在目录之内（词法 + realpath 双检），且扩展名 ∈ {.json, .md}；越界 → 忽略指针 + warning，绝不读。这条挡住「恶意板文件把 archive 指向敏感文件诱导读展示」的路径。
+5. 只读纪律：插件对板文件 / 归档文件只有 `readFile` / `stat`；无任何写 / 删 / 改名代码路径。`permissions.fs` 声明 `["user-config", "board-files"]`（in-process 的 fs 声明是声明性的，实际边界由上述白名单自持；`user-config` 覆盖 settings.set 写 config.yaml）。
+
+### 5.4 设置写路径（两期）
+
+- **P1：插件自持 `plugin.kanban.settings.set`（permission write）**——model-registry 先例：`withConfigLock` 内 read-modify-write，只改 `plugins[name=kanban].config` 块，其余键原样保留；写前按 §5.1 schema 自校验（fail-fast，不落无效配置）；返回写后读回。config-watch 随后触发热应用。此路径**零宿主改动**，kanban 独立可交付。
+- **P2：宿主通用 `plugins.settings.set {id, config}`（additive，与 q-settings 共建）**——`config.set` 白名单今天不含 plugins[]（embed 契约 §1 明言一期无 RPC 写路径）。VSCode 式设置页要能保存**任意**插件的设置，需要一条通用写缝：只允许写目标插件 manifest `contributes.settings` 声明过的键、按声明类型校验、**禁止**经此路径写 `enabled / trust_ui / expose`（那些是信任/授权面，保持手改 config.yaml 或既有 CLI）。kanban 届时把 `settings.set` 标记 deprecated 并转发同一落盘逻辑。此缝属宿主改动，**不在本插件设计内实施**，列 §10 协同契约供 q-settings / main 裁定。
 
 ## 6. RPC 接口契约
 
-（待扩充：plugin.kanban.* 方法表、参数/结果 DTO、错误码、ifMtime 轮询协议）
+canonical 前缀 `plugin.kanban.`（SDK 侧裸名）。全部经 `PluginRpcRegistry` 同一 DTO 校验；read 方法对 gateway read token 开放，write 方法需 write 权限。
+
+### 6.1 方法表
+
+| 裸名 | 权限 | 参数 | 结果 | 说明 |
+| --- | --- | --- | --- | --- |
+| `boards.list` | read | `{}` | `{ boards: BoardMeta[], settings: EffectiveSettings }` | 配置侧板清单 + 生效设置；每项含存在性/mtime，不含板内容 |
+| `board.get` | read | `{ id: string, ifMtimeMs?: number, ifSizeBytes?: number }` | `BoardGetResult`（见下） | 读+解析+归一化一个板；条件命中返回 unchanged |
+| `archive.get` | read | `{ id: string, offset?: number, limit?: number, query?: string }` | `{ entries: ArchivedTaskDTO[], total: number, offset: number }` | 归档分页读（P2）；query 对 title/owner/branch/cycle 子串过滤 |
+| `settings.get` | read | `{}` | `{ settings: EffectiveSettings, source: 'config' }` | 生效设置回显（q-settings 现值也可走 config.get，此口供插件页自足） |
+| `settings.set` | write | `{ boards?, refreshIntervalMs?, showArchive? }` | `{ ok: true, settings: EffectiveSettings }` | §5.4 P1 写路径；整块替换传入键，未传键保留 |
+
+### 6.2 DTO
+
+```ts
+interface BoardMeta {
+  id: string; title: string; path: string;      // title 缺省 = 文件内 board，再缺省 = 文件名
+  exists: boolean; mtimeMs?: number; sizeBytes?: number;
+  error?: { code: string; message: string };    // 存在但读/解析失败时的摘要（list 不抛整表）
+}
+interface EffectiveSettings {
+  boards: Array<{ id: string; path: string; title?: string }>;
+  refreshIntervalMs: number; showArchive: boolean;
+}
+type BoardGetResult =
+  | { unchanged: true; mtimeMs: number; sizeBytes: number }        // ifMtimeMs+ifSizeBytes 双命中
+  | { unchanged: false; board: BoardDTO; mtimeMs: number; sizeBytes: number };
+// BoardDTO 见 §4.4；ArchivedTaskDTO = TaskDTO & { archivedAt: string; cycle?: string }
+```
+
+轮询协议（§8）：UI 持上次 `mtimeMs/sizeBytes`，poll 时带 `ifMtimeMs/ifSizeBytes`；宿主只 `stat` 不读文件，命中即回 `{unchanged:true}`（一次 RPC ≈ 一次 stat，廉价）。不命中才读+解析。文件被替换但 mtime 精度不够的极端情形由 size 双条件兜底；仍漏则手动刷新必达（手动不带条件）。
+
+### 6.3 错误码（插件侧 `Error('code: message')` → registry toRpcError）
+
+| code | 触发 | UI 呈现 |
+| --- | --- | --- |
+| `invalid_params` | id 缺失/未命中白名单、参数类型错、settings 校验失败 | toast + 表单字段错误 |
+| `board_not_found` | 配置路径不存在 | 板级空态：路径 + 「去设置」动作 |
+| `board_unreadable` | EACCES / EISDIR 等 fs 错误 | 板级错误态 + errno 摘要 |
+| `board_parse_error` | JSON parse 失败 / 顶层形状错 | 错误态 + 行列号 + 原文预览（截断 4 KiB） |
+| `board_too_large` | > 2 MiB | 错误态 + 实际大小 |
+| `archive_unavailable` | 无指针 / containment 拒绝 / 归档读失败 | 归档 tab 内错误态，不影响当前板 |
+| `config_write_failed` | settings.set 落盘失败（锁/权限） | toast error，设置表单保留草稿 |
+
+### 6.4 事件与推送
+
+一期**不声明 contributes.events**（无宿主→插件事件需求），也不依赖插件→UI 推送（现契约无此通道，§8）。`permissions.events: []`。
 
 ## 7. UI 设计（页面 + 弹窗路线）
 
