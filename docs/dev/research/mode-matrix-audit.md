@@ -182,6 +182,9 @@
 | `packages/serve/src/gateway/auth.ts` | 注释对齐 | frame-src 'self' 语义改为「兜底同源 framing」，与 2026-11-23 iframe 直连裁决一致（无行为变更） |
 | `docs/dev/research/mode-matrix-audit.md` | 审计文档 | 本文 |
 
+后续增量提交：`18acfe27`（NodeProvider import 排序对齐 biome——首轮门禁唯一 error，纯排序零行为变更）；
+文档收尾各节逐段提交（§3.2 / §4+§5 / §6）。
+
 ---
 
 ## 5. 缺口台账（owner + oracle）
