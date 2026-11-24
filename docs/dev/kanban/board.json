@@ -103,10 +103,10 @@
     {
       "id": "q-media-view",
       "title": "media图片surfaced到模型上下文(模型本身多模态,直接看图)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-media-view",
       "branch": "feat/q-media-view",
-      "progress": "派单：media read拒图/describe调独立provider；增强media把本地图片以附件surfaced到调用模型上下文(复用用户附图机制),模型原生看图不需tesseract/独立provider"
+      "progress": "merge入main；media action=view复用0.56视觉基座(refs→vision/plan→适配器图块),工具结果图附件通路attachToolImages→appendInjectedMessages追加user图消息→主模型原生看图,零新provider；enabled即注册无需CLI后端；build绿待用户启用media+view验收"
     },
     {
       "id": "g1-proxy-node",
