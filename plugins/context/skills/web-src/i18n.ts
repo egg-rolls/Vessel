@@ -114,7 +114,8 @@ const ZH: Record<MessageKey, string> = {
 
   'detail.empty': '选择一个技能，查看正文、信任状态与会话加载记录。',
   'detail.missing.title': '技能不存在或已移除',
-  'detail.missing.description': '它可能已在磁盘上被删除或重命名。重新扫描索引，或从列表中选择其它技能。',
+  'detail.missing.description':
+    '它可能已在磁盘上被删除或重命名。重新扫描索引，或从列表中选择其它技能。',
   'detail.backToList': '返回列表',
   'detail.source': '来源',
   'detail.version': '版本',
