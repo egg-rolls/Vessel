@@ -82,9 +82,10 @@ function pluginValueMatches(raw: unknown, expected: string): boolean {
 }
 
 export interface SettingsWriter {
-  save: (def: SettingDef, raw: string) => Promise<void>;
+  /** S5：scope 透传核心写路径（project = 工作区覆盖层）；local/插件分支忽略。 */
+  save: (def: SettingDef, raw: string, scope?: 'user' | 'project') => Promise<void>;
   /** 恢复默认：核心 = 写 default；local = 移除存储键回内置默认（R8）。 */
-  reset: (def: SettingDef) => Promise<void>;
+  reset: (def: SettingDef, scope?: 'user' | 'project') => Promise<void>;
   savingKey: string | undefined;
   /** 写面未注入（not_found）→ 只读 + 原因；refresh 给一次复位。 */
   writeUnavailable: boolean;
@@ -131,7 +132,7 @@ export function useSettingsWriter(): SettingsWriter {
   );
 
   const save = useCallback(
-    async (def: SettingDef, raw: string) => {
+    async (def: SettingDef, raw: string, scope?: 'user' | 'project') => {
       if (def.readOnly || def.type === 'view' || def.type === 'object' || def.type === 'array') {
         return;
       }
@@ -190,7 +191,7 @@ export function useSettingsWriter(): SettingsWriter {
       setSavingKey(def.id);
       try {
         try {
-          await client.setConfigValue(def.key, value);
+          await client.setConfigValue(def.key, value, scope);
         } catch (error) {
           // 失败只清本次写入值，回到服务端值；不恢复更早的未确认选择。
           clearSettingsPending([{ key: def.key, value: raw }]);
@@ -232,7 +233,7 @@ export function useSettingsWriter(): SettingsWriter {
   );
 
   const reset = useCallback(
-    async (def: SettingDef) => {
+    async (def: SettingDef, scope?: 'user' | 'project') => {
       if (def.scope === 'local') {
         if (def.id === 'local.theme') {
           setTheme((def.default ?? 'dark') as Theme);
@@ -248,7 +249,7 @@ export function useSettingsWriter(): SettingsWriter {
         return;
       }
       if (def.default === undefined) return;
-      await save(def, def.default);
+      await save(def, def.default, scope);
     },
     [bumpLocal, save, setTheme, toast],
   );

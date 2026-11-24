@@ -1,7 +1,8 @@
 /**
  * VSCode 式设置弹窗（vscode-settings-design §3，S1）。
  *
- * 搜索框 + 左分类树 + 右设置项列表；用户/工作区/浏览器 tab（工作区 S5 前置灰）。
+ * 搜索框 + 左分类树 + 右设置项列表；用户/工作区/浏览器 tab（S5：工作区层写项目
+ * vessel.yaml，经 config.set scope=project）。
  * 打开态由路由驱动（{domain:'settings'} 深链可分享、后退关闭）；本组件只消费
  * 路由传入的 focusKey/query/category 初值。数据复用 useConfigStoreApi /
  * useConnection，不新建通道；写路径走 useSettingsWriter（scope 分流）。
@@ -197,7 +198,19 @@ export function SettingsDialog({
     [values],
   );
 
-  const scopeDefs = useMemo(() => defs.filter((def) => def.scope === tab), [defs, tab]);
+  // S5：project tab 显示 scope user/project 的服务端核心键（写工作区覆盖层）；
+  // 插件键走 plugins.config.set（无层级）、view 项非配置键，均不进 project tab。
+  const scopeDefs = useMemo(
+    () =>
+      defs.filter((def) =>
+        tab === 'project'
+          ? (def.scope === 'user' || def.scope === 'project') &&
+            def.pluginId === undefined &&
+            def.type !== 'view'
+          : def.scope === tab,
+      ),
+    [defs, tab],
+  );
   const hits = useMemo(
     () => scopeDefs.filter((def) => matchesSearch(def, parsed, { haystacks, isModified })),
     [scopeDefs, parsed, haystacks, isModified],
@@ -371,8 +384,10 @@ export function SettingsDialog({
         saving={writer.savingKey === def.id}
         query={parsed.text}
         envOverride={envOverrideFor(def)}
-        onSave={(target, raw) => void writer.save(target, raw)}
-        onReset={(target) => void writer.reset(target)}
+        onSave={(target, raw) =>
+          void writer.save(target, raw, tab === 'project' ? 'project' : 'user')
+        }
+        onReset={(target) => void writer.reset(target, tab === 'project' ? 'project' : 'user')}
         onReloadPlugin={def.restartRequired === true ? () => void writer.reloadPlugin() : undefined}
       >
         {def.type === 'view' ? renderView(def) : undefined}
@@ -381,9 +396,6 @@ export function SettingsDialog({
   );
 
   const listBody = () => {
-    if (tab === 'project') {
-      return <p className="p-4 text-sm text-muted">{t('settings.dialog.projectSoon')}</p>;
-    }
     if (tab !== 'local' && configAvailable && !data) {
       return config.status === 'error' ? (
         <ErrorState message={config.error} onRetry={reloadConfig} />
@@ -463,9 +475,9 @@ export function SettingsDialog({
     );
   };
 
-  const tabs: { id: ScopeTab; label: string; disabled?: boolean }[] = [
+  const tabs: { id: ScopeTab; label: string }[] = [
     { id: 'user', label: t('settings.dialog.tabUser') },
-    { id: 'project', label: t('settings.dialog.tabProject'), disabled: true },
+    { id: 'project', label: t('settings.dialog.tabProject') },
     { id: 'local', label: t('settings.dialog.tabLocal') },
   ];
 
@@ -485,9 +497,7 @@ export function SettingsDialog({
             type="button"
             role="tab"
             aria-selected={tab === entry.id}
-            disabled={entry.disabled}
-            title={entry.disabled ? t('settings.dialog.projectSoon') : undefined}
-            className={`rounded-sm px-3 py-1 text-sm transition-colors disabled:opacity-45 ${
+            className={`rounded-sm px-3 py-1 text-sm transition-colors ${
               tab === entry.id ? 'bg-accent-soft text-accent-ink' : 'text-muted hover:bg-hover'
             }`}
             onClick={() => selectTab(entry.id)}

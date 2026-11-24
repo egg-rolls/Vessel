@@ -85,12 +85,17 @@ export abstract class IntegrationsClient extends TeamsClient {
     return this.rpc<ConfigSourcesResponse>('config.sources', {});
   }
 
-  /** 0.15：只写服务端白名单键；未注入 writer 时返回 not_found。 */
+  /**
+   * 0.15：只写服务端白名单键；未注入 writer 时返回 not_found。
+   * S5 additive：scope='project' 写工作区覆盖层（项目 vessel.yaml，优先于 user）；
+   * 缺省不传 scope（旧 gateway 兼容，服务端缺省 user）。
+   */
   setConfigValue(
     key: string,
     value: string | boolean | number,
+    scope?: 'user' | 'project',
   ): Promise<{ ok: boolean; key: string; value: string | boolean | number }> {
-    return this.rpc('config.set', { key, value });
+    return this.rpc('config.set', scope === undefined ? { key, value } : { key, value, scope });
   }
 
   /**
