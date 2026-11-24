@@ -408,6 +408,15 @@ export interface AgentControlLike {
     agentId: string,
   ): AgentToolEntryLike[] | undefined | Promise<AgentToolEntryLike[] | undefined>;
   /**
+   * 通用成员级工具（当前只有 `inbox`）：所有成员共有、与具体成员无关的工具描述符。
+   *
+   * 工具权限统一规范（additive，可选）：节点口径清单（`tools.list` /
+   * `capabilities.list` / `nodeInfo.capabilities.tools`）与 `permissions.setToolPolicy`
+   * 的存在性校验经此把通用成员工具纳入同一份权限面。老适配器没实现时退回纯全局
+   * 工具口径，形状不变。数据来自执行内核的真实注册路径 —— 这里只透传。
+   */
+  commonToolSurface?(): AgentToolEntryLike[] | undefined;
+  /**
    * `sessions.create`（CREATE-0.39）：同 agent 新 session，成为唯一 primary。
    * 失败以 AgentError 形状（`code` + `message`）reject，RPC 层统一映射。
    */

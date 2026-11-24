@@ -1481,6 +1481,22 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const pluginHost = (): PluginHost | undefined => opts.pluginHost ?? runtime?.pluginHost;
 
   /**
+   * 通用成员级工具（inbox 等所有 agent 都有的）：经 `opts.agent.commonToolSurface`
+   * 透传执行内核的真实注册路径判据（与 `tools.list` 节点口径同源）。
+   *
+   * 工具权限统一规范：节点口径清单（capabilities.list / nodeInfo.capabilities.tools）
+   * 与 `permissions.setToolPolicy` 的存在性校验都经此把通用成员工具纳入同一份权限面，
+   * 不再按注册作用域分裂。读失败 / 老适配器没实现 ⇒ 空数组，退回纯全局工具口径。
+   */
+  const commonMemberToolEntries = (): Array<{ name: string; description?: string }> => {
+    try {
+      return opts.agent?.commonToolSurface?.() ?? [];
+    } catch {
+      return [];
+    }
+  };
+
+  /**
    * config 视图里的当前 provider/model（`nodeInfo.capabilities` 的可选槽，doctor 等
    * 远端读侧据此显示节点实际模型）。nodeInfo 是同步的，而 `opts.config.snapshot`
    * 可能异步（bootstrap 注入）：构造时预热一次，每次 nodeInfo 再刷新；异步结果落缓存
@@ -1544,6 +1560,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
       tools = (pluginHost()?.listTools() ?? []).map((tool) => tool.name);
     } catch {
       tools = [];
+    }
+    // 工具权限统一规范：通用成员级工具（inbox 等）与全局工具同列（去重、宿主优先）。
+    for (const entry of commonMemberToolEntries()) {
+      if (!tools.includes(entry.name)) tools.push(entry.name);
     }
 
     return {
@@ -2705,6 +2725,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createPermissionsMethods({
       ...(opts.permissions !== undefined ? { permissions: opts.permissions } : {}),
       pluginHost,
+      // 工具权限统一规范：通用成员级工具（inbox 等）与全局工具一致可设策略。
+      commonToolNames: () => commonMemberToolEntries().map((tool) => tool.name),
     }),
     // 0.52：附件目录浏览（只读；additive，排在表尾）。
     // 允许根 / deny / realpath 都在装配层，serve 只出形状与稳定码。
@@ -3183,16 +3205,21 @@ export function startGateway(opts: GatewayOptions): Gateway {
     throw new RpcError('not_found', 'Feishu channel is not enabled');
   }
 
-  /** capabilities.list 的 tools（单执行面的 plugin host） */
+  /** capabilities.list 的 tools（单执行面的 plugin host + 通用成员级工具，统一权限面） */
   function toolDescriptions(): Array<{ name: string; description?: string }> {
+    let hostTools: Array<{ name: string; description?: string }> = [];
     try {
-      return (pluginHost()?.listTools() ?? []).map((tool) => ({
+      hostTools = (pluginHost()?.listTools() ?? []).map((tool) => ({
         name: tool.name,
         ...(tool.description ? { description: tool.description } : {}),
       }));
     } catch {
-      return [];
+      hostTools = [];
     }
+    // 去重、宿主优先：同名时以宿主定义为准，通用成员工具不顶掉宿主工具。
+    const seen = new Set(hostTools.map((tool) => tool.name));
+    const common = commonMemberToolEntries().filter((tool) => !seen.has(tool.name));
+    return [...hostTools, ...common];
   }
 
   /** 单视图 plugins.list 数据源。 */
