@@ -124,3 +124,28 @@
 | iframe 桥 RPC | `PluginFrame.tsx:155-156` | `client.rpc('plugin.<id>.<method>')` ⇒ 代理模式经 /nodes/<id>；方法白名单 = contributions.rpc ∪ commands（plugin-contributions.ts:456-467） |
 | plugin 命名空间过代理 | `proxy-config.ts:88-92` | 'plugin'/'plugins' 在表内（2026-11-23 用户裁决）；DENIED_RPC_METHODS 仍生效 |
 | embed 宿主 RPC | `host-factory.ts:155` / `plugin-catalog.ts:38` | 同样经 client.rpc（活连接），不直连 |
+
+### 3.2 模式矩阵（每格 = 一条代码路径）
+
+| 数据面 \ 模式 | proxy | direct（平台） | legacy |
+|---|---|---|---|
+| iframe HTML 页加载 | **[通]** 直连选中节点 api_url（PluginFrame.tsx:83-89 platform 分支不区分直连/代理子模式）；拼接保路径（plugin-contributions.ts:267）；node 静态免鉴权（gateway.ts:4087-4122）；CSP frame-src 含 node origin（server.ts:1052 → auth.ts:607-608） | **[通]** 同左口径（api_url 直连，同一代码路径） | **[通]** nodeUrl 空 ⇒ 页面同源 = node（resolveNodeOrigin :240-246）；同源 framing 由 default-src 'self' 兜底 |
+| embed 模块动态 import | **[通]** nodeUrl=`<platform>/nodes/<id>` ⇒ 平台同源转发（PluginEmbed.tsx:62-63 → pluginEmbedAssetUrl :282-293）；白名单只放行 `/plugins/<id>/ui/**` GET/HEAD（proxy-config.ts:63, 295-309）；node 侧保留命名空间永不命中动态路由（gateway.ts:4068-4069） | **[通]** node origin + `/plugins/<id>/ui/<path>`（同一 URL 构造） | **[通]** 页面同源 |
+| embed CSS 注入 | **[通]** 同模块口径（PluginEmbed.tsx:102-106，`?v=hash` 与入口同参） | **[通]** | **[通]** |
+| iframe 桥 RPC `plugin.<id>.<method>` | **[通]** client.rpc 经活连接 `/nodes/<id>/v1/rpc`（PluginFrame.tsx:155-156 → rpc.ts:55-58）；plugin/plugins 命名空间在表内（proxy-config.ts:91-92）；方法白名单 = contributions.rpc ∪ commands（plugin-contributions.ts:456-467）；DENIED_RPC_METHODS 仍生效（:107-115） | **[通]** node origin + credentials token | **[通]** 同源 + legacy token |
+| embed 宿主 RPC / catalog | **[通]** host-factory.ts:155 与 plugin-catalog.ts:38（`plugins.catalog`）都经 client.rpc，不直连 | **[通]** | **[通]** |
+| CSP framing 放行 | **[通]** 平台 HTML 注入 frame-src 'self' + node origins（server.ts:1041-1057；origins = registry apiUrl + 派生来源 :548-555，gateway-command.ts:3210-3215）；只进 CSP 不扩 CORS | **[通]** 同左 | **[通]** node HTML 无扩展源 ⇒ 保持旧输出（auth.ts:607-608 无指令；gateway.ts:4126-4130），default-src 'self' 兜底同源 iframe |
+
+补充格（模式无关 / serve 侧强制）：
+
+| 场景 | 判定 |
+|---|---|
+| iframe HTML 误经代理 | **[设计内]** fail-closed：`/plugins/<id>/<entry>` 不在白名单 ⇒ 404 proxy_path_not_allowed，文案明示「iframe 页仍请直连 node」（proxy-config.ts:311-318）⇒ 设计意图在 serve 侧强制贯彻，不依赖前端自觉 |
+| iframe 沙箱 / 消息校验 | **[通]** `allow-scripts allow-forms` 无 allow-same-origin ⇒ opaque origin（PluginFrame.tsx:221）；消息按 event.source + origin 硬校验（:143-144），方法白名单外静默丢弃（:152） |
+| node 静态免鉴权 + 懒激活 | **[通]** 非 API GET/HEAD 不进鉴权链（gateway.ts:4087, 4135-4138）；`/plugins/*` 先 ensureActive（:4092-4110，in-process 放行 = 基线 6c1fe2d4）再 servePluginAsset（staticMounts 含 in-process = 基线 95361fac） |
+| embed 保留命名空间 | **[通]** `/plugins/<id>/ui/` 解码后判定、永不命中动态路由（gateway.ts:4062-4069）⇒ 代理白名单只会转发到静态服务 |
+
+**S7 结论：设计意图三句话（iframe 直连 node / embed 经 nodeUrl / RPC 经活连接）前端选择 + serve 白名单两侧闭合，无新缺口。**
+本分支对 auth.ts 仅注释对齐（frame-src 'self' 的语义说明与 2026-11-23 裁决一致），无行为变更。
+
+---
