@@ -253,6 +253,7 @@ export {
 // 运行时
 export {
   assertToolNameLegality,
+  attachToolImages,
   auditToolNames,
   type BoundedToolResult,
   boundToolResult,
@@ -312,6 +313,7 @@ export {
   type ToolResultGateOptions,
   type ToolResultGateReceipt,
   type ToolTransport,
+  takeToolAttachments,
   takeToolResultGateReceipt,
   takeToolTransport,
   toErrorEnvelope,

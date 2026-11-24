@@ -4935,6 +4935,9 @@ export class ExecutionUnit {
           // O4 additive：缺省不写 = 旧事件逐字节不变。
           ...(result.transport !== undefined ? { transport: result.transport } : {}),
           ...(isBridgeCall(toolCall) ? { via_bridge: true } : {}),
+          // q-media-view additive：附图引用（只有 path + sha256，没有字节）进事件，
+          // 供审计与 blob GC 的引用集合扫描（与 user.message 的 refs 同一口径）。
+          ...(result.refs !== undefined && result.refs.length > 0 ? { refs: result.refs } : {}),
         },
         ts: Date.now(),
       });
@@ -4948,6 +4951,8 @@ export class ExecutionUnit {
         ...(result.bounded === true
           ? { bounded: true as const, original_chars: result.original_chars }
           : {}),
+        // q-media-view：附图引用带给 loop，由它以带 refs 的 user 消息 surfaced。
+        ...(result.refs !== undefined && result.refs.length > 0 ? { refs: result.refs } : {}),
       };
     } catch (error) {
       // 权限超时是致命错误（DECISION-022 §2.2）：终止 run，不折回工具错误让模型重试。
