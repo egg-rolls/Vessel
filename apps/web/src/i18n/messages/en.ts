@@ -129,11 +129,108 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'breadcrumb.observe.evals': 'Observe › Evals',
   'breadcrumb.settings': 'Settings',
   'breadcrumb.capabilities': 'Capabilities',
-  'breadcrumb.visual': 'Visuals',
-  'breadcrumb.designLab': 'Design Lab',
 
   // Settings
   'settings.title': 'Settings',
+  'settings.category.common': 'Commonly Used',
+  'settings.category.visual': 'Visual',
+  'settings.category.display': 'Display & Visibility',
+  'settings.category.runtime': 'Runtime',
+  'settings.category.logs': 'Logs',
+  'settings.category.connection': 'Connection',
+  'settings.category.advancedConfig': 'Advanced',
+  'settings.category.extensions': 'Extensions',
+  'settings.item.local.navCollapsed.title': 'Collapse sidebar by default',
+  'settings.item.local.navCollapsed.desc':
+    'Default collapsed state of the left nav when the WebUI opens; the sidebar toggle writes the same storage key.',
+  'settings.item.local.navGroups.title': 'Group collapse state',
+  'settings.item.local.navGroups.desc':
+    'Collapsed state of left-nav groups (read-only); reset = expand all.',
+  'settings.item.local.settingsTree.title': 'Settings tree collapse state',
+  'settings.item.local.settingsTree.desc':
+    'Collapsed categories of the settings dialog tree (JSON array, this browser only).',
+  'settings.item.local.settingsTab.title': 'Default settings tab',
+  'settings.item.local.settingsTab.desc':
+    'Scope tab selected when the settings dialog opens (User / Workspace / Browser).',
+  'settings.item.view.designLab.title': 'Design Lab',
+  'settings.item.view.designLab.desc':
+    'Design tokens and component previews (static samples, no gateway needed).',
+  'settings.item.view.connection.title': 'Connection summary',
+  'settings.item.view.connection.desc':
+    'Gateway connection state / node / version (read-only diagnostics).',
+  'settings.item.view.advancedConfig.title': 'Advanced configuration',
+  'settings.item.view.advancedConfig.desc':
+    'Resolved configuration JSON, key/value table and sources (read-only).',
+  // Core server keys (S6: migrated from settings.display.field.*; registry title/description keys).
+  'settings.item.verbosity.title': 'Verbosity',
+  'settings.item.showInternalEvents.title': 'Show system info (internal events)',
+  'settings.item.showInternalEvents.desc':
+    'Off keeps only replies, tool calls, errors and permission/ask cards. On adds runtime notices, hook / LLM context and other system messages; the vessel:* transcript messages follow this key too, and verbosity=debug shows them as well.',
+  'settings.item.showArchived.title': 'Show archived / closed (pending removal)',
+  'settings.item.showArchived.desc':
+    'Archived Teams and closed agents are hidden by default (both are waiting to be pruned). On brings them back to the Team list, Agent list and member sidebar with an "archived / closed · pending removal" badge. Direct links are unaffected and always open.',
+  'settings.item.errorLevel.title': 'Error level',
+  'settings.item.showProcessErrors.title': 'Show process errors',
+  'settings.item.askUser.title': 'Allow ask',
+  'settings.item.askUser.desc':
+    'Registration setting: takes effect on a new connection or after a gateway restart.',
+  'settings.item.showReasoning.title': 'Show reasoning stream',
+  'settings.item.expandCards.title': 'Expand cards by default',
+  'settings.item.expandCards.desc':
+    'Tool, system and queued cards start expanded; permission and ask cards always do. A manual toggle on a card wins over the default.',
+  'settings.item.statusBars.title': 'Status bar position',
+  'settings.item.language.title': 'UI language',
+  'settings.item.logLevel.title': 'Log level',
+  'settings.item.logColor.title': 'Log color',
+  'settings.item.logFormat.title': 'Log format',
+  'settings.item.logTime.title': 'Log time',
+  'settings.item.emptyResponseEnabled.title': 'Empty-response fallback',
+  'settings.item.emptyResponseEnabled.desc':
+    'When the model returns an empty reply (no content, no tool calls), retry instead of ending the run with zero output (seamless re-call by default; see below). On = default.',
+  'settings.item.emptyResponseSeamless.title': 'Seamless retry (no nudge scar)',
+  'settings.item.emptyResponseSeamless.desc':
+    'On (default): discard the empty turn and re-call the model with the existing transcript — no injected message, no scar. If still empty after the retry budget, one nudge is injected as a last resort. Off: always inject the nudge.',
+  'settings.item.emptyResponseMaxRetries.title': 'Empty-response retries',
+  'settings.item.emptyResponseMaxRetries.desc':
+    'Max retries per run (integer 0–10, default 2), shared by seamless re-calls and nudges. When exhausted the run ends gracefully with a logged notice.',
+  'settings.item.emptyResponseNudge.title': 'Empty-response nudge text',
+  'settings.item.emptyResponseNudge.desc':
+    'Custom nudge injected as a user message. Leave unset to keep the built-in wording.',
+  'settings.dialog.searchPlaceholder':
+    'Search settings… (@modified / @plugin:<id> / @local / @user)',
+  'settings.dialog.tabUser': 'User',
+  'settings.dialog.tabProject': 'Workspace',
+  'settings.dialog.tabLocal': 'Browser',
+  'settings.dialog.filterModified': 'Modified (@modified)',
+  'settings.dialog.filterPlugin': 'Plugin (@plugin:<id>)',
+  'settings.dialog.filterScope': 'Scope (@local / @user / @project)',
+  'settings.dialog.clearFilters': 'Clear filters',
+  'settings.dialog.noMatches': 'No matching settings',
+  'settings.dialog.resetDefault': 'Reset to default',
+  'settings.dialog.resetDone': 'Reset to default: {key}',
+  'settings.dialog.saved': 'Saved: {key}',
+  'settings.dialog.saveFailed': 'Save failed: {detail}',
+  'settings.dialog.saveUnconfirmed': 'Written but unconfirmed: {key}',
+  'settings.dialog.writeUnavailable': 'This gateway has no settings write face; read-only',
+  'settings.dialog.configUnavailable': 'This gateway has no config control plane.',
+  'settings.dialog.scopeUser': 'User',
+  'settings.dialog.scopeProject': 'Workspace',
+  'settings.dialog.scopeLocal': 'Local',
+  'settings.dialog.modified': 'Modified',
+  'settings.dialog.readOnly': 'Read-only',
+  'settings.dialog.envOverride': 'Overridden by environment variable {env}',
+  'settings.dialog.restartRequired': 'Takes effect after reloading the plugin',
+  'settings.dialog.reloadPlugin': 'Reload',
+  'settings.dialog.copyKey': 'Copy key path',
+  'settings.dialog.loading': 'Loading settings…',
+  'settings.dialog.openGateway': 'Open Gateway page',
+  'settings.dialog.openDesignLab': 'Expand Design Lab',
+  'settings.dialog.fullscreen': 'Open fullscreen',
+  'settings.dialog.collapseTree': 'Collapse category tree',
+  'settings.dialog.expandTree': 'Expand category tree',
+  'settings.dialog.editInYaml': 'Edit in vessel.yaml',
+  'settings.dialog.expandAll': 'Expand all',
+  'settings.dialog.pluginReloaded': 'Plugin reloaded',
   'settings.connection.devProxyNotice':
     'Dev proxy auth is enabled: connecting to the same-origin gateway forwarded by the Vite dev server. No token is stored in the browser.',
 
@@ -163,9 +260,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'appearance.motion.title': 'Motion',
   'appearance.motion.desc':
     'Motion follows the system prefers-reduced-motion setting; there is no separate switch. When reduced motion is on, drawers, the command palette and status pulses are disabled.',
-  'appearance.language.title': 'Language',
-  'appearance.language.desc':
-    'The interface updates immediately. Technical terms, commands and error codes stay untranslated.',
   'appearance.language.zh': '简体中文',
   'appearance.language.en': 'English',
   'language.toggleTo': 'Switch interface language to {language}',
@@ -175,6 +269,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // Common
   'common.cancel': 'Cancel',
   'common.close': 'Close',
+  'common.expand': 'Expand',
+  'common.collapse': 'Collapse',
   'common.confirm': 'Confirm',
   'common.loading': 'Loading…',
   'common.processing': 'Working…',
@@ -563,69 +659,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.diagnostics.doctor.attach.disconnected': 'Gateway is not attached',
   'observe.diagnostics.doctor.feishu.disabled': 'Feishu is not enabled',
   'observe.diagnostics.doctor.feishu.detail': 'app id {appId}, app secret {appSecret}',
-  // 0.15: Settings → Display
-  'settings.display.title': 'Display & visibility',
-  'settings.display.description':
-    'Writes user config; only the listed keys are writable. Display and visibility settings apply immediately after saving.',
-  'settings.display.noToken': 'Not connected',
-  'settings.display.noTokenReason': 'Connect to read or write settings.',
-  'settings.display.unavailableTitle': 'Config API not enabled',
-  'settings.display.unavailableReason': 'This gateway has no config control plane.',
-  'settings.display.loading': 'Loading settings…',
-  'settings.display.refresh': 'Refresh',
-  'settings.display.disconnected': 'Disconnected; writes are disabled.',
-  'settings.display.saved': 'Saved {key}',
-  'settings.display.saveFailed': 'Save failed: {detail}',
-  'settings.display.writeUnavailable': 'This gateway has no config writer; read-only.',
-  'settings.display.saveUnconfirmed':
-    'Submitted {key}, but the gateway still returns the old value; hot-apply usually lands within a second — if it stays inconsistent, restart the gateway and retry.',
-  'settings.display.field.verbosity': 'Verbosity',
-  'settings.display.field.showInternalEvents': 'Show system info (internal events)',
-  'settings.display.field.showInternalEvents.hint':
-    'Off keeps only replies, tool calls, errors and permission/ask cards. On adds runtime notices, hook / LLM context and other system messages; the vessel:* transcript messages follow this key too, and verbosity=debug shows them as well.',
-  'settings.display.field.showArchived': 'Show archived / closed (pending removal)',
-  'settings.display.field.showArchived.hint':
-    'Archived Teams and closed agents are hidden by default (both are waiting to be pruned). On brings them back to the Team list, Agent list and member sidebar with an "archived / closed · pending removal" badge. Direct links are unaffected and always open.',
-  'settings.display.field.errorLevel': 'Error level',
-  'settings.display.field.showProcessErrors': 'Show process errors',
-  'settings.display.field.askUser': 'Allow ask',
-  'settings.display.field.askUser.hint':
-    'Registration setting: takes effect on a new connection or after a gateway restart.',
-  'settings.display.booleanOn': 'Enabled',
-  'settings.display.field.showReasoning': 'Show reasoning stream',
-  'settings.display.field.expandCards': 'Expand cards by default',
-  'settings.display.field.expandCards.hint':
-    'Tool, system and queued cards start expanded; permission and ask cards always do. A manual toggle on a card wins over the default.',
-  'settings.display.field.statusBars': 'Status bar position',
-  'settings.display.field.language': 'UI language',
-  'settings.display.field.logLevel': 'Log level',
-  'settings.display.field.logColor': 'Log color',
-  'settings.display.field.logFormat': 'Log format',
-  'settings.display.field.logTime': 'Log time',
-  'settings.display.runtime.title': 'Runtime (core)',
-  'settings.display.runtime.description':
-    'Core runtime safeguards for all agents. Changes apply to new sessions (existing sessions keep their startup snapshot).',
-  'settings.display.field.emptyResponseEnabled': 'Empty-response fallback',
-  'settings.display.field.emptyResponseEnabled.hint':
-    'When the model returns an empty reply (no content, no tool calls), retry instead of ending the run with zero output (seamless re-call by default; see below). On = default.',
-  'settings.display.field.emptyResponseSeamless': 'Seamless retry (no nudge scar)',
-  'settings.display.field.emptyResponseSeamless.hint':
-    'On (default): discard the empty turn and re-call the model with the existing transcript — no injected message, no scar. If still empty after the retry budget, one nudge is injected as a last resort. Off: always inject the nudge.',
-  'settings.display.field.emptyResponseMaxRetries': 'Empty-response retries',
-  'settings.display.field.emptyResponseMaxRetries.hint':
-    'Max retries per run (integer 0–10, default 2), shared by seamless re-calls and nudges. When exhausted the run ends gracefully with a logged notice.',
-  'settings.display.field.emptyResponseNudge': 'Empty-response nudge text',
-  'settings.display.field.emptyResponseNudge.hint':
-    'Custom nudge injected as a user message. Leave unset to keep the built-in wording.',
-  'settings.display.log.title': 'Logs (gateway)',
-  'settings.display.log.description':
-    'Controls the gateway process log hub (level, color, format, time). Changes hot-apply without a restart.',
-  'settings.display.log.overridden':
-    'Overridden by environment variable {env}; changes here have no effect until it is unset.',
-  'settings.display.log.modules': 'Per-module levels (modules)',
-  'settings.display.log.modulesHint':
-    'Read-only here for now; set event-name prefixes in config to override the global level.',
-  'settings.display.log.modulesEmpty': 'Not configured.',
 
   // Team (0.19 S6). Technical terms (agent / run / session / gateway / token /
   // @ / Team / workspace) and error codes stay untranslated.
@@ -1122,6 +1155,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
 
   // Command palette / shell
   'palette.group.navigation': 'Navigation',
+  'palette.group.settings': 'Settings',
   'palette.group.entity': 'Entities',
   'palette.group.action': 'Actions',
   'palette.group.help': 'Help',
@@ -1143,6 +1177,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'palette.action.checkConnection': 'Check connection',
   'palette.action.reconnect': 'Reconnect',
   'palette.hint.action': 'Action',
+  'palette.hint.settings': 'Setting',
   'palette.hint.help': 'Help',
   'palette.hint.session': 'Session',
   'palette.hint.run': 'Run',
@@ -2034,8 +2069,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
 
   // Design Lab：token / 组件 / 弹窗的自动发现展览馆（本页不手写清单）
   'designLab.title': 'Design Lab',
-  'designLab.subtitle':
-    'Tokens and reusable components are discovered at runtime: add a token or a *.preview.tsx and it appears here; nothing is listed by hand.',
   'designLab.tokens.autoNote':
     'The list is enumerated from the custom properties that actually exist on :root and grouped by prefix, so a new token needs no change here.',
   'designLab.tokens.colors': 'Colors',
@@ -2251,8 +2284,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'integrations.tools.subtitle': 'Tools the model can call, with their approval policy.',
   'integrations.mcp.subtitle': 'MCP servers this gateway connects to, and their tool availability.',
   'integrations.channels.subtitle': 'External channel connectivity and message delivery status.',
-  'visual.subtitle': 'Theme, language, motion, and display preferences for this browser.',
-  'settings.subtitle': 'The resolved configuration and where each value comes from.',
 
   // ── account.* (web-avatar job): account popover in the header ───────────────
   // Identity / current node / sign-in method / settings / sign out. Append new keys

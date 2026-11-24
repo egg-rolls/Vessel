@@ -35,6 +35,13 @@ export function isSlashPaletteShortcut(event: KeyEventLike): boolean {
   return event.key === '/' && !isEditableTarget(event.target);
 }
 
+/** Ctrl+, / Cmd+, 开/关设置弹窗（VSCode 同款；输入框聚焦时不拦截）。 */
+export function isSettingsShortcut(event: KeyEventLike): boolean {
+  if (event.altKey || event.shiftKey) return false;
+  if (isEditableTarget(event.target)) return false;
+  return (event.ctrlKey === true || event.metaKey === true) && event.key === ',';
+}
+
 export function isEscape(event: KeyEventLike): boolean {
   return event.key === 'Escape';
 }

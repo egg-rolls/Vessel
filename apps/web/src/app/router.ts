@@ -31,11 +31,19 @@ export type Route =
   | { domain: 'teams'; nodeKey: string; teamId: string; agentId?: string; bodyId?: string }
   | { domain: 'agents'; nodeKey?: string; teamId?: string; state?: string; presence?: string }
   | { domain: 'capabilities' }
-  | { domain: 'visual' }
-  | { domain: 'designLab' }
-  | { domain: 'settings' };
+  /**
+   * 设置弹窗（VSCode 式，vscode-settings-design §3.8）：路由 = 可分享状态。
+   * ShellOverlays 消费本路由打开 SettingsDialog；关闭 replace 回 chat。
+   * focusKey = 设置项 id 深链定位；query = 搜索词；category = 分类定位。
+   * S6：visual / designLab 整页路由删除，parseRoute 别名直接解析成本路由。
+   */
+  | { domain: 'settings'; focusKey?: string; query?: string; category?: string };
 
-export type Domain = Route['domain'];
+/**
+ * 导航 id 域：Route 域 + legacy visual / designLab（S6 整页删除后不再是路由，
+ * 保留 id 供 DOMAINS 图标 / 命令面板文案复用；primaryRoute 落 settings 别名）。
+ */
+export type Domain = Route['domain'] | 'visual' | 'designLab';
 
 export const DEFAULT_ROUTE: Route = { domain: 'chat' };
 
@@ -186,16 +194,29 @@ export function parseRoute(hash: string): Route {
     case 'capabilities':
       return { domain: 'capabilities' };
     case 'visual':
-      return { domain: 'visual' };
+      // S2：旧整页别名 → 设置弹窗视觉分类（旧链接永不 404）。
+      return { domain: 'settings', category: 'visual' };
     case 'designLab':
-      return { domain: 'designLab' };
+      // S2：设计实验室 = 视觉分区 view 项（自动展开由 focusKey 驱动）。
+      return { domain: 'settings', focusKey: 'local.designLab', category: 'visual' };
     case 'settings': {
       // 0.45 IA：旧 settings 子页作为别名跳到新的顶层页面。
       const tab = segments[1] ?? query.get('tab');
       if (tab === 'connection') return { domain: 'gateway' };
       if (tab === 'capabilities') return { domain: 'capabilities' };
-      if (tab === 'appearance' || tab === 'display') return { domain: 'visual' };
-      return { domain: 'settings' };
+      // S2：appearance|display 别名 → 弹窗视觉分类。
+      if (tab === 'appearance' || tab === 'display') {
+        return { domain: 'settings', category: 'visual' };
+      }
+      const focusKey = queryText(query, 'focus');
+      const search = queryText(query, 'q');
+      const category = queryText(query, 'category');
+      return {
+        domain: 'settings',
+        ...(focusKey ? { focusKey } : {}),
+        ...(search ? { query: search } : {}),
+        ...(category ? { category } : {}),
+      };
     }
     default:
       return { ...DEFAULT_ROUTE };
@@ -271,12 +292,14 @@ export function formatRoute(route: Route): string {
     }
     case 'capabilities':
       return '#/capabilities';
-    case 'visual':
-      return '#/visual';
-    case 'designLab':
-      return '#/designLab';
-    case 'settings':
-      return '#/settings';
+    case 'settings': {
+      const query = new URLSearchParams();
+      if (route.focusKey) query.set('focus', route.focusKey);
+      if (route.query) query.set('q', route.query);
+      if (route.category) query.set('category', route.category);
+      const suffix = query.toString();
+      return suffix ? `#/settings?${suffix}` : '#/settings';
+    }
   }
 }
 

@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { PluginListItem } from '../../gateway/types';
+import { useLocale } from '../../i18n';
 import { type ResourceState, resourceData, useResource } from '../../state/useResource';
 import {
   buildPluginInventory,
@@ -32,6 +33,8 @@ export interface PluginContributionsState extends PluginInventory {
 
 export function usePluginContributions(): PluginContributionsState {
   const { client, connectionState, hasToken, epoch, eventStore } = useConnection();
+  // S3：设置域标题经 pluginT 在归一化时解析——locale 变化需重建 inventory。
+  const locale = useLocale();
   const resource = useResource({
     load: () => client.listPlugins(),
     enabled: hasToken && connectionState === 'open',
@@ -80,7 +83,8 @@ export function usePluginContributions(): PluginContributionsState {
 
   const plugins: readonly PluginListItem[] =
     changedSnapshot ?? resourceData(resource.state) ?? EMPTY_PLUGINS;
-  const inventory = useMemo(() => buildPluginInventory(plugins), [plugins]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: locale 驱动 pluginT 标题重解析（回调体不引用）
+  const inventory = useMemo(() => buildPluginInventory(plugins), [plugins, locale]);
   return {
     plugins,
     ...inventory,

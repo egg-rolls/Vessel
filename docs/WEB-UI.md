@@ -171,6 +171,77 @@ class 与同一个阈值，不要给某一页复制第二份。
 4. **只记一个**：团队同一时刻只有一个被打开，写入时清掉别的 node 槽位；侧栏 / 抽屉 /
    成员栏展开态不落存储（刷新按默认关闭）。
 
+## 设置（VSCode 式弹窗）
+
+设置统一为一个路由驱动的弹窗（`domains/settings/dialog/SettingsDialog.tsx`）；
+旧整页（Appearance / Display / Visual / Settings）已在 S6 删除。设计基线：
+`docs/dev/plans/vscode-settings-design.md`；默认视觉契约：
+`docs/dev/specs/default-visual-contract.md`。
+
+### 单一事实源：注册表
+
+- `state/settings-registry.ts`：核心服务端键表（`CORE_SETTING_SPECS` → `CORE_SETTINGS`）
+  + 本地偏好（`LOCAL_SETTINGS`）+ view 项（`VIEW_SETTINGS`）+ 插件域
+  （`pluginSettingsToDefs`，装上即出现）。纯数据 + 纯函数，不 import React。
+- `state/display-settings.ts` 是**派生兼容层**：`DISPLAY_SETTINGS` 从 `CORE_SETTINGS`
+  反向派生（保留导出）；值读取（`readDisplayValue` / `resolveDisplayValues`）与日志
+  env 覆盖读取仍在这里。新增核心键 = 键表加一行 + i18n 加 `settings.item.<id>.*`，
+  不另立第二份清单。
+- 每项声明唯一归属 scope：`user`（`~/.vessel/config.yaml`）/ `project`
+  （`<project>/vessel.yaml`，工作区覆盖）/ `local`（浏览器 localStorage）。生效优先级
+  `project > user > 内置默认`（服务端解析）；local 不参与服务端解析，纯呈现层。
+  不做同一键两层全量双写（避免 theme 式双真相）。
+
+### 入口与路由
+
+- 入口：AppBar 右上角齿轮（替换 gateway 状态按钮）、`Ctrl/Cmd+,`、AccountMenu、
+  命令面板、移动端 More。gateway 在线状态只留左侧栏，顶栏不再重复。
+- 打开态 = 路由 `{domain:'settings', focusKey?, query?, category?}`（ShellOverlays
+  消费）；关闭 replace 回 chat，背景保留上页（AppShell backgroundRoute）。
+- 旧路由 `#/visual` `#/designLab` `#/settings?tab=appearance|display` 全是进弹窗的
+  深链别名（旧链接永不 404）；`?tab=connection|capabilities` 别名保留。
+  `focusKey` = 设置项 id 定位 + 高亮衰减，并决定层级 tab。
+- 顶部 tab 用户 | 工作区 | 浏览器 = 过滤注册表 + 换写路径；工作区 tab 渲染
+  scope user/project 的服务端核心键（插件键与 view 项不进），写经 `config.set`
+  additive `scope:'project'`（未注入项目写面 → not_found → 只读 + 原因）。
+- 搜索（`state/settings-search.ts`）：`@modified` / `@plugin:<id>` / `@local` /
+  `@user` / `@project` 筛选 token + 空格分词 AND；草堆 = 标题/描述/键路径/keywords/
+  enum 选项；命中 `<mark>` 分段高亮。
+- 命令面板设置键检索（S6）：注册表项以 `searchOnly` 入面板（空查询不刷屏），
+  命中 → `navigate({domain:'settings', focusKey})`。插件设置键不在面板列
+  （弹窗内 `@plugin:<id>` 检索）。
+
+### 写路径（useSettingsWriter）
+
+- 核心键 → `client.setConfigValue(key, value, scope?)` + 8×250ms 轮询确认
+  （覆盖热应用 debounce）。乐观 overlay 在全局 `uiStore.settingsPending`：
+  旧快照不覆盖用户刚选的值；清除按 key+value 匹配（快速 A→B 保留 B）；
+  弹窗关闭不丢未确认写入。写 RPC 失败才算保存失败；确认超时 → 明确 toast
+  「已写入但未确认」，不静默。
+- local 键 → 转调既有唯一写者：theme 经 `uiStore.setTheme` → `storeTheme`
+  （绝不直接写 DOM / localStorage），nav 经 `writeNavPreference`；同步写、无确认窗口。
+- 插件键 → `plugins.config.set`（write 权限），确认源 = `plugins.list[].config`
+  快照；child 模式 `restartRequired` → 提示 + [重载]（`plugins.reload`），不谎报热应用。
+- 恢复默认 = 写契约 default（`config.set` 无 delete）；local 项 = 移除存储键回内置
+  默认；无 default 的项不显示 ↺。`@modified` = 值 ≠ default（缺省回退 fallback）。
+- `ui.language` 是服务端键（agent 侧也消费）：写入成功后同步 `setLocale`。
+- 写面未注入（not_found）→ 只读 + 原因 + [刷新] 复位，不永久禁用。
+
+### view 项与嵌套弹窗
+
+- 视觉分类内「设计实验室」= view 项（懒加载 `DesignLabContent`，可折叠 / 全屏）；
+  连接摘要 / 高级配置（ConfigView）同为 view 项。
+- 嵌套弹窗 Esc：内层挂 **capture 阶段**监听 + `stopImmediatePropagation`，一次 Esc
+  只关一层（DesignLabSection 先例）；焦点圈由最上层 ModalShell 维护。
+
+### i18n 与分类
+
+- 项文案 `settings.item.<id>.title|desc`（desc 可缺失，渲染侧经 `hasMessage` 判定，
+  缺失不渲染描述行）；分类 `settings.category.*`：视觉 / 显示与可见性 / 运行期 /
+  日志 / 连接 / 高级 / 扩展。「常用」是 `common:true` 的 curated 过滤视图，不是独立分类。
+- 插件项文案经 `pluginT` 解析，分类固定 extensions，不能注入核心分类
+  （与 navGroups 核心 key 不可覆盖同一安全口径）。
+
 ## L1：token
 
 值只写在 `styles/tokens.css`；`index.css` 的 `@theme inline` 只做别名

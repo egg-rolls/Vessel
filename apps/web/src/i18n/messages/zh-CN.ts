@@ -129,11 +129,100 @@ export const messages = {
   'breadcrumb.observe.evals': '可观测 › 评测',
   'breadcrumb.settings': '设置',
   'breadcrumb.capabilities': '能力清单',
-  'breadcrumb.visual': '视觉效果',
-  'breadcrumb.designLab': '设计实验室',
 
   // Settings
   'settings.title': '设置',
+  'settings.category.common': '常用',
+  'settings.category.visual': '视觉',
+  'settings.category.display': '显示与可见性',
+  'settings.category.runtime': '运行期',
+  'settings.category.logs': '日志',
+  'settings.category.connection': '连接',
+  'settings.category.advancedConfig': '高级',
+  'settings.category.extensions': '扩展',
+  'settings.item.local.navCollapsed.title': '侧栏默认折叠',
+  'settings.item.local.navCollapsed.desc':
+    '打开 WebUI 时左侧导航栏的默认折叠态；左栏折叠按钮即时写同一存储键。',
+  'settings.item.local.navGroups.title': '分组折叠状态',
+  'settings.item.local.navGroups.desc': '左侧导航各分组的折叠态（只读展示）；重置 = 全部展开。',
+  'settings.item.local.settingsTree.title': '设置分类树折叠态',
+  'settings.item.local.settingsTree.desc': '设置弹窗分类树的折叠状态（JSON 数组，本浏览器）。',
+  'settings.item.local.settingsTab.title': '设置默认层级',
+  'settings.item.local.settingsTab.desc':
+    '打开设置弹窗时默认选中的层级 tab（用户 / 工作区 / 浏览器）。',
+  'settings.item.view.designLab.title': '设计实验室',
+  'settings.item.view.designLab.desc': '设计 token 与组件预览（纯静态样例，不连 gateway）。',
+  'settings.item.view.connection.title': '连接摘要',
+  'settings.item.view.connection.desc': 'gateway 连接状态 / 节点 / 版本（只读诊断面）。',
+  'settings.item.view.advancedConfig.title': '高级配置',
+  'settings.item.view.advancedConfig.desc': '解析后的配置 JSON、键值表与来源表（只读）。',
+  // 核心服务端键（S6 自 settings.display.field.* 迁入；注册表 titleKey/descriptionKey）。
+  'settings.item.verbosity.title': '输出详略',
+  'settings.item.showInternalEvents.title': '显示系统信息（内部事件）',
+  'settings.item.showInternalEvents.desc':
+    '关闭时只保留正文、工具调用、错误与权限/ask 卡片；打开后额外显示运行提示、hook / LLM 上下文等系统消息（会话里的 vessel:* 上下文消息同受此键控制）；verbosity=debug 也会显示这些系统消息。',
+  'settings.item.showArchived.title': '显示已归档 / 已停用（待移除）',
+  'settings.item.showArchived.desc':
+    '默认隐藏已归档 Team 与已停用 agent（它们都在等待被清理）；打开后它们回到 Team 列表、Agent 列表与成员侧栏，并带「已归档 · 待移除 / 已停用 · 待移除」标记。直接链接不受此开关影响，始终可打开。',
+  'settings.item.errorLevel.title': '错误层级',
+  'settings.item.showProcessErrors.title': '显示 process 错误',
+  'settings.item.askUser.title': '允许 ask',
+  'settings.item.askUser.desc': '注册类设置：保存后需新连接或重启 gateway 才生效。',
+  'settings.item.showReasoning.title': '显示思考流',
+  'settings.item.expandCards.title': '卡片默认展开',
+  'settings.item.expandCards.desc':
+    '工具 / 系统消息 / 排队卡片默认展开；权限与提问卡片始终展开。某张卡片手动开合后以手动状态为准。',
+  'settings.item.statusBars.title': '状态栏位置',
+  'settings.item.language.title': '界面语言',
+  'settings.item.logLevel.title': '日志级别',
+  'settings.item.logColor.title': '日志颜色',
+  'settings.item.logFormat.title': '日志格式',
+  'settings.item.logTime.title': '日志时间',
+  'settings.item.emptyResponseEnabled.title': '空响应兜底',
+  'settings.item.emptyResponseEnabled.desc':
+    '模型返回空回复（无内容、无工具调用）时重试而不是零输出早退（缺省无感重调，见下）。缺省开。',
+  'settings.item.emptyResponseSeamless.title': '无感重试（不留疤）',
+  'settings.item.emptyResponseSeamless.desc':
+    '开（缺省）：丢弃空轮，用已有 transcript 原样重调模型——不注入新消息、零疤痕；重试耗尽仍空才注入一次 nudge 兜底。关：直接注入 nudge。',
+  'settings.item.emptyResponseMaxRetries.title': '空响应重试上限',
+  'settings.item.emptyResponseMaxRetries.desc':
+    '每次 run 的重试上限（0–10 整数，缺省 2），无感重调与 nudge 共用。耗尽后优雅终止并落日志注记。',
+  'settings.item.emptyResponseNudge.title': '空响应提示文案',
+  'settings.item.emptyResponseNudge.desc': '自定义 nudge（以 user 消息注入）。不设置则用内置文案。',
+  'settings.dialog.searchPlaceholder': '搜索设置…（@modified / @plugin:<id> / @local / @user）',
+  'settings.dialog.tabUser': '用户',
+  'settings.dialog.tabProject': '工作区',
+  'settings.dialog.tabLocal': '浏览器',
+  'settings.dialog.filterModified': '已修改 (@modified)',
+  'settings.dialog.filterPlugin': '插件域 (@plugin:<id>)',
+  'settings.dialog.filterScope': '层级 (@local / @user / @project)',
+  'settings.dialog.clearFilters': '清除筛选',
+  'settings.dialog.noMatches': '没有匹配的设置',
+  'settings.dialog.resetDefault': '恢复默认',
+  'settings.dialog.resetDone': '已恢复默认：{key}',
+  'settings.dialog.saved': '已保存：{key}',
+  'settings.dialog.saveFailed': '保存失败：{detail}',
+  'settings.dialog.saveUnconfirmed': '已写入但未确认：{key}',
+  'settings.dialog.writeUnavailable': '当前 gateway 无设置写面，只读',
+  'settings.dialog.configUnavailable': '该 gateway 没有注入 config 控制面。',
+  'settings.dialog.scopeUser': '用户',
+  'settings.dialog.scopeProject': '工作区',
+  'settings.dialog.scopeLocal': '本地',
+  'settings.dialog.modified': '已修改',
+  'settings.dialog.readOnly': '只读',
+  'settings.dialog.envOverride': '被环境变量 {env} 覆盖',
+  'settings.dialog.restartRequired': '重载插件后生效',
+  'settings.dialog.reloadPlugin': '重载',
+  'settings.dialog.copyKey': '复制键路径',
+  'settings.dialog.loading': '加载设置…',
+  'settings.dialog.openGateway': '打开 Gateway 页',
+  'settings.dialog.openDesignLab': '展开设计实验室',
+  'settings.dialog.fullscreen': '全屏打开',
+  'settings.dialog.collapseTree': '折叠分类树',
+  'settings.dialog.expandTree': '展开分类树',
+  'settings.dialog.editInYaml': '在 vessel.yaml 中编辑',
+  'settings.dialog.expandAll': '全部展开',
+  'settings.dialog.pluginReloaded': '插件已重载',
   'settings.connection.devProxyNotice':
     '开发代理鉴权已启用：连接同源 gateway（由 Vite 开发服务器转发），前端不保存 token。',
 
@@ -163,8 +252,6 @@ export const messages = {
   'appearance.motion.title': '动效',
   'appearance.motion.desc':
     '动效跟随系统的 prefers-reduced-motion，不提供单独开关。减少动效时抽屉、命令面板与状态脉冲都会关闭。',
-  'appearance.language.title': '界面语言',
-  'appearance.language.desc': '切换后界面文案立即更新；技术词、命令与错误码保持原文。',
   'appearance.language.zh': '简体中文',
   'appearance.language.en': 'English',
   'language.toggleTo': '切换界面语言为 {language}',
@@ -174,6 +261,8 @@ export const messages = {
   // 通用
   'common.cancel': '取消',
   'common.close': '关闭',
+  'common.expand': '展开',
+  'common.collapse': '折叠',
   'common.confirm': '确认',
   'common.loading': '正在加载…',
   'common.processing': '处理中…',
@@ -539,65 +628,6 @@ export const messages = {
   'observe.diagnostics.doctor.attach.disconnected': '未连接 gateway',
   'observe.diagnostics.doctor.feishu.disabled': '飞书未启用',
   'observe.diagnostics.doctor.feishu.detail': 'app id {appId}，app secret {appSecret}',
-  // 0.15: Settings → Display
-  'settings.display.title': '显示与可见性',
-  'settings.display.description': '写入用户配置；仅列出的键可写。显示与可见性设置保存后立即生效。',
-  'settings.display.noToken': '未连接 gateway',
-  'settings.display.noTokenReason': '连接后才能读取/写入设置。',
-  'settings.display.unavailableTitle': '配置接口未启用',
-  'settings.display.unavailableReason': '该 gateway 没有注入 config 控制面。',
-  'settings.display.loading': '正在读取设置…',
-  'settings.display.refresh': '刷新',
-  'settings.display.disconnected': '连接已断开；写操作已禁用。',
-  'settings.display.saved': '已保存 {key}',
-  'settings.display.saveFailed': '保存失败：{detail}',
-  'settings.display.writeUnavailable': '该 gateway 未注入 config 写入；当前只读。',
-  'settings.display.saveUnconfirmed':
-    '已提交 {key}，但 gateway 仍返回旧值；配置热应用通常需要 1 秒内完成，若持续不一致请重启 gateway 后重试。',
-  'settings.display.field.verbosity': '输出详略',
-  'settings.display.field.showInternalEvents': '显示系统信息（内部事件）',
-  'settings.display.field.showInternalEvents.hint':
-    '关闭时只保留正文、工具调用、错误与权限/ask 卡片；打开后额外显示运行提示、hook / LLM 上下文等系统消息（会话里的 vessel:* 上下文消息同受此键控制）；verbosity=debug 也会显示这些系统消息。',
-  'settings.display.field.errorLevel': '错误层级',
-  'settings.display.field.showArchived': '显示已归档 / 已停用（待移除）',
-  'settings.display.field.showArchived.hint':
-    '默认隐藏已归档 Team 与已停用 agent（它们都在等待被清理）；打开后它们回到 Team 列表、Agent 列表与成员侧栏，并带「已归档 · 待移除 / 已停用 · 待移除」标记。直接链接不受此开关影响，始终可打开。',
-  'settings.display.field.showProcessErrors': '显示 process 错误',
-  'settings.display.field.askUser': '允许 ask',
-  'settings.display.field.askUser.hint': '注册类设置：保存后需新连接或重启 gateway 才生效。',
-  'settings.display.booleanOn': '启用',
-  'settings.display.field.showReasoning': '显示思考流',
-  'settings.display.field.expandCards': '卡片默认展开',
-  'settings.display.field.expandCards.hint':
-    '工具 / 系统消息 / 排队卡片默认展开；权限与提问卡片始终展开。某张卡片手动开合后以手动状态为准。',
-  'settings.display.field.statusBars': '状态栏位置',
-  'settings.display.field.language': '界面语言',
-  'settings.display.field.logLevel': '日志级别',
-  'settings.display.field.logColor': '日志颜色',
-  'settings.display.field.logFormat': '日志格式',
-  'settings.display.field.logTime': '日志时间',
-  'settings.display.runtime.title': '运行期（core）',
-  'settings.display.runtime.description':
-    '影响所有 agent 的核心运行期兜底。改动对新会话生效（已存活会话持启动时快照）。',
-  'settings.display.field.emptyResponseEnabled': '空响应兜底',
-  'settings.display.field.emptyResponseEnabled.hint':
-    '模型返回空回复（无内容、无工具调用）时重试而不是零输出早退（缺省无感重调，见下）。缺省开。',
-  'settings.display.field.emptyResponseSeamless': '无感重试（不留疤）',
-  'settings.display.field.emptyResponseSeamless.hint':
-    '开（缺省）：丢弃空轮，用已有 transcript 原样重调模型——不注入新消息、零疤痕；重试耗尽仍空才注入一次 nudge 兜底。关：直接注入 nudge。',
-  'settings.display.field.emptyResponseMaxRetries': '空响应重试上限',
-  'settings.display.field.emptyResponseMaxRetries.hint':
-    '每次 run 的重试上限（0–10 整数，缺省 2），无感重调与 nudge 共用。耗尽后优雅终止并落日志注记。',
-  'settings.display.field.emptyResponseNudge': '空响应提示文案',
-  'settings.display.field.emptyResponseNudge.hint':
-    '自定义 nudge（以 user 消息注入）。不设置则用内置文案。',
-  'settings.display.log.title': '日志（gateway）',
-  'settings.display.log.description':
-    '控制 gateway 进程的日志中枢（级别 / 颜色 / 格式 / 时间）。保存后热应用，无需重启。',
-  'settings.display.log.overridden': '被环境变量 {env} 覆盖，取消该变量前此处修改不生效。',
-  'settings.display.log.modules': '按模块级别（modules）',
-  'settings.display.log.modulesHint': '此处暂只读；按事件名前缀在配置中设置，可覆盖全局级别。',
-  'settings.display.log.modulesEmpty': '未配置。',
 
   // Team（0.19 S6）。技术词 agent / run / session / gateway / token / @ / Team /
   // workspace 与错误码保持原文。
@@ -1072,6 +1102,7 @@ export const messages = {
 
   // 命令面板 / 壳层
   'palette.group.navigation': '导航',
+  'palette.group.settings': '设置',
   'palette.group.entity': '实体',
   'palette.group.action': '动作',
   'palette.group.help': '帮助',
@@ -1093,6 +1124,7 @@ export const messages = {
   'palette.action.checkConnection': '检查连接',
   'palette.action.reconnect': '重新连接',
   'palette.hint.action': '动作',
+  'palette.hint.settings': '设置项',
   'palette.hint.help': '帮助',
   'palette.hint.session': '会话',
   'palette.hint.run': '运行',
@@ -1924,8 +1956,6 @@ export const messages = {
 
   // Design Lab：token / 组件 / 弹窗的自动发现展览馆（本页不手写清单）
   'designLab.title': '设计实验室',
-  'designLab.subtitle':
-    'token 与可复用组件都在运行时自动发现：新增 token 或 *.preview.tsx 就会出现在这里，本页不手写清单。',
   'designLab.tokens.autoNote':
     '清单由 :root 上实际存在的自定义属性自动枚举（按前缀分组）：新增一个 token 不需要改本页代码。',
   'designLab.tokens.colors': '颜色',
@@ -2126,8 +2156,6 @@ export const messages = {
   'integrations.tools.subtitle': '模型可调用的工具及其审批策略。',
   'integrations.mcp.subtitle': '本 gateway 连接的 MCP 服务及其工具可用性。',
   'integrations.channels.subtitle': '外部渠道的连接状态与消息投递情况。',
-  'visual.subtitle': '本浏览器的主题、语言、动效与显示偏好。',
-  'settings.subtitle': '解析后的配置，以及每个值的来源。',
 
   // ── account.*（单子 web-avatar）：头部账号浮层 ──────────────────────────────
   // 身份 / 当前节点 / 登录方式 / 设置 / 登出。新 key 只在文件尾部追加，

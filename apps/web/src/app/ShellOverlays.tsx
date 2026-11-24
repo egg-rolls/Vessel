@@ -2,10 +2,12 @@ import { CommandPalette } from '../components/CommandPalette';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ModalShell } from '../components/Modal';
 import { Button } from '../components/ui';
+import { SettingsDialog } from '../domains/settings/dialog/SettingsDialog';
 import { t } from '../i18n';
 import type { PaletteItem } from '../state/palette';
+import type { Route } from './router';
 
-/** 外壳级浮层：命令面板、帮助、破坏性动作二次确认。 */
+/** 外壳级浮层：命令面板、帮助、设置弹窗（路由驱动）、破坏性动作二次确认。 */
 export function ShellOverlays({
   paletteOpen,
   paletteItems,
@@ -18,6 +20,9 @@ export function ShellOverlays({
   pendingAction,
   onClearPending,
   onConfirmPending,
+  settingsRoute,
+  onCloseSettings,
+  onNavigate,
 }: {
   paletteOpen: boolean;
   paletteItems: PaletteItem[];
@@ -30,9 +35,23 @@ export function ShellOverlays({
   pendingAction: PaletteItem | null;
   onClearPending: () => void;
   onConfirmPending: () => void;
+  /** route.domain==='settings' 时非空：弹窗打开态 = 路由（可深链、后退关闭）。 */
+  settingsRoute: { focusKey?: string; query?: string; category?: string } | null;
+  onCloseSettings: () => void;
+  onNavigate: (route: Route) => void;
 }) {
   return (
     <>
+      {settingsRoute && (
+        <SettingsDialog
+          focusKey={settingsRoute.focusKey}
+          initialQuery={settingsRoute.query}
+          initialCategory={settingsRoute.category}
+          onClose={onCloseSettings}
+          onNavigate={onNavigate}
+        />
+      )}
+
       {paletteOpen && (
         <CommandPalette
           items={paletteItems}

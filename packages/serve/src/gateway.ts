@@ -256,6 +256,16 @@ export interface GatewayOptions {
    * `restart_required: true`（不得谎报已重载）。
    */
   pluginsReload?: () => Promise<PluginReloadResult>;
+  /**
+   * S4（vscode-settings-design §4.4）：`plugins.config.set` 的写面（asm 注入
+   * setPluginConfigValue）。缺省 = not_found（旧装配 / node 本地 RPC 无写端口）。
+   * handler 成功后由 gateway 广播 plugin.changed（config 快照变了）。
+   */
+  pluginsConfigSet?: (
+    plugin: string,
+    key: string,
+    value: string | number | boolean,
+  ) => Promise<void>;
   /** 请求体上限（字节，默认 1 MiB） */
   maxBodyBytes?: number;
   /**
@@ -2433,6 +2443,24 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ? {
           pluginsContributions: () => opts.pluginHostManager?.contributionsFor() ?? {},
           pluginsMetadata: () => pluginMetadata(),
+          pluginSettingSpec: (plugin: string) => opts.pluginHostManager?.settingSpecFor?.(plugin),
+        }
+      : {}),
+    ...(opts.pluginsConfigSet !== undefined
+      ? {
+          pluginsConfigSet: async (
+            plugin: string,
+            key: string,
+            value: string | number | boolean,
+          ) => {
+            const write = opts.pluginsConfigSet as (
+              plugin: string,
+              key: string,
+              value: string | number | boolean,
+            ) => Promise<void>;
+            await write(plugin, key, value);
+            broadcastPluginChanged();
+          },
         }
       : {}),
     ...(opts.pluginsReload !== undefined

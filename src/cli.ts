@@ -148,7 +148,11 @@ import {
   noteStartup,
   timeStartup,
 } from './observability/startup-timing';
-import { buildPluginConfigMap, declarativePluginEntries } from './plugin/plugin-config';
+import {
+  buildPluginConfigMap,
+  declarativePluginEntries,
+  setPluginConfigValue,
+} from './plugin/plugin-config';
 import {
   activateStartupPlugins,
   createPluginHostManager,
@@ -1001,7 +1005,13 @@ async function runWithConfig(result: BootstrapResult) {
     markStartup('sweep');
     // 0.15：serve 的 config.set 写回面（对象变量避免对 ConfigGatewayOptionsLike 的
     // 多余属性检查；serve 合入 0.15 后该字段会被正式识别）。
-    const gatewayConfigSet = createGatewayConfigSet({ defaultTenantId: result.tenantId });
+    const gatewayConfigSet = createGatewayConfigSet({
+      defaultTenantId: result.tenantId,
+      // S5：工作区覆盖层写项目 vessel.yaml（configPaths 与 config.get paths 同源）。
+      ...(gatewayBundle.configPaths?.project !== undefined
+        ? { projectConfigPath: gatewayBundle.configPaths.project }
+        : {}),
+    });
     // 写后热应用：config.set 落盘后同步跑一次唯一热应用入口，保证 RPC 返回时
     // config.get 已是最新（单飞行 / 有上界 / 失败只 warn，见该模块契约）。
     const applyWrittenConfig = createWrittenConfigApplier({
@@ -1522,6 +1532,9 @@ async function runWithConfig(result: BootstrapResult) {
         ? { pluginHostManager, pluginHttp: pluginHostManager }
         : {}),
       ...(pluginsReload !== undefined ? { pluginsReload } : {}),
+      // S4：插件设置写面（plugins.config.set）；值校验在 serve 方法层按 manifest spec。
+      pluginsConfigSet: (plugin: string, key: string, value: string | number | boolean) =>
+        setPluginConfigValue(plugin, key, value),
       // 单执行面的插件清单：bundle 插件 + 体验型 child 插件。
       plugins: pluginEntries,
       pluginCatalog,

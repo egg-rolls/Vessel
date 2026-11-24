@@ -24,11 +24,11 @@ import type { PrimaryDomain } from './nav';
 import { routeBreadcrumb } from './nav';
 import { readNavPreference, writeNavPreference } from './nav-preference';
 import { buildPaletteItems } from './palette-items';
-import { formatRoute } from './router';
+import { DEFAULT_ROUTE, formatRoute, type Route } from './router';
 import { ShellOverlays } from './ShellOverlays';
 import { ShellRouteView } from './ShellRouteView';
 import { shellNoticeItems } from './shellNoticeItems';
-import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
+import { isPaletteShortcut, isSettingsShortcut, isSlashPaletteShortcut } from './shortcuts';
 import { useDrawerA11y } from './useDrawerA11y';
 import { useHashRoute } from './useHashRoute';
 import { probeHubNavStatus } from './useNavStatus';
@@ -39,7 +39,11 @@ import { useViewportWidth } from './useViewportWidth';
 
 export function AppShell() {
   const locale = useLocale();
-  const { route, navigate } = useHashRoute();
+  const { route, navigate, replace } = useHashRoute();
+  // 设置弹窗是路由驱动浮层：背景保留上一个页面（chat 不重挂载、不丢滚动）。
+  const backgroundRoute = useRef<Route>(DEFAULT_ROUTE);
+  if (route.domain !== 'settings') backgroundRoute.current = route;
+  const viewRoute = route.domain === 'settings' ? backgroundRoute.current : route;
   // 路由级订阅：Chat 会话页只回放本会话，Team / Runs 只收失效信号（契约 §4.1）。
   useRouteSubscription(route);
   const toast = useToast();
@@ -84,7 +88,7 @@ export function AppShell() {
   const lastEventVersion = useRef(-1);
 
   // 当前会话的权限/提问在 ChatView 的 Composer 槽位处理；其他会话只保留顶部提示条。
-  const modalOpen = Boolean(pendingAction || helpOpen);
+  const modalOpen = Boolean(pendingAction || helpOpen || route.domain === 'settings');
   // 归属解析要 roster（历史脏数据的上溯兑底）：外壳拿一次，顶部条 / 待批页共用同一份
   // store（`useAgentStore`），不为这条提示多开一路 RPC。
   const rosterState = useAgentStore((state) => state.roster);
@@ -258,7 +262,7 @@ export function AppShell() {
   // **主题以存储为准的自愈。** `data-theme` 不是只有这里会写：视觉设置页的 token 表
   // 在退化路径下会临时把 `<html data-theme="dark">`（`domains/design/tokens.ts`），
   // 插件宿主也可能按自己的上下文改它。一旦被改脏而没有还原，界面上没有任何东西会纠正，
-  // 用户只能靠「再进一次视觉设置页」触发 AppearanceView 挂载时的那次重放 ——
+  // 用户只能靠「再开一次设置弹窗拨主题」触发 uiStore.setTheme 的那次重放 ——
   // 这正是「切亮色 → 刷新/切页后变回暗色」表现出来的形状。
   // 所以这里在「回到前台 / 从往返缓存恢复 / 其它标签页改了偏好」时，按存储值重放一次
   // （幂等，纯读一次 localStorage，代价可忽略）。
@@ -310,6 +314,13 @@ export function AppShell() {
       firstRoute.current = false;
       return;
     }
+    // 设置弹窗打开：焦点归弹窗（useModalA11y），不抢焦点/不滚背景。
+    if (route.domain === 'settings') {
+      setAnnouncement(t('nav.opened', { path: routeBreadcrumb(route) }));
+      setNavDrawerOpen(false);
+      setChatSessionsOpen(false);
+      return;
+    }
     window.scrollTo(0, 0);
     mainRef.current?.scrollTo?.(0, 0);
     mainRef.current?.focus();
@@ -347,6 +358,13 @@ export function AppShell() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // Ctrl+, 开/关设置弹窗（优先于 modalOpen 守卫：弹窗打开时也要能关）。
+      if (isSettingsShortcut(event)) {
+        event.preventDefault();
+        if (route.domain === 'settings') replace({ domain: 'chat' });
+        else navigate({ domain: 'settings' });
+        return;
+      }
       if (modalOpen) return;
       if (isPaletteShortcut(event)) {
         event.preventDefault();
@@ -362,7 +380,7 @@ export function AppShell() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [modalOpen]);
+  }, [modalOpen, route.domain, navigate, replace]);
 
   const openHelp = useCallback(() => setHelpOpen(true), []);
 
@@ -465,7 +483,7 @@ export function AppShell() {
             inert={navMode === 'drawer' && navDrawerOpen ? true : undefined}
           >
             <ShellRouteView
-              route={route}
+              route={viewRoute}
               navigate={navigate}
               chatSessionsOpen={chatSessionsOpen}
               onCloseSessions={closeSessions}
@@ -505,6 +523,13 @@ export function AppShell() {
             setPendingAction(null);
             action?.run();
           }}
+          settingsRoute={
+            route.domain === 'settings'
+              ? { focusKey: route.focusKey, query: route.query, category: route.category }
+              : null
+          }
+          onCloseSettings={() => replace({ domain: 'chat' })}
+          onNavigate={navigate}
         />
       </div>
     </PaletteEntitiesProvider>

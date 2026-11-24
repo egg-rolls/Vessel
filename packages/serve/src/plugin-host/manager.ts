@@ -56,6 +56,7 @@ import type {
   PluginReloadResult,
   PluginRenderContributions,
   PluginRuntimeStatus,
+  PluginSettingSpec,
   PluginStaticMount,
   PluginStatusEntry,
   PluginUiTrust,
@@ -1255,6 +1256,21 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     return output;
   }
 
+  /** S4：写路径用的 settings spec + 运行模式（child = spawn 后不可变）。 */
+  settingSpecFor(
+    id: string,
+  ): { settings: Record<string, unknown>; mode: 'in-process' | 'child' } | undefined {
+    const entry = this.entries.get(id);
+    if (entry !== undefined) {
+      return { settings: entry.descriptor.contributes?.settings ?? {}, mode: 'child' };
+    }
+    const record = this.inProcess.get(id);
+    if (record !== undefined) {
+      return { settings: record.descriptor.contributes?.settings ?? {}, mode: 'in-process' };
+    }
+    return undefined;
+  }
+
   /** enabled 且声明 ui.dir 的静态挂载（child + 已登记的 in-process）。 */
   staticMounts(): PluginStaticMount[] {
     const mounts: PluginStaticMount[] = [];
@@ -1910,12 +1926,16 @@ export function renderContributions(
     .sort((a, b) => a.order - b.order);
   // E1 amendment：bare 方法名；web iframe bridge 用它做 RPC 白名单。
   const rpc = (contributes.rpc ?? []).map((method) => method.name);
+  // S3 additive：settings spec 原样透传（loader readSettings 已校验形状）。
+  const settings = contributes.settings;
+  const hasSettings = settings !== undefined && Object.keys(settings).length > 0;
   if (
     pages.length === 0 &&
     panels.length === 0 &&
     toolbar.length === 0 &&
     commands.length === 0 &&
-    rpc.length === 0
+    rpc.length === 0 &&
+    !hasSettings
   ) {
     return undefined;
   }
@@ -1927,6 +1947,7 @@ export function renderContributions(
     commands,
     rpc,
     ...(contributes.i18n !== undefined ? { i18n: contributes.i18n } : {}),
+    ...(hasSettings ? { settings: settings as Record<string, PluginSettingSpec> } : {}),
   };
 }
 

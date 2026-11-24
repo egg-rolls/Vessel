@@ -85,12 +85,48 @@ export abstract class IntegrationsClient extends TeamsClient {
     return this.rpc<ConfigSourcesResponse>('config.sources', {});
   }
 
-  /** 0.15：只写服务端白名单键；未注入 writer 时返回 not_found。 */
+  /**
+   * 0.15：只写服务端白名单键；未注入 writer 时返回 not_found。
+   * S5 additive：scope='project' 写工作区覆盖层（项目 vessel.yaml，优先于 user）；
+   * 缺省不传 scope（旧 gateway 兼容，服务端缺省 user）。
+   */
   setConfigValue(
     key: string,
     value: string | boolean | number,
+    scope?: 'user' | 'project',
   ): Promise<{ ok: boolean; key: string; value: string | boolean | number }> {
-    return this.rpc('config.set', { key, value });
+    return this.rpc('config.set', scope === undefined ? { key, value } : { key, value, scope });
+  }
+
+  /**
+   * S4（vscode-settings-design §4.4）：插件设置写路径（write 权限）。
+   * 旧 gateway / 未注入写面 → not_found（UI 只读 + 原因）。
+   * restartRequired=true（child 模式）→ 提示重载，不谎报热应用。
+   */
+  setPluginConfigValue(
+    plugin: string,
+    key: string,
+    value: string | boolean | number,
+  ): Promise<{
+    ok: boolean;
+    plugin: string;
+    key: string;
+    value: string | boolean | number;
+    restartRequired: boolean;
+  }> {
+    return this.rpc('plugins.config.set', { plugin, key, value });
+  }
+
+  /** S4：child 插件改配置后的显式重载（plugins.reload，write 权限，已有）。 */
+  reloadPlugins(): Promise<{
+    added: string[];
+    removed: string[];
+    changed: string[];
+    active: string[];
+    errors: Array<{ id: string; code: string; message: string }>;
+    restart_required?: boolean;
+  }> {
+    return this.rpc('plugins.reload', {});
   }
 
   /**

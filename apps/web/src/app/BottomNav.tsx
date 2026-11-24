@@ -29,8 +29,6 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
     route.domain === 'teams' ||
     route.domain === 'agents' ||
     route.domain === 'capabilities' ||
-    route.domain === 'visual' ||
-    route.domain === 'designLab' ||
     route.domain === 'mcp' ||
     route.domain === 'channels' ||
     route.domain === 'observe' ||
@@ -129,26 +127,7 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
             >
               <DomainIcon domain="capabilities" /> {domainLabel('capabilities')}
             </button>
-            <button
-              type="button"
-              className="more-item"
-              onClick={() => {
-                setMoreOpen(false);
-                navigate(primaryRoute('visual'));
-              }}
-            >
-              <DomainIcon domain="visual" /> {domainLabel('visual')}
-            </button>
-            <button
-              type="button"
-              className="more-item"
-              onClick={() => {
-                setMoreOpen(false);
-                navigate(primaryRoute('designLab'));
-              }}
-            >
-              <DomainIcon domain="designLab" /> {domainLabel('designLab')}
-            </button>
+            {/* S2：visual/designLab 入口收进设置弹窗视觉分区（#/visual #/designLab 别名仍可达）。 */}
             <button
               type="button"
               className="more-item"

@@ -1,9 +1,7 @@
 import type { ReactNode } from 'react';
 import { Tooltip } from '../components/Tooltip';
 import { AccountMenu } from '../domains/auth/AccountMenu';
-import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
-import { connectionLabel } from './connection-label';
 import { LanguageToggle } from './LanguageToggle';
 import { routeBreadcrumb } from './nav';
 import type { Route } from './router';
@@ -29,8 +27,6 @@ export function AppBar({
   center?: ReactNode;
 }) {
   useLocale();
-  const { connectionState, hasToken } = useConnection();
-  const connLabel = hasToken ? connectionLabel(connectionState) : t('nav.conn.idle');
   const drawerToggle = onToggleSessions
     ? {
         id: 'sessions-toggle',
@@ -98,18 +94,17 @@ export function AppBar({
         </button>
       </Tooltip>
 
-      <Tooltip label={t('nav.connStatusTitle')}>
+      {/* 裁定⑤：设置入口常驻右上角，替换原 gateway 状态按钮
+          （gateway 在线状态只留左侧栏 nav-status 四档点色；断连有 StaleNotice/MessageBar 兜底）。 */}
+      <Tooltip label={`${t('nav.settings')} (Ctrl+,)`}>
         <button
           type="button"
-          className="group inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-transparent px-2.5 py-1 text-xs tracking-wide text-muted transition-colors duration-150 hover:bg-hover data-[state=open]:text-success data-[state=connecting]:text-warn data-[state=reconnecting]:text-warn data-[state=closed]:text-danger data-[state=error]:text-danger max-compact:px-2 pointer-coarse:min-h-touch"
-          data-state={hasToken ? connectionState : 'idle'}
-          onClick={() => navigate({ domain: 'gateway' })}
+          className="inline-flex size-9 flex-none items-center justify-center rounded-full bg-transparent text-base text-muted transition-colors duration-150 hover:bg-hover hover:text-ink pointer-coarse:size-touch"
+          aria-label={t('nav.settings')}
+          aria-keyshortcuts="Control+, Meta+,"
+          onClick={() => navigate({ domain: 'settings' })}
         >
-          <span
-            className="size-1.5 flex-none rounded-full bg-faint group-data-[state=open]:bg-success group-data-[state=connecting]:bg-warn group-data-[state=connecting]:pulse-soft group-data-[state=reconnecting]:bg-warn group-data-[state=reconnecting]:pulse-soft group-data-[state=closed]:bg-danger group-data-[state=error]:bg-danger"
-            aria-hidden="true"
-          />
-          <span className="max-compact:hidden">{connLabel}</span>
+          <span aria-hidden="true">⚙</span>
         </button>
       </Tooltip>
 

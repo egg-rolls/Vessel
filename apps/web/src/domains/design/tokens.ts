@@ -388,8 +388,8 @@ function sampleDarkValues(names: readonly string[]): TokenValues {
   const previous = root.getAttribute('data-theme');
   root.setAttribute('data-theme', 'dark');
   // **必须 try/finally**：这段代码是唯一会往主文档硬写 `data-theme="dark"` 的地方，
-  // 一旦读值中途抛异常而没有还原，整页会永久停在暗色，而且除了「重新进一次视觉设置页
-  // （AppearanceView 挂载时按存储重放主题）」没有任何人会纠正它 —— 这与用户报的
+  // 一旦读值中途抛异常而没有还原，整页会永久停在暗色，而且除了「重新开一次设置弹窗
+  // （主题项经 uiStore.setTheme 按存储重放）」没有任何人会纠正它 —— 这与用户报的
   // 「切亮色后刷新变回暗色、只有进视觉设置页才恢复」是同一个形状。
   try {
     const values = readValues(names, getComputedStyle(root));

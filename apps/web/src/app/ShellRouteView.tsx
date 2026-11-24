@@ -1,6 +1,5 @@
 import { AgentsView } from '../domains/agents/AgentsView';
 import { ChatView } from '../domains/chat/ChatView';
-import { DesignLabView } from '../domains/design/DesignLabView';
 import { GatewayView } from '../domains/gateway/GatewayView';
 import { HubView } from '../domains/hub/HubView';
 import { CapabilityView } from '../domains/integrations/CapabilityView';
@@ -10,8 +9,7 @@ import { PendingView } from '../domains/pending/PendingView';
 import { PluginHostView } from '../domains/plugins/PluginHostView';
 import { PluginPageView } from '../domains/plugins/PluginPageView';
 import { RunsView } from '../domains/runs/RunsView';
-import { CapabilitiesPage, VisualPage } from '../domains/settings/NavPages';
-import { SettingsView } from '../domains/settings/SettingsView';
+import { CapabilitiesPage } from '../domains/settings/NavPages';
 import { TeamsView } from '../domains/teams/TeamsView';
 import type { Route } from './router';
 import type { PaneResizeApi } from './usePaneResize';
@@ -57,9 +55,8 @@ export function ShellRouteView({
       {route.domain === 'observe' && <ObserveView route={route} navigate={navigate} />}
       {route.domain === 'plugins' && <PluginPageView route={route} />}
       {route.domain === 'capabilities' && <CapabilitiesPage />}
-      {route.domain === 'visual' && <VisualPage />}
-      {route.domain === 'designLab' && <DesignLabView />}
-      {route.domain === 'settings' && <SettingsView />}
+      {/* visual / designLab / settings 不再是整页路由：parseRoute 别名进设置弹窗
+          （ShellOverlays 消费），背景保留上页（AppShell backgroundRoute）。 */}
     </>
   );
 }

@@ -290,6 +290,30 @@ export interface PluginRenderContributions {
   commands: Array<{ name: string; title: string }>;
   /** E1 amendment：bare RPC 方法名，供 web iframe bridge 做白名单。 */
   rpc: string[];
+  /**
+   * S3 additive（vscode-settings-design §4.2）：manifest contributes.settings
+   * 的 UI 元数据 spec（loader 已校验形状，原样透传，同 i18n 处理方式）。
+   * 旧 gateway 不返回 → Web 归一化得空数组 → 扩展组不渲染。
+   */
+  settings?: Record<string, PluginSettingSpec>;
+}
+
+/**
+ * 插件设置项 spec（§4.1）：现状 {type, description?, default?} 继续合法；
+ * 扩展字段全部可选。object/array 仍只读；嵌套 schema 不支持（v1 扁平）。
+ */
+export interface PluginSettingSpec {
+  type?: string;
+  title?: string;
+  titleKey?: string;
+  description?: string;
+  descriptionKey?: string;
+  default?: unknown;
+  enum?: string[];
+  keywords?: string[];
+  order?: number;
+  minimum?: number;
+  maximum?: number;
 }
 
 /** `plugins.reload` 的单项失败（只影响该 plugin）。 */
@@ -398,6 +422,14 @@ export interface PluginHostManagerLike {
   ensureActive(id: string): Promise<void>;
   /** plugin id → 渲染字段；只含 enabled 的体验型 plugin。 */
   contributionsFor(): Record<string, PluginRenderContributions>;
+  /**
+   * S4（vscode-settings-design §4.4）：写路径用的 settings spec + 运行模式。
+   * child 模式 settings 经 env 注入，spawn 后不可变 → restartRequired=true。
+   * 未登记的插件返回 undefined（方法层报 not_found）。
+   */
+  settingSpecFor?(
+    id: string,
+  ): { settings: Record<string, unknown>; mode: 'in-process' | 'child' } | undefined;
   /** 当前 enabled、且声明了 ui.dir 的静态挂载。 */
   staticMounts(): PluginStaticMount[];
   /** 由 gateway 用 hub 构造的事件源注入；替换旧源并重订阅 active plugin。 */

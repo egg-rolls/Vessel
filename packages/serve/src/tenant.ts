@@ -47,6 +47,8 @@ export interface ConfigSetRequest {
   tenantId: string;
   key: string;
   value: string | boolean | number;
+  /** S5 additive（vscode-settings-design §2.3）：写入层级；缺省 user。 */
+  scope?: 'user' | 'project';
 }
 
 export interface ConfigGatewayOptionsLike {

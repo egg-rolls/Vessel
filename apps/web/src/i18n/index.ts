@@ -117,6 +117,11 @@ function interpolate(template: string, params?: Record<string, string | number>)
 }
 
 /** 翻译；未命中回退 zh-CN，再回退 key。永不抛错。 */
+/** 键在当前 locale 或回退目录中是否存在（可选描述行判定；t() 缺失键回退键名）。 */
+export function hasMessage(key: string): boolean {
+  return CATALOGS[getLocale()][key] !== undefined || CATALOGS[DEFAULT_LOCALE][key] !== undefined;
+}
+
 export function t(key: string, params?: Record<string, string | number>): string {
   const locale = getLocale();
   const template = CATALOGS[locale][key] ?? CATALOGS[DEFAULT_LOCALE][key] ?? key;
