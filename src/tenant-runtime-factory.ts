@@ -69,6 +69,7 @@ import { TimelineEventLog } from '../packages/core/src/timeline/read-port';
 import type { PluginHostManager } from '../packages/serve/src/index';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
+import { emptyResponsePolicyOf } from './empty-response-settings';
 import { createFeishuFromConfig, stopFeishuChannel } from './feishu-wiring';
 import { FileLeaseService } from './lease-service';
 import { normalizeLegacyToolName } from './legacy-tool-names';
@@ -112,7 +113,6 @@ import {
   type TraceRecorderFactory,
 } from './trace-wiring';
 import { createUsagePricing } from './usage-pricing';
-import { emptyResponsePolicyOf } from './empty-response-settings';
 import { visionSettingsOf } from './vision-settings';
 
 /** 构造一个 tenant 执行面的输入 */

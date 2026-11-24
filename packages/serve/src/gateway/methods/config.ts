@@ -348,7 +348,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
         required: ['key', 'value'],
         properties: {
           key: { type: 'string', minLength: 1 },
-          // 布尔键接受 boolean，其余键接受 string；具体校验在 handler。
+          // 布尔键接受 boolean，整数键接受 number|string，其余键接受 string；具体校验在 handler。
           value: {},
         },
       },

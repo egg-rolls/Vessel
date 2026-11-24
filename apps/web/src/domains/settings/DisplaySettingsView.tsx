@@ -19,6 +19,7 @@ import {
   confirmedDisplayKeys,
   DISPLAY_SETTINGS,
   type DisplaySettingDef,
+  EMPTY_RESPONSE_SETTING_PREFIX,
   LOG_SETTING_PREFIX,
   readDisplayValue,
   readLogEnvOverrides,
@@ -50,7 +51,54 @@ function isUnavailable(error: unknown): boolean {
 }
 
 /**
- * 可写键的控件网格（纯展示）：布尔用 checkbox、枚举用 radio。
+ * 文本 / 数字输入（q-empty-response 起）：本地草稿，**blur / Enter 才提交**——
+ * 逐键写 config.set 会把每个 keystroke 变成一次落盘。非法值（越界整数 / 空串）
+ * 不提交并回落到服务端值。
+ */
+function CommitTextInput({
+  disabled,
+  onCommit,
+  setting,
+  value,
+}: {
+  disabled: boolean;
+  onCommit: (raw: string) => void;
+  setting: DisplaySettingDef;
+  value: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  // 服务端值变化（含写入确认后的快照）同步草稿；本地编辑中不被旧快照打断
+  // （value 只在确认 / 刷新时变）。
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => {
+    if (draft === value) return;
+    if (toConfigValue(setting, draft) === undefined) {
+      setDraft(value);
+      return;
+    }
+    onCommit(draft);
+  };
+  return (
+    <input
+      type={setting.type === 'number' ? 'number' : 'text'}
+      className="mt-2.5 w-full rounded-md border border-line bg-surface px-2 py-1 font-mono text-md text-ink focus:border-accent focus:outline-none"
+      value={draft}
+      min={setting.min}
+      max={setting.max}
+      step={setting.type === 'number' ? 1 : undefined}
+      disabled={disabled}
+      aria-label={setting.key}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') event.currentTarget.blur();
+      }}
+    />
+  );
+}
+
+/**
+ * 可写键的控件网格（纯展示）：布尔用 checkbox、枚举用 radio、数字/文本用输入框。
  * 单独导出便于静态渲染断言；不依赖 connection / store。
  */
 export function DisplaySettingsFields({
@@ -99,6 +147,13 @@ export function DisplaySettingsFields({
                 {t('settings.display.field.showArchived.hint')}
               </div>
             )}
+            {(setting.id === 'emptyResponseEnabled' ||
+              setting.id === 'emptyResponseMaxRetries' ||
+              setting.id === 'emptyResponseNudge') && (
+              <div className="mt-0.5 text-sm text-muted">
+                {t(`settings.display.field.${setting.id}.hint`)}
+              </div>
+            )}
             {extraHint !== undefined && (
               <div className="mt-0.5 text-sm text-muted">{extraHint}</div>
             )}
@@ -113,6 +168,13 @@ export function DisplaySettingsFields({
                 />
                 <span>{t('settings.display.booleanOn')}</span>
               </label>
+            ) : setting.type === 'number' || setting.type === 'string' ? (
+              <CommitTextInput
+                setting={setting}
+                value={current}
+                disabled={disabled}
+                onCommit={(raw) => onChange(setting, raw)}
+              />
             ) : (
               <div
                 className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5"
@@ -288,7 +350,22 @@ export function DisplaySettingsView() {
       >
         <DisplaySettingsFields
           settings={DISPLAY_SETTINGS.filter(
-            (setting) => !setting.key.startsWith(LOG_SETTING_PREFIX),
+            (setting) =>
+              !setting.key.startsWith(LOG_SETTING_PREFIX) &&
+              !setting.key.startsWith(EMPTY_RESPONSE_SETTING_PREFIX),
+          )}
+          display={display}
+          disabledFor={(setting) => !connected || saving === setting.key || readOnly}
+          onChange={(setting, raw) => void change(setting, raw)}
+        />
+      </Section>
+      <Section
+        title={t('settings.display.runtime.title')}
+        description={t('settings.display.runtime.description')}
+      >
+        <DisplaySettingsFields
+          settings={DISPLAY_SETTINGS.filter((setting) =>
+            setting.key.startsWith(EMPTY_RESPONSE_SETTING_PREFIX),
           )}
           display={display}
           disabledFor={(setting) => !connected || saving === setting.key || readOnly}
