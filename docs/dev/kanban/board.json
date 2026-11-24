@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "首轮验收4/4通过+真canary agent canary-probe(56112218)经targeting建成跑canary新代码做真端到端验收(async bash来源/空响应seamless/增量卡)；federation canary侧env_file通；生产侧待用户重启+晋升拍板"
+      "progress": "401根因=PII guardrail掩码config key(sk-7c77假值)，文件到文件拷真key(sk-JoQ len25)修复+重启；canary-verifier(8c007d99)跑真端到端验收；federation canary侧env_file通；生产侧待用户重启+晋升拍板"
     },
     {
       "id": "q-node-target",
