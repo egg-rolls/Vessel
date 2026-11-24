@@ -25,8 +25,9 @@ import {
   type VesselConfig,
 } from '../packages/config/src/index';
 import { isLoopbackHostname } from '../packages/serve/src/index';
-import type { DoctorCommandArgs } from './cli-args';
-import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
+import type { DoctorCommandArgs } from './cli/args';
+import { type ControlPlaneTarget, resolveControlPlaneTarget } from './cli/control-plane-target';
+import { ui } from './cli/output';
 import {
   resolveDataDir,
   resolveEffectiveTenantId,
@@ -48,7 +49,6 @@ import { declarativePluginEntries } from './plugin/plugin-config';
 import { PluginLoader } from './plugin/plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin/plugin-selection';
 import { readPackageVersion } from './shared/version';
-import { ui } from './ui-style';
 
 export interface DoctorCommandResult {
   exitCode: number;

@@ -8,7 +8,7 @@
  * @module vessel/attention-client
  */
 
-import type { ControlPlaneTarget } from '../control-plane-target';
+import type { ControlPlaneTarget } from '../cli/control-plane-target';
 import { RpcClientError } from '../rpc';
 
 export interface AttentionInteraction {

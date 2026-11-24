@@ -21,7 +21,7 @@
 
 import type { AgentService } from '@vessel-agent/agent';
 import type { StoredInteraction } from '../../packages/serve/src/index';
-import { formatAnswersForModel, remainingQuestionsOf } from '../ask-channel';
+import { formatAnswersForModel, remainingQuestionsOf } from '../cli/ask-channel';
 
 /**
  * 答案消息的正文前缀：让模型一眼看出「这是人对我那个待批提问的回答」。

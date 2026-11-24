@@ -68,10 +68,10 @@ import {
 import { TimelineEventLog } from '../../packages/core/src/timeline/read-port';
 import type { PluginHostManager } from '../../packages/serve/src/index';
 import { ownerSelfCard } from '../agent/self-card';
+import type { FeishuChannelLike, MetricsControlLike } from '../cli/control-plane-types';
 import { emptyResponsePolicyOf } from '../config/empty-response-settings';
 import { normalizeLegacyToolName } from '../config/legacy-tool-names';
 import { visionSettingsOf } from '../config/vision-settings';
-import type { FeishuChannelLike, MetricsControlLike } from '../control-plane-types';
 import { resolveDataDir } from '../data/data-paths';
 import { resolveAgentCwd } from '../data/path-resolution';
 import { reportShutdownFailure } from '../gateway/shutdown-report';

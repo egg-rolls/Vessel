@@ -16,7 +16,8 @@ import { readdir, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { getUserConfigDir, loadConfig, type VesselConfig } from '../packages/config/src/index';
-import { DEFAULT_STOP_TIMEOUT_MS, type GatewaySelector } from './cli-args';
+import { DEFAULT_STOP_TIMEOUT_MS, type GatewaySelector } from './cli/args';
+import { ui } from './cli/output';
 import { expandHome, resolveDataDir } from './data/data-paths';
 import { isHumanTerminal } from './gateway/gateway-banner';
 import { loadNodeRegistry } from './gateway/node-registry';
@@ -31,7 +32,6 @@ import { resolveConnectToken, resolveGatewayToken } from './gateway/transport-fa
 import { type GatewayCommandDeps, resolveGatewayTargets, stopGateway } from './gateway-command';
 import { t } from './i18n';
 import { createHttpRpcClient, type HttpRpcClient, normalizeConnectUrl } from './rpc/http-client';
-import { ui } from './ui-style';
 
 /** 冻结签名（CONTRACT-stop-semantics S1）；接线方 = src/commands/registry.ts。 */
 export interface StopFleetOptions extends GatewayCommandDeps {

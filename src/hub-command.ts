@@ -15,7 +15,8 @@ import {
   normalizeEntryOrigin,
   type VesselConfig,
 } from '../packages/config/src/index';
-import type { HubCommand } from './cli-args';
+import type { HubCommand } from './cli/args';
+import { ui } from './cli/output';
 import { expandHome, resolveDataDir } from './data/data-paths';
 import { collectGatewayState } from './gateway/pid';
 import { createHubJoinStore } from './hub/join-store';
@@ -37,7 +38,6 @@ import type { HubNodeState, SecretStore } from './hub/types';
 import { t } from './i18n';
 import { resolveNodeId } from './node/node-identity';
 import { readPackageVersion } from './shared/version';
-import { ui } from './ui-style';
 
 const DEFAULT_HUB_PORT = 8643;
 const REQUEST_TIMEOUT_MS = 10_000;

@@ -21,8 +21,8 @@ import {
 } from './agent/agent-owner-client';
 import type { AgentOwnerRecord } from './agent/agent-owner-server';
 import type { CommandResult } from './agent-command';
-import type { TeamCommand } from './cli-args';
-import { ui } from './ui-style';
+import type { TeamCommand } from './cli/args';
+import { ui } from './cli/output';
 
 export interface TeamCommandOptions {
   dataDir: string;

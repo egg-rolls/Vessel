@@ -14,7 +14,7 @@ import type {
   RunRecordStore,
   SessionStore,
   WorkingContext,
-} from '../packages/core/src/index';
+} from '../../packages/core/src/index';
 
 // ── evals ───────────────────────────────────────
 

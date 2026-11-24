@@ -17,7 +17,7 @@ import {
   type EventStream,
   type RunEvent,
   type SessionEventLogPort,
-} from '../packages/core/src/index';
+} from '../../packages/core/src/index';
 import {
   createInteractionMethods,
   createInteractionsRegistry,
@@ -25,8 +25,8 @@ import {
   type RpcMethodContext,
   type RpcMethodDefinition,
   type StoredInteraction,
-} from '../packages/serve/src/index';
-import { RpcClientError } from './rpc';
+} from '../../packages/serve/src/index';
+import { RpcClientError } from '../rpc';
 
 /** 恢复注入的 user.message 来源标记；也用于幂等去重。 */
 export const ASK_RESUME_SOURCE = 'ask_resume';

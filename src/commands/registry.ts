@@ -10,7 +10,8 @@ import { loadConfig, type VesselConfig } from '../../packages/config/src/index';
 import { runAgentCommand } from '../agent-command';
 import { runAgentInboxCommand } from '../agent-inbox-command';
 import { agentsCommand } from '../agents-command';
-import type { CliArgs } from '../cli-args';
+import type { CliArgs } from '../cli/args';
+import { ui } from '../cli/output';
 import { runUpdateCommand } from '../cli-update';
 import { runCompletionCommand } from '../completion-command';
 import {
@@ -40,7 +41,6 @@ import { runTeamCommand } from '../team-command';
 import { tokenListCommand, tokenRotateCommand, tokenShowCommand } from '../token-command';
 import { listTools } from '../tools-engine/tools-list';
 import { tracePruneCommand } from '../trace-command';
-import { ui } from '../ui-style';
 import { attentionCommand } from './attention';
 import { runFederationCommand } from './federation';
 import { modelCommand } from './model';

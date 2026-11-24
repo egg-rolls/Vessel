@@ -32,9 +32,10 @@ import {
   platformListenGuard,
   startPlatformGateway,
 } from '../packages/serve/src/index';
-import type { GatewayCommand, GatewayInstallTarget, GatewaySelector } from './cli-args';
+import type { GatewayCommand, GatewayInstallTarget, GatewaySelector } from './cli/args';
+import { type ControlPlaneTarget, resolveControlPlaneTarget } from './cli/control-plane-target';
+import { ui } from './cli/output';
 import { formatConfigErrors } from './config/config-error-format';
-import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
 import { expandHome, resolveDataDir } from './data/data-paths';
 import { gatewayLogPath, startGatewayDaemon } from './gateway/daemon';
 import {
@@ -125,7 +126,6 @@ import { t } from './i18n';
 import { effectiveNodeToken, effectivePlatformToken } from './node/token-derive';
 import { createHttpRpcClient } from './rpc/http-client';
 import { readPackageVersion } from './shared/version';
-import { ui } from './ui-style';
 
 /** 依赖注入（CLI 只用默认值；测试注入平台/路径/命令执行） */
 export interface GatewayCommandDeps {

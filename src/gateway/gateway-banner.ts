@@ -16,7 +16,7 @@
 
 import { isLoopbackHostname } from '../../packages/config/src/index';
 import type { Gateway } from '../../packages/serve/src/index';
-import { shouldUseColor, ui } from '../ui-style';
+import { shouldUseColor, ui } from '../cli/output';
 
 /** banner 呈现判定输入（测试注入；缺省读进程状态与环境） */
 export interface BannerDisplayOptions {

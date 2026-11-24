@@ -70,14 +70,14 @@ import {
   type LocalHumanTarget,
   type LocalMemberTarget,
 } from '../agent/team-human-delivery';
-import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from '../ask-channel';
+import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from '../cli/ask-channel';
+import type { FeishuChannelLike, MetricsControlLike } from '../cli/control-plane-types';
 import { formatConfigErrors } from '../config/config-error-format';
 import { sanitizeConfigForSnapshot } from '../config/config-snapshot';
 import { registerRefsNoticeHook, registerRuntimeNoticeHook } from '../config/hot-apply-assembly';
 import { normalizeLegacyToolName } from '../config/legacy-tool-names';
 import { createReplSettings, type ReplSettingsControlLike } from '../config/ui-settings';
 import { visionSurfaceOf } from '../config/vision-settings';
-import type { FeishuChannelLike, MetricsControlLike } from '../control-plane-types';
 import { createConfigAttachmentIngest } from '../data/attachment-ingest';
 import { createConfigAttachmentLister } from '../data/attachments-list';
 import { withDataLock } from '../data/data-lock';

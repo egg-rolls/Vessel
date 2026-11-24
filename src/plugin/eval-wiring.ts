@@ -11,7 +11,7 @@
 
 import { DEFAULT_EVALS_OPTIONS, type VesselConfig } from '../../packages/config/src/index';
 import type { EventStream, LLMProvider } from '../../packages/core/src/index';
-import type { EvalReport, EvalRunnerLike, EvalsModuleLike } from '../control-plane-types';
+import type { EvalReport, EvalRunnerLike, EvalsModuleLike } from '../cli/control-plane-types';
 import {
   isSafeSuiteName,
   resolveEvalSuite,

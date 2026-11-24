@@ -20,7 +20,8 @@ import {
   resolveGatewayNodePorts,
   type VesselConfig,
 } from '../packages/config/src/index';
-import type { GatewayNodesCommand } from './cli-args';
+import type { GatewayNodesCommand } from './cli/args';
+import { ui } from './cli/output';
 import { resolveDataDir } from './data/data-paths';
 import {
   assertNodeDataDirMatches,
@@ -41,7 +42,6 @@ import {
 import { isProcessAlive, readGatewayPidRecord } from './gateway/pid';
 import { nodeListenFromConfig, probeHttpHealth } from './gateway-command';
 import { HUB_DEFAULT_PORT } from './hub/server';
-import { ui } from './ui-style';
 
 export interface GatewayNodesCommandDeps {
   /** gateway data dir（缺省 `resolveDataDir(config, env)`）。 */

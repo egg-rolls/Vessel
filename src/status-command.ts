@@ -8,12 +8,13 @@
  */
 
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
-import { formatConfigErrors } from './config/config-error-format';
 import {
   type ControlPlaneTarget,
   type ControlPlaneTargetOptions,
   resolveControlPlaneTarget,
-} from './control-plane-target';
+} from './cli/control-plane-target';
+import { ui } from './cli/output';
+import { formatConfigErrors } from './config/config-error-format';
 import { resolveDataDir, resolveEffectiveTenantId } from './data/data-paths';
 import {
   collectGatewayState,
@@ -24,7 +25,6 @@ import { gatewayBaseUrl } from './gateway/reload';
 import { resolveGatewayToken } from './gateway/transport-factory';
 import { t } from './i18n';
 import { readPackageVersion } from './shared/version';
-import { ui } from './ui-style';
 
 export interface CommandResult {
   exitCode: number;

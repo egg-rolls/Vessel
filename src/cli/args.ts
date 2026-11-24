@@ -5,10 +5,10 @@
  * 不加载配置、不构造 runtime、不产生副作用。
  */
 
-import { allowedOriginError } from '../packages/config/src/index';
+import { allowedOriginError } from '../../packages/config/src/index';
+import type { DevCommandArgs } from '../dev-command';
+import { parseFederationAddress } from '../federation/federation-address';
 import { type CompletionCommandArgs, isCompletionShell } from './completion-spec';
-import type { DevCommandArgs } from './dev-command';
-import { parseFederationAddress } from './federation/federation-address';
 
 /** `--serve` 省略端口时的默认值 */
 export const DEFAULT_SERVE_PORT = 8642;

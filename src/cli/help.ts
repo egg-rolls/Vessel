@@ -14,6 +14,7 @@
  * @module vessel/cli-help
  */
 
+import { t } from '../i18n';
 import {
   CLI_FLAG_HELP,
   CLI_FLAG_VALUE,
@@ -21,9 +22,8 @@ import {
   CLI_HELP_GROUPS,
   type CliFlag,
   type CliHelpCommand,
-} from './cli-help-spec';
-import { t } from './i18n';
-import { ui } from './ui-style';
+} from './help-spec';
+import { ui } from './output';
 
 /** 识别 help 的写法（`vessel help ...` / `vessel <group> help` / 任意位置的 `-h`） */
 const HELP_TOKENS: ReadonlySet<string> = new Set(['-h', '--help']);

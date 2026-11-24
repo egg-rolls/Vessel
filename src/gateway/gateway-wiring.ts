@@ -12,7 +12,7 @@ import type {
   FederationGatewayOptions,
   TeamControlLike,
 } from '../../packages/serve/src/index';
-import type { FeishuChannelLike, MetricsControlLike } from '../control-plane-types';
+import type { FeishuChannelLike, MetricsControlLike } from '../cli/control-plane-types';
 import { resolveFederationOptions } from '../federation/federation-config';
 import { latestEvalReport } from '../plugin/eval-wiring';
 import { PluginLoader } from '../plugin/plugin-loader';

@@ -16,7 +16,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { VesselConfig } from '../../packages/config/src/index';
 import type { CommandResult } from '../agent-command';
-import type { FederationCommand } from '../cli-args';
+import type { FederationCommand } from '../cli/args';
+import { ui } from '../cli/output';
 import {
   FEDERATION_INVALID_ADDRESS,
   type FederationAddress,
@@ -33,7 +34,6 @@ import {
 import { resolveFederationOptions } from '../federation/federation-config';
 import { t } from '../i18n';
 import { resolveNodeId } from '../node/node-identity';
-import { ui } from '../ui-style';
 
 /** v1 固定 tenant（DECISION-036 §2） */
 const FEDERATION_TENANT = 'default';

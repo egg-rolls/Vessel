@@ -14,7 +14,7 @@ import type {
   FeishuChannelLike,
   FeishuChannelOptionsLike,
   FeishuModuleLike,
-} from '../control-plane-types';
+} from '../cli/control-plane-types';
 import type { PluginLoader } from './plugin-loader';
 
 export interface ResolvedFeishuOptions {

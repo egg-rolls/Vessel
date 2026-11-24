@@ -10,8 +10,12 @@
 
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import { readTraceEvents, type TenantPaths } from '../packages/core/src/index';
+import {
+  type ControlPlaneTargetOptions,
+  resolveControlPlaneTarget,
+} from './cli/control-plane-target';
+import { ui } from './cli/output';
 import { formatConfigErrors } from './config/config-error-format';
-import { type ControlPlaneTargetOptions, resolveControlPlaneTarget } from './control-plane-target';
 import {
   resolveDataDir,
   resolveEffectiveTenantId,
@@ -19,7 +23,6 @@ import {
 } from './data/data-paths';
 import { t } from './i18n';
 import { RpcClientError } from './rpc';
-import { ui } from './ui-style';
 
 export interface CommandResult {
   exitCode: number;

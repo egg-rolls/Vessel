@@ -10,8 +10,8 @@
  * @module vessel/control-plane-target
  */
 
-import { loadConfig, type VesselConfig } from '../packages/config/src/index';
-import { resolveDataDir } from './data/data-paths';
+import { loadConfig, type VesselConfig } from '../../packages/config/src/index';
+import { resolveDataDir } from '../data/data-paths';
 import {
   type CommandRunner,
   collectGatewayState,
@@ -20,11 +20,11 @@ import {
   type GatewayStateEntry,
   type GatewayStateSnapshot,
   gatewayPidFileName,
-} from './gateway/pid';
-import { gatewayBaseUrl } from './gateway/reload';
-import { resolveConnectToken, resolveGatewayToken } from './gateway/transport-factory';
-import type { RpcClient } from './rpc';
-import { createHttpRpcClient, normalizeConnectUrl } from './rpc/http-client';
+} from '../gateway/pid';
+import { gatewayBaseUrl } from '../gateway/reload';
+import { resolveConnectToken, resolveGatewayToken } from '../gateway/transport-factory';
+import type { RpcClient } from '../rpc';
+import { createHttpRpcClient, normalizeConnectUrl } from '../rpc/http-client';
 
 /** 解析选项 */
 export interface ControlPlaneTargetOptions {

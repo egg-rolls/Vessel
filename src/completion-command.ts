@@ -9,8 +9,8 @@
  * @module vessel/completion-command
  */
 
-import { renderCompletionScript } from './completion-script';
-import type { CompletionCommandArgs } from './completion-spec';
+import { renderCompletionScript } from './cli/completion-script';
+import type { CompletionCommandArgs } from './cli/completion-spec';
 import { t } from './i18n';
 
 /** 执行补全命令；返回进程退出码 */

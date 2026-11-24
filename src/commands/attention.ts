@@ -15,13 +15,14 @@ import {
   loadConfig,
   type VesselConfig,
 } from '../../packages/config/src/index';
-import { createOfflineAttentionTarget } from '../ask-channel';
-import type { AttentionCommandArgs } from '../cli-args';
+import type { AttentionCommandArgs } from '../cli/args';
+import { createOfflineAttentionTarget } from '../cli/ask-channel';
 import {
   type ControlPlaneTarget,
   type ControlPlaneTargetOptions,
   resolveControlPlaneTarget,
-} from '../control-plane-target';
+} from '../cli/control-plane-target';
+import { ui } from '../cli/output';
 import { resolveDataDir, resolveEffectiveTenantId } from '../data/data-paths';
 import {
   type AttentionInteraction,
@@ -44,7 +45,6 @@ import { parseFederationAddress } from '../federation/federation-address';
 import { resolveInteractionsDir } from '../gateway/interactions-dir';
 import { t } from '../i18n';
 import { RpcClientError } from '../rpc';
-import { ui } from '../ui-style';
 
 export interface CommandResult {
   exitCode: number;

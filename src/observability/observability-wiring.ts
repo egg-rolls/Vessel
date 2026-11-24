@@ -16,7 +16,7 @@ import {
   MetricsCollector,
 } from '../../packages/core/src/index';
 import { MemoryEventBus } from '../../packages/core/src/kernel/index';
-import type { MetricsControlLike } from '../control-plane-types';
+import type { MetricsControlLike } from '../cli/control-plane-types';
 
 /** 块存在才启用 metrics / 控制面 */
 export function isObservabilityConfigured(config: VesselConfig): boolean {

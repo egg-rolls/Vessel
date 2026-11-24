@@ -16,7 +16,7 @@
  * @module vessel/cli-help-spec
  */
 
-import type { MessageKey } from './i18n';
+import type { MessageKey } from '../i18n';
 
 /**
  * flag 字面量 → usage 行里的取值占位；`null` = 布尔 flag。

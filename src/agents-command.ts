@@ -11,10 +11,10 @@ import {
   type ControlPlaneTarget,
   type ControlPlaneTargetOptions,
   resolveControlPlaneTarget,
-} from './control-plane-target';
+} from './cli/control-plane-target';
+import { ui } from './cli/output';
 import { t } from './i18n';
 import { RpcClientError } from './rpc';
-import { ui } from './ui-style';
 
 export interface CommandResult {
   exitCode: number;

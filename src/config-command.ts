@@ -19,6 +19,7 @@ import {
   redactSourcePaths,
 } from '../packages/config/src/index';
 import { loggingEnvOverrides } from '../packages/core/src/index';
+import { ui } from './cli/output';
 import { formatConfigError, formatConfigErrors } from './config/config-error-format';
 import {
   isSettableConfigKey,
@@ -31,7 +32,6 @@ import {
 } from './config/ui-settings';
 import { resolveDataDir } from './data/data-paths';
 import { t } from './i18n';
-import { ui } from './ui-style';
 
 type EnvMap = Record<string, string | undefined>;
 

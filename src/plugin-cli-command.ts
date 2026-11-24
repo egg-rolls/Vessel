@@ -28,11 +28,12 @@ import {
   type PluginExposeConfig,
 } from '../packages/config/src/index';
 import { isCliCommandExposed } from '../packages/serve/src/index';
-import { builtinCommandTokens } from './completion-spec';
+import { builtinCommandTokens } from './cli/completion-spec';
 import {
   type ResolveControlPlaneTargetResult,
   resolveControlPlaneTarget,
-} from './control-plane-target';
+} from './cli/control-plane-target';
+import { ui } from './cli/output';
 import { resolveDataDir, resolveEffectiveTenantId } from './data/data-paths';
 import { createCliLogger } from './observability/logging';
 import {
@@ -47,7 +48,6 @@ import {
   type PluginManifest,
   validatePluginManifest,
 } from './plugin/plugin-manifest';
-import { ui } from './ui-style';
 
 /** stdout 结果上限（字节）；超出后截断并附提示 */
 export const PLUGIN_CLI_MAX_STDOUT_BYTES = 64 * 1024;

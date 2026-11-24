@@ -8,9 +8,10 @@
 
 import { type ConfigLoadOptions, loadConfig } from '../packages/config/src/index';
 import type { LLMProvider, TenantPaths } from '../packages/core/src/index';
-import type { EvalCommand } from './cli-args';
+import type { EvalCommand } from './cli/args';
+import type { EvalReport } from './cli/control-plane-types';
+import { ui } from './cli/output';
 import { formatConfigErrors } from './config/config-error-format';
-import type { EvalReport } from './control-plane-types';
 import { acquireDataLock, type DataLock, DataLockError } from './data/data-lock';
 import {
   resolveDataDir,
@@ -22,7 +23,6 @@ import { installTrace, type TraceControl } from './observability/trace-wiring';
 import { executeEvalSuite } from './plugin/eval-wiring';
 import { PluginLoader } from './plugin/plugin-loader';
 import { createProvider } from './runtime/provider-factory';
-import { ui } from './ui-style';
 
 export interface EvalCommandOptions {
   useMock?: boolean;

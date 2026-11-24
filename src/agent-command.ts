@@ -19,8 +19,8 @@ import {
   resolveAgentOwner,
 } from './agent/agent-owner-client';
 import type { AgentOwnerMethod, AgentOwnerRecord } from './agent/agent-owner-server';
-import type { AgentCommand } from './cli-args';
-import { ui } from './ui-style';
+import type { AgentCommand } from './cli/args';
+import { ui } from './cli/output';
 
 export interface CommandResult {
   exitCode: number;

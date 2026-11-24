@@ -56,8 +56,18 @@ import {
 // 实测（本机）单是求值它就要数百毫秒到数秒 —— 而 `node start` / `gateway start` /
 // `--run` 永远不会进那个界面。它现在按需加载（见 {@link startInkRepl}）。
 import { createAskAnswerDelivery } from './agent/ask-answer-delivery';
-import { DEFAULT_SERVE_PORT, parseArgs } from './cli-args';
-import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli-help';
+import { DEFAULT_SERVE_PORT, parseArgs } from './cli/args';
+import type { FeishuChannelLike } from './cli/control-plane-types';
+import { feishuExitCode, signalExitCode, startFeishuChannel } from './cli/feishu-command';
+import {
+  HEADLESS_ASK_SUSPENDED_EXIT_CODE,
+  installHeadlessAskSuspend,
+  installHeadlessPermissionAutoAllow,
+  printSuspendedAsk,
+  runHeadless,
+} from './cli/headless-runner';
+import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli/help';
+import { ui } from './cli/output';
 import { buildCliConfigOverrides } from './config/cli-overrides';
 import { sanitizeConfigForSnapshot } from './config/config-snapshot';
 import {
@@ -83,12 +93,10 @@ import {
   registerRuntimeNoticeHook,
 } from './config/hot-apply-assembly';
 import { visionSurfaceOf } from './config/vision-settings';
-import type { FeishuChannelLike } from './control-plane-types';
 import { createConfigAttachmentLister } from './data/attachments-list';
 import { expandHome, resolveDataDir } from './data/data-paths';
 import { resolveAgentCwd } from './data/path-resolution';
 import { setToolPolicy } from './data/permission-store';
-import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
 import {
   renderGatewayBanner,
   renderGatewayBannerOneLine,
@@ -119,13 +127,6 @@ import {
   stopGateway,
   writeForegroundGatewayPid,
 } from './gateway-command';
-import {
-  HEADLESS_ASK_SUSPENDED_EXIT_CODE,
-  installHeadlessAskSuspend,
-  installHeadlessPermissionAutoAllow,
-  printSuspendedAsk,
-  runHeadless,
-} from './headless-runner';
 import { readHubNodeTrustedOrigins } from './hub/node-state';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
@@ -171,7 +172,6 @@ import { createTimelineRunEventsPort, timelineTailPort } from './session/timelin
 import { isAddressInUse } from './shared/port-in-use';
 import { readPackageVersion } from './shared/version';
 import { syncBasicToolsEngineWiring, syncCallbackToolsEngineWiring } from './tools-engine/wiring';
-import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update/gateway-check';
 

@@ -14,11 +14,11 @@ import type {
   SessionState,
   SessionStore,
   Unsubscribe,
-} from '../packages/core/src/index';
-import { asTuiEvent } from '../packages/tui/src/types/events.js';
-import { getCurrentGitBranch } from '../packages/tui/src/utils/git.js';
+} from '../../packages/core/src/index';
+import { asTuiEvent } from '../../packages/tui/src/types/events.js';
+import { getCurrentGitBranch } from '../../packages/tui/src/utils/git.js';
+import { t } from '../i18n';
 import { askRequestFromEvent, persistAskRequest } from './ask-channel';
-import { t } from './i18n';
 
 /** headless 下 ask 的人类通道（0.33 A）。 */
 export interface HeadlessAskChannel {

@@ -15,8 +15,9 @@
 import * as path from 'node:path';
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import { formatEventLine } from '../packages/serve/src/index';
-import type { NodeCommand } from './cli-args';
-import type { ControlPlaneTarget } from './control-plane-target';
+import type { NodeCommand } from './cli/args';
+import type { ControlPlaneTarget } from './cli/control-plane-target';
+import { ui } from './cli/output';
 import { expandHome, resolveDataDir } from './data/data-paths';
 import { gatewayLogPath, startGatewayDaemon } from './gateway/daemon';
 import { readSpawnedChildren } from './gateway/node-supervisor';
@@ -42,7 +43,6 @@ import { effectiveNodeTokenAuto } from './node/token-derive';
 import { createHttpRpcClient } from './rpc/http-client';
 // 0.56：`node token` 与「显式 > 注入 > 派生」的 node token 解析。
 import { nodeTokenCommand } from './token-command';
-import { ui } from './ui-style';
 
 /** 依赖注入（CLI 只用默认值；测试注入配置/路径/RPC 目标） */
 export interface NodeCommandDeps {
