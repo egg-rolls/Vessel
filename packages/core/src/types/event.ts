@@ -113,6 +113,26 @@ export interface LlmRetryPayload extends BaseEventPayload {
 }
 
 /**
+ * 空响应兜底事件 payload（`llm.empty_response`，q-empty-response）。
+ *
+ * 模型返回「无工具调用 + content 纯空白」时一条：`action: 'nudge'` = 已追加继续提示
+ * 并重新轮询；`action: 'exhausted'` = 重试上限耗尽（或 maxRetries=0），回落原始终止行为。
+ * 归内部事件层（默认隐藏）：它是过程信号不是失败——终稿仍由 `run.completed` 承担。
+ */
+export interface LlmEmptyResponsePayload extends BaseEventPayload {
+  run_id: string;
+  session_id?: string;
+  /** 本 run 内第几次空响应兜底（nudge 从 1 起；exhausted 时为已用尽的次数，可为 0） */
+  attempt: number;
+  /** 生效的 nudge 重试上限 */
+  max_retries: number;
+  /** 本次空响应的 finish_reason（stop / length / ...） */
+  finish_reason: string;
+  /** nudge = 已注入继续提示重新轮询；exhausted = 限次耗尽，回落原始终止行为 */
+  action: 'nudge' | 'exhausted';
+}
+
+/**
  * 流式段落摘要 payload（`llm.stream.summary`）。
  *
  * **一个段落结束时发一条，不是每个 delta 一条**，且**不含任何正文 / 思考文本**：
@@ -283,6 +303,7 @@ export type EventPayload =
   | LlmResponsePayload
   | LlmStreamChunkPayload
   | LlmRetryPayload
+  | LlmEmptyResponsePayload
   | LlmStreamSummaryPayload
   | PromptSystemContextPayload
   | ToolCallStartedPayload

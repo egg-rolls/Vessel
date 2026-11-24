@@ -22,6 +22,7 @@ import type {
   ConfigValidationResult,
   ConfigValidationWarning,
   ContextConfig,
+  EmptyResponseConfig,
   EnvInjectionConfig,
   EvalsConfig,
   FederationConfig,
@@ -2956,6 +2957,51 @@ export function validateVisionConfig(
 }
 
 /**
+ * 校验 `empty_response` 段（q-empty-response）。
+ *
+ * 只判形状与范围：布尔 / 0–10 的整数重试上限 / 非空文案。缺省值不在这里落
+ * （core loop 内置：启用、2 次）——本段整体可缺省。
+ */
+export function validateEmptyResponseConfig(
+  emptyResponse: EmptyResponseConfig | undefined,
+  errors: ConfigValidationError[] = [],
+): ConfigValidationError[] {
+  if (emptyResponse === undefined) return errors;
+  const enabled = emptyResponse.enabled;
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    errors.push({
+      path: 'emptyResponse.enabled',
+      message: 'emptyResponse.enabled must be a boolean',
+      value: enabled,
+    });
+  }
+  const maxRetries = emptyResponse.maxRetries;
+  if (
+    maxRetries !== undefined &&
+    (typeof maxRetries !== 'number' ||
+      !Number.isFinite(maxRetries) ||
+      !Number.isInteger(maxRetries) ||
+      maxRetries < 0 ||
+      maxRetries > 10)
+  ) {
+    errors.push({
+      path: 'emptyResponse.maxRetries',
+      message: 'emptyResponse.maxRetries must be an integer in [0, 10]',
+      value: maxRetries,
+    });
+  }
+  const nudge = emptyResponse.nudge;
+  if (nudge !== undefined && (typeof nudge !== 'string' || nudge.trim() === '')) {
+    errors.push({
+      path: 'emptyResponse.nudge',
+      message: 'emptyResponse.nudge must be a non-empty string',
+      value: nudge,
+    });
+  }
+  return errors;
+}
+
+/**
  * 校验 Vessel 配置。所有字段为 camelCase（ADR-019）。
  * @param config 配置对象
  * @returns 校验结果
@@ -3020,6 +3066,9 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
 
   // 0.56：视觉段（错误拼写的键不再静默失效；取值范围在这里夹一次，别让运行时各自夹）。
   validateVisionConfig(config.vision, errors);
+
+  // q-empty-response：空响应兜底段（缺省即启用；这里只夹形状与范围）。
+  validateEmptyResponseConfig(config.emptyResponse, errors);
 
   // 校验 API Key
   if (config.apiKey !== undefined) {
@@ -3956,6 +4005,8 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'blobGcIntervalHours',
     'blobGcDryRun',
   ],
+  // q-empty-response：空响应兜底（开关 / 重试上限 / nudge 文案）。
+  emptyResponse: ['enabled', 'maxRetries', 'nudge'],
 };
 
 /** `node.tls` / `hub.tls` 的已知键 */
@@ -4109,6 +4160,8 @@ export const KNOWN_CONFIG_KEYS = [
   'envInjection',
   // 0.56：视觉段（刻意没有 `enable` 键：支持即直通，`disabled` 是 kill switch）。
   'vision',
+  // q-empty-response：空响应兜底段（YAML `empty_response`；缺省 = 启用、重试 2 次）。
+  'emptyResponse',
   'permission',
   'plugins',
   'update',

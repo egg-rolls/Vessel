@@ -776,6 +776,28 @@ gateway:
 - **max_inflight 是物理资源保护，不是 run 累计限制**：缺省 `cpus × 4`（engine 进程 `readPoolLimits` 读取，经 spawn env 下发）；`rss_soft_limit_mb` 缺省不启用。
 - 键语义的家在 [architecture/config.md](../architecture/config.md)；执行现态与路由语义见 [tools.md#engine-exec](../architecture/tools.md#engine-exec) 与 [ADR-106](../adr/ADR-106-engine-pool.md)。
 
+### 2.24 `empty_response`（q-empty-response：空响应兜底，缺省开）
+
+```yaml
+empty_response:
+  enabled: true       # 缺省 true；false = 空响应直接当终稿（修复前行为，零回归开关）
+  max_retries: 2      # nudge 重试上限（不含首次响应）；缺省 2，范围 0–10；0 = 不重试只落日志
+  # nudge: '继续你的任务……'   # 自定义提示文案（user 消息注入）；缺省用 core 内置文案
+```
+
+- **管什么**：模型偶发「空内容 + 无工具调用 + 终止原因」（大上下文 / 压缩后更易发）。
+  无兜底时两条终止路径（`stop` / 其他 `finish_reason`）把空串当终稿 → agent 早退零输出。
+  现在 core loop 追加一条「继续你的任务」nudge 重新轮询；**限次防死循环**，耗尽落
+  `llm.empty_response`（`action: 'exhausted'`，internal 层事件）后回落原始终止行为——不再静默。
+- **缺省即启用**：整段可缺省（= enabled=true、max_retries=2、内置文案）。影响所有 agent
+  （owner + 成员）；工具调用路径与非空终稿不受影响，`finish_reason` 语义不变。
+- **生效面**：装配进 tenant profile ⇒ **新 EU（新会话）生效**；已存活会话持启动时快照
+  （与 `vision` 同语义）。
+- **可写面**：`emptyResponse.enabled` / `emptyResponse.maxRetries` / `emptyResponse.nudge`
+  三键进 `config.set` 白名单（WebUI 设置 →「运行期（core）」分组；CLI `vessel config set`）。
+  键语义的家：core `EmptyResponsePolicy`（types/provider.ts）+ `DEFAULT_EMPTY_RESPONSE_*`
+  （runtime/tool-calling-loop.ts）；映射在 `src/empty-response-settings.ts`。
+
 ## 3. 密钥与 `_env`
 
 所有接受密钥的字段支持 `<field>_env`：

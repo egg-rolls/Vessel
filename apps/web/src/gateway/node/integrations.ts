@@ -88,8 +88,8 @@ export abstract class IntegrationsClient extends TeamsClient {
   /** 0.15：只写服务端白名单键；未注入 writer 时返回 not_found。 */
   setConfigValue(
     key: string,
-    value: string | boolean,
-  ): Promise<{ ok: boolean; key: string; value: string | boolean }> {
+    value: string | boolean | number,
+  ): Promise<{ ok: boolean; key: string; value: string | boolean | number }> {
     return this.rpc('config.set', { key, value });
   }
 

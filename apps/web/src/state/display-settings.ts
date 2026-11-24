@@ -1,9 +1,13 @@
 /**
  * Settings → Display 的可写键白名单（与服务端 `config.set` 一致）。
  *
- * 只做纯转换：读取 `config.get` 的嵌套/蛇形值，写入时转成 string|boolean。
+ * 只做纯转换：读取 `config.get` 的嵌套/蛇形值，写入时转成 string|boolean|number。
+ *
+ * q-empty-response 起本表也是**核心运行期设置**的登记处（emptyResponse.*）：
+ * 对齐 docs/dev/plans/vscode-settings-design.md 的注册表机制 —— 注册表（S1）落地后
+ * 核心 SettingDef 从本表派生（id/key/type/范围即注册表字段），不再另立第二份清单。
  */
-export type DisplaySettingType = 'boolean' | 'enum';
+export type DisplaySettingType = 'boolean' | 'enum' | 'number' | 'string';
 
 export interface DisplaySettingDef {
   key: string;
@@ -11,6 +15,11 @@ export interface DisplaySettingDef {
   options?: readonly string[];
   /** i18n key 后缀（settings.display.field.<id>）。 */
   id: string;
+  /** number 键的取值范围（含端点；与 config validator 同界）。 */
+  min?: number;
+  max?: number;
+  /** 配置缺省时的展示值（缺省行为 ≠ 空：如 emptyResponse.enabled 缺省 true）。 */
+  fallback?: string;
 }
 
 export const DISPLAY_SETTINGS: readonly DisplaySettingDef[] = [
@@ -52,10 +61,30 @@ export const DISPLAY_SETTINGS: readonly DisplaySettingDef[] = [
     type: 'enum',
     options: ['auto', 'none', 'clock', 'iso'],
   },
+  // q-empty-response：空响应兜底（core 运行期设置，非插件域）。缺省 = 启用、重试 2 次、
+  // 内置 nudge 文案；fallback 让「未配置」显示真实缺省行为而不是空。
+  {
+    id: 'emptyResponseEnabled',
+    key: 'emptyResponse.enabled',
+    type: 'boolean',
+    fallback: 'true',
+  },
+  {
+    id: 'emptyResponseMaxRetries',
+    key: 'emptyResponse.maxRetries',
+    type: 'number',
+    min: 0,
+    max: 10,
+    fallback: '2',
+  },
+  { id: 'emptyResponseNudge', key: 'emptyResponse.nudge', type: 'string' },
 ];
 
 /** 日志分组键前缀（Display 页据此拆出「日志（gateway）」分组）。 */
 export const LOG_SETTING_PREFIX = 'observability.log.';
+
+/** 空响应兜底键前缀（Display 页据此拆出「运行期（core）」分组）。 */
+export const EMPTY_RESPONSE_SETTING_PREFIX = 'emptyResponse.';
 
 /** config.get 回报的一条日志环境变量覆盖（与 core LogEnvOverride 同形）。 */
 export interface LogEnvOverrideInfo {
@@ -109,11 +138,13 @@ function readPath(source: unknown, key: string): unknown {
   return current;
 }
 
-/** 读取当前值；缺失返回空串，布尔转 "true"/"false"。 */
+/** 读取当前值；缺失回落到登记的缺省展示值（无则空串），布尔转 "true"/"false"。 */
 export function readDisplayValue(source: unknown, key: string): string {
   const value = readPath(source, key);
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (value === undefined) return BY_KEY.get(key)?.fallback ?? '';
   return '';
 }
 
@@ -154,11 +185,24 @@ export function confirmedDisplayKeys(
 export function toConfigValue(
   setting: DisplaySettingDef,
   raw: string,
-): string | boolean | undefined {
+): string | boolean | number | undefined {
   if (setting.type === 'boolean') {
     if (raw === 'true') return true;
     if (raw === 'false') return false;
     return undefined;
+  }
+  if (setting.type === 'number') {
+    const value = Number(raw);
+    const min = setting.min ?? Number.NEGATIVE_INFINITY;
+    const max = setting.max ?? Number.POSITIVE_INFINITY;
+    if (raw.trim() === '' || !Number.isInteger(value) || value < min || value > max) {
+      return undefined;
+    }
+    return value;
+  }
+  if (setting.type === 'string') {
+    const value = raw.trim();
+    return value.length > 0 ? value : undefined;
   }
   return setting.options?.includes(raw) === true ? raw : undefined;
 }

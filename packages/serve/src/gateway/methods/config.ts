@@ -33,7 +33,17 @@ const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
   'ui.askUser',
   'ui.expandCards',
   'observability.showProcessErrors',
+  // q-empty-response：空响应兜底总开关（缺省 true）。
+  'emptyResponse.enabled',
 ]);
+
+/**
+ * 整数键（q-empty-response 起）：值域与 config validator 同界。
+ * 接受 number 或整数字符串（CLI / 旧客户端只传字符串）。
+ */
+const NUMBER_KEYS: Readonly<Record<string, { min: number; max: number }>> = {
+  'emptyResponse.maxRetries': { min: 0, max: 10 },
+};
 
 const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
   'ui.language': ['zh-CN', 'en'],
@@ -51,11 +61,14 @@ const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
 const SETTABLE_KEYS: ReadonlySet<string> = new Set([
   ...BOOLEAN_KEYS,
   ...Object.keys(ENUM_KEYS),
+  ...Object.keys(NUMBER_KEYS),
   'agent.cwd',
+  // q-empty-response：nudge 文案（非空字符串，走通用 string 路径）。
+  'emptyResponse.nudge',
 ]);
 
 /** 返回规范化后的值；非法键/值抛 invalid_params。 */
-function normalizeConfigValue(key: string, raw: unknown): string | boolean {
+function normalizeConfigValue(key: string, raw: unknown): string | boolean | number {
   if (!SETTABLE_KEYS.has(key)) {
     throw new RpcError('invalid_params', `Unsupported config key: ${key}`, { key });
   }
@@ -64,6 +77,18 @@ function normalizeConfigValue(key: string, raw: unknown): string | boolean {
     if (raw === 'true') return true;
     if (raw === 'false') return false;
     throw new RpcError('invalid_params', `${key} must be true or false`, { key });
+  }
+  const range = NUMBER_KEYS[key];
+  if (range !== undefined) {
+    const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+    if (!Number.isInteger(value) || value < range.min || value > range.max) {
+      throw new RpcError(
+        'invalid_params',
+        `${key} must be an integer in [${range.min}, ${range.max}]`,
+        { key },
+      );
+    }
+    return value;
   }
   if (typeof raw !== 'string') {
     throw new RpcError('invalid_params', `${key} must be a string`, { key });
@@ -323,7 +348,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
         required: ['key', 'value'],
         properties: {
           key: { type: 'string', minLength: 1 },
-          // 布尔键接受 boolean，其余键接受 string；具体校验在 handler。
+          // 布尔键接受 boolean，整数键接受 number|string，其余键接受 string；具体校验在 handler。
           value: {},
         },
       },

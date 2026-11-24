@@ -576,6 +576,18 @@ export const messages = {
   'settings.display.field.logColor': '日志颜色',
   'settings.display.field.logFormat': '日志格式',
   'settings.display.field.logTime': '日志时间',
+  'settings.display.runtime.title': '运行期（core）',
+  'settings.display.runtime.description':
+    '影响所有 agent 的核心运行期兜底。改动对新会话生效（已存活会话持启动时快照）。',
+  'settings.display.field.emptyResponseEnabled': '空响应兜底',
+  'settings.display.field.emptyResponseEnabled.hint':
+    '模型返回空回复（无内容、无工具调用）时，注入「继续你的任务」提示并重新轮询，而不是零输出早退。缺省开。',
+  'settings.display.field.emptyResponseMaxRetries': '空响应重试上限',
+  'settings.display.field.emptyResponseMaxRetries.hint':
+    '每次 run 的 nudge 重试上限（0–10 整数，缺省 2）。耗尽后优雅终止并落日志注记。',
+  'settings.display.field.emptyResponseNudge': '空响应提示文案',
+  'settings.display.field.emptyResponseNudge.hint':
+    '自定义 nudge（以 user 消息注入）。不设置则用内置文案。',
   'settings.display.log.title': '日志（gateway）',
   'settings.display.log.description':
     '控制 gateway 进程的日志中枢（级别 / 颜色 / 格式 / 时间）。保存后热应用，无需重启。',

@@ -125,6 +125,7 @@ import type {
 } from '../types/projection.js';
 import type {
   ChatRequest,
+  EmptyResponsePolicy,
   LLMProvider,
   LLMResponse,
   Message,
@@ -951,6 +952,8 @@ export class ExecutionUnit {
   private readonly includeReasoning: boolean;
   /** 传输层 / 过载重试策略（默认 `DEFAULT_PROVIDER_RETRY_POLICY`） */
   private readonly retryPolicy: ProviderRetryPolicy;
+  /** 空响应兜底策略（q-empty-response）；缺省 undefined ⇒ loop 按内置缺省（启用、2 次） */
+  private readonly emptyResponse?: EmptyResponsePolicy;
   /** 成功安装的插件句柄（安装顺序；dispose 逆序，0.9） */
   private plugins?: InstalledPlugins;
   /** dispose 幂等：第二次调用复用同一个 Promise，不再调用插件（0.9） */
@@ -1053,6 +1056,7 @@ export class ExecutionUnit {
     this.boundAgentId = opts.agentId;
     this.includeReasoning = opts.includeReasoning === true;
     this.retryPolicy = normalizeRetryPolicy(opts.retry);
+    this.emptyResponse = opts.emptyResponse;
     this.eventLog = opts.eventLog;
     this.compactionIndexDir = opts.compactionIndexDir;
     this.pricing = opts.pricing;
@@ -3621,6 +3625,7 @@ export class ExecutionUnit {
         emit: (e, o) => this.publishEvent(e, o),
       },
       ...(this.runTiming !== undefined ? { timing: this.runTiming } : {}),
+      ...(this.emptyResponse !== undefined ? { emptyResponse: this.emptyResponse } : {}),
       controls: {
         signal,
         limits: this.limits,

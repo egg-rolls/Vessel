@@ -2,15 +2,95 @@
   "archive": "vessel 红蓝开发已完成任务归档",
   "note": "append-only。完成任务由 main 轮次收尾时从 board.json 移入此处（entries=Task+archivedAt+cycle）。看板插件 P2 提供只读归档 tab。",
   "entries": [
-    { "id": "q-validation", "title": "O1 DTO语义对齐 + O3 校验分层 + S3 owner/oracle", "owner": "q-validation", "branch": "fix/q-validation", "progress": "merge 8694a681，build exit 0", "archivedAt": "2026-11-24T02:35:00+08:00", "cycle": "redblue-quality-round-1" },
-    { "id": "q-serving", "title": "S8 双轨 serving 全链审计 + 8处同类修复 + S4 URL统一", "owner": "q-serving", "branch": "fix/q-serving", "progress": "merge 28ea00ba，build exit 0", "archivedAt": "2026-11-24T02:35:00+08:00", "cycle": "redblue-quality-round-1" },
-    { "id": "q-modes", "title": "S5/S6/S7 模式矩阵审计 + apps/web 同类扫描", "owner": "q-modes", "branch": "fix/q-modes", "progress": "merge 688ba06c，262行审计，build rc=0三重核对，仅1处行为修复G2；遗留G1/G3", "archivedAt": "2026-11-24T02:35:00+08:00", "cycle": "redblue-quality-round-1" },
-    { "id": "q-pool-design", "title": "O4 pool 韧性复杂度评审（纯文档）", "owner": "q-pool-design", "branch": "fix/q-pool-design", "progress": "merge a4c374e5，158行评审；正确性机制keep/韧性冗余~200行可简化/复杂度大头是拓扑成本；opt-out运行时已闭环，打包层是A1增量价值", "archivedAt": "2026-11-24T02:35:00+08:00", "cycle": "redblue-quality-round-1" },
-    { "id": "q-cli", "title": "CLI 规范架构文档（命令分层/动词契约/输出契约）", "owner": "q-cli", "branch": "design/q-cli", "progress": "merge fe4eb5e3，357行 cli-conventions.md；新增命令面落地另起代码任务", "archivedAt": "2026-11-24T02:35:00+08:00", "cycle": "redblue-quality-round-1" },
-    { "id": "q-skills", "title": "SKILLS 插件设计（管理+agent查看/加载）", "owner": "q-skills", "branch": "design/q-skills", "progress": "merge（592bc3a0前），908行 skills-plugin-design.md；in-process能力插件/信任门TOFU/三来源/单skills工具/设置协同；实施另派单", "archivedAt": "2026-11-24T02:35:00+08:00", "cycle": "redblue-quality-round-1" },
-    { "id": "q-kanban", "title": "任务看板插件设计（只读文件弹窗+路径设置）", "owner": "q-kanban", "branch": "design/q-kanban", "progress": "merge 592bc3a0，612行 task-***REDACTED***.md；builtin in-process只读embed/现有board.json零改动可读/归档append-only/设置域；实施另派单", "archivedAt": "2026-11-24T02:35:00+08:00", "cycle": "redblue-quality-round-1" },
-    { "id": "q-settings", "title": "VSCode式设置重构设计（检索/插件设置域/视觉分区）", "owner": "q-settings", "branch": "design/q-settings", "progress": "merge a64596ac，599行 vscode-settings-design.md；五裁定全落实，contributes.settings已存在只差UI面，新增plugins.config.set写RPC；S1-S6切片；4开放问题待裁", "archivedAt": "2026-11-24T02:50:00+08:00", "cycle": "redblue-quality-round-1" },
-    { "id": "q-agent-lifecycle", "title": "agent 生命周期重构设计（持久保留/只中断/标注回收/系统GC）", "owner": "q-agent-lifecycle", "branch": "design/q-agent-lifecycle", "progress": "merge 3b02e0c7，734行 agent-lifecycle-design.md；新根因:重启后首次sweep停机计入TTL回收空闲承包；recyclable正交标志/mark-gated GC/dormant保留同id复活；5开放问题待裁", "archivedAt": "2026-11-24T02:50:00+08:00", "cycle": "redblue-quality-round-1" },
-    { "id": "q-redblue", "title": "红蓝版本手册调研（业界方法→vessel原语映射）", "owner": "q-redblue", "branch": "design/q-redblue", "progress": "merge 5a324cef，636行 redblue-operations-manual.md；蓝绿骨架+cohort金丝雀+config开关台账+expand-contract；闭环六步落既有原语；introspection实证早退根因吻合:513/725", "archivedAt": "2026-11-24T03:05:00+08:00", "cycle": "redblue-quality-round-1" }
+    {
+      "id": "q-validation",
+      "title": "O1 DTO语义对齐 + O3 校验分层 + S3 owner/oracle",
+      "owner": "q-validation",
+      "branch": "fix/q-validation",
+      "progress": "merge 8694a681，build exit 0",
+      "archivedAt": "2026-11-24T02:35:00+08:00",
+      "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-serving",
+      "title": "S8 双轨 serving 全链审计 + 8处同类修复 + S4 URL统一",
+      "owner": "q-serving",
+      "branch": "fix/q-serving",
+      "progress": "merge 28ea00ba，build exit 0",
+      "archivedAt": "2026-11-24T02:35:00+08:00",
+      "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-modes",
+      "title": "S5/S6/S7 模式矩阵审计 + apps/web 同类扫描",
+      "owner": "q-modes",
+      "branch": "fix/q-modes",
+      "progress": "merge 688ba06c，262行审计，build rc=0三重核对，仅1处行为修复G2；遗留G1/G3",
+      "archivedAt": "2026-11-24T02:35:00+08:00",
+      "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-pool-design",
+      "title": "O4 pool 韧性复杂度评审（纯文档）",
+      "owner": "q-pool-design",
+      "branch": "fix/q-pool-design",
+      "progress": "merge a4c374e5，158行评审；正确性机制keep/韧性冗余~200行可简化/复杂度大头是拓扑成本；opt-out运行时已闭环，打包层是A1增量价值",
+      "archivedAt": "2026-11-24T02:35:00+08:00",
+      "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-cli",
+      "title": "CLI 规范架构文档（命令分层/动词契约/输出契约）",
+      "owner": "q-cli",
+      "branch": "design/q-cli",
+      "progress": "merge fe4eb5e3，357行 cli-conventions.md；新增命令面落地另起代码任务",
+      "archivedAt": "2026-11-24T02:35:00+08:00",
+      "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-skills",
+      "title": "SKILLS 插件设计（管理+agent查看/加载）",
+      "owner": "q-skills",
+      "branch": "design/q-skills",
+      "progress": "merge（592bc3a0前），908行 skills-plugin-design.md；in-process能力插件/信任门TOFU/三来源/单skills工具/设置协同；实施另派单",
+      "archivedAt": "2026-11-24T02:35:00+08:00",
+      "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-kanban",
+      "title": "任务看板插件设计（只读文件弹窗+路径设置）",
+      "owner": "q-kanban",
+      "branch": "design/q-kanban",
+      "progress": "merge 592bc3a0，612行 task-***REDACTED***.md；builtin in-process只读embed/现有board.json零改动可读/归档append-only/设置域；实施另派单",
+      "archivedAt": "2026-11-24T02:35:00+08:00",
+      "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-settings",
+      "title": "VSCode式设置重构设计（检索/插件设置域/视觉分区）",
+      "owner": "q-settings",
+      "branch": "design/q-settings",
+      "progress": "merge a64596ac，599行 vscode-settings-design.md；五裁定全落实，contributes.settings已存在只差UI面，新增plugins.config.set写RPC；S1-S6切片；4开放问题待裁",
+      "archivedAt": "2026-11-24T02:50:00+08:00",
+      "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-agent-lifecycle",
+      "title": "agent 生命周期重构设计（持久保留/只中断/标注回收/系统GC）",
+      "owner": "q-agent-lifecycle",
+      "branch": "design/q-agent-lifecycle",
+      "progress": "merge 3b02e0c7，734行 agent-lifecycle-design.md；新根因:重启后首次sweep停机计入TTL回收空闲承包；recyclable正交标志/mark-gated GC/dormant保留同id复活；5开放问题待裁",
+      "archivedAt": "2026-11-24T02:50:00+08:00",
+      "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-redblue",
+      "title": "红蓝版本手册调研（业界方法→vessel原语映射）",
+      "owner": "q-redblue",
+      "branch": "design/q-redblue",
+      "progress": "merge 5a324cef，636行 redblue-operations-manual.md；蓝绿骨架+cohort金丝雀+config开关台账+expand-contract；闭环六步落既有原语；introspection实证早退根因吻合:513/725",
+      "archivedAt": "2026-11-24T03:05:00+08:00",
+      "cycle": "redblue-quality-round-1"
+    }
   ]
 }

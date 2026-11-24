@@ -218,6 +218,27 @@ export interface ProviderRetryPolicy {
   jitterRatio: number;
 }
 
+/**
+ * 空响应兜底策略（q-empty-response）。
+ *
+ * 针对「模型偶发返回空内容 + 无工具调用 + 终止原因」：无兜底时 loop 的两条终止路径
+ * （stop / 其他 finish_reason）会把空串当终稿返回，agent 早退零输出（大上下文 / 压缩后更易发）。
+ * 启用后空响应不终止——追加一条「继续你的任务」nudge（user 消息）重新轮询模型；
+ * 重试限次，耗尽后落一条 `llm.empty_response`（action=exhausted）事件再回落原始终止行为。
+ *
+ * 只管「语义空响应」；传输层断开 / 过载重试是另一套策略（`ProviderRetryPolicy`）。
+ * 缺省值见 core `DEFAULT_EMPTY_RESPONSE_MAX_RETRIES` / `DEFAULT_EMPTY_RESPONSE_NUDGE`
+ * （tool-calling-loop.ts）：未注入本策略 = 启用、重试 2 次。
+ */
+export interface EmptyResponsePolicy {
+  /** 总开关；缺省 true。false = 空响应直接当终稿（修复前行为，零回归开关）。 */
+  enabled?: boolean;
+  /** nudge 重试上限（不含首次响应）；缺省 2；0 = 不重试（只落耗尽日志）。 */
+  maxRetries?: number;
+  /** nudge 文案（以 user 消息追加）；缺省 `DEFAULT_EMPTY_RESPONSE_NUDGE`。 */
+  nudge?: string;
+}
+
 /** LLM Provider 接口 */
 export interface LLMProvider {
   chat(req: ChatRequest): Promise<LLMResponse>;

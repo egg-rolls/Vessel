@@ -196,6 +196,23 @@ export interface EnvInjectionConfig {
 }
 
 /**
+ * 空响应兜底配置（q-empty-response；YAML `empty_response`；全部可选）。
+ *
+ * 模型偶发「空内容 + 无工具调用 + 终止原因」时，core loop 不再把空串当终稿，
+ * 而是追加一条「继续你的任务」nudge 重新轮询（限次防死循环）。缺省即启用：
+ * 不写本段 = enabled=true、maxRetries=2、nudge 用 core 内置文案。
+ * 映射到 core `EmptyResponsePolicy`（src/empty-response-settings.ts）。
+ */
+export interface EmptyResponseConfig {
+  /** 总开关；缺省 true。false = 空响应直接当终稿（修复前行为，零回归开关）。 */
+  enabled?: boolean;
+  /** nudge 重试上限（不含首次响应）；缺省 2，范围 0–10；0 = 不重试（只落耗尽日志）。 */
+  maxRetries?: number;
+  /** nudge 文案（以 user 消息追加）；缺省 core `DEFAULT_EMPTY_RESPONSE_NUDGE`。 */
+  nudge?: string;
+}
+
+/**
  * 视觉配置（0.56，P0；全部可选）。
  *
  * **故意没有 `enable` 这个键**：决策 1 = 「模型支持视觉就直接发」，所以能力问
@@ -1140,6 +1157,8 @@ export interface VesselConfig {
   envInjection?: EnvInjectionConfig;
   /** 0.56：视觉（kill switch / 预算 / 精度 / 预处理 / blob 生命周期）；缺省全部走默认值。 */
   vision?: VisionConfig;
+  /** 空响应兜底（q-empty-response）；缺省 = 启用、nudge 重试 2 次。 */
+  emptyResponse?: EmptyResponseConfig;
   /** 0.6.1：工具权限免确认规则 */
   permission?: PermissionConfig;
   plugins?: PluginConfig[];

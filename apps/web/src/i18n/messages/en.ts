@@ -602,6 +602,18 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.display.field.logColor': 'Log color',
   'settings.display.field.logFormat': 'Log format',
   'settings.display.field.logTime': 'Log time',
+  'settings.display.runtime.title': 'Runtime (core)',
+  'settings.display.runtime.description':
+    'Core runtime safeguards for all agents. Changes apply to new sessions (existing sessions keep their startup snapshot).',
+  'settings.display.field.emptyResponseEnabled': 'Empty-response fallback',
+  'settings.display.field.emptyResponseEnabled.hint':
+    'When the model returns an empty reply (no content, no tool calls), inject a "continue your task" nudge and re-poll instead of ending the run with zero output. On = default.',
+  'settings.display.field.emptyResponseMaxRetries': 'Empty-response nudge retries',
+  'settings.display.field.emptyResponseMaxRetries.hint':
+    'Max nudge retries per run (integer 0–10, default 2). When exhausted the run ends gracefully with a logged notice.',
+  'settings.display.field.emptyResponseNudge': 'Empty-response nudge text',
+  'settings.display.field.emptyResponseNudge.hint':
+    'Custom nudge injected as a user message. Leave unset to keep the built-in wording.',
   'settings.display.log.title': 'Logs (gateway)',
   'settings.display.log.description':
     'Controls the gateway process log hub (level, color, format, time). Changes hot-apply without a restart.',
