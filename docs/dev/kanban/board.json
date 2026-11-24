@@ -93,6 +93,14 @@
       "progress": "merge入main；三根因:R1终态effect重复全量刷新(加seq水位每条一次)R2 mergeTailPage新数组引用作废memo(逐条全等复用引用)R3 followKey贴底失明(追加items.length+末项key)；store轮询各有兜底职责未删；build绿待用户验收不再闪现"
     },
     {
+      "id": "q-skills-impl",
+      "title": "SKILLS插件实施(设计已就绪908行,树状拆分7切片)",
+      "column": "进行中",
+      "owner": "q-skills-impl",
+      "branch": "feat/q-skills-impl",
+      "progress": "派单：按skills-plugin-design.md实施in-process插件；切片骨架→数据模型→信任门→三来源→skills工具→设置域→UI，每片build+commit"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
