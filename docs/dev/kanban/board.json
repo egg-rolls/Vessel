@@ -15,10 +15,10 @@
     {
       "id": "plan-c",
       "title": "计划C：src 大重组（~94文件→~15领域目录）+ 管理规范/关键词",
-      "column": "待办",
-      "owner": "main",
-      "branch": "redblue-dev",
-      "progress": "修复轮+设计轮+早退修复全合入，可启动；待用户确认时机"
+      "column": "进行中",
+      "owner": "q-plan-c",
+      "branch": "refactor/q-plan-c",
+      "progress": "派单两阶段：阶段1布局约定+领域映射文档（待main确认）→阶段2逐域搬迁+import重写+每批build"
     },
     {
       "id": "final-gate",
