@@ -34,8 +34,8 @@ import {
   resolveModelRef,
   synthesizeLegacyRegistry,
   type VesselConfig,
-} from '../packages/config/src/index';
-import type { GatewayReloadResult } from '../packages/serve/src/index';
+} from '../../packages/config/src/index';
+import type { GatewayReloadResult } from '../../packages/serve/src/index';
 
 /** web gateway 的可选热重配置入口（尚未合入时缺省） */
 export interface GatewayReconfigureTarget {

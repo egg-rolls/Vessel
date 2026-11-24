@@ -9,7 +9,7 @@
  * @module vessel/shutdown-report
  */
 
-import type { EventStream, Logger } from '../packages/core/src/index';
+import type { EventStream, Logger } from '../../packages/core/src/index';
 
 export interface ShutdownFailureInput {
   events?: EventStream;

@@ -99,9 +99,12 @@ import {
   removeAutoApproveRule,
 } from '../data/permission-store';
 import { createFederationSendPort } from '../federation/federation-send-port';
+import { resolveInteractionsDir } from '../gateway/interactions-dir';
+import { resolveGatewayAuth } from '../gateway/serve-auth';
+import { reportShutdownFailure } from '../gateway/shutdown-report';
+import { resolveConnectToken } from '../gateway/transport-factory';
 import { createHubRuntime } from '../hub-wiring';
 import { t } from '../i18n';
-import { resolveInteractionsDir } from '../interactions-dir';
 import type { McpEngineShell } from '../mcp-engine-wiring';
 import type { MockScenarioName } from '../mock/scenarios';
 import { createNodeDrainer } from '../node/node-drain';
@@ -145,7 +148,6 @@ import {
   resumeError,
 } from '../run/durable-wiring';
 import { createRunControl } from '../run/run-control';
-import { resolveGatewayAuth } from '../serve-auth';
 import { createContextUsageSource } from '../session/context-usage';
 import { createImageDeliverySource } from '../session/image-delivery';
 import type { SessionControl } from '../session/session-control';
@@ -157,10 +159,8 @@ import { createSystemContextSource } from '../session/system-context';
 // 0.54 C：`events.list` 的按 run 读端口（同一模块，共用 timeline 的读面与路径口径）。
 import { createTimelineRunEventsPort, timelineTailPort } from '../session/timeline-dual-write';
 import { readPackageVersion } from '../shared/version';
-import { reportShutdownFailure } from '../shutdown-report';
 import { createEngineSupervisor, type EngineSupervisor } from '../tools-engine/supervisor';
 import { callbackRoute } from '../tools-engine/wiring';
-import { resolveConnectToken } from '../transport-factory';
 import { registerBashJobDelivery } from './bash-job-delivery';
 import { createRuntimeNoticeBus, type RuntimeNoticeBus } from './runtime-notice';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';

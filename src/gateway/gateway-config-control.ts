@@ -8,8 +8,8 @@
  * @module vessel/gateway-config-control
  */
 
-import { getUserConfigPath } from '../packages/config/src/index';
-import { isSettableConfigKey, setUserConfigValue } from './config/ui-settings';
+import { getUserConfigPath } from '../../packages/config/src/index';
+import { isSettableConfigKey, setUserConfigValue } from '../config/ui-settings';
 
 export interface GatewayConfigSetRequest {
   tenantId: string;

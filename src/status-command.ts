@@ -21,9 +21,9 @@ import {
   type GatewayStateSnapshot,
 } from './gateway/pid';
 import { gatewayBaseUrl } from './gateway/reload';
+import { resolveGatewayToken } from './gateway/transport-factory';
 import { t } from './i18n';
 import { readPackageVersion } from './shared/version';
-import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 
 export interface CommandResult {

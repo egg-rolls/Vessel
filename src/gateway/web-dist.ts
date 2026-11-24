@@ -12,16 +12,16 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { logEvent } from '../packages/serve/src/log-event';
-import { t } from './i18n';
+import { logEvent } from '../../packages/serve/src/log-event';
+import { t } from '../i18n';
 
 /** 仓库内默认静态目录（与 `src/cli.ts` 的 `resolveStaticDir` 一致） */
-export const DEFAULT_WEB_DIST_DIR = fileURLToPath(new URL('../apps/web/dist', import.meta.url));
+export const DEFAULT_WEB_DIST_DIR = fileURLToPath(new URL('../../apps/web/dist', import.meta.url));
 /** Web 源码目录；用于判断 dist 是否过期 */
-export const DEFAULT_WEB_SRC_DIR = fileURLToPath(new URL('../apps/web/src', import.meta.url));
-const DEFAULT_WEB_INDEX = fileURLToPath(new URL('../apps/web/index.html', import.meta.url));
+export const DEFAULT_WEB_SRC_DIR = fileURLToPath(new URL('../../apps/web/src', import.meta.url));
+const DEFAULT_WEB_INDEX = fileURLToPath(new URL('../../apps/web/index.html', import.meta.url));
 const DEFAULT_WEB_VITE_CONFIG = fileURLToPath(
-  new URL('../apps/web/vite.config.ts', import.meta.url),
+  new URL('../../apps/web/vite.config.ts', import.meta.url),
 );
 
 const DEFAULT_MAX_FILES = 5_000;

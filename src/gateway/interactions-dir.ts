@@ -9,7 +9,7 @@
 
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { DEFAULT_GATEWAY_INSTANCE } from './gateway/pid';
+import { DEFAULT_GATEWAY_INSTANCE } from './pid';
 
 /** 选目录；不创建 */
 export function resolveInteractionsDir(dataDir: string, instance?: string): string {

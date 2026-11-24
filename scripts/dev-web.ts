@@ -19,7 +19,7 @@ import { DEFAULT_SERVE_OPTIONS, loadConfig } from '../packages/config/src/index'
 import { resolveDataDir } from '../src/data/data-paths';
 import { gatewayLogPath, startGatewayDaemon, tailLog } from '../src/gateway/daemon';
 import { type GatewayPidRecord, isProcessAlive, readGatewayPidRecord } from '../src/gateway/pid';
-import { resolveGatewayToken } from '../src/transport-factory';
+import { resolveGatewayToken } from '../src/gateway/transport-factory';
 import { DEV_RELAY_HEADER, injectTokenIntoAuthFrame, isAllowedDevOrigin } from './dev-web-lib';
 
 /** relay 收尾时最多缓存的帧数（浏览器在 upstream open 前的首帧） */

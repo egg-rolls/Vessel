@@ -37,6 +37,11 @@ import { formatConfigErrors } from './config/config-error-format';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
 import { expandHome, resolveDataDir } from './data/data-paths';
 import { gatewayLogPath, startGatewayDaemon } from './gateway/daemon';
+import {
+  isHumanTerminal,
+  type PlatformStartupHub,
+  renderPlatformStartup,
+} from './gateway/gateway-banner';
 import { clearHandoffMarker, consumeHandoffMarker, writeHandoffMarker } from './gateway/handoff';
 import {
   acquireGatewayInstanceLock,
@@ -94,23 +99,13 @@ import {
   serviceStatus,
   uninstallService,
 } from './gateway/service';
+import { resolveGatewayToken } from './gateway/transport-factory';
 import {
   readWatchdogSnapshot,
   resolveStallWatchdogConfig,
   type StallWatchdogConfig,
   type WatchdogEvent,
 } from './gateway/watchdog';
-import { isHumanTerminal, type PlatformStartupHub, renderPlatformStartup } from './gateway-banner';
-import { readHubDerivedOrigins } from './hub/derive-origins';
-import { readHubLockFile } from './hub/runtime';
-import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from './hub/server';
-import { t } from './i18n';
-// 0.56：派生 token（显式配置永远优先；未配置时自动派生，绝不再「未配置就挂」）。
-import { effectiveNodeToken, effectivePlatformToken } from './node/token-derive';
-import { createHttpRpcClient } from './rpc/http-client';
-import { readPackageVersion } from './shared/version';
-import { resolveGatewayToken } from './transport-factory';
-import { ui } from './ui-style';
 import {
   inspectWebDist,
   interruptBuildOfStoppedHost,
@@ -121,7 +116,16 @@ import {
   webDistProbe,
   webDistStaleLine,
   webDistWarning,
-} from './web-dist';
+} from './gateway/web-dist';
+import { readHubDerivedOrigins } from './hub/derive-origins';
+import { readHubLockFile } from './hub/runtime';
+import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from './hub/server';
+import { t } from './i18n';
+// 0.56：派生 token（显式配置永远优先；未配置时自动派生，绝不再「未配置就挂」）。
+import { effectiveNodeToken, effectivePlatformToken } from './node/token-derive';
+import { createHttpRpcClient } from './rpc/http-client';
+import { readPackageVersion } from './shared/version';
+import { ui } from './ui-style';
 
 /** 依赖注入（CLI 只用默认值；测试注入平台/路径/命令执行） */
 export interface GatewayCommandDeps {

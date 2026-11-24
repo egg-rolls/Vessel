@@ -18,6 +18,7 @@ import { createInterface } from 'node:readline/promises';
 import { getUserConfigDir, loadConfig, type VesselConfig } from '../packages/config/src/index';
 import { DEFAULT_STOP_TIMEOUT_MS, type GatewaySelector } from './cli-args';
 import { expandHome, resolveDataDir } from './data/data-paths';
+import { isHumanTerminal } from './gateway/gateway-banner';
 import { loadNodeRegistry } from './gateway/node-registry';
 import { readSpawnedChildren, type SpawnedChildRecord } from './gateway/node-supervisor';
 import {
@@ -26,11 +27,10 @@ import {
   type GatewayPidRecord,
 } from './gateway/pid';
 import { gatewayBaseUrl, shutdownGateway } from './gateway/reload';
-import { isHumanTerminal } from './gateway-banner';
+import { resolveConnectToken, resolveGatewayToken } from './gateway/transport-factory';
 import { type GatewayCommandDeps, resolveGatewayTargets, stopGateway } from './gateway-command';
 import { t } from './i18n';
 import { createHttpRpcClient, type HttpRpcClient, normalizeConnectUrl } from './rpc/http-client';
-import { resolveConnectToken, resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 
 /** 冻结签名（CONTRACT-stop-semantics S1）；接线方 = src/commands/registry.ts。 */

@@ -6,16 +6,16 @@
  */
 
 import type { Logger } from '@vessel-agent/core';
-import type { VesselConfig } from '../packages/config/src/index';
+import type { VesselConfig } from '../../packages/config/src/index';
 import type {
   AgentControlLike,
   FederationGatewayOptions,
   TeamControlLike,
-} from '../packages/serve/src/index';
-import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
-import { resolveFederationOptions } from './federation/federation-config';
-import { latestEvalReport } from './plugin/eval-wiring';
-import { PluginLoader } from './plugin/plugin-loader';
+} from '../../packages/serve/src/index';
+import type { FeishuChannelLike, MetricsControlLike } from '../control-plane-types';
+import { resolveFederationOptions } from '../federation/federation-config';
+import { latestEvalReport } from '../plugin/eval-wiring';
+import { PluginLoader } from '../plugin/plugin-loader';
 
 export interface GatewayControlPlaneOptions {
   config: VesselConfig;

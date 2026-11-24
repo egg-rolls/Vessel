@@ -89,9 +89,26 @@ import { expandHome, resolveDataDir } from './data/data-paths';
 import { resolveAgentCwd } from './data/path-resolution';
 import { setToolPolicy } from './data/permission-store';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
+import {
+  renderGatewayBanner,
+  renderGatewayBannerOneLine,
+  wantsBoxBanner,
+} from './gateway/gateway-banner';
+import { createGatewayConfigSet } from './gateway/gateway-config-control';
+import {
+  createGatewayReloadRunner,
+  type GatewayReconfigureTarget,
+  type GatewayReloadApplier,
+} from './gateway/gateway-reload-wiring';
+import { buildGatewayControlPlane } from './gateway/gateway-wiring';
 import type { GatewayInstanceLock } from './gateway/instance-lock';
+import { ensureInteractionsDir, resolveInteractionsDir } from './gateway/interactions-dir';
 import { collectGatewayState, DEFAULT_GATEWAY_INSTANCE, GATEWAY_DAEMON_ENV } from './gateway/pid';
-import { renderGatewayBanner, renderGatewayBannerOneLine, wantsBoxBanner } from './gateway-banner';
+import { resolveGatewayAuth } from './gateway/serve-auth';
+import { checkTlsFiles, resolveServeOptions } from './gateway/serve-config';
+import { shutdownServeStack } from './gateway/shutdown-sequence';
+import { resolveGatewayToken } from './gateway/transport-factory';
+import { ensureWebDist, interruptWebBuild, webDistWarning } from './gateway/web-dist';
 import {
   deriveGatewayInstance,
   isForegroundGatewayCommand,
@@ -102,13 +119,6 @@ import {
   stopGateway,
   writeForegroundGatewayPid,
 } from './gateway-command';
-import { createGatewayConfigSet } from './gateway-config-control';
-import {
-  createGatewayReloadRunner,
-  type GatewayReconfigureTarget,
-  type GatewayReloadApplier,
-} from './gateway-reload-wiring';
-import { buildGatewayControlPlane } from './gateway-wiring';
 import {
   HEADLESS_ASK_SUSPENDED_EXIT_CODE,
   installHeadlessAskSuspend,
@@ -119,7 +129,6 @@ import {
 import { readHubNodeTrustedOrigins } from './hub/node-state';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
-import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-dir';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 // 0.56：派生 token（root-secret → HKDF；显式配置永远优先）。
 import { effectiveNodeToken } from './node/token-derive';
@@ -146,8 +155,6 @@ import { type BootstrapResult, bootstrap } from './runtime/bootstrap';
 import { installProcessErrorHandlers } from './runtime/process-handlers';
 import { createRuntimeNoticeBus } from './runtime/runtime-notice';
 import { normalizeBridgeDeny } from './runtime/vessel-meta';
-import { resolveGatewayAuth } from './serve-auth';
-import { checkTlsFiles, resolveServeOptions } from './serve-config';
 import { createContextUsageSource } from './session/context-usage';
 import { createImageDeliverySource } from './session/image-delivery';
 import { createSessionEventsSource } from './session/session-events';
@@ -163,13 +170,10 @@ import { createSystemContextSource } from './session/system-context';
 import { createTimelineRunEventsPort, timelineTailPort } from './session/timeline-dual-write';
 import { isAddressInUse } from './shared/port-in-use';
 import { readPackageVersion } from './shared/version';
-import { shutdownServeStack } from './shutdown-sequence';
 import { syncBasicToolsEngineWiring, syncCallbackToolsEngineWiring } from './tools-engine/wiring';
-import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update/gateway-check';
-import { ensureWebDist, interruptWebBuild, webDistWarning } from './web-dist';
 
 /**
  * 由专用装配路径管理的工厂式插件：tools applier 不能把它们当普通插件装

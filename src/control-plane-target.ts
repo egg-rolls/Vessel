@@ -22,9 +22,9 @@ import {
   gatewayPidFileName,
 } from './gateway/pid';
 import { gatewayBaseUrl } from './gateway/reload';
+import { resolveConnectToken, resolveGatewayToken } from './gateway/transport-factory';
 import type { RpcClient } from './rpc';
 import { createHttpRpcClient, normalizeConnectUrl } from './rpc/http-client';
-import { resolveConnectToken, resolveGatewayToken } from './transport-factory';
 
 /** 解析选项 */
 export interface ControlPlaneTargetOptions {

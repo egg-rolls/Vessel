@@ -14,7 +14,7 @@ import {
   DEFAULT_SERVE_OPTIONS,
   isLoopbackHostname,
   type VesselConfig,
-} from '../packages/config/src/index';
+} from '../../packages/config/src/index';
 
 /** 传给 `startGateway` 的解析结果 */
 export interface ServeRuntimeOptions {

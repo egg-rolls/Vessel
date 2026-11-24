@@ -4,7 +4,7 @@
  * 只从显式配置与 env 取值，绝不返回 `node.tokens` 条目；空串视为未设置。
  */
 
-import type { VesselConfig } from '../packages/config/src/index';
+import type { VesselConfig } from '../../packages/config/src/index';
 
 /**
  * 解析 gateway/本地客户端 token（绝不返回 node.tokens 条目）：

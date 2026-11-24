@@ -21,7 +21,7 @@ import {
   type Principal,
   type PrincipalRole,
   type VesselConfig,
-} from '../packages/config/src/index';
+} from '../../packages/config/src/index';
 
 type EnvMap = Record<string, string | undefined>;
 

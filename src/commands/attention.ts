@@ -41,8 +41,8 @@ import {
   selectAttentionNodes,
 } from '../federation/attention-nodes';
 import { parseFederationAddress } from '../federation/federation-address';
+import { resolveInteractionsDir } from '../gateway/interactions-dir';
 import { t } from '../i18n';
-import { resolveInteractionsDir } from '../interactions-dir';
 import { RpcClientError } from '../rpc';
 import { ui } from '../ui-style';
 

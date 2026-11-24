@@ -32,6 +32,10 @@ import {
   resolveEffectiveTenantId,
   resolveSingleTenantPaths,
 } from './data/data-paths';
+import { resolveGatewayToken } from './gateway/transport-factory';
+// 0.56.1：Web 控制台产物缺失要在 doctor 就能看见（`gateway start` 的硬前置）。
+// 0.57：产物「落后于源码」同理 —— 它是「界面一直是旧的」最常见的真实原因。
+import { DEFAULT_WEB_DIST_DIR, inspectWebDist, webDistStaleLine } from './gateway/web-dist';
 // 0.56：派生 token 的现状（根密钥 / 指纹；doctor 从不说「必须配置 token」）。
 import {
   effectiveHubToken,
@@ -44,11 +48,7 @@ import { declarativePluginEntries } from './plugin/plugin-config';
 import { PluginLoader } from './plugin/plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin/plugin-selection';
 import { readPackageVersion } from './shared/version';
-import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
-// 0.56.1：Web 控制台产物缺失要在 doctor 就能看见（`gateway start` 的硬前置）。
-// 0.57：产物「落后于源码」同理 —— 它是「界面一直是旧的」最常见的真实原因。
-import { DEFAULT_WEB_DIST_DIR, inspectWebDist, webDistStaleLine } from './web-dist';
 
 export interface DoctorCommandResult {
   exitCode: number;
