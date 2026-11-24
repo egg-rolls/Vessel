@@ -61,6 +61,14 @@
       "progress": "派单：6e15df06已合入重启但用户仍见agent名；查是否只改完成通知未覆盖启动/进度/live首帧"
     },
     {
+      "id": "q-ui-style",
+      "title": "设置弹窗+chunk日志去灰底(透黑底极简传统)+截图多模态验收",
+      "column": "进行中",
+      "owner": "q-ui-style",
+      "branch": "fix/q-ui-style",
+      "progress": "派单：VSCode弹窗按钮灰底+运行chunk日志灰底→transparent/var(--surface)极简黑底；装playwright截图+media查看验收"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
