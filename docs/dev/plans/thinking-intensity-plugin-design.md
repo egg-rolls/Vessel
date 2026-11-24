@@ -413,4 +413,334 @@ export interface LLMProvider {
   且「按钮状态」与「请求注入」会分裂成两个真相；hook 路径单一真相。
 - **不做深合并 / 参数改写**：extra 只增顶层键；改 messages/tools/model 一律拒绝（保留键）。
 - **不做响应侧钩子**：思考强度的效果（reasoning_content/usage）走既有响应链，无需新面。
-- **不新增 PluginHost 注册方法**：registerHook 足够；新注册面 = 新冻结契约，收益为零。
+- **不新增 PluginHost 注册方法**：registerHook 足够；新注册面 = 新冻结契约，收益为零。## 4. 插件设计（thinking-intensity）
+
+### 4.1 位置与 manifest
+
+- 目录：`plugins/provider/thinking-intensity/`（provider 类插件：知识是「provider × model →
+  参数」，与 provider-openai / provider-anthropic / model-registry 同组）。
+- 包名 `@vessel-agent/thinking-intensity`；`vessel.id: "thinking-intensity"`；
+  **`mode: in-process`**（BeforeLlm hook 必须在进程内；child 模式无 hook 通道——manifest
+  不声明 child 支持，装配按 in-process 加载）。`side: "both"`（后端 hook/RPC + Web 贡献面）。
+- 依赖：`@vessel-agent/core`（类型 + HookType）、`@vessel-agent/plugin-sdk`；
+  Web 侧无独立 bundle（工具栏菜单由**宿主**渲染，§4.7——插件不出 UI 组件，只出声明）。
+
+manifest 贡献面全集（声明即生效，零宿主硬编码）：
+
+```jsonc
+// package.json → vessel
+{
+  "id": "thinking-intensity",
+  "name": "Thinking Intensity",
+  "side": "both",
+  "activationEvents": ["onStartup"],
+  "contributes": {
+    "settings": { /* §4.2 */ },
+    "rpc": [
+      { "name": "get_state",    "description": "Current level + provider capability for a session", "permission": "read" },
+      { "name": "set_level",    "description": "Set thinking level (session-scoped or global runtime default)", "permission": "write" },
+      { "name": "capabilities", "description": "Provider mapping table summary (read-only diagnostics)", "permission": "read" }
+    ],
+    "toolbar": [
+      {
+        "slot": "composer",
+        "id": "thinking-level",
+        "label": "Thinking",
+        "titleKey": "thinking.toolbar.label",
+        "icon": "sparkles",                    // 须在 PLUGIN_ICON_NAMES 白名单内（实施时核对，无合适图标则省略）
+        "order": 20,
+        "menu": { /* §4.7 契约 */ }
+      }
+    ],
+    "i18n": { "en": { /* … */ }, "zh-CN": { /* … */ } }
+  },
+  "permissions": { "fs": [], "net": [], "process": false, "secrets": false, "events": [], "rpc": [] }
+}
+```
+
+- 权限最小面：插件**不发网络请求、不读文件、不碰凭证**——它只产出「参数建议」，
+  真正的 HTTP 由 core 适配器发出。net/fs 全空。
+- `events: []`：不订阅事件流（hook 上下文已含所需事实）；conflict 事件由 core 发，
+  插件不消费。
+
+### 4.2 设置 schema（contributes.settings，q-settings 自动发现）
+
+```jsonc
+"settings": {
+  "enabled": {
+    "type": "boolean", "default": true,
+    "titleKey": "thinking.settings.enabled",
+    "descriptionKey": "thinking.settings.enabled.desc",
+    "keywords": ["thinking", "思考", "强度", "reasoning"], "order": 10
+  },
+  "default_level": {
+    "type": "string", "default": "auto",
+    "enum": ["auto", "off", "low", "medium", "high"],
+    "titleKey": "thinking.settings.defaultLevel",
+    "descriptionKey": "thinking.settings.defaultLevel.desc",
+    "order": 20
+  },
+  "budget_low":    { "type": "integer", "default": 2048,  "minimum": 1024, "maximum": 65536,
+                     "titleKey": "thinking.settings.budgetLow", "order": 30 },
+  "budget_medium": { "type": "integer", "default": 8192,  "minimum": 1024, "maximum": 65536,
+                     "titleKey": "thinking.settings.budgetMedium", "order": 40 },
+  "budget_high":   { "type": "integer", "default": 16384, "minimum": 1024, "maximum": 65536,
+                     "titleKey": "thinking.settings.budgetHigh", "order": 50 },
+  "experimental_providers": {
+    "type": "boolean", "default": false,
+    "titleKey": "thinking.settings.experimental",
+    "descriptionKey": "thinking.settings.experimental.desc",
+    "order": 60
+  }
+}
+```
+
+语义：
+
+- `enabled=false` = kill switch（vision.disabled 同形）：hook 恒不注入，UI 按钮置灰。
+- `default_level` = 持久化全局默认（vessel.yaml `plugins[].config`，经 plugins.config.set 写）。
+  **`auto` = 不注入任何参数**（provider 自己的默认行为，零回归基线）。
+- `budget_*` 只作用于 budget 形状（Anthropic / Qwen thinking_budget）；effort 形状
+  （reasoning_effort）是枚举档位，无预算可调。minimum=1024 对齐 Anthropic 硬下限。
+- `experimental_providers`：映射表 `status:'experimental'` 行的总开关（§4.6）——
+  未经官方文档核实的厂商参数默认不生效，打开才注入（fail-safe）。
+- 生效语义（q-settings §4.5）：in-process 插件 config 热应用后**下一轮请求**读到新值
+  （hook 每轮读 settings 快照）；设置弹窗提示「已保存」，无需重载。
+- i18n key 命名沿用 `<pluginId>.settings.<key>[.desc]` 约定（q-settings §10.3）。
+
+### 4.3 状态模型与 RPC
+
+状态（插件后端内存，install 时初始化）：
+
+```ts
+type Level = 'auto' | 'off' | 'low' | 'medium' | 'high';
+
+interface ThinkingState {
+  /** per-session 覆盖：UI 按钮写这里；会话关闭/进程重启即失（v1 不持久化，§8.1 R4） */
+  sessionLevels: Map<string, Level>;
+  /** 全局运行期默认：set_level 不带 session_id 时写这里；缺省回 settings.default_level */
+  runtimeDefault: Level | undefined;
+  /** 能力缓存：hook 每轮从 ctx 学到 (session → providerName/model)，供 get_state 展示 */
+  observed: Map<string, { providerName?: string; model: string; supported: boolean }>;
+}
+```
+
+档位解析优先级：`sessionLevels[session] ?? runtimeDefault ?? settings.default_level ?? 'auto'`。
+
+RPC DTO（经既有 `plugin.thinking-intensity.<name>` 桥，§1.5）：
+
+```
+get_state { session_id?: string }
+→ {
+    level: Level,
+    source: 'session' | 'runtime' | 'settings',
+    enabled: boolean,                          // kill switch
+    provider?: {                               // 能力缓存命中才有（首轮请求前缺省）
+      name?: string, model: string,
+      supported: boolean,
+      available_levels?: Level[],              // 不支持的档位（如 o 系列不能 off）
+      hint?: string                            // i18n key 或短文案（降级原因）
+    }
+  }
+
+set_level { session_id?: string, level: Level }
+→ { ok: true, level, scope: 'session' | 'global' }
+错误：invalid_params（level 不在枚举 / session_id 超长）；forbidden（write 权限既有口径）
+
+capabilities {}
+→ { rows: Array<{ match: string, shape: 'effort'|'budget'|'toggle'|'none',
+                  status: 'stable'|'experimental', levels: Level[] }> }
+```
+
+- `set_level` 校验 level 枚举；session_id 长度上限 128（与 gateway 会话 id 口径一致）。
+- `get_state` 的 provider 能力来自**请求期观测缓存**——插件不反向查询 gateway/EU
+  （插件没有那个端口，也不该有）；首轮请求前 UI 显示「auto（请求后自动识别）」，
+  这是诚实降级而不是猜（§4.7 交互）。
+- 状态隔离：sessionLevels 按 session_id 键控，成员会话互不串；团队/多 tenant 场景下
+  插件实例 per-tenant 装配（既有插件装配口径），天然隔离。
+
+### 4.4 install 流程
+
+```ts
+install(host, options) {
+  const settings = readSettings(options?.config);        // §4.2 快照 + 热应用回调
+  const state = createState();
+  host.registerHook({
+    name: 'thinking-intensity',
+    type: HookType.BeforeLlm,
+    priority: 60,                                        // 环境卡类 hook 之后；extras 合并与顺序无关（键不冲突）
+    run: (ctx) => beforeLlm(ctx, state, settings),       // §4.5
+  });
+  return {
+    rpc: async (name, params) => dispatch(name, params, state, settings),  // §4.3
+    close: () => { state.sessionLevels.clear(); state.observed.clear(); },
+  };
+}
+```
+
+- settings 热应用：in-process 装配的 config 监听既有（q-settings §4.5）；插件每轮 hook
+  读最新快照，不缓存过期值。
+- 卸载/回滚：registerHook 记入 beginPluginInstall scope（既有机制），安装失败自动摘除。### 4.5 BeforeLlm hook（请求期注入 + 降级）
+
+```ts
+function beforeLlm(ctx: HookContext, state, settings): HookResult | undefined {
+  // 1. 观测记录（无论是否注入都学能力，UI 靠它）
+  const entry = resolveMapping(ctx.providerName, ctx.model);   // §4.6 纯函数
+  if (ctx.session_id) state.observed.set(ctx.session_id, {
+    providerName: ctx.providerName, model: ctx.model ?? '', supported: entry !== undefined,
+  });
+
+  // 2. 降级闸（任一命中 ⇒ 返回 undefined，请求逐字节不变）
+  if (!settings.enabled) return undefined;                     // kill switch
+  const level = resolveLevel(state, settings, ctx.session_id);
+  if (level === 'auto') return undefined;                      // 默认 = provider 自决
+  if (!ctx.model) return undefined;                            // 无模型事实，不猜
+  if (!entry) return undefined;                                // 未知 provider/model
+  if (entry.status === 'experimental' && !settings.experimental_providers) return undefined;
+
+  // 3. 档位 → wire 参数（纯函数；不支持的档位 ⇒ 不注入 + 观测记 hint）
+  const params = mapLevel(entry, level, settings);             // 可能 undefined（如 o 系列 off）
+  if (!params) { markUnsupported(state, ctx.session_id, level); return undefined; }
+
+  return { requestExtras: { params } };                        // headers 本插件 v1 不用（§4.6 注）
+}
+```
+
+判据：
+
+- **hook 无 I/O、无抛错路径**：全部纯函数 + 内存 Map；任何意外（ctx 缺字段/映射表 bug）
+  由 HookRunner 隔离兜底，请求照常（无 extra）。
+- **每轮重新解析**：档位/设置/模型（agent.model 覆盖、凭证轮换换 vendor）都在请求期生效，
+  与 vision plan 同节奏；不在 run 起点缓存。
+- `request_index` 不区分：同一 run 内所有轮次同档位（强度是会话级意图，不是轮级节奏）。
+- **headers 通道 v1 不用但保留**：任务书要求 core 开放 extra headers（已开，§3.1）；
+  思考强度主流参数全在 body。headers 透传留给后续插件（如厂商 beta 特性头
+  `anthropic-beta: ...`），本插件不注入任何头——少一个敏感面。
+
+### 4.6 provider 映射表（插件内纯数据）
+
+统一档位 `auto / off / low / medium / high`；三种 wire 形状：
+
+- **effort**：枚举参数（`reasoning_effort: 'low'|'medium'|'high'`，部分模型支持 'none'）。
+- **budget**：开关 + token 预算（`thinking: {type:'enabled', budget_tokens:N}` /
+  `enable_thinking:true + thinking_budget:N`）；off = 显式关闭。
+- **toggle**：只有开/关（`thinking: {type:'enabled'|'disabled'}`）；low/medium/high 都映射
+  为 enabled（无级差，hint 说明三档等效）。
+- **none**：思考不可控（恒开或恒关）⇒ supported=false，UI 提示「该模型思考强度不可调」。
+
+映射表（按序首中；protocol = ctx.providerName，model = ctx.model）：
+
+| # | match（protocol / model 模式） | shape | off | low / medium / high | status | 依据 |
+|---|-------------------------------|-------|-----|--------------------|--------|------|
+| 1 | anthropic / `claude` | budget | `thinking:{type:'disabled'}` | `thinking:{type:'enabled',budget_tokens:budget_*}` | stable | Anthropic extended thinking 文档；适配器兜底 temperature/budget 一致性（§3.2.1） |
+| 2 | openai / `^(o[134]\|gpt-5)` | effort | gpt-5.1+：`reasoning_effort:'none'`；o 系列/gpt-5：**不可关**（available_levels 去掉 off） | `reasoning_effort:'low'\|'medium'\|'high'` | stable | OpenAI reasoning 文档；gpt-5.1 引入 none（已核实） |
+| 3 | openai（或 dashscope）/ `^qwen` | budget | `enable_thinking:false` | `enable_thinking:true, thinking_budget:budget_*` | stable | DashScope Qwen3 混合思考（已核实 enable_thinking；thinking_budget 上限实施 P2 对官方文档复核） |
+| 4 | google / `^gemini-2\.5-flash` | effort | `reasoning_effort:'none'` | `reasoning_effort:'low'\|'medium'\|'high'` | experimental | Gemini OpenAI 兼容端点 reasoning_effort→thinkingBudget；待核实 |
+| 5 | google / `^gemini-2\.5-pro` | effort | **不可关** | 同上 | experimental | 2.5-pro 思考不能全关；待核实 |
+| 6 | openai / `^deepseek-reasoner` | none | — | — | stable | DeepSeek reasoner 恒思考，无强度参数（已核实） |
+| 7 | openai / `^deepseek-chat` | toggle | `thinking:{type:'disabled'}` | `thinking:{type:'enabled'}` | experimental | V3.2 混合思考开关；版本敏感 |
+| 8 | openai / `^glm-4\.[56]` | toggle | `thinking:{type:'disabled'}` | `thinking:{type:'enabled'}` | experimental | 智谱 OpenAI 兼容 thinking 开关；待核实 |
+| 9 | moonshot / `kimi` | none | — | — | stable | kimi-k2-thinking 恒思考；无公开强度参数 |
+| 10 | ollama / `*` | none | — | — | stable（v1） | 本地模型思考参数随 run 配置，OpenAI 兼容面不统一；二期评估 |
+| 兜底 | 未命中 | — | 不注入 | 不注入 | — | 优雅降级：supported=false，UI 提示 |
+
+表纪律：
+
+- **匹配键是 (providerName, model) 二元组**，providerName 缺省时只按 model 模式匹配
+  （裸 fallback 降级路径）；`^qwen` 行不依赖 protocol（dashscope 常以 openai 兼容注册）。
+- 每行带 `status`：stable = 官方文档已核实；experimental = 形状合理但未核实/版本敏感，
+  受 `experimental_providers` 闸（默认 false）。**实施切片 P2 只带 stable 行上线**，
+  experimental 行 P4 逐行核实后转正（核实 = 读官方文档，不是探针请求——宪法零探针）。
+- 映射表是**纯数据 + 纯函数**（可静态断言，settings-registry 同做法）；加厂商 = 加一行，
+  0 行 core 改动（vision「加视觉模型 = 加配置」同判据）。
+- 档位不可用（如 o 系列 off）：`mapLevel` 返回 undefined + observed 记
+  `available_levels`/`hint`——**不静默换成别的档位**（用户选了 off 却偷偷思考 = 谎报）。
+- toggle 形状的级差：low/medium/high 等效（wire 只有开关）；hint 说明「该模型仅支持
+  开/关，三档强度等效」——不假装有无级调节。
+- 新厂商参数若不在表内（如未来 `reasoning: {effort}` 新形状）：加行即可；core 合并闸
+  对任何顶层键一视同仁（§3.2），无需跟改。
+
+### 4.7 UI 控制
+
+#### 4.7.1 设置弹窗（零代码，q-settings 自动发现）
+
+§4.2 声明合入即出现在设置弹窗「扩展 → Thinking Intensity」组：enabled / default_level /
+budget_* / experimental_providers 可检索可编辑（plugins.config.set 写路径已有）。
+default_level 是**持久默认**；composer 按钮是**会话级即时覆盖**——两层分工与
+q-settings「侧栏折叠按钮 vs 设置默认值」同判据（§5.3 of vscode-settings-design）：
+即时操作与持久默认写不同存储，无第二真相（按钮状态不回写 settings）。
+
+#### 4.7.2 composer 工具栏菜单按钮（toolbar 契约 additive 扩展）
+
+**问题**：toolbar v1 只有「宿主按 id 映射回调」一条路（attach-file 先例）。若照搬，
+宿主要硬编码 `thinking-intensity` 动作 id + 档位弹层 + RPC 调用——宿主认识具体插件，
+违反「核心只有形状」。
+
+**方案**：给 `PluginToolbarContribution` additive 一个**通用 RPC 绑定菜单**声明 `menu`——
+宿主渲染「声明式菜单按钮」，任何插件都能用，宿主零插件专属代码：
+
+```jsonc
+// manifest contributes.toolbar[]（本插件的声明）
+{
+  "slot": "composer", "id": "thinking-level",
+  "label": "Thinking", "titleKey": "thinking.toolbar.label", "order": 20,
+  "menu": {
+    "read": "get_state",            // 须在本插件 contributes.rpc 内，permission=read
+    "write": "set_level",           // 须在本插件 contributes.rpc 内，permission=write
+    "valueKey": "level",            // read 结果里取当前值的键；write 时以该键传选中值
+    "sessionScoped": true,          // write 时宿主注入当前 session_id（插件拿不到宿主路由）
+    "items": [                      // 静态档位表（文案走插件 i18n）
+      { "value": "auto",   "labelKey": "thinking.level.auto" },
+      { "value": "off",    "labelKey": "thinking.level.off" },
+      { "value": "low",    "labelKey": "thinking.level.low" },
+      { "value": "medium", "labelKey": "thinking.level.medium" },
+      { "value": "high",   "labelKey": "thinking.level.high" }
+    ]
+  }
+}
+```
+
+宿主契约（通用，不含 thinking 一词）：
+
+1. **校验**（loader/normalizer，既有贡献点校验同层）：menu.read/write 必须在该插件
+   rpc 白名单且权限匹配（read→read，write→write）；items ≤16 项、value ≤64 字符；
+   valueKey 合法键名。违规 ⇒ 丢 menu 保留普通按钮声明（单项丢弃 + 告警，既有口径）。
+2. **渲染**：按钮文案 = `label: <当前档位文案>`（当前值来自 read RPC 结果的
+   `[valueKey]`，按 items 匹配 labelKey → pluginT；未匹配显示原值）。点击展开菜单
+   （复用宿主既有浮层/焦点圈/Esc 机制，ModalShell 同族）。
+3. **read 时机**：composer 挂载 + 会话切换 + 每次 write 成功后重拉；read 结果可选字段
+   （通用形状，任何插件可用）：
+   - `enabled: false` ⇒ 按钮置灰 + hint tooltip；
+   - `options: string[]` ⇒ 只渲染 value 在其中的 items（能力过滤：o 系列隐藏 off）；
+   - `hint: string` ⇒ 菜单底部说明行（如「该模型仅支持开/关」）。
+   缺省这些字段 ⇒ 全量 items 可点（旧插件/简单插件零负担）。
+4. **write**：选中 item → `client.rpc('plugin.<id>.<write>', { [valueKey]: value,
+   ...(sessionScoped ? { session_id: 当前会话 } : {}) })`；乐观更新按钮文案 +
+   失败 toast 回滚（q-settings settingsPending 同机制）；成功重拉 read。
+5. **降级**：旧 gateway 无 menu 透传 / 旧 Web 不认识 menu ⇒ normalizer 丢 menu 字段 ⇒
+   条目退化为无 handler 普通按钮 ⇒ **既有规则丢弃不渲染**（无死按钮）；设置弹窗
+   default_level 仍可用（功能不丢，只是没有即时按钮）。
+
+接线点（实施 P3）：
+
+| 文件 | 改动 |
+|------|------|
+| `src/plugin/plugin-manifest.ts` | PluginToolbarContribution += `menu?: PluginToolbarMenu`（类型 + 校验） |
+| `packages/serve/src/plugin-host/types.ts` | PluginRenderContributions toolbar 项透传 menu（同 settings 透传先例） |
+| `apps/web/src/domains/plugins/plugin-contributions.ts` | PluginToolbarItem += menu 归一化（白名单校验） |
+| `apps/web/src/domains/chat/composer-toolbar.ts` | menu 条目不走 hostActions 表，走通用 MenuAction 分支（新导出 composerToolbarMenuActions） |
+| `packages/plugin-ui/src/ComposerToolbar.tsx` | 渲染菜单按钮（declarative：items/current/options/hint + onSelect） |
+| chat/team composer 页 | 注入 session_id + rpc client（既有 useConnection） |
+
+#### 4.7.3 交互细节
+
+- 按钮位置：composer 工具栏，attach-file 之后（order 20）；会话页与团队页共用
+  （toolbar 既有口径）。
+- 档位文案：auto=「自动」/ off=「关闭」/ low=「低」/ medium=「中」/ high=「高」；
+  按钮常态显示「思考: 中」，compact 模式只显示图标 + 档位字。
+- 不支持的模型：按钮置灰 + tooltip「当前模型不支持思考强度调节」（read 的
+  supported=false / options 空）；**不隐藏按钮**（用户需要知道为什么没得调）。
+- 首轮请求前：能力未知 ⇒ 按钮可点、全档位可选，菜单底部提示「发送首条请求后自动识别
+  模型能力」；选了不支持的档位 ⇒ hook 不注入 + 下轮 read 带 hint（诚实降级）。
+- 不做滑块：档位是离散语义（各家 wire 都是枚举/预算档），滑块暗示无级调节是谎报；
+  budget 数值精调在设置弹窗（budget_* 数字输入）。
