@@ -42,7 +42,7 @@
       "column": "进行中",
       "owner": "q-session-fix",
       "branch": "fix/q-session-fix",
-      "progress": "派单：重启后WebUI默认main会话报会话不存在；owner成员session_id=main哨兵未解析到真实会话afb8de6e，body_history停epoch11"
+      "progress": "纠正:是金丝雀main非生产；真因canary sessions/main缺index.json+wal.manifest(owner哨兵main被当真实会话ID建目录且不完整)→sessions.get失败；q-session-fix聚焦金丝雀owner会话bootstrap"
     },
     {
       "id": "g1-proxy-node",
