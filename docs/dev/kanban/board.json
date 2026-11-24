@@ -23,10 +23,10 @@
     {
       "id": "q-runtime-fix",
       "title": "runtime修复：issue-0 plugins[]热应用剥离活体工具 + issue-1 工具输出隔离缺口",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-runtime-fix",
       "branch": "fix/q-runtime-fix",
-      "progress": "派单：金丝雀验收抓到的真bug—plugins[]热应用opt-in剥离内置工具+引擎/成员面不同步；tool-output落生产根应落本舰队dataDir"
+      "progress": "merge 17d6f44c；issue-0保留opt-in语义+引擎registry窗口超集retain+成员面轮边界原子收敛(消除广告却执行不了窗口)；issue-1 bootstrap设VESSEL_DATA_DIR落本舰队dataDir；issue-2注记遗留；待金丝雀复验"
     },
     {
       "id": "q-settings-impl",
