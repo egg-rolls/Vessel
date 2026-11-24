@@ -233,7 +233,15 @@ export interface ProviderRetryPolicy {
 export interface EmptyResponsePolicy {
   /** 总开关；缺省 true。false = 空响应直接当终稿（修复前行为，零回归开关）。 */
   enabled?: boolean;
-  /** nudge 重试上限（不含首次响应）；缺省 2；0 = 不重试（只落耗尽日志）。 */
+  /**
+   * 无感重试（缺省 true）：空响应时**丢弃空轮**（不发 llm.response、不写窗口），
+   * 用已有一致 transcript（含上一个工具结果）原样重调模型——零注入零疤痕，
+   * 与无感 resume 同源。连续空耗尽 `maxRetries` 后升级**一次** nudge 打破空模式
+   * （纯重调可能采样再吐空，nudge 是可靠性兜底）；再空则 exhausted 回落原始终止。
+   * false = 直接走 nudge 注入路径（一期行为）。
+   */
+  seamless?: boolean;
+  /** 重试上限（不含首次响应）；缺省 2；0 = 不重试（只落耗尽日志，也不升级 nudge）。 */
   maxRetries?: number;
   /** nudge 文案（以 user 消息追加）；缺省 `DEFAULT_EMPTY_RESPONSE_NUDGE`。 */
   nudge?: string;
