@@ -7,7 +7,7 @@ paths: [src/**, docs/FILE-MANAGEMENT.md, docs/architecture/cli-conventions.md, d
 
 # src 领域目录布局（计划 C）
 
-> **状态**：〔提案〕阶段1设计稿，待 main 审映射后进阶段2搬迁。落地后翻〔现行〕。
+> **状态**：〔提案→执行中〕main 已批准映射与 C1–C5 裁决（§8），阶段2逐域搬迁进行中；全部落地后翻〔现行〕。
 > 上位规范：[FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)（路径归属）；CLI 域布局以
 > [cli-conventions.md](cli-conventions.md) §8 为准绳（本文是其向全 src 的推广）。
 > 装配层导航见 [assembly.md](assembly.md)；分层边界见 [layering.md](layering.md)。
@@ -76,38 +76,40 @@ import 网全平铺。本方案把 136 个文件按**语义**归入 **14 个领�
 | src/ask-channel.ts | src/cli/ask-channel.ts | headless ask 人类通道，只服务 headless 入口 |
 | src/feishu-command.ts | src/cli/feishu-command.ts | `--feishu` 入口模式启动与错误分类（非 registry 命令） |
 
-### 2.2 cli/commands/（27 个命令，按命名空间分目录，§8 布局）
+### 2.2 cli/commands/（28 个命令；main C2 裁决：命名空间 ≥2 命令建目录，单命令平铺）
+
+目录命名空间（4 个）：agent/（3）、gateway/（2）、fleet/（2）、plugin/（2）；其余 21 个单命令命名空间平铺。
 
 | 现路径 | 目标 |
 |---|---|
 | src/agent-command.ts | src/cli/commands/agent/agent-command.ts |
 | src/agent-inbox-command.ts | src/cli/commands/agent/agent-inbox-command.ts |
 | src/agents-command.ts | src/cli/commands/agent/agents-command.ts |
-| src/team-command.ts | src/cli/commands/team/team-command.ts |
 | src/gateway-command.ts | src/cli/commands/gateway/gateway-command.ts |
 | src/gateway-nodes-command.ts | src/cli/commands/gateway/gateway-nodes-command.ts |
-| src/node-command.ts | src/cli/commands/node/node-command.ts |
-| src/hub-command.ts | src/cli/commands/hub/hub-command.ts |
 | src/stop-command.ts | src/cli/commands/fleet/stop-command.ts |
 | src/status-command.ts | src/cli/commands/fleet/status-command.ts |
-| src/config-command.ts | src/cli/commands/config/config-command.ts |
-| src/token-command.ts | src/cli/commands/token/token-command.ts |
 | src/plugin-command.ts | src/cli/commands/plugin/plugin-command.ts |
 | src/plugin-cli-command.ts | src/cli/commands/plugin/plugin-cli-command.ts |
-| src/cli-update.ts | src/cli/commands/update/cli-update.ts |
-| src/completion-command.ts | src/cli/commands/completion/completion-command.ts |
-| src/dev-command.ts | src/cli/commands/dev/dev-command.ts |
-| src/doctor-command.ts | src/cli/commands/doctor/doctor-command.ts |
-| src/errors-command.ts | src/cli/commands/errors/errors-command.ts |
-| src/logs-command.ts | src/cli/commands/logs/logs-command.ts |
-| src/trace-command.ts | src/cli/commands/trace/trace-command.ts |
-| src/eval-command.ts | src/cli/commands/eval/eval-command.ts |
-| src/migrate-command.ts | src/cli/commands/migrate/migrate-command.ts |
-| src/prune-command.ts | src/cli/commands/prune/prune-command.ts |
-| src/resume-command.ts | src/cli/commands/resume/resume-command.ts |
-| src/commands/attention.ts | src/cli/commands/attention/attention.ts |
-| src/commands/federation.ts | src/cli/commands/federation/federation.ts |
-| src/commands/model.ts | src/cli/commands/model/model.ts |
+| src/team-command.ts | src/cli/commands/team-command.ts |
+| src/node-command.ts | src/cli/commands/node-command.ts |
+| src/hub-command.ts | src/cli/commands/hub-command.ts |
+| src/config-command.ts | src/cli/commands/config-command.ts |
+| src/token-command.ts | src/cli/commands/token-command.ts |
+| src/cli-update.ts | src/cli/commands/cli-update.ts |
+| src/completion-command.ts | src/cli/commands/completion-command.ts |
+| src/dev-command.ts | src/cli/commands/dev-command.ts |
+| src/doctor-command.ts | src/cli/commands/doctor-command.ts |
+| src/errors-command.ts | src/cli/commands/errors-command.ts |
+| src/logs-command.ts | src/cli/commands/logs-command.ts |
+| src/trace-command.ts | src/cli/commands/trace-command.ts |
+| src/eval-command.ts | src/cli/commands/eval-command.ts |
+| src/migrate-command.ts | src/cli/commands/migrate-command.ts |
+| src/prune-command.ts | src/cli/commands/prune-command.ts |
+| src/resume-command.ts | src/cli/commands/resume-command.ts |
+| src/commands/attention.ts | src/cli/commands/attention.ts |
+| src/commands/federation.ts | src/cli/commands/federation.ts |
+| src/commands/model.ts | src/cli/commands/model.ts |
 
 ### 2.3 agent/（成员/团队能力装配）
 
@@ -431,14 +433,14 @@ import 网全平铺。本方案把 136 个文件按**语义**归入 **14 个领�
 **总回滚**：阶段2全部批次在 refactor/q-plan-c 上线性排列，main 可整段不合并，
 或 `git revert <批1>..<批16>` 逆序回退；src/cli.ts 与四个基础设施目录全程未动，回滚无残留。
 
-## 8. 待 main 确认项
+## 8. main 裁决记录（阶段2批准）
 
-- **C1**：`src/commands/` 并入 `src/cli/`（cli-conventions §8 布局），偏离任务书「commands/ 保留」字面。
-  若 main 裁定保留 `src/commands/`，则 §2.2 的 28 个命令改落 `src/commands/<ns>/`，cli/ 只收框架 12 件，其余不变。
-- **C2**：命令命名空间目录粒度——§8 是每命名空间一目录（23 个目录，多数 1 文件）。
-  备选：`cli/commands/` 平铺 28 文件（少 23 个目录）。本稿按 §8 执行，main 可改平铺。
-- **C3**：5 个点名改名（args/help-spec/help/output/registry）随搬迁一次做；其余保留原名。是否同意。
-- **C4**：`token-derive` 归 node/（备选 gateway/）；`tools-list` 归 tools-engine/（备选 cli/）；
-  `headless-runner`/`ask-channel`/`feishu-command` 归 cli/（备选 run/、agent/、plugin/）。本稿按语义主归属，main 可微调。
-- **C5**：docs/architecture/*.md 的 paths frontmatter 与正文 src 路径引用（约 32 个文档）随阶段2机械同步，
-  属 gov 路径——按任务书授权在本分支一并改，还是留给 main/gov 收口。
+- **C1 批准**：`src/commands/` 并入 `src/cli/`（任务书「commands/ 保留」系 main 笔误，以 cli-conventions §8 为准）。
+- **C2 修正**：命名空间 **≥2 命令才建目录**（agent/gateway/fleet/plugin 4 个），单命令命名空间平铺
+  `cli/commands/<原文件名>.ts`（21 个），避免单文件目录碎片化。§2.2 已按此更新。
+- **C3 批准**：仅 5 个点名改名（args/help-spec/help/output/registry），其余保留原名含 -command 后缀。
+- **C4 批准**：token-derive→node/、tools-list→tools-engine/、headless-runner/ask-channel/feishu-command→cli/。
+- **C5 批准**：~32 个 docs/architecture/*.md 的 paths/正文 src 路径同步在本分支收口批一并改。
+
+阶段2纪律（main 追加）：每批 git mv + 内联脚本精确重写 + 残留 grep + build 双判 + 独立 commit；
+5 文件 8 处运行时路径暗礁每处手工修正后单独验证路径计算；跨包 4 文件引用同步改；增量小输出防早退。
