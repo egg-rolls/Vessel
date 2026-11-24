@@ -276,9 +276,9 @@ export function SettingsDialog({
   const coreDisabledReason = writer.writeUnavailable
     ? t('settings.dialog.writeUnavailable')
     : !configAvailable
-      ? t('settings.display.unavailableReason')
+      ? t('settings.dialog.configUnavailable')
       : !connected
-        ? t('settings.display.unavailableReason')
+        ? t('settings.dialog.configUnavailable')
         : undefined;
 
   const envOverrideFor = (def: SettingDef): string | undefined => {
@@ -416,7 +416,7 @@ export function SettingsDialog({
     return (
       <>
         {!connected && hasToken && (
-          <StaleNotice message={t('settings.display.unavailableReason')} onRetry={reloadConfig} />
+          <StaleNotice message={t('settings.dialog.configUnavailable')} onRetry={reloadConfig} />
         )}
         {(activeCategory === COMMON_CATEGORY_ID || searching) && commonHits.length > 0 && (
           <div

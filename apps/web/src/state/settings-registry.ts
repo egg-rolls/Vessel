@@ -184,7 +184,7 @@ function snakeCase(id: string): string {
 
 /**
  * 核心服务端设置（scope=user，S5 起 project 可覆盖）。
- * descriptionKey 指向 .hint（可能不存在）——渲染侧必须经 i18n hasMessage 判定，
+ * descriptionKey 指向 .desc（可能不存在）——渲染侧必须经 i18n hasMessage 判定，
  * 缺失时不渲染描述行（t() 对缺失键回退键名本身）。
  */
 export const CORE_SETTINGS: readonly SettingDef[] = CORE_SETTING_SPECS.map((spec) => {
@@ -195,8 +195,8 @@ export const CORE_SETTINGS: readonly SettingDef[] = CORE_SETTING_SPECS.map((spec
     scope: 'user' as const,
     type: spec.type,
     source: 'core' as const,
-    titleKey: `settings.display.field.${shortId}`,
-    descriptionKey: `settings.display.field.${shortId}.hint`,
+    titleKey: `settings.item.${shortId}.title`,
+    descriptionKey: `settings.item.${shortId}.desc`,
     category: coreCategory(spec.key),
     common: CORE_COMMON.has(spec.key) ? true : undefined,
     options: spec.options,

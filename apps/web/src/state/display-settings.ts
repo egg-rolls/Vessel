@@ -23,7 +23,7 @@ export interface DisplaySettingDef {
   key: string;
   type: DisplaySettingType;
   options?: readonly string[];
-  /** i18n key 后缀（settings.display.field.<id>）。 */
+  /** i18n key 后缀（settings.item.<id>.title）。 */
   id: string;
   /** number 键的取值范围（含端点；与 config validator 同界）。 */
   min?: number;
