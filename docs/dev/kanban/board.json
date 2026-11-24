@@ -1,21 +1,15 @@
 {
   "board": "vessel 红蓝开发任务看板",
-  "updated": "2026-11-23T23:55:00+08:00",
-  "columns": ["待办", "进行中", "已完成", "阻塞"],
-  "note": "本文件由 main 维护，任务看板插件只读此文件弹窗展示。历史完成任务归档至 archive.json，本板只留当前内容。",
+  "updated": "2026-11-24T02:35:00+08:00",
+  "columns": ["待办", "进行中", "阻塞"],
+  "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。板只留当前活跃任务；完成任务由 main 轮次收尾移入 archive.json（append-only，采纳 q-kanban §9.2 归档约定）。",
   "tasks": [
-    { "id": "q-validation", "title": "O1 DTO语义对齐 + O3 校验分层 + S3 owner/oracle", "column": "已完成", "owner": "q-validation", "branch": "fix/q-validation", "progress": "已合入 redblue-dev (merge 8694a681)，build exit 0" },
-    { "id": "q-serving", "title": "S8 双轨 serving 全链审计 + 8处同类修复 + S4 URL统一", "column": "已完成", "owner": "q-serving", "branch": "fix/q-serving", "progress": "已合入 redblue-dev (merge 28ea00ba)，build exit 0" },
-    { "id": "q-modes", "title": "S5/S6/S7 模式矩阵审计 + apps/web 同类扫描", "column": "已完成", "owner": "q-modes", "branch": "fix/q-modes", "progress": "已合入 redblue-dev (merge 688ba06c)；262行审计，build rc=0三重核对，仅1处行为修复G2；遗留G1/G3见台账" },
-    { "id": "q-pool-design", "title": "O4 pool 韧性复杂度评审（纯文档）", "column": "已完成", "owner": "q-pool-design", "branch": "fix/q-pool-design", "progress": "已合入 redblue-dev (merge a4c374e5)；158行评审，判定：正确性机制keep/韧性冗余~200行可简化/复杂度大头是拓扑成本；opt-out运行时已闭环，打包层bootstrap静态import是A1增量价值" },
-    { "id": "q-cli", "title": "CLI 规范架构文档（命令分层/动词契约/输出契约）", "column": "已完成", "owner": "q-cli", "branch": "design/q-cli", "progress": "已合入 redblue-dev (merge fe4eb5e3)；357行 cli-conventions.md，两层模型/动词契约/tools-engine归属/停止依赖序/输出契约单一实现/src-cli布局（计划C合一）；新增面落地另起代码任务" },
-    { "id": "q-redblue", "title": "红蓝版本手册调研（业界方法→vessel原语映射）", "column": "进行中", "owner": "q-redblue", "branch": "design/q-redblue", "progress": "仅交骨架105行早退，已发续工指令：web_search业界方法+闭环逐阶段映射，增量提交" },
-    { "id": "q-skills", "title": "SKILLS 插件设计（管理+agent查看/加载）", "column": "待办", "owner": "q-skills", "branch": "design/q-skills", "progress": "worktree已建，排队待开工" },
-    { "id": "q-kanban", "title": "任务看板插件设计（只读文件弹窗+路径设置）", "column": "待办", "owner": "q-kanban", "branch": "design/q-kanban", "progress": "worktree已建，排队待开工" },
-    { "id": "q-settings", "title": "VSCode式设置重构设计（检索/插件设置域/视觉分区）", "column": "待办", "owner": "q-settings", "branch": "design/q-settings", "progress": "worktree已建，排队待开工" },
-    { "id": "q-agent-lifecycle", "title": "agent 生命周期重构设计（持久保留/只中断/标注回收/系统GC）", "column": "待办", "owner": "q-agent-lifecycle", "branch": "design/q-agent-lifecycle", "progress": "worktree已建，排队待开工" },
+    { "id": "q-redblue", "title": "红蓝版本手册调研（业界方法→vessel原语映射）", "column": "进行中", "owner": "q-redblue", "branch": "design/q-redblue", "progress": "骨架早退后续工中：web_search业界方法+闭环逐阶段映射，增量提交；附早退introspection" },
+    { "id": "q-settings", "title": "VSCode式设置重构设计（检索/插件设置域/视觉分区）", "column": "待办", "owner": "q-settings", "branch": "design/q-settings", "progress": "排队待开工；需与q-skills/q-kanban对齐plugins.settings.set写缝" },
+    { "id": "q-agent-lifecycle", "title": "agent 生命周期重构设计（持久保留/只中断/标注回收/系统GC）", "column": "待办", "owner": "q-agent-lifecycle", "branch": "design/q-agent-lifecycle", "progress": "排队待开工" },
+    { "id": "early-exit-fix", "title": "早退根因修复：tool-calling-loop 空响应兜底（nudge/retry）", "column": "待办", "owner": "main", "branch": "redblue-dev", "progress": "已诊断：tool-calling-loop.ts:513/725 对空内容+非工具终止无兜底，模型偶发空响应即早退；待派单修复+用户行为验证" },
     { "id": "g1-proxy-node", "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）", "column": "待办", "owner": "main", "branch": "redblue-dev", "progress": "q-modes留档缺口，修复需设计决策，main排期" },
-    { "id": "plan-c", "title": "计划C：src 大重组（~94文件→~15领域目录）+ 管理规范/关键词", "column": "待办", "owner": "main", "branch": "redblue-dev", "progress": "用户裁定开发完成后执行；q-modes/q-pool-design/q-cli已合入，待设计单齐后启动" },
+    { "id": "plan-c", "title": "计划C：src 大重组（~94文件→~15领域目录）+ 管理规范/关键词", "column": "待办", "owner": "main", "branch": "redblue-dev", "progress": "用户裁定开发完成后执行；修复轮已全合入，待设计单齐后启动" },
     { "id": "final-gate", "title": "最终合并树门禁 + 用户行为验收", "column": "待办", "owner": "main+user", "branch": "redblue-dev", "progress": "全部合入后由实施agent跑build，备产物读数供用户验收" }
   ]
 }
