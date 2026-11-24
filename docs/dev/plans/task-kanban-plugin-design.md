@@ -38,7 +38,7 @@
 | embed UI | `ui.embed` + `pages[].component`，builtin 自动 `embedded` 档，宿主 import 插件 ESM 同源渲染；SDK `createPluginHost`（`docs/architecture/plugin-embed.md`、`packages/plugin-sdk`） | 看板页用 embed 档；iframe entry 保留作 isolated 回退 |
 | 宿主 SDK 面 | P2 最小面：rpc / events.subscribe / theme / toast / i18n / log / permissions.has；**dialog / router / mounts 在 P3 未落地** | 「弹窗」一期不做宿主级 dialog，用页面承载（§7.3） |
 | settings 贡献点 | `contributes.settings`：JSON Schema 子集（type/description/default…），**宿主 v1 不自动渲染表单**；值存 `config.yaml plugins[].config`，激活时下发（child 经 settingsFor，in-process 经 install config） | kanban 声明 settings 域；渲染交给 q-settings（§10），过渡期页面内置设置节 |
-| settings 写路径 | `config.set` 白名单**不含 plugins[]**；先例：model-registry 自持 write RPC，经 `withConfigLock` 读改写 config.yaml 自己的块 | kanban P1 同模式自持 `settings.set`；P2 提宿主通用 `plugins.settings.set`（§5.4） |
+| settings 写路径 | `config.set` 白名单**不含 plugins[]**；先例：model-registry 自持 write RPC，经 `withConfigLock` 读改写 config.yaml 自己的块 | kanban P1 同模式自持 `settings_set`；P2 提宿主通用 `plugins.settings.set`（§5.4） |
 | 文件监听 | `src/plugin-watch.ts`（插件目录+config.yaml，300ms 去抖）、`src/config-watch.ts`；**无任意文件监听、无插件→UI 事件推送通道**（events 只有宿主→插件转发） | 刷新 P1 = 手动 + 可见期轮询（ifMtime 廉价比对）；推送列 P3 候选（§8） |
 | 参考插件 | `plugins/provider/model-registry`（in-process + rpc + embed 双页 + fs 声明 + config.yaml 写）；`plugins/observability/usage`（embed 双产线样本） | kanban 目录 / 构建 / 装配全部照这两个先例 |
 | 导航 | 内置组 chat/network/runs/integrations/status/observe/settings/top/plugins + 自定义 `plugin:<id>` 组；图标白名单 | 看板页挂 `status` 组，icon `runs`（§7.1） |
@@ -49,7 +49,7 @@
 **决定：builtin in-process 只读插件 + embed 页面**，落位 `plugins/observability/kanban`，id `kanban`。
 
 - in-process：需要直接读宿主文件系统上「配置的路径」；child 插件只有 data-dir 注入，读任意配置路径要另开缝，得不偿失。
-- 只读：不注册 tool / provider / hook / guardrail，不影响 run 与模型输入；只贡献 pages / rpc(read) / settings / i18n。唯一 write RPC 是 `settings.set`（写的是 config.yaml 的 kanban 配置块，**不是看板文件**）。
+- 只读：不注册 tool / provider / hook / guardrail，不影响 run 与模型输入；只贡献 pages / rpc(read) / settings / i18n。唯一 write RPC 是 `settings_set`（写的是 config.yaml 的 kanban 配置块，**不是看板文件**）。
 - embed：builtin → 自动 embedded 档，无 TOFU 确认负担；isolated iframe 回退保留（契约要求 entry 必填）。
 - 备选与否决理由：
   - child 体验插件：读配置路径需要新权限缝 + 子进程开销，否决。
@@ -70,7 +70,7 @@
 │  config.yaml ──plugins[kanban].config──▶ install(host,{config}) / settingsFor            │
 │      ▲                                        │                                          │
 │      │ withConfigLock 读改写                  ▼                                          │
-│      │ （仅 settings.set，P1）        ┌───────────────────────────────┐                  │
+│      │ （仅 settings_set，P1）        ┌───────────────────────────────┐                  │
 │      │                                │ kanban 插件                    │                  │
 │      └────────────────────────────────│  · 路径白名单 = 配置的 boards  │                  │
 │                                       │  · read+parse+normalize（§4）  │                  │
@@ -88,14 +88,14 @@
 ┌────────────────────────── apps/web（浏览器） ────────────────────────────────────────────┐
 │  plugins.list/catalog ──▶ 导航「任务看板」（status 组）                                  │
 │  PluginPageView ──ui_trust=embedded──▶ PluginEmbed ──import ESM──▶ KanbanView            │
-│        │                                        │ host.rpc('board.get'…)（SDK 白名单）   │
+│        │                                        │ host.rpc('board_get'…)（SDK 白名单）   │
 │        └──isolated 回退──▶ PluginFrame(iframe)  │ host.theme/toast/i18n                  │
 │                                                 ▼                                        │
 │                          看板列视图 / 任务卡片 / 归档 tab / 设置节（§7）                 │
 │                                                                                          │
 │  q-settings 设置页 ──「任务看板」域──▶ schema: catalog.manifest.contributes.settings     │
 │                                       现值: config.get → plugins[kanban].config          │
-│                                       写入: P1 plugin.kanban.settings.set                │
+│                                       写入: P1 plugin.kanban.settings_set                │
 │                                             P2 宿主 plugins.settings.set（§5.4/§10）     │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -279,14 +279,14 @@ plugins:
 
 1. **绝对路径**原样用；**相对路径**相对 node 宿主项目根（`process.cwd()`，与 basic-tools 缺省 cwd 同口径）解析。路径是**宿主 OS 路径**（Windows 节点写 `D:/…`，WSL 里跑节点写 `/mnt/d/…`）；不做跨 OS 路径翻译（风险见 §13）。
 2. 规范化：`path.resolve` + 去重（同一 realpath 只留一个板 id）；**不支持 glob / 目录扫描 / `~` 展开**（一期显式文件路径，避免误配目录把一堆文件拉进 UI）。
-3. **读白名单 = 配置的 boards 路径集合**。`board.get` 只接受板 `id` 参数，不接受自由路径；id 未命中 → `invalid_params`。插件代码内再校验一次解析后路径 ∈ 白名单（防配置热更与缓存错位）。
+3. **读白名单 = 配置的 boards 路径集合**。`board_get` 只接受板 `id` 参数，不接受自由路径；id 未命中 → `invalid_params`。插件代码内再校验一次解析后路径 ∈ 白名单（防配置热更与缓存错位）。
 4. **archive 指针 containment**：`archive.path` 来自**文件内容**（不可信输入），必须解析后落在 board.json 所在目录之内（词法 + realpath 双检），且扩展名 ∈ {.json, .md}；越界 → 忽略指针 + warning，绝不读。这条挡住「恶意板文件把 archive 指向敏感文件诱导读展示」的路径。
-5. 只读纪律：插件对板文件 / 归档文件只有 `readFile` / `stat`；无任何写 / 删 / 改名代码路径。`permissions.fs` 声明 `["user-config", "board-files"]`（in-process 的 fs 声明是声明性的，实际边界由上述白名单自持；`user-config` 覆盖 settings.set 写 config.yaml）。
+5. 只读纪律：插件对板文件 / 归档文件只有 `readFile` / `stat`；无任何写 / 删 / 改名代码路径。`permissions.fs` 声明 `["user-config", "board-files"]`（in-process 的 fs 声明是声明性的，实际边界由上述白名单自持；`user-config` 覆盖 settings_set 写 config.yaml）。
 
 ### 5.4 设置写路径（两期）
 
-- **P1：插件自持 `plugin.kanban.settings.set`（permission write）**——model-registry 先例：`withConfigLock` 内 read-modify-write，只改 `plugins[name=kanban].config` 块，其余键原样保留；写前按 §5.1 schema 自校验（fail-fast，不落无效配置）；返回写后读回。config-watch 随后触发热应用。此路径**零宿主改动**，kanban 独立可交付。
-- **P2：宿主通用 `plugins.settings.set {id, config}`（additive，与 q-settings 共建）**——`config.set` 白名单今天不含 plugins[]（embed 契约 §1 明言一期无 RPC 写路径）。VSCode 式设置页要能保存**任意**插件的设置，需要一条通用写缝：只允许写目标插件 manifest `contributes.settings` 声明过的键、按声明类型校验、**禁止**经此路径写 `enabled / trust_ui / expose`（那些是信任/授权面，保持手改 config.yaml 或既有 CLI）。kanban 届时把 `settings.set` 标记 deprecated 并转发同一落盘逻辑。此缝属宿主改动，**不在本插件设计内实施**，列 §10 协同契约供 q-settings / main 裁定。
+- **P1：插件自持 `plugin.kanban.settings_set`（permission write）**——model-registry 先例：`withConfigLock` 内 read-modify-write，只改 `plugins[name=kanban].config` 块，其余键原样保留；写前按 §5.1 schema 自校验（fail-fast，不落无效配置）；返回写后读回。config-watch 随后触发热应用。此路径**零宿主改动**，kanban 独立可交付。
+- **P2：宿主通用 `plugins.settings.set {id, config}`（additive，与 q-settings 共建）**——`config.set` 白名单今天不含 plugins[]（embed 契约 §1 明言一期无 RPC 写路径）。VSCode 式设置页要能保存**任意**插件的设置，需要一条通用写缝：只允许写目标插件 manifest `contributes.settings` 声明过的键、按声明类型校验、**禁止**经此路径写 `enabled / trust_ui / expose`（那些是信任/授权面，保持手改 config.yaml 或既有 CLI）。kanban 届时把 `settings_set` 标记 deprecated 并转发同一落盘逻辑。此缝属宿主改动，**不在本插件设计内实施**，列 §10 协同契约供 q-settings / main 裁定。
 
 ## 6. RPC 接口契约
 
@@ -296,11 +296,11 @@ canonical 前缀 `plugin.kanban.`（SDK 侧裸名）。全部经 `PluginRpcRegis
 
 | 裸名 | 权限 | 参数 | 结果 | 说明 |
 | --- | --- | --- | --- | --- |
-| `boards.list` | read | `{}` | `{ boards: BoardMeta[], settings: EffectiveSettings }` | 配置侧板清单 + 生效设置；每项含存在性/mtime，不含板内容 |
-| `board.get` | read | `{ id: string, ifMtimeMs?: number, ifSizeBytes?: number }` | `BoardGetResult`（见下） | 读+解析+归一化一个板；条件命中返回 unchanged |
-| `archive.get` | read | `{ id: string, offset?: number, limit?: number, query?: string }` | `{ entries: ArchivedTaskDTO[], total: number, offset: number }` | 归档分页读（P2）；query 对 title/owner/branch/cycle 子串过滤 |
-| `settings.get` | read | `{}` | `{ settings: EffectiveSettings, source: 'config' }` | 生效设置回显（q-settings 现值也可走 config.get，此口供插件页自足） |
-| `settings.set` | write | `{ boards?, refreshIntervalMs?, showArchive? }` | `{ ok: true, settings: EffectiveSettings }` | §5.4 P1 写路径；整块替换传入键，未传键保留 |
+| `boards_list` | read | `{}` | `{ boards: BoardMeta[], settings: EffectiveSettings }` | 配置侧板清单 + 生效设置；每项含存在性/mtime，不含板内容 |
+| `board_get` | read | `{ id: string, ifMtimeMs?: number, ifSizeBytes?: number }` | `BoardGetResult`（见下） | 读+解析+归一化一个板；条件命中返回 unchanged |
+| `archive_get` | read | `{ id: string, offset?: number, limit?: number, query?: string }` | `{ entries: ArchivedTaskDTO[], total: number, offset: number }` | 归档分页读（P2）；query 对 title/owner/branch/cycle 子串过滤 |
+| `settings_get` | read | `{}` | `{ settings: EffectiveSettings, source: 'config' }` | 生效设置回显（q-settings 现值也可走 config.get，此口供插件页自足） |
+| `settings_set` | write | `{ boards?, refreshIntervalMs?, showArchive? }` | `{ ok: true, settings: EffectiveSettings }` | §5.4 P1 写路径；整块替换传入键，未传键保留 |
 
 ### 6.2 DTO
 
@@ -332,7 +332,7 @@ type BoardGetResult =
 | `board_parse_error` | JSON parse 失败 / 顶层形状错 | 错误态 + 行列号 + 原文预览（截断 4 KiB） |
 | `board_too_large` | > 2 MiB | 错误态 + 实际大小 |
 | `archive_unavailable` | 无指针 / containment 拒绝 / 归档读失败 | 归档 tab 内错误态，不影响当前板 |
-| `config_write_failed` | settings.set 落盘失败（锁/权限） | toast error，设置表单保留草稿 |
+| `config_write_failed` | settings_set 落盘失败（锁/权限） | toast error，设置表单保留草稿 |
 
 ### 6.4 事件与推送
 
@@ -340,23 +340,215 @@ type BoardGetResult =
 
 ## 7. UI 设计（页面 + 弹窗路线）
 
-（待扩充：线框、卡片、归档视图、错误/空态、样式与 i18n 契约、弹窗分期）
+### 7.1 页面挂载
+
+- `contributes.pages`：单页 `{ id: "kanban", title: "Task Board", titleKey: "nav.kanban", nav: "status", icon: "runs", order: 30, entry: "kanban.html", component: "KanbanView" }`。挂内置 `status` 组（看板是状态可视化，不新开导航组；单页不值得一个 `plugin:kanban` 组）。
+- embed 档：`KanbanView` 是 `PluginMountProps` 组件（`{host, mount:'page', context}`），数据全走 `host.rpc`；iframe 回退页 `kanban.html` 复用同一份 web-src（usage 双产线模式）。
+- 组件复用 `@vessel-agent/plugin-ui`：`Page` / `Section` / `Tabs` / `Badge` / `CountBadge` / `SearchInput` / `Button` / `Stat`；卡片自绘（plugin-ui 无现成 KanbanCard）。
+
+### 7.2 线框（描述式）
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│ 任务看板  [红蓝开发看板 ▾]        更新于 11-23 23:30 · ↻ 刷新 · ● 10s 自动   │  ← Page header：
+│           (多板切换下拉/Tabs)      (updated 来自文件)  (手动)  (轮询状态点)   │     板切换器仅多板时显示
+├────────────────────────────────────────────────────────────────────────────┤
+│ ⓘ 本文件由 main 维护，任务看板插件只读此文件弹窗展示……                      │  ← note banner（可折叠）
+├────────────────────────────────────────────────────────────────────────────┤
+│ [当前板] [归档 (12)]                                    🔍 过滤 owner/分支/文本 │  ← Tabs + 过滤框
+├────────────────────────────────────────────────────────────────────────────┤
+│  待办 (5)      │  进行中 (2)     │  已完成 (2)     │  阻塞 (1)      │ ⋯      │  ← 列头：标题+计数
+│ ┌────────────┐ │ ┌────────────┐ │ ┌────────────┐ │ ┌────────────┐ │        │     wipLimit 超限警示色
+│ │ q-cli      │ │ │ q-modes    │ │ │ q-validation│ │ │ q-pool-…   │ │        │
+│ │ CLI 规范架 │ │ │ S5/S6/S7 … │ │ │ O1 DTO语义… │ │ │ O4 pool …  │ │        │  ← 卡片：
+│ │ 构文档     │ │ │            │ │ │             │ │ │            │ │        │     id 徽章 + 标题
+│ │ 👤 q-cli   │ │ │ 👤 q-modes │ │ │ 👤 q-valid… │ │ │ 👤 q-pool… │ │        │     owner / branch
+│ │ ⎇ design/… │ │ │ ⎇ fix/…    │ │ │ ⎇ fix/…     │ │ │ ⎇ fix/…    │ │        │     progress 摘要(2行截断)
+│ │ 工作树已建 │ │ │ 主体完成…  │ │ │ 已合入…     │ │ │ 两次大文档…│ │        │     priority 左边条色
+│ └────────────┘ │ └────────────┘ │ └────────────┘ │ └────────────┘ │        │
+│ ┌────────────┐ │                │                │                │        │
+│ │ q-redblue …│ │                │                │                │        │
+│ └────────────┘ │                │                │                │        │
+└────────────────────────────────────────────────────────────────────────────┘
+  列区横向滚动（列多时）；列内纵向滚动；卡片点击 → 详情侧栏/展开（progress 全文、
+  links、tags、时间戳）；「未分类」虚拟列灰显排最后（§4.4 降级）。
+```
+
+- **归档 tab**（P2）：同页 Tabs 第二页，`DataTable` 形态（title / owner / branch / cycle / doneAt / archivedAt），分页 + query 过滤；只读，无任何操作按钮。
+- **设置节**（过渡期，q-settings 落地前）：页面底部折叠 `Section`「展示设置」——路径列表（增/删/排序，每行 path + title 输入）、刷新间隔、归档开关；保存调 `settings_set`，成功 toast + 立即重拉 `boards_list`。q-settings 落地后此节收起为「去设置 → 任务看板域」链接（§10）。
+- **状态设计**：
+  - 加载：固定尺寸骨架（embed 契约 §8，不顶动布局）。
+  - 空配置（boards=[]）：空态插画 + 「添加看板文件路径」按钮直达设置节。
+  - 板级错误（§6.3）：错误卡 = code + message + 路径 + 重试按钮 + 原文预览（parse 错误）。
+  - 任务级 warnings：列头旁 ⚠ 徽章，点开列出降级明细（不弹窗打断）。
+  - 轮询失败：状态点变灰 + 上次成功时间，不 toast 轰炸（连续 3 次失败才 toast 一次）。
+- **主题/样式**：消费宿主 CSS 变量（tokens.css），暗色自动；CSS 包 `@layer plugin.kanban`，选择器 `[data-vessel-plugin="kanban"]` / `.vp-kanban-` 前缀；不自建 portal，提示统一 `host.toast`（embed 契约 §9）。
+- **i18n**：`contributes.i18n` en / zh-CN 双份（nav.kanban / 列头兜底 / 错误文案 / 设置标签），key 集合 typecheck 对齐。
+
+### 7.3 「弹窗」路线（用户意图②的弹窗/页面二选一）
+
+- **P1 = 页面**（上文）。理由：SDK dialog / mounts / router 在 embed 契约 P3 才落地；宿主现有 `Modal.tsx` 是宿主私有组件，插件拿不到挂载口。一期用页面完整满足「展示」意图，不新造宿主缝。
+- **P2 候选 = 快速看板弹窗**：两条路线届时择一（依赖宿主进度，不在本插件内实施）：
+  1. SDK `host.dialog`（embed 契约 P3）落地后，kanban 声明 command「打开看板弹窗」，任意页面经命令面板唤起，内容复用 KanbanView 的紧凑变体（只读列视图，无设置节）。
+  2. 若 P3 未落地而用户急需：宿主侧 additive 一个「看板速览」Modal 挂点（宿主改动，需 main 裁定），插件仍只供数据 RPC。
+- 结论：**弹窗是展示形态的增量，不是数据面的变化**——RPC/设置/刷新设计对两种形态完全通用。
 
 ## 8. 刷新机制
 
-（待扩充：手动 / 可见期轮询 / focus；fs.watch+事件推送为何列后期）
+| 期 | 机制 | 说明 |
+| --- | --- | --- |
+| P1 | 手动刷新 | header ↻ 按钮，无条件 `board_get`（不带 ifMtime），必达 |
+| P1 | 可见期轮询 | `refreshIntervalMs`（缺省 10s）；`document.visibilityState==='visible'` 才轮询，隐藏即停；带 `ifMtimeMs/ifSizeBytes` 条件（§6.2），命中 = 一次 stat 级 RPC |
+| P1 | focus 补刷 | window focus / 路由切回本页时立即补一次条件轮询（切走再切回不 stale） |
+| P1 | 设置热更 | config-watch 改 boards 后，下一次 `boards_list`/`board_get` 即用新配置（handler 每次 loadConfig，§5.2）；UI 在 settings_set 成功后主动重拉 |
+| P3 候选 | 文件监听 + 推送 | 插件 in-process `fs.watch` 配置路径（去抖 300ms，照 plugin-watch 模式）→ 更新内存缓存；**推送需宿主新缝**（现契约 events 只有宿主→插件转发，无插件→UI 通道）：需 additive「插件发事件入 hub」贡献点（如 `plugin.<id>.changed` → web eventStore → SDK events.subscribe）。宿主改动，列 P3 与 embed P3 一起裁定 |
+
+不做推送的理由：看板文件是低频变更（main 按任务节点改板），10s 轮询 + stat 条件比对的成本可忽略；为它先开宿主事件缝违背「机制在 harness、插件不自造」的次序。轮询间隔可配 0（纯手动）满足极简偏好。
+
+缓存纪律：插件内存缓存只存「解析结果 + mtime/size」，stat 不一致即失效重读；**不跨 RPC 请求持有板内容真相**（真相源永远是磁盘，§3）。
 
 ## 9. 归档策略
 
-（待扩充：维护者约定、archive.json schema、containment、插件只读归档视图）
+### 9.1 职责划分（用户意图①的落点）
 
-## 10. 与 q-settings 的协同
+- **板文件 = 当前态**：board.json 只保留当前任务（含进行中的「已完成」列任务——它们是本轮当前态的一部分）。
+- **归档 = 历史态**：完成任务在维护者判定的时点**移出板、追加进 archive.json**。移动是**维护者（main agent / 人）的动作**，插件只读两侧，绝不代写（一期硬约束）。
+- 插件对归档的贡献：schema 支持（archive 指针 + entries 形状）+ 只读归档视图（P2）+ 归档候选提示（见下）。
 
-（待扩充：设置域注册、schema/现值/写路径三件套、检索与视觉分区、过渡期 fallback）
+### 9.2 维护者约定（写进 board.json note / 团队操作手册）
+
+1. 任务完成 → 先移入「已完成」列（本轮可见成果）；轮次收尾（合入/验收后）→ 从 board.tasks 删除该条，**追加**到 archive.json `entries`，补 `archivedAt`（必填）、`doneAt`、`cycle`（建议）。
+2. archive.json **append-only**：只追加不改写历史条目；文件损坏由维护者负责（插件报 `archive_unavailable` 不背锅）。
+3. 板内 `archive.count / lastArchivedAt` 由维护者顺手更新（UI 以实际读到的 entries 为准，count 只是提示）。
+4. 归档文件与板同目录（containment 要求，§5.3）；命名约定 `archive.json`（与现有 board.json note 一致）。
+5. 大历史（>5000 条）可换 `archive.ndjson`（每行一条 ArchivedTask）——P3 候选，一期 JSON 单文件足够（2 MiB 上限内约数千条）。
+
+### 9.3 插件侧辅助（只读，不越权）
+
+- **归档候选提示**：UI 对「已完成列且 doneAt 超过 N 天（缺省 7，可配 `archiveHintDays`，P2）」的卡片显示 📦 徽章，提示维护者「可归档」；插件不执行移动。
+- **归档视图**：`archive_get` 分页 + 过滤（§6.1），让历史可查而不占板面。
+- **未来可选写路径（明确不在一期）**：若用户日后要求「插件内一键归档」，需新增 write RPC `task_archive`（板文件 + 归档文件双写、锁、回滚），**推翻只读硬约束，必须用户显式批准**后才设计。本设计预留 schema 兼容（entries 形状即归档写入的目标形状），不预留代码缝。
+
+## 10. 与 q-settings 的协同（VSCode 式设置）
+
+q-settings（design/q-settings，并行设计）目标：检索 / 插件设置域 / 视觉分区。kanban 作为**第一个消费方**注册一个设置域，协同契约如下（供 q-settings 设计对齐，双方都不需要私有缝）：
+
+### 10.1 三件套（schema / 现值 / 写入）
+
+| 件 | 来源 | kanban 侧义务 |
+| --- | --- | --- |
+| schema | `plugins.catalog` → `manifest.contributes.settings`（已有透传面） | 按 §5.1 声明完整 type/description/default/items；description 即设置页说明文案（en/zh 经 contributes.i18n 或 description 双语约定，由 q-settings 定口径） |
+| 现值 | `config.get` → `plugins[kanban].config`（redactConfig 不掩路径类键）；或 `plugin.kanban.settings_get` | 保证生效值 = 磁盘值（handler 每次 loadConfig）；缺省值在 manifest default 声明，q-settings 渲染「未设置=缺省」态 |
+| 写入 | P1：`plugin.kanban.settings_set`（插件自持）；P2：宿主通用 `plugins.settings.set`（§5.4） | P1 提供可被设置页调用的 write RPC；P2 迁移后 deprecated 转发 |
+
+### 10.2 设置域注册与视觉分区
+
+- 域 id = plugin id `kanban`；域标题取 `contributes.i18n` 的 `settings.domain`（「任务看板」/「Task Board」），fallback manifest name。
+- q-settings 的域列表 = 宿主域（外观/连接/能力…）+ **每个声明了 contributes.settings 的插件一域**（catalog 驱动，无需插件注册动作——声明即注册）。kanban 不需要也不应该自建平行设置入口。
+- 检索：q-settings 索引键名 + description；kanban 的 description 写足关键词（「路径」「看板」「刷新」「归档」「path」「board」），保证搜「路径」能命中。
+- 视觉分区：boards 是 array-of-object，通用渲染为「列表编辑器」（增/删/排序行）；refreshIntervalMs 数字输入（0=手动提示）；showArchive 开关。若 q-settings 一期只做通用 JSON Schema 渲染，kanban 的 boards 行编辑退化为 JSON 文本域也可用（功能不丢，体验降级）——**不为此要求 q-settings 做定制渲染器**。
+
+### 10.3 过渡期与依赖次序
+
+- q-settings 未落地时：kanban 页面内置设置节（§7.2）自足交付，用户已可配路径。
+- q-settings 落地后：kanban 设置节收起为跳转链接；两处写同一真相源（config.yaml kanban 块），无同步问题。
+- 宿主通用写缝（plugins.settings.set）是 q-settings 的宿主依赖，不是 kanban 的交付依赖——kanban P1 不被它阻塞。
 
 ## 11. manifest 示例与工程结构
 
-（待扩充：package.json vessel 块全文、目录树、build:ui 双产线、装配接线点）
+### 11.1 package.json（vessel 块全文示例）
+
+```jsonc
+{
+  "name": "@vessel-agent/kanban",
+  "version": "0.56.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "files": ["src", "web"],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:ui": "tsc -p tsconfig.web.json --noEmit && vite build && vite build --config vite.config.embed.ts"
+  },
+  "dependencies": {
+    "@vessel-agent/config": "workspace:*",
+    "@vessel-agent/core": "workspace:*",
+    "@vessel-agent/plugin-sdk": "workspace:*",
+    "@vessel-agent/plugin-ui": "workspace:*",
+    "react": "^19.1.0", "react-dom": "^19.1.0"
+  },
+  "vessel": {
+    "id": "kanban",
+    "name": "Task Kanban",
+    "version": "0.1.0",
+    "engines": { "vessel": ">=0.56.0 <1.0.0" },
+    "description": "任务看板：只读展示配置路径的看板文件（当前态），历史归档只读可查；多路径 + 设置域",
+    "side": "both",
+    "ui": {
+      "dir": "web",
+      "embed": { "entry": "embed/index.mjs", "css": "embed/index.css",
+                 "runtime": { "react": "^19", "sdk": "^1" } }
+    },
+    "activationEvents": ["onPage:kanban"],
+    "contributes": {
+      "i18n": {
+        "en": { "nav.kanban": "Task Board", "settings.domain": "Task Board" },
+        "zh-CN": { "nav.kanban": "任务看板", "settings.domain": "任务看板" }
+      },
+      "pages": [
+        { "id": "kanban", "title": "Task Board", "titleKey": "nav.kanban",
+          "nav": "status", "icon": "runs", "order": 30,
+          "entry": "kanban.html", "component": "KanbanView" }
+      ],
+      "settings": { /* §5.1 全文 */ },
+      "rpc": [
+        { "name": "boards_list", "description": "Configured boards metadata + effective settings", "permission": "read" },
+        { "name": "board_get", "description": "Read/parse one board; conditional unchanged via ifMtimeMs/ifSizeBytes", "permission": "read" },
+        { "name": "archive_get", "description": "Paged read-only archive entries", "permission": "read" },
+        { "name": "settings_get", "description": "Effective kanban settings", "permission": "read" },
+        { "name": "settings_set", "description": "Persist kanban config block (config.yaml, withConfigLock)", "permission": "write" }
+      ]
+    },
+    "permissions": {
+      "fs": ["user-config", "board-files"],
+      "net": [], "process": false, "secrets": false, "events": []
+    }
+  }
+}
+```
+
+注意：rpc 裸名一律 snake_case（`PLUGIN_RPC_NAME_RE = /^[a-z][a-z0-9_-]*$/` 不允许点号），canonical = `plugin.kanban.<裸名>`，全文 §6/§8/§10 同口径。宿主通用方法（`plugins.settings.set`、`config.get` 等）属宿主 RPC 命名空间，点号口径不变，两者不要混淆。
+
+### 11.2 目录结构（照 model-registry / usage 先例）
+
+```
+plugins/observability/kanban/
+├── package.json              # §11.1
+├── src/
+│   ├── index.ts              # Plugin 对象：install(host,{config}) 存兜底配置；rpc(name,params) 分发
+│   ├── settings.ts           # loadConfig 读生效设置 + 归一化（paths 别名/缺省 id）+ withConfigLock 写
+│   ├── board-store.ts        # 白名单校验 / stat / readFile / parse / normalize / mtime 缓存
+│   ├── schema.ts             # §4 DTO 类型 + 校验分级（纯函数，无 IO）
+│   └── archive.ts            # archive 指针 containment + 分页读（P2）
+├── web-src/
+│   ├── embed.tsx             # 具名导出 KanbanView（PluginMountProps）
+│   ├── KanbanView.tsx        # 页面壳：板切换/Tabs/刷新/轮询 hook
+│   ├── BoardColumns.tsx      # 列视图 + 卡片
+│   ├── ArchiveView.tsx       # 归档 DataTable（P2）
+│   ├── SettingsSection.tsx   # 过渡期设置节
+│   ├── useBoard.ts           # board_get + ifMtime 轮询 + visibility/focus
+│   ├── i18n.ts / styles.css  # 双语文案 + @layer plugin.kanban
+│   └── kanban.html           # iframe 回退入口（classic-script 产线）
+├── web/                      # 构建产物入库（iframe 产物 + embed/index.mjs + css + chunks）
+├── vite.config.ts / vite.config.embed.ts / tsconfig.web.json
+```
+
+### 11.3 装配接线点（实施期改动清单，全部有先例）
+
+1. `src/plugin-loader.ts` 默认内置名单 + `plugins/observability/kanban` 发现（builtin 目录扫描已覆盖，确认默认启用集包含 kanban）。
+2. in-process 登记：走现有 `registerInProcessPluginEntries`（wiring 收集处加 kanban 条目，照 model-registry）。
+3. 无新宿主缝：RPC registry / embed 加载 / catalog settings 透传 / config-watch 全部现成。
+4. 构建：`build:ui` 双产线（iframe + embed lib 模式，external react/sdk，照 usage §10）；产物入库带 biome-ignore 头；根 `bun run build` typecheck 覆盖。
 
 ## 12. 分期计划
 
