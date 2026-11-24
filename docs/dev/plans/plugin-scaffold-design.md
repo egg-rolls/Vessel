@@ -216,4 +216,82 @@ settings 校验与落盘（q-settings）；CLI 命名空间（contributes.cli）
   repo 内新建 `plugins/<category>/<name>/` 自动成为 workspace 包，无需改根配置。
 - **先例形态**：skills / model-registry 确立「in-process + capabilityManifest + 装配层自动登记」
   为管理插件标准形态；media 确立「opt-in + 边界继承 + install 期后端探测」；
-  q-settings 确立「contributes.settings 自动发现渲染」。脚手架照这些形态生成（§8）。
+  q-settings 确立「contributes.settings 自动发现渲染」。脚手架照这些形态生成（§8）。## 2. 目标与非目标
+
+### 2.1 目标
+
+- **G1 一条命令起插件**：`vessel plugin create <name> [--type capability|ui|tool]` 在
+  user / project / repo 三种位置生成可被 loader 直接发现的完整插件包；生成物**零修改即可
+  加载**（tool 型注册一个占位工具；capability 型注册一个占位 RPC；ui 型激活即回 hello）。
+- **G2 声明单源化**：rpc / settings / pages 的「manifest ↔ 代码」双写降为单源 +
+  显式生成命令（`vessel plugin sync`）；缺省字段可推导（id/name/version/engines/side/ui 路径/
+  activationEvents），显式声明永远优先。
+- **G3 装配知识归位**：opt-in、边界继承、dataDir/cwd 注入等「按插件名硬编码在宿主」的知识
+  迁为 manifest 声明（additive 字段），宿主硬编码保留为 legacy 兜底，存量行为字节等价。
+- **G4 UI 暗坑一次封装**：层序 / biome-ignore 头 / externals / 双产线收进共享构建配置工厂，
+  脚手架生成的 vite 配置只有 ~5 行。
+- **G5 迁移路径**：21 个存量插件逐个有明确迁移决策（迁 / 不迁 / 只迁一部分），
+  全程零行为回归（§7）。
+
+### 2.2 非目标
+
+- **N1** 不做市场 / 联网 / 依赖解析（`plugin install` 现态就是本地目录操作，create 同口径）。
+- **N2** 不做运行时 codegen / 动态 manifest 合成：manifest 永远是 package.json 里的静态 JSON，
+  校验永远在 import 代码之前（fail-closed 时序不变）。
+- **N3** 不新增 core 接口、不新增第二套扩展机制、不新增 gate/test/probe（宪法）。
+- **N4** 不自动化 provider / 工厂式插件的装配 wiring（语义必需，§3.2）；脚手架 v1 不生成
+  这两类（`--category provider` 明确拒绝并指路先例）。
+- **N5** 不改变默认信任模型：外部插件告警、`VESSEL_NO_EXTERNAL_PLUGINS`、override 门禁、
+  trust_ui / expose 授权全部原样。
+- **N6** 不做插件热卸载（in-process 现态重启语义不变）。
+
+## 3. 自动化裁决清单
+
+任务书要求「找出哪些注册可自动化、哪些必须显式」。逐项裁决如下；
+「已自动」= 现状即自动，本设计只复用；「生成」= 脚手架生成时解决；
+「推导」= 运行时 additive 缺省值；「声明」= 从宿主硬编码迁为 manifest 声明；
+「显式」= 语义上不可自动化，保持手写。
+
+### 3.1 可自动化（含已自动）
+
+| 注册操作 | 现状 | 裁决 | 机制落点 |
+| --- | --- | --- | --- |
+| 目录发现 / 入口解析 / 来源优先级 | 已自动 | 保持 | loader 不动 |
+| workspace 接线（repo 内） | 已自动（`plugins/*/*` glob） | 保持 | 根 package.json 不动 |
+| 默认集选择 + install + config 透传 | 已自动 | 保持 | selection / tenant-runtime-factory 不动 |
+| capabilityManifest → RPC/pages/settings 登记 | 已自动（0.51+） | 保持 | registerInProcessPlugin 不动 |
+| child 宿主装配 / 懒激活 / 热重载 | 已自动 | 保持 | createPluginHostManager 不动 |
+| settings 校验 / 落盘 / 渲染 | 已自动（q-settings） | 保持 | serve + setPluginConfigValue 不动 |
+| CLI 命名空间接线 | 已自动（contributes.cli） | 保持 | plugin-cli-command 不动 |
+| package.json 骨架（B1） | 手写 | **生成** | create 模板 §5 |
+| 清单必填四件套（B2） | 手写 | **生成 + 推导** | 模板写全；运行时缺省推导 §6.1 |
+| rpc 声明 ↔ switch 双写（B3） | 手写 | **生成 + 单源** | defineRpcHandlers + sync §6.2/6.3 |
+| settings schema ↔ parser 双写（B4） | 手写 | **生成 + 单源** | settings.ts 单源 + parseSettings + sync §6.2/6.3 |
+| Plugin 骨架（B5） | 手写 | **生成 + SDK 助手** | defineCapabilityPlugin §6.2 |
+| UI 十件套 + 构建暗坑（B6/B7） | 手写 | **生成 + 共享配置** | 模板 §5 + plugin-ui/build §6.5 |
+| pages entry/component/activationEvents 缺省 | 手写 | **推导** | §6.1 |
+| opt-in 名单（OPT_IN_PLUGINS） | 宿主硬编码 | **声明化** | `vessel.defaultEnabled` §6.4 |
+| 边界继承 / dataDir / cwd 注入名单 | 宿主硬编码 | **声明化** | `vessel.inherit` §6.4 |
+| envGranularity scope 名单 | 宿主硬编码 | **声明化（缓议）** | §6.4 开放问题 |
+| 插件一致性核对 | 人工评审项 | **保持人工**（宪法禁门禁脚本） | VERIFY.md 清单辅助 §5.4 |
+
+### 3.2 必须显式（不自动化，理由）
+
+| 注册操作 | 理由 |
+| --- | --- |
+| `permissions`（fs/net/process/secrets/events/rpc/ports） | 安全声明是**授权意图**，推导 = 静默扩权；fail-closed 门禁的根基。脚手架只生成**最小空声明**，作者按需要显式加 |
+| `scope: member` / `permissions.ports` | 成员身体端口是反向 RPC 通道（报告 §2.7），必须显式申请 |
+| `vessel.override` | 覆盖内置是信任决策，现态门禁保持 |
+| `trust_ui` / `plugins[].expose` | 用户侧授权，永远在 config 不在 manifest |
+| `dependencies.plugins` / ordering | 依赖是作者意图；校验已自动（knownPluginIds），声明不推导 |
+| `contributes.http[]` | 路由占位是攻击面管理（external 命名空间 / 保留路由 / 限额），逐条显式 |
+| provider 类的 `registerProvider(protocol, factory)` | 协议实现是代码语义，不是声明；装配 loop 已自动加载，**注册动作本身已是单行**，无样板可减 |
+| 工厂式插件的 wiring（mcp/feishu/evals/engine-client） | 需要宿主运行时对象（events/tenantId/engineClient）与专用配置块；这是**宿主功能**不是插件样板。四例各有专属契约，强行通用化 = 第二套扩展机制 |
+| `contributes.rpc[].permission`（read/write） | 每方法的读写级别是安全语义；sync 生成时缺省 read，**写方法必须作者显式标 write**（§6.3） |
+| 默认集成员资格的政策裁决 | `defaultEnabled` 只是把**声明位置**从宿主挪到 manifest；「某插件该不该默认开」仍是作者/评审的显式决策 |
+
+### 3.3 一条总原则
+
+> **声明可以少写，授权不能猜。** 凡属「重复 / 可推导 / 住错地方」的样板 → 自动化；
+> 凡属「安全意图 / 信任决策 / 代码语义」的注册 → 保持显式。fail-closed 时序
+> （先校验 manifest，后 import 代码）在任何方案下不得倒置。
