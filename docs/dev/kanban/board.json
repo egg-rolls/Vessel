@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "晋升演练成功(canary 898448b3)+探查员canary-explorer(efbb527d)已派金丝雀做首轮验收，共享文件沟通reports/explore-report.md；federation token传播bug交q-federation；生产侧待用户维护重启"
+      "progress": "federation token bug已修(env_file机制,canary peer解析无missing_token)+q-federation CLI/指南合入4b05ef9e；探查员报告:计划C结构✓seamless缺省生效✓但发现拓扑gap—CLI桥默认宿主node,探查员跑在main线非canary node,改用读码+canary探针验收；下一步:canary node直接RPC建agent+生产侧用户重启"
     },
     {
       "id": "g1-proxy-node",
