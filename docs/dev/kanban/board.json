@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "舰队已活：gateway8652/node8654/hub8653独立dataDir+provider配好；下一步federation peers接通稳定线+更新canary到最新redblue-dev测seamless+自治循环"
+      "progress": "第一次晋升演练成功：canary快进898448b3(计划C+seamless)+build:web+restart --stop-nodes，node8654 up（运行期验证Plan C路径暗礁）；下一步federation peers+自治循环+用户行为验收"
     },
     {
       "id": "g1-proxy-node",
