@@ -118,6 +118,15 @@
       "progress": "merge f6d6dc5e，483行 graceful-restart-design.md；双模式/cooperative暂停/quiesce安全边界/auto-resume复用EU.resumeRun(3416)/每会话marker即清单(无第二真相)/intent可选字段回滚兼容/fail-safe120s中止点名阻塞者/node.drain.status观测；自举悖论列实现期验证",
       "archivedAt": "2026-11-24T03:50:00+08:00",
       "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-display",
+      "title": "显示修复：异步bash来源归bash + owner工具变化显示增量消息而非self card",
+      "owner": "q-display",
+      "branch": "fix/q-display",
+      "progress": "问题1 merge 6e15df06（bash_job写tool:bash身份+前端senderKind卡头）；问题2 merge 887b3376（纠正前提:owner不重建self card,增量通道已存在;病灶Web buildLiveItems无message.injected投影→加injectedNoticeOfEvent分支live可见,owner+成员同治,非重构）；build全绿；待用户显示验收",
+      "archivedAt": "2026-11-24T04:00:00+08:00",
+      "cycle": "redblue-quality-round-1"
     }
   ]
 }

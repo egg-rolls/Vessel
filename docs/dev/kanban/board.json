@@ -5,14 +5,6 @@
   "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。板只留当前活跃任务；完成任务由 main 轮次收尾移入 archive.json（append-only，采纳 q-kanban §9.2 归档约定）。",
   "tasks": [
     {
-      "id": "q-display",
-      "title": "显示修复：异步bash来源归bash + owner工具变化显示增量消息而非self card",
-      "column": "进行中",
-      "owner": "q-display",
-      "branch": "fix/q-display",
-      "progress": "问题1已合入6e15df06（bash来源归tool:bash前端渲来自bash）；问题2 owner工具变化增量显示续工中（曾早退）"
-    },
-    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
