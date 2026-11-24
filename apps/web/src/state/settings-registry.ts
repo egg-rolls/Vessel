@@ -135,24 +135,36 @@ const CORE_SETTING_SPECS: readonly CoreSettingSpec[] = [
   { key: 'ui.statusBars', type: 'enum', options: ['top', 'bottom', 'both', 'none'] },
   { key: 'ui.language', type: 'enum', options: ['zh-CN', 'en'], default: 'zh-CN' },
   // 日志中枢（gateway）：modules 是 map，一期只读（不走 config.set）。
+  // fallback = 未配置时的真实缺省行为（DEFAULT_LOG_OPTIONS）。config.get 下发的是
+  // 用户原始配置（未填默认），缺 observability.log 时 readDisplayValue 回落到 fallback，
+  // 档位 radio 才有勾选态可回显——否则 value='' 四个档全不勾，用户看不到当前生效档。
   {
     key: 'observability.log.level',
     type: 'enum',
     options: ['debug', 'info', 'warn', 'error'],
     default: 'info',
+    fallback: 'info',
   },
   {
     key: 'observability.log.color',
     type: 'enum',
     options: ['auto', 'always', 'never'],
     default: 'auto',
+    fallback: 'auto',
   },
-  { key: 'observability.log.format', type: 'enum', options: ['pretty', 'json'], default: 'pretty' },
+  {
+    key: 'observability.log.format',
+    type: 'enum',
+    options: ['pretty', 'json'],
+    default: 'pretty',
+    fallback: 'pretty',
+  },
   {
     key: 'observability.log.time',
     type: 'enum',
     options: ['auto', 'none', 'clock', 'iso'],
     default: 'auto',
+    fallback: 'auto',
   },
   // q-empty-response：空响应兜底（core 运行期设置，非插件域）。缺省 = 启用、重试 2 次、
   // 内置 nudge 文案；fallback 让「未配置」显示真实缺省行为而不是空。
