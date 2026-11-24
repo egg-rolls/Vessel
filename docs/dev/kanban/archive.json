@@ -100,6 +100,15 @@
       "progress": "merge fd19a759，26文件+659/-33；两路径空响应nudge限次兜底+设置emptyResponse.enabled/maxRetries/nudge(缺省启用+2次,enabled:false零回归)；build exit0/1262文件0errors；待用户build+重启行为验收",
       "archivedAt": "2026-11-24T03:20:00+08:00",
       "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-promotion",
+      "title": "增量晋升 playbook（丢弃整体切换，稳定node+金丝雀逐步晋升）",
+      "owner": "q-promotion",
+      "branch": "design/q-promotion",
+      "progress": "merge ab693883，571行 incremental-promotion-playbook.md；稳定+金丝雀角色固定/搬代码不搬会话/三闸门+G-D数据兼容一票否决/金丝雀盲区/expand-contract/commit粒度回滚；整体切换降级特殊迁移；待裁观察窗/台账路径/稳定分支名",
+      "archivedAt": "2026-11-24T03:40:00+08:00",
+      "cycle": "redblue-quality-round-1"
     }
   ]
 }

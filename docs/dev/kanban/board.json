@@ -13,14 +13,6 @@
       "progress": "派单：basic-tools:1608通知来源归属 + tenant-runtime-factory:1048 owner self card路径重构成增量告知"
     },
     {
-      "id": "q-promotion",
-      "title": "增量晋升 playbook（丢弃整体切换，稳定node+金丝雀逐步晋升）",
-      "column": "进行中",
-      "owner": "q-promotion",
-      "branch": "design/q-promotion",
-      "progress": "派单：改写红蓝手册§6为增量晋升+裁决整体切换降级特殊迁移"
-    },
-    {
       "id": "q-restart",
       "title": "优雅重启设计（restart≠stop/drain-to-quiesce/auto-resume run/超时中止上报）",
       "column": "进行中",
