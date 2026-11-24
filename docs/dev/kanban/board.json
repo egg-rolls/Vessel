@@ -38,11 +38,11 @@
     },
     {
       "id": "q-session-fix",
-      "title": "修复WebUI默认main会话加载失败(owner哨兵session_id=main解析)",
-      "column": "进行中",
+      "title": "修复WebUI默认main会话加载失败(会话壳缺失)",
+      "column": "已完成",
       "owner": "q-session-fix",
       "branch": "fix/q-session-fix",
-      "progress": "纠正:是金丝雀main非生产；真因canary sessions/main缺index.json+wal.manifest(owner哨兵main被当真实会话ID建目录且不完整)→sessions.get失败；q-session-fix聚焦金丝雀owner会话bootstrap"
+      "progress": "merge 8216e3af；根因成员首会话id=成员id(main真实初始会话)，壳只首轮run落盘，金丝雀main从未跑→无壳；ensureSessionShell在create/rotate/快照恢复补壳，重启自愈；已入main(be718c7e)待金丝雀rebuild重启验证"
     },
     {
       "id": "q-msg-timeout",
