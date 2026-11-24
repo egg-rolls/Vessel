@@ -315,6 +315,7 @@ key = 最终 args.key（guardrail 改写后）
 | T10 | 多租户越界 | config.set 已 default-tenant-only（gateway-config-control），让渡继承 |
 | T11 | 审计规避（先关 audit 再写） | audit:false 语义 = 禁 auto 而非禁记录（§3.3）；audit 文件在 dataDir，T2 块 data_dir 不可改 |
 | T12 | 无 bridge 成员借让渡绕过「ask→deny 收口」做危险操作 | 让渡只放行 T0（纯展示）；T1 仍 ask→无 bridge 仍 deny；收口逻辑不改 |
+
 ## 4. 分期实施（设计口径，非本分支工作）
 
 全部 additive；每期独立可验收，缺省配置下零行为变化。
