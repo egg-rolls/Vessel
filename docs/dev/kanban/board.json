@@ -125,6 +125,14 @@
       "progress": "派单：canary旧会话Untitled/undefined；查ensureSessionShell壳与nameNewSession交互/AI命名空输入/WebUI空标题渲染；杜绝undefined"
     },
     {
+      "id": "q-skills-ui",
+      "title": "SkillsView重构工具页面样式(紧凑工具栏+表格卡片+错误优雅)",
+      "column": "进行中",
+      "owner": "q-skills-ui",
+      "branch": "fix/q-skills-ui",
+      "progress": "派单：按钮各占整行→紧凑一行工具栏；技能表格卡片包裹；unknown skill id裸错误→优雅降级；对齐工具页面样式+透黑底"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
