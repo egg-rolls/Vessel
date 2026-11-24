@@ -25,7 +25,7 @@
  * @module vessel/node-resume
  */
 
-import { formatEnvInfo } from '../packages/agent/src/env-info-scope.js';
+import { formatEnvInfo } from '../../packages/agent/src/env-info-scope.js';
 import {
   findRestartCardRecord,
   type RestartCandidate,
@@ -33,10 +33,10 @@ import {
   restartCandidates,
   restartCardAdmitted,
   restartInterruptedIso,
-} from '../packages/core/src/index.js';
-import type { SessionEventRecord } from '../packages/core/src/types/event.js';
-import type { SessionState, SessionStore } from '../packages/core/src/types/session.js';
-import { getLocale, type Locale, tIn } from './i18n/index.js';
+} from '../../packages/core/src/index.js';
+import type { SessionEventRecord } from '../../packages/core/src/types/event.js';
+import type { SessionState, SessionStore } from '../../packages/core/src/types/session.js';
+import { getLocale, type Locale, tIn } from '../i18n/index.js';
 
 /** 等「准入」的预算（毫秒）：启动阶段不该为此久等，超时就留标记给下次启动。 */
 export const NODE_RESUME_SETTLE_MS = 10_000;

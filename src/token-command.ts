@@ -36,7 +36,7 @@ import {
   type RootSecretState,
   rotateRootSecret,
   type TokenResolution,
-} from './token-derive';
+} from './node/token-derive';
 
 type EnvMap = Record<string, string | undefined>;
 

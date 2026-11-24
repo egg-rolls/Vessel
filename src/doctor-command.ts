@@ -32,10 +32,6 @@ import {
   resolveEffectiveTenantId,
   resolveSingleTenantPaths,
 } from './data/data-paths';
-import { declarativePluginEntries } from './plugin-config';
-import { PluginLoader } from './plugin-loader';
-import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
-import { readPackageVersion } from './shared/version';
 // 0.56：派生 token 的现状（根密钥 / 指纹；doctor 从不说「必须配置 token」）。
 import {
   effectiveHubToken,
@@ -43,7 +39,11 @@ import {
   effectivePlatformToken,
   loadRootSecret,
   readKnownNodeId,
-} from './token-derive';
+} from './node/token-derive';
+import { declarativePluginEntries } from './plugin-config';
+import { PluginLoader } from './plugin-loader';
+import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { readPackageVersion } from './shared/version';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 // 0.56.1：Web 控制台产物缺失要在 doctor 就能看见（`gateway start` 的硬前置）。

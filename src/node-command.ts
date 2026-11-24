@@ -38,10 +38,10 @@ import {
   probeHttpHealth,
 } from './gateway-command';
 import { t } from './i18n';
+import { effectiveNodeTokenAuto } from './node/token-derive';
 import { createHttpRpcClient } from './rpc/http-client';
 // 0.56：`node token` 与「显式 > 注入 > 派生」的 node token 解析。
 import { nodeTokenCommand } from './token-command';
-import { effectiveNodeTokenAuto } from './token-derive';
 import { ui } from './ui-style';
 
 /** 依赖注入（CLI 只用默认值；测试注入配置/路径/RPC 目标） */

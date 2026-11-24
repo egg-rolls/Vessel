@@ -24,7 +24,7 @@
 
 import { readFileSync } from 'node:fs';
 import * as nodePath from 'node:path';
-import type { VesselConfig } from '../packages/config/src/index';
+import type { VesselConfig } from '../../packages/config/src/index';
 import {
   derivePurposeToken,
   ensureRootSecret,
@@ -35,9 +35,9 @@ import {
   rotateRootSecret as rotateRootSecretFile,
   type TokenPurpose,
   tokenFingerprint,
-} from '../packages/config/src/index';
-import { resolveDataDir } from './data/data-paths';
-import { resolveGatewayToken } from './transport-factory';
+} from '../../packages/config/src/index';
+import { resolveDataDir } from '../data/data-paths';
+import { resolveGatewayToken } from '../transport-factory';
 
 /** node 身份文件名（`<dataDir>/node.json`）；与 `src/node-identity.ts` 同源约定。 */
 const NODE_IDENTITY_FILE_NAME = 'node.json';

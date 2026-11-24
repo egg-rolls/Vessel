@@ -35,7 +35,7 @@ import {
 import { type CreateSecretStoreOptions, createSecretStore } from './hub/secret-store';
 import type { HubNodeState, SecretStore } from './hub/types';
 import { t } from './i18n';
-import { resolveNodeId } from './node-identity';
+import { resolveNodeId } from './node/node-identity';
 import { readPackageVersion } from './shared/version';
 import { ui } from './ui-style';
 

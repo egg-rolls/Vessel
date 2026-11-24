@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import { atomicWrite, type Logger } from '@vessel-agent/core';
 import type { VesselConfig } from '../../packages/config/src/index';
 import { expandHome, resolveDataDir } from '../data/data-paths';
-import { nodeJsonPath, resolveNodeIdentity } from '../node-identity';
+import { nodeJsonPath, resolveNodeIdentity } from '../node/node-identity';
 
 export const NODE_REGISTRY_VERSION = 1;
 export const NODE_REGISTRY_FILE = 'nodes.json';

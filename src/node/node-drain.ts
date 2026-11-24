@@ -22,7 +22,7 @@
  * @module vessel/node-drain
  */
 
-import type { ResumeAfterRestart } from '../packages/core/src/types/session.js';
+import type { ResumeAfterRestart } from '../../packages/core/src/types/session.js';
 
 /** settle 预算（毫秒）：S1a 的硬上限，超时直接进入 flush。 */
 export const NODE_DRAIN_SETTLE_MS = 2000;

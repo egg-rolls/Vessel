@@ -32,7 +32,7 @@ import {
 } from '../federation-client';
 import { resolveFederationOptions } from '../federation-config';
 import { t } from '../i18n';
-import { resolveNodeId } from '../node-identity';
+import { resolveNodeId } from '../node/node-identity';
 import { ui } from '../ui-style';
 
 /** v1 固定 tenant（DECISION-036 §2） */

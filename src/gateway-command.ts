@@ -105,10 +105,10 @@ import { readHubDerivedOrigins } from './hub/derive-origins';
 import { readHubLockFile } from './hub/runtime';
 import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from './hub/server';
 import { t } from './i18n';
+// 0.56：派生 token（显式配置永远优先；未配置时自动派生，绝不再「未配置就挂」）。
+import { effectiveNodeToken, effectivePlatformToken } from './node/token-derive';
 import { createHttpRpcClient } from './rpc/http-client';
 import { readPackageVersion } from './shared/version';
-// 0.56：派生 token（显式配置永远优先；未配置时自动派生，绝不再「未配置就挂」）。
-import { effectiveNodeToken, effectivePlatformToken } from './token-derive';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import {
