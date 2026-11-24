@@ -13,6 +13,14 @@
       "progress": "federation token bug已修(env_file机制,canary peer解析无missing_token)+q-federation CLI/指南合入4b05ef9e；探查员报告:计划C结构✓seamless缺省生效✓但发现拓扑gap—CLI桥默认宿主node,探查员跑在main线非canary node,改用读码+canary探针验收；下一步:canary node直接RPC建agent+生产侧用户重启"
     },
     {
+      "id": "q-node-target",
+      "title": "CLI 指定 node 操作（--connect/--node targeting，任意 node 建 agent）",
+      "column": "进行中",
+      "owner": "q-node-target",
+      "branch": "fix/q-node-target",
+      "progress": "派单：CLI桥默认宿主→加全局--connect/--node targeting，让agent/team/session落到指定node（canary 8654），用户裁决理想态"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
