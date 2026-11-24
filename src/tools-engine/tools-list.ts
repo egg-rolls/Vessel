@@ -12,25 +12,25 @@ import {
   createAgentTool,
   createMemberExecutionHost,
 } from '@vessel-agent/agent';
-import { loadConfig } from '../packages/config/src/index';
+import { loadConfig } from '../../packages/config/src/index';
 import {
   assertToolNameLegality,
   InProcessScheduler,
   MemoryPluginHost,
   Runtime,
   TOOL_NAME_ALIASES,
-} from '../packages/core/src/index';
-import { drainWebToolsWarnings } from '../plugins/tools/web-tools/src/index';
-import { resolveDataDir } from './data/data-paths';
-import { resolveAgentCwd } from './data/path-resolution';
+} from '../../packages/core/src/index';
+import { drainWebToolsWarnings } from '../../plugins/tools/web-tools/src/index';
+import { resolveDataDir } from '../data/data-paths';
+import { resolveAgentCwd } from '../data/path-resolution';
 import {
   buildPluginConfigMap,
   declarativePluginEntries,
   installWithConfig,
-} from './plugin/plugin-config';
-import { PluginLoader } from './plugin/plugin-loader';
-import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin/plugin-selection';
-import { createVesselMetaSurface } from './runtime/vessel-meta';
+} from '../plugin/plugin-config';
+import { PluginLoader } from '../plugin/plugin-loader';
+import { resolvePluginSelection, warnExternalPluginsOnce } from '../plugin/plugin-selection';
+import { createVesselMetaSurface } from '../runtime/vessel-meta';
 
 export interface ToolSummary {
   name: string;

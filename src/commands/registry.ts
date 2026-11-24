@@ -38,7 +38,7 @@ import { stopFleetCommand } from '../stop-command';
 import { runTeamCommand } from '../team-command';
 // 0.56：`vessel token show|list|rotate`（根密钥 / 派生 token）。
 import { tokenListCommand, tokenRotateCommand, tokenShowCommand } from '../token-command';
-import { listTools } from '../tools-list';
+import { listTools } from '../tools-engine/tools-list';
 import { tracePruneCommand } from '../trace-command';
 import { ui } from '../ui-style';
 import { attentionCommand } from './attention';

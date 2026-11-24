@@ -75,7 +75,6 @@ import type { FeishuChannelLike, MetricsControlLike } from '../control-plane-typ
 import { resolveDataDir } from '../data/data-paths';
 import { resolveAgentCwd } from '../data/path-resolution';
 import { reportShutdownFailure } from '../gateway/shutdown-report';
-import { createMcpEngineFromConfig, type McpEngineShell } from '../mcp-engine-wiring';
 import type { MockScenarioName } from '../mock/scenarios';
 import {
   createEventStream,
@@ -115,6 +114,7 @@ import {
   type TimelinePublication,
 } from '../session/timeline-dual-write';
 import { createTimelineSessionLog, type TimelineSessionLog } from '../session/timeline-session-log';
+import { createMcpEngineFromConfig, type McpEngineShell } from '../tools-engine/mcp-engine-wiring';
 import { syncBasicToolsEngineWiring, syncCallbackToolsEngineWiring } from '../tools-engine/wiring';
 import { createProvider } from './provider-factory';
 import { includeReasoningFor } from './reasoning';

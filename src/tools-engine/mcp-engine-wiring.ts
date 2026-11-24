@@ -21,7 +21,7 @@ import type {
   McpServerStatus,
   McpToolDef,
 } from '@vessel-agent/mcp-client';
-import type { EventStream, Logger, PluginHost } from '../packages/core/src/index';
+import type { EventStream, Logger, PluginHost } from '../../packages/core/src/index';
 import {
   type CreateMcpOptions,
   createMcpControl,
@@ -32,7 +32,7 @@ import {
   type McpServerSummary,
   mcpError,
   resolveMcpServers,
-} from './plugin/mcp-wiring';
+} from '../plugin/mcp-wiring';
 
 /** loaded mcp-client 模块的批次 2 共享面（结构镜像，不静态 import 实现）。 */
 export interface McpEngineModuleLike {

@@ -105,7 +105,6 @@ import { reportShutdownFailure } from '../gateway/shutdown-report';
 import { resolveConnectToken } from '../gateway/transport-factory';
 import { createHubRuntime } from '../hub/hub-wiring';
 import { t } from '../i18n';
-import type { McpEngineShell } from '../mcp-engine-wiring';
 import type { MockScenarioName } from '../mock/scenarios';
 import { createNodeDrainer } from '../node/node-drain';
 import { resolveNodeIdentity } from '../node/node-identity';
@@ -159,6 +158,7 @@ import { createSystemContextSource } from '../session/system-context';
 // 0.54 C：`events.list` 的按 run 读端口（同一模块，共用 timeline 的读面与路径口径）。
 import { createTimelineRunEventsPort, timelineTailPort } from '../session/timeline-dual-write';
 import { readPackageVersion } from '../shared/version';
+import type { McpEngineShell } from '../tools-engine/mcp-engine-wiring';
 import { createEngineSupervisor, type EngineSupervisor } from '../tools-engine/supervisor';
 import { callbackRoute } from '../tools-engine/wiring';
 import { registerBashJobDelivery } from './bash-job-delivery';
