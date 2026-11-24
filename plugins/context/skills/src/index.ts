@@ -26,6 +26,13 @@ export {
 export { type ScanRootOptions, type ScanRootResult, scanSkillRoot } from './scanner.js';
 export { SkillsStore } from './store.js';
 export {
+  loadGateDecision,
+  originOfSource,
+  pinTrustRecord,
+  revokeTrustRecord,
+  trustStateOf,
+} from './trust.js';
+export {
   DEFAULT_MAX_LOAD_BYTES,
   emptyIndex,
   emptySessionLoads,

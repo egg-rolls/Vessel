@@ -118,10 +118,11 @@ function normalizeIndex(parsed: unknown): SkillIndex {
   };
 }
 
-/** 信任记录防御解析：非法记录丢弃（fail-closed → 该技能回 unknown） */
+/** 信任记录防御解析：非法记录丢弃（fail-closed → 该技能回 unknown）。
+ * sha256 允许空串（仅撤销记录可能无哈希；trusted 空哈希永不匹配，方向安全）。 */
 function normalizeTrustRecord(value: unknown): TrustRecord | undefined {
   if (!isRecord(value)) return undefined;
-  const sha256 = readString(value, 'sha256');
+  const sha256 = typeof value.sha256 === 'string' ? value.sha256 : undefined;
   const recordedAt = readString(value, 'recordedAt');
   const origin = readString(value, 'origin');
   const state = readString(value, 'state');
