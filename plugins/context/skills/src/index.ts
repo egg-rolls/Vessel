@@ -15,8 +15,13 @@
  * 文件永远是真相源，索引只是派生缓存；不新增 core 接口 / 事件 / 第二注册表。
  */
 
+import { buildPathBoundary } from '@vessel-agent/basic-tools';
 import type { Plugin, PluginHost } from '@vessel-agent/core';
+import { parseSkillsConfig } from './config.js';
+import { SkillsService } from './service.js';
+import { SkillsStore } from './store.js';
 
+export { parseSkillsConfig, type SkillsConfig } from './config.js';
 export {
   capDescription,
   deriveDescription,
@@ -24,6 +29,12 @@ export {
   parseFrontmatter,
 } from './frontmatter.js';
 export { type ScanRootOptions, type ScanRootResult, scanSkillRoot } from './scanner.js';
+export {
+  type ReadSkillResult,
+  type RescanResult,
+  SkillsService,
+  type SkillsServiceOptions,
+} from './service.js';
 export { SkillsStore } from './store.js';
 export {
   loadGateDecision,
@@ -59,26 +70,49 @@ export {
   type TrustStore,
   WATCH_DEBOUNCE_MS,
 } from './types.js';
+export { type SkillsWatcher, watchSkillRoots } from './watch.js';
 
 /** 插件名（config.yaml `plugins[].name` / loader 短名） */
 export const SKILLS_PLUGIN_NAME = 'skills';
 
+/** 插件构造选项（与 install 的第二参数同形） */
+export interface SkillsPluginOptions {
+  config?: Record<string, unknown>;
+}
+
 /**
  * 创建插件实例。
  *
- * 骨架切片：install 暂不注册任何面——数据层 / 信任门 / 工具 / RPC / 设置 / UI
- * 按设计 §12 分期 additive 落进本 install。`enabled: false` 的语义（不注册）
- * 随 config 解析一起落地。
+ * install（设计 §4/§5.4/§10.2）：解析 config（install 期钉死，生效语义 = 重启）；
+ * `enabled: false` 不注册任何东西；否则构造路径边界（继承 basic-tools，装配层
+ * 回落）、私有目录 store 与索引服务，启动异步全量扫描 + watch。
+ * 工具 / RPC 面在后续切片 additive 注册。
  */
-export function createSkillsPlugin(): Plugin {
+export function createSkillsPlugin(options: SkillsPluginOptions = {}): Plugin {
+  let service: SkillsService | undefined;
   return {
     name: SKILLS_PLUGIN_NAME,
     version: '0.1.0',
     description:
       'Managed skill library: scan / index three skill roots (project / user / collected library) ' +
       'with trust-gated load (`skills` tool) + library UI',
-    install(_host: PluginHost): void {
-      // 骨架：后续切片在这里注册 skills 工具并启动扫描 / watch。
+    install(_host: PluginHost, installOptions?: { config?: Record<string, unknown> }): void {
+      const { config, warnings } = parseSkillsConfig(installOptions?.config ?? options.config);
+      for (const warning of warnings) console.warn(`[skills] ${warning}`);
+      if (!config.enabled) return;
+
+      const boundary = buildPathBoundary({
+        allowedRoots: config.allowedRoots,
+        denyPaths: config.denyPaths,
+        cwd: config.cwd,
+      });
+      const store = new SkillsStore(config.stateDir);
+      service = new SkillsService({ config, boundary, store });
+      // 扫描是异步的：install 不阻塞进程启动；工具 / RPC 调用前 await ready()。
+    },
+    dispose(): void {
+      service?.dispose();
+      service = undefined;
     },
   };
 }
