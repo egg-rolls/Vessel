@@ -11,7 +11,7 @@
 
 import { type AdmitInput, AgentError, type AgentService } from '@vessel-agent/agent';
 import type { RunStatus, Scheduler, SchedulerSnapshot, WaitReason } from '@vessel-agent/core';
-import { RpcError } from '../packages/serve/src/index';
+import { RpcError } from '../../packages/serve/src/index';
 import type {
   LiveRunSnapshotLike,
   RunControlLike,
@@ -19,7 +19,7 @@ import type {
   RunControlStatus,
   RunStartLikeInput,
   RunStartLikeResult,
-} from '../packages/serve/src/run-control.js';
+} from '../../packages/serve/src/run-control.js';
 
 function statusOf(state: RunStatus): RunControlStatus {
   return state;

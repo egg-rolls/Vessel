@@ -15,7 +15,7 @@
  * @module vessel/connect-run-wait
  */
 
-import type { EventStream, RunEvent } from '../packages/core/src/index';
+import type { EventStream, RunEvent } from '../../packages/core/src/index';
 
 const TERMINAL_RUN_EVENT_TYPES: ReadonlySet<string> = new Set([
   'run.completed',

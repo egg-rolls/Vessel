@@ -33,7 +33,7 @@ import {
 } from '../packages/core/src/index';
 import type { AgentControlLike } from '../packages/serve/src/index';
 import type { RunControlLike } from '../packages/serve/src/run-control.js';
-import { type ConnectRunStart, waitForConnectedRun } from './connect-run-wait';
+import { type ConnectRunStart, waitForConnectedRun } from './run/connect-run-wait';
 
 /** run 终态等待上限缺省值；与 `--connect` 保持一致（10 分钟）。 */
 const DEFAULT_LOCAL_RUN_TIMEOUT_MS = 10 * 60_000;

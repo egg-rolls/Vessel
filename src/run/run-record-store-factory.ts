@@ -8,12 +8,12 @@
 
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { DEFAULT_DURABLE_OPTIONS, type VesselConfig } from '../packages/config/src/index';
+import { DEFAULT_DURABLE_OPTIONS, type VesselConfig } from '../../packages/config/src/index';
 import {
   FileRunRecordStore,
   MemoryRunRecordStore,
   type RunRecordStore,
-} from '../packages/core/src/index';
+} from '../../packages/core/src/index';
 
 export interface ResolvedDurableOptions {
   enabled: boolean;

@@ -73,7 +73,6 @@ import { visionSettingsOf } from './config/vision-settings';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { resolveDataDir } from './data/data-paths';
 import { resolveAgentCwd } from './data/path-resolution';
-import { FileLeaseService } from './lease-service';
 import { createMcpEngineFromConfig, type McpEngineShell } from './mcp-engine-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import {
@@ -103,7 +102,8 @@ import { type PluginDescriptor, PluginLoader } from './plugin/plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin/plugin-selection';
 import { createProvider } from './provider-factory';
 import { includeReasoningFor } from './reasoning';
-import { closeRunRecordStore, createRunRecordStore } from './run-record-store-factory';
+import { FileLeaseService } from './run/lease-service';
+import { closeRunRecordStore, createRunRecordStore } from './run/run-record-store-factory';
 import { ownerSelfCard } from './self-card';
 import { createSessionControl, type SessionControl } from './session/session-control';
 import { createSessionStore } from './session/session-factory';

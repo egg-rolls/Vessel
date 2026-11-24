@@ -37,8 +37,8 @@ import {
   type SessionStore,
   toSessionInfo,
 } from '../../packages/core/src/index';
-import { inspectSessionLease } from '../lease-service';
 import { noteStartup, noteStartupMax, timeStartup } from '../observability/startup-timing';
+import { inspectSessionLease } from '../run/lease-service';
 import {
   acquireSessionLock,
   inspectSessionLock,

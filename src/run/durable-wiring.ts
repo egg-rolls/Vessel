@@ -7,7 +7,7 @@
  * - 禁止「seed session + 合成续跑消息」：恢复只走 core 的 resumeRun。
  */
 
-import type { RunRecord, RunRecordStore } from '../packages/core/src/index';
+import type { RunRecord, RunRecordStore } from '../../packages/core/src/index';
 
 /** TUI `/runs` 与 CLI 列表共用的摘要（只含可恢复状态） */
 export interface DurableRunSummary {

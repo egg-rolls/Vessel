@@ -12,8 +12,8 @@ import {
   resolveEffectiveTenantId,
   resolveSingleTenantPaths,
 } from './data/data-paths';
-import { previewOf } from './durable-wiring';
-import { closeRunRecordStore, createRunRecordStore } from './run-record-store-factory';
+import { previewOf } from './run/durable-wiring';
+import { closeRunRecordStore, createRunRecordStore } from './run/run-record-store-factory';
 
 /** 列表展示上限（core 的默认值；显式写出来让语义可见） */
 const LIST_LIMIT = 50;

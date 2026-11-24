@@ -62,13 +62,13 @@ import {
   type TenantPaths,
 } from '../../packages/core/src/index';
 import { TimelineEventLog } from '../../packages/core/src/timeline/read-port';
-import { inspectSessionLease } from '../lease-service';
 import { resolveTraceOptions } from '../observability/trace-wiring';
+import { inspectSessionLease } from '../run/lease-service';
 import {
   createRunRecordStore,
   resolveDurableOptions,
   resolveRunStorePath,
-} from '../run-record-store-factory';
+} from '../run/run-record-store-factory';
 import { createSessionStore } from '../session/session-factory';
 import { inspectSessionLock } from '../session/session-lock';
 

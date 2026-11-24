@@ -143,7 +143,7 @@ import { FACTORY_PLUGINS } from './plugin/plugin-loader';
 import { type PluginWatchHandle, startPluginWatch } from './plugin/plugin-watch';
 import { runPluginCliCommand } from './plugin-cli-command';
 import { installProcessErrorHandlers } from './process-handlers';
-import { createRunControl } from './run-control';
+import { createRunControl } from './run/run-control';
 import { createRuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';

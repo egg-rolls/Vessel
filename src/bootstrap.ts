@@ -70,12 +70,6 @@ import { registerRefsNoticeHook, registerRuntimeNoticeHook } from './config/hot-
 import { normalizeLegacyToolName } from './config/legacy-tool-names';
 import { createReplSettings, type ReplSettingsControlLike } from './config/ui-settings';
 import { visionSurfaceOf } from './config/vision-settings';
-import {
-  type ConnectResumeStart,
-  type ConnectRunStart,
-  waitForConnectedResumeTerminal,
-  waitForConnectedRun,
-} from './connect-run-wait';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { createConfigAttachmentIngest } from './data/attachment-ingest';
 import { createConfigAttachmentLister } from './data/attachments-list';
@@ -97,13 +91,6 @@ import {
   listAutoApproveRules,
   removeAutoApproveRule,
 } from './data/permission-store';
-import {
-  type DurableRunHandleLike,
-  type DurableRunsControlLike,
-  listRunSummaries,
-  loadResumableCheckpoint,
-  resumeError,
-} from './durable-wiring';
 import { createFederationSendPort } from './federation/federation-send-port';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
@@ -139,7 +126,20 @@ import {
   normalizeConnectUrl,
   type RpcClient,
 } from './rpc/index';
-import { createRunControl } from './run-control';
+import {
+  type ConnectResumeStart,
+  type ConnectRunStart,
+  waitForConnectedResumeTerminal,
+  waitForConnectedRun,
+} from './run/connect-run-wait';
+import {
+  type DurableRunHandleLike,
+  type DurableRunsControlLike,
+  listRunSummaries,
+  loadResumableCheckpoint,
+  resumeError,
+} from './run/durable-wiring';
+import { createRunControl } from './run/run-control';
 import { createRuntimeNoticeBus, type RuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
 import { createContextUsageSource } from './session/context-usage';
