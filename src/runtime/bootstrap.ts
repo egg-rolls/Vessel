@@ -1029,6 +1029,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const dataDir = options.dataDirSubdir
     ? path.join(resolvedDataDir, options.dataDirSubdir)
     : resolvedDataDir;
+  // issue-1（隔离缺口）：把本 node 解析后的 dataDir 桥接进进程 env，使工具输出落盘根
+  // （core toolOutputRoot：ALS scope → VESSEL_TOOL_OUTPUT_DIR → VESSEL_DATA_DIR → ~/.vessel）
+  // 用 node 自身 dataDir 而非硬编码生产根。data_dir 来自配置文件时 host env 原本没有
+  // VESSEL_DATA_DIR，host in-process / 异步 bash 日志会落进 ~/.vessel；且下方 engine child
+  // settings.toolOutputDir = toolOutputRoot() 会把 host 的错根传给 child。此处与 entry.ts
+  // 对 child 的 `process.env.VESSEL_DATA_DIR = dataDir` 同源。默认根（config/env 均缺省）
+  // 取值不变（零回归）；显式 VESSEL_TOOL_OUTPUT_DIR 仍优先（toolOutputRoot 链不变）。
+  process.env.VESSEL_DATA_DIR = dataDir;
   // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准（T4 删除 config tenant 块后
   // `loadConfig()` 恒为 `default`）；fresh 数据根没有该文件时仍回 `default`。
   const tenantId = resolveEffectiveTenantId(configTenantId, dataDir);
