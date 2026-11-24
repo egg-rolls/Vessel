@@ -1,6 +1,6 @@
 {
   "board": "vessel 红蓝开发任务看板",
-  "updated": "2026-11-24T23:10:00+08:00",
+  "updated": "2026-11-24T23:45:00+08:00",
   "columns": ["待办", "进行中", "阻塞"],
   "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。板只留当前活跃任务；完成任务由 main 轮次收尾移入 archive.json（append-only，采纳 q-kanban §9.2 归档约定）。",
   "tasks": [
@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "金丝雀验收全过（verify2/3/4：日志重构/会话命名/滚动/UI/media view/SKILLS/权限统一/互联简化+skills装载名+AI命名兜底）；已晋升main 38ee0aec（ff-only，与canary b11f4889代码差量仅看板文档）；待用户 vessel gateway restart --stop-nodes 重启生产加载"
+      "progress": "金丝雀验收全过已晋升main 38ee0aec；待用户 vessel gateway restart --stop-nodes 重启生产。跨舰队通信修复：两侧peer team映射纠正（生产peer team_id=default/local vessel；金丝雀localTeamId=default），federation双向验证通（lead回执到达）；金丝雀host.node_name=soulkiller-canary已配置（下次重启生效，node_id不变）；金丝雀本地main越权已stand down"
     },
     {
       "id": "canary-qa-lead",
@@ -18,7 +18,31 @@
       "column": "进行中",
       "owner": "canary-qa-lead",
       "branch": "canary",
-      "progress": "常驻QA负责人717be135就职：接收main特性批次→树状划分→hire金丝雀测试员→汇总报告main；verify4两项全过，本批次已晋升main 38ee0aec并通报lead；下一特性批次待main派单"
+      "progress": "常驻QA负责人717be135就职；verify4全过批次已晋升38ee0aec。★跨舰队寻址纠正已投递：lead此前裸名main回执误投金丝雀本地main（本地main越权回执五条已作废并stand down）；报告必须用三段地址main@7181ed6c-5ec2-479e-9400-fcd54b480de5:vessel（回信原样回传from location）；federation双向通道已修复验证（生产→金丝雀queued✓，金丝雀→生产候lead回执）；T2b泄漏根因线索已通报（interop进程继承VESSEL_DATA_DIR=生产）"
+    },
+    {
+      "id": "q-tool-output-leak",
+      "title": "修复工具输出隔离击穿：继承的VESSEL_TOOL_OUTPUT_DIR/VESSEL_PLUGIN_CONFIG穿透舰队边界（T2b立卡）",
+      "column": "待办",
+      "owner": "main",
+      "branch": "redblue-dev",
+      "progress": "canary T2查证完毕证据链全（canary-data/reports/canary-t-runtime-report.md T2b节）：tool-result-gate.ts:292-296 VESSEL_TOOL_OUTPUT_DIR优先于VESSEL_DATA_DIR，17d6f44c只桥接后者；node-supervisor.ts:1338其余env透传→生产VESSEL_TOOL_OUTPUT_DIR/VESSEL_PLUGIN_CONFIG击穿gateway→node→engine（pid179484/87384 environ双变量并存铁证）；basic-tools asyncLogDir同源toolOutputRoot()。修复方向：bootstrap桥接清除/重写继承的VESSEL_TOOL_OUTPUT_DIR+VESSEL_PLUGIN_CONFIG+启动链env卫生；与q-fleet-isolation同根因族（进程树env继承跨舰队）"
+    },
+    {
+      "id": "q-fleet-isolation",
+      "title": "多舰队CLI/env隔离缺口：--user-config混合上下文（config=金丝雀/dataDir=生产）",
+      "column": "待办",
+      "owner": "main",
+      "branch": "redblue-dev",
+      "progress": "实测根因：interop/子进程继承宿主VESSEL_DATA_DIR=生产，env层覆盖--user-config的data_dir→CLI身份/锁探测落生产（federation peers/gateway status/reload全中招）；workaround=cmd.exe /c set VESSEL_DATA_DIR=<fleet>&&bun…。修复方向：显式--user-config时其data_dir应优先于继承env，或舰队统一launch入口净化env；另疑config.watch消费federation diff但运行时peer未更新（需peer remove+add强制重解析才生效），待查watch路径applyFederation注入"
+    },
+    {
+      "id": "q-from-card",
+      "title": "from location源卡片：系统卡片→环境信息卡片样式（用户要求）",
+      "column": "待办",
+      "owner": "main",
+      "branch": "redblue-dev",
+      "progress": "用户裁定：<from location=principal@node:team>源抬头从系统卡片提升为环境信息卡片，用环境信息卡片样式组织投射；待main扫Web UI渲染面（senderKind/系统卡/环境信息卡）后树状拆分派单"
     },
     {
       "id": "design-adjudication",
