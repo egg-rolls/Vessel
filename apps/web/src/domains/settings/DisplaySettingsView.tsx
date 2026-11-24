@@ -216,7 +216,7 @@ export function DisplaySettingsView() {
   useRefreshSignal(reloadConfig);
   const data = resourceData(config);
 
-  const pending = useUiStore((state) => state.displayPending);
+  const pending = useUiStore((state) => state.settingsPending);
   const setDisplayPending = useUiStore((state) => state.setDisplayPending);
   const clearDisplayPending = useUiStore((state) => state.clearDisplayPending);
   const [saving, setSaving] = useState<string | undefined>();
