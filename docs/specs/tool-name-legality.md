@@ -19,9 +19,9 @@ paths:
   - packages/core/src/runtime/execution-unit.ts
   - packages/core/src/provider/providers.ts
   - plugins/mcp/client/src/naming.ts
-  - src/bootstrap.ts
-  - src/legacy-tool-names.ts
-  - src/tenant-runtime-factory.ts
+  - src/runtime/bootstrap.ts
+  - src/config/legacy-tool-names.ts
+  - src/runtime/tenant-runtime-factory.ts
   - scripts/check-pii-vault.ts
   - scripts/check-tool-name-aliases.ts
 ---
@@ -61,7 +61,7 @@ paths:
 ## 3. 修法（已合入 `27026979`）
 
 1. **改名**：`pii.reveal` → `piiReveal`。模型可见面同步：`reveal.ts` 工具定义、`pii/notice.ts`
-   的提示文案、`pii/rules.ts` 的下一步建议、`src/bootstrap.ts:1202-1208`（默认 `neverAutoApprove`）、
+   的提示文案、`pii/rules.ts` 的下一步建议、`src/runtime/bootstrap.ts:1202-1208`（默认 `neverAutoApprove`）、
    `plugins/security/guardrail-pii`；
    唯一真名来源仍是 `PII_REVEAL_TOOL_NAME` 常量（不要在字符串里重复写名字）。
 2. **注册期 fail-fast**：`MemoryPluginHost.registerTool`（`plugin-host.ts:69-78`）先跑
@@ -109,18 +109,18 @@ paths:
   想同时安全就用下划线。
 - **已存在的历史会话**：改名只影响之后的请求；旧事件 / 旧 transcript 里的 `pii.reveal`
   字符串是历史事实，**不要批量改写**（append-only）。
-- **老配置里的旧名换算层（0.53 `legacy-name` 已修）**：原先 `src/tenant-runtime-factory.ts`
+- **老配置里的旧名换算层（0.53 `legacy-name` 已修）**：原先 `src/runtime/tenant-runtime-factory.ts`
   的 `normalizeLegacyAskToolName` 只把 `ask_user` 换成 `ask`，**不认** `pii.reveal`；而
-  `src/bootstrap.ts` 与 `resolveRuntimePermission` 正是用它做 `autoApprove` / `neverAutoApprove`
+  `src/runtime/bootstrap.ts` 与 `resolveRuntimePermission` 正是用它做 `autoApprove` / `neverAutoApprove`
   的换算 ⇒ 用户 YAML 里残留 `pii.reveal` 时**静默不匹配**（方向上是安全的一侧：`piiReveal`
   仍在默认 `neverAutoApprove` 里，所以「永远要人批」不丢），但和 L-011 是同一个形状——
   **「注册侧改名了、选择侧不认、还不报错」**。现在：
-  - 换算表是**表驱动、单一真源**：`src/legacy-tool-names.ts` 的 `LEGACY_TOOL_NAME_ALIASES`
+  - 换算表是**表驱动、单一真源**：`src/config/legacy-tool-names.ts` 的 `LEGACY_TOOL_NAME_ALIASES`
     （`ask_user → ask`、`pii.reveal → piiReveal`），`normalizeLegacyToolName` 只做**精确**
     表查找 —— 不做前缀 / 大小写 / 点号-下划线之类的模糊匹配（那等于允许任意别名，会把
     注册期的名字校验废掉）。旧函数名 `normalizeLegacyAskToolName` 已删，别再加回来。
-  - 两处换算点都覆盖：`src/bootstrap.ts` 的 `permission.autoApprove` + `neverAutoApprove`，
-    `src/tenant-runtime-factory.ts::resolveRuntimePermission` 的同两个字段。
+  - 两处换算点都覆盖：`src/runtime/bootstrap.ts` 的 `permission.autoApprove` + `neverAutoApprove`，
+    `src/runtime/tenant-runtime-factory.ts::resolveRuntimePermission` 的同两个字段。
   - 判据：`scripts/check-tool-name-aliases.ts`（零依赖）。它钉 ①别名目标必须是**真实存在**
     的工具名（名字从真 `MemoryPluginHost` 注册表读回，另三个 import 不到 workspace 包名的
     工厂从源码里的 `name: '<literal>'` 取，每个文件必须恰好一条）、②不许映到不存在的工具 /
@@ -131,9 +131,9 @@ paths:
   - 事件名 `pii.reveal.audit`（`PII_REVEAL_AUDIT_EVENT`）：事件名允许点号，且 append-only；
   - 读侧「双认」旧名：`packages/agent/src/runtime.ts`（`PARENT_ANSWERED_TOOL_NAMES`、ask 转发）、
     `packages/tui`（`ToolDisplay` / `tool-input-summary` / `AskUserDialog`）、
-    `packages/serve`（interactions 兜底）、`src/hot-apply-appliers.ts`（旧名工具不算插件工具）、
+    `packages/serve`（interactions 兜底）、`src/config/hot-apply-appliers.ts`（旧名工具不算插件工具）、
     `apps/web` 的 `[ask_user answer ` 历史正文前缀 —— 这些都是读历史数据，改成只认新名会让旧记录失明；
-  - YAML 键 `ui.ask_user`（`src/ui-settings.ts`）：**配置键**，与工具名是两套命名空间，未随改名而变。
+  - YAML 键 `ui.ask_user`（`src/config/ui-settings.ts`）：**配置键**，与工具名是两套命名空间，未随改名而变。
 - 内置工具名的全量反向扫描现在是判据（上面的探针 ③，清单 9 个：`agent` / `ask` / `bash` /
   `edit` / `media` / `piiReveal` / `read` / `subscribe` / `web_fetch`）。覆盖边界要说清：
   MCP 工具名是**动态**的（`mcp__<server>__<tool>`，由 `naming.ts` 清洗 + 注册期校验兜底），

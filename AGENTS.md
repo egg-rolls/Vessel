@@ -50,7 +50,7 @@
 - **权限**：默认无限等待，不得重新引入 120s / 固定 TTL；只有显式正数 `timeoutMs` 才超时；abort 优先于超时。只有 human / policy 能答，没有 agent 审批人，不提供 `allow-after`（ADR-077/079/091）。
 - **插件优先**：能做成插件的一律做成插件，**核心只留不变量与基座**（判据见 [docs/constitution/13-plugin-first.md](docs/constitution/13-plugin-first.md)）：新增能力先问「能不能做成插件」；答「能」就不往核心写；横跨两侧时按「机制在核心、实现在插件」切开。
 - **授权分级**：「这点小事能不能不问就做」按 [docs/constitution/12-autonomy.md](docs/constitution/12-autonomy.md) 自己判，不再逐次请示：`allow` 直接做并在 commit message / 回报里注明依据，`ask` 用 ask 工具一次问全，`deny` 不做并说明命中哪条；顺序 deny → ask → allow，**未知按 ask**，冲突从重。
-- **数据写入**：session / checkpoint 一律 `atomicWrite`，默认 `durable: true`；损坏 ≠ 不存在，抛 `SessionCorruptError`、不 unlink；单公司 data-dir 写意图锁（`src/data-lock.ts`），冲突返回 `data_locked` / `session_locked` / `run_locked`；运行时不再获取写者锁（ADR-056/086）。
+- **数据写入**：session / checkpoint 一律 `atomicWrite`，默认 `durable: true`；损坏 ≠ 不存在，抛 `SessionCorruptError`、不 unlink；单公司 data-dir 写意图锁（`src/data/data-lock.ts`），冲突返回 `data_locked` / `session_locked` / `run_locked`；运行时不再获取写者锁（ADR-056/086）。
 - **单 run**：同一个 `ExecutionUnit` 同时只允许一个 active run；第二个 run 抛 `run_already_running`；不要另写终态持久化 / 事件发布路径（ADR-054）。
 - **发布纪律**：1.0 前只做干跑，不 tag、不 publish、不 force-push；1 本地 squash 到 `main` 后直接 push，PR 只在用户明确要求时开；CI 异步，不作为 push 前置；tag `v*` 只有 1 打。
 - **插件信任**：内置插件（随 release 发布）可信；外部插件从项目 `./.vessel/plugins` 与用户 `~/.vessel/plugins` 发现，默认不可信，安装时必须展示其声明的 `permissions`（`fs` / `net` / `process` / `secrets` / `events` / `rpc`），未声明能力默认拒绝；体验插件跑在子进程但**不是安全沙箱**，能力插件仍在 in-process、拥有完整进程权限；`VESSEL_NO_EXTERNAL_PLUGINS=1` 只加载内置插件（ADR-099）。
@@ -76,9 +76,10 @@
 - [agent](docs/agents/agent.md) — `packages/agent/**`：AgentService、成员/team、dispatch。
 - [serve](docs/agents/serve.md) — `packages/serve/**`、`src/rpc/**`：gateway/RPC/远程/hub。
 - [web](docs/agents/web.md) — `apps/web/**`：i18n、token 存储、内联交互卡。
-- [tui](docs/agents/tui.md) — `packages/tui/**`、`src/i18n/**`、`src/ui-style.ts`、`src/commands/**`：TUI + CLI 终端面。
+- [tui](docs/agents/tui.md) — `packages/tui/**`、`src/i18n/**`、`src/cli/**`：TUI + CLI 终端面。
 - [plugins](docs/agents/plugins.md) — `plugins/**`、plugin loader：发现/信任/生命周期/MCP。
 - [gov](docs/agents/gov.md) — `docs/**`、根文档、`.github/**`、`scripts/**`：文档生命周期、角色路径、发布/CI。
+- **src 归类规则** — [docs/architecture/src-layout.md](docs/architecture/src-layout.md)：src 顶层只留 `cli.ts`，新文件按领域关键词表进 `src/<domain>/`（≥3 文件簇必进目录、新子系统 ≥3 文件必建目录）。
 
 ## 文件与目录
 

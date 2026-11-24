@@ -2,7 +2,7 @@
 title: 工具与权限边界
 kind: current
 triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask, mcp tool, vessel, bridge, guardrail, rpc, 工具, 权限, 黑名单, 白名单, 根目录, 提问, 工具集, 工具名, 命名规则, snake_case, 工具名校验, 别名, 弃用提示, pii_reveal, 控制面, 桥, 元工具, engine, pool, tools_engine, child, bridge_deny, transport, 执行位置, 双路]
-paths: [packages/core/src/types/tool.ts, packages/core/src/runtime/tool-name.ts, packages/core/src/runtime/plugin-host.ts, packages/core/src/runtime/tool-pipeline.ts, packages/core/src/runtime/tool-provenance.ts, packages/core/src/runtime/permission-policy.ts, plugins/tools/**, plugins/context/doc-subscription/**, plugins/mcp/client/src/naming.ts, packages/agent/src/tool.ts, packages/agent/src/inbox.ts, packages/agent/src/service.ts, packages/agent/src/member-cwd.ts, src/vessel-meta.ts, src/tools-engine/**, src/legacy-tool-names.ts, src/bootstrap.ts, src/gateway-command.ts, src/plugin-config.ts, src/ask-channel.ts, src/ask-answer-delivery.ts, packages/serve/src/interactions-registry.ts, apps/web/src/domains/pending/ask-submit-plan.ts, packages/tui/src/renderer/ask-user.ts, src/mcp-engine-wiring.ts]
+paths: [packages/core/src/types/tool.ts, packages/core/src/runtime/tool-name.ts, packages/core/src/runtime/plugin-host.ts, packages/core/src/runtime/tool-pipeline.ts, packages/core/src/runtime/tool-provenance.ts, packages/core/src/runtime/permission-policy.ts, plugins/tools/**, plugins/context/doc-subscription/**, plugins/mcp/client/src/naming.ts, packages/agent/src/tool.ts, packages/agent/src/inbox.ts, packages/agent/src/service.ts, packages/agent/src/member-cwd.ts, src/runtime/vessel-meta.ts, src/tools-engine/**, src/config/legacy-tool-names.ts, src/runtime/bootstrap.ts, src/cli/commands/gateway/gateway-command.ts, src/plugin/plugin-config.ts, src/cli/ask-channel.ts, src/agent/ask-answer-delivery.ts, packages/serve/src/interactions-registry.ts, apps/web/src/domains/pending/ask-submit-plan.ts, packages/tui/src/renderer/ask-user.ts, src/tools-engine/mcp-engine-wiring.ts]
 ---
 
 # 工具与权限边界
@@ -44,7 +44,7 @@ interface ToolDefinition {
 
 管道的 handler 被装配层就地替换为转发 handler（def 对象身份不变 ⇒ tools[] 快照 / 前缀缓存 / install 回滚不受影响）：白名单 `read` / `edit` / `write` / `bash`（同步）恒走 engine worker（与 host 同一份 basic-tools 包源码）；`bash`（`async:true`）/ `ask` / `recall` / `pii_reveal` / `agent` / `inbox` 是 callback——engine 只回关联 id，host 查 pending 表执行原 handler（at-most-once，零 ctx 序列化）；MCP 工具 exec=worker（连接在 engine 内，per-server 硬亲和）；`subscribe` / `media` / `vessel` 不 wire，留 in-process（`src/tools-engine/wiring.ts`）。权限判定、注册权威（PluginHost）、PII、事件与 WAL 全留 host；执行位置对模型不可见。
 
-传输双路由 `tools_engine.mode` 选择（缺省 `child`）：**child** = 每 node 一个 stdio 子进程（supervisor 重启预算 ≤3 次/10min，预算尽 disabled → 工具 fail-closed `engine_unavailable`，不静默回退 in-process）；**pool** = 显式 opt-in，node 的 PoolTransport 直连 gateway 监督的 detached engine 池（亲和 → 健康 → P2C 三步选择；进程级准入快拒 `engine_busy`，LB 换家重试，无队列）。池需 `gateway.engine_pool.size>0`（0=不建；1=fail-fast；开时 ≥2），双开关缺省关零回归；poolDir = `~/.vessel/engine-pool[-<instance>]`，**不随 `--data-dir` 移动**（`src/bootstrap.ts` / `src/gateway-command.ts`）。结果出口闸仍只在 core：worker 用同一份闸自裁 → 信封 `bounded:true` → host ctx re-mark，loop 不重裁。决策与拓扑细节见 [ADR-106](../adr/ADR-106-engine-pool.md)（accepted）；目标态设计史见 [0.57-tool-host](0.57-tool-host.md)（kind: target，部分被取代）。
+传输双路由 `tools_engine.mode` 选择（缺省 `child`）：**child** = 每 node 一个 stdio 子进程（supervisor 重启预算 ≤3 次/10min，预算尽 disabled → 工具 fail-closed `engine_unavailable`，不静默回退 in-process）；**pool** = 显式 opt-in，node 的 PoolTransport 直连 gateway 监督的 detached engine 池（亲和 → 健康 → P2C 三步选择；进程级准入快拒 `engine_busy`，LB 换家重试，无队列）。池需 `gateway.engine_pool.size>0`（0=不建；1=fail-fast；开时 ≥2），双开关缺省关零回归；poolDir = `~/.vessel/engine-pool[-<instance>]`，**不随 `--data-dir` 移动**（`src/runtime/bootstrap.ts` / `src/cli/commands/gateway/gateway-command.ts`）。结果出口闸仍只在 core：worker 用同一份闸自裁 → 信封 `bounded:true` → host ctx re-mark，loop 不重裁。决策与拓扑细节见 [ADR-106](../adr/ADR-106-engine-pool.md)（accepted）；目标态设计史见 [0.57-tool-host](0.57-tool-host.md)（kind: target，部分被取代）。
 
 <a id="tool-name-rule"></a>
 
@@ -70,7 +70,7 @@ interface ToolDefinition {
 
 **改名必须带别名（至少一版）**：改名的登记处只有一处 —— `TOOL_NAME_ALIASES`（`alias` / `target` / `notice` / `removeIn`）。细则：
 
-- 别名解析在**注册表一处**（`MemoryPluginHost.getTool` → `getToolAlias`），不是每个工具各写一份 if；配置层（`permission.auto_approve` / `never_auto_approve`）的换算也读同一张表（`src/legacy-tool-names.ts` 只是适配层）。
+- 别名解析在**注册表一处**（`MemoryPluginHost.getTool` → `getToolAlias`），不是每个工具各写一份 if；配置层（`permission.auto_approve` / `never_auto_approve`）的换算也读同一张表（`src/config/legacy-tool-names.ts` 只是适配层）。
 - 命中别名时**不静默**：`tool-pipeline` 把 `notice` 追加到回给模型的结果文本里（错误路径也带），例如
   `piiReveal 已重命名为 pii_reveal（0.55 起工具名统一 snake_case）；旧名保留一版，下一版移除，请改用 pii_reveal。`
 - 别名只做**精确表查找**，禁止前缀 / 大小写归一 / 点号-下划线互换之类的模糊换算 —— 那等于允许任意别名，会把注册期的名字校验一起废掉。
@@ -114,7 +114,7 @@ interface ToolDefinition {
 
 ### vessel 控制面桥（P1，单工具面）
 
-`vessel` 是**结构化控制面桥**（`src/vessel-meta.ts`，装配层注册；用户裁定 2026-11-18：**模型面只有
+`vessel` 是**结构化控制面桥**（`src/runtime/vessel-meta.ts`，装配层注册；用户裁定 2026-11-18：**模型面只有
 vessel 一个工具**，不设独立执行器）：让模型在**不改会话 tools[] 前缀**的前提下够到 live 注册表里的
 新工具与 Vessel 自身的 RPC 控制面。它不是注册型 meta-tool（不注册/发现工具，注册权威仍是 PluginHost），
 也不占能力工具名额——与 MCP 注册面同理。正当性：工具是进程内函数不是 CLI 命令，`bash` 表达不了；
@@ -141,7 +141,7 @@ read→allow（RPC 层已脱敏）/ write→ask / admin→deny / 未知方法→
 
 **递归与准入**：单跳——call_tool 目标不得是 `vessel` 自身；其余 live 注册表工具默认可桥
 （桥不放宽目标自身任何权限规则，高危分级由目标自己的 checkPermission / 默认 ask 继承）。
-桥准入经配置 `permission.bridge_deny`（缺省 `[]` = 行为零变化）：精确工具名，别名经同一 `TOOL_NAME_ALIASES` 表解析；命中只拦 `call_tool` 桥可达性，不影响新会话直调；`vessel` 自身硬排除（config 不可覆盖）；列表是活引用，permission 热应用 applier 更新（`src/vessel-meta.ts` / `src/bootstrap.ts`）。`tool.call.completed/failed` 带 additive 溯源字段：`transport`（`in_process` / `engine_worker` / `engine_callback`，缺省不写 = 旧事件逐字节不变）与 `via_bridge`（vessel-bridge guardrail 改写时打标，按对象身份读取）；机制在 core `tool-provenance.ts`，打标方在装配层 / 插件。
+桥准入经配置 `permission.bridge_deny`（缺省 `[]` = 行为零变化）：精确工具名，别名经同一 `TOOL_NAME_ALIASES` 表解析；命中只拦 `call_tool` 桥可达性，不影响新会话直调；`vessel` 自身硬排除（config 不可覆盖）；列表是活引用，permission 热应用 applier 更新（`src/runtime/vessel-meta.ts` / `src/runtime/bootstrap.ts`）。`tool.call.completed/failed` 带 additive 溯源字段：`transport`（`in_process` / `engine_worker` / `engine_callback`，缺省不写 = 旧事件逐字节不变）与 `via_bridge`（vessel-bridge guardrail 改写时打标，按对象身份读取）；机制在 core `tool-provenance.ts`，打标方在装配层 / 插件。
 历史与 tool.call.*：call_tool 记改写后的目标名（loop 既有语义），rpc/set_config 记 vessel 本身；
 UI 按 tool_call_id 配对，用户与模型同见。RPC 执行经 bootstrap 的本地 dispatcher（与 gateway 同一方法表 /
 同一权限语义，晚绑定回填）；失败折稳定错误文本回模型（run 继续），不产生新 WAL 洞。

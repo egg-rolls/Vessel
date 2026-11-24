@@ -2,7 +2,7 @@
 title: 两版本并行（红蓝双行）隔离配方
 kind: current
 triggers: [双行, 红蓝, 版本隔离, 并行版本, blue-green, user-config, data-dir, instance, engine_pool, 舰队, 切换, 回退, 候选线, 生产线]
-paths: [src/cli-args.ts, packages/config/src/loader.ts, src/gateway-command.ts, src/gateway/pool-supervisor.ts]
+paths: [src/cli/args.ts, packages/config/src/loader.ts, src/cli/commands/gateway/gateway-command.ts, src/gateway/pool-supervisor.ts]
 ---
 
 # 两版本并行（红蓝双行）隔离配方

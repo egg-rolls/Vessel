@@ -2,7 +2,7 @@
 title: un-acked 队列结案（0.54：它是空集，不是待实现）
 kind: current
 triggers: [un-acked 队列, 未确认队列, unacked, 未确认落盘, 已发布未落盘, 不遗漏判据, 双指针, timeline_head, wal_head, published_head, 发布早于 WAL, 洞, holes, 对账, 结案, 0.53 四问]
-paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.ts, packages/core/src/timeline/holes.ts, packages/core/src/timeline/types.ts, packages/serve/src/gateway/methods/sessions.ts, src/timeline-dual-write.ts, packages/config/src/defaults.ts]
+paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.ts, packages/core/src/timeline/holes.ts, packages/core/src/timeline/types.ts, packages/serve/src/gateway/methods/sessions.ts, src/session/timeline-dual-write.ts, packages/config/src/defaults.ts]
 ---
 
 # un-acked 队列结案（0.54：空集）
@@ -80,7 +80,7 @@ paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.
 
 | 契约 | 今天的实际 |
 | --- | --- |
-| UI 帧的 seq 一定 ≤ `wal_head` | **端到端已接线**：装配层 `TimelineWriter.open` 传了 `publish`（`src/timeline-dual-write.ts:919-929`），旧链路广播**降级为发送缓冲**（fsync 之后才放行）；「未发布尾部」由 `published_head` 显式表达 |
+| UI 帧的 seq 一定 ≤ `wal_head` | **端到端已接线**：装配层 `TimelineWriter.open` 传了 `publish`（`src/session/timeline-dual-write.ts:919-929`），旧链路广播**降级为发送缓冲**（fsync 之后才放行）；「未发布尾部」由 `published_head` 显式表达 |
 | 握手报 `{start_seq,end_seq,count,timeline_head,wal_head,published_head}` | **已落地**（`packages/serve/src/protocol.ts:145-181`）：`end_seq=wal_head` 是**可读性**事实，`min(end_seq, published_head)` 是**推送**事实，两者绝不合并 |
 | `sessions.get.event_cursor` 四字段 | **已落地** `{timeline_head, wal_head, holes, tainted}` + `published_head`（`packages/serve/src/gateway/methods/sessions.ts`） |
 | timeline 双写开 | **默认开**（`packages/config/src/defaults.ts:216` `dualWrite: true`，理由见 `:202` 注释）——只有显式写 `dual_write: false` 的安装才退回旧链路；整条链（写者 → 操作 → 单游标读 → 按段续拉）已可用 |

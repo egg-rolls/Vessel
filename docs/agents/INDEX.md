@@ -18,8 +18,8 @@ children: [core.md, agent.md, serve.md, web.md, tui.md, plugins.md, gov.md]
 | [agent](agent.md) | AgentService、成员/team、session/body、dispatch、预算 | agent, member, team, session, dispatch, rotate, create, budget, visibility | `packages/agent/**` |
 | [serve](serve.md) | gateway/RPC/远程/事件流/hub/attention | gateway, serve, rpc, remote, tls, origin, hub, attention, node, node_id, event stream, shutdown | `packages/serve/**`, `src/rpc/**` |
 | [web](web.md) | Web i18n、token 存储、内联交互卡 | web, apps/web, i18n, locale, sessionStorage, permission card, ask | `apps/web/**` |
-| [tui](tui.md) | TUI + CLI 终端面文案/样式/命令注册 | tui, cli, repl, terminal, i18n, sanitize, ansi, command, help, ask | `packages/tui/**`, `src/i18n/**`, `src/ui-style.ts`, `src/commands/**`, `src/cli.ts` |
-| [plugins](plugins.md) | 插件发现/信任/生命周期/MCP/skills | plugin, plugin host, discovery, trust, external, dispose, mcp, skill, evals | `plugins/**`, `src/plugin-loader.ts`, `src/plugin-selection.ts` |
+| [tui](tui.md) | TUI + CLI 终端面文案/样式/命令注册 | tui, cli, repl, terminal, i18n, sanitize, ansi, command, help, ask | `packages/tui/**`, `src/i18n/**`, `src/cli/**` |
+| [plugins](plugins.md) | 插件发现/信任/生命周期/MCP/skills | plugin, plugin host, discovery, trust, external, dispose, mcp, skill, evals | `plugins/**`, `src/plugin/plugin-loader.ts`, `src/plugin/plugin-selection.ts` |
 | [gov](gov.md) | 文档生命周期、角色路径、发布/CI | docs, doc management, frontmatter, release, ci, pr, roles, worktree | `docs/**`, `AGENTS.md`, `README.md`, `.github/**`, `scripts/**` |
 
 ## 主题入口

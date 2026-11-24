@@ -2,7 +2,7 @@
 title: 跨机器远程运维
 kind: current
 triggers: [远程, 远程运维, 远程访问, 跨机器, 多机部署, 证书, CA, TLS, 令牌, 非回环, 安全边界, hub, 联邦, 出站]
-paths: [packages/serve/src/gateway.ts, packages/serve/src/gateway/auth.ts, packages/serve/src/platform/auth.ts, packages/serve/src/platform/proxy.ts, packages/serve/src/platform/proxy-ws.ts, packages/serve/src/platform/proxy-config.ts, packages/serve/src/federation.ts, packages/serve/src/interactions-store.ts, src/serve-auth.ts, src/serve-config.ts, src/rpc/http-client.ts, src/cli-args.ts, src/node-command.ts, src/gateway/reload.ts, src/hub-command.ts, src/hub/**, packages/config/src/gateway.ts, packages/config/src/root-secret.ts]
+paths: [packages/serve/src/gateway.ts, packages/serve/src/gateway/auth.ts, packages/serve/src/platform/auth.ts, packages/serve/src/platform/proxy.ts, packages/serve/src/platform/proxy-ws.ts, packages/serve/src/platform/proxy-config.ts, packages/serve/src/federation.ts, packages/serve/src/interactions-store.ts, src/gateway/serve-auth.ts, src/gateway/serve-config.ts, src/rpc/http-client.ts, src/cli/args.ts, src/cli/commands/node-command.ts, src/gateway/reload.ts, src/cli/commands/hub-command.ts, src/hub/**, packages/config/src/gateway.ts, packages/config/src/root-secret.ts]
 ---
 
 # 跨机器远程运维

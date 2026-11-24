@@ -7,7 +7,8 @@ paths: [src/**, docs/FILE-MANAGEMENT.md, docs/architecture/cli-conventions.md, d
 
 # src 领域目录布局（计划 C）
 
-> **状态**：〔提案→执行中〕main 已批准映射与 C1–C5 裁决（§8），阶段2逐域搬迁进行中；全部落地后翻〔现行〕。
+> **状态**：〔现行〕计划 C 阶段2已落地（16 批 139 移动，每批 build 门禁绿；执行记录见 §9）。
+> main 批准映射与 C1–C5 裁决（§8）。新文件归类按 §3/§4 执行。
 > 上位规范：[FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)（路径归属）；CLI 域布局以
 > [cli-conventions.md](cli-conventions.md) §8 为准绳（本文是其向全 src 的推广）。
 > 装配层导航见 [assembly.md](assembly.md)；分层边界见 [layering.md](layering.md)。
@@ -349,7 +350,7 @@ import 网全平铺。本方案把 136 个文件按**语义**归入 **14 个领�
 | package.json bin/start、dev-web entryPath、build.ts 提示 | 都指 src/cli.ts | cli.ts 留守，**零改动** |
 | 非 import 的运行时路径计算 | **5 文件 8 处**（见 5.2） | 手工 edit，随所在域批提交 |
 | tsconfig include | `src/**/*.ts` 通配 | 零改动 |
-| biome | 无 organizeImports assist；src 内 import 全无扩展名（361/361） | 重写保持无扩展名风格；formatter 只动被改行 |
+| biome | **有** Organize imports 安全修复（实测：重写改变排序即触发 ci 红）；src 内 import 全无扩展名（361/361） | 每批重写后对触碰文件跑 `biome check --write`（仅安全修复）再 build；保持无扩展名风格 |
 
 ### 5.2 运行时路径计算修正清单（import.meta.dir / new URL 深度）
 
@@ -360,7 +361,7 @@ import 网全平铺。本方案把 136 个文件按**语义**归入 **14 个领�
 | runtime/bootstrap.ts:1247 | join(import.meta.dir, 'tools-engine', 'entry.ts') | join(import.meta.dir, '..', 'tools-engine', 'entry.ts') |
 | runtime/bootstrap.ts:1248 | join(import.meta.dir, '..') | join(import.meta.dir, '..', '..') |
 | cli/commands/gateway/gateway-command.ts:3057 | join(import.meta.dir, 'tools-engine', 'entry.ts') | join(import.meta.dir, '..', '..', '..', 'tools-engine', 'entry.ts') |
-| cli/commands/gateway/gateway-command.ts:3058 | join(import.meta.dir, '..') | join(import.meta.dir, '..', '..', '..') |
+| cli/commands/gateway/gateway-command.ts:3058 | join(import.meta.dir, '..') | join(import.meta.dir, '..', '..', '..', '..')（**4 级**到仓库根；初稿误写 3 级，静态核算抓出） |
 | plugin/plugin-loader.ts:33 | new URL('../plugins', import.meta.url) | new URL('../../plugins', …) |
 | shared/version.ts:11 | new URL('../package.json', …) | new URL('../../package.json', …) |
 | shared/version.ts:28 | new URL('..', …) | new URL('../..', …) |
@@ -444,3 +445,40 @@ import 网全平铺。本方案把 136 个文件按**语义**归入 **14 个领�
 
 阶段2纪律（main 追加）：每批 git mv + 内联脚本精确重写 + 残留 grep + build 双判 + 独立 commit；
 5 文件 8 处运行时路径暗礁每处手工修正后单独验证路径计算；跨包 4 文件引用同步改；增量小输出防早退。
+
+## 9. 执行记录（阶段2落地）
+
+**16 批 commit 链**（refactor/q-plan-c，每批独立可 revert）：
+60cc4982 shared(2) → 1972d499 data(10) → d4f6e8ea node(4) → 0ac1aef7 federation(6) →
+5852bb59 observability(5) → c6686434 config(11) → 88672af0 plugin(9) → dd99f2aa session(13) →
+3d415dfd run(5) → 0977c2c8 agent(10) → 1b61bead runtime(10) → adacfce4 gateway(11) →
+5e89ee1e hub(1) → 19eba70f tools-engine(2) → f9719e1e cli框架(11) → 9f4b8718 commands+registry(29)。
+
+**门禁读数**：16/16 批 `bun run build` EXIT=0、`error TS` 计数=0、输出含 `📦 Build complete!`
+（基线 build 同绿；每批另过悬空 import 检查=0 残留）。合计 **139 移动、944 条 specifier 重写**
+（含 cli.ts 动态 import×4、跨包 scripts/dev-web×2 面/scripts/version×1/examples×3）。
+
+**暗礁修正（5 文件 11 处，全部静态路径核算验证）**：
+- shared/version.ts：`../package.json`→`../../package.json`、`..`→`../..`（批1）
+- plugin/plugin-loader.ts：`../plugins`→`../../plugins`（批7）
+- runtime/bootstrap.ts：entryPath 加 `..`、rootDir 加 `..`（批11）
+- gateway/web-dist.ts：`../apps/web/*`→`../../apps/web/*` ×4（批12）
+- cli/commands/gateway/gateway-command.ts：entryPath 3 级上跳、rootDir **4 级**上跳（批16；
+  初稿误写 3 级，被逐处静态核算抓出——「每处单独验证路径计算」纪律的价值实证）
+
+**执行中的策略修正**：
+1. 重写器补「被移动文件自身指向未移动目标」的深度重算（批2悬空检查抓出 24 处后修补丁，幂等重跑）。
+2. biome **有** Organize imports 安全修复：每批重写后对触碰文件 `biome check --write` 再 build（§5.1 已更正）。
+3. 一次性重写器/检查器放个人侧 `worktrees/qpc-rewrite.py`（仓库外，未提交）。
+
+**文档同步（C5）**：活文档 49 个 258 处机械同步（docs/architecture、docs/agents、docs/operations、
+docs/specs、AGENTS.md）+ INDEX glob 收拢 + tui 角色路径收拢为 src/cli/** + AGENTS.md 加归类规则指针 +
+cli-conventions §8 翻〔已落地〕（迁移箭头保留为设计史）。**历史文档有意不动**：docs/adr（决策时点快照）、
+docs/versions（发布记录）、docs/dev（ dated 研究/计划）——改写历史反而失真，留 gov 知悉。
+
+**遗留**：
+- cli-conventions §8 的 errors.ts / exit-codes.ts / commands/tools-engine/（start/status/restart 包装）
+  属 q-cli 后续行为工作，非搬迁范围，未新建。
+- 行为验证归用户（宪法）：建议冒烟 `VESSEL_MOCK=1 bun run src/cli.ts --run "hello"`、
+  `gateway start --daemon`（验 bootstrap/gateway-command 的 entryPath/rootDir）、`--tools`、`update --check`。
+- 合并冲突由 main 收口裁决（在途分支若改 src 顶层旧路径，按「新位置 + 对方行为变更」合）。

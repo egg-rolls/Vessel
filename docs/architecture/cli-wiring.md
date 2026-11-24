@@ -2,7 +2,7 @@
 title: CLI 入口与装配 wiring
 kind: current
 triggers: [bootstrap, cli, args, wiring, repl, headless, resume, update, eval, feishu, factory, ReplContext, 装配, 启动, 命令行, 参数, 无头, 恢复会话, 退出码, 工厂]
-paths: [src/cli.ts, src/cli-args.ts, src/cli-overrides.ts, src/cli-help-spec.ts, src/cli-update.ts, src/bootstrap.ts, src/headless-runner.ts, src/resume-command.ts, src/tools-list.ts, src/commands/**, src/update/**, src/session-factory.ts, src/run-record-store-factory.ts, src/transport-factory.ts, src/mcp-wiring.ts, src/durable-wiring.ts, src/serve-config.ts, src/tenant-runtime-factory.ts, src/local-run-adapter.ts, src/eval-command.ts, src/eval-wiring.ts, src/feishu-command.ts]
+paths: [src/cli.ts, src/cli/args.ts, src/config/cli-overrides.ts, src/cli/help-spec.ts, src/cli/commands/cli-update.ts, src/runtime/bootstrap.ts, src/cli/headless-runner.ts, src/cli/commands/resume-command.ts, src/tools-engine/tools-list.ts, src/cli/commands/**, src/update/**, src/session/session-factory.ts, src/run/run-record-store-factory.ts, src/gateway/transport-factory.ts, src/plugin/mcp-wiring.ts, src/run/durable-wiring.ts, src/gateway/serve-config.ts, src/runtime/tenant-runtime-factory.ts, src/agent/local-run-adapter.ts, src/cli/commands/eval-command.ts, src/plugin/eval-wiring.ts, src/cli/feishu-command.ts]
 ---
 
 # CLI 入口与装配 wiring（`src/`）
@@ -34,7 +34,7 @@ paths: [src/cli.ts, src/cli-args.ts, src/cli-overrides.ts, src/cli-help-spec.ts,
 
 ## REPL 的职责边界
 
-`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`，以及 `mcp` / `runs` / `metrics` / `feishu` 控制面适配器。`context` 是**外壳只读镜像**：agent 启用时来自 `local-run-adapter.ts` 的会话镜像，否则是装配层新建的独立 `MemoryWorkingContext`；它不再与执行内核共享实例（WorkingContext 归每次 Run）。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开发生在 shell 层（注入语义见 [runtime-api.md](runtime-api.md#messages)）。slash 命令全部从 ReplContext 取数，渲染层在 `packages/tui/src/commands/commands.ts`。
+`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`，以及 `mcp` / `runs` / `metrics` / `feishu` 控制面适配器。`context` 是**外壳只读镜像**：agent 启用时来自 `local-run-adapter.ts` 的会话镜像，否则是装配层新建的独立 `MemoryWorkingContext`；它不再与执行内核共享实例（WorkingContext 归每次 Run）。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开发生在 shell 层（注入语义见 [runtime-api.md](runtime-api.md#messages)）。slash 命令全部从 ReplContext 取数，渲染层在 `packages/tui/src/cli/commands/commands.ts`。
 
 ## 用户可见命令行为
 

@@ -2,7 +2,7 @@
 title: CLI 命令与输出规范
 kind: target
 triggers: [cli, command, verb, start, stop, restart, status, reload, fleet, 舰队, 动词, 退出码, exit code, 输出, json, NO_COLOR, 颜色, 无障碍, tools-engine, 生命周期, 依赖序, drain, resume, 错误码, 渲染, src/cli]
-paths: [src/cli.ts, src/cli-args.ts, src/cli-help-spec.ts, src/cli-help.ts, src/commands/**, src/*-command.ts, src/ui-style.ts, src/tools-engine/supervisor.ts, src/gateway/node-supervisor.ts, src/gateway/pool-supervisor.ts]
+paths: [src/cli.ts, src/cli/**, src/tools-engine/supervisor.ts, src/gateway/node-supervisor.ts, src/gateway/pool-supervisor.ts]
 ---
 
 # CLI 命令与输出规范
@@ -10,7 +10,7 @@ paths: [src/cli.ts, src/cli-args.ts, src/cli-help-spec.ts, src/cli-help.ts, src/
 > **状态标记**：〔现行〕= 代码已实现、本文只做规范化表述；〔提案〕= 目标态设计，落地前以本文为准绳。
 > 事实源：命令分派见 [cli-wiring.md](cli-wiring.md)，进程归属见 [gateway-lifecycle.md](gateway-lifecycle.md)。
 > 本文是**规范**（conventions）：动词怎么定义、生命周期归谁、输出长什么样、退出码与错误码怎么稳定。
-> 纯设计文档，不改代码；落地重组（src/cli/ 领域目录，与计划 C 合一）见 §8。
+> 纯设计文档，不改代码；落地重组（src/cli/ 领域目录，与计划 C 合一）**已落地**，见 §8 与 [src-layout.md](src-layout.md)。
 
 ## 0. 一段话
 
@@ -183,9 +183,9 @@ vessel stop（舰队）
 
 ### 4.1 单一实现规则
 
-所有命令的输出走**同一个渲染模块**：现行事实源是 `src/ui-style.ts`（样式/对齐/颜色闸门）
-+ `src/i18n/`（文案）；目标态收拢为 `src/cli/output.ts`（§8，吸收 ui-style，命令只交
-**结构化视图模型**，渲染器决定布局/颜色/JSON）。禁止：
+所有命令的输出走**同一个渲染模块**：事实源是 `src/cli/output.ts`（原 `src/ui-style.ts`，计划 C 迁入；
+样式/对齐/颜色闸门）+ `src/i18n/`（文案）；命令只交
+**结构化视图模型**，渲染器决定布局/颜色/JSON（§8）。禁止：
 
 - 命令内手写 ANSI 转义或自造颜色判断（第二个颜色闸门 = 漂移源）；
 - 命令内自造表格对齐（必须走渲染器的 `displayWidth` 对齐，CJK/全角按 2 列）；
@@ -307,9 +307,11 @@ vessel stop（舰队）
 
 ## 8. 落地布局：src/cli/ 领域目录（与计划 C 重组合一）
 
-〔提案〕现状：`src/cli.ts`（入口分发）+ `src/cli-args.ts`（4.8k 行纯解析）+
-`src/commands/`（attention/federation/model/registry）+ 平铺 `src/*-command.ts`（20+ 个）+
-`src/ui-style.ts`。目标：CLI 收拢为一个领域目录，**输出契约单一实现**（§4）有了物理落点。
+〔已落地·计划 C〕本节是原始设计记录（箭头为当时迁移映射，保留不改）。**现行权威映射见
+[src-layout.md](src-layout.md) §2.1–2.2**：框架件与 28 命令已迁入 `src/cli/`，粒度按 main C2 裁决——
+命名空间 ≥2 命令建目录（agent/gateway/fleet/plugin），单命令平铺 `cli/commands/<原名>.ts`；
+`errors.ts` / `exit-codes.ts` / `commands/tools-engine/` 尚未新建（q-cli 后续工作，非搬迁范围）。
+原设计动机：CLI 收拢为一个领域目录，**输出契约单一实现**（§4）有了物理落点。
 
 ```
 src/cli/

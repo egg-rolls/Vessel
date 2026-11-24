@@ -2,7 +2,7 @@
 title: Trace 留存与隐私
 kind: current
 triggers: [trace, 追踪, 事件落盘, 事件日志, 留存, 保留期, 隐私, 脱敏, 重放, 级别, jsonl]
-paths: [packages/core/src/observability/**, packages/core/src/events/summarize-event.ts, packages/core/src/events/file-event-store.ts, packages/core/src/events/replay.ts, packages/core/src/session/delete-session.ts, packages/core/src/types/run-record-store.ts, packages/core/src/runtime/execution-unit.ts, packages/config/src/types.ts, packages/config/src/defaults.ts, src/trace-wiring.ts, src/data-lock.ts, src/data-paths.ts, packages/tui/src/commands/trace-command.ts, packages/serve/src/gateway/methods/observability.ts, packages/serve/src/event-buffer.ts, plugins/security/redact-secrets/src/redactor.ts, src/trace-command.ts]
+paths: [packages/core/src/observability/**, packages/core/src/events/summarize-event.ts, packages/core/src/events/file-event-store.ts, packages/core/src/events/replay.ts, packages/core/src/session/delete-session.ts, packages/core/src/types/run-record-store.ts, packages/core/src/runtime/execution-unit.ts, packages/config/src/types.ts, packages/config/src/defaults.ts, src/observability/trace-wiring.ts, src/data/data-lock.ts, src/data/data-paths.ts, packages/tui/src/cli/commands/trace-command.ts, packages/serve/src/gateway/methods/observability.ts, packages/serve/src/event-buffer.ts, plugins/security/redact-secrets/src/redactor.ts, src/cli/commands/trace-command.ts]
 ---
 
 # Trace 留存与隐私
@@ -65,7 +65,7 @@ vessel trace prune [--dry-run] [--json]
 
 - 在启动时与命令执行时按 `retention_days` / `max_runs` / `max_bytes` 清理。
 - **不删除** `running` / `interrupted` run 的 trace。
-- 真实 prune 前获取 data-dir 写意图锁（`src/data-lock.ts`）；锁冲突返回 `data_locked`。`--dry-run` 只读、不加锁。
+- 真实 prune 前获取 data-dir 写意图锁（`src/data/data-lock.ts`）；锁冲突返回 `data_locked`。`--dry-run` 只读、不加锁。
 - 返回 `{ deleted_runs, kept_runs, deleted_bytes }`；`--json` 输出同一形状。
 - 删除 session 时由 `deleteSessionData` 按 `session_id` 清理对应 `runs/` 与 `events/`；
   有 `running` / `interrupted` run 时返回 `conflict`。

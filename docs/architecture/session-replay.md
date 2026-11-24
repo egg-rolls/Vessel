@@ -50,7 +50,7 @@ seq；② 末条 = 区间内最后一个非洞 seq；③ 实收条数 `=== count
 
 0.53 的 `D` / `R` / `U` 三边界判据、以及「`U` 是空集」的结案见
 [unacked-queue-closure.md](unacked-queue-closure.md)：发布唯一出口在 WAL fsync 之后，等式右边两段都在磁盘上。
-（该文 §6「契约 ≠ 现状」写于 publish 接线之前，现状以 `src/timeline-dual-write.ts:43-80` 为准。）
+（该文 §6「契约 ≠ 现状」写于 publish 接线之前，现状以 `src/session/timeline-dual-write.ts:43-80` 为准。）
 
 ## 4. 缺口：污点条，不阻断渲染
 

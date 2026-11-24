@@ -2,7 +2,7 @@
 title: 迁移指南
 kind: current
 triggers: [迁移, 数据迁移, 升级, 迁移命令, sqlite, file-v1, file-v2, 存储布局, 会话库, 旧数据, legacy, 干跑, apply]
-paths: [src/migrate.ts, src/migrate-command.ts, src/data-lock.ts, src/data-paths.ts, packages/core/src/session/atomic-write.ts, packages/core/src/session/file-backend.ts, packages/core/src/session/sqlite-backend.ts, packages/core/src/session/run-record-store.ts]
+paths: [src/data/migrate.ts, src/cli/commands/migrate-command.ts, src/data/data-lock.ts, src/data/data-paths.ts, packages/core/src/session/atomic-write.ts, packages/core/src/session/file-backend.ts, packages/core/src/session/sqlite-backend.ts, packages/core/src/session/run-record-store.ts]
 ---
 
 # 迁移指南（sqlite / file-v1 → file-v2）
@@ -73,7 +73,7 @@ vessel migrate --from sqlite --to file-v2 --json
 
 - **dry-run 默认**：只读源并输出 `found / migrated / skipped / invalid` 计数。
 - **源只读**：不创建、修改或删除源文件/源库。
-- **写前加锁**：`--apply` 前获取 data-dir 写意图锁（`<dataDir>/.lock`，`src/data-lock.ts`）；锁冲突返回 `data_locked`。
+- **写前加锁**：`--apply` 前获取 data-dir 写意图锁（`<dataDir>/.lock`，`src/data/data-lock.ts`）；锁冲突返回 `data_locked`。
 - **dry-run 不加锁**：预览只读、不创建锁文件。
 - **幂等**：目标已存在同 `session_id` / `run_id` → `skipped`，不覆盖。
 - **保留字段**：`started_at` / `updated_at` / `status` / `messages` / `usage`。

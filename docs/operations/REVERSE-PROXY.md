@@ -2,7 +2,7 @@
 title: 公网暴露与同机反代的安全边界（0.55 P0 审计）
 kind: current
 triggers: [公网, 反代, 反向代理, nginx, 暴露, 威胁模型, loopback, 回环, 安全边界, P0, proxy_secret]
-paths: [packages/serve/src/platform/proxy-config.ts, packages/serve/src/platform/auth.ts, packages/serve/src/platform/server.ts, packages/serve/src/platform/rpc.ts, packages/serve/src/platform/listen-guard.ts, packages/serve/src/gateway/auth.ts, packages/serve/src/gateway.ts, packages/serve/src/tenant.ts, packages/serve/src/plugin-host/proxy.ts, packages/serve/src/auth/oauth.ts, packages/serve/src/auth/origins.ts, packages/serve/src/auth/github-oauth.ts, src/serve-auth.ts, src/gateway-command.ts, src/hub/server.ts, src/stop-command.ts, packages/config/src/gateway.ts, packages/config/src/auth.ts, packages/config/src/auth-origins.ts]
+paths: [packages/serve/src/platform/proxy-config.ts, packages/serve/src/platform/auth.ts, packages/serve/src/platform/server.ts, packages/serve/src/platform/rpc.ts, packages/serve/src/platform/listen-guard.ts, packages/serve/src/gateway/auth.ts, packages/serve/src/gateway.ts, packages/serve/src/tenant.ts, packages/serve/src/plugin-host/proxy.ts, packages/serve/src/auth/oauth.ts, packages/serve/src/auth/origins.ts, packages/serve/src/auth/github-oauth.ts, src/gateway/serve-auth.ts, src/cli/commands/gateway/gateway-command.ts, src/hub/server.ts, src/cli/commands/fleet/stop-command.ts, packages/config/src/gateway.ts, packages/config/src/auth.ts, packages/config/src/auth-origins.ts]
 ---
 
 # 公网暴露与同机反代的安全边界
@@ -77,9 +77,9 @@ paths: [packages/serve/src/platform/proxy-config.ts, packages/serve/src/platform
 |---|------|------|------------------|
 | 1 | 平台是否把请求当本机 | `packages/serve/src/platform/auth.ts:60-62`（`isLoopbackAddress`）、`packages/serve/src/platform/server.ts:106-119` | 恒为真 ⇒ 未配 `gateway.token` 时匿名即可用平台 RPC |
 | 2 | **node 凭据下发只查 loopback** | `packages/serve/src/platform/rpc.ts:157-165` | **匿名取走全部 node token** |
-| 3 | node token 怎么变成凭据 | `src/gateway-command.ts:2404-2409`（`resolveNodeCredential`） | 直接返回原始 token，无角色/范围收窄 |
+| 3 | node token 怎么变成凭据 | `src/cli/commands/gateway/gateway-command.ts:2404-2409`（`resolveNodeCredential`） | 直接返回原始 token，无角色/范围收窄 |
 | 4 | 平台 Host/Origin 守卫 | `packages/serve/src/gateway/auth.ts:199-213`、`packages/serve/src/platform/server.ts:98-104` | `hostAllowed` 放行回环 Host，也放行通配监听；`originAllowed` 对无 Origin（curl）直接放行 |
-| 5 | node 的「回环无 token ⇒ admin」 | `src/serve-auth.ts:123-124`、`packages/serve/src/tenant.ts:96-99` | `authenticate(null)` → `{role:'admin'}` |
+| 5 | node 的「回环无 token ⇒ admin」 | `src/gateway/serve-auth.ts:123-124`、`packages/serve/src/tenant.ts:96-99` | `authenticate(null)` → `{role:'admin'}` |
 | 6 | node HTTP 只按 token 解析、不看 peer | `packages/serve/src/gateway.ts:2509-2522`、`3682-3700` | 无凭据请求在「回环监听 + 无 token」时被授予 admin |
 | 7 | node WS 首帧鉴权 | `packages/serve/src/gateway.ts:2329-2334` | `{kind:'auth'}` 不带 token ⇒ admin，可订阅事件 + 发 `req` |
 | 8 | hub 读端点 | `src/hub/server.ts:348-352`、`699`、`718` | 匿名读目录 / 单节点详情 |
@@ -163,7 +163,7 @@ HTTP/1.1 200 OK  {"..."token":"node-b-ADMIN-TOKEN-88a0be31f5"...}
 | `packages/serve/src/platform/server.ts` / `types.ts` | 新增 `proxySecret` 选项并下传 |
 | `packages/serve/src/gateway.ts` | 新增 `proxySecret` 选项：无凭据的 HTTP 请求必须带头（`3682-3692`）；WS 首帧不带 token 时必须带头（upgrade 时定值 `proxySecretAuthed`，`2327-2332`） |
 | `packages/config/src/{types,validator,gateway,index}.ts` | 新增 `serve.proxy_secret_env` / `gateway.proxy_secret_env`（只存环境变量名，不接受内联密钥）+ 解析器 |
-| `src/cli.ts` / `src/gateway-command.ts` | 分别把 `serve.proxy_secret_env` / `gateway.proxy_secret_env` 解析结果传进去 |
+| `src/cli.ts` / `src/cli/commands/gateway/gateway-command.ts` | 分别把 `serve.proxy_secret_env` / `gateway.proxy_secret_env` 解析结果传进去 |
 
 **影响**：
 

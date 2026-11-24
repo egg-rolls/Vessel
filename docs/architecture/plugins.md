@@ -2,7 +2,7 @@
 title: Plugin 架构：能力插件与体验插件
 kind: current
 triggers: [plugin, plugin host, manifest, contribution, capability plugin, experience plugin, activation, reload, child process, trust, catalog, vessel.catalog, 插件, 插件清单, 插件端口, 扩展, 插件宿主, 清单, 激活, 热重载, 信任, engine-client, in-process rpc, specifier farm]
-paths: [src/plugin-loader.ts, src/plugin-manifest.ts, packages/serve/src/plugin-host/**, plugins/*/*/package.json, src/plugin-watch.ts, src/plugin-command.ts, apps/web/src/domains/plugins/plugin-catalog.ts, src/plugin-cli-command.ts, src/plugin-host-assembly.ts]
+paths: [src/plugin/plugin-loader.ts, src/plugin/plugin-manifest.ts, packages/serve/src/plugin-host/**, plugins/*/*/package.json, src/plugin/plugin-watch.ts, src/cli/commands/plugin/plugin-command.ts, apps/web/src/domains/plugins/plugin-catalog.ts, src/cli/commands/plugin/plugin-cli-command.ts, src/plugin/plugin-host-assembly.ts]
 ---
 
 # Plugin 架构：能力插件与体验插件
@@ -94,11 +94,11 @@ enable / disable / config watcher 后重建 effective 路由表，catalog 的
 
 ## 插件与宿主的模块边界
 
-插件是按普通动态 `import()` 加载的源码树（`src/plugin-loader.ts`）：全仓没有 import map、没有 `bunfig.toml`、没有自定义 loader，「插件能不能 import 到宿主的东西」只由 **ESM 上溯规则**决定，且在两种作用域下**不对称**：project / 源码检出（`<cwd>/.vessel/plugins/<id>/` 或仓内 `plugins/<category>/<name>/`）在仓库根就碰到 workspace 符号链接 ⇒ 裸导入能跑；user / `.tgz` 装出来的（`~/.vessel/plugins/<id>/`）上溯链里没有宿主 `node_modules` ⇒ 裸导入必挂。市场安装器只做 `download → verify → extract → rename`，从不起包管理器，user 作用域插件**不会**自带宿主依赖。这个不对称最容易漏测：源码检出里怎么写都对，装成 `.tgz` 就炸。
+插件是按普通动态 `import()` 加载的源码树（`src/plugin/plugin-loader.ts`）：全仓没有 import map、没有 `bunfig.toml`、没有自定义 loader，「插件能不能 import 到宿主的东西」只由 **ESM 上溯规则**决定，且在两种作用域下**不对称**：project / 源码检出（`<cwd>/.vessel/plugins/<id>/` 或仓内 `plugins/<category>/<name>/`）在仓库根就碰到 workspace 符号链接 ⇒ 裸导入能跑；user / `.tgz` 装出来的（`~/.vessel/plugins/<id>/`）上溯链里没有宿主 `node_modules` ⇒ 裸导入必挂。市场安装器只做 `download → verify → extract → rename`，从不起包管理器，user 作用域插件**不会**自带宿主依赖。这个不对称最容易漏测：源码检出里怎么写都对，装成 `.tgz` 就炸。
 
 **裁定：`.tgz` 插件不需要自带 `@vessel-agent/*`，由宿主转发**：
 
-- 加载插件前，`ensureSpecifierFarm`（`src/plugin-loader.ts`）在插件目录下补一小段 `node_modules`，把白名单包软链到**宿主自己的包根**。软链而非打包：插件保持可读源码、发布链不动，内联打包会把 core 复制 N 份。**加载前**建而非失败后重试：bun 1.3.9 缓存一次解析失败，同进程重试同一入口仍 `Cannot find module`（实测）。
+- 加载插件前，`ensureSpecifierFarm`（`src/plugin/plugin-loader.ts`）在插件目录下补一小段 `node_modules`，把白名单包软链到**宿主自己的包根**。软链而非打包：插件保持可读源码、发布链不动，内联打包会把 core 复制 N 份。**加载前**建而非失败后重试：bun 1.3.9 缓存一次解析失败，同进程重试同一入口仍 `Cannot find module`（实测）。
 - 单实例由「两边 realpath 相同」保证：`import()` 解析软链，插件拿到宿主同一个模块对象（枚举同一引用、`instanceof` 成立、单例注册表不分裂）。仓库内插件（`source === 'repo'`）**不建**这段缝：上溯链本来就通，不该往源码树里写 `node_modules`。
 - 第三方依赖不转发：插件 import 宿主没有的包时，报错点名 **「plugin X depends on Y, which the host does not provide」**（附白名单与底层错误），不是裸的 `Cannot find module`。**`.tgz` 插件必须自带第三方依赖。**
 - 白名单（`HOST_SHARED_PACKAGES`）：`@vessel-agent/core`、`@vessel-agent/agent`、`@vessel-agent/basic-tools`。入选标准只有一条——插件拿到第二个副本会出事（`instanceof`、单例、枚举/事件字符串常量、类型守卫）。`@vessel-agent/plugin-ui` 不在表里（只进浏览器侧打包，不走宿主 ESM 解析）；加包先回答「第二个副本会不会出问题」。

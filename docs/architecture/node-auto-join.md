@@ -2,7 +2,7 @@
 title: node 自动加入与注册表派生白名单
 kind: target
 triggers: [node auto join, 自动加入, 注册, registration, invite code, 邀请码, join code, 白名单, allowlist, allowed origins, origin, 派生, derive, 私网, private network, loopback, 回环, node token, 心跳, heartbeat, 过期节点, stale, 目录, directory, hub]
-paths: [src/hub/**, src/gateway-command.ts, packages/config/src/node-registration.ts, docs/architecture/node-auto-join.md]
+paths: [src/hub/**, src/cli/commands/gateway/gateway-command.ts, packages/config/src/node-registration.ts, docs/architecture/node-auto-join.md]
 ---
 
 # node 自动加入与注册表派生白名单
@@ -103,7 +103,7 @@ export function deriveTrustedOrigins(input: DerivedOriginsInput): string[];
 **额外入参**交给 origins-core 定下的单一实现：
 
 ```ts
-// src/gateway-command.ts（组合根）
+// src/cli/commands/gateway/gateway-command.ts（组合根）
 const hubDataDir = config.hub?.dataDir ? resolve(...) : join(dataDir, 'hub');
 const derivedOrigins = await readHubDerivedOrigins({ hubDataDir }); // 读 registry.json
 startPlatformGateway({ /* ... */ derivedOrigins: derivedOrigins.origins }); // 传**全量** D
@@ -194,7 +194,7 @@ node.allowed_origins  (显式)
 
 | 问题 | 答案 | 依据/改动 |
 |---|---|---|
-| 怎么发 | `vessel hub join-code`（hub 本机 CLI），明文只打印一次；`--json` 供脚本；可选 `--ttl` | 已有 `src/hub-command.ts:joinCodeCommand` |
+| 怎么发 | `vessel hub join-code`（hub 本机 CLI），明文只打印一次；`--json` 供脚本；可选 `--ttl` | 已有 `src/cli/commands/hub-command.ts:joinCodeCommand` |
 | 谁能发 | 只有能读 `<hubDataDir>` 的人（= 本机壳层权限） | 无 HTTP 端点取码，不存在"远程领码"面 |
 | 过期 | TTL 60–3600s，默认 300s；过期 ⇒ 410 `pairing_expired` | 已有 `join-store.clampTtl` |
 | 重放 | 不可。`consume()` 先比对 hash，再查 `used_at`，成功时**先原子写 `used_at` 再发 token**；进程内 single-flight 保证并发只成功一次 | 已有 |
@@ -296,7 +296,7 @@ node.allowed_origins  (显式)
 | `src/hub/node-credential-store.ts` | `defaultTtlMs` 选项（只影响新签发） |
 | `src/hub/node-state.ts` | `hub-node.json` 收 `trusted_origins`；`readHubNodeTrustedOrigins()` **永不抛错** |
 | `src/cli.ts` | `resolveGatewayAllowedOrigins(configured, injected, derived?)` + 启动时读 `hub-node.json`（批准过的改动；缺省 `undefined` ⇒ 行为与今天逐字一致） |
-| `src/hub-command.ts` | join 响应解析 `trusted_origins` 并写进 `hub-node.json`（**边界外 2 处同构小改，见 §11.5**） |
+| `src/cli/commands/hub-command.ts` | join 响应解析 `trusted_origins` 并写进 `hub-node.json`（**边界外 2 处同构小改，见 §11.5**） |
 | `packages/config/src/{types,validator}.ts` | `hub.token_ttl_days`（1–365）+ 已知键登记 |
 
 行为核对点（原先那批 `bun test` 用例已随宪法第三、四条删除，下面列出它们当年钉住的判据，
@@ -315,7 +315,7 @@ node.allowed_origins  (显式)
 | `packages/serve/src/gateway/auth.ts` | `resolveHttpAllowedOrigins` 新增 `derivedOrigins` 入参：**只加不减**，且只接受 `classifyOrigin === 'loopback'` 的条目（单一收窄点） |
 | `packages/serve/src/platform/server.ts` | 新增 `opts.derivedOrigins`；CSP 用 `cspNodeOrigins = nodeOrigins ∪ D`（全量），CORS 只在上面那一个函数里并入回环子集 |
 | `packages/serve/src/platform/types.ts` | `derivedOrigins?: readonly string[]` + 三行规则注释 |
-| `src/gateway-command.ts` | 组合根：`hubDataDir` → `readHubDerivedOrigins()` → `derivedOrigins: D`；非空时打一行 `hub.origins.derived` |
+| `src/cli/commands/gateway/gateway-command.ts` | 组合根：`hubDataDir` → `readHubDerivedOrigins()` → `derivedOrigins: D`；非空时打一行 `hub.origins.derived` |
 | `src/hub/registry.ts` | 新增只读入口 `readHubRegistryRecords(path)`（不校验 `hub_id`、坏记录逐条跳过、永不抛） |
 | `src/hub/derive-origins.ts` | `getLoopback()`；`readHubDerivedOrigins()`（跨进程读盘 + 同一套派生规则 + 一行日志） |
 | `packages/config/src/node-registration.ts` | `DerivedOriginsResult` 增加 `loopbackOrigins` / `privateOrigins` 子集 |
@@ -395,7 +395,7 @@ token ⇒ 400 `code_required`；`entries` 里 `kind` 与地址事实不符 ⇒ 4
 2. **`src/cli.ts`**：批准。新参数可选、缺省 `undefined`、不传时行为与今天逐字一致。
 3. **token 续期**：过期必须重走 join-code（不把 token 放进 join 请求体）；TTL 做成 `hub.token_ttl_days`（缺省 30，回环/本机节点可写长）。
 4. **`hub nodes prune`**：不做，只标 stale。
-5. **§10.1 里 `src/hub-command.ts` 的 2 处小改**（解析 join 响应的 `trusted_origins` + 写进 state）：这是 `hub-node.json` 唯一的写入点，不改这里就没有持久化通道；`HubNodeState` 里已有 3 个同形字段，改动同构。若不允许，退回"join 不下发、node 侧等 hello 帧扩展"。
+5. **§10.1 里 `src/cli/commands/hub-command.ts` 的 2 处小改**（解析 join 响应的 `trusted_origins` + 写进 state）：这是 `hub-node.json` 唯一的写入点，不改这里就没有持久化通道；`HubNodeState` 里已有 3 个同形字段，改动同构。若不允许，退回"join 不下发、node 侧等 hello 帧扩展"。
 
 ## 12. 未验证 / 风险
 

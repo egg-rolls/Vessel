@@ -2,7 +2,7 @@
 title: 配置模型
 kind: current
 triggers: [config, yaml, vessel.yaml, precedence, env, data root, gateway token, node token, secrets, 配置, 配置项, 优先级, 数据目录, 密钥, 令牌, 环境变量, tools_engine, engine_pool, 双开关]
-paths: [packages/config/**, src/cli-overrides.ts, src/serve-config.ts, src/config-watch.ts, src/permission-store.ts]
+paths: [packages/config/**, src/config/cli-overrides.ts, src/gateway/serve-config.ts, src/config/config-watch.ts, src/data/permission-store.ts]
 ---
 
 # 配置模型
@@ -24,7 +24,7 @@ paths: [packages/config/**, src/cli-overrides.ts, src/serve-config.ts, src/confi
 0.49 起没有 tenant overlay，也没有 `tenant` 配置块；旧 `tenant:` 块、`serve.tokens[*].tenantId`、
 `serve.adminToken` / `serve.adminTokenEnv` 一律 fail-fast 并给逐项 Fix（改为 `serve.tokens` 的 `{ role }`）。
 
-所有层只在 `loadConfig()` 合并一次。CLI 层由 `ConfigLoadOptions.cliOverrides` 传入（`Partial<VesselConfig>`，`source=cli`）；旧 `defaults` 为 deprecated 同义层，先应用、`cliOverrides` 后应用。`src/cli-overrides.ts` 只把**显式** flag 组装成该层（端口仅在显式给出时写入；`allowed_origins` 整体替换）。`resolveServeOptions(config)` 不再接收 argv，`bootstrapConnect` 也不再直接读 `process.env`。
+所有层只在 `loadConfig()` 合并一次。CLI 层由 `ConfigLoadOptions.cliOverrides` 传入（`Partial<VesselConfig>`，`source=cli`）；旧 `defaults` 为 deprecated 同义层，先应用、`cliOverrides` 后应用。`src/config/cli-overrides.ts` 只把**显式** flag 组装成该层（端口仅在显式给出时写入；`allowed_origins` 整体替换）。`resolveServeOptions(config)` 不再接收 argv，`bootstrapConnect` 也不再直接读 `process.env`。
 
 loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验器对未知键报错——配置写错要立刻知道，不静默忽略。
 

@@ -31,7 +31,7 @@ paths:
   - packages/serve/src/gateway/methods/runs.ts
   - packages/serve/src/gateway/methods/schemas.ts
   - packages/serve/src/team-control.ts
-  - packages/serve/src/agent-control.ts
+  - packages/serve/src/agent/agent-control.ts
   - packages/core/src/session/session-event-log.ts
   - packages/core/src/session/message-identity.ts
   - packages/core/src/session/project-messages.ts

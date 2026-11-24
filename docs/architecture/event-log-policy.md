@@ -2,7 +2,7 @@
 title: 会话事件日志落盘口径
 kind: current
 triggers: [event log, llm.request, stream summary, persist, resume, projection, ttft, chunk_count, 事件, 事件日志, 事件流, 落盘, 落盘策略, 裁剪, 回放, 体积上界, 投影, timeline, wal, 瞬时 chunk, legacy_session_unsupported, 旧格式, events.ndjson]
-paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.ts, packages/core/src/timeline/legacy-format.ts, packages/core/src/runtime/run-journal.ts, packages/core/src/runtime/execution-unit.ts, apps/web/src/state/events.ts, apps/web/src/state/event-visibility.ts, src/timeline-session-log.ts]
+paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.ts, packages/core/src/timeline/legacy-format.ts, packages/core/src/runtime/run-journal.ts, packages/core/src/runtime/execution-unit.ts, apps/web/src/state/events.ts, apps/web/src/state/event-visibility.ts, src/session/timeline-session-log.ts]
 ---
 
 # 会话事件日志落盘口径

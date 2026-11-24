@@ -2,7 +2,7 @@
 title: 超时不可信（bun 1.3.9 的 AbortSignal.timeout 可能不触发）
 kind: current
 triggers: [超时, timeout, 挂起, 卡住, 不动, 假超时, AbortSignal.timeout, AbortController, setDeadline, 不报错, hung, deadlock, 60s, 探针, 安装卡住]
-paths: [docs/operations/TIMEOUTS.md, packages/core/src/timeout.ts, src/config-write-apply.ts, src/dev-command.ts]
+paths: [docs/operations/TIMEOUTS.md, packages/core/src/timeout.ts, src/config/config-write-apply.ts, src/cli/commands/dev-command.ts]
 ---
 
 # 超时不可信：`AbortSignal.timeout()` 在 bun 1.3.9 上可能根本不触发
@@ -99,5 +99,5 @@ try {
   未改动。
 - 仍有 `AbortSignal.timeout` 的地方集中在 auth 策略（`oauth-exchange`、`oauth` 的换取环节），
   由该模块 owner 处理（auth 路径的语义需要 auth 侧确认，不在本次扫描的改动范围）。
-- 另有一处**反过来的**坑被顺手修掉：`src/config-write-apply.ts` 的兜底定时器原本是 `unref()`
+- 另有一处**反过来的**坑被顺手修掉：`src/config/config-write-apply.ts` 的兜底定时器原本是 `unref()`
   的，等于把「超时兜底」自己关掉了；现在改成普通定时器（有界，不会让进程被拖住）。
