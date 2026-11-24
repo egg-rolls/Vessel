@@ -554,6 +554,8 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
                     commands: { type: 'array', items: { type: 'object' } },
                     // E1 amendment：bare RPC 方法名。
                     rpc: { type: 'array', items: { type: 'string' } },
+                    // S3 additive：插件设置域 spec（vscode-settings-design §4.2）。
+                    settings: { type: 'object' },
                   },
                 },
               },
