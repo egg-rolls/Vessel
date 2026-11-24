@@ -1,9 +1,9 @@
 /**
  * Shared local-only UI preferences: theme and the optimistic overlay for
- * Settings → Display.
+ * settings writes (SettingsDialog / useSettingsWriter).
  *
  * Server-owned config is **not** cached here: configStore.config is the only
- * source for ui.* values. displayPending holds just the keys whose write is in
+ * source for ui.* values. settingsPending holds just the keys whose write is in
  * flight (or awaiting confirmation) so the form can show the chosen value
  * without keeping a second full server snapshot.
  *
@@ -21,9 +21,7 @@ import { CORE_SETTINGS } from '../state/settings-registry';
 import { initialTheme, storeTheme, THEME_KEY, type Theme } from '../state/theme';
 
 /** Sparse optimistic overlay for settings writes; '' means "not configured". */
-export type DisplayPending = Record<string, string>;
-/** 泛化名（vscode-settings-design §3.6）；旧名 DisplayPending 保留过渡。 */
-export type SettingsPending = DisplayPending;
+export type SettingsPending = Record<string, string>;
 
 type ReadStorage = Pick<Storage, 'getItem'>;
 
@@ -65,10 +63,6 @@ interface UiStoreActions {
   setSettingsPending: (patch: SettingsPending) => void;
   /** Drop overlay entries only while they still hold the expected value. */
   clearSettingsPending: (entries: readonly DisplayPendingEntry[]) => void;
-  /** @deprecated 旧名过渡（DisplaySettingsView 双轨期）；同 setSettingsPending。 */
-  setDisplayPending: (patch: DisplayPending) => void;
-  /** @deprecated 旧名过渡；同 clearSettingsPending。 */
-  clearDisplayPending: (entries: readonly DisplayPendingEntry[]) => void;
 }
 
 export type UiStoreState = UiPreferences & UiStoreActions;
@@ -115,7 +109,7 @@ export const useUiStore = create<UiStoreState>()((set, get) => ({
   ...loadUiPreferences(),
 
   setTheme: (theme) => {
-    // storeTheme 写入既有键/格式并同步本 store，AppearanceView 因此只有一条路径。
+    // storeTheme 写入既有键/格式并同步本 store，设置弹窗 local.theme 因此只有一条路径。
     const storage = browserStorage();
     if (storage) storeTheme(theme, storage);
     else set({ theme });
@@ -140,8 +134,4 @@ export const useUiStore = create<UiStoreState>()((set, get) => ({
     }
     if (changed) set({ settingsPending: next });
   },
-
-  // 旧名别名（双轨期 DisplaySettingsView 消费；S6 收敛删除）。
-  setDisplayPending: (patch) => get().setSettingsPending(patch),
-  clearDisplayPending: (entries) => get().clearSettingsPending(entries),
 }));

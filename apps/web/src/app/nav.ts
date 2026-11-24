@@ -46,7 +46,7 @@ export const NAV_GROUPS: readonly {
   { id: 'core', domains: ['hub', 'gateway', 'pluginHost'] },
   // 裁定③④⑤：settings 分组三个导航点全部移除——设置入口 = 右上角齿轮 / Ctrl+, /
   // AccountMenu / 命令面板 / 移动端 More；visual/designLab 由路由别名进弹窗（S2）。
-  // DOMAINS 保留 id 供路由别名与图标复用。
+  // DOMAINS 保留 id 供图标与命令面板文案复用（S6 起不再是路由域）。
 ];
 
 /** 主导航项的默认落点（不改路由；供 NavModel / 命令面板 / 移动端共用）。 */
@@ -79,9 +79,10 @@ export function primaryRoute(domain: PrimaryDomain): Route {
     case 'capabilities':
       return { domain: 'capabilities' };
     case 'visual':
-      return { domain: 'visual' };
+      // S6：legacy 导航 id → 设置弹窗视觉分类（与 parseRoute 别名一致）。
+      return { domain: 'settings', category: 'visual' };
     case 'designLab':
-      return { domain: 'designLab' };
+      return { domain: 'settings', focusKey: 'local.designLab', category: 'visual' };
     case 'settings':
       return { domain: 'settings' };
     case 'observe':
@@ -144,10 +145,6 @@ export function routeBreadcrumb(route: Route): string {
       return t('breadcrumb.plugins');
     case 'capabilities':
       return t('breadcrumb.capabilities');
-    case 'visual':
-      return t('breadcrumb.visual');
-    case 'designLab':
-      return t('breadcrumb.designLab');
     case 'settings':
       return t('breadcrumb.settings');
   }

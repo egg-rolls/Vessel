@@ -31,16 +31,19 @@ export type Route =
   | { domain: 'teams'; nodeKey: string; teamId: string; agentId?: string; bodyId?: string }
   | { domain: 'agents'; nodeKey?: string; teamId?: string; state?: string; presence?: string }
   | { domain: 'capabilities' }
-  | { domain: 'visual' }
-  | { domain: 'designLab' }
   /**
    * 设置弹窗（VSCode 式，vscode-settings-design §3.8）：路由 = 可分享状态。
    * ShellOverlays 消费本路由打开 SettingsDialog；关闭 replace 回 chat。
    * focusKey = 设置项 id 深链定位；query = 搜索词；category = 分类定位。
+   * S6：visual / designLab 整页路由删除，parseRoute 别名直接解析成本路由。
    */
   | { domain: 'settings'; focusKey?: string; query?: string; category?: string };
 
-export type Domain = Route['domain'];
+/**
+ * 导航 id 域：Route 域 + legacy visual / designLab（S6 整页删除后不再是路由，
+ * 保留 id 供 DOMAINS 图标 / 命令面板文案复用；primaryRoute 落 settings 别名）。
+ */
+export type Domain = Route['domain'] | 'visual' | 'designLab';
 
 export const DEFAULT_ROUTE: Route = { domain: 'chat' };
 
@@ -289,10 +292,6 @@ export function formatRoute(route: Route): string {
     }
     case 'capabilities':
       return '#/capabilities';
-    case 'visual':
-      return '#/visual';
-    case 'designLab':
-      return '#/designLab';
     case 'settings': {
       const query = new URLSearchParams();
       if (route.focusKey) query.set('focus', route.focusKey);

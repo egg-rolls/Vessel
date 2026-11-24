@@ -72,15 +72,6 @@ export function readLogEnvOverrides(source: unknown): LogEnvOverrideInfo[] {
   return overrides;
 }
 
-/** 读 observability.log.modules（只读展示；键是事件名前缀，值是级别）。 */
-export function readLogModules(source: unknown): [string, string][] {
-  const value = readPath(source, 'observability.log.modules');
-  if (!isRecord(value)) return [];
-  return Object.entries(value)
-    .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
-    .sort(([a], [b]) => a.localeCompare(b));
-}
-
 const BY_KEY = new Map(DISPLAY_SETTINGS.map((setting) => [setting.key, setting]));
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -129,50 +120,4 @@ export function resolveDisplayValues(
 export interface DisplayPendingEntry {
   key: string;
   value: string;
-}
-
-/** pending 中已被服务端快照确认的条目（key+value）；用于按值清除 overlay。 */
-export function confirmedDisplayKeys(
-  source: unknown,
-  pending: Readonly<Record<string, string>>,
-): DisplayPendingEntry[] {
-  const confirmed: DisplayPendingEntry[] = [];
-  for (const [key, value] of Object.entries(pending)) {
-    if (readDisplayValue(source, key) === value) confirmed.push({ key, value });
-  }
-  return confirmed;
-}
-
-/** 把表单值转成 `config.set` 的 value；非法返回 undefined。 */
-export function toConfigValue(
-  setting: DisplaySettingDef,
-  raw: string,
-): string | boolean | number | undefined {
-  if (setting.type === 'boolean') {
-    if (raw === 'true') return true;
-    if (raw === 'false') return false;
-    return undefined;
-  }
-  if (setting.type === 'number') {
-    const value = Number(raw);
-    const min = setting.min ?? Number.NEGATIVE_INFINITY;
-    const max = setting.max ?? Number.POSITIVE_INFINITY;
-    if (raw.trim() === '' || !Number.isInteger(value) || value < min || value > max) {
-      return undefined;
-    }
-    return value;
-  }
-  if (setting.type === 'string') {
-    const value = raw.trim();
-    return value.length > 0 ? value : undefined;
-  }
-  return setting.options?.includes(raw) === true ? raw : undefined;
-}
-
-export function isDisplaySettingKey(key: string): boolean {
-  return BY_KEY.has(key);
-}
-
-export function displaySettingFor(key: string): DisplaySettingDef | undefined {
-  return BY_KEY.get(key);
 }
