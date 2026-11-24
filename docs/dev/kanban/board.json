@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "金丝雀验收全过已晋升main 38ee0aec；待用户 vessel gateway restart --stop-nodes 重启生产。跨舰队通信修复：两侧peer team映射纠正（生产peer team_id=default/local vessel；金丝雀localTeamId=default），federation双向验证通（lead回执到达）；金丝雀host.node_name=soulkiller-canary已配置（下次重启生效，node_id不变）；金丝雀本地main越权已stand down"
+      "progress": "金丝雀验收全过已晋升main 38ee0aec；待用户 vessel gateway restart --stop-nodes 重启生产。跨舰队通信修复：两侧peer team映射纠正（生产peer team_id=default/local vessel；金丝雀localTeamId=default），federation双向验证通（lead回执到达）；金丝雀host.node_name=soulkiller-canary已配置（下次重启生效，node_id不变）；金丝雀本地main越权已stand down并确认。用户就寝：生产重启顺延明日，金丝雀舰队已通知就寝（夜间零操作）"
     },
     {
       "id": "canary-qa-lead",
@@ -18,7 +18,7 @@
       "column": "进行中",
       "owner": "canary-qa-lead",
       "branch": "canary",
-      "progress": "常驻QA负责人717be135就职；verify4全过批次已晋升38ee0aec。★跨舰队寻址纠正已投递：lead此前裸名main回执误投金丝雀本地main（本地main越权回执五条已作废并stand down）；报告必须用三段地址main@7181ed6c-5ec2-479e-9400-fcd54b480de5:vessel（回信原样回传from location）；federation双向通道已修复验证（生产→金丝雀queued✓，金丝雀→生产候lead回执）；T2b泄漏根因线索已通报（interop进程继承VESSEL_DATA_DIR=生产）"
+      "progress": "常驻QA负责人717be135就职；verify4全过批次已晋升38ee0aec。★跨舰队寻址纠正已投递：lead此前裸名main回执误投金丝雀本地main（本地main越权回执五条已作废并stand down）；报告必须用三段地址main@7181ed6c-5ec2-479e-9400-fcd54b480de5:vessel（回信原样回传from location）；federation双向通道已修复验证（生产→金丝雀queued✓，金丝雀→生产候lead回执）；T2b已立卡q-tool-output-leak（lead复验口径已定：environ无生产残留+双路径落canary-data/tool-output+生产根零新增）。★用户就寝：舰队收工standby（T3b/c收尾即止，测试员保留身体明日复用），夜间零操作；明日用户重启生产后恢复"
     },
     {
       "id": "q-tool-output-leak",
