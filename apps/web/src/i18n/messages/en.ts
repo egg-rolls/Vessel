@@ -195,6 +195,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.dialog.fullscreen': 'Open fullscreen',
   'settings.dialog.collapseTree': 'Collapse category tree',
   'settings.dialog.expandTree': 'Expand category tree',
+  'settings.dialog.editInYaml': 'Edit in vessel.yaml',
+  'settings.dialog.expandAll': 'Expand all',
   'settings.connection.devProxyNotice':
     'Dev proxy auth is enabled: connecting to the same-origin gateway forwarded by the Vite dev server. No token is stored in the browser.',
 

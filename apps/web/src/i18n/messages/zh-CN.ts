@@ -189,6 +189,8 @@ export const messages = {
   'settings.dialog.fullscreen': '全屏打开',
   'settings.dialog.collapseTree': '折叠分类树',
   'settings.dialog.expandTree': '展开分类树',
+  'settings.dialog.editInYaml': '在 vessel.yaml 中编辑',
+  'settings.dialog.expandAll': '全部展开',
   'settings.connection.devProxyNotice':
     '开发代理鉴权已启用：连接同源 gateway（由 Vite 开发服务器转发），前端不保存 token。',
 

@@ -152,6 +152,7 @@
   --container-modal-sm: var(--modal-w-sm);
   --container-modal-md: var(--modal-w-md);
   --container-modal-lg: var(--modal-w-lg);
+  --container-modal-xl: var(--modal-w-xl);
 
   /* 层级 */
   --z-index-drawer: var(--z-drawer);
@@ -206,6 +207,14 @@
 
 @utility modal-rise {
   animation: rise-in 0.18s var(--ease);
+}
+
+/* 设置搜索命中高亮（vscode-settings-design §3.3）：复用 accent token，无新颜色。 */
+mark {
+  background: var(--accent-soft);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
 }
 
 /* 底部导航 sheet：小屏额外给 safe-area 留白。 */

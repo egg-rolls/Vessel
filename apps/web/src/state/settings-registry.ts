@@ -52,6 +52,8 @@ export interface SettingDef {
   view?: 'designLab' | 'connection' | 'advancedConfig';
   /** 只读（环境变量覆盖 / 旧 gateway 无写面 / map 型键 / 说明行）。 */
   readOnly?: boolean;
+  /** 只读但可重置（local.nav.groups：[全部展开]）。 */
+  resettable?: boolean;
   /** 服务端键 = config 键路径；本地键 = localStorage 键；插件键 = 插件私有键。 */
   key: string;
   /** 插件项归属插件 id（source = plugin:<id> 时必有）。 */
@@ -210,6 +212,7 @@ export const LOCAL_SETTINGS: readonly SettingDef[] = [
     category: 'visual',
     // 只读展示 + [全部展开] 重置（§5.3）；v1 经通用 local 重置清空存储键。
     readOnly: true,
+    resettable: true,
     keywords: ['nav', 'groups', '分组', '折叠'],
   },
   {
