@@ -39,10 +39,10 @@
     {
       "id": "q-from-card",
       "title": "from location源卡片：系统卡片→环境信息卡片样式（用户要求）",
-      "column": "待办",
-      "owner": "main",
-      "branch": "redblue-dev",
-      "progress": "用户裁定：<from location=principal@node:team>源抬头从系统卡片提升为环境信息卡片，用环境信息卡片样式组织投射；待main扫Web UI渲染面（senderKind/系统卡/环境信息卡）后树状拆分派单"
+      "column": "进行中",
+      "owner": "q-from-card",
+      "branch": "fix/q-from-card",
+      "progress": "已派单27318a8a：vessel:source改notice卡样式组织投射principal@node:team；锚点transcript-items.ts(SOURCE_MESSAGE_NAME/runtimeContextKindOfName/injectedNoticeOfEvent)+runtime-visibility.ts权威分类O8对账；live/history双路径一致；增量提交+build门禁"
     },
     {
       "id": "design-adjudication",
