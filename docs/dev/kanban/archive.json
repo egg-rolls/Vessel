@@ -127,6 +127,15 @@
       "progress": "问题1 merge 6e15df06（bash_job写tool:bash身份+前端senderKind卡头）；问题2 merge 887b3376（纠正前提:owner不重建self card,增量通道已存在;病灶Web buildLiveItems无message.injected投影→加injectedNoticeOfEvent分支live可见,owner+成员同治,非重构）；build全绿；待用户显示验收",
       "archivedAt": "2026-11-24T04:00:00+08:00",
       "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "plan-c",
+      "title": "计划C：src 大重组（~94文件→~15领域目录）+ 管理规范/关键词",
+      "owner": "q-plan-c",
+      "branch": "refactor/q-plan-c",
+      "progress": "merge 517a220f；139移动/16批全绿/944import重写/5文件11暗礁修正(抓出gateway-command3级4级炸点)；src顶层cli.ts+19目录；src-layout.md管理规范+领域关键词；历史文档有意不动(时点快照)；合并树门禁验证中",
+      "archivedAt": "2026-11-24T04:20:00+08:00",
+      "cycle": "redblue-quality-round-1"
     }
   ]
 }

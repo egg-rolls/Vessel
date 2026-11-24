@@ -21,14 +21,6 @@
       "progress": "q-modes留档缺口，修复需设计决策，main排期"
     },
     {
-      "id": "plan-c",
-      "title": "计划C：src 大重组（~94文件→~15领域目录）+ 管理规范/关键词",
-      "column": "进行中",
-      "owner": "q-plan-c",
-      "branch": "refactor/q-plan-c",
-      "progress": "派单两阶段：阶段1布局约定+领域映射文档（待main确认）→阶段2逐域搬迁+import重写+每批build"
-    },
-    {
       "id": "final-gate",
       "title": "最终合并树门禁 + 用户行为验收",
       "column": "待办",
