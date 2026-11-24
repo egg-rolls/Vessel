@@ -77,11 +77,11 @@ config.set handler
 
 1. **成员选择层**（agent/runtime.ts）：0.51 用户裁定「节点有的 agent 都可以用」——成员工具面 = 父宿主全量，**不再按工具名长白名单**（L-011 教训：漏加是静默能力缺失）。只剩两条例外：deny 档收只读集合（read/media/subscribe）、`ask` 类工具要求 bridge。
 2. **注册侧**（tenant-tools）：tenant 级 allow/deny。
-3. **单次调用判定**（core PermissionPolicy，`packages/core/src/runtime/permission-policy.ts:129-214）：
+3. **单次调用判定**（core PermissionPolicy，`packages/core/src/runtime/permission-policy.ts:129-214`）：
    - 工具自带 `checkPermission` → 用工具判定；返回 `ask` 时若 `autoApprove.has(tool.name)` 或 remember-always 命中 → allow。
    - `neverAutoApprove`：exact 工具名把**任何** allow 降级 ask；scoped `tool.action` 只降级 auto 来源的 allow（读 `args.action`）。
    - ask → 发 `tool.permission.request` 事件，无限等待（显式 timeoutMs 才计时），用户 allow/deny/remember。
-   - **粒度注意**：`autoApprove` / remember-always 都是**工具名**粒度。对 vessel 点「always」= 放开 vessel 的**全部 write 方法**（含 plugins.config.set），不是只放开 set_config——这是现存的粗粒度风险（§3.7 T7）。
+   - **粒度注意**：`autoApprove` / remember-always 都是**工具名**粒度。对 vessel 点「always」= 放开 vessel 的**全部 write 方法**（含 plugins.config.set），不是只放开 set_config——这是现存的粗粒度风险（§3.8 T7）。
 4. **持久化策略**（`src/data/permission-store.ts`）：REPL「always」写回 `permission.auto_approve`；`permissions.setToolPolicy` RPC（write）是唯一 canonical 写方法，但在 vessel 硬禁名单里。
 
 **成员侧 ask 的收口**（`restrictPermissions`，agent/runtime.ts:2160-2186）：
@@ -126,6 +126,7 @@ q-tool-perm（合并 `422bad6f`）把 inbox 纳管为通用成员级工具：`co
 ### 2.7 热应用与重启边界
 
 `config.set` 写后同步热应用（§2.1）；`gateway.reload` 的 permission/tools/mcp applier（`src/config/hot-apply-appliers.ts`）对所有存活 runtime（owner + 成员 EU）整体替换规则。port 等键 requires restart（ADR-075）。**白名单内的键全部可热应用**——让渡不需要碰重启面。
+
 ## 3. 让渡设计
 
 ### 3.1 设计原则
@@ -244,6 +245,7 @@ key = 最终 args.key（guardrail 改写后）
 - deny/ask/allow 三态都经既有管道：ask 在无 bridge 成员处仍折 deny（restrictPermissions 不改）——但让渡命中的 T0 键在第 4 步已 allow，**不再进入 ask 收口**，这正是 headless 成员获得自助路径的方式。
 - `op=rpc` 其它方法（plugins.config.set 等）判定不变：write→ask，硬禁名单不变。
 - **让渡只作用 scope=user**：`scope=project` 的 config.set 维持 ask（项目 vessel.yaml 在工作区内，原始写面本就存在，RPC 路径不额外放开；且 project 层同样能写 permission 块，守卫口径必须一致）。
+
 ### 3.5 审计设计
 
 **落点**：`<dataDir>/audit/config-writes.jsonl`（node 数据根，append-only，复用 run-journal / archive-audit 的落盘模式；不放工作区，避免成员 cwd 写锁/清理误伤）。
@@ -313,3 +315,70 @@ key = 最终 args.key（guardrail 改写后）
 | T10 | 多租户越界 | config.set 已 default-tenant-only（gateway-config-control），让渡继承 |
 | T11 | 审计规避（先关 audit 再写） | audit:false 语义 = 禁 auto 而非禁记录（§3.3）；audit 文件在 dataDir，T2 块 data_dir 不可改 |
 | T12 | 无 bridge 成员借让渡绕过「ask→deny 收口」做危险操作 | 让渡只放行 T0（纯展示）；T1 仍 ask→无 bridge 仍 deny；收口逻辑不改 |
+## 4. 分期实施（设计口径，非本分支工作）
+
+全部 additive；每期独立可验收，缺省配置下零行为变化。
+
+**P1 让渡正门（核心）**
+- `src/config/agent-config-delegation.ts`：硬上限表 + 敏感块清单（单真源）。
+- `PermissionConfig.configDelegation` 类型 + validator（keys ⊆ 上限，越界报错）+ loader snake_case 映射。
+- vessel-meta：`op=set_config` / `op=rpc config.set` 键级判定（§3.4）；`getMemberBySession` 晚绑定注入（bootstrap 装配，AgentService 已有 entries 索引）。
+- 审计 jsonl 落盘（vessel 路径 + gateway config.set 路径统一）；auto 路径审计失败降级 ask。
+- 验收判据：delegation 关闭时逐字节现状；开启后 headless 成员写 T0 键免批且审计可查；写 T2 键稳定 deny 且审计留痕；never_auto_approve:[vessel] 能一键收回。
+
+**P2 旁门护栏（需 §5 裁定后）**
+- write/edit 敏感键写守卫（目标 = user/project 配置路径；新旧 YAML 敏感块 diff → deny）。
+- config-watch 敏感块变更检测 → runtime.notice 告警（来源非 RPC 写面时）。
+- 验收判据：agent edit config.yaml 的 ui 块成功、permission 块被拒；人手改 permission 块触发 notice（不阻断人）。
+
+**P3 体验与加固（additive）**
+- Web observe 审计视图（读 jsonl）；runtime.notice 摘要。
+- scoped remember（`vessel.set_config` 粒度，缓解 T7）；plugins.config.set 的 secret 字段标记与 agent 硬 deny（T6）。
+- T2 保守键（session/context/vision 等）逐键人工评审降级通道。
+
+## 5. 裁定项（报 main / 用户）
+
+| # | 问题 | 建议 |
+|---|---|---|
+| D1 | 让渡总开关缺省开还是关 | **关**（enabled:false）。用户显式开启才让渡；与 bridge_deny「缺省零变化」先例一致 |
+| D2 | 原始写面治理选 A/B/C（§3.6，触碰 2026-11-16 裁定边界） | **B+C**：read 全开、write/edit 敏感块 diff 拦截、config-watch 告警。若用户维持旁门全开，P1 仍可做，但须明示「白名单是便利通道不是安全边界」 |
+| D3 | T1 键（agent.cwd / emptyResponse.*）是否进让渡 | 进，但缺省 ask；nudge 永不 auto + 长度上限；agent.cwd 值须落 allowed_roots |
+| D4 | 审计失败策略 | auto 路径 fail-safe 降级 ask；人批路径 warn 不阻断（§3.5） |
+| D5 | owner 交互入口是否也享受让渡 | 否。人在场维持 ask；让渡只给成员身体（含 headless contractor） |
+
+## 6. 风险与残留局限（诚实标注）
+
+- **R1 bash 不是沙箱**（ADR-055/083 既有边界）：§3.6 B 守卫只约束合作的 write/edit；bash 重定向/脚本直写 config.yaml 无法完全拦截，C 告警是检测不是预防。残留风险由 D2 裁定承接。
+- **R2 remember-always 粗粒度**（T7）：用户对 vessel 点 always 会放开全部 write RPC。本设计不扩大也不修复它（P3 scoped remember 才修）；一期文档明示 + never_auto_approve 缓解。
+- **R3 合作式写锁**：withConfigLock / write-lock 都是合作式协议，非合作写入者（bash/IDE/git）不受约束——审计的 old/new 配对在锁内保证，但旁门写入可能绕过审计（由 C 告警兜底检测）。
+- **R4 键表漂移**：serve 与 asm 现有两份白名单手工同步（§2.6）；P1 引入单真源上限表时必须同时收敛这两份，否则第三份漂移。
+- **R5 prompt injection 持久化**：emptyResponse.nudge 是注入面（T1 强制 ask + 长度上限）；T0 键值均为枚举/布尔，无自由文本，注入面为零。
+- **R6 部署漂移**：生产 bash 描述仍 deny config.yaml，而代码已移除（2026-11-16）——说明运行构建落后或 deny_paths 配置追加。实施前须核对目标部署的实际 deny 配置，避免「设计以为门开着/关着」与现场不符。
+- **R7 让渡 ≠ 信任升级**：T0 auto 放行的是「改坏也无害」的键；任何新键进 T0 必须人工评审代码变更，配置不可扩（§3.1 原则 2）。fail-closed 方向保证漏评审 = 拒绝。
+
+## 7. 现状证据索引
+
+| 主题 | 位置 |
+|---|---|
+| config.set 方法（write 权限）+ 白名单/normalize | `packages/serve/src/gateway/methods/config.ts:28-110, 356-397` |
+| plugins.config.set（manifest 校验） | 同上 `:657-740` |
+| 写回实现（default tenant / 二次键校验 / scope） | `src/gateway/gateway-config-control.ts:35-53` |
+| SettableConfigKey / CONFIG_SET_TARGETS / setUserConfigValue（锁+原子写+值校验） | `src/config/ui-settings.ts:126-274` |
+| 写后热应用（单飞行/2s/失败不回 ok:false） | `src/config/config-write-apply.ts:24-98` |
+| vessel 元工具：硬禁名单 / rpcMethodDecision / checkPermission / bridge | `src/runtime/vessel-meta.ts:48-52, 112-122, 255-300` |
+| vessel 装配 + localDispatcher 晚绑定 | `src/runtime/bootstrap.ts:1380-1416, 2001, 2177` |
+| PermissionPolicy（autoApprove 工具名粒度 / never exact+scoped / remember） | `packages/core/src/runtime/permission-policy.ts:129-214` |
+| 四层闸门注释 / 0.51 成员面=节点全量 / withMemberAutoApprove | `packages/agent/src/runtime.ts:69-90, 123-128` |
+| restrictPermissions（ask→autoApprove→bridge→deny 收口） | `packages/agent/src/runtime.ts:2146-2186` |
+| effectivePermissionMode（team 提升 bridge） | `packages/agent/src/runtime.ts:1996-2011` |
+| 成员 permissionMode 缺省（headless allow / 交互 bridge） | `src/agent/agent-wiring.ts:42` |
+| 权限规则热应用到存活 EU | `packages/agent/src/runtime.ts:1552-1575`；`src/config/hot-apply-appliers.ts` |
+| DEFAULT_DENY_PATHS（config.yaml 已移除，2026-11-16 裁定） | `plugins/tools/basic-tools/src/index.ts:292-299` |
+| permission.auto_approve 持久化 / setToolPolicy | `src/data/permission-store.ts`；`packages/serve/src/gateway/methods/permissions.ts:98-135` |
+| PermissionConfig 类型 | `packages/config/src/types.ts:1039-1058` |
+| VesselConfig 顶层块（T2 枚举依据） | `packages/config/src/types.ts:1131-1243` |
+| gateway 角色分级 hasPermission | `packages/serve/src/rpc.ts:307-313` |
+| q-tool-perm 统一权限面（commonToolSurface） | 合并 `422bad6f`；`src/agent/agent-control.ts:322`；`packages/serve/src/agent-control.ts:418` |
+| 审计空白 | `src/config` / `packages/config` grep audit 零命中（调查时点） |
+
+—— 完 ——
