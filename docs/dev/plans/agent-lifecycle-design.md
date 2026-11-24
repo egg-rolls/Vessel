@@ -593,16 +593,143 @@ mark_reason`。写入规则：
 
 ## 7. 迁移计划
 
-（待扩充：分阶段落地、旧快照 / 旧配置兼容、回滚策略）
+纯设计文档，以下为**后续实现**的分阶段规划（每阶段独立可发布、可回滚）。
+
+### 阶段 1：标注层（无行为变更）
+
+- 快照 additive 四字段 + `recordFromStatus` 读取（§5.1）；
+- service `markRecyclable / unmarkRecyclable` + 事件（§3.4）；
+- RPC `agents.mark_recyclable / agents.unmark_recyclable` + `agents.list` 投影；
+- agent 工具增 `mark-recyclable / unmark` 动作，**`close` 暂保留原语义**
+  （此阶段标注只是元数据，sweep 仍走旧逻辑）。
+- 验收：标注 / 撤销 / 审计 / 看板徽标可用；旧快照零影响。
+
+### 阶段 2：收权 + mark-gated GC（行为切换，核心阶段）
+
+- agent 工具 `close` → 别名映射到 `mark-recyclable`（§3.1），级联对模型消失；
+- `sweepIdleTemporaries` → `sweepRecyclableMembers`（§4.1）：
+  **未标注永不回收**，temporary 重启保留生效（§1.4 根因消除）；
+- 安全互锁补 durable inbox / rotate 判据（§4.2）；宽限期配置上线（§4.3）；
+- `reinstate` 复活清标注四字段（§2.5）；孤儿 owner 转移（§4.6）；
+- `temporaryTtlHours` 兼容：配置存在时读作 grace 来源并 warn deprecated；
+  缺省 grace=24h。**旧 TTL 语义（无标注到期回收）在此阶段彻底停止。**
+- 验收：停机 > 旧 TTL 后重启，承包成员全部 dormant 保留、send 同 id 续接；
+  标注 + 宽限期满 + 安全 → 一个 tick 回收；未标注空闲任意久不回收。
+
+### 阶段 3：可见性收尾 + 别名移除
+
+- 待回收清单视图、`team_full` 导流提示、历史视图 `marked_by/mark_reason` 字段；
+- 移除工具 `close` 别名（一个版本周期后）；
+- 可选自动标注策略 `autoMarkIdleDays`（缺省 0 关闭，§4.4）随本阶段或更后。
+
+### 兼容与回滚
+
+- **旧快照**：无标注键 → 缺省 false → 永不自动回收（安全缺省，§2.2）。
+  阶段 2 上线瞬间，存量 temporary 全部从「TTL 倒计时」变为「永久保留」，
+  直到被显式标注——这是有意的行为切换，发布说明必须写明。
+- **旧配置**：`temporaryTtlHours` 不报错（validator 保留键），读作 grace 兼容
+  来源；文档标 deprecated。
+- **外部调用方**：RPC `agents.close` 语义不变（管理面 escape hatch），
+  依赖它的脚本不受影响；agent 工具侧 `close` 有别名缓冲期。
+- **回滚**：阶段 2 回滚 = 恢复旧 sweep + 旧工具 close；标注四字段是 additive，
+  旧代码忽略未知键，回滚不丢数据（已标注成员回滚后按旧 TTL 逻辑处置，
+  发布说明提示回滚窗口风险）。
 
 ## 8. 风险与权衡
 
-（待扩充：roster 增长与 TEAM_MEMBER_LIMIT、误标注、磁盘泄漏、兼容风险）
+### 8.1 roster 增长 vs TEAM_MEMBER_LIMIT=20（最大风险）
+
+持久保留 + 未标注永不回收 ⇒ present 成员单调增长，而 `TEAM_MEMBER_LIMIT=20`
+（`service.ts:179`）计入 peer + contractor。撞墙表现：`hire/create` 报 `team_full`。
+
+缓解（组合拳，不单独依赖任何一条）：
+
+1. **GC 必须真清**（§4.7）：已标注者一个 tick 内回收，标注是疏解主通道；
+2. **看板导流**（§6.1）：team_full 提示附待回收数，人类一眼看到出口；
+3. **上限可配置化**（实现期顺带）：20 是硬编码常量（注释「后续可配置」），
+   持久保留时代应提为配置键并适度调高；dormant 成员**仍计入**上限
+   （计入是保守选择：防止用 dormant 无限囤积；调高上限比豁免计数更可控）；
+4. 可选自动标注（§4.4）给「雇佣者忘了标注」的长尾兜底，缺省关闭保控制。
+
+权衡明示：宁可 team_full 报错（显式、可疏解），不要静默销毁（不可逆、丢历史）。
+
+### 8.2 误标注 / 恶意标注
+
+- 误标注：宽限期 24h + unmark 可撤销 + 看板待回收清单可见 + 回收后 reinstate
+  同 id 复活（历史不丢）——四层兜底，误标注的代价是「复活一次」而非「丢一切」。
+- 恶意 / 注入标注：self-mark deny（§3.2）+ peer 标注人类审批 + 标注理由落盘
+  可追责；agent 无法标注 main，无法立即销毁任何成员。
+- 残余风险：雇佣者被注入后批量标注自己的承包——宽限期 + 看板可见是人类介入窗口；
+  与现状（被注入可直接 close）相比攻击面**收窄**而非扩大。
+
+### 8.3 磁盘泄漏（记录永不删）
+
+成员记录 / 会话日志 / bindingHistory 永不删是现有铁律，持久保留使其更显著。
+本期边界：roster 上限（§8.1）约束 present 规模；历史视图硬顶 200 条
+（`releasedLimit`）约束展示；**磁盘归档 GC 留作后续可选阶段**（§4.6），
+不与标注语义耦合。风险接受理由：磁盘是慢变量，丢历史是快痛。
+
+### 8.4 兼容 / 语义风险
+
+- 依赖「close 立即销毁」的模型习惯：别名缓冲期 + 工具 description 明示
+  「nothing is destroyed immediately」；self card 文案同步。
+- 「temporary 重启即丢」的旧预期被打破：发布说明写明新语义（dormant 保留 +
+  同 id 续接），这正是用户提案要的行为。
+- 孤儿 owner 转移（D-4.6）改变 private 承包的归属：审计事件留痕，
+  人类管理面可见；备选方案均更差（§4.6）。
 
 ## 9. 决策记录与开放问题
 
-（待扩充）
+### 已裁决（本设计内，main / 人类可挑战）
+
+| # | 决策 | 理由摘要 |
+| --- | --- | --- |
+| D1 | recyclable 是正交持久标志，不是新 MemberState | 状态机表达执行相位；避免转移表乘积爆炸；快照 additive 兼容（§2.2） |
+| D2 | dormant / recycled 都是投影，不是状态 | 沿用 isReleased 析取风格；reinstate / 历史视图零改动复用（§2.3/2.4） |
+| D3 | 审批点在标注，GC 执行不二次审批 | 否则「系统自动回收」退化为人工清理，违背提案④（§3.2） |
+| D4 | self-mark deny；main 绝对保护（连 ask 都不给） | 防注入自毁；main 是节点入口（§3.2） |
+| D5 | 宽限期缺省 24h，重复标注刷新计时 | 一个人类工作日内可发现误标注（§4.3） |
+| D6 | 停机时长计入宽限期（不计入「回收理由」） | 标注是显式意思表示，与 idle_ttl 根因有本质区别（§4.1） |
+| D7 | 自动标注仅 temporary、缺省关闭 | peer 审批语义不可绕过；mark-gated 保控制（§4.4） |
+| D8 | 回收不级联；private 孤儿 owner 转人类 | mark-gated 铁律 + 0.28 private 无管理面旁路的可达性（§4.6） |
+| D9 | 管理面保留 agents.close 硬 close（含级联） | 人类 escape hatch；agent 工具够不着（§3.3） |
+| D10 | GC 永不 interrupt，忙就跳过 | 回收不得打断在途工作；interrupt 是调用方操作序（§4.1） |
+
+### 开放问题（实现前需 main / 人类确认）
+
+1. **TEAM_MEMBER_LIMIT 调高到多少 / 是否配置化**（§8.1）：建议配置键
+   `agent.teamMemberLimit` 缺省 50，待裁决。
+2. **grace 缺省 24h 是否合适**：自动化流水线场景可能想要 0；人类操作场景
+   可能想要 72h。当前取 24h，待使用反馈。
+3. **自动标注是否扩展到 peer（经人类一次性授权）**：本期否决（D7），
+   若后续 roster 压力主要来自 peer 再议。
+4. **磁盘归档 GC 的触发与保留策略**：本期不做（§8.3），后续阶段立项。
+5. **`close` 别名移除时机**：一个版本周期是建议值，依外部依赖盘点定。
 
 ## 附录 A：代码锚点表
 
-（待扩充）
+撰写时核对的工作树快照（分支 `design/q-agent-lifecycle`，基线 `b7fdf27c`）：
+
+| 主题 | 锚点 |
+| --- | --- |
+| 释放原因两种（closed / idle_ttl） | `packages/agent/src/service.ts:388-391` |
+| isReleased 析取 | `packages/agent/src/service.ts:394` |
+| sweep 节奏 clamp(ttl/10, 60s, 15min) | `packages/agent/src/service.ts:381-383, 4434` |
+| temporaryTtlHours 缺省 2h | `packages/agent/src/service.ts:370, 1014` |
+| 角色映射 peer→member / contractor→temporary | `packages/agent/src/service.ts:1304` |
+| TEAM_MEMBER_LIMIT=20 | `packages/agent/src/service.ts:179` |
+| loadSnapshot（非 left 一律 idle+gone） | `packages/agent/src/service.ts:1063` |
+| recordFromStatus | `packages/agent/src/service.ts:711` |
+| sweepIdleTemporaries / hasNonIdleWork / reclaimAgent | `packages/agent/src/service.ts:4374 / 4394 / 4410` |
+| close / closeOne / 级联 | `packages/agent/src/service.ts:6319 / 6355 / 6375` |
+| reinstate（原地复活、清 closedAt） | `packages/agent/src/service.ts:6700 / 6742` |
+| 历史视图 listReleasedMembers | `packages/agent/src/service.ts:6779` |
+| recoverPendingInputs / RECOVER_MAX_SESSIONS=8 | `packages/agent/src/service.ts:3783 / 349` |
+| MemberState / TRANSITIONS | `packages/agent/src/types.ts:33` / `packages/agent/src/registry.ts:109` |
+| MemberRecord（closedAt/closeReason、binding 永不删） | `packages/agent/src/registry.ts:51-106` |
+| PersistedAgentRecord（closed_at/close_reason additive） | `packages/agent/src/types.ts:175-222` |
+| agent 工具 ACTIONS / close 权限 / interrupt | `packages/agent/src/tool.ts:40 / 567 / 493` |
+| gateway agents.close（批量幂等、team scope） | `packages/serve/src/gateway/methods/agents.ts:1345` |
+| sweep 定时器（装配层、.unref） | `src/agent-service-wiring.ts:484-495` |
+| shutdown drain 三步 | `src/bootstrap.ts:2206-2254` |
+| 配置 temporaryTtlHours validator | `packages/config/src/validator.ts:3220` |
