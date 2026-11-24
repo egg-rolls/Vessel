@@ -117,6 +117,14 @@
       "progress": "派单：权限按注册作用域分裂不合理；inbox所有agent都有应进全局权限列表,统一auto/ask/never策略;权限UI聚合全局+通用成员工具"
     },
     {
+      "id": "q-naming-fix",
+      "title": "修复会话名undefined/Untitled(命名逻辑:已命名不走AI,未命名走AI)",
+      "column": "进行中",
+      "owner": "q-naming-fix",
+      "branch": "fix/q-naming-fix",
+      "progress": "派单：canary旧会话Untitled/undefined；查ensureSessionShell壳与nameNewSession交互/AI命名空输入/WebUI空标题渲染；杜绝undefined"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
