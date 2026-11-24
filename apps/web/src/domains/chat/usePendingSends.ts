@@ -4,6 +4,7 @@
  * 它只做四件事，且都不碰渲染树：
  * 1. `useSyncExternalStore` 订阅 `pendingSends`（渲染侧拿到一份稳定的数组快照）；
  * 2. 1 s 节拍调 `sweep()` —— 15 s 没回显 / 3 min 没被取用 ⇒ 失败态（**永不静默消失**）；
+ *    但调度器对该会话还有在飞工作时不判超时（`busySessions` 闸，agent 还在尝试）；
  * 3. 盯 `snapshot.entries` 的水位：新到的 `run.started` / `user.message` 交给
  *    `noteEvent()` 认领（首选 `run_id`，没有才按队首）。认领即从 store 摘除 ——
  *    「不重复」是结构性的（摘掉之后没有第二份可画），不是渲染层去重；
@@ -71,6 +72,14 @@ export function usePendingSends(options: {
    * 这里管气泡怎么显示，那边管消息怎么再飞一次。
    */
   onRetry?: (pending: PendingSend) => void;
+  /**
+   * 调度器还有在飞工作（`running` / `queued`）的会话集合（权威：`health.get` 的
+   * `runtime.scheduler`，见 `state/sessions.ts#inflightFromScheduler`）。
+   *
+   * 这些会话的 `sending` / `queued` pending **不判超时**：agent 还在尝试，单纯计时
+   * 到点不构成「发不出去」（用户裁决，见 `pending-sends.ts#sweep`）。缺省 = 纯计时。
+   */
+  busySessions?: ReadonlySet<string>;
 }): {
   pending: readonly PendingSend[];
   /** 已经被服务端取用（回显到达）的 `message_id`：条带据此立刻滤掉那份缓存读数。 */
@@ -99,10 +108,13 @@ export function usePendingSends(options: {
   );
 
   // 超时扫描：`sending` 15 s、`queued` 3 分钟各有出口（判定在 store 里）；排队跨分钟时
-  // 它会发一次通知，让气泡上的「已排队 N 分钟」跟着走。
+  // 它会发一次通知，让气泡上的「已排队 N 分钟」跟着走。`busySessions` 用 ref 带进
+  // interval：节拍闭包不重建，读到的永远是最新一份在飞集合。
+  const busyRef = useRef(options.busySessions);
+  busyRef.current = options.busySessions;
   useEffect(() => {
     const timer = window.setInterval(() => {
-      pendingSends.sweep();
+      pendingSends.sweep(undefined, busyRef.current);
     }, PENDING_SWEEP_INTERVAL_MS);
     return () => {
       window.clearInterval(timer);

@@ -230,13 +230,20 @@ export function ChatView({
   });
 
   // 0.56 乐观渲染：本地待确认的灰气泡。数据源是**事件流**（`snapshot.entries`，与
-  // `LiveItemStore` 同一条），回显一到就撤；15 s 没回显转失败态（重试 / 删除）。
+  // `LiveItemStore` 同一条），回显一到就撤；没回显且调度器对该会话已无在飞工作时转失败态
+  // （重试 / 删除）—— agent 还在跑就不判超时（用户裁决，见 `pending-sends.ts#sweep`）。
   // 它只消费 `run_id` / `session_id`，不碰 transcript 的消息身份（见 pending-sends.ts）。
   // 子 agent 详情页不画（那一屏讲的是另一个 run，与失败卡 / 已答卡同一个口径），
   // 但照常吃事件 —— 摘除动作与画不画无关，停掉反而会让 pending 卡在屏上等超时。
+  // 在飞集合来自 `health.get.runtime.scheduler`（权威账本，NodeProvider 已在轮询，零新增请求）。
+  const busySessions = useMemo(
+    () => new Set(sessionsApi.sessionInflight.keys()),
+    [sessionsApi.sessionInflight],
+  );
   const pendingSendsApi = usePendingSends({
     entries: snapshot.entries,
     sessionId: selectedId,
+    busySessions,
     onRetry: (pending) => {
       void submitApi.handleRetryPending(pending);
     },
