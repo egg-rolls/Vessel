@@ -72,7 +72,50 @@
           "description": "Pin current hash (trust) or revoke trust for a skill",
           "permission": "write"
         }
-      ]
+      ],
+      "settings": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Master switch; false = install registers nothing"
+        },
+        "sources": {
+          "type": "object",
+          "default": {
+            "project": true,
+            "user": true,
+            "library": true
+          },
+          "description": "Which skill roots to scan (project / user / library)"
+        },
+        "watch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Watch skill roots and rebuild the index (300ms debounce)"
+        },
+        "trust_default": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "deny"
+          ],
+          "default": "ask",
+          "description": "Policy for untrusted / changed skill content on load"
+        },
+        "max_load_bytes": {
+          "type": "number",
+          "default": 65536,
+          "description": "Cap for skill content returned by load / get"
+        },
+        "allowed_roots": {
+          "type": "array",
+          "description": "Inherited from basic-tools when unset (assembly merge)"
+        },
+        "deny_paths": {
+          "type": "array",
+          "description": "Inherited from basic-tools; library root appended by assembly"
+        }
+      }
     },
     "permissions": {
       "fs": [
