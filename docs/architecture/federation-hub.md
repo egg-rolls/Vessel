@@ -2,7 +2,7 @@
 title: Hub 控制面与跨节点 Federation
 kind: current
 triggers: [hub, federation, control plane, data plane, node, peer, pairing, join code, auto join, registration, derive origins, token, directory, attention, allowlist, hop, cross-node, 联邦, 中枢, 配对, 加入码, 自动加入, 注册表, 派生来源, 目录, 控制面, 数据面, 跨机, 节点互联]
-paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/config/src/node-registration.ts, packages/serve/src/federation.ts, src/cli/commands/gateway/gateway-command.ts, src/cli.ts, src/node/node-identity.ts]
+paths: [src/hub/**, src/hub-*.ts, src/federation/**, src/federation-*.ts, packages/config/src/node-registration.ts, packages/serve/src/federation.ts, src/cli/commands/gateway/gateway-command.ts, src/cli.ts, src/node/node-identity.ts]
 ---
 
 # Hub 控制面与跨节点 Federation
@@ -67,7 +67,8 @@ paths: [src/hub/**, src/hub-*.ts, src/federation-*.ts, packages/config/src/node-
 - 入站 `POST /v1/federation/messages` 注册在 gateway `principalForRequest` 之前；出站由 `vessel federation post|peers` 一次性进程发起。不复用 legacy `/v1/team/*`、`RemoteTransport` 或 hub 控制面。
 - envelope 为 `vessel.federation/1`，字段固定 `protocol / message_id / conversation_id / from / to / content / ts / hop / request_id?`；`from` / `to` 为 `{node_id, team_id, principal}`，严格解析，缺字段即 `federation_invalid`。
 - 地址 `<principal>@<node_id>:<team_id>`：`principal` 是目标 Team 的 present 成员名或保留字 `human`；它是名字，不是 agent id。
-- `federation.peers[]` 显式声明 `(nodeId, teamId)` / `url` / `tokenEnv` / `direction` / `caFile?` / `localTeamId?`；无通配、无自动发现，明文 `token` 被 validator 拒绝。每个 peer 一份 bearer token，内存定长比较；三套 token 命名空间（gateway 用户 / hub node / peer）不交叉；非回环 `url` 必须 https。
+- `federation.peers[]` 显式声明 `(nodeId, teamId)` / `url` / `tokenEnv` **或 `tokenSecret: true`** / `direction` / `caFile?` / `localTeamId?`；无通配，明文 `token` 被 validator 拒绝。每个 peer 一份 bearer token，内存定长比较；三套 token 命名空间（gateway 用户 / hub node / peer）不交叉；非回环 `url` 必须 https。
+- **自动配对（q-fed-simple）**：入站 `POST /v1/federation/pair`（与 messages 同路由，独立全局限流 12/min）。带一次性码（`vessel federation pair-code`，hash-only / TTL / 单次消费，语义同 hub join-code）或**回环 socket 免码**（同机同用户信任边界，同 `/v1/local/token` 拍板）→ target 生成共享 token 存 node SecretStore（`vessel-federation` 命名空间，`<dataDir>/federation/`，`federation.allowFileSecrets` 缺省 true）→ 自动写 `token_secret: true` peer 条目 → 进程内热应用 → 响应携带 token 明文一次；initiator（`vessel federation join <url|node-id>`）对称写自己一侧。重复配对 = 轮转 token。`vessel federation discover` 离线读 `<hubDataDir>/registry.json` 列回环节点（hub 仍不做运行时自动发现 / 不代理正文）。用法与失败分流见 [federation-setup §0](../operations/federation-setup.md)。
 
 <a id="federation-guards"></a>
 
