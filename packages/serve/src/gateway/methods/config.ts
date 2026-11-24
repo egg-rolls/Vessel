@@ -35,6 +35,8 @@ const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
   'observability.showProcessErrors',
   // q-empty-response：空响应兜底总开关（缺省 true）。
   'emptyResponse.enabled',
+  // q-empty-response 二期：无感重试开关（缺省 true；false = 一期 nudge 注入路径）。
+  'emptyResponse.seamless',
 ]);
 
 /**

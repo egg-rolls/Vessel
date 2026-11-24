@@ -46,7 +46,7 @@ import { boundToolResult, writeToolOutput } from './tool-result-gate.js';
 /** Loop 的最终结果；usage/facts 已通过 Run 拥有的 execution/context 原地写回。 */
 export type LoopResult = string;
 
-/** 空响应 nudge 重试上限缺省（不含首次响应；q-empty-response）。 */
+/** 空响应重试上限缺省（不含首次响应；seamless 重调 / nudge 共用；q-empty-response）。 */
 export const DEFAULT_EMPTY_RESPONSE_MAX_RETRIES = 2;
 
 /** 空响应 nudge 缺省文案（以 `vessel:notice` user 消息追加；可经配置覆盖）。 */
@@ -87,7 +87,8 @@ export interface LoopContext {
   readonly timing?: RunTiming;
   /**
    * 空响应兜底策略（q-empty-response；additive 可缺省）。
-   * 缺省 = 启用、nudge 重试 2 次（库用户不注入也拿到兜底）；见 `EmptyResponsePolicy`。
+   * 缺省 = 启用、无感重试（seamless）2 次 + 耗尽升级一次 nudge（库用户不注入也拿到
+   * 兜底）；seamless=false 走一期 nudge 路径；见 `EmptyResponsePolicy`。
    */
   readonly emptyResponse?: EmptyResponsePolicy;
 }
@@ -291,8 +292,12 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
   // 0.57 分段耗时：轮次从 1 起；`previous*` 是**上一轮**的读数（gap 那一行要用它把
   // 「模型慢」和「我们中间那一小段慢」分开）。
   let round = 0;
-  // 空响应兜底（q-empty-response）：本 run 已用的 nudge 重试次数；限次防死循环。
+  // 空响应兜底（q-empty-response）：本 run 已用的兜底动作次数（seamless/nudge 累计，
+  // 供事件 attempt）；限次防死循环。seamlessRetries 单独记无感重调预算；
+  // nudgeEscalated = 无感耗尽后已升级过一次 nudge（打破空模式的最后一击）。
   let emptyRetries = 0;
+  let seamlessRetries = 0;
+  let nudgeEscalated = false;
   let previousResponseAt: number | undefined;
   let previousToolCalls: number | undefined;
   let previousToolsMs: number | undefined;
@@ -502,6 +507,79 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       if (requestCost !== undefined) ctx.controls.limitChecker.addCost(stats, requestCost);
     }
 
+    // 完成原因判定提前到 llm.response 发布之前：无感重试（seamless）丢弃的空轮
+    // 不得落 durable transcript——投影会从 llm.response 重建空 assistant 轮（留疤）。
+    // 0.6.1 P1：finish_reason 不可靠——存在实际 tool_calls 时优先继续工具轮，
+    // 只有「无 tool_calls 且 stop」才视为终稿（对齐 Claude Code query.ts 的 tool_use 判定）。
+    const toolCalls = response.tool_calls;
+    const hasToolCalls = toolCalls !== undefined && toolCalls.length > 0;
+    const blankResponse = !hasToolCalls && (response.content ?? '').trim().length === 0;
+
+    // 无感重试（q-empty-response 二期，缺省开）：空响应时**丢弃空轮**——不发
+    // llm.response、不写窗口，用已有一致 transcript（含上一个工具结果）原样重调
+    // 模型（与无感 resume 同源：重入边界 = 事件投影一致，零注入零疤痕）。
+    // 限次复用 max_retries；连续空耗尽后升级**一次** nudge 打破空模式（纯重调可能
+    // 采样再吐空，nudge 是可靠性兜底；maxRetries=0 不升级，守「0=不重试」语义）；
+    // 再空则 exhausted 回落原始终止。usage/timing 已在上方记账（请求真实发生）；
+    // AfterLlm 照跑保持 Before/After 配对（hookCtx 不含响应对象，无内容泄漏）。
+    if (blankResponse) {
+      const policy = ctx.emptyResponse;
+      const enabled = policy?.enabled !== false;
+      const seamless = policy?.seamless !== false;
+      const maxRetries = sanitizeEmptyResponseRetries(policy?.maxRetries);
+      if (enabled && seamless) {
+        if (seamlessRetries < maxRetries) {
+          seamlessRetries += 1;
+          emptyRetries += 1;
+          ctx.events.emit({
+            type: 'llm.empty_response',
+            run_id: runId,
+            data: {
+              run_id: runId,
+              session_id: sessionId,
+              attempt: emptyRetries,
+              max_retries: maxRetries,
+              finish_reason: response.finish_reason,
+              action: 'seamless',
+            },
+            ts: Date.now(),
+          });
+          await ctx.controls.hooks.run(HookType.AfterLlm, hookCtx);
+          continue;
+        }
+        if (!nudgeEscalated && maxRetries > 0) {
+          nudgeEscalated = true;
+          emptyRetries += 1;
+          ctx.events.emit({
+            type: 'llm.empty_response',
+            run_id: runId,
+            data: {
+              run_id: runId,
+              session_id: sessionId,
+              attempt: emptyRetries,
+              max_retries: maxRetries,
+              finish_reason: response.finish_reason,
+              action: 'nudge',
+              escalated: true,
+            },
+            ts: Date.now(),
+          });
+          // 升级 nudge 同样丢弃空轮（零疤痕）：只注入一条继续消息。走注入通道
+          // （message.injected 落盘、resume 可重建、用户可见）；timestamp 保证
+          // 每次注入的去重键不同。
+          const nudge =
+            typeof policy?.nudge === 'string' && policy.nudge.trim().length > 0
+              ? policy.nudge
+              : DEFAULT_EMPTY_RESPONSE_NUDGE;
+          ctx.window.appendInjectedMessages(runId, [
+            { role: 'user', name: 'vessel:notice', content: nudge, timestamp: Date.now() },
+          ]);
+          await ctx.controls.hooks.run(HookType.AfterLlm, hookCtx);
+          continue;
+        }
+      }
+    }
+
     // 0.18：reasoning 只写入会话事件日志（resume 需要），**不进入对外发布的事件**。
     // ADR-077：默认不把思维链发给 UI / trace；TUI 仅在 includeReasoning=true 时
     // 通过 `llm.stream.chunk` 的 reasoning_delta 展示。
@@ -532,23 +610,18 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
     // 执行 AfterLlm 钩子
     await ctx.controls.hooks.run(HookType.AfterLlm, hookCtx);
 
-    // 检查完成原因。
-    // 0.6.1 P1：finish_reason 不可靠——存在实际 tool_calls 时优先继续工具轮，
-    // 只有「无 tool_calls 且 stop」才视为终稿（对齐 Claude Code query.ts 的 tool_use 判定）。
-    const toolCalls = response.tool_calls;
-    const hasToolCalls = toolCalls !== undefined && toolCalls.length > 0;
-
-    // 空响应兜底（q-empty-response）：无工具调用 + content 纯空白 ⇒ 不当终稿。
-    // 模型偶发「空内容 + 终止原因」（大上下文 / 压缩后更易发），旧行为把空串当终稿
-    // 返回，agent 早退零输出。这里追加一条「继续你的任务」nudge 重新轮询；限次
-    // （缺省 2），耗尽落 `llm.empty_response`(exhausted) 后回落原始终止路径（不再静默）。
-    // 工具调用路径与非空终稿不进本分支；finish_reason 语义不变。判定用模型原始输出
-    // （guardrail replacement 之前）：空响应重试时输出 guardrail 无意义。
-    if (!hasToolCalls && (response.content ?? '').trim().length === 0) {
+    // 空响应兜底（q-empty-response）：走到这里的空响应 = 无感模式预算耗尽（含升级
+    // nudge 后仍空），或非无感模式（seamless=false，一期 nudge 路径）。无感模式的
+    // 丢弃/升级已在 llm.response 发布**前**处理（空轮不落 durable transcript）；
+    // 此处空轮已落盘（llm.response 已发），nudge 路径须写回空 assistant 轮保持
+    // live 窗口 ≡ 事件投影。工具调用路径与非空终稿不进本分支；finish_reason 语义
+    // 不变。判定用模型原始输出（guardrail replacement 之前）。
+    if (blankResponse) {
       const policy = ctx.emptyResponse;
       const enabled = policy?.enabled !== false;
+      const seamless = policy?.seamless !== false;
       const maxRetries = sanitizeEmptyResponseRetries(policy?.maxRetries);
-      if (enabled && emptyRetries < maxRetries) {
+      if (enabled && !seamless && emptyRetries < maxRetries) {
         emptyRetries += 1;
         ctx.events.emit({
           type: 'llm.empty_response',

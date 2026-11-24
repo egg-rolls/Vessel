@@ -148,6 +148,7 @@ export function DisplaySettingsFields({
               </div>
             )}
             {(setting.id === 'emptyResponseEnabled' ||
+              setting.id === 'emptyResponseSeamless' ||
               setting.id === 'emptyResponseMaxRetries' ||
               setting.id === 'emptyResponseNudge') && (
               <div className="mt-0.5 text-sm text-muted">

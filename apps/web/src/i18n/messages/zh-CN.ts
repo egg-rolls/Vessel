@@ -581,10 +581,13 @@ export const messages = {
     '影响所有 agent 的核心运行期兜底。改动对新会话生效（已存活会话持启动时快照）。',
   'settings.display.field.emptyResponseEnabled': '空响应兜底',
   'settings.display.field.emptyResponseEnabled.hint':
-    '模型返回空回复（无内容、无工具调用）时，注入「继续你的任务」提示并重新轮询，而不是零输出早退。缺省开。',
+    '模型返回空回复（无内容、无工具调用）时重试而不是零输出早退（缺省无感重调，见下）。缺省开。',
+  'settings.display.field.emptyResponseSeamless': '无感重试（不留疤）',
+  'settings.display.field.emptyResponseSeamless.hint':
+    '开（缺省）：丢弃空轮，用已有 transcript 原样重调模型——不注入新消息、零疤痕；重试耗尽仍空才注入一次 nudge 兜底。关：直接注入 nudge。',
   'settings.display.field.emptyResponseMaxRetries': '空响应重试上限',
   'settings.display.field.emptyResponseMaxRetries.hint':
-    '每次 run 的 nudge 重试上限（0–10 整数，缺省 2）。耗尽后优雅终止并落日志注记。',
+    '每次 run 的重试上限（0–10 整数，缺省 2），无感重调与 nudge 共用。耗尽后优雅终止并落日志注记。',
   'settings.display.field.emptyResponseNudge': '空响应提示文案',
   'settings.display.field.emptyResponseNudge.hint':
     '自定义 nudge（以 user 消息注入）。不设置则用内置文案。',

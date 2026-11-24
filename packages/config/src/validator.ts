@@ -2975,6 +2975,14 @@ export function validateEmptyResponseConfig(
       value: enabled,
     });
   }
+  const seamless = emptyResponse.seamless;
+  if (seamless !== undefined && typeof seamless !== 'boolean') {
+    errors.push({
+      path: 'emptyResponse.seamless',
+      message: 'emptyResponse.seamless must be a boolean',
+      value: seamless,
+    });
+  }
   const maxRetries = emptyResponse.maxRetries;
   if (
     maxRetries !== undefined &&
@@ -4006,7 +4014,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'blobGcDryRun',
   ],
   // q-empty-response：空响应兜底（开关 / 重试上限 / nudge 文案）。
-  emptyResponse: ['enabled', 'maxRetries', 'nudge'],
+  emptyResponse: ['enabled', 'seamless', 'maxRetries', 'nudge'],
 };
 
 /** `node.tls` / `hub.tls` 的已知键 */

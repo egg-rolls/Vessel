@@ -70,6 +70,12 @@ export const DISPLAY_SETTINGS: readonly DisplaySettingDef[] = [
     fallback: 'true',
   },
   {
+    id: 'emptyResponseSeamless',
+    key: 'emptyResponse.seamless',
+    type: 'boolean',
+    fallback: 'true',
+  },
+  {
     id: 'emptyResponseMaxRetries',
     key: 'emptyResponse.maxRetries',
     type: 'number',

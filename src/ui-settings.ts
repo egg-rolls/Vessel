@@ -141,6 +141,7 @@ export type SettableConfigKey =
   | 'agent.cwd'
   // q-empty-response：空响应兜底（core 设置面；YAML `empty_response`）。
   | 'emptyResponse.enabled'
+  | 'emptyResponse.seamless'
   | 'emptyResponse.maxRetries'
   | 'emptyResponse.nudge';
 
@@ -173,6 +174,7 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
   'observability.log.time': { block: 'observability', subBlock: 'log', yamlKey: 'time' },
   'agent.cwd': { block: 'agent', yamlKey: 'cwd' },
   'emptyResponse.enabled': { block: 'empty_response', yamlKey: 'enabled' },
+  'emptyResponse.seamless': { block: 'empty_response', yamlKey: 'seamless' },
   'emptyResponse.maxRetries': { block: 'empty_response', yamlKey: 'max_retries' },
   'emptyResponse.nudge': { block: 'empty_response', yamlKey: 'nudge' },
 };
@@ -230,7 +232,10 @@ export async function setUserConfigValue(
     throw new Error(`invalid_path: ${JSON.stringify(value)}`);
   }
   // q-empty-response：与 config validator / serve config.set 同形状同界。
-  if (key === 'emptyResponse.enabled' && typeof value !== 'boolean') {
+  if (
+    (key === 'emptyResponse.enabled' || key === 'emptyResponse.seamless') &&
+    typeof value !== 'boolean'
+  ) {
     throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
   }
   if (
