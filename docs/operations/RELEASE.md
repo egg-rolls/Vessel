@@ -23,7 +23,7 @@ paths: [.github/workflows/release.yml, .github/actions/quality/action.yml, packa
 ## 1. 版本语义
 
 - 采用 SemVer：`MAJOR.MINOR.PATCH`。
-- alpha 阶段（`0.x`）：breaking 变更 → minor（`0.1` → `0.2`）；新功能 → minor；修复 → patch。
+- alpha 阶段（`0.x`）：breaking 变更 → minor（`0.1` → `0.2`）；**功能点/新功能 → patch（第三位 +1，如 `0.56.0` → `0.56.1`）**；修复 → patch。minor 留给里程碑/阶段收口（届时 patch 归零），避免第二位无限增长（用户裁决 2026-11-24）。
 - 预发布：`v<version>-beta.1`，npm dist-tag 用 `beta`；稳定版用 `latest`。
 
 ## 2. 发布前置条件
