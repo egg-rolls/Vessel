@@ -34,8 +34,8 @@ import type {
   SessionEventInput,
   SessionEventLogPort,
   SessionEventRecord,
-} from '../packages/core/src/index';
-import type { TimelineEventLog } from '../packages/core/src/timeline/read-port';
+} from '../../packages/core/src/index';
+import type { TimelineEventLog } from '../../packages/core/src/timeline/read-port';
 import type { SessionEventTailReader } from './context-usage';
 import type { SessionEventIndexLike } from './session-events';
 import type { TimelineDualWrite } from './timeline-dual-write';

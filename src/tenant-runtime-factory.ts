@@ -105,18 +105,18 @@ import { createProvider } from './provider-factory';
 import { includeReasoningFor } from './reasoning';
 import { closeRunRecordStore, createRunRecordStore } from './run-record-store-factory';
 import { ownerSelfCard } from './self-card';
-import { createSessionControl, type SessionControl } from './session-control';
-import { createSessionStore } from './session-factory';
-import { withSessionWriteLock } from './session-lock-runtime';
-import { reportShutdownFailure } from './shutdown-report';
+import { createSessionControl, type SessionControl } from './session/session-control';
+import { createSessionStore } from './session/session-factory';
+import { withSessionWriteLock } from './session/session-lock-runtime';
 import {
   createTimelineDualWrite,
   createTimelineLegacyBroadcastGate,
   type TimelineDualWrite,
   type TimelineLegacyBroadcastGate,
   type TimelinePublication,
-} from './timeline-dual-write';
-import { createTimelineSessionLog, type TimelineSessionLog } from './timeline-session-log';
+} from './session/timeline-dual-write';
+import { createTimelineSessionLog, type TimelineSessionLog } from './session/timeline-session-log';
+import { reportShutdownFailure } from './shutdown-report';
 import { syncBasicToolsEngineWiring, syncCallbackToolsEngineWiring } from './tools-engine/wiring';
 
 /** 构造一个 tenant 执行面的输入 */

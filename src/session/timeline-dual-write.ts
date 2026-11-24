@@ -103,11 +103,11 @@ import type {
   RunEvent,
   SessionEventRecord,
   TimelineDualWriteEvent,
-} from '../packages/core/src/index';
-import { encodeSessionDirName, sessionDirPath } from '../packages/core/src/index';
-import { loadIndexSnapshot } from '../packages/core/src/timeline/index';
-import { assertSessionFormatSupported } from '../packages/core/src/timeline/legacy-format';
-import { TimelineEventLog, toSessionEventRecord } from '../packages/core/src/timeline/read-port';
+} from '../../packages/core/src/index';
+import { encodeSessionDirName, sessionDirPath } from '../../packages/core/src/index';
+import { loadIndexSnapshot } from '../../packages/core/src/timeline/index';
+import { assertSessionFormatSupported } from '../../packages/core/src/timeline/legacy-format';
+import { TimelineEventLog, toSessionEventRecord } from '../../packages/core/src/timeline/read-port';
 import {
   CHUNK_FLUSH_MS,
   isNonFactEventType,
@@ -116,14 +116,14 @@ import {
   type TimelineHeads,
   type TimelineHole,
   type TimelineRecord,
-} from '../packages/core/src/timeline/types';
+} from '../../packages/core/src/timeline/types';
 import {
   readCrcNdjsonFile,
   readHoles,
   readTimelineEvents,
-} from '../packages/core/src/timeline/wal';
-import { TimelineWriter } from '../packages/core/src/timeline/writer';
-import { noteStartup, noteStartupMax } from './observability/startup-timing';
+} from '../../packages/core/src/timeline/wal';
+import { TimelineWriter } from '../../packages/core/src/timeline/writer';
+import { noteStartup, noteStartupMax } from '../observability/startup-timing';
 
 /**
  * 进程退出时给 flush 留的上限（ms）。

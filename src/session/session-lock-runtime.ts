@@ -8,7 +8,7 @@
  * @module vessel/session-lock-runtime
  */
 
-import type { Message, RunnableAgent, RunOptions } from '../packages/core/src/index';
+import type { Message, RunnableAgent, RunOptions } from '../../packages/core/src/index';
 import { acquireSessionLock } from './session-lock';
 
 export interface SessionWriteLockOptions {

@@ -77,8 +77,8 @@
  * @module vessel/context-usage
  */
 
-import { DEFAULT_CONFIG } from '../packages/config/src/index';
-import type { SessionEventRecord } from '../packages/core/src/index';
+import { DEFAULT_CONFIG } from '../../packages/config/src/index';
+import type { SessionEventRecord } from '../../packages/core/src/index';
 
 /**
  * 事件**只读尾窗面**（读口 `readTailMatches` 的结构子集）+ 尾水位来源。

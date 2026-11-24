@@ -39,7 +39,7 @@
  * @module vessel/image-delivery
  */
 
-import type { SessionEventRecord } from '../packages/core/src/index';
+import type { SessionEventRecord } from '../../packages/core/src/index';
 
 /** 一张图的投递事实（与 `packages/serve` 的 `ImageDeliveryView` 结构一致）。 */
 export interface ImageDeliveryView {

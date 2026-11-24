@@ -16,7 +16,7 @@ import {
   type SessionLogDirectoryPort,
   type SessionStore,
   type TenantPaths,
-} from '../packages/core/src/index';
+} from '../../packages/core/src/index';
 
 /** session 不存在 */
 export class SessionNotFoundError extends Error {

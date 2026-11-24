@@ -84,7 +84,6 @@ import {
   registerRuntimeNoticeHook,
 } from './config/hot-apply-assembly';
 import { visionSurfaceOf } from './config/vision-settings';
-import { createContextUsageSource } from './context-usage';
 import type { FeishuChannelLike } from './control-plane-types';
 import { createConfigAttachmentLister } from './data/attachments-list';
 import { expandHome, resolveDataDir } from './data/data-paths';
@@ -121,7 +120,6 @@ import {
 import { readHubNodeTrustedOrigins } from './hub/node-state';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
-import { createImageDeliverySource } from './image-delivery';
 import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-dir';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 // 0.56：派生 token（root-secret → HKDF；显式配置永远优先）。
@@ -149,20 +147,22 @@ import { createRunControl } from './run-control';
 import { createRuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
-import { createSessionEventsSource } from './session-events';
+import { createContextUsageSource } from './session/context-usage';
+import { createImageDeliverySource } from './session/image-delivery';
+import { createSessionEventsSource } from './session/session-events';
 import {
   reconcileStaleSessions,
   type SessionLivenessContext,
   withLivenessRepair,
-} from './session-liveness';
-import { resolveContinueSessionId, resumeSession, runSessionList } from './session-resume';
+} from './session/session-liveness';
+import { resolveContinueSessionId, resumeSession, runSessionList } from './session/session-resume';
+import { createSystemContextSource } from './session/system-context';
+// 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
+// 0.54 C：`events.list` 的按 run 读端口（同一模块）。
+import { createTimelineRunEventsPort, timelineTailPort } from './session/timeline-dual-write';
 import { isAddressInUse } from './shared/port-in-use';
 import { readPackageVersion } from './shared/version';
 import { shutdownServeStack } from './shutdown-sequence';
-import { createSystemContextSource } from './system-context';
-// 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
-// 0.54 C：`events.list` 的按 run 读端口（同一模块）。
-import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-write';
 import { syncBasicToolsEngineWiring, syncCallbackToolsEngineWiring } from './tools-engine/wiring';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';

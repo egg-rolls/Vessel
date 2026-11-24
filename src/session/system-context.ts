@@ -33,7 +33,7 @@
  * @module vessel/system-context
  */
 
-import type { SessionEventRecord } from '../packages/core/src/index';
+import type { SessionEventRecord } from '../../packages/core/src/index';
 import type { SessionEventTailReader } from './context-usage';
 
 /**

@@ -28,7 +28,7 @@
  * @module vessel/session-events
  */
 
-import type { SessionEventRecord } from '../packages/core/src/index';
+import type { SessionEventRecord } from '../../packages/core/src/index';
 
 /**
  * `sessions.events` 的事件体：与 SSE 回放**同一个事件对象**（与

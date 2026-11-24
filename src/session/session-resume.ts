@@ -14,15 +14,15 @@
 import { Database } from 'bun:sqlite';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ConfigLoadOptions, VesselConfig } from '../packages/config/src/index';
-import { loadConfig } from '../packages/config/src/index';
-import type { SessionInfo, SessionStore, TenantPaths } from '../packages/core/src/index';
-import { withTitleSource } from '../packages/core/src/index';
+import type { ConfigLoadOptions, VesselConfig } from '../../packages/config/src/index';
+import { loadConfig } from '../../packages/config/src/index';
+import type { SessionInfo, SessionStore, TenantPaths } from '../../packages/core/src/index';
+import { withTitleSource } from '../../packages/core/src/index';
 import {
   resolveDataDir,
   resolveEffectiveTenantId,
   resolveSingleTenantPaths,
-} from './data/data-paths';
+} from '../data/data-paths';
 import { createSessionStore } from './session-factory';
 
 /** 列表展示上限 */

@@ -76,7 +76,6 @@ import {
   waitForConnectedResumeTerminal,
   waitForConnectedRun,
 } from './connect-run-wait';
-import { createContextUsageSource } from './context-usage';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { createConfigAttachmentIngest } from './data/attachment-ingest';
 import { createConfigAttachmentLister } from './data/attachments-list';
@@ -108,7 +107,6 @@ import {
 import { createFederationSendPort } from './federation/federation-send-port';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
-import { createImageDeliverySource } from './image-delivery';
 import { resolveInteractionsDir } from './interactions-dir';
 import { createLocalRunAdapter } from './local-run-adapter';
 import type { McpEngineShell } from './mcp-engine-wiring';
@@ -144,12 +142,18 @@ import {
 import { createRunControl } from './run-control';
 import { createRuntimeNoticeBus, type RuntimeNoticeBus } from './runtime-notice';
 import { resolveGatewayAuth } from './serve-auth';
-import type { SessionControl } from './session-control';
-import { createSessionEventsSource } from './session-events';
-import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
+import { createContextUsageSource } from './session/context-usage';
+import { createImageDeliverySource } from './session/image-delivery';
+import type { SessionControl } from './session/session-control';
+import { createSessionEventsSource } from './session/session-events';
+import { acquireSessionLock, type SessionLock, SessionLockedError } from './session/session-lock';
+import { createSystemContextSource } from './session/system-context';
+// 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
+// 只有双写开关开时才有 `timelineDualWrite`，此时才传；关闭路径与 0.53 逐字节相同。
+// 0.54 C：`events.list` 的按 run 读端口（同一模块，共用 timeline 的读面与路径口径）。
+import { createTimelineRunEventsPort, timelineTailPort } from './session/timeline-dual-write';
 import { readPackageVersion } from './shared/version';
 import { reportShutdownFailure } from './shutdown-report';
-import { createSystemContextSource } from './system-context';
 import {
   createTeamHumanDelivery,
   createTeamLocalMemberDelivery,
@@ -157,10 +161,6 @@ import {
   type LocalMemberTarget,
 } from './team-human-delivery';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
-// 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
-// 只有双写开关开时才有 `timelineDualWrite`，此时才传；关闭路径与 0.53 逐字节相同。
-// 0.54 C：`events.list` 的按 run 读端口（同一模块，共用 timeline 的读面与路径口径）。
-import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-write';
 import { createEngineSupervisor, type EngineSupervisor } from './tools-engine/supervisor';
 import { callbackRoute } from './tools-engine/wiring';
 import { resolveConnectToken } from './transport-factory';

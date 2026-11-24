@@ -69,8 +69,8 @@ import {
   resolveDurableOptions,
   resolveRunStorePath,
 } from '../run-record-store-factory';
-import { createSessionStore } from '../session-factory';
-import { inspectSessionLock } from '../session-lock';
+import { createSessionStore } from '../session/session-factory';
+import { inspectSessionLock } from '../session/session-lock';
 
 /** 单页上限（与 `RunRecordStore.list` 实现的硬上限一致） */
 const PAGE_LIMIT = 200;

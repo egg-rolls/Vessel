@@ -52,7 +52,7 @@ import type {
   ToolDefinition,
   UsageLimits,
 } from '@vessel-agent/core';
-import { createContextRatioSource, withLiveContextRatio } from './context-ratio-source';
+import { createContextRatioSource, withLiveContextRatio } from './session/context-ratio-source';
 
 export interface AgentServiceWiringOptions {
   /**

@@ -39,7 +39,7 @@ import {
   type Logger,
 } from '@vessel-agent/core';
 // 只读探针复用 session-lock 的不可解析宽限，避免两处各写一套时间判断而漂移。
-import { SESSION_LOCK_UNPARSEABLE_GRACE_MS } from './session-lock';
+import { SESSION_LOCK_UNPARSEABLE_GRACE_MS } from './session/session-lock';
 
 /** 回收守卫文件超过该时长视为 stale */
 const LEASE_RECLAIM_GUARD_STALE_MS = 10_000;

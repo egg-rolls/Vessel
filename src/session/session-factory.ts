@@ -8,13 +8,13 @@
  * - memory 不变。
  */
 
-import type { SessionConfig } from '../packages/config/src/index';
+import type { SessionConfig } from '../../packages/config/src/index';
 import {
   FileSessionStore,
   MemorySessionStore,
   type SessionStore,
   SQLiteSessionStore,
-} from '../packages/core/src/index';
+} from '../../packages/core/src/index';
 
 export const DEFAULT_SQLITE_PATH = '.vessel/sessions.db';
 export const DEFAULT_FILE_DIR = '.vessel/sessions';
