@@ -223,3 +223,41 @@
   `start --daemon` 后再缺省 restart ⇒ 保持 daemon（新 record 带 daemon:true）。
 
 ---
+
+## 6. 门禁读数（唯一门禁：bun run build）
+
+**口径**：根 `bun run build` = typecheck（root + examples + apps/web，tsc --noEmit）+ lint（biome ci .）；
+产物读数另跑 `bun run --cwd apps/web build`（tsc --noEmit && vite build）生成 dist。
+日志：`D:/Application/APP/Vessel/docs/dev/tmp/q-modes/gates.log`（两轮完整记录，2523 行）。
+防 WSL 退出码谎报：rc 之外独立核对日志 ✅/✓ 标记 + dist 文件数/字节/index.html 实读。
+
+### 6.1 轮次记录
+
+| 轮 | 时间（+08:00） | 代码状态 | root build rc | web build rc | 结论 |
+|---|---|---|---|---|---|
+| 1 | 2026-11-24 10:26:29 | WIP 53811383 | **1** | 0 | typecheck 通过；lint 唯一 error = NodeProvider.tsx:9 organizeImports（WIP 引入的 import 排序）；22 warnings 均基线既有 |
+| 2 | 2026-11-24 10:29:05 | 18acfe27 排序修复后（文档收尾 a71d3f44） | **0** | **0** | ✅ Type check 通过；✅ Lint 通过（Checked 1259 files，22 warnings / 0 errors）；vite v7.3.6 ✓ 464 modules transformed，✓ built in 4.05s |
+
+### 6.2 产物独立读数（第 2 轮，apps/web/dist）
+
+| 项 | 读数 |
+|---|---|
+| DIST_EXISTS | yes |
+| FILE_COUNT | 45 |
+| BYTES | 1,377,005 |
+| index.html | 1137 B，mtime 2026-11-24 10:29（与本轮构建一致） |
+| 主 bundle | assets/index-QPUN_FQ2.js 991.30 kB（gzip 287.49 kB） |
+
+**门禁结论：通过（rc1=0 / rc2=0 + 产物非空实读）。**
+遗留 lint warnings（22 条，useTemplate / noNonNullAssertion 等）全部位于本次未触碰的基线文件
+（packages/core/src/context/*、src/cli.ts 等），不属本任务范围，未动。
+
+---
+
+## 7. 收尾状态
+
+- 分支 `fix/q-modes`（worktree `worktrees/q-modes`），基线 db69c381；提交链：
+  53811383（WIP 保全）→ e5fa7748（§3.2）→ 18acfe27（import 排序）→ af1a36ab（§4+§5）→ a71d3f44（§4.3 注）→ 本节提交。
+- 行为变更仅 1 处（G2 修复）+ 1 处纯 import 排序；其余为注释对齐与审计文档。
+- 未 merge、未碰主 checkout、未删 worktree；零测试/探针/临时进程，行为验证归用户（§5 oracle）。
+- 遗留：G1（owner main 排期）、G3（用户一次性 start --daemon 自愈，设计内）。
