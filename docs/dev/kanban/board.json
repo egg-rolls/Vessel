@@ -109,6 +109,14 @@
       "progress": "merge入main；media action=view复用0.56视觉基座(refs→vision/plan→适配器图块),工具结果图附件通路attachToolImages→appendInjectedMessages追加user图消息→主模型原生看图,零新provider；enabled即注册无需CLI后端；build绿待用户启用media+view验收"
     },
     {
+      "id": "q-tool-perm",
+      "title": "工具权限统一规范(inbox等通用成员工具纳入全局权限列表)",
+      "column": "进行中",
+      "owner": "q-tool-perm",
+      "branch": "fix/q-tool-perm",
+      "progress": "派单：权限按注册作用域分裂不合理；inbox所有agent都有应进全局权限列表,统一auto/ask/never策略;权限UI聚合全局+通用成员工具"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
