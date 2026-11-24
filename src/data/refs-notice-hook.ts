@@ -70,7 +70,7 @@ import {
   type Message,
   type MessageRef,
   type ToolDefinition,
-} from '../packages/core/src/index';
+} from '../../packages/core/src/index';
 
 /** 注册名（幂等注册用） */
 export const REFS_NOTICE_HOOK = 'refs-notice';

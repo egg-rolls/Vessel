@@ -35,7 +35,7 @@ import {
 import type { GatewayCommand, GatewayInstallTarget, GatewaySelector } from './cli-args';
 import { formatConfigErrors } from './config-error-format';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
-import { expandHome, resolveDataDir } from './data-paths';
+import { expandHome, resolveDataDir } from './data/data-paths';
 import { gatewayLogPath, startGatewayDaemon } from './gateway/daemon';
 import { clearHandoffMarker, consumeHandoffMarker, writeHandoffMarker } from './gateway/handoff';
 import {

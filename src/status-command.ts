@@ -14,7 +14,7 @@ import {
   type ControlPlaneTargetOptions,
   resolveControlPlaneTarget,
 } from './control-plane-target';
-import { resolveDataDir, resolveEffectiveTenantId } from './data-paths';
+import { resolveDataDir, resolveEffectiveTenantId } from './data/data-paths';
 import {
   collectGatewayState,
   type GatewayStateEntry,

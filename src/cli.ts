@@ -56,7 +56,6 @@ import {
 // 实测（本机）单是求值它就要数百毫秒到数秒 —— 而 `node start` / `gateway start` /
 // `--run` 永远不会进那个界面。它现在按需加载（见 {@link startInkRepl}）。
 import { createAskAnswerDelivery } from './ask-answer-delivery';
-import { createConfigAttachmentLister } from './attachments-list';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { DEFAULT_SERVE_PORT, parseArgs } from './cli-args';
 import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli-help';
@@ -66,7 +65,10 @@ import { type ConfigWatchHandle, startConfigWatch, toConfigReloadOutcome } from 
 import { createWrittenConfigApplier } from './config-write-apply';
 import { createContextUsageSource } from './context-usage';
 import type { FeishuChannelLike } from './control-plane-types';
-import { expandHome, resolveDataDir } from './data-paths';
+import { createConfigAttachmentLister } from './data/attachments-list';
+import { expandHome, resolveDataDir } from './data/data-paths';
+import { resolveAgentCwd } from './data/path-resolution';
+import { setToolPolicy } from './data/permission-store';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
 import type { GatewayInstanceLock } from './gateway/instance-lock';
 import { collectGatewayState, DEFAULT_GATEWAY_INSTANCE, GATEWAY_DAEMON_ENV } from './gateway/pid';
@@ -119,8 +121,6 @@ import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-di
 import { createCliLogger, diffLogOptions, resolveLogOptions } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 import { isForegroundNodeCommand } from './node-command';
-import { resolveAgentCwd } from './path-resolution';
-import { setToolPolicy } from './permission-store';
 import { runPluginCliCommand } from './plugin-cli-command';
 import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
 import {

@@ -11,7 +11,7 @@ import { open, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { loadConfig } from '../packages/config/src/index';
 import type { LogsCommandArgs } from './cli-args';
-import { resolveDataDir } from './data-paths';
+import { resolveDataDir } from './data/data-paths';
 import { gatewayLogPath } from './gateway/daemon';
 import { t } from './i18n';
 import { ui } from './ui-style';

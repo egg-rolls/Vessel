@@ -18,10 +18,14 @@
 
 import { loadConfig } from '../packages/config/src/index';
 import { formatConfigErrors } from './config-error-format';
-import { acquireDataLock, DataLockError } from './data-lock';
-import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
+import { acquireDataLock, DataLockError } from './data/data-lock';
+import {
+  resolveDataDir,
+  resolveEffectiveTenantId,
+  resolveSingleTenantPaths,
+} from './data/data-paths';
+import { type PruneNote, type PruneReport, pruneTenantData } from './data/prune-wiring';
 import { t } from './i18n';
-import { type PruneNote, type PruneReport, pruneTenantData } from './prune-wiring';
 
 type EnvMap = Record<string, string | undefined>;
 

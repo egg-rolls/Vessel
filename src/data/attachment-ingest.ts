@@ -24,18 +24,18 @@
  */
 
 import * as path from 'node:path';
-import type { VesselConfig } from '../packages/config/src/index';
-import type { MessageRef } from '../packages/core/src/index';
-import { ingestImageRefs } from '../packages/core/src/index';
+import type { VesselConfig } from '../../packages/config/src/index';
+import type { MessageRef } from '../../packages/core/src/index';
+import { ingestImageRefs } from '../../packages/core/src/index';
 import {
   buildPathBoundary,
   canonicalPath,
   evaluatePath,
   type PathBoundary,
   parseBasicToolsConfig,
-} from '../plugins/tools/basic-tools/src/index';
+} from '../../plugins/tools/basic-tools/src/index';
+import { buildPluginConfigMap, declarativePluginEntries } from '../plugin-config';
 import { resolveAgentCwd } from './path-resolution';
-import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
 
 export interface AttachmentIngestOptions {
   /** 当前活配置（getter：热应用后下一次入池就用新边界）。 */

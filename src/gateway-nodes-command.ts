@@ -21,7 +21,7 @@ import {
   type VesselConfig,
 } from '../packages/config/src/index';
 import type { GatewayNodesCommand } from './cli-args';
-import { resolveDataDir } from './data-paths';
+import { resolveDataDir } from './data/data-paths';
 import {
   assertNodeDataDirMatches,
   assertRegistryEntryUnique,

@@ -12,7 +12,11 @@ import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import { readTraceEvents, type TenantPaths } from '../packages/core/src/index';
 import { formatConfigErrors } from './config-error-format';
 import { type ControlPlaneTargetOptions, resolveControlPlaneTarget } from './control-plane-target';
-import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
+import {
+  resolveDataDir,
+  resolveEffectiveTenantId,
+  resolveSingleTenantPaths,
+} from './data/data-paths';
 import { t } from './i18n';
 import { RpcClientError } from './rpc';
 import { ui } from './ui-style';

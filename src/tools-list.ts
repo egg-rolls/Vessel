@@ -21,8 +21,8 @@ import {
   TOOL_NAME_ALIASES,
 } from '../packages/core/src/index';
 import { drainWebToolsWarnings } from '../plugins/tools/web-tools/src/index';
-import { resolveDataDir } from './data-paths';
-import { resolveAgentCwd } from './path-resolution';
+import { resolveDataDir } from './data/data-paths';
+import { resolveAgentCwd } from './data/path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';

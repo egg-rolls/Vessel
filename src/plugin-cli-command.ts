@@ -33,7 +33,7 @@ import {
   type ResolveControlPlaneTargetResult,
   resolveControlPlaneTarget,
 } from './control-plane-target';
-import { resolveDataDir, resolveEffectiveTenantId } from './data-paths';
+import { resolveDataDir, resolveEffectiveTenantId } from './data/data-paths';
 import { createCliLogger } from './logging';
 import {
   defaultPluginRoots,

@@ -20,7 +20,7 @@ import {
 } from '../packages/config/src/index';
 import { loggingEnvOverrides } from '../packages/core/src/index';
 import { formatConfigError, formatConfigErrors } from './config-error-format';
-import { resolveDataDir } from './data-paths';
+import { resolveDataDir } from './data/data-paths';
 import { t } from './i18n';
 import {
   isSettableConfigKey,

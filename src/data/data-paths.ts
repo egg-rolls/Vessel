@@ -13,12 +13,12 @@
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { DEFAULT_DATA_DIR, type VesselConfig } from '../packages/config/src/index';
+import { DEFAULT_DATA_DIR, type VesselConfig } from '../../packages/config/src/index';
 import {
   assertTenantId,
   resolveSingleTenantPaths as resolveCoreSingleTenantPaths,
   type TenantPaths,
-} from '../packages/core/src/index';
+} from '../../packages/core/src/index';
 
 /** 展开开头的 `~`（支持 `~`、`~/x`、`~\x`） */
 export function expandHome(input: string): string {

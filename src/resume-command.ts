@@ -7,7 +7,11 @@
 
 import { type ConfigLoadOptions, loadConfig } from '../packages/config/src/index';
 import { formatConfigErrors } from './config-error-format';
-import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
+import {
+  resolveDataDir,
+  resolveEffectiveTenantId,
+  resolveSingleTenantPaths,
+} from './data/data-paths';
 import { previewOf } from './durable-wiring';
 import { closeRunRecordStore, createRunRecordStore } from './run-record-store-factory';
 

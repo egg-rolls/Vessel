@@ -11,7 +11,7 @@
  */
 
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
-import { resolveDataDir } from './data-paths';
+import { resolveDataDir } from './data/data-paths';
 import {
   type CommandRunner,
   collectGatewayState,

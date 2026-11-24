@@ -9,7 +9,7 @@
 import { realpath, stat } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { DEFAULT_EVALS_OPTIONS, type VesselConfig } from '../packages/config/src/index';
+import { DEFAULT_EVALS_OPTIONS, type VesselConfig } from '../../packages/config/src/index';
 
 /** name 的安全字符集 */
 export const SAFE_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;

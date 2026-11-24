@@ -45,7 +45,7 @@ import { copyFile, link, lstat, mkdtemp, readdir, readFile, rm, stat } from 'nod
 import * as os from 'node:os';
 import { join } from 'node:path';
 import { FileTeamStore, inboxPath, snapshotPath, teamDirPath } from '@vessel-agent/agent';
-import type { VesselConfig } from '../packages/config/src/index';
+import type { VesselConfig } from '../../packages/config/src/index';
 import {
   atomicWrite,
   deleteSessionData as coreDeleteSessionData,
@@ -60,17 +60,17 @@ import {
   sessionDirPath,
   sessionLogDirExists,
   type TenantPaths,
-} from '../packages/core/src/index';
-import { TimelineEventLog } from '../packages/core/src/timeline/read-port';
-import { inspectSessionLease } from './lease-service';
+} from '../../packages/core/src/index';
+import { TimelineEventLog } from '../../packages/core/src/timeline/read-port';
+import { inspectSessionLease } from '../lease-service';
 import {
   createRunRecordStore,
   resolveDurableOptions,
   resolveRunStorePath,
-} from './run-record-store-factory';
-import { createSessionStore } from './session-factory';
-import { inspectSessionLock } from './session-lock';
-import { resolveTraceOptions } from './trace-wiring';
+} from '../run-record-store-factory';
+import { createSessionStore } from '../session-factory';
+import { inspectSessionLock } from '../session-lock';
+import { resolveTraceOptions } from '../trace-wiring';
 
 /** 单页上限（与 `RunRecordStore.list` 实现的硬上限一致） */
 const PAGE_LIMIT = 200;

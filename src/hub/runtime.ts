@@ -17,7 +17,7 @@ import { mkdir, open } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { Logger } from '@vessel-agent/core';
 import type { HubConfig, VesselConfig } from '../../packages/config/src/index';
-import { expandHome, resolveDataDir } from '../data-paths';
+import { expandHome, resolveDataDir } from '../data/data-paths';
 import {
   deleteRecordIfOwned,
   isBeforeBoot,

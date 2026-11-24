@@ -9,8 +9,8 @@
 
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import { formatConfigErrors } from './config-error-format';
-import { resolveDataDir, resolveEffectiveTenantId } from './data-paths';
-import { MigrateError, type MigrateResult, migrate } from './migrate';
+import { resolveDataDir, resolveEffectiveTenantId } from './data/data-paths';
+import { MigrateError, type MigrateResult, migrate } from './data/migrate';
 
 type EnvMap = Record<string, string | undefined>;
 

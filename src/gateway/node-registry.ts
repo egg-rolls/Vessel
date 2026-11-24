@@ -16,7 +16,7 @@ import { readFile, unlink } from 'node:fs/promises';
 import * as path from 'node:path';
 import { atomicWrite, type Logger } from '@vessel-agent/core';
 import type { VesselConfig } from '../../packages/config/src/index';
-import { expandHome, resolveDataDir } from '../data-paths';
+import { expandHome, resolveDataDir } from '../data/data-paths';
 import { nodeJsonPath, resolveNodeIdentity } from '../node-identity';
 
 export const NODE_REGISTRY_VERSION = 1;

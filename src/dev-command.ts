@@ -23,7 +23,7 @@ import {
   type VesselConfig,
 } from '../packages/config/src/index';
 import { formatConfigErrors } from './config-error-format';
-import { expandHome, resolveDataDir } from './data-paths';
+import { expandHome, resolveDataDir } from './data/data-paths';
 import { t } from './i18n';
 
 type EnvMap = Record<string, string | undefined>;

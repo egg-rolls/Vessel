@@ -11,8 +11,12 @@ import type { LLMProvider, TenantPaths } from '../packages/core/src/index';
 import type { EvalCommand } from './cli-args';
 import { formatConfigErrors } from './config-error-format';
 import type { EvalReport } from './control-plane-types';
-import { acquireDataLock, type DataLock, DataLockError } from './data-lock';
-import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
+import { acquireDataLock, type DataLock, DataLockError } from './data/data-lock';
+import {
+  resolveDataDir,
+  resolveEffectiveTenantId,
+  resolveSingleTenantPaths,
+} from './data/data-paths';
 import { executeEvalSuite } from './eval-wiring';
 import { createEventStream } from './observability-wiring';
 import { PluginLoader } from './plugin-loader';

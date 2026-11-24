@@ -18,7 +18,7 @@ import {
   resolveEvalsDir,
   resolveEvalsOutDir,
   type TenantPathOptions,
-} from './path-resolution';
+} from './data/path-resolution';
 import type { PluginLoader } from './plugin-loader';
 
 export interface ResolvedEvalsOptions {

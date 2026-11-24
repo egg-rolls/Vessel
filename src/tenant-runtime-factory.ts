@@ -68,7 +68,8 @@ import {
 import { TimelineEventLog } from '../packages/core/src/timeline/read-port';
 import type { PluginHostManager } from '../packages/serve/src/index';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
-import { resolveDataDir } from './data-paths';
+import { resolveDataDir } from './data/data-paths';
+import { resolveAgentCwd } from './data/path-resolution';
 import { emptyResponsePolicyOf } from './empty-response-settings';
 import { createFeishuFromConfig, stopFeishuChannel } from './feishu-wiring';
 import { FileLeaseService } from './lease-service';
@@ -82,7 +83,6 @@ import {
   disposeMetrics,
   type MetricsFactory,
 } from './observability-wiring';
-import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, withPluginConfig } from './plugin-config';
 import { registerInProcessPluginEntries } from './plugin-host-assembly';
 import { type PluginDescriptor, PluginLoader } from './plugin-loader';

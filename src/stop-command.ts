@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { getUserConfigDir, loadConfig, type VesselConfig } from '../packages/config/src/index';
 import { DEFAULT_STOP_TIMEOUT_MS, type GatewaySelector } from './cli-args';
-import { expandHome, resolveDataDir } from './data-paths';
+import { expandHome, resolveDataDir } from './data/data-paths';
 import { loadNodeRegistry } from './gateway/node-registry';
 import { readSpawnedChildren, type SpawnedChildRecord } from './gateway/node-supervisor';
 import {

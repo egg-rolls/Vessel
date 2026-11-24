@@ -18,7 +18,11 @@ import type { ConfigLoadOptions, VesselConfig } from '../packages/config/src/ind
 import { loadConfig } from '../packages/config/src/index';
 import type { SessionInfo, SessionStore, TenantPaths } from '../packages/core/src/index';
 import { withTitleSource } from '../packages/core/src/index';
-import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
+import {
+  resolveDataDir,
+  resolveEffectiveTenantId,
+  resolveSingleTenantPaths,
+} from './data/data-paths';
 import { createSessionStore } from './session-factory';
 
 /** 列表展示上限 */

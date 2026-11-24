@@ -17,7 +17,7 @@ import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import { formatEventLine } from '../packages/serve/src/index';
 import type { NodeCommand } from './cli-args';
 import type { ControlPlaneTarget } from './control-plane-target';
-import { expandHome, resolveDataDir } from './data-paths';
+import { expandHome, resolveDataDir } from './data/data-paths';
 import { gatewayLogPath, startGatewayDaemon } from './gateway/daemon';
 import { readSpawnedChildren } from './gateway/node-supervisor';
 import {

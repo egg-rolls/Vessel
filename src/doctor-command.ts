@@ -27,7 +27,11 @@ import {
 import { isLoopbackHostname } from '../packages/serve/src/index';
 import type { DoctorCommandArgs } from './cli-args';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
-import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
+import {
+  resolveDataDir,
+  resolveEffectiveTenantId,
+  resolveSingleTenantPaths,
+} from './data/data-paths';
 import { declarativePluginEntries } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';

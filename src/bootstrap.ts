@@ -63,8 +63,6 @@ import { createAgentServiceWiring } from './agent-service-wiring';
 import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
 import { createAskAnswerDelivery } from './ask-answer-delivery';
 import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from './ask-channel';
-import { createConfigAttachmentIngest } from './attachment-ingest';
-import { createConfigAttachmentLister } from './attachments-list';
 import { registerBashJobDelivery } from './bash-job-delivery';
 import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
@@ -76,8 +74,26 @@ import {
 } from './connect-run-wait';
 import { createContextUsageSource } from './context-usage';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
-import { withDataLock } from './data-lock';
-import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
+import { createConfigAttachmentIngest } from './data/attachment-ingest';
+import { createConfigAttachmentLister } from './data/attachments-list';
+import { withDataLock } from './data/data-lock';
+import {
+  resolveDataDir,
+  resolveEffectiveTenantId,
+  resolveSingleTenantPaths,
+} from './data/data-paths';
+import {
+  formatImageBlobGcReport,
+  type ImageBlobGcRunner,
+  isBlobRootInsideDataDir,
+  startImageBlobGc,
+} from './data/image-blob-gc';
+import { resolveAgentCwd } from './data/path-resolution';
+import {
+  addAutoApproveRule,
+  listAutoApproveRules,
+  removeAutoApproveRule,
+} from './data/permission-store';
 import {
   type DurableRunHandleLike,
   type DurableRunsControlLike,
@@ -89,12 +105,6 @@ import { createFederationSendPort } from './federation-send-port';
 import { registerRefsNoticeHook, registerRuntimeNoticeHook } from './hot-apply-assembly';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
-import {
-  formatImageBlobGcReport,
-  type ImageBlobGcRunner,
-  isBlobRootInsideDataDir,
-  startImageBlobGc,
-} from './image-blob-gc';
 import { createImageDeliverySource } from './image-delivery';
 import { resolveInteractionsDir } from './interactions-dir';
 import { normalizeLegacyToolName } from './legacy-tool-names';
@@ -107,13 +117,7 @@ import { createNodeDrainer } from './node-drain';
 import { resolveNodeIdentity } from './node-identity';
 import { createNodeResumer } from './node-resume';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
-import { resolveAgentCwd } from './path-resolution';
 import { createPeerNoticeRouter, type PeerNoticeRouter } from './peer-notices';
-import {
-  addAutoApproveRule,
-  listAutoApproveRules,
-  removeAutoApproveRule,
-} from './permission-store';
 import { declarativePluginEntries } from './plugin-config';
 import {
   activateStartupPlugins,

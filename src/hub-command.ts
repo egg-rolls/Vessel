@@ -16,7 +16,7 @@ import {
   type VesselConfig,
 } from '../packages/config/src/index';
 import type { HubCommand } from './cli-args';
-import { expandHome, resolveDataDir } from './data-paths';
+import { expandHome, resolveDataDir } from './data/data-paths';
 import { collectGatewayState } from './gateway/pid';
 import { createHubJoinStore } from './hub/join-store';
 import {

@@ -24,7 +24,7 @@ import {
   tokenFingerprint,
 } from '../packages/config/src/index';
 import { formatConfigErrors } from './config-error-format';
-import { resolveDataDir } from './data-paths';
+import { resolveDataDir } from './data/data-paths';
 import { loadNodeRegistry } from './gateway/node-registry';
 import {
   effectiveHubToken,

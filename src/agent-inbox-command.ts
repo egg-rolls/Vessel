@@ -17,7 +17,7 @@ import {
   resolveAgentOwner,
 } from './agent-owner-client';
 import type { AgentCommand } from './cli-args';
-import { assertRootTenantLayout, resolveEffectiveTenantId } from './data-paths';
+import { assertRootTenantLayout, resolveEffectiveTenantId } from './data/data-paths';
 import { ui } from './ui-style';
 
 export interface AgentInboxCommandOptions {

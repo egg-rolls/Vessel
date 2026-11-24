@@ -19,7 +19,7 @@ import {
   type RunRecord,
   type SessionState,
   type TenantPaths,
-} from '../packages/core/src/index';
+} from '../../packages/core/src/index';
 import { acquireDataLock, DataLockError } from './data-lock';
 import { expandHome, resolveSingleTenantPaths } from './data-paths';
 

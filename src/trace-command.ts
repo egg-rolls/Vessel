@@ -11,8 +11,12 @@
 import { loadConfig } from '../packages/config/src/index';
 import type { PruneTraceResult } from '../packages/core/src/index';
 import { formatConfigErrors } from './config-error-format';
-import { acquireDataLock, DataLockError } from './data-lock';
-import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } from './data-paths';
+import { acquireDataLock, DataLockError } from './data/data-lock';
+import {
+  resolveDataDir,
+  resolveEffectiveTenantId,
+  resolveSingleTenantPaths,
+} from './data/data-paths';
 import { pruneTenantTrace } from './trace-wiring';
 
 type EnvMap = Record<string, string | undefined>;

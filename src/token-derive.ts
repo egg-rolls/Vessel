@@ -36,7 +36,7 @@ import {
   type TokenPurpose,
   tokenFingerprint,
 } from '../packages/config/src/index';
-import { resolveDataDir } from './data-paths';
+import { resolveDataDir } from './data/data-paths';
 import { resolveGatewayToken } from './transport-factory';
 
 /** node 身份文件名（`<dataDir>/node.json`）；与 `src/node-identity.ts` 同源约定。 */

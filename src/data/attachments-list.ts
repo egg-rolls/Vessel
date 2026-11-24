@@ -21,22 +21,22 @@ import type { Dirent } from 'node:fs';
 import { readdir, realpath, stat } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { VesselConfig } from '../packages/config/src/index';
+import type { VesselConfig } from '../../packages/config/src/index';
 import type {
   AttachmentListEntry,
   AttachmentLister,
   AttachmentListRequest,
   AttachmentListResult,
-} from '../packages/serve/src/index';
+} from '../../packages/serve/src/index';
 import {
   buildPathBoundary,
   canonicalPath,
   evaluatePath,
   type PathBoundary,
   parseBasicToolsConfig,
-} from '../plugins/tools/basic-tools/src/index';
+} from '../../plugins/tools/basic-tools/src/index';
+import { buildPluginConfigMap, declarativePluginEntries } from '../plugin-config';
 import { resolveAgentCwd } from './path-resolution';
-import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
 
 export interface AttachmentsListOptions {
   /**

@@ -20,7 +20,7 @@ import {
 } from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { getUserConfigPath } from '../packages/config/src/index';
+import { getUserConfigPath } from '../../packages/config/src/index';
 
 /** 存储选项 */
 export interface PermissionStoreOptions {

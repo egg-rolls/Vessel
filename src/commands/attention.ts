@@ -39,7 +39,7 @@ import {
   type ControlPlaneTargetOptions,
   resolveControlPlaneTarget,
 } from '../control-plane-target';
-import { resolveDataDir, resolveEffectiveTenantId } from '../data-paths';
+import { resolveDataDir, resolveEffectiveTenantId } from '../data/data-paths';
 import { parseFederationAddress } from '../federation-address';
 import { t } from '../i18n';
 import { resolveInteractionsDir } from '../interactions-dir';

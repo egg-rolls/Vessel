@@ -19,7 +19,7 @@ import {
   configSetCommand,
   configShowCommand,
 } from '../config-command';
-import { resolveDataDir } from '../data-paths';
+import { resolveDataDir } from '../data/data-paths';
 import { runDevCommand } from '../dev-command';
 import { doctorCommand } from '../doctor-command';
 import { errorsCommand } from '../errors-command';

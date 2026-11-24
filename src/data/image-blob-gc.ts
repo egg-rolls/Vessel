@@ -31,7 +31,7 @@ import {
   collectImageBlobs,
   IMAGE_BLOB_POOL_MAX_BYTES,
   isSha256,
-} from '../packages/core/src/index';
+} from '../../packages/core/src/index';
 
 /** 64 位小写十六进制（与 `isSha256` 同一口径；`matchAll` 要求全局标志）。 */
 const SHA256_IN_TEXT = /[0-9a-f]{64}/g;
