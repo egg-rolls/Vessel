@@ -101,7 +101,7 @@ import {
   loadResumableCheckpoint,
   resumeError,
 } from './durable-wiring';
-import { createFederationSendPort } from './federation-send-port';
+import { createFederationSendPort } from './federation/federation-send-port';
 import { registerRefsNoticeHook, registerRuntimeNoticeHook } from './hot-apply-assembly';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';

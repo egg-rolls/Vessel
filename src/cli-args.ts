@@ -8,7 +8,7 @@
 import { allowedOriginError } from '../packages/config/src/index';
 import { type CompletionCommandArgs, isCompletionShell } from './completion-spec';
 import type { DevCommandArgs } from './dev-command';
-import { parseFederationAddress } from './federation-address';
+import { parseFederationAddress } from './federation/federation-address';
 
 /** `--serve` 省略端口时的默认值 */
 export const DEFAULT_SERVE_PORT = 8642;

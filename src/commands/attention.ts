@@ -16,6 +16,13 @@ import {
   type VesselConfig,
 } from '../../packages/config/src/index';
 import { createOfflineAttentionTarget } from '../ask-channel';
+import type { AttentionCommandArgs } from '../cli-args';
+import {
+  type ControlPlaneTarget,
+  type ControlPlaneTargetOptions,
+  resolveControlPlaneTarget,
+} from '../control-plane-target';
+import { resolveDataDir, resolveEffectiveTenantId } from '../data/data-paths';
 import {
   type AttentionInteraction,
   type AttentionPage,
@@ -24,7 +31,7 @@ import {
   resolveAgentFilter,
   respondAsk,
   respondPermission,
-} from '../attention-client';
+} from '../federation/attention-client';
 import {
   type AttentionNodeToken,
   configuredAttentionNodes,
@@ -32,15 +39,8 @@ import {
   findAttentionNodeByAddress,
   resolveNodeToken,
   selectAttentionNodes,
-} from '../attention-nodes';
-import type { AttentionCommandArgs } from '../cli-args';
-import {
-  type ControlPlaneTarget,
-  type ControlPlaneTargetOptions,
-  resolveControlPlaneTarget,
-} from '../control-plane-target';
-import { resolveDataDir, resolveEffectiveTenantId } from '../data/data-paths';
-import { parseFederationAddress } from '../federation-address';
+} from '../federation/attention-nodes';
+import { parseFederationAddress } from '../federation/federation-address';
 import { t } from '../i18n';
 import { resolveInteractionsDir } from '../interactions-dir';
 import { RpcClientError } from '../rpc';

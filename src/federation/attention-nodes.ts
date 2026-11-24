@@ -8,9 +8,9 @@
  * @module vessel/attention-nodes
  */
 
-import type { AttentionNodeConfig, VesselConfig } from '../packages/config/src/index';
-import type { ControlPlaneTarget } from './control-plane-target';
-import { createHttpRpcClient, normalizeConnectUrl } from './rpc/http-client';
+import type { AttentionNodeConfig, VesselConfig } from '../../packages/config/src/index';
+import type { ControlPlaneTarget } from '../control-plane-target';
+import { createHttpRpcClient, normalizeConnectUrl } from '../rpc/http-client';
 
 export type AttentionNodeToken = { ok: true; token: string } | { ok: false; error: string };
 

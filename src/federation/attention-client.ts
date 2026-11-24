@@ -8,8 +8,8 @@
  * @module vessel/attention-client
  */
 
-import type { ControlPlaneTarget } from './control-plane-target';
-import { RpcClientError } from './rpc';
+import type { ControlPlaneTarget } from '../control-plane-target';
+import { RpcClientError } from '../rpc';
 
 export interface AttentionInteraction {
   kind: 'permission' | 'ask';

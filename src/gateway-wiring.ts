@@ -14,7 +14,7 @@ import type {
 } from '../packages/serve/src/index';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { latestEvalReport } from './eval-wiring';
-import { resolveFederationOptions } from './federation-config';
+import { resolveFederationOptions } from './federation/federation-config';
 import { PluginLoader } from './plugin-loader';
 
 export interface GatewayControlPlaneOptions {

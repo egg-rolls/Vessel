@@ -22,15 +22,15 @@ import {
   type FederationAddress,
   formatFederationAddress,
   parseFederationAddress,
-} from '../federation-address';
+} from '../federation/federation-address';
 import {
   FederationClientError,
   type FederationPostResult,
   type FederationTeamInfoResult,
   postFederation,
   postFederationTeamInfo,
-} from '../federation-client';
-import { resolveFederationOptions } from '../federation-config';
+} from '../federation/federation-client';
+import { resolveFederationOptions } from '../federation/federation-config';
 import { t } from '../i18n';
 import { resolveNodeId } from '../node/node-identity';
 import { ui } from '../ui-style';

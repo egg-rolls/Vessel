@@ -11,7 +11,7 @@
  * @module vessel/federation-config
  */
 
-import type { FederationConfig, FederationPeerConfig } from '../packages/config/src/index';
+import type { FederationConfig, FederationPeerConfig } from '../../packages/config/src/index';
 
 export type FederationDirection = 'in' | 'out' | 'both';
 

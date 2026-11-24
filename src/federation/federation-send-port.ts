@@ -19,7 +19,8 @@ import type {
   FederationSendRequest,
   FederationSendResult,
 } from '@vessel-agent/agent';
-import type { FederationConfig } from '../packages/config/src/index';
+import type { FederationConfig } from '../../packages/config/src/index';
+import type { LocalHumanTarget, LocalMemberTarget } from '../team-human-delivery';
 import {
   parseFederationAddress,
   type ResolveNodeAliases,
@@ -34,7 +35,6 @@ import {
   postFederationTeamInfo,
 } from './federation-client';
 import { resolveFederationOptions } from './federation-config';
-import type { LocalHumanTarget, LocalMemberTarget } from './team-human-delivery';
 
 export interface FederationSendPortOptions {
   federation: FederationConfig;
