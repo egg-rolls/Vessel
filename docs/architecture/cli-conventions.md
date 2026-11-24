@@ -181,19 +181,129 @@ vessel stop（舰队）
 
 ## 4. 输出契约（单一渲染实现）
 
-（待扩充）
+### 4.1 单一实现规则
+
+所有命令的输出走**同一个渲染模块**：现行事实源是 `src/ui-style.ts`（样式/对齐/颜色闸门）
++ `src/i18n/`（文案）；目标态收拢为 `src/cli/output.ts`（§8，吸收 ui-style，命令只交
+**结构化视图模型**，渲染器决定布局/颜色/JSON）。禁止：
+
+- 命令内手写 ANSI 转义或自造颜色判断（第二个颜色闸门 = 漂移源）；
+- 命令内自造表格对齐（必须走渲染器的 `displayWidth` 对齐，CJK/全角按 2 列）；
+- 同一语义两套文案（help 与用法错误已单一数据源 `cli-help-spec.ts`，输出同理）。
+
+### 4.2 通道纪律
+
+| 通道 | 内容 | 规则 |
+|---|---|---|
+| stdout | **结果**：人类报告 或 恰好一份 JSON 文档 | `--json` 时 stdout 只有 JSON：无 ANSI、无人类行、无进度噪声 |
+| stderr | 警告 / 诊断 / 错误 | 配置校验警告、`*.drain.skipped`、残留提示等走 stderr；不污染机读 stdout |
+
+- `--json` 下必须保留的警告进 JSON 的 `warnings` 数组（或 stderr），**不静默丢**。
+- 退出码与通道无关：JSON 失败也走 §6 错误包 + 非零码。
+
+### 4.3 人类输出布局
+
+- 标题（品牌色 + 粗体）+ 分隔线（缺省 48 列）；`label  value` 对齐列（kv，label 宽统一）。
+- 组件表列序固定：**组件名（稳定标识 + 实例）→ 状态 → pid → url/备注**。
+  组件名用稳定标识符（`gateway` / `node` / `hub` / `tools-engine` + 实例名），不用翻译名。
+- **生命周期动词必须显示状态迁移**（`running → stopped`、`starting → ready`）；
+  status 显示现态 + 原因（degraded/stale/failed 必带 reason 与时刻）。
+- 状态符号：`✓` ok / `!` warn / `✗` err / `·` info——符号承载语义，颜色只是增强（§7）。
+- 数据值（路径、id、枚举、表格数据行）保持纯文本：不上色、不翻译。
+
+### 4.4 状态词汇表（与状态机同一套枚举，不造第二套）
+
+| 域 | 枚举 |
+|---|---|
+| 平台实例 | `running` / `degraded` / `starting` / `stale` / `unknown` / `foreign-host` / 未运行 |
+| node（平台视图） | `starting` / `ready` / `failed` / `adopted` / `external` |
+| tools-engine〔提案〕 | `active` / `restarting` / `disabled` / 随 node 停止 |
+
+人类文案可翻译，**枚举字面量保持英文**（机读面与人类面指同一事实）。
+
+### 4.5 国际化
+
+人类散文走 `t()`（zh-CN / en 两份 catalog）；命令名、flag、路径、数据值、状态枚举是
+命令行字面量/数据，不翻译。新增输出 = 新增 MessageKey，不在命令里硬编码文案。
+
+### 4.6 JSON 契约面
+
+- **既有 `--json` 形状是冻结契约**（如 `gateway status --json` 不加 adopted 字段的先例）：
+  只 additive 加字段，不改名、不删字段、不改语义。
+- 新命令统一信封：成功 `{ "ok": true, "command": "<ns verb>", "data": { … }, "warnings": [...]? }`；
+  失败走 §6 错误包。序列化统一 `JSON.stringify(payload, null, 2)`，一份文档，无 ANSI。
+- 机读面缺省不输出密钥值：打印值仅回环 + 交互式终端，非交互需显式 opt-in
+  （`token show` 的 `allowNonInteractive` 先例）；`--json` 不是绕过该闸门的后门。
 
 ## 5. 退出码表
 
-（待扩充）
+| 码 | 语义 | 例 |
+|---|---|---|
+| 0 | 成功 / 幂等空操作 / 用户主动取消 | 停成；本无运行再 stop；确认 N/EOF |
+| 1 | 运行时失败 | 组件没停成、超时、非交互无 `--yes` 拒绝、显式目标不可达、配置校验错误 |
+| 2 | 用法错误 | 未知命令/flag、缺参、互斥冲突、未知子命令（feishu 配置类错误同归 2 的先例） |
+| 3 | headless ask 挂起（保留码，现行 `HEADLESS_ASK_SUSPENDED_EXIT_CODE`） | `--run` 遇 ask 无法交互 |
+| 130 / 143 | SIGINT / SIGTERM（128+信号号） | 前台进程被中断 |
+
+规则：
+
+1. **退出码是契约**：同一事实状态永远同一码；新码必须先登记进本表，禁止命令私造。
+2. 幂等成功 = 0，不是「错误：已在运行」（start 已跑 / stop 已停都属此类）。
+3. 一次性命令经 `commands/registry.ts` 返回码，cli.ts 统一落 `process.exitCode`；
+   headless 只记录退出码，走完清理再落码，不提前 `process.exit`。〔现行〕
+4. 部分失败 = 1 + 逐组件报告；不吞失败，也不把「用户取消」当失败。
 
 ## 6. 错误格式与稳定码
 
-（待扩充）
+### 6.1 人类格式
+
+```
+✗ <stable_code>: <message>
+  next: <一条可执行的下一步>
+```
+
+- 用法错误末尾统一附 `Try 'vessel <cmd...> --help'`（文案与 help 单一数据源 cli-help-spec）。
+- `next` 对运行时错误**必填**：给一条能直接跑的命令或能直接查的文件
+  （如 `vessel node start`、`检查 <dataDir>/platform.pid`），不给「请联系管理员」式空话。
+- 警告不是错误：不打稳定码、不影响退出码、走 stderr（§4.2）。
+
+### 6.2 JSON 错误包
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "stop_timeout",
+    "message": "…",
+    "next": "vessel stop --timeout 30000",
+    "details": { }
+  }
+}
+```
+
+`details` 可选、additive；`code` / `message` 必有；错误包与成功信封互斥（`ok` 判别）。
+
+### 6.3 稳定码注册规则
+
+- 命名 `snake_case`，域前缀：`usage_*` / `stop_*` / `gateway_*` / `node_*` / `engine_*` /
+  `config_*` / `token_*` …；与 RPC 稳定码（`unauthorized` / `not_found` /
+  `ENGINE_ERROR.unavailable` 等既有先例）同口径，能复用不新造。
+- **码是契约**：永不改名、永不复用给别的语义；废弃走「保留旧码 + 文档标 deprecated」，
+  不静默换码。message 可翻译可润色，code 恒英文恒定。
+- 每个新码登记：码 → 语义 → 退出码 → next 模板。登记表随 §8 落地放
+  `src/cli/errors.ts`（单一事实源），本文是规范。
 
 ## 7. 颜色与无障碍
 
-（待扩充）
+1. **语义不依赖颜色**：符号（✓/!/✗/·）+ 文字承载状态，去色后信息无损。
+2. **颜色闸门单一谓词**（现行 `shouldUseColor`）：stdout 是 TTY **且** `NO_COLOR` 未设置
+   （no-color.org：任意值含空串都算设置）**且** `TERM !== 'dumb'`。非 TTY 管道自动纯文本；
+   `--json` 恒无 ANSI。
+3. **警告不用黄色**：中性粗体（现行 DECISION-023 §2.5 决策，避免与品牌色/低对比终端冲突）。
+4. **降级路径**：truecolor 品牌色（海洋绿 `#1EFFC7`）假设深色终端；16 色终端由基础 ANSI
+   （绿/红/青/粗体）承担语义，品牌色降级不丢状态。
+5. **对齐按显示宽度**：CJK/全角按 2 列（`displayWidth`），混排表格不锯齿。
+6. 数据行/路径/JSON 永不上色；无闪烁类动画。
 
 ## 8. 落地布局：src/cli/ 领域目录（与计划 C 重组合一）
 
