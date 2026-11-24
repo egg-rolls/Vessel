@@ -44,6 +44,8 @@ import type { MessageRef } from '../../gateway/types';
  * （`loadStoredHistory` 之后、`llm.request` 之前），所以「15 s 还没回显」不可能是
  * 「模型慢」—— 只可能是这条 run 没起来（spawn 失败 / 队列卡住 / 事件流断了）。
  * 阈值取 15 s：远大于正常冷态回显（秒级），又短于用户开始怀疑自己没发出去的时间。
+ * **前提**：调度器对这个会话没有在飞工作（见 `sweep` 的 `busySessions` 闸）—— agent
+ * 还在跑时回显晚到不算失败。
  */
 export const PENDING_ECHO_TIMEOUT_MS = 15_000;
 
@@ -59,6 +61,9 @@ export const PENDING_SWEEP_INTERVAL_MS = 1_000;
  * 而不是一条永远转圈的排队卡。
  *
  * 3 分钟是用户给的数（「比如 3 分钟」）：比一次正常 run 长得多，又短到用户还在等这一刻。
+ * **0.58 修正（用户裁决）**：计时只在调度器对这个会话**没有在飞工作**时才收敛成失败
+ * （见 `sweep` 的 `busySessions` 闸）—— 前面那一轮还在跑（哪怕跑 10 分钟），排队就是
+ * 正常的，不判「排队超时」。
  */
 export const PENDING_QUEUE_TIMEOUT_MS = 180_000;
 
@@ -165,6 +170,17 @@ const ECHO_EVENT_TYPES: readonly string[] = ['user.message', 'run.started'];
 /** 兜底认领时的正文比较（guardrail 改写后正文会变，这里只挡「明显不是同一条」）。 */
 function sameText(left: string, right: string): boolean {
   return left.trim() === right.trim();
+}
+
+/**
+ * 「超时类」失败码：这三种失败的正文**都可能已被服务端收下**（`sending` 的 RPC 在飞 /
+ * `queued` 明确排进了队列 / `deferred` 明确收下了），所以迟到的回显必须能把它们认领掉
+ * （见 {@link PendingSendStore.noteEvent}）。其余失败（RPC 错 / 断线）服务端没收到，不认。
+ */
+const TIMEOUT_FAILURES: readonly string[] = ['timeout', 'queue_timeout', 'defer_timeout'];
+
+function isTimeoutFailure(failure: string | undefined): boolean {
+  return failure !== undefined && TIMEOUT_FAILURES.includes(failure);
 }
 
 /**
@@ -412,20 +428,28 @@ export class PendingSendStore {
    * 2. 没有 `run_id`（旧服务端 / 别名）：只在**同会话**里按**队首顺序**认领一条
    *    `sending` 且正文相同的 pending；认领即撤，所以同一条回显**不可能**认领第二次
    *    （「认领只发生一次」是结构性的，不靠计数）；
-   * 3. 上面两条都不中时，再看有没有 `deferred` 的 pending 等这句话（0.57：服务端明确
-   *    不回 run id，见 {@link claimDeferred}）。
+   * 3. 上面两条都不中时，再看有没有 `deferred` / **超时类失败**的 pending 等这句话
+   *    （见 {@link claimByEchoText}）。
+   *
+   * **超时类失败（`timeout` / `queue_timeout` / `defer_timeout`）也在候选里**：它们的正文
+   * 可能已被服务端收下，只是客户端先判了失败。回显一到，那条失败行必须让位给会话里那条
+   * 真消息 —— 否则屏上同时有「未发送 · 已超时」和一条正常气泡 = 同一条消息两份
+   * （用户报的 bug）。其余失败（RPC 错 / 断线）服务端没收到，不参与认领。
    */
   noteEvent(event: PendingEchoEvent): string | undefined {
     if (!ECHO_EVENT_TYPES.includes(event.type)) return undefined;
     if (this.items.length === 0) return undefined;
-    const candidates = this.items.filter((item) => item.state !== 'failed');
+    const candidates = this.items.filter(
+      (item) => item.state !== 'failed' || isTimeoutFailure(item.failure),
+    );
     if (event.runId !== undefined && event.runId !== '') {
       const byRun = candidates.find((item) => item.runId === event.runId);
       if (byRun === undefined) {
-        // 没有 pending 挂这个 run id。**先**看有没有 `deferred` 的 pending 等这句话
-        // （0.57）：服务端明确不回 run id，这条回显就是「它终于起跑了」的唯一信号
-        // （`run.started.input` 是改写前的原文，正好等于用户敲的字）。
-        return this.claimDeferred(event);
+        // 没有 pending 挂这个 run id。**先**看有没有 `deferred` / 超时类失败的 pending
+        // 等这句话：服务端明确不回 run id（deferred）或失败时没挂上 run id，这条回显
+        // 就是「它终于起跑了」的唯一信号（`run.started.input` 是改写前的原文，正好等于
+        // 用户敲的字）。
+        return this.claimByEchoText(event);
       }
       // 记住「这条真的发出去了」：条带那份缓存读数据此立刻滤掉旧行（不等下一次轮询）。
       this.noteSent(byRun.messageId);
@@ -440,34 +464,38 @@ export class PendingSendStore {
           item.sessionId === event.sessionId) &&
         (event.text === undefined || sameText(item.text, event.text)),
     );
-    if (queueHead === undefined) return this.claimDeferred(event);
+    if (queueHead === undefined) return this.claimByEchoText(event);
     this.noteSent(queueHead.messageId);
     this.remove(queueHead.id);
     return queueHead.id;
   }
 
   /**
-   * 认领一条 `deferred` 的 pending：**同会话 + 同一句正文**，且事件必须真的带正文。
+   * 按「同会话 + 同一句正文」认领一条 `deferred` / **超时类失败**的 pending，
+   * 且事件必须真的带正文。
    *
    * 为什么必须有一条这样的退路：`deferred` 的 pending 没有 run id（服务端明确不回），
-   * 于是「按 run_id 精确认领」这条首选路径对它永远不成立；不按正文认领一次，这条 pending
-   * 就只能等到 3 分钟超时 —— 那时消息其实早就进了会话（用户会看到「未发送」+「那条真消息」）。
+   * 超时类失败的 pending 也可能没挂上 run id（`sending` 在 `runs.start` 返回前就超时），
+   * 于是「按 run_id 精确认领」这条首选路径对它们不成立；不按正文认领一次，这条 pending
+   * 就只能永远停在失败态 —— 而消息其实早就进了会话（用户会看到「未发送 · 已超时」+
+   * 「那条真消息」两份）。
    *
    * 为什么安全：只认 `run.started` / `user.message`（`ECHO_EVENT_TYPES` 已限）、只认同会话、
    * 正文相等，并且**认领即摘除** —— 「最多认领一次」是结构性的，不靠计数。正文相等这种弱
    * 身份只在「没有强身份可用」时启用，与 0.56 的队首兜底认领是同一档。
    *
-   * 也认 **`defer_timeout` 的失败态**：那条 pending 的正文确实被服务端收下了（`deferred`
-   * 的语义就是「收下了、还没跑」），所以「同会话 + 同一句正文」的 run 起来时它必须让位 ——
-   * 否则用户会同时看到「未发送」和一条真消息，再点重试就是两份（重试会先撤回服务端那份，
-   * 但已经落地的那条撤不回来）。别的原因的 `failed` 不认（RPC 失败那条服务端根本没收到）。
+   * 超时类失败（`timeout` / `queue_timeout` / `defer_timeout`）都认：它们的正文确实可能
+   * 被服务端收下了（`queued` / `deferred` 的语义就是「收下了」，`sending` 的 RPC 可能在飞），
+   * 所以「同会话 + 同一句正文」的 run 起来时它必须让位 —— 否则用户会同时看到「未发送」
+   * 和一条真消息，再点重试就是两份（重试会先撤回服务端那份，但已经落地的那条撤不回来）。
+   * 别的原因的 `failed` 不认（RPC 失败那条服务端根本没收到）。
    */
-  private claimDeferred(event: PendingEchoEvent): string | undefined {
+  private claimByEchoText(event: PendingEchoEvent): string | undefined {
     if (event.text === undefined) return undefined;
     const hit = this.items.find(
       (item) =>
         (item.state === 'deferred' ||
-          (item.state === 'failed' && item.failure === 'defer_timeout')) &&
+          (item.state === 'failed' && isTimeoutFailure(item.failure))) &&
         (item.sessionId === null ||
           event.sessionId === undefined ||
           item.sessionId === event.sessionId) &&
@@ -488,12 +516,30 @@ export class PendingSendStore {
    * - `deferred` 超过 {@link PENDING_DEFER_TIMEOUT_MS}（3 min）⇒ `failure: 'defer_timeout'`
    *   —— 服务端**收下了**但一直没接单（`stopped` 那条要等人工动作，可能永远等不到）。
    *
+   * **`busySessions` 闸（用户裁决）**：调度器对某个会话还有在飞工作（`running` / `queued`，
+   * 权威来源 `health.get.runtime.scheduler`）时，那个会话的 `sending` / `queued` pending
+   * **不判超时** —— agent 还在尝试（没抛错、还在跑），单纯计时到点不构成「发不出去」的
+   * 结论。一轮 run 跑 10 分钟，排在它后面的消息等 10 分钟是**正常**，不是失败。只有调度器
+   * 对这个会话**没有任何在飞工作**（run 结束 / 失败 / 被取消，而消息还没被取用）时，
+   * 计时才收敛成失败态 —— 那才是「实在不能解决的问题」。`deferred` 不受此闸：服务端
+   * 明确说了这一轮不起跑（draining / rotate / stopped），不属于「还在尝试」。
+   * 缺省（不传）= 旧行为，纯计时。
+   *
    * `failed` 不重复标。返回本次被标失败的条数，供驱动断言。
    */
-  sweep(now?: number): number {
+  sweep(now?: number, busySessions?: ReadonlySet<string>): number {
     const at = now ?? this.now();
     let failed = 0;
     this.items = this.items.map((item) => {
+      // agent 仍在尝试：调度器对这个会话还有在飞工作 ⇒ 不判超时（见上）。
+      if (
+        busySessions !== undefined &&
+        item.sessionId !== null &&
+        (item.state === 'sending' || item.state === 'queued') &&
+        busySessions.has(item.sessionId)
+      ) {
+        return item;
+      }
       const budget =
         item.state === 'sending'
           ? PENDING_ECHO_TIMEOUT_MS
