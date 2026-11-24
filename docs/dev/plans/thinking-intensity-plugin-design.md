@@ -225,7 +225,7 @@ export interface ChatRequest {
 
 ### 3.2 适配器合并闸（新文件 `packages/core/src/provider/request-extras.ts`）
 
-两个纯函数 + 常量，四个适配器接入点共用：
+两个纯函数 + 常量，全部适配器接入点共用（下表 6 行 / 7 个调用点）：
 
 ```ts
 /** 危险头 denylist（小写比较）：认证 / 传输 framing / 协议版本钉死。 */
@@ -349,7 +349,7 @@ HookRunner 聚合语义（hook-runner.ts，additive 一段）：
 | 1 | `packages/core/src/types/provider.ts` | ChatRequest += extra_headers/extra_params；LLMProvider += providerName?（§3.5） |
 | 2 | `packages/core/src/types/hook.ts` | HookContext += model/providerName；HookResult += requestExtras |
 | 3 | `packages/core/src/provider/request-extras.ts`（新） | 合并闸纯函数 + 常量（§3.2） |
-| 4 | `packages/core/src/provider/providers.ts` | 6 处接入（§3.2 表）+ Anthropic 一致性规则 |
+| 4 | `packages/core/src/provider/providers.ts` | 7 个调用点接入（§3.2 表）+ Anthropic 一致性规则 |
 | 5 | `packages/core/src/runtime/hook-runner.ts` | requestExtras 聚合 + conflict 事件 |
 | 6 | `packages/core/src/runtime/tool-calling-loop.ts` | hookCtx += `model: ctx.model` / `providerName: ctx.providerName`；`ProviderPort.chat` args += `requestExtras?`；:488 调用点条件透传 `beforeLlm.requestExtras` |
 | 7 | `packages/core/src/runtime/execution-unit.ts` | LoopContext += `providerName?`（createLoopContext 读 `this.provider.providerName`）；chatWithOverflowRetry 把 args.requestExtras 拆进 ChatRequest（**非空才带键**，:3894 attachment_plan 同形）；llm.request persistData += extras 元信息（§3.6） |
@@ -413,7 +413,9 @@ export interface LLMProvider {
   且「按钮状态」与「请求注入」会分裂成两个真相；hook 路径单一真相。
 - **不做深合并 / 参数改写**：extra 只增顶层键；改 messages/tools/model 一律拒绝（保留键）。
 - **不做响应侧钩子**：思考强度的效果（reasoning_content/usage）走既有响应链，无需新面。
-- **不新增 PluginHost 注册方法**：registerHook 足够；新注册面 = 新冻结契约，收益为零。## 4. 插件设计（thinking-intensity）
+- **不新增 PluginHost 注册方法**：registerHook 足够；新注册面 = 新冻结契约，收益为零。
+
+## 4. 插件设计（thinking-intensity）
 
 ### 4.1 位置与 manifest
 
@@ -433,7 +435,7 @@ manifest 贡献面全集（声明即生效，零宿主硬编码）：
   "id": "thinking-intensity",
   "name": "Thinking Intensity",
   "side": "both",
-  "activationEvents": ["onStartup"],
+  // 不声明 activationEvents：hook 类插件装配即常驻（doc-subscription / hook-logging 先例）
   "contributes": {
     "settings": { /* §4.2 */ },
     "rpc": [
@@ -447,7 +449,7 @@ manifest 贡献面全集（声明即生效，零宿主硬编码）：
         "id": "thinking-level",
         "label": "Thinking",
         "titleKey": "thinking.toolbar.label",
-        "icon": "sparkles",                    // 须在 PLUGIN_ICON_NAMES 白名单内（实施时核对，无合适图标则省略）
+        "icon": "observe",                     // 须在 PLUGIN_ICON_NAMES 白名单内（今天 14 个图标无思考专属，取 observe；可省略）
         "order": 20,
         "menu": { /* §4.7 契约 */ }
       }
@@ -580,7 +582,9 @@ install(host, options) {
 
 - settings 热应用：in-process 装配的 config 监听既有（q-settings §4.5）；插件每轮 hook
   读最新快照，不缓存过期值。
-- 卸载/回滚：registerHook 记入 beginPluginInstall scope（既有机制），安装失败自动摘除。### 4.5 BeforeLlm hook（请求期注入 + 降级）
+- 卸载/回滚：registerHook 记入 beginPluginInstall scope（既有机制），安装失败自动摘除。
+
+### 4.5 BeforeLlm hook（请求期注入 + 降级）
 
 ```ts
 function beforeLlm(ctx: HookContext, state, settings): HookResult | undefined {
@@ -744,3 +748,163 @@ q-settings「侧栏折叠按钮 vs 设置默认值」同判据（§5.3 of vscode
   模型能力」；选了不支持的档位 ⇒ hook 不注入 + 下轮 read 带 hint（诚实降级）。
 - 不做滑块：档位是离散语义（各家 wire 都是枚举/预算档），滑块暗示无级调节是谎报；
   budget 数值精调在设置弹窗（budget_* 数字输入）。
+
+## 5. 与现有机制的衔接
+
+### 5.1 vision / plan 请求期机制（同节奏、正交）
+
+- 同一判据链：vision 是「能力问实例（provider.vision）+ 请求期算 plan（resolveAttachmentPlanFor）
+  + 适配器命中才改形状」；thinking 是「身份问实例（provider.providerName）+ 请求期 hook 算
+  extras + 适配器合并闸」。两者都在 `chatWithOverflowRetry` 内、`provider.chat` 前完成，
+  互不读写对方字段。
+- 差异点（明示）：attachment_plan 每 attempt 重算（依赖压缩后的消息视图）；extra 轮级一次
+  （不依赖消息视图）。overflow 重试后 extra 不变是**正确**的——强度意图不随压缩改变。
+- 图 + 思考同时启用：请求体既有图块又有 thinking 参数，各家 API 均支持（多模态 reasoning
+  模型）；无组合特判。
+
+### 5.2 include_reasoning / ui.showReasoning（显示侧，正交）
+
+- `include_reasoning`（EU 选项）决定 reasoning_delta 是否进事件流；`ui.showReasoning` 决定
+  Web 是否渲染。本插件决定**生成多少思考**——三者三层，互不覆盖。
+- 组合语义：off 档 + showReasoning=true ⇒ 没有思维链可显示（模型不思考），UI 自然为空；
+  high 档 + showReasoning=false ⇒ 思考照常生成、回传、计费，只是不显示。**不做联动**
+  （联动会制造「关显示=省 token」的错觉）。
+
+### 5.3 前缀不变量 / prompt cache
+
+- extra 只加 body 顶层键，`messages / system / tools` 一个字节不动 ⇒ prefixGuard 与
+  CONTRACT-prefix-invariant 不受影响；prompt cache 断点（applyPromptCache /
+  addMessageCacheBreakpoint）照常。
+- 注意：部分厂商的隐式缓存键可能含采样参数——reasoning_effort 变化可能导致缓存未命中
+  （成本事实，不是正确性问题）；切档后首轮 prompt_tokens 可能升高，usage 面可见（§5.6）。
+  文档提示即可，不做缓存补偿。
+
+### 5.4 model-registry / 凭证轮换 / agent.model 覆盖
+
+- providerName 挂 delegating wrapper（resolved.protocol），不随实例缓存键（凭证 updatedAt）
+  变化——轮换凭证不换身份，映射稳定。
+- `agent.model` 覆盖 ⇒ req.model 变 ⇒ hook 每轮按新 model 重新匹配映射表（§4.5），
+  自动适配；vision 的「能力是 (provider, model) 函数」判据原样复用。
+- 未知 protocol 复用 openai 工厂：wrapper 挂原 protocol（路由事实），传输是 openai 兼容
+  ——映射表按 protocol+model 匹配不受影响。
+
+### 5.5 q-settings / 插件装配
+
+- 设置域声明即发现（S3/S4 已实施）；写路径 plugins.config.set 校验 enum/minimum/maximum
+  由 spec 驱动，本插件零写侧代码。
+- in-process 限定：hook 与 RPC 状态都在进程内；manifest 不声明 child 支持。若未来装配
+  把它放 child ⇒ hook 不存在 ⇒ 恒不注入（additive 降级，不炸），设置弹窗会显示
+  restartRequired——文档明示本插件必须 in-process。
+- 装配顺序无关：registerHook 按 priority 排序执行；extras 键（reasoning_effort/thinking/
+  enable_thinking）与其它插件的 extras 键天然不冲突；真冲突 ⇒ conflict 事件 + 后到覆盖
+  （§3.3），可观测。
+
+### 5.6 重试 / 空响应兜底 / 用量计价
+
+- withRetry / withTimeout / overflow / empty-response 重调都复用同一 ChatRequest（或重建
+  消息视图但 extra 不变）——强度参数在重试间稳定，不会「重试一次换个强度」。
+- reasoning token 已计入 completion_tokens（既有 fromOpenAiUsage / StreamAccumulator），
+  high 档的成本在 usage 插件 / context_usage / 计价面**自动可见**，零新计量。
+- `llm.request` persistData 的 request_extras 键名元信息（§3.6）让「这轮为什么贵/为什么
+  没思考」可从落盘日志回答。
+
+### 5.7 成员 body / 团队场景
+
+- 成员 EU 的 pluginHost 来自 profile 工厂或成员自有宿主（ExecutionUnitRequest.pluginHost）；
+  tenant 插件的 hook 经装配进入 EU HookRunner（skills 环境卡 / doc-subscription 已验证此路）。
+  本插件作为 tenant 插件装配 ⇒ 成员会话同样受控。
+- 会话级状态按 session_id 键控 ⇒ 同一 tenant 下多个成员会话各自独立档位；
+  全局默认（settings）是 tenant 级意图。
+- 跨节点（federation）：插件状态在**本节点**进程内；远端成员的请求由远端节点装配的插件
+  实例控制——v1 不做跨节点档位同步（开放问题 Q2）。
+
+## 6. 安全与护栏
+
+| 面 | 护栏 | 落点 |
+|----|------|------|
+| 认证头劫持 | Authorization / x-api-key / cookie / proxy-authorization 等 denylist，丢弃+告警 | §3.2 RESERVED_HEADERS |
+| 请求形状篡改 | model/messages/tools/system/stream/temperature/max_tokens 保留键，插件不可覆盖 | §3.2 RESERVED_BODY_KEYS_* |
+| 协议漂移 | anthropic-version / content-type 钉死 | §3.2 |
+| 体积放大 | 头 ≤16 条 / 值 ≤1024B；参数 ≤16 键 / 序列化 ≤8KiB；超限丢弃 | §3.2 EXTRA_LIMITS |
+| 非 JSON 值 | 函数/symbol/循环引用丢弃（JSON.stringify 校验） | §3.2 |
+| 坏插件 | 合并闸逐项 fail-open；hook 抛错 HookRunner 隔离 | §3.2 / §1.3 |
+| 越权写 | set_level 走 contributes.rpc permission=write（gateway 既有鉴权）；menu.write 校验权限匹配 | §4.3 / §4.7 |
+| 会话串扰 | session_id 键控 + 长度上限；tenant 装配隔离 | §4.3 |
+| 敏感值落盘 | extra 值不进事件/落盘（只记键名）；头值连 debug 摘要都不打 | §3.6 |
+| 凭证接触 | 插件 permissions net/fs/secrets 全空；hook 上下文不含 base_url/api_key | §4.1 |
+| 谎报 | 不支持档位不静默替换；toggle 无级差明示；能力未知不猜 | §4.6 / §4.7 |
+
+信任模型：in-process 插件与既有插件同信任级（装配即信任，安装经 marketplace/TOFU 既有门）；
+本设计不新增信任面——合并闸防的是**bug 与越界**，不是恶意进程内代码（后者已有插件信任门管）。
+
+## 7. 实施切片（文件级；实施由 main 派单）
+
+| 切片 | 内容 | 主要文件 | 门禁 |
+|------|------|----------|------|
+| **P1** core 透传钩子 | ChatRequest extra 字段 + 合并闸 + 7 接入点 + Anthropic 一致性规则 + HookResult.requestExtras/HookContext.model/providerName + HookRunner 聚合 + loop/EU 接线 + providerName 实例事实（3 挂载点）+ llm.request 元信息 | §3.4 表 10 项 | bun run build exit 0；缺省逐字节不变（静态对照请求体字面量） |
+| **P2** 插件后端 | manifest（settings/rpc/i18n）+ 状态 + BeforeLlm hook + stable 映射行（1/2/3/6/9/10）+ RPC dispatch + 装配登记 | 新 `plugins/provider/thinking-intensity/{package.json,src/index.ts,src/mapping.ts,src/state.ts}`；装配插件清单 | 同上 |
+| **P3** 工具栏菜单契约 + UI | menu 声明类型/校验/透传/归一化 + ComposerToolbar 菜单渲染 + composer 页接线 + 插件 toolbar 声明 | §4.7.2 表 6 项 + 插件 manifest | 同上 |
+| **P4** 映射扩面 + 文档 | experimental 行逐行官方文档核实转正（4/5/7/8）+ capabilities 诊断面 + docs 同步（WEB-UI.md / specs / 本文件定稿） | mapping.ts + docs | 同上 + doc-sync 复核 |
+
+- 依赖：P1 是 P2 的前置；P3 依赖 P2 的 RPC；P4 独立可后置。每切片独立 commit + 独立可回退。
+- P1 合入即有通用透传能力（任何插件可注入 extra）；P2 合入即可经 vessel.yaml
+  `plugins[].config.default_level` 控制强度（无 UI 也能用）；P3 合入满足「按钮」诉求。
+- 宪法约束：零测试/探针/临时进程；每切片仅 `bun run build` 门禁；不碰主 checkout；
+  只提交实施分支。映射核实读官方文档，不发验证请求。
+
+## 8. 风险与开放问题
+
+### 8.1 风险表
+
+| # | 风险 | 缓解 |
+|---|------|------|
+| R1 | Anthropic thinking 要求 temperature=1 / budget<max_tokens，config 的 temperature/max_tokens 与之冲突 | 适配器一致性规则（§3.2.1）：enabled ⇒ 删 temperature；budget clamp；放不下 ⇒ 丢 thinking 降级，不发必 400 的请求 |
+| R2 | 厂商参数漂移（新模型改参数名/枚举值）⇒ 400 | 映射表 status 闸 + experimental 默认关；400 走既有 ProviderHttpError 面（错误可见）；不做自动降档重试（会掩盖配置错误，且重试语义属 core 重试策略，插件不碰）；修表 = 加行/改行，热应用下一轮生效 |
+| R3 | 多 hook extras 键冲突 | 后到覆盖 + conflict 事件（§3.3）；本插件键名空间（reasoning_effort/thinking/enable_thinking/thinking_budget）与既有插件无交集 |
+| R4 | 会话级档位进程重启即失 | v1 明示「会话级覆盖是即时意图，持久默认走设置」；重启后回 settings.default_level（不是回 auto，用户持久意图不丢）；持久化会话覆盖列二期（Q3） |
+| R5 | toolbar menu 契约扩展面过大 | menu 是单一 additive 可选字段，校验/降级沿用既有贡献点口径；旧链路丢 menu 不渲染死按钮；宿主零插件专属代码（通用性判据） |
+| R6 | 能力观测滞后（首轮请求前 UI 不知道模型） | 诚实降级：全档可选 + 提示「请求后识别」；hook 不支持 ⇒ 不注入 + hint；不反向查询 gateway（插件无端口） |
+| R7 | 切档导致隐式缓存未命中、成本上升 | §5.3 文档提示；usage 面既有可见性；不做缓存补偿 |
+| R8 | budget 档与模型上限不符（如 thinking_budget 超 Qwen 上限） | P2 实施对官方文档复核上限；适配器 clamp 只兜 Anthropic 硬约束；其它厂商超限 ⇒ 400 可见 + 修表（R2 同路） |
+| R9 | 用户误以为 off = 省钱（off 档模型不支持时） | available_levels 过滤 + hint 明示「不可关」；不静默替换档位 |
+| R10 | child 模式误装配 ⇒ 功能静默缺失 | manifest 限定 in-process；文档明示；装配降级不炸（§5.5） |
+
+### 8.2 开放问题（main 裁决）
+
+- **Q1** 档位集：v1 五档（auto/off/low/medium/high）。是否加 `minimal`（gpt-5 系）/`max`
+  （budget 上限档）？倾向不加：minimal 与 low 语义重叠，max 用 budget_high 设置覆盖。
+- **Q2** 作用域：v1 会话级 + tenant 全局默认。是否需要 per-agent（成员 pin 强度，
+  随 self card）/ 跨节点同步？倾向二期：成员 pin 要动装配链，跨节点要动 federation 协议。
+- **Q3** 会话覆盖持久化：重启后恢复 per-session 档位需要插件写数据目录（fs 权限 + 落盘
+  形状）。v1 不做（R4）；若 main 认为需要，P2 加 `state.json`（permissions.fs 限定插件数据目录）。
+- **Q4** headers 注入的首个用户：本插件 v1 只用 params。是否同期给 anthropic 插件加
+  `anthropic-beta` 头配置（验证 headers 通道）？倾向不搭车：headers 闸已随 P1 落地，
+  首个用户另单。
+- **Q5** UI 形态：菜单按钮（本设计）vs 循环按钮（点一下换一档）vs 设置弹窗内滑块。
+  倾向菜单：档位可见、能力过滤可表达、误触少；循环按钮在「不支持档位」上会静默跳过，
+  交互谎报风险。
+
+## 9. 验收判据（实施门禁）
+
+1. **零回归**：不装插件 / enabled=false / default_level=auto / 未知模型 ⇒ 四家请求体与
+   今天逐字节相同（静态对照 providers.ts 字面量；无 extra 键出现）。
+2. **wire 形状**：anthropic+claude high ⇒ body.thinking={type:'enabled',budget_tokens:16384}
+   且无 temperature；openai+gpt-5.1 low ⇒ reasoning_effort:'low'；qwen off ⇒
+   enable_thinking:false；deepseek-reasoner 任意档 ⇒ 无注入。
+3. **护栏**：extra 注入 Authorization/model/messages ⇒ 丢弃 + 一次性告警，请求照常；
+   超 16 键 ⇒ 截断丢弃；Anthropic budget≥max_tokens ⇒ clamp/降级。
+4. **UI 流**：设置弹窗出现 Thinking Intensity 域（6 键可编辑）；composer 出现
+   「思考: <档>」菜单按钮；选档 ⇒ set_level ⇒ 下一轮请求带对应参数；不支持模型 ⇒
+   按钮置灰 + hint；旧 gateway ⇒ 按钮不渲染、设置域仍可用。
+5. **可观测**：llm.request persistData 带 request_extras 键名；conflict 事件可触发；
+   usage 面 reasoning token 随档位变化。
+6. **故障隔离**：hook 抛错 ⇒ hook.error 事件 + 请求无 extra 照常；合并闸违规不抛错。
+
+## 10. 协同与文档互指
+
+- q-settings（vscode-settings-design.md §4）：设置域契约权威，本文件 §4.2 只声明不复制。
+- model-registry（CONTRACT-model-registry-internal）：providerName 实例事实挂 wrapper，
+  不改 registry 契约；protocol 语义沿用。
+- vision（0.56 design）：请求期注入判据同源，本文件 §5.1 明示差异。
+- 实施时 specs 同步：plugin-manifest 契约（toolbar.menu）/ ChatRequest 字段 / HookResult
+  字段进对应 spec 文档（P4 doc-sync）。
