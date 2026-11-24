@@ -13,6 +13,7 @@
     { "id": "q-skills", "title": "SKILLS 插件设计（管理+agent查看/加载）", "column": "待办", "owner": "q-skills", "branch": "design/q-skills", "progress": "分支已建，worktree待补建，派单中" },
     { "id": "q-kanban", "title": "任务看板插件设计（只读文件弹窗+路径设置）", "column": "待办", "owner": "q-kanban", "branch": "design/q-kanban", "progress": "新单，派单中" },
     { "id": "q-settings", "title": "VSCode式设置重构设计（检索/插件设置域/视觉分区）", "column": "待办", "owner": "q-settings", "branch": "design/q-settings", "progress": "新单，派单中" },
+    { "id": "q-agent-lifecycle", "title": "agent 生命周期重构设计（持久保留/只中断/标注回收/系统GC）", "column": "待办", "owner": "q-agent-lifecycle", "branch": "design/q-agent-lifecycle", "progress": "新单，派单中" },
     { "id": "plan-c", "title": "计划C：src 大重组（~94文件→~15领域目录）+ 管理规范/关键词", "column": "待办", "owner": "main", "branch": "redblue-dev", "progress": "用户裁定开发完成后执行；待 q-modes/q-pool-design 合入后启动" },
     { "id": "final-gate", "title": "最终合并树门禁 + 用户行为验收", "column": "待办", "owner": "main+user", "branch": "redblue-dev", "progress": "全部合入后由实施agent跑build，备产物读数供用户验收" }
   ]
