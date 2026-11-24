@@ -89,7 +89,7 @@ interface ToolDefinition {
 
 ## 工具集：能力工具为什么这么少
 
-默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit` / `write`**（`write` 是建文件 / 整体替换 / 追加，**逐字节落盘、不经 shell**——heredoc 与重定向会把内容交给 shell，反引号与美元括号会被先展开）；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；edit/write 自动订阅所改文件、read 自动订阅所读行范围（line-level），`subscribe:false` 可 opt-out 该次调用的自动订阅；订阅变更只发短通知（read 订阅可带范围 diff 明细），按需 `inspect`；未订阅不通知）。成员 body 在装配层 attach 收件箱后另有 `inbox`；`ask` 按入口注册。装配层另常驻注册 **`vessel`** 控制面桥（P1 单工具面，见下「vessel 控制面桥」）。`team_*` / `delegate_task` 已删除。
+默认运行期工具：`plugins/tools/basic-tools` 提供能力工具 **`bash` / `read` / `edit` / `write`**（`write` 是建文件 / 整体替换 / 追加，**逐字节落盘、不经 shell**——heredoc 与重定向会把内容交给 shell，反引号与美元括号会被先展开）；`packages/agent` 提供内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）；`plugins/context/doc-subscription` 提供 `subscribe`（agent 显式订阅文件；edit/write 自动订阅所改文件、read 自动订阅所读行范围（line-level），`subscribe:false` 可 opt-out 该次调用的自动订阅；订阅变更只发短通知（read 订阅可带范围 diff 明细），按需 `inspect`；未订阅不通知）。`plugins/context/skills` 提供 `skills`（管理技能库的单工具三动作：list / search 只读元数据，load 经信任门——TOFU 哈希锁，首次 / 内容变更 ask、revoked deny——把技能内容按 `<skill id source path trust>` 包裹进语言空间并记会话加载态；三来源 = 项目 `skills/`、用户 `~/.vessel/skills/`、收集库 `<dataDir>/plugins/skills/library/`，收集库根由装配层追加进 basic-tools `deny_paths` 隔离；写技能仍是 `write` / `edit` 改文件，不注册 CRUD）。成员 body 在装配层 attach 收件箱后另有 `inbox`；`ask` 按入口注册。装配层另常驻注册 **`vessel`** 控制面桥（P1 单工具面，见下「vessel 控制面桥」）。`team_*` / `delegate_task` 已删除。
 
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
@@ -100,7 +100,7 @@ interface ToolDefinition {
 | `vessel` | 装配层常驻注册（bootstrap，先于 owner 派生；`--tools` 同口径）。单工具面控制面桥：调用本会话不可直调的已注册工具 / 既有 RPC 方法 / 经 `config.set` 改配置。见下「vessel 控制面桥」 |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
-口径：默认 root 工具面 = 能力工具 + `agent` + `subscribe` + `vessel`（控制面桥）；显式 `agent.enabled: false` 去掉 `agent`；交互 REPL 或 gateway-serve 再加 `ask`。**只有一份工具面**：成员用的就是节点有的这一份（0.51 用户裁定），所以 `tools.list` 无论传不传 `agent_id` 都是 `{ tools }` 一个形状，没有 `surface` / `source` / `unavailable`（见 [gateway-rpc](gateway-rpc.md)）。仅剩两条**行为**差异：deny（只读）档只留 `read` / `media` / `subscribe`，需要父级应答的 `ask` / `ask_user` 要求 bridge —— 判据见 [agent-structure](agent-structure.md) 的「工具面」。`inbox` 仍是成员运行期注入（节点面上暂时没有它，待 inbox 插件化后自然归位）；配置 MCP 后在基础上加 MCP 工具（数量由 server 提供）。实际清单以 `bun run src/cli.ts --tools` 输出为准，本文不写死数量。`--tools` 一次性命令按 headless 口径列出，且**不连接 MCP、不展开 `ask` 与成员侧 `inbox`**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
+口径：默认 root 工具面 = 能力工具 + `agent` + `subscribe` + `skills` + `vessel`（控制面桥）；显式 `agent.enabled: false` 去掉 `agent`；交互 REPL 或 gateway-serve 再加 `ask`。**只有一份工具面**：成员用的就是节点有的这一份（0.51 用户裁定），所以 `tools.list` 无论传不传 `agent_id` 都是 `{ tools }` 一个形状，没有 `surface` / `source` / `unavailable`（见 [gateway-rpc](gateway-rpc.md)）。仅剩两条**行为**差异：deny（只读）档只留 `read` / `media` / `subscribe`，需要父级应答的 `ask` / `ask_user` 要求 bridge —— 判据见 [agent-structure](agent-structure.md) 的「工具面」。`inbox` 仍是成员运行期注入（节点面上暂时没有它，待 inbox 插件化后自然归位）；配置 MCP 后在基础上加 MCP 工具（数量由 server 提供）。实际清单以 `bun run src/cli.ts --tools` 输出为准，本文不写死数量。`--tools` 一次性命令按 headless 口径列出，且**不连接 MCP、不展开 `ask` 与成员侧 `inbox`**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
@@ -183,12 +183,12 @@ UI 按 tool_call_id 配对，用户与模型同见。RPC 执行经 bootstrap 的
 | `grep` / `ls` / `cat` / `find` | `bash` 就能干，且组合能力更强 |
 | file-ops（`write_file` / `create_dir` / `path_exists` / …） | `edit` 写、`bash` 建目录与判定存在 |
 | meta-tools（`register_tool` / `search_assets` / `inspect_asset` / …） | 写文件即等于建工具：模型用 `bash` 落一个插件目录，下次启动被 `PluginLoader` 扫到。注意 `vessel` 不是这类——它不注册/发现工具，只是既有注册表与 RPC 控制面的结构化桥（见上「vessel 控制面桥」） |
-| skills-loader（scanner + CRUD + 文件监听） | skills 就是文件；前端引用、core 只收消息 |
+| skills-loader（scanner + CRUD + 文件监听） | skills 就是文件；前端引用、core 只收消息。**澄清**：`plugins/context/skills` 不是它的复活——管理对象是带信任边界的收集库（三来源索引 + TOFU 哈希锁 + 信任门控 load），只注册一个只读工具（list/search/load），不注册 CRUD；差异论证见 [skills 插件设计](../dev/plans/skills-plugin-design.md) §2.2 |
 | memory 插件 | 项目约定写在 `AGENTS.md`，模型自己读；跨会话笔记是 markdown 文件，模型自己读写 |
 
 > MCP 不是「能力工具」，而是把外部工具接进 `PluginHost` 的插件（ADR-039）；它不占基础工具名额，也不改变能力工具的判据。
 
-**evals / feishu 不注册模型工具**；工具口径：默认 = 能力工具 + `agent` + `subscribe` + `vessel`；交互模式再加 `ask`；另有 N 个 MCP 工具。
+**evals / feishu 不注册模型工具**；工具口径：默认 = 能力工具 + `agent` + `subscribe` + `skills` + `vessel`；交互模式再加 `ask`；另有 N 个 MCP 工具。
 
 判据只有一条：**能被其他工具替代的工具，就不该存在**。工具越多，模型的选错空间越大；真正的通用原语只有"执行一条命令"，其余都是它的特化。
 

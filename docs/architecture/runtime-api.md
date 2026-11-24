@@ -44,7 +44,7 @@ run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<str
   每个命中文件读为一条 user 注入消息（`<file path="...">内容</file>`，>100KB 截断并在末尾标注），读取失败则跳过并给一条 warning，**用户原文一字不改**。经 `RunOptions.messages` 传给 `run()`。headless 侧的对应入口是 `--run @file`。
 
   > **为什么要有「全角标点截断」这一步**：中文里路径与标点之间没有空白——`@skills/x.md，请按这个来` 的 token 尾字符是汉字，只剥尾部标点剥不掉 `，` 及其后面的句子；而半角标点**不能**当截断符（会把 `@skills/code-writing.md` 在第一个 `.` 处打断）。所以规则是：**全角标点截断，半角标点只剥尾部**。
-- **skills 不是一条加载通道**：harness 不扫描、不解析、不注入 skills 目录。技能就是 markdown 文件，放两个位置——仓库 `skills/`（项目级，随仓库提交、团队共享）与 `~/.vessel/skills/`（用户级，跨项目复用）。这是纯约定，代码里零硬编码。前端负责查找与引用，core 只收消息。
+- **skills 不是一条加载通道**：harness 不扫描、不解析、不注入 skills 目录。技能就是 markdown 文件，放两个位置——仓库 `skills/`（项目级，随仓库提交、团队共享）与 `~/.vessel/skills/`（用户级，跨项目复用）。这是纯约定，代码里零硬编码。前端负责查找与引用，core 只收消息。**澄清（skills 插件）**：`plugins/context/skills` 扫描 / 索引这两个根与插件私有收集库，提供信任门控的显式 `skills load`——它不自动注入、不改 core 语义，前端 `@path` 通道原样保留；管理面与信任边界见 [skills 插件设计](../dev/plans/skills-plugin-design.md)。
 
 当前内置使用者：`@path` 文件引用（TUI/headless）与成员来源标注 `vessel:source`
 （`packages/agent`）。两者都持久化，且都在用户输入之前。
