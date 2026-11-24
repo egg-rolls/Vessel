@@ -47,10 +47,10 @@
     {
       "id": "q-msg-timeout",
       "title": "修复消息超时重复回inbox(agent仍跑不该回退+回退去重)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-msg-timeout",
       "branch": "fix/q-msg-timeout",
-      "progress": "派单：人工消息超时回inbox不撤回已发送份→双份；裁决agent未抛错不回退+回退去重单一真相"
+      "progress": "merge入main；根因①sweep纯计时不看调度器在飞②failed行不被迟到回显认领→双份；修:sweep按busySessions闸(agent在跑不超时)+超时失败行可被回显认领单一真相；build绿待用户行为验收"
     },
     {
       "id": "q-bash-source",
