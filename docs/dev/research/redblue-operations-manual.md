@@ -503,7 +503,50 @@ handoff: <git 分支/文档路径>
 
 ## 7. 跨节点场景
 
-（填写：多机 handoff、federation 回报、hub join、会话宇宙切换的跨机形态。）
+> 同机双行（§6 主线）是回环特例；跨机时多三件事：TLS、hub 目录、D 定格。闭环六步不变，
+> 只有通道搭建与入住动作的形态不同。
+
+### 7.1 拓扑与通道
+
+- **控制面（hub）**：B 机 node 出站加入 A 机 hub（或独立 hub 机）。[事实] REMOTE.md §3.6：
+  ```bash
+  # hub 侧（独立 dataDir，必须与节点 dataDir 不同）
+  vessel hub join-code --data-dir <hubDir> --ttl 300 --json
+  # node 侧：一次性 code 换 token（只进 SecretStore，不落 YAML/日志）
+  vessel hub join https://hub.example:8643 --code <CODE> \
+    [--public-url <url>] [--ca <file>] [--data-dir <nodeDir>]
+  ```
+  同机回环有无码自助重 join（auto-join 已实现 [事实] node-auto-join.md 状态行）；跨机走 join-code。
+  hub 只传目录 / 指针元数据，**不代理正文**；节点离线保留最后快照只读展示。[事实] federation-hub.md
+- **数据面（federation）**：peers url 非回环**必须 https**（无 `--insecure` 逃生口 [事实] REMOTE.md §1）。
+  TLS 两条路 [事实] REMOTE.md §2.1/§3：① node 自带 TLS：`allow_remote: true` + token + `tls.cert_file/key_file`
+  （SAN 必须覆盖客户端实际使用的 host/IP，否则启动失败 / 校验失败）；② 反向代理终结 TLS，node 留回环，
+  `--connect https://...` 指代理。自签证书用 peer 的 `caFile` 指定 CA。
+- **NAT**：`hub.direction: node` 只保证元数据可达；没有浏览器可达地址的节点要隧道 / 反向代理，
+  可用 `public_url` 声明 origin；`data_plane: direct|unreachable` 由 `public_url ?? url` 派生。
+  [事实] CONFIG.md §2.13
+- **D 定格（G8）**：新 node join 后，老平台的派生白名单不运行期刷新 ⇒ 浏览器直连新 node 会 403。
+  绕行：显式 `node.allowed_origins`（`reload --scope config` 可热更 [事实] REMOTE.md §3.4）或重启平台。
+  [事实] node-auto-join.md §10.2–10.3
+
+### 7.2 跨机闭环差异（相对 §6）
+
+| 阶段 | 跨机形态 |
+|---|---|
+| 6.1 起新版 | B 机 agent 本地执行启动命令（A 机 agent 经 federation 下指令，**不是远程 spawn**——federation 不做远程生命周期 [事实]）；出生证照写，git push 共享 |
+| 6.2 自检回报 | 通道 = https peers（§7.1）；报告契约不变；git 兜底更重要（跨机网络窗口更多）[推断] |
+| 6.3 修复 | 修复在 B 机 worktree；`restart --stop-nodes` 由 B 机 agent 本地执行；A 机只收报告 [推断] |
+| 6.4 回归 | 用户浏览器经代理 / 隧道开 B origin；其余清单不变 |
+| 6.5 入住 | handoff 文档经 **git push/pull** 跨机（durable 主通道）+ federation 指针消息；B 机本地重建成员；用户入口指 B 机；A 机保留为回退线 [推断] |
+| 6.6 迭代/回退 | 回退 = 入口指回 A 机；两机数据根各自独立，互不触碰 [事实] 配方 DD 分离 |
+
+### 7.3 跨节点 handoff 的边界（再强调）
+
+- federation **不做**远程 spawn / close / rotate / resume / create、自动中继 / mesh、离线队列 / 重试。
+  [事实] federation-hub.md §不做什么
+- 所以「把 A 机的 agent 搬到 B 机」永远 = **文档 + 消息 + 目标侧新建**，没有别的形态。
+  会话宇宙切换（裁决②）在跨机场景同样成立：不迁移数据，只交接工作。[推断]
+- hop 恒 1：A↔B 直连；经第三机中转不支持（maxHops 只是防御上界）。[事实] federation-hub.md §guards
 
 ## 8. 风险登记
 
