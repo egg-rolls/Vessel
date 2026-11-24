@@ -134,6 +134,14 @@ export const messages = {
 
   // Settings
   'settings.title': '设置',
+  'settings.category.common': '常用',
+  'settings.category.visual': '视觉',
+  'settings.category.display': '显示与可见性',
+  'settings.category.runtime': '运行期',
+  'settings.category.logs': '日志',
+  'settings.category.connection': '连接',
+  'settings.category.advancedConfig': '高级',
+  'settings.category.extensions': '扩展',
   'settings.connection.devProxyNotice':
     '开发代理鉴权已启用：连接同源 gateway（由 Vite 开发服务器转发），前端不保存 token。',
 

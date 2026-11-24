@@ -134,6 +134,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
 
   // Settings
   'settings.title': 'Settings',
+  'settings.category.common': 'Commonly Used',
+  'settings.category.visual': 'Visual',
+  'settings.category.display': 'Display & Visibility',
+  'settings.category.runtime': 'Runtime',
+  'settings.category.logs': 'Logs',
+  'settings.category.connection': 'Connection',
+  'settings.category.advancedConfig': 'Advanced',
+  'settings.category.extensions': 'Extensions',
   'settings.connection.devProxyNotice':
     'Dev proxy auth is enabled: connecting to the same-origin gateway forwarded by the Vite dev server. No token is stored in the browser.',
 
