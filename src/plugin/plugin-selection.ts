@@ -27,6 +27,7 @@ import {
   OPT_IN_PLUGINS,
   type PluginDescriptor,
   type PluginLoader,
+  pluginAliasMap,
 } from './plugin-loader';
 
 /** 选择结果 */
@@ -62,6 +63,11 @@ export function resolvePluginSelection(
   const selected = new Map<string, PluginConfig>();
   const descriptors = loader.list();
   const noExternal = externalPluginsDisabled(env);
+  // 兼容别名归一（金丝雀终验 issue-①）：规范名 = 清单 id（skills），旧包短名
+  // （plugin-skills）是别名。config 按任一种拼写书写都归一到规范名再选择，
+  // 与 loader.load / pluginConfigs[plugin.name] / pluginEnabledInConfig 同一口径。
+  const aliases = pluginAliasMap(descriptors);
+  const canonicalName = (name: string): string => aliases.get(name) ?? name;
 
   let external: PluginDescriptor[] = [];
 
@@ -85,7 +91,7 @@ export function resolvePluginSelection(
   } else {
     for (const entry of configured) {
       if (entry.enabled === false) continue;
-      selected.set(entry.name, entry);
+      selected.set(canonicalName(entry.name), entry);
     }
   }
 
@@ -93,21 +99,26 @@ export function resolvePluginSelection(
   // - 显式 enabled:true 不被声明式 enabled:false 关掉；
   // - 显式 enabled:false 不被声明式条目重新启用。
   const explicitlyEnabled = new Set(
-    (configured ?? []).filter((entry) => entry.enabled !== false).map((entry) => entry.name),
+    (configured ?? [])
+      .filter((entry) => entry.enabled !== false)
+      .map((entry) => canonicalName(entry.name)),
   );
   const explicitlyDisabled = new Set(
-    (configured ?? []).filter((entry) => entry.enabled === false).map((entry) => entry.name),
+    (configured ?? [])
+      .filter((entry) => entry.enabled === false)
+      .map((entry) => canonicalName(entry.name)),
   );
 
   // 声明式 guardrails/hooks：按名字启用或停用。
   for (const entry of declarative) {
-    if (FACTORY_PLUGINS.has(entry.name)) continue;
+    const name = canonicalName(entry.name);
+    if (FACTORY_PLUGINS.has(name)) continue;
     if (entry.enabled === false) {
-      if (!explicitlyEnabled.has(entry.name)) selected.delete(entry.name);
+      if (!explicitlyEnabled.has(name)) selected.delete(name);
       continue;
     }
-    if (explicitlyDisabled.has(entry.name)) continue;
-    if (!selected.has(entry.name)) selected.set(entry.name, entry);
+    if (explicitlyDisabled.has(name)) continue;
+    if (!selected.has(name)) selected.set(name, entry);
   }
 
   if (debug) {

@@ -87,6 +87,15 @@ settings 贡献、UI embed 接线、装配层特判——阻力大。本设计�
 | **in-process + capabilityManifest** | 声明了 `vessel` 清单字段（除 `override`）但**无** `entry` | 默认集装载 install 后，`registerInProcessPlugin`（`plugin-host-assembly.ts` L218）把 `Plugin.rpc` 接进同一个 `PluginRpcRegistry`（canonical `plugin.<id>.<name>`） |
 | **in-process 无清单（legacy）** | 无 `vessel` 块（或只有 `override`） | 只走 install 注册面（tool / provider / guardrail / hook），**无贡献面**（RPC/pages/settings 都不可声明） |
 
+> **命名一致性（金丝雀终验 issue-①，q-verify-fix 已落地）**：描述符规范名统一为
+> 「声明了清单 `id` 就用 id，否则用包短名」——child 分支一直如此，in-process 分支
+> 此前只用包短名，于是 skills（包名 `@vessel-agent/plugin-skills`、清单 id `skills`）
+> 的显式 `plugins: [{name: skills}]` 匹配不到描述符 → `load_failed`。现在两种形态同口径；
+> 包短名与 id 不一致时短名进 `descriptor.aliases`，选择层经 `pluginAliasMap` 归一，
+> 按短名书写的存量配置仍可装载。**config `plugins[].name` 的正确拼写 = 清单 id**
+> （= `Plugin.name` = RPC canonical `plugin.<id>.*` = 装配层配置键）。脚手架生成时
+> 包名可带 `plugin-` 前缀（npm 辨识），但清单 id 必须与插件自报名一致。
+
 关键事实：**「manifest 发现 → 自动注册」在 0.51 / model-registry D3 之后已经存在**——
 声明了 capabilityManifest 的 in-process 插件，其 RPC / pages / navGroups / settings 贡献
 由装配层自动登记（`tenant-runtime-factory.ts` L884-921 收集 → L1614 `bundle.registerInProcessPlugins`；

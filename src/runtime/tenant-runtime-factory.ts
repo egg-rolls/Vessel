@@ -319,6 +319,23 @@ const SESSION_TITLE_SYSTEM_PROMPT =
   'No quotes, no markdown, no trailing punctuation. Do not answer the question. ' +
   'Reply with the title only.';
 
+/**
+ * C4：命名请求的完成预算（金丝雀终验 issue-②）。
+ *
+ * 此前是 64：reasoning 模型（deepseek-reasoner / 思考模式 qwen 等）的思维链与正文
+ * **共用** max_tokens 预算，64 token 全被思考耗尽 → `content` 为空 → 清洗得空串 →
+ * 静默放弃，会话永远卡在 Untitled。标题正文本身 ≤40 字符，2048 给思维链留足余量
+ * （与压缩 reduce 的 SUMMARIZER_REDUCE_MAX_TOKENS 同量级）；即便仍被耗尽 / 超时，
+ * 下面还有派生标题兜底，不再静默放弃。
+ */
+const SESSION_TITLE_MAX_TOKENS = 2048;
+/**
+ * C4：命名请求的截止时间。命名是 run.completed 后的 fire-and-forget 补名，不阻塞
+ * run 终态；reasoning 模型首 token 延迟高，5s 经常不够（超时 = 又一条静默放弃路径），
+ * 放宽到与压缩摘要同口径的 15s。
+ */
+const SESSION_TITLE_TIMEOUT_MS = 15_000;
+
 /** 去掉首尾引号 / 反引号（含中英文引号） */
 function stripWrappingQuotes(value: string): string {
   return value
@@ -1422,34 +1439,51 @@ export async function buildTenantRuntime(
       const input = firstUserInputForTitle(messages);
       if (input === undefined) return;
       // 0.64：AI 起标题是后台补的，触发时事件循环经常是空的 —— 用会真正触发的截止时间。
-      const deadline = startDeadline(5000);
-      let response: Awaited<ReturnType<LLMProvider['chat']>>;
+      const deadline = startDeadline(SESSION_TITLE_TIMEOUT_MS);
+      let aiTitle = '';
       try {
-        response = await provider.chat({
+        const response = await provider.chat({
           model: providerModel,
           messages: [
             { role: 'system', content: SESSION_TITLE_SYSTEM_PROMPT },
             { role: 'user', content: input },
           ],
-          max_tokens: 64,
+          max_tokens: SESSION_TITLE_MAX_TOKENS,
           temperature: 0.2,
           signal: deadline.signal,
+        });
+        aiTitle = sanitizeGeneratedTitle(response.content);
+      } catch (error) {
+        // 失败不再静默放弃：warn 之后走下面的派生标题兜底。
+        logger.warn('session title generation failed', {
+          session_id: sessionId,
+          error: error instanceof Error ? error.message : String(error),
         });
       } finally {
         deadline.dispose();
       }
-      const title = sanitizeGeneratedTitle(response.content);
-      if (title === '') return;
       // 生成窗口内可能人工 rename / 已有另一次命名：写前重读，保住人工标题。
       const current = await session.load(sessionId);
       if (current === null) return;
       if (current.title_source === 'manual' || current.title_source === 'generated') return;
       const currentDerived = deriveSessionMeta(current.messages ?? []).title;
       if (!isPlaceholderTitle(current.title) && current.title !== currentDerived) return;
+      // 兜底（金丝雀终验 issue-②）：AI 无产出（reasoning 耗尽预算 / 超时 / 空响应）时
+      // 用派生标题（首条用户话语截断，与读侧 deriveSessionMeta 同口径）补名，
+      // 不再让会话静默卡在 Untitled。兜底标题**不标 generated**：它等于派生标题，
+      // 下一次 run.completed 仍会通过上面的守卫，AI 命名可重试；人工标题不受影响。
+      const title =
+        aiTitle !== '' ? aiTitle : isPlaceholderTitle(currentDerived) ? '' : currentDerived;
+      if (title === '') return;
+      if (aiTitle === '') {
+        logger.warn('session title generation produced no output; using derived title fallback', {
+          session_id: sessionId,
+        });
+      }
       await session.save({
         ...current,
         title,
-        title_source: 'generated',
+        ...(aiTitle !== '' ? { title_source: 'generated' as const } : {}),
         updated_at: Date.now(),
       });
       events.publish({
