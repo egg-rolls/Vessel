@@ -45,6 +45,22 @@
       "progress": "纠正:是金丝雀main非生产；真因canary sessions/main缺index.json+wal.manifest(owner哨兵main被当真实会话ID建目录且不完整)→sessions.get失败；q-session-fix聚焦金丝雀owner会话bootstrap"
     },
     {
+      "id": "q-msg-timeout",
+      "title": "修复消息超时重复回inbox(agent仍跑不该回退+回退去重)",
+      "column": "进行中",
+      "owner": "q-msg-timeout",
+      "branch": "fix/q-msg-timeout",
+      "progress": "派单：人工消息超时回inbox不撤回已发送份→双份；裁决agent未抛错不回退+回退去重单一真相"
+    },
+    {
+      "id": "q-bash-source",
+      "title": "复查async bash来源仍显agent名(q-display修复可能未覆盖live全路径)",
+      "column": "进行中",
+      "owner": "q-bash-source",
+      "branch": "fix/q-bash-source",
+      "progress": "派单：6e15df06已合入重启但用户仍见agent名；查是否只改完成通知未覆盖启动/进度/live首帧"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
