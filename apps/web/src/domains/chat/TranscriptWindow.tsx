@@ -317,7 +317,7 @@ export function TranscriptWindow({
   // detail 刷新重建 item 流时没有新事件、组数也不变 —— 旧 followKey 对此是盲区：
   // 重建把内容高度瞬时改变后贴底跟随不触发，滑块停在被夹下去的位置（跳离底部回不来）。
   // 与 Team 页 teamFollowKey（末条消息身份）同一口径；未 pinned 时跟随不动，阅读不打断。
-  const lastItemKey = items.length > 0 ? items[items.length - 1]?.key ?? '' : '';
+  const lastItemKey = items.length > 0 ? (items[items.length - 1]?.key ?? '') : '';
   const followKey = `${snapshotVersion}:${renderedGroups.length}:${items.length}:${lastItemKey}`;
   const { scrollRef, getElement, pinned, onScroll, scrollToBottom, userIntentProps } =
     useStickyBottom({

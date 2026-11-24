@@ -405,6 +405,7 @@ export function useChatTranscript({
   // 作废认领账本。SSE/WS 已推送终态，一次精确刷新足够（本段注释原本就写着「一次」）。
   const refreshedTerminalSeq = useRef(0);
   // 切会话 / 重连换了 seq 空间：水位归零重判，并取消挂起的旧会话刷新。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: selectedId / epoch 是水位复位的显式触发器，不是 effect 体的输入
   useEffect(() => {
     refreshedTerminalSeq.current = 0;
     window.clearTimeout(refreshTimer.current);
