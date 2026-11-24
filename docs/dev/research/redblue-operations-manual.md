@@ -195,7 +195,42 @@
 
 ## 4. 映射：业界方法 → vessel 原语
 
-（填写：已具备 / 缺口 / 替代做法 三列映射表。）
+> 状态三档：**已具备** = 有原语且语义对得上；**替代** = 无同形原语，但可用既有杠杆组合出等效做法；
+> **缺口** = 既无原语也无干净替代，需要纪律绕行或将来补（§5 逐条分析）。
+> 每行给锚点；组合做法标 [推断]。
+
+| # | 业界方法 / 要素 | vessel 原语 | 状态 | 锚点 / 替代做法 |
+|---|---|---|---|---|
+| M1 | 蓝绿：两套同构环境 | 不对称隔离配方：A 默认根；B `--user-config` + `--data-dir` + `engine_pool.instance` + 端口错开 | 已具备 | [事实] 配方 §1–2；两 checkout 各自 bun install |
+| M2 | 蓝绿：路由器切换 | 无路由器实体；**入口即路由器**：浏览器 origin / CLI UC/DD flag / `--connect` + connect token | 替代 | [事实] 配方 §2 入口对照表；[推断] 切换动作 = 人改入口，无集中开关 |
+| M3 | 蓝绿：快速回退 | A 根 / 配置 / 端口未被触碰 ⇒ 入口换回即回退，零成本 | 已具备 | [事实] 配方 §4 |
+| M4 | 蓝绿：切换前只读过渡 / 双喂 | 无只读模式原语；双喂不做（裁决②） | 替代 | [推断] 入住前冻结 A 行新工作 + handoff 文档落 git（§6.5 步骤 1）；共享 workspace 按 R8 分区 |
+| M5 | 蓝绿：角色轮转（旧套变下版 staging） | B 转正后旧 A 保留为回退线；下一轮候选可复用 B checkout 或起 C 行 | 替代 | [推断] §6.6；端口 / instance 命名表防碰撞 |
+| M6 | 蓝绿：schema 先行、应用后上 | 不共享 dataDir ⇒ 无共享 schema 可先行；数据格式单向门靠 DD 分离绕开 | 缺口（裁决边界） | [事实] 配方 §4–5 R7；裁决②不迁移（§5 G1） |
+| M7 | 金丝雀：子集部署 | B 行整舰队独立起；cohort 粒度 = team / node / 人 | 替代 | [事实] 配方 §2；[推断] 先迁一个团队入住 B，federation 保持互通 |
+| M8 | 金丝雀：canary vs control 评估 | `/health` + `gateway status --json` + 真实日志 + 用户行为验证 | 替代 | [事实] GATEWAY.md；宪法第四条；[推断] 清单即 oracle（§6.4），无自动指标分析 |
+| M9 | 金丝雀：评估接回发布流程 | 无 promote 闸门原语；用户裁决 = 闸门 | 替代 | [推断] 回归清单全绿 → 用户口头 / 文档裁决入住（§6.4→6.5） |
+| M10 | 金丝雀：内部员工先行 | B 行第一批用户 = 开发者自己（日用 A 不动） | 已具备 | [推断] 配方场景定义本身 |
+| M11 | 特性开关：release toggle | config 键 + env + 插件 enable/disable；候选线 config diff = 台账 | 替代 | [事实] CONFIG.md 层序；`VESSEL_NO_EXTERNAL_PLUGINS`；[推断] 入住后 diff 清零纪律（§6.6） |
+| M12 | 特性开关：运行时动态改 | `gateway reload --scope config,plugins,permission,tools,mcp`；TLS/token/端口/provider 改动必须 restart | 已具备（粗粒度） | [事实] packages/serve/src/gateway/methods/admin.ts:21 `RELOAD_SCOPES`；REMOTE.md §3.4；无 per-request flag，不建（§5 G13） |
+| M13 | 特性开关：Ops 长命开关 | config 常设键（降级 / 池开关 / hub direction） | 已具备 | [事实] CONFIG.md；[推断] 长命键合理保留，不算债 |
+| M14 | expand-contract：接口三相 | federation envelope / RPC / config 键 additive 演进；本仓文档门（doc-sync）约束形状 | 已具备（纪律层） | [事实] federation-hub.md envelope 固定字段；[推断] 红蓝期接口变更先 additive |
+| M15 | expand-contract：migrate 相 | 会话宇宙切换：换入口 + handoff 文档 + federation 消息 + B 行重建成员 | 替代 | [事实] 裁决②；rotate startup_prompt 语义；[推断] §6.5 |
+| M16 | expand-contract：contract 相 | 旧线退役 = `stop --stop-nodes` + 数据根归档（不删）；可无限推迟 | 替代 | [事实] GATEWAY.md §4；[推断] §6.6 |
+| M17 | Argo：readiness ≠ 验收 | `/health` / node ready 只是就绪；验收 = 真实工作 + 用户验证 | 已具备（区分） | [事实] gateway-lifecycle.md 分段启动；宪法第四条 |
+| M18 | Argo：manual judgement | 用户裁决入住 / 回退；agent 只备清单不代跑 | 已具备 | [事实] 宪法；[推断] §6.4 |
+| M19 | Argo：自动 promote/rollback、加权流量 | 无 | 缺口（宪法边界） | 不补：零探针 + 无切分面（§5 G4/G12） |
+| M20 | rolling：优雅 drain | `gateway.shutdown`：node 写 resume 标记 + interrupt ≤10s，超时强杀；池只 terminate owned | 已具备 | [事实] GATEWAY.md §4；配方 §3 |
+| M21 | rolling：重启不丢任务 | c 档：inbox 落盘重投（human 源 FIFO）+ 重启 EnvCard + 标记准入后清 | 已具备 | [事实] src/node-resume.ts 头注；graceful-restart.md §1 |
+| M22 | rolling：checkpoint 续跑（b 档） | RunStore checkpoint + `runs.resume`（running\|interrupted）+ 手动 `vessel resume`；**启动期不自动续** | 缺口（可补，目标态） | [事实] ADR-040；graceful-restart.md §2；§5 G9 |
+| M23 | 换代码 vs 换配置两条通道 | 代码：`restart --stop-nodes`（缺省 restart **不换 node 代码**）；配置：`reload` | 已具备 | [事实] GATEWAY.md §4 表 + 提示行 |
+| M24 | 跨版本 handoff（同进程） | `agent rotate`：startup_prompt 是唯一 handoff 通道，新 body 不继承对话 | 已具备（同进程） | [事实] agent 工具语义；**不是换代码**（graceful-restart.md §2） |
+| M25 | 跨节点 handoff | federation 不做远程 spawn/rotate/resume ⇒ handoff = git 文档 + 地址消息 + 目标侧重建成员 | 替代 | [事实] federation-hub.md §不做什么；[推断] §6.5/§7 |
+| M26 | 跨节点回报通道 | `POST <peer.url>/v1/federation/messages`；`vessel federation post --to --from`；agent send 地址形态（跨节点无 interrupt/notify） | 已具备 | [事实] src/federation-client.ts:4,26；cli-args.ts:3973；packages/agent/src/tool.ts |
+| M27 | 回报可靠性（离线队列 / exactly-once） | 无离线队列 / 重试 / 跨重启 exactly-once；去重仅进程内 LRU 1024；限流 60/min | 缺口（可补，现绕行） | [事实] federation-hub.md §guards；[推断] 幂等 message_id + ack + 重发 + git 落盘（§6.2） |
+| M28 | 热备 / 灾备演练 | A 行保留 = 热备回退线；每次入住演练一次回退路径 | 已具备 | [推断] Fowler 角色轮转副产品在 vessel 的对应 |
+| M29 | 工作区并发安全 | write.lock 合作式（仅新版 edit/write 持锁）；旧版是非合作写入者 | 缺口（纪律绕行） | [事实] 配方 R8；B 行独立 worktree 根治 |
+| M30 | 共享面隔离（插件 / 更新 / 服务） | `~/.vessel` 硬编码面不随 UC/DD 移动；env + 双行期纪律 | 替代 | [事实] 配方 §1/§5 R4–R6 |
 
 ## 5. 缺口分析
 
