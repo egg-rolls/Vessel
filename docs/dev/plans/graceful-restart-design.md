@@ -125,7 +125,68 @@ idle
 - 独立 node（无 supervisor）：CLI 包装器负责 wait-exit + respawn；无包装器时 `node.restart` 拒绝并提示用 `node stop` + 手动启动（fail-closed，不承诺做不到的事）。
 - 与 gateway handoff 的关系：`gateway restart`（平台层）继续保 node 不动；`node restart`（节点层）才走本设计。两层正交，可组合（先 gateway restart 换平台代码，再逐 node restart 换节点代码）。
 
-## 3. drain-to-quiesce：quiesce 判定（第2步填充）
+## 3. drain-to-quiesce：quiesce 判定
+
+### 3.1 定义：等「活跃 run 到安全边界」，不是等「所有事件」
+
+用户提案②的「等待所有事件停止」需要精确化（main-2）：node 上永远有不会停的事件——watcher、心跳、durable inbox 轮询、后台 async job。等「所有事件」= 永挂。quiesce 的判定对象**只有活跃 run**：
+
+> **定义（quiesce）**：进程内所有活跃 run 均处于「安全边界」——
+> (a) 已到终态（completed/failed/cancelled，自然完成是最优解）；或
+> (b) 已 cooperative 暂停于干净 checkpoint：**无在途工具调用、无未落盘的模型输出**，下一动作（发 LLM 请求）尚未开始。
+>
+> 后台进程、watcher、心跳、inbox 轮询**不在判定集内**（§3.4 另处理）。
+
+run 级相位与处置：
+
+| run 相位 | 含义 | restart drain 处置 | 安全性论证 |
+|---|---|---|---|
+| `llm_streaming` | 等模型响应（含流式） | 软截止前等完；软截止后 cancel，丢弃部分响应 | LLM 推理是只读请求，无世界副作用；损失 = 一次部分请求的 token 成本；resume 重发同一请求 |
+| `tool_executing` | 工具调用在途（副作用可能发生中） | **必须等完**（结果落盘后才算边界） | 杀在途工具 = 副作用状态未知 + 结果丢失 = 当年否决续 run 的死结本身 |
+| `between_calls` | 工具批已完成、结果已落盘、下一请求未发 | 即刻在此暂停（这就是安全边界） | checkpoint 干净，resume 从下一请求继续，零重放 |
+| `checkpointing` | 正在写 journal/SessionState | 等写完（毫秒级） | 写一半的 checkpoint 不可续 |
+| `idle` | 无活跃 run | 已静默 | — |
+
+### 3.2 cooperative 暂停的实现钩子（不 interrupt）
+
+- 在 `tool-calling-loop` 的**既有迭代边界**（空响应 nudge 检查所在的同一位置）加一个 `restartRequested` 旗标检查：旗标置位 且 当前工具批全部完成且结果已落盘 ⇒ 走正常收口路径落 checkpoint（status=`interrupted`，复用 `failureCheckpointStatus` 的 shutdown 语义），退出循环。**不是 abort**：不触发 AbortSignal、不产生悬空 tool_use、不丢部分响应。
+- 旗标经 EU 暴露（`requestRestartPause()`），node-drain 的 restart 模式对每个活跃 EU 置位；`activeRunSnapshot()` 扩展为携带相位与在途工具信息（§7 复用同一快照）。
+- 未 drain 时零开销：一次布尔检查挂在既有边界上，不新增轮询、不新增事件。
+- 长模型流的软截止取消走**既有** `interrupt` 的 signal 通道但 reason 区分（`restart_llm_cancel`）：只 cancel 当前 LLM 请求、checkpoint 回退到上一干净边界（部分响应不落盘）。这与 stop 的 interrupt('shutdown') 不同——后者切断一切。
+- 自然完成优先：若 run 在预算内自己跑完，drain 不暂停它，marker 也不写（无欠账）。quiesce 判定对「已终态」与「已暂停」一视同仁。
+
+### 3.3 判定算法（node-drain restart 模式）
+
+```
+beginDrain('restart'):
+  fence()                          # 现成 beginFence
+  for eu in activeEUs: eu.requestRestartPause()
+  loop (poll 10ms，与现 settle 同节奏):
+    snapshot = 所有 EU 的 run 相位快照
+    if 全部 ∈ {idle, 终态, between_calls 已暂停}: → quiesced
+    if now > softDeadline: 对 llm_streaming 的 run 发 restart_llm_cancel
+    if now > hardDeadline: → abort（§6，不写 marker、不 flush 退出）
+  quiesced:
+    armMarkers(intent='restart', 边界快照)   # 只给「暂停未终态」的 run 写
+    flushStateWrites()
+    → exiting（§2.4）
+```
+
+- 软截止（softDeadline）缺省 = hardDeadline 的 50%：前半程尽量让模型流自然收完（响应完整落盘，resume 无需重发），后半程才动用「取消 LLM 流」这个安全但浪费 token 的手段。
+- 工具批内多个并行工具调用：等**整批**完成（批是 checkpoint 的原子单位，半批 = 悬空 tool_use）。
+- 暂停后到 armMarkers 之间 run 不会复活：围栏已拒新输入，迭代边界旗标仍置位；durable inbox 的新消息只排队不触发 run。
+
+### 3.4 后台进程：不在 quiesce 判定内（D7）
+
+- async bash job 是 host 编排的资产（`tools-engine/worker.ts:78`：jobs map/通知槽在 host）。job 可能跑几小时，等它 = 永挂，故**排除**。
+- P1（记录+告知）：drain 时把存活 job 清单（job_id、pid、log 路径、所属会话）写进该会话 marker 的 `background_jobs` 字段；恢复卡如实告知「后台 job X 未被等待，日志在 <path>，请核对状态」——模型按卡指令「先核对现状」自行读 log/查 pid。job 的 stdout 本就落盘（启动时返回 log path），**工作产出不因重启丢失**；丢的只是「完成通知槽」。
+- 进程归属：node 退出时 host 不主动杀 job 子进程（现状即不 await 不杀）；job 成为孤儿但继续跑、继续写 log。P1 卡片明示这一点。
+- P3（adopt）：job registry 持久化（`<dataDir>/background-jobs.json`：job_id/pid/log_path/session_id/command/started_at）→ 新进程启动时按 pid 存活 + 启动时间三元组校验后 adopt（重挂等待/轮询 log 尾 + 完成标记文件），恢复完成通知槽。校验失败（pid 复用/已死）⇒ 标记 `background_stopped` 如实入卡。此模式与 gateway.pid adopt 判据同构。
+- `background_stopped` 字段从「S1a 恒 false」变为有真实语义（P3）；P1 用 `background_jobs` 清单替代布尔猜测。
+
+### 3.5 与现 settle 三态的关系
+
+stop 模式三态（idle/settled/timeout）原样保留。restart 模式是**另一条判定**（quiesced/aborted 二态 + 相位快照），不复用 2s 预算、不复用「超时就走」语义——restart 的超时语义是「超时就**不重启**」（§6），方向相反。两模式共享 fence/arm/flush 机件，分叉在 settle 策略。
 
 ## 4. resume manifest 格式（第3步填充）
 
