@@ -94,11 +94,11 @@
     },
     {
       "id": "q-skills-impl",
-      "title": "SKILLS插件实施(设计已就绪908行,树状拆分7切片)",
-      "column": "进行中",
+      "title": "SKILLS插件实施P1(in-process+TOFU信任门+三来源+skills工具+UI)",
+      "column": "已完成",
       "owner": "q-skills-impl",
       "branch": "feat/q-skills-impl",
-      "progress": "派单：按skills-plugin-design.md实施in-process插件；切片骨架→数据模型→信任门→三来源→skills工具→设置域→UI，每片build+commit"
+      "progress": "merge入main；plugins/context/skills in-process能力插件,默认集自动装载；TOFU哈希锁信任门(load重读重算+TOCTOU闸)+扫描fail-closed；skills单工具list/search/load+管理RPC+embed/iframe UI+设置七键自动发现；core零改动；P2导入/注入/P3marketplace留分期；build绿待用户放md验收"
     },
     {
       "id": "q-media-view",
