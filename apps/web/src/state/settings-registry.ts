@@ -1,19 +1,13 @@
 /**
  * 设置注册表（VSCode 式设置重构 S1，docs/dev/plans/vscode-settings-design.md §2.2）。
  *
- * 单一事实源：核心定义（DISPLAY_SETTINGS 全量 + 本地偏好 + view 项）+ 插件设置域
+ * 单一事实源：核心定义（服务端键全量 + 本地偏好 + view 项）+ 插件设置域
  * （S3 起由 buildPluginInventory 归一化合并）。纯数据 + 纯函数，不 import React。
+ * S6 反转：核心键表在本文件登记，display-settings.ts 的 DISPLAY_SETTINGS 反向派生。
  *
  * id 规则：核心 = config 键（ui.showReasoning）；本地 = local.<id>；插件 = <pluginId>.<key>。
  * 核心键白名单不含插件 id 段，核心与插件键永不冲突。
  */
-
-/** 核心定义：从 DISPLAY_SETTINGS 派生（单一清单，不另立第二份；§2.2）。 */
-import {
-  DISPLAY_SETTINGS,
-  EMPTY_RESPONSE_SETTING_PREFIX,
-  LOG_SETTING_PREFIX,
-} from './display-settings';
 
 export type SettingScope = 'user' | 'project' | 'local';
 export type SettingType = 'boolean' | 'enum' | 'string' | 'number' | 'object' | 'array' | 'view';
@@ -82,30 +76,91 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
 /** 「常用」是 curated 过滤视图（common:true），不是独立分类。 */
 export const COMMON_CATEGORY_ID = 'common';
 
+/** 日志分组键前缀（日志分类；display-settings 兼容层原样 re-export）。 */
+export const LOG_SETTING_PREFIX = 'observability.log.';
+
+/** 空响应兜底键前缀（运行期 core 分类）。 */
+export const EMPTY_RESPONSE_SETTING_PREFIX = 'emptyResponse.';
+
 /**
- * 契约默认值（@modified 判定 + 恢复默认）。来源：packages/config/src/types.ts
+ * 核心键的 legacy 短 id（旧 DISPLAY_SETTINGS.id / i18n 后缀）：
+ * ui.* / observability.showProcessErrors 取末段；log.* → log<Level>；
+ * emptyResponse.* → emptyResponse<Enabled>。搜索别名与派生层共用此规则。
+ */
+export function coreShortId(key: string): string {
+  for (const [prefix, stem] of [
+    [LOG_SETTING_PREFIX, 'log'],
+    [EMPTY_RESPONSE_SETTING_PREFIX, 'emptyResponse'],
+  ] as const) {
+    if (key.startsWith(prefix)) {
+      const rest = key.slice(prefix.length);
+      return `${stem}${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
+    }
+  }
+  return key.split('.').pop() ?? key;
+}
+
+/**
+ * 核心服务端键表（单一事实源；DISPLAY_SETTINGS 由 display-settings.ts 反向派生）。
+ * default = 契约默认值（@modified 判定 + 恢复默认），来源：packages/config/src/types.ts
  * UiConfig/ObservabilityConfig 注释 + defaults.ts DEFAULT_LOG_OPTIONS +
  * empty-response 缺省（§7.3）。statusBars 默认由消费方决定、nudge 无缺省 → 不登记
  * （无默认可回，不显示 ↺）。askUser 在 gateway 入口缺省 true（UiConfig 注释）。
+ * fallback = 未配置时的显示值（真实缺省行为）。
  */
-const CORE_DEFAULTS: Readonly<Record<string, string>> = {
-  'ui.verbosity': 'normal',
-  'ui.showInternalEvents': 'false',
-  'ui.showArchived': 'false',
-  'ui.errorLevel': 'user',
-  'ui.showReasoning': 'false',
-  'ui.expandCards': 'false',
-  'ui.askUser': 'true',
-  'ui.language': 'zh-CN',
-  'observability.showProcessErrors': 'false',
-  'observability.log.level': 'info',
-  'observability.log.color': 'auto',
-  'observability.log.format': 'pretty',
-  'observability.log.time': 'auto',
-  'emptyResponse.enabled': 'true',
-  'emptyResponse.seamless': 'true',
-  'emptyResponse.maxRetries': '2',
-};
+interface CoreSettingSpec {
+  key: string;
+  type: 'boolean' | 'enum' | 'number' | 'string';
+  options?: readonly string[];
+  min?: number;
+  max?: number;
+  default?: string;
+  fallback?: string;
+}
+
+const CORE_SETTING_SPECS: readonly CoreSettingSpec[] = [
+  { key: 'ui.verbosity', type: 'enum', options: ['minimal', 'normal', 'debug'], default: 'normal' },
+  // 默认视觉契约（用户裁决：生产 8642 为默认）：系统/内部消息**默认隐藏**。
+  // fallback 'false' 是缺省值的显式 codify——未配置时 UI 按 false 渲染/判定，
+  // 各舰队继承此默认；验收期的 show_internal_events:true 只是临时 override。
+  { key: 'ui.showInternalEvents', type: 'boolean', default: 'false', fallback: 'false' },
+  // 0.51：已归档 Team / 已停用 agent 的默认隐藏开关。与 showInternalEvents 同一层
+  // （同一个 ui 块、同一条 config.set 写路径），入口也在同一个「显示与可见性」分组。
+  { key: 'ui.showArchived', type: 'boolean', default: 'false' },
+  { key: 'ui.errorLevel', type: 'enum', options: ['user', 'all'], default: 'user' },
+  { key: 'observability.showProcessErrors', type: 'boolean', default: 'false' },
+  { key: 'ui.askUser', type: 'boolean', default: 'true' },
+  { key: 'ui.showReasoning', type: 'boolean', default: 'false' },
+  { key: 'ui.expandCards', type: 'boolean', default: 'false' },
+  { key: 'ui.statusBars', type: 'enum', options: ['top', 'bottom', 'both', 'none'] },
+  { key: 'ui.language', type: 'enum', options: ['zh-CN', 'en'], default: 'zh-CN' },
+  // 日志中枢（gateway）：modules 是 map，一期只读（不走 config.set）。
+  {
+    key: 'observability.log.level',
+    type: 'enum',
+    options: ['debug', 'info', 'warn', 'error'],
+    default: 'info',
+  },
+  {
+    key: 'observability.log.color',
+    type: 'enum',
+    options: ['auto', 'always', 'never'],
+    default: 'auto',
+  },
+  { key: 'observability.log.format', type: 'enum', options: ['pretty', 'json'], default: 'pretty' },
+  {
+    key: 'observability.log.time',
+    type: 'enum',
+    options: ['auto', 'none', 'clock', 'iso'],
+    default: 'auto',
+  },
+  // q-empty-response：空响应兜底（core 运行期设置，非插件域）。缺省 = 启用、重试 2 次、
+  // 内置 nudge 文案；fallback 让「未配置」显示真实缺省行为而不是空。
+  { key: 'emptyResponse.enabled', type: 'boolean', default: 'true', fallback: 'true' },
+  { key: 'emptyResponse.seamless', type: 'boolean', default: 'true', fallback: 'true' },
+  { key: 'emptyResponse.maxRetries', type: 'number', min: 0, max: 10, default: '2', fallback: '2' },
+  { key: 'emptyResponse.nudge', type: 'string' },
+];
 
 /** 「常用」curated 清单（§6 + 裁定③：showInternalEvents 是默认视觉旗舰键）。 */
 const CORE_COMMON: ReadonlySet<string> = new Set([
@@ -132,23 +187,26 @@ function snakeCase(id: string): string {
  * descriptionKey 指向 .hint（可能不存在）——渲染侧必须经 i18n hasMessage 判定，
  * 缺失时不渲染描述行（t() 对缺失键回退键名本身）。
  */
-export const CORE_SETTINGS: readonly SettingDef[] = DISPLAY_SETTINGS.map((setting) => ({
-  id: setting.key,
-  key: setting.key,
-  scope: 'user' as const,
-  type: setting.type,
-  source: 'core' as const,
-  titleKey: `settings.display.field.${setting.id}`,
-  descriptionKey: `settings.display.field.${setting.id}.hint`,
-  category: coreCategory(setting.key),
-  common: CORE_COMMON.has(setting.key) ? true : undefined,
-  options: setting.options,
-  min: setting.min,
-  max: setting.max,
-  default: CORE_DEFAULTS[setting.key],
-  fallback: setting.fallback,
-  keywords: [setting.id, snakeCase(setting.id)],
-}));
+export const CORE_SETTINGS: readonly SettingDef[] = CORE_SETTING_SPECS.map((spec) => {
+  const shortId = coreShortId(spec.key);
+  return {
+    id: spec.key,
+    key: spec.key,
+    scope: 'user' as const,
+    type: spec.type,
+    source: 'core' as const,
+    titleKey: `settings.display.field.${shortId}`,
+    descriptionKey: `settings.display.field.${shortId}.hint`,
+    category: coreCategory(spec.key),
+    common: CORE_COMMON.has(spec.key) ? true : undefined,
+    options: spec.options,
+    min: spec.min,
+    max: spec.max,
+    default: spec.default,
+    fallback: spec.fallback,
+    keywords: [shortId, snakeCase(shortId)],
+  };
+});
 
 /**
  * 本地呈现偏好（scope=local，浏览器 localStorage；§7.1 键名全部原名保留）。
