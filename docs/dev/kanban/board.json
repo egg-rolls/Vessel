@@ -101,6 +101,14 @@
       "progress": "派单：按skills-plugin-design.md实施in-process插件；切片骨架→数据模型→信任门→三来源→skills工具→设置域→UI，每片build+commit"
     },
     {
+      "id": "q-media-view",
+      "title": "media图片surfaced到模型上下文(模型本身多模态,直接看图)",
+      "column": "进行中",
+      "owner": "q-media-view",
+      "branch": "feat/q-media-view",
+      "progress": "派单：media read拒图/describe调独立provider；增强media把本地图片以附件surfaced到调用模型上下文(复用用户附图机制),模型原生看图不需tesseract/独立provider"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
