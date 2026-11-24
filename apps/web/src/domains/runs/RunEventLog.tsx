@@ -32,9 +32,11 @@ import { pretty } from './run-detail-format';
 import { buildLogRows, eventLogWindow, filterLogRows, parseSeqInput } from './run-event-log';
 import type { RunTrace } from './useRunTrace';
 
-/** 行网格：窄屏堆叠，宽屏一行的四列（时间戳 / seq / type / 摘要）。 */
+/** 行网格：窄屏堆叠，宽屏一行的四列（时间戳 / seq / type / 摘要）。
+ *  bg-transparent 必须显式写：无底色 utility 的 <button> 会落回浏览器原生
+ *  ButtonFace（暗色档 ≈ #6b6b6b 灰板）——那正是用户裁定要去掉的灰底。 */
 const ROW_CLASS =
-  'grid w-full grid-cols-[minmax(0,1fr)] gap-x-3 gap-y-0.5 px-2.5 py-1.5 text-left font-mono text-xs tint-hover tint-press wide:grid-cols-[11.5rem_4.5rem_minmax(8rem,15rem)_minmax(0,1fr)] wide:items-baseline';
+  'grid w-full grid-cols-[minmax(0,1fr)] gap-x-3 gap-y-0.5 bg-transparent px-2.5 py-1.5 text-left font-mono text-xs tint-hover tint-press wide:grid-cols-[11.5rem_4.5rem_minmax(8rem,15rem)_minmax(0,1fr)] wide:items-baseline';
 
 const HEAD_CLASS =
   'hidden grid-cols-[11.5rem_4.5rem_minmax(8rem,15rem)_minmax(0,1fr)] gap-x-3 px-2.5 py-1.5 font-mono text-2xs tracking-widest text-faint uppercase wide:grid';

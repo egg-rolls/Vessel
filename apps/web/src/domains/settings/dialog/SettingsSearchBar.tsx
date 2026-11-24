@@ -51,28 +51,28 @@ export function SettingsSearchBar({ query, onQueryChange, pluginIds }: SettingsS
         <div className="absolute right-0 z-10 mt-1 flex w-56 flex-col gap-0.5 rounded-sm border border-line bg-surface p-1.5 shadow-elev">
           <button
             type="button"
-            className="rounded-sm px-2 py-1 text-left text-sm hover:bg-hover"
+            className="rounded-sm bg-transparent px-2 py-1 text-left text-sm hover:bg-hover"
             onClick={() => appendToken('@modified')}
           >
             {t('settings.dialog.filterModified')}
           </button>
           <button
             type="button"
-            className="rounded-sm px-2 py-1 text-left text-sm hover:bg-hover"
+            className="rounded-sm bg-transparent px-2 py-1 text-left text-sm hover:bg-hover"
             onClick={() => appendToken('@local')}
           >
             @local
           </button>
           <button
             type="button"
-            className="rounded-sm px-2 py-1 text-left text-sm hover:bg-hover"
+            className="rounded-sm bg-transparent px-2 py-1 text-left text-sm hover:bg-hover"
             onClick={() => appendToken('@user')}
           >
             @user
           </button>
           <button
             type="button"
-            className="rounded-sm px-2 py-1 text-left text-sm hover:bg-hover"
+            className="rounded-sm bg-transparent px-2 py-1 text-left text-sm hover:bg-hover"
             onClick={() => appendToken('@project')}
           >
             @project
@@ -81,7 +81,7 @@ export function SettingsSearchBar({ query, onQueryChange, pluginIds }: SettingsS
             <button
               key={pluginId}
               type="button"
-              className="rounded-sm px-2 py-1 text-left text-sm hover:bg-hover"
+              className="rounded-sm bg-transparent px-2 py-1 text-left text-sm hover:bg-hover"
               onClick={() => appendToken(`@plugin:${pluginId}`)}
             >
               @plugin:{pluginId}
