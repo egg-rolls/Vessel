@@ -22,9 +22,9 @@ import {
 } from './gateway/pid';
 import { gatewayBaseUrl } from './gateway/reload';
 import { t } from './i18n';
+import { readPackageVersion } from './shared/version';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
-import { readPackageVersion } from './version';
 
 export interface CommandResult {
   exitCode: number;

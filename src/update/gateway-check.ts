@@ -15,7 +15,7 @@
 import type { VesselConfig } from '../../packages/config/src/index';
 import type { Logger } from '../../packages/core/src/index';
 import type { RuntimeNoticeBus } from '../runtime-notice';
-import { readPackageVersion } from '../version';
+import { readPackageVersion } from '../shared/version';
 import { resolveUpdateChannel } from './background';
 import { readUpdateCache, shouldCheck, writeUpdateCache } from './cache';
 import { checkForUpdate, isUpdateSourceMissing } from './check';

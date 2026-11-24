@@ -24,7 +24,7 @@ import {
   satisfiesComparator,
 } from '@vessel-agent/plugin-sdk';
 import type { PluginPortName, PluginScope } from '../packages/core/src/index';
-import { readPackageVersion } from './version';
+import { readPackageVersion } from './shared/version';
 
 export {
   compareSemver,

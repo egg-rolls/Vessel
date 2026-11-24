@@ -14,11 +14,11 @@
 import { createInterface } from 'node:readline/promises';
 import { loadConfig } from '../packages/config/src/index';
 import { t } from './i18n';
+import { readPackageVersion } from './shared/version';
 import { ui } from './ui-style';
 import { checkForUpdate } from './update/check';
 import { buildInstallPlan, detectInstallForm, type InstallForm } from './update/install-detect';
 import type { UpdateChannel } from './update/manifest';
-import { readPackageVersion } from './version';
 
 export interface UpdateCommandOptions {
   check: boolean;

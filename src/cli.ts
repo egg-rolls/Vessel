@@ -131,7 +131,6 @@ import {
 } from './plugin-host-assembly';
 import { FACTORY_PLUGINS } from './plugin-loader';
 import { type PluginWatchHandle, startPluginWatch } from './plugin-watch';
-import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
 import { createRunControl } from './run-control';
 import { createRuntimeNoticeBus } from './runtime-notice';
@@ -144,6 +143,8 @@ import {
   withLivenessRepair,
 } from './session-liveness';
 import { resolveContinueSessionId, resumeSession, runSessionList } from './session-resume';
+import { isAddressInUse } from './shared/port-in-use';
+import { readPackageVersion } from './shared/version';
 import { shutdownServeStack } from './shutdown-sequence';
 import { flushStartupTiming, markStartup, noteStartup, timeStartup } from './startup-timing';
 import { createSystemContextSource } from './system-context';
@@ -157,7 +158,6 @@ import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update/gateway-check';
-import { readPackageVersion } from './version';
 import { normalizeBridgeDeny } from './vessel-meta';
 import { visionSurfaceOf } from './vision-settings';
 import { ensureWebDist, interruptWebBuild, webDistWarning } from './web-dist';

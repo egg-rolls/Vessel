@@ -135,6 +135,7 @@ import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
 import { createSessionEventsSource } from './session-events';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
+import { readPackageVersion } from './shared/version';
 import { reportShutdownFailure } from './shutdown-report';
 import { markStartup, timeStartup } from './startup-timing';
 import { createSystemContextSource } from './system-context';
@@ -154,7 +155,6 @@ import { callbackRoute } from './tools-engine/wiring';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
-import { readPackageVersion } from './version';
 import { createVesselMetaSurface, normalizeBridgeDeny, type VesselRpcPort } from './vessel-meta';
 import { visionSurfaceOf } from './vision-settings';
 

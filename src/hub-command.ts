@@ -36,8 +36,8 @@ import { type CreateSecretStoreOptions, createSecretStore } from './hub/secret-s
 import type { HubNodeState, SecretStore } from './hub/types';
 import { t } from './i18n';
 import { resolveNodeId } from './node-identity';
+import { readPackageVersion } from './shared/version';
 import { ui } from './ui-style';
-import { readPackageVersion } from './version';
 
 const DEFAULT_HUB_PORT = 8643;
 const REQUEST_TIMEOUT_MS = 10_000;

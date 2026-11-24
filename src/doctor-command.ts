@@ -31,6 +31,7 @@ import { resolveDataDir, resolveEffectiveTenantId, resolveSingleTenantPaths } fr
 import { declarativePluginEntries } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { readPackageVersion } from './shared/version';
 // 0.56：派生 token 的现状（根密钥 / 指纹；doctor 从不说「必须配置 token」）。
 import {
   effectiveHubToken,
@@ -41,7 +42,6 @@ import {
 } from './token-derive';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
-import { readPackageVersion } from './version';
 // 0.56.1：Web 控制台产物缺失要在 doctor 就能看见（`gateway start` 的硬前置）。
 // 0.57：产物「落后于源码」同理 —— 它是「界面一直是旧的」最常见的真实原因。
 import { DEFAULT_WEB_DIST_DIR, inspectWebDist, webDistStaleLine } from './web-dist';

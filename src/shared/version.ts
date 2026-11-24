@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 /** 读取根 package.json 的 version；缺失时返回 '0.0.0' */
 export function readPackageVersion(): string {
   try {
-    const raw = readFileSync(new URL('../package.json', import.meta.url), 'utf-8');
+    const raw = readFileSync(new URL('../../package.json', import.meta.url), 'utf-8');
     const pkg = JSON.parse(raw) as { version?: unknown };
     return typeof pkg.version === 'string' && pkg.version.length > 0 ? pkg.version : '0.0.0';
   } catch {
@@ -25,7 +25,7 @@ export function readPackageVersion(): string {
 export function readGitCommit(): string | undefined {
   try {
     const out = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
-      cwd: new URL('..', import.meta.url),
+      cwd: new URL('../..', import.meta.url),
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
