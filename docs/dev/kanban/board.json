@@ -21,6 +21,22 @@
       "progress": "merge 4041e57c；--connect/--node targeting实现缺省零破坏；canary建agent正确姿势--connect http://127.0.0.1:8652 --node 7377657b(回环匿名)，--node单独走PID探测找生产是坑"
     },
     {
+      "id": "q-runtime-fix",
+      "title": "runtime修复：issue-0 plugins[]热应用剥离活体工具 + issue-1 工具输出隔离缺口",
+      "column": "进行中",
+      "owner": "q-runtime-fix",
+      "branch": "fix/q-runtime-fix",
+      "progress": "派单：金丝雀验收抓到的真bug—plugins[]热应用opt-in剥离内置工具+引擎/成员面不同步；tool-output落生产根应落本舰队dataDir"
+    },
+    {
+      "id": "q-settings-impl",
+      "title": "VSCode式设置实施+插件设置域自动发现+默认视觉方案(8642为默认)",
+      "column": "进行中",
+      "owner": "q-settings-impl",
+      "branch": "feat/q-settings-impl",
+      "progress": "派单：按vscode-settings-design.md实施S1-S6+contributes.settings自动发现+showInternalEvents缺省false+设置入口右上角"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
