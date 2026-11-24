@@ -6,8 +6,28 @@
 > [`docs/versions/CURRENT.md`](docs/versions/CURRENT.md)。
 >
 > 变更记录遵循 [Keep a Changelog](https://keepachangelog.com/)。
-> 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
+> 0.x 阶段：breaking 变更走 minor，功能点/新功能走 patch（第三位 +1），修复走 patch；minor 留里程碑收口。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
+
+## [0.56.1] - 未发布
+
+> 红蓝开发首轮晋升（金丝雀验收后合入 main）。**功能点起 patch 递增**（用户裁决 2026-11-24，见 RELEASE §1）。
+
+### 新增
+
+- **早退修复 + 无感重试**：tool-calling-loop 空响应 nudge 兜底（限次防死循环）+ `emptyResponse.seamless` 无感重调（空轮发布前丢弃，零疤痕）；设置 `enabled/seamless/maxRetries/nudge` 四路同步（YAML/config.set/CLI/WebUI）。
+- **VSCode 式设置（S1–S6）**：可检索弹窗（分类树/搜索 @token/用户·工作区层）+ **插件设置域自动发现**（manifest `contributes.settings` 透传归一化，装上即出现）+ `plugins.config.set` 写 RPC + **默认视觉契约**（系统消息默认隐藏、设置入口右上角齿轮替换 gateway 图标，`specs/default-visual-contract.md`）。
+- **federation peer 动态管理 CLI**（`vessel federation peer add/list/remove` 热应用）+ **CLI node targeting**（`--connect`/`--node` 任意 node 建 agent）+ 双舰队接入指南。
+- **显示修复**：async bash 完成通知来源归 `tool:bash`（前端「来自 bash」）+ 环境信息增量卡运行中 live 可见（`buildLiveItems` 投影 `message.injected`）。
+
+### 修复
+
+- **issue-0**：`plugins[]` 热应用引擎注册表/成员工具面轮边界原子收敛（消除「模型被广告却执行不了」窗口，保留 opt-in 语义）。
+- **issue-1**：工具输出落本舰队 `dataDir`（bootstrap 设 `VESSEL_DATA_DIR`，修隔离缺口）。
+
+### 变更
+
+- **计划 C**：src 大重组（139 文件 → 14 领域 + shared，`cli.ts` 唯一顶层入口，944 import 精确重写，11 处运行时路径暗礁修正）。
 
 ## [0.56.0] - 未发布
 
