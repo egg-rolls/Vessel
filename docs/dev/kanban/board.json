@@ -5,6 +5,22 @@
   "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。板只留当前活跃任务；完成任务由 main 轮次收尾移入 archive.json（append-only，采纳 q-kanban §9.2 归档约定）。",
   "tasks": [
     {
+      "id": "q-promotion",
+      "title": "增量晋升 playbook（丢弃整体切换，稳定node+金丝雀逐步晋升）",
+      "column": "进行中",
+      "owner": "q-promotion",
+      "branch": "design/q-promotion",
+      "progress": "派单：改写红蓝手册§6为增量晋升+裁决整体切换降级特殊迁移"
+    },
+    {
+      "id": "q-restart",
+      "title": "优雅重启设计（restart≠stop/drain-to-quiesce/auto-resume run/超时中止上报）",
+      "column": "进行中",
+      "owner": "q-restart",
+      "branch": "design/q-restart",
+      "progress": "派单：现状2s硬停+不续run；设计优雅等待+恢复run+超时中止交agent修复+重启可观测性"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
