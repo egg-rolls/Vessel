@@ -695,3 +695,121 @@ create 生成的插件**直接是目标形态**（单源 settings/rpc + 缺省�
   的现态实现；工厂**不新增契约语义**，只消灭复制。
 - capability 模板的 rpc 注册路径 = model-registry D3 路径（Plugin.rpc → registerInProcess →
   同一 PluginRpcRegistry / canonical 名 / DTO 校验），不自造注册路径（model-registry 头注释纪律）。
+
+## 9. 风险与开放问题
+
+| # | 风险 | 缓解 |
+| --- | --- | --- |
+| R1 | **缺省推导弱化 fail-closed 的观感**：id/version 从 package.json 推导后，「清单写错」变成「package.json 写错」 | 推导只补缺省、不豁免任何校验（§6.1 表右列）；`plugin list --json` 标注 derived 字段；评审项照旧 |
+| R2 | **engines 宽缺省（>=0.43）让老宿主装上新插件** | 缺省下限是契约诞生版而非「无约束」；模板生成时写**当前版本**下限；作者要兼容旧版须显式放宽——方向与现态一致（显式才是意图） |
+| R3 | **user/project 模板依赖越界**：作者照 repo 先例 import config/plugin-sdk → 加载失败（HOST_SHARED_PACKAGES 只三包） | 模板按 where 约束依赖（§4.2）；加载失败已有可归因错误（pluginDependencyError 点名缺包）；VERIFY.md 列评审项 |
+| R4 | **plugin-sdk 是否进转发白名单**（开放）：sdk 是纯函数+冻对象，第二副本初步判断无害，但白名单入选标准是「第二副本会不会出事」的逐包裁决 | 独立决策，不夹带进本设计；v1 模板内联同形片段绕开 |
+| R5 | **sync 静态解析的脆弱性**：handler map 附注 / schema const 若不是纯字面量（含表达式/展开），AST 解析取不到 | sync 只认字面量形状，取不到就**报错退出、不写回**（生成器失败安全）；模板保证生成物是字面量；作者手写复杂形状时回退手写 manifest（现态） |
+| R6 | **模板漂移**：先例演进（如 embed 契约 P3 加 router/dialog）后模板过时 | 模板头注释标注「照 <先例> @ <版本>」；共享构建工厂把最易漂移的暗坑收进一处（§6.5）；模板演进不影响已生成插件 |
+| R7 | **defaultEnabled 迁移改变默认集**：media 从 Set 转声明若口径不齐，会意外进/出默认集 | P3 验收以「默认集名单逐字等价」为准（人工评审）；Set 兜底保留到迁移完成；显式 plugins: 完整清单语义不动 |
+| R8 | **inherit 通用化过度**：把 skills 收集库隔离这类专属安全语义也通用化 = 给任意插件开 deny_paths 注入面 | §6.4 明确隔离不通用化；inherit 只含现态已有的三类回落（pathBoundary/dataDir/cwd），不新增注入语义 |
+| R9 | **plugin-ui/build 的 node/browser 边界**：build subpath 引入 vite 依赖，污染浏览器侧包 | exports 条件导出（node 条件 / 独立 subpath `./build`）；vite 本就是 UI 插件 devDependency，不新增运行时依赖 |
+| R10 | **脚手架成为第二套扩展机制的观感**（ADR-004/037/099） | create/sync 只产出**既有机制的合法输入**（package.json + Plugin 源码）；运行时零新机制；§6.6 负面清单 |
+| R11 | **Windows 路径/软链**：user 模板落盘与转发缝 junction 现态已处理；create 不涉及软链 | 落盘用 path.resolve + 原子 rename；不触碰 loader 的 farm 逻辑 |
+| R12 | **envGranularity manifest 化的语义争议**（开放）：插件自报 env scope 产出 vs 宿主断言 | v1 缓议（§6.4）；需与 env-injection 契约（框架轴 A）对齐后另议 |
+
+开放问题汇总（需实现期裁决，不阻塞设计）：R4（sdk 白名单）、R12（envGranularity）、
+`inherit` 字段最终命名、skills 收集库隔离是否迁专属声明、`--type ui` 的 category 缺省
+`experience` 是否引入新组织约定（loader 无感，纯目录语义）。
+
+## 10. 分期实施计划
+
+每期独立可交付、独立可回退；P1 不依赖任何运行时改动，先行消灭最大阻力。
+
+### P1：脚手架 CLI（纯生成，零运行时改动）
+
+- `vessel plugin create` 三型 + where 三位置 + 校验 + 模板 + VERIFY.md（§4/§5）。
+- 模板按**现态**生成（清单四件套写全、opt-in 写注释指针、UI 复制先例构建文件）。
+- 验收（人工评审项）：三型各生成一个临时插件 → 重启后 `plugin list` 可见、
+  占位工具/RPC/页面可调 → 删除；user/repo 两位置各验一次；冲突/非法名/保留名被拒。
+- 落点：args.ts / plugin-command.ts / plugin-create.ts / templates/ / completion / help。
+
+### P2：manifest 缺省推导 + SDK 助手 + sync（单源化）
+
+- §6.1 推导表（validatePluginManifest options 扩展）；§6.2 三助手；§6.3 sync。
+- 迁移 web-tools（settings 单源）+ model-registry（rpc 单源）验证全链。
+- 验收：存量 21 插件清单全显式 ⇒ 加载行为/贡献面/默认集逐字不变；web-tools/model-registry
+  迁移后配置快照与 RPC 面等价；sync 对非字面量形状失败安全。
+
+### P3：装配知识 manifest 化（defaultEnabled / inherit）
+
+- §6.4 两字段 + selection/buildPluginConfigMap 声明优先改造；硬编码降级兜底。
+- 迁移 media / recall / doc-subscription / skills / basic-tools（§7.1）。
+- 验收：默认集名单逐字等价；media 边界回落（含显式空数组）语义等价；
+  dataDir/cwd 注入等价；热应用与 --tools 同口径。
+
+### P4：共享 UI 构建工厂 + UI 插件迁移
+
+- §6.5 createPluginViteConfigs；4 个 UI 插件换用；模板改 ~5 行 vite 配置。
+- 验收：4 插件构建产物**字节等价**（入库 diff 评审）；embed/iframe 双档渲染等价。
+
+### P5（可选，独立裁决）：开放问题收口
+
+- sdk 转发白名单（R4）、envGranularity 声明化（R12）、硬编码兜底清理评估（§7.2）。
+
+## 附录 A：注册链路时序
+
+```
+进程启动
+  └─ PluginLoader.scan()                          [发现：目录约定，已自动]
+       ├─ repo plugins/<cat>/<name> ─┐
+       ├─ project .vessel/plugins ───┤ 同 id 优先级裁决 + override 门禁
+       ├─ user ~/.vessel/plugins ────┤
+       └─ node_modules/@vessel-agent ┘
+       └─ readPlugin: package.json + vessel 块
+            ├─ entry+contributes → child descriptor
+            ├─ vessel 无 entry → capabilityManifest（fail-closed 校验）
+            └─ 无 vessel → legacy in-process
+  └─ resolvePluginSelection()                     [选择：默认集/opt-in/工厂排除]
+  └─ createProvider → model-registry-wiring       [provider 类单独装配 loop]
+  └─ buildPluginConfigMap()                       [安装配置：显式>声明式>装配回落]
+  └─ installPluginsIntoHost(withPluginConfig…)    [install：tenant 一次]
+  └─ 工厂 wiring（mcp/feishu/evals/engine）        [显式：宿主运行时依赖]
+  └─ createPluginHostManager(child descriptors)   [child 宿主，已自动]
+  └─ registerInProcessPluginEntries(capability…)  [RPC/pages/settings 登记，已自动]
+  └─ activateStartupPlugins(onStartup/*)          [child 启动激活；其余懒激活]
+运行期
+  └─ plugin-watch → createPluginReloader          [child 热替换；in-process restart_required]
+  └─ vessel <plugin> <cmd> → contributes.cli      [CLI 命名空间，已自动]
+  └─ q-settings → contributes.settings            [校验/落盘/渲染，已自动]
+```
+
+## 附录 B：manifest 前后对比（capability + UI 型）
+
+**现态**（model-registry 实样，~135 行 vessel 块）：id/name/version/engines/description/side
+全显式；ui.dir/embed.entry/embed.css/embed.runtime 全显式；pages 每页 entry/component 显式；
+activationEvents 显式；rpc 10 条与代码 switch 双写。
+
+**目标态**（缺省推导 + 单源后，作者手写部分）：
+
+```jsonc
+{
+  "name": "@vessel-agent/my-plugin",
+  "version": "0.1.0",
+  "vessel": {
+    // id/name/version/engines/side/description → 推导（§6.1）
+    "ui": {},                          // dir=web / embed 全套 → 推导
+    "contributes": {
+      "pages": [{ "id": "main" }],     // entry=main.html / component=MainView → 推导
+      "navGroups": [{ "id": "plugin:my-plugin", "title": "My Plugin", "icon": "plugins" }],
+      "rpc": [/* sync 从 src/rpc.ts 生成；write 权限作者显式附注 */],
+      "settings": {/* sync 从 src/settings.ts 生成 */},
+      "i18n": {/* sync 从 web-src/i18n.ts 生成（可选） */}
+    },
+    "permissions": { "fs": ["data-dir"] }   // 永远显式（§3.2）
+  }
+}
+```
+
+手写量从 ~135 行降至 ~20 行；代码侧 switch/parseConfig 由助手 + 单源替代；
+UI 构建文件由 ~10 个复制文件降至模板生成 + ~5 行 vite 配置。**授权声明一行不减。**
+
+---
+
+*本设计由 q-plugin-scaffold 产出（design/q-plugin-scaffold，基点 723fb673）。
+实现另开分支；本文档不构成任何代码承诺。*
