@@ -91,6 +91,15 @@
       "progress": "merge 5a324cef，636行 redblue-operations-manual.md；蓝绿骨架+cohort金丝雀+config开关台账+expand-contract；闭环六步落既有原语；introspection实证早退根因吻合:513/725",
       "archivedAt": "2026-11-24T03:05:00+08:00",
       "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "early-exit-fix",
+      "title": "早退根因修复：tool-calling-loop 空响应兜底（nudge/retry，可调控）",
+      "owner": "q-empty-response",
+      "branch": "fix/q-empty-response",
+      "progress": "merge fd19a759，26文件+659/-33；两路径空响应nudge限次兜底+设置emptyResponse.enabled/maxRetries/nudge(缺省启用+2次,enabled:false零回归)；build exit0/1262文件0errors；待用户build+重启行为验收",
+      "archivedAt": "2026-11-24T03:20:00+08:00",
+      "cycle": "redblue-quality-round-1"
     }
   ]
 }
