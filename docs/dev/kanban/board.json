@@ -111,10 +111,10 @@
     {
       "id": "q-tool-perm",
       "title": "工具权限统一规范(inbox等通用成员工具纳入全局权限列表)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-tool-perm",
       "branch": "fix/q-tool-perm",
-      "progress": "派单：权限按注册作用域分裂不合理；inbox所有agent都有应进全局权限列表,统一auto/ask/never策略;权限UI聚合全局+通用成员工具"
+      "progress": "merge入redblue-dev(待金丝雀验收后晋升main)；commonMemberTools描述符→gateway聚合tools.list→权限UI,inbox可查可设auto/ask/never+scoped键；保留始终可用语义(never=强制确认非禁用)+专门注记；运行期判定零改动；build绿"
     },
     {
       "id": "q-naming-fix",
