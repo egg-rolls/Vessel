@@ -809,6 +809,13 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
   name: { type: 'string', description: 'create/hire: display name' },
   model: { type: 'string', description: 'create/hire: model override' },
   system_prompt: { type: 'string', description: 'create/hire: optional system prompt' },
+  // q-session-naming：成员侧也要能命名会话（正常路径沿用父级 tool.ts 的同名定义）。
+  title: {
+    type: 'string',
+    description:
+      'create/hire/rotate: optional session title; omitted = the member name; ' +
+      'AI titling never renames a named session',
+  },
   to: {
     type: 'string',
     description:
@@ -846,7 +853,7 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
   members: {
     type: 'array',
     description:
-      'create/hire: [{name?, model?, system_prompt?, visibility?}]; ' +
+      'create/hire: [{name?, model?, system_prompt?, visibility?, title?}]; ' +
       'close: [member id or session id]',
   },
   startup_prompt: {

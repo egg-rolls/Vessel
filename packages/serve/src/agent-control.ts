@@ -88,6 +88,8 @@ export interface AgentCreateLikeInput {
   /** peer / 成员派生路径：按已存在 Team 绑定；peer 必填。 */
   team_id?: string;
   name?: string;
+  /** q-session-naming：首会话显式标题（同 create/hire 工具口径；缺省由 service 决定）。 */
+  title?: string;
   model?: string;
   system_prompt?: string;
   /** team_id 解析出的 workspace；缺省 = AgentService 的默认 workspace 规则。 */

@@ -1277,6 +1277,8 @@ export class AgentServiceImpl implements AgentService {
         : readRequiredString(input, 'from_session_id');
     const seed = readCreateSeed(input.seed);
     const keepMessages = readKeepMessages(input.keep_messages);
+    // q-session-naming：首会话显式标题（与 rotate 同一形状）。校验早于任何副作用。
+    const title = readSessionTitle(input.title);
     if (fromSessionId === undefined) {
       if (input.seed !== undefined || input.keep_messages !== undefined) {
         throw new AgentError('invalid_input', 'seed / keep_messages require from_session_id');
@@ -1426,6 +1428,12 @@ export class AgentServiceImpl implements AgentService {
             );
           }
         }
+        if (title !== undefined) {
+          throw new AgentError(
+            'invalid_input',
+            'title cannot be declared on a reused member; use rotate to name the next session',
+          );
+        }
         return { ...this.statusFor(existing), reused: true };
       }
     }
@@ -1500,6 +1508,12 @@ export class AgentServiceImpl implements AgentService {
         error: errorText(error),
       });
     });
+    // q-session-naming：agent 派生的成员（spawnedBy 有值）首会话按成员身份命名，
+    // 不再依赖「截断首消息 / AI 摘要」；显式 title 优先。bootstrap 创建（如 main，
+    // 无 spawnedBy）保持既有派生 + AI 命名链路。
+    if (title !== undefined || spawnedBy !== undefined) {
+      await this.nameNewSession(record, record.sessionId, title);
+    }
     return this.statusFor(record);
   }
 
@@ -1530,6 +1544,9 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('invalid_input', `source_private: ${source.id}`);
     }
     await this.assertSourceIdle(source, fromSessionId);
+
+    // q-session-naming：首会话显式标题（与 createOne / rotate 同一形状）。
+    const title = readSessionTitle(input.title);
 
     const kind = input.kind;
     if (kind !== undefined && kind !== 'peer' && kind !== 'contractor') {
@@ -1704,6 +1721,10 @@ export class AgentServiceImpl implements AgentService {
       copied_messages: seedResult.copiedMessages,
     });
     this.rememberPeerOrigin(record, spawnedBy);
+    // q-session-naming：与 createOne 同口径 —— 显式 title 优先，agent 派生缺省用成员名。
+    if (title !== undefined || spawnedBy !== undefined) {
+      await this.nameNewSession(record, record.sessionId, title);
+    }
     return this.statusFor(record);
   }
 
@@ -1935,6 +1956,37 @@ export class AgentServiceImpl implements AgentService {
     } catch (error) {
       this.logger.warn('agent.session.shell_ensure_failed', {
         agent_id: agentId,
+        session_id: sessionId,
+        error: errorText(error),
+      });
+    }
+  }
+
+  /**
+   * q-session-naming：给新建 / 换体的会话一个有意义的名字。
+   *
+   * 显式 title 优先；缺省退回成员 name（再退 id）。复用 `setSessionTitle` 的
+   * 'manual' 口径：命名后派生截断（deriveSessionMeta）与 AI 命名都不再覆盖，
+   * 人工 rename 仍然有效。best-effort 与壳 / 事件写入同口径：命名失败只 warn，
+   * 绝不回滚已提交的创建 / 换体。
+   */
+  private async nameNewSession(
+    record: MemberRecord,
+    sessionId: string,
+    explicitTitle?: string,
+  ): Promise<void> {
+    const title = explicitTitle ?? record.name ?? record.id;
+    try {
+      const applied = await this.runtime.setSessionTitle?.(sessionId, title, 'manual');
+      if (applied !== true) {
+        this.logger.warn('agent.session_create.title_unavailable', {
+          agent_id: record.id,
+          session_id: sessionId,
+        });
+      }
+    } catch (error) {
+      this.logger.warn('agent.session_create.title_failed', {
+        agent_id: record.id,
         session_id: sessionId,
         error: errorText(error),
       });
@@ -2256,6 +2308,8 @@ export class AgentServiceImpl implements AgentService {
       presence: 'live',
       source_agent_id: source.id,
     });
+    // q-session-naming：自动创建恒为 agent 驱动，首会话同样按成员身份命名。
+    await this.nameNewSession(record, record.sessionId);
     return { ok: true, member: record };
   }
 
@@ -5790,26 +5844,16 @@ export class AgentServiceImpl implements AgentService {
       });
     }
 
-    if (title !== undefined) {
+    // q-session-naming：显式 title 优先；内置 agent 工具的 rotate（allowActiveRun）
+    // 未传 title 时缺省用成员 name（再退 id）—— 新 body 不再依赖「截断首消息」。
+    // 人经 RPC 发起的 sessions.create 未传 title 时保持既有派生 + AI 命名链路。
+    const effectiveTitle = title ?? (allowActiveRun ? (record.name ?? record.id) : undefined);
+    if (effectiveTitle !== undefined) {
       // Name the new body before its first turn: the shell is marked
       // title_source: 'manual', so both the derived title and the AI titler leave
       // it alone. Best-effort like the startup prompt: a shell write failure must
       // not undo a committed rotation.
-      try {
-        const applied = await this.runtime.setSessionTitle?.(newSessionId, title, 'manual');
-        if (applied !== true) {
-          this.logger.warn('agent.session_create.title_unavailable', {
-            agent_id: record.id,
-            session_id: newSessionId,
-          });
-        }
-      } catch (error) {
-        this.logger.warn('agent.session_create.title_failed', {
-          agent_id: record.id,
-          session_id: newSessionId,
-          error: errorText(error),
-        });
-      }
+      await this.nameNewSession(record, newSessionId, effectiveTitle);
     }
 
     const startupPrompt =
@@ -5849,7 +5893,7 @@ export class AgentServiceImpl implements AgentService {
     return {
       agent_id: record.id,
       session_id: newSessionId,
-      ...(title !== undefined ? { title } : {}),
+      ...(effectiveTitle !== undefined ? { title: effectiveTitle } : {}),
       ...(sourceSessionId !== undefined
         ? {
             source_session_id: sourceSessionId,
@@ -7683,7 +7727,7 @@ function optionalString(value: unknown): string | undefined {
 }
 
 /**
- * Additive: explicit session title (sessions.create / rotate). Trimmed, must be
+ * Additive: explicit session title (sessions.create / rotate / agents.create). Trimmed, must be
  * non-empty and at most MAX_SESSION_TITLE_LENGTH chars; nothing is silently
  * truncated, the caller gets invalid_input instead.
  */

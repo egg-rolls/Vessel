@@ -982,6 +982,8 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 // contractor = 归属调用者；缺省保持 0.25 行为。
                 kind: { type: 'string', enum: ['peer', 'contractor'] },
                 name: { type: 'string', minLength: 1 },
+                // q-session-naming：首会话显式标题（长度上限由 service 统一校验）。
+                title: { type: 'string', minLength: 1 },
                 model: { type: 'string', minLength: 1 },
                 system_prompt: { type: 'string' },
                 team_id: { type: 'string', minLength: 1 },
@@ -1059,6 +1061,8 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
             // CLI 的 `--workspace` 是 owner 传输特权：保留显式 workspace 绑定的语义，
             // 但 gateway / Web 不能伪造主机路径（逐条拒绝）。
             const rawWorkspace = optionalEntryString(entry, 'workspace', 'agents.create');
+            // q-session-naming：首会话显式标题；所有分支共用，形状校验逐条。
+            const title = optionalEntryString(entry, 'title', 'agents.create');
             // CREATE-0.39：有来源走独立分支（种子复制 / 压缩），不解析 team workspace；
             // 结构字段由服务从源派生（identity 不传）。
             const fromSessionId = optionalEntryString(entry, 'from_session_id', 'agents.create');
@@ -1090,6 +1094,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                   ...(rawKind !== undefined ? { kind: rawKind } : {}),
                   ...(teamId !== undefined ? { team_id: teamId } : {}),
                   ...(name !== undefined ? { name } : {}),
+                  ...(title !== undefined ? { title } : {}),
                   ...(model !== undefined ? { model } : {}),
                   ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
                   ...(visibility !== undefined ? { visibility } : {}),
@@ -1129,6 +1134,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                     kind: 'peer',
                     team_id: teamId,
                     ...(name !== undefined ? { name } : {}),
+                    ...(title !== undefined ? { title } : {}),
                     ...(model !== undefined ? { model } : {}),
                     ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
                     ...(visibility !== undefined ? { visibility } : {}),
@@ -1142,6 +1148,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                   kind: 'contractor',
                   ...(teamId !== undefined ? { team_id: teamId } : {}),
                   ...(name !== undefined ? { name } : {}),
+                  ...(title !== undefined ? { title } : {}),
                   ...(model !== undefined ? { model } : {}),
                   ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
                   ...(visibility !== undefined ? { visibility } : {}),
@@ -1166,6 +1173,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
               return {
                 input: {
                   ...(name !== undefined ? { name } : {}),
+                  ...(title !== undefined ? { title } : {}),
                   workspace: rawWorkspace,
                   ...(model !== undefined ? { model } : {}),
                   ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
@@ -1193,6 +1201,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 input: {
                   name,
                   workspace,
+                  ...(title !== undefined ? { title } : {}),
                   ...(model !== undefined ? { model } : {}),
                   ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
                   ...(visibility !== undefined ? { visibility } : {}),
@@ -1207,6 +1216,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
             return {
               input: {
                 ...(name !== undefined ? { name } : {}),
+                ...(title !== undefined ? { title } : {}),
                 ...(model !== undefined ? { model } : {}),
                 ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
                 ...(visibility !== undefined ? { visibility } : {}),

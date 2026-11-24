@@ -264,6 +264,8 @@ function mapDerived(
 ): Record<string, unknown> {
   const input: Record<string, unknown> = { ...fixed };
   if (record.name !== undefined) input.name = record.name;
+  // q-session-naming：首会话显式标题（形状校验在 service 逐条做，batch 不整批抛错）。
+  if (record.title !== undefined) input.title = record.title;
   if (record.model !== undefined) input.model = record.model;
   if (record.system_prompt !== undefined) input.systemPrompt = record.system_prompt;
   // create 的 visibility 由 service 强制 team；传了非 team 值时由 service 逐条拒绝。
@@ -433,6 +435,7 @@ export function createAgentTool(
       'create: peer member(s) in the caller team (root owner: use hire). ' +
       'hire: contractor owned by the caller (any member may hire), bound to the caller team if it ' +
       'has one. ' +
+      'create/hire accept an optional title for the first session (default: the member name). ' +
       'send: dispatch a message (live queue now, gone resume first, rotating queue for the new ' +
       'body); returns immediately. This is the default channel for reporting to your parent: ' +
       'progress, blockers, a decision you made, or a question you cannot settle alone goes here ' +
@@ -477,7 +480,7 @@ export function createAgentTool(
         members: {
           type: 'array',
           description:
-            'create/hire: [{name?, model?, system_prompt?, visibility?}] ' +
+            'create/hire: [{name?, model?, system_prompt?, visibility?, title?}] ' +
             '(model = explicit pin, omit to follow the node default model); ' +
             'close: [member id or session id]',
         },
@@ -544,7 +547,7 @@ export function createAgentTool(
         title: {
           type: 'string',
           maxLength: MAX_SESSION_TITLE_LENGTH,
-          description: `rotate: optional name for the new session (1-${MAX_SESSION_TITLE_LENGTH} chars); AI titling never renames a named session`,
+          description: `create/hire/rotate: optional session title (1-${MAX_SESSION_TITLE_LENGTH} chars); omitted = the member name for agent-spawned members and tool rotate; AI titling never renames a named session`,
         },
         state: {
           type: 'string',
