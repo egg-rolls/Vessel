@@ -471,16 +471,101 @@ ledger: <git 分支/文档路径>
 
 ## 7. 与红蓝手册的差异
 
-（待扩充：逐节对照表——保留什么 / 替换什么 / 新增什么）
+> 逐节对照 `redblue-operations-manual.md`（q-redblue，终版 `1dc61c72`）。
+> 三档：**保留** = 原样继承；**替换** = 增量晋升改写；**新增** = 红蓝手册没有。
+
+| 红蓝手册 | 本 playbook | 档 | 说明 |
+|---|---|---|---|
+| §0 推荐组合（蓝绿骨架 + cohort 金丝雀 + 入口切换回退） | §0 稳定/金丝雀常驻 + 增量晋升 + commit 回滚 | 替换 | 骨架从「切换」变「晋升」 |
+| §1 A/B 行、会话宇宙、入住、迭代 | §1 稳定/金丝雀、晋升、批次、台账、特殊迁移 | 替换 | 角色固定，不轮转 |
+| §2 原语盘点 | 不重复，直接引用 | 保留 | 隔离/生命周期/federation/共享面事实全部沿用 |
+| §3 业界调研 | 不重复，引用结论 | 保留 | Fowler/Sato/SRE/Hodgson/Argo 已核实 |
+| §4 映射 M1–M30 | 大部分沿用；M2/M3/M5/M15/M16 语义变 | 替换 | 见下「映射语义变化」 |
+| §5 缺口 G1–G13 | 全部沿用；G1 绕行方式变 | 保留+ | G1 从「换宇宙」变「不切换宇宙」（§4 硬闸门） |
+| §6.0 前置纪律 | §2.0 | 保留+ | 冻结纪律常设化；新增稳定分支纪律 |
+| §6.1 起新版 | §2.0/§2.1（金丝雀常驻，一次起） | 替换 | 不再每轮起新舰队 |
+| §6.2 自检回报 | §2.2 | 保留+ | 清单加 h 项数据兼容分类；报告改名 canary-report |
+| §6.3 修复 | §2.1 | 保留 | restart --stop-nodes / c 档兜底不变 |
+| §6.4 回归 | §3 G-C | 保留+ | 加晋升后冒烟（第 7 项） |
+| §6.5 入住（换宇宙 + handoff） | §2.4 晋升 + §5 特殊迁移 | **替换** | 核心差异：常规路径不再换宇宙 |
+| §6.6 迭代/回退（入口换回） | §2.6 台账 + §6 commit 回滚 | 替换 | 回退粒度从整宇宙 → 单批/单 commit |
+| §7 跨节点场景 | 沿用（federation 通道形态不变） | 保留 | 跨机晋升 = git push/pull 搬代码，更自然 |
+| §8 风险 R11–R20 | §8 继承 + R21–R28 | 保留+ | 新增增量晋升特有风险 |
+
+**映射语义变化**（§4 表中随框架变的几行）[推断]：
+- M2「入口即路由器」：增量晋升下**入口不动**，路由器隐喻失效；「切换」只发生在特殊迁移。
+- M3「快速回退 = 入口换回」：变为「revert + rebuild + restart」，粒度更细但需重启。
+- M5「角色轮转」：**取消**——稳定/金丝雀角色固定，不轮转。
+- M15「migrate 相 = 换宇宙」：变为「merge/cherry-pick 搬代码」；会话不迁移。
+- M16「contract 相 = 旧线退役」：回归经典 expand-contract——contract = 删旧格式支持（§4.2）。
+
+**一句话总结差异**：红蓝手册把「新宇宙」当发布单元，整体切换、会话抛弃、入口回退；
+本 playbook 把「已验证 commit 批」当发布单元，增量晋升、会话保留、代码回退。
+隔离配方 / 生命周期原语 / federation 纪律 / 宪法边界**全部不变**——变的是发布节奏与回滚粒度。[推断]
 
 ## 8. 风险登记
 
-（待扩充：继承 R1–R20 + 增量晋升特有风险）
+> 配方 R1–R10 + 红蓝手册 R11–R20 **全部继承**（[事实] version-isolation-blue-green.md §5；
+> redblue-operations-manual.md §8，不重复抄表）。增量晋升特有新增：
+
+| # | 风险 | 缓解 | 锚点 |
+|---|---|---|---|
+| R21 | **delta 重新变大**：批次积压 / 金丝雀长期不晋升，退回大爆炸切换老路 | 小步高频；台账监控未晋升 commit 数；大 delta 拆批而非借特殊迁移 | [推断] §2.6/§5.1；[业界] SRE 小批量 |
+| R22 | **金丝雀盲区**：新宇宙验不出「新代码读旧数据」的单向门 | G-D 硬闸门 = 设计时分类论证，不靠金丝雀读数；晋升前只读核对稳定数据格式；冒烟含历史读回 | [推断] §4.3 |
+| R23 | **晋升重启打断生产线 run**：c 档代价现在落在日用稳定线（比候选线疼） | idle/轮次边界重启；先只读核对无 active run；一批一次重启；重启卡 + 输入重放 + 手动 resume 兜底 | [事实] node-resume.ts；GATEWAY.md §4；§2.4 |
+| R24 | **反向单向门**：新代码已写新格式，代码回滚后旧二进制读不了 | G-D 把住 one-way 不静默晋升；contract 批显式裁决关闭回滚窗口；回滚顺序 = 停进程→恢复备份→回退二进制 | [事实] 配方 §4；§6.3 |
+| R25 | **cherry-pick 分叉**：摘取产生新 hash，金丝雀/稳定分支分叉，后续 merge 冲突 | 默认 merge；cherry-pick 台账记 hash 映射；下批前先处理分叉 | [推断] §2.4/§2.6 |
+| R26 | **晋升后前端缓存**：同 origin 新后端，旧前端假报 timeline 缺口（R9 晋升形态） | 晋升后恒刷新页面；冒烟先排除缓存 | [事实] 配方 R9；§2.5 |
+| R27 | **金丝雀范围 creep**：常驻实验线变成第二生产线，数据根膨胀 / 隔离纪律松弛 | 金丝雀只跑实验不接日用；常设隔离纪律（§2.0）；定期归档实验数据根 | [推断] §1/§2.0 |
+| R28 | **批次依赖断裂**：cherry-pick 的 commit 依赖未晋升 commit，晋升后行为与金丝雀不一致 | 批次自包含；G-B 在稳定树复核 build；冒烟对比金丝雀行为 | [推断] §2.4/§3 |
+
+**风险重心转移** [推断]：红蓝手册最疼的是 R11（候选线假升级）与 R13（handoff 断档）；
+增量晋升下 R11 落在**生产线**（更疼，R23 同源），R13 被「会话不搬」大幅缓解（稳定线上下文
+原地保留），但新增 R22/R24（数据兼容）成为头号风险——**硬闸门 G-D 是增量晋升的安全基石**。
 
 ## 9. 未证 / 待实测
 
-（待扩充）
+1. **晋升循环整体未端到端实测**：本 playbook 是调研产物，作者按宪法不启动舰队、不跑探针。
+   每步有文档/代码锚点，但组合行为（金丝雀验证 → 闸门 → merge → 稳定 rebuild → restart →
+   durable-resume → 冒烟）待用户按 §2 真实走一轮验证。[推断] 各步独立语义已证，组合未证。
+2. **G-D 分类论证的可靠性未证**：「新代码读旧数据」靠设计时人工分类，无自动校验（宪法禁探针）；
+   首轮建议晋升前只读核对稳定数据格式 + 冒烟重点打开历史会话。
+3. **cherry-pick 分叉处理**（R25）的具体 git 工作流未展开；默认 merge 路径更稳，挑选路径待实测。
+4. 观察窗「1–3 天」、台账路径 `docs/operations/promotion-ledger.md`、稳定分支名（main vs stable）、
+   迁移线命名 migrate/866x 均为**建议**，非用户裁决。
+5. **反向单向门的数据恢复时序**（§6.3）继承配方 §4 警示，本 playbook 未新增实测；
+   `.v4.bak` 恢复在真实稳定线上的操作待验证。
+6. b 档自动串接（G9 目标态）与 D 运行期刷新（G8 目标态）仍是将来代码工作，本 playbook 只绕行
+   （继承红蓝手册 §9）。
+7. 跨机晋升（git push/pull 搬代码 + 各机本地 restart）的通道形态沿用红蓝手册 §7，未新增实测。
 
 ## 10. 参考
 
-（待扩充：本仓锚点 + 业界来源指针）
+### 本仓锚点（基线 57407f62）
+
+- `docs/dev/research/redblue-operations-manual.md` —— q-redblue 红蓝手册（本 playbook 的改写基础；
+  §2 原语 / §3 业界 / §4 映射 / §5 缺口 / §8 风险 R11–R20 全部继承）
+- `docs/operations/version-isolation-blue-green.md` —— 2026-11-23 裁决配方（隔离骨架；§4 单向门警示）
+- `docs/operations/GATEWAY.md` §4 —— stop/restart/--stop-nodes 语义表（R11 锚点）
+- `docs/architecture/gateway-lifecycle.md` —— 分段启动 / adopt / 归属三元复核
+- `docs/architecture/federation-hub.md` —— federation 数据面 / guards / 不做什么
+- `docs/operations/REMOTE.md` §3.4 / §3.5.1 —— reload scope / token 词表
+- `docs/operations/MIGRATION.md` §1–2 —— vessel migrate 只做存储格式迁移（非跨版本会话迁移）
+- `docs/adr/ADR-040-durable-run-store-checkpoint-resume.md` —— checkpoint / runs.resume 语义
+- `docs/dev/research/graceful-restart.md` —— 三档判定（c 档已实现，b 档不承诺）
+- 代码：`src/node-resume.ts`（重启卡四步序）、`src/federation-config.ts`（peer fail-closed）、
+  `src/federation-client.ts`（POST federation/messages）、`packages/agent/src/tool.ts`（agent send 地址形态）
+
+### 业界来源（沿用红蓝手册 §10 已核实条目，不重复抓取）
+
+| 来源 | 用在 |
+|---|---|
+| Martin Fowler, *BlueGreenDeployment* | §5 特殊迁移（只读过渡 / 角色轮转降级）/ DB 解耦 |
+| Danilo Sato, *CanaryRelease* | §2.2 观察窗 / 并发版本数最少 |
+| Google SRE Workbook ch16, *Canarying Releases* | §3 小批量高频 / 先定判据再放量 / 二进制推送是事故主因 |
+| Pete Hodgson, *Feature Toggles* | config diff 台账纪律（继承） |
+| Danilo Sato, *ParallelChange* | §4 expand–migrate–contract 三相（增量晋升回归经典含义） |
+| Argo Rollouts 官方文档 | §3 readiness≠验收 / manual judgement |
+
+> 检索说明：业界 URL 与抓取核实见红蓝手册 §10（2026-11-24 调研）；本 playbook 不重复抓取，
+> 只引用其已核实结论。
