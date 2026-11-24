@@ -49,7 +49,7 @@ created: 2026-12-01
   `packages/core/src/runtime/plugin-host.ts`）。core 冻结，不为任何扩展类型新增接口
   （ADR-034 supersede ADR-011/017）。
 - **能力插件（in-process）**：`install(host)` 注册 tool / provider / guardrail / hook /
-  memberBody / readSideMasker；`Plugin.rpc`经装配层 `registerInProcessPlugin`
+  memberBody / readSideMasker；`Plugin.rpc` 经装配层 `registerInProcessPlugin`
   （`src/plugin-host-assembly.ts`）登记进 serve 的 `PluginHostManager.registerInProcess`，
   与 child **共用同一个 `PluginRpcRegistry` / canonical 名 `plugin.<id>.<name>` / DTO 校验**；
   声明 `contributes.rpc` 却无 handler ⇒ fail-closed `plugin_manifest_invalid`。
@@ -123,11 +123,92 @@ created: 2026-12-01
 
 ## 2. 目标与非目标
 
-（待扩充）
+### 2.1 目标
+
+设计一个内置插件 `skills`（目录 `plugins/context/skills/`，包名 `@vessel-agent/plugin-skills`），
+管理 **vessel 收集来的技能库**，并提供四个面：
+
+1. **管理面**：扫描 / 索引三个来源的技能文件（项目 `skills/`、用户 `~/.vessel/skills/`、
+   插件私有收集库 `<dataDir>/plugins/skills/library/`），维护元数据、内容哈希与信任记录；
+   文件永远是真相源，索引只是派生缓存。
+2. **agent 工具面**：一个 `skills` 工具（list / search / load 三动作），让模型在 run 中
+   发现、检索、按信任门加载技能内容进语言空间。
+3. **UI 面**：技能库列表 / 详情 / 信任状态 / 会话加载状态，embed 档渲染、iframe 回退。
+4. **设置面**：经 `contributes.settings` 声明技能库配置，进 q-settings 的 VSCode 式
+   设置编辑器；权限与安全边界（加载信任门、收集库隔离）见 §9。
+
+### 2.2 与「被判死的 skills-loader」的差异（为什么这次该存在）
+
+tools.md 判死 skills-loader 的理由是「skills 就是文件；前端引用、core 只收消息」。
+本设计**不推翻那条判据**，而是论证管理对象变了：
+
+| 维度 | 被判死的 skills-loader | 本设计的 skills 插件 |
+|---|---|---|
+| 管理对象 | 本地两个目录的 markdown 扫描 + CRUD + 文件监听 | **收集来的技能库**：含插件私有 library（marketplace / 导入 / 团队分享落地处），带来源与信任元数据 |
+| 工具面 | scanner + CRUD（create / edit / delete 全注册成工具） | **只有一个只读工具**（list / search / load）；写技能 = 模型用 `write` / `edit` 改文件，不注册 CRUD 工具 |
+| 加载语义 | 扫描后自动注入 | **信任门控的显式加载**：TOFU 哈希锁 + `checkPermission` ask/deny；不自动注入（P3 再议） |
+| 可替代性 | 读文件 = `read`，建文件 = `write`，全可替代 | 发现 / 检索 / 信任门**不可被 read+bash 组合替代**（论证见 §6.1） |
+| core 改动 | 无 | 无（core 冻结不动，注入仍走既有工具结果 / `RunOptions.messages` 通道） |
+
+一句话：**skills-loader 死于「把文件操作注册成工具」；本插件活于「管理一个有信任边界的
+收集库」**。如果未来收集库不存在（用户只有本地两个目录），本插件的工具面确实退化到接近
+可替代——所以 library 来源与信任门是设计的承重墙，不是装饰（§13 风险 R1）。
+
+### 2.3 非目标
+
+- **不改 core**：不加 SkillHost、不加事件类型、不改 `RunOptions.messages` 语义。
+- **不做技能的自动注入**（P1/P2）：不注册 BeforeLlm hook 往每轮塞技能内容；
+  加载只由模型显式 `skills load` 或用户前端 `@path` / UI 动作触发。
+- **不做技能创作 CRUD 工具**：写 / 改 / 删技能文件是 `write` / `edit` / `bash` 的事。
+- **不做语义检索 / embedding**（P1）：子串 + 标签检索足够百级规模；P3  opt-in 再议。
+- **不做跨节点同步**：技能库是 node 本地数据（dataDir 本地）；联邦 / 团队共享走
+  marketplace 与仓库提交，不在本插件内做复制协议。
+- **不执行技能附带脚本**：技能是数据（markdown + 附件），插件永不执行它；模型若用
+  `bash` 跑附件脚本，那是 bash 的权限判定，不是本插件的授权（§9.4）。
+- **不写测试 / 探针 / 临时进程**（宪法）：验证 = `bun run build`（typecheck + biome ci）
+  + 用户手动行为验证。
 
 ## 3. 插件形态选择：in-process（理由与备选）
 
-（待扩充）
+**结论：in-process 能力插件 + capability manifest（`side: "both"`、无 `entry`），
+完全照 model-registry 先例。`vessel.scope: 'node'`（缺省），不申请成员端口。**
+
+### 3.1 理由（按承重顺序）
+
+1. **agent 工具面只有 in-process 能给**。`registerTool` 是 `PluginHost` 的方法，
+   child 插件不直接注册 core 类型、不进入提示词（plugins.md「对 Vessel 与 AI 流的作用」）。
+   若选 child，工具必须经「child RPC → 装配层转发注册」的第二套桥——这正是被禁止的
+   第二注册入口，且 MCP client / engine-client 之外没有先例。需求②直接排除 child。
+2. **贡献面不受损**。in-process + capability manifest 同样有 pages / ui.embed / rpc /
+   settings / i18n / navGroups（model-registry D3 先例，`registerInProcess` 与 child 共用
+   RPC registry / DTO 校验 / contributionsFor / staticMounts）。需求③⑤不需要 child。
+3. **builtin 可信，隔离收益为零**。child 的价值是崩溃 / 生命周期隔离 + 外部不可信代码的
+   进程边界。本插件是 repo 内置、可信；技能解析是纯数据操作（markdown + frontmatter），
+   不执行任何技能代码，没有「不可信代码在插件里跑」的场景。为它付 IPC 往返、spawn、
+   崩溃重启监督的成本没有对价。
+4. **工具调用在热路径上**。`skills load` 每次调用都进 run 的工具管道；in-process 是
+   函数调用，child 是 NDJSON IPC + DTO 校验往返。检索 / 加载延迟直接计入 run 时长。
+5. **per-session 状态与 hook 扩展**。加载状态按 session 存 stateDir（doc-subscription
+   同构）；P3 若做 pinned 注入需要 `registerHook`——同样只有 in-process 能给。
+
+### 3.2 代价（诚实列出）
+
+- **无热重载**：插件代码 / manifest 改动必须重启进程；`plugins.reload` 返回
+  `restart_required`。技能**文件**的变化不受此限——扫描 / watch / rescan 是数据层，
+  随时生效（§5.4）。
+- **与宿主共命运**：插件崩溃 = 进程崩溃。缓解：解析全程防御（大小上限、frontmatter
+  子集解析、失败降级为 raw 条目），不做任何网络 / 子进程操作（P1）。
+- **settings 热应用受限**：install 期拿 config（doc-subscription 口径），改设置需重启；
+  UI 必须如实显示「需要重启」（catalog `restartRequired` 已有该字段）。见 §10.4。
+
+### 3.3 备选与否决理由
+
+| 备选 | 否决理由 |
+|---|---|
+| child 体验插件 + 装配层转发工具 | 第二注册入口（禁）；IPC 热路径税；builtin 无隔离收益 |
+| 工厂式插件（FACTORY_PLUGINS，装配层构造） | 不需要装配层注入特殊依赖（config / dataDir 经 install options 就够）；工厂式是 mcp / engine-client 这类「无 install 注册面」的特例，本插件有标准 install 面 |
+| `scope: 'member'` + 端口 | 端口闭集只有 inbox，本插件不需要；工具按 tenant 安装一次、per-session 状态走 store 即可（doc-subscription 同构） |
+| 拆两个插件（in-process 工具 + child UI） | 同一份索引 / 信任状态被两个进程共享 = 引入锁与一致性问题；model-registry 已证明单插件双面可行 |
 
 ## 4. 架构总览
 
