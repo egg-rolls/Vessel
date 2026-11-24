@@ -550,12 +550,65 @@ handoff: <git 分支/文档路径>
 
 ## 8. 风险登记
 
-（填写：继承配方 R1–R10 + 闭环新增风险。）
+> 配方 R1–R10 全部继承（[事实] version-isolation-blue-green.md §5，不重复抄表）：
+> R1 池 adopt 无版本闸 / R2 端口冲突 / R3 共享 dataDir 互扰 / R4 OS 服务拉错版本 /
+> R5 插件与 marketplace 共享 / R6 更新缓存共享 / R7 数据格式单向门 / R8 同 workspace 并行写 /
+> R9 浏览器旧缓存 / R10 舰队 yaml 可读。闭环新增：
+
+| # | 风险 | 缓解 | 锚点 |
+|---|---|---|---|
+| R11 | **假升级**：`restart` 缺省不换 node 代码，以为升了实际没升 | 换代码恒 `--stop-nodes`；自检 b 项版本核对；命令自带提示行 | [事实] GATEWAY.md §4 |
+| R12 | 回报丢 / 重（federation 无离线队列，去重仅进程内） | 幂等 message_id + 接收方文档去重 + ack + 重发；关键报告落 git | [事实] federation-hub.md §guards；§6.2(d) |
+| R13 | handoff 文档过期 / 不全 ⇒ B 行新成员上下文断档 | 冻结期写文档 + 模板（状态/未竟/路径/名册/坑）+ 用户核对 | [推断] §6.5 |
+| R14 | 入口切换不彻底（浏览器缓存 / CLI 仍指 A）⇒ 假回归 | 刷新 + 重新登录 + 入口对照表逐项核对 | [事实] 配方 §2、R9 |
+| R15 | 回退线被误停 / 数据根被删 ⇒ 无路可退 | A 行保留为默认处置；停要显式 `--stop-nodes` 并记录；数据根归档不删 | [推断] §6.5–6.6 |
+| R16 | 迭代期端口 / instance 碰撞 | §6.0 命名表；bind fail-fast 可见 | [事实] 配方 R2 |
+| R17 | 长命 release toggle 债（候选 config diff 滞留） | 入住后台账清零或转正 | [业界] Hodgson；§6.6 |
+| R18 | 修复重启打断在途 run（c 档可见代价） | idle / 轮次边界重启；重启卡 + 输入重放兜底；必要时手动 `vessel resume` | [事实] node-resume.ts；ADR-040 |
+| R19 | 跨机新 node origin 不被老平台认识（D 定格）⇒ 403 | 显式 `node.allowed_origins`（可热更）或重启平台 | [事实] node-auto-join.md §10.3；REMOTE.md §3.4 |
+| R20 | peer secret 进 yaml / 日志 | 只走 tokenEnv；yaml 不放密钥（R10）；token 解析后不落盘不打印 | [事实] federation-config.ts 头注 |
 
 ## 9. 未证 / 待实测
 
-（填写。）
+1. **闭环整体未端到端实测**：本手册是调研产物，作者按宪法不启动舰队、不跑探针。每步都有
+   文档 / 代码锚点，但组合行为（federation 报告 → dispatch → 记录员落文档 → ack 回程）
+   待用户按 §6 真实走一轮验证。[推断] 各步独立语义已证，组合未证。
+2. 报告契约（§6.2c）是文本约定不是 schema：接收方 agent 解析可靠性未证；首轮建议人工核对落盘结果。
+3. cohort 观察窗「1–3 天」、C 行命名 green/866x、角色分工均为**建议**，非用户裁决。
+4. 跨机 TLS 终结的具体代理配置未展开（属 REMOTE.md / 运维范畴）；`caFile` 自签链路待实测。
+5. Windows 下 drain 超时回退强杀的实际时序、`--stop-nodes` 后池孤儿残留形态：见 GATEWAY.md §4
+   与配方 §3 的既有实测记录，本手册未新增实测。
+6. b 档自动串接（G9 目标态）与 D 运行期刷新（G8 目标态）是将来代码工作，本手册只绕行。
 
 ## 10. 参考
 
-（填写：本仓文档锚点 + 业界 URL。）
+### 本仓锚点（基线 8694a681）
+
+- `docs/operations/version-isolation-blue-green.md` —— 2026-11-23 裁决配方（本手册骨架）
+- `docs/operations/GATEWAY.md` §4 —— stop / restart / --stop-nodes 语义表
+- `docs/architecture/gateway-lifecycle.md` —— 分段启动 / adopt / handoff / 归属三元复核 / Q4-C
+- `docs/architecture/federation-hub.md` —— federation 数据面 / guards / hub 控制面 / 不做什么
+- `docs/architecture/node-auto-join.md` §10 —— auto-join 现态 / D 定格 / 证伪方式
+- `docs/operations/REMOTE.md` §2.1 / §3.3.1 / §3.4 / §3.5.1 / §3.6 —— TLS / 寻址 / reload / token 词表 / hub join
+- `docs/operations/CONFIG.md` §2.13 —— hub direction / NAT 数据面
+- `docs/operations/MIGRATION.md` —— vessel migrate 只做存储格式迁移（非跨版本会话迁移）
+- `docs/adr/ADR-040-durable-run-store-checkpoint-resume.md` —— checkpoint / runs.resume 语义
+- `docs/dev/research/graceful-restart.md` —— 三档判定 + 进程级优雅重启业界表（nginx / k8s / systemd / Erlang / pm2 / Claude Code / aider / OpenHands，URL 见该文 §4）
+- 代码：`src/node-resume.ts`（重启卡四步序）、`src/federation-config.ts`（peer 归一化 fail-closed）、
+  `src/federation-client.ts`（`POST <peer.url>/v1/federation/messages`）、`src/cli-args.ts:3973`
+  （federation post/peers）、`packages/serve/src/gateway/methods/admin.ts:21`（RELOAD_SCOPES）、
+  `packages/agent/src/tool.ts`（agent send 地址形态，跨节点无 interrupt/notify）
+
+### 业界来源（2026-11-24 本次调研直接抓取）
+
+| 来源 | URL | 用在 |
+|---|---|---|
+| Martin Fowler, *BlueGreenDeployment*（2010，2015 更新） | https://martinfowler.com/bliki/BlueGreenDeployment.html | §3.1 骨架 / 只读过渡 / 角色轮转 / DB 解耦 |
+| Danilo Sato, *CanaryRelease*（2014） | https://martinfowler.com/bliki/CanaryRelease.html | §3.2 cohort / ParallelChange 应用 / 并发版本数 |
+| Google SRE Workbook ch16, *Canarying Releases* | https://sre.google/workbook/canarying-releases/ | §3.2 三要求 / 小批量 / 按变化速率分离 |
+| Pete Hodgson, *Feature Toggles*（2017） | https://martinfowler.com/articles/feature-toggles.html | §3.3 四类别 / carrying cost / 静态优先 |
+| Danilo Sato, *ParallelChange*（2014） | https://martinfowler.com/bliki/ParallelChange.html | §3.4 expand–migrate–contract |
+| Argo Rollouts 官方文档 | https://argoproj.github.io/rollouts/ | §3.5 readiness≠验收 / manual judgement / rolling 局限 |
+
+> 检索说明：web_search（bocha 后端）对英文查询命中质量差，以上 URL 经搜索定位候选后
+> 以 web_fetch 直接抓取原文核实；未采信搜索摘要中的二手转述。
