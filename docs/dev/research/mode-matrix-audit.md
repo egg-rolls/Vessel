@@ -1,0 +1,263 @@
+# 模式矩阵审计（S5/S6/S7）· q-modes
+
+> 基线：`db69c381`（含 `1aae9ace` restart 模式保持 / `57e514f7` 代理模式修复 / `1a075344` URL 拼接保留代理路径）。
+> 分支 `fix/q-modes`。方法：**代码级逐路径静态追踪**（宪法第三/四条：不写测试文件、不起临时进程、
+> 行为验证归用户本人；本文每格给 file:line + 判定，作为用户行为验证的对照单）。
+> 标注：**[通]** = 全链静态核通；**[设计内]** = 行为是既有裁决/文档明示；**[缺口·修]** = 本次发现并修复；
+> **[缺口·留]** = 既有已留档缺口，本次不动（owner + oracle 见 §5）。
+
+---
+
+## 1. S5 · gateway restart 保持运行模式
+
+### 1.1 机制全链（一个事实一个家）
+
+模式事实的唯一来源 = **pid record 的 `daemon` 字段**；唯一写入依据 = **env 标记
+`VESSEL_GATEWAY_DAEMON`**（daemon 子进程 argv 与前台 start 完全相同，命令行不可区分）。
+
+| 环节 | 位置 | 事实 |
+|---|---|---|
+| record 字段 | `src/gateway/pid.ts:21` | `daemon?: boolean`（可选，旧记录无字段） |
+| env 标记常量 | `src/gateway/pid.ts:28` | `GATEWAY_DAEMON_ENV = 'VESSEL_GATEWAY_DAEMON'` |
+| 读侧校验 | `src/gateway/pid.ts:124` | 非 boolean ⇒ 整条 record 判 corrupt（fail-loud） |
+| 写侧透传 | `src/gateway/pid.ts:224` | `writeGatewayPid` 原样落盘 |
+| daemon spawn 置标记 | `src/gateway/daemon.ts:248` | `env: { ...process.env, [GATEWAY_DAEMON_ENV]: '1' }` |
+| 子进程 argv | `src/gateway/daemon.ts:128-153` | `buildDaemonArgv` = `gateway start`（**不带 --daemon**）⇒ 子进程走前台分支写 record |
+| 平台前台写 record | `src/gateway-command.ts:3296` | `daemon: env[GATEWAY_DAEMON_ENV] === '1'`（kind=platform） |
+| legacy/node 前台写 record | `src/cli.ts:1651` | 同口径（kind 缺省 node） |
+| 解析三态 | `src/cli-args.ts:2011-2072` | `--daemon` ⇒ true（:2025-2028）；缺省 ⇒ undefined；未知参数 ⇒ 报错（:2057） |
+| 分发前解析 | `src/cli.ts:369-378` | `daemon === undefined` ⇒ `resolveRestartDaemonMode`，**先于**注册表与前台分支 |
+| 模式解析 | `src/gateway-command.ts:713-729` | 读目标实例 record：`record?.daemon === true`；任何失败/缺席 ⇒ false（历史行为） |
+| state kind | `src/gateway-command.ts:152-157` | `VESSEL_LEGACY_SERVE=1` ⇒ 'node'，否则 'platform'（与两侧写入口径一致） |
+| 路由分流 | `src/gateway-command.ts:3468-3472` | `isForegroundGatewayCommand` = `daemon === false` |
+| 注册表（daemon 路） | `src/commands/registry.ts:293-301` | `!isForegroundGatewayCommand` ⇒ `runGatewayCommand` |
+| daemon restart 执行 | `src/gateway-command.ts:2348-2400` | 停前快照 instance/port/host → `stopGateway`(keepNodes) → `startDaemonCommand` |
+| 前台 restart 执行（非 legacy） | `src/gateway-command.ts:2786-2831` | 快照 → listen 守卫（停前）→ `stopGateway`(keepNodes) → 本平台进程继续起 |
+| 前台 restart 执行（legacy） | `src/cli.ts:446-465` | 快照 → `stopGateway` → `--serve` 管线 |
+| 文档 | `docs/operations/GATEWAY.md:108-111` | 模式保持 + 旧记录回落 + --all 约束 |
+| help | `src/cli-help-spec.ts:459-463` | restart flags 无 `--foreground`（与解析器一致） |
+
+### 1.2 模式矩阵（每格 = 一条代码路径）
+
+| 运行中实例 \ restart 参数 | 缺省 | `--daemon` | `--foreground` |
+|---|---|---|---|
+| **daemon**（record.daemon=true） | **[通]** 保持 daemon：cli.ts:376 → gateway-command.ts:725 读 true → registry:296 → restartDaemonCommand:2348 → spawn 再置标记（daemon.ts:248）⇒ 新 record 仍 true | **[通]** 强制 daemon：cli-args.ts:2026 ⇒ true，跳过解析，同左路 | **[设计内]** `Unknown argument for gateway restart: --foreground`（cli-args.ts:2057）。依据：1aae9ace 提交说明「未加 --foreground（宪法 10，切前台用 stop+start）」；main 2026-11-23 裁决维持 |
+| **前台**（record.daemon=false） | **[通]** 保持前台：resolve ⇒ false → 非 legacy 走 cli.ts:402-427 平台前台分支（runPlatformGatewayForeground restart :2786）；legacy 走 cli.ts:446-465 | **[通]** 显式切 daemon（覆盖语义）：true → registry → restartDaemonCommand | **[设计内]** 同上，解析期拒绝 |
+| **旧记录**（无 daemon 字段，升级前已在跑） | **[设计内]** 回落前台：`record?.daemon === true` 为 false（gateway-command.ts:725）。1aae9ace 明示：需一次 `start --daemon` 重写 record 后才保持 | **[通]** 强制 daemon，且新 record 带标记（自愈路径） | **[设计内]** 拒绝 |
+| **无实例 / lock-only / 读取失败** | **[设计内]** 回落前台：resolveGatewayTargets 无匹配或异常 ⇒ false（gateway-command.ts:724-727）；随后前台 restart 按无实例正常起 | **[通]** 正常 daemon 起 | **[设计内]** 拒绝 |
+
+补充格：
+
+| 场景 | 判定 |
+|---|---|
+| `--all` 不带 `--daemon` | **[设计内]** 解析期拒绝 `gateway restart --all requires --daemon`（cli-args.ts:2062-2064；undefined 与 false 都拦） |
+| `--all --daemon` | **[通]** restartDaemonCommand:2382-2400 逐实例 startDaemonCommand |
+| 多实例无选择器 + 缺省 | **[通]** resolve 先回落 false，前台路径 resolveGatewayTargets 报 `multiple_instances`（gateway-command.ts:690-699）⇒ 显式失败，不静默换模式 |
+| legacy（VESSEL_LEGACY_SERVE=1）daemon/前台 × 缺省 | **[通]** kind='node'（gateway-command.ts:156）读 gateway.pid；写入侧 cli.ts:1651 同 kind ⇒ 口径闭合 |
+| `--stop-nodes` / `--keep-nodes` / `--no-keep-nodes` | **[通]** 与模式正交：keepNodes 只影响 stopGateway 是否连 node/hub 一起停（cli-args.ts:2029-2043；两条 restart 执行路径同口径 :2370 / :2820） |
+| 模式解析时机 | **[通]** cli.ts:369-378 在注册表（:382-397）与前台分支（:402）**之前**；两条路由都按 `daemon === false` 分流，晚解析会走错路 |
+
+**S5 结论：基线修复全链核通，无新缺口。** 唯一注意项 = 旧记录一次性回落（§5 G3）。
+
+---
+
+## 2. S6 · NodeProvider 健康/attention 的模式路由
+
+### 2.1 模式选择全链
+
+| 环节 | 位置 | 事实 |
+|---|---|---|
+| 代理能力探测 | `apps/web/src/gateway/bootstrap.ts:109-133` | whoami.proxy.enabled ⇒ **不取 credentials**，nodeToken=''、nodeCredentials=[]；baseUrl = `${platformOrigin}${basePath}/${node_id}`（basePath 缺省 /nodes） |
+| 直连平台模式 | `bootstrap.ts:135-190` | 逐节点取 credentials（多节点带 node_id），按 node_id 分槽 |
+| legacy 判定 | `bootstrap.ts:82-83` + `ConnectionProvider.tsx:218-235` | /platform/rpc 不存在 ⇒ kind:'legacy'，nodeUrl=platformUrl（页面同源），旧 token 槽 |
+| 代理接线 | `ConnectionProvider.tsx:254-274` | proxyMode=true；nodeUrl=proxy.baseUrl；**清理直连遗留 token 槽**（:256-258）；nodeToken=平台 token（仅平台鉴权用） |
+| 直连接线 | `ConnectionProvider.tsx:276-316` | nodeUrl=normalizeNodeOrigin(api_url)（:55-58，origin 归一）；token 按 node_id 落 sessionStorage |
+| client 构造 | `ConnectionProvider.tsx:162-163` | `new GatewayClient(nodeUrl ?? '', proxyMode ? { proxy: true } : {})` |
+| 节点切换 | `ConnectionProvider.tsx:341-349` | selectionSeq ⇒ 重跑 bootstrap ⇒ 代理基路径随选中节点重建 |
+| 当前节点健康 | `NodeProvider.tsx:140-146` | current ⇒ `client.getHealth()`；其余 ⇒ fetchNodeRpc 直连 |
+| 当前节点 attention | `NodeProvider.tsx:200-206` | current ⇒ `client.listInteractionsPage()`；其余 ⇒ fetchNodeAttention 直连 |
+| 健康轮询范围 | `NodeProvider.tsx:148-162` | 平台模式只轮询当前节点；其它节点健康来自 platform.nodes.list 的 status 投影 |
+| getHealth 实现 | `gateway/node/integrations.ts:112-114` | `rpc('health.get')` |
+| RPC 传输 | `gateway/node/rpc.ts:55-58` | **拼接** `${httpBase()}${path}`（保留 /nodes/<id>）；proxy ⇒ `credentials:'same-origin'`（cookie）；无 token 且非 proxy ⇒ 显式 unauthorized（:46-48） |
+| httpBase | `gateway/node/protocol.ts:210-212` | baseUrl 空 ⇒ 页面同源（legacy） |
+| 预探健康 | `gateway/node/protocol.ts:223-255` | `/health` 拼接；proxy ⇒ same-origin cookie（:230，0.58 修 omit 丢 cookie） |
+| WS | `gateway/node/protocol.ts:214-216, 289` | `toWebSocketBase(httpBase()) + /v1/events`（拼接保路径）；首帧 auth token |
+| 代理 RPC 白名单 | `packages/serve/src/platform/proxy-config.ts:72-98` | health / interactions / plugin / plugins 等命名空间在表内；DENIED_RPC_METHODS（:107-115）仍生效 |
+| HTTP/WS 同口径 | `packages/serve/src/platform/proxy.ts:388, 661` | 两条传输共用 checkRpcMethod |
+| 代理 WS 鉴权 | `packages/serve/src/platform/server.ts:990-1025` | 升级时平台鉴权（cookie/Bearer/回环）；配了平台 token 时允许首帧延迟鉴权 |
+
+### 2.2 模式矩阵
+
+| 数据面 \ 模式 | proxy | direct（平台） | legacy |
+|---|---|---|---|
+| 当前节点 health.get | **[通]** `<platform>/nodes/<id>/v1/rpc` + cookie；health 命名空间白名单 | **[通]** node origin + credentials token | **[通]** 页面同源 + legacy token |
+| 当前节点 interactions.list | **[通]** 同上（interactions 在表内） | **[通]** | **[通]** |
+| 当前节点 WS 事件流 | **[通]** `<platform>/nodes/<id>/v1/events`（WS 白名单 proxy-config.ts:49） | **[通]** node origin | **[通]** 同源 |
+| 当前节点 teamControl | **[通]** NodeProvider.tsx:241-243 current ⇒ client（活连接） | **[通]** | **[通]** |
+| 额外节点 health/attention/teams | **[缺口·留 G1]** fetchNodeRpc 直连 api_url；proxy 模式 token 槽被清（ConnectionProvider.tsx:256-258）⇒ 无 Authorization ⇒ 401 | **[通]** 各节点 credentials 分槽 token（bootstrap.ts:139-164） | **[通]** 手填节点 sessionStorage token |
+| 全节点 attention 扇出 | **[缺口·修]** 原 fetchAllAttention 走 fetchAllNodeAttention 统一扇出，**含当前节点** ⇒ 代理模式当前节点也 401（S6 同类）。已修：逐节点委托 fetchAttention（NodeProvider.tsx:208-239），当前节点走活连接；错误归一 NodeRpcError 保持结果形状。当前无消费方（潜在缺口，修后 API 面与单节点口径一致） | **[通]** | **[通]** |
+
+**S6 结论：基线修复（当前节点走活连接）全链核通；扫出并修复 1 处同类潜在缺口（fetchAllAttention）。**
+
+---
+
+## 3. S7 · 插件 iframe / embed 的设计意图贯彻
+
+设计意图（plugin-embed 契约 §4，2026-11-23 用户裁决）：
+**iframe HTML 直连 node origin**（静态免鉴权）；**embed 模块经 nodeUrl**（代理模式 = 平台同源转发，
+动态 import 必须同源）；**数据面 RPC 经活连接**（代理模式走 /nodes/<id> 代理）。
+
+### 3.1 全链
+
+| 环节 | 位置 | 事实 |
+|---|---|---|
+| iframe origin 选择 | `apps/web/src/domains/plugins/PluginFrame.tsx:83-89` | platform ⇒ 选中节点 api_url（直连/代理子模式同口径）；legacy ⇒ nodeUrl（页面同源=node） |
+| iframe URL 构造 | `PluginFrame.tsx:93-102` → `plugin-contributions.ts:248-273` | **拼接** `${origin}/plugins/<id>/<entry>`（:267，1a075344 修 new URL 吞路径）；entry 白名单校验（safeEntryPath :222-231） |
+| iframe 沙箱 | `PluginFrame.tsx:221` | `allow-scripts allow-forms`，无 allow-same-origin ⇒ opaque origin；消息按 source 硬校验（:143-144） |
+| embed 模块/CSS URL | `PluginEmbed.tsx:62-63, 102` → `plugin-contributions.ts:282-293` | `${nodeUrl}/plugins/<id>/ui/<path>` 拼接；proxy 模式 nodeUrl=<platform>/nodes/<id> ⇒ 同源 |
+| 代理路径白名单 | `packages/serve/src/platform/proxy-config.ts:63, 295-310` | 只放行 `/plugins/<id>/ui/**` 且仅 GET/HEAD；**iframe HTML 路径不在白名单** ⇒ 404 proxy_path_not_allowed（:311-318，错误文案明示「iframe 页仍请直连 node」）⇒ 设计意图在 serve 侧强制贯彻 |
+| CSP frame-src | `packages/serve/src/gateway/auth.ts:596-607` | 有扩展源 ⇒ `frame-src 'self' <node origins>`；无扩展源保持旧输出（default-src 'self' 兜底）；frame-ancestors 'none' 不变 |
+| node origins 来源 | `packages/serve/src/platform/server.ts:548-555` + `src/gateway-command.ts:3210` | cspNodeOrigins = registry 各节点 apiUrl + 派生来源（回环+本机私网）；只进 CSP，不扩 CORS |
+| CSP 下发点 | `packages/serve/src/platform/server.ts:1041-1057` | 平台 HTML（text/html）响应注入；frameSrc/connectSrc 都带 node origins |
+| node 静态免鉴权 | `packages/serve/src/gateway.ts:4079-4122` | 非 API 的 GET/HEAD 不进鉴权链（:4135-4138 注释明示）；/plugins/* 先 ensureActive 懒激活（:4092-4110，in-process 放行 = 基线 6c1fe2d4）再 servePluginAsset（staticMounts 含 in-process = 基线 95361fac） |
+| embed 静态保留命名空间 | `packages/serve/src/gateway.ts:4057-4077` | `/plugins/<id>/ui/` 永不命中动态路由 ⇒ 代理白名单只会转发到静态服务 |
+| iframe 桥 RPC | `PluginFrame.tsx:155-156` | `client.rpc('plugin.<id>.<method>')` ⇒ 代理模式经 /nodes/<id>；方法白名单 = contributions.rpc ∪ commands（plugin-contributions.ts:456-467） |
+| plugin 命名空间过代理 | `proxy-config.ts:88-92` | 'plugin'/'plugins' 在表内（2026-11-23 用户裁决）；DENIED_RPC_METHODS 仍生效 |
+| embed 宿主 RPC | `host-factory.ts:155` / `plugin-catalog.ts:38` | 同样经 client.rpc（活连接），不直连 |
+
+### 3.2 模式矩阵（每格 = 一条代码路径）
+
+| 数据面 \ 模式 | proxy | direct（平台） | legacy |
+|---|---|---|---|
+| iframe HTML 页加载 | **[通]** 直连选中节点 api_url（PluginFrame.tsx:83-89 platform 分支不区分直连/代理子模式）；拼接保路径（plugin-contributions.ts:267）；node 静态免鉴权（gateway.ts:4087-4122）；CSP frame-src 含 node origin（server.ts:1052 → auth.ts:607-608） | **[通]** 同左口径（api_url 直连，同一代码路径） | **[通]** nodeUrl 空 ⇒ 页面同源 = node（resolveNodeOrigin :240-246）；同源 framing 由 default-src 'self' 兜底 |
+| embed 模块动态 import | **[通]** nodeUrl=`<platform>/nodes/<id>` ⇒ 平台同源转发（PluginEmbed.tsx:62-63 → pluginEmbedAssetUrl :282-293）；白名单只放行 `/plugins/<id>/ui/**` GET/HEAD（proxy-config.ts:63, 295-309）；node 侧保留命名空间永不命中动态路由（gateway.ts:4068-4069） | **[通]** node origin + `/plugins/<id>/ui/<path>`（同一 URL 构造） | **[通]** 页面同源 |
+| embed CSS 注入 | **[通]** 同模块口径（PluginEmbed.tsx:102-106，`?v=hash` 与入口同参） | **[通]** | **[通]** |
+| iframe 桥 RPC `plugin.<id>.<method>` | **[通]** client.rpc 经活连接 `/nodes/<id>/v1/rpc`（PluginFrame.tsx:155-156 → rpc.ts:55-58）；plugin/plugins 命名空间在表内（proxy-config.ts:91-92）；方法白名单 = contributions.rpc ∪ commands（plugin-contributions.ts:456-467）；DENIED_RPC_METHODS 仍生效（:107-115） | **[通]** node origin + credentials token | **[通]** 同源 + legacy token |
+| embed 宿主 RPC / catalog | **[通]** host-factory.ts:155 与 plugin-catalog.ts:38（`plugins.catalog`）都经 client.rpc，不直连 | **[通]** | **[通]** |
+| CSP framing 放行 | **[通]** 平台 HTML 注入 frame-src 'self' + node origins（server.ts:1041-1057；origins = registry apiUrl + 派生来源 :548-555，gateway-command.ts:3210-3215）；只进 CSP 不扩 CORS | **[通]** 同左 | **[通]** node HTML 无扩展源 ⇒ 保持旧输出（auth.ts:607-608 无指令；gateway.ts:4126-4130），default-src 'self' 兜底同源 iframe |
+
+补充格（模式无关 / serve 侧强制）：
+
+| 场景 | 判定 |
+|---|---|
+| iframe HTML 误经代理 | **[设计内]** fail-closed：`/plugins/<id>/<entry>` 不在白名单 ⇒ 404 proxy_path_not_allowed，文案明示「iframe 页仍请直连 node」（proxy-config.ts:311-318）⇒ 设计意图在 serve 侧强制贯彻，不依赖前端自觉 |
+| iframe 沙箱 / 消息校验 | **[通]** `allow-scripts allow-forms` 无 allow-same-origin ⇒ opaque origin（PluginFrame.tsx:221）；消息按 event.source + origin 硬校验（:143-144），方法白名单外静默丢弃（:152） |
+| node 静态免鉴权 + 懒激活 | **[通]** 非 API GET/HEAD 不进鉴权链（gateway.ts:4087, 4135-4138）；`/plugins/*` 先 ensureActive（:4092-4110，in-process 放行 = 基线 6c1fe2d4）再 servePluginAsset（staticMounts 含 in-process = 基线 95361fac） |
+| embed 保留命名空间 | **[通]** `/plugins/<id>/ui/` 解码后判定、永不命中动态路由（gateway.ts:4062-4069）⇒ 代理白名单只会转发到静态服务 |
+
+**S7 结论：设计意图三句话（iframe 直连 node / embed 经 nodeUrl / RPC 经活连接）前端选择 + serve 白名单两侧闭合，无新缺口。**
+本分支对 auth.ts 仅注释对齐（frame-src 'self' 的语义说明与 2026-11-23 裁决一致），无行为变更。
+
+---
+
+## 4. 扫描汇总表
+
+方法回顾：代码级逐路径静态追踪（宪法第三/四条），每格 file:line + 判定；不写测试、不起进程，
+行为验证归用户（§5 各缺口给 oracle 对照单）。
+
+### 4.1 分域汇总
+
+| 域 | 机制链（§x.1） | 矩阵格（§x.2） | [通] | [设计内] | [缺口·修] | [缺口·留] |
+|---|---|---|---|---|---|---|
+| S5 · restart 模式保持 | 19 环（§1.1） | 18 格（4×3 + 补充 6） | 11 | 7 | 0 | 0（G3 为设计内注意项，见 §5） |
+| S6 · 健康/attention 模式路由 | 18 环（§2.1） | 18 格（6×3） | 16 | 0 | 1（G2） | 1（G1） |
+| S7 · 插件 iframe/embed 意图贯彻 | 13 环（§3.1） | 22 格（6×3 + 补充 4） | 21 | 1 | 0 | 0 |
+| **合计** | **50 环** | **58 格** | **48** | **8** | **1** | **1** |
+
+### 4.2 扫描面（26 个文件，跨域去重）
+
+| 域 | 文件 |
+|---|---|
+| S5 | `src/gateway/pid.ts`、`src/gateway/daemon.ts`、`src/gateway-command.ts`、`src/cli.ts`、`src/cli-args.ts`、`src/commands/registry.ts`、`src/cli-help-spec.ts`、`docs/operations/GATEWAY.md` |
+| S6 | `apps/web/src/gateway/bootstrap.ts`、`ConnectionProvider.tsx`、`NodeProvider.tsx`、`nodes.ts`、`client.ts`、`gateway/node/integrations.ts`、`gateway/node/rpc.ts`、`gateway/node/protocol.ts`、`packages/serve/src/platform/proxy-config.ts`、`platform/proxy.ts`、`platform/server.ts` |
+| S7 | `apps/web/src/domains/plugins/PluginFrame.tsx`、`PluginEmbed.tsx`、`plugin-contributions.ts`、`host-factory.ts`、`plugin-catalog.ts`、`packages/serve/src/gateway/auth.ts`、`packages/serve/src/gateway.ts`（+ 与 S5/S6 共享的 `gateway-command.ts`、`proxy-config.ts`、`server.ts`） |
+
+### 4.3 本分支变更清单（WIP 53811383 保全，5 文件）
+
+| 文件 | 性质 | 内容 |
+|---|---|---|
+| `apps/web/src/gateway/NodeProvider.tsx` | **行为修复（唯一）** | G2：fetchAllAttention 改逐节点委托 fetchAttention（当前节点走活连接），错误归一 NodeRpcError 保持结果形状 |
+| `apps/web/src/gateway/nodes.ts` | 注释警示 | fetchAllNodeAttention 标明「纯直连扇出」，含当前节点的扇出必须走 NodeProvider.fetchAllAttention |
+| `apps/web/src/gateway/ConnectionProvider.tsx` | 注释对齐 | selectPlatformNode 说明代理模式不取凭据、只换代理基路径 |
+| `packages/serve/src/gateway/auth.ts` | 注释对齐 | frame-src 'self' 语义改为「兜底同源 framing」，与 2026-11-23 iframe 直连裁决一致（无行为变更） |
+| `docs/dev/research/mode-matrix-audit.md` | 审计文档 | 本文 |
+
+后续增量提交：`18acfe27`（NodeProvider import 排序对齐 biome——首轮门禁唯一 error，纯排序零行为变更）；
+文档收尾各节逐段提交（§3.2 / §4+§5 / §6）。
+
+---
+
+## 5. 缺口台账（owner + oracle）
+
+### G1 · [缺口·留] proxy 模式额外节点（非当前）数据面直连 401
+
+- **现象**：代理模式下，非当前节点的 health / attention / teams 拉取必 401。
+- **根因链**：代理能力探测不取 node credentials（bootstrap.ts:109-133）⇒ 接线时清理直连遗留
+  token 槽（ConnectionProvider.tsx:256-258）⇒ 额外节点仍走 fetchNodeRpc / fetchNodeAttention
+  直连 api_url（NodeProvider.tsx:140-146 / 200-206 非 current 分支）⇒ 无 Authorization ⇒ 401。
+- **为什么留**：既有已留档缺口。修复 = 额外节点数据面也代理化（逐节点代理基路径 + 平台鉴权口径），
+  属新的设计决策，超出本次 S6「当前节点走活连接」的任务范围；本次只修同类潜在缺口 G2，不动 G1。
+- **owner**：main（排期裁决）。候选方向（非裁决）：额外节点 health/attention 经
+  `<platform>/nodes/<id>` 代理（每节点一个 proxy client），或由平台提供聚合投影。
+- **oracle（用户行为验证对照）**：proxy 模式 + 注册 ≥2 节点，当前节点 = A 时，面板上 B 节点的
+  健康 / attention 应显示真实数据而非 401/unauthorized；direct 与 legacy 模式行为不变。
+
+### G2 · [缺口·修] fetchAllAttention 统一扇出含当前节点 ⇒ proxy 401（本次已修）
+
+- **现象（修前）**：fetchAllAttention 走 fetchAllNodeAttention 纯直连扇出，当前节点也被直连
+  api_url ⇒ 代理模式当前节点 401（与 S6 基线缺口同类）。
+- **修复**：逐节点委托 fetchAttention（NodeProvider.tsx:208-239），复用「当前节点走活连接、
+  其余直连」路由；GatewayHttpError / 未知错误归一 NodeRpcError，保持 NodeAttentionResult 形状。
+- **owner**：q-modes（已修，本分支）。
+- **oracle**：当前无 UI 消费方（潜在缺口，修后 API 面与单节点口径一致）；静态对照 = 扇出逐节点
+  走 fetchAttention。未来消费方接入后，proxy 模式含当前节点的扇出结果中当前节点应 ok:true。
+
+### G3 · [缺口·留 · 设计内] 旧 pid record（无 daemon 字段）restart 缺省一次性回落前台
+
+- **现象**：升级前已在跑的 daemon 实例，升级后首次 `gateway restart`（缺省）回落前台。
+- **依据**：`record?.daemon === true` 对无字段记录为 false（gateway-command.ts:725）；
+  1aae9ace 提交说明明示此回落，`docs/operations/GATEWAY.md:108-111` 已留档。
+- **自愈**：一次 `gateway start --daemon` 重写 record 后，后续缺省 restart 保持 daemon。
+- **owner**：用户（一次性操作）；文档口径归 main 留档（已完成）。
+- **oracle**：升级后旧 daemon 实例缺省 restart ⇒ 前台运行（预期内）；执行一次
+  `start --daemon` 后再缺省 restart ⇒ 保持 daemon（新 record 带 daemon:true）。
+
+---
+
+## 6. 门禁读数（唯一门禁：bun run build）
+
+**口径**：根 `bun run build` = typecheck（root + examples + apps/web，tsc --noEmit）+ lint（biome ci .）；
+产物读数另跑 `bun run --cwd apps/web build`（tsc --noEmit && vite build）生成 dist。
+日志：`D:/Application/APP/Vessel/docs/dev/tmp/q-modes/gates.log`（两轮完整记录，2523 行）。
+防 WSL 退出码谎报：rc 之外独立核对日志 ✅/✓ 标记 + dist 文件数/字节/index.html 实读。
+
+### 6.1 轮次记录
+
+| 轮 | 时间（+08:00） | 代码状态 | root build rc | web build rc | 结论 |
+|---|---|---|---|---|---|
+| 1 | 2026-11-24 10:26:29 | WIP 53811383 | **1** | 0 | typecheck 通过；lint 唯一 error = NodeProvider.tsx:9 organizeImports（WIP 引入的 import 排序）；22 warnings 均基线既有 |
+| 2 | 2026-11-24 10:29:05 | 18acfe27 排序修复后（文档收尾 a71d3f44） | **0** | **0** | ✅ Type check 通过；✅ Lint 通过（Checked 1259 files，22 warnings / 0 errors）；vite v7.3.6 ✓ 464 modules transformed，✓ built in 4.05s |
+
+### 6.2 产物独立读数（第 2 轮，apps/web/dist）
+
+| 项 | 读数 |
+|---|---|
+| DIST_EXISTS | yes |
+| FILE_COUNT | 45 |
+| BYTES | 1,377,005 |
+| index.html | 1137 B，mtime 2026-11-24 10:29（与本轮构建一致） |
+| 主 bundle | assets/index-QPUN_FQ2.js 991.30 kB（gzip 287.49 kB） |
+
+**门禁结论：通过（rc1=0 / rc2=0 + 产物非空实读）。**
+遗留 lint warnings（22 条，useTemplate / noNonNullAssertion 等）全部位于本次未触碰的基线文件
+（packages/core/src/context/*、src/cli.ts 等），不属本任务范围，未动。
+
+---
+
+## 7. 收尾状态
+
+- 分支 `fix/q-modes`（worktree `worktrees/q-modes`），基线 db69c381；提交链：
+  53811383（WIP 保全）→ e5fa7748（§3.2）→ 18acfe27（import 排序）→ af1a36ab（§4+§5）→ a71d3f44（§4.3 注）→ 本节提交。
+- 行为变更仅 1 处（G2 修复）+ 1 处纯 import 排序；其余为注释对齐与审计文档。
+- 未 merge、未碰主 checkout、未删 worktree；零测试/探针/临时进程，行为验证归用户（§5 oracle）。
+- 遗留：G1（owner main 排期）、G3（用户一次性 start --daemon 自愈，设计内）。

@@ -18,9 +18,9 @@ import {
 import { useNodeStore } from '../stores/nodeStore';
 import { usePolledAction } from '../stores/usePolledAction';
 import { useConnection } from './ConnectionProvider';
+import { GatewayHttpError } from './client';
 import type { ListedInteractionPage } from './interaction-hydration';
 import {
-  fetchAllNodeAttention,
   fetchNodeAttention,
   fetchNodeRpc,
   type NodeAttentionParams,
@@ -29,6 +29,7 @@ import {
   type NodeDraft,
   type NodeDraftCheck,
   type NodeDraftError,
+  NodeRpcError,
   nodeTokenIdentity,
   readNodeToken,
   readStoredNodes,
@@ -204,9 +205,37 @@ export function NodeProvider({ children }: { children: ReactNode }) {
     [tokenFor, client],
   );
 
+  // 逐节点复用 fetchAttention 的路由规则（当前节点走活连接，其余直连）：
+  // 不能换回 fetchAllNodeAttention 的统一扇出——那会把当前节点也直连 api_url，
+  // 代理模式下浏览器没有 node token ⇒ 401（S6 同类缺口）。错误统一归一成
+  // NodeRpcError，保持 NodeAttentionResult 的既有形状。
   const fetchAllAttention = useCallback(
-    (params: NodeAttentionParams = {}) => fetchAllNodeAttention(nodes, params, tokenFor),
-    [nodes, tokenFor],
+    (params: NodeAttentionParams = {}) =>
+      Promise.all(
+        nodes.map(async (node): Promise<NodeAttentionResult> => {
+          try {
+            return { node, ok: true, page: await fetchAttention(node, params) };
+          } catch (error) {
+            if (error instanceof NodeRpcError) return { node, ok: false, error };
+            if (error instanceof GatewayHttpError) {
+              return {
+                node,
+                ok: false,
+                error: new NodeRpcError(error.code, error.message, error.status),
+              };
+            }
+            return {
+              node,
+              ok: false,
+              error: new NodeRpcError(
+                'internal',
+                error instanceof Error ? error.message : String(error),
+              ),
+            };
+          }
+        }),
+      ),
+    [nodes, fetchAttention],
   );
 
   const teamControl = useCallback(

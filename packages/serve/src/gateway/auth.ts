@@ -599,10 +599,11 @@ export function buildContentSecurityPolicy(
     if (url === null) continue;
     if (url.protocol === 'http:' || url.protocol === 'https:') frameSources.add(url.origin);
   }
-  // 有扩展源时 frame-src 必须带上 'self'：代理模式插件 iframe 是同源平台 URL
-  // （<platform>/nodes/<id>/plugins/...），缺 'self' 会被整条拦掉；无扩展源的
-  // 基线靠 default-src 'self' 兜底本就放行同源。'self' 只放行同源 framing，
-  // 不扩大跨源面（frame-ancestors 'none' 不变）。无扩展源时保持旧输出（无指令）。
+  // 有扩展源时 frame-src 必须带上 'self'：兜底同源 framing（legacy 页面同源 =
+  // node，插件 iframe 也是同源）。平台/代理模式的插件 iframe 按 2026-11-23 裁决
+  // 直连 node origin（PluginFrame 取选中节点 api_url），由扩展源里的 node origin
+  // 放行；'self' 不扩大跨源面（frame-ancestors 'none' 不变）。无扩展源时保持旧
+  // 输出（无指令，default-src 'self' 兜底）。
   const frameDirective =
     frameSources.size > 0 ? `frame-src 'self' ${[...frameSources].join(' ')}; ` : '';
   // plugin-embed 契约 §6：内联 import map（apps/web vite.config.ts 注入的冻结

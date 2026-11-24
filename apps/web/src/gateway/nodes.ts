@@ -301,6 +301,11 @@ function asNodeRpcError(error: unknown): NodeRpcError {
 /**
  * 逐节点独立拉取 attention：一个节点 401 / 网络失败只体现在自己的结果里，
  * 不会拒绝整体 Promise，也不影响其它节点。
+ *
+ * ⚠️ 这是**纯直连**扇出（每个节点都 fetch 自己的 api_url）：不含「当前节点走
+ * 活连接」的路由规则。代理模式下当前节点没有 node token，直连必 401——需要
+ * 含当前节点的扇出时用 NodeProvider.fetchAllAttention（逐节点走 fetchAttention），
+ * 不要直接调这里。
  */
 export async function fetchAllNodeAttention(
   nodes: readonly NodeConfig[],
