@@ -728,6 +728,17 @@ function formatMessageSource(
  */
 export const ASK_ANSWER_INPUT_NAME = 'ask:answer';
 
+/**
+ * 异步 bash 作业完成投递的消息名（`Message.name`，随 `user.message` 持久化）。
+ *
+ * 它不是「谁说的话」：作业是该成员自己起的后台 bash，结果投回自己。过去不写 name，
+ * 落进 `agentInputName` 的 A2A 推导 ⇒ Web 渲成「来自 agent <成员自己>」（用户反馈的
+ * 正是这条：看起来像成员给自己发了条消息）。现在显式声明工具来源 `tool:bash`，
+ * Web 渲成「来自 bash」卡（身份判定在 `apps/web/src/domains/chat/agent-sender.ts`）。
+ * 与 `ask:answer` 同理：它是该轮真实的输入锚点，不是 `vessel:*` 上下文。
+ */
+export const BASH_JOB_INPUT_NAME = 'tool:bash';
+
 /** `name` 只允许简单标签：Provider 侧把 `name` 当标识符，空格 / 符号 / 中文都不进。 */
 function sanitizeAlias(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '');
@@ -1277,10 +1288,15 @@ export class MemberExecutionHost implements MemberExecutionPort {
     };
     // 输入本身可能带结构化身份：A2A 是 agent:<alias>（Web 渲染成 agent 消息卡），
     // 运行时合成输入（idle 唤醒）是 vessel:notice（环境信息卡），async ask 的答案
-    // （human 来源）是 ask:answer（待批答复卡），rotate 交接嘱托是
-    // rotate:handoff:<epoch>（交接卡）。人类 / 系统正文来源保持 nil。
+    // （human 来源）是 ask:answer（待批答复卡），异步 bash 作业完成是 tool:bash
+    // （「来自 bash」卡），rotate 交接嘱托是 rotate:handoff:<epoch>（交接卡）。
+    // 人类 / 系统正文来源保持 nil。
     const inputName =
-      message.origin === 'ask_answer' ? ASK_ANSWER_INPUT_NAME : inputNameOf(message);
+      message.origin === 'ask_answer'
+        ? ASK_ANSWER_INPUT_NAME
+        : message.origin === 'bash_job'
+          ? BASH_JOB_INPUT_NAME
+          : inputNameOf(message);
     // 附件引用（0.52）：只有路径与种类，随 user 消息落进 `user.message` 事件与
     // SessionState。refs 不进 `RunOptions.messages`，正文也永不在这里被读出来。
     const refs = message.refs !== undefined && message.refs.length > 0 ? message.refs : undefined;

@@ -72,6 +72,7 @@ export {
 } from './registry.js';
 export {
   ASK_ANSWER_INPUT_NAME,
+  BASH_JOB_INPUT_NAME,
   createMemberExecutionHost,
   MemberExecutionHost,
   type MemberExecutionHostOptions,

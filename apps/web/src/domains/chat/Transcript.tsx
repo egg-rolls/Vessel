@@ -107,7 +107,8 @@ function TranscriptMessage({
     if (agentSender !== undefined) {
       return (
         <AgentMessageCard
-          sender={agentSender}
+          sender={agentSender.alias}
+          senderKind={agentSender.kind}
           content={message.content}
           ts={message.timestamp}
           {...(source !== undefined ? { source } : {})}

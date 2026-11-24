@@ -447,6 +447,7 @@ export function TranscriptWindow({
         return item.sender !== undefined ? (
           <AgentMessageCard
             sender={item.sender}
+            {...(item.senderKind !== undefined ? { senderKind: item.senderKind } : {})}
             content={item.text}
             ts={item.ts}
             defaultOpen={cardsDefaultOpen}

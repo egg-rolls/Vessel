@@ -1468,6 +1468,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.rotateHandoff.source': 'handover brief written by the agent that started the rotate',
   'chat.agentMessage.from': 'from agent {name}',
   'chat.agentMessage.group': 'Message from agent {name}',
+  'chat.toolMessage.from': 'from {name}',
+  'chat.toolMessage.group': 'Delivery from {name}',
   // 0.36: message bubble action group
   'chat.message.actions': 'Message actions',
   // long-message fold (same toggle component on the chat and team pages)

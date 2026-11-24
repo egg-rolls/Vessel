@@ -1395,6 +1395,8 @@ export const messages = {
   'chat.rotateHandoff.source': '发起 rotate 的 agent 写的交接嘱托 · 不是人在这里打的字',
   'chat.agentMessage.from': '来自 agent {name}',
   'chat.agentMessage.group': '来自 agent {name} 的消息',
+  'chat.toolMessage.from': '来自 {name}',
+  'chat.toolMessage.group': '来自 {name} 的投递',
   // 0.36: 消息气泡操作组
   'chat.message.actions': '消息操作',
   // 长消息折叠（会话页与团队页共用同一个按钮组件）
