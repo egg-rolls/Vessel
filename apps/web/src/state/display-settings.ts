@@ -24,7 +24,10 @@ export interface DisplaySettingDef {
 
 export const DISPLAY_SETTINGS: readonly DisplaySettingDef[] = [
   { id: 'verbosity', key: 'ui.verbosity', type: 'enum', options: ['minimal', 'normal', 'debug'] },
-  { id: 'showInternalEvents', key: 'ui.showInternalEvents', type: 'boolean' },
+  // 默认视觉契约（用户裁决：生产 8642 为默认）：系统/内部消息**默认隐藏**。
+  // fallback 'false' 是缺省值的显式 codify——未配置时 UI 按 false 渲染/判定，
+  // 各舰队继承此默认；验收期的 show_internal_events:true 只是临时 override。
+  { id: 'showInternalEvents', key: 'ui.showInternalEvents', type: 'boolean', fallback: 'false' },
   // 0.51：已归档 Team / 已停用 agent 的默认隐藏开关。与 showInternalEvents 同一层
   // （同一个 ui 块、同一条 config.set 写路径），入口也在同一个「显示与可见性」分组。
   { id: 'showArchived', key: 'ui.showArchived', type: 'boolean' },
