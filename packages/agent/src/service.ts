@@ -7301,6 +7301,23 @@ export class AgentServiceImpl implements AgentService {
     }
   }
 
+  /**
+   * issue-0（additive）：running 成员当前广告的工具名并集（引擎 retain 计算用）。
+   * port 未实现时返回空集（老执行内核没有这份实读面，按「无 retain」处理 = 现态）。
+   */
+  runningToolNames(): Set<string> {
+    const read = this.runtime.runningToolNames;
+    if (typeof read !== 'function') return new Set();
+    return read.call(this.runtime);
+  }
+
+  /** issue-0（additive）：挂上轮边界工具刷新回调；port 未实现时 no-op。 */
+  setToolsRefreshListener(listener: (() => void) | undefined): void {
+    const set = this.runtime.setToolsRefreshListener;
+    if (typeof set !== 'function') return;
+    set.call(this.runtime, listener);
+  }
+
   subscribe(listener: AgentEventListener): () => void {
     if (typeof listener !== 'function') {
       throw new AgentError('invalid_input', 'listener must be a function');

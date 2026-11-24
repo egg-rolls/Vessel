@@ -620,7 +620,8 @@ export function createWebTools(config: WebToolsConfig, deps: WebToolsDeps = {}):
       `web_search 未注册：没有任何搜索后端能解析到 key。设置其中一个环境变量即可：${howToFix}` +
       '（也可用顶层配置 env_file 指向密钥文件）；' +
       '或配置 plugins[].config.always_register: true 让工具在无 key 时也出现（调用会报 provider_auth_failed）。' +
-      '改完需要重启（web_fetch 不受影响）';
+      '注意：plugins: 是完整 opt-in 清单——只列 web-tools 会排除其余内置插件（bash/read/edit/write 等），' +
+      '须把它们一并列入或改用默认集。改完需要重启（web_fetch 不受影响）';
     process.stderr.write(`web-tools: ${message}\n`);
     if (!setupWarnings.includes(message)) setupWarnings.push(message);
   }

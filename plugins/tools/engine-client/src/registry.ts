@@ -6,8 +6,14 @@
  * （engine 派发前机械校验与 host impl.swapped 对拍共用同一指纹算法）。
  * 热应用重注册的新 def 对象 → 重新 wireTool（新指纹覆盖，rejected 清零）。
  *
- * pushRegistry 喂增量：upsert = 全部未 rejected 条目；remove = lastPushed − 当前账本；
+ * pushRegistry 喂增量：upsert = 全部未 rejected 条目；remove = lastPushed − 当前账本 − retain；
  * 成功后更新 lastPushed，失败原样抛（装配层记日志）。
+ *
+ * retain（issue-0 热应用同步）：活体成员的工具面延迟到轮边界才刷新（ADR-054），窗口期内
+ * 引擎注册表必须仍能执行这些「已从宿主移除、但活体成员面仍在广告」的工具，否则模型被广告
+ * 执行不了的工具（engine_tool_not_registered）。装配层把 retain 设为 running 成员当前广告的
+ * 工具名并集；push 不 remove retain 内的名字，并把它们保留在 lastPushed，待轮边界 retain 收缩
+ * 后的下一次 push 才冲刷移除。缺省 retain 为空 = 现态行为（零回归）。
  *
  * @module @vessel-agent/engine-client
  */
@@ -48,6 +54,11 @@ export interface ToolLedger {
   get(name: string): LedgerRecord | undefined;
   /** impl.swapped 指纹不一致 / 未知 name → 标 rejected（转发拒、push 不再 upsert）。 */
   markRejected(name: string): void;
+  /**
+   * issue-0：设置 push 的 retain 集（活体成员面仍广告的工具名）。push 不 remove 这些名字，
+   * 并把它们保留在 lastPushed，待 retain 收缩后的下一次 push 才冲刷。缺省空集 = 现态。
+   */
+  setRetain(names: Iterable<string>): void;
   /** 喂账本增量；transport 缺省 → unavailable；失败原样抛。 */
   push(): Promise<void>;
 }
@@ -57,6 +68,7 @@ export function createToolLedger(deps: ToolLedgerDeps): ToolLedger {
   const wrapped = new WeakSet<ToolDefinition>();
   const records = new Map<string, LedgerRecord>();
   let lastPushed = new Set<string>();
+  let retain = new Set<string>();
 
   return {
     wire(def, route) {
@@ -102,6 +114,9 @@ export function createToolLedger(deps: ToolLedgerDeps): ToolLedger {
       const record = records.get(name);
       if (record !== undefined) record.rejected = true;
     },
+    setRetain(names) {
+      retain = new Set(names);
+    },
     async push() {
       const transport = getTransport();
       if (transport === undefined || !transport.active) {
@@ -112,10 +127,12 @@ export function createToolLedger(deps: ToolLedgerDeps): ToolLedger {
         if (!record.rejected) upsert.push(record.entry);
       }
       const current = new Set(records.keys());
-      const remove = [...lastPushed].filter((name) => !current.has(name));
+      // issue-0：retain 内的名字不 remove（活体成员面仍在广告，引擎须保持可执行）。
+      const remove = [...lastPushed].filter((name) => !current.has(name) && !retain.has(name));
       const params: RegistrySyncParams = { upsert, remove };
       await transport.request(ENGINE_WIRE.registrySync, params);
-      lastPushed = current;
+      // retain 内、本次仍在引擎的名字保留在 lastPushed，待 retain 收缩后的 push 冲刷移除。
+      lastPushed = new Set([...current, ...[...lastPushed].filter((name) => retain.has(name))]);
     },
   };
 }
