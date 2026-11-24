@@ -25,7 +25,7 @@ import {
   type HubNodeSnapshotInput,
   type HubPointerInput,
   type HubTeamMeta,
-} from '../packages/serve/src/index';
+} from '../../packages/serve/src/index';
 
 /** 成员生命周期事件 → 目录变化（开放字符串，不新增常量导出）。 */
 const AGENT_STATE_EVENTS = new Set([

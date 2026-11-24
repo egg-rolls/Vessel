@@ -103,7 +103,7 @@ import { resolveInteractionsDir } from '../gateway/interactions-dir';
 import { resolveGatewayAuth } from '../gateway/serve-auth';
 import { reportShutdownFailure } from '../gateway/shutdown-report';
 import { resolveConnectToken } from '../gateway/transport-factory';
-import { createHubRuntime } from '../hub-wiring';
+import { createHubRuntime } from '../hub/hub-wiring';
 import { t } from '../i18n';
 import type { McpEngineShell } from '../mcp-engine-wiring';
 import type { MockScenarioName } from '../mock/scenarios';
