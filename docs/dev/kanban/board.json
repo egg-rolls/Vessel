@@ -5,6 +5,14 @@
   "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。板只留当前活跃任务；完成任务由 main 轮次收尾移入 archive.json（append-only，采纳 q-kanban §9.2 归档约定）。",
   "tasks": [
     {
+      "id": "q-display",
+      "title": "显示修复：异步bash来源归bash + owner工具变化显示增量消息而非self card",
+      "column": "进行中",
+      "owner": "q-display",
+      "branch": "fix/q-display",
+      "progress": "派单：basic-tools:1608通知来源归属 + tenant-runtime-factory:1048 owner self card路径重构成增量告知"
+    },
+    {
       "id": "q-promotion",
       "title": "增量晋升 playbook（丢弃整体切换，稳定node+金丝雀逐步晋升）",
       "column": "进行中",
