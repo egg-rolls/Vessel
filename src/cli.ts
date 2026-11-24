@@ -57,6 +57,18 @@ import {
 // `--run` 永远不会进那个界面。它现在按需加载（见 {@link startInkRepl}）。
 import { createAskAnswerDelivery } from './agent/ask-answer-delivery';
 import { DEFAULT_SERVE_PORT, parseArgs } from './cli/args';
+import {
+  deriveGatewayInstance,
+  isForegroundGatewayCommand,
+  prepareForegroundGatewayStart,
+  printSplitModePortError,
+  resolveGatewayTargets,
+  resolveRestartDaemonMode,
+  stopGateway,
+  writeForegroundGatewayPid,
+} from './cli/commands/gateway/gateway-command';
+import { isForegroundNodeCommand } from './cli/commands/node-command';
+import { runPluginCliCommand } from './cli/commands/plugin/plugin-cli-command';
 import type { FeishuChannelLike } from './cli/control-plane-types';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './cli/feishu-command';
 import {
@@ -117,23 +129,12 @@ import { checkTlsFiles, resolveServeOptions } from './gateway/serve-config';
 import { shutdownServeStack } from './gateway/shutdown-sequence';
 import { resolveGatewayToken } from './gateway/transport-factory';
 import { ensureWebDist, interruptWebBuild, webDistWarning } from './gateway/web-dist';
-import {
-  deriveGatewayInstance,
-  isForegroundGatewayCommand,
-  prepareForegroundGatewayStart,
-  printSplitModePortError,
-  resolveGatewayTargets,
-  resolveRestartDaemonMode,
-  stopGateway,
-  writeForegroundGatewayPid,
-} from './gateway-command';
 import { readHubNodeTrustedOrigins } from './hub/node-state';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 // 0.56：派生 token（root-secret → HKDF；显式配置永远优先）。
 import { effectiveNodeToken } from './node/token-derive';
-import { isForegroundNodeCommand } from './node-command';
 import { createCliLogger, diffLogOptions, resolveLogOptions } from './observability/logging';
 import {
   flushStartupTiming,
@@ -150,7 +151,6 @@ import {
 } from './plugin/plugin-host-assembly';
 import { FACTORY_PLUGINS } from './plugin/plugin-loader';
 import { type PluginWatchHandle, startPluginWatch } from './plugin/plugin-watch';
-import { runPluginCliCommand } from './plugin-cli-command';
 import { createRunControl } from './run/run-control';
 import { type BootstrapResult, bootstrap } from './runtime/bootstrap';
 import { installProcessErrorHandlers } from './runtime/process-handlers';
@@ -393,13 +393,13 @@ if (demoRequested) {
 // 命中后不进入 bootstrap / REPL / serve / headless 主流程。
 // dynamic import：--help / --version 早退路径不再加载注册表（S4 §2.3）。
 {
-  const { applyCommandLocale, matchCommand } = await import('./commands/registry');
+  const { applyCommandLocale, matchCommand } = await import('./cli/registry');
   // 0.49 G3a：`gateway nodes ...` 是 registry 管理命令，不进 gateway 一次性分发
   // （后者不承载平台写语义）。
   const gatewayNodes = args.gatewayNodes;
   if (gatewayNodes !== null) {
     await applyCommandLocale();
-    const { runGatewayNodesCommand } = await import('./gateway-nodes-command');
+    const { runGatewayNodesCommand } = await import('./cli/commands/gateway/gateway-nodes-command');
     process.exit(await runGatewayNodesCommand(gatewayNodes));
   }
   const command = matchCommand(args);
@@ -417,7 +417,7 @@ if (
   isForegroundGatewayCommand(args.gateway) &&
   process.env.VESSEL_LEGACY_SERVE !== '1'
 ) {
-  const { applyCommandLocale } = await import('./commands/registry');
+  const { applyCommandLocale } = await import('./cli/registry');
   await applyCommandLocale();
   // 启动诊断（0.50）：拆分路径**也**托管 dist（静态资源由平台 gateway 同源下发），
   // 所以产物缺失/过期时要就地自修复，而不是把「缺失 + 命令教学」丢给用户。
@@ -430,7 +430,7 @@ if (
   // 只在仓库内默认目录生效：`VESSEL_STATIC_DIR` 指向的外部产物不归我们管；
   // `VESSEL_NO_WEB_AUTOBUILD=1` 关掉自修复；构建失败只告警、不改退出码。
   await ensureWebDist({ waitWhenMissing: true });
-  const { runPlatformGatewayForeground } = await import('./gateway-command');
+  const { runPlatformGatewayForeground } = await import('./cli/commands/gateway/gateway-command');
   process.exit(
     await runPlatformGatewayForeground({
       command: args.gateway,

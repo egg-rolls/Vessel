@@ -6,8 +6,8 @@
  */
 
 import { allowedOriginError } from '../../packages/config/src/index';
-import type { DevCommandArgs } from '../dev-command';
 import { parseFederationAddress } from '../federation/federation-address';
+import type { DevCommandArgs } from './commands/dev-command';
 import { type CompletionCommandArgs, isCompletionShell } from './completion-spec';
 
 /** `--serve` 省略端口时的默认值 */
