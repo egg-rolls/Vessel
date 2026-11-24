@@ -18,27 +18,34 @@ import { cn } from '../../components/ui';
 import { formatClock } from '../../format';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
-import { agentSenderOfName } from './agent-sender';
+import { type MessageSender, senderOfName } from './agent-sender';
 import { StreamCard } from './StreamCard';
 
 /**
- * 这条消息是否 agent 发来的；是则返回发送者 alias。
- * 名字 → alias 的解析只在 `agent-sender.ts`，这里只做 `Message` 到 `name` 的取值。
+ * 这条消息是否 agent / 工具发来的；是则返回卡身份（kind + alias）。
+ * 名字 → 身份的解析只在 `agent-sender.ts`，这里只做 `Message` 到 `name` 的取值。
  */
-export function agentMessageSender(message: Message): string | undefined {
-  return agentSenderOfName(message.name);
+export function agentMessageSender(message: Message): MessageSender | undefined {
+  return senderOfName(message.name);
 }
 
 export function AgentMessageCard({
   sender,
+  senderKind = 'agent',
   content,
   ts,
   source,
   defaultOpen = false,
   entering = false,
 }: {
-  /** 发送者 alias（不含 `agent:` 前缀）。 */
+  /** 发送者 alias（不含 `agent:` / `tool:` 前缀）。 */
   sender: string;
+  /**
+   * 来源类别：`agent` = A2A 投递（卡头「来自 agent X」）；
+   * `tool` = 工具来源投递（卡头「来自 X」，如异步 bash 完成的「来自 bash」）。
+   * 缺省 `agent`：存量调用点都是 A2A。
+   */
+  senderKind?: 'agent' | 'tool';
   /** 正文（与 `Message.content` / `run.started.input` 同源）。 */
   content: string;
   /** 消息时间（Unix ms）；生命周期时间在卡片展开体里，缺省不显示。 */
@@ -56,14 +63,17 @@ export function AgentMessageCard({
   entering?: boolean;
 }) {
   const clock = formatClock(ts);
+  // 卡头文案按来源类别分：agent 投递带「agent」字样，工具来源只报工具名（「来自 bash」）。
+  const fromKey = senderKind === 'tool' ? 'chat.toolMessage.from' : 'chat.agentMessage.from';
+  const groupKey = senderKind === 'tool' ? 'chat.toolMessage.group' : 'chat.agentMessage.group';
   return (
     <StreamCard
       className={cn('agent-message', entering && 'msg-enter')}
-      ariaLabel={t('chat.agentMessage.group', { name: sender })}
+      ariaLabel={t(groupKey, { name: sender })}
       defaultOpen={defaultOpen}
       title={
         <span className="max-w-56 truncate font-mono text-2xs tracking-wider text-accent">
-          {t('chat.agentMessage.from', { name: sender })}
+          {t(fromKey, { name: sender })}
         </span>
       }
       summary={content}

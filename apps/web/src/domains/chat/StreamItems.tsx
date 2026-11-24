@@ -21,7 +21,7 @@ import type { Verbosity } from '../../state/visibility';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { AgentMessageCard } from './AgentMessageCard';
-import { agentSenderOfName } from './agent-sender';
+import { senderOfName } from './agent-sender';
 import { filterTimelineItems, reasoningVisible, runningToolHint } from './chat-visibility';
 import { composerIconControlClass, composerQuietIconTone } from './composer-controls';
 import { EnvCard } from './EnvCard';
@@ -535,7 +535,7 @@ export const RunItems = memo(function RunItems({
 
   // 输入的发言人：与 live item / 历史消息同一个判定（agent-sender.ts），
   // 有 sender 就渲染 agent 卡，否则用户气泡。
-  const inputSender = agentSenderOfName(group.inputName);
+  const inputSender = senderOfName(group.inputName);
   // 失败卡与时间线上的 `run-failure` item 是同一个组件、同一份数据（`runFailureOfGroup`）：
   // 子 agent transcript 走这里，主时间线走 item —— 两条路径都不会为同一 run 出第二张卡。
   const failure = status === 'failed' ? runFailureOfGroup(group) : undefined;
@@ -546,7 +546,8 @@ export const RunItems = memo(function RunItems({
         !hideInput &&
         (inputSender !== undefined ? (
           <AgentMessageCard
-            sender={inputSender}
+            sender={inputSender.alias}
+            senderKind={inputSender.kind}
             content={group.input}
             ts={group.startedAt}
             defaultOpen={cardsDefaultOpen}

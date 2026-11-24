@@ -270,8 +270,9 @@ export interface AgentMessage {
    * - `ask_answer` = 人类在待批页回答了本成员发的 async `ask`；执行内核据此把
    *   core `Message.name` 写成 `ask:answer`，Web 渲染成「待批答复」卡而不是用户气泡。
    * - `bash_job` = 该成员自己起的后台 bash 作业跑完了，运行时把结果投回同一个成员
-   *   （见 `src/bash-job-delivery.ts`）。它不是「谁说的话」，所以不写 `input_name`：
-   *   正文自带 `[runtime] bash job …` 前缀，渲染与普通成员消息一致即可。
+   *   （见 `src/bash-job-delivery.ts`）。它不是「谁说的话」：执行内核据此把
+   *   core `Message.name` 写成 `tool:bash`（`runtime.ts` 的 `BASH_JOB_INPUT_NAME`），
+   *   Web 渲染成「来自 bash」卡而不是「来自 agent <成员自己>」。
    */
   origin?: 'ask_answer' | 'bash_job';
   /**

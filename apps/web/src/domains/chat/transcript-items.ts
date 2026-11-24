@@ -56,7 +56,7 @@ import type { SessionDetail } from '../../gateway/types/sessions';
 import type { ErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
 import type { HandoverRequest } from '../../state/live-items';
-import { agentSenderOfName } from './agent-sender';
+import { agentSenderOfName, senderOfName } from './agent-sender';
 import {
   ASK_ANSWER_MESSAGE_NAME,
   type AskAnswerCard as AskAnswerData,
@@ -154,12 +154,14 @@ export interface RunInputItem extends ItemMeta {
    */
   refs?: MessageRef[];
   /**
-   * 输入是 agent 投递时的发送者 alias（来自 `run.started.input_name` /
+   * 输入是 agent / 工具投递时的发送者 alias（来自 `run.started.input_name` /
    * `user.message.message.name`，判定见 `agent-sender.ts`）。
    *
-   * 有值 ⇒ 渲染 agent 卡；无值 ⇒ 用户气泡。渲染层不再自己判身份。
+   * 有值 ⇒ 渲染来源卡；无值 ⇒ 用户气泡。渲染层不再自己判身份。
    */
   sender?: string;
+  /** 来源类别（agent 投递 / 工具来源投递）：卡头文案用，缺省 `agent`。 */
+  senderKind?: 'agent' | 'tool';
   /**
    * 这条输入消息的稳定 id（0.56）：服务端落盘时盖的同一个字符串。
    *
@@ -832,7 +834,7 @@ function isSourceMessage(message: Message): boolean {
   return message.name === SOURCE_MESSAGE_NAME;
 }
 
-/** 这条消息是否 agent 发来的（agent:<alias>）。判定只在 agent-sender.ts 一处。 */
+/** 这条消息是否 agent / 工具发来的（agent:<alias> / tool:<name>）。判定只在 agent-sender.ts 一处。 */
 function isAgentNamed(message: Message): boolean {
   return agentSenderOfName(message.name) !== undefined;
 }
@@ -1441,7 +1443,8 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
     };
     // run 的输入：历史里还没落盘时由它显示气泡；被历史消息认领后由 assemble 丢掉。
     // 身份随首个事件一起到（`run.started.input_name`）：agent 投递 = `agent:<alias>`
-    // → agent 卡；运行时合成输入 = `vessel:*` → 运行时提示卡（环境信息），绝不画成
+    // → agent 卡；工具来源投递 = `tool:<name>`（如异步 bash 完成）→「来自 <name>」卡；
+    // 运行时合成输入 = `vessel:*` → 运行时提示卡（环境信息），绝不画成
     // 用户气泡；rotate 交接嘱托 = `rotate:handoff[:<epoch>]` → 交接卡；
     // 都不是 = 人自己说的话 → 气泡。
     if (trimText(group.input).length > 0) {
@@ -1499,13 +1502,13 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           ...seqMeta,
         });
       } else {
-        const sender = agentSenderOfName(group.inputName);
+        const sender = senderOfName(group.inputName);
         items.push({
           kind: 'run-input',
           key: `run:${group.runId}:input`,
           runId: group.runId,
           text,
-          ...(sender !== undefined ? { sender } : {}),
+          ...(sender !== undefined ? { sender: sender.alias, senderKind: sender.kind } : {}),
           // 运行态气泡上方的 chip：与历史侧同一行组件，refs 到了就渲染。
           ...(group.inputRefs !== undefined ? { refs: group.inputRefs } : {}),
           ...messageIdPart,
