@@ -79,10 +79,10 @@
     {
       "id": "q-session-naming",
       "title": "create/hire/rotate会话命名(子agent会话名截断→有意义命名)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-session-naming",
       "branch": "fix/q-session-naming",
-      "progress": "派单：hire子agent会话名靠截断(检查两字)；查create/hire/rotate命名机制,用成员name/任务摘要作title复用setSessionTitle"
+      "progress": "merge入main；调查:检查两字是AI摘要非截断；create/hire/rotate首会话显式title+spawnedBy缺省成员名(manual口径,派生截断/AI不覆盖)；成员侧schema补title+agents.create透传；main首会话AI命名不回归；build绿待用户hire验证"
     },
     {
       "id": "q-scroll-fix",
