@@ -391,7 +391,115 @@ reinstate：复活时增清标注四字段（§2.5）
 
 ## 4. GC 策略（mark-gated）
 
-（待扩充：sweep 改造、安全互锁、宽限期、可选自动标注、保护名单、回收动作）
+### 4.1 sweep 改造：`sweepRecyclableMembers`
+
+替换 `sweepIdleTemporaries`（`service.ts:4374`），判据全换：
+
+```text
+for record in registry.all():
+  # 门槛（全部满足才进入互锁检查）
+  record.membership == 'present'
+  record.recyclable == true                  # ← 核心闸门：未标注永不回收
+  record.id != mainId                        # ← 绝对保护（service 层不变式）
+  record.markedAt + recycleGraceMs <= now    # ← 宽限期已满
+  # 角色不再设限：member（经人类 ask 标注）与 temporary 都可回收；
+  # 「member 永不回收」的旧铁律由「未标注永不回收 + peer 标注需审批」替代。
+
+  # 安全互锁（§4.2，任一命中即跳过，等下一个 tick）
+  if hasNonIdleWork(record.id): continue
+  if durableInboxUnread(record.id) > 0: continue
+  if record.rotation == 'rotating': continue
+
+  await reclaimAgent(record, now, 'recycled')
+```
+
+- **节奏**：沿用 `clamp(基准/10, 60s, 15min)` 公式（`service.ts:4434`），基准从
+  `temporaryTtlMs` 换成 `recycleGraceMs`。缺省 grace=24h → 15min tick；
+  grace=0 → 60s tick。定时器仍只在装配层（`agent-service-wiring.ts:484`），
+  `.unref()` 不变。
+- **判据仍读持久化字段**（`markedAt` 落盘）：冷启动后无内存 entry 也能正确判定，
+  继承现 sweep 的优点。
+- **停机时长计入宽限期是可接受的**：与 `idle_ttl` 根因（§1.4）的本质区别是——
+  标注是显式意思表示，宽限期只是撤销窗口；重启后第一个 tick 回收已标注且安全的
+  成员符合标注意图。担心误杀的场景由 unmark / 管理面 reinstate 兜底。
+- **GC 永不 interrupt**：忙就跳过，绝不为了回收打断在途工作。「先 interrupt
+  保全再标注」是**调用方**的操作序（M3 + M4），不是 GC 的动作。
+
+### 4.2 安全互锁（回收时刻必须「空闲且安全」）
+
+在现有 `hasNonIdleWork`（`service.ts:4394`）基础上补持久化判据：
+
+| 判据 | 来源 | 现状 |
+| --- | --- | --- |
+| 在跑轮（`entry.active`）/ 排队（`queuedRuns`）/ pending / running / waiting_permission | 内存 ExecutionUnit | 已有，保留 |
+| spawning 中的 entry | 内存 | 已有（active 判定覆盖），显式列出 |
+| **durable inbox 未读 > 0** | 持久化收件箱（`inbox.list` 只读口径，`service.ts:4204`） | **新增**：冷 dormant 成员没有内存 entry，旧互锁查不到它的未读消息；有待处理 inbox 的成员不可回收（提案④安全互锁） |
+| rotate 窗口（`rotation==='rotating'`） | 内存 | **新增**：换体中途不回收 |
+| 未提交 WIP | — | 系统边界外（git 工作区不由 agent 服务管辖）；由 interrupt 的 resume 标记 + durable inbox 保全机制覆盖「进程内 WIP」，文档明示边界 |
+
+互锁是**跳过**不是**失败**：被跳过的成员保持标注，下一个 tick 再查；
+看板显示「已标注 / 等待安全窗口」（§6）。
+
+### 4.3 宽限期（grace）
+
+- `agent.recycleGraceHours` 缺省 **24h**：标注后至少 24h 才可能被回收，
+  期间 unmark 可撤销（M7）。24h 是「一个人类工作日内能发现误标注」的量级裁决。
+- 重复标注刷新 `markedAt` → 宽限期重新计时（幂等语义，§3.1）。
+- `grace=0`：标注后下一个安全 tick 即回收。保留给自动化流水线（雇佣者批量
+  标注一次性承包），文档标注「不建议人类操作使用」。
+- 宽限期与互锁独立：宽限期满但忙 → 继续等；安全但宽限未满 → 继续等。
+
+### 4.4 可选自动标注策略（缺省关闭）
+
+`agent.autoMarkIdleDays > 0` 时启用（缺省 0 = 纯 mark-gated，保控制）：
+
+- 对象：**仅 temporary**（peer 标注必须人类审批，自动标注不得绕过审批语义；
+  main 是 member 且绝对保护，天然排除）。
+- 判据：`membership=='present'` ∧ 空闲（互锁全过，含 inbox 无未读）∧
+  `max(lastSeen, body.lastActiveAt) + autoMarkIdleDays*24h <= now`。
+- 动作：置 `recyclable=true`，`markedBy='system'`，
+  `markReason='auto_idle_policy: idle ≥ N days'`，发 `agent.marked_recyclable`。
+  随后走正常宽限期 + 互锁——**自动标注不缩短任何安全距离**。
+- 可撤销：人类 / 雇佣者 unmark 即退出；审计里 `marked_by='system'` 一目了然。
+- 节奏：与 GC 同一 tick 内先标注后回收判定（刚标注的必然宽限未满，天然分两轮）。
+
+### 4.5 保护名单（永不回收）
+
+1. **main**：service 层不变式（`record.id == mainId` 恒跳过），与标注无关；
+   工具层 mark main 直接 deny（§3.2）。
+2. **未标注成员**：`recyclable !== true` 恒跳过——mark-gated 的定义本身。
+3. **在途工作 / 未读 inbox / rotate 窗口**：互锁跳过（§4.2）。
+4. **调用者自身**：工具层 deny self-mark（§3.2）；人类管理面显式标注自己
+   雇佣的承包不受此限（root owner allow）。
+
+### 4.6 回收动作与孤儿处置
+
+- 执行器复用 `reclaimAgent`（`service.ts:4410`）：退役 body（标 `retiredAt`，
+  记录永不删）→ `left/closed` → `closedAt` + `closeReason='recycled'` →
+  `presence='gone'` → `agent.closed` 事件（reason=`recycled`）→ snapshot。
+  会话历史 / event log / bindingHistory 全部保留（`body_id ≡ session_id` 钥匙不动）。
+- **不级联**：回收 owner 不连带回收其承包（mark-gated 铁律：子成员没有标注
+  就没有回收）。
+- **孤儿可见性处置（决策 D-4.6）**：owner 被回收后，其 `visibility='private'`
+  的 present 子成员会陷入「只对 owner 可见、owner 已 left」的不可达组合
+  （0.28 起 private 无管理面旁路）。处置：回收 owner 时把这类子成员的
+  `owner` 转给人类 root principal（`'human'`），发 `agent.update` 审计事件，
+  其余字段不动。备选方案（均否决）：级联回收（违背 mark-gated）；
+  跳过有 private 子成员的 owner（永久阻塞回收，泄漏）；
+  强制改 team 可见（可能泄露私有上下文）。
+- **磁盘层 GC 不在本期**：成员记录 / 会话日志永不删是现有铁律，本设计沿用。
+  磁盘增长是慢变量（§8.3），留作后续可选阶段（归档压缩），不与标注语义耦合。
+
+### 4.7 GC 必须真清（防泄漏）
+
+mark-gated 的另一半责任：**已标注 + 安全 + 宽限期满的成员必须在该 tick 被回收**，
+不允许附加任何隐式豁免（除 §4.5 保护名单）。否则持久保留 + 标注堆积 =
+roster 无限增长（§8.1）。实现验收要点：
+
+- 构造「标注 → 宽限期满 → 安全」场景，断言一个 tick 内 `membership='left'`；
+- `team_full`（`TEAM_MEMBER_LIMIT=20`）压力下，待回收清单是疏解通道：
+  看板置顶显示「N 个已标注待回收」，人类可 unmark 或等 GC；
+- GC 回收数进日志（`agent.sweep.recycled`，沿用现 sweep 返回计数口径）。
 
 ## 5. 重启持久化
 
