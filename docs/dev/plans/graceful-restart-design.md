@@ -188,9 +188,126 @@ beginDrain('restart'):
 
 stop 模式三态（idle/settled/timeout）原样保留。restart 模式是**另一条判定**（quiesced/aborted 二态 + 相位快照），不复用 2s 预算、不复用「超时就走」语义——restart 的超时语义是「超时就**不重启**」（§6），方向相反。两模式共享 fence/arm/flush 机件，分叉在 settle 策略。
 
-## 4. resume manifest 格式（第3步填充）
+## 4. resume manifest 格式
 
-## 5. auto-resume 与工具安全（第3步填充）
+### 4.1 权威真相 = 每会话 marker（D3，对 main「记录清单」的细化）
+
+用户提案②要求「记录需恢复的会话清单」。本设计**不新增中心化清单文件**：现有 `resume_after_restart` marker 写在 SessionState 内、经 RunJournal 单写者落盘、崩溃安全、admission 后逐个清除——它本身就是分布式清单，且与恢复收口（clearMarker）天然一致。新增中心文件 = 第二真相源 = 清单与 marker 漂移的新故障面。
+
+「清单」以两种**投影**形式存在（都不是真相源）：
+1. drain 报告（内存/RPC，§7）：quiesce 完成时枚举所有已 arm 的 marker，供重启 agent 核对「这次重启欠了哪些会话」。
+2. `node-restart.json`（supervisor 用，§2.4）：只含 pid/时间/TTL，不含会话清单——supervisor 不需要知道欠账，新进程扫 marker 即得。
+
+### 4.2 marker 扩展（additive，D6）
+
+```ts
+interface ResumeAfterRestart {
+  // —— 现有字段，语义不动 ——
+  run_id: string;
+  interrupted_at: number;
+  reason: 'shutdown';            // 闭联合保持不动（回滚安全，见 §4.3）
+  pending_input_ids: string[];
+  background_stopped: boolean;   // P1 仍恒 false；P3 起有真实语义
+
+  // —— 新增可选字段（旧代码忽略，新代码缺省降级）——
+  intent?: 'stop' | 'restart';   // 缺省 'stop' = 现状卡片路径
+  boundary?: {                   // restart 专属：暂停时的干净边界快照
+    kind: 'tool_batch'           // 工具批完成、下一请求未发（§3.1 b）
+        | 'llm_cancelled';       // 软截止后取消 LLM 流，回退上一干净边界
+    in_flight_tools: [];         // 不变式：graceful 路径恒为空（§5.1）
+    last_completed_tools?: Array<{ tool_name: string; call_id: string }>;
+    paused_at_iteration: number; // resume 后 nudge 引用的进度锚
+  };
+  background_jobs?: Array<{      // P1：存活 job 清单（§3.4）
+    job_id: string; pid: number; log_path: string; command_digest: string;
+  }>;
+  resume_attempts?: number;      // auto-resume 限次计数（§5.5），缺省 0
+}
+```
+
+- `boundary.in_flight_tools` 类型上允许非空（为 forced/crash 路径留位），但 **graceful restart 的写入不变式是空数组**——armMarkers 前断言快照无在途工具，非空即说明 quiesce 判定有 bug，宁可 abort 也不写脏 marker。
+- `resume_attempts` 由新进程在每次尝试 auto-resume 前经 RunJournal 递增（单写者，崩溃安全）；admission 成功 clearMarker 时自然归零。
+
+### 4.3 回滚安全（为什么 reason 不动）
+
+`reason` 是闭联合且旧解析器可能严格校验。若新增 `'restart'` 字面量，新代码写的 marker 在**回滚到旧代码**后可能被判非法 → 僵尸 marker → 会话恢复静默丢失。故 intent 走独立可选字段：旧代码读新 marker = 普通 shutdown marker → 卡片+输入重放（安全降级，只是不自动续跑）；新代码读旧 marker = intent 缺省 'stop' → 现状路径。双向兼容，无迁移。
+
+### 4.4 写入时机与幂等
+
+- restart：quiesced 之后、flush 之前 arm（现序列同位）；只给「暂停未终态」的 run 写。自然完成的 run 无 marker。
+- 重复 restart（abort 后重试）：abort 不写 marker，无残留；quiesced 后 arm 失败（写盘错误）⇒ 整体 abort（fail-safe：宁可不出重启，不可无清单退出）。
+- ResumeMarkerRegistry 的竞态防护（现成）原样适用：arm 与并发 clearMarker 互斥。
+
+## 5. auto-resume 与工具安全
+
+### 5.1 关键洞察的展开（main-3）：优雅等待如何化解幂等死结
+
+当年否决「续 run + 重放工具」的死结：hard-kill 后在途工具的副作用状态未知（文件写了一半？命令执行了没有？），重放可能重复副作用，不重放可能丢工作——两头不安全，所以只发卡片让人类/模型自己核对。
+
+drain-to-quiesce 把死结**从根上拆掉**：停之前等到「无在途工具」的干净边界（§3.1），于是：
+- 已完成的工具：结果已落盘在 transcript 里，resume 后模型**看得见**，不需要重放；
+- 未开始的工具：还没发生副作用，resume 后模型正常发起，不是「重放」是「首放」；
+- 在途工具：**不存在**（quiesce 不变式）。
+
+所以 graceful-wait + auto-resume 的安全性 ≠ hard-kill + replay 的安全性——前者根本没有 replay。这就是「restart 可以续 run 而 stop 不续」的正当性来源：不是 stop 不配续，是 stop 的 hard-kill 边界不干净，续跑仍须走卡片核对路径（现状保留）。
+
+### 5.2 auto-resume 序列（复用既有引擎，D4）
+
+新进程 startup，`node-resume` 扫 marker 后按 intent 分流：
+
+```
+intent='stop'（缺省）: 现状路径不动（卡片 → 输入重放 → admission → clearMarker）
+intent='restart':
+  1. announce()          恢复卡照发（runtime.notice EnvCard，去重键不变）
+                         卡文案增补：边界快照 + 「你的 run 将自动续跑」+ 后台 job 清单
+  2. 前置校验            RunRecord.status ∈ {running, interrupted}（resumeRun 既有门槛）
+                         member 已关闭/退役 → 走既有 no_member 僵尸清理，不续
+                         resume_attempts ≥ 上限 → 降级卡片路径（§5.5）
+  3. resume_attempts++   经 RunJournal 落盘（先递增再续，崩溃也计数）
+  4. resumeRun(record)   既有入口：run_id 不变，transcript/usage/锚点/压缩段全恢复
+  5. 卡先于首个请求      announce 的 notice 注入机制保证恢复卡进入续跑 run 的首个
+                         LLM 请求上下文（卡即 nudge，§5.4）
+  6. admission → clearMarker   既有收口原样复用
+```
+
+- 顺序裁决：**先卡后续**。卡是「核对现状」指令的载体，必须在模型续跑决策之前可见；既有 announce→下一请求注入的时序天然满足（续跑 run 就是「下一请求」）。
+- 并发：多会话 auto-resume 沿用扫描的有界并发模式，但续跑是重操作，缺省并发上限 4（可配）；每会话 lease 由 resumeRun 自取（现成）。
+- 失败收口：resumeRun 抛错（run_not_resumable/empty checkpoint/lease 冲突）⇒ 不 crash 启动流程，降级为卡片路径 + 如实报错入卡（「自动续跑失败：<原因>，请手动继续或 --resume-run」）。fail-safe 贯穿。
+
+### 5.3 悬空 tool_use 的合成收口（crash/forced 兜底）
+
+graceful 路径不变式保证无悬空 tool_use；但两条兜底路径仍可能产生：
+(a) 旧 marker（intent 缺省）被新代码尝试续跑；(b) 进程在 quiesce 后、flush 前崩溃。
+
+规则：resume 加载 transcript 后，对每个无配对 tool_result 的 tool_use 合成一条 tool_result：
+
+```
+[tool interrupted by node restart — outcome unknown.
+ Verify side effects (files/processes/remote state) before retrying. Do not assume it completed.]
+```
+
+- 这是**标记**不是重放（main-4）：给 provider 一个合法的配对（Anthropic 系要求 tool_use 必有 tool_result），给模型一个诚实的「状态未知」信号，模型按卡指令核对后自行决定重试。
+- 合成事件经 journal 落盘（可审计、resume 可重建），打 `synthetic: true` 标，UI 如实显示「重启打断，结果未知」。
+- 绝不合成「成功」或「失败」——两者都是伪造事实。
+
+### 5.4 续跑 nudge 与早退 nudge 的协同（main-4）
+
+- 通道复用：续跑指令走 `message.injected` 通道（q-empty-response 同款）——用户可见、resume 可重建、非 live 窗口私有消息。恢复卡（EnvCard）是用户侧投影，nudge 是模型侧指令，**同源同文案**，避免「卡说一套、模型收到另一套」。
+- 文案骨架（i18n，遵循现恢复卡风格）：节点已换新代码重启；你的 run 在 <边界描述> 处干净暂停（iteration N，最后完成工具 X）；**先核对现状再继续**——已完成的工作不要重做；后台 job 清单见卡；若发现状态与 transcript 不符，以现实为准并说明。
+- 与空响应 nudge 的叠加限次：续跑后若模型空响应早退，既有 nudge 机制照常兜底（缺省 2 次）；两类 nudge 各自计数互不挤占，但共享「限次防死循环」原则。
+- `llm_cancelled` 边界的特化文案：明示「上一请求被取消、响应未落盘，本次为重发」，模型不会误以为丢了已完成的工作。
+
+### 5.5 续跑限次与崩溃循环防护
+
+- 每 run `resume_attempts` 上限缺省 3（可配）。达到上限 ⇒ 永久降级该 marker 为卡片路径（不再自动续），卡文案如实说明「已尝试 N 次自动续跑未成功」。
+- 崩溃循环场景：新代码有 bug → 续跑即崩 → marker 未 clear、attempts 已递增 → 下次启动再试 → 3 次后停手。旧代码回滚后 marker 仍可被卡片路径救起（§4.3）。
+- 启动期全局护栏：若上一进程在 resuming 阶段崩溃（restart marker 仍在 + 无任何 admission 记录），新进程可配置 `auto_resume=false` 启动一次（运维逃生门），只发卡片。
+
+### 5.6 待处理人类输入的并入
+
+- restart 会话的 pending 输入**不再独立重放成新 run**（避免与续跑 run 抢单 run 守卫）：输入留在 durable inbox，由续跑 run 经既有 inbox→run 消费路径在迭代边界拾取；`recoverPendingInputs` 对「已 auto-resume 的会话」跳过重放。
+- 时序保证：输入在围栏期排队（不丢），续跑 run 启动后消费——比重放更晚但更有序（模型先看到卡+续跑上下文，再看到新输入）。
+- 集成校验点（实现期核对，非本设计断言）：inbox 消费是否覆盖「run 进行中」的投递；若不覆盖，退化为「续跑 run 终态后再重放」，仍跳过并发重放。
 
 ## 6. 有界等待与超时中止上报协议（第4步填充）
 
