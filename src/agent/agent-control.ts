@@ -319,6 +319,11 @@ export function createAgentControl(
       // 这里只做形状透传 —— 适配器不许自己拼工具清单（第二份规格会腐烂）。
       return service.toolSurface(agentId);
     },
+    commonToolSurface(): AgentToolEntryLike[] {
+      // 通用成员级工具（inbox 等所有 agent 都有的）：节点口径清单与权限校验的统一
+      // 数据源。同样只透传 service → 执行内核的判据，适配器不自己拼清单。
+      return service.commonMemberTools();
+    },
     async dispatch(inputs: AgentDispatchLikeInput[]): Promise<AgentDispatchBatchResultLike> {
       const settledResults = await Promise.allSettled(
         inputs.map((input) =>
