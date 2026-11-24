@@ -35,7 +35,7 @@ function isUnavailable(error: unknown): boolean {
   return code === 'not_found' || code === 'method_not_allowed';
 }
 
-/** 表单值 → config.set value；非法返回 undefined（与 toConfigValue 同语义）。 */
+/** 表单值 → config.set value；非法返回 undefined（布尔/整数/枚举/非空字符串校验）。 */
 export function toSettingConfigValue(
   def: SettingDef,
   raw: string,
