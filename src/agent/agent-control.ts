@@ -178,6 +178,7 @@ export function createAgentControl(
           ...(input.kind !== undefined ? { kind: input.kind } : {}),
           ...(input.team_id !== undefined ? { teamId: input.team_id } : {}),
           ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.title !== undefined ? { title: input.title } : {}),
           ...(input.model !== undefined ? { model: input.model } : {}),
           ...(input.system_prompt !== undefined ? { systemPrompt: input.system_prompt } : {}),
           ...(input.workspace !== undefined ? { workspace: input.workspace } : {}),
