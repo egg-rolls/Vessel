@@ -135,10 +135,10 @@
     {
       "id": "q-fed-simple",
       "title": "节点互联简化(自动配对握手+自动写配置热应用+回环自动发现)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-fed-simple",
       "branch": "feat/q-fed-simple",
-      "progress": "派单：免手动peers/token env/重启；federation join握手验证→自动写配置热应用+token经hub自动交换+回环auto-join；复用federation-hub基础"
+      "progress": "merge入redblue-dev(待金丝雀验收晋升main)；federation join握手(一次性码/回环免码)→token存SecretStore(DPAPI/keychain+AES-GCM)→自动写两侧peer热应用零重启零env_file；discover读hub registry回环发现；失败明确分流；token绝不进配置/日志；build绿"
     },
     {
       "id": "g1-proxy-node",
