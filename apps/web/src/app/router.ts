@@ -33,7 +33,12 @@ export type Route =
   | { domain: 'capabilities' }
   | { domain: 'visual' }
   | { domain: 'designLab' }
-  | { domain: 'settings' };
+  /**
+   * 设置弹窗（VSCode 式，vscode-settings-design §3.8）：路由 = 可分享状态。
+   * ShellOverlays 消费本路由打开 SettingsDialog；关闭 replace 回 chat。
+   * focusKey = 设置项 id 深链定位；query = 搜索词；category = 分类定位。
+   */
+  | { domain: 'settings'; focusKey?: string; query?: string; category?: string };
 
 export type Domain = Route['domain'];
 
@@ -194,8 +199,17 @@ export function parseRoute(hash: string): Route {
       const tab = segments[1] ?? query.get('tab');
       if (tab === 'connection') return { domain: 'gateway' };
       if (tab === 'capabilities') return { domain: 'capabilities' };
+      // S1 双轨：appearance|display 别名仍指旧 visual 整页；S2 起指弹窗视觉分类。
       if (tab === 'appearance' || tab === 'display') return { domain: 'visual' };
-      return { domain: 'settings' };
+      const focusKey = queryText(query, 'focus');
+      const search = queryText(query, 'q');
+      const category = queryText(query, 'category');
+      return {
+        domain: 'settings',
+        ...(focusKey ? { focusKey } : {}),
+        ...(search ? { query: search } : {}),
+        ...(category ? { category } : {}),
+      };
     }
     default:
       return { ...DEFAULT_ROUTE };
@@ -275,8 +289,14 @@ export function formatRoute(route: Route): string {
       return '#/visual';
     case 'designLab':
       return '#/designLab';
-    case 'settings':
-      return '#/settings';
+    case 'settings': {
+      const query = new URLSearchParams();
+      if (route.focusKey) query.set('focus', route.focusKey);
+      if (route.query) query.set('q', route.query);
+      if (route.category) query.set('category', route.category);
+      const suffix = query.toString();
+      return suffix ? `#/settings?${suffix}` : '#/settings';
+    }
   }
 }
 

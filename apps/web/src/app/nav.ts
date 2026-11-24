@@ -44,7 +44,9 @@ export const NAV_GROUPS: readonly {
   { id: 'runs', domains: ['runs'] },
   { id: 'integrations', domains: ['capabilities', 'tools', 'mcp', 'channels'] },
   { id: 'core', domains: ['hub', 'gateway', 'pluginHost'] },
-  { id: 'settings', domains: ['settings', 'visual', 'designLab'] },
+  // 裁定③④⑤：settings 分组三个导航点全部移除——设置入口 = 右上角齿轮 / Ctrl+, /
+  // AccountMenu / 命令面板 / 移动端 More；visual/designLab 由路由别名进弹窗（S2）。
+  // DOMAINS 保留 id 供路由别名与图标复用。
 ];
 
 /** 主导航项的默认落点（不改路由；供 NavModel / 命令面板 / 移动端共用）。 */

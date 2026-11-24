@@ -24,11 +24,11 @@ import type { PrimaryDomain } from './nav';
 import { routeBreadcrumb } from './nav';
 import { readNavPreference, writeNavPreference } from './nav-preference';
 import { buildPaletteItems } from './palette-items';
-import { formatRoute } from './router';
+import { DEFAULT_ROUTE, formatRoute, type Route } from './router';
 import { ShellOverlays } from './ShellOverlays';
 import { ShellRouteView } from './ShellRouteView';
 import { shellNoticeItems } from './shellNoticeItems';
-import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
+import { isPaletteShortcut, isSettingsShortcut, isSlashPaletteShortcut } from './shortcuts';
 import { useDrawerA11y } from './useDrawerA11y';
 import { useHashRoute } from './useHashRoute';
 import { probeHubNavStatus } from './useNavStatus';
@@ -39,7 +39,11 @@ import { useViewportWidth } from './useViewportWidth';
 
 export function AppShell() {
   const locale = useLocale();
-  const { route, navigate } = useHashRoute();
+  const { route, navigate, replace } = useHashRoute();
+  // 设置弹窗是路由驱动浮层：背景保留上一个页面（chat 不重挂载、不丢滚动）。
+  const backgroundRoute = useRef<Route>(DEFAULT_ROUTE);
+  if (route.domain !== 'settings') backgroundRoute.current = route;
+  const viewRoute = route.domain === 'settings' ? backgroundRoute.current : route;
   // 路由级订阅：Chat 会话页只回放本会话，Team / Runs 只收失效信号（契约 §4.1）。
   useRouteSubscription(route);
   const toast = useToast();
@@ -84,7 +88,7 @@ export function AppShell() {
   const lastEventVersion = useRef(-1);
 
   // 当前会话的权限/提问在 ChatView 的 Composer 槽位处理；其他会话只保留顶部提示条。
-  const modalOpen = Boolean(pendingAction || helpOpen);
+  const modalOpen = Boolean(pendingAction || helpOpen || route.domain === 'settings');
   // 归属解析要 roster（历史脏数据的上溯兑底）：外壳拿一次，顶部条 / 待批页共用同一份
   // store（`useAgentStore`），不为这条提示多开一路 RPC。
   const rosterState = useAgentStore((state) => state.roster);
@@ -310,6 +314,13 @@ export function AppShell() {
       firstRoute.current = false;
       return;
     }
+    // 设置弹窗打开：焦点归弹窗（useModalA11y），不抢焦点/不滚背景。
+    if (route.domain === 'settings') {
+      setAnnouncement(t('nav.opened', { path: routeBreadcrumb(route) }));
+      setNavDrawerOpen(false);
+      setChatSessionsOpen(false);
+      return;
+    }
     window.scrollTo(0, 0);
     mainRef.current?.scrollTo?.(0, 0);
     mainRef.current?.focus();
@@ -347,6 +358,13 @@ export function AppShell() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // Ctrl+, 开/关设置弹窗（优先于 modalOpen 守卫：弹窗打开时也要能关）。
+      if (isSettingsShortcut(event)) {
+        event.preventDefault();
+        if (route.domain === 'settings') replace({ domain: 'chat' });
+        else navigate({ domain: 'settings' });
+        return;
+      }
       if (modalOpen) return;
       if (isPaletteShortcut(event)) {
         event.preventDefault();
@@ -362,7 +380,7 @@ export function AppShell() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [modalOpen]);
+  }, [modalOpen, route.domain, navigate, replace]);
 
   const openHelp = useCallback(() => setHelpOpen(true), []);
 
@@ -465,7 +483,7 @@ export function AppShell() {
             inert={navMode === 'drawer' && navDrawerOpen ? true : undefined}
           >
             <ShellRouteView
-              route={route}
+              route={viewRoute}
               navigate={navigate}
               chatSessionsOpen={chatSessionsOpen}
               onCloseSessions={closeSessions}
@@ -505,6 +523,13 @@ export function AppShell() {
             setPendingAction(null);
             action?.run();
           }}
+          settingsRoute={
+            route.domain === 'settings'
+              ? { focusKey: route.focusKey, query: route.query, category: route.category }
+              : null
+          }
+          onCloseSettings={() => replace({ domain: 'chat' })}
+          onNavigate={navigate}
         />
       </div>
     </PaletteEntitiesProvider>
