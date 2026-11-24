@@ -13,7 +13,7 @@
 
 import { createHash } from 'node:crypto';
 import type { Dirent, Stats } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { lstat, readdir, readFile, stat } from 'node:fs/promises';
 import * as path from 'node:path';
 import { canonicalPath, evaluatePath, type PathBoundary } from '@vessel-agent/basic-tools';
 import { capDescription, deriveDescription, parseFrontmatter } from './frontmatter.js';
@@ -204,11 +204,12 @@ export async function scanSkillRoot(options: ScanRootOptions): Promise<ScanRootR
       if (item.name.startsWith('.')) continue;
       const full = path.join(dir, item.name);
       if (item.isDirectory()) {
-        // dir 形态：目录里有 SKILL.md 即技能目录，附件只列清单，不再下钻找技能
+        // dir 形态：目录里有 SKILL.md 即技能目录，附件只列清单，不再下钻找技能。
+        // lstat 不跟随 symlink：SKILL.md 本身是 symlink 时不算技能（fail-closed）。
         let skillFile: string | undefined;
         try {
           const candidate = path.join(full, 'SKILL.md');
-          const info = await stat(candidate);
+          const info = await lstat(candidate);
           if (info.isFile()) skillFile = candidate;
         } catch {
           // 无 SKILL.md：普通子目录，继续下钻

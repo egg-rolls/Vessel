@@ -190,12 +190,17 @@ export function capContent(content: string, cap: number): { text: string; trunca
 /**
  * load：信任门 → 内容进语言空间 + 记加载态（设计 §6.3/§6.4/§9.5）。
  * 门判定与 checkPermission 同一口径（重读重算）；ask 已由管道在 handler 前
- * 取得用户批准——unknown/stale 在此钉锁（TOFU），不自动更新 stale 锁之外的任何态。
+ * 取得用户批准——unknown/stale 在此钉锁（TOFU）。
+ *
+ * TOCTOU 闸：checkPermission 期把 {id, sha256, decision} 按 tool_call_id 记入
+ * gateChecks；handler 重读哈希与判定期不符 → 拒绝重试（掉包不加载）；判定期
+ * allow 而现在 unknown/stale（信任记录中途变了）→ 同样 fail-closed 拒绝重试。
  */
 async function handleLoad(
   service: SkillsService,
   args: SkillsArgs,
   ctx: ToolContext,
+  gateChecks: Map<string, GateCheck>,
 ): Promise<string> {
   const id = args.id ?? '';
   const entry = service.entryById(id);
@@ -208,6 +213,12 @@ async function handleLoad(
       return `skills: "${id}" is oversize (${fresh.bytes} bytes > ${MAX_SKILL_FILE_BYTES} cap); list-only, cannot load`;
     }
     return `skills: cannot read "${id}": ${fresh.message}`;
+  }
+  const checkKey = ctx.tool_call_id ?? '';
+  const checked = checkKey !== '' ? gateChecks.get(checkKey) : undefined;
+  if (checkKey !== '') gateChecks.delete(checkKey);
+  if (checked !== undefined && checked.id === id && checked.sha256 !== fresh.sha256) {
+    return `skills: content of "${id}" changed since the permission check; load refused (retry load)`;
   }
   const current: SkillEntry = {
     ...entry,
@@ -223,7 +234,12 @@ async function handleLoad(
       : `skills: load denied for "${id}" by the trust gate (trust_default=deny; content is ${state})`;
   }
   if (state === 'unknown' || state === 'stale') {
-    // TOFU：用户批准后钉住当前哈希；已有记录保留其 origin（marketplace 不自动提升）
+    // TOFU 钉锁需要用户批准：判定期 ask（管道已取批准）或无判定记录（直调路径）。
+    const approved = checked === undefined || checked.id !== id || checked.decision === 'ask';
+    if (!approved) {
+      return `skills: trust state of "${id}" changed since the permission check; load refused (retry load)`;
+    }
+    // 用户批准后钉住当前哈希；已有记录保留其 origin（marketplace 不自动提升）
     const previous = service.getTrustStore().skills[id];
     const origin = previous?.origin ?? originOfSource(entry.source);
     await service.putTrustRecord(id, pinTrustRecord(fresh.sha256, origin));
@@ -264,8 +280,17 @@ async function handleLoad(
   return lines.join('\n');
 }
 
+/** checkPermission 期的判定快照（TOCTOU 闸：handler 比对哈希与批准口径） */
+interface GateCheck {
+  id: string;
+  sha256: string;
+  decision: 'allow' | 'ask' | 'deny';
+}
+
 /** 构造 `skills` 工具（service 在安装期钉死） */
 export function createSkillsTool(service: SkillsService): ToolDefinition {
+  /** tool_call_id → 判定期快照；一次性消费，超 512 条整体清空（防泄漏） */
+  const gateChecks = new Map<string, GateCheck>();
   return {
     name: 'skills',
     description: SKILLS_TOOL_DESCRIPTION,
@@ -292,7 +317,7 @@ export function createSkillsTool(service: SkillsService): ToolDefinition {
     display: { label: 'Skills', kind: 'search' },
     // 信任门（§6.4）：list/search 只读元数据恒 allow；load 按信任态判定。
     // 无副作用：不钉锁、不写 loads——TOFU 在用户批准后的 handler 内。
-    checkPermission: async (input) => {
+    checkPermission: async (input, ctx) => {
       if (!isRecord(input)) return 'allow';
       const action = input.action ?? 'list';
       if (action !== 'load') return 'allow';
@@ -304,7 +329,13 @@ export function createSkillsTool(service: SkillsService): ToolDefinition {
       const fresh = await service.readSkillFile(entry);
       if (!fresh.ok) return 'allow'; // handler 报 oversize / unreadable
       const state = trustStateOf({ ...entry, sha256: fresh.sha256 }, service.getTrustStore());
-      return loadGateDecision(state, service.config.trustDefault);
+      const decision = loadGateDecision(state, service.config.trustDefault);
+      const key = ctx.tool_call_id ?? '';
+      if (key !== '') {
+        if (gateChecks.size > 512) gateChecks.clear();
+        gateChecks.set(key, { id, sha256: fresh.sha256, decision });
+      }
+      return decision;
     },
     handler: async (args, ctx) => {
       await service.ready();
@@ -316,7 +347,7 @@ export function createSkillsTool(service: SkillsService): ToolDefinition {
         case 'search':
           return handleSearch(service, parsed);
         case 'load':
-          return handleLoad(service, parsed, ctx);
+          return handleLoad(service, parsed, ctx, gateChecks);
       }
     },
   };
