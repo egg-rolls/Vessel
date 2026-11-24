@@ -10,6 +10,13 @@
  * - 声明式 `guardrails:` / `hooks:` 条目按插件名追加（本身即显式 opt-in）；
  * - 显式 `plugins` 项的 `enabled` 是最终裁决：`false` 不能被声明式条目重新启用。
  *
+ * ⚠ 完整 opt-in 列表陷阱（金丝雀 issue-0）：`plugins:` 一旦出现就是**完整**启用清单，不是
+ * 「在默认集上追加/覆盖」。只想改某个内置插件的配置（如 web-tools 的 always_register）而写
+ * `plugins: [{name: web-tools, ...}]`，会把其余内置插件（basic-tools 的 bash/read/edit/write 等）
+ * 全部排除——热应用会据此从活体节点剥离这些工具。要保留内置工具，须把它们一并列入 `plugins:`，
+ * 或干脆不写 `plugins:`（走默认集）、仅用该插件自身的配置键。引擎注册表与成员工具面已对齐到
+ * 同一轮边界（见 cli.ts tools applier 的 retain 同步），剥离不再产生「被广告却执行不了」的窗口。
+ *
  * 默认集里的外部插件（project / user / node_modules）会在启动时告警一次：
  * 它们以完整进程权限运行，不可信仓库应显式 opt-out。
  */

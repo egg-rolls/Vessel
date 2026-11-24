@@ -1176,6 +1176,10 @@ async function runWithConfig(result: BootstrapResult) {
           // 批次 3：recall / pii_reveal 是插件管辖工具（热应用可能换 def）；ask 入口注册
           // 不被 applier 触碰，sync 幂等 no-op。agent / inbox 不在插件管辖域，无需在此重接。
           syncCallbackToolsEngineWiring(result.toolsEngine.client, ctx.pluginHost);
+          // issue-0：push 前把 retain 设为 running 成员仍广告的工具名并集——引擎注册表立即
+          // 生效，而 running 成员面延迟到轮边界才刷新；窗口期内引擎须保持这些工具可执行，
+          // 否则模型被广告执行不了的工具（engine_tool_not_registered）。
+          syncEngineRetain();
           try {
             await result.toolsEngine.client.pushRegistry();
           } catch (error) {
@@ -1191,6 +1195,34 @@ async function runWithConfig(result: BootstrapResult) {
         return outcome.summaries;
       },
     };
+
+    // issue-0：引擎注册表 retain 同步。running 成员的工具面只在轮边界刷新（ADR-054），
+    // 窗口期内引擎须保持「活体成员面仍广告的工具」可执行（超集语义）。热应用 push 前设
+    // retain（见 tools applier）；每具 body 在轮边界应用 pending 刷新后回调这里重算 retain，
+    // 收缩时 push 冲刷已释放工具的移除——引擎注册表与成员工具面在同一轮边界收敛。
+    let engineRetain = new Set<string>();
+    const syncEngineRetain = (): boolean => {
+      const engine = result.toolsEngine;
+      if (engine === undefined) return false;
+      const retain = result.agent?.service.runningToolNames?.() ?? new Set<string>();
+      if (
+        retain.size === engineRetain.size &&
+        [...retain].every((name) => engineRetain.has(name))
+      ) {
+        return false;
+      }
+      engineRetain = retain;
+      engine.client.setRegistryRetain(retain);
+      return true;
+    };
+    result.agent?.service.setToolsRefreshListener?.(() => {
+      if (!syncEngineRetain()) return;
+      void result.toolsEngine?.client.pushRegistry().catch((error) => {
+        logger.warn('tools-engine registry push failed after member tools refresh', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
 
     // 日志中枢热应用（observability.log）：由 config-watch 的 scopes 列表触发，
     // 不新增 RPC scope（ADR-075：config 类改动走 config 通路）。只有 log 字段变化

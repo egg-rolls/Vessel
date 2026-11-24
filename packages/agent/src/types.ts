@@ -419,6 +419,21 @@ export interface MemberExecutionPort {
    */
   refreshTools?(tools?: readonly ToolDefinition[]): Promise<number> | number;
   /**
+   * issue-0（additive，可选）：running body 当前广告的工具名并集（实读各 body 自己的工具宿主）。
+   *
+   * 工具热应用把引擎注册表立即推到新集，而 running 成员的工具面延迟到轮边界才刷新（ADR-054）。
+   * 装配层用这份并集设引擎 retain，使窗口期内引擎仍能执行活体成员面仍广告的工具，消除
+   * 「模型被广告执行不了的工具」的不同步窗口。未实现时调用方按空集处理。
+   */
+  runningToolNames?(): Set<string>;
+  /**
+   * issue-0（additive，可选）：挂上「轮边界应用了 pending 工具刷新」的回调（传 undefined 关闭）。
+   *
+   * `finishRun` 在轮边界把 pending 工具面应用到 body 后触发；装配层据此重算引擎 retain 并
+   * 冲刷已释放工具的移除，使引擎注册表与成员工具面在同一轮边界收敛。缺省 = 不回调。
+   */
+  setToolsRefreshListener?(listener: (() => void) | undefined): void;
+  /**
    * 0.28 D6（additive，可选）：角色转换后把上下文策略热应用到该成员的活体。
    *
    * `member.role` 是**转换后**的角色；实现的唯一义务是让活体「下一次 run」按它生效
@@ -1837,6 +1852,16 @@ export interface AgentService {
    * （或 port 未实现）。
    */
   refreshTools?(tools?: readonly ToolDefinition[]): Promise<number>;
+  /**
+   * issue-0（additive，可选）：running 成员当前广告的工具名并集（引擎 retain 计算用）。
+   * port 未实现时返回空集。详见 `MemberExecutionPort.runningToolNames`。
+   */
+  runningToolNames?(): Set<string>;
+  /**
+   * issue-0（additive，可选）：挂上轮边界工具刷新回调（引擎 retain 冲刷用）；传 undefined 关闭。
+   * port 未实现时 no-op。详见 `MemberExecutionPort.setToolsRefreshListener`。
+   */
+  setToolsRefreshListener?(listener: (() => void) | undefined): void;
   /** 订阅成员事件；返回取消函数 */
   subscribe(listener: AgentEventListener): () => void;
 }

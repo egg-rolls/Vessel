@@ -979,6 +979,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
   private readonly pendingNotices = new Map<string, PendingNotice[]>();
   /** 0.32：由装配层挂上的收件箱；spawn 时据此注册 notice hook 与 `inbox` 工具 */
   private inbox?: AgentInboxPort;
+  /** issue-0：轮边界应用 pending 工具刷新后的回调（装配层冲刷引擎 retain）；可变，晚绑定 */
+  private toolsRefreshListener?: () => void;
 
   constructor(options: MemberExecutionHostOptions) {
     this.model = options.model;
@@ -1566,6 +1568,27 @@ export class MemberExecutionHost implements MemberExecutionPort {
   }
 
   /**
+   * issue-0：running body 当前广告的工具名并集（实读各 body 自己的工具宿主）。
+   *
+   * 工具热应用把引擎注册表立即推到新集，而 running 成员的工具面延迟到轮边界才刷新。
+   * 装配层用这份并集设引擎 retain，使窗口期内引擎仍能执行活体成员面仍广告的工具。
+   * idle body 的面已被 refreshTools 即时刷新到宿主新集，无需 retain，故只收 running。
+   */
+  runningToolNames(): Set<string> {
+    const names = new Set<string>();
+    for (const entry of this.entries.values()) {
+      if (!entry.running) continue;
+      for (const tool of entry.pluginHost.listTools()) names.add(tool.name);
+    }
+    return names;
+  }
+
+  /** issue-0：挂上轮边界工具刷新回调（传 undefined 关闭）；finishRun 应用 pending 刷新后触发。 */
+  setToolsRefreshListener(listener: (() => void) | undefined): void {
+    this.toolsRefreshListener = listener;
+  }
+
+  /**
    * 0.51：该成员这一份工具清单（canonical `tools.list{agent_id}` 的唯一数据源）。
    *
    * 两条路径，都是真实注册路径的结果：
@@ -1598,6 +1621,9 @@ export class MemberExecutionHost implements MemberExecutionPort {
     // body 已被 dispose（entries 里已无此条目）时不再触碰其宿主。
     if (this.entries.get(member.session_id) !== entry) return;
     this.applyToolsToEntry(entry, source);
+    // issue-0：成员面已在轮边界刷新 → 通知装配层重算引擎 retain、冲刷已释放工具的移除，
+    // 使引擎注册表与成员工具面在同一轮边界收敛（消除热应用不同步窗口）。
+    this.toolsRefreshListener?.();
   }
 
   /**

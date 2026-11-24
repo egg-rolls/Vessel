@@ -54,8 +54,14 @@ export interface EngineClient {
   wireTool(def: ToolDefinition, route: ToolRoute): void;
   /** 恢复原 handler + 账本 remove（C3 卸载对称）。 */
   unwireTool(name: string): void;
-  /** 推账本增量（upsert = 全账本；remove = 上次推过但已不在账本的名字）。 */
+  /** 推账本增量（upsert = 全账本；remove = 上次推过但已不在账本的名字 − retain）。 */
   pushRegistry(): Promise<void>;
+  /**
+   * issue-0：设置注册表 retain 集（活体成员面仍广告的工具名）。所有 pushRegistry 路径
+   * （cli 热应用 / bootstrap 重连 / mcp）自动 honoring：retain 内的名字不被 remove，
+   * 待轮边界成员面刷新、retain 收缩后的 push 才冲刷移除。缺省空集 = 现态（零回归）。
+   */
+  setRegistryRetain(names: Iterable<string>): void;
   /** child.ts onToolCallback hook 落点：关联-only fail-closed 执行原 handler。 */
   handleToolCallback(params: unknown): Promise<unknown>;
   /** child.ts onEngineNotification hook 落点（impl.swapped / health）。 */
@@ -84,6 +90,9 @@ export function createEngineClient(options: EngineClientOptions): EngineClient {
     },
     pushRegistry() {
       return ledger.push();
+    },
+    setRegistryRetain(names) {
+      ledger.setRetain(names);
     },
     handleToolCallback(params) {
       return pending.handleCallback(params);
