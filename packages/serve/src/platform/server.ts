@@ -24,9 +24,9 @@ import {
   resolveRequestEdge,
 } from '../gateway/auth.js';
 import { serveStatic } from '../gateway/static.js';
-import { createPlatformMetrics } from './metrics.js';
 import { platformTokenMatches, platformUnauthorizedMessage, resolvePlatformAuth } from './auth.js';
 import { platformListenGuard } from './listen-guard.js';
+import { createPlatformMetrics } from './metrics.js';
 import { PlatformProxy } from './proxy.js';
 import { PROXY_BASE_PATH, parseProxyRoute } from './proxy-config.js';
 import type { ProxyWsClient } from './proxy-ws.js';
