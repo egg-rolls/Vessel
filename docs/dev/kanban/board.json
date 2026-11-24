@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "金丝雀已同步main bf51663a(0.56.1含VSCode设置+全修复)+重启pid6904，两线代码一致互为兜底；canary-verifier首轮4/4真通过；待复验issue-0/1+VSCode设置；生产侧已重启生效"
+      "progress": "金丝雀同步main c5d6f715(会话壳+超时去重)+rebuild+重启pid147636；canary-test(3bcd8950)派验超时去重+会话壳；q-ui-style待合后再同步；restart drain超时需手动start(q-restart设计待实施)"
     },
     {
       "id": "q-node-target",
