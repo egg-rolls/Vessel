@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "401根因=PII guardrail掩码config key(sk-7c77假值)，文件到文件拷真key(sk-JoQ len25)修复+重启；canary-verifier(8c007d99)跑真端到端验收；federation canary侧env_file通；生产侧待用户重启+晋升拍板"
+      "progress": "金丝雀已同步main bf51663a(0.56.1含VSCode设置+全修复)+重启pid6904，两线代码一致互为兜底；canary-verifier首轮4/4真通过；待复验issue-0/1+VSCode设置；生产侧已重启生效"
     },
     {
       "id": "q-node-target",
@@ -35,6 +35,14 @@
       "owner": "q-settings-impl",
       "branch": "feat/q-settings-impl",
       "progress": "merge 79f818e4，S1-S6全落地24提交(自雇q-settings-finish分担S5/S6树状拆分)；插件contributes.settings自动发现+plugins.config.set写+showInternalEvents缺省false契约；已快进main备重启；待用户行为验收"
+    },
+    {
+      "id": "q-session-fix",
+      "title": "修复WebUI默认main会话加载失败(owner哨兵session_id=main解析)",
+      "column": "进行中",
+      "owner": "q-session-fix",
+      "branch": "fix/q-session-fix",
+      "progress": "派单：重启后WebUI默认main会话报会话不存在；owner成员session_id=main哨兵未解析到真实会话afb8de6e，body_history停epoch11"
     },
     {
       "id": "g1-proxy-node",
