@@ -35,6 +35,7 @@ import { resolveNodeId } from '../../node/node-identity';
 import type { FederationCommand } from '../args';
 import { ui } from '../output';
 import type { CommandResult } from './agent/agent-command';
+import { discoverCommand, joinCommand, pairCodeCommand } from './federation-pair';
 import { runFederationPeerCommand } from './federation-peer';
 
 /** v1 固定 tenant（DECISION-036 §2） */
@@ -517,6 +518,10 @@ export async function runFederationCommand(
   if (command.kind === 'peer-add' || command.kind === 'peer-remove') {
     return runFederationPeerCommand(command, options);
   }
+  // q-fed-simple：自动配对（pair-code / join / discover）。
+  if (command.kind === 'pair-code') return pairCodeCommand(command, options);
+  if (command.kind === 'join') return joinCommand(command, options);
+  if (command.kind === 'discover') return discoverCommand(command, options);
   if (command.kind === 'team-info') return teamInfoCommand(command, options);
   return postCommand(command, options);
 }

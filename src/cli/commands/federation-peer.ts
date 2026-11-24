@@ -22,6 +22,7 @@ import {
   withConfigLock,
   writeUserConfigRoot,
 } from '../../../packages/config/src/index';
+import { deleteFederationPeerSecret } from '../../federation/federation-secrets';
 import { isProcessAlive, readGatewayPidRecord } from '../../gateway/pid';
 import { reloadGateway } from '../../gateway/reload';
 import { resolveGatewayToken } from '../../gateway/transport-factory';
@@ -62,7 +63,7 @@ function failure(code: string, detail: string, exitCode = 2): CommandResult {
 }
 
 /** URL 规则与 validator.absoluteBaseUrlError 逐字同口径（loopback 允许 http）。 */
-function peerUrlError(value: string): string | null {
+export function peerUrlError(value: string): string | null {
   let url: URL;
   try {
     url = new URL(value);
@@ -128,7 +129,7 @@ function withPeerEntries(
   return { ...root, federation: { ...federation, peers: entries } };
 }
 
-interface ReloadOutcome {
+export interface ReloadOutcome {
   attempted: boolean;
   ok: boolean;
   detail: string;
@@ -138,7 +139,9 @@ interface ReloadOutcome {
  * best-effort 触发运行中 node gateway 的 `gateway.reload`（config scope）。
  * 写盘已成功：这里失败只降级为提示（文件监听 / 下次启动兜底），绝不回失败码。
  */
-async function tryReloadGateway(options: FederationPeerCommandOptions): Promise<ReloadOutcome> {
+export async function tryReloadGateway(
+  options: FederationPeerCommandOptions,
+): Promise<ReloadOutcome> {
   const record = await readGatewayPidRecord(options.dataDir);
   if (record === null || !isProcessAlive(record.pid)) {
     return { attempted: false, ok: false, detail: '' };
@@ -161,7 +164,7 @@ async function tryReloadGateway(options: FederationPeerCommandOptions): Promise<
 }
 
 /** reload 结果 → 输出行（成功 / 未运行 / 失败三种提示）。 */
-function reloadLines(reload: ReloadOutcome): string[] {
+export function reloadLines(reload: ReloadOutcome): string[] {
   if (!reload.attempted) return [ui.dim(t('federation.peer.reloadSkipped'))];
   if (reload.ok) return [ui.ok(t('federation.peer.reloaded', { scopes: reload.detail }))];
   return [ui.warn(t('federation.peer.reloadFailed', { detail: reload.detail }))];
@@ -324,6 +327,7 @@ async function peerRemoveCommand(
   const target = options.userConfigPath ?? getUserConfigPath();
   const isLabel = command.target.includes(':');
   let removedLabel = '';
+  let secretCleanup: { nodeId: string; teamId: string } | undefined;
   try {
     await withConfigLock(target, async () => {
       const root = await readUserConfigRoot(target);
@@ -355,6 +359,15 @@ async function peerRemoveCommand(
       const removed = matches[0];
       if (removed === undefined) return;
       removedLabel = entryLabel(removed);
+      // q-fed-simple：token_secret peer 删除后清理 SecretStore（best-effort）。
+      const removedIdentity = entryIdentity(removed);
+      if (
+        (removed.token_secret ?? removed.tokenSecret) === true &&
+        removedIdentity.nodeId !== undefined &&
+        removedIdentity.teamId !== undefined
+      ) {
+        secretCleanup = { nodeId: removedIdentity.nodeId, teamId: removedIdentity.teamId };
+      }
       const next = entries.filter((entry) => entry !== removed);
       await writeUserConfigRoot(target, withPeerEntries(root, next));
     });
@@ -370,6 +383,20 @@ async function peerRemoveCommand(
       }),
       1,
     );
+  }
+
+  if (secretCleanup !== undefined) {
+    try {
+      await deleteFederationPeerSecret(
+        {
+          dataDir: options.dataDir,
+          allowFileSecrets: options.config.federation?.allowFileSecrets,
+        },
+        secretCleanup,
+      );
+    } catch {
+      // best-effort：孤儿 secret 不影响行为（peer 已删，入站不再匹配）；下次配对覆盖写。
+    }
   }
 
   const reload = await tryReloadGateway(options);
