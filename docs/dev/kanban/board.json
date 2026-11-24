@@ -87,10 +87,10 @@
     {
       "id": "q-scroll-fix",
       "title": "修复会话定时闪现+滚动跳位(冗余轮询重渲染/SSE已推送)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-scroll-fix",
       "branch": "fix/q-scroll-fix",
-      "progress": "派单：会话固定周期闪现滑块跳离底部；查ChatView周期轮询/React key re-mount/滚动锚定，去冗余轮询或保持滚动锚定"
+      "progress": "merge入main；三根因:R1终态effect重复全量刷新(加seq水位每条一次)R2 mergeTailPage新数组引用作废memo(逐条全等复用引用)R3 followKey贴底失明(追加items.length+末项key)；store轮询各有兜底职责未删；build绿待用户验收不再闪现"
     },
     {
       "id": "g1-proxy-node",
