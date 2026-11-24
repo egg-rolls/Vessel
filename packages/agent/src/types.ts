@@ -735,6 +735,13 @@ export interface CreateMemberInput {
    */
   role?: AgentRole;
   name?: string;
+  /**
+   * q-session-naming：首会话的显式标题（与 rotate 的 title 同一形状：trim 后
+   * 1..MAX_SESSION_TITLE_LENGTH 码点）。写入 title_source: 'manual'，派生截断与
+   * AI 命名都不再覆盖。缺省：agent 派生的成员（spawnedBy 有值）用成员 name 作
+   * 初始标题；bootstrap 创建（如 main）保持既有派生 + AI 命名链路。
+   */
+  title?: string;
   model?: string;
   systemPrompt?: string;
   visibility?: MemberVisibility;
@@ -1122,8 +1129,9 @@ export interface SessionCreateInput {
   startup_prompt?: string;
   /**
    * Additive: human title for the new session (rotate naming). Written to the new
-   * shell as title_source: 'manual'; omitted means the session keeps the derived
-   * title until automatic naming fills one in.
+   * shell as title_source: 'manual'. Omitted: the built-in agent tool's rotate
+   * defaults to the member name (q-session-naming); RPC sessions.create without
+   * a title keeps the derived title until automatic naming fills one in.
    */
   title?: string;
   /** conversation（缺省）/ both（同时做文件回滚；agent 层只透传） */
@@ -1145,7 +1153,10 @@ export interface SessionCreateInternalOptions {
 export interface SessionCreateResult {
   agent_id: string;
   session_id: string;
-  /** Additive: echoed back only when a title was requested (title_source: manual). */
+  /**
+   * Additive: echoed back when a title was requested or defaulted
+   * (title_source: manual).
+   */
   title?: string;
   /** 无来源时缺省 */
   source_session_id?: string;
