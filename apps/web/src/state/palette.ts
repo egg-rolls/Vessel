@@ -1,10 +1,11 @@
 /** 命令面板的纯数据模型：过滤、排序、分组与索引移动（可单测）。 */
 import { t } from '../i18n';
 
-export type PaletteGroup = 'navigation' | 'entity' | 'action' | 'help';
+export type PaletteGroup = 'navigation' | 'settings' | 'entity' | 'action' | 'help';
 
 export const PALETTE_GROUP_ORDER: readonly PaletteGroup[] = [
   'navigation',
+  'settings',
   'entity',
   'action',
   'help',
@@ -12,6 +13,7 @@ export const PALETTE_GROUP_ORDER: readonly PaletteGroup[] = [
 
 export const PALETTE_GROUP_LABEL_KEYS: Record<PaletteGroup, string> = {
   navigation: 'palette.group.navigation',
+  settings: 'palette.group.settings',
   entity: 'palette.group.entity',
   action: 'palette.group.action',
   help: 'palette.group.help',
@@ -34,6 +36,8 @@ export interface PaletteItem {
   /** 破坏性/不可逆动作：必须二次确认，不允许在面板内直接执行。 */
   danger?: boolean;
   confirm?: PaletteConfirm;
+  /** S6 设置键检索：只在有搜索词时出现，空查询列表不刷屏。 */
+  searchOnly?: boolean;
   run: () => void;
 }
 
@@ -78,6 +82,7 @@ export function filterPaletteItems(
 
   if (!parsed.needle) {
     return candidates
+      .filter((item) => item.searchOnly !== true)
       .map((item, index) => ({ item, index }))
       .sort((a, b) => {
         const groupDelta =

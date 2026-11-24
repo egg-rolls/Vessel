@@ -1189,6 +1189,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
 
   // Command palette / shell
   'palette.group.navigation': 'Navigation',
+  'palette.group.settings': 'Settings',
   'palette.group.entity': 'Entities',
   'palette.group.action': 'Actions',
   'palette.group.help': 'Help',
@@ -1210,6 +1211,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'palette.action.checkConnection': 'Check connection',
   'palette.action.reconnect': 'Reconnect',
   'palette.hint.action': 'Action',
+  'palette.hint.settings': 'Setting',
   'palette.hint.help': 'Help',
   'palette.hint.session': 'Session',
   'palette.hint.run': 'Run',

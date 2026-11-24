@@ -1133,6 +1133,7 @@ export const messages = {
 
   // 命令面板 / 壳层
   'palette.group.navigation': '导航',
+  'palette.group.settings': '设置',
   'palette.group.entity': '实体',
   'palette.group.action': '动作',
   'palette.group.help': '帮助',
@@ -1154,6 +1155,7 @@ export const messages = {
   'palette.action.checkConnection': '检查连接',
   'palette.action.reconnect': '重新连接',
   'palette.hint.action': '动作',
+  'palette.hint.settings': '设置项',
   'palette.hint.help': '帮助',
   'palette.hint.session': '会话',
   'palette.hint.run': '运行',

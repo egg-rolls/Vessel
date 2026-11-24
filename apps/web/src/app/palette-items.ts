@@ -2,6 +2,7 @@ import type { ToastApi } from '../components/ToastProvider';
 import type { ConnectionState } from '../gateway/client';
 import { t } from '../i18n';
 import type { PaletteItem } from '../state/palette';
+import { mergeSettings } from '../state/settings-registry';
 import { DOMAINS, domainLabel, primaryRoute } from './nav';
 import { requestRefresh } from './refresh';
 import type { Route } from './router';
@@ -32,6 +33,17 @@ export function buildPaletteItems({
       keywords: [domain.id, domainLabel(domain.id)],
       hint: t('nav.hintNavigation'),
       run: () => navigate(primaryRoute(domain.id)),
+    })),
+    // S6 设置键检索（vscode-settings-design §3.1）：注册表项命中 → 打开弹窗并聚焦。
+    // searchOnly：空查询不刷屏；插件设置键不在此列（弹窗内 @plugin:<id> 检索）。
+    ...mergeSettings().map((def) => ({
+      id: `setting-${def.id}`,
+      group: 'settings' as const,
+      label: def.titleKey ? t(def.titleKey) : (def.title ?? def.id),
+      keywords: [def.id, def.key, ...(def.keywords ?? [])],
+      hint: t('palette.hint.settings'),
+      searchOnly: true,
+      run: () => navigate({ domain: 'settings', focusKey: def.id }),
     })),
     {
       id: 'action-new-session',
