@@ -1,7 +1,7 @@
 ---
 title: Bun 段错误（win32）取证 runbook：gateway 崩了之后收集什么、先看哪一行
 kind: current
-triggers: [segfault, 段错误, panic, bun.report, gateway 崩溃, 崩溃, crash, runbook, 取证, Segmentation fault, 0xFFFFFFFFFFFFFFFF, 资源采样, gateway.resources, VESSEL_RESOURCE_SAMPLE_MS, proxy, passthrough, pump, crc32]
+triggers: [segfault, 段错误, panic, bun.report, gateway 崩溃, 崩溃, crash, runbook, 取证, Segmentation fault, 0xFFFFFFFFFFFFFFFF, 资源指标, gateway.resources, metrics, Prometheus, 指标分离, proxy, passthrough, pump, crc32]
 paths: [docs/operations/BUN-WIN32-SEGFAULT.md, packages/serve/src/platform/proxy.ts, packages/serve/src/platform/server.ts, packages/core/src/timeline/wal.ts]
 ---
 
@@ -35,13 +35,14 @@ stdout/stderr 不落盘，这段文字**只存在于那个终端滚动缓冲里*
    tail -n 30 "<dataDir>/logs/node-<名字>.log"
    tail -n 30 "<dataDir>/logs/gateway.log"
    ```
-3. **资源采样曲线**（0.58 起有）：`gateway.resources` 每 60 秒一行（§3）。
+3. **资源指标曲线**（0.58 起有；日志/指标分离后改走 `/metrics`，§3）：
    ```bash
-   grep -c "gateway.resources" "<dataDir>/logs/gateway.log"
-   grep "gateway.resources" "<dataDir>/logs/gateway.log" | tail -n 20
+   curl -s http://127.0.0.1:8642/metrics | grep -E 'resident_memory|ws_active|ws_pending|stream_mode'
    ```
-   看三件事：`rss_mb` 是不是**单向上升**（泄漏）还是窄带抖动（正常）；
-   `ws_active` / `ws_pending` 有没有堆积；`mode=` 是 `pump` 还是 `passthrough`。
+   看三件事：`vessel_process_resident_memory_bytes` 是不是**单向上升**（泄漏）还是窄带抖动
+   （正常）；`vessel_proxy_ws_active` / `vessel_proxy_ws_pending_bytes` 有没有堆积；
+   `vessel_proxy_http_stream_mode` 的 `mode=` 是 `pump` 还是 `passthrough`。
+   时序曲线由外部 Prometheus/Grafana scrape `/metrics` 留存（事件日志不再有周期资源行）。
 4. **崩之前 10 分钟在做什么**：`<dataDir>/data/events/<run_id>.jsonl` 的最后几条
    `tool.call.completed`（工具名 + 命令）就是「当时在干什么」。
 5. **pid 与时间**：`<dataDir>/platform-children.json`（子进程 pid + `started_at`）、
@@ -52,21 +53,35 @@ stdout/stderr 不落盘，这段文字**只存在于那个终端滚动缓冲里*
 `127.0.0.1` 的随机端口、数据只落系统临时目录，从不碰 8642/8644/真实数据 —— 将来要重新验证也
 得守同一条边界（探针本身已按宪法删除，结论见 §6）。
 
-## 3. 资源采样（0.58 新）
+## 3. 资源指标（0.58 新；日志/指标分离后走 `/metrics`）
 
-平台网关每 60 秒打一行（`VESSEL_RESOURCE_SAMPLE_MS` 改间隔，`=0` 关掉）：
+资源统计是**统计指标**不是**时间事件**：不再每 60s 往事件日志打 `gateway.resources`
+WRN 行（那只会刷噪音、淹没有用的时点事件与错误），改为登记进 Prometheus registry，
+由平台 `/metrics` 端点按 pull 模型暴露（scrape 时求值）。与 `/health` 同口径：回环
+匿名可读，远端 scrape 带平台 token（Bearer）。
+
+```bash
+curl -s http://127.0.0.1:8642/metrics
+```
 
 ```
-gateway.resources uptime_s=3600 rss_mb=184 heap_mb=42 http_requests=5697 http_failures=3
-http_inflight=4 passthrough=12 mode=passthrough ws_active=2 ws_pending=0
+# HELP vessel_process_resident_memory_bytes Platform gateway process resident set size in bytes.
+# TYPE vessel_process_resident_memory_bytes gauge
+vessel_process_resident_memory_bytes{role="platform"} 192937984
+# HELP vessel_proxy_http_stream_mode Active HTTP streaming implementation (value 1 for the current mode label).
+# TYPE vessel_proxy_http_stream_mode gauge
+vessel_proxy_http_stream_mode{role="platform",mode="passthrough"} 1
 ```
+
+时序曲线交给外部 Prometheus/Grafana scrape `/metrics` 留存；事件日志只留时点事件 + 错误。
 
 **怎么读**：
-- `rss_mb` 单调上升且不回落 → 真的泄漏，先按泄漏查（`heap_mb` 同步涨 = JS 侧；
-  只有 `rss_mb` 涨 = 原生侧）。
-- `rss_mb` 在窄带里抖、崩的时候也不高 → **不是内存问题**，是某条原生调用踩空。
+- `vessel_process_resident_memory_bytes` 单调上升且不回落 → 真的泄漏，先按泄漏查
+  （`vessel_process_heap_used_bytes` 同步涨 = JS 侧；只有 rss 涨 = 原生侧）。
+- rss 在窄带里抖、崩的时候也不高 → **不是内存问题**，是某条原生调用踩空。
   本次事故就是这样：崩的时候 `RSS: 0.18GB`，正好是空进程的基线。
-- `mode=pump` → 你跑的是**已知会崩**的流式转发实现（§5），先按 §4 切回去。
+- `vessel_proxy_http_stream_mode` 的 `mode="pump"` → 你跑的是**已知会崩**的流式转发
+  实现（§5），先按 §4 切回去。
 
 ## 4. 现在就能做的两条开关
 
