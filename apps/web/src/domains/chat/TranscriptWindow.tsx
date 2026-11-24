@@ -275,10 +275,50 @@ export function TranscriptWindow({
   onEditMessage: (keepMessages: number, text: string) => void;
   onRetryMessage: (keepMessages: number, text: string) => void;
 }) {
+  // 可见窗口首条消息的 ts：比它更早的 live item 由 buildTranscriptItems 夹到末尾
+  // （turn 锚点 / 窗口夹取 / 伪 run 拆条都在那里，由 check-transcript-items 守）。
+  const windowStartTs = transcriptWindow.shown[0]?.timestamp;
+
+  // 单一 item 流：历史消息、live 事件、排队提交先合成 item，再按 kind 选组件渲染。
+  // 身份 / 去重 / 排序都在 transcript-items.ts（纯函数 + 门禁），这里只做渲染映射。
+  const items = useMemo(
+    () =>
+      buildTranscriptItems({
+        messages: transcriptMessages,
+        messageIndexOffset,
+        liveGroups: activeAgent ? [] : renderedGroups,
+        windowStartTs,
+        historyIndex,
+        isHidden: isHiddenMessage,
+        noticeKindOf,
+        // 子 agent 详情占位时（liveGroups 被清空）不补主会话的失败卡 / 系统消息卡 / 已答提问：
+        // 那一屏讲的是另一个 run。几路补的都按自己的身份去重（见 transcript-items.ts）。
+        ...(activeAgent ? {} : { sessionFailure, sessionSystemContext, answeredAsks }),
+      }),
+    [
+      transcriptMessages,
+      messageIndexOffset,
+      activeAgent,
+      renderedGroups,
+      windowStartTs,
+      historyIndex,
+      isHiddenMessage,
+      noticeKindOf,
+      sessionFailure,
+      sessionSystemContext,
+      answeredAsks,
+    ],
+  );
+
   // 打开 / 切换会话的 reset key：detail 到达（hydrate）会再触发一次稳定贴底；
   // 加载更早历史不改变这两个字段，因此不会跳底。
   const resetKey = selectedId ? `${selectedId}:${detailSessionId ?? ''}` : null;
-  const followKey = `${snapshotVersion}:${renderedGroups.length}`;
+  // 跟随触发器：流式版本 / 组数之外，还必须覆盖 **item 流自身的变化**（条数 + 末项身份）。
+  // detail 刷新重建 item 流时没有新事件、组数也不变 —— 旧 followKey 对此是盲区：
+  // 重建把内容高度瞬时改变后贴底跟随不触发，滑块停在被夹下去的位置（跳离底部回不来）。
+  // 与 Team 页 teamFollowKey（末条消息身份）同一口径；未 pinned 时跟随不动，阅读不打断。
+  const lastItemKey = items.length > 0 ? items[items.length - 1]?.key ?? '' : '';
+  const followKey = `${snapshotVersion}:${renderedGroups.length}:${items.length}:${lastItemKey}`;
   const { scrollRef, getElement, pinned, onScroll, scrollToBottom, userIntentProps } =
     useStickyBottom({
       resetKey,
@@ -330,41 +370,6 @@ export function TranscriptWindow({
     };
     void settled.then(settle, settle);
   }, [hasEarlier, getElement, onLoadEarlier]);
-
-  // 可见窗口首条消息的 ts：比它更早的 live item 由 buildTranscriptItems 夹到末尾
-  // （turn 锚点 / 窗口夹取 / 伪 run 拆条都在那里，由 check-transcript-items 守）。
-  const windowStartTs = transcriptWindow.shown[0]?.timestamp;
-
-  // 单一 item 流：历史消息、live 事件、排队提交先合成 item，再按 kind 选组件渲染。
-  // 身份 / 去重 / 排序都在 transcript-items.ts（纯函数 + 门禁），这里只做渲染映射。
-  const items = useMemo(
-    () =>
-      buildTranscriptItems({
-        messages: transcriptMessages,
-        messageIndexOffset,
-        liveGroups: activeAgent ? [] : renderedGroups,
-        windowStartTs,
-        historyIndex,
-        isHidden: isHiddenMessage,
-        noticeKindOf,
-        // 子 agent 详情占位时（liveGroups 被清空）不补主会话的失败卡 / 系统消息卡 / 已答提问：
-        // 那一屏讲的是另一个 run。几路补的都按自己的身份去重（见 transcript-items.ts）。
-        ...(activeAgent ? {} : { sessionFailure, sessionSystemContext, answeredAsks }),
-      }),
-    [
-      transcriptMessages,
-      messageIndexOffset,
-      activeAgent,
-      renderedGroups,
-      windowStartTs,
-      historyIndex,
-      isHiddenMessage,
-      noticeKindOf,
-      sessionFailure,
-      sessionSystemContext,
-      answeredAsks,
-    ],
-  );
 
   // 前插触发器：历史消息页长度变化，或 item 流的**首项**变了。
   // 后者是事件时间线那一段的特征（更早的段前插 ⇒ 首项换人；追加不会改变首项），
