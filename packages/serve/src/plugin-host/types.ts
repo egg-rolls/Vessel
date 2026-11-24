@@ -422,6 +422,14 @@ export interface PluginHostManagerLike {
   ensureActive(id: string): Promise<void>;
   /** plugin id → 渲染字段；只含 enabled 的体验型 plugin。 */
   contributionsFor(): Record<string, PluginRenderContributions>;
+  /**
+   * S4（vscode-settings-design §4.4）：写路径用的 settings spec + 运行模式。
+   * child 模式 settings 经 env 注入，spawn 后不可变 → restartRequired=true。
+   * 未登记的插件返回 undefined（方法层报 not_found）。
+   */
+  settingSpecFor?(
+    id: string,
+  ): { settings: Record<string, unknown>; mode: 'in-process' | 'child' } | undefined;
   /** 当前 enabled、且声明了 ui.dir 的静态挂载。 */
   staticMounts(): PluginStaticMount[];
   /** 由 gateway 用 hub 构造的事件源注入；替换旧源并重订阅 active plugin。 */

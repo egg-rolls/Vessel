@@ -1256,6 +1256,21 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
     return output;
   }
 
+  /** S4：写路径用的 settings spec + 运行模式（child = spawn 后不可变）。 */
+  settingSpecFor(
+    id: string,
+  ): { settings: Record<string, unknown>; mode: 'in-process' | 'child' } | undefined {
+    const entry = this.entries.get(id);
+    if (entry !== undefined) {
+      return { settings: entry.descriptor.contributes?.settings ?? {}, mode: 'child' };
+    }
+    const record = this.inProcess.get(id);
+    if (record !== undefined) {
+      return { settings: record.descriptor.contributes?.settings ?? {}, mode: 'in-process' };
+    }
+    return undefined;
+  }
+
   /** enabled 且声明 ui.dir 的静态挂载（child + 已登记的 in-process）。 */
   staticMounts(): PluginStaticMount[] {
     const mounts: PluginStaticMount[] = [];

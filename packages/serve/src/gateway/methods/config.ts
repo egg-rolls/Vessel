@@ -127,6 +127,16 @@ export interface ConfigMethodsDeps {
   pluginsMetadata?(): Record<string, PluginListMetadata>;
   /** 0.43 E3：rescan / diff / manager.reload 由 assembly 注入；缺省 not_supported。 */
   pluginsReload?: () => Promise<PluginReloadResult>;
+  /** S4：插件设置 spec + 模式（manager.settingSpecFor）；缺省 → not_found。 */
+  pluginSettingSpec?: (
+    plugin: string,
+  ) => { settings: Record<string, unknown>; mode: 'in-process' | 'child' } | undefined;
+  /** S4：插件配置写面（asm setPluginConfigValue + 广播）；缺省 → not_found。 */
+  pluginsConfigSet?: (
+    plugin: string,
+    key: string,
+    value: string | number | boolean,
+  ) => Promise<void>;
   pluginHost(): PluginHost | undefined;
   /**
    * 0.51（additive）：按身体读工具清单的解析口（app 注入 `AgentControlLike`）。
@@ -620,6 +630,93 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
           throw new RpcError('not_supported', 'Plugin reload is not available.');
         }
         return deps.pluginsReload();
+      },
+    },
+    {
+      // S4（vscode-settings-design §4.4）：插件设置写路径。照 config.set 先例
+      // （write 权限）；按 manifest contributes.settings 校验，未声明键报错而非静默丢弃。
+      name: 'plugins.config.set',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['plugin', 'key', 'value'],
+        properties: {
+          plugin: { type: 'string', minLength: 1 },
+          key: { type: 'string', minLength: 1 },
+          value: {},
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['ok', 'plugin', 'key', 'value', 'restartRequired'],
+        properties: {
+          ok: { type: 'boolean' },
+          plugin: { type: 'string' },
+          key: { type: 'string' },
+          value: {},
+          restartRequired: { type: 'boolean' },
+        },
+      },
+      handler: async (params) => {
+        const plugin = stringParam(params, 'plugin');
+        const key = stringParam(params, 'key');
+        const spec = deps.pluginSettingSpec?.(plugin);
+        if (spec === undefined) {
+          throw new RpcError('not_found', `Plugin "${plugin}" is not registered.`);
+        }
+        const item = spec.settings[key];
+        if (item === null || typeof item !== 'object') {
+          throw new RpcError(
+            'invalid_params',
+            `Setting "${key}" is not declared by plugin "${plugin}".`,
+          );
+        }
+        const declared = item as Record<string, unknown>;
+        const value = params.value;
+        const type = typeof declared.type === 'string' ? declared.type : undefined;
+        const typeOk =
+          type === 'string'
+            ? typeof value === 'string'
+            : type === 'boolean'
+              ? typeof value === 'boolean'
+              : type === 'number'
+                ? typeof value === 'number' && Number.isFinite(value)
+                : type === 'integer'
+                  ? typeof value === 'number' && Number.isInteger(value)
+                  : false; // object/array 只读，不接受写
+        if (!typeOk) {
+          throw new RpcError(
+            'invalid_params',
+            `Setting "${key}" expects type "${type ?? 'unknown'}".`,
+          );
+        }
+        if (Array.isArray(declared.enum) && !declared.enum.includes(value)) {
+          throw new RpcError('invalid_params', `Setting "${key}" is outside the declared enum.`);
+        }
+        if (typeof value === 'number') {
+          const min = typeof declared.minimum === 'number' ? declared.minimum : undefined;
+          const max = typeof declared.maximum === 'number' ? declared.maximum : undefined;
+          if ((min !== undefined && value < min) || (max !== undefined && value > max)) {
+            throw new RpcError(
+              'invalid_params',
+              `Setting "${key}" is outside [${min ?? '-∞'}, ${max ?? '∞'}].`,
+            );
+          }
+        }
+        if (deps.pluginsConfigSet === undefined) {
+          throw new RpcError('not_found', 'Plugin config write is not available.');
+        }
+        try {
+          await deps.pluginsConfigSet(plugin, key, value as string | number | boolean);
+        } catch (error) {
+          if (error instanceof RpcError) throw error;
+          throw new RpcError(
+            'internal',
+            error instanceof Error ? error.message : 'Plugin config write failed',
+          );
+        }
+        // child 模式 settings 经 env 注入，spawn 后不可变 → 显式重载提示（不谎报热应用）。
+        return { ok: true, plugin, key, value, restartRequired: spec.mode === 'child' };
       },
     },
   ];
