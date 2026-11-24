@@ -503,11 +503,93 @@ roster 无限增长（§8.1）。实现验收要点：
 
 ## 5. 重启持久化
 
-（待扩充：快照 additive 字段、loadSnapshot 变更、再激活路径、shutdown drain）
+### 5.1 快照 schema（additive，v5 口径延续）
+
+`PersistedAgentRecord` 新增四键（§2.2）：`recyclable / marked_by / marked_at /
+mark_reason`。写入规则：
+
+- 未标注成员**不写**这四个键（缺省即 false，快照不膨胀）；
+- `snapshot.ts` 解析沿用「绝不在 parse 阶段 reject」铁律：旧快照无键 → 缺省；
+  未知键忽略；`recyclable` 非 boolean → 视为缺省（损坏不丢记录）。
+- `closed_at / close_reason` 复用现有键，`close_reason='recycled'` 是新值不是新键。
+- 版本号：沿用现有 additive 演进方式（0.51 cwd / 0.53 closedAt 同例），
+  不 bump 破坏性版本。
+
+### 5.2 loadSnapshot：temporary 不再被释放
+
+`loadSnapshot`（`service.ts:1063`）本身**不改恢复语义**：非 left 成员一律
+`idle + gone`（dormant），temporary 与 member 同等待遇。变更只有两处：
+
+1. `recordFromStatus`（`service.ts:711`）增读标注四字段（additive）；
+2. **重启后的 sweep 不再无标注回收**（§4.1 判据换掉）——§1.4 根因的第 3 步
+   被连根拔除：停机多久都不构成回收理由，只有标注才是。
+
+`agent.stale` 事件（`service.ts:1101`）照发：dormant 成员对看板表现为
+「在册 / 离线」，不是「已释放」。
+
+### 5.3 再激活路径（同 id 续接，零新机制）
+
+```text
+人类/agent send → admit（service.ts:2676 起）
+  → 目标 dormant（present + idle + gone）
+  → ensureExecutionUnit 惰性重建 runtime（现有机制）
+  → 同一 binding_id ≡ session_id 续接会话历史
+  → recoverPendingInputs 恢复 durable inbox（RECOVER_MAX_SESSIONS=8 封顶）
+```
+
+- **不重新 hire**：id / name / owner / team / model pin / systemPrompt 全部
+  来自恢复的记录；会话历史经 binding 钥匙续接。
+- 已释放成员（`left/closed`，含被 GC 回收的）：模型侧 send 会命中
+  `member_closed`；复活走管理面 `reinstate`（§2.4），复活后回未标注缺省。
+- 重启恢复的 spawn 成本封顶不变（`service.ts:349`）：保留是记录级，
+  不是一开机全部拉起。
+
+### 5.4 shutdown drain（保留现状，明确边界）
+
+`src/bootstrap.ts:2206-2254` 的三步（fence → resume 标记 → interrupt('shutdown')）
+**不变**：
+
+- drain 只打断在途 run，不释放成员（现状已如此，§1.4 第 1 步）；
+- 被 interrupt 的 run：WIP 经 resume 标记 + durable inbox 保全，重启后
+  `recoverPendingInputs` 重投（human 源条目保持 unread，agent 源条目模型
+  `inbox read` 取，`service.ts:2979` 口径）；
+- draining 期间排队的消息随进程退出丢弃的现有边界（`service.ts:964`）不变——
+  本设计不扩大 drain 的保全范围，只保证「成员记录与已落盘 inbox 不丢」。
 
 ## 6. 可见性
 
-（待扩充：roster / 看板 recyclable 标志、待回收清单、事件与审计）
+### 6.1 roster / 看板
+
+- `agents.list` status 投影新增 `recyclable / marked_by / marked_at / mark_reason`
+  （§3.3，additive，未标注不出现）。`agent list` 工具输出同步。
+- 看板（kanban 插件只读弹窗，见 `docs/dev/kanban`）成员卡片：
+  - `recyclable=true` → 显示「待回收」徽标 + 标注者 + 最早回收时刻
+    （`marked_at + grace`）；
+  - 互锁未过（忙 / 有未读 inbox）→ 徽标附「等待安全窗口」；
+  - dormant（present + gone）→ 现有「离线」表现不变，**不再与「已释放」混淆**。
+- **待回收清单**：看板新增只读视图，筛选 `recyclable=true ∧ present`，
+  按 `marked_at` 升序（最早标注的最先回收）；每行提供 unmark 入口
+  （人类管理面，走 `agents.unmark_recyclable`）。
+- `team_full` 提示附待回收数：「Team 已满（20）；N 个成员已标注待回收」，
+  把 roster 压力显式导流到标注 / GC 通道（§8.1）。
+
+### 6.2 历史视图（已回收清单）
+
+`includeReleases`（`service.ts:6779`）零改动即支持：`close_reason='recycled'`
+自然进入历史条目；`releasedFields` 可选字段集增 `marked_by / mark_reason`
+（additive，未知字段拒绝的口径不变），让「谁标注的 / 为何标注」在回收后仍可查。
+
+### 6.3 事件与审计
+
+| 事件 | 触发 | 载荷要点 |
+| --- | --- | --- |
+| `agent.marked_recyclable`（新） | markOne / 自动标注 | agent_id, marked_by, marked_at, mark_reason, recycle_after |
+| `agent.unmarked`（新） | unmarkOne | agent_id, 操作者 |
+| `agent.closed`（复用） | GC 回收 / 管理面硬 close | reason=`recycled` / `closed`（+ marked_by 供看板） |
+| `agent.rejoined`（复用） | reinstate 复活 | 现状不变 |
+
+审计链完整闭环：**谁标注（marked_by）→ 何时（marked_at）→ 为何（mark_reason）
+→ 何时回收（closed_at）→ 为何回收（close_reason）**，全部落盘 + 事件双通道。
 
 ## 7. 迁移计划
 
