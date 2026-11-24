@@ -191,16 +191,20 @@ export function parseRoute(hash: string): Route {
     case 'capabilities':
       return { domain: 'capabilities' };
     case 'visual':
-      return { domain: 'visual' };
+      // S2：旧整页别名 → 设置弹窗视觉分类（旧链接永不 404）。
+      return { domain: 'settings', category: 'visual' };
     case 'designLab':
-      return { domain: 'designLab' };
+      // S2：设计实验室 = 视觉分区 view 项（自动展开由 focusKey 驱动）。
+      return { domain: 'settings', focusKey: 'local.designLab', category: 'visual' };
     case 'settings': {
       // 0.45 IA：旧 settings 子页作为别名跳到新的顶层页面。
       const tab = segments[1] ?? query.get('tab');
       if (tab === 'connection') return { domain: 'gateway' };
       if (tab === 'capabilities') return { domain: 'capabilities' };
-      // S1 双轨：appearance|display 别名仍指旧 visual 整页；S2 起指弹窗视觉分类。
-      if (tab === 'appearance' || tab === 'display') return { domain: 'visual' };
+      // S2：appearance|display 别名 → 弹窗视觉分类。
+      if (tab === 'appearance' || tab === 'display') {
+        return { domain: 'settings', category: 'visual' };
+      }
       const focusKey = queryText(query, 'focus');
       const search = queryText(query, 'q');
       const category = queryText(query, 'category');

@@ -238,6 +238,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // Common
   'common.cancel': 'Cancel',
   'common.close': 'Close',
+  'common.expand': 'Expand',
+  'common.collapse': 'Collapse',
   'common.confirm': 'Confirm',
   'common.loading': 'Loading…',
   'common.processing': 'Working…',

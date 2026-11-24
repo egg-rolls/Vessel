@@ -35,6 +35,7 @@ import { useUiStore } from '../../../stores/uiStore';
 import { useConfigStoreApi } from '../../../stores/useConfigStoreApi';
 import { type CategoryNode, CategoryTree } from './CategoryTree';
 import { ConnectionSection } from './ConnectionSection';
+import { DesignLabSection } from './DesignLabSection';
 import { SettingRow } from './SettingRow';
 import { SettingsSearchBar } from './SettingsSearchBar';
 import { readLocalSetting, useSettingsWriter } from './useSettingsWriter';
@@ -277,16 +278,8 @@ export function SettingsDialog({
         </Suspense>
       );
     }
-    // designLab：S1 双轨期先开旧页；S2 换懒加载内嵌区块 + 全屏。
-    return (
-      <Button
-        variant="link"
-        className="self-start text-sm"
-        onClick={() => onNavigate({ domain: 'designLab' })}
-      >
-        {t('settings.dialog.openDesignLab')} →
-      </Button>
-    );
+    // designLab：S2 懒加载内嵌区块（展开/全屏）；深链 focusKey 自动展开。
+    return <DesignLabSection defaultExpanded={focusKey === 'local.designLab'} />;
   };
 
   const renderRow = (def: SettingDef) => (

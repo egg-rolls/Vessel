@@ -231,6 +231,8 @@ export const messages = {
   // 通用
   'common.cancel': '取消',
   'common.close': '关闭',
+  'common.expand': '展开',
+  'common.collapse': '折叠',
   'common.confirm': '确认',
   'common.loading': '正在加载…',
   'common.processing': '处理中…',
