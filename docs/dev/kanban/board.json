@@ -69,6 +69,22 @@
       "progress": "派单：VSCode弹窗按钮灰底+运行chunk日志灰底→transparent/var(--surface)极简黑底；装playwright截图+media查看验收"
     },
     {
+      "id": "q-log-refactor",
+      "title": "日志metrics/events分离(资源统计移出事件日志)+日志档位勾选态显示",
+      "column": "进行中",
+      "owner": "q-log-refactor",
+      "branch": "fix/q-log-refactor",
+      "progress": "派单：gateway.resources周期WRN统计噪音→指标面板分离,事件日志留有意义事件+错误直报；日志档位无勾选显示→回显当前/默认档"
+    },
+    {
+      "id": "q-session-naming",
+      "title": "create/hire/rotate会话命名(子agent会话名截断→有意义命名)",
+      "column": "进行中",
+      "owner": "q-session-naming",
+      "branch": "fix/q-session-naming",
+      "progress": "派单：hire子agent会话名靠截断(检查两字)；查create/hire/rotate命名机制,用成员name/任务摘要作title复用setSessionTitle"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
