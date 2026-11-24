@@ -15,10 +15,9 @@ import type { MemberStatus } from '@vessel-agent/agent';
 import {
   AgentOwnerRequestError,
   AgentOwnerUnavailableError,
-  callAgentOwner,
-  resolveAgentOwner,
 } from '../../../agent/agent-owner-client';
-import type { AgentOwnerMethod, AgentOwnerRecord } from '../../../agent/agent-owner-server';
+import type { AgentOwnerMethod } from '../../../agent/agent-owner-server';
+import { type AgentCall, resolveAgentCall } from '../../agent-call';
 import type { AgentCommand } from '../../args';
 import { ui } from '../../output';
 
@@ -33,6 +32,11 @@ type AgentOwnerCommand = Exclude<AgentCommand, { kind: 'inbox' }>;
 
 export interface AgentCommandOptions {
   dataDir: string;
+  /** q-node-target：显式 targeting（缺省照旧本地 owner）。 */
+  connectUrl?: string | null;
+  connectToken?: string | null;
+  caFile?: string | null;
+  nodeId?: string | null;
   /** 测试注入 */
   isAlive?: (pid: number) => boolean;
   fetchImpl?: typeof fetch;
@@ -214,20 +218,16 @@ export async function runAgentCommand(
   command: AgentOwnerCommand,
   options: AgentCommandOptions,
 ): Promise<CommandResult> {
-  let record: AgentOwnerRecord;
+  let agentCall: AgentCall;
   try {
-    record = await resolveAgentOwner(options.dataDir, {
-      ...(options.isAlive !== undefined ? { isAlive: options.isAlive } : {}),
-    });
+    agentCall = await resolveAgentCall(options);
   } catch (error) {
     return failure(error);
   }
 
   const { method, params } = methodParams(command);
   try {
-    const result = await callAgentOwner(record, method, params, {
-      ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
-    });
+    const result = await agentCall.call(method, params);
     const stdout = command.json ? JSON.stringify(result, null, 2) : humanOutput(command, result);
     // 单条 send / dispatch / create 的逐条失败 → exit 1
     // （close 保持批量汇总语义）。
@@ -238,6 +238,8 @@ export async function runAgentCommand(
     return { exitCode: rejected ? 1 : 0, stdout, stderr: '' };
   } catch (error) {
     return failure(error);
+  } finally {
+    await agentCall.close();
   }
 }
 

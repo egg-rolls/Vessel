@@ -479,6 +479,12 @@ export interface CliArgs {
   connectTokenArg: string | null;
   /** 0.6：`--ca <path>`（自签/私有 CA，PEM） */
   caArg: string | null;
+  /**
+   * q-node-target：`--node <id>`（经平台代理 `/nodes/<id>/v1/rpc` 打到指定 node）。
+   * 目前由 `agent` / `team` 子命令解析器摘出；null = 未指定（照旧本地 owner）。
+   * 与 `--connect` 组合 = 远端平台代理；单独 = 本地平台代理。
+   */
+  nodeTargetArg: string | null;
   /** 0.6：`--allowed-origin <origin>`（可重复；需 --serve） */
   allowedOrigins: string[];
   /** 0.5 一次性本地命令 */
@@ -592,6 +598,62 @@ function extractUserConfigFlag(
 }
 
 /**
+ * q-node-target：把 targeting 旗标从 `agent` / `team` 子命令 argv 里前置摘出。
+ *
+ * 为什么前置摘：这两个命令在 parseArgs 主循环 i===0 就进入各自子命令解析器，
+ * 主循环的全局 `--connect` / `--ca` 够不着它们；逐个子命令重复一遍既容易漏、
+ * 又会和位置参数（send/post 的 content）打架。仿 extractUserConfigFlag 先例，
+ * 统一摘出后写回既有全局字段（connectArg/connectTokenArg/caArg）+ nodeTargetArg。
+ *
+ * 认 `--connect` / `--connect-token` / `--ca` / `--connect-ca` / `--node`，
+ * 支持 `--flag value` 与 `--flag=value` 两种写法。缺值 → 报错。
+ */
+function extractTargetFlags(
+  rest: readonly string[],
+  args: CliArgs,
+): { ok: true; rest: string[] } | { ok: false; error: string } {
+  const remaining: string[] = [];
+  const assign = (flag: string, value: string): void => {
+    if (flag === '--connect') args.connectArg = value;
+    else if (flag === '--connect-token') args.connectTokenArg = value;
+    else if (flag === '--ca' || flag === '--connect-ca') args.caArg = value;
+    else if (flag === '--node') args.nodeTargetArg = value;
+  };
+  const flags = ['--connect', '--connect-token', '--ca', '--connect-ca', '--node'];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    const inline = flags.find((flag) => a.startsWith(`${flag}=`));
+    if (inline !== undefined) {
+      const value = a.slice(inline.length + 1).trim();
+      if (value === '') return { ok: false, error: `Missing value for ${inline}` };
+      assign(inline, value);
+      continue;
+    }
+    if (flags.includes(a)) {
+      const next = rest[i + 1];
+      // token 值可能以 '-' 开头；其余（url/path/id）不允许。
+      const dashOk = a === '--connect-token';
+      if (next === undefined || next.trim() === '' || (!dashOk && next.startsWith('-'))) {
+        return { ok: false, error: `Missing value for ${a}` };
+      }
+      assign(a, next);
+      i++;
+      continue;
+    }
+    remaining.push(a);
+  }
+  // connect 专属参数必须伴 --connect 或 --node（agent/team 只认显式 targeting）。
+  const connectOnly = [
+    args.connectTokenArg !== null ? '--connect-token' : null,
+    args.caArg !== null ? '--ca' : null,
+  ].filter((v): v is string => v !== null);
+  if (connectOnly.length > 0 && args.connectArg === null && args.nodeTargetArg === null) {
+    return { ok: false, error: `${connectOnly[0]} requires --connect or --node` };
+  }
+  return { ok: true, rest: remaining };
+}
+
+/**
  * 解析 argv（不含 node/bun 与脚本路径）。
  * 未知参数一律报错，不静默忽略。
  */
@@ -619,6 +681,7 @@ export function parseArgs(argv: string[]): ParseResult {
     connectArg: null,
     connectTokenArg: null,
     caArg: null,
+    nodeTargetArg: null,
     allowedOrigins: [],
     configCommand: null,
     migrate: null,
@@ -3163,6 +3226,13 @@ function parseAttentionArgs(rest: string[], args: CliArgs): ParseResult {
 
 /** `agent create|send|inbox|close|list|dispatch`（0.17 Phase A；0.19 dispatch；0.32 inbox） */
 function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
+  const extracted = extractTargetFlags(rest, args);
+  if (!extracted.ok) return extracted;
+  rest = extracted.rest;
+  // inbox 是本地只读队列，不经 RPC；显式拒绝 targeting，避免「以为打到了远端」。
+  if (rest[0] === 'inbox' && (args.connectArg !== null || args.nodeTargetArg !== null)) {
+    return { ok: false, error: 'agent inbox is local-only; --connect/--node are not supported' };
+  }
   const sub = rest[0];
   if (sub === undefined || sub === '--help' || sub === '-h') {
     args.help = true;
@@ -3560,6 +3630,9 @@ function parseTeamBudget(tail: string[], args: CliArgs): ParseResult {
  * 只做语法；workspace / roster 解析在 `src/team-command.ts`。
  */
 function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
+  const extracted = extractTargetFlags(rest, args);
+  if (!extracted.ok) return extracted;
+  rest = extracted.rest;
   const sub = rest[0];
   if (sub === undefined || sub === '--help' || sub === '-h') {
     args.help = true;

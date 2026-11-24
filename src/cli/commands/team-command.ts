@@ -12,20 +12,23 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { normalizeWorkspace } from '@vessel-agent/agent';
-import {
-  AgentOwnerRequestError,
-  AgentOwnerUnavailableError,
-  type CallAgentOwnerOptions,
-  callAgentOwner,
-  resolveAgentOwner,
-} from '../../agent/agent-owner-client';
-import type { AgentOwnerRecord } from '../../agent/agent-owner-server';
+import { AgentOwnerRequestError, AgentOwnerUnavailableError } from '../../agent/agent-owner-client';
+import type { AgentOwnerMethod } from '../../agent/agent-owner-server';
+import { type AgentCall, resolveAgentCall } from '../agent-call';
 import type { TeamCommand } from '../args';
 import { ui } from '../output';
 import type { CommandResult } from './agent/agent-command';
 
+/** 统一调用面（本地 owner 或 targeting RPC）；方法名 = canonical 方法名。 */
+type OwnerCall = (method: AgentOwnerMethod, params: Record<string, unknown>) => Promise<unknown>;
+
 export interface TeamCommandOptions {
   dataDir: string;
+  /** q-node-target：显式 targeting（缺省照旧本地 owner）。 */
+  connectUrl?: string | null;
+  connectToken?: string | null;
+  caFile?: string | null;
+  nodeId?: string | null;
   /** 测试注入 */
   isAlive?: (pid: number) => boolean;
   fetchImpl?: typeof fetch;
@@ -384,18 +387,9 @@ function formatMembersResult(result: unknown): string {
  *
  * 窗口固定成 1 / 1：`show` 只读基础信息，成员与日志列表由 `team get` 负责。
  */
-async function getTeamDetail(
-  record: AgentOwnerRecord,
-  teamId: string,
-  options: CallAgentOwnerOptions,
-): Promise<unknown | undefined> {
+async function getTeamDetail(call: OwnerCall, teamId: string): Promise<unknown | undefined> {
   try {
-    return await callAgentOwner(
-      record,
-      'teams.get',
-      { team_id: teamId, limit: 1, members_limit: 1 },
-      options,
-    );
+    return await call('teams.get', { team_id: teamId, limit: 1, members_limit: 1 });
   } catch (error) {
     if (error instanceof AgentOwnerRequestError && error.code === 'not_found') return undefined;
     throw error;
@@ -420,14 +414,13 @@ function matchesTeamAlias(team: TeamSummaryView, ref: string): boolean {
  * team 比不猜更糟（改错对象）。
  */
 async function resolveTeamDetail(
-  record: AgentOwnerRecord,
+  call: OwnerCall,
   ref: string,
-  options: CallAgentOwnerOptions,
 ): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
-  const direct = await getTeamDetail(record, ref, options);
+  const direct = await getTeamDetail(call, ref);
   if (direct !== undefined) return { ok: true, value: direct };
 
-  const listed = teamList(await callAgentOwner(record, 'teams.list', {}, options));
+  const listed = teamList(await call('teams.list', {}));
   const hits = listed.filter((team) => matchesTeamAlias(team, ref));
   if (hits.length > 1) {
     const ids = hits.map((team) => asString(team.team_id)).join(', ');
@@ -435,7 +428,7 @@ async function resolveTeamDetail(
   }
   const id = hits[0]?.team_id;
   if (id !== undefined) {
-    const found = await getTeamDetail(record, id, options);
+    const found = await getTeamDetail(call, id);
     if (found !== undefined) return { ok: true, value: found };
   }
   return {
@@ -551,17 +544,15 @@ export async function runTeamCommand(
   command: TeamCommand,
   options: TeamCommandOptions,
 ): Promise<CommandResult> {
-  let record: AgentOwnerRecord;
+  let agentCall: AgentCall;
   try {
-    record = await resolveAgentOwner(options.dataDir, {
-      ...(options.isAlive !== undefined ? { isAlive: options.isAlive } : {}),
-    });
+    agentCall = await resolveAgentCall(options);
   } catch (error) {
     return failure(error);
   }
 
   try {
-    const result = await execute(command, record, options);
+    const result = await execute(command, (method, params) => agentCall.call(method, params));
     if (!result.ok) return { exitCode: 1, stdout: '', stderr: result.error };
     if (command.json) {
       return {
@@ -573,6 +564,8 @@ export async function runTeamCommand(
     return { exitCode: result.exitCode ?? 0, stdout: result.text ?? '', stderr: '' };
   } catch (error) {
     return failure(error);
+  } finally {
+    await agentCall.close();
   }
 }
 
@@ -580,104 +573,75 @@ type Executed =
   | { ok: true; value: unknown; text?: string; exitCode?: number }
   | { ok: false; error: string };
 
-async function execute(
-  command: TeamCommand,
-  record: AgentOwnerRecord,
-  options: TeamCommandOptions,
-): Promise<Executed> {
-  const fetchOptions = options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {};
-
+async function execute(command: TeamCommand, call: OwnerCall): Promise<Executed> {
   if (command.kind === 'list') {
-    const value = await callAgentOwner(record, 'teams.list', {}, fetchOptions);
+    const value = await call('teams.list', {});
     return { ok: true, value, text: formatTeamList(value) };
   }
 
   if (command.kind === 'create') {
     const policy = await resolvePolicy(command);
     if (!policy.ok) return { ok: false, error: policy.error };
-    const value = await callAgentOwner(
-      record,
-      'teams.create',
-      {
-        workspace: command.workspace,
-        ...(command.name !== undefined ? { name: command.name } : {}),
-        ...(command.description !== undefined ? { description: command.description } : {}),
-        ...(policy.policy !== undefined ? { policy: policy.policy } : {}),
-      },
-      fetchOptions,
-    );
+    const value = await call('teams.create', {
+      workspace: command.workspace,
+      ...(command.name !== undefined ? { name: command.name } : {}),
+      ...(command.description !== undefined ? { description: command.description } : {}),
+      ...(policy.policy !== undefined ? { policy: policy.policy } : {}),
+    });
     return { ok: true, value, text: formatTeamWrite(value) };
   }
 
   if (command.kind === 'update') {
     const policy = await resolvePolicy(command);
     if (!policy.ok) return { ok: false, error: policy.error };
-    const value = await callAgentOwner(
-      record,
-      'teams.update',
-      {
-        team_id: command.teamId,
-        ...(command.name !== undefined ? { name: command.name } : {}),
-        ...(command.description !== undefined ? { description: command.description } : {}),
-        ...(policy.policy !== undefined ? { policy: policy.policy } : {}),
-      },
-      fetchOptions,
-    );
+    const value = await call('teams.update', {
+      team_id: command.teamId,
+      ...(command.name !== undefined ? { name: command.name } : {}),
+      ...(command.description !== undefined ? { description: command.description } : {}),
+      ...(policy.policy !== undefined ? { policy: policy.policy } : {}),
+    });
     return { ok: true, value, text: formatTeamWrite(value) };
   }
 
   if (command.kind === 'archive') {
-    const value = await callAgentOwner(
-      record,
-      'teams.archive',
-      { team_id: command.teamId },
-      fetchOptions,
-    );
+    const value = await call('teams.archive', { team_id: command.teamId });
     return { ok: true, value, text: formatTeamWrite(value) };
   }
 
   if (command.kind === 'freeze' || command.kind === 'unfreeze') {
-    const value = await callAgentOwner(
-      record,
-      'teams.spawnFrozen',
-      { team_id: command.teamId, frozen: command.kind === 'freeze' },
-      fetchOptions,
-    );
+    const value = await call('teams.spawnFrozen', {
+      team_id: command.teamId,
+      frozen: command.kind === 'freeze',
+    });
     return { ok: true, value, text: formatTeamWrite(value) };
   }
 
   if (command.kind === 'get') {
-    const value = await callAgentOwner(
-      record,
-      'teams.get',
-      {
-        team_id: command.teamId,
-        ...(command.limit !== undefined ? { limit: command.limit } : {}),
-        ...(command.members !== undefined ? { members_limit: command.members } : {}),
-      },
-      fetchOptions,
-    );
+    const value = await call('teams.get', {
+      team_id: command.teamId,
+      ...(command.limit !== undefined ? { limit: command.limit } : {}),
+      ...(command.members !== undefined ? { members_limit: command.members } : {}),
+    });
     return { ok: true, value, text: formatTeamGet(value) };
   }
 
   if (command.kind === 'members') {
-    const value = await callAgentOwner(
-      record,
-      'teams.members',
-      { team_id: command.teamId, action: command.action, member: command.member },
-      fetchOptions,
-    );
+    const value = await call('teams.members', {
+      team_id: command.teamId,
+      action: command.action,
+      member: command.member,
+    });
     return { ok: true, value, text: formatMembersResult(value) };
   }
 
   if (command.kind === 'show') {
-    const resolved = await resolveTeamDetail(record, command.team, fetchOptions);
+    const resolved = await resolveTeamDetail(call, command.team);
     if (!resolved.ok) return resolved;
     return { ok: true, value: resolved.value, text: formatTeamShow(resolved.value) };
   }
 
   if (command.kind === 'mine') {
-    const listed = await callAgentOwner(record, 'teams.list', {}, fetchOptions);
+    const listed = await call('teams.list', {});
     const teams = teamList(listed);
     // team-scoped token 的 `teams.list` 会脱敏 workspace（防泄漏主机路径）：
     // 没有路径就没有包含关系可算，明说原因，别把它报成「不属于任何 Team」。
@@ -708,34 +672,22 @@ async function execute(
   }
 
   if (command.kind === 'budget-status') {
-    const value = await callAgentOwner(
-      record,
-      'teams.budget',
-      {
-        team_id: command.teamId,
-        action: 'status',
-        ...(command.conversationId !== undefined
-          ? { conversation_id: command.conversationId }
-          : {}),
-      },
-      fetchOptions,
-    );
+    const value = await call('teams.budget', {
+      team_id: command.teamId,
+      action: 'status',
+      ...(command.conversationId !== undefined ? { conversation_id: command.conversationId } : {}),
+    });
     return { ok: true, value, text: formatBudgetStatus(value) };
   }
 
   if (command.kind === 'budget-override') {
-    const value = await callAgentOwner(
-      record,
-      'teams.budget',
-      {
-        team_id: command.teamId,
-        action: 'override',
-        conversation_id: command.conversationId,
-        dimension: command.dimension,
-        max: command.max,
-      },
-      fetchOptions,
-    );
+    const value = await call('teams.budget', {
+      team_id: command.teamId,
+      action: 'override',
+      conversation_id: command.conversationId,
+      dimension: command.dimension,
+      max: command.max,
+    });
     return { ok: true, value, text: formatBudgetOverride(value) };
   }
 
@@ -743,22 +695,17 @@ async function execute(
   // canonical `agents.list` 在 owner principal 下按 viewer 返回全部成员，含 team_id。
   let mentionIds: string[] = [];
   if (command.mentions.length > 0) {
-    const listed = await callAgentOwner(record, 'agents.list', {}, fetchOptions);
+    const listed = await call('agents.list', {});
     const resolved = resolveMentions(rosterFromAgents(listed, command.teamId), command.mentions);
     if (!resolved.ok) return { ok: false, error: resolved.error };
     mentionIds = resolved.ids;
   }
 
-  const value = await callAgentOwner(
-    record,
-    'teams.post',
-    {
-      team_id: command.teamId,
-      content: command.content,
-      ...(mentionIds.length > 0 ? { mentions: mentionIds } : {}),
-    },
-    fetchOptions,
-  );
+  const value = await call('teams.post', {
+    team_id: command.teamId,
+    content: command.content,
+    ...(mentionIds.length > 0 ? { mentions: mentionIds } : {}),
+  });
   const rendered = formatPostResult(value);
   return { ok: true, value, text: rendered.text, exitCode: rendered.failed ? 1 : 0 };
 }

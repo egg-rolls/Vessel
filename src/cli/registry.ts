@@ -380,7 +380,13 @@ export const cliCommands: readonly CliCommand[] = [
       return printCommandResult(
         command.kind === 'inbox'
           ? await runAgentInboxCommand(command, { dataDir })
-          : await runAgentCommand(command, { dataDir }),
+          : await runAgentCommand(command, {
+              dataDir,
+              connectUrl: args.connectArg,
+              connectToken: args.connectTokenArg,
+              caFile: args.caArg,
+              nodeId: args.nodeTargetArg,
+            }),
       );
     },
   },
@@ -393,6 +399,10 @@ export const cliCommands: readonly CliCommand[] = [
       return printCommandResult(
         await runTeamCommand(command, {
           dataDir: await resolveCommandDataDir(),
+          connectUrl: args.connectArg,
+          connectToken: args.connectTokenArg,
+          caFile: args.caArg,
+          nodeId: args.nodeTargetArg,
         }),
       );
     },
