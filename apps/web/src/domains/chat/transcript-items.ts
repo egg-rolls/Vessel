@@ -1078,6 +1078,8 @@ export function buildHistoryIndex(
 
   // A2A 来源行折叠：vessel:source 之后「下一条可见消息」是 agent 消息时，来源行不再
   // 单独成行，地址吸进那张 agent 卡（见 MessageItem.sourceText）。从后往前扫，O(n)。
+  // 用户裁决（单一表示）：vessel:notice 等运行时上下文消息（环境信息卡）不作为吸收目标 ——
+  // 来源地址跨过它们挂到后面的 agent 卡上，而不是在环境卡旁边再留一张「系统提示 · source」卡。
   const foldedSourceByAgent = new Map<number, string>();
   const foldedSourceIndexes = new Set<number>();
   let nextVisible: { absIndex: number; message: Message } | undefined;
@@ -1099,6 +1101,8 @@ export function buildHistoryIndex(
       continue;
     }
     if (isHiddenMessage) continue;
+    // 环境信息卡等运行时上下文消息不是对话参与者：跳过，让来源行吸到后面的 agent 卡。
+    if (isRuntimeContextMessage(message)) continue;
     nextVisible = { absIndex, message };
   }
 

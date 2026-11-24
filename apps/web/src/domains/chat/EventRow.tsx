@@ -181,7 +181,8 @@ const TAG_TONE: Record<string, string> = {
   'tag-tool-fail': 'bg-danger-soft text-danger',
   'tag-error': 'bg-danger-soft text-danger',
   'tag-guard': 'bg-warn-soft text-warn',
-  'tag-llm': 'bg-accent-soft text-accent',
+  // llm 系统事件标签：透黑底（用户裁定）——只留 accent 文字色，不铺薄荷绿罩色。
+  'tag-llm': 'text-accent',
   'tag-raw': 'text-muted',
 };
 

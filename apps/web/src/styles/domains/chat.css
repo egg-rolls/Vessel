@@ -1017,7 +1017,8 @@
 }
 
 .notice-block.info {
-  background: var(--accent-soft);
+  /* 透黑底（用户裁定）：系统事件卡不再铺薄荷绿罩色，语义只留在文字与圆点色上。 */
+  background: transparent;
   color: var(--accent);
 }
 

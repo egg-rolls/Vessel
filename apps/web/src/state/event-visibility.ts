@@ -122,10 +122,13 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   'context.changed': { tier: 'internal', live: true },
   'context.pressure': { tier: 'internal', live: true, 承接: 'notice' },
   'context.compacted': { tier: 'internal', live: true, 承接: 'notice' },
-  // 上下文裁剪（工具结果被清）本身是 run 内部状态同步，但**清理必须可见**：0.52 V1 起
-  // 段起点会追加一张 env 卡（scope `trim`），事件与卡是同一个投影 ⇒ 承接 notice。
-  'context.cleared_tool_result': { tier: 'internal', live: true, 承接: 'notice' },
-  'context.archive_notice': { tier: 'internal', live: true, 承接: 'notice' },
+  // 上下文裁剪（工具结果被清）：生产侧（core execution-unit）把 trim env 卡
+  // （vessel:notice，scope `trim`）与本事件**同一次 append**（同一去重签名，一起落 / 一起不落），
+  // 环境信息卡就是这件事的用户可见表示。用户裁决（单一表示）：已有环境信息卡承接的事件
+  // 不再另出系统卡 ⇒ observe（聊天永不出现，Runs / Observe 仍可查原始事件）。
+  'context.cleared_tool_result': { tier: 'observe', live: true, 承接: 'card' },
+  // 归档卡与 trim 卡同类（ADR-104 §2.3(c)）：env 卡（scope `trim`）是唯一用户表示，同上。
+  'context.archive_notice': { tier: 'observe', live: true, 承接: 'card' },
   // 0.53 U2 会话级投射模式（ADR-104 §5.2）：**决策变更的 run 起点**一条 /
   // 运行期 fail-open 留痕 / 体积触顶告警。三条都是「模型这一轮看到的上下文被怎么改写过」
   // 的审计，与 `prompt.system_context`（content）是同一件事的两面，但正文不是用户要读的
@@ -169,6 +172,10 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   'plugin.init.failed': { tier: 'internal', live: true },
   'plugin.dispose.failed': { tier: 'internal', live: true },
   'runtime.notice': { tier: 'internal', live: true },
+  // 注入锚点事件（runtime-notice-hook）：注入的 vessel:notice 消息本体已由环境信息卡
+  // 表示（live 经 message.injected 投影、历史经消息回填）。用户裁决（单一表示）：
+  // 不再另出「未知事件类型」系统卡 ⇒ observe；诊断仍可在 Runs / Observe 读原始事件。
+  'runtime.notice.injected': { tier: 'observe', live: true, 承接: 'card' },
   // 团队预算：预警 / 阻断 / 人工覆盖都是「同一笔预算怎么被改」的审计。有会话归属，
   // 所以是**真外泄**面；本轮按 `internal`（展开可见）落档，若产品要「可行动」应比照
   // `agent.limit.warning` 升成 notice —— 属产品裁决，先在表里显式声明。
