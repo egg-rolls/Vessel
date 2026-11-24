@@ -781,22 +781,31 @@ gateway:
 ```yaml
 empty_response:
   enabled: true       # 缺省 true；false = 空响应直接当终稿（修复前行为，零回归开关）
-  max_retries: 2      # nudge 重试上限（不含首次响应）；缺省 2，范围 0–10；0 = 不重试只落日志
+  seamless: true      # 缺省 true；无感重试（丢弃空轮、原样重调，零注入零疤痕）；false = 一期 nudge 注入路径
+  max_retries: 2      # 重试上限（不含首次响应；seamless 重调 / nudge 共用）；缺省 2，范围 0–10；0 = 不重试只落日志
   # nudge: '继续你的任务……'   # 自定义提示文案（user 消息注入）；缺省用 core 内置文案
 ```
 
 - **管什么**：模型偶发「空内容 + 无工具调用 + 终止原因」（大上下文 / 压缩后更易发）。
   无兜底时两条终止路径（`stop` / 其他 `finish_reason`）把空串当终稿 → agent 早退零输出。
-  现在 core loop 追加一条「继续你的任务」nudge 重新轮询；**限次防死循环**，耗尽落
-  `llm.empty_response`（`action: 'exhausted'`，internal 层事件）后回落原始终止行为——不再静默。
-- **缺省即启用**：整段可缺省（= enabled=true、max_retries=2、内置文案）。影响所有 agent
-  （owner + 成员）；工具调用路径与非空终稿不受影响，`finish_reason` 语义不变。
+- **无感重试（seamless，缺省）**：空响应时**丢弃空轮**——不发 `llm.response`、不写窗口，
+  用已有一致 transcript（含上一个工具结果）**原样重调**模型，不注入任何新消息（零疤痕，
+  与无感 resume 同源：重入边界 = 事件投影一致）。只记 `llm.empty_response`
+  （`action: 'seamless'`，internal 层，不进 transcript）。
+- **混合兜底**：seamless 重调限次（`max_retries`）；连续空耗尽后升级**一次** nudge
+  （`action: 'nudge', escalated: true`，注入继续消息打破空模式——纯重调可能采样再吐空）；
+  再空则 `action: 'exhausted'` 回落原始终止行为——不再静默。`max_retries: 0` 不升级。
+- **seamless: false**：一期路径——空轮落盘 + 注入「继续你的任务」nudge 重新轮询，
+  限次 `max_retries`，耗尽同上。**enabled: false**：修复前行为。两开关各自零回归。
+- **缺省即启用**：整段可缺省（= enabled=true、seamless=true、max_retries=2、内置文案）。
+  影响所有 agent（owner + 成员）；工具调用路径与非空终稿不受影响，`finish_reason` 语义不变；
+  usage/timing 照常记账（重试请求真实发生）。
 - **生效面**：装配进 tenant profile ⇒ **新 EU（新会话）生效**；已存活会话持启动时快照
   （与 `vision` 同语义）。
-- **可写面**：`emptyResponse.enabled` / `emptyResponse.maxRetries` / `emptyResponse.nudge`
-  三键进 `config.set` 白名单（WebUI 设置 →「运行期（core）」分组；CLI `vessel config set`）。
-  键语义的家：core `EmptyResponsePolicy`（types/provider.ts）+ `DEFAULT_EMPTY_RESPONSE_*`
-  （runtime/tool-calling-loop.ts）；映射在 `src/empty-response-settings.ts`。
+- **可写面**：`emptyResponse.enabled` / `emptyResponse.seamless` / `emptyResponse.maxRetries` /
+  `emptyResponse.nudge` 四键进 `config.set` 白名单（WebUI 设置 →「运行期（core）」分组；
+  CLI `vessel config set`）。键语义的家：core `EmptyResponsePolicy`（types/provider.ts）+
+  `DEFAULT_EMPTY_RESPONSE_*`（runtime/tool-calling-loop.ts）；映射在 `src/empty-response-settings.ts`。
 
 ## 3. 密钥与 `_env`
 
