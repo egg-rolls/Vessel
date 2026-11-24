@@ -336,7 +336,7 @@ vessel plugin create <name> [options]
 
 | where | 落点 | 发现来源 | 依赖约束（§1.5 白名单） |
 | --- | --- | --- | --- |
-| `user`（缺省） | `VESSEL_PLUGINS_DIR` → `~/.vessel/plugins/<name>/`（扁平） | user | 模板只 import `@vessel-agent/core`（type-only 亦经转发缝）；**不得**依赖 config/plugin-sdk(node 侧)/basic-tools 之外的宿主包。settings 解析用模板内置的迷你 parser（不 import SDK），或作者自行 bundle |
+| `user`（缺省） | `VESSEL_PLUGINS_DIR` → `~/.vessel/plugins/<name>/`（扁平） | user | 模板只 import 转发白名单内的宿主包（core/agent/basic-tools，§1.5）；**不得**依赖白名单外的宿主包（尤其 `@vessel-agent/config` / `plugin-sdk` node 侧——model-registry 因此只能住 repo）。settings 解析用模板内置的迷你 parser（不 import SDK），或作者自行 bundle |
 | `project` | `./.vessel/plugins/<name>/` | project | 同 user |
 | `repo` | `plugins/<category>/<name>/` | repo | workspace 全量可用（`workspace:*`）；生成后提示 `bun install`；UI 型可用 plugin-sdk/plugin-ui/react 全套 |
 
@@ -415,7 +415,8 @@ Exit codes：0 成功；1 运行期失败（冲突/IO）；2 用法非法（照 
 
 要点：`--opt-in` 时清单写 `defaultEnabled: false`（§6.4 落地前的过渡期同时提示作者
 「现态需进 OPT_IN_PLUGINS 或显式 plugins:」——模板按 §10 分期自适应）；
-路径边界需求留注释指针（media 先例：`buildPathBoundary` 仅 repo 可用，user 模板不 import）。
+路径边界需求留注释指针（media 先例：`buildPathBoundary` 来自 basic-tools，在转发白名单内，
+user/project 亦可用；边界回落语义见 §6.4 `inherit.pathBoundary`）。
 
 ### 5.2 `--type capability [--ui]`（先例：model-registry / skills）
 
