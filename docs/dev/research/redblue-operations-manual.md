@@ -234,7 +234,39 @@
 
 ## 5. 缺口分析
 
-（填写：区分「可补缺口」与「裁决边界（不补，绕行）」，每条给缓解。）
+> 分两类：**裁决 / 宪法边界**（用户已裁决不做或宪法禁止 ⇒ 不补，只给绕行）与
+> **真实缺口**（原语缺失，可将来补；本手册不改代码，只给绕行 + 标注目标态）。
+> 每条：现象 → 对闭环的影响 → 绕行 → 是否值得补。
+
+### 5.1 裁决 / 宪法边界（不补，绕行）
+
+| # | 边界 | 对闭环的影响 | 绕行 |
+|---|---|---|---|
+| G1 | **不做离线数据迁移**（裁决②，2026-11-23） | 旧会话 / 成员 / 事件不在 B 行出现；「入住」不是数据搬家 | 会话宇宙切换：git + handoff 文档 + federation 消息承载工作连续性（§6.5）；旧宇宙整体保留 = 回退线 + 只读查询入口。数据格式单向门（v4→v5、`legacy_session_unsupported`）使迁移本身就是高风险动作，裁决合理 [推断] |
+| G2 | **不加 profile 新实体**（裁决①） | 双行配置是手工组合既有杠杆，无一键 profile | 配方 §2 模板 + 出生证记录（§6.1）；组合正确性靠清单核对，不靠新抽象 |
+| G3 | **双行期不跑 install-service**（裁决③）+ 共享面纪律（R4–R6） | OS 服务 / marketplace / update apply 会写共享 `~/.vessel` 波及生产线 | B 行 `VESSEL_NO_EXTERNAL_PLUGINS=1` + `update.auto_check: false`；双行期冻结这三类动作（§6.0） |
+| G4 | **零探针 / 零自动验证**（宪法第四条） | 无自动金丝雀分析、无自动 promote 闸门 | 清单即 oracle + 用户行为验证 + 用户裁决（§6.4）；Argo 的 manual judgement 同构 |
+
+### 5.2 真实缺口（可补；本手册只绕行）
+
+| # | 缺口 | 现象 / 锚点 | 对闭环的影响 | 绕行 | 值得补？ |
+|---|---|---|---|---|---|
+| G5 | **adopt 无版本闸** | 池状态文件 version 字段只做形状校验、从不比较（配方 R1）；node/hub 归属复核是 pid + started_at + node_id/hub lock 三元，不比版本 [事实] gateway-lifecycle.md §不越界 | 若误共享 poolDir / dataDir，新 gateway 静默收编旧 engine / 旧 node，「新版舰队」混入旧代码 | `engine_pool.instance` + DD 分离根治；出生证记录各线 commit，自检核对（§6.2） | 值得（目标态：adopt 判据加版本比较），但隔离纪律已覆盖红蓝场景，非本任务 |
+| G6 | **federation 无离线队列 / 重试 / 跨重启 exactly-once** | hop 恒 1、去重仅进程内 LRU 1024、限流 60/min [事实] federation-hub.md §guards | 自检回报 / handoff 消息可能丢（对端重启窗口）或重（跨重启重发） | 幂等 `message_id` + 接收方按 id 文档去重 + ack 回执 + 失败重发；**关键报告同时落 git 文档**（durable 兜底，§6.2） | 队列 / 重试值得将来评估；exactly-once 与「无中心可嵌入」冲突，文档已明确不声称 |
+| G7 | **无远程生命周期操作** | federation 不做远程 spawn / close / rotate / resume / create [事实] federation-hub.md §不做什么 | 跨节点入住不能自动把 A 行成员「搬」到 B 行 | handoff = git 文档 + 地址消息 + 目标侧 agent create/hire 重建（§6.5/§7）；这是裁决②的必然配套 [推断] | 不补（与 G1 同源）；文档 handoff 是正解 |
+| G8 | **派生白名单 D 定格** | D 在平台启动 / join 那一刻定格，运行期刷新是 target [事实] node-auto-join.md §10.2–10.3 | 跨机新 node 加入后，老平台不认识其 origin ⇒ 浏览器直连 403 | 同机回环天然不受影响；跨机：显式 `node.allowed_origins`（可 `reload --scope config` 热更 [事实] REMOTE.md §3.4）或重启平台 | 值得（target 已列：hello 帧带 trusted_origins），非本任务 |
+| G9 | **b 档不自动串接** | checkpoint + `runs.resume` 原料在，但启动期不自动续 run；在途写类工具不可安全重放 [事实] graceful-restart.md §2–3 | `restart --stop-nodes` 后 interrupted run 要手动 `vessel resume`；闭环的「修复→重启」步有可见中断 | c 档兜底（重启卡 + human 输入重放）+ 手动 resume；重启时机选 idle / 轮次边界（§6.3） | 值得（目标态：drain 标记自动串接 + 工具可重放标签），但先给工具打标签否则是假承诺 |
+| G10 | **write.lock 合作式** | 只有新版 edit/write 持锁；0.54 无 write 工具无锁 = 非合作写入者 [事实] 配方 R8 | 同 workspace 双版本并行写可静默覆盖 | **B 行独立 worktree/workspace 根治**；必须共享时 A 只读或人工分区 + expected_content | 不补（跨版本锁协议无意义）；隔离是正解 |
+| G11 | **无统一入口 / 流量切分** | 无路由器 / 代理实体；hub 只传目录指针不代理正文 [事实] federation-hub.md | 切换是人工动作；做不了百分比金丝雀 | 入口对照表（配方 §2）+ cohort 粒度（team/node/人）+ 时间盒观察窗（§6.4/6.6） | 不建（API 表面税）；人工入口切换与宪法同构 |
+| G12 | **无 flag 框架** | 无 per-request toggle；只有 config/env/插件粗粒度开关 | 功能级灰度只能整线切换 | config diff 台账 + 入住后清零纪律（§6.6）；插件 enable/disable 当功能开关 | 不建（Hodgson：优先静态配置；本仓 config 层序已够） |
+| G13 | **回报无结构化契约** | federation content 是自由文本；无 schema / ack 原语 [事实] federation-hub.md envelope | 自检报告格式靠约定，机器不可校验 | §6.2 给固定文本契约 + message_id；接收方 agent 按契约解析落文档 [推断] | 轻量值得（约定即可，不必新 RPC）；重 schema 违反 API 表面税 |
+
+### 5.3 小结
+
+闭环六步里，**起新版 / 修复 / 回归 / 回退**四步的原语已齐（配方 + 生命周期 + c 档恢复）；
+**自检回报**步靠 federation + 幂等纪律补可靠性（G6/G13）；**入住**步的「搬会话」被裁决②替换为
+「换宇宙 + handoff」（G1/G7），这是设计选择不是缺陷。真正值得将来补的代码级缺口只有
+G5（版本闸）、G8（D 刷新）、G9（b 档串接）三项，且都已有 target 记录，不属于本手册任务。
 
 ## 6. 推荐方法 + 操作步骤（闭环 playbook）
 
