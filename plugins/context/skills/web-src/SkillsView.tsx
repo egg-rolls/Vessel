@@ -9,6 +9,10 @@
  * - Content preview is the human surface (§9.5): no trust gate, no loads write.
  *   P1 renders markdown as <pre> (plugin-ui has no embed-reachable markdown
  *   renderer yet; design §8.3 open question 2 — no third-party runtime dep).
+ * - 工具页面样式对齐（q-skills-ui）：TableToolbar 单行紧凑工具栏（搜索 + 来源 /
+ *   标签下拉 + 重扫 / 刷新），表格 + 分页脚注包进透黑底细线卡片；控件局部 GHOST
+ *   覆盖（shared.tsx，不动 plugin-ui 共享组件）；unknown_id 走 MissingSkill
+ *   优雅降级，错误一律内联告警卡，不渲染裸错误文本。
  */
 
 import {
@@ -22,12 +26,17 @@ import {
   SearchInput,
   Section,
   Select,
+  TableToolbar,
 } from '@vessel-agent/plugin-ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Translator } from './i18n';
 import {
   EmptyState,
   ErrorState,
+  GHOST_BUTTON_CLASS,
+  GHOST_CONTROL_CLASS,
+  GHOST_PANEL_CLASS,
+  isUnknownIdError,
   LoadingState,
   type LoadState,
   toError,
@@ -74,6 +83,43 @@ function TrustBadge({ trust, t }: { trust: TrustState | undefined; t: Translator
 /** 会话短 id（前 8 位，审计展示用） */
 function shortId(value: string): string {
   return value.length > 8 ? `${value.slice(0, 8)}…` : value;
+}
+
+/**
+ * 选中技能已不存在（unknown_id）时的优雅降级：说明 + 重扫 / 返回列表动作，
+ * 不渲染裸错误文本；id 仅作 faint 标识展示。
+ */
+function MissingSkill({
+  id,
+  t,
+  busy,
+  onRescan,
+  onBack,
+}: {
+  id: string;
+  t: Translator;
+  busy: boolean;
+  onRescan: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <Section
+      title={t('detail.missing.title')}
+      description={t('detail.missing.description')}
+      actions={
+        <span className="inline-flex flex-wrap items-center gap-2">
+          <Button size="small" className={GHOST_BUTTON_CLASS} disabled={busy} onClick={onRescan}>
+            {t('skills.rescan')}
+          </Button>
+          <Button size="small" className={GHOST_BUTTON_CLASS} onClick={onBack}>
+            {t('detail.backToList')}
+          </Button>
+        </span>
+      }
+    >
+      <p className="font-mono text-xs text-faint wrap-anywhere">{id}</p>
+    </Section>
+  );
 }
 
 interface Notice {
@@ -221,7 +267,13 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
     try {
       const result = await client.call<TrustSetResult>('trust_set', { id, action });
       if (result.error !== undefined) {
-        setNotice({ kind: 'error', text: result.error.message });
+        if (isUnknownIdError(result.error)) {
+          // 技能已不存在：友好提示 + 重拉（详情面板随之走 MissingSkill 降级）。
+          setNotice({ kind: 'error', text: t('detail.missing.title') });
+          refresh();
+        } else {
+          setNotice({ kind: 'error', text: result.error.message });
+        }
       } else {
         setNotice({ kind: 'saved', text: t('trust.saved') });
         refresh();
@@ -278,18 +330,19 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
 
   return (
     <PageScaffold title={t('skills.title')} subtitle={t('skills.subtitle')}>
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      <TableToolbar label={t('skills.toolbar')}>
         <SearchInput
           value={query}
           onChange={setQuery}
           placeholder={t('skills.searchPlaceholder')}
           ariaLabel={t('skills.searchAria')}
-          className="grow basis-60"
+          className={`grow basis-60 max-w-search ${GHOST_CONTROL_CLASS}`}
         />
         <Select
           value={source}
           onChange={(event) => setSource(event.target.value as '' | SkillSource)}
           aria-label={t('detail.source')}
+          className={`w-36 ${GHOST_CONTROL_CLASS}`}
         >
           <option value="">{t('skills.sourceAll')}</option>
           <option value="project">project</option>
@@ -300,6 +353,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
           value={tag}
           onChange={(event) => setTag(event.target.value)}
           aria-label={t('detail.tags')}
+          className={`w-40 ${GHOST_CONTROL_CLASS}`}
         >
           <option value="">{t('skills.tagAll')}</option>
           {tagOptions.map((option) => (
@@ -308,16 +362,23 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
             </option>
           ))}
         </Select>
-        <Button onClick={() => void runRescan()} disabled={busy}>
+        <Button className={GHOST_BUTTON_CLASS} onClick={() => void runRescan()} disabled={busy}>
           {t('skills.rescan')}
         </Button>
-        <Button onClick={refresh}>{t('common.refresh')}</Button>
-      </div>
+        <Button className={GHOST_BUTTON_CLASS} onClick={refresh}>
+          {t('common.refresh')}
+        </Button>
+        {listState.status === 'ready' ? (
+          <span className="ml-1.5 inline-block rounded-full border border-line bg-transparent px-1.5 py-0.5 font-mono text-xs text-muted">
+            {items.length}/{total}
+          </span>
+        ) : null}
+      </TableToolbar>
 
       {notice !== null ? (
         <p
           role={notice.kind === 'error' ? 'alert' : 'status'}
-          className={`mb-3 text-sm wrap-anywhere ${notice.kind === 'error' ? 'text-danger' : 'text-success'}`}
+          className={`rounded-md border border-line px-3 py-2 text-sm wrap-anywhere ${notice.kind === 'error' ? 'bg-danger-soft text-danger' : 'bg-success-soft text-success'}`}
         >
           {notice.text}
         </p>
@@ -344,19 +405,20 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
               />
             )
           ) : (
-            <>
+            <div className={`overflow-hidden rounded-md ${GHOST_PANEL_CLASS}`}>
               <DataTable
                 columns={columns}
                 rows={items}
                 rowKey={(row) => row.id}
                 activeKey={selectedId ?? undefined}
               />
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted">
+              <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2 text-sm text-muted">
                 <span>
                   {t('skills.page', { from: offset + 1, to: offset + items.length, total })}
                 </span>
                 <Button
                   size="small"
+                  className={GHOST_BUTTON_CLASS}
                   disabled={offset === 0}
                   onClick={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
                 >
@@ -364,6 +426,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                 </Button>
                 <Button
                   size="small"
+                  className={GHOST_BUTTON_CLASS}
                   disabled={offset + items.length >= total}
                   onClick={() => setOffset(offset + PAGE_LIMIT)}
                 >
@@ -373,7 +436,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                   {t('skills.generatedAt', { ts: listState.data.generatedAt })}
                 </span>
               </div>
-            </>
+            </div>
           )}
         </div>
 
@@ -383,17 +446,44 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
           ) : detailState.status === 'loading' ? (
             <LoadingState label={t('common.loading')} />
           ) : detailState.status === 'error' ? (
-            <ErrorState
-              error={detailState.error}
-              onRetry={() => void loadDetail(selectedId)}
-              title={t('common.loadError')}
-              retryLabel={t('common.retry')}
-            />
+            isUnknownIdError({ message: detailState.error.message }) ? (
+              <MissingSkill
+                id={selectedId}
+                t={t}
+                busy={busy}
+                onRescan={() => void runRescan()}
+                onBack={() => {
+                  setSelectedId(null);
+                  setDetailState(null);
+                }}
+              />
+            ) : (
+              <ErrorState
+                error={detailState.error}
+                onRetry={() => void loadDetail(selectedId)}
+                title={t('common.loadError')}
+                retryLabel={t('common.retry')}
+              />
+            )
           ) : detailEntry === undefined ? (
-            <Section
-              title={t('detail.contentError')}
-              description={detail?.error?.message ?? selectedId}
-            />
+            isUnknownIdError(detail?.error) ? (
+              <MissingSkill
+                id={selectedId}
+                t={t}
+                busy={busy}
+                onRescan={() => void runRescan()}
+                onBack={() => {
+                  setSelectedId(null);
+                  setDetailState(null);
+                }}
+              />
+            ) : (
+              <Section title={t('detail.contentError')}>
+                <p role="alert" className="text-sm text-muted wrap-anywhere">
+                  {detail?.error?.message ?? selectedId}
+                </p>
+              </Section>
+            )
           ) : (
             <div className="flex flex-col gap-4">
               <Section
@@ -428,7 +518,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                     ))}
                   </ul>
                 ) : null}
-              </Section>{' '}
+              </Section>
               {detailTrust === 'stale' ? (
                 <p role="alert" className="rounded-sm bg-warn-soft px-3 py-2 text-sm text-warn">
                   {t('trust.staleBanner')}
@@ -440,7 +530,13 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
               ) : null}
               <Section title={t('detail.content')}>
                 {detail?.error !== undefined ? (
-                  <p className="text-sm text-danger wrap-anywhere">{detail.error.message}</p>
+                  <div
+                    role="alert"
+                    className="rounded-sm border border-line bg-danger-soft px-3 py-2 text-sm text-danger"
+                  >
+                    <p className="font-medium">{t('detail.contentError')}</p>
+                    <p className="mt-1 wrap-anywhere">{detail.error.message}</p>
+                  </div>
                 ) : (
                   <>
                     {detail?.truncated === true ? (
