@@ -61,3 +61,49 @@ host 的 `toolOutputRoot()` 落到硬编码 `~/.vessel`；且 `settings.toolOutp
 
 ## issue-2 — node 本地 RPC 无 config.set 写端口（两线共有）
 顺手评估，若对 issue-0/1 修复无必要则注记遗留（见完成报告）。
+
+---
+
+## 修复落地与门禁（完成补记）
+
+### 提交（分支 fix/q-runtime-fix）
+- `23f4dd75` docs：调查注记（本文件）。
+- `894217d1` fix(tools)：issue-0 引擎注册表与成员工具面热应用同步。
+- `1bce7a64` fix(runtime)：issue-1 工具输出落本 node dataDir。
+
+### 门禁（唯一门禁 `bun run build` = typecheck + lint；日志个人侧 docs/dev/tmp/q-runtime-fix/gates.log）
+- issue-0：exit 0（Type check ✅ + Lint ✅）。首轮 lint 曾报 1 error＝新增 cli.ts 长 if 超 100 列的
+  **格式化**差异（biome vcs 模式只查改动文件，故基线不报）；按 biome 折行后通过。22 warnings 全为
+  基线既有（cli.ts/pii/archive-notice 等的 noNonNullAssertion/useTemplate，不致命），未触碰。
+- issue-1：exit 0（Type check ✅ + Lint ✅）。
+
+### issue-0 修法要点（保留 opt-in 语义 + 同步引擎/成员面）
+- 不改 `resolvePluginSelection` 的完整 opt-in 契约（文档化信任边界）。
+- `ToolLedger.push` retain 超集：`remove = lastPushed − current − retain`；retain 名保留在 lastPushed。
+- `EngineClient.setRegistryRetain`：持久 retain，所有 push 路径（cli/bootstrap 重连/mcp）自动 honoring。
+- 成员执行面 `runningToolNames()`（running body 广告工具名并集）+ `setToolsRefreshListener()`
+  （finishRun 应用 pending 刷新后回调）；cli tools applier push 前设 retain，轮边界监听器重算并冲刷移除。
+- 窗口期引擎保持「活体成员面仍广告的工具」可执行；轮边界引擎注册表与成员面同刻收敛。
+- 文档警示：plugin-selection 头注 + web-tools always_register 提示「plugins[] 是完整 opt-in 清单」。
+
+### issue-1 修法要点
+- bootstrap 解析 dataDir 后 `process.env.VESSEL_DATA_DIR = dataDir`（与 entry.ts 对 child 同源）。
+- host toolOutputRoot() 落 `<dataDir>/tool-output`，并经 settings.toolOutputDir 传 child；默认根零回归。
+
+### issue-2 评估（遗留，不在本次最小修范围）
+`config.set` 写端口现状：gateway RPC 有（`src/gateway/gateway-config-control.ts`，仅 default tenant）；
+CLI 有 `vessel config set`（标量白名单 ui.*/observability.*/agent.cwd，不含 plugins）。**node 本地 RPC 无
+config.set**。plugins[] 等结构改动当前只能编辑 vessel.yaml 由 config-watch 热应用（金丝雀验收即此路径）。
+给 node 本地 RPC 增 config.set 属新写端口（校验+热应用接线+权限），与 issue-0/1 的最小修无关，注记遗留。
+
+### 已知边界（注记）
+- issue-0：引擎 crash/respawn 恰发生在 retain 窗口内时，被剥离且已 unwire 的工具无法随重连重推
+  （恢复路径本就降级、在途调用已断）；常规热应用窗口已完全消除。
+- issue-0：完整 opt-in 语义保留——只列 web-tools 仍会排除其余内置工具，但现在剥离在轮边界原子生效
+  且有 notice/文档警示，不再产生「被广告却执行不了」的窗口；要保留内置工具须一并列入或走默认集。
+
+### 行为验证归用户（金丝雀复验要点）
+- issue-0：running 成员期间热应用 `plugins:[web-tools]`，模型广告的工具应仍可执行至轮边界；轮边界后
+  成员面与引擎注册表一致收缩，无 engine_tool_not_registered 窗口。
+- issue-1：data_dir=canary-data 的 node，异步 bash 日志与同步截断落盘应落 canary-data/tool-output，
+  不再写生产 ~/.vessel/data/tool-output。
