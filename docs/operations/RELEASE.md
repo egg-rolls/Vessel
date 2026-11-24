@@ -2,7 +2,7 @@
 title: 发布手册
 kind: current
 triggers: [发布, 发版, 版本号, 语义化版本, tag, 发布流程, 发布前置, 干跑, npm, 子包, 变更日志, 构建, web 控制台]
-paths: [.github/workflows/release.yml, .github/actions/quality/action.yml, package.json, scripts/version.ts, scripts/latest-json.ts, src/version.ts]
+paths: [.github/workflows/release.yml, .github/actions/quality/action.yml, package.json, scripts/version.ts, scripts/latest-json.ts, src/shared/version.ts]
 ---
 
 # 发布手册
@@ -102,7 +102,7 @@ gateway 生命周期与包级自更新的发布说明需要额外确认：
 - **服务注册**：`vessel gateway install-service` 只注册当前平台的用户级服务（systemd user / LaunchAgent / Windows 登录计划任务）；发布说明需注明不提供 root 服务，daemon 自身不做崩溃重启，常驻交给服务管理器。
 - **热重载边界**：`gateway.reload` 只承诺 plugins 扫描缓存与 `serve.allowed_origins`；其它配置字段返回 `requires_restart`。release notes 不得把“reload 成功”写成“所有配置已生效”。
 - **自更新**：`vessel update` 只对 npm / bun 全局安装执行 `npm i -g vessel-agent@latest` / `bun add -g vessel-agent@latest`；源码 / 开发模式只提示，非 TTY 必须 `--yes`。不提供二进制替换（ADR-006）。
-- **CLI 样式**：人类可读输出走 `src/ui-style.ts`，`--json` 与数据行无 ANSI；CI 日志与管道不依赖颜色。
+- **CLI 样式**：人类可读输出走 `src/cli/output.ts`，`--json` 与数据行无 ANSI；CI 日志与管道不依赖颜色。
 
 ## 2.4 状态栏与权限生命周期发布前确认
 

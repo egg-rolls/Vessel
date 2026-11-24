@@ -2,7 +2,7 @@
 title: 扩展机制与插件发现
 kind: current
 triggers: [plugin, plugin host, loader, discovery, trust, external, mcp, skill, config, 扩展, 扩展模型, 插件, 插件发现, 插件端口, 外部插件, 技能, 扩展面]
-paths: [packages/core/src/types/plugin.ts, packages/core/src/types/member-port.ts, src/plugin-loader.ts, src/plugin-selection.ts, src/plugin-manifest.ts, packages/agent/src/runtime.ts, packages/agent/src/member-ports.ts, plugins/mcp/client/**, src/feishu-wiring.ts]
+paths: [packages/core/src/types/plugin.ts, packages/core/src/types/member-port.ts, src/plugin/plugin-loader.ts, src/plugin/plugin-selection.ts, src/plugin/plugin-manifest.ts, packages/agent/src/runtime.ts, packages/agent/src/member-ports.ts, plugins/mcp/client/**, src/plugin/feishu-wiring.ts]
 ---
 
 # 扩展机制与插件发现
@@ -60,7 +60,7 @@ interface PluginHost {
 
 ## 插件发现
 
-**唯一一套：运行时目录扫描**（`src/plugin-loader.ts`）。
+**唯一一套：运行时目录扫描**（`src/plugin/plugin-loader.ts`）。
 
 ```
 plugins/                                 package.json + src/index.ts 存在即注册
@@ -87,7 +87,7 @@ class PluginLoader {
 
 **扫描只在进程启动时发生一次。** `PluginLoader` 把扫描结果缓存在实例上（插件目录在进程生命周期内视为不变），**这不是热加载**：新增或改动插件需要**重启进程**才生效，`/reload` 只重载配置、不重扫插件目录。用户 / 项目插件目录与 `plugins[].config` 注入见 `docs/versions/0.6.1.md`。
 
-**来源与优先级**：默认扫描根为 `repo`（仓库 `plugins/`）、`project`（`./.vessel/plugins`）、`user`（`~/.vessel/plugins`）、`node_modules`（仓库根与 cwd 的 `node_modules/@vessel-agent/*`，跳过非插件库包）。同 id 冲突**高优先级胜出**：project > user > repo > node_modules（`src/plugin-loader.ts` 的 `SOURCE_PRIORITY` / `resolveSourceConflict`）；覆盖内置另需 `vessel.override: true`，否则保留内置并告警。冲突与激活细节见 [plugins](plugins.md#发现与激活)。
+**来源与优先级**：默认扫描根为 `repo`（仓库 `plugins/`）、`project`（`./.vessel/plugins`）、`user`（`~/.vessel/plugins`）、`node_modules`（仓库根与 cwd 的 `node_modules/@vessel-agent/*`，跳过非插件库包）。同 id 冲突**高优先级胜出**：project > user > repo > node_modules（`src/plugin/plugin-loader.ts` 的 `SOURCE_PRIORITY` / `resolveSourceConflict`）；覆盖内置另需 `vessel.override: true`，否则保留内置并告警。冲突与激活细节见 [plugins](plugins.md#发现与激活)。
 
 **体验插件的外部命名空间与授权（0.48）**：child 插件（`source !== 'repo'`）的 `contributes.http[].path` 必须落在 `/plugins/<own-id>/` 命名空间内；HTTP route / CLI command 还需在 `plugins[].expose` 显式授权，内置插件不受 `expose` 影响。有效面与冲突语义见 [plugins.md](plugins.md#扩展面授权expose)。
 

@@ -17,7 +17,7 @@ import { mkdir, open } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { Logger } from '@vessel-agent/core';
 import type { HubConfig, VesselConfig } from '../../packages/config/src/index';
-import { expandHome, resolveDataDir } from '../data-paths';
+import { expandHome, resolveDataDir } from '../data/data-paths';
 import {
   deleteRecordIfOwned,
   isBeforeBoot,
@@ -25,9 +25,9 @@ import {
   quarantineCorruptRecordIfUnchanged,
   readGatewayStateFile,
 } from '../gateway/pid';
-import { resolveNodeId } from '../node-identity';
+import { resolveNodeId } from '../node/node-identity';
 // 0.56：hub 的派生 token（显式 hub.token_env 仍优先）。
-import { effectiveHubToken } from '../token-derive';
+import { effectiveHubToken } from '../node/token-derive';
 import { createOriginDeriver, readLocalAddresses } from './derive-origins';
 import { createHubJoinStore } from './join-store';
 import { createHubNodeCredentialStore } from './node-credential-store';

@@ -31,7 +31,7 @@ import {
   type EngineAuthFrame,
 } from '@vessel-agent/engine-client';
 import { attachNdjsonReader, createNdjsonWriter } from '@vessel-agent/serve';
-import { readPackageVersion } from '../version.js';
+import { readPackageVersion } from '../shared/version.js';
 import { ToolsEngine } from './engine.js';
 import { McpConnectionManager } from './mcp.js';
 import { parseAuthFrame } from './validate.js';

@@ -2,7 +2,7 @@
 title: Gateway 能力矩阵与职责归属
 kind: current
 triggers: [gateway capability, gateway lifecycle, tls termination, node ticket, origin allowlist, rate limit, audit, metrics, health probe, circuit breaker, adopt, version gate, node registry, routing, standby, 网关能力, 生命周期, 证书, 票据, 限流, 审计, 指标, 健康检查, 熔断, 路由]
-paths: [packages/serve/src/platform/**, src/gateway-command.ts, src/gateway/**, docs/architecture/gateway-capabilities.md]
+paths: [packages/serve/src/platform/**, src/cli/commands/gateway/gateway-command.ts, src/gateway/**, docs/architecture/gateway-capabilities.md]
 ---
 
 # Gateway 能力矩阵
@@ -27,7 +27,7 @@ paths: [packages/serve/src/platform/**, src/gateway-command.ts, src/gateway/**, 
 | 版本闸门 | 无 | 仅插件有 `engines.vessel` 范围检查（`plugin-manifest.ts:1450-1456`） | 条目缺 `protocol` 或低于 MIN 时 `gateway start` 输出 `node_unsupported_version` 并给出理由、不 spawn 该 node |
 | 单写者 | 有 | `gateway-command.ts:519-605` | 同 `dataDir` 并发 `start` 只允许一个成功，另一个非零退出且不改动 `nodes.json` |
 | 优雅停止（drain） | 有 | `gateway-command.ts:stopGateway`、`gateway/reload.ts:shutdownGateway`、`node-command.ts:runNodeCommand` | node/platform 停止先经 `gateway.shutdown` 请进程内 drain，等死预算内自死；超时/失败回退强杀并由停止方代打 `node.drain.skipped` / `platform.drain.skipped`。语义见 [gateway-lifecycle](gateway-lifecycle.md) / [GATEWAY](../operations/GATEWAY.md) |
-| 舰队级停（`vessel stop`） | 有 | `src/stop-command.ts:stopFleetCommand` | 本地清点 + 确认后走 `stopGateway({keepNodes:false})`；远程只认显式 `--connect`，经 `/platform/rpc`，非回环须过三门控（`gateway.remote_shutdown` + 已配置密钥反代 + 平台 token），远程不强杀 |
+| 舰队级停（`vessel stop`） | 有 | `src/cli/commands/fleet/stop-command.ts:stopFleetCommand` | 本地清点 + 确认后走 `stopGateway({keepNodes:false})`；远程只认显式 `--connect`，经 `/platform/rpc`，非回环须过三门控（`gateway.remote_shutdown` + 已配置密钥反代 + 平台 token），远程不强杀 |
 
 ## B 组 · 对外暴露
 
@@ -51,7 +51,7 @@ paths: [packages/serve/src/platform/**, src/gateway-command.ts, src/gateway/**, 
 | 平台 RPC 视图 | 有 | `platform/rpc.ts:PLATFORM_RPC_METHODS` | 6 个方法集合冻结（5 个只读 `platform.*` + `gateway.shutdown` 唯一非只读，additive）；新增方法需改 ADR 而不是加分支 |
 | 注册表热重载 | 无 | `gateway reload` 不重载 registry（`docs/versions/CURRENT.md:172`） | 改 `nodes.json` 后 `gateway reload` 生效，`requires_restart` 列表里不再出现 nodes |
 | 多节点路由查询 | 无 | — | 查询无副作用（探测计数不变），返回候选 + 排因，不替调用方选 |
-| hub 配对 | 有 | `src/hub-command.ts:524`（pairing TTL）、`:791`（pairing id） | 出站必须显式 opt-in；配对 id 过期即失效，未配置不发起连接 |
+| hub 配对 | 有 | `src/cli/commands/hub-command.ts:524`（pairing TTL）、`:791`（pairing id） | 出站必须显式 opt-in；配对 id 过期即失效，未配置不发起连接 |
 
 ## D 组 · 运维
 

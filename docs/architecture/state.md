@@ -2,7 +2,7 @@
 title: 状态与持久化接口
 kind: current
 triggers: [session, run store, checkpoint, durable, limits, corruption, prune, 状态, 存储, 检查点, 持久化, 损坏, 裁剪, 上界, 会话存储, message_id, 消息身份, 去重, loadForRead, exists]
-paths: [packages/core/src/types/session.ts, packages/core/src/types/limits.ts, packages/core/src/types/run-record-store.ts, packages/core/src/session/message-identity.ts, src/lease-service.ts, src/session-control.ts]
+paths: [packages/core/src/types/session.ts, packages/core/src/types/limits.ts, packages/core/src/types/run-record-store.ts, packages/core/src/session/message-identity.ts, src/run/lease-service.ts, src/session/session-control.ts]
 ---
 
 # 状态与持久化接口
@@ -102,5 +102,5 @@ interface RunRecordStore {
 实现：`MemoryRunRecordStore`（进程内）与 `FileRunRecordStore({ dir })`（每 run 一个 JSON 文件，temp + rename，Windows best-effort）。从 `@vessel-agent/core/session` 与根入口导出。**`RunRecordStore` 是 module port，不是第 10 个扩展接口**；`SessionStore`（会话壳：元数据 + messages 投影）与它正交（ADR-040）。
 （ADR-056）：`RunRecord` 不再有 `tenant_id`；`FileRunRecordStore` 不传 tenant，也不做 foreign tenant 归属判定。`delete(runId)` 先 `load()`；缺失直接 no-op，损坏时抛错、不 unlink。
 （ADR-056）：`list` 增加可选 `offset`（过滤、排序后切片，用于 `deleteSessionData` 的全量分页冲突检查）。`FileRunRecordStore.load()` 把非 ENOENT 读取错误、JSON 解析失败与非法记录形状视为损坏并抛 `SessionCorruptError`（`code: 'session_corrupt'`）；`delete()` 让该错误向上传播，绝不删除归属未知的文件。
-`pruneRuns(store, opts?)` helper（`PruneRunsOptions` / `PruneRunsResult`，从根入口与 `@vessel-agent/core/session` 导出），按 `status` / `older_than_ms` / `keep_latest` 清理 run；**不修改 `RunRecordStore` 接口**，也不自动调度（ADR-045）。（0.34）`FileLeaseService`（`src/lease-service.ts`）实现 `LeaseServicePort`（`binding` / `session` 两级租约，TTL + 续租 + 单调 `fencingToken`）：**仅单节点本地** `.locks/leases/**`，不做多节点 / 集群共识、**不可当分布式锁用**；跨节点迁移/接管靠 TTL 过期 + fencing，同一 `dataDir` 多进程依赖本地文件系统语义（原子 `wx` / rename）；写 `SessionEventLog` / `RunRecord` 按 `token >= currentFence` 拒绝旧 token，释放/过期使 fence 递增。
+`pruneRuns(store, opts?)` helper（`PruneRunsOptions` / `PruneRunsResult`，从根入口与 `@vessel-agent/core/session` 导出），按 `status` / `older_than_ms` / `keep_latest` 清理 run；**不修改 `RunRecordStore` 接口**，也不自动调度（ADR-045）。（0.34）`FileLeaseService`（`src/run/lease-service.ts`）实现 `LeaseServicePort`（`binding` / `session` 两级租约，TTL + 续租 + 单调 `fencingToken`）：**仅单节点本地** `.locks/leases/**`，不做多节点 / 集群共识、**不可当分布式锁用**；跨节点迁移/接管靠 TTL 过期 + fencing，同一 `dataDir` 多进程依赖本地文件系统语义（原子 `wx` / rename）；写 `SessionEventLog` / `RunRecord` 按 `token >= currentFence` 拒绝旧 token，释放/过期使 fence 递增。
 

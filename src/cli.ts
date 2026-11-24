@@ -55,22 +55,8 @@ import {
 // 0.57：**不**静态导入 Ink REPL。`ink-repl.tsx` 的传递闭包是 React + ink + 十几个组件，
 // 实测（本机）单是求值它就要数百毫秒到数秒 —— 而 `node start` / `gateway start` /
 // `--run` 永远不会进那个界面。它现在按需加载（见 {@link startInkRepl}）。
-import { createAskAnswerDelivery } from './ask-answer-delivery';
-import { createConfigAttachmentLister } from './attachments-list';
-import { type BootstrapResult, bootstrap } from './bootstrap';
-import { DEFAULT_SERVE_PORT, parseArgs } from './cli-args';
-import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli-help';
-import { buildCliConfigOverrides } from './cli-overrides';
-import { sanitizeConfigForSnapshot } from './config-snapshot';
-import { type ConfigWatchHandle, startConfigWatch, toConfigReloadOutcome } from './config-watch';
-import { createWrittenConfigApplier } from './config-write-apply';
-import { createContextUsageSource } from './context-usage';
-import type { FeishuChannelLike } from './control-plane-types';
-import { expandHome, resolveDataDir } from './data-paths';
-import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
-import type { GatewayInstanceLock } from './gateway/instance-lock';
-import { collectGatewayState, DEFAULT_GATEWAY_INSTANCE, GATEWAY_DAEMON_ENV } from './gateway/pid';
-import { renderGatewayBanner, renderGatewayBannerOneLine, wantsBoxBanner } from './gateway-banner';
+import { createAskAnswerDelivery } from './agent/ask-answer-delivery';
+import { DEFAULT_SERVE_PORT, parseArgs } from './cli/args';
 import {
   deriveGatewayInstance,
   isForegroundGatewayCommand,
@@ -80,21 +66,28 @@ import {
   resolveRestartDaemonMode,
   stopGateway,
   writeForegroundGatewayPid,
-} from './gateway-command';
-import { createGatewayConfigSet } from './gateway-config-control';
-import {
-  createGatewayReloadRunner,
-  type GatewayReconfigureTarget,
-  type GatewayReloadApplier,
-} from './gateway-reload-wiring';
-import { buildGatewayControlPlane } from './gateway-wiring';
+} from './cli/commands/gateway/gateway-command';
+import { isForegroundNodeCommand } from './cli/commands/node-command';
+import { runPluginCliCommand } from './cli/commands/plugin/plugin-cli-command';
+import type { FeishuChannelLike } from './cli/control-plane-types';
+import { feishuExitCode, signalExitCode, startFeishuChannel } from './cli/feishu-command';
 import {
   HEADLESS_ASK_SUSPENDED_EXIT_CODE,
   installHeadlessAskSuspend,
   installHeadlessPermissionAutoAllow,
   printSuspendedAsk,
   runHeadless,
-} from './headless-runner';
+} from './cli/headless-runner';
+import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli/help';
+import { ui } from './cli/output';
+import { buildCliConfigOverrides } from './config/cli-overrides';
+import { sanitizeConfigForSnapshot } from './config/config-snapshot';
+import {
+  type ConfigWatchHandle,
+  startConfigWatch,
+  toConfigReloadOutcome,
+} from './config/config-watch';
+import { createWrittenConfigApplier } from './config/config-write-apply';
 import {
   applyTools,
   createMcpApplier,
@@ -102,7 +95,7 @@ import {
   createPermissionApplier,
   type PermissionApplierState,
   pluginManagedToolNames,
-} from './hot-apply-appliers';
+} from './config/hot-apply-appliers';
 import {
   assemblePluginTools,
   collectPermissionTargets,
@@ -110,57 +103,77 @@ import {
   permissionConfigFor,
   registerRefsNoticeHook,
   registerRuntimeNoticeHook,
-} from './hot-apply-assembly';
+} from './config/hot-apply-assembly';
+import { visionSurfaceOf } from './config/vision-settings';
+import { createConfigAttachmentLister } from './data/attachments-list';
+import { expandHome, resolveDataDir } from './data/data-paths';
+import { resolveAgentCwd } from './data/path-resolution';
+import { setToolPolicy } from './data/permission-store';
+import {
+  renderGatewayBanner,
+  renderGatewayBannerOneLine,
+  wantsBoxBanner,
+} from './gateway/gateway-banner';
+import { createGatewayConfigSet } from './gateway/gateway-config-control';
+import {
+  createGatewayReloadRunner,
+  type GatewayReconfigureTarget,
+  type GatewayReloadApplier,
+} from './gateway/gateway-reload-wiring';
+import { buildGatewayControlPlane } from './gateway/gateway-wiring';
+import type { GatewayInstanceLock } from './gateway/instance-lock';
+import { ensureInteractionsDir, resolveInteractionsDir } from './gateway/interactions-dir';
+import { collectGatewayState, DEFAULT_GATEWAY_INSTANCE, GATEWAY_DAEMON_ENV } from './gateway/pid';
+import { resolveGatewayAuth } from './gateway/serve-auth';
+import { checkTlsFiles, resolveServeOptions } from './gateway/serve-config';
+import { shutdownServeStack } from './gateway/shutdown-sequence';
+import { resolveGatewayToken } from './gateway/transport-factory';
+import { ensureWebDist, interruptWebBuild, webDistWarning } from './gateway/web-dist';
 import { readHubNodeTrustedOrigins } from './hub/node-state';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
-import { createImageDeliverySource } from './image-delivery';
-import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-dir';
-import { createCliLogger, diffLogOptions, resolveLogOptions } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
-import { isForegroundNodeCommand } from './node-command';
-import { resolveAgentCwd } from './path-resolution';
-import { setToolPolicy } from './permission-store';
-import { runPluginCliCommand } from './plugin-cli-command';
-import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
+// 0.56：派生 token（root-secret → HKDF；显式配置永远优先）。
+import { effectiveNodeToken } from './node/token-derive';
+import { createCliLogger, diffLogOptions, resolveLogOptions } from './observability/logging';
+import {
+  flushStartupTiming,
+  markStartup,
+  noteStartup,
+  timeStartup,
+} from './observability/startup-timing';
+import { buildPluginConfigMap, declarativePluginEntries } from './plugin/plugin-config';
 import {
   activateStartupPlugins,
   createPluginHostManager,
   createPluginReloader,
   pluginSettingsFor,
-} from './plugin-host-assembly';
-import { FACTORY_PLUGINS } from './plugin-loader';
-import { type PluginWatchHandle, startPluginWatch } from './plugin-watch';
-import { isAddressInUse } from './port-in-use';
-import { installProcessErrorHandlers } from './process-handlers';
-import { createRunControl } from './run-control';
-import { createRuntimeNoticeBus } from './runtime-notice';
-import { resolveGatewayAuth } from './serve-auth';
-import { checkTlsFiles, resolveServeOptions } from './serve-config';
-import { createSessionEventsSource } from './session-events';
+} from './plugin/plugin-host-assembly';
+import { FACTORY_PLUGINS } from './plugin/plugin-loader';
+import { type PluginWatchHandle, startPluginWatch } from './plugin/plugin-watch';
+import { createRunControl } from './run/run-control';
+import { type BootstrapResult, bootstrap } from './runtime/bootstrap';
+import { installProcessErrorHandlers } from './runtime/process-handlers';
+import { createRuntimeNoticeBus } from './runtime/runtime-notice';
+import { normalizeBridgeDeny } from './runtime/vessel-meta';
+import { createContextUsageSource } from './session/context-usage';
+import { createImageDeliverySource } from './session/image-delivery';
+import { createSessionEventsSource } from './session/session-events';
 import {
   reconcileStaleSessions,
   type SessionLivenessContext,
   withLivenessRepair,
-} from './session-liveness';
-import { resolveContinueSessionId, resumeSession, runSessionList } from './session-resume';
-import { shutdownServeStack } from './shutdown-sequence';
-import { flushStartupTiming, markStartup, noteStartup, timeStartup } from './startup-timing';
-import { createSystemContextSource } from './system-context';
+} from './session/session-liveness';
+import { resolveContinueSessionId, resumeSession, runSessionList } from './session/session-resume';
+import { createSystemContextSource } from './session/system-context';
 // 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
 // 0.54 C：`events.list` 的按 run 读端口（同一模块）。
-import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-write';
-// 0.56：派生 token（root-secret → HKDF；显式配置永远优先）。
-import { effectiveNodeToken } from './token-derive';
+import { createTimelineRunEventsPort, timelineTailPort } from './session/timeline-dual-write';
+import { isAddressInUse } from './shared/port-in-use';
+import { readPackageVersion } from './shared/version';
 import { syncBasicToolsEngineWiring, syncCallbackToolsEngineWiring } from './tools-engine/wiring';
-import { resolveGatewayToken } from './transport-factory';
-import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update/gateway-check';
-import { readPackageVersion } from './version';
-import { normalizeBridgeDeny } from './vessel-meta';
-import { visionSurfaceOf } from './vision-settings';
-import { ensureWebDist, interruptWebBuild, webDistWarning } from './web-dist';
 
 /**
  * 由专用装配路径管理的工厂式插件：tools applier 不能把它们当普通插件装
@@ -380,13 +393,13 @@ if (demoRequested) {
 // 命中后不进入 bootstrap / REPL / serve / headless 主流程。
 // dynamic import：--help / --version 早退路径不再加载注册表（S4 §2.3）。
 {
-  const { applyCommandLocale, matchCommand } = await import('./commands/registry');
+  const { applyCommandLocale, matchCommand } = await import('./cli/registry');
   // 0.49 G3a：`gateway nodes ...` 是 registry 管理命令，不进 gateway 一次性分发
   // （后者不承载平台写语义）。
   const gatewayNodes = args.gatewayNodes;
   if (gatewayNodes !== null) {
     await applyCommandLocale();
-    const { runGatewayNodesCommand } = await import('./gateway-nodes-command');
+    const { runGatewayNodesCommand } = await import('./cli/commands/gateway/gateway-nodes-command');
     process.exit(await runGatewayNodesCommand(gatewayNodes));
   }
   const command = matchCommand(args);
@@ -404,7 +417,7 @@ if (
   isForegroundGatewayCommand(args.gateway) &&
   process.env.VESSEL_LEGACY_SERVE !== '1'
 ) {
-  const { applyCommandLocale } = await import('./commands/registry');
+  const { applyCommandLocale } = await import('./cli/registry');
   await applyCommandLocale();
   // 启动诊断（0.50）：拆分路径**也**托管 dist（静态资源由平台 gateway 同源下发），
   // 所以产物缺失/过期时要就地自修复，而不是把「缺失 + 命令教学」丢给用户。
@@ -417,7 +430,7 @@ if (
   // 只在仓库内默认目录生效：`VESSEL_STATIC_DIR` 指向的外部产物不归我们管；
   // `VESSEL_NO_WEB_AUTOBUILD=1` 关掉自修复；构建失败只告警、不改退出码。
   await ensureWebDist({ waitWhenMissing: true });
-  const { runPlatformGatewayForeground } = await import('./gateway-command');
+  const { runPlatformGatewayForeground } = await import('./cli/commands/gateway/gateway-command');
   process.exit(
     await runPlatformGatewayForeground({
       command: args.gateway,

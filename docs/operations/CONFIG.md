@@ -2,7 +2,7 @@
 title: 配置与密钥
 kind: current
 triggers: [配置, 配置项, 配置文件, 配置优先级, 密钥, 令牌, 环境变量, 用户级配置, 项目级配置, 默认值, vessel.yaml, 数据目录, 覆盖, secrets]
-paths: [packages/config/**, src/config-command.ts, src/token-command.ts, src/token-derive.ts, src/agent-command.ts, src/agent-inbox-command.ts, src/attention-client.ts, src/attention-nodes.ts, src/config-error-format.ts, src/doctor-command.ts, src/errors-command.ts, src/gateway-config-control.ts, src/gateway-reload-wiring.ts, src/hot-apply-appliers.ts, src/hot-apply-assembly.ts, src/interactions-dir.ts, src/logs-command.ts, src/port-in-use.ts, src/prune-command.ts, src/prune-wiring.ts, src/session-lock.ts, src/session-lock-runtime.ts, src/ui-settings.ts, src/usage-pricing.ts]
+paths: [packages/config/**, src/cli/commands/config-command.ts, src/cli/commands/token-command.ts, src/node/token-derive.ts, src/cli/commands/agent/agent-command.ts, src/cli/commands/agent/agent-inbox-command.ts, src/federation/attention-client.ts, src/federation/attention-nodes.ts, src/config/config-error-format.ts, src/cli/commands/doctor-command.ts, src/cli/commands/errors-command.ts, src/gateway/gateway-config-control.ts, src/gateway/gateway-reload-wiring.ts, src/config/hot-apply-appliers.ts, src/config/hot-apply-assembly.ts, src/gateway/interactions-dir.ts, src/cli/commands/logs-command.ts, src/shared/port-in-use.ts, src/cli/commands/prune-command.ts, src/data/prune-wiring.ts, src/session/session-lock.ts, src/session/session-lock-runtime.ts, src/config/ui-settings.ts, src/observability/usage-pricing.ts]
 ---
 
 # 配置与密钥
@@ -363,7 +363,7 @@ pricing:
 
 ### 2.10 写意图锁、数据根与交互记录（0.15 / 0.49，ADR-086）
 
-- **单公司 data-dir 写意图锁**（`src/data-lock.ts`）：`exclusive` 为 `<dataDir>/.lock`，`shared` 为 `<dataDir>/.members/<pid>-<nonce>.json`；锁文件 `{ pid, started_at, host }`。冲突返回 `data_locked`。stale 规则：死 pid、不可解析超过 5s、跨主机超过 24h 自动回收；回收持 `<lock>.reclaim` 守卫（守卫超过 10s 可清理）。
+- **单公司 data-dir 写意图锁**（`src/data/data-lock.ts`）：`exclusive` 为 `<dataDir>/.lock`，`shared` 为 `<dataDir>/.members/<pid>-<nonce>.json`；锁文件 `{ pid, started_at, host }`。冲突返回 `data_locked`。stale 规则：死 pid、不可解析超过 5s、跨主机超过 24h 自动回收；回收持 `<lock>.reclaim` 守卫（守卫超过 10s 可清理）。
 - **谁取锁**：只有写意图命令（`migrate --apply`、`trace prune`、`prune --yes`、`eval`、bootstrap 的 trace prune / session 删除）获取。`--run` / REPL / gateway 启动**不取**写者锁；同一 dataDir 的第二进程仍可启动（0.49 R7=B 已知限制）。
 - **session / run 写锁**：`<dataDir>/.locks/sessions/<sha16(session_id)>.lock` 与 `.locks/runs/<sha16(run_id)>.lock`（`0600`，内容含 `pid` / `started_at` / `host`）。同一 session 的第二个写者得到 `conflict`，消息前缀 `session_locked:`；run resume 冲突前缀 `run_locked:`。同进程重复获取用引用计数消化。
 - **根布局**：数据直接位于 `<dataDir>/sessions/`、`runs/`、`events/`、`agents/`、`conversations/`、`teams/`；没有 `tenants/<id>` 层。非空 `<dataDir>/tenants/**` 或 `.t2-migrating-*` → 启动 fail-fast `non_root_layout`（错误含路径 / 条目数 / 字节数；不移动、不删除数据）。
@@ -507,7 +507,7 @@ lease:
 ### 2.17 `config.yaml` 写锁（0.47，CONTRACT-0.47）
 
 - **锁文件**：`${configPath}.lock`，与配置文件同目录；内容 `{ token, pid, acquiredAt }`，`0600`，以 `open(..., 'wx')` 原子创建。
-- **受保护写入口**：只包裹「读 → 改 → 写」段。host 侧为 `src/plugin-config.ts` 的 `setPluginEnabled` 与 `src/ui-settings.ts` 的 `setUserConfigValue`（`vessel config set` / `/settings` / gateway 配置写入都经由后者）；marketplace 侧为 `upsertPluginConfig` / `setPluginConfigValue` / `setPluginEnabled` / `removePluginConfig`。下载、解压、安装/卸载目录操作与只读加载不在锁内。
+- **受保护写入口**：只包裹「读 → 改 → 写」段。host 侧为 `src/plugin/plugin-config.ts` 的 `setPluginEnabled` 与 `src/config/ui-settings.ts` 的 `setUserConfigValue`（`vessel config set` / `/settings` / gateway 配置写入都经由后者）；marketplace 侧为 `upsertPluginConfig` / `setPluginConfigValue` / `setPluginEnabled` / `removePluginConfig`。下载、解压、安装/卸载目录操作与只读加载不在锁内。
 - **stale 与 timeout**：锁文件超过 15s 未更新视为持有进程已崩溃，可被接管（Windows 上 unlink 遇 `EPERM` / `EBUSY` 会短暂重试）；等待超过 5s 抛 `config_locked`，调用方必须看到该错误，不得静默丢写。持锁进程崩溃时锁最多滞留约 15s。
 - **接管守卫**：stale 清理先原子创建 `${configPath}.lock.reclaim`（`{ token, pid, acquiredAt }`），只有守卫持有者能删除 stale 锁，删除前在守卫内重读 mtime；守卫自身超过 2s 视为崩溃可清理。没有守卫时两个接管者会交错 unlink/create，晚到的 unlink 会删掉对方刚建的新锁。
 - **同进程**：同一配置路径的写者按顺序串行；同一异步上下文内嵌套进入同一路径直接抛 `config_locked: nested lock`，不会排队成死锁。
@@ -805,7 +805,7 @@ empty_response:
 - **可写面**：`emptyResponse.enabled` / `emptyResponse.seamless` / `emptyResponse.maxRetries` /
   `emptyResponse.nudge` 四键进 `config.set` 白名单（WebUI 设置 →「运行期（core）」分组；
   CLI `vessel config set`）。键语义的家：core `EmptyResponsePolicy`（types/provider.ts）+
-  `DEFAULT_EMPTY_RESPONSE_*`（runtime/tool-calling-loop.ts）；映射在 `src/empty-response-settings.ts`。
+  `DEFAULT_EMPTY_RESPONSE_*`（runtime/tool-calling-loop.ts）；映射在 `src/config/empty-response-settings.ts`。
 
 ## 3. 密钥与 `_env`
 

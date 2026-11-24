@@ -51,7 +51,7 @@ applies_to: [N, M]
   没有 `tenants/<id>` 层；`tenant.json` 只保存内部持久单 id（缺省 `default`），不是 wire
   字段、不参与路由。legacy sqlite `sessions.tenant_id` 列按读写兼容保留（defer-3，待独立
   数据迁移）；核心 `RunRecord` / 事件 DTO 不再有 `tenant_id`。
-- 写意图锁是 `src/data-lock.ts`（单公司 data-dir；`data_locked`）；运行时不再获取写者锁，
+- 写意图锁是 `src/data/data-lock.ts`（单公司 data-dir；`data_locked`）；运行时不再获取写者锁，
   session / run 写冲突仍走 `session_locked` / `run_locked`。非空 `<dataDir>/tenants/**`
   或 `.t2-migrating-*` 启动 fail-fast `non_root_layout`，不读、不删、不迁移。
 

@@ -2,7 +2,7 @@
 title: 运维日志口径（一件事只有一种说法）
 kind: current
 triggers: [日志, log, 日志一致性, web.build, 构建, 构建日志, build.json, gateway status, 看门狗, supervisor, hub, console.log, logEvent, 事件行, key=value, 日志级别, 颜色, 降噪, log-hub]
-paths: [src/web-dist.ts, src/gateway-command.ts, src/cli.ts, src/logging.ts, packages/core/src/log-hub.ts, packages/core/src/log-format.ts, packages/serve/src/log-event.ts, packages/serve/src/platform/proxy.ts, packages/serve/src/platform/proxy-config.ts, packages/serve/src/platform/proxy-ws.ts, packages/serve/src/platform/server.ts, packages/serve/src/gateway.ts, src/provider-factory.ts]
+paths: [src/gateway/web-dist.ts, src/cli/commands/gateway/gateway-command.ts, src/cli.ts, src/observability/logging.ts, packages/core/src/log-hub.ts, packages/core/src/log-format.ts, packages/serve/src/log-event.ts, packages/serve/src/platform/proxy.ts, packages/serve/src/platform/proxy-config.ts, packages/serve/src/platform/proxy-ws.ts, packages/serve/src/platform/server.ts, packages/serve/src/gateway.ts, src/runtime/provider-factory.ts]
 ---
 
 # 运维日志口径：一件事只有一种说法
@@ -55,7 +55,7 @@ paths: [src/web-dist.ts, src/gateway-command.ts, src/cli.ts, src/logging.ts, pac
 | **看门狗动作（僵死重启 / 放弃 / 恢复）** | ①`printWatchdogEvent` 手拼 `event=supervisor.* ...`（第二套排版）②`gateway status` 的看门狗快照段（读 `platform-watchdog-*.json`） | `EVENT_FIELDS` 的 `supervisor.*` + `logEvent` | 手拼行**改成** `formatEventLine`（字段序进了 `EVENT_FIELDS`），输出通道仍可注入；快照段读的是「状态快照」，与「动作事件」是两个事实，保留 |
 | **Hub 起没起来** | ①启动横幅 `hub <url> (auto-started)` ②失败行 `hub_start_failed: <整句>`（裸码+整句，第三种排版）③`hub unavailable` | `hub.start_failed` 事件（启动阶段与收尾阶段同一套字段） | 两处失败行合并成一条事件；成功行仍是横幅（人读的位置），不重复打日志 |
 | **节点就绪状态** | ①`node <name>: <state> (原因/耗时)` ②启动摘要的 `(starting)`/`(adopted)` ③`gateway status` 的 `node <name> <url> <up/down>` | supervisor 状态机（`SupervisedNodeInfo`）；`up/down` 是**健康探测**，与 supervisor 生命周期是两个事实 | 未改；`describeNodeState` 是这两处的单一口径。**已知**：状态词表按视图不同（生命周期 vs 健康）——这是两个事实，不是两种说法 |
-| **平台/节点 token** | 不打印（安全规则）；派生值只进 `/health` 的布尔 | `src/token-derive.ts` | 不新增任何 token 日志（`AGENTS.md` 硬安全规则） |
+| **平台/节点 token** | 不打印（安全规则）；派生值只进 `/health` 的布尔 | `src/node/token-derive.ts` | 不新增任何 token 日志（`AGENTS.md` 硬安全规则） |
 | **拦截类诊断**（replay 预算截断 / 全局回放拒绝 / interactions 持久化与隔离 / tenant 事件扇出 / 停机清理失败） | 各文件自己拼 `[vessel] xxx: detail`（有的还把对象直接丢给 `console.warn`，终端里展开成多行 JSON） | `gateway.replay.budget_truncated`、`gateway.events.global_replay_denied`、`gateway.stop.failed`、`gateway.tenant_hub.failed`、`interactions.store.*`、`interactions.registry.reload_failed` | 全部改走 `logEvent`（`path` / `error` 用结构化字段，不再是自由文本） |
 | **日志级别与颜色**（gateway 进程太吵 / 三套格式交替 / 无法按模块调级别） | core Logger 每行 JSON、`logEvent` `[vessel] event k=v`、散落 `console.*` 自由文本，三种格式写进同一个 node-*.log；级别只有环境变量且只管 Logger 一路 | core 日志中枢 `log-hub.ts`（级别/模块/格式/时间/颜色，config `observability.log` 热应用）+ 排版唯一来源 `log-format.ts` | 三路汇流 `emitLogLine`；去 `[vessel]` 前缀；pretty=vite 式单行（时间 LVL 事件名 k=v）、json=单行 `{time,level,event,...fields}`；高频过程事件降 debug、审计账分级不折叠、重复按窗口折叠带 suppressed；配色见第十四条；WebUI Settings「日志（gateway）」分组 |
 | **node/platform 停止没走成优雅路径（drain 回退）** | 之前强杀是静默的，看不出「这次停止没 drain」 | 停止方代打一行：`node.drain.skipped`（`gateway-command.ts:stopGateway` legacy node 入口、`node-supervisor.ts:stopSpawnedChildren` / `NodeSupervisor.stop` 的回调接线、`node-command.ts:runNodeCommand` node stop）与 `platform.drain.skipped`（`gateway-command.ts:stopGateway` platform entry）；字段 `pid` / `name?` / `reason`（timeout 或 shutdown 失败码） | 新增（P0-run-stops P4）。**尚未登记 `EVENT_FIELDS`**（登记属代码改动，另批）；停止语义见 [gateway-lifecycle](../architecture/gateway-lifecycle.md) / [GATEWAY](GATEWAY.md) |
@@ -148,9 +148,9 @@ grep -rn "console\.\(log\|warn\|error\|info\)" src packages/serve/src --include=
 
 | 站点 | 为什么留 |
 |---|---|
-| `src/headless-runner.ts` 的 6 行 `[vessel] …` | headless 一次性运行的**结果通道**：告诉人「这次 run 在等人回答 / 去哪个目录看记录」。进程马上退出，没有第二个副本 |
-| `src/ask-answer-delivery.ts` 的 2 行 | 同上：异步投放失败的最终提示（含 request id），不是日志事件 |
-| `src/provider-factory.ts` 的 2 行 | 配置降级**一次性**告知（用哪个 provider / 为什么回退），只在构造时出现 |
+| `src/cli/headless-runner.ts` 的 6 行 `[vessel] …` | headless 一次性运行的**结果通道**：告诉人「这次 run 在等人回答 / 去哪个目录看记录」。进程马上退出，没有第二个副本 |
+| `src/agent/ask-answer-delivery.ts` 的 2 行 | 同上：异步投放失败的最终提示（含 request id），不是日志事件 |
+| `src/runtime/provider-factory.ts` 的 2 行 | 配置降级**一次性**告知（用哪个 provider / 为什么回退），只在构造时出现 |
 | `packages/serve/src/plugin-host/manager.ts` 2 行 | 插件**子进程**的 stdout 转发：正文是外来文本，加事件名只会重复 |
 | `packages/serve/src/platform/server.ts` 的 `[platform-auth]` | auth 后端告警转发（正文来自后端），同上 |
 

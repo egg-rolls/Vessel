@@ -2,7 +2,7 @@
 title: 插件发现、信任与生命周期
 kind: advisory
 triggers: [plugin, plugin host, discovery, trust, external, dispose, mcp, skill, evals, 插件, 插件发现, 信任, 隔离, 生命周期, 技能, 评测, 外部插件]
-paths: [plugins/**, src/plugin-loader.ts, src/plugin-selection.ts]
+paths: [plugins/**, src/plugin/plugin-loader.ts, src/plugin/plugin-selection.ts]
 applies_to: [N, M]
 ---
 
@@ -36,7 +36,7 @@ applies_to: [N, M]
 - 默认扫描根与优先级（高 → 低）：`project`（`./.vessel/plugins`）→ `user`（`~/.vessel/plugins`）→ `repo`（仓库内置 `plugins/`）→ `node_modules`（仓库根与 cwd）；同 id 冲突时高优先级胜出。覆盖内置插件需 `vessel.override: true`；否则保留内置实现、告警并记 `plugin_id_conflict`（不加载覆盖者）。
 - **体验插件**（子进程 + 贡献点）可热重载：gateway 监听 project / user 插件目录与 `config.yaml` 的 `plugins:`，变更去抖 300ms；按 id diff，新增为 inactive，变更先 deactivate 再替换，原 active 的重新激活，删除则注销 RPC 与静态路由。`plugins.reload`（write / admin）触发重扫并返回 `{added, removed, changed, active, errors, restart_required}`；每次 reload 广播 `plugin.changed`。
 - **能力插件**是 in-process 模块，v1 不做真正卸载：改动后必须重启进程；`plugins.reload` 返回 `restart_required`，不谎报已重载。
-- 默认集、外部插件告警与 `VESSEL_NO_EXTERNAL_PLUGINS` 的实现见 `src/plugin-loader.ts` / `src/plugin-selection.ts`；策略与 P0-3 残余风险见 AGENTS 硬规则，本文件不复述。
+- 默认集、外部插件告警与 `VESSEL_NO_EXTERNAL_PLUGINS` 的实现见 `src/plugin/plugin-loader.ts` / `src/plugin/plugin-selection.ts`；策略与 P0-3 残余风险见 AGENTS 硬规则，本文件不复述。
 
 ## 生命周期
 

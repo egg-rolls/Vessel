@@ -1,0 +1,775 @@
+/**
+ * `vessel team list|get|show|mine|post|members|budget|create|update|archive|freeze|unfreeze`
+ * （0.19 S3 / S4；S10.3；0.27；0.51 `show` / `mine`）。
+ *
+ * 只做参数映射、roster 名字解析、渲染与 exit code；
+ * Team 数据与投递全部在 REPL owner 的 TeamService。
+ * `--json` 原样输出端点结果，人类输出走 ui-style，错误码进 stderr。
+ *
+ * @module vessel/team-command
+ */
+
+import { readFile } from 'node:fs/promises';
+import * as path from 'node:path';
+import { normalizeWorkspace } from '@vessel-agent/agent';
+import {
+  AgentOwnerRequestError,
+  AgentOwnerUnavailableError,
+  type CallAgentOwnerOptions,
+  callAgentOwner,
+  resolveAgentOwner,
+} from '../../agent/agent-owner-client';
+import type { AgentOwnerRecord } from '../../agent/agent-owner-server';
+import type { TeamCommand } from '../args';
+import { ui } from '../output';
+import type { CommandResult } from './agent/agent-command';
+
+export interface TeamCommandOptions {
+  dataDir: string;
+  /** 测试注入 */
+  isAlive?: (pid: number) => boolean;
+  fetchImpl?: typeof fetch;
+}
+
+/** get 返回的成员条目（只读子集；服务端可能附加其它字段） */
+interface TeamMemberView {
+  agent_id: string;
+  name?: string;
+  session_id?: string;
+  membership?: string;
+  presence?: string;
+  visibility?: string;
+  /** 0.21：epoch ms；旧数据缺失 */
+  last_seen?: number;
+}
+
+/** get 返回的消息条目（只读子集） */
+interface TeamMessageView {
+  message_id?: string;
+  from?: string;
+  content?: string;
+  ts?: number;
+  kind?: string;
+}
+
+/** list / get 返回的 Team 摘要（只读子集；`show` 还要 policy / frozen） */
+interface TeamSummaryView {
+  team_id?: string;
+  name?: string;
+  member_count?: number;
+  online_count?: number;
+  workspace?: string;
+  description?: string;
+  policy?: Record<string, unknown>;
+  created_at?: number;
+  archived_at?: number;
+  spawn_frozen?: boolean;
+}
+
+/** post 返回的逐条投递结果（只读子集） */
+interface TeamDeliveryView {
+  agent_id?: string;
+  status?: string;
+  code?: string;
+  reason?: string;
+}
+
+/** 人类输出里单条消息的最大宽度 */
+const MESSAGE_MAX_CHARS = 120;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown, fallback = '-'): string {
+  return typeof value === 'string' && value !== '' ? value : fallback;
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** 折叠换行并按字符数截断（数据行保持单行） */
+function singleLine(value: string, max = MESSAGE_MAX_CHARS): string {
+  const flat = value.replace(/\s+/g, ' ').trim();
+  if (flat.length <= max) return flat;
+  return `${flat.slice(0, max)}...`;
+}
+
+function teamList(result: unknown): TeamSummaryView[] {
+  const raw = Array.isArray(result)
+    ? result
+    : isRecord(result) && Array.isArray(result.teams)
+      ? result.teams
+      : [];
+  return raw.filter(isRecord).map((entry) => entry as TeamSummaryView);
+}
+
+function teamMembers(result: unknown): TeamMemberView[] {
+  if (!isRecord(result) || !Array.isArray(result.members)) return [];
+  return result.members
+    .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+    .filter((entry) => typeof entry.agent_id === 'string')
+    .map((entry) => entry as unknown as TeamMemberView);
+}
+
+/** canonical `agents.list` → 某 Team 的完整 roster（只取 present，忽略 left）。 */
+function rosterFromAgents(result: unknown, teamId: string): TeamMemberView[] {
+  if (!isRecord(result) || !Array.isArray(result.agents)) return [];
+  return result.agents
+    .filter(isRecord)
+    .filter((entry) => entry.team_id === teamId && entry.membership !== 'left')
+    .filter((entry) => typeof entry.id === 'string')
+    .map((entry) => ({
+      agent_id: entry.id as string,
+      ...(typeof entry.name === 'string' ? { name: entry.name } : {}),
+      ...(typeof entry.session_id === 'string' ? { session_id: entry.session_id } : {}),
+      ...(typeof entry.membership === 'string' ? { membership: entry.membership } : {}),
+      ...(typeof entry.presence === 'string' ? { presence: entry.presence } : {}),
+      ...(typeof entry.visibility === 'string' ? { visibility: entry.visibility } : {}),
+    }));
+}
+
+function teamMessages(result: unknown): TeamMessageView[] {
+  if (!isRecord(result) || !Array.isArray(result.messages)) return [];
+  return result.messages.filter(isRecord).map((entry) => entry as TeamMessageView);
+}
+
+function formatTeamList(result: unknown): string {
+  const teams = teamList(result);
+  if (teams.length === 0) return ui.dim('No teams.');
+  const lines = [ui.section(`Teams (${teams.length}):`)];
+  for (const team of teams) {
+    lines.push(
+      `  ${asString(team.team_id)}  ${asString(team.name)}  ${String(team.member_count ?? 0)} members  ${String(team.online_count ?? 0)} online  ${asString(team.workspace)}`,
+    );
+  }
+  return lines.join('\n');
+}
+
+function formatTeamGet(result: unknown): string {
+  if (!isRecord(result) || !isRecord(result.team)) {
+    return JSON.stringify(result, null, 2);
+  }
+  const team = result.team;
+  const members = teamMembers(result);
+  const messages = teamMessages(result);
+  const lines: string[] = [
+    ui.section(`Team ${asString(team.team_id)}`),
+    ui.kv('name', asString(team.name)),
+    ui.kv('description', asString(team.description, '')),
+    ui.kv('workspace', asString(team.workspace)),
+    ui.kv('members', String(team.member_count ?? members.length)),
+    ui.kv('online', String(team.online_count ?? 0)),
+  ];
+  // 窗口大小 N 与完整 roster 总数 M 分开显示；缺失 member_count 时回退 N。
+  const totalMembers = asNumber(team.member_count) ?? members.length;
+  lines.push('', ui.section(`Members (${members.length} of ${totalMembers}):`));
+  if (members.length === 0) {
+    lines.push(`  ${ui.dim('No members.')}`);
+  } else {
+    for (const member of members) {
+      const lastSeen =
+        member.last_seen !== undefined ? new Date(member.last_seen).toISOString() : '';
+      lines.push(
+        `  ${asString(member.agent_id)}  ${asString(member.membership)}  ${asString(member.presence)}  ${asString(member.visibility)}  ${asString(member.name, '-')}  ${lastSeen}`,
+      );
+    }
+  }
+  lines.push('', ui.section(`Recent messages (${messages.length}):`));
+  if (messages.length === 0) {
+    lines.push(`  ${ui.dim('No messages.')}`);
+  } else {
+    for (const message of messages) {
+      const ts = asNumber(message.ts);
+      const when = ts !== undefined ? new Date(ts).toISOString() : '-';
+      lines.push(
+        `  ${when}  ${asString(message.from)}  [${asString(message.kind)}]  ${singleLine(asString(message.content, ''))}`,
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * `team show`：一个 Team 的基础信息（名称 / workspace / policy / frozen / 成员数）。
+ *
+ * workspace 在这里是服务端归一化过的绝对路径 —— 与 `team mine` 的判定口径一致，
+ * 两个命令对着看就能确认「成员 cwd 应等于 Team.workspace」这条不变式。
+ */
+function formatTeamShow(result: unknown): string {
+  const team = isRecord(result) && isRecord(result.team) ? result.team : undefined;
+  if (team === undefined) return JSON.stringify(result, null, 2);
+  const created = asNumber(team.created_at);
+  const archived = asNumber(team.archived_at);
+  const members = `${String(team.member_count ?? 0)} (${String(team.online_count ?? 0)} online)`;
+  const lines: string[] = [
+    ui.section(`Team ${asString(team.team_id)}`),
+    ui.kv('name', asString(team.name)),
+    ui.kv('description', asString(team.description, '')),
+    ui.kv('workspace', asString(team.workspace)),
+    ui.kv('policy', policySummary(team.policy)),
+    // 冻结只拦「新建成员」，与归档不同：这里分开显示，避免被读成整组停摆。
+    ui.kv('frozen', team.spawn_frozen === true ? 'yes' : 'no'),
+    ui.kv('archived', archived !== undefined ? new Date(archived).toISOString() : 'no'),
+    ui.kv('members', members),
+    ui.kv('created', created !== undefined ? new Date(created).toISOString() : '-'),
+  ];
+  return lines.join('\n');
+}
+
+/** policy 压成单行 JSON：详情是扫读界面，多行策略树留给 `--json`。 */
+function policySummary(policy: unknown): string {
+  if (!isRecord(policy)) return '-';
+  return Object.keys(policy).length === 0 ? '{}' : JSON.stringify(policy);
+}
+
+/** workspace 包含关系的判定依据；`exact` = cwd 就是 workspace 本身。 */
+type MineMatch = 'exact' | 'ancestor';
+
+interface TeamMineHit {
+  team: TeamSummaryView;
+  /** 归一化后的命中 workspace（判定依据，同时也是输出字段）。 */
+  workspace: string;
+  match: MineMatch;
+}
+
+/** 比较键：Windows 路径大小写不敏感（与 team-slug 的 `workspaceKey` 同口径）。 */
+function comparePath(value: string): string {
+  return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+
+/** cwd 落在 workspace 内时返回判定依据；`..` 前缀与跨盘符都算不命中。 */
+function ancestryOf(workspace: string, cwd: string): MineMatch | undefined {
+  const from = comparePath(workspace);
+  const to = comparePath(cwd);
+  if (from === to) return 'exact';
+  const rel = path.relative(from, to);
+  if (rel === '') return 'exact';
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
+  return 'ancestor';
+}
+
+/**
+ * 候选 Team 里取**最深**的命中 workspace：workspace 允许嵌套（monorepo 里一个包
+ * 也可能是一个 Team），近的祖先才是用户在问的那个。
+ */
+function resolveMine(teams: readonly TeamSummaryView[], cwd: string): TeamMineHit | undefined {
+  let best: TeamMineHit | undefined;
+  for (const team of teams) {
+    const raw = team.workspace;
+    if (raw === undefined || raw === '') continue;
+    let workspace: string;
+    try {
+      workspace = normalizeWorkspace(raw);
+    } catch {
+      // 旧数据的 workspace 可能已不可解析（盘符变了 / 非法字符）：跳过，别让一条脏记录毁掉整次查询。
+      continue;
+    }
+    const match = ancestryOf(workspace, cwd);
+    if (match === undefined) continue;
+    if (best === undefined || workspace.length > best.workspace.length) {
+      best = { team, workspace, match };
+    }
+  }
+  return best;
+}
+
+function formatTeamMine(hit: TeamMineHit, cwd: string): string {
+  const basis =
+    hit.match === 'exact'
+      ? 'exact: cwd 就是这个 Team 的 workspace'
+      : 'ancestor: cwd 落在该 Team workspace 之内';
+  return [
+    `${ui.symbol('ok')} team ${asString(hit.team.team_id)}`,
+    ui.kv('name', asString(hit.team.name)),
+    ui.kv('workspace', hit.workspace),
+    ui.kv('members', String(hit.team.member_count ?? 0)),
+    ui.kv('cwd', cwd),
+    // 判定依据单列一行：另一个 bug（成员 cwd 应等于 Team.workspace）靠它对账。
+    ui.kv('basis', basis),
+  ].join('\n');
+}
+
+function deliveriesOf(result: unknown): TeamDeliveryView[] {
+  if (!isRecord(result) || !Array.isArray(result.delivered)) return [];
+  return result.delivered.filter(isRecord).map((entry) => entry as TeamDeliveryView);
+}
+
+/** 逐条打印 delivery；返回是否有非 queued 项（决定 exit code） */
+function formatPostResult(result: unknown): { text: string; failed: boolean } {
+  if (!isRecord(result)) {
+    return { text: JSON.stringify(result, null, 2), failed: false };
+  }
+  const deliveries = deliveriesOf(result);
+  const failed = deliveries.some((delivery) => delivery.status !== 'queued');
+  const lines: string[] = [`${ui.symbol('ok')} posted ${asString(result.message_id)}`];
+  if (deliveries.length === 0) {
+    lines.push(`  ${ui.symbol('info')} no mentions; message logged only`);
+  }
+  for (const delivery of deliveries) {
+    const agentId = asString(delivery.agent_id);
+    const status = asString(delivery.status, 'error');
+    if (status === 'queued') {
+      lines.push(`  ${ui.symbol('ok')} ${agentId} queued`);
+      continue;
+    }
+    const detail =
+      delivery.code !== undefined || delivery.reason !== undefined
+        ? `${asString(delivery.code, status)}: ${asString(delivery.reason, '-')}`
+        : status;
+    lines.push(`  ${ui.symbol('err')} ${agentId} ${status} ${detail}`);
+  }
+  return { text: lines.join('\n'), failed };
+}
+
+/** create / update / archive 的 TeamSummary 输出（直接返回 TeamSummary）。 */
+function formatTeamWrite(result: unknown): string {
+  if (!isRecord(result)) return JSON.stringify(result, null, 2);
+  const lines = [
+    `${ui.symbol('ok')} team saved ${asString(result.team_id)}`,
+    ui.kv('name', asString(result.name)),
+    ui.kv('description', asString(result.description, '')),
+    ui.kv('workspace', asString(result.workspace)),
+    ui.kv('members', String(result.member_count ?? 0)),
+    ui.kv('online', String(result.online_count ?? 0)),
+  ];
+  if (result.archived_at !== undefined) {
+    lines.push(ui.kv('archived_at', String(result.archived_at)));
+  }
+  return lines.join('\n');
+}
+
+/**
+ * create / update 的 policy：内联对象或 JSON 文件。
+ * 文件优先语义由 CLI 解析层保证互斥；这里只负责读取与形状校验。
+ */
+async function resolvePolicy(command: {
+  policy?: Record<string, unknown>;
+  policyFile?: string;
+}): Promise<{ ok: true; policy?: Record<string, unknown> } | { ok: false; error: string }> {
+  if (command.policy !== undefined) return { ok: true, policy: command.policy };
+  if (command.policyFile === undefined) return { ok: true };
+  try {
+    const parsed = JSON.parse(await readFile(command.policyFile, 'utf8')) as unknown;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return {
+        ok: false,
+        error: `Invalid --policy-file ${command.policyFile}: expected a JSON object`,
+      };
+    }
+    return { ok: true, policy: parsed as Record<string, unknown> };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Failed to read --policy-file ${command.policyFile}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+}
+
+function formatMembersResult(result: unknown): string {
+  if (!isRecord(result)) return JSON.stringify(result, null, 2);
+  return [
+    ui.kv('team_id', asString(result.team_id)),
+    ui.kv('action', asString(result.action)),
+    ui.kv('agent_id', asString(result.agent_id)),
+    ui.kv('membership', asString(result.membership)),
+  ].join('\n');
+}
+
+/**
+ * `teams.get` 的 team 摘要；`not_found` 归一成 undefined 交给调用方决定是否回退。
+ *
+ * 窗口固定成 1 / 1：`show` 只读基础信息，成员与日志列表由 `team get` 负责。
+ */
+async function getTeamDetail(
+  record: AgentOwnerRecord,
+  teamId: string,
+  options: CallAgentOwnerOptions,
+): Promise<unknown | undefined> {
+  try {
+    return await callAgentOwner(
+      record,
+      'teams.get',
+      { team_id: teamId, limit: 1, members_limit: 1 },
+      options,
+    );
+  } catch (error) {
+    if (error instanceof AgentOwnerRequestError && error.code === 'not_found') return undefined;
+    throw error;
+  }
+}
+
+/** 名字 / workspace 目录名的候选判定（`team_id` 本身就是目录名 slug）。 */
+function matchesTeamAlias(team: TeamSummaryView, ref: string): boolean {
+  if (team.name !== undefined && team.name === ref) return true;
+  const workspace = team.workspace;
+  if (workspace === undefined || workspace === '') return false;
+  const segments = workspace.split(/[\\/]+/).filter(Boolean);
+  return segments[segments.length - 1] === ref;
+}
+
+/**
+ * `team show <team_id|slug>`：先按 id 问 `teams.get`，`not_found` 再在 `teams.list`
+ * 里按名字 / workspace 目录名找**唯一**命中。
+ *
+ * 为什么要回退：用户手里常常只有目录名或中文显示名，而 `team_id` 是 basename 的
+ * ASCII slug；`teams.list` 已经在手，不必为此新增 RPC。多命中一律报错 —— 猜错的
+ * team 比不猜更糟（改错对象）。
+ */
+async function resolveTeamDetail(
+  record: AgentOwnerRecord,
+  ref: string,
+  options: CallAgentOwnerOptions,
+): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
+  const direct = await getTeamDetail(record, ref, options);
+  if (direct !== undefined) return { ok: true, value: direct };
+
+  const listed = teamList(await callAgentOwner(record, 'teams.list', {}, options));
+  const hits = listed.filter((team) => matchesTeamAlias(team, ref));
+  if (hits.length > 1) {
+    const ids = hits.map((team) => asString(team.team_id)).join(', ');
+    return { ok: false, error: `ambiguous team: "${ref}" matches ${ids}` };
+  }
+  const id = hits[0]?.team_id;
+  if (id !== undefined) {
+    const found = await getTeamDetail(record, id, options);
+    if (found !== undefined) return { ok: true, value: found };
+  }
+  return {
+    ok: false,
+    error: `unknown team: "${ref}" (not an id, name, or workspace directory)`,
+  };
+}
+
+function numeric(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : '-';
+}
+
+function budgetConversations(result: unknown): Record<string, unknown>[] {
+  if (!isRecord(result) || !Array.isArray(result.conversations)) return [];
+  return result.conversations.filter(isRecord);
+}
+
+function formatBudgetStatus(result: unknown): string {
+  if (!isRecord(result)) return JSON.stringify(result, null, 2);
+  const lines: string[] = [ui.section(`Team ${asString(result.team_id)}`)];
+  const conversations = budgetConversations(result);
+  if (conversations.length === 0) {
+    lines.push(`  ${ui.dim('No conversations.')}`);
+    return lines.join('\n');
+  }
+  for (const conversation of conversations) {
+    lines.push(`  ${asString(conversation.conversation_id)}`);
+    lines.push(
+      `    hops ${numeric(conversation.hops)}  turns ${numeric(conversation.turns)}  tokens ${numeric(conversation.total_tokens)}  wall_clock_ms ${numeric(conversation.wall_clock_ms)}`,
+    );
+    const blocked = conversation.blocked;
+    lines.push(
+      isRecord(blocked)
+        ? `    blocked ${asString(blocked.dimension)} ${asString(blocked.reason)}`
+        : '    blocked -',
+    );
+    const overrides = isRecord(conversation.overrides) ? conversation.overrides : {};
+    const entries = Object.entries(overrides).filter(
+      (entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]),
+    );
+    if (entries.length === 0) {
+      lines.push('    overrides -');
+      continue;
+    }
+    for (const [dimension, override] of entries) {
+      lines.push(
+        `    overrides ${dimension}=${numeric(override.max)} (${asString(override.by)} via ${asString(override.via)})`,
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+function formatBudgetOverride(result: unknown): string {
+  if (!isRecord(result)) return JSON.stringify(result, null, 2);
+  const previous = result.previous_max === null ? 'policy' : numeric(result.previous_max);
+  const max = result.max === null ? 'unlimited' : numeric(result.max);
+  return [
+    `${ui.symbol('ok')} budget override ${asString(result.conversation_id)}`,
+    ui.kv('team_id', asString(result.team_id)),
+    ui.kv('dimension', asString(result.dimension)),
+    ui.kv('previous', previous),
+    ui.kv('max', max),
+  ].join('\n');
+}
+
+/**
+ * 把 `--mention` 的 name|id 解析为 agent id：
+ * 精确 agent_id / session_id 优先，其次 Team 内唯一 name。
+ */
+function resolveMentions(
+  members: TeamMemberView[],
+  mentions: string[],
+): { ok: true; ids: string[] } | { ok: false; error: string } {
+  const ids: string[] = [];
+  for (const mention of mentions) {
+    const byId = members.filter(
+      (member) => member.agent_id === mention || member.session_id === mention,
+    );
+    if (byId.length > 1) {
+      return {
+        ok: false,
+        error: `ambiguous team member: "${mention}" (matches multiple ids)`,
+      };
+    }
+    if (byId.length === 1) {
+      const id = byId[0]?.agent_id;
+      if (id !== undefined && !ids.includes(id)) ids.push(id);
+      continue;
+    }
+
+    const byName = members.filter((member) => member.name === mention);
+    if (byName.length === 0) {
+      return {
+        ok: false,
+        error: `unknown team member: "${mention}" (not an agent id, session id, or present name)`,
+      };
+    }
+    if (byName.length > 1) {
+      return {
+        ok: false,
+        error: `ambiguous team member: "${mention}" (matches ${byName.length} members)`,
+      };
+    }
+    const id = byName[0]?.agent_id;
+    if (id !== undefined && !ids.includes(id)) ids.push(id);
+  }
+  return { ok: true, ids };
+}
+
+/** 执行一个 team 子命令；不抛错，错误转 exitCode / stderr */
+export async function runTeamCommand(
+  command: TeamCommand,
+  options: TeamCommandOptions,
+): Promise<CommandResult> {
+  let record: AgentOwnerRecord;
+  try {
+    record = await resolveAgentOwner(options.dataDir, {
+      ...(options.isAlive !== undefined ? { isAlive: options.isAlive } : {}),
+    });
+  } catch (error) {
+    return failure(error);
+  }
+
+  try {
+    const result = await execute(command, record, options);
+    if (!result.ok) return { exitCode: 1, stdout: '', stderr: result.error };
+    if (command.json) {
+      return {
+        exitCode: result.exitCode ?? 0,
+        stdout: JSON.stringify(result.value, null, 2),
+        stderr: '',
+      };
+    }
+    return { exitCode: result.exitCode ?? 0, stdout: result.text ?? '', stderr: '' };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+type Executed =
+  | { ok: true; value: unknown; text?: string; exitCode?: number }
+  | { ok: false; error: string };
+
+async function execute(
+  command: TeamCommand,
+  record: AgentOwnerRecord,
+  options: TeamCommandOptions,
+): Promise<Executed> {
+  const fetchOptions = options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {};
+
+  if (command.kind === 'list') {
+    const value = await callAgentOwner(record, 'teams.list', {}, fetchOptions);
+    return { ok: true, value, text: formatTeamList(value) };
+  }
+
+  if (command.kind === 'create') {
+    const policy = await resolvePolicy(command);
+    if (!policy.ok) return { ok: false, error: policy.error };
+    const value = await callAgentOwner(
+      record,
+      'teams.create',
+      {
+        workspace: command.workspace,
+        ...(command.name !== undefined ? { name: command.name } : {}),
+        ...(command.description !== undefined ? { description: command.description } : {}),
+        ...(policy.policy !== undefined ? { policy: policy.policy } : {}),
+      },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatTeamWrite(value) };
+  }
+
+  if (command.kind === 'update') {
+    const policy = await resolvePolicy(command);
+    if (!policy.ok) return { ok: false, error: policy.error };
+    const value = await callAgentOwner(
+      record,
+      'teams.update',
+      {
+        team_id: command.teamId,
+        ...(command.name !== undefined ? { name: command.name } : {}),
+        ...(command.description !== undefined ? { description: command.description } : {}),
+        ...(policy.policy !== undefined ? { policy: policy.policy } : {}),
+      },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatTeamWrite(value) };
+  }
+
+  if (command.kind === 'archive') {
+    const value = await callAgentOwner(
+      record,
+      'teams.archive',
+      { team_id: command.teamId },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatTeamWrite(value) };
+  }
+
+  if (command.kind === 'freeze' || command.kind === 'unfreeze') {
+    const value = await callAgentOwner(
+      record,
+      'teams.spawnFrozen',
+      { team_id: command.teamId, frozen: command.kind === 'freeze' },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatTeamWrite(value) };
+  }
+
+  if (command.kind === 'get') {
+    const value = await callAgentOwner(
+      record,
+      'teams.get',
+      {
+        team_id: command.teamId,
+        ...(command.limit !== undefined ? { limit: command.limit } : {}),
+        ...(command.members !== undefined ? { members_limit: command.members } : {}),
+      },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatTeamGet(value) };
+  }
+
+  if (command.kind === 'members') {
+    const value = await callAgentOwner(
+      record,
+      'teams.members',
+      { team_id: command.teamId, action: command.action, member: command.member },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatMembersResult(value) };
+  }
+
+  if (command.kind === 'show') {
+    const resolved = await resolveTeamDetail(record, command.team, fetchOptions);
+    if (!resolved.ok) return resolved;
+    return { ok: true, value: resolved.value, text: formatTeamShow(resolved.value) };
+  }
+
+  if (command.kind === 'mine') {
+    const listed = await callAgentOwner(record, 'teams.list', {}, fetchOptions);
+    const teams = teamList(listed);
+    // team-scoped token 的 `teams.list` 会脱敏 workspace（防泄漏主机路径）：
+    // 没有路径就没有包含关系可算，明说原因，别把它报成「不属于任何 Team」。
+    if (
+      teams.length > 0 &&
+      teams.every((team) => team.workspace === undefined || team.workspace === '')
+    ) {
+      return {
+        ok: false,
+        error: 'team_workspace_unavailable: 端点未返回 workspace，无法按目录反查',
+      };
+    }
+    let cwd: string;
+    try {
+      cwd = normalizeWorkspace(process.cwd());
+    } catch {
+      cwd = path.resolve(process.cwd());
+    }
+    const hit = resolveMine(teams, cwd);
+    if (hit === undefined) {
+      return { ok: false, error: `no_team_for_cwd: 当前目录不属于任何 Team (cwd: ${cwd})` };
+    }
+    return {
+      ok: true,
+      value: { cwd, match: hit.match, matched_workspace: hit.workspace, team: hit.team },
+      text: formatTeamMine(hit, cwd),
+    };
+  }
+
+  if (command.kind === 'budget-status') {
+    const value = await callAgentOwner(
+      record,
+      'teams.budget',
+      {
+        team_id: command.teamId,
+        action: 'status',
+        ...(command.conversationId !== undefined
+          ? { conversation_id: command.conversationId }
+          : {}),
+      },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatBudgetStatus(value) };
+  }
+
+  if (command.kind === 'budget-override') {
+    const value = await callAgentOwner(
+      record,
+      'teams.budget',
+      {
+        team_id: command.teamId,
+        action: 'override',
+        conversation_id: command.conversationId,
+        dimension: command.dimension,
+        max: command.max,
+      },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatBudgetOverride(value) };
+  }
+
+  // post：有 --mention 时用完整成员视图解析为 agent id（不受展示窗口 20 / 100 限制）。
+  // canonical `agents.list` 在 owner principal 下按 viewer 返回全部成员，含 team_id。
+  let mentionIds: string[] = [];
+  if (command.mentions.length > 0) {
+    const listed = await callAgentOwner(record, 'agents.list', {}, fetchOptions);
+    const resolved = resolveMentions(rosterFromAgents(listed, command.teamId), command.mentions);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+    mentionIds = resolved.ids;
+  }
+
+  const value = await callAgentOwner(
+    record,
+    'teams.post',
+    {
+      team_id: command.teamId,
+      content: command.content,
+      ...(mentionIds.length > 0 ? { mentions: mentionIds } : {}),
+    },
+    fetchOptions,
+  );
+  const rendered = formatPostResult(value);
+  return { ok: true, value, text: rendered.text, exitCode: rendered.failed ? 1 : 0 };
+}
+
+function failure(error: unknown): CommandResult {
+  if (error instanceof AgentOwnerUnavailableError || error instanceof AgentOwnerRequestError) {
+    return { exitCode: 1, stdout: '', stderr: `${error.code}: ${error.message}` };
+  }
+  return {
+    exitCode: 1,
+    stdout: '',
+    stderr: `agent_owner_error: ${error instanceof Error ? error.message : String(error)}`,
+  };
+}

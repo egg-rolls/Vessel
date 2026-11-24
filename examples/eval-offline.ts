@@ -10,8 +10,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { loadConfig } from '../packages/config/src/index';
-import { executeEvalSuite } from '../src/eval-wiring';
-import { PluginLoader } from '../src/plugin-loader';
+import { executeEvalSuite } from '../src/plugin/eval-wiring';
+import { PluginLoader } from '../src/plugin/plugin-loader';
 
 function yamlPath(value: string): string {
   return value.replaceAll('\\', '/');

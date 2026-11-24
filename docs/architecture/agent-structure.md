@@ -2,7 +2,7 @@
 title: Agent 结构、成员与临时
 kind: current
 triggers: [agent, member, peer, contractor, temporary, owner, team, create, hire, role, promote, demote, tools, inbox, allowlist, 角色, 成员, 派生, 转换, 工具面, 数据模型, 负责人, 临时成员]
-paths: [packages/agent/src/snapshot.ts, packages/agent/src/types.ts, packages/agent/src/service.ts, packages/agent/src/runtime.ts, packages/agent/src/tool.ts, packages/agent/src/member-cwd.ts, apps/web/src/domains/agents/**, apps/web/src/domains/team/**, apps/web/src/stores/**, src/agent-wiring.ts]
+paths: [packages/agent/src/snapshot.ts, packages/agent/src/types.ts, packages/agent/src/service.ts, packages/agent/src/runtime.ts, packages/agent/src/tool.ts, packages/agent/src/member-cwd.ts, apps/web/src/domains/agents/**, apps/web/src/domains/team/**, apps/web/src/stores/**, src/agent/agent-wiring.ts]
 ---
 
 # Agent 结构、成员与临时

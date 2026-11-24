@@ -2,7 +2,7 @@
 title: 插件内嵌 React UI（embed 档）契约
 kind: current
 triggers: [plugin embed, ui_trust, ui_bundle_hash, ui.embed, plugin-sdk, import map, vendor shim, PluginEmbed, PluginErrorBoundary, embedded, isolated, trust_ui, 内嵌, 插件 UI, 信任档, 哈希锁, 同源]
-paths: [src/plugin-manifest.ts, packages/serve/src/plugin-host/**, packages/serve/src/platform/proxy-config.ts, packages/serve/src/gateway/auth.ts, packages/plugin-sdk/**, apps/web/src/domains/plugins/**, plugins/observability/usage/**]
+paths: [src/plugin/plugin-manifest.ts, packages/serve/src/plugin-host/**, packages/serve/src/platform/proxy-config.ts, packages/serve/src/gateway/auth.ts, packages/plugin-sdk/**, apps/web/src/domains/plugins/**, plugins/observability/usage/**]
 ---
 
 # 插件内嵌 React UI（embed 档）契约
@@ -32,7 +32,7 @@ paths: [src/plugin-manifest.ts, packages/serve/src/plugin-host/**, packages/serv
 - 安全措辞：embedded 等同「授予该插件对 Web 控制台的全部权限（含会话凭据）」；SDK 白名单
   只防误用，**不是沙箱**。
 
-## 2. manifest additive 字段（src/plugin-manifest.ts）
+## 2. manifest additive 字段（src/plugin/plugin-manifest.ts）
 
 ```jsonc
 "ui": {
@@ -160,7 +160,7 @@ ui_embed?: { entry: string; css?: string; runtime: { react: string; sdk: string 
   **bump 策略**：仅 SDK 契约变更时 bump（additive → minor，破坏 → major）；宿主 React
   主版本升级 = SDK major 提升并写 CHANGELOG。仓库 0.x minor 发版（0.55 / 0.56…）不改
   SDK 版本，插件 `runtime.sdk: "^1"` 跨仓库发版恒成立。
-- **semver 工具搬家 + 扩语法**：src/plugin-manifest.ts 的纯 semver 函数（parseSemver /
+- **semver 工具搬家 + 扩语法**：src/plugin/plugin-manifest.ts 的纯 semver 函数（parseSemver /
   isValidSemver / parseRangeVersion / compareSemver / parseVersionRange /
   satisfiesComparator / satisfiesVersionRange 及相关类型）移入
   `packages/plugin-sdk/src/semver.ts`；plugin-manifest.ts 改为 import + re-export

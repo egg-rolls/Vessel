@@ -2,7 +2,7 @@
 title: CI / CD 手册
 kind: current
 triggers: [CI, CD, 持续集成, 持续交付, 发布流水线, 工作流, workflow, release.yml, 质量门禁, 静态断言, lint, typecheck, build, 烟测, 端到端, 干跑, 本地校验]
-paths: [.github/workflows/**, .github/actions/quality/action.yml, package.json, scripts/version.ts, scripts/latest-json.ts, src/cli-update.ts, src/update/**]
+paths: [.github/workflows/**, .github/actions/quality/action.yml, package.json, scripts/version.ts, scripts/latest-json.ts, src/cli/commands/cli-update.ts, src/update/**]
 ---
 
 # CI / CD 手册
@@ -123,7 +123,7 @@ PR 没有 required checks，把关靠人 + 构建输出 + verifier 线程的读�
 - **gateway 生命周期**：参数解析、PID 原子写 / stale 判定（`<dataDir>/gateway.pid` 与日志 `0600`）、三平台服务定义与 daemon 启停；**不得**在 CI 里真的注册服务或修改开发机。
 - **热重载**：`gateway.reload` 只承诺 plugins 扫描缓存与 `serve.allowed_origins`，其余字段返回 `requires_restart`；改范围必须同时更新 ADR-075。
 - **自更新**：`vessel update` 只按 argv 决定形态，非 TTY 缺 `--yes` 返回 1；不在 CI 执行真实全局安装。
-- **CLI 样式**：人类可读输出走 `src/ui-style.ts`，TTY / `NO_COLOR` / `TERM=dumb` 有纯文本回退，`--json` 不带 ANSI。
+- **CLI 样式**：人类可读输出走 `src/cli/output.ts`，TTY / `NO_COLOR` / `TERM=dumb` 有纯文本回退，`--json` 不带 ANSI。
 - **权限生命周期**：默认无限等待、abort → `PermissionAbortedError`、显式正数 `timeoutMs` → `PermissionTimeoutError`、`deadline_at` 条件写入、重复应答幂等 / `conflict`、run 终态 `orphaned` / `run_ended`、POSIX `0600`。
 - **权限持久化**：gateway 在 `<dataDir>/interactions-<id>.json` 写 `pending` / `answered` / `orphaned`（`<id>` 是内部持久单 id，缺省 `default`，不是 wire 字段）；未知 `requestId` 返回 `not_found`。
 - **Web**：权限卡片在 run 卡片内联、跨 session 用顶部待处理条；不得重新引入全局权限遮罩。

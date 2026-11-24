@@ -8,7 +8,7 @@
 
 import type { VesselConfig } from '../../packages/config/src/index';
 import type { ReplContext } from '../../packages/tui/src/index';
-import { readPackageVersion } from '../version';
+import { readPackageVersion } from '../shared/version';
 import { readUpdateCache, shouldCheck, writeUpdateCache } from './cache';
 import { checkForUpdate } from './check';
 import type { UpdateChannel } from './manifest';

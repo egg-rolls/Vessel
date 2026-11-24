@@ -2,7 +2,7 @@
 title: 权限桥与会话切换
 kind: current
 triggers: [web, apps/web, permission bridge, ask, session switch, frontend, 网页, 前端, 权限桥, 会话切换, 浏览器]
-paths: [apps/web/src/gateway/**, apps/web/src/state/**, apps/web/src/auth/auth-client.ts, apps/web/src/domains/chat/PermissionCard.tsx, apps/web/src/domains/chat/pending-permissions.ts, apps/web/src/domains/chat/AskCard.tsx, apps/web/src/domains/chat/ask-answer.ts, apps/web/src/domains/chat/tool-catalog.tsx, apps/web/src/domains/integrations/McpPanel.tsx, apps/web/src/domains/integrations/ChannelsPanel.tsx, apps/web/src/domains/integrations/ToolsPanel.tsx, apps/web/src/domains/observe/MetricsPanel.tsx, apps/web/src/domains/runs/useRunsPage.ts, apps/web/vite.config.ts, packages/serve/src/gateway.ts, packages/core/src/runtime/runtime.ts, packages/core/src/runtime/execution-unit.ts, src/cli.ts, src/web-dist.ts]
+paths: [apps/web/src/gateway/**, apps/web/src/state/**, apps/web/src/auth/auth-client.ts, apps/web/src/domains/chat/PermissionCard.tsx, apps/web/src/domains/chat/pending-permissions.ts, apps/web/src/domains/chat/AskCard.tsx, apps/web/src/domains/chat/ask-answer.ts, apps/web/src/domains/chat/tool-catalog.tsx, apps/web/src/domains/integrations/McpPanel.tsx, apps/web/src/domains/integrations/ChannelsPanel.tsx, apps/web/src/domains/integrations/ToolsPanel.tsx, apps/web/src/domains/observe/MetricsPanel.tsx, apps/web/src/domains/runs/useRunsPage.ts, apps/web/vite.config.ts, packages/serve/src/gateway.ts, packages/core/src/runtime/runtime.ts, packages/core/src/runtime/execution-unit.ts, src/cli.ts, src/gateway/web-dist.ts]
 ---
 
 # 权限桥与会话切换（Web）

@@ -1,0 +1,370 @@
+/**
+ * `vessel config path|init|show`（0.5 E17 / PLAN §7.2–§7.4）
+ *
+ * - 一次性本地命令：不 bootstrap、不加载 provider、不加 tenant 锁；
+ * - `config show` 输出始终脱敏；有校验错误 exit 1；
+ * - `config init` 只写用户配置，不写真实密钥。
+ *
+ * @module vessel/config-command
+ */
+
+import { existsSync } from 'node:fs';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import * as path from 'node:path';
+import { stringify as stringifyYaml } from 'yaml';
+import {
+  buildConfigSnapshot,
+  getUserConfigPath,
+  loadConfig,
+  redactSourcePaths,
+} from '../../../packages/config/src/index';
+import { loggingEnvOverrides } from '../../../packages/core/src/index';
+import { formatConfigError, formatConfigErrors } from '../../config/config-error-format';
+import {
+  isSettableConfigKey,
+  isUiErrorLevel,
+  isUiLanguage,
+  isUiStatusBars,
+  isUiVerbosity,
+  LOG_ENUM_VALUES,
+  setUserConfigValue,
+} from '../../config/ui-settings';
+import { resolveDataDir } from '../../data/data-paths';
+import { t } from '../../i18n';
+import { ui } from '../output';
+
+type EnvMap = Record<string, string | undefined>;
+
+/** CLI 命令结果（CLI 层负责打印与 process.exit） */
+export interface ConfigCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** `config path` 选项 */
+export interface ConfigPathOptions {
+  json?: boolean;
+  configPath?: string;
+  userConfigPath?: string;
+  env?: EnvMap;
+}
+
+/** `config init` 选项 */
+export interface ConfigInitOptions {
+  force?: boolean;
+  json?: boolean;
+  userConfigPath?: string;
+}
+
+/** `config show` 选项 */
+export interface ConfigShowOptions {
+  sources?: boolean;
+  json?: boolean;
+  configPath?: string;
+  userConfigPath?: string;
+  env?: EnvMap;
+}
+
+/** `config set` 选项（0.11） */
+export interface ConfigSetOptions {
+  json?: boolean;
+  userConfigPath?: string;
+}
+
+/**
+ * 用户配置模板（内嵌；不含真实密钥）。
+ *
+ * `api_key_env` 只是注释示例：生效的 `_env` 在变量缺失时会报错，
+ * 模板必须能在零配置下直接启动（DECISION-020 §R1.6）。
+ */
+export const USER_CONFIG_TEMPLATE = `# Vessel user config (YAML is the primary configuration format)
+provider:
+  name: openai
+  model: gpt-4
+  # Read the key from an environment variable (must be set, otherwise startup fails):
+  # api_key_env: VESSEL_API_KEY
+  # For a custom OpenAI-compatible endpoint, set name: openai and uncomment:
+  # base_url: https://api.example.com/v1
+data_dir: ~/.vessel/data
+tenant:
+  default: default
+trace:
+  enabled: true
+  level: full
+`;
+
+function formatError(error: { path: string; message: string }): string {
+  return formatConfigError(error);
+}
+
+/** `vessel config path [--json]` */
+export async function configPathCommand(
+  options: ConfigPathOptions = {},
+): Promise<ConfigCommandResult> {
+  const env = options.env ?? process.env;
+  const projectPath = path.resolve(options.configPath ?? 'vessel.yaml');
+  const userPath = path.resolve(options.userConfigPath ?? getUserConfigPath());
+
+  const { config } = await loadConfig({
+    configPath: options.configPath,
+    userConfigPath: options.userConfigPath,
+    env,
+  });
+  const dataDir = resolveDataDir(config, env);
+
+  const exists = { user: existsSync(userPath), project: existsSync(projectPath) };
+
+  if (options.json) {
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({ user: userPath, project: projectPath, data_dir: dataDir, exists }),
+      stderr: '',
+    };
+  }
+
+  return {
+    exitCode: 0,
+    stdout: [
+      `user:    ${userPath} (${exists.user ? 'exists' : 'missing'})`,
+      `project: ${projectPath} (${exists.project ? 'exists' : 'missing'})`,
+      `data:    ${dataDir}`,
+    ].join('\n'),
+    stderr: '',
+  };
+}
+
+/** `vessel config init [--force] [--json]` */
+export async function configInitCommand(
+  options: ConfigInitOptions = {},
+): Promise<ConfigCommandResult> {
+  const target = options.userConfigPath ?? getUserConfigPath();
+
+  if (existsSync(target) && options.force !== true) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: t('config.init.exists', { path: target }),
+    };
+  }
+
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, USER_CONFIG_TEMPLATE, 'utf8');
+  await chmod(target, 0o600).catch(() => {
+    // POSIX best-effort；Windows 忽略
+  });
+
+  if (options.json) {
+    return { exitCode: 0, stdout: JSON.stringify({ path: target, created: true }), stderr: '' };
+  }
+  return {
+    exitCode: 0,
+    stdout: [ui.ok(`created ${target}`), t('config.init.next')].join('\n'),
+    stderr: '',
+  };
+}
+
+/**
+ * `vessel config set <key> <value> [--json]`（0.11；0.11.1 / 0.13 扩展键）。
+ * 支持 `ui.language` / `ui.showReasoning` / `ui.statusBars` / `agent.cwd`；
+ * 只写用户配置（YAML），保留其它键。
+ */
+export async function configSetCommand(
+  key: string,
+  value: string,
+  options: ConfigSetOptions = {},
+): Promise<ConfigCommandResult> {
+  if (!isSettableConfigKey(key)) {
+    return { exitCode: 2, stdout: '', stderr: t('config.set.unknownKey', { key }) };
+  }
+
+  let parsed: string | boolean | number = value;
+  if (key === 'ui.language') {
+    if (!isUiLanguage(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidLanguage', { value }),
+      };
+    }
+  } else if (key === 'ui.showReasoning') {
+    if (value !== 'true' && value !== 'false') {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidBoolean', { key, value }),
+      };
+    }
+    parsed = value === 'true';
+  } else if (key === 'ui.statusBars') {
+    if (!isUiStatusBars(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidStatusBars', { value }),
+      };
+    }
+  } else if (key === 'ui.verbosity') {
+    if (!isUiVerbosity(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidVerbosity', { value }),
+      };
+    }
+  } else if (
+    key === 'ui.showInternalEvents' ||
+    key === 'ui.askUser' ||
+    key === 'ui.expandCards' ||
+    key === 'ui.showArchived'
+  ) {
+    if (value !== 'true' && value !== 'false') {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidBoolean', { key, value }),
+      };
+    }
+    parsed = value === 'true';
+  } else if (key === 'ui.errorLevel') {
+    if (!isUiErrorLevel(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidErrorLevel', { value }),
+      };
+    }
+  } else if (key === 'observability.showProcessErrors') {
+    if (value !== 'true' && value !== 'false') {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidBoolean', { key, value }),
+      };
+    }
+    parsed = value === 'true';
+  } else if (key === 'emptyResponse.enabled' || key === 'emptyResponse.seamless') {
+    if (value !== 'true' && value !== 'false') {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidBoolean', { key, value }),
+      };
+    }
+    parsed = value === 'true';
+  } else if (key === 'emptyResponse.maxRetries') {
+    const retries = Number(value);
+    if (!Number.isInteger(retries) || retries < 0 || retries > 10) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidNumber', { key, min: 0, max: 10 }),
+      };
+    }
+    parsed = retries;
+  } else if (key === 'emptyResponse.nudge') {
+    if (value.trim() === '') {
+      return { exitCode: 2, stdout: '', stderr: t('config.set.invalidNudge') };
+    }
+    parsed = value.trim();
+  } else if (LOG_ENUM_VALUES[key] !== undefined) {
+    const allowed = LOG_ENUM_VALUES[key] ?? [];
+    if (!allowed.includes(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidEnum', { key, allowed: allowed.join(' | ') }),
+      };
+    }
+  } else if (value.trim() === '') {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: t('config.set.invalidPath', { value }),
+    };
+  } else {
+    parsed = value.trim();
+  }
+
+  const target = options.userConfigPath ?? getUserConfigPath();
+  try {
+    await setUserConfigValue(key, parsed, { configPath: target });
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: t('config.set.failed', {
+        detail: error instanceof Error ? error.message : String(error),
+      }),
+    };
+  }
+
+  if (options.json) {
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({ key, value: parsed, path: target }),
+      stderr: '',
+    };
+  }
+  return { exitCode: 0, stdout: ui.ok(`${key} = ${String(parsed)} (${target})`), stderr: '' };
+}
+
+/** `vessel config show [--sources] [--json]` */
+export async function configShowCommand(
+  options: ConfigShowOptions = {},
+): Promise<ConfigCommandResult> {
+  const result = await loadConfig({
+    configPath: options.configPath,
+    userConfigPath: options.userConfigPath,
+    env: options.env ?? process.env,
+  });
+
+  const warningText = result.validation.warnings.map(formatError).join('\n');
+
+  if (result.validation.errors.length > 0) {
+    const errors = result.validation.errors.map(({ path, message }) => ({ path, message }));
+    return {
+      exitCode: 1,
+      // 结构化输出始终在 stdout：脚本无需解析 stderr。
+      stdout: options.json ? JSON.stringify({ errors }) : '',
+      stderr: formatConfigErrors(result.validation.errors, { paths: result.paths }),
+    };
+  }
+
+  const snapshot = buildConfigSnapshot({
+    config: result.config,
+    sources: result.sources,
+    paths: result.paths,
+    tenantId: result.tenantId,
+  });
+
+  // 日志中枢的环境变量覆盖提示：config 值仍在，但运行时被环境压住（排障临时覆盖）。
+  const logOverrideNote = loggingEnvOverrides()
+    .map(
+      (override) =>
+        `observability.log.${override.key} overridden by ${override.env} (${override.value})`,
+    )
+    .join('; ');
+
+  if (options.json) {
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify(snapshot, null, 2),
+      stderr: [warningText, logOverrideNote === '' ? '' : `log: ${logOverrideNote}`]
+        .filter((part) => part !== '')
+        .join('\n'),
+    };
+  }
+
+  let stdout = stringifyYaml(snapshot.config);
+  if (logOverrideNote !== '') stdout += `\n# log: ${logOverrideNote}\n`;
+  if (options.sources) {
+    // 快照构造已脱敏；这里再走一次导出函数，保证 web/TUI 复用同一语义。
+    const lines = Object.entries(redactSourcePaths(snapshot.sources))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, source]) => `${key}: ${source}`);
+    stdout += `\n# sources\n${lines.join('\n')}\n`;
+  }
+
+  return { exitCode: 0, stdout, stderr: warningText };
+}
