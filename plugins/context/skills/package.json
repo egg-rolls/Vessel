@@ -40,6 +40,40 @@
     },
     "description": "Managed skill library: scan / index / trust-gated load + library UI",
     "side": "both",
+    "contributes": {
+      "rpc": [
+        {
+          "name": "list",
+          "description": "Skill index page (metadata only)",
+          "permission": "read"
+        },
+        {
+          "name": "get",
+          "description": "Skill detail: entry + content + trust (human view)",
+          "permission": "read"
+        },
+        {
+          "name": "search",
+          "description": "Substring search over name/description/tags/id",
+          "permission": "read"
+        },
+        {
+          "name": "loads",
+          "description": "Per-session skill load records",
+          "permission": "read"
+        },
+        {
+          "name": "rescan",
+          "description": "Rebuild the index from all enabled roots",
+          "permission": "write"
+        },
+        {
+          "name": "trust_set",
+          "description": "Pin current hash (trust) or revoke trust for a skill",
+          "permission": "write"
+        }
+      ]
+    },
     "permissions": {
       "fs": [
         "data-dir"

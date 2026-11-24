@@ -98,17 +98,17 @@ export function parseSkillsArgs(raw: unknown): SkillsArgs | string {
   };
 }
 
-/** list 确定性排序：source 优先级 project > user > library，同源按 id */
+/** list 确定性排序：source 优先级 project > user > library，同源按 id（RPC 同口径） */
 const SOURCE_ORDER: Record<SkillSource, number> = { project: 0, user: 1, library: 2 };
 
-function compareForList(a: SkillEntry, b: SkillEntry): number {
+export function compareForList(a: SkillEntry, b: SkillEntry): number {
   const bySource = SOURCE_ORDER[a.source] - SOURCE_ORDER[b.source];
   if (bySource !== 0) return bySource;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/** search 命中等级：name > tag > description > id；未命中 undefined */
-function searchRank(
+/** search 命中等级：name > tag > description > id；未命中 undefined（RPC 同口径） */
+export function searchRank(
   entry: SkillEntry,
   needle: string,
 ): { rank: number; field: string } | undefined {
@@ -177,8 +177,8 @@ function handleSearch(service: SkillsService, args: SkillsArgs): string {
   return footer === '' ? lines.join('\n') : `${lines.join('\n')}\n${footer}`;
 }
 
-/** 按字节上限截断（收尾的多字节替换符剥掉，不切出坏字符） */
-function capContent(content: string, cap: number): { text: string; truncated: boolean } {
+/** 按字节上限截断（收尾的多字节替换符剥掉，不切出坏字符）；load / get 共用 */
+export function capContent(content: string, cap: number): { text: string; truncated: boolean } {
   if (Buffer.byteLength(content, 'utf-8') <= cap) return { text: content, truncated: false };
   const text = Buffer.from(content, 'utf-8')
     .subarray(0, cap)

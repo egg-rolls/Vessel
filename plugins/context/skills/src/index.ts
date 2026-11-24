@@ -18,6 +18,7 @@
 import { buildPathBoundary } from '@vessel-agent/basic-tools';
 import type { Plugin, PluginHost } from '@vessel-agent/core';
 import { parseSkillsConfig } from './config.js';
+import { dispatchSkillsRpc } from './rpc.js';
 import { SkillsService } from './service.js';
 import { SkillsStore } from './store.js';
 import { createSkillsTool } from './tool.js';
@@ -29,6 +30,7 @@ export {
   type FrontmatterResult,
   parseFrontmatter,
 } from './frontmatter.js';
+export { dispatchSkillsRpc } from './rpc.js';
 export { type ScanRootOptions, type ScanRootResult, scanSkillRoot } from './scanner.js';
 export {
   type ReadSkillResult,
@@ -38,10 +40,13 @@ export {
 } from './service.js';
 export { SkillsStore } from './store.js';
 export {
+  capContent,
+  compareForList,
   createSkillsTool,
   parseSkillsArgs,
   SKILLS_TOOL_DESCRIPTION,
   type SkillsArgs,
+  searchRank,
 } from './tool.js';
 export {
   loadGateDecision,
@@ -93,7 +98,7 @@ export interface SkillsPluginOptions {
  * install（设计 §4/§5.4/§10.2）：解析 config（install 期钉死，生效语义 = 重启）；
  * `enabled: false` 不注册任何东西；否则构造路径边界（继承 basic-tools，装配层
  * 回落）、私有目录 store 与索引服务，启动异步全量扫描 + watch，注册 `skills`
- * 工具。RPC 面在后续切片 additive 注册。
+ * 工具；RPC 管理面经 Plugin.rpc 由装配层登记。
  */
 export function createSkillsPlugin(options: SkillsPluginOptions = {}): Plugin {
   let service: SkillsService | undefined;
@@ -121,6 +126,14 @@ export function createSkillsPlugin(options: SkillsPluginOptions = {}): Plugin {
     dispose(): void {
       service?.dispose();
       service = undefined;
+    },
+    // RPC 管理面（设计 §7）：装配层 registerInProcessPlugin 把本方法接进宿主
+    // PluginRpcRegistry（canonical plugin.skills.*，与 child 共用 DTO 校验）。
+    async rpc(name: string, params: Record<string, unknown>): Promise<unknown> {
+      if (service === undefined) {
+        throw new Error('skills plugin is not installed (config enabled:false?)');
+      }
+      return dispatchSkillsRpc(name, params, service);
     },
   };
 }
