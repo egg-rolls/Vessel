@@ -143,10 +143,10 @@
     {
       "id": "q-config-delegate",
       "title": "设计:agent配置权限有限让渡(安全子集白名单+审计,敏感键禁开)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-config-delegate",
       "branch": "design/q-config-delegate",
-      "progress": "派单：agent可写ui/display安全键白名单+审计；provider key/permission/federation token/plugins禁开防提权；复用config.set白名单"
+      "progress": "merge入redblue-dev；384行设计:三级键T0展示auto/T1行为ask/T2敏感硬deny+permission.config_delegation默认关+审计jsonl；关键发现2026-11-16裁定config.yaml出denylist旁门可自我解限需治理；D2旁门治理须用户裁定；P1正门+审计→P2旁门→P3视图"
     },
     {
       "id": "q-thinking-plugin",
