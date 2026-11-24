@@ -148,7 +148,11 @@ import {
   noteStartup,
   timeStartup,
 } from './observability/startup-timing';
-import { buildPluginConfigMap, declarativePluginEntries } from './plugin/plugin-config';
+import {
+  buildPluginConfigMap,
+  declarativePluginEntries,
+  setPluginConfigValue,
+} from './plugin/plugin-config';
 import {
   activateStartupPlugins,
   createPluginHostManager,
@@ -1490,6 +1494,9 @@ async function runWithConfig(result: BootstrapResult) {
         ? { pluginHostManager, pluginHttp: pluginHostManager }
         : {}),
       ...(pluginsReload !== undefined ? { pluginsReload } : {}),
+      // S4：插件设置写面（plugins.config.set）；值校验在 serve 方法层按 manifest spec。
+      pluginsConfigSet: (plugin: string, key: string, value: string | number | boolean) =>
+        setPluginConfigValue(plugin, key, value),
       // 单执行面的插件清单：bundle 插件 + 体验型 child 插件。
       plugins: pluginEntries,
       pluginCatalog,

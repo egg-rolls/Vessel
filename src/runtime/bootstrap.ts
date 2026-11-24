@@ -119,7 +119,7 @@ import {
   type TraceRecorderFactory,
 } from '../observability/trace-wiring';
 import type { McpControl } from '../plugin/mcp-wiring';
-import { declarativePluginEntries } from '../plugin/plugin-config';
+import { declarativePluginEntries, setPluginConfigValue } from '../plugin/plugin-config';
 import {
   activateStartupPlugins,
   createPluginHostManager,
@@ -2044,6 +2044,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       : {}),
     pluginHostManager: localPluginHostManager,
     pluginsReload: reloadLocalPlugins,
+    // S4：本地 RPC 同样注入插件设置写面（与 gateway 模式同一 asm 函数）。
+    pluginsConfigSet: (plugin: string, key: string, value: string | number | boolean) =>
+      setPluginConfigValue(plugin, key, value),
     // 0.15: local RPC runs also take the session write lock.
     runtime: bundle.runtime,
     context,

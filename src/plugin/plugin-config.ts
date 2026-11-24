@@ -119,6 +119,41 @@ export async function setPluginEnabled(
   });
 }
 
+/**
+ * S4（vscode-settings-design §4.4）：写单个插件配置键。照 setPluginEnabled 先例：
+ * withConfigLock → readUserConfigRoot → 只改 plugins[name].config[key] →
+ * writeUserConfigRoot（保留其它键 / 其它插件）。值已由 serve 方法层按 manifest
+ * spec 校验（type/enum/minmax）；这里不再二次校验类型。
+ */
+export async function setPluginConfigValue(
+  name: string,
+  key: string,
+  value: string | number | boolean,
+  options: { configPath?: string } = {},
+): Promise<void> {
+  if (name.trim() === '') throw new Error('plugin name must be non-empty');
+  if (key.trim() === '') throw new Error('setting key must be non-empty');
+  const configPath = options.configPath ?? getUserConfigPath();
+  await withConfigLock(configPath, async () => {
+    const root = await readUserConfigRoot(configPath);
+    const raw = root.plugins;
+    if (raw !== undefined && !Array.isArray(raw)) {
+      throw new Error('config.yaml plugins must be an array');
+    }
+    const entries: unknown[] = (raw ?? []).map((entry) => (isRecord(entry) ? { ...entry } : entry));
+    const index = entries.findIndex((entry) => isRecord(entry) && entry.name === name);
+    const entry: Record<string, unknown> =
+      index >= 0 ? (entries[index] as Record<string, unknown>) : { name };
+    const config = isRecord(entry.config) ? { ...entry.config } : {};
+    config[key] = value;
+    entry.config = config;
+    if (index >= 0) entries[index] = entry;
+    else entries.push(entry);
+    root.plugins = entries;
+    await writeUserConfigRoot(configPath, root);
+  });
+}
+
 /** 把声明式 guardrails / hooks 条目映射为插件配置（按 name 去重合并） */
 export function declarativePluginEntries(config: VesselConfig): PluginConfig[] {
   const merged = new Map<string, PluginConfig>();
