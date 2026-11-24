@@ -54,11 +54,11 @@
     },
     {
       "id": "q-bash-source",
-      "title": "复查async bash来源仍显agent名(q-display修复可能未覆盖live全路径)",
-      "column": "进行中",
+      "title": "复查async bash来源(用户确认已显示来自bash,无需修)",
+      "column": "已完成",
       "owner": "q-bash-source",
       "branch": "fix/q-bash-source",
-      "progress": "派单：6e15df06已合入重启但用户仍见agent名；查是否只改完成通知未覆盖启动/进度/live首帧"
+      "progress": "用户确认async bash已正确显示「来自bash」(q-display 6e15df06生效)，任务取消，agent已close+worktree/分支清理"
     },
     {
       "id": "q-ui-style",
