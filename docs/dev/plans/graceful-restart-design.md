@@ -428,6 +428,57 @@ RPC 错误载荷（稳定契约，供重启 agent 程序化消费）：
 - 用户侧可见性：restart 发起时向受影响会话发一张「节点即将重启换新代码，正在等待你的任务到达安全点」环境卡（与恢复卡同族同源）；abort 时补一张「重启已中止，原因+阻塞者」——用户不用猜节点为什么还没重启。
 - CLI：`vessel node restart [--timeout 120s] [--json] [--no-wait]`；`--no-wait` 发起即返回，agent 用 `node.drain.status` 跟进（长等待不占 CLI 连接）。
 
-## 8. 分期（第5步填充）
+## 8. 分期
 
-## 9. 风险与开放问题（第5步填充）
+每期独立可交付、独立可验证（行为验证归用户）；后一期不依赖前一期的未决项。
+
+### P1：意图分离 + drain-to-quiesce + 中止协议 + 观测（安全重启，卡片恢复）
+
+- node-drain 增 `restart` 模式：fence → 旗标 → quiesce 判定（§3.3）→ armMarkers(intent='restart') → flush → exit。
+- tool-calling-loop 迭代边界 cooperative 暂停钩子（§3.2）；EU `requestRestartPause()` + `activeRunSnapshot()` 扩展相位/在途工具。
+- 双截止 + abort 序列 + `restart_aborted` 载荷（§6）；`node.restart` / `node.restart.cancel` / `node.drain.status` RPC（§7）。
+- respawn 最小路径：node-restart marker + 专用退出码 + supervisor respawn（§2.4）；独立 node 由 CLI 包装。
+- marker additive 字段（intent/boundary/background_jobs，§4.2）。
+- **恢复仍走卡片+输入重放**（不续 run）——但边界干净，卡片能如实说「你的 run 停在工具 X 完成后」。
+- 交付判据（用户验证）：长工具执行中发起 restart ⇒ 等完再重启；卡死工具 ⇒ 超时中止、旧进程无恙、载荷点名阻塞者。
+
+### P2：auto-resume（续跑）
+
+- node-resume 按 intent 分流；`resumeRun(record)` 接线（§5.2）；先卡后续时序。
+- 悬空 tool_use 合成 tool_result（§5.3，兜底路径）；续跑 nudge 文案与注入（§5.4）。
+- `resume_attempts` 限次 + 崩溃循环护栏（§5.5）；pending 输入并入续跑 run（§5.6）。
+- 交付判据：restart 后无新人类输入，被打断的任务自动继续且不重做已完成工作；新代码崩溃 3 次后降级卡片。
+
+### P3：后台 job adopt + 运维打磨
+
+- job registry 持久化 + 启动 adopt（pid/启动时间三元组校验，§3.4）；`background_stopped` 真实语义；完成通知槽恢复。
+- `auto_resume=false` 逃生门配置化；`runs.list/get` 相位字段；restart 环境卡（发起/中止两张）。
+- gateway 层编排（可选）：`gateway restart --nodes` 逐节点滚动 restart（复用 P1 单机协议，节点间串行+观测）。
+
+### P4（展望，不在本设计承诺内）
+
+- 热更 scope 扩大（减少 restart 需求）；跨节点 manifest 汇总视图；restart 预算按工具类型自适应。
+
+## 9. 风险与开放问题
+
+| # | 风险 | 缓解 | 残余 |
+|---|---|---|---|
+| R1 | 长工具超预算 ⇒ 重启反复中止 | 观测+决策树（§6.3）：加长预算/取消阻塞 run/求助用户；fail-safe 不丢工作 | 正当超长任务（>2min 构建）需 agent 主动加长 timeout；缺省值可配 |
+| R2 | cooperative 钩子改动 tool-calling-loop 热路径 | 旗标检查挂既有迭代边界（nudge 同位），未 drain 零开销；不改工具执行语义 | 边界判定 bug 可能产生脏 checkpoint ⇒ armMarkers 前「在途工具必须为空」断言兜底（§4.2） |
+| R3 | 新代码 bug ⇒ auto-resume 崩溃循环 | attempts 限次 3 + 降级卡片 + 回滚兼容（§4.3/5.5） | 3 次崩溃的 token/时间成本；逃生门可关 auto-resume |
+| R4 | 围栏期新输入排队，长 quiesce 期间用户感觉「节点不理人」 | 预算有界（缺省 2min）+ 发起环境卡明示「在等什么」+ abort 即撤围栏 | 排队延迟最长 = 预算；durable inbox 保证不丢 |
+| R5 | 悬空 tool_use 合成被模型误读为「工具失败」 | 文案明示 outcome unknown + 核对指令（§5.3）；graceful 路径根本无悬空 | 模型仍可能误判——与现状卡片路径同等风险，不更差 |
+| R6 | supervisor respawn 与 handoff marker 交互（平台/节点两层重启叠加） | 两 marker 独立文件、独立 TTL、读后即删；非 restart 退出先删残留（handoff 同款裁决） | 组合场景（gateway restart 同时 node restart）需实现期明确互斥：平台 handoff 期间拒绝 node respawn 竞争 |
+| R7 | abort 后「干净暂停的 run」无人唤醒（无新输入时任务停摆） | 暂停 run 可被下次 restart/新输入/--resume-run 续起；观测接口标 restart_paused 供 agent 发现 | P1 阶段（无 auto-resume）abort 后暂停 run 需 agent 显式续；P2 起下次 restart 自动收 |
+| R8 | inbox 消费与续跑 run 的时序集成（§5.6 校验点） | 退化方案已备（终态后重放）；实现期核对既有 inbox→run 路径 | 若两条路径都不覆盖，需补「run 内投递」——列为 P2 前置核查项 |
+
+### 开放问题（实现期裁决，不阻塞设计）
+
+1. 专用退出码取值（75 是候选，需避开既有退出码表）与 supervisor 判据的精确写法。
+2. `node.restart` 的权限粒度：是否允许 agent 重启**自己所在**节点（自举悖论：重启发起者自己也被 drain）——倾向允许（发起者收 abort/成功载荷的通道在围栏期仍可读，RPC 响应先于 exit），但需实现期验证响应投递时序。
+3. 软截止比例（50%）与缺省预算（2min）的现场调参——归用户行为验证。
+4. 多 EU（tenant + members）快照聚合的归属路由：沿用 node-resume 既有 member 路由，不新造。
+
+### 宪法合规声明
+
+本设计纯文档：不引入测试/探针/临时进程；所有「交付判据」均为用户行为验证项；不改代码、不碰主 checkout；仅提交 design/q-restart 分支。
