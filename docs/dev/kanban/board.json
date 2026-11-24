@@ -5,6 +5,14 @@
   "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。板只留当前活跃任务；完成任务由 main 轮次收尾移入 archive.json（append-only，采纳 q-kanban §9.2 归档约定）。",
   "tasks": [
     {
+      "id": "canary-fleet",
+      "title": "金丝雀舰队实操（稳定+canary双node，渐进晋升）",
+      "column": "进行中",
+      "owner": "main",
+      "branch": "canary",
+      "progress": "舰队已活：gateway8652/node8654/hub8653独立dataDir+provider配好；下一步federation peers接通稳定线+更新canary到最新redblue-dev测seamless+自治循环"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
