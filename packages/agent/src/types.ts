@@ -519,6 +519,13 @@ export interface MemberExecutionPort {
    * 就是节点那一份，只是按这具身体读一次。未实现的 port 由 AgentService 按「答不出」处理。
    */
   toolSurface?(member: MemberExecutionMember): MemberToolEntry[];
+  /**
+   * 通用成员级工具（当前只有 `inbox`）：每具 body 都有、与具体成员无关的工具描述符。
+   *
+   * 工具权限统一规范的数据源：节点口径清单与权限校验经此纳入通用成员工具。
+   * 可选（additive）：老内核没实现时按「没有通用成员工具」处理，节点口径退回纯全局工具。
+   */
+  commonMemberTools?(): MemberToolEntry[];
 }
 
 /**
@@ -1668,6 +1675,14 @@ export interface AgentService {
    * 无身体按 spawn 同一套规则推导，判据只在 `packages/agent/src/runtime.ts` 一处。
    */
   toolSurface(agentId: string): MemberToolEntry[] | undefined;
+  /**
+   * 通用成员级工具（当前只有 `inbox`）：所有成员共有的工具描述符，与具体成员无关。
+   *
+   * 工具权限统一规范：节点口径清单（`tools.list` / `capabilities.list`）与
+   * `permissions.setToolPolicy` 经此把通用成员工具纳入同一份权限面。
+   * 老执行内核没实现该 port 时返回空数组（不报错，节点口径退回纯全局工具）。
+   */
+  commonMemberTools(): MemberToolEntry[];
   /**
    * 撤回待处理输入（`agents.recall`，0.53）：把消息从「将执行」集合里拿走。
    *

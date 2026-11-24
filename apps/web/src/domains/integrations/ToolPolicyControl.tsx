@@ -6,6 +6,7 @@ import { t } from '../../i18n';
 import { resourceData } from '../../state/useResource';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import {
+  ALWAYS_AVAILABLE_TOOLS,
   hasScopedNever,
   policyHintKey,
   policyLabelKey,
@@ -97,6 +98,11 @@ export function ToolPolicyControl({ tool }: { tool: ToolInfo }) {
     if (!connected) return t('common.writesDisabled');
     if (!loaded && configState.status === 'error') {
       return t('integrations.tools.policyLoadFailed', { detail: configState.error });
+    }
+    // 核心通道工具（inbox）：通用档位文案会撒谎（它自带恒 allow，缺省档并不询问），
+    // 用专门注记说明「始终可用 + never=每次强制确认（不是禁用）」的真实语义。
+    if (ALWAYS_AVAILABLE_TOOLS.has(tool.name)) {
+      return t('integrations.tools.policyAlwaysAvailableNote');
     }
     if (scopedNever && current === 'ask') {
       return t('integrations.tools.policyScopedHint');

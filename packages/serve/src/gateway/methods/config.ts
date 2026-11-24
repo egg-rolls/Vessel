@@ -421,17 +421,33 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
 export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[] {
   const { pluginHost } = deps;
 
-  /** 节点口径：节点插件宿主注册了什么（`tools.list` 的唯一资源形状）。 */
+  /**
+   * 通用成员级工具（inbox 等所有 agent 都有的）：经 `agent.commonToolSurface` 透传
+   * 执行内核的判据。读失败 / 老适配器没实现 ⇒ 空数组，节点口径退回纯全局工具。
+   */
+  function commonMemberTools(): ToolInfo[] {
+    try {
+      return deps.agent?.commonToolSurface?.() ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * 节点口径：节点插件宿主注册了什么 + 通用成员级工具（统一权限面）。
+   * 按 name 去重、宿主优先：同名时以宿主定义为准，通用工具不顶掉宿主工具。
+   */
   function toolsPayload(): { tools: ToolInfo[] } {
     const tools = pluginHost()?.listTools() ?? [];
-    return {
-      tools: tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        input_schema: tool.inputSchema,
-        has_permission_check: typeof tool.checkPermission === 'function',
-      })),
-    };
+    const hostTools: ToolInfo[] = tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.inputSchema,
+      has_permission_check: typeof tool.checkPermission === 'function',
+    }));
+    const seen = new Set(hostTools.map((tool) => tool.name));
+    const common = commonMemberTools().filter((tool) => !seen.has(tool.name));
+    return { tools: [...hostTools, ...common] };
   }
 
   return [

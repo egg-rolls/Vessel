@@ -1640,6 +1640,25 @@ export class MemberExecutionHost implements MemberExecutionPort {
     return describeTools(this.buildSurface(member).tools);
   }
 
+  /**
+   * 通用成员级工具（当前只有 `inbox`）：每具 body 都会拿到、与具体成员无关的工具。
+   *
+   * 工具权限统一规范：节点口径的工具清单（`tools.list` / `capabilities.list`）与
+   * `permissions.setToolPolicy` 的存在性校验经此把通用成员工具纳入同一份权限面 ——
+   * 不再按注册作用域分裂成「全局工具可查可设、成员工具不可见」。
+   *
+   * 判据仍只在真实注册路径一处：定义用 spawn 同源的 `createInboxTool` 构造，只读
+   * 描述符（name / description / schema / checkPermission 都与 agentId 无关，只有
+   * handler 闭包绑具体 body）——这里的产物**只作描述，绝不注册或执行**，agentId
+   * 占位空串即可。内核没 attach 收件箱时没有这个工具，返回空数组。
+   *
+   * 未来新增「所有 agent 都有」的成员级工具时，只在这里追加，不在 serve 另拼清单。
+   */
+  commonMemberTools(): MemberToolEntry[] {
+    if (this.inbox === undefined) return [];
+    return describeTools([createInboxTool({ inbox: this.inbox, agentId: '' })]);
+  }
+
   /** 轮结束：清 running；若期间收到过工具刷新，在轮边界应用。 */
   private finishRun(member: MemberExecutionMember, entry: MemberExecutionEntry): void {
     entry.running = false;

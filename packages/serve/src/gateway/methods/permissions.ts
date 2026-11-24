@@ -40,6 +40,12 @@ export interface PermissionsMethodsDeps {
   permissions?: PermissionsControl;
   /** `tools.list` 的同一宿主来源；用于工具存在性校验。 */
   pluginHost(): PluginHost | undefined;
+  /**
+   * 通用成员级工具名（inbox 等所有 agent 都有的）：与 `tools.list` 节点口径同源
+   * （执行内核的真实注册路径，经装配层透传）。工具权限统一规范：这些工具与全局
+   * 工具一样可设策略。缺省 / 读失败 ⇒ 空，校验退回纯全局工具口径。
+   */
+  commonToolNames?(): string[];
 }
 
 function stringParam(params: Record<string, unknown>, key: string): string {
@@ -61,16 +67,24 @@ function policyParam(params: Record<string, unknown>): ToolPolicy {
 }
 
 /**
- * 工具存在性校验：与 `tools.list` 走同一 `pluginHostFor`，因此 MCP / 插件工具同样可见。
- * exact 工具名优先；否则把 `tool.*` scoped 键（如 `agent.close`）在第一个 `.` 处拆出
- * base，base 必须是已注册工具。未知工具 / 未知 base → `invalid_params`（契约 §7），
- * 不泄漏宿主内部结构。
+ * 工具存在性校验：与 `tools.list` 走同一 `pluginHostFor`，因此 MCP / 插件工具同样可见；
+ * 通用成员级工具（inbox 等）经 `commonToolNames` 纳入同一份权限面，与全局工具一致可设。
+ * exact 工具名优先；否则把 `tool.*` scoped 键（如 `agent.close` / `inbox.read`）在第一个
+ * `.` 处拆出 base，base 必须是已注册工具。未知工具 / 未知 base → `invalid_params`
+ * （契约 §7），不泄漏宿主内部结构。
  */
-function assertKnownTool(tool: string, host: PluginHost | undefined): void {
+function assertKnownTool(
+  tool: string,
+  host: PluginHost | undefined,
+  commonToolNames: readonly string[] = [],
+): void {
   if (host === undefined) {
     throw new RpcError('not_found', 'Tool host is not available');
   }
-  const known = new Set(host.listTools().map((definition) => definition.name));
+  const known = new Set([
+    ...host.listTools().map((definition) => definition.name),
+    ...commonToolNames,
+  ]);
   if (known.has(tool)) return;
   const dot = tool.indexOf('.');
   const base = dot > 0 ? tool.slice(0, dot) : undefined;
@@ -109,7 +123,13 @@ export function createPermissionsMethods(deps: PermissionsMethodsDeps): RpcMetho
         }
         const tool = stringParam(params, 'tool');
         const policy = policyParam(params);
-        assertKnownTool(tool, deps.pluginHost());
+        let commonNames: string[] = [];
+        try {
+          commonNames = deps.commonToolNames?.() ?? [];
+        } catch {
+          commonNames = [];
+        }
+        assertKnownTool(tool, deps.pluginHost(), commonNames);
         let written: ToolPolicyWriteResult;
         try {
           written = control.setToolPolicy({ tool, policy });

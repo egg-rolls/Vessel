@@ -103,6 +103,15 @@ export function isPolicyEditable(_tool: Pick<ToolInfo, 'name' | 'has_permission_
   return true;
 }
 
+/**
+ * 默认始终可用的核心通道工具（通用成员级，所有成员共有）。
+ *
+ * inbox 的自带 checkPermission 恒 allow：缺省档与 auto 都不拦截它（保留「收消息核心
+ * 通道始终可用」语义）；never 也不是禁用工具，而是每次调用强制确认。UI 对这类工具
+ * 附专门注记，避免把「每次确认」的通用文案读成 inbox 的实际行为。
+ */
+export const ALWAYS_AVAILABLE_TOOLS: ReadonlySet<string> = new Set(['inbox']);
+
 function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
   const seen = new Set(a);
