@@ -98,6 +98,7 @@ import {
   listAutoApproveRules,
   removeAutoApproveRule,
 } from '../data/permission-store';
+import type { FederationRuntimeOptions } from '../federation/federation-config';
 import { createFederationSendPort } from '../federation/federation-send-port';
 import { resolveInteractionsDir } from '../gateway/interactions-dir';
 import { resolveGatewayAuth } from '../gateway/serve-auth';
@@ -329,6 +330,11 @@ export interface BootstrapResult {
   trace?: TraceControl;
   /** 0.5：session rename/delete 控制面 */
   sessionControl?: SessionControl;
+  /**
+   * S7 热应用：原地更新出站 federation 端口的已解析选项（config scope 的
+   * applyFederation 用）。启动时 `federation.enabled: false` ⇒ 端口未构造 ⇒ 缺省。
+   */
+  federationApply?: (next: FederationRuntimeOptions) => void;
   /** nodeId 唯一来源：config.host.nodeId > node.json > 首次生成 */
   nodeId: string;
   /** 节点展示名：config.host.nodeName > node.json > hostname 派生 */
@@ -1420,6 +1426,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
    * 同口径），闭包在 flush 时求值；装配前为 undefined 时通知退回报告时刻的 session。
    */
   let noticeAgentService: AgentService | undefined;
+  /**
+   * S7 热应用：出站 federation 端口的原地更新入口（agent 装配且 federation 启用时
+   * 才有）。在函数级声明，return 处透传给 CLI 的 applyFederation。
+   */
+  let federationApply: ((next: FederationRuntimeOptions) => void) | undefined;
   if (agentServiceEnabled) {
     // A3c：交互入口成员 ask 经父事件流弹现有权限卡片；headless 直接 allow。
     const memberPermissionMode: MemberPermissionMode = agentPlan.permissionMode;
@@ -1462,6 +1473,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
             localMember: () => localMember,
           })
         : undefined;
+    if (federation !== undefined) {
+      federationApply = (next) => federation.applyFederationOptions(next);
+    }
     // 运行期通知总线（CONTRACT-hot-apply §3）：热应用 / 版本检查 / 成员停下共用同一条
     // 总线与同一个 BeforeLlm hook —— 两个总线会让两个 hook 争同一个注册名（后者被跳过）。
     // 建在这里而不是 serve 壳里：TUI 入口同样要看到成员停下通知，serve 复用这一个实例。
@@ -2551,6 +2565,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(noticeBus !== undefined ? { notice: noticeBus } : {}),
     ...(trace ? { trace } : {}),
     sessionControl,
+    // S7 热应用：出站端口存在时透传其原地更新入口（入站面由 cli 的 controlPlane 持有）。
+    ...(federationApply !== undefined ? { federationApply } : {}),
     nodeId,
     nodeName,
     mcp: mcpControl,

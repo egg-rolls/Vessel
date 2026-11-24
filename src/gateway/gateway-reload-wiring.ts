@@ -11,7 +11,9 @@
  *   新 EU 立即用新值，live body / EU 的 model 是构造期只读快照（前缀不变量），本具仍旧
  *   值、下一具才生效；凭证轮换经 delegating wrapper 下一请求生效。未注入 applier 或
  *   新配置解析不出有效缺省模型时，变化域进 `requires_restart`，不假装生效。
- *   `config.agent.model` 仍属 `agent` 域，需重启；其余字段一律进 `requires_restart`；
+ *   `config.agent.model` 仍属 `agent` 域，需重启；`federation` 块经注入的
+ *   `applyFederation` 热应用（原地更新入站 / 出站 peer，未注入则进 `requires_restart`）；
+ *   其余字段一律进 `requires_restart`；
  * - `permission` / `tools` / `mcp`：由 `src/cli.ts` 注入 applier（见下）。
  *
  * ## applier 注册面
@@ -75,6 +77,14 @@ export interface GatewayReloadWiringOptions {
     to: string | undefined,
     next?: VesselConfig,
   ) => Promise<string[]> | string[];
+  /**
+   * S7 federation 热应用（config scope 内部，与 applyProviderModel 同形，不新增
+   * reload scope）。仅在 federation 块变化时调用；`next` = 校验通过的重载配置，
+   * 装配层据此重新解析 peer 并**原地**更新入站 / 出站运行时对象（下一请求生效）。
+   * 返回要广播的差异摘要行（并入 `summaries.config`；绝不包含 token 值）。
+   * 未注入 ⇒ 变化域进 `requires_restart`，不假装生效。
+   */
+  applyFederation?: (next: VesselConfig) => Promise<string[]> | string[];
 }
 
 /** 需要重启才能生效的配置域（DECISION-023 §2.3；`permission` 已可热应用）。 */
@@ -230,6 +240,19 @@ export function createGatewayReloadRunner(
               if (modelsChanged) restartFields.push('models');
             }
           }
+          // S7 federation 热应用：块变化且注入了 applier ⇒ 原地更新入站 / 出站
+          // 运行时对象；否则变化域进 requires_restart（不假装生效）。
+          const federationChanged =
+            stableValue(current.federation) !== stableValue(next.federation);
+          const federationLines: string[] = [];
+          if (federationChanged) {
+            if (options.applyFederation !== undefined) {
+              const lines = await options.applyFederation(next);
+              if (Array.isArray(lines)) federationLines.push(...lines);
+            } else {
+              restartFields.push('federation');
+            }
+          }
           if (allowedOriginsChanged(current, next)) {
             const target = options.gateway();
             const reconfigure = target?.reconfigure;
@@ -249,6 +272,7 @@ export function createGatewayReloadRunner(
           summaries.config = [
             ...restartFields.map((field) => `config: ${field} requires restart`),
             ...modelLines,
+            ...federationLines,
           ];
           continue;
         }

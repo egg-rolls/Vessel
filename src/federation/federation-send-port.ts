@@ -34,7 +34,11 @@ import {
   postFederation,
   postFederationTeamInfo,
 } from './federation-client';
-import { resolveFederationOptions } from './federation-config';
+import {
+  applyFederationOptions as applyRuntimeOptions,
+  type FederationRuntimeOptions,
+  resolveFederationOptions,
+} from './federation-config';
 
 export interface FederationSendPortOptions {
   federation: FederationConfig;
@@ -91,12 +95,22 @@ const LOCAL_HUMAN_DELIVERY_FAILED = 'local_human_delivery_failed';
 const LOCAL_MEMBER_DELIVERY_FAILED = 'local_member_delivery_failed';
 
 /**
+ * S7 热应用面：原地更新已解析的运行时选项（peers / enabled / maxHops / 限流）。
+ * client 逐请求读同一对象，更新后下一次 send / lookup 即用新 peer，不重启。
+ */
+export interface FederationSendPortHotApply {
+  applyFederationOptions(next: FederationRuntimeOptions): void;
+}
+
+/**
  * 构造跨节点发送端口。
  *
  * `federation.enabled !== true` 时不抛错：client 会对每次发送返回
  * `federation_disabled` rejected（装配层只在 enabled 时注入，这里是纵深防御）。
  */
-export function createFederationSendPort(options: FederationSendPortOptions): FederationSendPort {
+export function createFederationSendPort(
+  options: FederationSendPortOptions,
+): FederationSendPort & FederationSendPortHotApply {
   const { options: runtime } = resolveFederationOptions({
     federation: options.federation,
     nodeId: options.nodeId,
@@ -112,6 +126,9 @@ export function createFederationSendPort(options: FederationSendPortOptions): Fe
 
   return {
     nodeId: options.nodeId,
+    applyFederationOptions(next: FederationRuntimeOptions): void {
+      applyRuntimeOptions(runtime, next);
+    },
     resolve(to: string): FederationAddressPlacement {
       const placement = resolveAddress(to, {
         nodeId: options.nodeId,

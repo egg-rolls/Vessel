@@ -37,7 +37,8 @@ export interface GatewayControlPlaneOptions {
   loader?: PluginLoader;
   /**
    * S7：节点身份（`resolveNodeId()` 的结果）。
-   * 仅当 `config.federation.enabled !== false`（缺省开启）且本字段存在时注入 federation。
+   * 本字段存在即注入 federation 运行时对象（enabled:false 时入站仍 404，
+   * 但对象必须在场，热应用才能原地启用）。
    */
   nodeId?: string;
   /** 丢弃 federation peer（缺 token / 自指 / token 重复）时记录原因。 */
@@ -66,9 +67,11 @@ export function buildGatewayControlPlane(
   // 0.25：canonical `agents.create|update|close`（生产装配始终存在，除 agent 关闭）。
   if (options.agentControl) controlPlane.agent = options.agentControl;
 
-  // S7：缺省开启；显式 `federation.enabled: false` 才不注入。缺 token 的 peer
+  // S7：缺省开启；显式 `federation.enabled: false` 时入站路由仍 404（serve 逐请求
+  // 读 enabled）。这里**始终注入**已解析对象（只要有 nodeId）：热应用要原地改同一
+  // 个对象，启动时不注入会让 enabled:false → true 永远无法热生效。缺 token 的 peer
   // 由 resolver 丢弃（fail closed）；这里不打印 token / env，也不因缺失 token 报错。
-  if (options.config.federation?.enabled !== false && options.nodeId !== undefined) {
+  if (options.nodeId !== undefined) {
     const resolved = resolveFederationOptions({
       federation: options.config.federation,
       nodeId: options.nodeId,
