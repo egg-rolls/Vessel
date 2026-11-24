@@ -119,10 +119,10 @@
     {
       "id": "q-naming-fix",
       "title": "修复会话名undefined/Untitled(命名逻辑:已命名不走AI,未命名走AI)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-naming-fix",
       "branch": "fix/q-naming-fix",
-      "progress": "派单：canary旧会话Untitled/undefined；查ensureSessionShell壳与nameNewSession交互/AI命名空输入/WebUI空标题渲染；杜绝undefined"
+      "progress": "merge入redblue-dev(待金丝雀验收晋升main)；根因AI命名守卫把占位Untitled误判已命名→永不触发；isPlaceholderTitle占位=未命名走AI+manual/generated保留+sanitize拒undefined/null+显示侧cleanSessionTitle兜底；不迁移旧数据下次run补名；build绿"
     },
     {
       "id": "q-skills-ui",
