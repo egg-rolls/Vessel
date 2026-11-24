@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "金丝雀同步74d3a4d3(全修复)+启用media(plugins全集+skills镜像生产)+重启pid174456；canary-verify2六项5过media待验；canary-verify3(8e09121e)终验media view+4新修复(权限统一/技能库样式/命名undefined/互联简化)；全过晋升main+用户重启"
+      "progress": "canary-verify3终验DONE:①media✅②权限✅③skills样式✅但live装载❌(名skills vs plugin-skills)④命名❌(max_tokens64 reasoning耗尽Untitled)⑤互联✅；3过2问题派q-verify-fix修；修好复验后晋升main+用户重启；附write/edit订阅Windows锁文件观察"
     },
     {
       "id": "q-node-target",
@@ -163,6 +163,14 @@
       "owner": "q-plugin-scaffold",
       "branch": "design/q-plugin-scaffold",
       "progress": "merge入redblue-dev；816行设计:manifest自动注册已存在,真阻力=手写样板+装配硬编码；vessel plugin create脚手架(tool/capability/ui)+SDK助手defineRpcHandlers/parseSettings+sync生成器+共享UI构建工厂+manifest defaultEnabled/inherit；授权必须显式不能猜；P1脚手架零运行时→P5；宪法对齐零测试用VERIFY.md"
+    },
+    {
+      "id": "q-verify-fix",
+      "title": "修金丝雀终验两问题(skills装载名不一致+AI命名max_tokens=64被reasoning耗尽)",
+      "column": "进行中",
+      "owner": "q-verify-fix",
+      "branch": "fix/q-verify-fix",
+      "progress": "派单：①skills config名skills vs描述符plugin-skills不匹配load_failed→命名一致性；②generateSessionTitle max_tokens64被reasoning耗尽静默放弃Untitled→增token/关reasoning/兜底；附write/edit订阅Windows锁文件观察"
     },
     {
       "id": "g1-proxy-node",
