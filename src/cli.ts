@@ -115,6 +115,7 @@ import {
   federationOptionsFingerprint,
   resolveFederationOptions,
 } from './federation/federation-config';
+import { createFederationPairingPort } from './federation/federation-pairing';
 import { loadFederationPeerSecrets } from './federation/federation-secrets';
 import {
   renderGatewayBanner,
@@ -1714,6 +1715,21 @@ async function runWithConfig(result: BootstrapResult) {
     });
     // S7 热应用：入站路由读的就是这个对象；applyFederation 原地更新它。
     liveFederationOptions = controlPlane.federation as FederationRuntimeOptions | undefined;
+
+    // q-fed-simple：入站自动配对端口（码 / 回环判定 + token 交换 + 自动写配置 +
+    // 进程内热应用）。写盘走用户配置（与 federation peer add 同口径）；热应用复用
+    // reloadRunner 的 config scope，失败由配置监听兜底。
+    if (result.nodeId !== undefined) {
+      controlPlane.pairing = createFederationPairingPort({
+        dataDir,
+        nodeId: result.nodeId,
+        userConfigPath: getUserConfigPath(),
+        allowFileSecrets: config.federation?.allowFileSecrets,
+        ...(result.agent?.team ? { teams: result.agent.team } : {}),
+        hotApply: () => reloadRunner.reloadWithSummaries(['config']),
+        logger,
+      });
+    }
 
     try {
       gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);

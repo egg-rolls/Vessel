@@ -28,6 +28,104 @@ export const FEDERATION_PROTOCOL = 'vessel.federation/1';
 export const FEDERATION_MESSAGES_PATH = '/v1/federation/messages';
 /** 0.21：opt-in 只读成员目录（DECISION-037 §7.2）。 */
 export const FEDERATION_TEAM_INFO_PATH = '/v1/federation/team-info';
+/** q-fed-simple：自动配对握手（initiator → target；token 只在成功响应出现一次）。 */
+export const FEDERATION_PAIR_PATH = '/v1/federation/pair';
+
+/** pair 端点全局限流：未认证面，固定 60s 窗口最多 12 次尝试（防暴力猜码）。 */
+const PAIR_RATE_LIMIT_PER_MINUTE = 12;
+
+/** 配对成功：token 明文只在此出现一次（同 hub join 签发语义）。 */
+export type FederationPairOutcome =
+  | { ok: true; nodeId: string; teamId: string; token: string }
+  | { ok: false; code: string; message: string; status: number };
+
+/**
+ * 配对端口（asm 注入）：码判定 / token 生成 / SecretStore / 写 peer 配置 / 热应用
+ * 都在端口实现里；路由只做形状校验、限流与 HTTP 映射。
+ */
+export interface FederationPairingPort {
+  pair(input: {
+    code?: string;
+    /** 发起方 node_id（target 将写入的 peer 身份）。 */
+    nodeId: string;
+    /** 发起方 team_id。 */
+    teamId: string;
+    /** 发起方请求配对的目标 team（= target 本机 team）。 */
+    peerTeamId: string;
+    /** 发起方 node base URL（target 的出站 peer url）。 */
+    url: string;
+    allowDirectory: boolean;
+    /** 请求是否来自回环 socket（gateway 以 extra.peer_loopback 传入）。 */
+    loopback: boolean;
+  }): Promise<FederationPairOutcome>;
+}
+
+/** pair 请求严格键集合。 */
+const PAIR_KEYS = new Set([
+  'protocol',
+  'code',
+  'node_id',
+  'team_id',
+  'peer_team_id',
+  'url',
+  'allow_directory',
+]);
+
+interface PairRequest {
+  code?: string;
+  nodeId: string;
+  teamId: string;
+  peerTeamId: string;
+  url: string;
+  allowDirectory: boolean;
+}
+
+/** 回环 hostname（与 config validator.isLoopbackHostname 同口径）。 */
+function pairLoopbackHostname(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  if (normalized === 'localhost' || normalized === '::1' || normalized === '[::1]') return true;
+  const match = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(normalized);
+  return match?.slice(1).every((part) => Number(part) <= 255) === true;
+}
+
+/** 严格解析 pair 请求；URL 规则与 validator 同口径（loopback 允许 http）。 */
+function parsePairRequest(
+  record: Record<string, unknown>,
+): { ok: true; request: PairRequest } | { ok: false } {
+  for (const key of Object.keys(record)) if (!PAIR_KEYS.has(key)) return { ok: false };
+  if (record.protocol !== FEDERATION_PROTOCOL) return { ok: false };
+  if (typeof record.node_id !== 'string' || !NODE_ID_RE.test(record.node_id)) return { ok: false };
+  if (typeof record.team_id !== 'string' || !TEAM_ID_RE.test(record.team_id)) return { ok: false };
+  const peerTeamId = record.peer_team_id ?? record.team_id;
+  if (typeof peerTeamId !== 'string' || !TEAM_ID_RE.test(peerTeamId)) return { ok: false };
+  if (typeof record.url !== 'string' || record.url === '') return { ok: false };
+  let parsed: URL;
+  try {
+    parsed = new URL(record.url);
+  } catch {
+    return { ok: false };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { ok: false };
+  if (parsed.username !== '' || parsed.password !== '') return { ok: false };
+  if (parsed.pathname !== '/' && parsed.pathname !== '') return { ok: false };
+  if (parsed.search !== '' || parsed.hash !== '') return { ok: false };
+  if (!pairLoopbackHostname(parsed.hostname) && parsed.protocol !== 'https:') return { ok: false };
+  if (record.code !== undefined && (typeof record.code !== 'string' || record.code === '')) {
+    return { ok: false };
+  }
+  if (record.allow_directory !== undefined && typeof record.allow_directory !== 'boolean') {
+    return { ok: false };
+  }
+  const request: PairRequest = {
+    nodeId: record.node_id,
+    teamId: record.team_id,
+    peerTeamId,
+    url: parsed.origin,
+    allowDirectory: record.allow_directory === true,
+  };
+  if (record.code !== undefined) request.code = record.code;
+  return { ok: true, request };
+}
 
 /** team-info 缺省返回的成员条数。 */
 export const FEDERATION_DEFAULT_MEMBERS_LIMIT = 20;
@@ -98,6 +196,8 @@ export interface FederationRouteOptions {
   federation?: FederationGatewayOptions;
   /** 目标 Team 控制面；未注入 → 404 `team_not_found`。 */
   teams?: TeamControlLike;
+  /** q-fed-simple：配对端口；未注入 → pair 端点 404（消息 / 目录不受影响）。 */
+  pairing?: FederationPairingPort;
   /** 诊断事件出口（gateway 注入 `publishTeamEvent`）。 */
   publish?: (type: string, data: Record<string, unknown>) => void;
 }
@@ -536,6 +636,8 @@ function consumeRateLimit(
 export function createFederationRoute(options: FederationRouteOptions): FederationRoute {
   const dedupe = new ReceivedCache(DEDUPE_LIMIT);
   const rateWindows = new Map<string, RateWindow>();
+  /** q-fed-simple：pair 未认证面的全局固定窗口（与每 peer 限流分开）。 */
+  let pairWindow: RateWindow = { windowStart: 0, count: 0 };
   let cursor = 0;
 
   function publish(type: string, data: Record<string, unknown>): void {
@@ -551,7 +653,8 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
       const url = new URL(req.url);
       const isMessages = url.pathname === FEDERATION_MESSAGES_PATH;
       const isTeamInfo = url.pathname === FEDERATION_TEAM_INFO_PATH;
-      if (!isMessages && !isTeamInfo) return null;
+      const isPair = url.pathname === FEDERATION_PAIR_PATH;
+      if (!isMessages && !isTeamInfo && !isPair) return null;
       if (req.method !== 'POST') {
         return errorJson('not_found', `Not found: ${url.pathname}`, 404, extra);
       }
@@ -559,6 +662,54 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
       const federation = options.federation;
       if (federation?.enabled !== true) {
         return errorJson('not_found', `Not found: ${url.pathname}`, 404, extra);
+      }
+
+      // q-fed-simple：自动配对握手（独立于 peer bearer：码 / 回环判定在端口内）。
+      if (isPair) {
+        const pairing = options.pairing;
+        if (!pairing) {
+          return errorJson('not_found', `Not found: ${url.pathname}`, 404, extra);
+        }
+        const now = Date.now();
+        if (now - pairWindow.windowStart >= RATE_WINDOW_MS) {
+          pairWindow = { windowStart: now, count: 1 };
+        } else if (pairWindow.count >= PAIR_RATE_LIMIT_PER_MINUTE) {
+          return errorJson('federation_rate_limited', 'Federation rate limit exceeded', 429, extra);
+        } else {
+          pairWindow.count += 1;
+        }
+        const pairBody = await readBody(req);
+        if (!pairBody.ok || !isRecord(pairBody.value)) {
+          return errorJson('federation_invalid', 'Invalid federation pair request', 400, extra);
+        }
+        const pairRequest = parsePairRequest(pairBody.value);
+        if (!pairRequest.ok) {
+          return errorJson('federation_invalid', 'Invalid federation pair request', 400, extra);
+        }
+        const outcome = await pairing.pair({
+          ...pairRequest.request,
+          loopback: extra.peer_loopback === '1',
+        });
+        if (!outcome.ok) {
+          publish('federation.pair_rejected', { code: outcome.code });
+          return errorJson(outcome.code, outcome.message, outcome.status, extra);
+        }
+        // 事件只含身份，绝不带 token / 码。
+        publish('federation.paired', {
+          peer_node: pairRequest.request.nodeId,
+          peer_team: pairRequest.request.teamId,
+        });
+        return json(
+          {
+            protocol: FEDERATION_PROTOCOL,
+            ok: true,
+            node_id: outcome.nodeId,
+            team_id: outcome.teamId,
+            token: outcome.token,
+          },
+          200,
+          extra,
+        );
       }
 
       // 1. peer bearer（gateway 用户 token 不属于任何 peer → 401）。

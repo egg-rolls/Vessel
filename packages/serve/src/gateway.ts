@@ -38,7 +38,11 @@ import {
 } from './durable.js';
 import type { EvalsGatewayOptions } from './evals.js';
 import type { SeqEvent } from './event-buffer.js';
-import { createFederationRoute, type FederationGatewayOptions } from './federation.js';
+import {
+  createFederationRoute,
+  type FederationGatewayOptions,
+  type FederationPairingPort,
+} from './federation.js';
 import type { FeishuGatewayOptions } from './feishu.js';
 import {
   buildContentSecurityPolicy,
@@ -329,6 +333,11 @@ export interface GatewayOptions {
    * 缺省 / `enabled: false` = `/v1/federation/messages` 返回 404。
    */
   federation?: FederationGatewayOptions;
+  /**
+   * q-fed-simple：federation 自动配对端口（asm 注入）。
+   * 缺省 → `/v1/federation/pair` 404；消息 / 目录端点不受影响。
+   */
+  pairing?: FederationPairingPort;
   /** plugins.list / capabilities.list 数据源（单视图） */
   plugins?: () => Array<{ name: string; enabled: boolean }>;
   /**
@@ -3357,6 +3366,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const federationRoute = createFederationRoute({
     ...(opts.federation !== undefined ? { federation: opts.federation } : {}),
     ...(opts.teams !== undefined ? { teams: opts.teams } : {}),
+    ...(opts.pairing !== undefined ? { pairing: opts.pairing } : {}),
     publish: publishFederationEvent,
   });
 
@@ -4075,7 +4085,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const isWebSocket = (req.headers.get('upgrade') ?? '').toLowerCase() === 'websocket';
 
       // S7：federation 入站（独立 peer bearer；非该路径返回 null）。
-      const federationResponse = await federationRoute.handle(req, extra);
+      // q-fed-simple：pair 端点的无码同机判定需要 socket 事实（extra.peer_loopback）。
+      const federationResponse = await federationRoute.handle(req, {
+        ...extra,
+        peer_loopback: isLoopbackAddress(srv.requestIP(req)?.address) ? '1' : '0',
+      });
       if (federationResponse !== null) return federationResponse;
 
       // WS：/v1/events（/ws 为 0.1.0 兼容别名）。
