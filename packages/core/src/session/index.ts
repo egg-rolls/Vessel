@@ -101,6 +101,7 @@ export { removeLegacySessionTrace, sessionLogDirExists } from './session-log-dir
 export {
   compareSessionInfo,
   deriveSessionMeta,
+  isPlaceholderTitle,
   MemorySessionStore,
   normalizeResumeAfterRestart,
   toSessionInfo,

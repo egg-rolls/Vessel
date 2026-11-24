@@ -11,6 +11,7 @@ import {
   runtimeMessageKind,
   useRuntimeVisibility,
 } from '../../state/runtime-visibility';
+import { cleanSessionTitle } from '../../state/sessions';
 import { resourceData, useResource } from '../../state/useResource';
 import { EnvCard } from '../chat/EnvCard';
 import { envNoticeCard, isEnvNoticeKind } from '../chat/env-notice';
@@ -117,8 +118,9 @@ export function BodyTranscript({
     resource.state.status === 'error'
       ? { message: resource.state.error, code: resource.state.code }
       : undefined;
-  // 会话名优先，缺省回落到会话 ID（后者即 bodyId，取数用）。
-  const sessionTitle = session?.title?.trim() || session?.preview?.trim() || bodyId;
+  // 会话名优先，缺省回落到会话 ID（后者即 bodyId，取数用）；占位脏值跳过。
+  const sessionTitle =
+    cleanSessionTitle(session?.title) || cleanSessionTitle(session?.preview) || bodyId;
 
   if (!hasToken) {
     return (

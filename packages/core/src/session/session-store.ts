@@ -77,6 +77,26 @@ export function withTitleSource(info: SessionInfo, raw: unknown): SessionInfo {
 }
 
 /**
+ * 占位标题判定：undefined / null / 空串 / 'Untitled'（空输入派生占位）/
+ * 字面量 'undefined'、'null'（脏数据）一律视为「尚未命名」。大小写不敏感。
+ *
+ * 单一实现，两处共用：
+ * - AI 命名（tenant-runtime-factory）据此决定要不要补名 —— 占位 = 未命名 → 走 AI；
+ *   已确定命名（title_source manual / generated，或真实非派生标题）才跳过。
+ * - 读侧（toSessionInfo）据此不让占位标题遮住有意义的派生标题。
+ *
+ * 注意：'Untitled' 在这里算「未命名」（交给 AI 补名），但在 UI 显示侧它仍是一个
+ * 有意义的兜底默认（不是 undefined）—— 两侧口径不同是有意为之。
+ */
+export function isPlaceholderTitle(title: string | null | undefined): boolean {
+  if (title === undefined || title === null) return true;
+  const trimmed = title.trim();
+  if (trimmed === '') return true;
+  const lower = trimmed.toLowerCase();
+  return lower === 'untitled' || lower === 'undefined' || lower === 'null';
+}
+
+/**
  * `resume_after_restart` 的唯一归一化出口（0.52 S1a）。
  *
  * 磁盘 / SQL 上的这个字段是「进程被打断过」的**持久事实**，所以读取端一律不信形状、
@@ -109,9 +129,18 @@ export function normalizeResumeAfterRestart(value: unknown): ResumeAfterRestart 
 export function toSessionInfo(state: SessionState): SessionInfo {
   const messages = state.messages ?? [];
   const derived = deriveSessionMeta(messages);
+  // 占位标题（空 / 'Untitled' / 字面量 'undefined'、'null'）不算「已命名」：
+  // 没有 manual / generated 标记的占位标题让位给派生标题（有正文时是真实首句，
+  // 否则仍是 'Untitled'），杜绝把脏占位值直接渲染成会话名。人工 / AI 标记的标题
+  // 是有意命名，永远保留（哪怕字面恰好是 'Untitled'）。
+  const intentional = state.title_source === 'manual' || state.title_source === 'generated';
+  const storedTitle =
+    state.title !== undefined && (intentional || !isPlaceholderTitle(state.title))
+      ? state.title
+      : undefined;
   const info: SessionInfo = {
     session_id: state.session_id,
-    title: state.title ?? derived.title,
+    title: storedTitle ?? derived.title,
     preview: state.preview ?? derived.preview,
     status: state.status ?? 'running',
     started_at: state.created_at,

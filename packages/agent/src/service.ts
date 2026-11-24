@@ -1975,7 +1975,14 @@ export class AgentServiceImpl implements AgentService {
     sessionId: string,
     explicitTitle?: string,
   ): Promise<void> {
-    const title = explicitTitle ?? record.name ?? record.id;
+    // 显式 title 优先；缺省退回成员 name（再退 id）。跳过 undefined / 空串候选，
+    // 保证落壳的永远是一个有意义的名字（undefined / 空标题不该出现）。record.id
+    // 恒为非空字符串，是最终兜底。
+    const title =
+      [explicitTitle, record.name, record.id].find(
+        (candidate): candidate is string =>
+          typeof candidate === 'string' && candidate.trim() !== '',
+      ) ?? record.id;
     try {
       const applied = await this.runtime.setSessionTitle?.(sessionId, title, 'manual');
       if (applied !== true) {

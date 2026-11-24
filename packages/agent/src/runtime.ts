@@ -1494,6 +1494,9 @@ export class MemberExecutionHost implements MemberExecutionPort {
   ): Promise<boolean> {
     const store = this.session;
     if (store === undefined) return false;
+    // 空 / 非字符串标题绝不落壳：占位值会遮住有意义的命名（undefined 不该出现）。
+    // 调用方（nameNewSession / sessions.rename）应给出真实名字；这里兜底拒写。
+    if (typeof title !== 'string' || title.trim() === '') return false;
     const stored = await store.load(sessionId);
     if (stored?.title_source === 'manual' && source !== 'manual') return false;
     const now = Date.now();

@@ -182,9 +182,24 @@ export function inflightFromScheduler(
   return out;
 }
 
-/** 行标题回退：title > preview > session_id。 */
+/**
+ * 可用标题清洗：空 / undefined / 字面量占位脏值（'undefined'、'null'）一律返回空串，
+ * 让回退链继续往下走。'Untitled' 是有意义的兜底默认，保留（不是 undefined）。
+ * 后端已尽量归一化占位标题，这里是显示侧最后一道闸：无论存量数据多脏，
+ * 会话名都不会渲染成 'undefined' / 'null'。
+ */
+export function cleanSessionTitle(value: string | undefined | null): string {
+  const trimmed = value?.trim() ?? '';
+  if (trimmed === '') return '';
+  const lower = trimmed.toLowerCase();
+  return lower === 'undefined' || lower === 'null' ? '' : trimmed;
+}
+
+/** 行标题回退：title > preview > session_id（占位脏值跳过）。 */
 export function sessionTitle(session: SessionInfo): string {
-  return session.title?.trim() || session.preview?.trim() || session.session_id;
+  return (
+    cleanSessionTitle(session.title) || cleanSessionTitle(session.preview) || session.session_id
+  );
 }
 
 /** 校验并归一化重命名输入；空白/超长返回 null。 */
