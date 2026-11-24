@@ -297,3 +297,185 @@ settings 校验与落盘（q-settings）；CLI 命名空间（contributes.cli）
 > **声明可以少写，授权不能猜。** 凡属「重复 / 可推导 / 住错地方」的样板 → 自动化；
 > 凡属「安全意图 / 信任决策 / 代码语义」的注册 → 保持显式。fail-closed 时序
 > （先校验 manifest，后 import 代码）在任何方案下不得倒置。
+
+## 4. 脚手架 CLI：`vessel plugin create`
+
+### 4.1 命令形状
+
+```
+vessel plugin create <name> [options]
+
+  --type <tool|capability|ui>   插件形态（缺省 tool）
+  --where <user|project|repo>   目标位置（缺省 user）
+  --category <cat>              repo 内的分类目录（缺省按 type 推导，见 §4.3）
+  --ui                          capability 型附加 UI embed 脚手架（照 model-registry/skills）
+  --rpc                         生成占位 RPC 面（capability 缺省开；tool 可选）
+  --settings                    生成 settings 贡献 + 单源 schema（缺省开）
+  --cli                         生成 contributes.cli 占位命令（需 --rpc；缺省关）
+  --opt-in                      声明 vessel.defaultEnabled: false（照 media 先例）
+  --force                       目标目录已存在时覆盖（缺省拒绝）
+  --json                        机器可读输出
+```
+
+设计取舍：
+
+- **三型对齐任务书**，语义映射到既有先例：
+  - `tool` = in-process 工具插件（web-tools / media / recall 先例）：install 注册一个占位工具，
+    可选 settings；无 UI。
+  - `capability` = in-process 管理/RPC 插件（model-registry / skills 先例）：`install(){}` +
+    rpc handler map + capabilityManifest；`--ui` 追加 embed 双产线（skills 形态）。
+  - `ui` = **child 体验插件**（usage / marketplace 先例）：`vessel.entry` + NDJSON 协议入口 +
+    完整贡献面。理由：in-process 的 UI 需求已由 `capability --ui` 覆盖；child 是独立形态，
+    协议入口样板最重、最值得生成。**命名澄清**：`--type ui` 不是「给工具加界面」，
+    帮助文案必须写明「child-process experience plugin」。
+- **provider / 工厂式不生成**（N4）：`--category provider` → exit 2，stderr 指路
+  `plugins/provider/anthropic`（registerProvider 单行注册）与 §3.2 裁决。
+- 无 `--child` / `--in-process` 别名：形态由 type 唯一决定，避免双轴歧义。
+
+### 4.2 目标位置与依赖约束
+
+| where | 落点 | 发现来源 | 依赖约束（§1.5 白名单） |
+| --- | --- | --- | --- |
+| `user`（缺省） | `VESSEL_PLUGINS_DIR` → `~/.vessel/plugins/<name>/`（扁平） | user | 模板只 import `@vessel-agent/core`（type-only 亦经转发缝）；**不得**依赖 config/plugin-sdk(node 侧)/basic-tools 之外的宿主包。settings 解析用模板内置的迷你 parser（不 import SDK），或作者自行 bundle |
+| `project` | `./.vessel/plugins/<name>/` | project | 同 user |
+| `repo` | `plugins/<category>/<name>/` | repo | workspace 全量可用（`workspace:*`）；生成后提示 `bun install`；UI 型可用 plugin-sdk/plugin-ui/react 全套 |
+
+- **user/project 模板的 SDK 助手问题**：§6.2 的 `defineRpcHandlers`/`parseSettings` 住在
+  `@vessel-agent/plugin-sdk`，而该包**不在** HOST_SHARED_PACKAGES（它只被 web 产物消费）。
+  裁决：v1 助手以**可复制的源码片段**形式进模板（template 内联 ~30 行 helper，标注
+  「与 plugin-sdk 同形，repo 内可换 import」）；把 plugin-sdk 加入转发白名单是开放问题
+  （§9，需回答「第二副本会不会出事」——sdk 的 semver/宿主对象是纯函数+冻对象，
+  初步判断可加，但属独立决策，不夹带）。
+- `--where repo` 时 category 缺省：`tool`/`capability` → `tools`；`ui` → `experience`
+  （新分类目录；category 除 `provider` 外纯属组织语义，loader 不关心）。`--category` 可覆盖；
+  值为 `provider` 时拒绝（见上）。
+- 目标已存在：缺省 exit 1 并提示 `--force`（照 `plugin install` 先例）；`--force` 整目录替换。
+  **不删任何非目标目录**；不触碰 config.yaml（启用语义见 §4.4）。
+
+### 4.3 命名与冲突校验（生成前，全部本地）
+
+1. `<name>` 必须匹配 `PLUGIN_ID_RE`（`^[a-z0-9][a-z0-9-]{1,63}$`）——与 manifest id 同规则，
+   生成即合法；同时过 `PLUGIN_NAME_RE`（plugin-command.ts L31）。
+2. 用 `PluginLoader`（照 `makeLoader` 先例注入 userDir）扫全部发现根：同 id 已存在 → exit 1，
+   报出冲突来源（repo/user/project/node_modules）；**不自动加 override**。
+3. id 不得占用内置 CLI 命令名（`builtinCommandTokens`，completion-spec）——
+   与 manifest `reservedCliNames` 复检同口径，生成前就挡住。
+4. `--cli` 时占位命令 path 固定 `[<name>, "hello"]`，handler 固定指向占位 rpc `hello`。
+
+### 4.4 生成流程与生成后指引
+
+流程（纯 fs，无网络、无 git 操作、无子进程）：
+校验（§4.3）→ 渲染模板（字符串替换，无模板引擎依赖）→ 原子落盘（临时目录 + rename，
+照宪法不建临时**进程**；临时目录是 fs 操作，允许）→ 打印下一步。
+
+生成后指引（stdout，按 where/type 分支）：
+
+- user/project：`Restart Vessel to load it.`（plugins: 缺省时外部插件默认加载；
+  `--opt-in` 时改印启用示例 `plugins: [{ name: <name> }]`，照 media 文档口径）。
+  **不自动写 config.yaml**——启用是用户决策（与 install 先例一致）；若检测到 `plugins:`
+  已存在（完整清单陷阱），额外警告「需把 <name> 列入 plugins: 才会加载」。
+- repo：`Run bun install, then restart Vessel.`；UI 型追加 `bun run --cwd plugins/<cat>/<name> build:ui`。
+- 一律附 `VERIFY.md` 路径提示（人工验证清单，§5.4）。
+- best-effort `plugins.reload`（照 enable/disable 先例 `requestGatewayPluginReload`）：
+  in-process 新插件会得到 `restart_required`，如实转印，不谎报。
+
+Exit codes：0 成功；1 运行期失败（冲突/IO）；2 用法非法（照 plugin-cli-command 口径）。
+`--json` 输出 `{ name, type, where, dir, files: [...], nextSteps: [...] }`。
+
+### 4.5 实现落点（供实现分支）
+
+- `src/cli/args.ts`：`PluginCommandArgs` 追加 `{ kind: 'create'; name: string; type: ...; ... }`。
+- `src/cli/commands/plugin/plugin-create.ts`（新）：校验 + 渲染 + 落盘；
+  `plugin-command.ts` 的 `runPluginCommand` 加分支（照 list/install 先例返回
+  `{exitCode, stdout, stderr}`，测试注入形状不变——但宪法零测试，注入选项仅为 API 一致性保留）。
+- 模板住 `src/cli/commands/plugin/templates/`（`.ts` 模板字符串模块，随 src 分发；
+  根 package.json `files` 已含 src，无需改）。
+- `completion-spec.ts` / `help-spec.ts` 补 create 子命令与选项。
+- **不新增** gate/check/test 命令（宪法）；`vessel plugin sync`（§6.3）是生成器，另列。
+
+## 5. 模板结构
+
+通用约定：所有模板生成物**零修改可加载**；占位语义显式标注 `TODO(<name>)`；
+文件头注释照仓库风格（模块职责 + 契约指针）；biome 格式（生成即格式化，无后续 lint 债）。
+
+### 5.1 `--type tool`（先例：web-tools / media）
+
+```
+<name>/
+├── package.json          # B1 骨架 + vessel 清单（id/name/version/engines/side:backend/
+│                         #   contributes.settings 占位一键 / permissions 最小空声明）
+├── VERIFY.md             # 人工验证清单（§5.4）
+└── src/
+    ├── index.ts          # Plugin：install(host,{config}) → enabled 闸 → parseSettings →
+    │                     #   host.registerTool(createXxxTool(...))；dispose 幂等占位
+    ├── settings.ts       # SETTINGS_SCHEMA 单源（JSON Schema 子集 const）+ parseSettings
+    │                     #   （内联迷你 parser：type/default/enum/minmax，~30 行）
+    └── tool.ts           # 占位工具：<name>_hello，echo 参数；schema/描述完整可调用
+```
+
+要点：`--opt-in` 时清单写 `defaultEnabled: false`（§6.4 落地前的过渡期同时提示作者
+「现态需进 OPT_IN_PLUGINS 或显式 plugins:」——模板按 §10 分期自适应）；
+路径边界需求留注释指针（media 先例：`buildPathBoundary` 仅 repo 可用，user 模板不 import）。
+
+### 5.2 `--type capability [--ui]`（先例：model-registry / skills）
+
+```
+<name>/
+├── package.json          # vessel 清单：contributes.rpc[hello] + settings + permissions 最小声明
+├── VERIFY.md
+└── src/
+    ├── index.ts          # defineCapabilityPlugin({ name, settings, rpc: { hello } })
+    │                     #   → install(){}（RPC-only）或 install 注册工具（--rpc 之外可选）
+    ├── settings.ts       # 同 tool
+    └── rpc.ts            # handler map：{ hello: async (params) => ({...}) }
+                          #   defineRpcHandlers 内联片段：未知方法抛 unknown_method
+```
+
+`--ui` 追加（照 skills/model-registry 双产线）：
+
+```
+├── vite.config.ts        # ~5 行：createPluginViteConfigs({pluginId, pages})（§6.5）
+├── vite.config.embed.ts  # 同上 embed 档
+├── tsconfig.web.json     # 照抄先例（web-src jsx / paths）
+├── web-src/
+│   ├── embed.tsx         # 具名导出 <Name>View（PluginMountProps → host.rpc/theme/i18n）
+│   ├── main.tsx / App.tsx / <name>.html   # iframe 回退档
+│   ├── i18n.ts           # en/zh-CN 占位（与 manifest i18n 由 sync 对齐，§6.3）
+│   ├── env.d.ts / embed.css / styles.css
+└── web/                  # 构建产物目录（.gitkeep；产物入库规则照先例 biome-ignore 头）
+```
+
+manifest 同步追加：`ui.dir/embed`、`pages[<name>]`（entry/component 按 §6.1 缺省可省）、
+`navGroups[plugin:<name>]`、`i18n.nav.*`、`activationEvents`（child 才需要；capability 不写）。
+
+### 5.3 `--type ui`（child，先例：usage / marketplace）
+
+```
+<name>/
+├── package.json          # vessel.entry: src/index.ts + contributes 全套占位
+├── VERIFY.md
+└── src/
+    ├── index.ts          # NDJSON JSON-RPC 协议入口骨架：plugin.hello/activate/event/
+    │                     #   rpc/deactivate + ping→pong（照 usage 先例逐方法占位）
+    ├── protocol.ts       # 帧读写 / DTO 校验内联片段（stdout 只放协议，stderr 诊断）
+    └── rpc.ts            # handler map（hello 占位）
+```
+
+UI 文件与 §5.2 `--ui` 相同；child 的 settings 经 `plugin.activate` 注入（模板在 activate
+handler 里留 `settings = params.settings` 占位）。**协议版本 / 超时 / 崩溃语义**在模板头注释
+指回 CONTRACT-0.43 §3，不复制契约文本。
+
+### 5.4 VERIFY.md：测试占位的宪法替代
+
+任务书要求「测试占位」。仓库宪法（AGENTS.md L114-120）**禁止任何位置生成测试文件**，
+且门禁脚本先例（check-rpc-methods）已删改为评审项。裁决：脚手架生成 `VERIFY.md`——
+**人工验证清单**（文档，非脚本、非断言），内容按 type 分支：
+
+- 通用：`vessel plugin list` 可见 / enabled 状态正确；重启后 `plugin.loaded` 事件；
+  清单故意写错时 fail-closed 告警（评审项，照 docs/agents/plugins.md）。
+- tool：占位工具出现在工具面、调用回 echo；`enabled:false` 时不注册。
+- capability：`plugin.<name>.hello` 经 gateway 可调；未声明方法被拒（plugin_rpc_denied）。
+- ui：页面在导航出现；embed 档渲染；isolated 回退 iframe； deactivate 后进程退出。
+- 安全评审项：permissions 是否最小；external 源 http/cli 是否需 expose。
+
+清单是**给作者/评审者的文档**，不构成 gate；与「不写测试」裁定（仓库外也不写）一致。
