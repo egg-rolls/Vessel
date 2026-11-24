@@ -126,7 +126,25 @@ export function SettingsDialog({
     return () => clearTimeout(timer);
   }, [query]);
 
-  const defs = useMemo(() => mergeSettings(pluginSettingsToDefs(pluginDomains)), [pluginDomains]);
+  // S4：child 模式 → restartRequired（settings 经 env 注入，spawn 后不可变）。
+  const modeById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const plugin of plugins) {
+      if (plugin.mode !== undefined) map.set(plugin.name, plugin.mode);
+    }
+    return map;
+  }, [plugins]);
+  const defs = useMemo(
+    () =>
+      mergeSettings(
+        pluginSettingsToDefs(pluginDomains).map((def) =>
+          def.pluginId !== undefined && modeById.get(def.pluginId) === 'child'
+            ? { ...def, restartRequired: true }
+            : def,
+        ),
+      ),
+    [pluginDomains, modeById],
+  );
   const serverValues = useMemo(() => resolveDisplayValues(data, pending), [data, pending]);
   const logOverrides = useMemo(() => readLogEnvOverrides(data), [data]);
   // S3：插件值快照复用 E10 plugins.list[].config（不新增读 RPC）。
@@ -348,23 +366,14 @@ export function SettingsDialog({
         def={def}
         value={values[def.id] ?? ''}
         modified={isModified(def)}
-        disabled={
-          def.pluginId !== undefined
-            ? true // S3 只读；S4 接 plugins.config.set 后可编辑
-            : def.scope !== 'local' && coreDisabled
-        }
-        disabledReason={
-          def.pluginId !== undefined
-            ? t('settings.dialog.pluginReadOnly')
-            : def.scope !== 'local'
-              ? coreDisabledReason
-              : undefined
-        }
+        disabled={def.scope !== 'local' && coreDisabled}
+        disabledReason={def.scope !== 'local' ? coreDisabledReason : undefined}
         saving={writer.savingKey === def.id}
         query={parsed.text}
         envOverride={envOverrideFor(def)}
         onSave={(target, raw) => void writer.save(target, raw)}
         onReset={(target) => void writer.reset(target)}
+        onReloadPlugin={def.restartRequired === true ? () => void writer.reloadPlugin() : undefined}
       >
         {def.type === 'view' ? renderView(def) : undefined}
       </SettingRow>

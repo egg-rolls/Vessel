@@ -94,6 +94,37 @@ export abstract class IntegrationsClient extends TeamsClient {
   }
 
   /**
+   * S4（vscode-settings-design §4.4）：插件设置写路径（write 权限）。
+   * 旧 gateway / 未注入写面 → not_found（UI 只读 + 原因）。
+   * restartRequired=true（child 模式）→ 提示重载，不谎报热应用。
+   */
+  setPluginConfigValue(
+    plugin: string,
+    key: string,
+    value: string | boolean | number,
+  ): Promise<{
+    ok: boolean;
+    plugin: string;
+    key: string;
+    value: string | boolean | number;
+    restartRequired: boolean;
+  }> {
+    return this.rpc('plugins.config.set', { plugin, key, value });
+  }
+
+  /** S4：child 插件改配置后的显式重载（plugins.reload，write 权限，已有）。 */
+  reloadPlugins(): Promise<{
+    added: string[];
+    removed: string[];
+    changed: string[];
+    active: string[];
+    errors: Array<{ id: string; code: string; message: string }>;
+    restart_required?: boolean;
+  }> {
+    return this.rpc('plugins.reload', {});
+  }
+
+  /**
    * 写入单个工具的确认策略（canonical `permissions.setToolPolicy`）。
    * 旧 gateway 没有该方法，调用方须先用 `capabilities.list` 判定是否可用。
    */

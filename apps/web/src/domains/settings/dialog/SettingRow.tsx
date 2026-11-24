@@ -88,6 +88,8 @@ export interface SettingRowProps {
   envOverride?: string;
   onSave: (def: SettingDef, raw: string) => void;
   onReset: (def: SettingDef) => void;
+  /** S4：child 插件重载（restartRequired 提示条的 [重载] 按钮）。 */
+  onReloadPlugin?: () => void;
   /** view 型项的子视图（父级懒加载渲染）。 */
   children?: ReactNode;
 }
@@ -103,6 +105,7 @@ export function SettingRow({
   envOverride,
   onSave,
   onReset,
+  onReloadPlugin,
   children,
 }: SettingRowProps) {
   const title = def.titleKey ? t(def.titleKey) : (def.title ?? def.id);
@@ -248,7 +251,14 @@ export function SettingRow({
         </p>
       )}
       {def.restartRequired && (
-        <p className="text-sm text-warn">{t('settings.dialog.restartRequired')}</p>
+        <p className="flex items-center gap-2 text-sm text-warn">
+          {t('settings.dialog.restartRequired')}
+          {onReloadPlugin && (
+            <Button variant="link" className="text-sm" onClick={onReloadPlugin}>
+              {t('settings.dialog.reloadPlugin')}
+            </Button>
+          )}
+        </p>
       )}
       {disabledReason && <p className="text-sm text-muted">{disabledReason}</p>}
     </div>

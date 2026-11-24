@@ -198,6 +198,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.dialog.editInYaml': 'Edit in vessel.yaml',
   'settings.dialog.expandAll': 'Expand all',
   'settings.dialog.pluginReadOnly': 'Plugin settings are read-only for now (write support coming)',
+  'settings.dialog.pluginReloaded': 'Plugin reloaded',
   'settings.connection.devProxyNotice':
     'Dev proxy auth is enabled: connecting to the same-origin gateway forwarded by the Vite dev server. No token is stored in the browser.',
 

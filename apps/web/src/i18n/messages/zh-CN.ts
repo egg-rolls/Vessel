@@ -192,6 +192,7 @@ export const messages = {
   'settings.dialog.editInYaml': '在 vessel.yaml 中编辑',
   'settings.dialog.expandAll': '全部展开',
   'settings.dialog.pluginReadOnly': '插件设置当前只读（写支持即将落地）',
+  'settings.dialog.pluginReloaded': '插件已重载',
   'settings.connection.devProxyNotice':
     '开发代理鉴权已启用：连接同源 gateway（由 Vite 开发服务器转发），前端不保存 token。',
 

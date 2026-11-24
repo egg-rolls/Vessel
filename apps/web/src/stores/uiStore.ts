@@ -16,7 +16,7 @@
  * errors so a preference still applies for the current session.
  */
 import { create } from 'zustand';
-import { type DisplayPendingEntry } from '../state/display-settings';
+import type { DisplayPendingEntry } from '../state/display-settings';
 import { CORE_SETTINGS } from '../state/settings-registry';
 import { initialTheme, storeTheme, THEME_KEY, type Theme } from '../state/theme';
 
@@ -78,12 +78,19 @@ export type UiStoreState = UiPreferences & UiStoreActions;
  * 泛化：按注册表核心定义校验 boolean/enum/number/string（原仅 boolean/enum，
  * number/string 的乐观 overlay 之前被静默丢弃——q-empty-response 键受益）。
  */
+/** 插件设置 pending 键形状：<pluginId>.<key>（值校验权威在 serve 方法层）。 */
+const PLUGIN_PENDING_KEY = /^[a-z0-9][a-z0-9-]{0,63}\.[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
 function sanitizeSettingsPatch(patch: SettingsPending): SettingsPending {
   const next: SettingsPending = {};
   for (const [key, value] of Object.entries(patch)) {
     if (typeof value !== 'string') continue;
     const setting = CORE_SETTINGS.find((def) => def.key === key);
-    if (!setting) continue;
+    if (!setting) {
+      // S4：插件键按 id（pluginId.key）入 overlay；形状合法即收，类型由服务端校验。
+      if (PLUGIN_PENDING_KEY.test(key) && value !== '') next[key] = value;
+      continue;
+    }
     if (value === '') {
       next[key] = value;
       continue;

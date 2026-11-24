@@ -73,6 +73,14 @@ export function readLocalSetting(def: SettingDef): string {
   }
 }
 
+/** S4 确认：plugins.list config 快照值 === 本次写入的表单文本。 */
+function pluginValueMatches(raw: unknown, expected: string): boolean {
+  if (typeof raw === 'boolean') return (raw ? 'true' : 'false') === expected;
+  if (typeof raw === 'number') return String(raw) === expected;
+  if (typeof raw === 'string') return raw === expected;
+  return false;
+}
+
 export interface SettingsWriter {
   save: (def: SettingDef, raw: string) => Promise<void>;
   /** 恢复默认：核心 = 写 default；local = 移除存储键回内置默认（R8）。 */
@@ -83,6 +91,9 @@ export interface SettingsWriter {
   refresh: () => void;
   /** local 写入后自增，驱动弹窗重读 localStorage。 */
   localRevision: number;
+  /** S4：child 插件写后需重载（restartRequired）；reloadPlugin 显式重载。 */
+  restartPluginId: string | undefined;
+  reloadPlugin: () => Promise<void>;
 }
 
 export function useSettingsWriter(): SettingsWriter {
@@ -95,6 +106,7 @@ export function useSettingsWriter(): SettingsWriter {
   const [savingKey, setSavingKey] = useState<string | undefined>();
   const [writeUnavailable, setWriteUnavailable] = useState(false);
   const [localRevision, setLocalRevision] = useState(0);
+  const [restartPluginId, setRestartPluginId] = useState<string | undefined>();
 
   const bumpLocal = useCallback(() => setLocalRevision((revision) => revision + 1), []);
 
@@ -125,6 +137,50 @@ export function useSettingsWriter(): SettingsWriter {
       }
       if (def.scope === 'local') {
         saveLocal(def, raw);
+        return;
+      }
+      // S4：插件键 → plugins.config.set；确认源 = plugins.list[].config（E10）。
+      if (def.pluginId !== undefined) {
+        const pluginValue = toSettingConfigValue(def, raw);
+        if (pluginValue === undefined) return;
+        setSettingsPending({ [def.id]: raw });
+        setSavingKey(def.id);
+        try {
+          let result: { restartRequired: boolean };
+          try {
+            result = await client.setPluginConfigValue(def.pluginId, def.key, pluginValue);
+          } catch (error) {
+            clearSettingsPending([{ key: def.id, value: raw }]);
+            if (isUnavailable(error)) {
+              setWriteUnavailable(true);
+              toast.error(t('settings.dialog.writeUnavailable'));
+            } else {
+              toast.error(t('settings.dialog.saveFailed', { detail: errorMessage(error) }));
+            }
+            return;
+          }
+          let confirmed = false;
+          for (let attempt = 0; attempt < WRITE_CONFIRM_ATTEMPTS; attempt += 1) {
+            const fresh = await client.listPlugins().catch(() => undefined);
+            const entry = fresh?.find((plugin) => plugin.name === def.pluginId);
+            if (entry !== undefined && pluginValueMatches(entry.config?.[def.key], raw)) {
+              confirmed = true;
+              break;
+            }
+            if (attempt < WRITE_CONFIRM_ATTEMPTS - 1) {
+              await new Promise((resolve) => setTimeout(resolve, WRITE_CONFIRM_DELAY_MS));
+            }
+          }
+          clearSettingsPending([{ key: def.id, value: raw }]);
+          if (confirmed) {
+            toast.success(t('settings.dialog.saved', { key: def.id }));
+          } else {
+            toast.error(t('settings.dialog.saveUnconfirmed', { key: def.id }));
+          }
+          if (result.restartRequired) setRestartPluginId(def.pluginId);
+        } finally {
+          setSavingKey(undefined);
+        }
         return;
       }
       const value = toSettingConfigValue(def, raw);
@@ -202,5 +258,31 @@ export function useSettingsWriter(): SettingsWriter {
     reloadConfig();
   }, [reloadConfig]);
 
-  return { save, reset, savingKey, writeUnavailable, refresh, localRevision };
+  // S4：child 插件显式重载（不谎报热应用）；errors[] 逐项展示。
+  const reloadPlugin = useCallback(async () => {
+    try {
+      const result = await client.reloadPlugins();
+      if (result.errors.length > 0) {
+        for (const entry of result.errors) {
+          toast.error(`${entry.id}: ${entry.message}`);
+        }
+        return;
+      }
+      setRestartPluginId(undefined);
+      toast.success(t('settings.dialog.pluginReloaded'));
+    } catch (error) {
+      toast.error(t('settings.dialog.saveFailed', { detail: errorMessage(error) }));
+    }
+  }, [client, toast]);
+
+  return {
+    save,
+    reset,
+    savingKey,
+    writeUnavailable,
+    refresh,
+    localRevision,
+    restartPluginId,
+    reloadPlugin,
+  };
 }
