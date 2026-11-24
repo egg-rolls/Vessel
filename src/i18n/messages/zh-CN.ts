@@ -239,6 +239,7 @@ export const zhCN = {
   'flag.url': '对端 node 基址（node 端口；loopback 可用 http）',
   'flag.direction': '允许的投递方向：in | out | both（缺省 both）',
   'flag.localTeamId': '把对端 Team 映射到不同的本机 Team id',
+  'flag.peerTeamId': '要配对的目标节点 Team（缺省 = --team-id）',
   'flag.allowDirectory': '允许该 peer 入站查询本机 Team 目录（team-info）',
   'flag.caFile': '对端 TLS 连接的 CA 证书路径',
   'flag.help': '显示该命令的用法',
@@ -541,6 +542,29 @@ export const zhCN = {
   'federation.teamInfo.memberRow': '  {name}  {presence}  {lastSeen}',
   'federation.teamInfo.empty': '没有成员。',
   'federation.teamInfo.rejected': 'team-info 被拒绝：{code}：{reason}',
+
+  // ── federation pair-code/join/discover（q-fed-simple）──
+  'help.cmd.federationPairCode':
+    '在本节点出一次性 federation 配对码（跨机 join 用；同机回环可免码）',
+  'help.cmd.federationJoin':
+    '与目标节点配对：握手验证身份、自动交换共享 token、两侧自动写 peer 配置并热应用（不重启）',
+  'help.cmd.federationDiscover': '从本地 hub 注册表列同机节点（回环入口），附一条命令配对提示',
+  'federation.pairCode.issued': '配对码 {code}（{expires} 过期）；只显示这一次',
+  'federation.pairCode.hint':
+    '在另一节点执行：vessel federation join <本节点-url> --code <码>（同机回环可省略 --code）',
+  'federation.join.paired': '已与 {label}（{url}）配对；peer 已写入 {path}',
+  'federation.join.hint': '对端已在握手内自动写好它那一侧；token 存节点密钥库（绝不进配置）',
+  'federation.join.unreachable': '无法连接 {url}：{detail}',
+  'federation.join.failed': '{code}：{message}（目标 {url}）',
+  'federation.join.badResponse': '目标 {url} 返回了非法的配对响应',
+  'federation.join.unknownNode': '节点 {node} 不在本地 hub 注册表（{path}）',
+  'federation.join.noLoopback': '节点 {node} 在 hub 注册表里没有回环入口；请改用显式 URL join',
+  'federation.join.secretFailed':
+    '无法存储配对 token：{detail}（平台密钥库不可用？设置 federation.allow_file_secrets 或修复密钥库）',
+  'federation.discover.title': '同机 federation 候选节点（注册表：{path}）',
+  'federation.discover.empty': '本地 hub 注册表里没有其它回环节点。',
+  'federation.discover.row': '  {node}  {name}  {url}  {status}  teams={teams}',
+  'federation.discover.hint': '一条命令配对：vessel federation join <node_id>',
 
   // ── attention（0.22 S9.1）──
   'help.cmd.attention':

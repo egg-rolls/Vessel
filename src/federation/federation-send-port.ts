@@ -46,6 +46,8 @@ export interface FederationSendPortOptions {
   nodeId: string;
   /** token env 来源；缺省 `process.env`（测试传显式 map） */
   env?: Record<string, string | undefined>;
+  /** q-fed-simple：预加载的 SecretStore token（key `<nodeId>:<teamId>`）。 */
+  secrets?: Record<string, string | undefined>;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   /** 裸名跨节点查找的**总**预算（缺省 2000ms）；不是每个 peer 各等一次。 */
@@ -115,6 +117,7 @@ export function createFederationSendPort(
     federation: options.federation,
     nodeId: options.nodeId,
     ...(options.env !== undefined ? { env: options.env } : {}),
+    ...(options.secrets !== undefined ? { secrets: options.secrets } : {}),
   });
 
   const io: FederationClientIo = {

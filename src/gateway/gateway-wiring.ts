@@ -14,6 +14,7 @@ import type {
 } from '../../packages/serve/src/index';
 import type { FeishuChannelLike, MetricsControlLike } from '../cli/control-plane-types';
 import { resolveFederationOptions } from '../federation/federation-config';
+import { loadFederationPeerSecrets } from '../federation/federation-secrets';
 import { latestEvalReport } from '../plugin/eval-wiring';
 import { PluginLoader } from '../plugin/plugin-loader';
 
@@ -43,12 +44,17 @@ export interface GatewayControlPlaneOptions {
   nodeId?: string;
   /** 丢弃 federation peer（缺 token / 自指 / token 重复）时记录原因。 */
   logger?: Logger;
+  /**
+   * q-fed-simple：数据根。提供时预加载 `tokenSecret` peer 的 SecretStore token；
+   * 缺省 undefined ⇒ 只解析 env token（与旧行为逐字一致）。
+   */
+  dataDir?: string;
 }
 
 /** 只包含实际启用的控制面；未启用时不出现在对象里 */
-export function buildGatewayControlPlane(
+export async function buildGatewayControlPlane(
   options: GatewayControlPlaneOptions,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const controlPlane: Record<string, unknown> = {};
 
   if (options.metrics) {
@@ -72,9 +78,18 @@ export function buildGatewayControlPlane(
   // 个对象，启动时不注入会让 enabled:false → true 永远无法热生效。缺 token 的 peer
   // 由 resolver 丢弃（fail closed）；这里不打印 token / env，也不因缺失 token 报错。
   if (options.nodeId !== undefined) {
+    const secrets =
+      options.dataDir !== undefined
+        ? await loadFederationPeerSecrets({
+            dataDir: options.dataDir,
+            federation: options.config.federation,
+            ...(options.logger !== undefined ? { logger: options.logger } : {}),
+          })
+        : {};
     const resolved = resolveFederationOptions({
       federation: options.config.federation,
       nodeId: options.nodeId,
+      secrets,
     });
     for (const issue of resolved.issues) {
       options.logger?.warn('federation.peer.skipped', {

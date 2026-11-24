@@ -108,6 +108,7 @@ export const CLI_FLAG_VALUE = {
   '--value-stdin': null,
   '--node-id': '<node_id>',
   '--team-id': '<team_id>',
+  '--peer-team-id': '<team_id>',
   '--url': '<base-url>',
   '--direction': '<in|out|both>',
   '--local-team-id': '<team_id>',
@@ -203,6 +204,7 @@ export const CLI_FLAG_HELP: Readonly<Record<CliFlag, MessageKey>> = {
   '--value-stdin': 'flag.valueStdin',
   '--node-id': 'flag.nodeId',
   '--team-id': 'flag.teamId',
+  '--peer-team-id': 'flag.peerTeamId',
   '--url': 'flag.url',
   '--direction': 'flag.direction',
   '--local-team-id': 'flag.localTeamId',
@@ -715,6 +717,25 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     args: '<label|node-id>',
     flags: ['--json'],
   },
+  {
+    path: ['federation', 'pair-code'],
+    summary: 'help.cmd.federationPairCode',
+    flags: ['--ttl', '--json'],
+    flagValue: { '--ttl': '<seconds>' },
+  },
+  {
+    path: ['federation', 'join'],
+    summary: 'help.cmd.federationJoin',
+    args: '<url|node-id>',
+    flags: ['--code', '--team-id', '--peer-team-id', '--url', '--allow-directory', '--json'],
+    flagValue: {
+      '--code': '<pair-code>',
+      '--team-id': '<team_id>',
+      '--peer-team-id': '<team_id>',
+      '--url': '<self-base-url>',
+    },
+  },
+  { path: ['federation', 'discover'], summary: 'help.cmd.federationDiscover', flags: ['--json'] },
 
   // ── dev ──
   {

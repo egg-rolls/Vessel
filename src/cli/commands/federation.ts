@@ -29,11 +29,13 @@ import {
   postFederationTeamInfo,
 } from '../../federation/federation-client';
 import { resolveFederationOptions } from '../../federation/federation-config';
+import { loadFederationPeerSecrets } from '../../federation/federation-secrets';
 import { t } from '../../i18n';
 import { resolveNodeId } from '../../node/node-identity';
 import type { FederationCommand } from '../args';
 import { ui } from '../output';
 import type { CommandResult } from './agent/agent-command';
+import { discoverCommand, joinCommand, pairCodeCommand } from './federation-pair';
 import { runFederationPeerCommand } from './federation-peer';
 
 /** v1 固定 tenant（DECISION-036 §2） */
@@ -53,6 +55,8 @@ interface PeerView {
   team_id: string;
   direction: 'in' | 'out' | 'both';
   token_env: string;
+  /** q-fed-simple：token 来自 node SecretStore（自动配对）；此时 token_env 为 ''。 */
+  token_secret?: boolean;
   token_set: boolean;
   allow_directory: boolean;
   local_team_id?: string;
@@ -70,25 +74,30 @@ function failure(code: string, detail: string, exitCode = 1): CommandResult {
 function configuredPeers(
   config: VesselConfig,
   env: Record<string, string | undefined>,
+  secrets: Record<string, string | undefined> = {},
 ): PeerView[] {
   const configured = Array.isArray(config.federation?.peers) ? config.federation.peers : [];
   const peers: PeerView[] = [];
   for (const peer of configured) {
     if (!isRecord(peer)) continue;
+    const tokenSecret = peer.tokenSecret === true;
     if (
       typeof peer.nodeId !== 'string' ||
       typeof peer.teamId !== 'string' ||
-      typeof peer.tokenEnv !== 'string'
+      (!tokenSecret && typeof peer.tokenEnv !== 'string')
     ) {
       continue;
     }
     const direction = peer.direction === 'in' || peer.direction === 'out' ? peer.direction : 'both';
-    const token = env[peer.tokenEnv];
+    const token = tokenSecret
+      ? secrets[`${peer.nodeId}:${peer.teamId}`]
+      : env[peer.tokenEnv as string];
     const view: PeerView = {
       node_id: peer.nodeId,
       team_id: peer.teamId,
       direction,
-      token_env: peer.tokenEnv,
+      token_env: tokenSecret ? '' : (peer.tokenEnv as string),
+      ...(tokenSecret ? { token_secret: true } : {}),
       token_set: typeof token === 'string' && token !== '',
       allow_directory: peer.allowDirectory === true,
     };
@@ -130,7 +139,7 @@ function formatPeers(
         team: peer.team_id,
         direction: peer.direction,
         allowDir: String(peer.allow_directory),
-        tokenEnv: peer.token_env,
+        tokenEnv: peer.token_secret === true ? 'secret-store' : peer.token_env,
         token: peer.token_set ? t('federation.peers.tokenSet') : t('federation.peers.tokenUnset'),
       }),
     );
@@ -210,10 +219,15 @@ async function teamInfoCommand(
   }
 
   const env = options.env ?? process.env;
+  const secrets = await loadFederationPeerSecrets({
+    dataDir: options.dataDir,
+    federation: options.config.federation,
+  });
   const { options: runtime } = resolveFederationOptions({
     ...(options.config.federation !== undefined ? { federation: options.config.federation } : {}),
     nodeId,
     env,
+    secrets,
   });
 
   let result: FederationTeamInfoResult;
@@ -272,12 +286,17 @@ async function peersCommand(
     return failure('federation_error', detail, 2);
   }
 
+  const secrets = await loadFederationPeerSecrets({
+    dataDir: options.dataDir,
+    federation: options.config.federation,
+  });
   const { options: runtime, issues } = resolveFederationOptions({
     ...(options.config.federation !== undefined ? { federation: options.config.federation } : {}),
     nodeId,
     env,
+    secrets,
   });
-  const peers = configuredPeers(options.config, env);
+  const peers = configuredPeers(options.config, env, secrets);
 
   for (const issue of issues) {
     if (issue.reason === 'missing_token') {
@@ -436,10 +455,15 @@ async function postCommand(
   }
 
   const env = options.env ?? process.env;
+  const secrets = await loadFederationPeerSecrets({
+    dataDir: options.dataDir,
+    federation: options.config.federation,
+  });
   const { options: runtime } = resolveFederationOptions({
     ...(options.config.federation !== undefined ? { federation: options.config.federation } : {}),
     nodeId,
     env,
+    secrets,
   });
 
   let result: FederationPostResult;
@@ -494,6 +518,10 @@ export async function runFederationCommand(
   if (command.kind === 'peer-add' || command.kind === 'peer-remove') {
     return runFederationPeerCommand(command, options);
   }
+  // q-fed-simple：自动配对（pair-code / join / discover）。
+  if (command.kind === 'pair-code') return pairCodeCommand(command, options);
+  if (command.kind === 'join') return joinCommand(command, options);
+  if (command.kind === 'discover') return discoverCommand(command, options);
   if (command.kind === 'team-info') return teamInfoCommand(command, options);
   return postCommand(command, options);
 }

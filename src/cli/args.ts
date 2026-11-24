@@ -348,7 +348,26 @@ export type FederationCommand =
   /** `federation peer list`：与 `federation peers` 同一渲染（token 绝不打印）。 */
   | { kind: 'peer-list'; json: boolean }
   /** `federation peer remove <label|node-id>`：label = `<nodeId>:<teamId>`。 */
-  | { kind: 'peer-remove'; target: string; json: boolean };
+  | { kind: 'peer-remove'; target: string; json: boolean }
+  /** q-fed-simple：target 侧出一次性配对码（明文只打印一次）。 */
+  | { kind: 'pair-code'; ttl?: number; json: boolean }
+  /** q-fed-simple：与目标节点握手配对（token 自动交换 + 两侧自动写配置热应用）。 */
+  | {
+      kind: 'join';
+      /** 目标 node base URL 或 node_id（经本地 hub registry 解析回环 url）。 */
+      target: string;
+      code?: string;
+      /** 本机 team（缺省 vessel）。 */
+      teamId: string;
+      /** 对端 team（缺省 = teamId）。 */
+      peerTeamId?: string;
+      /** 本机 node base URL 覆盖（缺省从 node.hostname/port 派生）。 */
+      selfUrl?: string;
+      allowDirectory: boolean;
+      json: boolean;
+    }
+  /** q-fed-simple：读本地 hub registry，列同机回环节点。 */
+  | { kind: 'discover'; json: boolean };
 
 /**
  * `vessel model ...` 子命令：model-registry 插件 canonical RPC 的 CLI 包装。
@@ -4075,6 +4094,116 @@ function parseFederationArgs(rest: string[], args: CliArgs): ParseResult {
 
   if (sub === 'peer') {
     return parseFederationPeerArgs(tail, args);
+  }
+
+  if (sub === 'pair-code') {
+    let json = false;
+    let ttl: number | undefined;
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--ttl') {
+        const value = readFlagValue(tail, i, '--ttl');
+        if (!value.ok) return value;
+        if (!/^\d+$/.test(value.value)) {
+          return { ok: false, error: `Invalid --ttl: ${value.value} (expected 60..3600 seconds)` };
+        }
+        const parsed = Number.parseInt(value.value, 10);
+        if (parsed < 60 || parsed > 3600) {
+          return { ok: false, error: `Invalid --ttl: ${value.value} (expected 60..3600 seconds)` };
+        }
+        ttl = parsed;
+        i = value.next;
+        continue;
+      }
+      return { ok: false, error: `Unknown argument for federation pair-code: ${a}` };
+    }
+    if (args.help) return { ok: true, args };
+    args.federationCommand = { kind: 'pair-code', ...(ttl !== undefined ? { ttl } : {}), json };
+    return { ok: true, args };
+  }
+
+  if (sub === 'join') {
+    let json = false;
+    let allowDirectory = false;
+    let target: string | undefined;
+    let code: string | undefined;
+    let teamId = 'vessel';
+    let peerTeamId: string | undefined;
+    let selfUrl: string | undefined;
+    const valueFlags = new Set(['--code', '--team-id', '--peer-team-id', '--url']);
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--allow-directory') {
+        allowDirectory = true;
+        continue;
+      }
+      if (valueFlags.has(a)) {
+        const value = readFlagValue(tail, i, a);
+        if (!value.ok) return value;
+        if (a === '--code') code = value.value;
+        else if (a === '--team-id') teamId = value.value;
+        else if (a === '--peer-team-id') peerTeamId = value.value;
+        else selfUrl = value.value;
+        i = value.next;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for federation join: ${a}` };
+      }
+      if (target !== undefined) {
+        return { ok: false, error: 'federation join takes exactly one <url|node-id>' };
+      }
+      target = a;
+    }
+    if (args.help) return { ok: true, args };
+    if (target === undefined || target === '') {
+      return { ok: false, error: 'federation join requires <url|node-id>' };
+    }
+    args.federationCommand = {
+      kind: 'join',
+      target,
+      teamId,
+      allowDirectory,
+      ...(code !== undefined ? { code } : {}),
+      ...(peerTeamId !== undefined ? { peerTeamId } : {}),
+      ...(selfUrl !== undefined ? { selfUrl } : {}),
+      json,
+    };
+    return { ok: true, args };
+  }
+
+  if (sub === 'discover') {
+    let json = false;
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      return { ok: false, error: `Unknown argument for federation discover: ${a}` };
+    }
+    if (args.help) return { ok: true, args };
+    args.federationCommand = { kind: 'discover', json };
+    return { ok: true, args };
   }
 
   if (sub === 'peers') {

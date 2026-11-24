@@ -23,6 +23,8 @@ export interface FederationRuntimePeer {
   url?: string;
   caFile?: string;
   tokenEnv: string;
+  /** q-fed-simple：token 来自 node SecretStore（tokenEnv 此时为 ''）。 */
+  tokenSecret: boolean;
   /** 解析后的内存值；只用于出站 / 入站比较，不序列化。 */
   token: string;
   /** 入站 team-info 目录查询开关；只有显式 `true` 才开启。 */
@@ -78,13 +80,17 @@ function trimTrailingSlashes(url: string): string {
  * 归一化 federation 配置。
  *
  * `env` 缺省读 `process.env`；测试传显式 map。
+ * `secrets` 是预加载的 SecretStore token（key `<nodeId>:<teamId>`），
+ * 只供 `tokenSecret: true` 的 peer 使用；缺失同样 fail-closed 丢弃。
  */
 export function resolveFederationOptions(input: {
   federation?: FederationConfig;
   nodeId: string;
   env?: Record<string, string | undefined>;
+  secrets?: Record<string, string | undefined>;
 }): { options: FederationRuntimeOptions; issues: FederationResolutionIssue[] } {
   const env = input.env ?? process.env;
+  const secrets = input.secrets ?? {};
   const federation = input.federation;
   const issues: FederationResolutionIssue[] = [];
   const peers: FederationRuntimePeer[] = [];
@@ -96,10 +102,11 @@ export function resolveFederationOptions(input: {
       return;
     }
     const label = peerLabel(peer, index);
+    const tokenSecret = peer.tokenSecret === true;
     if (
       typeof peer.nodeId !== 'string' ||
       typeof peer.teamId !== 'string' ||
-      typeof peer.tokenEnv !== 'string'
+      (!tokenSecret && typeof peer.tokenEnv !== 'string')
     ) {
       issues.push({ peer: label, reason: 'invalid_config' });
       return;
@@ -109,7 +116,9 @@ export function resolveFederationOptions(input: {
       issues.push({ peer: label, reason: 'self_peer' });
       return;
     }
-    const token = env[peer.tokenEnv];
+    const token = tokenSecret
+      ? secrets[`${peer.nodeId}:${peer.teamId}`]
+      : env[peer.tokenEnv as string];
     if (typeof token !== 'string' || token === '') {
       issues.push({ peer: label, reason: 'missing_token' });
       return;
@@ -120,7 +129,8 @@ export function resolveFederationOptions(input: {
       nodeId: peer.nodeId,
       teamId: peer.teamId,
       direction,
-      tokenEnv: peer.tokenEnv,
+      tokenEnv: tokenSecret ? '' : (peer.tokenEnv as string),
+      tokenSecret,
       token,
       allowDirectory: peer.allowDirectory === true,
     };
@@ -200,7 +210,7 @@ export function federationOptionsFingerprint(options: FederationRuntimeOptions):
     .map(
       (peer) =>
         `${peer.nodeId}:${peer.teamId}:${peer.direction}:${peer.url ?? ''}:${peer.tokenEnv}:` +
-        `${peer.allowDirectory}:${peer.localTeamId ?? ''}:${peer.caFile ?? ''}`,
+        `${peer.tokenSecret}:${peer.allowDirectory}:${peer.localTeamId ?? ''}:${peer.caFile ?? ''}`,
     )
     .sort();
   return JSON.stringify({

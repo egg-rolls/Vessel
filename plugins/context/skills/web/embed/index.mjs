@@ -3506,8 +3506,6 @@ const Ir = typeof window > "u" ? ee : wt, Ue = de(function({
           children: k.map((g, a) => {
             const h = g.value === T;
             return (
-              // biome-ignore lint/a11y/useFocusableInteractive: aria-activedescendant 模式下选项不接收焦点
-              // biome-ignore lint/a11y/useKeyWithClickEvents: 键盘交互在触发器上（combobox 模式）
               /* @__PURE__ */ n(
                 "div",
                 {

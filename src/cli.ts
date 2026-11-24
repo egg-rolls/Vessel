@@ -115,6 +115,8 @@ import {
   federationOptionsFingerprint,
   resolveFederationOptions,
 } from './federation/federation-config';
+import { createFederationPairingPort } from './federation/federation-pairing';
+import { loadFederationPeerSecrets } from './federation/federation-secrets';
 import {
   renderGatewayBanner,
   renderGatewayBannerOneLine,
@@ -1324,13 +1326,19 @@ async function runWithConfig(result: BootstrapResult) {
             : `model: ${from ?? '(unset)'} → ${to} (node default; registry snapshot rebuilt + provider cache cleared; live bodies keep the old model until next body)`,
         ];
       },
-      // S7 federation 热应用：重新解析 peer（token 只从 env 进内存），原地更新入站
-      // 路由与出站端口持有的同一批运行时对象 —— 下一请求生效，不重启。
+      // S7 federation 热应用：重新解析 peer（env token + SecretStore token 只进内存），
+      // 原地更新入站路由与出站端口持有的同一批运行时对象 —— 下一请求生效，不重启。
       // 摘要行只含身份 / 计数，绝不包含 token 值。
-      applyFederation: (next) => {
+      applyFederation: async (next) => {
+        const secrets = await loadFederationPeerSecrets({
+          dataDir,
+          federation: next.federation,
+          logger,
+        });
         const resolved = resolveFederationOptions({
           ...(next.federation !== undefined ? { federation: next.federation } : {}),
           nodeId: result.nodeId,
+          secrets,
         });
         for (const issue of resolved.issues) {
           logger.warn('federation.peer.skipped', { peer: issue.peer, reason: issue.reason });
@@ -1693,10 +1701,11 @@ async function runWithConfig(result: BootstrapResult) {
 
     // 0.4 控制面：web 的 GatewayOptions 尚未合入本分支，用 Object.assign 注入
     // 冻结形状；合并后可直接写进 GatewayOptions。
-    const controlPlane = buildGatewayControlPlane({
+    const controlPlane = await buildGatewayControlPlane({
       config,
       nodeId: result.nodeId,
       logger,
+      dataDir,
       ...(result.metrics ? { metrics: result.metrics } : {}),
       ...(result.feishu ? { feishu: result.feishu } : {}),
       // 0.19 S3：canonical teams.* 只在默认 tenant 的 AgentService 存在时注入。
@@ -1706,6 +1715,21 @@ async function runWithConfig(result: BootstrapResult) {
     });
     // S7 热应用：入站路由读的就是这个对象；applyFederation 原地更新它。
     liveFederationOptions = controlPlane.federation as FederationRuntimeOptions | undefined;
+
+    // q-fed-simple：入站自动配对端口（码 / 回环判定 + token 交换 + 自动写配置 +
+    // 进程内热应用）。写盘走用户配置（与 federation peer add 同口径）；热应用复用
+    // reloadRunner 的 config scope，失败由配置监听兜底。
+    if (result.nodeId !== undefined) {
+      controlPlane.pairing = createFederationPairingPort({
+        dataDir,
+        nodeId: result.nodeId,
+        userConfigPath: getUserConfigPath(),
+        allowFileSecrets: config.federation?.allowFileSecrets,
+        ...(result.agent?.team ? { teams: result.agent.team } : {}),
+        hotApply: () => reloadRunner.reloadWithSummaries(['config']),
+        logger,
+      });
+    }
 
     try {
       gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);

@@ -256,6 +256,7 @@ export const en: Record<MessageKey, string> = {
   'flag.url': 'peer node base URL (node port; loopback may use http)',
   'flag.direction': 'allowed delivery direction: in | out | both (default both)',
   'flag.localTeamId': 'map the peer team to a different local team id',
+  'flag.peerTeamId': 'the team on the target node to pair with (defaults to --team-id)',
   'flag.allowDirectory': 'allow inbound team-info directory queries from this peer',
   'flag.caFile': 'CA bundle path for the peer TLS connection',
   'flag.help': 'show usage for this command',
@@ -577,6 +578,32 @@ export const en: Record<MessageKey, string> = {
   'federation.teamInfo.memberRow': '  {name}  {presence}  {lastSeen}',
   'federation.teamInfo.empty': 'No members.',
   'federation.teamInfo.rejected': 'team-info rejected: {code}: {reason}',
+
+  // ── federation pair-code/join/discover（q-fed-simple）──
+  'help.cmd.federationPairCode':
+    'issue a one-time federation pairing code on this node (for cross-machine join; same-machine loopback needs no code)',
+  'help.cmd.federationJoin':
+    'pair with a node: handshake verifies auth, exchanges the shared token, writes both peer configs and hot-applies (no restart)',
+  'help.cmd.federationDiscover':
+    'list same-machine nodes from the local hub registry (loopback entries) with a one-command join hint',
+  'federation.pairCode.issued': 'pairing code {code} (expires {expires}); shown only once',
+  'federation.pairCode.hint':
+    'on the other node run: vessel federation join <this-node-url> --code <code> (same-machine loopback may omit --code)',
+  'federation.join.paired': 'paired with {label} at {url}; peer written to {path}',
+  'federation.join.hint':
+    'the target node wrote its side during the handshake; token stored in the node secret store (never in config)',
+  'federation.join.unreachable': 'cannot reach {url}: {detail}',
+  'federation.join.failed': '{code}: {message} (target {url})',
+  'federation.join.badResponse': 'target {url} returned an invalid pair response',
+  'federation.join.unknownNode': 'node {node} is not in the local hub registry ({path})',
+  'federation.join.noLoopback':
+    'node {node} has no loopback entry in the hub registry; join with its explicit URL instead',
+  'federation.join.secretFailed':
+    'cannot store the paired token: {detail} (platform keychain unavailable? set federation.allow_file_secrets or fix the keychain)',
+  'federation.discover.title': 'Same-machine federation candidates (registry: {path})',
+  'federation.discover.empty': 'No other loopback nodes found in the local hub registry.',
+  'federation.discover.row': '  {node}  {name}  {url}  {status}  teams={teams}',
+  'federation.discover.hint': 'pair with one command: vessel federation join <node_id>',
 
   // ── attention (0.22 S9.1) ──
   'help.cmd.attention':
