@@ -3646,6 +3646,16 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * 通用成员级工具（当前只有 `inbox`）：所有成员共有，与具体成员无关。
+   *
+   * 服务层只透传执行内核的判据（`MemberExecutionPort.commonMemberTools`）；
+   * 老内核没实现时返回空数组 —— 节点口径退回纯全局工具，不报错。
+   */
+  commonMemberTools(): MemberToolEntry[] {
+    return this.runtime.commonMemberTools?.() ?? [];
+  }
+
+  /**
    * 撤回待处理输入（`agents.recall`，0.53）：把消息从「将执行」集合里拿走。
    *
    * 分档只有一条判据：**消息的 source**（inbox 条目里的 `source` 就是发送者 principal）。
