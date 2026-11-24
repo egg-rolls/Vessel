@@ -309,9 +309,124 @@ graceful 路径不变式保证无悬空 tool_use；但两条兜底路径仍可�
 - 时序保证：输入在围栏期排队（不丢），续跑 run 启动后消费——比重放更晚但更有序（模型先看到卡+续跑上下文，再看到新输入）。
 - 集成校验点（实现期核对，非本设计断言）：inbox 消费是否覆盖「run 进行中」的投递；若不覆盖，退化为「续跑 run 终态后再重放」，仍跳过并发重放。
 
-## 6. 有界等待与超时中止上报协议（第4步填充）
+## 6. 有界等待与超时中止上报协议
 
-## 7. 重启可观测性接口（第4步填充）
+### 6.1 预算与双截止
+
+| 参数 | 缺省 | 语义 |
+|---|---|---|
+| `node.restart.quiesce_timeout_ms` | 120_000（2min） | 硬截止：到点仍未 quiesce ⇒ **中止重启**（不是硬杀） |
+| 软截止 | 硬截止 × 50% | 到点开始 cancel 在途 LLM 流（§3.3），工具仍等 |
+| RPC 入参 `timeout_ms` | 覆盖配置 | 重启 agent 可按现场情况加长（如明知有长构建） |
+| `node.restart.cancel` | — | 硬截止前主动中止（§2.3） |
+
+- 缺省 2min 的依据：覆盖绝大多数同步工具（bash 缺省 120s 超时）+ 一轮模型流；长于它的通常是 async job（已排除）或异常卡死——后者正是「中止+上报」要抓的对象。
+- 预算耗尽的三种结局只有两种合法：**quiesced → 继续重启**；**aborted → 旧进程继续跑**。不存在第三种「超时硬杀」——那会把 fail-safe 变 fail-deadly（丢工作），违背用户提案③的本意（报错让 agent 修，而不是替 agent 做破坏性决定）。
+
+### 6.2 abort 序列（fail-safe 不变式）
+
+```
+aborting:
+  1. 清所有 EU 的 restartRequested 旗标
+  2. 已暂停在干净边界的 run：不唤醒也不丢弃——checkpoint 完好，
+     可被新输入 / --resume-run / 下次 restart 续起（暂停无害）
+  3. 不写任何 marker（armMarkers 从未执行）
+  4. unfence：撤围栏，durable inbox 排队消息照常投递
+  5. 不 exit、不写 node-restart.json、supervisor 无感
+aborted:
+  RPC 返回错误（§6.3）；进程回到正常服务态
+```
+
+不变式：**abort 后的系统状态 ≡ 重启请求前的状态 + 若干干净暂停的 run + 一段排队后投递的输入**。零工作丢失、零副作用伪造、零代码切换。
+
+### 6.3 中止上报协议（「一直在等什么关闭」）
+
+RPC 错误载荷（稳定契约，供重启 agent 程序化消费）：
+
+```jsonc
+{
+  "error": "restart_aborted",
+  "reason": "quiesce_timeout",          // | "cancelled"（主动 cancel）| "arm_failed"
+  "waited_ms": 120000,
+  "budget_ms": 120000,
+  "blockers": [                          // 精确到「哪个 run/工具/会话」
+    {
+      "session_id": "…", "run_id": "…",
+      "agent_id": "…", "agent_name": "q-restart",
+      "phase": "tool_executing",         // §3.1 相位
+      "current_tool": {
+        "name": "bash", "call_id": "…",
+        "started_at_ms": 1730000000000,
+        "elapsed_ms": 118000,
+        "args_digest": "npm run build …"  // 截断摘要，不泄全量参数
+      },
+      "since_ms": 118000
+    }
+  ],
+  "paused_clean": ["run_id…"],           // 已干净暂停的 run（无害，供核对）
+  "hint": "等待超时：上述工具仍在执行。可加长 timeout_ms 重试、runs.cancel 阻塞 run、或求助用户。旧进程未受影响。"
+}
+```
+
+- 重启 agent 的修复决策树（写进 RPC hint 与 CLI 输出）：
+  1. blocker 是**正当长任务**（构建/下载）⇒ 加长 `timeout_ms` 重试，或等它自然完成后重试；
+  2. blocker 是**卡死工具**（elapsed 远超该工具正常时长）⇒ `runs.cancel` 该 run（用户级取消，走既有 cancelled 语义），再重试 restart；
+  3. 判断不了 ⇒ 上报用户（ask），**绝不**自行升级为强杀。
+- CLI `vessel node restart --json` 原样输出该载荷；人类模式渲染阻塞者表格（会话/agent/工具/已等多久）。
+- 事件留痕：`node.restart.requested / quiesced / aborted` 进事件日志（§7），abort 的 blockers 快照随事件落盘——事后可审计「当时在等什么」。
+
+### 6.4 与 stop 的超时语义对照（防混淆）
+
+| | stop（现状） | restart（本设计） |
+|---|---|---|
+| 超时含义 | 「等够了，走」——进程退出 | 「等不到，不重启」——进程留下 |
+| 超时后工作 | 可能丢在途工具结果（marker+卡片兜底） | 零丢失 |
+| 超时后代码 | 旧进程已死 | 旧代码继续服务 |
+| 谁负责修复 | 下次启动的恢复卡 | 发起重启的 agent（当场） |
+
+## 7. 重启可观测性接口
+
+### 7.1 新增 RPC
+
+| 方法 | 入参 | 返回 | 用途 |
+|---|---|---|---|
+| `node.restart` | `{ timeout_ms?, reason? }` | 成功：`{ quiesced_ms, paused_runs[], completed_runs[], background_jobs[] }`；失败：§6.3 载荷 | 发起优雅重启（agent 可调用） |
+| `node.restart.cancel` | `{}` | `{ aborted: true, waited_ms }` | 主动中止进行中的 drain |
+| `node.drain.status` | `{}` | 见 §7.2 | **只读** introspect：当前 drain 相位 + 逐 run 阻塞者快照；无 drain 时返回活跃 run 概览 |
+
+权限：`node.restart` / `cancel` 与现 `node stop` 同级（node 管理权限）；`node.drain.status` 与 `runs.get` 同级（只读观测）。
+
+### 7.2 `node.drain.status` 快照格式
+
+```jsonc
+{
+  "drain": null | {
+    "mode": "stop" | "restart",
+    "phase": "fencing" | "quiescing" | "manifest" | "flushing" | "exiting" | "aborting",
+    "started_at_ms": …, "elapsed_ms": …, "budget_ms": …, "soft_deadline_ms": …
+  },
+  "runs": [                       // 活跃 run 全量（drain 与否都可查）
+    {
+      "session_id": "…", "run_id": "…", "agent_name": "…",
+      "phase": "llm_streaming" | "tool_executing" | "between_calls" | "checkpointing",
+      "iteration": 12,
+      "in_flight_tools": [ { "name": "bash", "call_id": "…", "elapsed_ms": …, "args_digest": "…" } ],
+      "restart_paused": false     // 已干净暂停的 run 标 true
+    }
+  ],
+  "background_jobs": [ { "job_id": "…", "pid": …, "log_path": "…", "session_id": "…" } ]
+}
+```
+
+- 数据源唯一：EU 的 `activeRunSnapshot()` 扩展（§3.2）——drain 判定、abort 上报、status RPC 三者**共用同一快照函数**，杜绝「观测说的和判定用的不一致」。
+- 重启 agent 的标准工作流：`node.restart` 发起 → 阻塞/长等待时轮询 `node.drain.status` 看「在等什么」→ 超时拿到 §6.3 载荷 → 按决策树修复。观测不是装饰，是修复闭环的输入。
+
+### 7.3 既有接口扩展与事件
+
+- `runs.list` / `runs.get`：增补 `phase` 与 `in_flight_tools` 字段（additive），让「哪个 run 卡在哪个工具」不依赖 drain 上下文也可查。
+- 事件日志新增：`node.restart.requested`（含 budget）、`node.restart.quiesced`（含 paused/completed 清单）、`node.restart.aborted`（含 blockers 快照）、`run.restart_paused`（run 级，干净边界落 checkpoint 时）。全部走既有 journal/事件通道，无新存储。
+- 用户侧可见性：restart 发起时向受影响会话发一张「节点即将重启换新代码，正在等待你的任务到达安全点」环境卡（与恢复卡同族同源）；abort 时补一张「重启已中止，原因+阻塞者」——用户不用猜节点为什么还没重启。
+- CLI：`vessel node restart [--timeout 120s] [--json] [--no-wait]`；`--no-wait` 发起即返回，agent 用 `node.drain.status` 跟进（长等待不占 CLI 连接）。
 
 ## 8. 分期（第5步填充）
 
