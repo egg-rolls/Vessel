@@ -243,7 +243,7 @@ export async function configSetCommand(
       };
     }
     parsed = value === 'true';
-  } else if (key === 'emptyResponse.enabled') {
+  } else if (key === 'emptyResponse.enabled' || key === 'emptyResponse.seamless') {
     if (value !== 'true' && value !== 'false') {
       return {
         exitCode: 2,

@@ -206,7 +206,12 @@ export interface EnvInjectionConfig {
 export interface EmptyResponseConfig {
   /** 总开关；缺省 true。false = 空响应直接当终稿（修复前行为，零回归开关）。 */
   enabled?: boolean;
-  /** nudge 重试上限（不含首次响应）；缺省 2，范围 0–10；0 = 不重试（只落耗尽日志）。 */
+  /**
+   * 无感重试；缺省 true。空响应丢弃空轮、用已有 transcript 原样重调（零注入零疤痕）；
+   * 连续空耗尽 maxRetries 后升级一次 nudge 打破空模式。false = 直接走 nudge 注入路径。
+   */
+  seamless?: boolean;
+  /** 重试上限（不含首次响应；seamless 重调 / nudge 共用）；缺省 2，范围 0–10；0 = 不重试。 */
   maxRetries?: number;
   /** nudge 文案（以 user 消息追加）；缺省 core `DEFAULT_EMPTY_RESPONSE_NUDGE`。 */
   nudge?: string;

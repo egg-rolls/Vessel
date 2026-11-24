@@ -607,10 +607,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Core runtime safeguards for all agents. Changes apply to new sessions (existing sessions keep their startup snapshot).',
   'settings.display.field.emptyResponseEnabled': 'Empty-response fallback',
   'settings.display.field.emptyResponseEnabled.hint':
-    'When the model returns an empty reply (no content, no tool calls), inject a "continue your task" nudge and re-poll instead of ending the run with zero output. On = default.',
-  'settings.display.field.emptyResponseMaxRetries': 'Empty-response nudge retries',
+    'When the model returns an empty reply (no content, no tool calls), retry instead of ending the run with zero output (seamless re-call by default; see below). On = default.',
+  'settings.display.field.emptyResponseSeamless': 'Seamless retry (no nudge scar)',
+  'settings.display.field.emptyResponseSeamless.hint':
+    'On (default): discard the empty turn and re-call the model with the existing transcript — no injected message, no scar. If still empty after the retry budget, one nudge is injected as a last resort. Off: always inject the nudge.',
+  'settings.display.field.emptyResponseMaxRetries': 'Empty-response retries',
   'settings.display.field.emptyResponseMaxRetries.hint':
-    'Max nudge retries per run (integer 0–10, default 2). When exhausted the run ends gracefully with a logged notice.',
+    'Max retries per run (integer 0–10, default 2), shared by seamless re-calls and nudges. When exhausted the run ends gracefully with a logged notice.',
   'settings.display.field.emptyResponseNudge': 'Empty-response nudge text',
   'settings.display.field.emptyResponseNudge.hint':
     'Custom nudge injected as a user message. Leave unset to keep the built-in wording.',
