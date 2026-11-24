@@ -62,11 +62,11 @@
     },
     {
       "id": "q-ui-style",
-      "title": "设置弹窗+chunk日志去灰底(透黑底极简传统)+截图多模态验收",
-      "column": "进行中",
+      "title": "设置弹窗+chunk日志去灰底+系统卡去重+导航置底+截图验收",
+      "column": "已完成",
       "owner": "q-ui-style",
       "branch": "fix/q-ui-style",
-      "progress": "派单：VSCode弹窗按钮灰底+运行chunk日志灰底→transparent/var(--surface)极简黑底；装playwright截图+media查看验收"
+      "progress": "merge入main；GHOST_*覆盖透黑底细线(设置弹窗/chunk日志)+系统卡单一表示去重去薄荷绿+导航core组置底默认折叠+ButtonFace灰板根因修；playwright computed-style客观核对全过；media ocr/describe缺口(无tesseract/多模态provider)用computed-style替代,截图留用户终验"
     },
     {
       "id": "q-log-refactor",
