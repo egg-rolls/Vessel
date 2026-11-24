@@ -286,6 +286,68 @@ export function mergeSettings(pluginDefs: readonly SettingDef[] = []): readonly 
   return [...CORE_SETTINGS, ...LOCAL_SETTINGS, ...VIEW_SETTINGS, ...pluginDefs];
 }
 
+/**
+ * 插件设置域 → SettingDef（S3，§4.3 归一化后的结构输入）。
+ * 结构化类型而非 import plugin-contributions：注册表保持纯数据、不沾 React。
+ * 插件项 scope=user（vessel.yaml plugins[].config），category 固定 extensions，
+ * 不能注入核心分类（与 navGroups 核心 key 不可覆盖同一安全口径）。
+ */
+export interface PluginSettingDomainInput {
+  pluginId: string;
+  pluginName: string;
+  items: readonly {
+    key: string;
+    id: string;
+    type: 'string' | 'number' | 'integer' | 'boolean' | 'object' | 'array';
+    title: string;
+    description?: string;
+    enum?: string[];
+    default?: unknown;
+    keywords?: string[];
+    order: number;
+    minimum?: number;
+    maximum?: number;
+  }[];
+}
+
+function scalarDefault(value: unknown): string | undefined {
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'string') return value;
+  return undefined;
+}
+
+export function pluginSettingsToDefs(domains: readonly PluginSettingDomainInput[]): SettingDef[] {
+  const defs: SettingDef[] = [];
+  for (const domain of domains) {
+    for (const item of domain.items) {
+      const type: SettingType = item.type === 'integer' ? 'number' : item.type;
+      defs.push({
+        id: item.id,
+        key: item.key,
+        scope: 'user',
+        type,
+        source: `plugin:${domain.pluginId}`,
+        title: item.title,
+        ...(item.description !== undefined ? { description: item.description } : {}),
+        category: 'extensions',
+        order: item.order,
+        ...(item.enum !== undefined ? { options: item.enum } : {}),
+        ...(item.minimum !== undefined ? { min: item.minimum } : {}),
+        ...(item.maximum !== undefined ? { max: item.maximum } : {}),
+        ...(scalarDefault(item.default) !== undefined
+          ? { default: scalarDefault(item.default) }
+          : {}),
+        keywords: [domain.pluginId, domain.pluginName, ...(item.keywords ?? [])],
+        pluginId: domain.pluginId,
+        // object/array：v1 只读 JSON（§3.5）。
+        ...(type === 'object' || type === 'array' ? { readOnly: true } : {}),
+      });
+    }
+  }
+  return defs;
+}
+
 export function settingDefFor(defs: readonly SettingDef[], id: string): SettingDef | undefined {
   return defs.find((def) => def.id === id);
 }

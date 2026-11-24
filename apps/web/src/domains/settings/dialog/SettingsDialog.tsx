@@ -21,6 +21,7 @@ import {
 import {
   COMMON_CATEGORY_ID,
   mergeSettings,
+  pluginSettingsToDefs,
   SETTINGS_CATEGORIES,
   type SettingDef,
 } from '../../../state/settings-registry';
@@ -33,6 +34,7 @@ import {
 import { resourceData } from '../../../state/useResource';
 import { useUiStore } from '../../../stores/uiStore';
 import { useConfigStoreApi } from '../../../stores/useConfigStoreApi';
+import { usePluginContributions } from '../../plugins/usePluginContributions';
 import { type CategoryNode, CategoryTree } from './CategoryTree';
 import { ConnectionSection } from './ConnectionSection';
 import { DesignLabSection } from './DesignLabSection';
@@ -50,6 +52,21 @@ const SEARCH_DEBOUNCE_MS = 150;
 const FOCUS_HIGHLIGHT_MS = 2000;
 
 type ScopeTab = 'user' | 'project' | 'local';
+
+/** 插件 config 快照值 → 表单文本（E10；object/array 走 JSON 只读视图）。 */
+function pluginValueText(raw: unknown): string | undefined {
+  if (typeof raw === 'boolean') return raw ? 'true' : 'false';
+  if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
+  if (typeof raw === 'string') return raw;
+  if (raw !== null && typeof raw === 'object') {
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
 
 function readStoredTab(): ScopeTab {
   try {
@@ -92,6 +109,8 @@ export function SettingsDialog({
   const pending = useUiStore((state) => state.settingsPending);
   const theme = useUiStore((state) => state.theme);
   const writer = useSettingsWriter();
+  // S3：插件设置域自动发现——装上即出现（enabled + 声明 settings），无需手工注册。
+  const { settings: pluginDomains, plugins } = usePluginContributions();
 
   const [tab, setTab] = useState<ScopeTab>(readStoredTab);
   const [query, setQuery] = useState(initialQuery ?? '');
@@ -107,9 +126,17 @@ export function SettingsDialog({
     return () => clearTimeout(timer);
   }, [query]);
 
-  const defs = useMemo(() => mergeSettings(), []);
+  const defs = useMemo(() => mergeSettings(pluginSettingsToDefs(pluginDomains)), [pluginDomains]);
   const serverValues = useMemo(() => resolveDisplayValues(data, pending), [data, pending]);
   const logOverrides = useMemo(() => readLogEnvOverrides(data), [data]);
+  // S3：插件值快照复用 E10 plugins.list[].config（不新增读 RPC）。
+  const pluginConfigById = useMemo(() => {
+    const map = new Map<string, Record<string, unknown>>();
+    for (const plugin of plugins) {
+      if (plugin.config) map.set(plugin.name, plugin.config);
+    }
+    return map;
+  }, [plugins]);
 
   // 值解析：核心 = 服务端快照 + pending overlay；local = storage / uiStore。
   // biome-ignore lint/correctness/useExhaustiveDependencies: localRevision 驱动 local 存储重读（回调体不引用）
@@ -121,13 +148,16 @@ export function SettingsDialog({
       } else if (def.scope === 'local') {
         map[def.id] =
           def.id === 'local.theme' ? theme : def.id === 'local.motion' ? '' : readLocalSetting(def);
+      } else if (def.pluginId !== undefined) {
+        const raw = pluginConfigById.get(def.pluginId)?.[def.key];
+        map[def.id] = pending[def.id] ?? pluginValueText(raw) ?? def.default ?? '';
       } else {
         map[def.id] = pending[def.key] ?? serverValues[def.key] ?? def.fallback ?? '';
       }
     }
     return map;
     // localRevision 驱动 local 存储重读（writer 写入后自增）。
-  }, [defs, theme, pending, serverValues, writer.localRevision]);
+  }, [defs, theme, pending, serverValues, pluginConfigById, writer.localRevision]);
 
   const haystacks = useMemo(() => {
     const map = new Map<string, string>();
@@ -158,11 +188,25 @@ export function SettingsDialog({
   const commonHits = useMemo(() => hits.filter((def) => def.common === true), [hits]);
   const sections = useMemo(
     () =>
-      SETTINGS_CATEGORIES.map((category) => ({
-        category,
-        items: hits.filter((def) => def.category === category.id),
-      })).filter((section) => section.items.length > 0),
+      SETTINGS_CATEGORIES.filter((category) => category.id !== 'extensions')
+        .map((category) => ({
+          category,
+          items: hits.filter((def) => def.category === category.id),
+        }))
+        .filter((section) => section.items.length > 0),
     [hits],
+  );
+  // S3：扩展组按插件域分节（标题 = pluginT 解析的插件名）。
+  const pluginSections = useMemo(
+    () =>
+      pluginDomains
+        .map((domain) => ({
+          id: `ext:${domain.pluginId}`,
+          label: domain.pluginName,
+          items: hits.filter((def) => def.pluginId === domain.pluginId),
+        }))
+        .filter((section) => section.items.length > 0),
+    [pluginDomains, hits],
   );
 
   const treeNodes = useMemo<CategoryNode[]>(() => {
@@ -181,8 +225,19 @@ export function SettingsDialog({
         count: searching ? section.items.length : undefined,
       });
     }
+    if (pluginSections.length > 0) {
+      nodes.push({
+        id: 'extensions',
+        label: t('settings.category.extensions'),
+        children: pluginSections.map((section) => ({
+          id: section.id,
+          label: section.label,
+          count: searching ? section.items.length : undefined,
+        })),
+      });
+    }
     return nodes;
-  }, [commonHits, sections, searching]);
+  }, [commonHits, sections, pluginSections, searching]);
 
   const connected = hasToken && connectionState === 'open';
   const configAvailable = hasToken && features.includes('config');
@@ -293,8 +348,18 @@ export function SettingsDialog({
         def={def}
         value={values[def.id] ?? ''}
         modified={isModified(def)}
-        disabled={def.scope !== 'local' && coreDisabled}
-        disabledReason={def.scope !== 'local' ? coreDisabledReason : undefined}
+        disabled={
+          def.pluginId !== undefined
+            ? true // S3 只读；S4 接 plugins.config.set 后可编辑
+            : def.scope !== 'local' && coreDisabled
+        }
+        disabledReason={
+          def.pluginId !== undefined
+            ? t('settings.dialog.pluginReadOnly')
+            : def.scope !== 'local'
+              ? coreDisabledReason
+              : undefined
+        }
         saving={writer.savingKey === def.id}
         query={parsed.text}
         envOverride={envOverrideFor(def)}
@@ -364,6 +429,27 @@ export function SettingsDialog({
               {section.items.map(renderRow)}
             </div>
           ))}
+        {pluginSections
+          .filter(
+            (section) =>
+              searching ||
+              activeCategory === COMMON_CATEGORY_ID ||
+              activeCategory === 'extensions' ||
+              section.id === activeCategory,
+          )
+          .map((section) => (
+            <div
+              key={section.id}
+              ref={(node) => {
+                sectionRefs.current[section.id] = node;
+              }}
+            >
+              <h3 className="sticky top-0 bg-raised py-1 text-sm font-medium text-muted">
+                {t('settings.category.extensions')} › {section.label}
+              </h3>
+              {section.items.map(renderRow)}
+            </div>
+          ))}
       </>
     );
   };
@@ -401,7 +487,11 @@ export function SettingsDialog({
           </button>
         ))}
       </div>
-      <SettingsSearchBar query={query} onQueryChange={setQuery} pluginIds={[]} />
+      <SettingsSearchBar
+        query={query}
+        onQueryChange={setQuery}
+        pluginIds={pluginDomains.map((domain) => domain.pluginId)}
+      />
       <div className="flex min-h-0 grow gap-4 max-compact:flex-col max-compact:gap-2">
         <aside className="w-48 shrink-0 overflow-y-auto border-r border-line pr-2 max-compact:hidden">
           <CategoryTree

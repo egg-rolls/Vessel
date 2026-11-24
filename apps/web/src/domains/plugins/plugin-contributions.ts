@@ -11,10 +11,11 @@ import type {
   PluginI18n,
   PluginListItem,
   PluginPanelSlot,
+  PluginSettingSpecWire,
   PluginToolbarSlot,
 } from '../../gateway/types';
 import { joinBaseUrl, normalizeBaseUrl, pageOrigin } from '../../gateway/url';
-import { t } from '../../i18n';
+import { getLocale, t } from '../../i18n';
 
 /** 图标白名单（与 DomainIcon 的领域名一致；不接受任意 SVG / 任意名字）。 */
 export const PLUGIN_NAV_ICONS = [
@@ -417,10 +418,168 @@ export interface PluginInventory {
   panels: PluginPanelItem[];
   /** 输入框工具栏声明（0.51 additive）；旧 gateway 不返回时为空数组。 */
   toolbar: PluginToolbarItem[];
+  /** S3 additive：插件设置域（vscode-settings-design §4.3）；旧 gateway 为空数组。 */
+  settings: PluginSettingsDomain[];
   /** plugin id → 私有 i18n 字典（不合并进宿主 catalog）。 */
   i18nByPlugin: ReadonlyMap<string, PluginI18n>;
   /** plugin id → 允许 iframe 调用的 RPC 方法名（rpc ∪ commands）。 */
   methodsByPlugin: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+/** S3：已校验、已排序的插件设置项（§4.3）。 */
+export interface PluginSettingItem {
+  /** 插件私有键（snake_case 惯例，不带插件前缀）。 */
+  key: string;
+  /** `${pluginId}.${key}`（注册表 / 搜索 / 深链用）。 */
+  id: string;
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'object' | 'array';
+  /** pluginT(titleKey) → title → key。 */
+  title: string;
+  description?: string;
+  enum?: string[];
+  default?: unknown;
+  keywords?: string[];
+  order: number;
+  minimum?: number;
+  maximum?: number;
+}
+
+export interface PluginSettingsDomain {
+  pluginId: string;
+  /** pluginT 解析后的显示名（回退 manifest name → id）。 */
+  pluginName: string;
+  items: PluginSettingItem[];
+}
+
+const SETTING_KEY = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+const SETTING_TYPES: ReadonlySet<string> = new Set([
+  'string',
+  'number',
+  'integer',
+  'boolean',
+  'object',
+  'array',
+]);
+const SETTING_MAX_ITEMS = 64;
+const SETTING_MAX_ENUM = 32;
+const SETTING_MAX_ENUM_LEN = 64;
+const SETTING_MAX_TEXT = 200;
+const SETTING_MAX_KEYWORDS = 16;
+
+function settingTypeMatches(type: PluginSettingItem['type'], value: unknown): boolean {
+  switch (type) {
+    case 'string':
+      return typeof value === 'string';
+    case 'number':
+      return typeof value === 'number' && Number.isFinite(value);
+    case 'integer':
+      return typeof value === 'number' && Number.isInteger(value);
+    case 'boolean':
+      return typeof value === 'boolean';
+    case 'object':
+      return value !== null && typeof value === 'object' && !Array.isArray(value);
+    case 'array':
+      return Array.isArray(value);
+  }
+}
+
+function boundedText(value: unknown): string {
+  return text(value).slice(0, SETTING_MAX_TEXT);
+}
+
+/**
+ * 单插件设置域归一化（§4.3 校验规则，延续现有 normalizer 风格）：
+ * 单项丢弃不整域丢弃；enum 非法丢 enum 保留项；default 类型不符忽略 default。
+ */
+function settingsDomainOf(
+  plugin: PluginListItem,
+  raw: Record<string, PluginSettingSpecWire>,
+  i18nByPlugin: ReadonlyMap<string, PluginI18n>,
+  locale: string,
+  pluginName: string,
+): PluginSettingsDomain | null {
+  const items: PluginSettingItem[] = [];
+  for (const [key, spec] of Object.entries(raw)) {
+    if (items.length >= SETTING_MAX_ITEMS) break;
+    if (!SETTING_KEY.test(key) || I18N_FORBIDDEN.has(key)) continue;
+    if (spec === null || typeof spec !== 'object') continue;
+    const type = text(spec.type);
+    if (!SETTING_TYPES.has(type)) continue;
+    const itemType = type as PluginSettingItem['type'];
+
+    const title =
+      pluginT(
+        i18nByPlugin,
+        plugin.name,
+        text(spec.titleKey) || undefined,
+        locale,
+        boundedText(spec.title),
+        key,
+      ).slice(0, SETTING_MAX_TEXT) || key;
+    const descriptionRaw = boundedText(spec.description);
+    const descKey = text(spec.descriptionKey);
+    let description = descriptionRaw;
+    if (descKey !== '') {
+      const resolved = pluginT(
+        i18nByPlugin,
+        plugin.name,
+        descKey,
+        locale,
+        descriptionRaw || undefined,
+      );
+      description = resolved === descKey ? descriptionRaw : resolved.slice(0, SETTING_MAX_TEXT);
+    }
+
+    let enumValues: string[] | undefined;
+    if (itemType === 'string' && Array.isArray(spec.enum)) {
+      const cleaned = spec.enum
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== '' && entry.length <= SETTING_MAX_ENUM_LEN)
+        .slice(0, SETTING_MAX_ENUM);
+      if (cleaned.length > 0) enumValues = cleaned;
+    }
+
+    let keywords: string[] | undefined;
+    if (Array.isArray(spec.keywords)) {
+      const cleaned = spec.keywords
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== '' && entry.length <= SETTING_MAX_ENUM_LEN)
+        .slice(0, SETTING_MAX_KEYWORDS);
+      if (cleaned.length > 0) keywords = cleaned;
+    }
+
+    const minimum =
+      (itemType === 'number' || itemType === 'integer') &&
+      typeof spec.minimum === 'number' &&
+      Number.isFinite(spec.minimum)
+        ? spec.minimum
+        : undefined;
+    const maximum =
+      (itemType === 'number' || itemType === 'integer') &&
+      typeof spec.maximum === 'number' &&
+      Number.isFinite(spec.maximum)
+        ? spec.maximum
+        : undefined;
+
+    items.push({
+      key,
+      id: `${plugin.name}.${key}`,
+      type: itemType,
+      title,
+      ...(description !== '' ? { description } : {}),
+      ...(enumValues !== undefined ? { enum: enumValues } : {}),
+      ...(settingTypeMatches(itemType, spec.default) ? { default: spec.default } : {}),
+      ...(keywords !== undefined ? { keywords } : {}),
+      order: orderOf(spec.order),
+      ...(minimum !== undefined ? { minimum } : {}),
+      ...(maximum !== undefined ? { maximum } : {}),
+    });
+  }
+  if (items.length === 0) return null;
+  items.sort(byOrder);
+  return { pluginId: plugin.name, pluginName, items };
 }
 
 /** 启用插件的贡献点平铺；零插件 / 旧 gateway 返回空集合。 */
@@ -429,8 +588,10 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
   const navGroups: PluginNavGroupItem[] = [];
   const panels: PluginPanelItem[] = [];
   const toolbar: PluginToolbarItem[] = [];
+  const settings: PluginSettingsDomain[] = [];
   const i18nByPlugin = new Map<string, PluginI18n>();
   const methodsByPlugin = new Map<string, Set<string>>();
+  const locale = getLocale();
 
   for (const plugin of plugins) {
     if (!isEnabledPlugin(plugin) || !isValidPluginId(plugin.name)) continue;
@@ -441,6 +602,21 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
     if (i18n !== undefined) i18nByPlugin.set(plugin.name, i18n);
     const group = navGroupOf(plugin);
     if (group !== null) navGroups.push(group);
+    // S3：设置域（enabled 插件才收，同 pages）。显示名 = 分组标题解析 → id。
+    const rawSettings = contributions.settings;
+    if (rawSettings !== null && typeof rawSettings === 'object') {
+      const pluginName = group
+        ? pluginT(i18nByPlugin, plugin.name, group.titleKey, locale, group.title, plugin.name)
+        : plugin.name;
+      const domain = settingsDomainOf(
+        plugin,
+        rawSettings as Record<string, PluginSettingSpecWire>,
+        i18nByPlugin,
+        locale,
+        pluginName,
+      );
+      if (domain !== null) settings.push(domain);
+    }
     for (const page of contributions.pages ?? []) {
       const item = pageOf(plugin, page, group?.id);
       if (item !== null) pages.push(item);
@@ -472,5 +648,6 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
   navGroups.sort(byOrder);
   panels.sort(byOrder);
   toolbar.sort(byOrder);
-  return { pages, navGroups, panels, toolbar, i18nByPlugin, methodsByPlugin };
+  settings.sort((a, b) => a.pluginName.localeCompare(b.pluginName));
+  return { pages, navGroups, panels, toolbar, settings, i18nByPlugin, methodsByPlugin };
 }

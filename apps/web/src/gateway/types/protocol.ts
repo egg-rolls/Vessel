@@ -247,6 +247,26 @@ export interface PluginContributions {
    * 读侧容忍该形状。
    */
   rpc?: Array<string | { name?: string; description?: string; permission?: 'read' | 'write' }>;
+  /**
+   * S3 additive（vscode-settings-design §4.2）：插件设置域 spec。
+   * 旧 gateway 不返回 → 归一化得空数组 → 扩展组不渲染。
+   */
+  settings?: Record<string, PluginSettingSpecWire>;
+}
+
+/** `contributes.settings.<key>` 的 wire 形状（§4.1；扩展字段全部可选）。 */
+export interface PluginSettingSpecWire {
+  type?: string;
+  title?: string;
+  titleKey?: string;
+  description?: string;
+  descriptionKey?: string;
+  default?: unknown;
+  enum?: unknown;
+  keywords?: unknown;
+  order?: unknown;
+  minimum?: unknown;
+  maximum?: unknown;
 }
 
 export type PluginRuntimeMode = 'in-process' | 'child';
