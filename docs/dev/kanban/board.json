@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "canary-verify3终验DONE:①media✅②权限✅③skills样式✅但live装载❌(名skills vs plugin-skills)④命名❌(max_tokens64 reasoning耗尽Untitled)⑤互联✅；3过2问题派q-verify-fix修；修好复验后晋升main+用户重启；附write/edit订阅Windows锁文件观察"
+      "progress": "q-verify-fix两修复(skills名统一+AI命名兜底)合入redblue-dev e2fff291；金丝雀同步b11f4889+重启pid132924；canary-verify4(9e2a32bc)复验skills装载+AI命名两项；全过晋升main+用户重启"
     },
     {
       "id": "q-node-target",
