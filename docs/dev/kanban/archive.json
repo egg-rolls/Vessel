@@ -109,6 +109,15 @@
       "progress": "merge ab693883，571行 incremental-promotion-playbook.md；稳定+金丝雀角色固定/搬代码不搬会话/三闸门+G-D数据兼容一票否决/金丝雀盲区/expand-contract/commit粒度回滚；整体切换降级特殊迁移；待裁观察窗/台账路径/稳定分支名",
       "archivedAt": "2026-11-24T03:40:00+08:00",
       "cycle": "redblue-quality-round-1"
+    },
+    {
+      "id": "q-restart",
+      "title": "优雅重启设计（restart≠stop/drain-to-quiesce/auto-resume run/超时中止上报）",
+      "owner": "q-restart",
+      "branch": "design/q-restart",
+      "progress": "merge f6d6dc5e，483行 graceful-restart-design.md；双模式/cooperative暂停/quiesce安全边界/auto-resume复用EU.resumeRun(3416)/每会话marker即清单(无第二真相)/intent可选字段回滚兼容/fail-safe120s中止点名阻塞者/node.drain.status观测；自举悖论列实现期验证",
+      "archivedAt": "2026-11-24T03:50:00+08:00",
+      "cycle": "redblue-quality-round-1"
     }
   ]
 }

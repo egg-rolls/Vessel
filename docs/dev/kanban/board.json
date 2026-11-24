@@ -13,14 +13,6 @@
       "progress": "派单：basic-tools:1608通知来源归属 + tenant-runtime-factory:1048 owner self card路径重构成增量告知"
     },
     {
-      "id": "q-restart",
-      "title": "优雅重启设计（restart≠stop/drain-to-quiesce/auto-resume run/超时中止上报）",
-      "column": "进行中",
-      "owner": "q-restart",
-      "branch": "design/q-restart",
-      "progress": "派单：现状2s硬停+不续run；设计优雅等待+恢复run+超时中止交agent修复+重启可观测性"
-    },
-    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
