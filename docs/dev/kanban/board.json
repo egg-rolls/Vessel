@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "金丝雀同步main c5d6f715(会话壳+超时去重)+rebuild+重启pid147636；canary-test(3bcd8950)派验超时去重+会话壳；q-ui-style待合后再同步；restart drain超时需手动start(q-restart设计待实施)"
+      "progress": "流程纠正:之前误把修复直接ff main跳过金丝雀闸门;现生产runtime未重启(新代码未生效)闸门还在;金丝雀同步723fb673+重启pid111284;canary-test已验超时去重+会话壳通过;canary-verify2(1ad01e3d)补验日志/命名/滚动/UI/media/SKILLS六项;全过前不重启生产"
     },
     {
       "id": "q-node-target",
