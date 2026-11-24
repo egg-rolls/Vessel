@@ -159,10 +159,10 @@
     {
       "id": "q-plugin-scaffold",
       "title": "设计:插件开发自动化脚手架(vessel plugin create+约定优于配置+自动注册)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-plugin-scaffold",
       "branch": "design/q-plugin-scaffold",
-      "progress": "派单：脚手架CLI生成manifest/注册/UI/settings样板+目录约定manifest发现自动注册减少boilerplate"
+      "progress": "merge入redblue-dev；816行设计:manifest自动注册已存在,真阻力=手写样板+装配硬编码；vessel plugin create脚手架(tool/capability/ui)+SDK助手defineRpcHandlers/parseSettings+sync生成器+共享UI构建工厂+manifest defaultEnabled/inherit；授权必须显式不能猜；P1脚手架零运行时→P5；宪法对齐零测试用VERIFY.md"
     },
     {
       "id": "g1-proxy-node",
