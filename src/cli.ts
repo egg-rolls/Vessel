@@ -110,6 +110,12 @@ import { expandHome, resolveDataDir } from './data/data-paths';
 import { resolveAgentCwd } from './data/path-resolution';
 import { setToolPolicy } from './data/permission-store';
 import {
+  applyFederationOptions,
+  type FederationRuntimeOptions,
+  federationOptionsFingerprint,
+  resolveFederationOptions,
+} from './federation/federation-config';
+import {
   renderGatewayBanner,
   renderGatewayBannerOneLine,
   wantsBoxBanner,
@@ -1089,6 +1095,10 @@ async function runWithConfig(result: BootstrapResult) {
     // O2：bridge_deny 随 permission applier 热应用（apply 成功才更新，与规则基线同口径）。
     let pendingBridgeDeny: string[] | undefined;
 
+    // S7 热应用：入站 federation 运行时对象（controlPlane.federation，gateway 启动后
+    // 赋值）。入站路由逐请求读它；config scope 的 applyFederation 原地更新。
+    let liveFederationOptions: FederationRuntimeOptions | undefined;
+
     const reloadAppliers: Record<string, GatewayReloadApplier> = {
       permission: createPermissionApplier(
         {
@@ -1271,6 +1281,39 @@ async function runWithConfig(result: BootstrapResult) {
             ? `provider/models: hot-applied (node default unchanged: ${to}; registry snapshot rebuilt + provider cache cleared; live bodies keep old routing until next body)`
             : `model: ${from ?? '(unset)'} → ${to} (node default; registry snapshot rebuilt + provider cache cleared; live bodies keep the old model until next body)`,
         ];
+      },
+      // S7 federation 热应用：重新解析 peer（token 只从 env 进内存），原地更新入站
+      // 路由与出站端口持有的同一批运行时对象 —— 下一请求生效，不重启。
+      // 摘要行只含身份 / 计数，绝不包含 token 值。
+      applyFederation: (next) => {
+        const resolved = resolveFederationOptions({
+          ...(next.federation !== undefined ? { federation: next.federation } : {}),
+          nodeId: result.nodeId,
+        });
+        for (const issue of resolved.issues) {
+          logger.warn('federation.peer.skipped', { peer: issue.peer, reason: issue.reason });
+        }
+        const target = liveFederationOptions;
+        if (target === undefined) {
+          return ['federation: requires restart (no live federation control plane)'];
+        }
+        const before = federationOptionsFingerprint(target);
+        const peerCountBefore = target.peers.length;
+        applyFederationOptions(target, resolved.options);
+        const lines: string[] = [];
+        if (result.federationApply !== undefined) {
+          result.federationApply(resolved.options);
+        } else if (resolved.options.enabled) {
+          lines.push(
+            'federation: outbound send port absent (disabled at startup); restart required for outbound',
+          );
+        }
+        if (before !== federationOptionsFingerprint(resolved.options)) {
+          lines.unshift(
+            `federation: hot-applied (enabled=${resolved.options.enabled}, peers ${peerCountBefore} → ${resolved.options.peers.length})`,
+          );
+        }
+        return lines;
       },
     });
 
@@ -1616,6 +1659,8 @@ async function runWithConfig(result: BootstrapResult) {
       // 0.25：canonical agents.create|update|close（同一 AgentService 适配器）。
       ...(result.agent?.control ? { agentControl: result.agent.control } : {}),
     });
+    // S7 热应用：入站路由读的就是这个对象；applyFederation 原地更新它。
+    liveFederationOptions = controlPlane.federation as FederationRuntimeOptions | undefined;
 
     try {
       gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);

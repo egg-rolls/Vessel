@@ -407,6 +407,24 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       },
       { name: 'team-info', flags: ['--json', '--to', '--members', '--help'] },
       { name: 'peers', flags: ['--json', '--help'] },
+      {
+        // `federation peer add|list|remove`：第三词交给各 shell 的默认补全
+        // （与 `gateway nodes` 同 precedent）。
+        name: 'peer',
+        flags: [
+          '--json',
+          '--node-id',
+          '--team-id',
+          '--token-env',
+          '--url',
+          '--direction',
+          '--local-team-id',
+          '--allow-directory',
+          '--ca-file',
+          '--help',
+        ],
+        flagValues: { '--direction': ['in', 'out', 'both'] },
+      },
     ],
   },
   {

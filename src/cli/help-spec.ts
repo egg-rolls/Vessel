@@ -106,6 +106,13 @@ export const CLI_FLAG_VALUE = {
   '--entry': '<json>',
   '--value-env': '<ENV>',
   '--value-stdin': null,
+  '--node-id': '<node_id>',
+  '--team-id': '<team_id>',
+  '--url': '<base-url>',
+  '--direction': '<in|out|both>',
+  '--local-team-id': '<team_id>',
+  '--allow-directory': null,
+  '--ca-file': '<path>',
 } as const;
 
 export type CliFlag = keyof typeof CLI_FLAG_VALUE;
@@ -194,6 +201,13 @@ export const CLI_FLAG_HELP: Readonly<Record<CliFlag, MessageKey>> = {
   '--entry': 'flag.entry',
   '--value-env': 'flag.valueEnv',
   '--value-stdin': 'flag.valueStdin',
+  '--node-id': 'flag.nodeId',
+  '--team-id': 'flag.teamId',
+  '--url': 'flag.url',
+  '--direction': 'flag.direction',
+  '--local-team-id': 'flag.localTeamId',
+  '--allow-directory': 'flag.allowDirectory',
+  '--ca-file': 'flag.caFile',
 };
 
 /** 一条命令级 help 规格 */
@@ -222,6 +236,7 @@ export const CLI_HELP_GROUPS: Readonly<Record<string, MessageKey>> = {
   config: 'help.group.config',
   dev: 'help.group.dev',
   federation: 'help.group.federation',
+  'federation peer': 'help.group.federationPeer',
   gateway: 'help.group.gateway',
   'gateway nodes': 'help.group.gatewayNodes',
   hub: 'help.group.hub',
@@ -663,6 +678,42 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     required: ['--to'],
     flagHelp: { '--to': 'flag.to.address' },
     flagValue: { '--to': '<principal@node:team>' },
+  },
+  {
+    path: ['federation', 'peer', 'add'],
+    summary: 'help.cmd.federationPeerAdd',
+    flags: [
+      '--node-id',
+      '--team-id',
+      '--token-env',
+      '--url',
+      '--direction',
+      '--local-team-id',
+      '--allow-directory',
+      '--ca-file',
+      '--json',
+    ],
+    required: ['--node-id', '--team-id', '--token-env'],
+    flagValue: {
+      '--node-id': '<node_id>',
+      '--team-id': '<team_id>',
+      '--token-env': '<ENV_NAME>',
+      '--url': '<base-url>',
+      '--direction': 'in|out|both',
+      '--local-team-id': '<team_id>',
+      '--ca-file': '<path>',
+    },
+  },
+  {
+    path: ['federation', 'peer', 'list'],
+    summary: 'help.cmd.federationPeerList',
+    flags: ['--json'],
+  },
+  {
+    path: ['federation', 'peer', 'remove'],
+    summary: 'help.cmd.federationPeerRemove',
+    args: '<label|node-id>',
+    flags: ['--json'],
   },
 
   // ── dev ──

@@ -34,6 +34,7 @@ import { resolveNodeId } from '../../node/node-identity';
 import type { FederationCommand } from '../args';
 import { ui } from '../output';
 import type { CommandResult } from './agent/agent-command';
+import { runFederationPeerCommand } from './federation-peer';
 
 /** v1 固定 tenant（DECISION-036 §2） */
 const FEDERATION_TENANT = 'default';
@@ -487,6 +488,12 @@ export async function runFederationCommand(
   options: FederationCommandOptions,
 ): Promise<CommandResult> {
   if (command.kind === 'peers') return peersCommand(command, options);
+  // `peer list` 与 `peers` 同一渲染（token 绝不打印）。
+  if (command.kind === 'peer-list')
+    return peersCommand({ kind: 'peers', json: command.json }, options);
+  if (command.kind === 'peer-add' || command.kind === 'peer-remove') {
+    return runFederationPeerCommand(command, options);
+  }
   if (command.kind === 'team-info') return teamInfoCommand(command, options);
   return postCommand(command, options);
 }

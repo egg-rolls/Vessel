@@ -173,3 +173,40 @@ export function resolveFederationOptions(input: {
     issues,
   };
 }
+
+/**
+ * 热应用：把新解析的选项**原地**写回装配层持有的运行时对象。
+ *
+ * 入站路由（serve federation route）与出站 client 都逐请求读该对象的字段，
+ * 原地替换后下一请求即生效，不需要重启。`nodeId` 是本机身份，不参与热更新。
+ * token 值只在运行时对象之间流动，绝不序列化 / 打印。
+ */
+export function applyFederationOptions(
+  target: FederationRuntimeOptions,
+  next: FederationRuntimeOptions,
+): void {
+  target.enabled = next.enabled;
+  target.maxHops = next.maxHops;
+  target.rateLimitPerMinute = next.rateLimitPerMinute;
+  target.peers = next.peers;
+}
+
+/**
+ * 热应用差异指纹：只含可公开字段（身份 / 方向 / url / tokenEnv / 开关），
+ * **绝不包含 token 值**。两份指纹相等 ⇒ 本次热应用无可见差异。
+ */
+export function federationOptionsFingerprint(options: FederationRuntimeOptions): string {
+  const peers = options.peers
+    .map(
+      (peer) =>
+        `${peer.nodeId}:${peer.teamId}:${peer.direction}:${peer.url ?? ''}:${peer.tokenEnv}:` +
+        `${peer.allowDirectory}:${peer.localTeamId ?? ''}:${peer.caFile ?? ''}`,
+    )
+    .sort();
+  return JSON.stringify({
+    enabled: options.enabled,
+    maxHops: options.maxHops,
+    rateLimitPerMinute: options.rateLimitPerMinute,
+    peers,
+  });
+}
