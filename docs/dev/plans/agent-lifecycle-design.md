@@ -130,7 +130,148 @@ function isReleased(record) {
 
 ## 2. 目标语义与状态机
 
-（待扩充：规范条款、recyclable 正交标志设计、状态机图、dormant 语义、释放原因扩展）
+### 2.1 规范条款（MUST / SHOULD / MUST NOT）
+
+- **M1 持久保留**：关机 / 重启 / drain MUST NOT 释放任何成员（含 temporary）。
+  重启后成员以 dormant 形态保留：`membership='present'`、`state='idle'`、
+  `presence='gone'`，id / 会话历史 / inbox 全部不变。
+- **M2 工具无销毁权**：agent 工具 MUST NOT 提供任何立即销毁成员的入口。
+  `agent close` 动作替换为 `mark-recyclable`；级联 close 一并废除（§3.1）。
+- **M3 中断保留**：`agent send interrupt:true` 是 agent 工具唯一的「停止」手段：
+  取消目标活动 run、保全 WIP（resume 标记 + durable inbox），不改 membership。
+- **M4 标注正交**：`recyclable` 是持久化布尔标志 + 审计三元组，**不是新状态**；
+  标注 / 撤销不改 `state / membership / presence`，不发终态通知。
+- **M5 mark-gated GC**：系统 sweep MUST 只回收 `recyclable===true` 且通过安全互锁
+  （§4.2）且宽限期已满（§4.3）的成员。未标注成员 MUST NOT 被自动回收——
+  **TTL 到期不再是回收理由**。
+- **M6 审批不降级**：标注 peer（`role='member'`，含 main）MUST 走人类审批（ask）；
+  标注 main / 调用者自身 MUST 拒绝（保护名单，§4.5）。GC 执行已获批标注时不再
+  二次审批（审批点在标注，见 §3.2 裁决）。
+- **M7 可撤销**：宽限期内任何有权限的主体可 `unmark` 撤销标注；撤销即退出待回收
+  清单，GC 永不回收。已回收成员走 `reinstate` 复活（同 id）。
+- **M8 审计完整**：标注（谁 / 何时 / 为何）与回收（时刻 / 原因）MUST 落盘并进
+  事件流；历史视图原样展示，不按白名单改写（沿用 0.53 口径）。
+
+### 2.2 关键设计决策：recyclable 是正交标志，不是新状态
+
+**决策**：不新增 `MemberState` 值（不加 `dormant` / `recyclable` / `recycled` 状态），
+只新增持久化标志字段。理由：
+
+1. `MemberState` 表达的是**执行相位**（created→idle→running→…→终态），由
+   `updateAgentState` 从 ExecutionUnit 聚合推导（`service.ts:4319`）。把「可回收」
+   塞进状态机会让推导逻辑分叉：一个 idle 成员可能同时可回收 / 不可回收，状态机
+   无法表达这种正交性，除非状态数乘积爆炸（`idle_recyclable` / `completed_recyclable`…）。
+2. `TRANSITIONS`（`registry.ts:109`）是封闭表，新增状态要改全部转移边与
+   `canTransition` 调用点；正交标志零侵入。
+3. 现有「释放」本来就是 `membership + state` 的析取投影（§1.2），不是状态枚举值——
+   沿用同一风格：**回收 = `left/closed` + `closeReason='recycled'`**，
+   **dormant = `present + idle + gone`**，都是投影，不是新状态。
+4. 快照兼容：additive 字段旧快照读作缺省（`recyclable` 缺省 false），
+   `snapshot.ts` 的「绝不在 parse 阶段 reject」铁律自然满足。
+
+新增持久字段（`MemberRecord` / `PersistedAgentRecord`，全部 additive）：
+
+```ts
+// registry.ts MemberRecord（camelCase）
+recyclable?: boolean;      // 缺省 undefined ≡ false：未标注 = 永不自动回收
+markedBy?: string;         // 标注者 principal（agent id / 'human' / 'system'）
+markedAt?: number;         // 标注时刻（宽限期计时基准）
+markReason?: string;       // 标注理由（必填，单行截断 500 字符，同闸原因口径）
+
+// types.ts PersistedAgentRecord（snake_case 落盘）
+recyclable?: boolean;
+marked_by?: string;
+marked_at?: number;
+mark_reason?: string;
+```
+
+`recyclable` 缺省 false 是**安全缺省**：旧快照 / 迁移期成员一律不可自动回收，
+宁可 roster 增长也不误杀（§8.1 的墙用显式标注 + GC 疏解，不用缺省 true）。
+
+### 2.3 状态机图
+
+执行相位状态机**不变**（沿用 `TRANSITIONS`）；标注是正交维度，回收是释放投影：
+
+```mermaid
+stateDiagram-v2
+    [*] --> created
+    created --> idle
+    idle --> running : admit / send
+    running --> waiting_permission
+    waiting_permission --> running
+    running --> completed
+    running --> failed
+    running --> cancelled : interrupt / drain
+    waiting_permission --> failed
+    waiting_permission --> cancelled
+    completed --> idle : 新工作
+    failed --> idle : 新工作
+    cancelled --> idle : 新工作
+    running --> idle : 轮结束
+    waiting_permission --> idle
+
+    state "正交标志 recyclable（不改 state）" as mark {
+        [*] --> unmarked : 缺省（永不自动回收）
+        unmarked --> marked : mark-recyclable（权限见 §3.2）
+        marked --> unmarked : unmark（宽限期内可撤销）
+    }
+
+    idle --> closed : ① 管理面硬 close（人类 escape hatch）
+    idle --> closed : ② mark-gated GC（marked ∧ 安全 ∧ 宽限期满）
+    closed --> [*] : membership=left（记录永不删）
+    note right of closed
+        closeReason:
+        closed = 管理面硬 close
+        recycled = mark-gated GC
+        idle_ttl = legacy（只读，不再写入）
+        reinstate 可原地复活（同 id）
+    end note
+```
+
+要点：
+
+- 图中 ② 只从 `idle` 出发是简化：GC 的安全互锁（§4.2）保证回收时刻成员必然
+  无在途工作，聚合态必为 idle / 终态之一；终态成员同样可被回收（先经
+  `updateAgentState` 归 idle 或直接按终态处理，实现时统一走 `reclaimAgent`）。
+- `running / waiting_permission` 成员**可以被标注**（标注不打断），但 GC 会一直
+  跳过直到安全；需要立刻停下时先 `interrupt` 保全再等 GC——这正是用户提案
+  「先 interrupt 保全再标注」的操作序。
+- `stale` 保持 legacy read-only，不新增写入者。
+
+### 2.4 dormant 语义与再激活（同 id，非重雇）
+
+- **dormant 不是新状态**：= `present + idle + presence:'gone'`。重启后所有成员
+  （含 temporary）都以此形态恢复（`loadSnapshot` 现有行为，§1.4 第 2 步），
+  本设计只是**不再让随后的 sweep 把它们销毁**。
+- **再激活 = 首次 admit 惰性重建 ExecutionUnit**（现有机制，`service.ts:1061`）：
+  任何 `agent send` / 人类投递到 dormant 成员 → admit → `ensureExecutionUnit`
+  重建 runtime → 同一 `binding_id ≡ session_id` 续接会话历史。**id 稳定，
+  无需重新 hire，无需新 API。**
+- 已释放（`left/closed`）成员的复活仍走 `reinstate`（管理面 / roster 通道，
+  同 id unretire）。本设计不新增模型侧复活入口：GC 回收的成员若需复活，
+  由人类 / roster 管理操作——避免模型绕过标注语义私自「复活再回收」打转。
+- 重启恢复的 spawn 成本仍由 `RECOVER_MAX_SESSIONS=8` 封顶（`service.ts:349`）：
+  dormant 保留是**记录级**的，不是一开机全部拉起；超出顺延下次启动。
+
+### 2.5 释放原因扩展与审计轨迹
+
+`closeReason` 值域扩展（历史视图原样展示，无需白名单改动）：
+
+| reason | 写入者 | 语义 |
+| --- | --- | --- |
+| `closed` | 管理面硬 close（人类 RPC，保留） | 显式立即关闭（escape hatch，§3.3） |
+| `recycled` | mark-gated GC（新） | 已标注 + 安全 + 宽限期满，系统自动回收 |
+| `idle_ttl` | **不再写入**（legacy 只读） | 旧 sweep 回收；存量记录原样保留 |
+
+审计轨迹两段式：
+
+1. **标注段**：`markedBy / markedAt / markReason` 落盘 + 新事件
+   `agent.marked_recyclable`（撤销发 `agent.unmarked`，清四个字段）。
+2. **回收段**：复用 `closedAt / closeReason='recycled'` + `agent.closed` 事件
+   （reason 携带 `recycled`，可附 `marked_by` 供看板展示「谁标注的」）。
+
+`reinstate` 复活时清标注四字段（与现有清 `closedAt/closeReason` 同一位置，
+`service.ts:6742`）：复活 = 回到未标注缺省，防止「复活即又被回收」。
 
 ## 3. API 变更
 
