@@ -3,7 +3,13 @@
  * （不必记语法）+ 清除筛选。输入防抖由父级负责（150ms）。
  */
 import { useRef } from 'react';
-import { Button, SearchInput } from '../../../components/ui';
+import {
+  Button,
+  GHOST_BUTTON_CLASS,
+  GHOST_CONTROL_CLASS,
+  SearchInput,
+} from '../../../components/ui';
+import { cn } from '../../../components/ui/cn';
 import { t } from '../../../i18n';
 
 export interface SettingsSearchBarProps {
@@ -27,14 +33,19 @@ export function SettingsSearchBar({ query, onQueryChange, pluginIds }: SettingsS
   return (
     <div className="flex items-center gap-2">
       <SearchInput
-        className="grow"
+        className={cn('grow', GHOST_CONTROL_CLASS)}
         value={query}
         onChange={onQueryChange}
         placeholder={t('settings.dialog.searchPlaceholder')}
         ariaLabel={t('settings.dialog.searchPlaceholder')}
       />
       <details ref={detailsRef} className="relative shrink-0">
-        <summary className="cursor-pointer list-none rounded-sm bg-sunken px-2.5 py-1.5 text-sm text-muted select-none">
+        <summary
+          className={cn(
+            'cursor-pointer list-none rounded-sm px-2.5 py-1.5 text-sm text-muted select-none tint-hover',
+            GHOST_BUTTON_CLASS,
+          )}
+        >
           @ ▾
         </summary>
         <div className="absolute right-0 z-10 mt-1 flex w-56 flex-col gap-0.5 rounded-sm border border-line bg-surface p-1.5 shadow-elev">

@@ -4,7 +4,19 @@ import { useRefreshSignal } from '../../app/refresh';
 import { CopyButton } from '../../components/CopyButton';
 import { JsonView } from '../../components/JsonView';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
-import { Badge, Button, DataTable, KeyValueList, SearchInput, Section } from '../../components/ui';
+import {
+  Badge,
+  Button,
+  DataTable,
+  GHOST_BADGE_CLASS,
+  GHOST_BUTTON_CLASS,
+  GHOST_CONTROL_CLASS,
+  GHOST_PANEL_CLASS,
+  KeyValueList,
+  SearchInput,
+  Section,
+} from '../../components/ui';
+import { cn } from '../../components/ui/cn';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import { filterConfigEntries, flattenConfig } from '../../state/config';
@@ -72,7 +84,7 @@ export function ConfigView() {
               label={t('config.copyJson')}
               toast={t('config.copiedJson')}
             />
-            <Button size="small" onClick={refresh}>
+            <Button size="small" className={GHOST_BUTTON_CLASS} onClick={refresh}>
               {t('common.refresh')}
             </Button>
           </div>
@@ -108,14 +120,18 @@ export function ConfigView() {
             },
           ]}
         />
-        <JsonView value={data.config.config} label={t('config.redactedJson')} />
+        <JsonView
+          value={data.config.config}
+          label={t('config.redactedJson')}
+          className={GHOST_PANEL_CLASS}
+        />
       </Section>
 
       <Section
         title={t('config.itemsTitle')}
         description={t('config.itemsDesc')}
         actions={
-          <Badge>
+          <Badge className={GHOST_BADGE_CLASS}>
             {filteredEntries.length}/{entries.length}
           </Badge>
         }
@@ -126,7 +142,7 @@ export function ConfigView() {
             onChange={setQuery}
             placeholder={t('config.searchPlaceholder')}
             ariaLabel={t('config.searchLabel')}
-            className="grow basis-60 max-w-search"
+            className={cn('grow basis-60 max-w-search', GHOST_CONTROL_CLASS)}
           />
         </TableToolbar>
         {entries.length === 0 ? (

@@ -44,7 +44,7 @@ export function CategoryTree({
             role="tab"
             aria-selected={activeId === node.id}
             className={`shrink-0 rounded-full px-3 py-1 text-sm transition-colors ${
-              activeId === node.id ? 'bg-accent-soft text-accent-ink' : 'bg-sunken text-muted'
+              activeId === node.id ? 'bg-accent-soft text-accent-ink' : 'text-muted hover:bg-hover'
             }`}
             onClick={() => onSelect(node.id)}
           >

@@ -29,6 +29,12 @@ export {
   Textarea,
   type TextareaProps,
 } from './Field';
+export {
+  GHOST_BADGE_CLASS,
+  GHOST_BUTTON_CLASS,
+  GHOST_CONTROL_CLASS,
+  GHOST_PANEL_CLASS,
+} from './ghost-control';
 export { Icon, type IconName } from './Icon';
 export { type KeyValueItem, KeyValueList, type KeyValueListProps } from './KeyValueList';
 export {
