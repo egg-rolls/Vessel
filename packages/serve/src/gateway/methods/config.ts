@@ -362,6 +362,8 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
           key: { type: 'string', minLength: 1 },
           // 布尔键接受 boolean，整数键接受 number|string，其余键接受 string；具体校验在 handler。
           value: {},
+          // S5 additive：写入层级（project = 工作区覆盖，优先于 user）；缺省 user。
+          scope: { type: 'string', enum: ['user', 'project'] },
         },
       },
       result_schema: {
@@ -380,8 +382,9 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
         }
         const key = stringParam(params, 'key');
         const value = normalizeConfigValue(key, params.value);
+        const scope = params.scope === 'project' ? 'project' : 'user';
         try {
-          await control.set({ tenantId: deps.defaultTenantId, key, value });
+          await control.set({ tenantId: deps.defaultTenantId, key, value, scope });
         } catch (error) {
           if (error instanceof RpcError) throw error;
           throw new RpcError(

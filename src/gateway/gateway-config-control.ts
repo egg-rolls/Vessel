@@ -15,12 +15,16 @@ export interface GatewayConfigSetRequest {
   tenantId: string;
   key: string;
   value: string | boolean | number;
+  /** S5 additive：写入层级；缺省 user。project 未注入路径 → not_found。 */
+  scope?: 'user' | 'project';
 }
 
 export interface GatewayConfigSetOptions {
   defaultTenantId: string;
   /** 用户配置路径；缺省 `~/.vessel/config.yaml` */
   configPath?: string;
+  /** S5：项目配置路径（工作区覆盖层）；缺省 → project 写入 not_found。 */
+  projectConfigPath?: string;
 }
 
 function codedError(code: string, message: string): Error {
@@ -39,6 +43,11 @@ export function createGatewayConfigSet(
     if (!isSettableConfigKey(request.key)) {
       throw codedError('invalid_params', `Unsupported config key: ${request.key}`);
     }
-    await setUserConfigValue(request.key, request.value, { configPath });
+    // S5：project 层写 <project>/vessel.yaml（setUserConfigValue 的 configPath 选项已支持）。
+    const targetPath = request.scope === 'project' ? options.projectConfigPath : configPath;
+    if (targetPath === undefined) {
+      throw codedError('not_found', 'Project config write is not available');
+    }
+    await setUserConfigValue(request.key, request.value, { configPath: targetPath });
   };
 }
