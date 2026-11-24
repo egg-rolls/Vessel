@@ -248,6 +248,11 @@ export interface ExecutionUnitOptions {
    */
   retry?: Partial<import('./provider.js').ProviderRetryPolicy>;
   /**
+   * 空响应兜底策略（q-empty-response；additive 可缺省）。
+   * 缺省 = 启用、nudge 重试 2 次；`enabled: false` 回退修复前行为。
+   */
+  emptyResponse?: import('./provider.js').EmptyResponsePolicy;
+  /**
    * 0.10：诊断日志 sink；缺省 noop。
    * 未注入且设置了 `VESSEL_DEBUG` 时，runtime 兜底为 stderr logger（level=debug）。
    */

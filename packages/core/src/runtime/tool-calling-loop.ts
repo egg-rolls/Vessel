@@ -26,7 +26,13 @@ import type {
   UsagePricing,
   UsageStats,
 } from '../types/limits.js';
-import type { ChatRequest, LLMResponse, Message, MessageRef } from '../types/provider.js';
+import type {
+  ChatRequest,
+  EmptyResponsePolicy,
+  LLMResponse,
+  Message,
+  MessageRef,
+} from '../types/provider.js';
 import type { Run } from '../types/run.js';
 import type { ToolCall } from '../types/tool.js';
 import type { GuardrailRunner } from './guardrail-runner.js';
@@ -39,6 +45,21 @@ import { boundToolResult, writeToolOutput } from './tool-result-gate.js';
 
 /** Loop 的最终结果；usage/facts 已通过 Run 拥有的 execution/context 原地写回。 */
 export type LoopResult = string;
+
+/** 空响应 nudge 重试上限缺省（不含首次响应；q-empty-response）。 */
+export const DEFAULT_EMPTY_RESPONSE_MAX_RETRIES = 2;
+
+/** 空响应 nudge 缺省文案（以 `vessel:notice` user 消息追加；可经配置覆盖）。 */
+export const DEFAULT_EMPTY_RESPONSE_NUDGE =
+  '你上一条回复为空（没有内容也没有工具调用）。请继续你的任务：给出完整的最终答复，或调用工具继续推进。';
+
+/** 重试上限净化：非有限数 / 负数 ⇒ 缺省；否则向下取整（配置 validator 另有 0–10 界）。 */
+function sanitizeEmptyResponseRetries(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return DEFAULT_EMPTY_RESPONSE_MAX_RETRIES;
+  }
+  return Math.floor(value);
+}
 
 /** Run 内一次 loop 的完整依赖面；每 run 构造一次，无跨 run 状态。 */
 export interface LoopContext {
@@ -64,6 +85,11 @@ export interface LoopContext {
    * 开关在 `run-timing.ts` 一处定义（宪法第十四条：格式只有一处真相）。
    */
   readonly timing?: RunTiming;
+  /**
+   * 空响应兜底策略（q-empty-response；additive 可缺省）。
+   * 缺省 = 启用、nudge 重试 2 次（库用户不注入也拿到兜底）；见 `EmptyResponsePolicy`。
+   */
+  readonly emptyResponse?: EmptyResponsePolicy;
 }
 
 /** WorkingContext / MessageWindowPort：只读写本次 run 的内存窗口。 */
@@ -265,6 +291,8 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
   // 0.57 分段耗时：轮次从 1 起；`previous*` 是**上一轮**的读数（gap 那一行要用它把
   // 「模型慢」和「我们中间那一小段慢」分开）。
   let round = 0;
+  // 空响应兜底（q-empty-response）：本 run 已用的 nudge 重试次数；限次防死循环。
+  let emptyRetries = 0;
   let previousResponseAt: number | undefined;
   let previousToolCalls: number | undefined;
   let previousToolsMs: number | undefined;
@@ -509,6 +537,75 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
     // 只有「无 tool_calls 且 stop」才视为终稿（对齐 Claude Code query.ts 的 tool_use 判定）。
     const toolCalls = response.tool_calls;
     const hasToolCalls = toolCalls !== undefined && toolCalls.length > 0;
+
+    // 空响应兜底（q-empty-response）：无工具调用 + content 纯空白 ⇒ 不当终稿。
+    // 模型偶发「空内容 + 终止原因」（大上下文 / 压缩后更易发），旧行为把空串当终稿
+    // 返回，agent 早退零输出。这里追加一条「继续你的任务」nudge 重新轮询；限次
+    // （缺省 2），耗尽落 `llm.empty_response`(exhausted) 后回落原始终止路径（不再静默）。
+    // 工具调用路径与非空终稿不进本分支；finish_reason 语义不变。判定用模型原始输出
+    // （guardrail replacement 之前）：空响应重试时输出 guardrail 无意义。
+    if (!hasToolCalls && (response.content ?? '').trim().length === 0) {
+      const policy = ctx.emptyResponse;
+      const enabled = policy?.enabled !== false;
+      const maxRetries = sanitizeEmptyResponseRetries(policy?.maxRetries);
+      if (enabled && emptyRetries < maxRetries) {
+        emptyRetries += 1;
+        ctx.events.emit({
+          type: 'llm.empty_response',
+          run_id: runId,
+          data: {
+            run_id: runId,
+            session_id: sessionId,
+            attempt: emptyRetries,
+            max_retries: maxRetries,
+            finish_reason: response.finish_reason,
+            action: 'nudge',
+          },
+          ts: Date.now(),
+        });
+        // 空 assistant 轮已是落盘事实（上方 llm.response 已持久化）：原样写回窗口，
+        // 保持 live 窗口 ≡ 事件投影（resume 会从 llm.response 重建出同一空轮）；
+        // thinking 模式同样需要 reasoning_content 供下一轮回传。
+        ctx.window.addMessage(
+          {
+            role: 'assistant',
+            content: response.content,
+            ...(response.reasoning_content
+              ? { reasoning_content: response.reasoning_content }
+              : {}),
+          },
+          runId,
+        );
+        // nudge 走注入通道（message.injected 事件 + 上下文写）：用户可见、resume 可重建，
+        // 不是只活在 live 窗口的私有消息。timestamp 保证每次 nudge 的注入去重键不同。
+        const nudge =
+          typeof policy?.nudge === 'string' && policy.nudge.trim().length > 0
+            ? policy.nudge
+            : DEFAULT_EMPTY_RESPONSE_NUDGE;
+        ctx.window.appendInjectedMessages(runId, [
+          { role: 'user', name: 'vessel:notice', content: nudge, timestamp: Date.now() },
+        ]);
+        continue;
+      }
+      if (enabled) {
+        // 限次耗尽（或 maxRetries=0）：留痕后回落现行行为——空串仍按原路径返回，
+        // 但不再静默（事件落盘，观察面 / 日志可见）。
+        ctx.events.emit({
+          type: 'llm.empty_response',
+          run_id: runId,
+          data: {
+            run_id: runId,
+            session_id: sessionId,
+            attempt: emptyRetries,
+            max_retries: maxRetries,
+            finish_reason: response.finish_reason,
+            action: 'exhausted',
+          },
+          ts: Date.now(),
+        });
+      }
+      // enabled=false 或重试耗尽：落到下方原始终止路径（行为与修复前一致）。
+    }
 
     if (!hasToolCalls && response.finish_reason === 'stop') {
       // 应用输出 Guardrail

@@ -63,7 +63,8 @@ export interface EventSpec {
  * 108 条（审计报告的 §2 全集）+ 6 条门禁扫出来的真实名字（`team.budget.override` /
  * `tool.permission.expired` / `delegate.*` 四条）+ `prompt.system_context`（0.50 模型上下文卡）
  * + 0.53 U2 的三条投射审计（`context.projection_*`），再减去 0.51 删掉的 rotate 三条死类型，
- * 共 115 条（分档计数由 `scripts/check-event-visibility.ts` 的 A4 影子断言钉死）。
+ * + q-empty-response 的 `llm.empty_response`（空响应兜底过程信号），
+ * 共 116 条（分档计数由 `scripts/check-event-visibility.ts` 的 A4 影子断言钉死）。
  *
  * 顺序按域分组（run/llm/tool → 上下文 → 会话/进程 → agent → 插件 → 子 agent），
  * 与 `docs/architecture/events.md` 的 marker 表同一顺序（门禁只比键集，顺序是人读的）。
@@ -113,6 +114,7 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   'llm.response': { tier: 'internal', live: true },
   'llm.stream.summary': { tier: 'internal', live: true },
   'llm.retry': { tier: 'internal', live: true },
+  'llm.empty_response': { tier: 'internal', live: true },
   'run.checkpoint': { tier: 'internal', live: true },
   'run.resumed': { tier: 'internal', live: true },
 

@@ -50,6 +50,11 @@ export interface TenantRuntimeProfile {
   /** 传输层 / 过载重试策略；缺省 = `DEFAULT_PROVIDER_RETRY_POLICY`（runtime/provider-retry.ts）。 */
   retry?: import('../types/provider.js').ProviderRetryPolicy;
   /**
+   * 空响应兜底策略（q-empty-response）；缺省不注入 ⇒ loop 内置缺省（启用、nudge 重试 2 次）。
+   * 装配层从 `empty_response` 配置段映射（src/empty-response-settings.ts）。
+   */
+  emptyResponse?: import('../types/provider.js').EmptyResponsePolicy;
+  /**
    * 视觉的**运行期设置**（0.56；kill switch / 单请求张数 / 精度意图）。
    *
    * 能力不在这里：问 `provider.vision`（插件的 `VisionBackend`）。缺省 = 支持即直通。
@@ -270,6 +275,7 @@ export class Runtime {
           : {}),
       // 0.56：视觉运行期设置（能力在 provider.vision 上，由插件挂）。
       ...(profile.vision !== undefined ? { vision: profile.vision } : {}),
+      ...(profile.emptyResponse !== undefined ? { emptyResponse: profile.emptyResponse } : {}),
       // 注入粒度框架：notice producer 的检测节奏端口（缺省不注入 ⇒ 恒 request）。
       ...(profile.envCadence !== undefined ? { envCadence: profile.envCadence } : {}),
       ...(overrides?.selfCard !== undefined ? { selfCard: overrides.selfCard } : {}),
