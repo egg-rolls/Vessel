@@ -336,15 +336,100 @@ import 网全平铺。本方案把 136 个文件按**语义**归入 **14 个领�
 
 ## 5. import 重写策略与影响面
 
-（第3步补全）
+### 5.1 影响面盘点（已实测）
+
+| 面 | 读数 | 处置 |
+|---|---|---|
+| src 顶层文件内相对 import | 632 条 | 随搬迁逐批重写 |
+| 既有子目录 → 顶层 import | 58 条（commands/→顶层 48；gateway/node-registry→data-paths、node-identity；hub/runtime→data-paths、node-identity、token-derive；tools-engine/entry→version；update/*→version、runtime-notice；gateway/reload→rpc 不动） | 目标文件移动的那一批一并重写 |
+| cli.ts 动态 import | 4 条（./commands/registry ×2、./gateway-nodes-command、./gateway-command） | cli 批重写 |
+| 跨包引用根 src | **仅 4 个文件**：scripts/dev-web.ts（data-paths、gateway/daemon、gateway/pid、transport-factory）、scripts/version.ts（plugin-manifest）、examples/eval-offline.ts（eval-wiring、plugin-loader）、examples/feishu-mock.ts（feishu-wiring） | 对应域批重写；packages/plugins/apps 对根 src **零引用**（实测 grep，各自 ../src 是包内路径） |
+| package.json bin/start、dev-web entryPath、build.ts 提示 | 都指 src/cli.ts | cli.ts 留守，**零改动** |
+| 非 import 的运行时路径计算 | **5 文件 8 处**（见 5.2） | 手工 edit，随所在域批提交 |
+| tsconfig include | `src/**/*.ts` 通配 | 零改动 |
+| biome | 无 organizeImports assist；src 内 import 全无扩展名（361/361） | 重写保持无扩展名风格；formatter 只动被改行 |
+
+### 5.2 运行时路径计算修正清单（import.meta.dir / new URL 深度）
+
+移动后模块目录深度变化，以下**不是 import 语句**、脚本扫不到，必须手工改：
+
+| 文件（迁后位置） | 现写法 | 迁后写法 |
+|---|---|---|
+| runtime/bootstrap.ts:1247 | join(import.meta.dir, 'tools-engine', 'entry.ts') | join(import.meta.dir, '..', 'tools-engine', 'entry.ts') |
+| runtime/bootstrap.ts:1248 | join(import.meta.dir, '..') | join(import.meta.dir, '..', '..') |
+| cli/commands/gateway/gateway-command.ts:3057 | join(import.meta.dir, 'tools-engine', 'entry.ts') | join(import.meta.dir, '..', '..', '..', 'tools-engine', 'entry.ts') |
+| cli/commands/gateway/gateway-command.ts:3058 | join(import.meta.dir, '..') | join(import.meta.dir, '..', '..', '..') |
+| plugin/plugin-loader.ts:33 | new URL('../plugins', import.meta.url) | new URL('../../plugins', …) |
+| shared/version.ts:11 | new URL('../package.json', …) | new URL('../../package.json', …) |
+| shared/version.ts:28 | new URL('..', …) | new URL('../..', …) |
+| gateway/web-dist.ts:19–24 | new URL('../apps/web/…', …) ×4 | new URL('../../apps/web/…', …) ×4 |
+
+（cli.ts:178 的 ../apps/web/dist 不动；tools-engine/supervisor.ts 只注释提及，entryPath 由装配层传入，不动。）
+
+### 5.3 重写机制（工具辅助 + 精确匹配，不做盲替换）
+
+1. **一次性脚本，不进仓库**：内联 python（bash 执行，用完即弃，符合 FILE-MANAGEMENT §3.4
+   「一次性迁移脚本放个人侧」——本任务直接内联执行，不落盘）。
+2. 每批给定 old→new 映射；扫描 src/**、scripts/**、examples/** 全部 .ts 的
+   `from '…'` / `import('…')` / `export … from '…'` 相对 specifier：
+   - 以**引用方文件所在目录**解析 specifier（归一化去 .js/.ts 后缀）得到绝对目标；
+   - 目标**精确命中**本批移动集合才重写；按引用方（可能也已移动）的新位置重算相对路径；
+   - 保持原风格（无扩展名保持无扩展名；原有 .js 的保持 .js）；
+   - 非相对 import（包名）一律不碰。
+3. 同批手工 edit §5.2 中属于本批的运行时路径。
+4. **残留检查**：grep 全仓（除 docs/node_modules）对旧路径的引用 = 0 才算重写完整。
+5. 门禁：`bun run build`（§6）。重写脚本本身不是门禁，build 才是。
+
+### 5.4 为什么不用「全仓字符串替换」
+
+`./data-paths` 这类短名在包内同名文件（plugins/*/src）也存在；盲替换会误伤。
+精确解析 + 命中移动集合是唯一安全口径。docs 里的路径引用是文档同步（C5），与代码重写分开。
 
 ## 6. 逐域分批顺序与门禁
 
-（第3步补全）
+原则：**叶子域先搬、cli 最后**；每批 = git mv + 全仓引用重写（引用方不动）+ §5.2 手工修正
++ 残留检查 + build + **独立 commit**。任何一批 build 红 → 停在该批修复或 revert，不带病进下一批。
+
+| 批 | 域 | 移动数 | 备注 |
+|---|---|---|---|
+| 1 | shared/ | 2 | version 深度修正；tools-engine/entry、update/* 引用重写 |
+| 2 | data/ | 10 | gateway/node-registry、hub/runtime、scripts/dev-web 引用重写 |
+| 3 | node/ | 4 | hub/runtime、gateway/node-registry 引用重写 |
+| 4 | federation/ | 6 | |
+| 5 | observability/ | 5 | |
+| 6 | config/ | 11 | |
+| 7 | plugin/ | 9 | plugin-loader URL 深度修正；scripts/version、examples/* 引用重写 |
+| 8 | session/ | 13 | |
+| 9 | run/ | 5 | |
+| 10 | agent/ | 10 | |
+| 11 | runtime/ | 10 | bootstrap import.meta.dir 修正（此时被装配物已在新位置） |
+| 12 | gateway/ 迁入 | 11 | web-dist URL 深度修正；scripts/dev-web transport-factory 引用重写 |
+| 13 | hub/ 迁入 | 1 | hub-wiring |
+| 14 | tools-engine/ 迁入 | 2 | tools-list、mcp-engine-wiring |
+| 15 | cli/ 框架 | 11 | args/help-spec/help/output 改名 + completion/control-plane/headless/ask-channel/feishu-command；cli.ts 引用重写 |
+| 16 | cli/commands/ + registry | 29 | 28 命令 + registry；cli.ts 4 条动态 import 重写；gateway-command import.meta.dir 修正；src/commands/ 目录删除 |
+| 收口 | 文档同步 | — | 最终 build + docs paths 同步（C5 裁定后）+ AGENTS.md 指针 + 本文翻〔现行〕 |
+
+**门禁口径（宪法）**：每批 `bun run build` 独立取 exit code **且**读产物证据——
+输出必须出现末尾 `📦 Build complete!`，且无 `error TS####` / `Found N error` /
+`Some errors were emitted`（WSL 退出码可能谎报 0，build.ts 已内置同款双判，读数记入 commit message
+或回报）。零测试、零探针、零临时进程；行为验证归用户。
 
 ## 7. 风险与回滚
 
-（第3步补全）
+| 风险 | 缓解 | 回滚 |
+|---|---|---|
+| 相对路径漏改/误改 | §5.3 精确匹配 + 残留 grep + 每批 build | 单批 `git revert <batch-commit>`（批间无交叉依赖，revert 一批不伤他批） |
+| 运行时路径计算漏改（build 绿但运行炸） | §5.2 清单逐条手工改 + 收口全仓 grep import.meta/new URL 复核 | 同上；行为验证归用户（宪法），发现即 revert 该批 |
+| 动态 import 字符串漏改 | cli.ts 4 条列入批16清单；typecheck 覆盖动态 import 类型 | 同上 |
+| WSL/Windows git 索引陈旧（本 worktree 已实测首次 status 谎报 1567 删除） | 每批操作前先 `git status` 刷新索引再核对 | 误判时以 `git ls-files` + 磁盘实况复核，不盲目 commit |
+| 早退（长 thinking 空响应） | 小步：每批 mv→重写→build→commit 四连，单批输出短 | 已提交批次不丢；接续从 git log 读进度 |
+| 与在途分支冲突（q-empty-response 等改 src 顶层） | 本分支只移动不改行为；合并冲突由 main 收口时按「新位置 + 对方行为变更」裁决 | 不 merge、不碰主 checkout（宪法） |
+| docs 路径引用漂移 | C5 裁定后收口批机械同步 32 个文档的 paths/正文 | 文档单独 commit，可独立 revert |
+| 命令字面量/flag/--json 形状/退出码变化 | 纯移动纪律：只改 import 与 §5.2 路径，命令契约面零触碰 | build 之外由用户行为验证兜底 |
+
+**总回滚**：阶段2全部批次在 refactor/q-plan-c 上线性排列，main 可整段不合并，
+或 `git revert <批1>..<批16>` 逆序回退；src/cli.ts 与四个基础设施目录全程未动，回滚无残留。
 
 ## 8. 待 main 确认项
 
