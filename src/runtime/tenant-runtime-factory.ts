@@ -15,7 +15,11 @@
 
 import { join } from 'node:path';
 import { createInboxMemberBodyContribution } from '@vessel-agent/agent';
-import { deriveSessionMeta, FileProjectionCache } from '@vessel-agent/core/session';
+import {
+  deriveSessionMeta,
+  FileProjectionCache,
+  isPlaceholderTitle,
+} from '@vessel-agent/core/session';
 import type { EngineClient } from '@vessel-agent/engine-client';
 import {
   type ConfigSources,
@@ -326,8 +330,13 @@ function stripWrappingQuotes(value: string): string {
 /**
  * C4：清洗 AI 生成的标题 —— trim → 去首尾引号 / 反引号 → 去 `Title:` 前缀
  * → 折叠空白 → 去句末标点 → 按码点截 40。返回空串表示放弃（保留派生标题）。
+ *
+ * 入参容错：provider 可能给 undefined / null（无 content），一律当空串放弃，
+ * 绝不把非字符串值 stringify 成 'undefined' 落库。清洗后若仍是占位 / 脏值
+ * （空 / 'Untitled' / 'undefined' / 'null'）同样放弃 —— 这些绝不能成为会话名。
  */
-export function sanitizeGeneratedTitle(raw: string): string {
+export function sanitizeGeneratedTitle(raw: string | undefined | null): string {
+  if (typeof raw !== 'string') return '';
   let title = stripWrappingQuotes(raw);
   title = title.replace(/^title\s*[:：]\s*/i, '').trim();
   // `Title: "Foo"` 这类组合：去前缀后再剥一次引号。
@@ -335,7 +344,8 @@ export function sanitizeGeneratedTitle(raw: string): string {
   title = title.replace(/\s+/g, ' ').trim();
   title = title.replace(/[.,;:!?。，；：！？…]+$/u, '').trim();
   const codePoints = Array.from(title);
-  return (codePoints.length > 40 ? codePoints.slice(0, 40).join('') : title).trim();
+  title = (codePoints.length > 40 ? codePoints.slice(0, 40).join('') : title).trim();
+  return isPlaceholderTitle(title) ? '' : title;
 }
 
 /**
@@ -1399,14 +1409,16 @@ export async function buildTenantRuntime(
     try {
       const state = await session.load(sessionId);
       if (state === null) return;
-      // Named on purpose (human rename / rotate title): automatic naming never
-      // touches it again. Sessions without a marker are legacy data and keep the
-      // old heuristic below, so no migration is needed.
-      if (state.title_source === 'manual') return;
+      // 已确定命名（人工 rename / 创建时按成员身份命名 / 上一次 AI 命名）⇒ 自动
+      // 命名永不覆盖。没有 marker 的是 legacy 数据，走下面的占位判定，无需迁移。
+      if (state.title_source === 'manual' || state.title_source === 'generated') return;
       const messages = state.messages ?? [];
       const derivedTitle = deriveSessionMeta(messages).title;
-      // An AI title (or any title that is not the derived one) is already there.
-      if (state.title !== undefined && state.title !== derivedTitle) return;
+      // 真实（非占位）且不等于当前派生标题 ⇒ 是 legacy 路径有意写下的名字，保留。
+      // 占位标题（空 / 'Untitled' / 'undefined' / 'null'）= 尚未命名 ⇒ 必须走 AI
+      // 补名。此前这里把落壳的 'Untitled' 当成「已有名字」直接 return，导致空壳
+      // 会话永远卡在 'Untitled'（用户报的 undefined / Untitled 根因之一）。
+      if (!isPlaceholderTitle(state.title) && state.title !== derivedTitle) return;
       const input = firstUserInputForTitle(messages);
       if (input === undefined) return;
       // 0.64：AI 起标题是后台补的，触发时事件循环经常是空的 —— 用会真正触发的截止时间。
@@ -1431,9 +1443,9 @@ export async function buildTenantRuntime(
       // 生成窗口内可能人工 rename / 已有另一次命名：写前重读，保住人工标题。
       const current = await session.load(sessionId);
       if (current === null) return;
-      if (current.title_source === 'manual') return;
+      if (current.title_source === 'manual' || current.title_source === 'generated') return;
       const currentDerived = deriveSessionMeta(current.messages ?? []).title;
-      if (current.title !== undefined && current.title !== currentDerived) return;
+      if (!isPlaceholderTitle(current.title) && current.title !== currentDerived) return;
       await session.save({
         ...current,
         title,

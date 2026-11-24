@@ -11,7 +11,7 @@ import {
   agentBreadcrumb,
   agentTree,
 } from '../../state/agents';
-import { sessionTitle } from '../../state/sessions';
+import { cleanSessionTitle, sessionTitle } from '../../state/sessions';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -164,7 +164,7 @@ export function SessionHeader({
   onSelectAgent?: (id: string | undefined) => void;
 }) {
   const toast = useToast();
-  const title = session ? sessionTitle(session) : detail?.title?.trim() || sessionId;
+  const title = session ? sessionTitle(session) : cleanSessionTitle(detail?.title) || sessionId;
   const tree = agentTree(agents);
   const running = agents.filter((node) => node.state === 'running').length;
   const activeChain = activeAgentId ? agentBreadcrumb(agents, activeAgentId) : [];

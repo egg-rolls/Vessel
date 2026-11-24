@@ -17,9 +17,13 @@ export type SessionStatus = 'running' | 'completed' | 'failed' | 'cancelled' | '
  *
  * - manual: a human (or the rotate title parameter) named it on purpose;
  *   automatic naming must never overwrite it.
- * - generated: the AI titler wrote it; later automatic passes may still update it.
+ * - generated: the AI titler wrote it; it is already named, so automatic naming
+ *   leaves it alone too (user ruling: a session that already has a name is not
+ *   re-named by AI).
  * - missing: 0.x data with no marker. Falls back to the legacy heuristic
- *   ("title differs from deriveSessionMeta"), so old sessions never need a migration.
+ *   ("a genuine title that differs from deriveSessionMeta is kept"), except that
+ *   placeholder titles (empty / 'Untitled' / 'undefined' / 'null') count as
+ *   unnamed and go through AI naming, so old sessions never need a migration.
  */
 export type SessionTitleSource = 'manual' | 'generated';
 
