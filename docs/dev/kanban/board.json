@@ -70,11 +70,11 @@
     },
     {
       "id": "q-log-refactor",
-      "title": "日志metrics/events分离(资源统计移出事件日志)+日志档位勾选态显示",
-      "column": "进行中",
+      "title": "日志metrics/events分离+Prometheus /metrics+日志档位勾选态",
+      "column": "已完成",
       "owner": "q-log-refactor",
       "branch": "fix/q-log-refactor",
-      "progress": "派单：gateway.resources周期WRN统计噪音→指标面板分离,事件日志留有意义事件+错误直报；日志档位无勾选显示→回显当前/默认档"
+      "progress": "merge入main；删gateway.resources周期WRN→Prometheus registry+/metrics端点(8642,回环匿名/远端token,vessel_前缀gauge/counter)；日志档位补fallback回显默认档；usage插件各自暴露不冲突；build绿待用户curl /metrics验收"
     },
     {
       "id": "q-session-naming",
