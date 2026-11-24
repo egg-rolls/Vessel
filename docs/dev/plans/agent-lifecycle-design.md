@@ -144,9 +144,10 @@ function isReleased(record) {
 - **M5 mark-gated GC**：系统 sweep MUST 只回收 `recyclable===true` 且通过安全互锁
   （§4.2）且宽限期已满（§4.3）的成员。未标注成员 MUST NOT 被自动回收——
   **TTL 到期不再是回收理由**。
-- **M6 审批不降级**：标注 peer（`role='member'`，含 main）MUST 走人类审批（ask）；
-  标注 main / 调用者自身 MUST 拒绝（保护名单，§4.5）。GC 执行已获批标注时不再
-  二次审批（审批点在标注，见 §3.2 裁决）。
+- **M6 审批不降级**：标注 peer（`role='member'`）MUST 走人类审批（ask），
+  其中 `main` 绝对保护（直接 deny，连 ask 都不给）；标注调用者自身 MUST 拒绝
+  （完成信号由雇佣者标注或自动标注策略表达，防注入自毁，§3.2）。
+  GC 执行已获批标注时不再二次审批（审批点在标注，见 §3.2 裁决）。
 - **M7 可撤销**：宽限期内任何有权限的主体可 `unmark` 撤销标注；撤销即退出待回收
   清单，GC 永不回收。已回收成员走 `reinstate` 复活（同 id）。
 - **M8 审计完整**：标注（谁 / 何时 / 为何）与回收（时刻 / 原因）MUST 落盘并进
@@ -275,7 +276,118 @@ stateDiagram-v2
 
 ## 3. API 变更
 
-（待扩充：agent 工具 close→mark-recyclable、interrupt 保留、权限矩阵、RPC 变更、service 层）
+### 3.1 agent 工具：`close` → `mark-recyclable`，`interrupt` 保留
+
+`packages/agent/src/tool.ts` 变更：
+
+```text
+ACTIONS:      ['create', 'hire', 'send', 'mark-recyclable', 'unmark', 'list', 'rotate', 'read']
+OWNER_ACTIONS / BODY_ACTIONS 同步替换 'close' → 'mark-recyclable'（+ 'unmark'）
+```
+
+- **`mark-recyclable`**（替代 `close`）：
+  - 入参：`members: [id…]`（批量，沿用 `readBatch`）或 `member: id`（单条，
+    沿用现有互斥校验 `assertExclusive`）；**`reason: string` 必填**（非空，
+    单行截断 500 字符，落 `markReason`）。
+  - 语义：置 `recyclable=true` + 审计三元组；**不 dispose、不改 state/membership、
+    不发终态通知、不级联**。幂等：重复标注刷新 `markedAt`（宽限期重新计时）
+    并更新 reason，返回当前标注状态。
+  - 返回：`{ agent_id, recyclable: true, marked_at, recycle_after }`
+    （`recycle_after = markedAt + grace`，让调用方知道最早回收时刻）。
+- **`unmark`**（新增）：入参同 `members/member`；清四个标注字段，幂等
+  （未标注时返回 `{recyclable:false}` no-op）。权限矩阵与标注相同（§3.2）。
+- **`send interrupt:true` 保留不动**（`tool.ts:493`）：取消活动 run、保全 WIP、
+  消息插队。这是 agent 工具唯一的「停止」手段（M3）。`notify` / `message_id`
+  三档语义不变。
+- **`close` 兼容别名（迁移期）**：`action:'close'` 不报错，映射为
+  `mark-recyclable`（reason 缺省 `'close_requested'`），返回体附
+  `deprecated: "close is now mark-recyclable; nothing is destroyed immediately"`。
+  一个版本周期后移除别名（§7 阶段 3）。**任何情况下都不再触发立即销毁。**
+- **级联废除**：工具路径不再到达 `closeOne`，private 子成员级联 close
+  （`service.ts:6375`）对模型侧彻底消失。owner 被回收后其 private 承包的处置
+  见 §4.6（不级联标注——mark-gated 铁律：没有标注就没有回收）。
+- 工具 description / self card 文案同步：`close: release member(s)` 改为
+  `mark-recyclable: flag member(s) for system auto-recycle (never immediate);
+  unmark: revoke the flag; interrupt remains the only way to stop a run`。
+
+### 3.2 权限矩阵（checkPermission 改造）
+
+沿用 `tool.ts:567` 的结构（owner 调用放行 → 逐目标判定 → 批量含 ask 整体 ask），
+把 `action !== 'close'` 的短路改为 `action !== 'mark-recyclable' && action !== 'unmark'`：
+
+| 调用者 → 目标 | mark-recyclable | unmark | 说明 |
+| --- | --- | --- | --- |
+| root owner（人类）→ 任意 | allow | allow | 管理面全权 |
+| 任意 → **main** | **deny** | allow（人类可清 main 的误标注） | 绝对保护，GC 也永不碰 main（§4.5） |
+| 成员 → **自身** | **deny** | allow | 防提示注入自毁；完成信号由雇佣者标注 / 自动策略表达 |
+| 成员 → peer（member，非 main） | **ask**（人类审批） | ask | 沿用现 close 对 member 的审批口径 |
+| 成员 → 自己雇佣的 temporary | allow | allow | owner 判定不变 |
+| 成员 → 同 Team 的 temporary | allow | allow | 沿用现 close 口径 |
+| 成员 → 其它 temporary | deny | deny | 沿用现 close 口径 |
+
+裁决记录（可挑战点）：
+
+- **审批点在标注，GC 执行不二次审批**。理由：标注已是「同意销毁」的明确意思表示
+  （peer 还经过人类 ask）；GC 只是延迟执行该意思。若 GC 再 ask 一次，等于把
+  「系统自动回收」变回「人工清理」，违背提案④。安全由互锁 + 宽限期 + 可撤销兜底。
+- **self-mark deny** 比现状（self-close allow）更严：立即销毁时代 self-close 是
+  「我干完了」的常规收口；mark-gated 时代 self-mark 会让被注入的 agent 给自己
+  判死刑且宽限期后不可逆（复活需人类）。完成收口改用：雇佣者标注 / 可选自动标注
+  （§4.4）/ 直接 idle 留着（不回收也无害）。
+- **main 连 ask 都不给**：main 是节点入口，回收它等于拆掉整个交互面；
+  人类要清理 main 走管理面硬 close（§3.3 escape hatch），不走标注。
+
+### 3.3 RPC（gateway）变更
+
+`packages/serve/src/gateway/methods/agents.ts`：
+
+- **`agents.mark_recyclable`（新增，write）**：批量
+  `{ agents: [{ agent_id, reason }] }`；team-scoped token 只能标注同 team
+  （沿用 `agents.close` 的 scope 校验）；成功条目
+  `{ ok:true, agent_id, recyclable:true, marked_at, recycle_after }`，与输入同序，
+  单条失败不影响其它条目（`mergeBatchResults` 口径）。
+- **`agents.unmark_recyclable`（新增，write）**：同形批量，清标注。
+- **`agents.close`（保留，write，语义不变）**：立即硬 close，作为**人类管理面
+  escape hatch**（误标注兜底 / 紧急清理 / 迁移期兼容）。agent 工具不再调用它；
+  文档明确「这是管理面特权，不是 agent 能力」。级联 close 仅存于此路径
+  （人类显式选择立即销毁时，private 子成员随 owner 关闭是合理语义）。
+- **`agents.list`（additive）**：status 投影新增
+  `recyclable / marked_by / marked_at / mark_reason`（未标注时缺省不出现，
+  沿用「记录里没有的事实就不出现」口径）；`includeReleases` 历史视图不变，
+  `close_reason='recycled'` 自然进入。
+- **事件**：新增 `agent.marked_recyclable` / `agent.unmarked`（订阅通道与
+  `agent.closed` 同源）；`agent.closed` 的 reason 扩展 `recycled`。
+- `agent-control.ts` 端口接口同步增 `markRecyclable / unmarkRecyclable`。
+
+### 3.4 service 层变更
+
+`packages/agent/src/service.ts`：
+
+```ts
+// 新增（批量语义与 close 同构：allSettled + settleBatch）
+async markRecyclable(input: MarkInput | MarkBatchInput): Promise<…>
+async unmarkRecyclable(input: UnmarkInput | UnmarkBatchInput): Promise<…>
+private markOne(ref, reason, marker): Promise<MarkResult>
+// markOne：requireMember → 保护名单校验（main/self 在权限层已拦，
+// service 层再兜一道：main 恒拒）→ 写四字段 → emit → scheduleSnapshot。
+// 不 dispose、不动 state/membership/presence、不 cancelPeerStopTimer。
+
+// 改造
+sweepIdleTemporaries → sweepRecyclableMembers（§4；判据/互锁/宽限期全换）
+sweepIntervalMs：节奏基准从 temporaryTtlMs 换成 recycleGraceMs（§4.3）
+
+// 保留
+close / closeOne：管理面硬 close 专用（含级联）；reclaimAgent：GC 执行器
+reinstate：复活时增清标注四字段（§2.5）
+```
+
+配置（`packages/config` `agent.*`）：
+
+| 键 | 缺省 | 语义 |
+| --- | --- | --- |
+| `agent.recycleGraceHours` | 24 | 标注 → 可回收的宽限期；0 = 标注后下一个安全 tick 即可回收（不建议） |
+| `agent.autoMarkIdleDays` | 0（关闭） | 可选自动标注策略阈值（§4.4）；0 = 纯 mark-gated |
+| `agent.temporaryTtlHours` | deprecated | 迁移期读作 `recycleGraceHours` 的兼容来源（§7），不再驱动无标注回收 |
 
 ## 4. GC 策略（mark-gated）
 
