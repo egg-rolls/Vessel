@@ -149,3 +149,74 @@
 本分支对 auth.ts 仅注释对齐（frame-src 'self' 的语义说明与 2026-11-23 裁决一致），无行为变更。
 
 ---
+
+## 4. 扫描汇总表
+
+方法回顾：代码级逐路径静态追踪（宪法第三/四条），每格 file:line + 判定；不写测试、不起进程，
+行为验证归用户（§5 各缺口给 oracle 对照单）。
+
+### 4.1 分域汇总
+
+| 域 | 机制链（§x.1） | 矩阵格（§x.2） | [通] | [设计内] | [缺口·修] | [缺口·留] |
+|---|---|---|---|---|---|---|
+| S5 · restart 模式保持 | 19 环（§1.1） | 18 格（4×3 + 补充 6） | 11 | 7 | 0 | 0（G3 为设计内注意项，见 §5） |
+| S6 · 健康/attention 模式路由 | 18 环（§2.1） | 18 格（6×3） | 16 | 0 | 1（G2） | 1（G1） |
+| S7 · 插件 iframe/embed 意图贯彻 | 13 环（§3.1） | 22 格（6×3 + 补充 4） | 21 | 1 | 0 | 0 |
+| **合计** | **50 环** | **58 格** | **48** | **8** | **1** | **1** |
+
+### 4.2 扫描面（26 个文件，跨域去重）
+
+| 域 | 文件 |
+|---|---|
+| S5 | `src/gateway/pid.ts`、`src/gateway/daemon.ts`、`src/gateway-command.ts`、`src/cli.ts`、`src/cli-args.ts`、`src/commands/registry.ts`、`src/cli-help-spec.ts`、`docs/operations/GATEWAY.md` |
+| S6 | `apps/web/src/gateway/bootstrap.ts`、`ConnectionProvider.tsx`、`NodeProvider.tsx`、`nodes.ts`、`client.ts`、`gateway/node/integrations.ts`、`gateway/node/rpc.ts`、`gateway/node/protocol.ts`、`packages/serve/src/platform/proxy-config.ts`、`platform/proxy.ts`、`platform/server.ts` |
+| S7 | `apps/web/src/domains/plugins/PluginFrame.tsx`、`PluginEmbed.tsx`、`plugin-contributions.ts`、`host-factory.ts`、`plugin-catalog.ts`、`packages/serve/src/gateway/auth.ts`、`packages/serve/src/gateway.ts`（+ 与 S5/S6 共享的 `gateway-command.ts`、`proxy-config.ts`、`server.ts`） |
+
+### 4.3 本分支变更清单（WIP 53811383 保全，5 文件）
+
+| 文件 | 性质 | 内容 |
+|---|---|---|
+| `apps/web/src/gateway/NodeProvider.tsx` | **行为修复（唯一）** | G2：fetchAllAttention 改逐节点委托 fetchAttention（当前节点走活连接），错误归一 NodeRpcError 保持结果形状 |
+| `apps/web/src/gateway/nodes.ts` | 注释警示 | fetchAllNodeAttention 标明「纯直连扇出」，含当前节点的扇出必须走 NodeProvider.fetchAllAttention |
+| `apps/web/src/gateway/ConnectionProvider.tsx` | 注释对齐 | selectPlatformNode 说明代理模式不取凭据、只换代理基路径 |
+| `packages/serve/src/gateway/auth.ts` | 注释对齐 | frame-src 'self' 语义改为「兜底同源 framing」，与 2026-11-23 iframe 直连裁决一致（无行为变更） |
+| `docs/dev/research/mode-matrix-audit.md` | 审计文档 | 本文 |
+
+---
+
+## 5. 缺口台账（owner + oracle）
+
+### G1 · [缺口·留] proxy 模式额外节点（非当前）数据面直连 401
+
+- **现象**：代理模式下，非当前节点的 health / attention / teams 拉取必 401。
+- **根因链**：代理能力探测不取 node credentials（bootstrap.ts:109-133）⇒ 接线时清理直连遗留
+  token 槽（ConnectionProvider.tsx:256-258）⇒ 额外节点仍走 fetchNodeRpc / fetchNodeAttention
+  直连 api_url（NodeProvider.tsx:140-146 / 200-206 非 current 分支）⇒ 无 Authorization ⇒ 401。
+- **为什么留**：既有已留档缺口。修复 = 额外节点数据面也代理化（逐节点代理基路径 + 平台鉴权口径），
+  属新的设计决策，超出本次 S6「当前节点走活连接」的任务范围；本次只修同类潜在缺口 G2，不动 G1。
+- **owner**：main（排期裁决）。候选方向（非裁决）：额外节点 health/attention 经
+  `<platform>/nodes/<id>` 代理（每节点一个 proxy client），或由平台提供聚合投影。
+- **oracle（用户行为验证对照）**：proxy 模式 + 注册 ≥2 节点，当前节点 = A 时，面板上 B 节点的
+  健康 / attention 应显示真实数据而非 401/unauthorized；direct 与 legacy 模式行为不变。
+
+### G2 · [缺口·修] fetchAllAttention 统一扇出含当前节点 ⇒ proxy 401（本次已修）
+
+- **现象（修前）**：fetchAllAttention 走 fetchAllNodeAttention 纯直连扇出，当前节点也被直连
+  api_url ⇒ 代理模式当前节点 401（与 S6 基线缺口同类）。
+- **修复**：逐节点委托 fetchAttention（NodeProvider.tsx:208-239），复用「当前节点走活连接、
+  其余直连」路由；GatewayHttpError / 未知错误归一 NodeRpcError，保持 NodeAttentionResult 形状。
+- **owner**：q-modes（已修，本分支）。
+- **oracle**：当前无 UI 消费方（潜在缺口，修后 API 面与单节点口径一致）；静态对照 = 扇出逐节点
+  走 fetchAttention。未来消费方接入后，proxy 模式含当前节点的扇出结果中当前节点应 ok:true。
+
+### G3 · [缺口·留 · 设计内] 旧 pid record（无 daemon 字段）restart 缺省一次性回落前台
+
+- **现象**：升级前已在跑的 daemon 实例，升级后首次 `gateway restart`（缺省）回落前台。
+- **依据**：`record?.daemon === true` 对无字段记录为 false（gateway-command.ts:725）；
+  1aae9ace 提交说明明示此回落，`docs/operations/GATEWAY.md:108-111` 已留档。
+- **自愈**：一次 `gateway start --daemon` 重写 record 后，后续缺省 restart 保持 daemon。
+- **owner**：用户（一次性操作）；文档口径归 main 留档（已完成）。
+- **oracle**：升级后旧 daemon 实例缺省 restart ⇒ 前台运行（预期内）；执行一次
+  `start --daemon` 后再缺省 restart ⇒ 保持 daemon（新 record 带 daemon:true）。
+
+---
