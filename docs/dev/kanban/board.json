@@ -133,6 +133,14 @@
       "progress": "派单：按钮各占整行→紧凑一行工具栏；技能表格卡片包裹；unknown skill id裸错误→优雅降级；对齐工具页面样式+透黑底"
     },
     {
+      "id": "q-fed-simple",
+      "title": "节点互联简化(自动配对握手+自动写配置热应用+回环自动发现)",
+      "column": "进行中",
+      "owner": "q-fed-simple",
+      "branch": "feat/q-fed-simple",
+      "progress": "派单：免手动peers/token env/重启；federation join握手验证→自动写配置热应用+token经hub自动交换+回环auto-join；复用federation-hub基础"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
