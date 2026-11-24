@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "流程纠正:之前误把修复直接ff main跳过金丝雀闸门;现生产runtime未重启(新代码未生效)闸门还在;金丝雀同步723fb673+重启pid111284;canary-test已验超时去重+会话壳通过;canary-verify2(1ad01e3d)补验日志/命名/滚动/UI/media/SKILLS六项;全过前不重启生产"
+      "progress": "金丝雀同步74d3a4d3(全修复)+启用media(plugins全集+skills镜像生产)+重启pid174456；canary-verify2六项5过media待验；canary-verify3(8e09121e)终验media view+4新修复(权限统一/技能库样式/命名undefined/互联简化)；全过晋升main+用户重启"
     },
     {
       "id": "q-node-target",
