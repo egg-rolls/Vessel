@@ -289,11 +289,50 @@ import 网全平铺。本方案把 136 个文件按**语义**归入 **14 个领�
 
 ## 3. 领域关键词表（供 agent 分类新文件）
 
-（第2步补全）
+分类口诀：**先问「它装配/服务的是哪个领域」，再看前缀**。前缀只是线索，语义才是判据；
+`*-wiring`/`*-factory` 归「被装配物」的领域，不归装配动作本身（bootstrap 除外，它是装配序之根）。
+
+| 领域 | 关键词（命中即候选） | 命名约定 | 边界判据 / 反例 |
+|---|---|---|---|
+| cli/ | cli、args、help、completion、command、退出码、exit code、渲染、output、NO_COLOR、headless、入口模式、--run/--pipe/--serve 分发 | 框架件裸名（args.ts/help.ts/output.ts）；命令 `<ns>-command.ts` 进 `commands/<ns>/` | 只收「解析/分派/渲染/入口模式」。命令调用的业务实现归业务域（反例：stop-command 在 cli/，stopGateway 接缝在 gateway/） |
+| agent/ | agent、member、team、body、AgentService、owner、self-card、inbox、peer、send 投递、ask 答案 | agent-*、*-delivery（成员交互向） | 成员/团队能力装配。反例：agent 命令在 cli/commands/agent/；federation 跨节点投递在 federation/ |
+| session/ | session、timeline、续接、resume（会话向）、写锁、liveness、context_usage、system_context、sessions.get 读数面 | session-*、timeline-*、*-usage/*-context 读数面 | 会话壳与其持久化/读数。反例：run 记录在 run/；会话锁的 data-dir 锁基建在 data/ |
+| run/ | run、durable、RunRecordStore、runs.*、lease、租约、终态等待、interrupted | run-*、durable-* | 一次执行的记录/控制/调度。反例：--resume-run 命令在 cli/；run 的会话锁在 session/ |
+| config/ | config、settings、热应用、hot-apply、reload applier、覆盖层、overrides、watch（配置向）、校验错误格式 | config-*、*-settings、hot-apply-* | 配置模型与生效链路。反例：gateway.reload 的 RPC 受理在 gateway/；插件自身配置在 plugin/ |
+| plugin/ | plugin、manifest、loader、selection、MCP 接线、插件宿主、eval/feishu 等插件类别接线 | plugin-*、<类别>-wiring（插件向） | 唯一运行期插件机制（ADR-037/099）。反例：engine 模式 MCP shell 在 tools-engine/；插件命令在 cli/ |
+| gateway/ | gateway、serve、platform、实例锁、pid、supervisor、adopt、handoff、drain（平台向）、shutdown、banner、web-dist、token→principal | gateway-*、serve-*、shutdown-* | 平台层生命周期与 serve 面。反例：node 自身 drain/resume 在 node/；舰队 stop 编排在 cli/commands/fleet/ |
+| hub/ | hub、join、pairing、directory、配对码、hub 控制面 | hub-*（既有目录内裸名亦可） | Hub 控制面与配对。反例：hub 命令在 cli/commands/hub/ |
+| node/ | node（身份/生命周期向）、node.json、drain（node 向）、resume 标记、token 派生、根密钥 | node-*、token-derive | node 组件自身。反例：平台视角的 node 监管在 gateway/node-supervisor；node 命令在 cli/ |
+| federation/ | federation、跨节点、agent@node:team、attention、出站 client、send port | federation-*、attention-* | 跨节点寻址与投递。反例：本机成员 send 在 agent/ |
+| tools-engine/ | tools-engine、engine、worker、工具执行、工具清单、--tools、MCP host shell | 既有目录内裸名；迁入件保留原名 | 工具执行引擎（child/pool）。反例：工具权限规则持久化在 data/；工具名兼容换算在 config/ |
+| observability/ | log、trace、timing、观测、usage、计价、诊断日志 | logging、*-wiring（观测向）、startup-timing | 观测数据的装配与计价。反例：logs/errors/trace 命令在 cli/；关闭失败报告与关闭序列成对在 gateway/ |
+| runtime/ | bootstrap、装配序、provider、model-registry、reasoning、tenant 执行面、通知总线、runtime.notice、元工具、进程兜底 | bootstrap、*-factory（core 运行时向）、runtime-notice* | 核心运行时整体装配与运行期机制。反例：单一领域的 wiring 归该领域（session-factory→session/） |
+| data/ | data-dir、路径解析、写锁（data-dir 向）、migrate、prune、留存、附件、attachment、blob、GC、permission-store | data-*、attachment*、image-blob-* | 数据落盘的路径/锁/迁移/留存/附件。反例：会话事件持久化端口在 session/（它是会话域端口，不是通用存储） |
+| shared/ | 版本读取、EADDRINUSE 等**无领域语义**纯叶子 | 裸名短词 | 准入：≥2 个领域共用 + 纯函数/只读 + 无领域状态。拿不准 → 问 main，不进 shared |
+| i18n/ | 文案、catalog、MessageKey、t() | messages/<lang>.ts | 只放文案，不放逻辑 |
+| rpc/ | RPC client、HttpRpcClient、local-client、RPC 类型 | 裸名 | 传输客户端基建；控制面目标解析（CLI 向）在 cli/ |
+| update/ | 自更新、latest.json、channel、install-detect、semver | 裸名 | 更新机制；`vessel update` 命令在 cli/commands/update/ |
+| mock/ | VESSEL_MOCK、场景 | scenarios.ts | 仅 mock 场景数据 |
 
 ## 4. 管理规范（新文件规则）
 
-（第2步补全）
+1. **顶层冻结**：`src/` 顶层只允许 `cli.ts` 一个 .ts。新增顶层文件 = 违规（gov 记录、main 要求整改）。
+2. **≥3 簇必进目录**：某领域已有 ≥3 个文件（含既有目录），该领域新文件**必须**进 `src/<domain>/`，
+   不得再平铺。隐式前缀簇达到 3 个文件时，按 §3 关键词表认领领域目录（没有对应目录则按第 3 条建新目录）。
+3. **新子系统 ≥3 文件必建目录**：新子系统预计/已有 ≥3 个文件，先建 `src/<domain>/` 再落文件；
+   目录名 = 单数名词、kebab-case、与 §3 关键词表登记同步（改本文 §1/§3 即登记）。
+   1–2 个文件的萌芽子系统：挂语义最近的既有领域，并在文件头注释写明「候选独立域」；满 3 个再拆。
+4. **shared/ 严格准入**：只收「≥2 领域共用 + 无领域语义 + 纯函数/只读」的叶子（§3）。
+   禁止把跨切难题扔进 shared 逃避归类；跨切 wiring 按「被装配物」归域（§3 口诀）。
+5. **命令三件套**：新命令 = `cli/commands/<ns>/` 文件 + help-spec 条目 + 稳定码/退出码登记
+   （cli-conventions §9.4），输出走 cli/output.ts 单一渲染。
+6. **纯移动纪律**：relocation commit 不混行为变更（cli-conventions §8.2）；改名只允许设计文档点名的。
+7. **与 FILE-MANAGEMENT.md 衔接**：本文是 FILE-MANAGEMENT §3.3「代码」在 `src/**` 内的细化；
+   路径独占不变（src/** 归 asm，本文档归 gov 审查、本任务经 main 授权代写）。
+   冲突时以 FILE-MANAGEMENT 为准，本文修订需 main 确认。
+8. **与 docs/agents/*.md 衔接**：各角色 handoff/领域文档引用 src 路径时以本文映射为准；
+   阶段2落地后同步 docs/architecture/*.md 的 paths frontmatter（见 §8 C5）。
+   AGENTS.md 不重复本文细节，只加一行指针（随阶段2收口提交）。
 
 ## 5. import 重写策略与影响面
 
