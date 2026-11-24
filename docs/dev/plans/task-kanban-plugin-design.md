@@ -1,6 +1,6 @@
 # 任务看板插件（kanban）设计
 
-> 状态：设计中（q-kanban，design/q-kanban 分支）
+> 状态：设计完成（q-kanban，design/q-kanban 分支；待 main 评审，实施另派单）
 > 任务书：main 派单「任务看板插件设计（只读文件弹窗+路径设置）」。
 > 性质：**纯设计文档，不改代码**。实施按 §12 分期，另派单执行。
 > 宪法约束：零测试 / 零探针 / 零临时进程；构建期检查只有 `bun run build`；行为验证由用户手动完成。
@@ -231,7 +231,7 @@ interface BoardDTO {
 | `refreshIntervalMs` | `integer`（minimum 0） | `10000` | 页面可见期自动轮询间隔；`0` = 纯手动刷新 |
 | `showArchive` | `boolean` | `true` | 是否显示归档 tab（板内有 archive 指针时才有内容） |
 
-兼容别名：`paths: string[]`（只给路径的简写）在解析时归一化为 `boards`；两者同时存在时 `boards` 优先。settings 声明只写 `boards`（别名不进 manifest schema，避免 q-settings 渲染出两个入口）。
+兼容别名：`paths: string[]`（只给路径的简写）在解析时归一化为 `boards`；两者同时存在时 `boards` 优先。settings 声明只写 `boards`（别名不进 manifest schema，避免 q-settings 渲染出两个入口）。P2 追加 `archiveHintDays`（integer，缺省 7，归档候选徽章阈值，§9.3）——additive，一期不声明。
 
 manifest 片段（JSON Schema 子集，宿主 v1 不自动渲染表单，渲染是 q-settings 的事）：
 
@@ -266,7 +266,8 @@ plugins:
       boards:
         - id: redblue
           title: 红蓝开发看板
-          path: D:/Application/APP/Vessel/Vessel/docs/dev/kanban/board.json
+          # board.json 由 main 在 redblue-dev 分支维护；路径指向其 worktree 检出
+          path: D:/Application/APP/Vessel/worktrees/redblue-dev/docs/dev/kanban/board.json
         - path: ./docs/dev/kanban/board.json     # 相对项目根（node 宿主 cwd）
       refreshIntervalMs: 10000
       showArchive: true
@@ -388,7 +389,7 @@ type BoardGetResult =
 ### 7.3 「弹窗」路线（用户意图②的弹窗/页面二选一）
 
 - **P1 = 页面**（上文）。理由：SDK dialog / mounts / router 在 embed 契约 P3 才落地；宿主现有 `Modal.tsx` 是宿主私有组件，插件拿不到挂载口。一期用页面完整满足「展示」意图，不新造宿主缝。
-- **P2 候选 = 快速看板弹窗**：两条路线届时择一（依赖宿主进度，不在本插件内实施）：
+- **P3 候选 = 快速看板弹窗**（与 §12 P3 同口径）：两条路线届时择一（依赖宿主进度，不在本插件内实施）：
   1. SDK `host.dialog`（embed 契约 P3）落地后，kanban 声明 command「打开看板弹窗」，任意页面经命令面板唤起，内容复用 KanbanView 的紧凑变体（只读列视图，无设置节）。
   2. 若 P3 未落地而用户急需：宿主侧 additive 一个「看板速览」Modal 挂点（宿主改动，需 main 裁定），插件仍只供数据 RPC。
 - 结论：**弹窗是展示形态的增量，不是数据面的变化**——RPC/设置/刷新设计对两种形态完全通用。
@@ -552,13 +553,58 @@ plugins/observability/kanban/
 
 ## 12. 分期计划
 
-（待扩充：P1 最小闭环 / P2 归档+设置协同 / P3 弹窗+推送，各期交付与验收）
+每期独立可交付、独立验收；后一期不阻塞前一期上线。实施另派单（本任务只交付设计）。
+
+### P1 — 最小只读闭环（核心交付）
+
+| 项 | 内容 |
+| --- | --- |
+| 插件骨架 | `plugins/observability/kanban`：Plugin 对象 + rpc 分发 + 装配登记（§11.3） |
+| 数据面 | `boards_list` / `board_get`（含 ifMtime 条件、§4 校验分级、2 MiB 上限）；settings 读（loadConfig 每次现读） |
+| 设置 | §5.1 三键声明 + `settings_set` 写 config.yaml（withConfigLock）+ 路径白名单/containment |
+| UI | embed 页 KanbanView：板切换、列视图、卡片、note banner、手动刷新 + 可见期轮询 + focus 补刷、错误/空态、过渡期设置节；iframe 回退产物 |
+| 不做 | 归档视图、markdown、弹窗、事件推送、宿主通用写缝 |
+| 验收（用户手动） | ① 配置现有 redblue board.json 路径 → 页面渲染与文件内容一致（撰写时 4 列 11 任务）；② main 改板 → 10s 内自动更新；③ 配第二个路径 → 切换器出现；④ 配错误路径/坏 JSON → 对应错误态不崩宿主；⑤ 设置节增删路径 → config.yaml 落盘且页面即时生效；⑥ `bun run build` exit 0 |
+
+### P2 — 归档 + 设置协同
+
+- `archive_get` 分页读 + 归档 tab（DataTable + query）+ 归档候选徽章（`archiveHintDays`）。
+- markdown 板解析（§4.5 约定式）。
+- q-settings 落地后：设置节收起为域跳转；若宿主通用 `plugins.settings.set` 已落地则迁移（deprecated 转发）。
+- 验收：归档 12 条可翻页可过滤；坏归档只影响归档 tab；q-settings 域内改路径与插件页行为一致。
+
+### P3 — 弹窗 + 推送（依赖宿主进度，需 main 裁定）
+
+- 快速看板弹窗：SDK dialog（embed 契约 P3）或宿主 Modal 挂点，二选一（§7.3）。
+- 文件监听 + 插件→UI 事件推送（需宿主 additive 事件缝，§8）。
+- `archive.ndjson` 大历史格式（可选）。
+- 一键归档 write RPC：**仅当用户显式批准推翻只读约束**才启动设计（§9.3）。
 
 ## 13. 风险与缓解
 
-（待扩充）
+| # | 风险 | 影响 | 缓解 |
+| --- | --- | --- | --- |
+| 1 | 配置路径指向敏感文件（误配/恶配），插件读并展示 | 信息泄露 | 只读白名单 = 显式配置路径（用户自己配的即授权）；archive 指针 containment（§5.3）挡文件内容诱导；UI 展示路径全名让用户可见可纠；不递归目录、不 glob |
+| 2 | 板文件被并发写（main 正在改）读到半截 JSON | parse 错误闪烁 | 读失败保留上次成功渲染 + 状态点变灰，下次轮询自愈；维护者约定原子写（write 临时文件 + rename，插件侧不要求但文档建议） |
+| 3 | mtime 精度不足致轮询漏更新 | 板面 stale | mtime+size 双条件；手动刷新必达；focus 补刷；P3 watch 兜底 |
+| 4 | Windows / WSL 路径口径混淆（`D:/…` vs `/mnt/d/…`） | 配了路径读不到 | 路径 = 宿主 OS 口径（§5.3），错误态回显解析后的绝对路径 + exists=false，用户一眼可纠；不做跨 OS 翻译（避免第二套路径真相） |
+| 5 | 大板 / 大归档打爆内存或 RPC 帧 | 宿主卡顿 | 2 MiB 文件上限 + 2000 任务软上限 + 归档分页（limit 缺省 50 上限 200） |
+| 6 | in-process 插件崩溃拖垮 node 宿主 | 节点不可用 | 插件代码全 try/catch 收敛为结构化 RPC 错误（registry toRpcError 兜底）；无后台定时器（轮询在浏览器侧）；无子进程 / 无 net |
+| 7 | settings_set 与 config.set / CLI 并发写 config.yaml | 配置丢失 | withConfigLock 跨进程锁 + lock 内 read-modify-write + 只改 kanban 块（model-registry 已验证模式） |
+| 8 | q-settings 设计未定，协同契约漂移 | 返工 | §10 三件套全部走**现有** catalog/config.get 面，无私有缝；写路径 P1 自持不依赖 q-settings；通用写缝只是 P2 迁移项 |
+| 9 | embed 契约 P3（dialog/mounts）延期 | 弹窗形态缺位 | 页面形态 P1 完整满足展示意图；弹窗是纯增量（§7.3），数据面零改动 |
+| 10 | 现有 board.json 形状演进（main 加字段） | 解析降级 | 宽进严出 + 未知键容忍（§4.4）；schemaVersion 只在破坏性变更时 bump；v0 永远可读 |
+| 11 | 插件被误当写入方（用户期待插件内拖拽改板） | 预期落差 | 文档 / UI 明示「只读 · 由 main 维护」note banner；拖拽编辑明确不在范围（推翻只读需用户批准，§9.3） |
 
-## 14. 参考
+## 14. 验收与宪法合规
+
+- **零测试 / 零探针 / 零临时进程**：本设计不含任何测试计划；实施期构建期检查只有 `bun run build`（typecheck + biome ci）与构建产物读数；行为验证由用户按 §12 各期验收单手动完成。
+- **不改代码（本任务）**：本分支只提交本文档；实施另派单。
+- **机制在 harness**：不新造注册表 / 配置解析 / RPC 通道；全部复用 §1 盘点出的现有缝；唯一提议的宿主新缝（plugins.settings.set / 事件推送 / dialog）均标注为宿主侧 additive、需 main 裁定、不阻塞插件 P1。
+- **真相源唯一**：板内容真相在磁盘文件（main 维护），设置真相在 config.yaml；插件内存只有派生只读缓存。
+- **additive 纪律**：schema 新字段全可缺省；现有 board.json / 旧插件 / 旧客户端零影响。
+
+## 15. 参考
 
 - `docs/architecture/plugins.md` / `docs/architecture/plugin-embed.md` / `docs/adr/ADR-102-host-level-ui-mount.md`
 - `packages/plugin-sdk/src/index.ts`、`src/plugin-manifest.ts`、`src/plugin-host-assembly.ts`、`src/plugin-config.ts`
