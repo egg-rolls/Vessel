@@ -24,7 +24,7 @@ import {
   resolveRequestEdge,
 } from '../gateway/auth.js';
 import { serveStatic } from '../gateway/static.js';
-import { logEvent } from '../log-event.js';
+import { createPlatformMetrics } from './metrics.js';
 import { platformTokenMatches, platformUnauthorizedMessage, resolvePlatformAuth } from './auth.js';
 import { platformListenGuard } from './listen-guard.js';
 import { PlatformProxy } from './proxy.js';
@@ -103,6 +103,7 @@ const RESERVED_PLATFORM_PREFIXES: readonly string[] = [
   '/auth/',
   '/web/',
   '/health',
+  '/metrics',
   '/build.json',
 ];
 
@@ -722,36 +723,14 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
   };
 
   /**
-   * 0.57：**周期性资源采样**（每 `VESSEL_RESOURCE_SAMPLE_MS`，缺省 60s 一行）。
+   * 日志/指标分离：资源统计是**统计指标**，不是**时间事件**。
    *
-   * 为什么要有：0.56 那次 Bun segfault 之后我们才发现「崩之前没有任何曲线」——
-   * 只有尸体和一串事件，无法判断是泄漏到爆还是瞬时非法调用。这一行让「崩之前」
-   * 变成可回看的：rss/heap/代理并发/流式模式/WS 活跃与待发字节。
-   *
-   * 只在能拿到代理统计时打（`proxy.stats()`），不拿网关自身的内存冒充代理开销。
+   * 原先每 60s 打一行 `gateway.resources` WRN 进事件日志 —— 全是噪音，淹没有用的
+   * 时点事件与错误。现在登记进 Prometheus registry，经 `/metrics` 端点按 pull 模型
+   * 暴露（scrape 时求值）：时序曲线交给外部 Prometheus/Grafana，事件日志不再出现
+   * 周期资源行，也没有周期定时器。见 `./metrics.ts`（指标族）与 `../prometheus.ts`。
    */
-  const resourceSampleMs = Number(process.env.VESSEL_RESOURCE_SAMPLE_MS ?? 60_000);
-  const resourceTimer = setInterval(
-    () => {
-      if (!Number.isFinite(resourceSampleMs) || resourceSampleMs <= 0) return;
-      const usage = process.memoryUsage();
-      const proxyStats = proxy.stats();
-      logEvent('warn', 'gateway.resources', {
-        uptime_s: Math.round(process.uptime()),
-        rss_mb: Math.round(usage.rss / 1048576),
-        heap_mb: Math.round(usage.heapUsed / 1048576),
-        http_requests: proxyStats.http_requests,
-        http_failures: proxyStats.http_failures,
-        http_inflight: proxyStats.http_inflight,
-        passthrough: proxyStats.http_passthrough_streams,
-        mode: proxyStats.http_stream_mode,
-        ws_active: proxyStats.ws_active,
-        ws_pending: proxyStats.ws_pending_bytes,
-      });
-    },
-    Number.isFinite(resourceSampleMs) && resourceSampleMs > 0 ? resourceSampleMs : 60_000,
-  );
-  resourceTimer.unref?.();
+  const metrics = createPlatformMetrics({ stats: () => proxy.stats(), version });
 
   const server = Bun.serve<PlatformWsData>({
     port: opts.port,
@@ -868,6 +847,29 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
           200,
           extra,
         );
+      }
+
+      // 日志/指标分离：`/metrics` 以 Prometheus exposition format 暴露资源指标（pull）。
+      // 与 `/health` 同口径：不放公网（回环或已认证才可读）—— 资源开销同样是内部事实。
+      // 本机 Prometheus 走回环匿名；远端 scrape 带平台 token（Bearer）。
+      if (path === '/metrics') {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          return errorJson('not_found', `Not found: ${path}`, 404, extra);
+        }
+        if (!auth.loopback && !auth.ok) {
+          return errorJson('platform_unauthorized', platformUnauthorizedMessage(auth), 401, extra);
+        }
+        const body = metrics.render();
+        return new Response(req.method === 'HEAD' ? null : body, {
+          status: 200,
+          headers: {
+            // Prometheus text exposition format 的标准 Content-Type。
+            'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff',
+            ...extra,
+          },
+        });
       }
 
       // 0.57：`/build.json` 是**实时**响应（静态构建戳 + 服务端现场判断），必须自己
@@ -1076,7 +1078,6 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
       // 0.58：代理 WS 同理 —— 不让一条事件流把停服卡死；关闭时按 `who: 'platform'` 记账。
       proxy.closeAll();
       clearInterval(authCleanupTimer);
-      clearInterval(resourceTimer);
       // 0.61：自查定时器跟着平台一起停（网关停了不该还在跑 tsc）。
       if (webBuildCheckTimer !== undefined) clearInterval(webBuildCheckTimer);
       await authService.flush();
