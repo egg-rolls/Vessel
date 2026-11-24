@@ -10,15 +10,15 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "首轮验收DONE 4/4通过(早退34/34+seamless零疤痕+显示20/20+计划C布局暗礁)；federation env_file修复canary侧无skipped；遗留:canary node真端到端需先建成员(q-node-target targeting解决中)；生产侧federation待用户重启"
+      "progress": "首轮验收4/4通过+真canary agent canary-probe(56112218)经targeting建成跑canary新代码做真端到端验收(async bash来源/空响应seamless/增量卡)；federation canary侧env_file通；生产侧待用户重启+晋升拍板"
     },
     {
       "id": "q-node-target",
       "title": "CLI 指定 node 操作（--connect/--node targeting，任意 node 建 agent）",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-node-target",
       "branch": "fix/q-node-target",
-      "progress": "派单：CLI桥默认宿主→加全局--connect/--node targeting，让agent/team/session落到指定node（canary 8654），用户裁决理想态"
+      "progress": "merge 4041e57c；--connect/--node targeting实现缺省零破坏；canary建agent正确姿势--connect http://127.0.0.1:8652 --node 7377657b(回环匿名)，--node单独走PID探测找生产是坑"
     },
     {
       "id": "g1-proxy-node",
