@@ -331,7 +331,24 @@ export type FederationCommand =
       members?: number;
       json: boolean;
     }
-  | { kind: 'peers'; json: boolean };
+  | { kind: 'peers'; json: boolean }
+  /** `federation peer add`：写用户配置 federation.peers（对象数组，不走标量 config.set）。 */
+  | {
+      kind: 'peer-add';
+      nodeId: string;
+      teamId: string;
+      tokenEnv: string;
+      url?: string;
+      direction: 'in' | 'out' | 'both';
+      localTeamId?: string;
+      allowDirectory: boolean;
+      caFile?: string;
+      json: boolean;
+    }
+  /** `federation peer list`：与 `federation peers` 同一渲染（token 绝不打印）。 */
+  | { kind: 'peer-list'; json: boolean }
+  /** `federation peer remove <label|node-id>`：label = `<nodeId>:<teamId>`。 */
+  | { kind: 'peer-remove'; target: string; json: boolean };
 
 /**
  * `vessel model ...` 子命令：model-registry 插件 canonical RPC 的 CLI 包装。
@@ -3983,6 +4000,10 @@ function parseFederationArgs(rest: string[], args: CliArgs): ParseResult {
   }
   const tail = rest.slice(1);
 
+  if (sub === 'peer') {
+    return parseFederationPeerArgs(tail, args);
+  }
+
   if (sub === 'peers') {
     let json = false;
     for (const a of tail) {
@@ -4107,6 +4128,158 @@ function parseFederationArgs(rest: string[], args: CliArgs): ParseResult {
     from,
     content,
     ...(conversationId !== undefined ? { conversationId } : {}),
+    json,
+  };
+  return { ok: true, args };
+}
+
+/**
+ * `federation peer add|list|remove`（q-federation）：peer 动态管理。
+ *
+ * peers 是对象数组，不走标量 `config.set` 白名单；这里只做语法与必填，
+ * 身份 / 重复 / 自指等语义校验在 `commands/federation-peer.ts`。
+ */
+function parseFederationPeerArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === undefined || sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  const tail = rest.slice(1);
+
+  if (sub === 'list') {
+    let json = false;
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      return { ok: false, error: `Unknown argument for federation peer list: ${a}` };
+    }
+    if (args.help) return { ok: true, args };
+    args.federationCommand = { kind: 'peer-list', json };
+    return { ok: true, args };
+  }
+
+  if (sub === 'remove') {
+    let json = false;
+    let target: string | undefined;
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for federation peer remove: ${a}` };
+      }
+      if (target !== undefined) {
+        return { ok: false, error: 'federation peer remove takes exactly one <label|node-id>' };
+      }
+      target = a;
+    }
+    if (args.help) return { ok: true, args };
+    if (target === undefined || target === '') {
+      return {
+        ok: false,
+        error: 'federation peer remove requires <label|node-id> (label = <nodeId>:<teamId>)',
+      };
+    }
+    args.federationCommand = { kind: 'peer-remove', target, json };
+    return { ok: true, args };
+  }
+
+  if (sub !== 'add') return { ok: false, error: `Unknown federation peer subcommand: ${sub}` };
+
+  let json = false;
+  let allowDirectory = false;
+  let nodeId: string | undefined;
+  let teamId: string | undefined;
+  let tokenEnv: string | undefined;
+  let url: string | undefined;
+  let localTeamId: string | undefined;
+  let caFile: string | undefined;
+  let direction: 'in' | 'out' | 'both' = 'both';
+  const valueFlags = new Set([
+    '--node-id',
+    '--team-id',
+    '--token-env',
+    '--url',
+    '--direction',
+    '--local-team-id',
+    '--ca-file',
+  ]);
+  for (let i = 0; i < tail.length; i++) {
+    const a = tail[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--allow-directory') {
+      allowDirectory = true;
+      continue;
+    }
+    if (valueFlags.has(a)) {
+      const value = readFlagValue(tail, i, a);
+      if (!value.ok) return value;
+      if (a === '--node-id') nodeId = value.value;
+      else if (a === '--team-id') teamId = value.value;
+      else if (a === '--token-env') tokenEnv = value.value;
+      else if (a === '--url') url = value.value;
+      else if (a === '--local-team-id') localTeamId = value.value;
+      else if (a === '--ca-file') caFile = value.value;
+      else {
+        if (value.value !== 'in' && value.value !== 'out' && value.value !== 'both') {
+          return {
+            ok: false,
+            error: `Invalid --direction: ${value.value} (expected in | out | both)`,
+          };
+        }
+        direction = value.value;
+      }
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for federation peer add: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  if (nodeId === undefined) {
+    return { ok: false, error: 'federation peer add requires --node-id <node_id>' };
+  }
+  if (teamId === undefined) {
+    return { ok: false, error: 'federation peer add requires --team-id <team_id>' };
+  }
+  if (tokenEnv === undefined) {
+    return { ok: false, error: 'federation peer add requires --token-env <ENV_NAME>' };
+  }
+  // validator 同规则：direction 含 out 必须有 url（入站-only peer 可以没有）。
+  if (direction !== 'in' && url === undefined) {
+    return {
+      ok: false,
+      error: 'federation peer add requires --url <base-url> when direction includes out',
+    };
+  }
+  args.federationCommand = {
+    kind: 'peer-add',
+    nodeId,
+    teamId,
+    tokenEnv,
+    direction,
+    allowDirectory,
+    ...(url !== undefined ? { url } : {}),
+    ...(localTeamId !== undefined ? { localTeamId } : {}),
+    ...(caFile !== undefined ? { caFile } : {}),
     json,
   };
   return { ok: true, args };

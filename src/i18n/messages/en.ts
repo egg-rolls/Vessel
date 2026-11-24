@@ -122,6 +122,11 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.federationPeers': 'list federation peers and whether their tokens are set',
   'help.cmd.federationTeamInfo':
     'query an allowlisted peer team directory (requires allowDirectory)',
+  'help.cmd.federationPeerAdd':
+    'add a federation peer to user config and hot-reload the running gateway (no restart)',
+  'help.cmd.federationPeerList': 'list configured federation peers (tokens are never printed)',
+  'help.cmd.federationPeerRemove':
+    'remove a federation peer by label (<nodeId>:<teamId>) or node id, then hot-reload',
   'help.cmd.help': 'show this help',
   'help.cmd.helpCommand': 'show one command in place (same as `vessel <command> -h`)',
   'help.cmd.globalDataDir': 'data directory only (isolated instance); CLI > env > config',
@@ -146,6 +151,8 @@ export const en: Record<MessageKey, string> = {
   'help.group.config': 'read / write user configuration',
   'help.group.dev': 'development-only maintenance commands',
   'help.group.federation': 'cross-node team delivery and directory queries',
+  'help.group.federationPeer':
+    'manage federation peers in user config (add / list / remove, hot-reload)',
   'help.group.gateway': 'gateway lifecycle and instance management',
   'help.group.gatewayNodes': 'local nodes in nodes.json',
   'help.group.hub': 'hub service and node joining',
@@ -244,6 +251,13 @@ export const en: Record<MessageKey, string> = {
   'flag.entry': 'vendor entry (JSON object: protocol / baseUrl / credential / apiKeyEnv / models)',
   'flag.valueEnv': 'read the credential value from this environment variable (never in argv)',
   'flag.valueStdin': 'read the credential value from stdin (never in argv)',
+  'flag.nodeId': 'peer node id (the other node, never this node)',
+  'flag.teamId': 'peer team id (slug on the other node)',
+  'flag.url': 'peer node base URL (node port; loopback may use http)',
+  'flag.direction': 'allowed delivery direction: in | out | both (default both)',
+  'flag.localTeamId': 'map the peer team to a different local team id',
+  'flag.allowDirectory': 'allow inbound team-info directory queries from this peer',
+  'flag.caFile': 'CA bundle path for the peer TLS connection',
   'flag.help': 'show usage for this command',
 
   // ── common ──
@@ -532,6 +546,31 @@ export const en: Record<MessageKey, string> = {
     'token_env={tokenEnv}  token={token}',
   'federation.peers.tokenSet': 'set',
   'federation.peers.tokenUnset': 'missing',
+  // ── federation peer add/list/remove（q-federation）──
+  'federation.peer.added': 'peer {label} added to {path}',
+  'federation.peer.removed': 'peer {label} removed from {path}',
+  'federation.peer.reloaded': 'running gateway reloaded ({scopes})',
+  'federation.peer.reloadSkipped':
+    'no running gateway found; the change applies via config watch or on next start',
+  'federation.peer.reloadFailed':
+    'gateway reload failed: {detail} (config watch will retry; otherwise restart the gateway)',
+  'federation.peer.notFound': 'no configured peer matches "{target}"',
+  'federation.peer.ambiguous':
+    'multiple peers match "{target}": {labels}; use the full <nodeId>:<teamId> label',
+  'federation.peer.duplicate': 'peer {label} already exists in {path}',
+  'federation.peer.selfPeer': 'node id "{node}" is this node; a peer must point at another node',
+  'federation.peer.invalidNodeId': 'invalid --node-id "{value}" (expected [A-Za-z0-9_-]{1,64})',
+  'federation.peer.invalidTeamId':
+    'invalid --team-id "{value}" (expected a lowercase slug: [a-z0-9][a-z0-9-]{0,63})',
+  'federation.peer.invalidTokenEnv':
+    'invalid --token-env "{value}" (expected an environment variable name)',
+  'federation.peer.invalidLocalTeamId': 'invalid --local-team-id "{value}" (expected a team slug)',
+  'federation.peer.invalidUrl': 'invalid --url "{value}": {message}',
+  'federation.peer.invalidCaFile': '--ca-file must be a non-empty path',
+  'federation.peer.invalidBlock': '{block} in user config must be a YAML object / array',
+  'federation.peer.writeFailed': 'failed to write {path}: {detail}',
+  'federation.peer.tokenUnset':
+    'token env {env} is not set in this shell; the gateway resolves it from its own environment or env_file',
   'federation.teamInfo.title': 'Team {teamId}',
   'federation.teamInfo.online': 'online {online} / {total}',
   'federation.teamInfo.members': 'Members ({count}):',
