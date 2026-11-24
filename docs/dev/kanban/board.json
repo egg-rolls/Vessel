@@ -1,0 +1,19 @@
+{
+  "board": "vessel 红蓝开发任务看板",
+  "updated": "2026-11-23T23:30:00+08:00",
+  "columns": ["待办", "进行中", "已完成", "阻塞"],
+  "note": "本文件由 main 维护，任务看板插件只读此文件弹窗展示。历史完成任务归档至 archive.json，本板只留当前内容。",
+  "tasks": [
+    { "id": "q-validation", "title": "O1 DTO语义对齐 + O3 校验分层 + S3 owner/oracle", "column": "已完成", "owner": "q-validation", "branch": "fix/q-validation", "progress": "已合入 redblue-dev (merge 8694a681)，build exit 0" },
+    { "id": "q-serving", "title": "S8 双轨 serving 全链审计 + 8处同类修复 + S4 URL统一", "column": "已完成", "owner": "q-serving", "branch": "fix/q-serving", "progress": "已合入 redblue-dev (merge 28ea00ba)，build exit 0" },
+    { "id": "q-modes", "title": "S5/S6/S7 模式矩阵审计 + apps/web 同类扫描", "column": "进行中", "owner": "q-modes", "branch": "fix/q-modes", "progress": "主体完成，WIP保全 53811383；剩审计文档§3-§6收尾 + bun run build + 最终报告" },
+    { "id": "q-pool-design", "title": "O4 pool 韧性复杂度评审（纯文档）", "column": "阻塞", "owner": "q-pool-design", "branch": "fix/q-pool-design", "progress": "两次大文档生成空输出失败；降阶最小交付重做中" },
+    { "id": "q-cli", "title": "CLI 规范架构文档（命令分层/动词契约/输出契约）", "column": "待办", "owner": "q-cli", "branch": "design/q-cli", "progress": "工作树已建，派单中" },
+    { "id": "q-redblue", "title": "红蓝版本手册调研（业界方法→vessel原语映射）", "column": "待办", "owner": "q-redblue", "branch": "design/q-redblue", "progress": "工作树已建，派单中" },
+    { "id": "q-skills", "title": "SKILLS 插件设计（管理+agent查看/加载）", "column": "待办", "owner": "q-skills", "branch": "design/q-skills", "progress": "分支已建，worktree待补建，派单中" },
+    { "id": "q-kanban", "title": "任务看板插件设计（只读文件弹窗+路径设置）", "column": "待办", "owner": "q-kanban", "branch": "design/q-kanban", "progress": "新单，派单中" },
+    { "id": "q-settings", "title": "VSCode式设置重构设计（检索/插件设置域/视觉分区）", "column": "待办", "owner": "q-settings", "branch": "design/q-settings", "progress": "新单，派单中" },
+    { "id": "plan-c", "title": "计划C：src 大重组（~94文件→~15领域目录）+ 管理规范/关键词", "column": "待办", "owner": "main", "branch": "redblue-dev", "progress": "用户裁定开发完成后执行；待 q-modes/q-pool-design 合入后启动" },
+    { "id": "final-gate", "title": "最终合并树门禁 + 用户行为验收", "column": "待办", "owner": "main+user", "branch": "redblue-dev", "progress": "全部合入后由实施agent跑build，备产物读数供用户验收" }
+  ]
+}
