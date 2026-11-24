@@ -404,6 +404,37 @@ export function promptContextOfEvent(event: RunEvent): PromptContextData | undef
 }
 
 /**
+ * run 中途注入的运行时上下文消息（`message.injected`）→ 可投影的环境信息卡数据。
+ *
+ * 这是 owner / 成员**共用**的增量通道在 live 侧的入口：工具面变更
+ * （`appendToolSurfaceNotice`）、系统提示词修订（`appendSystemRevisionNotice`）、模型变更
+ * （`appendModelChangeNotice`）、成员 self-card-delta，都经 `appendInjectedMessages` 落
+ * `message.injected` + 持久化（每条盖稳定 `message_id`）。消息本体是 `vessel:notice`
+ * （默认可见的环境信息，见 `runtime-visibility.ts`），但承载它的 `message.injected` 事件
+ * 是 internal 档 —— 不在这里投影成卡，运行中用户就看不到模型真实看到的这条增量消息
+ * （只能等 run 结束历史回填）。详见 `docs/dev/research/q-display-owner-delta-rootcause.md`。
+ *
+ * 只投影带稳定 `message_id` 的 `vessel:*` 消息：历史落盘后按 id 让位（同一条消息一张卡）。
+ * 无 id 的旧数据保持现状（原始事件行），不引入重复卡。非 vessel:* 注入（skill / 附件等）
+ * 不投影，仍归 internal 档。
+ */
+export function injectedNoticeOfEvent(
+  event: RunEvent,
+): { message: Message; noticeKind: string } | undefined {
+  if (event.type !== 'message.injected') return undefined;
+  const data = event.data as Record<string, unknown> | null | undefined;
+  if (data === null || typeof data !== 'object') return undefined;
+  const raw = data.message;
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const message = raw as Message;
+  if (typeof message.content !== 'string' || message.content.trim().length === 0) return undefined;
+  const noticeKind = runtimeContextKindOfName(message.name);
+  if (noticeKind === undefined) return undefined;
+  if (messageIdOf(message) === undefined) return undefined;
+  return { message, noticeKind };
+}
+
+/**
  * 只认「非空字符串数组」（`changed` 的宽松解析）；其它一律 `undefined` = 不知道。
  *
  * 空数组当「不知道」而不是「0 项变更」：两者给人看到的是完全不同的结论，前者是「没有
@@ -1611,6 +1642,29 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           });
           continue;
         }
+      }
+      // run 中途注入的运行时上下文（工具面 / 模型 / 上下文增量，owner 与成员同一通道）：
+      // 与历史侧同一套 envNoticeCard 解析、同一种 runtime-notice item，运行中即可见。
+      // 携 message_id 让位：历史落盘后由历史那条渲染，不出现第二张卡（见 assemble）。
+      // 不带 runId —— 它不是 run 的输入，不能走 claimedUserByRun 的输入认领口径。
+      const injectedNotice = injectedNoticeOfEvent(item.event);
+      if (injectedNotice !== undefined) {
+        const { message, noticeKind } = injectedNotice;
+        const env = isEnvNoticeKind(noticeKind) ? envNoticeCard(message.content) : undefined;
+        const messageId = messageIdOf(message);
+        const injectedTs = itemTs(item.event.ts);
+        items.push({
+          kind: 'runtime-notice',
+          // key 锚事件 seq（同 prompt-context）：回放重放同一事件不换 key、不重挂。
+          key: `inject:${item.key}`,
+          noticeKind,
+          text: message.content,
+          ...(env !== undefined ? { env } : {}),
+          ...(messageId !== undefined ? { messageId } : {}),
+          ...(injectedTs !== undefined ? { ts: injectedTs } : {}),
+          ...seqMeta,
+        });
+        continue;
       }
       // notice / 原始事件：逐条一个 item，不参与分组。
       items.push({
