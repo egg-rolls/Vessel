@@ -7,7 +7,7 @@
     { "id": "q-validation", "title": "O1 DTO语义对齐 + O3 校验分层 + S3 owner/oracle", "column": "已完成", "owner": "q-validation", "branch": "fix/q-validation", "progress": "已合入 redblue-dev (merge 8694a681)，build exit 0" },
     { "id": "q-serving", "title": "S8 双轨 serving 全链审计 + 8处同类修复 + S4 URL统一", "column": "已完成", "owner": "q-serving", "branch": "fix/q-serving", "progress": "已合入 redblue-dev (merge 28ea00ba)，build exit 0" },
     { "id": "q-modes", "title": "S5/S6/S7 模式矩阵审计 + apps/web 同类扫描", "column": "进行中", "owner": "q-modes", "branch": "fix/q-modes", "progress": "审计文档收尾中（§4 扫描汇总 af1a36ab）；剩 §5/§6 + bun run build + 最终报告" },
-    { "id": "q-pool-design", "title": "O4 pool 韧性复杂度评审（纯文档）", "column": "进行中", "owner": "q-pool-design", "branch": "fix/q-pool-design", "progress": "降阶增量策略生效：机制表+opt-out设计已提交，第三步工作量 6eb800c2" },
+    { "id": "q-pool-design", "title": "O4 pool 韧性复杂度评审（纯文档）", "column": "已完成", "owner": "q-pool-design", "branch": "fix/q-pool-design", "progress": "已合入 redblue-dev (merge a4c374e5)；158行评审，判定：正确性机制keep/韧性冗余~200行可简化/复杂度大头是拓扑成本；opt-out运行时已闭环，打包层bootstrap静态import是A1增量价值" },
     { "id": "q-cli", "title": "CLI 规范架构文档（命令分层/动词契约/输出契约）", "column": "进行中", "owner": "q-cli", "branch": "design/q-cli", "progress": "§0-§2 两层命令模型/命令分类已提交 97331125，扩充中" },
     { "id": "q-redblue", "title": "红蓝版本手册调研（业界方法→vessel原语映射）", "column": "进行中", "owner": "q-redblue", "branch": "design/q-redblue", "progress": "手册骨架已提交 f6b8476b，业界方法调研扩充中" },
     { "id": "q-skills", "title": "SKILLS 插件设计（管理+agent查看/加载）", "column": "待办", "owner": "q-skills", "branch": "design/q-skills", "progress": "worktree已建，排队待开工" },
