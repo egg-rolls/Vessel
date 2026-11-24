@@ -167,10 +167,10 @@
     {
       "id": "q-verify-fix",
       "title": "修金丝雀终验两问题(skills装载名不一致+AI命名max_tokens=64被reasoning耗尽)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-verify-fix",
       "branch": "fix/q-verify-fix",
-      "progress": "派单：①skills config名skills vs描述符plugin-skills不匹配load_failed→命名一致性；②generateSessionTitle max_tokens64被reasoning耗尽静默放弃Untitled→增token/关reasoning/兜底；附write/edit订阅Windows锁文件观察"
+      "progress": "merge入redblue-dev；①in-process描述符名=manifest.id??包短名(同child口径)+aliases兼容存量,config名skills正确；②AI命名max_tokens64→2048+截止15s+派生标题兜底(任何模型不卡Untitled)+warn不静默；build绿待金丝雀复验"
     },
     {
       "id": "g1-proxy-node",
