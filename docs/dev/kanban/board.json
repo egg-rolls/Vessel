@@ -151,10 +151,10 @@
     {
       "id": "q-thinking-plugin",
       "title": "设计:思考强度控制插件(core extra headers钩子+插件设置+UI)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-thinking-plugin",
       "branch": "design/q-thinking-plugin",
-      "progress": "派单：core provider透传钩子注入reasoning_effort等+插件contributes.settings+UI按钮/档位+provider映射降级"
+      "progress": "merge入redblue-dev；904行设计:ChatRequest extra_headers/params透传(危险头denylist+上限)+BeforeLlm hook注入requestExtras+插件contributes.settings6键自动发现+工具栏声明式菜单契约+provider映射effort/budget/toggle；auto=不注入零回归；Q1-Q5待用户裁；P1core透传→P2插件→P3菜单UI→P4experimental"
     },
     {
       "id": "q-plugin-scaffold",
