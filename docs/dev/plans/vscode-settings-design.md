@@ -1,19 +1,19 @@
 # VSCode 式设置重构设计（q-settings）
 
-- 状态：设计中（骨架 commit，后续增量扩充）
+- 状态：设计完成（待 main 评审；开放问题见 §9.2）
 - 分支：`design/q-settings`（纯设计，不改代码）
 - 产出：本文件；实施由 main 另行派单
 - 协同：q-kanban / q-skills（插件设置域声明方，见 §10）
 
 ## 0. 用户裁定（必须贯彻）
 
-| # | 裁定 | 本设计落点 |
-|---|------|-----------|
-| ① | 设置重构为 VSCode 式**弹窗**设置项（非现样式） | §3 SettingsDialog |
-| ② | 设置可检索；插件可自定义设置域（搜索/配置） | §3.3 搜索 + §4 贡献契约 |
-| ③ | 左侧菜单栏的「视觉效果」移进设置，作为设置的一部分 | §5 视觉分区 |
-| ④ | 设计实验室移到「视觉」分区 | §5.2 view 型设置项 |
-| ⑤ | 设置入口移到右上角，替换 gateway 在线图标（gateway 状态左侧栏已有，不重复） | §3.1 入口 |
+| # | 裁定 | 本设计落点 | 满足切片 |
+|---|------|-----------|----------|
+| ① | 设置重构为 VSCode 式**弹窗**设置项（非现样式） | §3 SettingsDialog | S1（+S5 工作区） |
+| ② | 设置可检索；插件可自定义设置域（搜索/配置） | §3.3 搜索 + §4 贡献契约 | S1 搜索 / S3+S4 插件域 |
+| ③ | 左侧菜单栏的「视觉效果」移进设置，作为设置的一部分 | §5 视觉分区 | S2 |
+| ④ | 设计实验室移到「视觉」分区 | §5.2 view 型设置项 | S2 |
+| ⑤ | 设置入口移到右上角，替换 gateway 在线图标（gateway 状态左侧栏已有，不重复） | §3.1 入口 | S1 |
 
 ## 1. 现状调研（事实锚点）
 
@@ -68,40 +68,39 @@
 
 ### 1.5 可复用基础设施
 
-- `ModalShell`（`components/Modal.tsx`）：portal / 焦点圈 / Esc / body 滚动锁 / sm|md|lg 宽度。
-- `CommandPalette`（⌘K）+ `palette-items.ts`：已有「查看配置」动作项。
-- `shortcuts.ts`：只占用 ⌘K / `/` / Esc → **Ctrl/Cmd+, 空闲**，可作设置快捷键（VSCode 同款）。
-- ui 组件：Section / SearchInput / SegmentedTabs / Badge / DataTable / JsonView / ToastProvider。
-- 乐观 overlay  store：`uiStore.displayPending`（按 key+值确认清除）。
+- `ModalShell`（portal/焦点圈/Esc/滚动锁/sm|md|lg）+ ui 组件（Section / SearchInput / SegmentedTabs / Badge / JsonView / Toast）。
+- `CommandPalette`（⌘K）已有「查看配置」动作项；`shortcuts.ts` 只占 ⌘K / `/` / Esc → **Ctrl/Cmd+, 空闲**（VSCode 同款）。
+- 乐观 overlay store：`uiStore.displayPending`（按 key+值确认清除）。
 
 ## 2. 总体架构
 
 ### 2.1 架构图
 
 ```
-                        ┌────────────────────────────────────────────────┐
-                        │              SettingsDialog（弹窗）              │
-                        │  搜索框 ─ 分类树 ─ 设置项列表 ─ 用户/工作区 tab     │
-                        └───────▲────────────────────────▲───────────────┘
-                                │ 读（统一 SettingDef）    │ 写（按 scope 分流）
-                ┌───────────────┴──────────┐   ┌─────────┴──────────────────────┐
-                │  settings-registry（新）  │   │ 写路径（全部复用既有机制）        │
-                │  核心定义 + 插件域归一化合并 │   │ scope=user/project → config.set │
-                └───▲──────────▲───────────┘   │ scope=local → 既有 storage 函数  │
-                    │          │               │ 插件键 → plugins.config.set（新）│
-        ┌───────────┴──┐  ┌────┴─────────┐     └──▲──────────▲──────────▲────────┘
-        │ 核心设置定义   │  │ 插件设置域     │        │          │          │
-        │ DISPLAY_     │  │ buildPlugin- │   ┌────┴───┐ ┌────┴────┐ ┌───┴────────┐
-        │ SETTINGS 收敛 │  │ Inventory 扩展│   │gateway │ │asm 写面  │ │localStorage│
-        │ + 本地偏好     │  │ (settings[]) │   │方法层   │ │ui-settings│ │theme/locale│
-        └──────────────┘  └────▲─────────┘   │白名单   │ │plugin-   │ │nav 偏好     │
-                               │             └────▲───┘ │config(新)│ └────────────┘
-                    plugins.list / plugin.changed │     └────▲────┘
-                               │                  │          │
-                        ┌──────┴──────────────────┴──────────┴───────┐
-                        │  vessel.yaml（user / project）+ manifest     │
-                        │  contributes.settings（已有，扩展 UI 元数据）  │
-                        └─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    SettingsDialog（弹窗）                      │
+│    搜索框 ─ 分类树 ─ 设置项列表 ─ 用户/工作区/浏览器 tab          │
+└─────────────▲────────────────────────────▲───────────────────┘
+              │ 读（统一 SettingDef）        │ 写（按 scope 分流）
+┌─────────────┴──────────────┐  ┌──────────┴─────────────────────────┐
+│ settings-registry（新）     │  │ user/project → config.set（现有）    │
+│ 核心定义 + 插件域归一化合并   │  │ local → 既有 storage 函数（唯一写者） │
+└──▲──────────────▲──────────┘  │ 插件键 → plugins.config.set（新）    │
+   │              │             └──▲───────────▲───────────▲─────────┘
+┌──┴─────────┐ ┌──┴─────────────┐   │           │           │
+│ 核心设置定义 │ │ 插件设置域       │ ┌─┴──────┐ ┌─┴───────┐ ┌─┴──────────┐
+│ DISPLAY_   │ │ buildPlugin-   │ │gateway │ │asm 写面  │ │localStorage│
+│ SETTINGS   │ │ Inventory 扩展  │ │方法层   │ │ui-settings│ │theme/locale│
+│ 收敛+本地偏好│ │ (settings[])  │ │白名单   │ │plugin-   │ │nav 偏好     │
+└────────────┘ └──▲─────────────┘ └─▲──────┘ │config(新)│ └────────────┘
+                  │                 │        └─▲────────┘
+       plugins.list / plugin.changed│          │
+                  └────────┬────────┴──────────┘
+                  ┌────────┴──────────────────────┐
+                  │ vessel.yaml（user / project）  │
+                  │ + manifest contributes.settings│
+                  │  （已有，扩展 UI 元数据）        │
+                  └───────────────────────────────┘
 ```
 
 ### 2.2 设置注册表（单一事实源）
@@ -110,7 +109,7 @@
 
 ```ts
 export type SettingScope = 'user' | 'project' | 'local';
-export type SettingType = 'boolean' | 'enum' | 'string' | 'number' | 'view';
+export type SettingType = 'boolean' | 'enum' | 'string' | 'number' | 'object' | 'array' | 'view';
 
 export interface SettingDef {
   /** 点分键：核心 = config 键（ui.showReasoning）；本地 = local.<id>；插件 = <pluginId>.<key> */
@@ -289,14 +288,15 @@ export interface SettingDef {
 
 ### 4.1 manifest `contributes.settings` spec 扩展（additive，向后兼容）
 
-现状 `{type, description?, default?}` 继续合法（marketplace / web-tools 零改动）。扩展字段全部可选：
+现状 `{type, description?, default?}` 继续合法（marketplace / web-tools 零改动）。扩展字段全部可选
+（下例为字段全集展示，实际声明按 type 取舍；标题解析优先级 titleKey → title → key）：
 
 ```jsonc
 // package.json → vessel.contributes.settings
 {
   "board_path": {
     "type": "string",                  // 已有：string|number|integer|boolean|object|array
-    "title": "看板文件路径",            // 新：可见标题（缺省回退 titleKey → key）
+    "title": "看板文件路径",            // 新：可见标题（titleKey 缺省时用）
     "titleKey": "kanban.settings.boardPath",  // 新：插件私有 i18n key（优先于 title）
     "description": "board.json 的仓库相对路径", // 已有
     "descriptionKey": "kanban.settings.boardPath.desc", // 新
@@ -422,12 +422,179 @@ export interface PluginSettingItem {
 - 左侧栏自身的折叠按钮保留（即时操作），设置项是「默认值/持久态」的可见入口——两者写同一存储键，
   无第二真相。
 
-## 6. 分区结构（待扩充：完整分类树）
+## 6. 分区结构（完整分类树）
 
-## 7. 存储 / 迁移 / 默认值（待扩充）
+```
+设置弹窗
+├── 常用            common:true 的 curated 视图（主题/语言/verbosity/askUser/showReasoning…）
+├── 视觉 visual
+│   ├── 主题                    local.theme          enum system|light|dark   [common]
+│   ├── 界面语言                ui.language          enum zh-CN|en            [common]
+│   ├── 动效                    （说明行：跟随系统 reduced-motion，无开关）
+│   ├── 导航
+│   │   ├── 侧栏默认折叠        local.nav.collapsed  boolean
+│   │   └── 分组折叠状态        local.nav.groups     readOnly + [全部展开]
+│   └── 设计实验室              local.designLab      view（§5.2，懒加载）
+├── 显示与可见性 display
+│   ├── ui.verbosity            enum minimal|normal|debug        [common]
+│   ├── ui.showInternalEvents   boolean
+│   ├── ui.showArchived         boolean
+│   ├── ui.errorLevel           enum user|all
+│   ├── ui.askUser              boolean                            [common]
+│   ├── ui.showReasoning        boolean                            [common]
+│   ├── ui.expandCards          boolean
+│   ├── ui.statusBars           enum top|bottom|both|none
+│   └── observability.showProcessErrors  boolean
+├── 日志 logs
+│   ├── observability.log.level / color / format / time   enum（环境变量覆盖时只读+提示）
+│   └── observability.log.modules                         readOnly map 展示
+├── 连接 connection        view：连接状态/节点/版本只读摘要 + [打开 Gateway 页]
+├── 高级 advancedConfig    view：现 ConfigView（脱敏 JSON + 键值表 + 来源表），只读
+└── 扩展 extensions        （动态：enabled 且声明 settings 的插件，按 order/名称排序）
+    ├── 任务看板 plugin:kanban       （q-kanban 声明，§10）
+    ├── Skills plugin:skills         （q-skills 声明，§10）
+    ├── Marketplace plugin:marketplace（已存在：registry_url/proxy/install_scope/…）
+    └── Web Tools plugin:web-tools   （已存在：backend/key_env/api_timeout_ms/…）
+```
 
-## 8. 实施计划（待扩充：切片 S1–S6，文件级）
+- 分类 id / 排序 / 标题 i18n key 在注册表常量固定；插件域只能追加到「扩展」下，
+  **不能注入核心分类**（与 navGroups 核心 key 不可覆盖同一安全口径）。
+- 「常用」不是分类而是过滤视图：项的 `common:true` 标记，curated 清单随注册表维护。
+- 连接/高级两个 view 项保证旧 ConfigView 与 gateway 入口的能力不丢（只读诊断面保留）。
 
-## 9. 风险与开放问题（待扩充）
+## 7. 存储 / 迁移 / 默认值
 
-## 10. 与 q-kanban / q-skills 协同（待扩充：声明示例 + 边界）
+### 7.1 scope 归属表
+
+| 键 | scope | 存储 | 备注 |
+|----|-------|------|------|
+| ui.* / observability.* / agent.cwd | user（S5 后 project 可覆盖） | vessel.yaml | 白名单键不变 |
+| local.theme | local | vessel.theme | 键名不变；storeTheme 唯一写者 |
+| local.nav.collapsed / local.nav.groups | local | vessel.nav.collapsed / -groups | 键名不变 |
+| local.settings.tree / local.settings.tab | local | vessel.settings.tree.collapsed / vessel.settings.tab | 新增（弹窗自身偏好） |
+| <pluginId>.<key> | user | vessel.yaml plugins[].config | 经 plugins.config.set |
+| ui.language | user | vessel.yaml | 写成功后 setLocale 同步本地（现有行为） |
+
+### 7.2 迁移（零数据迁移）
+
+- **服务端键与 localStorage 键全部原名保留**：无数据搬迁、无 schema 版本升级。
+  重构只动「渲染与入口」，不动存储事实。
+- 路由迁移：`#/settings|visual|designLab` 变深链别名（§3.8），旧链接永不 404；
+  `?tab=connection|capabilities` 别名保留。
+- 常量收敛：`DISPLAY_SETTINGS` 改从注册表派生（保留导出）；S6 删除
+  AppearanceView / DisplaySettingsView / VisualPage / 旧 SettingsView 整页（ConfigView 移入高级 view）。
+- i18n：新增 `settings.item.<id>.title|desc`、`settings.category.*`、`settings.dialog.*`；旧 `settings.display.field.*` / `appearance.*` 双轨期保留，S6 清理。
+- 双轨期（S1–S5）：旧 `#/visual` 整页仍可用（别名先指向旧页，S2 起指向弹窗），任何切片失败可独立回退，不出现「设置改不了」的中间态。
+
+### 7.3 默认值与重置
+
+- 注册表每项声明 default（服务端键默认值以 `packages/config/src/types.ts` UiConfig 注释为准：
+  showReasoning=false、showInternalEvents=false、showArchived=false、verbosity=normal…）。
+- 插件项 default 来自 manifest spec（已有字段）；缺省 default 的项不显示 ↺（无默认可回）。
+- 重置 = 写 default 值（config.set 无 delete；与 VSCode「移除覆盖」语义差异见 R8）；
+  local 项重置 = 移除存储键（回内置默认，如 theme 回 dark）。
+- `@modified` 判定：服务端项对比 config 快照值 vs default；local 项对比存储值 vs 内置默认。
+
+## 8. 实施计划（切片 S1–S6，文件级；实施由 main 派单）
+
+| 切片 | 内容 | 主要文件 | 门禁 |
+|------|------|----------|------|
+| **S1** 注册表+弹窗骨架+入口 | 核心 user/local 项渲染、搜索、分类树、常用视图；齿轮替换 gateway 按钮；Ctrl+,；AccountMenu/palette 改打开弹窗；settings 弹窗路由型+深链 | 新 `state/settings-registry.ts` `state/settings-search.ts` `stores/settingsDialogStore.ts` `domains/settings/dialog/{SettingsDialog,CategoryTree,SettingRow,SettingsSearchBar}.tsx`；改 `AppBar.tsx` `shortcuts.ts` `AccountMenu.tsx` `palette-items.ts` `router.ts` `ShellOverlays.tsx` `nav.ts` `BottomNav.tsx` `Modal.tsx`(xl) `uiStore.ts`(settingsPending) i18n | bun run build exit 0 |
+| **S2** 视觉分区 | 主题/语言/动效/导航偏好入注册表；设计实验室 view 项（懒加载+嵌套全屏）；左栏移除 visual/designLab 点；`#/visual` `#/designLab` 别名指向弹窗 | 新 `dialog/DesignLabSection.tsx`；改 `nav.ts` `router.ts` `ShellRouteView.tsx` `BottomNav.tsx`；`domains/design/*` 原样复用 | 同上 |
+| **S3** 插件域读侧 | serve spec 透传 + wire schema；Web 归一化 + 注册表 merge；扩展组只读渲染 | `plugin-host/types.ts` `gateway/methods/config.ts`(result_schema) `plugin-host/manager.ts`(contributionsFor)；web `gateway/types/protocol.ts` `plugin-contributions.ts` `usePluginContributions.ts` `settings-registry.ts` | 同上 |
+| **S4** 插件域写侧 | `plugins.config.set` 方法 + `setPluginConfigValue` 写面 + 装配注入 + client；乐观确认；restartRequired 提示+重载按钮 | `gateway/methods/config.ts` `src/plugin-config.ts` 装配注入点；web `gateway/client.ts` `dialog/SettingRow.tsx` | 同上 |
+| **S5** 工作区层级 | config.set additive `scope` 参数；project 写面（setUserConfigValue 的 configPath 选项已支持）；工作区 tab 启用 | `gateway/methods/config.ts` `src/gateway-config-control.ts` `src/ui-settings.ts`；web tab 过滤 | 同上 |
+| **S6** 收敛 | DISPLAY_SETTINGS 派生；旧页组件删除；palette 设置键检索；i18n 清理；docs 同步（WEB-UI.md / specs 定稿） | `state/display-settings.ts` 旧 settings 组件删除 `palette-items.ts` i18n docs | 同上 + doc-sync 复核 |
+
+- 依赖：S3/S4 是 q-kanban / q-skills 设置域**可编辑**的前置；其 manifest 声明（additive）可先行合入。
+- 宪法约束：零测试/探针/临时进程；每切片仅 `bun run build` 门禁；不碰主 checkout；只提交实施分支。
+- 每切片独立 commit + 独立可回退；S1 合入即满足裁定①⑤，S2 满足③④，S3/S4 满足②。
+
+## 9. 风险与开放问题
+
+### 9.1 风险表
+
+| # | 风险 | 缓解 |
+|---|------|------|
+| R1 | 移动端弹窗空间不足 | compact 单列 + 分类 chips + 全屏 sheet（§3.2） |
+| R2 | compact 下左栏是抽屉，gateway 状态不再常驻可见 | 用户裁定不重复；断连有 StaleNotice/MessageBar 全局兜底 + AccountMenu 节点信息 |
+| R3 | ui.language 服务端/本地双写分裂 | 单写者规则：config.set 成功 → setLocale；LanguageToggle 与设置项共用该路径 |
+| R4 | child 插件改配置不热生效 | restartRequired 显式提示 + 重载按钮；不谎报热应用（§4.5） |
+| R5 | 可写键白名单三层漂移（serve/asm/web） | 注册表 = Web 单一事实源；服务端白名单仍是权威；新增键必须同改 serve methods/config.ts + src/ui-settings.ts（同步义务写入 specs） |
+| R6 | 插件多时搜索卡顿 | 每插件 ≤64 项上限 + memo 索引 + 150ms 防抖 |
+| R7 | 深链聚焦时数据未就绪 | focusKey 入 store 队列，config/plugins 就绪后 scrollIntoView + 高亮衰减 |
+| R8 | config.set 无 delete，重置≠VSCode 移除覆盖 | v1 重置=写默认值（文档明示差异）；config.unset 列二期（Q4） |
+| R9 | 旧 gateway 无 settings 透传/写 RPC | additive 降级：域不渲染 / 只读+原因文案（同 toolbar 先例） |
+| R10 | 主题唯一写者 invariant（0.52）被破坏 | local writer 只转调 storeTheme，绝不直接写 DOM/localStorage |
+| R11 | 设计实验室嵌套全屏时两层 useModalA11y 都监听 document Esc，可能一次关两层 | 嵌套层 Esc 事件 stopPropagation + 焦点圈只扫最上层容器；实施 S2 时以静态渲染断言覆盖 |
+| R12 | 弹窗打开态入路由后，浏览器后退语义变化 | 后退 = 关弹窗（replace 回 chat），与命令面板/抽屉的 overlay 路由先例一致 |
+
+### 9.2 开放问题（main 裁决）
+
+- **Q1** 左栏 settings 分组整体移除（含 settings 导航点）：按裁定⑤「入口移到右上角」执行，
+  移动端保留 More→设置。若 main 认为桌面左栏仍需保留一个设置点，S1 只删 visual/designLab 两点。
+- **Q2** 工作区 tab 分期（S5）：契约现在设计完整，实现后置；若要求 v1 全量，S5 提前到 S2 之后。
+- **Q3** child 插件运行中 settings 推送通道（child 协议新增通知）：二期；v1 显式重载。
+- **Q4** `config.unset`（移除覆盖键，VSCode 完整语义）：二期；v1 重置=写默认值。
+
+## 10. 与 q-kanban / q-skills 协同
+
+### 10.1 边界（谁做什么）
+
+- **q-settings（本设计）**：设置弹窗 UI、搜索、注册表、`plugins.config.set` 写路径、
+  contributions.settings 透传与归一化。即「设置域的基础设施」。
+- **q-kanban / q-skills**：只在各自 manifest 声明 `contributes.settings` + 私有 i18n 字典，
+  并在插件代码里消费自己的 config（in-process 走 install config；child 走 VESSEL_PLUGIN_CONFIG）。
+  **不自建设置 UI**——声明即出现在设置弹窗「扩展」组，可检索可编辑（S3/S4 合入后）。
+
+### 10.2 q-kanban 声明示例（对齐其任务书「路径设置」）
+
+```jsonc
+// plugins/…/kanban/package.json → vessel.contributes
+{
+  "settings": {
+    "board_path": {
+      "type": "string",
+      "titleKey": "kanban.settings.boardPath",
+      "descriptionKey": "kanban.settings.boardPath.desc",
+      "default": "docs/dev/kanban/board.json",
+      "keywords": ["kanban", "看板", "board", "任务"]
+    }
+  },
+  "i18n": {
+    "zh-CN": {
+      "kanban.settings.boardPath": "看板文件路径",
+      "kanban.settings.boardPath.desc": "board.json 的仓库相对路径；文件由 main 维护，插件只读展示。"
+    },
+    "en": { "kanban.settings.boardPath": "Board file path", "kanban.settings.boardPath.desc": "Repo-relative path of board.json; maintained by main, plugin renders read-only." }
+  }
+}
+```
+
+- board.json 只读弹窗展示不变（main 维护）；board_path 设置只决定「读哪个文件」。
+- S4 合入前，board_path 仍可经 vessel.yaml `plugins[].config` 手改（现有 filterSettings 路径），
+  声明先行合入零回归（旧 Web 忽略 settings 字段）。
+
+### 10.3 q-skills 声明示例（键名以 q-skills 设计为准，此处只约束形状）
+
+```jsonc
+{
+  "settings": {
+    "skills_dirs": { "type": "array", "titleKey": "skills.settings.dirs",
+                     "descriptionKey": "skills.settings.dirs.desc" },
+    "auto_load":   { "type": "boolean", "default": true,
+                     "titleKey": "skills.settings.autoLoad" }
+  }
+}
+```
+
+- array 型 v1 只读 JSON 展示（§3.5）：q-skills 若需可编辑目录列表，用「多个 string 键」或
+  等二期 object/array 编辑；**不要**为绕过只读而私设 UI。
+- i18n key 命名约定：`<pluginId>.settings.<key>[.desc]`；字典只 en / zh-CN（E9 规则）。
+
+### 10.4 时序
+
+1. q-kanban / q-skills 的 manifest 声明 + 插件消费逻辑：随时可合（additive，不依赖本设计实施）。
+2. q-settings S3（读侧）合入 → 设置弹窗出现其设置域（只读）。
+3. q-settings S4（写侧）合入 → 可编辑 + 重载生效提示。
+4. 三方文档互指：本文件 §4 为契约权威；q-kanban / q-skills 设计文档引用本节，不复制契约正文。
