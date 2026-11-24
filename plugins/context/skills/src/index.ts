@@ -17,6 +17,42 @@
 
 import type { Plugin, PluginHost } from '@vessel-agent/core';
 
+export {
+  capDescription,
+  deriveDescription,
+  type FrontmatterResult,
+  parseFrontmatter,
+} from './frontmatter.js';
+export { type ScanRootOptions, type ScanRootResult, scanSkillRoot } from './scanner.js';
+export { SkillsStore } from './store.js';
+export {
+  DEFAULT_MAX_LOAD_BYTES,
+  emptyIndex,
+  emptySessionLoads,
+  emptyTrustStore,
+  type FrontmatterState,
+  LIST_DESCRIPTION_CHARS,
+  MAX_AUX_FILES,
+  MAX_DESCRIPTION_CHARS,
+  MAX_LOADS_PER_SESSION,
+  MAX_LOADS_SESSIONS,
+  MAX_PAGE_LIMIT,
+  MAX_SCAN_DEPTH,
+  MAX_SKILL_ENTRIES,
+  MAX_SKILL_FILE_BYTES,
+  MAX_TAG_CHARS,
+  MAX_TAGS,
+  type SessionLoad,
+  type SessionLoads,
+  type SkillEntry,
+  type SkillIndex,
+  type SkillSource,
+  type TrustRecord,
+  type TrustState,
+  type TrustStore,
+  WATCH_DEBOUNCE_MS,
+} from './types.js';
+
 /** 插件名（config.yaml `plugins[].name` / loader 短名） */
 export const SKILLS_PLUGIN_NAME = 'skills';
 

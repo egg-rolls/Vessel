@@ -138,6 +138,7 @@
       "name": "@vessel-agent/plugin-skills",
       "version": "0.56.1",
       "dependencies": {
+        "@vessel-agent/basic-tools": "workspace:*",
         "@vessel-agent/core": "workspace:*",
       },
       "devDependencies": {

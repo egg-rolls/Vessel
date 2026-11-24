@@ -25,6 +25,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@vessel-agent/basic-tools": "workspace:*",
     "@vessel-agent/core": "workspace:*"
   },
   "devDependencies": {
