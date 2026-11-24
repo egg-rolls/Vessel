@@ -307,8 +307,51 @@ vessel stop（舰队）
 
 ## 8. 落地布局：src/cli/ 领域目录（与计划 C 重组合一）
 
-（待扩充）
+〔提案〕现状：`src/cli.ts`（入口分发）+ `src/cli-args.ts`（4.8k 行纯解析）+
+`src/commands/`（attention/federation/model/registry）+ 平铺 `src/*-command.ts`（20+ 个）+
+`src/ui-style.ts`。目标：CLI 收拢为一个领域目录，**输出契约单一实现**（§4）有了物理落点。
+
+```
+src/cli/
+  args.ts        ← src/cli-args.ts        纯解析（语法与互斥），无副作用
+  help-spec.ts   ← src/cli-help-spec.ts   help / 子命令列表 / 用法错误的单一数据源
+  help.ts        ← src/cli-help.ts        按位置 help 渲染
+  output.ts      ← src/ui-style.ts        渲染契约 §4 单一实现（吸收 displayWidth / shouldUseColor）
+  errors.ts      （新）                  稳定码注册 + 错误包 §6（码 → 语义 → 退出码 → next 模板）
+  exit-codes.ts  （新）                  退出码枚举 §5 单一事实源
+  registry.ts    ← src/commands/registry.ts  分派接缝：match → run → 返回退出码
+  commands/
+    fleet/       ← stop-command.ts / status-command.ts；start〔新增〕
+    gateway/     ← gateway-command.ts / gateway-nodes-command.ts
+    node/        ← node-command.ts
+    hub/         ← hub-command.ts
+    tools-engine/（新）                  status / restart 包装（经 node RPC，§3.3）
+    agent/ team/ model/ config/ token/ plugin/ attention/ federation/ …
+                 ← 其余平铺 *-command.ts 与 src/commands/* 按域归位
+```
+
+迁移规则（strangler，不做 big-bang）：
+
+1. **registry 仍是唯一分派接缝**；cli.ts 瘦身为入口分发（REPL / serve / headless + registry），
+   主路径不经过 registry 的边界不变。
+2. **纯移动 commit**：relocation 与行为变更绝不混在同一 commit；import 路径机械更新。
+3. 顺序：先立新模块（output / errors / exit-codes，零行为变更）→ 按域逐批移动命令 →
+   最后瘦身 args / help。每批独立可回滚。
+4. 命令字面量、flag 别名（`--keep-nodes` / `--no-keep-nodes` / `--pipe` 等）、冻结契约面
+   （`--json` 形状、退出码、稳定码）在移动中**零变化**。
+5. 本文是纯设计；代码落地另起任务，落地时把对应章节从〔提案〕翻〔现行〕并同步
+   [cli-wiring.md](cli-wiring.md) 的 paths。
 
 ## 9. 兼容与演进规则
 
-（待扩充）
+1. **契约面只 additive**：argv 别名、`--json` 字段、退出码、稳定码、状态枚举——
+   加可以，改名/删/改语义不行（先例：`gateway status --json` 不加 adopted 字段；
+   `--keep-nodes` 保留为兼容别名）。
+2. **废弃流程**：文档标 deprecated → 别名至少保留一个 minor 版本 → major 移除并写 changelog；
+   永不静默换码/换形状。
+3. **新动词**必须先进 §2 矩阵：写明归属理由（适用 / 不适用），再进 help-spec 与 registry；
+   顶层裸动词不再新增（只属舰队）。
+4. **新命令**三件套齐备才算完成：分类表（§1.2）登记 + help-spec 条目 + 稳定码/退出码登记；
+   输出一律走单一渲染模块，禁止私造 ANSI / 对齐 / 颜色闸门。
+5. **文档同步**：本文 kind: target；某节落地后翻〔现行〕，事实源指针（cli-wiring /
+   gateway-lifecycle）同步更新，避免规范与现态两份漂移。
