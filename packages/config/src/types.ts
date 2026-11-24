@@ -858,15 +858,18 @@ export interface TeamConfigInput {
  * S7：跨节点 team ↔ team 的 peer 声明（全局配置）。
  *
  * - `nodeId` / `teamId` 是对端身份；`localTeamId` 只用于入站映射。
- * - `tokenEnv` 必填；明文 token 不接受。
+ * - token 来源二选一：`tokenEnv`（环境变量名）或 `tokenSecret: true`
+ *   （node SecretStore，key `peer:<nodeId>:<teamId>`；自动配对写入）。明文 token 不接受。
  * - `url` 在 `direction` 含 `out` 时必填；非回环必须 https。
- * - YAML 写 `node_id` / `team_id` / `local_team_id`，loader 递归转 camelCase。
+ * - YAML 写 `node_id` / `team_id` / `local_team_id` / `token_secret`，loader 递归转 camelCase。
  */
 export interface FederationPeerConfig {
   nodeId: string;
   teamId: string;
   url?: string;
-  tokenEnv: string;
+  tokenEnv?: string;
+  /** q-fed-simple：token 从 node federation SecretStore 解析（与 tokenEnv 二选一）。 */
+  tokenSecret?: boolean;
   caFile?: string;
   direction?: 'in' | 'out' | 'both';
   localTeamId?: string;
@@ -877,6 +880,12 @@ export interface FederationPeerConfig {
 /** S7：跨节点 federation（缺省关闭；不做自动发现）。 */
 export interface FederationConfig {
   enabled?: boolean;
+  /**
+   * q-fed-simple：平台密钥库不可用时允许 AES-256-GCM 0600 文件回退
+   * （`<dataDir>/federation/`）。缺省 true；显式 false 则 fail-closed。
+   * 只影响 `tokenSecret` peer 的 SecretStore，与 hub.allowFileSecrets 无关。
+   */
+  allowFileSecrets?: boolean;
   /** 节点间跨越次数上界；缺省 4，1..16 */
   maxHops?: number;
   /**

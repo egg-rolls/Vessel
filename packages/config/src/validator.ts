@@ -604,6 +604,7 @@ const FEDERATION_PEER_KEYS = new Set([
   'teamId',
   'url',
   'tokenEnv',
+  'tokenSecret',
   'caFile',
   'direction',
   'localTeamId',
@@ -625,13 +626,21 @@ function validateFederation(
     errors.push({ path: 'federation', message: 'federation must be an object' });
     return;
   }
-  const { enabled, maxHops, rateLimitPerMinute, peers } = federation as Partial<FederationConfig>;
+  const { enabled, maxHops, rateLimitPerMinute, peers, allowFileSecrets } =
+    federation as Partial<FederationConfig>;
 
   if (enabled !== undefined && typeof enabled !== 'boolean') {
     errors.push({
       path: 'federation.enabled',
       message: 'federation.enabled must be a boolean',
       value: enabled,
+    });
+  }
+  if (allowFileSecrets !== undefined && typeof allowFileSecrets !== 'boolean') {
+    errors.push({
+      path: 'federation.allowFileSecrets',
+      message: 'federation.allowFileSecrets must be a boolean',
+      value: allowFileSecrets,
     });
   }
   if (
@@ -750,8 +759,26 @@ function validateFederation(
       if (message !== null) errors.push({ path: `${base}.url`, message: `${base}.url ${message}` });
     }
 
-    if (typeof peer.tokenEnv !== 'string' || peer.tokenEnv === '') {
-      errors.push({ path: `${base}.tokenEnv`, message: `${base}.tokenEnv is required` });
+    // token 来源二选一：tokenEnv（env 名）或 tokenSecret:true（node SecretStore）。
+    if (peer.tokenSecret !== undefined && typeof peer.tokenSecret !== 'boolean') {
+      errors.push({
+        path: `${base}.tokenSecret`,
+        message: `${base}.token_secret must be a boolean`,
+        value: peer.tokenSecret,
+      });
+    }
+    if (peer.tokenSecret === true) {
+      if (peer.tokenEnv !== undefined) {
+        errors.push({
+          path: `${base}.tokenEnv`,
+          message: `${base}.tokenEnv must not be combined with token_secret; use one token source`,
+        });
+      }
+    } else if (typeof peer.tokenEnv !== 'string' || peer.tokenEnv === '') {
+      errors.push({
+        path: `${base}.tokenEnv`,
+        message: `${base}.tokenEnv is required (or set token_secret: true)`,
+      });
     } else {
       validateEnvName(`${base}.tokenEnv`, peer.tokenEnv, errors);
     }
@@ -3969,7 +3996,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'pairingTtlSeconds',
     'tokenTtlDays',
   ],
-  federation: ['enabled', 'maxHops', 'rateLimitPerMinute', 'peers'],
+  federation: ['enabled', 'maxHops', 'rateLimitPerMinute', 'peers', 'allowFileSecrets'],
   evals: ['enabled', 'dir', 'outDir', 'allowNetwork'],
   feishu: [
     'enabled',

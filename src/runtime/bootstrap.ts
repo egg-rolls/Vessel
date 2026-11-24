@@ -99,6 +99,7 @@ import {
   removeAutoApproveRule,
 } from '../data/permission-store';
 import type { FederationRuntimeOptions } from '../federation/federation-config';
+import { loadFederationPeerSecrets } from '../federation/federation-secrets';
 import { createFederationSendPort } from '../federation/federation-send-port';
 import { resolveInteractionsDir } from '../gateway/interactions-dir';
 import { resolveGatewayAuth } from '../gateway/serve-auth';
@@ -1470,11 +1471,18 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.21 S8.2：federation 缺省启用；显式 `federation.enabled: false` 才不注入。
     // 语义不只是「跨节点所以关掉就没」：本机人类投递也挂在这个端口上，关掉 federation
     // 等于连「agent 找本机人类」一起关掉。见下方 localHuman 的构造。
+    // q-fed-simple：`tokenSecret` peer 的 token 先从 SecretStore 预加载进内存。
+    const federationSecrets = await loadFederationPeerSecrets({
+      dataDir,
+      federation: config.federation,
+      logger,
+    });
     const federation =
       config.federation?.enabled !== false
         ? createFederationSendPort({
             federation: config.federation ?? {},
             nodeId,
+            secrets: federationSecrets,
             // 展示名只用于把指向本机的 `to` 归一化，不参与向外的 from。
             nodeName,
             localHuman: () => localHuman,
