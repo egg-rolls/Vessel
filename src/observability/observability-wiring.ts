@@ -8,15 +8,15 @@
  *   显式 0 = 不限制，>0 = 环形缓冲。
  */
 
-import { DEFAULT_OBSERVABILITY_OPTIONS, type VesselConfig } from '../packages/config/src/index';
+import { DEFAULT_OBSERVABILITY_OPTIONS, type VesselConfig } from '../../packages/config/src/index';
 import {
   type EventBus,
   type EventStream,
   MemoryEventStream,
   MetricsCollector,
-} from '../packages/core/src/index';
-import { MemoryEventBus } from '../packages/core/src/kernel/index';
-import type { MetricsControlLike } from './control-plane-types';
+} from '../../packages/core/src/index';
+import { MemoryEventBus } from '../../packages/core/src/kernel/index';
+import type { MetricsControlLike } from '../control-plane-types';
 
 /** 块存在才启用 metrics / 控制面 */
 export function isObservabilityConfigured(config: VesselConfig): boolean {

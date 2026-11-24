@@ -118,11 +118,17 @@ import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outboun
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { createImageDeliverySource } from './image-delivery';
 import { ensureInteractionsDir, resolveInteractionsDir } from './interactions-dir';
-import { createCliLogger, diffLogOptions, resolveLogOptions } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 // 0.56：派生 token（root-secret → HKDF；显式配置永远优先）。
 import { effectiveNodeToken } from './node/token-derive';
 import { isForegroundNodeCommand } from './node-command';
+import { createCliLogger, diffLogOptions, resolveLogOptions } from './observability/logging';
+import {
+  flushStartupTiming,
+  markStartup,
+  noteStartup,
+  timeStartup,
+} from './observability/startup-timing';
 import { runPluginCliCommand } from './plugin-cli-command';
 import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
 import {
@@ -148,7 +154,6 @@ import { resolveContinueSessionId, resumeSession, runSessionList } from './sessi
 import { isAddressInUse } from './shared/port-in-use';
 import { readPackageVersion } from './shared/version';
 import { shutdownServeStack } from './shutdown-sequence';
-import { flushStartupTiming, markStartup, noteStartup, timeStartup } from './startup-timing';
 import { createSystemContextSource } from './system-context';
 // 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
 // 0.54 C：`events.list` 的按 run 读端口（同一模块）。

@@ -63,6 +63,7 @@ import {
 } from '../../packages/core/src/index';
 import { TimelineEventLog } from '../../packages/core/src/timeline/read-port';
 import { inspectSessionLease } from '../lease-service';
+import { resolveTraceOptions } from '../observability/trace-wiring';
 import {
   createRunRecordStore,
   resolveDurableOptions,
@@ -70,7 +71,6 @@ import {
 } from '../run-record-store-factory';
 import { createSessionStore } from '../session-factory';
 import { inspectSessionLock } from '../session-lock';
-import { resolveTraceOptions } from '../trace-wiring';
 
 /** 单页上限（与 `RunRecordStore.list` 实现的硬上限一致） */
 const PAGE_LIMIT = 200;

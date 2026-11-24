@@ -38,13 +38,13 @@ import {
   toSessionInfo,
 } from '../packages/core/src/index';
 import { inspectSessionLease } from './lease-service';
+import { noteStartup, noteStartupMax, timeStartup } from './observability/startup-timing';
 import {
   acquireSessionLock,
   inspectSessionLock,
   SessionLockedError,
   type SessionLockInspection,
 } from './session-lock';
-import { noteStartup, noteStartupMax, timeStartup } from './startup-timing';
 
 /** 崩溃 run 的统一错误文本（与优雅 shutdown 的 interrupted checkpoint 语义对齐） */
 const RUN_LOST_ERROR = 'run lost: owning process exited before completion';

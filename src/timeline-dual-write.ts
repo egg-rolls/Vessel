@@ -123,7 +123,7 @@ import {
   readTimelineEvents,
 } from '../packages/core/src/timeline/wal';
 import { TimelineWriter } from '../packages/core/src/timeline/writer';
-import { noteStartup, noteStartupMax } from './startup-timing';
+import { noteStartup, noteStartupMax } from './observability/startup-timing';
 
 /**
  * 进程退出时给 flush 留的上限（ms）。

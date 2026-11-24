@@ -109,14 +109,20 @@ import { createImageDeliverySource } from './image-delivery';
 import { resolveInteractionsDir } from './interactions-dir';
 import { normalizeLegacyToolName } from './legacy-tool-names';
 import { createLocalRunAdapter } from './local-run-adapter';
-import { configureLoggingFromConfig, createCliLogger } from './logging';
 import type { McpEngineShell } from './mcp-engine-wiring';
 import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import { createNodeDrainer } from './node/node-drain';
 import { resolveNodeIdentity } from './node/node-identity';
 import { createNodeResumer } from './node/node-resume';
-import { createEventStream, type MetricsFactory } from './observability-wiring';
+import { configureLoggingFromConfig, createCliLogger } from './observability/logging';
+import { createEventStream, type MetricsFactory } from './observability/observability-wiring';
+import { markStartup, timeStartup } from './observability/startup-timing';
+import {
+  pruneTenantTrace,
+  type TraceControl,
+  type TraceRecorderFactory,
+} from './observability/trace-wiring';
 import { createPeerNoticeRouter, type PeerNoticeRouter } from './peer-notices';
 import { declarativePluginEntries } from './plugin-config';
 import {
@@ -141,7 +147,6 @@ import { createSessionEventsSource } from './session-events';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
 import { readPackageVersion } from './shared/version';
 import { reportShutdownFailure } from './shutdown-report';
-import { markStartup, timeStartup } from './startup-timing';
 import { createSystemContextSource } from './system-context';
 import {
   createTeamHumanDelivery,
@@ -156,7 +161,6 @@ import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-f
 import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-write';
 import { createEngineSupervisor, type EngineSupervisor } from './tools-engine/supervisor';
 import { callbackRoute } from './tools-engine/wiring';
-import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
 import { createVesselMetaSurface, normalizeBridgeDeny, type VesselRpcPort } from './vessel-meta';

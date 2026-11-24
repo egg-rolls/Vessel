@@ -18,10 +18,10 @@ import {
   resolveSingleTenantPaths,
 } from './data/data-paths';
 import { executeEvalSuite } from './eval-wiring';
-import { createEventStream } from './observability-wiring';
+import { createEventStream } from './observability/observability-wiring';
+import { installTrace, type TraceControl } from './observability/trace-wiring';
 import { PluginLoader } from './plugin-loader';
 import { createProvider } from './provider-factory';
-import { installTrace, type TraceControl } from './trace-wiring';
 import { ui } from './ui-style';
 
 export interface EvalCommandOptions {

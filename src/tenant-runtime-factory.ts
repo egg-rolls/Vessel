@@ -82,7 +82,16 @@ import {
   createMetricsCollector,
   disposeMetrics,
   type MetricsFactory,
-} from './observability-wiring';
+} from './observability/observability-wiring';
+import { noteStartup, noteStartupMax, timeStartup } from './observability/startup-timing';
+import {
+  composeTraceRedactors,
+  installTrace,
+  pruneTenantTrace,
+  type TraceControl,
+  type TraceRecorderFactory,
+} from './observability/trace-wiring';
+import { createUsagePricing } from './observability/usage-pricing';
 import { buildPluginConfigMap, declarativePluginEntries, withPluginConfig } from './plugin-config';
 import { registerInProcessPluginEntries } from './plugin-host-assembly';
 import { type PluginDescriptor, PluginLoader } from './plugin-loader';
@@ -95,7 +104,6 @@ import { createSessionControl, type SessionControl } from './session-control';
 import { createSessionStore } from './session-factory';
 import { withSessionWriteLock } from './session-lock-runtime';
 import { reportShutdownFailure } from './shutdown-report';
-import { noteStartup, noteStartupMax, timeStartup } from './startup-timing';
 import {
   createTimelineDualWrite,
   createTimelineLegacyBroadcastGate,
@@ -105,14 +113,6 @@ import {
 } from './timeline-dual-write';
 import { createTimelineSessionLog, type TimelineSessionLog } from './timeline-session-log';
 import { syncBasicToolsEngineWiring, syncCallbackToolsEngineWiring } from './tools-engine/wiring';
-import {
-  composeTraceRedactors,
-  installTrace,
-  pruneTenantTrace,
-  type TraceControl,
-  type TraceRecorderFactory,
-} from './trace-wiring';
-import { createUsagePricing } from './usage-pricing';
 import { visionSettingsOf } from './vision-settings';
 
 /** 构造一个 tenant 执行面的输入 */

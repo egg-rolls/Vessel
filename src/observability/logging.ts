@@ -12,13 +12,13 @@
  * @module vessel/logging
  */
 
-import { DEFAULT_LOG_OPTIONS, type VesselConfig } from '../packages/config/src/index';
+import { DEFAULT_LOG_OPTIONS, type VesselConfig } from '../../packages/config/src/index';
 import {
   configureLogging,
   createStderrLogger,
   type Logger,
   type LoggingConfig,
-} from '../packages/core/src/index';
+} from '../../packages/core/src/index';
 
 /**
  * 创建 CLI / serve 共用的 stderr logger。

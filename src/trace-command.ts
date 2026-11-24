@@ -17,7 +17,7 @@ import {
   resolveEffectiveTenantId,
   resolveSingleTenantPaths,
 } from './data/data-paths';
-import { pruneTenantTrace } from './trace-wiring';
+import { pruneTenantTrace } from './observability/trace-wiring';
 
 type EnvMap = Record<string, string | undefined>;
 

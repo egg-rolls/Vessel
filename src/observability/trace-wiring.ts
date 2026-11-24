@@ -16,7 +16,7 @@ import {
   DEFAULT_TRACE_OPTIONS,
   type TraceConfig,
   type VesselConfig,
-} from '../packages/config/src/index';
+} from '../../packages/config/src/index';
 import {
   createDefaultTraceRedactor,
   type EventStream,
@@ -28,8 +28,8 @@ import {
   type TraceLevel,
   type TraceRedactor,
   type Unsubscribe,
-} from '../packages/core/src/index';
-import { logEvent } from '../packages/serve/src/log-event';
+} from '../../packages/core/src/index';
+import { logEvent } from '../../packages/serve/src/log-event';
 
 /** trace 控制面（bootstrap / CLI 消费） */
 export interface TraceControl {

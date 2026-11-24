@@ -34,7 +34,7 @@ import {
   resolveControlPlaneTarget,
 } from './control-plane-target';
 import { resolveDataDir, resolveEffectiveTenantId } from './data/data-paths';
-import { createCliLogger } from './logging';
+import { createCliLogger } from './observability/logging';
 import {
   defaultPluginRoots,
   type PluginDescriptor,
