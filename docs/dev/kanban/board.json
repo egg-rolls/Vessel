@@ -31,10 +31,10 @@
     {
       "id": "q-settings-impl",
       "title": "VSCode式设置实施+插件设置域自动发现+默认视觉方案(8642为默认)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-settings-impl",
       "branch": "feat/q-settings-impl",
-      "progress": "派单：按vscode-settings-design.md实施S1-S6+contributes.settings自动发现+showInternalEvents缺省false+设置入口右上角"
+      "progress": "merge 79f818e4，S1-S6全落地24提交(自雇q-settings-finish分担S5/S6树状拆分)；插件contributes.settings自动发现+plugins.config.set写+showInternalEvents缺省false契约；已快进main备重启；待用户行为验收"
     },
     {
       "id": "g1-proxy-node",
