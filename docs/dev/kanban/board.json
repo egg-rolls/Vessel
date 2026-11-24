@@ -141,6 +141,30 @@
       "progress": "merge入redblue-dev(待金丝雀验收晋升main)；federation join握手(一次性码/回环免码)→token存SecretStore(DPAPI/keychain+AES-GCM)→自动写两侧peer热应用零重启零env_file；discover读hub registry回环发现；失败明确分流；token绝不进配置/日志；build绿"
     },
     {
+      "id": "q-config-delegate",
+      "title": "设计:agent配置权限有限让渡(安全子集白名单+审计,敏感键禁开)",
+      "column": "进行中",
+      "owner": "q-config-delegate",
+      "branch": "design/q-config-delegate",
+      "progress": "派单：agent可写ui/display安全键白名单+审计；provider key/permission/federation token/plugins禁开防提权；复用config.set白名单"
+    },
+    {
+      "id": "q-thinking-plugin",
+      "title": "设计:思考强度控制插件(core extra headers钩子+插件设置+UI)",
+      "column": "进行中",
+      "owner": "q-thinking-plugin",
+      "branch": "design/q-thinking-plugin",
+      "progress": "派单：core provider透传钩子注入reasoning_effort等+插件contributes.settings+UI按钮/档位+provider映射降级"
+    },
+    {
+      "id": "q-plugin-scaffold",
+      "title": "设计:插件开发自动化脚手架(vessel plugin create+约定优于配置+自动注册)",
+      "column": "进行中",
+      "owner": "q-plugin-scaffold",
+      "branch": "design/q-plugin-scaffold",
+      "progress": "派单：脚手架CLI生成manifest/注册/UI/settings样板+目录约定manifest发现自动注册减少boilerplate"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
