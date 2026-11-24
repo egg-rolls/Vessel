@@ -112,6 +112,7 @@ import {
   type TraceRecorderFactory,
 } from './trace-wiring';
 import { createUsagePricing } from './usage-pricing';
+import { emptyResponsePolicyOf } from './empty-response-settings';
 import { visionSettingsOf } from './vision-settings';
 
 /** 构造一个 tenant 执行面的输入 */
@@ -1026,6 +1027,11 @@ export async function buildTenantRuntime(
     // 0.56：视觉的运行期设置（能力在 provider.vision 上，由 provider 插件挂）。
     // 没有 `enable` 这个键：支持即直通；`disabled` 是出事时的 kill switch（不是默认门）。
     ...(visionSettingsOf(config) !== undefined ? { vision: visionSettingsOf(config) } : {}),
+    // q-empty-response：空响应兜底（nudge 重试）。缺省不注入 = core 内置缺省（启用、
+    // 2 次）；显式配置才覆盖。owner + 成员的新 EU 生效（与 vision 同快照语义）。
+    ...(emptyResponsePolicyOf(config) !== undefined
+      ? { emptyResponse: emptyResponsePolicyOf(config) }
+      : {}),
     // 注入粒度框架：EU notice producer（tools / pii）的检测节奏端口。缺省配置走
     // 内置默认表（全 request）⇒ gate 恒放行，零回归；model / trim 钉死不经此端口。
     envCadence: (scope) => resolveEnvCadence(scope, config.envInjection),

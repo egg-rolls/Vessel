@@ -14,7 +14,7 @@ import { isSettableConfigKey, setUserConfigValue } from './ui-settings';
 export interface GatewayConfigSetRequest {
   tenantId: string;
   key: string;
-  value: string | boolean;
+  value: string | boolean | number;
 }
 
 export interface GatewayConfigSetOptions {

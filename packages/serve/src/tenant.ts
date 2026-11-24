@@ -46,7 +46,7 @@ export interface ConfigSnapshotLike {
 export interface ConfigSetRequest {
   tenantId: string;
   key: string;
-  value: string | boolean;
+  value: string | boolean | number;
 }
 
 export interface ConfigGatewayOptionsLike {

@@ -277,6 +277,8 @@ export const zhCN = {
   'config.set.invalidErrorLevel': 'ui.errorLevel 只支持 "user" 或 "all"',
   'config.set.invalidEnum': '{key} 只支持：{allowed}',
   'config.set.invalidPath': 'agent.cwd 必须是非空路径',
+  'config.set.invalidNumber': '{key} 必须是 [{min}, {max}] 内的整数',
+  'config.set.invalidNudge': 'emptyResponse.nudge 必须是非空字符串',
   'config.set.failed': '写入用户配置失败：{detail}',
 
   // ── update ──

@@ -295,6 +295,8 @@ export const en: Record<MessageKey, string> = {
   'config.set.invalidErrorLevel': 'ui.errorLevel must be "user" or "all"',
   'config.set.invalidEnum': '{key} must be one of: {allowed}',
   'config.set.invalidPath': 'agent.cwd must be a non-empty path',
+  'config.set.invalidNumber': '{key} must be an integer in [{min}, {max}]',
+  'config.set.invalidNudge': 'emptyResponse.nudge must be a non-empty string',
   'config.set.failed': 'Failed to write user config: {detail}',
 
   // ── update ──

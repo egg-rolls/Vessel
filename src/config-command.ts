@@ -178,7 +178,7 @@ export async function configSetCommand(
     return { exitCode: 2, stdout: '', stderr: t('config.set.unknownKey', { key }) };
   }
 
-  let parsed: string | boolean = value;
+  let parsed: string | boolean | number = value;
   if (key === 'ui.language') {
     if (!isUiLanguage(value)) {
       return {
@@ -243,6 +243,30 @@ export async function configSetCommand(
       };
     }
     parsed = value === 'true';
+  } else if (key === 'emptyResponse.enabled') {
+    if (value !== 'true' && value !== 'false') {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidBoolean', { key, value }),
+      };
+    }
+    parsed = value === 'true';
+  } else if (key === 'emptyResponse.maxRetries') {
+    const retries = Number(value);
+    if (!Number.isInteger(retries) || retries < 0 || retries > 10) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidNumber', { key, min: 0, max: 10 }),
+      };
+    }
+    parsed = retries;
+  } else if (key === 'emptyResponse.nudge') {
+    if (value.trim() === '') {
+      return { exitCode: 2, stdout: '', stderr: t('config.set.invalidNudge') };
+    }
+    parsed = value.trim();
   } else if (LOG_ENUM_VALUES[key] !== undefined) {
     const allowed = LOG_ENUM_VALUES[key] ?? [];
     if (!allowed.includes(value)) {

@@ -138,7 +138,11 @@ export type SettableConfigKey =
   | 'observability.log.color'
   | 'observability.log.format'
   | 'observability.log.time'
-  | 'agent.cwd';
+  | 'agent.cwd'
+  // q-empty-response：空响应兜底（core 设置面；YAML `empty_response`）。
+  | 'emptyResponse.enabled'
+  | 'emptyResponse.maxRetries'
+  | 'emptyResponse.nudge';
 
 interface ConfigSetTarget {
   /** YAML 根下的块名 */
@@ -168,6 +172,9 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
   'observability.log.format': { block: 'observability', subBlock: 'log', yamlKey: 'format' },
   'observability.log.time': { block: 'observability', subBlock: 'log', yamlKey: 'time' },
   'agent.cwd': { block: 'agent', yamlKey: 'cwd' },
+  'emptyResponse.enabled': { block: 'empty_response', yamlKey: 'enabled' },
+  'emptyResponse.maxRetries': { block: 'empty_response', yamlKey: 'max_retries' },
+  'emptyResponse.nudge': { block: 'empty_response', yamlKey: 'nudge' },
 };
 
 /** 是否为支持的 `config set` 键 */
@@ -181,7 +188,7 @@ export function isSettableConfigKey(value: string): value is SettableConfigKey {
  */
 export async function setUserConfigValue(
   key: SettableConfigKey,
-  value: string | boolean,
+  value: string | boolean | number,
   options: UiSettingsStoreOptions = {},
 ): Promise<void> {
   const target = CONFIG_SET_TARGETS[key];
@@ -221,6 +228,19 @@ export async function setUserConfigValue(
   }
   if (key === 'agent.cwd' && (typeof value !== 'string' || value.trim() === '')) {
     throw new Error(`invalid_path: ${JSON.stringify(value)}`);
+  }
+  // q-empty-response：与 config validator / serve config.set 同形状同界。
+  if (key === 'emptyResponse.enabled' && typeof value !== 'boolean') {
+    throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
+  }
+  if (
+    key === 'emptyResponse.maxRetries' &&
+    (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 10)
+  ) {
+    throw new Error(`invalid_number: ${key}=${JSON.stringify(value)} (integer in [0, 10])`);
+  }
+  if (key === 'emptyResponse.nudge' && (typeof value !== 'string' || value.trim() === '')) {
+    throw new Error(`invalid_nudge: ${JSON.stringify(value)}`);
   }
 
   const configPath = options.configPath ?? getUserConfigPath();
