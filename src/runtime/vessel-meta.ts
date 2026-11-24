@@ -35,8 +35,8 @@ import {
   resolveToolNameAlias,
   type ToolCall,
   type ToolDefinition,
-} from '../packages/core/src/index';
-import type { CapabilityManifest, RpcDispatcher, RpcResponse } from '../packages/serve/src/rpc';
+} from '../../packages/core/src/index';
+import type { CapabilityManifest, RpcDispatcher, RpcResponse } from '../../packages/serve/src/rpc';
 
 /** 模型面桥工具名（常驻 tools[]，snake_case 合规；单工具面，无第二执行器）。 */
 export const VESSEL_TOOL_NAME = 'vessel';

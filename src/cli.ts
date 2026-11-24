@@ -56,7 +56,6 @@ import {
 // 实测（本机）单是求值它就要数百毫秒到数秒 —— 而 `node start` / `gateway start` /
 // `--run` 永远不会进那个界面。它现在按需加载（见 {@link startInkRepl}）。
 import { createAskAnswerDelivery } from './agent/ask-answer-delivery';
-import { type BootstrapResult, bootstrap } from './bootstrap';
 import { DEFAULT_SERVE_PORT, parseArgs } from './cli-args';
 import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli-help';
 import { buildCliConfigOverrides } from './config/cli-overrides';
@@ -142,9 +141,11 @@ import {
 import { FACTORY_PLUGINS } from './plugin/plugin-loader';
 import { type PluginWatchHandle, startPluginWatch } from './plugin/plugin-watch';
 import { runPluginCliCommand } from './plugin-cli-command';
-import { installProcessErrorHandlers } from './process-handlers';
 import { createRunControl } from './run/run-control';
-import { createRuntimeNoticeBus } from './runtime-notice';
+import { type BootstrapResult, bootstrap } from './runtime/bootstrap';
+import { installProcessErrorHandlers } from './runtime/process-handlers';
+import { createRuntimeNoticeBus } from './runtime/runtime-notice';
+import { normalizeBridgeDeny } from './runtime/vessel-meta';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
 import { createContextUsageSource } from './session/context-usage';
@@ -168,7 +169,6 @@ import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update/gateway-check';
-import { normalizeBridgeDeny } from './vessel-meta';
 import { ensureWebDist, interruptWebBuild, webDistWarning } from './web-dist';
 
 /**

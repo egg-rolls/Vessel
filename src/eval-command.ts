@@ -21,7 +21,7 @@ import { createEventStream } from './observability/observability-wiring';
 import { installTrace, type TraceControl } from './observability/trace-wiring';
 import { executeEvalSuite } from './plugin/eval-wiring';
 import { PluginLoader } from './plugin/plugin-loader';
-import { createProvider } from './provider-factory';
+import { createProvider } from './runtime/provider-factory';
 import { ui } from './ui-style';
 
 export interface EvalCommandOptions {

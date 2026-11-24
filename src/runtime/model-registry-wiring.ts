@@ -33,16 +33,16 @@ import {
   rootSecretPath,
   synthesizeLegacyRegistry,
   type VesselConfig,
-} from '../packages/config/src/index';
+} from '../../packages/config/src/index';
 import {
   type LLMProvider,
   MemoryPluginHost,
   OpenAICompatibleProvider,
   type Plugin,
   writeStderrNotice,
-} from '../packages/core/src/index';
-import { resolveDataDir } from './data/data-paths';
-import type { PluginDescriptor, PluginLoader } from './plugin/plugin-loader';
+} from '../../packages/core/src/index';
+import { resolveDataDir } from '../data/data-paths';
+import type { PluginDescriptor, PluginLoader } from '../plugin/plugin-loader';
 
 /** provider 配置错误（调用方决定退出码：0.3 入口 1 / 新子命令 2） */
 export class ProviderConfigError extends Error {

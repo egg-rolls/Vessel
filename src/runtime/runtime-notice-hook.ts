@@ -28,8 +28,8 @@ import type {
   HookContext,
   Message,
   SessionEventLogPort,
-} from '../packages/core/src/index';
-import { HookType } from '../packages/core/src/index';
+} from '../../packages/core/src/index';
+import { HookType } from '../../packages/core/src/index';
 import {
   NOTICE_DETAILS_MAX,
   type RuntimeNotice,

@@ -6,9 +6,9 @@
  * - `channel.start()` 的 SDK / 连接失败 → exit 1（Addendum B §11.3.8）。
  */
 
-import type { BootstrapResult } from './bootstrap';
 import type { FeishuChannelLike } from './control-plane-types';
 import { assertFeishuStartable, feishuError } from './plugin/feishu-wiring';
+import type { BootstrapResult } from './runtime/bootstrap';
 
 /** 飞书启动错误 → 退出码 */
 export function feishuExitCode(error: unknown): number {

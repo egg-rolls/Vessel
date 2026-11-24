@@ -22,7 +22,7 @@ import {
   DEFAULT_TIMELINE_OPTIONS,
   resolveEnvCadence,
   type VesselConfig,
-} from '../packages/config/src/index';
+} from '../../packages/config/src/index';
 import {
   alignMessageSeqs,
   appendCompactionIndex,
@@ -64,60 +64,60 @@ import {
   type TenantPaths,
   type TenantRuntimeProfile,
   type TraceRedactor,
-} from '../packages/core/src/index';
-import { TimelineEventLog } from '../packages/core/src/timeline/read-port';
-import type { PluginHostManager } from '../packages/serve/src/index';
-import { ownerSelfCard } from './agent/self-card';
-import { emptyResponsePolicyOf } from './config/empty-response-settings';
-import { normalizeLegacyToolName } from './config/legacy-tool-names';
-import { visionSettingsOf } from './config/vision-settings';
-import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
-import { resolveDataDir } from './data/data-paths';
-import { resolveAgentCwd } from './data/path-resolution';
-import { createMcpEngineFromConfig, type McpEngineShell } from './mcp-engine-wiring';
-import type { MockScenarioName } from './mock/scenarios';
+} from '../../packages/core/src/index';
+import { TimelineEventLog } from '../../packages/core/src/timeline/read-port';
+import type { PluginHostManager } from '../../packages/serve/src/index';
+import { ownerSelfCard } from '../agent/self-card';
+import { emptyResponsePolicyOf } from '../config/empty-response-settings';
+import { normalizeLegacyToolName } from '../config/legacy-tool-names';
+import { visionSettingsOf } from '../config/vision-settings';
+import type { FeishuChannelLike, MetricsControlLike } from '../control-plane-types';
+import { resolveDataDir } from '../data/data-paths';
+import { resolveAgentCwd } from '../data/path-resolution';
+import { createMcpEngineFromConfig, type McpEngineShell } from '../mcp-engine-wiring';
+import type { MockScenarioName } from '../mock/scenarios';
 import {
   createEventStream,
   createMetricsCollector,
   disposeMetrics,
   type MetricsFactory,
-} from './observability/observability-wiring';
-import { noteStartup, noteStartupMax, timeStartup } from './observability/startup-timing';
+} from '../observability/observability-wiring';
+import { noteStartup, noteStartupMax, timeStartup } from '../observability/startup-timing';
 import {
   composeTraceRedactors,
   installTrace,
   pruneTenantTrace,
   type TraceControl,
   type TraceRecorderFactory,
-} from './observability/trace-wiring';
-import { createUsagePricing } from './observability/usage-pricing';
-import { createFeishuFromConfig, stopFeishuChannel } from './plugin/feishu-wiring';
-import { installMcp, type McpControl, type McpPluginLike } from './plugin/mcp-wiring';
+} from '../observability/trace-wiring';
+import { createUsagePricing } from '../observability/usage-pricing';
+import { createFeishuFromConfig, stopFeishuChannel } from '../plugin/feishu-wiring';
+import { installMcp, type McpControl, type McpPluginLike } from '../plugin/mcp-wiring';
 import {
   buildPluginConfigMap,
   declarativePluginEntries,
   withPluginConfig,
-} from './plugin/plugin-config';
-import { registerInProcessPluginEntries } from './plugin/plugin-host-assembly';
-import { type PluginDescriptor, PluginLoader } from './plugin/plugin-loader';
-import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin/plugin-selection';
-import { createProvider } from './provider-factory';
-import { includeReasoningFor } from './reasoning';
-import { FileLeaseService } from './run/lease-service';
-import { closeRunRecordStore, createRunRecordStore } from './run/run-record-store-factory';
-import { createSessionControl, type SessionControl } from './session/session-control';
-import { createSessionStore } from './session/session-factory';
-import { withSessionWriteLock } from './session/session-lock-runtime';
+} from '../plugin/plugin-config';
+import { registerInProcessPluginEntries } from '../plugin/plugin-host-assembly';
+import { type PluginDescriptor, PluginLoader } from '../plugin/plugin-loader';
+import { resolvePluginSelection, warnExternalPluginsOnce } from '../plugin/plugin-selection';
+import { FileLeaseService } from '../run/lease-service';
+import { closeRunRecordStore, createRunRecordStore } from '../run/run-record-store-factory';
+import { createSessionControl, type SessionControl } from '../session/session-control';
+import { createSessionStore } from '../session/session-factory';
+import { withSessionWriteLock } from '../session/session-lock-runtime';
 import {
   createTimelineDualWrite,
   createTimelineLegacyBroadcastGate,
   type TimelineDualWrite,
   type TimelineLegacyBroadcastGate,
   type TimelinePublication,
-} from './session/timeline-dual-write';
-import { createTimelineSessionLog, type TimelineSessionLog } from './session/timeline-session-log';
-import { reportShutdownFailure } from './shutdown-report';
-import { syncBasicToolsEngineWiring, syncCallbackToolsEngineWiring } from './tools-engine/wiring';
+} from '../session/timeline-dual-write';
+import { createTimelineSessionLog, type TimelineSessionLog } from '../session/timeline-session-log';
+import { reportShutdownFailure } from '../shutdown-report';
+import { syncBasicToolsEngineWiring, syncCallbackToolsEngineWiring } from '../tools-engine/wiring';
+import { createProvider } from './provider-factory';
+import { includeReasoningFor } from './reasoning';
 
 /** 构造一个 tenant 执行面的输入 */
 export interface BuildTenantRuntimeOptions {
@@ -922,7 +922,7 @@ export async function buildTenantRuntime(
 
   // 0.15：ui.askUser=false 按 tenant 关闭（overlay 生效）；无客户端入口不会传 true。
   if (options.registerAskUser === true && config.ui?.askUser !== false) {
-    const { createAskUserTool } = await import('../packages/tui/src/renderer/ask-user');
+    const { createAskUserTool } = await import('../../packages/tui/src/renderer/ask-user');
     plugins.push({
       name: 'ask-user',
       version: '0.1.0',

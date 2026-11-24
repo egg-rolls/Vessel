@@ -16,11 +16,11 @@
  * 注入 resolveModel / 热应用 / in-process RPC 登记。
  */
 
-import type { VesselConfig } from '../packages/config/src/index';
-import { type LLMProvider, MemoryLLMProvider } from '../packages/core/src/index';
-import { createScenarioProvider, type MockScenarioName } from './mock/scenarios';
+import type { VesselConfig } from '../../packages/config/src/index';
+import { type LLMProvider, MemoryLLMProvider } from '../../packages/core/src/index';
+import { createScenarioProvider, type MockScenarioName } from '../mock/scenarios';
+import type { PluginLoader } from '../plugin/plugin-loader';
 import { createModelRegistryWiring, type ModelRegistryWiring } from './model-registry-wiring';
-import type { PluginLoader } from './plugin/plugin-loader';
 
 export interface ResolvedProvider {
   provider: LLMProvider;

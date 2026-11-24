@@ -25,7 +25,7 @@ import {
   NOTICE_SUMMARY_MAX,
   type RuntimeNotice,
   type RuntimeNoticeBus,
-} from '../runtime-notice';
+} from '../runtime/runtime-notice';
 
 /**
  * 合并 / 判定窗口：第一条变更进来后等这么久，父 session 仍空闲才发。

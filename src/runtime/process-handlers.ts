@@ -16,7 +16,7 @@ import {
   createDefaultTraceRedactor,
   type EventStream,
   type Logger,
-} from '../packages/core/src/index';
+} from '../../packages/core/src/index';
 
 /** 兜底处理的失败类型（开放集合，当前只有 Node 的两个入口） */
 export type ProcessFailureKind = 'unhandledRejection' | 'uncaughtException';

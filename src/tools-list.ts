@@ -30,7 +30,7 @@ import {
 } from './plugin/plugin-config';
 import { PluginLoader } from './plugin/plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin/plugin-selection';
-import { createVesselMetaSurface } from './vessel-meta';
+import { createVesselMetaSurface } from './runtime/vessel-meta';
 
 export interface ToolSummary {
   name: string;

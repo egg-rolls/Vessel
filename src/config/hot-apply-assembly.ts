@@ -40,9 +40,9 @@ import {
 } from '../plugin/plugin-config';
 import { PluginLoader } from '../plugin/plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from '../plugin/plugin-selection';
-import type { RuntimeNoticeBus } from '../runtime-notice';
-import { createRuntimeNoticeHook, RUNTIME_NOTICE_HOOK } from '../runtime-notice-hook';
-import { resolveRuntimePermission } from '../tenant-runtime-factory';
+import type { RuntimeNoticeBus } from '../runtime/runtime-notice';
+import { createRuntimeNoticeHook, RUNTIME_NOTICE_HOOK } from '../runtime/runtime-notice-hook';
+import { resolveRuntimePermission } from '../runtime/tenant-runtime-factory';
 
 /**
  * 权限规则解析：直接复用 bootstrap 的 `resolveRuntimePermission`，不另写一份，

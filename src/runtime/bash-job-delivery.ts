@@ -23,12 +23,12 @@
  * 于是 `from` 可以用真正的运行期身份 —— 起这条作业的那个成员 —— 不再借归属者。
  */
 
-import type { AgentService } from '../packages/agent/src/index';
-import type { Logger } from '../packages/core/src/index';
+import type { AgentService } from '../../packages/agent/src/index';
+import type { Logger } from '../../packages/core/src/index';
 import {
   type AsyncBashCompletion,
   registerAsyncBashCompletionSink,
-} from '../plugins/tools/basic-tools/src/index';
+} from '../../plugins/tools/basic-tools/src/index';
 
 /**
  * 同时在途的投递上限：与插件侧的 `MAX_ASYNC_JOBS`（4）对齐。

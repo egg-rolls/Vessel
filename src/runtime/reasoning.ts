@@ -9,7 +9,7 @@
  * @module vessel/reasoning
  */
 
-import type { VesselConfig } from '../packages/config/src/index';
+import type { VesselConfig } from '../../packages/config/src/index';
 
 /** core 0.11.1 的思考流开关；core 合并前保持可选 */
 export interface ReasoningRuntimeOption {

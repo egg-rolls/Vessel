@@ -27,7 +27,7 @@ import {
   loadConfig,
   resolveEffectiveApiKey,
   type VesselConfig,
-} from '../packages/config/src/index';
+} from '../../packages/config/src/index';
 import {
   assertToolNameLegality,
   imageBlobRoot,
@@ -47,123 +47,123 @@ import {
   type TenantPaths,
   type TraceRedactor,
   toolOutputRoot,
-} from '../packages/core/src/index';
-import type { AgentControlLike } from '../packages/serve/src/index';
+} from '../../packages/core/src/index';
+import type { AgentControlLike } from '../../packages/serve/src/index';
 import {
   type ConfigSnapshotLike,
   createGatewayEventHub,
   createLocalRpcDispatcher,
   type HubControlLike,
   type LocalRpcDispatcher,
-} from '../packages/serve/src/index';
-import type { ReplContext } from '../packages/tui/src/index';
-import { createAgentControl } from './agent/agent-control';
-import { type AgentOwnerServer, startAgentOwnerServer } from './agent/agent-owner-server';
-import { createAgentServiceWiring } from './agent/agent-service-wiring';
-import { type MemberPermissionMode, resolveAgentWiring } from './agent/agent-wiring';
-import { createAskAnswerDelivery } from './agent/ask-answer-delivery';
-import { createLocalRunAdapter } from './agent/local-run-adapter';
-import { createPeerNoticeRouter, type PeerNoticeRouter } from './agent/peer-notices';
+} from '../../packages/serve/src/index';
+import type { ReplContext } from '../../packages/tui/src/index';
+import { createAgentControl } from '../agent/agent-control';
+import { type AgentOwnerServer, startAgentOwnerServer } from '../agent/agent-owner-server';
+import { createAgentServiceWiring } from '../agent/agent-service-wiring';
+import { type MemberPermissionMode, resolveAgentWiring } from '../agent/agent-wiring';
+import { createAskAnswerDelivery } from '../agent/ask-answer-delivery';
+import { createLocalRunAdapter } from '../agent/local-run-adapter';
+import { createPeerNoticeRouter, type PeerNoticeRouter } from '../agent/peer-notices';
 import {
   createTeamHumanDelivery,
   createTeamLocalMemberDelivery,
   type LocalHumanTarget,
   type LocalMemberTarget,
-} from './agent/team-human-delivery';
-import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from './ask-channel';
-import { registerBashJobDelivery } from './bash-job-delivery';
-import { formatConfigErrors } from './config/config-error-format';
-import { sanitizeConfigForSnapshot } from './config/config-snapshot';
-import { registerRefsNoticeHook, registerRuntimeNoticeHook } from './config/hot-apply-assembly';
-import { normalizeLegacyToolName } from './config/legacy-tool-names';
-import { createReplSettings, type ReplSettingsControlLike } from './config/ui-settings';
-import { visionSurfaceOf } from './config/vision-settings';
-import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
-import { createConfigAttachmentIngest } from './data/attachment-ingest';
-import { createConfigAttachmentLister } from './data/attachments-list';
-import { withDataLock } from './data/data-lock';
+} from '../agent/team-human-delivery';
+import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from '../ask-channel';
+import { formatConfigErrors } from '../config/config-error-format';
+import { sanitizeConfigForSnapshot } from '../config/config-snapshot';
+import { registerRefsNoticeHook, registerRuntimeNoticeHook } from '../config/hot-apply-assembly';
+import { normalizeLegacyToolName } from '../config/legacy-tool-names';
+import { createReplSettings, type ReplSettingsControlLike } from '../config/ui-settings';
+import { visionSurfaceOf } from '../config/vision-settings';
+import type { FeishuChannelLike, MetricsControlLike } from '../control-plane-types';
+import { createConfigAttachmentIngest } from '../data/attachment-ingest';
+import { createConfigAttachmentLister } from '../data/attachments-list';
+import { withDataLock } from '../data/data-lock';
 import {
   resolveDataDir,
   resolveEffectiveTenantId,
   resolveSingleTenantPaths,
-} from './data/data-paths';
+} from '../data/data-paths';
 import {
   formatImageBlobGcReport,
   type ImageBlobGcRunner,
   isBlobRootInsideDataDir,
   startImageBlobGc,
-} from './data/image-blob-gc';
-import { resolveAgentCwd } from './data/path-resolution';
+} from '../data/image-blob-gc';
+import { resolveAgentCwd } from '../data/path-resolution';
 import {
   addAutoApproveRule,
   listAutoApproveRules,
   removeAutoApproveRule,
-} from './data/permission-store';
-import { createFederationSendPort } from './federation/federation-send-port';
-import { createHubRuntime } from './hub-wiring';
-import { t } from './i18n';
-import { resolveInteractionsDir } from './interactions-dir';
-import type { McpEngineShell } from './mcp-engine-wiring';
-import type { MockScenarioName } from './mock/scenarios';
-import { createNodeDrainer } from './node/node-drain';
-import { resolveNodeIdentity } from './node/node-identity';
-import { createNodeResumer } from './node/node-resume';
-import { configureLoggingFromConfig, createCliLogger } from './observability/logging';
-import { createEventStream, type MetricsFactory } from './observability/observability-wiring';
-import { markStartup, timeStartup } from './observability/startup-timing';
+} from '../data/permission-store';
+import { createFederationSendPort } from '../federation/federation-send-port';
+import { createHubRuntime } from '../hub-wiring';
+import { t } from '../i18n';
+import { resolveInteractionsDir } from '../interactions-dir';
+import type { McpEngineShell } from '../mcp-engine-wiring';
+import type { MockScenarioName } from '../mock/scenarios';
+import { createNodeDrainer } from '../node/node-drain';
+import { resolveNodeIdentity } from '../node/node-identity';
+import { createNodeResumer } from '../node/node-resume';
+import { configureLoggingFromConfig, createCliLogger } from '../observability/logging';
+import { createEventStream, type MetricsFactory } from '../observability/observability-wiring';
+import { markStartup, timeStartup } from '../observability/startup-timing';
 import {
   pruneTenantTrace,
   type TraceControl,
   type TraceRecorderFactory,
-} from './observability/trace-wiring';
-import type { McpControl } from './plugin/mcp-wiring';
-import { declarativePluginEntries } from './plugin/plugin-config';
+} from '../observability/trace-wiring';
+import type { McpControl } from '../plugin/mcp-wiring';
+import { declarativePluginEntries } from '../plugin/plugin-config';
 import {
   activateStartupPlugins,
   createPluginHostManager,
   createPluginReloader,
-} from './plugin/plugin-host-assembly';
-import { PluginLoader } from './plugin/plugin-loader';
-import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin/plugin-selection';
-import { startPluginWatch } from './plugin/plugin-watch';
+} from '../plugin/plugin-host-assembly';
+import { PluginLoader } from '../plugin/plugin-loader';
+import { resolvePluginSelection, warnExternalPluginsOnce } from '../plugin/plugin-selection';
+import { startPluginWatch } from '../plugin/plugin-watch';
 import {
   createHttpRpcClient,
   createLocalRpcClient,
   normalizeConnectUrl,
   type RpcClient,
-} from './rpc/index';
+} from '../rpc/index';
 import {
   type ConnectResumeStart,
   type ConnectRunStart,
   waitForConnectedResumeTerminal,
   waitForConnectedRun,
-} from './run/connect-run-wait';
+} from '../run/connect-run-wait';
 import {
   type DurableRunHandleLike,
   type DurableRunsControlLike,
   listRunSummaries,
   loadResumableCheckpoint,
   resumeError,
-} from './run/durable-wiring';
-import { createRunControl } from './run/run-control';
-import { createRuntimeNoticeBus, type RuntimeNoticeBus } from './runtime-notice';
-import { resolveGatewayAuth } from './serve-auth';
-import { createContextUsageSource } from './session/context-usage';
-import { createImageDeliverySource } from './session/image-delivery';
-import type { SessionControl } from './session/session-control';
-import { createSessionEventsSource } from './session/session-events';
-import { acquireSessionLock, type SessionLock, SessionLockedError } from './session/session-lock';
-import { createSystemContextSource } from './session/system-context';
+} from '../run/durable-wiring';
+import { createRunControl } from '../run/run-control';
+import { resolveGatewayAuth } from '../serve-auth';
+import { createContextUsageSource } from '../session/context-usage';
+import { createImageDeliverySource } from '../session/image-delivery';
+import type { SessionControl } from '../session/session-control';
+import { createSessionEventsSource } from '../session/session-events';
+import { acquireSessionLock, type SessionLock, SessionLockedError } from '../session/session-lock';
+import { createSystemContextSource } from '../session/system-context';
 // 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
 // 只有双写开关开时才有 `timelineDualWrite`，此时才传；关闭路径与 0.53 逐字节相同。
 // 0.54 C：`events.list` 的按 run 读端口（同一模块，共用 timeline 的读面与路径口径）。
-import { createTimelineRunEventsPort, timelineTailPort } from './session/timeline-dual-write';
-import { readPackageVersion } from './shared/version';
-import { reportShutdownFailure } from './shutdown-report';
+import { createTimelineRunEventsPort, timelineTailPort } from '../session/timeline-dual-write';
+import { readPackageVersion } from '../shared/version';
+import { reportShutdownFailure } from '../shutdown-report';
+import { createEngineSupervisor, type EngineSupervisor } from '../tools-engine/supervisor';
+import { callbackRoute } from '../tools-engine/wiring';
+import { resolveConnectToken } from '../transport-factory';
+import { registerBashJobDelivery } from './bash-job-delivery';
+import { createRuntimeNoticeBus, type RuntimeNoticeBus } from './runtime-notice';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
-import { createEngineSupervisor, type EngineSupervisor } from './tools-engine/supervisor';
-import { callbackRoute } from './tools-engine/wiring';
-import { resolveConnectToken } from './transport-factory';
 import { createVesselMetaSurface, normalizeBridgeDeny, type VesselRpcPort } from './vessel-meta';
 
 /**
@@ -1252,8 +1252,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     });
   } else {
     engineSupervisor = createEngineSupervisor({
-      entryPath: path.join(import.meta.dir, 'tools-engine', 'entry.ts'),
-      rootDir: path.join(import.meta.dir, '..'),
+      entryPath: path.join(import.meta.dir, '..', 'tools-engine', 'entry.ts'),
+      rootDir: path.join(import.meta.dir, '..', '..'),
       dataDir: path.join(dataDir, 'tools-engine'),
       // 落盘 env 与 host 同源：dataDir = 本入口解析后的数据目录；toolOutputDir = host 生效根。
       settings: { dataDir, toolOutputDir: toolOutputRoot() },

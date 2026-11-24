@@ -17,7 +17,7 @@
  * @module vessel/runtime-notice
  */
 
-import type { EventStream } from '../packages/core/src/index';
+import type { EventStream } from '../../packages/core/src/index';
 
 /**
  * 通知作用域：与 `gateway.reload` 的 scope 同名（`update` / `peer` 留给其它来源）。
