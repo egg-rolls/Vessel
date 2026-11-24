@@ -206,9 +206,21 @@ function mergeTailPage(
     return { detail: page, window: nextWindow, notice: cached.notice };
   }
   const prefix = cached.detail.messages.slice(0, nextWindow.start - old.start);
+  // 内容不变的刷新必须**零作废**：新尾页与缓存尾段逐条全等时复用缓存 messages 引用。
+  // 否则每次强制刷新（终态精确刷新 / 重连 hydrate）都分配新数组 → 历史索引按引用 memo
+  // 失效 → 认领账本身份失效整表重判 → item 流重建（闪现 + 滚动跳位的放大器）。
+  // 比较用逐条 JSON 全等：两份都来自同一个 sessions.get 序列化（字段序稳定），
+  // 窗口 ≤ message_limit 条 × 8KiB，只在刷新时跑，代价可忽略。
+  const cachedTail = cached.detail.messages.slice(nextWindow.start - old.start);
+  const tailUnchanged =
+    cachedTail.length === page.messages.length &&
+    cachedTail.every((message, index) => {
+      const next = page.messages[index];
+      return next !== undefined && JSON.stringify(message) === JSON.stringify(next);
+    });
   const detail: SessionDetail = {
     ...page,
-    messages: prefix.concat(page.messages),
+    messages: tailUnchanged ? cached.detail.messages : prefix.concat(page.messages),
     messages_total: nextWindow.end,
   };
   if (old.next_before === undefined) delete detail.next_before;
