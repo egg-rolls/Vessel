@@ -912,13 +912,17 @@
   overflow-wrap: anywhere;
 }
 
+/* 原始载荷透黑底（用户裁定：元素无底色）：摘掉 deep 灰板，换细线框。
+   本类只服务 EventPayload（内部事件展开区），不与它处共享 —— 0.52 工具卡先例同款
+   「只摘局部声明、不动共享 token」；--surface-deep 本身不改。 */
 .event-raw-pre {
   max-height: 288px;
   margin: 4px 0 0;
   padding: 8px 10px;
   overflow: auto;
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--surface-deep);
+  background: transparent;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--size-xs);
@@ -1013,7 +1017,8 @@
 }
 
 .notice-block.info {
-  background: var(--accent-soft);
+  /* 透黑底（用户裁定）：系统事件卡不再铺薄荷绿罩色，语义只留在文字与圆点色上。 */
+  background: transparent;
   color: var(--accent);
 }
 

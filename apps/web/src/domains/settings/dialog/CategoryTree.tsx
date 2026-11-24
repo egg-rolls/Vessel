@@ -44,7 +44,9 @@ export function CategoryTree({
             role="tab"
             aria-selected={activeId === node.id}
             className={`shrink-0 rounded-full px-3 py-1 text-sm transition-colors ${
-              activeId === node.id ? 'bg-accent-soft text-accent-ink' : 'bg-sunken text-muted'
+              activeId === node.id
+                ? 'bg-accent-soft text-accent-ink'
+                : 'bg-transparent text-muted hover:bg-hover'
             }`}
             onClick={() => onSelect(node.id)}
           >
@@ -67,7 +69,7 @@ export function CategoryTree({
               {hasChildren && (
                 <button
                   type="button"
-                  className="px-1 text-xs text-faint"
+                  className="bg-transparent px-1 text-xs text-faint"
                   aria-expanded={!collapsed}
                   aria-label={
                     collapsed ? t('settings.dialog.expandTree') : t('settings.dialog.collapseTree')
@@ -82,7 +84,7 @@ export function CategoryTree({
                 className={`flex grow items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors ${
                   activeId === node.id
                     ? 'bg-accent-soft text-accent-ink'
-                    : 'text-ink hover:bg-hover'
+                    : 'bg-transparent text-ink hover:bg-hover'
                 } ${hasChildren ? '' : 'ml-4'}`}
                 aria-current={activeId === node.id ? 'true' : undefined}
                 onClick={() => onSelect(node.id)}
@@ -100,7 +102,7 @@ export function CategoryTree({
                     className={`flex items-center justify-between gap-2 rounded-sm px-2 py-1 text-left text-sm transition-colors ${
                       activeId === child.id
                         ? 'bg-accent-soft text-accent-ink'
-                        : 'text-muted hover:bg-hover'
+                        : 'bg-transparent text-muted hover:bg-hover'
                     }`}
                     aria-current={activeId === child.id ? 'true' : undefined}
                     onClick={() => onSelect(child.id)}

@@ -132,6 +132,25 @@ export function buildNavModel({
     if (group.items.length > 0) groups.push(group);
   };
 
+  /** 内置组 → 模型（core 组单独置底，见下方用户裁决注释）。 */
+  const coreGroupModel = (group: (typeof NAV_GROUPS)[number], order: number): NavGroupModel => {
+    const items = group.domains.map((domain) => coreItem(domain, route, statuses, counts));
+    // 旧 `observe` 槽位并入 orchestration 组；旧 `status` key 并入 core。
+    if (group.id === 'network')
+      items.push(...pagesFor(pluginPages, 'observe', route, i18nByPlugin, locale));
+    if (group.id === 'core')
+      items.push(...pagesFor(pluginPages, 'status', route, i18nByPlugin, locale));
+    items.push(...pagesFor(pluginPages, group.id, route, i18nByPlugin, locale));
+    return {
+      id: group.id,
+      title: navGroupLabel(group.id),
+      icon: CORE_GROUP_ICONS[group.id],
+      order,
+      collapsible: true,
+      items,
+    };
+  };
+
   push({
     id: 'top',
     title: navGroupLabel('top'),
@@ -142,21 +161,10 @@ export function buildNavModel({
   });
 
   NAV_GROUPS.forEach((group, index) => {
-    const items = group.domains.map((domain) => coreItem(domain, route, statuses, counts));
-    // 旧 `observe` 槽位并入 orchestration 组；旧 `status` key 并入 core。
-    if (group.id === 'network')
-      items.push(...pagesFor(pluginPages, 'observe', route, i18nByPlugin, locale));
-    if (group.id === 'core')
-      items.push(...pagesFor(pluginPages, 'status', route, i18nByPlugin, locale));
-    items.push(...pagesFor(pluginPages, group.id, route, i18nByPlugin, locale));
-    push({
-      id: group.id,
-      title: navGroupLabel(group.id),
-      icon: CORE_GROUP_ICONS[group.id],
-      order: index + 1,
-      collapsible: true,
-      items,
-    });
+    // 用户裁决：状态信息组（枢纽 / 网关 / 插件宿主，绿点 + 版本号）只是看信息的，
+    // 不挡工作面板 —— 移到导航**最底部**（自定义工作面板组之后），默认折叠。
+    if (group.id === 'core') return;
+    push(coreGroupModel(group, index + 1));
   });
 
   const coreCount = groups.length;
@@ -181,6 +189,11 @@ export function buildNavModel({
       items: pagesFor(pluginPages, group.id, route, i18nByPlugin, locale),
     }));
   for (const group of customGroups) push(group);
+
+  // 状态信息组置底（用户裁决）：工作面板（请求日志 / 用量 / 模型管理等插件组）在上，
+  // 枢纽 / 网关 / 插件宿主在最下；默认折叠见 DomainNav.readCollapsedGroups。
+  const coreGroup = NAV_GROUPS.find((group) => group.id === 'core');
+  if (coreGroup) push(coreGroupModel(coreGroup, NAV_GROUPS.length + 1));
 
   return groups;
 }

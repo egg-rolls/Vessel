@@ -8,7 +8,16 @@
 import { type ReactNode, useEffect, useState } from 'react';
 import { CopyButton } from '../../../components/CopyButton';
 import { JsonView } from '../../../components/JsonView';
-import { Badge, Button, Input, Select } from '../../../components/ui';
+import {
+  Badge,
+  Button,
+  GHOST_BADGE_CLASS,
+  GHOST_CONTROL_CLASS,
+  GHOST_PANEL_CLASS,
+  Input,
+  Select,
+} from '../../../components/ui';
+import { cn } from '../../../components/ui/cn';
 import { hasMessage, t } from '../../../i18n';
 import type { SettingDef } from '../../../state/settings-registry';
 import { highlightSegments } from '../../../state/settings-search';
@@ -57,7 +66,7 @@ function CommitInput({
   return (
     <Input
       type={kind === 'number' ? 'number' : 'text'}
-      className="max-w-80 font-mono"
+      className={cn(GHOST_CONTROL_CLASS, 'max-w-80 font-mono')}
       disabled={disabled}
       min={min}
       max={max}
@@ -148,7 +157,7 @@ export function SettingRow({
     control =
       options.length > 4 ? (
         <Select
-          className="max-w-80"
+          className={cn(GHOST_CONTROL_CLASS, 'max-w-80')}
           disabled={controlDisabled}
           value={value}
           onChange={(event) => onSave(def, event.target.value)}
@@ -199,7 +208,7 @@ export function SettingRow({
     }
     control = (
       <div className="flex flex-col gap-1">
-        <JsonView value={parsed} label={def.key} maxHeight={200} />
+        <JsonView value={parsed} label={def.key} maxHeight={200} className={GHOST_PANEL_CLASS} />
         <span className="text-sm text-muted">{t('settings.dialog.editInYaml')}</span>
       </div>
     );
@@ -218,8 +227,14 @@ export function SettingRow({
         <span className="font-medium text-md">
           <Highlighted text={title} query={query} />
         </span>
-        <Badge tone="neutral">{scopeLabel}</Badge>
-        {def.readOnly && <Badge tone="neutral">{t('settings.dialog.readOnly')}</Badge>}
+        <Badge tone="neutral" className={GHOST_BADGE_CLASS}>
+          {scopeLabel}
+        </Badge>
+        {def.readOnly && (
+          <Badge tone="neutral" className={GHOST_BADGE_CLASS}>
+            {t('settings.dialog.readOnly')}
+          </Badge>
+        )}
         {saving && <Badge tone="accent">…</Badge>}
         {canReset && (
           <Button

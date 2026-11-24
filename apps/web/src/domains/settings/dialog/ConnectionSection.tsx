@@ -16,7 +16,7 @@ export function ConnectionSection({ onOpenGateway }: { onOpenGateway: () => void
   const tone = connectionState === 'open' && hasToken ? 'success' : 'warn';
 
   return (
-    <div className="flex flex-col gap-2 rounded-sm bg-sunken p-3">
+    <div className="flex flex-col gap-2 rounded-sm border border-line bg-transparent p-3">
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <Badge tone={tone}>{stateLabel}</Badge>
         {nodeLabel && <span className="text-muted">{nodeLabel}</span>}

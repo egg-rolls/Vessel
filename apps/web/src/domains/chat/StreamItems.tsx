@@ -309,7 +309,7 @@ export function RunFailureCard({
             </span>
           )}
           <a
-            className="ml-auto inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm bg-sunken px-2.5 py-1 text-sm tracking-wide text-ink no-underline transition-colors duration-150 tint-hover tint-press"
+            className="ml-auto inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm border border-line-strong bg-transparent px-2.5 py-1 text-sm tracking-wide text-ink no-underline transition-colors duration-150 tint-hover tint-press"
             href={runDetailHref(failure)}
           >
             {t('chat.run.detail')}

@@ -498,7 +498,9 @@ export function SettingsDialog({
             role="tab"
             aria-selected={tab === entry.id}
             className={`rounded-sm px-3 py-1 text-sm transition-colors ${
-              tab === entry.id ? 'bg-accent-soft text-accent-ink' : 'text-muted hover:bg-hover'
+              tab === entry.id
+                ? 'bg-accent-soft text-accent-ink'
+                : 'bg-transparent text-muted hover:bg-hover'
             }`}
             onClick={() => selectTab(entry.id)}
           >

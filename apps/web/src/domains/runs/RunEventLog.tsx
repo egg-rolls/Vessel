@@ -15,7 +15,15 @@ import {
   NotEnabledState,
   StaleNotice,
 } from '../../components/States';
-import { Badge, Button, cn, Input } from '../../components/ui';
+import {
+  Badge,
+  Button,
+  cn,
+  GHOST_BADGE_CLASS,
+  GHOST_BUTTON_CLASS,
+  GHOST_CONTROL_CLASS,
+  Input,
+} from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import { t } from '../../i18n';
 import { isErrorEventType } from '../../state/error-visibility';
@@ -24,14 +32,17 @@ import { pretty } from './run-detail-format';
 import { buildLogRows, eventLogWindow, filterLogRows, parseSeqInput } from './run-event-log';
 import type { RunTrace } from './useRunTrace';
 
-/** 行网格：窄屏堆叠，宽屏一行的四列（时间戳 / seq / type / 摘要）。 */
+/** 行网格：窄屏堆叠，宽屏一行的四列（时间戳 / seq / type / 摘要）。
+ *  bg-transparent 必须显式写：无底色 utility 的 <button> 会落回浏览器原生
+ *  ButtonFace（暗色档 ≈ #6b6b6b 灰板）——那正是用户裁定要去掉的灰底。 */
 const ROW_CLASS =
-  'grid w-full grid-cols-[minmax(0,1fr)] gap-x-3 gap-y-0.5 px-2.5 py-1.5 text-left font-mono text-xs tint-hover tint-press wide:grid-cols-[11.5rem_4.5rem_minmax(8rem,15rem)_minmax(0,1fr)] wide:items-baseline';
+  'grid w-full grid-cols-[minmax(0,1fr)] gap-x-3 gap-y-0.5 bg-transparent px-2.5 py-1.5 text-left font-mono text-xs tint-hover tint-press wide:grid-cols-[11.5rem_4.5rem_minmax(8rem,15rem)_minmax(0,1fr)] wide:items-baseline';
 
 const HEAD_CLASS =
   'hidden grid-cols-[11.5rem_4.5rem_minmax(8rem,15rem)_minmax(0,1fr)] gap-x-3 px-2.5 py-1.5 font-mono text-2xs tracking-widest text-faint uppercase wide:grid';
 
-const FILTER_INPUT_CLASS = 'w-auto px-2.25 py-1.25 text-xs font-mono';
+/* 透黑底细线（用户裁定：元素无底色）：过滤输入框摘掉 sunken 凹槽，换透明 + 细线。 */
+const FILTER_INPUT_CLASS = cn('w-auto px-2.25 py-1.25 text-xs font-mono', GHOST_CONTROL_CLASS);
 
 export function RunEventLog({
   trace,
@@ -130,10 +141,14 @@ export function RunEventLog({
           aria-label={t('runs.log.keywordLabel')}
           spellCheck={false}
         />
-        <Button size="small" onClick={() => void trace.loadFirstPage()}>
+        <Button
+          size="small"
+          className={GHOST_BUTTON_CLASS}
+          onClick={() => void trace.loadFirstPage()}
+        >
           {t('runs.detail.refreshEvents')}
         </Button>
-        <Badge>
+        <Badge className={GHOST_BADGE_CLASS}>
           <span className="tabular-nums">
             {filtered.length}/{rows.length}
           </span>
@@ -179,7 +194,8 @@ export function RunEventLog({
             />
           ) : (
             <>
-              <div className="mt-2 overflow-hidden rounded-md bg-sunken">
+              {/* 日志面板透黑底：灰底板换细线框，行分隔仍由 border-t 提供。 */}
+              <div className="mt-2 overflow-hidden rounded-md border border-line bg-transparent">
                 <div className={HEAD_CLASS}>
                   <span>{t('runs.log.col.time')}</span>
                   <span>seq</span>
@@ -219,7 +235,7 @@ export function RunEventLog({
                           <span className="truncate text-muted">{row.summary}</span>
                         </button>
                         {open && (
-                          <div className="border-t border-line bg-deep px-2.5 py-2">
+                          <div className="border-t border-line px-2.5 py-2">
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="font-mono text-2xs text-faint uppercase">
                                 event json
@@ -230,7 +246,7 @@ export function RunEventLog({
                                 toast={t('runs.detail.copiedJson')}
                               />
                             </div>
-                            <pre className="json-body mt-1.5 rounded-sm bg-sunken">{json}</pre>
+                            <pre className="json-body mt-1.5">{json}</pre>
                           </div>
                         )}
                       </li>
@@ -244,6 +260,7 @@ export function RunEventLog({
                   <>
                     <Button
                       size="small"
+                      className={GHOST_BUTTON_CLASS}
                       disabled={view.page <= 1}
                       onClick={() => setPage(view.page - 1)}
                     >
@@ -254,6 +271,7 @@ export function RunEventLog({
                     </span>
                     <Button
                       size="small"
+                      className={GHOST_BUTTON_CLASS}
                       disabled={view.page >= view.pageCount}
                       onClick={() => setPage(view.page + 1)}
                     >
@@ -265,6 +283,7 @@ export function RunEventLog({
                   <>
                     <Button
                       size="small"
+                      className={GHOST_BUTTON_CLASS}
                       disabled={trace.loadingMore || trace.sinceSeq === undefined}
                       onClick={() => void trace.loadMore()}
                     >

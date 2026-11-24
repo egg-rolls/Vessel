@@ -18,11 +18,14 @@ const COLLAPSED_GROUPS_KEY = 'vessel.nav.collapsed-groups';
 function readCollapsedGroups(): Set<string> {
   try {
     const raw = localStorage.getItem(COLLAPSED_GROUPS_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return new Set();
+    // 用户裁决：状态信息组（core = 枢纽 / 网关 / 插件宿主）默认折叠置底；
+    // 用户手动展开过（有持久化值）则尊重用户选择。
+    if (raw === null) return new Set(['core']);
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set(['core']);
     return new Set(parsed.filter((value): value is string => typeof value === 'string'));
   } catch {
-    return new Set();
+    return new Set(['core']);
   }
 }
 
