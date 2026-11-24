@@ -17,8 +17,8 @@ import {
 } from 'react';
 import { useNodeStore } from '../stores/nodeStore';
 import { usePolledAction } from '../stores/usePolledAction';
-import { GatewayHttpError } from './client';
 import { useConnection } from './ConnectionProvider';
+import { GatewayHttpError } from './client';
 import type { ListedInteractionPage } from './interaction-hydration';
 import {
   fetchNodeAttention,
