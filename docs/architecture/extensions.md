@@ -66,13 +66,14 @@ interface PluginHost {
 plugins/                                 package.json + src/index.ts 存在即注册
 ├── tools/{basic-tools,recall,web-tools}/  → bash/read/edit/write · recall · web_search/web_fetch
 ├── context/doc-subscription/            → subscribe 工具 + BeforeLlm hook
+├── context/skills/                      → skills 工具（list/search/load 信任门）+ 技能库管理 RPC + UI
 ├── mcp/client/ evals/harness/ im/feishu/ tools/engine-client/ → 工厂式（装配层自行构造）
 ├── security/{guardrail-pii,redact-secrets,tool-policy}/  → PII / 密钥 / 工具策略
 ├── observability/{hook-logging,usage}/  provider/{openai,anthropic,model-registry}/
 └── media/media/（opt-in）  marketplace/marketplace/（child：页面 + 市场）
 ```
 
-共 **18 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `mcp-client`、`evals`、`feishu` 与 `engine-client`（无 install 注册面，工厂即插件面：`createEngineClient` 由 bootstrap 构造，转发 handler 写回既有工具定义、不注册自有工具，执行位置见 [tools](tools.md#engine-exec)）。MCP 要求至少一个 `mcp_servers` 条目；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。opt-in 集（`OPT_IN_PLUGINS`）当前只有 `media`；`web-tools` 自 0.56 转默认加载。
+共 **19 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `mcp-client`、`evals`、`feishu` 与 `engine-client`（无 install 注册面，工厂即插件面：`createEngineClient` 由 bootstrap 构造，转发 handler 写回既有工具定义、不注册自有工具，执行位置见 [tools](tools.md#engine-exec)）。MCP 要求至少一个 `mcp_servers` 条目；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。opt-in 集（`OPT_IN_PLUGINS`）当前只有 `media`；`web-tools` 自 0.56 转默认加载。
 
 `PluginLoader` 的接口：
 

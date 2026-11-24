@@ -1,0 +1,185 @@
+{
+  "name": "@vessel-agent/plugin-skills",
+  "version": "0.56.1",
+  "description": "Managed skill library: scan / index / trust-gated load + library UI",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "web"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/egg-rolls/Vessel.git",
+    "directory": "plugins/context/skills"
+  },
+  "engines": {
+    "bun": ">=1.3.9"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:ui": "tsc -p tsconfig.web.json --noEmit && vite build && vite build --config vite.config.embed.ts",
+    "typecheck:ui": "tsc -p tsconfig.web.json --noEmit"
+  },
+  "dependencies": {
+    "@vessel-agent/basic-tools": "workspace:*",
+    "@vessel-agent/core": "workspace:*",
+    "@vessel-agent/plugin-sdk": "workspace:*",
+    "@vessel-agent/plugin-ui": "workspace:*",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.6.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^7.0.0"
+  },
+  "vessel": {
+    "id": "skills",
+    "name": "Skills",
+    "version": "0.1.0",
+    "engines": {
+      "vessel": ">=0.56.0 <1.0.0"
+    },
+    "description": "Managed skill library: scan / index / trust-gated load + library UI",
+    "side": "both",
+    "ui": {
+      "dir": "web",
+      "embed": {
+        "entry": "embed/index.mjs",
+        "css": "embed/index.css",
+        "runtime": {
+          "react": "^19",
+          "sdk": "^1"
+        }
+      }
+    },
+    "activationEvents": [
+      "onPage:skills"
+    ],
+    "contributes": {
+      "i18n": {
+        "en": {
+          "nav.skills": "Skills",
+          "trust.trusted": "Trusted",
+          "trust.stale": "Changed",
+          "trust.unknown": "Untrusted",
+          "trust.revoked": "Revoked"
+        },
+        "zh-CN": {
+          "nav.skills": "技能库",
+          "trust.trusted": "已信任",
+          "trust.stale": "已变更",
+          "trust.unknown": "未信任",
+          "trust.revoked": "已撤销"
+        }
+      },
+      "pages": [
+        {
+          "id": "skills",
+          "title": "Skills",
+          "titleKey": "nav.skills",
+          "nav": "integrations",
+          "icon": "tools",
+          "order": 60,
+          "entry": "skills.html",
+          "component": "SkillsView"
+        }
+      ],
+      "rpc": [
+        {
+          "name": "list",
+          "description": "Skill index page (metadata only)",
+          "permission": "read"
+        },
+        {
+          "name": "get",
+          "description": "Skill detail: entry + content + trust (human view)",
+          "permission": "read"
+        },
+        {
+          "name": "search",
+          "description": "Substring search over name/description/tags/id",
+          "permission": "read"
+        },
+        {
+          "name": "loads",
+          "description": "Per-session skill load records",
+          "permission": "read"
+        },
+        {
+          "name": "rescan",
+          "description": "Rebuild the index from all enabled roots",
+          "permission": "write"
+        },
+        {
+          "name": "trust_set",
+          "description": "Pin current hash (trust) or revoke trust for a skill",
+          "permission": "write"
+        }
+      ],
+      "settings": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Master switch; false = install registers nothing"
+        },
+        "sources": {
+          "type": "object",
+          "default": {
+            "project": true,
+            "user": true,
+            "library": true
+          },
+          "description": "Which skill roots to scan (project / user / library)"
+        },
+        "watch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Watch skill roots and rebuild the index (300ms debounce)"
+        },
+        "trust_default": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "deny"
+          ],
+          "default": "ask",
+          "description": "Policy for untrusted / changed skill content on load"
+        },
+        "max_load_bytes": {
+          "type": "number",
+          "default": 65536,
+          "description": "Cap for skill content returned by load / get"
+        },
+        "allowed_roots": {
+          "type": "array",
+          "description": "Inherited from basic-tools when unset (assembly merge)"
+        },
+        "deny_paths": {
+          "type": "array",
+          "description": "Inherited from basic-tools; library root appended by assembly"
+        }
+      }
+    },
+    "permissions": {
+      "fs": [
+        "data-dir"
+      ],
+      "net": [],
+      "process": false,
+      "secrets": false,
+      "events": [],
+      "rpc": []
+    }
+  }
+}

@@ -12,7 +12,7 @@ paths: [src/plugin/plugin-loader.ts, src/plugin/plugin-manifest.ts, packages/ser
 ## 一个机制，两种形态
 
 - 只有一套 plugin loader / manifest / 生命周期；`PluginHost` 仍是 core 唯一的运行期注册入口，禁止第二套构造期注册表（`ModuleHost` / `ModuleRegistry`）。
-- **能力插件**（capability）：in-process，`install(host)` 往 `PluginHost` 注册 tool / provider / guardrail / hook，直接影响 run 与模型输入；还可经 `Plugin.rpc` 暴露 in-process RPC（与 child 共用同一 `PluginRpcRegistry` / canonical 名 / DTO 校验，缝见 [extensions](extensions.md#plugin)）。
+- **能力插件**（capability）：in-process，`install(host)` 往 `PluginHost` 注册 tool / provider / guardrail / hook，直接影响 run 与模型输入；还可经 `Plugin.rpc` 暴露 in-process RPC（与 child 共用同一 `PluginRpcRegistry` / canonical 名 / DTO 校验，缝见 [extensions](extensions.md#plugin)）。声明 `vessel` 清单但无 `entry` 的 in-process 包同样有完整贡献面（pages / ui.embed / rpc / settings / i18n）：先例 `plugins/provider/model-registry` 与 `plugins/context/skills`（技能库管理：三来源扫描索引 + TOFU 信任门控的 `skills` 工具 + 管理 RPC + embed UI + `contributes.settings`，设计见 [skills-plugin-design](../dev/plans/skills-plugin-design.md)）。
 - **体验插件**（experience）：独立子进程，只经换行分隔的 JSON-RPC / DTO 与宿主通信，贡献 pages / commands / settings / rpc / events / panels / toolbar；UI 在独立 origin 的 iframe 中运行。
 - 两者同名 plugin、同一份清单与发现规则；差别只在执行位置与贡献面，不在扩展机制。贡献面由 harness（`packages/serve`、`apps/web`、CLI 装配层）收集，core 不感知。
 - **归属级**：默认 Workspace plugin（一家公司）；Platform plugin 仅服务所有公司的基础设施（Hub / registry / marketplace 后端）。Team 是使用范围，不拥有插件。Workspace 插件独立包与 Workspace=公司数据目录仍未实现（target），见 [topology](topology.md) 的「未实现 / target」表与[插件归属](topology.md#插件归属)。

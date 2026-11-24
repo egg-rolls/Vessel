@@ -9,6 +9,7 @@
  * @module vessel/plugin-config
  */
 
+import * as path from 'node:path';
 import {
   type EnvInjectionConfig,
   type GuardrailConfig,
@@ -220,10 +221,52 @@ export function buildPluginConfigMap(
   if (agentCwd !== undefined && map['basic-tools']?.cwd === undefined) {
     map['basic-tools'] = { ...(map['basic-tools'] ?? {}), cwd: agentCwd };
   }
-  applyPathBoundaryFallback(map);
+  // skills 的 project 根 = <cwd>/skills：cwd 回落与 basic-tools 同口径（显式优先）。
+  if (agentCwd !== undefined && map['skills']?.cwd === undefined) {
+    map['skills'] = { ...(map['skills'] ?? {}), cwd: agentCwd };
+  }
   applyDataDirFallback(map, dataDir);
+  // 边界回落在 dataDir/cwd 注入之后：skills 无显式 config 时也有 map 条目可继承
+  // （media 行为不变：无 config 条目仍跳过）。
+  applyPathBoundaryFallback(map);
+  applySkillsLibraryIsolation(map, dataDir, skillsActive(configured, declarative));
   applyEnvGranularity(map, envInjection);
   return map;
+}
+
+/** skills 是否会被装载（默认集含 skills；显式 plugins[] 以列表为准） */
+function skillsActive(
+  configured: PluginConfig[] | undefined,
+  declarative: PluginConfig[],
+): boolean {
+  if (configured === undefined) return true;
+  const explicit = configured.find((entry) => entry.name === 'skills');
+  if (explicit !== undefined) return explicit.enabled !== false;
+  return declarative.some((entry) => entry.name === 'skills' && entry.enabled !== false);
+}
+
+/**
+ * skills 收集库隔离（设计 §9.3，与信任门配套）：把
+ * `<dataDir>/plugins/skills/library/` 追加进 basic-tools 的 deny_paths——
+ * 模型 read/edit 收集库文件 → deny，技能内容只能经 `skills load` 的信任门
+ * 进入语言空间。project/user 根不隔离（用户自己的文件，@path/read 现态保留）。
+ *
+ * 诚实声明：bash 命令本身不受路径沙箱约束（现态 ADR-055），隔离挡的是工具面
+ * 顺手读，不是决心绕行的命令。skills 未装载时不追加（library 无管理方）。
+ */
+function applySkillsLibraryIsolation(
+  map: Record<string, Record<string, unknown>>,
+  dataDir: string | undefined,
+  active: boolean,
+): void {
+  if (dataDir === undefined || dataDir === '' || !active) return;
+  const libraryRoot = path.join(dataDir, 'plugins', 'skills', 'library');
+  const basicTools = map['basic-tools'] ?? {};
+  const key =
+    ['denyPaths', 'deny_paths'].find((spell) => basicTools[spell] !== undefined) ?? 'deny_paths';
+  const existing = Array.isArray(basicTools[key]) ? (basicTools[key] as unknown[]) : [];
+  if (existing.includes(libraryRoot)) return;
+  map['basic-tools'] = { ...basicTools, [key]: [...existing, libraryRoot] };
 }
 
 /**
@@ -262,8 +305,8 @@ function applyEnvGranularity(
 }
 
 /**
- * `recall` / `doc-subscription` 的数据目录回落到**应用层解析出来的那份**（0.56；
- * doc-subscription 于蜂群协作增强切片加入）。
+ * `recall` / `doc-subscription` / `skills` 的数据目录回落到**应用层解析出来的那份**
+ * （0.56；doc-subscription 于蜂群协作增强切片加入，skills 于收集库切片加入）。
  *
  * 为什么必须在装配层拼：`recall` 要读 `<data_dir>/sessions/<id>/`（时间线 + 压缩索引），
  * `doc-subscription` 生命周期要读 `<data_dir>/sessions/<id>.json` 会话壳
@@ -280,7 +323,7 @@ function applyDataDirFallback(
   dataDir?: string,
 ): void {
   if (dataDir === undefined || dataDir === '') return;
-  for (const name of ['recall', 'doc-subscription']) {
+  for (const name of ['recall', 'doc-subscription', 'skills']) {
     const config = map[name] ?? {};
     if (config.dataDir !== undefined || config.data_dir !== undefined) continue;
     map[name] = { ...config, data_dir: dataDir };
@@ -297,7 +340,8 @@ const PATH_BOUNDARY_KEY_GROUPS: readonly (readonly [string, string])[] = [
 ];
 
 /**
- * `media` 的路径边界回退到 `basic-tools` 的那份（0.52 附件引用改为读侧校验的配套）。
+ * `media` / `skills` 的路径边界回退到 `basic-tools` 的那份（0.52 附件引用改为读侧校验
+ * 的配套；skills 于收集库切片加入，扫描读用户技能目录同口径）。
  *
  * 为什么在装配层拼：插件 `install(host, { config })` 只收到**自己那份** config
  *（`pluginConfigs[plugin.name]`），`PluginHost` 没有 config getter、`PluginInitContext`
@@ -317,20 +361,24 @@ const PATH_BOUNDARY_KEY_GROUPS: readonly (readonly [string, string])[] = [
  */
 function applyPathBoundaryFallback(map: Record<string, Record<string, unknown>>): void {
   const basicTools = map['basic-tools'];
-  const media = map.media;
-  if (basicTools === undefined || media === undefined) return;
-  const merged: Record<string, unknown> = { ...media };
-  let inherited = false;
-  for (const spellings of PATH_BOUNDARY_KEY_GROUPS) {
-    // media 自己配了（任一个拼写存在，含空数组）→ 保持原值
-    if (spellings.some((key) => merged[key] !== undefined)) continue;
-    const source = spellings.find((key) => basicTools[key] !== undefined);
-    if (source === undefined) continue;
-    merged[source] = basicTools[source];
-    inherited = true;
+  if (basicTools === undefined) return;
+  // media（0.52）与 skills（收集库扫描读用户技能目录）同口径继承 basic-tools 边界。
+  for (const name of ['media', 'skills']) {
+    const own = map[name];
+    if (own === undefined) continue;
+    const merged: Record<string, unknown> = { ...own };
+    let inherited = false;
+    for (const spellings of PATH_BOUNDARY_KEY_GROUPS) {
+      // 自己配了（任一个拼写存在，含空数组）→ 保持原值
+      if (spellings.some((key) => merged[key] !== undefined)) continue;
+      const source = spellings.find((key) => basicTools[key] !== undefined);
+      if (source === undefined) continue;
+      merged[source] = basicTools[source];
+      inherited = true;
+    }
+    // 没有回退到任何键时保持原对象引用，避免制造无意义的新对象（配置指纹按 JSON 比）
+    if (inherited) map[name] = merged;
   }
-  // 没有回退到任何键时保持原对象引用，避免制造无意义的新对象（配置指纹按 JSON 比）
-  if (inherited) map.media = merged;
 }
 
 /**
