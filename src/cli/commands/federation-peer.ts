@@ -94,8 +94,12 @@ function entryLabel(entry: Record<string, unknown>): string {
   return `${nodeId ?? '?'}:${teamId ?? '?'}`;
 }
 
-/** 读用户配置里的 federation.peers 原始条目（锁内调用）。 */
-function readPeerEntries(root: Record<string, unknown>): Record<string, unknown>[] {
+/**
+ * 读用户配置里的 federation.peers 原始条目（锁内调用）。
+ * 返回**原始数组**（含非对象条目）：写回时原样保留，绝不静默丢用户数据；
+ * 匹配 / 渲染只对对象条目生效。
+ */
+function readPeerEntries(root: Record<string, unknown>): unknown[] {
   const federation = root.federation;
   if (federation === undefined || federation === null) return [];
   if (!isRecord(federation)) {
@@ -112,13 +116,13 @@ function readPeerEntries(root: Record<string, unknown>): Record<string, unknown>
       t('federation.peer.invalidBlock', { block: 'federation.peers' }),
     );
   }
-  return peers.filter(isRecord);
+  return peers;
 }
 
 /** 写回 federation.peers（保留 federation 块与其它根键；空数组保留为 []）。 */
 function withPeerEntries(
   root: Record<string, unknown>,
-  entries: Record<string, unknown>[],
+  entries: unknown[],
 ): Record<string, unknown> {
   const federation = isRecord(root.federation) ? root.federation : {};
   return { ...root, federation: { ...federation, peers: entries } };
@@ -235,6 +239,7 @@ async function peerAddCommand(
       const root = await readUserConfigRoot(target);
       const entries = readPeerEntries(root);
       const duplicate = entries.some((entry) => {
+        if (!isRecord(entry)) return false;
         const identity = entryIdentity(entry);
         return identity.nodeId === command.nodeId && identity.teamId === command.teamId;
       });
@@ -323,7 +328,8 @@ async function peerRemoveCommand(
     await withConfigLock(target, async () => {
       const root = await readUserConfigRoot(target);
       const entries = readPeerEntries(root);
-      const matches = entries.filter((entry) => {
+      const matches = entries.filter((entry): entry is Record<string, unknown> => {
+        if (!isRecord(entry)) return false;
         const identity = entryIdentity(entry);
         if (isLabel) {
           return `${identity.nodeId}:${identity.teamId}` === command.target;
