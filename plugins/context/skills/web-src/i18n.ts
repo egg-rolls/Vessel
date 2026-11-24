@@ -33,8 +33,13 @@ const EN = {
     'Put markdown into <repo>/skills/ or ~/.vessel/skills/, or import skills into the collected library (<dataDir>/plugins/skills/library/). Then rescan.',
   'skills.noMatch': 'No skills match the current filters.',
   'skills.generatedAt': 'Index generated at {ts}',
+  'skills.toolbar': 'Skill filters and actions',
 
   'detail.empty': 'Select a skill to see its content, trust state and session loads.',
+  'detail.missing.title': 'Skill no longer available',
+  'detail.missing.description':
+    'It may have been deleted or renamed on disk. Rescan the index, or pick another skill from the list.',
+  'detail.backToList': 'Back to list',
   'detail.source': 'Source',
   'detail.version': 'Version',
   'detail.tags': 'Tags',
@@ -105,8 +110,13 @@ const ZH: Record<MessageKey, string> = {
     '把 markdown 放进 <仓库>/skills/ 或 ~/.vessel/skills/，或把技能导入收集库（<dataDir>/plugins/skills/library/），然后重新扫描。',
   'skills.noMatch': '没有符合当前过滤条件的技能。',
   'skills.generatedAt': '索引生成于 {ts}',
+  'skills.toolbar': '技能筛选与操作',
 
   'detail.empty': '选择一个技能，查看正文、信任状态与会话加载记录。',
+  'detail.missing.title': '技能不存在或已移除',
+  'detail.missing.description':
+    '它可能已在磁盘上被删除或重命名。重新扫描索引，或从列表中选择其它技能。',
+  'detail.backToList': '返回列表',
   'detail.source': '来源',
   'detail.version': '版本',
   'detail.tags': '标签',
