@@ -619,3 +619,79 @@ plugin-ui 是浏览器侧包，build subpath 是 node 侧工具——package.jso
 - 不做插件间依赖自动解析 / 自动安装（N1）。
 - 不做 child 协议入口的运行时框架化（usage/marketplace 的 NDJSON 入口是契约实现，
   模板复制 + 指针足够；抽框架 = 第二套机制风险）。
+
+## 7. 现有插件迁移路径
+
+纪律（照 0.51 期 0 / model-registry 先例）：**每期对存量插件行为零变化**——
+迁移 = 换声明位置 / 换生成工具，不改语义；验收以「配置快照 / 工具面 / RPC 面 / 构建产物
+字节等价」为准（人工评审项，宪法零测试）。迁移全部可选、可逐个、可回退（显式字段写回即回退）。
+
+### 7.1 逐插件决策表
+
+| 插件 | 迁移内容 | 期 | 备注 |
+| --- | --- | --- | --- |
+| web-tools | settings 单源（settings.ts + sync）；清单四件套改缺省推导 | P2 | 最小 capability，先验证推导链 |
+| media | 补 vessel 清单（`defaultEnabled:false` + `inherit.pathBoundary`）；settings 单源；**OPT_IN_PLUGINS 删名** | P3 | 无清单→有清单是行为敏感点：默认集语义由 Set 转声明，需逐字对齐（含显式空数组边界语义） |
+| recall / doc-subscription | 补最小清单 + `inherit.dataDir`（doc-subscription 另 envGranularity 缓议） | P3 | 只迁 dataDir 注入；工具面不变 |
+| skills | settings/rpc 单源 + sync；UI 换共享构建工厂；`inherit.{pathBoundary,dataDir,cwd}`；收集库隔离保持硬编码 | P3/P4 | 信任门 / TOFU / 三来源语义**不动**（q-skills-impl 刚落地，不碰安全面） |
+| model-registry | rpc 单源（handler map 已在 rpc switch，改 defineRpcHandlers）；UI 换共享构建工厂；清单四件套缺省化 | P2/P4 | provider 类装配 loop 不动；凭证/明文纪律不动 |
+| usage / marketplace | UI 换共享构建工厂；清单 activationEvents/pages entry 缺省化；协议入口不动 | P4 | child 热重载语义不动 |
+| basic-tools | `inherit.cwd` 声明化；envGranularity 缓议 | P3 | deny_paths 注入方（skills 隔离）保持硬编码 |
+| anthropic / openai | **不迁**（provider 注册已是单行，无清单需求） | — | 可选：补最小清单只为 plugin list 展示，非必需 |
+| guardrail-pii / redact-secrets / tool-policy / hook-logging | **不迁**（声明式 guardrails/hooks 已自动；无贡献面需求） | — | 需要 settings 时再补清单 |
+| mcp-client / feishu / evals / engine-client | **不迁**（工厂式，§3.2 显式裁决） | — | wiring 是宿主功能 |
+| delegate-task / team | **不迁**（legacy 工具插件，无贡献面） | — | 同上 |
+
+### 7.2 宿主侧清理顺序（严格后置）
+
+1. P3 完成 media/recall/doc-subscription/skills/basic-tools 声明化后：
+   `buildPluginConfigMap` 的按名硬编码**降级为兜底分支**（不删，legacy 外部插件可能依赖）；
+   `OPT_IN_PLUGINS` 在 media 迁移后删名（Set 保留机制，空集）。
+2. P4 完成 UI 工厂迁移后：4 份 vite 配置删除，产物 diff 评审归档。
+3. 硬编码兜底的最终删除：**不设期限**——外部 legacy 插件（无清单）永远可能存在于
+   user/project 目录，兜底是兼容面不是债。
+
+### 7.3 新插件（脚手架产物）的出生形态
+
+create 生成的插件**直接是目标形态**（单源 settings/rpc + 缺省推导 + inherit 声明），
+不经历迁移。P1（脚手架）先于 P2-P4（运行时机制）落地时，模板按当时现态生成
+（如 opt-in 过渡期写注释提示进 OPT_IN_PLUGINS）；模板随分期演进，**已生成的插件不受
+模板演进影响**（生成物是普通源码，作者拥有）。
+
+## 8. 与先例对齐
+
+### 8.1 q-skills-impl（skills-plugin-design.md / 已落地 P1）
+
+- **形态照抄**：capability 模板 = skills 形态（in-process + capabilityManifest +
+  装配层 registerInProcessPlugin 自动登记 + `install(){}`/工具注册 + rpc 管理面）。
+  skills 设计 §3 的形态选择理由（不进子进程、信任门在插件内）对模板同样成立。
+- **安全面不碰**：TOFU 信任门 / 三来源 / 收集库隔离是 skills 专属语义，脚手架不通用化、
+  迁移不触碰（§7.1）。模板的 permissions 生成**最小空声明**，与 skills「声明过才给」口径一致。
+- **settings 协同**：skills 设计 §10 约定 contributes.settings 由 q-settings 自动发现渲染——
+  模板 settings 单源（§6.3）产出的 schema 严格落在该子集内，不扩字段。
+- **零测试纪律**：skills 实现分支按宪法删测试；本设计 VERIFY.md 替代测试占位（§5.4）同口径。
+
+### 8.2 q-media-view（investigation.md / media 插件）
+
+- **opt-in 语义**：media 的「不进默认集、显式 plugins: 才加载」迁为 `defaultEnabled:false`
+  声明（§6.4），语义逐字保留（含「显式列表即信任」）。
+- **边界继承**：media 的「自身 > basic-tools 回落、显式空数组 = 不限制」迁为
+  `inherit.pathBoundary` 声明，优先级与空数组语义不变（plugin-config.ts L362 注释是契约）。
+- **install 期探测**：media 的后端探测（pdftotext/tesseract/describe bridge）是插件内语义，
+  脚手架 tool 模板留「探测占位 + 缺后端明确报错不降级」注释指针，不通用化探测框架。
+- **refs 通道**：q-media-view 的「工具结果 → image refs」走宿主既有回执/注入通道，
+  与脚手架无交集；模板不复制该机制。
+
+### 8.3 q-settings（vscode-settings-design.md）
+
+- settings 的校验（serve 按 manifest spec）/ 落盘（setPluginConfigValue）/ 渲染（自动发现）
+  全链路已自动；本设计只解决「schema 与 parser 双写」（B4），不改 q-settings 任何接口。
+- `parseSettings` 助手的校验口径 = serve 方法层口径（type/enum/minmax），**插件侧预校验
+  不是第二套权威**：serve 仍按 manifest 校验，助手只是让 install 拿到类型化 config。
+
+### 8.4 plugin-embed 契约 / model-registry
+
+- 共享构建工厂（§6.5）封装的正是契约 §6（externals/import map）/ §9（层序）/ §10（双产线）
+  的现态实现；工厂**不新增契约语义**，只消灭复制。
+- capability 模板的 rpc 注册路径 = model-registry D3 路径（Plugin.rpc → registerInProcess →
+  同一 PluginRpcRegistry / canonical 名 / DTO 校验），不自造注册路径（model-registry 头注释纪律）。
