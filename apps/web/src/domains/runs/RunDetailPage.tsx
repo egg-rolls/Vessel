@@ -15,7 +15,13 @@ import { CopyButton } from '../../components/CopyButton';
 import { JsonView } from '../../components/JsonView';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
-import { Button, KeyValueList, Section } from '../../components/ui';
+import {
+  Button,
+  GHOST_BUTTON_CLASS,
+  GHOST_PANEL_CLASS,
+  KeyValueList,
+  Section,
+} from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import type { DurableRunSummary, RunStatus } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -84,7 +90,7 @@ export function RunDetailPage({
   return (
     <PageScaffold title={t('runs.detail.title')} subtitle={t('runs.detailPage.subtitle')}>
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="small" onClick={onBack}>
+        <Button size="small" className={GHOST_BUTTON_CLASS} onClick={onBack}>
           {t('runs.detailPage.back')}
         </Button>
         <StatusChip status={status} />
@@ -97,7 +103,11 @@ export function RunDetailPage({
           toast={t('runs.detail.copiedId')}
         />
         {raw !== null && (
-          <Button size="small" onClick={() => exportJson(raw, runId)}>
+          <Button
+            size="small"
+            className={GHOST_BUTTON_CLASS}
+            onClick={() => exportJson(raw, runId)}
+          >
             {t('runs.detail.exportJson')}
           </Button>
         )}
@@ -115,6 +125,7 @@ export function RunDetailPage({
         {resumable && (
           <Button
             size="small"
+            className={GHOST_BUTTON_CLASS}
             disabled={!canWrite || busy}
             title={!canWrite ? t('common.writesDisabled') : undefined}
             onClick={() => onResume(runId)}
@@ -230,7 +241,8 @@ export function RunDetailPage({
             <RunEventLog trace={runTrace} tab={tab} coreRunId={coreRunId} />
           </Section>
 
-          <details className="json-view">
+          {/* 透黑底：legacy .json-view 的 sunken 底由 utilities 层的透明细线覆盖。 */}
+          <details className={`json-view ${GHOST_PANEL_CLASS}`}>
             <summary>{t('runs.detail.outputTitle')}</summary>
             {output !== undefined && output.length > 0 ? (
               <pre className="json-body">{output}</pre>
@@ -239,7 +251,9 @@ export function RunDetailPage({
                 <span className="font-mono text-2xs text-faint uppercase">
                   {t('runs.detail.checkpointPreview')}
                 </span>
-                <pre className="json-body mt-1 rounded-sm bg-deep">{checkpointText}</pre>
+                <pre className="json-body mt-1 rounded-sm border border-line bg-transparent">
+                  {checkpointText}
+                </pre>
               </div>
             ) : (
               <div className="px-3 py-2">
@@ -252,7 +266,12 @@ export function RunDetailPage({
           </details>
 
           {raw !== null && (
-            <JsonView value={raw} label={t('runs.detail.rawLabel')} maxHeight={520} />
+            <JsonView
+              value={raw}
+              label={t('runs.detail.rawLabel')}
+              maxHeight={520}
+              className={GHOST_PANEL_CLASS}
+            />
           )}
 
           <PluginPanels

@@ -443,9 +443,11 @@ export function EventRow({
           <span className="shrink-0 font-mono text-sm tabular-nums text-faint">
             {formatTimestamp(event.ts, { withMs: true })}
           </span>
+          {/* 透黑底（用户裁定）：标签摘掉 sunken 灰底 —— 语义档保留 soft 罩色
+              （accent-soft 家族，与激活 tab 同语言），raw 档纯透明文字。 */}
           <span
             className={
-              'shrink-0 rounded-xs bg-sunken px-1.5 font-mono text-sm leading-4 tracking-wide whitespace-nowrap ' +
+              'shrink-0 rounded-xs px-1.5 font-mono text-sm leading-4 tracking-wide whitespace-nowrap ' +
               (TAG_TONE[tag.cls] ?? 'text-faint')
             }
           >
