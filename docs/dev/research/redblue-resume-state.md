@@ -40,9 +40,21 @@
 - 不碰主 checkout D:\Application\APP\Vessel\Vessel（生产节点在跑）；只提交自己分支；不 merge（main 合）；不雇子 agent。
 - 工具路径域：read/write/edit/codegraph 用 D:/ 路径；bash sync 在 WSL 用 /mnt/d/ 路径。
 
-## 五、agent id 速查
+## 五、agent id 速查（2026-11-23 重启后重雇，旧 id 已失效）
 
-- q-validation `6a6bcb84-27c0-42cc-adc5-4a50bded94e1`（完成）
-- q-serving `48a51694-aca5-4aa9-b6bb-99a103c2ff00`（完成）
-- q-modes `8f7edd39-4058-483d-8c71-336d4a66e21b`（WIP 保全）
-- q-pool-design `e680abf4-ca08-41a4-8868-877f08a6f4f8`（待重做）
+> 关机释放了所有承包 agent；已完成工作已合入主线无需重雇。以下为重新雇佣的 id。
+
+- q-modes `8e211225-838d-448a-8348-bd938ccea7e0`（接续 WIP 53811383 收尾）
+- q-pool-design `cec3e278-53ee-4521-9b41-acebdbb23f34`（O4 降阶增量重做）
+- q-cli `a8635904-e67a-4fef-8353-5b5ae8a18cb0`（CLI 规范架构文档）
+- q-redblue `fd35b181-75cd-47de-a7b5-c79b071157c6`（红蓝手册调研）
+- q-skills `79f401ec-489e-4925-b553-b11f65c24886`（SKILLS 插件设计）
+- q-kanban `845397aa-2722-438d-aaa3-a0ceddd10da0`（任务看板插件设计）
+- q-settings `84838fe0-848f-4a9b-8ebc-fa794d240cf4`（VSCode 式设置重构设计）
+- 已完成（无需 agent）：q-validation（merge 8694a681）、q-serving（merge 28ea00ba）
+
+## 六、任务看板（main 维护，用户直接看，无需 main 逐次汇报）
+
+- 看板文件：`docs/dev/kanban/board.json`（redblue-dev 分支，commit 106e1c16）。schema：columns + tasks[id/title/column/owner/branch/progress]。
+- main 每次任务状态变化即更新此文件；未来 q-kanban 插件只读此文件弹窗展示。历史完成任务归档至 archive.json。
+- 用户新增需求（2026-11-23）：看板插件 + VSCode 式设置重构（检索/插件设置域/视觉分区/设计实验室归视觉/设置移右上角替换 gateway 图标）——已派 q-kanban/q-settings 设计。
