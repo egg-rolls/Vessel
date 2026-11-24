@@ -84,12 +84,13 @@ export function useModalA11y(onClose: () => void) {
   return containerRef;
 }
 
-export type ModalSize = 'sm' | 'md' | 'lg';
+export type ModalSize = 'sm' | 'md' | 'lg' | 'xl';
 
 const MODAL_WIDTH: Record<ModalSize, string> = {
   sm: 'max-w-modal-sm',
   md: 'max-w-modal-md',
   lg: 'max-w-modal-lg',
+  xl: 'max-w-modal-xl',
 };
 
 export function ModalShell({
