@@ -17,7 +17,7 @@
  */
 
 import { loadConfig } from '../packages/config/src/index';
-import { formatConfigErrors } from './config-error-format';
+import { formatConfigErrors } from './config/config-error-format';
 import { acquireDataLock, DataLockError } from './data/data-lock';
 import {
   resolveDataDir,

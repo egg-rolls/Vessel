@@ -8,7 +8,7 @@
  */
 
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
-import { formatConfigErrors } from './config-error-format';
+import { formatConfigErrors } from './config/config-error-format';
 import { resolveDataDir, resolveEffectiveTenantId } from './data/data-paths';
 import { MigrateError, type MigrateResult, migrate } from './data/migrate';
 

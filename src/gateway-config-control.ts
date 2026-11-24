@@ -9,7 +9,7 @@
  */
 
 import { getUserConfigPath } from '../packages/config/src/index';
-import { isSettableConfigKey, setUserConfigValue } from './ui-settings';
+import { isSettableConfigKey, setUserConfigValue } from './config/ui-settings';
 
 export interface GatewayConfigSetRequest {
   tenantId: string;

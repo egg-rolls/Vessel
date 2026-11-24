@@ -8,7 +8,7 @@
  * @module vessel/cli-overrides
  */
 
-import type { VesselConfig } from '../packages/config/src/index';
+import type { VesselConfig } from '../../packages/config/src/index';
 
 /** 与 `parseArgs` 结果的子集保持一致；缺省/null 表示未显式给出。 */
 export interface CliConfigOverridesInput {

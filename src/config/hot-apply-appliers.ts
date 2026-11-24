@@ -21,9 +21,9 @@ import type {
   PluginHost,
   RuntimePermissionConfig,
   ToolDefinition,
-} from '../packages/core/src/index';
-import type { McpControl, McpServerSummary } from './mcp-wiring';
-import { VESSEL_TOOL_NAME } from './vessel-meta';
+} from '../../packages/core/src/index';
+import type { McpControl, McpServerSummary } from '../mcp-wiring';
+import { VESSEL_TOOL_NAME } from '../vessel-meta';
 
 /** 一条差异摘要（`scope: <detail>` 的一行文本） */
 export type ApplierSummaryLine = string;

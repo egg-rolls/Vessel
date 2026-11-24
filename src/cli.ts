@@ -59,10 +59,31 @@ import { createAskAnswerDelivery } from './ask-answer-delivery';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { DEFAULT_SERVE_PORT, parseArgs } from './cli-args';
 import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli-help';
-import { buildCliConfigOverrides } from './cli-overrides';
-import { sanitizeConfigForSnapshot } from './config-snapshot';
-import { type ConfigWatchHandle, startConfigWatch, toConfigReloadOutcome } from './config-watch';
-import { createWrittenConfigApplier } from './config-write-apply';
+import { buildCliConfigOverrides } from './config/cli-overrides';
+import { sanitizeConfigForSnapshot } from './config/config-snapshot';
+import {
+  type ConfigWatchHandle,
+  startConfigWatch,
+  toConfigReloadOutcome,
+} from './config/config-watch';
+import { createWrittenConfigApplier } from './config/config-write-apply';
+import {
+  applyTools,
+  createMcpApplier,
+  createMcpServerToggle,
+  createPermissionApplier,
+  type PermissionApplierState,
+  pluginManagedToolNames,
+} from './config/hot-apply-appliers';
+import {
+  assemblePluginTools,
+  collectPermissionTargets,
+  type PermissionApplyTarget,
+  permissionConfigFor,
+  registerRefsNoticeHook,
+  registerRuntimeNoticeHook,
+} from './config/hot-apply-assembly';
+import { visionSurfaceOf } from './config/vision-settings';
 import { createContextUsageSource } from './context-usage';
 import type { FeishuChannelLike } from './control-plane-types';
 import { createConfigAttachmentLister } from './data/attachments-list';
@@ -97,22 +118,6 @@ import {
   printSuspendedAsk,
   runHeadless,
 } from './headless-runner';
-import {
-  applyTools,
-  createMcpApplier,
-  createMcpServerToggle,
-  createPermissionApplier,
-  type PermissionApplierState,
-  pluginManagedToolNames,
-} from './hot-apply-appliers';
-import {
-  assemblePluginTools,
-  collectPermissionTargets,
-  type PermissionApplyTarget,
-  permissionConfigFor,
-  registerRefsNoticeHook,
-  registerRuntimeNoticeHook,
-} from './hot-apply-assembly';
 import { readHubNodeTrustedOrigins } from './hub/node-state';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
@@ -164,7 +169,6 @@ import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update/gateway-check';
 import { normalizeBridgeDeny } from './vessel-meta';
-import { visionSurfaceOf } from './vision-settings';
 import { ensureWebDist, interruptWebBuild, webDistWarning } from './web-dist';
 
 /**

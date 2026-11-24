@@ -33,7 +33,7 @@ import {
   startPlatformGateway,
 } from '../packages/serve/src/index';
 import type { GatewayCommand, GatewayInstallTarget, GatewaySelector } from './cli-args';
-import { formatConfigErrors } from './config-error-format';
+import { formatConfigErrors } from './config/config-error-format';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
 import { expandHome, resolveDataDir } from './data/data-paths';
 import { gatewayLogPath, startGatewayDaemon } from './gateway/daemon';

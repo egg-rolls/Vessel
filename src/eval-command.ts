@@ -9,7 +9,7 @@
 import { type ConfigLoadOptions, loadConfig } from '../packages/config/src/index';
 import type { LLMProvider, TenantPaths } from '../packages/core/src/index';
 import type { EvalCommand } from './cli-args';
-import { formatConfigErrors } from './config-error-format';
+import { formatConfigErrors } from './config/config-error-format';
 import type { EvalReport } from './control-plane-types';
 import { acquireDataLock, type DataLock, DataLockError } from './data/data-lock';
 import {

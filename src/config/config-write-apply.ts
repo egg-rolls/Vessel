@@ -18,7 +18,7 @@
  * @module vessel/config-write-apply
  */
 
-import type { Logger } from '../packages/core/src/index';
+import type { Logger } from '../../packages/core/src/index';
 
 /** 等待上界（缺省 2s：覆盖实测 370–800ms 收敛并留余量）。 */
 export const CONFIG_SET_APPLY_TIMEOUT_MS = 2_000;

@@ -22,7 +22,7 @@ import {
   resolveGatewayNodePorts,
   type VesselConfig,
 } from '../packages/config/src/index';
-import { formatConfigErrors } from './config-error-format';
+import { formatConfigErrors } from './config/config-error-format';
 import { expandHome, resolveDataDir } from './data/data-paths';
 import { t } from './i18n';
 

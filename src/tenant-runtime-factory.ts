@@ -67,13 +67,14 @@ import {
 } from '../packages/core/src/index';
 import { TimelineEventLog } from '../packages/core/src/timeline/read-port';
 import type { PluginHostManager } from '../packages/serve/src/index';
+import { emptyResponsePolicyOf } from './config/empty-response-settings';
+import { normalizeLegacyToolName } from './config/legacy-tool-names';
+import { visionSettingsOf } from './config/vision-settings';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { resolveDataDir } from './data/data-paths';
 import { resolveAgentCwd } from './data/path-resolution';
-import { emptyResponsePolicyOf } from './empty-response-settings';
 import { createFeishuFromConfig, stopFeishuChannel } from './feishu-wiring';
 import { FileLeaseService } from './lease-service';
-import { normalizeLegacyToolName } from './legacy-tool-names';
 import { createMcpEngineFromConfig, type McpEngineShell } from './mcp-engine-wiring';
 import { installMcp, type McpControl, type McpPluginLike } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
@@ -113,7 +114,6 @@ import {
 } from './timeline-dual-write';
 import { createTimelineSessionLog, type TimelineSessionLog } from './timeline-session-log';
 import { syncBasicToolsEngineWiring, syncCallbackToolsEngineWiring } from './tools-engine/wiring';
-import { visionSettingsOf } from './vision-settings';
 
 /** 构造一个 tenant 执行面的输入 */
 export interface BuildTenantRuntimeOptions {

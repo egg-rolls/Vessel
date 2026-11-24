@@ -17,8 +17,8 @@
 
 import { type FSWatcher, watch } from 'node:fs';
 import * as path from 'node:path';
-import type { Logger } from '../packages/core/src/index';
-import type { RuntimeNotice } from './runtime-notice';
+import type { Logger } from '../../packages/core/src/index';
+import type { RuntimeNotice } from '../runtime-notice';
 
 /** debounce 缺省值（契约 §2：常量集中一处）。 */
 export const CONFIG_WATCH_DEBOUNCE_MS = 300;

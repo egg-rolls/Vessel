@@ -22,8 +22,8 @@ import {
   type UiStatusBars,
   withConfigLock,
   writeUserConfigRoot,
-} from '../packages/config/src/index';
-import { type Locale, resolveLocale } from './i18n';
+} from '../../packages/config/src/index';
+import { type Locale, resolveLocale } from '../i18n';
 
 /** 支持的 UI 语言（与 CLI / TUI catalog 一致） */
 export type UiLanguage = Locale;

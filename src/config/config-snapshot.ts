@@ -7,7 +7,7 @@
  * @module vessel/config-snapshot
  */
 
-import type { VesselConfig } from '../packages/config/src/index';
+import type { VesselConfig } from '../../packages/config/src/index';
 
 /** 返回可安全下发的配置副本。 */
 export function sanitizeConfigForSnapshot(config: VesselConfig): VesselConfig {

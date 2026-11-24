@@ -17,8 +17,8 @@
  * @module vessel/empty-response-settings
  */
 
-import type { VesselConfig } from '../packages/config/src/index';
-import type { EmptyResponsePolicy } from '../packages/core/src/index';
+import type { VesselConfig } from '../../packages/config/src/index';
+import type { EmptyResponsePolicy } from '../../packages/core/src/index';
 
 /** nudge 重试上限的安全上界（与 config validator 的 [0, 10] 同界）。 */
 export const MAX_EMPTY_RESPONSE_RETRIES_LIMIT = 10;

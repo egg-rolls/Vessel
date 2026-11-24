@@ -23,7 +23,7 @@ import {
   rootSecretPath,
   tokenFingerprint,
 } from '../packages/config/src/index';
-import { formatConfigErrors } from './config-error-format';
+import { formatConfigErrors } from './config/config-error-format';
 import { resolveDataDir } from './data/data-paths';
 import { loadNodeRegistry } from './gateway/node-registry';
 import {

@@ -64,8 +64,12 @@ import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
 import { createAskAnswerDelivery } from './ask-answer-delivery';
 import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from './ask-channel';
 import { registerBashJobDelivery } from './bash-job-delivery';
-import { formatConfigErrors } from './config-error-format';
-import { sanitizeConfigForSnapshot } from './config-snapshot';
+import { formatConfigErrors } from './config/config-error-format';
+import { sanitizeConfigForSnapshot } from './config/config-snapshot';
+import { registerRefsNoticeHook, registerRuntimeNoticeHook } from './config/hot-apply-assembly';
+import { normalizeLegacyToolName } from './config/legacy-tool-names';
+import { createReplSettings, type ReplSettingsControlLike } from './config/ui-settings';
+import { visionSurfaceOf } from './config/vision-settings';
 import {
   type ConnectResumeStart,
   type ConnectRunStart,
@@ -102,12 +106,10 @@ import {
   resumeError,
 } from './durable-wiring';
 import { createFederationSendPort } from './federation/federation-send-port';
-import { registerRefsNoticeHook, registerRuntimeNoticeHook } from './hot-apply-assembly';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
 import { createImageDeliverySource } from './image-delivery';
 import { resolveInteractionsDir } from './interactions-dir';
-import { normalizeLegacyToolName } from './legacy-tool-names';
 import { createLocalRunAdapter } from './local-run-adapter';
 import type { McpEngineShell } from './mcp-engine-wiring';
 import type { McpControl } from './mcp-wiring';
@@ -162,9 +164,7 @@ import { createTimelineRunEventsPort, timelineTailPort } from './timeline-dual-w
 import { createEngineSupervisor, type EngineSupervisor } from './tools-engine/supervisor';
 import { callbackRoute } from './tools-engine/wiring';
 import { resolveConnectToken } from './transport-factory';
-import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
 import { createVesselMetaSurface, normalizeBridgeDeny, type VesselRpcPort } from './vessel-meta';
-import { visionSurfaceOf } from './vision-settings';
 
 /**
  * tui 0.6.1 冻结的权限控制面（本 worktree 的 tui 尚未导出该类型）。

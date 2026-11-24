@@ -7,7 +7,7 @@
  * @module vessel/config-error-format
  */
 
-import type { ConfigValidationError } from '../packages/config/src/index';
+import type { ConfigValidationError } from '../../packages/config/src/index';
 
 /** 格式化选项 */
 export interface ConfigErrorFormatOptions {

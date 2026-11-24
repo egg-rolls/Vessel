@@ -19,9 +19,7 @@ import {
   redactSourcePaths,
 } from '../packages/config/src/index';
 import { loggingEnvOverrides } from '../packages/core/src/index';
-import { formatConfigError, formatConfigErrors } from './config-error-format';
-import { resolveDataDir } from './data/data-paths';
-import { t } from './i18n';
+import { formatConfigError, formatConfigErrors } from './config/config-error-format';
 import {
   isSettableConfigKey,
   isUiErrorLevel,
@@ -30,7 +28,9 @@ import {
   isUiVerbosity,
   LOG_ENUM_VALUES,
   setUserConfigValue,
-} from './ui-settings';
+} from './config/ui-settings';
+import { resolveDataDir } from './data/data-paths';
+import { t } from './i18n';
 import { ui } from './ui-style';
 
 type EnvMap = Record<string, string | undefined>;

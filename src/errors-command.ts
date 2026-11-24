@@ -10,7 +10,7 @@
 
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import { readTraceEvents, type TenantPaths } from '../packages/core/src/index';
-import { formatConfigErrors } from './config-error-format';
+import { formatConfigErrors } from './config/config-error-format';
 import { type ControlPlaneTargetOptions, resolveControlPlaneTarget } from './control-plane-target';
 import {
   resolveDataDir,

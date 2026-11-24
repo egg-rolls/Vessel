@@ -17,28 +17,32 @@ import {
   type EnvInjectionConfig,
   finestCadence,
   type VesselConfig,
-} from '../packages/config/src/index';
+} from '../../packages/config/src/index';
 import type {
   PluginHost,
   RuntimePermissionConfig,
   SessionEventLogPort,
   ToolDefinition,
-} from '../packages/core/src/index';
-import { MemoryPluginHost } from '../packages/core/src/index';
-import { resolveDataDir } from './data/data-paths';
-import { resolveAgentCwd } from './data/path-resolution';
+} from '../../packages/core/src/index';
+import { MemoryPluginHost } from '../../packages/core/src/index';
+import { resolveDataDir } from '../data/data-paths';
+import { resolveAgentCwd } from '../data/path-resolution';
 import {
   createRefsNoticeHook,
   REFS_NOTICE_HOOK,
   readMediaSurface,
   type VisionSurface,
-} from './data/refs-notice-hook';
-import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
-import { PluginLoader } from './plugin-loader';
-import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
-import type { RuntimeNoticeBus } from './runtime-notice';
-import { createRuntimeNoticeHook, RUNTIME_NOTICE_HOOK } from './runtime-notice-hook';
-import { resolveRuntimePermission } from './tenant-runtime-factory';
+} from '../data/refs-notice-hook';
+import {
+  buildPluginConfigMap,
+  declarativePluginEntries,
+  installWithConfig,
+} from '../plugin-config';
+import { PluginLoader } from '../plugin-loader';
+import { resolvePluginSelection, warnExternalPluginsOnce } from '../plugin-selection';
+import type { RuntimeNoticeBus } from '../runtime-notice';
+import { createRuntimeNoticeHook, RUNTIME_NOTICE_HOOK } from '../runtime-notice-hook';
+import { resolveRuntimePermission } from '../tenant-runtime-factory';
 
 /**
  * 权限规则解析：直接复用 bootstrap 的 `resolveRuntimePermission`，不另写一份，
