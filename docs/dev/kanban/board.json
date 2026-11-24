@@ -173,6 +173,14 @@
       "progress": "merge入redblue-dev；①in-process描述符名=manifest.id??包短名(同child口径)+aliases兼容存量,config名skills正确；②AI命名max_tokens64→2048+截止15s+派生标题兜底(任何模型不卡Untitled)+warn不静默；build绿待金丝雀复验"
     },
     {
+      "id": "canary-qa-lead",
+      "title": "金丝雀专业测试团队负责人(常驻,划分特性+分派测试员+汇总报告)",
+      "column": "进行中",
+      "owner": "canary-qa-lead",
+      "branch": "canary",
+      "progress": "常驻QA负责人717be135就职：接收main特性批次→树状划分→hire金丝雀测试员→汇总报告main；首任务汇总verify4结果+梳理待晋升特性测试矩阵；往后main只对接lead"
+    },
+    {
       "id": "g1-proxy-node",
       "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）",
       "column": "待办",
