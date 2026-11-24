@@ -75,6 +75,21 @@ export const OPT_IN_PLUGINS: ReadonlySet<string> = new Set([
   // 想关掉：config.yaml 的 `plugins:` 里写 `- name: web-tools` + `enabled: false`。
 ]);
 
+/**
+ * 由描述符集构造「兼容别名 → 规范名」映射（只含声明了别名的条目）。
+ * 选择层用它把 config 里按旧包短名书写的插件名归一到清单 id（规范名），
+ * 保证显式 `plugins[]` / 声明式条目与装载名单同一口径。
+ */
+export function pluginAliasMap(descriptors: readonly PluginDescriptor[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const descriptor of descriptors) {
+    for (const alias of descriptor.aliases ?? []) {
+      if (!map.has(alias)) map.set(alias, descriptor.name);
+    }
+  }
+  return map;
+}
+
 /** 插件来源 */
 export type PluginSource = 'repo' | 'user' | 'project' | 'node_modules';
 
@@ -105,8 +120,23 @@ export interface PluginLoaderOptions {
 }
 
 export interface PluginDescriptor {
-  /** 短名（package.json name 去掉 scope），即调用 `load()` 时用的 key */
+  /**
+   * 规范名，即调用 `load()` 时用的 key：声明了 `vessel` 清单（id）时为清单 id，
+   * 否则为包短名（package.json name 去掉 scope）。
+   *
+   * 为什么以清单 id 为准（金丝雀终验 issue-①）：child 模式一直用 `manifest.id`，
+   * 而 in-process 此前只用包短名 —— skills 包名 `@vessel-agent/plugin-skills`、
+   * 清单 id / `Plugin.name` / 装配层配置键却都是 `skills`，于是显式
+   * `plugins: [{name: skills}]` 匹配不到描述符 → `load_failed`。统一后
+   * 「config plugins[].name = 清单 id = Plugin.name = RPC canonical id」一条线。
+   */
   name: string;
+  /**
+   * 兼容别名（additive）：清单 id 与包短名不一致时，包短名进别名表
+   * （如 skills 的 `plugin-skills`）。旧配置 / `vessel plugin enable plugin-skills`
+   * 物化出的默认集仍按短名书写，选择与装载经别名归一到规范名，不打死存量配置。
+   */
+  aliases?: readonly string[];
   /** 分类目录名（仓库内）或来源标签（用户/项目/node_modules） */
   category: string;
   version: string;
@@ -455,8 +485,11 @@ function readPlugin(base: string, category: string, source: PluginSource): Plugi
   const capabilityManifest = readInProcessManifest(vessel, base, source);
   if (capabilityManifest === null) return null;
   const override = vessel?.override === true;
+  // 规范名与 child 分支同口径：声明了清单 id 就用 id（skills → 'skills'），
+  // 包短名与 id 不一致时进别名表（'plugin-skills'），存量配置按短名仍可装载。
+  const manifestId = capabilityManifest?.id;
   return {
-    name: shortName,
+    name: manifestId ?? shortName,
     category,
     version: typeof pkg.version === 'string' ? pkg.version : '0.0.0',
     ...(typeof pkg.description === 'string' ? { description: pkg.description } : {}),
@@ -465,6 +498,7 @@ function readPlugin(base: string, category: string, source: PluginSource): Plugi
     source,
     mode: 'in-process',
     ...(capabilityManifest !== undefined ? { capabilityManifest } : {}),
+    ...(manifestId !== undefined && manifestId !== shortName ? { aliases: [shortName] } : {}),
     ...(override ? { override: true } : {}),
   };
 }
@@ -598,13 +632,18 @@ export class PluginLoader {
       .map((descriptor) => descriptor.name);
   }
 
+  /** 按规范名或兼容别名查描述符（别名 = 与清单 id 不一致的包短名）。 */
+  private findDescriptor(name: string): PluginDescriptor | undefined {
+    return this.list().find((d) => d.name === name || d.aliases?.includes(name) === true);
+  }
+
   /**
    * 原样加载插件模块（不要求 default 是 Plugin）。
    * 工厂式插件（如 `@vessel-agent/mcp-client` 的 `createMcpPlugin`）由装配层自行构造。
    * child 插件（体验插件）不得 import；未知插件或 import 失败返回 null。
    */
   async loadModule(name: string): Promise<unknown | null> {
-    const descriptor = this.list().find((d) => d.name === name);
+    const descriptor = this.findDescriptor(name);
     if (!descriptor || descriptor.mode === 'child') return null;
 
     try {
@@ -620,7 +659,7 @@ export class PluginLoader {
    * null / undefined（child 插件返回 undefined，表示「不是 in-process 模块」）。
    */
   async load(name: string): Promise<Plugin | null | undefined> {
-    const descriptor = this.list().find((d) => d.name === name);
+    const descriptor = this.findDescriptor(name);
     if (!descriptor) return null;
     if (descriptor.mode === 'child') return undefined;
 

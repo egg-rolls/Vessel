@@ -225,7 +225,8 @@ export async function runPluginCommand(
       const loader = makeLoader(userDir);
       const { names, configured } = await readEnabledNames(options);
       const rows = loader.list().map((descriptor) => ({
-        // 0.43：child 插件的用户可见 id 来自清单；in-process 插件仍用包短名。
+        // 0.43：child 插件的用户可见 id 来自清单；in-process 插件声明清单时同样
+        // 用清单 id（金丝雀终验 issue-① 统一），未声明清单才用包短名。
         id: descriptor.name,
         name: descriptor.name,
         version: descriptor.version,
