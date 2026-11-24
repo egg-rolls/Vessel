@@ -1684,6 +1684,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'integrations.tools.policyChecking': 'Checking gateway capabilities…',
   'integrations.tools.policyUnsupported': 'Requires a newer gateway.',
   'integrations.tools.policyLoadFailed': 'Could not read the permission config: {detail}',
+  'integrations.tools.policyAlwaysAvailableNote':
+    'inbox is the core message channel shared by every member and stays available by default (neither the default tier nor auto blocks it). "Always confirm" does not disable the tool — it asks on every call, which can block message delivery when nobody is watching, so set it with care. You can also narrow individual actions with per-action entries such as inbox.read.',
   'integrations.mcp.globalDesc': 'The MCP control plane is gateway-global.',
   'integrations.mcp.counts': '{total} servers · {failed} failed',
   'integrations.mcp.reconnectAll': 'Reconnect all failed ({count})',

@@ -1600,6 +1600,8 @@ export const messages = {
   'integrations.tools.policyChecking': '正在检查 gateway 能力…',
   'integrations.tools.policyUnsupported': '需要更新的 gateway。',
   'integrations.tools.policyLoadFailed': '读取权限配置失败：{detail}',
+  'integrations.tools.policyAlwaysAvailableNote':
+    'inbox 是所有成员共用的收消息核心通道，默认始终可用（缺省档与自动允许都不拦截）。设为「强制确认」不会禁用工具，而是每次调用都要确认——无人值守时可能阻塞消息接收，请谨慎设置；也可用 inbox.read 等按动作条目只收窄个别动作。',
   'integrations.mcp.globalDesc': 'MCP 控制面为 gateway 全局状态。',
   'integrations.mcp.counts': '{total} 个服务 · {failed} 个失败',
   'integrations.mcp.reconnectAll': '重连全部失败（{count}）',
