@@ -5,7 +5,7 @@
   "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。板只留当前活跃任务；完成任务由 main 轮次收尾移入 archive.json（append-only，采纳 q-kanban §9.2 归档约定）。",
   "tasks": [
     { "id": "q-redblue", "title": "红蓝版本手册调研（业界方法→vessel原语映射）", "column": "进行中", "owner": "q-redblue", "branch": "design/q-redblue", "progress": "续工推进至§5缺口分析（e0b63375，4裁决/9真实缺口）；剩§6-§9+来源；附早退introspection" },
-    { "id": "early-exit-fix", "title": "早退根因修复：tool-calling-loop 空响应兜底（nudge/retry）", "column": "待办", "owner": "main", "branch": "redblue-dev", "progress": "已诊断：tool-calling-loop.ts:513/725 对空内容+非工具终止无兜底；待用户点头派单修复+行为验证" },
+    { "id": "early-exit-fix", "title": "早退根因修复：tool-calling-loop 空响应兜底（nudge/retry，可调控）", "column": "进行中", "owner": "q-empty-response", "branch": "fix/q-empty-response", "progress": "用户已批派单：两终止路径空响应nudge重试+限次+设置项(enabled/max_retries/文案)；修完用户行为验证" },
     { "id": "g1-proxy-node", "title": "G1 遗留：proxy模式额外节点health/attention直连401（需额外节点代理化设计决策）", "column": "待办", "owner": "main", "branch": "redblue-dev", "progress": "q-modes留档缺口，修复需设计决策，main排期" },
     { "id": "plan-c", "title": "计划C：src 大重组（~94文件→~15领域目录）+ 管理规范/关键词", "column": "待办", "owner": "main", "branch": "redblue-dev", "progress": "用户裁定开发完成后执行；修复轮+设计轮基本齐备，待q-redblue合入后启动" },
     { "id": "final-gate", "title": "最终合并树门禁 + 用户行为验收", "column": "待办", "owner": "main+user", "branch": "redblue-dev", "progress": "全部合入后由实施agent跑build，备产物读数供用户验收" }
