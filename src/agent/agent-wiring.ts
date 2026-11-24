@@ -11,7 +11,7 @@ import type {
   TerminationConfig,
   UsageLimitsConfig,
   VesselConfig,
-} from '../packages/config/src/index';
+} from '../../packages/config/src/index';
 
 export type MemberPermissionMode = 'bridge' | 'allow' | 'deny';
 

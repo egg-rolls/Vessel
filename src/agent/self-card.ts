@@ -7,8 +7,8 @@
  * @module vessel/self-card
  */
 
-import type { VesselConfig } from '../packages/config/src/index';
-import type { SelfCardOptions } from '../packages/core/src/index';
+import type { VesselConfig } from '../../packages/config/src/index';
+import type { SelfCardOptions } from '../../packages/core/src/index';
 
 /** 推断当前入口已知会注册的工具名。 */
 export function knownOwnerToolNames(

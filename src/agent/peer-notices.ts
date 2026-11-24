@@ -19,13 +19,13 @@
  * @module vessel/peer-notices
  */
 
-import type { EventStream, Logger, RunEvent } from '../packages/core/src/index';
+import type { EventStream, Logger, RunEvent } from '../../packages/core/src/index';
 import {
   NOTICE_DETAILS_MAX,
   NOTICE_SUMMARY_MAX,
   type RuntimeNotice,
   type RuntimeNoticeBus,
-} from './runtime-notice';
+} from '../runtime-notice';
 
 /**
  * 合并 / 判定窗口：第一条变更进来后等这么久，父 session 仍空闲才发。

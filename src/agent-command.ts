@@ -17,8 +17,8 @@ import {
   AgentOwnerUnavailableError,
   callAgentOwner,
   resolveAgentOwner,
-} from './agent-owner-client';
-import type { AgentOwnerMethod, AgentOwnerRecord } from './agent-owner-server';
+} from './agent/agent-owner-client';
+import type { AgentOwnerMethod, AgentOwnerRecord } from './agent/agent-owner-server';
 import type { AgentCommand } from './cli-args';
 import { ui } from './ui-style';
 

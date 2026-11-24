@@ -20,7 +20,7 @@ import type {
   FederationSendResult,
 } from '@vessel-agent/agent';
 import type { FederationConfig } from '../../packages/config/src/index';
-import type { LocalHumanTarget, LocalMemberTarget } from '../team-human-delivery';
+import type { LocalHumanTarget, LocalMemberTarget } from '../agent/team-human-delivery';
 import {
   parseFederationAddress,
   type ResolveNodeAliases,

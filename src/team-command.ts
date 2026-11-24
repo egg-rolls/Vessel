@@ -12,15 +12,15 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { normalizeWorkspace } from '@vessel-agent/agent';
-import type { CommandResult } from './agent-command';
 import {
   AgentOwnerRequestError,
   AgentOwnerUnavailableError,
   type CallAgentOwnerOptions,
   callAgentOwner,
   resolveAgentOwner,
-} from './agent-owner-client';
-import type { AgentOwnerRecord } from './agent-owner-server';
+} from './agent/agent-owner-client';
+import type { AgentOwnerRecord } from './agent/agent-owner-server';
+import type { CommandResult } from './agent-command';
 import type { TeamCommand } from './cli-args';
 import { ui } from './ui-style';
 

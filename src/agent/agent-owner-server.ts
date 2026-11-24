@@ -16,8 +16,8 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promi
 import * as path from 'node:path';
 import type { Logger, SessionStore } from '@vessel-agent/core';
 import { withDeadline } from '@vessel-agent/core';
-import { isLoopbackHostname } from '../packages/config/src/index';
-import { createSessionMethods } from '../packages/serve/src/gateway/methods/sessions';
+import { isLoopbackHostname } from '../../packages/config/src/index';
+import { createSessionMethods } from '../../packages/serve/src/gateway/methods/sessions';
 import {
   type AgentControlLike,
   createAgentMethods,
@@ -27,7 +27,7 @@ import {
   defineMethods,
   type RpcMethodContext,
   type TeamControlLike,
-} from '../packages/serve/src/index';
+} from '../../packages/serve/src/index';
 import {
   createCommandRunner,
   deleteRecordIfOwned,
@@ -36,7 +36,7 @@ import {
   isProcessAlive as pidIsAlive,
   quarantineCorruptRecordIfUnchanged,
   readGatewayStateFile,
-} from './gateway/pid';
+} from '../gateway/pid';
 
 /** owner 记录文件名（dataDir 根） */
 export const AGENT_OWNER_FILE = 'agent-owner.json';

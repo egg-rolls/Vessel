@@ -57,11 +57,19 @@ import {
   type LocalRpcDispatcher,
 } from '../packages/serve/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
-import { createAgentControl } from './agent-control';
-import { type AgentOwnerServer, startAgentOwnerServer } from './agent-owner-server';
-import { createAgentServiceWiring } from './agent-service-wiring';
-import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
-import { createAskAnswerDelivery } from './ask-answer-delivery';
+import { createAgentControl } from './agent/agent-control';
+import { type AgentOwnerServer, startAgentOwnerServer } from './agent/agent-owner-server';
+import { createAgentServiceWiring } from './agent/agent-service-wiring';
+import { type MemberPermissionMode, resolveAgentWiring } from './agent/agent-wiring';
+import { createAskAnswerDelivery } from './agent/ask-answer-delivery';
+import { createLocalRunAdapter } from './agent/local-run-adapter';
+import { createPeerNoticeRouter, type PeerNoticeRouter } from './agent/peer-notices';
+import {
+  createTeamHumanDelivery,
+  createTeamLocalMemberDelivery,
+  type LocalHumanTarget,
+  type LocalMemberTarget,
+} from './agent/team-human-delivery';
 import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from './ask-channel';
 import { registerBashJobDelivery } from './bash-job-delivery';
 import { formatConfigErrors } from './config/config-error-format';
@@ -95,7 +103,6 @@ import { createFederationSendPort } from './federation/federation-send-port';
 import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
 import { resolveInteractionsDir } from './interactions-dir';
-import { createLocalRunAdapter } from './local-run-adapter';
 import type { McpEngineShell } from './mcp-engine-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import { createNodeDrainer } from './node/node-drain';
@@ -109,7 +116,6 @@ import {
   type TraceControl,
   type TraceRecorderFactory,
 } from './observability/trace-wiring';
-import { createPeerNoticeRouter, type PeerNoticeRouter } from './peer-notices';
 import type { McpControl } from './plugin/mcp-wiring';
 import { declarativePluginEntries } from './plugin/plugin-config';
 import {
@@ -154,12 +160,6 @@ import { createSystemContextSource } from './session/system-context';
 import { createTimelineRunEventsPort, timelineTailPort } from './session/timeline-dual-write';
 import { readPackageVersion } from './shared/version';
 import { reportShutdownFailure } from './shutdown-report';
-import {
-  createTeamHumanDelivery,
-  createTeamLocalMemberDelivery,
-  type LocalHumanTarget,
-  type LocalMemberTarget,
-} from './team-human-delivery';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
 import { createEngineSupervisor, type EngineSupervisor } from './tools-engine/supervisor';
 import { callbackRoute } from './tools-engine/wiring';

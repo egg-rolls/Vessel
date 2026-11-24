@@ -55,7 +55,7 @@ import {
 // 0.57：**不**静态导入 Ink REPL。`ink-repl.tsx` 的传递闭包是 React + ink + 十几个组件，
 // 实测（本机）单是求值它就要数百毫秒到数秒 —— 而 `node start` / `gateway start` /
 // `--run` 永远不会进那个界面。它现在按需加载（见 {@link startInkRepl}）。
-import { createAskAnswerDelivery } from './ask-answer-delivery';
+import { createAskAnswerDelivery } from './agent/ask-answer-delivery';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { DEFAULT_SERVE_PORT, parseArgs } from './cli-args';
 import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli-help';

@@ -10,12 +10,12 @@
 import { readFileSync } from 'node:fs';
 import { inboxPath } from '@vessel-agent/agent';
 import { loadConfig } from '../packages/config/src/index';
-import type { CommandResult } from './agent-command';
 import {
   AgentOwnerRequestError,
   AgentOwnerUnavailableError,
   resolveAgentOwner,
-} from './agent-owner-client';
+} from './agent/agent-owner-client';
+import type { CommandResult } from './agent-command';
 import type { AgentCommand } from './cli-args';
 import { assertRootTenantLayout, resolveEffectiveTenantId } from './data/data-paths';
 import { ui } from './ui-style';

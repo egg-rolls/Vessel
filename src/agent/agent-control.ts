@@ -45,7 +45,7 @@ import {
   type SessionRestartLikeResult,
   type SessionRestoreFilesLikeInput,
   type SessionRestoreFilesLikeResult,
-} from '../packages/serve/src/index';
+} from '../../packages/serve/src/index';
 
 /** `createAgentControl` 的内部选项（不是 wire 字段）。 */
 export interface AgentControlOptions {

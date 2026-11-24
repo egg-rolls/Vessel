@@ -67,6 +67,7 @@ import {
 } from '../packages/core/src/index';
 import { TimelineEventLog } from '../packages/core/src/timeline/read-port';
 import type { PluginHostManager } from '../packages/serve/src/index';
+import { ownerSelfCard } from './agent/self-card';
 import { emptyResponsePolicyOf } from './config/empty-response-settings';
 import { normalizeLegacyToolName } from './config/legacy-tool-names';
 import { visionSettingsOf } from './config/vision-settings';
@@ -104,7 +105,6 @@ import { createProvider } from './provider-factory';
 import { includeReasoningFor } from './reasoning';
 import { FileLeaseService } from './run/lease-service';
 import { closeRunRecordStore, createRunRecordStore } from './run/run-record-store-factory';
-import { ownerSelfCard } from './self-card';
 import { createSessionControl, type SessionControl } from './session/session-control';
 import { createSessionStore } from './session/session-factory';
 import { withSessionWriteLock } from './session/session-lock-runtime';
