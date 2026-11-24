@@ -398,35 +398,56 @@ export function useChatTranscript({
   // 终态/session.saved 后做一次精确刷新（150ms 合并）。
   const refreshTimer = useRef<number | undefined>(undefined);
   const lastSnapshotVersion = useRef(0);
+  // 已触发过刷新的终态事件 seq 水位：**只有新于水位的终态才再刷一次**。
+  // 旧实现每次快照版本变化都重扫尾窗，只要最近 40 条里还留着任何一条终态事件就再发
+  // 一次全量刷新 —— 终态事件在被挤出尾窗前会停留很久，多 agent 会话事件持续到达，
+  // 一条终态于是触发几十次重复刷新（用户报的「定时闪现」）：每次刷新都重建历史窗口、
+  // 作废认领账本。SSE/WS 已推送终态，一次精确刷新足够（本段注释原本就写着「一次」）。
+  const refreshedTerminalSeq = useRef(0);
+  // 切会话 / 重连换了 seq 空间：水位归零重判，并取消挂起的旧会话刷新。
+  useEffect(() => {
+    refreshedTerminalSeq.current = 0;
+    window.clearTimeout(refreshTimer.current);
+    refreshTimer.current = undefined;
+  }, [selectedId, epoch]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: 只在快照版本变化时扫描新增事件
   useEffect(() => {
     if (snapshot.version === lastSnapshotVersion.current) return;
     lastSnapshotVersion.current = snapshot.version;
     // transport-consumer：这里只找「该刷新 detail 了」的信号，不派生时间线。
     const recent = snapshot.entries.slice(-40);
-    const needsRefresh = recent.some(({ event }) => {
-      if (
+    // seq 回退（重连回放 / truncate 换了序号空间）：水位退回重扫，
+    // 与 usePendingSends 的回显水位同一形状。
+    let maxSeq = 0;
+    for (const entry of recent) {
+      if (entry.seq > maxSeq) maxSeq = entry.seq;
+    }
+    if (maxSeq < refreshedTerminalSeq.current) refreshedTerminalSeq.current = 0;
+    let triggerSeq = refreshedTerminalSeq.current;
+    for (const { event, seq } of recent) {
+      if (seq <= refreshedTerminalSeq.current) continue;
+      const terminal =
         event.type === 'run.completed' ||
         event.type === 'run.failed' ||
-        event.type === 'run.cancelled'
-      ) {
-        return true;
-      }
-      if (event.type === 'session.saved') {
-        const sessionId = (event.data as { session_id?: unknown }).session_id;
-        return typeof sessionId === 'string' && sessionId === selectedId;
-      }
-      return false;
-    });
-    if (!needsRefresh) return;
+        event.type === 'run.cancelled';
+      const saved =
+        event.type === 'session.saved' &&
+        (event.data as { session_id?: unknown }).session_id === selectedId;
+      if ((terminal || saved) && seq > triggerSeq) triggerSeq = seq;
+    }
+    if (triggerSeq <= refreshedTerminalSeq.current) return;
+    refreshedTerminalSeq.current = triggerSeq;
     window.clearTimeout(refreshTimer.current);
     refreshTimer.current = window.setTimeout(() => {
+      refreshTimer.current = undefined;
       void refreshSessions(client, {
         epoch,
         allowMissing: selectedId ? pendingNewSessions.current.has(selectedId) : false,
       });
     }, 150);
-    return () => window.clearTimeout(refreshTimer.current);
+    // 注意：这里**不**返回「每次依赖变化都清定时器」的 cleanup —— 水位之上的终态只
+    // 出现一次，后续版本 bump 不会再进调度分支，清了就没有人重排，刷新会丢。
+    // 卸载清理在下方独立 effect；切会话 / 重连的取消在水位复位 effect 里。
   }, [snapshot.version, selectedId, client, epoch, refreshSessions]);
 
   useEffect(
