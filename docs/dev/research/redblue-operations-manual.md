@@ -270,7 +270,236 @@ G5（版本闸）、G8（D 刷新）、G9（b 档串接）三项，且都已有 
 
 ## 6. 推荐方法 + 操作步骤（闭环 playbook）
 
-（填写：6.0 前置纪律；6.1 旧版 agent 起新版；6.2 新版自检回报；6.3 修复；6.4 回归；6.5 入住；6.6 迭代与回退。）
+> 推荐组合一句话：**蓝绿骨架（已裁决配方）+ team/node 粒度 cohort 金丝雀 + config 级开关台账
+> + expand-contract 节奏（旧宇宙保留 = 推迟 contract）+ 入口切换回退**。
+> 下面的命令是给**操作者**（舰队 agent 或人）执行的步骤说明；本手册作者不执行任何一条（宪法）。
+> 每阶段标：用到的原语 [事实] / 组合判断 [推断] / 证伪信号（做错了会看到什么）。
+
+```
+        ┌────────────────────────────────────────────────────────────┐
+        │                                                            │
+  6.1 起新版 ──► 6.2 自检回报 ──► 6.3 修复 ──► 6.4 回归 ──► 6.5 入住 ──► 6.6 迭代
+  (A 行 agent     (B 行 agent      (B worktree   (用户裁决)   (换宇宙+     (B 转正/
+   起 B 舰队)      federation      + restart     清单全绿     handoff)     回退=换回)
+                   回报 A 行)      --stop-nodes)      │            │
+        ▲               ▲              ▲            │ 失败       │ 下一轮
+        └───────────────┴──────────────┴────────────┘            └──► 6.1
+```
+
+### 6.0 前置与纪律（每轮闭环开始前核对）
+
+1. 两 checkout 各自 `bun install`（apps/web 另需 `bun install --cwd apps/web`），**不得 junction 共享
+   node_modules**。[事实] 配方头部
+2. B 行 config yaml 按配方 §2 模板（data_dir / 端口 8652/8654/8653 / `engine_pool.instance: blue` /
+   `update.auto_check: false`）；**yaml 不放任何密钥**（自定义路径不在 denylist，read/bash 读得到）。
+   [事实] 配方 §1–2、R10
+3. B 行启动恒带 `VESSEL_NO_EXTERNAL_PLUGINS=1`（用户插件发现根是 homedir 硬编码，此 env 是唯一隔离手段）。
+   [事实] 配方 §2
+4. 双行期冻结三类动作：`install-service` / marketplace install / update apply（都写共享 `~/.vessel`）。
+   [事实] 裁决③、配方 R4–R6
+5. B 行工作区 = 独立 worktree（`worktrees/<topic>`），不碰主 checkout、不碰 A 行 workspace。
+   [事实] 配方 R8；AGENTS.md worktree 规则
+6. 角色分工 [推断]：A 行 agent = 发起者 + 记录员；B 行 agent = 自检者 + 修复者；
+   **用户 = 回归与入住的唯一裁决者**；main = 分支合并裁决者。agent 不代用户做行为验证。
+7. 端口 / instance 命名表（防迭代碰撞）[推断]：A = default/8642/8644/8643；B = blue/8652/8654/8653；
+   下一轮 C = green/8662/8664/8663。`--port 0` 临时端口必须配 `--instance`。[事实] 配方 §2
+
+### 6.1 旧版 agent 起新版
+
+**原语**：不对称隔离配方 + 分段启动 + adopt。[事实] 配方 §1–2；gateway-lifecycle.md
+
+步骤（A 行 agent 经 bash 执行，A 行自身不重启、日用零影响）：
+
+1. 核对 B checkout 就绪：`git log -1`（记录 commit）、分支正确、`apps/web/dist` 存在且非空
+   （只读构建产物，不跑构建探针）。[推断] 出生证要可追溯
+2. 起 B 舰队（B checkout 内，配方 §2 原命令）：
+   ```bash
+   VESSEL_NO_EXTERNAL_PLUGINS=1 bun run src/cli.ts \
+     --user-config D:/Application/APP/Vessel/fleets/blue/config.yaml \
+     --data-dir  D:/Application/APP/Vessel/fleets/blue/data \
+     gateway start --instance blue --daemon
+   ```
+3. 就绪读数（只读）：`gateway status --json`（带同样 UC/DD，或 `--connect http://127.0.0.1:8652`
+   + connect token）；`<blue-data>/logs/gateway.log` 的 node ready 行。分段启动下单节点失败只标它
+   自己（`failed` 可见），不会静默。[事实] gateway-lifecycle.md；GATEWAY.md §1
+4. 写**出生证**进 handoff 文档（git commit）：commit / 版本 / 端口 / dataDir / instance / UC 路径 /
+   启动时间 / node_id（`<blue-data>/node.json`）/ team id。[推断] 这是跨宇宙 durable 状态的第一块
+5. 跨机变体：目标机 agent 执行同命令（或 SSH）；hub join 见 §7。
+
+证伪信号：bind fail-fast（端口撞了）；`node_start_failed`（配置错）；status 里 B 节点 `failed`。
+**注意**：起的是候选生产线（真实数据根、真实工作），不是临时探针——这是裁决配方允许的动作，
+与宪法「零临时验证进程」不冲突。[推断]
+
+### 6.2 新版自检回报
+
+**原语**：federation 数据面 + Team 日志落点。[事实] federation-hub.md §federation
+
+**(a) 回报通道一次性搭建**（两线各自 config；token/端口类改动需 restart，不可 reload [事实] REMOTE.md §3.4）：
+
+```yaml
+# A 行 config（~/.vessel/config.yaml）追加：
+federation:
+  peers:
+    - nodeId: <B 的 node_id>        # 出生证里有
+      teamId: <B 行接收 team id>
+      url: http://127.0.0.1:8654    # 对端 Node API（node.port），不是平台 8652
+      tokenEnv: VESSEL_PEER_BLUE    # 双方 env 里放同一个随机 secret
+      direction: both
+      localTeamId: <A 行接收 team id>
+# B 行 config 对称配 A（url: http://127.0.0.1:8644）
+```
+
+- [事实] peer 形状：`federation.peers[]` 显式 `(nodeId, teamId)` / url / tokenEnv / direction /
+  localTeamId? / caFile?；明文 token 被 validator 拒绝；缺 token 的 peer 直接丢弃（fail-closed）；
+  同一 token 命中多 peer 全部丢弃（src/federation-config.ts 头注）。
+- [事实] `enabled` 缺省 true，但**无 peers = 无通道**；入站 `POST <peer.url>/v1/federation/messages`
+  注册在 Node API（src/federation-client.ts:4,26）。
+- [事实] 回环 http 允许；非回环必须 https（跨机见 §7）。
+- [事实] DD 分离 ⇒ 派生 token 跨舰队 401；**peer token 是独立命名空间**，与 gateway 用户 / hub node
+  token 不交叉（REMOTE.md §3.5.1）——跨线回报必须显式配 peer，不能复用 connect token。
+- [推断] secret 由操作者生成（随机串），只进双方 env，不进 yaml（R10）。
+
+**(b) B 行自检清单**（全部只读读数或真实工作，零探针）：
+
+| # | 项 | 做法 | 证伪信号 |
+|---|---|---|---|
+| a | 舰队状态 | `gateway status --json`（带 UC/DD） | 任一节点 `failed` / hub 缺席 |
+| b | 版本核对 | `git log -1` + CLI 版本 vs 出生证 | commit 不符（起错 checkout） |
+| c | 日志扫描 | 只读 `<blue-data>/logs/gateway.log` | `node_start_failed` / `data_locked` / `hub_registry_corrupt` 等 fail-closed 行 |
+| d | 工具面真实工作 | B 行 agent 在**自己的 worktree** 做一件真实小任务（read/write/edit/bash 各用到） | 工具报错 / write.lock 冲突 |
+| e | 会话可见性 | 用户开 B origin 看 timeline（agent 看到的 = 用户看到的） | 缺口 / 假报（先刷新页面排除 R9 旧缓存） |
+| f | 回报通道 | 把本报告发 A 行（下面 (c)） | 401（token 错）/ 404（principal 不唯一）/ 429（限流） |
+| g | 隔离核对 | A 行 status / 端口 / config 未被触碰；池状态文件在 `engine-pool-blue/` | A 行读数变化 / 池文件在默认目录 |
+
+**(c) 报告契约**（自由文本通道上的约定 schema，G13 绕行）[推断]：
+
+```
+[blue-report] round=<N> seq=<M> message_id=<uuid>
+version=<commit> instance=blue ports=8652/8654/8653
+checklist: a=ok b=ok c=ok d=ok e=ok f=ok g=ok   # 或逐项 fail+原因
+gaps: <列表或 none>
+handoff: <git 分支/文档路径>
+```
+
+发送（B 行 agent 二选一）：
+- `agent send` to=`<A 行记录员名>@<A node_id>:<A team_id>`（地址形态；**跨节点不支持
+  interrupt/notify** [事实] packages/agent/src/tool.ts）；
+- CLI：`vessel federation post --to <addr> --from <B addr> <content...>`（一次性进程，结果走
+  exit code / JSON [事实] cli-args.ts:3973；federation-hub.md）。
+
+**(d) A 行接收与落盘**：
+
+- [事实] 入站落 Team 日志（`from = federation:<node>:<team>`），最多 1 个 run：principal 必须命中
+  **唯一 present 非 private 成员**，否则 404 零写入；`human` 只写日志 0 run。⇒ A 行接收 team 里
+  记录员必须 present 且名字唯一。
+- [推断] 记录员 agent 收到报告后：① 按 `message_id` 在 handoff 文档里查重（federation 去重只是
+  进程内 LRU，跨重启不保 [事实]）；② 新报告 append 进文档并 git commit（**durable 兜底 G6**）；
+  ③ 按日志条目自带的 `federation.from_addr` 回 ack（「按地址回复」[事实] federation-hub.md §federation）。
+- 发送失败处理 [推断]：401 查 tokenEnv 双方一致；404 查 principal present/唯一；429 等下一分钟窗口；
+  对端重启窗口丢消息 ⇒ 重发同 message_id（接收方文档去重）。关键报告（出生证 / 入住裁决）
+  **必须同时落 git**，federation 只当通知通道，不当唯一存储。
+
+### 6.3 修复
+
+**原语**：worktree 纪律 + 构建时检查 + `restart --stop-nodes` + c 档恢复。
+[事实] AGENTS.md；GATEWAY.md §4；src/node-resume.ts
+
+1. 缺陷来源：自检 gaps / 用户回归反馈 / A 行对照。修复在 **B checkout 的任务 worktree**
+   （`worktrees/<topic>`，自己的分支），不碰主 checkout、不碰 A 行 workspace（R8）。
+2. 改后 `bun run build`（typecheck + lint 是构建时检查，不是运行时探针）；只读核对 dist 产物非空。
+   [事实] AGENTS.md 验证分层
+3. **让新代码生效 = 换进程，不是 rotate**：
+   ```bash
+   bun run src/cli.ts --user-config <blue.yaml> --data-dir <blue-data> \
+     gateway restart --instance blue --stop-nodes
+   ```
+   - [事实] **缺省 `restart` 不换 node 代码**（新平台 adopt 回旧 node，命令打印提示
+     `to restart them too: vessel gateway restart --stop-nodes`，GATEWAY.md §4 表）。
+     这是闭环里最容易踩的坑：以为重启了、实际 node 还跑旧代码。
+   - [事实] `--stop-nodes`：node 先经 `gateway.shutdown` drain（写 resume 标记 + interrupt）≤10s，
+     超时回退强杀；池只 terminate owned engine（adopt/external 永不杀）。
+   - [事实] `agent rotate` / `sessions.restart` 是同进程换 body（epoch+1），**不是换代码**
+     （graceful-restart.md §2）；配置热更走 `gateway reload --scope config`（TLS/token/端口/provider 除外）。
+4. 重启代价与恢复（c 档，不承诺 b 档）：
+   - [事实] 被打断会话：启动扫 `resume_after_restart` 标记 → 发重启 EnvCard（模型 + 用户同源，
+     下一次请求、用户输入之前注入）→ FIFO 重放 human 输入 → 卡准入（`message.injected` 后有
+     `llm.request`）才清标记；去重键 run_id + interrupted_at（src/node-resume.ts 头注）。
+   - [事实] interrupted run 可手动 `vessel resume`（`runs.resume` 接受 running|interrupted，
+     ADR-040）；**启动期不自动续 run**。
+   - [推断] 重启时机选 idle / 轮次边界，把可见中断压到最小；在途写类工具不重放（同行主流同此，
+     graceful-restart.md §3）。
+5. 每修一批 → 回 6.2 出增量报告（seq+1，同 round）。小批量、高频次（SRE：小变更回退便宜）。[推断]
+
+证伪信号：restart 后 node 版本读数仍是旧 commit（忘了 --stop-nodes）；重启卡没出现（标记没写 /
+没准入）；human 输入没重放（inbox 条目非 human 源 / 无 session_id）。
+
+### 6.4 回归（用户裁决，agent 只备清单）
+
+**原语**：宪法第四条（行为验证由用户做，证据来自只读真实读数）+ readiness≠验收（§3.5）。
+
+回归清单（用户执行 / 观察；每项给证伪信号，风格仿 node-auto-join.md §10.4）：
+
+| # | 项 | 用户动作 | 失败会看到 |
+|---|---|---|---|
+| 1 | 入口 | 浏览器开 B origin，登录，**刷新页面** | 打不开 / 旧缓存假报 timeline 缺口（R9） |
+| 2 | 会话全链路 | 新会话 → 发消息 → 工具调用 → 看 timeline | agent 看到的 ≠ 用户看到的；工具报错 |
+| 3 | 历史读回 | 打开 B 行自己的历史会话 | 读不回 / 格式错（B 宇宙内应完整） |
+| 4 | 中断恢复 | 真实跑一次 `restart --stop-nodes`，观察重启卡 + 输入重放 | 卡缺席 / 输入丢 / 标记不清（下次启动重复发卡） |
+| 5 | federation 双向 | B→A 报告到达 Team 日志并 dispatch；A→B 按地址回复 | 401/404/429；日志有 `federation.rejected` |
+| 6 | 隔离 | A 行端口 / 数据根 / config 读数不变；池文件归属 blue | A 行被波及（R1–R6 任一破防） |
+| 7 | 工作区 | B worktree `git status` 干净、write.lock 无跨线争用 | 跨线覆盖（R8） |
+
+- 判定：全绿 → **用户裁决入住**（口头或文档记录）；任一红 → 回 6.3。
+- agent 职责边界 [推断]：只准备读数、整理证据、解释失败；**不代跑探针、不代裁决**。
+  清单外的探索性使用（用户日常真实工作）是最终 oracle——cohort 观察窗建议时间盒化
+  （如 1–3 天日用），期间 A 行保持可用（金丝雀回退路径常开）。
+
+### 6.5 入住（会话宇宙切换）
+
+**原语**：裁决②（切换 = 新会话宇宙，不迁移）+ federation handoff + agent create/hire。
+[事实] 配方 §4；federation-hub.md §不做什么
+
+前提：用户裁决；回归全绿；handoff 文档完整。**入住不是数据搬家，是工作连续性交接**：
+
+1. **冻结**：A 行停止接新工作（只读过渡期，Fowler §3.1 细节 1 的 vessel 形态）。A 行记录员写
+   handoff 文档：当前工作状态 / 未竟事项 / 关键路径 / 成员名册与职责 / 已知坑 → git commit。[推断]
+2. **handoff 消息**：A 记录员经 federation 发指针给 B 行（地址形态，内容 = 文档路径 + 摘要 +
+   message_id）；B 行 agent 读文档。git 是 durable 通道，消息只是通知（G6 绕行）。[推断]
+3. **B 行重建成员**：`agent create` / `hire`，system_prompt / 首条消息携带 handoff 文档路径与摘要。
+   - [事实] 跨宇宙**没有会话迁移**（裁决②）；`rotate` 的 startup_prompt 只是同进程 body handoff，
+     不能跨舰队。新成员 = 新会话，上下文靠文档重建。
+   - [事实] federation 不做远程 create/spawn ⇒ 重建必须由 B 行本地 agent 执行（G7）。
+4. **换入口**（= 切路由器）：浏览器 → B origin（刷新 + 重新登录，凭据按 origin 隔离只进
+   sessionStorage [事实] 配方 §2）；CLI → 带 B 的 UC/DD 或 `--connect` + connect token；TUI 同理。
+5. **A 行处置**：推荐**保留为回退线**（零成本热备，§3.1 角色轮转）；确要停则
+   `gateway stop --instance default --stop-nodes`（真停；缺省只停平台层）。双行期不卸载、
+   不 install-service。[事实] 配方 §3；裁决③
+6. **记录**：宇宙切换事件（时间 / 入口 / 版本 / 裁决人）写进 handoff 文档并 git commit。
+   B 行自此成为新 A（生产线）。[推断]
+
+旧会话怎么办：留在 A 宇宙。A 保留时可经 A 入口只读查询；确要导出注意
+`legacy_session_unsupported`（0.55+ 不认旧格式，用 0.54 导出 [事实] 配方 §4）。
+**不做**：停两行 → 备份 → 复制 dataDir 的离线迁移（裁决②禁止；单向门警示见配方 §4）。
+
+证伪信号：B 行成员「记得」A 行会话内容（不可能——除非 handoff 文档写了，说明文档在起作用）；
+用户浏览器仍指 A（入口没切）；A 行被停掉后想回退发现数据根被删（违反「归档不删」）。
+
+### 6.6 迭代与回退
+
+**回退**（入住后任何时刻）：
+- 入口换回 A 即回退，A 根 / 配置 / 端口未被触碰，零成本。[事实] 配方 §4
+- B 行已产生的工作：**git 提交仍在仓库**（工作区是 git，不是 dataDir）；B 宇宙会话状态留在 B，
+  需要时经 B 入口只读查询或写进 handoff 文档。[推断] 这是「不迁移」的代价，文档补偿。
+- 回退后 B 行保留现场（不删数据根）供排查；修复后重走 6.2–6.5。[推断]
+
+**迭代**（下一轮候选）：
+- 角色轮转（Fowler）：B 转正后，下一轮候选可复用 B checkout（pull 新 main）或起 C 行
+  （green/8662/8664/8663，§6.0 命名表）；旧 A 在稳定窗后退役：`stop --stop-nodes` + 数据根**归档不删**。
+- **并发版本数压到最少**（Sato）：同一时刻最多两行活跃（生产 + 候选）。[业界] §3.2
+- **开关台账清零**（Hodgson）：候选线相对生产线的 config diff 逐项处置——转正为正式配置或删除；
+  不留长命 release toggle。[业界] §3.3；[推断] 台账就是 handoff 文档的一节。
+- 每轮闭环产物全部进 git（出生证 / 自检报告序列 / 回归记录 / 入住记录 / 回退记录）——
+  **git 文档序列是跨会话宇宙的 durable 状态**，会话是宇宙内易失的。[推断] 这是本手册的核心推荐。
 
 ## 7. 跨节点场景
 
