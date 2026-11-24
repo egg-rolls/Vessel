@@ -1503,6 +1503,28 @@ export class MemberExecutionHost implements MemberExecutionPort {
     return true;
   }
 
+  /**
+   * Additive（q-session-fix）：壳缺失时合成一份最小壳；已存在则零写入。
+   *
+   * 与 `setSessionTitle` 的「新 body 无壳」分支同一口径：`status: 'completed'`，
+   * 不留给后端默认（SQLite 默认 'running' 会让 liveness sweep 误判崩溃 run）。
+   * 不写 title / messages —— 标题仍走既有命名链路，正文由首轮 run 落盘。
+   */
+  async ensureSessionShell(sessionId: string): Promise<boolean> {
+    const store = this.session;
+    if (store === undefined) return false;
+    const stored = await store.load(sessionId);
+    if (stored !== null) return false;
+    const now = Date.now();
+    await store.save({
+      session_id: sessionId,
+      created_at: now,
+      updated_at: now,
+      status: 'completed',
+    });
+    return true;
+  }
+
   async ensureSessionLease(sessionId: string, minFence?: number): Promise<LeaseGrant | undefined> {
     const entry = this.entries.get(sessionId);
     if (entry === undefined) return undefined;

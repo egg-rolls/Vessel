@@ -474,6 +474,21 @@ export interface MemberExecutionPort {
     source: SessionTitleSource,
   ): Promise<boolean> | boolean;
   /**
+   * Additive（q-session-fix）：确保会话壳（`sessions/<id>.json`）存在。
+   *
+   * 会话壳此前只在首轮 run 落盘时才写（`run-journal.saveSessionState`），而成员创建
+   * （`createOne`，首会话 id = 成员 id）与换体（`createSession`）只写时间线
+   * `session.created`。从未跑过 run 的 body（典型：fresh fleet 的 owner `main`）因此
+   * 有会话身份、有时间线，却没有壳 —— WebUI 默认会话入口按 `agents.list` 的
+   * `session_id` 调 `sessions.get` 直接 `not_found`（「会话不存在或已删除」）。
+   *
+   * 这里在创建 / 恢复时把壳补齐：已存在 ⇒ 不写（幂等）；缺失 ⇒ 合成一份最小壳，
+   * `status: 'completed'`（与 `setSessionTitle` 同一口径：不能留给后端默认
+   * `'running'`，否则 liveness sweep 会把从未跑过的会话当崩溃 run 修复）。
+   * 返回 false = 宿主没有 SessionStore（headless / 纯内存），调用方静默跳过。
+   */
+  ensureSessionShell?(sessionId: string): Promise<boolean> | boolean;
+  /**
    * 0.31（additive，可选）：该 body 的交互请求是否真能到达人类。
    *
    * 判据是「bridge 已挂上」而不是「宿主有人类」：permissionMode=allow 的
