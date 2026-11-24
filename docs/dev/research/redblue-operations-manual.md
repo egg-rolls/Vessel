@@ -8,7 +8,29 @@
 
 ## 0. 结论先说
 
-（调研完成后填写：推荐方法一句话 + 闭环六步摘要 + 最重要的三条纪律。）
+**推荐方法**：以已裁决的蓝绿隔离配方为骨架，叠加 team/node 粒度的 cohort 金丝雀（先让一个团队
+入住 B 行，federation 保持两线互通）、config 级开关台账（不建 flag 框架）、expand-contract 节奏
+（旧宇宙整体保留 = 推迟 contract），回退 = 入口换回 A 行（零成本）。业界来源与取舍见 §3，
+逐要素映射见 §4，缺口与绕行见 §5。
+
+**闭环六步**（详细命令与证伪信号见 §6）：
+
+1. **起新版**：A 行 agent 按配方起 B 舰队（UC/DD/instance/端口整体搬出），写出生证进 git。
+2. **自检回报**：B 行 agent 跑只读自检清单（状态/版本/日志/真实工作/隔离），经 federation
+   peer 通道发结构化报告给 A 行记录员；记录员按 message_id 去重落 git + 回 ack。
+3. **修复**：B worktree 小批量修，`bun run build` 后 **`gateway restart --stop-nodes`** 换代码
+   （缺省 restart 不换 node 代码——最大坑），c 档恢复兜底，回 step 2 出增量报告。
+4. **回归**：用户按清单做行为验证（agent 只备读数不代跑），全绿由用户裁决入住。
+5. **入住**：冻结 A → handoff 文档落 git + federation 指针 → B 行重建成员 → 换入口（刷新+重登录）
+   → A 保留为回退线。**会话不迁移**（裁决②），工作连续性靠 git + 文档 + 消息。
+6. **迭代**：B 转正；开关台账清零；下一轮候选复用 B checkout 或起 C 行；并发最多两行；
+   回退随时 = 入口换回。
+
+**三条最重要的纪律**：
+① 换代码必须 `restart --stop-nodes`，且自检核对版本读数（R11）；
+② B 行独立 worktree + 独立 dataDir + 独立池 instance，永不共享 workspace / 数据根（R1/R3/R8）；
+③ git 文档序列是跨会话宇宙的 durable 状态——federation 只当通知通道，关键报告 / handoff /
+裁决记录必须落 git（G6/R12）。
 
 ## 1. 范围与术语
 
