@@ -403,7 +403,7 @@ Exit codes：0 成功；1 运行期失败（冲突/IO）；2 用法非法（照 
 ```
 <name>/
 ├── package.json          # B1 骨架 + vessel 清单（id/name/version/engines/side:backend/
-│                         #   contributes.settings 占位一键 / permissions 最小空声明）
+│                         #   contributes.settings 占位一项 / permissions 最小空声明）
 ├── VERIFY.md             # 人工验证清单（§5.4）
 └── src/
     ├── index.ts          # Plugin：install(host,{config}) → enabled 闸 → parseSettings →
@@ -475,7 +475,147 @@ handler 里留 `settings = params.settings` 占位）。**协议版本 / 超时 
   清单故意写错时 fail-closed 告警（评审项，照 docs/agents/plugins.md）。
 - tool：占位工具出现在工具面、调用回 echo；`enabled:false` 时不注册。
 - capability：`plugin.<name>.hello` 经 gateway 可调；未声明方法被拒（plugin_rpc_denied）。
-- ui：页面在导航出现；embed 档渲染；isolated 回退 iframe； deactivate 后进程退出。
+- ui：页面在导航出现；embed 档渲染；isolated 回退 iframe；deactivate 后进程退出。
 - 安全评审项：permissions 是否最小；external 源 http/cli 是否需 expose。
 
 清单是**给作者/评审者的文档**，不构成 gate；与「不写测试」裁定（仓库外也不写）一致。
+
+## 6. 约定优于配置：运行时 additive 机制
+
+总纪律：**全部 additive**——显式声明永远优先；缺省推导只发生在「字段不存在」时；
+推导结果照样过既有 fail-closed 校验；存量插件（字段全显式）行为**字节等价**。
+落地顺序见 §10：脚手架（生成时）先行，运行时推导分期跟进，互不阻塞。
+
+### 6.1 Manifest 缺省推导表（落点：`parsePluginManifest` 入口，校验之前）
+
+| 字段 | 现态 | 缺省推导 | 校验不变 |
+| --- | --- | --- | --- |
+| `id` | 必填 | package.json 短名（去 scope；`readPlugin` 已算出，经 options 传入或校验器自读 baseDir/package.json） | `PLUGIN_ID_RE` / reservedCliNames / 冲突裁决照旧 |
+| `name` | 必填 | `id`（展示名缺省即 id；title 化不做，避免 i18n 歧义） | 非空照旧 |
+| `version` | 必填 | package.json `version`（须 full semver，否则仍 fail） | semver 校验照旧 |
+| `engines.vessel` | 必填 | `>=0.43.0 <1.0.0`（清单契约诞生版；**宽缺省 + 显式收紧**是作者责任，模板生成时写当前版本下限） | range 解析 + 当前版本比对**照旧**（缺省不豁免版本门） |
+| `side` | 缺省 both | 不变（已推导） | — |
+| `ui.dir` | ui 存在则必填 | `web` | 越界检查照旧 |
+| `ui.embed.entry` | 必填 | `embed/index.mjs` | `.mjs` / 相对路径检查照旧 |
+| `ui.embed.css` | 可选 | `embed/index.css`（文件不存在时 serve 现态如何处理就如何处理——推导只改声明，不改存在性语义） | `.css` 检查照旧 |
+| `ui.embed.runtime` | 必填 | `{ react: "^19", sdk: "^1" }` | semver range 校验照旧 |
+| `pages[].entry` | 必填 | `<page-id>.html` | 越界检查照旧 |
+| `pages[].component` | 可选（需 ui.embed） | 有 ui.embed 时缺省 `PascalCase(<page-id>)View`（与模板 embed 导出同名约定） | `PLUGIN_COMPONENT_RE` 照旧；**无 ui.embed 时不推导**（isolated 档无组件语义） |
+| `activationEvents`（child） | 缺省 [] | 有 pages 时缺省 `onPage:<id>` 全集（懒激活语义不变，只是免去手写） | 事件形状校验照旧 |
+| `description` | 可选 | package.json `description`（readPlugin 已有此回落，提升到清单层统一） | — |
+
+**不推导**：`permissions` / `scope` / `ports` / `dependencies` / `http` / `rpc[].permission` /
+`override` / `entry`（child 必填是形态判据，推导会改变 mode 判定——**绝对禁止**）。
+特别地，`contributes.rpc` 整体**不从代码推导**：校验时序（先 manifest 后 import）是
+fail-closed 的根基，任何「import 后补声明」方案都击穿它（§3.3）。
+
+实现注：`validatePluginManifest` 的 options 增加 `packageJson?: {name,version,description}`
+（由 readPlugin 传入，避免校验器二次读盘）；child / in-process 两分支共用同一推导函数。
+`plugin list --json` 输出推导后的规范化清单（现态已如此），诊断可加 `derived: [...]` 字段
+标注哪些字段来自缺省（additive，便于评审）。
+
+### 6.2 SDK 编写助手（落点：`packages/plugin-sdk`，repo 内消费；user 模板内联同形片段）
+
+三个纯函数助手，**产出既有 `Plugin` 形状，零 core 新接口**：
+
+```ts
+// 1. rpc handler map → Plugin.rpc（替代 switch 双写，B3）
+defineRpcHandlers({ hello: async (params) => ({ ok: true }) })
+// → { rpc(name, params) }：命中调 handler；未知抛 unknown_method:<name>（照 model-registry 现态）
+
+// 2. settings 单源解析（替代手写 parseXConfig，B4）
+parseSettings(rawConfig, SETTINGS_SCHEMA)
+// → { config, warnings }：按 JSON Schema 子集（type/default/enum/minimum/maximum）
+//   逐键校验+填缺省；未知键告警（照 skills parseSkillsConfig 口径）；enabled 闸内置
+
+// 3. 能力插件骨架（B5）
+defineCapabilityPlugin({ name, version?, description?, settings?, rpc?, tool? })
+// → Plugin：install 解析 settings → enabled:false 不注册 → 有 tool 则 registerTool；
+//   rpc 经 defineRpcHandlers；dispose 透传。name/version/description 缺省读自身 package.json
+//   （repo 内）或模板常量（user 内联版）。
+```
+
+边界：助手**不做**路径边界 / dataDir 注入（那是装配层语义，§6.4）；不 import config 包
+（依赖方向，plugin-config.ts 注释先例）；`parseSettings` 的 schema 子集与
+`PluginSettingSchema` / serve 校验口径**完全一致**（q-settings 契约），不扩子集。
+
+### 6.3 单源与 `vessel plugin sync`（生成器，不是门禁）
+
+双写问题的根治：**代码侧 const 是唯一真相源，manifest 片段是派生产物**。
+
+- `src/settings.ts` 的 `SETTINGS_SCHEMA` → `vessel.contributes.settings`；
+- `src/rpc.ts` 的 handler map 键 + 每方法附注（`{ description, permission }`）→
+  `vessel.contributes.rpc`；**permission 缺省 read，write 必须作者在 map 附注里显式标**
+  （§3.2 安全语义不猜）；
+- `web-src/i18n.ts` 的 en/zh-CN 表 → `vessel.contributes.i18n`（可选）。
+
+`vessel plugin sync [<dir>]`：读上述源文件（**静态解析 export const 字面量**，不执行插件
+代码——用 TS AST 或受限 JSON 字面量解析；handler map 只取键与附注，不取函数体），
+把派生片段**写回 package.json 的 vessel 块**（保留其它键，照 setPluginConfigValue 的
+只改目标键纪律）。显式命令、显式运行、diff 可见；**不在运行时执行、不做断言、不阻断
+任何流程**——它是生成器（与 create 同类），不是 check/rpc-methods 那类门禁（宪法）。
+一致性最终仍由运行时 fail-closed 校验 + 人工评审项兜底（docs/agents/plugins.md 现态）。
+
+未跑 sync 的后果：manifest 与代码漂移 → 运行时按 manifest 白名单拒绝未声明方法
+（现态语义，安全方向正确）。VERIFY.md 把「改 rpc/settings 后跑 sync」列为评审项。
+
+### 6.4 装配知识 manifest 化（消灭 plugin-config.ts 按名特判，B8）
+
+两个 additive 清单字段（名字待定，语义冻结）：
+
+```jsonc
+"vessel": {
+  "defaultEnabled": false,          // 缺省 true。false = 不进默认集（opt-in），
+                                    // 显式 plugins: 条目仍可启用（media 语义）
+  "inherit": {
+    "pathBoundary": "basic-tools",  // 路径边界回落来源（media/skills 现态语义：
+                                    // 自身任一键存在即不回落，含显式空数组）
+    "dataDir": true,                // 装配层注入应用层 resolveDataDir（recall 等现态）
+    "cwd": true                     // agent.cwd 回落（basic-tools/skills 现态）
+  }
+}
+```
+
+消费点改造（全部「声明优先，硬编码兜底」）：
+
+- `plugin-selection.ts`：默认集过滤改读 `descriptor.capabilityManifest?.defaultEnabled !== false`；
+  `OPT_IN_PLUGINS` Set 保留为 legacy 兜底（无清单的 media 现态靠它）。media 迁移后 Set 清空删除。
+- `buildPluginConfigMap`：`applyDataDirFallback` / `applyPathBoundaryFallback` / cwd 回落
+  改为遍历「声明了 inherit 的插件」；**按名硬编码保留为兜底**，存量无清单插件行为不变。
+  skills 收集库隔离（deny_paths 追加）是 skills 专属安全语义，**不通用化**，保持硬编码
+  （或迁为 skills 清单的专属声明，开放问题 §9）。
+- `envGranularity` scope 名单：**缓议**。它声明的是「插件产哪些 env scope」，属宿主对插件
+  内部行为的断言，manifest 化等于让插件自报产出——语义上可行但需与 env-injection 契约
+  对齐，v1 不动（§9 开放问题）。
+
+**零回归论证**：存量 21 插件中，有清单者字段全显式（推导不触发）；无清单者走硬编码兜底
+（路径不变）。新字段只被新插件/迁移后插件使用。热应用（assemblePluginTools）与 `--tools`
+吃同一份 buildPluginConfigMap 结果（现态唯一产地），改一处全覆盖。
+
+### 6.5 共享 UI 构建配置（落点：`packages/plugin-ui/build`，新 subpath export）
+
+现状：4 个 UI 插件各持 ~130 行 vite.config.embed.ts + ~100 行 vite.config.ts，
+其中层序声明 / biome-ignore-all 头 / externals 清单 / classic-script iframe 产线是
+**逐字复制的暗坑**（model-registry 注释明言层序保证靠宿主预留槽位）。
+
+设计：`createPluginViteConfigs({ pluginId, pages, uiDir? })` 返回
+`{ iframe: UserConfig, embed: UserConfig }`，一次封装：
+
+- embed 档：lib ESM → `web/embed/index.mjs` + `index.css`；externals 固定
+  react/react-dom/react/jsx-runtime/@vessel-agent/plugin-sdk（契约 §6）；
+  `@layer … plugin.<pluginId> …` 防御声明；biome-ignore-all 产物头（lint/format/assist）。
+- iframe 档：照先例 classic-script 流程，每页一个 html 入口。
+- 插件侧 vite.config.ts / vite.config.embed.ts 各 ~5 行（调工厂 + defineConfig）。
+
+迁移：4 个存量 UI 插件逐个换用工厂，**产物字节等价**为验收（构建产物入库，diff 可审）。
+plugin-ui 是浏览器侧包，build subpath 是 node 侧工具——package.json exports 分条件导出，
+不污染浏览器 bundle（§9 风险）。
+
+### 6.6 明确不做的「自动化」（防过度设计）
+
+- 不做「扫描 src/ 自动生成 manifest」的运行时魔法（fail-closed 时序，§3.3）。
+- 不做 navGroups 自动合成（导航是 UX 决策；模板生成 + 显式声明足够）。
+- 不做 permissions 推导 / 最小权限自动收紧（授权意图不可猜）。
+- 不做插件间依赖自动解析 / 自动安装（N1）。
+- 不做 child 协议入口的运行时框架化（usage/marketplace 的 NDJSON 入口是契约实现，
+  模板复制 + 指针足够；抽框架 = 第二套机制风险）。
