@@ -216,7 +216,9 @@ settings 校验与落盘（q-settings）；CLI 命名空间（contributes.cli）
   repo 内新建 `plugins/<category>/<name>/` 自动成为 workspace 包，无需改根配置。
 - **先例形态**：skills / model-registry 确立「in-process + capabilityManifest + 装配层自动登记」
   为管理插件标准形态；media 确立「opt-in + 边界继承 + install 期后端探测」；
-  q-settings 确立「contributes.settings 自动发现渲染」。脚手架照这些形态生成（§8）。## 2. 目标与非目标
+  q-settings 确立「contributes.settings 自动发现渲染」。脚手架照这些形态生成（§8）。
+
+## 2. 目标与非目标
 
 ### 2.1 目标
 
