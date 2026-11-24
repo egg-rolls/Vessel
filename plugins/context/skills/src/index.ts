@@ -20,6 +20,7 @@ import type { Plugin, PluginHost } from '@vessel-agent/core';
 import { parseSkillsConfig } from './config.js';
 import { SkillsService } from './service.js';
 import { SkillsStore } from './store.js';
+import { createSkillsTool } from './tool.js';
 
 export { parseSkillsConfig, type SkillsConfig } from './config.js';
 export {
@@ -36,6 +37,12 @@ export {
   type SkillsServiceOptions,
 } from './service.js';
 export { SkillsStore } from './store.js';
+export {
+  createSkillsTool,
+  parseSkillsArgs,
+  SKILLS_TOOL_DESCRIPTION,
+  type SkillsArgs,
+} from './tool.js';
 export {
   loadGateDecision,
   originOfSource,
@@ -85,8 +92,8 @@ export interface SkillsPluginOptions {
  *
  * install（设计 §4/§5.4/§10.2）：解析 config（install 期钉死，生效语义 = 重启）；
  * `enabled: false` 不注册任何东西；否则构造路径边界（继承 basic-tools，装配层
- * 回落）、私有目录 store 与索引服务，启动异步全量扫描 + watch。
- * 工具 / RPC 面在后续切片 additive 注册。
+ * 回落）、私有目录 store 与索引服务，启动异步全量扫描 + watch，注册 `skills`
+ * 工具。RPC 面在后续切片 additive 注册。
  */
 export function createSkillsPlugin(options: SkillsPluginOptions = {}): Plugin {
   let service: SkillsService | undefined;
@@ -96,7 +103,7 @@ export function createSkillsPlugin(options: SkillsPluginOptions = {}): Plugin {
     description:
       'Managed skill library: scan / index three skill roots (project / user / collected library) ' +
       'with trust-gated load (`skills` tool) + library UI',
-    install(_host: PluginHost, installOptions?: { config?: Record<string, unknown> }): void {
+    install(host: PluginHost, installOptions?: { config?: Record<string, unknown> }): void {
       const { config, warnings } = parseSkillsConfig(installOptions?.config ?? options.config);
       for (const warning of warnings) console.warn(`[skills] ${warning}`);
       if (!config.enabled) return;
@@ -109,6 +116,7 @@ export function createSkillsPlugin(options: SkillsPluginOptions = {}): Plugin {
       const store = new SkillsStore(config.stateDir);
       service = new SkillsService({ config, boundary, store });
       // 扫描是异步的：install 不阻塞进程启动；工具 / RPC 调用前 await ready()。
+      host.registerTool(createSkillsTool(service));
     },
     dispose(): void {
       service?.dispose();

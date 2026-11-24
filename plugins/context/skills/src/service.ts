@@ -42,7 +42,7 @@ export interface RescanResult {
 
 /** 读文件结果：成功带内容与重算哈希；oversize / 不可读带错误（不静默） */
 export type ReadSkillResult =
-  | { ok: true; content: string; sha256: string; bytes: number }
+  | { ok: true; content: string; sha256: string; bytes: number; mtimeMs: number }
   | { ok: false; error: 'oversize' | 'unreadable'; bytes: number; message: string };
 
 /** 索引服务构造选项 */
@@ -265,6 +265,7 @@ export class SkillsService {
       content,
       sha256: createHash('sha256').update(content, 'utf-8').digest('hex'),
       bytes: info.size,
+      mtimeMs: info.mtimeMs,
     };
   }
 
