@@ -1099,6 +1099,13 @@ export class AgentServiceImpl implements AgentService {
       }
       if (record.membership === 'present') {
         this.emit('agent.stale', record, { state: 'idle', presence: 'gone' });
+        // q-session-fix：存量记录补壳 —— 修复发生在「创建时补壳」之前的 fleet
+        // （典型：fresh fleet 的 owner main，session_id 即成员 id，从未跑过 run，
+        // 只有时间线没有壳）。只补 live primary；已退役 / 已关闭成员不动。
+        // 幂等：壳在 ⇒ 零写入；失败只 warn，不影响恢复。
+        if (record.binding !== undefined && record.binding.retiredAt === undefined) {
+          await this.ensureSessionShell(record.binding.bindingId, record.id);
+        }
       }
     }
     for (const [name, ids] of idsByName) {
@@ -1914,6 +1921,26 @@ export class AgentServiceImpl implements AgentService {
     await eventLog.sync?.(meta.sessionId);
   }
 
+  /**
+   * Additive（q-session-fix）：best-effort 补齐会话壳。
+   *
+   * 会话身份在创建 / 换体 / 快照恢复时就已成立（时间线有 `session.created`），但壳
+   * 此前要等首轮 run 才落盘 —— 从未跑过的 body（fresh fleet 的 owner `main`）会让
+   * WebUI 默认会话入口 `sessions.get` 直接 not_found。壳写失败只 warn：创建 / 恢复
+   * 本身已提交，不能因为补壳失败回滚或丢弃成员（与 `session.created` 同口径）。
+   */
+  private async ensureSessionShell(sessionId: string, agentId: string): Promise<void> {
+    try {
+      await this.runtime.ensureSessionShell?.(sessionId);
+    } catch (error) {
+      this.logger.warn('agent.session.shell_ensure_failed', {
+        agent_id: agentId,
+        session_id: sessionId,
+        error: errorText(error),
+      });
+    }
+  }
+
   /** session 级事件 best-effort 写入（事件日志缺失时静默跳过）。 */
   private async appendSessionEvent(
     sessionId: string,
@@ -2061,6 +2088,9 @@ export class AgentServiceImpl implements AgentService {
     this.registry.setState(record.id, 'idle');
     this.registry.setPresence(record.id, 'live');
     this.scheduleSnapshot();
+    // q-session-fix：首会话壳随创建落地（此前要等首轮 run），否则从未跑过的 body
+    // 在 WebUI 默认会话入口里是「会话不存在」。best-effort，不影响 spawn 结果。
+    await this.ensureSessionShell(body.bindingId, record.id);
   }
 
   /**
@@ -5735,6 +5765,10 @@ export class AgentServiceImpl implements AgentService {
         error: errorText(error),
       });
     });
+
+    // q-session-fix：新 body 的壳随换体落地（与 createOne 同一缺口：此前要等首轮
+    // run 才有壳，rotate 后从未开口的会话在 WebUI 里同样是 not_found）。
+    await this.ensureSessionShell(newSessionId, record.id);
 
     // 源退役审计（仅 copy / compact）；best-effort，失败只 warn。
     if (seedResult !== undefined && seedKind !== undefined && sourceSessionId !== undefined) {
