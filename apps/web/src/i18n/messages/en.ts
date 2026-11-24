@@ -142,6 +142,27 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.category.connection': 'Connection',
   'settings.category.advancedConfig': 'Advanced',
   'settings.category.extensions': 'Extensions',
+  'settings.item.local.navCollapsed.title': 'Collapse sidebar by default',
+  'settings.item.local.navCollapsed.desc':
+    'Default collapsed state of the left nav when the WebUI opens; the sidebar toggle writes the same storage key.',
+  'settings.item.local.navGroups.title': 'Group collapse state',
+  'settings.item.local.navGroups.desc':
+    'Collapsed state of left-nav groups (read-only); reset = expand all.',
+  'settings.item.local.settingsTree.title': 'Settings tree collapse state',
+  'settings.item.local.settingsTree.desc':
+    'Collapsed categories of the settings dialog tree (JSON array, this browser only).',
+  'settings.item.local.settingsTab.title': 'Default settings tab',
+  'settings.item.local.settingsTab.desc':
+    'Scope tab selected when the settings dialog opens (User / Workspace / Browser).',
+  'settings.item.view.designLab.title': 'Design Lab',
+  'settings.item.view.designLab.desc':
+    'Design tokens and component previews (static samples, no gateway needed).',
+  'settings.item.view.connection.title': 'Connection summary',
+  'settings.item.view.connection.desc':
+    'Gateway connection state / node / version (read-only diagnostics).',
+  'settings.item.view.advancedConfig.title': 'Advanced configuration',
+  'settings.item.view.advancedConfig.desc':
+    'Resolved configuration JSON, key/value table and sources (read-only).',
   'settings.connection.devProxyNotice':
     'Dev proxy auth is enabled: connecting to the same-origin gateway forwarded by the Vite dev server. No token is stored in the browser.',
 

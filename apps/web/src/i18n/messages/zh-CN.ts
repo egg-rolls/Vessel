@@ -142,6 +142,22 @@ export const messages = {
   'settings.category.connection': '连接',
   'settings.category.advancedConfig': '高级',
   'settings.category.extensions': '扩展',
+  'settings.item.local.navCollapsed.title': '侧栏默认折叠',
+  'settings.item.local.navCollapsed.desc':
+    '打开 WebUI 时左侧导航栏的默认折叠态；左栏折叠按钮即时写同一存储键。',
+  'settings.item.local.navGroups.title': '分组折叠状态',
+  'settings.item.local.navGroups.desc': '左侧导航各分组的折叠态（只读展示）；重置 = 全部展开。',
+  'settings.item.local.settingsTree.title': '设置分类树折叠态',
+  'settings.item.local.settingsTree.desc': '设置弹窗分类树的折叠状态（JSON 数组，本浏览器）。',
+  'settings.item.local.settingsTab.title': '设置默认层级',
+  'settings.item.local.settingsTab.desc':
+    '打开设置弹窗时默认选中的层级 tab（用户 / 工作区 / 浏览器）。',
+  'settings.item.view.designLab.title': '设计实验室',
+  'settings.item.view.designLab.desc': '设计 token 与组件预览（纯静态样例，不连 gateway）。',
+  'settings.item.view.connection.title': '连接摘要',
+  'settings.item.view.connection.desc': 'gateway 连接状态 / 节点 / 版本（只读诊断面）。',
+  'settings.item.view.advancedConfig.title': '高级配置',
+  'settings.item.view.advancedConfig.desc': '解析后的配置 JSON、键值表与来源表（只读）。',
   'settings.connection.devProxyNotice':
     '开发代理鉴权已启用：连接同源 gateway（由 Vite 开发服务器转发），前端不保存 token。',
 

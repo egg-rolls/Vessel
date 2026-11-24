@@ -38,6 +38,8 @@ export interface SettingDef {
   order?: number;
   /** enum 可选值。 */
   options?: readonly string[];
+  /** enum 选项 → 宿主 i18n key（缺省渲染原值 mono，与现 Display 页一致）。 */
+  optionLabelKeys?: Readonly<Record<string, string>>;
   /** number 边界（spec minimum/maximum）。 */
   min?: number;
   max?: number;
@@ -146,9 +148,139 @@ export const CORE_SETTINGS: readonly SettingDef[] = DISPLAY_SETTINGS.map((settin
   keywords: [setting.id, snakeCase(setting.id)],
 }));
 
-/** 注册表合并：核心 + 插件域（S3）。插件项 category 固定 extensions，不能注入核心分类。 */
+/**
+ * 本地呈现偏好（scope=local，浏览器 localStorage；§7.1 键名全部原名保留）。
+ * 写路径只转调既有唯一写者（storeTheme / writeNavPreference / setLocale），
+ * 绝不直接写 DOM（0.52 主题唯一写者 invariant，R10）。
+ */
+export const LOCAL_SETTINGS: readonly SettingDef[] = [
+  {
+    id: 'local.theme',
+    key: 'vessel.theme',
+    scope: 'local',
+    type: 'enum',
+    source: 'core',
+    titleKey: 'appearance.theme.title',
+    descriptionKey: 'appearance.theme.desc',
+    category: 'visual',
+    common: true,
+    options: ['system', 'light', 'dark'],
+    optionLabelKeys: {
+      system: 'appearance.theme.system',
+      light: 'appearance.theme.light',
+      dark: 'appearance.theme.dark',
+    },
+    // initialTheme 缺省 dark（无存储偏好/非法值时）。
+    default: 'dark',
+    keywords: ['theme', '主题', 'dark', 'light', '配色'],
+  },
+  {
+    id: 'local.motion',
+    key: 'local.motion',
+    scope: 'local',
+    type: 'string',
+    source: 'core',
+    titleKey: 'appearance.motion.title',
+    descriptionKey: 'appearance.motion.desc',
+    category: 'visual',
+    // 说明行：跟随系统 reduced-motion，无开关（§5.1）。
+    readOnly: true,
+    keywords: ['motion', '动效', 'animation', 'reduced-motion'],
+  },
+  {
+    id: 'local.nav.collapsed',
+    key: 'vessel.nav.collapsed',
+    scope: 'local',
+    type: 'boolean',
+    source: 'core',
+    titleKey: 'settings.item.local.navCollapsed.title',
+    descriptionKey: 'settings.item.local.navCollapsed.desc',
+    category: 'visual',
+    default: 'false',
+    keywords: ['nav', 'sidebar', '侧栏', '折叠', 'collapse'],
+  },
+  {
+    id: 'local.nav.groups',
+    key: 'vessel.nav.collapsed-groups',
+    scope: 'local',
+    type: 'object',
+    source: 'core',
+    titleKey: 'settings.item.local.navGroups.title',
+    descriptionKey: 'settings.item.local.navGroups.desc',
+    category: 'visual',
+    // 只读展示 + [全部展开] 重置（§5.3）；v1 经通用 local 重置清空存储键。
+    readOnly: true,
+    keywords: ['nav', 'groups', '分组', '折叠'],
+  },
+  {
+    id: 'local.settings.tree.collapsed',
+    key: 'vessel.settings.tree.collapsed',
+    scope: 'local',
+    type: 'object',
+    source: 'core',
+    titleKey: 'settings.item.local.settingsTree.title',
+    descriptionKey: 'settings.item.local.settingsTree.desc',
+    category: 'advancedConfig',
+    keywords: ['settings', 'tree', '分类树', '折叠'],
+  },
+  {
+    id: 'local.settings.tab',
+    key: 'vessel.settings.tab',
+    scope: 'local',
+    type: 'enum',
+    source: 'core',
+    titleKey: 'settings.item.local.settingsTab.title',
+    descriptionKey: 'settings.item.local.settingsTab.desc',
+    category: 'advancedConfig',
+    options: ['user', 'project', 'local'],
+    default: 'user',
+    keywords: ['settings', 'tab', '层级', 'scope'],
+  },
+];
+
+/** view 型项：渲染自定义子视图而非控件（§5.2 / §6；懒加载）。 */
+export const VIEW_SETTINGS: readonly SettingDef[] = [
+  {
+    id: 'local.designLab',
+    key: 'local.designLab',
+    scope: 'local',
+    type: 'view',
+    view: 'designLab',
+    source: 'core',
+    titleKey: 'settings.item.view.designLab.title',
+    descriptionKey: 'settings.item.view.designLab.desc',
+    category: 'visual',
+    keywords: ['design', '设计实验室', 'token', 'preview', 'lab'],
+  },
+  {
+    id: 'view.connection',
+    key: 'view.connection',
+    scope: 'user',
+    type: 'view',
+    view: 'connection',
+    source: 'core',
+    titleKey: 'settings.item.view.connection.title',
+    descriptionKey: 'settings.item.view.connection.desc',
+    category: 'connection',
+    keywords: ['gateway', '连接', 'connection', '节点', '版本'],
+  },
+  {
+    id: 'view.advancedConfig',
+    key: 'view.advancedConfig',
+    scope: 'user',
+    type: 'view',
+    view: 'advancedConfig',
+    source: 'core',
+    titleKey: 'settings.item.view.advancedConfig.title',
+    descriptionKey: 'settings.item.view.advancedConfig.desc',
+    category: 'advancedConfig',
+    keywords: ['config', 'yaml', 'json', '高级', '来源', 'sources'],
+  },
+];
+
+/** 注册表合并：核心 + 本地 + view + 插件域（S3）。插件项 category 固定 extensions。 */
 export function mergeSettings(pluginDefs: readonly SettingDef[] = []): readonly SettingDef[] {
-  return [...CORE_SETTINGS, ...pluginDefs];
+  return [...CORE_SETTINGS, ...LOCAL_SETTINGS, ...VIEW_SETTINGS, ...pluginDefs];
 }
 
 export function settingDefFor(defs: readonly SettingDef[], id: string): SettingDef | undefined {
