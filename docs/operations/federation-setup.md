@@ -11,6 +11,8 @@ paths: [src/federation/federation-config.ts, src/cli/commands/federation-peer.ts
 > federation 消息。数据面 **node 直连 node**（不经平台端口）；token 是显式共享秘密，
 > 与两舰队各自的 node token / root-secret 无关。
 > 配套 CLI：`vessel federation peer add|list|remove`（写 config + 热应用，不重启）。
+> 要在**指定 node**（而非默认宿主）建 agent/team/session，见
+> [cli-node-targeting.md](cli-node-targeting.md)（`--connect` / `--node` targeting）。
 
 ## 1. 拓扑事实
 
