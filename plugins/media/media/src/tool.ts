@@ -2,8 +2,10 @@
  * @vessel-agent/media - 单个 `media` 工具
  * @module @vessel-agent/media/tool
  *
- * action = read | ocr | describe，path 必填，page / frames 可选。
+ * action = read | view | ocr | describe，path 必填，page / frames 可选。
  * - read：文本直读；PDF 走 pdftotext（按页取，缺 CLI 时明确报错）；
+ * - view：图片入 blob 池 + 登记附件回执，loop 以带 refs 的 user 消息 surfaced，
+ *   多模态主模型**直接看图**（复用 0.56 视觉基座；无需任何外部 CLI）；
  * - ocr：图片 OCR 走 tesseract（缺 CLI 时明确报错）；
  * - describe：交多模态 bridge（未配置时明确报错，不静默降级）。
  *
@@ -16,7 +18,14 @@ import { readFile, stat } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { canonicalPath, evaluatePath, type PathBoundary } from '@vessel-agent/basic-tools';
-import type { ToolContext, ToolDefinition } from '@vessel-agent/core';
+import {
+  attachToolImages,
+  IMAGE_INGEST_MAX_BYTES,
+  ingestImageRefs,
+  sha8Of,
+  type ToolContext,
+  type ToolDefinition,
+} from '@vessel-agent/core';
 import type { MediaBackends } from './binaries.js';
 import type { MediaConfig } from './config.js';
 import { runCli } from './exec.js';
@@ -87,7 +96,14 @@ export interface MediaToolDeps {
 }
 
 /** 支持的动作 */
-export type MediaAction = 'read' | 'ocr' | 'describe';
+export type MediaAction = 'read' | 'view' | 'ocr' | 'describe';
+
+/**
+ * view 支持的图片后缀（IMAGE_EXTS + gif）。能否真内联取决于主模型视觉后端的
+ * formats 闭集（如 openai-compat 收 png/jpeg/gif/webp）；不收的格式请求期明确记
+ * `unsupported_format`，不静默 —— 这里不替后端猜能力。
+ */
+const VIEW_EXTS: ReadonlySet<string> = new Set([...IMAGE_EXTS, '.gif']);
 
 /** 类型守卫：值是否为对象记录 */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -326,11 +342,66 @@ async function readText(target: string, bytes: number, deps: MediaToolDeps): Pro
       '错误：' +
       target +
       ' 看起来是二进制文件（含 NUL 字节），read 只处理文本；' +
-      '图片请用 action=ocr 或 action=describe，PDF 会自动走 pdftotext。'
+      '图片请用 action=view（直接给模型看）/ ocr / describe，PDF 会自动走 pdftotext。'
     );
   }
   const text = buffer.toString('utf-8');
   return finalize([`${target}（文本，${String(bytes)} 字节）`, '----', text], deps.config);
+}
+
+/**
+ * 图片 surfaced（view）：入 blob 池 + 登记附件回执，模型原生看图。
+ *
+ * 字节经 core `ingestImageRefs` 落内容寻址 blob（上传即落，请求期只读冻结副本），
+ * 回执经 `attachToolImages` 登记 → 管道认领 → loop 在本批工具结果后追加一条带 refs
+ * 的 user 消息 → 视觉基座请求期内联。**全程只有引用进上下文，字节不进 Message。**
+ *
+ * 是否真内联取决于主模型视觉能力 / kill switch / 预算（事实由 image.sent /
+ * context.image_dropped 事件表达）；这里不声称「模型一定看到了」。
+ */
+async function runView(
+  target: string,
+  ext: string,
+  deps: MediaToolDeps,
+  ctx: ToolContext,
+): Promise<string> {
+  if (!VIEW_EXTS.has(ext)) {
+    return (
+      '错误：action=view 只处理图片（' +
+      [...VIEW_EXTS].join(' / ') +
+      '）：' +
+      target +
+      '。PDF 请用 action=read，文本直读也是 action=read。'
+    );
+  }
+  if (isAborted(ctx.signal)) return CANCELLED_TEXT;
+
+  const mime = MIME_BY_EXT[ext] ?? 'application/octet-stream';
+  // 边界判定与 checkPath 同一套（纵深防御）；入池上限 8 MiB 与视觉后端单图上限同档。
+  const ingest = await ingestImageRefs(
+    [{ kind: 'image', path: target, mime, name: path.basename(target) }],
+    { allowPath: (entry) => evaluatePath(entry, deps.boundary) },
+  );
+  if (isAborted(ctx.signal)) return CANCELLED_TEXT;
+
+  const ref = ingest.refs[0];
+  if (ref === undefined || ref.sha256 === undefined) {
+    const detail = ingest.notes.join('；');
+    return (
+      '错误：图片未能入池，无法作为附件加入上下文' +
+      (detail === '' ? '。' : `：${detail}。`) +
+      `单图入池上限 ${formatMiB(IMAGE_INGEST_MAX_BYTES)}；超限请先压缩。` +
+      '也可改用 action=ocr / action=describe（按本机后端可用性）。'
+    );
+  }
+
+  attachToolImages(ctx, [ref]);
+  const header = `${target}（view，${mime}，${String(ref.bytes ?? 0)} 字节，sha256 ${sha8Of(ref.sha256)}）`;
+  const note =
+    '图片已作为附件加入上下文（随下一条 user 消息 surfaced）：主模型具备视觉能力时即可直接看到本图，' +
+    '无需再读。是否内联以 image.sent / context.image_dropped 事件为准；' +
+    '未内联（无视觉 / 超预算 / 格式不收）时可改用 action=ocr / action=describe。';
+  return finalize([header, '----', note], deps.config);
 }
 
 /** 图片 OCR（tesseract） */
@@ -433,7 +504,8 @@ async function runDescribe(
 
 /** 当前后端支持的动作集合（未支持的动作不进 schema） */
 export function supportedActions(deps: MediaToolDeps): MediaAction[] {
-  const actions: MediaAction[] = ['read'];
+  // view 不需要任何外部后端（入池 + refs surfaced，模型原生视觉），恒可用。
+  const actions: MediaAction[] = ['read', 'view'];
   if (deps.backends.tesseract !== undefined) actions.push('ocr');
   if (deps.describe !== undefined && deps.backends.describe) actions.push('describe');
   return actions;
@@ -448,6 +520,9 @@ function describeActions(actions: readonly MediaAction[], deps: MediaToolDeps): 
         ? 'read=text files and PDF (pdftotext detected)'
         : 'read=text files; PDF is unavailable on this host (pdftotext not detected)',
     );
+  }
+  if (actions.includes('view')) {
+    notes.push('view=attach image to the calling model context (native vision, no CLI needed)');
   }
   if (actions.includes('ocr')) notes.push('ocr=image OCR via tesseract');
   if (actions.includes('describe')) notes.push('describe=multimodal provider');
@@ -464,7 +539,8 @@ export function createMediaTool(deps: MediaToolDeps): ToolDefinition {
       'Read one local attachment (image / PDF / text) referenced by the user. ' +
       'Actions: ' +
       describeActions(actions, deps) +
-      '. PDF text is paged via page/frames; output is truncated at ' +
+      '. For images prefer action=view: the image is attached to the model context and you see it directly. ' +
+      'PDF text is paged via page/frames; output is truncated at ' +
       String(deps.config.maxOutputBytes) +
       ' bytes (marked truncated). Prefer this over bash cat on binary files.',
     inputSchema: {
@@ -473,7 +549,7 @@ export function createMediaTool(deps: MediaToolDeps): ToolDefinition {
         action: {
           type: 'string',
           enum: actions,
-          description: 'read | ocr | describe',
+          description: 'read | view | ocr | describe',
         },
         path: {
           type: 'string',
@@ -508,8 +584,8 @@ export function createMediaTool(deps: MediaToolDeps): ToolDefinition {
       if (!isRecord(args)) return '错误：media 需要 { action, path }。';
 
       const action = args.action;
-      if (action !== 'read' && action !== 'ocr' && action !== 'describe') {
-        return '错误：action 必须是 read / ocr / describe。';
+      if (action !== 'read' && action !== 'view' && action !== 'ocr' && action !== 'describe') {
+        return '错误：action 必须是 read / view / ocr / describe。';
       }
       if (!actions.includes(action)) {
         if (action === 'ocr') {
@@ -538,6 +614,9 @@ export function createMediaTool(deps: MediaToolDeps): ToolDefinition {
       if (action === 'read') {
         if (checked.ext === '.pdf') return readPdf(checked.target, args, deps, signal);
         return readText(checked.target, checked.bytes, deps);
+      }
+      if (action === 'view') {
+        return runView(checked.target, checked.ext, deps, ctx);
       }
       if (action === 'ocr') {
         return runOcr(checked.target, checked.ext, args, deps, signal);

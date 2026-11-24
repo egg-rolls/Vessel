@@ -2,13 +2,14 @@
  * @vessel-agent/media - 多模态解析器（能力插件）
  * @module @vessel-agent/media
  *
- * 单个 `media` 工具：action = read | ocr | describe。
+ * 单个 `media` 工具：action = read | view | ocr | describe。
  * - read：文本 / PDF 抽文本（pdftotext）；
+ * - view：图片入 blob 池 + 附件回执 surfaced，多模态主模型直接看图（无需外部 CLI）；
  * - ocr：图片 OCR（tesseract）；
  * - describe：多模态描述桥（未配置则明确报错，不降级）。
  *
- * **零 token 税**：install 阶段探测后端，一个后端都没有时直接 return，
- * 不 registerTool —— schema 不进 prompt。插件本身不进默认插件集，
+ * view 不需要任何外部后端，因此插件 enabled 即注册工具；read(PDF) / ocr / describe
+ * 仍按 install 阶段探测到的后端进 schema 的 action enum。插件本身不进默认插件集，
  * 必须由 config.yaml 的 `plugins:` 条目显式启用（见 docs/agents/plugins.md）。
  */
 
@@ -72,29 +73,29 @@ function resolveBackends(config: MediaConfig, options: MediaPluginOptions): Medi
  *
  * install 行为（契约 §4）：
  * - `enabled: false` → 不注册；
- * - 没有任何后端（pdftotext / tesseract / describe 桥）→ 不注册，stderr 提示一次；
- * - 否则注册单个 `media` 工具（schema 的 action enum 只含可用动作）。
+ * - 否则注册单个 `media` 工具：view 恒可用（入池 + refs surfaced，无需外部后端），
+ *   read 恒可用（文本直读），ocr / describe 按探测到的后端进 schema 的 action enum。
  */
 export function createMediaPlugin(options: MediaPluginOptions = {}): Plugin {
   return {
     name: MEDIA_PLUGIN_NAME,
     version: '0.50.0',
     description:
-      'Multimodal attachment parser: single `media` tool (read / ocr / describe) with path boundary + ' +
-      'output caps; registers nothing when no backend (pdftotext / tesseract / multimodal) is available',
+      'Multimodal attachment parser: single `media` tool (read / view / ocr / describe) with path boundary + ' +
+      'output caps; view attaches images to the calling model context (native vision, no CLI backend needed)',
     install(host: PluginHost, installOptions?: { config?: Record<string, unknown> }): void {
       const config = parseMediaConfig(installOptions?.config ?? options.config);
       if (!config.enabled) return;
 
       const backends = resolveBackends(config, options);
       if (!hasAnyBackend(backends)) {
-        // 零 token 税：不注册工具，schema 不进 prompt
+        // view 不需要外部后端（字节入池 + refs surfaced，主模型原生视觉），工具仍注册；
+        // 这里只提示 PDF / OCR / describe 不可用，不再「零后端不注册」。
         console.warn(
-          '[media] no backend detected (pdftotext / tesseract / multimodal describe); ' +
-            'media tool not registered. Install poppler-utils or tesseract-ocr, ' +
-            'or configure plugins[].config.pdftotext / .tesseract.',
+          '[media] no CLI backend detected (pdftotext / tesseract / multimodal describe); ' +
+            'only action=read (text) / view (image attach) available. Install poppler-utils or ' +
+            'tesseract-ocr, or configure plugins[].config.pdftotext / .tesseract to enable more.',
         );
-        return;
       }
 
       const boundary = buildPathBoundary({

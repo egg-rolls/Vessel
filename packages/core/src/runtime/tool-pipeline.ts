@@ -23,7 +23,7 @@ import type { EventStream } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
 import { HookType } from '../types/hook.js';
 import type { PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
-import type { Message } from '../types/provider.js';
+import type { Message, MessageRef } from '../types/provider.js';
 import type { ToolCall, ToolContext, ToolDefinition } from '../types/tool.js';
 import { GuardrailRunner } from './guardrail-runner.js';
 import { HookRunner } from './hook-runner.js';
@@ -32,6 +32,7 @@ import {
   PermissionPolicy,
   PermissionTimeoutError,
 } from './permission-policy.js';
+import { takeToolAttachments } from './tool-attachment.js';
 import { type ToolTransport, takeToolTransport } from './tool-provenance.js';
 import { takeToolResultGateReceipt } from './tool-result-gate.js';
 
@@ -107,6 +108,12 @@ export interface ToolPipelineResult {
    * 缺省（无回执）= in_process / 旧事件，逐字节不变。
    */
   transport?: ToolTransport;
+  /**
+   * 工具结果附带的图片引用（q-media-view additive）：handler 经 `attachToolImages`
+   * 登记（字节已入 blob 池，这里只有 path + sha256），管道认领后带出，由 loop 以
+   * 带 refs 的 user 消息 surfaced 给多模态主模型。缺省（无回执）= 旧行为，逐字节不变。
+   */
+  refs?: MessageRef[];
 }
 
 export interface ToolPipeline {
@@ -349,6 +356,10 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
       // 刻意在 ToolResult guardrail 之后认领：block 折 fail() 时回执仍在 ctx 上，
       // 失败事件同样带执行位置（派发后失败 ≠ 没派发）。
       const transport = takeToolTransport(ctx);
+      // q-media-view：图片附件回执只在成功路径认领 —— guardrail block / handler 失败时
+      // 不 surfaced（被拦的结果不该附图）；回执随 ctx 回收，无泄漏。refs 与正文独立：
+      // ToolResult guardrail 改写文本不影响已入池的图片字节。
+      const attachedRefs = takeToolAttachments(ctx);
       return {
         ok: true,
         input: args,
@@ -357,6 +368,7 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
           ? { bounded: true as const, original_chars: resultOriginalChars ?? result.length }
           : {}),
         ...(transport !== undefined ? { transport } : {}),
+        ...(attachedRefs !== undefined ? { refs: attachedRefs } : {}),
       };
     },
   };

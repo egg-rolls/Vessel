@@ -47,6 +47,9 @@ export {
   type TimelineDualWritePort,
 } from './run-journal.js';
 export { type ExecutionUnitRequest, Runtime, type TenantRuntimeProfile } from './runtime.js';
+// q-media-view：工具结果图片附件回执（handler 登记 refs → 管道认领 → loop 以带 refs 的
+// user 消息 surfaced，复用 0.56 视觉基座内联；与 gate receipt 同形，handler 签名不变）。
+export { attachToolImages, takeToolAttachments } from './tool-attachment.js';
 export {
   assertToolNameLegality,
   auditToolNames,

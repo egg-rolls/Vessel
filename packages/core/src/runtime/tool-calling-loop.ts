@@ -26,12 +26,13 @@ import type {
   UsagePricing,
   UsageStats,
 } from '../types/limits.js';
-import type {
-  ChatRequest,
-  EmptyResponsePolicy,
-  LLMResponse,
-  Message,
-  MessageRef,
+import {
+  type ChatRequest,
+  type EmptyResponsePolicy,
+  type LLMResponse,
+  MESSAGE_REFS_MAX,
+  type Message,
+  type MessageRef,
 } from '../types/provider.js';
 import type { Run } from '../types/run.js';
 import type { ToolCall } from '../types/tool.js';
@@ -198,6 +199,12 @@ export interface ToolExecutionOutcome {
   bounded?: true;
   /** 裁剪前字符数（与 `bounded` 同时出现） */
   original_chars?: number;
+  /**
+   * 工具结果附带的图片引用（q-media-view additive；来自 `attachToolImages` 回执）。
+   * loop 在本批工具结果全部写回后，以一条带 refs 的 user 消息 surfaced（既有注入通道），
+   * 请求期由视觉基座（`vision/plan.ts`）内联给多模态主模型。缺省 = 旧行为。
+   */
+  refs?: MessageRef[];
 }
 
 /**
@@ -221,6 +228,29 @@ async function gateToolResult(outcome: ToolExecutionOutcome, sessionId: string):
       }),
   });
   return gated.content;
+}
+
+/**
+ * 工具结果附图的注入文案（q-media-view）：告诉模型这条 user 消息带着工具读出的图。
+ *
+ * 与 `[refs]` 尾注同一口径（英文、只列前 3 条路径）；明说「内联取决于模型视觉能力」，
+ * 不声称一定发出去了 —— 投递事实由 `image.sent` / `context.image_dropped` 事件表达。
+ */
+function toolImageAttachmentNote(
+  refs: readonly MessageRef[],
+  tools: readonly string[],
+  omitted: number,
+): string {
+  const shown = refs.slice(0, 3).map((ref) => ref.path);
+  if (refs.length > 3) shown.push(`+${String(refs.length - 3)} more`);
+  const noun = refs.length === 1 ? 'image' : 'images';
+  const from = tools.length > 0 ? ` from tool ${[...new Set(tools)].join(' / ')}` : '';
+  const cap = omitted > 0 ? ` (${String(omitted)} more omitted: over per-message ref cap)` : '';
+  return (
+    `[tool image] ${String(refs.length)} ${noun}${from}: ${shown.join(', ')}${cap}. ` +
+    'Attached to this message for direct viewing (inlined when the model supports vision; ' +
+    'delivery facts: image.sent / context.image_dropped).'
+  );
 }
 
 /**
@@ -833,6 +863,9 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
         );
 
         // 上下文严格按原调用顺序写回（并行完成顺序不影响历史顺序）
+        // q-media-view：本批工具结果附带的图片引用（已入池、带 sha256 的才算）。
+        const attachedImages: MessageRef[] = [];
+        const attachedFrom: string[] = [];
         for (const outcome of outcomes) {
           if (outcome.ok) {
             // 执行 AfterTool 钩子（0.6.1 P2：携带 tool/input）
@@ -881,6 +914,34 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
           );
           // 注：不再注入假 assistant 消息（见 ADR-005 / Phase 1 review #3）
           // Provider 负责正确解释 role: tool 消息
+          // q-media-view：收集附图引用。只 surfaced 已入池（带 sha256）的图 ——
+          // 没入池的图一定不内联（plan 记 not_ingested），不为它注入一条撒谎的消息。
+          for (const ref of outcome.refs ?? []) {
+            if (ref.kind === 'image' && typeof ref.sha256 === 'string' && ref.sha256 !== '') {
+              attachedImages.push(ref);
+              attachedFrom.push(outcome.toolCall.function.name);
+            }
+          }
+        }
+
+        // q-media-view：本批工具结果全部写回后，追加一条带 refs 的 user 消息（既有注入
+        // 通道：身份盖章 / message.injected 事件 / 落盘全复用）。为什么不挂在 role:'tool'
+        // 消息上：OpenAI 兼容传输的 tool 消息 content 只能是字符串；user 消息附图是
+        // 三家传输都支持的既有通路。为什么在整批之后：assistant(tool_calls) 与它的 tool
+        // 响应之间不插别的角色消息。追加在末尾 ⇒ 前缀守卫天然满足。
+        if (attachedImages.length > 0) {
+          const refs = attachedImages.slice(0, MESSAGE_REFS_MAX);
+          ctx.window.appendInjectedMessages(runId, [
+            {
+              role: 'user',
+              content: toolImageAttachmentNote(
+                refs,
+                attachedFrom,
+                attachedImages.length - refs.length,
+              ),
+              refs,
+            },
+          ]);
         }
 
         cursor += batch.length;
