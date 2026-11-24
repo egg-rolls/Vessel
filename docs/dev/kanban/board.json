@@ -127,10 +127,10 @@
     {
       "id": "q-skills-ui",
       "title": "SkillsView重构工具页面样式(紧凑工具栏+表格卡片+错误优雅)",
-      "column": "进行中",
+      "column": "已完成",
       "owner": "q-skills-ui",
       "branch": "fix/q-skills-ui",
-      "progress": "派单：按钮各占整行→紧凑一行工具栏；技能表格卡片包裹；unknown skill id裸错误→优雅降级；对齐工具页面样式+透黑底"
+      "progress": "merge入redblue-dev(待金丝雀验收晋升main)；TableToolbar单行紧凑(来源w-36/标签w-40/搜索grow+计数胶囊)+DataTable卡片透黑底细线+unknown_id MissingSkill降级卡+内联告警；GHOST局部覆盖不动共享token；build:ui双档绿"
     },
     {
       "id": "q-fed-simple",
