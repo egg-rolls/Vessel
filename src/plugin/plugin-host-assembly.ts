@@ -11,15 +11,15 @@
  */
 
 import * as path from 'node:path';
-import type { VesselConfig } from '../packages/config/src/index';
-import type { Logger, Plugin } from '../packages/core/src/index';
+import type { VesselConfig } from '../../packages/config/src/index';
+import type { Logger, Plugin } from '../../packages/core/src/index';
 import {
   PluginHostManager,
   type PluginHostManagerOptions,
   type PluginReloadResult,
   resolvePluginHttpLimits,
   type PluginDescriptor as ServePluginDescriptor,
-} from '../packages/serve/src/index';
+} from '../../packages/serve/src/index';
 import type { PluginDescriptor as LoaderPluginDescriptor, PluginLoader } from './plugin-loader';
 import type { PluginManifest } from './plugin-manifest';
 

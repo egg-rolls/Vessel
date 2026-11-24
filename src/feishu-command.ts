@@ -8,7 +8,7 @@
 
 import type { BootstrapResult } from './bootstrap';
 import type { FeishuChannelLike } from './control-plane-types';
-import { assertFeishuStartable, feishuError } from './feishu-wiring';
+import { assertFeishuStartable, feishuError } from './plugin/feishu-wiring';
 
 /** 飞书启动错误 → 退出码 */
 export function feishuExitCode(error: unknown): number {

@@ -13,9 +13,9 @@ import type {
   TeamControlLike,
 } from '../packages/serve/src/index';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
-import { latestEvalReport } from './eval-wiring';
 import { resolveFederationOptions } from './federation/federation-config';
-import { PluginLoader } from './plugin-loader';
+import { latestEvalReport } from './plugin/eval-wiring';
+import { PluginLoader } from './plugin/plugin-loader';
 
 export interface GatewayControlPlaneOptions {
   config: VesselConfig;

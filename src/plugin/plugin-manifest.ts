@@ -23,8 +23,8 @@ import {
   parseVersionRange,
   satisfiesComparator,
 } from '@vessel-agent/plugin-sdk';
-import type { PluginPortName, PluginScope } from '../packages/core/src/index';
-import { readPackageVersion } from './shared/version';
+import type { PluginPortName, PluginScope } from '../../packages/core/src/index';
+import { readPackageVersion } from '../shared/version';
 
 export {
   compareSemver,

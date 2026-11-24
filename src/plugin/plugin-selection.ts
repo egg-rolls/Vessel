@@ -14,7 +14,7 @@
  * 它们以完整进程权限运行，不可信仓库应显式 opt-out。
  */
 
-import type { PluginConfig } from '../packages/config/src/index';
+import type { PluginConfig } from '../../packages/config/src/index';
 import {
   FACTORY_PLUGINS,
   OPT_IN_PLUGINS,

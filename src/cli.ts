@@ -134,16 +134,16 @@ import {
   noteStartup,
   timeStartup,
 } from './observability/startup-timing';
-import { runPluginCliCommand } from './plugin-cli-command';
-import { buildPluginConfigMap, declarativePluginEntries } from './plugin-config';
+import { buildPluginConfigMap, declarativePluginEntries } from './plugin/plugin-config';
 import {
   activateStartupPlugins,
   createPluginHostManager,
   createPluginReloader,
   pluginSettingsFor,
-} from './plugin-host-assembly';
-import { FACTORY_PLUGINS } from './plugin-loader';
-import { type PluginWatchHandle, startPluginWatch } from './plugin-watch';
+} from './plugin/plugin-host-assembly';
+import { FACTORY_PLUGINS } from './plugin/plugin-loader';
+import { type PluginWatchHandle, startPluginWatch } from './plugin/plugin-watch';
+import { runPluginCliCommand } from './plugin-cli-command';
 import { installProcessErrorHandlers } from './process-handlers';
 import { createRunControl } from './run-control';
 import { createRuntimeNoticeBus } from './runtime-notice';

@@ -23,14 +23,14 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { Plugin } from '../packages/core/src/index';
+import type { Plugin } from '../../packages/core/src/index';
 import {
   type PluginManifest,
   PluginManifestValidationError,
   validatePluginManifest,
 } from './plugin-manifest';
 
-const PLUGINS_DIR = fileURLToPath(new URL('../plugins', import.meta.url));
+const PLUGINS_DIR = fileURLToPath(new URL('../../plugins', import.meta.url));
 
 /** 非插件 workspace 包：即使出现在 `node_modules/@vessel-agent` 也不注册 */
 const NON_PLUGIN_PACKAGES: ReadonlySet<string> = new Set([

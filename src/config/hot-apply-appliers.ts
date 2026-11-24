@@ -22,7 +22,7 @@ import type {
   RuntimePermissionConfig,
   ToolDefinition,
 } from '../../packages/core/src/index';
-import type { McpControl, McpServerSummary } from '../mcp-wiring';
+import type { McpControl, McpServerSummary } from '../plugin/mcp-wiring';
 import { VESSEL_TOOL_NAME } from '../vessel-meta';
 
 /** 一条差异摘要（`scope: <detail>` 的一行文本） */

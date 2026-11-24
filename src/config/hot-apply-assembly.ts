@@ -37,9 +37,9 @@ import {
   buildPluginConfigMap,
   declarativePluginEntries,
   installWithConfig,
-} from '../plugin-config';
-import { PluginLoader } from '../plugin-loader';
-import { resolvePluginSelection, warnExternalPluginsOnce } from '../plugin-selection';
+} from '../plugin/plugin-config';
+import { PluginLoader } from '../plugin/plugin-loader';
+import { resolvePluginSelection, warnExternalPluginsOnce } from '../plugin/plugin-selection';
 import type { RuntimeNoticeBus } from '../runtime-notice';
 import { createRuntimeNoticeHook, RUNTIME_NOTICE_HOOK } from '../runtime-notice-hook';
 import { resolveRuntimePermission } from '../tenant-runtime-factory';

@@ -18,7 +18,7 @@ import type {
   FeishuIncomingMessage,
   FeishuTransportHandlers,
 } from '../plugins/im/feishu/src/index';
-import { createFeishuFromConfig } from '../src/feishu-wiring';
+import { createFeishuFromConfig } from '../src/plugin/feishu-wiring';
 
 async function main(): Promise<number> {
   let handlers: FeishuTransportHandlers | undefined;

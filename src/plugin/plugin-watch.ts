@@ -20,7 +20,7 @@
 
 import { existsSync, type FSWatcher, watch } from 'node:fs';
 import * as path from 'node:path';
-import { getUserConfigPath } from '../packages/config/src/index';
+import { getUserConfigPath } from '../../packages/config/src/index';
 import { defaultPluginRoots } from './plugin-loader';
 
 export interface PluginWatchChange {

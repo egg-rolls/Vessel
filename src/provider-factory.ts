@@ -20,7 +20,7 @@ import type { VesselConfig } from '../packages/config/src/index';
 import { type LLMProvider, MemoryLLMProvider } from '../packages/core/src/index';
 import { createScenarioProvider, type MockScenarioName } from './mock/scenarios';
 import { createModelRegistryWiring, type ModelRegistryWiring } from './model-registry-wiring';
-import type { PluginLoader } from './plugin-loader';
+import type { PluginLoader } from './plugin/plugin-loader';
 
 export interface ResolvedProvider {
   provider: LLMProvider;

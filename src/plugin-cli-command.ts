@@ -40,13 +40,13 @@ import {
   type PluginDescriptor,
   PluginLoader,
   type PluginRoot,
-} from './plugin-loader';
+} from './plugin/plugin-loader';
 import {
   type PluginCliArgsSchema,
   type PluginCliContribution,
   type PluginManifest,
   validatePluginManifest,
-} from './plugin-manifest';
+} from './plugin/plugin-manifest';
 import { ui } from './ui-style';
 
 /** stdout 结果上限（字节）；超出后截断并附提示 */

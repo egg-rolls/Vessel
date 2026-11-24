@@ -8,8 +8,8 @@
  * - 动态 import，asm 分支不静态依赖 ext 的实现（并行开发隔离）。
  */
 
-import type { McpServerConfig, VesselConfig } from '../packages/config/src/index';
-import type { EventStream, Plugin, PluginHost } from '../packages/core/src/index';
+import type { McpServerConfig, VesselConfig } from '../../packages/config/src/index';
+import type { EventStream, Plugin, PluginHost } from '../../packages/core/src/index';
 import type { PluginLoader } from './plugin-loader';
 
 /** MCP server 状态快照（Addendum B §9.1 / tui McpServerSummary / web McpServerStatus） */

@@ -20,8 +20,13 @@ import {
   type VesselConfig,
   withConfigLock,
   writeUserConfigRoot,
-} from '../packages/config/src/index';
-import type { EnvCadence, Plugin, PluginHost, PluginInitContext } from '../packages/core/src/index';
+} from '../../packages/config/src/index';
+import type {
+  EnvCadence,
+  Plugin,
+  PluginHost,
+  PluginInitContext,
+} from '../../packages/core/src/index';
 
 /** core 0.6.1 的 install 形状；旧签名只用第一个参数也能工作 */
 export type PluginInstallOptions = { config?: Record<string, unknown> };

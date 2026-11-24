@@ -23,7 +23,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { satisfiesVersionRange } from '../src/plugin-manifest';
+import { satisfiesVersionRange } from '../src/plugin/plugin-manifest';
 
 const ROOT = process.cwd();
 

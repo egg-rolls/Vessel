@@ -23,9 +23,13 @@ import {
 import { drainWebToolsWarnings } from '../plugins/tools/web-tools/src/index';
 import { resolveDataDir } from './data/data-paths';
 import { resolveAgentCwd } from './data/path-resolution';
-import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
-import { PluginLoader } from './plugin-loader';
-import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import {
+  buildPluginConfigMap,
+  declarativePluginEntries,
+  installWithConfig,
+} from './plugin/plugin-config';
+import { PluginLoader } from './plugin/plugin-loader';
+import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin/plugin-selection';
 import { createVesselMetaSurface } from './vessel-meta';
 
 export interface ToolSummary {

@@ -112,7 +112,6 @@ import { createImageDeliverySource } from './image-delivery';
 import { resolveInteractionsDir } from './interactions-dir';
 import { createLocalRunAdapter } from './local-run-adapter';
 import type { McpEngineShell } from './mcp-engine-wiring';
-import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import { createNodeDrainer } from './node/node-drain';
 import { resolveNodeIdentity } from './node/node-identity';
@@ -126,15 +125,16 @@ import {
   type TraceRecorderFactory,
 } from './observability/trace-wiring';
 import { createPeerNoticeRouter, type PeerNoticeRouter } from './peer-notices';
-import { declarativePluginEntries } from './plugin-config';
+import type { McpControl } from './plugin/mcp-wiring';
+import { declarativePluginEntries } from './plugin/plugin-config';
 import {
   activateStartupPlugins,
   createPluginHostManager,
   createPluginReloader,
-} from './plugin-host-assembly';
-import { PluginLoader } from './plugin-loader';
-import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
-import { startPluginWatch } from './plugin-watch';
+} from './plugin/plugin-host-assembly';
+import { PluginLoader } from './plugin/plugin-loader';
+import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin/plugin-selection';
+import { startPluginWatch } from './plugin/plugin-watch';
 import {
   createHttpRpcClient,
   createLocalRpcClient,

@@ -34,7 +34,7 @@ import {
   type PathBoundary,
   parseBasicToolsConfig,
 } from '../../plugins/tools/basic-tools/src/index';
-import { buildPluginConfigMap, declarativePluginEntries } from '../plugin-config';
+import { buildPluginConfigMap, declarativePluginEntries } from '../plugin/plugin-config';
 import { resolveAgentCwd } from './path-resolution';
 
 export interface AttachmentIngestOptions {

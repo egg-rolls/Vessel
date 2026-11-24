@@ -9,16 +9,16 @@
  *   并处理 `--json` 的 stdout（Addendum D §13.2）。
  */
 
-import { DEFAULT_EVALS_OPTIONS, type VesselConfig } from '../packages/config/src/index';
-import type { EventStream, LLMProvider } from '../packages/core/src/index';
-import type { EvalReport, EvalRunnerLike, EvalsModuleLike } from './control-plane-types';
+import { DEFAULT_EVALS_OPTIONS, type VesselConfig } from '../../packages/config/src/index';
+import type { EventStream, LLMProvider } from '../../packages/core/src/index';
+import type { EvalReport, EvalRunnerLike, EvalsModuleLike } from '../control-plane-types';
 import {
   isSafeSuiteName,
   resolveEvalSuite,
   resolveEvalsDir,
   resolveEvalsOutDir,
   type TenantPathOptions,
-} from './data/path-resolution';
+} from '../data/path-resolution';
 import type { PluginLoader } from './plugin-loader';
 
 export interface ResolvedEvalsOptions {

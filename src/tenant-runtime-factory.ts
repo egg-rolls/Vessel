@@ -73,10 +73,8 @@ import { visionSettingsOf } from './config/vision-settings';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { resolveDataDir } from './data/data-paths';
 import { resolveAgentCwd } from './data/path-resolution';
-import { createFeishuFromConfig, stopFeishuChannel } from './feishu-wiring';
 import { FileLeaseService } from './lease-service';
 import { createMcpEngineFromConfig, type McpEngineShell } from './mcp-engine-wiring';
-import { installMcp, type McpControl, type McpPluginLike } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import {
   createEventStream,
@@ -93,10 +91,16 @@ import {
   type TraceRecorderFactory,
 } from './observability/trace-wiring';
 import { createUsagePricing } from './observability/usage-pricing';
-import { buildPluginConfigMap, declarativePluginEntries, withPluginConfig } from './plugin-config';
-import { registerInProcessPluginEntries } from './plugin-host-assembly';
-import { type PluginDescriptor, PluginLoader } from './plugin-loader';
-import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { createFeishuFromConfig, stopFeishuChannel } from './plugin/feishu-wiring';
+import { installMcp, type McpControl, type McpPluginLike } from './plugin/mcp-wiring';
+import {
+  buildPluginConfigMap,
+  declarativePluginEntries,
+  withPluginConfig,
+} from './plugin/plugin-config';
+import { registerInProcessPluginEntries } from './plugin/plugin-host-assembly';
+import { type PluginDescriptor, PluginLoader } from './plugin/plugin-loader';
+import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin/plugin-selection';
 import { createProvider } from './provider-factory';
 import { includeReasoningFor } from './reasoning';
 import { closeRunRecordStore, createRunRecordStore } from './run-record-store-factory';

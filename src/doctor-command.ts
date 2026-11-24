@@ -40,9 +40,9 @@ import {
   loadRootSecret,
   readKnownNodeId,
 } from './node/token-derive';
-import { declarativePluginEntries } from './plugin-config';
-import { PluginLoader } from './plugin-loader';
-import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { declarativePluginEntries } from './plugin/plugin-config';
+import { PluginLoader } from './plugin/plugin-loader';
+import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin/plugin-selection';
 import { readPackageVersion } from './shared/version';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';

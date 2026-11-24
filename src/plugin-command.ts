@@ -14,9 +14,9 @@ import * as path from 'node:path';
 import { getUserConfigPath, loadConfig, type PluginConfig } from '../packages/config/src/index';
 import type { PluginCommandArgs } from './cli-args';
 import { resolveControlPlaneTarget } from './control-plane-target';
-import { declarativePluginEntries, setPluginEnabled } from './plugin-config';
-import { defaultPluginRoots, type PluginDescriptor, PluginLoader } from './plugin-loader';
-import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { declarativePluginEntries, setPluginEnabled } from './plugin/plugin-config';
+import { defaultPluginRoots, type PluginDescriptor, PluginLoader } from './plugin/plugin-loader';
+import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin/plugin-selection';
 import { ui } from './ui-style';
 
 /** 与 CLI 解析一致的插件短名（防止路径穿越） */

@@ -8,13 +8,13 @@
  * - 只有显式 `--feishu` 才调用 `channel.start()`；enabled 单独不启动。
  */
 
-import { DEFAULT_FEISHU_OPTIONS, type VesselConfig } from '../packages/config/src/index';
-import type { EventStream } from '../packages/core/src/index';
+import { DEFAULT_FEISHU_OPTIONS, type VesselConfig } from '../../packages/config/src/index';
+import type { EventStream } from '../../packages/core/src/index';
 import type {
   FeishuChannelLike,
   FeishuChannelOptionsLike,
   FeishuModuleLike,
-} from './control-plane-types';
+} from '../control-plane-types';
 import type { PluginLoader } from './plugin-loader';
 
 export interface ResolvedFeishuOptions {
@@ -73,18 +73,18 @@ export function assertFeishuStartable(config: VesselConfig): void {
 export interface CreateFeishuOptions {
   config: VesselConfig;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
-  provider?: import('../packages/core/src/index').LLMProvider;
+  provider?: import('../../packages/core/src/index').LLMProvider;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
   model?: string;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
-  pluginHost?: import('../packages/core/src/index').PluginHost;
+  pluginHost?: import('../../packages/core/src/index').PluginHost;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
-  session?: import('../packages/core/src/index').SessionStore;
+  session?: import('../../packages/core/src/index').SessionStore;
   events: EventStream;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
-  runStore?: import('../packages/core/src/index').RunRecordStore;
+  runStore?: import('../../packages/core/src/index').RunRecordStore;
   /** @deprecated 0.27：执行面已迁移到 service.admit；插件不再使用。 */
-  contextFactory?: () => import('../packages/core/src/index').WorkingContext;
+  contextFactory?: () => import('../../packages/core/src/index').WorkingContext;
   /**
    * 0.27：注入的 AgentService；成员创建与 admit 执行面。
    * 装配层接线前的过渡期可缺省（插件 start() 会显式失败），接线后必传。
