@@ -23,8 +23,15 @@ import {
 } from '../gateway/pid';
 import { gatewayBaseUrl } from '../gateway/reload';
 import { resolveConnectToken, resolveGatewayToken } from '../gateway/transport-factory';
+import { effectivePlatformToken } from '../node/token-derive';
 import type { RpcClient } from '../rpc';
 import { createHttpRpcClient, normalizeConnectUrl } from '../rpc/http-client';
+
+/**
+ * node_id 形状（与平台代理 `proxy-config.ts` 的 NODE_ID_PATTERN 同口径）：
+ * 注册表 id 由 CLI 生成，只可能是这套字符。`--node` 直接拼进代理路径，必须先过这道闸。
+ */
+const NODE_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 
 /** 解析选项 */
 export interface ControlPlaneTargetOptions {
@@ -37,6 +44,12 @@ export interface ControlPlaneTargetOptions {
   dataDir?: string;
   /** 0.15：显式选择本地实例（`gateway status --rpc --instance`） */
   instance?: string;
+  /**
+   * q-node-target：经平台代理把 RPC 打到指定 node（`/nodes/<id>/v1/rpc`）。
+   * 与 `connectUrl` 组合 = 远端平台代理；单独给出 = 本地平台代理。
+   * 缺省（undefined/null）= 逐字旧行为（直连 node/gateway 的 `/v1/rpc`）。
+   */
+  nodeId?: string | null;
   platform?: NodeJS.Platform;
   runCommand?: CommandRunner;
   requestTimeoutMs?: number;
@@ -55,6 +68,8 @@ export interface ControlPlaneTarget {
   instance?: string;
   /** 本地 attach 时的 PID 记录（remote 为 undefined） */
   record?: GatewayPidRecord;
+  /** q-node-target：经代理 targeting 的 node_id（直连时为 undefined） */
+  nodeId?: string;
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
   close(): Promise<void>;
 }
@@ -129,7 +144,22 @@ export async function resolveControlPlaneTarget(
     return { ok: true, target: options.target, config, dataDir };
   }
 
-  const connectUrl = nonEmpty(options.connectUrl) ?? nonEmpty(env.VESSEL_CONNECT);
+  const nodeId = nonEmpty(options.nodeId);
+  if (nodeId !== undefined && !NODE_ID_PATTERN.test(nodeId)) {
+    return {
+      ok: false,
+      error: `Invalid --node "${nodeId}": expected a node_id (letters, digits, . _ - ; max 64)`,
+      code: 'invalid_connect',
+    };
+  }
+  // 经代理时 RPC 路径换成 `/nodes/<id>/v1/rpc`；平台鉴权后由代理覆写 node token。
+  const rpcPath = nodeId !== undefined ? `/nodes/${nodeId}/v1/rpc` : undefined;
+
+  // `--node` 而无 `--connect` 恒指**本地平台**代理：不吃 VESSEL_CONNECT env 回退
+  // （否则一个指向远端 node 的 env 会把「本地平台 + node」悄悄改写成「远端直连」）。
+  const connectUrl =
+    nonEmpty(options.connectUrl) ??
+    (nodeId === undefined ? nonEmpty(env.VESSEL_CONNECT) : undefined);
   if (connectUrl !== undefined) {
     const baseUrl = normalizeConnectUrl(connectUrl);
     const token = resolveConnectToken(config, { connectToken: options.connectToken, env }) ?? '';
@@ -139,6 +169,7 @@ export async function resolveControlPlaneTarget(
       token,
       subscribe: false,
       requestTimeoutMs: timeoutMs,
+      ...(rpcPath !== undefined ? { rpcPath } : {}),
       ...(ca !== undefined ? { ca } : {}),
     });
     return {
@@ -149,6 +180,7 @@ export async function resolveControlPlaneTarget(
         kind: 'remote',
         baseUrl,
         token,
+        ...(nodeId !== undefined ? { nodeId } : {}),
         request: (method, params) => client.request(method, params),
         close: () => client.close(),
       },
@@ -159,7 +191,13 @@ export async function resolveControlPlaneTarget(
   if (options.entries !== undefined) {
     entries = options.entries;
   } else {
-    const token = resolveGatewayToken(config, env);
+    // 经代理 targeting 本地平台时，探活用平台 token（与 localTarget 的凭据同口径）。
+    const token =
+      nodeId !== undefined
+        ? (nonEmpty(options.connectToken) ??
+          nonEmpty(env.VESSEL_CONNECT_TOKEN) ??
+          localPlatformToken())
+        : resolveGatewayToken(config, env);
     entries = (
       await collectGatewayState(dataDir, {
         ...(token !== undefined ? { token } : {}),
@@ -167,8 +205,23 @@ export async function resolveControlPlaneTarget(
     ).entries;
   }
 
+  /** 本地平台 token（只读派生，不生成 root-secret）；不可读 → undefined（回环匿名）。 */
+  function localPlatformToken(): string | undefined {
+    const resolved = effectivePlatformToken({ config, dataDir, env, create: false });
+    return resolved.ok ? resolved.value.token : undefined;
+  }
+
   async function localTarget(instance: string, record: GatewayPidRecord) {
-    const token = resolveGatewayToken(config, env) ?? '';
+    // 经代理 targeting 本地平台时，凭据是**平台 token**（gateway.token >
+    // gateway.token_env > 派生 vessel:platform），不是 node token 键；
+    // 显式 --connect-token / VESSEL_CONNECT_TOKEN 仍然最优先。
+    const token =
+      nodeId !== undefined
+        ? (nonEmpty(options.connectToken) ??
+          nonEmpty(env.VESSEL_CONNECT_TOKEN) ??
+          localPlatformToken() ??
+          '')
+        : (resolveGatewayToken(config, env) ?? '');
     const tls = config.node?.tls !== undefined;
     const baseUrl = gatewayBaseUrl(record, tls);
     const ca = tls
@@ -179,6 +232,7 @@ export async function resolveControlPlaneTarget(
       token,
       subscribe: false,
       requestTimeoutMs: timeoutMs,
+      ...(rpcPath !== undefined ? { rpcPath } : {}),
       ...(ca !== undefined ? { ca } : {}),
     });
     return {
@@ -191,6 +245,7 @@ export async function resolveControlPlaneTarget(
         token,
         instance,
         record,
+        ...(nodeId !== undefined ? { nodeId } : {}),
         request: <T = unknown>(method: string, params?: unknown) =>
           client.request<T>(method, params),
         close: () => client.close(),
