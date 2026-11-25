@@ -1209,6 +1209,8 @@ export const messages = {
   'chat.historyChanged': '更早的历史已被改写，已从服务端重新加载更早页面。',
   'chat.earlierLoadFailed': '更早的消息没能加载，可以重试：{detail}',
   'chat.toBottom': '回到底部 ↓',
+  'chat.index.label': '会话索引',
+  'chat.index.jump': '跳到第 {index} 条',
   'chat.pending.title': '待处理 · {count}',
   'chat.pending.identity.human': 'human',
   'chat.pending.identity.ask': 'ask 答复',

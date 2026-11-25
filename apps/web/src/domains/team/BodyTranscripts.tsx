@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useCallback, useMemo, useRef } from 'react';
 import { CopyButton } from '../../components/CopyButton';
 import { Markdown } from '../../components/Markdown';
 import { EmptyState, ErrorState, LoadingState, NotEnabledState } from '../../components/States';
@@ -13,8 +13,11 @@ import {
 } from '../../state/runtime-visibility';
 import { cleanSessionTitle } from '../../state/sessions';
 import { resourceData, useResource } from '../../state/useResource';
+import { ConversationIndex } from '../chat/ConversationIndex';
+import { indexEntriesOfMessages } from '../chat/conversation-index';
 import { EnvCard } from '../chat/EnvCard';
 import { runtimeEnvCard } from '../chat/env-notice';
+import { useConversationIndex } from '../chat/useConversationIndex';
 import type { MemberDetailClient } from './member-detail-types';
 
 export function SessionTranscript({ messages }: { messages: readonly Message[] }) {
@@ -40,15 +43,18 @@ export function SessionTranscript({ messages }: { messages: readonly Message[] }
     }
     if (message.role === 'system') {
       nodes.push(
-        <div
-          className="mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted"
-          key={key}
-          role="status"
-        >
-          <span className="mr-1.5 font-mono text-2xs uppercase text-faint">
-            {t('team.message.systemTag')}
-          </span>
-          <span>{message.content}</span>
+        // data-index-entry-key：会话索引竖条的跳转锚点（局部序号 key，与
+        // conversation-index.ts#indexEntriesOfMessages 同一套编号）。
+        <div key={key} data-index-entry-key={key}>
+          <div
+            className="mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted"
+            role="status"
+          >
+            <span className="mr-1.5 font-mono text-2xs uppercase text-faint">
+              {t('team.message.systemTag')}
+            </span>
+            <span>{message.content}</span>
+          </div>
         </div>,
       );
       continue;
@@ -59,28 +65,37 @@ export function SessionTranscript({ messages }: { messages: readonly Message[] }
     // 藏起来），想收起点一下即可。
     const env = runtimeEnvCard(kind, message.content);
     if (env !== undefined) {
-      nodes.push(<EnvCard env={env} ts={ts} defaultOpen key={key} />);
+      nodes.push(
+        <div key={key} data-index-entry-key={key}>
+          <EnvCard env={env} ts={ts} defaultOpen />
+        </div>,
+      );
       continue;
     }
     nodes.push(
-      <div className="flex flex-col gap-1" key={key}>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-faint">
-          <span className="font-medium text-muted">{message.name || message.role}</span>
-          {ts !== undefined && (
-            <time className="font-mono tabular-nums" dateTime={new Date(ts).toISOString()}>
-              {formatClock(ts)}
-            </time>
+      <div key={key} data-index-entry-key={key}>
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-faint">
+            <span className="font-medium text-muted">{message.name || message.role}</span>
+            {ts !== undefined && (
+              <time className="font-mono tabular-nums" dateTime={new Date(ts).toISOString()}>
+                {formatClock(ts)}
+              </time>
+            )}
+          </div>
+          {message.role === 'tool' ? (
+            <pre className="m-0 max-w-180 rounded-sm border border-line bg-sunken px-2.5 py-2 font-mono text-xs whitespace-pre-wrap wrap-anywhere">
+              {message.content}
+            </pre>
+          ) : (
+            <div className="team-message-bubble">
+              <Markdown
+                className="text-base leading-relaxed wrap-anywhere"
+                text={message.content}
+              />
+            </div>
           )}
         </div>
-        {message.role === 'tool' ? (
-          <pre className="m-0 max-w-180 rounded-sm border border-line bg-sunken px-2.5 py-2 font-mono text-xs whitespace-pre-wrap wrap-anywhere">
-            {message.content}
-          </pre>
-        ) : (
-          <div className="team-message-bubble">
-            <Markdown className="text-base leading-relaxed wrap-anywhere" text={message.content} />
-          </div>
-        )}
       </div>,
     );
   }
@@ -123,6 +138,23 @@ export function BodyTranscript({
   const sessionTitle =
     cleanSessionTitle(session?.title) || cleanSessionTitle(session?.preview) || bodyId;
 
+  // 会话索引竖条（minimap）：只读消息 → 索引条目（编号与 SessionTranscript 同源），
+  // 视口追踪 + 点击跳转与会话页同一套。钩子在早退之前，保证 hook 顺序稳定。
+  const { visibility } = useRuntimeVisibility();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const getScrollElement = useCallback(() => scrollRef.current, []);
+  const indexEntries = useMemo(
+    () => (session ? indexEntriesOfMessages(session.messages, visibility) : []),
+    [session, visibility],
+  );
+  const { activeKey: indexActiveKey, jumpTo: indexJumpTo } = useConversationIndex({
+    getElement: getScrollElement,
+    entryKeys: indexEntries.map((entry) => entry.key),
+    // hasToken 进 reset key：未连接时本屏早退成 NotEnabledState（滚动区不在 DOM），
+    // 连上后滚动区才出现 —— 触发器变了才会重新订阅。
+    resetKey: `${bodyId}:${hasToken ? '1' : '0'}`,
+  });
+
   if (!hasToken) {
     return (
       <NotEnabledState title={t('team.error.noToken')} reason={t('team.error.noTokenReason')} />
@@ -142,30 +174,38 @@ export function BodyTranscript({
           actions={<Button onClick={onBackToMember}>{t('breadcrumb.team.member')}</Button>}
         />
       </header>
-      <div className="team-transcript-scroll pt-4">
-        {!session && !error ? (
-          <LoadingState rows={3} />
-        ) : !session ? (
-          <ErrorState
-            message={error?.message ?? t('team.error.loadFailed')}
-            onRetry={resource.reload}
-          />
-        ) : (
-          <>
-            {/* Detail 槽：会话名（超长截断），右侧复制按钮复制的是**会话 ID**（bodyId）。 */}
-            <div className="mx-auto flex w-full max-w-180 min-w-0 items-center gap-2 text-2xs text-faint">
-              <span className="min-w-0 flex-1 truncate" title={sessionTitle}>
-                {sessionTitle}
-              </span>
-              <CopyButton text={bodyId} className="shrink-0 text-2xs" />
-            </div>
-            {session.messages.length === 0 ? (
-              <EmptyState title={t('team.chat.empty')} />
-            ) : (
-              <SessionTranscript messages={session.messages} />
-            )}
-          </>
-        )}
+      <div className="transcript-stage">
+        <div className="team-transcript-scroll pt-4" ref={scrollRef}>
+          {!session && !error ? (
+            <LoadingState rows={3} />
+          ) : !session ? (
+            <ErrorState
+              message={error?.message ?? t('team.error.loadFailed')}
+              onRetry={resource.reload}
+            />
+          ) : (
+            <>
+              {/* Detail 槽：会话名（超长截断），右侧复制按钮复制的是**会话 ID**（bodyId）。 */}
+              <div className="mx-auto flex w-full max-w-180 min-w-0 items-center gap-2 text-2xs text-faint">
+                <span className="min-w-0 flex-1 truncate" title={sessionTitle}>
+                  {sessionTitle}
+                </span>
+                <CopyButton text={bodyId} className="shrink-0 text-2xs" />
+              </div>
+              {session.messages.length === 0 ? (
+                <EmptyState title={t('team.chat.empty')} />
+              ) : (
+                <SessionTranscript messages={session.messages} />
+              )}
+            </>
+          )}
+        </div>
+        <ConversationIndex
+          entries={indexEntries}
+          activeKey={indexActiveKey}
+          onJump={indexJumpTo}
+          className="conversation-index-rail"
+        />
       </div>
     </div>
   );

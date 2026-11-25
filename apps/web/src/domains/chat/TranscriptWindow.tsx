@@ -15,6 +15,8 @@ import { AskAnswerCard } from './AskAnswerCard';
 import type { AnsweredAsk } from './ask-answered';
 import { ChatWelcome } from './ChatWelcome';
 import { reasoningVisible, toolVisible } from './chat-visibility';
+import { ConversationIndex } from './ConversationIndex';
+import { indexEntriesOfItems } from './conversation-index';
 import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
 import { isStripCoveredInboxNotice } from './env-notice';
@@ -41,6 +43,7 @@ import {
   type SessionPromptContext,
   type TranscriptItem,
 } from './transcript-items';
+import { useConversationIndex } from './useConversationIndex';
 import { useStickyBottom } from './useStickyBottom';
 
 /** 距顶多少像素内触发前插一页。 */
@@ -332,6 +335,15 @@ export function TranscriptWindow({
       followKey,
       sendTick,
     });
+
+  // 会话索引竖条（minimap）：item 流 → 索引条目，视口追踪 + 点击跳转见
+  // useConversationIndex。子 agent 详情页讲的是另一个 run（锚点不在这一屏），不画。
+  const indexEntries = useMemo(() => indexEntriesOfItems(items), [items]);
+  const { activeKey: indexActiveKey, jumpTo: indexJumpTo } = useConversationIndex({
+    getElement,
+    entryKeys: indexEntries.map((entry) => entry.key),
+    resetKey,
+  });
 
   // 前插锚点：请求前记录 (scrollHeight, scrollTop)，布局落地后按高度差回填 scrollTop。
   // 这样历史消息只会在视口上方长出来，用户看到的行不移动；stickyBottom 的 pinned
@@ -659,124 +671,134 @@ export function TranscriptWindow({
   }, [onScroll, getElement, requestEarlier]);
 
   return (
-    <div
-      className="conversation-scroll"
-      ref={scrollRef}
-      onScroll={handleScroll}
-      {...userIntentProps}
-    >
-      {!hasToken ? (
-        <EmptyState
-          title={t('chat.empty.noConnectionTitle')}
-          description={t('chat.empty.noConnectionDesc')}
-          action={
-            <Button type="button" variant="primary" onClick={onConfigureConnection}>
-              {t('common.configureConnection')}
-            </Button>
-          }
-        />
-      ) : selectedId ? (
-        <>
-          {hydrateError ? (
-            <ErrorState
-              message={hydrateError === NOT_FOUND_MESSAGE ? t('chat.notFound') : hydrateError}
-              onRetry={onRetryDetail}
-              action={
-                hydrateError === NOT_FOUND_MESSAGE ? (
-                  <Button type="button" onClick={onGoChat}>
-                    {t('breadcrumb.chat')}
-                  </Button>
-                ) : undefined
-              }
-            />
-          ) : hydrating && !hasTranscript && items.length === 0 ? (
-            // 只有「什么都没有」时才换成 LoadingState：重连 / 重订阅时实时内容还在，
-            // 换屏本身就是一次闪烁。
-            <LoadingState label={t('chat.loadingHistory')} />
-          ) : !hasTranscript && visibleGroups.length === 0 && !activeAgent ? (
-            <EmptyState
-              title={t('chat.empty.noHistoryTitle')}
-              description={t('chat.empty.noHistoryDesc')}
-            />
-          ) : null}
+    <div className="transcript-stage">
+      <div
+        className="conversation-scroll"
+        ref={scrollRef}
+        onScroll={handleScroll}
+        {...userIntentProps}
+      >
+        {!hasToken ? (
+          <EmptyState
+            title={t('chat.empty.noConnectionTitle')}
+            description={t('chat.empty.noConnectionDesc')}
+            action={
+              <Button type="button" variant="primary" onClick={onConfigureConnection}>
+                {t('common.configureConnection')}
+              </Button>
+            }
+          />
+        ) : selectedId ? (
+          <>
+            {hydrateError ? (
+              <ErrorState
+                message={hydrateError === NOT_FOUND_MESSAGE ? t('chat.notFound') : hydrateError}
+                onRetry={onRetryDetail}
+                action={
+                  hydrateError === NOT_FOUND_MESSAGE ? (
+                    <Button type="button" onClick={onGoChat}>
+                      {t('breadcrumb.chat')}
+                    </Button>
+                  ) : undefined
+                }
+              />
+            ) : hydrating && !hasTranscript && items.length === 0 ? (
+              // 只有「什么都没有」时才换成 LoadingState：重连 / 重订阅时实时内容还在，
+              // 换屏本身就是一次闪烁。
+              <LoadingState label={t('chat.loadingHistory')} />
+            ) : !hasTranscript && visibleGroups.length === 0 && !activeAgent ? (
+              <EmptyState
+                title={t('chat.empty.noHistoryTitle')}
+                description={t('chat.empty.noHistoryDesc')}
+              />
+            ) : null}
 
-          {hydrateStale && (
-            <StaleNotice
-              message={t('chat.staleHistory', { detail: hydrateStale })}
-              onRetry={onRetryDetail}
-            />
-          )}
+            {hydrateStale && (
+              <StaleNotice
+                message={t('chat.staleHistory', { detail: hydrateStale })}
+                onRetry={onRetryDetail}
+              />
+            )}
 
-          {detailNotice && (
-            <StaleNotice message={t(detailNotice)} onDismiss={onDismissDetailNotice} />
-          )}
+            {detailNotice && (
+              <StaleNotice message={t(detailNotice)} onDismiss={onDismissDetailNotice} />
+            )}
 
-          {/* 历史加载失败：就地可关闭 + 重试（历史加载是就地动作，弹 toast 会丢锚点）。
+            {/* 历史加载失败：就地可关闭 + 重试（历史加载是就地动作，弹 toast 会丢锚点）。
               文案框架本地化，原始细节放在 detail 里，不把英文错误直接当正文。 */}
-          {earlierError && (
-            <StaleNotice
-              message={t('chat.earlierLoadFailed', { detail: earlierError })}
-              onRetry={onRetryEarlier}
-              onDismiss={onDismissEarlierError}
-            />
-          )}
+            {earlierError && (
+              <StaleNotice
+                message={t('chat.earlierLoadFailed', { detail: earlierError })}
+                onRetry={onRetryEarlier}
+                onDismiss={onDismissEarlierError}
+              />
+            )}
 
-          {/* 0.18：历史消息与实时 run 的展开项共享同一个列表，没有 run 边界；
+            {/* 0.18：历史消息与实时 run 的展开项共享同一个列表，没有 run 边界；
               0.50：实时节点按 run 起始时间插进历史消息之间，不再整块追加在末尾。
               hydrate 期间先只给 LoadingState：重放会先灌进来一批准 live 组，
               详情到达后再被认领（transcript-items.ts）收掉，看起来就是「闪现 + 跳跃」。 */}
-          {items.length > 0 ? (
-            <Transcript
-              items={items}
-              allMessages={transcriptMessages}
-              messageIndexOffset={messageIndexOffset}
-              cardsDefaultOpen={cardsDefaultOpen}
-              showReasoning={showReasoning}
-              renderItem={renderItem}
-              onEditMessage={onEditMessage}
-              onRetryMessage={onRetryMessage}
-            />
-          ) : null}
+            {items.length > 0 ? (
+              <Transcript
+                items={items}
+                allMessages={transcriptMessages}
+                messageIndexOffset={messageIndexOffset}
+                cardsDefaultOpen={cardsDefaultOpen}
+                showReasoning={showReasoning}
+                renderItem={renderItem}
+                onEditMessage={onEditMessage}
+                onRetryMessage={onRetryMessage}
+              />
+            ) : null}
 
-          {/* 0.56 排队生命周期：**只有 `sending` 在会话流里**。
+            {/* 0.56 排队生命周期：**只有 `sending` 在会话流里**。
               判据来自 `pending-placement.ts#inConversationStream`（唯一出处，条带与驱动用
               同一份）：`queued` 只在待处理条带、`failed` 也只在条带（带「重试 / 编辑」）、
               `sent` 之后服务端回显接管成正常用户气泡。
               为什么 `queued` 必须在这里被跳过：它同时存在于服务端 inbox 与这条 pending 里，
               两边都画就是用户点名要删的「同一条消息在会话里又出现一次」。所以这不是「先显示
               再隐藏」，而是**状态一变成 queued 就不该由这一层渲染**。 */}
-          {pendingSends.filter(inConversationStream).map((pending) => (
-            <PendingBubble
-              key={pending.id}
-              pending={pending}
-              onRetry={onRetryPending}
-              onDismiss={onDismissPending}
-            />
-          ))}
+            {pendingSends.filter(inConversationStream).map((pending) => (
+              <PendingBubble
+                key={pending.id}
+                pending={pending}
+                onRetry={onRetryPending}
+                onDismiss={onDismissPending}
+              />
+            ))}
 
-          {/* run 在跑但还没有任何可见内容：一句「正在思考」（判据见上面的 showThinking）。
+            {/* run 在跑但还没有任何可见内容：一句「正在思考」（判据见上面的 showThinking）。
               它是会话滚动区的直接子项，排在整条 item 流之后（正在跑的 run 永远是最后一段）。 */}
-          {showThinking && <ThinkingHint />}
+            {showThinking && <ThinkingHint />}
 
-          {activeAgent && (
-            <SubagentTranscript
-              agent={activeAgent}
-              entries={entries}
-              errorLevel={errorLevel}
-              verbosity={verbosity}
-              messageVisibility={messageVisibility}
-            />
-          )}
-        </>
-      ) : draftActive ? (
-        <ChatWelcome />
-      ) : restorePending ? (
-        <LoadingState label={t('chat.restoringSession')} />
-      ) : null}
-      {!pinned && (
-        <button type="button" className="to-bottom" onClick={scrollToBottom}>
-          {t('chat.toBottom')}
-        </button>
+            {activeAgent && (
+              <SubagentTranscript
+                agent={activeAgent}
+                entries={entries}
+                errorLevel={errorLevel}
+                verbosity={verbosity}
+                messageVisibility={messageVisibility}
+              />
+            )}
+          </>
+        ) : draftActive ? (
+          <ChatWelcome />
+        ) : restorePending ? (
+          <LoadingState label={t('chat.restoringSession')} />
+        ) : null}
+        {!pinned && (
+          <button type="button" className="to-bottom" onClick={scrollToBottom}>
+            {t('chat.toBottom')}
+          </button>
+        )}
+      </div>
+      {!activeAgent && (
+        <ConversationIndex
+          entries={indexEntries}
+          activeKey={indexActiveKey}
+          onJump={indexJumpTo}
+          className="conversation-index-rail"
+        />
       )}
     </div>
   );

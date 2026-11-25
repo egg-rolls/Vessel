@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   EmptyState,
   ErrorState,
@@ -16,6 +16,9 @@ import type {
   TeamMessage,
 } from '../../gateway/types';
 import { t } from '../../i18n';
+import { ConversationIndex } from '../chat/ConversationIndex';
+import { indexEntriesOfTeamRows } from '../chat/conversation-index';
+import { useConversationIndex } from '../chat/useConversationIndex';
 import { useStickyBottom } from '../chat/useStickyBottom';
 import type { MentionChip } from './mention';
 import { TeamComposer } from './TeamComposer';
@@ -269,6 +272,15 @@ export function TeamChatMain({
     onLoadEarlier,
   });
 
+  // 会话索引竖条（minimap）：日志行 → 索引条目，视口追踪 + 点击跳转与会话页同一套。
+  const indexEntries = useMemo(() => indexEntriesOfTeamRows(rows), [rows]);
+  const getScrollElement = useCallback(() => scrollBox.current, []);
+  const { activeKey: indexActiveKey, jumpTo: indexJumpTo } = useConversationIndex({
+    getElement: getScrollElement,
+    entryKeys: indexEntries.map((entry) => entry.key),
+    resetKey,
+  });
+
   /**
    * 历史被改写（`history_changed`）→ 内容整体替换：替换前抓一次锚点，替换后按高度差
    * 回填，避免「重取尾页」把视口甩到顶部。贴底态（pinned）则维持贴底。
@@ -310,59 +322,67 @@ export function TeamChatMain({
         {historyNotice && (
           <StaleNotice message={t(historyNotice)} onDismiss={onDismissHistoryNotice} />
         )}
-        <div
-          className="team-transcript-scroll"
-          ref={setScrollRef}
-          onScroll={handleScroll}
-          {...userIntentProps}
-        >
-          {!hasToken ? (
-            <NotEnabledState
-              title={t('team.error.noToken')}
-              reason={t('team.error.noTokenReason')}
-            />
-          ) : firstLoading && rows.length === 0 ? (
-            // 只有「一行都没有」才换成骨架：切到已缓存过的 Team 时 rows 已由
-            // `useTeamChat` 的身份重置从缓存播下，这里不该再闪一次 LoadingState。
-            <LoadingState rows={3} />
-          ) : !detail && rows.length === 0 ? (
-            error?.code === 'not_found' ? (
+        <div className="transcript-stage">
+          <div
+            className="team-transcript-scroll"
+            ref={setScrollRef}
+            onScroll={handleScroll}
+            {...userIntentProps}
+          >
+            {!hasToken ? (
               <NotEnabledState
-                title={t('team.error.notEnabled')}
-                reason={t('team.error.notEnabledReason')}
-                hint={t('team.error.notEnabledHint')}
+                title={t('team.error.noToken')}
+                reason={t('team.error.noTokenReason')}
               />
+            ) : firstLoading && rows.length === 0 ? (
+              // 只有「一行都没有」才换成骨架：切到已缓存过的 Team 时 rows 已由
+              // `useTeamChat` 的身份重置从缓存播下，这里不该再闪一次 LoadingState。
+              <LoadingState rows={3} />
+            ) : !detail && rows.length === 0 ? (
+              error?.code === 'not_found' ? (
+                <NotEnabledState
+                  title={t('team.error.notEnabled')}
+                  reason={t('team.error.notEnabledReason')}
+                  hint={t('team.error.notEnabledHint')}
+                />
+              ) : (
+                <ErrorState
+                  message={error?.message ?? t('team.error.loadFailed')}
+                  onRetry={onRefresh}
+                />
+              )
+            ) : rows.length === 0 ? (
+              <EmptyState title={t('team.chat.empty')} description={t('team.chat.emptyHint')} />
             ) : (
-              <ErrorState
-                message={error?.message ?? t('team.error.loadFailed')}
-                onRetry={onRefresh}
+              <TeamTranscript
+                messages={rows}
+                motionResetKey={resetKey}
+                resolveMember={resolveMember}
+                resolveMemberLabel={agentLabel}
+                onViewMemberSession={(_agentId, sessionId) => onOpenSession(sessionId)}
+                onRetrySend={onRetrySend}
+                onEditMessage={onEditMessage}
+                onResendMessage={onResendMessage}
+                onRetractMessage={onRetractMessage}
               />
-            )
-          ) : rows.length === 0 ? (
-            <EmptyState title={t('team.chat.empty')} description={t('team.chat.emptyHint')} />
-          ) : (
-            <TeamTranscript
-              messages={rows}
-              motionResetKey={resetKey}
-              resolveMember={resolveMember}
-              resolveMemberLabel={agentLabel}
-              onViewMemberSession={(_agentId, sessionId) => onOpenSession(sessionId)}
-              onRetrySend={onRetrySend}
-              onEditMessage={onEditMessage}
-              onResendMessage={onResendMessage}
-              onRetractMessage={onRetractMessage}
-            />
-          )}
+            )}
 
-          {/* 无感加载更早：不再渲染按钮 / 截断提示，只留读屏播报（不占视觉）。 */}
-          <span className="sr-only" aria-live="polite">
-            {paging.loadedPages > 0 ? t('team.chat.loadedEarlier') : ''}
-          </span>
-          {!pinned && (
-            <button type="button" className="to-bottom" onClick={scrollToBottom}>
-              {t('chat.toBottom')}
-            </button>
-          )}
+            {/* 无感加载更早：不再渲染按钮 / 截断提示，只留读屏播报（不占视觉）。 */}
+            <span className="sr-only" aria-live="polite">
+              {paging.loadedPages > 0 ? t('team.chat.loadedEarlier') : ''}
+            </span>
+            {!pinned && (
+              <button type="button" className="to-bottom" onClick={scrollToBottom}>
+                {t('chat.toBottom')}
+              </button>
+            )}
+          </div>
+          <ConversationIndex
+            entries={indexEntries}
+            activeKey={indexActiveKey}
+            onJump={indexJumpTo}
+            className="conversation-index-rail"
+          />
         </div>
       </div>
 
