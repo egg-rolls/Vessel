@@ -141,6 +141,14 @@
       "progress": "✅完成合并03f13c06(fix/q-dr15-exit 3commits fd847228审计/ab55424e A/f8aaae58 B,17文件+939/-108,门禁绿)：A=server.stop(true)5s race有界化+best-effort+永久node.shutdown.step日志(serve共享shutdown-step.ts全链覆盖)+平台同修；B=等死段postQuiesceTimeoutMs=30s兜底+stop.forced审计reason=quiesce_exit_timeout+O7持久化persistStopAuditLine落log；候run不限时红线不动；根因精化:f0dabd9d interrupt假说排除→纯Bun server.stop残余连接挂起；★lead正式终裁DR15-1 node CLOSED✅(cli B形式核476行7判据node全PASS:A秒退5.08s/B~56ms无force/server.stop≤5s有界/兜底B+O7双证/裁定#5不回归/14⑤⑥/两路径seam同构,原阻塞缺陷A/B双路径解除)；DR15-2 platform另卡续作fix/q-dr15-2-platform候修复闭环→晋升信号"
     },
     {
+      "id": "q-ti5-manifest",
+      "title": "微修复：TI5-1 thinking-intensity manifest i18n键小写化（B1阻塞）",
+      "column": "进行中",
+      "owner": "q-ti5-manifest",
+      "branch": "fix/q-ti5-manifest",
+      "progress": "a71eb810派单(lead转达B1阻塞)：thinking-intensity/package.json i18n en/zh-CN 5大写键(defaultLevel/.desc/budgetLow/budgetMedium/budgetHigh)违^[a-z0-9][a-z0-9._-]*$→plugin_manifest_invalid fail-closed不加载→插件缺席plugins.list/catalog,get_state/config.set not_found,B1 live阻塞；修复=键改snake_case小写(与settings字段名一致)+同步titleKey/descriptionKey引用+grep无残留+build门禁；候修复→合并→canary同步→lifecycle/webui续验B1；B4不受影响/B3 cli PASS"
+    },
+    {
       "id": "q-dr15-2-platform",
       "title": "微修复：DR15-2 platform race失效（同步阻塞event loop→30s看门狗force污染）",
       "column": "进行中",
