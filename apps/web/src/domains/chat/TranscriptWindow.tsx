@@ -610,7 +610,8 @@ export function TranscriptWindow({
           // 卡头 scope 标签 + 条数、summary 首行、展开看全部原文（见 EnvCard.tsx）。
           return <EnvCard env={env} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
         }
-        // 其它运行时提示（vessel:source / subscription …）：沿用整段文本的 notice 卡。
+        // 其它运行时提示（vessel:subscription / limit …）：沿用整段文本的 notice 卡。
+        // （vessel:source 已改走上面的 EnvCard：scope「来源」，见 env-notice.ts。）
         return (
           <StreamCard
             className="runtime-notice-card w-full min-w-0 max-w-full"

@@ -67,7 +67,11 @@ export const ENV_NOTICE_SCOPES = [
   'pii',
 ] as const;
 
-export type EnvNoticeScope = (typeof ENV_NOTICE_SCOPES)[number] | 'context';
+export type EnvNoticeScope = (typeof ENV_NOTICE_SCOPES)[number] | 'context' | 'source';
+// `source` 不在 ENV_NOTICE_SCOPES 里：那份词表是 vessel:notice **行首 scope 词**的解析
+// 词表，来源卡的 scope 只由 sourceNoticeCard 装配（vessel:source 是另一种线格式
+// `<from location="..." />`，不走行解析）。加进解析词表反而会让 notice 正文里以
+// `source:` 开头的行被误认成来源卡。
 
 /** 一条通知（= 上下文里的一行）解析后的形状。 */
 export interface EnvNoticeLine {
@@ -121,7 +125,15 @@ export const ENV_NOTICE_DETAILS_MAX = 11;
 export const ENV_NOTICE_KIND = 'notice';
 
 /**
- * 这个 kind 的消息是不是环境信息（`source` / `limit` 均不是）。
+ * `vessel:source`（投射来源行）的种类：同样按环境信息卡呈现（用户裁定 q-from-card），
+ * 但线格式不同（`<from location="principal@node:team" />`），解析走 `sourceNoticeCard`。
+ * 可见性口径在 `state/runtime-kinds.ts` 的 `ENV_MESSAGE_KINDS`（两侧对账，门禁 O8）。
+ */
+export const ENV_SOURCE_KIND = 'source';
+
+/**
+ * 这个 kind 的消息是不是 `vessel:notice` 环境信息（`source` 走 `sourceNoticeCard`，
+ * `limit` 等仍不是）。
  *
  * 0.52 起 doc-subscription 也写 `vessel:notice`（scope `files`），所以老通道
  * `vessel:subscription` 不再有生产者，也**不**在这里特判：那些老消息落到「未登记的
@@ -129,6 +141,22 @@ export const ENV_NOTICE_KIND = 'notice';
  */
 export function isEnvNoticeKind(kind: string | undefined): boolean {
   return kind === ENV_NOTICE_KIND;
+}
+
+/**
+ * runtime 上下文种类 → 环境信息卡数据的**统一装配入口**（live / history / 中途注入 /
+ * 只读成员视图共用，双路径一致由结构保证而不是约定）：
+ * - `notice` → `envNoticeCard`（行解析）；
+ * - `source` → `sourceNoticeCard`（来源地址组织 + 原文块）；
+ * - 其余 kind → undefined（渲染侧退回整段文本的运行时提示卡）。
+ */
+export function runtimeEnvCard(
+  kind: string | undefined,
+  content: string,
+): EnvNoticeCard | undefined {
+  if (kind === ENV_NOTICE_KIND) return envNoticeCard(content);
+  if (kind === ENV_SOURCE_KIND) return sourceNoticeCard(content);
+  return undefined;
 }
 
 /** `[runtime]` 是 hook 的线格式前缀（模型侧上下文里真的存在，卡片里不重复显示）。 */
@@ -219,6 +247,34 @@ export function envNoticeCard(content: string): EnvNoticeCard | undefined {
 }
 
 /**
+ * `vessel:source` 的正文（`<from location="principal@node:team" />`）→ 环境信息卡
+ * （scope「来源」，用户裁定 q-from-card）。
+ *
+ * 口径：
+ * - 摘要行 = location 地址原文（可回信的地址就是「一眼要看的事实」，模型回信时原样抄）；
+ * - 展开区 = 全部行 + **原文块**（整段正文一字不动 —— 原文即模型所见事实，不改内容）；
+ * - 解析不出 location（旧数据 / 第三方改写）时不吞正文：整段原文当摘要行，仍是可读卡。
+ *
+ * 与 `transcript-items.ts` 的 `sourceLocationOf` 同一条正则口径（那边供 agent 卡吸收
+ * 折叠用，这边供卡片装配用）；两处都是纯函数，不互相 import（避免环）。
+ */
+const SOURCE_LOCATION = /location="([^"]+)"/;
+
+export function sourceNoticeCard(content: string): EnvNoticeCard | undefined {
+  const raw = content.trim();
+  if (raw.length === 0) return undefined;
+  const location = SOURCE_LOCATION.exec(content)?.[1];
+  const summary = location !== undefined && location.length > 0 ? location : raw;
+  return {
+    scope: 'source',
+    ok: true,
+    lines: [{ id: '0', scope: 'source', ok: true, text: summary }],
+    count: 1,
+    blocks: [{ labelKey: 'chat.env.source.raw', text: content }],
+  };
+}
+
+/**
  * 折叠：把后到的一张卡并进前一张（同 scope，由调用方判定）。
  *
  * 与 `pending-strip` 的同源折叠同一口径：**纯展示**合并，行仍逐条保留，
@@ -229,12 +285,15 @@ export function mergeEnvNoticeCards(head: EnvNoticeCard, next: EnvNoticeCard): E
   const kept = merged.slice(0, ENV_NOTICE_DETAILS_MAX);
   const dropped =
     (head.droppedLines ?? 0) + (next.droppedLines ?? 0) + (merged.length - kept.length);
+  // 原文块随折叠保留（来源卡的原文块是「模型所见事实」，折掉第二张卡不能丢它的原文）。
+  const blocks = [...(head.blocks ?? []), ...(next.blocks ?? [])];
   return {
     scope: head.scope,
     ok: head.ok && next.ok,
     lines: kept.map((line, index) => ({ ...line, id: String(index) })),
     count: head.count + next.count,
     ...(dropped > 0 ? { droppedLines: dropped } : {}),
+    ...(blocks.length > 0 ? { blocks } : {}),
   };
 }
 

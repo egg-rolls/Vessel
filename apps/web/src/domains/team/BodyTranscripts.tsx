@@ -14,7 +14,7 @@ import {
 import { cleanSessionTitle } from '../../state/sessions';
 import { resourceData, useResource } from '../../state/useResource';
 import { EnvCard } from '../chat/EnvCard';
-import { envNoticeCard, isEnvNoticeKind } from '../chat/env-notice';
+import { runtimeEnvCard } from '../chat/env-notice';
 import type { MemberDetailClient } from './member-detail-types';
 
 export function SessionTranscript({ messages }: { messages: readonly Message[] }) {
@@ -53,10 +53,11 @@ export function SessionTranscript({ messages }: { messages: readonly Message[] }
       );
       continue;
     }
-    // 环境信息（vessel:notice）默认可见后，这里也不能把它画成成员说的话：与聊天时间线
-    // 同一张卡（`EnvCard` → `StreamCard`），同一套样式与点击展开。只读视图里保底展开
-    // （今天就是铺全部行，不因为换卡把上下文藏起来），想收起点一下即可。
-    const env = isEnvNoticeKind(kind) ? envNoticeCard(message.content) : undefined;
+    // 环境信息（vessel:notice / vessel:source）默认可见后，这里也不能把它画成成员说的话：
+    // 与聊天时间线同一张卡（`EnvCard` → `StreamCard`）、同一个装配入口（runtimeEnvCard），
+    // 同一套样式与点击展开。只读视图里保底展开（今天就是铺全部行，不因为换卡把上下文
+    // 藏起来），想收起点一下即可。
+    const env = runtimeEnvCard(kind, message.content);
     if (env !== undefined) {
       nodes.push(<EnvCard env={env} ts={ts} defaultOpen key={key} />);
       continue;
