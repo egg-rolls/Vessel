@@ -1099,6 +1099,10 @@ export class ExecutionUnit {
       permission: this.permissionPolicy,
       guardrails: this.guardrails,
       hooks: this.hooks,
+      // q-card-robust P-A：工具手搓审批（agent rotate）的事实发射端口，与上面
+      // PermissionPolicy 的 emit 包装同一先例 —— 经 publishEvent（journal）才能
+      // 进会话时间线，时间线订阅的 Web 连接 live 可见、刷新可回放重建。
+      emitFact: (event) => this.publishEvent(event),
       // 0.52：工具参数求值前把 `«pii:…»` 换回真值；解不开就整调用失败。
       // onHandleFailure 只负责「整批失效」这一档的系统级提示卡（每 session 至多一张）。
       pii: {

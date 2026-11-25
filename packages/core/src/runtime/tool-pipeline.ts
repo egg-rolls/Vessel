@@ -19,7 +19,7 @@
  */
 
 import { getPiiVault } from '../pii/vault.js';
-import type { EventStream } from '../types/event.js';
+import type { EventStream, RunEvent } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
 import { HookType } from '../types/hook.js';
 import type { PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
@@ -42,6 +42,14 @@ export interface ToolPipelineDeps {
   permission: PermissionPolicy;
   guardrails: GuardrailRunner;
   hooks: HookRunner;
+  /**
+   * 事实发射端口（q-card-robust P-A，additive）：装配方注入 `publishEvent`
+   * （journal 包装），原样放进 `ToolContext.emitFact` 供工具手搓审批改道。
+   * 缺省不注入 —— 工具退回裸流发布，旧行为不变。与 PermissionPolicy 的 emit
+   * 包装同一先例（execution-unit.ts：「权限请求经 runtime 的 publishEvent，
+   * 才能保证先落盘再发布」）。
+   */
+  emitFact?: (event: RunEvent) => void;
   /**
    * 0.52 PII 句柄替换（工具参数求值前）。
    *
@@ -170,7 +178,7 @@ async function invokeTool(tool: ToolDefinition, args: unknown, ctx: ToolContext)
  * → handler → ToolResult guardrail → AfterTool（仅成功）。
  */
 export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
-  const { pluginHost, events, permission, guardrails, hooks } = deps;
+  const { pluginHost, events, permission, guardrails, hooks, emitFact } = deps;
 
   return {
     async execute(options: ToolPipelineOptions): Promise<ToolPipelineResult> {
@@ -207,6 +215,8 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
         tool_call_id: toolCall.id,
         messages: options.messages ?? [],
         events,
+        // P-A：事实发射端口（缺省不注入 → 工具退回裸流，旧行为不变）。
+        ...(emitFact !== undefined ? { emitFact } : {}),
         source: options.source ?? 'runtime',
         ...(options.signal ? { signal: options.signal } : {}),
         // 0.51：成员 cwd 只做默认起点；工具级显式参数与路径边界都不受影响。
@@ -382,6 +392,8 @@ export interface ToolPipelineFactoryDeps {
   permission?: RuntimePermissionConfig;
   /** 0.52：PII 句柄边界（缺省走进程级 vault；传 false 关闭） */
   pii?: false | PiiHandleBoundary;
+  /** 事实发射端口（q-card-robust P-A，additive）；缺省不注入，工具退回裸流。 */
+  emitFact?: (event: RunEvent) => void;
 }
 
 /**
@@ -398,5 +410,6 @@ export function createToolPipelineFor(deps: ToolPipelineFactoryDeps): ToolPipeli
     guardrails: new GuardrailRunner(deps.pluginHost, deps.events),
     hooks: new HookRunner(deps.pluginHost, deps.events),
     ...(deps.pii !== undefined ? { pii: deps.pii } : {}),
+    ...(deps.emitFact !== undefined ? { emitFact: deps.emitFact } : {}),
   });
 }
