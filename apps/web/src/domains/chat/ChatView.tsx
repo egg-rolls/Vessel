@@ -615,6 +615,9 @@ export function ChatView({
                 pendingSendsApi.dismiss(pending);
               }}
               onDismissPending={pendingSendsApi.dismiss}
+              // 真相源对账（P0-A）：每次读盘后用服务端 entries 收口客户端 pending ——
+              // `inbox read` 消费排队消息没有回显，不对账那行「等待中」会常驻到刷新。
+              onReconcile={pendingSendsApi.reconcile}
             />
           </div>
 

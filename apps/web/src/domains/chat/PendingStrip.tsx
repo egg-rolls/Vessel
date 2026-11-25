@@ -347,6 +347,7 @@ export function PendingStrip({
   onRetryPending,
   onEditPending,
   onDismissPending,
+  onReconcile,
   previewCount = PREVIEW_COUNT,
 }: {
   /** 当前会话（`selectedId`）：条带只显示归属它的待处理输入。 */
@@ -395,6 +396,22 @@ export function PendingStrip({
   /** 删掉一条客户端 pending（它还没成为服务端条目时，「取消」就是纯本地删除）。 */
   onDismissPending?: (pending: PendingSend) => void;
   /**
+   * 真相源对账（P0-A）：每次 `load` 拿到服务端读数后调用，把「服务端 inbox 里已经没有、
+   * 又等不到回显」的客户端 pending 摘掉（`pendingSends.reconcileWithServer`）。
+   *
+   * 为什么需要：main `inbox read` 消费排队消息会取消对应 queued run —— 它从未开跑，
+   * 永不发 `user.message` / `run.started` 回显，客户端 pending 只认回显摘除 ⇒ 那行
+   * 「等待中 human」常驻到刷新。live 触发器 / 2s 轮询只重读服务端条目，碰不到客户端行；
+   * 这一步把客户端行钉回服务端真相。`readStartedAt` 是本次读**发起**的时刻（防旧读数
+   * 误删刚入队的 pending，判据见 store）。缺省 = 宿主没有 pending store（设计预览），
+   * 只对账不了，不影响服务端条目那一半。
+   */
+  onReconcile?: (input: {
+    sessionId: string;
+    presentIds: ReadonlySet<string>;
+    readStartedAt: number;
+  }) => void;
+  /**
    * 默认态展示的组数（用户裁定「默认 3 条，数量可配置」）；缺省 {@link PREVIEW_COUNT}。
    * 展开态不受它限制（完整列表 + 限高滚动）。
    */
@@ -425,6 +442,9 @@ export function PendingStrip({
    */
   const load = useCallback(
     async (targetSessionId: string) => {
+      // 读发起时刻：对账只认「挂 messageId 之后才发起」的读数（入队前发起、响应晚到的
+      // 旧读数没有资格宣判 pending 已被消费，见 pending-sends.ts#reconcileWithServer）。
+      const readStartedAt = Date.now();
       try {
         const body = await client.rpc<AgentInboxResponse>('agents.inbox', {
           session_id: targetSessionId,
@@ -438,11 +458,19 @@ export function PendingStrip({
           ...(typeof body?.agent_id === 'string' ? { agentId: body.agent_id } : {}),
           entries,
         });
+        // 真相源对账（P0-A）：服务端读数落定后，把「inbox 里已经没有、又等不到回显」的
+        // 客户端 pending 摘掉 —— main `inbox read` 消费排队消息取消 queued run，那条
+        // 消息永无 user.message/run.started 回显，不对账就常驻「等待中」直到刷新。
+        onReconcile?.({
+          sessionId: targetSessionId,
+          presentIds: new Set(entries.map((entry) => entry.message_id)),
+          readStartedAt,
+        });
       } catch {
         // 读失败：保留上一份（下次轮询 / 触发器再试），不弹 toast。
       }
     },
-    [client],
+    [client, onReconcile],
   );
 
   // 触发读：切会话 / 重连（epoch）/ 本会话新受理一次发送（refreshKey）/ 取消后对齐
