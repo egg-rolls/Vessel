@@ -139,6 +139,9 @@ function manifestToServeDescriptor(
               ...(item.titleKey !== undefined ? { titleKey: item.titleKey } : {}),
               ...(item.icon !== undefined ? { icon: item.icon } : {}),
               ...(item.order !== undefined ? { order: item.order } : {}),
+              // TI5-2：通用 RPC 绑定菜单 additive 透传（loader readToolbarMenu 已
+              // 校验形状；serve contributionsFor 同款条件透传进 plugins.list wire）。
+              ...(item.menu !== undefined ? { menu: item.menu } : {}),
             })),
           }
         : {}),
