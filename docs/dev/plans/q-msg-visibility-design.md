@@ -119,4 +119,19 @@ export interface MessageVisibilityConfig {
 - runtime-kinds 零 import 约束：新参数用结构型内联类型，不 import message-visibility（避免纯函数半被拖进依赖图）。
 - `runtimeVisibilityFor` 签名变更：调用点仅 useRuntimeVisibility 一处（grep 确认），脚本无引用（check-order-clump 已不存在）。
 - 三层 config.set 键先例存在（observability.log.level），gateway/CLI 写路径无需新机制。
-- 存量 `show_internal_events: true` 配置：system 未配置 → 回退 true，行为不变（兼容映射核心验收点）。
+- 存量 `show_internal_events: true` 配置：system 未配置 → 回退 true，行为不变（兼容映射核心验收点）。## 6. 交付记录（②③④）
+
+- ② `899d7f9e`：config schema（MessageVisibilityConfig + validator + KNOWN_BLOCK_KEYS 子块收口）、
+  gateway/CLI 写白名单（5 布尔键，三层点键）、Web 解析口 state/message-visibility.ts、
+  runtime-kinds 查表改读 {environment, source, system}（分类不变）、useRuntimeVisibility 加回
+  messageVisibility（签名 additive，ChatView/BodyTranscripts 零改动）、chat-visibility 五函数加
+  toggle 入参（缺省 true = 旧行为）、TranscriptWindow/Transcript/StreamItems/SubagentTranscript
+  消费（历史思考块首次纳入档位判定——此前 minimal 不藏历史思考，属既有缺口，随本次一并收口）、
+  TUI errors-command 兼容映射（D4）。16 文件 +358/-65。
+- ③ `7978ad74`：settings-registry 五键登记（group=messageVisibility，常用旗舰键换 system）、
+  SettingDef.group + SettingsDialog 组头渲染、display-settings system 回显兼容旧键、
+  i18n 双语（组头 + 5 键 title/desc；旧键文案保留）。5 文件 +125/-10。
+- ④ build 门禁：`bun run build` exit 0；Type check（root + examples + apps/web）✅、
+  Lint（biome ci .）✅、📦 Build complete!；工作树干净。
+- 实施备注：主时间线工具被藏时的补偿沿用既有 ThinkingHint（showThinking 判据已计入 tools toggle）；
+  子 agent 侧 runningToolHint 扩为「工具被藏」触发（D1）。来源吸收路径零改动（D2）。
