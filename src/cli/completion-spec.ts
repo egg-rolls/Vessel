@@ -256,7 +256,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [
       {
         name: 'start',
-        flags: ['--daemon', '--instance', '--port', '--host', '--log'],
+        flags: ['--daemon', '--foreground', '--instance', '--port', '--host', '--log'],
       },
       { name: 'stop', flags: ['--timeout', '--instance', '--port', '--all'] },
       { name: 'status', flags: ['--json', '--rpc', '--instance', '--port', '--all'] },

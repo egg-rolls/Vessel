@@ -36,6 +36,10 @@ export interface GatewaySelector {
 export type GatewayCommand =
   | {
       kind: 'start';
+      /**
+       * 用户裁定 #1（start 即退）：缺省 true（detach）——spawn 平台后打印
+       * pid/port/node name 即退出；`--foreground` 显式 false 保留前台（调试）。
+       */
       daemon: boolean;
       instance?: string;
       port?: number;
@@ -2014,9 +2018,15 @@ function gatewaySelectorError(selector: GatewaySelector, command: string): strin
   return null;
 }
 
-/** `gateway start [--port N] [--host H] [--daemon] [--log <path>]` */
+/**
+ * `gateway start [--port N] [--host H] [--daemon] [--foreground] [--log <path>]`
+ *
+ * 用户裁定 #1（start 即退）：缺省 detach=true —— spawn 平台子进程、确认 PID 后
+ * 打印启动信息即退出（docker 式）；`--foreground` 显式保留前台（调试用）。
+ * `--daemon` 保留为显式后台别名（与缺省等价）。
+ */
 function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
-  const command: Extract<GatewayCommand, { kind: 'start' }> = { kind: 'start', daemon: false };
+  const command: Extract<GatewayCommand, { kind: 'start' }> = { kind: 'start', daemon: true };
 
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
@@ -2026,6 +2036,10 @@ function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
     }
     if (a === '--daemon') {
       command.daemon = true;
+      continue;
+    }
+    if (a === '--foreground') {
+      command.daemon = false;
       continue;
     }
     if (a === '--instance') {

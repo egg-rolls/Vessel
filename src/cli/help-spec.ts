@@ -26,6 +26,7 @@ import type { MessageKey } from '../i18n';
 export const CLI_FLAG_VALUE = {
   '--json': null,
   '--daemon': null,
+  '--foreground': null,
   '--keep-nodes': null,
   '--no-keep-nodes': null,
   '--force': null,
@@ -126,6 +127,7 @@ export type CliFlag = keyof typeof CLI_FLAG_VALUE;
 export const CLI_FLAG_HELP: Readonly<Record<CliFlag, MessageKey>> = {
   '--json': 'flag.json',
   '--daemon': 'flag.daemon',
+  '--foreground': 'flag.foreground',
   '--keep-nodes': 'flag.keepNodes',
   '--no-keep-nodes': 'flag.noKeepNodes',
   '--force': 'flag.force',
@@ -509,7 +511,7 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   {
     path: ['gateway', 'start'],
     summary: 'help.cmd.gatewayStart',
-    flags: ['--daemon', '--instance', '--port', '--host', '--log'],
+    flags: ['--daemon', '--foreground', '--instance', '--port', '--host', '--log'],
   },
   {
     path: ['gateway', 'status'],

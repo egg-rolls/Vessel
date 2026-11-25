@@ -60,7 +60,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.modelTest':
     'connectivity test against a saved vendor (sends a real request; may incur cost)',
   'help.cmd.gatewayStart':
-    'start in the foreground; --daemon detaches to gateway.log; --instance names it',
+    'start detached and exit once the platform is up (default); --foreground keeps it in front; --instance names it',
   'help.cmd.gatewayList': 'list gateway instances and PID files',
   'help.cmd.gatewayStop':
     'graceful SIGTERM stop (process termination on Windows); default keeps node/hub, --stop-nodes stops them too',
@@ -178,6 +178,7 @@ export const en: Record<MessageKey, string> = {
   'help.group.session': 'session maintenance (legacy migration)',
   'flag.json': 'emit JSON (data lines stay plain text)',
   'flag.daemon': 'detach to the background (log path via --log)',
+  'flag.foreground': 'keep running in the foreground (debugging; default is detached)',
   'flag.keepNodes':
     'handoff: stop the platform layer but keep node/hub alive (adopted by the next start)',
   'flag.noKeepNodes': 'cold restart: stop node/hub together with the platform layer',
@@ -356,6 +357,7 @@ export const en: Record<MessageKey, string> = {
   'gateway.stopKeptHub': 'kept hub alive for handoff',
   'gateway.startFailed': 'Gateway failed to start: {detail}',
   'gateway.started': 'Gateway started (pid {pid}): {url}',
+  'gateway.startedNode': 'node: {name} (port {port})',
   'gateway.logPath': 'Log: {path}',
   'gateway.webDistMissing':
     'Web console assets are missing at {path}. Build them once (a fresh clone has none): `bun run build:web` (= `cd apps/web && bun run build`), or point VESSEL_STATIC_DIR at an existing build, then start again.',

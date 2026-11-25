@@ -53,7 +53,8 @@ export const zhCN = {
   'help.cmd.modelCredentialRemove': '移除凭证（厂商仍引用时拒绝）',
   'help.cmd.modelCredentialsList': '列出凭证元数据（不含值）',
   'help.cmd.modelTest': '对已保存厂商做连通性测试（发真实请求，可能产生费用）',
-  'help.cmd.gatewayStart': '前台启动 gateway；--daemon 分离到 gateway.log；--instance 命名实例',
+  'help.cmd.gatewayStart':
+    '启动 gateway（缺省后台分离、就绪即退）；--foreground 保留前台；--instance 命名实例',
   'help.cmd.gatewayList': '列出 gateway 实例与 PID 文件',
   'help.cmd.gatewayStop':
     'SIGTERM 优雅停止（Windows 终止进程）；缺省只停平台层，--stop-nodes 连 node/hub 一起停',
@@ -161,6 +162,7 @@ export const zhCN = {
   'help.group.session': '会话维护（旧格式迁移）',
   'flag.json': '输出 JSON（数据行保持纯文本）',
   'flag.daemon': '分离到后台运行（日志见 --log）',
+  'flag.foreground': '保留前台运行（调试用；缺省后台分离即退）',
   'flag.keepNodes': 'handoff：只停平台层，node/hub 保活（由下一次启动 adopt 接管）',
   'flag.noKeepNodes': '冷重启：连 node/hub 一起停',
   'flag.force': '覆盖已有文件 / 强制安装',
@@ -334,6 +336,7 @@ export const zhCN = {
   'gateway.stopKeptHub': 'handoff：保留 hub 进程继续运行',
   'gateway.startFailed': 'Gateway 启动失败：{detail}',
   'gateway.started': 'Gateway 已启动（pid {pid}）：{url}',
+  'gateway.startedNode': '节点：{name}（端口 {port}）',
   'gateway.logPath': '日志：{path}',
   'gateway.webDistMissing':
     'Web 控制台静态资源缺失：{path}。新克隆的仓库必须先构建一次：`bun run build:web`（= `cd apps/web && bun run build`）；或把 VESSEL_STATIC_DIR 指向已有产物，然后重新 start。',

@@ -424,7 +424,8 @@ if (demoRequested) {
 // 0.49 G3b（CONTRACT §4.1）：非 legacy 的 `gateway start/restart` 前台只跑
 // **平台进程** —— 平台监听 + 每节点子进程监督；不进入 bootstrap / serve 管线，
 // 因此不加载 node runtime / tenant 锁 / plugin host / node 监听。
-// `gateway start --daemon` 的父进程由注册表处理，它会 spawn 本分支。
+// 用户裁定 #1（start 即退）：`gateway start` 缺省 detach，父进程由注册表处理
+// （spawn 本分支后打印启动信息即退出）；只有显式 `--foreground` 才留在前台。
 if (
   args.gateway !== null &&
   isForegroundGatewayCommand(args.gateway) &&

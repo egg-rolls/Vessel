@@ -1,9 +1,10 @@
 /**
  * `vessel gateway` 一次性子命令（0.12 DECISION-023 §2.1–§2.3）。
  *
- * 前台 `start` / `restart` 由 `cli.ts` 映射进现有 `--serve` 装配管线；
+ * `start` 缺省 detach（用户裁定 #1：spawn 平台、确认就绪、打印启动信息即退）；
+ * 显式 `--foreground` 的前台 `start` / `restart` 由 `cli.ts` 接进平台前台管线；
  * 这里处理：
- * - `start --daemon` / `restart --daemon`（分离子进程）；
+ * - `start`（缺省 detach）/ `restart --daemon`（分离子进程）；
  * - `stop` / `status` / `reload`；
  * - `install-service` / `uninstall-service`。
  *
@@ -13,6 +14,7 @@
  */
 
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { withDeadline } from '@vessel-agent/core';
 import {
@@ -123,6 +125,7 @@ import { readHubDerivedOrigins } from '../../../hub/derive-origins';
 import { readHubLockFile } from '../../../hub/runtime';
 import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from '../../../hub/server';
 import { t } from '../../../i18n';
+import { nodeJsonPath } from '../../../node/node-identity';
 // 0.56：派生 token（显式配置永远优先；未配置时自动派生，绝不再「未配置就挂」）。
 import { effectiveNodeToken, effectivePlatformToken } from '../../../node/token-derive';
 import { createHttpRpcClient } from '../../../rpc/http-client';
@@ -2187,6 +2190,29 @@ export async function reloadGatewayCommand(
   return failed ? 1 : 0;
 }
 
+/**
+ * start 即退（用户裁定 #1）的启动信息 node name：
+ * config host.nodeName > node.json name（只读）> pid record node_id。
+ */
+async function startupNodeName(
+  config: VesselConfig,
+  dataDir: string,
+  record: GatewayPidRecord,
+): Promise<string | undefined> {
+  const configured = config.host?.nodeName;
+  if (typeof configured === 'string' && configured.trim() !== '') return configured;
+  try {
+    const parsed: unknown = JSON.parse(await readFile(nodeJsonPath(dataDir), 'utf8'));
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      const name = (parsed as Record<string, unknown>).name;
+      if (typeof name === 'string' && name !== '') return name;
+    }
+  } catch {
+    // 缺失 / 损坏：回落 node_id（只读，不创建不改写）。
+  }
+  return record.node_id;
+}
+
 async function startDaemonCommand(
   options: GatewayCommandDeps & {
     instance?: string;
@@ -2272,6 +2298,11 @@ async function startDaemonCommand(
       print(ui.warn(t('gateway.startedUnconfirmed', { pid: result.record.pid })));
     } else {
       print(ui.ok(t('gateway.started', { pid: result.record.pid, url })));
+    }
+    // start 即退（用户裁定 #1）：退出前把 pid/port/node name 一次说全。
+    const nodeName = await startupNodeName(context.config, context.dataDir, result.record);
+    if (nodeName !== undefined) {
+      print(ui.dim(t('gateway.startedNode', { name: nodeName, port: result.record.port })));
     }
     print(ui.dim(t('gateway.logPath', { path: result.logPath })));
     return 0;
