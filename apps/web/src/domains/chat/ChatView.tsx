@@ -503,6 +503,12 @@ export function ChatView({
                   ...(agentId ? { agent: agentId } : {}),
                 });
               }}
+              onOpenInbox={() =>
+                navigate({
+                  domain: 'inbox',
+                  ...(catalogAgentId !== undefined ? { agentId: catalogAgentId } : {}),
+                })
+              }
             />
 
             {selectedId && (

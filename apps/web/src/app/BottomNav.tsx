@@ -28,6 +28,7 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
     route.domain === 'nodes' ||
     route.domain === 'teams' ||
     route.domain === 'kanban' ||
+    route.domain === 'inbox' ||
     route.domain === 'agents' ||
     route.domain === 'capabilities' ||
     route.domain === 'mcp' ||
@@ -117,6 +118,16 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
               }}
             >
               <DomainIcon domain="kanban" /> {domainLabel('kanban')}
+            </button>
+            <button
+              type="button"
+              className="more-item"
+              onClick={() => {
+                setMoreOpen(false);
+                navigate(primaryRoute('inbox'));
+              }}
+            >
+              <DomainIcon domain="inbox" /> {domainLabel('inbox')}
             </button>
             <button
               type="button"
