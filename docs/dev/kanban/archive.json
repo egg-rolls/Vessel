@@ -334,6 +334,15 @@
       "progress": "9d937507完成4提交合并redblue-dev 6d22cc80（07197a09基线/892765d6 bootstrap桥接sanitizeToolOutputEnv共享模块80行/f310a0cb spawnOnly+beginHub spawn卫生/3138b9a6 daemon+前台gateway链），+122/-6六文件build绿；语义=各舰队按自己dataDir派生(异根重写/同根保留生产零回归)；覆盖bootstrap+node/hub spawn+daemon+前台,engine白名单源头自动正确；待金丝雀复验5点(environ无生产残留/双路径落canary-data/tool-output/生产根零新增/生产零回归/须daemon链重启)；worktree已清",
       "archivedAt": "2026-11-25T09:25:00+08:00",
       "cycle": "redblue-feature-round-3"
+    },
+    {
+      "id": "q-ui-polish",
+      "title": "Web UI显示健壮性批次：inbox读后同步+agent卡片完整地址+顶栏ID→name+铅笔ICON+设置默认值",
+      "owner": "q-ui-polish",
+      "branch": "fix/q-ui-polish",
+      "progress": "810da7a1完成6提交合并redblue-dev 537300a7（386c35bf inbox live触发useInboxRefresh/4b3facf2 agent卡完整路由parseAgentAddress+node-name-context/5ac1b531顶栏breadcrumb node名/f5bb30df铅笔灰色SVG/c0373511设置默认值上控件configuredFor+placeholder/d262f393 biome收口），15文件+454/-94 build绿；零服务端改动(inbox事件触发UI侧)；并发避让q-from-card文件✓；待金丝雀验6点(inbox~250ms/跨舰队卡副行/顶栏名/铅笔SVG/设置默认态/旧卡不变)；worktree已清",
+      "archivedAt": "2026-11-25T09:50:00+08:00",
+      "cycle": "redblue-feature-round-3"
     }
   ]
 }
