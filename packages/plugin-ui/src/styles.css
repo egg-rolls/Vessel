@@ -21,32 +21,37 @@
   }
 }
 
-/* Minimal base: the subset of the host preflight these components need. */
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-button,
-input,
-textarea,
-select {
-  font-family: inherit;
-  color: inherit;
-}
-button {
-  border: 0;
-  cursor: pointer;
-  /* 与宿主 base.css 同口径：没写 bg 类的按钮不落 UA ButtonFace 灰板。
-     Button 6 变体全带显式 bg（utilities 层），不受影响。 */
-  background-color: transparent;
-}
-button:disabled {
-  cursor: not-allowed;
-}
-*:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+/* Minimal base: the subset of the host preflight these components need.
+   必须收在 @layer base 内（与宿主 base.css 经 layer() 引入同口径）：
+   unlayered 普通声明压过一切 layered 规则（与特异性无关），留在层外会
+   压掉 utilities 层全部 button 表面 utility（bg-* / border-* 等）。 */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+  button,
+  input,
+  textarea,
+  select {
+    font-family: inherit;
+    color: inherit;
+  }
+  button {
+    border: 0;
+    cursor: pointer;
+    /* 与宿主 base.css 同口径：没写 bg 类的按钮不落 UA ButtonFace 灰板。
+       重置在 base 层，utilities 层的显式 bg-* / border-* 永远压过本重置。 */
+    background-color: transparent;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  *:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
 }
 
 /* ─────────────────────────────────────────────────────────────
