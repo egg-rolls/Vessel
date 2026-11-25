@@ -61,6 +61,14 @@
       "progress": "✅完成合并552097e2(7eb80815 P1core extra钩子+P2热配置插件/830e9a47 P3工具栏菜单+设置UI,冲突解决保留drag-reference双方props)build绿；plugins/context/thinking-intensity(非provider,默认集排除provider纠偏)+模块级live holder热生效+contributes.settings自动发现+composer思考菜单+stable映射experimental闸；待金丝雀验+用户重启"
     },
     {
+      "id": "q-sse-shared",
+      "title": "调研：前端轮询盘点+SSE共用连接可行性（用户提问inbox更新等改SSE）",
+      "column": "进行中",
+      "owner": "q-sse-shared",
+      "branch": "design/q-sse-shared",
+      "progress": "f17abb81派单(用户提问:除大数据内容外其他轮询点?能否改SSE共用连接如inbox更新)：盘点前端轮询(PendingStrip 2s非空兜底/inbox 2s/10s/health/transcript/usage SWR)+现有事件传输(WS事件流gateway proxy)+SSE共用连接可行性(inbox已有事件触发能否去轮询/SSE vs WS取舍/multiplex多域归属分发)+SWR规范关系(替换兜底轮询vs传输层,兜底保留)+设计方案分级风险；零代码调研输出sse-shared-connection-audit.md"
+    },
+    {
       "id": "q-inbox-agent-view",
       "title": "P1-B agent级收件箱视图（用户裁定inbox应agent级非会话级）",
       "column": "进行中",
