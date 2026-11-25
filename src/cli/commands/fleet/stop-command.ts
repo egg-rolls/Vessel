@@ -49,7 +49,8 @@ import {
 export interface StopFleetOptions extends GatewayCommandDeps {
   yes?: boolean; // 跳过确认
   selector?: GatewaySelector; // 本地缺省 { all: true }；与 connectUrl 互斥
-  timeoutMs?: number; // 缺省 DEFAULT_STOP_TIMEOUT_MS
+  timeoutMs?: number; // 缺省 undefined = 不限时 drain（用户裁定 #5）；远程缺省 DEFAULT_STOP_TIMEOUT_MS
+  force?: boolean; // --force 递归传播到各组件 stop（非正常退出 + 审计）；远程不强杀
   connectUrl?: string | null; // 非空 = 远程分支（S7）
   connectToken?: string | null;
   caFile?: string | null;
@@ -64,6 +65,7 @@ export async function stopFleetCommand(options: StopFleetOptions = {}): Promise<
     yes,
     selector: selectorOption,
     timeoutMs: timeoutOption,
+    force,
     connectUrl,
     connectToken,
     caFile,
@@ -82,7 +84,9 @@ export async function stopFleetCommand(options: StopFleetOptions = {}): Promise<
       printErr(ui.warn(`⚠ ${warning.message}`));
     }
   }
-  const timeoutMs = timeoutOption ?? DEFAULT_STOP_TIMEOUT_MS;
+  // 远程轮询预算缺省 DEFAULT_STOP_TIMEOUT_MS（远程不强杀，S7 不变）；
+  // 本地缺省 undefined = 不限时 drain（用户裁定 #5）。
+  const remoteTimeoutMs = timeoutOption ?? DEFAULT_STOP_TIMEOUT_MS;
   // S1 安全决策：远程只认显式 --connect flag，不认 VESSEL_CONNECT env。
   const remoteUrl = nonEmpty(connectUrl);
   if (remoteUrl !== undefined) {
@@ -93,7 +97,7 @@ export async function stopFleetCommand(options: StopFleetOptions = {}): Promise<
       connectToken,
       caFile,
       yes,
-      timeoutMs,
+      timeoutMs: remoteTimeoutMs,
       print,
       printErr,
       sleep: deps.sleep,
@@ -106,7 +110,8 @@ export async function stopFleetCommand(options: StopFleetOptions = {}): Promise<
     env,
     yes,
     selector: selectorOption,
-    timeoutMs,
+    timeoutMs: timeoutOption,
+    force,
     print,
     printErr,
   });
@@ -120,7 +125,8 @@ async function stopLocalFleet(input: {
   env: Record<string, string | undefined>;
   yes?: boolean;
   selector?: GatewaySelector;
-  timeoutMs: number;
+  timeoutMs?: number;
+  force?: boolean;
   print: (line: string) => void;
   printErr: (line: string) => void;
 }): Promise<number> {
@@ -229,11 +235,13 @@ async function stopLocalFleet(input: {
   if (decision === 'cancelled') return 0;
 
   // S4 薄编排：终止顺序 / marker / 优雅步骤全部在共享接缝内，这里不另造路径。
+  // 用户裁定 #5：缺省不限时 drain + 进度；--force 递归传播（非正常退出 + 审计）。
   const code = await stopGateway({
     ...deps,
     keepNodes: false,
     selector,
     timeoutMs: input.timeoutMs,
+    ...(input.force === true ? { force: true } : {}),
   });
 
   // S5.4 池残留提示（最终兜底）：停止方不 terminate engine，只如实报告。

@@ -37,7 +37,9 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.resumeRun': 'resume an interrupted durable run',
   'help.cmd.status': 'local runtime / attach / gateway instances at a glance',
   'help.cmd.stop':
-    'stop the fleet (platform + manifest node/hub + owned pool engines); --connect for remote stop',
+    'stop the fleet gracefully (unlimited drain + progress; --force cuts runs with audit); --connect for remote stop',
+  'help.cmd.restart':
+    'docker-style stop then start; [name] targets an instance or registered node (default: whole fleet); --force propagates to stop',
   'help.cmd.agents': 'list agents via agents.list (local gateway or --connect)',
   'help.cmd.errors': 'recent run/tool errors (diagnostics in errorLevel: all)',
   'help.cmd.rpcList':
@@ -63,11 +65,11 @@ export const en: Record<MessageKey, string> = {
     'start detached and exit once the platform is up (default); --foreground keeps it in front; --instance names it',
   'help.cmd.gatewayList': 'list gateway instances and PID files',
   'help.cmd.gatewayStop':
-    'graceful SIGTERM stop (process termination on Windows); default keeps node/hub, --stop-nodes stops them too',
+    'stop the platform process gracefully (unlimited drain + progress; --force kills with audit); default keeps node/hub, --stop-nodes stops them too',
   'help.cmd.gatewayStatus':
     'pid/port/uptime/version/service state (--rpc is deprecated; use node status --rpc)',
   'help.cmd.gatewayRestart':
-    'stop then start (keeps --daemon); default swaps the platform layer only, --stop-nodes cold-restarts node/hub too',
+    'stop then start the platform only (keeps --daemon); node/hub stay alive and are adopted; --stop-nodes is deprecated (use vessel restart for the fleet)',
   'help.cmd.gatewayReload': 'hot-reload config/plugins without restarting',
   'help.cmd.gatewayInstall': 'register login autostart (systemd / launchd / schtasks)',
   'help.cmd.gatewayUninstall': 'remove the system service registration',
@@ -81,7 +83,10 @@ export const en: Record<MessageKey, string> = {
     'remove a node from nodes.json; takes effect on the next gateway start',
   'help.cmd.nodeStart': 'start only the Node API (default 8644; shares the gateway instance lock)',
   'help.cmd.nodeStatus': 'show the Node API listener and health (--rpc for health/queue)',
-  'help.cmd.nodeStop': 'stop only the Node API; gateway-managed nodes point to gateway stop',
+  'help.cmd.nodeStop':
+    'stop only the Node API gracefully (unlimited drain + progress; --force kills with audit); gateway-managed nodes point to gateway stop',
+  'help.cmd.nodeRestart':
+    'docker-style stop then start only this node ([name] selects a registered node); managed nodes point to vessel restart',
   'help.cmd.nodeReload': 'hot-reload Node API config (same operation as gateway reload)',
   'help.cmd.eval': 'offline evaluation',
   'help.cmd.evalOut': 'write evaluation JSON / choose the report path',
@@ -372,6 +377,8 @@ export const en: Record<MessageKey, string> = {
   'gateway.reloaded': 'Reloaded: {scopes}',
   'gateway.requiresRestart':
     'Requires a restart to take effect: {scopes} (run `vessel gateway restart`)',
+  'gateway.restart.stopNodesDeprecated':
+    '--stop-nodes is deprecated: gateway restart only restarts the platform process (node/hub stay alive). To restart the whole fleet, run `vessel restart`.',
   // ── node (0.49 G1) ──
   'node.started': 'Node API started (pid {pid}): {url}',
   'node.running': 'Node API is running: {url}',
@@ -457,6 +464,27 @@ export const en: Record<MessageKey, string> = {
   'stop.poolResidue.count': '{count} engine state file(s) remain in {dir}',
   'stop.done': 'Fleet stop complete.',
   'stop.failed': 'Fleet stop did not fully succeed (see reasons above).',
+  // ── graceful stop / force audit (用户裁定 #5, cli-topology-design §5.3/§5.4) ──
+  'stop.drain.progress': '⏳ {label}: draining… {count} run(s) active (waited {waited})',
+  'stop.drain.snapshotUnavailable': 'run snapshot unavailable (listener closed)',
+  'stop.drain.escalate': 'escalate: vessel runs cancel <run_id>   |   vessel stop --force',
+  'stop.drain.timeout':
+    'Timed out waiting for drain (pid {pid}, {timeout}); the process is still running and was NOT killed. Cancel blocking runs or escalate with --force.',
+  'stop.forced.summary': 'abnormal exit: {name} — {count} run(s) cut{note}',
+  // ── vessel restart (用户裁定 #6, cli-topology-design §7) ──
+  'restart.inventory.title': 'Restart inventory (fleet dataDir: {dataDir})',
+  'restart.inventory.instance': 'platform {instance}: {state} (pid {pid})',
+  'restart.nothingRunning': 'Nothing running; starting fresh.',
+  'restart.confirm.prompt': 'Restart stops active sessions then starts again. Continue? [y/N] ',
+  'restart.stopFailed':
+    'Restart aborted: stop did not fully succeed, so nothing was started. Escalate with `vessel stop --force`, then re-run restart.',
+  'restart.starting': 'starting {instance}…',
+  'restart.done': 'Restart complete.',
+  'restart.failed': 'Restart did not fully succeed (see reasons above).',
+  'restart.unknownTarget':
+    'Unknown restart target "{name}" in fleet {dataDir} (no matching gateway instance or registered node).',
+  'node.restartManaged':
+    'This node is managed by the platform; restart the whole fleet with `vessel restart` (or just the platform with `vessel gateway restart`).',
   'stop.remote.title': 'Remote platform inventory: {url}',
   'stop.remote.health': 'platform: {status} (version {version}, node_count {count})',
   'stop.remote.node': 'node {name} ({nodeId}): {status} {apiUrl}',

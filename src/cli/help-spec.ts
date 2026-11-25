@@ -308,6 +308,7 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     summary: 'help.cmd.stop',
     flags: [
       '--yes',
+      '--force',
       '--timeout',
       '--instance',
       '--port',
@@ -316,6 +317,11 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
       '--connect-token',
       '--ca',
     ],
+  },
+  {
+    path: ['restart'],
+    summary: 'help.cmd.restart',
+    flags: ['--yes', '--force', '--timeout', '--instance', '--port', '--all', '--data-dir'],
   },
   {
     path: ['agents'],
@@ -528,7 +534,7 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   {
     path: ['gateway', 'restart'],
     summary: 'help.cmd.gatewayRestart',
-    flags: ['--daemon', '--instance', '--port', '--all', '--no-keep-nodes'],
+    flags: ['--daemon', '--force', '--instance', '--port', '--all'],
   },
   {
     path: ['gateway', 'reload'],
@@ -538,7 +544,7 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   {
     path: ['gateway', 'stop'],
     summary: 'help.cmd.gatewayStop',
-    flags: ['--timeout', '--instance', '--port', '--all', '--keep-nodes'],
+    flags: ['--timeout', '--force', '--instance', '--port', '--all', '--keep-nodes'],
   },
   {
     path: ['gateway', 'install-service'],
@@ -569,7 +575,8 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     flags: ['--json', '--all', '--data-dir'],
     flagHelp: { '--all': 'flag.all.ps' },
   },
-  { path: ['node', 'stop'], summary: 'help.cmd.nodeStop' },
+  { path: ['node', 'stop'], summary: 'help.cmd.nodeStop', flags: ['--force', '--data-dir'] },
+  { path: ['node', 'restart'], summary: 'help.cmd.nodeRestart', flags: ['--force', '--data-dir'] },
   { path: ['node', 'reload'], summary: 'help.cmd.nodeReload', flags: ['--scope'] },
 
   // ── hub（service 侧 + node client 侧）──
