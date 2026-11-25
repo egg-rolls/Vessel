@@ -1669,7 +1669,9 @@ async function startAsyncBash(options: {
     `cwd：${options.cwd}`,
     `超时：${options.timeoutMs > 0 ? `${options.timeoutMs}ms` : '无（不限时）'}`,
     ...(options.timeoutMs > 0 && !job.killOnTimeout
-      ? ['超时行为：到点不杀进程（kill_on_timeout=false）——立即回报超时，进程继续跑，输出继续追加进日志。']
+      ? [
+          '超时行为：到点不杀进程（kill_on_timeout=false）——立即回报超时，进程继续跑，输出继续追加进日志。',
+        ]
       : []),
     `日志：${logPath}（运行中只有一行 started 标记，命令结束后写入完整输出）`,
     '本轮不等待：继续做别的事，不要轮询、不要重复启动同一条命令。',
@@ -1811,7 +1813,10 @@ function detachAsyncJob(job: AsyncBashJob): void {
       cut.omittedChars === 0
         ? full
         : `${cut.head}\n${omitMarker(cut, saved ?? job.logPath)}\n${cut.tail}`;
-    const elapsed = Math.max(0, Math.round(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000));
+    const elapsed = Math.max(
+      0,
+      Math.round(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000),
+    );
     const head = [
       `[runtime] bash job ${job.id} finished — timed out after ${job.timeoutMs}ms · process left running (kill_on_timeout=false) · ${elapsed}s`,
       `${ASYNC_NOTICE_DETAIL_MARK}cmd: ${oneLineText(job.command)}`,
