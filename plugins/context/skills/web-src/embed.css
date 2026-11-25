@@ -30,6 +30,46 @@
   grid-template-columns: repeat(--value(integer), minmax(0, 1fr));
 }
 
+/*
+ * 详情弹窗（shared.tsx Modal）：宿主 ModalShell 的 modal-pad / modal-fade /
+ * modal-rise 的本地等价物。iframe 层够不着宿主 utilities，embed 层也不依赖
+ * 宿主扫描产物——两层各自定义（styles.css 同款），值全走 host token
+ * （--space-* / --ease）；keyframes 独立命名，避开宿主 fade-in / rise-in。
+ */
+@utility skills-modal-pad {
+  padding: calc(var(--space-4) + env(safe-area-inset-top))
+    calc(var(--space-4) + env(safe-area-inset-right))
+    calc(var(--space-4) + env(safe-area-inset-bottom))
+    calc(var(--space-4) + env(safe-area-inset-left));
+
+  /* 与 --breakpoint-compact (680px) 对齐；utility 内 @variant 是 min-width，
+     这里需要 max-width 语义，所以直接写媒体查询（宿主 modal-pad 同款）。 */
+  @media (width < 680px) {
+    padding: var(--space-3);
+  }
+}
+
+@utility skills-modal-fade {
+  animation: skills-fade-in 0.14s var(--ease);
+}
+
+@utility skills-modal-rise {
+  animation: skills-rise-in 0.18s var(--ease);
+}
+
+@keyframes skills-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes skills-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+}
+
 @theme inline {
   /* Spacing: tokens' 4px base; p-1 = 4px, p-4 = 16px. */
   --spacing: var(--space-1);
