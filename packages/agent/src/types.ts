@@ -437,7 +437,7 @@ export interface MemberExecutionPort {
    * 0.28 D6（additive，可选）：角色转换后把上下文策略热应用到该成员的活体。
    *
    * `member.role` 是**转换后**的角色；实现的唯一义务是让活体「下一次 run」按它生效
-   * （自动压缩开关 + 80%–90% 压力提示尾句），不重建 body、不动历史。返回实际应用的
+   * （自动压缩开关 + 50%–85% 压力提示尾句），不重建 body、不动历史。返回实际应用的
    * ExecutionUnit 数量（没有活体时为 0，此时策略由下一次 spawn 生效）。未实现的 port 由
    * AgentService 按 0 处理并走兜底轮换。
    */

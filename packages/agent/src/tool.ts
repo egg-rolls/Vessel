@@ -8,7 +8,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { LIMIT_WARNING_THRESHOLD, type ToolContext, type ToolDefinition } from '@vessel-agent/core';
+import {
+  CONTEXT_PRESSURE_WARN_RATIO,
+  type ToolContext,
+  type ToolDefinition,
+} from '@vessel-agent/core';
 import { deliveryFromNotify } from './inbox.js';
 import { HUMAN_PRINCIPAL } from './team-address.js';
 import { TeamMetadataCorruptError } from './team-store.js';
@@ -649,9 +653,11 @@ export function createAgentTool(
           const ratio = service.contextRatio(callerSession);
           // 0.52：取整口径必须与界面一致 —— TUI 状态栏 / 会话列表 / core 的
           // `context.pressure` 全是 `Math.round(ratio * 100)`；这里若用 floor，就会出现
-          // 「界面 90%、提示 89%」这种比不给数更糟的错觉。
-          // 「高于/低于阈值线」也按同一个整数判，否则 89.6% 会显示成「90%（低于 90% 线）」。
-          const warningLine = Math.round(LIMIT_WARNING_THRESHOLD * 100);
+          // 「界面 50%、提示 49%」这种比不给数更糟的错觉。
+          // 「高于/低于阈值线」也按同一个整数判，否则 49.6% 会显示成「50%（低于 50% 线）」。
+          // 阈值线与 runtime 的 rotate 压力提示同源（CONTEXT_PRESSURE_WARN_RATIO，
+          // 用户裁定 0.5）：提示让模型 50% 就考虑换 body，批准卡不能反着说「90% 以下不必」。
+          const warningLine = Math.round(CONTEXT_PRESSURE_WARN_RATIO * 100);
           const percent = ratio === undefined ? undefined : Math.round(ratio * 100);
           const warning =
             ratio === undefined || percent === undefined

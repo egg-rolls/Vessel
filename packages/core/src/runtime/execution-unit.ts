@@ -190,8 +190,12 @@ import { isBridgeCall, type ToolTransport } from './tool-provenance.js';
 /**
  * Context pressure warning ratio：达到该比例但未到自动压缩阈值时，
  * 只提示模型/用户考虑 `agent(rotate)`，不主动压缩。
+ *
+ * **0.5（用户裁定）**：50% 即建议切换防堆积 —— 原来是 0.9，与默认压缩阈值
+ * （0.85）夹不出提示带，默认配置下 rotate 建议几乎永不出现；降到 0.5 后
+ * 50%–85% 之间每 run 提示一次，模型有充足余量写好 startup_prompt 再换 body。
  */
-export const CONTEXT_PRESSURE_WARN_RATIO = 0.9;
+export const CONTEXT_PRESSURE_WARN_RATIO = 0.5;
 
 /**
  * 历史投影的**增量续读**预算（第十一条：增量 / 有界）。
@@ -4515,7 +4519,8 @@ export class ExecutionUnit {
   }
 
   /**
-   * 90% 上下文压力：不压缩，只发一次事件 + 尾部消息，建议 `agent(rotate)`。
+   * 50% 上下文压力（用户裁定，见 {@link CONTEXT_PRESSURE_WARN_RATIO}）：不压缩，
+   * 只发一次事件 + 尾部消息，建议 `agent(rotate)`。
    * 自动压缩开启时超过压缩阈值静默让 autoCompactAsync 处理；**关闭时必须取消上界** ——
    * 此时没有压缩会把水位降回来，token 只会持续上穿阈值，上界会让提示永久静默。
    */
