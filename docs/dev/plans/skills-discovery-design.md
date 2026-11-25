@@ -651,3 +651,127 @@ tar 解压限额（条目数 / 单条目 / 总量 / 路径长度）复用 market
 唯一的既有文件 additive 改动是 §6.3 的 origin 派生（钉锁时读 provenance），不触及
 description / schema / 门判定。未来若确需模型面 discover（如自动化工作流），另开 ADR
 论证 opt-in 与税，不在本设计范围（§2.2 非目标）。
+
+## 10. UI 设计与 q-skills-ui 衔接
+
+### 10.1 页面结构：同页双 tab，不新增页面声明
+
+q-skills-ui 重设计（6cb3673b，已合入基线）确立了 SkillsView 的现态骨架：PageScaffold +
+TableToolbar 单行紧凑工具栏（SearchInput + 来源/标签 Select + 刷新）+ DataTable 透黑底
+细线卡片 + master-detail 详情面板。discovery **在该骨架内加一个视图切换**，不新造页面：
+
+```text
+SkillsView（既有 page id=skills，nav=integrations，activationEvents 不变）
+├── 视图切换（segmented：Library | Discover）← ★ 新增，PageScaffold 头部 / 工具栏上方
+├── Library（现态原样）
+│   ├── TableToolbar：搜索 + 来源/标签过滤 + 刷新 + ★「检查更新」按钮（P3b）
+│   ├── DataTable：id · name · source · trust 徽标 · description（+ ★ 可更新徽标 P3b）
+│   └── 详情面板：内容预览 / 信任面板（trust/revoke）/ 加载状态（现态零改动）
+└── Discover（★ 新增 DiscoverView）
+    ├── TableToolbar：源 Select（带状态点 ok/stale/unavailable）+ SearchInput
+    │   + tag 过滤 + 刷新按钮（discovery_refresh）+ ★「添加源」入口（§10.4）
+    ├── DataTable：name（+tier 徽标）· source · tags · version/commit · 状态列
+    │   状态列三态：「安装」按钮 / 「已安装」+trust 徽标 / 「可更新」（P3b）
+    └── 详情面板（master-detail 同款）：元数据 + 上游链接（http(s)+noopener）
+        + SKILL.md 纯文本预览（discovery_preview）+ 附件清单 + 「安装」主按钮
+```
+
+- 组件复用：DataTable / TableToolbar / SearchInput / Select / Badge / TrustBadge 全部
+  既有（plugin-ui / shared.tsx）；tier 徽标用 Badge tone 区分（curated=info、community=neutral、
+  local=neutral），**trust 徽标语义与 Library 完全一致**（unknown=未信任…），两套徽标不混用。
+- 空态 / 错误态：源 unavailable → 引导卡（原因 + 重试 + 去配置提示）；无结果 → 「换个关键词
+  或添加源」；rate_limited / stale → 横幅显示快照时间。缺省源未发布期间 Discover tab
+  显示引导而非报错（§4.2）。
+- embed + iframe 双产线不变；i18n additive 键（`skills.discover.*` / `skills.tier.*` /
+  `skills.install.*`），en + zh-CN 双语同步（现态纪律）。
+
+### 10.2 安装交互（信任决策的 UI 表达）
+
+1. 点「安装」→ **确认对话框**（不是即时动作）：展示名称 / 来源源 id + tier / 上游
+   repo@commit 或 version / 校验和（registry）/ 落地路径 `library/<name>/`，以及固定提示：
+   **「安装 ≠ 信任：首次加载仍需你确认」**。确认 → discovery_install。
+2. 成功 → notice + 详情面板切到 Library 视角（新条目 trust=unknown 徽标），或留在
+   Discover 显示「已安装 · 未信任」+「去查看」链接。busy 态禁用重复点击。
+3. `already_installed` → 对话框给两个选择：「去 Library 查看」/「覆盖安装」；覆盖走
+   **二次确认**（明示：内容变化后既有信任会变为「已变更」，下次加载重新确认）。
+4. 失败 → 业务错误码映射人话（checksum_mismatch=「校验和不符，已拒绝安装」等），
+   不静默、不半装（管线回滚保证）。
+5. 预览先行：详情面板默认拉 preview（人类先看再装）；preview_unavailable 降级元数据卡片，
+   安装按钮仍可用但对话框提示「无法预览，建议安装后先在 Library 查看再信任」。
+
+### 10.3 更新交互（P3b）
+
+- Library 工具栏「检查更新」→ discovery_updates → 有更新的行显示徽标 + 详情面板
+  「更新」按钮（from → to 摘要）→ 确认对话框（同安装，明示 stale 重确认语义）→
+  discovery_update。
+- Discover 结果行 join 出「可更新」态，点击直达同一更新流程。**无自动更新、无红点骚扰**：
+  检查是显式按钮，不轮询。
+
+### 10.4 源管理：P3a 只读 + 配置片段，P3b 写路径
+
+- skills manifest 现态 `fs: ["data-dir"]`，**无 user-config 权限**——P3a 不做 UI 写
+  config.yaml（不绕道私有写 RPC，上位设计 R6 纪律）。「添加源」对话框 = 预置模板
+  （anthropics/skills 等）+ 自定义表单 → **生成可复制的 config.yaml 片段** + 「改完重启
+  生效」提示（in-process 现态语义）。
+- P3b 若落地 UI 直写：additive 申请 `fs: ["user-config"]` + 复用 marketplace
+  setPluginConfigValue 先例（configureRegistry 同款），与 q-settings 写路径协同
+  （上位设计 §10.3 口径：q-settings 落地后走设置编辑器，不发明第二写口）。
+- 源删除 / 编辑同走 config.yaml（P3a）；UI 只读展示源清单 + 状态。
+
+## 11. 设置域与 Manifest 增补
+
+### 11.1 contributes.settings（additive，q-settings 自动发现）
+
+```jsonc
+"discovery": {
+  "type": "object",
+  "default": {
+    "enabled": true,
+    "sources": [{ "id": "vessel-skills", "kind": "registry",
+                  "url": "https://egg-rolls.github.io/vessel-skills/index.json",
+                  "tier": "curated" }],
+    "cache_ttl_ms": 600000,
+    "max_download_bytes": 10485760
+  },
+  "description": "Remote skill discovery: sources / cache / download limits (restart required)"
+}
+```
+
+- 声明形状跟随现态 `sources` 键先例（type object + default + description）；
+  **array-of-objects 的可视化编辑超出 q-settings 现态 schema 子集**——过渡期手改
+  config.yaml（trust_ui / R6 同款先例），schema 扩展跟随 q-settings 不先行发明
+  （上位设计 §10.4 开放问题 3 延续）。
+- 生效语义：install 期解析一次，改动 `restart_required` + UI 徽标（现态 §10.2 口径）。
+- `discovery.enabled=false` 是**整面回滚开关**：RPC 不注册 / tab 隐藏，Library 面零影响。
+
+### 11.2 manifest 其余增补（全部 additive）
+
+```jsonc
+"contributes": {
+  "rpc": [
+    // …既有六条不动…
+    { "name": "discovery_sources", "description": "Discovery sources + snapshot status", "permission": "read" },
+    { "name": "discovery_search",  "description": "Search remote skill catalogs (cached)", "permission": "read" },
+    { "name": "discovery_preview", "description": "Preview remote SKILL.md (human view, no trust gate)", "permission": "read" },
+    { "name": "discovery_install", "description": "Install a remote skill into the library (does NOT trust it)", "permission": "write" },
+    { "name": "discovery_refresh", "description": "Force-refresh source snapshots", "permission": "write" },
+    { "name": "discovery_updates", "description": "Report available updates for installed skills", "permission": "read" },
+    { "name": "discovery_update",  "description": "Explicitly update an installed skill (trust re-ask on change)", "permission": "write" }
+  ]
+},
+"permissions": {
+  "fs": ["data-dir"],            // 不变（P3b 源管理写路径才 additive user-config）
+  "net": ["github.com", "api.github.com", "raw.githubusercontent.com",
+          "codeload.github.com", "*.github.io"],   // ★ additive（P1 是 []）
+  "process": false,              // 不变：永不 spawn
+  "secrets": false,              // 不变：无 token 面
+  "events": [],                  // 不变：不新增宿主事件
+  "rpc": []
+}
+```
+
+- i18n / pages / activationEvents 不变（同页 tab，无新页面）。
+- vessel.version 随实现期 bump；engines 范围不变。
+- 文档增补（实现期交付）：plugins.md / extensions.md skills 条目加 discovery 段；
+  tools.md skills 工具条目**不变**（工具面零改动）；runtime-api.md 技能目录约定补
+  「library 可由 discovery 安装落地」一句。
