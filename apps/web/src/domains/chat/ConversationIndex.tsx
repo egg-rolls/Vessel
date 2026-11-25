@@ -41,6 +41,10 @@ export function ConversationIndex({
 
   // 首尾半屏留白：pad = (竖条视口高 - dot 高) / 2，第一条 / 最后一条 dot 恰好能居中。
   // 写在 track 的 paddingBlock 上（CSS 不写死值）；竖条高度变化（窗口 / dock）跟随重算。
+  // 依赖 hasEntries：entries 为空时组件返回 null（nav 不在 DOM），从空变非空那一帧
+  // 必须重新挂 observer —— 只写 [] 会让留白永远停在首帧的 null 上。
+  const hasEntries = entries.length > 0;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: hasEntries 是 nav 出现 / 消失的显式触发器
   useEffect(() => {
     const rail = railRef.current;
     const track = trackRef.current;
@@ -54,7 +58,7 @@ export function ConversationIndex({
     const observer = new ResizeObserver(update);
     observer.observe(rail);
     return () => observer.disconnect();
-  }, []);
+  }, [hasEntries]);
 
   // 高亮 dot 滚进竖条视口（居中）。只动竖条自己的 scrollTop：
   // 不用 scrollIntoView —— 它会连带滚动祖先容器，把主转录区也拽走。

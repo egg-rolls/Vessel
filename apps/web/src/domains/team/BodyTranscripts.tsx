@@ -150,7 +150,9 @@ export function BodyTranscript({
   const { activeKey: indexActiveKey, jumpTo: indexJumpTo } = useConversationIndex({
     getElement: getScrollElement,
     entryKeys: indexEntries.map((entry) => entry.key),
-    resetKey: bodyId,
+    // hasToken 进 reset key：未连接时本屏早退成 NotEnabledState（滚动区不在 DOM），
+    // 连上后滚动区才出现 —— 触发器变了才会重新订阅。
+    resetKey: `${bodyId}:${hasToken ? '1' : '0'}`,
   });
 
   if (!hasToken) {
