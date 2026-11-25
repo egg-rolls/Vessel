@@ -40,15 +40,18 @@ export function SessionTranscript({ messages }: { messages: readonly Message[] }
     }
     if (message.role === 'system') {
       nodes.push(
-        <div
-          className="mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted"
-          key={key}
-          role="status"
-        >
-          <span className="mr-1.5 font-mono text-2xs uppercase text-faint">
-            {t('team.message.systemTag')}
-          </span>
-          <span>{message.content}</span>
+        // data-index-entry-key：会话索引竖条的跳转锚点（局部序号 key，与
+        // conversation-index.ts#indexEntriesOfMessages 同一套编号）。
+        <div key={key} data-index-entry-key={key}>
+          <div
+            className="mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted"
+            role="status"
+          >
+            <span className="mr-1.5 font-mono text-2xs uppercase text-faint">
+              {t('team.message.systemTag')}
+            </span>
+            <span>{message.content}</span>
+          </div>
         </div>,
       );
       continue;
@@ -59,28 +62,37 @@ export function SessionTranscript({ messages }: { messages: readonly Message[] }
     // 藏起来），想收起点一下即可。
     const env = runtimeEnvCard(kind, message.content);
     if (env !== undefined) {
-      nodes.push(<EnvCard env={env} ts={ts} defaultOpen key={key} />);
+      nodes.push(
+        <div key={key} data-index-entry-key={key}>
+          <EnvCard env={env} ts={ts} defaultOpen />
+        </div>,
+      );
       continue;
     }
     nodes.push(
-      <div className="flex flex-col gap-1" key={key}>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-faint">
-          <span className="font-medium text-muted">{message.name || message.role}</span>
-          {ts !== undefined && (
-            <time className="font-mono tabular-nums" dateTime={new Date(ts).toISOString()}>
-              {formatClock(ts)}
-            </time>
+      <div key={key} data-index-entry-key={key}>
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-faint">
+            <span className="font-medium text-muted">{message.name || message.role}</span>
+            {ts !== undefined && (
+              <time className="font-mono tabular-nums" dateTime={new Date(ts).toISOString()}>
+                {formatClock(ts)}
+              </time>
+            )}
+          </div>
+          {message.role === 'tool' ? (
+            <pre className="m-0 max-w-180 rounded-sm border border-line bg-sunken px-2.5 py-2 font-mono text-xs whitespace-pre-wrap wrap-anywhere">
+              {message.content}
+            </pre>
+          ) : (
+            <div className="team-message-bubble">
+              <Markdown
+                className="text-base leading-relaxed wrap-anywhere"
+                text={message.content}
+              />
+            </div>
           )}
         </div>
-        {message.role === 'tool' ? (
-          <pre className="m-0 max-w-180 rounded-sm border border-line bg-sunken px-2.5 py-2 font-mono text-xs whitespace-pre-wrap wrap-anywhere">
-            {message.content}
-          </pre>
-        ) : (
-          <div className="team-message-bubble">
-            <Markdown className="text-base leading-relaxed wrap-anywhere" text={message.content} />
-          </div>
-        )}
       </div>,
     );
   }

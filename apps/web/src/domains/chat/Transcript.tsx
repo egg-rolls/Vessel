@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode, useMemo } from 'react';
+import { type ReactNode, useMemo } from 'react';
 import { Markdown } from '../../components/Markdown';
 import {
   type MessageAction,
@@ -253,27 +253,39 @@ export function Transcript({
     }
     if (item.kind === 'message') {
       const message = item.message;
+      // system / tool 在 TranscriptMessage 里返回 null：不进 DOM，也不留空锚点
+      // （空 wrapper 会白占一个 flex gap）。索引映射同一判据，见 conversation-index.ts。
+      if (message.role === 'system' || message.role === 'tool') continue;
       const sourceIndex = indexOf.get(message);
       const messageIndex =
         sourceIndex !== undefined && sourceIndex >= 0
           ? sourceIndex + messageIndexOffset
           : undefined;
       nodes.push(
-        <TranscriptMessage
-          key={item.key}
-          message={message}
-          messageIndex={messageIndex}
-          previousUser={previousUserMessage(message, allMessages, messageIndexOffset, indexOf)}
-          {...(item.sourceText !== undefined ? { source: item.sourceText } : {})}
-          cardsDefaultOpen={cardsDefaultOpen}
-          onCopy={copy}
-          onEdit={onEditMessage}
-          onRetry={onRetryMessage}
-        />,
+        // data-index-entry-key：会话索引竖条的跳转锚点（见 useConversationIndex.ts）。
+        <div key={item.key} data-index-entry-key={item.key}>
+          <TranscriptMessage
+            message={message}
+            messageIndex={messageIndex}
+            previousUser={previousUserMessage(message, allMessages, messageIndexOffset, indexOf)}
+            {...(item.sourceText !== undefined ? { source: item.sourceText } : {})}
+            cardsDefaultOpen={cardsDefaultOpen}
+            onCopy={copy}
+            onEdit={onEditMessage}
+            onRetry={onRetryMessage}
+          />
+        </div>,
       );
       continue;
     }
-    nodes.push(<Fragment key={item.key}>{renderItem(item)}</Fragment>);
+    const node = renderItem(item);
+    // 渲染不出节点的 item（如被条带覆盖的 inbox notice）不留空锚点，同上。
+    if (node === null || node === undefined) continue;
+    nodes.push(
+      <div key={item.key} data-index-entry-key={item.key}>
+        {node}
+      </div>,
+    );
   }
   return <div className="flex flex-col gap-4 py-1.5 pb-2.5">{nodes}</div>;
 }

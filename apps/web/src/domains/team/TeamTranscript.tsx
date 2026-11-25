@@ -101,29 +101,31 @@ export function TeamTranscript({
       (agentId) => resolveMemberLabel?.(agentId) ?? resolveMember?.(agentId)?.name ?? agentId,
     );
     nodes.push(
-      <TeamMessageRow
-        key={message.message_id}
-        message={message}
-        entering={
-          // 乐观行（`local:`）不播：回执到达后同一行会以真实 `message_id` 重挂一次，
-          // 两个 key 都播就是同一句话淡入两次。系统灰条也不播（它不是消息气泡）。
-          message.kind !== 'system' &&
-          !isLocalMessageId(message.message_id) &&
-          isEntering(message.message_id)
-        }
-        senderLabel={resolveMemberLabel?.(subjectId) ?? member?.name ?? subjectId}
-        recipientLabels={recipientLabels}
-        canViewSession={Boolean(member && sessionId)}
-        onViewSession={
-          member && sessionId && onViewMemberSession
-            ? () => onViewMemberSession(member.agent_id, sessionId)
-            : undefined
-        }
-        onRetry={message.sendStatus === 'failed' ? () => onRetrySend?.(message) : undefined}
-        onEdit={onEditMessage ? () => onEditMessage(message) : undefined}
-        onResend={onResendMessage ? () => onResendMessage(message) : undefined}
-        onRetract={onRetractMessage ? () => onRetractMessage(message) : undefined}
-      />,
+      // data-index-entry-key：会话索引竖条的跳转锚点（见 useConversationIndex.ts）。
+      <div key={message.message_id} data-index-entry-key={message.message_id}>
+        <TeamMessageRow
+          message={message}
+          entering={
+            // 乐观行（`local:`）不播：回执到达后同一行会以真实 `message_id` 重挂一次，
+            // 两个 key 都播就是同一句话淡入两次。系统灰条也不播（它不是消息气泡）。
+            message.kind !== 'system' &&
+            !isLocalMessageId(message.message_id) &&
+            isEntering(message.message_id)
+          }
+          senderLabel={resolveMemberLabel?.(subjectId) ?? member?.name ?? subjectId}
+          recipientLabels={recipientLabels}
+          canViewSession={Boolean(member && sessionId)}
+          onViewSession={
+            member && sessionId && onViewMemberSession
+              ? () => onViewMemberSession(member.agent_id, sessionId)
+              : undefined
+          }
+          onRetry={message.sendStatus === 'failed' ? () => onRetrySend?.(message) : undefined}
+          onEdit={onEditMessage ? () => onEditMessage(message) : undefined}
+          onResend={onResendMessage ? () => onResendMessage(message) : undefined}
+          onRetract={onRetractMessage ? () => onRetractMessage(message) : undefined}
+        />
+      </div>,
     );
   }
 

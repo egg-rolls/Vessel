@@ -14,7 +14,14 @@
  *   的 renderItem 里返回 null（见 env-notice.ts#isStripCoveredInboxNotice）。
  * 渲染不出节点的 item 不给 dot —— 否则点上去跳到一个空锚点。
  */
+
+import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
+import {
+  isRuntimeMessageVisible,
+  type RuntimeVisibility,
+  runtimeMessageKind,
+} from '../../state/runtime-visibility';
 import { isStripCoveredInboxNotice } from './env-notice';
 import type { TranscriptItem } from './transcript-items';
 
@@ -54,4 +61,29 @@ export function indexEntriesOfTeamRows(
     key: row.message_id,
     label: t('chat.index.jump', { index: index + 1 }),
   }));
+}
+
+/**
+ * 成员 body 页（只读会话消息）→ 索引条目。
+ *
+ * 只读消息没有稳定 id：key 用局部序号 `message-<n>`，编号规则与
+ * `BodyTranscripts.tsx#SessionTranscript` 逐字对齐 —— 先按 runtime 可见性过滤，
+ * 再对每条可见消息自增（system / 环境卡 / 普通消息都占一个号）。那边改过滤 /
+ * 编号，这里必须同步，否则 dot 与锚点错位。
+ */
+export function indexEntriesOfMessages(
+  messages: readonly Message[],
+  visibility: RuntimeVisibility,
+): ConversationIndexEntry[] {
+  const entries: ConversationIndexEntry[] = [];
+  let keySeq = 0;
+  for (const message of messages) {
+    const kind = runtimeMessageKind(message);
+    if (kind !== undefined && !isRuntimeMessageVisible(visibility, kind)) continue;
+    entries.push({
+      key: `message-${keySeq++}`,
+      label: t('chat.index.jump', { index: entries.length + 1 }),
+    });
+  }
+  return entries;
 }
