@@ -417,6 +417,12 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   { path: ['config', 'init'], summary: 'help.cmd.configInit', flags: ['--json', '--force'] },
   { path: ['config', 'show'], summary: 'help.cmd.configShow', flags: ['--json', '--sources'] },
   {
+    path: ['config', 'explain'],
+    summary: 'help.cmd.configExplain',
+    args: '<key>',
+    flags: ['--json'],
+  },
+  {
     path: ['config', 'set'],
     summary: 'help.cmd.configSet',
     args: '<key> <value>',

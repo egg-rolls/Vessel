@@ -76,6 +76,7 @@ export const zhCN = {
   'help.cmd.configPath': '打印用户/项目配置路径',
   'help.cmd.configInit': '生成用户配置模板',
   'help.cmd.configShow': '查看脱敏配置与来源',
+  'help.cmd.configExplain': '解释单个配置键：逐层值与谁赢（配置溯源）',
   'help.cmd.configSet':
     '写入用户配置（ui.language / ui.showReasoning / ui.statusBars / ui.verbosity / ui.showInternalEvents / ui.errorLevel / ui.askUser / observability.showProcessErrors / agent.cwd）',
   'help.cmd.pluginList': '列出仓库/用户/项目/node_modules 插件',
@@ -87,7 +88,8 @@ export const zhCN = {
   'help.cmd.migrateApply': '执行迁移',
   'help.cmd.tracePrune': '清理 trace（默认 dry-run）',
   'help.cmd.mock': 'mock 模式（不调 API）',
-  'help.cmd.doctor': '本机配置/环境自检（--deep 查询 gateway）',
+  'help.cmd.doctor':
+    '本机配置/环境+舰队自检（env 卫生/锁/端口/peer token/node 健康；--deep 查询 gateway）',
   'help.cmd.logsTail': '查看 gateway 日志尾部',
   'help.cmd.dataDir': '覆盖全局数据目录',
   'help.cmd.resumeRunList': '列出可恢复的 interrupted run',

@@ -3,6 +3,8 @@
  *
  * 检查项：provider key / 配置校验 / data_dir 可写 / session 后端路径 /
  * 插件目录与启用项 / MCP server 形状 / serve 端口占用 / 可选能力开关。
+ * q-ax-config②：舰队专项（env 卫生 / stale lock / 端口归属 / peer token / node 健康），
+ * 见 doctor-fleet.ts；全部严格限本舰队 dataDir。
  *
  * 默认不联网、不构造 runtime、不调用 provider；`--deep` 额外查询本地 gateway 的
  * health / mcp 列表（只读 RPC）。退出码 0 = 无失败项，1 = 有失败项。
@@ -49,6 +51,8 @@ import { readPackageVersion } from '../../shared/version';
 import type { DoctorCommandArgs } from '../args';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from '../control-plane-target';
 import { ui } from '../output';
+// q-ax-config②：舰队专项体检（env 卫生 / stale lock / 端口归属 / peer token / node 健康）。
+import { collectFleetChecks } from './doctor-fleet';
 
 export interface DoctorCommandResult {
   exitCode: number;
@@ -206,6 +210,8 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
     ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
     env,
+    // q-ax-config②：env_hygiene 需要对比 user 层 data_dir 与 env 覆盖。
+    captureLayers: true,
   });
   const { config, validation, tenantId: configTenantId, paths } = loaded;
   const dataDir = resolveDataDir(config, env);
@@ -420,6 +426,17 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
         ? `${exposure.join('; ')}（详见 docs/operations/REVERSE-PROXY.md §8）`
         : 'loopback listeners have an explicit token or proxy secret',
   });
+
+  // q-ax-config②：舰队专项体检（严格限本舰队 dataDir；只读）。
+  checks.push(
+    ...(await collectFleetChecks({
+      config,
+      env,
+      dataDir,
+      ...(loaded.layers !== undefined ? { layers: loaded.layers } : {}),
+      checkPort,
+    })),
+  );
 
   // --deep：只读查询本地 gateway（连接 / runtime / MCP 实际状态）。
   if (options.deep === true) {

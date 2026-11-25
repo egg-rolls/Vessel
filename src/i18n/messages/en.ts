@@ -84,6 +84,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.configPath': 'print user/project config paths',
   'help.cmd.configInit': 'generate a user config template',
   'help.cmd.configShow': 'show redacted config and sources',
+  'help.cmd.configExplain': 'explain one key: per-layer values and which layer wins',
   'help.cmd.configSet':
     'write a user setting (ui.language, ui.showReasoning, ui.statusBars, ui.verbosity, ui.showInternalEvents, ui.errorLevel, ui.askUser, observability.showProcessErrors, agent.cwd)',
   'help.cmd.pluginList': 'list repo/user/project/node_modules plugins',
@@ -95,7 +96,8 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.migrateApply': 'apply the migration',
   'help.cmd.tracePrune': 'prune trace (dry-run by default)',
   'help.cmd.mock': 'mock mode (no API calls)',
-  'help.cmd.doctor': 'local config/environment self-check (--deep queries the gateway)',
+  'help.cmd.doctor':
+    'local config/environment + fleet self-check (env hygiene, locks, ports, peers, node; --deep queries the gateway)',
   'help.cmd.logsTail': 'tail gateway logs',
   'help.cmd.dataDir': 'override the global data directory',
   'help.cmd.resumeRunList': 'list resumable interrupted runs',

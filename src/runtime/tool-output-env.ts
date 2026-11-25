@@ -18,7 +18,7 @@ export function deriveToolOutputDir(dataDir: string): string {
 }
 
 /** child 是否落在 parent 之内（含相等）；`..` 逃逸或跨盘绝对路径都算之外。 */
-function isWithinDir(parent: string, child: string): boolean {
+export function isWithinDir(parent: string, child: string): boolean {
   const rel = path.relative(path.resolve(parent), path.resolve(child));
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }

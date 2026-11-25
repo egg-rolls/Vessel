@@ -20,6 +20,7 @@ import { DEFAULT_CONFIG, DEFAULT_TENANT_ID, defaultModelForProvider } from './de
 import { type EnvFileLoadInfo, loadEnvFiles } from './env-file.js';
 import { resolveEnvRefsInLayer } from './secrets.js';
 import type {
+  ConfigLayers,
   ConfigLoadOptions,
   ConfigSource,
   ConfigSources,
@@ -49,6 +50,11 @@ export interface ConfigLoadResult {
    * 用于启动诊断：从哪个文件加载了几个键、哪些键因为真实 env 已存在而被保留。
    */
   envFiles?: EnvFileLoadInfo[];
+  /**
+   * q-ax-config（additive）：`options.captureLayers === true` 时附带各层贡献的
+   * 键值快照（_env 已解析），供 `config explain` 逐层溯源。缺省不出现。
+   */
+  layers?: ConfigLayers;
 }
 
 /** 类型守卫：判断值是否为纯对象（非 null、非数组） */
@@ -601,8 +607,21 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   const preErrors: ConfigValidationError[] = [];
   const preWarnings: ConfigValidationWarning[] = [];
 
+  // q-ax-config：逐层快照（仅 captureLayers 显式开启时记录；不改变合并语义）。
+  const layers: ConfigLayers | undefined = options.captureLayers
+    ? { default: {}, user: {}, project: {}, env: {}, cli: {} }
+    : undefined;
+  const captureLayer = (target: keyof ConfigLayers, layer: Partial<VesselConfig>): void => {
+    if (layers === undefined) return;
+    layers[target] = deepMerge(
+      layers[target] as Record<string, unknown>,
+      structuredClone(layer) as Record<string, unknown>,
+    ) as Partial<VesselConfig>;
+  };
+
   // 1. 默认配置（source=default）
   const config = applyLayerWithSources({} as VesselConfig, DEFAULT_CONFIG, 'default', sources);
+  captureLayer('default', DEFAULT_CONFIG);
 
   // 2. 用户层：legacy 映射 + 完整 config 键（source=user）
   const userFile = await loadRawConfig(userPath);
@@ -623,7 +642,9 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   const hasNewProvider = isRecord(rawUser.provider);
   const legacyKeys = legacyProviderKeys(rawUser);
   if (!hasNewProvider) {
-    applyLayerWithSources(config, legacyUserLayer(rawUser), 'user', sources);
+    const legacyLayer = legacyUserLayer(rawUser);
+    applyLayerWithSources(config, legacyLayer, 'user', sources);
+    captureLayer('user', legacyLayer);
   }
   if (legacyKeys.length > 0) {
     preWarnings.push({
@@ -640,6 +661,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   if (userLayer.error !== undefined) preErrors.push(userLayer.error);
   const resolvedUser = resolveEnvRefsInLayer(userLayer.layer as Partial<VesselConfig>, env);
   applyLayerWithSources(config, resolvedUser.layer, 'user', sources);
+  captureLayer('user', resolvedUser.layer);
   for (const key of Object.keys(resolvedUser.resolved)) sources[key] = 'env';
   preErrors.push(...resolvedUser.errors);
 
@@ -651,6 +673,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   if (projectLayer.error !== undefined) preErrors.push(projectLayer.error);
   const resolvedProject = resolveEnvRefsInLayer(projectLayer.layer as Partial<VesselConfig>, env);
   applyLayerWithSources(config, resolvedProject.layer, 'project', sources);
+  captureLayer('project', resolvedProject.layer);
   for (const key of Object.keys(resolvedProject.resolved)) sources[key] = 'env';
   preErrors.push(...resolvedProject.errors);
   preErrors.push(...projectSecretErrors(projectLayer.layer));
@@ -669,6 +692,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   const envConfig = loadConfigFromEnv(envPrefix, env);
   const resolvedEnv = resolveEnvRefsInLayer(envConfig, env);
   applyLayerWithSources(config, resolvedEnv.layer, 'env', sources);
+  captureLayer('env', resolvedEnv.layer);
   for (const key of Object.keys(resolvedEnv.resolved)) sources[key] = 'env';
   preErrors.push(...resolvedEnv.errors);
 
@@ -677,6 +701,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
     if (!cliLayer) continue;
     const resolvedCli = resolveEnvRefsInLayer(cliLayer, env);
     applyLayerWithSources(config, resolvedCli.layer, 'cli', sources);
+    captureLayer('cli', resolvedCli.layer);
     for (const key of Object.keys(resolvedCli.resolved)) sources[key] = 'env';
     preErrors.push(...resolvedCli.errors);
   }
@@ -705,6 +730,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
     paths: { user: userPath, project: projectPath },
     tenantId,
     ...(envFiles.files.length > 0 ? { envFiles: envFiles.files } : {}),
+    ...(layers !== undefined ? { layers } : {}),
   };
 }
 
