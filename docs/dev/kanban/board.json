@@ -40,10 +40,10 @@
     {
       "id": "q-ax-selfobs",
       "title": "AX自服务·自观组：vessel session status + vessel permission show",
-      "column": "进行中",
-      "owner": "q-ax-selfobs",
-      "branch": "feat/q-ax-selfobs",
-      "progress": "99309519派单：session status实时态(state/token/queue/缺省自身)+permission show有效矩阵(auto/ask/never+scoped+来源,RPC缺则additive补)；①session status②permission show③build每步一报"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并614ef033(b3b73f54 session status+588fa811 permission show含additive permissions.show RPC,11文件+1078,rebase自解冲突)build绿；待验(session status缺省自身/--id/--json/permission show/--member/旧gateway降级)；worktree已清。★AX三组全交付(config b59c5326/discovery 4f8099cf/selfobs 614ef033)"
     },
     {
       "id": "q-inbox-ux",
