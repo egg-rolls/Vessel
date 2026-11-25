@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "生产今晨用户已重启38ee0aec加载✓；金丝雀运行中(8652/8654健康)。★持续流生效(用户裁定:完成一个丢一个不攒批)：完成→合并redblue-dev→⑤同步前通报lead封存→「已封存」→canary同步+rebuild→批次书→lead分配测试员→报告→晋升。首批q-from-card已合并f5f125cb候lead封存→canary同步；federation双向✓peer映射已修；本地main stand down✓；拓扑C方案待用户裁"
+      "progress": "持续流生效。★dist服务路径修复(结构性)：canary gateway必须从fleets/canary cwd启动(staticDir解析本舰队dist)——此前从主仓起→服务主仓旧dist→web验证BLOCKED；已修+rebuild新码index-7MTU9pz8.js服务中。固化：canary启动/rebuild一律fleets/canary。当前settings2验批次1(from-card)+4(ui-polish)+T3b/c同窗；验完封存→一次restart加载批次2(leak)+3(plugin)→复验→晋升。federation双向✓；拓扑C待裁"
     },
     {
       "id": "canary-qa-lead",
