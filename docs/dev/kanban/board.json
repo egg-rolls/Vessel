@@ -142,7 +142,7 @@
       "column": "进行中",
       "owner": "q-dr15-exit",
       "branch": "fix/q-dr15-exit",
-      "progress": "8579ae91派单(lead终裁scope A+B皆须)：A主修复=node exit根因(packages/serve gateway.stop内部/hub-client close/agentControl.dispose/engineSupervisor.stop/bundle.close/lock.release深查定位drain.done+ws.closed后阻塞process.exit步骤)+永久步骤级shutdown进度日志(诊断缺口)+修复quiesce后秒退；B安全网=等死段有界兜底恢复(15-30s→force+stop.forced审计,CLI与--self orchestrator共用seam同修;★drain候run段保持不限时用户裁定#5)；复验归cli(15②--self+外部graceful stop自死+有界兜底+14⑤⑥不回归)；★lead/cli终归因假说已转达:f0dabd9d drain语义变更(run不再interrupt)→退出步状态差→某dispose/close等待句柄/订阅新语义下永不收口→exit挂起,①审计重点diff f0dabd9d前后退出步状态差；根因终证=永久步骤日志插桩+cli复验实证(非只读终证)；门禁判据:drain.done→新启动~20s量级+无stop.forced+continuation投递+步骤日志+兜底15-30s+drain不限时不回归；O8第五轮非阻塞(zombie run穿sweep+采样器store视图误显run数,与O7并列)；合并候修复闭环+lead复验终裁→晋升"
+      "progress": "8579ae91派单(lead终裁scope A+B皆须)：★①根因审计完成fd847228(main盘上核实)——挂点=gateway.stop内await server.stop(true)(gateway.ts:4722)Bun1.3.9/Windows残余活跃连接挂起永不settle；证据=日志签名夹逼(ws.closed后第二条drain.done缺失⇒卡server.stop)+平台0.58先例(platform/server.ts:1076同款)+其余全链await有界排除；cli假说精化:f0dabd9d状态差→残余连接(keep-alive HTTP/半闭WS/SSE controller.close≠TCP关)永不收口；A=server.stop 5s race+best-effort(平台同修)+永久node.shutdown.step步骤日志(共享helper落serve包)；B=waitForProcessExit postQuiesceTimeoutMs=30s(quiesce证据采样0run/快照不可用,live>0重置时钟候run不限时红线不动,三调用点stop.forced审计reason=quiesce_exit_timeout)；门禁:drain.done→新启动~20s+无stop.forced+continuation+步骤日志；复验归cli；合并候修复闭环+lead复验终裁→晋升"
     },
     {
       "id": "q-kanban-visual",
