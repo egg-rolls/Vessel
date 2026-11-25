@@ -67,11 +67,13 @@ export async function runShutdownStep<T>(
 }
 
 /**
- * 有界等待一个退出步的 promise（DR15-1 挂点修复用）：
+ * 有界等待一个退出步（DR15-1 挂点修复用；DR15-2 改 thunk 形）：
+ * - 先打 start（可附 startFields 诊断字段），**再**调用 start() 发起该步 ——
+ *   旧 promise 实参形会先求值实参，stop 同步抛错时 start 丢失、挂点不可归因；
  * - ms 内 settle → done；
  * - 到点未 settle → 打 `timeout_bounded`（warn）并返回 'timeout'，调用方
  *   **best-effort 推进**后续退出步（进程退出路径上不该有无限等待）；
- * - promise 拒绝 → 打 failed 并原样重抛（调用方既有 reportStopError 模式不变）。
+ * - 拒绝/同步抛错 → 打 failed 并原样重抛（调用方既有 reportStopError 模式不变）。
  *
  * 超时后原 promise 不被取消（也取消不了）：它继续在后台跑，这里只停止等待；
  * 挂一个 catch 吞掉迟到失败，防止超时分支返回后出现 unhandled rejection。
@@ -80,10 +82,11 @@ export async function runShutdownStep<T>(
 export async function raceShutdownTimeout(
   emit: ShutdownStepEmit,
   step: string,
-  pending: Promise<void>,
+  start: () => Promise<void>,
   timeoutMs: number,
+  startFields?: Record<string, unknown>,
 ): Promise<'done' | 'timeout'> {
-  emit('info', SHUTDOWN_STEP_EVENT, { step, status: 'start' });
+  emit('info', SHUTDOWN_STEP_EVENT, { step, status: 'start', ...(startFields ?? {}) });
   const startedAt = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<'timeout'>((resolve) => {
@@ -92,6 +95,7 @@ export async function raceShutdownTimeout(
   // 定时器不该反过来把进程挂住（退出路径上进程本就要死）。
   (timer as { unref?: () => void } | undefined)?.unref?.();
   try {
+    const pending = start();
     const outcome = await Promise.race([pending.then(() => 'done' as const), timeout]);
     if (outcome === 'timeout') {
       emit('warn', SHUTDOWN_STEP_EVENT, {
