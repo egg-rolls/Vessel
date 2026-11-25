@@ -34,7 +34,10 @@
 import type { ReactNode } from 'react';
 import { formatClock } from '../../format';
 import { t } from '../../i18n';
-import type { EnvNoticeBlock, EnvNoticeCard } from './env-notice';
+import { useAddressStyle } from '../../state/address-style';
+import { useAgentNames } from './agent-name-context';
+import { type EnvNoticeBlock, type EnvNoticeCard, styleSourceCard } from './env-notice';
+import { useNodeNamesContext } from './node-name-context';
 import { StreamCard } from './StreamCard';
 
 export function EnvCard({
@@ -71,6 +74,15 @@ export function EnvCard({
   blocks?: readonly EnvNoticeBlock[];
 }) {
   const clock = formatClock(ts);
+  // q-addr-display：来源卡的组织行按 ui.addressStyle 渲染（name 优先 → 短 id → full）；
+  // 原文块（blocks）一字不动 —— 原文即模型所见事实。非来源卡逐字不变。
+  const addressStyle = useAddressStyle();
+  const nodeNames = useNodeNamesContext();
+  const agentNames = useAgentNames();
+  const shown =
+    env.scope === 'source'
+      ? styleSourceCard(env, addressStyle, { node: nodeNames, principal: agentNames })
+      : env;
   return (
     <StreamCard
       className="env-notice-card w-full min-w-0 max-w-full"
@@ -95,7 +107,7 @@ export function EnvCard({
         </>
       }
       meta={meta ?? (env.count > 1 ? t('chat.env.count', { count: env.count }) : undefined)}
-      summary={facts && facts.length > 0 ? facts.join(' · ') : env.lines[0]?.text}
+      summary={facts && facts.length > 0 ? facts.join(' · ') : shown.lines[0]?.text}
     >
       {clock !== '' && (
         // 与 agent 卡同一个位置：展开体首行，等宽 / 淡色 / 可选中。
@@ -107,7 +119,7 @@ export function EnvCard({
         </div>
       )}
       <ul className="m-0 flex min-w-0 list-none flex-col gap-1 p-0">
-        {env.lines.map((line) => (
+        {shown.lines.map((line) => (
           // 行身份由 env-notice.ts 在构建 / 折叠时按卡内序号重编（同一张卡内唯一）。
           <li
             className="min-w-0 break-words whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-ink"
