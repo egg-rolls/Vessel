@@ -548,3 +548,106 @@ DTO additive、业务错误在 result 内 `{error: {code, message}}`、不发明
 现态坑的既有解法）。技能包 ≤10 MiB，同步 RPC 通常秒级；若 gateway mutation 超时上限
 盖不住最坏下载（marketplace 因此走 background job），实现期改用 CONTRACT-0.44 jobs
 模式——开放问题 3（§13），不阻塞设计。
+
+## 8. 权限与安全
+
+### 8.1 威胁模型增补（上位设计 §9.1 T1–T7 全部延续，新增 D 系）
+
+| # | 威胁 | 对策 | 残余（诚实列出） |
+|---|---|---|---|
+| D1 | 社区技能携带恶意提示注入（供应链内容攻击） | **安装 ≠ 信任**（不写 trust.json）+ 安装前预览 + tier 展示 + 首次 load TOFU ask + library deny_paths 隔离 | 与 T1 同：用户信任后的内容语义不保证；信任是人的判断 |
+| D2 | 源冒充 / registry 被篡改（假索引、MITM） | https 必须 + redirect 落点重校验 + asset sha256 必填拒收无签名条目 + github commit 钉住 | registry 自身被攻破时它发布的哈希也是恶意的——策展审计 + provenance 可追溯 + 信任门兜底；**校验和保完整性不保来源善意** |
+| D3 | 下载与落地之间被掉包 | staging 内校验哈希 → 原子 rename 落地；load 期重读重算（现态）；provenance 记录落地哈希 | 本地恶意进程同权限篡改 = 现态边界（trust.json 同款威胁，不新增承诺） |
+| D4 | 归档 / 树路径逃逸（tar `..`、symlink、github tree 恶意路径） | tar containment（marketplace extractEntries 同款）+ 词法路径校验 + symlink 条目跳过 + staging 跑 scanner 全套 | — |
+| D5 | 资源耗尽（超大索引 / 包 / 海量条目 / 限流风暴） | §8.4 限额表；github 并发 4 + 条件请求 + 403 回落缓存不重试 | 匿名限流 60 req/h 是体验瓶颈不是安全洞（缓存兜底） |
+| D6 | SSRF（源 URL 指向内网 / 云元数据） | https + loopback fixture 例外（marketplace 同款）；私网 / link-local / 元数据地址拒绝（web_fetch local 后端同款纪律）；URL 不携带凭据；proxy 仅显式配置 | 用户显式配置 loopback fixture 是自担行为（现态口径） |
+| D7 | 预览内容攻击 UI（XSS / 诱导点击） | 纯文本渲染（§8.5）；外链仅 http(s) + noopener；预览不进语言空间 | 人类阅读后被社会工程 = 人的判断域 |
+| D8 | 更新通道推送恶意新版 | 更新 = 显式动作 + UI 二次确认 + 哈希变化 → stale 重新 ask；**无自动更新** | 用户盲目重新确认 = T2 既有残余，UI 差异横幅缓解（P2 项） |
+
+**明确不防（延续上位设计）**：已 trusted 技能的内容语义；宿主进程内恶意插件；OS 级沙箱。
+discovery 没有扩大这些边界，也没有缩小它们。
+
+### 8.2 源可信度分级：tier 是展示概念，不是信任概念
+
+| tier | 语义 | 缺省启用 | 对信任门的影响 |
+|---|---|---|---|
+| `curated` | vessel 人工策展（vessel-skills registry，收录时人看过内容 + 上游 commit/license 可审计） | 是（唯一缺省源） | **无** |
+| `community` | 外部源（github 仓库等），未经 vessel 审核 | 否（用户显式添加） | **无** |
+| `local` | 用户自己的本地目录 | 否（显式添加） | **无** |
+
+- tier 只影响：UI 徽标 / 搜索排序（curated 前）/ 缺省启用。**loadGateDecision 只认
+  trust.json，不认 tier**——curated 技能首次 load 照样 ask。
+- 索引 / frontmatter 不能自证可信：trust.ts 现态纪律「frontmatter 写 trusted: true 无效」
+  延伸为「索引写 tier: curated 无效（tier 由本地源配置决定，远程索引无权声明自己的分级）」。
+  registry 条目即使自称 curated，本地源配置没标就是 community。
+
+### 8.3 网络与权限边界
+
+- manifest `permissions.net` additive 申请缺省主机集（§11.2）：`github.com`、
+  `api.github.com`、`raw.githubusercontent.com`、`codeload.github.com`、`*.github.io`
+  （marketplace 声明式同款）。`process: false` / `secrets: false` 不变——**永不 spawn、
+  永不取凭据**；匿名 GitHub 通道，私有仓库不在范围（无 token 管理面）。
+- 自定义 registry URL：https 校验 + loopback 例外 + redirect 重校验（assertSecureUrl 逐字
+  同款）；net 声明集之外的自定义主机如何 enforcement——marketplace 现态是声明式清单 +
+  URL 校验，discovery 跟随同口径，enforcement parity 列开放问题 4（§13）。
+- 下载请求带 `user-agent: vessel-skills/<version>`；无 cookie、无认证头；proxy 仅经
+  显式配置（marketplace settings.proxy 同款）。
+
+### 8.4 下载与解压硬限额（防 DoS 边界，全部常量化）
+
+| 限额 | 值 | 出处 |
+|---|---|---|
+| 索引字节上限 | 5 MiB | marketplace MAX_INDEX_BYTES 同款 |
+| 每源远程条目上限 | 2000（超出截断 + warning） | 新增 MAX_REMOTE_ENTRIES |
+| 单包下载上限 | 10 MiB（content-length 预检 + 流式累计双闸） | 新增，比插件包收紧（技能是 markdown） |
+| 单文件上限 | 1 MiB | MAX_SKILL_FILE_BYTES 现态 |
+| 附件数上限 | 50（超出截断标注） | MAX_AUX_FILES 现态 |
+| 目录深度 | 8 | MAX_SCAN_DEPTH 现态 |
+| github 元数据补全 | 200 条/刷新，并发 4 | 新增 MAX_GITHUB_METADATA_FETCHES |
+| 索引 fetch / 下载 deadline | 30s / 120s（startDeadline） | marketplace 现态解法同款 |
+| 源数量 | 8 | 新增 MAX_DISCOVERY_SOURCES |
+| 预览内容返回 | 64 KiB 截断 | DEFAULT_MAX_LOAD_BYTES / capContent 现态 |
+
+tar 解压限额（条目数 / 单条目 / 总量 / 路径长度）复用 marketplace DEFAULT_ARCHIVE_LIMITS
+口径（共享方式 §5.3）；library 条目总预算与本地三根共享 5000（MAX_SKILL_ENTRIES）——
+安装不发明第二套预算。
+
+### 8.5 预览「沙箱」的诚实定义
+
+任务书要求「沙箱预览」。本设计的预览沙箱 = **三层边界，不是隔离执行环境**：
+
+1. **渲染层**：UI 纯文本渲染远程内容（escape；与 SkillsView 详情现态同款降级口径），
+   不渲染 markdown HTML、不执行任何记法、外链 noopener。frontmatter 只当数据。
+2. **数据层**：预览内容只存在于 RPC result → UI 组件态；不落 library、不写 index、
+   不写 loads、不写 trust——预览零持久化副作用（缓存除外）。
+3. **语义层**：预览是人类面（§9.5 上位边界），不进任何 run 的语言空间。模型看不到
+   预览内容，除非用户安装 + 信任 + load。
+
+不承诺：OS 沙箱、内容审查、恶意 markdown 的语义过滤（全仓都没有，不假装）。
+
+### 8.6 审计链
+
+三件套回答「这段技能内容从哪来、谁装的、谁信的、哪轮进的上下文」：
+
+- **provenance.json**：来源（sourceId/repo/commit/version）+ 落地文件哈希 + 安装/更新时间。
+- **trust.json**：谁在何时钉了哪个哈希（origin=marketplace/import/local）/ 谁撤销的。
+- **loads/<sessionId>.json**：哪个会话哪一轮以什么哈希加载（现态）。
+
+## 9. Agent 工具面：不变（理由）
+
+**`skills` 工具保持 list/search/load 三动作，description / schema 零改动。**discovery 全部
+能力走 RPC（人类面）+ UI。论证：
+
+1. **信任决策是人**：安装外来内容是供应链决策。若模型有 install 动作，T1 攻击面扩大为
+   「诱导模型自主安装恶意技能」——提示注入可以直接喂「装这个技能」。把安装留在
+   gateway write 权限的人类面，注入最多诱导模型*建议*用户去装，决定权仍在人。
+2. **token 税（R7）**：新增动作 = description/schema 增长 = 每轮固定税。discovery 七方法
+   对模型零税；模型需要的「找到技能 → 加载」闭环由既有三动作完成（装进来的技能自动进索引）。
+3. **工具判据（tools.md）**：discovery 不满足「模型自主闭环必要」——搜索远程目录的动机
+   来自用户请求，用户自己在 UI 搜更快更准；模型代搜反而多一层不可控。
+4. 模型的自然语言路径保留：用户问「有没有 PDF 处理技能」→ 模型可回答「Skills 页面
+   Discover tab 搜 pdf，或让我 list 本地库」——建议不是动作。
+
+唯一的既有文件 additive 改动是 §6.3 的 origin 派生（钉锁时读 provenance），不触及
+description / schema / 门判定。未来若确需模型面 discover（如自动化工作流），另开 ADR
+论证 opt-in 与税，不在本设计范围（§2.2 非目标）。
