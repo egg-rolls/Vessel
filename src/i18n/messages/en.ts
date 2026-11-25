@@ -37,9 +37,9 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.resumeRun': 'resume an interrupted durable run',
   'help.cmd.status': 'local runtime / attach / gateway instances at a glance',
   'help.cmd.stop':
-    'stop the fleet gracefully (unlimited drain + progress; --force cuts runs with audit); --connect for remote stop',
+    'stop the fleet gracefully (waits for active runs to finish, unlimited + progress; --force cuts runs with audit); --connect for remote stop',
   'help.cmd.restart':
-    'docker-style stop then start; [name] targets an instance or registered node (default: whole fleet); --force propagates to stop',
+    'docker-style stop then start (default waits for runs to finish); [name] targets an instance or registered node (default: whole fleet); --force propagates to stop',
   'help.cmd.agents': 'list agents via agents.list (local gateway or --connect)',
   'help.cmd.errors': 'recent run/tool errors (diagnostics in errorLevel: all)',
   'help.cmd.rpcList':
@@ -65,7 +65,7 @@ export const en: Record<MessageKey, string> = {
     'start detached and exit once the platform is up (default); --foreground keeps it in front; --instance names it',
   'help.cmd.gatewayList': 'list gateway instances and PID files',
   'help.cmd.gatewayStop':
-    'stop the platform process gracefully (unlimited drain + progress; --force kills with audit); default keeps node/hub, --stop-nodes stops them too',
+    'stop the platform process gracefully (waits for active runs to finish, unlimited + progress; --force kills with audit); default keeps node/hub, --stop-nodes stops them too',
   'help.cmd.gatewayStatus':
     'pid/port/uptime/version/service state (--rpc is deprecated; use node status --rpc)',
   'help.cmd.gatewayRestart':
@@ -84,7 +84,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.nodeStart': 'start only the Node API (default 8644; shares the gateway instance lock)',
   'help.cmd.nodeStatus': 'show the Node API listener and health (--rpc for health/queue)',
   'help.cmd.nodeStop':
-    'stop only the Node API gracefully (unlimited drain + progress; --force kills with audit); gateway-managed nodes point to gateway stop',
+    'stop only the Node API gracefully (waits for active runs to finish, unlimited + progress; --force kills with audit); gateway-managed nodes point to gateway stop',
   'help.cmd.nodeRestart':
     'docker-style stop then start only this node ([name] selects a registered node); managed nodes point to vessel restart',
   'help.cmd.nodeReload': 'hot-reload Node API config (same operation as gateway reload)',

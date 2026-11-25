@@ -345,8 +345,9 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
     return confirmNodeStopped(context, entry, record.pid, sleep, print, printErr);
   }
 
-  // 优雅（默认）：进程内 drain（写 resume 标记 + interrupt('shutdown')）+ 不限时等死 + 5s 进度。
-  // Windows 上外部 process.kill 是无条件终止，不先走这一步，在跑 run 的恢复标记一条都写不出来。
+  // 优雅（默认）：进程内 drain-to-quiesce（fence + 不限时等活跃 run 自然跑完）
+  // + 停止方不限时等死 + 5s 进度。Windows 上外部 process.kill 是无条件终止，
+  // 不先走这一步，在跑 run 会被直接切断（只能靠启动 sweep 对账）。
   const graceful = await shutdownGateway({
     record,
     token: token ?? '',

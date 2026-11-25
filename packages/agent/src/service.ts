@@ -3042,9 +3042,10 @@ export class AgentServiceImpl implements AgentService {
       }
     }
     // 0.52 S1a：node 正在退出 —— agent 来源的投递落 durable inbox 即返回 queued。
-    // 语义就是「排队」：不提交、不入 mailbox、不唤醒（退出路径不许等任何 run）；
-    // 正文留在 inbox 里，下次启动由 S1c 的 recoverPendingInputs / 标记里的
-    // pending_input_ids 接着处理。没有 durable inbox 就没有「排队」这回事，只能明确拒绝。
+    // 语义就是「排队」：不提交、不入 mailbox、不唤醒（admit 本身不等任何 run；
+    // drain-to-quiesce 只等已受理的 live run）；正文留在 inbox 里，下次启动由
+    // recoverPendingInputs / 启动续作投递接着处理。没有 durable inbox 就没有
+    // 「排队」这回事，只能明确拒绝。
     if (this.draining) {
       if (this.inbox === undefined || internal?.startup === true) {
         throw new AgentError('node_draining', 'node_draining: startup');
@@ -7380,7 +7381,7 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * 0.52 S1a：node 优雅退出的**准入 fence**（退出序列第一段，先于写标记 / interrupt）。
+   * 0.52 S1a：node 优雅退出的**准入 fence**（drain-to-quiesce 第一段，先于 quiesce 等待）。
    *
    * 打开后：
    * - 人类来源的写（runs.start / 直接投递）⇒ 立刻抛 node_draining（RPC 侧映射成可重试的

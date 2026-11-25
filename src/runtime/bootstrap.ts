@@ -375,11 +375,10 @@ export interface BootstrapResult {
    */
   shutdown: (options?: { drain?: boolean }) => Promise<void>;
   /**
-   * 0.52 S1a：node 退出序列第一段（幂等）。
-   *
-   * fence 准入 → 只给有在跑 run 的会话写 resume 标记 → interrupt('shutdown')
-   * → ≤2s settle → flush。**必须在 gateway.stop() 之前调**，否则 run 已被打断，
-   * 快照为空就一条标记都写不出来。没有本地执行面（connect 模式）时不提供。
+   * node 退出序列（幂等）：fence 准入 → 不限时等活跃 run 自然跑完
+   * （drain-to-quiesce，不 interrupt、不写标记）→ flush。
+   * **必须在 gateway.stop() 之前调**（先关闸再等，退出期间不再起新 run）。
+   * 没有本地执行面（connect 模式）时不提供。
    */
   beginDrain?: () => Promise<void>;
   cleanup: () => void;
@@ -2270,48 +2269,51 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     });
   }
 
-  // ── 0.52 S1a：node 退出序列第一段 ───────────────────────────────
-  //   1) fence 准入（runs.start 立刻 gateway_restarting / agents.* 只进 inbox 并返 queued）
-  //   2) 只给「有在跑 run 的会话」写 resume 标记（走 RunJournal 单写口）
-  //   3) interrupt('shutdown')
-  //   4) ≤2s settle
-  //   5) flush 会话状态（半截回复也要落地）
+  // ── node 退出序列（drain-to-quiesce，用户裁定：缺省完全优雅）─────
+  //   1) fence 准入（runs.start 立刻 gateway_restarting / 人类输入拒绝 /
+  //      agents.* 只进 inbox 并返 queued）——此后 live run 集合只减不增
+  //   2) 不限时等所有活跃 run（含已受理排队的）自然跑完 + 每 5s 进度日志
+  //   3) flush 会话状态
+  // 不 interrupt、不写 resume 标记：run 自然完成就没有欠账。--force 是唯一
+  // 非优雅路径（停止方 SIGKILL + stop.forced 审计，进程内代码不执行）。
   // 幂等：SIGTERM 连发 / vessel node stop 与 shutdown() 同时触发都只做一次。
-  // 必须在 gateway.stop() 之前跑（否则 run 已被打断，快照为空 ⇒ 一条标记都写不出来），
-  // 所以它挂在 BootstrapResult.beginDrain 上，由 CLI 的退出路径先调。
+  // 挂在 BootstrapResult.beginDrain 上，由 CLI 的退出路径在 gateway.stop() 之前调。
   const nodeDrainer = createNodeDrainer({
     units: () => executionRuntime.listExecutionUnits(),
-    // P0-run-stops P3：headless 一次性进程不打 resume 标记——它的会话没有 agent
-    // 绑定，标记永远收不了卡、清不掉，只会累积成僵尸（与启动侧「headless 不替
-    // 别的会话恢复」对称）。interrupt / settle / flush 照旧。
-    armMarkers: !headless,
-    // 没有 AgentService（agent 关闭 / 极简入口）就没有 agent→agent 投递要排队：
-    // 空 Map + beginFence 返回 false（fence 由 runs.start 闸门之后的调用方兜底判断）。
-    pendingInboxIdsBySession: () => agentControl?.service.pendingInboxIdsBySession() ?? new Map(),
-    // 竞态保护：settle 期间被打断 run 的终态保存会重建会话状态，注册表让它别把标记冲掉。
-    armResumeMarker: (sessionId, marker) => {
-      bundle.resumeMarkers.arm(sessionId, marker);
+    // scheduler 口径的 queued+running：fence 前已受理排队的 run 会在 drain 期间
+    // 起跑，必须一并等完（只等执行面「此刻在跑」会漏掉它们）。
+    liveRuns: () => {
+      const snapshot = bundle.scheduler.snapshot?.();
+      if (snapshot === undefined) return [];
+      return [...snapshot.queued, ...snapshot.running].map((run) => ({
+        run_id: run.runId,
+        session_id: run.sessionId,
+        status: run.state,
+      }));
     },
+    // 没有 AgentService（agent 关闭 / 极简入口）就没有 agent→agent 投递要排队：
+    // beginFence 返回 false（fence 由 runs.start 闸门之后的调用方兜底判断）。
     beginFence: () => agentControl?.service.beginDrain() ?? false,
     warn: (message, fields) => {
       logger.warn(message, fields);
     },
+    info: (message, fields) => {
+      logger.info(message, fields);
+    },
   });
 
-  /** 0.52 S1a：执行 node 退出序列（幂等，可在任何退出路径上重复调用）。 */
+  /** 执行 node 退出序列（幂等，可在任何退出路径上重复调用）。 */
   const beginDrain = async (): Promise<void> => {
     try {
       const report = await nodeDrainer.beginDrain('shutdown');
       logger.info('node.drain.done', {
-        marks: report.marks.length,
-        persisted: report.marks.filter((mark) => mark.persisted).length,
-        interrupted: report.interrupted,
         settle: report.settle,
+        drained_runs: report.drained_runs,
         duration_ms: report.duration_ms,
         already_draining: report.already_draining,
       });
     } catch (error) {
-      // 退出序列失败不阻断退出：run 本来就要没了，只是少了标记。
+      // 退出序列失败不阻断退出（各步已自带日志）。
       logger.warn('node.drain.failed', {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -2380,7 +2382,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }
 
     // tools-engine P2：expectedExit 停 engine child（不触发重启）+ 清 pending 关联。
-    // run 已在 beginDrain 打断，在途转发经 abort → tool.cancel 收口。
+    // run 已在 beginDrain 等到自然终态（drain-to-quiesce），无在途转发。
     // 池 S20：pool 模式 dispose PoolTransport（关连接/定时器；detached engine 归 gateway 生命周期，
     // node 退出不杀池）；child 模式语义不变（engineSupervisor 有值时 optional chain 等价原调用）。
     try {

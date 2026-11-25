@@ -34,9 +34,10 @@ export const zhCN = {
   'help.cmd.continueRun': '续接最近会话并运行一轮',
   'help.cmd.resumeRun': '恢复中断的 durable run',
   'help.cmd.status': '一屏查看本地运行态 / attach / gateway 实例',
-  'help.cmd.stop': '优雅停止舰队（不限时 drain + 进度；--force 切断 run 并审计）；--connect 远程停',
+  'help.cmd.stop':
+    '优雅停止舰队（等活跃 run 自然跑完，不限时 + 进度；--force 切断 run 并审计）；--connect 远程停',
   'help.cmd.restart':
-    'docker 式先停后启；[name] 定向实例或登记 node（缺省整舰队）；--force 传播到 stop 段',
+    'docker 式先停后启（缺省等 run 跑完再停）；[name] 定向实例或登记 node（缺省整舰队）；--force 传播到 stop 段',
   'help.cmd.agents': '经 agents.list 列出 agent（本地 gateway 或 --connect）',
   'help.cmd.errors': '最近 run/tool 错误（errorLevel: all 时含诊断）',
   'help.cmd.rpcList': '列出 RPC 方法 + 参数/返回 schema 摘要（--node 经平台代理定向）',
@@ -59,7 +60,7 @@ export const zhCN = {
     '启动 gateway（缺省后台分离、就绪即退）；--foreground 保留前台；--instance 命名实例',
   'help.cmd.gatewayList': '列出 gateway 实例与 PID 文件',
   'help.cmd.gatewayStop':
-    '优雅停止平台进程（不限时 drain + 进度；--force 强杀并审计）；缺省只停平台层，--stop-nodes 连 node/hub 一起停',
+    '优雅停止平台进程（等活跃 run 自然跑完，不限时 + 进度；--force 强杀并审计）；缺省只停平台层，--stop-nodes 连 node/hub 一起停',
   'help.cmd.gatewayStatus':
     'PID/端口/运行时长/版本/服务状态（--rpc 已弃用，改用 node status --rpc）',
   'help.cmd.gatewayRestart':
@@ -77,7 +78,7 @@ export const zhCN = {
   'help.cmd.nodeStart': '只启动 Node API（缺省 8644；与 gateway 共用实例锁）',
   'help.cmd.nodeStatus': '查看 Node API 监听与 health（--rpc 查看 health/queue）',
   'help.cmd.nodeStop':
-    '优雅停止 Node API（不限时 drain + 进度；--force 强杀并审计）；gateway 托管时提示用 gateway stop',
+    '优雅停止 Node API（等活跃 run 自然跑完，不限时 + 进度；--force 强杀并审计）；gateway 托管时提示用 gateway stop',
   'help.cmd.nodeRestart':
     'docker 式先停后启只重启本 node（[name] 选登记 node）；托管节点提示用 vessel restart',
   'help.cmd.nodeReload': '热重载 Node API 配置（等同 gateway reload）',

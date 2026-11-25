@@ -1546,7 +1546,7 @@ async function runWithConfig(result: BootstrapResult) {
       reload: reloadRunner.reload,
       // P0-run-stops P1：`gateway.shutdown` 的优雅退出序列。Windows 上外部 stop 是
       // 无条件强杀（信号处理器跑不到），停止侧 CLI 先经本 RPC 触发进程内 drain
-      // （写 resume 标记 + interrupt('shutdown')），再等进程自死；超时仍强杀。
+      // （drain-to-quiesce：fence + 不限时等活跃 run 自然跑完），再等进程自死。
       // 走与 SIGTERM 完全相同的 activeCleanup（shutdownServeStack），不另造退出路径。
       shutdown: async () => {
         try {
@@ -1908,7 +1908,7 @@ async function runWithConfig(result: BootstrapResult) {
   }
 
   // 未捕获异常时的清理入口：停 gateway / 关闭额外 tenant / 释放默认 tenant。
-  // gateway.stop() 自带 interrupt('shutdown') + 5s drain，后续关闭传 drain:false。
+  // beginDrain 已 drain-to-quiesce（run 全部自然终态），后续关闭传 drain:false。
   activeCleanup = async () => {
     // 0.43：先停 watcher 并回收 plugin 子进程（停订阅 / 动态 RPC / 子进程）。
     pluginWatch?.close();
@@ -1923,8 +1923,8 @@ async function runWithConfig(result: BootstrapResult) {
     await hubNodeOutbound?.close();
     hubNodeOutbound = undefined;
     await shutdownServeStack({
-      // 0.52 S1a：fence + 写 resume 标记 + interrupt + ≤2s settle + flush，
-      // 必须早于 gateway.stop()（否则 run 已被打断，标记写不出来）。
+      // drain-to-quiesce：fence + 不限时等活跃 run 自然跑完 + flush，
+      // 必须早于 gateway.stop()（先关闸，退出期间不再起新 run）。
       ...(result.beginDrain ? { beginDrain: result.beginDrain } : {}),
       gateway,
       closeTenants: async () => {
@@ -1991,7 +1991,7 @@ async function runWithConfig(result: BootstrapResult) {
     await startInkRepl(ctx);
   }
 
-  // 固定顺序：await gateway.stop()（自带 interrupt + 5s drain）
+  // 固定顺序：await beginDrain（drain-to-quiesce）→ gateway.stop()
   // → closeAll → shutdown；后两步 drain:false，避免重复限时等待。
   const finish = async (beforeClose?: () => Promise<void>): Promise<void> => {
     // 构建中被叫停：先把构建子进程**真的**杀掉并留一行 `web.build.interrupted`，
