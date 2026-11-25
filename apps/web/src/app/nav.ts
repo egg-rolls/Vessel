@@ -102,8 +102,17 @@ export function isDomainActive(route: Route, domain: Domain): boolean {
   return route.domain === domain;
 }
 
-/** 顶栏路径文本（不放 gateway/token 表单）。 */
-export function routeBreadcrumb(route: Route): string {
+/**
+ * 顶栏路径文本（不放 gateway/token 表单）。
+ *
+ * `nodeNames`（nodeKey → 展示名，`useNodeNames()` 的结果）缺省 = 空表：节点详情
+ * 面包屑退 nodeKey 原文（不丢深链语义，URL hash 不变）。拿到名字时显示名字而非
+ * UUID（问题3：详情页标题早有名字，顶栏却直显 node id）。
+ */
+export function routeBreadcrumb(
+  route: Route,
+  nodeNames?: ReadonlyMap<string, string>,
+): string {
   switch (route.domain) {
     case 'chat':
       return route.sessionId ? t('breadcrumb.chat.session') : t('breadcrumb.chat');
@@ -124,7 +133,7 @@ export function routeBreadcrumb(route: Route): string {
       return t('breadcrumb.pluginHost');
     case 'nodes':
       return route.nodeKey
-        ? t('breadcrumb.nodes.detail', { node: route.nodeKey })
+        ? t('breadcrumb.nodes.detail', { node: nodeNames?.get(route.nodeKey) ?? route.nodeKey })
         : t('breadcrumb.nodes');
     case 'teams':
       if (!('teamId' in route)) return t('breadcrumb.teams');

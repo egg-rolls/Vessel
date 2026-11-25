@@ -7,6 +7,7 @@ import {
   pendingBarTarget,
   pendingPermissionsOutsideView,
 } from '../domains/chat/pending-permissions';
+import { useNodeNames } from '../domains/nodes/useNodeNames';
 import { rosterAttributionIndex } from '../domains/pending/attribution';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { useNodes } from '../gateway/NodeProvider';
@@ -94,6 +95,8 @@ export function AppShell() {
   const rosterState = useAgentStore((state) => state.roster);
   const loadRoster = useAgentStore((state) => state.loadRoster);
   const { nodes, teamControl } = useNodes();
+  // 节点展示名：路由播报与顶栏面包屑同口径（名字优先，拿不到退 nodeKey 原文）。
+  const nodeNames = useNodeNames();
   const rosters = useMemo(() => resourceData(rosterState) ?? [], [rosterState]);
   const attribution = useMemo(() => rosterAttributionIndex(rosters), [rosters]);
   // roster 只在 idle 时补一次：各域视图（chat / teams / agents / runs）自己也会加载，
@@ -316,7 +319,7 @@ export function AppShell() {
     }
     // 设置弹窗打开：焦点归弹窗（useModalA11y），不抢焦点/不滚背景。
     if (route.domain === 'settings') {
-      setAnnouncement(t('nav.opened', { path: routeBreadcrumb(route) }));
+      setAnnouncement(t('nav.opened', { path: routeBreadcrumb(route, nodeNames) }));
       setNavDrawerOpen(false);
       setChatSessionsOpen(false);
       return;
@@ -324,7 +327,7 @@ export function AppShell() {
     window.scrollTo(0, 0);
     mainRef.current?.scrollTo?.(0, 0);
     mainRef.current?.focus();
-    setAnnouncement(t('nav.opened', { path: routeBreadcrumb(route) }));
+    setAnnouncement(t('nav.opened', { path: routeBreadcrumb(route, nodeNames) }));
     setNavDrawerOpen(false);
     if (route.domain !== 'chat') setChatSessionsOpen(false);
   }, [routeKey]);
