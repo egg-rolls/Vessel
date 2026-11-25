@@ -97,7 +97,14 @@ import { HUMAN_PRINCIPAL } from './team-address.js';
 
 export const AGENT_INBOX_VERSION = 1;
 export const DEFAULT_MAX_INBOX_MESSAGES = 200;
-export const INBOX_READ_DEFAULT_LIMIT = 20;
+/**
+ * read 未给 ids 时的缺省条数（用户裁定：免 list 直读）。
+ *
+ * 3 而不是 20：无 ids 的 read 定位是「直接拿走最新到达的几条」，省掉先 list 再挑 id
+ * 的一轮工具往返；一次吞 20 条正文既撑上下文，也让模型来不及逐条处理。要更多就显式
+ * 传 limit，要精确挑就传 ids。
+ */
+export const INBOX_READ_DEFAULT_LIMIT = 3;
 
 /** summary 的最大字符数（截断时另加 `…`）。 */
 const INBOX_SUMMARY_MAX = 160;
@@ -210,7 +217,7 @@ export interface AgentInboxListEntry {
 }
 
 export interface AgentInboxReadSelection {
-  /** read：指定 id（按给定顺序返回）；缺省时取最旧的 limit 条。 */
+  /** read：指定 id（按给定顺序返回）；缺省时取**最新**的 limit 条（按时间序返回）。 */
   ids?: readonly string[];
   /** read：未给 ids 时的条数上限，缺省 `INBOX_READ_DEFAULT_LIMIT`。 */
   limit?: number;
@@ -703,7 +710,10 @@ export class AgentInboxStore implements AgentInboxPort {
       }
     } else {
       const limit = selection.limit ?? INBOX_READ_DEFAULT_LIMIT;
-      picked = limit > 0 ? candidates.slice(0, limit) : [];
+      // 免 list 直读（用户裁定）：无 ids 时取**最新**的 limit 条，返回仍按时间序
+      // （candidates 是插入序，slice(-limit) 取尾部 = 最近到达的几条）。较旧的留在
+      // 队列里，下次 read 或显式 ids 再取。
+      picked = limit > 0 ? candidates.slice(-limit) : [];
     }
     if (picked.length === 0) return [];
     // I2：只消费未被持有的条目。held 的正文已经排进某次 run —— read 不取消投递、
@@ -1158,6 +1168,8 @@ const INBOX_TOOL_DESCRIPTION =
   'list is the ONLY cheap peek: the three counts + per message {id, ts, source, a preview of the first ' +
   '40 characters, and more_chars = how many characters are NOT shown}. it never returns the body, so it ' +
   'never consumes anything — use it to decide what to read. ' +
+  'read without ids needs no list round: it directly takes the newest messages (default 3, ' +
+  'returned oldest-first); pass limit for more or ids to pick exactly. ' +
   'read TAKES messages: it returns the full text and consumes them, held (pending) ones included — for ' +
   'those it also cancels their queued run input, so the same text cannot arrive twice. it is irreversible: ' +
   'a message you read is never delivered again and never listed again. there is no peek-then-take: if you ' +
@@ -1252,7 +1264,8 @@ export function createInboxTool(options: {
         limit: {
           type: 'integer',
           minimum: 1,
-          description: 'read: max messages when ids omitted (default 20)',
+          description:
+            'read: max messages when ids omitted (default 3; takes the newest ones, returned oldest-first)',
         },
         content: {
           type: 'string',
