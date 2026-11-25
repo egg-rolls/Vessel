@@ -6,7 +6,7 @@
 
 ## 0. 重启前必须闭环（唯一阻塞晋升项）
 
-- **q-dr15-exit**（DR15-1 优雅退出修复，实施中）：根因 = gateway.stop 内 `await server.stop(true)`（gateway.ts:4722）Bun 1.3.9/Windows 残余活跃连接挂起永不 settle。
+- **q-dr15-exit**（DR15-1 优雅退出修复，✅已合并 redblue-dev 03f13c06，候金丝雀 cli 复验闭环）：根因 = gateway.stop 内 `await server.stop(true)`（gateway.ts:4722）Bun 1.3.9/Windows 残余活跃连接挂起永不 settle。
   - A：server.stop(true) 5s 有界 race + best-effort（平台同款同修）+ 永久 `node.shutdown.step` 步骤日志。
   - B：等死段 postQuiesceTimeoutMs=30s force 兜底 + stop.forced 审计持久化（reason=quiesce_exit_timeout，补 O7）；候 run 段不限时（裁定 #5）不动。
   - 流程：修复合 redblue-dev → 通报 lead HEAD+变更面+日志键名 → cli 复验（门禁：drain.done→新启动 ~20s 秒退 + 无 stop.forced + continuation + 步骤日志 + 兜底 30s + live>0 重置 + 14⑤⑥ + CLI/orchestrator 两路径 + --timeout/--force 零变化）→ PASS → DR15-1 CLOSED → 晋升 2.1.0 → 用户优雅重启生产。

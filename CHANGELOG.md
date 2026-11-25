@@ -37,6 +37,7 @@
 - **plugin-version**：内置插件恒兼容去版本门禁（5 manifest engines 删除，第三方保护保留）。
 - **skills-style**：摘 GHOST 整页误套 + 卡片 / 弹窗对齐 ToolsPanel / ModalShell 共享表面。
 - **empty-state**：错误 / 重试卡居中空态（States.tsx 一处改全局 ~30 处）。
+- **DR15-1 优雅退出挂起**（q-dr15-exit）：`server.stop(true)` Bun 1.3.9/Windows 残余活跃连接无界等待 → 5s 有界 race + best-effort 推进（平台同款）+ 永久 `node.shutdown.step` 步骤日志；等死段 30s 有界 force 兜底 + `stop.forced` 审计持久化（reason=quiesce_exit_timeout，补 O7）；候 run 段不限时（裁定 #5）不动。
 
 ### 变更
 
@@ -45,7 +46,7 @@
 
 ### 已知问题（第五轮处置）
 
-- ISSUE-DR15-1：graceful stop drain 后进程自死挂起（15① main 实测；归因 cli 当前 build 15② 决定性实验候闭环；force 兜底 runs_cut=0 安全）。
+- ISSUE-DR15-1：graceful stop drain 后进程自死挂起 —— **修复已合并（03f13c06），候金丝雀 cli 复验闭环**（server.stop 有界化 + 等死段兜底 + 审计持久化）。
 - plugin_manifest_invalid thinking-intensity（i18n key defaultLevel 大写 L 违模式，批次 B 登记）。
 
 ## [2.0.0] - 2026-11-25
