@@ -41,6 +41,7 @@ import {
   type DrainProgressInfo,
   type DrainRun,
   nodeRunSampler,
+  POST_QUIESCE_EXIT_TIMEOUT_MS,
   snapshotActiveRuns,
   waitForProcessExit,
 } from './stop-drain';
@@ -198,6 +199,12 @@ export interface NodeSupervisorOptions {
    * `node.drain.skipped` 的通道）。I/O 由调用方决定；抛错不影响终止。
    */
   onDrainSkipped?: (info: DrainSkippedInfo) => void;
+  /**
+   * DR15-1：quiesce 兜底强杀（drain 已完成但退出链挂死、进程未自死）时通知一次，
+   * 停止方代打 `stop.forced` 审计（reason=quiesce_exit_timeout）并持久化（O7）。
+   * 缺省 = 不打；抛错不影响终止。
+   */
+  onForced?: (info: ForcedStopInfo) => void;
 }
 
 /** Manifest 中的一条：只记录本平台 spawn 的子进程。 */
@@ -474,13 +481,17 @@ async function tryGracefulNodeShutdown(
   });
   if (!result.ok) return { dead: false, reason: result.code ?? 'error' };
   // 默认不限时等死 + 5s 进度（用户裁定 #5）；显式 --timeout 到点 reason:'timeout'。
+  // DR15-1：等死段有界兜底 —— quiesce 后 30s 未自死 → reason:'quiesce_timeout'，
+  // 调用方 force + stop.forced 审计；候 run 段（live > 0）不限时红线不动。
   const wait = await waitForProcessExit(child.pid, {
     sleep,
     ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+    postQuiesceTimeoutMs: POST_QUIESCE_EXIT_TIMEOUT_MS,
     ...(opts?.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
     sampleRuns: nodeRunSampler(record, ''),
   });
-  return wait.dead ? { dead: true } : { dead: false, reason: 'timeout' };
+  if (wait.dead) return { dead: true };
+  return { dead: false, reason: wait.quiesceTimedOut ? 'quiesce_timeout' : 'timeout' };
 }
 
 async function waitUntilDead(
@@ -580,6 +591,11 @@ export interface ForcedStopInfo {
   /** 终止前快照到的在跑 run（快照不可用 = 空数组 + snapshotUnavailable）。 */
   runs: DrainRun[];
   snapshotUnavailable: boolean;
+  /**
+   * DR15-1：缺省 = 显式 --force；'quiesce_exit_timeout' = drain 已完成但退出链
+   * 挂死、停止方有界兜底强杀（审计持久化时据此区分）。
+   */
+  reason?: string;
 }
 
 /** manifest 条目的启动时刻（node 写 ISO 8601；hub lock 写 epoch 毫秒字符串）。 */
@@ -711,6 +727,7 @@ export async function stopSpawnedChildren(
       } else {
         let gracefulDead = false;
         let gracefulTimeout = false;
+        let quiesceTimeout = false;
         if (child.kind !== 'hub') {
           const graceful = await tryGracefulNodeShutdown(child, sleep, {
             ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
@@ -720,7 +737,35 @@ export async function stopSpawnedChildren(
           });
           gracefulDead = graceful.dead;
           gracefulTimeout = graceful.reason === 'timeout';
-          if (!graceful.dead && !gracefulTimeout) {
+          quiesceTimeout = graceful.reason === 'quiesce_timeout';
+          if (quiesceTimeout) {
+            // DR15-1：drain 已完成（quiesce 证据）但退出链挂死、进程未自死 →
+            // 有界兜底强杀 + stop.forced 审计（快照 best-effort；quiesce 后 runs_cut 恒 0）。
+            let runs: DrainRun[] = [];
+            let snapshotUnavailable = false;
+            const record = await readGatewayPidRecord(child.data_dir);
+            if (record !== null && record.pid === child.pid) {
+              try {
+                runs = await snapshotActiveRuns(record, '');
+              } catch {
+                snapshotUnavailable = true;
+              }
+            } else {
+              snapshotUnavailable = true;
+            }
+            try {
+              options.onForced?.({
+                name: child.name,
+                kind,
+                pid: child.pid,
+                runs,
+                snapshotUnavailable,
+                reason: 'quiesce_exit_timeout',
+              });
+            } catch {
+              // 观察者抛错不影响终止。
+            }
+          } else if (!graceful.dead && !gracefulTimeout) {
             // 优雅受理失败（老版本无该方法 / 网络）→ 回退既有强杀，代打 node.drain.skipped。
             try {
               options.onDrainSkipped?.({
@@ -743,7 +788,14 @@ export async function stopSpawnedChildren(
           ok =
             options.terminate !== undefined
               ? await options.terminate(child.pid)
-              : await terminateChild(child.pid, { platform, runCommand, sleep, timeoutMs });
+              : await terminateChild(child.pid, {
+                  platform,
+                  runCommand,
+                  sleep,
+                  timeoutMs,
+                  // quiesce 兜底 = 非正常退出（与 force 同口径：POSIX SIGKILL / Windows 无条件终止）。
+                  ...(quiesceTimeout ? { force: true } : {}),
+                });
           if (!ok) failReason = `not confirmed stopped within ${timeoutMs}ms`;
         }
       }
@@ -1651,10 +1703,39 @@ export class NodeSupervisor {
         // 留着只会变孤儿（下次启动还可能撞端口），所以照样终止。
         // P0-run-stops P1：node 子进程先试优雅关闭（未就绪的通常 no_record → 直接强杀）。
         let gracefulDead = false;
+        let quiesceTimeout = false;
         if (child.kind !== 'hub') {
           const graceful = await tryGracefulNodeShutdown(child, this.sleep);
           gracefulDead = graceful.dead;
-          if (!graceful.dead) {
+          quiesceTimeout = graceful.reason === 'quiesce_timeout';
+          if (quiesceTimeout) {
+            // DR15-1：drain 已完成（quiesce 证据）但退出链挂死、进程未自死 →
+            // 有界兜底强杀 + stop.forced 审计（快照 best-effort；quiesce 后 runs_cut 恒 0）。
+            let runs: DrainRun[] = [];
+            let snapshotUnavailable = false;
+            const record = await readGatewayPidRecord(child.data_dir);
+            if (record !== null && record.pid === child.pid) {
+              try {
+                runs = await snapshotActiveRuns(record, '');
+              } catch {
+                snapshotUnavailable = true;
+              }
+            } else {
+              snapshotUnavailable = true;
+            }
+            try {
+              this.options.onForced?.({
+                name: child.name,
+                kind: 'node',
+                pid: child.pid,
+                runs,
+                snapshotUnavailable,
+                reason: 'quiesce_exit_timeout',
+              });
+            } catch {
+              // 观察者抛错不影响终止。
+            }
+          } else if (!graceful.dead) {
             try {
               this.options.onDrainSkipped?.({
                 name: child.name,
@@ -1666,7 +1747,7 @@ export class NodeSupervisor {
             }
           }
         }
-        const ok = gracefulDead || (await this.terminatePid(child.pid));
+        const ok = gracefulDead || (await this.terminatePid(child.pid, quiesceTimeout));
         const kind: 'node' | 'hub' = child.kind === 'hub' ? 'hub' : 'node';
         if (ok) {
           stopped += 1;

@@ -32,6 +32,8 @@ import { gatewayBaseUrl, reloadGateway, shutdownGateway } from '../../gateway/re
 import {
   type DrainRun,
   nodeRunSampler,
+  POST_QUIESCE_EXIT_TIMEOUT_MS,
+  persistStopAuditLine,
   snapshotActiveRuns,
   waitForProcessExit,
 } from '../../gateway/stop-drain';
@@ -43,6 +45,7 @@ import type { ControlPlaneTarget } from '../control-plane-target';
 import { ui } from '../output';
 import {
   formatDrainProgressLine,
+  formatForcedAuditEvent,
   formatForcedAuditLine,
   gatewayStatus,
   isPlatformRecord,
@@ -333,6 +336,17 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
         ),
       ),
     );
+    // DR15-1/O7：审计持久化到 node 实例日志（停止方 stdout 不进 node log）。
+    await persistStopAuditLine(
+      gatewayLogPath(context.dataDir, DEFAULT_GATEWAY_INSTANCE),
+      formatForcedAuditEvent(
+        'node',
+        DEFAULT_GATEWAY_INSTANCE,
+        record.pid,
+        runs,
+        snapshotUnavailable,
+      ),
+    );
     try {
       if (context.platform === 'win32') process.kill(record.pid);
       else process.kill(record.pid, 'SIGKILL');
@@ -356,8 +370,11 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
   });
   if (graceful.ok) {
     // 默认不限时等死（用户裁定 #5，去掉硬编码 10s）+ 进度（哪些 run/session 还在跑）。
+    // DR15-1：等死段有界兜底 —— quiesce 后 30s 未自死 → force + stop.forced 审计；
+    // 候 run 段（live > 0）重置时钟，不限时语义不动（红线）。
     const wait = await waitForProcessExit(record.pid, {
       sleep,
+      postQuiesceTimeoutMs: POST_QUIESCE_EXIT_TIMEOUT_MS,
       onProgress: (info) =>
         print(ui.info(formatDrainProgressLine(`node ${DEFAULT_GATEWAY_INSTANCE}`, info))),
       sampleRuns: nodeRunSampler(record, token ?? '', context.config.node?.tls !== undefined),
@@ -368,6 +385,62 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
       }
       print(ui.ok(t('node.stopped', { pid: record.pid })));
       return 0;
+    }
+    if (wait.quiesceTimedOut) {
+      // DR15-1：drain 已完成但退出链挂死、进程未自死 → 有界兜底强杀 + 审计。
+      let runs: DrainRun[] = [];
+      let snapshotUnavailable = false;
+      try {
+        runs = await snapshotActiveRuns(
+          record,
+          token ?? '',
+          context.config.node?.tls !== undefined,
+        );
+      } catch {
+        snapshotUnavailable = true;
+      }
+      printErr(
+        ui.warn(
+          t('stop.quiesceExitTimeout', {
+            pid: record.pid,
+            timeout: `${POST_QUIESCE_EXIT_TIMEOUT_MS}ms`,
+          }),
+        ),
+      );
+      printErr(
+        ui.warn(
+          formatForcedAuditLine(
+            'node',
+            DEFAULT_GATEWAY_INSTANCE,
+            record.pid,
+            runs,
+            snapshotUnavailable,
+            'quiesce_exit_timeout',
+          ),
+        ),
+      );
+      // O7：审计持久化到 node 实例日志（停止方 stdout 不进 node log）。
+      await persistStopAuditLine(
+        gatewayLogPath(context.dataDir, DEFAULT_GATEWAY_INSTANCE),
+        formatForcedAuditEvent(
+          'node',
+          DEFAULT_GATEWAY_INSTANCE,
+          record.pid,
+          runs,
+          snapshotUnavailable,
+          'quiesce_exit_timeout',
+        ),
+      );
+      try {
+        if (context.platform === 'win32') process.kill(record.pid);
+        else process.kill(record.pid, 'SIGKILL');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+          printErr(ui.err(t('gateway.stopFailed', { pid: record.pid, detail: String(error) })));
+          return 1;
+        }
+      }
+      return confirmNodeStopped(context, entry, record.pid, sleep, print, printErr);
     }
   }
   // 优雅受理失败（老版本无该方法 / 网络）→ 回退既有强杀，代打 node.drain.skipped。
