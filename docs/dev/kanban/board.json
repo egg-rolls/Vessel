@@ -96,10 +96,10 @@
     {
       "id": "q-kanban-view",
       "title": "任务看板查看器UI（真缺口：board.json无任何UI渲染）",
-      "column": "进行中",
-      "owner": "q-kanban-view",
-      "branch": "feat/q-kanban-view",
-      "progress": "797f3d0d派单：kanban.get/archive RPC+Web KanbanView三列卡片+用户打勾归档(不自动归档)+GHOST样式；①调研②RPC③UI④build"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并8834a75a(508368ac RPC+77af703f Web,17文件+977build绿)：kanban.get/archive+KanbanView三列+勾选归档ConfirmDialog绝不自动+#/kanban导航+30s if_mtime轮询；待金丝雀验+用户重启后#/kanban可见；遗留:舰队node读自身board副本可配kanban.board_path/跨进程写无锁声明"
     },
     {
       "id": "q-plugin-lifecycle",
