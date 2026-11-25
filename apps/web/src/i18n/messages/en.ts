@@ -1583,6 +1583,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.agentMessage.group': 'Message from agent {name}',
   'chat.toolMessage.from': 'from {name}',
   'chat.toolMessage.group': 'Delivery from {name}',
+  // P1-A: a message taken by `inbox read` (no run-input echo) — visible hand-off card.
+  'chat.inboxRead.from': 'from inbox · {source}',
+  'chat.inboxRead.group': 'Message taken from the inbox ({source})',
   // 0.36: message bubble action group
   'chat.message.actions': 'Message actions',
   // long-message fold (same toggle component on the chat and team pages)

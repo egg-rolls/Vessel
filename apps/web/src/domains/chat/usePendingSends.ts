@@ -90,6 +90,22 @@ export function usePendingSends(options: {
   sentMessageIds: readonly string[];
   retry: (pending: PendingSend) => void;
   dismiss: (pending: PendingSend) => void;
+  /**
+   * 真相源对账（P0-A）：条带每次 `agents.inbox` 读完后调用，把「服务端已消费 / 撤回、
+   * 又不会有回显」的客户端 pending 摘掉（判据与护栏全在 `pending-sends.ts#reconcileWithServer`）。
+   * 没有它，`inbox read` 取消 queued run 的那条消息永远等不到 `user.message` / `run.started`，
+   * 「等待中 human」那行会常驻到刷新。
+   */
+  reconcile: (input: {
+    sessionId: string;
+    presentIds: ReadonlySet<string>;
+    readStartedAt: number;
+  }) => void;
+  /**
+   * 兜底认领升级（P0-A 配套）：条带读到真实服务端条目后，把摘要兜底认领升级成精确
+   * `messageId`（判据在 `PendingStrip` 的升级 effect，配对与渲染顶替同一份贪心）。
+   */
+  attachMessage: (pendingId: string, messageId: string) => void;
 } {
   const all = useSyncExternalStore(pendingSends.subscribe, pendingSends.list, pendingSends.list);
   const sentMessageIds = useSyncExternalStore(
@@ -159,6 +175,12 @@ export function usePendingSends(options: {
     },
     dismiss: (item) => {
       pendingSends.remove(item.id);
+    },
+    reconcile: (input) => {
+      pendingSends.reconcileWithServer(input);
+    },
+    attachMessage: (pendingId, messageId) => {
+      pendingSends.attachMessage(pendingId, messageId);
     },
   };
 }
