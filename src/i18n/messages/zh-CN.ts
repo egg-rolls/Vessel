@@ -420,6 +420,13 @@ export const zhCN = {
   'stop.poolResidue.count': '{dir} 残留 {count} 个 engine 状态文件',
   'stop.done': '舰队停完成。',
   'stop.failed': '舰队停未全部成功（原因见上方输出）。',
+  // ── 优雅停止 / force 审计（用户裁定 #5，cli-topology-design §5.3/§5.4）──
+  'stop.drain.progress': '⏳ {label}：drain 中… 还有 {count} 个 run 在跑（已等待 {waited}）',
+  'stop.drain.snapshotUnavailable': 'run 快照不可用（监听已关闭）',
+  'stop.drain.escalate': '升级：vessel runs cancel <run_id>   |   vessel stop --force',
+  'stop.drain.timeout':
+    '等待 drain 超时（pid {pid}，{timeout}）；进程仍在运行，未被强杀。可取消阻塞 run 或用 --force 升级。',
+  'stop.forced.summary': '非正常退出：{name} —— {count} 个 run 被切断{note}',
   'stop.remote.title': '远程平台清点：{url}',
   'stop.remote.health': 'platform：{status}（version {version}，node_count {count}）',
   'stop.remote.node': 'node {name}（{nodeId}）：{status} {apiUrl}',

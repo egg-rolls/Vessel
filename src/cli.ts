@@ -486,7 +486,11 @@ if (foregroundGateway && args.gateway !== null) {
         targetHost = previous.record.host;
       }
     }
-    const stopCode = await stopGateway({ selector: gatewayArgs, entries });
+    const stopCode = await stopGateway({
+      selector: gatewayArgs,
+      entries,
+      ...(gatewayArgs.force === true ? { force: true } : {}),
+    });
     if (stopCode !== 0) process.exit(stopCode);
   }
 

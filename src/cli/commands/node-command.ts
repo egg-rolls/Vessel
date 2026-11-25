@@ -23,10 +23,17 @@ import {
   collectGatewayState,
   DEFAULT_GATEWAY_INSTANCE,
   type GatewayPidRecord,
+  type GatewayStateEntry,
   isProcessAlive,
   readGatewayPidRecord,
 } from '../../gateway/pid';
 import { gatewayBaseUrl, reloadGateway, shutdownGateway } from '../../gateway/reload';
+import {
+  type DrainRun,
+  nodeRunSampler,
+  snapshotActiveRuns,
+  waitForProcessExit,
+} from '../../gateway/stop-drain';
 import { t } from '../../i18n';
 import { effectiveNodeTokenAuto } from '../../node/token-derive';
 import { createHttpRpcClient } from '../../rpc/http-client';
@@ -34,6 +41,8 @@ import type { NodeCommand } from '../args';
 import type { ControlPlaneTarget } from '../control-plane-target';
 import { ui } from '../output';
 import {
+  formatDrainProgressLine,
+  formatForcedAuditLine,
   gatewayStatus,
   isPlatformRecord,
   type NodeListenInfo,
@@ -266,7 +275,7 @@ async function isManagedByPlatform(
 }
 
 /** `node stop`：gateway 托管 → 稳定非 0 并提示 `gateway stop`，不杀进程。 */
-async function nodeStopCommand(deps: NodeCommandDeps): Promise<number> {
+async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<number> {
   const context = await resolveNodeContext(deps);
   const print = deps.print ?? console.log;
   const printErr = deps.printErr ?? console.error;
@@ -303,9 +312,40 @@ async function nodeStopCommand(deps: NodeCommandDeps): Promise<number> {
     return 1;
   }
 
-  // P0-run-stops P1：强杀前先请 node 进程内 drain（写 resume 标记 + interrupt('shutdown')），
-  // 等它自死（≤10s）；失败/超时回退既有强杀。Windows 上外部 process.kill 是无条件终止，
-  // 不先走这一步，在跑 run 的恢复标记一条都写不出来。
+  // 用户裁定 #5：force = 显式非正常退出 —— 快照 + 强杀 + 审计，跳过优雅等待。
+  if (force) {
+    let runs: DrainRun[] = [];
+    let snapshotUnavailable = false;
+    try {
+      runs = await snapshotActiveRuns(record, token ?? '', context.config.node?.tls !== undefined);
+    } catch {
+      snapshotUnavailable = true;
+    }
+    printErr(
+      ui.warn(
+        formatForcedAuditLine(
+          'node',
+          DEFAULT_GATEWAY_INSTANCE,
+          record.pid,
+          runs,
+          snapshotUnavailable,
+        ),
+      ),
+    );
+    try {
+      if (context.platform === 'win32') process.kill(record.pid);
+      else process.kill(record.pid, 'SIGKILL');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+        printErr(ui.err(t('gateway.stopFailed', { pid: record.pid, detail: String(error) })));
+        return 1;
+      }
+    }
+    return confirmNodeStopped(context, entry, record.pid, sleep, print, printErr);
+  }
+
+  // 优雅（默认）：进程内 drain（写 resume 标记 + interrupt('shutdown')）+ 不限时等死 + 5s 进度。
+  // Windows 上外部 process.kill 是无条件终止，不先走这一步，在跑 run 的恢复标记一条都写不出来。
   const graceful = await shutdownGateway({
     record,
     token: token ?? '',
@@ -313,24 +353,27 @@ async function nodeStopCommand(deps: NodeCommandDeps): Promise<number> {
     requestTimeoutMs: 3_000,
   });
   if (graceful.ok) {
-    const graceDeadline = Date.now() + 10_000;
-    while (Date.now() < graceDeadline) {
-      if (!isProcessAlive(record.pid)) {
-        if (entry !== undefined) {
-          await cleanupGatewayStateEntry(context.dataDir, entry).catch(() => undefined);
-        }
-        print(ui.ok(t('node.stopped', { pid: record.pid })));
-        return 0;
+    // 默认不限时等死（用户裁定 #5，去掉硬编码 10s）+ 进度（哪些 run/session 还在跑）。
+    const wait = await waitForProcessExit(record.pid, {
+      sleep,
+      onProgress: (info) =>
+        print(ui.info(formatDrainProgressLine(`node ${DEFAULT_GATEWAY_INSTANCE}`, info))),
+      sampleRuns: nodeRunSampler(record, token ?? '', context.config.node?.tls !== undefined),
+    });
+    if (wait.dead) {
+      if (entry !== undefined) {
+        await cleanupGatewayStateEntry(context.dataDir, entry).catch(() => undefined);
       }
-      await sleep(100);
+      print(ui.ok(t('node.stopped', { pid: record.pid })));
+      return 0;
     }
   }
-  // P4：回退强杀 = 这次停止没有 drain，代打一行（宿主来不及自己说）。
+  // 优雅受理失败（老版本无该方法 / 网络）→ 回退既有强杀，代打 node.drain.skipped。
   printErr(
     ui.warn(
       formatEventLine('node.drain.skipped', {
         pid: record.pid,
-        reason: graceful.ok ? 'timeout' : (graceful.code ?? 'error'),
+        reason: graceful.ok ? 'error' : (graceful.code ?? 'error'),
       }),
     ),
   );
@@ -343,20 +386,30 @@ async function nodeStopCommand(deps: NodeCommandDeps): Promise<number> {
       return 1;
     }
   }
+  return confirmNodeStopped(context, entry, record.pid, sleep, print, printErr);
+}
 
+/** 强杀 / 回退杀后的有界确认等待（kill 应当很快）；确认死 → 条件清理 + 报告。 */
+async function confirmNodeStopped(
+  context: ResolvedNodeContext,
+  entry: GatewayStateEntry | undefined,
+  pid: number,
+  sleep: (ms: number) => Promise<void>,
+  print: (line: string) => void,
+  printErr: (line: string) => void,
+): Promise<number> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    if (!isProcessAlive(record.pid)) {
+    if (!isProcessAlive(pid)) {
       if (entry !== undefined) {
         await cleanupGatewayStateEntry(context.dataDir, entry).catch(() => undefined);
       }
-      print(ui.ok(t('node.stopped', { pid: record.pid })));
+      print(ui.ok(t('node.stopped', { pid })));
       return 0;
     }
     await sleep(100);
   }
-
-  printErr(ui.err(t('gateway.stopTimeout', { pid: record.pid, timeout: '10000ms' })));
+  printErr(ui.err(t('gateway.stopTimeout', { pid, timeout: '10000ms' })));
   return 1;
 }
 
@@ -467,7 +520,7 @@ export async function runNodeCommand(
     case 'status':
       return nodeStatusCommand(command, deps);
     case 'stop':
-      return nodeStopCommand(deps);
+      return nodeStopCommand(deps, command.force === true);
     case 'reload':
       return nodeReloadCommand(command, deps);
     case 'token':

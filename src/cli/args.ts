@@ -44,13 +44,16 @@ export type GatewayCommand =
     }
   | ({
       kind: 'stop';
-      timeoutMs: number;
+      /** 用户裁定 #5：缺省 undefined = 不限时 drain；显式 --timeout 才是可选上限。 */
+      timeoutMs?: number;
       /**
        * 0.55.1：缺省只停平台层，**不动 node/hub**（它们身上可能跑着会话，杀掉不可恢复）。
        * 破坏性动作要显式：`--stop-nodes` 才连 node/hub 一起停（整舰队真停）；
        * `--keep-nodes` / `--no-keep-nodes` 保留解析作兼容别名（前者等价缺省，后者等价 --stop-nodes）。
        */
       keepNodes?: boolean;
+      /** 用户裁定 #5：--force = 显式非正常退出（快照 + 强杀 + 审计 abnormal_exit）。 */
+      force?: boolean;
     } & GatewaySelector)
   | ({ kind: 'status'; json: boolean; rpc?: boolean } & GatewaySelector)
   | { kind: 'list'; json: boolean }
@@ -68,6 +71,8 @@ export type GatewayCommand =
        * 保留作兼容别名（前者等价缺省，后者等价 --stop-nodes）。
        */
       keepNodes?: boolean;
+      /** 用户裁定 #5：--force 传播到 stop 段（非正常退出 + 审计）；start 段无 force 语义。 */
+      force?: boolean;
     } & GatewaySelector)
   | ({ kind: 'reload'; scopes?: string[] } & GatewaySelector)
   | { kind: 'install-service'; target?: GatewayInstallTarget }
@@ -82,7 +87,7 @@ export type GatewayCommand =
 export type NodeCommand =
   | { kind: 'start'; daemon: boolean; configPath?: string }
   | { kind: 'status'; json: boolean; rpc: boolean }
-  | { kind: 'stop' }
+  | { kind: 'stop'; force?: boolean }
   | { kind: 'reload'; scopes?: string[] }
   /**
    * 0.56：`vessel node token [--print] [--json] [--node <id>]`。
@@ -584,7 +589,12 @@ export interface CliArgs {
    * 舰队级 `vessel stop`（CONTRACT-stop-semantics S1）。
    * 远程参数复用全局字段 connectArg/connectTokenArg/caArg（零新解析实体）。
    */
-  stopCommand: { yes: boolean; timeoutMs: number; selector: GatewaySelector } | null;
+  stopCommand: {
+    yes: boolean;
+    timeoutMs?: number;
+    force?: boolean;
+    selector: GatewaySelector;
+  } | null;
   /** 0.14：`vessel agents [--json]` */
   agentsCommand: { json: boolean } | null;
   /** 0.17：`vessel agent create|send|inbox|close|list|dispatch` */
@@ -2064,9 +2074,11 @@ function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `gateway stop [--timeout 10s] [--instance N|--port N|--all] [--stop-nodes]` */
+/** `gateway stop [--timeout 10s] [--instance N|--port N|--all] [--stop-nodes] [--force]` */
 function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
-  let timeoutMs = DEFAULT_STOP_TIMEOUT_MS;
+  // 用户裁定 #5：缺省不限时 drain（undefined）；显式 --timeout 才是可选上限。
+  let timeoutMs: number | undefined;
+  let force = false;
   // 0.55.1：缺省只停平台层，**不动 node/hub**（它们身上可能跑着会话，杀掉不可恢复）。
   // 破坏性动作要显式：`--stop-nodes` 才连 node/hub 一起停。
   let keepNodes = true;
@@ -2075,6 +2087,10 @@ function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
     const a = rest[i] ?? '';
     if (a === '--help' || a === '-h') {
       args.help = true;
+      continue;
+    }
+    if (a === '--force') {
+      force = true;
       continue;
     }
     if (a === '--stop-nodes') {
@@ -2123,8 +2139,9 @@ function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
   if (selectorError !== null) return { ok: false, error: selectorError };
   args.gateway = {
     kind: 'stop',
-    timeoutMs,
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     keepNodes,
+    ...(force ? { force: true } : {}),
     ...selector,
   };
   return { ok: true, args };
@@ -2210,6 +2227,7 @@ function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
   // 与 `stop` 同口径：要连 node 一起冷重启，显式写 `--stop-nodes`。
   // 注意：留活意味着 node 仍跑旧代码 —— 命令结尾会打印一行可复制的提示。
   let keepNodes = true;
+  let force = false;
   const selector: GatewaySelector = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
@@ -2219,6 +2237,10 @@ function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
     }
     if (a === '--daemon') {
       daemon = true;
+      continue;
+    }
+    if (a === '--force') {
+      force = true;
       continue;
     }
     if (a === '--stop-nodes') {
@@ -2261,6 +2283,7 @@ function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
     kind: 'restart',
     daemon,
     keepNodes,
+    ...(force ? { force: true } : {}),
     ...selector,
   };
   return { ok: true, args };
@@ -2598,13 +2621,18 @@ function parseNodeStatus(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `node stop [--data-dir <path>]` */
+/** `node stop [--force] [--data-dir <path>]` */
 function parseNodeStop(rest: string[], args: CliArgs): ParseResult {
+  let force = false;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === undefined) continue;
     if (a === '--help' || a === '-h') {
       args.help = true;
+      continue;
+    }
+    if (a === '--force') {
+      force = true;
       continue;
     }
     if (a === '--data-dir') {
@@ -2617,7 +2645,7 @@ function parseNodeStop(rest: string[], args: CliArgs): ParseResult {
     return { ok: false, error: `Unknown argument for node stop: ${a}` };
   }
   if (args.help) return { ok: true, args };
-  args.node = { kind: 'stop' };
+  args.node = { kind: 'stop', ...(force ? { force: true } : {}) };
   return { ok: true, args };
 }
 
@@ -2890,7 +2918,9 @@ function parseTokenArgs(rest: string[], args: CliArgs): ParseResult {
  */
 function parseStopArgs(rest: string[], args: CliArgs): ParseResult {
   let yes = false;
-  let timeoutMs = DEFAULT_STOP_TIMEOUT_MS;
+  let force = false;
+  // 用户裁定 #5：缺省不限时 drain（undefined）；显式 --timeout 才是可选上限。
+  let timeoutMs: number | undefined;
   const selector: GatewaySelector = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
@@ -2900,6 +2930,10 @@ function parseStopArgs(rest: string[], args: CliArgs): ParseResult {
     }
     if (a === '--yes') {
       yes = true;
+      continue;
+    }
+    if (a === '--force') {
+      force = true;
       continue;
     }
     if (a === '--timeout') {
@@ -2962,7 +2996,8 @@ function parseStopArgs(rest: string[], args: CliArgs): ParseResult {
     selector.instance !== undefined || selector.port !== undefined || selector.all === true;
   args.stopCommand = {
     yes,
-    timeoutMs,
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(force ? { force: true } : {}),
     selector: args.connectArg === null && !hasSelector ? { all: true } : selector,
   };
   return { ok: true, args };

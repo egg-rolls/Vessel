@@ -450,6 +450,13 @@ export const en: Record<MessageKey, string> = {
   'stop.poolResidue.count': '{count} engine state file(s) remain in {dir}',
   'stop.done': 'Fleet stop complete.',
   'stop.failed': 'Fleet stop did not fully succeed (see reasons above).',
+  // ── graceful stop / force audit (用户裁定 #5, cli-topology-design §5.3/§5.4) ──
+  'stop.drain.progress': '⏳ {label}: draining… {count} run(s) active (waited {waited})',
+  'stop.drain.snapshotUnavailable': 'run snapshot unavailable (listener closed)',
+  'stop.drain.escalate': 'escalate: vessel runs cancel <run_id>   |   vessel stop --force',
+  'stop.drain.timeout':
+    'Timed out waiting for drain (pid {pid}, {timeout}); the process is still running and was NOT killed. Cancel blocking runs or escalate with --force.',
+  'stop.forced.summary': 'abnormal exit: {name} — {count} run(s) cut{note}',
   'stop.remote.title': 'Remote platform inventory: {url}',
   'stop.remote.health': 'platform: {status} (version {version}, node_count {count})',
   'stop.remote.node': 'node {name} ({nodeId}): {status} {apiUrl}',

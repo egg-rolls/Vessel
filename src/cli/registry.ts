@@ -388,6 +388,7 @@ export const cliCommands: readonly CliCommand[] = [
         yes: command.yes,
         selector: command.selector,
         timeoutMs: command.timeoutMs,
+        ...(command.force === true ? { force: true } : {}),
         connectUrl: args.connectArg,
         connectToken: args.connectTokenArg,
         caFile: args.caArg,
