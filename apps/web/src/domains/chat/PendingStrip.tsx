@@ -229,7 +229,7 @@ function PendingRow({
       {fold && (
         <button
           type="button"
-          className="self-start font-mono text-2xs text-faint hover:text-ink"
+          className="bg-transparent self-start font-mono text-2xs text-faint hover:text-ink"
           onClick={fold.onToggle}
           aria-expanded={fold.open}
         >
@@ -929,7 +929,7 @@ export function PendingStrip({
               chevron 与 StreamCard 同形：收起指右，展开旋转 90° 指下。 */}
           <button
             type="button"
-            className="m-0 flex items-center gap-1 self-start font-mono text-2xs tracking-wide text-faint hover:text-ink"
+            className="bg-transparent m-0 flex items-center gap-1 self-start font-mono text-2xs tracking-wide text-faint hover:text-ink"
             onClick={() => setMode((prev) => (prev === 'collapsed' ? 'default' : 'collapsed'))}
             aria-expanded={mode !== 'collapsed'}
           >
@@ -1009,7 +1009,7 @@ export function PendingStrip({
           {mode === 'default' && view.hidden > 0 && (
             <button
               type="button"
-              className="m-0 self-start font-mono text-2xs text-faint hover:text-ink"
+              className="bg-transparent m-0 self-start font-mono text-2xs text-faint hover:text-ink"
               onClick={() => setMode('expanded')}
             >
               {t('chat.pending.expandAll', { count: view.hidden })}
@@ -1018,7 +1018,7 @@ export function PendingStrip({
           {mode === 'expanded' && (
             <button
               type="button"
-              className="m-0 self-start font-mono text-2xs text-faint hover:text-ink"
+              className="bg-transparent m-0 self-start font-mono text-2xs text-faint hover:text-ink"
               onClick={() => setMode('default')}
             >
               {t('chat.pending.collapseList')}
