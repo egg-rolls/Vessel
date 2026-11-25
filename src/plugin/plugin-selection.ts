@@ -1,21 +1,29 @@
 /**
  * 插件选择策略——bootstrap 与 `--tools` 共用，避免两处默认集漂移。
  *
- * 语义（0.7.1）：
- * - `plugins` 缺省（undefined）→ 全部非仓库插件也加载（默认信任模型，见下）；
+ * 语义（0.56.1 翻转，用户裁定「安装的插件默认开启」，main 批准方案 B）：
+ * - **覆盖层语义**：默认集（全部已安装的 in-process 能力插件）恒为底，
+ *   `plugins:` 条目只做覆盖，不再是「完整启用清单」：
+ *   - 条目 `enabled: false` → 排除（显式关永远优先）；
+ *   - 条目列入（enabled true / 缺省）→ 显式启用，可救回默认集之外的插件
+ *     （hook-logging、被 opt-out 挡下的外部插件等）；显式列表即信任，
+ *     opt-out 不影响显式指定的外部插件；
+ *   - 未列入 → 走默认集（**新装插件不配置即装载**）。
+ * - `plugins: []` = 无覆盖 = 完整默认集（旧语义是空集，破坏点见下）；
+ * - 默认集排除项（结构性，非「用户装的插件」语义范畴）：provider 类（专用装配）、
+ *   FACTORY_PLUGINS（bootstrap 按专用配置构造）、hook-logging（VESSEL_DEBUG 门控）、
+ *   child（宿主 spawn，不进 in-process 名单）；OPT_IN_PLUGINS 现为空集（media 已转默认）；
  * - `VESSEL_NO_EXTERNAL_PLUGINS=1|true` 时，默认集只选 `source === 'repo'`；
- * - `plugins` 出现（含空数组）→ 不回退默认集，只加载显式启用项；
- *   显式列表即信任，opt-out 不影响显式指定的外部插件；
- * - 全为 `enabled:false` → 为空，绝不回退为「全部插件」；
  * - 声明式 `guardrails:` / `hooks:` 条目按插件名追加（本身即显式 opt-in）；
  * - 显式 `plugins` 项的 `enabled` 是最终裁决：`false` 不能被声明式条目重新启用。
  *
- * ⚠ 完整 opt-in 列表陷阱（金丝雀 issue-0）：`plugins:` 一旦出现就是**完整**启用清单，不是
- * 「在默认集上追加/覆盖」。只想改某个内置插件的配置（如 web-tools 的 always_register）而写
- * `plugins: [{name: web-tools, ...}]`，会把其余内置插件（basic-tools 的 bash/read/edit/write 等）
- * 全部排除——热应用会据此从活体节点剥离这些工具。要保留内置工具，须把它们一并列入 `plugins:`，
- * 或干脆不写 `plugins:`（走默认集）、仅用该插件自身的配置键。引擎注册表与成员工具面已对齐到
- * 同一轮边界（见 cli.ts tools applier 的 retain 同步），剥离不再产生「被广告却执行不了」的窗口。
+ * ⚠ 旧契约（≤0.56.0，金丝雀 issue-0）已推翻：`plugins:` 一旦出现曾是**完整**启用清单，
+ * 写部分清单会把其余内置插件全部排除（热应用据此从活体节点剥离工具）。覆盖层语义下
+ * 部分清单只覆盖所列条目，issue-0 陷阱随之消失。**存量配置行为变化**：靠部分清单刻意
+ * 只开少数插件的配置，现在会开启完整默认集，须用 `enabled: false` 显式关——金丝雀重点
+ * 回归项。`vessel plugin enable|disable` 不再物化全量清单（只写目标单条），新装插件
+ * 不会再被物化清单静默排除。引擎注册表与成员工具面的轮边界原子收敛（cli.ts tools
+ * applier 的 retain 同步）不受影响：剥离仍只发生在显式 enabled:false / 声明式停用时。
  *
  * 默认集里的外部插件（project / user / node_modules）会在启动时告警一次：
  * 它们以完整进程权限运行，不可信仓库应显式 opt-out。
@@ -69,45 +77,43 @@ export function resolvePluginSelection(
   const aliases = pluginAliasMap(descriptors);
   const canonicalName = (name: string): string => aliases.get(name) ?? name;
 
-  let external: PluginDescriptor[] = [];
-
-  if (configured === undefined) {
-    // 默认集：排除调试插件、工厂式插件与 opt-in 插件；opt-out 时只保留仓库内插件。
-    // 0.43：child 插件（体验插件）由宿主 spawn，不进入 in-process 装载名单。
-    // 0.52：OPT_IN_PLUGINS（media）默认不加载——必须由 config.yaml 的 plugins: 显式启用。
-    const defaults = descriptors.filter(
-      (descriptor) =>
-        descriptor.mode === 'in-process' &&
-        descriptor.category !== 'provider' &&
-        !FACTORY_PLUGINS.has(descriptor.name) &&
-        !OPT_IN_PLUGINS.has(descriptor.name) &&
-        descriptor.name !== 'hook-logging' &&
-        (!noExternal || descriptor.source === 'repo'),
-    );
-    for (const descriptor of defaults) {
-      selected.set(descriptor.name, { name: descriptor.name });
-    }
-    external = defaults.filter((descriptor) => descriptor.source !== 'repo');
-  } else {
-    for (const entry of configured) {
-      if (entry.enabled === false) continue;
-      selected.set(canonicalName(entry.name), entry);
-    }
+  // 显式条目（覆盖层）先归一：enabled:false 排除；列入 = 显式启用（最终裁决）。
+  const explicitlyEnabled = new Set<string>();
+  const explicitlyDisabled = new Set<string>();
+  for (const entry of configured ?? []) {
+    const name = canonicalName(entry.name);
+    if (entry.enabled === false) explicitlyDisabled.add(name);
+    else explicitlyEnabled.add(name);
   }
 
-  // 显式 plugins 项是最终裁决：
-  // - 显式 enabled:true 不被声明式 enabled:false 关掉；
-  // - 显式 enabled:false 不被声明式条目重新启用。
-  const explicitlyEnabled = new Set(
-    (configured ?? [])
-      .filter((entry) => entry.enabled !== false)
-      .map((entry) => canonicalName(entry.name)),
+  // 默认集（恒为底）：排除调试插件、工厂式插件与 opt-in 插件（现为空集）；
+  // opt-out 时只保留仓库内插件。
+  // 0.43：child 插件（体验插件）由宿主 spawn，不进入 in-process 装载名单。
+  // 0.56.1：media 已转默认（OPT_IN_PLUGINS 清空）——装的插件默认开启。
+  const defaults = descriptors.filter(
+    (descriptor) =>
+      descriptor.mode === 'in-process' &&
+      descriptor.category !== 'provider' &&
+      !FACTORY_PLUGINS.has(descriptor.name) &&
+      !OPT_IN_PLUGINS.has(descriptor.name) &&
+      descriptor.name !== 'hook-logging' &&
+      (!noExternal || descriptor.source === 'repo'),
   );
-  const explicitlyDisabled = new Set(
-    (configured ?? [])
-      .filter((entry) => entry.enabled === false)
-      .map((entry) => canonicalName(entry.name)),
+  for (const descriptor of defaults) {
+    selected.set(descriptor.name, { name: descriptor.name });
+  }
+  // 显式列入的外部插件视为已信任，不计入启动告警（旧契约保留）。
+  const external = defaults.filter(
+    (descriptor) => descriptor.source !== 'repo' && !explicitlyEnabled.has(descriptor.name),
   );
+
+  // 覆盖：显式 enabled:false 从默认集移除；列入条目带自身 config 覆盖默认条目。
+  // 未列入的插件保持默认集成员身份——新装插件不配置即装载。
+  for (const entry of configured ?? []) {
+    const name = canonicalName(entry.name);
+    if (entry.enabled === false) selected.delete(name);
+    else selected.set(name, entry);
+  }
 
   // 声明式 guardrails/hooks：按名字启用或停用。
   for (const entry of declarative) {

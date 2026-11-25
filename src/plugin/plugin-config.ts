@@ -75,16 +75,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export interface SetPluginEnabledOptions {
   /** 用户配置文件；缺省 `~/.vessel/config.yaml` */
   configPath?: string;
-  /**
-   * `plugins:` 尚未出现时用于物化当前默认集（避免只写一条导致其它插件失去
-   * 默认加载）。通常传 `loader.getAvailablePlugins()`。
-   */
-  allNames?: readonly string[];
 }
 
 /**
  * 持久化单个插件的启用状态：只改 `plugins[]` 里该 name 的 `enabled`，
- * 保留其它键与配置根对象；`plugins:` 不存在时按 `allNames` 物化默认集。
+ * 保留其它键与配置根对象。
+ *
+ * 0.56.1 覆盖层语义：**不再物化全量默认集**——`plugins:` 条目只覆盖默认集
+ * （未列入 = 走默认），写目标单条即可。旧物化逻辑有两个缺陷：物化名单与运行时
+ * 默认集漂移（getAvailablePlugins 不排除 media/hook-logging）；物化后新装插件
+ * 被完整清单静默排除。覆盖层下两者都不复存在。
  */
 export async function setPluginEnabled(
   name: string,
@@ -100,13 +100,7 @@ export async function setPluginEnabled(
       throw new Error('config.yaml plugins must be an array');
     }
 
-    const entries: unknown[] =
-      raw === undefined
-        ? (options.allNames ?? []).map((entryName) => ({
-            name: entryName,
-            enabled: entryName === name ? enabled : true,
-          }))
-        : raw.map((entry) => (isRecord(entry) ? { ...entry } : entry));
+    const entries: unknown[] = (raw ?? []).map((entry) => (isRecord(entry) ? { ...entry } : entry));
 
     const index = entries.findIndex((entry) => isRecord(entry) && entry.name === name);
     if (index >= 0) {
@@ -118,6 +112,39 @@ export async function setPluginEnabled(
     root.plugins = entries;
     await writeUserConfigRoot(configPath, root);
   });
+}
+
+/**
+ * 覆盖层语义的启用判定（0.56.1，child 与 in-process 显示同一口径）：
+ * 条目缺省 = 启用（装的插件默认开启）；只有显式 `enabled: false` 才关。
+ * 宿主装配（pluginEnabledInConfig）与 CLI 列表（pluginEnabledByConfig）共用，
+ * 消除「宿主加载了、CLI 显示 no」的两套口径漂移。
+ */
+export function pluginEntryEnabled(
+  configured: readonly PluginConfig[] | undefined,
+  name: string,
+): boolean {
+  const entry = configured?.find((candidate) => candidate.name === name);
+  return entry === undefined || entry.enabled !== false;
+}
+
+/**
+ * 工厂式插件的启用**显示**口径（0.56.1，CLI 列表与面板基础行共用）：
+ * 工厂式插件不进 PluginLoader 装载名单，但确有启用语义——按实际装配门控标注
+ * （与 bootstrap wiring 同源），不按 plugins[] 条目猜。engine-client 等装配层
+ * 基础设施无用户面启用语义，恒显示未启用（与 CLI 列表同一口径）。
+ */
+export function factoryPluginDisplayEnabled(config: VesselConfig, name: string): boolean {
+  switch (name) {
+    case 'mcp-client':
+      return Object.values(config.mcpServers ?? {}).some((server) => server.enabled !== false);
+    case 'evals':
+      return config.evals?.enabled !== false;
+    case 'feishu':
+      return config.feishu?.enabled === true;
+    default:
+      return false;
+  }
 }
 
 /**

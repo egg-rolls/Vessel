@@ -20,6 +20,7 @@ import {
   resolvePluginHttpLimits,
   type PluginDescriptor as ServePluginDescriptor,
 } from '../../packages/serve/src/index';
+import { pluginEntryEnabled } from './plugin-config';
 import type { PluginDescriptor as LoaderPluginDescriptor, PluginLoader } from './plugin-loader';
 import type { PluginManifest } from './plugin-manifest';
 
@@ -52,10 +53,9 @@ export function pluginSettingsFor(config: VesselConfig, id: string): Record<stri
   return entry?.config !== undefined ? { ...entry.config } : {};
 }
 
-/** `plugins[]` 里某 plugin 的启用状态；缺省 true */
+/** `plugins[]` 里某 plugin 的启用状态；缺省 true（覆盖层语义，与 CLI 列表共用判定） */
 function pluginEnabledInConfig(config: VesselConfig, id: string): boolean {
-  const entry = config.plugins?.find((candidate) => candidate.name === id);
-  return entry === undefined || entry.enabled !== false;
+  return pluginEntryEnabled(config.plugins, id);
 }
 
 /** loader child descriptor → serve 宿主描述（title 等展示字段补默认值） */

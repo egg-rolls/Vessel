@@ -201,6 +201,13 @@ session:
   `['agent.close']`；显式配置整体替换默认，不合并。
 - `plugins[].config`：`Record<string, unknown>`，原样传给 `install(host, { config })`；
   未声明 `config` 时按 `install(host)` 调用，旧插件不受影响。
+- `plugins[]` 是**覆盖层语义**（0.56.1 翻转，用户裁定「安装的插件默认开启」；旧「完整启用
+  清单」契约作废）：默认集（全部已安装的 in-process 能力插件，含 media）恒为底，条目只做
+  覆盖——`enabled: false` 排除、列入 = 显式启用、未列入 = 走默认（**新装插件不配置即装载**）；
+  `plugins: []` = 完整默认集。结构性排除不进默认集：provider 类（专用装配）、工厂式插件
+  （feishu / mcp-client / evals / engine-client，按各自专用配置门控）、hook-logging
+  （`VESSEL_DEBUG` 门控）、child 体验插件（宿主 spawn，缺省启用）。**存量配置行为变化**：
+  靠部分清单刻意只开少数插件的配置，现在会开启完整默认集，须用 `enabled: false` 显式关。
 - 插件目录：仓库 `plugins/`、用户 `~/.vessel/plugins/`（Windows
   `%USERPROFILE%\.vessel\plugins\`）、项目 `./.vessel/plugins/`；启动时各扫描一次，
   新增插件仍需重启。安装 / 卸载只接受本地目录，不做远程市场：

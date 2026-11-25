@@ -153,6 +153,7 @@ import {
 import {
   buildPluginConfigMap,
   declarativePluginEntries,
+  factoryPluginDisplayEnabled,
   setPluginConfigValue,
 } from './plugin/plugin-config';
 import {
@@ -1447,7 +1448,22 @@ async function runWithConfig(result: BootstrapResult) {
       for (const configured of gatewayBundle.config.plugins ?? []) {
         if (configured.enabled === false && !loaded.has(configured.name)) {
           listed.push({ name: configured.name, enabled: false });
+          loaded.add(configured.name);
         }
+      }
+      // 0.56.1：发现但未装载的插件也补基础行（否则面板/catalog 完全不可见——
+      // catalog 缺行即跳过）。工厂式按实际装配门控标注（与 CLI 列表共用
+      // factoryPluginDisplayEnabled）；其余未装载（opt-out / debug 门控 /
+      // 加载失败）显示关。child 行由 manager.statuses() 提供，不在此补。
+      for (const descriptor of gatewayBundle.pluginLoader.list()) {
+        if (loaded.has(descriptor.name) || descriptor.mode === 'child') continue;
+        listed.push({
+          name: descriptor.name,
+          enabled:
+            FACTORY_PLUGINS.has(descriptor.name) &&
+            factoryPluginDisplayEnabled(gatewayBundle.config, descriptor.name),
+        });
+        loaded.add(descriptor.name);
       }
       return listed;
     };
