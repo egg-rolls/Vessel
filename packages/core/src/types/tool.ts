@@ -3,7 +3,7 @@
  * @module @vessel-agent/core/tools
  */
 
-import type { EventStream } from './event.js';
+import type { EventStream, RunEvent } from './event.js';
 import type { Message } from './provider.js';
 
 /** 工具上下文 */
@@ -18,6 +18,21 @@ export interface ToolContext {
   messages: Message[];
   /** 事件流（ADR-026/027：工具可发事件、等事件，实现交互暂停） */
   events: EventStream;
+  /**
+   * 事实发射端口（q-card-robust P-A，additive）：经装配方的 `publishEvent`
+   * （journal → 时间线双写）发布**用户应见的事实事件**，与内置 PermissionPolicy
+   * 的 emit 包装同构（execution-unit.ts 装配处）。
+   *
+   * 为什么需要它：`events.publish` 是裸流——只到 hub 广播 / 注册表，**不进会话
+   * 时间线**；时间线 epoch 的 Web 连接只收时间线记录，裸流发布的审批卡 live 永远
+   * 到不了浏览器（rotate 审批卡根因，见 docs/dev/plans/envcard-run-visibility-research.md
+   * Part II）。工具手搓审批（publish + waitFor）时，请求 / 收卡信号应走本端口；
+   * `waitFor` 仍用 `events`（同一条流，应答照旧到达）。
+   *
+   * 缺省（旧装配 / harness 未注入）= 工具退回 `events.publish`，行为逐字节不变。
+   * 只用于事实类型；过程信号（observe/internal）仍走 `events`。
+   */
+  emitFact?: (event: RunEvent) => void;
   /** 当前 run 的 AbortSignal（F10）；工具可用它响应取消 */
   signal?: AbortSignal;
   /**

@@ -113,6 +113,11 @@ export interface ListedInteraction {
   created_at: number;
   status: StoredInteractionStatus;
   /**
+   * q-card-robust P-B（additive）：orphaned 的原因（如 `approval_timeout`）。
+   * 缺省键 = run 终态孤儿化 / 旧记录，客户端不必读它也能按 status 收卡。
+   */
+  orphan_reason?: string;
+  /**
    * 0.52：ask 的语义（`async` = 投放到待批页后立即返回成功，答案稍后起新 run）。
    * 缺省键 = sync（阻塞型），旧客户端不受影响。
    */
@@ -154,6 +159,7 @@ const interactionItemSchema = {
     questions: {},
     created_at: { type: 'number' },
     status: { type: 'string', enum: ['pending', 'answered', 'orphaned'] },
+    orphan_reason: { type: 'string' },
     mode: { type: 'string', enum: ['sync', 'async'] },
     // 逐题进度（additive）：部分已答的 pending 请求靠它告诉待批页还剩哪几题。
     answered_questions: { type: 'array', items: { type: 'string' } },
@@ -201,6 +207,7 @@ function collectInteractions(sources: InteractionSources): ListedInteraction[] {
       ...(kind === 'ask' ? { questions: record.input } : { input: record.input }),
       created_at: record.created_at,
       status: record.status,
+      ...(record.orphan_reason !== undefined ? { orphan_reason: record.orphan_reason } : {}),
       ...(record.mode === 'async' ? { mode: 'async' as const } : {}),
       ...(record.answered_questions !== undefined && record.answered_questions.length > 0
         ? { answered_questions: record.answered_questions }

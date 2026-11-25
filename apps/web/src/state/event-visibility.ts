@@ -153,6 +153,12 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   // 它**不是**失败类（不叫 `.failed`/`.error`）：写者的洞由写者自己声明（`holes`），
   // 这条只说明「有一路客户端核不上自己的游标」，方向上不低于「可能客户端算错」。
   'timeline.gap_reported': { tier: 'observe', live: true },
+  // q-card-robust A-Web（分级纠正）：事件本体仍 internal（skill / 附件等**非 vessel:***
+  // 注入默认隐藏，档位语义不变），但**带稳定 message_id 的 vessel:* 环境信息注入**
+  // 经 entry 级判据（`isEnvInjectionVisible`）统一放行 —— inbox / peer 状态 / PII /
+  // 容量 / 工具面 / self-card 都是同级环境信息，与消息 kind 层（ENV_MESSAGE_KINDS）
+  // 的「恒可见」裁定对齐（此前裁定未穿透事件层，run 中注入的卡 live 全被挡）。
+  // 放行后由 buildLiveItems 的 injectedNoticeOfEvent 投影成环境卡（与历史侧同一入口）。
   'message.injected': { tier: 'internal', live: true },
   'message.compaction': { tier: 'internal', live: true },
   'limit.blocked': { tier: 'internal', live: true },
@@ -175,6 +181,8 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   // 注入锚点事件（runtime-notice-hook）：注入的 vessel:notice 消息本体已由环境信息卡
   // 表示（live 经 message.injected 投影、历史经消息回填）。用户裁决（单一表示）：
   // 不再另出「未知事件类型」系统卡 ⇒ observe；诊断仍可在 Runs / Observe 读原始事件。
+  // q-card-robust A-Web 起该前提重新成立：message.injected 的 vessel:* 注入经
+  // entry 级判据放行，投影分支可达（此前 internal 闸门把承接链断了）。
   'runtime.notice.injected': { tier: 'observe', live: true, 承接: 'card' },
   // 团队预算：预警 / 阻断 / 人工覆盖都是「同一笔预算怎么被改」的审计。有会话归属，
   // 所以是**真外泄**面；本轮按 `internal`（展开可见）落档，若产品要「可行动」应比照
@@ -322,14 +330,47 @@ export interface ChatVisibility {
 }
 
 /**
+ * entry 级判据（q-card-robust A-Web，分级纠正）：**vessel:* 环境信息注入统一可见**。
+ *
+ * 用户裁定（agent 可见 = 人类可见）：凡注入 agent 上下文的 `vessel:*` 消息
+ * （inbox 计数 / peer 状态 / PII 失效与容量 / 工具面 / self-card / 来源行……）都是
+ * 同级环境信息，都该以环境卡展示 —— 不是 inbox/PII 的特例白名单，而是把「环境信息」
+ * 这一类的分级对齐到消息 kind 层早已裁定的「恒可见」（ENV_MESSAGE_KINDS）。
+ *
+ * 判据与 `transcript-items.ts#injectedNoticeOfEvent`（投影分支）**逐字同口径**：
+ * 闸门放行的每一条都必须能被投影成卡，否则会在聊天里漏出原始事件行。
+ * - `message.injected` 且 `data.message.name` 以 `vessel:` 开头（前缀与
+ *   `RUNTIME_MESSAGE_PREFIX` 人工同步；state 层不反向 import domains 层）；
+ * - 带稳定 `message_id`（历史落盘后按 id 让位，不双出；无 id 的旧数据保持 internal）；
+ * - 非空字符串正文（空注入无卡可画，投影同样跳过）。
+ * 非 vessel:* 注入（skill / 附件等）不放行，仍归 internal 档。
+ */
+export function isEnvInjectionVisible(type: string, data: unknown): boolean {
+  if (type !== 'message.injected') return false;
+  if (data === null || typeof data !== 'object') return false;
+  const message = (data as Record<string, unknown>).message;
+  if (message === null || typeof message !== 'object') return false;
+  const { name, message_id: messageId, content } = message as Record<string, unknown>;
+  if (typeof name !== 'string' || !name.startsWith('vessel:')) return false;
+  if (typeof messageId !== 'string' || messageId.length === 0) return false;
+  if (typeof content !== 'string' || content.trim().length === 0) return false;
+  return true;
+}
+
+/**
  * 单条事件在会话时间线里是否可见（`groupEvents` / `EventGroupCache` 共用这一个判据）。
  *
  * - `content` ⇒ 恒可见；
  * - `observe` ⇒ 恒不可见（与开关无关）；
  * - `internal` / **未登记** ⇒ 仅 `showInternal` 时可见；`ui.errorLevel: all` 仍按旧语义
  *   放出 internal 级的失败类（非失败类的内部事件不因此解禁）。
+ *
+ * entry 级判据（additive 第三参）：给了事件载荷时，vessel:* 环境信息注入
+ * （`isEnvInjectionVisible`）按内容性质恒可见 —— 档位表管「类型」，这里补「载荷」，
+ * 两层合起来才是完整的分级。未给载荷的调用方行为逐字不变。
  */
-export function isVisibleInChat(type: string, options: ChatVisibility): boolean {
+export function isVisibleInChat(type: string, options: ChatVisibility, data?: unknown): boolean {
+  if (data !== undefined && isEnvInjectionVisible(type, data)) return true;
   const tier = tierOf(type);
   if (tier === 'observe') return false;
   if (tier === 'content') return true;

@@ -1099,6 +1099,10 @@ export class ExecutionUnit {
       permission: this.permissionPolicy,
       guardrails: this.guardrails,
       hooks: this.hooks,
+      // q-card-robust P-A：工具手搓审批（agent rotate）的事实发射端口，与上面
+      // PermissionPolicy 的 emit 包装同一先例 —— 经 publishEvent（journal）才能
+      // 进会话时间线，时间线订阅的 Web 连接 live 可见、刷新可回放重建。
+      emitFact: (event) => this.publishEvent(event),
       // 0.52：工具参数求值前把 `«pii:…»` 换回真值；解不开就整调用失败。
       // onHandleFailure 只负责「整批失效」这一档的系统级提示卡（每 session 至多一张）。
       pii: {
@@ -1149,15 +1153,28 @@ export class ExecutionUnit {
   }
 
   /**
-   * 向当前上下文追加一条 `vessel:notice`（身份变更等运行时提示）。
+   * 向当前上下文追加一条 `vessel:notice`（身份变更 / PII 状态等运行时提示）。
    *
-   * 只走 addContext：同步写上下文并发布 `context.changed`；**不入队、不启动 run**。
-   * 下一轮请求（当前 run 的后续迭代或下一次 run）在尾部看到该消息。调用方需保证
-   * 上下文已初始化（成员 runtime 在首次 runTurn 前改用 RunOptions.messages 注入）。
+   * q-card-robust A-Core：有 active run 时改走 `appendInjectedMessages` —— 与 hook
+   * 注入**同载体**：发 `message.injected` 事实（经 publishEvent → journal → 时间线，
+   * live 即显 + 刷新可回放重建），再 addContext 写上下文（`context.changed` 照发，
+   * 观测面 / TUI 仍消费它）。此前只走 addContext：`context.changed` 是非事实类型
+   * （run-journal 不派发）且广播副本被摘要剥掉 data.message，PII/身份卡 live 永远
+   * 到不了时间线订阅的浏览器、历史也不进事件投影（根因见
+   * docs/dev/plans/envcard-run-visibility-research.md Part I 通道 B）。
+   *
+   * **发射条件化（用户裁定）**：本入口只负责载体可达；发不发由生产者裁 ——
+   * PII 卡只在 PII 真生效（发生过脱敏 / 句柄失效 / 容量降级）时发，没脱敏不发，
+   * 防噪声（见 appendPiiDeadNotice / onPiiHandleFailure 的 isEnabled + 去重预算）。
+   *
+   * **不入队、不启动 run**。下一轮请求（当前 run 的后续迭代或下一次 run）在尾部
+   * 看到该消息。调用方需保证上下文已初始化（成员 runtime 在首次 runTurn 前改用
+   * RunOptions.messages 注入）。
    *
    * 0.56：提示也是**进了会话的消息**，所以在这里（唯一构造点）盖 `message_id`。
    * 时间戳同样在构造时定死 —— id 由「归属 + 时间戳」拼出，两者必须同源，之后
-   * `addContext` / 快照追加都不再改写它们，否则同一条提示会拿到两个身份。
+   * `appendInjectedMessages`（withMessageId 只补缺）/ 快照追加都不再改写它们，
+   * 否则同一条提示会拿到两个身份。
    */
   appendNotice(text: string): void {
     const execution = this.activeRun;
@@ -1171,7 +1188,9 @@ export class ExecutionUnit {
       message_id: noticeMessageIdOf(owner, timestamp),
     };
     if (execution !== undefined) {
-      this.addContext(message, execution.runId);
+      // A-Core：message.injected 事实 + addContext（context.changed 照发）。
+      // 构造处已盖 noticeMessageIdOf，withMessageId 不覆盖 ⇒ 事件/落盘/让位同 id。
+      this.appendInjectedMessages(execution, execution.runId, [message]);
       return;
     }
     // PLAN §4.3：无 active Run 时把 notice 追加到 SessionState.messages 快照，
@@ -2261,6 +2280,12 @@ export class ExecutionUnit {
    * append-only 决定了「失效」只能以**追加**表达（不能回改成新的标记形状）。
    * 去重靠 `claimUnannouncedDeadHandles`：同一批 id 只宣告一次，之后每轮不再重复。
    * 整批失效（broker 重启）与个别失效共用同一张卡的额度（每 session 至多一张）。
+   *
+   * **发射条件化（q-card-robust，用户裁定）**：PII 真生效才发 —— 本函数的每条发射
+   * 路径都以「发生过脱敏」的证据为前提：死句柄（句柄化曾发生）/ 容量降级计数 > 0
+   * （掩码曾发生）/ 整批失效（broker 重启前有句柄）；`vault.isEnabled` 为 false 直接
+   * 返回。没脱敏 ⇒ 无句柄、无降级、无失效，三条路都走不到 appendNotice，不发噪声卡。
+   * 载体（appendNotice → message.injected 事实）只保证「发了就可达」，不制造发射。
    */
   private async appendPiiDeadNotice(sessionId: string): Promise<void> {
     // 节奏 gate 在扫消息之前（run 级配置下后续请求不观察；去重轴不受影响）。

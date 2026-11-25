@@ -89,6 +89,14 @@ export interface StoredInteraction {
   created_at: number;
   status: StoredInteractionStatus;
   /**
+   * q-card-robust P-B（additive）：记录转 `orphaned` 的原因。
+   *
+   * 目前唯一生产者是 `tool.permission.expired` 收口（审批超时，如
+   * `approval_timeout`）—— 与 run 终态孤儿化区分开，供节点侧诊断。
+   * 缺省（旧记录 / run 终态孤儿化）= 不写该键，读侧无需迁移。
+   */
+  orphan_reason?: string;
+  /**
    * 0.33：headless 因无人应答而挂起的 ask。
    *
    * 该 run 的 checkpoint 是 `interrupted`（可 resume），请求必须跨进程保留为
@@ -207,6 +215,7 @@ function parseRecord(value: unknown): StoredInteraction | null {
   const parentSessionId = nonEmptyString(parent_session_id);
   const parentAgentId = nonEmptyString(parent_agent_id);
   const toolCallId = nonEmptyString(tool_call_id);
+  const orphanReason = nonEmptyString(value.orphan_reason);
   return {
     requestId,
     run_id,
@@ -221,6 +230,7 @@ function parseRecord(value: unknown): StoredInteraction | null {
     input,
     created_at,
     status,
+    ...(orphanReason !== undefined ? { orphan_reason: orphanReason } : {}),
     ...(value.suspended === true ? { suspended: true } : {}),
     ...(value.mode === 'async' ? { mode: 'async' as const } : {}),
     ...(answeredQuestions !== undefined ? { answered_questions: answeredQuestions } : {}),

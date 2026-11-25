@@ -722,6 +722,35 @@ export function createInteractionsRegistry(
       }
       return;
     }
+    if (event.type === 'tool.permission.expired') {
+      // q-card-robust P-B：审批超时收口。此前注册表不处理 expired —— 记录仍
+      // pending 直到 run 终态才 orphaned，本端浏览器靠 rememberExpiredRequestId
+      // 不复活死卡，但**换设备/换浏览器刷新**会在「expired 之后、run 终态之前」
+      // 的窗口里经 interactions.list 补回一张点了也没用的卡。这里把记录收口为
+      // orphaned（+原因），让任何端的快照都收敛；迟到应答走 respondPermission
+      // 的 run_ended 分支，不再投递进已无人等待的流。
+      // 幂等：只收 pending 的 permission 记录；已 answered / 已 orphaned（含
+      // run 终态孤儿化）原样保留，终态清理循环也只碰 pending，互不覆盖。
+      const data = isRecord(event.data) ? event.data : {};
+      const requestId = nonEmptyString(data.requestId);
+      if (requestId !== undefined) {
+        pendingPermissions.delete(requestId);
+        const record = interactionRecords.get(requestId);
+        if (
+          record !== undefined &&
+          record.status === 'pending' &&
+          (record.kind ?? 'permission') === 'permission'
+        ) {
+          rememberRecord({
+            ...record,
+            status: 'orphaned' as StoredInteractionStatus,
+            orphan_reason: nonEmptyString(data.reason) ?? 'expired',
+          });
+          persist();
+        }
+      }
+      return;
+    }
     if (event.type === 'ask.user.requested') {
       const data = isRecord(event.data) ? event.data : {};
       const requestId = nonEmptyString(data.requestId);

@@ -80,6 +80,14 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/obser
 `apps/web/src/state/event-visibility.ts`（`EVENT_TIERS` + `EVENT_TIER_FAMILIES` +
 `tierOf` / `isVisibleInChat`），不要在渲染层另写可见性判断。
 
+**entry 级判据（q-card-robust A-Web，分级纠正）**：档位表管「类型」，载荷谓词补
+「内容」——`message.injected` 本体仍 `internal`，但**带稳定 `message_id` 的 `vessel:*`
+环境信息注入**（inbox 计数 / peer 状态 / PII 失效与容量 / 工具面 / self-card / 来源行）
+经 `isEnvInjectionVisible` 统一恒可见，由 `buildLiveItems` 的 `injectedNoticeOfEvent`
+投影成环境卡（与历史侧同一入口、按 id 让位不双出）。这是把消息 kind 层
+（`ENV_MESSAGE_KINDS`）早已裁定的「环境信息恒可见」穿透到事件层：所有环境信息同级，
+不是 inbox/PII 的特例白名单。非 `vessel:*` 注入（skill / 附件等）与无 id 旧数据不放行。
+
 | 档 | 含义 | 聊天时间线 | 团队日志 |
 |---|---|---|---|
 | `content` | 用户要读的对话内容（正文 / 工具 / 输入 / run 终态 / 真失败） | 恒可见 | 按 `teamLog` |
