@@ -71,6 +71,13 @@ export const EXTRA_LIMITS = {
   maxSerializedBytes: 8192,
 } as const;
 
+/**
+ * OpenAI 兼容 budget 形状：max_tokens 容纳 thinking_budget 时的输出余量（TI5-4）。
+ * 抬升只在 max_tokens <= thinking_budget（必 400）时触发；余量保证严格大于约束
+ * 且留足单轮响应空间（长 tool_call arguments / 代码块）。固定常量，无厂商语义。
+ */
+export const OPENAI_THINKING_OUTPUT_HEADROOM = 8192;
+
 /** 进程内一次性告警去重（按签名；避免每轮请求刷屏）。 */
 const warned = new Set<string>();
 
@@ -239,4 +246,40 @@ export function applyAnthropicThinkingConsistency(
     next.thinking = { ...t, budget_tokens: clamped };
   }
   return next;
+}
+
+/**
+ * OpenAI 兼容 budget 形状 thinking 一致性兜底（TI5-4，用户裁定：抬 max_tokens 容纳）。
+ *
+ * 与 applyAnthropicThinkingConsistency 同判据：只做**形状一致性**不做厂商语义映射——
+ * 认识的是「budget 形状两数值键的序关系」这一传输协议硬事实（网关校验
+ * max_completion_tokens > thinking_budget，max_tokens 被网关翻译为 max_completion_tokens），
+ * 不认识任何厂商。哲学与 Anthropic 相反（用户裁定）：thinking 强度只是额外透传参数，
+ * **不该被 clamp**；max_tokens 放不下预算 ⇒ 抬 max_tokens 容纳，而不是砍思考。
+ *
+ * 触发（全满足才动 body）：thinking_budget 为有限正数 && enable_thinking !== false
+ * && max_tokens 为 number 且 <= thinking_budget（必 400 形状）。
+ * 动作：max_tokens 抬到 thinking_budget + 8192（输出余量；严格大于约束 + 响应空间），
+ * 克隆只改这一个键 + 一次性告警。不 clamp budget、不丢 thinking。
+ *
+ * 无 thinking_budget / 非 budget 形状 / 显式关闭 / max_tokens 已够 ⇒ 返回原对象
+ * （逐字节不变）。绝不抛错。
+ */
+export function applyOpenAIThinkingConsistency(
+  body: Record<string, unknown>,
+  warn: (msg: string) => void = defaultExtraWarning,
+): Record<string, unknown> {
+  const budget = body.thinking_budget;
+  if (typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0) return body;
+  if (body.enable_thinking === false) return body;
+  const maxTokens = body.max_tokens;
+  if (typeof maxTokens !== 'number' || maxTokens > budget) return body;
+
+  const raised = budget + OPENAI_THINKING_OUTPUT_HEADROOM;
+  warnOnce(
+    warn,
+    'openai-thinking-budget-raise',
+    `request-extras: max_tokens ${maxTokens} <= thinking_budget ${budget}; raised max_tokens to ${raised} to accommodate thinking`,
+  );
+  return { ...body, max_tokens: raised };
 }

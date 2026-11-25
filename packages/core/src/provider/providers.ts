@@ -15,6 +15,7 @@ import type { ToolCall } from '../types/tool.js';
 import { ProviderHttpError, parseRetryAfterMs } from './errors.js';
 import {
   applyAnthropicThinkingConsistency,
+  applyOpenAIThinkingConsistency,
   mergeExtraHeaders,
   mergeExtraParams,
   RESERVED_BODY_KEYS_ANTHROPIC,
@@ -470,17 +471,22 @@ export class OpenAICompatibleProvider implements LLMProvider {
       return await this.streamChat(url, messages, tools, req, req.on_chunk);
     }
 
-    const body = mergeExtraParams(
-      {
-        model: req.model ?? this.model,
-        messages,
-        tools,
-        temperature: req.temperature ?? this.temperature,
-        max_tokens: req.max_tokens ?? this.maxTokens,
-        stream: false,
-      },
-      req.extra_params,
-      RESERVED_BODY_KEYS_OPENAI,
+    // TI5-4：budget 形状 thinking 一致性（合并后兜底，与 Anthropic 同位置模式）——
+    // thinking_budget 放不下 max_tokens ⇒ 抬 max_tokens 容纳（用户裁定：不 clamp 思考）。
+    // 无 thinking / 非 budget 形状 ⇒ 原对象逐字节不变。
+    const body = applyOpenAIThinkingConsistency(
+      mergeExtraParams(
+        {
+          model: req.model ?? this.model,
+          messages,
+          tools,
+          temperature: req.temperature ?? this.temperature,
+          max_tokens: req.max_tokens ?? this.maxTokens,
+          stream: false,
+        },
+        req.extra_params,
+        RESERVED_BODY_KEYS_OPENAI,
+      ),
     );
 
     const headers: Record<string, string> = mergeExtraHeaders(
@@ -568,18 +574,21 @@ export class OpenAICompatibleProvider implements LLMProvider {
     req: ChatRequest,
     onChunk: (chunk: StreamChunk) => void,
   ): Promise<LLMResponse> {
-    const streamBody = mergeExtraParams(
-      {
-        model: req.model ?? this.model,
-        messages,
-        tools,
-        temperature: req.temperature ?? this.temperature,
-        max_tokens: req.max_tokens ?? this.maxTokens,
-        stream: true,
-        stream_options: { include_usage: true },
-      },
-      req.extra_params,
-      RESERVED_BODY_KEYS_OPENAI,
+    // TI5-4：与非流式分支同规则（budget 形状一致性，合并后兜底）。
+    const streamBody = applyOpenAIThinkingConsistency(
+      mergeExtraParams(
+        {
+          model: req.model ?? this.model,
+          messages,
+          tools,
+          temperature: req.temperature ?? this.temperature,
+          max_tokens: req.max_tokens ?? this.maxTokens,
+          stream: true,
+          stream_options: { include_usage: true },
+        },
+        req.extra_params,
+        RESERVED_BODY_KEYS_OPENAI,
+      ),
     );
 
     const streamHeaders: Record<string, string> = mergeExtraHeaders(
