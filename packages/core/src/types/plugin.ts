@@ -115,6 +115,17 @@ export interface PluginHost {
    */
   unregisterTool?(name: string): boolean;
   /**
+   * 可选（q-plugin-lifecycle §6.3）：按名注销 hook / guardrail / provider / 读侧脱敏器。
+   * 与 `unregisterTool?` 同口径——热应用要把一个插件的**全部注册面**整体摘干净 / 重建，
+   * 只有工具面可注销会造成「pii_reveal 进了但脱敏 guardrail 不生效」的危险半态。
+   * 返回是否真的移除（未注册过 false，不视为错误）；不实现的自定义宿主由调用方按
+   * 「该面不可热移除」保守处理（生命周期推导取 restart）。
+   */
+  unregisterHook?(name: string): boolean;
+  unregisterGuardrail?(name: string): boolean;
+  unregisterProvider?(name: string): boolean;
+  unregisterReadSideMasker?(name: string): boolean;
+  /**
    * 可选：记录一次插件安装的注册，用于安装失败时回滚（0.9）。
    * 不支持回滚的自定义宿主可以不实现。
    */

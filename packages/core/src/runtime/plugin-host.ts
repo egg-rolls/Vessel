@@ -401,11 +401,52 @@ export class MemoryPluginHost implements PluginHost {
   unregisterTool(name: string): boolean {
     this.externalTools.delete(name);
     if (!this.tools.delete(name)) return false;
-    for (const scope of this.installScopes) {
-      const index = scope.findIndex((entry) => entry.kind === 'tool' && entry.name === name);
-      if (index >= 0) scope.splice(index, 1);
-    }
+    this.purgeScopeEntries((entry) => entry.kind === 'tool' && entry.name === name);
     return true;
+  }
+
+  /**
+   * 按名注销 hook（q-plugin-lifecycle §6.3）。同名可能多条，全部移除；安装记录里的
+   * 对应条目一并清掉，避免安装回滚把已注销的 hook「复活」。未注册过返回 false。
+   */
+  unregisterHook(name: string): boolean {
+    const next = this.hooks.filter((hook) => hook.name !== name);
+    if (next.length === this.hooks.length) return false;
+    this.hooks = next;
+    this.purgeScopeEntries((entry) => entry.kind === 'hook' && entry.value.name === name);
+    return true;
+  }
+
+  /** 按名注销 guardrail（同 `unregisterHook` 口径）。 */
+  unregisterGuardrail(name: string): boolean {
+    const next = this.guardrails.filter((guardrail) => guardrail.name !== name);
+    if (next.length === this.guardrails.length) return false;
+    this.guardrails = next;
+    this.purgeScopeEntries((entry) => entry.kind === 'guardrail' && entry.value.name === name);
+    return true;
+  }
+
+  /** 按名注销 provider（同 `unregisterTool` 口径；provider 热替换仍属结构性 restart）。 */
+  unregisterProvider(name: string): boolean {
+    if (!this.providers.delete(name)) return false;
+    this.purgeScopeEntries((entry) => entry.kind === 'provider' && entry.name === name);
+    return true;
+  }
+
+  /** 按名注销读侧脱敏器（pii-guard 热启停要把脱敏面与工具面一起摘干净）。 */
+  unregisterReadSideMasker(name: string): boolean {
+    if (!this.readSideMaskers.delete(name)) return false;
+    this.purgeScopeEntries((entry) => entry.kind === 'readSideMasker' && entry.name === name);
+    return true;
+  }
+
+  /** 从所有安装 scope 里清掉满足判据的注册条目（注销时同步，防回滚复活）。 */
+  private purgeScopeEntries(match: (entry: PluginRegistration) => boolean): void {
+    for (const scope of this.installScopes) {
+      for (let i = scope.length - 1; i >= 0; i -= 1) {
+        if (match(scope[i] as PluginRegistration)) scope.splice(i, 1);
+      }
+    }
   }
 
   /**
