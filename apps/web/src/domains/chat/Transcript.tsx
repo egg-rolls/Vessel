@@ -11,6 +11,7 @@ import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
 import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
+import { isIndexUserMessage } from './conversation-index';
 import { MessageRefs } from './MessageRefs';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { isCardInputMessage, type TranscriptItem } from './transcript-items';
@@ -270,7 +271,12 @@ export function Transcript({
           : undefined;
       nodes.push(
         // data-index-entry-key：会话索引竖条的跳转锚点（见 useConversationIndex.ts）。
-        <div key={item.key} data-index-entry-key={item.key}>
+        // 只给「人打的字」挂（与索引映射同一判据 isIndexUserMessage）：AI 回复 / 卡
+        // 不带锚点，视口追踪天然只认 user 消息。wrapper 保留（flex 子项布局不变）。
+        <div
+          key={item.key}
+          data-index-entry-key={isIndexUserMessage(message) ? item.key : undefined}
+        >
           <TranscriptMessage
             message={message}
             messageIndex={messageIndex}
@@ -287,13 +293,10 @@ export function Transcript({
       continue;
     }
     const node = renderItem(item);
-    // 渲染不出节点的 item（如被条带覆盖的 inbox notice）不留空锚点，同上。
+    // 渲染不出节点的 item（如被条带覆盖的 inbox notice）不留空 wrapper，同上。
     if (node === null || node === undefined) continue;
-    nodes.push(
-      <div key={item.key} data-index-entry-key={item.key}>
-        {node}
-      </div>,
-    );
+    // 非消息 item（正文 / 思考 / 工具 / notice / 排队）不给索引锚点：索引只认 user 消息。
+    nodes.push(<div key={item.key}>{node}</div>);
   }
   return <div className="flex flex-col gap-4 py-1.5 pb-2.5">{nodes}</div>;
 }

@@ -37,6 +37,9 @@ select {
 button {
   border: 0;
   cursor: pointer;
+  /* 与宿主 base.css 同口径：没写 bg 类的按钮不落 UA ButtonFace 灰板。
+     Button 6 变体全带显式 bg（utilities 层），不受影响。 */
+  background-color: transparent;
 }
 button:disabled {
   cursor: not-allowed;

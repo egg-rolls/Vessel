@@ -14,7 +14,7 @@ import {
 import { cleanSessionTitle } from '../../state/sessions';
 import { resourceData, useResource } from '../../state/useResource';
 import { ConversationIndex } from '../chat/ConversationIndex';
-import { indexEntriesOfMessages } from '../chat/conversation-index';
+import { indexEntriesOfMessages, isIndexUserMessage } from '../chat/conversation-index';
 import { EnvCard } from '../chat/EnvCard';
 import { runtimeEnvCard } from '../chat/env-notice';
 import { useConversationIndex } from '../chat/useConversationIndex';
@@ -43,9 +43,9 @@ export function SessionTranscript({ messages }: { messages: readonly Message[] }
     }
     if (message.role === 'system') {
       nodes.push(
-        // data-index-entry-key：会话索引竖条的跳转锚点（局部序号 key，与
-        // conversation-index.ts#indexEntriesOfMessages 同一套编号）。
-        <div key={key} data-index-entry-key={key}>
+        // 系统灰条不给索引锚点（索引只认 user 消息）；局部序号照常占一个号，
+        // 与 conversation-index.ts#indexEntriesOfMessages 同一套编号。
+        <div key={key}>
           <div
             className="mx-auto my-0.5 max-w-180 rounded-r-sm border-l-2 border-l-line-strong bg-sunken px-3 py-1.25 text-center text-sm text-muted"
             role="status"
@@ -65,15 +65,18 @@ export function SessionTranscript({ messages }: { messages: readonly Message[] }
     // 藏起来），想收起点一下即可。
     const env = runtimeEnvCard(kind, message.content);
     if (env !== undefined) {
+      // 环境卡不给索引锚点（runtime 上下文不是 user 消息）；局部序号照常占号。
       nodes.push(
-        <div key={key} data-index-entry-key={key}>
+        <div key={key}>
           <EnvCard env={env} ts={ts} defaultOpen />
         </div>,
       );
       continue;
     }
     nodes.push(
-      <div key={key} data-index-entry-key={key}>
+      // data-index-entry-key：只给「人打的字」挂（与索引映射同一判据 isIndexUserMessage）；
+      // assistant / tool 行不带锚点。局部序号 key 与 indexEntriesOfMessages 同一套编号。
+      <div key={key} data-index-entry-key={isIndexUserMessage(message) ? key : undefined}>
         <div className="flex flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2 text-xs text-faint">
             <span className="font-medium text-muted">{message.name || message.role}</span>

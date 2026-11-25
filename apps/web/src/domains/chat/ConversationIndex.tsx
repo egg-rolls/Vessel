@@ -4,7 +4,8 @@
  * 形态参考豆包（用户裁定）：vertical flex column，每条 entry 是一个 h-2 rounded-full
  * 的 button（常态宽 8px，高亮加宽到 16px），`data-index-entry-key` 标识对应消息；
  * 竖条自身 overflow-y-auto 且隐藏滚动条，顶底 mask 渐隐，track 首尾留白半屏
- * （让第一条 / 最后一条 dot 也能滚到竖条中央）。
+ * （让第一条 / 最后一条 dot 也能滚到竖条中央）。dot hover 显示消息文本 tooltip
+ * （entry.preview，映射侧截断 100 字符；复用全局 Tooltip，限宽限高超出省略）。
  *
  * 数据与动作全部由调用方注入：
  * - `entries`：数据映射见 conversation-index.ts（item.key / message_id → entry）；
@@ -17,6 +18,7 @@
  * 定位（右侧 absolute / fixed、窄屏隐藏）由集成侧的 className 给，这里不写死。
  */
 import { useEffect, useRef } from 'react';
+import { Tooltip } from '../../components/Tooltip';
 import { t } from '../../i18n';
 import type { ConversationIndexEntry } from './conversation-index';
 
@@ -93,17 +95,24 @@ export function ConversationIndex({
         {entries.map((entry) => {
           const active = entry.key === activeKey;
           return (
-            <button
+            // hover tooltip = 消息文本预览（映射侧已截断 100 字符）；line-clamp-5 限高
+            // （≈96px）超出省略。Tooltip 用 cloneElement 不包 wrapper，button 仍是
+            // track 直接子节点 —— 高亮滚动 effect 遍历 track.children 不受影响。
+            <Tooltip
               key={entry.key}
-              type="button"
-              className="conversation-index-dot"
-              data-index-entry-key={entry.key}
-              data-active={active ? 'true' : undefined}
-              aria-label={entry.label}
-              aria-current={active ? 'true' : undefined}
-              title={entry.label}
-              onClick={() => onJump?.(entry.key)}
-            />
+              label={entry.preview || entry.label}
+              className="line-clamp-5 break-words"
+            >
+              <button
+                type="button"
+                className="conversation-index-dot"
+                data-index-entry-key={entry.key}
+                data-active={active ? 'true' : undefined}
+                aria-label={entry.label}
+                aria-current={active ? 'true' : undefined}
+                onClick={() => onJump?.(entry.key)}
+              />
+            </Tooltip>
           );
         })}
       </div>

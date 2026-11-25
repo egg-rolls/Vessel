@@ -90,8 +90,10 @@ import { QueuedNotice, type QueuedSubmission } from './StreamItems';
  * 身份显示在哪：**卡内、卡头「等待中」胶囊之后**（`QueuedNotice` 的 `identity` → 卡头
  * `meta` 槽）。以前是卡外左侧一个标签，用户裁决要「身份放在卡片内部、等待中的后面」。
  *
- * 三种身份由 `pending-strip.ts` 的 `pendingIdentityOf` 定（纯函数，门禁探针直接断言）：
+ * 身份分档由 `pending-strip.ts` 的 `pendingIdentityOf` 定（纯函数，门禁探针直接断言）：
  * - `human` ⇒ i18n 的 `chat.pending.identity.human`；
+ * - `ask` / `bash` / `system` 固定标签 ⇒ 对应 i18n 文案（ask 答复 / bash 作业 / 系统）——
+ *   它们不是「谁说的话」，不走显示名分支（bash 的 from_name 是收件人自己）；
  * - 有 `from_name` ⇒ `agent:<name>`（与 AgentMessageCard / A2A 卡片同形）；
  * - 没有 `from_name` ⇒ **短 id**（8 位 + `…`）—— 绝不再把完整 UUID 摆到卡头。
  * - 空 `from` ⇒ 不给身份，卡头回到「胶囊 + 摘要」两段。
@@ -105,6 +107,8 @@ function identityOf(entry: PendingStripEntry, fallbackName?: string): string | u
   return pendingIdentityOf(entry, {
     humanLabel: t('chat.pending.identity.human'),
     askLabel: t('chat.pending.identity.ask'),
+    bashLabel: t('chat.pending.identity.bash'),
+    systemLabel: t('chat.pending.identity.system'),
     agentLabel: (name) => t('chat.pending.identity.agent', { name }),
     ...(fallbackName !== undefined ? { fallbackName } : {}),
   });
@@ -225,7 +229,7 @@ function PendingRow({
       {fold && (
         <button
           type="button"
-          className="self-start font-mono text-2xs text-faint hover:text-ink"
+          className="bg-transparent self-start font-mono text-2xs text-faint hover:text-ink"
           onClick={fold.onToggle}
           aria-expanded={fold.open}
         >
@@ -925,7 +929,7 @@ export function PendingStrip({
               chevron 与 StreamCard 同形：收起指右，展开旋转 90° 指下。 */}
           <button
             type="button"
-            className="m-0 flex items-center gap-1 self-start font-mono text-2xs tracking-wide text-faint hover:text-ink"
+            className="bg-transparent m-0 flex items-center gap-1 self-start font-mono text-2xs tracking-wide text-faint hover:text-ink"
             onClick={() => setMode((prev) => (prev === 'collapsed' ? 'default' : 'collapsed'))}
             aria-expanded={mode !== 'collapsed'}
           >
@@ -1005,7 +1009,7 @@ export function PendingStrip({
           {mode === 'default' && view.hidden > 0 && (
             <button
               type="button"
-              className="m-0 self-start font-mono text-2xs text-faint hover:text-ink"
+              className="bg-transparent m-0 self-start font-mono text-2xs text-faint hover:text-ink"
               onClick={() => setMode('expanded')}
             >
               {t('chat.pending.expandAll', { count: view.hidden })}
@@ -1014,7 +1018,7 @@ export function PendingStrip({
           {mode === 'expanded' && (
             <button
               type="button"
-              className="m-0 self-start font-mono text-2xs text-faint hover:text-ink"
+              className="bg-transparent m-0 self-start font-mono text-2xs text-faint hover:text-ink"
               onClick={() => setMode('default')}
             >
               {t('chat.pending.collapseList')}
