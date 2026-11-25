@@ -1,6 +1,6 @@
 {
   "board": "vessel 红蓝开发任务看板",
-  "updated": "2026-11-25T08:45:00+08:00",
+  "updated": "2026-11-25T09:10:00+08:00",
   "columns": ["待办", "进行中", "阻塞"],
   "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。板只留当前活跃任务；完成任务由 main 轮次收尾移入 archive.json（append-only，采纳 q-kanban §9.2 归档约定）。",
   "tasks": [
@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "金丝雀验收全过已晋升main 38ee0aec；待用户 vessel gateway restart --stop-nodes 重启生产。跨舰队通信修复：两侧peer team映射纠正（生产peer team_id=default/local vessel；金丝雀localTeamId=default），federation双向验证通（lead回执到达）；金丝雀host.node_name=soulkiller-canary已配置（下次重启生效，node_id不变）；金丝雀本地main越权已stand down并确认。用户就寝：生产重启顺延明日，金丝雀舰队已通知就寝（夜间零操作）"
+      "progress": "生产今晨用户已重启38ee0aec加载✓；金丝雀运行中(8652/8654健康)。★持续流生效(用户裁定:完成一个丢一个不攒批)：完成→合并redblue-dev→⑤同步前通报lead封存→「已封存」→canary同步+rebuild→批次书→lead分配测试员→报告→晋升。首批q-from-card已合并f5f125cb候lead封存→canary同步；federation双向✓peer映射已修；本地main stand down✓；拓扑C方案待用户裁"
     },
     {
       "id": "canary-qa-lead",
@@ -18,7 +18,7 @@
       "column": "进行中",
       "owner": "canary-qa-lead",
       "branch": "canary",
-      "progress": "常驻QA负责人717be135就职；verify4全过批次已晋升38ee0aec。★跨舰队寻址纠正已投递：lead此前裸名main回执误投金丝雀本地main（本地main越权回执五条已作废并stand down）；报告必须用三段地址main@7181ed6c-5ec2-479e-9400-fcd54b480de5:vessel（回信原样回传from location）；federation双向通道已修复验证（生产→金丝雀queued✓，金丝雀→生产候lead回执）；T2b已立卡q-tool-output-leak（lead复验口径已定：environ无生产残留+双路径落canary-data/tool-output+生产根零新增）。★用户就寝：舰队收工standby（T3b/c收尾即止，测试员保留身体明日复用），夜间零操作；明日用户重启生产后恢复"
+      "progress": "持续流①-⑤确认生效（⑤封存握手：同步前通报→封存→「已封存」→同步/rebuild→批次书开验）。名册更正：测试员身体夜间已释放，canary-t-settings2(de096991)接棒T3b/c(继承T3a✅报告不重做)，leak批次到达hire canary-t-runtime2复验(口径:environ无生产残留+双路径落canary-data/tool-output+生产根零新增)；原则=活体复用续话/释放后新hire继承盘上报告。四在途批已登记矩阵(from-card/ui-polish/leak/plugin-default-on)；三段地址规范执行中；拓扑C知悉候裁"
     },
     {
       "id": "q-tool-output-leak",
@@ -26,7 +26,7 @@
       "column": "进行中",
       "owner": "q-tool-output-leak",
       "branch": "fix/q-tool-output-leak",
-      "progress": "canary T2查证完毕证据链全（canary-data/reports/canary-t-runtime-report.md T2b节）：tool-result-gate.ts:292-296 VESSEL_TOOL_OUTPUT_DIR优先于VESSEL_DATA_DIR，17d6f44c只桥接后者；node-supervisor.ts:1338其余env透传→生产VESSEL_TOOL_OUTPUT_DIR/VESSEL_PLUGIN_CONFIG击穿gateway→node→engine（pid179484/87384 environ双变量并存铁证）；basic-tools asyncLogDir同源toolOutputRoot()。修复方向：bootstrap桥接清除/重写继承的VESSEL_TOOL_OUTPUT_DIR+VESSEL_PLUGIN_CONFIG+启动链env卫生；与q-fleet-isolation同根因族（进程树env继承跨舰队）。9d937507调研后早退已催促续作：四步小步走①bootstrap桥接②supervisor卫生③daemon spawn链④build门禁，每步一提交一报告"
+      "progress": "canary T2查证完毕证据链全（canary-data/reports/canary-t-runtime-report.md T2b节）：tool-result-gate.ts:292-296 VESSEL_TOOL_OUTPUT_DIR优先于VESSEL_DATA_DIR，17d6f44c只桥接后者；node-supervisor.ts:1338其余env透传→生产VESSEL_TOOL_OUTPUT_DIR/VESSEL_PLUGIN_CONFIG击穿gateway→node→engine（pid179484/87384 environ双变量并存铁证）；basic-tools asyncLogDir同源toolOutputRoot()。修复方向：bootstrap桥接清除/重写继承的VESSEL_TOOL_OUTPUT_DIR+VESSEL_PLUGIN_CONFIG+启动链env卫生；与q-fleet-isolation同根因族（进程树env继承跨舰队）。9d937507早退催促后回正轨每步一报：①完成892765d6(sanitizeToolOutputEnv共享模块80行+bootstrap桥接,异根重写/同根保留生产零回归)+07197a09(基线换行)；②完成f310a0cb(spawnOnly:1337+beginHub:1198 spawn时初始env即干净,engine白名单无需改)；每步build绿；③daemon.ts:248+前台gateway卫生进行中④总门禁"
     },
     {
       "id": "q-plugin-default-on",
@@ -68,14 +68,7 @@
       "branch": "redblue-dev",
       "progress": "实测根因：interop/子进程继承宿主VESSEL_DATA_DIR=生产，env层覆盖--user-config的data_dir→CLI身份/锁探测落生产（federation peers/gateway status/reload全中招）；workaround=cmd.exe /c set VESSEL_DATA_DIR=<fleet>&&bun…。修复方向：显式--user-config时其data_dir应优先于继承env，或舰队统一launch入口净化env；另疑config.watch消费federation diff但运行时peer未更新（需peer remove+add强制重解析才生效），待查watch路径applyFederation注入"
     },
-    {
-      "id": "q-from-card",
-      "title": "from location源卡片：系统卡片→环境信息卡片样式（用户要求）",
-      "column": "进行中",
-      "owner": "q-from-card",
-      "branch": "fix/q-from-card",
-      "progress": "27318a8a夜间调研后早退已催促回正轨；调研结论：runtime-kinds.ts ENV_MESSAGE_KINDS加source+env-notice.ts sourceNoticeCard(scope来源,location组织成行,原文进blocks)+统一dispatch三处env计算→live/history天然一致；EnvCard/TranscriptWindow零改动；agent卡吸收路径不动(0.52裁定)；①已提交b2e8a922(分类+双路径投影)+18dcd26b(biome基线)；②卡片组织/i18n进行中③build收口"
-    },
+
     {
       "id": "design-adjudication",
       "title": "待用户裁定：三份设计（config-delegate D2旁门治理 / thinking-plugin Q1-Q5 / plugin-scaffold实施）",

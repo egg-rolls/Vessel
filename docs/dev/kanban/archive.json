@@ -316,6 +316,15 @@
       "progress": "merge入redblue-dev；①in-process描述符名=manifest.id??包短名(同child口径)+aliases兼容存量,config名skills正确；②AI命名max_tokens64→2048+截止15s+派生标题兜底(任何模型不卡Untitled)+warn不静默；build绿；canary-verify4复验两项全过(别名探针15/15+命名探针20/20+live双路径~3s获AI名)，随批晋升main 38ee0aec",
       "archivedAt": "2026-11-24T23:10:00+08:00",
       "cycle": "redblue-feature-round-2"
+    },
+    {
+      "id": "q-from-card",
+      "title": "from location源卡片：系统卡片→环境信息卡片样式（用户要求）",
+      "owner": "q-from-card",
+      "branch": "fix/q-from-card",
+      "progress": "27318a8a完成4提交合并redblue-dev f5f125cb（18dcd26b biome基线/b2e8a922分类O8对账+双路径投影/4e6cca3a来源卡组织/b03974e8注释收口），build绿×3(RC=0+产物行)，10文件+177/-45；ENV_MESSAGE_KINDS+=source恒可见+runtimeEnvCard统一装配四处同入口+sourceNoticeCard(摘要地址/明细principal/node/team/原文块一字不动)+相邻折叠保留原文+i18n来源/Source；EnvCard渲染零改动GHOST样式；worktree已清；金丝雀验证中(待验a-f六点,持续流首批⑤封存握手)",
+      "archivedAt": "2026-11-25T09:10:00+08:00",
+      "cycle": "redblue-feature-round-3"
     }
   ]
 }
