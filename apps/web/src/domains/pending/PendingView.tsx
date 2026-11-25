@@ -92,10 +92,10 @@ export function PendingView({ sessionId }: { sessionId?: string }) {
         </div>
       )}
       {clusters.length === 0 && !fetchFailed ? (
-        // 空态：内容在页内水平 + 垂直居中（复用既有 EmptyState，不自建一套）。
-        // `text-center` 由外壳继承到标题 / 说明，`min-h-60` 给出垂直居中的高度基准
+        // 空态：水平居中由 EmptyState 自身提供（居中空态，用户裁定）；
+        // 外壳只负责页内垂直居中，`min-h-60` 给出高度基准
         // （与 `NotEnabledState variant="page"` 同一口径）。
-        <div className="flex min-h-60 flex-col items-center justify-center text-center">
+        <div className="flex min-h-60 flex-col justify-center">
           <EmptyState title={t('pending.empty')} description={t('pending.empty.hint')} />
         </div>
       ) : (
