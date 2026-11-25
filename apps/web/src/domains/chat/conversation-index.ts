@@ -22,6 +22,9 @@
  *
  * 上界：只保留最近 MAX_INDEX_ENTRIES 条（slice(-MAX)），长会话不爆——dot 数有硬上限，
  * 竖条不会随历史无限变密。更早的历史仍可滚动阅读，只是不在索引里（无 dot、无高亮）。
+ *
+ * hover tooltip：entry.preview = 消息正文前 INDEX_PREVIEW_CHARS 字符（空白折叠、
+ * 超出加「…」），dot hover 时显示（渲染见 ConversationIndex.tsx）。
  */
 
 import type { Message, TeamMessage } from '../../gateway/types';
@@ -36,11 +39,22 @@ import { isCardInputMessage, type TranscriptItem } from './transcript-items';
 /** 索引条目上界：最近 50 条 user 消息，长会话不爆（dot 数 ≤ 50）。 */
 export const MAX_INDEX_ENTRIES = 50;
 
+/** hover tooltip 预览上界：消息正文前 100 字符，超出截断加「…」。 */
+export const INDEX_PREVIEW_CHARS = 100;
+
 export interface ConversationIndexEntry {
   /** 与消息 DOM 的 `data-index-entry-key` 同值：item.key / message_id / 局部序号。 */
   key: string;
-  /** aria-label / title：带序号的跳转提示（dot 本身无文字）。 */
+  /** aria-label：带序号的跳转提示（dot 本身无文字）。 */
   label: string;
+  /** hover tooltip 正文：消息文本预览（空白折叠、前 INDEX_PREVIEW_CHARS 字符 + …）。 */
+  preview: string;
+}
+
+/** 消息正文 → tooltip 预览：折叠空白（多行消息在 tooltip 里不撑高），超长截断加「…」。 */
+function previewOf(content: string): string {
+  const text = content.replace(/\s+/g, ' ').trim();
+  return text.length > INDEX_PREVIEW_CHARS ? `${text.slice(0, INDEX_PREVIEW_CHARS)}…` : text;
 }
 
 /**
@@ -59,35 +73,38 @@ export function isIndexUserRow(row: Pick<TeamMessage, 'from' | 'kind'>): boolean
   return row.from === 'human' && row.kind !== 'system';
 }
 
-/** key 列表 → 索引条目：取最近 MAX_INDEX_ENTRIES 条，序号在窗口内从 1 起。 */
-function entriesFromKeys(keys: readonly string[]): ConversationIndexEntry[] {
-  return keys.slice(-MAX_INDEX_ENTRIES).map((key, index) => ({
-    key,
+/** key + 正文 → 索引条目：取最近 MAX_INDEX_ENTRIES 条，序号在窗口内从 1 起。 */
+function entriesFromKeys(
+  entries: readonly { key: string; content: string }[],
+): ConversationIndexEntry[] {
+  return entries.slice(-MAX_INDEX_ENTRIES).map((entry, index) => ({
+    key: entry.key,
     label: t('chat.index.jump', { index: index + 1 }),
+    preview: previewOf(entry.content),
   }));
 }
 
 /** 会话页 item 流 → 索引条目（只 user 消息，保持时间线顺序，取最近 N 条）。 */
 export function indexEntriesOfItems(items: readonly TranscriptItem[]): ConversationIndexEntry[] {
-  const keys: string[] = [];
+  const entries: { key: string; content: string }[] = [];
   for (const item of items) {
     if (item.kind !== 'message') continue;
     if (!isIndexUserMessage(item.message)) continue;
-    keys.push(item.key);
+    entries.push({ key: item.key, content: item.message.content });
   }
-  return entriesFromKeys(keys);
+  return entriesFromKeys(entries);
 }
 
 /** 团队页消息行 → 索引条目（只 human 发言，取最近 N 条）。 */
 export function indexEntriesOfTeamRows(
-  rows: readonly Pick<TeamMessage, 'message_id' | 'from' | 'kind'>[],
+  rows: readonly Pick<TeamMessage, 'message_id' | 'from' | 'kind' | 'content'>[],
 ): ConversationIndexEntry[] {
-  const keys: string[] = [];
+  const entries: { key: string; content: string }[] = [];
   for (const row of rows) {
     if (!isIndexUserRow(row)) continue;
-    keys.push(row.message_id);
+    entries.push({ key: row.message_id, content: row.content });
   }
-  return entriesFromKeys(keys);
+  return entriesFromKeys(entries);
 }
 
 /**
@@ -102,13 +119,13 @@ export function indexEntriesOfMessages(
   messages: readonly Message[],
   visibility: RuntimeVisibility,
 ): ConversationIndexEntry[] {
-  const keys: string[] = [];
+  const entries: { key: string; content: string }[] = [];
   let keySeq = 0;
   for (const message of messages) {
     const kind = runtimeMessageKind(message);
     if (kind !== undefined && !isRuntimeMessageVisible(visibility, kind)) continue;
     const key = `message-${keySeq++}`;
-    if (isIndexUserMessage(message)) keys.push(key);
+    if (isIndexUserMessage(message)) entries.push({ key, content: message.content });
   }
-  return entriesFromKeys(keys);
+  return entriesFromKeys(entries);
 }

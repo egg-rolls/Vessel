@@ -49,10 +49,13 @@ export function Tooltip({
   label,
   children,
   placement = 'top',
+  className,
 }: {
   label: string;
   children: ReactElement;
   placement?: Placement;
+  /** 文本容器的附加 class（如 line-clamp-N 限高截断）；不影响气泡定位与箭头。 */
+  className?: string;
 }) {
   const id = useId();
   const anchorRef = useRef<HTMLElement | null>(null);
@@ -208,7 +211,7 @@ export function Tooltip({
                 aria-hidden="true"
                 style={{ left: position?.arrow ?? 0 }}
               />
-              {label}
+              <span className={className}>{label}</span>
             </div>,
             document.body,
           )
