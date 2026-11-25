@@ -252,6 +252,8 @@ export function envNoticeCard(content: string): EnvNoticeCard | undefined {
  *
  * 口径：
  * - 摘要行 = location 地址原文（可回信的地址就是「一眼要看的事实」，模型回信时原样抄）；
+ * - 明细行 = principal / node / team 三段组织投射（键是协议词，不翻译 —— 与
+ *   `contextChangeEntries` 的键同一口径：模型 id / 地址段都是事实，翻译只会丢信息）；
  * - 展开区 = 全部行 + **原文块**（整段正文一字不动 —— 原文即模型所见事实，不改内容）；
  * - 解析不出 location（旧数据 / 第三方改写）时不吞正文：整段原文当摘要行，仍是可读卡。
  *
@@ -260,15 +262,65 @@ export function envNoticeCard(content: string): EnvNoticeCard | undefined {
  */
 const SOURCE_LOCATION = /location="([^"]+)"/;
 
+/** 来源地址的段：`principal@node:team`（缺 node 时 `principal@team`，见 formatMessageSource）。 */
+export interface SourceAddress {
+  principal: string;
+  node?: string;
+  team?: string;
+}
+
+/** node 段是 uuid（生产侧 nodeId）：两段地址里区分 `@node` 与 `@team` 的形状判据。 */
+const NODE_UUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * location 地址 → 三段。段数决定语义（生产侧 `formatMessageSource`：有 node 才写三段，
+ * 缺的段不补占位符）：
+ * - 无 `@`：只有 principal（human / system / 纯内存构造）；
+ * - `@` 后带 `:`：三段 `principal@node:team`（空段不登记）；
+ * - `@` 后无 `:`：两段 —— uuid 形状是 node（缺 team），否则是 team（缺 nodeId）。
+ * 形状不合（空 principal / 空 host）返回 undefined，调用方退回原文呈现，绝不吞正文。
+ */
+export function parseSourceAddress(location: string): SourceAddress | undefined {
+  const value = location.trim();
+  if (value.length === 0) return undefined;
+  const at = value.indexOf('@');
+  if (at < 0) return { principal: value };
+  const principal = value.slice(0, at);
+  const host = value.slice(at + 1);
+  if (principal.length === 0 || host.length === 0) return undefined;
+  const colon = host.indexOf(':');
+  if (colon >= 0) {
+    const node = host.slice(0, colon);
+    const team = host.slice(colon + 1);
+    return {
+      principal,
+      ...(node.length > 0 ? { node } : {}),
+      ...(team.length > 0 ? { team } : {}),
+    };
+  }
+  return NODE_UUID_LIKE.test(host) ? { principal, node: host } : { principal, team: host };
+}
+
 export function sourceNoticeCard(content: string): EnvNoticeCard | undefined {
   const raw = content.trim();
   if (raw.length === 0) return undefined;
   const location = SOURCE_LOCATION.exec(content)?.[1];
-  const summary = location !== undefined && location.length > 0 ? location : raw;
+  const texts: string[] = [];
+  if (location !== undefined && location.length > 0) {
+    texts.push(location);
+    const address = parseSourceAddress(location);
+    if (address !== undefined) {
+      texts.push(`principal: ${address.principal}`);
+      if (address.node !== undefined) texts.push(`node: ${address.node}`);
+      if (address.team !== undefined) texts.push(`team: ${address.team}`);
+    }
+  } else {
+    texts.push(raw);
+  }
   return {
     scope: 'source',
     ok: true,
-    lines: [{ id: '0', scope: 'source', ok: true, text: summary }],
+    lines: texts.map((text, index) => ({ id: String(index), scope: 'source', ok: true, text })),
     count: 1,
     blocks: [{ labelKey: 'chat.env.source.raw', text: content }],
   };
