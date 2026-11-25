@@ -1171,7 +1171,8 @@ export class AgentServiceImpl implements AgentService {
         record.workspace !== undefined ||
         record.from_session_id !== undefined ||
         record.seed !== undefined ||
-        record.keep_messages !== undefined
+        record.keep_messages !== undefined ||
+        record.startup_prompt !== undefined
       ) {
         throw new AgentError(
           'invalid_input',
@@ -1279,6 +1280,10 @@ export class AgentServiceImpl implements AgentService {
     const keepMessages = readKeepMessages(input.keep_messages);
     // q-session-naming：首会话显式标题（与 rotate 同一形状）。校验早于任何副作用。
     const title = readSessionTitle(input.title);
+    // q-hire-prompt：可选启动任务（与 rotate 的 startup_prompt 同一形状）。
+    // 校验早于任何副作用；seeded 分支由 createFromSource 自行读取。
+    const startupPrompt =
+      input.startup_prompt === undefined ? undefined : readContent(input, 'startup_prompt');
     if (fromSessionId === undefined) {
       if (input.seed !== undefined || input.keep_messages !== undefined) {
         throw new AgentError('invalid_input', 'seed / keep_messages require from_session_id');
@@ -1404,8 +1409,9 @@ export class AgentServiceImpl implements AgentService {
 
     // 名称只由 present 成员占用：同 Team 内唯一；unbound 沿用 tenant 全扫。
     // 名字表达的是职位 / 功能，同 Team 已有同名成员说明这个职能已经有人承担：
-    // 复用已存在的成员，不再造一个同职能的。create / hire 不发消息，所以
-    // 「返回 id 让调用方自己决定要不要 send」不会引入隐式动作。
+    // 复用已存在的成员，不再造一个同职能的。create / hire 缺省不发消息，
+    // 「返回 id 让调用方自己决定要不要 send」不会引入隐式动作；显式 startup_prompt
+    // 才在创建提交后投递首条任务（q-hire-prompt），复用成员上声明则显式拒绝。
     //
     // **必须排在冻结 / 上限闸门之前**：复用不创建成员、不占额度，上面两条闸门
     // 限制的是「再塞一个进来」。放在后面的话，Team 满员时这条分支永远走不到，
@@ -1432,6 +1438,14 @@ export class AgentServiceImpl implements AgentService {
           throw new AgentError(
             'invalid_input',
             'title cannot be declared on a reused member; use rotate to name the next session',
+          );
+        }
+        // q-hire-prompt：复用成员已有会话与队列，启动任务不再适用 —— 静默丢掉
+        // 调用方写下的任务等于骗他「已经派出去了」，与 title / projection 同例拒绝。
+        if (startupPrompt !== undefined) {
+          throw new AgentError(
+            'invalid_input',
+            'startup_prompt cannot be delivered to a reused member; use send to give it a task',
           );
         }
         return { ...this.statusFor(existing), reused: true };
@@ -1514,7 +1528,42 @@ export class AgentServiceImpl implements AgentService {
     if (title !== undefined || spawnedBy !== undefined) {
       await this.nameNewSession(record, record.sessionId, title);
     }
+    // q-hire-prompt：启动任务在创建提交后投递（首轮 run input）；statusFor 在
+    // 投递之后取，调用方看到的 state 已反映首轮（queued / running）。
+    if (startupPrompt !== undefined) {
+      await this.deliverStartupPrompt(record, startupPrompt);
+    }
     return this.statusFor(record);
+  }
+
+  /**
+   * q-hire-prompt：create / hire 的可选启动任务投递 —— 与 createSession 的
+   * startup_prompt 同一形状（admitInternal `startup: true`：直接作首轮 run input，
+   * 不进 inbox，后续 send 正常排队）。不标 input_name：create 路径的 startup_prompt
+   * 是调用方写的开场任务，按正文渲染（types.ts 裁定：只有 rotate 交接嘱托标
+   * `rotate:handoff`）。best-effort：失败只 warn，不回滚已提交的创建（与
+   * `agent.session_create.startup_failed` 同口径）。
+   */
+  private async deliverStartupPrompt(record: MemberRecord, startupPrompt: string): Promise<void> {
+    try {
+      await this.admitInternal(
+        {
+          content: startupPrompt,
+          agent_id: record.id,
+          session_id: record.sessionId,
+          from: SYSTEM_PRINCIPAL,
+          channel: 'direct',
+          conversation_id: generateConversationId(this.newId),
+          strict: false,
+        },
+        { startup: true },
+      );
+    } catch (error) {
+      this.logger.warn('agent.create.startup_failed', {
+        agent_id: record.id,
+        error: errorText(error),
+      });
+    }
   }
 
   /**
@@ -1547,6 +1596,9 @@ export class AgentServiceImpl implements AgentService {
 
     // q-session-naming：首会话显式标题（与 createOne / rotate 同一形状）。
     const title = readSessionTitle(input.title);
+    // q-hire-prompt：seeded 路径同样支持可选启动任务（校验早于任何副作用）。
+    const startupPrompt =
+      input.startup_prompt === undefined ? undefined : readContent(input, 'startup_prompt');
 
     const kind = input.kind;
     if (kind !== undefined && kind !== 'peer' && kind !== 'contractor') {
@@ -1724,6 +1776,10 @@ export class AgentServiceImpl implements AgentService {
     // q-session-naming：与 createOne 同口径 —— 显式 title 优先，agent 派生缺省用成员名。
     if (title !== undefined || spawnedBy !== undefined) {
       await this.nameNewSession(record, record.sessionId, title);
+    }
+    // q-hire-prompt：与 createOne 同口径 —— 创建提交后投递启动任务（best-effort）。
+    if (startupPrompt !== undefined) {
+      await this.deliverStartupPrompt(record, startupPrompt);
     }
     return this.statusFor(record);
   }
