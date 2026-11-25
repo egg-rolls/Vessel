@@ -330,6 +330,10 @@ snake_case 双收；未知键忽略；非法值回落缺省 + warning，不半�
             "commit": "<40 hex>",            // 钉住的上游 commit
             "path": "skills/docx"
           },
+          "preview": {                       // 可选；curated 索引必须提供（§6.2 轻量预览通道）
+            "url": "https://…/code-writing/SKILL.md",   // raw SKILL.md，https 同款校验
+            "sha256": "<64 hex>"
+          },
           "published_at": "2026-11-25T00:00:00Z"
         }
       ]
@@ -424,3 +428,123 @@ interface RemoteSkillEntry {
 搜索排序复用 `searchRank` 单一口径（name > tag > description > id，tool.ts 导出函数直接
 import——同插件内共享，无跨插件问题）；多源结果合并后按 rank → tier（curated 前）→ id 排序；
 分页 ≤50（MAX_PAGE_LIMIT 同款）。**搜索是纯缓存内子串匹配，零网络**（网络只发生在刷新）。
+
+## 6. 核心流程：搜索 → 预览 → 安装 → 更新
+
+### 6.1 搜索（discovery_search）
+
+1. 读源快照缓存；无缓存或 TTL 过期 → 同步 fetch（索引 fetch 30s deadline；失败回落旧快照
+   标 stale，无旧快照 → 业务错误 `registry_fetch_failed`，UI 显示原因 + 重试）。
+2. 缓存内子串匹配（searchRank 口径：name > tag > description > id），source / tag 过滤，
+   多源合并排序（rank → tier curated 前 → id），分页 ≤50。**匹配阶段零网络。**
+3. join provenance + 本地索引派生 `installed` 字段（已安装 / trust 态 / 版本差），
+   UI 据此渲染「安装 / 已安装 / 可更新」三态按钮。
+
+### 6.2 预览（discovery_preview）——人类面，看 ≠ 加载
+
+- 取 SKILL.md 原文：registry 源用索引里的 `preview: {url, sha256}` 字段（curated 索引
+  **必须**提供，指向 raw SKILL.md；§5.1 schema 增补该可选键）；github 源按钉住 commit 取
+  raw；local 源经 boundary 读文件。无 preview 通道 → 业务错误 `preview_unavailable`，
+  UI 降级为纯元数据卡片（不下载整包来预览——预览必须轻）。
+- 返回 `{entry: RemoteSkillEntry, content, auxFiles: string[], truncated, warnings}`：
+  content 截断 64 KiB（capContent 复用）；auxFiles 只列清单（github tree / tgz 条目 /
+  目录扫描），**不取附件内容**。
+- 边界逐字对齐 `get` RPC：不写 loads、不做信任门、不触发 TOFU、不进任何 run 的语言空间。
+  UI 纯文本渲染（§8.5）。frontmatter 只当数据解析（子集解析器复用，无 eval）。
+
+### 6.3 安装（discovery_install）——七步管线，信任门零改动
+
+```text
+① resolve   缓存快照里定位条目（registry: version；github: 钉住 commit）
+② download  下载到 mkdtemp staging：
+            registry flat → 单 .md；registry dir → tgz（gunzip+tar 限额+stripCommonRoot）
+            github → 逐文件 raw@commit（≤50 附件+SKILL.md，每个 ≤1 MiB，合计 ≤10 MiB）
+            local → boundary 校验后复制
+③ verify    registry: sha256 比对 asset.sha256（不符 → checksum_mismatch，拒装）
+            github: commit 钉住即完整性锚（无上游哈希）；逐文件计算 sha256 记入 provenance
+④ validate  对 staging 跑 scanSkillRoot（scanner 全套：containment / symlink 跳过 /
+            1 MiB 单文件 / 深度 8 / 附件 50）；dir 形态要求 frontmatter.name == 目录名
+            （规范约束；不符 → skill_name_mismatch 拒装，防 id 混淆）
+⑤ conflict  目标 library/<name>/（或 <name>.md）已存在：
+            overwrite 缺省 false → already_installed（带 localId，UI 引导去 Library）
+            overwrite=true（UI 二次确认）→ 旧目录 rename 备份 → 落新 → 删备份；
+            **trust.json 记录原样保留**：哈希变了 → stale → 下次 load 重新 ask；
+            revoked 记录保留 → 仍然 deny。绝不自动重钉 / 绝不删信任记录
+⑥ land     moveDir staging → library 目标（EXDEV 回落 copy+delete；失败回滚备份，
+            marketplace installLocked 同款）；写 provenance.json（原子写，单写队列）
+⑦ index    rescanRoot('library') → 新条目进索引（trust=unknown）→ 返回 {entry, provenance, warnings}
+```
+
+**provenance.json 形状**（安装来源侧车，宿主侧唯一写口）：
+
+```ts
+interface ProvenanceRecord {
+  localId: string;               // 'library/<name>/SKILL' 等（与索引 id 同口径）
+  sourceId: string;
+  kind: 'registry' | 'github' | 'local';
+  origin: 'marketplace' | 'import';   // registry/github → marketplace；local → import
+  repo?: string;
+  commit?: string;               // 安装时钉住的 commit（更新检查的比对锚）
+  version?: string;
+  assetSha256?: string;          // registry asset 校验和
+  files: Array<{ path: string; sha256: string }>;   // 落地文件清单 + 本地哈希（审计）
+  installedAt: string;
+  updatedAt: string;
+}
+```
+
+**origin 派生（唯一一处既有文件 additive 改动）**：tool.ts / rpc.ts 钉锁路径现态是
+`previous?.origin ?? originOfSource(source)`；增补为
+`previous?.origin ?? provenanceOrigin(localId) ?? originOfSource(source)`——
+provenance 存在则取 'marketplace'，否则回落现态。**门判定、TOCTOU、stale 逻辑零改动**；
+已有记录保留 origin 的现态语义（marketplace 不自动提升）逐字保留。
+
+**landing.ts 共享 helper**：④⑤⑥⑦ 抽成与来源无关的落地管线（入参 = staging 目录 +
+provenance 草稿）。P2 import（本地路径 → library）与 discovery install 共用；谁先实现谁落，
+另一方薄封装（§1.1 纠偏、§12 协调）。
+
+**安装不写 trust.json**——这是「安装 ≠ 信任」的机制保证，不是约定俗成：装完的技能
+trust=unknown，模型首次 load 照常 ask；`trust_default=deny` 环境照常 deny。
+用户可以在 UI 里先预览再手动 trust_set(trust)（既有多写口之一），那也是人的显式动作。
+
+### 6.4 更新检查与更新（discovery_updates / discovery_update）
+
+- **检查（只报告）**：遍历 provenance → registry 源比对 latest version（semver）；
+  github 源解析 ref 当前 commit（条件请求，限流回落缓存）比对钉住 commit；local 源比对
+  文件哈希。返回 `{updates: [{localId, sourceId, from, to}], checkedAt, warnings}`。
+  UI 在 Library 行 / Discover 结果上显示「可更新」徽标。**不自动下载、不自动落地。**
+- **更新（显式动作）**：`discovery_update {local_id}` = 对同一来源条目重跑 §6.3 管线
+  （新版本 / 新 commit，overwrite 语义内置但 UI 仍二次确认）。内容哈希变化 → 既有信任锁
+  派生 stale → 下次 load 重新 ask（T2 对策原样生效）。provenance 更新 commit/version/updatedAt。
+- 批量「全部更新」P3b 再议：一次显式动作覆盖 N 个技能可接受（每个技能的信任仍各自重确认），
+  但 P3a 不做——先把单条路径走稳。
+- **删除 / 孤儿清理**：技能文件被用户删除后，rescan diff 发现 localId 消失 → 顺手剪掉
+  provenance 孤儿记录（派生数据随真相源）；trust.json 孤儿记录保留供审计（现态语义不动）。
+
+## 7. RPC 接口契约
+
+canonical 名 `plugin.skills.discovery_<name>`（宿主补前缀，与既有六方法同登记面）；
+manifest `contributes.rpc` additive 声明（§11.2）。契约纪律逐字延续上位设计 §7：
+DTO additive、业务错误在 result 内 `{error: {code, message}}`、不发明信封 code、
+**不新增宿主事件**（UI 刷新 = mutation 后重拉 + 手动刷新 + 聚焦重拉缓存）。
+
+| 方法 | 权限 | params | result | 语义 |
+|---|---|---|---|---|
+| `discovery_sources` | read | `{}` | `{enabled, sources: [{id, kind, tier, status: 'ok'\|'stale'\|'unavailable', fetchedAt?, commit?, entryCount?, warnings?}]}` | 源清单 + 快照状态（UI tab 头 / 添加源引导） |
+| `discovery_search` | read | `{query?, source?, tag?, offset?, limit?}` | `{items: RemoteSkillEntry[], total, stale?}` | 缓存内子串搜索（§6.1）；limit ≤50 |
+| `discovery_preview` | read | `{source_id, id, version?}` | `{entry, content, auxFiles, truncated, warnings}` | 人类面预览（§6.2）；不写 loads、不做门 |
+| `discovery_install` | write | `{source_id, id, version?, overwrite?}` | `{entry: SkillEntry, provenance, warnings}` | 七步管线（§6.3）；entry.trust=unknown |
+| `discovery_refresh` | write | `{source_id?}` | `{sources: […同 discovery_sources]}` | 显式绕过 TTL 重取（缺省全部源） |
+| `discovery_updates` | read | `{}` | `{updates: [{localId, sourceId, from, to}], checkedAt, warnings}` | 只报告（§6.4） |
+| `discovery_update` | write | `{local_id}` | `{entry, provenance, from, to, warnings}` | 显式更新 = 重跑安装管线；信任锁照常 stale |
+
+业务错误码（result 内，闭集）：`discovery_disabled` / `no_sources` / `unknown_source` /
+`unknown_remote_id` / `registry_invalid` / `registry_fetch_failed` / `rate_limited` /
+`preview_unavailable` / `download_failed` / `asset_too_large` / `checksum_mismatch` /
+`already_installed` / `skill_name_mismatch` / `oversize` / `install_failed`。
+参数非法走既有 `invalid_params` 信封（rpc.ts requireString / optionalCount 同款）。
+
+超时与同步性：索引 fetch 30s、下载 120s（startDeadline 口径，bun AbortSignal.timeout
+现态坑的既有解法）。技能包 ≤10 MiB，同步 RPC 通常秒级；若 gateway mutation 超时上限
+盖不住最坏下载（marketplace 因此走 background job），实现期改用 CONTRACT-0.44 jobs
+模式——开放问题 3（§13），不阻塞设计。
