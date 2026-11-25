@@ -97,7 +97,16 @@ export function readDisplayValue(source: unknown, key: string): string {
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (typeof value === 'string') return value;
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-  if (value === undefined) return BY_KEY.get(key)?.fallback ?? '';
+  if (value === undefined) {
+    // q-msg-visibility 兼容回显：系统信息 toggle 未配置时读旧键 ui.showInternalEvents
+    // （与 state/message-visibility.resolveMessageVisibility 同一映射），存量 true
+    // 配置在弹窗里仍显示为开；写路径只写新键（显式值优先于旧键）。
+    if (key === 'ui.messageVisibility.system') {
+      const legacy = readPath(source, 'ui.showInternalEvents');
+      if (typeof legacy === 'boolean') return legacy ? 'true' : 'false';
+    }
+    return BY_KEY.get(key)?.fallback ?? '';
+  }
   return '';
 }
 

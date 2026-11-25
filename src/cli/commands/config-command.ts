@@ -236,6 +236,16 @@ export async function configSetCommand(
       };
     }
     parsed = value === 'true';
+  } else if (key.startsWith('ui.messageVisibility.')) {
+    // q-msg-visibility：消息显示五 toggle（布尔）。
+    if (value !== 'true' && value !== 'false') {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidBoolean', { key, value }),
+      };
+    }
+    parsed = value === 'true';
   } else if (key === 'ui.errorLevel') {
     if (!isUiErrorLevel(value)) {
       return {

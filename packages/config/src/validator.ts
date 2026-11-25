@@ -1076,6 +1076,27 @@ function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]
       value: ui.showInternalEvents,
     });
   }
+  // q-msg-visibility：消息显示五 toggle（缺省 = 现行默认行为；system 回退旧键）。
+  if (ui.messageVisibility !== undefined) {
+    if (!isPlainObject(ui.messageVisibility)) {
+      errors.push({
+        path: 'ui.messageVisibility',
+        message: 'ui.messageVisibility must be an object',
+        value: ui.messageVisibility,
+      });
+    } else {
+      for (const key of ['reasoning', 'tools', 'environment', 'source', 'system'] as const) {
+        const value = ui.messageVisibility[key];
+        if (value !== undefined && typeof value !== 'boolean') {
+          errors.push({
+            path: `ui.messageVisibility.${key}`,
+            message: `ui.messageVisibility.${key} must be a boolean`,
+            value,
+          });
+        }
+      }
+    }
+  }
   if (ui.showArchived !== undefined && typeof ui.showArchived !== 'boolean') {
     errors.push({
       path: 'ui.showArchived',
@@ -4019,11 +4040,14 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'statusBars',
     'verbosity',
     'showInternalEvents',
+    'messageVisibility',
     'showArchived',
     'errorLevel',
     'askUser',
     'expandCards',
   ],
+  // q-msg-visibility：消息显示五 toggle（未知键由 findUnknownNestedKeys 报）。
+  'ui.messageVisibility': ['reasoning', 'tools', 'environment', 'source', 'system'],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
   timeline: ['dualWrite', 'chunkFlushMs', 'archiveIntervalMs'],
   // 0.56：视觉（kill switch / 预算 / 精度 / 预处理 / blob 生命周期 / GC 定时）。
@@ -4088,6 +4112,17 @@ export function findUnknownNestedKeys(config: Record<string, unknown>): UnknownN
     for (const key of Object.keys(logBlock)) {
       if (!knownLog.includes(key)) {
         unknown.push({ path: `observability.log.${key}`, key, block: 'observability.log' });
+      }
+    }
+  }
+
+  // ui.messageVisibility 子块（q-msg-visibility；与 observability.log 同一收口方式）。
+  const mvBlock = isPlainObject(config.ui) ? config.ui.messageVisibility : undefined;
+  if (isPlainObject(mvBlock)) {
+    const knownMv = KNOWN_BLOCK_KEYS['ui.messageVisibility'] ?? [];
+    for (const key of Object.keys(mvBlock)) {
+      if (!knownMv.includes(key)) {
+        unknown.push({ path: `ui.messageVisibility.${key}`, key, block: 'ui.messageVisibility' });
       }
     }
   }

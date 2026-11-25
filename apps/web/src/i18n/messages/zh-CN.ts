@@ -161,6 +161,23 @@ export const messages = {
   'settings.item.showInternalEvents.title': '显示系统信息（内部事件）',
   'settings.item.showInternalEvents.desc':
     '关闭时只保留正文、工具调用、错误与权限/ask 卡片；打开后额外显示运行提示、hook / LLM 上下文等系统消息（会话里的 vessel:* 上下文消息同受此键控制）；verbosity=debug 也会显示这些系统消息。',
+  // q-msg-visibility：消息显示分组（五 toggle；旧 showInternalEvents 键文案保留给存量深链）。
+  'settings.group.messageVisibility': '消息显示',
+  'settings.item.reasoning.title': '思考过程',
+  'settings.item.reasoning.desc':
+    '显示模型的思考流（实时与历史）；关闭后思考块不再渲染。输出详略 minimal 档仍会隐藏思考。',
+  'settings.item.tools.title': '工具卡片',
+  'settings.item.tools.desc':
+    '显示工具调用卡片；关闭后只保留一行「正在运行」状态，失败的工具卡始终显示（失败永不静默）。',
+  'settings.item.environment.title': '环境信息',
+  'settings.item.environment.desc':
+    '环境信息卡：配置热应用、权限、工具、MCP、更新、peer 通知等模型上下文提示（vessel:notice）。',
+  'settings.item.source.title': '来源卡片',
+  'settings.item.source.desc':
+    '投射来源卡（principal / node / team）；被 agent 卡吸收的来源行不受此开关影响。',
+  'settings.item.system.title': '系统信息',
+  'settings.item.system.desc':
+    '内部事件与系统上下文消息（运行提示、hook / LLM 上下文等 vessel:* 消息）；verbosity=debug 也会显示。未配置时沿用旧键 ui.showInternalEvents 的值。',
   'settings.item.showArchived.title': '显示已归档 / 已停用（待移除）',
   'settings.item.showArchived.desc':
     '默认隐藏已归档 Team 与已停用 agent（它们都在等待被清理）；打开后它们回到 Team 列表、Agent 列表与成员侧栏，并带「已归档 · 待移除 / 已停用 · 待移除」标记。直接链接不受此开关影响，始终可打开。',

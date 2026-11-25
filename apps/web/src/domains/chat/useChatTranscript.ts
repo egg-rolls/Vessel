@@ -122,7 +122,8 @@ export function useChatTranscript({
     setTranscriptLimit(TRANSCRIPT_WINDOW);
   }, [selectedId]);
 
-  // 0.15：信息层级来自 `ui.verbosity` / `ui.showInternalEvents` / `ui.errorLevel`；
+  // 0.15：信息层级来自 `ui.verbosity` / `ui.errorLevel` / 消息显示 toggle
+  // （q-msg-visibility：`ui.messageVisibility`，system 未配置时回退旧 showInternalEvents）；
   // 读取失败回退 0.13 行为（normal / 隐藏内部事件 / user）。
   const { config: configState } = useConfigStoreApi();
   const visibility = useMemo(

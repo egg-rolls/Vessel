@@ -7,7 +7,7 @@
  * 路由传入的 focusKey/query/category 初值。数据复用 useConfigStoreApi /
  * useConnection，不新建通道；写路径走 useSettingsWriter（scope 分流）。
  */
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { Route } from '../../../app/router';
 import { ModalShell } from '../../../components/Modal';
 import { ErrorState, LoadingState, StaleNotice } from '../../../components/States';
@@ -420,6 +420,30 @@ export function SettingsDialog({
     </div>
   );
 
+  /**
+   * 分类内子分组（q-msg-visibility）：相邻同 group 的项共用一个组头
+   * （i18n settings.group.<id>）；无 group 的项原样平铺。键表登记顺序保证同组相邻。
+   */
+  const renderGrouped = (items: readonly SettingDef[]): ReactNode[] => {
+    const nodes: ReactNode[] = [];
+    let lastGroup: string | undefined;
+    for (const def of items) {
+      if (def.group !== undefined && def.group !== lastGroup) {
+        nodes.push(
+          <h4
+            key={`group-${def.group}`}
+            className="mt-3 mb-1 border-t border-line pt-2 text-xs font-medium tracking-wider text-muted uppercase"
+          >
+            {t(`settings.group.${def.group}`)}
+          </h4>,
+        );
+      }
+      lastGroup = def.group;
+      nodes.push(renderRow(def));
+    }
+    return nodes;
+  };
+
   const listBody = () => {
     if (tab !== 'local' && configAvailable && !data) {
       return config.status === 'error' ? (
@@ -472,7 +496,7 @@ export function SettingsDialog({
               <h3 className="sticky top-0 bg-raised py-1 text-sm font-medium text-muted">
                 {t(section.category.titleKey)}
               </h3>
-              {section.items.map(renderRow)}
+              {renderGrouped(section.items)}
             </div>
           ))}
         {pluginSections

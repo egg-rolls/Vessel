@@ -76,6 +76,7 @@ function TranscriptMessage({
   previousUser,
   source,
   cardsDefaultOpen,
+  showReasoning = true,
   onCopy,
   onEdit,
   onRetry,
@@ -88,6 +89,8 @@ function TranscriptMessage({
   /** A2A 消息的回信地址（由被吸收的 vessel:source 行提供）。 */
   source?: string;
   cardsDefaultOpen: boolean;
+  /** 思考过程可见（q-msg-visibility：minimal 档 / toggle 关闭时 false）。 */
+  showReasoning?: boolean;
   onCopy: (text: string) => void;
   onEdit: (keepMessages: number, text: string) => void;
   onRetry: (keepMessages: number, text: string) => void;
@@ -148,7 +151,8 @@ function TranscriptMessage({
 
   const calls = message.tool_calls ?? [];
   // 思考块就在这个 item 里渲：被 live 认领的消息走不到这里（见 historyReasoning）。
-  const reasoning = historyReasoning(message);
+  // q-msg-visibility：思考过程 toggle / minimal 档关闭时不渲（与 live 同一判定）。
+  const reasoning = showReasoning ? historyReasoning(message) : undefined;
   // 时间归属：这一条**有**思考卡 ⇒ 时间在卡头（`ReasoningBlock` 的 `time`），正文下方
   // 的工具栏不再重复渲染。判据与 live 同源（`hasReasoningCard`；live 侧先在
   // `TranscriptWindow` 里按 run 汇总，再落到同一道门槛）。
@@ -207,6 +211,7 @@ export function Transcript({
   allMessages,
   messageIndexOffset = 0,
   cardsDefaultOpen = false,
+  showReasoning = true,
   renderItem,
   onEditMessage,
   onRetryMessage,
@@ -217,6 +222,8 @@ export function Transcript({
   /**  在完整  里的绝对下标。 */
   messageIndexOffset?: number;
   cardsDefaultOpen?: boolean;
+  /** 思考过程可见（q-msg-visibility；缺省 true = 改动前行为）。 */
+  showReasoning?: boolean;
   /** 非消息类 item（正文 / 思考 / 工具 / notice / 排队）的渲染器。 */
   renderItem: TranscriptItemRenderer;
   onEditMessage: (keepMessages: number, text: string) => void;
@@ -266,6 +273,7 @@ export function Transcript({
           previousUser={previousUserMessage(message, allMessages, messageIndexOffset, indexOf)}
           {...(item.sourceText !== undefined ? { source: item.sourceText } : {})}
           cardsDefaultOpen={cardsDefaultOpen}
+          showReasoning={showReasoning}
           onCopy={copy}
           onEdit={onEditMessage}
           onRetry={onRetryMessage}

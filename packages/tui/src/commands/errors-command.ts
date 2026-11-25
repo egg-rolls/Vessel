@@ -3,7 +3,8 @@
  * @module @vessel-agent/tui
  *
  * 默认只展示 user 级（run / tool / guardrail / 子 agent / 权限拒绝）；
- * `ui.errorLevel: all` 或 `ui.showInternalEvents: true` 时追加 internal 级。
+ * `ui.errorLevel: all` 或系统信息 toggle（`ui.messageVisibility.system`，
+ * 未配置时回退旧键 `ui.showInternalEvents`）为 true 时追加 internal 级。
  * `/errors all` 只影响本次展示，不写配置。
  */
 
@@ -32,6 +33,8 @@ const SHORT_RUN_ID = 12;
 interface UiDiagnosticsConfig {
   errorLevel?: unknown;
   showInternalEvents?: unknown;
+  /** q-msg-visibility：系统信息 toggle（未配置时回退旧键 showInternalEvents）。 */
+  messageVisibility?: { system?: unknown };
 }
 
 function readUiConfig(ctx: ReplContext): UiDiagnosticsConfig {
@@ -151,7 +154,12 @@ export function resolveErrorLevel(
     return { level: explicit, includeInternal: explicit === 'all' };
   }
 
-  const includeInternal = configured === 'all' || ui.showInternalEvents === true;
+  // q-msg-visibility：新键显式值优先；未配置回退旧键（与 Web 解析口同一兼容映射）。
+  const system =
+    typeof ui.messageVisibility?.system === 'boolean'
+      ? ui.messageVisibility.system
+      : ui.showInternalEvents === true;
+  const includeInternal = configured === 'all' || system;
   return {
     level: includeInternal ? 'all' : configured,
     includeInternal,

@@ -27,6 +27,8 @@ export interface SettingDef {
   keywords?: readonly string[];
   /** §6 分类 id。 */
   category: string;
+  /** 分类内子分组 id（q-msg-visibility：「消息显示」组；渲染侧出组头，i18n settings.group.<id>）。 */
+  group?: string;
   /** true → 进「常用」curated 视图。 */
   common?: boolean;
   order?: number;
@@ -116,14 +118,59 @@ interface CoreSettingSpec {
   max?: number;
   default?: string;
   fallback?: string;
+  /** 分类内子分组（SettingDef.group）。 */
+  group?: string;
+  /** 额外搜索别名（中英旧称），与自动 shortId/snake 关键词合并。 */
+  keywords?: readonly string[];
 }
 
 const CORE_SETTING_SPECS: readonly CoreSettingSpec[] = [
   { key: 'ui.verbosity', type: 'enum', options: ['minimal', 'normal', 'debug'], default: 'normal' },
-  // 默认视觉契约（用户裁决：生产 8642 为默认）：系统/内部消息**默认隐藏**。
-  // fallback 'false' 是缺省值的显式 codify——未配置时 UI 按 false 渲染/判定，
-  // 各舰队继承此默认；验收期的 show_internal_events:true 只是临时 override。
-  { key: 'ui.showInternalEvents', type: 'boolean', default: 'false', fallback: 'false' },
+  // q-msg-visibility（用户裁定）：消息显示五 toggle，归显示分类的「消息显示」子分组。
+  // 默认视觉契约不变：系统信息**默认隐藏**（fallback 'false' 是缺省值的显式 codify）；
+  // 其余四类默认开 = 现行观感。旧 ui.showInternalEvents 从 UI 撤下（兼容映射：
+  // system 未配置时读旧键，见 display-settings.readDisplayValue / state/message-visibility），
+  // 键本身保留在 schema 与 gateway/CLI 白名单，存量配置与脚本不破坏。
+  {
+    key: 'ui.messageVisibility.reasoning',
+    type: 'boolean',
+    default: 'true',
+    fallback: 'true',
+    group: 'messageVisibility',
+    keywords: ['思考', 'thinking', '消息显示', 'message display'],
+  },
+  {
+    key: 'ui.messageVisibility.tools',
+    type: 'boolean',
+    default: 'true',
+    fallback: 'true',
+    group: 'messageVisibility',
+    keywords: ['工具', 'tool', '消息显示', 'message display'],
+  },
+  {
+    key: 'ui.messageVisibility.environment',
+    type: 'boolean',
+    default: 'true',
+    fallback: 'true',
+    group: 'messageVisibility',
+    keywords: ['环境', 'notice', '消息显示', 'message display'],
+  },
+  {
+    key: 'ui.messageVisibility.source',
+    type: 'boolean',
+    default: 'true',
+    fallback: 'true',
+    group: 'messageVisibility',
+    keywords: ['来源', 'from', '消息显示', 'message display'],
+  },
+  {
+    key: 'ui.messageVisibility.system',
+    type: 'boolean',
+    default: 'false',
+    fallback: 'false',
+    group: 'messageVisibility',
+    keywords: ['系统', 'internal', 'showInternalEvents', '内部事件', '消息显示', 'message display'],
+  },
   // 0.51：已归档 Team / 已停用 agent 的默认隐藏开关。与 showInternalEvents 同一层
   // （同一个 ui 块、同一条 config.set 写路径），入口也在同一个「显示与可见性」分组。
   { key: 'ui.showArchived', type: 'boolean', default: 'false' },
@@ -174,13 +221,13 @@ const CORE_SETTING_SPECS: readonly CoreSettingSpec[] = [
   { key: 'emptyResponse.nudge', type: 'string' },
 ];
 
-/** 「常用」curated 清单（§6 + 裁定③：showInternalEvents 是默认视觉旗舰键）。 */
+/** 「常用」curated 清单（§6 + 裁定③：系统信息是默认视觉旗舰键；q-msg-visibility 起为 messageVisibility.system）。 */
 const CORE_COMMON: ReadonlySet<string> = new Set([
   'ui.verbosity',
   'ui.language',
   'ui.askUser',
   'ui.showReasoning',
-  'ui.showInternalEvents',
+  'ui.messageVisibility.system',
 ]);
 
 function coreCategory(key: string): string {
@@ -210,13 +257,14 @@ export const CORE_SETTINGS: readonly SettingDef[] = CORE_SETTING_SPECS.map((spec
     titleKey: `settings.item.${shortId}.title`,
     descriptionKey: `settings.item.${shortId}.desc`,
     category: coreCategory(spec.key),
+    ...(spec.group !== undefined ? { group: spec.group } : {}),
     common: CORE_COMMON.has(spec.key) ? true : undefined,
     options: spec.options,
     min: spec.min,
     max: spec.max,
     default: spec.default,
     fallback: spec.fallback,
-    keywords: [shortId, snakeCase(shortId)],
+    keywords: [shortId, snakeCase(shortId), ...(spec.keywords ?? [])],
   };
 });
 

@@ -7,12 +7,14 @@ import { t } from '../../i18n';
 import type { AgentNode } from '../../state/agents';
 import type { ErrorVisibility } from '../../state/error-visibility';
 import type { RunGroup, StoredEvent } from '../../state/events';
+import { useRuntimeVisibility } from '../../state/runtime-visibility';
 import type { Verbosity } from '../../state/visibility';
 import { SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE } from '../../stores/sessionStore';
 import { AgentMessageCard } from './AgentMessageCard';
 import { AskAnswerCard } from './AskAnswerCard';
 import type { AnsweredAsk } from './ask-answered';
 import { ChatWelcome } from './ChatWelcome';
+import { reasoningVisible, toolVisible } from './chat-visibility';
 import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
 import { isStripCoveredInboxNotice } from './env-notice';
@@ -275,6 +277,11 @@ export function TranscriptWindow({
   onEditMessage: (keepMessages: number, text: string) => void;
   onRetryMessage: (keepMessages: number, text: string) => void;
 }) {
+  // q-msg-visibility：消息显示 toggle 读同一份 configStore 快照（与 useChatTranscript
+  // 的 visibility 同源）；不经 ChatView props 链，避免与滚动容器改动相互踩踏。
+  const { messageVisibility } = useRuntimeVisibility();
+  const showReasoning = reasoningVisible(verbosity, messageVisibility.reasoning);
+
   // 可见窗口首条消息的 ts：比它更早的 live item 由 buildTranscriptItems 夹到末尾
   // （turn 锚点 / 窗口夹取 / 伪 run 拆条都在那里，由 check-transcript-items 守）。
   const windowStartTs = transcriptWindow.shown[0]?.timestamp;
@@ -408,13 +415,15 @@ export function TranscriptWindow({
   // `MessageActions` 不再重复渲染时间；没有卡的那一轮才把时间放回工具栏。
   const reasoningRuns = useMemo(() => {
     const runs = new Set<string>();
+    // 思考被藏（minimal / toggle 关）时不算「有思考卡」：时间留在正文工具栏。
+    if (!showReasoning) return runs;
     for (const item of items) {
       if (item.kind !== 'run-reasoning') continue;
       if (!hasReasoningCard(item.text)) continue;
       runs.add(item.runId);
     }
     return runs;
-  }, [items]);
+  }, [items, showReasoning]);
 
   // 「正在思考」：run 已经在跑、但这一轮**还没有任何可见内容**（正文 / 思考 / 工具卡）
   // 时的那一行状态。主会话页以前完全没有这句话 —— 只有子 agent transcript 里有，
@@ -435,10 +444,12 @@ export function TranscriptWindow({
       if (item.kind === 'run-text' || item.kind === 'run-reasoning') {
         return item.runId === latest.runId;
       }
-      if (item.kind === 'tool') return verbosity !== 'minimal' && item.runId === latest.runId;
+      if (item.kind === 'tool') {
+        return verbosity !== 'minimal' && messageVisibility.tools && item.runId === latest.runId;
+      }
       return false;
     });
-  }, [activeAgent, items, renderedGroups, verbosity]);
+  }, [activeAgent, items, renderedGroups, verbosity, messageVisibility.tools]);
 
   // 正文 / 思考 item 的复制入口（`chat.message.copy` 那套），与历史消息同一个 hook。
   const copy = useMessageCopy();
@@ -541,6 +552,8 @@ export function TranscriptWindow({
         );
       }
       case 'run-reasoning':
+        // q-msg-visibility：思考过程 toggle（与历史侧 Transcript 同一判定）。
+        if (!showReasoning) return null;
         // 思考卡：首次出现走 `.motion-appear`（只动透明度），展开 / 收起由
         // ReasoningBlock 内部的 `.motion-disclosure` 负责（见 styles/motion.css）。
         // 卡上没有消息工具栏（用户要的），只有一个卡头自带的「复制思考」小按钮，
@@ -555,6 +568,8 @@ export function TranscriptWindow({
           />
         );
       case 'tool':
+        // q-msg-visibility：工具卡片 toggle（失败卡永不静默，与 live 同一判定）。
+        if (!toolVisible(item.status, verbosity, messageVisibility.tools)) return null;
         return (
           <ToolCard
             card={{
@@ -716,6 +731,7 @@ export function TranscriptWindow({
               allMessages={transcriptMessages}
               messageIndexOffset={messageIndexOffset}
               cardsDefaultOpen={cardsDefaultOpen}
+              showReasoning={showReasoning}
               renderItem={renderItem}
               onEditMessage={onEditMessage}
               onRetryMessage={onRetryMessage}
@@ -748,6 +764,7 @@ export function TranscriptWindow({
               entries={entries}
               errorLevel={errorLevel}
               verbosity={verbosity}
+              messageVisibility={messageVisibility}
             />
           )}
         </>

@@ -129,6 +129,11 @@ export type SettableConfigKey =
   | 'ui.statusBars'
   | 'ui.verbosity'
   | 'ui.showInternalEvents'
+  | 'ui.messageVisibility.reasoning'
+  | 'ui.messageVisibility.tools'
+  | 'ui.messageVisibility.environment'
+  | 'ui.messageVisibility.source'
+  | 'ui.messageVisibility.system'
   | 'ui.showArchived'
   | 'ui.errorLevel'
   | 'ui.askUser'
@@ -160,6 +165,20 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
   'ui.statusBars': { block: 'ui', yamlKey: 'status_bars' },
   'ui.verbosity': { block: 'ui', yamlKey: 'verbosity' },
   'ui.showInternalEvents': { block: 'ui', yamlKey: 'show_internal_events' },
+  // q-msg-visibility：消息显示五 toggle（YAML 子块 message_visibility）。
+  'ui.messageVisibility.reasoning': {
+    block: 'ui',
+    subBlock: 'message_visibility',
+    yamlKey: 'reasoning',
+  },
+  'ui.messageVisibility.tools': { block: 'ui', subBlock: 'message_visibility', yamlKey: 'tools' },
+  'ui.messageVisibility.environment': {
+    block: 'ui',
+    subBlock: 'message_visibility',
+    yamlKey: 'environment',
+  },
+  'ui.messageVisibility.source': { block: 'ui', subBlock: 'message_visibility', yamlKey: 'source' },
+  'ui.messageVisibility.system': { block: 'ui', subBlock: 'message_visibility', yamlKey: 'system' },
   'ui.showArchived': { block: 'ui', yamlKey: 'show_archived' },
   'ui.errorLevel': { block: 'ui', yamlKey: 'error_level' },
   'ui.askUser': { block: 'ui', yamlKey: 'ask_user' },
@@ -213,6 +232,10 @@ export async function setUserConfigValue(
     throw new Error(`invalid_verbosity: ${JSON.stringify(value)}`);
   }
   if (key === 'ui.showInternalEvents' && typeof value !== 'boolean') {
+    throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
+  }
+  // q-msg-visibility：五 toggle 均为布尔。
+  if (key.startsWith('ui.messageVisibility.') && typeof value !== 'boolean') {
     throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
   }
   if (key === 'ui.errorLevel' && !isUiErrorLevel(value)) {

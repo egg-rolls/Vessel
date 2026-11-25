@@ -10,12 +10,15 @@
  * 代码第一次拖进根 typecheck 的图。所以：**本文件不许 import react / zustand / store /
  * useResource / 任何 .tsx**；React 侧只允许反过来依赖本文件。
  *
- * kind 语义（用户裁决，0.51，细节见 `./runtime-visibility` 与 `domains/chat/env-notice.ts`）：
- * - `notice`：**默认可见**，渲染成环境信息卡（`ENV_MESSAGE_KINDS`）；
- * - `source`：**默认可见**，同样渲染成环境信息卡（scope「来源」，用户裁定 q-from-card：
- *   投射来源 principal/node/team，原文保留可查；被 agent 卡吸收的折叠路径不变）；
- * - `subscription`：历史 kind，0.52 起没有生产者，可见性仍跟随 `ui.showInternalEvents`；
- * - 其余 kind（`limit` / `compaction` / `other`）同样跟随总开关。
+ * kind 语义（用户裁决，0.51；q-msg-visibility 起每类独立 toggle，细节见
+ * `./runtime-visibility` 与 `domains/chat/env-notice.ts`）：
+ * - `notice`：环境信息卡（`ENV_MESSAGE_KINDS`），跟随「环境信息」toggle（默认开）；
+ * - `source`：来源卡（同属 `ENV_MESSAGE_KINDS`，scope「来源」，用户裁定 q-from-card：
+ *   投射来源 principal/node/team，原文保留可查；被 agent 卡吸收的折叠路径不变），
+ *   跟随「来源卡片」toggle（默认开）；
+ * - `subscription`：历史 kind，0.52 起没有生产者，跟随「系统信息」toggle；
+ * - 其余 kind（`limit` / `compaction` / `other`）同样跟随「系统信息」toggle
+ *   （未配置新键时回退旧 `ui.showInternalEvents`）。
  */
 
 export const RUNTIME_MESSAGE_KINDS = [
@@ -37,7 +40,8 @@ export function isRuntimeMessageKind(value: string): value is RuntimeMessageKind
 }
 
 /**
- * 「环境信息」种类：默认以**卡片**出现，不跟随 `ui.showInternalEvents`。
+ * 「环境信息」种类：以**卡片**呈现，各有独立 toggle（q-msg-visibility：环境信息 /
+ * 来源卡片，默认开），不跟随「系统信息」。
  *
  * 词表与 `domains/chat/env-notice.ts` 的 `ENV_NOTICE_KIND` / `ENV_SOURCE_KIND` 是同一件事
  * （那边是渲染侧解析的权威：`notice` 走 `envNoticeCard`，`source` 走 `sourceNoticeCard`，
@@ -58,16 +62,30 @@ export function isEnvMessageKind(kind: RuntimeMessageKind): boolean {
 }
 
 /**
- * 总开关 → 六类 kind 的可见性。
+ * 消息显示配置 → 六类 kind 的可见性（q-msg-visibility）。
  *
- * 环境信息（`ENV_MESSAGE_KINDS`）**恒为 true**：它的暴露方式是卡片，不是「打开系统
- * 信息」；开关只决定其余 kind 与底层原始事件行。其余 kind 仍然全显 / 全隐。
+ * 分类不变（`ENV_MESSAGE_KINDS` 仍是 notice / source），但可见性不再硬编码：
+ * - `notice` → environment toggle（默认开）；
+ * - `source` → source toggle（默认开）；
+ * - 其余 kind（subscription / limit / compaction / other）→ system toggle
+ *   （默认关；调用方传入的 system 已含旧键兼容映射与 debug 叠加）。
+ *
+ * 参数是结构型内联类型（本文件零 import 约束）：与 `state/message-visibility.ts`
+ * 的 MessageVisibility 形状兼容，纯函数半不依赖它。
  */
-export function runtimeVisibilityFor(showSystem: boolean): RuntimeVisibility {
-  const shown = showSystem === true;
-  return Object.fromEntries(
-    RUNTIME_MESSAGE_KINDS.map((kind) => [kind, shown || isEnvMessageKind(kind)]),
-  ) as RuntimeVisibility;
+export function runtimeVisibilityFor(mv: {
+  environment: boolean;
+  source: boolean;
+  system: boolean;
+}): RuntimeVisibility {
+  return {
+    source: mv.source === true,
+    notice: mv.environment === true,
+    subscription: mv.system === true,
+    limit: mv.system === true,
+    compaction: mv.system === true,
+    other: mv.system === true,
+  };
 }
 
 const PREFIX = 'vessel:';

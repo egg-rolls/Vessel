@@ -17,6 +17,7 @@ import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
+import { DEFAULT_MESSAGE_VISIBILITY, type MessageVisibility } from '../../state/message-visibility';
 import type { Verbosity } from '../../state/visibility';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
@@ -460,6 +461,7 @@ export const RunItems = memo(function RunItems({
   hideInput = false,
   verbosity = 'normal',
   cardsDefaultOpen = false,
+  messageVisibility = DEFAULT_MESSAGE_VISIBILITY,
 }: {
   group: RunGroup;
   /** 用户已请求取消且服务端最终报 failed 时，按取消态展示。 */
@@ -472,6 +474,8 @@ export const RunItems = memo(function RunItems({
   verbosity?: Verbosity;
   /** 卡片默认展开（ui.expandCards || verbosity === 'debug'）；手动开合优先。 */
   cardsDefaultOpen?: boolean;
+  /** 消息显示 toggle（q-msg-visibility；缺省 = 改动前行为）。 */
+  messageVisibility?: MessageVisibility;
 }) {
   const copy = useMessageCopy();
   // `interrupted`（S1d：快照说这一 run 被中断）在展示上等同取消态：run 已经不再往下跑，
@@ -501,13 +505,24 @@ export const RunItems = memo(function RunItems({
   const foldedItems = useMemo(() => foldToolItems(group.items), [group.items]);
   const runRunning = group.status === 'running';
   const renderItems = useMemo(
-    () => filterTimelineItems(foldedItems, { verbosity, running: runRunning }),
-    [foldedItems, verbosity, runRunning],
+    () =>
+      filterTimelineItems(foldedItems, {
+        verbosity,
+        running: runRunning,
+        tools: messageVisibility.tools,
+        reasoning: messageVisibility.reasoning,
+      }),
+    [foldedItems, verbosity, runRunning, messageVisibility.tools, messageVisibility.reasoning],
   );
-  // minimal 档把工具卡整体藏掉了，用一行紧凑状态说明「正在跑某个工具」，避免看起来卡住。
+  // 工具卡被藏（minimal 档 / toggle 关）时，用一行紧凑状态说明「正在跑某个工具」，避免看起来卡住。
   const toolHint = useMemo(
-    () => runningToolHint(foldedItems, { verbosity, running: runRunning }),
-    [foldedItems, verbosity, runRunning],
+    () =>
+      runningToolHint(foldedItems, {
+        verbosity,
+        running: runRunning,
+        tools: messageVisibility.tools,
+      }),
+    [foldedItems, verbosity, runRunning, messageVisibility.tools],
   );
   // 只有最后一个思考块可能仍在流式输出；更早的块已经结束。
   const lastReasoningKey = useMemo(() => {
@@ -520,7 +535,9 @@ export const RunItems = memo(function RunItems({
   // 0.17：流式尾部缓冲单独渲染；minimal 只隐藏思考流，正文仍然可见。
   const liveText = group.status === 'running' ? group.liveText : undefined;
   const liveReasoning =
-    group.status === 'running' && reasoningVisible(verbosity) ? group.liveReasoning : undefined;
+    group.status === 'running' && reasoningVisible(verbosity, messageVisibility.reasoning)
+      ? group.liveReasoning
+      : undefined;
   // 「正在思考」的判据（只有既有的 `running` 状态，没有定时器）：
   // run 在跑、但这一轮**还没有任何可见内容**（正文 / 思考 / 工具卡）。以前这里用
   // `!group.liveReasoning`（未经过 verbosity 过滤）判断，minimal 档把思考流藏起来后
