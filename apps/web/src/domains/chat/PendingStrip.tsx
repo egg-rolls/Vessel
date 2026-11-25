@@ -11,7 +11,8 @@
  * 三条硬口径：
  * - **没有 `session_id` 的条目一律不显示**（老条目 / `wake`·`quiet` 投递）：宁可隐藏，
  *   也不把别人的消息串到这条会话上；
- * - **数据永远来自那次 RPC 读**，事件只当触发器（切会话 / 重连 / 本会话新受理一次发送），
+ * - **数据永远来自那次 RPC 读**，事件只当触发器（切会话 / 重连 / 本会话新受理一次发送 /
+ *   inbox 变更 live 事件：`inbox read/delete` 消费、新条目入队，见 `useInboxRefresh.ts`），
  *   非空时 2s 兜底轮询（空态零流量）；取数前 250ms debounce，让「发完立刻开跑」的条目
  *   不在条带上闪一下；
  * - 条带只做「还有几条在等」，写入口按来源分档（见下）。
@@ -339,7 +340,7 @@ export function PendingStrip({
   client: GatewayClient;
   /** 连接代际：重连后重新读一次（断线期间落盘的条目要补上）。 */
   epoch: number;
-  /** 外部触发器（本会话新受理一次发送 / run 数变化）：变一次读一次。 */
+  /** 外部触发器（本会话新受理一次发送 / run 数变化 / inbox 变更 live 事件）：变一次读一次。 */
   refreshKey: number;
   /**
    * 本会话的**客户端 pending**（`usePendingSends` 已按会话过滤）。

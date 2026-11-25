@@ -15,6 +15,7 @@ import { Button } from '../../../components/ui';
 import { useConnection } from '../../../gateway/ConnectionProvider';
 import { hasMessage, t, useLocale } from '../../../i18n';
 import {
+  hasConfiguredValue,
   LOG_SETTING_PREFIX,
   readLogEnvOverrides,
   resolveDisplayValues,
@@ -287,6 +288,29 @@ export function SettingsDialog({
     return logOverrides.find((override) => override.key === field)?.env;
   };
 
+  // 增量⑤：是否存在显式配置值（pending 乐观值也算）。values 那份混入了 fallback /
+  // default 回落，分不清「配了」与「缺省如此」——这里看原始来源：核心 = config.get
+  // 原始快照（hasConfiguredValue），插件 = plugins.list[].config，local = 存储键存在。
+  const configuredFor = (def: SettingDef): boolean => {
+    if (def.type === 'view') return false;
+    if (def.scope === 'local') {
+      // theme 是 uiStore 活值（initialTheme 自带缺省），恒按已配置显示。
+      if (def.id === 'local.theme') return true;
+      try {
+        return localStorage.getItem(def.key) !== null;
+      } catch {
+        return false;
+      }
+    }
+    if (def.pluginId !== undefined) {
+      return (
+        pending[def.id] !== undefined ||
+        pluginValueText(pluginConfigById.get(def.pluginId)?.[def.key]) !== undefined
+      );
+    }
+    return pending[def.key] !== undefined || hasConfiguredValue(data, def.key);
+  };
+
   const selectTab = (next: ScopeTab) => {
     setTab(next);
     try {
@@ -384,6 +408,7 @@ export function SettingsDialog({
         saving={writer.savingKey === def.id}
         query={parsed.text}
         envOverride={envOverrideFor(def)}
+        configured={configuredFor(def)}
         onSave={(target, raw) =>
           void writer.save(target, raw, tab === 'project' ? 'project' : 'user')
         }

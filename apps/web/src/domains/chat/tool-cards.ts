@@ -184,6 +184,84 @@ function principalLabel(value: string | undefined): string | undefined {
 }
 
 /**
+ * 完整地址 `<principal>@<node>:<team>` 的解析结果（additive，问题2）。
+ *
+ * 卡头摘要仍然只说「发给谁」（principalLabel 的口径不动）；舰队归属由这份解析
+ * 交给卡片副行 / 展开体显示。三段任一为空 / 形状不符 ⇒ `undefined`：旧消息的纯名字、
+ * 本地 id 一律不认，渲染逐字不变（向后兼容不是可选项）。
+ */
+export interface AgentRoute {
+  principal: string;
+  node: string;
+  team: string;
+  /** 原始地址（trim 后逐字；展示 / tooltip 用它，不重新拼装）。 */
+  raw: string;
+}
+
+/**
+ * 解析完整地址（纯函数）。node 段取**第一个** `:` 之前：node id（UUID）与 team id
+ * （slug / UUID）都不含 `:`，第一个冒号就是分界。未知 node 不猜名字 —— 这里只拆段，
+ * 名字映射是渲染层的事（查不到退原始 id）。
+ */
+export function parseAgentAddress(value: string | undefined): AgentRoute | undefined {
+  if (typeof value !== 'string') return undefined;
+  const raw = value.trim();
+  const at = raw.indexOf('@');
+  if (at <= 0) return undefined;
+  const rest = raw.slice(at + 1);
+  const colon = rest.indexOf(':');
+  if (colon <= 0 || colon === rest.length - 1) return undefined;
+  return {
+    principal: raw.slice(0, at),
+    node: rest.slice(0, colon),
+    team: rest.slice(colon + 1),
+    raw,
+  };
+}
+
+/**
+ * `agent` 工具入参里的目标地址：`to` / `member` / `members[0]` / `name`，与
+ * `agentSummary` 的目标解析同一顺序。只有完整地址形状才返回（纯名字 / 本地 id ⇒
+ * undefined，卡片不新增任何显示）。
+ */
+export function agentRouteOf(args: unknown): AgentRoute | undefined {
+  const parsed = parseToolArgs(args);
+  if (parsed === undefined || typeof parsed === 'string') return undefined;
+  const candidates = [
+    typeof parsed.to === 'string' ? parsed.to : undefined,
+    typeof parsed.member === 'string' ? parsed.member : undefined,
+    stringItems(parsed.members)[0],
+    typeof parsed.name === 'string' ? parsed.name : undefined,
+  ];
+  for (const candidate of candidates) {
+    const route = parseAgentAddress(candidate);
+    if (route !== undefined) return route;
+  }
+  return undefined;
+}
+
+/**
+ * `agent` 工具结果里的 `resolved_to`（服务端实际投递给谁）：本地成员 id 或完整地址。
+ * 结果可能是 JSON 字符串（工具回话）或已解析对象；没有该字段 ⇒ undefined。
+ * 批量结果（results[]）不逐条展开 —— 摘要只讲单发那一条，批量看展开体的输出分区。
+ */
+export function resolvedTargetOf(result: unknown): string | undefined {
+  let record: unknown = result;
+  if (typeof result === 'string') {
+    const trimmed = result.trim();
+    if (!trimmed.startsWith('{')) return undefined;
+    try {
+      record = JSON.parse(trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!isRecord(record)) return undefined;
+  const value = record.resolved_to;
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+/**
  * 目标以「谁能认出来」的形式出现：名字优先，内部 id 退短 id（见 `agent-labels.ts`）。
  *
  * 顺序不能反：地址先砍成 principal（那是「发给谁」而不是完整路由），再查名字表，

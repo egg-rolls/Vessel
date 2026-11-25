@@ -186,13 +186,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.logTime.title': 'Log time',
   'settings.item.emptyResponseEnabled.title': 'Empty-response fallback',
   'settings.item.emptyResponseEnabled.desc':
-    'When the model returns an empty reply (no content, no tool calls), retry instead of ending the run with zero output (seamless re-call by default; see below). On = default.',
+    'When the model returns an empty reply (no content, no tool calls), retry instead of ending the run with zero output (seamless re-call by default; see below).',
   'settings.item.emptyResponseSeamless.title': 'Seamless retry (no nudge scar)',
   'settings.item.emptyResponseSeamless.desc':
-    'On (default): discard the empty turn and re-call the model with the existing transcript — no injected message, no scar. If still empty after the retry budget, one nudge is injected as a last resort. Off: always inject the nudge.',
+    'On: discard the empty turn and re-call the model with the existing transcript — no injected message, no scar. If still empty after the retry budget, one nudge is injected as a last resort. Off: always inject the nudge.',
   'settings.item.emptyResponseMaxRetries.title': 'Empty-response retries',
   'settings.item.emptyResponseMaxRetries.desc':
-    'Max retries per run (integer 0–10, default 2), shared by seamless re-calls and nudges. When exhausted the run ends gracefully with a logged notice.',
+    'Max retries per run (integer 0–10), shared by seamless re-calls and nudges. When exhausted the run ends gracefully with a logged notice.',
   'settings.item.emptyResponseNudge.title': 'Empty-response nudge text',
   'settings.item.emptyResponseNudge.desc':
     'Custom nudge injected as a user message. Leave unset to keep the built-in wording.',
@@ -394,6 +394,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.tool.meta': 'Metadata',
   'chat.tool.retryable': 'Retryable',
   'chat.tool.truncated': 'Output truncated',
+  'chat.tool.route': 'Route',
+  'chat.tool.resolvedTo': 'Resolved to {target}',
   // 0.54 projection card: the placeholder the model saw, side by side with the original.
   // Wording matches ADR-104 §8.5; `passthrough` / `archive_notice` get no badge.
   'chat.projection.badge.placeholder': 'Model saw: placeholder',

@@ -4,6 +4,9 @@
  *
  * boolean = checkbox（与现 Display 页一致）；enum ≤4 = radio 组 / >4 = select；
  * string/number = blur/Enter 提交；object/array = 只读 JsonView；view = 父级子视图。
+ *
+ * 默认值体现在控件上（增量⑤）：选项类未配置时显示默认选中态；输入类未配置时
+ * 默认值作 placeholder（configured=false 由 SettingsDialog 判定），不写在说明文本里。
  */
 import { type ReactNode, useEffect, useState } from 'react';
 import { CopyButton } from '../../../components/CopyButton';
@@ -44,6 +47,7 @@ function CommitInput({
   max,
   min,
   onCommit,
+  placeholder,
   value,
 }: {
   disabled: boolean;
@@ -51,6 +55,8 @@ function CommitInput({
   max?: number;
   min?: number;
   onCommit: (raw: string) => void;
+  /** 未配置时的默认值提示（增量⑤：默认值体现在控件上，不写在说明文本里）。 */
+  placeholder?: string;
   value: string;
 }) {
   const [draft, setDraft] = useState(value);
@@ -70,6 +76,7 @@ function CommitInput({
       disabled={disabled}
       min={min}
       max={max}
+      placeholder={placeholder}
       value={draft}
       onFocus={() => setFocused(true)}
       onBlur={() => {
@@ -95,6 +102,12 @@ export interface SettingRowProps {
   saving: boolean;
   query: string;
   envOverride?: string;
+  /**
+   * 是否存在**显式配置值**（增量⑤；缺省 true = 旧行为）。
+   * false 时输入类控件清空值、把默认值显示为 placeholder；选项类控件不受它影响
+   * （未配置时 value 为空，控件自己回落到默认选中态）。
+   */
+  configured?: boolean;
   onSave: (def: SettingDef, raw: string) => void;
   onReset: (def: SettingDef) => void;
   /** S4：child 插件重载（restartRequired 提示条的 [重载] 按钮）。 */
@@ -112,6 +125,7 @@ export function SettingRow({
   saving,
   query,
   envOverride,
+  configured = true,
   onSave,
   onReset,
   onReloadPlugin,
@@ -137,6 +151,13 @@ export function SettingRow({
       : t('settings.dialog.resetDefault');
   const controlDisabled = disabled || def.readOnly === true || saving;
 
+  // 增量⑤：默认值直接体现在控件上——选项类（checkbox/radio/select）未配置（value 空）
+  // 时回落默认选中态（baseline 与 isSettingModified 同一口径：default ?? fallback）；
+  // 输入类未配置时值清空、默认值作 placeholder（见下方 CommitInput）。
+  // 无 default/fallback 的项 effective = value，渲染逐字不变（向后兼容）。
+  const baseline = def.default ?? def.fallback;
+  const effective = value === '' && baseline !== undefined ? baseline : value;
+
   let control: ReactNode = null;
   if (def.type === 'view') {
     control = children;
@@ -145,11 +166,11 @@ export function SettingRow({
       <label className="flex items-center gap-1.5 text-md">
         <input
           type="checkbox"
-          checked={value === 'true'}
+          checked={effective === 'true'}
           disabled={controlDisabled}
           onChange={(event) => onSave(def, event.target.checked ? 'true' : 'false')}
         />
-        <span className="font-mono">{value === 'true' ? 'true' : 'false'}</span>
+        <span className="font-mono">{effective === 'true' ? 'true' : 'false'}</span>
       </label>
     );
   } else if (def.type === 'enum') {
@@ -159,7 +180,7 @@ export function SettingRow({
         <Select
           className={cn(GHOST_CONTROL_CLASS, 'max-w-80')}
           disabled={controlDisabled}
-          value={value}
+          value={effective}
           onChange={(event) => onSave(def, event.target.value)}
         >
           {options.map((option) => (
@@ -176,7 +197,7 @@ export function SettingRow({
                 type="radio"
                 name={`setting-${def.id}`}
                 value={option}
-                checked={value === option}
+                checked={effective === option}
                 disabled={controlDisabled}
                 onChange={() => onSave(def, option)}
               />
@@ -195,7 +216,8 @@ export function SettingRow({
         max={def.max}
         min={def.min}
         onCommit={(raw) => onSave(def, raw)}
-        value={value}
+        placeholder={baseline}
+        value={configured ? value : ''}
       />
     );
   } else {

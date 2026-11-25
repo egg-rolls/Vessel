@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Tooltip } from '../components/Tooltip';
 import { AccountMenu } from '../domains/auth/AccountMenu';
+import { useNodeNames } from '../domains/nodes/useNodeNames';
 import { t, useLocale } from '../i18n';
 import { LanguageToggle } from './LanguageToggle';
 import { routeBreadcrumb } from './nav';
@@ -27,6 +28,8 @@ export function AppBar({
   center?: ReactNode;
 }) {
   useLocale();
+  // 节点展示名（问题3）：节点详情面包屑显示名字而非 node id；拿不到退 nodeKey 原文。
+  const nodeNames = useNodeNames();
   const drawerToggle = onToggleSessions
     ? {
         id: 'sessions-toggle',
@@ -72,7 +75,7 @@ export function AppBar({
         className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-serif text-xl font-semibold text-ink"
         aria-live="polite"
       >
-        {routeBreadcrumb(route)}
+        {routeBreadcrumb(route, nodeNames)}
       </span>
 
       <div className="flex min-w-0 flex-1 justify-center px-2 max-compact:px-1">{center}</div>
