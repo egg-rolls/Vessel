@@ -56,34 +56,34 @@
     {
       "id": "q-msg-visibility",
       "title": "消息显示设置整合：7类型独立toggle统一分组（用户裁定）",
-      "column": "待办",
-      "owner": "main",
-      "branch": "redblue-dev",
-      "progress": "用户裁定：思考/工具/环境/来源/系统各独立toggle归一组「消息显示」；核心内容恒显；旧showInternalEvents兼容映射；渲染侧统一messageVisibility配置对象；待派单"
+      "column": "进行中",
+      "owner": "q-msg-visibility",
+      "branch": "feat/q-msg-visibility",
+      "progress": "f3d8b60b派单：思考/工具/环境/来源/系统独立toggle归一组；核心恒显；showInternalEvents兼容映射；messageVisibility统一配置；①调研②config+渲染③设置UI④build"
     },
     {
       "id": "q-chat-index",
       "title": "会话索引竖条（豆包式minimap）：侧边dot导航+视口高亮+点击跳转",
-      "column": "待办",
-      "owner": "main",
-      "branch": "redblue-dev",
-      "progress": "用户裁定(参考豆包conversation-index-list)：会话页+团队页侧边竖向条,每消息一dot,当前视口高亮,点击平滑滚动,顶底渐隐；待派单"
+      "column": "进行中",
+      "owner": "q-chat-index",
+      "branch": "feat/q-chat-index",
+      "progress": "4aa2dfad派单：ConversationIndex组件+transcript数据映射+IntersectionObserver视口追踪+scrollIntoView跳转+ChatView/TeamView集成+responsive+渐隐mask；①组件②追踪跳转③集成④build"
     },
     {
       "id": "q-skills-ui",
       "title": "技能库页面UI重设计：卡片展示名称+点击详情（用户裁定参照工具页规范）",
-      "column": "待办",
-      "owner": "main",
-      "branch": "redblue-dev",
-      "progress": "用户反馈：SkillsView未参照工具页面设计规范，应改为技能卡片(只展示名称)+点击查看详细内容；待派单(当前批次收口后)"
+      "column": "进行中",
+      "owner": "q-skills-ui",
+      "branch": "fix/q-skills-ui",
+      "progress": "ee030af2派单：卡片网格(名称+来源小字)+点击展开详情(描述/指令/配置/信任态)+GHOST视觉+搜索筛选保留；①调研②卡片③适配④build"
     },
     {
       "id": "q-skills-discovery",
       "title": "技能插件搜索常用skills目录/marketplace（P3特性设计）",
-      "column": "待办",
-      "owner": "main",
-      "branch": "redblue-dev",
-      "progress": "用户需求：skills插件能搜索常用skills目录存放以便使用；q-skills-impl设计P3 marketplace留分期；待设计派单"
+      "column": "进行中",
+      "owner": "q-skills-discovery",
+      "branch": "design/q-skills-discovery",
+      "progress": "16ea13a4派单(设计零代码)：discovery源配置→搜索→预览→安装+TOFU不绕过+安全分级+UI衔接q-skills-ui；交付skills-discovery-design.md"
     },
 
     {
