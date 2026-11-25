@@ -1750,6 +1750,16 @@ function validateGatewaySettings(
     });
   }
 
+  // q-config-priority（用户裁定#2）：静态产物目录只认非空字符串（路径存在性由
+  // 启动期 index.html fail-fast 判，这里不碰文件系统）。
+  const webDist = (gateway as Record<string, unknown>).webDist;
+  if (webDist !== undefined && (typeof webDist !== 'string' || webDist.trim() === '')) {
+    errors.push({
+      path: 'gateway.webDist',
+      message: 'gateway.webDist must be a non-empty string (path to the web dist directory)',
+    });
+  }
+
   validateSuperviseSettings((gateway as Record<string, unknown>).supervise, errors);
 
   if (allowedOrigins !== undefined) {
@@ -3996,6 +4006,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'remoteShutdown',
     'supervise',
     'enginePool',
+    'webDist',
   ],
   // 0.56：WebUI 登录（嵌套 entries 由 validateAuthSettings 单独校验）。
   auth: [

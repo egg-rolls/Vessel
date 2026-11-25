@@ -615,6 +615,16 @@ export interface GatewayConfig {
   supervise?: GatewaySuperviseConfig;
   /** engine 池 S1：gateway 监督的共享 engine 池；缺省不建池（零回归）。 */
   enginePool?: GatewayEnginePoolConfig;
+  /**
+   * q-config-priority（用户裁定#2）：平台静态托管的 Web 产物目录（YAML `gateway.web_dist`）。
+   *
+   * 责任链：显式 `gateway.web_dist` > `VESSEL_STATIC_DIR` env > 仓库内 `apps/web/dist`
+   * （entry 相对解析）。配了它，无论从哪个 cwd 启动都服务这份 dist —— 金丝雀舰队
+   * （`--user-config` 指向舰队配置、cwd 在生产 checkout）由此不再误宿生产产物。
+   * `~` 展开、相对路径按 cwd 解析；启动时 `index.html` 缺失仍 fail-fast。
+   * 启动期键：热应用不重接静态目录（重启生效）。
+   */
+  webDist?: string;
 }
 
 /**

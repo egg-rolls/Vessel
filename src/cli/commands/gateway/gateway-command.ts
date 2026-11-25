@@ -20,6 +20,7 @@ import { withDeadline } from '@vessel-agent/core';
 import {
   type ConfigValidationError,
   checkPlatformTokenConflict,
+  DATA_DIR_CLI_MARKER_ENV,
   DEFAULT_GATEWAY_OPTIONS,
   DEFAULT_SERVE_OPTIONS,
   getUserConfigDir,
@@ -111,6 +112,7 @@ import {
   type WatchdogEvent,
 } from '../../../gateway/watchdog';
 import {
+  explicitWebDistDir,
   inspectWebDist,
   interruptBuildOfStoppedHost,
   interruptWebBuild,
@@ -507,7 +509,8 @@ async function localNodeStatusViews(
       try {
         const loaded = await loadConfig({
           configPath: entry.config_path,
-          env: { ...env, VESSEL_DATA_DIR: entry.data_dir },
+          // registry data_dir 是 CLI 级权威：伴生标记，与 supervisor spawn 同口径。
+          env: { ...env, VESSEL_DATA_DIR: entry.data_dir, [DATA_DIR_CLI_MARKER_ENV]: '1' },
         });
         const live = await preferLiveNodeListen(
           entry.data_dir,
@@ -1647,11 +1650,11 @@ export async function gatewayStatus(
   const stateKind = gatewayStateKind(options, context.env);
   // 0.57：产物落后于源码要能「不开浏览器也发现」。自修复只在 gateway 启动时跑一次，
   // 之后源码再变就没人说了 —— 所以这一行必须存在（不落后时为 null，不占行）。
-  // 判据与 `/build.json`、启动诊断共用 `inspectWebDist`（`VESSEL_STATIC_DIR` 指向的
-  // 外部产物不比源码，避免误报）。
-  const webDistStaticDir = (context.env.VESSEL_STATIC_DIR ?? '').trim();
+  // 判据与 `/build.json`、启动诊断共用 `inspectWebDist`（显式 `gateway.web_dist` /
+  // `VESSEL_STATIC_DIR` 指向的外部产物不比源码，避免误报）。
+  const webDistStaticDir = explicitWebDistDir(context.config, context.env);
   const webDistLine = webDistStaleLine(
-    await inspectWebDist(webDistStaticDir !== '' ? { staticDir: webDistStaticDir } : {}),
+    await inspectWebDist(webDistStaticDir !== undefined ? { staticDir: webDistStaticDir } : {}),
   );
   // 0.60：构建段也在这里取一次（跨进程读构建落盘的记录；口径与 `web.build.*` 一致）。
   const webBuildLines = await webBuildStatusLines();
@@ -2258,8 +2261,10 @@ async function startDaemonCommand(
   // 启动诊断：只提示，不在这里构建 —— 本进程随后就会退出（真正长驻的是被 spawn
   // 的 daemon 子进程，它走前台 gateway 路径，由 `cli.ts` 负责后台重建）。
   // 在这里起构建会随父进程退出被杀掉。
-  const staticDir = context.env.VESSEL_STATIC_DIR;
-  const warning = webDistWarning(await inspectWebDist(staticDir ? { staticDir } : {}));
+  const staticDir = explicitWebDistDir(context.config, context.env);
+  const warning = webDistWarning(
+    await inspectWebDist(staticDir !== undefined ? { staticDir } : {}),
+  );
   if (warning) printErr(ui.warn(warning));
 
   const snapshot = await collectStateFor(context, options);
@@ -2634,7 +2639,9 @@ async function resolveLocalNodes(options: {
       const configPath = entry.config_path as string;
       const loaded = await loadConfig({
         configPath,
-        env: { ...options.env, VESSEL_DATA_DIR: entry.data_dir },
+        // registry data_dir 是 CLI 级权威：伴生标记，与 supervisor spawn 同口径
+        // （否则显式 user config.data_dir 会压过它 → node_data_dir_mismatch）。
+        env: { ...options.env, VESSEL_DATA_DIR: entry.data_dir, [DATA_DIR_CLI_MARKER_ENV]: '1' },
       });
       if (loaded.validation.errors.length > 0) {
         const first = loaded.validation.errors[0];
@@ -3270,7 +3277,7 @@ export async function runPlatformGatewayForeground(
         webBuild: webDistBuildState,
         // 0.61：运行中自查（定时 60s + `/build.json` 探针）。判据/限频/互斥都在
         // `recheckWebDist` 里，和启动时那次构建是同一套；这里只把「何时叫」交出去。
-        webBuildCheck: (trigger) => recheckWebDist(trigger),
+        webBuildCheck: (trigger) => recheckWebDist(trigger, { staticDir: options.staticDir }),
         ...(webBuildCheckMs !== undefined ? { webBuildCheckMs } : {}),
         nodes: nodes.map((node) => ({
           nodeId: node.entry.node_id,
