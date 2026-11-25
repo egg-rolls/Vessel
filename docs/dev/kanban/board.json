@@ -56,10 +56,10 @@
     {
       "id": "q-hydration-anon",
       "title": "微修复：interaction hydration匿名连接token闸门（ISSUE-CR22-1刷新丢卡）",
-      "column": "进行中",
-      "owner": "q-hydration-anon",
-      "branch": "fix/q-hydration-anon",
-      "progress": "5fef23c0派单(裁定a本轮修)：use-interaction-hydration.ts token闸门!tokenAtStart.trim()对回环匿名整段跳过→刷新丢审批卡；对齐canConnect anonymousNode判据让匿名也hydration重建；生产token路径不受影响"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并5c42b487(2文件+13build绿)：闸门全对齐canConnect(canConnectRef,anonymousNode回环+proxyMode代理cookie同修),空token但canConnect成立照常hydration重建pending卡,permission/ask同入口,token路径零回归；已同步canary新bundle index-BsHFS0lE.js免restart；候cardrobust复验22②+⑥→ISSUE-CR22-1 CLOSED"
     },
     {
       "id": "q-context-fix",
