@@ -159,10 +159,10 @@
     {
       "id": "q-ti5-23",
       "title": "微修复：TI5-2 toolbar menu透传+TI5-3 plugins[].config键豁免（B1 PARTIAL）",
-      "column": "进行中",
-      "owner": "q-ti5-23",
-      "branch": "fix/q-ti5-23",
-      "progress": "a4481144派单(lead转达webui R2,B1 PARTIAL)：TI5-2=plugin-host-assembly.ts toolbar投影丢menu→additive透传menu(composer零aria-haspopup=menu修)；TI5-3=loader.ts preserveConfigMapKeys豁免不含plugins[].config→snake→camel递归(ADR-019)致多词键default_level/budget_*热启用失效(get_state恒auto)→加plugins[].config子树豁免保留用户键原样(先例mcpServers/pricing.models),parseSettings读snake匹配；红线ADR-019其余不动/enabled不回归；候修复→合并→canary同步→webui/lifecycle R3；B2/A/A2+C/B3已PASS"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并a31030a5(39905019 TI5-2 menu透传+2a2c7eb7 TI5-3 config豁免,2文件+8零冲突,门禁绿)：TI5-2 assembly toolbar.map additive透传menu(child+in-process两路径,零类型变更)；TI5-3 preserveConfigMapKeys豁免plugins[].config子树(路径格式修正:数组递归无索引段path=['plugins','config',…],冷加载+热重载共用入口同修,覆盖所有插件多词键,enabled不回归ADR-019其余零改)；候canary同步a31030a5+restart+webui/lifecycle R3(toolbar菜单渲染+多词键热启用)→TI5-2/TI5-3 CLOSED"
     },
     {
       "id": "q-ti5-manifest",
