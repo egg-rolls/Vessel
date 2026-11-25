@@ -95,6 +95,7 @@ import {
 import { createEvalMethods } from './gateway/methods/evals.js';
 import { createFeishuMethods } from './gateway/methods/feishu.js';
 import { createInteractionMethods } from './gateway/methods/interactions.js';
+import { createKanbanMethods, type KanbanMethodsDeps } from './gateway/methods/kanban.js';
 import { createMcpMethods } from './gateway/methods/mcp.js';
 import {
   createEventsMethods,
@@ -323,6 +324,12 @@ export interface GatewayOptions {
    * 缺省 = `teams.*` 仍进 manifest，但 handler 返回 `not_found`。
    */
   teams?: TeamControlLike;
+  /**
+   * q-kanban-view：任务看板读面 + 用户验收归档写面（canonical kanban.*）。
+   * boardPath 由装配层解析（config kanban.board_path → 缺省 <cwd>/docs/dev/kanban/board.json）。
+   * 缺省 = `kanban.*` 仍进 manifest，但 handler 返回 `not_found`。
+   */
+  kanban?: KanbanMethodsDeps;
   /**
    * 0.25：canonical agent 生命周期控制面（app 注入 AgentService 适配器）。
    * 缺省 = `agents.create|update|close` 仍进 manifest，但 handler 返回 `not_found`。
@@ -2730,6 +2737,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }),
     // 0.19 S3：本地 Team 控制面（canonical teams.*；additive，排在表尾）。
     ...createTeamMethods({ teams: opts.teams }),
+    // q-kanban-view：任务看板（canonical kanban.*；additive，排在表尾）。
+    ...createKanbanMethods(opts.kanban ?? {}),
     // CONTRACT-hot-apply §7：permissions.setToolPolicy（additive，排在表尾）。
     ...createPermissionsMethods({
       ...(opts.permissions !== undefined ? { permissions: opts.permissions } : {}),

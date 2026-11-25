@@ -27,6 +27,7 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
     route.domain === 'pluginHost' ||
     route.domain === 'nodes' ||
     route.domain === 'teams' ||
+    route.domain === 'kanban' ||
     route.domain === 'agents' ||
     route.domain === 'capabilities' ||
     route.domain === 'mcp' ||
@@ -106,6 +107,16 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
               }}
             >
               <DomainIcon domain="teams" /> {domainLabel('teams')}
+            </button>
+            <button
+              type="button"
+              className="more-item"
+              onClick={() => {
+                setMoreOpen(false);
+                navigate(primaryRoute('kanban'));
+              }}
+            >
+              <DomainIcon domain="kanban" /> {domainLabel('kanban')}
             </button>
             <button
               type="button"

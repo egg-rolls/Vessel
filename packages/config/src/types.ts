@@ -368,6 +368,12 @@ export interface DurableConfig {
   checkpointEvery?: 'iteration';
 }
 
+/** q-kanban-view：任务看板查看器（kanban.* RPC；缺省板 = <cwd>/docs/dev/kanban/board.json） */
+export interface KanbanConfig {
+  /** board.json 路径（绝对或相对进程 cwd；支持 ~ 展开，装配层解析） */
+  boardPath?: string;
+}
+
 /** Eval harness 配置（0.4；默认关闭、默认离线） */
 export interface EvalsConfig {
   /** true 才允许 CLI eval（默认 false） */
@@ -1281,6 +1287,8 @@ export interface VesselConfig {
   hub?: HubConfig;
   /** 0.4：eval harness */
   evals?: EvalsConfig;
+  /** q-kanban-view：任务看板查看器；缺省板 = <cwd>/docs/dev/kanban/board.json */
+  kanban?: KanbanConfig;
   /** 0.4：飞书渠道 */
   feishu?: FeishuConfig;
   /** 0.4：可观测性 */

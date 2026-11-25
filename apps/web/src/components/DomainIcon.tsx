@@ -147,6 +147,16 @@ export function DomainIcon({ domain }: { domain: Domain }) {
           <path d="M14.5 13.5V7.5" />
         </svg>
       );
+    case 'kanban':
+      // 三列看板：外框 + 两条列分隔线 + 各列一张卡片短线。
+      return (
+        <svg {...common}>
+          <rect x="3" y="3.5" width="14" height="13" rx="1.2" />
+          <path d="M7.7 3.5v13M12.3 3.5v13" />
+          <path d="M4.8 6.5h1.4M9.3 6.5h1.4M13.8 6.5h1.4" />
+          <path d="M4.8 9.5h1.4M9.3 9.5h1.4" />
+        </svg>
+      );
     case 'settings':
       return (
         <svg {...common}>

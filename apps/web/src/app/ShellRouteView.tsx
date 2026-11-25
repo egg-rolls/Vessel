@@ -3,6 +3,7 @@ import { ChatView } from '../domains/chat/ChatView';
 import { GatewayView } from '../domains/gateway/GatewayView';
 import { HubView } from '../domains/hub/HubView';
 import { CapabilityView } from '../domains/integrations/CapabilityView';
+import { KanbanView } from '../domains/kanban/KanbanView';
 import { NodePanelView } from '../domains/nodes/NodePanelView';
 import { ObserveView } from '../domains/observe/ObserveView';
 import { PendingView } from '../domains/pending/PendingView';
@@ -47,6 +48,7 @@ export function ShellRouteView({
       {route.domain === 'pluginHost' && <PluginHostView />}
       {route.domain === 'nodes' && <NodePanelView route={route} navigate={navigate} />}
       {route.domain === 'teams' && <TeamsView route={route} navigate={navigate} panes={panes} />}
+      {route.domain === 'kanban' && <KanbanView />}
       {route.domain === 'agents' && <AgentsView route={route} navigate={navigate} />}
       {route.domain === 'runs' && <RunsView route={route} navigate={navigate} />}
       {(route.domain === 'tools' || route.domain === 'mcp' || route.domain === 'channels') && (
