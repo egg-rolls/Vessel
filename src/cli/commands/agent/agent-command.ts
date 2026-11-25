@@ -108,7 +108,9 @@ function methodParams(command: AgentOwnerCommand): {
             ...(command.visibility !== undefined ? { visibility: command.visibility } : {}),
             ...(command.systemPrompt !== undefined ? { system_prompt: command.systemPrompt } : {}),
             // q-hire-prompt：创建即投递的首条任务（文件路径已在 runAgentCommand 读成正文）。
-            ...(command.startupPrompt !== undefined ? { startup_prompt: command.startupPrompt } : {}),
+            ...(command.startupPrompt !== undefined
+              ? { startup_prompt: command.startupPrompt }
+              : {}),
             ...(command.workspace !== undefined ? { workspace: command.workspace } : {}),
           },
         ],
