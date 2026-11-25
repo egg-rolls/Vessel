@@ -129,6 +129,25 @@ export function pluginEntryEnabled(
 }
 
 /**
+ * 工厂式插件的启用**显示**口径（0.56.1，CLI 列表与面板基础行共用）：
+ * 工厂式插件不进 PluginLoader 装载名单，但确有启用语义——按实际装配门控标注
+ * （与 bootstrap wiring 同源），不按 plugins[] 条目猜。engine-client 等装配层
+ * 基础设施无用户面启用语义，恒显示未启用（与 CLI 列表同一口径）。
+ */
+export function factoryPluginDisplayEnabled(config: VesselConfig, name: string): boolean {
+  switch (name) {
+    case 'mcp-client':
+      return Object.values(config.mcpServers ?? {}).some((server) => server.enabled !== false);
+    case 'evals':
+      return config.evals?.enabled !== false;
+    case 'feishu':
+      return config.feishu?.enabled === true;
+    default:
+      return false;
+  }
+}
+
+/**
  * S4（vscode-settings-design §4.4）：写单个插件配置键。照 setPluginEnabled 先例：
  * withConfigLock → readUserConfigRoot → 只改 plugins[name].config[key] →
  * writeUserConfigRoot（保留其它键 / 其它插件）。值已由 serve 方法层按 manifest

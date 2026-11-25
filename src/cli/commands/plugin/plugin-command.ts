@@ -18,11 +18,13 @@ import {
 } from '../../../../packages/config/src/index';
 import {
   declarativePluginEntries,
+  factoryPluginDisplayEnabled,
   pluginEntryEnabled,
   setPluginEnabled,
 } from '../../../plugin/plugin-config';
 import {
   defaultPluginRoots,
+  FACTORY_PLUGINS,
   type PluginDescriptor,
   PluginLoader,
 } from '../../../plugin/plugin-loader';
@@ -206,12 +208,11 @@ async function readEnabledNames(options: PluginCommandOptions): Promise<{
   );
   warnExternalPluginsOnce(selection.external);
   const names = new Set(selection.names);
-  // 工厂式插件不进 PluginLoader 名单，但确有启用语义；列表按实际装配标注。
-  if (Object.values(config.mcpServers ?? {}).some((server) => server.enabled !== false)) {
-    names.add('mcp-client');
+  // 工厂式插件不进 PluginLoader 名单，但确有启用语义；列表按实际装配标注
+  // （0.56.1：与面板基础行共用 factoryPluginDisplayEnabled，同一口径）。
+  for (const name of FACTORY_PLUGINS) {
+    if (factoryPluginDisplayEnabled(config, name)) names.add(name);
   }
-  if (config.evals?.enabled !== false) names.add('evals');
-  if (config.feishu?.enabled === true) names.add('feishu');
   if (config.provider?.name) names.add(`provider-${config.provider.name}`);
   return { names, configured: config.plugins };
 }

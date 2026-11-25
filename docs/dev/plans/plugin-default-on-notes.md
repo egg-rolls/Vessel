@@ -224,3 +224,15 @@ child 口径对齐 + 面板可见性；旧契约注释更新 + CHANGELOG 口径�
 - 声明式 guardrails/hooks 与显式条目的裁决关系不变（显式 enabled 最终裁决）。
 - 结构性排除不变：provider / FACTORY_PLUGINS / hook-logging（debug）/ child（宿主 spawn）。
 - 版本位：breaking→minor 的收口裁定归发布（RELEASE §1），本切片不动版本号。
+
+③ 实施细节（面板可见性 + 显示一致）：
+- 新增 `factoryPluginDisplayEnabled(config, name)`（plugin-config.ts）：工厂式插件启用
+  **显示**口径单源——mcp-client 按 mcpServers 有启用条目 / evals 缺省启用 / feishu 需
+  enabled:true / engine-client 等基础设施恒显示关。CLI readEnabledNames 与两处面板
+  基础行产地共用，消灭第三份口径。
+- cli.ts bundlePluginEntries / bootstrap.ts plugins()：发现但未装载的插件补基础行
+  （此前 catalog 缺行即不可见）——工厂式按上述门控标注，其余未装载（opt-out / debug
+  门控 / 加载失败）显示关；child 行仍由 manager.statuses() 提供；显式 disabled 补行
+  循环补 loaded.add 防重复行。
+- 面板开关写路径（config.set / vessel plugin enable）与显示读路径（plugins.list /
+  plugins.catalog）在覆盖层语义下闭环：未列入 = 默认开，显式关 = 行显示关。

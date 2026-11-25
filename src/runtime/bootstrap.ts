@@ -120,13 +120,17 @@ import {
   type TraceRecorderFactory,
 } from '../observability/trace-wiring';
 import type { McpControl } from '../plugin/mcp-wiring';
-import { declarativePluginEntries, setPluginConfigValue } from '../plugin/plugin-config';
+import {
+  declarativePluginEntries,
+  factoryPluginDisplayEnabled,
+  setPluginConfigValue,
+} from '../plugin/plugin-config';
 import {
   activateStartupPlugins,
   createPluginHostManager,
   createPluginReloader,
 } from '../plugin/plugin-host-assembly';
-import { PluginLoader } from '../plugin/plugin-loader';
+import { FACTORY_PLUGINS, PluginLoader } from '../plugin/plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from '../plugin/plugin-selection';
 import { startPluginWatch } from '../plugin/plugin-watch';
 import {
@@ -2090,6 +2094,18 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           listed.push(row);
           seen.add(row.name);
         }
+      }
+      // 0.56.1：发现但未装载的插件也补基础行（与 gateway 模式 bundlePluginEntries
+      // 同一口径）：工厂式按实际装配门控标注，其余未装载显示关；child 由宿主 statuses 提供。
+      for (const descriptor of bundle.pluginLoader.list()) {
+        if (seen.has(descriptor.name) || descriptor.mode === 'child') continue;
+        listed.push({
+          name: descriptor.name,
+          enabled:
+            FACTORY_PLUGINS.has(descriptor.name) &&
+            factoryPluginDisplayEnabled(config, descriptor.name),
+        });
+        seen.add(descriptor.name);
       }
       return listed;
     },
