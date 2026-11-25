@@ -48,7 +48,7 @@
     "name": "Model Registry",
     "version": "0.1.0",
     "engines": {
-      "vessel": ">=0.54.0 <1.0.0"
+      "vessel": ">=0.54.0 <3.0.0"
     },
     "description": "模型管理：厂商 / 别名 / 默认模型注册表 + 加密凭证库 + 连通性测试（管理 API + vendors/credentials 管理页）",
     "side": "both",

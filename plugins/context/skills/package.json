@@ -48,7 +48,7 @@
     "name": "Skills",
     "version": "0.1.0",
     "engines": {
-      "vessel": ">=0.56.0 <1.0.0"
+      "vessel": ">=0.56.0 <3.0.0"
     },
     "description": "Managed skill library: scan / index / trust-gated load + library UI",
     "side": "both",
