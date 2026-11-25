@@ -1,8 +1,8 @@
 {
   "board": "vessel 红蓝开发任务看板",
-  "updated": "2026-11-25T09:40:00+08:00",
+  "updated": "2026-11-25T18:10:00+08:00",
   "columns": ["待办", "进行中", "阻塞"],
-  "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。板只留当前活跃任务；完成任务由 main 轮次收尾移入 archive.json（append-only，采纳 q-kanban §9.2 归档约定）。",
+  "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。★用户裁定不自动归档：完成任务标「已合并待验收」留板，用户打勾才移 archive.json（append-only）。",
   "tasks": [
     {
       "id": "canary-fleet",
@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "★两次晋升完成：main=3953a92e(723fb673→38ee0aec→ab63936d→3953a92e)。第一轮六特性+第二轮四特性(msg-visibility/chat-index/skills-ui+grid-fix/hire-prompt)全验闭环。待用户重启生产加载全部。dist固化fleets/canary cwd✓。后续队列：plugin-config-read修复/O1-O6观察/OBS-1环境标签/OBS-2 config live/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期"
+      "progress": "★三次晋升完成：main=fb44a979(v2.0.0,723fb673→38ee0aec→ab63936d→3953a92e→fb44a979)，生产8642/8644健康。第一/二轮全验闭环+前批(from-card/ui-polish/leak/plugin-default-on/AX六命令/inbox-ux/addr-display/sidebar-anim/design-audit/minimap/tooltip/inbox-source/drawer-fix/plugin-version)已晋升。★第四轮金丝雀收尾：canary=3cc1474d(bundle index-DoIKo9x_.js)，skills-style DONE封存(SS2-1 CLOSED)，cardrobust(f87f4f8c)复验22②+⑥中→ALL封存→drain→node start→respawn复核→晋升redblue-dev(45b92c99)→用户重启。第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl)已登记批次书本轮不测。后续队列：plugin-config-read修复/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期"
     },
     {
       "id": "canary-qa-lead",
@@ -18,7 +18,7 @@
       "column": "进行中",
       "owner": "canary-qa-lead",
       "branch": "canary",
-      "progress": "持续流①-⑤确认生效（⑤封存握手：同步前通报→封存→「已封存」→同步/rebuild→批次书开验）。名册更正：测试员身体夜间已释放，canary-t-settings2(de096991)接棒T3b/c(继承T3a✅报告不重做)，leak批次到达hire canary-t-runtime2复验(口径:environ无生产残留+双路径落canary-data/tool-output+生产根零新增)；原则=活体复用续话/释放后新hire继承盘上报告。四在途批已登记矩阵(from-card/ui-polish/leak/plugin-default-on)；三段地址规范执行中；拓扑C知悉候裁"
+      "progress": "持续流①-⑤确认生效（⑤封存握手：同步前通报→封存→「已封存」→同步/rebuild→批次书开验）。★第四轮收尾：skills-style DONE封存(SS2-1 CLOSED)；hydration-anon修复同步核实(canary HEAD 3cc1474d/bundle index-DoIKo9x_.js/免restart实证)；cardrobust(f87f4f8c)正式任务书已发(22②刷新回放重建+⑥permission/ask+proxyMode同修面+live hash+config封存sha终验)；第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl)登记批次书本轮不测。候cardrobust DONE→22闭环+CR22-1 CLOSED→ALL封存通报→main drain paste 15①→node start→respawn复核"
     },
 
     {
@@ -59,7 +59,7 @@
       "column": "阻塞",
       "owner": "user",
       "branch": "redblue-dev",
-      "progress": "✅完成合并5c42b487(2文件+13build绿)：闸门全对齐canConnect(canConnectRef,anonymousNode回环+proxyMode代理cookie同修),空token但canConnect成立照常hydration重建pending卡,permission/ask同入口,token路径零回归；已同步canary新bundle index-BsHFS0lE.js免restart；候cardrobust复验22②+⑥→ISSUE-CR22-1 CLOSED"
+      "progress": "✅完成合并5c42b487(2文件+13build绿)：闸门全对齐canConnect(canConnectRef,anonymousNode回环+proxyMode代理cookie同修),空token但canConnect成立照常hydration重建pending卡,permission/ask同入口,token路径零回归；已同步canary HEAD 3cc1474d新bundle index-DoIKo9x_.js免restart(lead核实git clean+同进程实证)；候cardrobust复验22②+⑥→ISSUE-CR22-1 CLOSED"
     },
     {
       "id": "q-context-fix",
@@ -80,10 +80,10 @@
     {
       "id": "q-plugin-ui-layer",
       "title": "微修复：plugin-ui button重置层外压制iframe表面（ISSUE-SS2-1）",
-      "column": "进行中",
-      "owner": "q-plugin-ui-layer",
-      "branch": "fix/q-plugin-ui-layer",
-      "progress": "633d33d4派单(裁定a本轮修)：styles.css L37-43 button重置unlayered压iframe utilities→收进@layer base+四插件build:ui重建+同病面marketplace/usage确认；embed不回归"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并5fc114ba(a896e818四插件build:ui重建+792b3752 marketplace资产收口)build绿；button重置归@layer base不再压iframe utilities；金丝雀验毕ISSUE-SS2-1 CLOSED(skills-style封存连带)；待晋升+用户打勾"
     },
     {
       "id": "q-drag-reference",
@@ -104,10 +104,10 @@
     {
       "id": "q-empty-state",
       "title": "错误/重试卡居中空态样式（参照待批页○空态）",
-      "column": "进行中",
-      "owner": "q-empty-state",
-      "branch": "feat/q-empty-state",
-      "progress": "1af5de70派单：加载失败/重试卡改水平居中空态(图标+主文案+副文案,复用待批页EmptyState)；统一错误/空态组件"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并08cec35a：States.tsx一处改全局~30处,加载失败/重试卡水平居中空态(图标+主/副文案,复用待批页EmptyState)build绿；已同步canary(e20611db复验批次)；待金丝雀验+用户打勾"
     },
     {
       "id": "q-thinking-plugin",
@@ -131,7 +131,7 @@
       "column": "阻塞",
       "owner": "user",
       "branch": "redblue-dev",
-      "progress": "✅完成合并f10ba7ae(1e5cd162 P-A同构/7da30550 P-B expired收口/805046d2 PII载体按需/0d613279 A-Web分级纠正,10文件+175build绿)；agent可见=人类可见+分级纠正非特例+fail-open；待金丝雀验(rotate卡run中即现/环境卡run中可见/超时换端无死卡)+用户打勾；遗留:inbox session_id归属协调/P-C跨节点后续"
+      "progress": "✅完成合并f10ba7ae(1e5cd162 P-A同构/7da30550 P-B expired收口/805046d2 PII载体按需/0d613279 A-Web分级纠正,10文件+175build绿)；agent可见=人类可见+分级纠正非特例+fail-open；★金丝雀cardrobust(f87f4f8c)复验中:22②刷新回放重建+⑥permission/ask(hydration-anon修复后应PASS,对照2/2 FAIL基线)+proxyMode同修面+live bundle hash实证+config封存恢复lead sha终验(pii_reveal policy切换制造pending卡是测试道具,canary-config sha波动勿误判)；DONE→22闭环+CR22-1 CLOSED→ALL封存→drain；遗留:inbox session_id归属协调/P-C跨节点后续"
     },
     {
       "id": "q-graceful-selfrestart",
@@ -144,10 +144,10 @@
     {
       "id": "q-skills-style",
       "title": "技能库样式真复用组件/TOKEN对齐vessel风格（用户反馈自建感）",
-      "column": "进行中",
-      "owner": "q-skills-style",
-      "branch": "fix/q-skills-style",
-      "progress": "b64eef7a派单：审计SkillsView自定义vs共享，换plugin-ui组件(Dialog/Button/Section/KeyValueList)+GHOST token，消除自建感对齐工具页；①审计②换组件③build:ui"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并5e037cca(66d02d4f摘整页GHOST误套+卡片/弹窗逐字对齐ToolsPanel/ModalShell共享表面)build绿+build:ui；★金丝雀DONE封存(ISSUE-SS2-1 CLOSED,连带plugin-ui-layer微修复5fc114ba)；待晋升+用户打勾"
     },
     {
       "id": "q-inbox-actions",
@@ -168,10 +168,10 @@
     {
       "id": "q-plugin-lifecycle",
       "title": "设计：插件热加载/重启生命周期（manifest声明+UI badge如实+内置跟踪vessel版本）",
-      "column": "进行中",
-      "owner": "q-plugin-lifecycle",
-      "branch": "design/q-plugin-lifecycle",
-      "progress": "90dbe782派单(用户设计问题)：每插件热/重启能力矩阵+根因+lifecycle声明+UI badge修O5+内置跟踪vessel版本+独立version保留+iframe热替换可行性；零代码"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅设计完成合并9379c740(plugin-lifecycle-design.md)：per-capability生命周期+O5三层UI撒谎根因+内置跟踪vessel版本；实施单q-plugin-lifecycle-impl已合并c68cc6c1+792b3752(最优终态)；待金丝雀验+用户打勾"
     },
     {
       "id": "q-plugin-version",
@@ -187,23 +187,23 @@
       "column": "阻塞",
       "owner": "user",
       "branch": "redblue-dev",
-      "progress": "✅审查完成合并6ac8d638(a2e229a0调研/725ebee3方案,353行)：根因实锤每run起点压力预警整窗兜底含564冻结占位工具结果虚高170K(请求路径381K准)；rotate拒实为approval_timeout非ratio闸码名误导；统一方案修写侧兜底应用冻结占位集合~30行消费侧自动对齐；待派实施修复"
+      "progress": "✅审查完成合并6ac8d638(a2e229a0调研/725ebee3方案,353行)：根因实锤每run起点压力预警整窗兜底含564冻结占位工具结果虚高170K(请求路径381K准)；rotate拒实为approval_timeout非ratio闸码名误导；实施单q-context-fix已合并5de051ea(修写侧兜底应用冻结占位+切片+rotate文案)；遗留P4 TUI口径另单；待金丝雀验+用户重启后对齐"
     },
     {
       "id": "q-envcard-run",
       "title": "调研：卡片渲染健壮性（env卡run中不可见+permission审批卡刷新不显示）",
-      "column": "进行中",
-      "owner": "q-envcard-run",
-      "branch": "design/q-envcard-run",
-      "progress": "636f9151派单(用户两报告)：①run中看不到inbox/PII环境卡,run结束才显示②rotate权限审批卡前端不显示刷新也不出→approval_timeout(更优先,阻塞审批)；调研live vs history渲染差异+permission态持久化/渲染条件+修复方案；零代码"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅调研完成合并c859cc8e+04cbb5b1(envcard-run-visibility-research.md)：env卡live闸门internal档+终态补渲根因；permission审批卡=rotate裸流绕过journal/时间线+刷新依赖interactions.list可达性；实施单q-card-robust已合并f10ba7ae金丝雀复验中；待验闭环+用户打勾"
     },
     {
       "id": "q-runlost-audit",
       "title": "审查：run lost非优雅中断+inbox重启不唤醒（自重启续作链路）",
-      "column": "进行中",
-      "owner": "q-runlost-audit",
-      "branch": "design/q-runlost-audit",
-      "progress": "8cafa4d4派单(用户报告)：自重启vessel restart --force后run报owning process exited before completion被中断(非优雅)；inbox续作笔记不自动唤醒(需用户手动发消息)；审查run lost触发条件+自重启优雅路径+inbox重启唤醒缺口；零代码"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅审查完成合并9fc26e0c(runlost-graceful-restart-audit.md)：run lost触发条件(file:line)+编排者悖论+inbox七缺口+自重启三件套设计；实施单q-graceful-selfrestart已合并1d5e4688(drain-to-quiesce+--self+inbox唤醒G1-G7)；待金丝雀验+用户打勾"
     },
     {
       "id": "q-plugin-config-read",
@@ -309,7 +309,7 @@
       "column": "待办",
       "owner": "main+user",
       "branch": "redblue-dev",
-      "progress": "build门禁由各实施agent跑绿+金丝雀行为验收全过（verify2/3/4）+已晋升main 38ee0aec；剩=用户重启生产（vessel gateway restart --stop-nodes）+最终行为验收（设置/metrics/skills/media view/命名/滚动/互联等）"
+      "progress": "build门禁由各实施agent跑绿+金丝雀行为验收(第一/二轮verify2/3/4全过)+三次晋升main=fb44a979(v2.0.0)；★当前=第四轮金丝雀收尾(cardrobust复验→ALL封存→drain→respawn复核)→晋升redblue-dev 45b92c99到main(ff-only)→通知用户重启生产+最终行为验收；第五轮四面候lead批次书"
     }
   ]
 }
