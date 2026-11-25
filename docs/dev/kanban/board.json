@@ -51,7 +51,7 @@
       "column": "进行中",
       "owner": "q-plugin-default-on",
       "branch": "fix/q-plugin-default-on",
-      "progress": "①调研完成c91b5a4f(笔记201行)：默认集真源plugin-selection.ts五处共用；OPT_IN只剩media(理由文档已失)；现态缺陷A物化漂移+新装静默不加载/B child口径相反+面板不可见。★main裁定方案B批准：plugins:改覆盖层(默认集=全部已安装恒底,显式条目只覆盖,不物化)；media转默认；结构性排除保留(feishu/mcp-client/evals/engine-client/provider/hook-logging逐个论证)；child口径对齐+面板可见性；契约推翻登记+金丝雀重点回归存量部分清单。②实施中③面板+build"
+      "progress": "①调研完成c91b5a4f(笔记201行)：默认集真源plugin-selection.ts五处共用；OPT_IN只剩media(理由文档已失)；现态缺陷A物化漂移+新装静默不加载/B child口径相反+面板不可见。★main裁定方案B批准：plugins:改覆盖层(默认集=全部已安装恒底,显式条目只覆盖,不物化)；media转默认；结构性排除保留(feishu/mcp-client/evals/engine-client/provider/hook-logging逐个论证)；child口径对齐+面板可见性；契约推翻登记+金丝雀重点回归存量部分清单。②完成4提交(1a016f02基线newline/d32071ba覆盖层核心+media转默认/74464c62物化修复+child口径/2f50dd2d契约登记CHANGELOG breaking节)build绿；③面板可见性+显示一致+总门禁进行中"
     },
     {
       "id": "q-ui-polish",
