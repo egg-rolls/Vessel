@@ -4,7 +4,7 @@ import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../compone
 import { StatusGlyph } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { IconButton, Tooltip } from '../../components/Tooltip';
-import { Button, CountBadge, Input, SearchInput, SidebarShell } from '../../components/ui';
+import { Button, CountBadge, Icon, Input, SearchInput, SidebarShell } from '../../components/ui';
 import type { NodeRoster } from '../../gateway/team-roster';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -412,16 +412,17 @@ export function SessionList({
                             <Tooltip label={titleTooltip}>
                               <span className="session-title-text">{title}</span>
                             </Tooltip>
-                            {/* 已命名（title_source='manual'）：只给字形 + tooltip，
-                                中性灰、无背景，和状态字形同级，不抢标题注意力。 */}
+                            {/* 已命名（title_source='manual'）：只给图标 + tooltip，
+                                中性灰、无背景，和状态字形同级，不抢标题注意力。
+                                正式图标（图标库 edit 铅笔），不用 emoji 字形（用户裁定）。 */}
                             {session.title_source === 'manual' && (
                               <Tooltip label={t('chat.sessionList.named')}>
                                 <span
-                                  className="flex-none font-mono text-2xs leading-none text-muted"
+                                  className="flex-none text-muted"
                                   role="img"
                                   aria-label={t('chat.sessionList.named')}
                                 >
-                                  ✎
+                                  <Icon name="edit" size={12} />
                                 </span>
                               </Tooltip>
                             )}
