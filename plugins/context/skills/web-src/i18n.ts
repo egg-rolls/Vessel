@@ -13,7 +13,8 @@ const EN = {
   'common.retry': 'Retry',
   'common.refresh': 'Refresh',
   'common.loadError': 'Could not load this view',
-  'common.cancel': 'Cancel',
+
+  'common.close': 'Close',
   'common.prev': 'Previous',
   'common.next': 'Next',
 
@@ -26,7 +27,7 @@ const EN = {
   'skills.tagAll': 'All tags',
   'skills.rescan': 'Rescan',
   'skills.rescanDone': 'Index rebuilt: {added} added, {removed} removed, {changed} changed',
-  'skills.total': '{n} skill(s)',
+
   'skills.page': 'Showing {from}–{to} of {total}',
   'skills.empty.title': 'No skills indexed',
   'skills.empty.description':
@@ -34,8 +35,10 @@ const EN = {
   'skills.noMatch': 'No skills match the current filters.',
   'skills.generatedAt': 'Index generated at {ts}',
   'skills.toolbar': 'Skill filters and actions',
+  'skills.openDetails': 'Open details for {name}',
+  'skills.dialogLabel': 'Skill details: {name}',
 
-  'detail.empty': 'Select a skill to see its content, trust state and session loads.',
+  'detail.meta': 'Metadata',
   'detail.missing.title': 'Skill no longer available',
   'detail.missing.description':
     'It may have been deleted or renamed on disk. Rescan the index, or pick another skill from the list.',
@@ -44,7 +47,7 @@ const EN = {
   'detail.version': 'Version',
   'detail.tags': 'Tags',
   'detail.frontmatter': 'Frontmatter',
-  'detail.warnings': 'Warnings',
+
   'detail.content': 'Content',
   'detail.contentTruncated':
     'Preview truncated to the load cap; the file on disk is the full truth.',
@@ -78,8 +81,7 @@ const EN = {
   'loads.title': 'Session loads',
   'loads.none': 'Not loaded in any session yet.',
   'loads.count': 'loaded ×{n}',
-  'loads.session': 'Session',
-  'loads.loadedAt': 'Loaded at',
+
   'loads.runId': 'Run',
 };
 
@@ -90,7 +92,8 @@ const ZH: Record<MessageKey, string> = {
   'common.retry': '重试',
   'common.refresh': '刷新',
   'common.loadError': '无法加载此视图',
-  'common.cancel': '取消',
+
+  'common.close': '关闭',
   'common.prev': '上一页',
   'common.next': '下一页',
 
@@ -103,7 +106,7 @@ const ZH: Record<MessageKey, string> = {
   'skills.tagAll': '全部标签',
   'skills.rescan': '重新扫描',
   'skills.rescanDone': '索引已重建：新增 {added}、移除 {removed}、变更 {changed}',
-  'skills.total': '共 {n} 个技能',
+
   'skills.page': '显示 {from}–{to} / {total}',
   'skills.empty.title': '索引为空',
   'skills.empty.description':
@@ -111,8 +114,10 @@ const ZH: Record<MessageKey, string> = {
   'skills.noMatch': '没有符合当前过滤条件的技能。',
   'skills.generatedAt': '索引生成于 {ts}',
   'skills.toolbar': '技能筛选与操作',
+  'skills.openDetails': '查看 {name} 的详情',
+  'skills.dialogLabel': '技能详情：{name}',
 
-  'detail.empty': '选择一个技能，查看正文、信任状态与会话加载记录。',
+  'detail.meta': '元信息',
   'detail.missing.title': '技能不存在或已移除',
   'detail.missing.description':
     '它可能已在磁盘上被删除或重命名。重新扫描索引，或从列表中选择其它技能。',
@@ -121,7 +126,7 @@ const ZH: Record<MessageKey, string> = {
   'detail.version': '版本',
   'detail.tags': '标签',
   'detail.frontmatter': 'Frontmatter',
-  'detail.warnings': '告警',
+
   'detail.content': '正文',
   'detail.contentTruncated': '预览按加载上限截断；磁盘上的文件才是完整真相。',
   'detail.contentError': '正文不可用',
@@ -153,8 +158,7 @@ const ZH: Record<MessageKey, string> = {
   'loads.title': '会话加载',
   'loads.none': '尚未在任何会话加载。',
   'loads.count': '已加载 ×{n}',
-  'loads.session': '会话',
-  'loads.loadedAt': '加载时间',
+
   'loads.runId': 'Run',
 };
 

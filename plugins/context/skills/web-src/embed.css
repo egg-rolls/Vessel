@@ -95,4 +95,7 @@
   /* Semantic widths */
   --container-search: var(--search-max-w);
   --container-prose: 72ch;
+  /* 详情弹窗（shared.tsx Modal）：宿主 tokens 已有值，这里只补别名。 */
+  --container-modal-lg: var(--modal-w-lg);
+  --z-index-modal: var(--z-modal);
 }

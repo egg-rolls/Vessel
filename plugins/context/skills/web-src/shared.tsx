@@ -1,4 +1,5 @@
 import { Button, Section } from '@vessel-agent/plugin-ui';
+import { type ReactNode, useEffect, useRef } from 'react';
 import type { Translator } from './i18n';
 
 /**
@@ -10,6 +11,8 @@ import type { Translator } from './i18n';
 export const GHOST_CONTROL_CLASS = 'border border-line-strong bg-transparent shadow-none';
 export const GHOST_BUTTON_CLASS = 'border border-line-strong bg-transparent';
 export const GHOST_PANEL_CLASS = 'border border-line bg-transparent';
+/** Section 的 GHOST 覆盖：摘掉 bg-raised / shadow-elev-1，换透黑底细线（cn=twMerge 生效）。 */
+export const GHOST_SECTION_CLASS = 'border border-line bg-transparent shadow-none';
 
 /**
  * unknown_id 业务错（get / trust_set 对已删除 / 重命名技能的回执）。
@@ -79,5 +82,105 @@ export function ErrorState({
         </Button>
       }
     />
+  );
+}
+
+const MODAL_FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * 轻量详情弹窗（工具页 ModalShell 的插件本地等价物）。
+ * plugin-ui 没有 Modal 组件，apps/web 的 ModalShell 依赖宿主私有组件与
+ * @utility modal-fade/rise/pad，iframe / embed 两层都够不着——这里只用
+ * 两层都有的 utilities 落一个零依赖版本：Esc / 遮罩点击关闭、Tab 焦点圈、
+ * 打开锁 body 滚动、关闭恢复触发元素焦点。面板口径 GHOST：页面黑底 + 细线。
+ */
+export function Modal({
+  label,
+  closeLabel,
+  onClose,
+  children,
+}: {
+  label: string;
+  closeLabel: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const root = panelRef.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const focusables = (): HTMLElement[] =>
+      root
+        ? [...root.querySelectorAll<HTMLElement>(MODAL_FOCUSABLE)].filter(
+            (element) => element.offsetParent !== null || element === document.activeElement,
+          )
+        : [];
+    // 没有可聚焦元素时把焦点放到面板本身（tabIndex=-1），焦点不留在遮罩外。
+    (focusables()[0] ?? root)?.focus();
+
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previous?.focus();
+    };
+  }, []);
+
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop mousedown closes the modal
+    <div
+      className="fixed inset-0 z-modal flex items-center justify-center overflow-y-auto overscroll-contain bg-scrim p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        tabIndex={-1}
+        className="relative flex max-h-[86dvh] w-full max-w-modal-lg flex-col overflow-hidden rounded-lg border border-line bg-bg shadow-elev-4"
+      >
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain p-5 max-compact:p-4">
+          {children}
+        </div>
+        <Button
+          size="small"
+          aria-label={closeLabel}
+          className={`absolute right-2 top-2 ${GHOST_BUTTON_CLASS}`}
+          onClick={onClose}
+        >
+          ×
+        </Button>
+      </div>
+    </div>
   );
 }
