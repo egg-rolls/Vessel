@@ -208,4 +208,44 @@ C 下生产 gateway 为探测/代理凭据会加载金丝雀条目：`loadConfig
 | 浏览器跨 node 操作（roster/teams/attention） | ✅ 单 origin 平台代理 + `platform.nodes.credentials` 按 node 下发凭据，免二次登录（这是 **UI 面**收益，不是 agent send 面） |
 | CLI targeting | ✅ `--connect http://127.0.0.1:8642 --node <canary-id>` 一个入口管两 node（`cli-node-targeting.md`）；但**写回类管理命令仍须带金丝雀 `--user-config`**（§3.3 写方向） |
 
-**结论：任务书期望的「跨 gateway 寻址复杂度消失」不成立。同 gateway 的真实收益集中在 UI/CLI 入口与进程编排，不在 federation。**
+**结论：任务书期望的「跨 gateway 寻址复杂度消失」不成立。同 gateway 的真实收益集中在 UI/CLI 入口与进程编排，不在 federation。**---
+
+## §5 生命周期：独立 node restart 的可行性（调研面④）
+
+### 5.1 现态命令面盘点（实查）
+
+| 操作 | 托管 node（auto_start:true，在 manifest） | external node（auto_start:false，不在 manifest） |
+|---|---|---|
+| `node start --daemon --config <path>` | 可以独立起（gateway 下次 start 会 adopt） | ✅ 正常通道 |
+| `node stop` | ❌ **拒绝**：`nodeStopCommand`（node-command.ts L269）两道确定性判定——pid record 指向 platform 监听（L296），或 `isManagedByPlatform`（children manifest 含该 node，L301）→ 报 `node.managedByGateway` 退出 1 | ✅ 正常停：先 `gateway.shutdown` 请进程内 drain（写 resume 标记 + interrupt('shutdown')），等自死 ≤10s，超时回退强杀（L306–360） |
+| `node reload` | ✅ config scope 热应用（不重启） | ✅ 同 |
+| 平台 RPC 单 node restart | ❌ **不存在**（平台只有 nodes.list/get/credentials，§2.4） | ❌ 不存在 |
+| 看门狗自动重启 | ✅ 僵死探活失败 → 强杀 + 重 spawn（同一份 entry/env 快照） | ❌ external 不进看门狗 |
+| `gateway stop`（缺省） | 平台层停，node/hub **保活**（handoff marker，下次 adopt） | 同（本来就不归它管） |
+| `gateway stop --stop-nodes` / `vessel stop` | 连 **manifest 内** spawn/接管且归属可复核的 node/hub 一起停（`stopSpawnedChildren`） | ✅ **不受波及**：只认 manifest，external 不在其中 |
+| `gateway restart`（缺省） | 新平台 adopt 旧 node，**env/代码完全不刷新**（federation-setup.md §3.1 第 3 环） | 同 |
+
+**没有 `node restart` 子命令**（node-command.ts `runNodeCommand` L460：start/status/stop/reload/token）；「restart node」现态 = stop + start 两条命令，或看门狗代劳。
+
+### 5.2 drain 超时坑（任务书点名）
+
+- `node stop` 的优雅窗口：`shutdownGateway` 请求超时 3s + 等自死 10s，超时**回退强杀**并打 `node.drain.skipped reason=timeout`——在跑 run 的 resume 标记可能一条都写不出（Windows 外部 kill 是无条件终止）。`src/node/node-drain.ts` `createNodeDrainer` 负责进程内 settle。
+- 这个坑**与拓扑无关**：A/C 下金丝雀自己 stop 自己的 node 走同一条路径；B 下托管 node 连这条路径都没有（被 managed 判定拒绝），只能整舰队 `--stop-nodes` 或等看门狗。**B 反而把「独立 restart」变成不可能。**
+- 缓解（现有杠杆）：restart 前先 `node reload` 能热应用的 scope；drain 超时阈值目前硬编码（3s/10s），无 config 键——若金丝雀 run 普遍长，可另立「drain 预算可配」小项（与本调研解耦）。
+
+### 5.3 三拓扑下的「金丝雀日常重启」动作对比
+
+- **A（现状）**：`vessel --user-config canary-config.yaml --data-dir canary-data gateway restart --instance canary --stop-nodes`——整舰队冷重启（gateway+node+hub 三个进程），生产无感。
+- **B（托管）**：无单 node 通道。要么 `gateway stop --stop-nodes`（**连生产 node 一起停**，违背动机），要么等看门狗（不可主动触发）。**动机落空。**
+- **C（external）**：
+  ```bash
+  # 在 fleets/canary checkout 内（与启动同一套上下文）
+  vessel --user-config …/canary-config.yaml --data-dir …/canary-data node stop
+  vessel --user-config …/canary-config.yaml --data-dir …/canary-data node start --daemon --config …/canary-config.yaml
+  ```
+  只动金丝雀 node 一个进程；生产 gateway 的 `platform.nodes.list` 投影里它 down→up，浏览器切换不受影响（代理按 descriptor 转发，node 缺席只报 down）。**动机达成，且比 A 少动 gateway+hub 两个进程。**
+  注意：`node start --config` 把 canary-config 当 **project 层**，与 `--user-config` 同文件双挂时层序幂等（同键同值）；保持与现行启动配方同一套 flag 即可，不要发明新组合。
+
+### 5.4 adopt 语义的安全性（C 的关键保障）
+
+生产 gateway `begin()` 对 external 条目**只读 pid 文件、不 spawn、不杀**（node-supervisor.ts L963–982）；`claim()` 对活进程只 adopt 不重复 spawn（L995）。⇒ 生产 gateway 重启/崩溃/看门狗动作都**不会**把金丝雀进程收编或重 spawn 成生产代码。唯一危险动作是人为把条目改成 `auto_start:true`（§8 风险 R6）。
