@@ -64,12 +64,7 @@ import {
   isAskAnswerMessage,
 } from './ask-answer';
 import type { AnsweredAsk } from './ask-answered';
-import {
-  type EnvNoticeCard,
-  envNoticeCard,
-  isEnvNoticeKind,
-  mergeEnvNoticeCards,
-} from './env-notice';
+import { type EnvNoticeCard, mergeEnvNoticeCards, runtimeEnvCard } from './env-notice';
 import { buildHistoryToolItems } from './history-tools';
 import { projectionIndexByCallId } from './projection';
 import { type RotateHandoff, rotateHandoffOf } from './rotate-handoff';
@@ -844,8 +839,9 @@ export function isRuntimeContextMessage(message: Message): boolean {
  * 消息名 → runtime 上下文种类（`vessel:notice` → `notice`）；不是 runtime 上下文返回
  * undefined。live 侧的 run **输入**用它判身份（历史侧用 `runtimeMessageKind`）。
  *
- * 返回的是 `vessel:` 之后的后缀原文：渲染侧只关心「是不是 `notice`（环境信息卡）」，
- * 未知后缀仍会渲成运行时提示卡 —— 失败方向必须是「画成上下文」而不是「画成用户气泡」。
+ * 返回的是 `vessel:` 之后的后缀原文：渲染侧按它装配环境信息卡（`notice` / `source`，
+ * 统一入口 `runtimeEnvCard`），未知后缀仍会渲成运行时提示卡 —— 失败方向必须是
+ * 「画成上下文」而不是「画成用户气泡」。
  */
 function runtimeContextKindOfName(name: string | undefined): string | undefined {
   if (typeof name !== 'string' || !name.startsWith(RUNTIME_MESSAGE_PREFIX)) return undefined;
@@ -1316,10 +1312,11 @@ export function buildHistoryIndex(
     // 文本，按文本判定会把它吞成系统提示（隐藏或渲成通知卡）。
     const noticeKind = noticeKindOf?.(message);
     if (noticeKind !== undefined) {
-      // 环境信息（vessel:notice）：解析成卡片数据（scope 标签 / 缩略 / 展开行）。
-      // 解析失败（空正文 / 纯空白）时 env 缺省，渲染回退成整段文本的 notice 卡；
-      // 老通道 `vessel:subscription`（0.52 起不再生产）走的正是这条兜底，仍是可读卡。
-      const env = isEnvNoticeKind(noticeKind) ? envNoticeCard(message.content) : undefined;
+      // 环境信息（vessel:notice / vessel:source）：统一入口 runtimeEnvCard 装配卡片数据
+      // （notice 走行解析；source 走来源地址组织 + 原文块）。解析失败（空正文 / 纯空白）
+      // 时 env 缺省，渲染回退成整段文本的 notice 卡；老通道 `vessel:subscription`
+      // （0.52 起不再生产）走的正是这条兜底，仍是可读卡。
+      const env = runtimeEnvCard(noticeKind, message.content);
       items.push({
         kind: 'runtime-notice',
         key: itemKeyOf(message, absIndex, 'notice'),
@@ -1523,7 +1520,7 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           ...seqMeta,
         });
       } else if (noticeKind !== undefined) {
-        const env = isEnvNoticeKind(noticeKind) ? envNoticeCard(text) : undefined;
+        const env = runtimeEnvCard(noticeKind, text);
         items.push({
           kind: 'runtime-notice',
           key: `run:${group.runId}:input`,
@@ -1647,14 +1644,14 @@ export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
           continue;
         }
       }
-      // run 中途注入的运行时上下文（工具面 / 模型 / 上下文增量，owner 与成员同一通道）：
-      // 与历史侧同一套 envNoticeCard 解析、同一种 runtime-notice item，运行中即可见。
-      // 携 message_id 让位：历史落盘后由历史那条渲染，不出现第二张卡（见 assemble）。
-      // 不带 runId —— 它不是 run 的输入，不能走 claimedUserByRun 的输入认领口径。
+      // run 中途注入的运行时上下文（工具面 / 模型 / 上下文增量 / 投射来源，owner 与成员
+      // 同一通道）：与历史侧同一个 runtimeEnvCard 入口、同一种 runtime-notice item，
+      // 运行中即可见。携 message_id 让位：历史落盘后由历史那条渲染，不出现第二张卡
+      // （见 assemble）。不带 runId —— 它不是 run 的输入，不能走 claimedUserByRun 的输入认领口径。
       const injectedNotice = injectedNoticeOfEvent(item.event);
       if (injectedNotice !== undefined) {
         const { message, noticeKind } = injectedNotice;
-        const env = isEnvNoticeKind(noticeKind) ? envNoticeCard(message.content) : undefined;
+        const env = runtimeEnvCard(noticeKind, message.content);
         const messageId = messageIdOf(message);
         const injectedTs = itemTs(item.event.ts);
         items.push({

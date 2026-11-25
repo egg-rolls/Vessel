@@ -1390,6 +1390,9 @@ export const messages = {
   'chat.env.scope.trim': '已裁剪上下文',
   // 0.52：PII 句柄整批失效（内存 broker 重启）。逐调用的句柄失败不走卡，只落到那次工具调用。
   'chat.env.scope.pii': 'PII 脱敏',
+  // q-from-card：vessel:source 投射来源按环境信息卡呈现（scope「来源」）。
+  'chat.env.scope.source': '来源',
+  'chat.env.source.raw': '来源原文',
   'chat.env.count': '{count} 条',
   'chat.env.notApplied': '未生效',
   'chat.env.moreLines': '还有 {count} 行未显示',

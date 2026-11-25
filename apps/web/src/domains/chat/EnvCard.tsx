@@ -1,9 +1,10 @@
 /**
  * 「环境信息」卡：模型上下文里所有「模型需要知道的改变」的**唯一**渲染点。
  *
- * 用户裁定（0.52）：只有这一类卡 —— 身份 / 工具 / 模型 / 字段 / 重启 / 上下文快照都是它的
- * scope，标题就叫「环境信息」，scope 只决定卡头标签。数据有两条来源，渲染只有这一处：
+ * 用户裁定（0.52）：只有这一类卡 —— 身份 / 工具 / 模型 / 字段 / 重启 / 上下文快照 / 投射来源
+ * 都是它的 scope，标题就叫「环境信息」，scope 只决定卡头标签。数据有三条来源，渲染只有这一处：
  * - `vessel:notice` 消息（`env-notice.ts` 解析出的行）；
+ * - `vessel:source` 消息（`sourceNoticeCard` 组织的来源地址行 + 原文块，q-from-card 裁定）；
  * - `prompt.system_context` 事件（`envCardOfPromptContext` 装配的行 + 全量快照原文块）。
  *
  * 与「来自 agent X」卡（`AgentMessageCard`）是同一张卡（`StreamCard`），同一套样式与
@@ -66,7 +67,7 @@ export function EnvCard({
    * 展开里只留原文块 / hash / 窗口上限）。
    */
   facts?: readonly string[];
-  /** 展开区的原文块（0.52，additive：`prompt.system_context` 的全量快照）。 */
+  /** 展开区的原文块（0.52，additive）：全量快照 / 来源原文（`vessel:source`）。 */
   blocks?: readonly EnvNoticeBlock[];
 }) {
   const clock = formatClock(ts);

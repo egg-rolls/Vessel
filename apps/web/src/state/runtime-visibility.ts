@@ -15,18 +15,22 @@
  * Web 只保留一个显式入口（Settings → Display → 显示系统信息），写操作与其他
  * display 键一样走 config.set。
  *
- * **两种显示方式（用户裁决，0.51）**：环境信息（kind `notice` = `vessel:notice`）
- * 与底层系统信息是同一份上下文的两种呈现，不再是「显示 / 隐藏」的二选一：
+ * **两种显示方式（用户裁决，0.51）**：环境信息（kind `notice` = `vessel:notice`，以及
+ * `source` = `vessel:source` 来源行）与底层系统信息是同一份上下文的两种呈现，不再是
+ * 「显示 / 隐藏」的二选一：
  * - `notice`：**默认可见**，渲染成环境信息卡（scope 色条 + 一行摘要 + 可展开的
  *   details，见 `domains/chat/env-notice.ts`）。开关不再管它——否则用户永远看不到
  *   模型真实的上下文（配置热应用 / 权限 / 工具 / MCP / 更新 / peer 通知、订阅文件变更
  *   都走这条）。
+ * - `source`：**默认可见**（用户裁定 q-from-card）：投射来源按环境信息卡（scope「来源」）
+ *   呈现，principal/node/team 组织成行、原文保留可查。被 agent 卡吸收的折叠路径
+ *   （单一表示）不变；这里放开的是「未被吸收、单独成行」那一份的可见性。
  * - `subscription`：**历史 kind，0.52 起没有生产者**（doc-subscription 改为写
  *   `vessel:notice` + scope `files`）。可见性**不变**：仍跟随 `ui.showInternalEvents`，
- *   老消息按 `ENV_NOTICE_KIND` 之外的兜底路径渲成整段 notice —— 不特判成「文件变更」卡，
+ *   老消息按环境信息 kind 之外的兜底路径渲成整段 notice —— 不特判成「文件变更」卡，
  *   也不让它变成裸 JSON。词留着只为让老数据的种类名还可读（调试旧 trace 时仍能看到它
  *   当初是什么）。
- * - 其余 kind（`source` 已被 A2A 卡吸收；`limit` / `compaction` / `other`）：仍跟随
+ * - 其余 kind（`limit` / `compaction` / `other`）：仍跟随
  *   `ui.showInternalEvents`，与改动前一致。理由：`limit` 是 `agent.limit.warning` 的上下文
  *   副本（typed notice 已默认可见，再放一张卡就是同一事实的第二份）；`compaction` 目前
  *   没有生产者（压缩走 `message.compaction` 投影），保持预留。

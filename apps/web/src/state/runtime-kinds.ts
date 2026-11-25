@@ -12,8 +12,10 @@
  *
  * kind 语义（用户裁决，0.51，细节见 `./runtime-visibility` 与 `domains/chat/env-notice.ts`）：
  * - `notice`：**默认可见**，渲染成环境信息卡（`ENV_MESSAGE_KINDS`）；
+ * - `source`：**默认可见**，同样渲染成环境信息卡（scope「来源」，用户裁定 q-from-card：
+ *   投射来源 principal/node/team，原文保留可查；被 agent 卡吸收的折叠路径不变）；
  * - `subscription`：历史 kind，0.52 起没有生产者，可见性仍跟随 `ui.showInternalEvents`；
- * - 其余 kind（`source` 已被 A2A 卡吸收；`limit` / `compaction` / `other`）同样跟随总开关。
+ * - 其余 kind（`limit` / `compaction` / `other`）同样跟随总开关。
  */
 
 export const RUNTIME_MESSAGE_KINDS = [
@@ -37,13 +39,18 @@ export function isRuntimeMessageKind(value: string): value is RuntimeMessageKind
 /**
  * 「环境信息」种类：默认以**卡片**出现，不跟随 `ui.showInternalEvents`。
  *
- * 词表与 `domains/chat/env-notice.ts` 的 `ENV_NOTICE_KIND` 是同一件事（那边是渲染侧
- * 解析 `vessel:notice` 的权威）。这里只放开一个：`vessel:notice` 是模型上下文里
- * 唯一「给用户看的环境事实」——热应用结果（config / permission / tools / mcp /
- * update / peer）、inbox 条数提示、成员身份变更、订阅文件变更（scope `files`）都写在这条
- * 消息里。老通道 `vessel:subscription` **不**在这里（历史消息仍跟随总开关）。
+ * 词表与 `domains/chat/env-notice.ts` 的 `ENV_NOTICE_KIND` / `ENV_SOURCE_KIND` 是同一件事
+ * （那边是渲染侧解析的权威：`notice` 走 `envNoticeCard`，`source` 走 `sourceNoticeCard`，
+ * 统一入口 `runtimeEnvCard`）。这里放开两个：
+ * - `vessel:notice` 是模型上下文里「给用户看的环境事实」——热应用结果（config / permission /
+ *   tools / mcp / update / peer）、inbox 条数提示、成员身份变更、订阅文件变更（scope `files`）
+ *   都写在这条消息里；
+ * - `vessel:source` 是投射来源（`<from location="principal@node:team" />`）：用户裁定它按
+ *   环境信息卡（scope「来源」）呈现，不再跟随总开关藏起来。被 agent 卡吸收的折叠路径
+ *   （单一表示）不受影响。
+ * 老通道 `vessel:subscription` **不**在这里（历史消息仍跟随总开关）。
  */
-export const ENV_MESSAGE_KINDS: readonly RuntimeMessageKind[] = ['notice'];
+export const ENV_MESSAGE_KINDS: readonly RuntimeMessageKind[] = ['notice', 'source'];
 
 /** 这个 kind 是否属于「环境信息」（默认可见、渲染成卡片）。 */
 export function isEnvMessageKind(kind: RuntimeMessageKind): boolean {

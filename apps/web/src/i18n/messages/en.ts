@@ -1462,6 +1462,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.scope.trim': 'Trimmed',
   // 0.52: PII 句柄整批失效（内存 broker 重启）。逐调用的句柄失败不走卡，只落到那次工具调用。
   'chat.env.scope.pii': 'PII',
+  // q-from-card: vessel:source projection headers render as env cards (scope "Source").
+  'chat.env.scope.source': 'Source',
+  'chat.env.source.raw': 'Original source line',
   'chat.env.count': '{count} items',
   'chat.env.notApplied': 'not applied',
   'chat.env.moreLines': '{count} more lines not shown',
