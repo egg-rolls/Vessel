@@ -460,6 +460,21 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
   },
   { token: 'errors', registryName: 'errors', flags: ['--json', '--limit'] },
   {
+    token: 'rpc',
+    registryName: 'rpc',
+    subcommands: [
+      {
+        name: 'list',
+        flags: ['--json', '--node', '--connect', '--connect-token', '--ca', '--help'],
+      },
+    ],
+  },
+  {
+    token: 'fleet',
+    registryName: 'fleet',
+    subcommands: [{ name: 'status', flags: ['--json', '--data-dir', '--help'] }],
+  },
+  {
     token: 'dev',
     registryName: 'dev',
     subcommands: [{ name: 'reset', flags: ['--yes', '--dry-run', '--json', '--data-dir'] }],

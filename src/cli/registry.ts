@@ -29,6 +29,7 @@ import { doctorCommand } from './commands/doctor-command';
 import { errorsCommand } from './commands/errors-command';
 import { runEvalCommand } from './commands/eval-command';
 import { runFederationCommand } from './commands/federation';
+import { fleetStatusCommand } from './commands/fleet/fleet-status-command';
 import { statusCommand } from './commands/fleet/status-command';
 import { stopFleetCommand } from './commands/fleet/stop-command';
 import { isForegroundGatewayCommand, runGatewayCommand } from './commands/gateway/gateway-command';
@@ -40,6 +41,7 @@ import { isForegroundNodeCommand, runNodeCommand } from './commands/node-command
 import { runPluginCommand } from './commands/plugin/plugin-command';
 import { pruneCommand } from './commands/prune-command';
 import { runResumeList } from './commands/resume-command';
+import { rpcListCommand } from './commands/rpc-command';
 import { runTeamCommand } from './commands/team-command';
 // 0.56：`vessel token show|list|rotate`（根密钥 / 派生 token）。
 import { tokenListCommand, tokenRotateCommand, tokenShowCommand } from './commands/token-command';
@@ -465,6 +467,32 @@ export const cliCommands: readonly CliCommand[] = [
           caFile: args.caArg,
         }),
       );
+    },
+  },
+  {
+    name: 'rpc',
+    match: (args) => args.rpcCommand !== null && args.rpcCommand !== undefined,
+    run: async (args) => {
+      const command = args.rpcCommand;
+      if (command === null || command === undefined) return 1;
+      return printCommandResult(
+        await rpcListCommand({
+          json: command.json,
+          connectUrl: args.connectArg,
+          connectToken: args.connectTokenArg,
+          caFile: args.caArg,
+          nodeId: args.nodeTargetArg,
+        }),
+      );
+    },
+  },
+  {
+    name: 'fleet',
+    match: (args) => args.fleetCommand !== null && args.fleetCommand !== undefined,
+    run: async (args) => {
+      const command = args.fleetCommand;
+      if (command === null || command === undefined) return 1;
+      return printCommandResult(await fleetStatusCommand({ json: command.json }));
     },
   },
 ];
