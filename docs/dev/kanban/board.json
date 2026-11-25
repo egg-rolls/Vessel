@@ -2,7 +2,7 @@
   "board": "vessel 红蓝开发任务看板",
   "updated": "2026-11-25T21:43:00+08:00",
   "columns": ["待办", "进行中", "阻塞"],
-  "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。★归档政策（用户裁定2026-11-25细化）：金丝雀可自验的缺陷修复/微修复/内部改进/调研设计已实施→验证闭环即直接归档 archive.json；新功能/新视觉效果/UX 变更→留板「已合并待验收」用户打勾才归档（append-only）。",
+  "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。★归档政策（用户裁定2026-11-25细化）：金丝雀可自验的缺陷修复/微修复/内部改进/调研设计已实施→验证闭环即直接归档 archive.json；新功能/新视觉效果/UX 变更→留板「已合并待验收」用户打勾才归档；反复提出项（如 inbox 修复）亦留用户验收（append-only）。",
   "tasks": [
     {
       "id": "canary-fleet",
@@ -93,12 +93,20 @@
       "progress": "✅完成合并c68cc6c1+792b3752(7提交f92d4792/01ea38c4/de93e77e/2e115c3c/e39a2403/1dc94e52/fbbe35a3+marketplace资产收口)build绿；最优终态:能热真热(tool/hook/guardrail/masker/child启停/child settings)不能热诚实badge(provider/工厂/in-process代码),显示态=生效态同源,pii半态消除,无过渡闸无委屈代码；待金丝雀验+用户重启"
     },
     {
+      "id": "q-inbox-truth",
+      "title": "调研：inbox真相源一致性+前端忠实还原（用户报告read后仍显/部分消息不可见）",
+      "column": "进行中",
+      "owner": "q-inbox-truth",
+      "branch": "design/q-inbox-truth",
+      "progress": "717cb042派单(用户直接报告+live实证:两条已read的human消息前端仍显○等待中)：症状①read消费后前端不反映②部分agent→main消息(本地team/federation)用户inbox视图不可见；疑真相源不统一/前端不忠实/会话归属过滤；调研inbox tool消费store vs agents.inbox RPC投影 vs PendingStrip渲染链+useInboxRefresh触发器覆盖(386c35bf已在2.0.0运行生产)+会话归属口径+main tool事件是否达用户前端事件面；输出根因+修复方案分级；反复提出项留用户验收"
+    },
+    {
       "id": "q-pl5-guardrail",
       "title": "微修复：PL5-1 热应用guardrail reconcile保留vessel-bridge core",
       "column": "进行中",
       "owner": "q-pl5-guardrail",
       "branch": "fix/q-pl5-guardrail",
-      "progress": "9a7a4b84派单(lead转达请修复)：任何插件热应用必触发guardrails removed vessel-bridge(两次live pid97984/pid103760确证)→父宿主vessel-bridge core guardrail(vessel-meta.ts L295非插件贡献)缺席候restart自愈；①根因审计热应用vs冷启动guardrail reconcile差异(移除点file:line,假说热应用只从插件贡献组装丢core)→②修复热应用reconcile保core guardrail只reconcile插件贡献→③门禁；候修复→合并→canary同步→lifecycle复验热应用不再removed vessel-bridge"
+      "progress": "✅完成合并5ccfa964(c9903d70审计+9f718ee4修复,4文件+161/-6,门禁绿)：根因=cli.ts L1176 managedPluginGuardrails全量快照误含core vessel-bridge→热应用旁路target永不含它→hot-apply-appliers L449判removed注销桥；修复=vessel-meta导出VESSEL_BRIDGE_GUARDRAIL_NAME常量+pluginManagedGuardrailNames(host)排除core(同tools面D1口径)+cli.ts用helper；冷启动/node退出链/fail-closed零改动；候批量canary同步+lifecycle R3复验(热应用不再removed vessel-bridge+getGuardrails恒含桥+guardrail-pii不回归)→PL5-1 CLOSED"
     },
     {
       "id": "q-ti5-mapping",
