@@ -5,15 +5,20 @@ import type { ProjectionSummary } from '../../gateway/types';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { Verbosity } from '../../state/visibility';
+import { agentDisplayName } from './agent-labels';
 import { useAgentNames } from './agent-name-context';
+import { useNodeNamesContext } from './node-name-context';
 import { PayloadSection } from './payload-section';
 import { projectedOriginalText, showsOutputSection } from './projection';
 import { ProjectionBadge, ProjectionPanes } from './projection-card';
 import { StreamCard } from './StreamCard';
 import {
+  agentRouteOf,
   DEFAULT_SUMMARY_LENGTH,
   type DiffLine,
   editDiffOf,
+  parseAgentAddress,
+  resolvedTargetOf,
   type ToolCardView,
   toolSummary,
   valueText,
@@ -114,6 +119,15 @@ export function ToolCard({
   const meta = formatErrorMeta(card.errorMeta);
   const projection = card.projection;
 
+  // 完整路由（additive，问题2）：卡头摘要保持短（名字优先），舰队归属放副行 + 展开体。
+  // 只有入参是完整地址 `<principal>@<node>:<team>` 时才有 route —— 旧消息的纯名字 /
+  // 本地 id 解析不出，渲染逐字不变。node 名查不到退原始 id（不猜）。
+  const nodeNames = useNodeNamesContext();
+  const route = card.name === 'agent' ? agentRouteOf(card.args) : undefined;
+  const resolvedTo = card.name === 'agent' ? resolvedTargetOf(card.result) : undefined;
+  const resolvedRoute = resolvedTo !== undefined ? parseAgentAddress(resolvedTo) : undefined;
+  const nodeLabelOf = (node: string): string => nodeNames?.get(node) ?? node;
+
   // 卡片头（StreamCard 的 meta 槽）只放**运行耗时**，运行中 / 已结束同一个口径：
   // 运行中 = 现在 - startedAt（每秒刷新），已结束 = 事件给的总耗时。
   // 没有耗时数据时宁可不显示，也不回退到绝对时间（用户要的是「跑了多久」）。
@@ -158,12 +172,24 @@ export function ToolCard({
       }
       summary={summary.length > 0 ? summary : undefined}
       actions={
-        // 失败不能静默：折叠时也保留错误摘要（完整内容在展开体）。
-        card.status === 'error' && errorText ? (
-          <p className="m-0 line-clamp-3 whitespace-pre-wrap break-words px-2.5 pb-2 font-mono text-xs text-danger">
-            {errorText}
-          </p>
-        ) : undefined
+        <>
+          {/* 路由副行（折叠态也看得见）：目标舰队 = 节点展示名 + team；悬停看原始地址。
+              没有完整地址（旧卡 / 纯名字 / 本地 id）时整行不渲染，逐字不变。 */}
+          {route !== undefined && (
+            <p
+              className="m-0 break-all px-2.5 pb-1 font-mono text-2xs leading-snug text-faint"
+              title={route.raw}
+            >
+              {`→ ${nodeLabelOf(route.node)} : ${route.team}`}
+            </p>
+          )}
+          {/* 失败不能静默：折叠时也保留错误摘要（完整内容在展开体）。 */}
+          {card.status === 'error' && errorText ? (
+            <p className="m-0 line-clamp-3 whitespace-pre-wrap break-words px-2.5 pb-2 font-mono text-xs text-danger">
+              {errorText}
+            </p>
+          ) : undefined}
+        </>
       }
     >
       {projection !== undefined && (
@@ -191,6 +217,35 @@ export function ToolCard({
           {description ?? t('chat.tool.descriptionUnavailable')}
         </p>
       </div>
+
+      {/* 完整路由（展开体）：原始地址逐字 + 人话分解（节点名 · team · 发送对象名）。
+          与副行同一份解析，不重新拼装地址；node 名查不到退原始 id。 */}
+      {route !== undefined && (
+        <div className="flex flex-col gap-1">
+          <span className="font-mono text-xs uppercase tracking-wide text-faint">
+            {t('chat.tool.route')}
+          </span>
+          <p className="m-0 break-all font-mono text-xs text-muted">{route.raw}</p>
+          <p className="m-0 text-xs text-faint">
+            {`${nodeLabelOf(route.node)} · ${route.team} · ${
+              agentDisplayName(route.principal, agentNames) ?? route.principal
+            }`}
+          </p>
+        </div>
+      )}
+      {/* 服务端实际投递给谁（result.resolved_to）：本地 id 过名字表；完整地址再补舰队段。 */}
+      {resolvedTo !== undefined && (
+        <p className="m-0 break-all font-mono text-xs text-faint">
+          {t('chat.tool.resolvedTo', {
+            target:
+              resolvedRoute !== undefined
+                ? (agentDisplayName(resolvedRoute.principal, agentNames) ?? resolvedRoute.principal)
+                : (agentDisplayName(resolvedTo, agentNames) ?? resolvedTo),
+          })}
+          {resolvedRoute !== undefined &&
+            ` · ${nodeLabelOf(resolvedRoute.node)} : ${resolvedRoute.team}`}
+        </p>
+      )}
 
       <PayloadSection
         label={t('chat.tool.input')}

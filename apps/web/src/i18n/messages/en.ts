@@ -394,6 +394,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.tool.meta': 'Metadata',
   'chat.tool.retryable': 'Retryable',
   'chat.tool.truncated': 'Output truncated',
+  'chat.tool.route': 'Route',
+  'chat.tool.resolvedTo': 'Resolved to {target}',
   // 0.54 projection card: the placeholder the model saw, side by side with the original.
   // Wording matches ADR-104 §8.5; `passthrough` / `archive_notice` get no badge.
   'chat.projection.badge.placeholder': 'Model saw: placeholder',

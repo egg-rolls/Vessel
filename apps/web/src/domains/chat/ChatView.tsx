@@ -16,6 +16,7 @@ import { useRuntimeVisibility } from '../../state/runtime-visibility';
 import { sessionTitle } from '../../state/sessions';
 import { resourceData } from '../../state/useResource';
 import { useAgentStore } from '../../stores/agentStore';
+import { useNodeNames } from '../nodes/useNodeNames';
 import { useAskCursorPrune } from '../pending/ask-cursor-store';
 import { useAskDraftPrune } from '../pending/ask-draft-store';
 import { rosterAttributionIndex } from '../pending/attribution';
@@ -28,6 +29,7 @@ import { ChatHeader } from './ChatHeader';
 import { ComposerSlot } from './ComposerSlot';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
 import { errorMessage } from './errors';
+import { NodeNamesProvider } from './node-name-context';
 import { PendingStrip } from './PendingStrip';
 import type { PendingSend } from './pending-sends';
 import { ProjectionReadbackProvider } from './projection-readback';
@@ -134,6 +136,9 @@ export function ChatView({
   // 工具卡摘要里的「谁」：同一份 roster 派生的标识→名字表（不新增任何轮询 / RPC）。
   // `send → <session id>` 这种卡头就在这里翻成人名（纯计算见 agent-labels.ts）。
   const agentNames = useMemo(() => agentNamesOf(resourceData(rosterState) ?? []), [rosterState]);
+  // 节点展示名表（既有 useNodeNames：health 轮询 + sessionStorage 缓存，零新增请求）：
+  // agent 工具卡的完整路由副行把 node 段换成节点名，查不到退原始 id。
+  const nodeNames = useNodeNames();
   const sessionAskCount = useMemo(
     () => asksForSession(asks, selectedId, attribution).length,
     [asks, selectedId, attribution],
@@ -499,68 +504,72 @@ export function ChatView({
               范围与上面那条同一个理由 —— 只有转录区里的工具卡读它；没有 roster 时是空表，
               卡片一律退短 id，不编名字。 */}
             <AgentNamesProvider names={agentNames}>
-              <ProjectionReadbackProvider
-                client={client}
-                sessionId={sessionsApi.sessionDetail?.session_id ?? selectedId ?? undefined}
-              >
-                <TranscriptWindow
-                  hasToken={hasToken}
-                  selectedId={selectedId}
-                  activeAgent={transcriptApi.activeAgent}
-                  draftActive={draftActive}
-                  restorePending={sessionsApi.restorePending}
-                  hydrateError={transcriptApi.hydrateError}
-                  hydrating={transcriptApi.hydrating}
-                  hydrateStale={transcriptApi.hydrateStale}
-                  hasTranscript={transcriptApi.hasTranscript}
-                  hasEarlier={transcriptApi.hasEarlier}
-                  visibleGroups={transcriptApi.visibleGroups}
-                  renderedGroups={transcriptApi.renderedGroups}
-                  transcriptWindow={transcriptApi.transcriptWindow}
-                  transcriptMessages={transcriptApi.transcriptMessages}
-                  historyIndex={transcriptApi.historyIndex}
-                  isHiddenMessage={transcriptApi.isHiddenMessage}
-                  noticeKindOf={transcriptApi.noticeKindOf}
-                  messageIndexOffset={transcriptApi.messageIndexOffset}
-                  sessionFailure={transcriptApi.sessionFailure}
-                  sessionSystemContext={transcriptApi.sessionSystemContext}
-                  projectionSummary={sessionsApi.sessionDetail?.projection_summary}
-                  detailNotice={transcriptApi.detailNotice}
-                  onDismissDetailNotice={transcriptApi.dismissDetailNotice}
-                  earlierError={transcriptApi.earlierError}
-                  onDismissEarlierError={transcriptApi.dismissEarlierError}
-                  onRetryEarlier={() => {
-                    // 重试只重取「上一页」：服务端游标由窗口首条决定，失败后窗口没动，
-                    // 因此直接重发同一个 before 请求（不经本地扩窗，避免白扩一页）。
-                    if (!selectedId) return;
-                    void sessionsApi.loadEarlierDetail(client, selectedId, { epoch });
-                  }}
-                  verbosity={transcriptApi.visibility.verbosity}
-                  cardsDefaultOpen={transcriptApi.cardsDefaultOpen}
-                  errorLevel={transcriptApi.errorLevel}
-                  entries={snapshot.entries}
-                  snapshotVersion={snapshot.version}
-                  detailSessionId={sessionsApi.sessionDetail?.session_id}
-                  sendTick={submitApi.sendTick}
-                  onRetryDetail={transcriptApi.reloadDetail}
-                  onLoadEarlier={transcriptApi.loadEarlier}
-                  onConfigureConnection={() => navigate({ domain: 'gateway' })}
-                  onGoChat={() => navigate({ domain: 'chat' })}
-                  onEditMessage={handleEditMessage}
-                  onRetryMessage={handleRetryMessage}
-                  // 已答提问：服务端 answered 记录按 answered_at 落进时间线（item kind
-                  // ask-answered），不再是滚动区末尾的额外一段。子 agent 详情页讲的是另一个
-                  // run，那里不画（TranscriptWindow 按 activeAgent 自己断，同失败卡的口径）。
-                  answeredAsks={transcriptApi.activeAgent ? EMPTY_ANSWERED_ASKS : answeredAsks}
-                  // 0.56 乐观渲染：本地待确认的灰气泡（点击那一帧就在屏上）。
-                  // 子 agent 详情页不画（那一屏讲的是另一个 run），数据仍照常订阅。
-                  pendingSends={
-                    transcriptApi.activeAgent ? EMPTY_PENDING_SENDS : pendingSendsApi.pending
-                  }
-                  onRetryPending={pendingSendsApi.retry}
-                  onDismissPending={pendingSendsApi.dismiss}
-                />
-              </ProjectionReadbackProvider>
+              {/* 节点展示名表（问题2）：agent 工具卡的路由副行 / 展开体把 node 段换成
+                  节点名。与 agent 名字表同一个注入理由 —— 卡片不拉连接模块进渲染树。 */}
+              <NodeNamesProvider names={nodeNames}>
+                <ProjectionReadbackProvider
+                  client={client}
+                  sessionId={sessionsApi.sessionDetail?.session_id ?? selectedId ?? undefined}
+                >
+                  <TranscriptWindow
+                    hasToken={hasToken}
+                    selectedId={selectedId}
+                    activeAgent={transcriptApi.activeAgent}
+                    draftActive={draftActive}
+                    restorePending={sessionsApi.restorePending}
+                    hydrateError={transcriptApi.hydrateError}
+                    hydrating={transcriptApi.hydrating}
+                    hydrateStale={transcriptApi.hydrateStale}
+                    hasTranscript={transcriptApi.hasTranscript}
+                    hasEarlier={transcriptApi.hasEarlier}
+                    visibleGroups={transcriptApi.visibleGroups}
+                    renderedGroups={transcriptApi.renderedGroups}
+                    transcriptWindow={transcriptApi.transcriptWindow}
+                    transcriptMessages={transcriptApi.transcriptMessages}
+                    historyIndex={transcriptApi.historyIndex}
+                    isHiddenMessage={transcriptApi.isHiddenMessage}
+                    noticeKindOf={transcriptApi.noticeKindOf}
+                    messageIndexOffset={transcriptApi.messageIndexOffset}
+                    sessionFailure={transcriptApi.sessionFailure}
+                    sessionSystemContext={transcriptApi.sessionSystemContext}
+                    projectionSummary={sessionsApi.sessionDetail?.projection_summary}
+                    detailNotice={transcriptApi.detailNotice}
+                    onDismissDetailNotice={transcriptApi.dismissDetailNotice}
+                    earlierError={transcriptApi.earlierError}
+                    onDismissEarlierError={transcriptApi.dismissEarlierError}
+                    onRetryEarlier={() => {
+                      // 重试只重取「上一页」：服务端游标由窗口首条决定，失败后窗口没动，
+                      // 因此直接重发同一个 before 请求（不经本地扩窗，避免白扩一页）。
+                      if (!selectedId) return;
+                      void sessionsApi.loadEarlierDetail(client, selectedId, { epoch });
+                    }}
+                    verbosity={transcriptApi.visibility.verbosity}
+                    cardsDefaultOpen={transcriptApi.cardsDefaultOpen}
+                    errorLevel={transcriptApi.errorLevel}
+                    entries={snapshot.entries}
+                    snapshotVersion={snapshot.version}
+                    detailSessionId={sessionsApi.sessionDetail?.session_id}
+                    sendTick={submitApi.sendTick}
+                    onRetryDetail={transcriptApi.reloadDetail}
+                    onLoadEarlier={transcriptApi.loadEarlier}
+                    onConfigureConnection={() => navigate({ domain: 'gateway' })}
+                    onGoChat={() => navigate({ domain: 'chat' })}
+                    onEditMessage={handleEditMessage}
+                    onRetryMessage={handleRetryMessage}
+                    // 已答提问：服务端 answered 记录按 answered_at 落进时间线（item kind
+                    // ask-answered），不再是滚动区末尾的额外一段。子 agent 详情页讲的是另一个
+                    // run，那里不画（TranscriptWindow 按 activeAgent 自己断，同失败卡的口径）。
+                    answeredAsks={transcriptApi.activeAgent ? EMPTY_ANSWERED_ASKS : answeredAsks}
+                    // 0.56 乐观渲染：本地待确认的灰气泡（点击那一帧就在屏上）。
+                    // 子 agent 详情页不画（那一屏讲的是另一个 run），数据仍照常订阅。
+                    pendingSends={
+                      transcriptApi.activeAgent ? EMPTY_PENDING_SENDS : pendingSendsApi.pending
+                    }
+                    onRetryPending={pendingSendsApi.retry}
+                    onDismissPending={pendingSendsApi.dismiss}
+                  />
+                </ProjectionReadbackProvider>
+              </NodeNamesProvider>
             </AgentNamesProvider>
 
             {/* 待处理条带与转录区**同一个容器**（`.content-stage`），但不在滚动区里：

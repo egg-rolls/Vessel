@@ -380,6 +380,8 @@ export const messages = {
   'chat.tool.meta': '元数据',
   'chat.tool.retryable': '可重试',
   'chat.tool.truncated': '输出已截断',
+  'chat.tool.route': '路由',
+  'chat.tool.resolvedTo': '实际投递给 {target}',
   // 0.54 投影卡：把「模型看到的占位符」与「原文」并列摆在同一张卡上。
   // 词表与 ADR-104 §8.5 的 C1h 披露行同一语义；`passthrough` / `archive_notice` 不出 badge。
   'chat.projection.badge.placeholder': '模型看到：占位',
