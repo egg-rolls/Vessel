@@ -665,6 +665,20 @@ gateway:
 - **没开**：远程停回 401 `remote_shutdown_disabled`，提示 SSH 到主机跑 `vessel stop`（零实体兜底）。
 - 远程停完整形态见 [REVERSE-PROXY.md §12](REVERSE-PROXY.md)；命令面见 [GATEWAY.md §4](GATEWAY.md)。
 
+### 2.20.2 `gateway.web_dist`（q-config-priority：静态产物目录可配）
+
+```yaml
+gateway:
+  web_dist: D:/Application/APP/Vessel/fleets/canary/apps/web/dist
+```
+
+- **管什么**：平台 gateway 同源托管的 Web 控制台产物目录（`index.html` / `assets/**` / `build.json`）。
+- **责任链**：显式 `gateway.web_dist` > `VESSEL_STATIC_DIR` env > 仓库内 `apps/web/dist`（entry 相对解析）。空串视为未设置。`~` 展开；相对路径按 cwd 解析。
+- **为什么需要**：金丝雀舰队用 `--user-config` 指向舰队配置，但 cwd 在生产 checkout —— 缺省解析会宿生产产物。配了本键，**无论从哪个 cwd 启动都服务这份 dist**。
+- **启动期键**：热应用不重接静态目录（改它需重启）。启动时 `<web_dist>/index.html` 缺失仍 fail-fast（报错带解析后路径）。
+- **自动构建不碰显式目录**：`ensureWebDist` / 运行中自查（`recheckWebDist`）只自愈仓库内默认产物；本键或 `VESSEL_STATIC_DIR` 指向的外部产物不归它们管。
+- **诊断同口径**：`gateway status` / `gateway start` 启动诊断 / `doctor` 的 `web` 检查项都按本键优先解析。
+
 ### 2.21 `http.allowed_origins`（0.61：访问控制，与 `redirect_uri` 来源分开）
 
 两件事，别再混：

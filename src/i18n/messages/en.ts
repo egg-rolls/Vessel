@@ -353,7 +353,7 @@ export const en: Record<MessageKey, string> = {
   'gateway.started': 'Gateway started (pid {pid}): {url}',
   'gateway.logPath': 'Log: {path}',
   'gateway.webDistMissing':
-    'Web console assets are missing at {path}. Build them once (a fresh clone has none): `bun run build:web` (= `cd apps/web && bun run build`), or point VESSEL_STATIC_DIR at an existing build, then start again.',
+    'Web console assets are missing at {path}. Build them once (a fresh clone has none): `bun run build:web` (= `cd apps/web && bun run build`), or set gateway.web_dist (config) / VESSEL_STATIC_DIR (env) to an existing build, then start again.',
   'gateway.webDistStale':
     'Web console assets may be stale: {index} is older than {source}; build with `cd apps/web && npm run build`.',
   'gateway.webDistStaleLine':

@@ -331,7 +331,7 @@ export const zhCN = {
   'gateway.started': 'Gateway 已启动（pid {pid}）：{url}',
   'gateway.logPath': '日志：{path}',
   'gateway.webDistMissing':
-    'Web 控制台静态资源缺失：{path}。新克隆的仓库必须先构建一次：`bun run build:web`（= `cd apps/web && bun run build`）；或把 VESSEL_STATIC_DIR 指向已有产物，然后重新 start。',
+    'Web 控制台静态资源缺失：{path}。新克隆的仓库必须先构建一次：`bun run build:web`（= `cd apps/web && bun run build`）；或在配置里设 gateway.web_dist（或 env VESSEL_STATIC_DIR）指向已有产物，然后重新 start。',
   'gateway.webDistStale':
     'Web 控制台产物可能已过期：{index} 旧于 {source}。构建：`cd apps/web && npm run build`。',
   'gateway.webDistStaleLine':
