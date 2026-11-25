@@ -246,6 +246,13 @@ export class PlatformProxy {
   private readonly failureLog = new Map<string, { at: number; suppressed: number }>();
   private heartbeat?: ReturnType<typeof setInterval>;
   private inflight = 0;
+  /**
+   * DR15-2：在途上游请求的 AbortController 登记（请求结束 finally 移除）。
+   * 平台退出时 `abortInflight()` 全部 abort ⇒ fetch catch 立即返回 504/502 ⇒
+   * handler 完成 ⇒ Bun `pending_requests` 归零 ⇒ server.stop(true) 的 promise
+   * 不再被「挂死 node 的在途代理请求（每请求 30s 超时）」钉死。
+   */
+  private readonly inflightAborts = new Set<AbortController>();
   private wsOpened = 0;
   private wsRejected = 0;
   private httpRequests = 0;
@@ -353,6 +360,8 @@ export class PlatformProxy {
       this.inflight -= 1;
     };
 
+    // DR15-2：登记本请求的上游 AbortController（finally 移除，不泄漏）。
+    let requestAbort: AbortController | undefined;
     try {
       const headers = this.upstreamRequestHeaders(req, node.nodeId);
       let body: Uint8Array | undefined;
@@ -414,6 +423,8 @@ export class PlatformProxy {
         ? this.limits.probeTimeoutMs
         : this.limits.requestTimeoutMs;
       const controller = new AbortController();
+      requestAbort = controller;
+      this.inflightAborts.add(controller);
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       (timer as { unref?: () => void }).unref?.();
       /**
@@ -576,6 +587,9 @@ export class PlatformProxy {
         error: error instanceof Error ? error.name : 'unknown',
       });
       return jsonError('internal', 'internal: 代理转发失败（细节见平台日志）', 500);
+    } finally {
+      // DR15-2：handler 结束即移除登记（abortInflight 只对在途请求生效）。
+      if (requestAbort !== undefined) this.inflightAborts.delete(requestAbort);
     }
   }
 
@@ -719,6 +733,30 @@ export class PlatformProxy {
       bridge.shutdown();
     }
     this.bridges.clear();
+  }
+
+  /**
+   * DR15-2：平台退出时中止全部在途上游请求，返回中止条数。
+   *
+   * 为什么需要：Bun 1.3.9 `server.stop(true)` 的 promise 要 `pending_requests==0`
+   * 才 settle；node 先死后，代理里等死 node 回包的在途请求每请求最长挂 30s，
+   * 把 stop promise 钉死在 pending（ISSUE-DR15-2：platform.server.stop start 后
+   * 30s+ 无 done/timeout_bounded，看门狗 force）。abort 复用既有
+   * `req.signal → controller.abort()` 同款收口：fetch catch 立即返回 504/502，
+   * handler 完成 ⇒ pending_requests 归零 ⇒ stop 毫秒级 settle。
+   * best-effort：单条 abort 抛错不影响其余；登记由 handler finally 移除，不泄漏。
+   */
+  abortInflight(): number {
+    const count = this.inflightAborts.size;
+    for (const controller of this.inflightAborts) {
+      try {
+        controller.abort();
+      } catch {
+        // best-effort：单条失败不阻断其余中止。
+      }
+    }
+    this.inflightAborts.clear();
+    return count;
   }
 
   /** 测试 / 探针用的显式拆除（与 `closeAll` 同义，语义更明确）。 */

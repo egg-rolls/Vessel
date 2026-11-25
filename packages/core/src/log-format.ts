@@ -192,6 +192,10 @@ export const EVENT_FIELDS: Record<string, readonly FieldSpec[]> = {
     { key: 'status' },
     { key: 'dur', from: ['duration_ms'], kind: 'ms' },
     { key: 'timeout', from: ['timeout_ms'], kind: 'ms' },
+    // DR15-2：server.stop start 行永久诊断（残留等待实证归因；-1 = getter 不可用）。
+    { key: 'pending_requests', kind: 'value' },
+    { key: 'pending_ws', kind: 'value' },
+    { key: 'aborted_inflight', kind: 'value' },
     { key: 'error', kind: 'text' },
   ],
   /** 平台代理：node 在超时内没有回响应头（回 504）。 */

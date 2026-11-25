@@ -1081,14 +1081,30 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
       buildEvents.close();
       // 0.58：代理 WS 同理 —— 不让一条事件流把停服卡死；关闭时按 `who: 'platform'` 记账。
       proxy.closeAll();
+      // DR15-2：中止全部在途上游请求。node 先死后，代理里等死 node 回包的请求
+      // 每请求最长挂 30s，把 Bun `pending_requests>0` 钉住 ⇒ stop promise 永不
+      // settle（ISSUE-DR15-2：start 后 30s+ 无 done/timeout_bounded，看门狗 force）。
+      // abort ⇒ fetch catch 立即 504/502 ⇒ handler 完成 ⇒ pending_requests 归零。
+      const abortedInflight = proxy.abortInflight();
+      // DR15-2：关 idle keep-alive HTTP（node 侧等满 5s 的那类残余）。Bun 1.3.9
+      // 既有 API（server.zig closeIdleConnections）；类型滞后时可选链安全 no-op。
+      (server as { closeIdleConnections?: () => void }).closeIdleConnections?.();
       clearInterval(authCleanupTimer);
       // 0.61：自查定时器跟着平台一起停（网关停了不该还在跑 tsc）。
       if (webBuildCheckTimer !== undefined) clearInterval(webBuildCheckTimer);
       await runShutdownStep(emit, 'platform.auth.flush', () => authService.flush());
-      // DR15-1：与 node gateway 同款有界化（同根因类：Bun 1.3.9 stop promise 被残余
-      // 活跃连接挂住永不 settle）。上面先关长连接是 0.58 的既有缓解，这里是纵深防御：
-      // 到点 best-effort 推进，平台退出链（lock.release → process.exit）不被挂死。
-      await raceShutdownTimeout(emit, 'platform.server.stop', server.stop(true), 5_000);
+      // DR15-1 有界化 + DR15-2 预 drains：stop 的 settle 条件
+      // （pending_requests==0 / listener==null / WS active==0）——在途请求已 abort
+      // （handler 立即返回 ⇒ pending 归零）、WS 已 closeAll（残余由 stop 内
+      // app.close 强关）、listener 由 stop 自身关 ⇒ stop 应毫秒级 settle；
+      // 5s race 保留为纵深防御（触发条件移除后事件循环空闲，timer 真能发射）。
+      // start 行永久附 pending_* 诊断 —— 未来任何残留等待都可实证归因（复验矩阵②）。
+      const serverDiag = server as { pendingRequests?: number; pendingWebSockets?: number };
+      await raceShutdownTimeout(emit, 'platform.server.stop', () => server.stop(true), 5_000, {
+        pending_requests: serverDiag.pendingRequests ?? -1,
+        pending_ws: serverDiag.pendingWebSockets ?? -1,
+        aborted_inflight: abortedInflight,
+      });
     },
   };
 }
