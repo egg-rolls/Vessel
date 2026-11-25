@@ -1,6 +1,6 @@
 {
   "board": "vessel 红蓝开发任务看板",
-  "updated": "2026-11-25T09:10:00+08:00",
+  "updated": "2026-11-25T09:40:00+08:00",
   "columns": ["待办", "进行中", "阻塞"],
   "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。板只留当前活跃任务；完成任务由 main 轮次收尾移入 archive.json（append-only，采纳 q-kanban §9.2 归档约定）。",
   "tasks": [
@@ -21,6 +21,30 @@
       "progress": "持续流①-⑤确认生效（⑤封存握手：同步前通报→封存→「已封存」→同步/rebuild→批次书开验）。名册更正：测试员身体夜间已释放，canary-t-settings2(de096991)接棒T3b/c(继承T3a✅报告不重做)，leak批次到达hire canary-t-runtime2复验(口径:environ无生产残留+双路径落canary-data/tool-output+生产根零新增)；原则=活体复用续话/释放后新hire继承盘上报告。四在途批已登记矩阵(from-card/ui-polish/leak/plugin-default-on)；三段地址规范执行中；拓扑C知悉候裁"
     },
 
+    {
+      "id": "q-ax-config",
+      "title": "AX自服务·诊断组：vessel config explain + vessel doctor",
+      "column": "进行中",
+      "owner": "q-ax-config",
+      "branch": "feat/q-ax-config",
+      "progress": "56509db8派单(用户批准AX命令并行)：config explain各层provenance+winner(RPC缺则additive补config.explain)+doctor舰队体检(env卫生/stale lock/端口/peer token/node健康)；舰队边界dataDir严格；①explain②doctor③build每步一报"
+    },
+    {
+      "id": "q-ax-discovery",
+      "title": "AX自服务·发现组：vessel rpc list + vessel fleet status",
+      "column": "进行中",
+      "owner": "q-ax-discovery",
+      "branch": "feat/q-ax-discovery",
+      "progress": "bd947d72派单：rpc list能力发现(capabilities.list包装+schema摘要+--node定向)+fleet status一屏(身份/peers/nodes/gateway组合)；①rpc list②fleet status③build每步一报"
+    },
+    {
+      "id": "q-ax-selfobs",
+      "title": "AX自服务·自观组：vessel session status + vessel permission show",
+      "column": "进行中",
+      "owner": "q-ax-selfobs",
+      "branch": "feat/q-ax-selfobs",
+      "progress": "99309519派单：session status实时态(state/token/queue/缺省自身)+permission show有效矩阵(auto/ask/never+scoped+来源,RPC缺则additive补)；①session status②permission show③build每步一报"
+    },
     {
       "id": "q-plugin-default-on",
       "title": "装的插件默认开启而非默认关闭（用户裁定）",
