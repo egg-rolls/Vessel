@@ -62,11 +62,11 @@
     },
     {
       "id": "q-ti5-4-budget",
-      "title": "缺陷：TI5-4 thinking注入budget未抬max_completion_tokens（致provider 400阻塞）",
-      "column": "待办",
-      "owner": "user",
-      "branch": "",
-      "progress": "canary实测发现：O-TI2映射修复让dashscope/qwen4-max匹配qwen行→thinking-intensity注入thinking_budget(high=16384)，但max_completion_tokens=4096未抬→Dashscope 400 max_completion_tokens must be greater than thinking_budget→canary lead+lifecycle tester provider_http_error阻塞(节点活agent死)；workaround已改canary default_level:low(2048<4096)解阻；proper fix=thinking注入budget时保证max_completion_tokens>budget(抬max_tokens或clamp budget≤max_tokens)；候派单修复+用户裁定"
+      "title": "微修复：TI5-4 thinking注入抬max_tokens容纳budget（用户裁定不限制thinking）",
+      "column": "进行中",
+      "owner": "q-ti5-4-budget",
+      "branch": "fix/q-ti5-4-budget",
+      "progress": "0627dff2派单(用户裁定:thinking只传额外参数不该限token,抬max_tokens非clamp budget)：根因providers.ts OpenAICompatibleProvider L479/577 max_tokens=this.maxTokens(4096)+thinking_budget via extra_params(16384)无一致性→Dashscope 400阻塞canary；修复=request-extras加applyOpenAIThinkingConsistency抬max_tokens到thinking_budget+输出余量(不clamp budget)+wire OpenAI buildRequestBody；Anthropic clamp哲学暂不动聚焦OpenAI/qwen；workaround canary default_level low已解阻；候修复→合并→canary同步→lifecycle复验high档不再400"
     },
     {
       "id": "q-sse-shared",
