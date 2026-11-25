@@ -12,7 +12,7 @@
  *
  * | 事件 | 字段 | 含义 |
  * |---|---|---|
- * | `context.pressure` | `used`（+ `max`） | ≥90% 水位的真实读数 / 发送前闸拒发时的读数 |
+ * | `context.pressure` | `used`（+ `max`） | ≥50% 预警线（每 run 一次）/ 发送前闸拒发时的读数 |
  * | `context.changed` | `token_count` | 同上（live 注册表的另一来源） |
  * | `llm.request` | `estimated_tokens` | **实际生效的那条**（见下） |
  * | `llm.response` | `usage.prompt_tokens` | provider 报的真实 prompt 大小，最后兜底 |
@@ -32,19 +32,23 @@
  * `sessions.get` 变成 O(会话大小)（违反第十一条），而写侧已经把准数落在事件里了。
  *
  * 选择规则：**取文件里最新那条带可用数字的**（新 → 旧逐条试），不做「类型优先级」跳跃。
- * 为什么不用固定的类型优先级：`context.pressure` 只在 ≥90% 水位发，压缩把水位降下来
- * 之后它**不会重发** —— 一条更老的 pressure（例如 900K）会比它之后的
+ * 为什么不用固定的类型优先级：`context.pressure` 只在 ≥50% 预警线发（每 run 一次），
+ * 压缩把水位降下来之后它**不会重发** —— 一条更老的 pressure（例如 900K）会比它之后的
  * `llm.request.estimated_tokens`（压缩后的 200K）大得多，按类型硬挑会把过期的高水位
  * 当成现值。新 → 旧是唯一单调可靠的顺序；`source` 告诉你最后用了哪个字段。
  *
- * 为什么 `context.pressure` / `context.changed` 在真实数据里几乎永远不命中：
+ * 为什么 `context.changed` 永远不命中、`context.pressure` 只在 run 起点命中：
  * `context.changed` **本来就不落盘**（`packages/core/src/timeline/types.ts` 的
  * `isNonFactEventType`，ADR-098 C1：派生快照，落盘等于同一事实两份），
- * `context.pressure` 只在 ≥90% 水位才发。落盘上稳定存在的是后两条：
+ * `context.pressure` 在 ≥50% 预警线每 run 发一次（第一条请求之前）+ 闸拒发时发。
+ * 口径统一 P1 后它与 `llm.request.estimated_tokens` 同源（都是请求视图估算），
+ * 命中它不会出现第二个数。落盘上稳定存在的是后两条：
  *
- * - `estimated_tokens`：`execution-unit.ts` 的 `persistData` 里存的**就是**
- *   `execution.workingContext.tokenCount`（同一份增量缓存），与
- *   `context.changed.token_count` **是同一个数**，不是 provider 报的 token 数；
+ * - `estimated_tokens`：`execution-unit.ts` 的 `persistData` 里存的是**请求视图估算**
+ *   `contextUsed`（`correctedContextTokens`：锚点校正 + provider 地板），与
+ *   `context.changed.token_count` / `context.pressure.used` **是同一个数**，
+ *   不是 provider 报的 token 数（0.55 P0 起；旧注释说的 `workingContext.tokenCount`
+ *   已过期）；
  * - `usage.prompt_tokens`：provider 报的真实 prompt 大小（含 system / tools / 缓存
  *   命中），比本地估算略大几个 %，所以只作兜底。
  *
@@ -53,7 +57,7 @@
  *
  * ## `max` 从哪来（不是伪造，是随事件落盘的上下文窗口真值）
  * 事件优先，配置只做兜底（三级，见 {@link resolveContextWindow}）：
- * 1. 命中事件里的 `max`（`context.pressure` 的**真值**；≥90% 水位才发，多数会话没有）；
+ * 1. 命中事件里的 `max`（`context.pressure` 的**真值**；≥50% 预警线或闸拒发时才发）；
  * 2. `llm.request.data.context_max` —— **本模块的主力**：`workingContext.maxTokens`
  *    随事件落盘，历史会话因此自足（不再回推「当时的配置值」，将来按 agent / 模型
  *    配不同窗口也不会串）；
@@ -294,8 +298,8 @@ export function createContextUsageSource(options: ContextUsageSourceOptions): Co
         const source = SOURCES.find((entry) => entry.type === record.type);
         return source === undefined ? [] : [{ record, source }];
       });
-      // 为什么不按「类型优先级」跨新旧硬挑：`context.pressure` 只在 ≥90% 水位发，压缩把
-      // 水位降下来之后它不会重发 —— 一条更老的 pressure（例如 900K）会比它之后的
+      // 为什么不按「类型优先级」跨新旧硬挑：`context.pressure` 只在 ≥50% 预警线发
+      // （每 run 一次），压缩把水位降下来之后它不会重发 —— 一条更老的 pressure（例如 900K）会比它之后的
       // `llm.request.estimated_tokens`（压缩后的 200K）大得多，按类型硬挑会把过期的高
       // 水位当成现值。所以**同一 tier 内按新 → 旧**才是唯一单调可靠的顺序。
       const ordered = [
