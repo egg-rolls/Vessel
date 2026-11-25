@@ -54,6 +54,22 @@
       "progress": "✅完成合并ab63936d(023fec90 read缺省3/cf8b0308去超时/c5f5b404 rotate0.5/e2e8b89d条带三态)build绿；更正：产物读数误报撤回(本仓build=typecheck+lint无bundle,ADR-006)；待验4点(直读最新3/不超时回退/50%rotate提示/三态切换)；worktree已清"
     },
     {
+      "id": "q-envcard-run",
+      "title": "调研：环境信息卡run中不可见（inbox/PII卡run结束才显示，状态误区）",
+      "column": "进行中",
+      "owner": "q-envcard-run",
+      "branch": "design/q-envcard-run",
+      "progress": "636f9151派单(用户报告)：run中看不到inbox/PII环境卡,run结束才显示；裁定run中/结束应一致；调研live buildLiveItems vs history投影对vessel:notice处理差异+修复方案；零代码"
+    },
+    {
+      "id": "q-runlost-audit",
+      "title": "审查：run lost非优雅中断+inbox重启不唤醒（自重启续作链路）",
+      "column": "进行中",
+      "owner": "q-runlost-audit",
+      "branch": "design/q-runlost-audit",
+      "progress": "8cafa4d4派单(用户报告)：自重启vessel restart --force后run报owning process exited before completion被中断(非优雅)；inbox续作笔记不自动唤醒(需用户手动发消息)；审查run lost触发条件+自重启优雅路径+inbox重启唤醒缺口；零代码"
+    },
+    {
       "id": "q-plugin-config-read",
       "title": "修复plugins.list[].config读路径缺口（金丝雀T3b立卡·晋升后缺陷）",
       "column": "待办",
