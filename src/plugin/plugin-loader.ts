@@ -56,14 +56,21 @@ export const FACTORY_PLUGINS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 只能显式启用的插件（opt-in）：`plugins:` 缺省时的默认集**不含**它们。
+ * 只能显式启用的插件（opt-in）：默认集**不含**它们。现为**空集**——机制保留
+ * （scaffold 设计 §6.4 落地后迁为 manifest `defaultEnabled` 声明，Set 作 legacy 兜底）。
  *
- * `media` 是多模态解析器（view 恒可用；read(PDF)/ocr/describe 按 CLI 探测进 schema），
- * 契约（docs/dev/plans/refs-pipeline.md §4）要求它不进默认插件集：
- * 只在 config.yaml 的 `plugins:` 里出现才加载，避免给所有用户加工具 schema。
+ * 0.56.1：`media` 已**转默认加载**（用户裁定「安装的插件默认开启」）。
+ * 转默认的依据（与原 refs-pipeline.md §4「避免给所有用户加工具 schema」的顾虑逐条对上；
+ * 该文档已不在树内，顾虑仅存注释转述）：
+ * - `view` 恒可用（图片入 blob 池，主模型原生视觉）、`read`（文本直读）恒可用，
+ *   均零外部后端——schema 成本是一个工具条目，与 web-tools 同量级；
+ * - 零 CLI 后端时**优雅 idle**：warn 一次 + 仍注册缩减版工具（action enum 按实测
+ *   后端收缩），不崩不刷屏；`describe` 未配置多模态桥时明确报错、不静默降级；
+ * - 先例：`web-tools` 0.56 转默认（见下），media 的顾虑（schema 成本）弱于其当时
+ *   的顾虑（花钱/外发）。
+ * 想关掉：config.yaml 的 `plugins:` 里写 `- name: media` + `enabled: false`。
  */
-export const OPT_IN_PLUGINS: ReadonlySet<string> = new Set([
-  'media',
+export const OPT_IN_PLUGINS: ReadonlySet<string> = new Set<string>([
   // 0.56：`web-tools` 已**转默认加载**（任何会话都能用 web_search / web_fetch）。
   // 转默认的依据（与 0.52 当时的顾虑逐条对上）：
   // - `web_fetch` 缺省后端仍是 `local`：免费、每一跳都过 SSRF 与 robots，
