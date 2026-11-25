@@ -584,9 +584,10 @@ discovery 没有扩大这些边界，也没有缩小它们。
 ### 8.3 网络与权限边界
 
 - manifest `permissions.net` additive 申请缺省主机集（§11.2）：`github.com`、
-  `api.github.com`、`raw.githubusercontent.com`、`codeload.github.com`、`*.github.io`
-  （marketplace 声明式同款）。`process: false` / `secrets: false` 不变——**永不 spawn、
-  永不取凭据**；匿名 GitHub 通道，私有仓库不在范围（无 token 管理面）。
+  `api.github.com`、`*.githubusercontent.com`（raw / release 资产重定向落点）、
+  `*.github.io`（Pages registry）——marketplace 声明集 + api 主机。`process: false` /
+  `secrets: false` 不变——**永不 spawn、永不取凭据**；匿名 GitHub 通道，私有仓库不在范围
+  （无 token 管理面）。
 - 自定义 registry URL：https 校验 + loopback 例外 + redirect 重校验（assertSecureUrl 逐字
   同款）；net 声明集之外的自定义主机如何 enforcement——marketplace 现态是声明式清单 +
   URL 校验，discovery 跟随同口径，enforcement parity 列开放问题 4（§13）。
@@ -761,8 +762,8 @@ SkillsView（既有 page id=skills，nav=integrations，activationEvents 不变�
 },
 "permissions": {
   "fs": ["data-dir"],            // 不变（P3b 源管理写路径才 additive user-config）
-  "net": ["github.com", "api.github.com", "raw.githubusercontent.com",
-          "codeload.github.com", "*.github.io"],   // ★ additive（P1 是 []）
+  "net": ["github.com", "api.github.com", "*.githubusercontent.com",
+          "*.github.io"],   // ★ additive（P1 是 []）；marketplace 声明集 + api 主机
   "process": false,              // 不变：永不 spawn
   "secrets": false,              // 不变：无 token 面
   "events": [],                  // 不变：不新增宿主事件
@@ -775,3 +776,103 @@ SkillsView（既有 page id=skills，nav=integrations，activationEvents 不变�
 - 文档增补（实现期交付）：plugins.md / extensions.md skills 条目加 discovery 段；
   tools.md skills 工具条目**不变**（工具面零改动）；runtime-api.md 技能目录约定补
   「library 可由 discovery 安装落地」一句。
+
+## 12. 分期实施计划
+
+> 宪法口径延续上位设计 §12：每期验收 = `bun run build`（typecheck + biome ci）+ 构建产物
+> 读数 + **用户手动行为验证**；零测试 / 探针 / 临时进程。实现另开 `feat/skills-discovery-*`
+> 分支，本设计分支不写代码。每期独立可交付、additive、可回滚（`discovery.enabled=false`
+> 是整面回滚开关；install scope 回滚机制既有）。
+
+### P3a · registry 源 + 搜索 / 预览 / 安装 + UI（最小闭环）
+
+| # | 交付 | 落点 |
+|---|---|---|
+| 1 | discovery 配置解析（sources / tier / 限额）+ 源校验 | `src/config.ts`（additive）、`src/discovery/sources.ts` |
+| 2 | 快照缓存（TTL / stale 回落 / 损坏降级）+ registry 适配器（schema 1 校验 / sha256 必填 / https） | `src/discovery/{cache,registry}.ts` |
+| 3 | 共享落地管线（staging 校验 → 冲突 → 原子落地 → rescan）+ provenance 侧车 + origin 派生 additive | `src/discovery/{landing,provenance}.ts`、`src/{tool,rpc}.ts` 钉锁路径一处 |
+| 4 | 安装管线（registry flat / dir；tar 共享按开放问题 1 裁决）+ 预览 / 搜索 RPC | `src/discovery/install.ts`、`src/rpc.ts` dispatch additive |
+| 5 | DiscoverView + SkillsView 双 tab + 安装确认对话框 + i18n + 双产线产物 | `web-src/`、`web/`（产物入库） |
+| 6 | manifest：rpc 七条 + net 主机集 + settings discovery 键 | `package.json` |
+| 7 | **vessel-skills registry 发布**（独立交付物）：`egg-rolls/vessel-skills` 仓库 + 种子 index.json（本仓 skills/ 打包 + 人工精选社区技能，带 source/commit/license）+ validate CI | 独立仓库 / Pages，不占插件分支 |
+| 8 | 文档增补：plugins.md / extensions.md / runtime-api.md（§11.2） | `docs/architecture/**` |
+
+P3a 验收（用户手动）：Discover 搜「pdf」→ 命中 curated 条目 → 预览原文 → 安装确认 →
+Library 出现 trust=unknown 条目 → 模型 `skills load` 弹 ask → 批准后 trusted → 改文件再
+load → stale 重新 ask；覆盖安装保留信任记录（stale 重确认）；`trust_default=deny` 时 load
+被拒；模型 `read` library 文件被 deny_paths 拒；断网 / 坏索引 → stale 横幅或引导卡，
+Library 面不受影响；`discovery.enabled=false` → tab 消失、RPC 报 discovery_disabled。
+
+### P3b · github / local 源 + 更新面 + 源管理写路径
+
+- github 适配器：commit 解析 / tree 枚举 / 元数据懒补全（限额 200 / 并发 4）/ 逐文件 raw
+  下载 / ETag 条件请求 / 限流回落。预置源模板（anthropics/skills 等）UI 一键添加。
+- local 源：scanSkillRoot 只读浏览 + 复制落地（与 P2 import 合流，§1.1）。
+- 更新检查 / 显式更新 RPC + Library「检查更新」+ 行徽标 + 更新确认对话框；批量更新再议。
+- 源管理 UI 直写（additive `fs: ["user-config"]` + setPluginConfigValue 先例，与 q-settings
+  写路径协同）；rename 安装（开放问题 4）裁决后落地。
+- P3b 验收：添加 anthropics 源 → 搜索 / 预览 / 安装 docx 技能（commit 钉住）→ 上游推新
+  commit → 检查更新报差异 → 显式更新 → stale 重新 ask；限流时缓存兜底不风暴。
+
+### P3c · 生态扩展（每项先过设计评审 / 必要时 ADR，不在本设计承诺）
+
+- 聚合站适配器（仅当出现公开稳定 API 契约；skills.sh 私有接口不追）。
+- 语义检索（provider embedding，opt-in 设置键，token / 成本税评审——上位设计 P3 原项）。
+- pinned / 自动加载（BeforeLlm 注入，新 ADR 确认与现态纪律关系——上位设计 P3 原项）。
+- 团队 / workspace 共享（随 topology Workspace 数据目录——上位设计 P3 原项）。
+
+### 依赖与协调（诚实清单）
+
+| 依赖 | 现态 | 协调 |
+|---|---|---|
+| P2 import / 注入 | **设计已定、代码未落地**（§1.1 纠偏） | landing.ts 共享管线谁先实现谁落；discovery 不阻塞等 P2，P2 落地时薄封装复用 |
+| q-skills-ui 重设计 | 已合入基线（6cb3673b） | 直接在其骨架上加 tab，无冲突 |
+| TOCTOU 闸 / lstat fail-closed | 已合入（d7293324） | 零改动依赖 |
+| marketplace tar/semver | 插件私有 | 抽包协调（开放问题 1）；vendor 回落不阻塞 |
+| vessel-skills registry 发布 | 未创建 | P3a 交付物 7；发布前缺省源 unavailable 体验已设计（§4.2） |
+| q-settings 写路径 / schema 扩展 | 未落地 | 过渡手改 config.yaml（R6 先例）；不先行发明 |
+
+## 13. 风险与开放问题
+
+| # | 风险 | 等级 | 缓解 / 决策 |
+|---|---|---|---|
+| R1 | curated registry 未发布 / 停更 → 缺省源空转 | 中 | P3a 交付物含发布；unavailable 引导态不报错；种子小而精，社区源 opt-in 补充 |
+| R2 | GitHub 匿名限流 60 req/h → 大仓库刷新体验差 | 中 | TTL 缓存 + ETag 条件请求 + 元数据补全限额 200 + 403 回落旧快照；token 面不做（secrets:false） |
+| R3 | tar/semver 共享代码归属不清 → 跨插件私有 import 或双份漂移 | 中 | 开放问题 1 裁决；禁止跨插件相对路径 import |
+| R4 | 同步 install RPC 撞 gateway mutation 超时（最坏 120s 下载） | 中 | 开放问题 2：先实测；盖不住则改 CONTRACT-0.44 jobs 模式（marketplace 先例） |
+| R5 | net 权限声明式 enforcement 与自定义源主机不匹配 | 低 | 跟随 marketplace 现态口径（声明 + URL 校验）；host 强化时两者同步（开放问题 3） |
+| R6 | 跨源同名技能冲突（两个源都有 code-writing） | 低 | 冲突拒装 + 明示来源；rename 安装 P3b 裁决（--rename 改 frontmatter → 哈希语义随之变，skills CLI 先例已注明） |
+| R7 | 策展单点 / 审核成本 | 低 | registry 静态可审计（CI validate）；tier 只是展示，信任门兜底；策展 ≠ 信任已明示 |
+| R8 | provenance 与 trust 双文件一致性 | 低 | provenance 是派生审计数据（可剪枝重建），trust 是唯一信任真相；origin 只在钉锁时派生一次，已有记录保留（现态语义） |
+| R9 | 预览通道缺失（dir 资产无 preview 键）→ 用户盲装 | 低 | curated 索引强制 preview 键；缺失时 UI 明示「无法预览」+ 装后先看再信引导 |
+| R10 | 描述截断口径（vessel 200 vs 规范 1024） | 低 | 索引展示截断、预览 / load 返回原文（capContent 64 KiB）；不改解析器 |
+
+### 开放问题（实现前需裁决）
+
+1. **tar / gunzip / semver 共享方式**：抽 `@vessel-agent/archive` 小包（推荐，marketplace
+   迁移独立协调 commit）vs vendor 拷贝进 skills（注明出处 + 同步责任）。
+2. **install 同步 RPC vs background job**：实测 gateway mutation 超时上限后定；倾向先同步
+   （技能包小），超限再 jobs（不阻塞设计）。
+3. **net enforcement parity**：自定义 registry 主机超出 manifest 声明集时的判定口径——
+   跟随 marketplace 现态（声明式 + assertSecureUrl）；若宿主未来强化 enforcement，两插件同步。
+4. **rename 安装**（P3b）：是否支持 `--rename` 语义（改 frontmatter.name + 目录名 →
+   内容哈希与上游不同）；provenance 需记录 renamed 标记。
+5. **目录级 computedHash（skills-lock v2 口径）是否引入**：倾向**不引入**——vessel 信任门
+   钉 SKILL.md 单文件哈希是唯一信任口径，附件完整性走 provenance.files 审计 + read 边界；
+   引入目录哈希 = 第二套信任口径，违反单一口径纪律。
+6. **vessel-skills registry 仓库归属与发布流程**：egg-rolls org + GitHub Pages + validate CI
+   （vessel-plugins 同款）；种子技能打包脚本归属（scripts/ 还是 registry 仓库内）。
+
+---
+
+## 附：与上位设计的差异清单（评审对照用）
+
+| 上位设计（skills-plugin-design.md） | 本设计 | 性质 |
+|---|---|---|
+| §12 P3「marketplace 技能包对接（registry 下载 → 校验和 → library 落地）」一句 | §4–§7 完整展开：三种源适配器 / 七步安装管线 / 七个 RPC / provenance | 展开，不冲突 |
+| §9.2「P3 marketplace 签名验证落地前，marketplace 来源不自动提升信任」 | 安装不写 trust.json + tier 不影响门 + origin 钉锁时派生 | 逐字落实 |
+| §7 import RPC（P2） | landing.ts 共享管线，import 与 install 合流 | 协调（P2 代码未落地，§1.1 纠偏） |
+| §9.4 permissions.net: []（P1 零网络） | additive 主机集（§11.2） | additive 申请 |
+| §6 工具三动作 | 零改动（§9 论证） | 不变 |
+| §8 UI 单页 master-detail | 同页双 tab（Library / Discover） | additive |
+| 「明确不做」清单（core 接口 / 第二注册表 / 内容执行 / OS 沙箱…） | 全部延续（§2.2） | 不变 |
