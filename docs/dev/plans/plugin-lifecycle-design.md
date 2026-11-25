@@ -309,4 +309,196 @@ catalog / plugins.list 的 version 取 `descriptor.version`，而 loader 两条�
 可行且**已实现**。剩余缺口只有两个，都不在资产层：
 - child **后端代码**更新：指纹不含代码内容哈希，磁盘改代码不 bump version → 子进程不重启
   （§1.2 链路 B）。marketplace 更新流程靠 version bump 绕过；手改代码的开发场景须重启 gateway。
-- child **settings**：R-G 三层钉死，重启 gateway 才生效。
+- child **settings**：R-G 三层钉死，重启 gateway 才生效。---
+
+## 6. 设计方案
+
+原则：**能热的真热，不能热的诚实说重启；显示态与生效态同源。**
+不采纳「内置一律不能热加载关闭」的一刀切（§6.6）。全部字段 additive，旧客户端零破坏。
+
+### 6.1 manifest 生命周期声明（per-capability，宿主推导为主、声明为辅）
+
+**为什么不做一个二元 `lifecycle: 'hot' | 'restart'`**：现状矩阵（§2）里同一插件的不同能力
+生命周期不同（skills 工具热 / RPC 不跟 / settings 重启；child 启停热 / settings 重启）。
+二元声明必然在某一面撒谎。推荐 per-capability：
+
+```jsonc
+// package.json → vessel 块（additive，可选；与 scaffold 设计 §6.4 defaultEnabled 为 sibling 字段）
+"lifecycle": {
+  "toggle":   "hot" | "restart",   // enabled 翻转（含其全部注册面）
+  "settings": "hot" | "restart",   // plugins[].config 变化
+  "code":     "hot" | "restart"    // 磁盘代码更新；in-process 宿主强制 restart（ESM 物理约束）
+}
+```
+
+**真源是宿主推导，不是插件自报**（第三方插件可能谎报 hot）：
+
+1. **install 期注册面审计**：旁路装配（assemblePluginTools 的 MemoryPluginHost）包一层记录器，
+   记下该插件 install 注册了哪些面（tool / hook / guardrail / provider / rpc / 副作用）。
+   推导规则（对应 §2.4 根因）：
+   - 纯 tool（±rpc）→ `toggle: hot`（P1 后含 hook/guardrail，见 §6.3）；
+   - hook / guardrail / provider / 启动期副作用（watcher、渠道）→ `toggle: restart`（P1 前）；
+   - child → `toggle: hot`（进程边界是天然隔离单元，manager.reload 已全链）；
+     `settings: restart`（R-G，P2 后转 hot）；
+   - in-process → `code: restart` 恒成立（R-F）；child → `code: hot`（version bump 触发）。
+2. **manifest 声明只允许比推导更保守**：声明 restart 而推导 hot → 采纳声明（插件作者知道
+   宿主看不见的副作用）；声明 hot 而推导 restart → warn 一次 + 生效值取 restart（fail-honest）。
+3. 推导结果进 catalog 新字段 `lifecycle`（§6.2），UI 与 CLI `plugin list` 共用同一份。
+
+### 6.2 修 O5：badge 如实反映 + 热加载态实时跟踪
+
+三层修复对应 §3 三重根因，可独立增量落地：
+
+**R1 修复（enabled 读面活口径 + 读写联动）**
+
+- 读面：`bundlePluginEntries()`（cli.ts:1470-1503）与 bootstrap.ts:2101 的 enabled 不再硬编码
+  true / 读启动 config，统一改调共享判定 `pluginEntryEnabled(liveConfig.plugins, id)`
+  （plugin-config.ts:119-128，CLI / 宿主装配已共用，消灭第三份口径）。
+- **只做读面会制造新不一致**（面板显示关、RPC 面还开着）。因此配套读写联动：
+  config 热应用链（链路 A）在 tools applier 之后增加一步「in-process 登记态同步」——
+  按 liveConfig 对每个已登记 in-process 插件调 `manager.enable(id)` / `manager.disable(id)`
+  （manager.ts:1131-1168，**现成实现、零生产调用方**，R-B 就此接线）：
+  disable → 翻 enabled + 注销 RPC + 贡献面收口；enable → 翻回 + 重注册 RPC。
+  读面随后直接读 manager 状态（child 行今天就是这么做的，cli.ts:1442-1467），双轨同口径。
+- 效果：热 disable → 工具剥 + RPC 注销 + 面板显示关 + 导航页消失，**四面一致**。
+
+**R2 修复（restartRequired 改 pending 语义）**
+
+- catalog 新增 `pendingRestart: boolean`（additive；旧 `restartRequired` 字段保留一个版本期
+  作兼容别名，CHANGELOG 登记语义变更）：
+  `pendingRestart = 存在「期望态 ≠ 已生效态」且该面 lifecycle 为 restart 的差异`。
+  差异来源（全部已有计算，只差汇聚）：
+  - in-process 指纹变化（createPluginReloader 的 restart_required，plugin-host-assembly.ts:300-313）；
+  - child settings 变化（liveConfig vs settingsFor 启动快照，R-G）；
+  - lifecycle profile 为 restart 的插件的 enabled 变化（P1 前的 hook/guardrail/provider 类）；
+  - RESTART_FIELDS（agent/tls/token/port，gateway-reload-wiring.ts:100-113，属 config 域，
+    面板已有 config 重启提示的沿用其口径）。
+- badge 语义（CapabilitiesView「生效方式」列 + marketplace InstalledTable 同款）：
+  - `pendingRestart: true` → warn badge「重启后生效」（真阳性）；
+  - lifecycle 全 hot 且无 pending → 不挂 badge（或 neutral「即时生效」）；
+  - **模式信息留在 mode 列**（已有），不再用 restart 列复述模式。
+- `plugins.reload` 返回的 `restart_required`（真信号）接入同一 pending 汇聚，不再无 UI 消费。
+
+**R3 修复（广播补洞）**
+
+- tools applier / 登记态同步成功后触发 `broadcastPluginChanged`（gateway.ts:3260-3273 已有函数，
+  经 reload runner 注入触发点，与 plugins.reload / plugins.config.set 同一出口）。
+- 统一不变量：**任何插件生效态变化 → 必有一次 plugin.changed**；web 对账（usePluginContributions）
+  随即拿到 R1 修复后的活数据。node 专属 config / 项目 vessel.yaml 路径不再依赖 plugin-watch 间接补。
+
+### 6.3 热卸载补齐（P1：注销 API + dispose 热路径 + 旁路新实例）
+
+目标：把 ⚠️/❌ 的 in-process 插件升级为真热，消除 R-A / R-C。
+
+1. **core 宿主补对称注销面**：`unregisterHook(name)` / `unregisterGuardrail(name)` /
+   `unregisterProvider(name)`（与 unregisterTool 同形；hook/guardrail 已有 name 字段可作键）。
+   这是纯 additive API，不动既有注册语义。
+2. **热应用从「工具差量」扩为「注册面差量」**：旁路装配审计（§6.1）产出目标注册面全集，
+   applyTools 推广为 applyRegistrations：tool / hook / guardrail 各按名差量增删，
+   失败逆序回滚（沿用 applyTools 的回滚骨架，hot-apply-appliers.ts:245-264）。
+   provider 面**不进热差量**（R-D 结构性，保持 restart 声明）。
+3. **dispose 进热路径**：插件被热移除时调其 `Plugin.dispose()`（types/plugin.ts:36-37，
+   best-effort 吞错，与 ExecutionUnit.dispose 同语义）；skills watcher / doc-subscription store
+   由此真正释放。
+4. **旁路装配改新实例，杜绝单例 re-install**（R-C）：旁路用 cache-busted import
+   （`import(href + '?bypass=' + seq)`）拿新模块实例，真实宿主的实例不被旁路触碰。
+   模块表泄漏有限次可接受——与浏览器 embed 热更新同一权衡（plugin-embed 契约 §8，
+   embed-loader.ts:68 注释已接受该权衡）。热启用时真实宿主同样换新实例（旧实例 dispose）。
+   长期方向：插件导出工厂（scaffold 设计已往此走），工厂化后旁路零泄漏。
+5. **P1 前的过渡安全闸（all-or-nothing）**：lifecycle profile 为 restart 的插件，
+   tools applier **跳过其工具差量**（保持启动态 + pendingRestart badge），不再制造
+   「pii_reveal 工具进了但脱敏 guardrail 没生效」的危险半态（§2.1 guardrail-pii 行）。
+   这是相对今天的行为变化（今天会半热剥离），CHANGELOG 登记 + 金丝雀回归。
+
+### 6.4 内置插件版本策略（用户建议的采纳与修正）
+
+**采纳「内置跟踪 vessel 版本」，保留「独立 version」给第三方与契约语义：**
+
+| 对象 | pkg.version | vessel.version（manifest） | 门禁 |
+| --- | --- | --- | --- |
+| 内置插件（repo 源） | **= 引擎版本**，发布收口由 version.ts 统一 bump | **同步 bump = 引擎版本**（写模式扩展：version.ts 目前只写 pkg.version，不写 vessel 块） | 恒兼容（已裁定，e09858fc） |
+| 第三方插件 | 独立 | 独立（marketplace 更新比对 / child reload 指纹的真源） | engines.vessel 必填且须覆盖引擎（保留） |
+| plugin-sdk | 独立契约版本线（version.ts:36-44 已豁免） | — | runtime.sdk range |
+
+- **漂移修复**：引擎 2.0.0 / 插件 0.56.1 的既成漂移，在下次发布收口跑 version.ts 写模式回填；
+  本设计切片不动版本号（发布权归发布切片）。防再发：build / CI 门禁加 `version.ts --check`
+  （机制已在，version.ts:9），内置 pkg / vessel / 引擎三者不一致即红。
+- **UI 混排消除**：内置 vessel.version 跟踪引擎后，loader 两条取值分支（child 取 manifest.version、
+  in-process 取 pkg.version）自然同源，面板内置行统一显示引擎版本；第三方行显示自身版本。
+  无需改 loader 取值逻辑（改显示口径是治标，版本同源是治本）。
+- **手写第三份副本清理**：Plugin 实例的 `version`（skills index.ts:108 等）改为读清单 /
+  package.json，或删字段（catalog 不消费它），消灭人肉同步。
+- 为什么不采纳「内置 manifest 版本保持 0.1.0 独立」：内置与引擎同仓同发布，独立版本线
+  没有演进事实支撑（0.1.0 从未 bump 过），只制造显示混排与指纹语义混乱；独立版本的价值
+  在第三方生态（marketplace 更新、engines 兼容），那里完整保留。
+
+### 6.5 升级路线图（哪些可升级为热加载）
+
+| 阶段 | 内容 | 升级为热的对象 | 风险 |
+| --- | --- | --- | --- |
+| **P0 显示诚实**（纯读面 + 广播，零行为风险） | §6.2 R1 读面活口径 + R2 pending badge + R3 广播补洞；R1 的 manager.enable/disable 联动若嫌行为面大，可拆到 P0.5 | 面板如实：工具类插件显示「即时生效」，restart 类只在真有 pending 时挂 badge | 低；用户会看到状态「翻转」（实为纠错），金丝雀登记 |
+| **P1 注册面补齐** | §6.3 注销 API + dispose 热路径 + 旁路新实例 + all-or-nothing 过渡闸 | doc-subscription / skills / guardrail-pii / redact-secrets / tool-policy / hook-logging 启停转真热 | 中；core API additive，热差量回滚骨架复用 |
+| **P2 child settings 热应用** | settingsFor 改读 liveConfig（拆 cli.ts:967-976 的 C4 钉死）+ settings 哈希进 reload 指纹（或 settings 变更显式触发 deactivate+reactivate）；plugins.config.set 对 child 返回后自动触发 plugins.reload | marketplace / usage settings 转热（子进程重激活，非 gateway 重启）；「重启后生效」badge 对 child settings 摘除 | 中；子进程重启有秒级窗口，懒激活兜底 |
+| **P3 代码热更新**（可选） | child 已支持（version bump）；in-process 用 P1 的 cache-busted import + 指纹触发即可做，但模块表泄漏随更新次数增长 | 建议仅 dev 模式（VESSEL_DEBUG）开放 in-process 代码热更；生产保持 restart 诚实声明 | 高；不做也可接受 |
+| 不做 | provider / feishu / evals 工厂重构造 | 保持 restart（R-D/R-E 结构性；feishu 渠道 stop/start 理论可行，成本高收益低） | — |
+
+**iframe 资产热替换可行性**（任务④的直接回答）：已实现且全链验证（§5），无需升级；
+P2 解决的是 child 后端 settings，不是资产层。
+
+### 6.6 对用户问题的直接回答
+
+1. **「大部分需重启才能开启/关闭，这样好吗？」**——不好，但现状没有感知的那么差：
+   工具类与 child 启停今天就是热的；「大部分需重启」的感知主要来自假 badge（O5/R2）
+   与半热残留（R-A）。先修显示（P0），再补机制（P1/P2），重启面会收缩到
+   provider / 工厂类 / in-process 代码更新这些**结构性合理**的角落。
+2. **「很多插件可独立版本 + 热关闭热加载」**——方向成立：热关闭热加载按 per-capability
+   落地（§6.1/6.3/6.5）；独立版本保留给第三方（§6.4）。
+3. **「若不行，内置跟踪 vessel 版本 + 设为不能热加载关闭」**——前半采纳（§6.4，机制已在、
+   修漂移）；后半**不采纳一刀切**：把已经热的工具类插件降级成重启是方向反了，
+   且「不能热」应由宿主推导 + 诚实 badge 表达，而不是写死禁止。内置中真正不能热的
+   （provider / hook / guardrail 类，P1 前）会在面板如实挂「重启后生效」，用户建议的
+   合理内核（别假装能热）由 fail-honest 推导规则（§6.1）满足。
+
+---
+
+## 7. 风险与备选
+
+- **行为变化面**（实施切片须登记 CHANGELOG + 金丝雀）：
+  - P0：面板 enabled 从启动快照变活口径（纠错性翻转）；restart badge 从恒挂变 pending。
+  - P0.5/R1 联动：in-process RPC / 贡献面随 config 热启停（今天不跟）——导航页会随热 disable 消失，
+    这是期望语义，但属可见行为变化。
+  - P1 过渡闸：restart 类插件工具不再半热剥离（相对今天是行为收缩，安全方向）。
+- **模块表泄漏**：cache-busted import 每次热应用泄漏一份模块（有界、进程重启清零）；
+  与浏览器 embed 已接受的权衡同形。备选是插件全面 child 化 / engine-pool 隔离——
+  那是更大架构（ADR-106 方向），不在本设计范围。
+- **备选方案对比**：
+  - (a) 一刀切内置禁热（用户备选）：否——降级已热能力，且把显示问题当机制问题治。
+  - (b) 只修 badge 不补机制（P0 单独成切片）：可行且推荐先行——诚实的「重启后生效」
+    本身已消除大部分用户困惑；P1/P2 按收益排期。
+  - (c) 全插件 child 化：热卸载天然成立，但工具调用走 IPC 的延迟与改造面过大，否。
+- **宪法约束**：本切片零代码改动、零测试/探针；实施切片的验证计划（canary 回归项）
+  由实施者另立，本文不代跑。
+
+## 8. 锚点索引
+
+| 主题 | 位置 |
+| --- | --- |
+| 执行形态判据 / 扫描缓存 / ESM 缓存 | src/plugin/plugin-loader.ts:15、103-104、448-487、592-609、326-328、361-371 |
+| 版本取值双分支 | src/plugin/plugin-loader.ts:478（child=manifest.version）、:501（in-process=pkg.version） |
+| 覆盖层选择语义 | src/plugin/plugin-selection.ts 头注；src/plugin/plugin-config.ts:119-128 |
+| 链路 A config-watch | src/config/config-watch.ts:106-233；src/cli.ts:1407-1433 |
+| tools applier / 旁路装配 | src/cli.ts:1185-1243；src/config/hot-apply-assembly.ts:120-155；src/config/hot-apply-appliers.ts:202-303 |
+| 链路 B plugin-watch / reloader | src/plugin/plugin-watch.ts:46-59；src/cli.ts:997-1021；src/plugin/plugin-host-assembly.ts:280-315 |
+| manager.reload / 指纹 / embed 热刷新 | packages/serve/src/plugin-host/manager.ts:699-712、941-1070、1010-1017 |
+| manager 热启停（零调用方）/ in-process 登记 | packages/serve/src/plugin-host/manager.ts:1131-1168、1197-1241、723-733 |
+| 宿主注销面缺口 | packages/core/src/runtime/plugin-host.ts:183、195、212、398；packages/core/src/types/plugin.ts:36-37 |
+| O5 读面快照 | src/cli.ts:948、979、1470-1503（:1472 硬编码 true、:1482 启动 config）；src/runtime/bootstrap.ts:2101 |
+| O5 badge 硬编码 | packages/serve/src/plugin-host/catalog.ts:74-75、169；apps/web/src/domains/settings/CapabilitiesView.tsx:273-282；plugins/marketplace/marketplace/web-src/components/InstalledTable.tsx:104-106 |
+| O5 广播触发点 | packages/serve/src/gateway.ts:2478-2504、3260-3273 |
+| gateway.reload scope / RESTART_FIELDS | src/gateway/gateway-reload-wiring.ts:96-113、157、200-206；docs/adr/ADR-075-gateway-reload-scope.md |
+| child settings 钉死 | src/cli.ts:967-976；packages/serve/src/plugin-host/child.ts:128-165；packages/serve/src/gateway/methods/config.ts:745 |
+| iframe/embed 缓存与热替换 | packages/serve/src/plugin-host/static.ts:88-110；apps/web/src/domains/plugins/embed-loader.ts:46-48、62-70；apps/web/src/domains/plugins/PluginEmbed.tsx:64-115；apps/web/src/domains/plugins/PluginFrame.tsx:165-197；docs/architecture/plugin-embed.md §8 |
+| 版本机制 / 门禁 | scripts/version.ts:9、30-44；src/plugin/plugin-manifest.ts:293-323、1429-1435；e09858fc（内置恒兼容裁定） |
+| 工厂插件启动接线 | src/plugin/feishu-wiring.ts:4-8；src/plugin/eval-wiring.ts:4-9；src/plugin/mcp-wiring.ts:1-10；src/plugin/plugin-loader.ts:51-56 |
+| 各插件注册面 | 见 §2 矩阵逐行 file:line |
+| 前置调研 | docs/dev/plans/plugin-default-on-notes.md（覆盖层语义 + 面板显示链）；docs/dev/plans/plugin-scaffold-design.md §6.4（defaultEnabled 未落地）；docs/architecture/plugins.md、plugin-registry.md |
