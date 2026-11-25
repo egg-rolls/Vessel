@@ -3,7 +3,9 @@
  *
  * 用户裁决（2026-01）：环境信息本身也要以卡片出现，用户才能看到模型真实的上下文
  * 长什么样子。它与「底层系统信息」是**两种显示方式**，不是两套数据：
- * - 卡片 = 本模块解析的 `vessel:notice` 消息（模型上下文里的那一行行文本）；
+ * - 卡片 = 本模块解析的 `vessel:notice` 消息（模型上下文里的那一行行文本）与
+ *   `vessel:source` 来源行（`sourceNoticeCard`，q-from-card 裁定：scope「来源」，
+ *   principal/node/team 组织投射 + 原文块）；
  * - 底层行 = `runtime.notice` 原始事件（档位 `internal`，见 `state/event-visibility.ts`，开关打开时才出现）。
  *   两者的身份分别是「消息」与「事件」，各自成 item（消息侧 `notice:<下标>`，
  *   事件侧 `notice:notice-<seq>`），因此既不会互相吞掉，也不会把同一条渲染两遍。
@@ -17,8 +19,9 @@
  * 一张卡的作用域 = **首行**（摘要）的 scope；details 行没有自己的作用域，恒为 `context`，
  * 因此在 `peer` 卡里也只会作为「成员」卡下面的一行行明细出现。
  *
- * 可见性不在这里判：`state/runtime-visibility.ts` 决定 `notice` 种类默认可见，
- * 本模块只负责「解析成卡片内容」与「相邻同 scope 折叠」。卡片的**样子**也不在这里：
+ * 可见性不在这里判：`state/runtime-visibility.ts` 决定 `notice` / `source` 种类默认可见
+ * （`ENV_MESSAGE_KINDS`，两侧对账），本模块只负责「解析成卡片内容」与「相邻同 scope 折叠」。
+ * 卡片的**样子**也不在这里：
  * 渲染在 `EnvCard.tsx`，与「来自 agent X」卡同一张卡（用户裁决：复用 agent 卡的样式与
  * 点击展开机制），scope 只作为卡头标签出现。
  *
@@ -101,7 +104,8 @@ export interface EnvNoticeCard {
    *
    * 给「可展开看完整快照」那一类环境信息用：快照原文（system prompt / Self Card）是事实，
    * 不能按行拆、也不该被 `ENV_NOTICE_DETAILS_MAX` 截断 —— 它与「行」是两种粒度，各放一处。
-   * 现在只有 scope `context` 会带；渲染仍由 `EnvCard` 一处负责。
+   * scope `context`（全量快照）与 `source`（来源行原文，q-from-card）会带；
+   * 渲染仍由 `EnvCard` 一处负责。
    */
   blocks?: EnvNoticeBlock[];
 }
