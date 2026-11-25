@@ -4,10 +4,11 @@ import {
   PageScaffold,
   Stat,
   TableToolbar,
+  useStaleWhileRevalidate,
 } from '@vessel-agent/plugin-ui';
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { DayBucket, LeaderboardResult, SummaryResult } from '../src/aggregate.js';
-import { costHint, fmtCost, fmtInt, fmtPct, ratioHint } from './format';
+import { costHint, fmtCost, fmtInt, fmtPct, fmtTimeFull, ratioHint } from './format';
 import type { Translator } from './i18n';
 import { ModelTable } from './ModelTable';
 import {
@@ -15,12 +16,12 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
-  type LoadState,
   RangeTabs,
   type RangeValue,
+  RefreshingHint,
   rangeParams,
+  StaleNotice,
   TableFrame,
-  toError,
   type ViewProps,
 } from './shared';
 
@@ -155,54 +156,55 @@ function UsageBody({ data, t }: { data: UsageData; t: Translator }) {
   );
 }
 
+/** 后台轮询间隔（用户裁定：usage 15s SWR——保留旧数据后台刷新，不整页 loading）。 */
+const USAGE_POLL_MS = 15_000;
+
 export function UsageView({ client, refreshKey, t }: ViewProps) {
   const [range, setRange] = useState<RangeValue>('30');
-  const [state, setState] = useState<LoadState<UsageData>>({ status: 'loading' });
-  const [attempt, setAttempt] = useState(0);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey / attempt are explicit refetch triggers.
-  useEffect(() => {
-    let active = true;
-    setState({ status: 'loading' });
-    const params = rangeParams(range);
-    void Promise.all([
-      client.call<SummaryResult>('summary', params),
-      client.call<LeaderboardResult>('leaderboard', params),
-    ])
-      .then(([summary, models]) => {
-        if (active) setState({ status: 'ready', data: { summary, models } });
-      })
-      .catch((reason: unknown) => {
-        if (active) setState({ status: 'error', error: toError(reason) });
-      });
-    return () => {
-      active = false;
-    };
-  }, [client, range, refreshKey, attempt]);
-
-  const retry = useCallback(() => setAttempt((value) => value + 1), []);
+  // SWR（docs/architecture/data-refresh-swr.md）：range 是查询身份（切换 = 新查询，
+  // 首次 loading）；refreshKey / 15s 轮询是 revalidate（保留旧数据，就绪无缝替换）。
+  const swr = useStaleWhileRevalidate<UsageData>({
+    load: async () => {
+      const params = rangeParams(range);
+      const [summary, models] = await Promise.all([
+        client.call<SummaryResult>('summary', params),
+        client.call<LeaderboardResult>('leaderboard', params),
+      ]);
+      return { summary, models };
+    },
+    queryKey: [range],
+    intervalMs: USAGE_POLL_MS,
+    refreshKey,
+  });
 
   return (
     <PageScaffold title={t('usage.title')} subtitle={t('usage.description')}>
       <TableToolbar label={t('usage.toolbar')}>
         <RangeTabs value={range} onChange={setRange} t={t} />
+        {swr.isRefreshing ? <RefreshingHint label={t('common.updating')} /> : null}
       </TableToolbar>
       {/* The totals below are only as complete as the reader's coverage of the
           selected range; say so instead of presenting a partial sum as the
           total. Same component (and copy) as the Logs page. */}
-      {state.status === 'ready' ? (
-        <CoverageNotice source={state.data.summary.source} t={t} />
-      ) : null}
-      {state.status === 'loading' ? <LoadingState label={t('common.loading')} /> : null}
-      {state.status === 'error' ? (
+      {swr.data !== undefined ? <CoverageNotice source={swr.data.summary.source} t={t} /> : null}
+      {swr.isLoading ? <LoadingState label={t('common.loading')} /> : null}
+      {swr.error !== undefined && swr.data === undefined ? (
         <ErrorState
-          error={state.error}
-          onRetry={retry}
+          error={swr.error}
+          onRetry={swr.reload}
           title={t('common.loadError')}
           retryLabel={t('common.retry')}
         />
       ) : null}
-      {state.status === 'ready' ? <UsageBody data={state.data} t={t} /> : null}
+      {/* 刷新失败但旧数据仍在：细微 stale 提示 + 重试，绝不撤掉数据（SWR 条款 2）。 */}
+      {swr.error !== undefined && swr.data !== undefined ? (
+        <StaleNotice
+          message={t('common.stale', { time: fmtTimeFull(swr.updatedAt) })}
+          onRetry={swr.reload}
+          retryLabel={t('common.retry')}
+        />
+      ) : null}
+      {swr.data !== undefined ? <UsageBody data={swr.data} t={t} /> : null}
     </PageScaffold>
   );
 }
