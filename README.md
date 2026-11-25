@@ -33,13 +33,18 @@
 
 ## 为什么是 Vessel
 
-> 本节凝结自维护者团队长期使用 Vessel 做多 agent 协作开发的真实体验。
+> 本节凝结自维护者团队长期使用 Vessel 做多 agent 协作开发的真实体验——不是设想，是每天在跑的工作方式。
 
-- **组织一群 agent，而不是跑一个 agent。** 节点内按工作目录组 Team，成员招即派（`hire` / `create`）、定向通信（`agent send` 三段地址）、轮换身体（`rotate` 交接续作）。十几个实施 agent 并行开发，靠定向消息与看板保持有序。
-- **信任 agent 自主。** 不去过度限制——agent 已经知道如何干好一件事、如何不犯错误和挽救。运行时给的是原语与边界（权限、审批、可见性对等），不是每一步的遥控。
-- **优雅的生命周期。** 重启不是中断：drain-to-quiesce 等活跃 run 自然跑完，重启后嘱托与 inbox 自动续作。重启的权力可以下放给 agent 自己。
-- **真相源统一。** 服务端单一真相，前端 SWR 刷新；inbox 是 agent 级而非会话级——消息发给 agent，跨会话、跨身体仍然可达。
-- **可自托管的工程实践。** 红蓝开发流（主舰队开发 → 金丝雀舰队验收 → 晋升 → 优雅重启生产）就跑在 Vessel 自己的原语上：跨节点 federation 直接寻址，金丝雀独立节点独立数据，破坏性操作双锁隔离。
+**Vessel 不是「跑一个 agent」，而是「组织一群 agent 像团队一样协作」。** 节点内按工作目录组成 Team，成员招即派（`hire` / `create`）、定向通信（`agent send` 的三段地址）、轮换身体（`rotate` 交接续作）。维护者用 Vessel 协调十几个实施 agent 并行开发：靠定向消息与看板，不靠广播，不乱。
+
+几条设计信念，来自实践也约束实践：
+
+- **信任 agent 自主。** 不去限制太多——agent 已经知道如何干好一件事、如何不犯错误和挽救。运行时给的是原语与边界（权限分级、人类审批、可见性对等），不是每一步的遥控。授权有常设分级（`allow` / `ask` / `deny`），小事不必逐次请示。
+- **优雅的生命周期。** 重启不是中断：drain-to-quiesce 等活跃 run 自然跑完，秒退、重启，嘱托与 inbox 自动续作。重启的权力可以下放给 agent 自己（`restart --self`），工作不断、run 不丢。为了做到「秒退」，我们甚至修掉了 Bun `server.stop` 残余连接挂起的问题——优雅不是口号，是一个个具体缺陷的闭环。
+- **真相源统一。** 服务端是唯一权威，前端只做 SWR（stale-while-revalidate）：事件触发 + 兜底轮询，数据永远来自 RPC，刷新不闪烁、不清空。inbox 是 **agent 级**而非会话级——消息发给 agent，跨会话、跨身体仍然可达；身体可以换，身份与消息不丢。
+- **可自托管的工程实践。** Vessel 的开发就跑在 Vessel 自己的原语上：主舰队开发 → 金丝雀舰队验收 → 晋升 main → 优雅重启生产。跨节点 federation 直接寻址，开发协调者与金丝雀 QA 跨舰队协作验收；金丝雀是独立节点、独立数据，破坏性操作双锁隔离，绝不伤生产。
+
+多 agent 协作在这里不是玩具：有组织、有通信、有验收、有优雅生命周期。agent 在其中被信任、能自主、可观测。
 
 ## 快速开始
 
@@ -102,6 +107,23 @@ vessel          # 首次启动走引导向导：API 地址、Key、模型，保�
 | 发现 | `vessel rpc list [--node <id>] [--json]` | 列出控制面 RPC 方法与 schema 摘要——不翻源码就知道「这个 node 能调什么」 |
 | 发现 | `vessel fleet status [--json]` | 本舰队一屏：身份 / 平台实例 / 节点注册表与探活 / federation peers |
 
+```bash
+vessel session status              # 我现在什么状态？上下文还剩多少？队列里有什么？
+vessel session status --json       # 同上，纯数据（给 AI / 脚本）
+vessel permission show             # 我的哪些工具是 auto / ask / never？
+vessel config explain provider.model   # 这个键每层取值是什么？谁赢？为什么？
+vessel doctor                      # 环境体检：配置 / key / 数据根 / 端口 / 插件 / 舰队
+vessel rpc list                    # 这个 node 能调什么 RPC？
+vessel fleet status                # 本舰队有哪些节点、平台、peer？都活着吗？
+```
+
+这些命令不是第二套实现：它们是既有 RPC 的**只读包装**（`sessions.get` / `health.get` / `permissions.show` / `capabilities.list`……），与 Web 控制台同源同一份真相，不 bootstrap、不拿写锁、不输出密钥。`session status` 缺省解析调用者自身——agent 在 `bash` 里跑它，看到的就是自己的上下文预算（used / max / 百分比）、token 用量与 queue 深度，对自己有清醒认知。
+
+自服务还有两件随身原语：
+
+- **`agent rotate`** — 轮换身体：身份不变，换一个新会话继续。`startup_prompt` 是唯一的交接通道，新身体开局即带着嘱托。
+- **`inbox`** — agent 级收件箱（`<dataDir>/inbox/<agent>.json`）：消息发给 agent 而不是会话，跨身体可达。三档投递：`input`（作为下一轮输入）/ `wake`（只唤醒自己去读）/ `quiet`（只留档不唤醒）；`read` 就是拿走，同一段正文不会进两次上下文。
+
 自服务的关键一件：**优雅自重启续作**。
 
 ```bash
@@ -117,10 +139,11 @@ vessel restart --self --prompt "重启后继续：先核对金丝雀验收报告
 - **成员生命周期** — `create` / `hire` / `close` / `send` / `rotate` / `list` / `read`；peer 与 contractor 两条派生路径；成员关 peer 需人类审批。Team 日志走 CLI `vessel team post`。
 - **AX 自服务** — 自观测（`session status` / `permission show`）、自诊断（`config explain` / `doctor`）、自发现（`rpc list` / `fleet status`）、优雅自重启续作（`restart --self`）。见 [AX](#axagent-experience)。
 - **优雅生命周期** — stop / restart 缺省不限时优雅 drain，等活跃 run 自然跑完；`--force` 是唯一的非优雅退出且留审计。平台代码更新走 handoff，run 不断。
-- **上下文即消息** — skills 就是 Markdown 文件，`@路径` 在发送前展开为注入消息；`subscribe` 对具体文件做显式订阅，变更只发短通知，`inspect` 时取 diff。
+- **上下文即消息** — skills 就是 Markdown 文件，`@路径` 在发送前展开为注入消息；`subscribe` 对具体文件做显式订阅（edit/write/read 默认自动订阅所改/所读范围，可 opt-out），变更只发短通知，`inspect` 时取 diff。
 - **Durable run** — run 在开始、每轮 tool-call 后、结束时写 checkpoint；中断后 `--resume-run` 恢复。
 - **可观测** — 事件流（`<domain>.<action>.<event>`）、trace、metrics、Web 控制台时间线；`/v1/events?since=` 支持 `seq` 续订与 `gap` 标记。
-- **可扩展** — 插件、MCP、evals、飞书渠道；插件以目录形式放置即注册，外部插件启动时向 stderr 告警。
+- **单一真相源** — 服务端是唯一权威；前端 SWR（stale-while-revalidate）：事件触发 + 兜底轮询，数据永远来自 RPC。刷新保留旧数据、原子替换，只有首次加载才显示 loading。
+- **可扩展** — 插件、MCP、evals、飞书渠道；manifest 契约 fail-closed，per-capability 生命周期声明（`hot` / `restart`）：工具类插件热启停，不能热更的诚实标注「重启后生效」。装的插件默认开启（`plugins:` 只做覆盖）。
 - **多机** — 独立 Hub 服务、节点间 federation、远程 gateway（显式 opt-in，非回环必须 token + TLS）。
 - **单公司数据根** — 一个 data dir 一个公司；成员 / Team 是使用范围，不再有 tenant 选择、隔离存储或 quota。
 
@@ -153,12 +176,13 @@ vessel gateway start --daemon       # 平台 8642 + Node API 8644（同进程）
 vessel node start --daemon          # 只起 Node API（缺省 8644）
 vessel gateway status --json        # 两个监听的状态
 vessel node status --json
+vessel ps                           # docker ps 式进程清单（--all 含已停止，--json 机器可读）
 bun run build:web                   # 生产：Platform Gateway 托管 apps/web/dist
 bun run dev:web                     # 开发：http://127.0.0.1:5173
 VESSEL_MOCK=1 vessel --serve 8642   # legacy 单监听（保留至 G5）
 ```
 
-打开控制台后把平台 token 粘到 URL fragment（`#token=...`），它只进 `sessionStorage`；本地 node 的生效凭据由 `platform.nodes.credentials` 自动交付（回环匿名时为空）。支持运行提交 / 取消、事件时间线、会话列表、工具列表、run 内联权限卡片、`ask` 表单、Team 列表 / 群聊 / 成员侧栏 / `@` 补全 / Body 历史。
+打开控制台后，配置了认证（`auth.backends`）就走登录页（口令 / TOTP / 第三方登录）；URL 里的 `#token=` / `#bootstrap=` 只是**一次性引导码**（单次 + 10 分钟），用于首次引导设置，不是常规登录方式。缺省平台代理 node 流量（`gateway.proxy_nodes`）：浏览器只连平台端口，node token 不出网关。支持运行提交 / 取消、事件时间线、会话列表、工具列表、run 内联权限卡片、`ask` 表单、Team 列表 / 群聊 / 成员侧栏 / `@` 补全 / Body 历史、看板（`#/kanban`）与 VSCode 式设置弹窗（插件设置域装上即出现）。
 
 ### Headless 提问（退出码 3）
 
@@ -176,7 +200,7 @@ vessel --resume-run <run_id>
 
 ## 配置
 
-- 优先级：`CLI > env > project > user > default`；没有 tenant overlay / `tenant` 配置块。命令 `vessel config path|init|show`。详见 [CONFIG.md](docs/operations/CONFIG.md)。
+- 优先级：`CLI > env > project > user > default`（显式 `--user-config` 的 `data_dir` 有例外，见 CONFIG.md）；没有 tenant overlay / `tenant` 配置块。命令 `vessel config path|init|show|set|explain`。详见 [CONFIG.md](docs/operations/CONFIG.md)。
 - 默认数据根 `~/.vessel/data`（`VESSEL_DATA_DIR` 覆盖）；单公司数据直接位于 `<data_dir>/{sessions,runs,events,inbox}/`，`tenant.json` 只保存内部持久单 id，没有 `tenants/<id>/` 层。
 - 默认 `session.backend: file`；sqlite 仍可用。旧 `.vessel/sessions.db` 不会自动迁移，见 [MIGRATION.md](docs/operations/MIGRATION.md)。
 - trace 默认开启 `full`，按 30 天 / 1000 runs / 1 GiB prune；详见 [TRACE.md](docs/operations/TRACE.md)。
@@ -188,7 +212,7 @@ vessel --resume-run <run_id>
 - **MCP**：插件（`@vessel-agent/mcp-client`）。server 的工具经 `PluginHost` 注册，默认名 `mcp__<server>__<tool>`，权限默认 `ask`。密钥用 `<NAME>_env` 引用环境变量，配置层不做 `${VAR}` 插值。
 - **evals**：插件 + 运行器，默认完全离线；真实 provider 需 `evals.allowNetwork: true` 与 CLI `--allow-network` 双门控。
 - **飞书**：插件，官方 SDK WebSocket 长连接，只做文本；session 固定 `feishu:<chat_id>`。
-- **skills**：就是 Markdown 文件，放 `skills/`（项目级）或 `~/.vessel/skills/`（用户级）；这是约定，代码里没有硬编码路径。
+- **skills**：就是 Markdown 文件，放 `skills/`（项目级）或 `~/.vessel/skills/`（用户级）；`skills` 插件提供 list / search / load（TOFU 信任门控）与管理 UI。
 
 ```yaml
 mcp_servers:
@@ -259,7 +283,7 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
 一个 Vessel 进程 = 一个节点。Hub 是独立进程（`vessel hub start`，不随 gateway 启动），只做目录与指针；真正的消息走节点到节点的 federation。**默认是本机回环**，远程与跨节点都要显式配置。
 
 - **远程客户端**：`--connect <http(s)://origin>`（或 `VESSEL_CONNECT`）。回环允许明文；非回环必须 HTTPS + token；URL 只接受 origin。
-- **服务端**：`--serve-host` + `--allow-remote` + `--tls-cert` / `--tls-key`，或 `serve.*` 配置。
+- **服务端**：`--serve-host` + `--allow-remote` + `--tls-cert` / `--tls-key`，或 `node.*` 配置。
 - **Hub 目录**：`vessel hub start` 独立启动目录进程；`vessel hub join-code` 生成一次性配对码，节点用 `vessel hub join <hub-url> --code <CODE>` 出站加入（NAT 友好）。只支持 node → hub；`hub pair` / `hub node add` / `hub token *` / `hub data-token` 已删除。
 - **跨节点投递**：只走 federation（`POST /v1/federation/messages`），静态 peer allowlist + `<principal>@<node_id>:<team_id>` 地址。
 - **已知限制**：没有 mDNS / 服务网格 / 自动发现 / mTLS / 全局 durable；跨节点 spawn / close / rotate / resume 未实现。
@@ -350,6 +374,14 @@ cd apps/web && bun run build
 ### 模型思考过程去哪了？
 
 `reasoning_content` 会保存并回传，但 TUI / 事件流不展示；需要查看时设 `ui.showReasoning: true`。
+
+### agent 怎么知道自己的状态？
+
+`vessel session status`（缺省解析调用者自身）一屏看 state / token 用量 / 上下文预算 / queue 深度，`--json` 纯数据。权限矩阵用 `vessel permission show`，配置溯源用 `vessel config explain <key>`，能力发现用 `vessel rpc list`。见 [AX](#axagent-experience)。
+
+### 怎么更新代码而不丢正在跑的工作？
+
+平台代码更新用 `vessel gateway restart`（handoff，run 不断）；整舰队重启用 `vessel restart`，缺省不限时优雅 drain，等活跃 run 自然跑完。agent 也可以在自己的 run 里预约优雅自重启：`vessel restart --self --prompt "<续作嘱托>"`，重启后嘱托自动投递续作。`--force` 是唯一的非优雅退出，会留审计。
 
 ## 写给 AI
 
