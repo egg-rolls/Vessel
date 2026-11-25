@@ -9,6 +9,8 @@ type Vars = Record<string, string | number>;
 
 const EN = {
   'common.loading': 'Loading…',
+  'common.updating': 'Updating…',
+  'common.stale': 'Update failed; showing data from {time}.',
   'common.retry': 'Retry',
   'common.refresh': 'Refresh',
   'common.apply': 'Apply',
@@ -122,6 +124,8 @@ export type MessageKey = keyof typeof EN;
 
 const ZH: Record<MessageKey, string> = {
   'common.loading': '加载中…',
+  'common.updating': '更新中…',
+  'common.stale': '更新失败，显示 {time} 的数据。',
   'common.retry': '重试',
   'common.refresh': '刷新',
   'common.apply': '应用',

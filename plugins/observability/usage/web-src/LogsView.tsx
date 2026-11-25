@@ -8,9 +8,10 @@ import {
   SearchInput,
   Select,
   TableToolbar,
+  useStaleWhileRevalidate,
 } from '@vessel-agent/plugin-ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { LogItem, LogsResult, SourceCoverage } from '../src/aggregate.js';
+import type { LogItem, LogsResult } from '../src/aggregate.js';
 import { fmtCost, fmtDuration, fmtInt, fmtTime, fmtTimeFull, MISSING } from './format';
 import type { Translator } from './i18n';
 import {
@@ -20,7 +21,9 @@ import {
   LoadingState,
   RangeTabs,
   type RangeValue,
+  RefreshingHint,
   rangeParams,
+  StaleNotice,
   TableFrame,
   toError,
   type ViewProps,
@@ -246,49 +249,51 @@ function logColumns(t: Translator): readonly DataTableColumn<LogItem>[] {
   ];
 }
 
+/** 后台轮询间隔（SWR 规范；与 Usage 同口径 15s）。 */
+const LOGS_POLL_MS = 15_000;
+
 export function LogsView({ client, refreshKey, t }: ViewProps) {
   const [draft, setDraft] = useState<Filters>(EMPTY_FILTERS);
   const [applied, setApplied] = useState<Filters>(EMPTY_FILTERS);
-  const [pageKey, setPageKey] = useState(0);
-  const [items, setItems] = useState<LogItem[]>([]);
-  const [cursor, setCursor] = useState<LogsResult['next_cursor']>(null);
-  /** Which run files the backend actually read; null until the first page lands. */
-  const [source, setSource] = useState<SourceCoverage | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+  /** 用户 loadMore 追加的深层页；null = 只在首页。首页数据 swap 时清空。 */
+  const [extra, setExtra] = useState<{
+    items: LogItem[];
+    cursor: LogsResult['next_cursor'];
+  } | null>(null);
+  const [moreLoading, setMoreLoading] = useState(false);
+  const [moreError, setMoreError] = useState<Error | null>(null);
   /** The typed interval cannot be sent (empty or inverted); nothing was applied. */
   const [rangeInvalid, setRangeInvalid] = useState(false);
-  const generation = useRef(0);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey / pageKey are explicit refetch triggers.
+  // SWR（docs/architecture/data-refresh-swr.md）：applied 过滤是查询身份（换过滤 =
+  // 新查询，首次 loading）；refreshKey / 15s 轮询是 revalidate（保留旧数据无缝替换）。
+  // 分页条款：用户已 loadMore（extra !== null）时暂停后台 revalidate——interval 置 0
+  // 且冻结 refreshKey——避免后台 swap 抽走用户正在浏览的深层页；手动刷新 / 换过滤恢复。
+  const paged = extra !== null;
+  const frozenRefreshKey = useRef(refreshKey);
+  if (!paged) frozenRefreshKey.current = refreshKey;
+  const swr = useStaleWhileRevalidate<LogsResult>({
+    load: () => client.call<LogsResult>('logs', logsParams(applied)),
+    queryKey: [JSON.stringify(applied)],
+    intervalMs: paged ? 0 : LOGS_POLL_MS,
+    refreshKey: paged ? frozenRefreshKey.current : refreshKey,
+  });
+  const firstPage = swr.data;
+  const firstPageRef = useRef(firstPage);
+  firstPageRef.current = firstPage;
+
+  // 首页数据身份变化（新首页落地 / 换查询）：深层页与 loadMore 错误一并作废。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: firstPage 是故意的身份变化触发器（effect 不读它，只在 swap 时重跑）。
   useEffect(() => {
-    const current = generation.current + 1;
-    generation.current = current;
-    setLoading(true);
-    setError(null);
-    setItems([]);
-    setCursor(null);
-    setSource(null);
+    setExtra(null);
+    setMoreError(null);
+  }, [firstPage]);
 
-    void client
-      .call<LogsResult>('logs', logsParams(applied))
-      .then((data) => {
-        if (generation.current !== current) return;
-        setItems(data.items);
-        setCursor(data.next_cursor);
-        setSource(data.source ?? null);
-        setLoading(false);
-      })
-      .catch((reason: unknown) => {
-        if (generation.current !== current) return;
-        setError(toError(reason));
-        setLoading(false);
-      });
-  }, [client, applied, refreshKey, pageKey]);
-
-  const reload = useCallback(() => {
-    setApplied((value) => ({ ...value }));
-  }, []);
+  const items: LogItem[] =
+    firstPage !== undefined ? [...firstPage.items, ...(extra?.items ?? [])] : [];
+  const cursor = extra !== null ? extra.cursor : (firstPage?.next_cursor ?? null);
+  /** Which run files the backend actually read; null until the first page lands. */
+  const source = firstPage?.source ?? null;
 
   /**
    * Session / model / status take effect on Apply; the range does not wait for
@@ -331,29 +336,33 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
   }, []);
 
   const loadMore = useCallback(() => {
-    if (cursor === null || loading) return;
-    const current = generation.current;
-    setLoading(true);
-    setError(null);
+    if (firstPage === undefined || moreLoading) return;
+    const cursorNow = extra !== null ? extra.cursor : firstPage.next_cursor;
+    if (cursorNow === null) return;
+    setMoreLoading(true);
+    setMoreError(null);
     const params = {
       ...logsParams(applied),
-      before_ts: cursor.before_ts,
-      before_id: cursor.before_id,
+      before_ts: cursorNow.before_ts,
+      before_id: cursorNow.before_id,
     };
-    void client
-      .call<LogsResult>('logs', params)
-      .then((data) => {
-        if (generation.current !== current) return;
-        setItems((previous) => [...previous, ...data.items]);
-        setCursor(data.next_cursor);
-        setLoading(false);
-      })
-      .catch((reason: unknown) => {
-        if (generation.current !== current) return;
-        setError(toError(reason));
-        setLoading(false);
-      });
-  }, [applied, client, cursor, loading]);
+    void client.call<LogsResult>('logs', params).then(
+      (data) => {
+        setMoreLoading(false);
+        // 首页已 swap（手动刷新 / 换查询）：旧首页的追加页作废，不覆盖新数据。
+        if (firstPageRef.current !== firstPage) return;
+        setExtra((previous) => ({
+          items: [...(previous?.items ?? []), ...data.items],
+          cursor: data.next_cursor,
+        }));
+      },
+      (reason: unknown) => {
+        setMoreLoading(false);
+        if (firstPageRef.current !== firstPage) return;
+        setMoreError(toError(reason));
+      },
+    );
+  }, [applied, client, extra, firstPage, moreLoading]);
 
   // The default range is not a "filter": an empty first load should say "no logs
   // yet", not "no matching requests".
@@ -414,7 +423,8 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
         <Button variant="primary" onClick={applyDraft}>
           {t('common.apply')}
         </Button>
-        <Button onClick={reload}>{t('common.refresh')}</Button>
+        <Button onClick={swr.reload}>{t('common.refresh')}</Button>
+        {swr.isRefreshing ? <RefreshingHint label={t('common.updating')} /> : null}
       </TableToolbar>
 
       <details className="flex flex-col gap-2">
@@ -445,16 +455,24 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
 
       <CoverageNotice source={source} t={t} />
 
-      {loading && items.length === 0 ? <LoadingState label={t('common.loading')} /> : null}
-      {error !== null && items.length === 0 ? (
+      {swr.isLoading ? <LoadingState label={t('common.loading')} /> : null}
+      {swr.error !== undefined && firstPage === undefined ? (
         <ErrorState
-          error={error}
-          onRetry={() => setPageKey((value) => value + 1)}
+          error={swr.error}
+          onRetry={swr.reload}
           title={t('common.loadError')}
           retryLabel={t('common.retry')}
         />
       ) : null}
-      {!loading && error === null && items.length === 0 ? (
+      {/* 刷新失败但旧数据仍在：细微 stale 提示 + 重试，绝不撤掉数据（SWR 条款 2）。 */}
+      {swr.error !== undefined && firstPage !== undefined ? (
+        <StaleNotice
+          message={t('common.stale', { time: fmtTimeFull(swr.updatedAt) })}
+          onRetry={swr.reload}
+          retryLabel={t('common.retry')}
+        />
+      ) : null}
+      {!swr.isLoading && swr.error === undefined && items.length === 0 ? (
         <EmptyState
           title={hasFilters ? t('logs.empty.filtered') : t('logs.empty.title')}
           description={t('logs.empty.description')}
@@ -466,17 +484,17 @@ export function LogsView({ client, refreshKey, t }: ViewProps) {
           <TableFrame>
             <DataTable columns={logColumns(t)} rows={items} rowKey={(row) => row.id} />
           </TableFrame>
-          {error !== null ? (
+          {moreError !== null ? (
             <ErrorState
-              error={error}
+              error={moreError}
               onRetry={loadMore}
               title={t('common.loadMoreError')}
               retryLabel={t('common.retry')}
             />
           ) : cursor !== null ? (
             <div>
-              <Button variant="primary" onClick={loadMore} disabled={loading}>
-                {loading ? t('common.loading') : t('common.loadMore')}
+              <Button variant="primary" onClick={loadMore} disabled={moreLoading}>
+                {moreLoading ? t('common.loading') : t('common.loadMore')}
               </Button>
             </div>
           ) : null}

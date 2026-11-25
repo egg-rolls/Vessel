@@ -22,3 +22,4 @@ export * from './Section';
 export * from './Stat';
 export * from './TableToolbar';
 export * from './Tabs';
+export * from './useStaleWhileRevalidate';
