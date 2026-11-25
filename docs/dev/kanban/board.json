@@ -61,12 +61,20 @@
       "progress": "✅完成合并552097e2(7eb80815 P1core extra钩子+P2热配置插件/830e9a47 P3工具栏菜单+设置UI,冲突解决保留drag-reference双方props)build绿；plugins/context/thinking-intensity(非provider,默认集排除provider纠偏)+模块级live holder热生效+contributes.settings自动发现+composer思考菜单+stable映射experimental闸；待金丝雀验+用户重启"
     },
     {
+      "id": "q-ti5-4-budget",
+      "title": "缺陷：TI5-4 thinking注入budget未抬max_completion_tokens（致provider 400阻塞）",
+      "column": "待办",
+      "owner": "user",
+      "branch": "",
+      "progress": "canary实测发现：O-TI2映射修复让dashscope/qwen4-max匹配qwen行→thinking-intensity注入thinking_budget(high=16384)，但max_completion_tokens=4096未抬→Dashscope 400 max_completion_tokens must be greater than thinking_budget→canary lead+lifecycle tester provider_http_error阻塞(节点活agent死)；workaround已改canary default_level:low(2048<4096)解阻；proper fix=thinking注入budget时保证max_completion_tokens>budget(抬max_tokens或clamp budget≤max_tokens)；候派单修复+用户裁定"
+    },
+    {
       "id": "q-sse-shared",
       "title": "调研：前端轮询盘点+SSE共用连接可行性（用户提问inbox更新等改SSE）",
       "column": "进行中",
       "owner": "q-sse-shared",
       "branch": "design/q-sse-shared",
-      "progress": "f17abb81派单(用户提问:除大数据内容外其他轮询点?能否改SSE共用连接如inbox更新)：盘点前端轮询(PendingStrip 2s非空兜底/inbox 2s/10s/health/transcript/usage SWR)+现有事件传输(WS事件流gateway proxy)+SSE共用连接可行性(inbox已有事件触发能否去轮询/SSE vs WS取舍/multiplex多域归属分发)+SWR规范关系(替换兜底轮询vs传输层,兜底保留)+设计方案分级风险；零代码调研输出sse-shared-connection-audit.md"
+      "progress": "✅调研完成aed9c604(219行,用户裁定WS复用为主)：★共用连接已存在——每node一条WS(/v1/events)承载RPC+全事件族,所有轮询读本就骑这条WS；要做的是把轻量状态刷新触发从interval挪到WS事件面(事件当触发器数据仍RPC=SWR红线),兜底轮询降频保留,不新设SSE。盘点~20轮询点(inbox条带/专页2s非空门控/team chat 4s/runs详情2s/sessions60s/roster20s/health15s/config60s)；纯事件范例pending权限ask/build SSE/usage事件+15s；可行性:inbox最接近全事件化唯一缺口recall/claim不发事件(补agent.inbox.changed帧2s→10s),usage用llm.response触发,roster用agent.*帧；分级P0纯前端骑现有帧/P1小服务端增量(recall/claim发帧)/P2可选(team.message订阅等边际递减不建议)；风险+缓解全表§6；候用户裁定实施"
     },
     {
       "id": "q-inbox-agent-view",
