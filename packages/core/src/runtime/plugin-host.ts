@@ -297,6 +297,9 @@ export class MemoryPluginHost implements PluginHost {
           settle();
         }
       },
+      // 生命周期审计：本次安装登记过的注册面种类（去重）。entries 的 kind 与
+      // PluginSurfaceKind 同集；commit/rollback 后仍可读（审计只关心「装过什么」）。
+      surfaces: () => new Set(entries.map((entry) => entry.kind)),
     };
   }
 

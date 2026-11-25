@@ -51,7 +51,25 @@ export interface Plugin {
 export interface PluginInstallScope {
   commit(): void;
   rollback(): void;
+  /**
+   * 生命周期审计（q-plugin-lifecycle §6.1）：本次安装至今登记过的注册面种类。
+   * 真源是宿主实际看到的注册行为，不是插件自报 —— 供 per-capability 生命周期推导。
+   * 可选：不实现的自定义宿主退化成「审计为空」，推导按保守口径处理。
+   */
+  surfaces?(): ReadonlySet<PluginSurfaceKind>;
 }
+
+/**
+ * 插件 install 期可登记的注册面种类（与 MemoryPluginHost 的注册条目 kind 同集）。
+ * 生命周期推导据此判断「热应用能否完整摘除 / 重建该插件的全部注册面」。
+ */
+export type PluginSurfaceKind =
+  | 'tool'
+  | 'provider'
+  | 'guardrail'
+  | 'hook'
+  | 'memberBody'
+  | 'readSideMasker';
 
 /**
  * 读侧文本脱敏器（0.52 pii-guard）。

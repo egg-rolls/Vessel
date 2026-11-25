@@ -347,6 +347,17 @@ export interface PluginContributionsSnapshot {
 /** 插件运行模式（E10 元数据）。 */
 export type PluginMode = 'in-process' | 'child';
 
+/**
+ * per-capability 生命周期（q-plugin-lifecycle §6.1）的结构镜像。
+ * 真源由装配层推导（宿主 install 期注册面审计 + manifest 保守声明）注入；
+ * serve 只消费结构字段，不 import `src/`。每个能力：hot = 热应用即生效；restart = 需重启。
+ */
+export interface PluginLifecycleProfile {
+  toggle: 'hot' | 'restart';
+  settings: 'hot' | 'restart';
+  code: 'hot' | 'restart';
+}
+
 /** `plugins.list[].status` 允许的对外值（不含瞬态 starting/stopped）。 */
 export type PluginListStatus = 'inactive' | 'active' | 'unhealthy' | 'disabled' | 'invalid';
 

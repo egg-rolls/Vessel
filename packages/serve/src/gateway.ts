@@ -533,6 +533,12 @@ export interface Gateway {
    */
   reconfigure(options: GatewayReconfigureOptions): void;
   /**
+   * 广播 `plugin.changed`（q-plugin-lifecycle §6.2 R3）。config 热应用链（tools applier /
+   * 登记态同步）成功后由装配层调用，与 plugins.reload / plugins.config.set 同一出口，
+   * 保证「任何插件生效态变化 → 必有一次 plugin.changed」，web 对账随即拿到活数据。
+   */
+  notifyPluginChanged(): void;
+  /**
    * 进程内 dispatcher（与 asm `RpcDispatcher` 结构一致）。
    * asm 用它构造 `LocalRpcClient`；principal 缺省为本地 default/admin。
    */
@@ -4705,6 +4711,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     protocol: protocolInfo,
     tls: tlsMaterial !== undefined,
     reconfigure,
+    notifyPluginChanged: broadcastPluginChanged,
     rpc: dispatcher.dispatch,
     manifest,
     stop() {
