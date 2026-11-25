@@ -35,7 +35,7 @@
       "column": "进行中",
       "owner": "q-ui-polish",
       "branch": "fix/q-ui-polish",
-      "progress": "用户三问题派单810da7a1：①inbox read后UI不刷新（agents.inbox只读视图无变更事件→事件面订阅或工具完成refetch）②tool-cards.ts principalLabel砍地址→additive副行/展开显完整路由(node名+team+原址)向后兼容③顶栏路由nodeKey直显→useNodeNames映射(详情页已有名字)；避开q-from-card并发文件；④追加(用户裁定)：会话卡主动命名emoji铅笔→灰色正式ICON；⑤追加(用户裁定)：设置弹窗默认值上控件(选项默认选中/输入placeholder,不写说明文本)；五增量提交+build门禁"
+      "progress": "用户三问题派单810da7a1：①inbox read后UI不刷新（agents.inbox只读视图无变更事件→事件面订阅或工具完成refetch）②tool-cards.ts principalLabel砍地址→additive副行/展开显完整路由(node名+team+原址)向后兼容③顶栏路由nodeKey直显→useNodeNames映射(详情页已有名字)；避开q-from-card并发文件；④追加(用户裁定)：会话卡主动命名emoji铅笔→灰色正式ICON；⑤追加(用户裁定)：设置弹窗默认值上控件(选项默认选中/输入placeholder,不写说明文本)。进度：①inbox live触发386c35bf②agent卡完整路由4b3facf2③顶栏node名5ac1b531④铅笔ICON f5bb30df已提交；⑤设置默认值WIP进行中；build收口待⑤完"
     },
     {
       "id": "q-canary-topology",
