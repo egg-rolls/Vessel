@@ -33,6 +33,7 @@ import {
   composerHostActions,
   composerToolbarLabel,
   useComposerToolbarActions,
+  useComposerToolbarMenuActions,
 } from './composer-toolbar';
 import { refDisplayName, refKindLabel } from './MessageRefs';
 
@@ -210,6 +211,7 @@ export function ComposerToolbarBar({
   hostActions = NO_COMPOSER_TOOLBAR_HOST_ACTIONS,
   children,
   className,
+  sessionId,
 }: {
   contextUsage?: ComposerContextUsage;
   /** 右侧主按钮（发送 / 配置连接），由页面传入。 */
@@ -219,8 +221,15 @@ export function ComposerToolbarBar({
   /** 扩展槽里宿主自绘的控件。 */
   children?: ReactNode;
   className?: string;
+  /** 当前会话 id（P3 菜单 sessionScoped write 注入）；缺省（草稿态）菜单按全局默认。 */
+  sessionId?: string;
 }) {
-  const actions = useComposerToolbarActions(hostActions);
+  const hostToolbarActions = useComposerToolbarActions(hostActions);
+  const menuActions = useComposerToolbarMenuActions(sessionId);
+  const actions = useMemo(
+    () => [...hostToolbarActions, ...menuActions],
+    [hostToolbarActions, menuActions],
+  );
   return (
     <ComposerToolbar
       label={composerToolbarLabel()}
@@ -305,6 +314,7 @@ export function ComposerField({
   hostActions = NO_COMPOSER_TOOLBAR_HOST_ACTIONS,
   slot,
   attach,
+  sessionId,
 }: {
   /** 输入框：各页自绘（Enter / IME / mention 行为留在页面里），样式共用 `.composer-input`。 */
   children: ReactNode;
@@ -323,6 +333,8 @@ export function ComposerField({
    * 不留点了没反应的死按钮。
    */
   attach?: ComposerAttachBinding;
+  /** 当前会话 id（P3 菜单 sessionScoped write）；缺省（草稿态）按全局默认。 */
+  sessionId?: string;
 }) {
   const [attachOpen, setAttachOpen] = useState(false);
   const dialogId = useId();
@@ -347,7 +359,12 @@ export function ComposerField({
     // biome-ignore lint/a11y/useKeyWithClickEvents: 键盘流不变：Tab 直接到 textarea / 工具栏按钮，空白处不需要键盘等价键
     <div className="composer-field" onClick={focusComposerInputOnBlankClick}>
       {children}
-      <ComposerToolbarBar contextUsage={contextUsage} primary={primary} hostActions={actions}>
+      <ComposerToolbarBar
+        contextUsage={contextUsage}
+        primary={primary}
+        hostActions={actions}
+        sessionId={sessionId}
+      >
         {attach !== undefined && (
           <ComposerAttachButton
             open={attachOpen}

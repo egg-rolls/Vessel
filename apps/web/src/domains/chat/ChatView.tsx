@@ -660,6 +660,7 @@ export function ChatView({
             onRemoveSessionRef={submitApi.removeSessionRef}
             onAddSessionRef={submitApi.addSessionRef}
             currentScope={composerScope}
+            sessionId={selectedId ?? undefined}
           />
         </section>
 

@@ -6,3 +6,12 @@
 export type { ChatRequest, LLMProvider, LLMResponse, ProviderFactory } from '../types/provider.js';
 export { ProviderHttpError, parseRetryAfterMs } from './errors.js';
 export { AnthropicProvider, MemoryLLMProvider, OpenAICompatibleProvider } from './providers.js';
+export {
+  applyAnthropicThinkingConsistency,
+  EXTRA_LIMITS,
+  mergeExtraHeaders,
+  mergeExtraParams,
+  RESERVED_BODY_KEYS_ANTHROPIC,
+  RESERVED_BODY_KEYS_OPENAI,
+  RESERVED_HEADERS,
+} from './request-extras.js';

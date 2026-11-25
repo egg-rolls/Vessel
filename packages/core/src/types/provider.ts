@@ -165,6 +165,19 @@ export interface ChatRequest {
    * 适配器命中 `byMessageIndex` 时才把那条消息的 `content` 升成块数组。
    */
   attachment_plan?: AttachmentPlan;
+  /**
+   * 额外请求头（additive，q-thinking-plugin）。请求期由 BeforeLlm hook 注入
+   * （`HookResult.requestExtras.headers`），EU 原样透传；**只有适配器读它**。
+   * 合并闸见 `provider/request-extras.ts`：危险头（Authorization 等）丢弃 + 告警。
+   * 缺省 / 空 ⇒ 请求头与今天逐字节相同。
+   */
+  extra_headers?: Readonly<Record<string, string>>;
+  /**
+   * 额外请求体参数（additive，q-thinking-plugin）。顶层浅合并进 body；core 保留键
+   * （model/messages/tools/stream/…）不可覆盖，丢弃 + 告警。值必须 JSON 可序列化
+   * （函数/symbol/循环引用丢弃）。缺省 / 空 ⇒ 请求体逐字节相同。
+   */
+  extra_params?: Readonly<Record<string, unknown>>;
 }
 
 /** 流式 chunk：Provider 吐给 loop 的增量单元 */
@@ -261,6 +274,13 @@ export interface LLMProvider {
    * 回落旧文案。实例由**插件**在构造 provider 时挂上（宪法第十三条：核心只有形状）。
    */
   vision?: VisionBackend;
+  /**
+   * provider 身份（additive，q-thinking-plugin；**可选**）。装配注册名 / model-registry
+   * protocol（'openai' / 'anthropic' / 'google' / …）。与 vision 同一判据：身份是实例事实，
+   * 由构造方挂上；EU 经它填 `HookContext.providerName`。缺省 = 身份未知（裸 fallback /
+   * Memory / 旧插件），消费方按 model 名启发式降级，不炸。
+   */
+  providerName?: string;
 }
 
 /** Provider 工厂 */

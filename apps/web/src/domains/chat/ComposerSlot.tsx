@@ -67,6 +67,7 @@ export function ComposerSlot({
   client,
   contextUsage,
   memberModel,
+  sessionId,
   pendingFetch,
   onRetryPendingFetch,
   sessionRefs,
@@ -103,6 +104,8 @@ export function ComposerSlot({
   contextUsage?: ComposerContextUsage;
   /** 会话归属成员的模型切换入口；透传给 Composer 工具栏（权限 / ask 卡替换输入框时不显示）。 */
   memberModel?: MemberModelSwitchProps;
+  /** 当前会话 id（P3 思考强度菜单 sessionScoped write）；缺省（草稿态）按全局默认。 */
+  sessionId?: string;
   /** `interactions.list` 本轮状态（0.59）：failed ⇒ 这里出一条可见提示。 */
   pendingFetch?: PendingFetchState;
   /** 重新拉 pending（提示条上的「重新拉取」）。 */
@@ -174,6 +177,7 @@ export function ComposerSlot({
         onRemoveSessionRef={onRemoveSessionRef}
         onAddSessionRef={onAddSessionRef}
         currentScope={currentScope}
+        sessionId={sessionId}
       />
     );
 

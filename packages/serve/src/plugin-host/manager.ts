@@ -1925,6 +1925,8 @@ export function renderContributions(
       ...(item.titleKey !== undefined ? { titleKey: item.titleKey } : {}),
       ...(item.icon !== undefined ? { icon: item.icon } : {}),
       order: item.order ?? 100,
+      // P3 additive：通用 RPC 绑定菜单原样透传（loader readToolbarMenu 已校验形状）。
+      ...(item.menu !== undefined ? { menu: item.menu } : {}),
     }))
     .sort((a, b) => a.order - b.order);
   // E1 amendment：bare 方法名；web iframe bridge 用它做 RPC 白名单。

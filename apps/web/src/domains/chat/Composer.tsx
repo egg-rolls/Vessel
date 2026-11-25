@@ -59,6 +59,7 @@ export function Composer({
   onRemoveSessionRef,
   onAddSessionRef,
   currentScope,
+  sessionId,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -112,6 +113,8 @@ export function Composer({
   onAddSessionRef?: (chip: SessionRefChip) => boolean;
   /** 渐进披露基准：当前会话的节点 / 团队（同队同节点不显 team / node 徽章）。 */
   currentScope?: SessionRefScope;
+  /** 当前会话 id（P3 思考强度菜单 sessionScoped write）；缺省（草稿态）按全局默认。 */
+  sessionId?: string;
 }) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const mountedRef = useRef(true);
@@ -259,6 +262,7 @@ export function Composer({
         <ComposerField
           contextUsage={contextUsage}
           attach={attach}
+          sessionId={sessionId}
           slot={memberModel !== undefined ? <MemberModelSwitch {...memberModel} /> : undefined}
           primary={
             !hasToken || !connected ? (

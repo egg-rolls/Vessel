@@ -10,8 +10,33 @@
  */
 
 import type { EventStream } from '../types/event.js';
-import type { HookContext, HookResult, HookType } from '../types/hook.js';
+import { type HookContext, type HookResult, HookType } from '../types/hook.js';
 import type { PluginHost } from '../types/plugin.js';
+
+/**
+ * 聚合两个 requestExtras（additive，q-thinking-plugin）：顶层键浅合并，后到覆盖先到
+ * （与 updatedInput「后写生效」同口径）；同键不同值被覆盖时经 onConflict 发一次冲突信号。
+ */
+function mergeRequestExtras(
+  base: HookResult['requestExtras'],
+  incoming: NonNullable<HookResult['requestExtras']>,
+  onConflict: (key: string) => void,
+): NonNullable<HookResult['requestExtras']> {
+  const out: NonNullable<HookResult['requestExtras']> = {};
+  const headers: Record<string, string> = { ...(base?.headers ?? {}) };
+  for (const [key, value] of Object.entries(incoming.headers ?? {})) {
+    if (key in headers && headers[key] !== value) onConflict(`headers.${key}`);
+    headers[key] = value;
+  }
+  const params: Record<string, unknown> = { ...(base?.params ?? {}) };
+  for (const [key, value] of Object.entries(incoming.params ?? {})) {
+    if (key in params && params[key] !== value) onConflict(`params.${key}`);
+    params[key] = value;
+  }
+  if (Object.keys(headers).length > 0) out.headers = headers;
+  if (Object.keys(params).length > 0) out.params = params;
+  return out;
+}
 
 /**
  * 依次运行某阶段的 hook。
@@ -61,6 +86,19 @@ export class HookRunner {
           merged.additionalContext = merged.additionalContext
             ? `${merged.additionalContext}\n${result.additionalContext}`
             : result.additionalContext;
+        }
+        if (type === HookType.BeforeLlm && result.requestExtras) {
+          const next = mergeRequestExtras(merged.requestExtras, result.requestExtras, (key) => {
+            this.publish('hook.request_extras_conflict', {
+              hook_name: hook.name,
+              key,
+              run_id: ctx.run_id,
+              ...(ctx.session_id !== undefined ? { session_id: ctx.session_id } : {}),
+            });
+          });
+          if (next.headers !== undefined || next.params !== undefined) {
+            merged.requestExtras = next;
+          }
         }
         if (result.block) {
           merged.block = true;
