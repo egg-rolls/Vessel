@@ -104,10 +104,10 @@
     {
       "id": "q-thinking-plugin",
       "title": "思考强度插件Config热配置/热启用/同步config（用户裁定实施）",
-      "column": "进行中",
-      "owner": "q-thinking-plugin",
-      "branch": "feat/q-thinking-plugin",
-      "progress": "8196807a派单：基于thinking-intensity-plugin-design.md，热配置热启用同步config.yaml(不重启)，BeforeLlm hook注入requestExtras+provider映射+设置UI；auto零回归"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并552097e2(7eb80815 P1core extra钩子+P2热配置插件/830e9a47 P3工具栏菜单+设置UI,冲突解决保留drag-reference双方props)build绿；plugins/context/thinking-intensity(非provider,默认集排除provider纠偏)+模块级live holder热生效+contributes.settings自动发现+composer思考菜单+stable映射experimental闸；待金丝雀验+用户重启"
     },
     {
       "id": "q-plugin-lifecycle-impl",
