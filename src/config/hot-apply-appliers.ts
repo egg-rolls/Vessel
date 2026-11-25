@@ -27,7 +27,7 @@ import type {
   ToolDefinition,
 } from '../../packages/core/src/index';
 import type { McpControl, McpServerSummary } from '../plugin/mcp-wiring';
-import { VESSEL_TOOL_NAME } from '../runtime/vessel-meta';
+import { VESSEL_BRIDGE_GUARDRAIL_NAME, VESSEL_TOOL_NAME } from '../runtime/vessel-meta';
 import type { AssembledPluginRegistrations } from './hot-apply-assembly';
 
 /** 一条差异摘要（`scope: <detail>` 的一行文本） */
@@ -176,6 +176,23 @@ export function pluginManagedToolNames(
         name !== VESSEL_TOOL_NAME &&
         (mcp?.toolSource(name) ?? null) === null,
     );
+}
+
+/**
+ * 本 applier 实际管辖的插件 guardrail 名（启动装配产出）。
+ *
+ * 宿主上还有非插件来源的 core guardrail，必须排除：
+ * - `vessel-bridge` 由装配层注册（bootstrap，vessel call_tool fail-closed 翻译桥，
+ *   C-05 配对），不属于插件配置。旁路目标集只由插件 install 组装、永不含它，
+ *   不排除则每次热应用都把它判成 `removed` 注销（ISSUE-PL5-1，与 tools 面 D1 同构）。
+ *
+ * 与 `pluginManagedToolNames` 排除入口注册工具同口径：只增删插件来源的面。
+ */
+export function pluginManagedGuardrailNames(host: PluginHost): string[] {
+  return host
+    .getGuardrails()
+    .map((guardrail) => guardrail.name)
+    .filter((name) => name !== VESSEL_BRIDGE_GUARDRAIL_NAME);
 }
 
 /**

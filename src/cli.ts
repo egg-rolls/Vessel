@@ -96,6 +96,7 @@ import {
   createMcpServerToggle,
   createPermissionApplier,
   type PermissionApplierState,
+  pluginManagedGuardrailNames,
   pluginManagedToolNames,
 } from './config/hot-apply-appliers';
 import {
@@ -1166,16 +1167,16 @@ async function runWithConfig(result: BootstrapResult) {
     const managedPluginTools = new Set(pluginManagedToolNames(ctx.pluginHost, result.mcp));
     // q-plugin-lifecycle §6.3：注册面差量管辖域（hook / guardrail / readSideMasker）。
     // hook 排除入口注册的 notice hook（runtime-notice / refs-notice，非插件来源）；
-    // guardrail / masker 只来自插件，全量管辖。与工具面同口径：只增删插件来源的面。
+    // guardrail 排除装配层注册的 core vessel-bridge（ISSUE-PL5-1：旁路目标集只含插件
+    // 贡献，不排除则每次热应用误删桥）；masker 只来自插件，全量管辖。
+    // 与工具面同口径：只增删插件来源的面。
     const managedPluginHooks = new Set(
       ctx.pluginHost
         .getHooks()
         .map((hook) => hook.name)
         .filter((name) => name !== RUNTIME_NOTICE_HOOK && name !== REFS_NOTICE_HOOK),
     );
-    const managedPluginGuardrails = new Set(
-      ctx.pluginHost.getGuardrails().map((guardrail) => guardrail.name),
-    );
+    const managedPluginGuardrails = new Set(pluginManagedGuardrailNames(ctx.pluginHost));
     const managedPluginMaskers = new Set(
       (ctx.pluginHost.getReadSideMaskers?.() ?? []).map((masker) => masker.name),
     );
