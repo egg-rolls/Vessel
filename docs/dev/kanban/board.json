@@ -54,6 +54,14 @@
       "progress": "✅完成合并ab63936d(023fec90 read缺省3/cf8b0308去超时/c5f5b404 rotate0.5/e2e8b89d条带三态)build绿；更正：产物读数误报撤回(本仓build=typecheck+lint无bundle,ADR-006)；待验4点(直读最新3/不超时回退/50%rotate提示/三态切换)；worktree已清"
     },
     {
+      "id": "q-drag-reference",
+      "title": "会话卡片拖拽引用到输入框（chip链信息：会话/Agent/跨队+team/跨节点+node）",
+      "column": "进行中",
+      "owner": "q-drag-reference",
+      "branch": "feat/q-drag-reference",
+      "progress": "e5bc63a2派单(用户裁定)：会话卡draggable→输入框drop→引用chip(会话+Agent,跨队加team跨节点加node渐进披露)+发送解析复用mention；免复制粘贴"
+    },
+    {
       "id": "q-kanban-proxy",
       "title": "kanban proxy白名单缺失修复+board_path set RPC（用户报告加载失败）",
       "column": "进行中",
