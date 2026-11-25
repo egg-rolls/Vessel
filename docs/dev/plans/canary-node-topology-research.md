@@ -73,4 +73,51 @@ VESSEL_NO_EXTERNAL_PLUGINS=1 bun run src/cli.ts \
 
 现状每次启动金丝雀要起**两个 gateway**；用户希望单 gateway 多 node 后，金丝雀只需 start/restart node、不碰生产。附带期望：昨日跨 gateway federation peer team 映射的复杂度（三段地址 / peer token / team 落点）可能消失。
 
-本文逐面查证（§2–§7），给出影响矩阵与选项（§8）。**先说结论：动机的前半（少一个 gateway、单入口）选项 C 零代码可达；后半（寻址复杂度消失）不成立——federation 复杂度与 gateway 拓扑无关（§4）。**
+本文逐面查证（§2–§7），给出影响矩阵与选项（§8）。**先说结论：动机的前半（少一个 gateway、单入口）选项 C 零代码可达；后半（寻址复杂度消失）不成立——federation 复杂度与 gateway 拓扑无关（§4）。**---
+
+## §2 平台 / node-supervisor 模型（调研面①：一个 gateway 能管几个 node？）
+
+**答案：没有数量上限**（registry 是数组，校验只查唯一性不查数量）；G3 只接受 `kind: 'local'`（同机），`remote` 留给 G4。现态生产与金丝雀都跑在**隐式单节点**模式，多 node 机制存在但本机从未启用过。
+
+### 2.1 注册与发现：`nodes.json`
+
+锚点：`src/gateway/node-registry.ts`。
+
+- 路径：`<gatewayDataDir>/nodes.json`（`nodeRegistryPath` L75）。**缺失 = 隐式单节点**：`loadNodeRegistry`（L206）返回 `{kind:'missing'}`，调用方 `synthesizeImplicitNode`（L255）合成一条与 gateway 共用 dataDir/config 的条目，**不写文件**。
+- 条目形状（`NodeRegistryEntry` L28）：`node_id / name / kind:'local' / data_dir / config_path? / auto_start`。
+- **关键约束：显式 registry 里 `config_path` 是必填**。`parseEntry`（L108）对 `config_path` 无条件调 `requireAbsolutePath`（L135）——缺省/空串直接 `registry_invalid`。类型上的 `?` 只服务于隐式合成条目。**推论：给生产 gateway 加金丝雀条目时，生产 node 自己也必须有一个显式 config 文件**（迁移成本，§7）。
+- 唯一性（`assertUnique` L151 / `assertRegistryEntryUnique` L373）：`node_id` / `name` / `data_dir` / `config_path` 四者各自唯一；Windows 路径大小写不敏感比较。
+- `gateway nodes add <name> --data-dir <dir> --config <path> [--no-auto-start]`（`src/cli/args.ts` L2253）：add 前校验 config 可读可解析、`node.json` 身份一致（`resolveNodeIdForRegistryAdd` L313，**绝不写数据目录**）、dataDir 与 config 解析一致（`assertNodeDataDirMatches` L356）、端口不冲突。`--no-auto-start` 即 external node 开关。
+- 身份权威：`<data_dir>/node.json`（`host.node_id` 显式配置优先）。金丝雀 `node.json` 已存在（`7377657b…`）⇒ add 的身份前置条件满足。
+
+### 2.2 锁 / pid / manifest 命名族（实查 canary-data）
+
+| 文件 | 语义 |
+|---|---|
+| `platform-<instance>.lock` / `platform.pid` | 平台进程锁 / pid 记录（`gateway-default.lock` 是 node 族） |
+| `gateway.pid`（node dataDir 内） | node 进程 pid + host/port/version/node_id；supervisor adopt 与 `preferLiveNodeListen` 的依据 |
+| `platform-children[-<instance>].json` | **本平台 spawn 的子进程 manifest**（node + hub）；`node stop` 的「是否托管」判定、`stop --stop-nodes` 的终止范围都只认它 |
+| `platform-watchdog[-<instance>].json` | 看门狗快照（每 node 一条相位） |
+| `hub.lock`（hub dataDir 内） | hub 进程锁 |
+
+instance 只影响**命名族**，不影响数据隔离；数据隔离的根治杠杆是 dataDir（blue-green 文档 R3）。canary-data 里 canary/default 两族并存是历史启动方式不一致的痕迹，迁移时应顺手清理（§7）。
+
+### 2.3 NodeSupervisor：spawn / adopt / external 三态
+
+锚点：`src/gateway/node-supervisor.ts`、组合根 `src/cli/commands/gateway/gateway-command.ts` `resolveLocalNodes`（L2549）。
+
+- **每 node 独立解析**：显式条目用 `loadConfig({configPath, env:{...env, VESSEL_DATA_DIR: entry.data_dir}})` 加载**该 node 自己的 config**（project 层），独立校验、独立 token（`effectiveNodeToken`：显式 `node.token*` > 派生 `vessel:node:<id>`，root-secret 在该 node 的 dataDir）、独立端口；端口冲突（与平台 / hub 缺省口 / 其它 node）fail-fast。**单 node 失败只标 `failed`，不回滚平台、不牵连其它 node**（`begin` L953 注释）。
+- **phase A `claim`**（L995）：dataDir 里已有活进程 → **adopt 候选**（不重复 spawn、不杀）；`gateway.pid` 属于别的 node_id → `node_identity_mismatch` 标 failed；否则 spawn。
+- **`auto_start: false` ⇒ external**（`begin` L963–982）：不 spawn、不管生命周期；只读一次 pid 文件区分「已经在跑」与「缺席」，缺席时状态里给出可复制的启动命令（`vessel node start --daemon --config <path>`）。**external node 不进 manifest、不进看门狗。**
+- **spawn 的 entry 是 gateway 自己的**（`spawnOnly` L1293）：`execPath = process.execPath`、`entryPath = process.argv[1]`，argv = `node start [--config <path>]`（`buildDaemonArgv`，`src/gateway/daemon.ts` L128）。**registry / LocalNodeSpec 没有任何 per-node checkout / entry 覆盖字段**——这是选项 B 的版本隔离死穴（§3.2）。
+- **spawn env**（L1336–1348）：`{...gateway进程env快照, VESSEL_DATA_DIR: spec.dataDir, VESSEL_NODE_TOKEN: <生效token>, VESSEL_PLATFORM_ORIGINS: ...}`——**全量继承 + 三个注入键**，没有 per-node env allowlist / 追加字段（§6.2）。
+- 运行期崩溃只标 failed 不自动重启（G3）；**看门狗**（0.58，`src/gateway/watchdog.ts` `NodeWatchdog` L260）按 node 独立探活 `/health`，连续失败达阈值 → 强杀 + 用**同一份 entry/env 快照**重 spawn，每小时上限 + 指数退避。
+- **平台代理**：`packages/serve/src/platform/registry.ts` `createPlatformRegistry`（L91）对全部条目做 ≤1s `/health` 探测投影（`platform.nodes.list`）；数据面代理 `<platform>/nodes/<node_id>/…`（HTTP + WS 桥，`proxy.ts` / `proxy-ws.ts`），浏览器凭据 = 平台会话 cookie，node token 由 `platform.nodes.credentials` 下发（平台按各 node dataDir 现算）。**external node 同样有 descriptor ⇒ 同样可代理、可切换**——代理不关心进程是谁起的。
+
+### 2.4 平台 RPC 面（实查 grep）
+
+平台只读 allowlist：`platform.whoami` / `platform.nodes.list` / `platform.nodes.get` / `platform.nodes.credentials`。**没有 `platform.nodes.start/stop/restart`**。node 生命周期操作全部在 CLI 本机侧（§5）。
+
+### 2.5 hub 的归属
+
+gateway 自动拉起**一个**本地 hub（0.50，`beginHub` L1154；dataDir = `hub.dataDir` 或 `<gatewayDataDir>/hub`）。hub 是**独立进程 + 独立 dataDir**，node 经 `hub join` 与之建立出站连接（`<nodeDataDir>/hub-node.json` 存 join 结果）。**hub 不是 per-node 实体**：单 gateway 下金丝雀 node 要么继续连自己的旧 hub（需有人起它），要么 join 生产 hub（§8 C1/C2 变体）。
