@@ -166,6 +166,7 @@ import { callbackRoute } from '../tools-engine/wiring';
 import { registerBashJobDelivery } from './bash-job-delivery';
 import { createRuntimeNoticeBus, type RuntimeNoticeBus } from './runtime-notice';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
+import { sanitizeToolOutputEnv } from './tool-output-env';
 import { createVesselMetaSurface, normalizeBridgeDeny, type VesselRpcPort } from './vessel-meta';
 
 /**
@@ -1036,8 +1037,16 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // VESSEL_DATA_DIR，host in-process / 异步 bash 日志会落进 ~/.vessel；且下方 engine child
   // settings.toolOutputDir = toolOutputRoot() 会把 host 的错根传给 child。此处与 entry.ts
   // 对 child 的 `process.env.VESSEL_DATA_DIR = dataDir` 同源。默认根（config/env 均缺省）
-  // 取值不变（零回归）；显式 VESSEL_TOOL_OUTPUT_DIR 仍优先（toolOutputRoot 链不变）。
+  // 取值不变（零回归）。
   process.env.VESSEL_DATA_DIR = dataDir;
+  // T2b（隔离击穿）：只桥接 VESSEL_DATA_DIR 不够 —— toolOutputRoot 让继承的
+  // VESSEL_TOOL_OUTPUT_DIR 优先于 VESSEL_DATA_DIR，启动链（shell → gateway → node）
+  // 带来的生产根会击穿舰队边界（金丝雀 T2b：node/engine environ 双变量并存，输出落
+  // 生产根）。此处把落在本舰队 dataDir 之外的异根重写为 <dataDir>/tool-output，并同步
+  // 重写 VESSEL_PLUGIN_CONFIG 的 dataDir/toolOutputDir 字段（解析失败 → 清除不猜）。
+  // dataDir 之内的值（含生产舰队自身的正确根）保留 → 零回归；下方 engine child
+  // settings.toolOutputDir = toolOutputRoot() 由此拿到本舰队根。
+  sanitizeToolOutputEnv(process.env, dataDir);
   // 0.49 R1：单 id 以持久化 `<dataDir>/tenant.json` 为准（T4 删除 config tenant 块后
   // `loadConfig()` 恒为 `default`）；fresh 数据根没有该文件时仍回 `default`。
   const tenantId = resolveEffectiveTenantId(configTenantId, dataDir);
