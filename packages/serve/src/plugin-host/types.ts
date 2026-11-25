@@ -197,6 +197,16 @@ export interface PluginRpcContribution {
   permission?: 'read' | 'write';
 }
 
+/**
+ * TI5-5 additive：`plugins.list` rpc wire 的对象条目（携带调用方权限）。
+ * 只在 permission='write' 时发射；read / 缺省仍是 bare string（E1 canonical）。
+ * web 读侧双形状容忍（string 缺省 read，对象读 permission）。
+ */
+export interface PluginRpcWireEntry {
+  name: string;
+  permission?: 'read' | 'write';
+}
+
 /** `contributes`（只保留宿主需要的键） */
 export interface PluginManifestContributions {
   /** 插件私有字典；只允许 en / zh-CN。 */
@@ -314,8 +324,14 @@ export interface PluginRenderContributions {
     menu?: PluginToolbarMenu;
   }>;
   commands: Array<{ name: string; title: string }>;
-  /** E1 amendment：bare RPC 方法名，供 web iframe bridge 做白名单。 */
-  rpc: string[];
+  /**
+   * E1 amendment：bare RPC 方法名，供 web iframe bridge 做白名单。
+   * TI5-5 additive：write 方法发 `{name, permission:'write'}` 对象携带权限真相
+   * （web toolbarMenuOf 的 write 校验需要）；read / 缺省方法保持 bare string
+   * （E1 canonical 逐字节不变）。旧 string-only 消费方对对象条目 fail-closed
+   * 跳过——它们缺省 read，本来就不该调 write 方法。
+   */
+  rpc: Array<string | PluginRpcWireEntry>;
   /**
    * S3 additive（vscode-settings-design §4.2）：manifest contributes.settings
    * 的 UI 元数据 spec（loader 已校验形状，原样透传，同 i18n 处理方式）。

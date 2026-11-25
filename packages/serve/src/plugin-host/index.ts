@@ -145,6 +145,7 @@ export type {
   PluginReloadResult,
   PluginRenderContributions,
   PluginRpcContribution,
+  PluginRpcWireEntry,
   PluginRuntimeStatus,
   PluginSide,
   PluginStaticMount,

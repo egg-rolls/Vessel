@@ -593,8 +593,11 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
                     // 0.51 additive：输入框工具栏声明（declarative，无 entry）。
                     toolbar: { type: 'array', items: { type: 'object' } },
                     commands: { type: 'array', items: { type: 'object' } },
-                    // E1 amendment：bare RPC 方法名。
-                    rpc: { type: 'array', items: { type: 'string' } },
+                    // E1 amendment：bare RPC 方法名。TI5-5 additive：write 方法
+                    // 发 {name, permission:'write'} 对象；校验器子集无 union
+                    // （schemas.ts 口径），items 不声明 type（任意值通过），
+                    // 形状由 renderContributions 组装保证。
+                    rpc: { type: 'array', items: {} },
                     // S3 additive：插件设置域 spec（vscode-settings-design §4.2）。
                     settings: { type: 'object' },
                   },

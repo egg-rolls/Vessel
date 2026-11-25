@@ -1930,7 +1930,14 @@ export function renderContributions(
     }))
     .sort((a, b) => a.order - b.order);
   // E1 amendment：bare 方法名；web iframe bridge 用它做 RPC 白名单。
-  const rpc = (contributes.rpc ?? []).map((method) => method.name);
+  // TI5-5 additive：write 方法发 {name, permission} 对象携带权限真相（web
+  // toolbarMenuOf 校验 menu.write 需要）；read / 缺省保持 bare string（E1
+  // canonical 逐字节不变，旧 string-only 消费方零破坏）。
+  const rpc = (contributes.rpc ?? []).map((method) =>
+    method.permission === 'write'
+      ? { name: method.name, permission: 'write' as const }
+      : method.name,
+  );
   // S3 additive：settings spec 原样透传（loader readSettings 已校验形状）。
   const settings = contributes.settings;
   const hasSettings = settings !== undefined && Object.keys(settings).length > 0;
