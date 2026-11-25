@@ -101,6 +101,11 @@ export function usePendingSends(options: {
     presentIds: ReadonlySet<string>;
     readStartedAt: number;
   }) => void;
+  /**
+   * 兜底认领升级（P0-A 配套）：条带读到真实服务端条目后，把摘要兜底认领升级成精确
+   * `messageId`（判据在 `PendingStrip` 的升级 effect，配对与渲染顶替同一份贪心）。
+   */
+  attachMessage: (pendingId: string, messageId: string) => void;
 } {
   const all = useSyncExternalStore(pendingSends.subscribe, pendingSends.list, pendingSends.list);
   const sentMessageIds = useSyncExternalStore(
@@ -173,6 +178,9 @@ export function usePendingSends(options: {
     },
     reconcile: (input) => {
       pendingSends.reconcileWithServer(input);
+    },
+    attachMessage: (pendingId, messageId) => {
+      pendingSends.attachMessage(pendingId, messageId);
     },
   };
 }

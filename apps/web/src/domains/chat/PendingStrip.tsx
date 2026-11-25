@@ -70,7 +70,12 @@ import type {
 } from '../../gateway/types';
 import { t } from '../../i18n';
 import { errorMessage } from './errors';
-import { claimedEntryIds, inboxSummaryOf, inPendingStrip } from './pending-placement';
+import {
+  claimedEntryIdOf,
+  claimedEntryIds,
+  inboxSummaryOf,
+  inPendingStrip,
+} from './pending-placement';
 import type { PendingSend } from './pending-sends';
 import {
   canUnhold,
@@ -348,6 +353,7 @@ export function PendingStrip({
   onEditPending,
   onDismissPending,
   onReconcile,
+  onAttachMessage,
   previewCount = PREVIEW_COUNT,
 }: {
   /** 当前会话（`selectedId`）：条带只显示归属它的待处理输入。 */
@@ -411,6 +417,18 @@ export function PendingStrip({
     presentIds: ReadonlySet<string>;
     readStartedAt: number;
   }) => void;
+  /**
+   * 兜底认领升级：把服务端条目的 `message_id` 挂到认领它的客户端 pending 上
+   * （`pendingSends.attachMessage`）。
+   *
+   * `agent.message.queued` 不一定到达客户端（见 `pending-placement.ts#claimsEntry` 的
+   * 真机读数），pending 可能一直靠「同会话 + human 源 + 摘要同口径」的弱身份认领着
+   * 服务端条目。条带每次读到真实条目后，把这份配对升级成精确 id —— 之后消费对账
+   * （`onReconcile`）才能按 id 宣判它的生死，写操作也不必再靠摘要猜。配对规则与渲染
+   * 顶替是同一份贪心（`claimedEntryIdOf`），不会出现「渲染认了 A、升级挂了 B」。
+   * 缺省 = 宿主没有 pending store（设计预览），不升级。
+   */
+  onAttachMessage?: (pendingId: string, messageId: string) => void;
   /**
    * 默认态展示的组数（用户裁定「默认 3 条，数量可配置」）；缺省 {@link PREVIEW_COUNT}。
    * 展开态不受它限制（完整列表 + 限高滚动）。
@@ -489,6 +507,19 @@ export function PendingStrip({
   const current = sessionId !== null && pending?.sessionId === sessionId ? pending : null;
   const entries = current?.entries ?? [];
   const hasPending = entries.length > 0;
+
+  // 兜底认领升级（P0-A 配套）：没挂 messageId 的 pending 若按摘要认领到这次读数里的
+  // 条目，把服务端 id 挂上（与渲染顶替同一份贪心配对）。升级之后消费对账才能按 id
+  // 宣判它的生死 —— 否则 queued 事件缺席时它永远等不到回显、也进不了对账，「等待中」
+  // 那行照样常驻到刷新。只挂认领得到的（服务端读数确认存在的），绝不凭空造 id。
+  useEffect(() => {
+    if (onAttachMessage === undefined || entries.length === 0) return;
+    for (const item of pendings) {
+      if (item.messageId !== undefined) continue;
+      const claimedId = claimedEntryIdOf(item, pendings, entries);
+      if (claimedId !== undefined) onAttachMessage(item.id, claimedId);
+    }
+  }, [entries, pendings, onAttachMessage]);
 
   /**
    * 条带的**行**：未认领的服务端条目 + 客户端 pending 行，混成一份再排序 / 折叠。
@@ -841,6 +872,19 @@ export function PendingStrip({
   /** 某一行代表的客户端 pending（服务端条目行没有它）。 */
   const pendingOf = (id: string): PendingSend | undefined => byId.get(id)?.pending;
 
+  /**
+   * 这条 pending 对应的**服务端条目 id**：首选它挂着的 `messageId`；没挂时从当前读数里
+   * 按同一份贪心配对解析它认领的条目（`claimedEntryIdOf`，摘要兜底认领的延伸）。
+   *
+   * 为什么不能只看 `messageId`：`agent.message.queued` 不一定到达客户端（见
+   * `pending-placement.ts#claimsEntry` 的真机读数），queued 的 pending 可能没有 id 却
+   * 认领着一条真实的服务端条目。此时取消 / 编辑 / 重试若只做纯本地动作，服务端那条
+   * 就成孤儿 —— 用户以为撤回了，agent 之后 `inbox read` 照样读到；编辑重发就是两份。
+   * `undefined` 才表示「服务端真的没收到」（sending 在飞 / 读数里认领不到），纯本地收口。
+   */
+  const serverIdOf = (pending: PendingSend): string | undefined =>
+    pending.messageId ?? claimedEntryIdOf(pending, pendings, entries);
+
   /** 把这一行对应的客户端 pending 从 store 里删掉（它已经不该在屏上了）。 */
   const dropPending = (pending: PendingSend | undefined) => {
     if (pending !== undefined) onDismissPending?.(pending);
@@ -852,8 +896,10 @@ export function PendingStrip({
   const label = t('chat.pending.title', { count: view.total });
 
   /**
-   * 取消：服务端条目走 `agents.recall`（真删）；**还没被服务端收下的** pending 是纯本地
-   * 删除（服务端什么都没收到，没有孤儿要清理）。客户端行有 `messageId` 时两者都要做。
+   * 取消：服务端条目走 `agents.recall`（真删）；**服务端真的没收下的** pending 才是纯
+   * 本地删除。客户端行的服务端身份按 `serverIdOf` 解析（挂着的 `messageId`，或从当前
+   * 读数里认领到的条目）—— 没挂 id 不等于服务端没收到，只按 `messageId` 判会把服务端
+   * 那条留成孤儿（用户以为撤回了，agent 之后照样读到）。
    */
   const cancelRow = (id: string) => {
     const pending = pendingOf(id);
@@ -861,11 +907,12 @@ export function PendingStrip({
       void handleCancel(id);
       return;
     }
-    if (pending.messageId === undefined) {
+    const serverId = serverIdOf(pending);
+    if (serverId === undefined) {
       dropPending(pending);
       return;
     }
-    void handleCancel(pending.messageId).then(() => dropPending(pending));
+    void handleCancel(serverId).then(() => dropPending(pending));
   };
 
   /**
@@ -883,8 +930,9 @@ export function PendingStrip({
       return;
     }
     void (async () => {
-      if (pending.messageId !== undefined) {
-        const recalled = await recallEntry(pending.messageId);
+      const serverId = serverIdOf(pending);
+      if (serverId !== undefined) {
+        const recalled = await recallEntry(serverId);
         if (!recalled) return;
       }
       if (onEditPending !== undefined) {
@@ -907,8 +955,9 @@ export function PendingStrip({
     const pending = pendingOf(id);
     if (pending === undefined) return;
     void (async () => {
-      if (pending.messageId !== undefined) {
-        const recalled = await recallEntry(pending.messageId);
+      const serverId = serverIdOf(pending);
+      if (serverId !== undefined) {
+        const recalled = await recallEntry(serverId);
         if (!recalled) return;
       }
       onRetryPending?.(pending);
@@ -922,8 +971,9 @@ export function PendingStrip({
       void handleClaim(id);
       return;
     }
-    if (pending.messageId === undefined) return;
-    void handleClaim(pending.messageId).then(() => dropPending(pending));
+    const serverId = serverIdOf(pending);
+    if (serverId === undefined) return;
+    void handleClaim(serverId).then(() => dropPending(pending));
   };
   const unholdRow = (id: string) => void handleUnhold(id);
 
@@ -940,9 +990,10 @@ export function PendingStrip({
   /** 只有失败的客户端行给「重试」（服务端条目没有「再发一次」的语义）。 */
   const retryOf = (row: StripRow): ((id: string) => void) | undefined =>
     row.pending?.state === 'failed' ? retryRow : undefined;
-  /** 只有真的有服务端 id 的行给「我已处理」（否则它等价于删除，用取消那颗键就够）。 */
+  /** 只有真的有服务端身份的行给「我已处理」（否则它等价于删除，用取消那颗键就够）。
+   * 服务端身份按 `serverIdOf` 解析：没挂 `messageId` 但认领着服务端条目的行也算。 */
   const claimOf = (row: StripRow): ((id: string) => void) | undefined =>
-    row.pending === undefined || row.pending.messageId !== undefined ? claimRow : undefined;
+    row.pending === undefined || serverIdOf(row.pending) !== undefined ? claimRow : undefined;
   /** 「收回编辑」要宿主给草稿槽；客户端行只需要 pending 正文（本地就有）。 */
   const editOf = (row: StripRow): ((id: string) => void) | undefined =>
     row.pending !== undefined || onRefillDraft !== undefined ? editRow : undefined;
