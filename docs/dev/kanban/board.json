@@ -93,12 +93,20 @@
       "progress": "✅完成合并c68cc6c1+792b3752(7提交f92d4792/01ea38c4/de93e77e/2e115c3c/e39a2403/1dc94e52/fbbe35a3+marketplace资产收口)build绿；最优终态:能热真热(tool/hook/guardrail/masker/child启停/child settings)不能热诚实badge(provider/工厂/in-process代码),显示态=生效态同源,pii半态消除,无过渡闸无委屈代码；待金丝雀验+用户重启"
     },
     {
+      "id": "q-inbox-fix",
+      "title": "inbox修复：P0-A客户端pending对账服务端真相+P1-A消费消息可见承接",
+      "column": "进行中",
+      "owner": "q-inbox-fix",
+      "branch": "fix/q-inbox-fix",
+      "progress": "707d0fcf派单(q-inbox-truth审计13d96ba8定根因)：P0-A症状①=条带load后用服务端entries对账客户端pendingSends(messageId不在inbox且无回显⇒摘除),把客户端钉服务端真相免刷新(根因:客户端pending第二真相源无消费信号,read取消queued run永不发回显,pending永停queued;live触发器/2s轮询只重读服务端碰不到客户端行)；P1-A症状②=inbox-read消费消息渲染可见卡承接缺口；P1-B agent级收件箱面板新功能候用户裁定；红线服务端真相源/会话过滤设计意图/SWR不动；候修复→合并→canary同步→用户验收(反复提出项留用户)"
+    },
+    {
       "id": "q-inbox-truth",
       "title": "调研：inbox真相源一致性+前端忠实还原（用户报告read后仍显/部分消息不可见）",
       "column": "进行中",
       "owner": "q-inbox-truth",
       "branch": "design/q-inbox-truth",
-      "progress": "717cb042派单(用户直接报告+live实证:两条已read的human消息前端仍显○等待中)：症状①read消费后前端不反映②部分agent→main消息(本地team/federation)用户inbox视图不可见；疑真相源不统一/前端不忠实/会话归属过滤；调研inbox tool消费store vs agents.inbox RPC投影 vs PendingStrip渲染链+useInboxRefresh触发器覆盖(386c35bf已在2.0.0运行生产)+会话归属口径+main tool事件是否达用户前端事件面；输出根因+修复方案分级；反复提出项留用户验收"
+      "progress": "✅审计完成13d96ba8(330行全file:line实证,已合并redblue-dev c1227256)：★真相源统一(服务端单一AgentInboxStore,inbox tool与agents.inbox投影同源,刷新就对证实)非不统一；症状①根因=前端第二真相源客户端pendingSends内存行无消费信号(read取消queued run永不发回显,pending永停queued,live触发器/2s轮询只重读服务端碰不到客户端行,刷新即空因无持久化)→P0-A对账；症状②根因=会话级条带无agent面板+agent消息read消费后无可见承接(AgentMessageCard只画run-input)+wake/quiet无session_id设计过滤→P1-A承接/P1-B面板候用户裁定；main事件归属假说被纠正非主因；修复派q-inbox-fix"
     },
     {
       "id": "q-pl5-guardrail",
