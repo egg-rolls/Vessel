@@ -1,6 +1,6 @@
 {
   "board": "vessel 红蓝开发任务看板",
-  "updated": "2026-11-24T23:45:00+08:00",
+  "updated": "2026-11-25T08:35:00+08:00",
   "columns": ["待办", "进行中", "阻塞"],
   "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。板只留当前活跃任务；完成任务由 main 轮次收尾移入 archive.json（append-only，采纳 q-kanban §9.2 归档约定）。",
   "tasks": [
@@ -23,10 +23,26 @@
     {
       "id": "q-tool-output-leak",
       "title": "修复工具输出隔离击穿：继承的VESSEL_TOOL_OUTPUT_DIR/VESSEL_PLUGIN_CONFIG穿透舰队边界（T2b立卡）",
-      "column": "待办",
-      "owner": "main",
-      "branch": "redblue-dev",
+      "column": "进行中",
+      "owner": "q-tool-output-leak",
+      "branch": "fix/q-tool-output-leak",
       "progress": "canary T2查证完毕证据链全（canary-data/reports/canary-t-runtime-report.md T2b节）：tool-result-gate.ts:292-296 VESSEL_TOOL_OUTPUT_DIR优先于VESSEL_DATA_DIR，17d6f44c只桥接后者；node-supervisor.ts:1338其余env透传→生产VESSEL_TOOL_OUTPUT_DIR/VESSEL_PLUGIN_CONFIG击穿gateway→node→engine（pid179484/87384 environ双变量并存铁证）；basic-tools asyncLogDir同源toolOutputRoot()。修复方向：bootstrap桥接清除/重写继承的VESSEL_TOOL_OUTPUT_DIR+VESSEL_PLUGIN_CONFIG+启动链env卫生；与q-fleet-isolation同根因族（进程树env继承跨舰队）"
+    },
+    {
+      "id": "q-canary-topology",
+      "title": "调研：金丝雀编排入主gateway下node（单gateway多node）影响与可行性",
+      "column": "进行中",
+      "owner": "q-canary-topology",
+      "branch": "design/q-canary-topology",
+      "progress": "用户点名调研007f3bc9：platform/node-supervisor多node模型+dataDir/config隔离+同gateway寻址vs federation+独立node restart+UI+env卫生+迁移成本；交付canary-node-topology-research.md影响矩阵+选项ABC+推荐；零代码改动；与q-cli-topology/q-fleet-isolation衔接"
+    },
+    {
+      "id": "q-cli-topology",
+      "title": "设计：CLI命令拓扑梳理（vessel start/stop顶层编排+gateway只管gateway+优雅停止递归）",
+      "column": "进行中",
+      "owner": "q-cli-topology",
+      "branch": "design/q-cli-topology",
+      "progress": "用户裁定方向fa1e271b：vessel start全量编排幂等/gateway start只gateway移除--stop-nodes/vessel stop递归优雅默认不限时--force传播/vessel restart替代restart --stop-nodes；main意见入任务书：舰队边界dataDir严格+停止顺序论证+drain进度反馈+兼容弃用路径+stale lock；交付cli-topology-design.md命令矩阵+时序+分期；零代码改动"
     },
     {
       "id": "q-fleet-isolation",
@@ -42,7 +58,7 @@
       "column": "进行中",
       "owner": "q-from-card",
       "branch": "fix/q-from-card",
-      "progress": "已派单27318a8a：vessel:source改notice卡样式组织投射principal@node:team；锚点transcript-items.ts(SOURCE_MESSAGE_NAME/runtimeContextKindOfName/injectedNoticeOfEvent)+runtime-visibility.ts权威分类O8对账；live/history双路径一致；增量提交+build门禁"
+      "progress": "27318a8a夜间调研后早退已催促回正轨；调研结论：runtime-kinds.ts ENV_MESSAGE_KINDS加source+env-notice.ts sourceNoticeCard(scope来源,location组织成行,原文进blocks)+统一dispatch三处env计算→live/history天然一致；EnvCard/TranscriptWindow零改动；agent卡吸收路径不动(0.52裁定)；实施中①分类投影②卡片i18n③build收口"
     },
     {
       "id": "design-adjudication",
