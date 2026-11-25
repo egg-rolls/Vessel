@@ -4,19 +4,21 @@
 
 # Vessel
 
-**多 agent 运行时。** 一个节点内按工作目录组成 Team，成员可派生、定向通信、轮换身体；节点之间通过 Hub 与 federation 直接寻址。
+**多 agent 运行时，为 Agent Experience 而设计。** 一个节点内按工作目录组成 Team，成员可派生、定向通信、轮换身体；节点之间通过 Hub 与 federation 直接寻址。Agent 不只是被运行的对象——它能观测自己、诊断环境、发现能力、优雅地重启自己并续作。
 
-> A multi-agent runtime: teams form around working directories, members can spawn, message each other, and rotate bodies; nodes discover each other through a Hub and talk directly over federation.
+> A multi-agent runtime designed for Agent Experience (AX): teams form around working directories, members can spawn, message each other, and rotate bodies; nodes discover each other through a Hub and talk directly over federation. Agents are first-class residents, not just workloads — they can observe themselves, diagnose their environment, discover capabilities, and gracefully restart themselves with work continued.
 
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](#状态)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Bun](https://img.shields.io/badge/Bun-%3E%3D1.3.9-black?logo=bun)](https://bun.sh)
 
-核心是 agent 之间的组织与通信：节点、Team、成员生命周期、定向消息与跨节点地址。单个 agent 的执行面保持最小——一个 tool-calling loop、一个工具注册表、三个能力工具（`bash` / `read` / `edit`），其余能力由模型组合或插件提供。`@vessel-agent/core` 可单独引入；TUI / CLI / Web / Gateway 是自带的参考外壳。适合需要多 agent 协作、可自托管的团队与开发者。
+核心是 agent 之间的组织与通信：节点、Team、成员生命周期、定向消息与跨节点地址。单个 agent 的执行面保持最小——一个 tool-calling loop、一个工具注册表、四个能力工具（`bash` / `read` / `edit` / `write`），其余能力由模型组合或插件提供。与组织面并列的另一半是 **AX（Agent Experience）**：agent 在运行时里自观测、自诊断、自发现、自服务。`@vessel-agent/core` 可单独引入；TUI / CLI / Web / Gateway 是自带的参考外壳。适合需要多 agent 协作、可自托管的团队与开发者。
 
 ## 目录
 
+- [为什么是 Vessel](#为什么是-vessel)
 - [快速开始](#快速开始)
+- [AX：Agent Experience](#axagent-experience)
 - [特性](#特性)
 - [使用示例](#使用示例)
 - [配置](#配置)
@@ -24,9 +26,20 @@
 - [多节点与远程](#多节点与远程)
 - [能力边界](#能力边界)
 - [FAQ](#faq)
+- [写给 AI](#写给-ai)
 - [文档](#文档)
 - [贡献](#贡献)
 - [许可证](#许可证)
+
+## 为什么是 Vessel
+
+> 本节凝结自维护者团队长期使用 Vessel 做多 agent 协作开发的真实体验。
+
+- **组织一群 agent，而不是跑一个 agent。** 节点内按工作目录组 Team，成员招即派（`hire` / `create`）、定向通信（`agent send` 三段地址）、轮换身体（`rotate` 交接续作）。十几个实施 agent 并行开发，靠定向消息与看板保持有序。
+- **信任 agent 自主。** 不去过度限制——agent 已经知道如何干好一件事、如何不犯错误和挽救。运行时给的是原语与边界（权限、审批、可见性对等），不是每一步的遥控。
+- **优雅的生命周期。** 重启不是中断：drain-to-quiesce 等活跃 run 自然跑完，重启后嘱托与 inbox 自动续作。重启的权力可以下放给 agent 自己。
+- **真相源统一。** 服务端单一真相，前端 SWR 刷新；inbox 是 agent 级而非会话级——消息发给 agent，跨会话、跨身体仍然可达。
+- **可自托管的工程实践。** 红蓝开发流（主舰队开发 → 金丝雀舰队验收 → 晋升 → 优雅重启生产）就跑在 Vessel 自己的原语上：跨节点 federation 直接寻址，金丝雀独立节点独立数据，破坏性操作双锁隔离。
 
 ## 快速开始
 
@@ -74,11 +87,36 @@ vessel          # 首次启动走引导向导：API 地址、Key、模型，保�
 
 `vessel doctor` 列出 `ok` / `warn` / `fail` / `info` 检查项，退出码 0 = 无失败项、1 = 有失败项。也可以先 `vessel config init` 生成用户配置模板（不含真实密钥），再回填 `api_key_env` 指向的 Key。
 
+## AX：Agent Experience
+
+**AX（Agent Experience）是 Vessel 的核心理念之一：agent 是运行时的居民，不是黑盒里的负载。** 它对自己有清醒认知（自观测），对环境有诊断手段（自诊断），对能力有发现通道（自发现），对生命周期有自主权（自服务）。所有 AX 命令只读或显式意图、支持 `--json` 纯数据输出、不输出密钥——人和 AI 用同一套面。
+
+三组六命令（均已实现）：
+
+| 组 | 命令 | 一句话 |
+| --- | --- | --- |
+| 自观 | `vessel session status [--id <session>] [--json]` | 一屏看自己：state / run / token 用量 / 上下文预算（used / max / 百分比）/ queue 深度 / 最后活动；缺省解析调用者自身 |
+| 自观 | `vessel permission show [--member <id>] [--json]` | 有效权限矩阵一屏：工具 × auto/ask/never + 规则快照；缺省看自己 |
+| 诊断 | `vessel config explain <key> [--json]` | 一个配置键的逐层取值与「谁赢」，env 覆盖可溯源 |
+| 诊断 | `vessel doctor` | 配置 / provider / 数据根 / 端口 / 插件自检 + 舰队五项（env 一致性 / 锁 / 端口归属 / peer token 在位 / node 健康） |
+| 发现 | `vessel rpc list [--node <id>] [--json]` | 列出控制面 RPC 方法与 schema 摘要——不翻源码就知道「这个 node 能调什么」 |
+| 发现 | `vessel fleet status [--json]` | 本舰队一屏：身份 / 平台实例 / 节点注册表与探活 / federation peers |
+
+自服务的关键一件：**优雅自重启续作**。
+
+```bash
+vessel restart --self --prompt "重启后继续：先核对金丝雀验收报告，再推进晋升"
+```
+
+预约后立即返回，等待方向是反的：**重启等 run 跑完，run 不等重启**。agent 在自己的 run 里（经 `bash`）发起预约，收尾本回合、run 自然完成；detached 编排者这才动手 stop（drain-to-quiesce，其余活跃 run 缺省不限时等完）→ 秒退 → 重启 → 嘱托作为首轮输入自动投递，新身体续作，全程无需人类点火。`--self` 与 `--force` 互斥——自重启恒优雅。配合启动唤醒 sweep，重启后 inbox 里的待处理消息也会自动点火续作。
+
 ## 特性
 
 - **极简核心** — 核心契约 + 1 个循环 + 1 个注册表（`PluginHost`）。`@vessel-agent/core` 不出现业务概念，`dependencies` 保持为空。
-- **三个能力工具** — `bash` / `read` / `edit`。能被 bash 组合出来的能力不再单开工具；MCP 工具经插件注册进同一个 `PluginHost`。
-- **成员生命周期** — `create` / `hire` / `close` / `send` / `post` / `rotate` / `list`；peer 与 contractor 两条派生路径；成员关 peer 需人类审批。
+- **四个能力工具** — `bash` / `read` / `edit` / `write`（`write` 逐字节落盘、不经 shell）。能被它们组合出来的能力不再单开工具；MCP 工具经插件注册进同一个 `PluginHost`。
+- **成员生命周期** — `create` / `hire` / `close` / `send` / `rotate` / `list` / `read`；peer 与 contractor 两条派生路径；成员关 peer 需人类审批。Team 日志走 CLI `vessel team post`。
+- **AX 自服务** — 自观测（`session status` / `permission show`）、自诊断（`config explain` / `doctor`）、自发现（`rpc list` / `fleet status`）、优雅自重启续作（`restart --self`）。见 [AX](#axagent-experience)。
+- **优雅生命周期** — stop / restart 缺省不限时优雅 drain，等活跃 run 自然跑完；`--force` 是唯一的非优雅退出且留审计。平台代码更新走 handoff，run 不断。
 - **上下文即消息** — skills 就是 Markdown 文件，`@路径` 在发送前展开为注入消息；`subscribe` 对具体文件做显式订阅，变更只发短通知，`inspect` 时取 diff。
 - **Durable run** — run 在开始、每轮 tool-call 后、结束时写 checkpoint；中断后 `--resume-run` 恢复。
 - **可观测** — 事件流（`<domain>.<action>.<event>`）、trace、metrics、Web 控制台时间线；`/v1/events?since=` 支持 `seq` 续订与 `gap` 标记。
@@ -142,7 +180,7 @@ vessel --resume-run <run_id>
 - 默认数据根 `~/.vessel/data`（`VESSEL_DATA_DIR` 覆盖）；单公司数据直接位于 `<data_dir>/{sessions,runs,events,inbox}/`，`tenant.json` 只保存内部持久单 id，没有 `tenants/<id>/` 层。
 - 默认 `session.backend: file`；sqlite 仍可用。旧 `.vessel/sessions.db` 不会自动迁移，见 [MIGRATION.md](docs/operations/MIGRATION.md)。
 - trace 默认开启 `full`，按 30 天 / 1000 runs / 1 GiB prune；详见 [TRACE.md](docs/operations/TRACE.md)。
-- 没有 `--tenant` / `VESSEL_TENANT`。node token 用 `serve.tokens`（token → `{ role }`）或 legacy `serve.token`；Platform Gateway token 独立用 `gateway.token`，两者互不通用。
+- 没有 `--tenant` / `VESSEL_TENANT`。`serve:` 配置块已移除（写它启动失败）：node token 用 `node.tokens`（token → `{ role }`）或 `node.token` / `node.token_env`；Platform Gateway token 独立用 `gateway.token`，两者互不通用。
 - 语言：默认 zh-CN。`VESSEL_LANG=en`（或 `ui.language: en`）切换到英文；Web 控制台语言在 Settings → Appearance。
 
 ### 插件与 MCP
@@ -166,7 +204,7 @@ mcp_servers:
 
 **语言空间是唯一的执行面。** Vessel 做两件事：把世界折成语言（system prompt + 消息 + 工具 schema），把语言折回世界（解析 `tool_calls` → 执行 → 结果折回消息）。
 
-当前分层（0.34 Stage 4）：
+当前分层（Stage 4，已落地）：
 
 ```text
 Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-session）
@@ -211,7 +249,7 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
 | **节点**   | 一次 Vessel 进程，`node.json` 的 `node_id` + 数据目录 | 独立执行、授权、持久化；是唯一权威                                                               |
 | **Hub**    | 独立进程 `vessel hub start`                           | 登记节点 / Team / 成员 / 在线状态、推送指针；只接受 node → hub 出站 join；不代理正文、不替节点授权 |
 | **Team**   | `workspace` + `team_id` + roster + 日志 + policy      | 一个工作目录一个 Team（声明后按 `workspace` 匹配当前目录）；共享日志、预算、可见性               |
-| **Agent**  | 持久身份 + 可替换 Body                                | 主 Agent 可 `hire` / `close` 成员；成员可 `create` / `hire` / `close` / `send` / `post` / `list` / `rotate` |
+| **Agent**  | 持久身份 + 可替换 Body                                | 主 Agent 可 `hire` / `close` 成员；成员可 `create` / `hire` / `close` / `send` / `list` / `read` / `rotate` |
 | **地址**   | `<principal>@<node_id>:<team_id>`                     | 跨节点定向投递；`principal` 是名字，不是 agent id                                                |
 
 成员增长与分工是**显式派发**：谁做什么由主 Agent 或人决定。这里没有内建的自治规划器或任务市场。
@@ -247,7 +285,8 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
 
 ### 已实现
 
-- 单节点 Agent 生命周期：`create` / `hire` / `send` / `close` / `list` / `rotate` / `post`。
+- 单节点 Agent 生命周期：`create` / `hire` / `send` / `close` / `list` / `rotate` / `read`（Team 日志走 CLI `vessel team post`）。
+- AX 三组六命令：`session status` / `permission show` / `config explain` / `doctor`（含舰队五项）/ `rpc list` / `fleet status`；优雅自重启 `restart --self --prompt` + 启动唤醒 sweep。
 - Platform Gateway（8642）+ Node API（8644）同进程双监听（G1）；本地多 Node 独立子进程 + `nodes.json` 注册表（G3）。
 - 会话分支、收件箱与三档投递：`sessions.create` / `restart` / `activate`；`inbox` 工具；`send` 的 work / urgent（`interrupt`）/ notify。
 - temporary 回收（`agent.temporary_ttl_hours`，默认 2 小时，`0` 关闭）。
@@ -312,6 +351,16 @@ cd apps/web && bun run build
 
 `reasoning_content` 会保存并回传，但 TUI / 事件流不展示；需要查看时设 `ui.showReasoning: true`。
 
+## 写给 AI
+
+如果你是一个 AI agent，正在读这份 README 以了解或接入 Vessel：
+
+- **先读 [AGENTS.md](AGENTS.md)**：本仓的 AI 行为约定（风格、硬安全规则、怎么跑、红线）。开工前用 `bun run scripts/docs-find.ts --goal "<目标>" --paths <路径>` 检索相关架构模块。
+- **两条产品不变量不可绕过**：消息可见性对等（用户看到的 ⊇ agent 看到的）与请求 messages append-only（见[能力边界](#核心设计不变量)）。
+- **机器可读面**：AX 命令全部支持 `--json`（纯数据、无 ANSI、不输出密钥）；控制面能力经 `vessel rpc list --json` 或 RPC `capabilities.list` 发现，与 WebUI 同源。
+- **文档是给检索用的**：`docs/architecture/` 每篇头部有 frontmatter（`title` / `kind` / `triggers` / `paths`），按 triggers 命中，不必整读。
+- **你在运行时里是被信任的居民**：可以 `session status` 看自己的上下文预算，`config explain` 溯源配置，`restart --self --prompt` 优雅重启并给自己留续作嘱托。授权分级见 [docs/constitution/12-autonomy.md](docs/constitution/12-autonomy.md)。
+
 ## 文档
 
 | 文档                                                         | 作用                                                   |
@@ -325,6 +374,7 @@ cd apps/web && bun run build
 | [docs/DOC-MANAGEMENT.md](docs/DOC-MANAGEMENT.md)             | 文档生命周期、拆分规则与结构门禁                       |
 | [docs/DESIGN.md](docs/DESIGN.md)                             | 跨外壳设计系统：页面骨架、表格控件、时间戳、插件 i18n  |
 | [docs/WEB-UI.md](docs/WEB-UI.md)                             | Web 控制台 UI 规范与交互约定                           |
+| [docs/operations/INDEX.md](docs/operations/INDEX.md)         | 运维索引：按目标或故障现象命中对应 runbook              |
 | [docs/operations/CONFIG.md](docs/operations/CONFIG.md)       | 配置位置、优先级、单公司数据根与密钥                   |
 | [docs/operations/REMOTE.md](docs/operations/REMOTE.md)       | 跨机器远程：证书 / CA、两机配置、独立前端、故障排查    |
 | [docs/operations/TRACE.md](docs/operations/TRACE.md)         | trace 留存、脱敏与重放                                 |
@@ -334,7 +384,7 @@ cd apps/web && bun run build
 | [CHANGELOG.md](CHANGELOG.md)                                 | 变更记录                                               |
 | [AGENTS.md](AGENTS.md)                                       | AI 行为约定：风格、硬规矩、怎么跑、红线                |
 
-> `docs/operations/` 没有独立 `INDEX.md`，本表即其索引；新增 operations 文档必须在此登记（人工守，原 `check-docs` 脚本已按宪法删除）。
+> 运维文档的完整索引见 [docs/operations/INDEX.md](docs/operations/INDEX.md)；本表只列常用入口。
 
 ## 状态
 
