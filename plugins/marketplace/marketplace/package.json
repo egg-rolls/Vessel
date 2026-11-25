@@ -44,9 +44,6 @@
     "id": "marketplace",
     "name": "Marketplace",
     "version": "0.1.0",
-    "engines": {
-      "vessel": ">=0.33.0 <1.0.0"
-    },
     "description": "Browse, install and update Vessel plugins from a static registry",
     "side": "both",
     "entry": "src/index.ts",

@@ -20,7 +20,7 @@ paths: [src/plugin/plugin-loader.ts, src/plugin/plugin-manifest.ts, packages/ser
 
 ## Manifest（`package.json.vessel`）
 
-必填 `id / name / version / engines.vessel / entry`；可选 `side / ui / activationEvents / contributes / permissions / dependencies`。清单先于代码，解析或校验失败一律 fail-closed，不加载代码。
+必填 `id / name / version / entry`；可选 `engines / side / ui / activationEvents / contributes / permissions / dependencies`。`engines.vessel` 仅外部插件必填（见下「版本兼容」）。清单先于代码，解析或校验失败一律 fail-closed，不加载代码。
 
 ```jsonc
 { "vessel": {
@@ -90,7 +90,7 @@ enable / disable / config watcher 后重建 effective 路由表，catalog 的
 
 ## 版本兼容
 
-- `engines.vessel` 是 semver range，必须覆盖运行中的 Vessel 版本（根 `package.json` 的 `version`），否则 `plugin_version_incompatible` 且不加载代码。`side` 不兼容、缺依赖、依赖循环同样拒绝激活；错误码见 `vessel plugin list` 与 `<dataDir>/plugins/<id>/logs/`。
+- 版本门禁只针对**外部插件**（非 repo 源：user / project / node_modules）：`engines.vessel` 必填，是 semver range，必须覆盖运行中的 Vessel 版本（根 `package.json` 的 `version`），否则 `plugin_version_incompatible` 且不加载代码。**内置 / 自研插件（repo 源）恒兼容**：与引擎同仓同步发布，`engines` 可选、声明了也不做兼容性检查（2026-11-25 用户裁定，取代 fb44a979 式改范围续命）。`side` 不兼容、缺依赖、依赖循环同样拒绝激活；错误码见 `vessel plugin list` 与 `<dataDir>/plugins/<id>/logs/`。
 
 ## 插件与宿主的模块边界
 
