@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "★三次晋升完成：main=fb44a979(v2.0.0,723fb673→38ee0aec→ab63936d→3953a92e→99f87c0c→fb44a979)，生产8642/8644健康。已晋升=第一/二轮全验闭环+AX三组/inbox-ux/addr-display/sidebar-anim/design-audit/minimap+tooltip/inbox-source/drawer-fix/SemVer release。★第四轮收尾+DR15-1修复复验中：修复合并redblue-dev 03f13c06→canary同步aa92f5ae(22文件零冲突,web未变免rebuild)→协议A restart --force加载新码(审计runs_cut=1★lead对账✓=O8 zombie c0b150c7属skillsstyle19c5733f非活run,fencing_token2被completed61f63769取代,force后runs.list仍running冻结17:27铁证,零真实损失,第五轮非阻塞)→新进程组platform56812/node48092/hub63056,8652/8654/8653绿★version2.1.0新码实证；cli复验任务书已发(7判据)进行中,B安全网30s兜底在码不致无限挂；候cli PASS→DR15-1 CLOSED→晋升信号→晋升redblue-dev到main(ff-only)→用户重启。本批待晋升=kanban-view/kanban-proxy/graceful-selfrestart/empty-state/plugin-ui-layer/hydration-anon/drag-reference/card-robust/plugin-version/skills-style/inbox-actions+第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl,lead已登记批次书本轮不测)。后续队列：plugin-config-read修复/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期"
+      "progress": "★三次晋升完成：main=fb44a979(v2.0.0,723fb673→38ee0aec→ab63936d→3953a92e→99f87c0c→fb44a979)，生产8642/8644健康。已晋升=第一/二轮全验闭环+AX三组/inbox-ux/addr-display/sidebar-anim/design-audit/minimap+tooltip/inbox-source/drawer-fix/SemVer release。★第四轮收尾+DR15-1修复复验中：修复合并redblue-dev 03f13c06→canary同步aa92f5ae(22文件零冲突,web未变免rebuild)→协议A restart --force加载新码(审计runs_cut=1★lead对账✓=O8 zombie c0b150c7属skillsstyle19c5733f非活run,fencing_token2被completed61f63769取代,force后runs.list仍running冻结17:27铁证,零真实损失,第五轮非阻塞)→新进程组platform56812/node48092/hub63056,8652/8654/8653绿★version2.1.0新码实证；cli复验：A PASS(node自死5.08s无force,门禁①⑤⑥)+B完成(node路径PASS drain.done→自死56ms,server.stop timeout_bounded5s;platform DR15-2确证30s看门狗force abnormal_exit,B兜底保安全)；★我裁定DR15-2 platform race微修复后晋升(续派q-dr15-exit fix/q-dr15-2-platform与B并行)；候cli核B②⑦+DR15-2修复闭环platform清洁复验→7判据终版→lead终裁DR15-1 CLOSED+DR15-2处置→晋升信号→晋升redblue-dev到main(ff-only)→用户重启。本批待晋升=kanban-view/kanban-proxy/graceful-selfrestart/empty-state/plugin-ui-layer/hydration-anon/drag-reference/card-robust/plugin-version/skills-style/inbox-actions+第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl,lead已登记批次书本轮不测)。后续队列：plugin-config-read修复/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期"
     },
     {
       "id": "canary-qa-lead",
@@ -139,6 +139,14 @@
       "owner": "user",
       "branch": "redblue-dev",
       "progress": "✅完成合并03f13c06(fix/q-dr15-exit 3commits fd847228审计/ab55424e A/f8aaae58 B,17文件+939/-108,门禁绿)：A=server.stop(true)5s race有界化+best-effort+永久node.shutdown.step日志(serve共享shutdown-step.ts全链覆盖)+平台同修；B=等死段postQuiesceTimeoutMs=30s兜底+stop.forced审计reason=quiesce_exit_timeout+O7持久化persistStopAuditLine落log；候run不限时红线不动；根因精化:f0dabd9d interrupt假说排除→纯Bun server.stop残余连接挂起；★候canary同步03f13c06+restart(协议A)+cli复验(lead 7点矩阵:~20s无force+continuation/步骤日志/兜底30s审计/live>0重置/14⑤⑥/两路径/--timeout--force零变化)→DR15-1 CLOSED→晋升信号"
+    },
+    {
+      "id": "q-dr15-2-platform",
+      "title": "微修复：DR15-2 platform race失效（同步阻塞event loop→30s看门狗force污染）",
+      "column": "进行中",
+      "owner": "q-dr15-exit",
+      "branch": "fix/q-dr15-2-platform",
+      "progress": "q-dr15-exit续作(8579ae91,我裁定微修复后晋升与B并行)：DR15-1 node修复PASS后新发现——platform.server.stop进程内5s race失效(gateway.log start无done/timeout_bounded)→30s外部看门狗force(reason=quiesce_exit_timeout,abnormal_exit污染)；B兜底保安全无无限挂但每次platform停多等30s损害用户优雅重启；lead假说同步阻塞event loop→race timer无法发射；修复=platform停有界清洁(0.58预关残余句柄先例platform/server.ts:1076)；B实验确证基线(node PASS+platform30s兜底)；候①根因审计(node生效vs platform失效差异)→②修复→③门禁→合并→canary同步→platform路径另复验清洁→DR15-2闭环→晋升"
     },
     {
       "id": "q-kanban-visual",
