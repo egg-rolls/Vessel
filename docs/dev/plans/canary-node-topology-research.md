@@ -286,4 +286,44 @@ C 下生产 gateway 为探测/代理凭据会加载金丝雀条目：`loadConfig
 | ambient `VESSEL_TOOL_OUTPUT_DIR`/`VESSEL_PLUGIN_CONFIG` 等 | 各舰队快照独立，互不灌 | 生产 gateway 快照里若有 ⇒ **灌进金丝雀并压过其 config**（env 层 > project 层）；反向金丝雀 shell 的变量也进不了生产 gateway（它先启动） | 同 A |
 | `VESSEL_NO_EXTERNAL_PLUGINS` | 金丝雀启动时设 ✅ | 取决于生产 gateway 启动时有没有设——**生产通常不设** ⇒ 金丝雀 node 会加载 `~/.vessel/plugins` 外部插件（R5 击穿） | 同 A ✅ |
 
-**结论：B 的 env 模型是「一份快照灌所有 node」，与金丝雀隔离需求结构性冲突；C 保持「各 node 各快照」，T2b 类修复（node 内桥接 dataDir）在 C 下与 A 同样生效。** 若将来真要做 B，per-node env allowlist/追加字段是前置代码改动（与 per-node entry 同批立项）。
+**结论：B 的 env 模型是「一份快照灌所有 node」，与金丝雀隔离需求结构性冲突；C 保持「各 node 各快照」，T2b 类修复（node 内桥接 dataDir）在 C 下与 A 同样生效。** 若将来真要做 B，per-node env allowlist/追加字段是前置代码改动（与 per-node entry 同批立项）。---
+
+## §7 迁移成本（调研面⑦：现 canary-data / 会话 / 团队 / 配对如何迁或弃）
+
+### 7.1 核心结论：C 下数据零迁移
+
+registry 条目只是**指针**（node_id + data_dir + config_path）。金丝雀继续用 `fleets/canary-data` ⇒ 以下全部原样保留、无需搬动：
+
+| 资产 | 位置 | 迁移影响 |
+|---|---|---|
+| 会话 / runs / events / conversations | `canary-data/{sessions,runs,events,conversations}` | 无 |
+| 团队（`default`）/ 成员快照 / inbox | `canary-data/{teams,agents,inbox}` | 无 |
+| node 身份 | `canary-data/node.json`（`7377657b…`） | 无 ⇒ **三段地址、对端 peer 条目全部继续有效** |
+| root-secret / 派生 node token | `canary-data/root-secret` | 无 ⇒ 平台代理解析出的凭据与 node 自算一致 |
+| federation 配对 | canary-config `federation.peers` + `canary-data/federation-pair.json` + SecretStore（`token_secret` 时） | 无（peer 指向生产 node 端口 8644，不变） |
+| hub join 状态 | `canary-data/hub-node.json`（指向 8653 canary hub） | C1：无（hub 自起后照旧）；C2：需重新 `hub join` 生产 hub（一条命令，旧状态覆盖写） |
+| 工具输出 / 插件数据 | `canary-data/{tool-output,plugins}` | 无（T2b 修后落本根） |
+
+**要弃的只有**：canary gateway 平台层进程及其锁族（`platform-canary.*` / `platform-default.*` / `platform.pid` / `platform-children*.json` / watchdog 快照）。canary-data 里两族 instance 痕迹并存（§1.1），停金丝雀 gateway 后按 `gateway status` 清点清理 stale 条目即可（`cleanupGatewayStateEntry` 语义：stale 才清，running/unknown 不动）。
+
+### 7.2 生产侧的一次性改动（C 的真实成本）
+
+1. **生产 node 显式 config 文件**（registry `config_path` 必填，§2.1）：最小化，只声明 `data_dir: ~/.vessel/data` + `node.port: 8644`（其余键继续从生产用户层继承，与今天隐式模式取值一致）。放哪由用户定（§8 未决：`fleets/production-node.yaml` vs `~/.vessel/node.yaml`——后者在生产根内，按宪法由用户维护）。
+   ⚠️ 双源纪律：该文件是 project 层，会压过用户层同名键——**只放 data_dir/node.port，不放业务键**，避免与 `~/.vessel/config.yaml` 形成两处维护。
+2. **`nodes.json` 两条目**（生产 gateway dataDir 内）：
+   ```bash
+   vessel gateway nodes add production --data-dir ~/.vessel/data --config <production-node.yaml>
+   vessel gateway nodes add soulkiller-canary --data-dir D:/Application/APP/Vessel/fleets/canary-data \
+     --config D:/Application/APP/Vessel/fleets/canary-config.yaml --no-auto-start
+   ```
+   add 前置条件已满足：两侧 node.json 都在、端口不冲突（8644/8654/8642/8643 互异）、dataDir 与 config 解析一致。
+3. **生产 gateway 重启一次**加载 registry（隐式→显式是启动时解析，无热加载）。缺省 `gateway restart` 保活 node ⇒ 生产 node 进程不冷重启、会话不断；平台层重启秒级。**这是唯一一次碰生产的机会窗口**，可与用户已顺延的明日生产重启合并。
+4. 金丝雀侧：停 canary gateway（`gateway stop --instance canary`，缺省保活 node/hub）→ 金丝雀 node 以 external 身份继续跑（或按 §5.3 用金丝雀 checkout 的 `node stop/start` 换一遍启动上下文，确保 env 带 `--user-config`）。canary hub 自起（C1）：`hub start --data-dir canary-data/hub`（无看门狗，§8 R5）。
+
+### 7.3 回退
+
+C 的回退 = `vessel gateway nodes remove soulkiller-canary`（最后一条显式条目移除时 `deleteNodeRegistry` 回到隐式单节点）+ 生产 gateway 再重启一次 + 金丝雀按原配方起自己的 gateway。**数据全程未动，回退无单向门**（对比 blue-green §4 的离线迁移警示：本方案不触发任何数据格式迁移）。
+
+### 7.4 B 的迁移成本（对比用）
+
+除 §7.2 全部外，还需：per-node entry/env/user-config 代码改动 + 金丝雀 node 冷重启换生产代码（**金丝雀会话宇宙里的 agent 运行时被换版本**，成员快照 v5 兼容但行为面变）+ 独立 restart RPC 立项。且每次生产 gateway 升级都会同步换掉金丝雀 node 的代码——金丝雀不再能独立 pin 版本。**不建议**（§8）。
