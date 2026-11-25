@@ -11,6 +11,7 @@
 
 import { type FileHandle, mkdir, open, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { sanitizeToolOutputEnv } from '../runtime/tool-output-env';
 import {
   type CommandRunner,
   cleanupGatewayStateEntry,
@@ -236,6 +237,14 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
 
   // 0.55：记下本次启动的时刻；失败回滚只清理这之后 spawn 的子进程。
   const spawnedSince = Date.now();
+  // T2b：env 卫生 —— daemon 父进程 env 可能带异舰队的工具输出根（启动链继承：
+  // 生产 shell → gateway daemon）。按本子进程解析出的 dataDir 重写为派生值，
+  // gateway/node 子进程初始 env 即无生产残留（子侧 bootstrap/前台入口同语义兜底）。
+  const daemonEnv: Record<string, string | undefined> = {
+    ...process.env,
+    [GATEWAY_DAEMON_ENV]: '1',
+  };
+  sanitizeToolOutputEnv(daemonEnv, options.dataDir);
   let child: ReturnType<typeof spawn>;
   try {
     child = spawn(argv, {
@@ -245,7 +254,7 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
       detached: true,
       // 子进程 argv 与前台 start 相同，只靠这个标记让它在 pid record 里记
       // `daemon: true`（`gateway restart` 缺省据此保持后台模式）。
-      env: { ...process.env, [GATEWAY_DAEMON_ENV]: '1' },
+      env: daemonEnv,
     });
   } catch (error) {
     await handle.close().catch(() => undefined);
