@@ -29,6 +29,7 @@ const EN = {
   'skills.rescanDone': 'Index rebuilt: {added} added, {removed} removed, {changed} changed',
 
   'skills.page': 'Showing {from}–{to} of {total}',
+  'skills.pagination': 'Pagination',
   'skills.empty.title': 'No skills indexed',
   'skills.empty.description':
     'Put markdown into <repo>/skills/ or ~/.vessel/skills/, or import skills into the collected library (<dataDir>/plugins/skills/library/). Then rescan.',
@@ -108,6 +109,7 @@ const ZH: Record<MessageKey, string> = {
   'skills.rescanDone': '索引已重建：新增 {added}、移除 {removed}、变更 {changed}',
 
   'skills.page': '显示 {from}–{to} / {total}',
+  'skills.pagination': '分页导航',
   'skills.empty.title': '索引为空',
   'skills.empty.description':
     '把 markdown 放进 <仓库>/skills/ 或 ~/.vessel/skills/，或把技能导入收集库（<dataDir>/plugins/skills/library/），然后重新扫描。',
