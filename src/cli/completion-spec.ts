@@ -309,6 +309,16 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
   },
   { token: 'status', registryName: 'status', flags: ['--json'] },
   {
+    token: 'session',
+    registryName: 'session',
+    subcommands: [
+      {
+        name: 'status',
+        flags: ['--id', '--json', '--connect', '--connect-token', '--ca', '--data-dir'],
+      },
+    ],
+  },
+  {
     token: 'stop',
     registryName: 'stop',
     flags: ['--yes', '--timeout', '--instance', '--port', '--all'],

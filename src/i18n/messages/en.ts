@@ -751,4 +751,27 @@ export const en: Record<MessageKey, string> = {
   'resume.card.pending_inputs':
     '{count} accepted input(s) are queued and were admitted after this card, oldest first.',
   'resume.card.no_pending_inputs': 'no accepted input was queued; continue from the current state.',
+
+  // ── session status (AX self-service · self-observation) ──
+  'help.cmd.sessionStatus':
+    'session live state (state/run/usage/context/queue/last activity; default = caller itself)',
+  'flag.id': 'object id (e.g. session id; default resolves to the caller itself)',
+  'sessionStatus.title': 'Session status',
+  'sessionStatus.session': 'session',
+  'sessionStatus.sessionTitle': 'title',
+  'sessionStatus.agent': 'agent',
+  'sessionStatus.state': 'state',
+  'sessionStatus.run': 'run',
+  'sessionStatus.tokens': 'tokens',
+  'sessionStatus.context': 'context',
+  'sessionStatus.queue': 'queue',
+  'sessionStatus.messages': 'messages',
+  'sessionStatus.events': 'event tail',
+  'sessionStatus.activity': 'last activity',
+  'sessionStatus.source': 'source',
+  'sessionStatus.noMain':
+    'cannot resolve caller session: no main agent in agents.list (use --id <session> explicitly)',
+  'sessionStatus.notFound': 'session not found: {id}',
+  'sessionStatus.notAvailable':
+    'sessions.get is not available on this gateway (requires a 0.14+ serve build)',
 };

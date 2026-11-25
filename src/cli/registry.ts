@@ -42,6 +42,7 @@ import { runPluginCommand } from './commands/plugin/plugin-command';
 import { pruneCommand } from './commands/prune-command';
 import { runResumeList } from './commands/resume-command';
 import { rpcListCommand } from './commands/rpc-command';
+import { sessionStatusCommand } from './commands/session/session-status-command';
 import { runTeamCommand } from './commands/team-command';
 // 0.56：`vessel token show|list|rotate`（根密钥 / 派生 token）。
 import { tokenListCommand, tokenRotateCommand, tokenShowCommand } from './commands/token-command';
@@ -335,6 +336,23 @@ export const cliCommands: readonly CliCommand[] = [
       return printCommandResult(
         await statusCommand({
           json: args.statusCommand.json,
+          connectUrl: args.connectArg,
+          connectToken: args.connectTokenArg,
+          caFile: args.caArg,
+        }),
+      );
+    },
+  },
+  {
+    name: 'session',
+    match: (args) => (args.sessionCommand ?? null) !== null,
+    run: async (args) => {
+      const command = args.sessionCommand ?? null;
+      if (command === null) return 1;
+      return printCommandResult(
+        await sessionStatusCommand({
+          json: command.json,
+          ...(command.id !== undefined ? { id: command.id } : {}),
           connectUrl: args.connectArg,
           connectToken: args.connectTokenArg,
           caFile: args.caArg,

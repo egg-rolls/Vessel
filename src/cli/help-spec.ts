@@ -63,6 +63,7 @@ export const CLI_FLAG_VALUE = {
   '--system-prompt': '<text>',
   '--workspace': '<path>',
   '--message-id': '<id>',
+  '--id': '<id>',
   '--state': '<state>',
   '--limit': '<n>',
   '--members': '<n>',
@@ -159,6 +160,7 @@ export const CLI_FLAG_HELP: Readonly<Record<CliFlag, MessageKey>> = {
   '--system-prompt': 'flag.systemPrompt',
   '--workspace': 'flag.workspace',
   '--message-id': 'flag.messageId',
+  '--id': 'flag.id',
   '--state': 'flag.state',
   '--limit': 'flag.limit',
   '--members': 'flag.members',
@@ -275,6 +277,11 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     path: ['status'],
     summary: 'help.cmd.status',
     flags: ['--json', '--connect', '--connect-token', '--ca'],
+  },
+  {
+    path: ['session', 'status'],
+    summary: 'help.cmd.sessionStatus',
+    flags: ['--id', '--json', '--connect', '--connect-token', '--ca', '--data-dir'],
   },
   {
     path: ['stop'],
