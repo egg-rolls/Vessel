@@ -88,10 +88,10 @@
     {
       "id": "q-inbox-actions",
       "title": "inbox修改按钮撤回bug+撤回按钮改删除ICON（用户两裁定）",
-      "column": "进行中",
-      "owner": "q-inbox-actions",
-      "branch": "fix/q-inbox-actions",
-      "progress": "4d10e731派单：①修改按钮点击不撤回inbox那份(bug修)②撤回按钮→删除按钮+trash icon+inbox delete语义；①调研②修bug③改按钮④build"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并6e6887c6(377f6c21编辑级联消费team_message_id+recall_delivery/44d72922删除trash icon级联真删,18文件+441build绿)；待金丝雀验+用户打勾；限制:级联定位≤1000条日志窗口/旧gateway无recall_delivery编辑按失败"
     },
     {
       "id": "q-kanban-view",
