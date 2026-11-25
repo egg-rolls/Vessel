@@ -38,6 +38,7 @@ import { useAnsweredAsks } from './useAnsweredAsks';
 import { useChatSessions } from './useChatSessions';
 import { useChatSubmit } from './useChatSubmit';
 import { useChatTranscript } from './useChatTranscript';
+import { useInboxRefreshTick } from './useInboxRefresh';
 import { usePendingSends } from './usePendingSends';
 
 type ChatRoute = Extract<Route, { domain: 'chat' }>;
@@ -248,6 +249,11 @@ export function ChatView({
       void submitApi.handleRetryPending(pending);
     },
   });
+
+  // inbox 变更的 live 触发器：agent 用 `inbox read/delete` 消费条目、或新条目入队时，
+  // 条带立刻重读一次（不等 2s 兜底轮询，更不等页面刷新）。数据源仍是那次 RPC，
+  // 事件只当触发器（判据见 useInboxRefresh.ts）。
+  const inboxRefreshTick = useInboxRefreshTick(snapshot.entries, selectedId);
 
   // 已答提问的取数：数据来自服务端 answered 记录（落盘的真相），刷新 / 重连靠它重建。
   // 子 agent 详情态不读（那一屏讲的是另一个 run），草稿态没有会话 id 也不读。
@@ -561,12 +567,13 @@ export function ChatView({
               条带只负责「还有几条在等」，跟着输入区一起常驻。宽度 / 内边距由它自己
               对齐消息列（见 PendingStrip.tsx）。数据源是服务端持久真相
               （`agents.inbox{ sessionId }`），刷新 / 切会话都不丢；`refreshKey` 只是
-              「再读一次盘」的触发器（本会话新受理一次发送 / run 数变化）。 */}
+              「再读一次盘」的触发器（本会话新受理一次发送 / run 数变化 / inbox 变更
+              live 事件：`inbox read/delete` 消费、新条目入队，见 useInboxRefresh.ts）。 */}
             <PendingStrip
               sessionId={selectedId}
               client={client}
               epoch={epoch}
-              refreshKey={submitApi.sendTick + transcriptApi.visibleGroups.length}
+              refreshKey={submitApi.sendTick + transcriptApi.visibleGroups.length + inboxRefreshTick}
               pendings={transcriptApi.activeAgent ? EMPTY_PENDING_SENDS : pendingSendsApi.pending}
               sentMessageIds={pendingSendsApi.sentMessageIds}
               onRefillDraft={refillDraftFromStrip}
