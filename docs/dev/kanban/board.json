@@ -61,6 +61,22 @@
       "progress": "✅完成合并552097e2(7eb80815 P1core extra钩子+P2热配置插件/830e9a47 P3工具栏菜单+设置UI,冲突解决保留drag-reference双方props)build绿；plugins/context/thinking-intensity(非provider,默认集排除provider纠偏)+模块级live holder热生效+contributes.settings自动发现+composer思考菜单+stable映射experimental闸；待金丝雀验+用户重启"
     },
     {
+      "id": "q-ti5-56-wire",
+      "title": "微修复：TI5-5 toolbar menu wire权限+TI5-6 plugins.list config回显（B1长尾）",
+      "column": "进行中",
+      "owner": "q-ti5-56-wire",
+      "branch": "fix/q-ti5-56-wire",
+      "progress": "5e977e42派单(webui R3发现,main裁定B1全修再晋升)：TI5-5=TI5-2 assembly menu透传必要不充分,plugins.list rpc wire仍bare strings(PluginRenderContributions.rpc:string[])→web toolbarMenuOf write权限校验永败(string缺省read,set_level需write)→menu丢弃；修复wire rpc additive{name,permission}或web信节点侧menu.write；TI5-6=plugins.list wire无config字段→设置弹窗插件键不回显持久化值(default_level恒空placeholder=auto尽管config=low),即q-plugin-config-read缺陷；修复wire include config；候修复→合并→canary同步→webui验B1→晋升"
+    },
+    {
+      "id": "q-readme",
+      "title": "更新vessel README：GitHub规范突出AX+凝结main体验（用户直接需求）",
+      "column": "进行中",
+      "owner": "q-readme",
+      "branch": "docs/q-readme",
+      "progress": "900f84c0派单(用户需求:凝结main感受体验为GitHub规范README向人和AI介绍AX+产品)：现README354行已规范偏运行时机制→突出AX(Agent Experience自观测/自诊断/自发现/自服务/自主)与多agent运行时并列+保留GitHub结构+产品事实从docs核实+main体验段(信任agent自主/组织协作/优雅生命周期/真相源统一)+面向人和AI；附main体验笔记(红蓝流/federation/优雅自重启/插件/AX session status/宪法)；候大纲→全文→main审核合并"
+    },
+    {
       "id": "q-ti5-4-budget",
       "title": "微修复：TI5-4 thinking注入抬max_tokens容纳budget（用户裁定不限制thinking）",
       "column": "进行中",
