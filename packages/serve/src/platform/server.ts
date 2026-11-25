@@ -25,7 +25,7 @@ import {
 } from '../gateway/auth.js';
 import { serveStatic } from '../gateway/static.js';
 import { logEvent } from '../log-event.js';
-import { raceShutdownTimeout, runShutdownStep, type ShutdownStepEmit } from '../shutdown-step.js';
+import { runShutdownStep, SHUTDOWN_STEP_EVENT, type ShutdownStepEmit } from '../shutdown-step.js';
 import { platformTokenMatches, platformUnauthorizedMessage, resolvePlatformAuth } from './auth.js';
 import { platformListenGuard } from './listen-guard.js';
 import { createPlatformMetrics } from './metrics.js';
@@ -1093,18 +1093,47 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
       // 0.61：自查定时器跟着平台一起停（网关停了不该还在跑 tsc）。
       if (webBuildCheckTimer !== undefined) clearInterval(webBuildCheckTimer);
       await runShutdownStep(emit, 'platform.auth.flush', () => authService.flush());
-      // DR15-1 有界化 + DR15-2 预 drains：stop 的 settle 条件
-      // （pending_requests==0 / listener==null / WS active==0）——在途请求已 abort
-      // （handler 立即返回 ⇒ pending 归零）、WS 已 closeAll（残余由 stop 内
-      // app.close 强关）、listener 由 stop 自身关 ⇒ stop 应毫秒级 settle；
-      // 5s race 保留为纵深防御（触发条件移除后事件循环空闲，timer 真能发射）。
-      // start 行永久附 pending_* 诊断 —— 未来任何残留等待都可实证归因（复验矩阵②）。
+      // DR15-2 迭代2：不 await stop promise —— Bun 1.3.9 server-initiated WS
+      // close 永久泄漏 active_connections（close()/terminate() 先置 flags.closed，
+      // onClose 的 was_closed 分支不减计数，ServerWebSocket.zig:285-295），
+      // promise 的 settle 条件 active_connections==0（server.zig:1493-1497）
+      // 在发生过 server-initiated close 的进程里**不可达** ⇒ await（含 5s race）
+      // 只是白等。native 关闭（stopListening → app.close → us_socket_context_close
+      // 逐 socket closesocket）在 stop(true) **调用内同步完成**：调用返回 = 关闭
+      // 已完成，立即推进 lock.release → process.exit。CLOSING 残留已由
+      // terminate 预关消除（app.close 无半闭 WS 可搅 ⇒ 不再 native 卡死）；
+      // 万一仍同步卡死（不可静态定位帧），B 看门狗 30s 兜底保安全。
+      // start/done 永久附分类诊断：真实未关 WS ≈ pending_ws - proxy_ws_closed
+      // （泄漏计数如实显示，差值归因；lead 修正判据）。
       const serverDiag = server as { pendingRequests?: number; pendingWebSockets?: number };
-      await raceShutdownTimeout(emit, 'platform.server.stop', () => server.stop(true), 5_000, {
+      emit('info', SHUTDOWN_STEP_EVENT, {
+        step: 'platform.server.stop',
+        status: 'start',
         pending_requests: serverDiag.pendingRequests ?? -1,
         pending_ws: serverDiag.pendingWebSockets ?? -1,
+        proxy_ws_live: proxy.liveWsBridges,
+        proxy_ws_closed: proxy.serverClosedWs,
         aborted_inflight: abortedInflight,
       });
+      const stopStartedAt = Date.now();
+      try {
+        const stopPromise = server.stop(true);
+        emit('info', SHUTDOWN_STEP_EVENT, {
+          step: 'platform.server.stop',
+          status: 'done',
+          duration_ms: Date.now() - stopStartedAt,
+        });
+        // promise 可能永不 resolve（计数泄漏）；只挂 catch 防 unhandled rejection。
+        void stopPromise.catch(() => undefined);
+      } catch (error) {
+        emit('warn', SHUTDOWN_STEP_EVENT, {
+          step: 'platform.server.stop',
+          status: 'failed',
+          duration_ms: Date.now() - stopStartedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
     },
   };
 }

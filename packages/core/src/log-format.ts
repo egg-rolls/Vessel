@@ -195,6 +195,10 @@ export const EVENT_FIELDS: Record<string, readonly FieldSpec[]> = {
     // DR15-2：server.stop start 行永久诊断（残留等待实证归因；-1 = getter 不可用）。
     { key: 'pending_requests', kind: 'value' },
     { key: 'pending_ws', kind: 'value' },
+    // DR15-2 迭代2：WS 分类诊断——真实未关 WS ≈ pending_ws - proxy_ws_closed
+    //（Bun 1.3.9 server-initiated close 永久泄漏计数；proxy_ws_closed ≈ 泄漏量）。
+    { key: 'proxy_ws_live', kind: 'value' },
+    { key: 'proxy_ws_closed', kind: 'value' },
     { key: 'aborted_inflight', kind: 'value' },
     { key: 'error', kind: 'text' },
   ],

@@ -24,6 +24,14 @@ import type { PlatformProxyLimits } from './proxy-config.js';
 export interface ProxyWsClient {
   send(data: string | Uint8Array): number;
   close(code?: number, reason?: string): void;
+  /**
+   * DR15-2 迭代2：Bun 1.3.9 ServerWebSocket.terminate()（立即 us_socket_close，
+   * 无 close 帧握手）。server-initiated 关闭一律优先用它——graceful close()
+   * 在对端不 echo（冻结浏览器）时留 CLOSING 残留，stop(true) 的 native 收尾
+   * 会被 CLOSING socket 卡死（ISSUE-DR15-2）。client 侧 WebSocket 无此方法时
+   * 退回 close()（upstream 不计 pendingWebSockets，graceful 无害）。
+   */
+  terminate?(): void;
   getBufferedAmount(): number;
   ping(data?: string): void;
 }
@@ -124,6 +132,13 @@ export interface ProxyWsBridgeOptions {
   releaseBytes: (bytes: number) => void;
   /** 记账出口（`gateway.ws.closed` 等）；由组合层决定打到哪。 */
   log: (fields: Record<string, unknown>) => void;
+  /**
+   * DR15-2 迭代2：server-initiated downstream 关闭计数 hook（诊断用）。
+   * Bun 1.3.9 的 onClose 对 was_closed（JS 先置 flags.closed）不减
+   * active_connections ⇒ 每次 server-initiated close 永久泄漏 1 计数；
+   * 累计值 ≈ pendingWebSockets 里的泄漏量，供 stop 诊断差值归因。
+   */
+  onServerClose?: () => void;
   /** 可注入的 WS 客户端工厂（探针用）；缺省用全局 `WebSocket`。 */
   connect?: (url: string, headers: Record<string, string>) => ProxyWsUpstream;
   now?: () => number;
@@ -624,16 +639,25 @@ export class ProxyWsBridge {
     if (total > 0) this.release(total);
   }
 
-  private closeQuietly<T extends { close(code?: number, reason?: string): void }>(
-    target: T | undefined,
-    code?: number,
-    reason?: string,
-  ): void {
+  private closeQuietly<
+    T extends { close(code?: number, reason?: string): void; terminate?(): void },
+  >(target: T | undefined, code?: number, reason?: string): void {
     if (target === undefined) return;
     try {
-      target.close(code, reason);
+      // DR15-2 迭代2：优先 terminate()（立即 us_socket_close，无握手）——
+      // graceful close() 在对端不 echo 时留 CLOSING 残留（idleTimeout 兜底被
+      // native 卡死饿死），stop(true) 收尾被 CLOSING socket 卡死。terminate
+      // 必须在任何 graceful close 之前：close() 先置 flags.closed，之后
+      // terminate() 是 no-op（Bun 1.3.9 ServerWebSocket.zig:1095-1110）。
+      if (typeof target.terminate === 'function') target.terminate();
+      else target.close(code, reason);
     } catch {
       // 已关闭的对端不再重试。
+    }
+    // 累计 server-initiated downstream close（≈ Bun 计数泄漏量；已闭 socket
+    // 上 terminate no-op 会略多计，诊断口径为近似归因，不影响行为）。
+    if (this.client !== undefined && (target as unknown) === (this.client as unknown)) {
+      this.options.onServerClose?.();
     }
   }
 

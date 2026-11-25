@@ -254,6 +254,12 @@ export class PlatformProxy {
    */
   private readonly inflightAborts = new Set<AbortController>();
   private wsOpened = 0;
+  /**
+   * DR15-2 迭代2：累计 server-initiated downstream WS close 计数。
+   * Bun 1.3.9 对这类关闭永久泄漏 active_connections（onClose was_closed 不减），
+   * 此值 ≈ pendingWebSockets 中的泄漏量；stop 诊断用差值归因真实残留。
+   */
+  private wsServerClosed = 0;
   private wsRejected = 0;
   private httpRequests = 0;
   private httpFailures = 0;
@@ -692,6 +698,9 @@ export class PlatformProxy {
       reserveBytes: (bytes) => this.reserveBytes(bytes),
       releaseBytes: (bytes) => this.releaseBytes(bytes),
       log: (fields) => this.log(fields),
+      onServerClose: () => {
+        this.wsServerClosed += 1;
+      },
       ...(this.deps.connectWs !== undefined ? { connect: this.deps.connectWs } : {}),
       ...(this.deps.now !== undefined ? { now: this.deps.now } : {}),
     };
@@ -757,6 +766,16 @@ export class PlatformProxy {
     }
     this.inflightAborts.clear();
     return count;
+  }
+
+  /** DR15-2 迭代2 诊断：stop 时仍存活的 proxy bridge 数（真实未关 WS 的上界）。 */
+  get liveWsBridges(): number {
+    return this.bridges.size;
+  }
+
+  /** DR15-2 迭代2 诊断：累计 server-initiated downstream close（≈ Bun 计数泄漏量）。 */
+  get serverClosedWs(): number {
+    return this.wsServerClosed;
   }
 
   /** 测试 / 探针用的显式拆除（与 `closeAll` 同义，语义更明确）。 */
