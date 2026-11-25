@@ -6,12 +6,15 @@
 > [`docs/versions/CURRENT.md`](docs/versions/CURRENT.md)。
 >
 > 变更记录遵循 [Keep a Changelog](https://keepachangelog.com/)。
-> 0.x 阶段：breaking 变更走 minor，功能点/新功能走 patch（第三位 +1），修复走 patch；minor 留里程碑收口。
+> 0.x 阶段：特性批次晋升 → minor +1（patch 归零）；纯修复晋升 → patch +1；major 留用户里程碑。
+> 版本号只在晋升 main 时 bump（用户裁决 2026-11-25，覆盖旧规）。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
-## [0.56.1] - 未发布
+## [0.58.0] - 2026-11-25
 
-> 红蓝开发首轮晋升（金丝雀验收后合入 main）。**功能点起 patch 递增**（用户裁决 2026-11-24，见 RELEASE §1）。
+> 第二轮晋升（四特性：msg-visibility/chat-index/skills-ui+grid-fix/hire-prompt，main 3953a92e）。
+> 第一轮 0.57.0（六特性：from-card/ui-polish/leak/plugin-default-on/AX×3/inbox-ux，main ab63936d）。
+> 版本约定：特性批次晋升→minor，纯修复→patch，绑定晋升事件（RELEASE §1，用户裁决 2026-11-25）。
 
 ### 破坏性（升级须知）
 

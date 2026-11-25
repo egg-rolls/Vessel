@@ -20,11 +20,16 @@ paths: [.github/workflows/release.yml, .github/actions/quality/action.yml, packa
 > 为准 —— 原先用来枚举它的 `smoke-install` 脚本已按宪法删除）；`apps/web` 是 private，不发布。根 CLI 的发布名是 **`vessel-agent`**
 > （bin 仍是 `vessel`），必须在所有子包之后发布。发布账号需要对 `vessel-agent` npm 组织有写权限。
 
-## 1. 版本语义
+## 1. 版本语义（用户裁决 2026-11-25，覆盖 2026-11-24 旧规）
 
 - 采用 SemVer：`MAJOR.MINOR.PATCH`。
-- alpha 阶段（`0.x`）：breaking 变更 → minor（`0.1` → `0.2`）；**功能点/新功能 → patch（第三位 +1，如 `0.56.0` → `0.56.1`）**；修复 → patch。minor 留给里程碑/阶段收口（届时 patch 归零），避免第二位无限增长（用户裁决 2026-11-24）。
+- **版本号 = 生产发布身份，只在晋升 main 时 bump**（redblue-dev 开发提交不动版本号）。
+- **Major (0→1)**：用户宣布里程碑（「vessel 1.0 稳定」）。0.x 阶段 breaking 变更预期内，不单独 bump major。
+- **Minor (+1)**：每次**特性批次晋升 main**（一批验证通过的新特性落地生产）。patch 归零。
+- **Patch (+1)**：**纯修复晋升**（无新特性，只 bug fix / 样式修正 / 文档）。
+- 晋升 checklist：`git merge --ff-only` → bump package.json version → CHANGELOG 条目 → git tag `v<version>` → 通知用户重启。
 - 预发布：`v<version>-beta.1`，npm dist-tag 用 `beta`；稳定版用 `latest`。
+- 追溯：0.56.1（起点）→ 0.57.0（第一轮六特性晋升 ab63936d）→ 0.58.0（第二轮四特性晋升 3953a92e）。
 
 ## 2. 发布前置条件
 
