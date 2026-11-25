@@ -1,5 +1,12 @@
 /**
- * 「待批」里的一簇：同一 agent / 会话的多次 ask 聚在一起。
+ * 「待批」里的一簇：同一 agent / 会话的 permission 审批 + ask 提问聚在一起。
+ *
+ * 混合渲染（用户指示：权限卡也汇集进待批页）：
+ * - permission 项**原样复用 PermissionCard**（TeamPendingBar 同款先例），逐条裁决、
+ *   不进批量勾选（安全口径）；onDecide → respondPermission，失败收口（toast + hydrate
+ *   一致化）内置其中，与 composer 槽位完全同语义；run_ended / orphaned 的卡随
+ *   hydrate 自然消失，这里不做额外清理；
+ * - ask 题块保持原样：逐题勾选 + 分批提交（usePendingBatch），见下。
  *
  * - 折叠时只显示摘要与计数（列表态）；
  * - 展开后逐条显示问题正文（文本 / 同源图片 / 链接）、选项与自由输入；
@@ -30,6 +37,8 @@ import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { AskUserQuestion } from '../../gateway/types';
 import { t } from '../../i18n';
+import { PermissionCard } from '../chat/PermissionCard';
+import { permissionInputSummary } from '../team/TeamPendingBar';
 import { AnsweredGroup } from './AnsweredGroup';
 import { AskOptionChips } from './AskOptionChips';
 import { useAskDrafts, useDropAskDrafts, useSetAskDraft } from './ask-draft-store';
@@ -44,11 +53,18 @@ function shortId(value: string): string {
   return value.length > 16 ? `${value.slice(0, 16)}…` : value;
 }
 
-/** 折叠态的一行预览：第一条提问的 header + 正文。 */
+/** 折叠态的一行预览：簇内第一条（permission = 工具 + 参数摘要；ask = 首题 header + 正文）。 */
 function collapsedPreview(cluster: PendingCluster): string {
-  const first = cluster.requests[0]?.questions[0];
+  const first = cluster.items[0];
   if (first === undefined) return '';
-  return `${first.header}: ${first.question}`;
+  if (first.kind === 'permission') {
+    // 摘要复用 TeamPendingBar 的 permissionInputSummary（含 serializeInput 的 20k 安全上限）。
+    const summary = permissionInputSummary(first.request.input);
+    const label = t('pending.queue.permission', { tool: first.request.tool });
+    return summary.length > 0 ? `${label}: ${summary}` : label;
+  }
+  const question = first.request.questions[0];
+  return question === undefined ? '' : `${question.header}: ${question.question}`;
 }
 
 /** 问题正文：文本 + 同源图片 + 链接（远程图片由 CSP 拦截，统一降级成链接）。 */
@@ -189,16 +205,24 @@ export function PendingClusterCard({
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const { respondAsk, responding } = useConnection();
+  const { respondAsk, respondPermission, responding, connectionState, hasToken } = useConnection();
   const { busyKey, submit } = usePendingBatch(respondAsk);
   const busy = busyKey === cluster.key;
+  // 断线禁用权限动作（与 composer 槽位 / TeamPendingBar 同一口径）。
+  const connected = connectionState === 'open' && hasToken;
   // 草稿不再是组件 state：切页 / 刷新回来还在（见 ask-draft-store 头注释）。
   const drafts = useAskDrafts();
   const setDraft = useSetAskDraft();
   const dropDrafts = useDropAskDrafts();
 
+  /** 簇内的 ask 部分：题块 / 勾选 / 批量提交只作用于它们；permission 逐条裁决不进批量。 */
+  const askRequests = useMemo(
+    () => cluster.items.flatMap((item) => (item.kind === 'ask' ? [item.request] : [])),
+    [cluster.items],
+  );
+
   /** 全部问题的扁平视图：勾选、计数、投递计划都按「题」算，不按 request 绑死。 */
-  const rows = useMemo(() => askPlanRows(cluster.requests, drafts), [cluster.requests, drafts]);
+  const rows = useMemo(() => askPlanRows(askRequests, drafts), [askRequests, drafts]);
 
   /**
    * 每个请求的「未答 / 已答」两摞（0.52）：未答置顶，已答收进默认折叠的分组。
@@ -208,14 +232,14 @@ export function PendingClusterCard({
    */
   const rowGroups = useMemo(() => {
     const byRequest = new Map<string, ReturnType<typeof askRowGroups>>();
-    for (const request of cluster.requests) {
+    for (const request of askRequests) {
       byRequest.set(
         request.requestId,
         askRowGroups(rows.filter((row) => row.requestId === request.requestId)),
       );
     }
     return byRequest;
-  }, [cluster.requests, rows]);
+  }, [askRequests, rows]);
 
   /** 本次回复的投递计划：按 request 分组（同一请求的几题合成一次 `ask.respond`）。 */
   const plan = useMemo(() => {
@@ -299,7 +323,7 @@ export function PendingClusterCard({
       ? t('pending.cluster.agent', { id: shortId(cluster.agentId ?? '') })
       : cluster.scope === 'session'
         ? t('pending.cluster.session', { id: shortId(cluster.sessionId ?? '') })
-        : t('pending.cluster.run', { id: shortId(cluster.requests[0]?.runId ?? '') });
+        : t('pending.cluster.run', { id: shortId(cluster.items[0]?.request.runId ?? '') });
   /**
    * 归属会话（0.51）：成员 bridge 的请求「发起会话」是成员自己的，真正算谁的是父会话。
    * 只在两者不同（且确实解析出了父会话）时多标一行，避免普通会话的卡片上多一句废话。
@@ -316,8 +340,8 @@ export function PendingClusterCard({
         <span className="inline-flex flex-wrap items-center gap-2">
           {clusterLabel}
           <CountBadge
-            count={cluster.requests.length}
-            label={t('pending.cluster.count', { count: cluster.requests.length })}
+            count={cluster.items.length}
+            label={t('pending.cluster.count', { count: cluster.items.length })}
           />
           <Badge tone={cluster.source === 'team' ? 'info' : 'neutral'}>
             {cluster.source === 'team' ? t('pending.source.team') : t('pending.source.session')}
@@ -335,7 +359,8 @@ export function PendingClusterCard({
           <Button size="small" onClick={onToggle} aria-expanded={expanded}>
             {expanded ? t('pending.cluster.collapse') : t('pending.cluster.expand')}
           </Button>
-          {expanded && (
+          {/* 全选 / 批量回复只服务 ask 题块；纯 permission 簇没有批量动作（逐条裁决）。 */}
+          {expanded && askRequests.length > 0 && (
             <label className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-muted">
               <input
                 className="accent-accent"
@@ -352,7 +377,7 @@ export function PendingClusterCard({
               {t('pending.submit.count', { count: includedCount })}
             </span>
           )}
-          {expanded && (
+          {expanded && askRequests.length > 0 && (
             <Button variant="primary" size="small" disabled={!canSubmit} onClick={handleSubmit}>
               {busy ? t('pending.submit.busy') : t('pending.submit')}
             </Button>
@@ -362,7 +387,34 @@ export function PendingClusterCard({
     >
       {expanded ? (
         <div className="flex flex-col gap-3">
-          {cluster.requests.map((request) => {
+          {cluster.items.map((item) => {
+            if (item.kind === 'permission') {
+              const request = item.request;
+              const pendingRespond = responding.has(request.requestId);
+              return (
+                <div
+                  key={request.requestId}
+                  className="flex flex-col gap-2 rounded-md bg-raised p-3 shadow-elev-1"
+                >
+                  <div className="flex flex-wrap items-center gap-2 text-2xs text-faint">
+                    <span className="font-mono tabular-nums">run {shortId(request.runId)}</span>
+                    <span className="tabular-nums">{formatTimestamp(request.requestedAt)}</span>
+                    {pendingRespond && <span>{t('pending.item.responding')}</span>}
+                  </div>
+                  {/* 卡面原样复用 PermissionCard（禁自建）：busy 逐项、断连禁用；
+                      失败 / run 终态收口由 respondPermission 内置，与槽位同语义。 */}
+                  <PermissionCard
+                    request={request}
+                    busy={pendingRespond}
+                    connected={connected}
+                    onDecide={(decision, scope) => {
+                      void respondPermission(request.requestId, decision, scope);
+                    }}
+                  />
+                </div>
+              );
+            }
+            const request = item.request;
             const pendingRespond = responding.has(request.requestId);
             const requestDisabled = busy || pendingRespond;
             const groups = rowGroups.get(request.requestId) ?? { open: [], answered: [] };

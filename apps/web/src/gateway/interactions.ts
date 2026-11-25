@@ -48,6 +48,7 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
     session_id?: unknown;
     parent_session_id?: unknown;
     parent_agent_id?: unknown;
+    team_id?: unknown;
     tool_call_id?: unknown;
     source?: unknown;
   };
@@ -67,6 +68,10 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
       : {}),
     ...(typeof data.parent_agent_id === 'string' && data.parent_agent_id.length > 0
       ? { parentAgentId: data.parent_agent_id }
+      : {}),
+    // 与 askFromEvent 同口径：团队归属 additive 携带，待批页来源面判定用。
+    ...(typeof data.team_id === 'string' && data.team_id.length > 0
+      ? { teamId: data.team_id }
       : {}),
     ...(typeof data.tool_call_id === 'string' && data.tool_call_id.length > 0
       ? { toolCallId: data.tool_call_id }

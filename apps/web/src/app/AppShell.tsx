@@ -110,10 +110,10 @@ export function AppShell() {
     [permissions, route],
   );
   const otherAsks = useMemo(() => pendingPermissionsOutsideView(asks, route), [asks, route]);
-  // 侧栏「待批」计数：只数 ask（权限通道仍独立走自己的入口）。
+  // 侧栏「待批」计数：permission + ask 全算 —— 待批页是两者的总汇集，badge 与页面内容一致。
   const navCounts = useMemo<Partial<Record<PrimaryDomain, number>>>(
-    () => ({ pending: asks.length }),
-    [asks],
+    () => ({ pending: permissions.length + asks.length }),
+    [permissions, asks],
   );
   // compact bar 只跳会话；应答仍在目标会话的 Composer 槽位完成。
   const openPendingSession = useCallback(
