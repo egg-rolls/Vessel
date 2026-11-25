@@ -10,7 +10,8 @@
  *   见 `plugins/media/media/src/tool.ts`），**不是** `media.read` 这种点号方法名。
  *   曾经这里写死 `(use media.read)`，模型照字面调 → 「工具不存在」，附件永远读不到。
  *   **不要再把工具名写成 media.read**（2026-11 真实误用过）。
- * - media 是 opt-in 插件（`OPT_IN_PLUGINS`），未启用时模型侧**根本没有**这个工具；
+ * - media 自 0.56.1 起**默认加载**（用户裁定「安装的插件默认开启」，OPT_IN_PLUGINS 已清空）；
+ *   只有显式 `enabled: false` 关掉时模型侧才**根本没有**这个工具；
  *   此时再让它「use media」是把它推向必然失败。所以尾注分三档，且可用性由装配层传入
  *   （`createRefsNoticeHook({ mediaSurface })`），本模块不猜。
  * - **动作列表也不是全集**（0.51 #7）：media 插件按**实测到的后端**决定 schema 里
@@ -96,7 +97,7 @@ export const MEDIA_TOOL_NAME = 'media';
 export type MediaSurface =
   /** 工具在，且 schema 里读到了非空动作列表（按 schema 里的真实顺序） */
   | { readonly availability: 'actions'; readonly actions: readonly string[] }
-  /** 工具不在（插件没启用 / 零可用后端因此没注册工具） */
+  /** 工具不在（插件被显式 enabled:false 关掉） */
   | { readonly availability: 'absent' }
   /** 说不清：没有探针、schema 没有 enum、或探针自己抛错 */
   | { readonly availability: 'unknown' };
@@ -150,7 +151,7 @@ export function readMediaSurface(tools: readonly ToolDefinition[]): MediaSurface
 }
 
 /**
- * media 确定不可用（插件没启用 / 没装后端因此没注册工具）：
+ * media 确定不可用（插件被显式 enabled:false 关掉）：
  * 只说明「正文没进上下文」和怎么开，**绝不点名一个不存在的工具**。
  */
 const TAIL_MEDIA_UNAVAILABLE =

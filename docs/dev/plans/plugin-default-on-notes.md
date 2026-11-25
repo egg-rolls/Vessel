@@ -199,3 +199,28 @@ plugin-loader.ts:58-76 注释给出的理由：refs-pipeline.md §4 契约要求
 | 面板基础行 | src/cli.ts:1435-1457；src/runtime/bootstrap.ts:2084-2095 |
 | catalog 缺行即不可见 | packages/serve/src/plugin-host/catalog.ts:132-137 |
 | refs 提示的 media 依赖 | src/data/refs-notice-hook.ts:13 |
+
+## 8. 裁定与实施记录（步骤②）
+
+**main 裁定（方案 B 批准）**：plugins: 改覆盖层语义——默认集（全部已安装）恒为底，
+显式条目只覆盖（enabled:false 排除 / 列入=启用 / 未列入=走默认）；setPluginEnabled
+不再物化全量；media 删 OPT_IN 名转默认；结构性排除保留（§2.2/§2.3 名单获准）；
+child 口径对齐 + 面板可见性；旧契约注释更新 + CHANGELOG 口径，存量部分清单行为变化
+列金丝雀重点回归项。
+
+实施映射（小步提交）：
+
+| 步 | 内容 | 落点 |
+| --- | --- | --- |
+| ②-a | 覆盖层语义核心 + media 转默认 | plugin-selection.ts（契约注释重写 + 默认集恒为底 + 覆盖循环）；plugin-loader.ts（OPT_IN_PLUGINS 清空，转默认论证照 web-tools 格式） |
+| ②-b | 物化修复 + child 口径对齐 | plugin-config.ts（setPluginEnabled 删 allNames 物化；新增共享判定 pluginEntryEnabled）；plugin-command.ts（enable/disable 只写单条；pluginEnabledByConfig 委托共享判定；install 提示改「默认装载/显式关才需 enable」）；plugin-host-assembly.ts（pluginEnabledInConfig 委托共享判定） |
+| ②-c | 注释/文档同步 | refs-notice-hook.ts（media 依赖注释改默认加载，三档逻辑不动——事实驱动）；docs/agents/plugins.md media 节；docs/operations/CONFIG.md 覆盖层语义条；CHANGELOG 0.56.1 破坏性节 + child 口径修复条 |
+| ③ | 面板可见性 + 显示一致 + build 总门禁 + 总报告 | cli.ts / bootstrap.ts 基础行补「发现但未装载」行；待验点清单 |
+
+语义要点（实施后）：
+- `plugins: []` = 完整默认集（旧语义空集，破坏点已登记 CHANGELOG）。
+- 显式 enabled:true 可救回默认集排除项（hook-logging、opt-out 挡下的外部插件）——
+  「显式列表即信任」旧契约保留；显式列入的外部插件不计启动告警（旧契约保留）。
+- 声明式 guardrails/hooks 与显式条目的裁决关系不变（显式 enabled 最终裁决）。
+- 结构性排除不变：provider / FACTORY_PLUGINS / hook-logging（debug）/ child（宿主 spawn）。
+- 版本位：breaking→minor 的收口裁定归发布（RELEASE §1），本切片不动版本号。

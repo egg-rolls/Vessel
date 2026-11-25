@@ -56,11 +56,11 @@ applies_to: [N, M]
 - skills 就是文件，经消息进来；不写 harness 层的扫描 / 解析 / 注入通道。
 - `team_*` / `delegate_task` 已删除；evals / feishu / MCP 只做插件，不进 core（ADR-043/044/090）。
 
-## 多模态解析器（`media`，opt-in）
+## 多模态解析器（`media`，默认加载）
 
 - `plugins/media/media`：单个 `media` 工具（`action = read | ocr | describe`，`path` 必填，`page` / `frames` 可选）。`read` 直读文本、PDF 走 `pdftotext`；`ocr` 走 `tesseract`；`describe` 需装配层注入多模态 bridge，未配置时明确报错、不降级。路径边界复用 basic-tools 的 `evaluatePath` / `allowed_roots`；单文件 20 MiB，单次输出 32 KiB（超出标 `truncated`）。
-- **不在默认集**（`OPT_IN_PLUGINS`）：只在 `config.yaml` 显式出现才加载；`install` 阶段探测后端，`pdftotext` / `tesseract` / describe bridge 全缺时不注册工具（schema 不进 prompt）。第三方 CLI 只检测不安装。
-- 启用：`plugins: [{ name: media, config: { allowed_roots: ["~/work"] } }]`（可选 `pdftotext` / `tesseract` 指向可执行文件、`ocr_language`、`max_output_bytes` 等，只能收紧上限）。改完的配置在  热应用时会被重新 install（boundary / 后端探测都重跑）；能力插件本身不做热卸载，所以**新增/移除插件**仍需重启进程。
+- **在默认集**（0.56.1 语义翻转，用户裁定「安装的插件默认开启」；`OPT_IN_PLUGINS` 已清空）：装上即加载，无需写 `plugins:`。`install` 阶段探测后端，`view` / `read`（文本）恒可用、零外部后端；零 CLI 后端时 warn 一次并注册缩减版工具（action enum 按实测后端收缩），不崩不刷屏。第三方 CLI 只检测不安装。想关：`plugins: [{ name: media, enabled: false }]`。
+- 配置（可选）：`plugins: [{ name: media, config: { allowed_roots: ["~/work"] } }]`（可选 `pdftotext` / `tesseract` 指向可执行文件、`ocr_language`、`max_output_bytes` 等，只能收紧上限）。覆盖层语义下该条目只覆盖 media 自身，不影响其它插件的默认加载。改完的配置在热应用时会被重新 install（boundary / 后端探测都重跑）；能力插件本身不做热卸载，所以**新增/移除插件**仍需重启进程。
 - **边界默认继承 basic-tools**：`media` 自己没配 `allowed_roots` / `deny_paths` 时，装配层（`buildPluginConfigMap`）把 `basic-tools` 的那份填进来 —— 同一个 `allowed_roots` 下，`read` 越界 ask 的行为在 `media` 上一致，不会出现「同一份策略两条工具两条命」。优先级：**media 自身 > basic-tools 回落**；显式空数组（`allowed_roots: []`）= 明确不限制根，不会被回退覆盖。合并只在装配层做：插件 `install` 只拿得到自己那份 config，`PluginHost` 没有 config getter。
 
 ## 指针
