@@ -469,6 +469,11 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     ],
   },
   {
+    token: 'fleet',
+    registryName: 'fleet',
+    subcommands: [{ name: 'status', flags: ['--json', '--data-dir', '--help'] }],
+  },
+  {
     token: 'dev',
     registryName: 'dev',
     subcommands: [{ name: 'reset', flags: ['--yes', '--dry-run', '--json', '--data-dir'] }],

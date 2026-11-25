@@ -28,6 +28,7 @@ import { doctorCommand } from './commands/doctor-command';
 import { errorsCommand } from './commands/errors-command';
 import { runEvalCommand } from './commands/eval-command';
 import { runFederationCommand } from './commands/federation';
+import { fleetStatusCommand } from './commands/fleet/fleet-status-command';
 import { statusCommand } from './commands/fleet/status-command';
 import { stopFleetCommand } from './commands/fleet/stop-command';
 import { isForegroundGatewayCommand, runGatewayCommand } from './commands/gateway/gateway-command';
@@ -479,6 +480,15 @@ export const cliCommands: readonly CliCommand[] = [
           nodeId: args.nodeTargetArg,
         }),
       );
+    },
+  },
+  {
+    name: 'fleet',
+    match: (args) => args.fleetCommand !== null && args.fleetCommand !== undefined,
+    run: async (args) => {
+      const command = args.fleetCommand;
+      if (command === null || command === undefined) return 1;
+      return printCommandResult(await fleetStatusCommand({ json: command.json }));
     },
   },
 ];

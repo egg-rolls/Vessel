@@ -377,6 +377,12 @@ export type FederationCommand =
 export type RpcCommand = { kind: 'list'; json: boolean };
 
 /**
+ * `vessel fleet ...` 子命令：本舰队一屏总览（AX 自服务 · 发现组）。
+ * 本地只读命令：不接受 targeting（--connect / --node），严格本舰队 dataDir。
+ */
+export type FleetCommand = { kind: 'status'; json: boolean };
+
+/**
  * `vessel model ...` 子命令：model-registry 插件 canonical RPC 的 CLI 包装。
  *
  * kind 与 `plugin.model-registry.<name>` 一一对应（kebab → snake 在命令层映射）。
@@ -571,6 +577,8 @@ export interface CliArgs {
    * 可选以兼容既有 parseArgs 快照测试（与 hubCommand / tokenCommand 同先例）。
    */
   rpcCommand?: RpcCommand | null;
+  /** `vessel fleet ...`（本舰队总览；可选以兼容既有 parseArgs 快照测试）。 */
+  fleetCommand?: FleetCommand | null;
   /** 0.49：`vessel dev reset [--yes] [--dry-run] [--json]` */
   devCommand: DevCommandArgs | null;
   /** 0.51：`vessel prune [--yes] [--dry-run] [--json] [--older-than <dur>]` */
@@ -811,6 +819,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'rpc' && i === 0) {
       return parseRpcArgs(argv.slice(1), args);
+    }
+    if (a === 'fleet' && i === 0) {
+      return parseFleetArgs(argv.slice(1), args);
     }
     if (a === 'hub' && i === 0) {
       return parseHubArgs(argv.slice(1), args);
@@ -5227,5 +5238,43 @@ function parseRpcArgs(rest: string[], args: CliArgs): ParseResult {
   }
   if (args.help) return { ok: true, args };
   args.rpcCommand = { kind: 'list', json };
+  return { ok: true, args };
+}
+
+// ── fleet 子命令（AX 自服务 · 本舰队总览）─────────────────────────────
+
+/** `fleet status [--json]`（本地只读；--data-dir / --user-config 走全局旗标） */
+function parseFleetArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === undefined || sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub !== 'status') {
+    return { ok: false, error: `Unknown fleet subcommand: ${sub}` };
+  }
+  let json = false;
+  for (let i = 1; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    // 与 gateway/node/doctor 同族：子命令内也认 --data-dir（写回全局字段）。
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for fleet status: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.fleetCommand = { kind: 'status', json };
   return { ok: true, args };
 }

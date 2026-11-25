@@ -239,6 +239,7 @@ export const CLI_HELP_GROUPS: Readonly<Record<string, MessageKey>> = {
   dev: 'help.group.dev',
   federation: 'help.group.federation',
   'federation peer': 'help.group.federationPeer',
+  fleet: 'help.group.fleet',
   gateway: 'help.group.gateway',
   'gateway nodes': 'help.group.gatewayNodes',
   hub: 'help.group.hub',
@@ -307,6 +308,9 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     flags: ['--json', '--node', '--connect', '--connect-token', '--ca'],
     flagValue: { '--node': '<id>' },
   },
+
+  // ── fleet（AX 自服务 · 本舰队一屏总览；本地只读）──
+  { path: ['fleet', 'status'], summary: 'help.cmd.fleetStatus', flags: ['--json', '--data-dir'] },
 
   // ── model（model-registry RPC 包装；连接 flag 与 status / agents 同形）──
   { path: ['model', 'list'], summary: 'help.cmd.modelList', flags: MODEL_FLAGS },
