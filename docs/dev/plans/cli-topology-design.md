@@ -162,4 +162,87 @@ hub 子进程**不**设 VESSEL_DATA_DIR（node-supervisor.ts:1170，必须用 hu
   是 graceful-restart-design.md 的设计面，本文 §5 的「默认优雅不限时」以该文档为地基接线，不另造语义。
 - 停止方超时现状汇总：stopGateway 等死 10s；stopSpawnedChildren 优雅等死 10s（GRACEFUL_SHUTDOWN_TIMEOUT_MS）
   + 强杀等死 timeoutMs；node stop 优雅 10s + 强杀 10s；fleet stop 缺省 DEFAULT_STOP_TIMEOUT_MS=10s。
-  昨日金丝雀 restart 坑根源 = 这些 10s 预算在长 drain 面前必然超时 → stopCode=1 → restart 中止不 start。
+  昨日金丝雀 restart 坑根源 = 这些 10s 预算在长 drain 面前必然超时 → stopCode=1 → restart 中止不 start。## 2. 目标命令矩阵（现状 → 目标）
+
+> 原则：**舰队层薄编排，组件层只管自己**。每个组件的 start/stop 都是独立可用的正规命令；
+> 舰队命令 = 检测 + 按依赖序调用这些命令的共享接缝 + 汇总。表中「优雅」均指默认路径：
+> 进程内 drain、不限时间、进度可见（§5.3）；`--force` 均为显式非正常退出（§5.4）。
+
+### 2.1 舰队层
+
+| 命令 | 现状 | 目标 |
+|---|---|---|
+| `vessel start` | **不存在**（未知参数） | 舰队级全量启动编排：检测本舰队组件 → 幂等（已运行跳过 / stale 对账清理 / adopt）→ 按依赖序 spawn（hub → gateway → nodes）→ 逐个健康确认 → 汇总。缺省后台化（组件各自 daemon），编排进程确认完即退出 |
+| `vessel stop` | 已存在（薄编排 → `stopGateway({keepNodes:false})`，子进程先停再停平台，缺省 10s 超时） | 递归优雅停止：检测本舰队运行中组件（gateway/node/hub）→ 按依赖序调用**各组件自己的 stop**（node drain → gateway → hub）；默认优雅不限时间 + drain 进度；`--force` 递归传播；`--yes`/`--connect` 保留 |
+| `vessel restart` | **不存在** | stop + start 编排（代替 `gateway restart --stop-nodes`）；stop 未全成 → 不 start；`--force` 传播到 stop 段 |
+| `vessel status` | 已存在（只读清点） | 保留；输出补「组件级」视图（gateway/node/hub 各自状态行），与 stop 清点同口径（§5.1） |
+
+### 2.2 组件层
+
+| 命令 | 现状 | 目标 |
+|---|---|---|
+| `vessel gateway start [--daemon]` | 平台 bind + spawn auto_start nodes + 拉起 hub（事实全量启动） | **只启动平台进程**：守卫 → bind → 写 platform.pid。不 spawn node/hub；adopt 仅为只读检测/登记（代理需要）。前台/daemon 双模式保留 |
+| `vessel gateway stop` | 缺省只停平台（keepNodes handoff）；`--stop-nodes` 连 node/hub 一起停 | **只停平台进程**，永不碰 node/hub（keepNodes 概念消失——本来就不碰）。graceful-first 保留（`gateway.shutdown` RPC → 等死），默认不限时 + 进度；`--force` 强杀 + 审计。`--stop-nodes`/`--keep-nodes`/`--no-keep-nodes` 弃用（§8） |
+| `vessel gateway restart` | stop + start；缺省 keep nodes 待 adopt；`--stop-nodes` 冷重启全舰队 | **平台-only 热替换**（stop 平台 → start 平台；node/hub 天然保活，新平台 adopt 登记）。`--stop-nodes` 弃用 → warning + 等价映射 `vessel restart` |
+| `vessel gateway reload/status/list/nodes …` | 已存在 | 不变（reload 是热加载不是重启；nodes 是 registry 管理面） |
+| `vessel node start [--daemon] [--config]` | 独立 node；托管场景由平台 spawn | 不变；成为编排层 spawn node 的正规接缝（§4.3）。多 node 寻址接口预留 `--node <name>`（§10） |
+| `vessel node stop` | managed → 拒绝（exit 1）；独立 → 优雅 10s → 强杀 | **默认优雅不限时 + 进度；`--force` 强杀 + 审计**。解除 managed 拒绝（改提示行「由平台实例 X 托管；只停本 node」）；supervisor/watchdog 对有意停止不 respawn（§6.2） |
+| `vessel node status/reload/token` | 已存在 | 不变 |
+| `vessel hub start …` | 已存在（start/directory/watch/join/…） | 不变 |
+| `vessel hub stop` | **不存在** | 新增：默认优雅（停受理 + flush + 退出，hub 无 run 面）+ `--force`；寻址 = `config.hub.dataDir` 或 `<dataDir>/hub` 的 hub.lock（§6.3） |
+
+### 2.3 选择器与参数口径
+
+- 实例选择器 `--instance / --port / --all` 语义不变（args.ts GatewaySelector）；
+  **`--all` 恒 = 本舰队 dataDir 内全部实例**，绝不跨 dataDir（§3）。
+- 舰队层缺省 = 本舰队全量（stop 已有先例：空选择器归一 `{all:true}`，args.ts:2862-2871）；
+  start/restart 同口径。
+- `--timeout <dur>`：从「缺省 10s 硬预算」改为**可选显式上限**（缺省 = 不限时）。
+  显式给了 --timeout 而超时 → 不自动强杀，如实报告阻塞者并提示升级阶梯（§5.5）；
+  这与 graceful-restart-design D5「超时中止不硬杀」同哲学。
+- `--force`：舰队层递归传播到每个组件 stop 的 force；组件层只作用于自己。
+- `--yes`：跳过确认（stop/restart 保留现有 S3 规则：非交互无 --yes 拒绝）。
+- `--connect`（远程 stop）：P1 不动（远程不强杀、生命周期强杀恒本机的既有边界保留）。
+
+## 3. 舰队边界（dataDir 解析链与 env 继承教训）
+
+### 3.1 解析链与边界定义
+
+舰队 = **一次命令解析出的 dataDir 所圈定的状态文件集合**：
+`resolveDataDir(config, env)`（src/data/data-paths.ts:41）= `config.dataDir` > `VESSEL_DATA_DIR` env 兜底 > 缺省根。
+config 来自 `--user-config <path>` 指定的文件（缺省 `~/.vessel/config.yaml`）；`--data-dir` 是显式覆盖。
+
+边界规则（设计约束，实现必须遵守）：
+
+1. **清点/操作严格限本舰队**：`collectGatewayState(dataDir)`、registry（`<dataDir>/nodes.json`）、
+   manifest（`<dataDir>/platform-children*.json`）、hub lock（`config.hub.dataDir` 或 `<dataDir>/hub`）
+   ——全部以解析出的 dataDir 为根。**绝不枚举兄弟舰队目录**（不 readdir 上级、不扫 `~/.vessel` 全根）。
+2. **`--all` 不越界**：allInstances 扫描（stopSpawnedChildren:587-597）只 readdir 本 dataDir 的
+   manifest 文件，现状已合规；新编排沿用同一口径。
+3. **跨舰队必须显式**：要操作另一舰队，只能显式 `--user-config <该舰队配置>` 或 `--data-dir <该舰队根>`。
+   不提供隐式「发现所有舰队」的命令（未来若需要，是另一个显式 `vessel fleets list` 提案，不在本轮）。
+4. **registry 节点的 dataDir 可以不同于舰队根**（显式 registry 节点各有自己的 data_dir，
+   node-command.ts:241 先例）——舰队成员资格由**本舰队 registry/manifest 的登记**决定，
+   不是路径包含关系。停 node 时寻址用该节点自己的 data_dir（manifest/registry 已记录），
+   但**枚举入口**恒为本舰队文件。
+5. **清点抬头必须打印解析出的 dataDir**（stop.inventory.title 已有先例），让用户在确认前
+   看见「我要动的是哪个舰队」。start/restart 同口径。
+
+### 3.2 env 继承教训的防线
+
+昨日事故：interop 进程继承宿主 `VESSEL_DATA_DIR=生产`，导致跨舰队误操作。防线分三层：
+
+- **解析层**：`VESSEL_DATA_DIR` 只是兜底（config.dataDir 优先）。舰队命令在清点抬头打印
+  生效 dataDir 与**来源**（config / --data-dir / env 兜底）；来源 = env 兜底时加一行 warning
+  「dataDir 来自继承环境变量 VESSEL_DATA_DIR，跨舰队操作请显式 --user-config」。
+- **spawn 层**：编排 spawn 子进程时**显式注入**目标组件的 dataDir（node 已有先例
+  node-supervisor.ts:1338 `VESSEL_DATA_DIR: spec.dataDir`；hub 刻意不设、用 hub.dataDir，:1170）。
+  新编排层沿用：子进程 env 里的 VESSEL_DATA_DIR 恒为**该组件自己的** dataDir，
+  绝不透传编排进程继承来的值。daemon spawn（src/gateway/daemon.ts）同口径核对。
+- **确认层**：破坏性命令（stop/restart）的 S3 确认保留；确认提示里带 dataDir，
+  非交互无 --yes 拒绝（既有规则不动）。
+
+### 3.3 与远程分支的关系
+
+`vessel stop --connect` 的远程边界不变：只认显式 flag（不认 VESSEL_CONNECT env，S1 先例）、
+registry 级清点、远程不强杀。舰队边界规则同样适用：远程目标 = 显式 URL，不做发现式扫描。
