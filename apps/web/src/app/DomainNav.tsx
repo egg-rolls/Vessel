@@ -106,11 +106,19 @@ export function DomainNav({
     });
   };
 
+  // 展开 / 收起（expanded ↔ collapsed ↔ rail）过渡 width，内容区是 flex-auto 跟随
+  // 布局逐帧让位，不需要自己再加过渡。时长走 --motion-base（200ms），不写裸毫秒。
+  // 两个例外必须瞬切：
+  // - 拖拽手柄调宽（ResizeHandle data-dragging）：preview 每帧写 --nav-w，带过渡
+  //   会落后指针 200ms，:has() 命中时关掉（键盘微调 / 双击复位仍走过渡，属预期）；
+  // - prefers-reduced-motion：base.css 已全局压掉 transition-duration，这里再显式
+  //   钉死一次（与 motion.css 的三族同做法）。
+  // 抽屉模式走上面的 transform 过渡，宽度在屏外突变，不参与 width 过渡。
   const navClass = cn(
     'flex flex-none flex-col overflow-hidden bg-surface',
     drawer
       ? 'fixed inset-y-0 left-0 z-[var(--z-drawer)] min-h-0 w-[min(86vw,var(--drawer-w))] shadow-elev-3 transition-[transform,visibility] duration-[var(--motion-ui)] ease-[var(--ease)]'
-      : 'relative min-h-0',
+      : 'relative min-h-0 transition-[width] duration-[var(--motion-base)] ease-[var(--ease)] has-[[data-dragging]]:transition-none motion-reduce:transition-none',
     drawer &&
       (open ? 'visible translate-x-0 transition-[transform]' : 'invisible -translate-x-full'),
     !drawer &&
