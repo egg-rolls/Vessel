@@ -218,6 +218,22 @@ function defaultSleep(ms: number): Promise<void> {
 }
 
 /**
+ * force/崩溃的有疤恢复卡（runlost-graceful-restart-audit §4.5，补 G1 后半）。
+ *
+ * SIGKILL 无可执行代码 ⇒ 没有 resume 标记（G1），启动恢复扫不到任何卡。
+ * liveness sweep 把 running 残留对账成 interrupted（repaired 集合）后，至少「说得清」：
+ * 如实告知进程非正常退出、工具结果未知，先核对现状。不伪造「重启成功/工具已完成」。
+ * 有 pending 可直投条目时随后由 startupDispatchSweep 点火（卡随那轮 run 注入）。
+ */
+export function abnormalExitCardText(locale: Locale = getLocale()): string {
+  return formatEnvInfo({
+    scope: 'restart',
+    summary: tIn(locale, 'resume.abnormal.summary'),
+    details: [tIn(locale, 'resume.abnormal.verify_first'), tIn(locale, 'resume.abnormal.pending')],
+  });
+}
+
+/**
  * 造一个启动恢复执行器。
  *
  * 只依赖注入进来的四件事（会话仓库 / 事件日志 / 发卡 / 清标记 + 重放），自己不做 IO。
@@ -254,7 +270,11 @@ export function createNodeResumer(sources: NodeResumeSources): NodeResumer {
     for (const state of loaded) {
       if (state !== null) states.push(state);
     }
-    return restartCandidates(states);
+    // 自重启 Option A：带 continuation 的标记归 node-continuation 管（无感续作），
+    // 这里跳过——happy path 零疤痕，不发有疤恢复卡。
+    return restartCandidates(states).filter(
+      (candidate) => candidate.marker.continuation === undefined,
+    );
   }
 
   /** 这张卡在事件日志里发过没有（发过就不发第二张）。 */

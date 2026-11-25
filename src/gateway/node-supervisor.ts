@@ -447,9 +447,9 @@ export interface DrainSkippedInfo {
 /**
  * 终止 node 子进程前先试优雅关闭（P0-run-stops P1）。
  *
- * Windows 上外部 `process.kill` 是无条件终止，进程内 drain（写 resume 标记 +
- * interrupt('shutdown')）永远跑不到 —— 这里先经 `gateway.shutdown` 请 node 自己跑
- * 现成的 shutdownServeStack，再在预算内等它自死。**只有确认死亡才返回 dead=true**；
+ * Windows 上外部 `process.kill` 是无条件终止，进程内 drain（drain-to-quiesce：
+ * fence + 不限时等活跃 run 自然跑完）永远跑不到 —— 这里先经 `gateway.shutdown`
+ * 请 node 自己跑现成的 shutdownServeStack，再等它自死。**只有确认死亡才返回 dead=true**；
  * 其余一律交回调用方走既有强杀回退（失败模式是「停不掉」，不是「没杀成」）。
  *
  * 寻址用子进程自己 dataDir 的 `gateway.pid`（host/port，归属已由调用方复核）；

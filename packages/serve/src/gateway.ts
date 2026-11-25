@@ -63,7 +63,12 @@ import {
   resultFrame,
   timelineEpochEndFrame,
 } from './gateway/frames.js';
-import { createAdminMethods, type GatewayReloadResult } from './gateway/methods/admin.js';
+import {
+  createAdminMethods,
+  type GatewayReloadResult,
+  type SelfRestartInput,
+  type SelfRestartResult,
+} from './gateway/methods/admin.js';
 import { createAgentMethods } from './gateway/methods/agents.js';
 import { type AttachmentLister, createAttachmentMethods } from './gateway/methods/attachments.js';
 import {
@@ -83,7 +88,11 @@ import {
   timelineHello,
 } from './gateway/timeline-protocol.js';
 
-export type { GatewayReloadResult } from './gateway/methods/admin.js';
+export type {
+  GatewayReloadResult,
+  SelfRestartInput,
+  SelfRestartResult,
+} from './gateway/methods/admin.js';
 
 import type { AgentControlLike } from './agent-control.js';
 import {
@@ -370,10 +379,16 @@ export interface GatewayOptions {
   /**
    * P0-run-stops P1：`gateway.shutdown` 的优雅退出序列（asm 注入）。
    * 缺省 = 方法仍进 manifest，但 handler 返回 `not_supported`。
-   * 注入实现 = 现成 shutdownServeStack（drain 写 resume 标记 → 关栈）+ 进程退出；
+   * 注入实现 = 现成 shutdownServeStack（drain-to-quiesce → 关栈）+ 进程退出；
    * handler 先回 `{stopping:true}` 再 defer 一拍执行，停止侧超时仍会强杀。
    */
   shutdown?: () => Promise<void>;
+  /**
+   * 自重启 Option A：`node.restart.self` 的预约实现（asm 注入）。
+   * 写 continuation 标记后立即返回；重启由 detached 编排者在触发者 run 终态后执行。
+   * 缺省 = 方法仍进 manifest，但 handler 返回 `not_supported`。
+   */
+  selfRestart?: (input: SelfRestartInput) => Promise<SelfRestartResult>;
   /**
    * CONTRACT-hot-apply §7：`permissions.setToolPolicy` 的写盘面（asm 注入）。
    * 缺省 = 方法仍进 manifest，但 handler 返回 `not_supported`。
@@ -2725,6 +2740,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createAdminMethods({
       reload: opts.reload,
       ...(opts.shutdown !== undefined ? { shutdown: opts.shutdown } : {}),
+      ...(opts.selfRestart !== undefined ? { selfRestart: opts.selfRestart } : {}),
     }),
     // 0.14 P0：agents 注册表（additive，排在表尾）。
     ...createAgentMethods({

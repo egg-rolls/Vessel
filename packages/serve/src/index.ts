@@ -141,6 +141,8 @@ export {
   type GatewayReloadResult,
   RELOAD_SCOPES,
   type ReloadScope,
+  type SelfRestartInput,
+  type SelfRestartResult,
 } from './gateway/methods/admin.js';
 export {
   type AgentMethodsDeps,
