@@ -37,7 +37,8 @@
 - **plugin-version**：内置插件恒兼容去版本门禁（5 manifest engines 删除，第三方保护保留）。
 - **skills-style**：摘 GHOST 整页误套 + 卡片 / 弹窗对齐 ToolsPanel / ModalShell 共享表面。
 - **empty-state**：错误 / 重试卡居中空态（States.tsx 一处改全局 ~30 处）。
-- **DR15-1 优雅退出挂起**（q-dr15-exit）：`server.stop(true)` Bun 1.3.9/Windows 残余活跃连接无界等待 → 5s 有界 race + best-effort 推进（平台同款）+ 永久 `node.shutdown.step` 步骤日志；等死段 30s 有界 force 兜底 + `stop.forced` 审计持久化（reason=quiesce_exit_timeout，补 O7）；候 run 段不限时（裁定 #5）不动。
+- **DR15-1 优雅退出挂起**（q-dr15-exit）：`server.stop(true)` Bun 1.3.9/Windows 残余活跃连接无界等待 → 5s 有界 race + best-effort 推进（平台同款）+ 永久 `node.shutdown.step` 步骤日志；等死段 30s 有界 force 兜底 + `stop.forced` 审计持久化（reason=quiesce_exit_timeout，补 O7）；候 run 段不限时（裁定 #5）不动。**node 侧 CLOSED✅（金丝雀 7 判据全 PASS）**。
+- **DR15-2 platform 停 30s 看门狗污染**（q-dr15-2-platform）：platform `server.stop` 因在途代理请求钉死 pending_requests + 浏览器半闭 WS（idleTimeout:0 无兜底）致 native 收尾饿死事件循环、进程内 race timer 无法发射 → stop 前预 drains（`proxy.abortInflight()` + `server.closeIdleConnections()`，0.58 预关先例扩展）使 stop 毫秒级 settle + `pending_requests/pending_ws/aborted_inflight` 永久诊断字段 + raceShutdownTimeout thunk 形（node 调用点 1 行同步改保 DR15-1）；无 30s 看门狗 / 无 abnormal_exit 污染。
 
 ### 变更
 
@@ -46,7 +47,8 @@
 
 ### 已知问题（第五轮处置）
 
-- ISSUE-DR15-1：graceful stop drain 后进程自死挂起 —— **修复已合并（03f13c06），候金丝雀 cli 复验闭环**（server.stop 有界化 + 等死段兜底 + 审计持久化）。
+- ISSUE-DR15-1：graceful stop drain 后进程自死挂起 —— **node 侧 CLOSED✅**（金丝雀 7 判据全 PASS，A/B 双路径解除）；platform 侧见 DR15-2。
+- ISSUE-DR15-2：platform 停 30s 看门狗 force + abnormal_exit 污染 —— **修复已合并（1989a938），候金丝雀 cli platform 清洁复验闭环**（预 drains 使 stop 毫秒级 settle）。
 - plugin_manifest_invalid thinking-intensity（i18n key defaultLevel 大写 L 违模式，批次 B 登记）。
 
 ## [2.0.0] - 2026-11-25
