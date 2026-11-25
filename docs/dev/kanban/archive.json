@@ -343,6 +343,15 @@
       "progress": "810da7a1完成6提交合并redblue-dev 537300a7（386c35bf inbox live触发useInboxRefresh/4b3facf2 agent卡完整路由parseAgentAddress+node-name-context/5ac1b531顶栏breadcrumb node名/f5bb30df铅笔灰色SVG/c0373511设置默认值上控件configuredFor+placeholder/d262f393 biome收口），15文件+454/-94 build绿；零服务端改动(inbox事件触发UI侧)；并发避让q-from-card文件✓；待金丝雀验6点(inbox~250ms/跨舰队卡副行/顶栏名/铅笔SVG/设置默认态/旧卡不变)；worktree已清",
       "archivedAt": "2026-11-25T09:50:00+08:00",
       "cycle": "redblue-feature-round-3"
+    },
+    {
+      "id": "q-plugin-default-on",
+      "title": "装的插件默认开启而非默认关闭（用户裁定·方案B覆盖层语义）",
+      "owner": "q-plugin-default-on",
+      "branch": "fix/q-plugin-default-on",
+      "progress": "7948e40c完成6提交合并redblue-dev ef303f81（c91b5a4f调研/1a016f02基线/d32071ba覆盖层核心+media转默认/74464c62物化修复+child口径/2f50dd2d契约登记/f2ddd735面板可见性）12文件+424/-95 build绿；方案B：默认集=全部已安装恒底,plugins:只覆盖不物化；结构性排除保留；CHANGELOG breaking节；待金丝雀验8点(新装即装载/显式关/存量部分清单重点/media idle/单条物化/child/面板/NO_EXTERNAL)；worktree已清",
+      "archivedAt": "2026-11-25T10:00:00+08:00",
+      "cycle": "redblue-feature-round-3"
     }
   ]
 }

@@ -24,10 +24,10 @@
     {
       "id": "q-ax-config",
       "title": "AX自服务·诊断组：vessel config explain + vessel doctor",
-      "column": "进行中",
-      "owner": "q-ax-config",
-      "branch": "feat/q-ax-config",
-      "progress": "56509db8派单(用户批准AX命令并行)：config explain各层provenance+winner(RPC缺则additive补config.explain)+doctor舰队体检(env卫生/stale lock/端口/peer token/node健康)；舰队边界dataDir严格；①explain②doctor③build每步一报"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并b59c5326(c408fca2 explain层溯源12文件+483/b316e5b0 doctor舰队五项5文件+417)build绿cli.ts零改动；待金丝雀验证5点(explain逐层WINNER/env覆盖诊断/stale lock/端口归属/共享token)；worktree已清"
     },
     {
       "id": "q-ax-discovery",
@@ -46,12 +46,20 @@
       "progress": "99309519派单：session status实时态(state/token/queue/缺省自身)+permission show有效矩阵(auto/ask/never+scoped+来源,RPC缺则additive补)；①session status②permission show③build每步一报"
     },
     {
-      "id": "q-plugin-default-on",
-      "title": "装的插件默认开启而非默认关闭（用户裁定）",
-      "column": "进行中",
-      "owner": "q-plugin-default-on",
-      "branch": "fix/q-plugin-default-on",
-      "progress": "①调研完成c91b5a4f(笔记201行)：默认集真源plugin-selection.ts五处共用；OPT_IN只剩media(理由文档已失)；现态缺陷A物化漂移+新装静默不加载/B child口径相反+面板不可见。★main裁定方案B批准：plugins:改覆盖层(默认集=全部已安装恒底,显式条目只覆盖,不物化)；media转默认；结构性排除保留(feishu/mcp-client/evals/engine-client/provider/hook-logging逐个论证)；child口径对齐+面板可见性；契约推翻登记+金丝雀重点回归存量部分清单。②完成4提交(1a016f02基线newline/d32071ba覆盖层核心+media转默认/74464c62物化修复+child口径/2f50dd2d契约登记CHANGELOG breaking节)build绿；③面板可见性+显示一致+总门禁进行中"
+      "id": "q-skills-ui",
+      "title": "技能库页面UI重设计：卡片展示名称+点击详情（用户裁定参照工具页规范）",
+      "column": "待办",
+      "owner": "main",
+      "branch": "redblue-dev",
+      "progress": "用户反馈：SkillsView未参照工具页面设计规范，应改为技能卡片(只展示名称)+点击查看详细内容；待派单(当前批次收口后)"
+    },
+    {
+      "id": "q-skills-discovery",
+      "title": "技能插件搜索常用skills目录/marketplace（P3特性设计）",
+      "column": "待办",
+      "owner": "main",
+      "branch": "redblue-dev",
+      "progress": "用户需求：skills插件能搜索常用skills目录存放以便使用；q-skills-impl设计P3 marketplace留分期；待设计派单"
     },
 
     {
