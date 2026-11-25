@@ -377,7 +377,11 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
         )
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-3 min-compact:grid-cols-2 min-wide:grid-cols-3">
+          {/* skills-cols-*：自定义列数 utility（embed.css / styles.css 定义）。
+              不用 grid-cols-*：宿主 utilities 层含 .grid-cols-1（ToolsPanel 等），
+              层序 plugin.skills < utilities（契约 §9 故意），embed 里响应式列数
+              会被宿主 .grid-cols-1 级联压过恒 1 列；自定义类名避开冲突。 */}
+          <div className="grid skills-cols-1 gap-3 min-compact:skills-cols-2 min-wide:skills-cols-3">
             {items.map((row) => (
               <article className="flex" key={row.id}>
                 <button

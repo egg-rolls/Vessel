@@ -40,7 +40,7 @@ const et = {
   "detail.aux": "Auxiliary files",
   "detail.auxHint": "Listed only — the plugin never reads or executes them.",
   "detail.path": "Path",
-  "detail.bytes": "{n} bytes",
+  "detail.bytes": "Bytes",
   "frontmatter.ok": "ok",
   "frontmatter.partial": "partial (unknown keys ignored)",
   "frontmatter.none": "none",
@@ -101,7 +101,7 @@ const et = {
   "detail.aux": "附件清单",
   "detail.auxHint": "只列清单——插件不代读、不执行。",
   "detail.path": "路径",
-  "detail.bytes": "{n} 字节",
+  "detail.bytes": "字节",
   "frontmatter.ok": "合法",
   "frontmatter.partial": "部分（未知键已忽略）",
   "frontmatter.none": "无",
@@ -3419,6 +3419,8 @@ const zr = typeof window > "u" ? Z : wt, Ue = ue(function({
           children: v.map((g, a) => {
             const b = g.value === R;
             return (
+              // biome-ignore lint/a11y/useFocusableInteractive: aria-activedescendant 模式下选项不接收焦点
+              // biome-ignore lint/a11y/useKeyWithClickEvents: 键盘交互在触发器上（combobox 模式）
               /* @__PURE__ */ n(
                 "div",
                 {
@@ -3854,7 +3856,7 @@ function Gr({ client: e, refreshKey: o, t }) {
         retryLabel: t("common.retry")
       }
     ) : Y === 0 ? d !== "" || x !== "" || C !== "" ? /* @__PURE__ */ n(Ye, { title: t("skills.noMatch"), description: t("skills.searchPlaceholder") }) : /* @__PURE__ */ n(Ye, { title: t("skills.empty.title"), description: t("skills.empty.description") }) : /* @__PURE__ */ S(Se, { children: [
-      /* @__PURE__ */ n("div", { className: "grid grid-cols-1 gap-3 min-compact:grid-cols-2 min-wide:grid-cols-3", children: W.map((c) => /* @__PURE__ */ n("article", { className: "flex", children: /* @__PURE__ */ S(
+      /* @__PURE__ */ n("div", { className: "grid skills-cols-1 gap-3 min-compact:skills-cols-2 min-wide:skills-cols-3", children: W.map((c) => /* @__PURE__ */ n("article", { className: "flex", children: /* @__PURE__ */ S(
         "button",
         {
           type: "button",
