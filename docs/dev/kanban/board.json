@@ -80,10 +80,10 @@
     {
       "id": "q-chat-index",
       "title": "会话索引竖条（豆包式minimap）：侧边dot导航+视口高亮+点击跳转",
-      "column": "进行中",
-      "owner": "q-chat-index",
-      "branch": "feat/q-chat-index",
-      "progress": "4aa2dfad派单：ConversationIndex组件+transcript数据映射+IntersectionObserver视口追踪+scrollIntoView跳转+ChatView/TeamView集成+responsive+渐隐mask；①组件②追踪跳转③集成④build"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并b5a87644(4b4e9db5视图/e72a16eb追踪跳转/8459d8d0三页集成/c0ef4cd3时序修复)12文件+757 build绿；冲突解决保留msg-visibility showReasoning/messageVisibility+chat-index锚点/stage/ConversationIndex；待验(dot导航/视口高亮/点击跳转/窄屏隐藏)；worktree已清"
     },
     {
       "id": "q-skills-ui",
