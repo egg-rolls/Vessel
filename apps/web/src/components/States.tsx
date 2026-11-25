@@ -4,12 +4,18 @@ import { Button, cn } from './ui';
 
 /** 状态块外壳：迁移后统一由 L1 token utilities 组成。 */
 const stateShell = 'flex flex-col gap-2 rounded-md bg-sunken px-5 py-7';
+/**
+ * 居中空态（用户裁定）：图标 + 主文案 + 副文案 + 行动全部水平居中，
+ * 与待批页「没有待批的提问」同一口径。错误 / 重试 / 空态卡统一走此样式；
+ * LoadingState（骨架行需撑满宽度）与 StaleNotice（行内横条）除外。
+ */
+const stateCentered = 'items-center text-center';
 const stateIcon = 'flex-none text-lg leading-none text-muted';
 const stateTitle = 'font-serif text-lg leading-snug text-ink';
 const stateDesc = 'max-w-prose text-md leading-relaxed text-muted wrap-anywhere';
 const stateAction = 'mt-1 flex flex-wrap gap-2';
 
-/** 空态：一句解释 + 一个主行动。 */
+/** 空态：居中图标 + 一句解释 + 一个主行动。 */
 export function EmptyState({
   title,
   description,
@@ -20,7 +26,7 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className={cn('state-empty', stateShell)}>
+    <div className={cn('state-empty', stateShell, stateCentered)}>
       <span className={stateIcon} aria-hidden="true">
         ○
       </span>
@@ -46,7 +52,7 @@ export function LoadingState({ label, rows = 3 }: { label?: string; rows?: numbe
   );
 }
 
-/** 错误：摘要 + Retry；role=alert 但不抢焦点。title 缺省是通用加载失败文案。 */
+/** 错误：居中图标 + 摘要 + Retry；role=alert 但不抢焦点。title 缺省是通用加载失败文案。 */
 export function ErrorState({
   message,
   onRetry,
@@ -61,7 +67,10 @@ export function ErrorState({
   title?: string;
 }) {
   return (
-    <div className={cn('state-error', stateShell, 'bg-danger-soft text-danger')} role="alert">
+    <div
+      className={cn('state-error', stateShell, stateCentered, 'bg-danger-soft text-danger')}
+      role="alert"
+    >
       <span className={cn(stateIcon, 'text-danger')} aria-hidden="true">
         !
       </span>
@@ -78,8 +87,8 @@ export function ErrorState({
 }
 
 /**
- * 能力未启用/无权限：原因 + 如何启用，不提供「重试」。
- * `variant="page"` 用于整页能力页：内容居中、问号放大，不改变文字颜色。
+ * 能力未启用/无权限：原因 + 如何启用，不提供「重试」。内容同样水平居中。
+ * `variant="page"` 用于整页能力页：额外垂直居中、问号放大，不改变文字颜色。
  */
 export function NotEnabledState({
   title,
@@ -100,7 +109,8 @@ export function NotEnabledState({
       className={cn(
         'state-not-enabled',
         stateShell,
-        page && 'min-h-60 items-center justify-center px-6 py-12 text-center',
+        stateCentered,
+        page && 'min-h-60 justify-center px-6 py-12',
       )}
     >
       <span className={cn(stateIcon, page && 'text-3xl')} aria-hidden="true">

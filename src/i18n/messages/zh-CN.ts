@@ -34,9 +34,10 @@ export const zhCN = {
   'help.cmd.continueRun': '续接最近会话并运行一轮',
   'help.cmd.resumeRun': '恢复中断的 durable run',
   'help.cmd.status': '一屏查看本地运行态 / attach / gateway 实例',
-  'help.cmd.stop': '优雅停止舰队（不限时 drain + 进度；--force 切断 run 并审计）；--connect 远程停',
+  'help.cmd.stop':
+    '优雅停止舰队（等活跃 run 自然跑完，不限时 + 进度；--force 切断 run 并审计）；--connect 远程停',
   'help.cmd.restart':
-    'docker 式先停后启；[name] 定向实例或登记 node（缺省整舰队）；--force 传播到 stop 段',
+    '舰队冷重启（停 node，缺省等 run 跑完再停）；平台代码更新优先 vessel gateway restart（保 node、run 不断）；[name] 定向实例或登记 node（缺省整舰队）；--force 传播到 stop 段；--self 预约自重启（立即返回，编排者等触发 run 完成后重启，--prompt 续作嘱托）',
   'help.cmd.agents': '经 agents.list 列出 agent（本地 gateway 或 --connect）',
   'help.cmd.errors': '最近 run/tool 错误（errorLevel: all 时含诊断）',
   'help.cmd.rpcList': '列出 RPC 方法 + 参数/返回 schema 摘要（--node 经平台代理定向）',
@@ -59,11 +60,11 @@ export const zhCN = {
     '启动 gateway（缺省后台分离、就绪即退）；--foreground 保留前台；--instance 命名实例',
   'help.cmd.gatewayList': '列出 gateway 实例与 PID 文件',
   'help.cmd.gatewayStop':
-    '优雅停止平台进程（不限时 drain + 进度；--force 强杀并审计）；缺省只停平台层，--stop-nodes 连 node/hub 一起停',
+    '优雅停止平台进程（等活跃 run 自然跑完，不限时 + 进度；--force 强杀并审计）；缺省只停平台层，--stop-nodes 连 node/hub 一起停',
   'help.cmd.gatewayStatus':
     'PID/端口/运行时长/版本/服务状态（--rpc 已弃用，改用 node status --rpc）',
   'help.cmd.gatewayRestart':
-    '停止后重新启动平台（沿用 --daemon）；node/hub 保活并被 adopt；--stop-nodes 已弃用（整舰队请用 vessel restart）',
+    '重启平台进程（handoff：node/hub 保活并被 adopt，run 不断）——平台代码更新优先用它；沿用 --daemon；整舰队冷重启用 vessel restart；--stop-nodes 已弃用',
   'help.cmd.gatewayReload': '热重载 config / plugins，不重启进程',
   'help.cmd.gatewayInstall': '注册登录自启（systemd / launchd / schtasks）',
   'help.cmd.gatewayUninstall': '移除系统服务注册',
@@ -77,7 +78,7 @@ export const zhCN = {
   'help.cmd.nodeStart': '只启动 Node API（缺省 8644；与 gateway 共用实例锁）',
   'help.cmd.nodeStatus': '查看 Node API 监听与 health（--rpc 查看 health/queue）',
   'help.cmd.nodeStop':
-    '优雅停止 Node API（不限时 drain + 进度；--force 强杀并审计）；gateway 托管时提示用 gateway stop',
+    '优雅停止 Node API（等活跃 run 自然跑完，不限时 + 进度；--force 强杀并审计）；gateway 托管时提示用 gateway stop',
   'help.cmd.nodeRestart':
     'docker 式先停后启只重启本 node（[name] 选登记 node）；托管节点提示用 vessel restart',
   'help.cmd.nodeReload': '热重载 Node API 配置（等同 gateway reload）',
@@ -238,6 +239,11 @@ export const zhCN = {
   'flag.host': '监听地址',
   'flag.log': '后台日志路径',
   'flag.timeout': '等待上限（如 10s / 500ms）',
+  'flag.waitTimeout': '自重启编排者等触发 run 完成的预算（如 120s；超时不重启）',
+  'flag.self': '预约自重启：立即返回，编排者等触发 run 完成后优雅重启并续作',
+  'flag.prompt': '自重启续作嘱托（重启后作为首轮输入投递）',
+  'flag.session': '触发者会话 id（缺省读 VESSEL_SESSION_ID）',
+  'flag.run': '触发者 run id（缺省读 VESSEL_RUN_ID）',
   'flag.scope': '重载范围（逗号分隔：config,plugins）',
   'flag.config': '配置文件路径',
   'flag.lines': '行数（1-10000；-n 同义）',
@@ -444,9 +450,12 @@ export const zhCN = {
   'stop.forced.summary': '非正常退出：{name} —— {count} 个 run 被切断{note}',
   // ── vessel restart（用户裁定 #6，cli-topology-design §7）──
   'restart.inventory.title': '重启清点（舰队 dataDir：{dataDir}）',
+  'restart.platformHint':
+    '指路：平台代码更新优先 `vessel gateway restart`（node/hub 保活，run 不断）；本命令是舰队冷重启（停 node，缺省等活跃 run 自然跑完）。',
   'restart.inventory.instance': 'platform {instance}：{state}（pid {pid}）',
   'restart.nothingRunning': '本无运行实例，直接启动。',
-  'restart.confirm.prompt': '重启会先停掉在跑会话再重新启动。继续？[y/N] ',
+  'restart.confirm.prompt':
+    '重启会先停掉在跑会话（缺省等活跃 run 自然跑完，不限时；--force 切断）再重新启动。继续？[y/N] ',
   'restart.stopFailed':
     '重启中止：stop 未全部成功，因此没有启动任何实例。可用 `vessel stop --force` 升级后重跑 restart。',
   'restart.starting': '正在启动 {instance}…',
@@ -744,6 +753,11 @@ export const zhCN = {
   'resume.card.background_stopped': '后台进程已被重启停掉；还需要就重新跑起来，别假设它们还在。',
   'resume.card.pending_inputs': '后面排着 {count} 条已接受的输入，按最早顺序在此卡之后放行。',
   'resume.card.no_pending_inputs': '没有排着的已接受输入；从当前现状接着做。',
+  'resume.abnormal.summary':
+    '进程非正常退出（强杀或崩溃），上一轮 run 被打断；没有恢复标记，工具结果未知。',
+  'resume.abnormal.verify_first':
+    '先核对现状（文件、进程、任务进度）再继续；不要假设打断前的操作已经成功。',
+  'resume.abnormal.pending': '还排着的已接受输入会由启动投递自动放行；没有队列就从当前现状接着做。',
 
   // ── session status（AX 自服务 · 自观）──
   'help.cmd.sessionStatus': '会话实时态（state/run/用量/上下文/队列/最后活动；缺省=调用者自身）',

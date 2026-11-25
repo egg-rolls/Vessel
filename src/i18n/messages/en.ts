@@ -37,9 +37,9 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.resumeRun': 'resume an interrupted durable run',
   'help.cmd.status': 'local runtime / attach / gateway instances at a glance',
   'help.cmd.stop':
-    'stop the fleet gracefully (unlimited drain + progress; --force cuts runs with audit); --connect for remote stop',
+    'stop the fleet gracefully (waits for active runs to finish, unlimited + progress; --force cuts runs with audit); --connect for remote stop',
   'help.cmd.restart':
-    'docker-style stop then start; [name] targets an instance or registered node (default: whole fleet); --force propagates to stop',
+    'fleet cold restart (stops nodes; default waits for runs to finish); for platform code updates prefer vessel gateway restart (keeps nodes, runs uninterrupted); [name] targets an instance or registered node (default: whole fleet); --force propagates to stop; --self reserves a self-restart (returns immediately; orchestrator restarts after the triggering run finishes; --prompt carries the continuation)',
   'help.cmd.agents': 'list agents via agents.list (local gateway or --connect)',
   'help.cmd.errors': 'recent run/tool errors (diagnostics in errorLevel: all)',
   'help.cmd.rpcList':
@@ -65,11 +65,11 @@ export const en: Record<MessageKey, string> = {
     'start detached and exit once the platform is up (default); --foreground keeps it in front; --instance names it',
   'help.cmd.gatewayList': 'list gateway instances and PID files',
   'help.cmd.gatewayStop':
-    'stop the platform process gracefully (unlimited drain + progress; --force kills with audit); default keeps node/hub, --stop-nodes stops them too',
+    'stop the platform process gracefully (waits for active runs to finish, unlimited + progress; --force kills with audit); default keeps node/hub, --stop-nodes stops them too',
   'help.cmd.gatewayStatus':
     'pid/port/uptime/version/service state (--rpc is deprecated; use node status --rpc)',
   'help.cmd.gatewayRestart':
-    'stop then start the platform only (keeps --daemon); node/hub stay alive and are adopted; --stop-nodes is deprecated (use vessel restart for the fleet)',
+    'restart the platform process (handoff: node/hub stay alive and are adopted, runs uninterrupted) — preferred for platform code updates; keeps --daemon; use vessel restart for a fleet cold restart; --stop-nodes is deprecated',
   'help.cmd.gatewayReload': 'hot-reload config/plugins without restarting',
   'help.cmd.gatewayInstall': 'register login autostart (systemd / launchd / schtasks)',
   'help.cmd.gatewayUninstall': 'remove the system service registration',
@@ -84,7 +84,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.nodeStart': 'start only the Node API (default 8644; shares the gateway instance lock)',
   'help.cmd.nodeStatus': 'show the Node API listener and health (--rpc for health/queue)',
   'help.cmd.nodeStop':
-    'stop only the Node API gracefully (unlimited drain + progress; --force kills with audit); gateway-managed nodes point to gateway stop',
+    'stop only the Node API gracefully (waits for active runs to finish, unlimited + progress; --force kills with audit); gateway-managed nodes point to gateway stop',
   'help.cmd.nodeRestart':
     'docker-style stop then start only this node ([name] selects a registered node); managed nodes point to vessel restart',
   'help.cmd.nodeReload': 'hot-reload Node API config (same operation as gateway reload)',
@@ -255,6 +255,13 @@ export const en: Record<MessageKey, string> = {
   'flag.host': 'listen address',
   'flag.log': 'background log path',
   'flag.timeout': 'wait limit (e.g. 10s / 500ms)',
+  'flag.waitTimeout':
+    'self-restart orchestrator budget to wait for the triggering run (e.g. 120s; aborts on timeout)',
+  'flag.self':
+    'reserve a self-restart: returns immediately; orchestrator restarts gracefully after the triggering run finishes',
+  'flag.prompt': 'self-restart continuation prompt (delivered as the first input after restart)',
+  'flag.session': 'triggering session id (defaults to VESSEL_SESSION_ID)',
+  'flag.run': 'triggering run id (defaults to VESSEL_RUN_ID)',
   'flag.scope': 'reload scope (comma separated: config,plugins)',
   'flag.config': 'config file path',
   'flag.lines': 'number of lines (1-10000; -n alias)',
@@ -473,9 +480,12 @@ export const en: Record<MessageKey, string> = {
   'stop.forced.summary': 'abnormal exit: {name} — {count} run(s) cut{note}',
   // ── vessel restart (用户裁定 #6, cli-topology-design §7) ──
   'restart.inventory.title': 'Restart inventory (fleet dataDir: {dataDir})',
+  'restart.platformHint':
+    'Guidance: for platform code updates prefer `vessel gateway restart` (node/hub stay alive, runs uninterrupted); this command is a fleet cold restart (stops nodes; default waits for active runs to finish).',
   'restart.inventory.instance': 'platform {instance}: {state} (pid {pid})',
   'restart.nothingRunning': 'Nothing running; starting fresh.',
-  'restart.confirm.prompt': 'Restart stops active sessions then starts again. Continue? [y/N] ',
+  'restart.confirm.prompt':
+    'Restart stops active sessions (default waits for active runs to finish, unlimited; --force cuts them) then starts again. Continue? [y/N] ',
   'restart.stopFailed':
     'Restart aborted: stop did not fully succeed, so nothing was started. Escalate with `vessel stop --force`, then re-run restart.',
   'restart.starting': 'starting {instance}…',
@@ -791,6 +801,12 @@ export const en: Record<MessageKey, string> = {
   'resume.card.pending_inputs':
     '{count} accepted input(s) are queued and were admitted after this card, oldest first.',
   'resume.card.no_pending_inputs': 'no accepted input was queued; continue from the current state.',
+  'resume.abnormal.summary':
+    'the process exited abnormally (force kill or crash); the previous run was interrupted, no resume marker exists, and tool results are unknown.',
+  'resume.abnormal.verify_first':
+    'verify the current state (files, processes, task progress) before continuing; do not assume operations before the interruption succeeded.',
+  'resume.abnormal.pending':
+    'accepted inputs still queued will be dispatched automatically at startup; with no queue, continue from the current state.',
 
   // ── session status (AX self-service · self-observation) ──
   'help.cmd.sessionStatus':

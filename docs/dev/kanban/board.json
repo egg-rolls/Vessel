@@ -54,6 +54,46 @@
       "progress": "✅完成合并ab63936d(023fec90 read缺省3/cf8b0308去超时/c5f5b404 rotate0.5/e2e8b89d条带三态)build绿；更正：产物读数误报撤回(本仓build=typecheck+lint无bundle,ADR-006)；待验4点(直读最新3/不超时回退/50%rotate提示/三态切换)；worktree已清"
     },
     {
+      "id": "q-plugin-ui-layer",
+      "title": "微修复：plugin-ui button重置层外压制iframe表面（ISSUE-SS2-1）",
+      "column": "进行中",
+      "owner": "q-plugin-ui-layer",
+      "branch": "fix/q-plugin-ui-layer",
+      "progress": "633d33d4派单(裁定a本轮修)：styles.css L37-43 button重置unlayered压iframe utilities→收进@layer base+四插件build:ui重建+同病面marketplace/usage确认；embed不回归"
+    },
+    {
+      "id": "q-drag-reference",
+      "title": "会话卡片拖拽引用到输入框（chip链信息：会话/Agent/跨队+team/跨节点+node）",
+      "column": "进行中",
+      "owner": "q-drag-reference",
+      "branch": "feat/q-drag-reference",
+      "progress": "e5bc63a2派单(用户裁定)：会话卡draggable→输入框drop→引用chip(会话+Agent,跨队加team跨节点加node渐进披露)+发送解析复用mention；免复制粘贴"
+    },
+    {
+      "id": "q-kanban-proxy",
+      "title": "kanban proxy白名单缺失修复+board_path set RPC（用户报告加载失败）",
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并51c4c883(e9dd408e调研/d4fa28f2修复6文件+85/67200606门禁)：proxy白名单加kanban(HTTP/WS两面)+config.set kanban.boardPath三层白名单+applyKanban热应用；agent经vessel op=set_config kanban.boardPath设路径写后热生效；待金丝雀验+用户重启node看板加载恢复"
+    },
+    {
+      "id": "q-empty-state",
+      "title": "错误/重试卡居中空态样式（参照待批页○空态）",
+      "column": "进行中",
+      "owner": "q-empty-state",
+      "branch": "feat/q-empty-state",
+      "progress": "1af5de70派单：加载失败/重试卡改水平居中空态(图标+主文案+副文案,复用待批页EmptyState)；统一错误/空态组件"
+    },
+    {
+      "id": "q-thinking-plugin",
+      "title": "思考强度插件Config热配置/热启用/同步config（用户裁定实施）",
+      "column": "进行中",
+      "owner": "q-thinking-plugin",
+      "branch": "feat/q-thinking-plugin",
+      "progress": "8196807a派单：基于thinking-intensity-plugin-design.md，热配置热启用同步config.yaml(不重启)，BeforeLlm hook注入requestExtras+provider映射+设置UI；auto零回归"
+    },
+    {
       "id": "q-plugin-lifecycle-impl",
       "title": "插件生命周期最优实现（per-capability+O5修复+注销API+版本跟踪，不留中间态）",
       "column": "进行中",
@@ -72,10 +112,10 @@
     {
       "id": "q-graceful-selfrestart",
       "title": "完全优雅stop/restart(drain-to-quiesce)+自重启Option A（用户裁定）",
-      "column": "进行中",
-      "owner": "q-graceful-selfrestart",
-      "branch": "feat/q-graceful-selfrestart",
-      "progress": "91d6add1派单：stop/restart缺省完全优雅等run跑完(非打断+marker),--force才非优雅；自重启Option A早返回restarting+detached编排者+等待反转+续作唤醒；inbox启动sweep修G1-G7；基于runlost-audit设计P0-P3；①drain-to-quiesce②自重启③inbox唤醒④指路"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并1d5e4688(f0dabd9d drain-to-quiesce/949cff6b Option A --self自重启/671357d5 inbox唤醒G1-G7/8d61103c指路)build绿；stop/restart缺省等run真跑完不限时+进度,--force唯一非优雅；vessel restart --self --prompt早返回→run自然完成无run lost→重启→嘱托自动续跑；待金丝雀验+用户重启后可用--self优雅自重启续作"
     },
     {
       "id": "q-skills-style",
@@ -119,11 +159,11 @@
     },
     {
       "id": "q-context-debug",
-      "title": "调试：上下文用量显示不一致（runtime55%/rotate38%/用户见380K）",
-      "column": "待办",
-      "owner": "main",
-      "branch": "redblue-dev",
-      "progress": "用户报告后续调试：context_window runtime报551K/55%，rotate报38%，用户UI见380K——三处不一致，查上下文计量/显示链路；候用户排期"
+      "title": "审查统一：上下文口径不一致（runtime通知阈值vs rotate context_ratio vs UI）",
+      "column": "进行中",
+      "owner": "q-context-debug",
+      "branch": "design/q-context-debug",
+      "progress": "16b4471a派单：runtime context_window通知65% vs rotate拒38% vs UI380K三处打架；审查三计量源file:line+根因(计数法/取数时机/trim后不同步)+统一单一口径源；零代码"
     },
     {
       "id": "q-envcard-run",

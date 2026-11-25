@@ -1294,12 +1294,38 @@ function watchTempScript(scriptPath: string, exited: Promise<number>): void {
   void exited.then(cleanup, cleanup);
 }
 
+/**
+ * run 身份 env（自重启 Option A）：bash 子进程里的 `vessel restart --self` 据此
+ * 认出触发者会话 / run，无需模型自报身份。缺字段（如 headless 无 session）就不注入。
+ */
+function runIdentityEnv(ctx: ToolContext): Record<string, string | undefined> {
+  return {
+    ...(ctx.session_id !== undefined && ctx.session_id !== ''
+      ? { VESSEL_SESSION_ID: ctx.session_id }
+      : {}),
+    ...(ctx.run_id !== undefined && ctx.run_id !== '' ? { VESSEL_RUN_ID: ctx.run_id } : {}),
+  };
+}
+
 /** 启动 bash（WSL 启动器时传输走 buildBashTransport）；返回类型交给 Bun.spawn 推导（手写 Subprocess 泛型参数极易踩错） */
-function spawnBash(command: string, cwd: string | undefined, options?: { ignoreStdin?: boolean }) {
+function spawnBash(
+  command: string,
+  cwd: string | undefined,
+  options?: { ignoreStdin?: boolean; env?: Record<string, string | undefined> },
+) {
   const transport = buildBashTransport(command);
   // engine 池 S12：调用期 scope 的 dirs 注入子进程 env（池内多 node 共进程，进程级 env 不够）；
   // 无 scope（host in-process / child 模式）= 逐字继承 process.env，行为不变。
   const scope = callScopeStorage.getStore();
+  // 自重启 Option A：run 身份 env（VESSEL_SESSION_ID / VESSEL_RUN_ID）让 run 内发起的
+  // `vessel restart --self` 能认出触发者。WSL2 只传 WSLENV 列出的变量 ⇒ 追加登记。
+  const extraEnv = options?.env;
+  const wslenvAppend =
+    isWslBashLauncher() && extraEnv !== undefined
+      ? Object.keys(extraEnv)
+          .filter((key) => extraEnv[key] !== undefined)
+          .join(':')
+      : '';
   try {
     const proc = Bun.spawn({
       cmd: transport.cmd,
@@ -1308,6 +1334,12 @@ function spawnBash(command: string, cwd: string | undefined, options?: { ignoreS
         ...process.env,
         ...(scope?.dataDir ? { VESSEL_DATA_DIR: scope.dataDir } : {}),
         ...(scope?.toolOutputDir ? { VESSEL_TOOL_OUTPUT_DIR: scope.toolOutputDir } : {}),
+        ...(extraEnv ?? {}),
+        ...(wslenvAppend !== ''
+          ? {
+              WSLENV: `${process.env.WSLENV ? `${process.env.WSLENV}:` : ''}${wslenvAppend}`,
+            }
+          : {}),
       },
       stdout: 'pipe',
       stderr: 'pipe',
@@ -1594,7 +1626,10 @@ async function startAsyncBash(options: {
 
   let proc: ReturnType<typeof spawnBash>;
   try {
-    proc = spawnBash(options.command, options.cwd, { ignoreStdin: true });
+    proc = spawnBash(options.command, options.cwd, {
+      ignoreStdin: true,
+      env: runIdentityEnv(options.ctx),
+    });
   } catch (error) {
     // 占位日志别留在盘上假装还在跑
     try {
@@ -2271,7 +2306,7 @@ async function runBash(
 
   let proc: ReturnType<typeof spawnBash>;
   try {
-    proc = spawnBash(command, effectiveCwd);
+    proc = spawnBash(command, effectiveCwd, { env: runIdentityEnv(ctx) });
   } catch (error) {
     return `错误：无法启动 bash：${String(error)}`;
   }

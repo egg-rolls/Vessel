@@ -81,6 +81,11 @@ const ALLOWED_RPC_NAMESPACES: ReadonlySet<string> = new Set([
   'gateway',
   'health',
   'interactions',
+  // q-kanban-proxy：任务看板（kanban.get 读板 / kanban.archive 用户验收归档）。
+  // node 侧方法已就位（gateway/methods/kanban.ts），平台侧缺命名空间导致
+  // proxy_method_not_allowed（fail-closed）。两者都不涉及进程生死 / 服务安装，
+  // 无需进 DENIED_RPC_METHODS；后续 kanban.* 新方法同命名空间自动覆盖。
+  'kanban',
   'mcp',
   'metrics',
   'permission',

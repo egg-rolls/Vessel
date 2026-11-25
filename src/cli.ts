@@ -147,6 +147,7 @@ import { readHubNodeTrustedOrigins } from './hub/node-state';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
+import { abnormalExitCardText } from './node/node-resume';
 // 0.56：派生 token（root-secret → HKDF；显式配置永远优先）。
 import { effectiveNodeToken } from './node/token-derive';
 import { createCliLogger, diffLogOptions, resolveLogOptions } from './observability/logging';
@@ -1040,6 +1041,35 @@ async function runWithConfig(result: BootstrapResult) {
     noteStartup('sweep.checked', sweep.checked);
     noteStartup('sweep.repaired', sweep.repaired.length);
     markStartup('sweep');
+    // 重启唤醒（runlost-graceful-restart-audit §4.5 / §5.1，补 G1 后半 / G5 / G6 / G7）：
+    // 1) sweep 修复过的会话（force/崩溃无标记）发有疤恢复卡——至少「说得清」；
+    // 2) 启动 dispatch sweep：重建 noticeDirty + 有界主动投递，有 pending 可直投条目
+    //    的成员无需人类消息点火（冷成员特许 spawn，预算/cycle/hardStop 闸原样）。
+    // 顺序在 recoverPendingInputs（bootstrap 内）与 liveness sweep 之后：孤儿已重放/held，
+    // sweep 只点剩下的队头；失败不阻断启动（条目仍 unread，下次再试）。
+    if (result.agent !== undefined) {
+      for (const sessionId of sweep.repaired) {
+        try {
+          await result.agent.service.announceEnvironmentCard(sessionId, abnormalExitCardText());
+        } catch (error) {
+          logger.warn('session liveness card failed', {
+            session_id: sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      try {
+        const dispatchSweep = await result.agent.service.startupDispatchSweep();
+        if (dispatchSweep.lit > 0) {
+          logger.info('agent.inbox.sweep_done', { ...dispatchSweep });
+        }
+        noteStartup('sweep.dispatched', dispatchSweep.dispatched);
+      } catch (error) {
+        logger.warn('agent.inbox.sweep_error', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     // 0.15：serve 的 config.set 写回面（对象变量避免对 ConfigGatewayOptionsLike 的
     // 多余属性检查；serve 合入 0.15 后该字段会被正式识别）。
     const gatewayConfigSet = createGatewayConfigSet({
@@ -1313,6 +1343,13 @@ async function runWithConfig(result: BootstrapResult) {
     // 声明在这里（reload 闭包也要用），只读一次：热重载沿用同一份，直到下次 join。
     const hubDerivedOrigins = await readHubNodeTrustedOrigins(dataDir);
 
+    // q-kanban-proxy：kanban deps 提为可变对象（同一引用进 gatewayOptions.kanban）。
+    // kanban.* handler 每次调用读 deps.boardPath → 热应用原地改即活生效。
+    // 解析表达式是启动装配与热应用共用的唯一真相（~ 展开、相对进程 cwd → 缺省板）。
+    const resolveKanbanBoardPath = (kanban: VesselConfig['kanban']): string =>
+      path.resolve(expandHome(kanban?.boardPath?.trim() || 'docs/dev/kanban/board.json'));
+    const kanbanDeps: { boardPath: string } = { boardPath: resolveKanbanBoardPath(config.kanban) };
+
     const reloadRunner = createGatewayReloadRunner({
       // web 尚未合入 reconfigure 时该字段不存在；按结构化可选入口处理。
       // 0.50：config reload 重建 allowedOrigins 时仍并入平台注入的 Origin，
@@ -1399,6 +1436,15 @@ async function runWithConfig(result: BootstrapResult) {
           );
         }
         return lines;
+      },
+      // q-kanban-proxy：kanban 热应用——重解析 boardPath 原地更新 kanbanDeps
+      // （handler 每次调用读 deps.boardPath，下一次 kanban.get/archive 即用新板）。
+      // 解析结果未变（如仅 trim 差异）不产差异行，避免无意义 notice。
+      applyKanban: (next) => {
+        const from = kanbanDeps.boardPath;
+        const to = resolveKanbanBoardPath(next.kanban);
+        kanbanDeps.boardPath = to;
+        return from === to ? [] : [`kanban: board path ${from} → ${to} (hot-applied)`];
       },
     });
 
@@ -1545,17 +1591,15 @@ async function runWithConfig(result: BootstrapResult) {
       // 路径 = config kanban.board_path（~ 展开、相对进程 cwd）→ 缺省
       // <cwd>/docs/dev/kanban/board.json（cwd = repo 根 / 舰队 worktree 根）。
       // archive.json 恒取板同目录（serve 侧派生，不读文件内指针）。
-      kanban: {
-        boardPath: path.resolve(
-          expandHome(config.kanban?.boardPath?.trim() || 'docs/dev/kanban/board.json'),
-        ),
-      },
+      // q-kanban-proxy：kanbanDeps 是可变对象（声明在 reloadRunner 前），
+      // config.set kanban.boardPath / 手改 YAML 经 applyKanban 原地热更新。
+      kanban: kanbanDeps,
       // 0.12 / CONTRACT-hot-apply：`gateway.reload` 的唯一热应用入口。
       // serve 只做 scope 枚举校验；这里注入 `scope -> applier`。
       reload: reloadRunner.reload,
       // P0-run-stops P1：`gateway.shutdown` 的优雅退出序列。Windows 上外部 stop 是
       // 无条件强杀（信号处理器跑不到），停止侧 CLI 先经本 RPC 触发进程内 drain
-      // （写 resume 标记 + interrupt('shutdown')），再等进程自死；超时仍强杀。
+      // （drain-to-quiesce：fence + 不限时等活跃 run 自然跑完），再等进程自死。
       // 走与 SIGTERM 完全相同的 activeCleanup（shutdownServeStack），不另造退出路径。
       shutdown: async () => {
         try {
@@ -1566,6 +1610,9 @@ async function runWithConfig(result: BootstrapResult) {
         }
         process.exit(0);
       },
+      // 自重启 Option A：预约受理（写 continuation 标记后立即返回「正在重启」）。
+      // 触发者 run 自然完成后由 detached 编排者执行 stop/start（vessel restart --self）。
+      ...(result.selfRestart ? { selfRestart: result.selfRestart } : {}),
       // CONTRACT-hot-apply §7：permissions.setToolPolicy 的写盘面（用户 YAML）。
       permissions: {
         // AX 自服务 · 自观：permissions.show 的只读规则面（additive）。
@@ -1917,7 +1964,7 @@ async function runWithConfig(result: BootstrapResult) {
   }
 
   // 未捕获异常时的清理入口：停 gateway / 关闭额外 tenant / 释放默认 tenant。
-  // gateway.stop() 自带 interrupt('shutdown') + 5s drain，后续关闭传 drain:false。
+  // beginDrain 已 drain-to-quiesce（run 全部自然终态），后续关闭传 drain:false。
   activeCleanup = async () => {
     // 0.43：先停 watcher 并回收 plugin 子进程（停订阅 / 动态 RPC / 子进程）。
     pluginWatch?.close();
@@ -1932,8 +1979,8 @@ async function runWithConfig(result: BootstrapResult) {
     await hubNodeOutbound?.close();
     hubNodeOutbound = undefined;
     await shutdownServeStack({
-      // 0.52 S1a：fence + 写 resume 标记 + interrupt + ≤2s settle + flush，
-      // 必须早于 gateway.stop()（否则 run 已被打断，标记写不出来）。
+      // drain-to-quiesce：fence + 不限时等活跃 run 自然跑完 + flush，
+      // 必须早于 gateway.stop()（先关闸，退出期间不再起新 run）。
       ...(result.beginDrain ? { beginDrain: result.beginDrain } : {}),
       gateway,
       closeTenants: async () => {
@@ -2000,7 +2047,7 @@ async function runWithConfig(result: BootstrapResult) {
     await startInkRepl(ctx);
   }
 
-  // 固定顺序：await gateway.stop()（自带 interrupt + 5s drain）
+  // 固定顺序：await beginDrain（drain-to-quiesce）→ gateway.stop()
   // → closeAll → shutdown；后两步 drain:false，避免重复限时等待。
   const finish = async (beforeClose?: () => Promise<void>): Promise<void> => {
     // 构建中被叫停：先把构建子进程**真的**杀掉并留一行 `web.build.interrupted`，

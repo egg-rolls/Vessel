@@ -838,6 +838,30 @@ empty_response:
   CLI `vessel config set`）。键语义的家：core `EmptyResponsePolicy`（types/provider.ts）+
   `DEFAULT_EMPTY_RESPONSE_*`（runtime/tool-calling-loop.ts）；映射在 `src/config/empty-response-settings.ts`。
 
+### 2.25 `kanban`（q-kanban-proxy：看板路径可写 + 热应用）
+
+```yaml
+kanban:
+  board_path: ~/boards/team-board.json   # 缺省 <cwd>/docs/dev/kanban/board.json
+```
+
+- **`kanban.board_path`**：`kanban.get` / `kanban.archive` 读的 board.json 路径。
+  支持 `~` 展开；相对路径按进程 cwd（repo 根 / 舰队 worktree 根）解析为绝对路径。
+  缺省 `docs/dev/kanban/board.json`。archive.json 恒取板同目录（serve 侧派生）。
+  校验与 validator 同界：非空字符串；不做存在性校验（板不存在时 `kanban.get`
+  返回 `not_found`）。
+- **可写面**：`kanban.boardPath` 进 `config.set` 白名单（RPC 键 camelCase，落盘
+  YAML `kanban.board_path`；`scope: 'project'` 写工作区覆盖层）。CLI
+  `vessel config set kanban.boardPath <path>` 同键；agent 经 `vessel op=set_config`
+  帮用户添加 / 切换看板路径（照旧走审批闸门）。
+- **热应用**：写后热应用 / config-watch 经 reload `config` scope 的 `applyKanban`
+  重解析路径并原地更新 kanban deps —— `config.set` 返回时下一次 `kanban.get`
+  即用新板，不重启。未注入 applier 的部署进 `requires_restart`（不假装生效）。
+- **平台代理**：`kanban` 命名空间在平台 proxy 方法白名单内
+  （`ALLOWED_RPC_NAMESPACES`，q-kanban-proxy 修复 `proxy_method_not_allowed`）；
+  `kanban.get`（read）/ `kanban.archive`（write，仅用户验收勾选触发）经
+  `/nodes/:nodeId/v1/rpc` 与代理 WS 均可达。
+
 ## 3. 密钥与 `_env`
 
 所有接受密钥的字段支持 `<field>_env`：
@@ -1003,7 +1027,7 @@ vessel prune [--older-than <dur>] [--dry-run] [--json] [--yes]
 - `config.set`（RPC，0.15）：只写用户配置、只接受白名单键（`ui.language` /
   `ui.statusBars` / `ui.verbosity` / `ui.errorLevel` / `ui.showReasoning` /
   `ui.showInternalEvents` / `ui.showArchived` / `ui.askUser` / `ui.expandCards` /
-  `observability.showProcessErrors` / `agent.cwd`），值非法返回 `invalid_params`。写入同样原子、`0600`、保留其它键。
+  `observability.showProcessErrors` / `agent.cwd` / `kanban.boardPath` 等），值非法返回 `invalid_params`。写入同样原子、`0600`、保留其它键。
 
 ### 4.1 Gateway 生命周期与配置生效（0.12）
 

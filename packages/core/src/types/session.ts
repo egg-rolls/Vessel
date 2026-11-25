@@ -186,6 +186,30 @@ export interface ResumeAfterRestart {
    * 留这个字段是为了让 S1c 能区分「标记真的完整」与「后台被砍过」。
    */
   background_stopped: boolean;
+
+  // ── 自重启 Option A（additive，旧代码忽略，回滚安全）──────────────
+  /**
+   * 意图区分（q-restart D6）：缺省 'stop' = 现状卡片路径；'restart' = 保全+续跑。
+   * reason 闭联合保持不动（旧解析器可能严格校验，新字面量走独立可选字段）。
+   */
+  intent?: 'stop' | 'restart';
+  /**
+   * 自重启专属：触发者的续作嘱托（runlost-graceful-restart-audit §4.2 件 1）。
+   *
+   * 预约重启时触发者 run 尚未结束；run 自然完成后，新进程以本嘱托为首轮输入
+   * 起**新 run**（deliverStartupPrompt 同款 startup:true 通道），不是 resumeRun
+   * 旧 run——旧 run 已 completed，天然无疤。投递成功后经单写口清除。
+   */
+  continuation?: {
+    /** 续作嘱托正文（等价 rotate startup_prompt 的形状）。 */
+    prompt: string;
+    /** 预约时刻（epoch ms）。 */
+    requested_at: number;
+    /** 编排者 pid（归属复核 / 留痕用，可选）。 */
+    orchestrator_pid?: number;
+  };
+  /** 续作投递尝试次数（崩溃循环防护，缺省 0；上限后降级卡片路径）。 */
+  resume_attempts?: number;
 }
 
 /**

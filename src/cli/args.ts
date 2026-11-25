@@ -626,6 +626,20 @@ export interface CliArgs {
     timeoutMs?: number;
     force?: boolean;
     selector: GatewaySelector;
+    /** 自重启 Option A：预约即返回，detached 编排者在触发者 run 终态后执行 stop/start。 */
+    self?: boolean;
+    /** --self 的续作嘱托（必填；重启后以它为首轮输入起新 run）。 */
+    prompt?: string;
+    /** 触发者会话（缺省读 env VESSEL_SESSION_ID，bash 工具注入）。 */
+    session?: string;
+    /** 触发者 run（缺省读 env VESSEL_RUN_ID；node 侧校验活跃 run）。 */
+    run?: string;
+    /** 编排者等触发者 run 终态的预算（缺省 120s；超时不重启）。 */
+    waitTimeoutMs?: number;
+    /** 内部：编排者模式（读交接文件执行 wait→stop→start；不对人类暴露）。 */
+    orchestrate?: boolean;
+    /** 内部：交接文件所在 dataDir（缺省当前解析的 dataDir）。 */
+    handoff?: string;
   } | null;
   /** 0.14：`vessel agents [--json]` */
   agentsCommand: { json: boolean } | null;
@@ -3114,6 +3128,13 @@ function parseRestartArgs(rest: string[], args: CliArgs): ParseResult {
   let force = false;
   let name: string | undefined;
   let timeoutMs: number | undefined;
+  let self = false;
+  let prompt: string | undefined;
+  let session: string | undefined;
+  let run: string | undefined;
+  let waitTimeoutMs: number | undefined;
+  let orchestrate = false;
+  let handoff: string | undefined;
   const selector: GatewaySelector = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
@@ -3127,6 +3148,35 @@ function parseRestartArgs(rest: string[], args: CliArgs): ParseResult {
     }
     if (a === '--force') {
       force = true;
+      continue;
+    }
+    if (a === '--self') {
+      self = true;
+      continue;
+    }
+    if (a === '--orchestrate') {
+      orchestrate = true;
+      continue;
+    }
+    if (a === '--prompt' || a === '--session' || a === '--run' || a === '--handoff') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--prompt') prompt = value.value;
+      else if (a === '--session') session = value.value;
+      else if (a === '--run') run = value.value;
+      else handoff = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--wait-timeout') {
+      const value = readFlagValue(rest, i, '--wait-timeout');
+      if (!value.ok) return value;
+      const parsed = parseTimeoutMs(value.value);
+      if (parsed === null) {
+        return { ok: false, error: `Invalid --wait-timeout: ${value.value} (expected e.g. 120s)` };
+      }
+      waitTimeoutMs = parsed;
+      i = value.next;
       continue;
     }
     if (a === '--timeout') {
@@ -3162,6 +3212,22 @@ function parseRestartArgs(rest: string[], args: CliArgs): ParseResult {
     name = a;
   }
   if (args.help) return { ok: true, args };
+  // 自重启 Option A：--self 与 --force 互斥（预约必须走优雅 stop；审计 I4/R7）。
+  if (self && force) {
+    return {
+      ok: false,
+      error: 'restart --self cannot be combined with --force (self-restart is always graceful)',
+    };
+  }
+  if (self && prompt === undefined) {
+    return { ok: false, error: 'restart --self requires --prompt <continuation text>' };
+  }
+  if (self && name !== undefined) {
+    return {
+      ok: false,
+      error: 'restart --self does not accept a name (targets the fleet of the resolved dataDir)',
+    };
+  }
   const selectorError = gatewaySelectorError(selector, 'restart');
   if (selectorError !== null) return { ok: false, error: selectorError };
   if (
@@ -3180,6 +3246,13 @@ function parseRestartArgs(rest: string[], args: CliArgs): ParseResult {
     ...(name !== undefined ? { name } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(force ? { force: true } : {}),
+    ...(self ? { self: true } : {}),
+    ...(prompt !== undefined ? { prompt } : {}),
+    ...(session !== undefined ? { session } : {}),
+    ...(run !== undefined ? { run } : {}),
+    ...(waitTimeoutMs !== undefined ? { waitTimeoutMs } : {}),
+    ...(orchestrate ? { orchestrate: true } : {}),
+    ...(handoff !== undefined ? { handoff } : {}),
     selector: name === undefined && !hasSelector ? { all: true } : selector,
   };
   return { ok: true, args };
