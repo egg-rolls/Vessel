@@ -32,10 +32,10 @@
     {
       "id": "q-ax-discovery",
       "title": "AX自服务·发现组：vessel rpc list + vessel fleet status",
-      "column": "进行中",
-      "owner": "q-ax-discovery",
-      "branch": "feat/q-ax-discovery",
-      "progress": "bd947d72派单：rpc list能力发现(capabilities.list包装+schema摘要+--node定向)+fleet status一屏(身份/peers/nodes/gateway组合)；①rpc list②fleet status③build每步一报"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并4f8099cf(a28a1556 rpc list+2709034b fleet status,8文件+858纯additive,零cli.ts/服务端改动)build绿；待金丝雀验4点(rpc list本地/--node/fleet status/--data-dir边界/help/completion/无gateway教学)；worktree已清"
     },
     {
       "id": "q-ax-selfobs",
