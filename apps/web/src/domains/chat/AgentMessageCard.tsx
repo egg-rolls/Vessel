@@ -14,11 +14,16 @@
  *
  * 历史消息没有 `name`（0.50 之前投递的 A2A 消息），继续按用户气泡渲染，不做回填。
  */
+import { formatAddress } from '@vessel-agent/agent/address-display';
 import { cn } from '../../components/ui';
 import { formatClock } from '../../format';
 import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
+import { useAddressStyle } from '../../state/address-style';
+import { useAgentNames } from './agent-name-context';
 import { type MessageSender, senderOfName } from './agent-sender';
+import { parseSourceAddress } from './env-notice';
+import { useNodeNamesContext } from './node-name-context';
 import { StreamCard } from './StreamCard';
 
 /**
@@ -63,6 +68,19 @@ export function AgentMessageCard({
   entering?: boolean;
 }) {
   const clock = formatClock(ts);
+  // q-addr-display：来源地址按 ui.addressStyle 渲染（name 优先 → 短 id → full）。
+  // 纯显示层：title / 原文仍是 raw（模型所见事实不改）；名字表缺省时 formatAddress
+  // 自己走兜底链。解析不出段（旧数据）时整段原样，不吞不改。
+  const addressStyle = useAddressStyle();
+  const nodeNames = useNodeNamesContext();
+  const agentNames = useAgentNames();
+  const displaySource =
+    source !== undefined
+      ? formatAddress(parseSourceAddress(source) ?? { principal: source }, addressStyle, {
+          node: nodeNames,
+          principal: agentNames,
+        })
+      : undefined;
   // 卡头文案按来源类别分：agent 投递带「agent」字样，工具来源只报工具名（「来自 bash」）。
   const fromKey = senderKind === 'tool' ? 'chat.toolMessage.from' : 'chat.agentMessage.from';
   const groupKey = senderKind === 'tool' ? 'chat.toolMessage.group' : 'chat.agentMessage.group';
@@ -83,7 +101,7 @@ export function AgentMessageCard({
         <div className="mb-1 flex flex-wrap items-baseline gap-x-2 font-mono text-2xs text-faint">
           {source !== undefined && (
             <span className="break-all select-all" title={source}>
-              {source}
+              {displaySource}
             </span>
           )}
           {clock !== '' && (

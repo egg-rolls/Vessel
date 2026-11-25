@@ -235,6 +235,7 @@ export function resolveAddress(raw: string, local: ResolveNodeAliases): LocalAdd
  *
  * 大小写不敏感：`name` 常来自 hostname（Windows 全大写）或用户配置（混合大小写），
  * 两者不同源。`nodeId` 也一并比较，因为它才是 canonical 值。
+ * q-addr-display 起还认本机 nodeId 的 ≥8 位 hex 短前缀（compact 档来源行可回信）。
  *
  * **只认本机的 id 与展示名**，对端没有名字可用 —— 这是刻意的，不是遗漏：
  * - `federation.peers[]` 只有人写的 `nodeId` / `teamId` / `url` / `tokenEnv`，
@@ -253,8 +254,22 @@ export function resolveAddress(raw: string, local: ResolveNodeAliases): LocalAdd
  */
 export function isLocalNodeSegment(segment: string, local: ResolveNodeAliases): boolean {
   const needle = segment.toLowerCase();
-  if (local.nodeId.toLowerCase() === needle) return true;
+  const localId = local.nodeId.toLowerCase();
+  if (localId === needle) return true;
   if (local.name !== undefined && local.name !== '' && local.name.toLowerCase() === needle) {
+    return true;
+  }
+  // q-addr-display：本机 nodeId 的短前缀（≥8 位 hex）也算本机 —— compact 档来源行
+  // 渲染 `main@7181ed6c:vessel`，模型抄回去必须可解析。**只对本机这一个 id 做前缀**：
+  // 前缀要么命中本机 uuid 要么不命中，没有第二个候选，零误路由风险；远端不放开
+  // （peers 的 id 前缀可能歧义，且对端寻址必须写全形，见上方裁定）。
+  // 形状闸与 uuid 首段一致：8 位 hex 起步，最长不超过完整 id（上面已精确匹配）。
+  if (
+    needle.length >= 8 &&
+    needle.length < localId.length &&
+    /^[0-9a-f]+$/.test(needle) &&
+    localId.startsWith(needle)
+  ) {
     return true;
   }
   return false;

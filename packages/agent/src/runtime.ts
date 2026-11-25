@@ -50,6 +50,7 @@ import {
   type UsageLimits,
   type WorkingContext,
 } from '@vessel-agent/core';
+import { type AddressStyle, DEFAULT_ADDRESS_STYLE, formatAddress } from './address-display.js';
 import { type AgentInboxPort, createInboxNoticeHook, createInboxTool } from './inbox.js';
 import { resolveMemberCwd } from './member-cwd.js';
 import { buildMemberBodyPorts } from './member-ports.js';
@@ -457,6 +458,17 @@ export interface MemberExecutionHostOptions {
    * 缺省（纯内存构造 / 测试）时来源行退回两段 `principal@<team>`，不报错。
    */
   nodeId?: string;
+  /**
+   * 本机展示名（q-addr-display）：来源行 node 段 name 档的渲染来源。
+   * 与 nodeId 同源（bootstrap `resolveNodeIdentity()`），装配期传一次。
+   * 缺省 / 字符集不安全时 node 段兜底短 id（`formatAddress` 兜底链）。
+   */
+  nodeName?: string;
+  /**
+   * 地址显示风格（q-addr-display；`ui.addressStyle`，装配层读 config 传入）。
+   * 缺省 name 优先。只影响来源行显示，路由地址（`to`）不受影响。
+   */
+  addressStyle?: AddressStyle;
   includeReasoning?: boolean;
   /** tenant SessionStore；同 session_id 可跨进程续接历史 */
   session?: ExecutionUnitOptions['session'];
@@ -679,10 +691,17 @@ function inferMessageSource(from: string): NonNullable<AgentMessage['source']> {
  * - 名字合法（见 `isAddressSafePrincipal`）就写名字：`docs-core@<node>:<team>`；
  * - 名字不可用、或成员无名，一律写**完整 uuid**。
  *
- * 不缩成短 id：node 段是精确命中本机的，落到 `registry.resolve("3ae686c0")` 时
- * 只做 id / session / body 的精确匹配、没有前缀匹配，结果必然是 `unknown_member`
- * ——消息发不出去，而不是被误路由到远端。来源行还会持久化进历史，模型下一轮照样抄。
- * 名字不可用时同理不做任何截断降级，uuid 是唯一保证合法的 principal。
+ * **principal 不缩成短 id**：`registry.resolve("3ae686c0")` 只做 id / session / body
+ * 的精确匹配、没有前缀匹配，短 principal 必然是 `unknown_member` —— 消息发不出去。
+ * 来源行还会持久化进历史，模型下一轮照样抄。名字不可用时不做截断降级，
+ * uuid 是唯一保证合法的 principal（`formatAddress` 的 replyable 兜底同此裁定）。
+ *
+ * **node 段按 `addressStyle` 渲染**（q-addr-display）：name 档用本机展示名
+ * （`isLocalNodeSegment` 认本机名，大小写不敏感），compact 档用短 id ——
+ * `isLocalNodeSegment` 已支持本机 nodeId 的 ≥8 位前缀匹配（只对本机一个 id，
+ * 无前缀歧义），两种写法回信都可解析。名字字符集不安全（含点 / 空格等）时
+ * 不进地址，走短 id 兜底。federation 入站不走此路（远端 node 无名可查、
+ * 短 id 不可路由），保持 canonical。
  *
  * **缺 `nodeId` 时退回两段** `principal@<team>`（纯内存构造 / 测试路径）：不伪造 node 段，
  * 也不去猜一个主机名。
@@ -696,6 +715,8 @@ function formatMessageSource(
   message: AgentMessage,
   teamId: string | undefined,
   nodeId: string | undefined,
+  nodeName: string | undefined,
+  style: AddressStyle,
 ): string {
   if (message.from.startsWith('federation:')) {
     const address = sanitizeSource(message.from.slice('federation:'.length));
@@ -713,9 +734,21 @@ function formatMessageSource(
         : sanitizeSource(message.from)
       : source;
   const scope = teamId === undefined ? undefined : sanitizeSource(teamId);
-  // 段数决定语义：有 node 才写三段，有 team 才写 `@team`。缺的段不补占位符。
-  const host = [nodeId, scope].filter((part) => part !== undefined && part !== '');
-  const address = host.length === 0 ? principal : `${principal}@${host.join(':')}`;
+  // node 名只有字符集安全（与 FEDERATION_NODE_ID_RE 同形状）才进地址：
+  // hostname 派生名可能含点 / 空格，直接拼会让 parseFederationAddress 形状校验失败。
+  const safeNodeName =
+    nodeName !== undefined && nodeName !== '' && isAddressSafePrincipal(nodeName)
+      ? nodeName
+      : undefined;
+  const nodeNames =
+    nodeId !== undefined && safeNodeName !== undefined
+      ? { node: new Map([[nodeId, safeNodeName]]) }
+      : undefined;
+  // 段数决定语义：有 node 才写三段，有 team 才写 `@team`。缺的段不补占位符
+  // （formatAddress 同口径）。replyable：principal 兜底跳过短 id 直达 full uuid。
+  const address = formatAddress({ principal, node: nodeId, team: scope }, style, nodeNames, {
+    replyable: true,
+  });
   return `<from location="${escapeAttr(address)}" />`;
 }
 
@@ -978,6 +1011,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
   private readonly logger: Logger;
   private readonly tenantId?: string;
   private readonly nodeId?: string;
+  private readonly nodeName?: string;
+  private readonly addressStyle: AddressStyle;
   private readonly includeReasoning?: boolean;
   private readonly session?: ExecutionUnitOptions['session'];
   private readonly eventLog?: ExecutionUnitOptions['eventLog'];
@@ -1016,6 +1051,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
     this.logger = options.logger ?? noopLogger;
     this.tenantId = options.tenantId;
     this.nodeId = options.nodeId;
+    this.nodeName = options.nodeName;
+    this.addressStyle = options.addressStyle ?? DEFAULT_ADDRESS_STYLE;
     this.includeReasoning = options.includeReasoning;
     this.session = options.session;
     this.eventLog = options.eventLog;
@@ -1295,7 +1332,13 @@ export class MemberExecutionHost implements MemberExecutionPort {
     const sourceMessage: Message = {
       role: 'user',
       name: 'vessel:source',
-      content: formatMessageSource(message, member.team_id, this.nodeId),
+      content: formatMessageSource(
+        message,
+        member.team_id,
+        this.nodeId,
+        this.nodeName,
+        this.addressStyle,
+      ),
       timestamp: Date.now(),
     };
     // 输入本身可能带结构化身份：A2A 是 agent:<alias>（Web 渲染成 agent 消息卡），

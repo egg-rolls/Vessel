@@ -189,6 +189,9 @@ export const messages = {
   'settings.item.expandCards.title': '卡片默认展开',
   'settings.item.expandCards.desc':
     '工具 / 系统消息 / 排队卡片默认展开；权限与提问卡片始终展开。某张卡片手动开合后以手动状态为准。',
+  'settings.item.addressStyle.title': '地址显示格式',
+  'settings.item.addressStyle.desc':
+    '来源行 / 路由副行里地址的显示档位：name = 各段能用名就用名（main@soulkiller:vessel）；compact = 节点用短 id；full = 完整 uuid。只影响显示，发送路由始终用完整地址。',
   'settings.item.statusBars.title': '状态栏位置',
   'settings.item.language.title': '界面语言',
   'settings.item.logLevel.title': '日志级别',

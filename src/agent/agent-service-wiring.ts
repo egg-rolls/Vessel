@@ -11,6 +11,7 @@
 
 import * as path from 'node:path';
 import {
+  type AddressStyle,
   AgentError,
   type AgentService,
   type AgentServiceOptions,
@@ -63,6 +64,16 @@ export interface AgentServiceWiringOptions {
    * federation 发送端口。必填 —— federation 关闭时来源行仍要 node 段。
    */
   nodeId: string;
+  /**
+   * 本机展示名（q-addr-display）：与 nodeId 同源（bootstrap `resolveNodeIdentity()`）。
+   * 来源行 node 段 name 档的渲染来源；缺省时兜底短 id。
+   */
+  nodeName?: string;
+  /**
+   * 地址显示风格（q-addr-display；装配层传 `config.ui.addressStyle`）。
+   * 透传成员来源行与 federation 抬头显示行；缺省 name 优先。
+   */
+  addressStyle?: AddressStyle;
   tenantId: string;
   /** 全局 dataDir；snapshot 落 `<dataDir>/agents/<tenant>.json` */
   dataDir: string;
@@ -272,6 +283,9 @@ export function buildMemberExecutionOptions(
     // 来源行的 node 段：与 federation 端口同源（bootstrap 的 nodeIdentity），
     // 只在装配期传一次，执行内核不自己解析。
     nodeId: options.nodeId,
+    // q-addr-display：node 名与显示风格同样装配期传一次（缺省由执行内核兜底）。
+    ...(options.nodeName !== undefined ? { nodeName: options.nodeName } : {}),
+    ...(options.addressStyle !== undefined ? { addressStyle: options.addressStyle } : {}),
   };
 }
 
@@ -534,6 +548,8 @@ export async function createAgentServiceWiring(
     ...(options.parentEvents !== undefined ? { events: options.parentEvents } : {}),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
     ...(options.federation !== undefined ? { federation: options.federation } : {}),
+    // q-addr-display：federation 抬头显示行按风格渲染（reply-with 恒 canonical）。
+    ...(options.addressStyle !== undefined ? { addressStyle: options.addressStyle } : {}),
   });
 
   return {

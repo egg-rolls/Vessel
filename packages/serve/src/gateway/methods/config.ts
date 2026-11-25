@@ -58,6 +58,8 @@ const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
   'ui.statusBars': ['top', 'bottom', 'both', 'none'],
   'ui.verbosity': ['minimal', 'normal', 'debug'],
   'ui.errorLevel': ['user', 'all'],
+  // q-addr-display：地址显示三档（与 config validator / agent ADDRESS_STYLES 一致）。
+  'ui.addressStyle': ['name', 'compact', 'full'],
   // 日志中枢（与 src/ui-settings.ts LOG_ENUM_VALUES / config validator 一致）。
   // modules 是 map，一期只进 yaml、WebUI 只读，不走 config.set。
   'observability.log.level': ['debug', 'info', 'warn', 'error'],

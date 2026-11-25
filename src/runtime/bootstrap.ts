@@ -1535,6 +1535,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       // 来源行的 node 段与 federation 端口共用 nodeIdentity：federation 关掉时
       // 来源行仍要本机 node 段，不能只挂在 send port 上。
       nodeId,
+      // q-addr-display：node 名同源传入（name 档来源行）；显示风格读 ui.addressStyle，
+      // 装配期取值（重启生效；hot-apply 留扩展位）。缺省由执行内核兜底 name。
+      nodeName,
+      ...(config.ui?.addressStyle !== undefined ? { addressStyle: config.ui.addressStyle } : {}),
       tenantId,
       dataDir,
       sessionId: currentSessionId,

@@ -1,8 +1,10 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: diff 行没有稳定 id，顺序即语义
+import { formatAddress } from '@vessel-agent/agent/address-display';
 import { useEffect, useState } from 'react';
 import { formatDuration, formatTimestamp } from '../../format';
 import type { ProjectionSummary } from '../../gateway/types';
 import { t } from '../../i18n';
+import { useAddressStyle } from '../../state/address-style';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { Verbosity } from '../../state/visibility';
 import { agentDisplayName } from './agent-labels';
@@ -126,7 +128,15 @@ export function ToolCard({
   const route = card.name === 'agent' ? agentRouteOf(card.args) : undefined;
   const resolvedTo = card.name === 'agent' ? resolvedTargetOf(card.result) : undefined;
   const resolvedRoute = resolvedTo !== undefined ? parseAgentAddress(resolvedTo) : undefined;
-  const nodeLabelOf = (node: string): string => nodeNames?.get(node) ?? node;
+  // q-addr-display：node 段按 ui.addressStyle 渲染（name 档查名 → 短 id 兜底；
+  // compact 恒短 id；full 原样）。统一走 formatAddress，不再各自拼名字表。
+  const addressStyle = useAddressStyle();
+  const nodeLabelOf = (node: string): string =>
+    formatAddress(
+      { node },
+      addressStyle,
+      nodeNames !== undefined ? { node: nodeNames } : undefined,
+    );
 
   // 卡片头（StreamCard 的 meta 槽）只放**运行耗时**，运行中 / 已结束同一个口径：
   // 运行中 = 现在 - startedAt（每秒刷新），已结束 = 事件给的总耗时。
