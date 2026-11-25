@@ -54,12 +54,28 @@
       "progress": "✅完成合并ab63936d(023fec90 read缺省3/cf8b0308去超时/c5f5b404 rotate0.5/e2e8b89d条带三态)build绿；更正：产物读数误报撤回(本仓build=typecheck+lint无bundle,ADR-006)；待验4点(直读最新3/不超时回退/50%rotate提示/三态切换)；worktree已清"
     },
     {
+      "id": "q-kanban-view",
+      "title": "任务看板查看器UI（真缺口：board.json无任何UI渲染）",
+      "column": "进行中",
+      "owner": "q-kanban-view",
+      "branch": "feat/q-kanban-view",
+      "progress": "797f3d0d派单：kanban.get/archive RPC+Web KanbanView三列卡片+用户打勾归档(不自动归档)+GHOST样式；①调研②RPC③UI④build"
+    },
+    {
+      "id": "q-plugin-lifecycle",
+      "title": "设计：插件热加载/重启生命周期（manifest声明+UI badge如实+内置跟踪vessel版本）",
+      "column": "进行中",
+      "owner": "q-plugin-lifecycle",
+      "branch": "design/q-plugin-lifecycle",
+      "progress": "90dbe782派单(用户设计问题)：每插件热/重启能力矩阵+根因+lifecycle声明+UI badge修O5+内置跟踪vessel版本+独立version保留+iframe热替换可行性；零代码"
+    },
+    {
       "id": "q-plugin-version",
       "title": "自研插件去掉版本号限制（用户裁定）",
-      "column": "进行中",
-      "owner": "q-plugin-version",
-      "branch": "fix/q-plugin-version",
-      "progress": "a836d148派单：内置/自研插件跳过引擎版本范围检查(fb44a979曾适配<3.0.0)，第三方保留保护；①调研②实施③build"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并036e8c11(e09858fc)：内置恒兼容去引擎门禁+5manifest engines删除+第三方保护保留；修复5内置插件2.0.0下fail-closed真bug；待金丝雀验+用户打勾"
     },
     {
       "id": "q-context-debug",
