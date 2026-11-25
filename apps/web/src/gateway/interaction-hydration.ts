@@ -253,6 +253,12 @@ export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnap
         ...(item.tool_call_id !== undefined && item.tool_call_id.length > 0
           ? { toolCallId: item.tool_call_id }
           : {}),
+        // 待批页按 agent 聚类：与 ask 分支同口径 —— 服务端已经给了 agent_id / team_id，
+        // 这里不要丢掉，否则刷新 / 重连后补回的权限卡只能退化成按会话聚类。
+        ...(item.agent_id !== undefined && item.agent_id.length > 0
+          ? { agentId: item.agent_id }
+          : {}),
+        ...(item.team_id !== undefined && item.team_id.length > 0 ? { teamId: item.team_id } : {}),
       });
       continue;
     }

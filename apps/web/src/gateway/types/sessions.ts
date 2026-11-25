@@ -461,6 +461,11 @@ export interface PermissionRequest {
   source?: string;
   /** 0.17 additive：发起请求的子 agent（delegate_id / agent_id）；旧流缺失。 */
   agentId?: string;
+  /**
+   * 成员 bridge 的团队归属（事件 / 记录 `team_id`）；additive，与 ask 同口径。
+   * 服务端本来就携带，读侧用它判「团队」来源面；旧流缺失时保持 undefined。
+   */
+  teamId?: string;
   /** 事件时间（同一 run 多请求排序）。 */
   requestedAt: number;
 }
