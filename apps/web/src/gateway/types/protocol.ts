@@ -198,6 +198,24 @@ export interface PluginContributionToolbar {
   /** 白名单图标名；未知名由 Web normalizer 丢弃。 */
   icon?: string;
   order?: number;
+  /** 通用 RPC 绑定菜单（additive，q-thinking-plugin P3）；旧 gateway 不返回。 */
+  menu?: PluginContributionToolbarMenu;
+}
+
+/** 菜单档位项 wire 形状（additive）。 */
+export interface PluginContributionToolbarMenuItem {
+  value: string;
+  labelKey?: string;
+  label?: string;
+}
+
+/** 通用 RPC 绑定菜单 wire 形状（additive）。 */
+export interface PluginContributionToolbarMenu {
+  read: string;
+  write: string;
+  valueKey: string;
+  sessionScoped?: boolean;
+  items: PluginContributionToolbarMenuItem[];
 }
 
 /** `plugins.list` 的 additive 贡献点；旧 gateway 不返回。 */

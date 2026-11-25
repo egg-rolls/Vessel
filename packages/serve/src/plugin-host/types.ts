@@ -162,6 +162,24 @@ export interface PluginToolbarContribution {
   titleKey?: string;
   icon?: PluginIconName;
   order?: number;
+  /** 通用 RPC 绑定菜单（additive，q-thinking-plugin P3）；缺省 = 普通按钮。 */
+  menu?: PluginToolbarMenu;
+}
+
+/** 菜单档位项（additive）。 */
+export interface PluginToolbarMenuItem {
+  value: string;
+  labelKey?: string;
+  label?: string;
+}
+
+/** 通用 RPC 绑定菜单契约（additive；read/write 须在本插件 rpc 白名单且权限匹配）。 */
+export interface PluginToolbarMenu {
+  read: string;
+  write: string;
+  valueKey: string;
+  sessionScoped?: boolean;
+  items: PluginToolbarMenuItem[];
 }
 
 /** `contributes.commands[]` */
@@ -286,6 +304,7 @@ export interface PluginRenderContributions {
     titleKey?: string;
     icon?: PluginIconName;
     order: number;
+    menu?: PluginToolbarMenu;
   }>;
   commands: Array<{ name: string; title: string }>;
   /** E1 amendment：bare RPC 方法名，供 web iframe bridge 做白名单。 */

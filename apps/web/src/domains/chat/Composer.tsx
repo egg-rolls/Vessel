@@ -46,6 +46,7 @@ export function Composer({
   client,
   contextUsage,
   memberModel,
+  sessionId,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -85,6 +86,8 @@ export function Composer({
    * 缺省（会话无归属成员 / 草稿态）不渲染；数据由 ChatView 从选中会话喂入。
    */
   memberModel?: MemberModelSwitchProps;
+  /** 当前会话 id（P3 思考强度菜单 sessionScoped write）；缺省（草稿态）按全局默认。 */
+  sessionId?: string;
 }) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const mountedRef = useRef(true);
@@ -176,6 +179,7 @@ export function Composer({
         <ComposerField
           contextUsage={contextUsage}
           attach={attach}
+          sessionId={sessionId}
           slot={memberModel !== undefined ? <MemberModelSwitch {...memberModel} /> : undefined}
           primary={
             !hasToken || !connected ? (

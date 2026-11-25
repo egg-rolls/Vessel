@@ -640,6 +640,7 @@ export function ChatView({
             onRetryPendingFetch={() => {
               void hydrateInteractions();
             }}
+            sessionId={selectedId ?? undefined}
           />
         </section>
 

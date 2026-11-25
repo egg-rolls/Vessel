@@ -91,6 +91,24 @@ export interface PluginToolbarItem {
   titleKey?: string;
   icon?: PluginNavIcon;
   order: number;
+  /** 通用 RPC 绑定菜单（additive，P3）；缺省 = 普通按钮（宿主按 id 映射回调）。 */
+  menu?: PluginToolbarMenu;
+}
+
+/** 菜单档位项（归一化后）。 */
+export interface PluginToolbarMenuItem {
+  value: string;
+  labelKey?: string;
+  label?: string;
+}
+
+/** 通用 RPC 绑定菜单（归一化后；read/write 已校验 ∈ 本插件 rpc 白名单且权限匹配）。 */
+export interface PluginToolbarMenu {
+  read: string;
+  write: string;
+  valueKey: string;
+  sessionScoped?: boolean;
+  items: PluginToolbarMenuItem[];
 }
 
 /**
@@ -381,6 +399,7 @@ function toolbarOf(
   const icon = navIconOf(item.icon);
   if (icon === null) return null;
   const titleKey = text(item.titleKey);
+  const menu = toolbarMenuOf(plugin, item.menu);
   return {
     pluginId: plugin.name,
     pluginName: plugin.name,
@@ -390,6 +409,65 @@ function toolbarOf(
     ...(titleKey !== '' ? { titleKey } : {}),
     ...(icon !== undefined ? { icon } : {}),
     order: orderOf(item.order),
+    ...(menu !== undefined ? { menu } : {}),
+  };
+}
+
+/** 菜单档位上限 / 值长度上限（与 manifest loader 同口径）。 */
+const TOOLBAR_MENU_MAX_ITEMS = 16;
+const TOOLBAR_MENU_MAX_VALUE_LEN = 64;
+
+/**
+ * 通用 RPC 绑定菜单归一化（additive，P3）。校验 read/write 须在本插件 rpc 白名单内
+ * 且权限匹配（read→read，write→write）；违规 ⇒ 丢 menu 保留普通按钮（单项丢弃口径）。
+ * 旧 gateway 无 menu ⇒ undefined ⇒ 条目退化为普通按钮（无 handler 则不渲染）。
+ */
+function toolbarMenuOf(
+  plugin: PluginListItem,
+  raw: PluginContributionToolbar['menu'],
+): PluginToolbarMenu | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const read = text(raw.read);
+  const write = text(raw.write);
+  const valueKey = text(raw.valueKey);
+  if (read === '' || write === '' || valueKey === '') return undefined;
+
+  // rpc 白名单 + 权限（string 条目缺省 read；对象条目读 permission）。
+  const permissions = new Map<string, 'read' | 'write'>();
+  for (const rpc of plugin.contributions?.rpc ?? []) {
+    if (typeof rpc === 'string') {
+      const name = text(rpc);
+      if (name !== '') permissions.set(name, 'read');
+    } else if (rpc !== null && typeof rpc === 'object') {
+      const name = text(rpc.name);
+      if (name !== '') permissions.set(name, rpc.permission === 'write' ? 'write' : 'read');
+    }
+  }
+  if (permissions.get(read) !== 'read') return undefined;
+  if (permissions.get(write) !== 'write') return undefined;
+
+  if (!Array.isArray(raw.items) || raw.items.length === 0) return undefined;
+  const items: PluginToolbarMenuItem[] = [];
+  for (const entry of raw.items) {
+    if (items.length >= TOOLBAR_MENU_MAX_ITEMS) break;
+    if (entry === null || typeof entry !== 'object') continue;
+    const value = text(entry.value);
+    if (value === '' || value.length > TOOLBAR_MENU_MAX_VALUE_LEN) continue;
+    const labelKey = text(entry.labelKey);
+    const label = text(entry.label);
+    items.push({
+      value,
+      ...(labelKey !== '' ? { labelKey } : {}),
+      ...(label !== '' ? { label } : {}),
+    });
+  }
+  if (items.length === 0) return undefined;
+  return {
+    read,
+    write,
+    valueKey,
+    ...(raw.sessionScoped === true ? { sessionScoped: true } : {}),
+    items,
   };
 }
 

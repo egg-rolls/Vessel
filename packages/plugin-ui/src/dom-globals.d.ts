@@ -27,6 +27,17 @@ interface Node {
 interface Element extends Node {
   getBoundingClientRect(): DOMRect;
   scrollIntoView(options?: { block?: 'nearest' | 'start' | 'center' | 'end' }): void;
+  /** 菜单焦点管理用（additive，q-thinking-plugin P3）。 */
+  querySelector<E extends Element = Element>(selectors: string): E | null;
+  querySelectorAll<E extends Element = Element>(selectors: string): NodeListOf<E>;
+}
+
+/** querySelectorAll 返回值的最小数组_like 形状（可迭代 / 可索引）。 */
+interface NodeListOf<TNode extends Node> {
+  readonly length: number;
+  item(index: number): TNode | null;
+  [index: number]: TNode;
+  [Symbol.iterator](): IterableIterator<TNode>;
 }
 
 interface HTMLElement extends Element {
@@ -57,6 +68,13 @@ interface MouseEvent {
   target: EventTarget | null;
 }
 
+/** 键盘事件最小形状（菜单方向键 / Esc，additive P3）。 */
+interface KeyboardEvent {
+  key: string;
+  target: EventTarget | null;
+  preventDefault(): void;
+}
+
 interface Window {
   innerWidth: number;
   innerHeight: number;
@@ -77,14 +95,25 @@ declare var window: Window;
 declare var document: {
   body: HTMLElement;
   documentElement: HTMLElement;
+  activeElement: Element | null;
   addEventListener(
+    type: string,
+    listener: (event: MouseEvent) => void,
+    options?: boolean | { capture?: boolean },
+  ): void;
+  addEventListener(
+    type: string,
+    listener: (event: KeyboardEvent) => void,
+    options?: boolean | { capture?: boolean },
+  ): void;
+  removeEventListener(
     type: string,
     listener: (event: MouseEvent) => void,
     options?: boolean | { capture?: boolean },
   ): void;
   removeEventListener(
     type: string,
-    listener: (event: MouseEvent) => void,
+    listener: (event: KeyboardEvent) => void,
     options?: boolean | { capture?: boolean },
   ): void;
 };

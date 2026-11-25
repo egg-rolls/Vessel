@@ -113,6 +113,44 @@
           "permission": "read"
         }
       ],
+      "toolbar": [
+        {
+          "slot": "composer",
+          "id": "thinking-level",
+          "label": "Thinking",
+          "titleKey": "thinking-intensity.toolbar.label",
+          "icon": "observe",
+          "order": 20,
+          "menu": {
+            "read": "get_state",
+            "write": "set_level",
+            "valueKey": "level",
+            "sessionScoped": true,
+            "items": [
+              {
+                "value": "auto",
+                "labelKey": "thinking-intensity.level.auto"
+              },
+              {
+                "value": "off",
+                "labelKey": "thinking-intensity.level.off"
+              },
+              {
+                "value": "low",
+                "labelKey": "thinking-intensity.level.low"
+              },
+              {
+                "value": "medium",
+                "labelKey": "thinking-intensity.level.medium"
+              },
+              {
+                "value": "high",
+                "labelKey": "thinking-intensity.level.high"
+              }
+            ]
+          }
+        }
+      ],
       "i18n": {
         "en": {
           "thinking-intensity.settings.enabled": "Enable thinking intensity",

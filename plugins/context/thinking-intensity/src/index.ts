@@ -130,8 +130,13 @@ function getState(params: Record<string, unknown>): Record<string, unknown> {
     level,
     source: levelSource(state, sessionId),
     enabled: liveSettings.enabled,
+    // 通用菜单契约（设计 §4.7.2）顶层可选字段：options 能力过滤 / hint 说明 / supported。
+    // 首轮请求前 observed 缺省 ⇒ 不带 options（全档可选，诚实降级）。
     ...(observed !== undefined
       ? {
+          supported: observed.supported,
+          options: observed.availableLevels ?? [],
+          ...(observed.hint !== undefined ? { hint: observed.hint } : {}),
           provider: {
             ...(observed.providerName !== undefined ? { name: observed.providerName } : {}),
             model: observed.model,
