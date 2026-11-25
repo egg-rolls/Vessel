@@ -248,4 +248,42 @@ C 下生产 gateway 为探测/代理凭据会加载金丝雀条目：`loadConfig
 
 ### 5.4 adopt 语义的安全性（C 的关键保障）
 
-生产 gateway `begin()` 对 external 条目**只读 pid 文件、不 spawn、不杀**（node-supervisor.ts L963–982）；`claim()` 对活进程只 adopt 不重复 spawn（L995）。⇒ 生产 gateway 重启/崩溃/看门狗动作都**不会**把金丝雀进程收编或重 spawn 成生产代码。唯一危险动作是人为把条目改成 `auto_start:true`（§8 风险 R6）。
+生产 gateway `begin()` 对 external 条目**只读 pid 文件、不 spawn、不杀**（node-supervisor.ts L963–982）；`claim()` 对活进程只 adopt 不重复 spawn（L995）。⇒ 生产 gateway 重启/崩溃/看门狗动作都**不会**把金丝雀进程收编或重 spawn 成生产代码。唯一危险动作是人为把条目改成 `auto_start:true`（§8 风险 R6）。---
+
+## §6 Web UI 与 env 卫生（调研面⑤⑥）
+
+### 6.1 Web UI：多 node 展示/切换现成，但前端版本是生产 dist
+
+**现成能力（平台模式，0.49 G3c 起）**：
+
+- `platform.nodes.list` 是平台模式**唯一节点来源**（`apps/web/src/gateway/NodeProvider.tsx` L105–125：不合并手填节点）；
+- 选择顺序：持久化 node_id（sessionStorage `vessel.node-selection`）→ 第一个 up → 第一个节点（`node-selection.ts` `resolvePlatformNodeSelection` L68）；用户显式切换不做二次猜测；
+- 展示名：`useNodeNames`（`apps/web/src/domains/nodes/useNodeNames.ts` L53）优先 `health.get.node.name`，按 nodeKey 缓存 sessionStorage，健康短暂失败不回退 UUID；
+- 数据面：当前 node 走活连接（平台代理 `<origin>/nodes/<id>`，cookie 鉴权）；跨 node roster/teams/attention 按 node_id 取 `platform.nodes.credentials` 下发的凭据（NodeProvider L138–151 注释：代理模式下浏览器没有 node token，直连 api_url 必然 401）；
+- token 按 node_id 分槽 sessionStorage（`nodes.ts` `nodeTokenIdentity` L60），改名不丢。
+
+⇒ **C 落地后浏览器只开 8642 一个入口**，节点列表里 production / soulkiller-canary 并列、点击切换，一次登录。这是用户动机的真实收益面。
+
+**限制（必须向用户明示）**：
+
+1. **前端代码 = 平台所在 checkout 的 dist**。拆分模式 node 不宿 WebUI（`packages/serve/src/gateway.ts` L4205 注释「拆分模式 node 不宿 WebUI（staticDir 置空）」）；8654 只有 RPC/WS，没有页面。单 gateway 后金丝雀 node 的页面由**生产前端**渲染 ⇒ **金丝雀的新前端特性无法经此入口验收**；生产前端 × 金丝雀后端还可能有能力位/timeline 协议差异（blue-green R9：旧前端缓存对新后端假报 timeline 缺口——反向同理）。
+2. 缓解选项（§8 未决）：a) 保留 8652 作**纯 UI gateway**（只起平台层、node 指向 external 金丝雀——但隐式单节点模式下平台会自起 node，需 registry 化，等于金丝雀侧也做 C，复杂度回升）；b) `apps/web` dev server（vite）代理到金丝雀 node/平台做前端验收；c) 接受「金丝雀只验后端/agent 运行时」，前端特性走生产发布前的常规流程。**调研倾向 b/c：金丝雀日常（agent/工具/federation 修复）几乎全是后端面。**
+3. 平台会话是单用户（auth 0.56）：两 node 共享同一登录会话，**没有 per-node 的 UI 权限差**——金丝雀 node 的宽 auto_approve 在 UI 上可见可操作，与今天 8652 入口等价，不新增泄漏面（权限本体在 node config，§3.3）。
+
+### 6.2 env 卫生：T2b 教训与三拓扑对比
+
+**T2b 事实**（`docs/dev/reports/q-runtime-fix/investigation.md` issue-1，q-tool-output-leak 在修）：canary 的 data_dir 来自配置文件、host 进程 env 无 `VESSEL_DATA_DIR` ⇒ `toolOutputRoot()` 落到硬编码 `~/.vessel/data/tool-output`，host 与 engine child 双双写进生产根。修法：bootstrap 解析 dataDir 后桥接 `process.env.VESSEL_DATA_DIR`（已提交 `1bce7a64`）。
+
+**env 快照链**（federation-setup.md §3.1，四环）：daemon spawn = 启动那一刻 CLI env 快照 → node 子进程继承**平台**快照（spawnOnly L1337）→ `gateway restart` 缺省保活 node、env 不刷新 → WSL↔Windows env 边界。可靠注入 = node 自读 `env_file`。
+
+三拓扑对比：
+
+| | A | B | C |
+|---|---|---|---|
+| 金丝雀 node 的 env 来源 | 金丝雀启动 shell 快照（`--user-config`/`VESSEL_NO_EXTERNAL_PLUGINS` 等在此注入） | **生产 gateway 启动快照**全量继承 + 3 个注入键 | 同 A |
+| `VESSEL_DATA_DIR` | node bootstrap 桥接（T2b 修后） | spawnOnly 按 spec.dataDir 注入 ✅（B 唯一占优的键） | 同 A |
+| `VESSEL_USER_CONFIG` | 金丝雀自己的 ✅ | **缺失** ⇒ 用户层写回击穿（§3.3） | 同 A ✅ |
+| ambient `VESSEL_TOOL_OUTPUT_DIR`/`VESSEL_PLUGIN_CONFIG` 等 | 各舰队快照独立，互不灌 | 生产 gateway 快照里若有 ⇒ **灌进金丝雀并压过其 config**（env 层 > project 层）；反向金丝雀 shell 的变量也进不了生产 gateway（它先启动） | 同 A |
+| `VESSEL_NO_EXTERNAL_PLUGINS` | 金丝雀启动时设 ✅ | 取决于生产 gateway 启动时有没有设——**生产通常不设** ⇒ 金丝雀 node 会加载 `~/.vessel/plugins` 外部插件（R5 击穿） | 同 A ✅ |
+
+**结论：B 的 env 模型是「一份快照灌所有 node」，与金丝雀隔离需求结构性冲突；C 保持「各 node 各快照」，T2b 类修复（node 内桥接 dataDir）在 C 下与 A 同样生效。** 若将来真要做 B，per-node env allowlist/追加字段是前置代码改动（与 per-node entry 同批立项）。
