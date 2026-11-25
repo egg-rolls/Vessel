@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "★三次晋升完成：main=fb44a979(v2.0.0,723fb673→38ee0aec→ab63936d→3953a92e→fb44a979)，生产8642/8644健康。第一/二轮全验闭环+前批(from-card/ui-polish/leak/plugin-default-on/AX六命令/inbox-ux/addr-display/sidebar-anim/design-audit/minimap/tooltip/inbox-source/drawer-fix/plugin-version)已晋升。★第四轮金丝雀收尾：canary=3cc1474d(bundle index-DoIKo9x_.js)，skills-style DONE封存(SS2-1 CLOSED)，cardrobust(f87f4f8c)复验22②+⑥中→ALL封存→drain→node start→respawn复核→晋升redblue-dev(45b92c99)→用户重启。第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl)已登记批次书本轮不测。后续队列：plugin-config-read修复/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期"
+      "progress": "★三次晋升完成：main=fb44a979(v2.0.0,723fb673→38ee0aec→ab63936d→3953a92e→99f87c0c→fb44a979)，生产8642/8644健康。已晋升=第一/二轮全验闭环+AX三组/inbox-ux/addr-display/sidebar-anim/design-audit/minimap+tooltip/inbox-source/drawer-fix/SemVer release。★第四轮金丝雀收尾：canary=3cc1474d(bundle index-DoIKo9x_.js)，skills-style DONE封存(SS2-1 CLOSED)，cardrobust(f87f4f8c)复验22②+⑥中→ALL封存→drain→node start→respawn复核→晋升redblue-dev(32ee6e72,含main热修复fb44a979回并零diff)→用户重启。本批待晋升=kanban-view/kanban-proxy/graceful-selfrestart/empty-state/plugin-ui-layer/hydration-anon/drag-reference/card-robust/plugin-version/skills-style/inbox-actions+第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl,lead已登记批次书本轮不测)。后续队列：plugin-config-read修复/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期"
     },
     {
       "id": "canary-qa-lead",
@@ -309,7 +309,7 @@
       "column": "待办",
       "owner": "main+user",
       "branch": "redblue-dev",
-      "progress": "build门禁由各实施agent跑绿+金丝雀行为验收(第一/二轮verify2/3/4全过)+三次晋升main=fb44a979(v2.0.0)；★当前=第四轮金丝雀收尾(cardrobust复验→ALL封存→drain→respawn复核)→晋升redblue-dev 45b92c99到main(ff-only)→通知用户重启生产+最终行为验收；第五轮四面候lead批次书"
+      "progress": "build门禁由各实施agent跑绿+金丝雀行为验收(第一/二轮verify2/3/4全过)+三次晋升main=fb44a979(v2.0.0)；★main热修复fb44a979已回并redblue-dev(32ee6e72,内容取plugin-version删engines终态,树零diff,ff-only通路恢复)；当前=第四轮金丝雀收尾(cardrobust复验→ALL封存→drain→respawn复核)→晋升redblue-dev 32ee6e72到main(ff-only)→通知用户重启生产+最终行为验收；第五轮四面候lead批次书"
     }
   ]
 }
