@@ -141,6 +141,22 @@
       "progress": "✅完成合并03f13c06(fix/q-dr15-exit 3commits fd847228审计/ab55424e A/f8aaae58 B,17文件+939/-108,门禁绿)：A=server.stop(true)5s race有界化+best-effort+永久node.shutdown.step日志(serve共享shutdown-step.ts全链覆盖)+平台同修；B=等死段postQuiesceTimeoutMs=30s兜底+stop.forced审计reason=quiesce_exit_timeout+O7持久化persistStopAuditLine落log；候run不限时红线不动；根因精化:f0dabd9d interrupt假说排除→纯Bun server.stop残余连接挂起；★lead正式终裁DR15-1 node CLOSED✅(cli B形式核476行7判据node全PASS:A秒退5.08s/B~56ms无force/server.stop≤5s有界/兜底B+O7双证/裁定#5不回归/14⑤⑥/两路径seam同构,原阻塞缺陷A/B双路径解除)；DR15-2 platform另卡续作fix/q-dr15-2-platform候修复闭环→晋升信号"
     },
     {
+      "id": "q-pl5-guardrail",
+      "title": "微修复：PL5-1 热应用guardrail reconcile保留vessel-bridge core",
+      "column": "进行中",
+      "owner": "q-pl5-guardrail",
+      "branch": "fix/q-pl5-guardrail",
+      "progress": "9a7a4b84派单(lead转达请修复)：任何插件热应用必触发guardrails removed vessel-bridge(两次live pid97984/pid103760确证)→父宿主vessel-bridge core guardrail(vessel-meta.ts L295非插件贡献)缺席候restart自愈；①根因审计热应用vs冷启动guardrail reconcile差异(移除点file:line,假说热应用只从插件贡献组装丢core)→②修复热应用reconcile保core guardrail只reconcile插件贡献→③门禁；候修复→合并→canary同步→lifecycle复验热应用不再removed vessel-bridge"
+    },
+    {
+      "id": "q-ti5-mapping",
+      "title": "微修复：O-TI2 thinking-intensity映射vendor前缀裸名匹配（main裁定修复）",
+      "column": "进行中",
+      "owner": "q-ti5-mapping",
+      "branch": "fix/q-ti5-mapping",
+      "progress": "f2eb0371派单(O-TI2观察main裁定修复)：mapping.ts #3 qwen行/^qwen/i不匹配vendor前缀全ID dashscope/qwen4-max→supported:false不注入(用户实际模型真实缺口)；修复=resolveMapping裸名归一化(model.split('/').pop()通用)或改锚定pattern容前缀,agent裁定最小通用方案→dashscope/qwen4-max supported:true budget；红线映射知识在插件0core改动/stable行形状档位不动；候修复→合并→canary同步→webui复验get_state supported:true"
+    },
+    {
       "id": "q-ti5-23",
       "title": "微修复：TI5-2 toolbar menu透传+TI5-3 plugins[].config键豁免（B1 PARTIAL）",
       "column": "进行中",
