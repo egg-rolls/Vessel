@@ -16,7 +16,11 @@ import {
   loadConfig,
   type PluginConfig,
 } from '../../../../packages/config/src/index';
-import { declarativePluginEntries, setPluginEnabled } from '../../../plugin/plugin-config';
+import {
+  declarativePluginEntries,
+  pluginEntryEnabled,
+  setPluginEnabled,
+} from '../../../plugin/plugin-config';
 import {
   defaultPluginRoots,
   type PluginDescriptor,
@@ -105,13 +109,12 @@ function formatContributions(summary: Record<string, number>): string {
 }
 
 /**
- * child 插件的启用状态：未写 `plugins:` 时缺省启用；写了则只启用显式条目。
- * 与 in-process 插件共用同一 `plugins[]` 配置形状。
+ * child 插件的启用状态：覆盖层语义（0.56.1）——条目缺省 = 启用，只有显式
+ * `enabled: false` 才关。与宿主装配 pluginEnabledInConfig 共用 pluginEntryEnabled，
+ * 消除「宿主加载了、CLI 显示 no」的两套口径。
  */
 function pluginEnabledByConfig(name: string, configured: PluginConfig[] | undefined): boolean {
-  if (configured === undefined) return true;
-  const entry = configured.find((candidate) => candidate.name === name);
-  return entry !== undefined && entry.enabled !== false;
+  return pluginEntryEnabled(configured, name);
 }
 
 /** 从 plugin 目录的 package.json 读取短名；不合法返回错误 */
@@ -322,13 +325,17 @@ export async function runPluginCommand(
       } catch {
         // 配置无效不影响安装本身；只给出通用提示。
       }
+      // 0.56.1 覆盖层语义：装的插件默认开启；只有显式 enabled:false 才需要再启用。
+      const explicitlyOff = configured?.some(
+        (entry) => entry.name === named.name && entry.enabled === false,
+      );
       return {
         exitCode: 0,
         stdout: [
           ui.ok(`Installed "${named.name}" -> ${destination}`),
-          configured === undefined
-            ? 'Restart Vessel to load it (user plugins load by default when plugins: is absent).'
-            : 'Restart Vessel after enabling it in plugins:.',
+          explicitlyOff
+            ? 'It is explicitly disabled in plugins: (enabled: false); run "vessel plugin enable" to load it.'
+            : 'Restart Vessel to load it (installed plugins load by default).',
         ].join('\n'),
         stderr: '',
       };
@@ -347,11 +354,9 @@ export async function runPluginCommand(
     }
     const configPath = options.userConfigPath ?? getUserConfigPath();
     try {
-      const allNames = makeLoader(userDir).getAvailablePlugins();
-      await setPluginEnabled(command.name, command.kind === 'enable', {
-        configPath,
-        ...(allNames.length > 0 ? { allNames } : {}),
-      });
+      // 0.56.1 覆盖层语义：只写目标单条，不再物化全量默认集
+      // （物化会漂移且静默排除此后新装的插件，见 setPluginEnabled 注释）。
+      await setPluginEnabled(command.name, command.kind === 'enable', { configPath });
       const reloaded = await requestGatewayPluginReload(options);
       return {
         exitCode: 0,
