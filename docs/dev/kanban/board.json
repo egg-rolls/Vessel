@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "★三次晋升完成：main=fb44a979(v2.0.0,723fb673→38ee0aec→ab63936d→3953a92e→99f87c0c→fb44a979)，生产8642/8644健康。已晋升=第一/二轮全验闭环+AX三组/inbox-ux/addr-display/sidebar-anim/design-audit/minimap+tooltip/inbox-source/drawer-fix/SemVer release。★第四轮收尾+DR15-1修复复验中：修复合并redblue-dev 03f13c06→canary同步aa92f5ae(22文件零冲突,web未变免rebuild)→协议A restart --force加载新码(审计runs_cut=1★lead对账✓=O8 zombie c0b150c7属skillsstyle19c5733f非活run,fencing_token2被completed61f63769取代,force后runs.list仍running冻结17:27铁证,零真实损失,第五轮非阻塞)→新进程组platform56812/node48092/hub63056,8652/8654/8653绿★version2.1.0新码实证；cli复验：A PASS(node自死5.08s无force,门禁①⑤⑥)+B完成(node路径PASS drain.done→自死56ms,server.stop timeout_bounded5s;platform DR15-2确证30s看门狗force abnormal_exit,B兜底保安全)；★我裁定DR15-2 platform race微修复后晋升(续派q-dr15-exit fix/q-dr15-2-platform与B并行)；候cli核B②⑦+DR15-2修复闭环platform清洁复验→7判据终版→★DR15-1 node CLOSED✅(lead正式终裁7判据全PASS)+DR15-2修复合并1989a938→canary同步afdc4267+协议A restart加载(version2.1.0,platform50940/node47740,runs_cut=0)→候cli platform清洁复验6判据(platform.server.stop done dur≈ms+无quiesce_exit_timeout force+无abnormal_exit+node spot-check保DR15-1)→DR15-2 CLOSED→晋升信号→晋升redblue-dev到main(ff-only)→用户重启。本批待晋升=kanban-view/kanban-proxy/graceful-selfrestart/empty-state/plugin-ui-layer/hydration-anon/drag-reference/card-robust/plugin-version/skills-style/inbox-actions+第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl,lead已登记批次书本轮不测)。后续队列：plugin-config-read修复/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期"
+      "progress": "★三次晋升完成：main=fb44a979(v2.0.0,723fb673→38ee0aec→ab63936d→3953a92e→99f87c0c→fb44a979)，生产8642/8644健康。已晋升=第一/二轮全验闭环+AX三组/inbox-ux/addr-display/sidebar-anim/design-audit/minimap+tooltip/inbox-source/drawer-fix/SemVer release。★第四轮收尾+DR15-1修复复验中：修复合并redblue-dev 03f13c06→canary同步aa92f5ae(22文件零冲突,web未变免rebuild)→协议A restart --force加载新码(审计runs_cut=1★lead对账✓=O8 zombie c0b150c7属skillsstyle19c5733f非活run,fencing_token2被completed61f63769取代,force后runs.list仍running冻结17:27铁证,零真实损失,第五轮非阻塞)→新进程组platform56812/node48092/hub63056,8652/8654/8653绿★version2.1.0新码实证；cli复验：A PASS(node自死5.08s无force,门禁①⑤⑥)+B完成(node路径PASS drain.done→自死56ms,server.stop timeout_bounded5s;platform DR15-2确证30s看门狗force abnormal_exit,B兜底保安全)；★我裁定DR15-2 platform race微修复后晋升(续派q-dr15-exit fix/q-dr15-2-platform与B并行)；候cli核B②⑦+DR15-2修复闭环platform清洁复验→7判据终版→★DR15-1 node CLOSED✅+DR15-2迭代2修复合并1aba69c0(Bun计数泄漏workaround:terminate预关+stop不await+WS分类诊断)→canary同步d9d6cbde+协议A restart加载(version2.1.0,platform97020/node70348,runs_cut=0)→候cli修正判据复验6判据(start→done≈ms+差值pending_ws−proxy_ws_closed≈0+无CLOSING+无quiesce_exit_timeout force/abnormal_exit+node零改动spot-check)→★DR15-1+DR15-2 CLOSED✅第四轮14-22全闭环四ISSUE全CLOSED→晋升完成main=d5c7d3f1(2.1.0,ff-only)→用户优雅重启加载；第五轮A(permission汇集)/C(看板视觉)已合并redblue-dev 9aa43fbb候canary同步+lead tree拆分开验,B四面已搭晋升入main候正式验收。本批待晋升=kanban-view/kanban-proxy/graceful-selfrestart/empty-state/plugin-ui-layer/hydration-anon/drag-reference/card-robust/plugin-version/skills-style/inbox-actions+第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl,lead已登记批次书本轮不测)。后续队列：plugin-config-read修复/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期"
     },
     {
       "id": "canary-qa-lead",
@@ -154,7 +154,7 @@
       "column": "阻塞",
       "owner": "user",
       "branch": "feat/q-kanban-visual",
-      "progress": "✅实施完成build绿(main盘上核实:4commits 0576c89b审计/5bff3847看板GHOST误套摘除六面归位/96e96c8d plugin-ui Pager additive+skills替换build:ui/4d678f40报告,12文件+435/-229,plugin-ui index仅+1 additive导出既有零改动,typecheck+lint+📦全绿,资产sha256在报告)；★lead分批裁定:第五轮批次C=UI视觉专项(design-audit规范+像素验收,与18/20/21封存面耦合回归,测试员skillsstyle复用)；合并候第四轮晋升后(main合)+批次C金丝雀验+用户打勾；不做清单:看板未加分页/skills计数胶囊先例不动/RunEventLog GHOST域合法不动"
+      "progress": "✅实施完成build绿(main盘上核实:4commits 0576c89b审计/5bff3847看板GHOST误套摘除六面归位/96e96c8d plugin-ui Pager additive+skills替换build:ui/4d678f40报告,12文件+435/-229,plugin-ui index仅+1 additive导出既有零改动,typecheck+lint+📦全绿,资产sha256在报告)；★lead分批裁定:第五轮批次C=UI视觉专项(design-audit规范+像素验收,与18/20/21封存面耦合回归,测试员skillsstyle复用)；★已合并redblue-dev 9aa43fbb(晋升后)+候canary同步+第五轮批次C金丝雀像素验(skillsstyle+18/20/21封存面耦合,plugin-ui Pager additive红线)+用户打勾；不做清单:看板未加分页/skills计数胶囊先例不动/RunEventLog GHOST域合法不动"
     },
     {
       "id": "q-permission-pending",
@@ -162,7 +162,7 @@
       "column": "阻塞",
       "owner": "user",
       "branch": "feat/q-permission-pending",
-      "progress": "✅实施完成build绿(main盘上核实:4commits 9e5d2d64审计/44ed0c40 teamId additive/22522195混聚主特性/18b7a22c format,11文件+312/-71,红线文件零触及,hydration仅additive投影闸门不动,typecheck+lint+📦全绿)；方案=混合聚类(agent>session>run)+PermissionCard原样复用+respondPermission逐条裁决(不批量)+badge计数对齐(AppShell+ChatView)；★lead分批裁定:第五轮批次A专项(与CR22-1 hydration-anon共享入口耦合回归,测试员cardrobust卡面+skillsstyle待批页UI续话)；合并候第四轮晋升后(main合)+批次A金丝雀验+用户打勾；遗留:pendingBySession会话行badge原始sessionId口径=0.51既有设计(审计§3注明)"
+      "progress": "✅实施完成build绿(main盘上核实:4commits 9e5d2d64审计/44ed0c40 teamId additive/22522195混聚主特性/18b7a22c format,11文件+312/-71,红线文件零触及,hydration仅additive投影闸门不动,typecheck+lint+📦全绿)；方案=混合聚类(agent>session>run)+PermissionCard原样复用+respondPermission逐条裁决(不批量)+badge计数对齐(AppShell+ChatView)；★lead分批裁定:第五轮批次A专项(与CR22-1 hydration-anon共享入口耦合回归,测试员cardrobust卡面+skillsstyle待批页UI续话)；★已合并redblue-dev 9aa43fbb(晋升后)+候canary同步+第五轮批次A金丝雀验(耦合回归hydration-anon入口,cardrobust卡面+skillsstyle待批页UI)+用户打勾；遗留:pendingBySession会话行badge原始sessionId口径=0.51既有设计(审计§3注明)"
     },
     {
       "id": "q-graceful-selfrestart",

@@ -1,13 +1,14 @@
 /**
- * 「待批」汇集页：所有待回答的 ask 提问按 agent / 会话聚簇。
+ * 「待批」汇集页：所有待裁决的 permission 审批 + 待回答的 ask 提问按 agent / 会话聚簇。
  *
- * 数据源：useConnection().asks（interactionStore 的 pending ask，实时事件 +
- * 既有 interactions.list(status=pending) 补回）。不新开 store、不新增 RPC。
+ * 数据源：useConnection().permissions / .asks（interactionStore 的 pending 集合，
+ * 实时事件 + 既有 interactions.list(status=pending) 补回）。不新开 store、不新增 RPC。
  *
  * 三条展示面各管一段，互不替代：
- * - 会话：Composer 槽位的 AskCard（原同步等待行为不变）+ 会话栏「待批」入口；
+ * - 会话：Composer 槽位的 PermissionPrompt / AskCard（原同步等待行为不变）+ 会话栏「待批」入口；
  * - 团队：TeamPendingBar（成员会话的请求）；
- * - 本页：所有来源的总汇集，带聚类与**逐题回复**（每题独立勾选，可只回复其中几题）。
+ * - 本页：所有来源的总汇集（含当前会话，与 ask 同），permission **逐条裁决**、
+ *   ask **逐题回复**（每题独立勾选，可只回复其中几题）。
  */
 import { useMemo, useState } from 'react';
 import { EmptyState, ErrorState } from '../../components/States';
@@ -19,7 +20,7 @@ import { useAgentStore } from '../../stores/agentStore';
 import { PageFrame } from '../settings/PageFrame';
 import { useAskDraftPrune } from './ask-draft-store';
 import { rosterAttributionIndex } from './attribution';
-import { asksForSession, groupPendingAsks } from './cluster';
+import { groupPending, itemsForSession } from './cluster';
 import { PendingClusterCard } from './PendingClusterCard';
 
 /** 空串表示「用户手动收起了默认展开项」，与「未操作」区分开。 */
@@ -27,8 +28,15 @@ const COLLAPSED = '';
 
 export function PendingView({ sessionId }: { sessionId?: string }) {
   useLocale();
-  const { asks, connectionState, hasToken, pendingFetch, hydrateInteractions, relogin } =
-    useConnection();
+  const {
+    permissions,
+    asks,
+    connectionState,
+    hasToken,
+    pendingFetch,
+    hydrateInteractions,
+    relogin,
+  } = useConnection();
   // 请求一旦落定（本端或别的端答的）就从 pending 集合里消失 ⇒ 它的草稿一起清，
   // 否则草稿会跟着这个标签页一直留在 sessionStorage 里。
   // 断线期间不算「消失」（reset 会清空集合，重连后 hydration 还没回来时也是空的）。
@@ -43,7 +51,10 @@ export function PendingView({ sessionId }: { sessionId?: string }) {
   const rosters = useMemo(() => resourceData(rosterState) ?? [], [rosterState]);
   const attribution = useMemo(() => rosterAttributionIndex(rosters), [rosters]);
 
-  const clusters = useMemo(() => groupPendingAsks(asks, attribution), [asks, attribution]);
+  const clusters = useMemo(
+    () => groupPending(permissions, asks, attribution),
+    [permissions, asks, attribution],
+  );
 
   // 从某个会话的「待批」入口进来时，默认展开那一簇；不做过滤（待批显示总的）。
   const focusKey = useMemo(() => {
@@ -52,7 +63,7 @@ export function PendingView({ sessionId }: { sessionId?: string }) {
       (cluster) =>
         cluster.homeSessionId === sessionId ||
         cluster.sessionId === sessionId ||
-        asksForSession(cluster.requests, sessionId, attribution).length > 0,
+        itemsForSession(cluster.items, sessionId, attribution).length > 0,
     );
     return hit?.key ?? null;
   }, [clusters, sessionId, attribution]);

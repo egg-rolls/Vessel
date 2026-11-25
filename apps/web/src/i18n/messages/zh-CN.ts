@@ -457,12 +457,12 @@ export const messages = {
   'ask.submit': '提交',
   'ask.customPlaceholder.options': '或输入自定义回答',
   'ask.customPlaceholder.open': '输入回答',
-  // 待批（ask 汇集页）：来源 / 聚类 / 逐题回复
+  // 待批（permission + ask 汇集页）：来源 / 聚类 / 逐条裁决 / 逐题回复
   'pending.title': '待批',
   'pending.subtitle':
-    '所有待回答的 ask 提问汇集在这里；同一个 Agent 的提问聚在一起，每题独立作答，可以只回复其中几题。',
-  'pending.empty': '没有待批的提问',
-  'pending.empty.hint': 'Agent 一提问，这里就会出现。',
+    '所有待裁决的权限审批与待回答的 ask 提问汇集在这里；同一个 Agent 的请求聚在一起。权限逐条裁决，提问每题独立作答，可以只回复其中几题。',
+  'pending.empty': '没有待批的请求',
+  'pending.empty.hint': 'Agent 一请求权限或提问，这里就会出现。',
   // 0.59：拉不到列表时必须说出来（空 ≠ 没有待批）
   'pending.fetch.failed': '待批列表拉取失败：{detail}',
   'pending.fetch.failedHint':
@@ -473,12 +473,12 @@ export const messages = {
   'pending.fetch.shortBlocked': '待批列表拉不到（请求被拒）',
   'pending.fetch.retry': '重新拉取',
   'pending.entry': '待批',
-  'pending.entry.label': '本会话有 {count} 个待批提问',
+  'pending.entry.label': '本会话有 {count} 条待批请求',
   'pending.cluster.agent': 'Agent {id}',
   'pending.cluster.session': '会话 {id}',
   'pending.cluster.run': 'Run {id}',
   'pending.cluster.home': '归属 {id}',
-  'pending.cluster.count': '{count} 个提问',
+  'pending.cluster.count': '{count} 条待批',
   'pending.cluster.expand': '展开详情',
   'pending.cluster.collapse': '收起',
   'pending.source.session': '会话',

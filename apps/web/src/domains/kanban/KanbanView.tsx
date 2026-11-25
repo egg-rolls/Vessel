@@ -9,7 +9,11 @@
  * （命中只 stat 不读文件），document.hidden 暂停（useResource 内建）。
  *
  * 列 = board.columns 序（待办/进行中/阻塞）+「未分类」兜底列（未知 column 不丢任务）。
- * GHOST 样式对齐工具页（ghost-control utilities，无新色板）。
+ *
+ * 表面口径（q-kanban-visual 审计裁定）：共享默认表面（raised 卡 / sunken 控件 /
+ * warn-soft 警告），与工具页 / 技能库一致。GHOST 透黑底细线只供设置弹窗 /
+ * 运行期事件日志域（ghost-control.ts 头注），此前整页套用属误套，已摘除
+ * （skills-style 先例 66d02d4f 同款纠偏）；全部既有 token，无新色板。
  */
 import { PageScaffold } from '@vessel-agent/plugin-ui';
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -24,8 +28,6 @@ import {
 } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
 import { Button, CountBadge } from '../../components/ui';
-import { cn } from '../../components/ui/cn';
-import { GHOST_BUTTON_CLASS, GHOST_PANEL_CLASS } from '../../components/ui/ghost-control';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
@@ -209,20 +211,17 @@ export function KanbanView() {
                 label={t('kanban.taskCount', { count: board.tasks.length })}
               />
               <span className="flex-1" />
-              <Button
-                className={GHOST_BUTTON_CLASS}
-                onClick={manualRefresh}
-                disabled={resource.state.status === 'loading'}
-              >
+              <Button onClick={manualRefresh} disabled={resource.state.status === 'loading'}>
                 {t('kanban.refresh')}
               </Button>
             </div>
+            {/* 警告面走 warn-soft 档位（StaleNotice 逐字同款），列表色随面继承。 */}
             {board.warnings.length > 0 && (
-              <details className={cn('rounded-md p-3 text-sm text-warn', GHOST_PANEL_CLASS)}>
+              <details className="rounded-sm bg-warn-soft px-3 py-2 text-sm text-warn">
                 <summary className="cursor-pointer">
                   {t('kanban.warnings', { count: board.warnings.length })}
                 </summary>
-                <ul className="mt-2 flex flex-col gap-1 font-mono text-xs text-muted">
+                <ul className="mt-2 flex flex-col gap-1 font-mono text-xs">
                   {board.warnings.map((warning) => (
                     <li key={warning}>{warning}</li>
                   ))}
@@ -241,7 +240,7 @@ export function KanbanView() {
                     </header>
                     <div className="flex flex-col gap-2.5">
                       {group.tasks.length === 0 ? (
-                        <p className={cn('rounded-md p-3 text-sm text-faint', GHOST_PANEL_CLASS)}>
+                        <p className="rounded-md bg-sunken p-3 text-sm text-faint">
                           {t('kanban.emptyColumn')}
                         </p>
                       ) : (

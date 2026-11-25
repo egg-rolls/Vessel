@@ -474,12 +474,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'ask.submit': 'Submit',
   'ask.customPlaceholder.options': 'Or type a custom answer',
   'ask.customPlaceholder.open': 'Type an answer',
-  // 待批（ask 汇集页）：来源 / 聚类 / 逐题回复
+  // 待批（permission + ask 汇集页）：来源 / 聚类 / 逐条裁决 / 逐题回复
   'pending.title': 'Awaiting approval',
   'pending.subtitle':
-    'Every pending ask question in one place. Questions from the same agent are grouped, and each question is answered on its own — reply to just the ones you mean.',
-  'pending.empty': 'No pending questions',
-  'pending.empty.hint': 'New ask questions show up here as soon as an agent asks.',
+    'Every pending permission approval and ask question in one place. Requests from the same agent are grouped. Permissions are decided one by one; each question is answered on its own — reply to just the ones you mean.',
+  'pending.empty': 'No pending requests',
+  'pending.empty.hint':
+    'Permission requests and ask questions show up here as soon as an agent raises them.',
   // 0.59: a failed fetch must be visible (empty != nothing pending)
   'pending.fetch.failed': 'Could not load the pending list: {detail}',
   'pending.fetch.failedHint':
@@ -491,12 +492,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'pending.fetch.shortBlocked': 'Pending list unavailable (request rejected)',
   'pending.fetch.retry': 'Retry',
   'pending.entry': 'Pending',
-  'pending.entry.label': '{count} pending question(s) in this session',
+  'pending.entry.label': '{count} pending request(s) in this session',
   'pending.cluster.agent': 'Agent {id}',
   'pending.cluster.session': 'Session {id}',
   'pending.cluster.run': 'Run {id}',
   'pending.cluster.home': 'Home {id}',
-  'pending.cluster.count': '{count} question(s)',
+  'pending.cluster.count': '{count} pending',
   'pending.cluster.expand': 'Show details',
   'pending.cluster.collapse': 'Collapse',
   'pending.source.session': 'Session',

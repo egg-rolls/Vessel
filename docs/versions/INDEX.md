@@ -8,7 +8,7 @@
 
 | 版本   | 日期       | 主题                                              | 状态       | 链接                |
 | ------ | ---------- | ------------------------------------------------- | ---------- | ------------------- |
-| 2.1.0 | 2026-11-25 | 第四轮批次：看板/优雅自重启/插件生命周期/思考强度/SWR/拖拽引用/inbox操作/卡片健壮性/hydration-anon/上下文口径/skills-style/empty-state/plugin-version/bash超时/配置责任链/CLI ps（含第五轮四面搭晋升） | unreleased（晋升候 DR15-1 终裁） | [2.1.0](2.1.0.md) |
+| 2.1.0 | 2026-11-25 | 第四轮批次：看板/优雅自重启/插件生命周期/思考强度/SWR/拖拽引用/inbox操作/卡片健壮性/hydration-anon/上下文口径/skills-style/empty-state/plugin-version/bash超时/配置责任链/CLI ps（含第五轮四面搭晋升） | merged（基线 `main @ d5c7d3f1`，第四轮全闭环四 ISSUE CLOSED） | [2.1.0](2.1.0.md) |
 | 2.0.0 | 2026-11-25 | 标准 SemVer 新纪元 major=2（单一真相源 breaking）+ 本会话全部特性（from-card/ui-polish/leak/plugin-default-on/AX×6/inbox-ux/msg-visibility/chat-index/skills-ui/hire-prompt/addr-display/sidebar-anim/design-audit/minimap/tooltip/inbox-source/drawer-fix） | merged（基线 `main @ 99f87c0c`） | [CHANGELOG](../../CHANGELOG.md) |
 | 0.56.0 | —          | 0.54.0 收口后的开发线（曾标 0.55.0，2026-11-18 裁决统一 0.56.0）：模型注册表与厂商/凭证管理、工具 engine 外置执行、vessel 控制面桥、tools[] 会话快照、蜂群写协调与订阅闭环、注入粒度框架、认证策略化（口令/TOTP/HKDF/origins）、时间线范围读与启动性能、多模态与声明式搜索后端 | unreleased | [CHANGELOG](../../CHANGELOG.md) |
 | 0.54.0 | 2026-11-16 | 时间线迁移收口：hello 时间线段六字段、单游标单区间回填与四条硬校验、gap 帧与前端磁盘双源删除、events.ndjson 停写、chunk 瘦身 | merged（基线 `main @ c31dba42`） | [0.54.0](0.54.0.md) |

@@ -22,6 +22,7 @@ import {
   type BadgeTone,
   Button,
   KeyValueList,
+  Pager,
   PageScaffold,
   SearchInput,
   Section,
@@ -401,26 +402,22 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
               </article>
             ))}
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
-            <span>{t('skills.page', { from: offset + 1, to: offset + items.length, total })}</span>
-            <Button
-              size="small"
-              disabled={offset === 0}
-              onClick={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
-            >
-              {t('common.prev')}
-            </Button>
-            <Button
-              size="small"
-              disabled={offset + items.length >= total}
-              onClick={() => setOffset(offset + PAGE_LIMIT)}
-            >
-              {t('common.next')}
-            </Button>
+          {/* 分页条走 plugin-ui 共享 Pager（nav 语义 + 范围 tabular-nums +
+              默认表面按钮）；边界判定与翻页回调逐字保留，数据流零改。 */}
+          <Pager
+            label={t('skills.pagination')}
+            rangeLabel={t('skills.page', { from: offset + 1, to: offset + items.length, total })}
+            prevLabel={t('common.prev')}
+            nextLabel={t('common.next')}
+            canPrev={offset > 0}
+            canNext={offset + items.length < total}
+            onPrev={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
+            onNext={() => setOffset(offset + PAGE_LIMIT)}
+          >
             <span className="text-faint">
               {t('skills.generatedAt', { ts: listState.data.generatedAt })}
             </span>
-          </div>
+          </Pager>
         </>
       )}
 
