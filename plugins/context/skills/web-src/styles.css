@@ -2,6 +2,12 @@
 @import "@vessel-agent/plugin-ui/styles.css";
 @source "./";
 
+/* 卡片网格列数：与 embed.css 的 skills-cols-* 同定义（SkillsView 两层共用）。
+   避开 grid-cols-* 与宿主 utilities 层的同名级联冲突（见 embed.css 注释）。 */
+@utility skills-cols-* {
+  grid-template-columns: repeat(--value(integer), minmax(0, 1fr));
+}
+
 html,
 body {
   min-height: 100%;

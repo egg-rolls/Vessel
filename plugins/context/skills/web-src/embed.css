@@ -18,6 +18,18 @@
 @layer theme, base, legacy, plugin.skills, utilities;
 @source "./";
 
+/*
+ * 卡片网格列数：自定义 utility，刻意不用 grid-cols-*。
+ * 宿主 utilities 层含 .grid-cols-1（apps/web ToolsPanel / McpPanel 等），
+ * 而层序 plugin.skills < utilities 是契约 §9 的故意设计——embed 里
+ * min-wide:grid-cols-3 会被宿主 .grid-cols-1 级联压过，网格恒 1 列。
+ * skills-cols-* 不在宿主 utilities 出现，无同名规则可压；响应式变体
+ * （min-compact / min-wide）照常工作。iframe 层在 styles.css 有同名定义。
+ */
+@utility skills-cols-* {
+  grid-template-columns: repeat(--value(integer), minmax(0, 1fr));
+}
+
 @theme inline {
   /* Spacing: tokens' 4px base; p-1 = 4px, p-4 = 16px. */
   --spacing: var(--space-1);
