@@ -1247,6 +1247,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Earlier history was rewritten; the older pages were reloaded from the server.',
   'chat.earlierLoadFailed': 'Earlier messages could not be loaded; you can retry: {detail}',
   'chat.toBottom': 'Back to bottom ↓',
+  'chat.index.label': 'Conversation index',
+  'chat.index.jump': 'Jump to item {index}',
   'chat.pending.title': 'Pending · {count}',
   'chat.pending.identity.human': 'human',
   'chat.pending.identity.ask': 'ask answer',
