@@ -31,11 +31,16 @@ export interface PluginLifecycle {
  * install 登记的**每一个**注册面都在本集合里（热应用能把它整体摘干净 / 重建）。
  * provider 面永不入集（R-D 结构性：provider 实例启动期构造进 runtime，不可热替换）。
  *
- * 集合随热应用机制补齐而扩张（注销 API + 注册面差量落地后纳入 hook/guardrail/
- * readSideMasker）；推导是纯函数，机制到位即自动把对应插件翻成 hot，无需改推导规则。
+ * 注销 API（unregisterHook/Guardrail/Provider/ReadSideMasker）+ 注册面差量
+ * （applyRegistrations）+ fresh 实例采纳 / dispose 落地后，tool / hook / guardrail /
+ * readSideMasker 都可整体热差量；provider 仍永不入集（结构性 restart）。memberBody
+ * 贡献由成员 spawn 消费、不在节点热差量域，注册它的插件保守 restart。
  */
 export const HOT_DIFFABLE_SURFACES: ReadonlySet<PluginSurfaceKind> = new Set<PluginSurfaceKind>([
   'tool',
+  'hook',
+  'guardrail',
+  'readSideMasker',
 ]);
 
 export interface LifecycleDerivationInput {

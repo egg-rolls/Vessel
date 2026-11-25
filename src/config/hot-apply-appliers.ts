@@ -18,12 +18,17 @@
  */
 
 import type {
+  Guardrail,
+  Hook,
+  Plugin,
   PluginHost,
+  ReadSideMasker,
   RuntimePermissionConfig,
   ToolDefinition,
 } from '../../packages/core/src/index';
 import type { McpControl, McpServerSummary } from '../plugin/mcp-wiring';
 import { VESSEL_TOOL_NAME } from '../runtime/vessel-meta';
+import type { AssembledPluginRegistrations } from './hot-apply-assembly';
 
 /** 一条差异摘要（`scope: <detail>` 的一行文本） */
 export type ApplierSummaryLine = string;
@@ -310,6 +315,262 @@ export function createToolsApplier(
     const result = await applyTools(options);
     return result.summaries;
   };
+}
+
+// ── registrations（tool / hook / guardrail / readSideMasker 全注册面差量） ──────────
+
+/**
+ * 一个注册面的差量 / 应用适配器（q-plugin-lifecycle §6.3）。把四面统一成
+ * 「按名增删改 + 回滚」，避免每个面各写一份差量逻辑。`unregister` 返回 undefined
+ * 表示宿主不支持注销该面 → 该面降级「只增不删」（与 applyTools 同口径）。
+ */
+interface RegistrationFace<T> {
+  label: string;
+  target: T[];
+  current: () => T[];
+  name: (item: T) => string;
+  register: (item: T) => void;
+  unregister?: (name: string) => boolean;
+  managed: Set<string>;
+  /** 内容签名（可选）：同名且签名变了也算刷新；缺省只按 keyChanged 刷新。 */
+  signature?: (item: T) => string;
+}
+
+/** 管辖域（插件来源的注册面名；非插件来源如 notice hook / agent / MCP 不在内）。 */
+export interface ManagedRegistrationNames {
+  tools: Set<string>;
+  hooks: Set<string>;
+  guardrails: Set<string>;
+  maskers: Set<string>;
+}
+
+export interface RegistrationsApplierOptions {
+  host: PluginHost;
+  /** 旁路装配目标集（fresh 新实例 + per-plugin 注册面名）。抛错时不做任何变更。 */
+  computeTarget: () => Promise<AssembledPluginRegistrations>;
+  managed: ManagedRegistrationNames;
+  /**
+   * 当前生效的插件实例（插件名 → 实例）。启动用 bundle.plugins 初始化；热应用采纳
+   * 新实例 / dispose 旧实例都在这里记账。只含本 applier 管辖的插件（provider / 工厂
+   * 不经此路径），故 dispose 不会误伤结构性插件。
+   */
+  liveInstances: Map<string, Plugin>;
+  /** 插件安装配置摘要（变了 → 管辖注册面整体刷新）。 */
+  targetKey?: () => Promise<string> | string;
+  previousKey?: { value?: string };
+}
+
+export interface RegistrationsApplyResult {
+  summaries: ApplierSummaryLine[];
+  /** 采纳为新 live 实例的插件名（新增 / 配置刷新）。 */
+  adopted: string[];
+  /** dispose 掉的旧实例插件名（移除 / 被刷新替换 / 未采纳的旁路新实例）。 */
+  disposed: string[];
+}
+
+/** 安全 dispose（best-effort，不掩盖原始错误）。 */
+async function disposePlugin(plugin: Plugin | undefined): Promise<void> {
+  if (plugin === undefined || typeof plugin.dispose !== 'function') return;
+  try {
+    await plugin.dispose();
+  } catch {
+    // dispose 失败不阻断热应用；实例已被摘除注册面，残留由重启清理。
+  }
+}
+
+/**
+ * 全注册面差量热应用（q-plugin-lifecycle §6.3，`applyTools` 的推广）。
+ *
+ * 一个插件的 tool / hook / guardrail / readSideMasker **整体**增删改 —— 消除
+ * 「pii_reveal 工具进了但脱敏 guardrail / masker 没进」的危险半态。顺序保证
+ * 「要么全成、要么回到原状」：旁路求目标集 → 先注销 removed/updated 再注册 added/updated
+ * → 任一步失败按记录逆序回滚。注册成功后才做实例采纳 / dispose（回滚不 dispose）。
+ *
+ * 实例生命周期（R-C）：新增 / 配置刷新的插件采纳旁路 fresh 实例并 dispose 旧实例；
+ * 被移除的插件 dispose 旧实例；未变化的插件保留旧实例、dispose 旁路那份未采纳的新实例
+ * （旁路 install 起的 watcher 等副作用随之清理，不泄漏）。
+ */
+export async function applyRegistrations(
+  options: RegistrationsApplierOptions,
+): Promise<RegistrationsApplyResult> {
+  const host = options.host;
+  const target = await options.computeTarget();
+
+  const key = await options.targetKey?.();
+  const keyChanged =
+    key !== undefined && options.previousKey !== undefined && options.previousKey.value !== key;
+  if (options.previousKey !== undefined && key !== undefined) options.previousKey.value = key;
+
+  const faces: RegistrationFace<unknown>[] = [
+    {
+      label: 'tools',
+      target: target.tools,
+      current: () => host.listTools(),
+      name: (item) => (item as ToolDefinition).name,
+      register: (item) => host.registerTool(item as ToolDefinition),
+      unregister: host.unregisterTool?.bind(host),
+      managed: options.managed.tools,
+      signature: (item) => toolSignature(item as ToolDefinition),
+    },
+    {
+      label: 'hooks',
+      target: target.hooks,
+      current: () => host.getHooks(),
+      name: (item) => (item as Hook).name,
+      register: (item) => host.registerHook(item as Hook),
+      unregister: host.unregisterHook?.bind(host),
+      managed: options.managed.hooks,
+    },
+    {
+      label: 'guardrails',
+      target: target.guardrails,
+      current: () => host.getGuardrails(),
+      name: (item) => (item as Guardrail).name,
+      register: (item) => host.registerGuardrail(item as Guardrail),
+      unregister: host.unregisterGuardrail?.bind(host),
+      managed: options.managed.guardrails,
+    },
+    {
+      label: 'maskers',
+      target: target.readSideMaskers,
+      current: () => [...(host.getReadSideMaskers?.() ?? [])],
+      name: (item) => (item as ReadSideMasker).name,
+      register: (item) => host.registerReadSideMasker?.(item as ReadSideMasker),
+      unregister: host.unregisterReadSideMasker?.bind(host),
+      managed: options.managed.maskers,
+    },
+  ];
+
+  // 每面的增删改 + 回滚记录。
+  const plan = faces.map((face) => {
+    const targetByName = new Map(face.target.map((item) => [face.name(item), item]));
+    const currentByName = new Map(face.current().map((item) => [face.name(item), item]));
+    const added = [...targetByName.keys()].filter((name) => !currentByName.has(name));
+    const removed = [...currentByName.keys()].filter(
+      (name) => !targetByName.has(name) && face.managed.has(name),
+    );
+    const updated = [...targetByName.keys()].filter((name) => {
+      const existing = currentByName.get(name);
+      const next = targetByName.get(name);
+      if (existing === undefined || next === undefined) return false;
+      if (!face.managed.has(name)) return false;
+      if (existing === next) return false;
+      if (keyChanged) return true;
+      return face.signature !== undefined && face.signature(existing) !== face.signature(next);
+    });
+    return { face, targetByName, currentByName, added, removed, updated };
+  });
+
+  const anyChange = plan.some((p) => p.added.length + p.removed.length + p.updated.length > 0);
+
+  // 实例采纳 / dispose 计划（与注册面差量独立记账，注册成功后才执行）。
+  const targetPluginNames = new Set(target.names);
+  const adopted: string[] = [];
+  const disposed: string[] = [];
+  const instanceOps: Array<() => Promise<void>> = [];
+  for (const assembled of target.plugins) {
+    const old = options.liveInstances.get(assembled.name);
+    const isNew = old === undefined;
+    if (isNew || keyChanged) {
+      // 新增 / 配置刷新：采纳 fresh 实例，dispose 旧实例。
+      instanceOps.push(async () => {
+        options.liveInstances.set(assembled.name, assembled.instance);
+        if (old !== undefined && old !== assembled.instance) {
+          await disposePlugin(old);
+          disposed.push(assembled.name);
+        }
+        adopted.push(assembled.name);
+      });
+    } else {
+      // 未变化：保留旧实例，dispose 旁路那份未采纳的新实例（清理其 install 副作用）。
+      instanceOps.push(async () => {
+        if (assembled.instance !== old) {
+          await disposePlugin(assembled.instance);
+          disposed.push(assembled.name);
+        }
+      });
+    }
+  }
+  for (const [name, old] of options.liveInstances) {
+    if (targetPluginNames.has(name)) continue;
+    // 被移除的插件：dispose 旧实例（注册面已在差量里摘掉）。
+    instanceOps.push(async () => {
+      options.liveInstances.delete(name);
+      await disposePlugin(old);
+      disposed.push(name);
+    });
+  }
+
+  if (!anyChange && instanceOps.length === 0) {
+    return { summaries: [], adopted, disposed };
+  }
+
+  // 回滚记录：每面注销了什么（恢复）+ 注册了什么（撤销）。
+  const unregistered: Array<{ face: RegistrationFace<unknown>; item: unknown }> = [];
+  const registered: Array<{ face: RegistrationFace<unknown>; name: string }> = [];
+  const rollback = (): void => {
+    for (const { face, name } of registered.splice(0).reverse()) {
+      try {
+        face.unregister?.(name);
+      } catch {
+        // best-effort
+      }
+    }
+    for (const { face, item } of unregistered.splice(0).reverse()) {
+      try {
+        face.register(item);
+      } catch {
+        // best-effort
+      }
+    }
+  };
+
+  const summaries: ApplierSummaryLine[] = [];
+  try {
+    for (const { face, targetByName, currentByName, added, removed, updated } of plan) {
+      const toUnregister = [...new Set([...removed, ...updated])];
+      const degraded = face.unregister === undefined;
+      const toRegister = degraded ? added : [...added, ...updated];
+      if (!degraded) {
+        for (const name of toUnregister) {
+          const existing = currentByName.get(name);
+          const removable = face.unregister?.(name) ?? false;
+          if (removable && existing !== undefined) unregistered.push({ face, item: existing });
+        }
+      }
+      for (const name of toRegister) {
+        const item = targetByName.get(name);
+        if (item === undefined) continue;
+        face.register(item);
+        registered.push({ face, name });
+      }
+      // 管辖域并入本次目标名（后续 reload 才能把消失的名判成 removed）。
+      for (const name of targetByName.keys()) face.managed.add(name);
+      if (added.length + removed.length + updated.length > 0) {
+        summaries.push(`tools: ${face.label} +${added.length} -${removed.length}`);
+        if (removed.length > 0)
+          summaries.push(`tools: ${face.label} removed ${removed.join(', ')}`);
+        if (added.length > 0) summaries.push(`tools: ${face.label} added ${added.join(', ')}`);
+        if (updated.length > 0)
+          summaries.push(`tools: ${face.label} refreshed ${updated.join(', ')}`);
+        if (degraded && toUnregister.length > 0) {
+          summaries.push(
+            `tools: ${face.label} kept ${toUnregister.join(', ')} (restart to remove)`,
+          );
+        }
+      }
+    }
+  } catch (error) {
+    rollback();
+    throw new Error(
+      `tools_hot_apply_failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  // 注册面全部成功 → 执行实例采纳 / dispose（回滚路径不会到这里）。
+  for (const op of instanceOps) await op();
+
+  return { summaries, adopted, disposed };
 }
 
 // ── mcp ──────────────────────────────────────────

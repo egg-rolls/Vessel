@@ -89,7 +89,7 @@ import {
 } from './config/config-watch';
 import { createWrittenConfigApplier } from './config/config-write-apply';
 import {
-  applyTools,
+  applyRegistrations,
   createMcpApplier,
   createMcpServerToggle,
   createPermissionApplier,
@@ -97,7 +97,7 @@ import {
   pluginManagedToolNames,
 } from './config/hot-apply-appliers';
 import {
-  assemblePluginTools,
+  assemblePluginRegistrations,
   collectPermissionTargets,
   type PermissionApplyTarget,
   permissionConfigFor,
@@ -109,6 +109,7 @@ import { createConfigAttachmentLister } from './data/attachments-list';
 import { expandHome, resolveDataDir } from './data/data-paths';
 import { resolveAgentCwd } from './data/path-resolution';
 import { setToolPolicy } from './data/permission-store';
+import { REFS_NOTICE_HOOK } from './data/refs-notice-hook';
 import {
   applyFederationOptions,
   type FederationRuntimeOptions,
@@ -177,6 +178,7 @@ import { createRunControl } from './run/run-control';
 import { type BootstrapResult, bootstrap } from './runtime/bootstrap';
 import { installProcessErrorHandlers } from './runtime/process-handlers';
 import { createRuntimeNoticeBus } from './runtime/runtime-notice';
+import { RUNTIME_NOTICE_HOOK } from './runtime/runtime-notice-hook';
 import { normalizeBridgeDeny } from './runtime/vessel-meta';
 import { createContextUsageSource } from './session/context-usage';
 import { createImageDeliverySource } from './session/image-delivery';
@@ -1129,6 +1131,26 @@ async function runWithConfig(result: BootstrapResult) {
     // 入口注册的 agent / ask 与 MCP 工具（toolSource 非 null）不在管辖域内，
     // 否则一次 reload 会把它们判成 removed（D1）。
     const managedPluginTools = new Set(pluginManagedToolNames(ctx.pluginHost, result.mcp));
+    // q-plugin-lifecycle §6.3：注册面差量管辖域（hook / guardrail / readSideMasker）。
+    // hook 排除入口注册的 notice hook（runtime-notice / refs-notice，非插件来源）；
+    // guardrail / masker 只来自插件，全量管辖。与工具面同口径：只增删插件来源的面。
+    const managedPluginHooks = new Set(
+      ctx.pluginHost
+        .getHooks()
+        .map((hook) => hook.name)
+        .filter((name) => name !== RUNTIME_NOTICE_HOOK && name !== REFS_NOTICE_HOOK),
+    );
+    const managedPluginGuardrails = new Set(
+      ctx.pluginHost.getGuardrails().map((guardrail) => guardrail.name),
+    );
+    const managedPluginMaskers = new Set(
+      (ctx.pluginHost.getReadSideMaskers?.() ?? []).map((masker) => masker.name),
+    );
+    // 当前生效插件实例（启动装配产出）：热应用采纳 fresh 实例 / dispose 旧实例的记账起点。
+    // bundle.plugins 即管辖选择集（provider / 工厂不经此路径），dispose 不会误伤结构性插件。
+    const livePluginInstances = new Map(
+      gatewayBundle.plugins.map((plugin) => [plugin.name, plugin]),
+    );
     // 插件安装配置基线（用于识别「定义没变但行为配置变了」）：
     // `computeTargetTools` 每次读到的配置写入 `lastToolsConfigKey`，`targetKey` 读它。
     const pluginConfigKeyOf = (value: VesselConfig): string =>
@@ -1216,22 +1238,30 @@ async function runWithConfig(result: BootstrapResult) {
         permissionState,
       ),
       tools: async () => {
-        const outcome = await applyTools({
+        // q-plugin-lifecycle §6.3：全注册面差量（tool / hook / guardrail / readSideMasker
+        // 整体增删改 + fresh 实例采纳 / dispose），消除「工具进了但 guardrail 没进」半态。
+        const outcome = await applyRegistrations({
           host: ctx.pluginHost,
-          // 旁路重建：先在临时 host 上算出目标集，再一次性替换真实宿主。
-          computeTargetTools: async () => {
+          // 旁路重建：先在临时 host 上用 cache-busted 新实例算出目标集，再一次性替换真实宿主。
+          computeTarget: async () => {
             const next = await reloadVesselConfig();
             lastToolsConfigKey.current = pluginConfigKeyOf(next);
             lastReloadedToolsConfig = next;
-            const assembled = await assemblePluginTools({
+            return assemblePluginRegistrations({
               config: next,
               tenantId: result.tenantId,
+              loader: gatewayBundle.pluginLoader,
               excludePlugins: MCP_FACTORY_PLUGINS,
+              fresh: true,
             });
-            for (const tool of assembled.tools) managedPluginTools.add(tool.name);
-            return assembled.tools;
           },
-          managedNames: () => [...managedPluginTools],
+          managed: {
+            tools: managedPluginTools,
+            hooks: managedPluginHooks,
+            guardrails: managedPluginGuardrails,
+            maskers: managedPluginMaskers,
+          },
+          liveInstances: livePluginInstances,
           // 插件安装配置（basic-tools 的 cwd 等）变了就整体刷新，否则行为不会生效。
           targetKey: () => lastToolsConfigKey.current ?? '',
           previousKey: toolsConfigKey,
