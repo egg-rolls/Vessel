@@ -39,7 +39,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.stop':
     'stop the fleet gracefully (waits for active runs to finish, unlimited + progress; --force cuts runs with audit); --connect for remote stop',
   'help.cmd.restart':
-    'docker-style stop then start (default waits for runs to finish); [name] targets an instance or registered node (default: whole fleet); --force propagates to stop; --self reserves a self-restart (returns immediately; orchestrator restarts after the triggering run finishes; --prompt carries the continuation)',
+    'fleet cold restart (stops nodes; default waits for runs to finish); for platform code updates prefer vessel gateway restart (keeps nodes, runs uninterrupted); [name] targets an instance or registered node (default: whole fleet); --force propagates to stop; --self reserves a self-restart (returns immediately; orchestrator restarts after the triggering run finishes; --prompt carries the continuation)',
   'help.cmd.agents': 'list agents via agents.list (local gateway or --connect)',
   'help.cmd.errors': 'recent run/tool errors (diagnostics in errorLevel: all)',
   'help.cmd.rpcList':
@@ -69,7 +69,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.gatewayStatus':
     'pid/port/uptime/version/service state (--rpc is deprecated; use node status --rpc)',
   'help.cmd.gatewayRestart':
-    'stop then start the platform only (keeps --daemon); node/hub stay alive and are adopted; --stop-nodes is deprecated (use vessel restart for the fleet)',
+    'restart the platform process (handoff: node/hub stay alive and are adopted, runs uninterrupted) — preferred for platform code updates; keeps --daemon; use vessel restart for a fleet cold restart; --stop-nodes is deprecated',
   'help.cmd.gatewayReload': 'hot-reload config/plugins without restarting',
   'help.cmd.gatewayInstall': 'register login autostart (systemd / launchd / schtasks)',
   'help.cmd.gatewayUninstall': 'remove the system service registration',
@@ -480,9 +480,12 @@ export const en: Record<MessageKey, string> = {
   'stop.forced.summary': 'abnormal exit: {name} — {count} run(s) cut{note}',
   // ── vessel restart (用户裁定 #6, cli-topology-design §7) ──
   'restart.inventory.title': 'Restart inventory (fleet dataDir: {dataDir})',
+  'restart.platformHint':
+    'Guidance: for platform code updates prefer `vessel gateway restart` (node/hub stay alive, runs uninterrupted); this command is a fleet cold restart (stops nodes; default waits for active runs to finish).',
   'restart.inventory.instance': 'platform {instance}: {state} (pid {pid})',
   'restart.nothingRunning': 'Nothing running; starting fresh.',
-  'restart.confirm.prompt': 'Restart stops active sessions then starts again. Continue? [y/N] ',
+  'restart.confirm.prompt':
+    'Restart stops active sessions (default waits for active runs to finish, unlimited; --force cuts them) then starts again. Continue? [y/N] ',
   'restart.stopFailed':
     'Restart aborted: stop did not fully succeed, so nothing was started. Escalate with `vessel stop --force`, then re-run restart.',
   'restart.starting': 'starting {instance}…',

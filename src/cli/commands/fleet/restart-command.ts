@@ -136,6 +136,9 @@ export async function restartFleetCommand(options: RestartFleetOptions = {}): Pr
   const entries = snapshot.entries;
 
   print(ui.info(t('restart.inventory.title', { dataDir })));
+  // 指路（审计 P0）：平台代码更新优先 gateway restart（handoff 保 node、run 不断）；
+  // 本命令是舰队冷重启。只对缺省整舰队/选择器路径提示（name 定向 node 走 node restart）。
+  if (name === undefined) print(ui.info(t('restart.platformHint')));
 
   // ── 名称解析：instance 优先，其次 registry node 名（委托 node restart）。──
   if (name !== undefined && name.trim() !== '') {
