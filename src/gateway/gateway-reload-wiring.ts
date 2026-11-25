@@ -13,6 +13,8 @@
  *   新配置解析不出有效缺省模型时，变化域进 `requires_restart`，不假装生效。
  *   `config.agent.model` 仍属 `agent` 域，需重启；`federation` 块经注入的
  *   `applyFederation` 热应用（原地更新入站 / 出站 peer，未注入则进 `requires_restart`）；
+ *   `kanban` 块经注入的 `applyKanban` 热应用（q-kanban-proxy：重解析 boardPath
+ *   原地更新 kanban deps，未注入则进 `requires_restart`）；
  *   其余字段一律进 `requires_restart`；
  * - `permission` / `tools` / `mcp`：由 `src/cli.ts` 注入 applier（见下）。
  *
@@ -85,6 +87,14 @@ export interface GatewayReloadWiringOptions {
    * 未注入 ⇒ 变化域进 `requires_restart`，不假装生效。
    */
   applyFederation?: (next: VesselConfig) => Promise<string[]> | string[];
+  /**
+   * q-kanban-proxy：kanban 热应用（config scope 内部，与 applyFederation 同形，
+   * 不新增 reload scope）。仅在 kanban 块变化时调用；`next` = 校验通过的重载配置，
+   * 装配层据此重解析 boardPath 并**原地**更新 kanban deps（handler 每次调用读
+   * deps.boardPath，下一次 kanban.get 即用新板）。返回要广播的差异摘要行
+   * （并入 summaries.config）。未注入 ⇒ 变化域进 requires_restart，不假装生效。
+   */
+  applyKanban?: (next: VesselConfig) => Promise<string[]> | string[];
 }
 
 /** 需要重启才能生效的配置域（DECISION-023 §2.3；`permission` 已可热应用）。 */
@@ -253,6 +263,18 @@ export function createGatewayReloadRunner(
               restartFields.push('federation');
             }
           }
+          // q-kanban-proxy：kanban 热应用：块变化且注入了 applier ⇒ 重解析
+          // boardPath 原地更新 deps；否则变化域进 requires_restart（不假装生效）。
+          const kanbanChanged = stableValue(current.kanban) !== stableValue(next.kanban);
+          const kanbanLines: string[] = [];
+          if (kanbanChanged) {
+            if (options.applyKanban !== undefined) {
+              const lines = await options.applyKanban(next);
+              if (Array.isArray(lines)) kanbanLines.push(...lines);
+            } else {
+              restartFields.push('kanban');
+            }
+          }
           if (allowedOriginsChanged(current, next)) {
             const target = options.gateway();
             const reconfigure = target?.reconfigure;
@@ -273,6 +295,7 @@ export function createGatewayReloadRunner(
             ...restartFields.map((field) => `config: ${field} requires restart`),
             ...modelLines,
             ...federationLines,
+            ...kanbanLines,
           ];
           continue;
         }

@@ -148,7 +148,9 @@ export type SettableConfigKey =
   | 'emptyResponse.enabled'
   | 'emptyResponse.seamless'
   | 'emptyResponse.maxRetries'
-  | 'emptyResponse.nudge';
+  | 'emptyResponse.nudge'
+  // q-kanban-proxy：看板 board.json 路径（YAML kanban.board_path）。
+  | 'kanban.boardPath';
 
 interface ConfigSetTarget {
   /** YAML 根下的块名 */
@@ -196,6 +198,7 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
   'emptyResponse.seamless': { block: 'empty_response', yamlKey: 'seamless' },
   'emptyResponse.maxRetries': { block: 'empty_response', yamlKey: 'max_retries' },
   'emptyResponse.nudge': { block: 'empty_response', yamlKey: 'nudge' },
+  'kanban.boardPath': { block: 'kanban', yamlKey: 'board_path' },
 };
 
 /** 是否为支持的 `config set` 键 */
@@ -252,6 +255,11 @@ export async function setUserConfigValue(
     throw new Error(`invalid_enum: ${key}=${JSON.stringify(value)}`);
   }
   if (key === 'agent.cwd' && (typeof value !== 'string' || value.trim() === '')) {
+    throw new Error(`invalid_path: ${JSON.stringify(value)}`);
+  }
+  // q-kanban-proxy：与 config validator 同界（非空字符串）；~ 展开 / 相对 cwd
+  // 解析在装配层（与启动装配同一表达式），这里不做路径存在性校验。
+  if (key === 'kanban.boardPath' && (typeof value !== 'string' || value.trim() === '')) {
     throw new Error(`invalid_path: ${JSON.stringify(value)}`);
   }
   // q-empty-response：与 config validator / serve config.set 同形状同界。
