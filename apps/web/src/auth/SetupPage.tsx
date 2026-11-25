@@ -104,12 +104,12 @@ export function SetupPage({ username, passwordSet, onDone }: SetupPageProps) {
   };
 
   const primaryButton =
-    'mt-4 inline-flex w-full items-center justify-center rounded-full bg-ink px-4 py-2.5 text-sm font-medium text-page transition-opacity duration-150 hover:opacity-90 pointer-coarse:min-h-touch disabled:opacity-50';
+    'mt-4 inline-flex w-full items-center justify-center rounded-full bg-ink px-4 py-2.5 text-sm font-medium text-surface transition-opacity duration-150 hover:opacity-90 pointer-coarse:min-h-touch disabled:opacity-50';
   const secondaryButton =
-    'mt-3 inline-flex w-full items-center justify-center rounded-full border border-line px-4 py-2 text-sm text-muted transition-opacity duration-150 hover:opacity-90 disabled:opacity-50';
+    'mt-3 inline-flex w-full items-center justify-center rounded-full bg-transparent border border-line px-4 py-2 text-sm text-muted transition-opacity duration-150 hover:opacity-90 disabled:opacity-50';
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center bg-page px-6 text-ink">
+    <main className="flex min-h-dvh flex-col items-center justify-center bg-bg px-6 text-ink">
       <div className="w-full max-w-md rounded-xl border border-line bg-surface p-8 shadow-sm">
         <h1 className="font-serif text-2xl font-semibold">{t('auth.setup.title')}</h1>
         <p className="mt-2 text-sm text-muted">{t('auth.setup.subtitle', { user: username })}</p>
@@ -133,7 +133,7 @@ export function SetupPage({ username, passwordSet, onDone }: SetupPageProps) {
               autoComplete="new-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-line bg-page px-3 py-2 text-sm text-ink outline-none focus:border-ink"
+              className="mt-1 w-full rounded-lg border border-line bg-transparent px-3 py-2 text-sm text-ink outline-none focus:border-ink"
             />
             <label className="mt-3 block text-xs font-medium text-muted" htmlFor="setup-confirm">
               {t('auth.setup.passwordConfirm')}
@@ -144,7 +144,7 @@ export function SetupPage({ username, passwordSet, onDone }: SetupPageProps) {
               autoComplete="new-password"
               value={confirm}
               onChange={(event) => setConfirm(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-line bg-page px-3 py-2 text-sm text-ink outline-none focus:border-ink"
+              className="mt-1 w-full rounded-lg border border-line bg-transparent px-3 py-2 text-sm text-ink outline-none focus:border-ink"
             />
             <p className="mt-2 text-xs text-faint">{t('auth.setup.passwordHint')}</p>
             <button type="submit" disabled={busy} className={primaryButton}>
@@ -179,7 +179,7 @@ export function SetupPage({ username, passwordSet, onDone }: SetupPageProps) {
           <div className="mt-6">
             <p className="text-sm text-muted">{t('auth.setup.totpSecret')}</p>
             {otpauthUri !== null && (
-              <p className="mt-2 break-all rounded-lg border border-line bg-page px-3 py-2 text-xs text-ink">
+              <p className="mt-2 break-all rounded-lg border border-line bg-sunken px-3 py-2 text-xs text-ink">
                 {otpauthUri}
               </p>
             )}
@@ -191,7 +191,10 @@ export function SetupPage({ username, passwordSet, onDone }: SetupPageProps) {
             <p className="mt-4 text-sm font-medium text-danger">{t('auth.setup.recoveryTitle')}</p>
             <ul className="mt-2 grid grid-cols-2 gap-1 text-xs text-ink">
               {recoveryCodes.map((entry) => (
-                <li key={entry} className="rounded border border-line bg-page px-2 py-1 font-mono">
+                <li
+                  key={entry}
+                  className="rounded border border-line bg-sunken px-2 py-1 font-mono"
+                >
                   {entry}
                 </li>
               ))}
