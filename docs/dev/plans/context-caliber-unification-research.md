@@ -220,3 +220,136 @@ provider 实测与请求估算几乎逐字吻合（380,851 vs 380,817，锚点�
 
 本单事故 = 0.55 P0 的残留盲区：**占位机制（0.52 V1/0.53）与计数口径（0.55 P0）
 在 run 起点没有会师**。
+
+---
+
+## 3. 统一方案（single source of truth）
+
+### 3.0 总判断：真相源**已经存在**，缺的是它对自己合同的兑现
+
+0.52/0.55 P0 之后，架构上已是单一写侧：`currentContextTokens` 一个函数产出
+`context.changed.token_count` / `context.pressure.used` / `llm.request.estimated_tokens` /
+`prompt.system_context.estimated_tokens` / `lastContextRatio` 五个读数，rotate/UI/TUI-web
+全部只搬运（§1.5）。**不需要新建真相源，需要修写侧兜底路径的输入 population**，
+让它任何时刻估的都是「下一次请求视图」，与请求路径逐字同源。消费侧零改动。
+
+### 3.1 P1（核心）：run 起点兜底应用冻结占位集合
+
+位置：`packages/core/src/runtime/execution-unit.ts:1698-1706` `nextRequestTokens`。
+
+现状（1702）：`view === undefined ⇒ estimateMessagesTokensUpperBound(整窗)`。
+改为：兜底也走本段冻结的投射——
+
+```text
+view === undefined 时：
+  frozen = segmentClearPlans.get(workingContext) ?? []
+  projected = frozen.length > 0 ? withClearedToolResults(messages, frozen) : messages
+  return estimateMessagesTokensUpperBound(projected)
+```
+
+要点：
+
+- **复用请求路径的同一个函数、同一份冻结集合**（`withClearedToolResults` +
+  `segmentClearPlans`，与 `buildRequestMessages` 5232-5237 完全一致）⇒ 无第二套投射逻辑，
+  不会漂移。冻结集合在段起点（1865-1870）先于第一次压力预警存在，时序安全。
+- `passthrough` / `archive_notice` 模式冻结集合为 `[]`（1870）⇒ 行为与今天逐字相同，
+  只有 `placeholder` 模式（本事故模式）的数变小（变准）。
+- 合同 5（只许高报）不破：占位后的估算仍是「下一次请求」的上界（新追加消息不在冻结集合，
+  按全文估，正确）；tools/图片在兜底路径依旧不计（与今天一致，1694-1696 注释已声明），
+  发送前闸（3800）每请求重算并补上，安全边界不动。
+- 段起点压缩后 `requestView = undefined`（1325）的兜底同样受益。
+- 备选（不推荐）：段起点用 `buildRequestMessages` 实建一次视图并 seed `requestView`。
+  更精确（含 normalize/tools），但要在段起点提前拿 tool schema 与 system prompt，
+  多一次整窗扫描，且与首次请求重复构建——收益不抵复杂度。P1 最小改法已消除主因（170K 级），
+  normalize 丢条的残差是条数级（每条 4 token 开销 + 孤儿消息正文，方向偏高、合法）。
+
+### 3.2 P2：增量切片按源 population 计数
+
+位置：`execution-unit.ts:297`（`requestView` 形状）+ `3795-3798`（写入）+ `1703-1705`（切片）。
+
+- `requestView` 增加 `sourceMessageCount`（构建请求视图时**工作窗口**的条数）；
+- 增量路径改 `messages.slice(view.sourceMessageCount)`，不再拿请求视图条数切工作窗口。
+- 消除 §2.3 的错位（normalize 丢孤儿 tool 消息时请求视图条数 < 窗口条数 ⇒ 重复估算）。
+- 形状是内存态（不落盘、不进事件），无冻结契约风险。
+
+### 3.3 P3：消费侧零改动（证据清单）
+
+| 消费侧 | 为什么自动对齐 |
+|---|---|
+| runtime 通知 | 就是写侧本身（4558） |
+| `context.pressure` 事件 → serve 注册表 → agents.tree → UI live | 搬 `used/max`（registry:221-226），源头变准即准 |
+| `sessions.get.context_usage` → UI 落盘兜底 | 新→旧命中 pressure/llm.request，两者同源后不再互相打架（§2.5 的 UI 跳变连带消失） |
+| rotate 实时层 | 搬 `context.changed.token_count`（source.ts:105-108），同源 |
+| rotate 兜底（lastContextRatio） | run 末同一函数（2778-2782），同源 |
+| 批准卡 / warning 文案 | 读同一个 ratio（tool.ts:662-677），百分比取整口径已一致（Math.round） |
+
+### 3.4 P4（后续单）：TUI 口径归队
+
+`packages/tui/src/commands/context-command.ts:90` 与 `repl/status-metrics.ts:20` 的
+`estimateContextUsage` 仍用老 `estimateTokens`（乐观口径，系统性偏低，与 web/runtime 不同源）。
+建议改读同一份账本（会话状态/事件里的现成读数），或至少换用
+`estimateMessagesTokensUpperBound` + 锚点。TUI 是独立表面、不在本次三处之列，单列跟进。
+
+### 3.5 P5：文档漂移清单（实现单一并修正，纯注释）
+
+1. `packages/agent/src/service.ts:7141-7148`：「`context.changed.token_count` =
+   `ContextManager.tokenCount`」——0.55 P0 起已是 runtime 账本（`currentContextTokens`），注释过期。
+2. `src/session/context-ratio-source.ts:10-16`：「分子 = `ContextManager.tokenCount` 原值」——同上过期。
+3. `src/session/context-usage.ts:44-50`：「`estimated_tokens` 存的就是
+   `execution.workingContext.tokenCount`」——与同文件 0.55 P0 头注自相矛盾，过期。
+4. `execution-unit.ts:4556-4557`「与显示/闸同一个数」——P1 落地后才真正成立，补一句
+   「兜底亦应用冻结占位集合」防止回退。
+
+### 3.6 保留并文档化的语义差异（不是 bug，不统一）
+
+- **压缩判据用整窗 `tokenCount`**（context-manager.ts:1236-1245）：窗口拿不到占位集合，
+  整窗是请求视图的上界，有意保守；误压缩由 `compactionWouldBeMarginOnly`（1346-1351）拦。
+  与显示口径**语义不同**（触发判据 vs 现值），保留。
+- **provider `prompt_tokens` 只做地板/兜底**：它是「上一次请求」的真实大小，天然慢半拍
+  （request-view.ts 合同 1），不许当现值。
+- **UI 落盘兜底慢半拍**：历史会话/重启后只有落盘读数，最新也是上一条请求的估算——可接受，
+  文档说明即可。
+- **rotate 的 ratio 是信息不是闸**：拒绝永远来自人类审批（超时/拒绝/无通道）。
+  `rotate_not_needed` 码名误导（§2.4），但结果形状是冻结契约且已带 `reason` 字段——
+  建议调用方文档强调「看 reason 不看 code」，码名改动另议（不在本单）。
+
+### 3.7 验收口径（只读核对，不加探针）
+
+修复后在任一 `cleared > 0` 的会话时间线上核对：
+
+1. 每个 run：`context.pressure.used` ≈ 紧随其后的 `llm.request.estimated_tokens`
+   （差 = 两点之间追加的尾部消息，典型 <1%；事故样本的 45% 差消失）。
+2. 同 run 内 rotate 的 `context_percent` == 通知百分比（同一 ratio、同一取整）。
+3. `agents.tree.context_used` 跨 run 起点连续，不再 55%↔38% 跳变。
+4. 发送前闸与压缩判据行为不变（`context.compacted` 的 decision 输入、
+   `context_window_exceeded` 触发条件均不依赖本次改动的兜底路径）。
+
+### 3.8 风险与回滚
+
+- 改动集中在 `nextRequestTokens` 一个函数 + `requestView` 一个内存字段（预计 ~30 行，
+  单文件），无事件形状/落盘 schema/对外契约变化；回滚 = revert 单提交。
+- 通知数值整体下移（更准）⇒ 50% 预警比以前提得**晚**——这正是用户裁定要的行为
+  （「系统提示要 rotate 但工具说不需要」消失）；真超限仍有发送前闸 + provider overflow 卡兜底。
+- 无锚点会话兜底仍 ×1.15（合同 5 不变），不会引入低报。
+
+### 3.9 实施清单（供实现单，本单零代码）
+
+| # | 文件 | 改动 |
+|---|---|---|
+| P1 | `packages/core/src/runtime/execution-unit.ts:1698-1706` | 兜底应用 `segmentClearPlans` + `withClearedToolResults` |
+| P2 | 同上 `:297, :3795-3798, :1703-1705` | `requestView.sourceMessageCount`，增量按源条数切片 |
+| P5 | 同上 `:4556`；`packages/agent/src/service.ts:7141`；`src/session/context-ratio-source.ts:10`；`src/session/context-usage.ts:44` | 注释归队 |
+| P4 | TUI（另单） | `/context`/状态栏改读账本 |
+
+---
+
+## 附：取证方法（可复现，只读）
+
+- 生产时间线：`~/.vessel/data/sessions/f6484abd-26e3-4e49-8f36-4ccbf3c903fc/timeline.ndjson`
+  （main 前身体，epoch 13 之前的同一会话），按 `type ∈ {context.pressure, llm.request,
+  llm.response, run.started, context.cleared_tool_result}` 过滤 ts 窗口
+  `[1795593400000, 1795594000000]`，得 §2.1 表。
+- rotate 结果原文在该文件 seq 59056（`tool.call.completed`，tool_name=agent，
+  arguments.action=rotate）。
+- 代码基线：redblue-dev b939f4ce（= 生产 main fb44a979 + q-card-robust 事实通道改动；
+  本调研涉及的计量链路两分支逐字一致，已 diff 核对）。
