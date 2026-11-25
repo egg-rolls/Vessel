@@ -1,7 +1,25 @@
-# 环境信息卡 run 中可见性状态误区 · 根因调研与修复设计
+# 卡片渲染健壮性调研 —— envcard run 中可见性 + permission 审批卡刷新不显示
 
-日期：2026-07（任务书 q-envcard-run）· 分支 design/q-envcard-run · 调查人 q-envcard-run
+日期：2026-07（任务书 q-envcard-run + main 补充范围）· 分支 design/q-envcard-run · 调查人 q-envcard-run
 性质：**只调研 + 设计，零代码改动**。
+
+两个用户实测现象，同属「卡片渲染状态缺口」家族，但**根因相互独立**：
+
+| # | 现象 | 根因层 | 一句话 |
+| --- | --- | --- | --- |
+| I | run 运行中看不到环境信息卡（`[inbox] N unread`、PII 通知），run 结束才显示 | **Web 可见性闸门** | notice 的 live 载体事件是 internal 档，默认配置在进 fold 前就被丢弃；q-display 补的投影分支在闸门下游，不可达 |
+| II | main 调 `agent rotate` 时前端不显示 permission 审批卡，**刷新也不显示** → `approval_timeout` | **生产侧绕过事实通道 + 快照 RPC 可达性** | rotate 审批请求走裸事件流发布，**不进会话时间线**；当前 Web 的时间线订阅只收时间线记录 → live 卡永远到不了；刷新重建依赖 `interactions.list`，该 RPC 被挡/跨节点时卡片同样到不了 |
+
+用户裁定（两现象共同的验收标准）：
+- run 运行中和结束，能看到的事件卡片应该一致（I）；
+- 审批请求改变了一个状态值，WebUI 刷新应读取到，不应刷新也不显示（II）。
+
+**Part I** 为环境信息卡（原任务书范围）；**Part II** 为 permission 审批卡（补充范围，
+更优先——阻塞用户审批操作）；**Part III** 为两现象对照与共同修复原则。
+
+---
+
+# Part I · 环境信息卡 run 中可见性状态误区
 
 用户实测：run 运行中看不到环境信息卡（`[inbox] N unread`、PII 脱敏/失效通知）；
 run 结束后才显示。用户裁定：**run 运行中和结束，能看到的事件卡片应该一致**。
@@ -265,4 +283,323 @@ active run 时改走 `appendInjectedMessages`（或补发一条同 id 的 `messa
   `:397`（message.injected → 消息）
 - 前序调研：`docs/dev/research/q-display-owner-delta-rootcause.md`（投影缺失那一半）；
   相关 commit：290df5eb（q-display 投影）、b2e8a922（q-from-card source 恒可见）、
-  f96a13b1（单一表示去重）
+  f96a13b1（单一表示去重）---
+
+# Part II · permission 审批卡（rotate）run 中不显示、刷新也不显示
+
+现象（用户实测）：main 调 `agent rotate`，前端不出现 permission 审批卡（无法同意/拒绝），
+不停刷新仍不显示 → 工具侧 `approval_timeout`（`packages/agent/src/tool.ts:87`）。
+用户裁定：审批请求改变了一个状态值，WebUI 刷新应读取到。
+
+## 结论（先说答案）
+
+审批请求**确实落盘了**（interactions 注册表 + 0600 原子写文件），状态值存在；
+缺口在**两条到达路径各断一处**：
+
+1. **live 路径（已验证的结构性根因）**：rotate 审批请求用**裸工具事件流**发布
+   （`tool.ts:687` `ctx.events.publish`），绕过了 `publishEvent → RunJournal →
+   时间线双写` 这条**唯一事实通道**，因此**永远不会成为会话时间线记录**。
+   而当前 Web 聊天走**时间线 epoch 订阅**：gateway 对这类连接**一律不发** hub 环形
+   缓冲的广播帧（`gateway.ts:1729`），只发时间线尾随记录（`gateway.ts:2241-2277`）。
+   → live 审批卡永远到不了浏览器。**普通工具审批卡没有这个问题**——内置
+   `PermissionPolicy` 的请求专门经 `publishEvent` 包装发射（`execution-unit.ts:1089-1092`
+   注释原文：「权限请求经 runtime 的 publishEvent，才能保证先落盘再发布」），
+   进时间线、live 可见。rotate 是**手搓 publish+waitFor**，没走这条包装。
+2. **刷新路径（快照 RPC 可达性）**：刷新重建卡片的唯一来源是 `interactions.list`
+   （注册表里**有**这条 pending 记录——裸流发布仍经 bridge → hub raw fan-in →
+   注册表登记落盘）。hydration 链路本身完整；但 `interactions.list` **拉取失败时
+   卡片同样到不了**——0.59 之前失败被一律当成「空列表」，代码注释明确点名 rotate
+   权限卡是受害者（`interaction-hydration.ts:84-85`：「RPC 401 时待批页显示『没有
+   待批的提问』……rotate 的权限卡就是这样永远到不了界面」）。0.59 起失败会显示
+   提示条（`ComposerSlot.tsx:19-39`），但**卡片仍要等 RPC 成功才补回**。
+   另一可达性缺口：**跨节点**——chat hydration 只查本节点 gateway；若浏览器连的
+   节点与旋转 body 所在节点不同，本节点注册表没有这条记录（federation attention
+   只覆盖待批页，不覆盖会话页 Composer 槽位）。
+
+净效果：live 断（时间线缺口）+ 刷新断（RPC 被挡/跨节点）= 用户看到的「怎么刷都没有」，
+工具侧等到 `approval_timeout`。**状态值一直在，是到达路径断了**——用户裁定的方向正确。
+
+## ① 审批卡的数据流（生产 → 持久化 → 渲染）
+
+### 生产侧（rotate 专用，手搓审批）
+
+```
+agent tool rotate（packages/agent/src/tool.ts:651-747）
+  ├─ 闸门：options.humanApproval === true && service.canConfirm(callerSession)（:684）
+  │        canConfirm = entry.mode==='bridge' && parentEvents 存在（runtime.ts:1440-1443）
+  ├─ ctx.events.publish({ type:'tool.permission.request', tool:'agent.rotate',
+  │        session_id: callerSession, ... })（:687-706）   ← 裸流，不经 journal
+  ├─ ctx.events.waitFor('tool.permission.response', { timeout })（:708-714）
+  └─ 超时 → ctx.events.publish({ type:'tool.permission.expired', ... })（:733-744）
+           ← 同样裸流
+```
+
+`ctx.events` 是谁：工具管道的 `events` 端口 = ExecutionUnit 的**裸 `this.events`**
+（`execution-unit.ts:1098` → `tool-pipeline.ts:203-214`），**不是** `publishEvent`
+（journal 包装，`execution-unit.ts:5999-6012`）。
+
+### bridge 转发（成员 → 父流）
+
+```
+entry.events.subscribe（packages/agent/src/runtime.ts:1984-2001）
+  → bridgeRequestData 补 agent_id/team_id/session_id/parent_agent_id（:566-604）
+  → parentEvents.publish(forwarded)（:1997）   parentEvents = runtimeEvents（bootstrap.ts:1576）
+```
+
+### 持久化（注册表，hub raw fan-in）
+
+```
+hub.subscribe(raw)（gateway.ts:1468-1470）→ interactions.handleEvent
+  → tool.permission.request：pendingPermissions.set + rememberRecord(status:'pending')
+    + persist()（interactions-registry.ts:677-723）
+  → InteractionsStore.save：<interactionsDir>/interactions-<tenant>.json，0600 原子写
+    （interactions-store.ts:326-342）
+```
+
+**注意**：注册表吃的是 hub **raw** fan-in（不经脱敏/摘要 map），所以裸流发布的请求
+**照样登记落盘**——这就是「状态值存在」的根据。run 终态时该 run 的 pending 转
+`orphaned`（interactions-registry.ts:781-803）。
+
+### 渲染侧（Web）
+
+- **live**：WS 事件 → `connection-handlers.ts:191` `addPermission` →
+  `permissionFromEvent`（interactions.ts:42-78）→ interactionStore。
+- **刷新/重连**：`hydrateInteractions`（use-interaction-hydration.ts:63-66，
+  并行拉 `interactions.list` pending + orphaned）→ `buildHydrationSnapshot`
+  （interaction-hydration.ts:221-286）→ reducer 合并（:382-439）。
+  触发点：连接 hello 后 epoch（ConnectionProvider.tsx:461-464）、切会话
+  （ChatView.tsx:175-178）、重连（connection-handlers.ts:249-252）。
+- **渲染守卫**：`pendingForSession`（useChatTranscript.ts:371-374）→
+  `pendingOwnedBySession`（attribution.ts:212-222，唯一判据 `sessionId === 当前会话`）
+  → `pendingQueue` → ComposerSlot → PermissionPrompt（ComposerSlot.tsx:112-124）。
+  **渲染层对 run 状态无歧视**：只要请求在 store 里且 sessionId 匹配，卡就画。
+- **应答**：`permission.respond` → 注册表 `respondPermission` → 往 hub.stream() 发
+  `tool.permission.response`（interactions-registry.ts:822-839）→ bridge 回灌成员流
+  （runtime.ts:2004-2037）→ 工具 `waitFor` 收口。**应答链路与时间线无关**——
+  只要卡能画出来，点「允许」就能送达。修复只需解决「卡可见」。
+
+## ② 为什么刷新也不显示：三个假设的裁定
+
+- **假设 a「审批态只在内存未持久化」——不成立**。注册表 `rememberRecord + persist`
+  同步落盘（interactions-registry.ts:707-721），进程重启后 `loadAllSync` 读回
+  （interactions-store.ts:251-306；无活 run 的 pending 转 orphaned 是重启语义，
+  与「刷新前端」无关）。
+- **假设 b「前端渲染条件 bug」——不成立（渲染层）**。ComposerSlot / pendingForSession
+  不看 run 态；sessionId 匹配即渲染。**但 live 供给层有结构性 bug**（见下）。
+- **假设 c「审批请求与 session 关联丢失」——不成立**。tool.ts:701 写
+  `session_id: callerSession`，bridge 不覆盖已有字段（runtime.ts:580），
+  注册表/列表/hydration 全程携带。
+
+**真正的断点**：
+
+### 断点 1（live，已验证）：裸流发布不进时间线，时间线订阅收不到
+
+时间线 epoch 的连接**只收时间线记录**：
+
+- `sendEventToWs`（gateway.ts:1721-1747）第一行：
+  `if (ws.data.timelineEpoch === true) return;` —— hub 环形缓冲的广播帧
+  （`broadcastEvent`，:1760-1777）对时间线连接**一律跳过**；
+- 时间线连接的唯一实时来源是 `fanoutTimelineTailBatch`（gateway.ts:2241-2277），
+  数据来自 `opts.timelineTail`（bootstrap.ts:2075 `timelineTailPort(bundle.timelineDualWrite)`）
+  ——即**时间线写者 fsync 之后**发布的记录（timeline-dual-write.ts:42-48）。
+
+而一条事件要进时间线，唯一入口是 `publishEvent → journal.appendFact →
+dispatchToTimeline`（execution-unit.ts:5999-6012、run-journal.ts:90-110）。
+`tool.permission.request` **是事实类型**（不在 `DERIVED_EVENT_TYPES` /
+`isExcludedEventType`，timeline/types.ts:345-358）——**只要经 journal 就能进时间线**。
+内置 PermissionPolicy 正是这么做的（execution-unit.ts:1090-1092 把 `publishEvent`
+作为 emit 包装传进去；permission-policy.ts:74/:180-181 用它发请求）。
+
+rotate 审批就绕过了这一层：`tool.ts:687` 直接 `ctx.events.publish`（裸流）。
+裸流发布仍会到 hub（bridge 转发 → runtimeEvents → 双写闸门对「未认领」事件微任务
+直通，timeline-dual-write.ts:60/:614-615）→ 注册表登记 + **旧 epoch** 广播；
+但**没有 journal 派发 = 没有时间线记录 = 时间线连接永远收不到**。
+
+对照结论：**普通工具审批卡 live 可见（经 journal），rotate 审批卡 live 不可见
+（绕过 journal）**——与用户「只有 rotate 审批卡出问题」的实测一致。
+`tool.permission.expired`（tool.ts:733）同样裸流，时间线客户端也收不到收卡信号
+（Web 靠 `rememberExpiredRequestId` 跨刷新记住 + hydration 收敛兜底）。
+
+### 断点 2（刷新）：interactions.list 可达性
+
+注册表有记录 ⇒ 同节点、RPC 成功时，刷新**应当**补回卡片（链路已验证完整）。
+用户环境刷新仍不显示，候选解释按证据强度排序：
+
+1. **RPC 被挡（有代码注释直接点名）**：`interaction-hydration.ts:84-85` 记载
+   0.59 前 `interactions.list` 失败（如 401）被当成空列表，「rotate 的权限卡就是
+   这样永远到不了界面」。0.59 起失败可见（ComposerSlot 提示条 + 待批页提示），
+   但卡片仍要等 RPC 恢复。若用户节点版本早于 0.59，或失败提示被忽略，表现就是
+   「刷新也没有」。
+2. **跨节点拓扑**：浏览器连的 gateway 与旋转 body 所在节点不同 ⇒ 本节点注册表
+   无记录。chat hydration 只查本节点（use-interaction-hydration.ts:63-66 无节点
+   路由）；federation attention-client 只服务待批页/CLI（attention-client.ts:110）。
+3. **旧版本客户端**无 hydration / 无 interactions.list。
+
+**只读查证步骤（供修复单在用户环境执行）**：
+- 浏览器 DevTools 看 `interactions.list` WS 帧：成功？401/forbidden？返回里有没有
+  `tool:'agent.rotate'` 的 pending 条？
+- Composer 槽位有没有「拉取失败」提示条（0.59+）？
+- 节点侧读 `<dataDir>/interactions/interactions-<tenant>.json`：有没有该 requestId
+  的 pending 记录？（只读查证，不写生产路径）
+- 确认浏览器连接的节点与 main 所在节点是否同一个。
+
+## ③ 修复方案（设计，供后续修复单执行；permission 卡优先）
+
+目标：**审批卡 run 中即出现（与普通工具审批卡同等待遇），刷新必能补回，
+超时收卡信号同样可达**。
+
+### P-A（推荐，生产侧，最小改动）：rotate 审批事件改走事实通道
+
+让 rotate 的 `tool.permission.request` / `tool.permission.expired` 经
+`publishEvent`（journal）发射，从而进时间线、被时间线订阅实时收到、刷新时可由
+时间线回放重建（与正常工具审批卡完全同构）。落点二选一：
+
+- **ToolContext 增一个事实发射端口**（如 `emitFact`），装配侧接
+  `ExecutionUnit.publishEvent`（tool-pipeline.ts 构造 ctx 处 + execution-unit.ts
+  传入）；tool.ts rotate 的两处 publish 改用它。`waitFor` 仍用 `ctx.events`
+  （同一条流，应答照旧到达）。**影响面最小**：只有 rotate 审批改道，其余工具的
+  裸流发布语义不变。
+- 或把工具管道的 `events` 端口整体换成 publishEvent 包装。**不推荐**：所有工具的
+  裸流发布都会进 journal（非事实类型虽被 `isNonFactEventType` 挡掉，但发布时序从
+  同步变异步 fsync 后，影响面大，需逐一核对 waitFor / 观察面语义）。
+
+配套：`tool.permission.expired` 同样改道（收卡信号与请求卡同通道）。
+
+### P-B（注册表侧）：expired 收口记录
+
+注册表 `handleEvent` 目前**不处理** `tool.permission.expired`
+（interactions-registry.ts:676-804 只有 request/response/终态）：超时后记录仍
+`pending`，直到 run 终态才 orphaned。本端浏览器靠 `rememberExpiredRequestId`
+不复活死卡，但**换设备/换浏览器刷新**会在「expired 之后、run 终态之前」的窗口里
+补回一张点了也没用的卡。建议：expired 事件把记录收口为终态（`orphaned` + reason），
+让 `interactions.list` 在任何端都收敛。
+
+### P-C（Web 侧，可达性兜底）：hydration 失败可见 + 跨节点路由
+
+- 0.59 的失败可见（PendingFetchNotice）**保留**，它是「刷新也没有」的最后一道
+  自证；修复单验收时确认用户环境版本含此行为。
+- 跨节点：chat hydration 增加「按请求归属节点路由 interactions.list」或把
+  federation attention 的 pending 并入 chat 的 interactionStore（待批页已有
+  attention-client 先例）。此项工作量较大，可作为后续单；P-A 落地后同节点场景
+  已闭环。
+
+### 不推荐的方向
+
+- **run 中轮询 sessions.get 找审批态**：sessions.get 不携带权限请求明细
+  （requestId/input），拿不到也画不出卡；且重复刷新会作废认领账本（Part I 已述）。
+- **把审批卡改成读 member status（waiting_permission）**：状态值只说明「在等」，
+  不含请求内容；interactions.list 才是正确的快照源（用户裁定的「状态值」就是它）。
+
+## ④ 影响面（P-A + P-B）
+
+| 面 | 影响 |
+| --- | --- |
+| `packages/agent/src/tool.ts` | rotate 两处 publish 改事实端口；waitFor 不变 |
+| `packages/core/src/runtime/tool-pipeline.ts` / `execution-unit.ts` | ToolContext 增事实发射端口（additive，旧工具不受影响） |
+| 时间线 | `tool.permission.request` / `.expired` 本就是事实类型，进时间线无需改类型表；回放/刷新重建自动获得 |
+| `packages/serve/src/interactions-registry.ts` | P-B：expired 收口（注意与 run 终态 orphaned 的幂等） |
+| Web | 零改动即收益：live 事件经时间线尾随到达 → connection-handlers:191 照常 addPermission；刷新时时间线回放与 interactions.list 双保险 |
+| TUI / CLI | 应答链路（hub.stream → bridge → waitFor）不变；TUI 读 raw 流照旧 |
+| 既有裁决 | 权限等待不按时间过期（Addendum A）不变；rotate 的 approval_timeout 兜底不变；渲染守卫（sessionId 等值）不变 |
+
+### 风险与边界
+
+- **发布时序**：事实端口经 journal，fsync 后才到订阅者（微任务/IO 级延迟）；
+  rotate 的 `waitFor` 在同一条流上等应答，请求晚到几毫秒不影响正确性。
+- **双写闸门**：经 journal 的事件会被双写认领（claim），fsync 后放行；写者失败
+  fail-open 直通（timeline-dual-write.ts:60），UI 一条不丢——与既有事实事件同口径。
+- **旧会话**：legacy（events.ndjson only）会话不支持时间线订阅，走旧 epoch 广播；
+  P-A 前后都可见（旧 epoch 收 hub 广播），无回归。
+- **重复卡**：live 事件与 hydration 按 requestId 去重（enqueuePermission /
+  reducer hasId），时间线回放重建的卡与 interactions.list 补回的卡同 id 不双出。
+
+## ⑤ 验收口径（供修复单）
+
+1. 默认配置、时间线订阅下，main 调 `agent rotate`：审批卡**run 中即出现**在
+   会话页 Composer 槽位，可同意/拒绝，应答后工具正常收口；
+2. 审批等待中**刷新页面**：卡片必补回（时间线回放或 interactions.list 任一成功即可）；
+3. `interactions.list` 被挡时：Composer 槽位出现「拉取失败」提示条（0.59 行为），
+   不再冒充「没有待批」；
+4. 超时（approval_timeout）后：本端与**换端刷新**都不再出现死卡（P-B）；
+5. 普通工具审批卡、ask 卡、待批页行为零回归；`bun run build` + 相关门禁通过。
+
+---
+
+# Part III · 两现象对照与共同修复原则
+
+## ③（任务书）对照：是否同根因？
+
+**不是同一个根因，但是同一个家族**——「用户应见的卡片，其到达路径存在状态/通道缺口」：
+
+| 维度 | I · envcard | II · permission 审批卡 |
+| --- | --- | --- |
+| 断点层 | **Web 可见性闸门**（事件档位层） | **生产侧事实通道**（core 发布路径）+ 快照 RPC 可达性 |
+| 载体事件 | `message.injected` / `context.changed`（internal 档，默认被 LiveItemStore 丢弃） | `tool.permission.request`（observe 档、承接:'card'，档位没问题——**但压根没进时间线**） |
+| live 断因 | 事件到了浏览器，被闸门挡在 fold 外 | 事件**到不了**时间线订阅的浏览器（裸流发布绕过 journal） |
+| 刷新断因 | 历史窗口只在终态刷新（notice 消息终态才进 sessions.get） | interactions.list 被挡/跨节点（记录本身已落盘） |
+| 渲染层 | 无 run 状态歧视（TranscriptWindow:629-638） | 无 run 状态歧视（ComposerSlot:112-124） |
+| 修复落点 | Web 闸门白名单 + PII 载体统一（Part I 方案 A） | rotate 发布改事实端口 + expired 收口（Part II P-A/P-B） |
+
+**共同结构教训**：两张卡的渲染组件都「随时可以画」，缺口全在**供给链**——
+卡片可见性 = 载体事件到达正确的渲染路径 × 该路径的可见性判据放行 × 快照重建可达。
+三者任一断裂，用户看到的就是「状态误区」。
+
+## 共同修复原则（供后续同类卡片参照）
+
+1. **事实通道唯一**：凡用户应见的卡片，其载体事件必须经 `publishEvent → journal →
+   时间线`（或消息本体进 sessions.get 投影），不得用裸流发布绕过事实通道。
+   裸流只适合「过程信号」（observe/internal），不适合「用户应见事实」。
+2. **双路径一致**：live 投影与 history/快照重建必须用同一个卡片入口
+   （envcard：runtimeEnvCard；permission：permissionFromEvent / hydration 映射），
+   去重按稳定 id（messageId / requestId），终态让位不双出。
+3. **快照必可达**：每类卡片都要有一个「刷新就能读到」的权威快照源
+   （envcard：sessions.get 消息；permission：interactions.list），且快照拉取失败
+   **必须可见**，不得冒充「没有」（0.59 裁决）。
+4. **可见性裁定要穿透所有层**：消息 kind 层（ENV_MESSAGE_KINDS）的「恒可见」裁定
+   必须同步到事件档位层（EVENT_TIERS）与通道层（时间线事实类型），否则裁定在
+   某一层被静默拦截（I 的闸门、II 的 journal 绕过都是这类「裁定未穿透」）。
+
+## envcard 补充发现（Part I 方案 A 的加强证据）
+
+调研 Part II 时顺带验证了 Part I 通道 B（PII notice）的载体在时间线架构下的处境，
+**比 Part I 原结论更严峻**，进一步强化「A-Core 统一载体」的必要性：
+
+1. `context.changed` 是**非事实类型**（`DERIVED_EVENT_TYPES`，timeline/types.ts:351-358）
+   ——journal 明确不派发给时间线写者（run-journal.ts:107-108）。即 PII notice 的
+   live 载体**永远不进时间线**，时间线订阅的浏览器即使闸门放行也收不到它。
+2. `context.changed` 的**广播副本被摘要化剥掉 `data.message`**
+   （summarize-event.ts:94-111 `summarizeContextChanged`，hub map 必经，
+   tenant-event-hub.ts:192）——旧 epoch 连接收到的副本也没有消息本体可供投影。
+3. 对照：`message.injected` 经 `publishEvent` 发射（execution-unit.ts:5013-5022），
+   是事实类型，**进时间线**——Part I 方案 A 的白名单放行后，通道 A（inbox/总线/
+   source）在时间线架构下立即可用；通道 B（PII）必须先做 A-Core（appendNotice 改走
+   appendInjectedMessages）才能获得同等载体。**A-Core 不是可选项，是 PII 卡可见的
+   必要条件。**
+
+## 附：Part II 关键 file:line 索引
+
+- 生产：`packages/agent/src/tool.ts:651-747`（rotate 审批）、`:687-706`（裸流 publish）、
+  `:733-744`（expired 裸流）、`:87`（approval_timeout）；
+  `packages/agent/src/runtime.ts:1440-1443`（canConfirm）、`:1984-2001`（bridge 转发）、
+  `:566-604`（bridgeRequestData）、`:2004-2037`（应答回灌）、`:1131/:1175-1180`（成员自有流）
+- 工具管道：`packages/core/src/runtime/tool-pipeline.ts:203-214`（ctx.events = 裸流）；
+  `packages/core/src/runtime/execution-unit.ts:1096-1108`（管道装配）、
+  `:1089-1092`（PermissionPolicy 的 publishEvent 包装 + 注释）、`:5999-6012`（publishEvent）
+- 事实通道：`packages/core/src/runtime/run-journal.ts:90-110`（appendFact 派发）、
+  `packages/core/src/timeline/types.ts:345-358`（非事实类型表）、
+  `src/session/timeline-dual-write.ts:42-48/:60/:614-615`（fsync 后发布 / 未认领直通）
+- 时间线订阅：`packages/serve/src/gateway.ts:1729`（时间线连接拒收 hub 帧）、
+  `:2241-2277`（时间线尾随扇出）、`:2560-2688`（events.subscribe 时间线段）、
+  `src/runtime/bootstrap.ts:2075`（timelineTail 装配）、`:1576`（parentEvents）
+- 持久化：`packages/serve/src/interactions-registry.ts:677-723`（登记）、
+  `:781-803`（终态 orphaned）、`:806-862`（respondPermission）、
+  `packages/serve/src/interactions-store.ts:326-342`（0600 原子写）
+- 快照 RPC：`packages/serve/src/gateway/methods/interactions.ts:549-654`（interactions.list）
+- Web：`apps/web/src/gateway/connection-handlers.ts:123-129/:191-195`（live 入队）、
+  `apps/web/src/gateway/use-interaction-hydration.ts:63-99`（刷新重建）、
+  `apps/web/src/gateway/interaction-hydration.ts:84-85`（0.59 失败可见注释，点名 rotate）、
+  `apps/web/src/domains/chat/ComposerSlot.tsx:19-39/:112-124`（失败提示 + 渲染）、
+  `apps/web/src/domains/pending/attribution.ts:212-222`（渲染守卫）、
+  `apps/web/src/domains/chat/useChatTranscript.ts:367-384`（pending 派生）
+- 摘要化：`packages/core/src/events/summarize-event.ts:94-111/:117-123`、
+  `packages/serve/src/tenant-event-hub.ts:186-194`
