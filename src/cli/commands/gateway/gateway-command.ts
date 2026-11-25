@@ -18,6 +18,7 @@ import { withDeadline } from '@vessel-agent/core';
 import {
   type ConfigValidationError,
   checkPlatformTokenConflict,
+  DATA_DIR_CLI_MARKER_ENV,
   DEFAULT_GATEWAY_OPTIONS,
   DEFAULT_SERVE_OPTIONS,
   getUserConfigDir,
@@ -505,7 +506,8 @@ async function localNodeStatusViews(
       try {
         const loaded = await loadConfig({
           configPath: entry.config_path,
-          env: { ...env, VESSEL_DATA_DIR: entry.data_dir },
+          // registry data_dir 是 CLI 级权威：伴生标记，与 supervisor spawn 同口径。
+          env: { ...env, VESSEL_DATA_DIR: entry.data_dir, [DATA_DIR_CLI_MARKER_ENV]: '1' },
         });
         const live = await preferLiveNodeListen(
           entry.data_dir,
@@ -2606,7 +2608,9 @@ async function resolveLocalNodes(options: {
       const configPath = entry.config_path as string;
       const loaded = await loadConfig({
         configPath,
-        env: { ...options.env, VESSEL_DATA_DIR: entry.data_dir },
+        // registry data_dir 是 CLI 级权威：伴生标记，与 supervisor spawn 同口径
+        // （否则显式 user config.data_dir 会压过它 → node_data_dir_mismatch）。
+        env: { ...options.env, VESSEL_DATA_DIR: entry.data_dir, [DATA_DIR_CLI_MARKER_ENV]: '1' },
       });
       if (loaded.validation.errors.length > 0) {
         const first = loaded.validation.errors[0];

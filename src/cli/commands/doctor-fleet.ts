@@ -20,6 +20,7 @@
 import * as path from 'node:path';
 import {
   type ConfigLayers,
+  DATA_DIR_CLI_MARKER_ENV,
   DEFAULT_GATEWAY_OPTIONS,
   expandHomePath,
   type VesselConfig,
@@ -74,7 +75,8 @@ function envHygieneCheck(input: FleetChecksInput): FleetCheck {
   const root = path.resolve(dataDir);
   const issues: string[] = [];
 
-  // --user-config 只替换用户层；env 层照旧压过它。两层 data_dir 不一致时
+  // q-config-priority（用户裁定#3）：显式 --user-config 时 config.data_dir 优先于
+  // 继承 env；缺省加载时 env 仍压过用户层。两层 data_dir 不一致时，谁压过谁、
   // 「我明明切了舰队配置，数据怎么还落在老地方」就是这里要说清的事。
   const userDataDir = nonEmpty(layers?.user?.dataDir);
   const envDataDir = nonEmpty(env.VESSEL_DATA_DIR);
@@ -83,10 +85,21 @@ function envHygieneCheck(input: FleetChecksInput): FleetCheck {
     envDataDir !== undefined &&
     !samePath(expandHomePath(userDataDir), expandHomePath(envDataDir))
   ) {
-    issues.push(
-      `user config data_dir=${userDataDir} is overridden by VESSEL_DATA_DIR=${envDataDir} ` +
-        '(env wins over the user layer even with --user-config; unset VESSEL_DATA_DIR to let the user config win)',
-    );
+    const explicitUserConfig = nonEmpty(env.VESSEL_USER_CONFIG) !== undefined;
+    const cliMarked = env[DATA_DIR_CLI_MARKER_ENV] === '1';
+    if (explicitUserConfig && !cliMarked) {
+      issues.push(
+        `VESSEL_DATA_DIR=${envDataDir} is shadowed by the explicit user config data_dir=${userDataDir} ` +
+          '(with --user-config / VESSEL_USER_CONFIG, config wins over inherited env; unset VESSEL_DATA_DIR to silence this)',
+      );
+    } else {
+      issues.push(
+        `user config data_dir=${userDataDir} is overridden by VESSEL_DATA_DIR=${envDataDir} ` +
+          (cliMarked
+            ? '(VESSEL_DATA_DIR carries the CLI/registry override marker and wins)'
+            : '(env wins over the user layer when the user config is loaded by default; unset VESSEL_DATA_DIR to let the user config win)'),
+      );
+    }
   }
 
   const toolOutputDir = nonEmpty(env.VESSEL_TOOL_OUTPUT_DIR);

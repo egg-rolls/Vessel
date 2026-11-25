@@ -22,6 +22,7 @@
 
 import { mkdir, open, readdir, readFile, unlink } from 'node:fs/promises';
 import * as path from 'node:path';
+import { DATA_DIR_CLI_MARKER_ENV } from '@vessel-agent/config';
 import { atomicWrite, withDeadline } from '@vessel-agent/core';
 import { readHubLockFile } from '../hub/runtime';
 import { sanitizeToolOutputEnv } from '../runtime/tool-output-env';
@@ -1337,6 +1338,11 @@ export class NodeSupervisor {
     const nodeEnv: Record<string, string | undefined> = {
       ...(this.options.env ?? process.env),
       VESSEL_DATA_DIR: spec.dataDir,
+      // q-config-priority（用户裁定#3）：registry data_dir 是 CLI 级显式权威
+      // （gateway nodes add --data-dir 的落盘值）。伴生标记让子进程 loader 把它
+      // 当 CLI 层 —— 否则「显式 user config.data_dir > 继承 env」会压过 registry，
+      // 多节点舰队各 node 数据根分叉。
+      [DATA_DIR_CLI_MARKER_ENV]: '1',
     };
     sanitizeToolOutputEnv(nodeEnv, spec.dataDir);
     let child: ReturnType<typeof spawn>;

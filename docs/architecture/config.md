@@ -21,6 +21,7 @@ paths: [packages/config/**, src/config/cli-overrides.ts, src/gateway/serve-confi
 | 默认 | 代码 `DEFAULT_CONFIG` | 所有缺省值 |
 
 优先级：**CLI > env > project > user > default**。
+**q-config-priority（用户裁定#3，仅 `data_dir`）**：显式 `--user-config`（`userConfigPath` 或 `VESSEL_USER_CONFIG`）且用户层写了 `data_dir` 时，该键责任链为 **CLI > 显式 user config.data_dir > env > project > default**——继承的 `VESSEL_DATA_DIR` 不得压过显式舰队配置；非显式（缺省加载）保持旧链（生产 bootstrap 设 env 零回归）。`VESSEL_DATA_DIR_CLI=1` 是内部 env 契约（`--data-dir` 镜像 / supervisor/registry 注入伴生）：带标记的 `VESSEL_DATA_DIR` 按 CLI 层应用，仍最高优先。其它键一律维持 env > config。
 0.49 起没有 tenant overlay，也没有 `tenant` 配置块；旧 `tenant:` 块、`serve.tokens[*].tenantId`、
 `serve.adminToken` / `serve.adminTokenEnv` 一律 fail-fast 并给逐项 Fix（改为 `serve.tokens` 的 `{ role }`）。
 
@@ -41,7 +42,7 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | 键 | 说明 |
 |---|---|
 | `provider.timeout_ms` | LLM 请求超时（毫秒）；`<=0` 关闭。仅插件式 provider（openai / anthropic）生效 |
-| `data_dir` | 全局数据根，默认 `~/.vessel/data`；`VESSEL_DATA_DIR` 覆盖；`--data-dir` 为最高优先级一次性覆盖 |
+| `data_dir` | 全局数据根，默认 `~/.vessel/data`；`VESSEL_DATA_DIR` 覆盖；`--data-dir` 为最高优先级一次性覆盖。显式 `--user-config` 时用户层 `data_dir` 优先于继承 env（q-config-priority 用户裁定#3，见上文责任链） |
 | `trace.enabled` / `level` / `retention_days` / `max_runs` / `max_bytes` | 缺省 true / `full` / 30 / 1000 / 1 GiB；`level` 为 `full`\|`metadata`\|`off`；`max_bytes: 0` = 不限 |
 | `session.backend` | `file`（0.5 默认）/ `sqlite`（0.4 默认，仍可用）/ `memory`；`storagePath` 对应 sqlite 文件或 file 目录 |
 | `update.autoCheck` / `channel` / `source` | 交互启动后台检查（默认 true）、`latest` / `beta`、自定义清单源 |

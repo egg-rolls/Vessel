@@ -13,6 +13,7 @@
 import { existsSync } from 'node:fs';
 import * as net from 'node:net';
 import {
+  DATA_DIR_CLI_MARKER_ENV,
   DEFAULT_GATEWAY_OPTIONS,
   DEFAULT_SERVE_OPTIONS,
   loadConfig,
@@ -255,9 +256,10 @@ async function addCommand(
   }
   // CONTRACT §3/§6（FROZEN r2）：`config_path` 是 project 层；与
   // `node start --config` 共用 `loadConfig({ configPath, env })`（含校验）。
-  // 子进程由 supervisor 以 `VESSEL_DATA_DIR=<data_dir>` 启动，因此这里也用
-  // 同一 envNode，避免 add 与子进程在端口/token/data_dir 上分叉。
-  const envNode = { ...context.env, VESSEL_DATA_DIR: dataDir };
+  // 子进程由 supervisor 以 `VESSEL_DATA_DIR=<data_dir>` + CLI 标记启动，因此这里
+  // 也用同一 envNode（q-config-priority：registry data_dir 是 CLI 级权威，
+  // 不被显式 user config.data_dir 压过），避免 add 与子进程在端口/token/data_dir 上分叉。
+  const envNode = { ...context.env, VESSEL_DATA_DIR: dataDir, [DATA_DIR_CLI_MARKER_ENV]: '1' };
   let nodeConfig: VesselConfig;
   let projectConfig: VesselConfig;
   try {

@@ -23,6 +23,7 @@ import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import {
   buildConfigSnapshot,
+  DATA_DIR_CLI_MARKER_ENV,
   getUserConfigPath,
   isLoopbackHostname,
   loadConfig,
@@ -322,7 +323,13 @@ markStartup('args');
 // 0.15: one-shot commands call loadConfig() without cliOverrides; mirror the
 // explicit --data-dir into the env layer so they resolve the same data root.
 // The main bootstrap path still passes it through buildCliConfigOverrides().
-if (args.dataDirArg !== null) process.env.VESSEL_DATA_DIR = args.dataDirArg;
+// q-config-priority（用户裁定#3）：--data-dir 是 CLI 级显式权威。镜像走 env，但
+// 「显式 config > env」责任链下不得被用户配置 data_dir 压过 —— 伴生标记让 loader
+// 把它移回 CLI 层；子进程继承标记，整条启动链（含热重载）口径一致。
+if (args.dataDirArg !== null) {
+  process.env.VESSEL_DATA_DIR = args.dataDirArg;
+  process.env[DATA_DIR_CLI_MARKER_ENV] = '1';
+}
 // 0.56.1：`--user-config <path>` 只替换**用户层**配置路径。落到 env 是为了让
 // 一次性命令与它 spawn 的 daemon / node / hub 子进程看到同一个用户层
 // （否则子进程会去读真实 `~/.vessel/config.yaml`，「隔离开销」白做）。
