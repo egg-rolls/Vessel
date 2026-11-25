@@ -1,6 +1,6 @@
 {
   "board": "vessel 红蓝开发任务看板",
-  "updated": "2026-11-25T18:10:00+08:00",
+  "updated": "2026-11-25T18:30:00+08:00",
   "columns": ["待办", "进行中", "阻塞"],
   "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。★用户裁定不自动归档：完成任务标「已合并待验收」留板，用户打勾才移 archive.json（append-only）。",
   "tasks": [
@@ -132,6 +132,14 @@
       "owner": "user",
       "branch": "redblue-dev",
       "progress": "✅完成合并f10ba7ae(1e5cd162 P-A同构/7da30550 P-B expired收口/805046d2 PII载体按需/0d613279 A-Web分级纠正,10文件+175build绿)；agent可见=人类可见+分级纠正非特例+fail-open；★金丝雀cardrobust(f87f4f8c)复验中:22②刷新回放重建+⑥permission/ask(hydration-anon修复后应PASS,对照2/2 FAIL基线)+proxyMode同修面+live bundle hash实证+config封存恢复lead sha终验(pii_reveal policy切换制造pending卡是测试道具,canary-config sha波动勿误判)；DONE→22闭环+CR22-1 CLOSED→ALL封存→drain；遗留:inbox session_id归属协调/P-C跨节点后续"
+    },
+    {
+      "id": "q-permission-pending",
+      "title": "permission审批卡汇集进待批页（用户直接指示）",
+      "column": "进行中",
+      "owner": "q-permission-pending",
+      "branch": "feat/q-permission-pending",
+      "progress": "7f63b8b8派单(用户指示2026-11-25晚)：根因=PendingView只消费asks,permissions未汇集；gateway interactions.list两种kind都返回+hydration已重建两者→只缺Web消费侧；方案=混合聚类(agent>session>run)+原样复用PermissionCard+respondPermission逐条裁决(不批量批准)+badge计数对齐+teamId additive；★合并时机=第四轮晋升后(避未验码搭晋升),候lead登记第五轮批次书金丝雀验"
     },
     {
       "id": "q-graceful-selfrestart",
