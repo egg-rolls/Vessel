@@ -211,6 +211,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       { name: 'path', flags: ['--json'] },
       { name: 'init', flags: ['--json', '--force'] },
       { name: 'show', flags: ['--json', '--sources'] },
+      { name: 'explain', flags: ['--json'] },
       { name: 'set', flags: ['--json'] },
     ],
   },

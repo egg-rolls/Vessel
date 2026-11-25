@@ -76,6 +76,7 @@ export const zhCN = {
   'help.cmd.configPath': '打印用户/项目配置路径',
   'help.cmd.configInit': '生成用户配置模板',
   'help.cmd.configShow': '查看脱敏配置与来源',
+  'help.cmd.configExplain': '解释单个配置键：逐层值与谁赢（配置溯源）',
   'help.cmd.configSet':
     '写入用户配置（ui.language / ui.showReasoning / ui.statusBars / ui.verbosity / ui.showInternalEvents / ui.errorLevel / ui.askUser / observability.showProcessErrors / agent.cwd）',
   'help.cmd.pluginList': '列出仓库/用户/项目/node_modules 插件',

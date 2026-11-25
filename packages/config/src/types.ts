@@ -1242,6 +1242,20 @@ export interface VesselConfig {
   auth?: AuthConfig;
 }
 
+/**
+ * 各层配置的快照（q-ax-config：`config explain` 用；additive）。
+ * 每层是「该层实际贡献的键值」（_env 已解析、serve 块已摘除），
+ * 不是合并后的结果；未设置的键不出现。env_file 不是独立配置层
+ * （它注入环境变量，最终体现在 env 层），溯源由 explain 结合 envFiles 标注。
+ */
+export interface ConfigLayers {
+  default: Partial<VesselConfig>;
+  user: Partial<VesselConfig>;
+  project: Partial<VesselConfig>;
+  env: Partial<VesselConfig>;
+  cli: Partial<VesselConfig>;
+}
+
 /** 配置加载选项 */
 export interface ConfigLoadOptions {
   /** 项目配置文件路径（默认 ./vessel.yaml） */
@@ -1262,6 +1276,11 @@ export interface ConfigLoadOptions {
    * 同时提供时 `cliOverrides` 后应用（优先）。
    */
   defaults?: Partial<VesselConfig>;
+  /**
+   * q-ax-config（additive）：true 时在结果里附带 `layers`（各层贡献的键值快照），
+   * 供 `vessel config explain` 做逐层溯源。缺省 false，不影响既有加载路径。
+   */
+  captureLayers?: boolean;
 }
 
 /** 用户级配置（~/.vessel/config.yaml） */

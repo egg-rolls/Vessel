@@ -18,6 +18,7 @@ import { attentionCommand } from './commands/attention';
 import { runUpdateCommand } from './commands/cli-update';
 import { runCompletionCommand } from './commands/completion-command';
 import {
+  configExplainCommand,
   configInitCommand,
   configPathCommand,
   configSetCommand,
@@ -171,6 +172,9 @@ export const cliCommands: readonly CliCommand[] = [
         return printCommandResult(
           await configSetCommand(command.key, command.value, { json: command.json }),
         );
+      }
+      if (command.kind === 'explain') {
+        return printCommandResult(await configExplainCommand(command.key, { json: command.json }));
       }
       return printCommandResult(
         await configShowCommand({

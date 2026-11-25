@@ -14,6 +14,8 @@ import * as path from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import {
   buildConfigSnapshot,
+  type ConfigKeyExplanation,
+  explainConfigKey,
   getUserConfigPath,
   loadConfig,
   redactSourcePaths,
@@ -70,6 +72,14 @@ export interface ConfigShowOptions {
 export interface ConfigSetOptions {
   json?: boolean;
   userConfigPath?: string;
+}
+
+/** `config explain` 选项（q-ax-config） */
+export interface ConfigExplainOptions {
+  json?: boolean;
+  configPath?: string;
+  userConfigPath?: string;
+  env?: EnvMap;
 }
 
 /**
@@ -367,4 +377,94 @@ export async function configShowCommand(
   }
 
   return { exitCode: 0, stdout, stderr: warningText };
+}
+
+/** explain 的值展示（与 TUI displayValue 同口径；值已在 config 包脱敏）。 */
+function explainDisplayValue(value: unknown): string {
+  if (value === undefined) return '<unset>';
+  if (value === null) return 'null';
+  if (typeof value === 'string') return value.length === 0 ? '""' : value;
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+/** 单个键的逐层溯源块（人类可读）。 */
+function formatKeyExplanation(explanation: ConfigKeyExplanation): string {
+  const lines = [`key = ${explanation.key}`];
+  for (const entry of explanation.layers) {
+    const label = entry.layer === 'default' ? 'default' : `${entry.layer} (${entry.origin})`;
+    lines.push(
+      `  ${label}: ${explainDisplayValue(entry.value)}${entry.winner ? '  ← WINNER' : ''}`,
+    );
+  }
+  lines.push(
+    `effective: ${explainDisplayValue(explanation.effective)} (winner: ${explanation.winner})`,
+  );
+  for (const note of explanation.notes) lines.push(`  note: ${note}`);
+  return lines.join('\n');
+}
+
+/**
+ * `vessel config explain <key> [--json]`（q-ax-config：AX 自服务·配置溯源）。
+ *
+ * 一次性本地命令（与 config show 同族）：不 bootstrap、不连 gateway —— 逐层值
+ * 直接来自 `loadConfig({ captureLayers: true })`，因此不需要新增 RPC。
+ * key 支持 snake_case / camelCase，也支持前缀（如 `provider` → 其下所有叶子键）。
+ * 诊断命令：配置有校验错误时照常解释（错误以 ⚠ 列出），exit 0；未知键 exit 1。
+ */
+export async function configExplainCommand(
+  key: string,
+  options: ConfigExplainOptions = {},
+): Promise<ConfigCommandResult> {
+  const env = options.env ?? process.env;
+  const loaded = await loadConfig({
+    configPath: options.configPath,
+    userConfigPath: options.userConfigPath,
+    env,
+    captureLayers: true,
+  });
+  const explained = explainConfigKey(key, loaded, { env });
+
+  if (!explained.ok) {
+    const hint =
+      explained.suggestions.length > 0 ? `\nDid you mean: ${explained.suggestions.join(', ')}` : '';
+    return {
+      exitCode: 1,
+      stdout: options.json
+        ? JSON.stringify({ error: explained.message, suggestions: explained.suggestions })
+        : '',
+      stderr: `${explained.message}${hint}`,
+    };
+  }
+
+  if (options.json) {
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify(
+        {
+          key: explained.requestedKey,
+          explanations: explained.keys,
+          paths: loaded.paths,
+          ...(explained.configErrors.length > 0 ? { config_errors: explained.configErrors } : {}),
+          ...(explained.configWarnings.length > 0
+            ? { config_warnings: explained.configWarnings }
+            : {}),
+        },
+        null,
+        2,
+      ),
+      stderr: '',
+    };
+  }
+
+  const lines: string[] = [];
+  for (const error of explained.configErrors) {
+    lines.push(`⚠ config error: ${error.path}: ${error.message}`);
+  }
+  for (const warning of explained.configWarnings) {
+    lines.push(`⚠ config warning: ${warning.path}: ${warning.message}`);
+  }
+  if (lines.length > 0) lines.push('');
+  lines.push(explained.keys.map(formatKeyExplanation).join('\n\n'));
+  return { exitCode: 0, stdout: lines.join('\n'), stderr: '' };
 }

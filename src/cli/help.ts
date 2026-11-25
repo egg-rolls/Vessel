@@ -385,6 +385,7 @@ export function renderGlobalHelp(): string {
     ['vessel config path', t('help.cmd.configPath')],
     ['vessel config init', t('help.cmd.configInit')],
     ['vessel config show --sources', t('help.cmd.configShow')],
+    ['vessel config explain <key>', t('help.cmd.configExplain')],
     ['vessel config set <key> <value>', t('help.cmd.configSet')],
     ['vessel model list [--json]', t('help.cmd.modelList')],
     ['vessel model set-default <ref>', t('help.cmd.modelSetDefault')],

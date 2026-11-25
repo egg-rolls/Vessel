@@ -139,6 +139,7 @@ export type ConfigCommandArgs =
   | { kind: 'path'; json: boolean }
   | { kind: 'init'; json: boolean; force: boolean }
   | { kind: 'show'; json: boolean; sources: boolean }
+  | { kind: 'explain'; key: string; json: boolean }
   | {
       kind: 'set';
       key:
@@ -1227,7 +1228,7 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
   const sub = rest[0];
   if (sub === '--help' || sub === '-h' || sub === undefined) {
     if (sub === undefined)
-      return { ok: false, error: 'Missing config subcommand (path|init|show)' };
+      return { ok: false, error: 'Missing config subcommand (path|init|show|set|explain)' };
     args.help = true;
     return { ok: true, args };
   }
@@ -1312,6 +1313,35 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
       return { ok: false, error: 'agent.cwd must be a non-empty path' };
     }
     args.configCommand = { kind: 'set', key, value, json };
+    return { ok: true, args };
+  }
+
+  // q-ax-config：`config explain <key> [--json]`（逐层值 + 谁赢；键合法性在命令层判，
+  // 那里有完整叶子清单，能给出「Did you mean」建议）。
+  if (sub === 'explain') {
+    const positional: string[] = [];
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for config explain: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    if (positional.length !== 1) {
+      return {
+        ok: false,
+        error: 'Usage: vessel config explain <key> [--json] (e.g. data_dir / provider.model)',
+      };
+    }
+    args.configCommand = { kind: 'explain', key: positional[0] ?? '', json };
     return { ok: true, args };
   }
 

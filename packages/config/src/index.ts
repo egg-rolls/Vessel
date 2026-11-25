@@ -93,6 +93,15 @@ export {
   resolveEnvCadence,
 } from './env-injection.js';
 export {
+  type ConfigKeyExplanation,
+  type ConfigLayerValue,
+  type ExplainConfigOptions,
+  type ExplainConfigResult,
+  type ExplainLayerName,
+  explainConfigKey,
+  normalizeExplainKey,
+} from './explain.js';
+export {
   checkPlatformTokenConflict,
   resolveGatewayNodePorts,
   resolvePlatformProxySecret,

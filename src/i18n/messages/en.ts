@@ -84,6 +84,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.configPath': 'print user/project config paths',
   'help.cmd.configInit': 'generate a user config template',
   'help.cmd.configShow': 'show redacted config and sources',
+  'help.cmd.configExplain': 'explain one key: per-layer values and which layer wins',
   'help.cmd.configSet':
     'write a user setting (ui.language, ui.showReasoning, ui.statusBars, ui.verbosity, ui.showInternalEvents, ui.errorLevel, ui.askUser, observability.showProcessErrors, agent.cwd)',
   'help.cmd.pluginList': 'list repo/user/project/node_modules plugins',
