@@ -102,6 +102,17 @@ export function readDisplayValue(source: unknown, key: string): string {
 }
 
 /**
+ * config.get 是否**显式配置**了该键（不含 fallback 回落）。
+ *
+ * 给设置弹窗「未配置 → 默认值作 placeholder / 默认选中态」用：readDisplayValue
+ * 会把缺省行为填进显示值，分不清「配了这个值」与「没配、缺省如此」——判定配置
+ * 存在性必须看原始快照（增量⑤）。
+ */
+export function hasConfiguredValue(source: unknown, key: string): boolean {
+  return readPath(source, key) !== undefined;
+}
+
+/**
  * 服务端快照 + 本地乐观 overlay：pending 优先。
  * 保存中到达的旧快照不会覆盖用户刚选的值。
  */

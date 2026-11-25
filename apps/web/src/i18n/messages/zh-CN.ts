@@ -180,13 +180,13 @@ export const messages = {
   'settings.item.logTime.title': '日志时间',
   'settings.item.emptyResponseEnabled.title': '空响应兜底',
   'settings.item.emptyResponseEnabled.desc':
-    '模型返回空回复（无内容、无工具调用）时重试而不是零输出早退（缺省无感重调，见下）。缺省开。',
+    '模型返回空回复（无内容、无工具调用）时重试而不是零输出早退（缺省无感重调，见下）。',
   'settings.item.emptyResponseSeamless.title': '无感重试（不留疤）',
   'settings.item.emptyResponseSeamless.desc':
-    '开（缺省）：丢弃空轮，用已有 transcript 原样重调模型——不注入新消息、零疤痕；重试耗尽仍空才注入一次 nudge 兜底。关：直接注入 nudge。',
+    '开：丢弃空轮，用已有 transcript 原样重调模型——不注入新消息、零疤痕；重试耗尽仍空才注入一次 nudge 兜底。关：直接注入 nudge。',
   'settings.item.emptyResponseMaxRetries.title': '空响应重试上限',
   'settings.item.emptyResponseMaxRetries.desc':
-    '每次 run 的重试上限（0–10 整数，缺省 2），无感重调与 nudge 共用。耗尽后优雅终止并落日志注记。',
+    '每次 run 的重试上限（0–10 整数），无感重调与 nudge 共用。耗尽后优雅终止并落日志注记。',
   'settings.item.emptyResponseNudge.title': '空响应提示文案',
   'settings.item.emptyResponseNudge.desc': '自定义 nudge（以 user 消息注入）。不设置则用内置文案。',
   'settings.dialog.searchPlaceholder': '搜索设置…（@modified / @plugin:<id> / @local / @user）',
