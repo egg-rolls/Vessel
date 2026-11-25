@@ -1391,6 +1391,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.sessionRef.note': 'Referenced session',
   'chat.sessionRef.remove': 'Remove session reference {name}',
   'chat.sessionRef.reject.tooMany': 'At most {max} session references',
+  // Send serialization: the reference block rides along with the message body
+  // (the receiving agent reads the full chain; disclosure only affects chip badges).
+  'chat.sessionRef.header': 'Referenced sessions',
+  'chat.sessionRef.field.agent': 'agent',
+  'chat.sessionRef.field.team': 'team',
+  'chat.sessionRef.field.node': 'node',
   'chat.refs.label': 'Referenced files',
   'chat.refs.remove': 'Remove reference {name}',
   'chat.refs.kind.file': 'File',

@@ -14,6 +14,7 @@
  * 不另走 `useNodeNames` 的 health-name 通道 —— 同一个节点在卡片与 chip 上必须同名。
  */
 import type { SessionInfo } from '../../gateway/types';
+import { t } from '../../i18n';
 import { sessionTitle } from '../../state/sessions';
 import type { ComposerSessionRef } from '../../stores/composerDraftStore';
 
@@ -142,4 +143,28 @@ export function sessionRefDescription(chip: SessionRefChip): string {
   const address = sessionRefAddressOf(chip);
   const tail = `session: ${chip.sessionId}`;
   return address !== undefined ? `${address} · ${tail}` : tail;
+}
+
+/**
+ * 发送序列化：chip → 可读引用块，前置进消息正文（空行隔开）。
+ *
+ * `runs.start` 没有结构化会话引用字段（refs 是文件附件通道，mentions 只在
+ * `teams.post`），所以引用以**可读文本**随正文投递 —— 接收 agent 直接读到被引用
+ * 会话的基础链，需要深挖时拿着 session_id 自己查。
+ *
+ * 与 chip 徽章的渐进披露不同：**发送恒带全量信息**（agent / 团队 / 节点有则必写）——
+ * 披露是给人在输入框里看的降噪，接收方不该因为「恰好同队」就少知道一段归属。
+ * 缺失字段省略，不写空段。无 chip 时原样返回（调用方无需分支）。
+ */
+export function composeSessionRefText(text: string, chips: readonly SessionRefChip[]): string {
+  if (chips.length === 0) return text;
+  const lines = chips.map((chip) => {
+    const parts = [`「${chip.title}」`];
+    if (chip.agentName) parts.push(`${t('chat.sessionRef.field.agent')}: ${chip.agentName}`);
+    if (chip.team) parts.push(`${t('chat.sessionRef.field.team')}: ${chip.team}`);
+    if (chip.node) parts.push(`${t('chat.sessionRef.field.node')}: ${chip.node}`);
+    parts.push(`session_id: ${chip.sessionId}`);
+    return `- ${parts.join(' · ')}`;
+  });
+  return `[${t('chat.sessionRef.header')}]\n${lines.join('\n')}\n\n${text}`;
 }
