@@ -91,6 +91,7 @@ import {
   type AgentClaimInput,
   type AgentClaimResult,
   type AgentClaimSkip,
+  type AgentDispatchSweepResult,
   type AgentDrainOptions,
   type AgentDrainOutcome,
   AgentError,
@@ -919,6 +920,11 @@ export class AgentServiceImpl implements AgentService {
    * 但这个位让「扫过一次」这件事显式，而不是靠副作用）。
    */
   private startupRecoveryDone = false;
+  /**
+   * 启动 dispatch sweep 每进程只跑一次（审计 §5.4 幂等闸，与 startupRecoveryDone 同款）：
+   * 不与 live 投递竞争，只碰未 held 条目（单消费者规则）。
+   */
+  private startupSweepDone = false;
   /** body 级串行操作（0.32-D 打断重排）；按 bindingId 排队，避免两次打断交错。 */
   private readonly executionUnitOps = new Map<string, Promise<unknown>>();
   /**
@@ -3990,10 +3996,16 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * 启动恢复（0.53）：把**进程死亡时还没变成 run input** 的 human 输入重新投递一次。
+   * 启动恢复（0.53）：把**进程死亡时还没变成 run input** 的已接受输入重新投递一次。
    *
    * 判据（唯一）：`status === 'unread'` 且**未被 held** 且 `session_id` 存在且
-   * `source === 'human'` 且该 session 还有一个可重建的 binding。
+   * 该 session 还有一个可重建的 binding。
+   *
+   * **源判据（runlost-graceful-restart-audit §5.3，补 G3）**：human 源 ∪ agent 源
+   * （含自述转发）——只要带 `session_id`。`session_id` 是 input 投递的唯一持久判据：
+   * wake/quiet 条目**不带**它（G4 语义边界不动），天然排除。0.55 硬错误闸事故的
+   * 「报告唤醒循环」由 admitInternal 内的预算/cycle/hop/hardStop 闸拦（细筛），
+   * 不靠 source 粗筛——粗筛放宽、细筛原样，安全闸不变。
    *
    * 为什么这条判据干净：`held` 只存内存（见 `AgentInboxStore`），进程死亡后全部失效 ⇒
    * 磁盘上「没被任何 body 接管的输入」恰好就是孤儿集合，不需要任何幂等标记位。
@@ -4029,7 +4041,9 @@ export class AgentServiceImpl implements AgentService {
 
     // 1. 候选：枚举 registry 的成员（**不扫 inbox/ 目录**：不给不在册的 agent 起 body），
     //    每个成员 `inbox.list()` 是纯读盘、不 spawn。`includeHeld: false` 已经满足
-    //    「未 held」这一条；剩下两条（有 session_id / human 源）在这里判。
+    //    「未 held」这一条；剩下判据（有 session_id = input 投递）在这里判。
+    //    源不限 human（审计 §5.3 补 G3）：agent 源孤儿同样重放，预算/循环闸在
+    //    admitInternal 内原样生效；wake/quiet 无 session_id 天然排除。
     const bySession = new Map<
       string,
       { record: MemberRecord; entries: { id: string; ts: number }[] }
@@ -4040,7 +4054,6 @@ export class AgentServiceImpl implements AgentService {
       for (const entry of listed.messages) {
         const sessionId = entry.session_id;
         if (sessionId === undefined) continue;
-        if (entry.source !== HUMAN_PRINCIPAL) continue;
         const bucket = bySession.get(sessionId) ?? { record, entries: [] };
         bucket.entries.push({ id: entry.id, ts: entry.ts });
         bySession.set(sessionId, bucket);
@@ -4090,7 +4103,7 @@ export class AgentServiceImpl implements AgentService {
             {
               content: body.text,
               session_id: session.sessionId,
-              // 发送者沿用条目里落的 principal（判据已经只收 human 源）。
+              // 发送者沿用条目里落的 principal（human / agent 源同口径，审计 §5.3）。
               from: body.source,
               ...(body.refs !== undefined ? { refs: body.refs } : {}),
               reuse_message_id: body.id,
@@ -4116,6 +4129,96 @@ export class AgentServiceImpl implements AgentService {
         }
       }
       result.sessions += 1;
+    }
+    return result;
+  }
+
+  /**
+   * 启动 dispatch sweep（runlost-graceful-restart-audit §5.1，补 G5/G6/G7）。
+   *
+   * live 期「忙时留队列、空下来再投」的兜底靠内存 `noticeDirty` + 三个 dispatch 调用点；
+   * 重启后 noticeDirty 清零、没有 run 收口 ⇒ 有 pending 也点不着火。本方法在启动恢复段
+   * （recoverPendingInputs / liveness sweep 之后）跑**一次**有界主动投递：
+   *
+   * 1. 重建 noticeDirty：枚举 registry 成员（不扫 inbox 目录，与 recover 同口径），
+   *    凡 `inputHead` 非空（有 unread 可直投条目）者点亮；
+   * 2. 按最早 ts 升序、上限 `maxSessions`（缺省 8，与 recover 同口径防 spawn 风暴），
+   *    对每个点亮成员调**既有** `dispatchInbox`（不造新投递语义）；
+   * 3. 冷成员特许 spawn（审计 §5.1 推荐档）：重启后除 owner 外皆 gone，「投递不 spawn」
+   *    是 live 期裁定，不外推到恢复期——对「有 pending + 未关闭」的 gone 成员经
+   *    ensureExecutionUnit 重建 body 再 dispatch。`allowSpawn:false` 可退回保守档。
+   *
+   * 安全闸原样：dispatch 走 admitInternal，预算/cycle/hop/hardStop 全在；hardStop 闸住的
+   * body canDispatchInbox 恒 false ⇒ 留队列等显式解闸（「agent 投递不解闸」裁定不动）。
+   * 每进程一次（startupSweepDone 幂等闸）；只碰未 held 条目（单消费者规则）；
+   * 失败不阻断启动（条目仍 unread，下次再试）。
+   */
+  async startupDispatchSweep(
+    options: { maxSessions?: number; allowSpawn?: boolean } = {},
+  ): Promise<AgentDispatchSweepResult> {
+    await this.ready;
+    const empty: AgentDispatchSweepResult = {
+      lit: 0,
+      dispatched: 0,
+      spawned: 0,
+      deferred: 0,
+      failed: 0,
+    };
+    const inbox = this.inbox;
+    if (inbox === undefined) return empty;
+    if (this.startupSweepDone) return empty;
+    this.startupSweepDone = true;
+    if (this.draining) return empty;
+    const maxSessions =
+      typeof options.maxSessions === 'number' &&
+      Number.isInteger(options.maxSessions) &&
+      options.maxSessions > 0
+        ? options.maxSessions
+        : RECOVER_MAX_SESSIONS;
+    const allowSpawn = options.allowSpawn !== false;
+
+    // 1. 重建 noticeDirty + 候选（inputHead 非空 = 有可直投队头）。
+    const candidates: { record: MemberRecord; ts: number }[] = [];
+    for (const record of this.registry.all()) {
+      if (record.membership === 'left' || record.state === 'closed') continue;
+      const head = inbox.inputHead(record.id);
+      if (head === undefined) continue;
+      this.noticeDirty.add(record.id);
+      candidates.push({ record, ts: head.ts });
+    }
+    const result: AgentDispatchSweepResult = { ...empty, lit: candidates.length };
+    if (candidates.length === 0) return result;
+
+    // 2. 最早 ts 优先 + 有界；串行（每次 dispatch 都可能起 run，不制造 spawn 风暴）。
+    candidates.sort((left, right) => left.ts - right.ts);
+    for (const [index, candidate] of candidates.entries()) {
+      if (index >= maxSessions) {
+        result.deferred += 1;
+        this.logger.warn('agent.inbox.sweep_deferred', {
+          agent_id: candidate.record.id,
+          pending_head_ts: candidate.ts,
+        });
+        continue;
+      }
+      try {
+        // 3. 冷成员特许 spawn：gone + 有 pending + 未关闭 ⇒ 重建 body 再投。
+        if (allowSpawn && this.liveEntries(candidate.record.id).length === 0) {
+          await this.ensureExecutionUnit(candidate.record);
+          result.spawned += 1;
+        }
+        const moved = await this.dispatchInbox(candidate.record.id);
+        if (moved) result.dispatched += 1;
+        this.logger.info('agent.inbox.sweep_dispatch', {
+          agent_id: candidate.record.id,
+          moved,
+        });
+      } catch (error) {
+        result.failed += 1;
+        this.logger.warn('agent.inbox.sweep_failed', {
+          agent_id: candidate.record.id,
+          error: errorText(error),
+        });
+      }
     }
     return result;
   }

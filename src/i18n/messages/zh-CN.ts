@@ -750,6 +750,11 @@ export const zhCN = {
   'resume.card.background_stopped': '后台进程已被重启停掉；还需要就重新跑起来，别假设它们还在。',
   'resume.card.pending_inputs': '后面排着 {count} 条已接受的输入，按最早顺序在此卡之后放行。',
   'resume.card.no_pending_inputs': '没有排着的已接受输入；从当前现状接着做。',
+  'resume.abnormal.summary':
+    '进程非正常退出（强杀或崩溃），上一轮 run 被打断；没有恢复标记，工具结果未知。',
+  'resume.abnormal.verify_first':
+    '先核对现状（文件、进程、任务进度）再继续；不要假设打断前的操作已经成功。',
+  'resume.abnormal.pending': '还排着的已接受输入会由启动投递自动放行；没有队列就从当前现状接着做。',
 
   // ── session status（AX 自服务 · 自观）──
   'help.cmd.sessionStatus': '会话实时态（state/run/用量/上下文/队列/最后活动；缺省=调用者自身）',

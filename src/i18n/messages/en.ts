@@ -798,6 +798,12 @@ export const en: Record<MessageKey, string> = {
   'resume.card.pending_inputs':
     '{count} accepted input(s) are queued and were admitted after this card, oldest first.',
   'resume.card.no_pending_inputs': 'no accepted input was queued; continue from the current state.',
+  'resume.abnormal.summary':
+    'the process exited abnormally (force kill or crash); the previous run was interrupted, no resume marker exists, and tool results are unknown.',
+  'resume.abnormal.verify_first':
+    'verify the current state (files, processes, task progress) before continuing; do not assume operations before the interruption succeeded.',
+  'resume.abnormal.pending':
+    'accepted inputs still queued will be dispatched automatically at startup; with no queue, continue from the current state.',
 
   // ── session status (AX self-service · self-observation) ──
   'help.cmd.sessionStatus':

@@ -147,6 +147,7 @@ import { readHubNodeTrustedOrigins } from './hub/node-state';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
+import { abnormalExitCardText } from './node/node-resume';
 // 0.56：派生 token（root-secret → HKDF；显式配置永远优先）。
 import { effectiveNodeToken } from './node/token-derive';
 import { createCliLogger, diffLogOptions, resolveLogOptions } from './observability/logging';
@@ -1040,6 +1041,35 @@ async function runWithConfig(result: BootstrapResult) {
     noteStartup('sweep.checked', sweep.checked);
     noteStartup('sweep.repaired', sweep.repaired.length);
     markStartup('sweep');
+    // 重启唤醒（runlost-graceful-restart-audit §4.5 / §5.1，补 G1 后半 / G5 / G6 / G7）：
+    // 1) sweep 修复过的会话（force/崩溃无标记）发有疤恢复卡——至少「说得清」；
+    // 2) 启动 dispatch sweep：重建 noticeDirty + 有界主动投递，有 pending 可直投条目
+    //    的成员无需人类消息点火（冷成员特许 spawn，预算/cycle/hardStop 闸原样）。
+    // 顺序在 recoverPendingInputs（bootstrap 内）与 liveness sweep 之后：孤儿已重放/held，
+    // sweep 只点剩下的队头；失败不阻断启动（条目仍 unread，下次再试）。
+    if (result.agent !== undefined) {
+      for (const sessionId of sweep.repaired) {
+        try {
+          await result.agent.service.announceEnvironmentCard(sessionId, abnormalExitCardText());
+        } catch (error) {
+          logger.warn('session liveness card failed', {
+            session_id: sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      try {
+        const dispatchSweep = await result.agent.service.startupDispatchSweep();
+        if (dispatchSweep.lit > 0) {
+          logger.info('agent.inbox.sweep_done', { ...dispatchSweep });
+        }
+        noteStartup('sweep.dispatched', dispatchSweep.dispatched);
+      } catch (error) {
+        logger.warn('agent.inbox.sweep_error', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     // 0.15：serve 的 config.set 写回面（对象变量避免对 ConfigGatewayOptionsLike 的
     // 多余属性检查；serve 合入 0.15 后该字段会被正式识别）。
     const gatewayConfigSet = createGatewayConfigSet({

@@ -906,6 +906,21 @@ export interface AgentRecoverResult {
 }
 
 /**
+ * 启动 dispatch sweep 的结果（只用于日志 / 自检，不上 wire）。
+ *
+ * `lit` = 重建 noticeDirty 点亮的成员数（有可直投队头）；`dispatched` = 真正让目标
+ * 动起来的成员数；`spawned` = 冷成员特许重建 body 数；`deferred` = 超 maxSessions
+ * 顺延数；`failed` = 逐成员失败数（条目保持 unread，下次再试）。
+ */
+export interface AgentDispatchSweepResult {
+  lit: number;
+  dispatched: number;
+  spawned: number;
+  deferred: number;
+  failed: number;
+}
+
+/**
  * 重启恢复卡收不了的原因（P0-run-stops P4：per-session skip 原因，只用于日志）。
  * `no_member` = 会话没有任何成员记录（headless CLI 会话的典型形态）——装配层据此
  * 联合「会话已完成」判定僵尸标记并清理；其余原因保守保留标记。
@@ -979,8 +994,8 @@ export interface AgentClaimResult {
  * 「现在不能接，稍后由新 body / 下次启动接管」的原因（`status: 'deferred'`）。
  *
  * 三条路都**没有起跑**，因此也**没有 run**（见 `AdmitResult.run_id` 的注释）：
- * - `draining`：进程正在优雅退出；消息已落 durable inbox（held pending），重启后 human 源
- *   由 `recoverPendingInputs` 重投，agent 源保持 unread 供模型 `inbox read`；
+ * - `draining`：进程正在优雅退出；消息已落 durable inbox（held pending），重启后
+ *   带 session_id 的 input 条目（human ∪ agent 源）由 `recoverPendingInputs` 重投；
  * - `rotate`：body 正在换代；消息只落 inbox（**quiet**：不唤醒、不当 run input），
  *   新 body 的 notice 只报计数，正文由模型自己读 —— 它不会自动变成一轮 run；
  * - `stopped`：body 被不可重试的 provider 硬错误闸住，等显式人工动作（解闸后自动重投并起跑）。
@@ -1735,6 +1750,15 @@ export interface AgentService {
    * 一起跑」）。每进程只扫一次。
    */
   recoverPendingInputs(options?: { maxSessions?: number }): Promise<AgentRecoverResult>;
+  /**
+   * 启动 dispatch sweep（审计 §5.1，补 G5/G6/G7）：重建 noticeDirty + 有界主动投递，
+   * 让「有 pending 可直投条目」的成员无需人类消息点火。冷成员特许 spawn（allowSpawn
+   * 缺省 true）；预算/cycle/hardStop 闸原样。每进程一次。见实现注释。
+   */
+  startupDispatchSweep(options?: {
+    maxSessions?: number;
+    allowSpawn?: boolean;
+  }): Promise<AgentDispatchSweepResult>;
   /**
    * 启动恢复卡（0.52 S1c）：把一条环境信息排进**该会话**的下一次请求。
    *
