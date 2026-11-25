@@ -72,10 +72,10 @@
     {
       "id": "q-kanban-proxy",
       "title": "kanban proxy白名单缺失修复+board_path set RPC（用户报告加载失败）",
-      "column": "进行中",
-      "owner": "q-kanban-proxy",
-      "branch": "fix/q-kanban-proxy",
-      "progress": "e85de146派单：proxy_method_not_allowed kanban.get白名单缺失(fail-closed)→平台proxy加kanban命名空间+board_path set RPC让agent协助设路径"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并51c4c883(e9dd408e调研/d4fa28f2修复6文件+85/67200606门禁)：proxy白名单加kanban(HTTP/WS两面)+config.set kanban.boardPath三层白名单+applyKanban热应用；agent经vessel op=set_config kanban.boardPath设路径写后热生效；待金丝雀验+用户重启node看板加载恢复"
     },
     {
       "id": "q-empty-state",
