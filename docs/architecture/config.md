@@ -21,6 +21,7 @@ paths: [packages/config/**, src/config/cli-overrides.ts, src/gateway/serve-confi
 | 默认 | 代码 `DEFAULT_CONFIG` | 所有缺省值 |
 
 优先级：**CLI > env > project > user > default**。
+**q-config-priority（用户裁定#3，仅 `data_dir`）**：显式 `--user-config`（`userConfigPath` 或 `VESSEL_USER_CONFIG`）且用户层写了 `data_dir` 时，该键责任链为 **CLI > 显式 user config.data_dir > env > project > default**——继承的 `VESSEL_DATA_DIR` 不得压过显式舰队配置；非显式（缺省加载）保持旧链（生产 bootstrap 设 env 零回归）。`VESSEL_DATA_DIR_CLI=1` 是内部 env 契约（`--data-dir` 镜像 / supervisor/registry 注入伴生）：带标记的 `VESSEL_DATA_DIR` 按 CLI 层应用，仍最高优先。其它键一律维持 env > config。
 0.49 起没有 tenant overlay，也没有 `tenant` 配置块；旧 `tenant:` 块、`serve.tokens[*].tenantId`、
 `serve.adminToken` / `serve.adminTokenEnv` 一律 fail-fast 并给逐项 Fix（改为 `serve.tokens` 的 `{ role }`）。
 
@@ -41,7 +42,7 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | 键 | 说明 |
 |---|---|
 | `provider.timeout_ms` | LLM 请求超时（毫秒）；`<=0` 关闭。仅插件式 provider（openai / anthropic）生效 |
-| `data_dir` | 全局数据根，默认 `~/.vessel/data`；`VESSEL_DATA_DIR` 覆盖；`--data-dir` 为最高优先级一次性覆盖 |
+| `data_dir` | 全局数据根，默认 `~/.vessel/data`；`VESSEL_DATA_DIR` 覆盖；`--data-dir` 为最高优先级一次性覆盖。显式 `--user-config` 时用户层 `data_dir` 优先于继承 env（q-config-priority 用户裁定#3，见上文责任链） |
 | `trace.enabled` / `level` / `retention_days` / `max_runs` / `max_bytes` | 缺省 true / `full` / 30 / 1000 / 1 GiB；`level` 为 `full`\|`metadata`\|`off`；`max_bytes: 0` = 不限 |
 | `session.backend` | `file`（0.5 默认）/ `sqlite`（0.4 默认，仍可用）/ `memory`；`storagePath` 对应 sqlite 文件或 file 目录 |
 | `update.autoCheck` / `channel` / `source` | 交互启动后台检查（默认 true）、`latest` / `beta`、自定义清单源 |
@@ -58,6 +59,7 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `transport.kind` / `transport.token` | 只剩 `in-process`；`transport.token` 是 gateway token 的末位回退。`loopback` / `remote` / `transport.nodes[]` 已于 0.22.1 删除 |
 | `serve.token` / `serve.token_env` / `serve.tokens` | node token：`serve.tokens` 为 token → `{ role }`；`serve.token` / `token_env` 是 legacy 单 token 回退；`serve.adminToken` / `adminTokenEnv` 已删除，admin 用 `{ role: admin }`。解析顺序见 ADR-050 |
 | `gateway.token` / `gateway.token_env` / `gateway.port` / `gateway.remote_shutdown` | Platform Gateway token 与端口（缺省 8642）；token 独立读取，不与 node token 互相回退。`remote_shutdown` 缺省 false；true 才受理非回环 `gateway.shutdown`，且仍须平台 token + 已配置共享密钥的 TLS 反代（fail-closed；操作细节见 [operations/CONFIG.md §2.20.1](../operations/CONFIG.md)）。本地多 Node 由 `gateway nodes list\|add\|remove` 写 `<dataDir>/nodes.json`，各 Node 独立子进程；`node start --config` 可覆盖配置 |
+| `gateway.web_dist` | 平台静态托管的 Web 产物目录（q-config-priority 用户裁定#2）。责任链：显式 `gateway.web_dist` > `VESSEL_STATIC_DIR` env > 仓库内 `apps/web/dist`；启动期键（重启生效），`index.html` 缺失 fail-fast，自动构建不碰显式目录。见 [operations/CONFIG.md §2.20.2](../operations/CONFIG.md) |
 | `tools_engine.mode` / `gateway.engine_pool.*` | 工具执行双路双开关（[ADR-106](../adr/ADR-106-engine-pool.md)，缺省关零回归）：`mode: child`（缺省，per-node stdio 子进程）\| `pool`（共享池直连，需池存在）；`engine_pool.size`（0/缺省=不建池；1=fail-fast；开时 ≥2）/ `max_inflight`（缺省 cpus×4）/ `rss_soft_limit_mb` / `instance`（poolDir = `~/.vessel/engine-pool[-<instance>]`，**不随 data_dir 移动**，隔离实例必设）。执行现态见 [tools.md](tools.md#engine-exec) |
 | `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 true（0.24；显式 false 关闭）/ `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
 | `feishu.enabled` / `app_id` / `app_secret` / `domain` / `allowed_chat_ids` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝** |

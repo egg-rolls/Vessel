@@ -8,6 +8,14 @@
  * 0.5 优先级（DECISION-010 §2.4 / §11.4）：
  * CLI > VESSEL_* env > project > user > default
  *
+ * q-config-priority（用户裁定#3，**仅 dataDir**）：显式 `--user-config`
+ * （`options.userConfigPath` 或 `VESSEL_USER_CONFIG`）且用户层写了 `data_dir` 时，
+ * 责任链变为 CLI > 显式 user config.data_dir > env > project > default ——
+ * 继承的 `VESSEL_DATA_DIR` 不得压过显式舰队配置。非显式（缺省加载）保持旧链
+ * （生产 bootstrap 设 env 的场景零回归）。`VESSEL_DATA_DIR_CLI=1` 是内部 env 契约
+ * （`--data-dir` 镜像 / supervisor/registry 注入伴生）：带标记的 `VESSEL_DATA_DIR`
+ * 是 CLI 级显式覆盖，移入 CLI 层应用（仍最高优先）。其它键一律维持 env > config。
+ *
  * 0.49 T4：tenant 块 / overlay / 单 id 输入已删除；解析结果 `tenantId` 是内部
  * 单公司常量（C0），不再是用户可配置维度。
  */
@@ -35,6 +43,21 @@ import { deepMerge } from './utils.js';
 import { findExplicitSecretPaths, validateConfig } from './validator.js';
 
 type EnvMap = Record<string, string | undefined>;
+
+/**
+ * q-config-priority（用户裁定#3）：内部 env 契约 —— 值为 `'1'` 时表示伴生的
+ * `VESSEL_DATA_DIR` 是 **CLI 级显式覆盖**（`cli.ts` 的 `--data-dir` 镜像、
+ * supervisor/registry 的 `data_dir` 注入），不是沿启动链继承的环境变量。
+ * loader 据此把它移入 CLI 层（最高优先），不被「显式 config > env」压过。
+ * 设置方：`src/cli.ts`、`src/gateway/node-supervisor.ts`、
+ * `src/cli/commands/gateway/gateway-command.ts`、`gateway-nodes-command.ts`。
+ */
+export const DATA_DIR_CLI_MARKER_ENV = 'VESSEL_DATA_DIR_CLI';
+
+/** 非空白字符串（与 data-paths.nonEmpty 同口径）。 */
+function nonEmptyStr(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
 
 /** 配置加载结果（0.5：sources / paths / tenantId；0.49 T4 删除 tenantOverlayKeys） */
 export interface ConfigLoadResult {
@@ -691,13 +714,44 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   // 5. env 层（source=env）
   const envConfig = loadConfigFromEnv(envPrefix, env);
   const resolvedEnv = resolveEnvRefsInLayer(envConfig, env);
-  applyLayerWithSources(config, resolvedEnv.layer, 'env', sources);
-  captureLayer('env', resolvedEnv.layer);
+  // q-config-priority（用户裁定#3）：data_dir 责任链 CLI > 显式 config > env > default。
+  // - 带 DATA_DIR_CLI_MARKER_ENV 标记的 VESSEL_DATA_DIR 是 CLI 级显式覆盖
+  //   （--data-dir 镜像 / supervisor/registry 注入）→ 从 env 层摘出，第 6 步按 cli 应用；
+  // - 显式 --user-config 且用户层写了 data_dir → 继承的 VESSEL_DATA_DIR 不得压过它：
+  //   从 env 层摘出，env 层之后重断言 user 值（同时压过 project 层）。
+  // 非显式加载保持 env 优先（生产 bootstrap 零回归）；其它键不受本段影响。
+  const envDataDir = nonEmptyStr(resolvedEnv.layer.dataDir);
+  const cliMirroredDataDir = env[DATA_DIR_CLI_MARKER_ENV] === '1' ? envDataDir : undefined;
+  const explicitUserDataDir =
+    explicitUserPath !== undefined && cliMirroredDataDir === undefined
+      ? nonEmptyStr(resolvedUser.layer.dataDir)
+      : undefined;
+  let envLayer = resolvedEnv.layer;
+  if (
+    envDataDir !== undefined &&
+    (cliMirroredDataDir !== undefined || explicitUserDataDir !== undefined)
+  ) {
+    const { dataDir: _moved, ...rest } = envLayer;
+    envLayer = rest;
+  }
+  applyLayerWithSources(config, envLayer, 'env', sources);
+  captureLayer('env', envLayer);
   for (const key of Object.keys(resolvedEnv.resolved)) sources[key] = 'env';
   preErrors.push(...resolvedEnv.errors);
+  if (explicitUserDataDir !== undefined) {
+    config.dataDir = explicitUserDataDir;
+    // 用户层 data_dir 若经 _env 引用解析而来，来源如实标 env（与第 2 步同口径）。
+    sources.dataDir = Object.hasOwn(resolvedUser.resolved, 'dataDir') ? 'env' : 'user';
+  }
 
-  // 6. CLI 层（source=cli）：`defaults`（deprecated）先应用，`cliOverrides` 覆盖。
-  for (const cliLayer of [options.defaults, options.cliOverrides]) {
+  // 6. CLI 层（source=cli）：CLI 镜像 data_dir 先应用，`defaults`（deprecated）次之，
+  //    `cliOverrides` 最后覆盖（--data-dir 主路径经 buildCliConfigOverrides 走这里）。
+  const cliLayers: Array<Partial<VesselConfig> | undefined> = [
+    ...(cliMirroredDataDir !== undefined ? [{ dataDir: cliMirroredDataDir }] : []),
+    options.defaults,
+    options.cliOverrides,
+  ];
+  for (const cliLayer of cliLayers) {
     if (!cliLayer) continue;
     const resolvedCli = resolveEnvRefsInLayer(cliLayer, env);
     applyLayerWithSources(config, resolvedCli.layer, 'cli', sources);

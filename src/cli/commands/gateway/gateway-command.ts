@@ -1,9 +1,10 @@
 /**
  * `vessel gateway` 一次性子命令（0.12 DECISION-023 §2.1–§2.3）。
  *
- * 前台 `start` / `restart` 由 `cli.ts` 映射进现有 `--serve` 装配管线；
+ * `start` 缺省 detach（用户裁定 #1：spawn 平台、确认就绪、打印启动信息即退）；
+ * 显式 `--foreground` 的前台 `start` / `restart` 由 `cli.ts` 接进平台前台管线；
  * 这里处理：
- * - `start --daemon` / `restart --daemon`（分离子进程）；
+ * - `start`（缺省 detach）/ `restart --daemon`（分离子进程）；
  * - `stop` / `status` / `reload`；
  * - `install-service` / `uninstall-service`。
  *
@@ -13,11 +14,13 @@
  */
 
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { withDeadline } from '@vessel-agent/core';
 import {
   type ConfigValidationError,
   checkPlatformTokenConflict,
+  DATA_DIR_CLI_MARKER_ENV,
   DEFAULT_GATEWAY_OPTIONS,
   DEFAULT_SERVE_OPTIONS,
   getUserConfigDir,
@@ -59,6 +62,7 @@ import {
   synthesizeImplicitNode,
 } from '../../../gateway/node-registry';
 import {
+  type ForcedStopInfo,
   type HubSupervisorBeginResult,
   type LocalNodeSpec,
   NodeSupervisor,
@@ -101,6 +105,14 @@ import {
   serviceStatus,
   uninstallService,
 } from '../../../gateway/service';
+import {
+  type DrainProgressInfo,
+  type DrainRun,
+  formatWaited,
+  nodeRunSampler,
+  snapshotActiveRuns,
+  waitForProcessExit,
+} from '../../../gateway/stop-drain';
 import { resolveGatewayToken } from '../../../gateway/transport-factory';
 import {
   readWatchdogSnapshot,
@@ -109,6 +121,7 @@ import {
   type WatchdogEvent,
 } from '../../../gateway/watchdog';
 import {
+  explicitWebDistDir,
   inspectWebDist,
   interruptBuildOfStoppedHost,
   interruptWebBuild,
@@ -123,6 +136,7 @@ import { readHubDerivedOrigins } from '../../../hub/derive-origins';
 import { readHubLockFile } from '../../../hub/runtime';
 import { HUB_DEFAULT_HOSTNAME, HUB_DEFAULT_PORT } from '../../../hub/server';
 import { t } from '../../../i18n';
+import { nodeJsonPath } from '../../../node/node-identity';
 // 0.56：派生 token（显式配置永远优先；未配置时自动派生，绝不再「未配置就挂」）。
 import { effectiveNodeToken, effectivePlatformToken } from '../../../node/token-derive';
 import { createHttpRpcClient } from '../../../rpc/http-client';
@@ -196,14 +210,73 @@ async function resolveContext(deps: GatewayCommandDeps): Promise<ResolvedContext
   };
 }
 
-/** stop 的平台终止方式（Windows 没有 POSIX 信号语义） */
-function terminateProcess(pid: number, platform: NodeJS.Platform): void {
+/** stop 的平台终止方式（Windows 没有 POSIX 信号语义）。force = POSIX SIGKILL（§5.4）。 */
+function terminateProcess(pid: number, platform: NodeJS.Platform, force = false): void {
   if (platform === 'win32') process.kill(pid);
-  else process.kill(pid, 'SIGTERM');
+  else process.kill(pid, force ? 'SIGKILL' : 'SIGTERM');
 }
 
 function sleepDefault(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 用户裁定 #5：优雅 drain 进度行（5s 一行）。说清「在等什么、能做什么」——
+ * 哪些 run/session 还在跑 + 已等待时长 + 升级阶梯下一步命令（§5.3）。
+ * 快照不可用（监听已关）如实标注，不假装「0 run」。
+ */
+export function formatDrainProgressLine(label: string, info: DrainProgressInfo): string {
+  const lines = [
+    t('stop.drain.progress', {
+      label,
+      count: info.runs.length,
+      waited: formatWaited(info.waitedMs),
+    }),
+  ];
+  if (info.snapshotUnavailable) lines.push(`  ${t('stop.drain.snapshotUnavailable')}`);
+  for (const run of info.runs) {
+    const elapsed = run.started_at !== undefined ? formatWaited(Date.now() - run.started_at) : '?';
+    lines.push(`  run ${run.run_id} (session ${run.session_id}, ${elapsed}, ${run.status})`);
+  }
+  if (info.runs.length > 0) lines.push(`  ${t('stop.drain.escalate')}`);
+  return lines.join('\n');
+}
+
+/**
+ * 用户裁定 #5：force 非正常退出的审计行（停止方代打，镜像 node.drain.skipped 先例）。
+ * 结构化 stop.forced（abnormal_exit / runs_cut / sessions / runs / signal）+ 一行
+ * 人类汇总「非正常退出：N 个 run 被切断」（i18n en/zh-CN 同步）。快照不可用如实标注。
+ */
+function formatForcedStopLine(info: ForcedStopInfo): string {
+  return formatForcedAuditLine(info.kind, info.name, info.pid, info.runs, info.snapshotUnavailable);
+}
+
+/** 通用 force 审计行（component = node/hub/platform；entry 与子进程共用）。 */
+export function formatForcedAuditLine(
+  component: string,
+  name: string,
+  pid: number,
+  runs: DrainRun[],
+  snapshotUnavailable: boolean,
+): string {
+  const sessions = [...new Set(runs.map((run) => run.session_id).filter((id) => id !== ''))];
+  const audit = formatEventLine('stop.forced', {
+    component,
+    name,
+    pid,
+    abnormal_exit: true,
+    runs_cut: runs.length,
+    sessions: sessions.join(','),
+    runs: runs.map((run) => run.run_id).join(','),
+    signal: 'SIGKILL',
+    ...(snapshotUnavailable ? { snapshot_unavailable: true } : {}),
+  });
+  const summary = t('stop.forced.summary', {
+    name,
+    count: runs.length,
+    note: snapshotUnavailable ? ` (${t('stop.drain.snapshotUnavailable')})` : '',
+  });
+  return `${audit}\n  ${summary}`;
 }
 
 function errorMessage(error: unknown): string {
@@ -504,7 +577,8 @@ async function localNodeStatusViews(
       try {
         const loaded = await loadConfig({
           configPath: entry.config_path,
-          env: { ...env, VESSEL_DATA_DIR: entry.data_dir },
+          // registry data_dir 是 CLI 级权威：伴生标记，与 supervisor spawn 同口径。
+          env: { ...env, VESSEL_DATA_DIR: entry.data_dir, [DATA_DIR_CLI_MARKER_ENV]: '1' },
         });
         const live = await preferLiveNodeListen(
           entry.data_dir,
@@ -907,12 +981,23 @@ export async function stopGateway(
      * `--keep-nodes`（0.52 写法）都保留为别名。见 `src/gateway/handoff.ts`。
      */
     keepNodes?: boolean;
+    /**
+     * 用户裁定 #5：`--force` = 显式非正常退出。跳过优雅等待，终止前先快照在跑 run，
+     * 然后强杀（POSIX SIGKILL / Windows process.kill）+ 代打 `stop.forced` 审计
+     * （abnormal_exit / runs_cut）。递归传播到 stopSpawnedChildren（node/hub）。
+     * force 仍做归属复核与条件清理——升级的是等待策略，不是归属判据。
+     */
+    force?: boolean;
   } = {},
 ): Promise<number> {
   const context = await resolveContext(options);
   const print = options.print ?? console.log;
   const printErr = options.printErr ?? console.error;
-  const timeoutMs = options.timeoutMs ?? 10_000;
+  // 用户裁定 #5：缺省不限时 drain（undefined）；显式 --timeout 才是可选上限。
+  const timeoutMs = options.timeoutMs;
+  // 强杀后的确认等待预算（kill 应当很快；与优雅 drain 的不限时等待分开）。
+  const killConfirmMs = options.timeoutMs ?? 10_000;
+  const force = options.force === true;
   const sleep = options.sleep ?? sleepDefault;
   const selector = options.selector ?? {};
   const fallbackRunner = options.runCommand ?? createCommandRunner(2000);
@@ -965,6 +1050,7 @@ export async function stopGateway(
         ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
         ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+        ...(force ? { force: true } : {}),
         // P0-run-stops P4：node 没 drain 成被强杀时，停止方代打一行结构化日志。
         onDrainSkipped: (info) =>
           printErr(
@@ -976,6 +1062,10 @@ export async function stopGateway(
               }),
             ),
           ),
+        // 用户裁定 #5：force 非正常退出审计（停止方代打 stop.forced）。
+        onForced: (info) => printErr(ui.warn(formatForcedStopLine(info))),
+        // 用户裁定 #5：优雅 drain 进度（5s 一行，哪些 run/session 还在跑）。
+        onProgress: (name, info) => print(ui.info(formatDrainProgressLine(`node ${name}`, info))),
       });
       if (result.failed > 0) failed = true;
       keptNodes += result.kept?.nodes ?? 0;
@@ -1092,89 +1182,106 @@ export async function stopGateway(
           await clearHandoffMarker(context.dataDir, entry.instance).catch(() => undefined);
         }
       }
-      // P0-run-stops P1：legacy 单进程（stateKind='node'）本身就是 Node API ——
-      // 强杀前先请它进程内 drain（写 resume 标记 + interrupt('shutdown')），等它自死；
-      // 超时/失败回退既有强杀。node 子进程由 stopSpawnedChildren 各自优雅关闭。
-      // Q4-C：platform entry 同样 graceful-first —— 经 /platform/rpc 的 gateway.shutdown
-      // 让平台进程内跑退出序列（跑到 owned 池 stop，关闭 Windows owned engine 孤儿缺口）。
-      // marker 写/清已在上面发生（keep 语义单一权威，先于任何终止触发）；老平台没有
-      // 该方法 → not_found → 立即强杀回退，不假成功。
-      let drained = false;
-      if (stateKind === 'node' && entry.record !== undefined) {
-        const graceful = await shutdownGateway({
-          record: entry.record,
-          token: token ?? '',
-          tls: context.config.node?.tls !== undefined,
-          requestTimeoutMs: 3_000,
-        });
-        if (graceful.ok) {
-          const graceDeadline = Date.now() + 10_000;
-          while (Date.now() < graceDeadline) {
-            if (!isProcessAlive(pid)) {
-              drained = true;
-              break;
-            }
-            await sleep(100);
+      // 用户裁定 #5：force = 显式非正常退出 —— 快照 + 强杀 + 审计，跳过优雅等待。
+      // force 仍做归属复核（entry 状态机已在上面确认 running/degraded）与条件清理。
+      if (force) {
+        let runs: DrainRun[] = [];
+        let snapshotUnavailable = false;
+        if (entry.record !== undefined) {
+          let snapToken = token ?? '';
+          if (stateKind === 'platform') {
+            const resolution = effectivePlatformToken({
+              config: context.config,
+              dataDir: context.dataDir,
+              env: context.env,
+            });
+            snapToken = resolution.ok ? (resolution.value.token ?? '') : '';
           }
+          try {
+            runs = await snapshotActiveRuns(
+              entry.record,
+              snapToken,
+              stateKind === 'node' && context.config.node?.tls !== undefined,
+            );
+          } catch {
+            snapshotUnavailable = true;
+          }
+        } else {
+          snapshotUnavailable = true;
         }
-        if (!drained) {
-          // P4：强杀回退代打一行（宿主来不及自己说）——这次停止没有 drain。
-          printErr(
-            ui.warn(
-              formatEventLine('node.drain.skipped', {
-                pid,
-                reason: graceful.ok ? 'timeout' : (graceful.code ?? 'error'),
-              }),
-            ),
-          );
-        }
-      } else if (stateKind === 'platform' && entry.record !== undefined) {
-        // R1.1：平台 bearer 走**平台链**（gateway.token/token_env 显式 > 根密钥派生），
-        // 不是 node 链的 resolveGatewayToken（两 token 同配时必不同）；解析失败 →
-        // 跳优雅直接强杀，reason 记解析 code（下方 drain 行统一出口）。
-        const platformTokenResolution = effectivePlatformToken({
-          config: context.config,
-          dataDir: context.dataDir,
-          env: context.env,
-        });
-        const graceful: ShutdownGatewayResult = platformTokenResolution.ok
-          ? await shutdownGateway({
-              record: entry.record,
-              token: platformTokenResolution.value.token ?? '',
-              // 平台无原生 TLS（TLS 在反代终结）；本机停止直连回环 http。
-              tls: false,
-              rpcPath: '/platform/rpc',
+        printErr(
+          ui.warn(formatForcedAuditLine(stateKind, entry.instance, pid, runs, snapshotUnavailable)),
+        );
+        terminateProcess(pid, context.platform, true);
+      } else {
+        // 优雅（默认）：进程内 drain + 不限时等死 + 5s 进度（用户裁定 #5 / §5.3）。
+        // legacy node 走 node 链 token；platform 走 /platform/rpc + 平台链 token（Q4-C）。
+        // 老版本无 gateway.shutdown → not_found → 立即强杀回退，不假成功。
+        let drained = false;
+        let gracefulTimedOut = false;
+        let graceful: ShutdownGatewayResult = { ok: false, error: 'no record', code: 'no_record' };
+        let samplerToken = token ?? '';
+        let samplerTls = context.config.node?.tls !== undefined;
+        const record = entry.record;
+        if (record !== undefined) {
+          if (stateKind === 'platform') {
+            // R1.1：平台 bearer 走平台链（gateway.token/token_env 显式 > 根密钥派生）。
+            const resolution = effectivePlatformToken({
+              config: context.config,
+              dataDir: context.dataDir,
+              env: context.env,
+            });
+            samplerToken = resolution.ok ? (resolution.value.token ?? '') : '';
+            samplerTls = false;
+            graceful = resolution.ok
+              ? await shutdownGateway({
+                  record,
+                  token: samplerToken,
+                  tls: false,
+                  rpcPath: '/platform/rpc',
+                  requestTimeoutMs: 3_000,
+                })
+              : { ok: false, error: resolution.message, code: resolution.code };
+          } else {
+            graceful = await shutdownGateway({
+              record,
+              token: token ?? '',
+              tls: samplerTls,
               requestTimeoutMs: 3_000,
-            })
-          : {
-              ok: false,
-              error: platformTokenResolution.message,
-              code: platformTokenResolution.code,
-            };
-        if (graceful.ok) {
-          // 等死预算 = 停止方 timeoutMs（K5：等待预算在停止方，RPC 不带 timeout params）。
-          const graceDeadline = Date.now() + timeoutMs;
-          while (Date.now() < graceDeadline) {
-            if (!isProcessAlive(pid)) {
-              drained = true;
-              break;
-            }
-            await sleep(100);
+            });
+          }
+          if (graceful.ok) {
+            // 默认不限时等死（K5：等待预算在停止方）；显式 --timeout 才是可选上限。
+            const wait = await waitForProcessExit(pid, {
+              sleep,
+              ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+              onProgress: (info) =>
+                print(ui.info(formatDrainProgressLine(`${stateKind} ${entry.instance}`, info))),
+              sampleRuns: nodeRunSampler(record, samplerToken, samplerTls),
+            });
+            drained = wait.dead;
+            gracefulTimedOut = wait.timedOut;
           }
         }
+        if (gracefulTimedOut) {
+          // 显式 --timeout 到点：不自动强杀，如实报告阻塞者 + 升级提示，exit 1（§5.3 D4）。
+          printErr(ui.err(t('stop.drain.timeout', { pid, timeout: `${timeoutMs}ms` })));
+          failed = true;
+          continue;
+        }
         if (!drained) {
-          // 强杀回退代打一行（镜像 node.drain.skipped）：这次停止没走成优雅路径。
+          // 优雅受理失败（老版本/网络/token）→ 强杀回退，代打 drain.skipped（宿主来不及自己说）。
           printErr(
             ui.warn(
-              formatEventLine('platform.drain.skipped', {
-                pid,
-                reason: graceful.ok ? 'timeout' : (graceful.code ?? 'error'),
-              }),
+              formatEventLine(
+                stateKind === 'platform' ? 'platform.drain.skipped' : 'node.drain.skipped',
+                { pid, reason: graceful.ok ? 'error' : (graceful.code ?? 'error') },
+              ),
             ),
           );
+          terminateProcess(pid, context.platform);
         }
       }
-      if (!drained) terminateProcess(pid, context.platform);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
         printErr(ui.err(t('gateway.stopFailed', { pid, detail: errorMessage(error) })));
@@ -1183,7 +1290,8 @@ export async function stopGateway(
       }
     }
 
-    const deadline = Date.now() + timeoutMs;
+    // 强杀 / 回退杀后的确认等待（kill 应当很快；与优雅 drain 的不限时等待分开）。
+    const deadline = Date.now() + killConfirmMs;
     let stopped = false;
     while (Date.now() < deadline) {
       if (!isProcessAlive(pid)) {
@@ -1194,7 +1302,7 @@ export async function stopGateway(
     }
 
     if (!stopped) {
-      printErr(ui.err(t('gateway.stopTimeout', { pid, timeout: `${timeoutMs}ms` })));
+      printErr(ui.err(t('gateway.stopTimeout', { pid, timeout: `${killConfirmMs}ms` })));
       failed = true;
       continue;
     }
@@ -1644,11 +1752,11 @@ export async function gatewayStatus(
   const stateKind = gatewayStateKind(options, context.env);
   // 0.57：产物落后于源码要能「不开浏览器也发现」。自修复只在 gateway 启动时跑一次，
   // 之后源码再变就没人说了 —— 所以这一行必须存在（不落后时为 null，不占行）。
-  // 判据与 `/build.json`、启动诊断共用 `inspectWebDist`（`VESSEL_STATIC_DIR` 指向的
-  // 外部产物不比源码，避免误报）。
-  const webDistStaticDir = (context.env.VESSEL_STATIC_DIR ?? '').trim();
+  // 判据与 `/build.json`、启动诊断共用 `inspectWebDist`（显式 `gateway.web_dist` /
+  // `VESSEL_STATIC_DIR` 指向的外部产物不比源码，避免误报）。
+  const webDistStaticDir = explicitWebDistDir(context.config, context.env);
   const webDistLine = webDistStaleLine(
-    await inspectWebDist(webDistStaticDir !== '' ? { staticDir: webDistStaticDir } : {}),
+    await inspectWebDist(webDistStaticDir !== undefined ? { staticDir: webDistStaticDir } : {}),
   );
   // 0.60：构建段也在这里取一次（跨进程读构建落盘的记录；口径与 `web.build.*` 一致）。
   const webBuildLines = await webBuildStatusLines();
@@ -2187,7 +2295,30 @@ export async function reloadGatewayCommand(
   return failed ? 1 : 0;
 }
 
-async function startDaemonCommand(
+/**
+ * start 即退（用户裁定 #1）的启动信息 node name：
+ * config host.nodeName > node.json name（只读）> pid record node_id。
+ */
+async function startupNodeName(
+  config: VesselConfig,
+  dataDir: string,
+  record: GatewayPidRecord,
+): Promise<string | undefined> {
+  const configured = config.host?.nodeName;
+  if (typeof configured === 'string' && configured.trim() !== '') return configured;
+  try {
+    const parsed: unknown = JSON.parse(await readFile(nodeJsonPath(dataDir), 'utf8'));
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      const name = (parsed as Record<string, unknown>).name;
+      if (typeof name === 'string' && name !== '') return name;
+    }
+  } catch {
+    // 缺失 / 损坏：回落 node_id（只读，不创建不改写）。
+  }
+  return record.node_id;
+}
+
+export async function startDaemonCommand(
   options: GatewayCommandDeps & {
     instance?: string;
     port?: number;
@@ -2232,8 +2363,10 @@ async function startDaemonCommand(
   // 启动诊断：只提示，不在这里构建 —— 本进程随后就会退出（真正长驻的是被 spawn
   // 的 daemon 子进程，它走前台 gateway 路径，由 `cli.ts` 负责后台重建）。
   // 在这里起构建会随父进程退出被杀掉。
-  const staticDir = context.env.VESSEL_STATIC_DIR;
-  const warning = webDistWarning(await inspectWebDist(staticDir ? { staticDir } : {}));
+  const staticDir = explicitWebDistDir(context.config, context.env);
+  const warning = webDistWarning(
+    await inspectWebDist(staticDir !== undefined ? { staticDir } : {}),
+  );
   if (warning) printErr(ui.warn(warning));
 
   const snapshot = await collectStateFor(context, options);
@@ -2272,6 +2405,11 @@ async function startDaemonCommand(
       print(ui.warn(t('gateway.startedUnconfirmed', { pid: result.record.pid })));
     } else {
       print(ui.ok(t('gateway.started', { pid: result.record.pid, url })));
+    }
+    // start 即退（用户裁定 #1）：退出前把 pid/port/node name 一次说全。
+    const nodeName = await startupNodeName(context.config, context.dataDir, result.record);
+    if (nodeName !== undefined) {
+      print(ui.dim(t('gateway.startedNode', { name: nodeName, port: result.record.port })));
     }
     print(ui.dim(t('gateway.logPath', { path: result.logPath })));
     return 0;
@@ -2361,6 +2499,10 @@ async function restartDaemonCommand(
   const context = await resolveContext(deps);
   const printErr = deps.printErr ?? console.error;
   const printOut = deps.print ?? console.log;
+  // 用户裁定 #6：--stop-nodes 弃用 —— gateway restart 恒平台-only，指路 vessel restart。
+  if (command.stopNodesDeprecated === true) {
+    printErr(ui.warn(t('gateway.restart.stopNodesDeprecated')));
+  }
   // 停前快照：instance/port/host 原样保留（lock-only 也保留 instance）。
   const entries = (await collectStateFor(context, deps)).entries;
   const targets = await resolveGatewayTargets(context.dataDir, command, { entries });
@@ -2369,21 +2511,22 @@ async function restartDaemonCommand(
     return 1;
   }
 
-  // 0.55.2：restart 缺省只换平台层 —— node/hub 保活并被新平台 adopt 接管，
+  // 用户裁定 #6：gateway restart 只换平台层 —— node/hub 保活并被新平台 adopt 接管，
   // 在跑的 run 不受影响（代价：node 仍跑旧代码，命令结尾会打印提示）。
-  // 要连 node 一起冷重启：`--stop-nodes`。
+  // 要连 node 一起冷重启：`vessel restart`（舰队级 stop+start）。
   const stopCode = await stopGateway({
     ...deps,
     selector: command,
     entries,
-    keepNodes: command.keepNodes !== false,
+    keepNodes: true,
+    ...(command.force === true ? { force: true } : {}),
   });
   if (stopCode !== 0) return stopCode;
   if (command.keepNodes !== false) {
     printOut(
       ui.dim(
         'node/hub were kept running (still on the old code); ' +
-          'to restart them too: `vessel gateway restart --stop-nodes`',
+          'to restart the whole fleet: `vessel restart`',
       ),
     );
   }
@@ -2603,7 +2746,9 @@ async function resolveLocalNodes(options: {
       const configPath = entry.config_path as string;
       const loaded = await loadConfig({
         configPath,
-        env: { ...options.env, VESSEL_DATA_DIR: entry.data_dir },
+        // registry data_dir 是 CLI 级权威：伴生标记，与 supervisor spawn 同口径
+        // （否则显式 user config.data_dir 会压过它 → node_data_dir_mismatch）。
+        env: { ...options.env, VESSEL_DATA_DIR: entry.data_dir, [DATA_DIR_CLI_MARKER_ENV]: '1' },
       });
       if (loaded.validation.errors.length > 0) {
         const first = loaded.validation.errors[0];
@@ -2798,6 +2943,9 @@ export async function runPlatformGatewayForeground(
   let targetHost = command.kind === 'start' ? command.host : undefined;
 
   if (command.kind === 'restart') {
+    if (command.stopNodesDeprecated === true) {
+      printErr(ui.warn(t('gateway.restart.stopNodesDeprecated')));
+    }
     const entries = (await collectGatewayState(dataDir, { kind: 'platform' })).entries;
     const targets = await resolveGatewayTargets(dataDir, command, { entries });
     if (!targets.ok) {
@@ -2829,16 +2977,17 @@ export async function runPlatformGatewayForeground(
       stateKind: 'platform',
       print,
       printErr,
-      timeoutMs: 10_000,
-      // 0.55.2：前台 restart 同口径，缺省只换平台层，node/hub 保活待 adopt。
-      keepNodes: command.keepNodes !== false,
+      // 用户裁定 #5：缺省不限时 drain（去掉硬编码 10s）；显式 --timeout 才是上限。
+      // 用户裁定 #6：前台 restart 恒平台-only，node/hub 保活待 adopt。
+      keepNodes: true,
+      ...(command.force === true ? { force: true } : {}),
     });
     if (stopCode !== 0) return stopCode;
     if (command.keepNodes !== false) {
       print(
         ui.dim(
           'node/hub were kept running (still on the old code); ' +
-            'to restart them too: `vessel gateway restart --stop-nodes`',
+            'to restart the whole fleet: `vessel restart`',
         ),
       );
     }
@@ -3239,7 +3388,7 @@ export async function runPlatformGatewayForeground(
         webBuild: webDistBuildState,
         // 0.61：运行中自查（定时 60s + `/build.json` 探针）。判据/限频/互斥都在
         // `recheckWebDist` 里，和启动时那次构建是同一套；这里只把「何时叫」交出去。
-        webBuildCheck: (trigger) => recheckWebDist(trigger),
+        webBuildCheck: (trigger) => recheckWebDist(trigger, { staticDir: options.staticDir }),
         ...(webBuildCheckMs !== undefined ? { webBuildCheckMs } : {}),
         nodes: nodes.map((node) => ({
           nodeId: node.entry.node_id,
@@ -3457,6 +3606,7 @@ export async function runGatewayCommand(
         // 0.55：缺省**只停平台层**（node/hub 继续跑，下次 start 走 adopt）；
         // `--no-keep-nodes` 才是整体关闭（连 node/hub 一起停）。
         keepNodes: command.keepNodes !== false,
+        ...(command.force === true ? { force: true } : {}),
       });
     case 'status':
       return gatewayStatus({ ...deps, json: command.json, rpc: command.rpc, selector: command });

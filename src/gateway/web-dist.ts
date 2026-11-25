@@ -12,7 +12,9 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { VesselConfig } from '../../packages/config/src/index';
 import { logEvent } from '../../packages/serve/src/log-event';
+import { expandHome } from '../data/path-resolution';
 import { t } from '../i18n';
 
 /** 仓库内默认静态目录（与 `src/cli.ts` 的 `resolveStaticDir` 一致） */
@@ -25,6 +27,39 @@ const DEFAULT_WEB_VITE_CONFIG = fileURLToPath(
 );
 
 const DEFAULT_MAX_FILES = 5_000;
+
+/**
+ * q-config-priority（用户裁定#2）：显式静态目录解析（不含仓库内默认值）。
+ *
+ * 责任链：`gateway.web_dist` config > `VESSEL_STATIC_DIR` env > undefined（= 用默认）。
+ * 空串一律视为未设置（与 `inspectWebDist` / `resolveStaticDir` 同口径）。
+ * `~` 展开、相对路径按 cwd 解析为绝对路径。
+ */
+export function explicitWebDistDir(
+  config?: Pick<VesselConfig, 'gateway'>,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const fromConfig = config?.gateway?.webDist;
+  if (typeof fromConfig === 'string' && fromConfig.trim() !== '') {
+    return path.resolve(expandHome(fromConfig.trim()));
+  }
+  const fromEnv = env.VESSEL_STATIC_DIR;
+  if (typeof fromEnv === 'string' && fromEnv.trim() !== '') {
+    return path.resolve(expandHome(fromEnv.trim()));
+  }
+  return undefined;
+}
+
+/**
+ * 生效静态目录：显式（config > env）?? 仓库内 `apps/web/dist`。
+ * 只解析路径，不判存在性（存在性由 `inspectWebDist` / 启动 fail-fast 负责）。
+ */
+export function resolveWebDistDir(
+  config?: Pick<VesselConfig, 'gateway'>,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return explicitWebDistDir(config, env) ?? DEFAULT_WEB_DIST_DIR;
+}
 
 export interface WebDistStatus {
   /** 静态目录（绝对路径） */
@@ -1040,8 +1075,8 @@ function startBuild(
  * 反过来，产物**完全缺失**时没有可服务的东西，调用方可以传 `waitWhenMissing`
  * 等它建完再继续（平台 gateway 的 fail-fast 不接受「先起来再修」）。
  *
- * 只在**仓库内默认目录**下生效（自定义 `VESSEL_STATIC_DIR` 不碰）。任何失败都只告警、
- * 不改退出码，继续以现有产物提供服务。
+ * 只在**仓库内默认目录**下生效（显式 `gateway.web_dist` / `VESSEL_STATIC_DIR` 不碰）。
+ * 任何失败都只告警、不改退出码，继续以现有产物提供服务。
  */
 export async function ensureWebDist(options: EnsureWebDistOptions = {}): Promise<WebDistStatus> {
   const status = await inspectWebDist(options);
@@ -1086,9 +1121,19 @@ const RECHECK_MIN_INTERVAL_MS = 55_000;
  * 三档开关语义（见 `webAutoBuildMode`）：`off` / `startup` 都**不**自查 —— 只有
  * `always`（缺省）才在运行中继续自愈。
  */
-export async function recheckWebDist(trigger: 'probe' | 'timer'): Promise<void> {
+export async function recheckWebDist(
+  trigger: 'probe' | 'timer',
+  options: { staticDir?: string } = {},
+): Promise<void> {
   if (webAutoBuildMode() !== 'always') return;
-  const explicitDir = process.env.VESSEL_STATIC_DIR;
+  // q-config-priority（用户裁定#2）：装配面把生效 staticDir 传进来 —— 显式
+  // `gateway.web_dist` 指向的外部产物不归我们管（与 VESSEL_STATIC_DIR 同口径）。
+  // 未传 / 传的就是仓库内默认目录时，仍按 env 判（兼容旧调用）。
+  const explicitDir =
+    options.staticDir !== undefined &&
+    path.resolve(options.staticDir) !== path.resolve(DEFAULT_WEB_DIST_DIR)
+      ? options.staticDir
+      : process.env.VESSEL_STATIC_DIR;
   if (explicitDir !== undefined && explicitDir.trim() !== '') return;
   if (!canAutoBuild()) return;
   // 正在建就别排队：这轮本来也只是「确认一下还旧不旧」。

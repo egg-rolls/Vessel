@@ -34,11 +34,17 @@ export const zhCN = {
   'help.cmd.continueRun': '续接最近会话并运行一轮',
   'help.cmd.resumeRun': '恢复中断的 durable run',
   'help.cmd.status': '一屏查看本地运行态 / attach / gateway 实例',
-  'help.cmd.stop': '停止舰队（平台 + manifest node/hub + owned 池 engine）；--connect 远程停',
+  'help.cmd.stop': '优雅停止舰队（不限时 drain + 进度；--force 切断 run 并审计）；--connect 远程停',
+  'help.cmd.restart':
+    'docker 式先停后启；[name] 定向实例或登记 node（缺省整舰队）；--force 传播到 stop 段',
   'help.cmd.agents': '经 agents.list 列出 agent（本地 gateway 或 --connect）',
   'help.cmd.errors': '最近 run/tool 错误（errorLevel: all 时含诊断）',
   'help.cmd.rpcList': '列出 RPC 方法 + 参数/返回 schema 摘要（--node 经平台代理定向）',
   'help.cmd.fleetStatus': '一屏显示本舰队身份 / peers / nodes / gateway（只读）',
+  'help.cmd.ps': '列出本舰队进程（gateway/node/hub），docker ps 式',
+  'help.cmd.gatewayPs': '列出 gateway（平台）进程，docker ps 式',
+  'help.cmd.nodePs': '列出 node 进程，docker ps 式',
+  'help.cmd.hubPs': '列出 hub 进程，docker ps 式',
   'help.cmd.modelList': '列出模型注册表（厂商 / 别名 / 默认 / 生效模型）',
   'help.cmd.modelVendorSet': '创建或整体替换厂商（--entry 为厂商 JSON）',
   'help.cmd.modelVendorRemove': '移除厂商（别名 / 默认仍引用时拒绝）',
@@ -49,14 +55,15 @@ export const zhCN = {
   'help.cmd.modelCredentialRemove': '移除凭证（厂商仍引用时拒绝）',
   'help.cmd.modelCredentialsList': '列出凭证元数据（不含值）',
   'help.cmd.modelTest': '对已保存厂商做连通性测试（发真实请求，可能产生费用）',
-  'help.cmd.gatewayStart': '前台启动 gateway；--daemon 分离到 gateway.log；--instance 命名实例',
+  'help.cmd.gatewayStart':
+    '启动 gateway（缺省后台分离、就绪即退）；--foreground 保留前台；--instance 命名实例',
   'help.cmd.gatewayList': '列出 gateway 实例与 PID 文件',
   'help.cmd.gatewayStop':
-    'SIGTERM 优雅停止（Windows 终止进程）；缺省只停平台层，--stop-nodes 连 node/hub 一起停',
+    '优雅停止平台进程（不限时 drain + 进度；--force 强杀并审计）；缺省只停平台层，--stop-nodes 连 node/hub 一起停',
   'help.cmd.gatewayStatus':
     'PID/端口/运行时长/版本/服务状态（--rpc 已弃用，改用 node status --rpc）',
   'help.cmd.gatewayRestart':
-    '停止后重新启动（沿用 --daemon）；缺省只换平台层，--stop-nodes 连 node/hub 一起冷重启',
+    '停止后重新启动平台（沿用 --daemon）；node/hub 保活并被 adopt；--stop-nodes 已弃用（整舰队请用 vessel restart）',
   'help.cmd.gatewayReload': '热重载 config / plugins，不重启进程',
   'help.cmd.gatewayInstall': '注册登录自启（systemd / launchd / schtasks）',
   'help.cmd.gatewayUninstall': '移除系统服务注册',
@@ -69,7 +76,10 @@ export const zhCN = {
   'help.cmd.gatewayNodesRemove': '从 nodes.json 移除节点；下次 gateway start 生效',
   'help.cmd.nodeStart': '只启动 Node API（缺省 8644；与 gateway 共用实例锁）',
   'help.cmd.nodeStatus': '查看 Node API 监听与 health（--rpc 查看 health/queue）',
-  'help.cmd.nodeStop': '只停止 Node API；gateway 托管时提示用 gateway stop',
+  'help.cmd.nodeStop':
+    '优雅停止 Node API（不限时 drain + 进度；--force 强杀并审计）；gateway 托管时提示用 gateway stop',
+  'help.cmd.nodeRestart':
+    'docker 式先停后启只重启本 node（[name] 选登记 node）；托管节点提示用 vessel restart',
   'help.cmd.nodeReload': '热重载 Node API 配置（等同 gateway reload）',
   'help.cmd.eval': '离线评测',
   'help.cmd.evalOut': '评测输出 JSON / 指定报告',
@@ -157,6 +167,7 @@ export const zhCN = {
   'help.group.session': '会话维护（旧格式迁移）',
   'flag.json': '输出 JSON（数据行保持纯文本）',
   'flag.daemon': '分离到后台运行（日志见 --log）',
+  'flag.foreground': '保留前台运行（调试用；缺省后台分离即退）',
   'flag.keepNodes': 'handoff：只停平台层，node/hub 保活（由下一次启动 adopt 接管）',
   'flag.noKeepNodes': '冷重启：连 node/hub 一起停',
   'flag.force': '覆盖已有文件 / 强制安装',
@@ -171,6 +182,7 @@ export const zhCN = {
   'flag.interactive': '进入交互选择（需要 TTY）',
   'flag.allNodes': '聚合所有配置节点',
   'flag.all': '对所有目标生效',
+  'flag.all.ps': '含已停止进程（docker ps -a 式）',
   'flag.allow': '允许（permission 交互）',
   'flag.deny': '拒绝（permission 交互）',
   'flag.remember': '本次会话记住该决定',
@@ -329,9 +341,10 @@ export const zhCN = {
   'gateway.stopKeptHub': 'handoff：保留 hub 进程继续运行',
   'gateway.startFailed': 'Gateway 启动失败：{detail}',
   'gateway.started': 'Gateway 已启动（pid {pid}）：{url}',
+  'gateway.startedNode': '节点：{name}（端口 {port}）',
   'gateway.logPath': '日志：{path}',
   'gateway.webDistMissing':
-    'Web 控制台静态资源缺失：{path}。新克隆的仓库必须先构建一次：`bun run build:web`（= `cd apps/web && bun run build`）；或把 VESSEL_STATIC_DIR 指向已有产物，然后重新 start。',
+    'Web 控制台静态资源缺失：{path}。新克隆的仓库必须先构建一次：`bun run build:web`（= `cd apps/web && bun run build`）；或在配置里设 gateway.web_dist（或 env VESSEL_STATIC_DIR）指向已有产物，然后重新 start。',
   'gateway.webDistStale':
     'Web 控制台产物可能已过期：{index} 旧于 {source}。构建：`cd apps/web && npm run build`。',
   'gateway.webDistStaleLine':
@@ -342,6 +355,8 @@ export const zhCN = {
   'gateway.reloadFailed': '热重载失败：{detail}',
   'gateway.reloaded': '已热重载：{scopes}',
   'gateway.requiresRestart': '需要重启才生效：{scopes}（运行 `vessel gateway restart`）',
+  'gateway.restart.stopNodesDeprecated':
+    '--stop-nodes 已弃用：gateway restart 只重启平台进程（node/hub 保活）。要重启整个舰队，请运行 `vessel restart`。',
   // ── node（0.49 G1）──
   'node.started': 'Node API 已启动（pid {pid}）：{url}',
   'node.running': 'Node API 运行中：{url}',
@@ -420,6 +435,27 @@ export const zhCN = {
   'stop.poolResidue.count': '{dir} 残留 {count} 个 engine 状态文件',
   'stop.done': '舰队停完成。',
   'stop.failed': '舰队停未全部成功（原因见上方输出）。',
+  // ── 优雅停止 / force 审计（用户裁定 #5，cli-topology-design §5.3/§5.4）──
+  'stop.drain.progress': '⏳ {label}：drain 中… 还有 {count} 个 run 在跑（已等待 {waited}）',
+  'stop.drain.snapshotUnavailable': 'run 快照不可用（监听已关闭）',
+  'stop.drain.escalate': '升级：vessel runs cancel <run_id>   |   vessel stop --force',
+  'stop.drain.timeout':
+    '等待 drain 超时（pid {pid}，{timeout}）；进程仍在运行，未被强杀。可取消阻塞 run 或用 --force 升级。',
+  'stop.forced.summary': '非正常退出：{name} —— {count} 个 run 被切断{note}',
+  // ── vessel restart（用户裁定 #6，cli-topology-design §7）──
+  'restart.inventory.title': '重启清点（舰队 dataDir：{dataDir}）',
+  'restart.inventory.instance': 'platform {instance}：{state}（pid {pid}）',
+  'restart.nothingRunning': '本无运行实例，直接启动。',
+  'restart.confirm.prompt': '重启会先停掉在跑会话再重新启动。继续？[y/N] ',
+  'restart.stopFailed':
+    '重启中止：stop 未全部成功，因此没有启动任何实例。可用 `vessel stop --force` 升级后重跑 restart。',
+  'restart.starting': '正在启动 {instance}…',
+  'restart.done': '重启完成。',
+  'restart.failed': '重启未全部成功（原因见上方输出）。',
+  'restart.unknownTarget':
+    '舰队 {dataDir} 内找不到重启目标「{name}」（无匹配的 gateway 实例或登记 node）。',
+  'node.restartManaged':
+    '该 node 由平台托管；请用 `vessel restart` 重启整个舰队（或 `vessel gateway restart` 只重启平台）。',
   'stop.remote.title': '远程平台清点：{url}',
   'stop.remote.health': 'platform：{status}（version {version}，node_count {count}）',
   'stop.remote.node': 'node {name}（{nodeId}）：{status} {apiUrl}',
@@ -470,6 +506,9 @@ export const zhCN = {
   'fleet.noPeers': '未配置 federation peer',
   'fleet.fedEnabled': 'federation 已启用',
   'fleet.fedDisabled': 'federation 未启用',
+  'ps.title': 'Vessel 进程（本舰队）',
+  'ps.empty': '无运行中进程（--all 含已停止）',
+  'ps.emptyAll': '无进程记录',
   'model.title': 'Vessel 模型注册表',
   'model.empty': '注册表为空：没有厂商 / 别名 / 默认模型。',
   'model.vendors': '厂商（{count}）',

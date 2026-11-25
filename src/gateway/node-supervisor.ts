@@ -22,6 +22,7 @@
 
 import { mkdir, open, readdir, readFile, unlink } from 'node:fs/promises';
 import * as path from 'node:path';
+import { DATA_DIR_CLI_MARKER_ENV } from '@vessel-agent/config';
 import { atomicWrite, withDeadline } from '@vessel-agent/core';
 import { readHubLockFile } from '../hub/runtime';
 import { sanitizeToolOutputEnv } from '../runtime/tool-output-env';
@@ -36,6 +37,13 @@ import {
   readGatewayPidRecord,
 } from './pid';
 import { shutdownGateway } from './reload';
+import {
+  type DrainProgressInfo,
+  type DrainRun,
+  nodeRunSampler,
+  snapshotActiveRuns,
+  waitForProcessExit,
+} from './stop-drain';
 import {
   DEFAULT_STALL_WATCHDOG_CONFIG,
   NodeWatchdog,
@@ -55,9 +63,11 @@ import {
  */
 const DEFAULT_READINESS_TIMEOUT_MS = 180_000;
 const DEFAULT_STOP_TIMEOUT_MS = 5_000;
-/** P0-run-stops P1：优雅关闭受理后的等死预算；超时回退既有强杀。 */
-const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 10_000;
-/** P0-run-stops P1：`gateway.shutdown` 请求本身的超时（只受理，不等退出）。 */
+/**
+ * P0-run-stops P1：`gateway.shutdown` 请求本身的超时（只受理，不等退出）。
+ * 受理后的等死预算已改为**默认不限时**（cli-topology-design §5.3，用户裁定 #5）：
+ * 停止方经 waitForProcessExit 等进程自死 + 5s 进度，显式 --timeout 才是可选上限。
+ */
 const GRACEFUL_SHUTDOWN_REQUEST_MS = 3_000;
 const POLL_MS = 100;
 const HEALTH_TIMEOUT_MS = 1_000;
@@ -449,6 +459,11 @@ export interface DrainSkippedInfo {
 async function tryGracefulNodeShutdown(
   child: SpawnedChildRecord,
   sleep: (ms: number) => Promise<void>,
+  opts?: {
+    /** 可选显式上限（缺省不限时）；到点返回 reason:'timeout'，调用方不强杀。 */
+    timeoutMs?: number;
+    onProgress?: (info: DrainProgressInfo) => void;
+  },
 ): Promise<{ dead: boolean; reason?: string }> {
   const record = await readGatewayPidRecord(child.data_dir);
   if (record === null || record.pid !== child.pid) return { dead: false, reason: 'no_record' };
@@ -458,8 +473,14 @@ async function tryGracefulNodeShutdown(
     requestTimeoutMs: GRACEFUL_SHUTDOWN_REQUEST_MS,
   });
   if (!result.ok) return { dead: false, reason: result.code ?? 'error' };
-  const dead = await waitUntilDead(child.pid, GRACEFUL_SHUTDOWN_TIMEOUT_MS, sleep);
-  return dead ? { dead: true } : { dead: false, reason: 'timeout' };
+  // 默认不限时等死 + 5s 进度（用户裁定 #5）；显式 --timeout 到点 reason:'timeout'。
+  const wait = await waitForProcessExit(child.pid, {
+    sleep,
+    ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+    ...(opts?.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
+    sampleRuns: nodeRunSampler(record, ''),
+  });
+  return wait.dead ? { dead: true } : { dead: false, reason: 'timeout' };
 }
 
 async function waitUntilDead(
@@ -535,6 +556,30 @@ export interface StopSpawnedChildrenOptions {
    * `node.drain.skipped`）。缺省 = 不打（库本身不打印）。
    */
   onDrainSkipped?: (info: DrainSkippedInfo) => void;
+  /**
+   * 用户裁定 #5：`--force` = 显式非正常退出。跳过优雅等待，终止前先快照在跑 run，
+   * 然后强杀（POSIX SIGKILL / Windows process.kill + taskkill /T /F），并经
+   * `onForced` 通知停止方代打 `stop.forced` 审计（abnormal_exit / runs_cut）。
+   * force 仍做归属复核（recordOwnsPid）——升级的是等待策略，不是归属判据。
+   */
+  force?: boolean;
+  /** force 终止前的审计快照回调（停止方代打 stop.forced）；缺省 = 不打。 */
+  onForced?: (info: ForcedStopInfo) => void;
+  /**
+   * 优雅等待期间的进度回调（约每 5s 一次；停止方渲染「哪些 run/session 还在跑」）。
+   * 缺省 = 不渲染（库本身不打印）。
+   */
+  onProgress?: (name: string, info: DrainProgressInfo) => void;
+}
+
+/** 用户裁定 #5：一次 force 非正常退出的审计载荷（停止方代打 stop.forced）。 */
+export interface ForcedStopInfo {
+  name: string;
+  kind: 'node' | 'hub';
+  pid: number;
+  /** 终止前快照到的在跑 run（快照不可用 = 空数组 + snapshotUnavailable）。 */
+  runs: DrainRun[];
+  snapshotUnavailable: boolean;
 }
 
 /** manifest 条目的启动时刻（node 写 ISO 8601；hub lock 写 epoch 毫秒字符串）。 */
@@ -626,30 +671,82 @@ export async function stopSpawnedChildren(
         remaining.push(child);
         continue;
       }
-      // P0-run-stops P1：node 子进程先试优雅关闭（进程内 drain 写 resume 标记），
-      // 确认自死才算停成；否则回退既有强杀。hub 没有 run 面，不试。
-      let gracefulDead = false;
-      if (child.kind !== 'hub') {
-        const graceful = await tryGracefulNodeShutdown(child, sleep);
-        gracefulDead = graceful.dead;
-        if (!graceful.dead) {
-          try {
-            options.onDrainSkipped?.({
-              name: child.name,
-              pid: child.pid,
-              reason: graceful.reason ?? 'unknown',
-            });
-          } catch {
-            // 观察者抛错不影响终止。
+      // 用户裁定 #5：force = 显式非正常退出（快照 + 强杀 + 审计）；
+      // 缺省 = 优雅不限时 drain + 进度（node 进程内写 resume 标记），hub 无 run 面不试。
+      const kind: 'node' | 'hub' = child.kind === 'hub' ? 'hub' : 'node';
+      let ok = false;
+      let failReason: string | undefined;
+      if (options.force === true) {
+        // force：终止前先快照在跑 run（拿不到如实记「快照不可用」），再强杀 + 审计。
+        let runs: DrainRun[] = [];
+        let snapshotUnavailable = false;
+        if (child.kind !== 'hub') {
+          const record = await readGatewayPidRecord(child.data_dir);
+          if (record !== null && record.pid === child.pid) {
+            try {
+              runs = await snapshotActiveRuns(record, '');
+            } catch {
+              snapshotUnavailable = true;
+            }
+          } else {
+            snapshotUnavailable = true;
           }
         }
+        try {
+          options.onForced?.({ name: child.name, kind, pid: child.pid, runs, snapshotUnavailable });
+        } catch {
+          // 观察者抛错不影响终止。
+        }
+        ok =
+          options.terminate !== undefined
+            ? await options.terminate(child.pid)
+            : await terminateChild(child.pid, {
+                platform,
+                runCommand,
+                sleep,
+                timeoutMs,
+                force: true,
+              });
+        if (!ok) failReason = `not confirmed stopped within ${timeoutMs}ms`;
+      } else {
+        let gracefulDead = false;
+        let gracefulTimeout = false;
+        if (child.kind !== 'hub') {
+          const graceful = await tryGracefulNodeShutdown(child, sleep, {
+            ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+            ...(options.onProgress !== undefined
+              ? { onProgress: (info) => options.onProgress?.(child.name, info) }
+              : {}),
+          });
+          gracefulDead = graceful.dead;
+          gracefulTimeout = graceful.reason === 'timeout';
+          if (!graceful.dead && !gracefulTimeout) {
+            // 优雅受理失败（老版本无该方法 / 网络）→ 回退既有强杀，代打 node.drain.skipped。
+            try {
+              options.onDrainSkipped?.({
+                name: child.name,
+                pid: child.pid,
+                reason: graceful.reason ?? 'unknown',
+              });
+            } catch {
+              // 观察者抛错不影响终止。
+            }
+          }
+        }
+        if (gracefulDead) {
+          ok = true;
+        } else if (gracefulTimeout) {
+          // 显式 --timeout 到点：不自动强杀，如实报告阻塞者，条目保留供重试/升级（§5.3）。
+          ok = false;
+          failReason = `drain not complete within ${options.timeoutMs}ms (still running; escalate with --force)`;
+        } else {
+          ok =
+            options.terminate !== undefined
+              ? await options.terminate(child.pid)
+              : await terminateChild(child.pid, { platform, runCommand, sleep, timeoutMs });
+          if (!ok) failReason = `not confirmed stopped within ${timeoutMs}ms`;
+        }
       }
-      const ok = gracefulDead
-        ? true
-        : options.terminate !== undefined
-          ? await options.terminate(child.pid)
-          : await terminateChild(child.pid, { platform, runCommand, sleep, timeoutMs });
-      const kind: 'node' | 'hub' = child.kind === 'hub' ? 'hub' : 'node';
       if (ok) {
         stopped += 1;
         stoppedChildren.push({ name: child.name, kind, pid: child.pid });
@@ -661,7 +758,7 @@ export async function stopSpawnedChildren(
           name: child.name,
           kind,
           pid: child.pid,
-          reason: `not confirmed stopped within ${timeoutMs}ms`,
+          reason: failReason ?? 'unknown',
         });
       }
     }
@@ -1337,6 +1434,11 @@ export class NodeSupervisor {
     const nodeEnv: Record<string, string | undefined> = {
       ...(this.options.env ?? process.env),
       VESSEL_DATA_DIR: spec.dataDir,
+      // q-config-priority（用户裁定#3）：registry data_dir 是 CLI 级显式权威
+      // （gateway nodes add --data-dir 的落盘值）。伴生标记让子进程 loader 把它
+      // 当 CLI 层 —— 否则「显式 user config.data_dir > 继承 env」会压过 registry，
+      // 多节点舰队各 node 数据根分叉。
+      [DATA_DIR_CLI_MARKER_ENV]: '1',
     };
     sanitizeToolOutputEnv(nodeEnv, spec.dataDir);
     let child: ReturnType<typeof spawn>;

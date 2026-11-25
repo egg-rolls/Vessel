@@ -21,9 +21,9 @@
 
 import { existsSync } from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   buildConfigSnapshot,
+  DATA_DIR_CLI_MARKER_ENV,
   getUserConfigPath,
   isLoopbackHostname,
   loadConfig,
@@ -136,7 +136,13 @@ import { resolveGatewayAuth } from './gateway/serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './gateway/serve-config';
 import { shutdownServeStack } from './gateway/shutdown-sequence';
 import { resolveGatewayToken } from './gateway/transport-factory';
-import { ensureWebDist, interruptWebBuild, webDistWarning } from './gateway/web-dist';
+import {
+  ensureWebDist,
+  explicitWebDistDir,
+  interruptWebBuild,
+  resolveWebDistDir,
+  webDistWarning,
+} from './gateway/web-dist';
 import { readHubNodeTrustedOrigins } from './hub/node-state';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
@@ -196,22 +202,14 @@ import { type GatewayUpdateCheckHandle, startGatewayUpdateCheck } from './update
 const MCP_FACTORY_PLUGINS: ReadonlySet<string> = FACTORY_PLUGINS;
 
 /**
- * Web UI 构建产物目录（不判断是否存在）。`VESSEL_STATIC_DIR` 覆盖默认路径；
- * 0.49：拆分模式的 Gateway 宿主在这里 fail-fast，`--serve` legacy 仍按旧行为。
+ * Web 控制台静态目录（legacy `--serve` 托管面）：
+ * `gateway.web_dist` config > `VESSEL_STATIC_DIR` env > 仓库内 `apps/web/dist`
+ * （q-config-priority 用户裁定#2；解析共用 `gateway/web-dist.ts`）。
+ * 显式目录原样返回（存在性由宿主判）；默认目录不存在时不传（不托管静态站点）。
  */
-function resolveWebDistDir(): string {
-  return (
-    process.env.VESSEL_STATIC_DIR ?? fileURLToPath(new URL('../apps/web/dist', import.meta.url))
-  );
-}
-
-/**
- * Web 控制台静态目录：`VESSEL_STATIC_DIR` 覆盖；否则用仓库内 `apps/web/dist`。
- * 目录不存在时不传（gateway 不托管静态站点）。
- */
-function resolveStaticDir(): string | undefined {
-  const fromEnv = process.env.VESSEL_STATIC_DIR;
-  if (fromEnv) return fromEnv;
+function resolveStaticDir(config?: VesselConfig): string | undefined {
+  const explicit = explicitWebDistDir(config);
+  if (explicit !== undefined) return explicit;
   const dist = resolveWebDistDir();
   return existsSync(dist) ? dist : undefined;
 }
@@ -325,7 +323,13 @@ markStartup('args');
 // 0.15: one-shot commands call loadConfig() without cliOverrides; mirror the
 // explicit --data-dir into the env layer so they resolve the same data root.
 // The main bootstrap path still passes it through buildCliConfigOverrides().
-if (args.dataDirArg !== null) process.env.VESSEL_DATA_DIR = args.dataDirArg;
+// q-config-priority（用户裁定#3）：--data-dir 是 CLI 级显式权威。镜像走 env，但
+// 「显式 config > env」责任链下不得被用户配置 data_dir 压过 —— 伴生标记让 loader
+// 把它移回 CLI 层；子进程继承标记，整条启动链（含热重载）口径一致。
+if (args.dataDirArg !== null) {
+  process.env.VESSEL_DATA_DIR = args.dataDirArg;
+  process.env[DATA_DIR_CLI_MARKER_ENV] = '1';
+}
 // 0.56.1：`--user-config <path>` 只替换**用户层**配置路径。落到 env 是为了让
 // 一次性命令与它 spawn 的 daemon / node / hub 子进程看到同一个用户层
 // （否则子进程会去读真实 `~/.vessel/config.yaml`，「隔离开销」白做）。
@@ -424,7 +428,8 @@ if (demoRequested) {
 // 0.49 G3b（CONTRACT §4.1）：非 legacy 的 `gateway start/restart` 前台只跑
 // **平台进程** —— 平台监听 + 每节点子进程监督；不进入 bootstrap / serve 管线，
 // 因此不加载 node runtime / tenant 锁 / plugin host / node 监听。
-// `gateway start --daemon` 的父进程由注册表处理，它会 spawn 本分支。
+// 用户裁定 #1（start 即退）：`gateway start` 缺省 detach，父进程由注册表处理
+// （spawn 本分支后打印启动信息即退出）；只有显式 `--foreground` 才留在前台。
 if (
   args.gateway !== null &&
   isForegroundGatewayCommand(args.gateway) &&
@@ -440,14 +445,27 @@ if (
   // 等它建完，因为本函数下面的 gateway 在 `index.html` 缺失时直接失败退出
   // （`runPlatformGatewayForeground` 的 fail-fast），没有「先起来再修」这条路。
   //
-  // 只在仓库内默认目录生效：`VESSEL_STATIC_DIR` 指向的外部产物不归我们管；
-  // `VESSEL_NO_WEB_AUTOBUILD=1` 关掉自修复；构建失败只告警、不改退出码。
-  await ensureWebDist({ waitWhenMissing: true });
+  // 只在仓库内默认目录生效：显式 `gateway.web_dist` / `VESSEL_STATIC_DIR` 指向的外部
+  // 产物不归我们管；`VESSEL_NO_WEB_AUTOBUILD=1` 关掉自修复；构建失败只告警、不改退出码。
+  // q-config-priority（用户裁定#2）：先读一次配置拿 `gateway.web_dist` —— 金丝雀舰队
+  // 配置指向舰队 dist，无论从哪个 cwd 启动都宿那份。这里加载失败不报（前台入口
+  // runPlatformGatewayForeground 会同口径再加载并统一报错），只回落 env/默认解析。
+  let platformWebDistConfig: VesselConfig | undefined;
+  try {
+    platformWebDistConfig = (await loadConfig()).config;
+  } catch {
+    // 配置错误由前台入口统一报告
+  }
+  const platformExplicitDist = explicitWebDistDir(platformWebDistConfig);
+  await ensureWebDist({
+    ...(platformExplicitDist !== undefined ? { staticDir: platformExplicitDist } : {}),
+    waitWhenMissing: true,
+  });
   const { runPlatformGatewayForeground } = await import('./cli/commands/gateway/gateway-command');
   process.exit(
     await runPlatformGatewayForeground({
       command: args.gateway,
-      staticDir: resolveWebDistDir(),
+      staticDir: resolveWebDistDir(platformWebDistConfig),
       ...(args.dataDirArg !== null ? { dataDirOverride: args.dataDirArg } : {}),
     }),
   );
@@ -486,7 +504,11 @@ if (foregroundGateway && args.gateway !== null) {
         targetHost = previous.record.host;
       }
     }
-    const stopCode = await stopGateway({ selector: gatewayArgs, entries });
+    const stopCode = await stopGateway({
+      selector: gatewayArgs,
+      entries,
+      ...(gatewayArgs.force === true ? { force: true } : {}),
+    });
     if (stopCode !== 0) process.exit(stopCode);
   }
 
@@ -553,7 +575,19 @@ if (foregroundGateway && args.gateway !== null) {
 // 0.50 起拆分路径（`gateway start` / `node start`）也在启动诊断里自修复；`node start`
 // 本身不宿 WebUI（staticDir 只在 Gateway 解析）。
 if (args.servePort !== null && !nodeOnlyMode) {
-  const status = await ensureWebDist({ waitWhenMissing: true });
+  // q-config-priority（用户裁定#2）：legacy 托管面同样尊重 `gateway.web_dist`
+  // （显式目录不触发自动构建）；加载失败不报，bootstrap 会统一报告配置错误。
+  let serveWebDistConfig: VesselConfig | undefined;
+  try {
+    serveWebDistConfig = (await loadConfig()).config;
+  } catch {
+    // 配置错误由 bootstrap 统一报告
+  }
+  const serveExplicitDist = explicitWebDistDir(serveWebDistConfig);
+  const status = await ensureWebDist({
+    ...(serveExplicitDist !== undefined ? { staticDir: serveExplicitDist } : {}),
+    waitWhenMissing: true,
+  });
   // 自修复能接管时 webDistWarning 返回 null（`web.build.*` 事件已经说过），只留真正修不了的情况。
   const warning = webDistWarning(status);
   if (warning) console.error(ui.warn(warning));
@@ -1578,7 +1612,7 @@ async function runWithConfig(result: BootstrapResult) {
       plugins: pluginEntries,
       pluginCatalog,
       // 0.49 G1：拆分模式 node 不宿 WebUI（staticDir 只在 Gateway 启动路径解析）。
-      ...(nodeOnlyMode ? {} : { staticDir: resolveStaticDir() }),
+      ...(nodeOnlyMode ? {} : { staticDir: resolveStaticDir(config) }),
       nodeId: result.nodeId,
       nodeName: result.nodeName,
       auth: authResult.auth,

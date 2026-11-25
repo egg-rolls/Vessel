@@ -37,12 +37,18 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.resumeRun': 'resume an interrupted durable run',
   'help.cmd.status': 'local runtime / attach / gateway instances at a glance',
   'help.cmd.stop':
-    'stop the fleet (platform + manifest node/hub + owned pool engines); --connect for remote stop',
+    'stop the fleet gracefully (unlimited drain + progress; --force cuts runs with audit); --connect for remote stop',
+  'help.cmd.restart':
+    'docker-style stop then start; [name] targets an instance or registered node (default: whole fleet); --force propagates to stop',
   'help.cmd.agents': 'list agents via agents.list (local gateway or --connect)',
   'help.cmd.errors': 'recent run/tool errors (diagnostics in errorLevel: all)',
   'help.cmd.rpcList':
     'list RPC methods with params/result schema summaries (--node targets via platform proxy)',
   'help.cmd.fleetStatus': 'this fleet at a glance: identity / peers / nodes / gateway (read-only)',
+  'help.cmd.ps': 'list fleet processes (gateway/node/hub), docker ps style',
+  'help.cmd.gatewayPs': 'list gateway (platform) processes, docker ps style',
+  'help.cmd.nodePs': 'list node processes, docker ps style',
+  'help.cmd.hubPs': 'list hub processes, docker ps style',
   'help.cmd.modelList': 'list the model registry (vendors / aliases / default / effective)',
   'help.cmd.modelVendorSet': 'create or replace a vendor entry (--entry is the vendor JSON)',
   'help.cmd.modelVendorRemove': 'remove a vendor (refused while aliases / default reference it)',
@@ -56,14 +62,14 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.modelTest':
     'connectivity test against a saved vendor (sends a real request; may incur cost)',
   'help.cmd.gatewayStart':
-    'start in the foreground; --daemon detaches to gateway.log; --instance names it',
+    'start detached and exit once the platform is up (default); --foreground keeps it in front; --instance names it',
   'help.cmd.gatewayList': 'list gateway instances and PID files',
   'help.cmd.gatewayStop':
-    'graceful SIGTERM stop (process termination on Windows); default keeps node/hub, --stop-nodes stops them too',
+    'stop the platform process gracefully (unlimited drain + progress; --force kills with audit); default keeps node/hub, --stop-nodes stops them too',
   'help.cmd.gatewayStatus':
     'pid/port/uptime/version/service state (--rpc is deprecated; use node status --rpc)',
   'help.cmd.gatewayRestart':
-    'stop then start (keeps --daemon); default swaps the platform layer only, --stop-nodes cold-restarts node/hub too',
+    'stop then start the platform only (keeps --daemon); node/hub stay alive and are adopted; --stop-nodes is deprecated (use vessel restart for the fleet)',
   'help.cmd.gatewayReload': 'hot-reload config/plugins without restarting',
   'help.cmd.gatewayInstall': 'register login autostart (systemd / launchd / schtasks)',
   'help.cmd.gatewayUninstall': 'remove the system service registration',
@@ -77,7 +83,10 @@ export const en: Record<MessageKey, string> = {
     'remove a node from nodes.json; takes effect on the next gateway start',
   'help.cmd.nodeStart': 'start only the Node API (default 8644; shares the gateway instance lock)',
   'help.cmd.nodeStatus': 'show the Node API listener and health (--rpc for health/queue)',
-  'help.cmd.nodeStop': 'stop only the Node API; gateway-managed nodes point to gateway stop',
+  'help.cmd.nodeStop':
+    'stop only the Node API gracefully (unlimited drain + progress; --force kills with audit); gateway-managed nodes point to gateway stop',
+  'help.cmd.nodeRestart':
+    'docker-style stop then start only this node ([name] selects a registered node); managed nodes point to vessel restart',
   'help.cmd.nodeReload': 'hot-reload Node API config (same operation as gateway reload)',
   'help.cmd.eval': 'offline evaluation',
   'help.cmd.evalOut': 'write evaluation JSON / choose the report path',
@@ -174,6 +183,7 @@ export const en: Record<MessageKey, string> = {
   'help.group.session': 'session maintenance (legacy migration)',
   'flag.json': 'emit JSON (data lines stay plain text)',
   'flag.daemon': 'detach to the background (log path via --log)',
+  'flag.foreground': 'keep running in the foreground (debugging; default is detached)',
   'flag.keepNodes':
     'handoff: stop the platform layer but keep node/hub alive (adopted by the next start)',
   'flag.noKeepNodes': 'cold restart: stop node/hub together with the platform layer',
@@ -189,6 +199,7 @@ export const en: Record<MessageKey, string> = {
   'flag.interactive': 'interactive selection (requires a TTY)',
   'flag.allNodes': 'aggregate every configured node',
   'flag.all': 'apply to every target',
+  'flag.all.ps': 'include stopped processes (docker ps -a style)',
   'flag.allow': 'allow (permission interaction)',
   'flag.deny': 'deny (permission interaction)',
   'flag.remember': 'remember this decision for the session',
@@ -351,9 +362,10 @@ export const en: Record<MessageKey, string> = {
   'gateway.stopKeptHub': 'kept hub alive for handoff',
   'gateway.startFailed': 'Gateway failed to start: {detail}',
   'gateway.started': 'Gateway started (pid {pid}): {url}',
+  'gateway.startedNode': 'node: {name} (port {port})',
   'gateway.logPath': 'Log: {path}',
   'gateway.webDistMissing':
-    'Web console assets are missing at {path}. Build them once (a fresh clone has none): `bun run build:web` (= `cd apps/web && bun run build`), or point VESSEL_STATIC_DIR at an existing build, then start again.',
+    'Web console assets are missing at {path}. Build them once (a fresh clone has none): `bun run build:web` (= `cd apps/web && bun run build`), or set gateway.web_dist (config) / VESSEL_STATIC_DIR (env) to an existing build, then start again.',
   'gateway.webDistStale':
     'Web console assets may be stale: {index} is older than {source}; build with `cd apps/web && npm run build`.',
   'gateway.webDistStaleLine':
@@ -365,6 +377,8 @@ export const en: Record<MessageKey, string> = {
   'gateway.reloaded': 'Reloaded: {scopes}',
   'gateway.requiresRestart':
     'Requires a restart to take effect: {scopes} (run `vessel gateway restart`)',
+  'gateway.restart.stopNodesDeprecated':
+    '--stop-nodes is deprecated: gateway restart only restarts the platform process (node/hub stay alive). To restart the whole fleet, run `vessel restart`.',
   // ── node (0.49 G1) ──
   'node.started': 'Node API started (pid {pid}): {url}',
   'node.running': 'Node API is running: {url}',
@@ -450,6 +464,27 @@ export const en: Record<MessageKey, string> = {
   'stop.poolResidue.count': '{count} engine state file(s) remain in {dir}',
   'stop.done': 'Fleet stop complete.',
   'stop.failed': 'Fleet stop did not fully succeed (see reasons above).',
+  // ── graceful stop / force audit (用户裁定 #5, cli-topology-design §5.3/§5.4) ──
+  'stop.drain.progress': '⏳ {label}: draining… {count} run(s) active (waited {waited})',
+  'stop.drain.snapshotUnavailable': 'run snapshot unavailable (listener closed)',
+  'stop.drain.escalate': 'escalate: vessel runs cancel <run_id>   |   vessel stop --force',
+  'stop.drain.timeout':
+    'Timed out waiting for drain (pid {pid}, {timeout}); the process is still running and was NOT killed. Cancel blocking runs or escalate with --force.',
+  'stop.forced.summary': 'abnormal exit: {name} — {count} run(s) cut{note}',
+  // ── vessel restart (用户裁定 #6, cli-topology-design §7) ──
+  'restart.inventory.title': 'Restart inventory (fleet dataDir: {dataDir})',
+  'restart.inventory.instance': 'platform {instance}: {state} (pid {pid})',
+  'restart.nothingRunning': 'Nothing running; starting fresh.',
+  'restart.confirm.prompt': 'Restart stops active sessions then starts again. Continue? [y/N] ',
+  'restart.stopFailed':
+    'Restart aborted: stop did not fully succeed, so nothing was started. Escalate with `vessel stop --force`, then re-run restart.',
+  'restart.starting': 'starting {instance}…',
+  'restart.done': 'Restart complete.',
+  'restart.failed': 'Restart did not fully succeed (see reasons above).',
+  'restart.unknownTarget':
+    'Unknown restart target "{name}" in fleet {dataDir} (no matching gateway instance or registered node).',
+  'node.restartManaged':
+    'This node is managed by the platform; restart the whole fleet with `vessel restart` (or just the platform with `vessel gateway restart`).',
   'stop.remote.title': 'Remote platform inventory: {url}',
   'stop.remote.health': 'platform: {status} (version {version}, node_count {count})',
   'stop.remote.node': 'node {name} ({nodeId}): {status} {apiUrl}',
@@ -502,6 +537,9 @@ export const en: Record<MessageKey, string> = {
   'fleet.noPeers': 'no federation peers configured',
   'fleet.fedEnabled': 'federation enabled',
   'fleet.fedDisabled': 'federation disabled',
+  'ps.title': 'Vessel processes (this fleet)',
+  'ps.empty': 'no running processes (use --all to include stopped)',
+  'ps.emptyAll': 'no process records',
   'model.title': 'Vessel Model Registry',
   'model.empty': 'Registry is empty: no vendors, aliases or default model.',
   'model.vendors': 'Vendors ({count})',

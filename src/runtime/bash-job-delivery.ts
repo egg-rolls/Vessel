@@ -27,16 +27,17 @@ import type { AgentService } from '../../packages/agent/src/index';
 import type { Logger } from '../../packages/core/src/index';
 import {
   type AsyncBashCompletion,
+  getAsyncBashLimits,
   registerAsyncBashCompletionSink,
 } from '../../plugins/tools/basic-tools/src/index';
 
 /**
- * 同时在途的投递上限：与插件侧的 `MAX_ASYNC_JOBS`（4）对齐。
+ * 同时在途的投递上限：与插件侧生效的并发上限（`getAsyncBashLimits().maxAsyncJobs`，
+ * 缺省 16，可配 basic-tools max_async_jobs）同源 —— 不存第二份数值（0.58 用户裁定#8）。
  *
  * 为什么要有：admit 会起 run，run 有预算。超限时直接返回 false（交给 hook 兜底），
  * 而不是排队 —— 排队会让「作业完成」和「模型看到结果」之间的延迟无上界。
  */
-const MAX_INFLIGHT_DELIVERIES = 4;
 
 /** 装配依赖：只要 admit + identify 两个口（不把整个 AgentService 契约绑进来）。 */
 export type BashJobDeliveryDeps = {
@@ -50,7 +51,7 @@ export type BashJobDeliveryDeps = {
 export function registerBashJobDelivery(deps: BashJobDeliveryDeps): () => void {
   let inflight = 0;
   return registerAsyncBashCompletionSink(async (completion: AsyncBashCompletion) => {
-    if (inflight >= MAX_INFLIGHT_DELIVERIES) {
+    if (inflight >= getAsyncBashLimits().maxAsyncJobs) {
       deps.logger?.warn('agent.bash_job.delivery_skipped', {
         job_id: completion.jobId,
         reason: 'inflight_limit',

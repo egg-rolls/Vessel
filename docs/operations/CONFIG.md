@@ -28,6 +28,14 @@ paths: [packages/config/**, src/cli/commands/config-command.ts, src/cli/commands
 CLI > env > project > user > default
 ```
 
+**例外（q-config-priority 用户裁定#3，仅 `data_dir`）**：显式 `--user-config`（或 `VESSEL_USER_CONFIG`）且该配置写了 `data_dir` 时：
+
+```text
+CLI > 显式 user config.data_dir > env(VESSEL_DATA_DIR) > project > default
+```
+
+缺省加载（没给 `--user-config`）时 env 仍优先——生产 bootstrap 设 `VESSEL_DATA_DIR` 的场景零回归。`--data-dir` 与 supervisor/registry 注入的 `VESSEL_DATA_DIR` 带内部标记 `VESSEL_DATA_DIR_CLI=1`，按 CLI 级权威应用，不被显式 config 压过。其它键不受本例外影响。
+
 0.49 起没有 tenant overlay，也没有 `tenant` 配置块。旧配置会被 fail-fast 并给出逐项 Fix：删除整个 `tenant:` 块、删除 `serve.tokens[*].tenantId`（只保留 `role`）、删除 `serve.adminToken` / `serve.adminTokenEnv`（改用 `serve.tokens` 的 `{ role: admin }`）。
 
 ### 2.0.0 一台机器跑多个实例：`--data-dir`
@@ -57,6 +65,8 @@ vessel gateway start --daemon --data-dir /var/tmp/vessel-b \
 
 - **只替换用户层**（`~/.vessel/config.yaml`）：项目 `vessel.yaml`、`VESSEL_*` 环境变量、
   CLI 参数的原有优先级不变（`VESSEL_USER_CONFIG` 等价，daemon/node/hub 子进程也一致携带）。
+  **例外（用户裁定#3）**：显式指定时该文件的 `data_dir` 优先于继承的 `VESSEL_DATA_DIR`
+  （见上文优先级例外）——金丝雀舰队由此不再被生产 shell 的 env 击穿数据根。
 - 显式给出但**文件不存在 → 直接报错退出（exit 2）**，绝不静默回落成空配置：
   「以为验的是空配置，其实还是读了真配置」是这类隔离最常见的假绿。
   需要一个空用户层就写一个空文件（`{}`）。
@@ -664,6 +674,20 @@ gateway:
   非回环而未配置反代密钥 ⇒ 一律拒（fail-closed，防「opt-in = 裸公网停」误配）。
 - **没开**：远程停回 401 `remote_shutdown_disabled`，提示 SSH 到主机跑 `vessel stop`（零实体兜底）。
 - 远程停完整形态见 [REVERSE-PROXY.md §12](REVERSE-PROXY.md)；命令面见 [GATEWAY.md §4](GATEWAY.md)。
+
+### 2.20.2 `gateway.web_dist`（q-config-priority：静态产物目录可配）
+
+```yaml
+gateway:
+  web_dist: D:/Application/APP/Vessel/fleets/canary/apps/web/dist
+```
+
+- **管什么**：平台 gateway 同源托管的 Web 控制台产物目录（`index.html` / `assets/**` / `build.json`）。
+- **责任链**：显式 `gateway.web_dist` > `VESSEL_STATIC_DIR` env > 仓库内 `apps/web/dist`（entry 相对解析）。空串视为未设置。`~` 展开；相对路径按 cwd 解析。
+- **为什么需要**：金丝雀舰队用 `--user-config` 指向舰队配置，但 cwd 在生产 checkout —— 缺省解析会宿生产产物。配了本键，**无论从哪个 cwd 启动都服务这份 dist**。
+- **启动期键**：热应用不重接静态目录（改它需重启）。启动时 `<web_dist>/index.html` 缺失仍 fail-fast（报错带解析后路径）。
+- **自动构建不碰显式目录**：`ensureWebDist` / 运行中自查（`recheckWebDist`）只自愈仓库内默认产物；本键或 `VESSEL_STATIC_DIR` 指向的外部产物不归它们管。
+- **诊断同口径**：`gateway status` / `gateway start` 启动诊断 / `doctor` 的 `web` 检查项都按本键优先解析。
 
 ### 2.21 `http.allowed_origins`（0.61：访问控制，与 `redirect_uri` 来源分开）
 

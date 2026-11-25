@@ -30,6 +30,8 @@ import { errorsCommand } from './commands/errors-command';
 import { runEvalCommand } from './commands/eval-command';
 import { runFederationCommand } from './commands/federation';
 import { fleetStatusCommand } from './commands/fleet/fleet-status-command';
+import { psCommand } from './commands/fleet/ps-command';
+import { restartFleetCommand } from './commands/fleet/restart-command';
 import { statusCommand } from './commands/fleet/status-command';
 import { stopFleetCommand } from './commands/fleet/stop-command';
 import { isForegroundGatewayCommand, runGatewayCommand } from './commands/gateway/gateway-command';
@@ -388,9 +390,25 @@ export const cliCommands: readonly CliCommand[] = [
         yes: command.yes,
         selector: command.selector,
         timeoutMs: command.timeoutMs,
+        ...(command.force === true ? { force: true } : {}),
         connectUrl: args.connectArg,
         connectToken: args.connectTokenArg,
         caFile: args.caArg,
+      });
+    },
+  },
+  {
+    name: 'restart',
+    match: (args) => args.restartCommand !== null,
+    run: async (args) => {
+      const command = args.restartCommand;
+      if (command === null) return 1;
+      return restartFleetCommand({
+        ...(command.name !== undefined ? { name: command.name } : {}),
+        yes: command.yes,
+        selector: command.selector,
+        timeoutMs: command.timeoutMs,
+        ...(command.force === true ? { force: true } : {}),
       });
     },
   },
@@ -529,6 +547,22 @@ export const cliCommands: readonly CliCommand[] = [
       const command = args.fleetCommand;
       if (command === null || command === undefined) return 1;
       return printCommandResult(await fleetStatusCommand({ json: command.json }));
+    },
+  },
+  {
+    // 用户裁定 #4：docker ps 式进程清单（vessel ps / gateway ps / node ps / hub ps）。
+    name: 'ps',
+    match: (args) => (args.psCommand ?? null) !== null,
+    run: async (args) => {
+      const command = args.psCommand ?? null;
+      if (command === null) return 1;
+      return printCommandResult(
+        await psCommand({
+          json: command.json,
+          all: command.all,
+          ...(command.type !== undefined ? { type: command.type } : {}),
+        }),
+      );
     },
   },
 ];

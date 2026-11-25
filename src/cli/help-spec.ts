@@ -26,6 +26,7 @@ import type { MessageKey } from '../i18n';
 export const CLI_FLAG_VALUE = {
   '--json': null,
   '--daemon': null,
+  '--foreground': null,
   '--keep-nodes': null,
   '--no-keep-nodes': null,
   '--force': null,
@@ -126,6 +127,7 @@ export type CliFlag = keyof typeof CLI_FLAG_VALUE;
 export const CLI_FLAG_HELP: Readonly<Record<CliFlag, MessageKey>> = {
   '--json': 'flag.json',
   '--daemon': 'flag.daemon',
+  '--foreground': 'flag.foreground',
   '--keep-nodes': 'flag.keepNodes',
   '--no-keep-nodes': 'flag.noKeepNodes',
   '--force': 'flag.force',
@@ -286,6 +288,12 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     flags: ['--json', '--connect', '--connect-token', '--ca'],
   },
   {
+    path: ['ps'],
+    summary: 'help.cmd.ps',
+    flags: ['--json', '--all', '--data-dir'],
+    flagHelp: { '--all': 'flag.all.ps' },
+  },
+  {
     path: ['session', 'status'],
     summary: 'help.cmd.sessionStatus',
     flags: ['--id', '--json', '--connect', '--connect-token', '--ca', '--data-dir'],
@@ -300,6 +308,7 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     summary: 'help.cmd.stop',
     flags: [
       '--yes',
+      '--force',
       '--timeout',
       '--instance',
       '--port',
@@ -308,6 +317,11 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
       '--connect-token',
       '--ca',
     ],
+  },
+  {
+    path: ['restart'],
+    summary: 'help.cmd.restart',
+    flags: ['--yes', '--force', '--timeout', '--instance', '--port', '--all', '--data-dir'],
   },
   {
     path: ['agents'],
@@ -503,7 +517,7 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   {
     path: ['gateway', 'start'],
     summary: 'help.cmd.gatewayStart',
-    flags: ['--daemon', '--instance', '--port', '--host', '--log'],
+    flags: ['--daemon', '--foreground', '--instance', '--port', '--host', '--log'],
   },
   {
     path: ['gateway', 'status'],
@@ -512,9 +526,15 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   },
   { path: ['gateway', 'list'], summary: 'help.cmd.gatewayList', flags: ['--json'] },
   {
+    path: ['gateway', 'ps'],
+    summary: 'help.cmd.gatewayPs',
+    flags: ['--json', '--all', '--data-dir'],
+    flagHelp: { '--all': 'flag.all.ps' },
+  },
+  {
     path: ['gateway', 'restart'],
     summary: 'help.cmd.gatewayRestart',
-    flags: ['--daemon', '--instance', '--port', '--all', '--no-keep-nodes'],
+    flags: ['--daemon', '--force', '--instance', '--port', '--all'],
   },
   {
     path: ['gateway', 'reload'],
@@ -524,7 +544,7 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   {
     path: ['gateway', 'stop'],
     summary: 'help.cmd.gatewayStop',
-    flags: ['--timeout', '--instance', '--port', '--all', '--keep-nodes'],
+    flags: ['--timeout', '--force', '--instance', '--port', '--all', '--keep-nodes'],
   },
   {
     path: ['gateway', 'install-service'],
@@ -549,7 +569,14 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   // ── node ──
   { path: ['node', 'start'], summary: 'help.cmd.nodeStart', flags: ['--daemon', '--config'] },
   { path: ['node', 'status'], summary: 'help.cmd.nodeStatus', flags: ['--json', '--rpc'] },
-  { path: ['node', 'stop'], summary: 'help.cmd.nodeStop' },
+  {
+    path: ['node', 'ps'],
+    summary: 'help.cmd.nodePs',
+    flags: ['--json', '--all', '--data-dir'],
+    flagHelp: { '--all': 'flag.all.ps' },
+  },
+  { path: ['node', 'stop'], summary: 'help.cmd.nodeStop', flags: ['--force', '--data-dir'] },
+  { path: ['node', 'restart'], summary: 'help.cmd.nodeRestart', flags: ['--force', '--data-dir'] },
   { path: ['node', 'reload'], summary: 'help.cmd.nodeReload', flags: ['--scope'] },
 
   // ── hub（service 侧 + node client 侧）──
@@ -557,6 +584,12 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     path: ['hub', 'start'],
     summary: 'help.cmd.hubStart',
     flags: ['--host', '--port', '--data-dir', '--allow-remote', '--tls-cert', '--tls-key'],
+  },
+  {
+    path: ['hub', 'ps'],
+    summary: 'help.cmd.hubPs',
+    flags: ['--json', '--all', '--data-dir'],
+    flagHelp: { '--all': 'flag.all.ps' },
   },
   {
     path: ['hub', 'directory'],

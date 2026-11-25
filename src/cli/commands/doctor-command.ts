@@ -35,7 +35,12 @@ import {
 import { resolveGatewayToken } from '../../gateway/transport-factory';
 // 0.56.1：Web 控制台产物缺失要在 doctor 就能看见（`gateway start` 的硬前置）。
 // 0.57：产物「落后于源码」同理 —— 它是「界面一直是旧的」最常见的真实原因。
-import { DEFAULT_WEB_DIST_DIR, inspectWebDist, webDistStaleLine } from '../../gateway/web-dist';
+import {
+  DEFAULT_WEB_DIST_DIR,
+  explicitWebDistDir,
+  inspectWebDist,
+  webDistStaleLine,
+} from '../../gateway/web-dist';
 // 0.56：派生 token 的现状（根密钥 / 指纹；doctor 从不说「必须配置 token」）。
 import {
   effectiveHubToken,
@@ -536,9 +541,10 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
   // 0.57：再加一条「产物落后于源码」——gateway 只在**启动时**自动重建，之后源码
   // 再变就没有任何人会重建，也不会有任何提示。这里是用户能主动看到它的地方。
   {
-    const staticDir = (env.VESSEL_STATIC_DIR ?? '').trim() || DEFAULT_WEB_DIST_DIR;
+    const explicitDir = explicitWebDistDir(config, env);
+    const staticDir = explicitDir ?? DEFAULT_WEB_DIST_DIR;
     const status = await inspectWebDist(
-      (env.VESSEL_STATIC_DIR ?? '').trim() !== '' ? { staticDir } : {},
+      explicitDir !== undefined ? { staticDir: explicitDir } : {},
     );
     const staleLine = webDistStaleLine(status);
     checks.push({
@@ -547,7 +553,7 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
       message: status.exists
         ? (staleLine ?? staticDir)
         : `missing at ${staticDir} — run "bun run build:web" (fresh clone has no assets), ` +
-          'or point VESSEL_STATIC_DIR at an existing build',
+          'or set gateway.web_dist / VESSEL_STATIC_DIR to an existing build',
     });
   }
 

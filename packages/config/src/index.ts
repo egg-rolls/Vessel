@@ -112,6 +112,7 @@ export {
 export {
   applyLayerWithSources,
   type ConfigLoadResult,
+  DATA_DIR_CLI_MARKER_ENV,
   getUserConfigDir,
   getUserConfigPath,
   loadConfig,
