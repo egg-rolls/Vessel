@@ -13,6 +13,11 @@
  * `plugin_manifest_invalid`。semver 实现住在 @vessel-agent/plugin-sdk
  * （plugin-embed 契约 §7），这里 import + re-export，消费方不变。
  *
+ * `engines.vessel` 版本门禁**只对外部插件**（`external: true`，非 repo 源）生效：
+ * 内置 / 自研插件与引擎同仓同步发布，恒兼容，engines 可选且不做兼容性检查
+ * （用户裁定；此前 `<1.0.0` 范围在引擎升 2.0.0 后把 5 个内置插件全部 fail-closed，
+ * fb44a979 式「续命改范围」即是该多余检查的维护负担）。
+ *
  * @module vessel/plugin-manifest
  */
 
@@ -288,7 +293,11 @@ export interface PluginManifest {
   id: string;
   name: string;
   version: string;
-  engines: { vessel: string };
+  /**
+   * 引擎版本范围。外部插件必填且必须覆盖当前引擎版本；内置 / 自研插件可选、
+   * 不参与兼容性检查（恒兼容）。缺省时不出现在规范化清单里。
+   */
+  engines?: { vessel: string };
   description?: string;
   side: PluginSide;
   /**
@@ -359,6 +368,9 @@ export interface PluginManifestOptions {
    * 0.48 M4：外部插件（非 `repo` 源）。提供为 true 时，`contributes.http[].path`
    * 必须落在 `/plugins/<own-id>/<至少一个非空段>` 命名空间内（CONTRACT-0.48 §6.1）。
    * 缺省 false（内置插件沿用 M1 规则）。
+   *
+   * 同时决定 `engines.vessel` 版本门禁：外部插件必填且必须覆盖当前引擎版本
+   * （fail-closed）；内置 / 自研插件（缺省 false）engines 可选、恒兼容，不做检查。
    */
   external?: boolean;
   /**
@@ -1414,27 +1426,37 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
     fail('plugin_manifest_invalid', `version "${version}" is not a full semver (x.y.z)`);
   }
 
-  if (!isRecord(raw.engines)) fail('plugin_manifest_invalid', 'engines must be an object');
-  const vesselRange = requireString(raw.engines.vessel, 'engines.vessel');
-  const parsedRange = parseVersionRange(vesselRange);
-  if (!parsedRange) {
-    fail(
-      'plugin_manifest_invalid',
-      `engines.vessel "${vesselRange}" is unsupported (use >=x.y / >=x.y.z comparators or ^x.y / ~x.y)`,
-    );
-  }
-  const currentVersion = options.vesselVersion ?? readPackageVersion();
-  const current = parseSemver(currentVersion);
-  if (
-    current &&
-    !parsedRange.some((alternative) =>
-      alternative.every((comparator) => satisfiesComparator(current, comparator)),
-    )
-  ) {
-    fail(
-      'plugin_version_incompatible',
-      `plugin "${id}" requires vessel ${vesselRange}, current ${currentVersion}`,
-    );
+  // engines.vessel 版本门禁只对外部插件生效（external: true，非 repo 源）。
+  // 内置 / 自研插件与引擎同仓同步发布，恒兼容：engines 可选，声明了也只做形状
+  // 校验、不做兼容性检查；外部插件保持必填 + fail-closed 版本保护。
+  const external = options.external === true;
+  let engines: { vessel: string } | undefined;
+  if (external || raw.engines !== undefined) {
+    if (!isRecord(raw.engines)) fail('plugin_manifest_invalid', 'engines must be an object');
+    const vesselRange = requireString(raw.engines.vessel, 'engines.vessel');
+    const parsedRange = parseVersionRange(vesselRange);
+    if (!parsedRange) {
+      fail(
+        'plugin_manifest_invalid',
+        `engines.vessel "${vesselRange}" is unsupported (use >=x.y / >=x.y.z comparators or ^x.y / ~x.y)`,
+      );
+    }
+    if (external) {
+      const currentVersion = options.vesselVersion ?? readPackageVersion();
+      const current = parseSemver(currentVersion);
+      if (
+        current &&
+        !parsedRange.some((alternative) =>
+          alternative.every((comparator) => satisfiesComparator(current, comparator)),
+        )
+      ) {
+        fail(
+          'plugin_version_incompatible',
+          `plugin "${id}" requires vessel ${vesselRange}, current ${currentVersion}`,
+        );
+      }
+    }
+    engines = { vessel: vesselRange };
   }
 
   const entry = readManifestEntry(raw.entry, options);
@@ -1549,7 +1571,7 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
     id,
     name,
     version,
-    engines: { vessel: vesselRange },
+    ...(engines !== undefined ? { engines } : {}),
     ...(description !== undefined ? { description } : {}),
     side,
     scope,

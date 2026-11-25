@@ -5,8 +5,8 @@
  *
  * - 卡片网格：每技能一卡片，只展示名称 + 来源小标签；点击整卡 → 弹窗详情
  *   （描述 / 元信息 / 正文 / 信任态 / 会话加载），对齐工具页「卡片 + Modal」语言。
- * - GHOST 口径（shared.tsx 局部覆盖，不动 plugin-ui）：卡片 / 弹窗面板 / Section
- *   一律透黑底细线；hover 提亮细线 + surface-hover。
+ * - 表面口径：共享组件默认表面（raised 卡片 / sunken 控件 / raised Section），
+ *   卡片类串与 ToolsPanel 逐字同款；不再套 GHOST 局部皮肤（那是宿主设置域先例）。
  * - Trust badges are server-derived (trustState rule); the frontend only consumes.
  * - trust_set is the only trust write path; rescan rebuilds the index.
  * - Refresh strategy: refetch after mutations + manual refresh + window focus.
@@ -33,10 +33,6 @@ import type { Translator } from './i18n';
 import {
   EmptyState,
   ErrorState,
-  GHOST_BUTTON_CLASS,
-  GHOST_CONTROL_CLASS,
-  GHOST_PANEL_CLASS,
-  GHOST_SECTION_CLASS,
   isUnknownIdError,
   LoadingState,
   type LoadState,
@@ -107,13 +103,12 @@ function MissingSkill({
     <Section
       title={t('detail.missing.title')}
       description={t('detail.missing.description')}
-      className={GHOST_SECTION_CLASS}
       actions={
         <span className="inline-flex flex-wrap items-center gap-2">
-          <Button size="small" className={GHOST_BUTTON_CLASS} disabled={busy} onClick={onRescan}>
+          <Button size="small" disabled={busy} onClick={onRescan}>
             {t('skills.rescan')}
           </Button>
-          <Button size="small" className={GHOST_BUTTON_CLASS} onClick={onBack}>
+          <Button size="small" onClick={onBack}>
             {t('detail.backToList')}
           </Button>
         </span>
@@ -312,13 +307,13 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
           onChange={setQuery}
           placeholder={t('skills.searchPlaceholder')}
           ariaLabel={t('skills.searchAria')}
-          className={`grow basis-60 max-w-search ${GHOST_CONTROL_CLASS}`}
+          className="grow basis-60 max-w-search"
         />
         <Select
           value={source}
           onChange={(event) => setSource(event.target.value as '' | SkillSource)}
           aria-label={t('detail.source')}
-          className={`w-36 ${GHOST_CONTROL_CLASS}`}
+          className="w-36"
         >
           <option value="">{t('skills.sourceAll')}</option>
           <option value="project">project</option>
@@ -329,7 +324,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
           value={tag}
           onChange={(event) => setTag(event.target.value)}
           aria-label={t('detail.tags')}
-          className={`w-40 ${GHOST_CONTROL_CLASS}`}
+          className="w-40"
         >
           <option value="">{t('skills.tagAll')}</option>
           {tagOptions.map((option) => (
@@ -338,14 +333,12 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
             </option>
           ))}
         </Select>
-        <Button className={GHOST_BUTTON_CLASS} onClick={() => void runRescan()} disabled={busy}>
+        <Button onClick={() => void runRescan()} disabled={busy}>
           {t('skills.rescan')}
         </Button>
-        <Button className={GHOST_BUTTON_CLASS} onClick={refresh}>
-          {t('common.refresh')}
-        </Button>
+        <Button onClick={refresh}>{t('common.refresh')}</Button>
         {listState.status === 'ready' ? (
-          <span className="ml-1.5 inline-block rounded-full border border-line bg-transparent px-1.5 py-0.5 font-mono text-xs text-muted">
+          <span className="ml-1.5 inline-block rounded-full bg-sunken px-1.5 py-0.5 font-mono text-xs text-muted">
             {items.length}/{total}
           </span>
         ) : null}
@@ -387,7 +380,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                 <button
                   type="button"
                   onClick={() => setSelectedId(row.id)}
-                  className={`flex min-h-control w-full items-center gap-2 rounded-md px-3 py-2.5 text-left transition-colors duration-150 hover:border-line-strong hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent pointer-coarse:min-h-touch ${GHOST_PANEL_CLASS}`}
+                  className="flex min-h-control w-full items-center gap-2 rounded-md border border-transparent bg-raised px-3 py-2.5 text-left text-muted transition-colors duration-150 hover:border-line hover:bg-surface-hover hover:shadow-elev-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface pointer-coarse:min-h-touch forced-colors:border"
                   aria-haspopup="dialog"
                   title={t('skills.openDetails', { name: row.name })}
                 >
@@ -412,7 +405,6 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
             <span>{t('skills.page', { from: offset + 1, to: offset + items.length, total })}</span>
             <Button
               size="small"
-              className={GHOST_BUTTON_CLASS}
               disabled={offset === 0}
               onClick={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
             >
@@ -420,7 +412,6 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
             </Button>
             <Button
               size="small"
-              className={GHOST_BUTTON_CLASS}
               disabled={offset + items.length >= total}
               onClick={() => setOffset(offset + PAGE_LIMIT)}
             >
@@ -468,7 +459,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                 onBack={closeDetail}
               />
             ) : (
-              <Section title={t('detail.contentError')} className={GHOST_SECTION_CLASS}>
+              <Section title={t('detail.contentError')}>
                 <p role="alert" className="text-sm text-muted wrap-anywhere">
                   {detail?.error?.message ?? selectedId}
                 </p>
@@ -477,7 +468,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
           ) : (
             <>
               <div className="flex flex-wrap items-center gap-2 pr-8">
-                <h2 className="m-0 min-w-0 break-words text-lg font-medium text-ink">
+                <h2 className="m-0 min-w-0 break-words font-mono text-lg font-medium text-ink">
                   {detailEntry.name}
                 </h2>
                 <TrustBadge trust={detailTrust} t={t} />
@@ -493,7 +484,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                   {detailEntry.description}
                 </p>
               ) : null}
-              <Section title={t('detail.meta')} className={GHOST_SECTION_CLASS}>
+              <Section title={t('detail.meta')}>
                 <KeyValueList
                   items={[
                     { label: t('detail.source'), value: detailEntry.source },
@@ -531,7 +522,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                   {t('trust.revokedBanner')}
                 </p>
               ) : null}
-              <Section title={t('detail.content')} className={GHOST_SECTION_CLASS}>
+              <Section title={t('detail.content')}>
                 {detail?.error !== undefined ? (
                   <div
                     role="alert"
@@ -564,11 +555,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                   </div>
                 ) : null}
               </Section>
-              <Section
-                title={t('trust.title')}
-                actions={<TrustBadge trust={detailTrust} t={t} />}
-                className={GHOST_SECTION_CLASS}
-              >
+              <Section title={t('trust.title')} actions={<TrustBadge trust={detailTrust} t={t} />}>
                 {detailTrust === 'unknown' ? (
                   <p className="text-sm text-muted">{t('trust.unknownHint')}</p>
                 ) : null}
@@ -609,7 +596,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                   </Button>
                 </div>
               </Section>
-              <Section title={t('loads.title')} className={GHOST_SECTION_CLASS}>
+              <Section title={t('loads.title')}>
                 {detailLoads.length === 0 ? (
                   <p className="text-sm text-muted">{t('loads.none')}</p>
                 ) : (

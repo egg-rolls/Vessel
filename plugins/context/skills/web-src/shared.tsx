@@ -2,17 +2,12 @@ import { Button, Section } from '@vessel-agent/plugin-ui';
 import { type ReactNode, useEffect, useRef } from 'react';
 import type { Translator } from './i18n';
 
-/**
- * 透黑底细线局部覆盖（对齐 apps/web ghost-control 的 q-ui-style 先例：
- * 摘局部声明，不动 plugin-ui 共享组件 / 共享 token）。
- * 全部是既有 utilities：细线勾形 + 透出页面黑底 + 摘掉 inset 凹槽；
- * 焦点环 / disabled 透明度 / tint-hover 仍由基类提供。
+/*
+ * 表面口径：一律用 plugin-ui 共享组件的默认表面（raised 卡片 / sunken 控件），
+ * 与工具页 ToolsPanel / McpPanel 同款。曾套过整页 GHOST 透黑底细线覆盖——
+ * 那是宿主设置弹窗 / 运行期事件日志的局部皮肤（apps/web ghost-control.ts
+ * 明确「sunken 底仍是其余域的默认」），整页套用造成与工具页观感背离，已摘除。
  */
-export const GHOST_CONTROL_CLASS = 'border border-line-strong bg-transparent shadow-none';
-export const GHOST_BUTTON_CLASS = 'border border-line-strong bg-transparent';
-export const GHOST_PANEL_CLASS = 'border border-line bg-transparent';
-/** Section 的 GHOST 覆盖：摘掉 bg-raised / shadow-elev-1，换透黑底细线（cn=twMerge 生效）。 */
-export const GHOST_SECTION_CLASS = 'border border-line bg-transparent shadow-none';
 
 /**
  * unknown_id 业务错（get / trust_set 对已删除 / 重命名技能的回执）。
@@ -90,10 +85,13 @@ const MODAL_FOCUSABLE =
 
 /**
  * 轻量详情弹窗（工具页 ModalShell 的插件本地等价物）。
- * plugin-ui 没有 Modal 组件，apps/web 的 ModalShell 依赖宿主私有组件与
- * @utility modal-fade/rise/pad，iframe / embed 两层都够不着——这里只用
- * 两层都有的 utilities 落一个零依赖版本：Esc / 遮罩点击关闭、Tab 焦点圈、
- * 打开锁 body 滚动、关闭恢复触发元素焦点。面板口径 GHOST：页面黑底 + 细线。
+ * plugin-ui 没有 Modal 组件，apps/web 的 ModalShell 依赖宿主私有组件（IconButton /
+ * Tooltip）与 portal，iframe 层够不着——这里只用两层都有的 utilities 落一个
+ * 零依赖版本：Esc / 遮罩点击关闭、Tab 焦点圈、打开锁 body 滚动、关闭恢复触发
+ * 元素焦点。面板口径逐字对齐 ModalShell（apps/web components/Modal.tsx）：
+ * raised 面 + elev-4 + gap-3 + min(86dvh, --modal-max-h)；safe-area 内衬与
+ * fade/rise 入场由 skills-modal-* 本地 utility 提供（embed.css / styles.css，
+ * 值全走 host token，独立命名避开宿主同名 keyframes）。
  */
 export function Modal({
   label,
@@ -156,7 +154,7 @@ export function Modal({
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: backdrop mousedown closes the modal
     <div
-      className="fixed inset-0 z-modal flex items-center justify-center overflow-y-auto overscroll-contain bg-scrim p-4"
+      className="skills-modal-fade fixed inset-0 z-modal flex h-dvh w-screen items-center justify-center overflow-y-auto overscroll-contain bg-scrim skills-modal-pad"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -167,15 +165,15 @@ export function Modal({
         aria-modal="true"
         aria-label={label}
         tabIndex={-1}
-        className="relative flex max-h-[86dvh] w-full max-w-modal-lg flex-col overflow-hidden rounded-lg border border-line bg-bg shadow-elev-4"
+        className="skills-modal-rise relative flex max-h-[min(86dvh,var(--modal-max-h))] w-full max-w-modal-lg flex-col gap-3 overflow-hidden rounded-lg border border-line bg-raised p-5 shadow-elev-4 max-compact:p-4"
       >
-        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain p-5 max-compact:p-4">
+        <div className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain p-1 -m-1">
           {children}
         </div>
         <Button
           size="small"
           aria-label={closeLabel}
-          className={`absolute right-2 top-2 ${GHOST_BUTTON_CLASS}`}
+          className="absolute right-2 top-2"
           onClick={onClose}
         >
           ×
