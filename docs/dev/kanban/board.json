@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "持续流生效。★dist服务路径修复(结构性)：canary gateway必须从fleets/canary cwd启动(staticDir解析本舰队dist)——此前从主仓起→服务主仓旧dist→web验证BLOCKED；已修+rebuild新码index-7MTU9pz8.js服务中。固化：canary启动/rebuild一律fleets/canary。当前settings2验批次1(from-card)+4(ui-polish)+T3b/c同窗；验完封存→一次restart加载批次2(leak)+3(plugin)→复验→晋升。federation双向✓；拓扑C待裁"
+      "progress": "★六特性全验闭环晋升main ab63936d(38ee0aec→ab63936d,75文件+5714)：from-card/ui-polish/leak/plugin-default-on/AX三组/inbox-ux✅。待用户重启生产加载。下一轮金丝雀验：msg-visibility/chat-index/skills-ui/hire-prompt(已合并redblue-dev)。dist固化fleets/canary cwd✓。观察O1/O3/O4/O5/O6+plugin-config-read候后续批次。拓扑C/CLI实施待裁"
     },
     {
       "id": "canary-qa-lead",
