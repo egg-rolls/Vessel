@@ -36,6 +36,20 @@ function copyMarker(marker: ResumeAfterRestart): ResumeAfterRestart {
     reason: marker.reason,
     pending_input_ids: [...marker.pending_input_ids],
     background_stopped: marker.background_stopped,
+    // additive 字段（自重启 Option A）：缺省不写，保持旧盘面形状。
+    ...(marker.intent !== undefined ? { intent: marker.intent } : {}),
+    ...(marker.continuation !== undefined
+      ? {
+          continuation: {
+            prompt: marker.continuation.prompt,
+            requested_at: marker.continuation.requested_at,
+            ...(marker.continuation.orchestrator_pid !== undefined
+              ? { orchestrator_pid: marker.continuation.orchestrator_pid }
+              : {}),
+          },
+        }
+      : {}),
+    ...(marker.resume_attempts !== undefined ? { resume_attempts: marker.resume_attempts } : {}),
   };
 }
 

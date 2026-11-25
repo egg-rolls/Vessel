@@ -39,7 +39,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.stop':
     'stop the fleet gracefully (waits for active runs to finish, unlimited + progress; --force cuts runs with audit); --connect for remote stop',
   'help.cmd.restart':
-    'docker-style stop then start (default waits for runs to finish); [name] targets an instance or registered node (default: whole fleet); --force propagates to stop',
+    'docker-style stop then start (default waits for runs to finish); [name] targets an instance or registered node (default: whole fleet); --force propagates to stop; --self reserves a self-restart (returns immediately; orchestrator restarts after the triggering run finishes; --prompt carries the continuation)',
   'help.cmd.agents': 'list agents via agents.list (local gateway or --connect)',
   'help.cmd.errors': 'recent run/tool errors (diagnostics in errorLevel: all)',
   'help.cmd.rpcList':
@@ -255,6 +255,13 @@ export const en: Record<MessageKey, string> = {
   'flag.host': 'listen address',
   'flag.log': 'background log path',
   'flag.timeout': 'wait limit (e.g. 10s / 500ms)',
+  'flag.waitTimeout':
+    'self-restart orchestrator budget to wait for the triggering run (e.g. 120s; aborts on timeout)',
+  'flag.self':
+    'reserve a self-restart: returns immediately; orchestrator restarts gracefully after the triggering run finishes',
+  'flag.prompt': 'self-restart continuation prompt (delivered as the first input after restart)',
+  'flag.session': 'triggering session id (defaults to VESSEL_SESSION_ID)',
+  'flag.run': 'triggering run id (defaults to VESSEL_RUN_ID)',
   'flag.scope': 'reload scope (comma separated: config,plugins)',
   'flag.config': 'config file path',
   'flag.lines': 'number of lines (1-10000; -n alias)',

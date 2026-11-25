@@ -34,15 +34,40 @@ export interface GatewayShutdownResult {
   stopping: boolean;
 }
 
+/**
+ * `node.restart.self` 入参（自重启 Option A，runlost-graceful-restart-audit §4.2）。
+ * cancel=true 时只需 session_id（编排者等待超时后撤销 continuation 标记）。
+ */
+export interface SelfRestartInput {
+  session_id: string;
+  run_id?: string;
+  prompt?: string;
+  cancel?: boolean;
+}
+
+/** `node.restart.self` 结果：只表示「预约已受理 / 已撤销」，重启由 detached 编排者执行。 */
+export interface SelfRestartResult {
+  accepted?: boolean;
+  cancelled?: boolean;
+  run_id?: string;
+  session_id?: string;
+}
+
 export interface AdminMethodsDeps {
   /** asm 注入的实际热重载实现；缺省 → `not_supported`。 */
   reload?: (scopes: string[]) => Promise<GatewayReloadResult>;
   /**
    * asm 注入的优雅退出序列（P0-run-stops P1）：跑现成的 shutdownServeStack
-   * （beginDrain 写 resume 标记 → gateway.stop → … → exit）。缺省 → `not_supported`。
+   * （beginDrain drain-to-quiesce → gateway.stop → … → exit）。缺省 → `not_supported`。
    * **调用方（停止侧 CLI）在超时后仍会强杀**——这里不保证进程一定退出。
    */
   shutdown?: () => Promise<void>;
+  /**
+   * asm 注入的自重启预约（Option A）：写 continuation 标记（RunJournal 单写口）
+   * 并立即返回——触发者 run 自然完成后由 detached 编排者执行 stop/start。
+   * 缺省 → `not_supported`。
+   */
+  selfRestart?: (input: SelfRestartInput) => Promise<SelfRestartResult>;
 }
 
 /**
@@ -120,6 +145,55 @@ export function createAdminMethods(deps: AdminMethodsDeps): RpcMethodDefinition[
           void shutdown().catch(() => undefined);
         }, 0);
         return { stopping: true };
+      },
+    },
+    {
+      // 自重启 Option A（用户裁定）：预约即返回「调用成功，正在重启」——工具调用
+      // 不跨进程死亡（避 run lost）。触发者 run 自然完成 → detached 编排者等 quiesce
+      // → 优雅 stop/start → 新进程按 continuation 标记续作。与 gateway.shutdown 同级
+      // （admin）；模型面经 bash CLI `vessel restart --self` 触达。
+      name: 'node.restart.self',
+      permission: 'admin',
+      params_schema: {
+        type: 'object',
+        required: ['session_id'],
+        properties: {
+          session_id: { type: 'string' },
+          run_id: { type: 'string' },
+          prompt: { type: 'string' },
+          cancel: { type: 'boolean' },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        properties: {
+          accepted: { type: 'boolean' },
+          cancelled: { type: 'boolean' },
+          run_id: { type: 'string' },
+          session_id: { type: 'string' },
+        },
+      },
+      handler: async (params) => {
+        const selfRestart = deps.selfRestart;
+        if (!selfRestart) {
+          throw new RpcError('not_supported', 'node.restart.self is not supported by this gateway');
+        }
+        const sessionId = typeof params.session_id === 'string' ? params.session_id.trim() : '';
+        if (sessionId === '') {
+          throw new RpcError('invalid_params', 'session_id must be a non-empty string');
+        }
+        const cancel = params.cancel === true;
+        const prompt = typeof params.prompt === 'string' ? params.prompt : '';
+        if (!cancel && prompt.trim() === '') {
+          throw new RpcError('invalid_params', 'prompt must be a non-empty string (continuation)');
+        }
+        const runId =
+          typeof params.run_id === 'string' && params.run_id !== '' ? params.run_id : undefined;
+        return selfRestart({
+          session_id: sessionId,
+          ...(runId !== undefined ? { run_id: runId } : {}),
+          ...(cancel ? { cancel: true } : { prompt }),
+        });
       },
     },
   ];

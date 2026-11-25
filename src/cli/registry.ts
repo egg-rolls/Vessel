@@ -409,6 +409,13 @@ export const cliCommands: readonly CliCommand[] = [
         selector: command.selector,
         timeoutMs: command.timeoutMs,
         ...(command.force === true ? { force: true } : {}),
+        ...(command.self === true ? { self: true } : {}),
+        ...(command.prompt !== undefined ? { prompt: command.prompt } : {}),
+        ...(command.session !== undefined ? { session: command.session } : {}),
+        ...(command.run !== undefined ? { run: command.run } : {}),
+        ...(command.waitTimeoutMs !== undefined ? { waitTimeoutMs: command.waitTimeoutMs } : {}),
+        ...(command.orchestrate === true ? { orchestrate: true } : {}),
+        ...(command.handoff !== undefined ? { handoff: command.handoff } : {}),
       });
     },
   },

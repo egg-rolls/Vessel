@@ -1586,6 +1586,62 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * 自重启 Option A（runlost-graceful-restart-audit §4.2 件 3）：跨进程续作投递。
+   *
+   * 新进程启动扫到 continuation 标记且触发者 run 已 completed 时，把嘱托以
+   * `admitInternal {startup:true}` 投递（deliverStartupPrompt 同款通道：直接作
+   * 首轮 run input、不进 inbox）→ 新 run 发起 → 续作开始。这是 rotate 交接嘱托
+   * 的跨进程版——机制已存在，这里只补持久化触发源的公开入口。
+   *
+   * 判据与 announceEnvironmentCard 同口径：no_member / left / closed / retired
+   * 不投递（装配层据此清僵尸标记或降级）。失败如实回报，不抛错。
+   */
+  async deliverContinuationPrompt(
+    sessionId: string,
+    prompt: string,
+  ): Promise<{ delivered: boolean; reason?: string }> {
+    if (typeof prompt !== 'string' || prompt.trim() === '') {
+      return { delivered: false, reason: 'empty_prompt' };
+    }
+    await this.ready;
+    const record = this.registry.getBySession(sessionId);
+    if (record === undefined) return { delivered: false, reason: 'no_member' };
+    if (record.membership === 'left') return { delivered: false, reason: 'left' };
+    if (record.state === 'closed') return { delivered: false, reason: 'closed' };
+    if (this.registry.isRetiredSession(sessionId)) return { delivered: false, reason: 'retired' };
+    try {
+      const outcome = await this.admitInternal(
+        {
+          content: prompt,
+          agent_id: record.id,
+          session_id: sessionId,
+          from: SYSTEM_PRINCIPAL,
+          channel: 'direct',
+          conversation_id: generateConversationId(this.newId),
+          strict: false,
+        },
+        { startup: true },
+      );
+      if (outcome.result.status === 'deferred') {
+        return { delivered: false, reason: outcome.result.reason ?? 'deferred' };
+      }
+      this.logger.info('agent.continuation.delivered', {
+        agent_id: record.id,
+        session_id: sessionId,
+        ...(outcome.result.run_id !== undefined ? { run_id: outcome.result.run_id } : {}),
+      });
+      return { delivered: true };
+    } catch (error) {
+      this.logger.warn('agent.continuation.delivery_failed', {
+        agent_id: record.id,
+        session_id: sessionId,
+        error: errorText(error),
+      });
+      return { delivered: false, reason: 'failed' };
+    }
+  }
+
+  /**
    * `agents.create{from_session_id}`：新 agent + 新 session，种子来自源 transcript。
    *
    * 源 agent / 源 session 零改动、仍可跑；不受「每源一个派生」限制（该限制只

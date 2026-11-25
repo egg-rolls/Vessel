@@ -1749,6 +1749,15 @@ export interface AgentService {
    */
   announceEnvironmentCard(sessionId: string, text: string): Promise<EnvironmentCardAnnouncement>;
   /**
+   * 自重启 Option A：跨进程续作投递（continuation 标记 → startup:true 首轮输入）。
+   * 判据与 announceEnvironmentCard 同口径；`{delivered:false, reason}` 供装配层
+   * 清僵尸标记 / 降级 / 保留重试。见 AgentServiceImpl.deliverContinuationPrompt。
+   */
+  deliverContinuationPrompt(
+    sessionId: string,
+    prompt: string,
+  ): Promise<{ delivered: boolean; reason?: string }>;
+  /**
    * 更新名字 / model / systemPrompt；名字立即生效且保持同 Team（unbound 为 tenant）
    * 内 present 成员唯一。model / systemPrompt 只影响下一次 spawn 的 ExecutionUnit。
    */

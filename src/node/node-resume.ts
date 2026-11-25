@@ -254,7 +254,11 @@ export function createNodeResumer(sources: NodeResumeSources): NodeResumer {
     for (const state of loaded) {
       if (state !== null) states.push(state);
     }
-    return restartCandidates(states);
+    // 自重启 Option A：带 continuation 的标记归 node-continuation 管（无感续作），
+    // 这里跳过——happy path 零疤痕，不发有疤恢复卡。
+    return restartCandidates(states).filter(
+      (candidate) => candidate.marker.continuation === undefined,
+    );
   }
 
   /** 这张卡在事件日志里发过没有（发过就不发第二张）。 */

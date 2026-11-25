@@ -38,6 +38,11 @@ export type RpcErrorCode =
   // 0.52 S1a：node 正在优雅退出（fence 已打开）。**可重试**：等 node 回来再发，
   // 客户端按「稍后重试」处理，不要当终态错误展示。
   | 'gateway_restarting'
+  // 自重启 Option A（node.restart.self）：触发者会话此刻没有活跃 run /
+  // run_id 与活跃 run 不符 / continuation 标记落盘失败。
+  | 'no_active_run'
+  | 'run_mismatch'
+  | 'marker_failed'
   // 0.54 B1（ADR-105 §6 / D4）：时间线订阅的两个稳定码。
   // - `legacy_session_unsupported`：**0.54 之前的旧格式会话**（只有 `events.ndjson`、
   //   没有 timeline 标记）。0.55 起「只读冻结」不再是中间态：这种目录读、写、迁移全不支持，

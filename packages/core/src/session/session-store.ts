@@ -116,12 +116,32 @@ export function normalizeResumeAfterRestart(value: unknown): ResumeAfterRestart 
   const pending = Array.isArray(raw.pending_input_ids)
     ? raw.pending_input_ids.filter((id): id is string => typeof id === 'string')
     : [];
+  // additive 字段（自重启 Option A）：形状非法就丢该字段，不连累基础标记。
+  const intent = raw.intent === 'stop' || raw.intent === 'restart' ? raw.intent : undefined;
+  let continuation: ResumeAfterRestart['continuation'];
+  if (raw.continuation !== null && typeof raw.continuation === 'object') {
+    const c = raw.continuation as Record<string, unknown>;
+    if (typeof c.prompt === 'string' && c.prompt !== '' && typeof c.requested_at === 'number') {
+      continuation = {
+        prompt: c.prompt,
+        requested_at: c.requested_at,
+        ...(typeof c.orchestrator_pid === 'number' ? { orchestrator_pid: c.orchestrator_pid } : {}),
+      };
+    }
+  }
+  const attempts =
+    typeof raw.resume_attempts === 'number' && Number.isFinite(raw.resume_attempts)
+      ? raw.resume_attempts
+      : undefined;
   return {
     run_id: raw.run_id,
     interrupted_at: raw.interrupted_at,
     reason: 'shutdown',
     pending_input_ids: pending,
     background_stopped: raw.background_stopped === true,
+    ...(intent !== undefined ? { intent } : {}),
+    ...(continuation !== undefined ? { continuation } : {}),
+    ...(attempts !== undefined ? { resume_attempts: attempts } : {}),
   };
 }
 

@@ -346,7 +346,20 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
   {
     token: 'restart',
     registryName: 'restart',
-    flags: ['--yes', '--force', '--timeout', '--instance', '--port', '--all', '--data-dir'],
+    flags: [
+      '--yes',
+      '--force',
+      '--timeout',
+      '--instance',
+      '--port',
+      '--all',
+      '--data-dir',
+      '--self',
+      '--prompt',
+      '--session',
+      '--run',
+      '--wait-timeout',
+    ],
   },
   {
     token: 'attention',

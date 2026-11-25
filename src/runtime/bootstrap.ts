@@ -48,6 +48,7 @@ import {
   type TraceRedactor,
   toolOutputRoot,
 } from '../../packages/core/src/index';
+import type { ResumeAfterRestart } from '../../packages/core/src/types/session';
 import type { AgentControlLike } from '../../packages/serve/src/index';
 import {
   type ConfigSnapshotLike,
@@ -55,6 +56,9 @@ import {
   createLocalRpcDispatcher,
   type HubControlLike,
   type LocalRpcDispatcher,
+  RpcError,
+  type SelfRestartInput,
+  type SelfRestartResult,
 } from '../../packages/serve/src/index';
 import type { ReplContext } from '../../packages/tui/src/index';
 import { createAgentControl } from '../agent/agent-control';
@@ -108,6 +112,7 @@ import { resolveConnectToken } from '../gateway/transport-factory';
 import { createHubRuntime } from '../hub/hub-wiring';
 import { t } from '../i18n';
 import type { MockScenarioName } from '../mock/scenarios';
+import { resumeContinuations } from '../node/node-continuation';
 import { createNodeDrainer } from '../node/node-drain';
 import { resolveNodeIdentity } from '../node/node-identity';
 import { createNodeResumer } from '../node/node-resume';
@@ -381,6 +386,11 @@ export interface BootstrapResult {
    * 没有本地执行面（connect 模式）时不提供。
    */
   beginDrain?: () => Promise<void>;
+  /**
+   * 自重启 Option A：`node.restart.self` 的预约受理（写 continuation 标记后立即返回）。
+   * 没有本地执行面（connect 模式 / agent 关闭）时不提供。
+   */
+  selfRestart?: (input: SelfRestartInput) => Promise<SelfRestartResult>;
   cleanup: () => void;
 }
 
@@ -1669,6 +1679,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 3) 卡之后才调既有的 `recoverPendingInputs()` 重放**已接受**的输入（最早 ts FIFO）；
     // 4) 卡片落成消息且随请求进了模型上下文之后才清标记（清标记走 RunJournal 单写口）。
     // 任何一步失败都不阻断启动：标记与 unread 条目都还在，下次启动再判（幂等）。
+    //
+    // 自重启 Option A：continuation 标记的无感续作在发卡**之前**投递（node-continuation）；
+    // 降级出来的普通标记恰好被随后的 node-resume 发卡。node-resume 跳过 continuation 标记。
+    // （标记单写口更新 updateResumeMarker 是函数声明，提升在本函数作用域，见 selfRestart 旁。）
     if (!headless) {
       try {
         if (eventLog === undefined) {
@@ -1679,6 +1693,29 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
             logger.info('agent.inbox.recover_done', { ...recovered });
           }
         } else {
+          // 自重启 Option A（件 3）：无感续作先行——触发者 run 已 completed 的
+          // continuation 标记经 startup:true 通道投递（新 run 起跑），成功即清标记；
+          // 非 completed / attempts 超限降级普通标记，由下面 node-resume 发卡。
+          if (runStore !== undefined) {
+            try {
+              const continuation = await resumeContinuations({
+                session,
+                runStatus: async (runId) => (await runStore.load(runId))?.status,
+                deliver: (sid, prompt) => wiring.service.deliverContinuationPrompt(sid, prompt),
+                updateMarker: updateResumeMarker,
+                warn: (event, meta) => logger.warn(event, meta),
+                info: (event, meta) => logger.info(event, meta),
+              });
+              if (continuation.found > 0) {
+                logger.info('node.continuation.done', { ...continuation });
+              }
+            } catch (error) {
+              // 续作扫描失败不阻断启动：标记仍在盘上，下次启动再试。
+              logger.warn('node.continuation.failed', {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
           const restarted = createNodeResumer({
             session,
             eventLog,
@@ -2320,6 +2357,107 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }
   };
 
+  // ── 自重启 Option A：预约受理（node.restart.self 的 asm 实现）─────────
+  // 写 continuation 标记（RunJournal 单写口 + 注册表竞态防护）后**立即返回**：
+  // 工具调用不跨进程死亡（避 run lost）。触发者 run 自然完成 → detached 编排者
+  // 等 quiesce → 优雅 stop/start → 新进程按标记续作（node-continuation）。
+
+  /**
+   * 标记单写口更新（函数声明，提升供启动恢复段与本实现共用）：只更新「还是同一份
+   * 标记」的那一个，transform 返回 undefined = 清除。落盘走 RunJournal（唯一写口）。
+   * 注意：若标记已在本进程注册表武装（预约受理），journal 合并会把它带回来——
+   * 清除类操作必须先 bundle.resumeMarkers.clear（见 cancel 分支）。
+   */
+  async function updateResumeMarker(
+    sessionId: string,
+    key: { run_id: string; interrupted_at: number },
+    transform: (marker: ResumeAfterRestart) => ResumeAfterRestart | undefined,
+  ): Promise<boolean> {
+    const state = await session.load(sessionId);
+    if (state === null) return false;
+    if (!sameRestartMarker(state.resume_after_restart, key)) return false;
+    const current = state.resume_after_restart;
+    if (current === undefined) return false;
+    const next = transform(current);
+    const journal = journalFactory.transient({
+      runId: 'manual',
+      events: runtimeEvents,
+      sessionId,
+    });
+    if (next === undefined) {
+      const { resume_after_restart: _cleared, ...rest } = state;
+      await journal.saveSessionState(rest);
+    } else {
+      await journal.saveSessionState({ ...state, resume_after_restart: next });
+    }
+    return true;
+  }
+
+  const selfRestart = async (input: SelfRestartInput): Promise<SelfRestartResult> => {
+    const sessionId = input.session_id;
+    if (input.cancel === true) {
+      // 编排者等待超时撤销：先卸注册表（否则 journal 合并会把标记带回来），再清盘。
+      bundle.resumeMarkers.clear(sessionId);
+      const state = await session.load(sessionId);
+      const marker = state?.resume_after_restart;
+      if (state === null || marker === undefined || marker.continuation === undefined) {
+        return { cancelled: false, session_id: sessionId };
+      }
+      const cancelled = await updateResumeMarker(
+        sessionId,
+        { run_id: marker.run_id, interrupted_at: marker.interrupted_at },
+        () => undefined,
+      );
+      logger.info('node.self_restart.cancelled', { session_id: sessionId, cancelled });
+      return { cancelled, session_id: sessionId };
+    }
+    // 受理：触发者必须是该会话此刻的活跃 run（自重启从 run 内发起）。
+    type SelfRestartUnit = ReturnType<typeof executionRuntime.listExecutionUnits>[number];
+    let unit: SelfRestartUnit | undefined;
+    let activeRunId: string | undefined;
+    for (const candidate of executionRuntime.listExecutionUnits()) {
+      const snapshot = candidate.activeRunSnapshot();
+      if (snapshot !== undefined && snapshot.session_id === sessionId) {
+        unit = candidate;
+        activeRunId = snapshot.run_id;
+        break;
+      }
+    }
+    if (unit === undefined || activeRunId === undefined) {
+      throw new RpcError(
+        'no_active_run',
+        'node.restart.self must be triggered from an active run of the session',
+      );
+    }
+    if (input.run_id !== undefined && input.run_id !== activeRunId) {
+      throw new RpcError(
+        'run_mismatch',
+        `run_id ${input.run_id} is not the active run of the session`,
+      );
+    }
+    const requestedAt = Date.now();
+    const marker: ResumeAfterRestart = {
+      run_id: activeRunId,
+      interrupted_at: requestedAt,
+      reason: 'shutdown',
+      pending_input_ids: [
+        ...(agentControl?.service.pendingInboxIdsBySession().get(sessionId) ?? []),
+      ],
+      background_stopped: false,
+      intent: 'restart',
+      continuation: { prompt: input.prompt ?? '', requested_at: requestedAt },
+    };
+    // 先登记竞态保护再落盘：run 终态保存会重建会话状态，注册表让它别把标记冲掉。
+    bundle.resumeMarkers.arm(sessionId, marker);
+    const persisted = await unit.armResumeAfterRestart(sessionId, marker);
+    if (!persisted) {
+      bundle.resumeMarkers.clear(sessionId);
+      throw new RpcError('marker_failed', 'failed to persist the continuation marker');
+    }
+    logger.info('node.self_restart.accepted', { session_id: sessionId, run_id: activeRunId });
+    return { accepted: true, run_id: activeRunId, session_id: sessionId };
+  };
+
   // ── 关闭 ────────────────────────────────────────
   let shuttingDown = false;
 
@@ -2627,6 +2765,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     resumeRun,
     shutdown,
     beginDrain,
+    selfRestart,
     cleanup: () => {
       void shutdown();
     },

@@ -37,7 +37,7 @@ export const zhCN = {
   'help.cmd.stop':
     '优雅停止舰队（等活跃 run 自然跑完，不限时 + 进度；--force 切断 run 并审计）；--connect 远程停',
   'help.cmd.restart':
-    'docker 式先停后启（缺省等 run 跑完再停）；[name] 定向实例或登记 node（缺省整舰队）；--force 传播到 stop 段',
+    'docker 式先停后启（缺省等 run 跑完再停）；[name] 定向实例或登记 node（缺省整舰队）；--force 传播到 stop 段；--self 预约自重启（立即返回，编排者等触发 run 完成后重启，--prompt 续作嘱托）',
   'help.cmd.agents': '经 agents.list 列出 agent（本地 gateway 或 --connect）',
   'help.cmd.errors': '最近 run/tool 错误（errorLevel: all 时含诊断）',
   'help.cmd.rpcList': '列出 RPC 方法 + 参数/返回 schema 摘要（--node 经平台代理定向）',
@@ -239,6 +239,11 @@ export const zhCN = {
   'flag.host': '监听地址',
   'flag.log': '后台日志路径',
   'flag.timeout': '等待上限（如 10s / 500ms）',
+  'flag.waitTimeout': '自重启编排者等触发 run 完成的预算（如 120s；超时不重启）',
+  'flag.self': '预约自重启：立即返回，编排者等触发 run 完成后优雅重启并续作',
+  'flag.prompt': '自重启续作嘱托（重启后作为首轮输入投递）',
+  'flag.session': '触发者会话 id（缺省读 VESSEL_SESSION_ID）',
+  'flag.run': '触发者 run id（缺省读 VESSEL_RUN_ID）',
   'flag.scope': '重载范围（逗号分隔：config,plugins）',
   'flag.config': '配置文件路径',
   'flag.lines': '行数（1-10000；-n 同义）',
