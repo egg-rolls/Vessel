@@ -54,6 +54,14 @@
       "progress": "✅完成合并ab63936d(023fec90 read缺省3/cf8b0308去超时/c5f5b404 rotate0.5/e2e8b89d条带三态)build绿；更正：产物读数误报撤回(本仓build=typecheck+lint无bundle,ADR-006)；待验4点(直读最新3/不超时回退/50%rotate提示/三态切换)；worktree已清"
     },
     {
+      "id": "q-plugin-ui-layer",
+      "title": "微修复：plugin-ui button重置层外压制iframe表面（ISSUE-SS2-1）",
+      "column": "进行中",
+      "owner": "q-plugin-ui-layer",
+      "branch": "fix/q-plugin-ui-layer",
+      "progress": "633d33d4派单(裁定a本轮修)：styles.css L37-43 button重置unlayered压iframe utilities→收进@layer base+四插件build:ui重建+同病面marketplace/usage确认；embed不回归"
+    },
+    {
       "id": "q-drag-reference",
       "title": "会话卡片拖拽引用到输入框（chip链信息：会话/Agent/跨队+team/跨节点+node）",
       "column": "进行中",
