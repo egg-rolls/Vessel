@@ -1253,7 +1253,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // agent 源的身份形状与 A2A 卡片（`chat.agentMessage.from`）一致：用户一眼能对上「谁发给我的」。
   'chat.pending.identity.agent': 'agent:{name}',
   'chat.pending.sameSource': '{count} items',
-  'chat.pending.more': '{count} more not shown',
+  'chat.pending.expandAll': 'Show all ({count} more)',
+  'chat.pending.collapseList': 'Collapse',
   'chat.pendingSend.offline': 'Offline — not sent',
   'chat.pendingSend.sending': 'Sending…',
   'chat.pendingSend.queued': 'Queued · one round ahead',

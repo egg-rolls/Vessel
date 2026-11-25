@@ -40,7 +40,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 | 写协调（scope `lock` / `conflict`） | lock：工作区写锁争用 / 不可用；conflict：`expected_content` 并发修改冲突（均「写未执行」，锁路径 / 错误进明细行） | basic-tools `createWriteCoordNoticeHook`（BeforeLlm，priority 165，drain 内按条目 scope 过 cadence）→ `vessel:notice` | 尾部 | 是（表面记录按签名去重） |
 | 工具面变更（热应用 / MCP toggle / `applyToolsToEntry` 热刷新 / 权限档 / inbox） | `tools: 2 added, 1 removed; …` + `· + ask — <description ≤80 字符>` / `· - fs_write (removed; calls will be rejected)`；首行写清生效点（新会话 / 新 body 才进请求列表） | core EU（`ExecutionUnit.appendToolSurfaceNotice`，每轮请求前 diff 已报面 vs live 宿主）→ `appendInjectedMessages` → `vessel:notice`（scope `tools`） | 尾部 | 是（同一变更只注入一次；回滚照样报；请求 tools[] 是会话起点快照，不随卡变） |
 | 跨重启 / 换 body 的模型变更 | `model: A → B` + 生效点（之前的轮次用 A，本次 run 用 B） | core EU 首 run 比较（目标会话存档 `prompt_context` 指纹 vs 当前 model）→ `appendInjectedMessages` → `vessel:notice`（scope `model`） | 尾部 | 是（同一过渡只注入一次；回滚照样报；指纹缺省不发） |
-| 90% 预警（`limits.*` / `termination.*` / 上下文压力） | `[runtime] input_tokens_limit / context_window: 900k/1M …`（后者推荐 rotate；默认 0.85 且自动压缩开启时不出现） | core `publishLimitWarnings` / `publishContextPressureWarning` → `vessel:limit` | 尾部 | 是 |
+| 90% 预警（`limits.*` / `termination.*`）/ 50% 上下文压力 | `[runtime] input_tokens_limit / context_window: 500k/1M …`（后者推荐 rotate；默认 50%–85% 带内每 run 一次） | core `publishLimitWarnings` / `publishContextPressureWarning` → `vessel:limit` | 尾部 | 是 |
 | 旧 `additionalContext` / 任意 BeforeLlm hook | 自动转 `vessel:hook` / 自定义消息 | `ctx.messages` | 尾部 | 是（每 run 一次） |
 | LLM 输出 / 工具结果 | assistant / tool | `llm.response` / `tool.call.*` | 顺序 | 是 |
 | 压缩 | 摘要 | `compactAsync` / `autoCompactAsync` / `compactContext` | system 之后 | 是（事件日志 + session cache） |
@@ -59,7 +59,7 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 2. 写入 `RunOptions.messages`（`message.injected`，用户输入之前）
 3. 输入 guardrail（可改写用户文本）
 4. 写入用户消息（`user.message`）→ `saveSession`
-5. loop：limits 90% 预警 → termination / usage 检查 → 上下文 90% 压力预警 → `autoCompactAsync`（> `compactThreshold`，默认 85%）→ BeforeLlm hooks（system 只读；`ctx.messages` 追加）→ `appendInjectedMessages` → `buildRequestMessages`（归一化 + 替换基底 system）→ `ensureToolPin`（读会话 tools[] 快照）→ **PrefixGuard** → LLM → assistant / tool 入上下文
+5. loop：limits 90% 预警 → termination / usage 检查 → 上下文 50% 压力预警 → `autoCompactAsync`（> `compactThreshold`，默认 85%）→ BeforeLlm hooks（system 只读；`ctx.messages` 追加）→ `appendInjectedMessages` → `buildRequestMessages`（归一化 + 替换基底 system）→ `ensureToolPin`（读会话 tools[] 快照）→ **PrefixGuard** → LLM → assistant / tool 入上下文
 6. `finalizeRun` → save session / checkpoint
 
 ## 持久化与恢复
@@ -80,9 +80,9 @@ paths: [packages/core/src/context/**, packages/core/src/runtime/execution-unit.t
 | 保留 | system 全保留；最近非 system 在 30% 预算内，至少 2 条 |
 | 工具结果清空 | 保留最近结果至累计 ≤ `maxTokens × 5%`（至少 1、最多 10）；占位 `[cleared <tool>: <命令摘要> -> exit <n>, <n> lines]`，不含完整参数 / 输出 |
 | 摘要 | provider summarizer；15s 超时；per-session 连续 3 次失败熔断 10 分钟，`force` 绕过；输出预算 `clamp(removedTokens / 8, 2048, 8192)`，合并旧摘要，模板含“当前用户要求（原话）” |
-| 结果与事件 | `role: system` + `compaction_summary: true`，旧摘要移除、system 提前；`context.compacted`（auto / overflow / manual）、`message.compaction`（可选 `cleared_tool_call_ids` / `degraded`）、`context.pressure`（90%–threshold，每 run 一次） |
+| 结果与事件 | `role: system` + `compaction_summary: true`，旧摘要移除、system 提前；`context.compacted`（auto / overflow / manual）、`message.compaction`（可选 `cleared_tool_call_ids` / `degraded`）、`context.pressure`（50%–threshold，每 run 一次） |
 
-压缩摘要经 `RunJournal` 追加 `message.compaction` 事实事件（Run 内以当前 `runId`，两次 Run 之间的手动 `/compact` 用 `run_id='manual'`），恢复时从 session cache + 事件日志重建。**90% 与 threshold 分工**：`context.tokenCount / maxTokens` 到 90% 且未超过 `compactThreshold` 时不压缩，发 `context.pressure` + `vessel:limit` 推荐 `agent(rotate)`；超过阈值（默认 85%）由 `autoCompactAsync` 自动压缩，因此默认配置（自动压缩开启）下压力提示不会出现。`limits.inputTokensLimit` 是另一套机制：仅在显式配置后才做 90% usage 预警与硬上限判定，缺省不限。`rotate` 不自动触发；模型发起的 rotate 必须经人类权限确认。**run 内 overflow 不改写历史**：provider 报上下文超限 ⇒ 把该次 400 记成真实锚点 + 地板、追加一张「超限」卡（`appendContextOverflowNotice`，scope `context`），本次 Run 以原始错误收尾；压缩留到下一个段起点（旧 `forceCompact` 就地重试已删）。
+压缩摘要经 `RunJournal` 追加 `message.compaction` 事实事件（Run 内以当前 `runId`，两次 Run 之间的手动 `/compact` 用 `run_id='manual'`），恢复时从 session cache + 事件日志重建。**50% 与 threshold 分工**：`context.tokenCount / maxTokens` 到 50%（用户裁定 `CONTEXT_PRESSURE_WARN_RATIO`，原 90%）且未超过 `compactThreshold` 时不压缩，发 `context.pressure` + `vessel:limit` 推荐 `agent(rotate)`；超过阈值（默认 85%）由 `autoCompactAsync` 自动压缩 —— 默认配置（自动压缩开启）下压力提示在 50%–85% 带内每 run 出现一次，50% 即建议切换防堆积。`limits.inputTokensLimit` 是另一套机制：仅在显式配置后才做 90% usage 预警与硬上限判定，缺省不限。`rotate` 不自动触发；模型发起的 rotate 必须经人类权限确认。**run 内 overflow 不改写历史**：provider 报上下文超限 ⇒ 把该次 400 记成真实锚点 + 地板、追加一张「超限」卡（`appendContextOverflowNotice`，scope `context`），本次 Run 以原始错误收尾；压缩留到下一个段起点（旧 `forceCompact` 就地重试已删）。
 
 ### 压缩索引与按需读回（0.57）
 

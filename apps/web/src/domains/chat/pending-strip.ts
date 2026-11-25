@@ -14,7 +14,8 @@
  * 口径（与 main 的裁决一致）：
  * - `held` 在前、按 ts 升序；其余（unread）按 ts 升序 —— 只做「谁在等」的稳定排序，
  *   不假装能拖拽换序（条目的先后只有 `ts` 是权威的，落盘后没有队列序号）。
- * - 条带只展示前 `PREVIEW_COUNT` 组，其余折叠成「还有 N 条」。
+ * - 条带三态（用户裁定，见 {@link PendingStripMode}）：收起只留 badge 计数；默认展示前
+ *   `PREVIEW_COUNT` 组（数量可经组件 prop 配置），其余折叠；展开给完整列表（限高 + 滚动）。
  * - **同源重复折叠**：相邻两条 `from` 相同、状态相同、且正文互为前缀或一条包含另一条
  *   时并成一组（组头显示一条摘要 + 「N 条」，可展开看全部）。这是**纯展示**折叠：
  *   `ordered` 仍是逐条的真实条目，数据不删。
@@ -181,8 +182,24 @@ export function groupSenderName(group: PendingStripGroup): string | undefined {
   return undefined;
 }
 
-/** 条带里默认展示的摘要条数（其余折叠）。 */
+/**
+ * 条带里默认展示的摘要条数（其余折叠）。
+ *
+ * 这是**缺省值**：宿主可经 `PendingStrip` 的 `previewCount` prop 覆盖（用户裁定
+ * 「默认显示 3 条，数量可配置」）；展开态不受它限制（完整列表 + 限高滚动）。
+ */
 export const PREVIEW_COUNT = 3;
+
+/**
+ * 条带的三态展示（用户裁定）：
+ *
+ * - `collapsed`：只留 badge 计数（「待处理 · N」那一行），不画任何卡片；
+ * - `default`（缺省）：展示前 `previewCount` 组，其余折叠成「展开全部（还有 N 条）」；
+ * - `expanded`：完整列表，高度上限 + 滚动（条带不该把输入区挤出屏幕）。
+ *
+ * 纯展示状态：不触发 RPC、不改条目；同源折叠组（「N 条」）在三态里各自独立开合。
+ */
+export type PendingStripMode = 'collapsed' | 'default' | 'expanded';
 
 /** held 在前（ts 升序），其余按 ts 升序；同 ts 用 message_id 兜底保证稳定。 */
 export function orderPendingEntries(entries: readonly PendingStripEntry[]): PendingStripEntry[] {

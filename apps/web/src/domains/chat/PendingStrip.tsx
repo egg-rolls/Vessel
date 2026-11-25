@@ -51,9 +51,16 @@
  *
  * 宽度与消息列表同宽同内边距：它渲染在 `.content-stage` 里（与转录区同一个容器），
  * 外层用 `.conversation-scroll` 同款内衬，内层用同款 `--chat-content-w` 列宽 + 居中。
+ *
+ * **三态展示（用户裁定）**：`collapsed` 只留 badge 计数（卡头那行按钮），不画卡片；
+ * `default`（缺省）显示前 `previewCount` 组（缺省 3，数量可配置），其余折叠成
+ * 「展开全部（还有 N 条）」；`expanded` 给完整列表，高度上限 + 滚动。卡头按钮在
+ * 「badge ↔ 卡片」之间开合，footer 按钮在「默认 ↔ 全部」之间开合；都是纯展示状态，
+ * 不触发 RPC。同源折叠组（「N 条」）与三态无关，各自独立开合。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useToast } from '../../components/ToastProvider';
+import { Icon } from '../../components/ui';
 import type { GatewayClient } from '../../gateway/client';
 import type {
   AgentClaimResponse,
@@ -72,6 +79,8 @@ import {
   ownedBySession,
   type PendingStripEntry,
   type PendingStripGroup,
+  type PendingStripMode,
+  PREVIEW_COUNT,
   pendingIdentityOf,
   pendingStripView,
 } from './pending-strip';
@@ -334,6 +343,7 @@ export function PendingStrip({
   onRetryPending,
   onEditPending,
   onDismissPending,
+  previewCount = PREVIEW_COUNT,
 }: {
   /** 当前会话（`selectedId`）：条带只显示归属它的待处理输入。 */
   sessionId: string | null;
@@ -380,6 +390,11 @@ export function PendingStrip({
   onEditPending?: (pending: PendingSend) => void;
   /** 删掉一条客户端 pending（它还没成为服务端条目时，「取消」就是纯本地删除）。 */
   onDismissPending?: (pending: PendingSend) => void;
+  /**
+   * 默认态展示的组数（用户裁定「默认 3 条，数量可配置」）；缺省 {@link PREVIEW_COUNT}。
+   * 展开态不受它限制（完整列表 + 限高滚动）。
+   */
+  previewCount?: number;
 }) {
   const toast = useToast();
   /** 服务端最近一次读数；带归属会话，切会话时旧响应不会串到新会话上。 */
@@ -390,6 +405,11 @@ export function PendingStrip({
   const [reloadTick, setReloadTick] = useState(0);
   /** 同源折叠组的展开状态（只影响展示：组内条目各自仍是真实的待处理条目）。 */
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set());
+  /**
+   * 条带三态（用户裁定）：收起 = 只 badge；默认 = 前 previewCount 组；展开 = 全部 + 限高滚动。
+   * 纯本地展示状态，不触发 RPC；切会话不重置（它是用户的查看偏好，不是会话数据）。
+   */
+  const [mode, setMode] = useState<PendingStripMode>('default');
 
   /**
    * 读一次盘。失败保留上一份读数（条带是提示，不把网络抖动升级成全局错误）。
@@ -470,7 +490,15 @@ export function PendingStrip({
     return () => window.clearInterval(id);
   }, [sessionId, hasPending, load]);
 
-  const view = useMemo(() => pendingStripView(rows.map((row) => row.entry)), [rows]);
+  // 展开态给全部组（slice 上界取 MAX_SAFE_INTEGER = 不裁）；默认态按 previewCount 裁。
+  const view = useMemo(
+    () =>
+      pendingStripView(
+        rows.map((row) => row.entry),
+        mode === 'expanded' ? Number.MAX_SAFE_INTEGER : previewCount,
+      ),
+    [rows, mode, previewCount],
+  );
   /** 条目 id → 条带行（`QueuedNotice` 要吃 `QueuedSubmission`，动作还要认出客户端那条）。 */
   const byId = useMemo(() => new Map(rows.map((row) => [row.entry.message_id, row])), [rows]);
 
@@ -893,70 +921,104 @@ export function PendingStrip({
           `.conversation-scroll > *` 的 `--chat-content-w` 列宽 + 居中。 */}
       <div className="px-[var(--content-pad-inline)]">
         <div className="mx-auto flex max-w-[var(--chat-content-w,860px)] flex-col gap-1.5">
-          <p className="m-0 font-mono text-2xs tracking-wide text-faint">{label}</p>
+          {/* 卡头 = badge + 三态开关：点击在「只 badge ↔ 卡片」之间开合（用户裁定）。
+              chevron 与 StreamCard 同形：收起指右，展开旋转 90° 指下。 */}
+          <button
+            type="button"
+            className="m-0 flex items-center gap-1 self-start font-mono text-2xs tracking-wide text-faint hover:text-ink"
+            onClick={() => setMode((prev) => (prev === 'collapsed' ? 'default' : 'collapsed'))}
+            aria-expanded={mode !== 'collapsed'}
+          >
+            <Icon
+              name="chevron"
+              className={`event-toggle-icon h-3 w-3 ${mode === 'collapsed' ? '' : 'rotate-90'}`}
+            />
+            {label}
+          </button>
 
-          <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
-            {view.preview.map((group) => {
-              // 组头 + 其余：`head` 取不到就整组跳过（不渲染半张卡）。
-              const [head, ...rest] = rowsOf(group, byId);
-              if (head === undefined) return null;
-              const folded = group.entries.length > 1;
-              const open = folded && expandedGroups.has(group.key);
-              const fold = folded
-                ? { count: group.entries.length, open, onToggle: () => toggleGroup(group.key) }
-                : undefined;
-              // 组内条目同源（`from` 相同），所以显示名只需算一次：组里任一条有名字，
-              // 组头与展开后的每一条都用它 —— 同一张卡的不同行不该出现两种身份写法。
-              const senderName = groupSenderName(group);
-              return (
-                <li key={group.key} className="flex flex-col gap-1.5">
-                  <PendingRow
-                    item={head.item}
-                    identity={identityOf(head.entry, senderName)}
-                    human={head.entry.from === HUMAN_SOURCE}
-                    {...(labelOf(head) !== undefined ? { label: labelOf(head) } : {})}
-                    onCancel={cancelRow}
-                    onEdit={editOf(head)}
-                    onClaim={claimOf(head)}
-                    onUnhold={
-                      head.pending === undefined && canUnhold(head.entry) ? unholdRow : undefined
-                    }
-                    onRetry={retryOf(head)}
-                    fold={fold}
-                  />
-                  {/* 展开后逐条列出：仍是那些待处理条目，写操作按各自的条目 id 与来源判定。 */}
-                  {open && (
-                    <ul className="m-0 flex list-none flex-col gap-1.5 border-l border-line pl-2">
-                      {rest.map((row) => (
-                        <li key={row.entry.message_id}>
-                          <PendingRow
-                            item={row.item}
-                            identity={identityOf(row.entry, senderName)}
-                            human={row.entry.from === HUMAN_SOURCE}
-                            {...(labelOf(row) !== undefined ? { label: labelOf(row) } : {})}
-                            onCancel={cancelRow}
-                            onEdit={editOf(row)}
-                            onClaim={claimOf(row)}
-                            onUnhold={
-                              row.pending === undefined && canUnhold(row.entry)
-                                ? unholdRow
-                                : undefined
-                            }
-                            onRetry={retryOf(row)}
-                          />
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+          {mode !== 'collapsed' && (
+            <div className={mode === 'expanded' ? 'max-h-[40vh] overflow-y-auto' : undefined}>
+              <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+                {view.preview.map((group) => {
+                  // 组头 + 其余：`head` 取不到就整组跳过（不渲染半张卡）。
+                  const [head, ...rest] = rowsOf(group, byId);
+                  if (head === undefined) return null;
+                  const folded = group.entries.length > 1;
+                  const open = folded && expandedGroups.has(group.key);
+                  const fold = folded
+                    ? { count: group.entries.length, open, onToggle: () => toggleGroup(group.key) }
+                    : undefined;
+                  // 组内条目同源（`from` 相同），所以显示名只需算一次：组里任一条有名字，
+                  // 组头与展开后的每一条都用它 —— 同一张卡的不同行不该出现两种身份写法。
+                  const senderName = groupSenderName(group);
+                  return (
+                    <li key={group.key} className="flex flex-col gap-1.5">
+                      <PendingRow
+                        item={head.item}
+                        identity={identityOf(head.entry, senderName)}
+                        human={head.entry.from === HUMAN_SOURCE}
+                        {...(labelOf(head) !== undefined ? { label: labelOf(head) } : {})}
+                        onCancel={cancelRow}
+                        onEdit={editOf(head)}
+                        onClaim={claimOf(head)}
+                        onUnhold={
+                          head.pending === undefined && canUnhold(head.entry)
+                            ? unholdRow
+                            : undefined
+                        }
+                        onRetry={retryOf(head)}
+                        fold={fold}
+                      />
+                      {/* 展开后逐条列出：仍是那些待处理条目，写操作按各自的条目 id 与来源判定。 */}
+                      {open && (
+                        <ul className="m-0 flex list-none flex-col gap-1.5 border-l border-line pl-2">
+                          {rest.map((row) => (
+                            <li key={row.entry.message_id}>
+                              <PendingRow
+                                item={row.item}
+                                identity={identityOf(row.entry, senderName)}
+                                human={row.entry.from === HUMAN_SOURCE}
+                                {...(labelOf(row) !== undefined ? { label: labelOf(row) } : {})}
+                                onCancel={cancelRow}
+                                onEdit={editOf(row)}
+                                onClaim={claimOf(row)}
+                                onUnhold={
+                                  row.pending === undefined && canUnhold(row.entry)
+                                    ? unholdRow
+                                    : undefined
+                                }
+                                onRetry={retryOf(row)}
+                              />
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
 
-          {view.hidden > 0 && (
-            <p className="m-0 text-2xs text-faint">
-              {t('chat.pending.more', { count: view.hidden })}
-            </p>
+          {/* 默认态：其余条目折叠成一颗「展开全部」；展开态：一颗「收起」回到默认。
+              都是纯展示切换，不触发 RPC。 */}
+          {mode === 'default' && view.hidden > 0 && (
+            <button
+              type="button"
+              className="m-0 self-start font-mono text-2xs text-faint hover:text-ink"
+              onClick={() => setMode('expanded')}
+            >
+              {t('chat.pending.expandAll', { count: view.hidden })}
+            </button>
+          )}
+          {mode === 'expanded' && (
+            <button
+              type="button"
+              className="m-0 self-start font-mono text-2xs text-faint hover:text-ink"
+              onClick={() => setMode('default')}
+            >
+              {t('chat.pending.collapseList')}
+            </button>
           )}
         </div>
       </div>

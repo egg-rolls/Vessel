@@ -379,7 +379,8 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       throw new LimitExceededError(limitBlock);
     }
 
-    // 90%–95%：不压缩，只提示换 ExecutionUnit；>95% 交给段起点压缩。
+    // 压力预警线（默认 50%）–压缩阈值（默认 85%）：不压缩，只提示换 ExecutionUnit；
+    // 超过压缩阈值交给段起点压缩。
     // 自动压缩关闭时没有后续压缩降水位，提示不设上界（见 publishContextPressureWarning）。
     ctx.controls.publishContextPressureWarning();
 

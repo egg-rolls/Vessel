@@ -1198,7 +1198,8 @@ export const messages = {
   // agent 源的身份形状与 A2A 卡片一致（`agent:<名字>`）：agent 是产品术语，中文不译。
   'chat.pending.identity.agent': 'agent:{name}',
   'chat.pending.sameSource': '{count} 条',
-  'chat.pending.more': '还有 {count} 条未展开',
+  'chat.pending.expandAll': '展开全部（还有 {count} 条）',
+  'chat.pending.collapseList': '收起',
   'chat.pendingSend.offline': '连不上网关，没发出',
   'chat.pendingSend.sending': '发送中…',
   'chat.pendingSend.queued': '已排队，前面还有一轮',

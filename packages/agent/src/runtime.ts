@@ -1879,7 +1879,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
    * 两件事一起换，body 不重建、历史不动 —— 「转正那天同一具活着的 body
    * 不必重建，但下一次 run 的上下文策略按新身份生效」：
    * - 自动压缩开关（entry 上的可变 `contextPolicy`，per-Run 工厂读取）；
-   * - 80%–90% 压力提示的尾句文案（core `ExecutionUnit.applyContextPolicy`）。
+   * - 50%–85% 压力提示的尾句文案（core `ExecutionUnit.applyContextPolicy`）。
    *
    * 返回实际应用的 body 数。未 spawn（没有活体）时返回 0：那种情况下策略由
    * 下一次 `spawn` 的 `contextPolicyFor(role)` 生效，两条路径共用同一份映射。
