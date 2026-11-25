@@ -196,6 +196,8 @@ export const zhCN = {
   'flag.model': '模型（provider/model）',
   'flag.visibility': '可见性',
   'flag.systemPrompt': '系统提示词',
+  'flag.startupPrompt': '首条任务消息，创建即投递（触发首轮 run）',
+  'flag.startupPromptFile': '从文件读取首条任务消息',
   'flag.workspace': '成员工作目录',
   'flag.messageId': '投递给已有 inbox 消息（需配合 --interrupt）',
   'flag.state': '按状态过滤',

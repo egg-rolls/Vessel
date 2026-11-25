@@ -778,6 +778,14 @@ export interface CreateMemberInput {
   seed?: CreateSeed;
   /** 仅 `from_session_id` 存在时合法；`sessions.get().messages` 下标 */
   keep_messages?: number;
+  /**
+   * q-hire-prompt：可选启动任务（与 rotate 的 startup_prompt 语义对齐）。
+   * 非空时创建提交后立即作为首条 user message 投递（admitInternal startup:true，
+   * 直接作首轮 run input，不进 inbox），等价于 hire + send 原子化；后续 send 排队。
+   * 缺省 = 现行为（创建后 idle 等消息）。同名复用成员上声明 → invalid_input。
+   * 身份渲染沿用 create 路径裁定：调用方写的开场任务，按正文渲染，不标 input_name。
+   */
+  startup_prompt?: string;
 }
 
 /** 批量创建（条目并行，逐条结果） */

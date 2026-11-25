@@ -998,6 +998,8 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 from_session_id: { type: 'string', minLength: 1 },
                 seed: { type: 'string', enum: ['copy', 'compact'] },
                 keep_messages: { type: 'integer', minimum: 0 },
+                // q-hire-prompt：可选启动任务（非空校验 / 字节上限由 service 统一做）。
+                startup_prompt: { type: 'string' },
               },
             },
           },
@@ -1063,6 +1065,8 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
             const rawWorkspace = optionalEntryString(entry, 'workspace', 'agents.create');
             // q-session-naming：首会话显式标题；所有分支共用，形状校验逐条。
             const title = optionalEntryString(entry, 'title', 'agents.create');
+            // q-hire-prompt：可选启动任务；所有分支共用，形状校验逐条（service readContent）。
+            const startupPrompt = optionalEntryString(entry, 'startup_prompt', 'agents.create');
             // CREATE-0.39：有来源走独立分支（种子复制 / 压缩），不解析 team workspace；
             // 结构字段由服务从源派生（identity 不传）。
             const fromSessionId = optionalEntryString(entry, 'from_session_id', 'agents.create');
@@ -1101,6 +1105,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                   from_session_id: fromSessionId,
                   ...(seed !== undefined ? { seed } : {}),
                   ...(projectedKeep !== undefined ? { keep_messages: projectedKeep } : {}),
+                  ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
                   spawnedBy: ownerId ?? 'human',
                 },
               };
@@ -1138,6 +1143,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                     ...(model !== undefined ? { model } : {}),
                     ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
                     ...(visibility !== undefined ? { visibility } : {}),
+                    ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
                     spawnedBy: ownerId ?? 'human',
                   },
                 };
@@ -1152,6 +1158,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                   ...(model !== undefined ? { model } : {}),
                   ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
                   ...(visibility !== undefined ? { visibility } : {}),
+                  ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
                   ...identity,
                   spawnedBy: ownerId ?? 'human',
                 },
@@ -1178,6 +1185,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                   ...(model !== undefined ? { model } : {}),
                   ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
                   ...(visibility !== undefined ? { visibility } : {}),
+                  ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
                   ...identity,
                 },
               };
@@ -1205,6 +1213,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                   ...(model !== undefined ? { model } : {}),
                   ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
                   ...(visibility !== undefined ? { visibility } : {}),
+                  ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
                   ...identity,
                 },
               };
@@ -1220,6 +1229,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 ...(model !== undefined ? { model } : {}),
                 ...(systemPrompt !== undefined ? { system_prompt: systemPrompt } : {}),
                 ...(visibility !== undefined ? { visibility } : {}),
+                ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
                 ...identity,
               },
             };

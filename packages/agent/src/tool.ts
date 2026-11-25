@@ -272,6 +272,8 @@ function mapDerived(
   if (record.title !== undefined) input.title = record.title;
   if (record.model !== undefined) input.model = record.model;
   if (record.system_prompt !== undefined) input.systemPrompt = record.system_prompt;
+  // q-hire-prompt：可选启动任务（形状校验在 service 逐条做，batch 不整批抛错）。
+  if (record.startup_prompt !== undefined) input.startup_prompt = record.startup_prompt;
   // create 的 visibility 由 service 强制 team；传了非 team 值时由 service 逐条拒绝。
   if (record.visibility !== undefined) input.visibility = record.visibility;
   return input;
@@ -440,6 +442,9 @@ export function createAgentTool(
       'hire: contractor owned by the caller (any member may hire), bound to the caller team if it ' +
       'has one. ' +
       'create/hire accept an optional title for the first session (default: the member name). ' +
+      'create/hire accept an optional startup_prompt: the first user message (the task), ' +
+      'delivered at creation so the new member starts its first run at once — no follow-up ' +
+      'send needed; omit = created idle, waiting for messages. ' +
       'send: dispatch a message (live queue now, gone resume first, rotating queue for the new ' +
       'body); returns immediately. This is the default channel for reporting to your parent: ' +
       'progress, blockers, a decision you made, or a question you cannot settle alone goes here ' +
@@ -484,7 +489,7 @@ export function createAgentTool(
         members: {
           type: 'array',
           description:
-            'create/hire: [{name?, model?, system_prompt?, visibility?, title?}] ' +
+            'create/hire: [{name?, model?, system_prompt?, visibility?, title?, startup_prompt?}] ' +
             '(model = explicit pin, omit to follow the node default model); ' +
             'close: [member id or session id]',
         },
@@ -545,6 +550,9 @@ export function createAgentTool(
           // 成员侧 schema 沿用这一份（runtime 的 MEMBER_AGENT_PROPERTIES 只做 fallback），
           // 所以「唯一交接通道」这句话写在这里对两侧同时生效。
           description:
+            'create/hire: optional first user message (the task), delivered at creation — ' +
+            'the new member starts its first run at once, no follow-up send needed; ' +
+            'omit = created idle. Cannot be combined with members at the top level. ' +
             'rotate: required; the new body first message and the only handoff channel — ' +
             'it does not inherit this conversation, so write everything the next body needs',
         },
@@ -840,7 +848,7 @@ export function createAgentTool(
               ...(caller.team_id !== undefined ? { teamId: caller.team_id } : {}),
             };
           }
-          const singles = ['name', 'model', 'system_prompt', 'visibility'];
+          const singles = ['name', 'model', 'system_prompt', 'visibility', 'startup_prompt'];
           if (record.members !== undefined) {
             assertExclusive(record, singles, 'members', action);
             const entries = readBatch(record, 'members', action).map((entry) =>

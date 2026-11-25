@@ -123,6 +123,8 @@ export const DYNAMIC_VALUE_FLAGS: readonly string[] = [
   '--name',
   '--model',
   '--system-prompt',
+  '--startup-prompt',
+  '--startup-prompt-file',
   '--workspace',
   '--mention',
   '--from',
@@ -382,7 +384,16 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [
       {
         name: 'create',
-        flags: ['--json', '--name', '--model', '--visibility', '--system-prompt', '--workspace'],
+        flags: [
+          '--json',
+          '--name',
+          '--model',
+          '--visibility',
+          '--system-prompt',
+          '--startup-prompt',
+          '--startup-prompt-file',
+          '--workspace',
+        ],
         flagValues: { '--visibility': AGENT_VISIBILITIES },
       },
       {

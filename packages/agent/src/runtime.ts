@@ -853,7 +853,7 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
   members: {
     type: 'array',
     description:
-      'create/hire: [{name?, model?, system_prompt?, visibility?, title?}]; ' +
+      'create/hire: [{name?, model?, system_prompt?, visibility?, title?, startup_prompt?}]; ' +
       'close: [member id or session id]',
   },
   startup_prompt: {
@@ -861,6 +861,9 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
     // 正常路径沿用父级（tool.ts）那份描述，这里只是父级 schema 缺失时的兜底；
     // 两份措辞保持一致，避免成员侧又说回「必填即可」。
     description:
+      'create/hire: optional first user message (the task), delivered at creation — ' +
+      'the new member starts its first run at once, no follow-up send needed; ' +
+      'omit = created idle. ' +
       'rotate: required; the new body first message and the only handoff channel — ' +
       'it does not inherit this conversation, so write everything the next body needs',
   },
