@@ -54,6 +54,14 @@
       "progress": "✅完成合并ab63936d(023fec90 read缺省3/cf8b0308去超时/c5f5b404 rotate0.5/e2e8b89d条带三态)build绿；更正：产物读数误报撤回(本仓build=typecheck+lint无bundle,ADR-006)；待验4点(直读最新3/不超时回退/50%rotate提示/三态切换)；worktree已清"
     },
     {
+      "id": "q-plugin-lifecycle-impl",
+      "title": "插件生命周期最优实现（per-capability+O5修复+注销API+版本跟踪，不留中间态）",
+      "column": "进行中",
+      "owner": "q-plugin-lifecycle-impl",
+      "branch": "feat/q-plugin-lifecycle-impl",
+      "progress": "a65c2606派单(用户裁定最优一步到位)：per-capability fail-honest+O5三层(enabled liveConfig/pendingRestart badge/补广播)+注销API消pii半态(弃过渡闸委屈代码)+内置跟踪vessel版本+child settings热；基于plugin-lifecycle-design.md"
+    },
+    {
       "id": "q-card-robust",
       "title": "卡片渲染健壮性修复：permission同构P-A+PII按需发射+env闸门白名单",
       "column": "进行中",
