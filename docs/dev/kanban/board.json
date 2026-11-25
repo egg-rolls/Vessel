@@ -112,10 +112,10 @@
     {
       "id": "q-graceful-selfrestart",
       "title": "完全优雅stop/restart(drain-to-quiesce)+自重启Option A（用户裁定）",
-      "column": "进行中",
-      "owner": "q-graceful-selfrestart",
-      "branch": "feat/q-graceful-selfrestart",
-      "progress": "91d6add1派单：stop/restart缺省完全优雅等run跑完(非打断+marker),--force才非优雅；自重启Option A早返回restarting+detached编排者+等待反转+续作唤醒；inbox启动sweep修G1-G7；基于runlost-audit设计P0-P3；①drain-to-quiesce②自重启③inbox唤醒④指路"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并1d5e4688(f0dabd9d drain-to-quiesce/949cff6b Option A --self自重启/671357d5 inbox唤醒G1-G7/8d61103c指路)build绿；stop/restart缺省等run真跑完不限时+进度,--force唯一非优雅；vessel restart --self --prompt早返回→run自然完成无run lost→重启→嘱托自动续跑；待金丝雀验+用户重启后可用--self优雅自重启续作"
     },
     {
       "id": "q-skills-style",
