@@ -72,10 +72,10 @@
     {
       "id": "q-msg-visibility",
       "title": "消息显示设置整合：7类型独立toggle统一分组（用户裁定）",
-      "column": "进行中",
-      "owner": "q-msg-visibility",
-      "branch": "feat/q-msg-visibility",
-      "progress": "f3d8b60b派单：思考/工具/环境/来源/系统独立toggle归一组；核心恒显；showInternalEvents兼容映射；messageVisibility统一配置；①调研②config+渲染③设置UI④build"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并9d657de8(02d9a596调研/899d7f9e config+渲染16文件+358/7978ad74设置UI/7f4914ef门禁)22文件+620 build绿；messageVisibility五布尔+旧键回退+设置分组+历史思考纳入minimal；待验(未配置观感逐字节一致/存量showInternalEvents兼容/五toggle独立)；worktree已清"
     },
     {
       "id": "q-chat-index",
@@ -96,10 +96,10 @@
     {
       "id": "q-skills-discovery",
       "title": "技能插件搜索常用skills目录/marketplace（P3特性设计）",
-      "column": "进行中",
-      "owner": "q-skills-discovery",
-      "branch": "design/q-skills-discovery",
-      "progress": "16ea13a4派单(设计零代码)：discovery源配置→搜索→预览→安装+TOFU不绕过+安全分级+UI衔接q-skills-ui；交付skills-discovery-design.md"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅设计完成合并64eac4c4(876行13节6提交)：skills内部模块+三源适配器(registry/github/local)+七步安装管线+安装≠信任机制+工具面零改动(人的供应链决策)+7additive RPC+UI双tab；P2纠偏(import未落地)；6开放问题留实现评审；待用户批准实施分期P3a/b/c；worktree已清"
     },
 
     {
