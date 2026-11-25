@@ -135,12 +135,17 @@ function convertKeys(
  * - observability.log.modules：事件名前缀（`bash_job` 这类下划线是名字的一部分）
  * - models.vendors / models.aliases：vendor id / 别名（用户自定义 id，原样保留）
  * - models.vendors.<id>.models：wire model id（可含 `/`、`.`、`_`，同 pricing.models）
+ * - plugins[].config 子树（含嵌套）：插件 settings 键 = manifest settings 字段名
+ *   （snake_case，如 thinking-intensity 的 default_level / budget_high），同属
+ *   用户自定义 map 键。注意 convertKeys 数组递归不追加索引，故 plugins[] 元素内
+ *   的 path 形如 ['plugins', 'config', …]（path[1] 即 'config'，无索引段）。
  */
 export function preserveConfigMapKeys(path: string[], _key: string): boolean {
   if (path[0] === 'mcpServers') {
     if (path.length === 1) return true;
     return path.length === 3 && (path[2] === 'env' || path[2] === 'headers');
   }
+  if (path[0] === 'plugins' && path.length >= 2 && path[1] === 'config') return true;
   if (path[0] === 'node' && path.length === 2 && path[1] === 'tokens') return true;
   if (path[0] === 'pricing' && path.length === 2 && path[1] === 'models') return true;
   if (path[0] === 'models') {

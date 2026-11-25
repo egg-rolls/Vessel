@@ -42,6 +42,12 @@ import type { CapabilityManifest, RpcDispatcher, RpcResponse } from '../../packa
 export const VESSEL_TOOL_NAME = 'vessel';
 
 /**
+ * 桥 guardrail 名（core，装配层注册，非插件贡献）。热应用注册面差量的管辖域
+ * 必须排除它（pluginManagedGuardrailNames），否则插件目标集里没有它 → 误判 removed。
+ */
+export const VESSEL_BRIDGE_GUARDRAIL_NAME = 'vessel-bridge';
+
+/**
  * 自审批 / 自改权限策略的方法：只有 human / policy 能答（ADR-077/079/091），
  * 模型经任何通路都不得触碰——否则权限管道形同虚设。
  */
@@ -292,7 +298,7 @@ export function createVesselMetaSurface(options: VesselMetaOptions): VesselMetaS
   };
 
   const bridgeGuardrail: Guardrail = {
-    name: 'vessel-bridge',
+    name: VESSEL_BRIDGE_GUARDRAIL_NAME,
     stage: GuardrailStage.ToolCall,
     // 先于 tool-policy（50）：允许/禁止策略落在改写后的最终工具上。
     priority: 40,
