@@ -34,7 +34,9 @@ export const zhCN = {
   'help.cmd.continueRun': '续接最近会话并运行一轮',
   'help.cmd.resumeRun': '恢复中断的 durable run',
   'help.cmd.status': '一屏查看本地运行态 / attach / gateway 实例',
-  'help.cmd.stop': '停止舰队（平台 + manifest node/hub + owned 池 engine）；--connect 远程停',
+  'help.cmd.stop': '优雅停止舰队（不限时 drain + 进度；--force 切断 run 并审计）；--connect 远程停',
+  'help.cmd.restart':
+    'docker 式先停后启；[name] 定向实例或登记 node（缺省整舰队）；--force 传播到 stop 段',
   'help.cmd.agents': '经 agents.list 列出 agent（本地 gateway 或 --connect）',
   'help.cmd.errors': '最近 run/tool 错误（errorLevel: all 时含诊断）',
   'help.cmd.rpcList': '列出 RPC 方法 + 参数/返回 schema 摘要（--node 经平台代理定向）',
@@ -52,11 +54,11 @@ export const zhCN = {
   'help.cmd.gatewayStart': '前台启动 gateway；--daemon 分离到 gateway.log；--instance 命名实例',
   'help.cmd.gatewayList': '列出 gateway 实例与 PID 文件',
   'help.cmd.gatewayStop':
-    'SIGTERM 优雅停止（Windows 终止进程）；缺省只停平台层，--stop-nodes 连 node/hub 一起停',
+    '优雅停止平台进程（不限时 drain + 进度；--force 强杀并审计）；缺省只停平台层，--stop-nodes 连 node/hub 一起停',
   'help.cmd.gatewayStatus':
     'PID/端口/运行时长/版本/服务状态（--rpc 已弃用，改用 node status --rpc）',
   'help.cmd.gatewayRestart':
-    '停止后重新启动（沿用 --daemon）；缺省只换平台层，--stop-nodes 连 node/hub 一起冷重启',
+    '停止后重新启动平台（沿用 --daemon）；node/hub 保活并被 adopt；--stop-nodes 已弃用（整舰队请用 vessel restart）',
   'help.cmd.gatewayReload': '热重载 config / plugins，不重启进程',
   'help.cmd.gatewayInstall': '注册登录自启（systemd / launchd / schtasks）',
   'help.cmd.gatewayUninstall': '移除系统服务注册',
@@ -69,7 +71,10 @@ export const zhCN = {
   'help.cmd.gatewayNodesRemove': '从 nodes.json 移除节点；下次 gateway start 生效',
   'help.cmd.nodeStart': '只启动 Node API（缺省 8644；与 gateway 共用实例锁）',
   'help.cmd.nodeStatus': '查看 Node API 监听与 health（--rpc 查看 health/queue）',
-  'help.cmd.nodeStop': '只停止 Node API；gateway 托管时提示用 gateway stop',
+  'help.cmd.nodeStop':
+    '优雅停止 Node API（不限时 drain + 进度；--force 强杀并审计）；gateway 托管时提示用 gateway stop',
+  'help.cmd.nodeRestart':
+    'docker 式先停后启只重启本 node（[name] 选登记 node）；托管节点提示用 vessel restart',
   'help.cmd.nodeReload': '热重载 Node API 配置（等同 gateway reload）',
   'help.cmd.eval': '离线评测',
   'help.cmd.evalOut': '评测输出 JSON / 指定报告',
@@ -342,6 +347,8 @@ export const zhCN = {
   'gateway.reloadFailed': '热重载失败：{detail}',
   'gateway.reloaded': '已热重载：{scopes}',
   'gateway.requiresRestart': '需要重启才生效：{scopes}（运行 `vessel gateway restart`）',
+  'gateway.restart.stopNodesDeprecated':
+    '--stop-nodes 已弃用：gateway restart 只重启平台进程（node/hub 保活）。要重启整个舰队，请运行 `vessel restart`。',
   // ── node（0.49 G1）──
   'node.started': 'Node API 已启动（pid {pid}）：{url}',
   'node.running': 'Node API 运行中：{url}',
@@ -427,6 +434,20 @@ export const zhCN = {
   'stop.drain.timeout':
     '等待 drain 超时（pid {pid}，{timeout}）；进程仍在运行，未被强杀。可取消阻塞 run 或用 --force 升级。',
   'stop.forced.summary': '非正常退出：{name} —— {count} 个 run 被切断{note}',
+  // ── vessel restart（用户裁定 #6，cli-topology-design §7）──
+  'restart.inventory.title': '重启清点（舰队 dataDir：{dataDir}）',
+  'restart.inventory.instance': 'platform {instance}：{state}（pid {pid}）',
+  'restart.nothingRunning': '本无运行实例，直接启动。',
+  'restart.confirm.prompt': '重启会先停掉在跑会话再重新启动。继续？[y/N] ',
+  'restart.stopFailed':
+    '重启中止：stop 未全部成功，因此没有启动任何实例。可用 `vessel stop --force` 升级后重跑 restart。',
+  'restart.starting': '正在启动 {instance}…',
+  'restart.done': '重启完成。',
+  'restart.failed': '重启未全部成功（原因见上方输出）。',
+  'restart.unknownTarget':
+    '舰队 {dataDir} 内找不到重启目标「{name}」（无匹配的 gateway 实例或登记 node）。',
+  'node.restartManaged':
+    '该 node 由平台托管；请用 `vessel restart` 重启整个舰队（或 `vessel gateway restart` 只重启平台）。',
   'stop.remote.title': '远程平台清点：{url}',
   'stop.remote.health': 'platform：{status}（version {version}，node_count {count}）',
   'stop.remote.node': 'node {name}（{nodeId}）：{status} {apiUrl}',

@@ -30,6 +30,7 @@ import { errorsCommand } from './commands/errors-command';
 import { runEvalCommand } from './commands/eval-command';
 import { runFederationCommand } from './commands/federation';
 import { fleetStatusCommand } from './commands/fleet/fleet-status-command';
+import { restartFleetCommand } from './commands/fleet/restart-command';
 import { statusCommand } from './commands/fleet/status-command';
 import { stopFleetCommand } from './commands/fleet/stop-command';
 import { isForegroundGatewayCommand, runGatewayCommand } from './commands/gateway/gateway-command';
@@ -392,6 +393,21 @@ export const cliCommands: readonly CliCommand[] = [
         connectUrl: args.connectArg,
         connectToken: args.connectTokenArg,
         caFile: args.caArg,
+      });
+    },
+  },
+  {
+    name: 'restart',
+    match: (args) => args.restartCommand !== null,
+    run: async (args) => {
+      const command = args.restartCommand;
+      if (command === null) return 1;
+      return restartFleetCommand({
+        ...(command.name !== undefined ? { name: command.name } : {}),
+        yes: command.yes,
+        selector: command.selector,
+        timeoutMs: command.timeoutMs,
+        ...(command.force === true ? { force: true } : {}),
       });
     },
   },

@@ -17,6 +17,7 @@ import { loadConfig, type VesselConfig } from '../../../packages/config/src/inde
 import { formatEventLine } from '../../../packages/serve/src/index';
 import { expandHome, resolveDataDir } from '../../data/data-paths';
 import { gatewayLogPath, startGatewayDaemon } from '../../gateway/daemon';
+import { loadNodeRegistry } from '../../gateway/node-registry';
 import { readSpawnedChildren } from '../../gateway/node-supervisor';
 import {
   cleanupGatewayStateEntry,
@@ -413,6 +414,70 @@ async function confirmNodeStopped(
   return 1;
 }
 
+/**
+ * `node restart [name]`：docker 式 stop → start（用户裁定 #6，只重启本 node）。
+ *
+ * 复用 nodeStopCommand（优雅不限时 + 进度 / --force）做 stop 段，startNodeDaemonCommand
+ * 做 start 段。stop 未成 → 不 start（D11）。本无运行 → 直接 start（幂等）。
+ * 托管节点（platform 监督）→ 不独立重启（提示 vessel restart / gateway restart），
+ * 避免与平台 supervisor 的 respawn 打架（§6.2 的 stop-intent 机制属 P1，本轮未做）。
+ */
+export async function nodeRestartCommand(
+  deps: NodeCommandDeps,
+  force = false,
+  name?: string,
+): Promise<number> {
+  let context = await resolveNodeContext(deps);
+  const print = deps.print ?? console.log;
+  const printErr = deps.printErr ?? console.error;
+  // 名称解析（node name / dataDir 别名）：给 name → 本舰队 registry 找该 node 的 dataDir。
+  if (name !== undefined && name.trim() !== '') {
+    const trimmed = name.trim();
+    const registry = await loadNodeRegistry(context.dataDir).catch(() => undefined);
+    const node =
+      registry?.kind === 'ready'
+        ? registry.registry.nodes.find((item) => item.name === trimmed)
+        : undefined;
+    if (node !== undefined) {
+      context = await resolveNodeContext({ ...deps, dataDir: node.data_dir });
+    } else if (trimmed !== DEFAULT_GATEWAY_INSTANCE) {
+      printErr(ui.err(t('restart.unknownTarget', { name: trimmed, dataDir: context.dataDir })));
+      return 1;
+    }
+  }
+  const stopToken = effectiveNodeTokenAuto({
+    config: context.config,
+    dataDir: context.dataDir,
+    env: context.env,
+  });
+  const token = stopToken.ok ? stopToken.value.token : undefined;
+  const snapshot = await collectGatewayState(context.dataDir, {
+    ...(token !== undefined ? { token } : {}),
+  });
+  const entry = snapshot.entries.find((item) => item.instance === DEFAULT_GATEWAY_INSTANCE);
+  const record = entry?.record;
+  const running = record !== undefined && isProcessAlive(record.pid);
+
+  if (running && record !== undefined) {
+    // 托管判定（镜像 nodeStopCommand）：托管节点不独立重启，指路舰队/平台 restart。
+    const health = await probeHttpHealth(record);
+    const managed =
+      health?.role === 'platform' || (await isManagedByPlatform(context.dataDir, record, token));
+    if (managed) {
+      printErr(ui.err(t('node.restartManaged')));
+      return 1;
+    }
+    const stopCode = await nodeStopCommand(deps, force);
+    if (stopCode !== 0) {
+      printErr(ui.err(t('restart.stopFailed')));
+      return stopCode;
+    }
+  }
+  // start 段（本无运行 / 刚停成）：复用 node daemon start 接缝。
+  print(ui.info(t('restart.starting', { instance: 'node' })));
+  return startNodeDaemonCommand({ kind: 'start', daemon: true }, deps);
+}
+
 /** `node reload`：与 `gateway reload` 同一操作（Node API `gateway.reload`）。 */
 async function nodeReloadCommand(
   command: Extract<NodeCommand, { kind: 'reload' }>,
@@ -521,6 +586,8 @@ export async function runNodeCommand(
       return nodeStatusCommand(command, deps);
     case 'stop':
       return nodeStopCommand(deps, command.force === true);
+    case 'restart':
+      return nodeRestartCommand(deps, command.force === true, command.name);
     case 'reload':
       return nodeReloadCommand(command, deps);
     case 'token':

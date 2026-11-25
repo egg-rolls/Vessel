@@ -258,7 +258,10 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
         name: 'start',
         flags: ['--daemon', '--instance', '--port', '--host', '--log'],
       },
-      { name: 'stop', flags: ['--timeout', '--instance', '--port', '--all'] },
+      {
+        name: 'stop',
+        flags: ['--timeout', '--force', '--instance', '--port', '--all', '--keep-nodes'],
+      },
       { name: 'status', flags: ['--json', '--rpc', '--instance', '--port', '--all'] },
       { name: 'list', flags: ['--json'] },
       {
@@ -267,7 +270,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
         name: 'nodes',
         flags: ['--json', '--data-dir', '--config', '--no-auto-start'],
       },
-      { name: 'restart', flags: ['--daemon', '--instance', '--port', '--all'] },
+      { name: 'restart', flags: ['--daemon', '--force', '--instance', '--port', '--all'] },
       {
         name: 'reload',
         flags: ['--scope', '--instance', '--port', '--all'],
@@ -283,7 +286,8 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [
       { name: 'start', flags: ['--daemon', '--config'] },
       { name: 'status', flags: ['--json', '--rpc'] },
-      { name: 'stop' },
+      { name: 'stop', flags: ['--force', '--data-dir'] },
+      { name: 'restart', flags: ['--force', '--data-dir'] },
       { name: 'reload', flags: ['--scope'], flagValues: { '--scope': ['config', 'plugins'] } },
     ],
   },
@@ -333,7 +337,12 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
   {
     token: 'stop',
     registryName: 'stop',
-    flags: ['--yes', '--timeout', '--instance', '--port', '--all'],
+    flags: ['--yes', '--force', '--timeout', '--instance', '--port', '--all'],
+  },
+  {
+    token: 'restart',
+    registryName: 'restart',
+    flags: ['--yes', '--force', '--timeout', '--instance', '--port', '--all', '--data-dir'],
   },
   {
     token: 'attention',

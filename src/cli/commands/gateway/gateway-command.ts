@@ -2289,7 +2289,7 @@ export async function reloadGatewayCommand(
   return failed ? 1 : 0;
 }
 
-async function startDaemonCommand(
+export async function startDaemonCommand(
   options: GatewayCommandDeps & {
     instance?: string;
     port?: number;
@@ -2463,6 +2463,10 @@ async function restartDaemonCommand(
   const context = await resolveContext(deps);
   const printErr = deps.printErr ?? console.error;
   const printOut = deps.print ?? console.log;
+  // 用户裁定 #6：--stop-nodes 弃用 —— gateway restart 恒平台-only，指路 vessel restart。
+  if (command.stopNodesDeprecated === true) {
+    printErr(ui.warn(t('gateway.restart.stopNodesDeprecated')));
+  }
   // 停前快照：instance/port/host 原样保留（lock-only 也保留 instance）。
   const entries = (await collectStateFor(context, deps)).entries;
   const targets = await resolveGatewayTargets(context.dataDir, command, { entries });
@@ -2471,14 +2475,14 @@ async function restartDaemonCommand(
     return 1;
   }
 
-  // 0.55.2：restart 缺省只换平台层 —— node/hub 保活并被新平台 adopt 接管，
+  // 用户裁定 #6：gateway restart 只换平台层 —— node/hub 保活并被新平台 adopt 接管，
   // 在跑的 run 不受影响（代价：node 仍跑旧代码，命令结尾会打印提示）。
-  // 要连 node 一起冷重启：`--stop-nodes`。
+  // 要连 node 一起冷重启：`vessel restart`（舰队级 stop+start）。
   const stopCode = await stopGateway({
     ...deps,
     selector: command,
     entries,
-    keepNodes: command.keepNodes !== false,
+    keepNodes: true,
     ...(command.force === true ? { force: true } : {}),
   });
   if (stopCode !== 0) return stopCode;
@@ -2486,7 +2490,7 @@ async function restartDaemonCommand(
     printOut(
       ui.dim(
         'node/hub were kept running (still on the old code); ' +
-          'to restart them too: `vessel gateway restart --stop-nodes`',
+          'to restart the whole fleet: `vessel restart`',
       ),
     );
   }
@@ -2901,6 +2905,9 @@ export async function runPlatformGatewayForeground(
   let targetHost = command.kind === 'start' ? command.host : undefined;
 
   if (command.kind === 'restart') {
+    if (command.stopNodesDeprecated === true) {
+      printErr(ui.warn(t('gateway.restart.stopNodesDeprecated')));
+    }
     const entries = (await collectGatewayState(dataDir, { kind: 'platform' })).entries;
     const targets = await resolveGatewayTargets(dataDir, command, { entries });
     if (!targets.ok) {
@@ -2933,8 +2940,8 @@ export async function runPlatformGatewayForeground(
       print,
       printErr,
       // 用户裁定 #5：缺省不限时 drain（去掉硬编码 10s）；显式 --timeout 才是上限。
-      // 0.55.2：前台 restart 同口径，缺省只换平台层，node/hub 保活待 adopt。
-      keepNodes: command.keepNodes !== false,
+      // 用户裁定 #6：前台 restart 恒平台-only，node/hub 保活待 adopt。
+      keepNodes: true,
       ...(command.force === true ? { force: true } : {}),
     });
     if (stopCode !== 0) return stopCode;
@@ -2942,7 +2949,7 @@ export async function runPlatformGatewayForeground(
       print(
         ui.dim(
           'node/hub were kept running (still on the old code); ' +
-            'to restart them too: `vessel gateway restart --stop-nodes`',
+            'to restart the whole fleet: `vessel restart`',
         ),
       );
     }
