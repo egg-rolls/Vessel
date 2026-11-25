@@ -160,3 +160,267 @@ manifest/engines/permissions 审查与 config 写入）；discovery 装的是**�
 - **不做跨节点同步 / 团队共享协议**：上位设计非目标延续；共享走仓库提交或 curated registry。
 - **不新增 core 接口 / 宿主事件 / 第二注册表**：discovery 是 skills 插件内部模块 + additive RPC。
 - **不承诺 OS 沙箱 / 内容审查**：预览「沙箱」= 纯文本渲染 + 人类面边界（§8.5），不是隔离执行环境。
+
+## 3. 架构总览
+
+### 3.1 形态：skills 插件内部模块，不是新插件
+
+discovery 落在 `plugins/context/skills/src/discovery/`，与 scanner / trust / store 并列：
+
+```text
+plugins/context/skills/
+├── src/
+│   ├── discovery/            # ★ 新增（本设计）
+│   │   ├── sources.ts        # 源配置解析 + 校验（config.ts 同款纪律）
+│   │   ├── registry.ts       # registry 适配器：索引 fetch / 解析 / 校验
+│   │   ├── github.ts         # github 适配器：commit 解析 / tree 枚举 / raw 下载
+│   │   ├── local.ts          # local 适配器：本地目录浏览（P3b，复用 scanner）
+│   │   ├── cache.ts          # 每源快照缓存（TTL / stale 回落 / ETag）
+│   │   ├── install.ts        # 下载 → 校验 → staging → 落地管线
+│   │   ├── landing.ts        # ★ 共享落地 helper（与 P2 import 共用，§6.3）
+│   │   └── provenance.ts     # 安装来源侧车（provenance.json，原子写）
+│   ├── rpc.ts                # dispatch 增 discovery_* 分支（additive）
+│   ├── tool.ts               # 零改动（§9）；钉锁 origin 派生一处 additive（§6.3）
+│   ├── trust.ts / service.ts / scanner.ts / store.ts   # 零改动
+│   └── config.ts             # 增 discovery 键解析（additive）
+└── web-src/
+    ├── SkillsView.tsx        # 增 Library / Discover 切换（§10）
+    └── DiscoverView.tsx      # ★ 新增：搜索 / 结果表 / 预览 / 安装
+```
+
+理由（按承重顺序）：
+
+1. **library 根、信任门、隔离、索引、UI 全在 skills 插件里**。discovery 的产出物（library 里的
+   技能文件）只有经 skills 的 scanner/trust 才有意义；拆成独立插件 = 跨插件写别人的 dataDir +
+   第二套信任口径，违反「不新增第二注册表」纪律。
+2. **marketplace 插件装代码、skills 装数据**，审查面与落地处完全不同（§1.2）；合并进 marketplace
+   会把「技能信任门」与「插件激活」两套语义搅在一起。
+3. in-process 形态延续上位设计 §3：零新宿主缝，install 期解析配置，RPC 经既有
+   `registerInProcessPlugin` 登记，UI 经既有 embed/iframe 双产线。
+
+### 3.2 数据流（一张图）
+
+```text
+ 源（https）                    skills 插件宿主侧                          既有面（零改动）
+┌──────────────────┐   ┌──────────────────────────────────────┐   ┌─────────────────────────┐
+│ vessel-skills     │   │ discovery/registry|github|local       │   │ scanner → index.json    │
+│ registry index.json│──▶│  fetch → 校验 → cache（TTL 10min）    │   │ trust.ts 信任门 / TOCTOU │
+│ GitHub repo@commit│   │        │                              │   │ skills 工具 list/search/ │
+│ 本地目录（P3b）    │   │        ▼ search（子串，searchRank 口径）│   │   load（门照常）         │
+└──────────────────┘   │        ▼ preview（SKILL.md 原文，人类面）│   │ SkillsView Library tab  │
+                       │        ▼ install（显式动作）            │   │ deny_paths 隔离          │
+                       │  下载 → sha256/commit 校验 → staging    │   └─────────────────────────┘
+                       │  → scanner 校验 → landing.ts 原子落地 ──┼──▶ library/<name>/SKILL.md
+                       │  → provenance.json（来源侧车）          │      （trust 态 = unknown，
+                       │  → rescanRoot('library')               │       首次 load 才 TOFU）
+                       └──────────────────────────────────────┘
+```
+
+三条边界重申（上位设计 §9.5 延伸）：
+
+- **预览是人类面**：远程 SKILL.md 原文只进 UI（纯文本渲染），不进任何 run 的语言空间、不记 loads、
+  不触发 TOFU——与 `get` RPC 同边界。
+- **安装是宿主侧数据搬运**：写 library 文件 + provenance，**不写 trust.json**。
+- **加载才过门**：模型 `skills load` 走既有 checkPermission → ask → handler 钉锁，一行不改。
+
+### 3.3 存储布局增补（插件私有目录，fs: ["data-dir"] 既有权限内）
+
+```text
+<dataDir>/plugins/skills/
+├── library/                  # 既有：安装落地处（dir 形态 <name>/SKILL.md；flat 形态 <name>.md）
+├── discovery/                # ★ 新增
+│   ├── <sourceId>.json       # 每源索引快照缓存（派生缓存，可整文件重建/删除）
+│   └── provenance.json       # 安装来源记录（宿主侧写，临时文件 + rename 原子写）
+├── index.json / trust.json / loads/ / logs/    # 既有，零改动
+```
+
+写纪律延续：缓存整文件覆盖（损坏 → 视为无缓存，重新 fetch）；provenance.json 原子写 +
+进程内单写队列（与 trust.json 同款）；staging 临时目录 `mkdtemp(stateDir/tmp-)`，finally 清理。
+
+## 4. Discovery 源配置
+
+### 4.1 配置形状（config.yaml `plugins[].config.discovery`，additive）
+
+```yaml
+plugins:
+  - name: skills
+    config:
+      # …既有 enabled / sources / watch / trust_default / max_load_bytes 不动…
+      discovery:
+        enabled: true                # 缺省 true；false = 不注册 discovery RPC / UI tab
+        sources:
+          - id: vessel-skills        # 源唯一 id（^[a-z0-9][a-z0-9-]{1,63}$，marketplace 同款）
+            kind: registry           # registry | github | local
+            url: https://egg-rolls.github.io/vessel-skills/index.json
+            tier: curated            # curated | community | local（展示分级，§8.2）
+          - id: anthropics           # P3b 起可用的预置 github 源（缺省不启用，UI 一键添加）
+            kind: github
+            repo: anthropics/skills  # owner/repo
+            ref: main                # 分支/tag；刷新时解析为 commit 钉住
+            path: skills             # 仓库内技能根（缺省自动探测 skills/ 与根级）
+            tier: community
+          - id: my-team              # P3b：本地目录源（浏览 + 导入，复用 import 管线）
+            kind: local
+            path: ~/team-skills
+            tier: local
+        cache_ttl_ms: 600000         # 缺省 10 min（marketplace REGISTRY_CACHE_TTL_MS 同款）
+        max_download_bytes: 10485760 # 缺省 10 MiB（技能是 markdown，比插件包收紧）
+```
+
+解析纪律与 config.ts 逐字同款：install 期解析一次（in-process 生效语义 = 重启）；camelCase /
+snake_case 双收；未知键忽略；非法值回落缺省 + warning，不半应用；`discovery` 非 object →
+整体回落缺省 + warning。新增上限常量：`MAX_DISCOVERY_SOURCES = 8`（超出截断告警）。
+
+### 4.2 缺省源与「未配置」体验
+
+- **缺省 sources = [vessel-skills registry]**（curated）。该索引随 P3a 发布（§4.3）；发布前 /
+  fetch 失败时**不阻塞 activation**——marketplace 先例：registry_url 缺失 UI 照常加载并显示
+  「去配置」。discovery tab 显示源状态（ok / stale / unavailable + 原因），Library tab 完全不受影响。
+- `discovery.enabled=false` 或 sources 为空：discovery RPC 返回业务错误
+  `discovery_disabled` / `no_sources`（result 内结构化错误，不发明信封 code），UI tab 隐藏或显示引导。
+- **github / local 源缺省不预置启用**：用户经 UI「添加源」或 config.yaml 显式加入（社区内容
+  opt-in，与 trust_default 的 fail-closed 哲学一致）。UI 提供预置模板（anthropics/skills 等
+  知名仓库）降低输入成本，但添加动作 = 用户显式选择。
+
+### 4.3 curated registry：vessel-skills（P3a 交付物，非代码）
+
+复用 vessel-plugins 的 GitHub Pages 静态索引模式（`egg-rolls.github.io/vessel-plugins/index.json`
+先例，registry-template/ 有 validate.mjs + CI 校验同款）：
+
+- 仓库 `egg-rolls/vessel-skills`：`index.json`（§5.1 schema）+ 技能包资产（release tgz 或
+  Pages 静态文件）+ validate CI（schema / sha256 / URL 校验，marketplace registry-template 同款）。
+- **种子内容**：本仓 `skills/` 既有技能（code-writing 等）打包 + 人工审核的社区精选
+  （anthropics/skills 的 document-skills 等，注明上游 repo@commit 与 license）。
+- 策展纪律：每条 entry 必须带 `source`（上游 repo + commit + path）与 license；收录 = 人工
+  看过内容，但**策展 ≠ 信任**——tier=curated 只影响展示与排序，不影响信任门（§8.2）。
+- 该仓库与索引发布是独立交付物（文档 + 静态资产），不占 skills 插件代码分支。
+
+## 5. 索引格式与源适配器
+
+### 5.1 registry 索引 schema（vessel-skills index.json，schema 1）
+
+与 marketplace registry 同构（§1.2），把 `plugins[]` 换成 `skills[]`、asset 增 `kind`：
+
+```jsonc
+{
+  "schema": 1,
+  "updated_at": "2026-11-25T00:00:00Z",
+  "skills": [
+    {
+      "id": "code-writing",                  // ^[a-z0-9][a-z0-9-]{1,63}$（marketplace PLUGIN_ID_RE 同款）
+      "name": "code-writing",                // 展示名（缺省 = id）
+      "summary": "本仓代码风格与提交纪律",     // ≤200 字符（索引展示截断口径）
+      "description": "…",                    // 长描述（预览页用）
+      "tags": ["code", "style"],             // ≤16 个，每个 ≤32 字符（types.ts 同款上限）
+      "license": "MIT",
+      "repo": "https://github.com/egg-rolls/vessel-skills",
+      "latest": "1.2.0",
+      "versions": [
+        {
+          "version": "1.2.0",
+          "asset": {
+            "kind": "dir",                   // dir = tgz 技能目录；flat = 单 .md 文件
+            "url": "https://…/code-writing-1.2.0.tgz",
+            "sha256": "<64 hex>",            // 必填；无校验和条目拒收（marketplace 逐字同款）
+            "size": 12345                    // 正整数，≤ max_download_bytes
+          },
+          "source": {                        // 上游 provenance（策展可审计）
+            "kind": "github",
+            "repo": "anthropics/skills",
+            "commit": "<40 hex>",            // 钉住的上游 commit
+            "path": "skills/docx"
+          },
+          "published_at": "2026-11-25T00:00:00Z"
+        }
+      ]
+    }
+  ]
+}
+```
+
+校验纪律（registry.ts 同款，逐条对齐 marketplace parseAsset / optionalHttpUrl）：
+
+- `schema !== 1` → `registry_invalid`；索引字节上限 5 MiB（MAX_INDEX_BYTES 同款）；
+  条目上限 `MAX_REMOTE_ENTRIES = 2000`/源（超出截断 + warning，防 DoS）。
+- asset.url / repo / homepage 仅 http(s)；**下载 URL https 必须，http 仅 loopback fixture**；
+  sha256 64 hex 必填；size 正安全整数。任何一条非法 → 整条目拒收 + warning（不半应用）。
+- 版本选择：缺省 latest；`versions[]` 语义与 marketplace 一致（显式版本可装旧版）。
+  技能无 engines / prerelease 概念——不引入 semver 依赖，版本比对用 marketplace semver.ts
+  同款全 semver 校验（共享方式同 §5.3 tar 开放问题）。
+
+### 5.2 github 适配器（P3b）：commit 钉住 + 逐文件 raw 下载
+
+**不依赖 skills.sh 私有 API**（§1.3 结论）；只用 GitHub 公开通道，无 token（匿名限流
+60 req/h/IP → 缓存 + 条件请求兜底，§5.4）：
+
+1. **解析 commit**：`GET api.github.com/repos/{owner}/{repo}/commits/{ref}` → `sha`。
+   快照缓存记录该 commit；TTL 内搜索 / 预览 / 安装全部钉住它（skills-lock v2 同款
+   「restore 按 commit 不追 HEAD」纪律）。刷新 = 显式动作或 TTL 过期。
+2. **枚举技能**：`GET api.github.com/repos/{owner}/{repo}/git/trees/{commit}?recursive=1`
+   → 找 `SKILL.md` 条目（配置 `path` 根下，或自动探测 `skills/` 与根级）。
+   - `truncated: true`（超大仓库）→ 只取已返回部分 + warning。
+   - mode `120000`（symlink）条目**跳过**（scanner fail-closed 同款）；路径词法校验
+     （无 `..`、无绝对路径、深度 ≤ MAX_SCAN_DEPTH）。
+   - 每个 SKILL.md 所在目录 = 一个技能；dir 名即候选 name（规范：name 须与目录一致）。
+3. **元数据补全（懒加载 + 限额）**：tree 只有路径，没有 description。对前
+   `MAX_GITHUB_METADATA_FETCHES = 200` 个条目经 `raw.githubusercontent.com/{repo}/{commit}/{path}/SKILL.md`
+   取原文 → frontmatter 子集解析（复用 frontmatter.ts，纯数据）→ name/description/tags。
+   超出限额的条目只有 name 可搜 + warning；预览时按需单取。并发上限 4，单文件 ≤1 MiB。
+4. **下载（安装时）**：**逐文件 raw 下载，不拉整仓 tarball**——tree 已给出技能目录下全部
+   文件路径（≤ MAX_AUX_FILES + 1 个 SKILL.md），按 commit 逐个取 raw，每个 ≤1 MiB、
+   合计 ≤ max_download_bytes。好处：无 tar 依赖、无整仓体量税、天然逐文件 containment。
+   完整性 = commit 钉住 + TLS（GitHub 无逐文件上游哈希）；落地后 sha256 由本地计算记入
+   provenance，TOFU 门照常兜底。
+5. **flat 单文件技能**：registry asset.kind=flat 直接下载 .md（无 tar）；github 源里
+   根级裸 .md（无 SKILL.md）不识别为技能——规范以 SKILL.md 为锚，避免把 README 当技能。
+
+### 5.3 local 适配器（P3b）与共享代码决策
+
+- **local 源** = 本地目录浏览：复用 `scanSkillRoot`（containment / symlink 跳过 / 上限全套）
+  产出只读索引；「安装」= 复制进 library，走 §6.3 共享 landing 管线——**这正是 P2 import 的
+  超集**（import 是单路径动作，local 源是可搜索的目录面）。P2 import 落地后 local 源薄封装即可。
+- **tar / gunzip / semver 共享**（registry dir 资产需要）：marketplace 的 tar.ts / semver.ts
+  自包含、无插件私有依赖。两个选项：
+  - **推荐**：抽成小 workspace 包 `@vessel-agent/archive`（additive 新包），marketplace 迁移
+    是独立协调 commit（不属本设计分支）；skills 依赖新包。
+  - 回落：vendor 拷贝进 `skills/src/discovery/tar.ts`（注明出处与同步责任）。
+  裁决留实现评审（§13 开放问题 2）；**禁止**跨插件相对路径 import 私有源码。
+
+### 5.4 缓存与刷新
+
+- 每源快照 `discovery/<sourceId>.json`：`{sourceId, fetchedAt, commit?, etag?, entries[], warnings[]}`。
+  整文件覆盖；损坏 → 视为无缓存重新 fetch（派生缓存纪律）。
+- TTL 10 min（可配 `cache_ttl_ms`）；TTL 内命中缓存零网络。**fetch 失败回落旧快照标 `stale`**
+  （marketplace RegistrySnapshot.stale 同款），UI 显示「快照时间 + 刷新按钮」。
+- github 源条件请求：缓存 etag（tree/commits 响应 ETag），刷新带 `If-None-Match` → 304 零成本；
+  403 限流 → 回落旧快照 + warning（不重试风暴）。
+- `discovery_refresh` RPC（write）= 显式绕过 TTL 重取；UI 刷新按钮 / 页面聚焦不自动绕过
+  （聚焦重拉只读缓存，与上位设计「不新增宿主事件」纪律一致）。
+
+### 5.5 远程条目 DTO（搜索结果 / 预览共用）
+
+```ts
+interface RemoteSkillEntry {
+  sourceId: string;                 // 配置里的源 id
+  kind: 'registry' | 'github' | 'local';
+  tier: 'curated' | 'community' | 'local';
+  id: string;                       // 源内唯一：registry = entry.id；github = 目录相对路径
+  name: string;
+  description: string;              // 展示截断 200 字符（本地索引同口径）
+  tags: string[];
+  version?: string;
+  license?: string;
+  repo?: string;                    // 上游仓库（可点链接，仅 http(s)）
+  commit?: string;                  // github 源 / registry source 钉住的 commit
+  assetKind: 'flat' | 'dir';
+  bytes?: number;
+  sha256?: string;                  // registry asset 校验和（github 源无上游哈希）
+  /** 已安装态（provenance + 本地索引 join 派生；UI「已安装 / 可更新」徽标） */
+  installed?: { localId: string; trust: TrustState; version?: string; commit?: string };
+  warnings?: string[];
+}
+```
+
+搜索排序复用 `searchRank` 单一口径（name > tag > description > id，tool.ts 导出函数直接
+import——同插件内共享，无跨插件问题）；多源结果合并后按 rank → tier（curated 前）→ id 排序；
+分页 ≤50（MAX_PAGE_LIMIT 同款）。**搜索是纯缓存内子串匹配，零网络**（网络只发生在刷新）。
