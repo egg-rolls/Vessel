@@ -12,6 +12,8 @@
  * @module vessel/shutdown-sequence
  */
 
+import { runShutdownStep, type ShutdownStepEmit } from '@vessel-agent/serve';
+
 type DrainOptions = { drain?: boolean } | undefined;
 
 export interface ShutdownSequenceOptions {
@@ -27,6 +29,11 @@ export interface ShutdownSequenceOptions {
   beforeClose?: () => Promise<void>;
   closeTenants: (options?: { drain?: boolean }) => Promise<void>;
   shutdown: (options?: { drain?: boolean }) => Promise<void>;
+  /**
+   * DR15-1：步骤级进度日志发射口（可选；缺省不打，兼容既有调用方）。
+   * 注入后每步打 node.shutdown.step start/done —— 挂起时最后一条 start 即挂点。
+   */
+  onStep?: ShutdownStepEmit;
 }
 
 /** 返回传给 closeTenants/shutdown 的 drain 选项，便于调用方复用/测试。 */
@@ -40,15 +47,24 @@ export function serveDrainOptions(
  * 按固定顺序关闭 serve 栈；每步异常由调用方自己的实现隔离（这里不吞）。
  */
 export async function shutdownServeStack(options: ShutdownSequenceOptions): Promise<void> {
-  // drain-to-quiesce：先 fence + 不限时等活跃 run 自然跑完 + flush（幂等，重复调用不会重做）。
-  if (options.beginDrain) await options.beginDrain();
+  // DR15-1：有 onStep 时每步打进度日志；没有则原样直跑（零行为变化）。
+  const emit = options.onStep;
+  const step = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
+    emit ? runShutdownStep(emit, name, fn) : fn();
 
-  if (options.gateway) await options.gateway.stop();
+  // drain-to-quiesce：先 fence + 不限时等活跃 run 自然跑完 + flush（幂等，重复调用不会重做）。
+  const beginDrain = options.beginDrain;
+  if (beginDrain) await step('serve.beginDrain', beginDrain);
+
+  const gateway = options.gateway;
+  if (gateway) await step('serve.gateway.stop', () => gateway.stop());
   const drainOptions = serveDrainOptions(options.gateway);
 
-  if (options.closeTransport) await options.closeTransport();
-  if (options.beforeClose) await options.beforeClose();
+  const closeTransport = options.closeTransport;
+  if (closeTransport) await step('serve.closeTransport', closeTransport);
+  const beforeClose = options.beforeClose;
+  if (beforeClose) await step('serve.beforeClose', beforeClose);
 
-  await options.closeTenants(drainOptions);
-  await options.shutdown(drainOptions);
+  await step('serve.closeTenants', () => options.closeTenants(drainOptions));
+  await step('serve.shutdown', () => options.shutdown(drainOptions));
 }

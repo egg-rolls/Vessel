@@ -442,6 +442,12 @@ export {
   type SessionSearchHit,
   searchSessions,
 } from './session-search.js';
+export {
+  raceShutdownTimeout,
+  runShutdownStep,
+  SHUTDOWN_STEP_EVENT,
+  type ShutdownStepEmit,
+} from './shutdown-step.js';
 export type {
   BudgetDimensionLike,
   ConversationBudgetStatusLike,

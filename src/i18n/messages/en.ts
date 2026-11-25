@@ -478,6 +478,8 @@ export const en: Record<MessageKey, string> = {
   'stop.drain.timeout':
     'Timed out waiting for drain (pid {pid}, {timeout}); the process is still running and was NOT killed. Cancel blocking runs or escalate with --force.',
   'stop.forced.summary': 'abnormal exit: {name} — {count} run(s) cut{note}',
+  'stop.quiesceExitTimeout':
+    'Drain complete but pid {pid} did not exit within {timeout} (exit chain wedged) — forcing termination. See node.shutdown.step logs for the hanging step.',
   // ── vessel restart (用户裁定 #6, cli-topology-design §7) ──
   'restart.inventory.title': 'Restart inventory (fleet dataDir: {dataDir})',
   'restart.platformHint':
