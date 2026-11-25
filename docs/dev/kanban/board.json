@@ -47,11 +47,11 @@
     },
     {
       "id": "q-inbox-ux",
-      "title": "inbox体验：read免list直读(缺省3)+WebUI三态(展开/默认3条/收起badge)",
-      "column": "待办",
-      "owner": "main",
-      "branch": "redblue-dev",
-      "progress": "用户裁定：①inbox read无ids时按时间序读最新N条(缺省3,省list轮)②WebUI inbox面板三态(展开完整列表高度上限滚动/默认3条可配多余折叠/收起只badge数量)；待派单"
+      "title": "inbox体验+排队超时移除+rotate阈值0.5+WebUI三态",
+      "column": "进行中",
+      "owner": "q-inbox-ux",
+      "branch": "fix/q-inbox-ux",
+      "progress": "291a5ed4派单(用户四裁定)：①read免list直读缺省3②去掉排队超时sweep③rotate阈值默认0.5(50%即建议切换防堆积)④WebUI三态(展开/默认3条可配/收起badge)；每步一提交一报"
     },
     {
       "id": "q-skills-ui",
