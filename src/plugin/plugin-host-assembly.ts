@@ -38,8 +38,9 @@ export interface PluginHostAssemblyOptions {
   dataDir: string;
   logger?: Logger;
   /**
-   * settings 解析（单执行面）。缺省只用 `config.plugins[].config`；
-   * asm 注入启动 bundle 的配置，不回退 liveConfig。
+   * settings 解析（单执行面）。缺省只用 `config.plugins[].config`。
+   * q-plugin-lifecycle §6.5 P2：gateway 注入读 liveConfig 的实现，子进程重激活拿新值；
+   * 本地模式仍用启动 config（其执行面 config 不热重读，语义不变）。
    */
   settingsFor?: (id: string) => Record<string, unknown>;
   /** 探针可覆盖子进程可执行文件 */
@@ -168,6 +169,10 @@ function manifestToServeDescriptor(
       ordering: manifest.dependencies.ordering,
     },
     enabled: pluginEnabledInConfig(config, manifest.id),
+    // q-plugin-lifecycle §6.5 P2：已解析 settings 值进描述符 → 进 reload 指纹。
+    // config 由调用方传 liveConfig（reloader）/ 启动 config（manager），改 settings
+    // 即指纹变 → 子进程重激活拿新 env。与 settingsFor 同源（pluginSettingsFor）。
+    settings: pluginSettingsFor(config, manifest.id),
   };
 }
 

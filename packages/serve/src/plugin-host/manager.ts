@@ -708,6 +708,9 @@ function descriptorFingerprint(descriptor: PluginDescriptor): string {
     builtin: descriptor.builtin ?? false,
     uiEmbed: descriptor.uiEmbed ?? null,
     trustUi: descriptor.trustUi ?? null,
+    // q-plugin-lifecycle §6.5 P2：settings 值进指纹 → 改 settings 触发子进程重激活
+    //（spawn 期 env 注入新值），child settings 转热。缺省 {} 与历史无 settings 行为一致。
+    settings: descriptor.settings ?? {},
   });
 }
 

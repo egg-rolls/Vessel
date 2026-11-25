@@ -971,8 +971,6 @@ async function runWithConfig(result: BootstrapResult) {
     // 只预激活声明 `onStartup` / `*` 的 child plugin；`onPage:` / `onCommand:`
     // 等首次页面 / RPC 访问时由 serve 的 ensureActive 懒激活。
     if (result.bundle !== undefined) {
-      // C4：settings 唯一来源是启动 bundle 的 `plugins[].config`（不回退 liveConfig）。
-      const startupConfig = result.bundle.config;
       pluginHostManager = createPluginHostManager({
         loader: result.bundle.pluginLoader,
         config: liveConfig,
@@ -980,7 +978,10 @@ async function runWithConfig(result: BootstrapResult) {
         getConfig: () => liveConfig,
         dataDir,
         logger,
-        settingsFor: (id) => pluginSettingsFor(startupConfig, id),
+        // q-plugin-lifecycle §6.5 P2：settings 读 liveConfig（拆 C4 启动钉死）。
+        // 子进程重激活时 spawn 期 env 注入新值；settings 值已进 reload 指纹（descriptor.settings），
+        // 改 settings → 指纹变 → manager.reload 重激活 child，无需重启 gateway。
+        settingsFor: (id) => pluginSettingsFor(liveConfig, id),
       });
       // P1-w2d（D3）：install 后登记 in-process 能力插件的 RPC / 贡献面（w1a 接缝）。
       inProcessPluginRows = gatewayBundle.registerInProcessPlugins(pluginHostManager, liveConfig);
@@ -1614,8 +1615,9 @@ async function runWithConfig(result: BootstrapResult) {
           isFactory: FACTORY_PLUGINS.has(descriptor.name),
           category: descriptor.category,
           declared: (descriptor.manifest ?? descriptor.capabilityManifest)?.lifecycle,
-          // child settings 热应用接线后翻 true（④）；当前 spawn 期 env 钉死 → restart。
-          childSettingsHot: false,
+          // child settings 热应用已接线（§6.5 P2）：settingsFor 读 liveConfig + settings
+          // 值进 reload 指纹 → 子进程重激活，child settings 转热。
+          childSettingsHot: true,
         });
         lifecycle.set(descriptor.name, profile);
         // pendingRestart：只在该面 lifecycle 为 restart 时，期望态 ≠ 已生效态才算。
