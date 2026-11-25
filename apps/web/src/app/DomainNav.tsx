@@ -123,7 +123,9 @@ export function DomainNav({
       ? 'fixed inset-y-0 left-0 z-[var(--z-drawer)] min-h-0 w-[min(86vw,var(--drawer-w))] shadow-elev-3 transition-[transform,translate,visibility] duration-[var(--motion-ui)] ease-[var(--ease)]'
       : 'relative min-h-0 transition-[width] duration-[var(--motion-base)] ease-[var(--ease)] has-[[data-dragging]]:transition-none motion-reduce:transition-none',
     drawer &&
-      (open ? 'visible translate-x-0 transition-[transform,translate]' : 'invisible -translate-x-full'),
+      (open
+        ? 'visible translate-x-0 transition-[transform,translate]'
+        : 'invisible -translate-x-full'),
     !drawer &&
       (mode === 'collapsed'
         ? 'w-[var(--nav-w-collapsed)]'
