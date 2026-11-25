@@ -176,4 +176,36 @@ C 下生产 gateway 为探测/代理凭据会加载金丝雀条目：`loadConfig
 - 代理凭据：token = 显式 `node.token*` 或从 **canary-data/root-secret** 派生 ⇒ 与 node 自算必然一致（0.56 设计目标，gateway-command.ts L2639 注释）；
 - 探活端口：`node.port` 在 canary-config 里 ⇒ 一致；`preferLiveNodeListen`（L2668）还会优先采信活进程自报地址。
 
-⇒ **凭据/代理不受双源差异影响**；差异只可能出现在状态展示的边角键。纪律：canary-config 保持「金丝雀生效配置的完整声明」，不依赖生产用户层补键。
+⇒ **凭据/代理不受双源差异影响**；差异只可能出现在状态展示的边角键。纪律：canary-config 保持「金丝雀生效配置的完整声明」，不依赖生产用户层补键。---
+
+## §4 寻址：同 gateway 多 node vs 跨 gateway federation（调研面③）
+
+### 4.1 「本机」的判定单位是 node 进程，不是 gateway
+
+锚点：`src/federation/federation-address.ts`。
+
+- 地址段数定义语义（DECISION-037 §2）：1 段 = 本机 agent；2 段 `p@team` = **恒本机**；3 段 `p@node:team` = node 段命中本机别名才算本机，否则 `remote` 透传 federation。
+- `resolveAddress`（L169）是「是不是本机」的**唯一判断点**；`isLocalNodeSegment`（L254）只比较**本 node 进程**的 canonical nodeId 与展示名（大小写不敏感）。每个 node 进程有自己的 `node.json` 身份——**gateway 的身份不进入这个判定**。
+- `team-service.ts` `sendAddress`（L1017）：`federation.resolve(to)` → 非 remote 走 `deliverLocalAddress`（本 node 内投递）；remote 走 `federation.send`（HTTP POST 对端 **node 端口** `/v1/federation/messages`，`federation-client.ts`）。
+
+**推论：生产 node 与金丝雀 node 即使挂在同一个 gateway 下，互相 send 仍然是 3 段地址 + federation 出站**——与今天跨 gateway 时逐字节相同。gateway（平台层）不在 agent send 的数据路径上：它只做浏览器代理与进程监督。
+
+### 4.2 昨日修的复杂度属于 team 命名，不属于 gateway 拓扑
+
+现状 canary-config 的 peer：`node_id: 7181ed6c…, team_id: vessel, local_team_id: default`。入站 allowlist 按 **nodeId + teamId + direction** 匹配（`findOutboundPeer`，federation-client.ts L152），`localTeamId` 把对端 team 映射到本机 team（缺省同名）。这套机制的触发条件是「两侧 team 不同名」，与两个 node 是否同 gateway **无关**：
+
+- A/B/C 三种拓扑下，peer 条目、共享 token（`VESSEL_FED_TOKEN` / `token_secret`）、三段地址、`local_team_id` 映射**一个都少不了**；
+- 若两侧 team 统一命名（都叫 `vessel`），`local_team_id` 可省——这是**命名决策**，不是拓扑收益（§8 未决问题）。
+
+### 4.3 同 gateway 能简化什么（诚实清单）
+
+| 项 | 是否因同 gateway 简化 |
+|---|---|
+| 三段地址 / peer allowlist / 共享 token / team 映射 | ❌ 不变（node↔node 数据面） |
+| peer URL | ❌ 本来就是回环 `127.0.0.1:8644/8654`（同机），拓扑无关 |
+| 自动配对（`federation join`，q-fed-simple） | ❌ 回环免码 join 今天已跨 gateway 可用；与拓扑无关 |
+| `federation discover`（读本地 hub registry.json） | ⚠️ **仅当两 node join 同一个 hub**（C2）时，一份 registry 同时列两 node，发现略顺；C1/A 下各读各的 hub，与今天同 |
+| 浏览器跨 node 操作（roster/teams/attention） | ✅ 单 origin 平台代理 + `platform.nodes.credentials` 按 node 下发凭据，免二次登录（这是 **UI 面**收益，不是 agent send 面） |
+| CLI targeting | ✅ `--connect http://127.0.0.1:8642 --node <canary-id>` 一个入口管两 node（`cli-node-targeting.md`）；但**写回类管理命令仍须带金丝雀 `--user-config`**（§3.3 写方向） |
+
+**结论：任务书期望的「跨 gateway 寻址复杂度消失」不成立。同 gateway 的真实收益集中在 UI/CLI 入口与进程编排，不在 federation。**
