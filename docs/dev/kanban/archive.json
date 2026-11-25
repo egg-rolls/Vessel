@@ -325,6 +325,15 @@
       "progress": "27318a8a完成4提交合并redblue-dev f5f125cb（18dcd26b biome基线/b2e8a922分类O8对账+双路径投影/4e6cca3a来源卡组织/b03974e8注释收口），build绿×3(RC=0+产物行)，10文件+177/-45；ENV_MESSAGE_KINDS+=source恒可见+runtimeEnvCard统一装配四处同入口+sourceNoticeCard(摘要地址/明细principal/node/team/原文块一字不动)+相邻折叠保留原文+i18n来源/Source；EnvCard渲染零改动GHOST样式；worktree已清；金丝雀验证中(待验a-f六点,持续流首批⑤封存握手)",
       "archivedAt": "2026-11-25T09:10:00+08:00",
       "cycle": "redblue-feature-round-3"
+    },
+    {
+      "id": "q-tool-output-leak",
+      "title": "修复工具输出隔离击穿：继承的VESSEL_TOOL_OUTPUT_DIR/VESSEL_PLUGIN_CONFIG穿透舰队边界（T2b立卡）",
+      "owner": "q-tool-output-leak",
+      "branch": "fix/q-tool-output-leak",
+      "progress": "9d937507完成4提交合并redblue-dev 6d22cc80（07197a09基线/892765d6 bootstrap桥接sanitizeToolOutputEnv共享模块80行/f310a0cb spawnOnly+beginHub spawn卫生/3138b9a6 daemon+前台gateway链），+122/-6六文件build绿；语义=各舰队按自己dataDir派生(异根重写/同根保留生产零回归)；覆盖bootstrap+node/hub spawn+daemon+前台,engine白名单源头自动正确；待金丝雀复验5点(environ无生产残留/双路径落canary-data/tool-output/生产根零新增/生产零回归/须daemon链重启)；worktree已清",
+      "archivedAt": "2026-11-25T09:25:00+08:00",
+      "cycle": "redblue-feature-round-3"
     }
   ]
 }
