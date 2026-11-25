@@ -11,8 +11,8 @@
  * @module vessel/agent-command
  */
 
-import type { MemberStatus } from '@vessel-agent/agent';
 import { readFile } from 'node:fs/promises';
+import type { MemberStatus } from '@vessel-agent/agent';
 import {
   AgentOwnerRequestError,
   AgentOwnerUnavailableError,
