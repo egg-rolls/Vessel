@@ -1269,6 +1269,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.pending.title': 'Pending · {count}',
   'chat.pending.identity.human': 'human',
   'chat.pending.identity.ask': 'ask answer',
+  // Fixed runtime labels (server InboxSourceLabel): not "who said it" — never the
+  // from_name branch (a bash job's from_name is the recipient itself).
+  'chat.pending.identity.bash': 'bash job',
+  'chat.pending.identity.system': 'system',
   // agent 源的身份形状与 A2A 卡片（`chat.agentMessage.from`）一致：用户一眼能对上「谁发给我的」。
   'chat.pending.identity.agent': 'agent:{name}',
   'chat.pending.sameSource': '{count} items',
