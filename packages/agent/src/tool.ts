@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   CONTEXT_PRESSURE_WARN_RATIO,
+  type RunEvent,
   type ToolContext,
   type ToolDefinition,
 } from '@vessel-agent/core';
@@ -684,7 +685,15 @@ export function createAgentTool(
           if (options.humanApproval === true && service.canConfirm(callerSession)) {
             const requestId = randomUUID();
             const waitLimitMs = options.rotateApprovalTimeoutMs ?? ROTATE_APPROVAL_TIMEOUT_MS;
-            ctx.events.publish({
+            // q-card-robust P-A：审批请求 / 超时收卡信号改走**事实通道**（装配方
+            // publishEvent → journal → 时间线），与内置 PermissionPolicy 同构 ——
+            // 裸流发布不进会话时间线，时间线订阅的 Web 连接 live 永远收不到这张卡
+            // （根因见 docs/dev/plans/envcard-run-visibility-research.md Part II）。
+            // 事实端口缺省（旧装配 / harness）退回裸流，行为不变；waitFor 仍走
+            // ctx.events（同一条流，应答照旧到达）。
+            const publishApproval: (event: RunEvent) => void =
+              ctx.emitFact ?? ((event) => ctx.events.publish(event));
+            publishApproval({
               type: 'tool.permission.request',
               run_id: ctx.run_id,
               data: {
@@ -730,7 +739,8 @@ export function createAgentTool(
                 // 超时后这张卡在界面上已经**没有意义**了：请求还在服务端 pending，
                 // 用户看到的是一张「能点」的卡 —— 点下去要么无人订阅（静默无效），
                 // 要么报 expired。这里显式发过期事件，让界面把卡收起来并说清原因。
-                ctx.events.publish({
+                // P-A：收卡信号与请求卡同通道（事实端口），时间线订阅同样可达。
+                publishApproval({
                   type: 'tool.permission.expired',
                   run_id: ctx.run_id,
                   data: {

@@ -977,13 +977,17 @@ function refsOf(value: unknown): MessageRef[] {
  * `observe` 恒不可见、`internal`（含**未登记**）只随 `showInternal` / `errorLevel: all`
  * 放开。`showInternal` 由调用方传入 `showsInternalEvents()` 的结果
  * （`ui.showInternalEvents || verbosity === 'debug'`）。
+ *
+ * q-card-robust A-Web：载荷一并传入 —— vessel:* 环境信息注入（带稳定 message_id）
+ * 经 entry 级判据恒可见（分级纠正，见 `isEnvInjectionVisible`）。ingest / refold /
+ * groupEvents 三路共用本函数，live 与回放同一口径。
  */
 export function isVisibleForGrouping(
   entry: StoredEvent,
   showInternal: boolean,
   errorLevel: ErrorVisibility = 'user',
 ): boolean {
-  return isVisibleInChat(entry.event.type, { showInternal, errorLevel });
+  return isVisibleInChat(entry.event.type, { showInternal, errorLevel }, entry.event.data);
 }
 
 /**
