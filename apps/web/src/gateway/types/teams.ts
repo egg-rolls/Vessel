@@ -93,7 +93,7 @@ export interface TeamMessage {
    * 0.51：删掉 `rotate` —— 对应的 `agent.rotated` 从未发出过，这个值一行都没被写过。
    */
   system_event?: 'join' | 'leave' | 'archive' | 'create' | 'fork' | 'retract';
-  /** 0.38 additive：tombstone 指向被撤回的消息；仅 `system_event: 'retract'` 时出现。 */
+  /** 0.38 additive：tombstone 指向被删除的消息（wire 事件名仍 retract）；仅 `system_event: 'retract'` 时出现。 */
   retracted_message_id?: string;
   /** 0.21 additive：federation 入站日志的回信地址；本地日志缺失。 */
   federation?: TeamMessageFederation;
@@ -137,12 +137,12 @@ export interface TeamPostResult {
   refs?: MessageRef[];
 }
 
-/** `teams.retract` 结果（0.38 append-only tombstone）。 */
+/** `teams.retract`（删除）结果（0.38 append-only tombstone + inbox 副本级联真删）。 */
 export interface TeamRetractResult {
   team_id: string;
   /** tombstone 自己的 message_id。 */
   message_id: string;
-  /** 被撤回的目标 message_id。 */
+  /** 被删除的目标 message_id。 */
   retracted_message_id: string;
 }
 

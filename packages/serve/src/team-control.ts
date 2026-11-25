@@ -242,7 +242,10 @@ export interface TeamControlLike {
     /** 0.21：跨节点报文元数据 */
     federation?: TeamLogFederationLike;
   }): Promise<TeamPostResultLike>;
-  /** 0.38：追加撤回 tombstone（日志保留原消息；目标须在可读窗口内）。 */
+  /**
+   * 删除（wire 仍叫 retract）：追加 tombstone（日志保留原消息；目标须在可读窗口内），
+   * 并级联真删各成员 inbox 里的那一份。
+   */
   retract(input: { team_id: string; message_id: string }): Promise<TeamRetractResultLike>;
   /**
    * 消费一条 team 消息的 inbox 投递（编辑按钮）：不写 tombstone、不改日志，

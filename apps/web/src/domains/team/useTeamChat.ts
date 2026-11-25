@@ -533,7 +533,7 @@ export function useTeamChat({
     try {
       await client.retractTeam({ team_id: teamId, message_id: target.message_id });
       setRetractTarget(null);
-      toast?.success(t('team.message.retractDone'));
+      toast?.success(t('team.message.deleteDone'));
       reloadRef.current();
     } catch (error) {
       // 失败保留弹窗与错误，用户可重试或取消。

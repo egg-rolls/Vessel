@@ -729,12 +729,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.message.editRecallFailed':
     'Could not recall the copy in the member inbox; draft not refilled: {detail}',
   'team.message.resend': 'Resend',
-  'team.message.retract': 'Retract',
-  'team.message.retractTitle': 'Retract message',
-  'team.message.retractBody':
-    'This message will be hidden from the Team view; the log keeps a retraction marker and later replies remain. This cannot be undone.',
-  'team.message.retractConfirm': 'Retract',
-  'team.message.retractDone': 'Retracted',
+  // "Delete" (user ruling, formerly "Retract"): hides the view AND deletes the inbox
+  // copies — not a recoverable retraction.
+  'team.message.delete': 'Delete',
+  'team.message.deleteTitle': 'Delete message',
+  'team.message.deleteBody':
+    'This message will be hidden from the Team view and the copies in member inboxes will be deleted (except any already running); the log keeps a deletion marker and later replies remain. This cannot be undone.',
+  'team.message.deleteConfirm': 'Delete',
+  'team.message.deleteDone': 'Deleted',
   'team.federation.from': 'federation from',
   'team.federation.reply': 'Reply by address',
   'team.federation.replyHint':
@@ -746,7 +748,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.system.create': '{name} created a new session',
   // Legacy log only: 0.39 writes `create`, never `fork`.
   'team.system.fork': 'agent forked (legacy record)',
-  'team.system.retract': '{name} retracted a message',
+  // Wire system event stays `retract` (append-only legacy log compatibility); the
+  // display text follows the "delete" semantics.
+  'team.system.retract': '{name} deleted a message',
   'team.system.unknown': 'Team system event',
 
   'team.delivery.queued': 'Queued',

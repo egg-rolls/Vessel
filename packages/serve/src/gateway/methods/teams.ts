@@ -424,7 +424,8 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       },
     },
     {
-      // 0.38：撤回 = 追加 tombstone；不删除原消息，也不级联删除后续回复。
+      // 0.38：追加 tombstone；不删除原消息，也不级联删除后续回复。
+      // 删除语义（用户裁定）：服务端另级联真删各成员 inbox 里的那一份（见 TeamService.retract）。
       name: 'teams.retract',
       permission: 'write',
       params_schema: {

@@ -64,7 +64,10 @@ export abstract class TeamsClient extends AgentsClient {
     return this.rpc<TeamSummary>('teams.spawnFrozen', { team_id: teamId, frozen });
   }
 
-  /** 0.38：追加一条 tombstone；目标消息由 UI 隐藏，日志不重写。 */
+  /**
+   * 删除（wire 仍叫 retract）：追加一条 tombstone，目标消息由 UI 隐藏，日志不重写；
+   * 服务端同时级联真删各成员 inbox 里的那一份（已开始执行的除外）。
+   */
   retractTeam(input: { team_id: string; message_id: string }): Promise<TeamRetractResult> {
     return this.rpc<TeamRetractResult>('teams.retract', input);
   }

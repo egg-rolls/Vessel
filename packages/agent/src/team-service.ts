@@ -473,8 +473,13 @@ export class DefaultTeamService implements AgentTeamService {
   }
 
   /**
-   * 撤回：日志保持 append-only，追加一条 system tombstone；不删除 / 不改写原消息，
-   * 也不级联删除后续回复。目标必须仍在可读窗口（≤1000 条）内。
+   * 删除（wire 仍叫 retract，用户裁定改「删除」语义）：日志保持 append-only，追加一条
+   * system tombstone；不删除 / 不改写原消息，也不级联删除后续回复。目标必须仍在可读
+   * 窗口（≤1000 条）内。
+   *
+   * tombstone 之外**级联真删各成员 inbox 里的那一份**（cascadeRecall）：只隐藏视图
+   * 而收件箱照投照跑不是「删除」。级联 best-effort —— tombstone 已落盘，单条收口
+   * 失败只 warn，不推翻删除结果（已消费 / 正在跑的副本本就收不回，按 skipped 如实）。
    */
   async retract(input: TeamRetractInput): Promise<TeamRetractResult> {
     const record = this.store.get(input.team_id);
@@ -524,6 +529,16 @@ export class DefaultTeamService implements AgentTeamService {
     }
     // 指针事件：web 的定向 reload 据此拉到 tombstone；不含正文。
     this.emit({ team_id: input.team_id, kind: 'system', message_id: messageId });
+    // 删除语义的另一半：收件箱副本级联真删（与编辑共用同一段收口）。
+    try {
+      await this.cascadeRecall(target);
+    } catch (error) {
+      this.logger.warn('team.retract.cascade_failed', {
+        team_id: input.team_id,
+        message_id: input.message_id,
+        error: errorText(error),
+      });
+    }
     return {
       message_id: messageId,
       team_id: input.team_id,

@@ -45,7 +45,10 @@ export interface TeamControl {
   createTeam(input: TeamCreateInput): Promise<TeamSummary>;
   updateTeam(input: TeamUpdateInput): Promise<TeamSummary>;
   archiveTeam(teamId: string): Promise<TeamSummary>;
-  /** 0.38：追加 tombstone（append-only）；目标消息由 UI 隐藏。 */
+  /**
+   * 删除（wire 仍叫 retract）：追加 tombstone（append-only），目标消息由 UI 隐藏；
+   * 服务端同时级联真删各成员 inbox 里的那一份。
+   */
   retractTeam(input: { team_id: string; message_id: string }): Promise<TeamRetractResult>;
   /**
    * 编辑的级联收口：只消费该消息投进各成员 inbox 的那一份（不写 tombstone、不改日志）。
