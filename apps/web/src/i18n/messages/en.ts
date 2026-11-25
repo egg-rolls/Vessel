@@ -1387,6 +1387,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.composer.sending': 'Sending',
   'chat.composer.send': 'Send',
   'chat.composer.hint': 'Enter to send · Shift+Enter for a new line',
+  // Session references (drag a session card onto the composer): chip a11y / remove / cap.
+  'chat.sessionRef.note': 'Referenced session',
+  'chat.sessionRef.remove': 'Remove session reference {name}',
+  'chat.sessionRef.reject.tooMany': 'At most {max} session references',
   'chat.refs.label': 'Referenced files',
   'chat.refs.remove': 'Remove reference {name}',
   'chat.refs.kind.file': 'File',

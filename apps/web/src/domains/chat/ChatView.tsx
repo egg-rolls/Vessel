@@ -34,6 +34,7 @@ import { PendingStrip } from './PendingStrip';
 import type { PendingSend } from './pending-sends';
 import { ProjectionReadbackProvider } from './projection-readback';
 import { SessionRail } from './SessionRail';
+import type { SessionRefScope } from './session-ref';
 import { TranscriptWindow } from './TranscriptWindow';
 import { ToolCatalogProvider } from './tool-catalog';
 import { useAnsweredAsks } from './useAnsweredAsks';
@@ -206,6 +207,21 @@ export function ChatView({
     teamControl,
     pendingNewSessions,
   });
+
+  // 会话引用 chip 的渐进披露基准：当前会话的节点 / 团队（与卡片第二行地址同一份
+  // roster 派生，不新增请求）。草稿态（无选中会话）= 当前节点、无团队 —— 新 agent
+  // 将落在本节点且不入任何 team，跨队 / 跨节点的引用照常显徽章。
+  const composerScope = useMemo<SessionRefScope>(() => {
+    const agent = sessionsApi.selectedSession?.agent;
+    const address = agent ? sessionsApi.agentAddressesById.get(agent.id) : undefined;
+    if (address) {
+      return { node: address.node, ...(address.team ? { team: address.team } : {}) };
+    }
+    const rosters = resourceData(rosterState) ?? [];
+    const current = rosters.find((roster) => roster.node.current) ?? rosters[0];
+    const node = current?.node.name;
+    return node ? { node } : {};
+  }, [sessionsApi.selectedSession, sessionsApi.agentAddressesById, rosterState]);
 
   const transcriptApi = useChatTranscript({
     client,
@@ -640,6 +656,10 @@ export function ChatView({
             onRetryPendingFetch={() => {
               void hydrateInteractions();
             }}
+            sessionRefs={submitApi.sessionRefs}
+            onRemoveSessionRef={submitApi.removeSessionRef}
+            onAddSessionRef={submitApi.addSessionRef}
+            currentScope={composerScope}
           />
         </section>
 

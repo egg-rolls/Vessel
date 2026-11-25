@@ -10,6 +10,7 @@ import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { closedAgentSessionIds } from '../../state/archive-visibility';
 import { groupSessionsByDay, normalizeSessionTitle, sessionTitle } from '../../state/sessions';
+import { SESSION_REF_MIME, sessionRefAddressOf, sessionRefPayloadOf } from './session-ref';
 
 // 会话列表的「已停用 · 待移除」徽标集合：实现在零依赖模块里（门禁探针也要用），
 // 这里只做转发，保持原有 import 路径对消费方不变。
@@ -367,9 +368,28 @@ export function SessionList({
                 // preview 只进 title tooltip，不再占一行布局。
                 const titleTooltip = preview ? `${title} — ${preview}` : title;
                 return (
+                  // biome-ignore lint/a11y/noStaticElementInteractions: 拖拽会话卡到输入框是鼠标便捷入口（点击选中仍在内部 button 上，键盘流不变）
                   <div
                     className={`session-row group ${active ? 'active' : ''}`.trim()}
                     key={session.session_id}
+                    // 会话卡可拖拽到输入框成为引用 chip（session-ref.ts）。重命名编辑中
+                    // 禁用拖拽：那时拖的是选中文本，不是会话。点击选中行为不变。
+                    draggable={!editing}
+                    onDragStart={(event) => {
+                      const payload = sessionRefPayloadOf(
+                        session,
+                        agentAddressesById,
+                        agentAddresses,
+                      );
+                      event.dataTransfer.setData(SESSION_REF_MIME, JSON.stringify(payload));
+                      // 纯文本回落：拖到外部编辑器时至少留下可读的会话地址。
+                      const address = sessionRefAddressOf(payload);
+                      event.dataTransfer.setData(
+                        'text/plain',
+                        address !== undefined ? `${payload.title} (${address})` : payload.title,
+                      );
+                      event.dataTransfer.effectAllowed = 'copy';
+                    }}
                   >
                     {editing ? (
                       <div className="session-rename">

@@ -10,7 +10,7 @@
  * - key（沿用既有语义）：会话 `chat:new` / `chat:<sessionId>`，团队 `team:<nodeKey>:<teamId>`；
  * - 有界：单条正文 ≤ 32 KiB（UTF-8，超出截断保前缀）、最多**落盘** 50 个槽（按最后写入时间
  *   淘汰最旧；当前页面内存里仍保留全部）、空草稿不落盘（内存里也仍是「空即删条目」）；
- *   引用单槽 ≤ 32 条（与 core `Message.refs` 同一上限）；
+ *   引用单槽 ≤ 32 条（与 core `Message.refs` 同一上限）；会话引用单槽 ≤ 8 条（按 sessionId 去重）；
  * - 落盘节流：写动作后 debounce 300ms；`pagehide` / `beforeunload` / 页面转后台时同步 flush；
  * - SSR / 隐私模式：模块顶层不碰 storage，首次使用时懒 hydrate；读写全程 try/catch，
  *   失败静默降级成纯内存（等价于之前的行为）；
@@ -27,6 +27,24 @@ export interface ComposerChip {
   readonly label: string;
 }
 
+/**
+ * 会话引用 chip（拖拽会话卡到输入框产生；stores 不反向依赖 domains，结构类型在此）。
+ *
+ * 与附件引用（`MessageRef`，只有路径）不同：会话引用携带被引用会话的基础链展示信息
+ * （会话名 / agent 名 / 团队 / 节点），发送时序列化为可读引用文本随正文投递
+ * （`runs.start` 没有结构化会话引用字段，见 `domains/chat/session-ref.ts`）。
+ * 展示值在拖拽那一刻快照；渐进披露（跨队 / 跨节点才显示 team / node 徽章）在渲染侧
+ * 按当前会话 scope 比较，不在这里判。
+ */
+export interface ComposerSessionRef {
+  readonly sessionId: string;
+  readonly title: string;
+  readonly agentName?: string;
+  readonly agentId?: string;
+  readonly team?: string;
+  readonly node?: string;
+}
+
 export interface ComposerDraft {
   readonly text: string;
   readonly chips: readonly ComposerChip[];
@@ -35,6 +53,11 @@ export interface ComposerDraft {
    * 同一路径可以出现两次（两个 chip、删一个只删对应下标）。
    */
   readonly refs: readonly MessageRef[];
+  /**
+   * 待发送的会话引用（拖拽会话卡产生）。按 `sessionId` 去重：同一会话引用两次
+   * 不增加信息，只渲染一个 chip。顺序即发送顺序。
+   */
+  readonly sessionRefs: readonly ComposerSessionRef[];
 }
 
 export const EMPTY_CHIPS: readonly ComposerChip[] = Object.freeze([]);
@@ -44,6 +67,7 @@ export const EMPTY_DRAFT: ComposerDraft = Object.freeze({
   text: '',
   chips: EMPTY_CHIPS,
   refs: Object.freeze([]) as readonly MessageRef[],
+  sessionRefs: Object.freeze([]) as readonly ComposerSessionRef[],
 });
 
 /** 草稿态（还没建 session）的槽位。 */
@@ -68,6 +92,8 @@ const STORAGE_VERSION = 2;
 const MAX_DRAFT_BYTES = 32 * 1024;
 /** 单槽引用条数上限：与 core `Message.refs` 同一口径（32 条）。 */
 const MAX_DRAFT_REFS = 32;
+/** 单槽会话引用条数上限：每条是一段基础链文本（token 税比路径重），收紧到 8 条。 */
+const MAX_DRAFT_SESSION_REFS = 8;
 /** 最多保留的槽数；超出按最后写入时间淘汰最旧。 */
 const MAX_SLOTS = 50;
 const PERSIST_DEBOUNCE_MS = 300;
@@ -78,6 +104,8 @@ interface PersistedSlot {
   chips: ComposerChip[];
   /** 待发送引用（只有路径与种类）；没有引用时不写该键。 */
   refs?: MessageRef[];
+  /** 待发送会话引用（基础链展示值）；没有时不写该键。v2 内的 additive 字段，旧副本缺失按空。 */
+  sessionRefs?: ComposerSessionRef[];
 }
 
 /** 落盘形状：数组顺序 = 由旧到新（淘汰直接切头部）。 */
@@ -145,6 +173,9 @@ function collectSlots(): PersistedSlot[] {
       text: truncateDraftText(draft.text),
       chips: draft.chips.map((chip) => ({ agentId: chip.agentId, label: chip.label })),
       ...(draft.refs.length > 0 ? { refs: draft.refs.map((ref) => ({ ...ref })) } : {}),
+      ...(draft.sessionRefs.length > 0
+        ? { sessionRefs: draft.sessionRefs.map((ref) => ({ ...ref })) }
+        : {}),
     });
   }
   slots.sort((a, b) => (recency.get(a.key) ?? 0) - (recency.get(b.key) ?? 0));
@@ -170,6 +201,39 @@ function parseRefs(value: unknown): MessageRef[] {
     if (typeof entry.mime === 'string') ref.mime = entry.mime;
     if (typeof entry.bytes === 'number' && Number.isFinite(entry.bytes) && entry.bytes >= 0) {
       ref.bytes = Math.floor(entry.bytes);
+    }
+    refs.push(ref);
+  }
+  return refs;
+}
+
+/**
+ * 宽松解析会话引用：`sessionId` / `title` 必须是非空字符串，其余展示值可选；
+ * 逐条丢弃坏数据，上限 `MAX_DRAFT_SESSION_REFS`（与 `addSessionRef` 同一口径）。
+ */
+function parseSessionRefs(value: unknown): ComposerSessionRef[] {
+  if (!Array.isArray(value)) return [];
+  const refs: ComposerSessionRef[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (refs.length >= MAX_DRAFT_SESSION_REFS) break;
+    if (!isRecord(entry)) continue;
+    const { sessionId, title } = entry;
+    if (typeof sessionId !== 'string' || sessionId.length === 0) continue;
+    if (typeof title !== 'string' || title.length === 0) continue;
+    if (seen.has(sessionId)) continue;
+    seen.add(sessionId);
+    const ref: {
+      sessionId: string;
+      title: string;
+      agentName?: string;
+      agentId?: string;
+      team?: string;
+      node?: string;
+    } = { sessionId, title };
+    for (const field of ['agentName', 'agentId', 'team', 'node'] as const) {
+      const raw = entry[field];
+      if (typeof raw === 'string' && raw.length > 0) ref[field] = raw;
     }
     refs.push(ref);
   }
@@ -209,6 +273,7 @@ function parseDrafts(raw: string | null): Record<string, ComposerDraft> | null {
       text: truncateDraftText(text),
       chips: parseChips(slot.chips),
       refs: parseRefs(slot.refs),
+      sessionRefs: parseSessionRefs(slot.sessionRefs),
     };
     if (isEmpty(draft)) continue;
     drafts[key] = draft;
@@ -305,12 +370,26 @@ interface ComposerDraftState {
   addRef: (key: string, ref: MessageRef) => boolean;
   /** 删一条引用（下标即 refs 里的位置）。 */
   removeRef: (key: string, index: number) => void;
+  /** 写待发送会话引用（整组替换；顺序即发送顺序）。 */
+  setSessionRefs: (key: string, refs: readonly ComposerSessionRef[]) => void;
+  /**
+   * 加一条会话引用（尾部追加）：按 `sessionId` 去重（同一会话引用两次不增加信息），
+   * 已存在或超过上限返回 `false`。
+   */
+  addSessionRef: (key: string, ref: ComposerSessionRef) => boolean;
+  /** 删一条会话引用（下标即 sessionRefs 里的位置）。 */
+  removeSessionRef: (key: string, index: number) => void;
   /** 发送成功后清空该 key（正文、chips 与引用一起）。 */
   clear: (key: string) => void;
 }
 
 function isEmpty(draft: ComposerDraft): boolean {
-  return draft.text.length === 0 && draft.chips.length === 0 && draft.refs.length === 0;
+  return (
+    draft.text.length === 0 &&
+    draft.chips.length === 0 &&
+    draft.refs.length === 0 &&
+    draft.sessionRefs.length === 0
+  );
 }
 
 /** 写入（或按需删除）一条草稿；空草稿删条目，避免长期挂着一堆空槽。 */
@@ -334,11 +413,12 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
     const text = typeof value === 'function' ? value(current.text) : value;
     // 同值写入不写 state（`Object.is` 短路，不触发重渲染），也不落盘。
     if (text === current.text) return;
-    // 只换正文时保留 chips / refs 引用，那两个订阅者不因敲字重渲染。
+    // 只换正文时保留 chips / refs / sessionRefs 引用，那些订阅者不因敲字重渲染。
     const drafts = withDraft(get().drafts, key, {
       text,
       chips: current.chips,
       refs: current.refs,
+      sessionRefs: current.sessionRefs,
     });
     set({ drafts });
     if (drafts[key] === undefined) forget(key);
@@ -353,6 +433,7 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
       text: current.text,
       chips,
       refs: current.refs,
+      sessionRefs: current.sessionRefs,
     });
     set({ drafts });
     if (drafts[key] === undefined) forget(key);
@@ -368,6 +449,7 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
       text: current.text,
       chips: current.chips,
       refs: capped,
+      sessionRefs: current.sessionRefs,
     });
     set({ drafts });
     if (drafts[key] === undefined) forget(key);
@@ -383,6 +465,7 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
       text: current.text,
       chips: current.chips,
       refs: [...current.refs, ref],
+      sessionRefs: current.sessionRefs,
     });
     set({ drafts });
     markTouched(key);
@@ -400,6 +483,58 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
       text: current.text,
       chips: current.chips,
       refs,
+      sessionRefs: current.sessionRefs,
+    });
+    set({ drafts });
+    if (drafts[key] === undefined) forget(key);
+    else markTouched(key);
+    schedulePersist();
+  },
+
+  setSessionRefs: (key, refs) => {
+    ensureHydrated();
+    const current = get().drafts[key] ?? EMPTY_DRAFT;
+    const capped = refs.slice(0, MAX_DRAFT_SESSION_REFS);
+    const drafts = withDraft(get().drafts, key, {
+      text: current.text,
+      chips: current.chips,
+      refs: current.refs,
+      sessionRefs: capped,
+    });
+    set({ drafts });
+    if (drafts[key] === undefined) forget(key);
+    else markTouched(key);
+    schedulePersist();
+  },
+
+  addSessionRef: (key, ref) => {
+    ensureHydrated();
+    const current = get().drafts[key] ?? EMPTY_DRAFT;
+    if (current.sessionRefs.length >= MAX_DRAFT_SESSION_REFS) return false;
+    if (current.sessionRefs.some((item) => item.sessionId === ref.sessionId)) return false;
+    const drafts = withDraft(get().drafts, key, {
+      text: current.text,
+      chips: current.chips,
+      refs: current.refs,
+      sessionRefs: [...current.sessionRefs, ref],
+    });
+    set({ drafts });
+    markTouched(key);
+    schedulePersist();
+    return true;
+  },
+
+  removeSessionRef: (key, index) => {
+    ensureHydrated();
+    const current = get().drafts[key];
+    if (current === undefined) return;
+    const sessionRefs = current.sessionRefs.filter((_, position) => position !== index);
+    if (sessionRefs.length === current.sessionRefs.length) return;
+    const drafts = withDraft(get().drafts, key, {
+      text: current.text,
+      chips: current.chips,
+      refs: current.refs,
+      sessionRefs,
     });
     set({ drafts });
     if (drafts[key] === undefined) forget(key);
@@ -443,6 +578,18 @@ export function useComposerRefs(key: string): readonly MessageRef[] {
 /** 引用条数上限（与 `addRef` / 落盘解析共用一份）。 */
 export const MAX_COMPOSER_REFS = MAX_DRAFT_REFS;
 
+/** 未命中 key 时的稳定空会话引用（`Object.is` 比较快照，不能每次渲染新建）。 */
+const EMPTY_SESSION_REFS: readonly ComposerSessionRef[] = Object.freeze([]);
+
+/** 读 key 的待发送会话引用；未命中回退冻结空数组（顺序即发送顺序）。 */
+export function useComposerSessionRefs(key: string): readonly ComposerSessionRef[] {
+  ensureHydrated();
+  return useComposerDraftStore((state) => state.drafts[key]?.sessionRefs ?? EMPTY_SESSION_REFS);
+}
+
+/** 会话引用条数上限（与 `addSessionRef` / 落盘解析共用一份）。 */
+export const MAX_COMPOSER_SESSION_REFS = MAX_DRAFT_SESSION_REFS;
+
 /**
  * 把草稿态（`chat:new`）的正文继承给目标会话槽。
  *
@@ -453,7 +600,7 @@ export const MAX_COMPOSER_REFS = MAX_DRAFT_REFS;
  */
 export function adoptNewChatDraft(sessionId: string): void {
   ensureHydrated();
-  const { drafts, setText, setRefs, clear } = useComposerDraftStore.getState();
+  const { drafts, setText, setRefs, setSessionRefs, clear } = useComposerDraftStore.getState();
   const source = drafts[NEW_CHAT_DRAFT_KEY];
   const text = source?.text ?? '';
   if (text.length === 0) return;
@@ -464,6 +611,14 @@ export function adoptNewChatDraft(sessionId: string): void {
   const refs = source?.refs ?? EMPTY_REFS;
   if (refs.length > 0 && (drafts[targetKey]?.refs ?? EMPTY_REFS).length === 0) {
     setRefs(targetKey, refs);
+  }
+  // 会话引用同理：草稿态拖进来的会话卡跟正文一起搬（目标槽已有时不覆盖）。
+  const sessionRefs = source?.sessionRefs ?? EMPTY_SESSION_REFS;
+  if (
+    sessionRefs.length > 0 &&
+    (drafts[targetKey]?.sessionRefs ?? EMPTY_SESSION_REFS).length === 0
+  ) {
+    setSessionRefs(targetKey, sessionRefs);
   }
   clear(NEW_CHAT_DRAFT_KEY);
 }
