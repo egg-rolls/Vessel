@@ -751,4 +751,47 @@ export const en: Record<MessageKey, string> = {
   'resume.card.pending_inputs':
     '{count} accepted input(s) are queued and were admitted after this card, oldest first.',
   'resume.card.no_pending_inputs': 'no accepted input was queued; continue from the current state.',
+
+  // ── session status (AX self-service · self-observation) ──
+  'help.cmd.sessionStatus':
+    'session live state (state/run/usage/context/queue/last activity; default = caller itself)',
+  'flag.id': 'object id (e.g. session id; default resolves to the caller itself)',
+  'sessionStatus.title': 'Session status',
+  'sessionStatus.session': 'session',
+  'sessionStatus.sessionTitle': 'title',
+  'sessionStatus.agent': 'agent',
+  'sessionStatus.state': 'state',
+  'sessionStatus.run': 'run',
+  'sessionStatus.tokens': 'tokens',
+  'sessionStatus.context': 'context',
+  'sessionStatus.queue': 'queue',
+  'sessionStatus.messages': 'messages',
+  'sessionStatus.events': 'event tail',
+  'sessionStatus.activity': 'last activity',
+  'sessionStatus.source': 'source',
+  'sessionStatus.noMain':
+    'cannot resolve caller session: no main agent in agents.list (use --id <session> explicitly)',
+  'sessionStatus.notFound': 'session not found: {id}',
+  'sessionStatus.notAvailable':
+    'sessions.get is not available on this gateway (requires a 0.14+ serve build)',
+
+  // ── permission show (AX self-service · self-observation) ──
+  'help.group.permission': 'permission self-observation (effective matrix, read-only)',
+  'help.cmd.permissionShow':
+    'effective permission matrix (tools × auto/ask/never + scoped keys + rule sources; default = caller itself)',
+  'flag.member': 'member id within this fleet (default = caller itself)',
+  'permissionShow.title': 'Effective permission matrix',
+  'permissionShow.default': 'default',
+  'permissionShow.member': 'member',
+  'permissionShow.autoApprove': 'auto approve',
+  'permissionShow.neverApprove': 'always ask',
+  'permissionShow.bridgeDeny': 'bridge deny',
+  'permissionShow.tools': 'Tools',
+  'permissionShow.scoped': 'Scoped keys',
+  'permissionShow.source': 'source',
+  'permissionShow.checkNote':
+    '* = tool has its own checkPermission (runtime explicit decision may override the static matrix)',
+  'permissionShow.memberNotFound': 'member not found (this fleet only): {id}',
+  'permissionShow.notAvailable':
+    'permissions.show is not available on this gateway (requires a newer serve build)',
 };

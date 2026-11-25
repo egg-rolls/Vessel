@@ -703,6 +703,45 @@ export const zhCN = {
   'resume.card.background_stopped': '后台进程已被重启停掉；还需要就重新跑起来，别假设它们还在。',
   'resume.card.pending_inputs': '后面排着 {count} 条已接受的输入，按最早顺序在此卡之后放行。',
   'resume.card.no_pending_inputs': '没有排着的已接受输入；从当前现状接着做。',
+
+  // ── session status（AX 自服务 · 自观）──
+  'help.cmd.sessionStatus': '会话实时态（state/run/用量/上下文/队列/最后活动；缺省=调用者自身）',
+  'flag.id': '对象 id（如会话 id；缺省由命令解析调用者自身）',
+  'sessionStatus.title': '会话实时态',
+  'sessionStatus.session': '会话',
+  'sessionStatus.sessionTitle': '标题',
+  'sessionStatus.agent': '归属',
+  'sessionStatus.state': '状态',
+  'sessionStatus.run': 'Run',
+  'sessionStatus.tokens': '用量',
+  'sessionStatus.context': '上下文',
+  'sessionStatus.queue': '队列',
+  'sessionStatus.messages': '消息数',
+  'sessionStatus.events': '事件尾',
+  'sessionStatus.activity': '最后活动',
+  'sessionStatus.source': '来源',
+  'sessionStatus.noMain':
+    '无法解析调用者会话：agents.list 里没有 main（用 --id <session> 显式指定）',
+  'sessionStatus.notFound': '会话不存在：{id}',
+  'sessionStatus.notAvailable': '该 gateway 不支持 sessions.get（需要 0.14+ serve）',
+
+  // ── permission show（AX 自服务 · 自观）──
+  'help.group.permission': '权限自观（有效矩阵只读）',
+  'help.cmd.permissionShow':
+    '有效权限矩阵（工具×auto/ask/never + scoped 键 + 规则来源；缺省=调用者自身）',
+  'flag.member': '本舰队成员 id（缺省=调用者自身）',
+  'permissionShow.title': '有效权限矩阵',
+  'permissionShow.default': '默认判定',
+  'permissionShow.member': '成员',
+  'permissionShow.autoApprove': '免确认',
+  'permissionShow.neverApprove': '强制确认',
+  'permissionShow.bridgeDeny': '桥拒绝',
+  'permissionShow.tools': '工具',
+  'permissionShow.scoped': 'Scoped 键',
+  'permissionShow.source': '来源',
+  'permissionShow.checkNote': '* = 工具自带 checkPermission（运行期显式判定可覆盖静态矩阵）',
+  'permissionShow.memberNotFound': '成员不存在（限本舰队）：{id}',
+  'permissionShow.notAvailable': '该 gateway 不支持 permissions.show（需要新版 serve）',
 } as const;
 
 /** CLI catalog 的 key 集合（en 必须一一对应） */
