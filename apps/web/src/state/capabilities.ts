@@ -4,6 +4,7 @@ import type {
   PluginCatalogItem,
   PluginCatalogKind,
   PluginCatalogScope,
+  PluginLifecycleProfile,
   PluginRuntimeMode,
   PluginRuntimeStatus,
 } from '../gateway/types';
@@ -24,10 +25,13 @@ export interface CatalogPluginRow {
   kind?: PluginCatalogKind;
   mode?: PluginRuntimeMode;
   restartRequired?: boolean;
+  /** q-plugin-lifecycle §6.2 R2：真阳性「重启后生效」badge 判据。 */
+  pendingRestart?: boolean;
+  lifecycle?: PluginLifecycleProfile;
   status?: PluginRuntimeStatus;
 }
 
-/** catalog 主路径：字段原样透传，不在前端推导 kind / restartRequired。 */
+/** catalog 主路径：字段原样透传，不在前端推导 kind / pendingRestart。 */
 export function catalogRowsFromItems(items: readonly PluginCatalogItem[]): CatalogPluginRow[] {
   return items.map((item) => ({
     id: item.id,
@@ -38,6 +42,9 @@ export function catalogRowsFromItems(items: readonly PluginCatalogItem[]): Catal
     kind: item.kind,
     mode: item.mode,
     restartRequired: item.restartRequired,
+    // pendingRestart 缺省（旧 gateway）时回落兼容别名 restartRequired。
+    pendingRestart: item.pendingRestart ?? item.restartRequired,
+    ...(item.lifecycle !== undefined ? { lifecycle: item.lifecycle } : {}),
     ...(item.status !== undefined ? { status: item.status } : {}),
   }));
 }

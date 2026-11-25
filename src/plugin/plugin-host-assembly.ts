@@ -276,13 +276,27 @@ export interface PluginReloaderOptions {
   getConfig: () => VesselConfig;
 }
 
-/** in-process 能力插件无法热重载：指纹变化时 `restart_required=true` */
-function inProcessFingerprint(descriptors: readonly LoaderPluginDescriptor[]): string {
-  return descriptors
-    .filter((descriptor) => descriptor.mode === 'in-process')
-    .map((descriptor) => `${descriptor.name}@${descriptor.version}:${descriptor.dir}`)
-    .sort()
-    .join('|');
+/** in-process 能力插件的 per-plugin 指纹（name → name@version:dir）。 */
+function inProcessFingerprintMap(
+  descriptors: readonly LoaderPluginDescriptor[],
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const descriptor of descriptors) {
+    if (descriptor.mode !== 'in-process') continue;
+    map.set(descriptor.name, `${descriptor.name}@${descriptor.version}:${descriptor.dir}`);
+  }
+  return map;
+}
+
+/** 共享插件重载器：child 热重载 + in-process 待重启追踪（q-plugin-lifecycle §6.2 R2）。 */
+export interface PluginReloader {
+  reload(): Promise<PluginReloadResult>;
+  /**
+   * in-process 插件中「磁盘指纹 ≠ 已生效（启动）指纹」的集合（新增 / 变更 / 移除）。
+   * in-process 代码更新须重启（ESM 物理约束），故已生效基线恒为启动态，pending 持续到重启。
+   * 这是 `restart_required` 真信号的 per-plugin 来源，供 catalog pendingRestart 汇聚。
+   */
+  pendingInProcessRestart(): ReadonlySet<string>;
 }
 
 /**
@@ -290,27 +304,38 @@ function inProcessFingerprint(descriptors: readonly LoaderPluginDescriptor[]): s
  * descriptor → `manager.reload(descriptors)`。
  *
  * 不重启进程；in-process 能力插件若发生变化，结果带 `restart_required`，
- * 不谎报已重载。
+ * 不谎报已重载。pending 以**启动态**为已生效基线（不随 reload 清零），诚实持续到重启。
  */
-export function createPluginReloader(
-  options: PluginReloaderOptions,
-): () => Promise<PluginReloadResult> {
-  let baseline = inProcessFingerprint(options.loader.list());
+export function createPluginReloader(options: PluginReloaderOptions): PluginReloader {
+  const applied = inProcessFingerprintMap(options.loader.list());
 
-  return async (): Promise<PluginReloadResult> => {
-    const descriptors = options.loader.rescan();
-    const next = inProcessFingerprint(descriptors);
-    const restartRequired = next !== baseline;
-    baseline = next;
+  const pendingFrom = (descriptors: readonly LoaderPluginDescriptor[]): Set<string> => {
+    const current = inProcessFingerprintMap(descriptors);
+    const pending = new Set<string>();
+    for (const [name, fingerprint] of applied) {
+      if (current.get(name) !== fingerprint) pending.add(name);
+    }
+    for (const name of current.keys()) {
+      if (!applied.has(name)) pending.add(name);
+    }
+    return pending;
+  };
 
-    const config = options.getConfig();
-    const childDescriptors = descriptors
-      .filter((descriptor) => descriptor.mode === 'child')
-      .map((descriptor) => toServeDescriptor(descriptor, config));
+  return {
+    pendingInProcessRestart: () => pendingFrom(options.loader.list()),
+    async reload(): Promise<PluginReloadResult> {
+      const descriptors = options.loader.rescan();
+      const pending = pendingFrom(descriptors);
 
-    const result = await options.manager.reload(childDescriptors);
-    if (restartRequired) result.restart_required = true;
-    return result;
+      const config = options.getConfig();
+      const childDescriptors = descriptors
+        .filter((descriptor) => descriptor.mode === 'child')
+        .map((descriptor) => toServeDescriptor(descriptor, config));
+
+      const result = await options.manager.reload(childDescriptors);
+      if (pending.size > 0) result.restart_required = true;
+      return result;
+    },
   };
 }
 

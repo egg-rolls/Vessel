@@ -273,8 +273,10 @@ export function CapabilitiesView() {
                   key: 'restart',
                   header: t('capabilities.col.restart'),
                   hide: 'compact',
+                  // q-plugin-lifecycle §6.2 R2：badge 如实反映「有待生效的 restart 类变更」
+                  // （pendingRestart），不再是 in-process 模式硬编码。模式信息留在 mode 列。
                   cell: (plugin) =>
-                    plugin.restartRequired ? (
+                    plugin.pendingRestart ? (
                       <Badge tone="warn">{t('capabilities.restartRequired')}</Badge>
                     ) : (
                       '—'
