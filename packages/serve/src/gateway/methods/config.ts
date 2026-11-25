@@ -576,6 +576,9 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
                   type: 'string',
                   enum: ['inactive', 'active', 'unhealthy', 'disabled', 'invalid'],
                 },
+                // TI5-6 additive：插件持久化 config 快照（plugins[].config 原值）；
+                // 无持久化值时整字段缺省。web 设置弹窗回显 / 写确认消费。
+                config: { type: 'object' },
                 // plugin-embed 契约 §3：additive；没有 ui.embed 的插件缺省。
                 ui_trust: { type: 'string', enum: ['embedded', 'isolated'] },
                 ui_bundle_hash: { type: 'string' },

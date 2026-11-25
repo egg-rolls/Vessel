@@ -411,6 +411,12 @@ export interface PluginListMetadata {
   version?: string;
   mode?: PluginMode;
   status?: PluginListStatus;
+  /**
+   * TI5-6 additive：插件持久化 config 快照（config `plugins[].config` 原值，
+   * 不含 manifest default）。web 设置弹窗回显 + 写确认消费（PluginListItem.config）。
+   * 无持久化值时整字段缺省（旧客户端忽略）。
+   */
+  config?: Record<string, unknown>;
   /** plugin-embed 契约 §3：没有 ui.embed 的插件三字段缺省。 */
   ui_trust?: PluginUiTrust;
   ui_bundle_hash?: string;
@@ -434,6 +440,12 @@ export interface PluginStatusEntry {
   events_dropped: number;
   /** 当前 restart 窗口内已重启次数。 */
   restarts: number;
+  /**
+   * TI5-6 additive：持久化 config 快照（内部字段；pluginListMetadata 映射到
+   * wire `config`）。优先 settingsFor 活配置读端口（写后新鲜），无端口回退
+   * descriptor.settings（启动快照）。无持久化值时缺省。
+   */
+  config?: Record<string, unknown>;
   /**
    * plugin-embed 契约 §3：descriptor 加载 / reload 时计算的 embed 信任态
    * （内部字段；pluginListMetadata 映射到 wire）。无 ui.embed / embedRoot

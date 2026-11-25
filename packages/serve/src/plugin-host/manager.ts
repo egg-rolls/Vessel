@@ -87,7 +87,11 @@ export interface PluginHostManagerOptions {
   eventsPerSecond?: number;
   /** 事件 DTO 的额外变换（在事件源之后、白名单之前）。 */
   redact?: (event: PluginEventDto) => PluginEventDto;
-  /** 懒激活时解析 settings（缺省 `{}`）；显式 activate 的 settings 优先。 */
+  /**
+   * 懒激活时解析 settings（缺省 `{}`）；显式 activate 的 settings 优先。
+   * TI5-6 起亦作元数据读端口：statusOf 经它取持久化 config 快照进 plugins.list
+   * （装配注入读 liveConfig 的实现 → 写后回显新鲜；缺省回退 descriptor.settings）。
+   */
   settingsFor?: (id: string) => Record<string, unknown>;
   logger?: PluginLogger;
   onEventDropped?: (pluginId: string, dropped: number) => void;
@@ -1782,6 +1786,8 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
   private statusOf(entry: Entry): PluginStatusEntry {
     const now = this.now();
     const restarts = entry.restarts.filter((timestamp) => now - timestamp < this.restartWindowMs);
+    // TI5-6：持久化 config 快照进元数据（web 设置回显 / 写确认消费）。
+    const config = this.persistedConfigOf(entry.descriptor);
     return {
       id: entry.descriptor.id,
       status: entry.status,
@@ -1792,6 +1798,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
       ...(entry.message !== undefined ? { message: entry.message } : {}),
       events_dropped: entry.dropped,
       restarts: restarts.length,
+      ...(config !== undefined ? { config } : {}),
       ...(entry.embedState !== undefined && entry.descriptor.uiEmbed !== undefined
         ? {
             ui_trust: entry.embedState.trust,
@@ -1804,6 +1811,9 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
 
   /** in-process 状态（双轨另一轨）：登记即激活，无 restart / dropped 维度。 */
   private inProcessStatusOf(record: InProcessRecord): PluginStatusEntry {
+    // TI5-6：in-process 登记是一次性的（descriptor.settings 是启动快照），
+    // settingsFor 活配置读端口保证 plugins.config.set 写后回显新鲜。
+    const config = this.persistedConfigOf(record.descriptor);
     return {
       id: record.descriptor.id,
       status: record.enabled ? 'active' : 'disabled',
@@ -1812,6 +1822,7 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
       mode: 'in-process',
       events_dropped: 0,
       restarts: 0,
+      ...(config !== undefined ? { config } : {}),
       ...(record.embedState !== undefined && record.descriptor.uiEmbed !== undefined
         ? {
             ui_trust: record.embedState.trust,
@@ -1820,6 +1831,17 @@ export class PluginHostManager implements PluginHostManagerLike, PluginHttpHostL
           }
         : {}),
     };
+  }
+
+  /**
+   * TI5-6：插件持久化 config（config `plugins[].config` 原值，不含 default）。
+   * settingsFor 优先（装配注入的活配置读端口，gateway 读 liveConfig）；
+   * 无端口回退 descriptor.settings（本地模式启动快照，语义不变）。
+   * 空对象 → undefined（wire 整字段缺省 = 无持久化值，不发射空壳）。
+   */
+  private persistedConfigOf(descriptor: PluginDescriptor): Record<string, unknown> | undefined {
+    const config = this.options.settingsFor?.(descriptor.id) ?? descriptor.settings ?? {};
+    return Object.keys(config).length > 0 ? config : undefined;
   }
 
   private publishState(entry: Entry): void {
@@ -1866,6 +1888,8 @@ export function pluginListMetadata(
       ...(status.version !== undefined ? { version: status.version } : {}),
       ...(status.mode !== undefined ? { mode: status.mode } : {}),
       status: toPluginListStatus(status.status),
+      // TI5-6 additive：持久化 config 快照（web 设置回显 / 写确认消费）。
+      ...(status.config !== undefined ? { config: status.config } : {}),
       // plugin-embed 契约 §3：embed 信任态（无 ui.embed 的插件缺省）。
       ...(status.ui_trust !== undefined ? { ui_trust: status.ui_trust } : {}),
       ...(status.ui_bundle_hash !== undefined ? { ui_bundle_hash: status.ui_bundle_hash } : {}),
