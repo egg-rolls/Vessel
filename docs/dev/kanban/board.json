@@ -54,6 +54,14 @@
       "progress": "✅完成合并ab63936d(023fec90 read缺省3/cf8b0308去超时/c5f5b404 rotate0.5/e2e8b89d条带三态)build绿；更正：产物读数误报撤回(本仓build=typecheck+lint无bundle,ADR-006)；待验4点(直读最新3/不超时回退/50%rotate提示/三态切换)；worktree已清"
     },
     {
+      "id": "q-swr-refresh",
+      "title": "数据刷新stale-while-revalidate规范（保留旧数据后台刷新无缝替换）",
+      "column": "进行中",
+      "owner": "q-swr-refresh",
+      "branch": "feat/q-swr-refresh",
+      "progress": "e2b4b280派单(用户裁定)：usage刷新去整页loading闪烁→SWR(保留旧数据+15s后台refetch+就绪swap+首次才loading)+共享hook+文档化规范；kanban if_mtime先例"
+    },
+    {
       "id": "q-plugin-ui-layer",
       "title": "微修复：plugin-ui button重置层外压制iframe表面（ISSUE-SS2-1）",
       "column": "进行中",
