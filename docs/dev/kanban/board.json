@@ -88,10 +88,10 @@
     {
       "id": "q-skills-ui",
       "title": "技能库页面UI重设计：卡片展示名称+点击详情（用户裁定参照工具页规范）",
-      "column": "进行中",
-      "owner": "q-skills-ui",
-      "branch": "fix/q-skills-ui",
-      "progress": "ee030af2派单：卡片网格(名称+来源小字)+点击展开详情(描述/指令/配置/信任态)+GHOST视觉+搜索筛选保留；①调研②卡片③适配④build"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并c0bc026e(b5364e13调研/4ce27f44卡片+Modal/4ea31b76 i18n/00704654 build:ui产物)build绿+build:ui产物实证；卡片网格1/2/3列+GHOST弹窗详情+信任态+筛选分页；RPC/plugin-ui/宿主零改动；待用户视觉验收；worktree已清"
     },
     {
       "id": "q-skills-discovery",
