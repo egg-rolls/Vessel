@@ -291,10 +291,15 @@ interface StoredHistory {
 interface RunContextAccounting {
   /**
    * 最近一次真实请求视图的读数：`tokens` = `estimateRequestViewTokens(args.messages)`
-   * 的上界估算（已含每条消息开销与 tools），`messageCount` = 那次请求的消息条数
-   * （用来算「其后追加了多少」）。
+   * 的上界估算（已含每条消息开销与 tools），`messageCount` = 那次请求的消息条数。
+   *
+   * `sourceMessageCount` = 构建那次请求视图时**工作窗口**的条数（口径统一 P2）：
+   * 增量切片必须按它切，不能按 `messageCount` —— `normalizeMessages` 会丢弃孤儿
+   * tool 消息，请求视图条数可能小于窗口条数，拿视图条数切窗口会把已在视图里的
+   * 消息再估一遍（偏高）。窗口 append-only，构建后只增不减，按源条数切片恰好
+   * 覆盖「其后追加的消息」。
    */
-  requestView?: { tokens: number; messageCount: number };
+  requestView?: { tokens: number; messageCount: number; sourceMessageCount: number };
   /** 校正锚点（provider `prompt_tokens` ÷ 同一请求视图的上界估算）。 */
   anchor?: ContextAnchor;
   /**
@@ -1690,18 +1695,33 @@ export class ExecutionUnit {
    *
    * 增量口径（第十一条）：本段已经构建过一次请求（`state.requestView` 有值）时，取那次
    * 的视图估算 + **其后追加的消息**的上界估算；没有请求过（run 刚起来）就按整窗上界估。
-   * 两者都不会「倒退」：追加只加，压缩会换窗口（新 run 的段起点）。
+   * 两者都不会「倒退」：追加只加，压缩会换窗口（新 run 的段起点）。追加切片按
+   * `view.sourceMessageCount`（构建视图时**工作窗口**的条数）切，不拿请求视图条数
+   * 切窗口 —— normalize 丢孤儿 tool 消息时两个 population 条数不等，会错位重估（P2）。
    *
-   * tools 只在有请求视图时计入（那是上一次请求真的带上的那张表）；整窗兜底路径不知道
+   * 兜底也应用本段冻结的占位集合（口径统一 P1）：整窗含已被冻结集合替换掉的工具结果
+   * **全文**（append-only，历史不改写），而本段每一次请求都会把它们换成小占位符。
+   * 兜底若不应用同一份集合，run 起点的压力预警就会比随后的请求估算虚高一大截
+   * （生产实锤：564 条占位 ⇒ 通知 55% vs 请求 38%）。这里复用请求路径的同一个函数、
+   * 同一份冻结集合（`withClearedToolResults` + `segmentClearPlans`，与
+   * `buildRequestMessages` 完全一致），不引入第二套投射逻辑。冻结集合在段起点先于
+   * 第一次压力预警存在，时序安全；`passthrough` / `archive_notice` 模式集合恒空 ⇒
+   * 行为与未应用时逐字相同。新追加的消息不在冻结集合里，仍按全文估（只许高报，合同 5）。
+   *
+   * tools 只在有请求视图时计入（那是上一次请求真的带上的那张表）；兜底路径不知道
    * 工具表，因此略偏低 —— 但发送前闸会补上 tools（它手上有 `args.tools`），闸不受影响。
    */
   private nextRequestTokens(execution: Run): number {
     const state = this.accounting(execution);
     const messages = execution.workingContext.messages;
     const view = state.requestView;
-    if (view === undefined) return estimateMessagesTokensUpperBound(messages);
-    if (messages.length <= view.messageCount) return view.tokens;
-    const appended = messages.slice(view.messageCount);
+    if (view === undefined) {
+      const frozen = this.segmentClearPlans.get(execution.workingContext) ?? [];
+      const projected = frozen.length > 0 ? withClearedToolResults(messages, frozen) : messages;
+      return estimateMessagesTokensUpperBound(projected);
+    }
+    if (messages.length <= view.sourceMessageCount) return view.tokens;
+    const appended = messages.slice(view.sourceMessageCount);
     return view.tokens + estimateMessagesTokensUpperBound(appended);
   }
 
@@ -3795,6 +3815,10 @@ export class ExecutionUnit {
       this.accounting(execution).requestView = {
         tokens: requestViewTokens,
         messageCount: messages.length,
+        // P2：增量切片的基准是**构建视图时工作窗口**的条数，不是请求视图条数
+        // （normalize 丢孤儿 tool 消息时两者不等）。构建到此处之间窗口无追加
+        // （loop 在 buildRequestMessages 之后只读；附件解析/投递报告不写窗口）。
+        sourceMessageCount: execution.workingContext.messages.length,
       };
       const contextUsed = this.correctedContextTokens(execution, requestViewTokens);
       if (contextMax !== undefined && contextUsed >= contextMax) {
@@ -4555,6 +4579,8 @@ export class ExecutionUnit {
     if (max === undefined || max <= 0) return;
     // 0.55 P0：与显示 / 闸同一个数（下一次请求视图的上界估算，锚点校正后），
     // 不是 `workingContext.tokenCount` —— 两处口径必须一致，否则「环」与「闸」打架。
+    // 口径统一 P1：run 起点无请求视图时的兜底亦应用冻结占位集合（见 `nextRequestTokens`），
+    // 预警数 ≈ 随后的 `llm.request.estimated_tokens`，不再因工具结果全文虚高。
     const used = this.currentContextTokens(execution);
     const ratio = used / max;
     // 缺省（实现不暴露 autoCompact）按开启处理，与 0.27 行为一致。

@@ -7,9 +7,10 @@
  * 是上一轮的旧值，要么（本轮就是首次 run 时）压根没有。
  *
  * 这里的口径固定成界面那一份，**不另算**：
- *   分子 = 该会话最近一条 `context.changed.token_count`，也就是
- *          `ContextManager.tokenCount`（`packages/core/src/context/context-manager.ts`）
- *          的原值 —— 有真实用量锚点时它已按锚点校正过；TUI 状态栏和 web 实时百分比
+ *   分子 = 该会话最近一条 `context.changed.token_count`，也就是 runtime 账本
+ *          `ExecutionUnit.currentContextTokens`（0.55 P0 起：下一次请求视图的上界
+ *          估算 × 锚点校正，再以 provider 上次回报压地板；**不再是**窗口
+ *          `ContextManager.tokenCount` 的原值）—— TUI 状态栏和 web 实时百分比
  *          读的是同一个字段。
  *   分母 = 该会话最近一次真值（`context.pressure.max` / `prompt.system_context.context_max`，
  *          两者都来自 `workingContext.maxTokens`）；真值还没到过时用装配层给的窗口上限，

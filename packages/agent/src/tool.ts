@@ -459,6 +459,10 @@ export function createAgentTool(
       'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first, ' +
       'plus an optional title that AI naming will not overwrite; ' +
       'a body may only rotate itself. ' +
+      'rotate always asks a human first; context_ratio is informational, not a gate. ' +
+      'On failure read reason (approval_timeout / denied_by_human / no_human_channel / ' +
+      'approval_unavailable), not code — the legacy code rotate_not_needed covers every ' +
+      'non-approval and does not mean the ratio was too low. ' +
       'startup_prompt is the only handoff: the new body starts at once and does not inherit ' +
       'this conversation, so it must carry everything the next body needs to know. ' +
       'Bodies may use create, hire, close, rotate, send, list and read. ' +
@@ -769,6 +773,11 @@ export function createAgentTool(
             });
             return JSON.stringify({
               status: 'failed',
+              // 码名是历史遗留（冻结契约，不改）：它装的是「未获批准」的全部档位
+              // （超时 / 人拒绝 / 无人类通道 / 审批不可用），**与 ratio 高低无关** ——
+              // rotate 没有 ratio 闸，ratio 只进 warning 文案与批准卡。调用方必须看
+              // `reason` 分辨档位，不能把 `rotate_not_needed` 读成「工具认为不需要
+              // rotate」（口径统一审查 §2.4 的误读实锤）。工具描述里已同步澄清。
               code: 'rotate_not_needed',
               reason: denial,
               // 超时档把等过的时限写结果里：调用方据此分辨「人点了拒绝」与「根本没人答」。
