@@ -149,8 +149,30 @@ CLI args.ts parseAgentArgs(create) → agent-command.ts methodParams
 | ③ | src/cli/args.ts | create 旗标解析 |
 | ③ | src/cli/commands/agent/agent-command.ts | 读文件 + params |
 | ③ | src/cli/help-spec.ts, src/cli/completion-spec.ts | 旗标登记 |
+| ③ | src/i18n/messages/en.ts, src/i18n/messages/zh-CN.ts | flag.startupPrompt(File) 文案 |
 | ④ | bun run build | 唯一门禁（exit 0 + 产物读数） |
 
 并发域：本单只动 agent service/tool/CLI agent 命令 + serve agents.create wire，
 与 q-msg-visibility（config/runtime-visibility）、q-chat-index（ChatView）、
 q-skills-ui（plugins/skills）无交集。
+
+## 5. 步骤④门禁实证（bun run build，唯一门禁）
+
+工作区新检出需先装依赖：根 `bun install`（482 packages，exit 0）+
+`apps/web bun install`（86 packages，exit 0）；bun.lock 零改动。
+
+门禁历程（全部日志实证）：
+- build1/2：前置检查失败（apps/web / 根 node_modules 缺失）→ 装依赖解决。
+- build3：typecheck ✅；lint 2 errors —— 其一为本单 agent-command.ts import 排序
+  （organizeImports），修复提交 aed646d9；其余诊断为基线既有 warning/info。
+- build4：typecheck ✅；lint 1 error —— 本单 agent-command.ts startup_prompt 条件行
+  超 printWidth（biome format），按期望形状折行，修复提交 c5b13b12。
+- build5（最终）：**EXIT=0**
+  - `✅ Type check（root + examples + apps/web） 通过`（tsc --noEmit ×2 + apps/web）
+  - `✅ Lint（biome ci .） 通过`（Checked 1317 files；余 18 warnings / 42 infos
+    全部为基线既有：core/context useTemplate、pii/cli noNonNullAssertion 等，非本单引入）
+  - `📦 Build complete!`（本仓无 bundle，ADR-006；产物读数即日志实证）
+
+提交链（feat/q-hire-prompt）：
+a248bae3 ①调研+schema设计 → 92533d57 ②service实现 → 2ada9458 ③schema+wire+CLI
+→ aed646d9 / c5b13b12 门禁修复 → 本提交 ④门禁实证。
