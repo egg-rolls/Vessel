@@ -66,7 +66,7 @@
       "column": "进行中",
       "owner": "q-ti5-4-budget",
       "branch": "fix/q-ti5-4-budget",
-      "progress": "0627dff2派单(用户裁定:thinking只传额外参数不该限token,抬max_tokens非clamp budget)：根因providers.ts OpenAICompatibleProvider L479/577 max_tokens=this.maxTokens(4096)+thinking_budget via extra_params(16384)无一致性→Dashscope 400阻塞canary；修复=request-extras加applyOpenAIThinkingConsistency抬max_tokens到thinking_budget+输出余量(不clamp budget)+wire OpenAI buildRequestBody；Anthropic clamp哲学暂不动聚焦OpenAI/qwen；workaround canary default_level low已解阻；候修复→合并→canary同步→lifecycle复验high档不再400"
+      "progress": "✅完成合并f028d654(b47b5360审计+256c9d23修复,4文件+193/-23门禁绿)：applyOpenAIThinkingConsistency抬max_tokens=budget+8192(high16384→24576不再400/medium8192→16384/low off非qwen逐字节不变,插件零改,Anthropic clamp不动,触发stderr告警)；用户裁定不限制thinking抬max_tokens非clamp；候canary同步+验high不再400+随晋升批次入main"
     },
     {
       "id": "q-sse-shared",
