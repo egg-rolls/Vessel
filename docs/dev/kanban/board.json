@@ -46,6 +46,14 @@
       "progress": "99309519派单：session status实时态(state/token/queue/缺省自身)+permission show有效矩阵(auto/ask/never+scoped+来源,RPC缺则additive补)；①session status②permission show③build每步一报"
     },
     {
+      "id": "q-inbox-ux",
+      "title": "inbox体验：read免list直读(缺省3)+WebUI三态(展开/默认3条/收起badge)",
+      "column": "待办",
+      "owner": "main",
+      "branch": "redblue-dev",
+      "progress": "用户裁定：①inbox read无ids时按时间序读最新N条(缺省3,省list轮)②WebUI inbox面板三态(展开完整列表高度上限滚动/默认3条可配多余折叠/收起只badge数量)；待派单"
+    },
+    {
       "id": "q-skills-ui",
       "title": "技能库页面UI重设计：卡片展示名称+点击详情（用户裁定参照工具页规范）",
       "column": "待办",
