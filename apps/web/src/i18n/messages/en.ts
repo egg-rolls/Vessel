@@ -166,6 +166,23 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.showInternalEvents.title': 'Show system info (internal events)',
   'settings.item.showInternalEvents.desc':
     'Off keeps only replies, tool calls, errors and permission/ask cards. On adds runtime notices, hook / LLM context and other system messages; the vessel:* transcript messages follow this key too, and verbosity=debug shows them as well.',
+  // q-msg-visibility: message display group (five toggles; legacy showInternalEvents wording kept for old deep links).
+  'settings.group.messageVisibility': 'Message display',
+  'settings.item.reasoning.title': 'Thinking process',
+  'settings.item.reasoning.desc':
+    'Show the model reasoning stream (live and history). Off hides reasoning blocks; verbosity=minimal still hides them.',
+  'settings.item.tools.title': 'Tool cards',
+  'settings.item.tools.desc':
+    'Show tool call cards. Off keeps only a one-line running status; failed tool cards always show (failures are never silent).',
+  'settings.item.environment.title': 'Environment info',
+  'settings.item.environment.desc':
+    'Environment cards: config hot-apply, permission, tool, MCP, update and peer notices — the model context hints (vessel:notice).',
+  'settings.item.source.title': 'Source cards',
+  'settings.item.source.desc':
+    'Projection source cards (principal / node / team). Source lines absorbed into agent cards are unaffected.',
+  'settings.item.system.title': 'System info',
+  'settings.item.system.desc':
+    'Internal events and system context messages (runtime notices, hook / LLM context and other vessel:* messages); verbosity=debug shows them too. When unset, the legacy ui.showInternalEvents value applies.',
   'settings.item.showArchived.title': 'Show archived / closed (pending removal)',
   'settings.item.showArchived.desc':
     'Archived Teams and closed agents are hidden by default (both are waiting to be pruned). On brings them back to the Team list, Agent list and member sidebar with an "archived / closed · pending removal" badge. Direct links are unaffected and always open.',
