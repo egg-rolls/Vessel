@@ -693,6 +693,7 @@ export const messages = {
   'team.message.systemTag': '系统',
   'team.message.viewBody': '查看成员会话',
   'team.message.edit': '编辑',
+  'team.message.editRecallFailed': '没能撤回成员收件箱里的那份，草稿未回填：{detail}',
   'team.message.resend': '重发',
   'team.message.retract': '撤回',
   'team.message.retractTitle': '撤回消息',

@@ -49,6 +49,8 @@ import {
   type TeamMembersResult,
   type TeamPostInput,
   type TeamPostResult,
+  type TeamRecallDeliveryInput,
+  type TeamRecallDeliveryResult,
   type TeamRecord,
   type TeamRetractInput,
   type TeamRetractResult,
@@ -447,6 +449,7 @@ export class DefaultTeamService implements AgentTeamService {
               conversationId,
               input.team_id,
               refs,
+              messageId,
             ),
       ),
     );
@@ -526,6 +529,56 @@ export class DefaultTeamService implements AgentTeamService {
       team_id: input.team_id,
       retracted_message_id: input.message_id,
     };
+  }
+
+  /**
+   * 消费一条 team 消息的 inbox 投递（编辑按钮）：**不写 tombstone、不改日志**，
+   * 只把该消息投进各成员收件箱的那一份拿走 —— 否则人改完重发，成员还会把旧的那份
+   * 执行一遍（同一段话两份）。
+   *
+   * 目标必须仍在可读窗口内（与 retract 同口径）；system 行没有投递，拒绝。
+   * 不检查归档：这不是日志写操作，归档 Team 的旧投递同样该能被收掉。
+   */
+  async recallDelivery(input: TeamRecallDeliveryInput): Promise<TeamRecallDeliveryResult> {
+    const record = this.store.get(input.team_id);
+    if (record === undefined) {
+      throw new TeamError('team_not_found', `team_not_found: ${input.team_id}`);
+    }
+    const entries = await this.store.readLog(input.team_id, { limit: MAX_LOG_READ_LIMIT });
+    const target = entries.find((entry) => entry.message_id === input.message_id);
+    if (target === undefined) {
+      throw new TeamError(
+        'message_not_found',
+        `message_not_found: ${input.message_id} (outside the ${MAX_LOG_READ_LIMIT}-entry read window)`,
+      );
+    }
+    if (target.kind === 'system') {
+      throw new TeamError('invalid_input', `cannot recall system message: ${input.message_id}`);
+    }
+    return {
+      team_id: input.team_id,
+      message_id: input.message_id,
+      deliveries: await this.cascadeRecall(target),
+    };
+  }
+
+  /**
+   * 级联收口（retract / recallDelivery 共用）：对目标消息的每个收件成员，按
+   * `team_message_id` 关联撤回 inbox 里的那一份（`AgentService.recallTeamDelivery`，
+   * 与 `agents.recall` 同一段逐条收口：human 源真删、consumed / active 跳过）。
+   *
+   * 只走 `mentions`（真正 dispatch 过的解析后 id）；`to` 里的 owner 日志标记不投递，
+   * 也不该级联。逐成员 best-effort：单条失败不影响其它成员。
+   */
+  private async cascadeRecall(
+    target: TeamLogEntry,
+  ): Promise<TeamRecallDeliveryResult['deliveries']> {
+    const deliveries: TeamRecallDeliveryResult['deliveries'] = [];
+    for (const agentId of target.mentions) {
+      const result = await this.agent.recallTeamDelivery(agentId, target.message_id);
+      deliveries.push({ agent_id: agentId, deleted: result.deleted, skipped: result.skipped });
+    }
+    return deliveries;
   }
 
   async members(input: TeamMembersInput): Promise<TeamMembersResult | undefined> {
@@ -1377,6 +1430,7 @@ export class DefaultTeamService implements AgentTeamService {
     conversationId: string,
     originTeamId?: string,
     refs: readonly MessageRef[] = [],
+    teamMessageId?: string,
   ): Promise<TeamDelivery> {
     try {
       const result = await this.agent.dispatch({
@@ -1388,6 +1442,8 @@ export class DefaultTeamService implements AgentTeamService {
         //（等价 `refs = []`），旧路径的 payload 一字不变。
         ...(refs.length > 0 ? { refs: [...refs] } : {}),
         ...(originTeamId !== undefined ? { origin_team_id: originTeamId } : {}),
+        // team 日志关联随投递落 inbox：编辑 / 删除这条 team 消息时按它级联消费副本。
+        ...(teamMessageId !== undefined ? { team_message_id: teamMessageId } : {}),
       });
       if (result.status === 'queued') {
         return {

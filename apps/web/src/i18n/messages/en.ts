@@ -726,6 +726,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.message.systemTag': 'System',
   'team.message.viewBody': 'View member session',
   'team.message.edit': 'Edit',
+  'team.message.editRecallFailed':
+    'Could not recall the copy in the member inbox; draft not refilled: {detail}',
   'team.message.resend': 'Resend',
   'team.message.retract': 'Retract',
   'team.message.retractTitle': 'Retract message',

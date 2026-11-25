@@ -9,6 +9,7 @@ import type {
   TeamCreateInput,
   TeamDetail,
   TeamPostResult,
+  TeamRecallDeliveryResult,
   TeamRetractResult,
   TeamSummary,
   TeamUpdateInput,
@@ -66,5 +67,16 @@ export abstract class TeamsClient extends AgentsClient {
   /** 0.38：追加一条 tombstone；目标消息由 UI 隐藏，日志不重写。 */
   retractTeam(input: { team_id: string; message_id: string }): Promise<TeamRetractResult> {
     return this.rpc<TeamRetractResult>('teams.retract', input);
+  }
+
+  /**
+   * 编辑的级联收口：只消费该消息投进各成员 inbox 的那一份（不写 tombstone、不改日志）。
+   * 旧 gateway 没有该方法时 RPC 报 method_not_found，调用方按失败处理（不回填草稿）。
+   */
+  recallTeamDelivery(input: {
+    team_id: string;
+    message_id: string;
+  }): Promise<TeamRecallDeliveryResult> {
+    return this.rpc<TeamRecallDeliveryResult>('teams.recall_delivery', input);
   }
 }

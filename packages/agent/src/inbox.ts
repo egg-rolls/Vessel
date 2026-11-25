@@ -168,6 +168,13 @@ export interface StoredInboxMessage {
    */
   conversation_id?: string;
   /**
+   * 来源 Team 日志条目的 message_id（additive）：只有 `TeamService.post` 的 @ 投递
+   * 会写。team 日志与 inbox 副本是两个 id，这份关联让「编辑 / 删除一条 team 消息」
+   * 能定位到成员收件箱里的那一份并级联消费。旧条目 / 非 team 投递缺省 = 无关联
+   * （照常加载，级联按 not_found 跳过，不迁移、不报错）。
+   */
+  team_message_id?: string;
+  /**
    * 发送者显示名（additive，0.51）：入队时已知的 `AgentMessage.from_name`。
    *
    * 只给展示用（条带身份行），不参与投递判定。缺省 = 老条目 / 发送方没有本机成员名
@@ -187,6 +194,8 @@ export interface AgentInboxEntryInput {
   refs?: MessageRef[];
   /** 会话归属（conversation_id）；idle 直投据此把这条送进它原本的会话。 */
   conversation_id?: string;
+  /** 来源 Team 日志条目 id（可缺省）；随条目落盘，供 team 消息编辑 / 删除级联定位。 */
+  team_message_id?: string;
   /**
    * 发送者显示名（可缺省，additive 0.51）：入队时发送方已知的 `from_name`。
    *
@@ -408,6 +417,13 @@ export interface AgentInboxPort {
   /** 不做 status / hold 过滤、不改状态（0.32-D 打断按 id 定位）。 */
   findByIds(agentId: string, ids: readonly string[]): StoredInboxMessage[];
   /**
+   * 按来源 Team 日志条目 id 找 inbox 副本（team 消息编辑 / 删除的级联定位）。
+   *
+   * 只读、不改状态；返回全部命中（同一 team 消息对同一成员至多一条，防御性返回数组）。
+   * 旧条目 / 非 team 投递没有关联字段 ⇒ 空数组，调用方按 not_found 处理。
+   */
+  findByTeamMessage(agentId: string, teamMessageId: string): StoredInboxMessage[];
+  /**
    * 显式投递失败：从队列移除。缺省删除所有命中 id（含 held / consumed）；
    * `onlyUnheld:true` 只删 unread 且未持有的消息，其余进 skipped。
    */
@@ -523,6 +539,10 @@ function isStoredInboxMessage(value: unknown): value is StoredInboxMessage {
   if (value.quiet !== undefined && value.quiet !== true) return false;
   // 显示名同理 additive：老文件没有它照常加载，有它就必须是字符串（不猜类型）。
   if (value.from_name !== undefined && typeof value.from_name !== 'string') return false;
+  // team 关联同理 additive：缺省 = 非 team 投递 / 老条目；有它就必须是字符串（不猜类型）。
+  if (value.team_message_id !== undefined && typeof value.team_message_id !== 'string') {
+    return false;
+  }
   // refs 只校验「是数组」，条目形状在 cloneMessage 里过 `normalizeRefs`（逐条丢弃坏条目，
   // 不因为一条坏引用把整个收件箱判成损坏）。
   if (value.refs !== undefined && !Array.isArray(value.refs)) return false;
@@ -555,6 +575,10 @@ function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
       : {}),
     ...(message.session_id !== undefined ? { session_id: message.session_id } : {}),
     ...(message.conversation_id !== undefined ? { conversation_id: message.conversation_id } : {}),
+    // team 关联：空串按「无关联」落盘（与显示名同口径：缺字段，不是空字符串）。
+    ...(typeof message.team_message_id === 'string' && message.team_message_id !== ''
+      ? { team_message_id: message.team_message_id }
+      : {}),
     ...(message.quiet === true ? { quiet: true as const } : {}),
     ...(fromName !== undefined ? { from_name: fromName } : {}),
     ...(refs.length > 0 ? { refs } : {}),
@@ -639,6 +663,10 @@ export class AgentInboxStore implements AgentInboxPort {
       ...(sessionId !== undefined ? { session_id: sessionId } : {}),
       ...(message.conversation_id !== undefined
         ? { conversation_id: message.conversation_id }
+        : {}),
+      // team 关联随条目落盘：编辑 / 删除 team 消息时按它定位收件箱里的那一份。
+      ...(typeof message.team_message_id === 'string' && message.team_message_id !== ''
+        ? { team_message_id: message.team_message_id }
         : {}),
       // quiet 由**本次投递模式**派生（不另开参数）：它落盘后只有一个含义
       // 「这条永不作为 run input」，idle 直投据此跳过它。
@@ -800,6 +828,14 @@ export class AgentInboxStore implements AgentInboxPort {
       if (message !== undefined) found.push(cloneMessage(message));
     }
     return found;
+  }
+
+  findByTeamMessage(agentId: string, teamMessageId: string): StoredInboxMessage[] {
+    const state = this.stateFor(agentId);
+    if (!state.available || teamMessageId === '') return [];
+    return state.messages
+      .filter((message) => message.team_message_id === teamMessageId)
+      .map(cloneMessage);
   }
 
   inputHead(agentId: string): StoredInboxMessage | undefined {

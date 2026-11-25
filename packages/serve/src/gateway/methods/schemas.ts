@@ -915,6 +915,41 @@ export const teamRetractResultSchema = {
   },
 };
 
+/**
+ * teams.recall_delivery 结果：逐成员的 inbox 级联收口（deleted / skipped 与
+ * agents.recall 同形；skipped.reason = not_found / consumed / active）。
+ */
+export const teamRecallDeliveryResultSchema = {
+  type: 'object',
+  required: ['team_id', 'message_id', 'deliveries'],
+  properties: {
+    team_id: { type: 'string' },
+    message_id: { type: 'string' },
+    deliveries: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['agent_id', 'deleted', 'skipped'],
+        properties: {
+          agent_id: { type: 'string' },
+          deleted: { type: 'array', items: { type: 'string' } },
+          skipped: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['message_id', 'reason'],
+              properties: {
+                message_id: { type: 'string' },
+                reason: { type: 'string', enum: ['not_found', 'consumed', 'active'] },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
 /** teams.members 结果（TeamMembersResult）。 */
 export const teamMembersResultSchema = {
   type: 'object',

@@ -146,6 +146,21 @@ export interface TeamRetractResult {
   retracted_message_id: string;
 }
 
+/**
+ * `teams.recall_delivery` 结果：编辑一条 team 消息时，逐成员级联消费 inbox 副本。
+ * `deleted` / `skipped` 与 `agents.recall` 同形（inbox 消息 id）；skipped 的
+ * not_found / consumed / active 都不是错误（副本早已不在「将执行」集合里）。
+ */
+export interface TeamRecallDeliveryResult {
+  team_id: string;
+  message_id: string;
+  deliveries: {
+    agent_id: string;
+    deleted: string[];
+    skipped: { message_id: string; reason: 'not_found' | 'consumed' | 'active' }[];
+  }[];
+}
+
 /** teams.get 结果。 */
 export interface TeamDetail {
   team: TeamSummary;
