@@ -54,6 +54,14 @@
       "progress": "✅完成合并ab63936d(023fec90 read缺省3/cf8b0308去超时/c5f5b404 rotate0.5/e2e8b89d条带三态)build绿；更正：产物读数误报撤回(本仓build=typecheck+lint无bundle,ADR-006)；待验4点(直读最新3/不超时回退/50%rotate提示/三态切换)；worktree已清"
     },
     {
+      "id": "q-card-robust",
+      "title": "卡片渲染健壮性修复：permission同构P-A+PII按需发射+env闸门白名单",
+      "column": "进行中",
+      "owner": "q-card-robust",
+      "branch": "fix/q-card-robust",
+      "progress": "ec0a5d9f派单(用户裁定)：①P-A rotate改道publishEvent同构普通审批卡②P-B注册表expired收口③A-Core PII载体进时间线+条件发射(真脱敏才发防噪声)④A-Web闸门vessel:*白名单；基于envcard-run-visibility-research.md"
+    },
+    {
       "id": "q-graceful-selfrestart",
       "title": "完全优雅stop/restart(drain-to-quiesce)+自重启Option A（用户裁定）",
       "column": "进行中",
