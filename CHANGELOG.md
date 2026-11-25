@@ -38,7 +38,7 @@
 - **skills-style**：摘 GHOST 整页误套 + 卡片 / 弹窗对齐 ToolsPanel / ModalShell 共享表面。
 - **empty-state**：错误 / 重试卡居中空态（States.tsx 一处改全局 ~30 处）。
 - **DR15-1 优雅退出挂起**（q-dr15-exit）：`server.stop(true)` Bun 1.3.9/Windows 残余活跃连接无界等待 → 5s 有界 race + best-effort 推进（平台同款）+ 永久 `node.shutdown.step` 步骤日志；等死段 30s 有界 force 兜底 + `stop.forced` 审计持久化（reason=quiesce_exit_timeout，补 O7）；候 run 段不限时（裁定 #5）不动。**node 侧 CLOSED✅（金丝雀 7 判据全 PASS）**。
-- **DR15-2 platform 停 30s 看门狗污染**（q-dr15-2-platform）：platform `server.stop` 因在途代理请求钉死 pending_requests + 浏览器半闭 WS（idleTimeout:0 无兜底）致 native 收尾饿死事件循环、进程内 race timer 无法发射 → stop 前预 drains（`proxy.abortInflight()` + `server.closeIdleConnections()`，0.58 预关先例扩展）使 stop 毫秒级 settle + `pending_requests/pending_ws/aborted_inflight` 永久诊断字段 + raceShutdownTimeout thunk 形（node 调用点 1 行同步改保 DR15-1）；无 30s 看门狗 / 无 abnormal_exit 污染。
+- **DR15-2 platform 停 30s 看门狗污染**（q-dr15-2-platform / q-dr15-2-iter2）：根因 = Bun 1.3.9 server-initiated WS close 永久泄漏 `active_connections`（`flags.closed` 先置 → onClose 仅 !was_closed 减计数）→ `pendingWebSockets` 永不归零 → stop promise 永不 resolve；node 先死 finish graceful close 的 downstream WS 移出 bridges 注册表致 closeAll 零覆盖 + CLOSING 残留卡死 native 收尾。修复（vendor bug workaround，O9 登记 upstream 候选）：`closeQuietly` 优先 `terminate()`（立即 us_socket_close 无握手，先于 graceful close 消除 CLOSING）+ platform stop **不 await 不可 resolve 的 promise**（native app.close 同步关 socket，调用返回即 done）+ 迭代 1 `abortInflight()`/`closeIdleConnections()` 预 drains 保留 + 永久分类诊断 `pending_ws/proxy_ws_live/proxy_ws_closed`（真实残留≈差值）+ B 看门狗保留；node 退出链零改动保 DR15-1。
 
 ### 变更
 
@@ -48,7 +48,7 @@
 ### 已知问题（第五轮处置）
 
 - ISSUE-DR15-1：graceful stop drain 后进程自死挂起 —— **node 侧 CLOSED✅**（金丝雀 7 判据全 PASS，A/B 双路径解除）；platform 侧见 DR15-2。
-- ISSUE-DR15-2：platform 停 30s 看门狗 force + abnormal_exit 污染 —— **修复已合并（1989a938），候金丝雀 cli platform 清洁复验闭环**（预 drains 使 stop 毫秒级 settle）。
+- ISSUE-DR15-2：platform 停 30s 看门狗 force + abnormal_exit 污染 —— **迭代 2 修复已合并（1aba69c0，Bun 1.3.9 计数泄漏 workaround：terminate 预关 + stop 不 await），候金丝雀 cli 修正判据复验闭环**。
 - plugin_manifest_invalid thinking-intensity（i18n key defaultLevel 大写 L 违模式，批次 B 登记）。
 
 ## [2.0.0] - 2026-11-25
