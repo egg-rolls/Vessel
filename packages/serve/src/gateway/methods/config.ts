@@ -75,6 +75,10 @@ const SETTABLE_KEYS: ReadonlySet<string> = new Set([
   'agent.cwd',
   // q-empty-response：nudge 文案（非空字符串，走通用 string 路径）。
   'emptyResponse.nudge',
+  // q-kanban-proxy：看板 board.json 路径（非空字符串，走通用 string 路径；
+  // ~ 展开 / 相对 cwd 解析在装配层，与启动装配同一表达式）。落盘 YAML
+  // kanban.board_path；写后热应用原地更新 kanban deps，返回时即活生效。
+  'kanban.boardPath',
 ]);
 
 /** 返回规范化后的值；非法键/值抛 invalid_params。 */

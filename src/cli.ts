@@ -1313,6 +1313,13 @@ async function runWithConfig(result: BootstrapResult) {
     // 声明在这里（reload 闭包也要用），只读一次：热重载沿用同一份，直到下次 join。
     const hubDerivedOrigins = await readHubNodeTrustedOrigins(dataDir);
 
+    // q-kanban-proxy：kanban deps 提为可变对象（同一引用进 gatewayOptions.kanban）。
+    // kanban.* handler 每次调用读 deps.boardPath → 热应用原地改即活生效。
+    // 解析表达式是启动装配与热应用共用的唯一真相（~ 展开、相对进程 cwd → 缺省板）。
+    const resolveKanbanBoardPath = (kanban: VesselConfig['kanban']): string =>
+      path.resolve(expandHome(kanban?.boardPath?.trim() || 'docs/dev/kanban/board.json'));
+    const kanbanDeps: { boardPath: string } = { boardPath: resolveKanbanBoardPath(config.kanban) };
+
     const reloadRunner = createGatewayReloadRunner({
       // web 尚未合入 reconfigure 时该字段不存在；按结构化可选入口处理。
       // 0.50：config reload 重建 allowedOrigins 时仍并入平台注入的 Origin，
@@ -1399,6 +1406,15 @@ async function runWithConfig(result: BootstrapResult) {
           );
         }
         return lines;
+      },
+      // q-kanban-proxy：kanban 热应用——重解析 boardPath 原地更新 kanbanDeps
+      // （handler 每次调用读 deps.boardPath，下一次 kanban.get/archive 即用新板）。
+      // 解析结果未变（如仅 trim 差异）不产差异行，避免无意义 notice。
+      applyKanban: (next) => {
+        const from = kanbanDeps.boardPath;
+        const to = resolveKanbanBoardPath(next.kanban);
+        kanbanDeps.boardPath = to;
+        return from === to ? [] : [`kanban: board path ${from} → ${to} (hot-applied)`];
       },
     });
 
@@ -1545,11 +1561,9 @@ async function runWithConfig(result: BootstrapResult) {
       // 路径 = config kanban.board_path（~ 展开、相对进程 cwd）→ 缺省
       // <cwd>/docs/dev/kanban/board.json（cwd = repo 根 / 舰队 worktree 根）。
       // archive.json 恒取板同目录（serve 侧派生，不读文件内指针）。
-      kanban: {
-        boardPath: path.resolve(
-          expandHome(config.kanban?.boardPath?.trim() || 'docs/dev/kanban/board.json'),
-        ),
-      },
+      // q-kanban-proxy：kanbanDeps 是可变对象（声明在 reloadRunner 前），
+      // config.set kanban.boardPath / 手改 YAML 经 applyKanban 原地热更新。
+      kanban: kanbanDeps,
       // 0.12 / CONTRACT-hot-apply：`gateway.reload` 的唯一热应用入口。
       // serve 只做 scope 枚举校验；这里注入 `scope -> applier`。
       reload: reloadRunner.reload,
