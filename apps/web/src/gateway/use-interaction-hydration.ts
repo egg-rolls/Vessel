@@ -17,6 +17,12 @@ export interface InteractionHydrationDeps {
   recordSettled: (requestId: string) => void;
   settledRef: Current<Map<string, number>>;
   tokenRef: Current<string>;
+  /**
+   * canConnect 判据同步（ISSUE-CR22-1）：匿名回环（anonymousNode）与平台代理
+   * （proxyMode，cookie 登录时 token 可空）都是合法的无 token 连接，
+   * hydration 不能因 token 为空整段跳过。
+   */
+  canConnectRef?: Current<boolean>;
   hydrationGenerationRef: Current<number>;
   /**
    * 本轮结果回报（0.59）。**成功也回报** —— 界面要能区分「真的没有待批」与「拉不到」，
@@ -37,6 +43,7 @@ export function useInteractionHydration({
   recordSettled,
   settledRef,
   tokenRef,
+  canConnectRef,
   hydrationGenerationRef,
   onFetchState,
 }: InteractionHydrationDeps): () => Promise<void> {
@@ -44,7 +51,8 @@ export function useInteractionHydration({
   return useCallback(async (): Promise<void> => {
     if (client.connectionState !== 'open') return;
     const tokenAtStart = tokenRef.current;
-    if (!tokenAtStart.trim()) return;
+    // 与 canConnect 对齐：匿名回环 / 平台代理等合法无 token 连接也要重建审批卡。
+    if (!tokenAtStart.trim() && !canConnectRef?.current) return;
     const clientAtStart = client;
     const generation = hydrationGenerationRef.current + 1;
     hydrationGenerationRef.current = generation;
