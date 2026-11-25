@@ -326,4 +326,93 @@ C 的回退 = `vessel gateway nodes remove soulkiller-canary`（最后一条显�
 
 ### 7.4 B 的迁移成本（对比用）
 
-除 §7.2 全部外，还需：per-node entry/env/user-config 代码改动 + 金丝雀 node 冷重启换生产代码（**金丝雀会话宇宙里的 agent 运行时被换版本**，成员快照 v5 兼容但行为面变）+ 独立 restart RPC 立项。且每次生产 gateway 升级都会同步换掉金丝雀 node 的代码——金丝雀不再能独立 pin 版本。**不建议**（§8）。
+除 §7.2 全部外，还需：per-node entry/env/user-config 代码改动 + 金丝雀 node 冷重启换生产代码（**金丝雀会话宇宙里的 agent 运行时被换版本**，成员快照 v5 兼容但行为面变）+ 独立 restart RPC 立项。且每次生产 gateway 升级都会同步换掉金丝雀 node 的代码——金丝雀不再能独立 pin 版本。**不建议**（§8）。---
+
+## §8 选项、推荐、风险、未决问题
+
+### 8.1 选项定义
+
+**选项 A：维持双 gateway（现状）**
+- 做法：不动。金丝雀整舰队自治（gateway+node+hub），生产隐式单节点。
+- 得：零改动、零风险、版本/权限/env 隔离最彻底、金丝雀前端可经 8652 验收。
+- 失：6 进程、两个 Web 入口两次登录、每次金丝雀冷重启要动三个进程；用户动机未满足。
+
+**选项 B：单 gateway 多 node，金丝雀由生产 gateway 托管（auto_start:true）**
+- 做法：生产 registry 化 + 金丝雀条目托管。
+- **前置代码改动（均无现成杠杆，§2.3/§3.2/§3.3/§5.1/§6.2）**：
+  1. per-node entry/checkout（spawn/看门狗/restart 全链路），否则金丝雀跑生产代码；
+  2. per-node env 注入（至少 `VESSEL_USER_CONFIG`、`VESSEL_NO_EXTERNAL_PLUGINS`），否则用户层写回击穿 + 外部插件击穿；
+  3. 单 node 生命周期 RPC/CLI（`platform.nodes.restart` 或托管 node 的 `node stop` 豁免），否则「只 restart 金丝雀」做不到。
+- 判定：**机制上可行但等于一个新特性立项**；且改完后金丝雀版本跟随生产 gateway，独立 pin 版本能力丧失。**短期不建议**；若用户长期想要「真正的单平台多版本 node」，可另立 ADR 走 B 的完整设计（含版本闸，补 blue-green R1 的课）。
+
+**选项 C：混合——单 gateway + external 金丝雀 node（auto_start:false）【推荐】**
+- 做法：§7.2 四步，零代码改动。金丝雀进程仍由金丝雀 checkout 自起自停（版本/env/权限写回隔离与 A 完全一致），生产 gateway 只提供：统一 Web 入口（代理+切换）、统一 CLI targeting、状态投影。
+- 变体：
+  - **C1（推荐）：金丝雀保留独立 hub（8653），自启动**（`hub start --data-dir canary-data/hub`）。隔离最彻底；代价 = hub 无看门狗、多一条手动启动命令（可写进金丝雀启动脚本，与 node start 并列）。进程数 6→5。
+  - **C2：金丝雀 node join 生产 hub（8643）**。少一个进程（6→4）、`federation discover` 一份 registry 列两 node、hub 目录单 pane 看两舰队团队元数据。代价 = 金丝雀团队/成员元数据进生产 hub 目录（可见性混合，非权限混合）；hub 代码 = 生产版本，金丝雀对 hub 协议新特性的验收失效；跨版本 node↔hub 协议兼容需验证（`incompatible` 状态存在）。**若用户更看重「单目录」可选 C2，但金丝雀现态 hub 协议面不是测试重点时 C1 更稳。**
+
+### 8.2 推荐与理由
+
+**推荐 C1**。对照用户动机逐条：
+
+| 动机 | C1 达成度 |
+|---|---|
+| 少起一个 gateway | ✅ 金丝雀平台层退役（6→5 进程；hub 仍在但无平台层） |
+| 金丝雀只 start/restart node、不碰生产 | ✅ `node stop/start` 只动金丝雀 node；生产 `stop --stop-nodes`/看门狗/restart 均不波及 external（§5.4） |
+| 单 Web 入口 | ✅ 8642 平台模式切换两 node（§6.1） |
+| 跨 gateway 寻址复杂度消失 | ❌ **不成立**（§4）——但 C 不增加任何寻址复杂度，现状 peer/映射原样有效 |
+| 零代码改动、不碰生产数据 | ✅ 唯一生产动作 = 一次平台层重启（可与明日既定重启合并）+ 两个新文件（production-node.yaml / nodes.json） |
+
+### 8.3 风险与缓解（C1）
+
+| # | 风险 | 缓解 |
+|---|---|---|
+| R1 | 生产 gateway 一次性重启（隐式→显式 registry） | 缺省 restart 保活 node，生产会话不断；与用户既定的明日生产重启合并；回退 = remove 条目 + 再重启（§7.3） |
+| R2 | production-node.yaml 与用户配置双源 | 最小文件纪律：只 data_dir + node.port；文档注明「业务键一律进用户层」 |
+| R3 | gateway 侧解析金丝雀条目用生产用户层（§3.4 双源差异） | 凭据/端口已验证一致；canary-config 保持完整声明；状态展示边角差异可接受 |
+| R4 | 前端 = 生产 dist，金丝雀新前端特性无法经 8642 验收；能力位/timeline 差异可能假报缺口 | §6.1 缓解 b/c（vite dev 或接受后端-only 验收）；浏览器刷新纪律沿用 blue-green R9 |
+| R5 | canary hub 自启动后无看门狗，崩溃成孤儿 | 启动脚本并列 hub start；`hub status` 巡检；或选 C2 消除 |
+| R6 | 人为把金丝雀条目改 auto_start:true ⇒ 崩溃/看门狗后静默换生产代码（版本号两线相同，不可见） | 运维纪律 + 本文档警示；可在 kanban 立「registry 条目变更须过 main」卡 |
+| R7 | engine pool 共享（若将来开 pool）：poolDir 是 gateway 级、跨版本 adopt 无版本闸（blue-green R1） | 金丝雀保持 `tools_engine.mode: child`（现态缺省）；开 pool 前必须 `engine_pool.instance` 隔离 |
+| R8 | CLI 写回类命令忘带金丝雀 `--user-config` ⇒ peer/权限写进生产用户配置 | 与 A 下既有纪律相同（federation-setup §5.3）；C 不新增此风险，但单入口习惯可能让人忘——启动脚本/卡片固化 flag |
+| R9 | canary-data 两族 instance 锁痕迹误导状态判定 | 迁移时按 `gateway status` 清点，stale 才清（§7.1） |
+
+### 8.4 未决问题（请用户裁定）
+
+1. **是否批准 C1 的一次性生产动作**（production-node.yaml + nodes.json + 生产平台层重启一次）？可否与明日既定生产重启合并？
+2. **C1 vs C2**：金丝雀 hub 自起（隔离优先）还是 join 生产 hub（单目录/少进程优先）？
+3. **金丝雀新前端特性验收通道**：接受「后端-only + vite dev 兜底」，还是保留 8652 纯 UI 入口（复杂度回升，不推荐）？
+4. **production-node.yaml 放哪**：`fleets/production-node.yaml`（agent 可维护）还是 `~/.vessel/node.yaml`（生产根内，用户维护）？
+5. **team 命名统一**（与拓扑解耦，可顺带）：金丝雀 `default` → `vessel`，消除 `local_team_id` 映射？需金丝雀侧建 team/迁成员或接受新会话宇宙（blue-green 裁决②口径）。
+6. **是否另立 B 的长期项**（per-node entry/env + 单 node restart RPC + 版本闸）？若立，C 是其过渡态而非终态。
+
+### 8.5 迁移步骤草案（C1，零代码；执行须用户批准后另行派单）
+
+1. 用户批准 §8.4-1/2/4 → 建 production-node.yaml（最小两键）。
+2. 生产侧：`gateway nodes add production …` + `gateway nodes add soulkiller-canary … --no-auto-start`（add 只写 nodes.json，不重启进程）。
+3. 生产平台层重启（缺省保活 node）→ `gateway nodes list` 验证两条目：production up、soulkiller-canary external（running outside this gateway）。
+4. 金丝雀侧：停 canary gateway（缺省保活 node/hub）→ 确认金丝雀 node 仍 up（8654）→ 清理 canary-data stale 平台锁族。
+5. 浏览器开 8642 → 节点列表切换 soulkiller-canary → 验证会话/团队/attention 可读（代理凭据下发）。
+6. 双向 federation 验证（沿用 federation-setup §7：peers token=set、human→human post、成员跨节点 send）——**预期零变化**，此步是回归确认而非新配置。
+7. 金丝雀日常重启演练：`node stop` + `node start --daemon --config …`（金丝雀 checkout 上下文）→ 生产侧投影 down→up，生产 node 无感。
+8. 回退预案就位（§7.3）后收工；kanban 记录拓扑变更与 R6/R8 纪律。
+
+### 8.6 代码锚点索引（查证于 2026-11-25，main checkout 只读）
+
+| 面 | 锚点 |
+|---|---|
+| registry | `src/gateway/node-registry.ts`：parseEntry L108（config_path 必填 L135）、loadNodeRegistry L206、synthesizeImplicitNode L255、resolveNodeIdForRegistryAdd L313 |
+| 组合根 | `src/cli/commands/gateway/gateway-command.ts`：resolveLocalNodes L2549、preferLiveNodeListen L2668、stopGateway keepNodes L3453、restartDaemonCommand L2356 |
+| supervisor | `src/gateway/node-supervisor.ts`：LocalNodeSpec L69、begin/external L953–992、claim/adopt L995、spawnOnly entry/env L1293–1386、beginHub L1154 |
+| daemon | `src/gateway/daemon.ts`：buildDaemonArgv L128、env 快照 L248 |
+| node CLI | `src/cli/commands/node-command.ts`：nodeStopCommand L269（managed 拒绝 L296/L301、drain L306–360）、runNodeCommand L460（无 restart） |
+| 看门狗 | `src/gateway/watchdog.ts`：NodeWatchdog L260、resolveStallWatchdogConfig L90 |
+| 平台 | `packages/serve/src/platform/registry.ts` L91；`apps/web/src/gateway/platform/client.ts`（nodes.list/get/credentials）；proxy.ts / proxy-ws.ts |
+| 寻址 | `src/federation/federation-address.ts`：resolveAddress L169、isLocalNodeSegment L254；`packages/agent/src/team-service.ts` sendAddress L1017；`src/federation/federation-client.ts` findOutboundPeer L152 |
+| config | `packages/config/src/loader.ts`：loadConfig L585–709、getUserConfigPath L164；`src/data/permission-store.ts` L65/L249 |
+| UI | `apps/web/src/gateway/NodeProvider.tsx` L85、node-selection.ts L68、useNodeNames.ts L53、nodes.ts L60；`packages/serve/src/gateway.ts` L4205（node 不宿 WebUI） |
+| 运维文档 | `docs/operations/federation-setup.md`（§3.1 env 快照链 / §5.3 用户配置隔离 / §6 重启序列）、`docs/operations/version-isolation-blue-green.md`（隔离杠杆 / R1–R10）、`docs/dev/reports/q-runtime-fix/investigation.md`（T2b issue-1） |
+
+---
+
+*调研完。本文档不伴随任何代码/配置/运行时改动；执行 §8.5 须用户批准并另行派单。*
