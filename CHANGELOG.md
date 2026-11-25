@@ -6,15 +6,15 @@
 > [`docs/versions/CURRENT.md`](docs/versions/CURRENT.md)。
 >
 > 变更记录遵循 [Keep a Changelog](https://keepachangelog.com/)。
-> 0.x 阶段：特性批次晋升 → minor +1（patch 归零）；纯修复晋升 → patch +1；major 留用户里程碑。
-> 版本号只在晋升 main 时 bump（用户裁决 2026-11-25，覆盖旧规）。
+> 标准 SemVer（用户裁决 2026-11-25 终版）：breaking→major / feature→minor / fix→patch。
+> 版本 = 代码契约身份，不绑发版节奏。major=2（单一真相源架构 breaking）。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
-## [0.58.0] - 2026-11-25
+## [2.0.0] - 2026-11-25
 
-> 第二轮晋升（四特性：msg-visibility/chat-index/skills-ui+grid-fix/hire-prompt，main 3953a92e）。
-> 第一轮 0.57.0（六特性：from-card/ui-polish/leak/plugin-default-on/AX×3/inbox-ux，main ab63936d）。
-> 版本约定：特性批次晋升→minor，纯修复→patch，绑定晋升事件（RELEASE §1，用户裁决 2026-11-25）。
+> 标准 SemVer 新纪元。major=2：多文件→单一真相源架构 breaking（前会话）。
+> 含本会话全部特性：from-card/ui-polish/leak/plugin-default-on/AX×6/inbox-ux/msg-visibility/chat-index/skills-ui/hire-prompt/addr-display/sidebar-anim/design-audit/minimap精修/tooltip/inbox-source/drawer-fix。
+> 0.x 系列（0.56.1 止）为开发期历史。
 
 ### 破坏性（升级须知）
 
