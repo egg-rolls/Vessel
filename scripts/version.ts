@@ -128,6 +128,27 @@ function syncInternalDependencies(pkg: Record<string, unknown>): boolean {
   return updated;
 }
 
+/**
+ * 内置插件清单版本（`vessel.version`）同步到引擎版本（q-plugin-lifecycle §6.4）。
+ *
+ * 内置与引擎同仓同发布，清单版本独立线没有演进事实支撑，只制造面板混排（child 取
+ * manifest.version、in-process 取 pkg.version）与 child reload 指纹语义混乱。写模式
+ * 因此把已声明的 `vessel.version` 一并 bump 到引擎版本，让两条取值分支自然同源。
+ *
+ * 只在字段已存在时改写：未声明清单版本的 in-process 包本就用 pkg.version，不新增字段。
+ * 第三方插件不在仓库 `plugins/` 发现根（装到 user/project 目录），version.ts 扫不到，
+ * 其独立版本 + engines 门禁完整保留。
+ */
+function syncVesselBlockVersion(pkg: Record<string, unknown>, version: string): boolean {
+  const vessel = pkg.vessel;
+  if (!vessel || typeof vessel !== 'object' || Array.isArray(vessel)) return false;
+  const block = vessel as Record<string, unknown>;
+  if (typeof block.version !== 'string') return false;
+  if (block.version === version) return false;
+  block.version = version;
+  return true;
+}
+
 /** 内部依赖是否已全部是 `workspace:*`；返回违规描述（空数组 = 合规）。 */
 function internalDependencyIssues(pkg: Record<string, unknown>, path: string): string[] {
   const issues: string[] = [];
@@ -178,6 +199,8 @@ export async function applyVersion(root: string, version: string): Promise<strin
     let updated = manifest.version !== version;
     if (updated) pkg.version = version;
     if (syncInternalDependencies(pkg)) updated = true;
+    // 内置清单版本同 bump（§6.4）：pkg.version 与 vessel.version 一起跟踪引擎版本。
+    if (syncVesselBlockVersion(pkg, version)) updated = true;
     if (!updated) continue;
 
     await writeFile(fullPath, `${JSON.stringify(pkg, null, 2)}\n`);
@@ -233,13 +256,22 @@ export async function checkVersions(root: string, expected?: string): Promise<st
 
   // 插件 engines.vessel 必须允许当前版本；否则 loader 会静默跳过内置插件
   // （0.50.0 bump 曾因 `>=0.33.0 <0.45.0` 让 marketplace/usage 消失）。
+  // 同时锁内置清单版本同源（§6.4）：仓库 plugins/ 即内置（repo 源），其 vessel.version
+  // 必须 = 引擎版本，否则面板 child/in-process 两条取值分支混排、child 指纹语义漂移。
   for (const manifest of manifests) {
     if (!manifest.path.startsWith('plugins/')) continue;
-    let pkg: { vessel?: { engines?: { vessel?: unknown } } };
+    let pkg: { vessel?: { version?: unknown; engines?: { vessel?: unknown } } };
     try {
       pkg = JSON.parse(await readFile(join(root, manifest.path), 'utf8'));
     } catch {
       continue;
+    }
+    const manifestVersion = pkg.vessel?.version;
+    if (typeof manifestVersion === 'string' && manifestVersion !== target) {
+      errors.push(
+        `${manifest.path}: vessel.version "${manifestVersion}" != engine ${target} ` +
+          '(built-in plugin manifest version must track the engine version)',
+      );
     }
     const range = pkg.vessel?.engines?.vessel;
     if (typeof range === 'string' && !satisfiesVersionRange(target, range)) {
@@ -316,6 +348,11 @@ async function main(): Promise<void> {
       if (manifest.version !== version) reasons.push(`${manifest.version} -> ${version}`);
       if (internalDependencyIssues(pkg, manifest.path).length > 0) {
         reasons.push(`内部依赖 -> ${WORKSPACE_PROTOCOL}`);
+      }
+      // 写模式还会同 bump 内置清单版本，预演一起算（否则版本已对齐时谎报无改动）。
+      const vessel = pkg.vessel as Record<string, unknown> | undefined;
+      if (typeof vessel?.version === 'string' && vessel.version !== version) {
+        reasons.push(`vessel.version ${vessel.version} -> ${version}`);
       }
       if (reasons.length === 0) continue;
       pending.push(`  ${manifest.path} (${reasons.join('; ')})`);

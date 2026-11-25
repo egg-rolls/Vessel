@@ -128,6 +128,7 @@ import type { McpControl } from '../plugin/mcp-wiring';
 import {
   declarativePluginEntries,
   factoryPluginDisplayEnabled,
+  pluginEntryEnabled,
   setPluginConfigValue,
 } from '../plugin/plugin-config';
 import {
@@ -2042,7 +2043,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 0.43 E3：本地模式同样监听项目/用户插件目录与 config，变更即 rescan + reload。
   const localPluginWatch = startPluginWatch({
     onChange: ({ paths }) => {
-      void reloadLocalPlugins().catch((error) => {
+      void reloadLocalPlugins.reload().catch((error) => {
         logger.warn('plugin.reload.failed', {
           error: error instanceof Error ? error.message : String(error),
           paths,
@@ -2112,7 +2113,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         }
       : {}),
     pluginHostManager: localPluginHostManager,
-    pluginsReload: reloadLocalPlugins,
+    pluginsReload: () => reloadLocalPlugins.reload(),
     // S4：本地 RPC 同样注入插件设置写面（与 gateway 模式同一 asm 函数）。
     pluginsConfigSet: (plugin: string, key: string, value: string | number | boolean) =>
       setPluginConfigValue(plugin, key, value),
@@ -2135,7 +2136,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         }) as unknown as ConfigSnapshotLike,
     },
     plugins: () => {
-      const listed = plugins.map((plugin) => ({ name: plugin.name, enabled: true }));
+      // q-plugin-lifecycle §6.2 R1：enabled 用共享判定读 config（覆盖层语义），
+      // 不再硬编码 true —— 显式 disabled 的插件如实显示关。
+      const listed = plugins.map((plugin) => ({
+        name: plugin.name,
+        enabled: pluginEntryEnabled(config.plugins, plugin.name),
+      }));
       // P1-w2d：已登记 in-process 能力插件补基础行（契约 §1），按 name 去重。
       const seen = new Set(listed.map((plugin) => plugin.name));
       for (const row of inProcessPluginRows) {

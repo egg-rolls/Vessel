@@ -101,7 +101,7 @@ export function InstalledTable({
         const readOnly = item.scope === 'builtin' || item.kind === 'builtin';
         return (
           <div className="flex flex-wrap items-center justify-end gap-2">
-            {item.restartRequired ? (
+            {(item.pendingRestart ?? item.restartRequired) ? (
               <span className="text-xs text-muted">{t('badge.restartRequired')}</span>
             ) : null}
             <Button

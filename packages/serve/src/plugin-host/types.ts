@@ -244,6 +244,13 @@ export interface PluginDescriptor {
   enabled?: boolean;
   /** 内置插件（随 release 发布，可信）；`auth: none/plugin` 只允许内置。 */
   builtin?: boolean;
+  /**
+   * 已解析的 settings 值（config `plugins[].config`，assembly 透传）。
+   * q-plugin-lifecycle §6.5 P2：进 reload 指纹 —— settings 变化 → 指纹变 → 子进程
+   * 重激活（spawn 期 env 注入新值），child settings 转热（非 gateway 重启）。
+   * 与 `contributes.settings`（schema）不同：这是用户配置的实际值。
+   */
+  settings?: Record<string, unknown>;
 }
 
 /** `plugins.list` 的 E1 渲染字段（contract §2.7） */
@@ -347,6 +354,17 @@ export interface PluginContributionsSnapshot {
 /** 插件运行模式（E10 元数据）。 */
 export type PluginMode = 'in-process' | 'child';
 
+/**
+ * per-capability 生命周期（q-plugin-lifecycle §6.1）的结构镜像。
+ * 真源由装配层推导（宿主 install 期注册面审计 + manifest 保守声明）注入；
+ * serve 只消费结构字段，不 import `src/`。每个能力：hot = 热应用即生效；restart = 需重启。
+ */
+export interface PluginLifecycleProfile {
+  toggle: 'hot' | 'restart';
+  settings: 'hot' | 'restart';
+  code: 'hot' | 'restart';
+}
+
 /** `plugins.list[].status` 允许的对外值（不含瞬态 starting/stopped）。 */
 export type PluginListStatus = 'inactive' | 'active' | 'unhealthy' | 'disabled' | 'invalid';
 
@@ -424,7 +442,8 @@ export interface PluginHostManagerLike {
   contributionsFor(): Record<string, PluginRenderContributions>;
   /**
    * S4（vscode-settings-design §4.4）：写路径用的 settings spec + 运行模式。
-   * child 模式 settings 经 env 注入，spawn 后不可变 → restartRequired=true。
+   * q-plugin-lifecycle §6.5 P2 后 child settings 也热应用：settings 值进 reload 指纹，
+   * 改 settings → 子进程重激活（spawn 期 env 注入新值），无需重启 gateway。
    * 未登记的插件返回 undefined（方法层报 not_found）。
    */
   settingSpecFor?(

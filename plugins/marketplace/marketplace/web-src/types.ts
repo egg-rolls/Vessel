@@ -43,7 +43,10 @@ export interface CatalogItem {
   mode: CatalogMode;
   enabled: boolean;
   supportsToggle: boolean;
+  /** Compat alias = pendingRestart (q-plugin-lifecycle §6.2 R2 semantic change). */
   restartRequired: boolean;
+  /** True when a restart-class change is pending (expected ≠ effective). */
+  pendingRestart?: boolean;
   status?: CatalogStatus;
   path: string;
   entry?: string;

@@ -320,6 +320,16 @@ export interface PluginManifest {
   dependencies: PluginDependency;
   /** 显式允许覆盖同 id 的内置插件 */
   override?: boolean;
+  /**
+   * per-capability 生命周期声明（q-plugin-lifecycle §6.1，additive 可选）。
+   * 真源是宿主 install 期注册面审计；本声明只允许比推导**更保守**（声明 restart 采纳，
+   * 谎报 hot → warn + 取 restart，fail-honest）。缺省 = 完全由宿主推导。
+   */
+  lifecycle?: {
+    toggle?: 'hot' | 'restart';
+    settings?: 'hot' | 'restart';
+    code?: 'hot' | 'restart';
+  };
 }
 
 /** CONTRACT-0.43 §8 错误码（plugin_* 命名） */
@@ -1555,6 +1565,23 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
     fail('plugin_manifest_invalid', 'override must be a boolean');
   }
 
+  // per-capability 生命周期声明（additive 可选）：每个能力只认 hot|restart。
+  // 形状非法 fail-closed；语义约束（只允许更保守）由宿主推导层 reconcile，不在这里。
+  let lifecycle: PluginManifest['lifecycle'];
+  if (raw.lifecycle !== undefined) {
+    if (!isRecord(raw.lifecycle)) fail('plugin_manifest_invalid', 'lifecycle must be an object');
+    const parsed: NonNullable<PluginManifest['lifecycle']> = {};
+    for (const capability of ['toggle', 'settings', 'code'] as const) {
+      const value = (raw.lifecycle as Record<string, unknown>)[capability];
+      if (value === undefined) continue;
+      if (value !== 'hot' && value !== 'restart') {
+        fail('plugin_manifest_invalid', `lifecycle.${capability} must be "hot" or "restart"`);
+      }
+      parsed[capability] = value;
+    }
+    lifecycle = parsed;
+  }
+
   if (options.knownPluginIds !== undefined) {
     const known = new Set(options.knownPluginIds);
     for (const dependency of dependencies.plugins) {
@@ -1582,6 +1609,7 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
     permissions,
     dependencies,
     ...(raw.override === true ? { override: true } : {}),
+    ...(lifecycle !== undefined ? { lifecycle } : {}),
   };
 }
 

@@ -17,7 +17,12 @@ import {
   surfaceSummaryFromManifest,
 } from './expose.js';
 import { toPluginListStatus } from './manager.js';
-import type { PluginListStatus, PluginMode, PluginRuntimeStatus } from './types.js';
+import type {
+  PluginLifecycleProfile,
+  PluginListStatus,
+  PluginMode,
+  PluginRuntimeStatus,
+} from './types.js';
 
 /** 发现来源：内置 / 用户 / 项目 / node_modules */
 export type PluginCatalogScope = 'builtin' | 'user' | 'project' | 'node_modules';
@@ -58,6 +63,16 @@ export interface PluginCatalogInput {
   expose?: ReadonlyMap<string, PluginExposeConfig>;
   /** CONTRACT-0.48 §6.2 / §8.2：manager 判定 HTTP 面 conflict fail-closed。 */
   httpSurfaceDisabled?: boolean;
+  /**
+   * per-capability 生命周期（q-plugin-lifecycle §6.1）：装配层推导注入（插件名 → profile）。
+   * 缺省（未注入）时 catalog 不输出 lifecycle 字段，旧客户端零破坏。
+   */
+  lifecycle?: ReadonlyMap<string, PluginLifecycleProfile>;
+  /**
+   * pendingRestart（q-plugin-lifecycle §6.2 R2）：插件名 → 是否存在「期望态 ≠ 已生效态」
+   * 且该面 lifecycle 为 restart 的差异。缺省视为 false（无待生效变更）。
+   */
+  pendingRestart?: ReadonlyMap<string, boolean>;
 }
 
 /** 宿主输出的统一插件视图（CONTRACT-0.47 §3）。 */
@@ -71,8 +86,18 @@ export interface PluginCatalogItem {
   enabled: boolean;
   /** 写 config 后是否允许切换；v1 恒为 true。 */
   supportsToggle: boolean;
-  /** in-process 插件切换后需要重启 gateway 才真正卸载。 */
+  /**
+   * 兼容别名（q-plugin-lifecycle §6.2 R2）：语义已改为 = `pendingRestart`
+   * （存在待生效的 restart 类差异），不再是「in-process 模式」硬编码。保留一个版本期。
+   */
   restartRequired: boolean;
+  /**
+   * 是否存在「期望态 ≠ 已生效态」且该面 lifecycle 为 restart 的差异（真阳性 badge）。
+   * 全 hot 且无 pending → false（面板不挂「重启后生效」）。
+   */
+  pendingRestart: boolean;
+  /** per-capability 生命周期（宿主推导 + manifest 保守声明）；未注入时缺省。 */
+  lifecycle?: PluginLifecycleProfile;
   status?: PluginListStatus;
   /** 插件目录绝对路径（本地控制台展示；不含密钥）。 */
   path: string;
@@ -157,6 +182,10 @@ export function buildPluginCatalog(input: PluginCatalogInput): PluginCatalogItem
               : {}),
           });
 
+    // pendingRestart 由装配层汇聚（期望态 ≠ 已生效态 且该面 restart）；缺省 false。
+    const pendingRestart = input.pendingRestart?.get(entry.name) === true;
+    const lifecycle = input.lifecycle?.get(entry.name);
+
     items.push({
       id: descriptor.name,
       name: displayName(descriptor),
@@ -166,7 +195,10 @@ export function buildPluginCatalog(input: PluginCatalogInput): PluginCatalogItem
       mode: descriptor.mode,
       enabled: entry.enabled,
       supportsToggle: true,
-      restartRequired: descriptor.mode === 'in-process',
+      // 兼容别名与 pendingRestart 同源（语义变更见字段注释）。
+      restartRequired: pendingRestart,
+      pendingRestart,
+      ...(lifecycle !== undefined ? { lifecycle } : {}),
       ...(rawStatus !== undefined ? { status: toPluginListStatus(rawStatus) } : {}),
       path: descriptor.dir,
       ...(descriptor.entry !== undefined ? { entry: descriptor.entry } : {}),

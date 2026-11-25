@@ -53,6 +53,7 @@ import {
   noopLogger,
   type Plugin,
   type PluginHost,
+  type PluginSurfaceKind,
   type ProjectionCursor,
   type ResumeMarkerRegistryState,
   type RunEvent,
@@ -227,6 +228,12 @@ export interface TenantRuntimeBundle {
     manager: PluginHostManager,
     config: VesselConfig,
   ) => Array<{ name: string; enabled: boolean }>;
+  /**
+   * 生命周期审计（q-plugin-lifecycle §6.1）：install 期实际登记的注册面（插件名 → 种类集）。
+   * 真源 = 宿主注册行为；catalog / 热应用据此推导 per-capability 生命周期。
+   * provider / 工厂类不经 installPluginsIntoHost，缺省（推导按结构判据 restart）。
+   */
+  pluginSurfaces: ReadonlyMap<string, ReadonlySet<PluginSurfaceKind>>;
   /** tenant 独立事件流（trace / metrics 只订阅它） */
   events: EventStream;
   /** runtime 事件出口；与 tenant 流同一实例 */
@@ -1663,6 +1670,7 @@ export async function buildTenantRuntime(
         entries: [...inProcessCapabilityPlugins, ...(registry?.inProcessPlugins ?? [])],
         config: pluginConfig,
       }),
+    pluginSurfaces: installedPlugins.surfaces,
     events,
     runtimeEvents: events,
     session,

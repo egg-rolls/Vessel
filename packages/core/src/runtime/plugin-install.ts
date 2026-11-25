@@ -10,12 +10,18 @@
 
 import type { RunEvent } from '../types/event.js';
 import type { Logger } from '../types/logging.js';
-import type { Plugin, PluginHost } from '../types/plugin.js';
+import type { Plugin, PluginHost, PluginSurfaceKind } from '../types/plugin.js';
 import { assertToolNameLegality } from './tool-name.js';
 
 /** 一次安装的句柄：已安装插件（安装顺序）+ 逆序 dispose。 */
 export interface InstalledPlugins {
   readonly plugins: readonly Plugin[];
+  /**
+   * 生命周期审计（q-plugin-lifecycle §6.1）：插件名 → install 期实际登记的注册面种类。
+   * 真源是宿主看到的注册行为；供 per-capability 生命周期推导（catalog / 热应用共用）。
+   * 宿主不支持 scope.surfaces 时该插件缺省（推导按保守口径）。
+   */
+  readonly surfaces: ReadonlyMap<string, ReadonlySet<PluginSurfaceKind>>;
   dispose(): Promise<void>;
 }
 
@@ -42,6 +48,7 @@ export async function installPluginsIntoHost(
   opts: InstallPluginsOptions,
 ): Promise<InstalledPlugins> {
   const installed: Plugin[] = [];
+  const surfaces = new Map<string, ReadonlySet<PluginSurfaceKind>>();
 
   for (const plugin of opts.plugins) {
     const scope = opts.host.beginPluginInstall?.(plugin.name);
@@ -52,6 +59,9 @@ export async function installPluginsIntoHost(
       if (result instanceof Promise) {
         await result; // 如果失败，让 async 构造函数抛出
       }
+      // 生命周期审计：commit 前读本次安装登记的注册面（真源 = 宿主实际注册行为）。
+      const audited = scope?.surfaces?.();
+      if (audited !== undefined) surfaces.set(plugin.name, audited);
       scope?.commit();
       installed.push(plugin);
       opts.publish({
@@ -112,6 +122,7 @@ export async function installPluginsIntoHost(
 
   return {
     plugins: installed,
+    surfaces,
     async dispose(): Promise<void> {
       // 逆安装顺序；异常只发 `plugin.dispose.failed`，不外抛（0.9）
       for (let index = installed.length - 1; index >= 0; index -= 1) {
