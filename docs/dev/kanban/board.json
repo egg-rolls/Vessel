@@ -139,7 +139,7 @@
       "column": "进行中",
       "owner": "q-permission-pending",
       "branch": "feat/q-permission-pending",
-      "progress": "7f63b8b8派单(用户指示2026-11-25晚)：根因=PendingView只消费asks,permissions未汇集；gateway interactions.list两种kind都返回+hydration已重建两者→只缺Web消费侧；方案=混合聚类(agent>session>run)+原样复用PermissionCard+respondPermission逐条裁决(不批量批准)+badge计数对齐+teamId additive；★合并时机=第四轮晋升后(避未验码搭晋升),候lead登记第五轮批次书金丝雀验"
+      "progress": "7f63b8b8派单(用户指示2026-11-25晚)：根因=PendingView只消费asks,permissions未汇集；gateway interactions.list两种kind都返回+hydration已重建两者→只缺Web消费侧；方案=混合聚类(agent>session>run)+原样复用PermissionCard+respondPermission逐条裁决(不批量批准)+badge计数对齐+teamId additive；★lead分批裁定:第五轮批次A=permission汇集专项(用户指示优先,与CR22-1 hydration-anon共享入口须耦合回归防互踩,测试员=cardrobust卡面+skillsstyle待批页UI复用续话),批次B=四面独立；合并时机=第四轮晋升后"
     },
     {
       "id": "q-graceful-selfrestart",
