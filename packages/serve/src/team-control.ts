@@ -130,6 +130,17 @@ export interface TeamRetractResultLike {
   retracted_message_id: string;
 }
 
+/** teams.recall_delivery 结果：逐成员的 inbox 级联收口（与 agents.recall 同形）。 */
+export interface TeamRecallDeliveryResultLike {
+  team_id: string;
+  message_id: string;
+  deliveries: {
+    agent_id: string;
+    deleted: string[];
+    skipped: { message_id: string; reason: 'not_found' | 'consumed' | 'active' }[];
+  }[];
+}
+
 /** 预算维度（0.19 S4）。 */
 export type BudgetDimensionLike = 'hops' | 'turns' | 'tokens' | 'wall_clock' | 'cycle';
 
@@ -231,8 +242,19 @@ export interface TeamControlLike {
     /** 0.21：跨节点报文元数据 */
     federation?: TeamLogFederationLike;
   }): Promise<TeamPostResultLike>;
-  /** 0.38：追加撤回 tombstone（日志保留原消息；目标须在可读窗口内）。 */
+  /**
+   * 删除（wire 仍叫 retract）：追加 tombstone（日志保留原消息；目标须在可读窗口内），
+   * 并级联真删各成员 inbox 里的那一份。
+   */
   retract(input: { team_id: string; message_id: string }): Promise<TeamRetractResultLike>;
+  /**
+   * 消费一条 team 消息的 inbox 投递（编辑按钮）：不写 tombstone、不改日志，
+   * 只级联撤回各收件成员 inbox 里的那一份（目标须在可读窗口内）。
+   */
+  recallDelivery(input: {
+    team_id: string;
+    message_id: string;
+  }): Promise<TeamRecallDeliveryResultLike>;
   members(input: {
     team_id: string;
     action: 'add' | 'remove';

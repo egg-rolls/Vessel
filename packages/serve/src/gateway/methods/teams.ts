@@ -24,6 +24,7 @@ import {
   teamDetailSchema,
   teamMembersResultSchema,
   teamPostResultSchema,
+  teamRecallDeliveryResultSchema,
   teamRetractResultSchema,
   teamSummarySchema,
 } from './schemas.js';
@@ -423,7 +424,8 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
       },
     },
     {
-      // 0.38：撤回 = 追加 tombstone；不删除原消息，也不级联删除后续回复。
+      // 0.38：追加 tombstone；不删除原消息，也不级联删除后续回复。
+      // 删除语义（用户裁定）：服务端另级联真删各成员 inbox 里的那一份（见 TeamService.retract）。
       name: 'teams.retract',
       permission: 'write',
       params_schema: {
@@ -442,6 +444,32 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           assertTeamScope(teamScopeOf(ctx), teamId);
           const messageId = stringParam(params, 'message_id');
           return await control.retract({ team_id: teamId, message_id: messageId });
+        } catch (error) {
+          return mapTeamError(error);
+        }
+      },
+    },
+    {
+      // 编辑按钮的级联收口：只消费该消息投进各成员 inbox 的那一份，不写 tombstone、
+      // 不改日志（与 teams.retract 的「视图隐藏 + 级联」分工）。目标须在可读窗口内。
+      name: 'teams.recall_delivery',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['team_id', 'message_id'],
+        properties: {
+          team_id: { type: 'string', minLength: 1 },
+          message_id: { type: 'string', minLength: 1 },
+        },
+      },
+      result_schema: teamRecallDeliveryResultSchema,
+      handler: async (params, ctx) => {
+        try {
+          const control = requireTeamControl(teams);
+          const teamId = stringParam(params, 'team_id');
+          assertTeamScope(teamScopeOf(ctx), teamId);
+          const messageId = stringParam(params, 'message_id');
+          return await control.recallDelivery({ team_id: teamId, message_id: messageId });
         } catch (error) {
           return mapTeamError(error);
         }

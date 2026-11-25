@@ -257,6 +257,14 @@ export interface AgentMessage {
    */
   channel?: AgentMessageChannel;
   /**
+   * 来源 Team 日志条目的 message_id（内存内元数据，随 inbox 条目落盘）。
+   *
+   * 只有 `TeamService.post` 的 @ 投递会填：team 日志与 inbox 副本是两个 id
+   * （日志先写、dispatch 再生成 inbox id），没有这份关联，「编辑 / 删除一条 team
+   * 消息」就定位不到成员收件箱里的那一份。缺省 = 非 team 投递（直发 / ask / bash）。
+   */
+  team_message_id?: string;
+  /**
    * 发送者的显示名（内存内元数据，不落 snapshot）。由 AgentService 入队时按
    * registry 填；人类 / 系统 / 联邦地址没有本机成员名，缺省。
    *
@@ -855,6 +863,12 @@ export interface AdmitInput {
   from?: string;
   channel?: 'direct' | 'team';
   origin_team_id?: string;
+  /**
+   * 来源 Team 日志条目的 message_id（仅内部装配，不暴露为 RPC 参数）。
+   * 随 inbox 条目落盘（`StoredInboxMessage.team_message_id`），供「编辑 / 删除
+   * team 消息」级联消费成员收件箱里的那一份。缺省 = 非 team 投递。
+   */
+  team_message_id?: string;
   conversation_id?: string;
   /** agents.send 语义：不自动恢复 gone 成员；dispatch/runs.start 缺省允许 */
   strict?: boolean;
@@ -1067,6 +1081,11 @@ export interface DispatchInput {
    * 成员 send / reply / owner dispatch 不传，由发送者或目标推导。
    */
   origin_team_id?: string;
+  /**
+   * 来源 Team 日志条目的 message_id（仅内部装配，TeamService.post 填）。
+   * 透传进 admit → inbox 条目落盘，供「编辑 / 删除 team 消息」级联消费收件箱副本。
+   */
+  team_message_id?: string;
   /**
    * 本次投递是否允许在 resume 失败后自动创建新 Agent。
    * 缺省看 team policy `allowAutoCreate`（默认关闭）；显式值覆盖 policy。
@@ -1701,6 +1720,15 @@ export interface AgentService {
    */
   recall(input: AgentRecallInput): Promise<AgentRecallResult>;
   /**
+   * 按**来源 Team 日志条目 id** 撤回 inbox 投递（team 消息的编辑 / 删除级联用）。
+   *
+   * 定位判据是条目落盘的 `team_message_id`（只有 TeamService.post 的 @ 投递会写），
+   * 收口与 `recall` 逐条同一段：consumed / active 跳过，其余取消 queued run + 出队 +
+   * 按 source 分档（human 真删 / 其它 unhold 留档）。找不到条目 = `skipped: not_found`
+   * （消息可能早被消费 / 裁剪，或旧条目没有关联字段）—— 不报错，调用方按条处理。
+   */
+  recallTeamDelivery(agentId: string, teamMessageId: string): Promise<AgentRecallResult>;
+  /**
    * 认领待处理输入（`agents.claim`，0.51）：**「这条我已经拿到了，别再投给我」**。
    *
    * 与 `recall` 的区别是「拿走之后留什么」：recall 要么真删（human 源）要么留档
@@ -2147,6 +2175,27 @@ export interface TeamRetractResult {
   retracted_message_id: string;
 }
 
+/**
+ * 「消费一条 team 消息的 inbox 投递」（编辑按钮用）：不写 tombstone、不改日志，
+ * 只把该消息投进各成员收件箱的那一份按 `agents.recall` 同一套收口拿走
+ * （human 源真删；已消费 / 正在跑的跳过）。
+ */
+export interface TeamRecallDeliveryInput {
+  team_id: string;
+  message_id: string;
+}
+
+/** 逐成员的级联结果：`deleted` / `skipped` 与 `agents.recall` 同形（inbox 消息 id）。 */
+export interface TeamRecallDeliveryResult {
+  team_id: string;
+  message_id: string;
+  deliveries: {
+    agent_id: string;
+    deleted: string[];
+    skipped: AgentRecallSkip[];
+  }[];
+}
+
 export interface TeamMembersInput {
   team_id: string;
   action: 'add' | 'remove';
@@ -2359,6 +2408,11 @@ export interface AgentTeamService {
   post(input: TeamPostInput): Promise<TeamPostResult>;
   /** 追加撤回 tombstone；目标必须仍在可读日志窗口内。 */
   retract(input: TeamRetractInput): Promise<TeamRetractResult>;
+  /**
+   * 消费一条 team 消息的 inbox 投递（编辑按钮）：不写 tombstone、不改日志，
+   * 只级联撤回各收件成员 inbox 里的那一份（见 TeamRecallDeliveryInput）。
+   */
+  recallDelivery(input: TeamRecallDeliveryInput): Promise<TeamRecallDeliveryResult>;
   /** 未知 Team 返回 undefined；业务失败抛 TeamError */
   members(input: TeamMembersInput): Promise<TeamMembersResult | undefined>;
   /** 成员 ExecutionUnit 的 A2A send */

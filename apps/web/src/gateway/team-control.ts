@@ -20,6 +20,7 @@ import type {
   TeamCreateInput,
   TeamDetail,
   TeamPostResult,
+  TeamRecallDeliveryResult,
   TeamRetractResult,
   TeamSummary,
   TeamUpdateInput,
@@ -44,8 +45,19 @@ export interface TeamControl {
   createTeam(input: TeamCreateInput): Promise<TeamSummary>;
   updateTeam(input: TeamUpdateInput): Promise<TeamSummary>;
   archiveTeam(teamId: string): Promise<TeamSummary>;
-  /** 0.38：追加 tombstone（append-only）；目标消息由 UI 隐藏。 */
+  /**
+   * 删除（wire 仍叫 retract）：追加 tombstone（append-only），目标消息由 UI 隐藏；
+   * 服务端同时级联真删各成员 inbox 里的那一份。
+   */
   retractTeam(input: { team_id: string; message_id: string }): Promise<TeamRetractResult>;
+  /**
+   * 编辑的级联收口：只消费该消息投进各成员 inbox 的那一份（不写 tombstone、不改日志）。
+   * 旧 gateway 没有该方法时报错，调用方按失败处理。
+   */
+  recallTeamDelivery(input: {
+    team_id: string;
+    message_id: string;
+  }): Promise<TeamRecallDeliveryResult>;
   /**
    * 0.52：附件引用弹层的目录浏览（节点侧只读 `attachments.list`）。
    *
@@ -104,6 +116,9 @@ export function createRemoteTeamControl(
     },
     retractTeam(input) {
       return call<TeamRetractResult>('teams.retract', input);
+    },
+    recallTeamDelivery(input) {
+      return call<TeamRecallDeliveryResult>('teams.recall_delivery', input);
     },
     listAttachments(params = {}) {
       return call<AttachmentListResult>('attachments.list', params);

@@ -8,6 +8,7 @@ import type {
   PermissionScope,
   TeamDetail,
   TeamPostResult,
+  TeamRecallDeliveryResult,
   TeamRetractResult,
 } from '../../gateway/types';
 import type { StoredEvent } from '../../state/events';
@@ -29,6 +30,14 @@ export interface TeamChatClient {
     refs?: MessageRef[];
   }): Promise<TeamPostResult>;
   retractTeam(input: { team_id: string; message_id: string }): Promise<TeamRetractResult>;
+  /**
+   * 编辑的级联收口：消费该消息投进各成员 inbox 的那一份（不写 tombstone、不改日志）。
+   * 旧 gateway 没有该方法时报错，editMessage 按失败处理（不回填草稿）。
+   */
+  recallTeamDelivery(input: {
+    team_id: string;
+    message_id: string;
+  }): Promise<TeamRecallDeliveryResult>;
   /**
    * 0.52：附件引用弹层的目录浏览（节点侧只读 `attachments.list`）。
    *

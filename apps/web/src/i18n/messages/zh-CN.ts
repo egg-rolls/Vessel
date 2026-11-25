@@ -694,13 +694,15 @@ export const messages = {
   'team.message.systemTag': '系统',
   'team.message.viewBody': '查看成员会话',
   'team.message.edit': '编辑',
+  'team.message.editRecallFailed': '没能撤回成员收件箱里的那份，草稿未回填：{detail}',
   'team.message.resend': '重发',
-  'team.message.retract': '撤回',
-  'team.message.retractTitle': '撤回消息',
-  'team.message.retractBody':
-    '这条消息会从 Team 视图中隐藏；日志保留撤回标记，后续回复不删除。此操作不可撤销。',
-  'team.message.retractConfirm': '撤回',
-  'team.message.retractDone': '已撤回',
+  // 「删除」（用户裁定，原「撤回」）：视图隐藏 + 成员收件箱副本真删，不是可恢复的撤回。
+  'team.message.delete': '删除',
+  'team.message.deleteTitle': '删除消息',
+  'team.message.deleteBody':
+    '这条消息会从 Team 视图中隐藏，成员收件箱里的副本一并删除（已开始执行的除外）；日志保留删除标记，后续回复不删除。此操作不可撤销。',
+  'team.message.deleteConfirm': '删除',
+  'team.message.deleteDone': '已删除',
   'team.federation.from': 'federation 来自',
   'team.federation.reply': '按地址回复',
   'team.federation.replyHint':
@@ -712,7 +714,8 @@ export const messages = {
   'team.system.create': '{name} 创建了新会话',
   // 旧日志只读：0.39 起新写 `create`，不再写 `fork`。
   'team.system.fork': 'agent 已 fork（旧记录）',
-  'team.system.retract': '{name} 撤回了一条消息',
+  // wire 系统事件仍叫 retract（append-only 旧日志兼容）；显示文案按「删除」语义。
+  'team.system.retract': '{name} 删除了一条消息',
   'team.system.unknown': 'Team 系统事件',
 
   'team.delivery.queued': '排队中',

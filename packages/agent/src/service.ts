@@ -2994,6 +2994,8 @@ export class AgentServiceImpl implements AgentService {
       ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
       source: this.messageSource(from),
       channel,
+      // team 日志关联随消息进 inbox（trackInbox / rotate quiet 两条落盘路都带）。
+      ...(input.team_message_id !== undefined ? { team_message_id: input.team_message_id } : {}),
       // 名字随消息带上：执行内核不持有 registry，渲染时无处可查。
       ...(senderName !== undefined ? { from_name: senderName } : {}),
       ...(input.origin !== undefined ? { origin: input.origin } : {}),
@@ -3021,6 +3023,11 @@ export class AgentServiceImpl implements AgentService {
             source: inboxSourceOf(message),
             text: content,
             ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+            // team 关联同样带进 quiet 条目：rotate 窗口落盘的那一份也要能被
+            // 「编辑 / 删除 team 消息」级联定位到。
+            ...(message.team_message_id !== undefined
+              ? { team_message_id: message.team_message_id }
+              : {}),
             // 显示名同样带进 quiet 条目：rotate 窗口落盘的消息之后也会上条带，
             // 缺了它卡头一样只剩 UUID（本来就知道的名字，没有理由丢掉）。
             ...(senderName !== undefined ? { from_name: senderName } : {}),
@@ -3249,6 +3256,10 @@ export class AgentServiceImpl implements AgentService {
           : {}),
         // 附件引用随条目落盘：重启恢复重投时带上，附件不丢。
         ...(message.refs !== undefined ? { refs: message.refs } : {}),
+        // team 日志关联随条目落盘：编辑 / 删除 team 消息时按它定位这份副本。
+        ...(message.team_message_id !== undefined
+          ? { team_message_id: message.team_message_id }
+          : {}),
         // 显示名随条目落盘（只给条带身份行）：入队这一刻 registry 里还有发送方，
         // 之后渲染时已经无处可查 —— 不存下来，卡头就只能摆一串 UUID。
         ...(message.from_name !== undefined ? { from_name: message.from_name } : {}),
@@ -3786,6 +3797,44 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * 按来源 Team 日志条目 id 撤回 inbox 投递（team 消息编辑 / 删除的级联收口）。
+   *
+   * 与 `recall` 的唯一差别是**定位方式**：recall 按 inbox 消息 id，这里按条目落盘的
+   * `team_message_id`（只有 TeamService.post 的 @ 投递会写）。找到之后走同一段逐条
+   * 收口：consumed / active 跳过，其余取消 queued run + 出队 + 按 source 分档。
+   * 没有命中（旧条目无关联 / 早被消费裁剪）返回 `skipped: not_found`，不报错 ——
+   * 级联是 best-effort，调用方（TeamService）按条如实汇报。
+   */
+  async recallTeamDelivery(agentId: string, teamMessageId: string): Promise<AgentRecallResult> {
+    await this.ready;
+    const deleted: string[] = [];
+    const skipped: AgentRecallSkip[] = [];
+    const store = this.inbox;
+    const found = store === undefined ? [] : store.findByTeamMessage(agentId, teamMessageId);
+    if (found.length === 0) {
+      skipped.push({ message_id: teamMessageId, reason: 'not_found' });
+      return { deleted, skipped };
+    }
+    for (const entry of found) {
+      const messageId = entry.id;
+      if (entry.status === 'consumed') {
+        skipped.push({ message_id: messageId, reason: 'consumed' });
+        continue;
+      }
+      const holder =
+        entry.session_id !== undefined ? this.findEntry(agentId, entry.session_id) : undefined;
+      if (holder?.active?.messageId === messageId) {
+        skipped.push({ message_id: messageId, reason: 'active' });
+        continue;
+      }
+      this.cancelQueuedRunsFor(holder, messageId, 'recall');
+      this.closeWithdrawnMessage(agentId, holder, messageId, entry.source);
+      deleted.push(messageId);
+    }
+    return { deleted, skipped };
+  }
+
+  /**
    * 认领待处理输入（`agents.claim`，0.51）：「这几条我已经拿到正文了，从队列里拿走」。
    *
    * 0.55 起**模型侧不再有这个动作**：工具的 `read` 就等于拿走（它取到 held 条目时走的是
@@ -4036,6 +4085,11 @@ export class AgentServiceImpl implements AgentService {
               // 发送者沿用条目里落的 principal（判据已经只收 human 源）。
               from: body.source,
               ...(body.refs !== undefined ? { refs: body.refs } : {}),
+              // team 关联原样带回：append 同 id 幂等本就保留原条目，这里显式带上
+              // 是防条目在恢复前被裁掉后重落盘时丢关联。
+              ...(body.team_message_id !== undefined
+                ? { team_message_id: body.team_message_id }
+                : {}),
               reuse_message_id: body.id,
             },
             { recovery: true },
@@ -4879,6 +4933,10 @@ export class AgentServiceImpl implements AgentService {
             conversation_id: conversationId,
             // 入队时存下的显示名随重建带回：丢了它条带 / 卡头只能退短 id。
             ...(stored.from_name !== undefined ? { from_name: stored.from_name } : {}),
+            // team 关联同理带回：urgent 重投不该把「编辑 / 删除 team 消息」的定位弄丢。
+            ...(stored.team_message_id !== undefined
+              ? { team_message_id: stored.team_message_id }
+              : {}),
           } satisfies AgentMessage);
       } else {
         conversationId = this.resolveConversationForDelivery(
@@ -5339,6 +5397,8 @@ export class AgentServiceImpl implements AgentService {
           channel: 'direct',
           ...(head.refs !== undefined ? { refs: head.refs } : {}),
           ...(head.conversation_id !== undefined ? { conversation_id: head.conversation_id } : {}),
+          // team 关联原样带回（append 同 id 幂等，防裁掉重落时丢关联）。
+          ...(head.team_message_id !== undefined ? { team_message_id: head.team_message_id } : {}),
           // 复用条目自己的 id：append 幂等、markConsumed 天然指向同一条，
           // 这条消息不会因为「先落盘、后被直投」而在磁盘上变成两条。
           reuse_message_id: head.id,
@@ -5537,6 +5597,10 @@ export class AgentServiceImpl implements AgentService {
 
     const originTeamId =
       raw.origin_team_id === undefined ? undefined : readRequiredString(raw, 'origin_team_id');
+    // team 日志关联（仅内部装配，TeamService.post 填）：随 inbox 条目落盘，
+    // 供「编辑 / 删除 team 消息」级联定位收件箱副本。
+    const teamMessageId =
+      raw.team_message_id === undefined ? undefined : readRequiredString(raw, 'team_message_id');
     if (wakes) {
       try {
         const outcome = await this.wakeDelivery(target, {
@@ -5600,6 +5664,7 @@ export class AgentServiceImpl implements AgentService {
         from,
         channel: originTeamId === undefined ? 'direct' : 'team',
         ...(originTeamId !== undefined ? { origin_team_id: originTeamId } : {}),
+        ...(teamMessageId !== undefined ? { team_message_id: teamMessageId } : {}),
         ...(originSessionId !== undefined ? { origin_session_id: originSessionId } : {}),
         ...(originRunId !== undefined ? { origin_run_id: originRunId } : {}),
         conversation_id: conversationId,
