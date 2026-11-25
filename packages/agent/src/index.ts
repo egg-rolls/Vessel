@@ -6,6 +6,19 @@
  * 不负责 UI / 传输 / provider / 工具 schema；执行内核由 MemberExecutionPort 注入。
  */
 
+// q-addr-display：地址显示纯函数（零 import leaf；web 经 alias 按源码消费同一份）。
+export {
+  ADDRESS_STYLES,
+  type AddressNameMaps,
+  type AddressSegments,
+  type AddressStyle,
+  DEFAULT_ADDRESS_STYLE,
+  type FormatAddressOptions,
+  formatAddress,
+  isUuidLike,
+  normalizeAddressStyle,
+  shortAddressId,
+} from './address-display.js';
 export {
   ConversationBudget,
   type ConversationBudgetOptions,

@@ -27,6 +27,12 @@
  *
  * @module web/chat/env-notice
  */
+// q-addr-display：地址显示纯函数（零 import leaf，不破坏本模块「无 React / DOM / store」）。
+import {
+  type AddressNameMaps,
+  type AddressStyle,
+  formatAddress,
+} from '@vessel-agent/agent/address-display';
 
 /**
  * 「环境信息」的作用域词表。
@@ -303,6 +309,45 @@ export function parseSourceAddress(location: string): SourceAddress | undefined 
     };
   }
   return NODE_UUID_LIKE.test(host) ? { principal, node: host } : { principal, team: host };
+}
+
+/**
+ * q-addr-display：来源卡按 `ui.addressStyle` 渲染（纯函数，渲染侧调用）。
+ *
+ * 只动「组织行」：摘要行（location）与 `principal: / node: / team:` 明细行按
+ * formatAddress 兜底链渲染；**原文块（blocks）一字不动** —— 原文即模型所见事实。
+ * 非 source 卡原样返回；解析不出地址的行（旧数据 / 第三方改写）原样保留，不吞不改。
+ */
+export function styleSourceCard(
+  env: EnvNoticeCard,
+  style: AddressStyle,
+  names?: AddressNameMaps,
+): EnvNoticeCard {
+  if (env.scope !== 'source') return env;
+  return {
+    ...env,
+    lines: env.lines.map((line) => ({ ...line, text: styleSourceLine(line.text, style, names) })),
+  };
+}
+
+function styleSourceLine(text: string, style: AddressStyle, names?: AddressNameMaps): string {
+  for (const key of ['principal', 'node', 'team'] as const) {
+    const prefix = `${key}: `;
+    if (text.startsWith(prefix)) {
+      const value = text.slice(prefix.length);
+      const segment =
+        key === 'principal'
+          ? { principal: value }
+          : key === 'node'
+            ? { node: value }
+            : { team: value };
+      return prefix + formatAddress(segment, style, names);
+    }
+  }
+  // 含标签字符的不是裸地址（原文兜底行 / 第三方改写）：不猜，原样。
+  if (text.includes('<') || text.includes('"')) return text;
+  const address = parseSourceAddress(text);
+  return address !== undefined ? formatAddress(address, style, names) : text;
 }
 
 export function sourceNoticeCard(content: string): EnvNoticeCard | undefined {

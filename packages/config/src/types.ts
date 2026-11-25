@@ -1068,6 +1068,15 @@ export type UiVerbosity = 'minimal' | 'normal' | 'debug';
 export type UiErrorLevel = 'user' | 'all';
 
 /**
+ * 地址显示风格（q-addr-display；默认 name）。
+ * name = 各段能用名就用名；compact = principal 名 + node 短 id + team 名；
+ * full = 各段原样（full uuid）。只影响显示层，路由地址恒 canonical full-id。
+ * 值与 `packages/agent/src/address-display.ts` 的 ADDRESS_STYLES 同步
+ * （config 包不依赖 agent 包，方向是 core ← packages ← src，两处都是 leaf 定义）。
+ */
+export type UiAddressStyle = 'name' | 'compact' | 'full';
+
+/**
  * 消息显示（q-msg-visibility）：时间线七类消息里可配置的五类，每类独立 toggle。
  * 用户消息 / AI 正文恒显，不在此列。缺省值 = 现行默认行为（未配置不改变观感）。
  *
@@ -1144,6 +1153,12 @@ export interface UiConfig {
    * 用户在某张卡片上手动开合后，以手动状态为准。
    */
   expandCards?: boolean;
+  /**
+   * 地址显示风格（q-addr-display；YAML 键 `address_style`；默认 name）。
+   * 影响面：runtime 来源行 / federation 抬头显示行 / web 路由副行与来源卡。
+   * 非法值由 validator 拒绝；消费方缺省按 name（`normalizeAddressStyle`）。
+   */
+  addressStyle?: UiAddressStyle;
   /**
    * 是否注册 `ask` 工具（0.15；YAML 键 `ui.ask_user`，键名未随工具改名而变）。
    *

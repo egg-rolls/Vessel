@@ -312,6 +312,12 @@ export default defineConfig({
         find: '@vessel-agent/plugin-sdk',
         replacement: resolve(PLUGIN_SDK_SRC, 'index.ts'),
       },
+      // q-addr-display：地址显示纯函数（零 import leaf）按源码消费，与 tsconfig paths
+      // 同一映射。只开放这一个子路径 —— agent 包根有 node 依赖，不进 web bundle。
+      {
+        find: '@vessel-agent/agent/address-display',
+        replacement: resolve(__dirname, '../../packages/agent/src/address-display.ts'),
+      },
     ],
   },
   plugins: [react(), tailwindcss(), writeBuildStamp(), vesselPluginEmbed()],

@@ -1022,6 +1022,9 @@ const UI_VERBOSITY: ReadonlySet<string> = new Set(['minimal', 'normal', 'debug']
 /** `ui.errorLevel` 允许值（0.14） */
 const UI_ERROR_LEVELS: ReadonlySet<string> = new Set(['user', 'all']);
 
+/** `ui.addressStyle` 允许值（q-addr-display；与 agent 包 ADDRESS_STYLES 同步） */
+const UI_ADDRESS_STYLES: ReadonlySet<string> = new Set(['name', 'compact', 'full']);
+
 /** 校验 ui 块（0.8.5 language；0.11 clearOnStart；0.11.1 showReasoning；0.13/0.14 可见性；0.15 askUser） */
 function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]): void {
   if (!isPlainObject(ui)) {
@@ -1126,6 +1129,16 @@ function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]
       path: 'ui.askUser',
       message: 'ui.askUser must be a boolean',
       value: ui.askUser,
+    });
+  }
+  if (
+    ui.addressStyle !== undefined &&
+    (typeof ui.addressStyle !== 'string' || !UI_ADDRESS_STYLES.has(ui.addressStyle))
+  ) {
+    errors.push({
+      path: 'ui.addressStyle',
+      message: 'ui.addressStyle must be one of "name", "compact", "full"',
+      value: ui.addressStyle,
     });
   }
 }

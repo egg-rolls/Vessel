@@ -13,7 +13,10 @@
     "paths": {
       "@vessel-agent/plugin-ui": ["../../packages/plugin-ui/src/index.ts"],
       "@vessel-agent/plugin-ui/*": ["../../packages/plugin-ui/src/*"],
-      "@vessel-agent/plugin-sdk": ["../../packages/plugin-sdk/src/index.ts"]
+      "@vessel-agent/plugin-sdk": ["../../packages/plugin-sdk/src/index.ts"],
+      // q-addr-display：地址显示纯函数按源码消费（零 import leaf，不拖 agent 包依赖图；
+      // 先例：plugin-ui / plugin-sdk）。只映射这一个子路径，包根不开放。
+      "@vessel-agent/agent/address-display": ["../../packages/agent/src/address-display.ts"]
     },
     "skipLibCheck": true,
     "resolveJsonModule": true,

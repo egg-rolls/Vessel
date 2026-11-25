@@ -179,6 +179,16 @@ const CORE_SETTING_SPECS: readonly CoreSettingSpec[] = [
   { key: 'ui.askUser', type: 'boolean', default: 'true' },
   { key: 'ui.showReasoning', type: 'boolean', default: 'false' },
   { key: 'ui.expandCards', type: 'boolean', default: 'false' },
+  // q-addr-display（用户裁定）：地址显示三档，缺省 name 优先（轻量有质感）。
+  // fallback 让「未配置」回显真实缺省档；只影响显示层，路由地址恒 canonical full-id。
+  {
+    key: 'ui.addressStyle',
+    type: 'enum',
+    options: ['name', 'compact', 'full'],
+    default: 'name',
+    fallback: 'name',
+    keywords: ['地址', 'address', '显示格式', '节点名', 'short-id', 'uuid'],
+  },
   { key: 'ui.statusBars', type: 'enum', options: ['top', 'bottom', 'both', 'none'] },
   { key: 'ui.language', type: 'enum', options: ['zh-CN', 'en'], default: 'zh-CN' },
   // 日志中枢（gateway）：modules 是 map，一期只读（不走 config.set）。

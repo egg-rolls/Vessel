@@ -16,6 +16,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { EventStream, Logger, MessageRef, RunEvent } from '@vessel-agent/core';
+import { type AddressStyle, DEFAULT_ADDRESS_STYLE, formatAddress } from './address-display.js';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import { type AgentInboxDelivery, DEFAULT_INBOX_DELIVERY } from './inbox.js';
 import { normalizeRefs } from './refs.js';
@@ -71,6 +72,12 @@ export interface TeamServiceOptions {
   federation?: FederationSendPort;
   /** 0.27：run.* 事件来源；缺省时 reply / 失败日志不写（fail-closed） */
   events?: EventStream;
+  /**
+   * q-addr-display：地址显示风格（`ui.addressStyle`，装配层读 config 传入）。
+   * 只影响 federation 抬头的 `from` 显示行；`reply with` 的路由地址恒 canonical。
+   * 缺省 name 优先（远端 node 无名可查时兜底短 id）。
+   */
+  addressStyle?: AddressStyle;
 }
 
 /** 系统消息固定英文文案（不含正文） */
@@ -134,6 +141,7 @@ export class DefaultTeamService implements AgentTeamService {
   private readonly newId: () => string;
   private readonly logger: Logger;
   private readonly federation: FederationSendPort | undefined;
+  private readonly addressStyle: AddressStyle;
   private readonly unsubscribe: () => void;
   /** 0.27：run.* 订阅的取消函数；没有 events 时为 undefined */
   private readonly unsubscribeRuns: (() => void) | undefined;
@@ -158,6 +166,7 @@ export class DefaultTeamService implements AgentTeamService {
     this.newId = options.newId ?? randomUUID;
     this.logger = options.logger ?? NOOP_LOGGER;
     this.federation = options.federation;
+    this.addressStyle = options.addressStyle ?? DEFAULT_ADDRESS_STYLE;
     this.unsubscribe = this.agent.subscribe((event) => this.onAgentEvent(event));
     this.unsubscribeRuns =
       options.events !== undefined
@@ -426,7 +435,7 @@ export class DefaultTeamService implements AgentTeamService {
     const dispatchContent =
       input.federation === undefined
         ? content
-        : federationDispatchContent(input.federation.from_addr, content);
+        : federationDispatchContent(input.federation.from_addr, content, this.addressStyle);
     const dispatched = await Promise.all(
       slots.map((slot) =>
         slot.targetId === undefined
@@ -1745,9 +1754,31 @@ function windowRoster(
   return members.slice(0, normalizeMembersLimit(limit));
 }
 
-/** dispatch 前置抬头（只进投递正文，不进 Team 日志） */
-function federationDispatchContent(fromAddr: string, content: string): string {
-  return `[federation] from ${fromAddr}\nreply with: agent(send, to="${fromAddr}", content="...")\n\n${content}`;
+/**
+ * dispatch 前置抬头（只进投递正文，不进 Team 日志）。
+ *
+ * q-addr-display：`from` 显示行按 addressStyle 渲染（远端 node 无名可查 →
+ * name 档兜底短 id）；**`reply with` 的 `to` 恒 canonical full-id** —— 那是路由
+ * 地址，远端 node 短 id / 名字都不可解析（显示与路由分离裁定）。
+ */
+function federationDispatchContent(fromAddr: string, content: string, style: AddressStyle): string {
+  return `[federation] from ${formatFederationDisplay(fromAddr, style)}\nreply with: agent(send, to="${fromAddr}", content="...")\n\n${content}`;
+}
+
+/** 三段拆段 → formatAddress；形状不符（非 canonical 三段）时原样显示，不猜。 */
+function formatFederationDisplay(fromAddr: string, style: AddressStyle): string {
+  const at = fromAddr.lastIndexOf('@');
+  if (at <= 0) return fromAddr;
+  const colon = fromAddr.indexOf(':', at + 1);
+  if (colon <= at + 1 || colon === fromAddr.length - 1) return fromAddr;
+  return formatAddress(
+    {
+      principal: fromAddr.slice(0, at),
+      node: fromAddr.slice(at + 1, colon),
+      team: fromAddr.slice(colon + 1),
+    },
+    style,
+  );
 }
 
 /** Team 回复日志上限：与 AgentService 一致，超限截断并加标记 */

@@ -195,6 +195,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.expandCards.title': 'Expand cards by default',
   'settings.item.expandCards.desc':
     'Tool, system and queued cards start expanded; permission and ask cards always do. A manual toggle on a card wins over the default.',
+  'settings.item.addressStyle.title': 'Address display style',
+  'settings.item.addressStyle.desc':
+    'How addresses render in source lines and route sublines: name = use names where available (main@soulkiller:vessel); compact = short node id; full = full uuid. Display only — routing always uses the full address.',
   'settings.item.statusBars.title': 'Status bar position',
   'settings.item.language.title': 'UI language',
   'settings.item.logLevel.title': 'Log level',
