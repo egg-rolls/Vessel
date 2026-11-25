@@ -3603,6 +3603,8 @@ const Bo = typeof window > "u" ? ne : Ot, Wo = de(function({
           children: v.map((x, d) => {
             const z = x.value === T;
             return (
+              // biome-ignore lint/a11y/useFocusableInteractive: aria-activedescendant 模式下选项不接收焦点
+              // biome-ignore lint/a11y/useKeyWithClickEvents: 键盘交互在触发器上（combobox 模式）
               /* @__PURE__ */ a(
                 "div",
                 {
