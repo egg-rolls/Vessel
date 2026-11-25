@@ -7299,8 +7299,10 @@ export class AgentServiceImpl implements AgentService {
   /**
    * 0.31：body 上下文水位（0–1），不落盘。
    * 0.52：取数链只有一条 —— 装配层的端口实现直接返回**界面那一份**读数
-   * （`context.changed.token_count` = `ContextManager.tokenCount` / 窗口上限），见
-   * `src/context-ratio-source.ts`。这里不再有任何二次估算：两处各算一次，就是「界面 51%、
+   * （`context.changed.token_count` = runtime 账本 `ExecutionUnit.currentContextTokens`，
+   * 即下一次请求视图的上界估算 × 锚点校正、provider 地板，再 ÷ 窗口上限；0.55 P0 起
+   * 不再是窗口 `ContextManager.tokenCount`），见 `src/context-ratio-source.ts`。
+   * 这里不再有任何二次估算：两处各算一次，就是「界面 51%、
    * 提示 unknown」这种不一致的来源。
    *
    * 残留的 undefined 只有一种：这具 body 既没收到过该会话的上下文事件、宿主也没有它的

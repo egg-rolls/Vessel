@@ -19,7 +19,11 @@ import {
   type VesselConfig,
 } from '../../packages/config/src/index';
 import type {
+  Guardrail,
+  Hook,
+  Plugin,
   PluginHost,
+  ReadSideMasker,
   RuntimePermissionConfig,
   SessionEventLogPort,
   ToolDefinition,
@@ -124,6 +128,50 @@ export async function assemblePluginTools(options: {
   /** 显式排除的插件名（工厂式 / 由其它 applier 管理的插件） */
   excludePlugins?: ReadonlySet<string>;
 }): Promise<{ tools: ToolDefinition[]; names: string[] }> {
+  const assembled = await assemblePluginRegistrations(options);
+  return { tools: assembled.tools, names: assembled.names };
+}
+
+/** 一个插件在旁路装配里实际登记的注册面名（按 install 前后宿主面差量捕获）。 */
+export interface AssembledPluginFaces {
+  name: string;
+  /** 本次装配产出的实例（fresh=true 时是 cache-busted 新实例，可供热启用采纳 / dispose）。 */
+  instance: Plugin;
+  toolNames: string[];
+  hookNames: string[];
+  guardrailNames: string[];
+  maskerNames: string[];
+}
+
+/** 旁路装配的全部注册面目标集 + per-plugin 实例 / 名（注册面差量与 dispose 的真源）。 */
+export interface AssembledPluginRegistrations {
+  tools: ToolDefinition[];
+  hooks: Hook[];
+  guardrails: Guardrail[];
+  readSideMaskers: ReadSideMasker[];
+  plugins: AssembledPluginFaces[];
+  names: string[];
+}
+
+/**
+ * 在旁路 host 上装配插件的**全部注册面**（tool / hook / guardrail / readSideMasker），
+ * 不碰真实宿主。口径与 `--tools` / bootstrap 一致：插件选择 → 配置合并 → tenant 策略。
+ *
+ * `fresh=true`（q-plugin-lifecycle §6.3）用 `loader.loadFresh` 拿 cache-busted 新实例：
+ * 旁路 re-install 不再触碰真实宿主共享单例，热启用可采纳新实例并 dispose 旧的，
+ * 消除 watcher / store 重建却不 dispose 的泄漏（R-C）。`fresh=false` 沿用单例（只读重算）。
+ *
+ * per-plugin 注册面名按「install 前后宿主面差量」捕获 —— 这是注册面差量「按名整体
+ * 摘干净 / 重建一个插件」与生命周期审计共用的真源。
+ */
+export async function assemblePluginRegistrations(options: {
+  config: VesselConfig;
+  tenantId: string;
+  loader?: PluginLoader;
+  excludePlugins?: ReadonlySet<string>;
+  /** 用 cache-busted 新实例（热应用采纳 / dispose）；缺省 false 沿用单例。 */
+  fresh?: boolean;
+}): Promise<AssembledPluginRegistrations> {
   const loader = options.loader ?? new PluginLoader();
   const declarative = declarativePluginEntries(options.config);
   const selection = resolvePluginSelection(
@@ -142,16 +190,48 @@ export async function assemblePluginTools(options: {
     options.config.envInjection,
   );
   const exclude = options.excludePlugins ?? new Set<string>();
-  const host: PluginHost = new MemoryPluginHost();
+  const host = new MemoryPluginHost();
+  const plugins: AssembledPluginFaces[] = [];
   const names: string[] = [];
   for (const name of selection.names) {
     if (exclude.has(name)) continue;
-    const plugin = await loader.load(name);
+    const plugin = options.fresh === true ? await loader.loadFresh(name) : await loader.load(name);
     if (!plugin) continue;
+    const beforeTools = new Set(host.listTools().map((tool) => tool.name));
+    const beforeHooks = new Set(host.getHooks().map((hook) => hook.name));
+    const beforeGuardrails = new Set(host.getGuardrails().map((guardrail) => guardrail.name));
+    const beforeMaskers = new Set(host.getReadSideMaskers().map((masker) => masker.name));
     await installWithConfig(plugin, host, pluginConfigs[plugin.name]);
+    plugins.push({
+      name,
+      instance: plugin,
+      toolNames: host
+        .listTools()
+        .map((tool) => tool.name)
+        .filter((n) => !beforeTools.has(n)),
+      hookNames: host
+        .getHooks()
+        .map((hook) => hook.name)
+        .filter((n) => !beforeHooks.has(n)),
+      guardrailNames: host
+        .getGuardrails()
+        .map((guardrail) => guardrail.name)
+        .filter((n) => !beforeGuardrails.has(n)),
+      maskerNames: host
+        .getReadSideMaskers()
+        .map((masker) => masker.name)
+        .filter((n) => !beforeMaskers.has(n)),
+    });
     names.push(name);
   }
-  return { tools: host.listTools(), names };
+  return {
+    tools: host.listTools(),
+    hooks: host.getHooks(),
+    guardrails: host.getGuardrails(),
+    readSideMaskers: [...host.getReadSideMaskers()],
+    plugins,
+    names,
+  };
 }
 
 /**

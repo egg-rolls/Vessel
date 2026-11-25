@@ -155,6 +155,16 @@
         "vite": "^7.0.0",
       },
     },
+    "plugins/context/thinking-intensity": {
+      "name": "@vessel-agent/thinking-intensity",
+      "version": "0.1.0",
+      "dependencies": {
+        "@vessel-agent/core": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^7.0.2",
+      },
+    },
     "plugins/evals/harness": {
       "name": "@vessel-agent/evals",
       "version": "0.56.1",
@@ -701,6 +711,8 @@
     "@vessel-agent/redact-secrets": ["@vessel-agent/redact-secrets@workspace:plugins/security/redact-secrets"],
 
     "@vessel-agent/serve": ["@vessel-agent/serve@workspace:packages/serve"],
+
+    "@vessel-agent/thinking-intensity": ["@vessel-agent/thinking-intensity@workspace:plugins/context/thinking-intensity"],
 
     "@vessel-agent/tool-policy": ["@vessel-agent/tool-policy@workspace:plugins/security/tool-policy"],
 

@@ -198,6 +198,24 @@ export interface PluginContributionToolbar {
   /** 白名单图标名；未知名由 Web normalizer 丢弃。 */
   icon?: string;
   order?: number;
+  /** 通用 RPC 绑定菜单（additive，q-thinking-plugin P3）；旧 gateway 不返回。 */
+  menu?: PluginContributionToolbarMenu;
+}
+
+/** 菜单档位项 wire 形状（additive）。 */
+export interface PluginContributionToolbarMenuItem {
+  value: string;
+  labelKey?: string;
+  label?: string;
+}
+
+/** 通用 RPC 绑定菜单 wire 形状（additive）。 */
+export interface PluginContributionToolbarMenu {
+  read: string;
+  write: string;
+  valueKey: string;
+  sessionScoped?: boolean;
+  items: PluginContributionToolbarMenuItem[];
 }
 
 /** `plugins.list` 的 additive 贡献点；旧 gateway 不返回。 */
@@ -295,8 +313,18 @@ export interface PluginSurfaceSummary {
 }
 
 /**
+ * per-capability 生命周期（q-plugin-lifecycle §6.1）：宿主推导 + manifest 保守声明。
+ * 每个能力 hot = 热应用即生效；restart = 需重启 gateway。前端只消费，不推导。
+ */
+export interface PluginLifecycleProfile {
+  toggle: 'hot' | 'restart';
+  settings: 'hot' | 'restart';
+  code: 'hot' | 'restart';
+}
+
+/**
  * CONTRACT-0.47 §3：`plugins.catalog` 的只读条目。
- * 前端不推导字段；`kind` / `restartRequired` 以 gateway 返回值为准。
+ * 前端不推导字段；`kind` / `pendingRestart` 以 gateway 返回值为准。
  */
 export interface PluginCatalogItem {
   id: string;
@@ -307,7 +335,12 @@ export interface PluginCatalogItem {
   mode: PluginRuntimeMode;
   enabled: boolean;
   supportsToggle: boolean;
+  /** 兼容别名 = pendingRestart（q-plugin-lifecycle §6.2 R2 语义变更）。 */
   restartRequired: boolean;
+  /** 存在「期望态 ≠ 已生效态」且该面 restart 的差异（真阳性 badge）。 */
+  pendingRestart?: boolean;
+  /** per-capability 生命周期；旧 gateway 缺省。 */
+  lifecycle?: PluginLifecycleProfile;
   status?: PluginRuntimeStatus;
   path: string;
   entry?: string;

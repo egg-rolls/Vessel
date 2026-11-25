@@ -1,0 +1,200 @@
+{
+  "name": "@vessel-agent/thinking-intensity",
+  "version": "0.1.0",
+  "description": "Model thinking-intensity control: hot config settings + BeforeLlm requestExtras injection (per-provider effort/budget/toggle mapping)",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/egg-rolls/Vessel.git",
+    "directory": "plugins/context/thinking-intensity"
+  },
+  "engines": {
+    "bun": ">=1.3.9"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vessel-agent/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  },
+  "vessel": {
+    "id": "thinking-intensity",
+    "name": "Thinking Intensity",
+    "version": "0.1.0",
+    "description": "Control model thinking intensity (effort/budget/toggle per provider) as hot config; auto = no injection (zero regression)",
+    "side": "both",
+    "contributes": {
+      "settings": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "titleKey": "thinking-intensity.settings.enabled",
+          "descriptionKey": "thinking-intensity.settings.enabled.desc",
+          "keywords": [
+            "thinking",
+            "思考",
+            "强度",
+            "reasoning"
+          ],
+          "order": 10
+        },
+        "default_level": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "titleKey": "thinking-intensity.settings.defaultLevel",
+          "descriptionKey": "thinking-intensity.settings.defaultLevel.desc",
+          "order": 20
+        },
+        "budget_low": {
+          "type": "integer",
+          "default": 2048,
+          "minimum": 1024,
+          "maximum": 65536,
+          "titleKey": "thinking-intensity.settings.budgetLow",
+          "order": 30
+        },
+        "budget_medium": {
+          "type": "integer",
+          "default": 8192,
+          "minimum": 1024,
+          "maximum": 65536,
+          "titleKey": "thinking-intensity.settings.budgetMedium",
+          "order": 40
+        },
+        "budget_high": {
+          "type": "integer",
+          "default": 16384,
+          "minimum": 1024,
+          "maximum": 65536,
+          "titleKey": "thinking-intensity.settings.budgetHigh",
+          "order": 50
+        },
+        "experimental_providers": {
+          "type": "boolean",
+          "default": false,
+          "titleKey": "thinking-intensity.settings.experimental",
+          "descriptionKey": "thinking-intensity.settings.experimental.desc",
+          "order": 60
+        }
+      },
+      "rpc": [
+        {
+          "name": "get_state",
+          "description": "Current level + provider capability for a session",
+          "permission": "read"
+        },
+        {
+          "name": "set_level",
+          "description": "Set thinking level (session-scoped or global runtime default)",
+          "permission": "write"
+        },
+        {
+          "name": "capabilities",
+          "description": "Provider mapping table summary (read-only diagnostics)",
+          "permission": "read"
+        }
+      ],
+      "toolbar": [
+        {
+          "slot": "composer",
+          "id": "thinking-level",
+          "label": "Thinking",
+          "titleKey": "thinking-intensity.toolbar.label",
+          "icon": "observe",
+          "order": 20,
+          "menu": {
+            "read": "get_state",
+            "write": "set_level",
+            "valueKey": "level",
+            "sessionScoped": true,
+            "items": [
+              {
+                "value": "auto",
+                "labelKey": "thinking-intensity.level.auto"
+              },
+              {
+                "value": "off",
+                "labelKey": "thinking-intensity.level.off"
+              },
+              {
+                "value": "low",
+                "labelKey": "thinking-intensity.level.low"
+              },
+              {
+                "value": "medium",
+                "labelKey": "thinking-intensity.level.medium"
+              },
+              {
+                "value": "high",
+                "labelKey": "thinking-intensity.level.high"
+              }
+            ]
+          }
+        }
+      ],
+      "i18n": {
+        "en": {
+          "thinking-intensity.settings.enabled": "Enable thinking intensity",
+          "thinking-intensity.settings.enabled.desc": "Master switch; off = never inject thinking parameters (kill switch).",
+          "thinking-intensity.settings.defaultLevel": "Default level",
+          "thinking-intensity.settings.defaultLevel.desc": "Persistent global default. auto = provider decides (no injection).",
+          "thinking-intensity.settings.budgetLow": "Low budget (tokens)",
+          "thinking-intensity.settings.budgetMedium": "Medium budget (tokens)",
+          "thinking-intensity.settings.budgetHigh": "High budget (tokens)",
+          "thinking-intensity.settings.experimental": "Experimental providers",
+          "thinking-intensity.settings.experimental.desc": "Enable unverified provider mappings (fail-safe: off by default).",
+          "thinking-intensity.level.auto": "Auto",
+          "thinking-intensity.level.off": "Off",
+          "thinking-intensity.level.low": "Low",
+          "thinking-intensity.level.medium": "Medium",
+          "thinking-intensity.level.high": "High",
+          "thinking-intensity.toolbar.label": "Thinking"
+        },
+        "zh-CN": {
+          "thinking-intensity.settings.enabled": "启用思考强度",
+          "thinking-intensity.settings.enabled.desc": "总开关；关闭 = 永不注入思考参数（kill switch）。",
+          "thinking-intensity.settings.defaultLevel": "默认档位",
+          "thinking-intensity.settings.defaultLevel.desc": "持久化全局默认。auto = 由 provider 自决（不注入）。",
+          "thinking-intensity.settings.budgetLow": "低档预算（token）",
+          "thinking-intensity.settings.budgetMedium": "中档预算（token）",
+          "thinking-intensity.settings.budgetHigh": "高档预算（token）",
+          "thinking-intensity.settings.experimental": "实验性 provider",
+          "thinking-intensity.settings.experimental.desc": "启用未经核实的 provider 映射（fail-safe：默认关闭）。",
+          "thinking-intensity.level.auto": "自动",
+          "thinking-intensity.level.off": "关闭",
+          "thinking-intensity.level.low": "低",
+          "thinking-intensity.level.medium": "中",
+          "thinking-intensity.level.high": "高",
+          "thinking-intensity.toolbar.label": "思考"
+        }
+      }
+    },
+    "permissions": {
+      "fs": [],
+      "net": [],
+      "process": false,
+      "secrets": false,
+      "events": [],
+      "rpc": []
+    }
+  }
+}

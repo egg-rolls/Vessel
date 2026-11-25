@@ -63,7 +63,10 @@ const plugin: Plugin = {
       const onRetry = readRetryHook(c);
       if (onRetry) retryOptions.onRetry = onRetry;
       // timeout 在外层：总时限覆盖全部重试与退避
-      return withTimeout(withRetry(provider, retryOptions), readTimeoutMs(c));
+      // q-thinking-plugin：providerName 身份挂实例（装配注册名），供 BeforeLlm 映射。
+      return Object.assign(withTimeout(withRetry(provider, retryOptions), readTimeoutMs(c)), {
+        providerName: 'anthropic',
+      });
     });
   },
 };

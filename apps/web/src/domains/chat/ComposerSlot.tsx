@@ -8,6 +8,7 @@ import type { ComposerContextUsage } from './ComposerChrome';
 import type { MemberModelSwitchProps } from './MemberModelSwitch';
 import { AskPrompt, PermissionPrompt, type PromptQueueChip } from './PromptSlots';
 import type { PendingQueueItem } from './pending-permissions';
+import type { SessionRefChip, SessionRefScope } from './session-ref';
 
 /**
  * `interactions.list` 拉取失败的可见条（0.59）。
@@ -66,8 +67,13 @@ export function ComposerSlot({
   client,
   contextUsage,
   memberModel,
+  sessionId,
   pendingFetch,
   onRetryPendingFetch,
+  sessionRefs,
+  onRemoveSessionRef,
+  onAddSessionRef,
+  currentScope,
 }: {
   pendingItem: PendingQueueItem | null;
   pendingItems: readonly PendingQueueItem[];
@@ -98,10 +104,20 @@ export function ComposerSlot({
   contextUsage?: ComposerContextUsage;
   /** 会话归属成员的模型切换入口；透传给 Composer 工具栏（权限 / ask 卡替换输入框时不显示）。 */
   memberModel?: MemberModelSwitchProps;
+  /** 当前会话 id（P3 思考强度菜单 sessionScoped write）；缺省（草稿态）按全局默认。 */
+  sessionId?: string;
   /** `interactions.list` 本轮状态（0.59）：failed ⇒ 这里出一条可见提示。 */
   pendingFetch?: PendingFetchState;
   /** 重新拉 pending（提示条上的「重新拉取」）。 */
   onRetryPendingFetch?: () => void;
+  /** 待发送的会话引用（拖拽会话卡产生）；透传给 Composer 引用区。 */
+  sessionRefs?: readonly SessionRefChip[];
+  /** 删除一条会话引用（下标即 sessionRefs 里的位置）。 */
+  onRemoveSessionRef?: (index: number) => void;
+  /** 加一条会话引用（Composer 的 drop 落点）；缺省不启用 drop 目标。 */
+  onAddSessionRef?: (chip: SessionRefChip) => boolean;
+  /** 渐进披露基准（当前会话节点 / 团队）；透传给 Composer。 */
+  currentScope?: SessionRefScope;
 }) {
   // 提示条在**三种槽位之上**：权限卡 / ask 卡 / 输入框。拉不到 pending 时正是这三种
   // 都可能「什么都没有」的时刻，提示必须跟着槽位一起在。
@@ -157,6 +173,11 @@ export function ComposerSlot({
         client={client}
         contextUsage={contextUsage}
         memberModel={memberModel}
+        sessionRefs={sessionRefs}
+        onRemoveSessionRef={onRemoveSessionRef}
+        onAddSessionRef={onAddSessionRef}
+        currentScope={currentScope}
+        sessionId={sessionId}
       />
     );
 

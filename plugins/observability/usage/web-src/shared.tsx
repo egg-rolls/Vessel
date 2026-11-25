@@ -103,11 +103,6 @@ export function RangeTabs({
   );
 }
 
-export type LoadState<T> =
-  | { status: 'loading' }
-  | { status: 'error'; error: Error }
-  | { status: 'ready'; data: T };
-
 export function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
 }
@@ -117,6 +112,44 @@ export function LoadingState({ label }: { label: string }) {
     <p className="py-6 text-md text-muted" aria-live="polite">
       {label}
     </p>
+  );
+}
+
+/**
+ * 细微「更新中」指示（SWR 规范）：有旧数据的后台刷新期间显示，绝不整页 loading。
+ * 放 toolbar 右端，mono 小字，不占布局重心。
+ */
+export function RefreshingHint({ label }: { label: string }) {
+  return (
+    <span
+      className="ml-auto font-mono text-2xs uppercase tracking-widest text-faint"
+      aria-live="polite"
+    >
+      {label}
+    </span>
+  );
+}
+
+/**
+ * 刷新失败的细微提示（SWR 规范）：旧数据保留不动，只说明「显示的是何时数据」+ 重试。
+ * 与 ErrorState（无数据可显示时的整块错误态）严格区分。
+ */
+export function StaleNotice({
+  message,
+  onRetry,
+  retryLabel,
+}: {
+  message: string;
+  onRetry: () => void;
+  retryLabel: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm text-warn" role="status">
+      <span>{message}</span>
+      <Button size="small" onClick={onRetry}>
+        {retryLabel}
+      </Button>
+    </div>
   );
 }
 

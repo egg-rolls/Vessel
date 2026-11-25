@@ -358,6 +358,9 @@ function ensureSpecifierFarm(descriptor: PluginDescriptor): void {
  *    bun 的 `Cannot find module` 原样丢给用户。白名单包会先补转发缝（这就是
  *    「.tgz 插件不自带 core」能跑起来的唯一机制）。
  */
+/** cache-busted 入口的唯一序号（`loadFresh` 用；进程级递增，保证每次都是新模块记录）。 */
+let freshInstanceSeq = 0;
+
 async function importPluginEntry(descriptor: PluginDescriptor): Promise<unknown> {
   ensureSpecifierFarm(descriptor);
   const href = pathToFileURL(descriptor.entry).href;
@@ -672,6 +675,38 @@ export class PluginLoader {
 
     try {
       const mod = (await importPluginEntry(descriptor)) as { default?: unknown };
+      const plugin = mod.default as Plugin | undefined;
+      if (!plugin || typeof plugin.install !== 'function') {
+        console.warn(`Plugin "${name}" has no default export with install(). Skipping.`);
+        return null;
+      }
+      return plugin;
+    } catch (e) {
+      console.warn(`Failed to load plugin "${name}": ${e instanceof Error ? e.message : e}`);
+      return null;
+    }
+  }
+
+  /**
+   * 加载一个**全新**插件实例（q-plugin-lifecycle §6.3，cache-busted import）。
+   *
+   * 热应用的旁路装配用它拿新模块实例，而不是 `load()` 的进程级单例：旁路 re-install
+   * 单例会把 watcher / store 等内部状态再建一份却不 dispose 旧的（R-C 泄漏），还会触碰
+   * 真实宿主共享的那份实例。给入口 URL 追加唯一 query → ESM 视为新模块重新求值，
+   * `export default createXPlugin()` 产出新实例；而插件对宿主包 / 自身相对文件的 import
+   * 仍解析到共享模块（query 只挂在入口），共享态（如 pii vault）不被复制。
+   *
+   * 与 `load()` 同口径：未知 / child / 无 install 默认导出返回 null/undefined。
+   */
+  async loadFresh(name: string): Promise<Plugin | null | undefined> {
+    const descriptor = this.findDescriptor(name);
+    if (!descriptor) return null;
+    if (descriptor.mode === 'child') return undefined;
+    try {
+      ensureSpecifierFarm(descriptor);
+      freshInstanceSeq += 1;
+      const href = `${pathToFileURL(descriptor.entry).href}?vessel_fresh=${freshInstanceSeq}`;
+      const mod = (await import(href)) as { default?: unknown };
       const plugin = mod.default as Plugin | undefined;
       if (!plugin || typeof plugin.install !== 'function') {
         console.warn(`Plugin "${name}" has no default export with install(). Skipping.`);

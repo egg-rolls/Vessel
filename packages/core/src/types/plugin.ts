@@ -51,7 +51,25 @@ export interface Plugin {
 export interface PluginInstallScope {
   commit(): void;
   rollback(): void;
+  /**
+   * 生命周期审计（q-plugin-lifecycle §6.1）：本次安装至今登记过的注册面种类。
+   * 真源是宿主实际看到的注册行为，不是插件自报 —— 供 per-capability 生命周期推导。
+   * 可选：不实现的自定义宿主退化成「审计为空」，推导按保守口径处理。
+   */
+  surfaces?(): ReadonlySet<PluginSurfaceKind>;
 }
+
+/**
+ * 插件 install 期可登记的注册面种类（与 MemoryPluginHost 的注册条目 kind 同集）。
+ * 生命周期推导据此判断「热应用能否完整摘除 / 重建该插件的全部注册面」。
+ */
+export type PluginSurfaceKind =
+  | 'tool'
+  | 'provider'
+  | 'guardrail'
+  | 'hook'
+  | 'memberBody'
+  | 'readSideMasker';
 
 /**
  * 读侧文本脱敏器（0.52 pii-guard）。
@@ -96,6 +114,17 @@ export interface PluginHost {
    * 返回是否真的移除了——未注册过返回 false，不视为错误。
    */
   unregisterTool?(name: string): boolean;
+  /**
+   * 可选（q-plugin-lifecycle §6.3）：按名注销 hook / guardrail / provider / 读侧脱敏器。
+   * 与 `unregisterTool?` 同口径——热应用要把一个插件的**全部注册面**整体摘干净 / 重建，
+   * 只有工具面可注销会造成「pii_reveal 进了但脱敏 guardrail 不生效」的危险半态。
+   * 返回是否真的移除（未注册过 false，不视为错误）；不实现的自定义宿主由调用方按
+   * 「该面不可热移除」保守处理（生命周期推导取 restart）。
+   */
+  unregisterHook?(name: string): boolean;
+  unregisterGuardrail?(name: string): boolean;
+  unregisterProvider?(name: string): boolean;
+  unregisterReadSideMasker?(name: string): boolean;
   /**
    * 可选：记录一次插件安装的注册，用于安装失败时回滚（0.9）。
    * 不支持回滚的自定义宿主可以不实现。

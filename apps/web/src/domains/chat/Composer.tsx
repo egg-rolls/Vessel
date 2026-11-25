@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef } from 'react';
+import type { ComposerAttachment } from '@vessel-agent/plugin-ui';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Tooltip } from '../../components/Tooltip';
 import { AutoGrowTextarea, Button } from '../../components/ui';
 import type { MessageRef } from '../../gateway/types';
@@ -16,6 +17,14 @@ import {
   refsToAttachments,
 } from './ComposerChrome';
 import { MemberModelSwitch, type MemberModelSwitchProps } from './MemberModelSwitch';
+import {
+  parseSessionRefPayload,
+  SESSION_REF_MIME,
+  type SessionRefChip,
+  type SessionRefScope,
+  sessionRefBadges,
+  sessionRefDescription,
+} from './session-ref';
 
 /**
  * 会话输入框卡片：卡片 > 引用区 > 字段容器 > (textarea + 工具栏)。
@@ -46,6 +55,11 @@ export function Composer({
   client,
   contextUsage,
   memberModel,
+  sessionRefs,
+  onRemoveSessionRef,
+  onAddSessionRef,
+  currentScope,
+  sessionId,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -85,11 +99,29 @@ export function Composer({
    * 缺省（会话无归属成员 / 草稿态）不渲染；数据由 ChatView 从选中会话喂入。
    */
   memberModel?: MemberModelSwitchProps;
+  /**
+   * 待发送的会话引用（拖拽会话卡到输入框产生；草稿槽持有，与 refs 同族）。
+   * 缺省 / 空数组时不渲染会话引用 chip。
+   */
+  sessionRefs?: readonly SessionRefChip[];
+  /** 删除一条会话引用（下标即 sessionRefs 里的位置）。 */
+  onRemoveSessionRef?: (index: number) => void;
+  /**
+   * 加一条会话引用（drop 落点）：去重 / 上限在草稿 store 判。
+   * 缺省时整张卡片不作为会话引用 drop 目标（普通文本拖放行为不变）。
+   */
+  onAddSessionRef?: (chip: SessionRefChip) => boolean;
+  /** 渐进披露基准：当前会话的节点 / 团队（同队同节点不显 team / node 徽章）。 */
+  currentScope?: SessionRefScope;
+  /** 当前会话 id（P3 思考强度菜单 sessionScoped write）；缺省（草稿态）按全局默认。 */
+  sessionId?: string;
 }) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const mountedRef = useRef(true);
   const wasSubmittingRef = useRef(submitting);
   const compositionEndRef = useRef(0);
+  /** 会话卡拖拽悬停在卡片上（drop 目标高亮）；只认 SESSION_REF_MIME。 */
+  const [dropActive, setDropActive] = useState(false);
   const canSend = hasToken && connected && !disabled && !submitting && value.trim().length > 0;
 
   useEffect(() => {
@@ -122,8 +154,24 @@ export function Composer({
       : t('chat.composer.placeholder');
 
   // 引用区唯一实现：MessageRef[] → 通用 chip 行（id 用 path），删除按 path 回写下标。
-  const refItems = refsToAttachments(refs ?? []);
+  // 会话引用 chip 并进同一行（id 用 `session-ref:<sessionId>`，与团队页 mention chip
+  // 同一套「前缀分流」做法）：label = 会话名，徽章 = agent / 跨队 team / 跨节点 node。
+  const sessionRefItems: ComposerAttachment[] = (sessionRefs ?? []).map((chip) => ({
+    id: `session-ref:${chip.sessionId}`,
+    label: chip.title,
+    kind: 'ref',
+    note: t('chat.sessionRef.note'),
+    description: sessionRefDescription(chip),
+    badges: sessionRefBadges(chip, currentScope),
+  }));
+  const refItems = [...refsToAttachments(refs ?? []), ...sessionRefItems];
   const removeRef = (id: string) => {
+    if (id.startsWith('session-ref:')) {
+      const sessionId = id.slice('session-ref:'.length);
+      const index = (sessionRefs ?? []).findIndex((chip) => chip.sessionId === sessionId);
+      if (index >= 0) onRemoveSessionRef?.(index);
+      return;
+    }
     const index = refIndexForId(refs ?? [], id);
     if (index >= 0) onRemoveRef?.(index);
   };
@@ -144,8 +192,39 @@ export function Composer({
       {/* biome-ignore lint/a11y/noStaticElementInteractions: 点卡片留白聚焦 textarea 是鼠标便捷入口（卡片不是可点控件） */}
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: 键盘流不变：Tab 直接到输入框 / 按钮，留白处不需要键盘等价键 */}
       <div
-        className="w-full max-w-[var(--dock-width)] mx-auto px-3.5 pt-2.25 pb-3 rounded-lg bg-raised shadow-elev-2"
+        className={`w-full max-w-[var(--dock-width)] mx-auto px-3.5 pt-2.25 pb-3 rounded-lg bg-raised shadow-elev-2${
+          dropActive ? ' ring-2 ring-accent' : ''
+        }`}
         onClick={focusComposerInputOnBlankClick}
+        onDragOver={(event) => {
+          // 只认会话引用 MIME：普通文本 / 文件拖入不接管，textarea 原生拖放不变。
+          if (onAddSessionRef === undefined) return;
+          if (!event.dataTransfer.types.includes(SESSION_REF_MIME)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+          setDropActive(true);
+        }}
+        onDragLeave={(event) => {
+          // 只在真正离开卡片时熄灯（子元素间移动 relatedTarget 仍在卡片内）。
+          if (
+            event.relatedTarget instanceof Node &&
+            event.currentTarget.contains(event.relatedTarget)
+          ) {
+            return;
+          }
+          setDropActive(false);
+        }}
+        onDrop={(event) => {
+          setDropActive(false);
+          if (onAddSessionRef === undefined) return;
+          const raw = event.dataTransfer.getData(SESSION_REF_MIME);
+          if (raw === '') return;
+          event.preventDefault();
+          const chip = parseSessionRefPayload(raw);
+          if (chip === null) return;
+          onAddSessionRef(chip);
+          inputRef.current?.focus();
+        }}
       >
         <div className="flex items-center justify-between gap-3 mb-1.5 text-xs text-faint">
           <Tooltip label={targetLabel}>
@@ -171,11 +250,19 @@ export function Composer({
         <ComposerRefsArea
           className="composer-refs-row"
           items={refItems}
-          onRemove={onRemoveRef === undefined ? undefined : removeRef}
+          onRemove={
+            onRemoveRef === undefined && onRemoveSessionRef === undefined ? undefined : removeRef
+          }
+          removeLabel={(item) =>
+            item.kind === 'ref'
+              ? t('chat.sessionRef.remove', { name: item.label })
+              : t('composer.refs.remove', { name: item.label })
+          }
         />
         <ComposerField
           contextUsage={contextUsage}
           attach={attach}
+          sessionId={sessionId}
           slot={memberModel !== undefined ? <MemberModelSwitch {...memberModel} /> : undefined}
           primary={
             !hasToken || !connected ? (

@@ -746,8 +746,11 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
             error instanceof Error ? error.message : 'Plugin config write failed',
           );
         }
-        // child 模式 settings 经 env 注入，spawn 后不可变 → 显式重载提示（不谎报热应用）。
-        return { ok: true, plugin, key, value, restartRequired: spec.mode === 'child' };
+        // q-plugin-lifecycle §6.5 P2：settings 写后两模式都热应用——in-process 走 targetKey
+        // 刷新，child 的 settings 值进 reload 指纹 → plugin-watch（盯用户 config）触发
+        // manager.reload 重激活子进程（spawn 期 env 注入新值），均无需重启 gateway。
+        // restartRequired 如实回 false（不再按 child 模式硬编码 true）。
+        return { ok: true, plugin, key, value, restartRequired: false };
       },
     },
   ];

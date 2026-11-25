@@ -89,7 +89,7 @@ import {
 } from './config/config-watch';
 import { createWrittenConfigApplier } from './config/config-write-apply';
 import {
-  applyTools,
+  applyRegistrations,
   createMcpApplier,
   createMcpServerToggle,
   createPermissionApplier,
@@ -97,7 +97,7 @@ import {
   pluginManagedToolNames,
 } from './config/hot-apply-appliers';
 import {
-  assemblePluginTools,
+  assemblePluginRegistrations,
   collectPermissionTargets,
   type PermissionApplyTarget,
   permissionConfigFor,
@@ -109,6 +109,7 @@ import { createConfigAttachmentLister } from './data/attachments-list';
 import { expandHome, resolveDataDir } from './data/data-paths';
 import { resolveAgentCwd } from './data/path-resolution';
 import { setToolPolicy } from './data/permission-store';
+import { REFS_NOTICE_HOOK } from './data/refs-notice-hook';
 import {
   applyFederationOptions,
   type FederationRuntimeOptions,
@@ -161,20 +162,24 @@ import {
   buildPluginConfigMap,
   declarativePluginEntries,
   factoryPluginDisplayEnabled,
+  pluginEntryEnabled,
   setPluginConfigValue,
 } from './plugin/plugin-config';
 import {
   activateStartupPlugins,
   createPluginHostManager,
   createPluginReloader,
+  type PluginReloader,
   pluginSettingsFor,
 } from './plugin/plugin-host-assembly';
+import { derivePluginLifecycle, type PluginLifecycle } from './plugin/plugin-lifecycle';
 import { FACTORY_PLUGINS } from './plugin/plugin-loader';
 import { type PluginWatchHandle, startPluginWatch } from './plugin/plugin-watch';
 import { createRunControl } from './run/run-control';
 import { type BootstrapResult, bootstrap } from './runtime/bootstrap';
 import { installProcessErrorHandlers } from './runtime/process-handlers';
 import { createRuntimeNoticeBus } from './runtime/runtime-notice';
+import { RUNTIME_NOTICE_HOOK } from './runtime/runtime-notice-hook';
 import { normalizeBridgeDeny } from './runtime/vessel-meta';
 import { createContextUsageSource } from './session/context-usage';
 import { createImageDeliverySource } from './session/image-delivery';
@@ -773,6 +778,8 @@ async function runWithConfig(result: BootstrapResult) {
   let pluginHostManager: PluginHostManager | undefined;
   /** 0.43 E3：`plugins.reload` 的 rescan + manager.reload 实现。 */
   let pluginsReload: (() => Promise<PluginReloadResult>) | undefined;
+  /** q-plugin-lifecycle §6.2 R2：in-process 待重启追踪（pendingRestart 汇聚源之一）。 */
+  let pluginReloader: PluginReloader | undefined;
   /** 0.43：项目/用户插件目录与 config 变更监听（关闭时停止）。 */
   let pluginWatch: PluginWatchHandle | undefined;
   /**
@@ -965,8 +972,6 @@ async function runWithConfig(result: BootstrapResult) {
     // 只预激活声明 `onStartup` / `*` 的 child plugin；`onPage:` / `onCommand:`
     // 等首次页面 / RPC 访问时由 serve 的 ensureActive 懒激活。
     if (result.bundle !== undefined) {
-      // C4：settings 唯一来源是启动 bundle 的 `plugins[].config`（不回退 liveConfig）。
-      const startupConfig = result.bundle.config;
       pluginHostManager = createPluginHostManager({
         loader: result.bundle.pluginLoader,
         config: liveConfig,
@@ -974,7 +979,10 @@ async function runWithConfig(result: BootstrapResult) {
         getConfig: () => liveConfig,
         dataDir,
         logger,
-        settingsFor: (id) => pluginSettingsFor(startupConfig, id),
+        // q-plugin-lifecycle §6.5 P2：settings 读 liveConfig（拆 C4 启动钉死）。
+        // 子进程重激活时 spawn 期 env 注入新值；settings 值已进 reload 指纹（descriptor.settings），
+        // 改 settings → 指纹变 → manager.reload 重激活 child，无需重启 gateway。
+        settingsFor: (id) => pluginSettingsFor(liveConfig, id),
       });
       // P1-w2d（D3）：install 后登记 in-process 能力插件的 RPC / 贡献面（w1a 接缝）。
       inProcessPluginRows = gatewayBundle.registerInProcessPlugins(pluginHostManager, liveConfig);
@@ -997,14 +1005,15 @@ async function runWithConfig(result: BootstrapResult) {
 
       // 0.43 E3：`plugins.reload` = 重新读配置 → rescan → manager.reload。
       // 先 reloadVesselConfig 让 config.yaml 的 enable/disable 立即进入 liveConfig。
-      const rescanAndReload = createPluginReloader({
+      const reloader = createPluginReloader({
         loader: result.bundle.pluginLoader,
         manager: pluginHostManager,
         getConfig: () => liveConfig,
       });
+      pluginReloader = reloader;
       pluginsReload = async (): Promise<PluginReloadResult> => {
         await reloadVesselConfig();
-        return rescanAndReload();
+        return reloader.reload();
       };
 
       // 目录 / config 变更 → 300ms 去抖后执行同一 reload（gateway 会广播 plugin.changed）。
@@ -1153,6 +1162,26 @@ async function runWithConfig(result: BootstrapResult) {
     // 入口注册的 agent / ask 与 MCP 工具（toolSource 非 null）不在管辖域内，
     // 否则一次 reload 会把它们判成 removed（D1）。
     const managedPluginTools = new Set(pluginManagedToolNames(ctx.pluginHost, result.mcp));
+    // q-plugin-lifecycle §6.3：注册面差量管辖域（hook / guardrail / readSideMasker）。
+    // hook 排除入口注册的 notice hook（runtime-notice / refs-notice，非插件来源）；
+    // guardrail / masker 只来自插件，全量管辖。与工具面同口径：只增删插件来源的面。
+    const managedPluginHooks = new Set(
+      ctx.pluginHost
+        .getHooks()
+        .map((hook) => hook.name)
+        .filter((name) => name !== RUNTIME_NOTICE_HOOK && name !== REFS_NOTICE_HOOK),
+    );
+    const managedPluginGuardrails = new Set(
+      ctx.pluginHost.getGuardrails().map((guardrail) => guardrail.name),
+    );
+    const managedPluginMaskers = new Set(
+      (ctx.pluginHost.getReadSideMaskers?.() ?? []).map((masker) => masker.name),
+    );
+    // 当前生效插件实例（启动装配产出）：热应用采纳 fresh 实例 / dispose 旧实例的记账起点。
+    // bundle.plugins 即管辖选择集（provider / 工厂不经此路径），dispose 不会误伤结构性插件。
+    const livePluginInstances = new Map(
+      gatewayBundle.plugins.map((plugin) => [plugin.name, plugin]),
+    );
     // 插件安装配置基线（用于识别「定义没变但行为配置变了」）：
     // `computeTargetTools` 每次读到的配置写入 `lastToolsConfigKey`，`targetKey` 读它。
     const pluginConfigKeyOf = (value: VesselConfig): string =>
@@ -1175,6 +1204,33 @@ async function runWithConfig(result: BootstrapResult) {
     // S7 热应用：入站 federation 运行时对象（controlPlane.federation，gateway 启动后
     // 赋值）。入站路由逐请求读它；config scope 的 applyFederation 原地更新。
     let liveFederationOptions: FederationRuntimeOptions | undefined;
+
+    /**
+     * q-plugin-lifecycle §6.2 R1 读写联动：按 liveConfig 同步已登记 in-process 插件的
+     * 登记态（enabled + RPC / 贡献面）。manager.enable/disable 是现成实现（此前零生产
+     * 调用方），这里接线 —— 热 disable → 翻 enabled + 注销 RPC + 贡献面收口；enable 反之。
+     * 读面（bundlePluginEntries）随后读 liveConfig 同口径，四面一致。child 的启停由
+     * manager.reload（enabled 进指纹）负责，不在此重复。
+     */
+    const syncInProcessRegistrationState = async (): Promise<string[]> => {
+      const manager = pluginHostManager;
+      if (manager === undefined) return [];
+      const lines: string[] = [];
+      const statusById = new Map(manager.statuses().map((status) => [status.id, status]));
+      for (const row of inProcessPluginRows) {
+        const desired = pluginEntryEnabled(liveConfig.plugins, row.name);
+        const current = statusById.get(row.name)?.enabled;
+        if (current === undefined || current === desired) continue;
+        if (desired) {
+          manager.enable(row.name);
+          lines.push(`plugins: ${row.name} enabled`);
+        } else {
+          await manager.disable(row.name);
+          lines.push(`plugins: ${row.name} disabled`);
+        }
+      }
+      return lines;
+    };
 
     const reloadAppliers: Record<string, GatewayReloadApplier> = {
       permission: createPermissionApplier(
@@ -1213,26 +1269,41 @@ async function runWithConfig(result: BootstrapResult) {
         permissionState,
       ),
       tools: async () => {
-        const outcome = await applyTools({
+        // q-plugin-lifecycle §6.3：全注册面差量（tool / hook / guardrail / readSideMasker
+        // 整体增删改 + fresh 实例采纳 / dispose），消除「工具进了但 guardrail 没进」半态。
+        const outcome = await applyRegistrations({
           host: ctx.pluginHost,
-          // 旁路重建：先在临时 host 上算出目标集，再一次性替换真实宿主。
-          computeTargetTools: async () => {
+          // 旁路重建：先在临时 host 上用 cache-busted 新实例算出目标集，再一次性替换真实宿主。
+          computeTarget: async () => {
             const next = await reloadVesselConfig();
             lastToolsConfigKey.current = pluginConfigKeyOf(next);
             lastReloadedToolsConfig = next;
-            const assembled = await assemblePluginTools({
+            return assemblePluginRegistrations({
               config: next,
               tenantId: result.tenantId,
+              loader: gatewayBundle.pluginLoader,
               excludePlugins: MCP_FACTORY_PLUGINS,
+              fresh: true,
             });
-            for (const tool of assembled.tools) managedPluginTools.add(tool.name);
-            return assembled.tools;
           },
-          managedNames: () => [...managedPluginTools],
+          managed: {
+            tools: managedPluginTools,
+            hooks: managedPluginHooks,
+            guardrails: managedPluginGuardrails,
+            maskers: managedPluginMaskers,
+          },
+          liveInstances: livePluginInstances,
           // 插件安装配置（basic-tools 的 cwd 等）变了就整体刷新，否则行为不会生效。
           targetKey: () => lastToolsConfigKey.current ?? '',
           previousKey: toolsConfigKey,
         });
+        // q-plugin-lifecycle §6.2 R1：工具差量之后同步 in-process 登记态（RPC / 贡献面
+        // 随 liveConfig 启停），读面与生效态同源。
+        const registrationLines = await syncInProcessRegistrationState();
+        // q-plugin-lifecycle §6.2 R3：任何插件生效态变化 → 必有一次 plugin.changed。
+        // tools applier 成功后广播（与 plugins.reload / plugins.config.set 同一出口），
+        // node 专属 config / 项目 vessel.yaml 路径不再依赖 plugin-watch 间接补。
+        gateway?.notifyPluginChanged();
         // tools-engine P2（seams §3.5）：applyTools 之后、refreshTools 之前重接线——
         // 热应用产生新 def 对象 → 重新 wireTool（新指纹覆盖）；移除的工具 unwire；
         // boundary/config 用本次 reload 的安装配置重建（与装配同一份 buildPluginConfigMap）。
@@ -1269,7 +1340,7 @@ async function runWithConfig(result: BootstrapResult) {
         // 不重建 session / context（有 active run 时由执行内核延迟到轮边界）。
         // 传入应用后的全量工具面（含 agent / ask / MCP），成员侧再按白名单过滤。
         await result.agent?.service.refreshTools?.(ctx.pluginHost.listTools());
-        return outcome.summaries;
+        return [...outcome.summaries, ...registrationLines];
       },
     };
 
@@ -1514,18 +1585,27 @@ async function runWithConfig(result: BootstrapResult) {
 
     // 0.47：单执行面的 plugins 数据源（与 gateway `plugins` 同源）。
     const bundlePluginEntries = (): Array<{ name: string; enabled: boolean }> => {
+      // q-plugin-lifecycle §6.2 R1：enabled 统一读 liveConfig 的共享判定
+      // （pluginEntryEnabled，覆盖层语义），不再硬编码 true / 读启动 config ——
+      // 热 disable / 热装载后面板如实翻转（读写联动见 tools applier 的登记态同步）。
       const loaded = new Set(gatewayBundle.plugins.map((plugin) => plugin.name));
-      const listed = gatewayBundle.plugins.map((plugin) => ({ name: plugin.name, enabled: true }));
+      const listed = gatewayBundle.plugins.map((plugin) => ({
+        name: plugin.name,
+        enabled: pluginEntryEnabled(liveConfig.plugins, plugin.name),
+      }));
       // P1-w2d：已登记 in-process 能力插件补基础行（provider 类不在 bundle.plugins），
       // 否则 plugins.list 的 contributions 没有行可合并（契约 §1）；按 name 去重。
       for (const row of inProcessPluginRows) {
         if (!loaded.has(row.name)) {
-          listed.push(row);
+          listed.push({
+            name: row.name,
+            enabled: pluginEntryEnabled(liveConfig.plugins, row.name),
+          });
           loaded.add(row.name);
         }
       }
-      // 配置里显式 disabled 的插件不加载，但仍要出现在 plugins.list 中。
-      for (const configured of gatewayBundle.config.plugins ?? []) {
+      // 配置里显式 disabled 的插件不加载，但仍要出现在 plugins.list 中（读 liveConfig）。
+      for (const configured of liveConfig.plugins ?? []) {
         if (configured.enabled === false && !loaded.has(configured.name)) {
           listed.push({ name: configured.name, enabled: false });
           loaded.add(configured.name);
@@ -1533,7 +1613,7 @@ async function runWithConfig(result: BootstrapResult) {
       }
       // 0.56.1：发现但未装载的插件也补基础行（否则面板/catalog 完全不可见——
       // catalog 缺行即跳过）。工厂式按实际装配门控标注（与 CLI 列表共用
-      // factoryPluginDisplayEnabled）；其余未装载（opt-out / debug 门控 /
+      // factoryPluginDisplayEnabled，读 liveConfig）；其余未装载（opt-out / debug 门控 /
       // 加载失败）显示关。child 行由 manager.statuses() 提供，不在此补。
       for (const descriptor of gatewayBundle.pluginLoader.list()) {
         if (loaded.has(descriptor.name) || descriptor.mode === 'child') continue;
@@ -1541,7 +1621,7 @@ async function runWithConfig(result: BootstrapResult) {
           name: descriptor.name,
           enabled:
             FACTORY_PLUGINS.has(descriptor.name) &&
-            factoryPluginDisplayEnabled(gatewayBundle.config, descriptor.name),
+            factoryPluginDisplayEnabled(liveConfig, descriptor.name),
         });
         loaded.add(descriptor.name);
       }
@@ -1554,18 +1634,60 @@ async function runWithConfig(result: BootstrapResult) {
 
     // 0.47：catalog 单视图；descriptor 是发现结果（全局），status 只按 entry 名查找。
     // 0.48 M4：注入 config `expose` 与 manager 的 surface 级冲突状态。
+    // q-plugin-lifecycle §6.1/§6.2：注入 per-capability lifecycle（宿主审计推导）与
+    // pendingRestart（期望态 ≠ 已生效态 且该面 restart 的差异汇聚）。
+    const settingsFingerprint = (settings: Record<string, unknown>): string =>
+      JSON.stringify(
+        Object.keys(settings)
+          .sort()
+          .map((key) => [key, settings[key]]),
+      );
     const pluginCatalog = () => {
       const expose = new Map<string, PluginExposeConfig>();
       for (const plugin of liveConfig.plugins ?? []) {
         if (plugin.expose !== undefined) expose.set(plugin.name, plugin.expose);
       }
       const httpSurfaceDisabled = pluginHostManager?.httpSurfaceDisabled() === true;
+      const descriptors = gatewayBundle.pluginLoader.list();
+      const startupConfig = gatewayBundle.config;
+      const codePending = pluginReloader?.pendingInProcessRestart() ?? new Set<string>();
+      const lifecycle = new Map<string, PluginLifecycle>();
+      const pendingRestart = new Map<string, boolean>();
+      for (const descriptor of descriptors) {
+        const profile = derivePluginLifecycle({
+          name: descriptor.name,
+          mode: descriptor.mode,
+          surfaces: gatewayBundle.pluginSurfaces.get(descriptor.name),
+          isFactory: FACTORY_PLUGINS.has(descriptor.name),
+          category: descriptor.category,
+          declared: (descriptor.manifest ?? descriptor.capabilityManifest)?.lifecycle,
+          // child settings 热应用已接线（§6.5 P2）：settingsFor 读 liveConfig + settings
+          // 值进 reload 指纹 → 子进程重激活，child settings 转热。
+          childSettingsHot: true,
+        });
+        lifecycle.set(descriptor.name, profile);
+        // pendingRestart：只在该面 lifecycle 为 restart 时，期望态 ≠ 已生效态才算。
+        let pending = false;
+        if (profile.toggle === 'restart') {
+          // restart 类启停的已生效态 = 启动态（注册面不热翻）；期望态 = liveConfig。
+          const desired = pluginEntryEnabled(liveConfig.plugins, descriptor.name);
+          const effective = pluginEntryEnabled(startupConfig.plugins, descriptor.name);
+          if (desired !== effective) pending = true;
+        }
+        if (profile.settings === 'restart') {
+          const desired = settingsFingerprint(pluginSettingsFor(liveConfig, descriptor.name));
+          const applied = settingsFingerprint(pluginSettingsFor(startupConfig, descriptor.name));
+          if (desired !== applied) pending = true;
+        }
+        if (profile.code === 'restart' && codePending.has(descriptor.name)) pending = true;
+        pendingRestart.set(descriptor.name, pending);
+      }
       return buildPluginCatalog({
         entries: pluginEntries(),
-        descriptors: new Map(
-          gatewayBundle.pluginLoader.list().map((descriptor) => [descriptor.name, descriptor]),
-        ),
+        descriptors: new Map(descriptors.map((descriptor) => [descriptor.name, descriptor])),
         statuses: pluginHostManager?.statuses() ?? [],
+        lifecycle,
+        pendingRestart,
         ...(expose.size > 0 ? { expose } : {}),
         ...(httpSurfaceDisabled ? { httpSurfaceDisabled } : {}),
       });

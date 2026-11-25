@@ -11,7 +11,8 @@
  *   见 {@link composerHostActions}）。
  */
 import type { ComposerToolbarAction } from '@vessel-agent/plugin-ui';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useConnection } from '../../gateway/ConnectionProvider';
 import type { PluginI18n } from '../../gateway/types';
 import { getLocale, t, useLocale } from '../../i18n';
 import { type PluginToolbarItem, pluginT } from '../plugins/plugin-contributions';
@@ -106,4 +107,152 @@ export function useComposerToolbarActions(
 /** 工具栏扩展槽的无障碍名称（会话 / 团队同一份文案）。 */
 export function composerToolbarLabel(): string {
   return t('composer.toolbar.label');
+}
+
+/** 单个菜单按钮的 read RPC 状态（通用形状，设计 §4.7.2）。 */
+interface ToolbarMenuReadState {
+  current?: string;
+  enabled?: boolean;
+  options?: string[];
+  hint?: string;
+}
+
+/**
+ * 通用 RPC 绑定菜单动作（additive，q-thinking-plugin P3）。
+ *
+ * 菜单条目不走 hostActions 表：宿主经 read RPC 取当前值 / 能力过滤 / 说明，经 write
+ * RPC 落选中值（sessionScoped 时注入当前 session_id）。宿主零插件专属代码——任何
+ * 声明了 menu 的插件都走这一条。read 时机：挂载 + 会话切换 + write 成功后重拉。
+ * 旧 gateway 无 menu 透传 ⇒ menuItems 为空 ⇒ 返回空数组（既有按钮规则不变）。
+ */
+export function useComposerToolbarMenuActions(sessionId?: string): ComposerToolbarAction[] {
+  const { toolbar, i18nByPlugin } = usePluginContributions();
+  const locale = useLocale();
+  const { client, hasToken, connectionState } = useConnection();
+  const menuItems = useMemo(
+    () => toolbarForSlot(toolbar, 'composer').filter((item) => item.menu !== undefined),
+    [toolbar],
+  );
+  const [states, setStates] = useState<Record<string, ToolbarMenuReadState>>({});
+
+  const connected = hasToken && connectionState === 'open';
+
+  // read RPC：挂载 / 会话切换 / 连接恢复 / 菜单声明变化时重拉。
+  useEffect(() => {
+    if (!connected || menuItems.length === 0) return;
+    let cancelled = false;
+    for (const item of menuItems) {
+      const menu = item.menu;
+      if (menu === undefined) continue;
+      const key = `${item.pluginId}:${item.id}`;
+      const params =
+        menu.sessionScoped === true && sessionId !== undefined ? { session_id: sessionId } : {};
+      client
+        .rpc<Record<string, unknown>>(`plugin.${item.pluginId}.${menu.read}`, params)
+        .then((result) => {
+          if (cancelled || result === null || typeof result !== 'object') return;
+          const current = result[menu.valueKey];
+          const options = result.options;
+          const hint = result.hint;
+          setStates((prev) => ({
+            ...prev,
+            [key]: {
+              ...(typeof current === 'string' ? { current } : {}),
+              ...(typeof result.enabled === 'boolean' ? { enabled: result.enabled } : {}),
+              ...(Array.isArray(options)
+                ? { options: options.filter((v): v is string => typeof v === 'string') }
+                : {}),
+              ...(typeof hint === 'string' ? { hint } : {}),
+            },
+          }));
+        })
+        .catch(() => {
+          // read 失败不阻断渲染：按钮保持全档可选（诚实降级）。
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [client, connected, sessionId, menuItems]);
+
+  return useMemo(() => {
+    const actions: ComposerToolbarAction[] = [];
+    for (const item of menuItems) {
+      const menu = item.menu;
+      if (menu === undefined) continue;
+      const key = `${item.pluginId}:${item.id}`;
+      const readState = states[key];
+      const label = pluginT(
+        i18nByPlugin,
+        item.pluginId,
+        item.titleKey,
+        locale,
+        item.label,
+        item.id,
+      );
+      // 能力过滤：options 存在时只渲染其中的档位；options 为空数组 ⇒ 不支持 ⇒ 置灰。
+      const options = readState?.options;
+      const filtered =
+        options !== undefined
+          ? menu.items.filter((entry) => options.includes(entry.value))
+          : menu.items;
+      const items = filtered.map((entry) => ({
+        value: entry.value,
+        label: pluginT(
+          i18nByPlugin,
+          item.pluginId,
+          entry.labelKey,
+          locale,
+          entry.label,
+          entry.value,
+        ),
+      }));
+      const disabled =
+        !connected ||
+        readState?.enabled === false ||
+        (readState?.options !== undefined && readState.options.length === 0);
+      actions.push({
+        id: key,
+        label,
+        disabled,
+        onSelect: () => {},
+        menu: {
+          items,
+          ...(readState?.current !== undefined ? { current: readState.current } : {}),
+          ...(readState?.hint !== undefined ? { hint: readState.hint } : {}),
+          onSelect: (value: string) => {
+            // 乐观更新按钮文案；write 成功后重拉 read（失败回落由下一轮 read 收敛）。
+            setStates((prev) => ({ ...prev, [key]: { ...prev[key], current: value } }));
+            const params: Record<string, unknown> = { [menu.valueKey]: value };
+            if (menu.sessionScoped === true && sessionId !== undefined) {
+              params.session_id = sessionId;
+            }
+            client
+              .rpc(`plugin.${item.pluginId}.${menu.write}`, params)
+              .then(() => {
+                const readParams =
+                  menu.sessionScoped === true && sessionId !== undefined
+                    ? { session_id: sessionId }
+                    : {};
+                return client.rpc<Record<string, unknown>>(
+                  `plugin.${item.pluginId}.${menu.read}`,
+                  readParams,
+                );
+              })
+              .then((result) => {
+                if (result === null || typeof result !== 'object') return;
+                const current = result[menu.valueKey];
+                if (typeof current === 'string') {
+                  setStates((prev) => ({ ...prev, [key]: { ...prev[key], current } }));
+                }
+              })
+              .catch(() => {
+                // write 失败：乐观值已由后续 read 收敛；不阻断 UI。
+              });
+          },
+        },
+      });
+    }
+    return actions;
+  }, [menuItems, states, i18nByPlugin, locale, connected, client, sessionId]);
 }

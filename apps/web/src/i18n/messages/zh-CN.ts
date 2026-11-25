@@ -1322,6 +1322,15 @@ export const messages = {
   'chat.composer.sending': '发送中',
   'chat.composer.send': '发送',
   'chat.composer.hint': 'Enter 发送 · Shift+Enter 换行',
+  // 会话引用（拖拽会话卡到输入框）：chip 读屏 / 删除 / 上限提示。
+  'chat.sessionRef.note': '引用会话',
+  'chat.sessionRef.remove': '移除会话引用 {name}',
+  'chat.sessionRef.reject.tooMany': '会话引用最多 {max} 条',
+  // 发送序列化：引用块随正文投递（接收 agent 读全量基础链，披露只影响 chip 徽章）。
+  'chat.sessionRef.header': '引用会话',
+  'chat.sessionRef.field.agent': 'agent',
+  'chat.sessionRef.field.team': '团队',
+  'chat.sessionRef.field.node': '节点',
   'chat.refs.label': '引用的文件',
   'chat.refs.remove': '移除引用 {name}',
   'chat.refs.kind.file': '文件',

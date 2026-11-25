@@ -17,6 +17,11 @@ export interface ComposerAttachment {
   note?: string;
   /** 补充说明（完整路径等），用作悬浮标题与读屏文案的兜底。 */
   description?: string;
+  /**
+   * 标签后的小徽章（additive）：会话引用 chip 用它显示 agent / 团队 / 节点
+   * （渐进披露由宿主决定给哪些）。缺省 / 空数组不渲染，现有消费方不受影响。
+   */
+  badges?: readonly string[];
 }
 
 export interface ComposerAttachmentsProps {
@@ -57,6 +62,14 @@ export function ComposerAttachments({
           )}
           {item.note !== undefined && <span className="sr-only">{item.note}</span>}
           <span className="truncate">{item.label}</span>
+          {item.badges?.map((badge) => (
+            <span
+              key={badge}
+              className="flex-none rounded-sm bg-raised px-1 font-mono text-2xs text-faint"
+            >
+              {badge}
+            </span>
+          ))}
           {onRemove !== undefined && (
             <button
               type="button"

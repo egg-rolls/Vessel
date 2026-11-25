@@ -166,6 +166,39 @@ export interface PluginToolbarContribution {
   /** 白名单图标名（复用 {@link PLUGIN_ICON_NAMES}）。 */
   icon?: PluginIconName;
   order?: number;
+  /**
+   * 通用 RPC 绑定菜单（additive，q-thinking-plugin P3；设计 §4.7.2）。宿主渲染
+   * 「声明式菜单按钮」，任何插件可用，宿主零插件专属代码。缺省 = 普通按钮（宿主
+   * 按 id 映射回调）。违规 ⇒ 丢 menu 保留普通按钮声明（单项丢弃，既有口径）。
+   */
+  menu?: PluginToolbarMenu;
+}
+
+/** 菜单档位项（静态档位表；文案走插件 i18n）。 */
+export interface PluginToolbarMenuItem {
+  /** 选中值（write 时以 valueKey 传回插件）；≤64 字符。 */
+  value: string;
+  /** 插件私有 i18n key；缺省渲染原值。 */
+  labelKey?: string;
+  /** 文案 fallback。 */
+  label?: string;
+}
+
+/**
+ * 通用 RPC 绑定菜单契约。read/write 须在本插件 contributes.rpc 白名单内且权限匹配
+ * （read→read，write→write）——该校验在 Web 归一化层做（那里同时持有 rpc 白名单）。
+ */
+export interface PluginToolbarMenu {
+  /** 读当前值的 RPC 裸名（permission=read）。 */
+  read: string;
+  /** 写选中值的 RPC 裸名（permission=write）。 */
+  write: string;
+  /** read 结果里取当前值的键；write 时以该键传选中值。 */
+  valueKey: string;
+  /** write 时宿主注入当前 session_id（插件拿不到宿主路由）。 */
+  sessionScoped?: boolean;
+  /** 静态档位表（≤16 项）。 */
+  items: PluginToolbarMenuItem[];
 }
 
 /** 0.48 M1：`contributes.http[].method`（CONTRACT-0.48 §2） */
@@ -320,6 +353,16 @@ export interface PluginManifest {
   dependencies: PluginDependency;
   /** 显式允许覆盖同 id 的内置插件 */
   override?: boolean;
+  /**
+   * per-capability 生命周期声明（q-plugin-lifecycle §6.1，additive 可选）。
+   * 真源是宿主 install 期注册面审计；本声明只允许比推导**更保守**（声明 restart 采纳，
+   * 谎报 hot → warn + 取 restart，fail-honest）。缺省 = 完全由宿主推导。
+   */
+  lifecycle?: {
+    toggle?: 'hot' | 'restart';
+    settings?: 'hot' | 'restart';
+    code?: 'hot' | 'restart';
+  };
 }
 
 /** CONTRACT-0.43 §8 错误码（plugin_* 命名） */
@@ -693,6 +736,7 @@ function readToolbar(value: unknown): PluginToolbarContribution[] {
       item.titleKey === undefined ? undefined : requireString(item.titleKey, `${field}.titleKey`);
     const icon = readIcon(item.icon, `${field}.icon`);
     const order = optionalNumber(item.order, `${field}.order`);
+    const menu = readToolbarMenu(item.menu, `${field}.menu`);
     return {
       slot: item.slot,
       id,
@@ -700,8 +744,49 @@ function readToolbar(value: unknown): PluginToolbarContribution[] {
       ...(titleKey !== undefined ? { titleKey } : {}),
       ...(icon !== undefined ? { icon } : {}),
       ...(order !== undefined ? { order } : {}),
+      ...(menu !== undefined ? { menu } : {}),
     };
   });
+}
+
+/** 菜单档位项上限 / 值长度上限（设计 §4.7.2）。 */
+const TOOLBAR_MENU_MAX_ITEMS = 16;
+const TOOLBAR_MENU_MAX_VALUE_LEN = 64;
+
+/**
+ * 校验通用 RPC 绑定菜单形状（additive）。违规 ⇒ 返回 undefined（丢 menu 保留普通
+ * 按钮声明，单项丢弃口径）。read/write ∈ rpc 白名单 + 权限匹配的校验在 Web 归一化层
+ * （那里同时持有 rpc 白名单）；这里只校验形状。
+ */
+function readToolbarMenu(value: unknown, _field: string): PluginToolbarMenu | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return undefined;
+  const read = typeof value.read === 'string' ? value.read.trim() : '';
+  const write = typeof value.write === 'string' ? value.write.trim() : '';
+  const valueKey = typeof value.valueKey === 'string' ? value.valueKey.trim() : '';
+  if (read === '' || write === '' || valueKey === '') return undefined;
+  if (!Array.isArray(value.items) || value.items.length === 0) return undefined;
+  const items: PluginToolbarMenuItem[] = [];
+  for (const raw of value.items) {
+    if (items.length >= TOOLBAR_MENU_MAX_ITEMS) break;
+    if (!isRecord(raw)) continue;
+    const itemValue = typeof raw.value === 'string' ? raw.value.trim() : '';
+    if (itemValue === '' || itemValue.length > TOOLBAR_MENU_MAX_VALUE_LEN) continue;
+    const labelKey =
+      typeof raw.labelKey === 'string' && raw.labelKey.trim() !== ''
+        ? raw.labelKey.trim()
+        : undefined;
+    const label =
+      typeof raw.label === 'string' && raw.label.trim() !== '' ? raw.label.trim() : undefined;
+    items.push({
+      value: itemValue,
+      ...(labelKey !== undefined ? { labelKey } : {}),
+      ...(label !== undefined ? { label } : {}),
+    });
+  }
+  if (items.length === 0) return undefined;
+  const sessionScoped = value.sessionScoped === true;
+  return { read, write, valueKey, ...(sessionScoped ? { sessionScoped } : {}), items };
 }
 
 function readCommands(value: unknown): PluginCommandContribution[] {
@@ -1555,6 +1640,23 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
     fail('plugin_manifest_invalid', 'override must be a boolean');
   }
 
+  // per-capability 生命周期声明（additive 可选）：每个能力只认 hot|restart。
+  // 形状非法 fail-closed；语义约束（只允许更保守）由宿主推导层 reconcile，不在这里。
+  let lifecycle: PluginManifest['lifecycle'];
+  if (raw.lifecycle !== undefined) {
+    if (!isRecord(raw.lifecycle)) fail('plugin_manifest_invalid', 'lifecycle must be an object');
+    const parsed: NonNullable<PluginManifest['lifecycle']> = {};
+    for (const capability of ['toggle', 'settings', 'code'] as const) {
+      const value = (raw.lifecycle as Record<string, unknown>)[capability];
+      if (value === undefined) continue;
+      if (value !== 'hot' && value !== 'restart') {
+        fail('plugin_manifest_invalid', `lifecycle.${capability} must be "hot" or "restart"`);
+      }
+      parsed[capability] = value;
+    }
+    lifecycle = parsed;
+  }
+
   if (options.knownPluginIds !== undefined) {
     const known = new Set(options.knownPluginIds);
     for (const dependency of dependencies.plugins) {
@@ -1582,6 +1684,7 @@ export function parsePluginManifest(raw: unknown, options: PluginManifestOptions
     permissions,
     dependencies,
     ...(raw.override === true ? { override: true } : {}),
+    ...(lifecycle !== undefined ? { lifecycle } : {}),
   };
 }
 

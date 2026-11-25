@@ -175,6 +175,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   // 0.58：代理模式下「能连」不再取决于有没有 node token —— 鉴权是平台会话语义。
   const canConnect = nodeUrl !== null && (proxyMode || nodeToken.trim() !== '' || anonymousNode);
   const hasToken = canConnect;
+  // canConnect 判据同步进 ref：hydration 闸门全对齐（ISSUE-CR22-1，含匿名回环 / 代理 cookie）。
+  const canConnectRef = useRef(canConnect);
+  canConnectRef.current = canConnect;
 
   /**
    * 平台引导（契约 §5.2）：whoami → nodes.list → credentials → node 直连。
@@ -367,6 +370,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     recordSettled,
     settledRef,
     tokenRef: nodeTokenRef,
+    canConnectRef,
     hydrationGenerationRef,
     onFetchState: setPendingFetch,
   });

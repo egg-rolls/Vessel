@@ -54,6 +54,30 @@
       "progress": "✅完成合并ab63936d(023fec90 read缺省3/cf8b0308去超时/c5f5b404 rotate0.5/e2e8b89d条带三态)build绿；更正：产物读数误报撤回(本仓build=typecheck+lint无bundle,ADR-006)；待验4点(直读最新3/不超时回退/50%rotate提示/三态切换)；worktree已清"
     },
     {
+      "id": "q-hydration-anon",
+      "title": "微修复：interaction hydration匿名连接token闸门（ISSUE-CR22-1刷新丢卡）",
+      "column": "进行中",
+      "owner": "q-hydration-anon",
+      "branch": "fix/q-hydration-anon",
+      "progress": "5fef23c0派单(裁定a本轮修)：use-interaction-hydration.ts token闸门!tokenAtStart.trim()对回环匿名整段跳过→刷新丢审批卡；对齐canConnect anonymousNode判据让匿名也hydration重建；生产token路径不受影响"
+    },
+    {
+      "id": "q-context-fix",
+      "title": "上下文口径统一修写侧（兜底估算应用冻结占位~30行+切片修正）",
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并5de051ea(e45e4053 P1兜底冻结占位/25253257 P2切片/81f3aa08 rotate文案+P5注释,5文件+67build绿)；消虚高170K消费侧自动对齐(pressure.used≈llm.request Δ<1%/rotate percent==通知/UI跳变消失)；遗留P4 TUI口径另单+码名另议+部署后Δ实测；待金丝雀验+用户重启后50%↔73%打架消失"
+    },
+    {
+      "id": "q-swr-refresh",
+      "title": "数据刷新stale-while-revalidate规范（保留旧数据后台刷新无缝替换）",
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并07231261(b32ea3fc调研/572455e6 plugin-ui useStaleWhileRevalidate共享hook213行/75114a48 usage+logs接入15s轮询保留旧数据原子swap/9efe9bff data-refresh-swr.md规范)build绿+产物幂等；usage/logs去整页闪烁,失败保留旧数据stale提示,仅首次/新查询loading；待金丝雀验+用户重启"
+    },
+    {
       "id": "q-plugin-ui-layer",
       "title": "微修复：plugin-ui button重置层外压制iframe表面（ISSUE-SS2-1）",
       "column": "进行中",
@@ -64,10 +88,10 @@
     {
       "id": "q-drag-reference",
       "title": "会话卡片拖拽引用到输入框（chip链信息：会话/Agent/跨队+team/跨节点+node）",
-      "column": "进行中",
-      "owner": "q-drag-reference",
-      "branch": "feat/q-drag-reference",
-      "progress": "e5bc63a2派单(用户裁定)：会话卡draggable→输入框drop→引用chip(会话+Agent,跨队加team跨节点加node渐进披露)+发送解析复用mention；免复制粘贴"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并4221e4ad(d75ab6e1拖拽chip/35559e73发送序列化,10文件+574build绿)：会话卡draggable→Composer drop→chip渐进披露(会话+Agent跨队team跨节点node)+可读引用块发送零服务端改动+草稿槽持久化去重上限8；待金丝雀验+用户重启"
     },
     {
       "id": "q-kanban-proxy",
@@ -88,18 +112,18 @@
     {
       "id": "q-thinking-plugin",
       "title": "思考强度插件Config热配置/热启用/同步config（用户裁定实施）",
-      "column": "进行中",
-      "owner": "q-thinking-plugin",
-      "branch": "feat/q-thinking-plugin",
-      "progress": "8196807a派单：基于thinking-intensity-plugin-design.md，热配置热启用同步config.yaml(不重启)，BeforeLlm hook注入requestExtras+provider映射+设置UI；auto零回归"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并552097e2(7eb80815 P1core extra钩子+P2热配置插件/830e9a47 P3工具栏菜单+设置UI,冲突解决保留drag-reference双方props)build绿；plugins/context/thinking-intensity(非provider,默认集排除provider纠偏)+模块级live holder热生效+contributes.settings自动发现+composer思考菜单+stable映射experimental闸；待金丝雀验+用户重启"
     },
     {
       "id": "q-plugin-lifecycle-impl",
       "title": "插件生命周期最优实现（per-capability+O5修复+注销API+版本跟踪，不留中间态）",
-      "column": "进行中",
-      "owner": "q-plugin-lifecycle-impl",
-      "branch": "feat/q-plugin-lifecycle-impl",
-      "progress": "a65c2606派单(用户裁定最优一步到位)：per-capability fail-honest+O5三层(enabled liveConfig/pendingRestart badge/补广播)+注销API消pii半态(弃过渡闸委屈代码)+内置跟踪vessel版本+child settings热；基于plugin-lifecycle-design.md"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并c68cc6c1+792b3752(7提交f92d4792/01ea38c4/de93e77e/2e115c3c/e39a2403/1dc94e52/fbbe35a3+marketplace资产收口)build绿；最优终态:能热真热(tool/hook/guardrail/masker/child启停/child settings)不能热诚实badge(provider/工厂/in-process代码),显示态=生效态同源,pii半态消除,无过渡闸无委屈代码；待金丝雀验+用户重启"
     },
     {
       "id": "q-card-robust",
@@ -159,11 +183,11 @@
     },
     {
       "id": "q-context-debug",
-      "title": "审查统一：上下文口径不一致（runtime通知阈值vs rotate context_ratio vs UI）",
-      "column": "进行中",
-      "owner": "q-context-debug",
-      "branch": "design/q-context-debug",
-      "progress": "16b4471a派单：runtime context_window通知65% vs rotate拒38% vs UI380K三处打架；审查三计量源file:line+根因(计数法/取数时机/trim后不同步)+统一单一口径源；零代码"
+      "title": "审查统一：上下文口径不一致（通知虚高170K根因+修写侧方案）",
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅审查完成合并6ac8d638(a2e229a0调研/725ebee3方案,353行)：根因实锤每run起点压力预警整窗兜底含564冻结占位工具结果虚高170K(请求路径381K准)；rotate拒实为approval_timeout非ratio闸码名误导；统一方案修写侧兜底应用冻结占位集合~30行消费侧自动对齐；待派实施修复"
     },
     {
       "id": "q-envcard-run",

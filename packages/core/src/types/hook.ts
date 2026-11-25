@@ -43,6 +43,13 @@ export interface HookContext {
    * 缺省 = 旧 caller 未传，按 0 处理。
    */
   request_index?: number;
+  /** BeforeLlm：本次请求的模型标识（additive，q-thinking-plugin；来自 LoopContext.model，计价同源）。 */
+  model?: string;
+  /**
+   * BeforeLlm：provider 身份（additive，q-thinking-plugin；来自 LLMProvider.providerName 实例事实）。
+   * 缺省 = 装配未挂身份（裸 fallback / MemoryLLMProvider）——hook 自行按 model 启发式降级。
+   */
+  providerName?: string;
   /** BeforeTool / AfterTool：当前工具名（0.6.1 P2） */
   tool?: string;
   /** BeforeTool / AfterTool：当前工具输入；BeforeTool 可经 HookResult.updatedInput 改写 */
@@ -66,6 +73,16 @@ export interface HookResult {
    * `{ role: 'user', name: 'vessel:hook' }` 尾消息；新代码请写 `ctx.messages`。
    */
   additionalContext?: string;
+  /**
+   * BeforeLlm：本次请求的额外头/参数（additive，q-thinking-plugin）。runtime 经
+   * ProviderPort.chat → ChatRequest.extra_headers/extra_params 透传给适配器；合并闸在
+   * 适配器（provider/request-extras.ts）。仅 BeforeLlm 消费；其它阶段返回本字段被忽略。
+   * 缺省 = 请求形状不变。
+   */
+  requestExtras?: {
+    headers?: Record<string, string>;
+    params?: Record<string, unknown>;
+  };
 }
 
 /** Hook 接口 */

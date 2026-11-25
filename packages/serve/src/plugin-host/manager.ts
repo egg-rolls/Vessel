@@ -708,6 +708,9 @@ function descriptorFingerprint(descriptor: PluginDescriptor): string {
     builtin: descriptor.builtin ?? false,
     uiEmbed: descriptor.uiEmbed ?? null,
     trustUi: descriptor.trustUi ?? null,
+    // q-plugin-lifecycle §6.5 P2：settings 值进指纹 → 改 settings 触发子进程重激活
+    //（spawn 期 env 注入新值），child settings 转热。缺省 {} 与历史无 settings 行为一致。
+    settings: descriptor.settings ?? {},
   });
 }
 
@@ -1922,6 +1925,8 @@ export function renderContributions(
       ...(item.titleKey !== undefined ? { titleKey: item.titleKey } : {}),
       ...(item.icon !== undefined ? { icon: item.icon } : {}),
       order: item.order ?? 100,
+      // P3 additive：通用 RPC 绑定菜单原样透传（loader readToolbarMenu 已校验形状）。
+      ...(item.menu !== undefined ? { menu: item.menu } : {}),
     }))
     .sort((a, b) => a.order - b.order);
   // E1 amendment：bare 方法名；web iframe bridge 用它做 RPC 白名单。
