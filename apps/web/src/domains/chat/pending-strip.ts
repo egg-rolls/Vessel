@@ -20,8 +20,9 @@
  *   时并成一组（组头显示一条摘要 + 「N 条」，可展开看全部）。这是**纯展示**折叠：
  *   `ordered` 仍是逐条的真实条目，数据不删。
  *
- * - **身份（0.51）**：卡头那格「谁」由 {@link pendingIdentityOf} 决定 —— 人类走 i18n 文案、
- *   有 `from_name` 走 `agent:<name>`、没有就退成短 id（{@link shortSenderId}）。
+ * - **身份（0.51）**：卡头那格「谁」由 {@link pendingIdentityOf} 决定 —— 人类 / ask /
+ *   bash / system 固定标签走 i18n 文案、有 `from_name` 走 `agent:<name>`、没有就退成
+ *   短 id（{@link shortSenderId}）。
  *   折叠组的显示名用 {@link groupSenderName} 取（组头优先、组内兜底）：组里明明有同一个
  *   发送者的名字时，组头不该因为「恰好排第一的是老条目」就退回短 id。
  *
@@ -83,6 +84,22 @@ export const HUMAN_SOURCE = 'human';
 export const ASK_SOURCE = 'ask';
 
 /**
+ * 「bash 作业结果」的 inbox 来源（0.55，镜像服务端 `BASH_JOB_INBOX_SOURCE`）。
+ *
+ * 异步 bash 作业完成投回本会话：`from`（=服务端 source）是固定标签 `bash`，**不是**
+ * 成员自己。不认它时身份行会落进 `from_name` 分支显示 `agent:<成员自己的名字>` ——
+ * 看起来就是「自己发给自己」（用户反馈的正是这条）。身份行必须说人话：这是运行时
+ * 送回来的作业结果，与时间线的 `tool:bash` 卡（「来自 bash」）同一口径。
+ */
+export const BASH_SOURCE = 'bash';
+
+/**
+ * 「系统」的 inbox 来源（镜像服务端 `SYSTEM_PRINCIPAL`）：system principal 投递的
+ * 条目身份行显示系统文案，而不是退成一串短 id。
+ */
+export const SYSTEM_SOURCE = 'system';
+
+/**
  * 要不要给这颗「取消 hold / 留档」键：**非 human 源**且当前是 `held`（0.53 产品裁定）。
  *
  * 判据必须与服务端 `agents.recall` 自己的分档一致（`source === 'human'` 才真删，其余源
@@ -131,9 +148,12 @@ export function shortSenderId(from: string): string {
 /**
  * 条带卡头身份（纯函数）：`等待中　<身份>: <说的话>` 里那格「谁」。
  *
- * 三种身份（用户口径，0.51）：
+ * 身份分档（用户口径，0.51；来源 enum 见服务端 `InboxSourceLabel`）：
  * - `from === HUMAN_SOURCE` ⇒ `humanLabel`（i18n 的「你/人类」；字面由 UI 层注入，
  *   本模块保持无 i18n 依赖，门禁探针才能直接断言字符串）；
+ * - `from === ASK_SOURCE` / `BASH_SOURCE` / `SYSTEM_SOURCE` ⇒ 对应固定标签文案
+ *   （ask 答复 / bash 作业 / 系统）：它们不是「谁说的话」，**不走显示名分支** ——
+ *   bash 作业的 `from_name` 是收件人自己，走名字分支就画成「自己发给自己」；
  * - 有显示名 ⇒ `agent:<name>`（与 AgentMessageCard / A2A 卡片同形，用户一眼能对上）；
  * - 没有显示名 ⇒ 短 id（{@link shortSenderId}），**绝不显示完整 UUID**；
  * - 空 `from` ⇒ `undefined`（不渲染身份槽，卡头回到「胶囊 + 摘要」两段）。
@@ -151,6 +171,10 @@ export function pendingIdentityOf(
     humanLabel: string;
     /** ask 答复的身份字面（缺省退回短 id，但生产调用点必须传）。 */
     askLabel?: string;
+    /** bash 作业结果的身份字面（缺省退回短 id，但生产调用点必须传）。 */
+    bashLabel?: string;
+    /** 系统来源的身份字面（缺省退回短 id，但生产调用点必须传）。 */
+    systemLabel?: string;
     /** agent 身份的字面：拿名字换一串可显示文本（缺省 `agent:<name>`）。 */
     agentLabel?: (name: string) => string;
     fallbackName?: string;
@@ -160,6 +184,10 @@ export function pendingIdentityOf(
   if (from === '') return undefined;
   if (from === HUMAN_SOURCE) return options.humanLabel;
   if (from === ASK_SOURCE) return options.askLabel ?? shortSenderId(from);
+  // 固定 runtime 标签先于显示名判定：bash 作业条目的 from_name 是收件人自己，
+  // 落进名字分支就是「自己发给自己」（见 BASH_SOURCE 注释）。
+  if (from === BASH_SOURCE) return options.bashLabel ?? shortSenderId(from);
+  if (from === SYSTEM_SOURCE) return options.systemLabel ?? shortSenderId(from);
   const name = nameOf(entry.from_name) ?? nameOf(options.fallbackName);
   if (name === undefined) return shortSenderId(from);
   return (options.agentLabel ?? defaultAgentLabel)(name);

@@ -1214,6 +1214,10 @@ export const messages = {
   'chat.pending.title': '待处理 · {count}',
   'chat.pending.identity.human': 'human',
   'chat.pending.identity.ask': 'ask 答复',
+  // 固定 runtime 标签（服务端 InboxSourceLabel）：不是「谁说的话」，不走显示名分支
+  // （bash 作业条目的 from_name 是收件人自己，走名字分支就画成「自己发给自己」）。
+  'chat.pending.identity.bash': 'bash 作业',
+  'chat.pending.identity.system': '系统',
   // agent 源的身份形状与 A2A 卡片一致（`agent:<名字>`）：agent 是产品术语，中文不译。
   'chat.pending.identity.agent': 'agent:{name}',
   'chat.pending.sameSource': '{count} 条',

@@ -212,6 +212,25 @@ export const ASK_ANSWER_INBOX_SOURCE = 'ask';
  */
 export const BASH_JOB_INBOX_SOURCE = 'bash';
 
+/**
+ * inbox 来源的**固定标签 enum**（用户裁定：来源在创建源头规定，渲染侧读 enum 判显示）。
+ *
+ * `source` 字段的取值域 = 这四个固定标签 + principal 地址（本机成员 UUID / `federation:`
+ * 地址）。固定标签表达「不是谁说的话」的来源类别（人类 / 系统 / ask 答复 / bash 作业），
+ * 地址表达「谁说的话」。赋值统一收口在 {@link inboxSourceOf}（admit / trackInbox /
+ * rotate 窗口 / 还原 unread 共用），**不允许**旁路直接拿 `from` 当来源 —— 那会把
+ * 「作业回报自己」写成「自己发给自己」。
+ *
+ * 不另设第二个 kind 字段：source 已承载同一事实，第二字段就是第二套口径（同
+ * `pending` / `held` 之鉴）。旧条目（加标签之前落盘的 source=成员 id）不迁移，渲染侧
+ * 按既有 agent 身份 / 短 id 降级 —— 缺 enum 是合法的老状态，不是损坏。
+ */
+export type InboxSourceLabel =
+  | typeof HUMAN_PRINCIPAL
+  | typeof SYSTEM_PRINCIPAL
+  | typeof ASK_ANSWER_INBOX_SOURCE
+  | typeof BASH_JOB_INBOX_SOURCE;
+
 /** inbox 条目的来源：只有「人对 ask 的答复」与普通人类消息在这里分家。 */
 function inboxSourceOf(message: AgentMessage): string {
   if (message.origin === 'ask_answer') return ASK_ANSWER_INBOX_SOURCE;
@@ -4858,6 +4877,8 @@ export class AgentServiceImpl implements AgentService {
             source: this.messageSource(stored.source),
             channel: 'direct',
             conversation_id: conversationId,
+            // 入队时存下的显示名随重建带回：丢了它条带 / 卡头只能退短 id。
+            ...(stored.from_name !== undefined ? { from_name: stored.from_name } : {}),
           } satisfies AgentMessage);
       } else {
         conversationId = this.resolveConversationForDelivery(
@@ -5114,7 +5135,9 @@ export class AgentServiceImpl implements AgentService {
       {
         id: message.id,
         ts: message.ts,
-        source: message.from,
+        // 与 trackInbox 同一口径（inboxSourceOf）：bash / ask 消息还原后来源仍是固定
+        // 标签，不是 from（bash 作业的 from 就是收件人自己 ⇒ 条带「自己发给自己」）。
+        source: inboxSourceOf(message),
         text: message.content,
         ...(message.conversation_id !== undefined
           ? { conversation_id: message.conversation_id }
@@ -7717,12 +7740,17 @@ export class AgentServiceImpl implements AgentService {
   /**
    * 入队时标注发送者类别（仅用于模型上下文，不参与权限判定）。
    *
-   * 判据只看「这个 principal 是不是本机登记的成员」：登记了就是 agent（`main` 也是
-   * agent），没登记才是人类 / 系统语境。这里**不看 role** —— 人类的缺省 `from` 是
-   * `human`，与成员身份彻底分开。
+   * 判据：固定 runtime 标签（`system` / `ask` / `bash`）归系统语境；其余看「这个
+   * principal 是不是本机登记的成员」：登记了就是 agent（`main` 也是 agent），没登记
+   * 才是人类 / 系统语境。这里**不看 role** —— 人类的缺省 `from` 是 `human`，与成员
+   * 身份彻底分开。
    */
   private messageSource(from: string): AgentMessage['source'] {
     if (from === SYSTEM_PRINCIPAL) return 'system';
+    // 固定 runtime 标签（ask 答复 / bash 作业结果）不是「谁说的话」：interrupt 的
+    // message_id 分支从 inbox 条目重建消息时 from 就是这些标签，不认它们会因 registry
+    // 查无此 id 而误判成 human（模型侧把作业结果标成人类输入）。
+    if (from === ASK_ANSWER_INBOX_SOURCE || from === BASH_JOB_INBOX_SOURCE) return 'system';
     if (from.startsWith('federation:')) return 'agent';
     return this.registry.get(from) === undefined ? 'human' : 'agent';
   }

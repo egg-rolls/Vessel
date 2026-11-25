@@ -138,6 +138,12 @@ export function deliveryFromNotify(notify: boolean | undefined): AgentInboxDeliv
 export interface StoredInboxMessage {
   id: string;
   ts: number;
+  /**
+   * 来源 enum（创建源头赋值，渲染侧读它判显示）：固定标签 `human` / `system` /
+   * `ask` / `bash`（见 `service.ts` 的 `InboxSourceLabel`）+ principal 地址（本机成员
+   * UUID / `federation:` 地址）。旧条目可能是加标签前的成员 id（如 bash 作业曾写
+   * 收件人自己）——不迁移，渲染按既有 agent 身份 / 短 id 降级。
+   */
   source: string;
   summary: string;
   text: string;
