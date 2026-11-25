@@ -1525,6 +1525,21 @@ async function runWithConfig(result: BootstrapResult) {
       },
       // CONTRACT-hot-apply §7：permissions.setToolPolicy 的写盘面（用户 YAML）。
       permissions: {
+        // AX 自服务 · 自观：permissions.show 的只读规则面（additive）。
+        // 源 = 热应用基线 permissionState.current（启动 = permissionConfigFor，
+        // reload 成功才更新）——与差异通知同一份「当前有效规则」，不读 YAML 原样。
+        rules: () => {
+          const current = permissionState.current ?? permissionConfigFor(liveConfig, headless);
+          const bridgeDeny =
+            result.toolsEngine?.bridgeDeny.current ??
+            normalizeBridgeDeny(liveConfig.permission?.bridgeDeny);
+          return {
+            default: current.default ?? (headless ? 'allow' : 'ask'),
+            autoApprove: current.autoApprove ?? [],
+            neverAutoApprove: current.neverAutoApprove ?? [],
+            bridgeDeny,
+          };
+        },
         setToolPolicy: ({ tool, policy }) => {
           const written = setToolPolicy(tool, policy, { configPath: hotApplyConfigPath });
           // 写盘成功后同步活配置（重新赋值而非原地修改），让随后的 config.get 返回新数组。

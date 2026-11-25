@@ -319,6 +319,16 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     ],
   },
   {
+    token: 'permission',
+    registryName: 'permission',
+    subcommands: [
+      {
+        name: 'show',
+        flags: ['--member', '--json', '--connect', '--connect-token', '--ca', '--data-dir'],
+      },
+    ],
+  },
+  {
     token: 'stop',
     registryName: 'stop',
     flags: ['--yes', '--timeout', '--instance', '--port', '--all'],

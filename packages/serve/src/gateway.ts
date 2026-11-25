@@ -2736,6 +2736,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       pluginHost,
       // 工具权限统一规范：通用成员级工具（inbox 等）与全局工具一致可设策略。
       commonToolNames: () => commonMemberToolEntries().map((tool) => tool.name),
+      // AX 自服务 · 自观：permissions.show{member_id} 的成员解析与工具面（additive）。
+      ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
     }),
     // 0.52：附件目录浏览（只读；additive，排在表尾）。
     // 允许根 / deny / realpath 都在装配层，serve 只出形状与稳定码。

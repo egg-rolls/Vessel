@@ -485,6 +485,19 @@ export type SessionCommand = {
   json: boolean;
 };
 
+/**
+ * AX 自服务 · 自观：`vessel permission show [--member <id>] [--json]`。
+ *
+ * 缺省 = 调用者自身权限（CLI 上下文 = operator → 节点级矩阵）；
+ * `--member` 限本舰队成员（服务端只认本节点 AgentService）。
+ */
+export type PermissionCommand = {
+  kind: 'show';
+  /** 本舰队成员 id；缺省 = 节点级矩阵。 */
+  member?: string;
+  json: boolean;
+};
+
 export interface CliArgs {
   /** `vessel demo`：无 Key 交互演示（mock + tools 场景） */
   demo: boolean;
@@ -580,6 +593,8 @@ export interface CliArgs {
   hubCommand?: HubCommand | null;
   /** AX 自服务 · 自观：`vessel session status`；可选以兼容既有 parseArgs 快照测试 */
   sessionCommand?: SessionCommand | null;
+  /** AX 自服务 · 自观：`vessel permission show`；可选以兼容既有 parseArgs 快照测试 */
+  permissionCommand?: PermissionCommand | null;
   /** 0.14：`vessel errors [--json] [--limit N]` */
   errorsCommand: { json: boolean; limit?: number } | null;
   /** 0.18：`vessel completion <bash|zsh|fish|powershell>` */
@@ -814,6 +829,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'session' && i === 0) {
       return parseSessionArgs(argv.slice(1), args);
+    }
+    if (a === 'permission' && i === 0) {
+      return parsePermissionArgs(argv.slice(1), args);
     }
     if (a === 'stop' && i === 0) {
       return parseStopArgs(argv.slice(1), args);
@@ -3016,6 +3034,57 @@ function parseSessionArgs(rest: string[], args: CliArgs): ParseResult {
   }
   if (args.help) return { ok: true, args };
   args.sessionCommand = { kind: 'status', json, ...(id !== undefined ? { id } : {}) };
+  return { ok: true, args };
+}
+
+/**
+ * `permission show [--member <id>] [--json]`（AX 自服务 · 自观）。
+ *
+ * 连接参数经 `extractTargetFlags` 摘到全局字段；`--data-dir` 自行接受。
+ */
+function parsePermissionArgs(rest: string[], args: CliArgs): ParseResult {
+  const extracted = extractTargetFlags(rest, args);
+  if (!extracted.ok) return extracted;
+  rest = extracted.rest;
+  const sub = rest[0];
+  if (sub === undefined || sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub !== 'show') {
+    return { ok: false, error: `Unknown subcommand for permission: ${sub}` };
+  }
+  const tail = rest.slice(1);
+  let member: string | undefined;
+  let json = false;
+  for (let i = 0; i < tail.length; i++) {
+    const a = tail[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--member') {
+      const value = readFlagValue(tail, i, '--member');
+      if (!value.ok) return value;
+      member = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--data-dir') {
+      const value = readFlagValue(tail, i, '--data-dir');
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for permission show: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.permissionCommand = { kind: 'show', json, ...(member !== undefined ? { member } : {}) };
   return { ok: true, args };
 }
 

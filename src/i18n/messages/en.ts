@@ -774,4 +774,24 @@ export const en: Record<MessageKey, string> = {
   'sessionStatus.notFound': 'session not found: {id}',
   'sessionStatus.notAvailable':
     'sessions.get is not available on this gateway (requires a 0.14+ serve build)',
+
+  // ── permission show (AX self-service · self-observation) ──
+  'help.group.permission': 'permission self-observation (effective matrix, read-only)',
+  'help.cmd.permissionShow':
+    'effective permission matrix (tools × auto/ask/never + scoped keys + rule sources; default = caller itself)',
+  'flag.member': 'member id within this fleet (default = caller itself)',
+  'permissionShow.title': 'Effective permission matrix',
+  'permissionShow.default': 'default',
+  'permissionShow.member': 'member',
+  'permissionShow.autoApprove': 'auto approve',
+  'permissionShow.neverApprove': 'always ask',
+  'permissionShow.bridgeDeny': 'bridge deny',
+  'permissionShow.tools': 'Tools',
+  'permissionShow.scoped': 'Scoped keys',
+  'permissionShow.source': 'source',
+  'permissionShow.checkNote':
+    '* = tool has its own checkPermission (runtime explicit decision may override the static matrix)',
+  'permissionShow.memberNotFound': 'member not found (this fleet only): {id}',
+  'permissionShow.notAvailable':
+    'permissions.show is not available on this gateway (requires a newer serve build)',
 };

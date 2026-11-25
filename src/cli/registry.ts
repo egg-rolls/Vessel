@@ -38,6 +38,7 @@ import { logsCommand } from './commands/logs-command';
 import { migrateCommand } from './commands/migrate-command';
 import { modelCommand } from './commands/model';
 import { isForegroundNodeCommand, runNodeCommand } from './commands/node-command';
+import { permissionShowCommand } from './commands/permission/permission-show-command';
 import { runPluginCommand } from './commands/plugin/plugin-command';
 import { pruneCommand } from './commands/prune-command';
 import { runResumeList } from './commands/resume-command';
@@ -353,6 +354,23 @@ export const cliCommands: readonly CliCommand[] = [
         await sessionStatusCommand({
           json: command.json,
           ...(command.id !== undefined ? { id: command.id } : {}),
+          connectUrl: args.connectArg,
+          connectToken: args.connectTokenArg,
+          caFile: args.caArg,
+        }),
+      );
+    },
+  },
+  {
+    name: 'permission',
+    match: (args) => (args.permissionCommand ?? null) !== null,
+    run: async (args) => {
+      const command = args.permissionCommand ?? null;
+      if (command === null) return 1;
+      return printCommandResult(
+        await permissionShowCommand({
+          json: command.json,
+          ...(command.member !== undefined ? { member: command.member } : {}),
           connectUrl: args.connectArg,
           connectToken: args.connectTokenArg,
           caFile: args.caArg,
