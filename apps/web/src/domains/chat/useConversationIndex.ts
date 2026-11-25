@@ -1,10 +1,11 @@
 /**
  * 会话索引竖条的视口追踪 + 点击跳转（会话页 / 团队页 / 成员 body 页共用）。
  *
- * 锚点契约：时间线里每条可见消息的 DOM 包一层 `data-index-entry-key`
+ * 锚点契约：时间线里只有 **user 消息**（人打的字）的 DOM 带 `data-index-entry-key`
  * （会话页 = item.key，见 Transcript.tsx；团队页 = message_id，见 TeamTranscript.tsx；
- * body 页 = 局部序号 key，见 BodyTranscripts.tsx）。索引条目（conversation-index.ts）
- * 与锚点用同一个字符串，这里只认这个属性，不关心消息身份怎么来。
+ * body 页 = 局部序号 key，见 BodyTranscripts.tsx；过滤判据见 conversation-index.ts）。
+ * 索引条目与锚点用同一个字符串，这里只认这个属性，不关心消息身份怎么来 ——
+ * 锚点已收窄到 user 消息，30% 线判据天然只落在 user 消息上，逻辑无需感知过滤。
  *
  * 当前项判据：视口顶部往下 30% 处画一条线，最后一条「顶边在线上方」的锚点就是
  * 正在读的那条（阅读位置靠近屏顶，与目录高亮同一口径）。滚到第一条上方时高亮第一条。

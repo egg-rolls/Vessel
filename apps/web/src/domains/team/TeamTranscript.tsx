@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import { useEnteringItemKeys } from '../../components/ui';
 import { localDayKey, localDayLabel } from '../../format';
 import type { TeamMember, TeamMessage } from '../../gateway/types';
+import { isIndexUserRow } from '../chat/conversation-index';
 import { TeamMessageRow, type TeamMessageView } from './TeamMessageRow';
 import { isLocalMessageId } from './team-send';
 
@@ -102,7 +103,11 @@ export function TeamTranscript({
     );
     nodes.push(
       // data-index-entry-key：会话索引竖条的跳转锚点（见 useConversationIndex.ts）。
-      <div key={message.message_id} data-index-entry-key={message.message_id}>
+      // 只给 human 发言挂（与索引映射同一判据 isIndexUserRow）；agent / 系统行不带锚点。
+      <div
+        key={message.message_id}
+        data-index-entry-key={isIndexUserRow(message) ? message.message_id : undefined}
+      >
         <TeamMessageRow
           message={message}
           entering={
