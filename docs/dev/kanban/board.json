@@ -112,10 +112,10 @@
     {
       "id": "q-plugin-lifecycle-impl",
       "title": "插件生命周期最优实现（per-capability+O5修复+注销API+版本跟踪，不留中间态）",
-      "column": "进行中",
-      "owner": "q-plugin-lifecycle-impl",
-      "branch": "feat/q-plugin-lifecycle-impl",
-      "progress": "a65c2606派单(用户裁定最优一步到位)：per-capability fail-honest+O5三层(enabled liveConfig/pendingRestart badge/补广播)+注销API消pii半态(弃过渡闸委屈代码)+内置跟踪vessel版本+child settings热；基于plugin-lifecycle-design.md"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并c68cc6c1+792b3752(7提交f92d4792/01ea38c4/de93e77e/2e115c3c/e39a2403/1dc94e52/fbbe35a3+marketplace资产收口)build绿；最优终态:能热真热(tool/hook/guardrail/masker/child启停/child settings)不能热诚实badge(provider/工厂/in-process代码),显示态=生效态同源,pii半态消除,无过渡闸无委屈代码；待金丝雀验+用户重启"
     },
     {
       "id": "q-card-robust",
