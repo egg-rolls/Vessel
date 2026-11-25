@@ -11,6 +11,7 @@ export type IconName =
   | 'transcript'
   | 'reply'
   | 'retract'
+  | 'delete'
   | 'chevron'
   | 'attach'
   | 'check'
@@ -65,6 +66,19 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <path d="M2.75 6.25h7.5a3 3 0 0 1 0 6H7" />
       <path d="M5.25 3.5 2.5 6.25l2.75 2.75" />
+    </>
+  ),
+  /**
+   * 垃圾桶：Team 消息的「删除」键（原「撤回」）。语义是删除该消息投进成员收件箱的
+   * 那一份（inbox 真删）+ 视图隐藏，不是「撤回来还能再发」—— 图形用垃圾桶而不是
+   * 撤回箭头，与 `retract`（条带取消排队那颗）区分开。
+   */
+  delete: (
+    <>
+      <path d="M2.75 4.25h10.5" />
+      <path d="M6.25 4.25V3a.75.75 0 0 1 .75-.75h2a.75.75 0 0 1 .75.75v1.25" />
+      <path d="M4.25 4.25l.6 8.5a1 1 0 0 0 1 .95h4.3a1 1 0 0 0 1-.95l.6-8.5" />
+      <path d="M6.75 7v4M9.25 7v4" />
     </>
   ),
   resend: PLANE,

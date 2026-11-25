@@ -1541,6 +1541,15 @@ async function runWithConfig(result: BootstrapResult) {
       // 0.13 Addendum A：权限交互持久化目录（serve 负责文件格式与原子写）。
       // 0.15：命名实例落到 <dataDir>/instances/<instance>，避免同 dataDir 互相覆盖。
       interactionsDir: ensureInteractionsDir(dataDir, foregroundGatewayInstance),
+      // q-kanban-view：任务看板读面 + 用户验收归档写面（kanban.*）。
+      // 路径 = config kanban.board_path（~ 展开、相对进程 cwd）→ 缺省
+      // <cwd>/docs/dev/kanban/board.json（cwd = repo 根 / 舰队 worktree 根）。
+      // archive.json 恒取板同目录（serve 侧派生，不读文件内指针）。
+      kanban: {
+        boardPath: path.resolve(
+          expandHome(config.kanban?.boardPath?.trim() || 'docs/dev/kanban/board.json'),
+        ),
+      },
       // 0.12 / CONTRACT-hot-apply：`gateway.reload` 的唯一热应用入口。
       // serve 只做 scope 枚举校验；这里注入 `scope -> applier`。
       reload: reloadRunner.reload,

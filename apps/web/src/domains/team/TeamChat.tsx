@@ -184,9 +184,9 @@ export function TeamChat(props: TeamChatProps) {
 
       {retractTarget && (
         <ConfirmDialog
-          title={t('team.message.retractTitle')}
-          body={<p>{t('team.message.retractBody')}</p>}
-          confirmLabel={t('team.message.retractConfirm')}
+          title={t('team.message.deleteTitle')}
+          body={<p>{t('team.message.deleteBody')}</p>}
+          confirmLabel={t('team.message.deleteConfirm')}
           danger
           busy={retracting}
           onConfirm={() => {

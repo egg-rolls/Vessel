@@ -29,6 +29,7 @@ import type {
   FeishuConfig,
   GatewayConfig,
   HubConfig,
+  KanbanConfig,
   NodeConfig,
   ObservabilityConfig,
   PricingConfig,
@@ -510,6 +511,22 @@ function validateEvals(evals: EvalsConfig, errors: ConfigValidationError[]): voi
       path: 'evals.allowNetwork',
       message: 'evals.allowNetwork must be a boolean',
       value: allowNetwork,
+    });
+  }
+}
+
+/** 校验 kanban 块（q-kanban-view：任务看板查看器；只有 boardPath 一个键） */
+function validateKanban(kanban: KanbanConfig, errors: ConfigValidationError[]): void {
+  if (typeof kanban !== 'object' || kanban === null || Array.isArray(kanban)) {
+    errors.push({ path: 'kanban', message: 'kanban must be an object' });
+    return;
+  }
+  const { boardPath } = kanban;
+  if (boardPath !== undefined && (typeof boardPath !== 'string' || boardPath.trim() === '')) {
+    errors.push({
+      path: 'kanban.boardPath',
+      message: 'kanban.boardPath must be a non-empty string',
+      value: boardPath,
     });
   }
 }
@@ -3872,6 +3889,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
 
   // 校验 0.4 块；块缺省时不做任何事（保持 0.3 行为）。
   if (config.evals) validateEvals(config.evals, errors);
+  if (config.kanban) validateKanban(config.kanban, errors);
   if (config.feishu) validateFeishu(config.feishu, errors);
   if (config.observability) validateObservability(config.observability, errors);
 
@@ -4278,6 +4296,7 @@ export const KNOWN_CONFIG_KEYS = [
   'http',
   'hub',
   'evals',
+  'kanban',
   'feishu',
   'observability',
   'ui',

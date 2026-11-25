@@ -481,11 +481,27 @@ export function useTeamChat({
     setRetryHint(true);
   };
 
-  /** edit：回填正文 + mention chips；不发送、不删日志。 */
+  /**
+   * edit：**先级联消费 inbox 副本，再回填正文 + mention chips**；不发送、不删日志。
+   *
+   * 顺序不能反（与条带「收回编辑」同一口径）：这条消息经 @ 投进成员收件箱的那一份
+   * 如果不先拿走，人改完重发，成员还会把旧的那份执行一遍 —— 同一段话两份。
+   * `teams.recall_delivery` 只消费 inbox（不写 tombstone、不改日志）；skipped
+   * （已消费 / 正在跑 / 无关联）不算失败，照常回填。RPC 失败则**什么都不改**：
+   * 草稿原样、提示说清原因，绝不制造「输入框一份 + 队列一份」。
+   */
   const editMessage = (message: TeamMessage) => {
-    setDraft(message.content);
-    setChips(message.mentions.map((agentId) => ({ agentId, label: agentLabel(agentId) })));
-    setRetryHint(false);
+    void (async () => {
+      try {
+        await client.recallTeamDelivery({ team_id: teamId, message_id: message.message_id });
+      } catch (error) {
+        toast?.error(t('team.message.editRecallFailed', { detail: errorMessage(error) }));
+        return;
+      }
+      setDraft(message.content);
+      setChips(message.mentions.map((agentId) => ({ agentId, label: agentLabel(agentId) })));
+      setRetryHint(false);
+    })();
   };
 
   /**
@@ -517,7 +533,7 @@ export function useTeamChat({
     try {
       await client.retractTeam({ team_id: teamId, message_id: target.message_id });
       setRetractTarget(null);
-      toast?.success(t('team.message.retractDone'));
+      toast?.success(t('team.message.deleteDone'));
       reloadRef.current();
     } catch (error) {
       // 失败保留弹窗与错误，用户可重试或取消。

@@ -91,6 +91,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'breadcrumb.tools': 'Tools',
   'breadcrumb.mcp': 'MCP servers',
   'breadcrumb.channels': 'Channels',
+  'breadcrumb.kanban': 'Kanban',
   'breadcrumb.plugins': 'Plugins',
 
   // Plugin Host (E10)
@@ -726,13 +727,17 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.message.systemTag': 'System',
   'team.message.viewBody': 'View member session',
   'team.message.edit': 'Edit',
+  'team.message.editRecallFailed':
+    'Could not recall the copy in the member inbox; draft not refilled: {detail}',
   'team.message.resend': 'Resend',
-  'team.message.retract': 'Retract',
-  'team.message.retractTitle': 'Retract message',
-  'team.message.retractBody':
-    'This message will be hidden from the Team view; the log keeps a retraction marker and later replies remain. This cannot be undone.',
-  'team.message.retractConfirm': 'Retract',
-  'team.message.retractDone': 'Retracted',
+  // "Delete" (user ruling, formerly "Retract"): hides the view AND deletes the inbox
+  // copies — not a recoverable retraction.
+  'team.message.delete': 'Delete',
+  'team.message.deleteTitle': 'Delete message',
+  'team.message.deleteBody':
+    'This message will be hidden from the Team view and the copies in member inboxes will be deleted (except any already running); the log keeps a deletion marker and later replies remain. This cannot be undone.',
+  'team.message.deleteConfirm': 'Delete',
+  'team.message.deleteDone': 'Deleted',
   'team.federation.from': 'federation from',
   'team.federation.reply': 'Reply by address',
   'team.federation.replyHint':
@@ -744,7 +749,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.system.create': '{name} created a new session',
   // Legacy log only: 0.39 writes `create`, never `fork`.
   'team.system.fork': 'agent forked (legacy record)',
-  'team.system.retract': '{name} retracted a message',
+  // Wire system event stays `retract` (append-only legacy log compatibility); the
+  // display text follows the "delete" semantics.
+  'team.system.retract': '{name} deleted a message',
   'team.system.unknown': 'Team system event',
 
   'team.delivery.queued': 'Queued',
@@ -844,6 +851,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.domain.pluginHost': 'Plugin Host',
   'nav.domain.nodes': 'Nodes',
   'nav.domain.teams': 'Teams',
+  'nav.domain.kanban': 'Kanban',
   'nav.domain.agents': 'Agents',
   'nav.group.network': 'ORCHESTRATION',
   'breadcrumb.hub': 'Hub',
@@ -1008,6 +1016,30 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'This agent is closed · pending removal: it no longer shows in the default list. Direct links keep working until it is pruned.',
   'archive.session.agentClosedHint':
     'Its agent is closed · pending removal; the session is kept and its history stays readable.',
+
+  // Kanban (task board viewer, q-kanban-view)
+  'kanban.subtitle':
+    'Red-blue development task board (docs/dev/kanban/board.json). Read-only; checking a card accepts it and moves it to archive.json.',
+  'kanban.noTokenReason': 'Connect to the gateway to read the board.',
+  'kanban.notFound': 'Board file not found',
+  'kanban.refresh': 'Refresh',
+  'kanban.updated': 'Updated {time}',
+  'kanban.taskCount': '{count} tasks',
+  'kanban.warnings': '{count} normalization warnings (bad tasks skipped; the rest still shown)',
+  'kanban.empty': 'No tasks on the board',
+  'kanban.emptyHint': 'The board is maintained by main; newly dispatched tasks will appear here.',
+  'kanban.emptyColumn': 'Empty',
+  'kanban.uncategorized': 'Uncategorized',
+  'kanban.accept': 'Accept & archive',
+  'kanban.acceptAria': 'Accept task: {title}',
+  'kanban.expandProgress': 'Expand progress',
+  'kanban.collapseProgress': 'Collapse progress',
+  'kanban.confirmTitle': 'Archive task?',
+  'kanban.confirmBody':
+    '"{title}" will be removed from the board and appended to archive.json in the same directory (append-only, history stays readable). Archiving is triggered by your acceptance check, never automatically.',
+  'kanban.confirmAction': 'Accept & archive',
+  'kanban.archived': 'Archived: {title}',
+  'kanban.archiveFailed': 'Archive failed: {message}',
 
   // Teams (cross-node)
   'teams.title': 'Teams',

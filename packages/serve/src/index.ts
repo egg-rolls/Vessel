@@ -163,6 +163,7 @@ export {
   type InteractionSources,
   type ListedInteraction,
 } from './gateway/methods/interactions.js';
+export { createKanbanMethods, type KanbanMethodsDeps } from './gateway/methods/kanban.js';
 export {
   createPermissionsMethods,
   type PermissionsControl,

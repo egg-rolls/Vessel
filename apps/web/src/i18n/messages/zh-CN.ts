@@ -91,6 +91,7 @@ export const messages = {
   'breadcrumb.tools': '工具',
   'breadcrumb.mcp': 'MCP 服务',
   'breadcrumb.channels': '渠道',
+  'breadcrumb.kanban': '看板',
   'breadcrumb.plugins': '插件',
 
   // Plugin Host (E10)
@@ -693,13 +694,15 @@ export const messages = {
   'team.message.systemTag': '系统',
   'team.message.viewBody': '查看成员会话',
   'team.message.edit': '编辑',
+  'team.message.editRecallFailed': '没能撤回成员收件箱里的那份，草稿未回填：{detail}',
   'team.message.resend': '重发',
-  'team.message.retract': '撤回',
-  'team.message.retractTitle': '撤回消息',
-  'team.message.retractBody':
-    '这条消息会从 Team 视图中隐藏；日志保留撤回标记，后续回复不删除。此操作不可撤销。',
-  'team.message.retractConfirm': '撤回',
-  'team.message.retractDone': '已撤回',
+  // 「删除」（用户裁定，原「撤回」）：视图隐藏 + 成员收件箱副本真删，不是可恢复的撤回。
+  'team.message.delete': '删除',
+  'team.message.deleteTitle': '删除消息',
+  'team.message.deleteBody':
+    '这条消息会从 Team 视图中隐藏，成员收件箱里的副本一并删除（已开始执行的除外）；日志保留删除标记，后续回复不删除。此操作不可撤销。',
+  'team.message.deleteConfirm': '删除',
+  'team.message.deleteDone': '已删除',
   'team.federation.from': 'federation 来自',
   'team.federation.reply': '按地址回复',
   'team.federation.replyHint':
@@ -711,7 +714,8 @@ export const messages = {
   'team.system.create': '{name} 创建了新会话',
   // 旧日志只读：0.39 起新写 `create`，不再写 `fork`。
   'team.system.fork': 'agent 已 fork（旧记录）',
-  'team.system.retract': '{name} 撤回了一条消息',
+  // wire 系统事件仍叫 retract（append-only 旧日志兼容）；显示文案按「删除」语义。
+  'team.system.retract': '{name} 删除了一条消息',
   'team.system.unknown': 'Team 系统事件',
 
   'team.delivery.queued': '排队中',
@@ -806,6 +810,7 @@ export const messages = {
   'nav.domain.pluginHost': '插件宿主',
   'nav.domain.nodes': '节点',
   'nav.domain.teams': '团队',
+  'nav.domain.kanban': '看板',
   'nav.domain.agents': '智能体',
   'nav.group.network': '智能体编排',
   'breadcrumb.hub': '面板核心',
@@ -962,6 +967,30 @@ export const messages = {
   'archive.notice.agent':
     '这个 agent 已停用 · 等待被移除：默认列表里不再显示；直接链接仍可随时打开，直到它被清理。',
   'archive.session.agentClosedHint': '所属 agent 已停用 · 等待被移除；会话保留，历史仍可查看。',
+
+  // Kanban（任务看板查看器，q-kanban-view）
+  'kanban.subtitle':
+    '红蓝开发任务看板（docs/dev/kanban/board.json）。只读展示；勾选卡片验收后移入 archive.json 归档。',
+  'kanban.noTokenReason': '连接网关后才能读取看板。',
+  'kanban.notFound': '看板文件不存在',
+  'kanban.refresh': '刷新',
+  'kanban.updated': '更新于 {time}',
+  'kanban.taskCount': '{count} 项任务',
+  'kanban.warnings': '板文件有 {count} 条降级警告（坏任务已跳过，不影响其余展示）',
+  'kanban.empty': '板上暂无任务',
+  'kanban.emptyHint': '看板由 main 维护；新任务派单后会出现在这里。',
+  'kanban.emptyColumn': '空',
+  'kanban.uncategorized': '未分类',
+  'kanban.accept': '验收归档',
+  'kanban.acceptAria': '验收任务：{title}',
+  'kanban.expandProgress': '展开进展',
+  'kanban.collapseProgress': '收起进展',
+  'kanban.confirmTitle': '归档任务？',
+  'kanban.confirmBody':
+    '「{title}」将从看板移除，并追加到同目录 archive.json（append-only，历史可查）。归档由你的验收勾选触发，不会自动发生。',
+  'kanban.confirmAction': '验收并归档',
+  'kanban.archived': '已归档：{title}',
+  'kanban.archiveFailed': '归档失败：{message}',
 
   // Teams（跨节点）
   'teams.title': '团队',

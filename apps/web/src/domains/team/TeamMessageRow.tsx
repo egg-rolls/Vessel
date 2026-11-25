@@ -100,7 +100,7 @@ function DeliveryNotes({ deliveries }: { deliveries: readonly TeamDelivery[] }) 
 
 function SystemNotice({ message, senderLabel }: { message: TeamMessage; senderLabel?: string }) {
   const key = message.system_event ? SYSTEM_KEYS[message.system_event] : undefined;
-  // 撤回 tombstone 的 `from` 固定为 human（`to` / `mentions` 为空），显示“我/你”。
+  // 删除 tombstone（wire 仍叫 retract）的 `from` 固定为 human（`to` / `mentions` 为空），显示“我/你”。
   const rawName = senderLabel ?? message.from;
   const name = rawName === 'human' ? t('team.message.you') : rawName;
   const text = key ? t(key, { name }) : message.content || t('team.system.unknown');
@@ -184,7 +184,7 @@ export function TeamMessageRow({
         ? ' opacity-70'
         : '';
 
-  // 已落盘的人类消息才有 edit / resend / retract；本地 failed 只保留 retry。
+  // 已落盘的人类消息才有 edit / resend / delete；本地 failed 只保留 retry。
   const persisted = message.sendStatus === undefined || message.sendStatus === 'sent';
   const hasContent = message.content.trim().length > 0;
 
@@ -201,7 +201,9 @@ export function TeamMessageRow({
       actions.push({ id: 'resend', label: t('team.message.resend'), onSelect: onResend });
     }
     if (onRetract) {
-      actions.push({ id: 'retract', label: t('team.message.retract'), onSelect: onRetract });
+      // 「删除」（用户裁定，原「撤回」）：trash icon + 删除文案。底层 teams.retract
+      // 在 tombstone 之外级联真删成员 inbox 里的那一份 —— 语义是删除，不是撤回可恢复。
+      actions.push({ id: 'delete', label: t('team.message.delete'), onSelect: onRetract });
     }
   }
   if ((isReply || isAgent) && canViewSession && onViewSession) {
