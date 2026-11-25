@@ -4743,7 +4743,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         await raceShutdownTimeout(
           emit,
           'gateway.server.stop',
-          server.stop(true),
+          () => server.stop(true),
           SERVER_STOP_TIMEOUT_MS,
         );
       } catch (error) {
