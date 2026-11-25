@@ -64,10 +64,10 @@
     {
       "id": "q-swr-refresh",
       "title": "数据刷新stale-while-revalidate规范（保留旧数据后台刷新无缝替换）",
-      "column": "进行中",
-      "owner": "q-swr-refresh",
-      "branch": "feat/q-swr-refresh",
-      "progress": "e2b4b280派单(用户裁定)：usage刷新去整页loading闪烁→SWR(保留旧数据+15s后台refetch+就绪swap+首次才loading)+共享hook+文档化规范；kanban if_mtime先例"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并07231261(b32ea3fc调研/572455e6 plugin-ui useStaleWhileRevalidate共享hook213行/75114a48 usage+logs接入15s轮询保留旧数据原子swap/9efe9bff data-refresh-swr.md规范)build绿+产物幂等；usage/logs去整页闪烁,失败保留旧数据stale提示,仅首次/新查询loading；待金丝雀验+用户重启"
     },
     {
       "id": "q-plugin-ui-layer",
