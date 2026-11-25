@@ -64,10 +64,10 @@
     {
       "id": "q-hire-prompt",
       "title": "hire/create加可选startup_prompt：招即派任务一步到位（用户裁定）",
-      "column": "进行中",
-      "owner": "q-hire-prompt",
-      "branch": "feat/q-hire-prompt",
-      "progress": "ca83a301派单：hire/create+startup_prompt可选字段,创建时投递首条user message触发首轮run,与rotate对齐,CLI --startup-prompt,向后兼容omit=idle；①调研②handler③schema+CLI④build"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并0e2ae4cf(a248bae3设计/92533d57 service/2ada9458 wire+CLI/aed646d9+c5b13b12 lint/0dca31cb门禁)14文件+348 build绿；admitInternal startup直投+复用拒绝+seeded同口径+gateway六分支透传；待验(hire+startup即首轮run/omit不变/复用拒绝/CLI file)；worktree已清。★本轮13单全合并"
     },
     {
       "id": "q-msg-visibility",
