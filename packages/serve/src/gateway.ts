@@ -186,6 +186,7 @@ import {
   type RpcResponse,
 } from './rpc.js';
 import type { LiveRunSnapshotLike, RunControlLike, RunControlSnapshotLike } from './run-control.js';
+import { raceShutdownTimeout, runShutdownStep, type ShutdownStepEmit } from './shutdown-step.js';
 import type { TeamControlLike } from './team-control.js';
 import {
   type ConfigGatewayOptionsLike,
@@ -928,6 +929,13 @@ function noteGlobalReplayDenied(since: number, candidates: number): void {
 const DEFAULT_PORT = 8642;
 const DEFAULT_HOSTNAME = '127.0.0.1';
 const DEFAULT_MAX_BODY = 1024 * 1024;
+
+/**
+ * DR15-1：`server.stop(true)` 的有界等待预算。Bun 1.3.9 的 stop promise 等活跃连接
+ * 关完才 resolve（平台 0.58 先例实证），残余连接能把它永久挂死。正常关连接是毫秒级，
+ * 5s 已极宽裕；到点 best-effort 推进退出链（listener 已闭，残余随 process.exit 终止）。
+ */
+const SERVER_STOP_TIMEOUT_MS = 5_000;
 
 const BASE_FEATURES = [
   'events.replay',
@@ -4687,39 +4695,57 @@ export function startGateway(opts: GatewayOptions): Gateway {
   async function shutdown(): Promise<void> {
     if (heartbeat !== undefined) clearInterval(heartbeat);
 
+    // DR15-1：退出步永久进度日志（挂起时最后一条 start 即挂点；复验可实证哪步慢）。
+    const emit: ShutdownStepEmit = (level, event, fields) => logEvent(level, event, fields);
+
     // 0.27：执行生命周期归 app / AgentService —— gateway 只退订、关连接。
     // 这里不再清队列、不中断 active run、不等终态。
-    try {
-      unsubscribe();
-    } catch (error) {
-      reportStopError('unsubscribe events', error);
-    }
-    try {
-      unsubscribeTimelineTail?.();
-    } catch (error) {
-      reportStopError('unsubscribe timeline tail', error);
-    }
-    try {
-      // 0.55：退订后把窗口里剩的**发出去**再关连接（发不出去也无所谓：记录已在盘上，
-      // 客户端带游标重连就能拉到）。这一步必须早于 `closeWsClients`，否则每一帧都会
-      // 撞上「连接已关」。
-      flushTimelineTail('stop');
-    } catch (error) {
-      reportStopError('flush timeline tail', error);
-    }
-    try {
-      unsubscribeInteractions();
-    } catch (error) {
-      reportStopError('unsubscribe interactions', error);
-    }
+    await runShutdownStep(emit, 'gateway.unsubscribe_flush', async () => {
+      try {
+        unsubscribe();
+      } catch (error) {
+        reportStopError('unsubscribe events', error);
+      }
+      try {
+        unsubscribeTimelineTail?.();
+      } catch (error) {
+        reportStopError('unsubscribe timeline tail', error);
+      }
+      try {
+        // 0.55：退订后把窗口里剩的**发出去**再关连接（发不出去也无所谓：记录已在盘上，
+        // 客户端带游标重连就能拉到）。这一步必须早于 `closeWsClients`，否则每一帧都会
+        // 撞上「连接已关」。
+        flushTimelineTail('stop');
+      } catch (error) {
+        reportStopError('flush timeline tail', error);
+      }
+      try {
+        unsubscribeInteractions();
+      } catch (error) {
+        reportStopError('unsubscribe interactions', error);
+      }
+    });
 
-    closeWsClients();
-    closePluginWsClients();
-    closeSseClients(sseClients);
+    await runShutdownStep(emit, 'gateway.close_clients', async () => {
+      closeWsClients();
+      closePluginWsClients();
+      closeSseClients(sseClients);
+    });
 
     if (server) {
       try {
-        await server.stop(true);
+        // DR15-1 挂点修复：Bun 1.3.9 的 server.stop(true) 会等「活跃连接」关完才
+        // resolve（平台侧 0.58 先例实证：长连接不关就等不完）——残余 SSE/半闭 WS/
+        // keep-alive HTTP 任何一条都能把退出链永久挂死（ISSUE-DR15-1：drain 成功 +
+        // 监听已闭后进程不自死）。listener 在 stop() 发起时已关，quiesce 已由
+        // beginDrain 保证，这里只是关连接：有界等待，到点 best-effort 推进后续
+        // 退出步，残余连接随 process.exit 一起终止。
+        await raceShutdownTimeout(
+          emit,
+          'gateway.server.stop',
+          server.stop(true),
+          SERVER_STOP_TIMEOUT_MS,
+        );
       } catch (error) {
         reportStopError('stop http server', error);
       }

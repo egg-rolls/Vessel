@@ -10,6 +10,45 @@
 > 版本 = 代码契约身份，不绑发版节奏。major=2（单一真相源架构 breaking）。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
+## [2.1.0] - 2026-11-25
+
+> 第四轮批次晋升（红蓝金丝雀验收 14–22 全闭环，ISSUE-CR22-1 / ISSUE-SS2-1 CLOSED）。
+> feature→minor（RELEASE §1）：看板 / 优雅自重启 / 插件生命周期 / 思考强度 / SWR / 拖拽引用等新功能。
+> 含第五轮四面（thinking-plugin / swr-refresh / context-fix / plugin-lifecycle-impl）搭晋升，金丝雀批次 B 验收候启动。
+
+### 新增
+
+- **任务看板**（q-kanban-view / q-kanban-proxy）：`kanban.get` / `kanban.archive` RPC + KanbanView 三列 + 勾选验收归档（用户裁定：绝不自动归档）+ `#/kanban` 导航 + proxy 白名单 / `board_path` config.set 热应用。
+- **优雅停止 / 自重启**（q-graceful-stop / q-graceful-selfrestart）：stop / restart 缺省 drain-to-quiesce（不限时等活跃 run 自然跑完 + 5s 进度；`--force` 唯一非优雅 + `stop.forced` 审计）；`vessel restart --self` Option A（早返回 + detached 编排者 + continuation 自动续作）；inbox 启动唤醒 G1–G7；`vessel ps` docker 式进程清单 + `gateway start` 即退。
+- **插件生命周期**（q-plugin-lifecycle-impl）：per-capability lifecycle 声明 + O5 三层诚实 badge + 注销 API 消 pii 半态 + 内置版本跟踪 vessel + child settings 热应用。
+- **思考强度插件**（q-thinking-plugin）：热配置 + 工具栏菜单 + 设置 UI。
+- **SWR 刷新**（q-swr-refresh）：stale-while-revalidate 共享 hook + usage 去闪烁 + 规范文档。
+- **拖拽引用**（q-drag-reference）：会话卡拖拽引用 chip + 渐进披露 + 可读引用块发送。
+- **inbox 操作**（q-inbox-actions）：编辑级联消费 inbox 副本（team_message_id + recall_delivery）+ 撤回改删除 trash icon 级联真删。
+- **bash 工具**（q-bash-timeout）：async 缺省不限时 + kill_on_timeout=false + 并发 16。
+- **配置责任链**（q-config-priority）：webDist 配置 + 显式 config > env 责任链。
+
+### 修复
+
+- **卡片健壮性**（q-card-robust）：permission 同构 P-A（agent 可见 = 人类可见）+ PII 按需载体 + env 闸门分级纠正 + fail-open + expired 收口。
+- **hydration-anon**（ISSUE-CR22-1）：hydration token 闸门全对齐 canConnect——匿名回环 / 代理 cookie 无 token 连接刷新重建审批卡。
+- **上下文口径**（q-context-fix）：写侧兜底应用冻结占位消通知虚高 170K + 切片修正 + rotate 文案澄清。
+- **plugin-ui-layer**（ISSUE-SS2-1）：button 重置归 `@layer base` 修 iframe 表面压制 + 四插件重建。
+- **plugin-version**：内置插件恒兼容去版本门禁（5 manifest engines 删除，第三方保护保留）。
+- **skills-style**：摘 GHOST 整页误套 + 卡片 / 弹窗对齐 ToolsPanel / ModalShell 共享表面。
+- **empty-state**：错误 / 重试卡居中空态（States.tsx 一处改全局 ~30 处）。
+- **DR15-1 优雅退出挂起**（q-dr15-exit）：`server.stop(true)` Bun 1.3.9/Windows 残余活跃连接无界等待 → 5s 有界 race + best-effort 推进（平台同款）+ 永久 `node.shutdown.step` 步骤日志；等死段 30s 有界 force 兜底 + `stop.forced` 审计持久化（reason=quiesce_exit_timeout，补 O7）；候 run 段不限时（裁定 #5）不动。
+
+### 变更
+
+- 内置插件不再受 `engines.vessel` 版本门禁限制（恒兼容）；第三方插件保护不变。
+- stop / restart 语义：缺省不限时优雅 drain（用户裁定 #5）；`--force` 唯一非优雅退出 + 审计。
+
+### 已知问题（第五轮处置）
+
+- ISSUE-DR15-1：graceful stop drain 后进程自死挂起 —— **修复已合并（03f13c06），候金丝雀 cli 复验闭环**（server.stop 有界化 + 等死段兜底 + 审计持久化）。
+- plugin_manifest_invalid thinking-intensity（i18n key defaultLevel 大写 L 违模式，批次 B 登记）。
+
 ## [2.0.0] - 2026-11-25
 
 > 标准 SemVer 新纪元。major=2：多文件→单一真相源架构 breaking（前会话）。

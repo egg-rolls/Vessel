@@ -71,7 +71,11 @@ import {
   type TraceRedactor,
 } from '../../packages/core/src/index';
 import { TimelineEventLog } from '../../packages/core/src/timeline/read-port';
-import type { PluginHostManager } from '../../packages/serve/src/index';
+import {
+  type PluginHostManager,
+  runShutdownStep,
+  type ShutdownStepEmit,
+} from '../../packages/serve/src/index';
 import { ownerSelfCard } from '../agent/self-card';
 import type { FeishuChannelLike, MetricsControlLike } from '../cli/control-plane-types';
 import { emptyResponsePolicyOf } from '../config/empty-response-settings';
@@ -1561,6 +1565,12 @@ export async function buildTenantRuntime(
     if (closed) return;
     closed = true;
 
+    // DR15-1：退出步永久进度日志（挂起时最后一条 start 即挂点；复验实证哪步慢）。
+    const emit: ShutdownStepEmit = (level, event, fields) => {
+      if (level === 'warn') logger.warn(event, fields);
+      else logger.info(event, fields);
+    };
+
     // 先中断 / 等待在跑 run，再进入关闭顺序。
     // serve 路径已由 gateway.stop() 完成 drain，调用方传 drain:false 避免二次 5s。
     if (closeOptions.drain !== false) await drain();
@@ -1571,13 +1581,16 @@ export async function buildTenantRuntime(
     // `ExecutionUnit.dispose()` 触达不到；它的 dispose() 只是 close() 的
     // 幂等别名（ext 0.9），因此这里保留显式 close —— 不要为接 dispose
     // 而改安装顺序（DECISION-019 A）。
-    await stopFeishuChannel(feishuChannel, (error) => report('feishu.stop', error));
+    await runShutdownStep(emit, 'bundle.feishu.stop', () =>
+      stopFeishuChannel(feishuChannel, (error) => report('feishu.stop', error)),
+    );
 
     disposeMetrics(metrics);
 
-    if (mcpPlugin) {
+    const mcp = mcpPlugin;
+    if (mcp) {
       try {
-        await mcpPlugin.close();
+        await runShutdownStep(emit, 'bundle.mcp.close', () => mcp.close());
       } catch (error) {
         report('mcp.close', error);
       }
@@ -1585,41 +1598,47 @@ export async function buildTenantRuntime(
 
     // Stage 4：per-session EU 由 Runtime 目录持有；逐个 retire（dispose + 移出目录）。
     // retire 幂等；单条失败不阻断其余条目与后续关闭步骤。
-    for (const sessionId of servedSessionIds) {
-      try {
-        await options.runtime.retireExecutionUnit({ tenantId, sessionId });
-      } catch (error) {
-        report('runtime.retire', error);
+    await runShutdownStep(emit, 'bundle.runtime.retire', async () => {
+      for (const sessionId of servedSessionIds) {
+        try {
+          await options.runtime.retireExecutionUnit({ tenantId, sessionId });
+        } catch (error) {
+          report('runtime.retire', error);
+        }
       }
-    }
-    servedSessionIds.clear();
+      servedSessionIds.clear();
+    });
 
     // 插件在 EU 之外安装（tenant host 共享），随 bundle 关闭一起 dispose。
     try {
-      await installedPlugins.dispose();
+      await runShutdownStep(emit, 'bundle.plugin.dispose', () => installedPlugins.dispose());
     } catch (error) {
       report('runtime.plugin.dispose', error);
     }
 
     if (trace) {
-      try {
-        await trace.flush();
-      } catch (error) {
-        report('trace.flush', error);
-      }
-      try {
-        await trace.close();
-      } catch (error) {
-        report('trace.close', error);
-      }
+      await runShutdownStep(emit, 'bundle.trace.close', async () => {
+        try {
+          await trace.flush();
+        } catch (error) {
+          report('trace.flush', error);
+        }
+        try {
+          await trace.close();
+        } catch (error) {
+          report('trace.close', error);
+        }
+      });
     }
 
-    await closeRunRecordStore(runStore, (error) => report('runStore.close', error));
+    await runShutdownStep(emit, 'bundle.runStore.close', () =>
+      closeRunRecordStore(runStore, (error) => report('runStore.close', error)),
+    );
 
     if (timelineDualWrite !== undefined) {
       // 尽力而为：`closeAll` 自带 300ms 上限，关不掉也不拖住退出（数据在旧链路里）。
       try {
-        await timelineDualWrite.closeAll();
+        await runShutdownStep(emit, 'bundle.timeline.close', () => timelineDualWrite.closeAll());
       } catch (error) {
         report('timelineDualWrite.close', error);
       }
@@ -1628,7 +1647,9 @@ export async function buildTenantRuntime(
     if (eventLog) {
       try {
         // 时间线写者有自己的关闭路径（`closeAll`，带 300ms 上限）；这个端口没有额外句柄。
-        await eventLog.flush?.();
+        await runShutdownStep(emit, 'bundle.eventLog.flush', async () => {
+          await eventLog.flush?.();
+        });
       } catch (error) {
         report('eventLog.flush', error);
       }

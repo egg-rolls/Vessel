@@ -16,9 +16,19 @@
  * @module vessel/stop-drain
  */
 
+import { appendFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { createHttpRpcClient } from '../rpc/http-client';
 import { type GatewayPidRecord, isProcessAlive } from './pid';
 import { gatewayBaseUrl } from './reload';
+
+/**
+ * DR15-1：等死段有界兜底预算（quiesce 之后等进程自死）。
+ * scope A 修复后正常退出链 <1-2s；病态但有界的清理最坏 ~15-20s（child terminate
+ * 并行 ≤8s + server.stop 5s + flush），30s 留足裕量防误杀。quiesce 后已无 live run，
+ * 兜底强杀 runs_cut 恒 0 —— 代价只是等待时长，不是切断工作。
+ */
+export const POST_QUIESCE_EXIT_TIMEOUT_MS = 30_000;
 
 /** drain 进度 / force 审计里的一条在跑 run（不含 token）。 */
 export interface DrainRun {
@@ -46,6 +56,22 @@ export interface WaitForProcessExitOptions {
    * 到点返回 `{ dead:false, timedOut:true }`，调用方如实报告，不自动强杀。
    */
   timeoutMs?: number;
+  /**
+   * DR15-1：等死段有界兜底（毫秒，缺省 undefined = 不启用，兼容旧调用）。
+   *
+   * 红线（用户裁定 #5）：**候 run 段不限时语义不动** —— 采样到 live run > 0 时
+   * 时钟重置，继续不限时等 run 自然跑完。本预算只约束「quiesce 之后等进程自死」
+   * 这一段：node 退出序列硬顺序 beginDrain → gateway.stop，quiesce 后进程应秒退；
+   * 退出链挂死（ISSUE-DR15-1）时不该让停止方无限干等。
+   *
+   * quiesce 证据（停止方读不到 node 的 drain.done，用采样推断）：
+   * - 采样成功且 live run = 0（fence 已关闸，live 集合只减不增）；
+   * - 采样失败（快照不可用）：本地 stop 回环连接失败 = 监听已闭，而监听只在
+   *   beginDrain 完成**之后**才关（gateway.stop）⇒ drain 必已完成。
+   * 证据持续满本预算进程仍活 → 返回 `quiesceTimedOut:true`，调用方 force-kill
+   * 兜底 + stop.forced 审计（此时已无 live run，runs_cut 恒 0）。
+   */
+  postQuiesceTimeoutMs?: number;
   /** 进度回调（缺省不渲染）；约每 progressIntervalMs 触发一次。 */
   onProgress?: (info: DrainProgressInfo) => void;
   /** live run 采样器（调用方用 nodeRunSampler 接线）；缺省 = 无进度数据。 */
@@ -66,24 +92,35 @@ function sleepDefault(ms: number): Promise<void> {
  * 缺省不限时；显式 timeoutMs 到点返回 timedOut（不强杀）。等待期间按
  * progressIntervalMs 采样 live run 并回调 onProgress（采样失败标注不可用）。
  * 进程死亡立即返回 `{ dead:true }`。
+ *
+ * DR15-1：启用 postQuiesceTimeoutMs 后，quiesce 证据（0 live run / 快照不可用）
+ * 持续满预算进程仍活 → 返回 quiesceTimedOut（调用方 force 兜底 + 审计）；
+ * 采样到 live run > 0 重置时钟 —— 候 run 段不限时红线不动。
  */
 export async function waitForProcessExit(
   pid: number,
   options: WaitForProcessExitOptions = {},
-): Promise<{ dead: boolean; timedOut: boolean }> {
+): Promise<{ dead: boolean; timedOut: boolean; quiesceTimedOut: boolean }> {
   const sleep = options.sleep ?? sleepDefault;
   const now = options.now ?? Date.now;
   const pollMs = options.pollMs ?? 100;
   const interval = options.progressIntervalMs ?? 5_000;
   const start = now();
   const deadline = options.timeoutMs !== undefined ? start + options.timeoutMs : undefined;
+  const postQuiesceMs = options.postQuiesceTimeoutMs;
   let nextProgressAt = start + interval;
+  /** quiesce 证据首次出现时刻；live run > 0 时重置（候 run 段不限时）。 */
+  let quiesceSince: number | undefined;
 
   for (;;) {
-    if (!isProcessAlive(pid)) return { dead: true, timedOut: false };
+    if (!isProcessAlive(pid)) return { dead: true, timedOut: false, quiesceTimedOut: false };
     const at = now();
-    if (deadline !== undefined && at >= deadline) return { dead: false, timedOut: true };
-    if (options.onProgress !== undefined && at >= nextProgressAt) {
+    if (deadline !== undefined && at >= deadline) {
+      return { dead: false, timedOut: true, quiesceTimedOut: false };
+    }
+    // 有界兜底启用时采样不依赖 onProgress（supervisor.stop 无进度回调也要能判定 quiesce）。
+    const wantSample = options.onProgress !== undefined || postQuiesceMs !== undefined;
+    if (wantSample && at >= nextProgressAt) {
       nextProgressAt = at + interval;
       let runs: DrainRun[] = [];
       let unavailable = false;
@@ -96,10 +133,24 @@ export async function waitForProcessExit(
       } else {
         unavailable = true;
       }
-      try {
-        options.onProgress({ waitedMs: at - start, runs, snapshotUnavailable: unavailable });
-      } catch {
-        // 进度渲染异常不影响等待。
+      if (postQuiesceMs !== undefined) {
+        if (!unavailable && runs.length > 0) {
+          // 候 run 段：还有活就重置时钟，继续不限时等（用户裁定 #5 红线）。
+          quiesceSince = undefined;
+        } else {
+          // quiesce 证据：0 live run，或快照不可用（监听闭 ⟹ drain 毕，见选项注释）。
+          quiesceSince ??= at;
+          if (at - quiesceSince >= postQuiesceMs) {
+            return { dead: false, timedOut: false, quiesceTimedOut: true };
+          }
+        }
+      }
+      if (options.onProgress !== undefined) {
+        try {
+          options.onProgress({ waitedMs: at - start, runs, snapshotUnavailable: unavailable });
+        } catch {
+          // 进度渲染异常不影响等待。
+        }
       }
     }
     await sleep(pollMs);
@@ -172,4 +223,22 @@ export function formatWaited(ms: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return minutes > 0 ? `${minutes}m${String(seconds).padStart(2, '0')}s` : `${seconds}s`;
+}
+
+/**
+ * DR15-1/O7：停止方代打的审计持久化到目标实例日志文件（best-effort）。
+ *
+ * 为什么需要：停止方是独立短命 CLI 进程，它的 stdout/stderr 不进 node/gateway
+ * 日志文件 —— stop.forced 审计只打终端会随终端丢失（O7 盲点）。这里把结构化
+ * 审计行追加进目标自己的日志（与进程内日志同文件，事后可按时间线对账）。
+ * 日志路径由调用方给：platform / 独立 node daemon → gatewayLogPath(dataDir, instance)；
+ * 平台托管 node 子进程 → nodeLogPath(gatewayDataDir, name)。失败绝不阻断停止。
+ */
+export async function persistStopAuditLine(logPath: string, line: string): Promise<void> {
+  try {
+    await mkdir(dirname(logPath), { recursive: true, mode: 0o700 });
+    await appendFile(logPath, line.endsWith('\n') ? line : `${line}\n`, { mode: 0o600 });
+  } catch {
+    // best-effort：审计持久化失败不阻断停止。
+  }
 }

@@ -24,6 +24,8 @@ import {
   resolveRequestEdge,
 } from '../gateway/auth.js';
 import { serveStatic } from '../gateway/static.js';
+import { logEvent } from '../log-event.js';
+import { raceShutdownTimeout, runShutdownStep, type ShutdownStepEmit } from '../shutdown-step.js';
 import { platformTokenMatches, platformUnauthorizedMessage, resolvePlatformAuth } from './auth.js';
 import { platformListenGuard } from './listen-guard.js';
 import { createPlatformMetrics } from './metrics.js';
@@ -1073,6 +1075,8 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
     // Bun 对 unix socket 返回 undefined；平台只走 TCP，回退到请求端口。
     port: server.port ?? opts.port,
     async stop(): Promise<void> {
+      // DR15-1：退出步永久进度日志（与 node 侧同一事件名 node.shutdown.step）。
+      const emit: ShutdownStepEmit = (level, event, fields) => logEvent(level, event, fields);
       // 先断开 SSE 长连接：`server.stop(true)` 会等活跃连接，长连接不关就等不完。
       buildEvents.close();
       // 0.58：代理 WS 同理 —— 不让一条事件流把停服卡死；关闭时按 `who: 'platform'` 记账。
@@ -1080,8 +1084,11 @@ export function startPlatformGateway(opts: PlatformGatewayOptions): PlatformGate
       clearInterval(authCleanupTimer);
       // 0.61：自查定时器跟着平台一起停（网关停了不该还在跑 tsc）。
       if (webBuildCheckTimer !== undefined) clearInterval(webBuildCheckTimer);
-      await authService.flush();
-      await server.stop(true);
+      await runShutdownStep(emit, 'platform.auth.flush', () => authService.flush());
+      // DR15-1：与 node gateway 同款有界化（同根因类：Bun 1.3.9 stop promise 被残余
+      // 活跃连接挂住永不 settle）。上面先关长连接是 0.58 的既有缓解，这里是纵深防御：
+      // 到点 best-effort 推进，平台退出链（lock.release → process.exit）不被挂死。
+      await raceShutdownTimeout(emit, 'platform.server.stop', server.stop(true), 5_000);
     },
   };
 }

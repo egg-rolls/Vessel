@@ -33,6 +33,8 @@ import {
 import {
   formatEventLine,
   platformListenGuard,
+  runShutdownStep,
+  type ShutdownStepEmit,
   startPlatformGateway,
 } from '../../../../packages/serve/src/index';
 import { formatConfigErrors } from '../../../config/config-error-format';
@@ -66,6 +68,7 @@ import {
   type HubSupervisorBeginResult,
   type LocalNodeSpec,
   NodeSupervisor,
+  nodeLogPath,
   type StoppedChildDetail,
   type SupervisedNodeInfo,
   stopSpawnedChildren,
@@ -110,6 +113,8 @@ import {
   type DrainRun,
   formatWaited,
   nodeRunSampler,
+  POST_QUIESCE_EXIT_TIMEOUT_MS,
+  persistStopAuditLine,
   snapshotActiveRuns,
   waitForProcessExit,
 } from '../../../gateway/stop-drain';
@@ -248,7 +253,32 @@ export function formatDrainProgressLine(label: string, info: DrainProgressInfo):
  * 人类汇总「非正常退出：N 个 run 被切断」（i18n en/zh-CN 同步）。快照不可用如实标注。
  */
 function formatForcedStopLine(info: ForcedStopInfo): string {
-  return formatForcedAuditLine(info.kind, info.name, info.pid, info.runs, info.snapshotUnavailable);
+  return formatForcedAuditLine(
+    info.kind,
+    info.name,
+    info.pid,
+    info.runs,
+    info.snapshotUnavailable,
+    info.reason,
+  );
+}
+
+/**
+ * DR15-1/O7：node 子进程强杀审计持久化到其日志（node-<name>.log）。
+ * 停止方 stdout 不进子进程日志 —— 不写盘审计就随终端丢失（O7 盲点）。
+ */
+function persistChildForcedAudit(dataDir: string, info: ForcedStopInfo): Promise<void> {
+  return persistStopAuditLine(
+    nodeLogPath(dataDir, info.name),
+    formatForcedAuditEvent(
+      info.kind,
+      info.name,
+      info.pid,
+      info.runs,
+      info.snapshotUnavailable,
+      info.reason,
+    ),
+  );
 }
 
 /** 通用 force 审计行（component = node/hub/platform；entry 与子进程共用）。 */
@@ -258,9 +288,32 @@ export function formatForcedAuditLine(
   pid: number,
   runs: DrainRun[],
   snapshotUnavailable: boolean,
+  reason?: string,
+): string {
+  const audit = formatForcedAuditEvent(component, name, pid, runs, snapshotUnavailable, reason);
+  const summary = t('stop.forced.summary', {
+    name,
+    count: runs.length,
+    note: snapshotUnavailable ? ` (${t('stop.drain.snapshotUnavailable')})` : '',
+  });
+  return `${audit}\n  ${summary}`;
+}
+
+/**
+ * DR15-1/O7：stop.forced 的**单行结构化事件**（审计持久化用，与人类汇总分离）。
+ * reason 缺省 = 显式 --force；quiesce_exit_timeout = drain 已完成但退出链挂死、
+ * 停止方有界兜底强杀（ISSUE-DR15-1）。
+ */
+export function formatForcedAuditEvent(
+  component: string,
+  name: string,
+  pid: number,
+  runs: DrainRun[],
+  snapshotUnavailable: boolean,
+  reason?: string,
 ): string {
   const sessions = [...new Set(runs.map((run) => run.session_id).filter((id) => id !== ''))];
-  const audit = formatEventLine('stop.forced', {
+  return formatEventLine('stop.forced', {
     component,
     name,
     pid,
@@ -269,14 +322,9 @@ export function formatForcedAuditLine(
     sessions: sessions.join(','),
     runs: runs.map((run) => run.run_id).join(','),
     signal: 'SIGKILL',
+    ...(reason !== undefined ? { reason } : {}),
     ...(snapshotUnavailable ? { snapshot_unavailable: true } : {}),
   });
-  const summary = t('stop.forced.summary', {
-    name,
-    count: runs.length,
-    note: snapshotUnavailable ? ` (${t('stop.drain.snapshotUnavailable')})` : '',
-  });
-  return `${audit}\n  ${summary}`;
 }
 
 function errorMessage(error: unknown): string {
@@ -1063,7 +1111,11 @@ export async function stopGateway(
             ),
           ),
         // 用户裁定 #5：force 非正常退出审计（停止方代打 stop.forced）。
-        onForced: (info) => printErr(ui.warn(formatForcedStopLine(info))),
+        // DR15-1/O7：同时持久化到 node 子进程日志（best-effort，不阻断停止）。
+        onForced: (info) => {
+          printErr(ui.warn(formatForcedStopLine(info)));
+          void persistChildForcedAudit(context.dataDir, info);
+        },
         // 用户裁定 #5：优雅 drain 进度（5s 一行，哪些 run/session 还在跑）。
         onProgress: (name, info) => print(ui.info(formatDrainProgressLine(`node ${name}`, info))),
       });
@@ -1212,6 +1264,13 @@ export async function stopGateway(
         printErr(
           ui.warn(formatForcedAuditLine(stateKind, entry.instance, pid, runs, snapshotUnavailable)),
         );
+        // DR15-1/O7：审计持久化到目标实例日志（停止方 stdout 不进 node/gateway log）。
+        if (entry.record !== undefined) {
+          await persistStopAuditLine(
+            gatewayLogPath(context.dataDir, entry.instance),
+            formatForcedAuditEvent(stateKind, entry.instance, pid, runs, snapshotUnavailable),
+          );
+        }
         terminateProcess(pid, context.platform, true);
       } else {
         // 优雅（默认）：进程内 drain + 不限时等死 + 5s 进度（用户裁定 #5 / §5.3）。
@@ -1252,15 +1311,65 @@ export async function stopGateway(
           }
           if (graceful.ok) {
             // 默认不限时等死（K5：等待预算在停止方）；显式 --timeout 才是可选上限。
+            // DR15-1：等死段有界兜底 —— quiesce（0 live run / 快照不可用）后进程
+            // 应秒退；退出链挂死时 30s 到点返回 quiesceTimedOut → force + 审计。
+            // 候 run 段（live > 0）重置时钟，不限时语义不动（用户裁定 #5 红线）。
             const wait = await waitForProcessExit(pid, {
               sleep,
               ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+              postQuiesceTimeoutMs: POST_QUIESCE_EXIT_TIMEOUT_MS,
               onProgress: (info) =>
                 print(ui.info(formatDrainProgressLine(`${stateKind} ${entry.instance}`, info))),
               sampleRuns: nodeRunSampler(record, samplerToken, samplerTls),
             });
             drained = wait.dead;
             gracefulTimedOut = wait.timedOut;
+            if (wait.quiesceTimedOut) {
+              // DR15-1：drain 已完成（quiesce 证据）但进程未自死 → 有界兜底强杀。
+              // 此时监听已闭，快照 best-effort（不可用如实标注；quiesce 后 runs_cut 恒 0）。
+              let runs: DrainRun[] = [];
+              let snapshotUnavailable = false;
+              try {
+                runs = await snapshotActiveRuns(record, samplerToken, samplerTls);
+              } catch {
+                snapshotUnavailable = true;
+              }
+              printErr(
+                ui.warn(
+                  t('stop.quiesceExitTimeout', {
+                    pid,
+                    timeout: `${POST_QUIESCE_EXIT_TIMEOUT_MS}ms`,
+                  }),
+                ),
+              );
+              printErr(
+                ui.warn(
+                  formatForcedAuditLine(
+                    stateKind,
+                    entry.instance,
+                    pid,
+                    runs,
+                    snapshotUnavailable,
+                    'quiesce_exit_timeout',
+                  ),
+                ),
+              );
+              // O7：审计持久化到目标实例日志（停止方 stdout 不进 node/gateway log）。
+              await persistStopAuditLine(
+                gatewayLogPath(context.dataDir, entry.instance),
+                formatForcedAuditEvent(
+                  stateKind,
+                  entry.instance,
+                  pid,
+                  runs,
+                  snapshotUnavailable,
+                  'quiesce_exit_timeout',
+                ),
+              );
+              terminateProcess(pid, context.platform, true);
+              // 进入既有 kill-confirm + 条件清理（与 force 分支同口径）。
+              drained = true;
+            }
           }
         }
         if (gracefulTimedOut) {
@@ -3163,6 +3272,12 @@ export async function runPlatformGatewayForeground(
             }),
           ),
         ),
+      // DR15-1：quiesce 兜底强杀（drain 完成但退出链挂死）→ 代打 stop.forced 审计
+      // （reason=quiesce_exit_timeout）+ 持久化到 node 子进程日志（O7）。
+      onForced: (info) => {
+        printErr(ui.warn(formatForcedStopLine(info)));
+        void persistChildForcedAudit(dataDir, info);
+      },
     });
     const specs: LocalNodeSpec[] = nodes.map((node) => ({
       nodeId: node.entry.node_id,
@@ -3319,6 +3434,13 @@ export async function runPlatformGatewayForeground(
     // 这个闭包，不另造退出路径（node 先例 cli.ts：「走与 SIGTERM 完全相同的 activeCleanup」）。
     // 停止方（stopGateway 优雅步）经 RPC 触发它，让平台进程内跑到 owned 池 stop 再退，
     // 关闭 Windows owned engine 孤儿缺口；keep 语义零变化（handoff marker 单一权威）。
+    // DR15-1：平台退出步永久进度日志（与 node 侧同一事件名 node.shutdown.step；
+    // 平台无结构化 logger，走 formatEventLine + print，daemon 下进 logs/gateway.log）。
+    const platformShutdownEmit: ShutdownStepEmit = (level, event, fields) => {
+      const line = formatEventLine(event, fields);
+      if (level === 'warn') printErr(ui.warn(line));
+      else print(ui.dim(line));
+    };
     const performPlatformShutdown = async (): Promise<void> => {
       // 构建中被叫停（`gateway stop` / Ctrl-C / 外部 SIGTERM）：**真的**杀掉构建子进程，
       // 并留一行 `web.build.interrupted` —— 用户要的是「知道这次构建被中断了」，
@@ -3329,7 +3451,11 @@ export async function runPlatformGatewayForeground(
       // 没有 marker（Ctrl-C、`gateway stop`、外部 SIGTERM）就照旧连子进程一起停。
       handoffKept = await consumeHandoffMarker(dataDir, instance, process.pid).catch(() => false);
       if (handoffKept) {
-        const result = await supervisor?.stop({ keep: true }).catch(() => undefined);
+        const result = await runShutdownStep(
+          platformShutdownEmit,
+          'platform.supervisor.stop',
+          async () => await supervisor?.stop({ keep: true }).catch(() => undefined),
+        );
         if (result !== undefined) {
           print(ui.info(t('gateway.stopKeptNodes', { count: result.kept?.nodes ?? 0 })));
           if ((result.kept?.hubs ?? 0) > 0) print(ui.info(t('gateway.stopKeptHub')));
@@ -3340,11 +3466,23 @@ export async function runPlatformGatewayForeground(
           print(ui.dim(`engine pool: kept ${keptEngines} owned engine(s) for adopt`));
         }
       } else {
-        await supervisor?.stop().catch(() => undefined);
+        await runShutdownStep(
+          platformShutdownEmit,
+          'platform.supervisor.stop',
+          async () => await supervisor?.stop().catch(() => undefined),
+        );
         // 池 S20：非 handoff 停止 terminate owned（adopt/external 永不杀，S7）；node 先停再停 engine。
-        await poolSupervisor?.stop().catch(() => undefined);
+        await runShutdownStep(
+          platformShutdownEmit,
+          'platform.pool.stop',
+          async () => await poolSupervisor?.stop().catch(() => undefined),
+        );
       }
-      await platformGateway?.stop().catch(() => undefined);
+      await runShutdownStep(
+        platformShutdownEmit,
+        'platform.gateway.stop',
+        async () => await platformGateway?.stop().catch(() => undefined),
+      );
       platformGateway = undefined;
     };
 
@@ -3411,7 +3549,11 @@ export async function runPlatformGatewayForeground(
         shutdown: {
           handle: async () => {
             await performPlatformShutdown().catch(() => undefined);
-            await lock.release().catch(() => undefined);
+            await runShutdownStep(
+              platformShutdownEmit,
+              'platform.lock.release',
+              async () => await lock.release().catch(() => undefined),
+            );
             process.exit(0);
           },
           remoteAllowed: config.gateway?.remoteShutdown === true,

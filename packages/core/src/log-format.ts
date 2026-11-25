@@ -182,6 +182,18 @@ export const EVENT_FIELDS: Record<string, readonly FieldSpec[]> = {
     { key: 'last_seq', from: ['last_seq_sent'], kind: 'value' },
     { key: 'upstream', from: ['upstream_open'], kind: 'flag' },
   ],
+  /**
+   * DR15-1：退出链步骤级进度（node / 平台 / serve 共用同一事件名）。
+   * 挂起时日志里最后一条 start 就是挂点；done 带 duration_ms 供复验实证哪步慢；
+   * timeout_bounded = 有界等待到点 best-effort 推进（server.stop 挂点修复）。
+   */
+  'node.shutdown.step': [
+    { key: 'step' },
+    { key: 'status' },
+    { key: 'dur', from: ['duration_ms'], kind: 'ms' },
+    { key: 'timeout', from: ['timeout_ms'], kind: 'ms' },
+    { key: 'error', kind: 'text' },
+  ],
   /** 平台代理：node 在超时内没有回响应头（回 504）。 */
   'gateway.proxy.node_timeout': [
     { key: 'node', from: ['node_name', 'node_id'], kind: 'node' },

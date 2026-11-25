@@ -448,6 +448,8 @@ export const zhCN = {
   'stop.drain.timeout':
     '等待 drain 超时（pid {pid}，{timeout}）；进程仍在运行，未被强杀。可取消阻塞 run 或用 --force 升级。',
   'stop.forced.summary': '非正常退出：{name} —— {count} 个 run 被切断{note}',
+  'stop.quiesceExitTimeout':
+    'drain 已完成但 pid {pid} 在 {timeout} 内未自死（退出链挂起）—— 有界兜底强杀。挂点见 node.shutdown.step 日志。',
   // ── vessel restart（用户裁定 #6，cli-topology-design §7）──
   'restart.inventory.title': '重启清点（舰队 dataDir：{dataDir}）',
   'restart.platformHint':
