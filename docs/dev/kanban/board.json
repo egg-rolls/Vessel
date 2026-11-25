@@ -26,7 +26,7 @@
       "column": "进行中",
       "owner": "q-tool-output-leak",
       "branch": "fix/q-tool-output-leak",
-      "progress": "canary T2查证完毕证据链全（canary-data/reports/canary-t-runtime-report.md T2b节）：tool-result-gate.ts:292-296 VESSEL_TOOL_OUTPUT_DIR优先于VESSEL_DATA_DIR，17d6f44c只桥接后者；node-supervisor.ts:1338其余env透传→生产VESSEL_TOOL_OUTPUT_DIR/VESSEL_PLUGIN_CONFIG击穿gateway→node→engine（pid179484/87384 environ双变量并存铁证）；basic-tools asyncLogDir同源toolOutputRoot()。修复方向：bootstrap桥接清除/重写继承的VESSEL_TOOL_OUTPUT_DIR+VESSEL_PLUGIN_CONFIG+启动链env卫生；与q-fleet-isolation同根因族（进程树env继承跨舰队）"
+      "progress": "canary T2查证完毕证据链全（canary-data/reports/canary-t-runtime-report.md T2b节）：tool-result-gate.ts:292-296 VESSEL_TOOL_OUTPUT_DIR优先于VESSEL_DATA_DIR，17d6f44c只桥接后者；node-supervisor.ts:1338其余env透传→生产VESSEL_TOOL_OUTPUT_DIR/VESSEL_PLUGIN_CONFIG击穿gateway→node→engine（pid179484/87384 environ双变量并存铁证）；basic-tools asyncLogDir同源toolOutputRoot()。修复方向：bootstrap桥接清除/重写继承的VESSEL_TOOL_OUTPUT_DIR+VESSEL_PLUGIN_CONFIG+启动链env卫生；与q-fleet-isolation同根因族（进程树env继承跨舰队）。9d937507调研后早退已催促续作：四步小步走①bootstrap桥接②supervisor卫生③daemon spawn链④build门禁，每步一提交一报告"
     },
     {
       "id": "q-ui-polish",
@@ -66,7 +66,7 @@
       "column": "进行中",
       "owner": "q-from-card",
       "branch": "fix/q-from-card",
-      "progress": "27318a8a夜间调研后早退已催促回正轨；调研结论：runtime-kinds.ts ENV_MESSAGE_KINDS加source+env-notice.ts sourceNoticeCard(scope来源,location组织成行,原文进blocks)+统一dispatch三处env计算→live/history天然一致；EnvCard/TranscriptWindow零改动；agent卡吸收路径不动(0.52裁定)；实施中①分类投影②卡片i18n③build收口"
+      "progress": "27318a8a夜间调研后早退已催促回正轨；调研结论：runtime-kinds.ts ENV_MESSAGE_KINDS加source+env-notice.ts sourceNoticeCard(scope来源,location组织成行,原文进blocks)+统一dispatch三处env计算→live/history天然一致；EnvCard/TranscriptWindow零改动；agent卡吸收路径不动(0.52裁定)；①已提交b2e8a922(分类+双路径投影)+18dcd26b(biome基线)；②卡片组织/i18n进行中③build收口"
     },
     {
       "id": "design-adjudication",
