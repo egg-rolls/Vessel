@@ -78,9 +78,10 @@
   （正文不可变）；peek 失败如实报错，不本地假装。
 - **空态 / 错误态 / 陈旧提示**：`States` 组件（kanban 同款：EmptyState / ErrorState /
   StaleNotice / NotEnabledState）。
-- **写操作交互**：与条带同款「乐观本地减法 + 失败重读对齐 + toast 如实」
-  （`PendingStrip.tsx:525-562,725-768` 的模式），文案复用既有 `chat.pending.*` /
-  `chat.toast.*` key，不新造同义词。
+- **写操作交互**：成功 / 失败都**立即重读对齐** + toast 如实（条带做乐观本地减法
+  是因为它有「2s 轮询缓存 + 客户端 pending 对账」的包袱；本页没有，一次 RPC 往返
+  就是真相，数据永远来自读）。文案复用既有 `chat.pending.*` 身份 / 原因 key，
+  动作反馈新增 `inbox.*`（条带文案里的「条带」字样在本页不成立）。
 
 ## 3. SWR（事件触发重读 + 兜底轮询，红线）
 

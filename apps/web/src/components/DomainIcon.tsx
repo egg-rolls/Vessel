@@ -157,6 +157,14 @@ export function DomainIcon({ domain }: { domain: Domain }) {
           <path d="M4.8 9.5h1.4M9.3 9.5h1.4" />
         </svg>
       );
+    case 'inbox':
+      // 信封：外框 + 封口折线（与 pending 的开口托盘区分 —— 那是待批，这是收件箱）。
+      return (
+        <svg {...common}>
+          <rect x="3" y="4.5" width="14" height="11" rx="1.2" />
+          <path d="M3.5 5.5 10 10.5l6.5-5" />
+        </svg>
+      );
     case 'settings':
       return (
         <svg {...common}>
