@@ -452,4 +452,117 @@ vessel stop
 - 接线点：组件 stop 共享接缝的 graceful 分支 = 触发该文档的 drain 模式（intent: 'stop'），
   等待无 deadline；`vessel restart` 的 stop 段用 intent: 'restart'（quiesce 后 auto-resume 续跑）。
   两段共用同一套进度/升级/审计机制；该文档未落地前，P1 的 graceful 分支退化为
-  现有 beginDrain（2s settle）+ 不限时等死，语义差异在 §11 分期里显式标注。
+  现有 beginDrain（2s settle）+ 不限时等死，语义差异在 §11 分期里显式标注。## 6. 组件级 stop 语义（gateway / node / hub）
+
+> 共同口径（用户⑤）：默认优雅（进程内 drain + 停止方不限时等死 + 进度回调）；
+> `--force` = 显式非正常退出（快照 + 强杀 + 审计，§5.4）；归属复核与条件清理两分支共用。
+> 每个组件 stop 都导出**共享接缝函数**（供舰队编排调用，镜像 stopGateway 被 fleet stop 复用的先例），
+> CLI 命令与编排调用同一函数——「编排调用各组件自己的 stop」不是 shell 出去再跑一遍 CLI，
+> 而是进程内调用同一接缝（无子 CLI 进程、无 env 二次继承风险）。
+
+### 6.1 gateway stop / restart（平台-only）
+
+- `stopGateway` 收窄：删除 keepNodes 分支与 stopSpawnedChildren 调用（944-991 段），
+  只保留平台进程停止（graceful-first RPC → 等死 → 条件清理 → reportChildLifecycle 改为
+  **只读交代**「node/hub 仍在跑，停它们用 vessel stop」）。
+- handoff marker：`gateway restart`（平台热替换）仍写 marker 供新平台 adopt 登记；
+  `gateway stop`（真停）清残留 marker（现状 1087-1093 逻辑保留，keepForHandoff 判据改为
+  「调用方是 restart 还是 stop」而非 keepNodes 参数）。
+- `gateway restart` = 平台 stop + 平台 start（daemon/前台双路径保留，resolveRestartDaemonMode 不变）；
+  node/hub 天然保活（根本不被触碰），新平台 adopt 登记后照常代理。
+  「node 仍跑旧代码」提示保留，升级命令改为 `vessel restart`（§8）。
+- 平台 graceful 等待默认不限时（平台无 run 面，实际等待短）；`--force` 同 §5.4
+  （平台审计行 runs_cut 恒 0——平台不跑 run；仍记录 abnormal_exit）。
+
+### 6.2 node stop（解除 managed 拒绝 + 优雅不限时）
+
+- **解除拒绝**：node-command.ts:294-304 的两道 managed 判定从「拒绝 exit 1」改为「提示行」：
+  `node default 由平台实例 X 托管；只停本 node（平台与其他 node 不受影响）`。
+  理由：新拓扑下平台不再代管 node 生命周期（D2），node stop 是 node 停止的唯一正规路径；
+  舰队编排（§5.2 第 2 拍）调用的就是它。保留判定本身用于**提示与审计**（托管关系如实可见）。
+- **supervisor/watchdog 协调（防 respawn 打架）**：平台侧 NodeSupervisor/watchdog 今天对
+  子进程退出有 respawn/stall-restart 逻辑（watchdog.ts:181-205）。有意停止必须不被 respawn：
+  - graceful 分支：node 进程内 drain 写 resume 标记 + 正常退出码；supervisor 检测到
+    「drain 标记存在 / 退出码=有意停止」→ 标记该 node 为 stopped-intentional，不 respawn、
+    从 manifest 移除条目（或标 stopped），watchdog 不探活（watchdog.ts:16 已有
+    「正在 stop/restart 不探活」先例，扩展为「有意停止不探活」）。
+  - force 分支：停止方在终止前写**stop-intent 记录**（复用 handoff marker 的文件模式，
+    新增 kind:'stop'，TTL 同 120s 先例）——Windows 强杀下宿主来不及自证，
+    supervisor 见 marker 即知是有意停止。marker 消费后清理（consumeHandoffMarker 先例）。
+  - 崩溃（无 marker、非零退出）→ 既有自愈 respawn 不变。
+- **优雅不限时**：删除硬编码 10s（node-command.ts:316/347），graceful 等死无 deadline +
+  onProgress（§5.3）；`--timeout` 可选上限（到点报告不强杀）。
+- `--force`：快照 + SIGKILL/taskkill + stop.forced 审计（§5.4）+ stop-intent marker。
+- 多 node 寻址：P1 维持隐式单节点/registry 缺省口径；`--node <name>` 接口预留（§10）。
+
+### 6.3 hub stop（新增）
+
+- 寻址：`config.hub.dataDir`（expandHome + resolve）或 `<dataDir>/hub` 的 hub.lock
+  （readHubLockFile 先例，gateway-command.ts:1319）；lock 缺失/死 pid → 「未运行」+ stale 清理。
+- graceful：hub 无 run 面——进程内停受理（关监听）+ flush 落盘 + 退出；
+  触发接缝 = hub 进程新增 shutdown 受理（镜像 node admin.ts gateway.shutdown 的
+  「只受理 defer 一拍」形状；hub 已有 HTTP 面，additive 一个 admin 端点/RPC）。
+  老 hub 无该端点 → not_found → 如实报告并提示 --force（不假成功，镜像平台老版本回退先例）。
+- `--force`：归属复核（hub.lock pid + 探活）+ 强杀 + 审计（runs_cut 恒 0）。
+- 舰队编排第 4 拍调用本接缝；standalone hub（不在任何 manifest）从此有正规停止路径
+  （补上 fleet/stop-command.ts:212「hub stop 不在本轮」的缺口）。
+
+## 7. `vessel restart`：stop + start 编排
+
+```
+vessel restart [--instance N | --port N | --all] [--force] [--yes] [--timeout <dur>]
+```
+
+- 语义 = `vessel stop`（§5 全部机制：清点/确认/递归优雅/进度/升级阶梯）
+  → 全成后 `vessel start`（§4 幂等编排）。
+- **stop 未全成 → 不 start**（防双跑/端口冲突；现状 restartDaemonCommand 的
+  stopCode≠0 即返回先例保留），如实报告失败组件 + 提示 `vessel stop --force` 升级后重跑。
+  昨日金丝雀「停了旧没起新」的坑在新命令面下的正解：失败可见 + 升级阶梯 + 幂等重跑收敛，
+  而不是把停止预算调大碰运气。
+- `--force` 只传播到 stop 段（start 段无 force 语义——启动恒幂等检测）。
+- stop 段 intent='restart'：drain-to-quiesce 后写 resume 清单，start 段健康确认后
+  auto-resume 续跑（graceful-restart-design §5 的触发面；该文档落地前 P1 退化为
+  现有 marker 恢复卡路径，§5.6）。
+- 确认一次（restart 开头 S3 确认覆盖 stop+start 全程；--yes 跳过）。
+- `gateway restart --stop-nodes` 的等价映射目标就是本命令（§8）。
+- 远程 restart 不在本轮（远程 stop 已有 S7；远程 start 涉及 spawn 面，生命周期强杀恒本机
+  的边界下远程编排另案）。
+
+## 8. 兼容与弃用路径（main-4）
+
+### 8.1 --stop-nodes / --keep-nodes / --no-keep-nodes 弃用三步
+
+| 阶段 | 行为 |
+|---|---|
+| P1（弃用警告 + 等价映射） | 解析保留（args.ts:1984-1996 / 2128-2140）。`gateway stop --stop-nodes` → stderr warning「--stop-nodes 已弃用：gateway stop 只停平台进程；本次等价执行 vessel stop（舰队级递归停止）」→ 内部转调 stopFleetCommand 共享接缝。`gateway restart --stop-nodes` → warning + 等价映射 `vessel restart`。`--no-keep-nodes` 同 --stop-nodes；`--keep-nodes` 等价缺省（warning 提示可省略） |
+| P2 | 映射行为不变；help/completion 里隐藏弃用 flag（不再补全提示），docs 全量改口径 |
+| P3（移除） | 解析删除 → 未知参数报错，错误信息指路 `vessel stop` / `vessel restart`；keepNodes 参数从 GatewayCommand/stopGateway 签名移除 |
+
+- 映射期退出码口径 = 目标命令口径（fleet stop 的 0/1 规则）；warning 走 stderr 不污染 --json。
+- 0.55.2 的「缺省 keep nodes」行为在 P1 即变为「gateway stop 永不碰 node/hub」——
+  对缺省路径用户**无感**（本来就只停平台）；对 --stop-nodes 用户是显式弃用警告 + 等价语义。
+
+### 8.2 输出口径同步（不能让用户学到旧命令）
+
+- `reportChildLifecycle`（gateway-command.ts:1296/1326/1334）三处
+  `stop it with vessel gateway stop --stop-nodes` → `stop the fleet with vessel stop`；
+- restart 的「to restart them too: gateway restart --stop-nodes」提示（2385/2835）→
+  `to restart the whole fleet: vessel restart`；
+- node stop managed 拒绝文案（i18n node.managedByGateway）→ 提示行文案（§6.2）；
+- i18n：src/i18n/messages/en.ts / zh-CN.ts 增改同步（stop.forced 审计、drain 进度、
+  弃用 warning、start 逐组件行）；数据值保持英文、人类输出走 ui + t() 的既有口径。
+- completion-command.ts：补 `vessel start/restart`、`hub stop`、`node stop --force`、
+  `runs cancel`；弃用 flag 按 P2 隐藏。
+- docs 交接：README/CLI 帮助、docs/dev/research/redblue-operations-manual.md（运维手册
+  停止/重启章节）、graceful-restart-design.md 交叉引用段、CONTRACT-stop-semantics 相关
+  i18n 注释（S4 共享接缝描述改为「各组件自己的 stop」）。kanban 交接口径由 main 同步。
+
+### 8.3 不变面（兼容承诺）
+
+- `vessel stop --connect` 远程分支（S7）行为不变；
+- `gateway reload` / `node reload`（热加载）不变；
+- 实例选择器、--daemon/--log、service install/uninstall、gateway nodes registry 管理不变；
+- legacy `VESSEL_LEGACY_SERVE=1` 单进程族分流保留（stateKind='node' 路径不删，
+  其 stop 同样升级为优雅不限时 + --force）；
+- 状态文件形状（pid/lock/manifest/registry/handoff marker）不变——
+  新旧 CLI 混跑窗口内（P1 映射期）旧记录可被新命令读，新命令不写新形状文件。
