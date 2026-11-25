@@ -55,7 +55,7 @@ const EN = {
   'detail.aux': 'Auxiliary files',
   'detail.auxHint': 'Listed only — the plugin never reads or executes them.',
   'detail.path': 'Path',
-  'detail.bytes': '{n} bytes',
+  'detail.bytes': 'Bytes',
 
   'frontmatter.ok': 'ok',
   'frontmatter.partial': 'partial (unknown keys ignored)',
@@ -133,7 +133,7 @@ const ZH: Record<MessageKey, string> = {
   'detail.aux': '附件清单',
   'detail.auxHint': '只列清单——插件不代读、不执行。',
   'detail.path': '路径',
-  'detail.bytes': '{n} 字节',
+  'detail.bytes': '字节',
 
   'frontmatter.ok': '合法',
   'frontmatter.partial': '部分（未知键已忽略）',
