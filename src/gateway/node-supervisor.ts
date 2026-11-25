@@ -24,6 +24,7 @@ import { mkdir, open, readdir, readFile, unlink } from 'node:fs/promises';
 import * as path from 'node:path';
 import { atomicWrite, withDeadline } from '@vessel-agent/core';
 import { readHubLockFile } from '../hub/runtime';
+import { sanitizeToolOutputEnv } from '../runtime/tool-output-env';
 import { buildDaemonArgv } from './daemon';
 import {
   type CommandRunner,
@@ -1187,6 +1188,10 @@ export class NodeSupervisor {
     }
 
     const spawn = this.options.spawn ?? Bun.spawn;
+    // T2b：env 卫生 —— 继承异根按 hub 自身 dataDir 重写（hub 不消费这两个变量，
+    // 重写只为不让宿主的生产根透传进 hub 进程 environ）。
+    const hubEnv: Record<string, string | undefined> = { ...(this.options.env ?? process.env) };
+    sanitizeToolOutputEnv(hubEnv, spec.dataDir);
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(argv, {
@@ -1195,7 +1200,7 @@ export class NodeSupervisor {
         stderr: handle.fd,
         detached: true,
         env: {
-          ...(this.options.env ?? process.env),
+          ...hubEnv,
           ...(this.options.platformOrigins !== undefined && this.options.platformOrigins.length > 0
             ? { VESSEL_PLATFORM_ORIGINS: this.options.platformOrigins.join(',') }
             : {}),
@@ -1326,6 +1331,14 @@ export class NodeSupervisor {
     }
 
     const spawn = this.options.spawn ?? Bun.spawn;
+    // T2b：env 卫生 —— 宿主的 VESSEL_TOOL_OUTPUT_DIR / VESSEL_PLUGIN_CONFIG 可能指向
+    // 异数据根（启动链继承）；按本 node 自己的 dataDir 重写为派生值，生产根不再
+    // 击穿 gateway → node（node 侧 bootstrap 是同语义第二道防线）。
+    const nodeEnv: Record<string, string | undefined> = {
+      ...(this.options.env ?? process.env),
+      VESSEL_DATA_DIR: spec.dataDir,
+    };
+    sanitizeToolOutputEnv(nodeEnv, spec.dataDir);
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(argv, {
@@ -1334,8 +1347,7 @@ export class NodeSupervisor {
         stderr: handle.fd,
         detached: true,
         env: {
-          ...(this.options.env ?? process.env),
-          VESSEL_DATA_DIR: spec.dataDir,
+          ...nodeEnv,
           // 0.56：把该 node 的**生效 token**（显式或派生）注入子进程环境。
           // node 侧「显式 > VESSEL_NODE_TOKEN > 现算派生」——所以独立启动的 node
           // 不需要任何 token 配置，被 gateway 拉起的 node 更是零配置且值一致。

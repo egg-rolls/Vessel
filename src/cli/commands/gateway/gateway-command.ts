@@ -126,6 +126,7 @@ import { t } from '../../../i18n';
 // 0.56：派生 token（显式配置永远优先；未配置时自动派生，绝不再「未配置就挂」）。
 import { effectiveNodeToken, effectivePlatformToken } from '../../../node/token-derive';
 import { createHttpRpcClient } from '../../../rpc/http-client';
+import { sanitizeToolOutputEnv } from '../../../runtime/tool-output-env';
 import { readPackageVersion } from '../../../shared/version';
 import type { GatewayCommand, GatewayInstallTarget, GatewaySelector } from '../../args';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from '../../control-plane-target';
@@ -2785,6 +2786,11 @@ export async function runPlatformGatewayForeground(
     return 1;
   }
   const dataDir = resolveDataDir(config, env);
+  // T2b：前台 gateway 不走 bootstrap —— 在此对本进程做同语义 env 卫生，继承异根
+  // 不留在 gateway 进程自身，也不经 ...process.env 透传给子进程。NodeSupervisor
+  // 接收 env（可能是注入副本），不同对象时一并卫生。
+  sanitizeToolOutputEnv(process.env, dataDir);
+  if (env !== process.env) sanitizeToolOutputEnv(env, dataDir);
 
   const command = options.command;
   let targetInstance = command.instance;
