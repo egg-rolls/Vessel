@@ -162,7 +162,9 @@ hub 子进程**不**设 VESSEL_DATA_DIR（node-supervisor.ts:1170，必须用 hu
   是 graceful-restart-design.md 的设计面，本文 §5 的「默认优雅不限时」以该文档为地基接线，不另造语义。
 - 停止方超时现状汇总：stopGateway 等死 10s；stopSpawnedChildren 优雅等死 10s（GRACEFUL_SHUTDOWN_TIMEOUT_MS）
   + 强杀等死 timeoutMs；node stop 优雅 10s + 强杀 10s；fleet stop 缺省 DEFAULT_STOP_TIMEOUT_MS=10s。
-  昨日金丝雀 restart 坑根源 = 这些 10s 预算在长 drain 面前必然超时 → stopCode=1 → restart 中止不 start。## 2. 目标命令矩阵（现状 → 目标）
+  昨日金丝雀 restart 坑根源 = 这些 10s 预算在长 drain 面前必然超时 → stopCode=1 → restart 中止不 start。
+
+## 2. 目标命令矩阵（现状 → 目标）
 
 > 原则：**舰队层薄编排，组件层只管自己**。每个组件的 start/stop 都是独立可用的正规命令；
 > 舰队命令 = 检测 + 按依赖序调用这些命令的共享接缝 + 汇总。表中「优雅」均指默认路径：
@@ -245,7 +247,9 @@ config 来自 `--user-config <path>` 指定的文件（缺省 `~/.vessel/config.
 ### 3.3 与远程分支的关系
 
 `vessel stop --connect` 的远程边界不变：只认显式 flag（不认 VESSEL_CONNECT env，S1 先例）、
-registry 级清点、远程不强杀。舰队边界规则同样适用：远程目标 = 显式 URL，不做发现式扫描。## 4. `vessel start`：舰队级全量启动编排（幂等）
+registry 级清点、远程不强杀。舰队边界规则同样适用：远程目标 = 显式 URL，不做发现式扫描。
+
+## 4. `vessel start`：舰队级全量启动编排（幂等）
 
 ### 4.1 职责与形态
 
@@ -318,7 +322,9 @@ vessel start [--instance N | --port N | --all] [--yes] [--user-config <path>] [-
 - 剥离出的 spawn 逻辑不是删除而是**上移**：编排层复用 node-supervisor 的 spawn/manifest 写入接缝。
   manifest 写入者改为编排层调用的共享函数（平台只读 manifest 做代理登记/归属复核）；
   SpawnedChildRecord 形状不变。`gateway stop` 不再消费 manifest 停子进程。
-- watchdog/supervisor 的 respawn 职责收窄为「崩溃自愈」（§6.2），不再承担 auto_start。## 5. `vessel stop`：递归优雅停止
+- watchdog/supervisor 的 respawn 职责收窄为「崩溃自愈」（§6.2），不再承担 auto_start。
+
+## 5. `vessel stop`：递归优雅停止
 
 ### 5.1 检测（只读清点，本舰队）
 
@@ -452,7 +458,9 @@ vessel stop
 - 接线点：组件 stop 共享接缝的 graceful 分支 = 触发该文档的 drain 模式（intent: 'stop'），
   等待无 deadline；`vessel restart` 的 stop 段用 intent: 'restart'（quiesce 后 auto-resume 续跑）。
   两段共用同一套进度/升级/审计机制；该文档未落地前，P1 的 graceful 分支退化为
-  现有 beginDrain（2s settle）+ 不限时等死，语义差异在 §11 分期里显式标注。## 6. 组件级 stop 语义（gateway / node / hub）
+  现有 beginDrain（2s settle）+ 不限时等死，语义差异在 §11 分期里显式标注。
+
+## 6. 组件级 stop 语义（gateway / node / hub）
 
 > 共同口径（用户⑤）：默认优雅（进程内 drain + 停止方不限时等死 + 进度回调）；
 > `--force` = 显式非正常退出（快照 + 强杀 + 审计，§5.4）；归属复核与条件清理两分支共用。
@@ -566,3 +574,162 @@ vessel restart [--instance N | --port N | --all] [--force] [--yes] [--timeout <d
   其 stop 同样升级为优雅不限时 + --force）；
 - 状态文件形状（pid/lock/manifest/registry/handoff marker）不变——
   新旧 CLI 混跑窗口内（P1 映射期）旧记录可被新命令读，新命令不写新形状文件。
+
+## 9. 幂等与 stale lock 清理（main-5 + 用户⑨ + 今晨案例）
+
+### 9.1 现有 stale 机制（地基）
+
+- 状态机：classifyGatewayRecord（pid.ts:347）——pid 活 + health 身份确认 = running；
+  pid 活但身份未确认 = degraded（停止前需要 2s 命令行回退复核 isGatewayCommandLine）；
+  pid 死 = stale；文件损坏 = unknown；lock host 非本机 = foreign-host；启动窗口 = starting。
+- 条件清理：cleanupGatewayStateEntry（文件被并发修改则不动）；
+  deleteRecordIfOwned（pid + started_at 双判据）；quarantineCorruptRecordIfUnchanged（损坏隔离）。
+- 回收触发点：prepareForegroundGatewayStart（start 前）、stopGateway（stop 时）、
+  nodeStopCommand（node stop 时）——**幂等启动的 stale 清理不需要新机制，需要的是补一个态**（§9.3）。
+
+### 9.2 幂等启动的清理口径（§4.2 的展开）
+
+- stale 确认 → 条件清理 pid/lock/owner → spawn；清理失败（文件被改）→ 重检一轮再分流；
+- manifest 孤儿条目：recordOwnsPid 复核不通过的条目直接丢弃（stopSpawnedChildren:610 先例），
+  start 清点同口径；
+- 池残留：只报告不 terminate（S5.4 边界不变）；
+- handoff marker 残留：TTL 120s 自然过期 + consumeHandoffMarker 消费；
+  真停路径清 marker（防陈旧 marker 把真停变假停，现状 1085-1092 先例）。
+
+### 9.3 今晨金丝雀案例：锁记录与实际进程脱节（stale-adopt 对账）
+
+**案例**（用户⑨提供，今晨真实发生）：金丝雀新平台 pid 46932 已在 8652 健康服务，
+但 `canary-data/platform-canary.pid` 与 `.lock` 仍写昨日 pid 132924。
+现有状态机把「记录 pid 死」判为 stale → stop/restart 误判「未运行」；
+若随后 start 还会撞端口（EADDRINUSE）或 spawn 出第二个平台。
+
+**缺口本质**：stale 判据只看「记录里的 pid 死没死」，不看「记录的端口上有没有活的 vessel 进程」。
+记录与进程脱节（写记录者崩溃/被强杀、进程由别的路径拉起）时，stale ≠ 未运行。
+
+**设计：stale-adopt 对账（清理前的强制一步）**：
+
+```
+entry.state == stale
+  → 探记录 host:port 的 health（probeHttpHealth 先例，platform 走 /health）
+  ├─ 无响应/连接拒绝 → 确认 stale → 条件清理 → （start 路径）spawn
+  ├─ 响应但身份非 vessel（HTML/别的进程）→ 确认 stale + 端口被占报告
+  │    （不删文件不 spawn，fail-closed 交用户处置）
+  └─ 响应且身份 = vessel 平台/node（health 身份判据）
+       → 对账 adopt：以 health 自报的 pid/started_at 条件重写 pid 记录 + 刷新 lock
+       → 视为 running（start 跳过 / stop 正常纳入停止范围）
+       → 审计行 state.reconciled {instance, old_pid, new_pid, port}（如实留痕）
+```
+
+- **身份判据 additive**：platform `/health` 与 `platform.health.get` 载荷今天只有
+  status/version/node_count/proxy（platform/rpc.ts:264-278），**需 additive 增加
+  pid / started_at / incarnation**（node 侧 nodeInfo 已带 pid，先例现成）。
+  对账用 incarnation 防「同端口换了新进程」误认；旧平台无新字段 → 回退现有
+  degraded 命令行复核口径（isGatewayCommandLine），不假成功。
+- **条件重写**：重写前重读文件确认仍是那份 stale 记录（并发安全，镜像
+  deleteRecordIfOwned 的判据模式）；重写失败 → 按 unknown 报告，不 spawn。
+- **覆盖面**：start 幂等分流（§4.2）、stop 清点（§5.1）、status 视图三处共用同一对账函数
+  （单读入口 collectStateFor 的扩展，不另造第二套状态读）。
+- 该对账**不改变** foreign-host / unknown 的 fail-closed 口径（身份确认不了就不动）。
+
+### 9.4 并发与竞态
+
+- 两个编排进程并发（§5.3 另端升级）：组件层归属复核 + 条件清理保证不互踩；
+  对账重写与 spawn 之间无锁窗口由「spawn 前组件自己的实例锁 acquire」兜底
+  （acquireGatewayInstanceLock 既有语义：锁被占 → 拒绝，不重复 spawn）。
+- starting 态：不等待无限——沿用 daemon 等待预算，超时报告（R4「正在启动不等待不删文件」先例）。
+
+## 10. 与 q-canary-topology 调研衔接（main-6：留接口不预判结论）
+
+q-canary-topology 正在调研「单 gateway 多 node」形态是否成立。本设计**不预判其结论**，
+但命令面按「多 node 是一等公民」预留接口（registry 模型今天已支持多节点登记，
+nodes.json + gateway nodes list/add/remove 先例）：
+
+1. **组件寻址与舰队寻址分离**：组件 stop/start 接缝签名取 `(dataDir, nodeRef)`
+   （nodeRef = registry name / node_id / 隐式 default），不依赖全局 env 或「当前实例」隐式态。
+   单 node 时 nodeRef 缺省 = 隐式节点；多 node 时编排逐个传入——**接缝形状今天就是多 node 的**。
+2. **`--node <name>` 选择器预留**：`node stop/start/status --node <name>`（P1 只解析缺省值，
+   多 node 寻址随 canary 结论落地）；舰队层 `vessel stop --node <name>` = 只停该 node
+   （组件级操作的自然提升，选择器模型与 GatewaySelector 并列新增 NodeSelector，互斥规则镜像）。
+3. **`--fleet` 问题**：任务书提示的 `vessel node start --fleet canary` 形态——
+   本设计的舰队边界（§3）下，跨舰队操作恒走显式 `--user-config <canary 配置>`；
+   `--fleet <name>` 若未来引入，只能是「显式配置路径的别名解析」（name → 已登记的舰队配置路径），
+   绝不引入隐式发现/枚举。P1 不做，接口位置留在 args 全局 flag 层。
+4. **单 gateway 多 node 若成立**：启动顺序（§4.3）nodes 段天然展开为 N 个；
+   停止时序（§5.2）node 段串行 N 个（进度逐个输出）；平台代理/adopt 登记按 node_id 多路复用
+   （platform.nodes.list 已是复数面）。命令面**零结构变化**，只是循环次数变化——
+   这正是「编排薄、组件自治」的红利。
+5. **若结论是多 gateway 各带 node**：实例选择器（--instance/--all）已覆盖，同样零结构变化。
+
+## 11. 分期（P1 命令面 / P2 优雅递归 / P3 清理）
+
+### P1：命令面（拓扑成立，语义先保守）
+
+- 注册 `vessel start` / `vessel restart`（args 顶层分发 + registry + help/completion）；
+  start = §4 幂等编排（检测/跳过/stale 清理/spawn/健康确认）；restart = stop+start（stop 段暂用现状停止语义）。
+- `gateway start` 剥离 spawn node/hub（职责上移）；`gateway stop/restart` 收窄平台-only；
+  keepNodes 分支删除，--stop-nodes/--keep-nodes/--no-keep-nodes 弃用警告 + 等价映射（§8.1 P1 行）。
+- `node stop`：解除 managed 拒绝（改提示行）+ `--force` 参数面 + stop-intent marker（防 respawn）；
+  graceful 等待暂保留现状 10s 预算（**P1 显式标注：不限时优雅在 P2**，避免 P1 就依赖未落地的 quiesce）。
+- `hub stop` 新增（graceful 受理端点 + --force）。
+- 输出口径同步（§8.2 全部文案/i18n/completion/docs）。
+- 验收口径（用户行为验证）：vessel start 幂等重跑跳过已运行；gateway stop 后 node/hub 仍在跑且提示正确；
+  --stop-nodes 出 warning 且等价舰队停；node stop 托管节点不再拒绝且平台不 respawn。
+
+### P2：优雅递归（不限时 + 进度 + 升级阶梯 + 审计）
+
+- 组件 stop graceful 分支切换为不限时等死 + onProgress 进度行（§5.3）；
+  与 graceful-restart-design 的 drain-to-quiesce 接线（intent: stop/restart）；
+  该文档未落地部分退化为 beginDrain + 不限时等死（§5.6）。
+- `vessel stop` 递归时序切换为 nodes→gateway→hub（§5.2），调用各组件共享接缝；
+  `--force` 递归传播 + stop.forced 审计（§5.4）；--timeout 改可选上限（到点报告不强杀）。
+- `vessel runs cancel` 薄包装（升级阶梯第二级，§5.5）。
+- stale-adopt 对账（§9.3）+ platform health additive pid/started_at/incarnation。
+- 验收口径：长工具 run 在跑时 vessel stop 不限时等待且进度可见；另端 --force 升级出审计行；
+  今晨案例态（记录死 pid + 端口活进程）被对账为 running 而非「未运行」。
+
+### P3：清理（移除弃用 + 残留治理）
+
+- 移除 --stop-nodes/--keep-nodes/--no-keep-nodes 解析与 keepNodes 签名（§8.1 P3 行）；
+- node stop / stopSpawnedChildren 的 10s 硬编码残留全量清除（统一走组件接缝）；
+- manifest/池残留治理：start 清点孤儿条目丢弃、池残留提示保持只读（terminate engine 另案）；
+- `vessel doctor` 增 stale-lock 对账检查项（只读报告 + 指路 vessel start 幂等收敛）；
+- 多 node 寻址（--node）随 q-canary-topology 结论落地（§10）；node 并行启动优化（可选）。
+
+## 12. 风险与开放问题
+
+1. **职责上移的过渡窗口**（P1）：gateway start 剥离 spawn 后，旧习惯「gateway start 一把梭」
+   的用户会得到只有平台的半舰队——help/输出必须指路 vessel start；
+   运维手册与 kanban 交接口径同步（§8.2）。是否需要一个版本的「gateway start 检测到
+   无 node 时打印 vessel start 提示」软着陆？（建议：要，一行提示，不自动代跑。）
+2. **启动失败不回滚**（§4.4）与现状回滚语义的差异——已论证，提请 main 复核确认。
+3. **drain-to-quiesce 依赖**：P2 的不限时优雅以 graceful-restart-design 落地为前提；
+   若其延期，P2 退化为「beginDrain(2s settle) + 不限时等死」——等待的是进程退出而非 run 完成，
+   语义差异已在 §5.6 显式标注，不会静默降级。
+4. **watchdog 协调**（§6.2）：stop-intent marker 是新文件 kind（复用 handoff 模式），
+   需与 q-agent-lifecycle 的 supervisor 设计核对不冲突（同一 manifest/marker 家族）。
+5. **platform health additive**（§9.3）：pid/started_at/incarnation 进 health 载荷是契约面
+   additive（老客户端忽略未知字段），但 platform rpc allowlist 注释标「冻结」——
+   走 additive 修订流程（Q4-C gateway.shutdown 先例），不破坏冻结形状。
+6. **远程面**：vessel start/restart 远程编排不在本轮（生命周期强杀恒本机边界）；
+   远程 stop 的 S7 不变。远程舰队全量编排若未来需要，另案设计（spawn 面远程化是安全敏感面）。
+7. **legacy 单进程族**（VESSEL_LEGACY_SERVE=1）：保留分流但其 stop 同步升级优雅口径；
+   移除 legacy 族是另一个清理提案，不在本轮。
+
+---
+
+## 附：现状 → 目标一图流
+
+```
+现状                                    目标
+─────────────────────────────          ─────────────────────────────
+vessel start      （不存在）            舰队全量启动编排（幂等四拍）
+vessel stop       → stopGateway         递归编排：node stop → gateway stop → hub stop
+                    (keepNodes:false)   （各组件自己的接缝；优雅不限时+进度；--force 递归+审计）
+vessel restart    （不存在）            stop + start（stop 未全成不 start）
+gateway start     平台+spawn nodes+hub  只启动平台进程
+gateway stop      平台（--stop-nodes    只停平台进程；--stop-nodes 弃用→映射 vessel stop
+                    连 node/hub）
+gateway restart   平台热替换/冷重启     平台-only 热替换；--stop-nodes 弃用→映射 vessel restart
+node stop         managed 拒绝；10s     优雅不限时+进度；--force+审计；托管提示不拒绝
+hub stop          （不存在）            新增：优雅受理+flush；--force
+```
