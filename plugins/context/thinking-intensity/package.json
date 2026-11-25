@@ -60,8 +60,8 @@
             "medium",
             "high"
           ],
-          "titleKey": "thinking-intensity.settings.defaultLevel",
-          "descriptionKey": "thinking-intensity.settings.defaultLevel.desc",
+          "titleKey": "thinking-intensity.settings.default_level",
+          "descriptionKey": "thinking-intensity.settings.default_level.desc",
           "order": 20
         },
         "budget_low": {
@@ -69,7 +69,7 @@
           "default": 2048,
           "minimum": 1024,
           "maximum": 65536,
-          "titleKey": "thinking-intensity.settings.budgetLow",
+          "titleKey": "thinking-intensity.settings.budget_low",
           "order": 30
         },
         "budget_medium": {
@@ -77,7 +77,7 @@
           "default": 8192,
           "minimum": 1024,
           "maximum": 65536,
-          "titleKey": "thinking-intensity.settings.budgetMedium",
+          "titleKey": "thinking-intensity.settings.budget_medium",
           "order": 40
         },
         "budget_high": {
@@ -85,7 +85,7 @@
           "default": 16384,
           "minimum": 1024,
           "maximum": 65536,
-          "titleKey": "thinking-intensity.settings.budgetHigh",
+          "titleKey": "thinking-intensity.settings.budget_high",
           "order": 50
         },
         "experimental_providers": {
@@ -155,11 +155,11 @@
         "en": {
           "thinking-intensity.settings.enabled": "Enable thinking intensity",
           "thinking-intensity.settings.enabled.desc": "Master switch; off = never inject thinking parameters (kill switch).",
-          "thinking-intensity.settings.defaultLevel": "Default level",
-          "thinking-intensity.settings.defaultLevel.desc": "Persistent global default. auto = provider decides (no injection).",
-          "thinking-intensity.settings.budgetLow": "Low budget (tokens)",
-          "thinking-intensity.settings.budgetMedium": "Medium budget (tokens)",
-          "thinking-intensity.settings.budgetHigh": "High budget (tokens)",
+          "thinking-intensity.settings.default_level": "Default level",
+          "thinking-intensity.settings.default_level.desc": "Persistent global default. auto = provider decides (no injection).",
+          "thinking-intensity.settings.budget_low": "Low budget (tokens)",
+          "thinking-intensity.settings.budget_medium": "Medium budget (tokens)",
+          "thinking-intensity.settings.budget_high": "High budget (tokens)",
           "thinking-intensity.settings.experimental": "Experimental providers",
           "thinking-intensity.settings.experimental.desc": "Enable unverified provider mappings (fail-safe: off by default).",
           "thinking-intensity.level.auto": "Auto",
@@ -172,11 +172,11 @@
         "zh-CN": {
           "thinking-intensity.settings.enabled": "启用思考强度",
           "thinking-intensity.settings.enabled.desc": "总开关；关闭 = 永不注入思考参数（kill switch）。",
-          "thinking-intensity.settings.defaultLevel": "默认档位",
-          "thinking-intensity.settings.defaultLevel.desc": "持久化全局默认。auto = 由 provider 自决（不注入）。",
-          "thinking-intensity.settings.budgetLow": "低档预算（token）",
-          "thinking-intensity.settings.budgetMedium": "中档预算（token）",
-          "thinking-intensity.settings.budgetHigh": "高档预算（token）",
+          "thinking-intensity.settings.default_level": "默认档位",
+          "thinking-intensity.settings.default_level.desc": "持久化全局默认。auto = 由 provider 自决（不注入）。",
+          "thinking-intensity.settings.budget_low": "低档预算（token）",
+          "thinking-intensity.settings.budget_medium": "中档预算（token）",
+          "thinking-intensity.settings.budget_high": "高档预算（token）",
           "thinking-intensity.settings.experimental": "实验性 provider",
           "thinking-intensity.settings.experimental.desc": "启用未经核实的 provider 映射（fail-safe：默认关闭）。",
           "thinking-intensity.level.auto": "自动",
