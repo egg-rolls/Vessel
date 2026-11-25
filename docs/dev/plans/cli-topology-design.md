@@ -245,4 +245,211 @@ config 来自 `--user-config <path>` 指定的文件（缺省 `~/.vessel/config.
 ### 3.3 与远程分支的关系
 
 `vessel stop --connect` 的远程边界不变：只认显式 flag（不认 VESSEL_CONNECT env，S1 先例）、
-registry 级清点、远程不强杀。舰队边界规则同样适用：远程目标 = 显式 URL，不做发现式扫描。
+registry 级清点、远程不强杀。舰队边界规则同样适用：远程目标 = 显式 URL，不做发现式扫描。## 4. `vessel start`：舰队级全量启动编排（幂等）
+
+### 4.1 职责与形态
+
+`vessel start` = 舰队级薄编排（新注册：args.ts 顶层分发 + registry.ts 一次性命令）：
+
+```
+vessel start [--instance N | --port N | --all] [--yes] [--user-config <path>] [--data-dir <path>]
+```
+
+- 缺省后台化：编排进程依次把组件以 daemon 形态拉起（复用各组件既有 daemon 接缝），
+  逐个健康确认后退出；输出逐组件一行（started / skipped(running) / adopted / failed+原因）。
+- 前台需求留给组件层（`gateway start` 前台管线保留，供开发调试）；
+  `vessel start --foreground` 不在本轮（开放问题 §12）。
+- 编排**不**新造进程管理实体：不写自己的 pid/lock，不新增状态文件；
+  全部状态仍是各组件既有的 pid/lock/manifest/registry（单一真相源）。
+
+### 4.2 幂等序列（用户⑨：检测 → adopt 或清理 stale → spawn → 健康确认）
+
+对每个组件（按 §4.3 顺序）执行同一四拍：
+
+1. **检测**：读该组件状态文件 + 探活（collectGatewayState / hub.lock + isProcessAlive / health 探测）。
+2. **分流**：
+   - `running`（身份已确认）→ **跳过**，输出 `skipped (already running, pid N)`——幂等核心；
+   - `stale` → 先走 **stale-adopt 对账**（§9.3：端口上有活的 vessel 进程 → 对账重写记录并视为 running 跳过；
+     确认无活进程 → 条件清理 pid/lock/owner）再 spawn；
+   - `starting` → 有界等待（沿用 daemon 等待预算）后重检；仍未就绪 → 报告失败，不重复 spawn；
+   - `unknown` / `foreign-host` → **拒绝且不动文件**（既有 fail-closed 口径），汇总 exit 1；
+   - 无记录 → spawn。
+3. **spawn**：调用组件自己的 daemon start 接缝（不绕过其守卫：端口校验、duplicate_node_id、
+   implicit_node_conflict、platformListenError 全部保留在组件层）。
+4. **健康确认**：等该组件的 pid 文件 + health（node readiness 既有上限 20s；平台 waitMs 60s 先例），
+   确认后才进入下一个组件；失败 → 记录并继续下一组件（§4.4 失败策略）。
+
+### 4.3 启动顺序与依赖论证
+
+**hub → gateway（平台）→ nodes（registry auto_start / 隐式单节点）**。
+
+- hub 先：node 的出站事件（`hub.direction: node`，cli.ts:1804-1825）拨号 hub；
+  事件 sink 先就绪，node 起来即可注册/上报，避免启动窗口内的出站失败重试噪音。
+  hub 无 run 面、启动快，先启后停都便宜。
+- gateway 次：平台 bind 是 fail-fast 守卫最重的一步（端口/token/origin/implicit_node_conflict）；
+  先过守卫再拉 node，避免「node 起来了平台 bind 失败」的半舰队。
+  平台不再等 node 就绪才写 platform.pid（职责上移后平台只对自己负责）——
+  **这是与现状的关键差异**：现状平台写 PID 以 node 就绪为前提（gateway-command.ts:2256），
+  新拓扑下平台 PID 只代表平台监听就绪，node 就绪由编排层逐个确认并汇总。
+- nodes 最后：按 registry 顺序（auto_start=true 的）逐个 spawn + 健康确认；
+  无 registry → 隐式单节点（`node start --daemon`，dataDir = 舰队根）。
+  node 之间无依赖，串行即可（P1 保守；并行是 P3 优化，不影响语义）。
+- adopt 场景（平台热替换后 node 已在跑）：node 检测拍命中 running → 跳过；
+  平台侧 adopt 登记（只读检测）照常发生——**adopt 是登记不是生命周期动作**（D2）。
+
+### 4.4 失败策略：不自动回滚，收敛靠重跑
+
+现状 gateway start 任一 node 失败 → 回滚（停已 spawn 子进程 + 停平台）。新编排**不自动回滚**：
+
+- 已健康确认的组件保持运行（它们可能已在服务会话；停它们 = 破坏性动作，须显式）；
+- 失败组件如实报告（原因 + 日志路径），汇总 exit 1；
+- 用户修复后**重跑 `vessel start` 即收敛**（幂等：成功的跳过，只补失败的）——
+  这正是幂等编排的红利；需要清场时显式 `vessel stop`。
+- 例外：平台 bind 失败时还没有任何 node 被 spawn（顺序保证），无残留。
+
+> 与现状回滚语义的差异是有意决策：回滚把「启动失败」升级成「停止已运行组件」，
+> 在幂等编排下既无必要又危险。列入 §12 开放问题供 main 复核。
+
+### 4.5 与 gateway start 的职责切分
+
+- `gateway start` 前台管线（runPlatformGatewayForeground）剥离 spawn node/hub 段
+  （2941-3095 的 hub autoStart / node phase A/B），只留平台 bind + 守卫 + platform.pid + adopt 登记。
+- `startGatewayDaemon` 的 waitMs 语义随之简化（只等平台 PID，不再等 node readiness）。
+- 剥离出的 spawn 逻辑不是删除而是**上移**：编排层复用 node-supervisor 的 spawn/manifest 写入接缝。
+  manifest 写入者改为编排层调用的共享函数（平台只读 manifest 做代理登记/归属复核）；
+  SpawnedChildRecord 形状不变。`gateway stop` 不再消费 manifest 停子进程。
+- watchdog/supervisor 的 respawn 职责收窄为「崩溃自愈」（§6.2），不再承担 auto_start。## 5. `vessel stop`：递归优雅停止
+
+### 5.1 检测（只读清点，本舰队）
+
+沿用 fleet/stop-command.ts S2 清点并扩为**组件级**清单（与 `vessel status` 同口径）：
+
+- gateway：collectGatewayState 全实例（platform 族；legacy node 族按 VESSEL_LEGACY_SERVE 分流不变）；
+- node：registry 节点 + 隐式单节点 + manifest 子进程，逐个读其 dataDir 的 gateway.pid + 探活；
+  registry 报告层区分 manifest 内（本舰队 spawn/接管）与 external（登记但非本舰队 spawn）——
+  **登记即成员**：external/adopt 来源的节点同样属于本舰队停止范围（§3.1 规则 4），
+  但「手工外部启动且未登记」的进程不动（无归属证据，既有 fail-closed 口径）；
+- hub：hub.lock（config.hub.dataDir 或 <dataDir>/hub）+ 探活；
+- 池残留：只读清点 + 提示（S5.4 不变，停止方不 terminate engine）。
+
+清点抬头打印 dataDir + 来源（§3.2）；逐组件一行（kind/name/pid/state/url）；
+`stop.warning.activeSessions` 警告保留；S3 确认规则不变（--yes / 非交互拒绝 / N 取消零杀）。
+
+### 5.2 停止时序与依赖论证（main-2）
+
+**推荐时序：nodes drain → gateway 停 → hub 停**（任务书方案 B 的精化版）：
+
+```
+vessel stop
+  ├─ 1. 只读清点 + 确认（§5.1）
+  ├─ 2. 对每个运行中 node 调用 node stop 共享接缝（串行；默认优雅不限时）
+  │     node 进程内：beginDrain fence 拒新 → drain-to-quiesce（等活跃 run 到安全边界）
+  │     → 写 resume 标记 → 干净落盘 → 退出
+  │     停止方：每 5s 打印该 node 的 drain 进度（§5.3）
+  ├─ 3. 对每个运行中 gateway 实例调用 gateway stop 共享接缝
+  │     平台进程内：gateway.shutdown 受理 → 关监听/代理 → lock.release → 退出
+  │     （平台无 run 面，等待短；node 已停，无 handoff 保活需求，清残留 marker）
+  ├─ 4. hub stop 共享接缝（停受理 + flush + 退出）
+  └─ 5. 池残留提示 + 逐组件汇总（stopped / failed+原因 / skipped(not running)）
+```
+
+论证（对比方案 A「gateway 先停接收 → node drain → gateway 退出」）：
+
+- **fence 权威在 node 准入层**（beginDrain beginFence），不在平台代理。方案 A 需要给平台
+  新增「只 fence 不退出」的中间态（新 RPC/新状态），而方案 B 里 node 自己的 beginDrain
+  第一拍就拒新 run——平台代理转发来的新请求会拿到 node 的干净拒绝，**无需平台中间态**。
+- **最长的等待发生在观测面还活着的时候**：node drain 可能分钟级（长工具/长模型流）；
+  方案 B 期间平台代理/WebUI 仍在，用户能在 UI 里看 run 状态、经代理做外科手术式取消（§5.5）；
+  方案 A 先杀平台则 drain 期间 UI 全黑，进度只能靠 CLI 轮询 node 端口，体验倒退。
+- **hub 最后停**：node 出站事件（hub.direction=node）依赖 hub 活着才能把 drain 期间的
+  终态事件/标记同步出去；hub 无 run 面，停它最快，放最后不拖长总时长。
+- **gateway 在 node 之后停**：平台无 run 面，它的优雅退出不依赖 node；
+  反过来若平台先死，node 的代理注册/心跳会报错制造噪音。node 全停后平台退出是干净收尾。
+- **失败隔离**：某 node 未确认停止 → 记录失败、继续其余组件（编排不代管生命周期，
+  残留 node 是独立进程，如实报告 + 记录保留供重试）；gateway/hub 失败同理；汇总 exit 1。
+  与现状 stopSpawnedChildren「未确认停止保留条目」同哲学。
+- **--force 时序**：同一依赖序，但每个组件走 force 分支（§5.4）；
+  顺序仍保持（先 node 后 gateway 后 hub），保证审计快照时观测面还在、
+  且 hub 最后死让 node 的最后一批事件有机会出去。
+
+### 5.3 不限时间 ≠ 无反馈（main-3）
+
+- 组件 stop 共享接缝接受 `onProgress` 回调（镜像既有 `onDrainSkipped` 注入缝，
+  node-supervisor.ts:536 先例）；编排层把回调渲染为进度行。
+- 进度数据源：node 的既有 RPC 快照面（`gatewayStatusRpc` 消费的 runControl/scheduler 快照：
+  running/queued run 清单，含 run_id/session_id/已运行时长）。drain 期间 node 监听仍在
+  （fence 只拒新 run，不关读面），停止方每 5s 拉一次：
+
+  ```
+  ⏳ node default: draining… 2 run(s) active (waited 35s)
+     run a1b2c3 (session s-foo, 4m12s, tool bash running)
+     run d4e5f6 (session s-bar, 1m03s, llm streaming)
+     escalate: vessel runs cancel a1b2c3   |   vessel stop --force
+  ```
+
+- 进度行同时给出**升级阶梯的下一步命令**（§5.5），防「看起来卡死」：
+  用户随时知道在等什么、能做什么。
+- 另端升级：另一终端执行 `vessel stop --force` 不需要等待第一个进程——force 分支直接
+  归属复核 + 终止（幂等：第一个编排进程随后发现进程已死，按 stopped 汇总）。
+  两个编排进程并发不互斥（无编排锁），安全性由组件层归属复核 + 条件清理保证（§9）。
+- Ctrl-C 语义：第一次 Ctrl-C 打印「仍在等待 drain；再按一次中止编排（组件继续 drain），
+  或另端 --force 升级」；第二次中止编排进程本身，**不**顺手杀组件（优雅意图不被误触升级）。
+- 显式 `--timeout`：到点不自动强杀，打印阻塞者快照 + 升级提示，exit 1（D4）。
+
+### 5.4 graceful / force 语义与审计（用户⑥⑧）
+
+**graceful（默认）**：
+- 组件进程内跑完整退出序列（shutdown-sequence：beginDrain → gateway.stop → transport →
+  closeTenants → shutdown）；drain 段按 graceful-restart-design 的 drain-to-quiesce
+  等活跃 run 到安全边界（无在途工具 + 无未落盘模型输出），**不 interrupt**；
+- 全量干净落盘：resume 标记（如需续跑）、transcript、usage、inbox 持久化全部 flush；
+- 会话状态 = 正常终态（run 自然 completed，或干净 checkpoint 的 interrupted-可续跑）；
+- 停止方确认自死才算停成（waitUntilDead 无 deadline 版），条件清理 pid/lock/owner。
+
+**force（显式 --force，递归传播）**：
+- 跳过优雅等待：终止前**先快照**在跑 run（runControl 快照 RPC；拿不到则如实记「快照不可用」），
+  然后 POSIX SIGKILL / Windows process.kill + taskkill /T /F（terminateChild force 先例，
+  node-supervisor.ts:481-507）；
+- **审计留痕，不能静默**（用户⑥）：停止方代打结构化审计行（镜像 node.drain.skipped 先例）：
+
+  ```
+  ⚠ stop.forced component=node name=default pid=12345 abnormal_exit=true runs_cut=2
+    sessions=[s-foo,s-bar] runs=[a1b2c3,d4e5f6] signal=SIGKILL
+  ```
+
+  同时写入舰队日志（结构化事件，与 web.build.interrupted 代打同机制）；
+  汇总行明示「非正常退出：N 个 run 被切断」（i18n en/zh-CN 同步）；
+- **状态语义**（用户⑧）：被切断 session 不是 completed——进程内来不及写 checkpoint 时，
+  下次启动的既有恢复路径（node-resume 扫 marker / 悬空 tool_use 合成 / ensureSessionShell /
+  rotate handoff / inbox 持久化）按 interrupted/crashed 处理（graceful-restart-design D9 的
+  「有疤模式」：恢复卡 + nudge + outcome unknown 合成，先核对再继续）。
+  force 路径**不新增**状态实体，复用既有 marker/恢复机制；审计行是停止方的如实记录，
+  不是第二真相源。
+- force 仍做归属复核（pid + started_at / recordOwnsPid）与条件清理——
+  **force 升级的是等待策略，不是归属判据**（绝不杀身份未确认的进程）。
+
+### 5.5 升级阶梯（用户⑦）
+
+```
+第一级：优雅等待（默认）——drain 进度可见（§5.3），run 自然走到安全边界
+第二级：外科手术式取消单个阻塞 run——进度行给出 run_id，用户另端执行精准取消，
+        让优雅 drain 自行完成（不必全杀）
+第三级：vessel stop --force——全舰队非正常退出（审计留痕）
+```
+
+第二级的机制复用（不新造执行面）：
+- `runs.cancel` RPC 已存在（packages/serve/src/gateway/methods/runs.ts:276，
+  含 save_failed 审计先例）；agent send interrupt 是成员级取消的既有通道。
+- CLI 面：新增薄包装 `vessel runs cancel <run_id> [--node <name>]`（P2，additive；
+  寻址 = 本舰队 node 的 RPC 目标，经平台代理或直连 node 端口），
+  取消后 drain 进度行自然收敛——这就是「force 不必全有全无」的落点。
+- 编排进程自身不做自动升级（默认路径永远优雅）；升级决策恒在用户/运维 agent 手里。
+
+### 5.6 与 graceful-restart-design 的分工
+
+- 该文档负责**进程内** drain-to-quiesce / resume 清单 / auto-resume / 无感-有疤两模式的语义；
+- 本文负责**命令面**：谁调用谁、等待预算在哪、进度怎么输出、force 怎么传播与审计；
+- 接线点：组件 stop 共享接缝的 graceful 分支 = 触发该文档的 drain 模式（intent: 'stop'），
+  等待无 deadline；`vessel restart` 的 stop 段用 intent: 'restart'（quiesce 后 auto-resume 续跑）。
+  两段共用同一套进度/升级/审计机制；该文档未落地前，P1 的 graceful 分支退化为
+  现有 beginDrain（2s settle）+ 不限时等死，语义差异在 §11 分期里显式标注。
