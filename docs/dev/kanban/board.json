@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "★六特性全验闭环晋升main ab63936d(38ee0aec→ab63936d,75文件+5714)：from-card/ui-polish/leak/plugin-default-on/AX三组/inbox-ux✅。待用户重启生产加载。下一轮金丝雀验：msg-visibility/chat-index/skills-ui/hire-prompt(已合并redblue-dev)。dist固化fleets/canary cwd✓。观察O1/O3/O4/O5/O6+plugin-config-read候后续批次。拓扑C/CLI实施待裁"
+      "progress": "★两次晋升完成：main=3953a92e(723fb673→38ee0aec→ab63936d→3953a92e)。第一轮六特性+第二轮四特性(msg-visibility/chat-index/skills-ui+grid-fix/hire-prompt)全验闭环。待用户重启生产加载全部。dist固化fleets/canary cwd✓。后续队列：plugin-config-read修复/O1-O6观察/OBS-1环境标签/OBS-2 config live/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期"
     },
     {
       "id": "canary-qa-lead",
