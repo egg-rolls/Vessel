@@ -37,6 +37,11 @@ textarea {
 button {
   border: 0;
   cursor: pointer;
+  /* 透黑底：preflight 刻意不引入（见 index.css 头注），缺这一行时没写 bg 类的
+     按钮会落回 UA ButtonFace（暗色档 ≈#6b6b6b 灰板）。显式 bg-* utility 在
+     utilities 层永远压过本重置；设背景的类选择器（.link-btn / .load-more 等）
+     特异性更高，也不受影响。新按钮默认透黑底，自定义样式只需写自己的 bg 档位。 */
+  background-color: transparent;
 }
 
 button:disabled {
