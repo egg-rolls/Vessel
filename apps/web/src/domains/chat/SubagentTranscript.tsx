@@ -19,6 +19,7 @@ import { t } from '../../i18n';
 import type { AgentNode } from '../../state/agents';
 import { type ErrorVisibility, isEventVisible } from '../../state/error-visibility';
 import { buildGroup, type StoredEvent } from '../../state/events';
+import type { MessageVisibility } from '../../state/message-visibility';
 import type { Verbosity } from '../../state/visibility';
 import { RunItems } from './StreamItems';
 
@@ -49,11 +50,14 @@ export function SubagentTranscript({
   entries,
   errorLevel = 'user',
   verbosity = 'normal',
+  messageVisibility,
 }: {
   agent: AgentNode;
   entries: readonly StoredEvent[];
   errorLevel?: ErrorVisibility;
   verbosity?: Verbosity;
+  /** 消息显示 toggle（q-msg-visibility；缺省 = RunItems 默认）。 */
+  messageVisibility?: MessageVisibility;
 }) {
   const childEntries = useMemo(
     () => childEntriesFor(entries, agent, errorLevel),
@@ -92,7 +96,11 @@ export function SubagentTranscript({
         </Tooltip>
       </div>
       {group ? (
-        <RunItems group={group} verbosity={verbosity} />
+        <RunItems
+          group={group}
+          verbosity={verbosity}
+          {...(messageVisibility !== undefined ? { messageVisibility } : {})}
+        />
       ) : (
         <p className="subagent-empty text-muted">{t('chat.subagents.emptyRun')}</p>
       )}

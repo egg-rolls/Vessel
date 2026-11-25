@@ -1067,6 +1067,26 @@ export type UiVerbosity = 'minimal' | 'normal' | 'debug';
 /** 错误展示层级（0.14；默认 user） */
 export type UiErrorLevel = 'user' | 'all';
 
+/**
+ * 消息显示（q-msg-visibility）：时间线七类消息里可配置的五类，每类独立 toggle。
+ * 用户消息 / AI 正文恒显，不在此列。缺省值 = 现行默认行为（未配置不改变观感）。
+ *
+ * 兼容映射：`system` 未配置时回退旧键 `ui.showInternalEvents`（存量配置无损）；
+ * 解析口在 Web `state/message-visibility.ts`，消费方不各自读旧键。
+ */
+export interface MessageVisibilityConfig {
+  /** 思考过程（默认 true）。渲染侧开关；verbosity minimal 档仍隐藏（档位语义保留）。 */
+  reasoning?: boolean;
+  /** 工具卡片（默认 true）。关闭 ≡ minimal 对工具的处理：失败卡仍显（失败永不静默）。 */
+  tools?: boolean;
+  /** 环境信息卡（`vessel:notice`；默认 true）。 */
+  environment?: boolean;
+  /** 来源卡（`vessel:source`；默认 true）。被 agent 卡吸收的折叠路径不受影响。 */
+  source?: boolean;
+  /** 系统信息（默认 false）。未配置时回退 `ui.showInternalEvents`；verbosity debug 仍一并放开。 */
+  system?: boolean;
+}
+
 /** UI 配置（0.8.5；0.11 clearOnStart；0.11.1 showReasoning；0.13 statusBars；0.14 可见性；0.15 askUser） */
 export interface UiConfig {
   /** UI 语言；'zh-CN' | 'en'，非法值由消费方归一化回退 */
@@ -1079,8 +1099,16 @@ export interface UiConfig {
   /**
    * 是否在事件流中展示 `llm.request` / `hook.*` / `agent.*` 等内部事件
    * （0.14；默认 false，保持 0.13 行为）。
+   *
+   * q-msg-visibility 起由 `messageVisibility.system` 接管（未配置新键时本键继续生效，
+   * 兼容映射见 MessageVisibilityConfig）；本键保留给存量配置与脚本写路径。
    */
   showInternalEvents?: boolean;
+  /**
+   * 消息显示（q-msg-visibility；YAML 键 `message_visibility`）：五类消息独立 toggle。
+   * 缺省 = 现行默认行为；`system` 未配置时回退 `showInternalEvents`。
+   */
+  messageVisibility?: MessageVisibilityConfig;
   /**
    * 列表里是否展示「已归档 Team / 已停用 agent」（0.51；默认 false = 隐藏）。
    *

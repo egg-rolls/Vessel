@@ -28,6 +28,12 @@ import { runtimeSnapshotSchema, stringListSchema } from './schemas.js';
 const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
   'ui.showReasoning',
   'ui.showInternalEvents',
+  // q-msg-visibility：消息显示五 toggle（system 未配置时消费方回退 ui.showInternalEvents）。
+  'ui.messageVisibility.reasoning',
+  'ui.messageVisibility.tools',
+  'ui.messageVisibility.environment',
+  'ui.messageVisibility.source',
+  'ui.messageVisibility.system',
   // 0.51：Web「可见性」分组的开关，与 ui.showInternalEvents 同一写路径。
   'ui.showArchived',
   'ui.askUser',

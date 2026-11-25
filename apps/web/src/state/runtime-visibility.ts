@@ -10,10 +10,11 @@
  *   后者用 `window.setInterval` / `document.visibilityState`，只能活在带 DOM lib 的
  *   `apps/web` tsconfig 下）。
  *
- * 0.50：可见性不再是浏览器本地偏好，而是服务端配置 ui.showInternalEvents
- * （默认 false；verbosity: debug 按既有「或」语义一并放开，见 state/visibility.ts）。
- * Web 只保留一个显式入口（Settings → Display → 显示系统信息），写操作与其他
- * display 键一样走 config.set。
+ * 0.50：可见性不再是浏览器本地偏好，而是服务端配置（q-msg-visibility 起为
+ * ui.messageVisibility 五 toggle；旧 ui.showInternalEvents 兼容映射到「系统信息」，
+ * 默认 false；verbosity: debug 按既有「或」语义一并放开，见 state/visibility.ts）。
+ * Web 显式入口在 Settings → Display →「消息显示」分组，写操作与其他 display 键一样
+ * 走 config.set。
  *
  * **两种显示方式（用户裁决，0.51）**：环境信息（kind `notice` = `vessel:notice`，以及
  * `source` = `vessel:source` 来源行）与底层系统信息是同一份上下文的两种呈现，不再是
@@ -46,6 +47,7 @@
  */
 import { useCallback, useMemo } from 'react';
 import { useConfigStore } from '../stores/configStore';
+import { type MessageVisibility, resolveMessageVisibility } from './message-visibility';
 import {
   isRuntimeMessageVisible,
   type RuntimeMessageKind,
@@ -53,26 +55,34 @@ import {
   runtimeVisibilityFor,
 } from './runtime-kinds';
 import { resourceData } from './useResource';
-import { resolveUiVisibility, showsInternalEvents } from './visibility';
+import { resolveVerbosity } from './visibility';
 
 export * from './runtime-kinds';
 
 /**
- * React binding：Settings 用 config.set 写同一个键，会话读同一份 configStore
- * 快照，所以保存后无需刷新即生效；未连上 gateway / 未加载配置时按默认（全隐）处理。
+ * React binding：Settings 用 config.set 写同一组键，会话读同一份 configStore
+ * 快照，所以保存后无需刷新即生效；未连上 gateway / 未加载配置时按缺省处理。
+ *
+ * q-msg-visibility：可见性改读 ui.messageVisibility（五 toggle，解析口
+ * `state/message-visibility.ts`，含旧 showInternalEvents 兼容映射）。
+ * 返回的 `messageVisibility.system` 已叠加 verbosity debug 的「或」语义
+ * （与改动前 showsInternalEvents 同口径）；其余四 toggle 是配置原值。
+ * 选择器只取 config data 引用（快照对象，引用稳定）：无关 store 切片变化不重渲染。
  */
 export function useRuntimeVisibility(): {
   visibility: RuntimeVisibility;
   isVisible: (target: RuntimeMessageKind | string) => boolean;
+  messageVisibility: MessageVisibility;
 } {
-  // 选择器只返回布尔：config 里其他键变化不会让会话时间线重算。
-  const showSystem = useConfigStore((state) =>
-    showsInternalEvents(resolveUiVisibility(resourceData(state.config))),
-  );
-  const visibility = useMemo(() => runtimeVisibilityFor(showSystem), [showSystem]);
+  const data = useConfigStore((state) => resourceData(state.config));
+  const messageVisibility = useMemo(() => {
+    const mv = resolveMessageVisibility(data);
+    return { ...mv, system: mv.system || resolveVerbosity(data) === 'debug' };
+  }, [data]);
+  const visibility = useMemo(() => runtimeVisibilityFor(messageVisibility), [messageVisibility]);
   const isVisible = useCallback(
     (target: RuntimeMessageKind | string) => isRuntimeMessageVisible(visibility, target),
     [visibility],
   );
-  return { visibility, isVisible };
+  return { visibility, isVisible, messageVisibility };
 }

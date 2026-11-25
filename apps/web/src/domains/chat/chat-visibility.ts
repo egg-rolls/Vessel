@@ -23,13 +23,19 @@ import type { ChatRenderItem } from './tool-cards';
 export type ToolVisibilityStatus = 'running' | 'done' | 'error';
 
 /**
- * 一张工具卡在给定档位是否可见。
+ * 一张工具卡在给定档位 + 消息显示配置下是否可见。
  *
  * minimal 只保留失败卡（失败永不静默）；normal / debug 全部保留（含 running）。
- * 与  无关：运行中的卡与终态卡必须同时可见或同时隐藏。
+ * q-msg-visibility：「工具卡片」toggle 关闭 ≡ minimal 对工具的处理（失败卡仍显）。
+ * 与运行状态无关：运行中的卡与终态卡必须同时可见或同时隐藏。
  */
-export function toolVisible(status: ToolVisibilityStatus, verbosity: Verbosity): boolean {
-  return verbosity !== 'minimal' || status === 'error';
+export function toolVisible(
+  status: ToolVisibilityStatus,
+  verbosity: Verbosity,
+  tools = true,
+): boolean {
+  if (status === 'error') return true;
+  return verbosity !== 'minimal' && tools;
 }
 
 /**
@@ -38,8 +44,12 @@ export function toolVisible(status: ToolVisibilityStatus, verbosity: Verbosity):
  * 落盘的 tool 消息不带状态（成功与失败都只是一条 message），因此调用方传 done；
  * 失败信息另外由失败 run 的 notice 承担，不会在这里被永久藏掉。
  */
-export function historyToolVisible(status: ToolVisibilityStatus, verbosity: Verbosity): boolean {
-  return toolVisible(status, verbosity);
+export function historyToolVisible(
+  status: ToolVisibilityStatus,
+  verbosity: Verbosity,
+  tools = true,
+): boolean {
+  return toolVisible(status, verbosity, tools);
 }
 
 /** 一条原始事件行在给定档位是否可见：minimal 只留错误 / 失败行（失败永不静默）。 */
@@ -54,21 +64,23 @@ export interface RunningToolHint {
 }
 
 /**
- * minimal 档的一行状态：minimal 会把工具卡整体隐藏，没有这行会让人以为 run 卡住。
+ * 「工具被藏」档的一行状态：minimal 档或「工具卡片」toggle 关闭会把工具卡整体隐藏，
+ * 没有这行会让人以为 run 卡住。
  *
  * 只在三个条件同时成立时返回：
- * - verbosity 为 minimal（normal / debug 有完整卡片，不需要这一行）；
+ * - 工具卡被藏（verbosity 为 minimal，或 tools toggle 关闭）；
  * - run 仍在跑（options.running；已终态就不再显示活动提示）；
  * - 该 run 里**最后一条工具项**的 status 仍是 running（工具结束即消失；
  *   顺序调用下它就是正在跑的那个）。
  *
- * 不使用新开关：它只是 minimal 档对「隐藏了工具卡」的一行补偿。
+ * 不另立开关：它只是「隐藏了工具卡」的一行补偿（q-msg-visibility 起两种藏法共用）。
  */
 export function runningToolHint(
   items: readonly ChatRenderItem[],
-  options: { verbosity: Verbosity; running?: boolean },
+  options: { verbosity: Verbosity; running?: boolean; tools?: boolean },
 ): RunningToolHint | undefined {
-  if (options.verbosity !== 'minimal') return undefined;
+  const toolsHidden = options.verbosity === 'minimal' || options.tools === false;
+  if (!toolsHidden) return undefined;
   if (options.running !== true) return undefined;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
@@ -79,30 +91,33 @@ export function runningToolHint(
 }
 
 /**
- * 思考块可见性：live 与历史共用同一档位（minimal 隐藏，normal / debug 显示）。
+ * 思考块可见性：live 与历史共用同一判定（minimal 隐藏；「思考过程」toggle 关闭隐藏）。
  * live 侧由 `filterTimelineItems` 内联判定，历史侧（Transcript）直接调这里 ——
  * 两处不能各写一份，否则「跑的时候能看到、结束后消失」又会回来。
  */
-export function reasoningVisible(verbosity: Verbosity): boolean {
-  return verbosity !== 'minimal';
+export function reasoningVisible(verbosity: Verbosity, reasoning = true): boolean {
+  return verbosity !== 'minimal' && reasoning;
 }
 
 /**
  * live 的渲染项过滤：foldToolItems(group.items) 的结果 → 实际渲染项。
  *
  * options.running 传入 run 是否仍在跑，仅用于调用侧一致性（见文件头不变量），
- * 不参与判定。
+ * 不参与判定。options.tools / options.reasoning 是消息显示 toggle（缺省 true =
+ * 改动前行为）；正文 / notice 恒显，事件行仍只跟档位。
  */
 export function filterTimelineItems(
   items: readonly ChatRenderItem[],
-  options: { verbosity: Verbosity; running?: boolean },
+  options: { verbosity: Verbosity; running?: boolean; tools?: boolean; reasoning?: boolean },
 ): ChatRenderItem[] {
   const verbosity = options.verbosity;
-  if (verbosity !== 'minimal') return items.slice();
+  const tools = options.tools !== false;
+  const reasoning = options.reasoning !== false;
+  if (verbosity !== 'minimal' && tools && reasoning) return items.slice();
   return items.filter((item) => {
     if (item.kind === 'text' || item.kind === 'notice') return true;
-    if (item.kind === 'reasoning') return reasoningVisible(verbosity);
-    if (item.kind === 'tool') return toolVisible(item.status, verbosity);
+    if (item.kind === 'reasoning') return reasoningVisible(verbosity, reasoning);
+    if (item.kind === 'tool') return toolVisible(item.status, verbosity, tools);
     return eventRowVisible(item.event.type, verbosity);
   });
 }
