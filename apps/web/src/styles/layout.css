@@ -196,6 +196,17 @@
   flex-direction: column;
 }
 
+/* 转录区宿主（会话页 / 团队页 / 成员 body 页共用）：滚动区 + 会话索引竖条。
+   竖条绝对定位在右缘，不占主内容宽度；滚动区照旧 flex:1 收缩滚动。
+   它是 position:relative —— 竖条的 top/bottom 只覆盖转录区，不盖页头 / 输入区。 */
+.transcript-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* 会话内容列左右内衬：与 `.conversation-scroll` / `.composer-area` 的
    padding-inline 一致，手柄用它把右缘夹在列内。 */
 .conversation .content-stage {
