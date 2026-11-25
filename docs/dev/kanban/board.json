@@ -151,11 +151,11 @@
     },
     {
       "id": "q-context-debug",
-      "title": "调试：上下文用量显示不一致（runtime55%/rotate38%/用户见380K）",
-      "column": "待办",
-      "owner": "main",
-      "branch": "redblue-dev",
-      "progress": "用户报告后续调试：context_window runtime报551K/55%，rotate报38%，用户UI见380K——三处不一致，查上下文计量/显示链路；候用户排期"
+      "title": "审查统一：上下文口径不一致（runtime通知阈值vs rotate context_ratio vs UI）",
+      "column": "进行中",
+      "owner": "q-context-debug",
+      "branch": "design/q-context-debug",
+      "progress": "16b4471a派单：runtime context_window通知65% vs rotate拒38% vs UI380K三处打架；审查三计量源file:line+根因(计数法/取数时机/trim后不同步)+统一单一口径源；零代码"
     },
     {
       "id": "q-envcard-run",
