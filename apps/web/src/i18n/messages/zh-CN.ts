@@ -91,6 +91,7 @@ export const messages = {
   'breadcrumb.tools': '工具',
   'breadcrumb.mcp': 'MCP 服务',
   'breadcrumb.channels': '渠道',
+  'breadcrumb.kanban': '看板',
   'breadcrumb.plugins': '插件',
 
   // Plugin Host (E10)
@@ -806,6 +807,7 @@ export const messages = {
   'nav.domain.pluginHost': '插件宿主',
   'nav.domain.nodes': '节点',
   'nav.domain.teams': '团队',
+  'nav.domain.kanban': '看板',
   'nav.domain.agents': '智能体',
   'nav.group.network': '智能体编排',
   'breadcrumb.hub': '面板核心',
@@ -962,6 +964,30 @@ export const messages = {
   'archive.notice.agent':
     '这个 agent 已停用 · 等待被移除：默认列表里不再显示；直接链接仍可随时打开，直到它被清理。',
   'archive.session.agentClosedHint': '所属 agent 已停用 · 等待被移除；会话保留，历史仍可查看。',
+
+  // Kanban（任务看板查看器，q-kanban-view）
+  'kanban.subtitle':
+    '红蓝开发任务看板（docs/dev/kanban/board.json）。只读展示；勾选卡片验收后移入 archive.json 归档。',
+  'kanban.noTokenReason': '连接网关后才能读取看板。',
+  'kanban.notFound': '看板文件不存在',
+  'kanban.refresh': '刷新',
+  'kanban.updated': '更新于 {time}',
+  'kanban.taskCount': '{count} 项任务',
+  'kanban.warnings': '板文件有 {count} 条降级警告（坏任务已跳过，不影响其余展示）',
+  'kanban.empty': '板上暂无任务',
+  'kanban.emptyHint': '看板由 main 维护；新任务派单后会出现在这里。',
+  'kanban.emptyColumn': '空',
+  'kanban.uncategorized': '未分类',
+  'kanban.accept': '验收归档',
+  'kanban.acceptAria': '验收任务：{title}',
+  'kanban.expandProgress': '展开进展',
+  'kanban.collapseProgress': '收起进展',
+  'kanban.confirmTitle': '归档任务？',
+  'kanban.confirmBody':
+    '「{title}」将从看板移除，并追加到同目录 archive.json（append-only，历史可查）。归档由你的验收勾选触发，不会自动发生。',
+  'kanban.confirmAction': '验收并归档',
+  'kanban.archived': '已归档：{title}',
+  'kanban.archiveFailed': '归档失败：{message}',
 
   // Teams（跨节点）
   'teams.title': '团队',

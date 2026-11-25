@@ -29,6 +29,8 @@ export type Route =
   | { domain: 'nodes'; nodeKey?: string }
   | { domain: 'teams' }
   | { domain: 'teams'; nodeKey: string; teamId: string; agentId?: string; bodyId?: string }
+  /** 任务看板查看器（q-kanban-view）：`#/kanban`，读 kanban.get / 验收 kanban.archive。 */
+  | { domain: 'kanban' }
   | { domain: 'agents'; nodeKey?: string; teamId?: string; state?: string; presence?: string }
   | { domain: 'capabilities' }
   /**
@@ -130,6 +132,8 @@ export function parseRoute(hash: string): Route {
       return { domain: 'mcp' };
     case 'channels':
       return { domain: 'channels' };
+    case 'kanban':
+      return { domain: 'kanban' };
     case 'observe': {
       const tab = pick<'metrics' | 'evals' | 'diagnostics' | 'attention'>(
         segments[1] ?? query.get('tab'),
@@ -258,6 +262,8 @@ export function formatRoute(route: Route): string {
       return '#/mcp';
     case 'channels':
       return '#/channels';
+    case 'kanban':
+      return '#/kanban';
     case 'observe':
       return `#/observe/${route.tab}`;
     case 'plugins': {

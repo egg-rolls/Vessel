@@ -17,6 +17,7 @@ export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'pending' },
   { id: 'agents' },
   { id: 'teams' },
+  { id: 'kanban' },
   { id: 'nodes' },
   { id: 'runs' },
   { id: 'tools' },
@@ -39,7 +40,7 @@ export const NAV_GROUPS: readonly {
   id: string;
   domains: readonly PrimaryDomain[];
 }[] = [
-  { id: 'chat', domains: ['chat', 'pending', 'teams'] },
+  { id: 'chat', domains: ['chat', 'pending', 'teams', 'kanban'] },
   { id: 'network', domains: ['agents', 'nodes'] },
   { id: 'runs', domains: ['runs'] },
   { id: 'integrations', domains: ['capabilities', 'tools', 'mcp', 'channels'] },
@@ -66,6 +67,8 @@ export function primaryRoute(domain: PrimaryDomain): Route {
       return { domain: 'nodes' };
     case 'teams':
       return { domain: 'teams' };
+    case 'kanban':
+      return { domain: 'kanban' };
     case 'agents':
       return { domain: 'agents' };
     case 'runs':
@@ -145,6 +148,8 @@ export function routeBreadcrumb(route: Route, nodeNames?: ReadonlyMap<string, st
       return t('breadcrumb.mcp');
     case 'channels':
       return t('breadcrumb.channels');
+    case 'kanban':
+      return t('breadcrumb.kanban');
     case 'observe':
       return t(`breadcrumb.observe.${route.tab}`);
     case 'plugins':
