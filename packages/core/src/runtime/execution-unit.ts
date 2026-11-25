@@ -1692,14 +1692,27 @@ export class ExecutionUnit {
    * 的视图估算 + **其后追加的消息**的上界估算；没有请求过（run 刚起来）就按整窗上界估。
    * 两者都不会「倒退」：追加只加，压缩会换窗口（新 run 的段起点）。
    *
-   * tools 只在有请求视图时计入（那是上一次请求真的带上的那张表）；整窗兜底路径不知道
+   * 兜底也应用本段冻结的占位集合（口径统一 P1）：整窗含已被冻结集合替换掉的工具结果
+   * **全文**（append-only，历史不改写），而本段每一次请求都会把它们换成小占位符。
+   * 兜底若不应用同一份集合，run 起点的压力预警就会比随后的请求估算虚高一大截
+   * （生产实锤：564 条占位 ⇒ 通知 55% vs 请求 38%）。这里复用请求路径的同一个函数、
+   * 同一份冻结集合（`withClearedToolResults` + `segmentClearPlans`，与
+   * `buildRequestMessages` 完全一致），不引入第二套投射逻辑。冻结集合在段起点先于
+   * 第一次压力预警存在，时序安全；`passthrough` / `archive_notice` 模式集合恒空 ⇒
+   * 行为与未应用时逐字相同。新追加的消息不在冻结集合里，仍按全文估（只许高报，合同 5）。
+   *
+   * tools 只在有请求视图时计入（那是上一次请求真的带上的那张表）；兜底路径不知道
    * 工具表，因此略偏低 —— 但发送前闸会补上 tools（它手上有 `args.tools`），闸不受影响。
    */
   private nextRequestTokens(execution: Run): number {
     const state = this.accounting(execution);
     const messages = execution.workingContext.messages;
     const view = state.requestView;
-    if (view === undefined) return estimateMessagesTokensUpperBound(messages);
+    if (view === undefined) {
+      const frozen = this.segmentClearPlans.get(execution.workingContext) ?? [];
+      const projected = frozen.length > 0 ? withClearedToolResults(messages, frozen) : messages;
+      return estimateMessagesTokensUpperBound(projected);
+    }
     if (messages.length <= view.messageCount) return view.tokens;
     const appended = messages.slice(view.messageCount);
     return view.tokens + estimateMessagesTokensUpperBound(appended);
@@ -4555,6 +4568,8 @@ export class ExecutionUnit {
     if (max === undefined || max <= 0) return;
     // 0.55 P0：与显示 / 闸同一个数（下一次请求视图的上界估算，锚点校正后），
     // 不是 `workingContext.tokenCount` —— 两处口径必须一致，否则「环」与「闸」打架。
+    // 口径统一 P1：run 起点无请求视图时的兜底亦应用冻结占位集合（见 `nextRequestTokens`），
+    // 预警数 ≈ 随后的 `llm.request.estimated_tokens`，不再因工具结果全文虚高。
     const used = this.currentContextTokens(execution);
     const ratio = used / max;
     // 缺省（实现不暴露 autoCompact）按开启处理，与 0.27 行为一致。
