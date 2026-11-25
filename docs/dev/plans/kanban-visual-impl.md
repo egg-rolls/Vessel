@@ -60,4 +60,56 @@ SkillsView L404-423 raw 条 → `<Pager …>`，onPrev/onNext 回调与禁用条
 3. Pager 组件 + skills 替换 + i18n additive + build:ui 资产重建 commit。
 4. 总门禁：worktree 根 `set -o pipefail; bun run build 2>&1 | tee build.log; echo EXIT=$?`（typecheck+lint+📦 实证）→ 最终报告（commit hashes + 文件清单 + 日志关键行 + 资产 hash）。
 
-宪法遵守：零测试/探针/临时进程；只提交 feat/q-kanban-visual；不碰生产 checkout / ~/.vessel；不合并；布局/交互/数据流零改。
+宪法遵守：零测试/探针/临时进程；只提交 feat/q-kanban-visual；不碰生产 checkout / ~/.vessel；不合并；布局/交互/数据流零改。---
+
+## 4. ④ 最终报告（实施完成，总门禁绿）
+
+### 提交链（feat/q-kanban-visual，基线 redblue-dev @ 98557883）
+
+| 阶段 | commit | 内容 |
+|---|---|---|
+| ① 审计 | `0576c89b` | 本文档 §0-3：两目标面偏差清单 + 规范依据 + 设计裁定（main 已验收采纳） |
+| ② 看板修复 | `5bff3847` | K1/K2/K3/K5/K6/K7 六面归位默认表面 + 两文件头注更正 |
+| ③ 分页组件 | `96e96c8d` | plugin-ui Pager additive + skills 替换 + i18n additive + build:ui 资产重建 |
+| ④ 报告 | （本节所在 commit） | 门禁实证 + 资产 hash |
+
+### 文件清单（98557883..HEAD，12 文件 +383/-229）
+
+- `apps/web/src/domains/kanban/KanbanCard.tsx`（卡面 raised+elev-1 / Badge 默认 / link 展开钮）
+- `apps/web/src/domains/kanban/KanbanView.tsx`（刷新钮默认 plain / warn-soft 警告 / sunken 空列）
+- `packages/plugin-ui/src/Pager.tsx`（**新增**，63 行）
+- `packages/plugin-ui/src/index.ts`（**仅 +1 行** additive 导出；既有导出/组件零改动，git diff 实证）
+- `plugins/context/skills/web-src/SkillsView.tsx`（raw 条 → Pager，回调/禁用条件逐字保留）
+- `plugins/context/skills/web-src/i18n.ts`（+2 行：skills.pagination zh/en）
+- skills 资产（build:ui 重建）：`web/assets/skills-B42IixC9.js`、`web/assets/skills-xAKwVcZd.css`（旧 hash 资产删除）、`web/embed/index.mjs`、`web/skills.html`；`web/embed/index.css` 内容未变（Pager 全用既有 utilities，@source 扫描无新增类）
+- `docs/dev/plans/kanban-visual-impl.md`（本文档）
+
+### 总门禁实证（worktree 根，set -o pipefail + tee build.log + EXIT 兜底）
+
+```
+1️⃣ Type check（root + examples + apps/web） — ✅ 通过
+2️⃣ Lint（biome ci .） — ✅ 通过（Checked 1343 files；25 warnings / 42 infos 全部既有，
+   日志 grep Pager/kanban/SkillsView 零命中——本次改动零新增告警）
+📦 Build complete!
+EXIT=0
+```
+
+本仓无 bundle（ADR-006），📦 成功行为门禁实证；build.log 留盘（gitignore 内，不入库）。
+skills build:ui 独立绿：tsc -p tsconfig.web.json --noEmit + vite iframe（57 modules）+ vite embed（29 modules）。
+
+### 资产 sha256
+
+```
+b369c4772652d38f0aa07063ac5f29740cbbbeda74eb275c3df6936011db7f22  web/assets/skills-B42IixC9.js
+6354b422510b73eab335c8623f00f01e8f98b82936c59415ad1c82e2f53a5b37  web/assets/skills-xAKwVcZd.css
+e5f1925c69b2cee519c890b127f27631fb10dc8d1d5c630c4d3e256849a96158  web/embed/index.mjs
+5dd87fdc57e041e15f9ef42f1a19255cbe4f832de776e9bbe398df2b6415b20f  web/embed/index.css（未变）
+7f165aa95cf1bc734ebed4a24882bd45b7729269964df5fb630f628f9ff463a3  web/skills.html
+```
+
+### 红线遵守自查
+
+- 布局/交互/数据流零改：轮询/归档确认/兜底列/翻页 offset 逻辑逐字保留；看板未加分页。
+- plugin-ui 只 additive：index.ts 仅 +1 行，既有组件一行未动（批次 C 耦合回归护 skills-style 封存面）。
+- 零新建 token/色板；零测试/探针/临时进程；未碰生产 checkout / ~/.vessel / 8642；未合并、未删 worktree/branch。
+- 行为验证（看板视觉 / 分页翻页 / 禁用边界 / zh-en 切换）归用户/金丝雀。
