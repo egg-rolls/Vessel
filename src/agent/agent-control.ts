@@ -192,6 +192,8 @@ export function createAgentControl(
             : {}),
           ...(input.seed !== undefined ? { seed: input.seed } : {}),
           ...(input.keep_messages !== undefined ? { keep_messages: input.keep_messages } : {}),
+          // q-hire-prompt：可选启动任务，原样透传（形状校验在 service 逐条做）。
+          ...(input.startup_prompt !== undefined ? { startup_prompt: input.startup_prompt } : {}),
         })),
       });
       return mapLifecycle(batch.results, (status) => ({

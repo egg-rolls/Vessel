@@ -12,6 +12,7 @@
  */
 
 import type { MemberStatus } from '@vessel-agent/agent';
+import { readFile } from 'node:fs/promises';
 import {
   AgentOwnerRequestError,
   AgentOwnerUnavailableError,
@@ -106,6 +107,8 @@ function methodParams(command: AgentOwnerCommand): {
             ...(command.model !== undefined ? { model: command.model } : {}),
             ...(command.visibility !== undefined ? { visibility: command.visibility } : {}),
             ...(command.systemPrompt !== undefined ? { system_prompt: command.systemPrompt } : {}),
+            // q-hire-prompt：创建即投递的首条任务（文件路径已在 runAgentCommand 读成正文）。
+            ...(command.startupPrompt !== undefined ? { startup_prompt: command.startupPrompt } : {}),
             ...(command.workspace !== undefined ? { workspace: command.workspace } : {}),
           },
         ],
@@ -225,10 +228,29 @@ export async function runAgentCommand(
     return failure(error);
   }
 
-  const { method, params } = methodParams(command);
+  // q-hire-prompt：--startup-prompt-file 在命令层读成正文（--policy-file 先例）；
+  // 读失败是本地输入错误，不走 agent_owner_error 文案。
+  let resolved = command;
+  if (command.kind === 'create' && command.startupPromptFile !== undefined) {
+    try {
+      const text = await readFile(command.startupPromptFile, 'utf8');
+      resolved = { ...command, startupPrompt: text, startupPromptFile: undefined };
+    } catch (error) {
+      await agentCall.close();
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr:
+          `Failed to read --startup-prompt-file ${command.startupPromptFile}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  const { method, params } = methodParams(resolved);
   try {
     const result = await agentCall.call(method, params);
-    const stdout = command.json ? JSON.stringify(result, null, 2) : humanOutput(command, result);
+    const stdout = command.json ? JSON.stringify(result, null, 2) : humanOutput(resolved, result);
     // 单条 send / dispatch / create 的逐条失败 → exit 1
     // （close 保持批量汇总语义）。
     const single =

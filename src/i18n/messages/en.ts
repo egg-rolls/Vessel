@@ -214,6 +214,8 @@ export const en: Record<MessageKey, string> = {
   'flag.model': 'model (provider/model)',
   'flag.visibility': 'visibility',
   'flag.systemPrompt': 'system prompt',
+  'flag.startupPrompt': 'first task message, delivered at creation (starts the first run)',
+  'flag.startupPromptFile': 'read the first task message from a file',
   'flag.workspace': 'member working directory',
   'flag.messageId': 'deliver to an existing inbox message (requires --interrupt)',
   'flag.state': 'filter by state',

@@ -113,6 +113,11 @@ export interface AgentCreateLikeInput {
   seed?: AgentCreateSeedLike;
   /** 仅 `from_session_id` 存在时合法；`sessions.get().messages` 下标。 */
   keep_messages?: number;
+  /**
+   * q-hire-prompt：可选启动任务（与 rotate 的 startup_prompt 语义对齐）。
+   * 非空时创建提交后立即作为首条 user message 投递并触发首轮 run；缺省 = 创建后 idle。
+   */
+  startup_prompt?: string;
 }
 
 /** CREATE-0.39：种子方式；缺省 copy，compact 必须显式。 */

@@ -229,6 +229,10 @@ export type AgentCommand =
       model?: string;
       visibility?: AgentVisibilityArg;
       systemPrompt?: string;
+      /** q-hire-prompt：创建即投递的首条任务（与 --startup-prompt-file 互斥）。 */
+      startupPrompt?: string;
+      /** q-hire-prompt：长文本任务文件路径（命令层读取；与 --startup-prompt 互斥）。 */
+      startupPromptFile?: string;
       /** 0.19 S3：显式 workspace → 隐式建 / 复用 Team 并绑定 */
       workspace?: string;
     }
@@ -3460,6 +3464,8 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
     let model: string | undefined;
     let visibility: AgentVisibilityArg | undefined;
     let systemPrompt: string | undefined;
+    let startupPrompt: string | undefined;
+    let startupPromptFile: string | undefined;
     let workspace: string | undefined;
     for (let i = 0; i < tail.length; i++) {
       const a = tail[i] ?? '';
@@ -3476,6 +3482,8 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
         a === '--model' ||
         a === '--visibility' ||
         a === '--system-prompt' ||
+        a === '--startup-prompt' ||
+        a === '--startup-prompt-file' ||
         a === '--workspace'
       ) {
         const value = readFlagValue(tail, i, a);
@@ -3484,6 +3492,8 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
         if (a === '--name') name = value.value;
         else if (a === '--model') model = value.value;
         else if (a === '--system-prompt') systemPrompt = value.value;
+        else if (a === '--startup-prompt') startupPrompt = value.value;
+        else if (a === '--startup-prompt-file') startupPromptFile = value.value;
         else if (a === '--workspace') workspace = value.value;
         else {
           if (value.value !== 'private' && value.value !== 'team' && value.value !== 'tenant') {
@@ -3500,6 +3510,10 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
       return { ok: false, error: `Unknown argument for agent create: ${a}` };
     }
     if (args.help) return { ok: true, args };
+    // q-hire-prompt：--startup-prompt / --startup-prompt-file 互斥（--policy 先例）。
+    if (startupPrompt !== undefined && startupPromptFile !== undefined) {
+      return { ok: false, error: 'Use only one of --startup-prompt / --startup-prompt-file' };
+    }
     args.agentCommand = {
       kind: 'create',
       json,
@@ -3507,6 +3521,8 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
       ...(model !== undefined ? { model } : {}),
       ...(visibility !== undefined ? { visibility } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      ...(startupPrompt !== undefined ? { startupPrompt } : {}),
+      ...(startupPromptFile !== undefined ? { startupPromptFile } : {}),
       ...(workspace !== undefined ? { workspace } : {}),
     };
     return { ok: true, args };
