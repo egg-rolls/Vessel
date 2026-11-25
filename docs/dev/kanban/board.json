@@ -54,6 +54,22 @@
       "progress": "291a5ed4派单(用户四裁定)：①read免list直读缺省3②去掉排队超时sweep③rotate阈值默认0.5(50%即建议切换防堆积)④WebUI三态(展开/默认3条可配/收起badge)；每步一提交一报"
     },
     {
+      "id": "q-msg-visibility",
+      "title": "消息显示设置整合：7类型独立toggle统一分组（用户裁定）",
+      "column": "待办",
+      "owner": "main",
+      "branch": "redblue-dev",
+      "progress": "用户裁定：思考/工具/环境/来源/系统各独立toggle归一组「消息显示」；核心内容恒显；旧showInternalEvents兼容映射；渲染侧统一messageVisibility配置对象；待派单"
+    },
+    {
+      "id": "q-chat-index",
+      "title": "会话索引竖条（豆包式minimap）：侧边dot导航+视口高亮+点击跳转",
+      "column": "待办",
+      "owner": "main",
+      "branch": "redblue-dev",
+      "progress": "用户裁定(参考豆包conversation-index-list)：会话页+团队页侧边竖向条,每消息一dot,当前视口高亮,点击平滑滚动,顶底渐隐；待派单"
+    },
+    {
       "id": "q-skills-ui",
       "title": "技能库页面UI重设计：卡片展示名称+点击详情（用户裁定参照工具页规范）",
       "column": "待办",
