@@ -283,6 +283,10 @@ export async function createModelRegistryWiring(options: {
       get vision() {
         return currentInstance(resolved).vision;
       },
+      // q-thinking-plugin：身份是路由事实（resolved.protocol），挂 wrapper 级，不随实例
+      // 缓存键（凭证 updatedAt）变——轮换凭证不换身份。未知 protocol 复用 openai 工厂时
+      // 仍挂原 protocol（dashscope 走 openai 传输但身份可以是 'dashscope'）。
+      providerName: resolved.protocol,
     };
   }
 

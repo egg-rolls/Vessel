@@ -13,6 +13,13 @@ import type {
 } from '../types/provider.js';
 import type { ToolCall } from '../types/tool.js';
 import { ProviderHttpError, parseRetryAfterMs } from './errors.js';
+import {
+  applyAnthropicThinkingConsistency,
+  mergeExtraHeaders,
+  mergeExtraParams,
+  RESERVED_BODY_KEYS_ANTHROPIC,
+  RESERVED_BODY_KEYS_OPENAI,
+} from './request-extras.js';
 import { StreamAccumulator } from './stream-accumulator.js';
 import {
   type AnthropicRawUsage,
@@ -463,16 +470,23 @@ export class OpenAICompatibleProvider implements LLMProvider {
       return await this.streamChat(url, messages, tools, req, req.on_chunk);
     }
 
-    const body = {
-      model: req.model ?? this.model,
-      messages,
-      tools,
-      temperature: req.temperature ?? this.temperature,
-      max_tokens: req.max_tokens ?? this.maxTokens,
-      stream: false,
-    };
+    const body = mergeExtraParams(
+      {
+        model: req.model ?? this.model,
+        messages,
+        tools,
+        temperature: req.temperature ?? this.temperature,
+        max_tokens: req.max_tokens ?? this.maxTokens,
+        stream: false,
+      },
+      req.extra_params,
+      RESERVED_BODY_KEYS_OPENAI,
+    );
 
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const headers: Record<string, string> = mergeExtraHeaders(
+      { 'Content-Type': 'application/json' },
+      req.extra_headers,
+    );
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
 
     const response = await fetch(url, {
@@ -554,17 +568,24 @@ export class OpenAICompatibleProvider implements LLMProvider {
     req: ChatRequest,
     onChunk: (chunk: StreamChunk) => void,
   ): Promise<LLMResponse> {
-    const streamBody = {
-      model: req.model ?? this.model,
-      messages,
-      tools,
-      temperature: req.temperature ?? this.temperature,
-      max_tokens: req.max_tokens ?? this.maxTokens,
-      stream: true,
-      stream_options: { include_usage: true },
-    };
+    const streamBody = mergeExtraParams(
+      {
+        model: req.model ?? this.model,
+        messages,
+        tools,
+        temperature: req.temperature ?? this.temperature,
+        max_tokens: req.max_tokens ?? this.maxTokens,
+        stream: true,
+        stream_options: { include_usage: true },
+      },
+      req.extra_params,
+      RESERVED_BODY_KEYS_OPENAI,
+    );
 
-    const streamHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+    const streamHeaders: Record<string, string> = mergeExtraHeaders(
+      { 'Content-Type': 'application/json' },
+      req.extra_headers,
+    );
     if (this.apiKey) streamHeaders.Authorization = `Bearer ${this.apiKey}`;
 
     const response = await fetch(url, {
@@ -751,11 +772,14 @@ export class AnthropicProvider implements LLMProvider {
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01',
-      },
+      headers: mergeExtraHeaders(
+        {
+          'Content-Type': 'application/json',
+          'x-api-key': this.apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        req.extra_headers,
+      ),
       signal: req.signal,
       body: JSON.stringify(body),
     });
@@ -857,7 +881,8 @@ export class AnthropicProvider implements LLMProvider {
       tools,
     };
     if (stream) body.stream = true;
-    return body;
+    const merged = mergeExtraParams(body, req.extra_params, RESERVED_BODY_KEYS_ANTHROPIC);
+    return applyAnthropicThinkingConsistency(merged);
   }
 
   /**
@@ -877,11 +902,14 @@ export class AnthropicProvider implements LLMProvider {
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01',
-      },
+      headers: mergeExtraHeaders(
+        {
+          'Content-Type': 'application/json',
+          'x-api-key': this.apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        req.extra_headers,
+      ),
       signal: req.signal,
       body: JSON.stringify(streamBody),
     });

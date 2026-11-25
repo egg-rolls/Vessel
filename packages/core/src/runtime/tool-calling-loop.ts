@@ -67,6 +67,8 @@ export interface LoopContext {
   readonly execution: Run;
   /** 本次请求的模型标识；计价按它查价格表。 */
   readonly model: string;
+  /** provider 身份（additive，q-thinking-plugin；来自 provider 实例事实）；缺省 = 身份未知。 */
+  readonly providerName?: string;
   /** opt-in 计价；缺省不累计 `totalCost`。 */
   readonly pricing?: UsagePricing;
   /**
@@ -129,6 +131,11 @@ export interface ProviderPort {
     sessionId: string;
     signal?: AbortSignal;
     rebuildMessages: () => Message[];
+    /** BeforeLlm hook 注入的额外头/参数（additive，q-thinking-plugin）；缺省 = 请求形状不变。 */
+    requestExtras?: {
+      headers?: Record<string, string>;
+      params?: Record<string, unknown>;
+    };
   }): Promise<LLMResponse>;
 }
 
@@ -399,6 +406,8 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       run_id: runId,
       session_id: sessionId,
       request_index: round - 1,
+      model: ctx.model,
+      ...(ctx.providerName !== undefined ? { providerName: ctx.providerName } : {}),
       ...(inputRefs !== undefined && inputRefs.length > 0 ? { refs: inputRefs } : {}),
     };
     const baseSystemPrompt = ctx.controls.getBaseSystemPrompt();
@@ -492,6 +501,7 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       sessionId,
       ...(ctx.controls.signal !== undefined ? { signal: ctx.controls.signal } : {}),
       rebuildMessages: () => ctx.window.buildRequestMessages(baseSystemPrompt),
+      ...(beforeLlm.requestExtras !== undefined ? { requestExtras: beforeLlm.requestExtras } : {}),
     });
     const responseAt = Date.now();
     previousResponseAt = responseAt;

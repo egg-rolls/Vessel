@@ -3626,6 +3626,9 @@ export class ExecutionUnit {
     return {
       execution,
       model: this.model,
+      ...(this.provider.providerName !== undefined
+        ? { providerName: this.provider.providerName }
+        : {}),
       ...(this.pricing !== undefined ? { pricing: this.pricing } : {}),
       ...(inputRefs !== undefined && inputRefs.length > 0 ? { inputRefs } : {}),
       window: {
@@ -3734,6 +3737,11 @@ export class ExecutionUnit {
       signal?: AbortSignal;
       /** 重新按当前窗口组装请求；0.52 V2 起 run 内不改写历史，保留位给段起点以后的路径。 */
       rebuildMessages: () => Message[];
+      /** BeforeLlm hook 注入的额外头/参数（additive，q-thinking-plugin）；轮级事实，重试链复用。 */
+      requestExtras?: {
+        headers?: Record<string, string>;
+        params?: Record<string, unknown>;
+      };
     },
   ): Promise<LLMResponse> {
     const { runId, stats } = execution;
@@ -3888,6 +3896,20 @@ export class ExecutionUnit {
             ...(attachmentPlan.images > 0 || attachmentPlan.dropped.length > 0
               ? { images: summarizeAttachmentPlan(attachmentPlan) }
               : {}),
+            // q-thinking-plugin：extra 注入的**键名元信息**（值一律不落——头值可能敏感，
+            // 统一「只记键名」避免逐键分级）。让「这轮为什么贵/为什么没思考」可从落盘日志回答。
+            ...(args.requestExtras !== undefined &&
+            ((args.requestExtras.headers !== undefined &&
+              Object.keys(args.requestExtras.headers).length > 0) ||
+              (args.requestExtras.params !== undefined &&
+                Object.keys(args.requestExtras.params).length > 0))
+              ? {
+                  request_extras: {
+                    header_keys: Object.keys(args.requestExtras.headers ?? {}),
+                    param_keys: Object.keys(args.requestExtras.params ?? {}),
+                  },
+                }
+              : {}),
             // temperature / max_tokens：core 今天不设（沿用 provider 默认），因此不写；
             // 字段已在 `LlmRequestPayload` 里预留，harness 接上时在这里补。
           },
@@ -3921,6 +3943,16 @@ export class ExecutionUnit {
         // 0.56：这一轮要发的图。**只有适配器读它**（`Message` 一个字节没变）；
         // 一张都没发时缺省 ⇒ 请求体与 0.55 逐字节相同（P0-13）。
         ...(attachmentPlan.images > 0 ? { attachment_plan: attachmentPlan } : {}),
+        // q-thinking-plugin：BeforeLlm hook 注入的额外头/参数。**非空才带键**；
+        // 缺省 / 空 ⇒ 请求体与今天逐字节相同（P0-13）。轮级事实，重试链复用同一份。
+        ...(args.requestExtras?.headers !== undefined &&
+        Object.keys(args.requestExtras.headers).length > 0
+          ? { extra_headers: args.requestExtras.headers }
+          : {}),
+        ...(args.requestExtras?.params !== undefined &&
+        Object.keys(args.requestExtras.params).length > 0
+          ? { extra_params: args.requestExtras.params }
+          : {}),
         // 流式（ADR-007）：始终提供 stream + on_chunk。支持流式的 Provider 边收边经回调吐增量，
         // loop 在此发布 LlmStreamChunk 事件供 TUI 订阅渲染；不支持流式的 Provider 忽略字段、
         // 退化为整段返回（无 chunk 事件，无副作用）。chat() 仍返回完整 LLMResponse。
