@@ -33,6 +33,8 @@ import {
 import {
   formatEventLine,
   platformListenGuard,
+  runShutdownStep,
+  type ShutdownStepEmit,
   startPlatformGateway,
 } from '../../../../packages/serve/src/index';
 import { formatConfigErrors } from '../../../config/config-error-format';
@@ -3319,6 +3321,13 @@ export async function runPlatformGatewayForeground(
     // 这个闭包，不另造退出路径（node 先例 cli.ts：「走与 SIGTERM 完全相同的 activeCleanup」）。
     // 停止方（stopGateway 优雅步）经 RPC 触发它，让平台进程内跑到 owned 池 stop 再退，
     // 关闭 Windows owned engine 孤儿缺口；keep 语义零变化（handoff marker 单一权威）。
+    // DR15-1：平台退出步永久进度日志（与 node 侧同一事件名 node.shutdown.step；
+    // 平台无结构化 logger，走 formatEventLine + print，daemon 下进 logs/gateway.log）。
+    const platformShutdownEmit: ShutdownStepEmit = (level, event, fields) => {
+      const line = formatEventLine(event, fields);
+      if (level === 'warn') printErr(ui.warn(line));
+      else print(ui.dim(line));
+    };
     const performPlatformShutdown = async (): Promise<void> => {
       // 构建中被叫停（`gateway stop` / Ctrl-C / 外部 SIGTERM）：**真的**杀掉构建子进程，
       // 并留一行 `web.build.interrupted` —— 用户要的是「知道这次构建被中断了」，
@@ -3329,7 +3338,11 @@ export async function runPlatformGatewayForeground(
       // 没有 marker（Ctrl-C、`gateway stop`、外部 SIGTERM）就照旧连子进程一起停。
       handoffKept = await consumeHandoffMarker(dataDir, instance, process.pid).catch(() => false);
       if (handoffKept) {
-        const result = await supervisor?.stop({ keep: true }).catch(() => undefined);
+        const result = await runShutdownStep(
+          platformShutdownEmit,
+          'platform.supervisor.stop',
+          async () => await supervisor?.stop({ keep: true }).catch(() => undefined),
+        );
         if (result !== undefined) {
           print(ui.info(t('gateway.stopKeptNodes', { count: result.kept?.nodes ?? 0 })));
           if ((result.kept?.hubs ?? 0) > 0) print(ui.info(t('gateway.stopKeptHub')));
@@ -3340,11 +3353,23 @@ export async function runPlatformGatewayForeground(
           print(ui.dim(`engine pool: kept ${keptEngines} owned engine(s) for adopt`));
         }
       } else {
-        await supervisor?.stop().catch(() => undefined);
+        await runShutdownStep(
+          platformShutdownEmit,
+          'platform.supervisor.stop',
+          async () => await supervisor?.stop().catch(() => undefined),
+        );
         // 池 S20：非 handoff 停止 terminate owned（adopt/external 永不杀，S7）；node 先停再停 engine。
-        await poolSupervisor?.stop().catch(() => undefined);
+        await runShutdownStep(
+          platformShutdownEmit,
+          'platform.pool.stop',
+          async () => await poolSupervisor?.stop().catch(() => undefined),
+        );
       }
-      await platformGateway?.stop().catch(() => undefined);
+      await runShutdownStep(
+        platformShutdownEmit,
+        'platform.gateway.stop',
+        async () => await platformGateway?.stop().catch(() => undefined),
+      );
       platformGateway = undefined;
     };
 
@@ -3411,7 +3436,11 @@ export async function runPlatformGatewayForeground(
         shutdown: {
           handle: async () => {
             await performPlatformShutdown().catch(() => undefined);
-            await lock.release().catch(() => undefined);
+            await runShutdownStep(
+              platformShutdownEmit,
+              'platform.lock.release',
+              async () => await lock.release().catch(() => undefined),
+            );
             process.exit(0);
           },
           remoteAllowed: config.gateway?.remoteShutdown === true,

@@ -170,6 +170,14 @@ pluginWatch.close（同步）
      + force terminate。
 - i18n en/zh-CN additive 新键：quiesce 兜底警示行（drain 已完成但进程未自死 → 强杀 +
   指路 node.shutdown.step 日志）。
+- **O7 审计持久化（lead 复验矩阵点 3 补充要求）**：停止方是独立短命 CLI，stdout 不进
+  node/gateway 日志 —— stop.forced 审计只打终端会随终端丢失。新增
+  `persistStopAuditLine(logPath, line)`（stop-drain.ts，best-effort appendFile）：
+  quiesce 兜底路径**必须**持久化；显式 --force 路径顺手同修（lead 允许）。
+  日志路径：platform / 独立 node → gatewayLogPath(context.dataDir, instance)；
+  平台托管 node 子进程 → nodeLogPath(gatewayDataDir, name)（onForced 回调接线处）。
+  审计单行事件与人类汇总分离：formatForcedAuditEvent（单行，持久化用）/
+  formatForcedAuditLine（事件+汇总，终端用）；reason 字段区分 quiesce_exit_timeout。
 
 ## 4. 不做的事（最小外科手术边界）
 
@@ -194,3 +202,17 @@ pluginWatch.close（同步）
 ① 本审计文档 commit → 报 main；② scope A（挂点有界化 + 永久步骤日志）commit；
 ③ scope B（等死段有界兜底 + 审计）commit；④ 总门禁 `bun run build` 绿 → 最终报告
 （commit hashes + 文件清单 + build 关键行 + 根因结论 + 复验指引）。
+
+## 7. 补遗：f0dabd9d interrupt 副作用假说核验（lead 转达 cli 终归因假说）
+
+假说：旧 beginDrain 的 `interrupt('shutdown')` 有副作用关闭某些句柄/订阅，新
+drain-to-quiesce 不 interrupt → 退出步等待的句柄永不收口。**核验结论：不成立。**
+
+1. `ExecutionUnit.interrupt`（packages/core/src/runtime/execution-unit.ts:2882-2890）
+   实现 = 仅 `control.controller.abort(reason)`（中止在跑 run 的 AbortController），
+   不关任何句柄/订阅/连接；且无 active run 时直接 return。
+2. 决定性反证：15① 复现是 **idle node（settle=idle，0 run）**——旧路径在 0 run 时
+   同样不会调 interrupt（无在跑 run 可打断），新旧 drain 对 idle node 行为逐字相同，
+   而挂起照样发生 ⇒ 挂起与 interrupt 副作用无关。
+3. 挂点仍为 §2 所证 `server.stop(true)`（日志签名夹逼 + 平台 0.58 先例）；
+   永久步骤日志即 lead 指定的运行时插桩本体，金丝雀复验终证。

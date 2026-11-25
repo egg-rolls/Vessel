@@ -49,6 +49,8 @@ import {
   normalizeAllowedOrigins,
   type PluginHostManager,
   type PluginReloadResult,
+  runShutdownStep,
+  type ShutdownStepEmit,
   startGateway,
   type TenantEventHub,
 } from '../packages/serve/src/index';
@@ -2087,18 +2089,28 @@ async function runWithConfig(result: BootstrapResult) {
 
   // 未捕获异常时的清理入口：停 gateway / 关闭额外 tenant / 释放默认 tenant。
   // beginDrain 已 drain-to-quiesce（run 全部自然终态），后续关闭传 drain:false。
+  // DR15-1：退出步永久进度日志发射口（activeCleanup 与 SIGTERM 的 finish 共用）。
+  // 挂起时日志里最后一条 node.shutdown.step status=start 就是挂点。
+  const shutdownStepEmit: ShutdownStepEmit = (level, event, fields) => {
+    if (level === 'warn') logger.warn(event, fields);
+    else logger.info(event, fields);
+  };
   activeCleanup = async () => {
     // 0.43：先停 watcher 并回收 plugin 子进程（停订阅 / 动态 RPC / 子进程）。
     pluginWatch?.close();
     pluginWatch = undefined;
-    await pluginHostManager?.stopAll();
+    await runShutdownStep(shutdownStepEmit, 'cleanup.plugin.stopAll', async () => {
+      await pluginHostManager?.stopAll();
+    });
     pluginHostManager = undefined;
     // 先停配置监听 / 版本检查与出站，避免 gateway drain 期间继续触发热应用或重连。
     gatewayUpdateCheck?.stop();
     gatewayUpdateCheck = undefined;
     configWatch?.close();
     configWatch = undefined;
-    await hubNodeOutbound?.close();
+    await runShutdownStep(shutdownStepEmit, 'cleanup.hubOutbound.close', async () => {
+      await hubNodeOutbound?.close();
+    });
     hubNodeOutbound = undefined;
     await shutdownServeStack({
       // drain-to-quiesce：fence + 不限时等活跃 run 自然跑完 + flush，
@@ -2110,8 +2122,11 @@ async function runWithConfig(result: BootstrapResult) {
         eventHub = undefined;
       },
       shutdown: (options) => result.shutdown(options),
+      onStep: shutdownStepEmit,
     });
-    await foregroundGatewayLock?.release();
+    await runShutdownStep(shutdownStepEmit, 'cleanup.foregroundLock.release', async () => {
+      await foregroundGatewayLock?.release();
+    });
   };
 
   let shutdownSignal: 'SIGINT' | 'SIGTERM' | undefined;
@@ -2178,10 +2193,14 @@ async function runWithConfig(result: BootstrapResult) {
     // 0.43：先停 watcher 并回收 plugin 子进程（停订阅 / 动态 RPC / 子进程）。
     pluginWatch?.close();
     pluginWatch = undefined;
-    await pluginHostManager?.stopAll();
+    await runShutdownStep(shutdownStepEmit, 'cleanup.plugin.stopAll', async () => {
+      await pluginHostManager?.stopAll();
+    });
     pluginHostManager = undefined;
     // 先停出站，避免 gateway drain 期间继续重连或刷新目录。
-    await hubNodeOutbound?.close();
+    await runShutdownStep(shutdownStepEmit, 'cleanup.hubOutbound.close', async () => {
+      await hubNodeOutbound?.close();
+    });
     hubNodeOutbound = undefined;
     await shutdownServeStack({
       // 0.52 S1a：见上（feishu 退出路径同一段）。
@@ -2194,8 +2213,11 @@ async function runWithConfig(result: BootstrapResult) {
         eventHub = undefined;
       },
       shutdown: (options) => result.shutdown(options),
+      onStep: shutdownStepEmit,
     });
-    await foregroundGatewayLock?.release();
+    await runShutdownStep(shutdownStepEmit, 'cleanup.foregroundLock.release', async () => {
+      await foregroundGatewayLock?.release();
+    });
   };
 
   // 0.4：显式 --feishu 时，SIGINT/SIGTERM 走 130/143；

@@ -57,8 +57,10 @@ import {
   type HubControlLike,
   type LocalRpcDispatcher,
   RpcError,
+  runShutdownStep,
   type SelfRestartInput,
   type SelfRestartResult,
+  type ShutdownStepEmit,
 } from '../../packages/serve/src/index';
 import type { ReplContext } from '../../packages/tui/src/index';
 import { createAgentControl } from '../agent/agent-control';
@@ -2470,9 +2472,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const shutdown = async (shutdownOptions: { drain?: boolean } = {}): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
+    // DR15-1：退出步永久进度日志（挂起时最后一条 start 即挂点；复验实证哪步慢）。
+    const emit: ShutdownStepEmit = (level, event, fields) => {
+      if (level === 'warn') logger.warn(event, fields);
+      else logger.info(event, fields);
+    };
     // 0.52 S1a：退出序列第一段（幂等）。serve 壳在 gateway.stop() 之前已经调过一次；
     // 这里兜住「直接 shutdown() 的路径」——REPL 的 onExit、cleanup、uncaught 收尾。
-    await beginDrain();
+    await runShutdownStep(emit, 'shutdown.beginDrain', () => beginDrain());
 
     try {
       unsubPermissionPersist?.();
@@ -2496,7 +2503,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
     // 0.17：先停 owner 端点，CLI 不再有机会在 teardown 中途入队。
     try {
-      await agentControl?.dispose();
+      await runShutdownStep(emit, 'shutdown.agent.dispose', async () => {
+        await agentControl?.dispose();
+      });
     } catch (error) {
       reportShutdownFailure({
         events: bundle.events,
@@ -2514,7 +2523,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }
 
     try {
-      await localPluginHostManager.stopAll();
+      await runShutdownStep(emit, 'shutdown.plugin.stopAll', () =>
+        localPluginHostManager.stopAll(),
+      );
     } catch (error) {
       reportShutdownFailure({
         events: bundle.events,
@@ -2530,9 +2541,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 池 S20：pool 模式 dispose PoolTransport（关连接/定时器；detached engine 归 gateway 生命周期，
     // node 退出不杀池）；child 模式语义不变（engineSupervisor 有值时 optional chain 等价原调用）。
     try {
-      await engineSupervisor?.stop();
-      poolTransportRef.current?.dispose();
-      engineClient.dispose();
+      await runShutdownStep(emit, 'shutdown.toolsEngine.stop', async () => {
+        await engineSupervisor?.stop();
+        poolTransportRef.current?.dispose();
+        engineClient.dispose();
+      });
     } catch (error) {
       reportShutdownFailure({
         events: bundle.events,
@@ -2569,11 +2582,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
     // bundle 关闭顺序：feishu → metrics → MCP → runtime
     // → trace → runStore → session；session 写锁由 bootstrap 在最后释放。
-    await bundle.close(shutdownOptions);
+    await runShutdownStep(emit, 'shutdown.bundle.close', () => bundle.close(shutdownOptions));
 
-    if (processSessionLock) {
+    const sessionLock = processSessionLock;
+    if (sessionLock) {
       try {
-        await processSessionLock.release();
+        await runShutdownStep(emit, 'shutdown.sessionLock.release', () => sessionLock.release());
       } catch (error) {
         reportShutdownFailure({
           events: bundle.events,
