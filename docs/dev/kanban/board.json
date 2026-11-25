@@ -139,10 +139,10 @@
     {
       "id": "q-kanban-visual",
       "title": "看板视觉规范化+分页导航重设计（用户直接指示）",
-      "column": "进行中",
-      "owner": "q-kanban-visual",
+      "column": "阻塞",
+      "owner": "user",
       "branch": "feat/q-kanban-visual",
-      "progress": "c2b4dadf派单(用户指示2026-11-25晚)：①KanbanView/KanbanCard逐面审计对齐design-audit规范+共享表面/token(数据流零改)②skills插件'显示1–1/1上一页下一页'raw分页条按规范重设计替换(plugin-ui共享组件优先+skills build:ui重建)；看板不加分页(用户未要求)；合并候第四轮晋升后+金丝雀验收(第五轮登记)"
+      "progress": "✅实施完成build绿(main盘上核实:4commits 0576c89b审计/5bff3847看板GHOST误套摘除六面归位/96e96c8d plugin-ui Pager additive+skills替换build:ui/4d678f40报告,12文件+435/-229,plugin-ui index仅+1 additive导出既有零改动,typecheck+lint+📦全绿,资产sha256在报告)；★lead分批裁定:第五轮批次C=UI视觉专项(design-audit规范+像素验收,与18/20/21封存面耦合回归,测试员skillsstyle复用)；合并候第四轮晋升后(main合)+批次C金丝雀验+用户打勾；不做清单:看板未加分页/skills计数胶囊先例不动/RunEventLog GHOST域合法不动"
     },
     {
       "id": "q-permission-pending",
