@@ -482,6 +482,56 @@
       "progress": "✅审查完成合并9fc26e0c(runlost-graceful-restart-audit.md)：run lost触发条件(file:line)+编排者悖论+inbox七缺口+自重启三件套设计；实施单q-graceful-selfrestart已合并1d5e4688(drain-to-quiesce+--self+inbox唤醒G1-G7)；待金丝雀验+用户打勾",
       "archivedAt": "2026-11-25T21:43:00+08:00",
       "cycle": "redblue-round4-5-self-verified-fixes"
+    },
+    {
+      "id": "q-ax-config",
+      "title": "AX自服务·诊断组：vessel config explain + vessel doctor",
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并b59c5326(c408fca2 explain层溯源12文件+483/b316e5b0 doctor舰队五项5文件+417)build绿cli.ts零改动；待金丝雀验证5点(explain逐层WINNER/env覆盖诊断/stale lock/端口归属/共享token)；worktree已清",
+      "archivedAt": "2026-11-25T22:21:37+08:00",
+      "cycle": "redblue-round4-5-self-verified-internal"
+    },
+    {
+      "id": "q-ax-discovery",
+      "title": "AX自服务·发现组：vessel rpc list + vessel fleet status",
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并4f8099cf(a28a1556 rpc list+2709034b fleet status,8文件+858纯additive,零cli.ts/服务端改动)build绿；待金丝雀验4点(rpc list本地/--node/fleet status/--data-dir边界/help/completion/无gateway教学)；worktree已清",
+      "archivedAt": "2026-11-25T22:21:37+08:00",
+      "cycle": "redblue-round4-5-self-verified-internal"
+    },
+    {
+      "id": "q-ax-selfobs",
+      "title": "AX自服务·自观组：vessel session status + vessel permission show",
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并614ef033(b3b73f54 session status+588fa811 permission show含additive permissions.show RPC,11文件+1078,rebase自解冲突)build绿；待验(session status缺省自身/--id/--json/permission show/--member/旧gateway降级)；worktree已清。★AX三组全交付(config b59c5326/discovery 4f8099cf/selfobs 614ef033)",
+      "archivedAt": "2026-11-25T22:21:37+08:00",
+      "cycle": "redblue-round4-5-self-verified-internal"
+    },
+    {
+      "id": "q-plugin-lifecycle-impl",
+      "title": "插件生命周期最优实现（per-capability+O5修复+注销API+版本跟踪，不留中间态）",
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并c68cc6c1+792b3752(7提交f92d4792/01ea38c4/de93e77e/2e115c3c/e39a2403/1dc94e52/fbbe35a3+marketplace资产收口)build绿；最优终态:能热真热(tool/hook/guardrail/masker/child启停/child settings)不能热诚实badge(provider/工厂/in-process代码),显示态=生效态同源,pii半态消除,无过渡闸无委屈代码；待金丝雀验+用户重启",
+      "archivedAt": "2026-11-25T22:21:37+08:00",
+      "cycle": "redblue-round4-5-self-verified-internal"
+    },
+    {
+      "id": "q-graceful-selfrestart",
+      "title": "完全优雅stop/restart(drain-to-quiesce)+自重启Option A（用户裁定）",
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并1d5e4688(f0dabd9d drain-to-quiesce/949cff6b Option A --self自重启/671357d5 inbox唤醒G1-G7/8d61103c指路)build绿；stop/restart缺省等run真跑完不限时+进度,--force唯一非优雅；vessel restart --self --prompt早返回→run自然完成无run lost→重启→嘱托自动续跑；★15①main实测发现(2026-11-25T18:25):drain-to-quiesce本身✓(node.drain.done settle=idle 0run 1ms+5s进度行)但进程不自死✗——gateway.stop(ws closed)后activeCleanup挂起12+分钟(cli.ts:2090-2115候选eventHub.close/result.shutdown/lock.release,process.exit未到达),协议A force兜底runs_cut=0+舰队已恢复；lead登记ISSUE-DR15-1；★15②决定性实验FAIL(cli --self当前build复现:drain.done settle=settled 1run 36.3s@10:45:47Z→pid 76624存活3m8s+orchestrator干等3m42s→main协议A自主force兜底runs_cut=0→orchestrator自主start pid87476+continuation投递✓)；两次独立复现(10:25外部stop+10:45--self)=确定性非状态依赖；cli provisional归因:node侧疑似既有(07:47平台重试172s旧证)+stop侧放大回归确证(24b4eb95移除10s force兜底→不限时干等)；main预调研退出链候选:gateway.stop后半/closeTenants/agentControl.dispose/localPluginHostManager.stopAll/engineSupervisor.stop(tools-engine child Windows退出疑)/bundle.close/processSessionLock.release,诊断缺口=零步骤进度日志；候lead终裁+微修复scope→本轮微修复快速通道→晋升",
+      "archivedAt": "2026-11-25T22:21:37+08:00",
+      "cycle": "redblue-round4-5-self-verified-internal"
     }
   ]
 }
