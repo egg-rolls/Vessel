@@ -48,10 +48,10 @@
     {
       "id": "q-inbox-ux",
       "title": "inbox体验+排队超时移除+rotate阈值0.5+WebUI三态",
-      "column": "进行中",
-      "owner": "q-inbox-ux",
-      "branch": "fix/q-inbox-ux",
-      "progress": "291a5ed4派单(用户四裁定)：①read免list直读缺省3②去掉排队超时sweep③rotate阈值默认0.5(50%即建议切换防堆积)④WebUI三态(展开/默认3条可配/收起badge)；每步一提交一报"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并ab63936d(023fec90 read缺省3/cf8b0308去超时/c5f5b404 rotate0.5/e2e8b89d条带三态)build绿；更正：产物读数误报撤回(本仓build=typecheck+lint无bundle,ADR-006)；待验4点(直读最新3/不超时回退/50%rotate提示/三态切换)；worktree已清"
     },
     {
       "id": "q-msg-visibility",
