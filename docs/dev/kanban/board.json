@@ -56,10 +56,10 @@
     {
       "id": "q-context-fix",
       "title": "上下文口径统一修写侧（兜底估算应用冻结占位~30行+切片修正）",
-      "column": "进行中",
-      "owner": "q-context-fix",
-      "branch": "fix/q-context-fix",
-      "progress": "eaa86e59派单：P1 execution-unit:1702兜底估算复用withClearedToolResults+segmentClearPlans消虚高170K②P2 requestView sourceMessageCount修切片③消费侧零改动自动对齐④rotate码名澄清；验收pressure.used≈llm.request Δ<1%"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并5de051ea(e45e4053 P1兜底冻结占位/25253257 P2切片/81f3aa08 rotate文案+P5注释,5文件+67build绿)；消虚高170K消费侧自动对齐(pressure.used≈llm.request Δ<1%/rotate percent==通知/UI跳变消失)；遗留P4 TUI口径另单+码名另议+部署后Δ实测；待金丝雀验+用户重启后50%↔73%打架消失"
     },
     {
       "id": "q-swr-refresh",
