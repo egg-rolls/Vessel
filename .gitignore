@@ -77,9 +77,9 @@ coverage/
 coverage.lcov
 test-results/
 reports/
-# 例外：0.54 起的实测报告是仓库资产（§1.5 尺子等），不能被上面这条吞掉
-!docs/dev/reports/
-!docs/dev/reports/**
+# docs/dev/ 全部属个人侧（外层仓 D:/Application/APP/Vessel/docs/dev/），代码仓不跟踪
+# （用户裁定：kanban/plans/reports/research/design/specs 等 dev 文档归个人侧，不上代码云）
+docs/dev/
 *.snap
 
 # ----------------------------------------------------------
