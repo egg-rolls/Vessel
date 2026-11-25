@@ -20,6 +20,7 @@ import { indexEntriesOfItems } from './conversation-index';
 import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
 import { isStripCoveredInboxNotice } from './env-notice';
+import { InboxReadCard } from './InboxReadCard';
 import { PendingBubble } from './PendingBubble';
 import { inConversationStream } from './pending-placement';
 import type { PendingSend } from './pending-sends';
@@ -459,6 +460,10 @@ export function TranscriptWindow({
       if (item.kind === 'tool') {
         return verbosity !== 'minimal' && messageVisibility.tools && item.runId === latest.runId;
       }
+      // 收件箱取走的承接卡是消息不是工具：不受工具开关 / minimal 档影响，永远算可见内容。
+      if (item.kind === 'inbox-read') {
+        return item.runId === latest.runId;
+      }
       return false;
     });
   }, [activeAgent, items, renderedGroups, verbosity, messageVisibility.tools]);
@@ -487,6 +492,21 @@ export function TranscriptWindow({
             ts={item.ts}
             entering={isEntering(item.key)}
             refs={item.refs}
+          />
+        );
+      case 'inbox-read':
+        // P1-A 症状②承接：被 inbox read 消费的消息（不成为 run input、无回显）在这里
+        // 可见。human 源 = 人自己说的话 → 用户气泡（与 run-input 同口径）；agent / system
+        // 源 → 收件箱消息卡（read 结果只给 source 这一层身份，没有发送者名，不猜不造）。
+        return item.source === 'human' ? (
+          <UserBubble text={item.text} ts={item.ts} entering={isEntering(item.key)} />
+        ) : (
+          <InboxReadCard
+            source={item.source}
+            content={item.text}
+            ts={item.ts}
+            defaultOpen={cardsDefaultOpen}
+            entering={isEntering(item.key)}
           />
         );
       case 'ask-answer':
