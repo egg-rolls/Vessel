@@ -143,10 +143,10 @@
     {
       "id": "q-ti5-manifest",
       "title": "微修复：TI5-1 thinking-intensity manifest i18n键小写化（B1阻塞）",
-      "column": "进行中",
-      "owner": "q-ti5-manifest",
-      "branch": "fix/q-ti5-manifest",
-      "progress": "a71eb810派单(lead转达B1阻塞)：thinking-intensity/package.json i18n en/zh-CN 5大写键(defaultLevel/.desc/budgetLow/budgetMedium/budgetHigh)违^[a-z0-9][a-z0-9._-]*$→plugin_manifest_invalid fail-closed不加载→插件缺席plugins.list/catalog,get_state/config.set not_found,B1 live阻塞；修复=键改snake_case小写(与settings字段名一致)+同步titleKey/descriptionKey引用+grep无残留+build门禁；候修复→合并→canary同步→lifecycle/webui续验B1；B4不受影响/B3 cli PASS"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并30d52490(bbf61719修复+ed52c04e报告,2文件+71/-15零冲突,门禁绿)：thinking-intensity/package.json i18n en/zh-CN 5键改snake_case小写(default_level/budget_*)+settings引用5处同步,grep零残留,30键全合模式bad=0引用无悬空；plugin_manifest_invalid消除→插件现身plugins.list/catalog+get_state/config.set可达；候canary同步30d52490+restart(协议A,web未变免rebuild)+lifecycle/webui续验B1→TI5-1 CLOSED"
     },
     {
       "id": "q-dr15-2-platform",
