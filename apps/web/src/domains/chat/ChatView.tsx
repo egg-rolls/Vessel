@@ -20,7 +20,7 @@ import { useNodeNames } from '../nodes/useNodeNames';
 import { useAskCursorPrune } from '../pending/ask-cursor-store';
 import { useAskDraftPrune } from '../pending/ask-draft-store';
 import { rosterAttributionIndex } from '../pending/attribution';
-import { asksForSession } from '../pending/cluster';
+import { itemsForSession, pendingItems } from '../pending/cluster';
 import { PluginPanels } from '../plugins/PluginPanels';
 import { agentNamesOf } from './agent-labels';
 import { AgentNamesProvider } from './agent-name-context';
@@ -126,9 +126,9 @@ export function ChatView({
 
   const selectedId = route.sessionId && route.sessionId !== 'new' ? route.sessionId : null;
   const draftActive = route.sessionId === 'new';
-  // 会话分区的「待批」计数：数「归到本会话」的 ask（含成员 bridge 的父会话归属，
-  // 历史脏数据靠 roster 上溯兑底）。注意它数的是「去待批页能看到几条」，与会话页
-  // Composer 槽位「只渲自己 run 的 ask」那条守卫不是同一个判据。
+  // 会话分区的「待批」计数：数「归到本会话」的 permission + ask（含成员 bridge 的父会话
+  // 归属，历史脏数据靠 roster 上溯兑底）。注意它数的是「去待批页能看到几条」，与会话页
+  // Composer 槽位「只渲自己 run 的请求」那条守卫不是同一个判据。
   const rosterState = useAgentStore((state) => state.roster);
   const attribution = useMemo(
     () => rosterAttributionIndex(resourceData(rosterState) ?? []),
@@ -140,9 +140,9 @@ export function ChatView({
   // 节点展示名表（既有 useNodeNames：health 轮询 + sessionStorage 缓存，零新增请求）：
   // agent 工具卡的完整路由副行把 node 段换成节点名，查不到退原始 id。
   const nodeNames = useNodeNames();
-  const sessionAskCount = useMemo(
-    () => asksForSession(asks, selectedId, attribution).length,
-    [asks, selectedId, attribution],
+  const sessionPendingCount = useMemo(
+    () => itemsForSession(pendingItems(permissions, asks), selectedId, attribution).length,
+    [permissions, asks, selectedId, attribution],
   );
   // ask 草稿的清理钩子：请求一旦从 pending 集合里消失（本端或别的端答的），
   // 它的草稿一起清 —— 否则这份 sessionStorage 副本会跟着标签页活到关掉为止。
@@ -436,7 +436,7 @@ export function ChatView({
           draftActive={draftActive}
           pendingBySession={sessionsApi.pendingBySession}
           inflightBySession={sessionsApi.sessionInflight}
-          pendingAskCount={sessionAskCount}
+          pendingAskCount={sessionPendingCount}
           onOpenPending={() =>
             navigate({ domain: 'pending', ...(selectedId ? { sessionId: selectedId } : {}) })
           }
