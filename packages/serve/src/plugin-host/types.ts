@@ -197,6 +197,16 @@ export interface PluginRpcContribution {
   permission?: 'read' | 'write';
 }
 
+/**
+ * TI5-5 additive：`plugins.list` rpc wire 的对象条目（携带调用方权限）。
+ * 只在 permission='write' 时发射；read / 缺省仍是 bare string（E1 canonical）。
+ * web 读侧双形状容忍（string 缺省 read，对象读 permission）。
+ */
+export interface PluginRpcWireEntry {
+  name: string;
+  permission?: 'read' | 'write';
+}
+
 /** `contributes`（只保留宿主需要的键） */
 export interface PluginManifestContributions {
   /** 插件私有字典；只允许 en / zh-CN。 */
@@ -314,8 +324,14 @@ export interface PluginRenderContributions {
     menu?: PluginToolbarMenu;
   }>;
   commands: Array<{ name: string; title: string }>;
-  /** E1 amendment：bare RPC 方法名，供 web iframe bridge 做白名单。 */
-  rpc: string[];
+  /**
+   * E1 amendment：bare RPC 方法名，供 web iframe bridge 做白名单。
+   * TI5-5 additive：write 方法发 `{name, permission:'write'}` 对象携带权限真相
+   * （web toolbarMenuOf 的 write 校验需要）；read / 缺省方法保持 bare string
+   * （E1 canonical 逐字节不变）。旧 string-only 消费方对对象条目 fail-closed
+   * 跳过——它们缺省 read，本来就不该调 write 方法。
+   */
+  rpc: Array<string | PluginRpcWireEntry>;
   /**
    * S3 additive（vscode-settings-design §4.2）：manifest contributes.settings
    * 的 UI 元数据 spec（loader 已校验形状，原样透传，同 i18n 处理方式）。
@@ -395,6 +411,12 @@ export interface PluginListMetadata {
   version?: string;
   mode?: PluginMode;
   status?: PluginListStatus;
+  /**
+   * TI5-6 additive：插件持久化 config 快照（config `plugins[].config` 原值，
+   * 不含 manifest default）。web 设置弹窗回显 + 写确认消费（PluginListItem.config）。
+   * 无持久化值时整字段缺省（旧客户端忽略）。
+   */
+  config?: Record<string, unknown>;
   /** plugin-embed 契约 §3：没有 ui.embed 的插件三字段缺省。 */
   ui_trust?: PluginUiTrust;
   ui_bundle_hash?: string;
@@ -418,6 +440,12 @@ export interface PluginStatusEntry {
   events_dropped: number;
   /** 当前 restart 窗口内已重启次数。 */
   restarts: number;
+  /**
+   * TI5-6 additive：持久化 config 快照（内部字段；pluginListMetadata 映射到
+   * wire `config`）。优先 settingsFor 活配置读端口（写后新鲜），无端口回退
+   * descriptor.settings（启动快照）。无持久化值时缺省。
+   */
+  config?: Record<string, unknown>;
   /**
    * plugin-embed 契约 §3：descriptor 加载 / reload 时计算的 embed 信任态
    * （内部字段；pluginListMetadata 映射到 wire）。无 ui.embed / embedRoot
