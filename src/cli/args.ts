@@ -388,6 +388,20 @@ export type RpcCommand = { kind: 'list'; json: boolean };
 export type FleetCommand = { kind: 'status'; json: boolean };
 
 /**
+ * `vessel ps` / `vessel gateway ps` / `vessel node ps` / `vessel hub ps`
+ * （用户裁定 #4：docker ps 式进程管理）。
+ *
+ * `type` 缺省 = 全部类型；`all` = 含已停止（docker ps -a 式）。
+ * 只读本舰队运行时文件；--data-dir / --user-config 走全局旗标。
+ */
+export type PsCommand = {
+  kind: 'ps';
+  type?: 'gateway' | 'node' | 'hub';
+  json: boolean;
+  all: boolean;
+};
+
+/**
  * `vessel model ...` 子命令：model-registry 插件 canonical RPC 的 CLI 包装。
  *
  * kind 与 `plugin.model-registry.<name>` 一一对应（kebab → snake 在命令层映射）。
@@ -614,6 +628,8 @@ export interface CliArgs {
   rpcCommand?: RpcCommand | null;
   /** `vessel fleet ...`（本舰队总览；可选以兼容既有 parseArgs 快照测试）。 */
   fleetCommand?: FleetCommand | null;
+  /** `vessel ps`（docker ps 式进程清单；可选以兼容既有 parseArgs 快照测试）。 */
+  psCommand?: PsCommand | null;
   /** 0.49：`vessel dev reset [--yes] [--dry-run] [--json]` */
   devCommand: DevCommandArgs | null;
   /** 0.51：`vessel prune [--yes] [--dry-run] [--json] [--older-than <dur>]` */
@@ -863,6 +879,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'fleet' && i === 0) {
       return parseFleetArgs(argv.slice(1), args);
+    }
+    if (a === 'ps' && i === 0) {
+      return parsePsArgs(argv.slice(1), args);
     }
     if (a === 'hub' && i === 0) {
       return parseHubArgs(argv.slice(1), args);
@@ -2499,7 +2518,7 @@ function parseGatewayArgs(rest: string[], args: CliArgs): ParseResult {
       ok: false,
       error:
         'Missing gateway subcommand ' +
-        '(start|stop|status|list|restart|reload|nodes|install-service|uninstall-service)',
+        '(start|stop|status|list|ps|restart|reload|nodes|install-service|uninstall-service)',
     };
   }
 
@@ -2513,6 +2532,8 @@ function parseGatewayArgs(rest: string[], args: CliArgs): ParseResult {
       return parseGatewayStatus(tail, args);
     case 'list':
       return parseGatewayList(tail, args);
+    case 'ps':
+      return parsePsArgs(tail, args, 'gateway');
     case 'nodes':
       return parseGatewayNodes(tail, args);
     case 'restart':
@@ -2668,7 +2689,7 @@ function parseNodeArgs(rest: string[], args: CliArgs): ParseResult {
   if (sub === undefined) {
     return {
       ok: false,
-      error: 'Missing node subcommand (start|status|stop|reload)',
+      error: 'Missing node subcommand (start|status|stop|reload|ps)',
     };
   }
 
@@ -2682,6 +2703,8 @@ function parseNodeArgs(rest: string[], args: CliArgs): ParseResult {
       return parseNodeStop(tail, args);
     case 'reload':
       return parseNodeReload(tail, args);
+    case 'ps':
+      return parsePsArgs(tail, args, 'node');
     case 'token':
       return parseNodeToken(tail, args);
     default:
@@ -5240,7 +5263,7 @@ function parseHubArgs(rest: string[], args: CliArgs): ParseResult {
   if (sub === undefined) {
     return {
       ok: false,
-      error: 'Missing hub subcommand (start|directory|watch|join-code|join|node)',
+      error: 'Missing hub subcommand (start|directory|watch|join-code|join|node|ps)',
     };
   }
   const tail = rest.slice(1);
@@ -5248,6 +5271,8 @@ function parseHubArgs(rest: string[], args: CliArgs): ParseResult {
     // ── service（保留）──
     case 'start':
       return parseHubStart(tail, args);
+    case 'ps':
+      return parsePsArgs(tail, args, 'hub');
     case 'directory':
       return parseHubDirectory(tail, args);
     case 'watch':
@@ -5461,5 +5486,48 @@ function parseFleetArgs(rest: string[], args: CliArgs): ParseResult {
   }
   if (args.help) return { ok: true, args };
   args.fleetCommand = { kind: 'status', json };
+  return { ok: true, args };
+}
+
+// ── ps（用户裁定 #4：docker ps 式进程清单）─────────────────────────────
+
+/**
+ * `ps [--json] [--all] [--data-dir <path>]`；`type` 由 gateway/node/hub
+ * 子命令分发传入（`vessel gateway ps` = 只列 gateway）。
+ */
+function parsePsArgs(
+  rest: string[],
+  args: CliArgs,
+  type?: 'gateway' | 'node' | 'hub',
+): ParseResult {
+  let json = false;
+  let all = false;
+  const label = type === undefined ? 'ps' : `${type} ps`;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--all') {
+      all = true;
+      continue;
+    }
+    // 与 fleet status 同族：子命令内也认 --data-dir（写回全局字段）。
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for ${label}: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.psCommand = { kind: 'ps', json, all, ...(type !== undefined ? { type } : {}) };
   return { ok: true, args };
 }

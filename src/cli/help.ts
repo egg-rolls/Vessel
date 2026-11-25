@@ -295,6 +295,7 @@ export function renderGlobalHelp(): string {
     ['vessel --resume-run <runId>', t('help.cmd.resumeRun')],
   ];
   const gateway: Array<[string, string]> = [
+    ['vessel ps [--all] [--json]', t('help.cmd.ps')],
     ['vessel status [--json]', t('help.cmd.status')],
     ['vessel agents [--json]', t('help.cmd.agents')],
     ['vessel attention [--connect <url>] [--json] [--interactive]', t('help.cmd.attention')],

@@ -286,6 +286,12 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     flags: ['--json', '--connect', '--connect-token', '--ca'],
   },
   {
+    path: ['ps'],
+    summary: 'help.cmd.ps',
+    flags: ['--json', '--all', '--data-dir'],
+    flagHelp: { '--all': 'flag.all.ps' },
+  },
+  {
     path: ['session', 'status'],
     summary: 'help.cmd.sessionStatus',
     flags: ['--id', '--json', '--connect', '--connect-token', '--ca', '--data-dir'],
@@ -512,6 +518,12 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   },
   { path: ['gateway', 'list'], summary: 'help.cmd.gatewayList', flags: ['--json'] },
   {
+    path: ['gateway', 'ps'],
+    summary: 'help.cmd.gatewayPs',
+    flags: ['--json', '--all', '--data-dir'],
+    flagHelp: { '--all': 'flag.all.ps' },
+  },
+  {
     path: ['gateway', 'restart'],
     summary: 'help.cmd.gatewayRestart',
     flags: ['--daemon', '--instance', '--port', '--all', '--no-keep-nodes'],
@@ -549,6 +561,12 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   // ── node ──
   { path: ['node', 'start'], summary: 'help.cmd.nodeStart', flags: ['--daemon', '--config'] },
   { path: ['node', 'status'], summary: 'help.cmd.nodeStatus', flags: ['--json', '--rpc'] },
+  {
+    path: ['node', 'ps'],
+    summary: 'help.cmd.nodePs',
+    flags: ['--json', '--all', '--data-dir'],
+    flagHelp: { '--all': 'flag.all.ps' },
+  },
   { path: ['node', 'stop'], summary: 'help.cmd.nodeStop' },
   { path: ['node', 'reload'], summary: 'help.cmd.nodeReload', flags: ['--scope'] },
 
@@ -557,6 +575,12 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     path: ['hub', 'start'],
     summary: 'help.cmd.hubStart',
     flags: ['--host', '--port', '--data-dir', '--allow-remote', '--tls-cert', '--tls-key'],
+  },
+  {
+    path: ['hub', 'ps'],
+    summary: 'help.cmd.hubPs',
+    flags: ['--json', '--all', '--data-dir'],
+    flagHelp: { '--all': 'flag.all.ps' },
   },
   {
     path: ['hub', 'directory'],
