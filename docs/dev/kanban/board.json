@@ -72,10 +72,10 @@
     {
       "id": "q-drag-reference",
       "title": "会话卡片拖拽引用到输入框（chip链信息：会话/Agent/跨队+team/跨节点+node）",
-      "column": "进行中",
-      "owner": "q-drag-reference",
-      "branch": "feat/q-drag-reference",
-      "progress": "e5bc63a2派单(用户裁定)：会话卡draggable→输入框drop→引用chip(会话+Agent,跨队加team跨节点加node渐进披露)+发送解析复用mention；免复制粘贴"
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅完成合并4221e4ad(d75ab6e1拖拽chip/35559e73发送序列化,10文件+574build绿)：会话卡draggable→Composer drop→chip渐进披露(会话+Agent跨队team跨节点node)+可读引用块发送零服务端改动+草稿槽持久化去重上限8；待金丝雀验+用户重启"
     },
     {
       "id": "q-kanban-proxy",
@@ -167,11 +167,11 @@
     },
     {
       "id": "q-context-debug",
-      "title": "审查统一：上下文口径不一致（runtime通知阈值vs rotate context_ratio vs UI）",
-      "column": "进行中",
-      "owner": "q-context-debug",
-      "branch": "design/q-context-debug",
-      "progress": "16b4471a派单：runtime context_window通知65% vs rotate拒38% vs UI380K三处打架；审查三计量源file:line+根因(计数法/取数时机/trim后不同步)+统一单一口径源；零代码"
+      "title": "审查统一：上下文口径不一致（通知虚高170K根因+修写侧方案）",
+      "column": "阻塞",
+      "owner": "user",
+      "branch": "redblue-dev",
+      "progress": "✅审查完成合并6ac8d638(a2e229a0调研/725ebee3方案,353行)：根因实锤每run起点压力预警整窗兜底含564冻结占位工具结果虚高170K(请求路径381K准)；rotate拒实为approval_timeout非ratio闸码名误导；统一方案修写侧兜底应用冻结占位集合~30行消费侧自动对齐；待派实施修复"
     },
     {
       "id": "q-envcard-run",
