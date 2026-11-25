@@ -247,6 +247,7 @@ export const CLI_HELP_GROUPS: Readonly<Record<string, MessageKey>> = {
   model: 'help.group.model',
   node: 'help.group.node',
   plugin: 'help.group.plugin',
+  rpc: 'help.group.rpc',
   session: 'help.group.session',
   team: 'help.group.team',
   trace: 'help.group.trace',
@@ -297,6 +298,14 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     path: ['errors'],
     summary: 'help.cmd.errors',
     flags: ['--json', '--limit', '--connect', '--connect-token', '--ca'],
+  },
+
+  // ── rpc（AX 自服务 · capabilities.list 包装；--node 经平台代理定向）──
+  {
+    path: ['rpc', 'list'],
+    summary: 'help.cmd.rpcList',
+    flags: ['--json', '--node', '--connect', '--connect-token', '--ca'],
+    flagValue: { '--node': '<id>' },
   },
 
   // ── model（model-registry RPC 包装；连接 flag 与 status / agents 同形）──

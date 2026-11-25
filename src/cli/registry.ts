@@ -39,6 +39,7 @@ import { isForegroundNodeCommand, runNodeCommand } from './commands/node-command
 import { runPluginCommand } from './commands/plugin/plugin-command';
 import { pruneCommand } from './commands/prune-command';
 import { runResumeList } from './commands/resume-command';
+import { rpcListCommand } from './commands/rpc-command';
 import { runTeamCommand } from './commands/team-command';
 // 0.56：`vessel token show|list|rotate`（根密钥 / 派生 token）。
 import { tokenListCommand, tokenRotateCommand, tokenShowCommand } from './commands/token-command';
@@ -459,6 +460,23 @@ export const cliCommands: readonly CliCommand[] = [
           connectUrl: args.connectArg,
           connectToken: args.connectTokenArg,
           caFile: args.caArg,
+        }),
+      );
+    },
+  },
+  {
+    name: 'rpc',
+    match: (args) => args.rpcCommand !== null && args.rpcCommand !== undefined,
+    run: async (args) => {
+      const command = args.rpcCommand;
+      if (command === null || command === undefined) return 1;
+      return printCommandResult(
+        await rpcListCommand({
+          json: command.json,
+          connectUrl: args.connectArg,
+          connectToken: args.connectTokenArg,
+          caFile: args.caArg,
+          nodeId: args.nodeTargetArg,
         }),
       );
     },

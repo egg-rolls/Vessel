@@ -370,6 +370,13 @@ export type FederationCommand =
   | { kind: 'discover'; json: boolean };
 
 /**
+ * `vessel rpc ...` 子命令：capabilities.list 的 CLI 包装（AX 自服务 · 能力发现）。
+ * targeting（--node / --connect / --connect-token / --ca）复用全局字段，
+ * 由 extractTargetFlags 前置摘出（与 agent / team 同机制）。
+ */
+export type RpcCommand = { kind: 'list'; json: boolean };
+
+/**
  * `vessel model ...` 子命令：model-registry 插件 canonical RPC 的 CLI 包装。
  *
  * kind 与 `plugin.model-registry.<name>` 一一对应（kebab → snake 在命令层映射）。
@@ -559,6 +566,11 @@ export interface CliArgs {
   attentionCommand: AttentionCommandArgs | null;
   /** `vessel model ...`（model-registry RPC 包装） */
   modelCommand: ModelCommand | null;
+  /**
+   * `vessel rpc ...`（AX 自服务 · capabilities.list 包装）。
+   * 可选以兼容既有 parseArgs 快照测试（与 hubCommand / tokenCommand 同先例）。
+   */
+  rpcCommand?: RpcCommand | null;
   /** 0.49：`vessel dev reset [--yes] [--dry-run] [--json]` */
   devCommand: DevCommandArgs | null;
   /** 0.51：`vessel prune [--yes] [--dry-run] [--json] [--older-than <dur>]` */
@@ -796,6 +808,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'model' && i === 0) {
       return parseModelArgs(argv.slice(1), args);
+    }
+    if (a === 'rpc' && i === 0) {
+      return parseRpcArgs(argv.slice(1), args);
     }
     if (a === 'hub' && i === 0) {
       return parseHubArgs(argv.slice(1), args);
@@ -5180,5 +5195,37 @@ function parseLogsArgs(rest: string[], args: CliArgs): ParseResult {
   }
   if (args.help) return { ok: true, args };
   args.logsCommand = { kind: 'tail', json, lines, ...(instance !== undefined ? { instance } : {}) };
+  return { ok: true, args };
+}
+// ── rpc 子命令（AX 自服务 · capabilities.list 包装）─────────────────────
+
+/** `rpc list [--json] [--node <id>] [--connect <url>]` */
+function parseRpcArgs(rest: string[], args: CliArgs): ParseResult {
+  const extracted = extractTargetFlags(rest, args);
+  if (!extracted.ok) return extracted;
+  rest = extracted.rest;
+  const sub = rest[0];
+  if (sub === undefined || sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub !== 'list') {
+    return { ok: false, error: `Unknown rpc subcommand: ${sub}` };
+  }
+  let json = false;
+  for (let i = 1; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for rpc list: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.rpcCommand = { kind: 'list', json };
   return { ok: true, args };
 }
