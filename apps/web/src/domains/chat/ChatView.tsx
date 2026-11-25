@@ -582,7 +582,9 @@ export function ChatView({
               sessionId={selectedId}
               client={client}
               epoch={epoch}
-              refreshKey={submitApi.sendTick + transcriptApi.visibleGroups.length + inboxRefreshTick}
+              refreshKey={
+                submitApi.sendTick + transcriptApi.visibleGroups.length + inboxRefreshTick
+              }
               pendings={transcriptApi.activeAgent ? EMPTY_PENDING_SENDS : pendingSendsApi.pending}
               sentMessageIds={pendingSendsApi.sentMessageIds}
               onRefillDraft={refillDraftFromStrip}

@@ -109,10 +109,7 @@ export function isDomainActive(route: Route, domain: Domain): boolean {
  * 面包屑退 nodeKey 原文（不丢深链语义，URL hash 不变）。拿到名字时显示名字而非
  * UUID（问题3：详情页标题早有名字，顶栏却直显 node id）。
  */
-export function routeBreadcrumb(
-  route: Route,
-  nodeNames?: ReadonlyMap<string, string>,
-): string {
+export function routeBreadcrumb(route: Route, nodeNames?: ReadonlyMap<string, string>): string {
   switch (route.domain) {
     case 'chat':
       return route.sessionId ? t('breadcrumb.chat.session') : t('breadcrumb.chat');
