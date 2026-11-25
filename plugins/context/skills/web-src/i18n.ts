@@ -14,6 +14,7 @@ const EN = {
   'common.refresh': 'Refresh',
   'common.loadError': 'Could not load this view',
   'common.cancel': 'Cancel',
+  'common.close': 'Close',
   'common.prev': 'Previous',
   'common.next': 'Next',
 
@@ -34,8 +35,11 @@ const EN = {
   'skills.noMatch': 'No skills match the current filters.',
   'skills.generatedAt': 'Index generated at {ts}',
   'skills.toolbar': 'Skill filters and actions',
+  'skills.openDetails': 'Open details for {name}',
+  'skills.dialogLabel': 'Skill details: {name}',
 
   'detail.empty': 'Select a skill to see its content, trust state and session loads.',
+  'detail.meta': 'Metadata',
   'detail.missing.title': 'Skill no longer available',
   'detail.missing.description':
     'It may have been deleted or renamed on disk. Rescan the index, or pick another skill from the list.',
@@ -91,6 +95,7 @@ const ZH: Record<MessageKey, string> = {
   'common.refresh': '刷新',
   'common.loadError': '无法加载此视图',
   'common.cancel': '取消',
+  'common.close': '关闭',
   'common.prev': '上一页',
   'common.next': '下一页',
 
@@ -111,8 +116,11 @@ const ZH: Record<MessageKey, string> = {
   'skills.noMatch': '没有符合当前过滤条件的技能。',
   'skills.generatedAt': '索引生成于 {ts}',
   'skills.toolbar': '技能筛选与操作',
+  'skills.openDetails': '查看 {name} 的详情',
+  'skills.dialogLabel': '技能详情：{name}',
 
   'detail.empty': '选择一个技能，查看正文、信任状态与会话加载记录。',
+  'detail.meta': '元信息',
   'detail.missing.title': '技能不存在或已移除',
   'detail.missing.description':
     '它可能已在磁盘上被删除或重命名。重新扫描索引，或从列表中选择其它技能。',

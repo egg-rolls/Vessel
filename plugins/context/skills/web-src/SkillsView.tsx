@@ -1,7 +1,12 @@
 /**
- * Skills library master-detail view (design §8). One page, two tiers:
- * iframe (PluginRpcClient) and embed (host.rpc) share this component.
+ * Skills library card view (用户裁定：卡片重设计，参照工具页 ToolsPanel).
+ * One page, two tiers: iframe (PluginRpcClient) and embed (host.rpc) share
+ * this component.
  *
+ * - 卡片网格：每技能一卡片，只展示名称 + 来源小标签；点击整卡 → 弹窗详情
+ *   （描述 / 元信息 / 正文 / 信任态 / 会话加载），对齐工具页「卡片 + Modal」语言。
+ * - GHOST 口径（shared.tsx 局部覆盖，不动 plugin-ui）：卡片 / 弹窗面板 / Section
+ *   一律透黑底细线；hover 提亮细线 + surface-hover。
  * - Trust badges are server-derived (trustState rule); the frontend only consumes.
  * - trust_set is the only trust write path; rescan rebuilds the index.
  * - Refresh strategy: refetch after mutations + manual refresh + window focus.
@@ -9,18 +14,13 @@
  * - Content preview is the human surface (§9.5): no trust gate, no loads write.
  *   P1 renders markdown as <pre> (plugin-ui has no embed-reachable markdown
  *   renderer yet; design §8.3 open question 2 — no third-party runtime dep).
- * - 工具页面样式对齐（q-skills-ui）：TableToolbar 单行紧凑工具栏（搜索 + 来源 /
- *   标签下拉 + 重扫 / 刷新），表格 + 分页脚注包进透黑底细线卡片；控件局部 GHOST
- *   覆盖（shared.tsx，不动 plugin-ui 共享组件）；unknown_id 走 MissingSkill
- *   优雅降级，错误一律内联告警卡，不渲染裸错误文本。
+ * - unknown_id 走 MissingSkill 优雅降级，错误一律内联告警卡，不渲染裸错误文本。
  */
 
 import {
   Badge,
   type BadgeTone,
   Button,
-  DataTable,
-  type DataTableColumn,
   KeyValueList,
   PageScaffold,
   SearchInput,
@@ -36,9 +36,11 @@ import {
   GHOST_BUTTON_CLASS,
   GHOST_CONTROL_CLASS,
   GHOST_PANEL_CLASS,
+  GHOST_SECTION_CLASS,
   isUnknownIdError,
   LoadingState,
   type LoadState,
+  Modal,
   toError,
   type ViewProps,
 } from './shared';
@@ -47,7 +49,6 @@ import type {
   ListResult,
   LoadsResult,
   RescanResult,
-  SkillEntryDto,
   SkillSource,
   TrustSetResult,
   TrustState,
@@ -106,6 +107,7 @@ function MissingSkill({
     <Section
       title={t('detail.missing.title')}
       description={t('detail.missing.description')}
+      className={GHOST_SECTION_CLASS}
       actions={
         <span className="inline-flex flex-wrap items-center gap-2">
           <Button size="small" className={GHOST_BUTTON_CLASS} disabled={busy} onClick={onRescan}>
@@ -214,7 +216,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
   const items = listState.status === 'ready' ? listState.data.items : [];
   const total = listState.status === 'ready' ? listState.data.total : 0;
 
-  /** 每技能加载会话计数（loads RPC 派生；列表徽标 + 详情清单共用） */
+  /** 每技能加载会话计数（loads RPC 派生；详情标题徽章用） */
   const loadCounts = useMemo(() => {
     const counts = new Map<string, number>();
     if (loadsState.status !== 'ready') return counts;
@@ -268,7 +270,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
       const result = await client.call<TrustSetResult>('trust_set', { id, action });
       if (result.error !== undefined) {
         if (isUnknownIdError(result.error)) {
-          // 技能已不存在：友好提示 + 重拉（详情面板随之走 MissingSkill 降级）。
+          // 技能已不存在：友好提示 + 重拉（详情弹窗随之走 MissingSkill 降级）。
           setNotice({ kind: 'error', text: t('detail.missing.title') });
           refresh();
         } else {
@@ -285,36 +287,10 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
     }
   }
 
-  const columns: readonly DataTableColumn<SkillEntryDto>[] = [
-    {
-      key: 'name',
-      header: t('skills.title'),
-      cell: (row) => (
-        <button
-          type="button"
-          onClick={() => setSelectedId(row.id)}
-          className="inline-flex cursor-pointer flex-wrap items-center gap-1.5 bg-transparent p-0 text-left text-ink hover:text-accent"
-        >
-          <span className="font-medium">{row.name}</span>
-          <Badge>{row.source}</Badge>
-          {(loadCounts.get(row.id) ?? 0) > 0 ? (
-            <Badge tone="info">{t('loads.count', { n: loadCounts.get(row.id) ?? 0 })}</Badge>
-          ) : null}
-        </button>
-      ),
-    },
-    {
-      key: 'trust',
-      header: t('trust.title'),
-      cell: (row) => <TrustBadge trust={row.trust} t={t} />,
-    },
-    {
-      key: 'description',
-      header: t('detail.content'),
-      hide: 'compact',
-      cell: (row) => <span className="text-muted">{row.description}</span>,
-    },
-  ];
+  function closeDetail(): void {
+    setSelectedId(null);
+    setDetailState(null);
+  }
 
   const detail = detailState?.status === 'ready' ? detailState.data : undefined;
   const detailEntry = detail?.entry;
@@ -384,66 +360,82 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
         </p>
       ) : null}
 
-      <div className="grid gap-4 min-wide:grid-cols-[minmax(0,5fr)_minmax(0,4fr)]">
-        <div className="min-w-0">
-          {listState.status === 'loading' ? (
-            <LoadingState label={t('common.loading')} />
-          ) : listState.status === 'error' ? (
-            <ErrorState
-              error={listState.error}
-              onRetry={() => void loadList()}
-              title={t('common.loadError')}
-              retryLabel={t('common.retry')}
-            />
-          ) : total === 0 ? (
-            query !== '' || source !== '' || tag !== '' ? (
-              <EmptyState title={t('skills.noMatch')} description={t('skills.searchPlaceholder')} />
-            ) : (
-              <EmptyState
-                title={t('skills.empty.title')}
-                description={t('skills.empty.description')}
-              />
-            )
-          ) : (
-            <div className={`overflow-hidden rounded-md ${GHOST_PANEL_CLASS}`}>
-              <DataTable
-                columns={columns}
-                rows={items}
-                rowKey={(row) => row.id}
-                activeKey={selectedId ?? undefined}
-              />
-              <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2 text-sm text-muted">
-                <span>
-                  {t('skills.page', { from: offset + 1, to: offset + items.length, total })}
-                </span>
-                <Button
-                  size="small"
-                  className={GHOST_BUTTON_CLASS}
-                  disabled={offset === 0}
-                  onClick={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
+      {listState.status === 'loading' ? (
+        <LoadingState label={t('common.loading')} />
+      ) : listState.status === 'error' ? (
+        <ErrorState
+          error={listState.error}
+          onRetry={() => void loadList()}
+          title={t('common.loadError')}
+          retryLabel={t('common.retry')}
+        />
+      ) : total === 0 ? (
+        query !== '' || source !== '' || tag !== '' ? (
+          <EmptyState title={t('skills.noMatch')} description={t('skills.searchPlaceholder')} />
+        ) : (
+          <EmptyState title={t('skills.empty.title')} description={t('skills.empty.description')} />
+        )
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-3 min-compact:grid-cols-2 min-wide:grid-cols-3">
+            {items.map((row) => (
+              <article className="flex" key={row.id}>
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(row.id)}
+                  className={`flex min-h-control w-full items-center gap-2 rounded-md px-3 py-2.5 text-left transition-colors duration-150 hover:border-line-strong hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent pointer-coarse:min-h-touch ${GHOST_PANEL_CLASS}`}
+                  aria-haspopup="dialog"
+                  title={t('skills.openDetails', { name: row.name })}
                 >
-                  {t('common.prev')}
-                </Button>
-                <Button
-                  size="small"
-                  className={GHOST_BUTTON_CLASS}
-                  disabled={offset + items.length >= total}
-                  onClick={() => setOffset(offset + PAGE_LIMIT)}
-                >
-                  {t('common.next')}
-                </Button>
-                <span className="text-faint">
-                  {t('skills.generatedAt', { ts: listState.data.generatedAt })}
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
+                  <span className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                    <span className="min-w-0 break-words font-mono text-sm font-medium text-ink">
+                      {row.name}
+                    </span>
+                    <Badge>{row.source}</Badge>
+                  </span>
+                  <span
+                    className="flex-none font-mono text-sm leading-none text-faint"
+                    aria-hidden="true"
+                  >
+                    ›
+                  </span>
+                  <span className="sr-only">{t('skills.openDetails', { name: row.name })}</span>
+                </button>
+              </article>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
+            <span>{t('skills.page', { from: offset + 1, to: offset + items.length, total })}</span>
+            <Button
+              size="small"
+              className={GHOST_BUTTON_CLASS}
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
+            >
+              {t('common.prev')}
+            </Button>
+            <Button
+              size="small"
+              className={GHOST_BUTTON_CLASS}
+              disabled={offset + items.length >= total}
+              onClick={() => setOffset(offset + PAGE_LIMIT)}
+            >
+              {t('common.next')}
+            </Button>
+            <span className="text-faint">
+              {t('skills.generatedAt', { ts: listState.data.generatedAt })}
+            </span>
+          </div>
+        </>
+      )}
 
-        <div className="min-w-0">
-          {selectedId === null || detailState === null ? (
-            <Section title={t('skills.title')} description={t('detail.empty')} />
-          ) : detailState.status === 'loading' ? (
+      {selectedId !== null && detailState !== null ? (
+        <Modal
+          label={t('skills.dialogLabel', { name: detailEntry?.name ?? shortId(selectedId) })}
+          closeLabel={t('common.close')}
+          onClose={closeDetail}
+        >
+          {detailState.status === 'loading' ? (
             <LoadingState label={t('common.loading')} />
           ) : detailState.status === 'error' ? (
             isUnknownIdError({ message: detailState.error.message }) ? (
@@ -452,10 +444,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                 t={t}
                 busy={busy}
                 onRescan={() => void runRescan()}
-                onBack={() => {
-                  setSelectedId(null);
-                  setDetailState(null);
-                }}
+                onBack={closeDetail}
               />
             ) : (
               <ErrorState
@@ -472,25 +461,35 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                 t={t}
                 busy={busy}
                 onRescan={() => void runRescan()}
-                onBack={() => {
-                  setSelectedId(null);
-                  setDetailState(null);
-                }}
+                onBack={closeDetail}
               />
             ) : (
-              <Section title={t('detail.contentError')}>
+              <Section title={t('detail.contentError')} className={GHOST_SECTION_CLASS}>
                 <p role="alert" className="text-sm text-muted wrap-anywhere">
                   {detail?.error?.message ?? selectedId}
                 </p>
               </Section>
             )
           ) : (
-            <div className="flex flex-col gap-4">
-              <Section
-                title={detailEntry.name}
-                description={detailEntry.description}
-                actions={<TrustBadge trust={detailTrust} t={t} />}
-              >
+            <>
+              <div className="flex flex-wrap items-center gap-2 pr-8">
+                <h2 className="m-0 min-w-0 break-words text-lg font-medium text-ink">
+                  {detailEntry.name}
+                </h2>
+                <TrustBadge trust={detailTrust} t={t} />
+                <Badge>{detailEntry.source}</Badge>
+                {(loadCounts.get(detailEntry.id) ?? 0) > 0 ? (
+                  <Badge tone="info">
+                    {t('loads.count', { n: loadCounts.get(detailEntry.id) ?? 0 })}
+                  </Badge>
+                ) : null}
+              </div>
+              {detailEntry.description !== '' ? (
+                <p className="m-0 max-w-prose text-md leading-relaxed text-muted">
+                  {detailEntry.description}
+                </p>
+              ) : null}
+              <Section title={t('detail.meta')} className={GHOST_SECTION_CLASS}>
                 <KeyValueList
                   items={[
                     { label: t('detail.source'), value: detailEntry.source },
@@ -528,7 +527,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                   {t('trust.revokedBanner')}
                 </p>
               ) : null}
-              <Section title={t('detail.content')}>
+              <Section title={t('detail.content')} className={GHOST_SECTION_CLASS}>
                 {detail?.error !== undefined ? (
                   <div
                     role="alert"
@@ -561,7 +560,11 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                   </div>
                 ) : null}
               </Section>
-              <Section title={t('trust.title')} actions={<TrustBadge trust={detailTrust} t={t} />}>
+              <Section
+                title={t('trust.title')}
+                actions={<TrustBadge trust={detailTrust} t={t} />}
+                className={GHOST_SECTION_CLASS}
+              >
                 {detailTrust === 'unknown' ? (
                   <p className="text-sm text-muted">{t('trust.unknownHint')}</p>
                 ) : null}
@@ -602,7 +605,7 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                   </Button>
                 </div>
               </Section>
-              <Section title={t('loads.title')}>
+              <Section title={t('loads.title')} className={GHOST_SECTION_CLASS}>
                 {detailLoads.length === 0 ? (
                   <p className="text-sm text-muted">{t('loads.none')}</p>
                 ) : (
@@ -622,10 +625,10 @@ export function SkillsView({ client, refreshKey, t }: ViewProps) {
                   </ul>
                 )}
               </Section>
-            </div>
+            </>
           )}
-        </div>
-      </div>
+        </Modal>
+      ) : null}
     </PageScaffold>
   );
 }
