@@ -15,13 +15,18 @@
  * 2. **不进 transcript 持久层。** 它只在内存里活（刷新即消失 ⇒ 「刷新后只剩一份」是
  *    结构性结论，不靠对账）；也**不进 `inputsByRun`** 的认领集合（那是 dup-hunt 的消息
  *    身份，pending 是另一类东西，混进去就会改变「谁认领谁」的语义）。
- * 3. **失败绝不静默消失。** 15 s 没有任何回显 ⇒ `failed`；排队 3 min 没被取用 ⇒ `failed`。
- *    失败态的落点是**待处理条带**（带「重试 / 编辑」，见 `pending-placement.ts`），
- *    不是会话流里的一条灰气泡 —— 用户口径：入队消息的展示只有「inbox → 发出」这一段。
- *    重试**复用同一个 id**（不是新开一条 pending，也不是再画一条气泡）。
+ * 3. **失败绝不静默消失。** 失败态的落点是**待处理条带**（带「重试 / 编辑」，见
+ *    `pending-placement.ts`），不是会话流里的一条灰气泡 —— 用户口径：入队消息的展示
+ *    只有「inbox → 发出」这一段。重试**复用同一个 id**（不是新开一条 pending，也不是
+ *    再画一条气泡）。
+ *    **超时回退已移除（用户裁定：「不太需要」）**：原来「15 s 没回显 / 排队 3 min
+ *    没被取用 ⇒ failed」的 sweep 不再被调度 —— 消息在服务端 inbox 里持久化、等被
+ *    取用，客户端不替服务端宣判失败。失败态只剩一条来路：`runs.start` RPC 明确失败
+ *    （`markFailed`）。`sweep` 与 `busySessions` 闸保留在 store 里（驱动 / 调试），
+ *    超时类失败码（`timeout` / `queue_timeout` / `defer_timeout`）的回显认领兼容也保留。
  *    0.57 起服务端还有第三种应答 `deferred`（**收下了、但这一轮不会起跑、没有 run id**，
- *    见 `pending-placement.ts` 与 `AdmitResult`）：它同样只在条带上，同样有出口
- *    （`defer_timeout` → 「未发送 · 等待接单超时」，重试会先撤回服务端那份）。
+ *    见 `pending-placement.ts` 与 `AdmitResult`）：它同样只在条带上，靠回显认领或
+ *    用户动作（重试会先撤回服务端那份）收口，不再按计时转失败。
  *
  * 这一层**不碰** `EventStore` / `LiveItemStore` / `transcript-items.ts`：它只消费事件里
  * 的 `run_id` / `session_id` / `message_id`（`noteEvent` / `noteQueued`），产出「这条消息现在
@@ -40,48 +45,39 @@ import type { MessageRef } from '../../gateway/types';
 /**
  * 多久没等到回显就算「发不出去」（毫秒）。
  *
- * 依据是**服务端顺序**，不是拍的：`user.message` 在 `executeRun` 里发布得很早
- * （`loadStoredHistory` 之后、`llm.request` 之前），所以「15 s 还没回显」不可能是
- * 「模型慢」—— 只可能是这条 run 没起来（spawn 失败 / 队列卡住 / 事件流断了）。
- * 阈值取 15 s：远大于正常冷态回显（秒级），又短于用户开始怀疑自己没发出去的时间。
- * **前提**：调度器对这个会话没有在飞工作（见 `sweep` 的 `busySessions` 闸）—— agent
- * 还在跑时回显晚到不算失败。
+ * **运行期已不再使用（用户裁定移除超时 sweep）**：保留给 store 的 `sweep`
+ * （驱动 / 调试口径）。原依据是**服务端顺序**：`user.message` 在 `executeRun` 里
+ * 发布得很早（`loadStoredHistory` 之后、`llm.request` 之前），「15 s 还没回显」
+ * 只可能是 run 没起来 —— 但用户裁定客户端不该替服务端宣判失败，消息在 inbox 里等。
  */
 export const PENDING_ECHO_TIMEOUT_MS = 15_000;
 
-/** 扫超时的节拍：1 s 足够（判定阈值是 15 s / 3 min 量级，不需要更细）。 */
+/** 扫超时的节拍：1 s。**运行期已无消费者**（sweep 不再被调度），保留给驱动 / 调试。 */
 export const PENDING_SWEEP_INTERVAL_MS = 1_000;
 
 /**
  * 排队多久没被 run 取用就算「排队超时」（毫秒）：3 分钟。
  *
- * 依据是**排队这件事本身**：`queued` 的 pending 前面有一整轮在跑，15 s 那个回显口径对它
- * 完全不适用（见 {@link PENDING_ECHO_TIMEOUT_MS}）。但「永远等下去」也不行 —— 一条消息在
- * 队列里躺 3 分钟，用户需要的是「它没发出去」这个**结论**加一个出口（重试 / 编辑），
- * 而不是一条永远转圈的排队卡。
- *
- * 3 分钟是用户给的数（「比如 3 分钟」）：比一次正常 run 长得多，又短到用户还在等这一刻。
- * **0.58 修正（用户裁决）**：计时只在调度器对这个会话**没有在飞工作**时才收敛成失败
- * （见 `sweep` 的 `busySessions` 闸）—— 前面那一轮还在跑（哪怕跑 10 分钟），排队就是
- * 正常的，不判「排队超时」。
+ * **运行期已不再使用（用户裁定移除超时 sweep）**：排队消息在服务端 inbox 里持久化、
+ * 等被取用，前面那一轮跑多久都正常，客户端不再按计时收敛成失败。保留给 store 的
+ * `sweep`（驱动 / 调试口径，含 `busySessions` 闸）。
  */
 export const PENDING_QUEUE_TIMEOUT_MS = 180_000;
 
 /**
  * `deferred` 多久还没被接单就转成「未发送 · 等待接单超时」（毫秒）：3 分钟（同排队口径）。
  *
- * `deferred` 的语义是「服务端**已收下**，只是这一轮没起跑」（draining / body 换代 /
- * 硬错误闸）。三条路里前两条是秒级到分钟级，第三条（`stopped`）要等人工动作、**没有**
- * 确定时刻。所以不能让它无限期停在「等待中」：到点就转失败态（条带上带「重试 / 编辑」），
- * 让用户有一个出口。重试会**先撤回服务端那份**再重发（见 `PendingStrip` 的 `retryRow`），
- * 不会变成两份。
+ * **运行期已不再使用（用户裁定移除超时 sweep）**：`deferred`（服务端已收下、这一轮
+ * 没起跑）靠回显认领或用户动作收口，不再按计时转失败。保留给 store 的 `sweep`
+ * （驱动 / 调试口径）。重试仍会**先撤回服务端那份**再重发（见 `PendingStrip` 的
+ * `retryRow`），不会变成两份。
  */
 export const PENDING_DEFER_TIMEOUT_MS = 180_000;
 
 export type PendingSendState =
   /** 已发出 `runs.start`（或还在等它返回）：正文在飞。 */
   | 'sending'
-  /** `runs.start` 说这条**排队**了：等服务端起跑，**不按 15 s 判失败**（前面还有一整轮）。超时口径是 {@link PENDING_QUEUE_TIMEOUT_MS}。 */
+  /** `runs.start` 说这条**排队**了：等服务端起跑，**不按计时判失败**（超时 sweep 已移除，消息在 inbox 里等被取用）。 */
   | 'queued'
   /**
    * `runs.start` 回 `deferred`（0.57）：服务端**收下了**、但这一轮没起跑，**没有 run id**。
@@ -89,10 +85,10 @@ export type PendingSendState =
    * 三条路：`draining`（进程在退出，消息留在收件箱）/ `rotate`（body 换代，消息落在收件箱，
    * **不会**自动变成一轮 run）/ `stopped`（硬错误闸，解闸后自动重投）。这条 pending 没有
    * run id 可对，所以靠「同会话 + 同一句正文」的 `run.started` 认领（见 `noteEvent`）；
-   * 认领不到就 {@link PENDING_DEFER_TIMEOUT_MS} 后转 `failed`（`defer_timeout`）。
+   * 超时 sweep 移除后不再按计时转失败 —— 认领不到就一直在条带上等（用户可重试 / 删除）。
    */
   | 'deferred'
-  /** 超时 / RPC 失败：带着原因留在原地，等「重试 / 删除」。 */
+  /** RPC 明确失败（超时回退已移除）：带着原因留在原地，等「重试 / 删除」。 */
   | 'failed';
 
 /**
@@ -142,9 +138,9 @@ export interface PendingSend {
   /**
    * `failed` 时的人话原因；`sending` / `queued` / `deferred` 恒为 `undefined`。
    *
-   * `'timeout'` = 15 s 没有回显，`'queue_timeout'` = 排队 3 分钟没被取用，
-   * `'defer_timeout'` = 服务端收下了但 3 分钟没接单（三者文案不同，
-   * 见 `PendingStrip` / `PendingBubble` 的标签映射）；其余是 RPC / 断线的原始说明。
+   * 运行期只来自 RPC / 断线的原始说明（`markFailed`）。超时类码（`'timeout'` /
+   * `'queue_timeout'` / `'defer_timeout'`）随超时 sweep 移除不再产生，但文案映射与
+   * 回显认领兼容保留（见 `PendingStrip` / `PendingBubble` 与 {@link isTimeoutFailure}）。
    */
   failure?: string;
 }
@@ -282,8 +278,8 @@ export class PendingSendStore {
   /**
    * `runs.start` 返回：挂上**首选合并键**。
    *
-   * `queued` 的 run 前面还有一整轮在跑，回显本来就该晚 —— 这种 pending 不按 15 s 判失败
-   * （它有自己的 3 min 排队口径，见 `sweep`）。
+   * `queued` 的 run 前面还有一整轮在跑，回显本来就该晚 —— 这种 pending 不按计时判失败
+   * （超时 sweep 已移除，见模块头）。
    */
   attachRun(id: string, runId: string, status: string): void {
     let changed = false;
@@ -509,6 +505,11 @@ export class PendingSendStore {
 
   /**
    * 扫超时：三个口径，**都往 `failed` 收**（失败态永远带着出口，永不静默消失）。
+   *
+   * **运行期已不再被调度（用户裁定：「不太需要」）**：唯一的驱动
+   * （`usePendingSends` 的 1 s interval）已移除 —— 排队 / 回显超时整个不再触发，
+   * 消息在服务端 inbox 里持久化、等被取用。本方法与 `busySessions` 闸原样保留，
+   * 供驱动验证 / 调试按旧口径断言；运行期失败态只来自 `markFailed`（RPC 明确失败）。
    *
    * - `sending` 超过 {@link PENDING_ECHO_TIMEOUT_MS}（15 s）⇒ `failure: 'timeout'`；
    * - `queued` 超过 {@link PENDING_QUEUE_TIMEOUT_MS}（3 min）⇒ `failure: 'queue_timeout'`

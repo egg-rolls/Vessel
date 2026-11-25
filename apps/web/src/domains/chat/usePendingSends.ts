@@ -1,16 +1,20 @@
 /**
- * 把「本地待确认」接到真实的**事件流**上：订阅 store、扫超时、吃回显、认领队列 id。
+ * 把「本地待确认」接到真实的**事件流**上：订阅 store、吃回显、认领队列 id。
  *
- * 它只做四件事，且都不碰渲染树：
+ * 它只做三件事，且都不碰渲染树：
  * 1. `useSyncExternalStore` 订阅 `pendingSends`（渲染侧拿到一份稳定的数组快照）；
- * 2. 1 s 节拍调 `sweep()` —— 15 s 没回显 / 3 min 没被取用 ⇒ 失败态（**永不静默消失**）；
- *    但调度器对该会话还有在飞工作时不判超时（`busySessions` 闸，agent 还在尝试）；
- * 3. 盯 `snapshot.entries` 的水位：新到的 `run.started` / `user.message` 交给
+ * 2. 盯 `snapshot.entries` 的水位：新到的 `run.started` / `user.message` 交给
  *    `noteEvent()` 认领（首选 `run_id`，没有才按队首）。认领即从 store 摘除 ——
  *    「不重复」是结构性的（摘掉之后没有第二份可画），不是渲染层去重；
- * 4. 同一水位上吃 `agent.message.queued`：把服务端那条队列条目的 `message_id` 挂到
+ * 3. 同一水位上吃 `agent.message.queued`：把服务端那条队列条目的 `message_id` 挂到
  *    对应的 pending 上（`noteQueued`）。有了这个共享身份，条带才能让客户端那行**精确顶替**
  *    服务端那行（`pending-placement.ts#claimsEntry`），而不是同一条消息在条带上画两遍。
+ *
+ * **超时 sweep 已移除（用户裁定：「不太需要」）**：原来这里有一个 1 s 节拍的
+ * `pendingSends.sweep()`（15 s 没回显 / 3 min 没被取用 ⇒ 失败态）。排队回退整个不再
+ * 触发 —— 消息在服务端 inbox 里持久化、等被取用，客户端不该替服务端宣判「发不出去」。
+ * 失败态只剩一条来路：`runs.start` RPC 明确失败（`markFailed`，立刻、带原因）。
+ * store 里的 `sweep` 与 `busySessions` 闸保留（驱动 / 调试可用），但运行期无人调度。
  *
  * **为什么从 `entries` 读而不是直接订阅 WS**：`entries` 就是 `EventStore` 已经过
  * 去重 / 排序 / 归属判定之后的那份（锚点事件不参与裁剪），拿它当唯一输入口径与
@@ -23,7 +27,7 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { StoredEvent } from '../../state/events';
 import { queuedMessageOf } from './pending-placement';
-import { PENDING_SWEEP_INTERVAL_MS, type PendingSend, pendingSends } from './pending-sends';
+import { type PendingSend, pendingSends } from './pending-sends';
 
 /** 只认这两类事件（与 `pending-sends.ts` 的 `ECHO_EVENT_TYPES` 同一份口径）。 */
 const ECHO_TYPES: readonly string[] = ['user.message', 'run.started'];
@@ -76,8 +80,8 @@ export function usePendingSends(options: {
    * 调度器还有在飞工作（`running` / `queued`）的会话集合（权威：`health.get` 的
    * `runtime.scheduler`，见 `state/sessions.ts#inflightFromScheduler`）。
    *
-   * 这些会话的 `sending` / `queued` pending **不判超时**：agent 还在尝试，单纯计时
-   * 到点不构成「发不出去」（用户裁决，见 `pending-sends.ts#sweep`）。缺省 = 纯计时。
+   * **超时 sweep 移除后运行期不再消费它**（用户裁定，见模块头）：保留入参是为了
+   * 调用方形状不变，且 store 的 `sweep`（驱动 / 调试）仍认这份闸。
    */
   busySessions?: ReadonlySet<string>;
 }): {
@@ -107,19 +111,10 @@ export function usePendingSends(options: {
     [all, options.sessionId],
   );
 
-  // 超时扫描：`sending` 15 s、`queued` 3 分钟各有出口（判定在 store 里）；排队跨分钟时
-  // 它会发一次通知，让气泡上的「已排队 N 分钟」跟着走。`busySessions` 用 ref 带进
-  // interval：节拍闭包不重建，读到的永远是最新一份在飞集合。
-  const busyRef = useRef(options.busySessions);
-  busyRef.current = options.busySessions;
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      pendingSends.sweep(undefined, busyRef.current);
-    }, PENDING_SWEEP_INTERVAL_MS);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, []);
+  // 超时扫描已移除（用户裁定：「不太需要」）：这里原来有一个 1 s 节拍调
+  // `pendingSends.sweep(undefined, busyRef.current)` 的 interval —— 排队 / 回显超时
+  // 整个不再触发，消息在服务端 inbox 里等被取用，失败态只来自 RPC 明确失败。
+  // store 的 `sweep` 与 `busySessions` 闸保留给驱动 / 调试，运行期无人调度。
 
   // 回显水位：`seq` 只增不减，回放 / 回填只会重复不会乱序，所以一个水位够了。
   // 换会话 / 重连换了 seq 纪元（窗口最大 seq 比水位还小）时水位退回重扫 ——
