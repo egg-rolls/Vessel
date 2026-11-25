@@ -53,9 +53,18 @@ function budgetFor(level: ConcreteLevel, budgets: Budgets): number | undefined {
   return undefined;
 }
 
+/**
+ * 裸模型名：剥 vendor 前缀（dashscope/qwen4-max → qwen4-max）。
+ * 匹配口径统一用裸名：resolveMapping 的 modelPattern 与行内模型判定
+ * （gpt51OrLater）同口径；裸名输入原样返回。
+ */
+function bareModelName(model: string): string {
+  return model.split('/').pop() ?? model;
+}
+
 /** gpt-5.1+ 才支持 reasoning_effort:'none'（o 系列 / gpt-5.0 不可关）。 */
 function gpt51OrLater(model: string): boolean {
-  return /^gpt-5\.[1-9]/.test(model);
+  return /^gpt-5\.[1-9]/.test(bareModelName(model));
 }
 
 /**
@@ -136,17 +145,20 @@ export const MAPPING: readonly MappingEntry[] = [
 /**
  * 按 (providerName, model) 取首中映射行。providerName 缺省 ⇒ 只按 model 模式匹配
  * （裸 fallback 降级）；model 缺省 ⇒ undefined（不猜）。
+ * modelPattern 一律对裸模型名匹配（vendor 前缀剥离，如 dashscope/qwen4-max）。
  */
 export function resolveMapping(
   providerName: string | undefined,
   model: string | undefined,
 ): MappingEntry | undefined {
   if (model === undefined || model === '') return undefined;
+  const bare = bareModelName(model);
+  if (bare === '') return undefined; // 退化输入（如 "vendor/"）不猜
   for (const row of MAPPING) {
     if (providerName !== undefined && row.protocol !== undefined && row.protocol !== providerName) {
       continue;
     }
-    if (row.modelPattern.test(model)) return row;
+    if (row.modelPattern.test(bare)) return row;
   }
   return undefined;
 }
