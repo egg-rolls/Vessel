@@ -1,6 +1,6 @@
 {
   "board": "vessel 红蓝开发任务看板",
-  "updated": "2026-11-25T18:30:00+08:00",
+  "updated": "2026-11-25T18:40:00+08:00",
   "columns": ["待办", "进行中", "阻塞"],
   "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。★用户裁定不自动归档：完成任务标「已合并待验收」留板，用户打勾才移 archive.json（append-only）。",
   "tasks": [
@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "★三次晋升完成：main=fb44a979(v2.0.0,723fb673→38ee0aec→ab63936d→3953a92e→99f87c0c→fb44a979)，生产8642/8644健康。已晋升=第一/二轮全验闭环+AX三组/inbox-ux/addr-display/sidebar-anim/design-audit/minimap+tooltip/inbox-source/drawer-fix/SemVer release。★第四轮金丝雀收尾：canary=3cc1474d(bundle index-DoIKo9x_.js)，skills-style DONE封存(SS2-1 CLOSED)，cardrobust(f87f4f8c)复验22②+⑥中→ALL封存→drain→node start→respawn复核→晋升redblue-dev(32ee6e72,含main热修复fb44a979回并零diff)→用户重启。本批待晋升=kanban-view/kanban-proxy/graceful-selfrestart/empty-state/plugin-ui-layer/hydration-anon/drag-reference/card-robust/plugin-version/skills-style/inbox-actions+第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl,lead已登记批次书本轮不测)。后续队列：plugin-config-read修复/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期"
+      "progress": "★三次晋升完成：main=fb44a979(v2.0.0,723fb673→38ee0aec→ab63936d→3953a92e→99f87c0c→fb44a979)，生产8642/8644健康。已晋升=第一/二轮全验闭环+AX三组/inbox-ux/addr-display/sidebar-anim/design-audit/minimap+tooltip/inbox-source/drawer-fix/SemVer release。★第四轮金丝雀收尾：drain周期已执行(18:25优雅stop→15①发现drain后进程不自死→协议A force兜底runs_cut=0→gateway start恢复:platform 79144/node 76624/hub 63800,8652/8654/8653 OK)；候lead respawn cli delta核14⑤⑥+15①交叉核+ISSUE裁定→第四轮全闭环→晋升redblue-dev(32ee6e72+,含main热修复回并零diff)→用户重启。本批待晋升=kanban-view/kanban-proxy/graceful-selfrestart/empty-state/plugin-ui-layer/hydration-anon/drag-reference/card-robust/plugin-version/skills-style/inbox-actions+第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl,lead已登记批次书本轮不测)。后续队列：plugin-config-read修复/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期"
     },
     {
       "id": "canary-qa-lead",
@@ -139,7 +139,7 @@
       "column": "进行中",
       "owner": "q-permission-pending",
       "branch": "feat/q-permission-pending",
-      "progress": "7f63b8b8派单(用户指示2026-11-25晚)：根因=PendingView只消费asks,permissions未汇集；gateway interactions.list两种kind都返回+hydration已重建两者→只缺Web消费侧；方案=混合聚类(agent>session>run)+原样复用PermissionCard+respondPermission逐条裁决(不批量批准)+badge计数对齐+teamId additive；★lead分批裁定:第五轮批次A=permission汇集专项(用户指示优先,与CR22-1 hydration-anon共享入口须耦合回归防互踩,测试员=cardrobust卡面+skillsstyle待批页UI复用续话),批次B=四面独立；合并时机=第四轮晋升后"
+      "progress": "7f63b8b8派单(用户指示2026-11-25晚)：根因=PendingView只消费asks,permissions未汇集；gateway interactions.list两种kind都返回+hydration已重建两者→只缺Web消费侧；方案=混合聚类(agent>session>run)+原样复用PermissionCard+respondPermission逐条裁决(不批量批准)+badge计数对齐+teamId additive(实施agent调研发现interactionStore已携带team_id,项5或仅验证)；★lead分批裁定:第五轮批次A=permission汇集专项(用户指示优先,与CR22-1 hydration-anon共享入口须耦合回归防互踩,测试员=cardrobust卡面+skillsstyle待批页UI复用续话),批次B=四面独立；合并时机=第四轮晋升后；⚠首run80消息调研后空回复早退零产物→已催单步续作(①审计文档commit)"
     },
     {
       "id": "q-graceful-selfrestart",
@@ -147,7 +147,7 @@
       "column": "阻塞",
       "owner": "user",
       "branch": "redblue-dev",
-      "progress": "✅完成合并1d5e4688(f0dabd9d drain-to-quiesce/949cff6b Option A --self自重启/671357d5 inbox唤醒G1-G7/8d61103c指路)build绿；stop/restart缺省等run真跑完不限时+进度,--force唯一非优雅；vessel restart --self --prompt早返回→run自然完成无run lost→重启→嘱托自动续跑；待金丝雀验+用户重启后可用--self优雅自重启续作"
+      "progress": "✅完成合并1d5e4688(f0dabd9d drain-to-quiesce/949cff6b Option A --self自重启/671357d5 inbox唤醒G1-G7/8d61103c指路)build绿；stop/restart缺省等run真跑完不限时+进度,--force唯一非优雅；vessel restart --self --prompt早返回→run自然完成无run lost→重启→嘱托自动续跑；★15①main实测发现(2026-11-25T18:25):drain-to-quiesce本身✓(node.drain.done settle=idle 0run 1ms+5s进度行)但进程不自死✗——gateway.stop(ws closed)后activeCleanup挂起12+分钟(cli.ts:2090-2115候选eventHub.close/result.shutdown/lock.release,process.exit未到达),协议A force兜底runs_cut=0+舰队已恢复；候lead裁定ISSUE归因/阻塞性+cli交叉核14⑤⑥"
     },
     {
       "id": "q-skills-style",
