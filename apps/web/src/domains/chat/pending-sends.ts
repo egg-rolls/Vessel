@@ -37,6 +37,10 @@
  * 必须消失、`failed` 回流到条带带「重试 / 编辑」。三个状态与三处展示的映射全部由
  * `pending-placement.ts` 给出，本文件只负责**状态本身**怎么变。
  *
+ * **消费对账（P0-A）**：回显不是唯一的收口 —— agent 用 `inbox read` 消费排队消息时对应
+ * queued run 被取消、从未开跑，**永无回显**。条带每次读盘后调 {@link PendingSendStore.reconcileWithServer}
+ * 用服务端真相摘除这类 pending（只删不增，不碰上面第 2 条「不靠对账防重复」的结构保证）。
+ *
  * @module
  */
 
@@ -189,6 +193,17 @@ export class PendingSendStore {
   private items: PendingSend[] = [];
   /** 已被服务端取用（回显到达）的 `message_id`，见 {@link sentMessageIds}。 */
   private sentIds: string[] = [];
+  /**
+   * 每条 pending 挂上服务端 `message_id` 的**客户端时刻**（{@link reconcileWithServer} 用）。
+   *
+   * 为什么记它：对账的那次 `agents.inbox` 读可能在**入队之前**就已发起（响应晚到），
+   * 拿一份旧读数判「服务端没有这条」会把刚排进队列的 pending 误删。只有
+   * 「挂 id 在前、读盘发起在后」的读数才有资格宣判这条消息已被消费 —— 挂 id 必然
+   * 晚于服务端落盘（`agent.message.queued` / `runs.start` 应答都在 append 之后），
+   * 所以晚于它发起的读一定看得到这条条目，除非它真的被消费 / 撤回了。
+   * 不记进 `PendingSend` 公开形状：这是对账的私有账本，不是消息的属性。
+   */
+  private readonly messageIdAt = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
   private nextSequence = 1;
   private readonly now: () => number;
@@ -246,6 +261,8 @@ export class PendingSendStore {
             }
           : item,
       );
+      // 旧身份已撤回：对账账本同步作废（新身份落定时重新记时）。
+      this.messageIdAt.delete(id);
       this.emit();
       return id;
     }
@@ -310,7 +327,10 @@ export class PendingSendStore {
       changed = true;
       return { ...item, messageId };
     });
-    if (changed) this.emit();
+    if (changed) {
+      this.messageIdAt.set(id, this.now());
+      this.emit();
+    }
   }
 
   /**
@@ -364,9 +384,11 @@ export class PendingSendStore {
     info: { reason?: string; retryAfterMs?: number; messageId?: string },
   ): void {
     let changed = false;
+    let idAttached = false;
     this.items = this.items.map((item) => {
       if (item.id !== id) return item;
       changed = true;
+      if (info.messageId !== undefined && item.messageId !== info.messageId) idAttached = true;
       return {
         ...item,
         state: 'deferred',
@@ -377,7 +399,10 @@ export class PendingSendStore {
         ...(info.messageId !== undefined ? { messageId: info.messageId } : {}),
       };
     });
-    if (changed) this.emit();
+    if (changed) {
+      if (idAttached) this.messageIdAt.set(id, this.now());
+      this.emit();
+    }
   }
 
   /** RPC 直接失败（断网 / 准入闸门拒绝）：立刻进失败态，**不**等 15 s。 */
@@ -396,6 +421,7 @@ export class PendingSendStore {
     const next = this.items.filter((item) => item.id !== id);
     if (next.length === this.items.length) return;
     this.items = next;
+    this.messageIdAt.delete(id);
     this.emit();
   }
 
@@ -403,6 +429,9 @@ export class PendingSendStore {
   clearSession(sessionId: string | null): void {
     const next = this.items.filter((item) => item.sessionId !== sessionId);
     if (next.length === this.items.length) return;
+    for (const item of this.items) {
+      if (item.sessionId === sessionId) this.messageIdAt.delete(item.id);
+    }
     this.items = next;
     this.emit();
   }
@@ -410,7 +439,62 @@ export class PendingSendStore {
   reset(): void {
     if (this.items.length === 0) return;
     this.items = [];
+    this.messageIdAt.clear();
     this.emit();
+  }
+
+  /**
+   * 真相源对账（P0-A，症状①「read 后仍显等待中、刷新才消失」的收口）：
+   * 拿条带**刚读到的服务端 inbox** 宣判客户端 pending 的生死。
+   *
+   * 为什么必须有它：main 用 `inbox read` 消费一条排队中的 human 消息时，对应的 queued run
+   * 被 `withdrawQueuedRuns` 取消、**从未开跑** ⇒ 永远不会发 `user.message` / `run.started`
+   * 回显，而 {@link noteEvent} 只认这两类回显 ⇒ 这条 pending 没有任何事件能摘除它，
+   * 「等待中 human: …」那行常驻直到刷新（pendingSends 无持久化，刷新即空）。
+   * 服务端条目那一半有 2s 轮询管辖，客户端这一半没有 —— 这里把它钉回服务端真相：
+   * **服务端 inbox 里已经没有这条消息（且没收到回显）⇒ 它已被消费 / 撤回 ⇒ 摘除**。
+   *
+   * 四条护栏（缺一不误删）：
+   * 1. **只对已挂 `messageId` 的 pending**：没挂 id 的草稿 / 在飞态不动（服务端身份还没
+   *    落定，「读数里没有」不构成任何结论）；
+   * 2. **只对同会话**：条带读的是 `agents.inbox{ session_id }`（等值过滤），别的会话的
+   *    pending 与这份读数无关；
+   * 3. **只对 `queued` / `deferred(draining|stopped)`**：这些状态的服务端条目都带
+   *    `session_id`（`trackInbox` 写 bodyId），会话读数看得到它们。`deferred(rotate)`
+   *    的条目是 quiet、**不带 session_id**（`service.ts` 的 rotate 窗口落盘），会话读数
+   *    永远不含它 —— 拿这份读数宣判它就是误删；`failed` 不动（失败绝不静默消失，
+   *    出口只有重试 / 编辑 / 删除）；
+   * 4. **只认「挂 id 之后才发起」的读数**（`readStartedAt`，见 {@link messageIdAt}）：
+   *    入队前发起、响应晚到的旧读数没有资格宣判。
+   *
+   * 摘除的 id 记进 {@link sentMessageIds}：消息确实已被服务端取走，条带手里任何一份
+   * 旧缓存读数里的它都该立刻滤掉（与回显摘除同一条防重复规矩）。
+   * 返回本次摘除条数（驱动 / 调试断言用）。
+   */
+  reconcileWithServer(input: {
+    sessionId: string;
+    presentIds: ReadonlySet<string>;
+    readStartedAt: number;
+  }): number {
+    const gone = this.items.filter(
+      (item) =>
+        item.sessionId === input.sessionId &&
+        item.messageId !== undefined &&
+        !input.presentIds.has(item.messageId) &&
+        (item.state === 'queued' ||
+          (item.state === 'deferred' &&
+            (item.deferredReason === 'draining' || item.deferredReason === 'stopped'))) &&
+        (this.messageIdAt.get(item.id) ?? Number.POSITIVE_INFINITY) <= input.readStartedAt,
+    );
+    if (gone.length === 0) return 0;
+    const ids = new Set(gone.map((item) => item.id));
+    this.items = this.items.filter((item) => !ids.has(item.id));
+    for (const item of gone) {
+      this.messageIdAt.delete(item.id);
+      this.noteSent(item.messageId);
+    }
+    this.emit();
+    return gone.length;
   }
 
   /**

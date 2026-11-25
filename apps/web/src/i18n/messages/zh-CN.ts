@@ -92,6 +92,7 @@ export const messages = {
   'breadcrumb.mcp': 'MCP 服务',
   'breadcrumb.channels': '渠道',
   'breadcrumb.kanban': '看板',
+  'breadcrumb.inbox': '收件箱',
   'breadcrumb.plugins': '插件',
 
   // Plugin Host (E10)
@@ -333,6 +334,7 @@ export const messages = {
   'chat.session.pending': '有 {count} 个待处理请求',
   'chat.session.copyId': '复制会话 ID',
   'chat.session.copiedId': '已复制会话 ID',
+  'chat.session.openInbox': '收件箱',
   'chat.session.copyIdTitle': '复制会话 ID：{title}',
   // 成员模型切换入口（model-registry P2）：成员级 pin，下一具 body / 续接 run 生效
   'chat.memberModel.button': '模型',
@@ -811,6 +813,7 @@ export const messages = {
   'nav.domain.nodes': '节点',
   'nav.domain.teams': '团队',
   'nav.domain.kanban': '看板',
+  'nav.domain.inbox': '收件箱',
   'nav.domain.agents': '智能体',
   'nav.group.network': '智能体编排',
   'breadcrumb.hub': '面板核心',
@@ -991,6 +994,36 @@ export const messages = {
   'kanban.confirmAction': '验收并归档',
   'kanban.archived': '已归档：{title}',
   'kanban.archiveFailed': '归档失败：{message}',
+
+  // Inbox（agent 级收件箱，P1-B q-inbox-agent-view）：全量跨会话，不做会话过滤。
+  'inbox.subtitle': '发给这个 agent 的全部消息（跨会话，含无会话归属的 wake/quiet 投递）',
+  'inbox.agentLabel': 'Agent',
+  'inbox.unreadCount': '未读 {count} 条',
+  'inbox.pendingCount': '排队中 {count} 条',
+  'inbox.entryCount': '共 {count} 条',
+  'inbox.empty': '收件箱是空的',
+  'inbox.emptyHint': '发给这个 agent 的消息会出现在这里；被模型读走（消费）后不再显示。',
+  'inbox.noTokenReason': '连接 gateway 后才能读取 agent 收件箱。',
+  'inbox.notFound': '找不到这个 agent',
+  'inbox.status.held': '排队中',
+  'inbox.status.unread': '未读',
+  'inbox.noSession': '无归属',
+  'inbox.noSessionHint':
+    '这条消息没有会话归属（wake/quiet 投递或老条目），不属于任何会话的输入队列。',
+  'inbox.openSession': '去会话',
+  'inbox.expand': '展开全文',
+  'inbox.collapse': '收起',
+  'inbox.peeking': '正在读取全文…',
+  'inbox.peekFailed': '读取全文失败：{detail}',
+  'inbox.peekMissing': '没有读到这条消息（可能已被消费）',
+  'inbox.cancel': '取消这条',
+  'inbox.cancelled': '已取消：这条消息已从收件箱移除',
+  'inbox.cancelRejected': '取消请求未被受理，已重读对齐（这条可能已经不在了）',
+  'inbox.claimTaken': '已标记为处理：这条不会再投递',
+  'inbox.claimSkipped': '没能拿走这一条（{reason}），已重读对齐',
+  'inbox.unheld': '已取消 hold：这条按未读留档，模型仍能读到',
+  'inbox.unholdRejected': '服务端没有解除 hold，已重读对齐（这条可能已经不在了）',
+  'inbox.unholdFailed': '取消 hold 失败：{detail}',
 
   // Teams（跨节点）
   'teams.title': '团队',
@@ -1502,6 +1535,9 @@ export const messages = {
   'chat.agentMessage.group': '来自 agent {name} 的消息',
   'chat.toolMessage.from': '来自 {name}',
   'chat.toolMessage.group': '来自 {name} 的投递',
+  // P1-A：被 inbox read 取走的消息（无 run-input 回显）的可见承接卡。
+  'chat.inboxRead.from': '来自收件箱 · {source}',
+  'chat.inboxRead.group': '从收件箱取走的消息（{source}）',
   // 0.36: 消息气泡操作组
   'chat.message.actions': '消息操作',
   // 长消息折叠（会话页与团队页共用同一个按钮组件）

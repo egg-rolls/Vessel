@@ -146,26 +146,55 @@ export function claimsEntry(pending: PendingSend, entry: StripEntryLike): boolea
 }
 
 /**
- * 被客户端 pending 认领掉的条目 id 集合（条带据此跳过那些条目）。
+ * 贪心配对：每条 pending 认领哪条服务端条目（pending id → entry message_id）。
  *
  * 认领按 pending 的创建顺序贪心配对：同一个人连发两条一样的话时，第一条 pending 拿走
  * 最早的那条条目，第二条拿走下一条 —— 不会两条 pending 抢同一条条目（否则就会有一条
- * 消息在条带上出现两次）。
+ * 消息在条带上出现两次）。{@link claimedEntryIds} 与 {@link claimedEntryIdOf} 都从这
+ * 一份配对导出，「谁认领谁」只有一套规矩。
  */
-export function claimedEntryIds(
+function pairClaimedEntries(
   pendings: readonly PendingSend[],
   entries: readonly StripEntryLike[],
-): ReadonlySet<string> {
+): Map<string, string> {
   const claimed = new Set<string>();
+  const pairs = new Map<string, string>();
   for (const pending of pendings) {
     for (const entry of entries) {
       if (claimed.has(entry.message_id)) continue;
       if (!claimsEntry(pending, entry)) continue;
       claimed.add(entry.message_id);
+      pairs.set(pending.id, entry.message_id);
       break;
     }
   }
-  return claimed;
+  return pairs;
+}
+
+/** 被客户端 pending 认领掉的条目 id 集合（条带据此跳过那些条目）。 */
+export function claimedEntryIds(
+  pendings: readonly PendingSend[],
+  entries: readonly StripEntryLike[],
+): ReadonlySet<string> {
+  return new Set(pairClaimedEntries(pendings, entries).values());
+}
+
+/**
+ * 这条 pending 认领的服务端条目 id（没有认领 ⇒ `undefined`）。
+ *
+ * 为什么写操作需要它：`agent.message.queued` 不一定到达客户端（见 {@link claimsEntry}
+ * 的真机读数），pending 可能**没有 `messageId` 却认领着一条真实的服务端条目**（摘要
+ * 兜底）。此时「取消 / 编辑 / 重试」若只做纯本地删除，服务端那条就成孤儿 —— 用户以为
+ * 撤回了，agent 之后 `inbox read` 照样读到它；编辑重发更是服务端两份。所以写操作
+ * 必须先从这份读数里把认领的条目 id 解析出来，撤回作用到**服务端真相**上。
+ * 与 {@link claimedEntryIds} 同一份贪心配对，不会出现「渲染认了 A、写操作撤了 B」。
+ */
+export function claimedEntryIdOf(
+  target: PendingSend,
+  pendings: readonly PendingSend[],
+  entries: readonly StripEntryLike[],
+): string | undefined {
+  return pairClaimedEntries(pendings, entries).get(target.id);
 }
 
 /** 一条消息在各处的出现次数（驱动断言用；渲染侧不读它）。 */

@@ -1,6 +1,6 @@
 {
   "board": "vessel 红蓝开发任务看板",
-  "updated": "2026-11-25T21:43:00+08:00",
+  "updated": "2026-11-25T22:21:37+08:00",
   "columns": ["待办", "进行中", "阻塞"],
   "note": "本文件由 main 维护，看板插件只读此文件弹窗展示。★归档政策（用户裁定2026-11-25细化）：金丝雀可自验的缺陷修复/微修复/内部改进/调研设计已实施→验证闭环即直接归档 archive.json；新功能/新视觉效果/UX 变更→留板「已合并待验收」用户打勾才归档；反复提出项（如 inbox 修复）亦留用户验收（append-only）。",
   "tasks": [
@@ -10,7 +10,7 @@
       "column": "进行中",
       "owner": "main",
       "branch": "canary",
-      "progress": "★三次晋升完成：main=fb44a979(v2.0.0,723fb673→38ee0aec→ab63936d→3953a92e→99f87c0c→fb44a979)，生产8642/8644健康。已晋升=第一/二轮全验闭环+AX三组/inbox-ux/addr-display/sidebar-anim/design-audit/minimap+tooltip/inbox-source/drawer-fix/SemVer release。★第四轮收尾+DR15-1修复复验中：修复合并redblue-dev 03f13c06→canary同步aa92f5ae(22文件零冲突,web未变免rebuild)→协议A restart --force加载新码(审计runs_cut=1★lead对账✓=O8 zombie c0b150c7属skillsstyle19c5733f非活run,fencing_token2被completed61f63769取代,force后runs.list仍running冻结17:27铁证,零真实损失,第五轮非阻塞)→新进程组platform56812/node48092/hub63056,8652/8654/8653绿★version2.1.0新码实证；cli复验：A PASS(node自死5.08s无force,门禁①⑤⑥)+B完成(node路径PASS drain.done→自死56ms,server.stop timeout_bounded5s;platform DR15-2确证30s看门狗force abnormal_exit,B兜底保安全)；★我裁定DR15-2 platform race微修复后晋升(续派q-dr15-exit fix/q-dr15-2-platform与B并行)；候cli核B②⑦+DR15-2修复闭环platform清洁复验→7判据终版→★DR15-1 node CLOSED✅+DR15-2迭代2修复合并1aba69c0(Bun计数泄漏workaround:terminate预关+stop不await+WS分类诊断)→canary同步d9d6cbde+协议A restart加载(version2.1.0,platform97020/node70348,runs_cut=0)→候cli修正判据复验6判据(start→done≈ms+差值pending_ws−proxy_ws_closed≈0+无CLOSING+无quiesce_exit_timeout force/abnormal_exit+node零改动spot-check)→★DR15-1+DR15-2 CLOSED✅第四轮14-22全闭环四ISSUE全CLOSED→晋升完成main=d5c7d3f1(2.1.0,ff-only)→用户优雅重启加载；第五轮A(permission汇集)/C(看板视觉)已合并redblue-dev 9aa43fbb→canary同步c5f61727+web rebuild绿(★新bundle index-37GKsuwv.js,plugin-ui-B9g0LlhK.js含Pager,skills新资产skills-B42IixC9.js/skills-xAKwVcZd.css)+协议A restart加载(platform49148/node97984,runs_cut=0)→lead tree拆分第五轮开验(A耦合回归/B四面正式验收/C像素验收)；B四面已搭晋升入main候正式验收；TI5-1修复合并30d52490→canary同步8a1ae52f+restart加载(platform74724/node103760,runs_cut=4测试员预期respawn,plugin_manifest_invalid零出现B1解阻)→lead编排lifecycle/webui续验B1+A/C/B4收尾；生产8642仍2.0.0候用户重启加载2.1.0。本批待晋升=kanban-view/kanban-proxy/graceful-selfrestart/empty-state/plugin-ui-layer/hydration-anon/drag-reference/card-robust/plugin-version/skills-style/inbox-actions+第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl,lead已登记批次书本轮不测)。后续队列：plugin-config-read修复/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期"
+      "progress": "★三次晋升完成：main=fb44a979(v2.0.0,723fb673→38ee0aec→ab63936d→3953a92e→99f87c0c→fb44a979)，生产8642/8644健康。已晋升=第一/二轮全验闭环+AX三组/inbox-ux/addr-display/sidebar-anim/design-audit/minimap+tooltip/inbox-source/drawer-fix/SemVer release。★第四轮收尾+DR15-1修复复验中：修复合并redblue-dev 03f13c06→canary同步aa92f5ae(22文件零冲突,web未变免rebuild)→协议A restart --force加载新码(审计runs_cut=1★lead对账✓=O8 zombie c0b150c7属skillsstyle19c5733f非活run,fencing_token2被completed61f63769取代,force后runs.list仍running冻结17:27铁证,零真实损失,第五轮非阻塞)→新进程组platform56812/node48092/hub63056,8652/8654/8653绿★version2.1.0新码实证；cli复验：A PASS(node自死5.08s无force,门禁①⑤⑥)+B完成(node路径PASS drain.done→自死56ms,server.stop timeout_bounded5s;platform DR15-2确证30s看门狗force abnormal_exit,B兜底保安全)；★我裁定DR15-2 platform race微修复后晋升(续派q-dr15-exit fix/q-dr15-2-platform与B并行)；候cli核B②⑦+DR15-2修复闭环platform清洁复验→7判据终版→★DR15-1 node CLOSED✅+DR15-2迭代2修复合并1aba69c0(Bun计数泄漏workaround:terminate预关+stop不await+WS分类诊断)→canary同步d9d6cbde+协议A restart加载(version2.1.0,platform97020/node70348,runs_cut=0)→候cli修正判据复验6判据(start→done≈ms+差值pending_ws−proxy_ws_closed≈0+无CLOSING+无quiesce_exit_timeout force/abnormal_exit+node零改动spot-check)→★DR15-1+DR15-2 CLOSED✅第四轮14-22全闭环四ISSUE全CLOSED→晋升完成main=d5c7d3f1(2.1.0,ff-only)→用户优雅重启加载；第五轮A(permission汇集)/C(看板视觉)已合并redblue-dev 9aa43fbb→canary同步c5f61727+web rebuild绿(★新bundle index-37GKsuwv.js,plugin-ui-B9g0LlhK.js含Pager,skills新资产skills-B42IixC9.js/skills-xAKwVcZd.css)+协议A restart加载(platform49148/node97984,runs_cut=0)→lead tree拆分第五轮开验(A耦合回归/B四面正式验收/C像素验收)；B四面已搭晋升入main候正式验收；TI5-1 CLOSED+B4 PASS；R3批量修复(TI5-2/TI5-3 a31030a5+O-TI2 38e73168+PL5-1 5ccfa964)合并→canary同步6571fb1e+restart加载(platform99784/node107788,runs_cut=1=O8 zombie非阻塞,apps/web未变免rebuild)→lead编排R3综合验(webui B1 toolbar菜单+多词键+O-TI2 supported:true/lifecycle TI5-3热配置+PL5-1热应用保vessel-bridge+guardrail-pii不回归)；q-inbox-truth调研完成(真相源统一,症状①客户端pending第二真相源/症状②无agent面板承接缺口)→q-inbox-fix(P0-A对账e3212603+9adf0f11撤回编辑双份已完成,P1-A续作)+q-inbox-agent-view(P1-B agent级#/inbox视图,设计审计5ec22ec6+实现续作)；★生产已重启2.0.0→2.1.0(用户下放重启权力,首启无--self故interrupt,工具skills/web_search/web_fetch恢复,最新engines错误=0)；main新体读交接文档接续；生产8642/8644 2.1.0健康。本批待晋升=kanban-view/kanban-proxy/graceful-selfrestart/empty-state/plugin-ui-layer/hydration-anon/drag-reference/card-robust/plugin-version/skills-style/inbox-actions+第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl,lead已登记批次书本轮不测)。后续队列：plugin-config-read修复/拓扑C/CLI实施/skills-discovery实施——候用户裁定排期。★最新：TI5-4(thinking抬max_tokens)派单0627dff2审计b47b5360②③中；canary thinking high致budget>max_tokens provider400阻塞lead→改low+restart(pid54416)sweep复活lead→R3进行中；用户批准R3 PASS→晋升第五轮+inbox修复→graceful restart生产(修board_path+vessel-bridge+PL5-1)；生产vessel-bridge候restart自愈。"
     },
     {
       "id": "canary-qa-lead",
@@ -19,30 +19,6 @@
       "owner": "canary-qa-lead",
       "branch": "canary",
       "progress": "持续流①-⑤确认生效（⑤封存握手：同步前通报→封存→「已封存」→同步/rebuild→批次书开验）。★第四轮收尾：skills-style DONE封存(SS2-1 CLOSED)；hydration-anon修复同步核实(canary HEAD 3cc1474d/bundle index-DoIKo9x_.js/免restart实证)；cardrobust(f87f4f8c)正式任务书已发(22②刷新回放重建+⑥permission/ask+proxyMode同修面+live hash+config封存sha终验)；第五轮四面(thinking-plugin/swr-refresh/context-fix/plugin-lifecycle-impl)登记批次书本轮不测。候cardrobust DONE→22闭环+CR22-1 CLOSED→ALL封存通报→main drain paste 15①→node start→respawn复核"
-    },
-    {
-      "id": "q-ax-config",
-      "title": "AX自服务·诊断组：vessel config explain + vessel doctor",
-      "column": "阻塞",
-      "owner": "user",
-      "branch": "redblue-dev",
-      "progress": "✅完成合并b59c5326(c408fca2 explain层溯源12文件+483/b316e5b0 doctor舰队五项5文件+417)build绿cli.ts零改动；待金丝雀验证5点(explain逐层WINNER/env覆盖诊断/stale lock/端口归属/共享token)；worktree已清"
-    },
-    {
-      "id": "q-ax-discovery",
-      "title": "AX自服务·发现组：vessel rpc list + vessel fleet status",
-      "column": "阻塞",
-      "owner": "user",
-      "branch": "redblue-dev",
-      "progress": "✅完成合并4f8099cf(a28a1556 rpc list+2709034b fleet status,8文件+858纯additive,零cli.ts/服务端改动)build绿；待金丝雀验4点(rpc list本地/--node/fleet status/--data-dir边界/help/completion/无gateway教学)；worktree已清"
-    },
-    {
-      "id": "q-ax-selfobs",
-      "title": "AX自服务·自观组：vessel session status + vessel permission show",
-      "column": "阻塞",
-      "owner": "user",
-      "branch": "redblue-dev",
-      "progress": "✅完成合并614ef033(b3b73f54 session status+588fa811 permission show含additive permissions.show RPC,11文件+1078,rebase自解冲突)build绿；待验(session status缺省自身/--id/--json/permission show/--member/旧gateway降级)；worktree已清。★AX三组全交付(config b59c5326/discovery 4f8099cf/selfobs 614ef033)"
     },
     {
       "id": "q-inbox-ux",
@@ -85,12 +61,36 @@
       "progress": "✅完成合并552097e2(7eb80815 P1core extra钩子+P2热配置插件/830e9a47 P3工具栏菜单+设置UI,冲突解决保留drag-reference双方props)build绿；plugins/context/thinking-intensity(非provider,默认集排除provider纠偏)+模块级live holder热生效+contributes.settings自动发现+composer思考菜单+stable映射experimental闸；待金丝雀验+用户重启"
     },
     {
-      "id": "q-plugin-lifecycle-impl",
-      "title": "插件生命周期最优实现（per-capability+O5修复+注销API+版本跟踪，不留中间态）",
-      "column": "阻塞",
-      "owner": "user",
-      "branch": "redblue-dev",
-      "progress": "✅完成合并c68cc6c1+792b3752(7提交f92d4792/01ea38c4/de93e77e/2e115c3c/e39a2403/1dc94e52/fbbe35a3+marketplace资产收口)build绿；最优终态:能热真热(tool/hook/guardrail/masker/child启停/child settings)不能热诚实badge(provider/工厂/in-process代码),显示态=生效态同源,pii半态消除,无过渡闸无委屈代码；待金丝雀验+用户重启"
+      "id": "q-ti5-4-budget",
+      "title": "微修复：TI5-4 thinking注入抬max_tokens容纳budget（用户裁定不限制thinking）",
+      "column": "进行中",
+      "owner": "q-ti5-4-budget",
+      "branch": "fix/q-ti5-4-budget",
+      "progress": "✅完成合并f028d654(b47b5360审计+256c9d23修复,4文件+193/-23门禁绿)：applyOpenAIThinkingConsistency抬max_tokens=budget+8192(high16384→24576不再400/medium8192→16384/low off非qwen逐字节不变,插件零改,Anthropic clamp不动,触发stderr告警)；用户裁定不限制thinking抬max_tokens非clamp；候canary同步+验high不再400+随晋升批次入main"
+    },
+    {
+      "id": "q-sse-shared",
+      "title": "调研：前端轮询盘点+SSE共用连接可行性（用户提问inbox更新等改SSE）",
+      "column": "进行中",
+      "owner": "q-sse-shared",
+      "branch": "design/q-sse-shared",
+      "progress": "✅调研完成aed9c604(219行,用户裁定WS复用为主)：★共用连接已存在——每node一条WS(/v1/events)承载RPC+全事件族,所有轮询读本就骑这条WS；要做的是把轻量状态刷新触发从interval挪到WS事件面(事件当触发器数据仍RPC=SWR红线),兜底轮询降频保留,不新设SSE。盘点~20轮询点(inbox条带/专页2s非空门控/team chat 4s/runs详情2s/sessions60s/roster20s/health15s/config60s)；纯事件范例pending权限ask/build SSE/usage事件+15s；可行性:inbox最接近全事件化唯一缺口recall/claim不发事件(补agent.inbox.changed帧2s→10s),usage用llm.response触发,roster用agent.*帧；分级P0纯前端骑现有帧/P1小服务端增量(recall/claim发帧)/P2可选(team.message订阅等边际递减不建议)；风险+缓解全表§6；候用户裁定实施"
+    },
+    {
+      "id": "q-inbox-agent-view",
+      "title": "P1-B agent级收件箱视图（用户裁定inbox应agent级非会话级）",
+      "column": "进行中",
+      "owner": "q-inbox-agent-view",
+      "branch": "feat/q-inbox-agent-view",
+      "progress": "✅完成合并4f3f1d0a(5ec22ec6设计+a9ffd411实现,14文件+801/-4,门禁绿,服务端零改/PendingStrip/pending-sends零改)：方案①新增#/inbox?agent=<id>(缺省main)agent级真相视图,client.inbox{agent_id,include_held}不带session_id→service.ts:3760过滤短路全量(held+unread含wake/quiet无归属)→agent→main消息(本地team/federation/wake quiet)全可见；agent选择器+逐行归属标注防串台+peek全文+来源分档写操作+四态；SWR agent级触发+兜底轮询(非空2s/空态10s)；PendingStrip会话级run-queue保留(红线)；会话页头入口；候canary同步(web变更需rebuild)+用户验收(#/inbox见main全量跨会话+页头入口+条带不变)；新视觉留用户验收"
+    },
+    {
+      "id": "q-inbox-fix",
+      "title": "inbox修复：P0-A客户端pending对账服务端真相+P1-A消费消息可见承接",
+      "column": "进行中",
+      "owner": "q-inbox-fix",
+      "branch": "fix/q-inbox-fix",
+      "progress": "✅完成合并ac3ef34b(3commits e3212603 P0-A对账+9adf0f11撤回编辑重试消孤儿双份+53f376d9 P1-A承接,11文件+482/-22,门禁绿,全apps/web服务端零改)：P0-A=PendingStrip.load reconcileWithServer四护栏防误删(rotate-deferred排除盘上实证)症状①免刷新≤2s；撤回/编辑/重试按serverIdOf(messageId??claimedEntryIdOf)作用服务端真相消孤儿双份(用户假说成立客户端漏撤服务端)；P1-A=inbox-read.ts+InboxReadCard消费消息可见承接(human→UserBubble/agent→来自收件箱卡)症状②；候canary同步+用户验收3点(①read后≤2s消失免刷新②撤回编辑无旧消息无双份③agent消息read后时间线现承接卡刷新仍在)；inbox反复提出项留用户验收"
     },
     {
       "id": "q-inbox-truth",
@@ -98,7 +98,7 @@
       "column": "进行中",
       "owner": "q-inbox-truth",
       "branch": "design/q-inbox-truth",
-      "progress": "717cb042派单(用户直接报告+live实证:两条已read的human消息前端仍显○等待中)：症状①read消费后前端不反映②部分agent→main消息(本地team/federation)用户inbox视图不可见；疑真相源不统一/前端不忠实/会话归属过滤；调研inbox tool消费store vs agents.inbox RPC投影 vs PendingStrip渲染链+useInboxRefresh触发器覆盖(386c35bf已在2.0.0运行生产)+会话归属口径+main tool事件是否达用户前端事件面；输出根因+修复方案分级；反复提出项留用户验收"
+      "progress": "✅审计完成13d96ba8(330行全file:line实证,已合并redblue-dev c1227256)：★真相源统一(服务端单一AgentInboxStore,inbox tool与agents.inbox投影同源,刷新就对证实)非不统一；症状①根因=前端第二真相源客户端pendingSends内存行无消费信号(read取消queued run永不发回显,pending永停queued,live触发器/2s轮询只重读服务端碰不到客户端行,刷新即空因无持久化)→P0-A对账；症状②根因=会话级条带无agent面板+agent消息read消费后无可见承接(AgentMessageCard只画run-input)+wake/quiet无session_id设计过滤→P1-A承接/P1-B面板候用户裁定；main事件归属假说被纠正非主因；修复派q-inbox-fix"
     },
     {
       "id": "q-pl5-guardrail",
@@ -139,14 +139,6 @@
       "owner": "user",
       "branch": "feat/q-permission-pending",
       "progress": "✅实施完成build绿(main盘上核实:4commits 9e5d2d64审计/44ed0c40 teamId additive/22522195混聚主特性/18b7a22c format,11文件+312/-71,红线文件零触及,hydration仅additive投影闸门不动,typecheck+lint+📦全绿)；方案=混合聚类(agent>session>run)+PermissionCard原样复用+respondPermission逐条裁决(不批量)+badge计数对齐(AppShell+ChatView)；★lead分批裁定:第五轮批次A专项(与CR22-1 hydration-anon共享入口耦合回归,测试员cardrobust卡面+skillsstyle待批页UI续话)；★已合并redblue-dev 9aa43fbb(晋升后)+候canary同步+第五轮批次A金丝雀验(耦合回归hydration-anon入口,cardrobust卡面+skillsstyle待批页UI)+用户打勾；遗留:pendingBySession会话行badge原始sessionId口径=0.51既有设计(审计§3注明)"
-    },
-    {
-      "id": "q-graceful-selfrestart",
-      "title": "完全优雅stop/restart(drain-to-quiesce)+自重启Option A（用户裁定）",
-      "column": "阻塞",
-      "owner": "user",
-      "branch": "redblue-dev",
-      "progress": "✅完成合并1d5e4688(f0dabd9d drain-to-quiesce/949cff6b Option A --self自重启/671357d5 inbox唤醒G1-G7/8d61103c指路)build绿；stop/restart缺省等run真跑完不限时+进度,--force唯一非优雅；vessel restart --self --prompt早返回→run自然完成无run lost→重启→嘱托自动续跑；★15①main实测发现(2026-11-25T18:25):drain-to-quiesce本身✓(node.drain.done settle=idle 0run 1ms+5s进度行)但进程不自死✗——gateway.stop(ws closed)后activeCleanup挂起12+分钟(cli.ts:2090-2115候选eventHub.close/result.shutdown/lock.release,process.exit未到达),协议A force兜底runs_cut=0+舰队已恢复；lead登记ISSUE-DR15-1；★15②决定性实验FAIL(cli --self当前build复现:drain.done settle=settled 1run 36.3s@10:45:47Z→pid 76624存活3m8s+orchestrator干等3m42s→main协议A自主force兜底runs_cut=0→orchestrator自主start pid87476+continuation投递✓)；两次独立复现(10:25外部stop+10:45--self)=确定性非状态依赖；cli provisional归因:node侧疑似既有(07:47平台重试172s旧证)+stop侧放大回归确证(24b4eb95移除10s force兜底→不限时干等)；main预调研退出链候选:gateway.stop后半/closeTenants/agentControl.dispose/localPluginHostManager.stopAll/engineSupervisor.stop(tools-engine child Windows退出疑)/bundle.close/processSessionLock.release,诊断缺口=零步骤进度日志；候lead终裁+微修复scope→本轮微修复快速通道→晋升"
     },
     {
       "id": "q-skills-style",

@@ -2,6 +2,7 @@ import { AgentsView } from '../domains/agents/AgentsView';
 import { ChatView } from '../domains/chat/ChatView';
 import { GatewayView } from '../domains/gateway/GatewayView';
 import { HubView } from '../domains/hub/HubView';
+import { InboxView } from '../domains/inbox/InboxView';
 import { CapabilityView } from '../domains/integrations/CapabilityView';
 import { KanbanView } from '../domains/kanban/KanbanView';
 import { NodePanelView } from '../domains/nodes/NodePanelView';
@@ -49,6 +50,7 @@ export function ShellRouteView({
       {route.domain === 'nodes' && <NodePanelView route={route} navigate={navigate} />}
       {route.domain === 'teams' && <TeamsView route={route} navigate={navigate} panes={panes} />}
       {route.domain === 'kanban' && <KanbanView />}
+      {route.domain === 'inbox' && <InboxView route={route} navigate={navigate} />}
       {route.domain === 'agents' && <AgentsView route={route} navigate={navigate} />}
       {route.domain === 'runs' && <RunsView route={route} navigate={navigate} />}
       {(route.domain === 'tools' || route.domain === 'mcp' || route.domain === 'channels') && (

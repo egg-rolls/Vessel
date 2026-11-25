@@ -66,6 +66,7 @@ import {
 import type { AnsweredAsk } from './ask-answered';
 import { type EnvNoticeCard, mergeEnvNoticeCards, runtimeEnvCard } from './env-notice';
 import { buildHistoryToolItems } from './history-tools';
+import { inboxReadMessagesOf } from './inbox-read';
 import { projectionIndexByCallId } from './projection';
 import { type RotateHandoff, rotateHandoffOf } from './rotate-handoff';
 import { compareTimelineEntries } from './timeline-order';
@@ -164,6 +165,31 @@ export interface RunInputItem extends ItemMeta {
    * 该 run 有几条输入消息（那两道判据是 0.51 的兜底，旧数据没有 id 时才走）。
    */
   messageId?: string;
+}
+
+/**
+ * 「收件箱取走」item（P1-A）：被 `inbox read` 消费的那条消息的可见承接。
+ *
+ * 为什么是独立 kind：read 消费的消息**不会**成为 run input（不发 user.message /
+ * run.started 回显），也不落盘成上下文消息 —— 时间线上没有任何既有 item 承接它，
+ * 用户永远看不到（audit §3 症状②主因）。这里从工具结果把全文投影成消息 item，
+ * 站在取走它的那张工具卡旁边（见 `projectInboxReads`）。
+ *
+ * 身份只有 read 结果给的那一层：`source`（human / agent / system）+ 稳定 `messageId`。
+ * 没有发送者名（服务端工具面不改，红线）；human 源渲染为用户气泡（与 run-input 同口径），
+ * 其余渲染为收件箱消息卡。`messageId` 参与装配面去重：同一条消息若已被 run-input /
+ * 历史消息承接，这里不再出第二份（一条消息一个地方）。
+ */
+export interface InboxReadItem extends ItemMeta {
+  kind: 'inbox-read';
+  /** inbox 条目的稳定 id（与 `agents.inbox` 的 `message_id` 同一个字符串）。 */
+  messageId: string;
+  /** 消息全文（read 结果里的 `text`）。 */
+  text: string;
+  /** 来源类别：human / agent / system。 */
+  source: string;
+  /** 取走它的那次 read 所属的 run（诊断用；不参与输入认领）。 */
+  runId?: string;
 }
 
 /**
@@ -482,6 +508,7 @@ export type TranscriptItem =
   | MessageItem
   | RuntimeNoticeItem
   | RunInputItem
+  | InboxReadItem
   | AskAnswerItem
   | AskAnsweredItem
   | RotateHandoffItem
@@ -2380,6 +2407,52 @@ function mergeItem(
 }
 
 /**
+ * 「收件箱取走」投影（P1-A，症状②的承接）：合并排序**之后**，把每张 inbox read 工具卡
+ * 取走的消息投影成可见的 `inbox-read` item，紧跟在那张工具卡后面。
+ *
+ * 为什么放在合并后而不是 live / 历史各自的建 item 阶段：
+ * - 工具卡的内容是「history ∪ live、history 优先」（见 `mergeItem`）—— 只有合并后的
+ *   output 才是权威全文（live 是 8KiB 预览，可能截断）。在这里解析一次，两路来源
+ *   （事件回放 / 历史落盘）天然共用同一份投影，刷新前后同一个 key、同一张卡；
+ * - 位置直接站在工具卡旁（消费发生的时刻），不参与认领 / 让位 / 窗口夹取 ——
+ *   那些规则管的是「run 的输入与正文」，read 消费的消息两者都不是。
+ *
+ * 去重（一条消息一个地方）：消息 id 已被历史消息（`history.messageIds`）或 run-input
+ * 承接 ⇒ 不再投影；同一条消息在多次 read 结果里出现（消费不可逆，正常不会）也只出一次。
+ * 工具卡本身照旧受工具可见性开关管辖；承接卡是**消息**不是工具，不受那个开关影响。
+ */
+function projectInboxReads(
+  ordered: readonly TranscriptItem[],
+  historyMessageIds: ReadonlySet<string>,
+): TranscriptItem[] {
+  const taken = new Set<string>(historyMessageIds);
+  for (const item of ordered) {
+    if (item.kind === 'run-input' && item.messageId !== undefined) taken.add(item.messageId);
+  }
+  const out: TranscriptItem[] = [];
+  for (const item of ordered) {
+    out.push(item);
+    if (item.kind !== 'tool') continue;
+    for (const message of inboxReadMessagesOf(item.name, item.args, item.output)) {
+      if (taken.has(message.id)) continue;
+      taken.add(message.id);
+      out.push({
+        kind: 'inbox-read',
+        key: `inbox-read:${message.id}`,
+        messageId: message.id,
+        text: message.text,
+        source: message.source,
+        ...(item.runId !== undefined ? { runId: item.runId } : {}),
+        // 排序时刻 = 取走它的那次 read 的落位时刻（工具卡的 ts）；多条消息同 ts 时
+        // 保持 read 结果里的顺序（插入序，不再重排）。
+        ...(item.ts !== undefined ? { ts: item.ts } : {}),
+      });
+    }
+  }
+  return out;
+}
+
+/**
  * 单一 item 流（纯函数）。
  *
  * 复杂度：历史侧 item / 反查表由  按  引用 memo；live 侧 item
@@ -2612,7 +2685,9 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     .sort((a, b) => compareTimelineEntries(a.item, b.item, a.index, b.index))
     .map(({ item }) => item);
 
-  return foldAdjacentEnvNotices(withSpeakerRuns(ordered));
+  return foldAdjacentEnvNotices(
+    withSpeakerRuns(projectInboxReads(ordered, new Set(history.messageIds.keys()))),
+  );
 }
 
 /**

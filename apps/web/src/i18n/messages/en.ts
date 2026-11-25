@@ -92,6 +92,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'breadcrumb.mcp': 'MCP servers',
   'breadcrumb.channels': 'Channels',
   'breadcrumb.kanban': 'Kanban',
+  'breadcrumb.inbox': 'Inbox',
   'breadcrumb.plugins': 'Plugins',
 
   // Plugin Host (E10)
@@ -342,6 +343,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.session.pending': '{count} pending request(s)',
   'chat.session.copyId': 'Copy session ID',
   'chat.session.copiedId': 'Session ID copied',
+  'chat.session.openInbox': 'Inbox',
   'chat.session.copyIdTitle': 'Copy session ID: {title}',
   // Member model switch entry (model-registry P2): member-level pin, next body / resumed run
   'chat.memberModel.button': 'Model',
@@ -853,6 +855,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.domain.nodes': 'Nodes',
   'nav.domain.teams': 'Teams',
   'nav.domain.kanban': 'Kanban',
+  'nav.domain.inbox': 'Inbox',
   'nav.domain.agents': 'Agents',
   'nav.group.network': 'ORCHESTRATION',
   'breadcrumb.hub': 'Hub',
@@ -1041,6 +1044,40 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'kanban.confirmAction': 'Accept & archive',
   'kanban.archived': 'Archived: {title}',
   'kanban.archiveFailed': 'Archive failed: {message}',
+
+  // Inbox (agent-level inbox, P1-B q-inbox-agent-view): full cross-session truth, no session filter.
+  'inbox.subtitle':
+    'Every message addressed to this agent (cross-session, including wake/quiet deliveries without a session)',
+  'inbox.agentLabel': 'Agent',
+  'inbox.unreadCount': '{count} unread',
+  'inbox.pendingCount': '{count} queued',
+  'inbox.entryCount': '{count} entries',
+  'inbox.empty': 'Inbox is empty',
+  'inbox.emptyHint':
+    'Messages addressed to this agent appear here; once the model reads (consumes) one, it no longer shows.',
+  'inbox.noTokenReason': 'Connect to the gateway to read agent inboxes.',
+  'inbox.notFound': 'Agent not found',
+  'inbox.status.held': 'Queued',
+  'inbox.status.unread': 'Unread',
+  'inbox.noSession': 'No session',
+  'inbox.noSessionHint':
+    'This message has no session attribution (wake/quiet delivery or a legacy entry); it is not part of any session input queue.',
+  'inbox.openSession': 'Open session',
+  'inbox.expand': 'Show full text',
+  'inbox.collapse': 'Collapse',
+  'inbox.peeking': 'Reading full text…',
+  'inbox.peekFailed': 'Failed to read full text: {detail}',
+  'inbox.peekMissing': 'message not found (it may have been consumed)',
+  'inbox.cancel': 'Cancel message',
+  'inbox.cancelled': 'Cancelled: the message was removed from the inbox',
+  'inbox.cancelRejected':
+    'Cancel was not accepted; re-read to align (the message may already be gone)',
+  'inbox.claimTaken': 'Marked as handled: this message will not be delivered',
+  'inbox.claimSkipped': 'Could not take this message ({reason}); re-read to align',
+  'inbox.unheld': 'Hold released: kept as unread, the model can still read it',
+  'inbox.unholdRejected':
+    'The server did not release the hold; re-read to align (the message may already be gone)',
+  'inbox.unholdFailed': 'Failed to release hold: {detail}',
 
   // Teams (cross-node)
   'teams.title': 'Teams',
@@ -1583,6 +1620,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.agentMessage.group': 'Message from agent {name}',
   'chat.toolMessage.from': 'from {name}',
   'chat.toolMessage.group': 'Delivery from {name}',
+  // P1-A: a message taken by `inbox read` (no run-input echo) — visible hand-off card.
+  'chat.inboxRead.from': 'from inbox · {source}',
+  'chat.inboxRead.group': 'Message taken from the inbox ({source})',
   // 0.36: message bubble action group
   'chat.message.actions': 'Message actions',
   // long-message fold (same toggle component on the chat and team pages)
