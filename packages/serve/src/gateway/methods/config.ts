@@ -576,6 +576,9 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
                   type: 'string',
                   enum: ['inactive', 'active', 'unhealthy', 'disabled', 'invalid'],
                 },
+                // TI5-6 additive：插件持久化 config 快照（plugins[].config 原值）；
+                // 无持久化值时整字段缺省。web 设置弹窗回显 / 写确认消费。
+                config: { type: 'object' },
                 // plugin-embed 契约 §3：additive；没有 ui.embed 的插件缺省。
                 ui_trust: { type: 'string', enum: ['embedded', 'isolated'] },
                 ui_bundle_hash: { type: 'string' },
@@ -593,8 +596,11 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
                     // 0.51 additive：输入框工具栏声明（declarative，无 entry）。
                     toolbar: { type: 'array', items: { type: 'object' } },
                     commands: { type: 'array', items: { type: 'object' } },
-                    // E1 amendment：bare RPC 方法名。
-                    rpc: { type: 'array', items: { type: 'string' } },
+                    // E1 amendment：bare RPC 方法名。TI5-5 additive：write 方法
+                    // 发 {name, permission:'write'} 对象；校验器子集无 union
+                    // （schemas.ts 口径），items 不声明 type（任意值通过），
+                    // 形状由 renderContributions 组装保证。
+                    rpc: { type: 'array', items: {} },
                     // S3 additive：插件设置域 spec（vscode-settings-design §4.2）。
                     settings: { type: 'object' },
                   },

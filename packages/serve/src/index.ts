@@ -384,6 +384,7 @@ export {
   type PluginRpcContribution,
   type PluginRpcHandler,
   PluginRpcRegistry,
+  type PluginRpcWireEntry,
   type PluginRuntimeStatus,
   type PluginSide,
   type PluginStaticMount,
