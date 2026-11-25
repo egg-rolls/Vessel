@@ -96,7 +96,8 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.migrateApply': 'apply the migration',
   'help.cmd.tracePrune': 'prune trace (dry-run by default)',
   'help.cmd.mock': 'mock mode (no API calls)',
-  'help.cmd.doctor': 'local config/environment self-check (--deep queries the gateway)',
+  'help.cmd.doctor':
+    'local config/environment + fleet self-check (env hygiene, locks, ports, peers, node; --deep queries the gateway)',
   'help.cmd.logsTail': 'tail gateway logs',
   'help.cmd.dataDir': 'override the global data directory',
   'help.cmd.resumeRunList': 'list resumable interrupted runs',

@@ -88,7 +88,8 @@ export const zhCN = {
   'help.cmd.migrateApply': '执行迁移',
   'help.cmd.tracePrune': '清理 trace（默认 dry-run）',
   'help.cmd.mock': 'mock 模式（不调 API）',
-  'help.cmd.doctor': '本机配置/环境自检（--deep 查询 gateway）',
+  'help.cmd.doctor':
+    '本机配置/环境+舰队自检（env 卫生/锁/端口/peer token/node 健康；--deep 查询 gateway）',
   'help.cmd.logsTail': '查看 gateway 日志尾部',
   'help.cmd.dataDir': '覆盖全局数据目录',
   'help.cmd.resumeRunList': '列出可恢复的 interrupted run',
