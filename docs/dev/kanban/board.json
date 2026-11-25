@@ -71,11 +71,11 @@
     },
     {
       "id": "q-envcard-run",
-      "title": "调研：环境信息卡run中不可见（inbox/PII卡run结束才显示，状态误区）",
+      "title": "调研：卡片渲染健壮性（env卡run中不可见+permission审批卡刷新不显示）",
       "column": "进行中",
       "owner": "q-envcard-run",
       "branch": "design/q-envcard-run",
-      "progress": "636f9151派单(用户报告)：run中看不到inbox/PII环境卡,run结束才显示；裁定run中/结束应一致；调研live buildLiveItems vs history投影对vessel:notice处理差异+修复方案；零代码"
+      "progress": "636f9151派单(用户两报告)：①run中看不到inbox/PII环境卡,run结束才显示②rotate权限审批卡前端不显示刷新也不出→approval_timeout(更优先,阻塞审批)；调研live vs history渲染差异+permission态持久化/渲染条件+修复方案；零代码"
     },
     {
       "id": "q-runlost-audit",
