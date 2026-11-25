@@ -256,11 +256,12 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [
       {
         name: 'start',
-        flags: ['--daemon', '--instance', '--port', '--host', '--log'],
+        flags: ['--daemon', '--foreground', '--instance', '--port', '--host', '--log'],
       },
       { name: 'stop', flags: ['--timeout', '--instance', '--port', '--all'] },
       { name: 'status', flags: ['--json', '--rpc', '--instance', '--port', '--all'] },
       { name: 'list', flags: ['--json'] },
+      { name: 'ps', flags: ['--json', '--all', '--data-dir'] },
       {
         // 三级子命令（list/add/remove）不能由当前两级 spec 表达；这里挂出
         // `gateway nodes` 及其 flags，第三词交给各 shell 的默认补全。
@@ -283,6 +284,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [
       { name: 'start', flags: ['--daemon', '--config'] },
       { name: 'status', flags: ['--json', '--rpc'] },
+      { name: 'ps', flags: ['--json', '--all', '--data-dir'] },
       { name: 'stop' },
       { name: 'reload', flags: ['--scope'], flagValues: { '--scope': ['config', 'plugins'] } },
     ],
@@ -296,6 +298,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
         name: 'start',
         flags: ['--host', '--port', '--data-dir', '--allow-remote', '--tls-cert', '--tls-key'],
       },
+      { name: 'ps', flags: ['--json', '--all', '--data-dir'] },
       { name: 'directory', flags: ['--hub-url', '--token-env', '--json'] },
       { name: 'watch', flags: ['--hub-url', '--token-env'] },
       { name: 'join-code', flags: ['--data-dir', '--ttl', '--json'] },
@@ -310,6 +313,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     ],
   },
   { token: 'status', registryName: 'status', flags: ['--json'] },
+  { token: 'ps', registryName: 'ps', flags: ['--json', '--all', '--data-dir'] },
   {
     token: 'session',
     registryName: 'session',

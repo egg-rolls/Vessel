@@ -125,7 +125,12 @@ export async function tailLog(logPath: string, maxLines = 10): Promise<string> {
   }
 }
 
-/** 构造前台子进程 argv（去掉 --daemon，保留 port/host） */
+/**
+ * 构造前台子进程 argv（保留 port/host）。
+ * 用户裁定 #1（start 即退）：`gateway start` 缺省 detach，daemon 子进程必须
+ * 显式 `--foreground` 才留在前台管线（否则子进程会再 spawn 一层 daemon）。
+ * `node start` 缺省仍是前台，不需要该旗标。
+ */
 export function buildDaemonArgv(options: {
   execPath: string;
   entryPath: string;
@@ -141,6 +146,7 @@ export function buildDaemonArgv(options: {
     options.entryPath,
     options.command ?? 'gateway',
     'start',
+    ...((options.command ?? 'gateway') === 'gateway' ? ['--foreground'] : []),
     // `node start` 只支持 `[--daemon] [--config]`；实例固定为 default（共享同一 PID/锁）。
     ...(options.instance !== undefined && (options.command ?? 'gateway') === 'gateway'
       ? ['--instance', options.instance]

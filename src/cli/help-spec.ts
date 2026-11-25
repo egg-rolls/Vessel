@@ -26,6 +26,7 @@ import type { MessageKey } from '../i18n';
 export const CLI_FLAG_VALUE = {
   '--json': null,
   '--daemon': null,
+  '--foreground': null,
   '--keep-nodes': null,
   '--no-keep-nodes': null,
   '--force': null,
@@ -126,6 +127,7 @@ export type CliFlag = keyof typeof CLI_FLAG_VALUE;
 export const CLI_FLAG_HELP: Readonly<Record<CliFlag, MessageKey>> = {
   '--json': 'flag.json',
   '--daemon': 'flag.daemon',
+  '--foreground': 'flag.foreground',
   '--keep-nodes': 'flag.keepNodes',
   '--no-keep-nodes': 'flag.noKeepNodes',
   '--force': 'flag.force',
@@ -284,6 +286,12 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     path: ['status'],
     summary: 'help.cmd.status',
     flags: ['--json', '--connect', '--connect-token', '--ca'],
+  },
+  {
+    path: ['ps'],
+    summary: 'help.cmd.ps',
+    flags: ['--json', '--all', '--data-dir'],
+    flagHelp: { '--all': 'flag.all.ps' },
   },
   {
     path: ['session', 'status'],
@@ -503,7 +511,7 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   {
     path: ['gateway', 'start'],
     summary: 'help.cmd.gatewayStart',
-    flags: ['--daemon', '--instance', '--port', '--host', '--log'],
+    flags: ['--daemon', '--foreground', '--instance', '--port', '--host', '--log'],
   },
   {
     path: ['gateway', 'status'],
@@ -511,6 +519,12 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     flags: ['--json', '--rpc', '--instance', '--port', '--all'],
   },
   { path: ['gateway', 'list'], summary: 'help.cmd.gatewayList', flags: ['--json'] },
+  {
+    path: ['gateway', 'ps'],
+    summary: 'help.cmd.gatewayPs',
+    flags: ['--json', '--all', '--data-dir'],
+    flagHelp: { '--all': 'flag.all.ps' },
+  },
   {
     path: ['gateway', 'restart'],
     summary: 'help.cmd.gatewayRestart',
@@ -549,6 +563,12 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   // ── node ──
   { path: ['node', 'start'], summary: 'help.cmd.nodeStart', flags: ['--daemon', '--config'] },
   { path: ['node', 'status'], summary: 'help.cmd.nodeStatus', flags: ['--json', '--rpc'] },
+  {
+    path: ['node', 'ps'],
+    summary: 'help.cmd.nodePs',
+    flags: ['--json', '--all', '--data-dir'],
+    flagHelp: { '--all': 'flag.all.ps' },
+  },
   { path: ['node', 'stop'], summary: 'help.cmd.nodeStop' },
   { path: ['node', 'reload'], summary: 'help.cmd.nodeReload', flags: ['--scope'] },
 
@@ -557,6 +577,12 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
     path: ['hub', 'start'],
     summary: 'help.cmd.hubStart',
     flags: ['--host', '--port', '--data-dir', '--allow-remote', '--tls-cert', '--tls-key'],
+  },
+  {
+    path: ['hub', 'ps'],
+    summary: 'help.cmd.hubPs',
+    flags: ['--json', '--all', '--data-dir'],
+    flagHelp: { '--all': 'flag.all.ps' },
   },
   {
     path: ['hub', 'directory'],

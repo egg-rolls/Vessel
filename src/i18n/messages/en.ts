@@ -43,6 +43,10 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.rpcList':
     'list RPC methods with params/result schema summaries (--node targets via platform proxy)',
   'help.cmd.fleetStatus': 'this fleet at a glance: identity / peers / nodes / gateway (read-only)',
+  'help.cmd.ps': 'list fleet processes (gateway/node/hub), docker ps style',
+  'help.cmd.gatewayPs': 'list gateway (platform) processes, docker ps style',
+  'help.cmd.nodePs': 'list node processes, docker ps style',
+  'help.cmd.hubPs': 'list hub processes, docker ps style',
   'help.cmd.modelList': 'list the model registry (vendors / aliases / default / effective)',
   'help.cmd.modelVendorSet': 'create or replace a vendor entry (--entry is the vendor JSON)',
   'help.cmd.modelVendorRemove': 'remove a vendor (refused while aliases / default reference it)',
@@ -56,7 +60,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.modelTest':
     'connectivity test against a saved vendor (sends a real request; may incur cost)',
   'help.cmd.gatewayStart':
-    'start in the foreground; --daemon detaches to gateway.log; --instance names it',
+    'start detached and exit once the platform is up (default); --foreground keeps it in front; --instance names it',
   'help.cmd.gatewayList': 'list gateway instances and PID files',
   'help.cmd.gatewayStop':
     'graceful SIGTERM stop (process termination on Windows); default keeps node/hub, --stop-nodes stops them too',
@@ -174,6 +178,7 @@ export const en: Record<MessageKey, string> = {
   'help.group.session': 'session maintenance (legacy migration)',
   'flag.json': 'emit JSON (data lines stay plain text)',
   'flag.daemon': 'detach to the background (log path via --log)',
+  'flag.foreground': 'keep running in the foreground (debugging; default is detached)',
   'flag.keepNodes':
     'handoff: stop the platform layer but keep node/hub alive (adopted by the next start)',
   'flag.noKeepNodes': 'cold restart: stop node/hub together with the platform layer',
@@ -189,6 +194,7 @@ export const en: Record<MessageKey, string> = {
   'flag.interactive': 'interactive selection (requires a TTY)',
   'flag.allNodes': 'aggregate every configured node',
   'flag.all': 'apply to every target',
+  'flag.all.ps': 'include stopped processes (docker ps -a style)',
   'flag.allow': 'allow (permission interaction)',
   'flag.deny': 'deny (permission interaction)',
   'flag.remember': 'remember this decision for the session',
@@ -351,6 +357,7 @@ export const en: Record<MessageKey, string> = {
   'gateway.stopKeptHub': 'kept hub alive for handoff',
   'gateway.startFailed': 'Gateway failed to start: {detail}',
   'gateway.started': 'Gateway started (pid {pid}): {url}',
+  'gateway.startedNode': 'node: {name} (port {port})',
   'gateway.logPath': 'Log: {path}',
   'gateway.webDistMissing':
     'Web console assets are missing at {path}. Build them once (a fresh clone has none): `bun run build:web` (= `cd apps/web && bun run build`), or point VESSEL_STATIC_DIR at an existing build, then start again.',
@@ -502,6 +509,9 @@ export const en: Record<MessageKey, string> = {
   'fleet.noPeers': 'no federation peers configured',
   'fleet.fedEnabled': 'federation enabled',
   'fleet.fedDisabled': 'federation disabled',
+  'ps.title': 'Vessel processes (this fleet)',
+  'ps.empty': 'no running processes (use --all to include stopped)',
+  'ps.emptyAll': 'no process records',
   'model.title': 'Vessel Model Registry',
   'model.empty': 'Registry is empty: no vendors, aliases or default model.',
   'model.vendors': 'Vendors ({count})',
