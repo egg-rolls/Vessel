@@ -11,17 +11,20 @@
       不要用「每次 render 改 key / 拼随机类名」伪造重复动画 —— 那会重建节点，
       实际效果是整行重排 + 重播，比不做动画更抖。
 
-   2. 大小变化类 —— `.motion-disclosure`（`<details>` 的展开 / 收起）
+   2. 大小变化类 —— `.motion-disclosure`（`<details>`）/ `.motion-panel`（自管开合面板）
       `.motion-disclosure` 挂在 `<details>` 上，展开 / 收起做 `block-size` 过渡。原生
       summary 的键盘操作、可达名、收起后内容不可聚焦（content-visibility）全部保留，
       所以不要为了动画把 `<details>` 拆成 div + aria-expanded。
       浏览器不支持 `::details-content` 时直接开合（就是今天的行为），不做假动画。
 
-      **还没有**「非 `<details>` 的自管开合面板」，因此本文件不放那套 class（无使用点的
-      代码不预留）。真有第一个使用点时照这个写，别用 max-height 猜值（内容一长就抖，
-      猜小了裁掉、猜大了拖沓）——容器 display: grid + grid-template-rows: 0fr（收起）→
-      1fr（展开，行高跟着内容长，不用量高度），状态放 data-motion-open，子项 min-height: 0
-      + overflow: clip 防止把父级重新撑开，两个方向的时长都用 --motion-slow。
+      非 `<details>` 的自管开合面板（button + aria-expanded 自己管状态）用
+      `.motion-panel`，第一个使用点 = 主导航分区（app/NavGroup）。别用 max-height
+      猜值（内容一长就抖，猜小了裁掉、猜大了拖沓）——容器 display: grid +
+      grid-template-rows: 0fr（收起）→ 1fr（展开，行高跟着内容长，不用量高度），
+      状态放 data-motion-open，子项 `.motion-panel-inner` min-height: 0 + overflow: clip
+      防止把父级重新撑开。时长缺省 --motion-slow，可经 --motion-panel-duration 覆写
+      （导航分区覆写为 --motion-base = 200ms）。不支持 grid-template-rows 过渡的
+      旧浏览器直接瞬切开合，不做假动画。
       收起时**调用方**负责给 `inert` / `hidden` —— 动画 class 不管可访问性。
 
    3. 流式类 —— `.motion-stream`
@@ -114,6 +117,25 @@
   }
 }
 
+/* 非 <details> 的自管开合面板（契约 ② 第二分支；第一个使用点 = 主导航分区）。
+   grid 行高 0fr ↔ 1fr 过渡：行高跟着内容长，不量高度、不猜 max-height。
+   时长缺省 --motion-slow，调用方可经 --motion-panel-duration 覆写（NavGroup
+   声明 var(--motion-base) = 200ms）。收起终态的 inert / aria-hidden 由调用方负责。 */
+.motion-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--motion-panel-duration, var(--motion-slow)) var(--motion-ease);
+}
+
+.motion-panel[data-motion-open] {
+  grid-template-rows: 1fr;
+}
+
+.motion-panel > .motion-panel-inner {
+  min-height: 0;
+  overflow: clip;
+}
+
 /* ── ③ 流式类 ─────────────────────────────────────────────── */
 
 /* 正文块「先占位、再出现」：块的高度 / 位置在挂载那一帧就按最终排版落位，
@@ -151,5 +173,11 @@
     transition: none;
     block-size: auto;
     opacity: 1;
+  }
+
+  /* 自管开合面板是普通元素，base.css 的全局抑制已覆盖 grid 过渡；
+     这里同样把「没有动画」这个结果钉死，开合瞬切。 */
+  .motion-panel {
+    transition: none;
   }
 }

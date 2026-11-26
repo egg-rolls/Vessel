@@ -146,9 +146,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.local.navCollapsed.title': 'Collapse sidebar by default',
   'settings.item.local.navCollapsed.desc':
     'Default collapsed state of the left nav when the WebUI opens; the sidebar toggle writes the same storage key.',
-  'settings.item.local.navGroups.title': 'Group collapse state',
+  'settings.item.local.navGroups.title': 'Group expansion state',
   'settings.item.local.navGroups.desc':
-    'Collapsed state of left-nav groups (read-only); reset = expand all.',
+    'Expanded state of left-nav groups (read-only); reset = collapse all.',
   'settings.item.local.settingsTree.title': 'Settings tree collapse state',
   'settings.item.local.settingsTree.desc':
     'Collapsed categories of the settings dialog tree (JSON array, this browser only).',

@@ -146,8 +146,8 @@ export const messages = {
   'settings.item.local.navCollapsed.title': '侧栏默认折叠',
   'settings.item.local.navCollapsed.desc':
     '打开 WebUI 时左侧导航栏的默认折叠态；左栏折叠按钮即时写同一存储键。',
-  'settings.item.local.navGroups.title': '分组折叠状态',
-  'settings.item.local.navGroups.desc': '左侧导航各分组的折叠态（只读展示）；重置 = 全部展开。',
+  'settings.item.local.navGroups.title': '分组展开状态',
+  'settings.item.local.navGroups.desc': '左侧导航各分组的展开态（只读展示）；重置 = 全部收起。',
   'settings.item.local.settingsTree.title': '设置分类树折叠态',
   'settings.item.local.settingsTree.desc': '设置弹窗分类树的折叠状态（JSON 数组，本浏览器）。',
   'settings.item.local.settingsTab.title': '设置默认层级',

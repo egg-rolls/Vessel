@@ -331,17 +331,17 @@ export const LOCAL_SETTINGS: readonly SettingDef[] = [
   },
   {
     id: 'local.nav.groups',
-    key: 'vessel.nav.collapsed-groups',
+    key: 'vessel.nav.expanded-groups',
     scope: 'local',
     type: 'object',
     source: 'core',
     titleKey: 'settings.item.local.navGroups.title',
     descriptionKey: 'settings.item.local.navGroups.desc',
     category: 'visual',
-    // 只读展示 + [全部展开] 重置（§5.3）；v1 经通用 local 重置清空存储键。
+    // 只读展示 + 重置（§5.3）；v1 经通用 local 重置清空存储键 = 回到默认全收起。
     readOnly: true,
     resettable: true,
-    keywords: ['nav', 'groups', '分组', '折叠'],
+    keywords: ['nav', 'groups', '分组', '展开', '折叠'],
   },
   {
     id: 'local.settings.tree.collapsed',

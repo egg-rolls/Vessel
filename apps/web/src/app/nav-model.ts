@@ -192,7 +192,7 @@ export function buildNavModel({
   for (const group of customGroups) push(group);
 
   // 状态信息组置底（用户裁决）：工作面板（请求日志 / 用量 / 模型管理等插件组）在上，
-  // 枢纽 / 网关 / 插件宿主在最下；默认折叠见 DomainNav.readCollapsedGroups。
+  // 枢纽 / 网关 / 插件宿主在最下；分区默认全收起见 DomainNav.readExpandedGroups。
   const coreGroup = NAV_GROUPS.find((group) => group.id === 'core');
   if (coreGroup) push(coreGroupModel(coreGroup, NAV_GROUPS.length + 1));
 
