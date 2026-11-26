@@ -1524,7 +1524,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       events: runtimeEvents,
       tenantId,
     });
-    registerRuntimeNoticeHook(finalPluginHost, noticeBus, eventLog, config.envInjection);
+    registerRuntimeNoticeHook(finalPluginHost, noticeBus, eventLog, () => config.envInjection);
     // 0.52：附件引用的环境信息行（模型据此知道有附件、该用 media 工具读）。
     // 0.56 P1：带上视觉面探针——有 `provider.vision` 且没被 kill switch 关时，尾注改说
     // 「图已随本条消息附上，不要再读」（避免模型把图再 media: read 一遍 = 双倍花费）。

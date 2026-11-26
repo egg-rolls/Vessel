@@ -87,8 +87,11 @@ export interface RuntimeNoticeHookOptions {
    * 'run' ⇒ 每 run 只在首次请求取通知（`request_index > 0` 早退）。gate 在
    * `takeStored` **之前**：游标不推进，通知留在总线，下一 run 首请求照常取（不丢）。
    * 整 hook 取最细：装配层传 `finestCadence(['config','permission','tools','mcp','update','peer'], …)`。
+   *
+   * live resolver（P1）：可传 `() => EnvCadence` 闭包，每次发射实时求值⇒热改 cadence
+   * 即时生效（装配层捕获 live 配置 getter，非注册时快照）；静态值仍兼容（旧 caller 零回归）。
    */
-  cadence?: EnvCadence;
+  cadence?: EnvCadence | (() => EnvCadence);
 }
 
 /** 注入落盘的事件类型（`runtime.*` 命名风格，与 `runtime.notice` 同族）。 */
@@ -208,7 +211,9 @@ export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook
     async run(ctx): Promise<void> {
       // 节奏 gate 在 takeStored 之前：游标不推进 ⇒ 通知不丢，下一 run 首请求照常取。
       // request_index 缺省 0（旧 caller）⇒ 恒放行，零回归。
-      if (options.cadence === 'run' && (ctx.request_index ?? 0) > 0) return;
+      // live resolver：cadence 是闭包则每次发射实时求值（热改即时生效）；静态值原样用。
+      const cadence = typeof options.cadence === 'function' ? options.cadence() : options.cadence;
+      if (cadence === 'run' && (ctx.request_index ?? 0) > 0) return;
       const stored = options.bus.takeStored(ctx.session_id, limit);
       if (stored.length === 0) return;
       const runId = typeof ctx.run_id === 'string' ? ctx.run_id : '';
