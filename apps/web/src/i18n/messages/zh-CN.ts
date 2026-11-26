@@ -1532,9 +1532,6 @@ export const messages = {
   'chat.agentMessage.group': '来自 agent {name} 的消息',
   'chat.toolMessage.from': '来自 {name}',
   'chat.toolMessage.group': '来自 {name} 的投递',
-  // P1-A：被 inbox read 取走的消息（无 run-input 回显）的可见承接卡。
-  'chat.inboxRead.from': '来自收件箱 · {source}',
-  'chat.inboxRead.group': '从收件箱取走的消息（{source}）',
   // 0.36: 消息气泡操作组
   'chat.message.actions': '消息操作',
   // 长消息折叠（会话页与团队页共用同一个按钮组件）
