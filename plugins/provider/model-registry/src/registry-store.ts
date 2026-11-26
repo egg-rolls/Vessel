@@ -114,9 +114,9 @@ function assertModelsValid(
   return warnings;
 }
 
-/** 删空 credentials/entries map，避免在 yaml 里留空壳（迁移期 vendors/aliases 同）。 */
+/** 删空 credentials/entries map，避免在 yaml 里留空壳。 */
 function pruneEmptyMaps(models: Record<string, unknown>): void {
-  for (const key of ['credentials', 'entries', 'vendors', 'aliases']) {
+  for (const key of ['credentials', 'entries']) {
     const value = models[key];
     if (isRecord(value) && Object.keys(value).length === 0) delete models[key];
   }
@@ -138,8 +138,6 @@ async function mutateModels(
       ['models', root.models],
       ['models.credentials', isRecord(root.models) ? root.models.credentials : undefined],
       ['models.entries', isRecord(root.models) ? root.models.entries : undefined],
-      ['models.vendors', isRecord(root.models) ? root.models.vendors : undefined],
-      ['models.aliases', isRecord(root.models) ? root.models.aliases : undefined],
     ] as const) {
       if (value !== undefined && !isRecord(value)) {
         throw new Error(`models_invalid: existing ${key} block is not an object; fix it first`);

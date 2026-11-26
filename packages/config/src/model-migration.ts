@@ -44,6 +44,24 @@ import type {
 import { readUserConfigRoot, writeUserConfigRoot } from './user-config.js';
 import { validateModels } from './validator.js';
 
+/** 旧 vendor 形状（仅迁移机器消费；注册面类型已删除，§7）。 */
+interface LegacyVendorEntry {
+  protocol: string;
+  baseUrl?: string;
+  credential?: string;
+  apiKeyEnv?: string;
+  models: Record<string, { promptCache?: boolean }>;
+}
+
+/** 迁移输入：旧 vendors/aliases [+ 既有新形状块]。 */
+export interface LegacyModelsInput {
+  default?: string;
+  credentials?: Record<string, CredentialEntry>;
+  entries?: Record<string, ModelEntry>;
+  vendors?: Record<string, LegacyVendorEntry>;
+  aliases?: Record<string, string>;
+}
+
 /** 迁移报告（§7.5）：落 `<dataDir>/model-registry-migration.json`；doctor / list 消费。 */
 export interface MigrationReport {
   migratedAt: string;
@@ -99,7 +117,7 @@ export interface TransformResult {
  * 不触磁盘、不读密钥；语义校验在编排层写前执行。
  */
 export function transformLegacyModels(
-  models: ModelsConfig,
+  models: LegacyModelsInput,
   pricing: PricingConfig | undefined,
 ): TransformResult {
   const credentials: Record<string, CredentialEntry> = { ...(models.credentials ?? {}) };
@@ -418,7 +436,7 @@ export async function migrateUserConfigModels(options: {
     const root = await readUserConfigRoot(configPath);
     if (!hasLegacyModelsBlock(root)) return undefined;
     const modelsCamel =
-      snakeToCamel<{ models?: ModelsConfig }>(
+      snakeToCamel<{ models?: LegacyModelsInput }>(
         { models: root.models },
         {
           preserveKey: preserveConfigMapKeys,

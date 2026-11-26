@@ -26,6 +26,7 @@ import {
   DERIVED_TOKEN_PREFIX,
   defaultModelForProvider,
   derivePurposeToken,
+  ModelRefError,
   type ResolvedModel,
   ROOT_SECRET_BYTES,
   readRootSecret,
@@ -121,6 +122,11 @@ export interface ModelRegistryWiring {
    * 再走默认链。返回的 provider 是 delegating wrapper（凭证轮换下一请求生效）。
    */
   resolveModel: (ref: string | undefined) => { provider: LLMProvider; model: string };
+  /**
+   * 纯校验（P3 收紧，§11.1）：ref 未命中注册表且无 legacy 透传 → 错误文案 + 候选；
+   * 命中 / 透传 → undefined。不构造 provider、不解密凭证（gateway 参数闸用）。
+   */
+  validateModelRef: (ref: string) => string | undefined;
   /** config scope 热应用：重建快照 + 清缓存；下一具 body/EU/run 生效，不动 live 请求。 */
   applyConfig: (next: VesselConfig) => void;
   /** provider 类 in-process 插件中声明 capabilityManifest 的（装配层 install 后登记）。 */
@@ -363,6 +369,18 @@ export async function createModelRegistryWiring(options: {
     return { provider: delegatingProvider(resolved), model: resolved.wireModel };
   };
 
+  const validateModelRef = (ref: string): string | undefined => {
+    try {
+      resolveModelRef(snapshot, ref);
+      return undefined;
+    } catch (error) {
+      if (error instanceof ModelRefError) {
+        return `${error.message} Candidates: ${error.candidates.join(', ') || '<none>'}`;
+      }
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
+
   const applyConfig = (next: VesselConfig): void => {
     config = next;
     dataDir = resolveDataDir(next);
@@ -373,5 +391,5 @@ export async function createModelRegistryWiring(options: {
     cache.clear();
   };
 
-  return { resolveModel, applyConfig, inProcessPlugins };
+  return { resolveModel, validateModelRef, applyConfig, inProcessPlugins };
 }

@@ -15,9 +15,7 @@
  *
  * legacy provider.* 兼容面（H1 保留）：读时折成合成凭证 `legacy:<provider.name>` +
  * 合成条目（键 = provider.model 原值），承接 env 层 / setup 向导 / P0-1 字符串 pin。
- *
- * 迁移期（§7）：models.vendors/aliases 仍在磁盘时读时折成 entries（与迁移映射同规则），
- * 一次性迁移落地后该折叠删除——代码零 vendors 读路径。
+ * 旧 vendors/aliases 块已全量删除（§7 一次性迁移；迁移机器见 model-migration.ts）。
  *
  * env 优先级（§2.6 冻结）：VESSEL_MODEL 与 models.default 并存时 env 赢。env 层已把
  * VESSEL_MODEL 写进合并后 config 的 provider.model；装配层把 env model 值作为 ref 传入
@@ -65,8 +63,6 @@ export interface RegistryEntry {
   /** param.promptCache ?? legacy provider.promptCache（三态语义不变） */
   promptCache?: boolean;
   legacy: boolean;
-  /** @deprecated 迁移期：vendor 折叠条目的来源 vendor id（折叠删除时一并移除） */
-  vendorId?: string;
 }
 
 /** Registry 快照：随 config 重载重建；只含元数据，不含任何密钥值。 */
@@ -248,53 +244,6 @@ export function synthesizeLegacyRegistry(
         legacy: false,
       };
       if (entry.alias !== undefined) aliases[entry.alias] = key;
-    }
-  }
-
-  // 迁移期 vendor 折叠（§7.2 同规则：wire 全局唯一 → 键 = wire；冲突 → vid/wire）。
-  // 一次性迁移落地后本段删除（代码零 vendors 读路径）。
-  if (models?.vendors !== undefined) {
-    const wireCount = new Map<string, number>();
-    for (const vendor of Object.values(models.vendors)) {
-      for (const wire of Object.keys(vendor.models ?? {})) {
-        wireCount.set(wire, (wireCount.get(wire) ?? 0) + 1);
-      }
-    }
-    const refMap = new Map<string, string>();
-    for (const [vid, vendor] of Object.entries(models.vendors)) {
-      for (const [wire, modelEntry] of Object.entries(vendor.models ?? {})) {
-        const unique = (wireCount.get(wire) ?? 0) === 1 && !hasOwn(entries, wire);
-        const key = unique ? wire : `${vid}/${wire}`;
-        entries[key] = {
-          id: key,
-          wireModel: wire,
-          provider: vendor.protocol,
-          mode: defaultModeFor(vendor.protocol),
-          credentialRef: vendor.credential,
-          apiKeyEnv: vendor.apiKeyEnv,
-          baseUrl: vendor.baseUrl,
-          promptCache: modelEntry.promptCache,
-          legacy: false,
-          vendorId: vid,
-        };
-        refMap.set(`${vid}/${wire}`, key);
-      }
-    }
-    // 顶层 aliases 折叠：alias → vid/wire 映射到折叠条目键。
-    // 多别名指向同一模型 → 保留字典序首个（H3 单值；其余迁移报告列出，§7.2）。
-    if (models.aliases !== undefined) {
-      const sorted = Object.entries(models.aliases).sort(([a], [b]) =>
-        a < b ? -1 : a > b ? 1 : 0,
-      );
-      for (const [alias, target] of sorted) {
-        if (hasOwn(aliases, alias)) continue;
-        const mapped = refMap.get(target) ?? (hasOwn(entries, target) ? target : undefined);
-        if (mapped === undefined) continue;
-        const entry = entries[mapped];
-        if (entry === undefined || entry.alias !== undefined) continue;
-        aliases[alias] = mapped;
-        entry.alias = alias;
-      }
     }
   }
 

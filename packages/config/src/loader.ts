@@ -134,8 +134,9 @@ function convertKeys(
  * - node.tokens：token 原文
  * - pricing.models：模型名（常含 `/`、`.`，不能按 snake_case 改写）
  * - observability.log.modules：事件名前缀（`bash_job` 这类下划线是名字的一部分）
- * - models.vendors / models.aliases：vendor id / 别名（用户自定义 id，原样保留；迁移期）
- * - models.vendors.<id>.models：wire model id（可含 `/`、`.`、`_`，同 pricing.models）
+ * - models.vendors / models.aliases：旧块 map 键（**仅迁移机器读旧 yaml 时用**，§7；
+ *   注册面已删除 vendors/aliases）
+ * - models.vendors.<id>.models：wire model id（可含 `/`、`.`、`_`，同 pricing.models；迁移读用）
  * - models.credentials / models.entries：凭证 id / 条目键（两面重构 §3/§4，原样保留）
  * - models.entries.<id>.param.extra 子树：自由请求参数 map 键（原样保留）；
  *   .info 已知键走 snake→camel，未知键读容忍原样保留（§10.3）

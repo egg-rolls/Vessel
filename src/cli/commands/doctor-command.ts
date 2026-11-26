@@ -564,7 +564,8 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
   // model-registry 两面重构 §7.5：迁移完成 / 悬空 pin / 疑似旧 ref / dangling 凭证。
   {
     const report = await readMigrationReport(dataDir);
-    if (config.models?.vendors !== undefined || config.models?.aliases !== undefined) {
+    const modelsRaw = config.models as Record<string, unknown> | undefined;
+    if (modelsRaw?.vendors !== undefined || modelsRaw?.aliases !== undefined) {
       checks.push({
         name: 'model_migration',
         status: 'fail',

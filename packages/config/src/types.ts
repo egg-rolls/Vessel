@@ -24,33 +24,6 @@ export interface ProviderConfig {
 }
 
 /**
- * models.vendors.<id>.models 的每模型配置（旧 vendor 形状，迁移期保留）。
- * 唯一可选字段是 promptCache 三态；两面重构后移入 ModelEntry.param.promptCache。
- * @deprecated 过渡期：一次性迁移（§7）后随 vendors 块删除。
- */
-export interface VendorModelEntry {
-  /** true 强开 / false 强关 / 缺省 auto（openai 兼容按模型名含 claude；anthropic 默认 true） */
-  promptCache?: boolean;
-}
-
-/**
- * models.vendors.<id> 条目（旧 vendor 形状，迁移期保留）：protocol + 端点 + 凭证引用 + 模型清单。
- * @deprecated 过渡期：两面重构（凭证面 + 模型面）取代；一次性迁移（§7）后删除。
- */
-export interface VendorEntry {
-  /** 已注册的 provider 工厂名（openai / anthropic / google / ... 或自定义 provider 插件名） */
-  protocol: string;
-  /** 可选；缺省用 protocol 工厂的默认 baseUrl */
-  baseUrl?: string;
-  /** credentials.json 凭证引用 id（值不进 yaml）；与 apiKeyEnv 互斥 */
-  credential?: string;
-  /** 环境变量间接引用（ADR-050 §4）；与 credential 互斥 */
-  apiKeyEnv?: string;
-  /** wire model id（可含 `/`）→ 每模型配置；至少 1 条 */
-  models: Record<string, VendorModelEntry>;
-}
-
-/**
  * 模型请求模式（两面重构 §6）：协议内的 wire 请求形状，与流式/思考正交。
  * - openai 系（openai / openai-compatible / gemini）：chat | responses；缺省 chat。
  * - anthropic：messages；缺省 messages。
@@ -122,7 +95,7 @@ export interface ModelEntry {
  * models 块（两面重构）：凭证面 + 模型面元数据（无密钥值，user/project 层可叠）。
  * 缺省 = 纯 legacy provider.* 行为；旧配置由 synthesizeLegacyRegistry 折成
  * `legacy:<provider.name>` 合成凭证+条目，不改也能跑。
- * vendors/aliases 为迁移期保留块（§7 一次性迁移后删除）。
+ * 旧 vendors/aliases 块已删除（§7 一次性迁移；出现即未知键错误 + 迁移指引）。
  */
 export interface ModelsConfig {
   /** 有效默认 ref（别称或条目键）；必须命中注册条目（P0 起严格） */
@@ -131,10 +104,6 @@ export interface ModelsConfig {
   credentials?: Record<string, CredentialEntry>;
   /** 条目键（^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$；`legacy:` 前缀保留）→ 模型条目 */
   entries?: Record<string, ModelEntry>;
-  /** @deprecated 迁移期保留：vendor id → 厂商条目（§7 一次性迁移后删除） */
-  vendors?: Record<string, VendorEntry>;
-  /** @deprecated 迁移期保留：扁平别名 alias → vendor/model（迁移折入条目 alias 字段） */
-  aliases?: Record<string, string>;
 }
 
 /** Guardrail 配置 */

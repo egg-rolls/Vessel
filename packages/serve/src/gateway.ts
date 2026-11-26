@@ -346,6 +346,11 @@ export interface GatewayOptions {
    */
   agent?: AgentControlLike;
   /**
+   * P3 收紧（两面重构 §11.1）：agents.create/update 的 model 参数未注册 ref 校验
+   * （装配层注入 registry 纯校验；缺省不校验，零回归）。
+   */
+  modelRefError?: (ref: string) => string | undefined;
+  /**
    * S7：跨节点 federation 入站面（asm 归一化后注入，含已解析 peer token）。
    * 缺省 / `enabled: false` = `/v1/federation/messages` 返回 404。
    */
@@ -2762,6 +2767,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       liveRuns,
       ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
       ...(opts.teams !== undefined ? { teams: opts.teams } : {}),
+      ...(opts.modelRefError !== undefined ? { modelRefError: opts.modelRefError } : {}),
       // CREATE-0.39：`agents.create{keep_messages}` 按 `sessions.get().messages` 校验。
       ...(session !== undefined ? { sessionStore: () => session } : {}),
     }),
