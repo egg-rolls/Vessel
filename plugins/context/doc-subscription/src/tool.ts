@@ -453,7 +453,7 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
         action: {
           type: 'string',
           enum: ['add', 'remove', 'list', 'inspect'],
-          description: 'add | remove | list | inspect',
+          description: 'add | remove | list | inspect (default list)',
         },
         path: { type: 'string', description: 'Single file path (add / remove / inspect)' },
         paths: {
@@ -463,14 +463,14 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
         },
         id: { type: 'string', description: 'Subscription id (remove / inspect)' },
       },
-      required: ['action'],
     },
     display: { label: 'Subscribe', kind: 'generic' },
     // 校验全部在 handler；工具不写日志
     checkPermission: async () => 'allow',
     handler: async (args: unknown, ctx: ToolContext): Promise<string> => {
       if (!isRecord(args)) return '错误：subscribe 需要 { action }';
-      const action = args.action;
+      // 零参 peek 范式（对齐 skills/recall）：缺省 action = list，只读计数不消费。
+      const action = args.action ?? 'list';
       if (action !== 'add' && action !== 'remove' && action !== 'list' && action !== 'inspect') {
         return '错误：action 必须是 add / remove / list / inspect。';
       }

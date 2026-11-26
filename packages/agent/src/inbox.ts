@@ -1291,7 +1291,11 @@ export function createInboxTool(options: {
       properties: {
         // 0.55：`claim` 不在枚举里 —— 它已经并进 `read`。老会话仍发它时按别名执行
         // （见 handler 的 legacy 分支），但模型看得到的契约只有这四个动作。
-        action: { type: 'string', enum: ['list', 'read', 'delete', 'insert'] },
+        action: {
+          type: 'string',
+          enum: ['list', 'read', 'delete', 'insert'],
+          description: 'Default list',
+        },
         ids: {
           type: 'array',
           items: { type: 'string' },
@@ -1314,11 +1318,11 @@ export function createInboxTool(options: {
           description: 'insert: message text (non-empty)',
         },
       },
-      required: ['action'],
     },
     async handler(args, ctx: ToolContext): Promise<string> {
       const input = isRecordValue(args) ? args : {};
-      const action = input.action;
+      // 零参 peek 范式（对齐 skills/recall）：缺省 action = list，只读计数不消费。
+      const action = input.action ?? 'list';
       // 0.55 兼容：`claim` 已并入 `read`。老会话（0.51 的模型契约）还会发它 —— 认作
       // `read` 的别名执行同一套语义（取正文 + 消费 + 取消 queued run），结果里附一行
       // `note` 指路。不报错（意图本来就一致），也不静默（模型得知道契约变了）。
