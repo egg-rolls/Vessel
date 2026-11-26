@@ -10,8 +10,10 @@
  *
  * `resolveConfig` 闭包**每趟求值**：enabled / intervalHours / olderThanHours / dryRun
  * 全部活生效。cadence 不冻结启动值 —— 定时器是自重排链（每趟结束后按**最新** interval
- * 排下一趟），配置热重载换掉 interval 后下一趟即按新节奏。enabled=false 只跳过趟、
- * 链不断：再开即活，无需重启。装配层把重载配置喂进闭包持有的活引用（applyAutoPrune）。
+ * 排下一趟）；热应用同时调 `reschedule()` 把**挂起**的定时器立即按新 interval 重排
+ * （O4：热改即重排，不等下一趟 —— 否则缺省 24h 挂定后热改要明天才生效）。
+ * enabled=false 只跳过趟、链不断：再开即活，无需重启。装配层把重载配置喂进闭包持有
+ * 的活引用（applyAutoPrune）。
  *
  * ## 纪律（全部有先例背书）
  *
@@ -94,6 +96,13 @@ export interface AutoPruneRunner {
   stop(): void;
   /** 在飞趟收口承诺（dispose 排序：先停调度并等在飞趟，再拆 agent 执行面） */
   idle(): Promise<void>;
+  /**
+   * 热应用重排（O4）：清掉挂起定时器，按 live resolver **当前** interval 立即重排。
+   * 只换配置引用不重排的话，缺省 24h 挂定后热改 interval 要等下一趟才生效（明天）；
+   * 理想准则 = 热改即重排。在飞趟不动（收口时自重排链会再按最新 interval 排一次，
+   * armTimer 先清后挂保证永远只有一条链）。启动首趟未跑时保持立即排入（不延迟首趟）。
+   */
+  reschedule(): void;
 }
 
 /** 一行人类可读的读数（日志 / gc.agents 事件 / 通知卡共用同一句话）。 */
@@ -282,14 +291,19 @@ export function startAutoPrune(options: AutoPruneScheduleOptions): AutoPruneRunn
     }
   };
 
+  /** 先清后挂：任何时刻最多一个挂起定时器（热重排与在飞趟收口不会叠出两条链）。 */
+  function armTimer(ms: number): void {
+    if (timer !== undefined) clearTimeout(timer as unknown as ReturnType<typeof setTimeout>);
+    timer = schedule(() => {
+      void tick();
+    }, ms);
+    timer.unref?.();
+  }
+
   /** 自重排链：每趟结束后按**最新** interval 排下一趟（cadence 活生效）。 */
   function scheduleNext(): void {
     if (stopped) return;
-    const intervalHours = clampInterval(options.resolveConfig().autoPrune?.intervalHours);
-    timer = schedule(() => {
-      void tick();
-    }, intervalHours * HOUR_MS);
-    timer.unref?.();
+    armTimer(clampInterval(options.resolveConfig().autoPrune?.intervalHours) * HOUR_MS);
   }
 
   async function tick(): Promise<void> {
@@ -304,10 +318,7 @@ export function startAutoPrune(options: AutoPruneScheduleOptions): AutoPruneRunn
   }
 
   // 启动后的第一趟（dry-run）立刻排进队列：不阻塞首帧（setTimeout 0）。
-  timer = schedule(() => {
-    void tick();
-  }, 0);
-  timer.unref?.();
+  armTimer(0);
 
   return {
     runOnce,
@@ -317,6 +328,15 @@ export function startAutoPrune(options: AutoPruneScheduleOptions): AutoPruneRunn
     },
     async idle() {
       await inFlight;
+    },
+    reschedule() {
+      if (stopped) return;
+      // 首趟还没跑：保持立即排入（热应用不该把启动首趟 dry-run 推迟一个 interval）。
+      if (first) {
+        armTimer(0);
+        return;
+      }
+      scheduleNext();
     },
   };
 }

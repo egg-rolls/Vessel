@@ -3051,7 +3051,7 @@ export function validateVisionConfig(
  * 只判形状与范围（先例 `agent.temporaryTtlHours` / `vision.blobGc*`）：布尔开关 /
  * 非负有限小时数。interval 的 [1, 168] 夹取在消费方 `startAutoPrune`（同 blob GC：
  * validator 拒非法值，夹取归运行时）；olderThan 0 = 纯状态判据，负数无意义（拒绝，
- * 不静默回退默认）。缺省值不在这里落（消费方解析：enabled=false / 24h / 168h）。
+ * 不静默回退默认）。缺省值不在这里落（消费方解析：enabled=true / 24h / 168h）。
  */
 export function validateAutoPruneConfig(
   autoPrune: AutoPruneConfig | undefined,
@@ -3201,7 +3201,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   // 0.56：视觉段（错误拼写的键不再静默失效；取值范围在这里夹一次，别让运行时各自夹）。
   validateVisionConfig(config.vision, errors);
 
-  // auto-gc P1：自动回收段（缺省关闭；形状与范围在这里夹，夹取归消费方）。
+  // auto-gc P1：自动回收段（缺省开启；形状与范围在这里夹，夹取归消费方）。
   if (config.autoPrune !== undefined) {
     if (!isPlainObject(config.autoPrune)) {
       errors.push({ path: 'autoPrune', message: 'autoPrune must be an object' });
@@ -4321,7 +4321,7 @@ export const KNOWN_CONFIG_KEYS = [
   'envInjection',
   // 0.56：视觉段（刻意没有 `enable` 键：支持即直通，`disabled` 是 kill switch）。
   'vision',
-  // auto-gc P1：自动回收段（YAML `auto_prune`；缺省关闭，显式开启）。
+  // auto-gc P1：自动回收段（YAML `auto_prune`；缺省开启，显式 false 才关）。
   'autoPrune',
   // q-empty-response：空响应兜底段（YAML `empty_response`；缺省 = 启用、重试 2 次）。
   'emptyResponse',
