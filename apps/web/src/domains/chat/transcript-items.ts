@@ -2421,6 +2421,8 @@ function mergeItem(
  *
  * 去重（一条消息一个地方）：消息 id 已被历史消息（`history.messageIds`）或 run-input
  * 承接 ⇒ 不再投影；同一条消息在多次 read 结果里出现（消费不可逆，正常不会）也只出一次。
+ * 窗口闸门豁免产出的承接卡（工具卡在窗口之前、本身被闸）也走这份 taken：已承接 ⇒ 丢卡，
+ * 未承接 ⇒ 登记，窗口内的 read 结果不会把它再投影一遍。
  * 工具卡本身照旧受工具可见性开关管辖；承接卡是**消息**不是工具，不受那个开关影响。
  */
 function projectInboxReads(
@@ -2433,6 +2435,15 @@ function projectInboxReads(
   }
   const out: TranscriptItem[] = [];
   for (const item of ordered) {
+    // 窗口闸门豁免产出的承接卡（见 buildTranscriptItems 的 unloadedBefore 分支）已经
+    // 在时间线里：走同一份 taken 去重 —— 历史消息 / run-input 已承接这条消息 ⇒ 不留卡；
+    // 否则登记进 taken，窗口内 read 结果再含同一 id 也不会重复投影。
+    if (item.kind === 'inbox-read') {
+      if (taken.has(item.messageId)) continue;
+      taken.add(item.messageId);
+      out.push(item);
+      continue;
+    }
     out.push(item);
     if (item.kind !== 'tool') continue;
     for (const message of inboxReadMessagesOf(item.name, item.args, item.output)) {
@@ -2523,6 +2534,10 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
    * 权威在历史侧，点「加载更早」把消息拉进来之后，同一批工具卡会由历史侧（owning
    * assistant 就在窗口里）以正确位置重新出现，一条都不丢。
    *
+   * 唯一例外（main 裁定）：inbox read 的**承接卡**是消息不是工具，不受这条闸门管辖 ——
+   * 被消费的消息没有别的历史替身（不是 run 输入、不落历史消息窗口），闸掉即永久不可见。
+   * 被闸的 read 工具卡仍投影 inbox-read item（见下面闸门分支），工具卡本身照旧被闸。
+   *
    * 三个边界（都是有意为之）：
    * - `messageIndexOffset === 0`（窗口没被截断：短会话 / 新会话 / 全量消息）一律保留。
    *   这正是 `check-transcript-items` 的 F9/O5 守的形状 —— 那里窗口外**没有**「还没加载
@@ -2561,6 +2576,26 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     }
 
     if (unloadedBefore !== undefined && item.ts !== undefined && item.ts < unloadedBefore) {
+      // inbox-read 豁免（main 裁定）：承接卡是**消息**不是工具 —— 这条闸门防的是
+      // 「窗口之前工具卡聚堆」，对被 read 消费的消息不适用：它既不是 run 输入也不是
+      // 历史消息，时间线上没有别的承接，闸掉它用户就永远看不到这条消息（P1 症状②
+      // 的主因）。所以被闸的 inbox read 工具卡仍在这里投影承接卡（ts = 工具卡落位
+      // 时刻，排序后站在消费发生的位置）；工具卡本身照旧被闸。「连续后缀」不变量
+      // 对消息卡让位。去重与 projectInboxReads 共用同一份 taken（history.messageIds
+      // + run-input）：已被承接的消息不出第二张卡（见那里的 inbox-read 分支）。
+      if (item.kind === 'tool') {
+        for (const message of inboxReadMessagesOf(item.name, item.args, item.output)) {
+          items.push({
+            kind: 'inbox-read',
+            key: `inbox-read:${message.id}`,
+            messageId: message.id,
+            text: message.text,
+            source: message.source,
+            ...(item.runId !== undefined ? { runId: item.runId } : {}),
+            ts: item.ts,
+          });
+        }
+      }
       continue;
     }
 
