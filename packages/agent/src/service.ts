@@ -7669,6 +7669,36 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * auto-gc P1（D3）：从活 registry 摘除已关闭成员并同步落盘。
+   *
+   * 双保险：只接受 `closed + left`（扫描判据之外再加一道执行期校验）；任一 id 是
+   * 活成员整批拒绝（不 partial —— 宁可留，不可错删）。已不存在的 id 幂等跳过。
+   * 摘除后 `scheduleSnapshot + flushSnapshot`：快照是整份 registry 重写，不先
+   * schedule 就 flush 会因「无待写」空转，摘除落不了盘。closed 成员的 body / EU
+   * 清理在 close / reclaim 时已完成，这里只摘记录与残留的退役 EU 表项。
+   */
+  async removeClosedMembers(ids: readonly string[]): Promise<boolean> {
+    await this.ready;
+    if (ids.length === 0) return true;
+    for (const id of ids) {
+      const record = this.registry.get(id);
+      if (record === undefined) continue;
+      if (record.state !== 'closed' || record.membership !== 'left') return false;
+    }
+    for (const id of ids) {
+      this.registry.remove(id);
+      this.executionUnitRegistry.delete(id);
+    }
+    this.scheduleSnapshot();
+    return this.flushSnapshot();
+  }
+
+  /** auto-gc P1：在线 prune 的快照事实源（与 scheduleSnapshot 同一份映射）。 */
+  snapshotRecords(): PersistedAgentRecord[] {
+    return this.registry.all().map(toPersistedRecord);
+  }
+
+  /**
    * CONTRACT-hot-apply §4：把权限规则热应用到所有 live ExecutionUnit。
    * 返回成功应用的 ExecutionUnit 数量；port 未实现时返回 0。
    */

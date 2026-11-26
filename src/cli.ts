@@ -1520,6 +1520,16 @@ async function runWithConfig(result: BootstrapResult) {
         kanbanDeps.boardPath = to;
         return from === to ? [] : [`kanban: board path ${from} → ${to} (hot-applied)`];
       },
+      // auto-gc P1：autoPrune 热应用——调度器自启动起读 live resolver 闭包（每趟求值
+      // 最新 enabled / interval / olderThan / dryRun，cadence 不冻结启动值）；这里把
+      // 重载配置喂进调度器持有的活引用，下一趟即生效。无本地调度器（connectMode）
+      // 时如实报 requires restart（同 applyFederation 口径）。
+      applyAutoPrune: (next) => {
+        if (result.applyAutoPruneConfig === undefined) {
+          return ['autoPrune: requires restart (no local auto-prune scheduler)'];
+        }
+        return result.applyAutoPruneConfig(next);
+      },
     });
 
     // 配置监听（CONTRACT-hot-apply §2）：校验通过才应用，失败只记日志 + 发失败 notice。

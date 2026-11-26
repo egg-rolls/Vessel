@@ -18,6 +18,7 @@ import { validateTeamPolicy } from './team-policy.js';
 import type {
   AttentionConfig,
   AuthConfig,
+  AutoPruneConfig,
   ConfigValidationError,
   ConfigValidationResult,
   ConfigValidationWarning,
@@ -3045,6 +3046,43 @@ export function validateVisionConfig(
 }
 
 /**
+ * 校验 `autoPrune` 段（auto-gc P1；YAML `auto_prune`）。
+ *
+ * 只判形状与范围（先例 `agent.temporaryTtlHours` / `vision.blobGc*`）：布尔开关 /
+ * 非负有限小时数。interval 的 [1, 168] 夹取在消费方 `startAutoPrune`（同 blob GC：
+ * validator 拒非法值，夹取归运行时）；olderThan 0 = 纯状态判据，负数无意义（拒绝，
+ * 不静默回退默认）。缺省值不在这里落（消费方解析：enabled=false / 24h / 168h）。
+ */
+export function validateAutoPruneConfig(
+  autoPrune: AutoPruneConfig | undefined,
+  errors: ConfigValidationError[] = [],
+): ConfigValidationError[] {
+  if (autoPrune === undefined) return errors;
+  for (const key of ['enabled', 'dryRun'] as const) {
+    const value = autoPrune[key];
+    if (value !== undefined && typeof value !== 'boolean') {
+      errors.push({
+        path: `autoPrune.${key}`,
+        message: `autoPrune.${key} must be a boolean`,
+        value,
+      });
+    }
+  }
+  for (const key of ['intervalHours', 'olderThanHours'] as const) {
+    const value = autoPrune[key];
+    if (value === undefined) continue;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      errors.push({
+        path: `autoPrune.${key}`,
+        message: `autoPrune.${key} must be a non-negative finite number`,
+        value,
+      });
+    }
+  }
+  return errors;
+}
+
+/**
  * 校验 `empty_response` 段（q-empty-response）。
  *
  * 只判形状与范围：布尔 / 0–10 的整数重试上限 / 非空文案。缺省值不在这里落
@@ -3162,6 +3200,15 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
 
   // 0.56：视觉段（错误拼写的键不再静默失效；取值范围在这里夹一次，别让运行时各自夹）。
   validateVisionConfig(config.vision, errors);
+
+  // auto-gc P1：自动回收段（缺省关闭；形状与范围在这里夹，夹取归消费方）。
+  if (config.autoPrune !== undefined) {
+    if (!isPlainObject(config.autoPrune)) {
+      errors.push({ path: 'autoPrune', message: 'autoPrune must be an object' });
+    } else {
+      validateAutoPruneConfig(config.autoPrune, errors);
+    }
+  }
 
   // q-empty-response：空响应兜底段（缺省即启用；这里只夹形状与范围）。
   validateEmptyResponseConfig(config.emptyResponse, errors);
@@ -4108,6 +4155,8 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   ],
   // q-empty-response：空响应兜底（开关 / 重试上限 / nudge 文案）。
   emptyResponse: ['enabled', 'seamless', 'maxRetries', 'nudge'],
+  // auto-gc P1：自动回收（总开关 / 间隔 / 判老叠加 / 观察模式）。
+  autoPrune: ['enabled', 'intervalHours', 'olderThanHours', 'dryRun'],
 };
 
 /** `node.tls` / `hub.tls` 的已知键 */
@@ -4272,6 +4321,8 @@ export const KNOWN_CONFIG_KEYS = [
   'envInjection',
   // 0.56：视觉段（刻意没有 `enable` 键：支持即直通，`disabled` 是 kill switch）。
   'vision',
+  // auto-gc P1：自动回收段（YAML `auto_prune`；缺省关闭，显式开启）。
+  'autoPrune',
   // q-empty-response：空响应兜底段（YAML `empty_response`；缺省 = 启用、重试 2 次）。
   'emptyResponse',
   'permission',
