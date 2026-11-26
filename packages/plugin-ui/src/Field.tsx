@@ -216,6 +216,8 @@ interface ListboxPosition {
   left: number;
   width: number;
   maxHeight: number;
+  /** 是否上翻（实测高度判定）；定位复测时用于相等性收敛。 */
+  placeAbove: boolean;
 }
 
 /**
@@ -284,27 +286,47 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
     }
   };
 
+  const reposition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const width = Math.min(Math.max(rect.width, popupMinWidth ?? 0), viewportWidth - 16);
+    const left = Math.max(8, Math.min(rect.left, viewportWidth - width - 8));
+    // 实测优先（用户验收②）：弹层已渲染时用真实内容高度（scrollHeight + 边框厚度，
+    // 含 footer）判上翻与定位；首帧未渲染回落行数估算，渲染后由复测 effect 修正。
+    const popup = popupRef.current;
+    const contentHeight = popup
+      ? popup.scrollHeight + (popup.offsetHeight - popup.clientHeight)
+      : options.length * 34 + 8;
+    const desired = Math.min(240, contentHeight);
+    const below = viewportHeight - rect.bottom - 8;
+    const above = rect.top - 8;
+    const placeAbove = below < desired && above > below;
+    const maxHeight = Math.max(96, Math.min(240, placeAbove ? above : below));
+    // 上翻贴触发器上沿用「实测渲染高度 = min(内容高, maxHeight)」，不再拿 maxHeight
+    // 当高度：旧算法在内容矮于上限时底边悬空、顶部飘出输入框区域（外飘根因）。
+    const height = Math.min(contentHeight, maxHeight);
+    const top = placeAbove ? Math.max(8, rect.top - 4 - height) : rect.bottom + 4;
+    // 相等回 prev：复测收敛后不再触发渲染，避免 measure→set→measure 循环。
+    setPosition((prev) =>
+      prev !== null &&
+      prev.top === top &&
+      prev.left === left &&
+      prev.width === width &&
+      prev.maxHeight === maxHeight &&
+      prev.placeAbove === placeAbove
+        ? prev
+        : { top, left, width, maxHeight, placeAbove },
+    );
+  }, [options.length, popupMinWidth]);
+
   useIsomorphicLayoutEffect(() => {
     if (!open) {
       setPosition(null);
       return;
     }
-    const reposition = () => {
-      const trigger = triggerRef.current;
-      if (!trigger) return;
-      const rect = trigger.getBoundingClientRect();
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-      const width = Math.min(Math.max(rect.width, popupMinWidth ?? 0), viewportWidth - 16);
-      const left = Math.max(8, Math.min(rect.left, viewportWidth - width - 8));
-      const desired = Math.min(240, options.length * 34 + 8);
-      const below = viewportHeight - rect.bottom - 8;
-      const above = rect.top - 8;
-      const placeAbove = below < desired && above > below;
-      const maxHeight = Math.max(96, Math.min(240, placeAbove ? above : below));
-      const top = placeAbove ? Math.max(8, rect.top - 4 - maxHeight) : rect.bottom + 4;
-      setPosition({ top, left, width, maxHeight });
-    };
     reposition();
     window.addEventListener('scroll', reposition, true);
     window.addEventListener('resize', reposition);
@@ -312,7 +334,13 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
       window.removeEventListener('scroll', reposition, true);
       window.removeEventListener('resize', reposition);
     };
-  }, [open, options.length, popupMinWidth]);
+  }, [open, reposition]);
+
+  // 首帧弹层未渲染只能估算；portal 渲染后（position 变化）立即复测真实高度收敛，
+  // 保证上翻时浮窗底边紧贴触发按钮上沿、锚定输入框区域不外飘。
+  useIsomorphicLayoutEffect(() => {
+    if (open && position !== null && popupRef.current) reposition();
+  }, [open, position, reposition]);
 
   useEffect(() => {
     if (!open || activeIndex < 0) return;
