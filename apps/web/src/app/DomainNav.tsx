@@ -1,4 +1,4 @@
-import { type Ref, useState } from 'react';
+import { type Ref, useEffect, useState } from 'react';
 import { ResizeHandle } from '../components/ResizeHandle';
 import { IconButton } from '../components/Tooltip';
 import { cn } from '../components/ui/cn';
@@ -95,6 +95,22 @@ export function DomainNav({
     statuses,
     ...(counts !== undefined ? { counts } : {}),
   });
+
+  // D2：路由命中收起组（深链 / 命令面板跳转）自动展开该组并持久化——视同用户
+  // 意图，保证当前页在导航可见。只在 active 组变化时触发；用户手动收起当前页
+  // 所在组不强行 reopen（组头 active 圆点提示）。插件组晚到时 active 组从
+  // undefined 变为有值，同样命中。
+  const activeGroupId = groups.find((group) => group.items.some((item) => item.active))?.id;
+  useEffect(() => {
+    if (activeGroupId === undefined) return;
+    setExpandedGroups((previous) => {
+      if (previous.has(activeGroupId)) return previous;
+      const next = new Set(previous);
+      next.add(activeGroupId);
+      writeExpandedGroups(next);
+      return next;
+    });
+  }, [activeGroupId]);
 
   const drawer = mode === 'drawer';
   const collapsed = mode === 'collapsed' || mode === 'rail';

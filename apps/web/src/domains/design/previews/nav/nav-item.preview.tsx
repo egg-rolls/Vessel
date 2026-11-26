@@ -1,11 +1,13 @@
 /**
- * 菜单按钮（app/NavGroup + app/NavItem）：分组头 + 四档状态点 + 折叠态 + 无状态项。
+ * 菜单按钮（app/NavGroup + app/NavItem）：分组头 + 四档状态点 + 折叠态 + 无状态项
+ * + 分区开合（收起态聚合徽标 / active 圆点 + 200ms grid 动画交互样例）。
  *
  * 四档语义见 app/nav-status.ts 文件头：accent = 已连接 / 正常、amber = 进行中、
  * danger = 出错、muted = 未配置 / 未知。曾经的 ok / warn 两档已删除，这里不出现。
  * 状态文案全部来自 NavStatusMeta.labelKey，颜色由 NavItem 自己的 data-tone 决定 ——
  * 本样例不复制任何一份状态表。
  */
+import { useState } from 'react';
 import { NavGroup } from '../../../../app/NavGroup';
 import { NavItem } from '../../../../app/NavItem';
 import type { NavGroupModel, NavItemModel } from '../../../../app/nav-model';
@@ -79,12 +81,16 @@ function groupModel(): NavGroupModel {
     order: 0,
     collapsible: true,
     items: [...ITEMS],
+    // buildNavModel 的组级聚合在预览里手工等价：CONNECTED.count = 3。
+    count: 3,
   };
 }
 
 const NOOP_NAVIGATE = (_route: Route): void => undefined;
 
 export default function NavItemPreview() {
+  // 交互样例：点击组头开合，亲眼看 200ms grid 过渡与收起终态。
+  const [open, setOpen] = useState(false);
   return (
     <div className="flex flex-col gap-4">
       <div className="w-64 max-w-full rounded-sm bg-surface p-2">
@@ -95,6 +101,34 @@ export default function NavItemPreview() {
           onToggle={() => undefined}
           onNavigate={NOOP_NAVIGATE}
         />
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="w-64 max-w-full rounded-sm bg-surface p-2">
+          <NavGroup
+            group={groupModel()}
+            collapsed={false}
+            expanded={false}
+            onToggle={() => undefined}
+            onNavigate={NOOP_NAVIGATE}
+          />
+        </div>
+        <p className="max-w-prose text-sm text-muted">
+          {t('designLab.preview.navItem.groupCollapsed')}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="w-64 max-w-full rounded-sm bg-surface p-2">
+          <NavGroup
+            group={groupModel()}
+            collapsed={false}
+            expanded={open}
+            onToggle={() => setOpen((value) => !value)}
+            onNavigate={NOOP_NAVIGATE}
+          />
+        </div>
+        <p className="max-w-prose text-sm text-muted">
+          {t('designLab.preview.navItem.groupToggle')}
+        </p>
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <div className="w-14 rounded-sm bg-surface p-2">

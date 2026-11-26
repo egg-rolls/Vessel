@@ -26,6 +26,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.domain.designLab': 'Design Lab',
   'nav.group.chat': 'Chat',
   'nav.group.items': 'Items',
+  'nav.group.current': 'Current page is in this group',
   'nav.group.runs': 'RUNS',
   'nav.group.plugins': 'PLUGINS',
   'nav.group.observe': 'OBSERVE',
@@ -2315,7 +2316,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.preview.navItem.collapsed':
     'Collapsed shows only the icon; hover for 300 ms to see the tooltip (title, status, count, version).',
   'designLab.preview.navItem.desc':
-    'Menu buttons: group header, the four status dots (accent / amber / danger / muted) and the collapsed form.',
+    'Menu buttons: group header, the four status dots (accent / amber / danger / muted), the collapsed form, and the group open/close animation.',
+  'designLab.preview.navItem.groupCollapsed':
+    'Collapsed group header: the aggregated count badge (the pending backlog stays visible) plus an accent dot when the current page is inside; not duplicated while expanded.',
+  'designLab.preview.navItem.groupToggle':
+    'Click the header to toggle the group: grid 0fr↔1fr transition at 200 ms (--motion-base); collapsed content ends inert, so Tab never lands on hidden items.',
   'designLab.preview.navItem.plain':
     'An item with no status signal: no dot, and no placeholder version.',
   'designLab.preview.navStatus.colStatus': 'Status',
