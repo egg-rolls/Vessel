@@ -2,7 +2,7 @@
  * model-registry P1-w2d：多厂商路由 + 热应用装配（CONTRACT-model-registry-internal §3/§4）。
  *
  * - registry 快照（`synthesizeLegacyRegistry`）+ provider 实例缓存：
- *   键 = vendorId + 凭证信封 updatedAt（只读元数据，不解密）+ promptCache flag；
+ *   键 = entryId + baseUrl + 凭证信封 updatedAt（只读元数据，不解密）+ promptCache + param 构造缺省；
  * - `resolveModel` 返回 **delegating wrapper**（实现 LLMProvider）：每请求按当前键取/建
  *   实例 → 凭证轮换后 live EU **下一请求**即用新 key，不需要插件→装配通知通道；
  * - 构造唯一路径：`providerHost.getProvider(protocol)` 工厂（snake_case 参数同

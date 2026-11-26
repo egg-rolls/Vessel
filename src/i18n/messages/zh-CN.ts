@@ -157,7 +157,7 @@ export const zhCN = {
   'help.group.hub': 'Hub 服务与节点加入',
   'help.group.hubNode': 'hub 侧节点配对',
   'help.group.logs': '日志读取',
-  'help.group.model': '模型注册表：厂商 / 别名 / 默认 / 凭证 / 连通性测试',
+  'help.group.model': '模型注册表：凭证 / 模型条目 / 默认 / 连通性测试',
   'help.group.node': 'Node API 生命周期',
   'help.group.plugin': '插件安装 / 启停',
   'help.group.rpc': 'RPC 能力发现（capabilities.list 包装）',

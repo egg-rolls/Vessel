@@ -171,8 +171,7 @@ export const en: Record<MessageKey, string> = {
   'help.group.hub': 'hub service and node joining',
   'help.group.hubNode': 'hub-side node pairings',
   'help.group.logs': 'log reading',
-  'help.group.model':
-    'model registry: vendors / aliases / default / credentials / connectivity test',
+  'help.group.model': 'model registry: credentials / model entries / default / connectivity test',
   'help.group.node': 'node API lifecycle',
   'help.group.plugin': 'plugin install / enable / disable',
   'help.group.rpc': 'RPC capability discovery (capabilities.list wrapper)',
