@@ -189,6 +189,16 @@ export interface SelectProps
   defaultValue?: string | number;
   onChange?: (event: SelectChangeEvent) => void;
   children?: ReactNode;
+  /**
+   * 弹层底部的非交互说明行（additive）：渲染在 listbox 之外、弹层容器之内，
+   * 不参与键盘导航与选中。缺省不渲染（现行为）。
+   */
+  footer?: ReactNode;
+  /**
+   * 弹层最小宽度 px（additive）：缺省 = 触发器宽度（现行为）。窄触发器
+   * （如工具栏 pill）传更大值保证选项可读；仍受视口宽度钳制。
+   */
+  popupMinWidth?: number;
 }
 
 /** SSR 下没有 DOM，避免 useLayoutEffect 警告。 */
@@ -222,6 +232,8 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
     required,
     id,
     name,
+    footer,
+    popupMinWidth,
     ...props
   },
   ref,
@@ -275,7 +287,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
       const rect = trigger.getBoundingClientRect();
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
-      const width = Math.min(rect.width, viewportWidth - 16);
+      const width = Math.min(Math.max(rect.width, popupMinWidth ?? 0), viewportWidth - 16);
       const left = Math.max(8, Math.min(rect.left, viewportWidth - width - 8));
       const desired = Math.min(240, options.length * 34 + 8);
       const below = viewportHeight - rect.bottom - 8;
@@ -292,7 +304,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
       window.removeEventListener('scroll', reposition, true);
       window.removeEventListener('resize', reposition);
     };
-  }, [open, options.length]);
+  }, [open, options.length, popupMinWidth]);
 
   useEffect(() => {
     if (!open || activeIndex < 0) return;
@@ -411,11 +423,6 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
         ? createPortal(
             <div
               ref={popupRef}
-              id={listboxId}
-              role="listbox"
-              aria-labelledby={id}
-              aria-label={id == null ? ariaLabel : undefined}
-              tabIndex={-1}
               className="fixed z-tooltip flex flex-col overflow-y-auto overscroll-contain rounded-md border border-line bg-raised p-1 shadow-elev-3"
               style={{
                 top: position.top,
@@ -424,36 +431,50 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
                 maxHeight: position.maxHeight,
               }}
             >
-              {options.map((option, index) => {
-                const isSelected = option.value === current;
-                return (
-                  // biome-ignore lint/a11y/useFocusableInteractive: aria-activedescendant 模式下选项不接收焦点
-                  // biome-ignore lint/a11y/useKeyWithClickEvents: 键盘交互在触发器上（combobox 模式）
-                  <div
-                    key={option.key}
-                    ref={(node) => {
-                      optionRefs.current[index] = node;
-                    }}
-                    id={optionId(index)}
-                    role="option"
-                    aria-selected={isSelected}
-                    aria-disabled={option.disabled || undefined}
-                    className={cn(
-                      'flex min-h-8 cursor-pointer items-center rounded-sm px-2.5 py-1.75 text-left text-md text-ink transition-colors pointer-coarse:min-h-touch',
-                      index === activeIndex && 'bg-hover',
-                      isSelected && 'bg-accent-soft text-accent-ink',
-                      option.disabled && 'cursor-not-allowed opacity-45',
-                    )}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onPointerEnter={() => {
-                      if (!option.disabled) setActiveIndex(index);
-                    }}
-                    onClick={() => selectOption(option)}
-                  >
-                    <span className="truncate">{option.label}</span>
-                  </div>
-                );
-              })}
+              <div
+                id={listboxId}
+                role="listbox"
+                aria-labelledby={id}
+                aria-label={id == null ? ariaLabel : undefined}
+                tabIndex={-1}
+                className="flex flex-col"
+              >
+                {options.map((option, index) => {
+                  const isSelected = option.value === current;
+                  return (
+                    // biome-ignore lint/a11y/useFocusableInteractive: aria-activedescendant 模式下选项不接收焦点
+                    // biome-ignore lint/a11y/useKeyWithClickEvents: 键盘交互在触发器上（combobox 模式）
+                    <div
+                      key={option.key}
+                      ref={(node) => {
+                        optionRefs.current[index] = node;
+                      }}
+                      id={optionId(index)}
+                      role="option"
+                      aria-selected={isSelected}
+                      aria-disabled={option.disabled || undefined}
+                      className={cn(
+                        'flex min-h-8 cursor-pointer items-center rounded-sm px-2.5 py-1.75 text-left text-md text-ink transition-colors pointer-coarse:min-h-touch',
+                        index === activeIndex && 'bg-hover',
+                        isSelected && 'bg-accent-soft text-accent-ink',
+                        option.disabled && 'cursor-not-allowed opacity-45',
+                      )}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onPointerEnter={() => {
+                        if (!option.disabled) setActiveIndex(index);
+                      }}
+                      onClick={() => selectOption(option)}
+                    >
+                      <span className="truncate">{option.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {footer != null ? (
+                <div className="mt-1 border-t border-line px-2.5 pt-1.5 pb-0.5 text-xs text-faint wrap-anywhere">
+                  {footer}
+                </div>
+              ) : null}
             </div>,
             document.body,
           )
