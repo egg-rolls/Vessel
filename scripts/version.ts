@@ -260,6 +260,32 @@ export async function applyVersion(root: string, version: string): Promise<strin
   return changed;
 }
 
+/**
+ * 写模式预演：返回将要改动的 manifest 行（`path (reasons)`），不落盘。
+ * 内部依赖归一化与 vessel.version 同 bump 都算进去（否则版本已对齐时谎报无改动）。
+ * version.ts --dry-run 与 release.ts --dry-run 共用。
+ */
+export async function previewVersion(root: string, version: string): Promise<string[]> {
+  const manifests = await collectManifests(root);
+  const pending: string[] = [];
+  for (const manifest of manifests) {
+    const pkg = await readPackageJson(root, manifest.path);
+    if (!pkg) continue;
+    const reasons: string[] = [];
+    if (manifest.version !== version) reasons.push(`${manifest.version} -> ${version}`);
+    if (internalDependencyIssues(pkg, manifest.path).length > 0) {
+      reasons.push(`内部依赖 -> ${WORKSPACE_PROTOCOL}`);
+    }
+    const vessel = pkg.vessel as Record<string, unknown> | undefined;
+    if (typeof vessel?.version === 'string' && vessel.version !== version) {
+      reasons.push(`vessel.version ${vessel.version} -> ${version}`);
+    }
+    if (reasons.length === 0) continue;
+    pending.push(`${manifest.path} (${reasons.join('; ')})`);
+  }
+  return pending;
+}
+
 export async function changelogHasVersion(root: string, version: string): Promise<boolean> {
   const text = await readFile(join(root, 'CHANGELOG.md'), 'utf8');
   return new RegExp(`^## \\[${escapeRegExp(version)}\\]`, 'm').test(text);
@@ -416,26 +442,7 @@ async function main(): Promise<void> {
   }
 
   if (dryRun) {
-    const manifests = await collectManifests(ROOT);
-    const pending: string[] = [];
-    for (const manifest of manifests) {
-      const pkg = await readPackageJson(ROOT, manifest.path);
-      if (!pkg) continue;
-      // 写模式还会把内部依赖归一化为 `workspace:*`，预演必须一起算进去，
-      // 否则版本已是目标值时 dry-run 会谎报「无改动」。
-      const reasons: string[] = [];
-      if (manifest.version !== version) reasons.push(`${manifest.version} -> ${version}`);
-      if (internalDependencyIssues(pkg, manifest.path).length > 0) {
-        reasons.push(`内部依赖 -> ${WORKSPACE_PROTOCOL}`);
-      }
-      // 写模式还会同 bump 内置清单版本，预演一起算（否则版本已对齐时谎报无改动）。
-      const vessel = pkg.vessel as Record<string, unknown> | undefined;
-      if (typeof vessel?.version === 'string' && vessel.version !== version) {
-        reasons.push(`vessel.version ${vessel.version} -> ${version}`);
-      }
-      if (reasons.length === 0) continue;
-      pending.push(`  ${manifest.path} (${reasons.join('; ')})`);
-    }
+    const pending = await previewVersion(ROOT, version);
     if (pending.length === 0) {
       console.log(
         `all manifests already at ${version} with internal deps at ${WORKSPACE_PROTOCOL}`,
@@ -443,7 +450,7 @@ async function main(): Promise<void> {
       return;
     }
     console.log(`would update ${pending.length} manifest(s) to ${version}:`);
-    for (const line of pending) console.log(line);
+    for (const line of pending) console.log(`  ${line}`);
     return;
   }
 
