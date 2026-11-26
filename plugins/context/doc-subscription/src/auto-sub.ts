@@ -39,7 +39,7 @@ export function createAutoSubscribeHook(deps: SubscribeToolDeps): Hook {
       if (record.subscribe === false) return;
       if (ctx.tool === 'read') {
         try {
-          await readSubscribePath(deps, ctx.session_id ?? 'default', record, ctx.cwd);
+          await readSubscribePath(deps, ctx.session_id ?? 'default', record, ctx.cwd, ctx.agent_id);
         } catch {
           // best-effort：自动订阅失败不得影响工具流
         }

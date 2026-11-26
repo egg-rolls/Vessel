@@ -612,53 +612,58 @@ export async function autoSubscribePath(
   const canonical = canonicalPath(resolveInput(config, trimmed));
   let wrote = false;
   // 原子读改写（设计 §2.2 修洞 3）：load→改→save 整段在 per-session 串行链内，并发批不丢更新。
-  await deps.store.mutate(sessionId, async (state) => {
-    const existing = state.subscriptions[canonical] ?? undefined;
-    const outcome = await prepareEntry(trimmed, { ...deps, config }, existing);
-    if (outcome.entry === undefined) return undefined;
-    const entry = outcome.entry;
-    // 升级梯 manual > edit > read：manual 不降级；read 条目被 edit/write 触碰升为 'edit'
-    // （清除后不再自过期）；新建置 'edit'。
-    entry.origin = existing?.origin === 'manual' ? 'manual' : 'edit';
+  await deps.store.mutate(
+    sessionId,
+    async (state) => {
+      const existing = state.subscriptions[canonical] ?? undefined;
+      const outcome = await prepareEntry(trimmed, { ...deps, config }, existing);
+      if (outcome.entry === undefined) return undefined;
+      const entry = outcome.entry;
+      // 升级梯 manual > edit > read：manual 不降级；read 条目被 edit/write 触碰升为 'edit'
+      // （清除后不再自过期）；新建置 'edit'。
+      entry.origin = existing?.origin === 'manual' ? 'manual' : 'edit';
 
-    const observation = await observeEntry(entry, deps);
-    if (observation !== undefined) {
-      entry.rev = observation.rev;
-      entry.size = observation.size;
-      entry.mtime_ms = observation.mtime_ms;
-      // 基线抑制：该 rev 视为「已通知」，自己刚做的改动不出卡；他人再改时 BeforeLlm 才通知。
-      entry.notified_rev = observation.rev;
-      entry.notified_at = Date.now();
-      // 来源标记（设计 §2.2）：基线化同时记 last_writer；origin 缺省（旧 caller）不标。
-      if (origin !== undefined) {
-        entry.last_writer = {
-          session_id: sessionId,
-          ...(origin.member_id !== undefined ? { member_id: origin.member_id } : {}),
-          tool: origin.tool,
-          ts: Date.now(),
-          rev: observation.rev,
-        };
+      const observation = await observeEntry(entry, deps);
+      if (observation !== undefined) {
+        entry.rev = observation.rev;
+        entry.size = observation.size;
+        entry.mtime_ms = observation.mtime_ms;
+        // 基线抑制：该 rev 视为「已通知」，自己刚做的改动不出卡；他人再改时 BeforeLlm 才通知。
+        entry.notified_rev = observation.rev;
+        entry.notified_at = Date.now();
+        // 来源标记（设计 §2.2）：基线化同时记 last_writer；origin 缺省（旧 caller）不标。
+        if (origin !== undefined) {
+          entry.last_writer = {
+            session_id: sessionId,
+            ...(origin.member_id !== undefined ? { member_id: origin.member_id } : {}),
+            tool: origin.tool,
+            ts: Date.now(),
+            rev: observation.rev,
+          };
+        }
       }
-    }
 
-    if (
-      existing !== undefined &&
-      existing.rev === entry.rev &&
-      existing.notified_rev === entry.notified_rev &&
-      existing.seen_rev === entry.seen_rev &&
-      existing.size === entry.size &&
-      existing.mtime_ms === entry.mtime_ms &&
-      // origin 升级（read → edit）也算变化；reads 原样携带不改，无需比较。
-      existing.origin === entry.origin &&
-      // last_writer 实质判等（ts 除外）：同来源同内容重触不写盘。
-      sameOrigin(existing.last_writer, entry.last_writer)
-    ) {
-      return undefined; // 无变化不写盘
-    }
-    state.subscriptions[entry.path] = entry;
-    wrote = true;
-    return state;
-  });
+      if (
+        existing !== undefined &&
+        existing.rev === entry.rev &&
+        existing.notified_rev === entry.notified_rev &&
+        existing.seen_rev === entry.seen_rev &&
+        existing.size === entry.size &&
+        existing.mtime_ms === entry.mtime_ms &&
+        // origin 升级（read → edit）也算变化；reads 原样携带不改，无需比较。
+        existing.origin === entry.origin &&
+        // last_writer 实质判等（ts 除外）：同来源同内容重触不写盘。
+        sameOrigin(existing.last_writer, entry.last_writer)
+      ) {
+        return undefined; // 无变化不写盘
+      }
+      state.subscriptions[entry.path] = entry;
+      wrote = true;
+      return state;
+      // 成员指针（§2.6）：edit/write 落盘同步更新（origin.member_id 可得时）。
+    },
+    origin?.member_id,
+  );
   return wrote;
 }
 
@@ -691,6 +696,7 @@ export async function readSubscribePath(
   sessionId: string,
   args: Record<string, unknown>,
   cwd?: string,
+  memberId?: string,
 ): Promise<boolean> {
   const rawPath = typeof args.path === 'string' ? args.path.trim() : '';
   if (rawPath === '') return false;
@@ -735,29 +741,34 @@ export async function readSubscribePath(
 
   // 原子读改写（设计 §2.2 修洞 3）：read 只追加引用 / 新建条目，不记 last_writer（read 非编辑）。
   let wrote = false;
-  await deps.store.mutate(sessionId, async (state) => {
-    const existing = state.subscriptions[canonical];
-    if (existing !== undefined) {
-      existing.reads.push(ref);
+  await deps.store.mutate(
+    sessionId,
+    async (state) => {
+      const existing = state.subscriptions[canonical];
+      if (existing !== undefined) {
+        existing.reads.push(ref);
+        wrote = true;
+        return state;
+      }
+
+      const outcome = await prepareEntry(rawPath, { ...deps, config }, undefined);
+      if (outcome.entry === undefined) return undefined;
+      const entry = outcome.entry;
+      entry.origin = 'read';
+      entry.reads = [ref];
+      // 基线抑制：订阅时的观察视为「已通知」，read 本身不出卡；他人再改才通知。
+      // rev 直接用刚读 buffer 的 hash（与 observeEntry 同口径），避免二次整文件读。
+      entry.rev = sha256Hex(buffer);
+      entry.notified_rev = entry.rev;
+      entry.notified_at = Date.now();
+      entry.size = buffer.byteLength;
+      entry.mtime_ms = info.mtimeMs;
+      state.subscriptions[entry.path] = entry;
       wrote = true;
       return state;
-    }
-
-    const outcome = await prepareEntry(rawPath, { ...deps, config }, undefined);
-    if (outcome.entry === undefined) return undefined;
-    const entry = outcome.entry;
-    entry.origin = 'read';
-    entry.reads = [ref];
-    // 基线抑制：订阅时的观察视为「已通知」，read 本身不出卡；他人再改才通知。
-    // rev 直接用刚读 buffer 的 hash（与 observeEntry 同口径），避免二次整文件读。
-    entry.rev = sha256Hex(buffer);
-    entry.notified_rev = entry.rev;
-    entry.notified_at = Date.now();
-    entry.size = buffer.byteLength;
-    entry.mtime_ms = info.mtimeMs;
-    state.subscriptions[entry.path] = entry;
-    wrote = true;
-    return state;
-  });
+      // 成员指针（§2.6）：read 订阅落盘同步更新（memberId 可得时；read 不记 last_writer）。
+    },
+    memberId,
+  );
   return wrote;
 }

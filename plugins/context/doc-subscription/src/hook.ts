@@ -304,6 +304,17 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
 
       const sessionId = ctx.session_id ?? 'default';
 
+      // rotate 订阅迁移（设计 §2.6）：新 body 首访惰性收养旧 session 状态（member 指针，
+      // notified_rev/reads/last_writer 全量）。ctx.agent_id 可得才收养；无 agent_id（非成员
+      // session）行为=现状。best-effort：收养失败退回现状基线，不阻断观察/通知。
+      if (ctx.agent_id !== undefined) {
+        try {
+          await deps.store.adoptMemberSession(ctx.agent_id, sessionId);
+        } catch {
+          // 收养失败不阻断观察。
+        }
+      }
+
       let state: SessionSubscriptionState;
       try {
         state = await deps.store.load(sessionId);
@@ -434,7 +445,8 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       if (!dirty) return;
 
       try {
-        await deps.store.save(state);
+        // 成员指针（§2.6）：观察落盘同步更新，指向本成员当前 session（agent_id 可得时）。
+        await deps.store.save(state, ctx.agent_id);
       } catch {
         // 保存失败时通知仍返回；下个 run 可能重复一次（at-most-once 风险）。
       }
