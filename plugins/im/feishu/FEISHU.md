@@ -134,7 +134,7 @@ vessel start --feishu  # 启动飞书渠道（可与 --serve / REPL 同用）
 | 现象 | 先查 |
 |---|---|
 | doctor 全绿但启动失败（`feishu_invalid`） | 旧版 app_secret_env 口径 bug（§8）；升级，或临时改用 `VESSEL_FEISHU_APP_SECRET` |
-| 时灵时不灵 / 消息丢失 | 同 App ID 多进程多连接（§4）；一 app 一连接 |
+| 时灵时不灵 / 消息丢失 | 同 App ID 多进程多连接（§4）；一 app 一连接。`vessel doctor` 的 `feishu_unique_app_id` 检查项可离线发现本舰队重复 app_id；gateway 启动装配期重复即 fail loud |
 | 群聊收不到消息 | ① 是否 @ 了机器人（mention-only 默认）② `im:message.group_at_msg` 权限且已发布版本 ③ 机器人在群里 ④ `allowed_chat_ids` / `allowed_user_ids` 白名单拦截 |
 | 单聊无响应 | `im:message.p2p_msg` 权限；可用范围含该用户；`enabled: true` |
 | 没有 👀 | reaction 权限未开通——正常静默降级，不影响回复 |

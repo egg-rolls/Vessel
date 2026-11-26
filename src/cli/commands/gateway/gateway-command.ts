@@ -144,6 +144,7 @@ import { t } from '../../../i18n';
 import { nodeJsonPath } from '../../../node/node-identity';
 // 0.56：派生 token（显式配置永远优先；未配置时自动派生，绝不再「未配置就挂」）。
 import { effectiveNodeToken, effectivePlatformToken } from '../../../node/token-derive';
+import { assertUniqueFeishuAppIds } from '../../../plugin/feishu-wiring';
 import { createHttpRpcClient } from '../../../rpc/http-client';
 import { sanitizeToolOutputEnv } from '../../../runtime/tool-output-env';
 import { readPackageVersion } from '../../../shared/version';
@@ -2961,6 +2962,23 @@ async function resolveLocalNodes(options: {
       ...(token !== undefined ? { token } : {}),
       apiUrl: nodeOriginOf(listen.host, nodePort, nodeConfig.node?.tls !== undefined),
     });
+  }
+
+  // P1-A7：同 app_id 多节点 fail loud——同一飞书 app 多条 WS 长连接会被平台随机分消息
+  // （「时灵时不灵」根因）。装配期唯一性守卫，重复即报错而非带病启动。
+  try {
+    assertUniqueFeishuAppIds(
+      resolved.map((node) => ({
+        tenantId: node.entry.node_id ?? node.entry.name,
+        config: node.config,
+      })),
+    );
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    throw new LocalNodeStartError(
+      typeof code === 'string' ? code : 'feishu_duplicate_app_id',
+      error instanceof Error ? error.message : String(error),
+    );
   }
 
   return resolved;
