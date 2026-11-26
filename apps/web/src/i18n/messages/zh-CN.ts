@@ -347,6 +347,8 @@ export const messages = {
     '选择注册模型 = 为该成员固定（pin）：活体 body 与当前 run 不变，下一具 body / 续接 run 生效，届时会话会追加一条环境信息卡。留空 = 不修改。',
   'chat.memberModel.saved': '已更新 {name} 的模型，下一具 body / 续接 run 生效',
   'chat.memberModel.failed': '模型切换失败',
+  // 思考强度菜单 pill 的前缀标签（用户验收①）：pill 显示「思考: <档位>」
+  'chat.thinking.label': '思考:',
   // 0.18 UX3：会话列表相对时间与会话头上下文长度
   'time.today': '今天',
   'time.yesterday': '昨天',

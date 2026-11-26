@@ -36,6 +36,11 @@ export interface ComposerToolbarMenuState {
   current?: string;
   /** 菜单底部说明行（如「该模型仅支持开/关」）。 */
   hint?: string;
+  /**
+   * pill 前缀标签（additive，用户验收①；已翻译文案，如「思考:」）。只进触发器
+   * 显示「前缀 + 当前档位」，不进档位表选项。缺省不渲染（现行为）。
+   */
+  prefix?: string;
   /** 选中一档（宿主经 RPC write 落状态）。 */
   onSelect: (value: string) => void;
 }
@@ -130,7 +135,8 @@ function ToolbarMenuButton({ action }: { action: ComposerToolbarAction }) {
   const menu = action.menu;
   if (menu === undefined) return null;
   // current 缺失（read 未回）或不在档位表（如不支持模型上的会话 override）时合成
-  // 显示项，保证触发器非空；缺失态用 action.label 占位并禁用防误选。
+  // 显示项，保证触发器非空；缺失态用「—」占位并禁用防误选（前缀标签已表达语义，
+  // 不再拿 action.label 占位，避免「思考: 思考」式重复）。
   const current = menu.current ?? '';
   const items = menu.items.some((item) => item.value === current)
     ? menu.items
@@ -138,7 +144,7 @@ function ToolbarMenuButton({ action }: { action: ComposerToolbarAction }) {
         ...menu.items,
         {
           value: current,
-          label: menu.current ?? action.label,
+          label: menu.current ?? '—',
           disabled: menu.current === undefined,
         },
       ];
@@ -150,6 +156,7 @@ function ToolbarMenuButton({ action }: { action: ComposerToolbarAction }) {
       disabled={action.disabled}
       value={current}
       popupMinWidth={144}
+      prefix={menu.prefix}
       onChange={(event) => menu.onSelect(event.target.value)}
       footer={menu.hint !== undefined && menu.hint !== '' ? menu.hint : undefined}
     >

@@ -182,6 +182,7 @@ export interface SelectProps
     | 'onFocus'
     | 'onBlur'
     | 'role'
+    | 'prefix'
   > {
   invalid?: boolean;
   required?: boolean;
@@ -199,6 +200,12 @@ export interface SelectProps
    * （如工具栏 pill）传更大值保证选项可读；仍受视口宽度钳制。
    */
   popupMinWidth?: number;
+  /**
+   * 触发器前缀标签（additive，用户验收①）：渲染在选中值左侧、chevron 之外，
+   * 只进触发器不进 listbox 选项。纯装饰（aria-hidden），无障碍名仍由
+   * aria-label 承担。缺省不渲染（现行为）。
+   */
+  prefix?: ReactNode;
 }
 
 /** SSR 下没有 DOM，避免 useLayoutEffect 警告。 */
@@ -234,6 +241,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
     name,
     footer,
     popupMinWidth,
+    prefix,
     ...props
   },
   ref,
@@ -405,6 +413,11 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
         }}
         onKeyDown={onTriggerKeyDown}
       >
+        {prefix != null ? (
+          <span aria-hidden="true" className="flex-none text-faint">
+            {prefix}
+          </span>
+        ) : null}
         <span className="truncate">{selected ? selected.label : null}</span>
         <svg
           aria-hidden="true"
