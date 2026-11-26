@@ -17,7 +17,12 @@
  */
 
 import type { ModelEntry, ModelRegistrySnapshot } from '@vessel-agent/config';
-import { readMigrationReport, resolveEffectiveApiKey, resolveModelRef } from '@vessel-agent/config';
+import {
+  CREDENTIAL_ID_RE,
+  readMigrationReport,
+  resolveEffectiveApiKey,
+  resolveModelRef,
+} from '@vessel-agent/config';
 import type { Plugin } from '@vessel-agent/core';
 import { defaultBaseUrlFor, testConnectivity } from './connectivity';
 import { CredentialStore, resolveDataDir } from './credential-store';
@@ -247,13 +252,24 @@ async function handleDefaultSet(params: Record<string, unknown>): Promise<Record
 
 /**
  * credential_set：一次写两处（§3.3）——先加密库值、后 yaml 元数据（withConfigLock 内）。
- * 值失败不写 yaml；yaml 失败留孤儿值（无害，credentials_list 可见未引用条目）。
+ * id 形状在写值前 fail-fast 校验（无效 id 不再产生孤儿值）；值失败不写 yaml；
+ * yaml 失败仍可能留孤儿值（credentials_list 可见未引用条目，可经 credential_remove 清除）。
  * apiKey 缺省 = 不改值（编辑态）；baseUrl 必填。明文纪律：值永不回显。
  */
 async function handleCredentialSet(
   params: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const id = requireString(params, 'id');
+  // fail-fast：id 形状与 validateCredentialsBlock 同口径，先于 store.set——
+  // 否则加密库值已落盘而 yaml 校验拒绝，留下 credential_remove 曾删不掉的孤儿。
+  if (id.startsWith('legacy:')) {
+    throw invalidParams(`id "${id}" uses the reserved "legacy:" prefix`);
+  }
+  if (!CREDENTIAL_ID_RE.test(id)) {
+    throw invalidParams(
+      'id must match ^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$ (letters, digits, hyphens; up to 64 chars)',
+    );
+  }
   const baseUrl = requireString(params, 'baseUrl');
   const apiKeyEnv = optionalString(params, 'apiKeyEnv');
   // 迁移期兼容：旧 UI/CLI 的 value 参数 = apiKey（C6 UI 收敛后删除）。
@@ -280,13 +296,26 @@ async function handleCredentialRemove(
         'remove those references first',
     );
   }
-  // 先删 yaml 元数据，再删库值（库值缺失 = env-only 凭证，容忍）。
-  await credentialRemoveMeta(id);
+  // 先删 yaml 元数据，再删库值。两侧缺失各自容忍：yaml 无 = store-only 孤儿
+  // （credential_set 先值后 yaml 的失败窗口遗留），库值无 = env-only 凭证；
+  // 两处皆无才报 unknown_credential。
+  let metaAbsent = false;
+  try {
+    await credentialRemoveMeta(id);
+  } catch (error) {
+    if (!(error instanceof Error && error.message.startsWith('unknown_credential'))) throw error;
+    metaAbsent = true;
+  }
   const store = new CredentialStore(resolveDataDir(config));
   try {
     await store.remove(id);
   } catch (error) {
     if (!(error instanceof Error && error.message.startsWith('unknown_credential'))) throw error;
+    if (metaAbsent) {
+      throw new Error(
+        `unknown_credential: "${id}" is in neither the yaml models.credentials block nor the credential store`,
+      );
+    }
   }
   return { ok: true };
 }

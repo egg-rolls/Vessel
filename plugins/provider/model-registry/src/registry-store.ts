@@ -9,7 +9,8 @@
  * - 引用检查 = registry 内部引用（models.default / entry.credential），不读 agent store
  *   （dangling pin 由 doctor 只读交叉检查）。
  * - 只改 models 块；根对象与其它块原样保留。生效异步（config-watch），这里不做热应用。
- * - 凭证值不在本模块：credential_set 的加密库值写入在 index.ts（先值后元数据，§3.3）。
+ * - 凭证值不在本模块：credential_set 的加密库值写入在 index.ts（先值后元数据，§3.3）；
+ *   yaml 半失败可能留 store-only 孤儿值，credential_remove 容忍 yaml 缺失并清掉库值。
  */
 
 import {

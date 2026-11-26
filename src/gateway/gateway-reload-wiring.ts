@@ -37,6 +37,8 @@
  */
 
 import {
+  type DefaultModelIdentity,
+  defaultModelRefOf,
   resolveModelRef,
   synthesizeLegacyRegistry,
   type VesselConfig,
@@ -69,18 +71,27 @@ export interface GatewayReloadWiringOptions {
   /**
    * `provider.*` / `models.*` 热应用（P0-1 D4 批准的注入字段，P1-w2d 泛化；config scope
    * 内部，不新增 reload scope）。仅在 provider / models 块变化**且新配置能解析出非空
-   * 有效缺省模型**时调用；`from` / `to` = 变化前后的有效缺省 wire model（env 优先级
-   * 冻结：VESSEL_MODEL 赢 models.default），`next` = 校验通过的重载配置（装配层据此
-   * 重建 registry 快照 + 清 provider 缓存）。返回要广播的差异摘要行（并入
-   * `summaries.config`）。生效点 = 节点缺省模型：新 body / 新 EU 用新值，live body / EU
-   * 构造期只读、下一具才生效（前缀不变量）。未注入或解析不出有效缺省 ⇒ 变化域进
-   * `requires_restart`（不猜 provider 缺省模型，不假装生效）。
+   * 有效缺省模型**时调用；`from` / `to` = 变化前后的有效缺省**身份**（第 6 修 SPAWN-03：
+   * ref + wire 分离——ref 是宿主缺省 / spawn 继承 / 比较语义的键，wire 只作展示；
+   * env 优先级冻结：VESSEL_MODEL 赢 models.default），`next` = 校验通过的重载配置
+   * （装配层据此重建 registry 快照 + 清 provider 缓存）。返回要广播的差异摘要行
+   * （并入 `summaries.config`）。生效点 = 节点缺省模型：新 body / 新 EU 用新值，
+   * live body / EU 构造期只读、下一具才生效（前缀不变量）。未注入或解析不出有效缺省
+   * ⇒ 变化域进 `requires_restart`（不猜 provider 缺省模型，不假装生效）。
    */
   applyProviderModel?: (
-    from: string | undefined,
-    to: string | undefined,
+    from: DefaultModelIdentity | undefined,
+    to: DefaultModelIdentity | undefined,
     next?: VesselConfig,
   ) => Promise<string[]> | string[];
+  /**
+   * 缺省身份预览（第 6 修 SPAWN-03）：装配层注入 registry.previewDefaultModel——
+   * 按运行期同口径（legacyPresent 单向闸）解析给定配置的缺省身份。缺省时回落
+   * 本模块只读保守口径（legacyPresent=true，与旧 effectiveDefaultModel 字节等价）。
+   * 解析不出 / ModelRefError → undefined ⇒ 变化域进 requires_restart，
+   * 不再把不可重解析的 wire 名热应用进宿主缺省（热应用重新污染）。
+   */
+  previewDefaultModel?: (config: VesselConfig) => DefaultModelIdentity | undefined;
   /**
    * S7 federation 热应用（config scope 内部，与 applyProviderModel 同形，不新增
    * reload scope）。仅在 federation 块变化时调用；`next` = 校验通过的重载配置，
@@ -164,14 +175,20 @@ export function allowedOriginsChanged(current: VesselConfig, next: VesselConfig)
 }
 
 /**
- * 有效缺省 wire model（env 优先级冻结 §2.6：VESSEL_MODEL 赢 models.default）：
+ * 有效缺省身份（env 优先级冻结 §2.6：VESSEL_MODEL 赢 models.default）：
  * 与 wiring.resolveModel(undefined) 同一 resolver 口径，只读解析、不构造 provider。
+ * 保守回落口径（legacyPresent=true）：装配层注入 previewDefaultModel 时以运行期
+ * 同口径预览为准（第 6 修 SPAWN-03）。ref 与 wire 分离：ref 供继承 / 比较，wire 供展示。
  */
-function effectiveDefaultModel(config: VesselConfig): string | undefined {
+function effectiveDefaultModel(config: VesselConfig): DefaultModelIdentity | undefined {
   const envModel = process.env.VESSEL_MODEL;
   const snapshot = synthesizeLegacyRegistry(config);
-  return resolveModelRef(snapshot, envModel !== undefined && envModel !== '' ? envModel : undefined)
-    ?.wireModel;
+  const resolved = resolveModelRef(
+    snapshot,
+    envModel !== undefined && envModel !== '' ? envModel : undefined,
+  );
+  if (!resolved?.wireModel) return undefined;
+  return { ref: defaultModelRefOf(resolved, true), wireModel: resolved.wireModel };
 }
 
 /** 缺省 scopes（`gateway.reload({})` 时跑）：与 serve 的 `RELOAD_SCOPES` 同序。 */
@@ -247,13 +264,13 @@ export function createGatewayReloadRunner(
           const modelsChanged = stableValue(current.models) !== stableValue(next.models);
           const modelLines: string[] = [];
           if (providerChanged || modelsChanged) {
-            const modelFrom = effectiveDefaultModel(current);
-            const modelTo = effectiveDefaultModel(next);
-            if (
-              typeof modelTo === 'string' &&
-              modelTo !== '' &&
-              options.applyProviderModel !== undefined
-            ) {
+            // 第 6 修（SPAWN-03）：from/to 是缺省**身份**（ref + wire）——比较语义在
+            // ref 级（异键同 wire = changed；同键异 wire = 缺省未变、仅 wire 改名），
+            // 展示面保留 wire。预览优先用运行期同口径（legacyPresent 单向闸）。
+            const preview = options.previewDefaultModel ?? effectiveDefaultModel;
+            const modelFrom = preview(current);
+            const modelTo = preview(next);
+            if (modelTo !== undefined && options.applyProviderModel !== undefined) {
               const lines = await options.applyProviderModel(modelFrom, modelTo, next);
               if (Array.isArray(lines)) modelLines.push(...lines);
             } else {

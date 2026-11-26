@@ -24,6 +24,7 @@ import type { EngineClient } from '@vessel-agent/engine-client';
 import {
   type ConfigSources,
   DEFAULT_TIMELINE_OPTIONS,
+  type DefaultModelIdentity,
   resolveEnvCadence,
   type VesselConfig,
 } from '../../packages/config/src/index';
@@ -208,6 +209,11 @@ export interface TenantRuntimeBundle {
   providerName: string;
   /** 启动时的 provider 模型快照（装配期一次性消费；热应用后的活值读 config / profile） */
   providerModel: string;
+  /**
+   * 启动时的缺省模型身份 ref（第 6 修 SPAWN-02）：宿主缺省 / spawn 继承用它，
+   * 展示面用 providerModel（wire）。热应用后的活值经 applyDefaultModel 下发。
+   */
+  providerModelRef: string;
   providerBaseUrl: string;
   /**
    * 节点缺省模型热应用入口（P0-1 D4 批准；P1-w2d 泛化到 provider/models 全域，
@@ -224,6 +230,12 @@ export interface TenantRuntimeBundle {
    * 未命中注册表且无 legacy 透传 → 错误文案 + 候选；mock 模式缺省。
    */
   validateModelRef?: (ref: string) => string | undefined;
+  /**
+   * 缺省模型身份热应用预览（第 6 修 SPAWN-03）：registry 存在时注入，
+   * config scope 用它按运行期同口径（legacyPresent 单向闸）解析 from/to 身份；
+   * mock 模式缺省（runner 回落只读保守口径）。
+   */
+  previewDefaultModel?: (next: VesselConfig) => DefaultModelIdentity | undefined;
   /**
    * P1-w2d（w1a 接缝）：install 之后对 capabilityManifest 非空的 in-process 插件调
    * `registerInProcessPlugin`，把 RPC / 贡献面登记进宿主 PluginRpcRegistry。
@@ -752,7 +764,8 @@ export async function buildTenantRuntime(
     'runtime.provider',
     createProvider(config, loader, useMock, options.mockScenario, legacyPresent),
   );
-  const { provider, providerName, providerModel, providerBaseUrl, registry } = resolvedProvider;
+  const { provider, providerName, providerModel, providerModelRef, providerBaseUrl, registry } =
+    resolvedProvider;
   // 0.51：opt-in 计价；两面重构 §10.1 合并视图（entry.pricing 按 wire 名覆盖 pricing.models）。
   const pricing = createUsagePricing(config.pricing, config.models?.entries);
 
@@ -1683,6 +1696,7 @@ export async function buildTenantRuntime(
     provider,
     providerName,
     providerModel,
+    providerModelRef,
     providerBaseUrl,
     // 原地改引用（不能重新注册：同 tenant 不同 profile 会抛 tenant_profile_conflict）。
     // next 提供时同步重建 registry 快照 + 清缓存（P1-w2d 泛化；live EU 不动，下一具生效）。
@@ -1691,6 +1705,7 @@ export async function buildTenantRuntime(
       if (next !== undefined) registry?.applyConfig(next);
     },
     ...(registry !== undefined ? { validateModelRef: registry.validateModelRef } : {}),
+    ...(registry !== undefined ? { previewDefaultModel: registry.previewDefaultModel } : {}),
     // provider 类能力插件（model-registry）由 wiring 收集；显式启用时 selection 的
     // 显式分支不排除 provider 类，同一插件会再进通用装载名单——两条路各持同一
     // descriptor/plugin（同 loader 缓存 + ESM 单实例）。去重单实现在装配层

@@ -383,8 +383,16 @@ export interface MemberExecutionHostOptions {
    * `getOrCreateExecutionUnit` 取得，不再在 host 内直接构造。
    */
   runtime: Runtime;
-  /** 成员未指定 model 时的默认模型；两者都缺省时 spawn 失败 */
+  /**
+   * 成员未指定 model 时的宿主缺省 **ref**（第 6 修：条目键 / legacy 透传 ref，
+   * 不是 wire 名）；spawn 继承经 resolveModelRef 解析。两者都缺省时 spawn 失败。
+   */
   model?: string;
+  /**
+   * 宿主缺省的展示 wire 名（selfCard / delta 真值盒用；与缺省 ref 分离）。
+   * 缺省回落 model 原值（mock / 未注入装配层与旧行为字节等价）。
+   */
+  modelWire?: string;
   /** 工具 / hooks / guardrails 的来源（父宿主）；缺省时成员没有工具 */
   pluginHost?: PluginHost;
   /**
@@ -980,8 +988,13 @@ const DERIVED_BODY: {
 
 /** 进程内成员执行内核 */
 export class MemberExecutionHost implements MemberExecutionPort {
-  /** 宿主缺省 model；`provider.model` 热应用会经 `updateDefaultModel` 整体替换（非 readonly） */
+  /**
+   * 宿主缺省 model **ref**（条目键 / legacy 透传 ref）；`provider.model` 热应用会经
+   * `updateDefaultModel` 整体替换（非 readonly）。spawn 继承用它走 resolveModelRef。
+   */
   private model?: string;
+  /** 宿主缺省的展示 wire 快照（selfCard / delta 真值盒）；与 ref 同步热应用替换。 */
+  private modelWire?: string;
   private readonly pluginHost?: PluginHost;
   private readonly readOnlyTools: ReadonlySet<string>;
   private readonly permissionMode: MemberExecutionPermissionMode;
@@ -1029,6 +1042,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
 
   constructor(options: MemberExecutionHostOptions) {
     this.model = options.model;
+    this.modelWire = options.modelWire ?? options.model;
     this.pluginHost = options.pluginHost;
     this.readOnlyTools = new Set(options.readOnlyTools ?? DEFAULT_READ_ONLY_TOOLS);
     this.permissionMode = options.permissionMode ?? 'allow';
@@ -1072,19 +1086,28 @@ export class MemberExecutionHost implements MemberExecutionPort {
    * 只影响**此后 spawn** 的成员 body（`member.model ?? this.model` 的回落端）；
    * live body 的 model 是构造期只读快照（system 前缀不变量），本具仍旧值、
    * 下一具才用新值。不触碰任何 live ExecutionUnit，也不改显式 pin（record.model）。
+   *
+   * 第 6 修：`model` 是可重解析的缺省 **ref**（条目键 / legacy 透传 ref），
+   * `wireModel` 是配套展示 wire（selfCard / delta 真值盒）；缺省 wire 回落 ref 原值。
    */
-  updateDefaultModel(model: string): void {
+  updateDefaultModel(model: string, wireModel?: string): void {
     this.model = model;
+    this.modelWire = wireModel ?? model;
   }
 
   async spawn(member: MemberExecutionMember): Promise<void> {
     if (this.entries.has(member.session_id)) {
       throw new Error(`member runtime already spawned: ${member.session_id}`);
     }
+    // 第 6 修（SPAWN-02）：继承值是缺省 **ref**（条目键 / legacy 透传 ref），经
+    // EU 的 resolveModel 解析成 wire；裸 wire 名在 legacyPresent=false 时无命中会
+    // ModelRefError，故宿主缺省不再存 wire。展示面（selfCard / delta）仍用 wire。
     const model = member.model ?? this.model;
     if (!model) {
       throw new Error(`member runtime model is required: ${member.id}`);
     }
+    // 显式 pin 展示原值（与旧行为字节等价）；缺省继承展示宿主 wire 快照。
+    const displayModel = member.model ?? this.modelWire ?? model;
 
     const surface = this.buildSurface(member);
     const mode = surface.mode;
@@ -1099,7 +1122,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
     }
     for (const tool of surface.tools) pluginHost.registerTool(tool);
 
-    const selfCard = this.buildSelfCard(member, model, surface.tools);
+    const selfCard = this.buildSelfCard(member, displayModel, surface.tools);
     // 0.52：Self Card 是构造期只读快照 —— 基础信息改了不能热替换它（那是 system 前缀，
     // 变一次就让整段历史缓存失效）。改成「增量告知」：这具 body 自带一个真值盒（此刻 =
     // 这张卡），`AgentService.update` 时推进；hook 每轮 diff「模型相信的值」与它，变了就
@@ -1107,15 +1130,18 @@ export class MemberExecutionHost implements MemberExecutionPort {
     const selfCardIdentity = { member };
     pluginHost.registerHook(
       createSelfCardDeltaHook({
-        // 基线 / 真值都用**有效 model**（显式 pin ?? 宿主缺省），与 Self Card 同口径：
-        // 记录缺省跟随 config 后 record.model 多为 undefined，若按记录值做基线，
+        // 基线 / 真值都用**有效展示 model**（显式 pin ?? 宿主缺省 wire），与 Self Card
+        // 同口径：记录缺省跟随 config 后 record.model 多为 undefined，若按记录值做基线，
         // 卡显示 X 而相信值是 (none)，之后设 pin 会误报「(none) → X」。
-        baseline: selfCardIdentityOf({ ...member, model }, mode),
+        baseline: selfCardIdentityOf({ ...member, model: displayModel }, mode),
         // 权限档每轮现算：Team 成员在 `forceBridgeForTeams` 下会被强制 bridge，是「进队 /
         // 转正」直接改出来的身份变化，不能只报 team 那一行。
         current: () =>
           selfCardIdentityOf(
-            { ...selfCardIdentity.member, model: selfCardIdentity.member.model ?? this.model },
+            {
+              ...selfCardIdentity.member,
+              model: selfCardIdentity.member.model ?? this.modelWire ?? this.model,
+            },
             this.effectivePermissionMode(selfCardIdentity.member),
           ),
         // 整 hook 取最细（不做 per-kind 分裂，见 SelfCardDeltaHookOptions.cadence）：
@@ -1974,8 +2000,11 @@ export class MemberExecutionHost implements MemberExecutionPort {
   noteSelfCardIdentity(member: MemberExecutionMember): number {
     const entry = this.entries.get(member.session_id);
     if (entry === undefined || entry.memberId !== member.id) return 0;
-    // 真值盒存入有效 model（显式 pin ?? 宿主缺省），与 delta 基线 / Self Card 同口径。
-    entry.selfCardIdentity.member = { ...member, model: member.model ?? this.model };
+    // 真值盒存入有效展示 model（显式 pin ?? 宿主缺省 wire），与 delta 基线 / Self Card 同口径。
+    entry.selfCardIdentity.member = {
+      ...member,
+      model: member.model ?? this.modelWire ?? this.model,
+    };
     return 1;
   }
 
