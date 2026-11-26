@@ -144,6 +144,8 @@ export type SettableConfigKey =
   | 'observability.log.format'
   | 'observability.log.time'
   | 'agent.cwd'
+  // q-team-limit-config：Team present 成员上限（YAML agent.team_member_limit）。
+  | 'agent.teamMemberLimit'
   // q-empty-response：空响应兜底（core 设置面；YAML `empty_response`）。
   | 'emptyResponse.enabled'
   | 'emptyResponse.seamless'
@@ -199,6 +201,7 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
   'observability.log.format': { block: 'observability', subBlock: 'log', yamlKey: 'format' },
   'observability.log.time': { block: 'observability', subBlock: 'log', yamlKey: 'time' },
   'agent.cwd': { block: 'agent', yamlKey: 'cwd' },
+  'agent.teamMemberLimit': { block: 'agent', yamlKey: 'team_member_limit' },
   'emptyResponse.enabled': { block: 'empty_response', yamlKey: 'enabled' },
   'emptyResponse.seamless': { block: 'empty_response', yamlKey: 'seamless' },
   'emptyResponse.maxRetries': { block: 'empty_response', yamlKey: 'max_retries' },
@@ -265,6 +268,14 @@ export async function setUserConfigValue(
   }
   if (key === 'agent.cwd' && (typeof value !== 'string' || value.trim() === '')) {
     throw new Error(`invalid_path: ${JSON.stringify(value)}`);
+  }
+  // q-team-limit-config：与 config validator / serve config.set 同形状同界
+  // （正整数 ≥1，无人为上限）。构造期注入，写后需重启生效。
+  if (
+    key === 'agent.teamMemberLimit' &&
+    (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)
+  ) {
+    throw new Error(`invalid_number: ${key}=${JSON.stringify(value)} (integer >= 1)`);
   }
   // q-kanban-proxy：与 config validator 同界（非空字符串）；~ 展开 / 相对 cwd
   // 解析在装配层（与启动装配同一表达式），这里不做路径存在性校验。

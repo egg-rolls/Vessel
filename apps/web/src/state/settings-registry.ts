@@ -229,6 +229,16 @@ const CORE_SETTING_SPECS: readonly CoreSettingSpec[] = [
   { key: 'emptyResponse.seamless', type: 'boolean', default: 'true', fallback: 'true' },
   { key: 'emptyResponse.maxRetries', type: 'number', min: 0, max: 10, default: '2', fallback: '2' },
   { key: 'emptyResponse.nudge', type: 'string' },
+  // q-team-limit-config：Team present 成员上限（缺省 100；正整数 ≥1，无人为上限）。
+  // 构造期注入 AgentService，写后需重启生效（desc 注明）。
+  {
+    key: 'agent.teamMemberLimit',
+    type: 'number',
+    min: 1,
+    default: '100',
+    fallback: '100',
+    keywords: ['成员上限', '团队人数', 'team limit', 'team_full'],
+  },
 ];
 
 /** 「常用」curated 清单（§6 + 裁定③：系统信息是默认视觉旗舰键；q-msg-visibility 起为 messageVisibility.system）。 */
@@ -244,6 +254,7 @@ function coreCategory(key: string): string {
   if (key === 'ui.language' || key === 'ui.statusBars') return 'visual';
   if (key.startsWith(LOG_SETTING_PREFIX)) return 'logs';
   if (key.startsWith(EMPTY_RESPONSE_SETTING_PREFIX)) return 'runtime';
+  if (key === 'agent.teamMemberLimit') return 'runtime';
   return 'display';
 }
 

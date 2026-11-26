@@ -212,6 +212,9 @@ export const messages = {
     '每次 run 的重试上限（0–10 整数），无感重调与 nudge 共用。耗尽后优雅终止并落日志注记。',
   'settings.item.emptyResponseNudge.title': '空响应提示文案',
   'settings.item.emptyResponseNudge.desc': '自定义 nudge（以 user 消息注入）。不设置则用内置文案。',
+  'settings.item.teamMemberLimit.title': 'Team 成员上限',
+  'settings.item.teamMemberLimit.desc':
+    '单个 Team 内 present 成员（peer + contractor，含已关闭未离册）的数量上限；正整数 ≥1，缺省 100。超限 spawn 报 team_full。修改后需重启节点生效。',
   'settings.dialog.searchPlaceholder': '搜索设置…（@modified / @plugin:<id> / @local / @user）',
   'settings.dialog.tabUser': '用户',
   'settings.dialog.tabProject': '工作区',

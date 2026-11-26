@@ -219,6 +219,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.emptyResponseNudge.title': 'Empty-response nudge text',
   'settings.item.emptyResponseNudge.desc':
     'Custom nudge injected as a user message. Leave unset to keep the built-in wording.',
+  'settings.item.teamMemberLimit.title': 'Team member limit',
+  'settings.item.teamMemberLimit.desc':
+    'Max present members (peers + contractors, including closed-but-not-departed) per team; positive integer ≥ 1, default 100. Spawns beyond the limit fail with team_full. Requires a node restart to apply.',
   'settings.dialog.searchPlaceholder':
     'Search settings… (@modified / @plugin:<id> / @local / @user)',
   'settings.dialog.tabUser': 'User',
