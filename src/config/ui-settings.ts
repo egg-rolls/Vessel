@@ -350,8 +350,15 @@ export async function setUserConfigValue(
   if (depthColorRange !== undefined) {
     const upperOk =
       typeof value === 'number' &&
-      (depthColorRange.maxExclusive === true ? value < depthColorRange.max : value <= depthColorRange.max);
-    if (typeof value !== 'number' || !Number.isFinite(value) || value < depthColorRange.min || !upperOk) {
+      (depthColorRange.maxExclusive === true
+        ? value < depthColorRange.max
+        : value <= depthColorRange.max);
+    if (
+      typeof value !== 'number' ||
+      !Number.isFinite(value) ||
+      value < depthColorRange.min ||
+      !upperOk
+    ) {
       const upper = depthColorRange.maxExclusive === true ? ')' : ']';
       throw new Error(
         `invalid_number: ${key}=${JSON.stringify(value)} (number in [${depthColorRange.min}, ${depthColorRange.max}${upper})`,

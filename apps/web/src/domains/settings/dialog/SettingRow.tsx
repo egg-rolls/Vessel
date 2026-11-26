@@ -48,6 +48,7 @@ function CommitInput({
   min,
   onCommit,
   placeholder,
+  step,
   value,
 }: {
   disabled: boolean;
@@ -57,6 +58,8 @@ function CommitInput({
   onCommit: (raw: string) => void;
   /** 未配置时的默认值提示（增量⑤：默认值体现在控件上，不写在说明文本里）。 */
   placeholder?: string;
+  /** number 步进（depth-color float 键 = 'any'；缺省浏览器默认 1 = 旧键整数步进）。 */
+  step?: number | 'any';
   value: string;
 }) {
   const [draft, setDraft] = useState(value);
@@ -76,6 +79,7 @@ function CommitInput({
       disabled={disabled}
       min={min}
       max={max}
+      {...(step !== undefined ? { step } : {})}
       placeholder={placeholder}
       value={draft}
       onFocus={() => setFocused(true)}
@@ -217,6 +221,7 @@ export function SettingRow({
         min={def.min}
         onCommit={(raw) => onSave(def, raw)}
         placeholder={baseline}
+        {...(def.type === 'number' && def.float === true ? { step: 'any' as const } : {})}
         value={configured ? value : ''}
       />
     );

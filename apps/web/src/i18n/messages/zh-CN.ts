@@ -212,6 +212,29 @@ export const messages = {
     '每次 run 的重试上限（0–10 整数），无感重调与 nudge 共用。耗尽后优雅终止并落日志注记。',
   'settings.item.emptyResponseNudge.title': '空响应提示文案',
   'settings.item.emptyResponseNudge.desc': '自定义 nudge（以 user 消息注入）。不设置则用内置文案。',
+  // depth-color：会话卡地址子标题树深度配色（视觉分类 depthColor 子分组）。
+  'settings.group.depthColor': '深度配色',
+  'settings.item.depthColorEnabled.title': '按树深度着色',
+  'settings.item.depthColorEnabled.desc':
+    '会话卡地址子标题（name@node:team）按 agent 树深度轮转色相（根=0，每层+1）；关闭后全部回主题强调色。退役身体 / primary 徽标保持灰档（状态语义优先）。',
+  'settings.item.depthColorRootHue.title': '根色相',
+  'settings.item.depthColorRootHue.desc':
+    '根（深度 0）地址的色相，度 [0, 360)。默认 172.6 = 现品牌强调色色相（亮色档零回归）。',
+  'settings.item.depthColorHueStep.title': '每层色相步进',
+  'settings.item.depthColorHueStep.desc':
+    '每深一层色相增量，度 [0, 360]。默认 137.508 ≈ 黄金角（360/φ²）：无理旋转永不精确重复，无限轮转不饱和；0/360 = 不轮转（单色）。',
+  'settings.item.depthColorLightnessLight.title': '亮色亮度（OKLCH L）',
+  'settings.item.depthColorLightnessLight.desc':
+    '亮色档感知亮度 [0.30, 0.51]；上界由 WCAG 对比度实证锁定（全色相 ≥4.5:1）。默认 0.4714 = 现强调色精确 L。',
+  'settings.item.depthColorChromaLight.title': '亮色色度（OKLCH C）',
+  'settings.item.depthColorChromaLight.desc':
+    '亮色档色度 [0, 0.37]；超 gamut 部分浏览器自动降色度（保亮度/色相）。默认 0.0887 = 现强调色精确 C。',
+  'settings.item.depthColorLightnessDark.title': '暗色亮度（OKLCH L）',
+  'settings.item.depthColorLightnessDark.desc':
+    '暗色档感知亮度 [0.73, 0.95]；下界由全色度值域 WCAG 对比度实证锁定（≥4.5:1）。默认 0.85（区分度优先）。',
+  'settings.item.depthColorChromaDark.title': '暗色色度（OKLCH C）',
+  'settings.item.depthColorChromaDark.desc':
+    '暗色档色度 [0, 0.37]；默认 0.13。色度越高轮转色越鲜艳，超 gamut 色相自动降色度。',
   'settings.dialog.searchPlaceholder': '搜索设置…（@modified / @plugin:<id> / @local / @user）',
   'settings.dialog.tabUser': '用户',
   'settings.dialog.tabProject': '工作区',
@@ -2134,6 +2157,16 @@ export const messages = {
     '左起：发送纸飞机（16px）、回形针（14px，墨迹与纸飞机同占地）、禁用态发送键。把鼠标停在可用的两颗上看 hover 档 —— 盒子不变，只有图标颜色变。',
   'designLab.preview.composerIcon.sampleLabel': '样例 {tone} 图标按钮',
   'designLab.preview.composerIcon.title': 'Composer 图标按钮',
+  'designLab.preview.depthColor.title': '深度色板',
+  'designLab.preview.depthColor.desc':
+    '会话卡地址子标题的树深度配色：色相 = (根色相 + 深度 × 步进) mod 360（黄金角轮转，无限不饱和），OKLCH 固定 L/C、浏览器原生 gamut 映射。读当前设置；两行分别是亮/暗档（深度 0–9），调参前后在此可视对比。',
+  'designLab.preview.depthColor.lightRow': '亮色档',
+  'designLab.preview.depthColor.darkRow': '暗色档',
+  'designLab.preview.depthColor.depthLabel': '深度 {depth}',
+  'designLab.preview.depthColor.params':
+    '根色相 {rootHue}° · 步进 {hueStep}° · L/C 亮 {lLight}/{cLight} · 暗 {lDark}/{cDark}',
+  'designLab.preview.depthColor.disabled': '深度配色已关闭（地址档全部用主题强调色）',
+  'designLab.preview.depthColor.swatchLabel': '深度 {depth}，色相 {hue}°',
   'designLab.preview.confirm.body': '样例文案：确认后只关掉弹窗，不发起任何请求。',
   'designLab.preview.confirm.dangerBody': '样例文案：危险色主按钮，需要用户明确确认。',
   'designLab.preview.confirm.dangerConfirm': '删除',

@@ -78,8 +78,8 @@ export {
 export {
   canTransition,
   type MemberRecord,
-  memberDepths,
   MemberRegistry,
+  memberDepths,
   toMemberStatus,
   toPersistedRecord,
   toRuntimeMember,

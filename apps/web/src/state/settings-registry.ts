@@ -39,6 +39,10 @@ export interface SettingDef {
   /** number 边界（spec minimum/maximum）。 */
   min?: number;
   max?: number;
+  /** number 键接受浮点（depth-color D7；缺省 false = 整数，旧键行为不变）。 */
+  float?: boolean;
+  /** max 为开区间上界（depth-color rootHue ∈ [0,360)；与 serve config.set 同口径）。 */
+  maxExclusive?: boolean;
   /** 契约默认值（@modified 判定 + 恢复默认）；缺省 = 无默认可回，不显示 ↺。 */
   default?: string;
   /** 未配置时的显示值（真实缺省行为）。 */
@@ -84,6 +88,9 @@ export const LOG_SETTING_PREFIX = 'observability.log.';
 /** 空响应兜底键前缀（运行期 core 分类）。 */
 export const EMPTY_RESPONSE_SETTING_PREFIX = 'emptyResponse.';
 
+/** 树深度配色键前缀（depth-color；视觉分类）。 */
+export const DEPTH_COLOR_SETTING_PREFIX = 'ui.depthColor.';
+
 /**
  * 核心键的 legacy 短 id（旧 DISPLAY_SETTINGS.id / i18n 后缀）：
  * ui.* / observability.showProcessErrors 取末段；log.* → log<Level>；
@@ -93,6 +100,8 @@ export function coreShortId(key: string): string {
   for (const [prefix, stem] of [
     [LOG_SETTING_PREFIX, 'log'],
     [EMPTY_RESPONSE_SETTING_PREFIX, 'emptyResponse'],
+    // depth-color：depthColor<Enabled/RootHue/…>，避免末段 'enabled' 这类泛化 id 碰撞。
+    [DEPTH_COLOR_SETTING_PREFIX, 'depthColor'],
   ] as const) {
     if (key.startsWith(prefix)) {
       const rest = key.slice(prefix.length);
@@ -116,6 +125,10 @@ interface CoreSettingSpec {
   options?: readonly string[];
   min?: number;
   max?: number;
+  /** number 键接受浮点（depth-color D7；缺省 false = 整数）。 */
+  float?: boolean;
+  /** max 开区间上界（与 serve config.set maxExclusive 同口径）。 */
+  maxExclusive?: boolean;
   default?: string;
   fallback?: string;
   /** 分类内子分组（SettingDef.group）。 */
@@ -229,6 +242,85 @@ const CORE_SETTING_SPECS: readonly CoreSettingSpec[] = [
   { key: 'emptyResponse.seamless', type: 'boolean', default: 'true', fallback: 'true' },
   { key: 'emptyResponse.maxRetries', type: 'number', min: 0, max: 10, default: '2', fallback: '2' },
   { key: 'emptyResponse.nudge', type: 'string' },
+  // depth-color（用户裁定 D1-D7）：会话卡地址子标题树深度配色七键，归视觉分类的
+  // 「深度配色」子分组（与 messageVisibility 子分组同构）。缺省即现状锚点：
+  // light depth0 逐字节 = 现 accent-ink（零回归）；L 值域 = WCAG 对比度护栏
+  // （dark 下界 0.73 由全 C 值域压力实证锁定，见 state/depth-color.ts）。
+  {
+    key: 'ui.depthColor.enabled',
+    type: 'boolean',
+    default: 'true',
+    fallback: 'true',
+    group: 'depthColor',
+    keywords: ['深度', '层级', 'depth', '配色', 'color', '色相'],
+  },
+  {
+    key: 'ui.depthColor.rootHue',
+    type: 'number',
+    float: true,
+    min: 0,
+    max: 360,
+    maxExclusive: true,
+    default: '172.6',
+    fallback: '172.6',
+    group: 'depthColor',
+    keywords: ['根色相', 'root hue', '色相', 'hue', '品牌', '黄金角'],
+  },
+  {
+    key: 'ui.depthColor.hueStep',
+    type: 'number',
+    float: true,
+    min: 0,
+    max: 360,
+    default: '137.508',
+    fallback: '137.508',
+    group: 'depthColor',
+    keywords: ['步进', '黄金角', 'golden', '轮转', 'step', '色相'],
+  },
+  {
+    key: 'ui.depthColor.lightnessLight',
+    type: 'number',
+    float: true,
+    min: 0.3,
+    max: 0.51,
+    default: '0.4714',
+    fallback: '0.4714',
+    group: 'depthColor',
+    keywords: ['亮度', 'lightness', 'OKLCH', 'light', '亮色'],
+  },
+  {
+    key: 'ui.depthColor.chromaLight',
+    type: 'number',
+    float: true,
+    min: 0,
+    max: 0.37,
+    default: '0.0887',
+    fallback: '0.0887',
+    group: 'depthColor',
+    keywords: ['色度', 'chroma', '饱和度', 'light', '亮色'],
+  },
+  {
+    key: 'ui.depthColor.lightnessDark',
+    type: 'number',
+    float: true,
+    min: 0.73,
+    max: 0.95,
+    default: '0.85',
+    fallback: '0.85',
+    group: 'depthColor',
+    keywords: ['亮度', 'lightness', 'OKLCH', 'dark', '暗色'],
+  },
+  {
+    key: 'ui.depthColor.chromaDark',
+    type: 'number',
+    float: true,
+    min: 0,
+    max: 0.37,
+    default: '0.13',
+    fallback: '0.13',
+    group: 'depthColor',
+    keywords: ['色度', 'chroma', '饱和度', 'dark', '暗色'],
+  },
 ];
 
 /** 「常用」curated 清单（§6 + 裁定③：系统信息是默认视觉旗舰键；q-msg-visibility 起为 messageVisibility.system）。 */
@@ -242,6 +334,8 @@ const CORE_COMMON: ReadonlySet<string> = new Set([
 
 function coreCategory(key: string): string {
   if (key === 'ui.language' || key === 'ui.statusBars') return 'visual';
+  // depth-color：与 local.theme / designLab 同视觉分类（depthColor 子分组）。
+  if (key.startsWith(DEPTH_COLOR_SETTING_PREFIX)) return 'visual';
   if (key.startsWith(LOG_SETTING_PREFIX)) return 'logs';
   if (key.startsWith(EMPTY_RESPONSE_SETTING_PREFIX)) return 'runtime';
   return 'display';
@@ -272,6 +366,8 @@ export const CORE_SETTINGS: readonly SettingDef[] = CORE_SETTING_SPECS.map((spec
     options: spec.options,
     min: spec.min,
     max: spec.max,
+    ...(spec.float !== undefined ? { float: spec.float } : {}),
+    ...(spec.maxExclusive !== undefined ? { maxExclusive: spec.maxExclusive } : {}),
     default: spec.default,
     fallback: spec.fallback,
     keywords: [shortId, snakeCase(shortId), ...(spec.keywords ?? [])],
