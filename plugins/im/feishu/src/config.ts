@@ -60,6 +60,7 @@ export function resolveFeishuConfig(
     throw configError('feishu.mention_policy must be "mention-only" or "all"');
   }
 
+  // P1-A6（D2=b）：sessionPrefix 已 deprecated（无运行时消费）；保留校验兼容旧 yaml，下个大版本删除。
   const sessionPrefix = config.sessionPrefix ?? 'feishu';
   if (
     sessionPrefix === '' ||

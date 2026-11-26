@@ -19,6 +19,7 @@ export interface FeishuConfig {
   mentionPolicy?: 'mention-only' | 'all';
   /** 收到消息是否点 👀 reaction 回执（P1-A4，D4；默认 true；无权限静默降级）。 */
   ackReaction?: boolean;
+  /** @deprecated P1-A6（D2=b）：无运行时消费；保留校验兼容旧 yaml，下个大版本删除。 */
   sessionPrefix?: string;
   replyTimeoutMs?: number;
   maxReplyChars?: number;
@@ -35,6 +36,7 @@ export interface ResolvedFeishuConfig {
   allowedUserIds: string[];
   mentionPolicy: 'mention-only' | 'all';
   ackReaction: boolean;
+  /** @deprecated P1-A6：无运行时消费，仅保留兼容。 */
   sessionPrefix: string;
   replyTimeoutMs: number;
   maxReplyChars: number;

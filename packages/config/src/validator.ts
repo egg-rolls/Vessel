@@ -830,7 +830,11 @@ function validateFederation(
 }
 
 /** 校验 feishu 块（0.4；0.4 已移除单 agent_id） */
-function validateFeishu(feishu: FeishuConfig, errors: ConfigValidationError[]): void {
+function validateFeishu(
+  feishu: FeishuConfig,
+  errors: ConfigValidationError[],
+  warnings: ConfigValidationWarning[],
+): void {
   const {
     enabled,
     appId,
@@ -916,6 +920,18 @@ function validateFeishu(feishu: FeishuConfig, errors: ConfigValidationError[]): 
     errors.push({
       path: 'feishu.sessionPrefix',
       message: 'feishu.sessionPrefix must be non-empty without ":" or path separators',
+      value: sessionPrefix,
+    });
+  }
+  // P1-A6（D2=b）：sessionPrefix 已无运行时消费（成员寻址由 id feishu_<chat_id> 承担），
+  // 标 deprecated；保留校验以兼容旧 yaml，下个大版本删除。
+  if (sessionPrefix !== undefined) {
+    warnings.push({
+      path: 'feishu.sessionPrefix',
+      message:
+        'feishu.session_prefix is deprecated and has no runtime effect (member addressing uses ' +
+        'id feishu_<chat_id>); it is kept for backward compatibility and will be removed in the ' +
+        'next major version. Remove it from your config.',
       value: sessionPrefix,
     });
   }
@@ -3918,7 +3934,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   // 校验 0.4 块；块缺省时不做任何事（保持 0.3 行为）。
   if (config.evals) validateEvals(config.evals, errors);
   if (config.kanban) validateKanban(config.kanban, errors);
-  if (config.feishu) validateFeishu(config.feishu, errors);
+  if (config.feishu) validateFeishu(config.feishu, errors, warnings);
   if (config.observability) validateObservability(config.observability, errors);
 
   // 校验 ui（0.8.5 language；0.11 clearOnStart）

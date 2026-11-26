@@ -70,7 +70,7 @@ feishu:
 | `allowed_user_ids` | `[]` | **（P1 新增）** 发言人 open_id 白名单；空 = 不限。见 §7 |
 | `mention_policy` | `mention-only` | **（P1 新增，行为变更）** 群聊响应策略：`mention-only` 只响应 @ 机器人；`all` 响应全部群消息（需 `im:message.group_msg`）。见 §8 |
 | `ack_reaction` | `true` | **（P1 新增）** 收到消息是否点 👀 reaction；权限错误静默降级 |
-| `session_prefix` | `feishu` | **（P1 起 deprecated）** 历史会话前缀，仅保留兼容，新配置勿用 |
+| `session_prefix` | `feishu` | **（P1 起 deprecated，下个大版本删除）** 历史会话前缀，无运行时作用，仅保留兼容；新配置勿用，旧配置建议移除 |
 | `reply_timeout_ms` | `300000` | 单次回复超时（ms），超时发超时文案 |
 | `max_reply_chars` | `4000` | 回复截断长度（超长带 `…(truncated)` 后缀） |
 | `max_members` | `8` | 保留的 chat 成员上限（1..64） |
@@ -126,7 +126,7 @@ vessel start --feishu  # 启动飞书渠道（可与 --serve / REPL 同用）
   - **兜底配置**：`feishu.mention_policy: all` 恢复旧行为（需 `im:message.group_msg` 权限）。
   - 升级后「群里 bot 不说话」：先确认是否 @ 了机器人；确需旧行为再设 `mention_policy: all`。
 - **app_secret_env 口径统一（bug 修复）**：旧版本启动路径「显式 app_secret 优先」与 doctor「env[app_secret_env] 优先」分裂——两者并存时 doctor 全绿但启动用了另一个 secret。P1 统一为 doctor 优先序：`VESSEL_FEISHU_APP_SECRET` > `env[app_secret_env]` > `app_secret`。
-- **session_prefix deprecated**：保留校验与兼容，新配置勿用；成员寻址由 id（`feishu_<chat_id>`）承担。
+- **session_prefix deprecated（下个大版本删除）**：无运行时作用（成员寻址由 id `feishu_<chat_id>` 承担）；保留校验以兼容旧 yaml（不炸旧配置），配置仍写它时 `vessel doctor` / 加载会给出 deprecated 警告；新配置勿用，建议移除。
 - **新增字段**：`allowed_user_ids` / `mention_policy` / `ack_reaction`（见 §3）；旧版本写入会被按未知键拒绝。
 
 ## 9. 故障排查

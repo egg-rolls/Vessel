@@ -405,7 +405,7 @@ export interface FeishuConfig {
   mentionPolicy?: 'mention-only' | 'all';
   /** 收到消息点 👀 reaction 回执（P1-A4，D4；默认 true；无权限静默降级） */
   ackReaction?: boolean;
-  /** session = <prefix>:<chat_id>（默认 feishu） */
+  /** @deprecated P1-A6（D2=b）：无运行时消费（成员寻址由 id feishu_<chat_id> 承担）；保留校验兼容旧 yaml，下个大版本删除。 */
   sessionPrefix?: string;
   /** 单次回复超时毫秒（默认 300000；1..86400000） */
   replyTimeoutMs?: number;

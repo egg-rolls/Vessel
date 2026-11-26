@@ -26,6 +26,7 @@ export interface ResolvedFeishuOptions {
   allowedUserIds: string[];
   mentionPolicy: 'mention-only' | 'all';
   ackReaction: boolean;
+  /** @deprecated P1-A6（D2=b）：无运行时消费，仅保留兼容，下个大版本删除。 */
   sessionPrefix: string;
   replyTimeoutMs: number;
   maxReplyChars: number;
