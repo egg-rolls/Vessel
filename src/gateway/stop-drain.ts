@@ -18,7 +18,7 @@
 
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { createHttpRpcClient } from '../rpc/http-client';
+import { createHttpRpcClient, isRpcConnectionRefused } from '../rpc/http-client';
 import { type GatewayPidRecord, isProcessAlive } from './pid';
 import { gatewayBaseUrl } from './reload';
 
@@ -64,10 +64,14 @@ export interface WaitForProcessExitOptions {
    * 这一段：node 退出序列硬顺序 beginDrain → gateway.stop，quiesce 后进程应秒退；
    * 退出链挂死（ISSUE-DR15-1）时不该让停止方无限干等。
    *
-   * quiesce 证据（停止方读不到 node 的 drain.done，用采样推断）：
+   * quiesce 证据（停止方读不到 node 的 drain.done，用采样推断）——**要求阳性**
+   * （SD-4：任何采样失败都当「drain 必已完成」会在 401 / 事件循环过载 / 网络抖动
+   * 时把仍在跑的 run 误判成已 drain → 30s 强杀）：
    * - 采样成功且 live run = 0（fence 已关闸，live 集合只减不增）；
-   * - 采样失败（快照不可用）：本地 stop 回环连接失败 = 监听已闭，而监听只在
-   *   beginDrain 完成**之后**才关（gateway.stop）⇒ drain 必已完成。
+   * - 采样失败且**专属连接拒绝**（ECONNREFUSED / Bun ConnectionRefused）：本地
+   *   stop 回环连接被拒 = 监听已闭，而监听只在 beginDrain 完成**之后**才关
+   *   （gateway.stop）⇒ drain 必已完成。
+   * - 401 / 超时 / 其它失败**不是**证据：不计入强杀时钟（时钟重置，等下一次阳性）。
    * 证据持续满本预算进程仍活 → 返回 `quiesceTimedOut:true`，调用方 force-kill
    * 兜底 + stop.forced 审计（此时已无 live run，runs_cut 恒 0）。
    */
@@ -93,9 +97,10 @@ function sleepDefault(ms: number): Promise<void> {
  * progressIntervalMs 采样 live run 并回调 onProgress（采样失败标注不可用）。
  * 进程死亡立即返回 `{ dead:true }`。
  *
- * DR15-1：启用 postQuiesceTimeoutMs 后，quiesce 证据（0 live run / 快照不可用）
- * 持续满预算进程仍活 → 返回 quiesceTimedOut（调用方 force 兜底 + 审计）；
- * 采样到 live run > 0 重置时钟 —— 候 run 段不限时红线不动。
+ * DR15-1：启用 postQuiesceTimeoutMs 后，quiesce **阳性**证据（成功采样 0 live run /
+ * 专属连接拒绝 = 监听已闭）持续满预算进程仍活 → 返回 quiesceTimedOut（调用方 force
+ * 兜底 + 审计）；采样到 live run > 0 重置时钟 —— 候 run 段不限时红线不动。
+ * SD-4：401 / 超时 / 其它采样失败不是证据，不计入强杀时钟（重置，等下一次阳性）。
  */
 export async function waitForProcessExit(
   pid: number,
@@ -124,11 +129,14 @@ export async function waitForProcessExit(
       nextProgressAt = at + interval;
       let runs: DrainRun[] = [];
       let unavailable = false;
+      /** SD-4：失败是否专属连接拒绝（监听已闭）—— 唯一可作阳性证据的失败。 */
+      let listenerClosed = false;
       if (options.sampleRuns !== undefined) {
         try {
           runs = await options.sampleRuns();
-        } catch {
+        } catch (error) {
           unavailable = true;
+          listenerClosed = isRpcConnectionRefused(error);
         }
       } else {
         unavailable = true;
@@ -137,12 +145,16 @@ export async function waitForProcessExit(
         if (!unavailable && runs.length > 0) {
           // 候 run 段：还有活就重置时钟，继续不限时等（用户裁定 #5 红线）。
           quiesceSince = undefined;
-        } else {
-          // quiesce 证据：0 live run，或快照不可用（监听闭 ⟹ drain 毕，见选项注释）。
+        } else if (!unavailable || listenerClosed) {
+          // quiesce 阳性证据：成功采样 0 live run，或专属连接拒绝（监听闭 ⟹ drain 毕）。
           quiesceSince ??= at;
           if (at - quiesceSince >= postQuiesceMs) {
             return { dead: false, timedOut: false, quiesceTimedOut: true };
           }
+        } else {
+          // SD-4：401 / 超时 / 其它失败不是证据 —— 不计入强杀时钟，重置等下一次阳性。
+          // （无采样器时同口径：没有阳性证据就不推断 drain 完成，宁可不强杀。）
+          quiesceSince = undefined;
         }
       }
       if (options.onProgress !== undefined) {
