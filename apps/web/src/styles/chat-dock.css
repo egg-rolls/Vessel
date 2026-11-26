@@ -56,8 +56,8 @@
   padding-bottom: 6px;
 }
 
-/* 焦点环只由 `.composer-field:focus-within` 承担（整块「输入 + 工具栏」），
-   输入框自身不再画环，避免双层。 */
+/* 焦点环只由 `.composer-field:has(.composer-input:focus)` 承担（「正在输入」整块；
+   工具栏按钮聚焦不点亮，用户验收③），输入框自身不再画环，避免双层。 */
 
 .composer-input:focus,
 .composer-input:focus-visible {

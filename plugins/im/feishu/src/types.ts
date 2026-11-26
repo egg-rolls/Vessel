@@ -13,6 +13,13 @@ export interface FeishuConfig {
   domain?: 'feishu' | 'lark';
   /** 空 = 机器人所在的所有群/单聊。 */
   allowedChatIds?: string[];
+  /** 发言人 open_id 白名单（P1-A5，D3=a）；空 = 不限（向后兼容），非空仅列表内可驱动 agent。 */
+  allowedUserIds?: string[];
+  /** 群聊 @ 策略（P1-A3，D6）：mention-only 只响应 @ 机器人（默认）；all 响应全部群消息。 */
+  mentionPolicy?: 'mention-only' | 'all';
+  /** 收到消息是否点 👀 reaction 回执（P1-A4，D4；默认 true；无权限静默降级）。 */
+  ackReaction?: boolean;
+  /** @deprecated P1-A6（D2=b）：无运行时消费；保留校验兼容旧 yaml，下个大版本删除。 */
   sessionPrefix?: string;
   replyTimeoutMs?: number;
   maxReplyChars?: number;
@@ -26,6 +33,10 @@ export interface ResolvedFeishuConfig {
   appSecret: string;
   domain: 'feishu' | 'lark';
   allowedChatIds: string[];
+  allowedUserIds: string[];
+  mentionPolicy: 'mention-only' | 'all';
+  ackReaction: boolean;
+  /** @deprecated P1-A6：无运行时消费，仅保留兼容。 */
   sessionPrefix: string;
   replyTimeoutMs: number;
   maxReplyChars: number;
@@ -48,6 +59,14 @@ export interface FeishuChannel {
   status(): FeishuStatus;
 }
 
+/** 群聊 @ 提及（P1-A3）：key 为文本占位符（如 @_user_1），mentionedType 区分 user/bot。 */
+export interface FeishuMention {
+  key: string;
+  name?: string;
+  openId?: string;
+  mentionedType?: string;
+}
+
 export interface FeishuIncomingMessage {
   messageId: string;
   chatId: string;
@@ -59,6 +78,10 @@ export interface FeishuIncomingMessage {
   /** 原始 content JSON。 */
   content: string;
   createTime?: number;
+  /** 发言人 open_id（P1-A3 additive；群聊发言人前缀与白名单用）。 */
+  senderId?: string;
+  /** @ 提及数组（P1-A3 additive；占位符清洗与 mention-only 判定用）。 */
+  mentions?: FeishuMention[];
 }
 
 export interface FeishuTransportHandlers {
@@ -75,6 +98,11 @@ export interface FeishuTransport {
   stop(): Promise<void>;
   /** im.message.reply 到原消息。 */
   reply(input: { messageId: string; chatId: string; text: string }): Promise<void>;
+  /**
+   * im.messageReaction.create 表情回执（P1-A4，可选）。
+   * 无权限/失败由渠道静默降级；mock transport 可不实现。
+   */
+  react?(input: { messageId: string; emojiType: string }): Promise<void>;
 }
 
 export interface FeishuPluginOptions {
@@ -108,6 +136,8 @@ export interface FeishuPluginOptions {
   transport?: FeishuTransport;
   /** 环境变量覆盖（默认 process.env；测试注入）。 */
   env?: Record<string, string | undefined>;
+  /** 三态文案语言（P1-A4，D4）；装配层按节点 i18n 注入，缺省 zh-CN。 */
+  locale?: 'zh-CN' | 'en';
 }
 
 export interface FeishuPlugin extends Plugin, FeishuChannel {

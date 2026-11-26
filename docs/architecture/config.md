@@ -62,9 +62,11 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `gateway.web_dist` | 平台静态托管的 Web 产物目录（q-config-priority 用户裁定#2）。责任链：显式 `gateway.web_dist` > `VESSEL_STATIC_DIR` env > 仓库内 `apps/web/dist`；启动期键（重启生效），`index.html` 缺失 fail-fast，自动构建不碰显式目录。见 [operations/CONFIG.md §2.20.2](../operations/CONFIG.md) |
 | `tools_engine.mode` / `gateway.engine_pool.*` | 工具执行双路双开关（[ADR-106](../adr/ADR-106-engine-pool.md)，缺省关零回归）：`mode: child`（缺省，per-node stdio 子进程）\| `pool`（共享池直连，需池存在）；`engine_pool.size`（0/缺省=不建池；1=fail-fast；开时 ≥2）/ `max_inflight`（缺省 cpus×4）/ `rss_soft_limit_mb` / `instance`（poolDir = `~/.vessel/engine-pool[-<instance>]`，**不随 data_dir 移动**，隔离实例必设）。执行现态见 [tools.md](tools.md#engine-exec) |
 | `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 true（0.24；显式 false 关闭）/ `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
-| `feishu.enabled` / `app_id` / `app_secret` / `domain` / `allowed_chat_ids` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝** |
+| `feishu.enabled` / `app_id` / `app_secret` / `app_secret_env` / `domain` / `allowed_chat_ids` / `allowed_user_ids` / `mention_policy` / `ack_reaction` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 可覆盖；secret 优先序 `VESSEL_FEISHU_APP_SECRET` > `env[app_secret_env]` > `app_secret`（doctor 同口径）；`allowed_user_ids` 空=不限；`mention_policy` 默认 mention-only（D6 breaking）；`session_prefix` deprecated（无运行时作用，下个大版本删）；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝**；连接指南 [FEISHU.md](../../plugins/im/feishu/FEISHU.md) |
 | `observability.event_history` / `metrics` | `event_history` 缺省 1000，显式 0 = 不限制，>0 = 环形缓冲；块缺省时不注入 metrics，块存在时 `metrics` 默认 true |
 | `observability.log.level` / `modules` / `color` / `format` / `time` | 进程级日志中枢（core `log-hub.ts`）：`level` 缺省 info；`modules` 是事件名前缀→级别（最长前缀匹配，按点分段；**键是事件名**，loader 不做 snake→camel 改写）；`color` auto/always/never（缺省 auto）；`format` pretty/json（缺省 pretty）；`time` auto/none/clock/iso（缺省 auto：TTY clock、落盘 iso）。启动应用 + config-watch 热应用（差异行进 `runtime.notice`，不新增 RPC scope）；WebUI Settings「日志（gateway）」分组经 `config.set` 写四个标量键，`modules` 一期只读。日志口径见 [operations/LOGS](../operations/LOGS.md) |
+| `models.default` / `models.credentials` / `models.entries` | 模型注册表两面形状（见下节）：凭证面（认证端点元数据）+ 模型面（扁平条目）；旧 `vendors` / `aliases` 块已删除（一次性迁移） |
+| `pricing.models.<wire>` | legacy / 未注册 wire 模型的价格兜底表；注册模型价格唯一源 = `models.entries.<id>.pricing`（合并视图按 wire 名覆盖，见下节） |
 
 `observability.log` 的优先级（高→低）：`VESSEL_DEBUG`（非空强制 debug）> `VESSEL_LOG_LEVEL` >
 `VESSEL_RUN_TIMING=1`（仅 `run.timing` / `run.llm.gap` 强制 debug）> config > 默认。
@@ -72,6 +74,62 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 被环境覆盖时 `config show` 与 `config.get`（`logEnvOverrides`）/ WebUI 都给出提示。
 
 `permission.auto_approve`（TS 字段 `autoApprove`）、`permission.never_auto_approve`（TS 字段 `neverAutoApprove`，未配置时有效值 `['agent.close']`）、`plugins[].config` 消费与 `VESSEL_PLUGINS` / `VESSEL_SESSION_BACKEND` / `VESSEL_MODEL` 覆盖（见 `docs/versions/0.6.1.md`）。
+
+### models 块：凭证面 + 模型面（两面重构）
+
+设计真源：外层仓 `docs/dev/design/model-registry-two-face-design.md`（取代上位契约
+`docs/dev/plans/model-registry.md` 的 vendor 实体 / 两段式 ref / 顶层 aliases）。磁盘只有两种
+实体，**无密钥值**（user/project 层可叠、config-watch 热重载）：
+
+```yaml
+models:
+  default: qwen4-max            # 有效默认 ref（别称或条目键），必须命中注册条目
+  credentials:                  # 凭证面：认证端点（可被任意多个模型共享）
+    soulkiller-gw:
+      base_url: https://gw.example.com/v1   # 请求地址*（http(s)；端点随认证走）
+    dashscope:
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key_env: DASHSCOPE_API_KEY        # 可选 env 间接来源；库值优先
+  entries:                      # 模型面：扁平条目（键 = ref 主处理柄）
+    qwen4-max:
+      name: dashscope/qwen4-max # wire 名（缺省 = 条目键）
+      alias: qwen               # 别称：单值、扁平唯一、不撞条目键
+      provider: openai-compatible  # 协议适配（非品牌）；缺省 openai
+      mode: chat                # wire 请求形状；缺省按 provider 推导（anthropic→messages）
+      credential: soulkiller-gw # 访问凭证*（ref → models.credentials）
+      pricing: { input_per_million: 2.0, output_per_million: 8.0 }
+      param: { temperature: 0.7, max_tokens: 8192 }
+      info: { display_name: Qwen4 Max, context_window: 262144 }
+```
+
+- **凭证值**只经 `plugin.model-registry.credential_set` 写入 `<dataDir>/credentials.json`
+  （AES-256-GCM 信封 v1，root-secret 派生 key）；yaml 永不存值。`credential_set` 一次写两处
+  （先库值后 yaml 元数据）；`credentials_list` 回 `hasValue` / `usedBy`，值永不回显。
+- **端点定位** = `entry.provider`（协议适配器）+ `entry.credential → credentials.baseUrl`。
+  规范协议集：`openai` / `openai-compatible` / `anthropic` / `gemini`（= openai 兼容传输别名）；
+  品牌工厂名（google/mistral/ollama/cohere）保留注册供 legacy 兼容，退出注册表 UI。
+  注册条目未知 provider 解析期 fail-fast + 候选；注册模型端点不回落协议默认。
+- **ModelRef 解析**（`packages/config/src/model-registry.ts`）：① 空 ref → 有效默认
+  （`models.default` ?? legacy 合成条目 ?? 协议默认；`VESSEL_MODEL` 赢 `models.default`）
+  ② 别称精确命中 ③ 条目键精确命中 ④ 未命中且 legacyPresent → ref 原样作 wire model 走
+  legacy 合成凭证（P0-1 字节等价）⑤ 未命中且无 legacy → `ModelRefError` + 候选（无 vendor 兜底）。
+- **legacy provider.\* 兼容面保留**：读时折成合成凭证 `legacy:<provider.name>` + 合成条目
+  （键 = `provider.model` 原值）；env 层 / setup 向导 / model-follow 写入口不动。
+- **一次性迁移**（`model-migration.ts`，loader 首载钩子）：用户层 `models.vendors`/`aliases`
+  首载自动迁成 credentials + entries（withConfigLock + `.pre-model-registry.bak` + 写前预校验 +
+  幂等）；同 credential 异端点拆分 + 值重加密复制；wire 全局唯一 → 键 = wire，冲突 → `vid/wire`；
+  多别名字典序首个入 `alias`，其余报告；`pricing.models` 命中 wire 搬入 `entry.pricing`；
+  agent store v5 显式 pin 同批改写。报告落 `<dataDir>/model-registry-migration.json`
+  （`vessel doctor` / `model list` 消费）。项目层旧块不自动迁移：报错 + 手动迁移指引。
+- **param 优先级链**：请求显式（EU/harness）> 会话级 thinking 注入（BeforeLlm requestExtras）
+  > `entry.param` > 全局 `provider.*`。temperature/maxTokens/topP → 构造缺省；extra → 请求期
+  经 `mergeExtraParams` 并入（RESERVED_BODY_KEYS 写前拒绝）；messages 零触碰（append-only）。
+- **价格合并视图**（`usage-pricing.ts`）：`entry.pricing` 按 wire 名覆盖 `pricing.models`
+  同名键；同 wire 多 entry 价格不同 → 确定性取条目键序首个 + 写前 warning（D7 计量合并不变）。
+- **info** 只展示/规划，永不进 wire 请求体；未知键读容忍。
+- 管理面：插件两 tab（凭证 → 模型）+ CLI `vessel model list/set/remove/set-default/
+  credential-set/credential-remove/credentials-list/test`（RPC 8 方法）；WebUI ModelPicker
+  选项 = 别称 + 条目键 + 跟随默认（无自由文本；存量未注册 pin 原样显示 + 标记）。
 
 配置示例：
 
@@ -101,7 +159,7 @@ serve:
 
 - **顶层未知键是 error**（带编辑距离拼写建议），不是 warning——启动即失败，避免配置悄悄无效；`mcp_servers` 内未知名与 `serve.tls` 未知名同样报错。
 - 已知但当前未消费的字段（`agent.name/temperature/maxTokens`、`session.maxHistory`、`guardrails`、`hooks`）给显式 warning，不静默。
-- provider 默认 model 是 provider-aware：只有已登记 provider（当前 `openai`）有默认；未知 provider 必须显式配 `model`。
+- provider 默认 model 是 provider-aware：只有已登记 provider（`openai` / `openai-compatible` / `gemini`）有默认；未知 provider 必须显式配 `model`。
 - `VESSEL_PROVIDER_API_KEY` 可回填顶层 `apiKey`。
 
 **注意**：`vessel.yaml` 的 `tools:` 声明段已删除（连同 `ToolConfig` 类型）。从前"用户在配置里声明一个 shell/http 工具"这条路径没有了——有了 `bash` 之后，加能力就是写文件 + 跑命令。

@@ -12,6 +12,7 @@ import type { Verbosity } from '../../state/visibility';
 import { SESSION_NOT_FOUND_MESSAGE as NOT_FOUND_MESSAGE } from '../../stores/sessionStore';
 import { AgentMessageCard } from './AgentMessageCard';
 import { AskAnswerCard } from './AskAnswerCard';
+import { useAgentNames } from './agent-name-context';
 import type { AnsweredAsk } from './ask-answered';
 import { ChatWelcome } from './ChatWelcome';
 import { ConversationIndex } from './ConversationIndex';
@@ -19,11 +20,17 @@ import { reasoningVisible, toolVisible } from './chat-visibility';
 import { indexEntriesOfItems } from './conversation-index';
 import { EnvCard } from './EnvCard';
 import { NoticeRow } from './EventRow';
-import { isStripCoveredInboxNotice } from './env-notice';
-import { InboxReadCard } from './InboxReadCard';
+import { isStripCoveredInboxNotice, parseSourceAddress } from './env-notice';
 import { PendingBubble } from './PendingBubble';
 import { inConversationStream } from './pending-placement';
 import type { PendingSend } from './pending-sends';
+import {
+  ASK_SOURCE,
+  BASH_SOURCE,
+  HUMAN_SOURCE,
+  SYSTEM_SOURCE,
+  shortSenderId,
+} from './pending-strip';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { RotateHandoffCard } from './RotateHandoffCard';
 import { StreamCard } from './StreamCard';
@@ -51,6 +58,26 @@ import { useStickyBottom } from './useStickyBottom';
 const EARLIER_TRIGGER_PX = 200;
 /** 一页填不满视口时的连续补页上限（避免短会话无限请求）。 */
 const AUTO_PAGE_BUDGET = 20;
+
+/**
+ * inbox read 承接卡的固定标签来源 → 人话（inbox 统一批 §5.2）。
+ *
+ * `ask` / `bash` / `system` 不是「谁说的话」，走工具来源卡（「来自 X」，与 bash 作业
+ * run-input 卡同形）；文案复用条带同一组 i18n（`chat.pending.identity.*`），不新造同义词。
+ * 非固定标签（principal 地址 / 老数据的成员 id）返回 undefined，走 roster 查表分支。
+ */
+function fixedSourceLabel(source: string): string | undefined {
+  switch (source) {
+    case ASK_SOURCE:
+      return t('chat.pending.identity.ask');
+    case BASH_SOURCE:
+      return t('chat.pending.identity.bash');
+    case SYSTEM_SOURCE:
+      return t('chat.pending.identity.system');
+    default:
+      return undefined;
+  }
+}
 
 /**
  * 首屏到货多少条以内算「真的追加」（见 `useEnteringItems`）。
@@ -471,6 +498,10 @@ export function TranscriptWindow({
   // 正文 / 思考 item 的复制入口（`chat.message.copy` 那套），与历史消息同一个 hook。
   const copy = useMessageCopy();
 
+  // roster 名字表（ChatView 注入，无 Provider 时 undefined）：inbox read 承接卡把
+  // principal 地址解析成名字，解析不到退短 id —— 查表不是造名（§5.2 纪律）。
+  const agentNames = useAgentNames();
+
   const renderItem = (item: TranscriptItem): ReactNode => {
     switch (item.kind) {
       case 'run-input':
@@ -494,21 +525,43 @@ export function TranscriptWindow({
             refs={item.refs}
           />
         );
-      case 'inbox-read':
+      case 'inbox-read': {
         // P1-A 症状②承接：被 inbox read 消费的消息（不成为 run input、无回显）在这里
-        // 可见。human 源 = 人自己说的话 → 用户气泡（与 run-input 同口径）；agent / system
-        // 源 → 收件箱消息卡（read 结果只给 source 这一层身份，没有发送者名，不猜不造）。
-        return item.source === 'human' ? (
-          <UserBubble text={item.text} ts={item.ts} entering={isEntering(item.key)} />
-        ) : (
-          <InboxReadCard
-            source={item.source}
+        // 可见。卡片复用（inbox 统一批 §5，平行承接卡已废弃并入）：
+        // - human 源 = 人自己说的话 → 用户气泡（与 run-input 同口径）；
+        // - 固定标签 ask / bash / system → 工具来源卡（「来自 X」，标签人话与条带同一组 i18n）；
+        // - principal 地址（成员 UUID / federation 地址，含老数据 source=成员 id）→
+        //   AgentMessageCard：roster 查表解析名字，解析不到退短 id（绝不摆完整 UUID）；
+        //   原始地址吸入展开体首行（formatAddress 按 ui.addressStyle，A2A 卡同款）。
+        // 「收件箱取走」框定彻底消失 —— inbox 本身就是收件箱，消息卡只报「谁说的」。
+        if (item.source === HUMAN_SOURCE) {
+          return <UserBubble text={item.text} ts={item.ts} entering={isEntering(item.key)} />;
+        }
+        const fixedLabel = fixedSourceLabel(item.source);
+        if (fixedLabel !== undefined) {
+          return (
+            <AgentMessageCard
+              sender={fixedLabel}
+              senderKind="tool"
+              content={item.text}
+              ts={item.ts}
+              defaultOpen={cardsDefaultOpen}
+              entering={isEntering(item.key)}
+            />
+          );
+        }
+        const principal = parseSourceAddress(item.source)?.principal ?? item.source;
+        return (
+          <AgentMessageCard
+            sender={agentNames?.get(principal) ?? shortSenderId(principal)}
             content={item.text}
             ts={item.ts}
+            source={item.source}
             defaultOpen={cardsDefaultOpen}
             entering={isEntering(item.key)}
           />
         );
+      }
       case 'ask-answer':
         // 「待批答复」：数据仍是那条 user 消息，呈现是一张卡（人是在待批页回答的）。
         return <AskAnswerCard card={item.card} ts={item.ts} defaultOpen={cardsDefaultOpen} />;

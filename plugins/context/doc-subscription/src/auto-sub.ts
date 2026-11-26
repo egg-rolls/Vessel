@@ -15,7 +15,7 @@
  *   只有他人再改（rev 不同）才通知（autoSubscribePath / readSubscribePath，tool.ts）。
  * - **覆盖两条执行路**：hook 在 host 侧跑，与 handler 在 in-process 还是 engine worker 无关。
  * - **best-effort**：任何失败静默，不得打断工具流。
- * - 已知局限：相对路径按 config.cwd 解析（AfterTool 无成员 cwd）；成员 cwd 相对路径可能漏订。
+ * - 相对路径按成员实际 cwd 归一化（HookContext.cwd，P1 修洞1）；装配未填时回退 config.cwd（现状）。
  * - 感知只在 run 边界（BeforeLlm 注入，append-only 铁律）；本 hook 不注入任何消息。
  */
 
@@ -39,7 +39,7 @@ export function createAutoSubscribeHook(deps: SubscribeToolDeps): Hook {
       if (record.subscribe === false) return;
       if (ctx.tool === 'read') {
         try {
-          await readSubscribePath(deps, ctx.session_id ?? 'default', record);
+          await readSubscribePath(deps, ctx.session_id ?? 'default', record, ctx.cwd, ctx.agent_id);
         } catch {
           // best-effort：自动订阅失败不得影响工具流
         }
@@ -49,7 +49,11 @@ export function createAutoSubscribeHook(deps: SubscribeToolDeps): Hook {
       const rawPath = typeof record.path === 'string' ? record.path : '';
       if (rawPath.trim() === '') return;
       try {
-        await autoSubscribePath(deps, ctx.session_id ?? 'default', rawPath);
+        await autoSubscribePath(deps, ctx.session_id ?? 'default', rawPath, {
+          tool: ctx.tool,
+          member_id: ctx.agent_id,
+          cwd: ctx.cwd,
+        });
       } catch {
         // best-effort：自动订阅失败不得影响工具流
       }

@@ -1137,7 +1137,14 @@ export class MemberExecutionHost implements MemberExecutionPort {
           isEnabled: () => inboxState.enabled,
           onNotified: ({ runId, unread, pending }) => {
             // 人类可见的提示：模型侧另有一条 `vessel:notice` 尾消息（不含正文）。
-            events.publish({
+            // 事实通道为主（q-card-robust P-A 同构）：经 EU.emitFact → publishEvent →
+            // journal.appendFact → 时间线双写，WebUI 时间线订阅 live 可见＋刷新可回放重建。
+            // 此前直发成员本地裸流（events.publish）只经 appendObserved（runtime.notice 不在
+            // 观察落盘白名单）⇒不进时间线、Web 收不到卡（根因见
+            // docs/dev/plans/envcard-run-visibility-research.md Part II）。publishEvent 内部
+            // publishRaw 仍发裸流⇒父流并入 / bridge 旧订阅兼容保留。runtime 在下方装配创建，
+            // 本回调运行期（EU run 中）才触发，届时已初始化。
+            runtime.emitFact({
               type: 'runtime.notice',
               run_id: runId,
               data: {

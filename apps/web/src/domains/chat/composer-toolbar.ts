@@ -222,6 +222,9 @@ export function useComposerToolbarMenuActions(sessionId?: string): ComposerToolb
         onSelect: () => {},
         menu: {
           items,
+          // pill 前缀标签（用户验收①）：宿主 catalog 提供「思考:」/「Thinking:」，
+          // 与 auto 豁免同在宿主归一层；工具栏 / Select 只认通用 prefix 字段。
+          prefix: t('chat.thinking.label'),
           ...(readState?.current !== undefined ? { current: readState.current } : {}),
           ...(readState?.hint !== undefined ? { hint: readState.hint } : {}),
           onSelect: (value: string) => {

@@ -3,17 +3,19 @@
  *
  * 它回答的是「我这一轮还压着几条输入」，不是队列编辑器。
  *
- * **数据源是服务端持久真相（0.53）**：`agents.inbox{ session_id }`（服务端按归属等值过滤，
- * 前端再用 `ownedBySession` 断一次）。不再读客户端内存里的 `queuedRuns` —— 那是「一份内存、
- * 两处渲染」，刷新 / 切会话就消失；也不再读 agent 维度的全量 inbox —— 那会把「父 agent
- * 发给子成员的消息」串进这条带子。
+ * **数据源是服务端持久真相（0.53 / inbox 统一批 I-1）**：`agents.inbox{ agent_id,
+ * include_held: true }` —— agent 级全量（跨会话，含无 `session_id` 的 wake/quiet 投递）。
+ * 不再读客户端内存里的 `queuedRuns` —— 那是「一份内存、两处渲染」，刷新 / 切会话就消失。
  *
  * 三条硬口径：
- * - **没有 `session_id` 的条目一律不显示**（老条目 / `wake`·`quiet` 投递）：宁可隐藏，
- *   也不把别人的消息串到这条会话上；
+ * - **agent 级全量可见**（用户裁定：inbox 挂载提到 agent 层）：会话等值从「显示闸门」
+ *   降级为「写操作判据」——「收回编辑」仍只对当前会话条目开放（peek 的 `session_id`
+ *   等值断言保留）；逐行归属标注随面板演化补上；
  * - **数据永远来自那次 RPC 读**，事件只当触发器（切会话 / 重连 / 本会话新受理一次发送 /
- *   inbox 变更 live 事件：`inbox read/delete` 消费、新条目入队，见 `useInboxRefresh.ts`），
- *   非空时 2s 兜底轮询（空态零流量）；取数前 250ms debounce，让「发完立刻开跑」的条目
+ *   inbox 变更 live 事件：`inbox read/delete` 消费、新条目入队，**agent 级**判据见
+ *   `../inbox/agent-inbox-refresh.ts`；面板展开也重读一次，D-5/R4），
+ *   零 interval（§6.5 用户理想裁定），兜底面 = resync 点 R1-R7（重连/回可见/全局刷新/
+ *   展开/写后/切换/live 事件）；取数前 250ms debounce，让「发完立刻开跑」的条目
  *   不在条带上闪一下；
  * - 条带只做「还有几条在等」，写入口按来源分档（见下）。
  *
@@ -29,8 +31,8 @@
  *   body 处理掉别人给它的输入），所以 `agents.claim` 在前端**只对 human 源开放**。
  *
  * 这就是 0.53 那条 `from === 'human'` 等值过滤的去向：它当时兼任两件事 ——「别串台」
- * 和「只收人的字」。「别串台」的真判据是 `session_id`（保留，见 `ownedBySession`），
- * 「只收人的字」这一半按上面的分档放开了。
+ * 和「只收人的字」。「别串台」的真判据是 `session_id`（降级为写操作判据，见
+ * `handleTakeBack` 的 peek 等值断言），「只收人的字」这一半按上面的分档放开了。
  *
  * 视觉零改动：卡片仍是 `QueuedNotice`（amber / 满宽 / 单圆点 / actions 槽位 / `onBand`
  * 胶囊），卡头文案是「等待中」（`chat.pending.waiting`）—— 条目没有 run，落盘后也没有
@@ -55,12 +57,15 @@
  * **三态展示（用户裁定）**：`collapsed` 只留 badge 计数（卡头那行按钮），不画卡片；
  * `default`（缺省）显示前 `previewCount` 组（缺省 3，数量可配置），其余折叠成
  * 「展开全部（还有 N 条）」；`expanded` 给完整列表，高度上限 + 滚动。卡头按钮在
- * 「badge ↔ 卡片」之间开合，footer 按钮在「默认 ↔ 全部」之间开合；都是纯展示状态，
- * 不触发 RPC。同源折叠组（「N 条」）与三态无关，各自独立开合。
+ * 「badge ↔ 卡片」之间开合，footer 按钮在「默认 ↔ 全部」之间开合。开合走 `.motion-collapse`
+ * grid 过渡（§7，防突兀），本身是纯展示状态，唯一的附加触发：**展开（collapsed→非 collapsed）
+ * 重读一次盘**（D-5/R4：用户主动要看真相，展开是有意义读）。同源折叠组（「N 条」）与三态
+ * 无关，各自独立开合。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRefreshSignal } from '../../app/refresh';
 import { useToast } from '../../components/ToastProvider';
-import { Icon } from '../../components/ui';
+import { Icon, useEnteringItemKeys } from '../../components/ui';
 import type { GatewayClient } from '../../gateway/client';
 import type {
   AgentClaimResponse,
@@ -81,7 +86,6 @@ import {
   canUnhold,
   groupSenderName,
   HUMAN_SOURCE,
-  ownedBySession,
   type PendingStripEntry,
   type PendingStripGroup,
   type PendingStripMode,
@@ -121,14 +125,10 @@ function identityOf(entry: PendingStripEntry, fallbackName?: string): string | u
 
 /** 取数前的去抖：`agent.message.queued` 先于 run 开跑到达，空闲会话里那条毫秒级就被消费。 */
 const DEBOUNCE_MS = 250;
-/** 非空时的兜底轮询（空态零流量）：事件只当触发器，数据永远来自这次读。 */
-const POLL_MS = 2000;
 
-/** 一次读到的会话内待处理条目（连同它属于哪个会话，切会话时不串台）。 */
+/** 一次读到的 agent 级待处理条目（连同它属于哪个 agent，换 agent 时旧响应不串台）。 */
 interface PendingInbox {
-  sessionId: string;
-  /** 取消要用它（条目没有 run id，recall 按 agent + message id 定位）。 */
-  agentId?: string;
+  agentId: string;
   entries: AgentInboxEntry[];
 }
 
@@ -148,7 +148,7 @@ function toEntry(entry: AgentInboxEntry): PendingStripEntry {
 /**
  * 就地改一条条目的 `status`：乐观更新与回滚共用这一份（不动顺序、不动别的条目）。
  *
- * 为什么不整体快照回退：unhold 只来回翻一条 `held ↔ unread`，轮询可能同时在更新别的
+ * 为什么不整体快照回退：unhold 只来回翻一条 `held ↔ unread`，重读可能同时在更新别的
  * 条目 —— 回滚整摞会把别人的更新一起抹掉。
  */
 function withEntryStatus(
@@ -183,6 +183,7 @@ function PendingRow({
   onUnhold,
   onRetry,
   fold,
+  entering = false,
 }: {
   item: QueuedSubmission;
   /** 卡头身份（`human` / agent 名或 id）；`undefined` = 不渲染身份槽。 */
@@ -215,6 +216,8 @@ function PendingRow({
   onRetry?: (id: string) => void;
   /** 组头才传：组内条数、开合状态与切换。 */
   fold?: { count: number; open: boolean; onToggle: () => void };
+  /** 入场动画（§7）：调用方按 `useEnteringItemKeys` 判定，透传 QueuedNotice → StreamCard。 */
+  entering?: boolean;
 }) {
   // 写操作按来源分档：human 源三颗，非 human 源只有 unhold 那一颗（它的 recall 不是删除，
   // 而是把消息退回可读 unread）。`undefined` = 没给（`QueuedNotice` 把缺省当成「不给这颗
@@ -224,6 +227,7 @@ function PendingRow({
       <QueuedNotice
         item={item}
         identity={identity}
+        entering={entering}
         onCancel={human ? onCancel : undefined}
         onEdit={human ? onEdit : undefined}
         onClaim={human ? onClaim : undefined}
@@ -343,6 +347,7 @@ function rowsOf(group: PendingStripGroup, byId: ReadonlyMap<string, StripRow>): 
 
 export function PendingStrip({
   sessionId,
+  agentId,
   client,
   epoch,
   refreshKey,
@@ -356,8 +361,14 @@ export function PendingStrip({
   onAttachMessage,
   previewCount = PREVIEW_COUNT,
 }: {
-  /** 当前会话（`selectedId`）：条带只显示归属它的待处理输入。 */
+  /** 当前会话（`selectedId`）：写操作判据与客户端 pending 对账的归属（取数已是 agent 级）。 */
   sessionId: string | null;
+  /**
+   * 面板归属 agent（I-1 唯一数据源）：取数 `agents.inbox{agent_id}` 的目标。
+   * 由宿主派生（当前会话所属 agent；子 agent 详情视图跟 activeAgent）。
+   * 缺省 = 归属未知 ⇒ 不发 RPC（不猜 id）。
+   */
+  agentId?: string;
   client: GatewayClient;
   /** 连接代际：重连后重新读一次（断线期间落盘的条目要补上）。 */
   epoch: number;
@@ -373,9 +384,9 @@ export function PendingStrip({
   /**
    * 已经**发出去**（服务端取用、回显到达）的 `message_id`。
    *
-   * 条带的 `agents.inbox` 读数是**上一次轮询的缓存**（非空时每 2 s 一次）：那条消息被取用
-   * 之后，缓存里还留着它，最长 2 s 内会与「会话里那条正常气泡」同时出现在屏上 ——
-   * 又是同一条消息两份。这份名单让条带立刻把旧读数滤掉（不等下一次轮询，也不用猜）。
+   * 条带的 `agents.inbox` 读数是**上一次读的缓存**（live 触发 / resync 才重读）：那条消息
+   * 被取用之后，缓存里还留着它，下一次重读前会与「会话里那条正常气泡」同时出现在屏上 ——
+   * 又是同一条消息两份。这份名单让条带立刻把旧读数滤掉（不等下一次重读，也不用猜）。
    */
   sentMessageIds?: readonly string[];
   /**
@@ -407,7 +418,7 @@ export function PendingStrip({
    *
    * 为什么需要：main `inbox read` 消费排队消息会取消对应 queued run —— 它从未开跑，
    * 永不发 `user.message` / `run.started` 回显，客户端 pending 只认回显摘除 ⇒ 那行
-   * 「等待中 human」常驻到刷新。live 触发器 / 2s 轮询只重读服务端条目，碰不到客户端行；
+   * 「等待中 human」常驻到刷新。live 触发器 / resync 重读只重读服务端条目，碰不到客户端行；
    * 这一步把客户端行钉回服务端真相。`readStartedAt` 是本次读**发起**的时刻（防旧读数
    * 误删刚入队的 pending，判据见 store）。缺省 = 宿主没有 pending store（设计预览），
    * 只对账不了，不影响服务端条目那一半。
@@ -440,73 +451,75 @@ export function PendingStrip({
   const [pending, setPending] = useState<PendingInbox | null>(null);
   /** 在途的写操作（取消 / 收回编辑 / 我已处理）：同一条消息同时只允许一次，三颗键一起禁用。 */
   const [cancelling, setCancelling] = useState<ReadonlySet<string>>(new Set());
-  /** 本地重读（写操作被拒 / 出错后与服务端对齐）。 */
+  /** 本地重读触发器：写操作后（成功/失败都重读对齐，R5/§4.5）+ 展开（R4）+ 回可见（R2）+ 全局刷新（R3）。 */
   const [reloadTick, setReloadTick] = useState(0);
   /** 同源折叠组的展开状态（只影响展示：组内条目各自仍是真实的待处理条目）。 */
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set());
   /**
    * 条带三态（用户裁定）：收起 = 只 badge；默认 = 前 previewCount 组；展开 = 全部 + 限高滚动。
-   * 纯本地展示状态，不触发 RPC；切会话不重置（它是用户的查看偏好，不是会话数据）。
+   * 本地展示状态；切会话不重置（它是用户的查看偏好，不是会话数据）。
+   * collapsed→非 collapsed 附加一次重读（D-5/R4，见卡头按钮），其余开合不触发 RPC。
    */
   const [mode, setMode] = useState<PendingStripMode>('default');
 
   /**
    * 读一次盘。失败保留上一份读数（条带是提示，不把网络抖动升级成全局错误）。
    *
-   * `session_id` 过滤在服务端做（等值比较，缺 `session_id` 的老条目永不命中），这里再走
-   * 一遍同一个纯函数（`ownedBySession`）：防旧响应串台，也防「服务端哪天不再过滤」这个
-   * 假设 —— 缺 `session_id` 一律不认，是这条带子的第一条硬口径。
+   * agent 级全量（I-1）：不带 `session_id` ⇒ 服务端归属过滤短路，返回该 agent 全部
+   * unread（held + unread，含无 session_id 的 wake/quiet）。会话等值不再做显示闸门，
+   * 降级为写操作判据（`handleTakeBack` 的 peek 断言）与对账归属。
    * **不再按来源过滤**：agent 源照常上带子，只在渲染时不给写操作。
    */
   const load = useCallback(
-    async (targetSessionId: string) => {
+    async (targetAgentId: string) => {
       // 读发起时刻：对账只认「挂 messageId 之后才发起」的读数（入队前发起、响应晚到的
       // 旧读数没有资格宣判 pending 已被消费，见 pending-sends.ts#reconcileWithServer）。
       const readStartedAt = Date.now();
       try {
         const body = await client.rpc<AgentInboxResponse>('agents.inbox', {
-          session_id: targetSessionId,
+          agent_id: targetAgentId,
+          include_held: true,
         });
-        const entries = ownedBySession(
-          Array.isArray(body?.entries) ? body.entries : [],
-          targetSessionId,
-        );
-        setPending({
-          sessionId: targetSessionId,
-          ...(typeof body?.agent_id === 'string' ? { agentId: body.agent_id } : {}),
-          entries,
-        });
+        const entries = Array.isArray(body?.entries) ? body.entries : [];
+        setPending({ agentId: targetAgentId, entries });
         // 真相源对账（P0-A）：服务端读数落定后，把「inbox 里已经没有、又等不到回显」的
         // 客户端 pending 摘掉 —— main `inbox read` 消费排队消息取消 queued run，那条
         // 消息永无 user.message/run.started 回显，不对账就常驻「等待中」直到刷新。
-        onReconcile?.({
-          sessionId: targetSessionId,
-          presentIds: new Set(entries.map((entry) => entry.message_id)),
-          readStartedAt,
-        });
+        // agent 级 presentIds ⊇ 会话级：「不在 presentIds」仍蕴含「已被消费」，无误删
+        // （reconcile 按 item.sessionId 等值 + messageIdAt ≤ readStartedAt 护栏不动）。
+        if (sessionId !== null) {
+          onReconcile?.({
+            sessionId,
+            presentIds: new Set(entries.map((entry) => entry.message_id)),
+            readStartedAt,
+          });
+        }
       } catch {
-        // 读失败：保留上一份（下次轮询 / 触发器再试），不弹 toast。
+        // 读失败：保留上一份（下次触发器 / resync 再试），不弹 toast。
       }
     },
-    [client, onReconcile],
+    [client, sessionId, onReconcile],
   );
 
-  // 触发读：切会话 / 重连（epoch）/ 本会话新受理一次发送（refreshKey）/ 取消后对齐
+  // 触发读：换 agent / 重连（epoch）/ 本会话新受理一次发送（refreshKey）/ 取消后对齐
   // （reloadTick）。后三个只是「再读一次盘」的触发器，不参与读数本身 —— 条带的数据源
   // 永远是那次 RPC，不拿事件拼条目。
   // biome-ignore lint/correctness/useExhaustiveDependencies: epoch / refreshKey / reloadTick 是有意的触发器
   useEffect(() => {
-    if (sessionId === null) {
+    if (agentId === undefined) {
       setPending(null);
       return;
     }
-    const timer = window.setTimeout(() => void load(sessionId), DEBOUNCE_MS);
+    const timer = window.setTimeout(() => void load(agentId), DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [sessionId, epoch, refreshKey, reloadTick, load]);
+  }, [agentId, epoch, refreshKey, reloadTick, load]);
 
-  const current = sessionId !== null && pending?.sessionId === sessionId ? pending : null;
+  const current = agentId !== undefined && pending?.agentId === agentId ? pending : null;
   const entries = current?.entries ?? [];
-  const hasPending = entries.length > 0;
+  // 入场判定（§7）：首屏整批 = 历史不播（面板首屏常非空，整批渐显 = 闪屏），之后 live
+  // 追加的新 message_id 才播 `.motion-appear`；换 agent 重置重认首屏（Team 页同款语义）。
+  // 不用会话页那套「空→1-2 条」门。客户端行的 key 不在服务端首屏集里 ⇒ 挂载即播（它本就新）。
+  const isEntering = useEnteringItemKeys(entries, (entry) => entry.message_id, agentId ?? null);
 
   // 兜底认领升级（P0-A 配套）：没挂 messageId 的 pending 若按摘要认领到这次读数里的
   // 条目，把服务端 id 挂上（与渲染顶替同一份贪心配对）。升级之后消费对账才能按 id
@@ -546,12 +559,19 @@ export function PendingStrip({
     return [...serverRows, ...clientRows];
   }, [entries, pendings, sentMessageIds, cancelling]);
 
-  // 非空时才轮询：空态零流量（条带绝大多数时间是空的）。
+  // 零 interval（用户理想裁定，§6.5）：轮询已删，兜底面全部事件/用户驱动 ——
+  // R2 页面回可见重读一次（承接「连接活着但事件丢了」的静默缺口；条带不是 useResource
+  // 消费点，visibility 监听自己挂，与 useResource.resyncOnVisible 同口径）；
+  // R3 全局刷新信号（命令面板「刷新当前视图」，InboxView 同款）。
   useEffect(() => {
-    if (sessionId === null || !hasPending) return;
-    const id = window.setInterval(() => void load(sessionId), POLL_MS);
-    return () => window.clearInterval(id);
-  }, [sessionId, hasPending, load]);
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      setReloadTick((value) => value + 1);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+  useRefreshSignal(useCallback(() => setReloadTick((value) => value + 1), []));
 
   // 展开态给全部组（slice 上界取 MAX_SAFE_INTEGER = 不裁）；默认态按 previewCount 裁。
   const view = useMemo(
@@ -578,8 +598,8 @@ export function PendingStrip({
   /**
    * 取消一条待处理输入：`agents.recall`（human 源 = 真删）。
    *
-   * 成功后**直接从条带里去掉**（不重读）：条目已经不在待处理集合里，下一次轮询也会得到
-   * 同样的结果；失败 / 未受理则重读一次与服务端对齐，并给出提示，不本地假装成功。
+   * 成功后**直接从条带里去掉**（即时反馈）+ 立即重读对齐（R5/§4.5）：条目已经不在待处理
+   * 集合里，重读确认同一份真相；失败 / 未受理则重读一次与服务端对齐，并给出提示，不本地假装成功。
    */
   const handleCancel = useCallback(
     async (messageId: string) => {
@@ -602,6 +622,8 @@ export function PendingStrip({
                 },
           );
           toast.success(t('chat.toast.queueCancelled'));
+          // R5（§4.5）：成功也立即重读对齐 —— 本地减法是即时反馈，真相以读为准。
+          setReloadTick((value) => value + 1);
         } else {
           toast.error(t('chat.toast.cancelNotAccepted'));
           setReloadTick((value) => value + 1);
@@ -629,7 +651,7 @@ export function PendingStrip({
    *
    * 于是这里做**乐观更新 + 按 id 回滚**：先把这一条就地翻成 `unread`（那颗键随之消失、
    * 排序把它排到还 held 的后面），RPC 被拒 / 抛错时按 id 翻回 `held` 再重读对齐。只回滚
-   * 自己动过的那一条，不整体快照回退 —— 轮询可能同时在更新别的条目。
+   * 自己动过的那一条，不整体快照回退 —— 重读可能同时在更新别的条目。
    */
   const handleUnhold = useCallback(
     async (messageId: string) => {
@@ -649,6 +671,8 @@ export function PendingStrip({
         const deleted = Array.isArray(result?.deleted) ? result.deleted : [];
         if (deleted.includes(messageId)) {
           toast.success(t('chat.pending.unheld'));
+          // R5（§4.5）：乐观翻 unread 是即时反馈，成功也重读一次与服务端对齐。
+          setReloadTick((value) => value + 1);
         } else {
           // 服务端没受理（条目已经被别处处理掉了）：翻回去，再重读一次对齐。
           setPending((prev) =>
@@ -698,8 +722,10 @@ export function PendingStrip({
   const handleTakeBack = useCallback(
     async (messageId: string) => {
       const agentId = current?.agentId;
-      const targetSessionId = current?.sessionId;
-      if (agentId === undefined || targetSessionId === undefined) return;
+      // 写操作判据（I-5c）：收回编辑只对**当前会话**的 human 条目开放 —— 草稿槽属于
+      // 当前会话，把别会话的字回填进来是串台。agent 级读数下这条断言是防串台闸门。
+      const targetSessionId = sessionId;
+      if (agentId === undefined || targetSessionId === null) return;
       if (onRefillDraft === undefined) return;
       setCancelling((prev) => new Set(prev).add(messageId));
       // 草稿是否已经写进去：决定 recall 失败时报哪一句（「已放回输入框，但…」vs 原样报错）。
@@ -746,6 +772,8 @@ export function PendingStrip({
                 },
           );
           toast.success(t('chat.pending.editTaken'));
+          // R5（§4.5）：成功也立即重读对齐（本地减法只是即时反馈）。
+          setReloadTick((value) => value + 1);
         } else {
           toast.error(t('chat.pending.editRecallRejected'));
           setReloadTick((value) => value + 1);
@@ -766,7 +794,7 @@ export function PendingStrip({
         });
       }
     },
-    [client, current?.agentId, current?.sessionId, onRefillDraft, toast],
+    [client, current?.agentId, sessionId, onRefillDraft, toast],
   );
 
   /**
@@ -802,6 +830,8 @@ export function PendingStrip({
                 },
           );
           toast.success(t('chat.pending.claimTaken'));
+          // R5（§4.5）：成功也立即重读对齐（本地减法只是即时反馈）。
+          setReloadTick((value) => value + 1);
         } else {
           // 没拿成就别猜「为什么」：reason 由服务端给，翻成人话再说。
           const skip = (result?.skipped ?? []).find((entry) => entry.message_id === messageId);
@@ -859,6 +889,8 @@ export function PendingStrip({
                 entries: prev.entries.filter((entry) => entry.message_id !== messageId),
               },
         );
+        // R5（§4.5）：撤成功也重读对齐（调用方随后做本地编辑/重试，真相以读为准）。
+        setReloadTick((value) => value + 1);
         return true;
       } catch (error) {
         toast.error(errorMessage(error));
@@ -1003,13 +1035,18 @@ export function PendingStrip({
       {/* 与消息列同宽同内边距：外层是 `.conversation-scroll` 的内衬，内层是
           `.conversation-scroll > *` 的 `--chat-content-w` 列宽 + 居中。 */}
       <div className="px-[var(--content-pad-inline)]">
-        <div className="mx-auto flex max-w-[var(--chat-content-w,860px)] flex-col gap-1.5">
+        <div className="mx-auto flex max-w-[var(--chat-content-w,860px)] flex-col">
           {/* 卡头 = badge + 三态开关：点击在「只 badge ↔ 卡片」之间开合（用户裁定）。
-              chevron 与 StreamCard 同形：收起指右，展开旋转 90° 指下。 */}
+              chevron 与 StreamCard 同形：收起指右，展开旋转 90° 指下。
+              展开（collapsed→非 collapsed）附加一次重读（D-5/R4：用户主动要看真相）；
+              收起仍是纯展示。reloadTick 并入读 effect，250ms debounce 不变。 */}
           <button
             type="button"
             className="bg-transparent m-0 flex items-center gap-1 self-start font-mono text-2xs tracking-wide text-faint hover:text-ink"
-            onClick={() => setMode((prev) => (prev === 'collapsed' ? 'default' : 'collapsed'))}
+            onClick={() => {
+              if (mode === 'collapsed') setReloadTick((value) => value + 1);
+              setMode((prev) => (prev === 'collapsed' ? 'default' : 'collapsed'));
+            }}
             aria-expanded={mode !== 'collapsed'}
           >
             <Icon
@@ -1019,76 +1056,93 @@ export function PendingStrip({
             {label}
           </button>
 
-          {mode !== 'collapsed' && (
-            <div className={mode === 'expanded' ? 'max-h-[40vh] overflow-y-auto' : undefined}>
-              <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
-                {view.preview.map((group) => {
-                  // 组头 + 其余：`head` 取不到就整组跳过（不渲染半张卡）。
-                  const [head, ...rest] = rowsOf(group, byId);
-                  if (head === undefined) return null;
-                  const folded = group.entries.length > 1;
-                  const open = folded && expandedGroups.has(group.key);
-                  const fold = folded
-                    ? { count: group.entries.length, open, onToggle: () => toggleGroup(group.key) }
-                    : undefined;
-                  // 组内条目同源（`from` 相同），所以显示名只需算一次：组里任一条有名字，
-                  // 组头与展开后的每一条都用它 —— 同一张卡的不同行不该出现两种身份写法。
-                  const senderName = groupSenderName(group);
-                  return (
-                    <li key={group.key} className="flex flex-col gap-1.5">
-                      <PendingRow
-                        item={head.item}
-                        identity={identityOf(head.entry, senderName)}
-                        human={head.entry.from === HUMAN_SOURCE}
-                        {...(labelOf(head) !== undefined ? { label: labelOf(head) } : {})}
-                        onCancel={cancelRow}
-                        onEdit={editOf(head)}
-                        onClaim={claimOf(head)}
-                        onUnhold={
-                          head.pending === undefined && canUnhold(head.entry)
-                            ? unholdRow
-                            : undefined
+          {/* 三态开合（§7）：`.motion-collapse` grid 0fr→1fr 自管过渡（motion.css ②，
+              本批是第一个使用点），替代条件渲染瞬切。卡节点常驻不重建 —— 开合不重播
+              entering。收起时 inert 摘掉焦点 / 交互（调用方责任，motion 契约）。
+              卡列上间距放在被裁的子项里（pt-1.5）：0fr 时连 padding 一起裁掉，收起态
+              不占 phantom gap，与旧条件渲染像素一致；展开 / 收起时间距随行高平滑过渡。 */}
+          <div
+            className="motion-collapse"
+            data-motion-open={mode !== 'collapsed'}
+            inert={mode === 'collapsed' ? true : undefined}
+          >
+            <div className="pt-1.5">
+              <div className={mode === 'expanded' ? 'max-h-[40vh] overflow-y-auto' : undefined}>
+                <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+                  {view.preview.map((group) => {
+                    // 组头 + 其余：`head` 取不到就整组跳过（不渲染半张卡）。
+                    const [head, ...rest] = rowsOf(group, byId);
+                    if (head === undefined) return null;
+                    const folded = group.entries.length > 1;
+                    const open = folded && expandedGroups.has(group.key);
+                    const fold = folded
+                      ? {
+                          count: group.entries.length,
+                          open,
+                          onToggle: () => toggleGroup(group.key),
                         }
-                        onRetry={retryOf(head)}
-                        fold={fold}
-                      />
-                      {/* 展开后逐条列出：仍是那些待处理条目，写操作按各自的条目 id 与来源判定。 */}
-                      {open && (
-                        <ul className="m-0 flex list-none flex-col gap-1.5 border-l border-line pl-2">
-                          {rest.map((row) => (
-                            <li key={row.entry.message_id}>
-                              <PendingRow
-                                item={row.item}
-                                identity={identityOf(row.entry, senderName)}
-                                human={row.entry.from === HUMAN_SOURCE}
-                                {...(labelOf(row) !== undefined ? { label: labelOf(row) } : {})}
-                                onCancel={cancelRow}
-                                onEdit={editOf(row)}
-                                onClaim={claimOf(row)}
-                                onUnhold={
-                                  row.pending === undefined && canUnhold(row.entry)
-                                    ? unholdRow
-                                    : undefined
-                                }
-                                onRetry={retryOf(row)}
-                              />
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+                      : undefined;
+                    // 组内条目同源（`from` 相同），所以显示名只需算一次：组里任一条有名字，
+                    // 组头与展开后的每一条都用它 —— 同一张卡的不同行不该出现两种身份写法。
+                    const senderName = groupSenderName(group);
+                    return (
+                      <li key={group.key} className="flex flex-col gap-1.5">
+                        <PendingRow
+                          item={head.item}
+                          identity={identityOf(head.entry, senderName)}
+                          entering={isEntering(head.entry.message_id)}
+                          human={head.entry.from === HUMAN_SOURCE}
+                          {...(labelOf(head) !== undefined ? { label: labelOf(head) } : {})}
+                          onCancel={cancelRow}
+                          onEdit={editOf(head)}
+                          onClaim={claimOf(head)}
+                          onUnhold={
+                            head.pending === undefined && canUnhold(head.entry)
+                              ? unholdRow
+                              : undefined
+                          }
+                          onRetry={retryOf(head)}
+                          fold={fold}
+                        />
+                        {/* 展开后逐条列出：仍是那些待处理条目，写操作按各自的条目 id 与来源判定。 */}
+                        {open && (
+                          <ul className="m-0 flex list-none flex-col gap-1.5 border-l border-line pl-2">
+                            {rest.map((row) => (
+                              <li key={row.entry.message_id}>
+                                <PendingRow
+                                  item={row.item}
+                                  identity={identityOf(row.entry, senderName)}
+                                  entering={isEntering(row.entry.message_id)}
+                                  human={row.entry.from === HUMAN_SOURCE}
+                                  {...(labelOf(row) !== undefined ? { label: labelOf(row) } : {})}
+                                  onCancel={cancelRow}
+                                  onEdit={editOf(row)}
+                                  onClaim={claimOf(row)}
+                                  onUnhold={
+                                    row.pending === undefined && canUnhold(row.entry)
+                                      ? unholdRow
+                                      : undefined
+                                  }
+                                  onRetry={retryOf(row)}
+                                />
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             </div>
-          )}
+          </div>
 
           {/* 默认态：其余条目折叠成一颗「展开全部」；展开态：一颗「收起」回到默认。
-              都是纯展示切换，不触发 RPC。 */}
+              都是纯展示切换，不触发 RPC。mt-1.5 补回列间距（列 gap 已让位给 grid 开合）。 */}
           {mode === 'default' && view.hidden > 0 && (
             <button
               type="button"
-              className="bg-transparent m-0 self-start font-mono text-2xs text-faint hover:text-ink"
+              className="bg-transparent m-0 mt-1.5 self-start font-mono text-2xs text-faint hover:text-ink"
               onClick={() => setMode('expanded')}
             >
               {t('chat.pending.expandAll', { count: view.hidden })}
@@ -1097,7 +1151,7 @@ export function PendingStrip({
           {mode === 'expanded' && (
             <button
               type="button"
-              className="bg-transparent m-0 self-start font-mono text-2xs text-faint hover:text-ink"
+              className="bg-transparent m-0 mt-1.5 self-start font-mono text-2xs text-faint hover:text-ink"
               onClick={() => setMode('default')}
             >
               {t('chat.pending.collapseList')}

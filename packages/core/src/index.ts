@@ -249,6 +249,9 @@ export {
   MemoryLLMProvider,
   OpenAICompatibleProvider,
   ProviderHttpError,
+  // model-registry 两面重构 §10.2：param.extra 写前校验按 provider 的 reserved 集拒绝。
+  RESERVED_BODY_KEYS_ANTHROPIC,
+  RESERVED_BODY_KEYS_OPENAI,
 } from './provider/index.js';
 // 运行时
 export {

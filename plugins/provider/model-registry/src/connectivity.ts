@@ -14,32 +14,16 @@
  * 只接受已保存 vendor（凭证解析在 index.ts；明文 key 不出现在 test 参数）。
  */
 
+import { defaultBaseUrlFor } from '@vessel-agent/config';
 import { createDefaultTraceRedactor } from '@vessel-agent/core';
+
+export { defaultBaseUrlFor };
 
 export interface ConnectivityResult {
   ok: boolean;
   latencyMs: number;
   models?: string[];
   error?: { code: string; message: string };
-}
-
-/**
- * 协议工厂默认 baseUrl：openai 系五名与 plugins/provider/openai 的 PROVIDERS 表同值，
- * anthropic 与 core AnthropicProvider 默认同值。vendor.baseUrl 缺省时兜底；
- * 自定义 provider 插件协议不在此表（wire 未知）→ unsupported_protocol。
- */
-const DEFAULT_BASE_URLS: Readonly<Record<string, string>> = {
-  openai: 'https://api.openai.com/v1',
-  google: 'https://generativelanguage.googleapis.com/v1beta/openai',
-  mistral: 'https://api.mistral.ai/v1',
-  ollama: 'http://localhost:11434/v1',
-  // Cohere 的 OpenAI 兼容端点在 /compatibility/v1（同 openai 插件注释）
-  cohere: 'https://api.cohere.ai/compatibility/v1',
-  anthropic: 'https://api.anthropic.com',
-};
-
-export function defaultBaseUrlFor(protocol: string): string | undefined {
-  return Object.hasOwn(DEFAULT_BASE_URLS, protocol) ? DEFAULT_BASE_URLS[protocol] : undefined;
 }
 
 const TIMEOUT_MS = 15_000;

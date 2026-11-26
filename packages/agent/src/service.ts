@@ -57,6 +57,7 @@ import {
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import {
+  type AgentInboxChange,
   type AgentInboxDelivery,
   type AgentInboxListEntry,
   AgentInboxStore,
@@ -1074,6 +1075,9 @@ export class AgentServiceImpl implements AgentService {
             // consumed 之前调这一步，`inbox{action:'claim'}`（模型侧工具）与 `agents.claim`
             // 才会真的「拿走就再也不投」。
             beforeClaim: (agentId, ids) => this.withdrawQueuedRuns(agentId, ids),
+            // inbox 统一批 §6.2：状态机每个 mutation 口落状态后发一条 agent.inbox.changed
+            // 帧（recall/claim 无事件的缺口由此补齐；数据仍走 RPC，帧只是触发器）。
+            onChange: (agentId, change) => this.emitInboxChanged(agentId, change),
           })
         : undefined;
     if (this.inbox !== undefined) this.runtime.attachInbox?.(this.inbox);
@@ -7800,6 +7804,32 @@ export class AgentServiceImpl implements AgentService {
    * 指定 ExecutionUnit 的事件出口：body 级事件必须带自己的 session_id；
    * `run_id` 始终是成员 id（run.* 由 runtime / scheduler 发布）。
    */
+  /**
+   * inbox 状态机变更 → `agent.inbox.changed` 帧（inbox 统一批 §6.2）。
+   *
+   * store 的 onChange 钩子是唯一来源：append / hold / unhold / release / consume /
+   * claim / discard 全覆盖（模型工具 read/delete、RPC recall/claim、调度 hold/release
+   * 都经 store 状态机口，一处钩子无遗漏）。`agent.message.queued` 保留不动。
+   *
+   * 会话归属：条目自带归属优先，缺省回落到成员当前 primary session（emitForSession
+   * 恒带 session_id，出站补齐与可见性判定同源）。registry 查不到成员（纯 store /
+   * 已删除）⇒ 不发帧，不猜归属。
+   */
+  private emitInboxChanged(agentId: string, change: AgentInboxChange): void {
+    const member = this.registry.get(agentId);
+    if (member === undefined) return;
+    this.emitForSession(
+      'agent.inbox.changed',
+      member,
+      change.sessionId ?? currentBindingSession(member),
+      {
+        reason: change.reason,
+        message_ids: change.messageIds,
+        ...(change.delivery !== undefined ? { delivery: change.delivery } : {}),
+      },
+    );
+  }
+
   private emitForSession(
     type: string,
     member: MemberRecord,

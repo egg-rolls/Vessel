@@ -26,6 +26,7 @@ import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { DEFAULT_CONFIG, DEFAULT_TENANT_ID, defaultModelForProvider } from './defaults.js';
 import { type EnvFileLoadInfo, loadEnvFiles } from './env-file.js';
+import { hasLegacyModelsBlock, migrateUserConfigModels } from './model-migration.js';
 import { resolveEnvRefsInLayer } from './secrets.js';
 import type {
   ConfigLayers,
@@ -133,14 +134,18 @@ function convertKeys(
  * - node.tokens：token 原文
  * - pricing.models：模型名（常含 `/`、`.`，不能按 snake_case 改写）
  * - observability.log.modules：事件名前缀（`bash_job` 这类下划线是名字的一部分）
- * - models.vendors / models.aliases：vendor id / 别名（用户自定义 id，原样保留）
- * - models.vendors.<id>.models：wire model id（可含 `/`、`.`、`_`，同 pricing.models）
+ * - models.vendors / models.aliases：旧块 map 键（**仅迁移机器读旧 yaml 时用**，§7；
+ *   注册面已删除 vendors/aliases）
+ * - models.vendors.<id>.models：wire model id（可含 `/`、`.`、`_`，同 pricing.models；迁移读用）
+ * - models.credentials / models.entries：凭证 id / 条目键（两面重构 §3/§4，原样保留）
+ * - models.entries.<id>.param.extra 子树：自由请求参数 map 键（原样保留）；
+ *   .info 已知键走 snake→camel，未知键读容忍原样保留（§10.3）
  * - plugins[].config 子树（含嵌套）：插件 settings 键 = manifest settings 字段名
  *   （snake_case，如 thinking-intensity 的 default_level / budget_high），同属
  *   用户自定义 map 键。注意 convertKeys 数组递归不追加索引，故 plugins[] 元素内
  *   的 path 形如 ['plugins', 'config', …]（path[1] 即 'config'，无索引段）。
  */
-export function preserveConfigMapKeys(path: string[], _key: string): boolean {
+export function preserveConfigMapKeys(path: string[], key: string): boolean {
   if (path[0] === 'mcpServers') {
     if (path.length === 1) return true;
     return path.length === 3 && (path[2] === 'env' || path[2] === 'headers');
@@ -149,8 +154,26 @@ export function preserveConfigMapKeys(path: string[], _key: string): boolean {
   if (path[0] === 'node' && path.length === 2 && path[1] === 'tokens') return true;
   if (path[0] === 'pricing' && path.length === 2 && path[1] === 'models') return true;
   if (path[0] === 'models') {
-    if (path.length === 2 && (path[1] === 'vendors' || path[1] === 'aliases')) return true;
+    if (
+      path.length === 2 &&
+      (path[1] === 'vendors' ||
+        path[1] === 'aliases' ||
+        path[1] === 'credentials' ||
+        path[1] === 'entries')
+    ) {
+      return true;
+    }
     if (path.length === 4 && path[1] === 'vendors' && path[3] === 'models') return true;
+    // 两面重构：entries.<id>.param.extra 子树 map 键原样保留（自由请求参数）。
+    if (path.length >= 5 && path[1] === 'entries' && path[3] === 'param' && path[4] === 'extra') {
+      return true;
+    }
+    // entries.<id>.info：已知键走 snake→camel（display_name/context_window/max_output_tokens），
+    // 未知键读容忍原样保留（§10.3）；更深层（capabilities 内未知键等）一律保留。
+    if (path.length >= 4 && path[1] === 'entries' && path[3] === 'info') {
+      if (path.length > 4) return true;
+      return key !== 'display_name' && key !== 'context_window' && key !== 'max_output_tokens';
+    }
   }
   if (
     path[0] === 'observability' &&
@@ -652,7 +675,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   captureLayer('default', DEFAULT_CONFIG);
 
   // 2. 用户层：legacy 映射 + 完整 config 键（source=user）
-  const userFile = await loadRawConfig(userPath);
+  let userFile = await loadRawConfig(userPath);
   if (userFile.error) preErrors.push(userFile.error);
   if (explicitUserPath !== undefined && !(await pathExists(explicitUserPath))) {
     preErrors.push({
@@ -665,7 +688,23 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
         'drop the flag.',
     });
   }
-  const rawUser = userFile.raw;
+  let rawUser = userFile.raw;
+  // §7 一次性迁移钩子（H7 首载自动）：models.vendors/aliases → credentials+entries。
+  // withConfigLock 内执行（已在锁内则原地免嵌套）；幂等（无旧块 no-op）；失败 fail-fast
+  // （.bak 完好）。迁移后重读用户层，后续层叠/校验都走新形状。
+  if (hasLegacyModelsBlock(rawUser)) {
+    const report = await migrateUserConfigModels({ configPath: userPath, env });
+    if (report !== undefined) {
+      preWarnings.push({
+        path: 'models',
+        message:
+          'model registry migrated: vendors/aliases -> credentials + entries (one-shot; ' +
+          'report: <dataDir>/model-registry-migration.json; backup: config.yaml.pre-model-registry.bak)',
+      });
+      userFile = await loadRawConfig(userPath);
+      rawUser = userFile.raw;
+    }
+  }
   // 同层出现新版 `provider:` 时 legacy 键整体忽略（DECISION-020 §R1.4）。
   const hasNewProvider = isRecord(rawUser.provider);
   const legacyKeys = legacyProviderKeys(rawUser);
@@ -697,6 +736,16 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   const projectFile = await loadRawConfig(projectPath);
   if (projectFile.error) preErrors.push(projectFile.error);
   const rawProject = projectFile.raw;
+  // 项目层旧块不自动迁移（config 写路径只落用户层）：fail-loud + 手动迁移指引。
+  if (hasLegacyModelsBlock(rawProject)) {
+    preErrors.push({
+      path: 'models.vendors',
+      message:
+        'project-layer models.vendors/aliases are not auto-migrated (config writes go to the user layer); ' +
+        'migrate this file manually to models.credentials + models.entries ' +
+        '(see docs/dev/design/model-registry-two-face-design.md §7)',
+    });
+  }
   const projectLayer = rejectServeBlock(rawProject, 'project config');
   if (projectLayer.error !== undefined) preErrors.push(projectLayer.error);
   const resolvedProject = resolveEnvRefsInLayer(projectLayer.layer as Partial<VesselConfig>, env);
@@ -771,6 +820,24 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
     if (fallback) {
       config.provider.model = fallback;
       sources['provider.model'] = 'default';
+    }
+  }
+
+  // 7.5 feishu appSecretEnv 启动接线（P1-A1，与 doctor feishu_credentials 同口径）：
+  //     env 层（第 5 步）只合并 VESSEL_FEISHU_*；appSecretEnv 指向的变量必须在此
+  //     解析进 appSecret，否则「doctor 全绿但启动必败」——validator 的启用必填校验
+  //     与 resolveFeishuOptions 都只看 appSecret。
+  //     优先序：VESSEL_FEISHU_APP_SECRET > env[appSecretEnv] > 显式 appSecret。
+  {
+    const feishu = config.feishu;
+    const secretEnvName = nonEmptyStr(feishu?.appSecretEnv);
+    if (feishu !== undefined && secretEnvName !== undefined) {
+      const vesselSecret = nonEmptyStr(getEnvVar(env, `${envPrefix}FEISHU_APP_SECRET`));
+      const namedSecret = nonEmptyStr(getEnvVar(env, secretEnvName));
+      if (vesselSecret === undefined && namedSecret !== undefined) {
+        config.feishu = { ...feishu, appSecret: namedSecret };
+        sources['feishu.appSecret'] = 'env';
+      }
     }
   }
 

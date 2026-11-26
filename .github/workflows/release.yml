@@ -96,15 +96,9 @@ jobs:
           npm ci
           npm run build
 
-      # 发布干跑：任何检查失败都会让 verify job 失败，publish-npm 依赖它，
-      # 因此不会进入 npm publish。
-      - name: Release dry run
-        run: bun run scripts/release-dry-run.ts
-
-      # 安装解析 smoke：17 个子包 + 根 tarball（共 18 个非 private 包）真正装到临时目录并运行
-      # `vessel --version` / `vessel --tools`（mock，无 Key，不发布）。
-      - name: Install resolution smoke
-        run: bun run scripts/smoke-install.ts
+      # tarball 内容 / 包名 / 内部版本 / 安装解析：原 release-dry-run / smoke-install
+      # 脚本已按宪法删除，对应两步已从本 workflow 移除（q-release-script）；
+      # 发布前按 RELEASE.md §2.1 / §2.2 清单人工核对。
 
   # ── 质量检查（发布前最后一道防线）───────────────
   quality:

@@ -153,7 +153,6 @@ export function SessionHeader({
   agents = [],
   activeAgentId,
   onSelectAgent,
-  onOpenInbox,
 }: {
   session: SessionInfo | null;
   sessionId: string;
@@ -163,12 +162,6 @@ export function SessionHeader({
   /** `?agent=` 深链选中的子 agent。 */
   activeAgentId?: string;
   onSelectAgent?: (id: string | undefined) => void;
-  /**
-   * 打开本会话归属 agent 的 agent 级收件箱（P1-B，q-inbox-agent-view）。
-   * 条带只答「这一轮压着几条输入」；发给这个 agent 的全量消息（跨会话、含
-   * wake/quiet）在 `#/inbox` 看 —— 这颗键是那个视图的现场入口。
-   */
-  onOpenInbox?: () => void;
 }) {
   const toast = useToast();
   const title = session ? sessionTitle(session) : cleanSessionTitle(detail?.title) || sessionId;
@@ -212,16 +205,6 @@ export function SessionHeader({
               {session ? title : truncate(title, 42)}
             </h2>
           </Tooltip>
-          {onOpenInbox && (
-            <Button
-              type="button"
-              variant="link"
-              className="no-underline text-xs text-muted"
-              onClick={onOpenInbox}
-            >
-              {t('chat.session.openInbox')}
-            </Button>
-          )}
         </div>
         {activeAgentId && (
           <nav className="subagent-breadcrumb" aria-label={t('chat.subagents.title')}>

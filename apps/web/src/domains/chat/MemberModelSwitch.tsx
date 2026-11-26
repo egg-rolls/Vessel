@@ -40,6 +40,9 @@ export interface MemberModelSwitchProps {
  */
 const memberModelPillClass = cn(
   'h-control max-w-36 flex-none gap-1 rounded-full border border-line-strong bg-sunken px-2.5 py-0 text-xs disabled:opacity-100',
+  // 键盘焦点环换低调灰（用户验收③，与 thinking pill 同构）：抵掉 Button 基类的
+  // 主题色 ring-accent + offset；鼠标点击本就不触发 focus-visible，无额外 border。
+  'focus-visible:ring-line-strong focus-visible:ring-offset-0',
   composerQuietIconTone,
 );
 

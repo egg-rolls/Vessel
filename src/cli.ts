@@ -1142,7 +1142,7 @@ async function runWithConfig(result: BootstrapResult) {
         events: result.bundle?.runtimeEvents ?? ctx.events,
         tenantId: result.tenantId,
       });
-    registerRuntimeNoticeHook(ctx.pluginHost, noticeBus, undefined, liveConfig.envInjection);
+    registerRuntimeNoticeHook(ctx.pluginHost, noticeBus, undefined, () => liveConfig.envInjection);
     // 0.52：附件引用的环境信息行（同一 host、同一 BeforeLlm 阶段）。
     // 0.56 P1：视觉面探针——有 `provider.vision` 且没被 kill switch 关时，尾注改说
     // 「图已随本条消息附上，不要再读」（否则模型会把图再读一遍 = 双倍花费）。
@@ -1788,6 +1788,10 @@ async function runWithConfig(result: BootstrapResult) {
         },
       },
       hub: eventHub,
+      // P3 收紧（两面重构 §11.1）：agents.create/update model 参数未注册 ref 校验。
+      ...(gatewayBundle.validateModelRef !== undefined
+        ? { modelRefError: gatewayBundle.validateModelRef }
+        : {}),
       // 0.18：events.list 的二次脱敏与 live hub / trace 同源（ext 幂等）。
       redactor: gatewayBundle.redactor,
       session: livenessSession ?? ctx.session,

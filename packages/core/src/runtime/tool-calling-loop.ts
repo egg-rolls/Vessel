@@ -62,6 +62,28 @@ function sanitizeEmptyResponseRetries(value: number | undefined): number {
   return Math.floor(value);
 }
 
+/**
+ * 空响应兜底耗尽（q-empty-exhaust，用户裁定）：seamless 重调 + 升级 nudge 后仍空
+ * （或非无感模式限次耗尽 / maxRetries=0）⇒ 不再把空串当终稿 completed 早退，
+ * 由 EU 统一终态路径标 `run.failed`。稳定 code 进 error envelope
+ * （CODE_META.empty_response_exhausted：category=internal ⇒ 不触发 0.55 provider
+ * 硬错误闸，parent 催续可直接接单）；agent 层既有 peerStops → peer-notices 链路
+ * 自动把 failed + 错误码报给 parent（防静默早退）。消息以 code 开头：peer 通知的
+ * `errorLabel` 取稳定码。`enabled=false` 零回归开关不走本错误。
+ */
+export class EmptyResponseExhaustedError extends Error {
+  readonly code = 'empty_response_exhausted' as const;
+  readonly details: { attempt: number; max_retries: number; finish_reason: string };
+
+  constructor(details: { attempt: number; max_retries: number; finish_reason: string }) {
+    super(
+      `empty_response_exhausted: model returned empty response after ${details.attempt} fallback retries (max_retries=${details.max_retries}, finish_reason=${details.finish_reason})`,
+    );
+    this.name = 'EmptyResponseExhaustedError';
+    this.details = details;
+  }
+}
+
 /** Run 内一次 loop 的完整依赖面；每 run 构造一次，无跨 run 状态。 */
 export interface LoopContext {
   readonly execution: Run;
@@ -69,6 +91,10 @@ export interface LoopContext {
   readonly model: string;
   /** provider 身份（additive，q-thinking-plugin；来自 provider 实例事实）；缺省 = 身份未知。 */
   readonly providerName?: string;
+  /** 成员实际 cwd（additive，P1 origin 填充；EU member-cwd 事实 toolCwd）；缺省 = 装配未填。 */
+  readonly cwd?: string;
+  /** 成员 id（additive，P1 origin 填充；EU 身份事实 boundAgentId，跨 body 稳定）；缺省 = 装配未填。 */
+  readonly agent_id?: string;
   /** opt-in 计价；缺省不累计 `totalCost`。 */
   readonly pricing?: UsagePricing;
   /**
@@ -91,7 +117,8 @@ export interface LoopContext {
   /**
    * 空响应兜底策略（q-empty-response；additive 可缺省）。
    * 缺省 = 启用、无感重试（seamless）2 次 + 耗尽升级一次 nudge（库用户不注入也拿到
-   * 兜底）；seamless=false 走一期 nudge 路径；见 `EmptyResponsePolicy`。
+   * 兜底）；仍空 ⇒ 抛 `EmptyResponseExhaustedError` 标 failed 并经既有 peer 链路
+   * 通知 parent（q-empty-exhaust）；seamless=false 走一期 nudge 路径；见 `EmptyResponsePolicy`。
    */
   readonly emptyResponse?: EmptyResponsePolicy;
 }
@@ -408,6 +435,8 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       request_index: round - 1,
       model: ctx.model,
       ...(ctx.providerName !== undefined ? { providerName: ctx.providerName } : {}),
+      ...(ctx.cwd !== undefined ? { cwd: ctx.cwd } : {}),
+      ...(ctx.agent_id !== undefined ? { agent_id: ctx.agent_id } : {}),
       ...(inputRefs !== undefined && inputRefs.length > 0 ? { refs: inputRefs } : {}),
     };
     const baseSystemPrompt = ctx.controls.getBaseSystemPrompt();
@@ -561,7 +590,7 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
     // 模型（与无感 resume 同源：重入边界 = 事件投影一致，零注入零疤痕）。
     // 限次复用 max_retries；连续空耗尽后升级**一次** nudge 打破空模式（纯重调可能
     // 采样再吐空，nudge 是可靠性兜底；maxRetries=0 不升级，守「0=不重试」语义）；
-    // 再空则 exhausted 回落原始终止。usage/timing 已在上方记账（请求真实发生）；
+    // 再空则 exhausted 标 failed 并通知 parent（q-empty-exhaust）。usage/timing 已在上方记账（请求真实发生）；
     // AfterLlm 照跑保持 Before/After 配对（hookCtx 不含响应对象，无内容泄漏）。
     if (blankResponse) {
       const policy = ctx.emptyResponse;
@@ -702,8 +731,10 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
         continue;
       }
       if (enabled) {
-        // 限次耗尽（或 maxRetries=0）：留痕后回落现行行为——空串仍按原路径返回，
-        // 但不再静默（事件落盘，观察面 / 日志可见）。
+        // 限次耗尽（或 maxRetries=0）：留痕后标 failed（q-empty-exhaust，用户裁定）——
+        // 空串不再当终稿 completed 早退；抛稳定 code 由 EU 统一终态路径落 run.failed，
+        // agent 层既有 peerStops → peer-notices 链路自动把 failed + 错误码通知 parent
+        // （防静默早退，parent 可催续；category=internal 不触发 0.55 硬错误闸）。
         ctx.events.emit({
           type: 'llm.empty_response',
           run_id: runId,
@@ -717,8 +748,26 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
           },
           ts: Date.now(),
         });
+        // 空 assistant 轮已是落盘事实（上方 llm.response 已持久化）：原样写回窗口，
+        // 保持 live 窗口 ≡ 事件投影（与上方 nudge 分支同口径；resume 会从
+        // llm.response 重建出同一空轮）。
+        ctx.window.addMessage(
+          {
+            role: 'assistant',
+            content: response.content,
+            ...(response.reasoning_content
+              ? { reasoning_content: response.reasoning_content }
+              : {}),
+          },
+          runId,
+        );
+        throw new EmptyResponseExhaustedError({
+          attempt: emptyRetries,
+          max_retries: maxRetries,
+          finish_reason: response.finish_reason,
+        });
       }
-      // enabled=false 或重试耗尽：落到下方原始终止路径（行为与修复前一致）。
+      // enabled=false：落到下方原始终止路径（零回归开关，行为与修复前一致）。
     }
 
     if (!hasToolCalls && response.finish_reason === 'stop') {

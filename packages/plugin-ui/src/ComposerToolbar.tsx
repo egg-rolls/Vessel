@@ -36,6 +36,11 @@ export interface ComposerToolbarMenuState {
   current?: string;
   /** 菜单底部说明行（如「该模型仅支持开/关」）。 */
   hint?: string;
+  /**
+   * pill 前缀标签（additive，用户验收①；已翻译文案，如「思考:」）。只进触发器
+   * 显示「前缀 + 当前档位」，不进档位表选项。缺省不渲染（现行为）。
+   */
+  prefix?: string;
   /** 选中一档（宿主经 RPC write 落状态）。 */
   onSelect: (value: string) => void;
 }
@@ -117,9 +122,12 @@ function renderToolbarAction(action: ComposerToolbarAction) {
  * 工具栏选择器 pill 样式：与宿主模型选择 pill（memberModelPillClass + quiet 色调）
  * 同构。plugin-ui 不 import 宿主模块，这里复刻同一套设计 token；cn=twMerge 保证
  * 这些类可靠覆盖 Select 的表单触发器基类。
+ * 焦点态（用户验收③）：focus:shadow-none 抵掉基类 focus:shadow-focus —— 点击/聚焦
+ * 不再出主题色环（浮窗本身就是点击响应）；键盘焦点保留低调的非主题色灰环
+ * （focus-visible:ring-line-strong，无 offset），不裸删焦点指示。
  */
 const TOOLBAR_PILL_CLASS =
-  'h-control w-auto max-w-36 flex-none justify-center gap-1 rounded-full border border-line-strong bg-sunken px-2.5 py-0 text-xs text-muted shadow-none enabled:hover:text-ink disabled:text-faint disabled:opacity-100';
+  'h-control w-auto max-w-36 flex-none justify-center gap-1 rounded-full border border-line-strong bg-sunken px-2.5 py-0 text-xs text-muted shadow-none focus:shadow-none focus-visible:ring-2 focus-visible:ring-line-strong focus-visible:ring-offset-0 enabled:hover:text-ink disabled:text-faint disabled:opacity-100';
 
 /**
  * 声明式菜单按钮（additive，P3；D5 同构裁定）：复用通用 Select（combobox +
@@ -130,7 +138,8 @@ function ToolbarMenuButton({ action }: { action: ComposerToolbarAction }) {
   const menu = action.menu;
   if (menu === undefined) return null;
   // current 缺失（read 未回）或不在档位表（如不支持模型上的会话 override）时合成
-  // 显示项，保证触发器非空；缺失态用 action.label 占位并禁用防误选。
+  // 显示项，保证触发器非空；缺失态用「—」占位并禁用防误选（前缀标签已表达语义，
+  // 不再拿 action.label 占位，避免「思考: 思考」式重复）。
   const current = menu.current ?? '';
   const items = menu.items.some((item) => item.value === current)
     ? menu.items
@@ -138,7 +147,7 @@ function ToolbarMenuButton({ action }: { action: ComposerToolbarAction }) {
         ...menu.items,
         {
           value: current,
-          label: menu.current ?? action.label,
+          label: menu.current ?? '—',
           disabled: menu.current === undefined,
         },
       ];
@@ -150,6 +159,7 @@ function ToolbarMenuButton({ action }: { action: ComposerToolbarAction }) {
       disabled={action.disabled}
       value={current}
       popupMinWidth={144}
+      prefix={menu.prefix}
       onChange={(event) => menu.onSelect(event.target.value)}
       footer={menu.hint !== undefined && menu.hint !== '' ? menu.hint : undefined}
     >

@@ -2,16 +2,17 @@
 title: 发布手册
 kind: current
 triggers: [发布, 发版, 版本号, 语义化版本, tag, 发布流程, 发布前置, 干跑, npm, 子包, 变更日志, 构建, web 控制台]
-paths: [.github/workflows/release.yml, .github/actions/quality/action.yml, package.json, scripts/version.ts, scripts/latest-json.ts, src/shared/version.ts]
+paths: [.github/workflows/release.yml, .github/workflows/version-check.yml, .github/actions/quality/action.yml, package.json, scripts/version.ts, scripts/release.ts, scripts/latest-json.ts, src/shared/version.ts]
 ---
 
 # 发布手册
 
-> 适用版本线：`0.x`。发布由 **tag `v*`** 触发，不由分支名触发。
-> 维护者：`gov`；最终发布决定权在 1。
+> 适用版本线：`2.x`（标准 SemVer，§1；0.x 开发期「只干跑不 tag」纪律已随 1.0 门槛越过而归档）。
+> 发布由 **tag `v*`** 触发，不由分支名触发。
+> 维护者：`gov`；最终发布决定权在 1（收口由 main 在晋升时执行 `scripts/release.ts`，§3）。
 > 当前版本、收口状态与下一步以 [docs/versions/CURRENT.md](../versions/CURRENT.md) 为准；
 > 本文只保留发布流程与前置条件，不维护版本状态。
-> 1.0 前只做发布干跑：不 tag、不 push tag、不 `npm publish`、不合并 `main`；
+> 收口自动 commit、可选 `--auto-tag`；**push（main + tag）仍由 main 执行**，不 force-push；
 > 不发布二进制（ADR-006 继续有效），只发 npm 库包 + GitHub Release。
 > 发布前置**必须先构建 Web 控制台**（`apps/web` 的 `npm ci` + `npm run build`）——`dist/` 被
 > `.gitignore` 忽略，根 tarball 的 `files` 包含 `apps/web/dist`，不构建就会发出缺少
@@ -65,10 +66,10 @@ paths: [.github/workflows/release.yml, .github/actions/quality/action.yml, packa
 - 通过标准（人工）：上面 6 条逐条核对无偏差。
 - **不做**：不创建 tag、不 push、不调用 `npm publish`、不合并 `main`、不上传 artifact。
 
-**收口顺序（DECISION-009 §12.3）**：
+**收口顺序（DECISION-009 §12.3；2.x 现态由 `scripts/release.ts` 编排，见 §3）**：
 
 1. 各轨道合入 `release/<version>`，qa 能力门禁通过；
-2. **1 运行 `scripts/version.ts` 写模式 → 全部 manifest 升到 `<version>`**；
+2. **运行 `scripts/release.ts --bump <kind>`（或 `scripts/version.ts` 写模式）→ 全部 manifest 升到 `<version>`**；
 3. **在 bump 之后用普通 `bun install` 刷新 `bun.lock`（不要 `--frozen-lockfile`）**，
    确保 lock 记录同一版本；
 4. gov 写 `CHANGELOG.md` 的 `## [<version>]`；
@@ -120,22 +121,39 @@ gateway 生命周期与包级自更新的发布说明需要额外确认：
 ## 3. 版本脚本
 
 ```bash
-# 只校验（日常/CI）
+# 只校验（日常/CI；main push 由 version-check.yml 自动跑）
 bun run scripts/version.ts --check <version>
 
-# 写入根、packages/*、plugins/*/*、apps/web 的版本（发布收口时由 1 执行）
+# 写入根、packages/*、plugins/*/*、apps/web 的版本（发布收口时执行）
 bun run scripts/version.ts <version>
+
+# 从根版本算下一 SemVer 并写入（patch=Z+1 / minor=Y+1 / major=X+1）
+bun run scripts/version.ts --bump patch
 
 # 预演，不落盘
 bun run scripts/version.ts <version> --dry-run
+bun run scripts/version.ts --bump minor --dry-run
+
+# 发布收口编排（晋升时 main 必跑；双模式 + auto-commit + 可选 auto-tag）
+bun run scripts/release.ts --bump patch              # 增量·轻收口（修复批）
+bun run scripts/release.ts --bump minor --auto-tag   # 全量·重收口（功能批）
+bun run scripts/release.ts <version> --dry-run       # 显式版本：幂等重跑/漂移修复
 ```
 
 规则：
 
 - `--check` 同时校验所有可发布包版本一致，以及 `CHANGELOG.md` 含 `## [<version>]`。
 - 根 `package.json` 的 `version` 与所有 workspace 包一起校验；`--version` 也从这里读取。
-- 写模式会机械改写各包 `package.json`，**只由 1 在发布收口执行**；日常开发不运行写模式。
-- 脚本不做 git 操作（commit / tag 仍手工执行）。
+- 写模式会机械改写各包 `package.json`，**只在发布收口执行**；日常开发不运行写模式。
+- `version.ts` 本身不做 git 操作；git（commit / tag）由 `release.ts` 编排：
+  - **增量（patch）轻收口**：manifest 统一 + CHANGELOG 缺节时立骨架（明细候补，不造内容）
+    + CURRENT.md 版本节同步 + auto-commit。
+  - **全量（minor/major）重收口**：轻收口全部 + `docs/versions/<v>.md`（CHANGELOG 节逐字迁入）
+    + INDEX.md 登记；CHANGELOG 完整节**缺则报错候人补**，不自动造内容。
+  - 收口末尾必过 `--check` 门禁；`--auto-tag` 打 annotated tag `v<version>`，**不 push**
+    （push main + tag 由 main 执行，tag push 触发 release.yml）。
+  - bump 类型准则：批次含新功能→minor / 纯修复→patch / breaking→major（§1）。
+  - git 不可用时（L-057：WSL worktree）写模式拒跑，收口在主 checkout 执行；`--dry-run` 降级预演。
 
 ## 4. 发布步骤
 
@@ -166,9 +184,8 @@ git push origin v<version>
 
 1. `verify`：校验 tag 在 `main` 上、版本一致、CHANGELOG 有该版本；
    先执行 Node 22 + `apps/web` 的 `npm ci` / `npm run build`。
-   **注意**：workflow 里仍在调用已删除的 `scripts/release-dry-run.ts` 与
-   `scripts/smoke-install.ts`，这两步现在会直接红 —— 在 1 决定删掉或重写之前，
-   发布不能靠这个 workflow 判定，只能人工核对 §2.1 / §2.2。
+   原 `release-dry-run.ts` / `smoke-install.ts` 死步骤**已移除**（q-release-script）；
+   tarball 内容 / 安装解析按 §2.1 / §2.2 清单**人工核对**。
 2. 复跑 quality。
 3. `npm publish`：`publish-npm` 是独立 checkout，会再次构建 Web 控制台；
    **先全部子包**

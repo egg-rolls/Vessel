@@ -1,0 +1,77 @@
+# Vessel 主形态 compose 骨架（多容器多角色：gateway + node-1 + hub）
+# 设计：docs/dev/design/docker-cd-design.md v2 §5.3 / §2（目标拓扑）。
+#
+# ★能力边界（诚实口径，§1.5）：gateway↔node 跨容器注册今天做不到——node 注册表 kind 只接受
+#   local（node-registry.ts:25），`gateway nodes add` 依赖共享文件系统。remote 注册 = G4 开发项（P2）。
+#   因此本骨架中 node-1 容器可独立起（TLS 数据面就绪），但 gateway 代理/注册 node-1 须待 G4 落地。
+#   今天零开发可跑的多容器形态 = split-hub profile（docker-compose.split-hub.yml）；
+#   单容器试用 = quick-start profile（docker-compose.quickstart.yml）。
+#
+# 起法（G4 落地后全链路）：
+#   cp .env.example .env                      # 填 NODE_1_TOKEN/HUB_TOKEN（openssl rand -hex 32）+ provider keys
+#   bash certs/gen.sh                         # 内部 CA + node-1/hub 证书（D13，见 certs/README.md）
+#   mkdir -p config/gateway config/node-1 config/hub
+#   cp config/gateway.example.yaml config/gateway/config.yaml   # node-1/hub 同理
+#   docker compose up -d
+#   docker compose exec gateway vessel gateway nodes add node-1 --remote \
+#     --url https://node-1:8644 --token-env NODE_1_TOKEN        # ← G4（P2）后才可用
+name: vessel
+networks:
+  vessel-net:
+    driver: bridge
+volumes:
+  gateway-data:
+  node-1-data:
+  hub-data:
+services:
+  gateway:
+    image: ghcr.io/egg-rolls/vessel-gateway:${VESSEL_VERSION:-latest}
+    restart: unless-stopped
+    stop_grace_period: 15s
+    ports:
+      - "127.0.0.1:8642:8642"     # 唯一默认发布端口（D3）；公网部署改 "8642:8642" + 前置 TLS 反代（§8.5）
+    volumes:
+      - gateway-data:/data        # nodes.json（G4 注册表权威源）+ platform root-secret + interactions
+      - ./config/gateway:/home/bun/.vessel
+      - ./certs/ca.crt:/certs/ca.crt:ro
+    environment:
+      NODE_1_TOKEN: ${NODE_1_TOKEN:?在 .env 设置（openssl rand -hex 32）}   # 双注入：gateway 代理注入 Authorization 用
+      HUB_TOKEN: ${HUB_TOKEN:-}
+      NODE_EXTRA_CA_CERTS: /certs/ca.crt
+      VESSEL_LOG_LEVEL: ${VESSEL_LOG_LEVEL:-info}
+    networks: [vessel-net]
+    # 纯平台薄壳：config/gateway 设 hub.auto_start:false；首启空 nodes.json（nodes:[]）⇒ 零 spawn（§1.5）。
+    # G4 后注册远程 node：
+    # docker compose exec gateway vessel gateway nodes add node-1 --remote \
+    #   --url https://node-1:8644 --token-env NODE_1_TOKEN
+  node-1:
+    image: ghcr.io/egg-rolls/vessel-node:${VESSEL_VERSION:-latest}
+    restart: unless-stopped
+    stop_grace_period: 30s        # node drain 可能较长（topology D4 不限时口径，容器给足余量）
+    volumes:
+      - node-1-data:/data         # sessions/runs/events + node.json 身份 + root-secret + federation secrets
+      - ./config/node-1:/home/bun/.vessel
+      - ./certs:/certs:ro
+    environment:
+      NODE_1_TOKEN: ${NODE_1_TOKEN:?在 .env 设置}   # 双注入：node 显式 token（与 gateway 共享同一 env 值）
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      HUB_JOIN_CODE: ${HUB_JOIN_CODE:-}
+      NODE_EXTRA_CA_CERTS: /certs/ca.crt
+    networks: [vessel-net]
+    # 不发布端口（D3）：浏览器数据面经 gateway /nodes/* 代理；CLI 远程 targeting 按需经反代。
+    # 水平扩展 node-2：复制本服务块改名 node-2（卷 node-2-data、证书 SAN=node-2、NODE_2_TOKEN），
+    # gateway 侧 nodes add node-2 --remote --url https://node-2:8644 --token-env NODE_2_TOKEN。
+    # 不用 --scale（每实例需独立身份/卷/证书/注册，D14）。
+  hub:
+    image: ghcr.io/egg-rolls/vessel-hub:${VESSEL_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - hub-data:/data            # registry.json + join-store + hub secrets
+      - ./config/hub:/home/bun/.vessel
+      - ./certs:/certs:ro
+    environment:
+      HUB_TOKEN: ${HUB_TOKEN:?在 .env 设置（openssl rand -hex 32）}
+      NODE_EXTRA_CA_CERTS: /certs/ca.crt
+    networks: [vessel-net]
+    # 单 compose 内不发布 8643（走 DNS）；跨主机联邦时加 ports: "8643:8643"。

@@ -54,6 +54,17 @@ export interface HookContext {
   tool?: string;
   /** BeforeTool / AfterTool：当前工具输入；BeforeTool 可经 HookResult.updatedInput 改写 */
   input?: unknown;
+  /**
+   * 成员实际 cwd（additive，P1 origin 标记侧；设计 §2.2）。AfterTool 时 = 该成员实际
+   * 工作目录（EU 从 member-cwd 事实填入），供相对路径归一化（修 config.cwd 口径错位）。
+   * 缺省 = 装配未填，消费方回退 config.cwd（现状基线，零回归）。
+   */
+  cwd?: string;
+  /**
+   * 成员 id（additive，P1 origin 标记侧；设计 §2.2；EU/runtime 身份事实，跨 body 稳定）。
+   * last_writer 抑制主键；缺省 = 装配未填，消费方回退 session_id 判等（现状基线）。
+   */
+  agent_id?: string;
   [key: string]: unknown;
 }
 

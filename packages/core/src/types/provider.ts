@@ -237,7 +237,9 @@ export interface ProviderRetryPolicy {
  * 针对「模型偶发返回空内容 + 无工具调用 + 终止原因」：无兜底时 loop 的两条终止路径
  * （stop / 其他 finish_reason）会把空串当终稿返回，agent 早退零输出（大上下文 / 压缩后更易发）。
  * 启用后空响应不终止——追加一条「继续你的任务」nudge（user 消息）重新轮询模型；
- * 重试限次，耗尽后落一条 `llm.empty_response`（action=exhausted）事件再回落原始终止行为。
+ * 重试限次，耗尽后落一条 `llm.empty_response`（action=exhausted）事件并抛
+ * `EmptyResponseExhaustedError`（code=empty_response_exhausted）⇒ run 标 failed，
+ * agent 层既有 peer 链路自动通知 parent（q-empty-exhaust，防静默早退）。
  *
  * 只管「语义空响应」；传输层断开 / 过载重试是另一套策略（`ProviderRetryPolicy`）。
  * 缺省值见 core `DEFAULT_EMPTY_RESPONSE_MAX_RETRIES` / `DEFAULT_EMPTY_RESPONSE_NUDGE`
@@ -250,11 +252,11 @@ export interface EmptyResponsePolicy {
    * 无感重试（缺省 true）：空响应时**丢弃空轮**（不发 llm.response、不写窗口），
    * 用已有一致 transcript（含上一个工具结果）原样重调模型——零注入零疤痕，
    * 与无感 resume 同源。连续空耗尽 `maxRetries` 后升级**一次** nudge 打破空模式
-   * （纯重调可能采样再吐空，nudge 是可靠性兜底）；再空则 exhausted 回落原始终止。
+   * （纯重调可能采样再吐空，nudge 是可靠性兜底）；再空则 exhausted 标 failed 并通知 parent。
    * false = 直接走 nudge 注入路径（一期行为）。
    */
   seamless?: boolean;
-  /** 重试上限（不含首次响应）；缺省 2；0 = 不重试（只落耗尽日志，也不升级 nudge）。 */
+  /** 重试上限（不含首次响应）；缺省 2；0 = 不重试（首个空响应即耗尽标 failed，也不升级 nudge）。 */
   maxRetries?: number;
   /** nudge 文案（以 user 消息追加）；缺省 `DEFAULT_EMPTY_RESPONSE_NUDGE`。 */
   nudge?: string;

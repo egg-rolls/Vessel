@@ -220,6 +220,11 @@ export interface TenantRuntimeBundle {
    */
   applyProviderModel: (model: string, next?: VesselConfig) => void;
   /**
+   * P3 收紧（两面重构 §11.1）：ModelRef 纯校验（gateway agents/sessions 参数闸）。
+   * 未命中注册表且无 legacy 透传 → 错误文案 + 候选；mock 模式缺省。
+   */
+  validateModelRef?: (ref: string) => string | undefined;
+  /**
    * P1-w2d（w1a 接缝）：install 之后对 capabilityManifest 非空的 in-process 插件调
    * `registerInProcessPlugin`，把 RPC / 贡献面登记进宿主 PluginRpcRegistry。
    * 由装配层在 `createPluginHostManager` 之后调用（cli gateway / bootstrap local）；
@@ -739,13 +744,17 @@ export async function buildTenantRuntime(
     tenantRunsDir: tenantPaths.runs_dir,
     tenantId,
   });
+  // §7.4 legacyPresent：provider.* 有非 default 层来源（与 registry-store 同口径）。
+  const legacyPresent = Object.entries(options.configSources ?? {}).some(
+    ([key, source]) => (key === 'provider' || key.startsWith('provider.')) && source !== 'default',
+  );
   const resolvedProvider = await timeStartup(
     'runtime.provider',
-    createProvider(config, loader, useMock, options.mockScenario),
+    createProvider(config, loader, useMock, options.mockScenario, legacyPresent),
   );
   const { provider, providerName, providerModel, providerBaseUrl, registry } = resolvedProvider;
-  // 0.51：opt-in 计价；无配置时为 undefined，total_cost 保持 0。
-  const pricing = createUsagePricing(config.pricing);
+  // 0.51：opt-in 计价；两面重构 §10.1 合并视图（entry.pricing 按 wire 名覆盖 pricing.models）。
+  const pricing = createUsagePricing(config.pricing, config.models?.entries);
 
   // P1-w2d：summarizer 与 EU 消费同一 resolveModel（默认热应用后压缩跟随）；
   // mock 无 registry → 常量闭包，与今天逐字等价。
@@ -1681,6 +1690,7 @@ export async function buildTenantRuntime(
       ownerProfile.model = model;
       if (next !== undefined) registry?.applyConfig(next);
     },
+    ...(registry !== undefined ? { validateModelRef: registry.validateModelRef } : {}),
     // provider 类能力插件（model-registry）由 wiring 收集；显式启用时 selection 的
     // 显式分支不排除 provider 类，同一插件会再进通用装载名单——两条路各持同一
     // descriptor/plugin（同 loader 缓存 + ESM 单实例）。去重单实现在装配层

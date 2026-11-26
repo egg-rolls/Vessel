@@ -116,6 +116,10 @@ export const CLI_FLAG_VALUE = {
   '--entry': '<json>',
   '--value-env': '<ENV>',
   '--value-stdin': null,
+  '--base-url': '<url>',
+  '--api-key-env': '<ENV>',
+  '--credential': '<id>',
+  '--provider': '<name>',
   '--node-id': '<node_id>',
   '--team-id': '<team_id>',
   '--peer-team-id': '<team_id>',
@@ -222,6 +226,10 @@ export const CLI_FLAG_HELP: Readonly<Record<CliFlag, MessageKey>> = {
   '--entry': 'flag.entry',
   '--value-env': 'flag.valueEnv',
   '--value-stdin': 'flag.valueStdin',
+  '--base-url': 'flag.baseUrl',
+  '--api-key-env': 'flag.apiKeyEnv',
+  '--credential': 'flag.credential',
+  '--provider': 'flag.provider',
   '--node-id': 'flag.nodeId',
   '--team-id': 'flag.teamId',
   '--peer-team-id': 'flag.peerTeamId',
@@ -371,28 +379,16 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   // ── model（model-registry RPC 包装；连接 flag 与 status / agents 同形）──
   { path: ['model', 'list'], summary: 'help.cmd.modelList', flags: MODEL_FLAGS },
   {
-    path: ['model', 'vendor-set'],
-    summary: 'help.cmd.modelVendorSet',
+    path: ['model', 'set'],
+    summary: 'help.cmd.modelSet',
     args: '<id>',
     flags: [...MODEL_FLAGS, '--entry'],
     required: ['--entry'],
   },
   {
-    path: ['model', 'vendor-remove'],
-    summary: 'help.cmd.modelVendorRemove',
+    path: ['model', 'remove'],
+    summary: 'help.cmd.modelRemove',
     args: '<id>',
-    flags: MODEL_FLAGS,
-  },
-  {
-    path: ['model', 'alias-set'],
-    summary: 'help.cmd.modelAliasSet',
-    args: '<alias> <ref>',
-    flags: MODEL_FLAGS,
-  },
-  {
-    path: ['model', 'alias-remove'],
-    summary: 'help.cmd.modelAliasRemove',
-    args: '<alias>',
     flags: MODEL_FLAGS,
   },
   {
@@ -404,8 +400,10 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   {
     path: ['model', 'credential-set'],
     summary: 'help.cmd.modelCredentialSet',
-    usage: 'vessel model credential-set <id> [--value-env <ENV> | --value-stdin] [options]',
-    flags: [...MODEL_FLAGS, '--value-env', '--value-stdin'],
+    usage:
+      'vessel model credential-set <id> --base-url <url> [--api-key-env <ENV>] [--value-env <ENV> | --value-stdin] [options]',
+    flags: [...MODEL_FLAGS, '--base-url', '--api-key-env', '--value-env', '--value-stdin'],
+    required: ['--base-url'],
   },
   {
     path: ['model', 'credential-remove'],
@@ -421,8 +419,8 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
   {
     path: ['model', 'test'],
     summary: 'help.cmd.modelTest',
-    args: '<vendor>',
-    flags: [...MODEL_FLAGS, '--model'],
+    args: '[<entry>]',
+    flags: [...MODEL_FLAGS, '--credential', '--provider', '--model'],
   },
 
   // ── attention（列表是命令，respond 是其子命令）──

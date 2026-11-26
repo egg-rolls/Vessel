@@ -1,20 +1,20 @@
 /**
- * 模型选择器（model-registry P2，native 共享组件）。
+ * 模型选择器（model-registry P2 → 两面重构 §9.2，native 共享组件）。
  *
  * 数据源唯一 = `plugin.model-registry.list`（in-process 插件 RPC；native client 直调
- * plugin.* 的先例 = PluginFrame 桥）。选项 = 「跟随默认」空值项 + 别名 + vendor/model
- * 分组。RPC 不可用（插件未加载 / 请求失败）时降级为禁用占位，不造第二套数据源，
- * 也不提供自由文本（P2 只给注册 ref + 跟随默认，收紧在 P3）。
+ * plugin.* 的先例 = PluginFrame 桥）。选项 = 「跟随默认」空值项 + 别称（条目 alias 字段
+ * 聚合）+ 条目键。**无自由文本输入**（P3 收紧兑现）：RPC 不可用时降级为禁用占位，
+ * 不造第二套数据源。
  *
  * 存量 pin（非空且不在注册清单里的值）原样显示 + 「未注册」标记：可保留、可重选，
- * 不静默丢。当前 gateway 的 agents.* 读 DTO 不返回 record.model，调用方拿得到 pin
- * 才谈得上预填；本组件只保证「给值就原样显示」。
+ * 不静默丢（P0-1 D7 纪律）。当前 gateway 的 agents.* 读 DTO 返回 record.model，
+ * 调用方拿得到 pin 才谈得上预填；本组件只保证「给值就原样显示」。
  *
  * 形状复用 plugin-ui Select（button + portal listbox）：它只解析 `<option>` children，
  * 不解析 optgroup —— 分组用 disabled 头部选项表达（value 恒 ''，不可选中；空值项
  * 永远在第一位，trigger 的按值查找不会落到头部上）。
  */
-import { Fragment, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useConnection } from '../gateway/ConnectionProvider';
 import type { NodeView } from '../gateway/NodeProvider';
 import { fetchNodeRpc, nodeKeyOf } from '../gateway/nodes';
@@ -34,15 +34,16 @@ export interface ModelPickerProps {
   emptyLabel?: string;
 }
 
-interface PickerVendor {
+interface PickerEntry {
   id: string;
-  models: string[];
+  name: string;
+  legacy: boolean;
 }
 
 interface PickerRegistry {
-  vendors: PickerVendor[];
+  entries: PickerEntry[];
   aliases: { alias: string; target: string }[];
-  /** 有效默认的展示串（`vendorId/wireModel`）；无效配置 / 无默认时缺省。 */
+  /** 有效默认的展示串（`entryId (wireModel)`）；无效配置 / 无默认时缺省。 */
   effective?: string;
 }
 
@@ -55,31 +56,28 @@ type PickerState =
 function parseRegistry(raw: unknown): PickerRegistry | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const record = raw as Record<string, unknown>;
-  if (!Array.isArray(record.vendors)) return undefined;
-  const vendors: PickerVendor[] = [];
-  for (const item of record.vendors) {
-    if (typeof item !== 'object' || item === null) continue;
-    const vendor = item as Record<string, unknown>;
-    if (typeof vendor.id !== 'string' || vendor.id === '') continue;
-    const models =
-      typeof vendor.models === 'object' && vendor.models !== null ? Object.keys(vendor.models) : [];
-    vendors.push({ id: vendor.id, models });
-  }
+  if (!Array.isArray(record.entries)) return undefined;
+  const entries: PickerEntry[] = [];
   const aliases: { alias: string; target: string }[] = [];
-  if (typeof record.aliases === 'object' && record.aliases !== null) {
-    for (const [alias, target] of Object.entries(record.aliases)) {
-      if (typeof target === 'string' && target !== '') aliases.push({ alias, target });
+  for (const item of record.entries) {
+    if (typeof item !== 'object' || item === null) continue;
+    const entry = item as Record<string, unknown>;
+    if (typeof entry.id !== 'string' || entry.id === '') continue;
+    const name = typeof entry.name === 'string' && entry.name !== '' ? entry.name : entry.id;
+    entries.push({ id: entry.id, name, legacy: entry.legacy === true });
+    if (typeof entry.alias === 'string' && entry.alias !== '') {
+      aliases.push({ alias: entry.alias, target: entry.id });
     }
   }
   let effective: string | undefined;
   const rawEffective = record.effective;
   if (typeof rawEffective === 'object' && rawEffective !== null) {
     const resolved = rawEffective as Record<string, unknown>;
-    if (typeof resolved.vendorId === 'string' && typeof resolved.wireModel === 'string') {
-      effective = `${resolved.vendorId}/${resolved.wireModel}`;
+    if (typeof resolved.entryId === 'string' && typeof resolved.wireModel === 'string') {
+      effective = `${resolved.entryId} (${resolved.wireModel})`;
     }
   }
-  return { vendors, aliases, ...(effective !== undefined ? { effective } : {}) };
+  return { entries, aliases, ...(effective !== undefined ? { effective } : {}) };
 }
 
 export function ModelPicker({
@@ -129,9 +127,7 @@ export function ModelPicker({
   const registry = state.status === 'ready' ? state.registry : undefined;
   const registered = new Set<string>();
   for (const { alias } of registry?.aliases ?? []) registered.add(alias);
-  for (const vendor of registry?.vendors ?? []) {
-    for (const model of vendor.models) registered.add(`${vendor.id}/${model}`);
-  }
+  for (const entry of registry?.entries ?? []) registered.add(entry.id);
   // 非空值不在清单里 → 原样保留为一个可选项；「未注册」判定只在注册表真的加载后下，
   // loading / failed 时只原样显示值，不预判它未注册。
   const pinOption = value !== '' && !registered.has(value);
@@ -173,21 +169,20 @@ export function ModelPicker({
             ))}
           </>
         )}
-        {registry?.vendors.map((vendor) => (
-          <Fragment key={vendor.id}>
+        {registry !== undefined && registry.entries.length > 0 && (
+          <>
             <option value="" disabled>
-              <span className="font-mono">{vendor.id}</span>
+              {t('modelPicker.groupEntries')}
             </option>
-            {vendor.models.map((model) => {
-              const ref = `${vendor.id}/${model}`;
-              return (
-                <option key={ref} value={ref}>
-                  <span className="font-mono">{ref}</span>
-                </option>
-              );
-            })}
-          </Fragment>
-        ))}
+            {registry.entries.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                <span className="font-mono">{entry.id}</span>
+                {entry.name !== entry.id && <span className="text-faint"> → {entry.name}</span>}
+                {entry.legacy && <span className="text-faint"> · legacy</span>}
+              </option>
+            ))}
+          </>
+        )}
       </Select>
       {state.status === 'failed' && (
         <p className="mt-1 mb-0 text-xs text-faint">{t('modelPicker.unavailable')}</p>

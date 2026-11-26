@@ -699,11 +699,9 @@ const QUEUED_ICON_VEIL = 'bg-white/10 enabled:hover:bg-white/20';
  * 排队态那个修饰类（`stream-card-queued-waiting`，见 chat.css）覆盖成 amber。`tone` 保持
  * 默认 neutral —— StreamCard 的词表里没有 amber，也不该为一张卡去改卡原语。
  *
- * 卡头那颗胶囊落在琥珀底上，所以显式传 `StatusChip` 的 `onBand` 变体（不透明底 + ink
- * 文字），不用「淡底淡字」的默认档。
- *
- * 卡头左侧只留**一个**状态标记：`StatusChip` 的字形（○ 排队）已经表达了状态，
- * notice 家族的身份圆点不再叠一个（见 chat.css 的 `.stream-card-queued`）。
+ * **不画状态胶囊**（用户裁定：在 inbox 即等待，无需显示）：卡头没有「等待中」那一格，
+ * 读作「<身份>: <说的话>」。`label` 覆盖（失败 / deferred 行的结论句）仍画在标题位。
+ * notice 家族的身份圆点不叠（见 chat.css 的 `.stream-card-queued`）。
  *
  * 写操作是**可操作控件**，落在**正文下面一行**（用户裁决）：不进 `summary`（那里不放
  * 可点元素），也不用 StreamCard 的 `actions` 槽 —— 那个槽在卡头之后、展开体之前渲染，
@@ -721,10 +719,10 @@ const QUEUED_ICON_VEIL = 'bg-white/10 enabled:hover:bg-white/20';
  * 「留档」而不是「撤掉」。
  *
  * **身份在卡内**：卡头 `meta` 槽写「这条是谁给的」（`human:` / `<agent 名>:`），
- * 正文 `summary` 仍只放那句话 —— 读起来是「等待中　human: 说的话」。以前身份是卡外左侧
- * 一个标签，卡片只是「条带里的一行」；现在身份是卡头的轻量标记，卡片自己就说得清是谁。
- * 顺序天然由 StreamCard 的卡头给出（`title` → `meta` → `summary`），所以身份一定落在
- * 「等待中」胶囊之后、正文之前，不需要在这里补间距（卡头是 `gap: 10px` 的 flex 行）。
+ * 正文 `summary` 仍只放那句话 —— 读起来是「human: 说的话」（在 inbox 即等待，不画
+ * 状态胶囊）。以前身份是卡外左侧一个标签，卡片只是「条带里的一行」；现在身份是卡头的
+ * 轻量标记，卡片自己就说得清是谁。顺序天然由 StreamCard 的卡头给出（`title` → `meta` →
+ * `summary`）：无 `label` 时标题位为空（CSS `:empty` 隐藏），身份就是卡头第一格。
  *
  * 不把身份拼进 `summary` 的理由：`summary` 是单行 ellipsis 的正文位，拼进去身份会跟着
  * 长文本一起被截掉，也失去「等宽小字 + 弱化色」的层次；`meta` 槽天生就是「标题后的
@@ -740,6 +738,7 @@ export function QueuedNotice({
   label,
   identity,
   defaultOpen = false,
+  entering = false,
 }: {
   item: QueuedSubmission;
   /**
@@ -783,25 +782,30 @@ export function QueuedNotice({
    */
   onRetry?: (id: string) => void;
   /**
-   * 卡头文案；缺省「等待中」（`chat.pending.waiting`）。
+   * 卡头结论句覆盖（失败 / deferred 行：「未发出 · 原因」）；缺省不画状态位 ——
+   * 在 inbox 即等待，无需显示（用户裁定）。
    *
    * 不编队列序号：条目落盘后没有权威顺序（`ts` 只保证「谁先到」），而 run 的
    * `queue_position` 是调度器口径、对没有 run 的条目无意义。
    */
   label?: string;
   /**
-   * 身份（这条待处理输入是谁给的）：卡头 `meta` 槽，落在「等待中」胶囊之后。
+   * 身份（这条待处理输入是谁给的）：卡头 `meta` 槽；无 `label` 时它就是卡头第一格。
    *
    * 由调用方给**纯名字**（条带：`human` 走 i18n，agent 源给名 / id），冒号在这里补 ——
-   * 卡面统一是 `<身份>: <说的话>`，不指望上游记得带分隔符。缺省 = 不渲染身份槽
-   * （卡头回到「胶囊 + 摘要」两段，与没有身份的排队项一致）。
+   * 卡面统一是 `<身份>: <说的话>`，不指望上游记得带分隔符。缺省 = 不渲染身份槽。
    */
   identity?: string;
   /** 默认展开（ui.expandCards || verbosity === 'debug'）；排队卡是纯信息卡。 */
   defaultOpen?: boolean;
+  /**
+   * 入场动画（inbox 统一批 §7）：live 追加的新条目才播 `.motion-appear`（只动透明度）。
+   * 判定在调用方（`useEnteringItemKeys`：首屏整批 = 历史不播，之后新 key 才播）；
+   * 本组件只透传给 StreamCard，不自己判「新不新」。
+   */
+  entering?: boolean;
 }) {
-  // 待处理条目只有一种状态：还在等（取消成功 ⇒ 条目消失 ⇒ 整张卡消失，没有残留态）。
-  const status = 'queued';
+  // 在 inbox 即等待：不画状态胶囊（用户裁定）。取消成功 ⇒ 条目消失 ⇒ 整张卡消失，没有残留态。
   const stateClass = 'stream-card-queued-waiting';
   // 两颗键的公共形：形状层只取一次（与输入框的发送键 / 回形针同一份），色调走次要档，
   // 底色换成这层白纱（`QUEUED_ICON_VEIL`；twMerge 会把形状层的 `bg-sunken` 让掉）。
@@ -902,17 +906,13 @@ export function QueuedNotice({
       // 卡宽跟列一致（w-full + min-w-0 + max-w-full）：短输入不缩水、长输入不撑宽。
       className={`notice-block stream-card-queued w-full min-w-0 max-w-full ${stateClass}`.trim()}
       defaultOpen={defaultOpen}
-      title={
-        <StatusChip
-          status={status}
-          label={label ?? t('chat.pending.waiting')}
-          // 排队中的胶囊在琥珀底上 ⇒ onBand（不透明底 + ink 文字）。
-          variant="onBand"
-        />
-      }
+      entering={entering}
+      // 无结论句覆盖时标题位为空（在 inbox 即等待，不画状态胶囊）；空标题由 CSS
+      // `.stream-card-queued … .stream-card-title:empty` 隐藏，身份 meta 就是卡头第一格。
+      title={label ?? null}
       summary={item.input}
       // 身份：`human:` / `<agent 名>:` —— 卡头 flex 顺序是 title → meta → summary，
-      // 所以它一定落在「等待中」胶囊之后、正文之前。颜色用这条带的前景色 `--amber`
+      // 无 label 时它是第一格。颜色用这条带的前景色 `--amber`
       //（tokens.css 里 amber 档的「前景 / 图标」角色，展开 chevron 同色）：meta 槽默认的
       // `text-faint` 压在 `--amber-soft` 上只有约 3.8:1，2xs 小字读不清。
       meta={identity === undefined ? undefined : <span className="text-amber">{identity}:</span>}

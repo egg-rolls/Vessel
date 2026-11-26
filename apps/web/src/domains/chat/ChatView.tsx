@@ -16,6 +16,7 @@ import { useRuntimeVisibility } from '../../state/runtime-visibility';
 import { sessionTitle } from '../../state/sessions';
 import { resourceData } from '../../state/useResource';
 import { useAgentStore } from '../../stores/agentStore';
+import { useAgentInboxRefreshTick } from '../inbox/agent-inbox-refresh';
 import { useNodeNames } from '../nodes/useNodeNames';
 import { useAskCursorPrune } from '../pending/ask-cursor-store';
 import { useAskDraftPrune } from '../pending/ask-draft-store';
@@ -29,6 +30,7 @@ import { ChatHeader } from './ChatHeader';
 import { ComposerSlot } from './ComposerSlot';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
 import { errorMessage } from './errors';
+import { sessionBodyOwners } from './main-session';
 import { NodeNamesProvider } from './node-name-context';
 import { PendingStrip } from './PendingStrip';
 import type { PendingSend } from './pending-sends';
@@ -41,7 +43,6 @@ import { useAnsweredAsks } from './useAnsweredAsks';
 import { useChatSessions } from './useChatSessions';
 import { useChatSubmit } from './useChatSubmit';
 import { useChatTranscript } from './useChatTranscript';
-import { useInboxRefreshTick } from './useInboxRefresh';
 import { usePendingSends } from './usePendingSends';
 
 type ChatRoute = Extract<Route, { domain: 'chat' }>;
@@ -53,24 +54,28 @@ const EMPTY_ANSWERED_ASKS: readonly AnsweredAsk[] = [];
 const EMPTY_PENDING_SENDS: readonly PendingSend[] = [];
 
 /**
- * 当前会话 body 的成员 id（工具描述目录按它拉 `tools.list{agent_id}`）。
+ * 当前会话 body 的成员 id（工具描述目录 / inbox 面板按它拉 agent 级数据）。
  *
- * 判据来自**已有的事件派生 agent 树**（`agentsForSession` 的同一份数据），不新增 RPC：
- * 显式选中的子 agent 优先；否则取「`sessionId` 恰好是本会话」且深度最小的节点 ——
- * 那正是拥有这具 body 的成员。历史会话 / 进程重启后事件树可能为空，此时返回
- * `undefined`，目录退回节点插件面（与今天一致）。
+ * 派生链（inbox 统一批 §4.1，全部已有数据，不新增 RPC）：
+ * 1. 显式选中的子 agent（`?agent=` 深链详情态）优先；
+ * 2. 事件派生 agent 树（`agentsForSession` 的同一份数据）：取「`sessionId` 恰好是
+ *    本会话」且深度最小的节点 —— 那正是拥有这具 body 的成员；
+ * 3. roster 反查兜底（`sessionBodyOwners`）：历史会话 / 进程重启后事件树为空，
+ *    但 roster 的 `session_id` / `bodies` / `body_history` 仍认得这具 body 归谁。
+ * 都命中不了返回 `undefined`（不猜 id）：目录退回节点插件面，面板不发 RPC。
  */
 function catalogAgentOfSession(
   activeAgentId: string | undefined,
   nodes: readonly { id: string; depth: number; sessionId?: string }[],
   sessionId: string | null,
+  bodyOwners: ReadonlyMap<string, string>,
 ): string | undefined {
   if (activeAgentId !== undefined) return activeAgentId;
   if (sessionId === null) return undefined;
   const owners = nodes
     .filter((node) => node.sessionId === sessionId)
     .sort((a, b) => a.depth - b.depth);
-  return owners[0]?.id;
+  return owners[0]?.id ?? bodyOwners.get(sessionId);
 }
 
 /** 待确认的历史消息分支操作：keepMessages 是 `sessions.get` 的 session.messages 下标。 */
@@ -271,11 +276,6 @@ export function ChatView({
     },
   });
 
-  // inbox 变更的 live 触发器：agent 用 `inbox read/delete` 消费条目、或新条目入队时，
-  // 条带立刻重读一次（不等 2s 兜底轮询，更不等页面刷新）。数据源仍是那次 RPC，
-  // 事件只当触发器（判据见 useInboxRefresh.ts）。
-  const inboxRefreshTick = useInboxRefreshTick(snapshot.entries, selectedId);
-
   // 已答提问的取数：数据来自服务端 answered 记录（落盘的真相），刷新 / 重连靠它重建。
   // 子 agent 详情态不读（那一屏讲的是另一个 run），草稿态没有会话 id 也不读。
   const answeredAsks = useAnsweredAsks({
@@ -414,11 +414,36 @@ export function ChatView({
     }
   };
 
-  // 工具描述目录：知道属于哪个成员就按成员拉（`inbox` 这类成员内置工具才有描述）。
+  // 工具描述目录 / inbox 面板：知道属于哪个成员就按成员拉（`inbox` 这类成员内置工具才有描述）。
+  // roster 反查表与 attribution 同源（同一份 rosterState，不新增轮询 / RPC）。
+  const bodyOwners = useMemo(
+    () => sessionBodyOwners(resourceData(rosterState) ?? []),
+    [rosterState],
+  );
   const catalogAgentId = catalogAgentOfSession(
     transcriptApi.activeAgent?.id,
     transcriptApi.sessionAgents,
     selectedId,
+    bodyOwners,
+  );
+
+  // inbox 变更的 live 触发器（agent 级，与取数同口径 I-1）：该 agent 的条目被
+  // `inbox read/delete` 消费、或新条目入队（含跨会话 / wake-quiet 投递）时，条带立刻
+  // 重读一次（不等 2s 兜底轮询，更不等页面刷新）。数据源仍是那次 RPC，事件只当触发器
+  // （判据见 ../inbox/agent-inbox-refresh.ts；会话级 useInboxRefresh 已退役删除）。
+  // 工具帧归属用的 body sessions 由 roster 反查表反转而来（同一份数据，不新增 RPC）。
+  const agentSessions = useMemo(() => {
+    const sessions = new Set<string>();
+    if (catalogAgentId === undefined) return sessions;
+    for (const [session, agent] of bodyOwners) {
+      if (agent === catalogAgentId) sessions.add(session);
+    }
+    return sessions;
+  }, [bodyOwners, catalogAgentId]);
+  const inboxRefreshTick = useAgentInboxRefreshTick(
+    snapshot.entries,
+    catalogAgentId,
+    agentSessions,
   );
 
   return (
@@ -503,12 +528,6 @@ export function ChatView({
                   ...(agentId ? { agent: agentId } : {}),
                 });
               }}
-              onOpenInbox={() =>
-                navigate({
-                  domain: 'inbox',
-                  ...(catalogAgentId !== undefined ? { agentId: catalogAgentId } : {}),
-                })
-              }
             />
 
             {selectedId && (
@@ -597,11 +616,13 @@ export function ChatView({
             {/* 待处理条带与转录区**同一个容器**（`.content-stage`），但不在滚动区里：
               条带只负责「还有几条在等」，跟着输入区一起常驻。宽度 / 内边距由它自己
               对齐消息列（见 PendingStrip.tsx）。数据源是服务端持久真相
-              （`agents.inbox{ sessionId }`），刷新 / 切会话都不丢；`refreshKey` 只是
-              「再读一次盘」的触发器（本会话新受理一次发送 / run 数变化 / inbox 变更
-              live 事件：`inbox read/delete` 消费、新条目入队，见 useInboxRefresh.ts）。 */}
+              （`agents.inbox{ agent_id }`，agent 级全量，I-1），刷新 / 切会话都不丢；
+              `refreshKey` 只是「再读一次盘」的触发器（本会话新受理一次发送 / run 数变化 /
+              inbox 变更 live 事件：`inbox read/delete` 消费、新条目入队，**agent 级**判据，
+              含跨会话 / wake-quiet 投递；面板展开重读在条带内部，D-5）。 */}
             <PendingStrip
               sessionId={selectedId}
+              agentId={catalogAgentId}
               client={client}
               epoch={epoch}
               refreshKey={

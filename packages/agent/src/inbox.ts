@@ -463,6 +463,38 @@ export interface AgentInboxStoreOptions {
    * 这一步在 `consume` 之前执行，注入方负责「取消 queued run + 出队」。
    */
   beforeClaim?: (agentId: string, ids: readonly string[]) => Promise<void> | void;
+  /**
+   * 状态机变更钩子（inbox 统一批 §6.2，与 `beforeClaim` 同一注入先例）；缺省 = 无观察方。
+   *
+   * 每个 mutation 口（append / hold / unhold / releaseHeldFor / claim / markConsumed /
+   * discard / consume）**落状态后**同步调用一次，装配层据此发 `agent.inbox.changed` 帧。
+   * 纯读（list / read 的挑选 / findByIds / inputHead）不调；no-op mutation（重复 id 准入、
+   * 已 consumed 再消费、未持有再 unhold）也不调 —— 计数不变不发。
+   *
+   * 钩子抛错不影响状态机（store 已落状态，观察方失败只记日志）；回调里不做重活。
+   */
+  onChange?: (agentId: string, change: AgentInboxChange) => void;
+}
+
+/** `agent.inbox.changed` 的变更理由（store 状态机的出口词汇，§6.2 payload.reason）。 */
+export type AgentInboxChangeReason =
+  | 'appended'
+  | 'held'
+  | 'unheld'
+  | 'released'
+  | 'consumed'
+  | 'claimed'
+  | 'discarded';
+
+/** 一次 mutation 的变更摘要（触发器不读它，数据永远来自那次 RPC；诊断 / 未来细粒度 UI 用）。 */
+export interface AgentInboxChange {
+  reason: AgentInboxChangeReason;
+  /** 本次变更的条目 id。 */
+  messageIds: readonly string[];
+  /** 条目归属会话：变更条目共享同一已知归属时给出；wake/quiet / 混合归属缺省。 */
+  sessionId?: string;
+  /** 投递模式：仅 `appended`。 */
+  delivery?: AgentInboxDelivery;
 }
 
 interface InboxFile {
@@ -597,6 +629,8 @@ export class AgentInboxStore implements AgentInboxPort {
   private readonly agents = new Map<string, AgentInboxState>();
   /** 见 `AgentInboxStoreOptions.beforeClaim`；缺省 = 没有执行侧可收口。 */
   private readonly beforeClaim?: (agentId: string, ids: readonly string[]) => Promise<void> | void;
+  /** 见 `AgentInboxStoreOptions.onChange`；缺省 = 无观察方（纯 store）。 */
+  private readonly onChange?: (agentId: string, change: AgentInboxChange) => void;
   /** 永不 reject 的串行写链（单写者） */
   private writeChain: Promise<void> = Promise.resolve();
 
@@ -617,6 +651,7 @@ export class AgentInboxStore implements AgentInboxPort {
         ? max
         : DEFAULT_MAX_INBOX_MESSAGES;
     this.beforeClaim = options.beforeClaim;
+    this.onChange = options.onChange;
   }
 
   append(
@@ -676,24 +711,62 @@ export class AgentInboxStore implements AgentInboxPort {
     });
     this.prune(state);
     void this.enqueueWrite(state);
+    this.notifyChange(agentId, {
+      reason: 'appended',
+      messageIds: [message.id],
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      delivery,
+    });
     return { accepted: true };
   }
 
   hold(agentId: string, id: string, bodyId: string): void {
-    this.stateFor(agentId).held.set(id, bodyId);
+    const state = this.stateFor(agentId);
+    const previous = state.held.get(id);
+    state.held.set(id, bodyId);
+    // 计数不变不发：同 body 重 hold / 未知 id / 已 consumed 条目都不改 unread/pending。
+    if (previous === bodyId) return;
+    const message = state.messages.find((entry) => entry.id === id);
+    if (message === undefined || message.status !== 'unread') return;
+    this.notifyChange(agentId, {
+      reason: 'held',
+      messageIds: [id],
+      ...(message.session_id !== undefined ? { sessionId: message.session_id } : {}),
+    });
   }
 
   /** I4：只释放 `bodyId` 自己持有的消息；其它 live body 的在途队列不受影响。 */
   releaseHeldFor(agentId: string, bodyId: string): void {
     const state = this.stateFor(agentId);
+    const released: string[] = [];
     for (const [id, owner] of state.held) {
-      if (owner === bodyId) state.held.delete(id);
+      if (owner === bodyId) {
+        state.held.delete(id);
+        released.push(id);
+      }
     }
+    if (released.length === 0) return;
+    const sessionId = this.changeSessionId(state, released);
+    this.notifyChange(agentId, {
+      reason: 'released',
+      messageIds: released,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+    });
   }
 
   unhold(agentId: string, ids: readonly string[]): void {
     const state = this.stateFor(agentId);
-    for (const id of ids) state.held.delete(id);
+    const unheld: string[] = [];
+    for (const id of ids) {
+      if (state.held.delete(id)) unheld.push(id);
+    }
+    if (unheld.length === 0) return;
+    const sessionId = this.changeSessionId(state, unheld);
+    this.notifyChange(agentId, {
+      reason: 'unheld',
+      messageIds: unheld,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+    });
   }
 
   list(
@@ -805,7 +878,9 @@ export class AgentInboxStore implements AgentInboxPort {
       // `sessionId` 缺省（`agents.claim` RPC 那条路）= 没有任何 body 把它当 run input
       // 消费过，`consumed_by_session` 就不写：那个字段的含义是「哪具 body 执行的」，
       // 认领不是执行。模型侧工具会传自己的 session（它就是那个想「收下」的 body）。
-      await this.consume(agentId, claimed, sessionId);
+      // 帧理由走 `claimed`（与 read/markConsumed 的 `consumed` 区分，§6.2）；
+      // 发帧在 consume 里统一做，这里不另发（一次 mutation 一条帧）。
+      await this.consume(agentId, claimed, sessionId, 'claimed');
     }
     return {
       claimed,
@@ -891,9 +966,16 @@ export class AgentInboxStore implements AgentInboxPort {
       state.held.delete(id);
     }
     if (deleted.length > 0) {
+      // 归属在移除前取（移除后查不到条目）；帧在落状态后发。
+      const sessionId = this.changeSessionId(state, deleted);
       const removed = new Set(deleted);
       state.messages = state.messages.filter((message) => !removed.has(message.id));
       void this.enqueueWrite(state);
+      this.notifyChange(agentId, {
+        reason: 'discarded',
+        messageIds: deleted,
+        ...(sessionId !== undefined ? { sessionId } : {}),
+      });
     }
     return { deleted, skipped };
   }
@@ -906,6 +988,38 @@ export class AgentInboxStore implements AgentInboxPort {
 
   async flush(): Promise<void> {
     await this.writeChain;
+  }
+
+  /**
+   * 变更钩子的唯一调用口：状态已落，观察方抛错只记日志，不打断状态机。
+   * 缺省（无 onChange）零开销。
+   */
+  private notifyChange(agentId: string, change: AgentInboxChange): void {
+    if (this.onChange === undefined) return;
+    try {
+      this.onChange(agentId, change);
+    } catch (error) {
+      this.logger.warn('inbox.onChange.failed', {
+        agent_id: agentId,
+        reason: change.reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * 帧的 `sessionId`：变更条目的**共同已知归属**（§6.2「单条且已知时」的多条推广）。
+   * 任一条目缺归属或归属不一致 ⇒ undefined（wake/quiet / 混合归属不猜）。
+   */
+  private changeSessionId(state: AgentInboxState, ids: readonly string[]): string | undefined {
+    let session: string | undefined;
+    for (const id of ids) {
+      const value = state.messages.find((message) => message.id === id)?.session_id;
+      if (value === undefined) return undefined;
+      if (session === undefined) session = value;
+      else if (session !== value) return undefined;
+    }
+    return session;
   }
 
   /**
@@ -942,21 +1056,29 @@ export class AgentInboxStore implements AgentInboxPort {
     agentId: string,
     ids: readonly string[],
     sessionId?: string,
+    reason: 'consumed' | 'claimed' = 'consumed',
   ): Promise<void> {
     const state = this.stateFor(agentId);
     if (!state.available) return;
     const wanted = new Set(ids);
     if (wanted.size === 0) return;
-    let changed = false;
+    const changedIds: string[] = [];
     for (const message of state.messages) {
       if (!wanted.has(message.id)) continue;
-      if (message.status !== 'consumed') changed = true;
+      if (message.status !== 'consumed') changedIds.push(message.id);
       message.status = 'consumed';
       if (sessionId !== undefined) message.consumed_by_session = sessionId;
       state.held.delete(message.id);
     }
-    // startup prompt 不在 inbox 里：未知 id 不触发空写。
-    if (changed) await this.enqueueWrite(state);
+    // startup prompt 不在 inbox 里：未知 id 不触发空写；已 consumed 再消费也不发帧。
+    if (changedIds.length === 0) return;
+    await this.enqueueWrite(state);
+    const attribution = this.changeSessionId(state, changedIds);
+    this.notifyChange(agentId, {
+      reason,
+      messageIds: changedIds,
+      ...(attribution !== undefined ? { sessionId: attribution } : {}),
+    });
   }
 
   private stateFor(agentId: string): AgentInboxState {
@@ -1291,7 +1413,11 @@ export function createInboxTool(options: {
       properties: {
         // 0.55：`claim` 不在枚举里 —— 它已经并进 `read`。老会话仍发它时按别名执行
         // （见 handler 的 legacy 分支），但模型看得到的契约只有这四个动作。
-        action: { type: 'string', enum: ['list', 'read', 'delete', 'insert'] },
+        action: {
+          type: 'string',
+          enum: ['list', 'read', 'delete', 'insert'],
+          description: 'Default list',
+        },
         ids: {
           type: 'array',
           items: { type: 'string' },
@@ -1314,11 +1440,11 @@ export function createInboxTool(options: {
           description: 'insert: message text (non-empty)',
         },
       },
-      required: ['action'],
     },
     async handler(args, ctx: ToolContext): Promise<string> {
       const input = isRecordValue(args) ? args : {};
-      const action = input.action;
+      // 零参 peek 范式（对齐 skills/recall）：缺省 action = list，只读计数不消费。
+      const action = input.action ?? 'list';
       // 0.55 兼容：`claim` 已并入 `read`。老会话（0.51 的模型契约）还会发它 —— 认作
       // `read` 的别名执行同一套语义（取正文 + 消费 + 取消 queued run），结果里附一行
       // `note` 指路。不报错（意图本来就一致），也不静默（模型得知道契约变了）。

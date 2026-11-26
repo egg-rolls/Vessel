@@ -394,6 +394,8 @@ export interface StartAgentOwnerServerOptions {
   sessionFor?: () => SessionStore | undefined;
   /** canonical `teams.*` 控制面；缺省时方法仍在表内，返回 `not_found`。 */
   teams?: TeamControlLike;
+  /** P3 收紧（两面重构 §11.1）：model 参数未注册 ref 校验（缺省不校验）。 */
+  modelRefError?: (ref: string) => string | undefined;
   dataDir: string;
   /**
    * 0.49 T4：内部单 id 保留在调用方（bootstrap）过渡；owner server 不再使用，
@@ -488,6 +490,7 @@ function createOwnerRpc(options: {
   control: AgentControlLike;
   sessionFor?: () => SessionStore | undefined;
   teams?: TeamControlLike;
+  modelRefError?: (ref: string) => string | undefined;
   ownerId: string;
 }): OwnerRpc {
   const sessionMethods = createSessionMethods({
@@ -503,6 +506,7 @@ function createOwnerRpc(options: {
       liveRuns: () => [],
       agent: options.control,
       ...(options.teams !== undefined ? { teams: options.teams } : {}),
+      ...(options.modelRefError !== undefined ? { modelRefError: options.modelRefError } : {}),
     }),
     ...sessionMethods,
     ...createTeamMethods({ teams: options.teams }),
@@ -554,6 +558,7 @@ export async function startAgentOwnerServer(
     control: options.control,
     ...(options.sessionFor !== undefined ? { sessionFor: options.sessionFor } : {}),
     ...(options.teams !== undefined ? { teams: options.teams } : {}),
+    ...(options.modelRefError !== undefined ? { modelRefError: options.modelRefError } : {}),
     ownerId,
   });
 

@@ -418,7 +418,7 @@ export type PsCommand = {
 };
 
 /**
- * `vessel model ...` 子命令：model-registry 插件 canonical RPC 的 CLI 包装。
+ * `vessel model ...` 子命令：model-registry 插件 canonical RPC 的 CLI 包装（两面重构 §8.2）。
  *
  * kind 与 `plugin.model-registry.<name>` 一一对应（kebab → snake 在命令层映射）。
  * credential-set 的 value 不在 argv 出现：只经 `--value-env` / `--value-stdin` /
@@ -426,21 +426,28 @@ export type PsCommand = {
  */
 export type ModelCommand =
   | { kind: 'list'; json: boolean }
-  | { kind: 'vendor-set'; id: string; entry: unknown; json: boolean }
-  | { kind: 'vendor-remove'; id: string; json: boolean }
-  | { kind: 'alias-set'; alias: string; ref: string; json: boolean }
-  | { kind: 'alias-remove'; alias: string; json: boolean }
+  | { kind: 'set'; id: string; entry: unknown; json: boolean }
+  | { kind: 'remove'; id: string; json: boolean }
   | { kind: 'set-default'; ref: string; json: boolean }
   | {
       kind: 'credential-set';
       id: string;
+      baseUrl: string;
+      apiKeyEnv?: string;
       valueEnv?: string;
       valueStdin: boolean;
       json: boolean;
     }
   | { kind: 'credential-remove'; id: string; json: boolean }
   | { kind: 'credentials-list'; json: boolean }
-  | { kind: 'test'; vendor: string; model?: string; json: boolean };
+  | {
+      kind: 'test';
+      entry?: string;
+      credential?: string;
+      provider?: string;
+      model?: string;
+      json: boolean;
+    };
 
 /** `vessel hub ...` 子命令（S5） */
 export type HubCommand =
@@ -4993,15 +5000,13 @@ function parseFederationPeerArgs(rest: string[], args: CliArgs): ParseResult {
 /** 位置参数规格：个数 + 缺参错误里的用法提示。 */
 const MODEL_POSITIONAL_SPEC: Readonly<Record<string, { count: number; usage: string }>> = {
   list: { count: 0, usage: '' },
-  'vendor-set': { count: 1, usage: '<id>' },
-  'vendor-remove': { count: 1, usage: '<id>' },
-  'alias-set': { count: 2, usage: '<alias> <ref>' },
-  'alias-remove': { count: 1, usage: '<alias>' },
+  set: { count: 1, usage: '<id>' },
+  remove: { count: 1, usage: '<id>' },
   'set-default': { count: 1, usage: '<ref>' },
   'credential-set': { count: 1, usage: '<id>' },
   'credential-remove': { count: 1, usage: '<id>' },
   'credentials-list': { count: 0, usage: '' },
-  test: { count: 1, usage: '<vendor>' },
+  test: { count: 0, usage: '[<entry>] (--credential <id> for a credential-level ping)' },
 };
 
 /**
@@ -5009,7 +5014,7 @@ const MODEL_POSITIONAL_SPEC: Readonly<Record<string, { count: number; usage: str
  * i===0 提前返回，不进全局 `--connect` switch）；写回全局 connectArg /
  * connectTokenArg / caArg，registry 透传给命令层（与 status / agents / errors 同形）。
  *
- * 解析层只做语法与必填；vendor entry 的字段 / 语义校验在插件 handler（parseVendorEntry）。
+ * 解析层只做语法与必填；model entry 的字段 / 语义校验在插件 handler（parseModelEntry）。
  */
 function parseModelArgs(rest: string[], args: CliArgs): ParseResult {
   const sub = rest[0];
@@ -5028,6 +5033,10 @@ function parseModelArgs(rest: string[], args: CliArgs): ParseResult {
   let entrySeen = false;
   let valueEnv: string | undefined;
   let valueStdin = false;
+  let baseUrl: string | undefined;
+  let apiKeyEnv: string | undefined;
+  let credential: string | undefined;
+  let provider: string | undefined;
   let model: string | undefined;
   const positional: string[] = [];
 
@@ -5050,7 +5059,7 @@ function parseModelArgs(rest: string[], args: CliArgs): ParseResult {
       i = value.next;
       continue;
     }
-    if (a === '--entry' && sub === 'vendor-set') {
+    if (a === '--entry' && sub === 'set') {
       const value = readFlagValue(tail, i, '--entry');
       if (!value.ok) return value;
       try {
@@ -5062,9 +5071,40 @@ function parseModelArgs(rest: string[], args: CliArgs): ParseResult {
         };
       }
       if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-        return { ok: false, error: '--entry must be a JSON object (vendor entry)' };
+        return { ok: false, error: '--entry must be a JSON object (model entry)' };
       }
       entrySeen = true;
+      i = value.next;
+      continue;
+    }
+    if (a === '--base-url' && sub === 'credential-set') {
+      const value = readFlagValue(tail, i, '--base-url');
+      if (!value.ok) return value;
+      baseUrl = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--api-key-env' && sub === 'credential-set') {
+      const value = readFlagValue(tail, i, '--api-key-env');
+      if (!value.ok) return value;
+      if (!HUB_ENV_NAME_RE.test(value.value)) {
+        return { ok: false, error: 'Invalid --api-key-env: expected an environment variable name' };
+      }
+      apiKeyEnv = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--credential' && sub === 'test') {
+      const value = readFlagValue(tail, i, '--credential');
+      if (!value.ok) return value;
+      credential = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--provider' && sub === 'test') {
+      const value = readFlagValue(tail, i, '--provider');
+      if (!value.ok) return value;
+      provider = value.value;
       i = value.next;
       continue;
     }
@@ -5108,11 +5148,12 @@ function parseModelArgs(rest: string[], args: CliArgs): ParseResult {
     return { ok: false, error: `${connectOnly} requires --connect` };
   }
 
-  if (positional.length !== spec.count) {
+  const positionalOk = sub === 'test' ? positional.length <= 1 : positional.length === spec.count;
+  if (!positionalOk) {
     return {
       ok: false,
       error:
-        spec.count === 0
+        spec.count === 0 && sub !== 'test'
           ? `model ${sub} takes no positional arguments`
           : `model ${sub} requires ${spec.usage}`,
     };
@@ -5122,26 +5163,15 @@ function parseModelArgs(rest: string[], args: CliArgs): ParseResult {
     case 'list':
       args.modelCommand = { kind: 'list', json };
       break;
-    case 'vendor-set': {
+    case 'set': {
       if (!entrySeen) {
-        return { ok: false, error: 'model vendor-set requires --entry <json>' };
+        return { ok: false, error: 'model set requires --entry <json>' };
       }
-      args.modelCommand = { kind: 'vendor-set', id: positional[0] ?? '', entry, json };
+      args.modelCommand = { kind: 'set', id: positional[0] ?? '', entry, json };
       break;
     }
-    case 'vendor-remove':
-      args.modelCommand = { kind: 'vendor-remove', id: positional[0] ?? '', json };
-      break;
-    case 'alias-set':
-      args.modelCommand = {
-        kind: 'alias-set',
-        alias: positional[0] ?? '',
-        ref: positional[1] ?? '',
-        json,
-      };
-      break;
-    case 'alias-remove':
-      args.modelCommand = { kind: 'alias-remove', alias: positional[0] ?? '', json };
+    case 'remove':
+      args.modelCommand = { kind: 'remove', id: positional[0] ?? '', json };
       break;
     case 'set-default':
       args.modelCommand = { kind: 'set-default', ref: positional[0] ?? '', json };
@@ -5150,9 +5180,14 @@ function parseModelArgs(rest: string[], args: CliArgs): ParseResult {
       if (valueEnv !== undefined && valueStdin) {
         return { ok: false, error: '--value-env and --value-stdin are mutually exclusive' };
       }
+      if (baseUrl === undefined || baseUrl.trim() === '') {
+        return { ok: false, error: 'model credential-set requires --base-url <url>' };
+      }
       args.modelCommand = {
         kind: 'credential-set',
         id: positional[0] ?? '',
+        baseUrl,
+        ...(apiKeyEnv !== undefined ? { apiKeyEnv } : {}),
         ...(valueEnv !== undefined ? { valueEnv } : {}),
         valueStdin,
         json,
@@ -5165,14 +5200,24 @@ function parseModelArgs(rest: string[], args: CliArgs): ParseResult {
     case 'credentials-list':
       args.modelCommand = { kind: 'credentials-list', json };
       break;
-    case 'test':
+    case 'test': {
+      const entryArg = positional[0];
+      if (entryArg !== undefined && credential !== undefined) {
+        return { ok: false, error: 'model test takes <entry> or --credential, not both' };
+      }
+      if (entryArg === undefined && credential === undefined) {
+        return { ok: false, error: 'model test requires <entry> or --credential <id>' };
+      }
       args.modelCommand = {
         kind: 'test',
-        vendor: positional[0] ?? '',
+        ...(entryArg !== undefined ? { entry: entryArg } : {}),
+        ...(credential !== undefined ? { credential } : {}),
+        ...(provider !== undefined ? { provider } : {}),
         ...(model !== undefined ? { model } : {}),
         json,
       };
       break;
+    }
   }
   return { ok: true, args };
 }

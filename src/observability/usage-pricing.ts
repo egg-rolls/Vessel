@@ -16,7 +16,7 @@
  * @module vessel/usage-pricing
  */
 
-import type { PricingConfig } from '@vessel-agent/config';
+import type { ModelEntry, PricingConfig } from '@vessel-agent/config';
 import type { Usage, UsagePricing } from '@vessel-agent/core';
 
 const PER_MILLION = 1_000_000;
@@ -29,11 +29,25 @@ function nonNegative(value: number | undefined): number {
 /**
  * 由配置生成计价表；没有配置任何模型时返回 undefined（保持旧行为）。
  *
- * 模型名按 `provider.model` 精确匹配；别名 / 网关改写后的模型需要写同一个值。
+ * 两面重构 §10.1 合并视图：注册模型价格唯一源 = entry.pricing（按 wire 名覆盖
+ * 顶层 pricing.models 同名键）；顶层块降级为 legacy / 未注册 wire 的兜底（H8）。
+ * 同 wire 名多 entry 价格不同 → 确定性取条目键序首个（H4；写前校验已 warning）。
+ * 模型名按 wire 字符串精确匹配（D7：usage 聚合键无 entry/vendor 维度）。
  */
-export function createUsagePricing(pricing: PricingConfig | undefined): UsagePricing | undefined {
-  const models = pricing?.models;
-  if (models === undefined || Object.keys(models).length === 0) return undefined;
+export function createUsagePricing(
+  pricing: PricingConfig | undefined,
+  entries?: Record<string, ModelEntry>,
+): UsagePricing | undefined {
+  const models: Record<string, NonNullable<ModelEntry['pricing']>> = { ...(pricing?.models ?? {}) };
+  const entryWires = new Set<string>();
+  for (const [key, entry] of Object.entries(entries ?? {})) {
+    if (entry.pricing === undefined) continue;
+    const wire = entry.name ?? key;
+    if (entryWires.has(wire)) continue;
+    entryWires.add(wire);
+    models[wire] = entry.pricing;
+  }
+  if (Object.keys(models).length === 0) return undefined;
 
   return {
     costOf(model: string, usage: Usage): number | undefined {

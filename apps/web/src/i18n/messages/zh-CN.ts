@@ -25,6 +25,8 @@ export const messages = {
   'nav.domain.settings': '设置',
   'nav.domain.designLab': '设计实验室',
   'nav.group.chat': '会话',
+  'nav.group.items': '事项',
+  'nav.group.current': '当前页在此分组',
   'nav.group.runs': '运行',
   'nav.group.plugins': '插件',
   'nav.group.observe': 'OBSERVE',
@@ -92,7 +94,6 @@ export const messages = {
   'breadcrumb.mcp': 'MCP 服务',
   'breadcrumb.channels': '渠道',
   'breadcrumb.kanban': '看板',
-  'breadcrumb.inbox': '收件箱',
   'breadcrumb.plugins': '插件',
 
   // Plugin Host (E10)
@@ -145,8 +146,8 @@ export const messages = {
   'settings.item.local.navCollapsed.title': '侧栏默认折叠',
   'settings.item.local.navCollapsed.desc':
     '打开 WebUI 时左侧导航栏的默认折叠态；左栏折叠按钮即时写同一存储键。',
-  'settings.item.local.navGroups.title': '分组折叠状态',
-  'settings.item.local.navGroups.desc': '左侧导航各分组的折叠态（只读展示）；重置 = 全部展开。',
+  'settings.item.local.navGroups.title': '分组展开状态',
+  'settings.item.local.navGroups.desc': '左侧导航各分组的展开态（只读展示）；重置 = 全部收起。',
   'settings.item.local.settingsTree.title': '设置分类树折叠态',
   'settings.item.local.settingsTree.desc': '设置弹窗分类树的折叠状态（JSON 数组，本浏览器）。',
   'settings.item.local.settingsTab.title': '设置默认层级',
@@ -334,7 +335,6 @@ export const messages = {
   'chat.session.pending': '有 {count} 个待处理请求',
   'chat.session.copyId': '复制会话 ID',
   'chat.session.copiedId': '已复制会话 ID',
-  'chat.session.openInbox': '收件箱',
   'chat.session.copyIdTitle': '复制会话 ID：{title}',
   // 成员模型切换入口（model-registry P2）：成员级 pin，下一具 body / 续接 run 生效
   'chat.memberModel.button': '模型',
@@ -347,6 +347,8 @@ export const messages = {
     '选择注册模型 = 为该成员固定（pin）：活体 body 与当前 run 不变，下一具 body / 续接 run 生效，届时会话会追加一条环境信息卡。留空 = 不修改。',
   'chat.memberModel.saved': '已更新 {name} 的模型，下一具 body / 续接 run 生效',
   'chat.memberModel.failed': '模型切换失败',
+  // 思考强度菜单 pill 的前缀标签（用户验收①）：pill 显示「思考: <档位>」
+  'chat.thinking.label': '思考:',
   // 0.18 UX3：会话列表相对时间与会话头上下文长度
   'time.today': '今天',
   'time.yesterday': '昨天',
@@ -1137,6 +1139,7 @@ export const messages = {
   'modelPicker.emptyWithCurrent': '{label}（当前：{model}）',
   'modelPicker.unregistered': '未注册',
   'modelPicker.groupAliases': '别名',
+  'modelPicker.groupEntries': '模型条目',
   'modelPicker.unavailable': '模型注册表不可用（插件未加载或请求失败），暂无法选择。',
   'agents.detail.title': '智能体',
   'agents.detail.advanced': '高级信息',
@@ -1276,7 +1279,7 @@ export const messages = {
   'chat.toBottom': '回到底部 ↓',
   'chat.index.label': '会话索引',
   'chat.index.jump': '跳到第 {index} 条',
-  'chat.pending.title': '待处理 · {count}',
+  'chat.pending.title': '收件箱 · {count}',
   'chat.pending.identity.human': 'human',
   'chat.pending.identity.ask': 'ask 答复',
   // 固定 runtime 标签（服务端 InboxSourceLabel）：不是「谁说的话」，不走显示名分支
@@ -1309,7 +1312,6 @@ export const messages = {
   'chat.pendingSend.echoTimeout': '等待回显超时',
   'chat.pendingSend.recallUnknown': '还不知道这条属于哪个成员，没能撤回',
   'chat.pendingSend.recallRejected': '没能撤回服务端那条，条带已重读',
-  'chat.pending.waiting': '等待中',
   'chat.pending.edit': '收回编辑',
   'chat.pending.editTaken': '已收回，内容放回输入框',
   'chat.pending.editPeekFailed': '没能读到这条的原文，条带保持原样',
@@ -1535,9 +1537,6 @@ export const messages = {
   'chat.agentMessage.group': '来自 agent {name} 的消息',
   'chat.toolMessage.from': '来自 {name}',
   'chat.toolMessage.group': '来自 {name} 的投递',
-  // P1-A：被 inbox read 取走的消息（无 run-input 回显）的可见承接卡。
-  'chat.inboxRead.from': '来自收件箱 · {source}',
-  'chat.inboxRead.group': '从收件箱取走的消息（{source}）',
   // 0.36: 消息气泡操作组
   'chat.message.actions': '消息操作',
   // 长消息折叠（会话页与团队页共用同一个按钮组件）
@@ -2186,7 +2185,11 @@ export const messages = {
   'designLab.preview.navItem.collapsed':
     '折叠态只留图标；悬停 300ms 出 Tooltip（标题 + 状态 + 计数 + 版本）。',
   'designLab.preview.navItem.desc':
-    '菜单按钮：分组头 + 四档状态点（accent / amber / danger / muted）+ 折叠态。',
+    '菜单按钮：分组头 + 四档状态点（accent / amber / danger / muted）+ 折叠态 + 分区开合动画。',
+  'designLab.preview.navItem.groupCollapsed':
+    '收起态组头：聚合计数徽标（待批积压不因收起隐藏）+ 当前页所在组的 accent 圆点；展开时不重复显示。',
+  'designLab.preview.navItem.groupToggle':
+    '点击组头开合分区：grid 0fr↔1fr 过渡 200ms（--motion-base），收起终态内容 inert，Tab 不落入隐藏项。',
   'designLab.preview.navItem.plain': '没有状态信号的项：不渲染状态点，也不留占位版本号。',
   'designLab.preview.navStatus.colStatus': '状态',
   'designLab.preview.navStatus.colValue': '当前主题下的值',

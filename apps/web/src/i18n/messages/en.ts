@@ -25,6 +25,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.domain.settings': 'Settings',
   'nav.domain.designLab': 'Design Lab',
   'nav.group.chat': 'Chat',
+  'nav.group.items': 'Items',
+  'nav.group.current': 'Current page is in this group',
   'nav.group.runs': 'RUNS',
   'nav.group.plugins': 'PLUGINS',
   'nav.group.observe': 'OBSERVE',
@@ -92,7 +94,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'breadcrumb.mcp': 'MCP servers',
   'breadcrumb.channels': 'Channels',
   'breadcrumb.kanban': 'Kanban',
-  'breadcrumb.inbox': 'Inbox',
   'breadcrumb.plugins': 'Plugins',
 
   // Plugin Host (E10)
@@ -145,9 +146,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.local.navCollapsed.title': 'Collapse sidebar by default',
   'settings.item.local.navCollapsed.desc':
     'Default collapsed state of the left nav when the WebUI opens; the sidebar toggle writes the same storage key.',
-  'settings.item.local.navGroups.title': 'Group collapse state',
+  'settings.item.local.navGroups.title': 'Group expansion state',
   'settings.item.local.navGroups.desc':
-    'Collapsed state of left-nav groups (read-only); reset = expand all.',
+    'Expanded state of left-nav groups (read-only); reset = collapse all.',
   'settings.item.local.settingsTree.title': 'Settings tree collapse state',
   'settings.item.local.settingsTree.desc':
     'Collapsed categories of the settings dialog tree (JSON array, this browser only).',
@@ -343,7 +344,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.session.pending': '{count} pending request(s)',
   'chat.session.copyId': 'Copy session ID',
   'chat.session.copiedId': 'Session ID copied',
-  'chat.session.openInbox': 'Inbox',
   'chat.session.copyIdTitle': 'Copy session ID: {title}',
   // Member model switch entry (model-registry P2): member-level pin, next body / resumed run
   'chat.memberModel.button': 'Model',
@@ -357,6 +357,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Picking a registered model pins it for this member: the live body and current run stay unchanged; it applies to the next body / resumed run, when an environment notice is appended to the session. Empty = no change.',
   'chat.memberModel.saved': 'Model updated for {name}; applies to the next body / resumed run',
   'chat.memberModel.failed': 'Model switch failed',
+  // Prefix label for the thinking-intensity menu pill (user acceptance ①): "Thinking: <level>"
+  'chat.thinking.label': 'Thinking:',
   // 0.18 UX3: relative time + context length
   'time.today': 'Today',
   'time.yesterday': 'Yesterday',
@@ -1196,6 +1198,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'modelPicker.emptyWithCurrent': '{label} (current: {model})',
   'modelPicker.unregistered': 'unregistered',
   'modelPicker.groupAliases': 'Aliases',
+  'modelPicker.groupEntries': 'Model entries',
   'modelPicker.unavailable':
     'Model registry unavailable (plugin not loaded or request failed); selection is disabled.',
   'agents.detail.title': 'Agent',
@@ -1339,7 +1342,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.toBottom': 'Back to bottom ↓',
   'chat.index.label': 'Conversation index',
   'chat.index.jump': 'Jump to item {index}',
-  'chat.pending.title': 'Pending · {count}',
+  'chat.pending.title': 'Inbox · {count}',
   'chat.pending.identity.human': 'human',
   'chat.pending.identity.ask': 'ask answer',
   // Fixed runtime labels (server InboxSourceLabel): not "who said it" — never the
@@ -1373,7 +1376,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.pendingSend.recallUnknown':
     'Not sure which member owns this one yet — nothing was recalled',
   'chat.pendingSend.recallRejected': 'Could not recall the queued copy; the strip was reloaded',
-  'chat.pending.waiting': 'Waiting',
   'chat.pending.edit': 'Take back to edit',
   'chat.pending.editTaken': 'Taken back into the input box',
   'chat.pending.editPeekFailed': 'Could not read the full text of that item; nothing was changed',
@@ -1620,9 +1622,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.agentMessage.group': 'Message from agent {name}',
   'chat.toolMessage.from': 'from {name}',
   'chat.toolMessage.group': 'Delivery from {name}',
-  // P1-A: a message taken by `inbox read` (no run-input echo) — visible hand-off card.
-  'chat.inboxRead.from': 'from inbox · {source}',
-  'chat.inboxRead.group': 'Message taken from the inbox ({source})',
   // 0.36: message bubble action group
   'chat.message.actions': 'Message actions',
   // long-message fold (same toggle component on the chat and team pages)
@@ -2314,7 +2313,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.preview.navItem.collapsed':
     'Collapsed shows only the icon; hover for 300 ms to see the tooltip (title, status, count, version).',
   'designLab.preview.navItem.desc':
-    'Menu buttons: group header, the four status dots (accent / amber / danger / muted) and the collapsed form.',
+    'Menu buttons: group header, the four status dots (accent / amber / danger / muted), the collapsed form, and the group open/close animation.',
+  'designLab.preview.navItem.groupCollapsed':
+    'Collapsed group header: the aggregated count badge (the pending backlog stays visible) plus an accent dot when the current page is inside; not duplicated while expanded.',
+  'designLab.preview.navItem.groupToggle':
+    'Click the header to toggle the group: grid 0fr↔1fr transition at 200 ms (--motion-base); collapsed content ends inert, so Tab never lands on hidden items.',
   'designLab.preview.navItem.plain':
     'An item with no status signal: no dot, and no placeholder version.',
   'designLab.preview.navStatus.colStatus': 'Status',
