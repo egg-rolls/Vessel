@@ -1187,6 +1187,34 @@ export interface MessageVisibilityConfig {
   system?: boolean;
 }
 
+/**
+ * 会话卡地址子标题的树深度配色（depth-color；YAML 键 `depth_color`）。
+ *
+ * 算法：`hue(depth) = (rootHue + depth × hueStep) mod 360`（黄金角轮转，无限不饱和），
+ * 颜色 = OKLCH(L_theme, C_theme, hue)，浏览器原生 `oklch()` 自带 gamut 映射（保 L/H 降 C）。
+ * 全部可选、缺省即现状锚点：light depth0 逐字节 = 现 accent-ink #086b56（零回归）。
+ *
+ * L 值域是**对比度护栏**（WCAG AA ≥4.5:1，全 360 色相 × 全 C 值域实证）：light ≤0.51、dark ≥0.73；
+ * 非法值由 validator / config.set 拒绝（invalid_params），不依赖 UI 提示。
+ * C 值域 [0, 0.37]：gamut 映射只降 C 不动 L，对比度包络不变。
+ */
+export interface UiDepthColorConfig {
+  /** 总开关（默认 true）；false = 全部地址档回 accent-ink（现状）。 */
+  enabled?: boolean;
+  /** 根色相（度，[0, 360)；默认 172.6 = 现 accent-ink 两档实测色相）。 */
+  rootHue?: number;
+  /** 每层色相步进（度，[0, 360]；默认 137.508 ≈ 黄金角 360/φ²；0/360 = 不轮转）。 */
+  hueStep?: number;
+  /** light 档 OKLCH L（[0.30, 0.51]；默认 0.4714 = 现 accent-ink 精确 L）。 */
+  lightnessLight?: number;
+  /** light 档 OKLCH C（[0, 0.37]；默认 0.0887 = 现 accent-ink 精确 C）。 */
+  chromaLight?: number;
+  /** dark 档 OKLCH L（[0.73, 0.95]；默认 0.85，区分度优先 D2；下界 0.73 由全 C 值域压力实证锁定）。 */
+  lightnessDark?: number;
+  /** dark 档 OKLCH C（[0, 0.37]；默认 0.13）。 */
+  chromaDark?: number;
+}
+
 /** UI 配置（0.8.5；0.11 clearOnStart；0.11.1 showReasoning；0.13 statusBars；0.14 可见性；0.15 askUser） */
 export interface UiConfig {
   /** UI 语言；'zh-CN' | 'en'，非法值由消费方归一化回退 */
@@ -1250,6 +1278,12 @@ export interface UiConfig {
    * 非法值由 validator 拒绝；消费方缺省按 name（`normalizeAddressStyle`）。
    */
   addressStyle?: UiAddressStyle;
+  /**
+   * 会话卡地址子标题的树深度配色（depth-color；YAML 键 `depth_color`）。
+   * 缺省 = 启用、黄金角轮转、light depth0 与现 accent-ink 逐字节一致（零回归）。
+   * 值域护栏见 UiDepthColorConfig；非法值由 validator 拒绝。
+   */
+  depthColor?: UiDepthColorConfig;
   /**
    * 是否注册 `ask` 工具（0.15；YAML 键 `ui.ask_user`，键名未随工具改名而变）。
    *

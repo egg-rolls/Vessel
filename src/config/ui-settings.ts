@@ -56,6 +56,21 @@ export const LOG_ENUM_VALUES: Readonly<Record<string, readonly string[]>> = {
   'observability.log.time': ['auto', 'none', 'clock', 'iso'],
 };
 
+/**
+ * `ui.depthColor.*` number 键值域（depth-color §6.1；与 config validator /
+ * serve config.set NUMBER_KEYS 同界）。L 上/下界 = WCAG 对比度护栏（实证锁定）。
+ */
+const DEPTH_COLOR_RANGES: Readonly<
+  Record<string, { min: number; max: number; maxExclusive?: boolean }>
+> = {
+  'ui.depthColor.rootHue': { min: 0, max: 360, maxExclusive: true },
+  'ui.depthColor.hueStep': { min: 0, max: 360 },
+  'ui.depthColor.lightnessLight': { min: 0.3, max: 0.51 },
+  'ui.depthColor.chromaLight': { min: 0, max: 0.37 },
+  'ui.depthColor.lightnessDark': { min: 0.73, max: 0.95 },
+  'ui.depthColor.chromaDark': { min: 0, max: 0.37 },
+};
+
 /** 存储选项 */
 export interface UiSettingsStoreOptions {
   /** 用户配置文件路径；缺省 `~/.vessel/config.yaml` */
@@ -155,7 +170,15 @@ export type SettableConfigKey =
   | 'autoPrune.enabled'
   | 'autoPrune.intervalHours'
   | 'autoPrune.olderThanHours'
-  | 'autoPrune.dryRun';
+  | 'autoPrune.dryRun'
+  // depth-color：会话卡树深度配色七键（YAML `ui.depth_color`；D7 浮点键）。
+  | 'ui.depthColor.enabled'
+  | 'ui.depthColor.rootHue'
+  | 'ui.depthColor.hueStep'
+  | 'ui.depthColor.lightnessLight'
+  | 'ui.depthColor.chromaLight'
+  | 'ui.depthColor.lightnessDark'
+  | 'ui.depthColor.chromaDark';
 
 interface ConfigSetTarget {
   /** YAML 根下的块名 */
@@ -208,6 +231,22 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
   'autoPrune.intervalHours': { block: 'auto_prune', yamlKey: 'interval_hours' },
   'autoPrune.olderThanHours': { block: 'auto_prune', yamlKey: 'older_than_hours' },
   'autoPrune.dryRun': { block: 'auto_prune', yamlKey: 'dry_run' },
+  // depth-color：ui.depth_color 子块（与 message_visibility 同款三层键）。
+  'ui.depthColor.enabled': { block: 'ui', subBlock: 'depth_color', yamlKey: 'enabled' },
+  'ui.depthColor.rootHue': { block: 'ui', subBlock: 'depth_color', yamlKey: 'root_hue' },
+  'ui.depthColor.hueStep': { block: 'ui', subBlock: 'depth_color', yamlKey: 'hue_step' },
+  'ui.depthColor.lightnessLight': {
+    block: 'ui',
+    subBlock: 'depth_color',
+    yamlKey: 'lightness_light',
+  },
+  'ui.depthColor.chromaLight': { block: 'ui', subBlock: 'depth_color', yamlKey: 'chroma_light' },
+  'ui.depthColor.lightnessDark': {
+    block: 'ui',
+    subBlock: 'depth_color',
+    yamlKey: 'lightness_dark',
+  },
+  'ui.depthColor.chromaDark': { block: 'ui', subBlock: 'depth_color', yamlKey: 'chroma_dark' },
 };
 
 /** 是否为支持的 `config set` 键 */
@@ -302,6 +341,22 @@ export async function setUserConfigValue(
     (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 8760)
   ) {
     throw new Error(`invalid_number: ${key}=${JSON.stringify(value)} (integer in [0, 8760])`);
+  }
+  // depth-color：与 config validator / serve config.set 同形状同界（D7 浮点键）。
+  if (key === 'ui.depthColor.enabled' && typeof value !== 'boolean') {
+    throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
+  }
+  const depthColorRange = DEPTH_COLOR_RANGES[key];
+  if (depthColorRange !== undefined) {
+    const upperOk =
+      typeof value === 'number' &&
+      (depthColorRange.maxExclusive === true ? value < depthColorRange.max : value <= depthColorRange.max);
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < depthColorRange.min || !upperOk) {
+      const upper = depthColorRange.maxExclusive === true ? ')' : ']';
+      throw new Error(
+        `invalid_number: ${key}=${JSON.stringify(value)} (number in [${depthColorRange.min}, ${depthColorRange.max}${upper})`,
+      );
+    }
   }
 
   const configPath = options.configPath ?? getUserConfigPath();
