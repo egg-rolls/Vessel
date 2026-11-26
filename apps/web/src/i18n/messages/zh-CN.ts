@@ -94,7 +94,6 @@ export const messages = {
   'breadcrumb.mcp': 'MCP 服务',
   'breadcrumb.channels': '渠道',
   'breadcrumb.kanban': '看板',
-  'breadcrumb.inbox': '收件箱',
   'breadcrumb.plugins': '插件',
 
   // Plugin Host (E10)
@@ -336,7 +335,6 @@ export const messages = {
   'chat.session.pending': '有 {count} 个待处理请求',
   'chat.session.copyId': '复制会话 ID',
   'chat.session.copiedId': '已复制会话 ID',
-  'chat.session.openInbox': '收件箱',
   'chat.session.copyIdTitle': '复制会话 ID：{title}',
   // 成员模型切换入口（model-registry P2）：成员级 pin，下一具 body / 续接 run 生效
   'chat.memberModel.button': '模型',
@@ -1280,7 +1278,7 @@ export const messages = {
   'chat.toBottom': '回到底部 ↓',
   'chat.index.label': '会话索引',
   'chat.index.jump': '跳到第 {index} 条',
-  'chat.pending.title': '待处理 · {count}',
+  'chat.pending.title': '收件箱 · {count}',
   'chat.pending.identity.human': 'human',
   'chat.pending.identity.ask': 'ask 答复',
   // 固定 runtime 标签（服务端 InboxSourceLabel）：不是「谁说的话」，不走显示名分支
@@ -1313,7 +1311,6 @@ export const messages = {
   'chat.pendingSend.echoTimeout': '等待回显超时',
   'chat.pendingSend.recallUnknown': '还不知道这条属于哪个成员，没能撤回',
   'chat.pendingSend.recallRejected': '没能撤回服务端那条，条带已重读',
-  'chat.pending.waiting': '等待中',
   'chat.pending.edit': '收回编辑',
   'chat.pending.editTaken': '已收回，内容放回输入框',
   'chat.pending.editPeekFailed': '没能读到这条的原文，条带保持原样',
@@ -1539,9 +1536,6 @@ export const messages = {
   'chat.agentMessage.group': '来自 agent {name} 的消息',
   'chat.toolMessage.from': '来自 {name}',
   'chat.toolMessage.group': '来自 {name} 的投递',
-  // P1-A：被 inbox read 取走的消息（无 run-input 回显）的可见承接卡。
-  'chat.inboxRead.from': '来自收件箱 · {source}',
-  'chat.inboxRead.group': '从收件箱取走的消息（{source}）',
   // 0.36: 消息气泡操作组
   'chat.message.actions': '消息操作',
   // 长消息折叠（会话页与团队页共用同一个按钮组件）

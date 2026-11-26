@@ -64,7 +64,8 @@ export interface EventSpec {
  * `tool.permission.expired` / `delegate.*` 四条）+ `prompt.system_context`（0.50 模型上下文卡）
  * + 0.53 U2 的三条投射审计（`context.projection_*`），再减去 0.51 删掉的 rotate 三条死类型，
  * + q-empty-response 的 `llm.empty_response`（空响应兜底过程信号），
- * 共 116 条（分档计数由 `scripts/check-event-visibility.ts` 的 A4 影子断言钉死）。
+ * + inbox 统一批的 `agent.inbox.changed`（agent 级 inbox 变更触发信号），
+ * 共 117 条（分档计数由 `scripts/check-event-visibility.ts` 的 A4 影子断言钉死）。
  *
  * 顺序按域分组（run/llm/tool → 上下文 → 会话/进程 → agent → 插件 → 子 agent），
  * 与 `docs/architecture/events.md` 的 marker 表同一顺序（门禁只比键集，顺序是人读的）。
@@ -210,6 +211,11 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   'agent.spawned': { tier: 'observe', live: true, 承接: 'team-log', teamLog: 'system' },
   'agent.closed': { tier: 'observe', live: true, 承接: 'team-log', teamLog: 'system' },
   'agent.message.queued': { tier: 'observe', live: true },
+  // inbox 统一批 §6.2：agent 级 inbox 状态机变更信号（append/hold/unhold/release/
+  // consume/claim/discard 全 mutation 口，store onChange 钩子唯一来源）。面板触发器
+  // 从 EventStore 原始条目读它（不受档位影响）；聊天/团队时间线永不出现 —— 它是
+  // inbox 元数据审计，不是对话内容（正文仍由消息卡 / RPC 承接）。
+  'agent.inbox.changed': { tier: 'observe', live: true },
   'agent.message.notified': { tier: 'observe', live: false },
   'agent.message.sent': { tier: 'observe', live: false },
   'agent.stale': { tier: 'observe', live: true },

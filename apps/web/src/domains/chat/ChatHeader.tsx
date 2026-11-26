@@ -15,7 +15,6 @@ export function ChatHeader({
   activeAgentId,
   draftActive,
   onSelectAgent,
-  onOpenInbox,
 }: {
   selectedId: string | null;
   selectedSession: SessionInfo | undefined;
@@ -24,8 +23,6 @@ export function ChatHeader({
   activeAgentId?: string;
   draftActive: boolean;
   onSelectAgent: (agentId: string | undefined) => void;
-  /** 打开本会话归属 agent 的 agent 级收件箱（P1-B）；缺省不渲染入口。 */
-  onOpenInbox?: () => void;
 }) {
   if (selectedId) {
     return (
@@ -36,7 +33,6 @@ export function ChatHeader({
         agents={agents}
         activeAgentId={activeAgentId}
         onSelectAgent={onSelectAgent}
-        {...(onOpenInbox ? { onOpenInbox } : {})}
       />
     );
   }

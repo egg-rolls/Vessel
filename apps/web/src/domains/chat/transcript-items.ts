@@ -175,9 +175,11 @@ export interface RunInputItem extends ItemMeta {
  * 用户永远看不到（audit §3 症状②主因）。这里从工具结果把全文投影成消息 item，
  * 站在取走它的那张工具卡旁边（见 `projectInboxReads`）。
  *
- * 身份只有 read 结果给的那一层：`source`（human / agent / system）+ 稳定 `messageId`。
- * 没有发送者名（服务端工具面不改，红线）；human 源渲染为用户气泡（与 run-input 同口径），
- * 其余渲染为收件箱消息卡。`messageId` 参与装配面去重：同一条消息若已被 run-input /
+ * 身份只有 read 结果给的那一层：`source`（固定标签 human/ask/bash/system + principal
+ * 地址）+ 稳定 `messageId`。没有发送者名（服务端工具面不改，红线）；human 源渲染为
+ * 用户气泡（与 run-input 同口径），其余**复用 AgentMessageCard**（inbox 统一批 §5：
+ * 固定标签走工具来源卡，principal 地址由渲染层 roster 查表解析名字 / 短 id 兜底）。
+ * `messageId` 参与装配面去重：同一条消息若已被 run-input /
  * 历史消息承接，这里不再出第二份（一条消息一个地方）。
  */
 export interface InboxReadItem extends ItemMeta {
@@ -186,7 +188,7 @@ export interface InboxReadItem extends ItemMeta {
   messageId: string;
   /** 消息全文（read 结果里的 `text`）。 */
   text: string;
-  /** 来源类别：human / agent / system。 */
+  /** 来源：固定标签（human / ask / bash / system）或 principal 地址（老数据可能是成员 id）。 */
   source: string;
   /** 取走它的那次 read 所属的 run（诊断用；不参与输入认领）。 */
   runId?: string;

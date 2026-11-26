@@ -594,6 +594,15 @@ interface WsData {
   sessionId?: string;
   types?: string[];
   /**
+   * inbox 统一批 §6.3：订阅会话的**归属 agent**（subscribe 时经 `opts.agent.resolve`
+   * 派生，与 `agents.inbox{session_id}` 同一套反查规则；不信客户端自报）。
+   *
+   * 只用于放行 `agent.inbox.changed`（agent 级 inbox 元数据变更信号，会话等值过滤
+   * 会挡住同 agent 别会话 / wake-quiet 的那一半）。resolve 失败 ⇒ undefined ⇒
+   * 只收会话内帧（降级不报错）。其余事件族的会话边界一字不动。
+   */
+  inboxAgentId?: string;
+  /**
    * 进程级全局事件流的显式 opt-in（events.subscribe 的 allow_global）。
    *
    * 没有 session_id 又没有 types 的订阅默认**一条都不发**（见 acceptsEvent）；
@@ -872,12 +881,28 @@ function matchesTypeFilter(types: readonly string[] | undefined, type: string): 
  */
 function acceptsEvent(
   event: RunEvent,
-  filter: { runId?: string; sessionId?: string; types?: readonly string[] },
+  filter: {
+    runId?: string;
+    sessionId?: string;
+    types?: readonly string[];
+    inboxAgentId?: string;
+  },
   resolveSession: (event: RunEvent) => string | undefined,
   options: { allowGlobal?: boolean } = {},
 ): boolean {
   if (filter.runId !== undefined && event.run_id !== filter.runId) return false;
   if (!matchesTypeFilter(filter.types, event.type)) return false;
+  // inbox 统一批 §6.3：**仅限 agent.inbox.changed** 按「订阅会话的归属 agent」放行。
+  // 归属由服务端 subscribe 时 resolve 派生（fail-closed，不信客户端自报）；放行的只是
+  // inbox 元数据变更信号 —— 该 agent 的 inbox 内容本就经 agents.inbox{agent_id} 对任何
+  // 已鉴权连接可读，事件可见性与 RPC 可见性对齐。其余帧的会话等值口径一字不改。
+  if (
+    event.type === 'agent.inbox.changed' &&
+    filter.inboxAgentId !== undefined &&
+    (event.data as Record<string, unknown>).agent_id === filter.inboxAgentId
+  ) {
+    return true;
+  }
   if (filter.sessionId !== undefined) return resolveSession(event) === filter.sessionId;
   // 0.60：**没有会话作用域时的默认拒绝**。旧口径是「不传 session_id ⇒ 全发」，
   // 于是一个漏传 session_id 的订阅（旧客户端、代理丢了 query、降级路径、
@@ -1742,7 +1767,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
   ): boolean {
     return acceptsEvent(
       event,
-      { runId: ws.data.runId, sessionId: ws.data.sessionId, types: ws.data.types },
+      {
+        runId: ws.data.runId,
+        sessionId: ws.data.sessionId,
+        types: ws.data.types,
+        inboxAgentId: ws.data.inboxAgentId,
+      },
       (target) => resolveEventSession(target, replaySessions),
       { allowGlobal: ws.data.allowGlobal === true },
     );
@@ -3002,6 +3032,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (typeof params.since === 'number' && params.since >= 0) ws.data.since = params.since;
     ws.data.runId = typeof params.run_id === 'string' ? params.run_id : undefined;
     ws.data.sessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
+    // inbox 统一批 §6.3：会话订阅顺带解析归属 agent（subscribe 时一次，async 上下文
+    // 合法；会话切换 = 重新 subscribe = 重新 resolve）。与 agents.inbox{session_id}
+    // 同一套 resolve 规则；失败 / 无 agent 控制面 ⇒ undefined ⇒ 只收会话内帧。
+    ws.data.inboxAgentId = undefined;
+    if (ws.data.sessionId !== undefined && opts.agent !== undefined) {
+      try {
+        const resolved = await opts.agent.resolve(ws.data.sessionId);
+        ws.data.inboxAgentId = resolved?.id;
+      } catch {
+        // 降级不报错：归属解析失败只是少收 inbox 变更信号，会话内帧不受影响。
+      }
+    }
     ws.data.types = Array.isArray(params.types)
       ? params.types.filter((item): item is string => typeof item === 'string')
       : undefined;

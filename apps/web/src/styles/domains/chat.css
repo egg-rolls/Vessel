@@ -1011,6 +1011,12 @@
   display: none;
 }
 
+/* 排队卡同理：不画状态胶囊后标题位常空（在 inbox 即等待），空标题不占 flex gap。 */
+.notice-block.stream-card-queued > summary > .stream-card-title:empty,
+.notice-block.stream-card-queued > .event-block-summary > .stream-card-title:empty {
+  display: none;
+}
+
 .notice-block.warn {
   background: var(--warn-soft);
   color: var(--warn);

@@ -17,14 +17,14 @@
       所以不要为了动画把 `<details>` 拆成 div + aria-expanded。
       浏览器不支持 `::details-content` 时直接开合（就是今天的行为），不做假动画。
 
-      非 `<details>` 的自管开合面板（button + aria-expanded 自己管状态）用
-      `.motion-panel`，第一个使用点 = 主导航分区（app/NavGroup）。别用 max-height
-      猜值（内容一长就抖，猜小了裁掉、猜大了拖沓）——容器 display: grid +
+      非 `<details>` 的自管开合面板（button + aria-expanded 自己管状态）有两个配方
+      class：`.motion-panel`（第一个使用点 = 主导航分区 app/NavGroup，时长可经
+      --motion-panel-duration 覆写为 --motion-base = 200ms）与 `.motion-collapse`
+      （第一个使用点 = inbox 条带三态卡列，inbox 统一批 §7，时长 --motion-slow）。
+      别用 max-height 猜值（内容一长就抖，猜小了裁掉、猜大了拖沓）——容器 display: grid +
       grid-template-rows: 0fr（收起）→ 1fr（展开，行高跟着内容长，不用量高度），
-      状态放 data-motion-open，子项 `.motion-panel-inner` min-height: 0 + overflow: clip
-      防止把父级重新撑开。时长缺省 --motion-slow，可经 --motion-panel-duration 覆写
-      （导航分区覆写为 --motion-base = 200ms）。不支持 grid-template-rows 过渡的
-      旧浏览器直接瞬切开合，不做假动画。
+      状态放 data-motion-open，子项 min-height: 0 + overflow: clip 防止把父级重新撑开。
+      不支持 grid-template-rows 过渡的旧浏览器直接瞬切开合，不做假动画。
       收起时**调用方**负责给 `inert` / `hidden` —— 动画 class 不管可访问性。
 
    3. 流式类 —— `.motion-stream`
@@ -136,6 +136,27 @@
   overflow: clip;
 }
 
+/* 自管开合（非 `<details>`，文件头 ② 的配方；第一个使用点 = inbox 条带三态卡列）：
+   grid 行高 0fr ↔ 1fr 跟着内容长，不量高度、不猜 max-height。状态在 data-motion-open
+   （调用方写），收起时的 inert / hidden 也由调用方给 —— 本类只动尺寸。
+   子项的 overflow: clip 防止内容把 0fr 的行重新撑开；clip-margin 留 4px 让内部
+   控件的焦点环不被切掉（与 ::details-content 同一理由）。 */
+.motion-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--motion-slow) var(--motion-ease);
+}
+
+.motion-collapse[data-motion-open="true"] {
+  grid-template-rows: 1fr;
+}
+
+.motion-collapse > * {
+  min-height: 0;
+  overflow: clip;
+  overflow-clip-margin: 4px;
+}
+
 /* ── ③ 流式类 ─────────────────────────────────────────────── */
 
 /* 正文块「先占位、再出现」：块的高度 / 位置在挂载那一帧就按最终排版落位，
@@ -175,9 +196,10 @@
     opacity: 1;
   }
 
-  /* 自管开合面板是普通元素，base.css 的全局抑制已覆盖 grid 过渡；
-     这里同样把「没有动画」这个结果钉死，开合瞬切。 */
-  .motion-panel {
+  /* 自管开合面板（.motion-panel 导航 / .motion-collapse inbox）是普通元素，
+     base.css 的全局抑制已覆盖 grid 过渡；这里同样把「没有动画」钉死，开合瞬切。 */
+  .motion-panel,
+  .motion-collapse {
     transition: none;
   }
 }

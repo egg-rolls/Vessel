@@ -94,7 +94,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'breadcrumb.mcp': 'MCP servers',
   'breadcrumb.channels': 'Channels',
   'breadcrumb.kanban': 'Kanban',
-  'breadcrumb.inbox': 'Inbox',
   'breadcrumb.plugins': 'Plugins',
 
   // Plugin Host (E10)
@@ -345,7 +344,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.session.pending': '{count} pending request(s)',
   'chat.session.copyId': 'Copy session ID',
   'chat.session.copiedId': 'Session ID copied',
-  'chat.session.openInbox': 'Inbox',
   'chat.session.copyIdTitle': 'Copy session ID: {title}',
   // Member model switch entry (model-registry P2): member-level pin, next body / resumed run
   'chat.memberModel.button': 'Model',
@@ -1343,7 +1341,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.toBottom': 'Back to bottom ↓',
   'chat.index.label': 'Conversation index',
   'chat.index.jump': 'Jump to item {index}',
-  'chat.pending.title': 'Pending · {count}',
+  'chat.pending.title': 'Inbox · {count}',
   'chat.pending.identity.human': 'human',
   'chat.pending.identity.ask': 'ask answer',
   // Fixed runtime labels (server InboxSourceLabel): not "who said it" — never the
@@ -1377,7 +1375,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.pendingSend.recallUnknown':
     'Not sure which member owns this one yet — nothing was recalled',
   'chat.pendingSend.recallRejected': 'Could not recall the queued copy; the strip was reloaded',
-  'chat.pending.waiting': 'Waiting',
   'chat.pending.edit': 'Take back to edit',
   'chat.pending.editTaken': 'Taken back into the input box',
   'chat.pending.editPeekFailed': 'Could not read the full text of that item; nothing was changed',
@@ -1624,9 +1621,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.agentMessage.group': 'Message from agent {name}',
   'chat.toolMessage.from': 'from {name}',
   'chat.toolMessage.group': 'Delivery from {name}',
-  // P1-A: a message taken by `inbox read` (no run-input echo) — visible hand-off card.
-  'chat.inboxRead.from': 'from inbox · {source}',
-  'chat.inboxRead.group': 'Message taken from the inbox ({source})',
   // 0.36: message bubble action group
   'chat.message.actions': 'Message actions',
   // long-message fold (same toggle component on the chat and team pages)
