@@ -368,6 +368,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
   private model: string;
   private temperature?: number;
   private maxTokens?: number;
+  /** 构造缺省 top_p（model-registry 两面重构 §10.2）；undefined = 不进请求体（字节等价） */
+  private topP?: number;
   /** 显式配置；undefined = 按（请求）模型名自动判定，见 resolveOpenAiPromptCache */
   private promptCache?: boolean;
 
@@ -377,6 +379,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     model?: string;
     temperature?: number;
     max_tokens?: number;
+    top_p?: number;
     prompt_cache?: boolean;
   }) {
     this.apiKey = config.api_key;
@@ -384,6 +387,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     this.model = config.model ?? 'gpt-4';
     this.temperature = config.temperature;
     this.maxTokens = config.max_tokens;
+    this.topP = config.top_p;
     this.promptCache = config.prompt_cache;
   }
 
@@ -482,6 +486,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
           tools,
           temperature: req.temperature ?? this.temperature,
           max_tokens: req.max_tokens ?? this.maxTokens,
+          // undefined 时 JSON.stringify 丢键 → 未配置 top_p 的请求体逐字节不变；
+          // hook 经 extra_params.top_p 覆盖（非 reserved 键，mergeExtraParams 浅合并赢）。
+          top_p: this.topP,
           stream: false,
         },
         req.extra_params,
@@ -583,6 +590,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
           tools,
           temperature: req.temperature ?? this.temperature,
           max_tokens: req.max_tokens ?? this.maxTokens,
+          top_p: this.topP,
           stream: true,
           stream_options: { include_usage: true },
         },
@@ -673,6 +681,8 @@ export class AnthropicProvider implements LLMProvider {
   private model: string;
   private temperature?: number;
   private maxTokens?: number;
+  /** 构造缺省 top_p（model-registry 两面重构 §10.2）；undefined = 不进请求体（字节等价） */
+  private topP?: number;
   private promptCache: boolean;
 
   constructor(config: {
@@ -681,6 +691,7 @@ export class AnthropicProvider implements LLMProvider {
     model?: string;
     temperature?: number;
     max_tokens?: number;
+    top_p?: number;
     /** 显式提示词缓存；缺省开启 */
     prompt_cache?: boolean;
   }) {
@@ -689,6 +700,7 @@ export class AnthropicProvider implements LLMProvider {
     this.model = config.model ?? 'claude-3-opus-20240229';
     this.temperature = config.temperature;
     this.maxTokens = config.max_tokens;
+    this.topP = config.top_p;
     this.promptCache = config.prompt_cache ?? true;
   }
 
@@ -882,6 +894,8 @@ export class AnthropicProvider implements LLMProvider {
       model: req.model ?? this.model,
       temperature: req.temperature ?? this.temperature,
       max_tokens: req.max_tokens ?? this.maxTokens ?? 4096,
+      // undefined 时 JSON.stringify 丢键 → 未配置 top_p 的请求体逐字节不变。
+      top_p: this.topP,
       messages,
       system:
         this.promptCache && systemContent

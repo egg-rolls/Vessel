@@ -28,11 +28,39 @@ import type {
  */
 export const PROVIDER_DEFAULT_MODELS: Readonly<Record<string, string>> = {
   openai: 'gpt-4',
+  // 规范协议集（model-registry 两面重构 §5）：openai-compatible 与 openai 传输等价；
+  // gemini = generativelanguage openai 兼容端点别名（同 google）。
+  'openai-compatible': 'gpt-4',
+  gemini: 'gemini-pro',
 };
 
 /** 取 provider 的默认 model；未知 provider 返回 undefined */
 export function defaultModelForProvider(name: string | undefined): string | undefined {
   return name ? PROVIDER_DEFAULT_MODELS[name] : undefined;
+}
+
+/**
+ * 协议工厂默认 baseUrl（两面重构 §3.1）：与 plugins/provider/openai 的 PROVIDERS 表
+ * 及 core AnthropicProvider 默认同值。**仅供 legacy 合成、迁移物化与 test 兜底**——
+ * 注册模型端点恒来自凭证 baseUrl（必填）。自定义 provider 插件协议不在此表（wire 未知）。
+ */
+export const PROTOCOL_DEFAULT_BASE_URLS: Readonly<Record<string, string>> = {
+  openai: 'https://api.openai.com/v1',
+  'openai-compatible': 'https://api.openai.com/v1',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  google: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  mistral: 'https://api.mistral.ai/v1',
+  ollama: 'http://localhost:11434/v1',
+  // Cohere 的 OpenAI 兼容端点在 /compatibility/v1（同 openai 插件注释）
+  cohere: 'https://api.cohere.ai/compatibility/v1',
+  anthropic: 'https://api.anthropic.com',
+};
+
+/** 协议默认端点；未知协议返回 undefined。 */
+export function defaultBaseUrlFor(protocol: string): string | undefined {
+  return Object.hasOwn(PROTOCOL_DEFAULT_BASE_URLS, protocol)
+    ? PROTOCOL_DEFAULT_BASE_URLS[protocol]
+    : undefined;
 }
 
 /**

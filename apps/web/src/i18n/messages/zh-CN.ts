@@ -1139,6 +1139,7 @@ export const messages = {
   'modelPicker.emptyWithCurrent': '{label}（当前：{model}）',
   'modelPicker.unregistered': '未注册',
   'modelPicker.groupAliases': '别名',
+  'modelPicker.groupEntries': '模型条目',
   'modelPicker.unavailable': '模型注册表不可用（插件未加载或请求失败），暂无法选择。',
   'agents.detail.title': '智能体',
   'agents.detail.advanced': '高级信息',

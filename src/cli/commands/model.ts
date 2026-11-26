@@ -106,11 +106,11 @@ async function promptHiddenSecret(prompt: string): Promise<string> {
   });
 }
 
-type SecretSource = { ok: true; value: string } | { ok: false; error: string };
+type SecretSource = { ok: true; value: string | undefined } | { ok: false; error: string };
 
 /**
- * 值来源三选一（解析层已保证 --value-env / --value-stdin 互斥）：
- * env 引用 → stdin 全文 → TTY 隐藏输入。非 TTY 且无 flag → 可照做的拒绝文案。
+ * 值来源（解析层已保证 --value-env / --value-stdin 互斥）：
+ * env 引用 → stdin 全文 → TTY 隐藏输入（空输入 = 不改值）→ 非 TTY 无 flag = 只写元数据。
  * 返回值只进 RPC params；任何分支都不把值写进输出。
  */
 async function resolveCredentialValue(
@@ -131,10 +131,10 @@ async function resolveCredentialValue(
   }
   if (process.stdin.isTTY === true && process.stdout.isTTY === true) {
     const value = (await promptHiddenSecret(t('model.secretPrompt'))).trim();
-    if (value === '') return { ok: false, error: t('model.secretEmpty') };
-    return { ok: true, value };
+    // 空输入 = 不改值（编辑态只写元数据）。
+    return { ok: true, value: value === '' ? undefined : value };
   }
-  return { ok: false, error: t('model.secretRequired') };
+  return { ok: true, value: undefined };
 }
 
 // ── RPC 映射（kebab 命令 → canonical snake 方法）────────────────────────
@@ -147,23 +147,22 @@ function rpcCallOf(
   switch (command.kind) {
     case 'list':
       return { method: `${prefix}list`, params: {} };
-    case 'vendor-set':
-      return { method: `${prefix}vendor_set`, params: { id: command.id, entry: command.entry } };
-    case 'vendor-remove':
-      return { method: `${prefix}vendor_remove`, params: { id: command.id } };
-    case 'alias-set':
-      return {
-        method: `${prefix}alias_set`,
-        params: { alias: command.alias, ref: command.ref },
-      };
-    case 'alias-remove':
-      return { method: `${prefix}alias_remove`, params: { alias: command.alias } };
+    case 'set':
+      return { method: `${prefix}model_set`, params: { id: command.id, entry: command.entry } };
+    case 'remove':
+      return { method: `${prefix}model_remove`, params: { id: command.id } };
     case 'set-default':
       return { method: `${prefix}default_set`, params: { ref: command.ref } };
     case 'credential-set':
       return {
         method: `${prefix}credential_set`,
-        params: { id: command.id, value: credentialValue ?? '' },
+        params: {
+          id: command.id,
+          baseUrl: command.baseUrl,
+          ...(command.apiKeyEnv !== undefined ? { apiKeyEnv: command.apiKeyEnv } : {}),
+          // 值缺省 = 不改值（编辑态只写元数据）；值只进 params，绝不进输出。
+          ...(credentialValue !== undefined ? { apiKey: credentialValue } : {}),
+        },
       };
     case 'credential-remove':
       return { method: `${prefix}credential_remove`, params: { id: command.id } };
@@ -173,7 +172,9 @@ function rpcCallOf(
       return {
         method: `${prefix}test`,
         params: {
-          vendor: command.vendor,
+          ...(command.entry !== undefined ? { entry: command.entry } : {}),
+          ...(command.credential !== undefined ? { credential: command.credential } : {}),
+          ...(command.provider !== undefined ? { provider: command.provider } : {}),
           ...(command.model !== undefined ? { model: command.model } : {}),
         },
       };
@@ -276,14 +277,10 @@ function renderHuman(
       return renderCredentialsList(result, target);
     case 'test':
       return renderTest(result);
-    case 'vendor-set':
-      return okResult(savedLines(`vendor "${command.id}" saved`));
-    case 'vendor-remove':
-      return okResult(savedLines(`vendor "${command.id}" removed`));
-    case 'alias-set':
-      return okResult(savedLines(`alias "${command.alias}" -> ${command.ref}`));
-    case 'alias-remove':
-      return okResult(savedLines(`alias "${command.alias}" removed`));
+    case 'set':
+      return okResult(savedLines(`model "${command.id}" saved`));
+    case 'remove':
+      return okResult(savedLines(`model "${command.id}" removed`));
     case 'set-default': {
       const lines = savedLines(`default model set to ${command.ref}`);
       if (isRecord(result)) {
@@ -292,7 +289,7 @@ function renderHuman(
           lines.push(
             ui.kv(
               t('model.effective'),
-              `${pickString(effective, 'vendorId') ?? '?'}/${pickString(effective, 'wireModel') ?? '?'}`,
+              `${pickString(effective, 'entryId') ?? '?'} (${pickString(effective, 'wireModel') ?? '?'})`,
               10,
             ),
           );
@@ -314,17 +311,20 @@ function renderHuman(
   }
 }
 
-function formatVendor(vendor: Record<string, unknown>): string {
-  const parts = [pickString(vendor, 'id') ?? '(unknown)'];
-  const protocol = pickString(vendor, 'protocol');
-  if (protocol !== undefined) parts.push(`protocol=${protocol}`);
-  const baseUrl = pickString(vendor, 'baseUrl');
-  if (baseUrl !== undefined) parts.push(`baseUrl=${baseUrl}`);
-  const credential = pickString(vendor, 'credentialRef');
+function formatEntry(entry: Record<string, unknown>): string {
+  const parts = [pickString(entry, 'id') ?? '(unknown)'];
+  const name = pickString(entry, 'name');
+  if (name !== undefined && name !== parts[0]) parts.push(`wire=${name}`);
+  const alias = pickString(entry, 'alias');
+  if (alias !== undefined) parts.push(`alias=${alias}`);
+  const provider = pickString(entry, 'provider');
+  if (provider !== undefined) parts.push(`provider=${provider}`);
+  const mode = pickString(entry, 'mode');
+  if (mode !== undefined) parts.push(`mode=${mode}`);
+  const credential = pickString(entry, 'credential');
   if (credential !== undefined) parts.push(`credential=${credential}`);
-  const models = isRecord(vendor.models) ? Object.keys(vendor.models) : [];
-  parts.push(`models: ${models.length > 0 ? models.join(', ') : '-'}`);
-  if (vendor.inUse === true) parts.push('in-use');
+  if (entry.inUse === true) parts.push('default');
+  if (entry.legacy === true) parts.push('legacy');
   return parts.join('  ');
 }
 
@@ -334,26 +334,31 @@ function renderList(result: unknown, target: ControlPlaneTarget): CommandResult 
     lines.push('', JSON.stringify(result, null, 2));
     return okResult(lines);
   }
-  const vendors = Array.isArray(result.vendors) ? result.vendors : [];
-  const aliases = isRecord(result.aliases) ? result.aliases : {};
+  const entries = Array.isArray(result.entries) ? result.entries : [];
+  const credentials = Array.isArray(result.credentials) ? result.credentials : [];
   const defaultRef = pickString(result, 'default');
   const effective = isRecord(result.effective) ? result.effective : undefined;
-  const legacy = isRecord(result.legacy) ? result.legacy : undefined;
 
-  if (vendors.length === 0 && Object.keys(aliases).length === 0 && defaultRef === undefined) {
+  if (entries.length === 0 && credentials.length === 0 && defaultRef === undefined) {
     lines.push('', ui.info(t('model.empty')));
   }
-  if (vendors.length > 0) {
-    lines.push('', ui.section(t('model.vendors', { count: vendors.length })));
-    for (const vendor of vendors) {
-      lines.push(isRecord(vendor) ? `  ${formatVendor(vendor)}` : `  ${JSON.stringify(vendor)}`);
+  if (credentials.length > 0) {
+    lines.push('', ui.section(t('model.credentials', { count: credentials.length })));
+    for (const cred of credentials) {
+      if (!isRecord(cred)) {
+        lines.push(`  ${JSON.stringify(cred)}`);
+        continue;
+      }
+      const id = pickString(cred, 'id') ?? '(unknown)';
+      const baseUrl = pickString(cred, 'baseUrl') ?? '-';
+      const hasValue = cred.hasValue === true ? 'value-set' : 'no-value';
+      lines.push(`  ${id}  baseUrl=${baseUrl}  ${hasValue}`);
     }
   }
-  const aliasEntries = Object.entries(aliases);
-  if (aliasEntries.length > 0) {
-    lines.push('', ui.section(t('model.aliases', { count: aliasEntries.length })));
-    for (const [alias, ref] of aliasEntries) {
-      lines.push(`  ${alias} → ${String(ref)}`);
+  if (entries.length > 0) {
+    lines.push('', ui.section(t('model.entries', { count: entries.length })));
+    for (const entry of entries) {
+      lines.push(isRecord(entry) ? `  ${formatEntry(entry)}` : `  ${JSON.stringify(entry)}`);
     }
   }
   if (defaultRef !== undefined) {
@@ -363,18 +368,18 @@ function renderList(result: unknown, target: ControlPlaneTarget): CommandResult 
     lines.push(
       ui.kv(
         t('model.effective'),
-        `${pickString(effective, 'vendorId') ?? '?'}/${pickString(effective, 'wireModel') ?? '?'}`,
+        `${pickString(effective, 'entryId') ?? '?'} (${pickString(effective, 'wireModel') ?? '?'})`,
         10,
       ),
     );
   }
-  if (legacy?.present === true) {
-    lines.push('', ui.warn(t('model.legacyPresent', { ref: pickString(legacy, 'ref') ?? '-' })));
+  if (result.legacyPresent === true) {
+    lines.push('', ui.warn(t('model.legacyPresent')));
   }
   return okResult(lines);
 }
 
-/** credentials-list：只出 id / createdAt / updatedAt / usedBy 元数据，无值。 */
+/** credentials-list：只出 id / baseUrl / apiKeyEnv / hasValue / 时间戳 / usedBy 元数据，无值。 */
 function renderCredentialsList(result: unknown, target: ControlPlaneTarget): CommandResult {
   const lines = sourceLines(target);
   const items = Array.isArray(result) ? result : [];
@@ -389,11 +394,13 @@ function renderCredentialsList(result: unknown, target: ControlPlaneTarget): Com
       continue;
     }
     const id = pickString(item, 'id') ?? '(unknown)';
-    const created = pickString(item, 'createdAt') ?? '-';
+    const baseUrl = pickString(item, 'baseUrl') ?? '-';
+    const apiKeyEnv = pickString(item, 'apiKeyEnv');
+    const hasValue = item.hasValue === true ? 'value-set' : 'no-value';
     const updated = pickString(item, 'updatedAt') ?? '-';
     const usedBy = Array.isArray(item.usedBy) ? item.usedBy.map(String) : [];
     lines.push(
-      `  ${id}  created=${created}  updated=${updated}  usedBy: ${usedBy.length > 0 ? usedBy.join(', ') : '-'}`,
+      `  ${id}  baseUrl=${baseUrl}${apiKeyEnv !== undefined ? `  apiKeyEnv=${apiKeyEnv}` : ''}  ${hasValue}  updated=${updated}  usedBy: ${usedBy.length > 0 ? usedBy.join(', ') : '-'}`,
     );
   }
   return okResult(lines);

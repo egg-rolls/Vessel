@@ -1,8 +1,13 @@
 /**
  * @vessel-agent/provider-openai — OpenAI 兼容 Provider 插件
  *
- * 注册所有 OpenAI 兼容的 provider（openai / google / mistral / ollama / cohere），
- * 全部走核心 OpenAICompatibleProvider，仅 base_url 与默认 model 不同。
+ * 注册所有 OpenAI 兼容的 provider，全部走核心 OpenAICompatibleProvider，
+ * 仅 base_url 与默认 model 不同。两类名字：
+ * - 规范协议集（model-registry 两面重构 §5）：openai / openai-compatible / gemini
+ *   —— openai-compatible = 显式第三方兼容端点（传输与 openai 等价）；
+ *   gemini = generativelanguage 的 openai 兼容端点传输别名（原生 generateContent 另批）。
+ * - 品牌工厂名（google / mistral / ollama / cohere）：保留注册供 legacy provider.name
+ *   与存量 pin 兼容，但退出注册表 UI；品牌端点改由「凭证 baseURL + openai-compatible」表达。
  */
 
 import type { Plugin, PluginHost } from '@vessel-agent/core';
@@ -19,6 +24,15 @@ export interface ProviderPluginOptions {
 /** Provider 注册项：名字 + 默认 base_url + 默认 model */
 const PROVIDERS: Array<{ name: string; baseUrl: string; model: string }> = [
   { name: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4' },
+  // 规范协议集：openai-compatible 与 openai 传输等价，区别在身份与缺省语义
+  // （注册模型 baseURL 恒来自凭证；工厂默认端点只对 legacy 合成生效）。
+  { name: 'openai-compatible', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4' },
+  // gemini = openai-compatible 传输别名（今天 google 即此形态；H5 裁定）。
+  {
+    name: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    model: 'gemini-pro',
+  },
   {
     name: 'google',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
@@ -69,6 +83,7 @@ const plugin: Plugin = {
           model,
           temperature: c.temperature as number | undefined,
           max_tokens: c.max_tokens as number | undefined,
+          top_p: c.top_p as number | undefined,
           prompt_cache: readPromptCache(c),
         });
         const retryOptions: RetryOptions = { ...resolveRetryOptions(c), provider: p.name };

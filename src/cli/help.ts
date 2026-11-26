@@ -389,9 +389,14 @@ export function renderGlobalHelp(): string {
     ['vessel config explain <key>', t('help.cmd.configExplain')],
     ['vessel config set <key> <value>', t('help.cmd.configSet')],
     ['vessel model list [--json]', t('help.cmd.modelList')],
+    ['vessel model set <id> --entry <json>', t('help.cmd.modelSet')],
+    ['vessel model remove <id>', t('help.cmd.modelRemove')],
     ['vessel model set-default <ref>', t('help.cmd.modelSetDefault')],
-    ['vessel model credential-set <id> [--value-env <ENV>]', t('help.cmd.modelCredentialSet')],
-    ['vessel model test <vendor> [--model <id>]', t('help.cmd.modelTest')],
+    [
+      'vessel model credential-set <id> --base-url <url> [--value-env <ENV>]',
+      t('help.cmd.modelCredentialSet'),
+    ],
+    ['vessel model test [<entry>] [--credential <id>]', t('help.cmd.modelTest')],
   ];
   const plugins: Array<[string, string]> = [
     ['vessel plugin list', t('help.cmd.pluginList')],

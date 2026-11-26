@@ -60,6 +60,11 @@ export interface AgentMethodsDeps {
    * 由 agent 层按全量投影处理。
    */
   sessionStore?: () => SessionStore | undefined;
+  /**
+   * P3 收紧（两面重构 §11.1）：model 参数未注册 ref 校验（装配层注入 registry 纯校验）。
+   * 返回错误文案 = 拒绝（invalid_params）；undefined = 放行。缺省不校验（零回归）。
+   */
+  modelRefError?: (ref: string) => string | undefined;
 }
 
 /**
@@ -620,6 +625,15 @@ async function visibleAgents(
 }
 
 export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[] {
+  // P3 收紧（两面重构 §11.1）：model 参数未注册 ref 校验（注入面；缺省不校验，零回归）。
+  const readModelParam = (entry: Record<string, unknown>, method: string): string | undefined => {
+    const model = optionalEntryString(entry, 'model', method);
+    if (model !== undefined && deps.modelRefError !== undefined) {
+      const error = deps.modelRefError(model);
+      if (error !== undefined) throw new RpcError('invalid_params', `model: ${error}`);
+    }
+    return model;
+  };
   return [
     {
       name: 'agents.list',
@@ -1089,7 +1103,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 projectedKeep = boundary.projected;
               }
               const name = optionalEntryString(entry, 'name', 'agents.create');
-              const model = optionalEntryString(entry, 'model', 'agents.create');
+              const model = readModelParam(entry, 'agents.create');
               const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.create');
               const visibility = optionalVisibility(entry, 'agents.create');
               const teamId = optionalEntryString(entry, 'team_id', 'agents.create');
@@ -1123,7 +1137,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
             }
             if (rawKind !== undefined) {
               const name = optionalEntryString(entry, 'name', 'agents.create');
-              const model = optionalEntryString(entry, 'model', 'agents.create');
+              const model = readModelParam(entry, 'agents.create');
               const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.create');
               const visibility = optionalVisibility(entry, 'agents.create');
               const teamId = optionalEntryString(entry, 'team_id', 'agents.create');
@@ -1174,7 +1188,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 };
               }
               const name = optionalEntryString(entry, 'name', 'agents.create');
-              const model = optionalEntryString(entry, 'model', 'agents.create');
+              const model = readModelParam(entry, 'agents.create');
               const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.create');
               const visibility = optionalVisibility(entry, 'agents.create');
               return {
@@ -1202,7 +1216,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                   failure: fail('invalid_input', 'team_id requires name to bind a member'),
                 };
               }
-              const model = optionalEntryString(entry, 'model', 'agents.create');
+              const model = readModelParam(entry, 'agents.create');
               const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.create');
               const visibility = optionalVisibility(entry, 'agents.create');
               return {
@@ -1219,7 +1233,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
               };
             }
             const name = optionalEntryString(entry, 'name', 'agents.create');
-            const model = optionalEntryString(entry, 'model', 'agents.create');
+            const model = readModelParam(entry, 'agents.create');
             const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.create');
             const visibility = optionalVisibility(entry, 'agents.create');
             return {
@@ -1299,7 +1313,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
               return { failure: fail('invalid_params', 'agent_id must be a non-empty string') };
             }
             const name = optionalEntryString(entry, 'name', 'agents.update');
-            const model = optionalEntryString(entry, 'model', 'agents.update');
+            const model = readModelParam(entry, 'agents.update');
             const systemPrompt = optionalEntryString(entry, 'system_prompt', 'agents.update');
             const role = optionalRole(entry, 'agents.update');
             const teamId = optionalEntryString(entry, 'team_id', 'agents.update');

@@ -18,11 +18,15 @@ import * as path from 'node:path';
 import {
   getUserConfigPath,
   loadConfig,
+  ModelRefError,
+  readMigrationReport,
   resolveEffectiveApiKey,
+  resolveModelRef,
   resolvePlatformProxySecret,
   resolvePlatformToken,
   resolveServeProxySecret,
   rootSecretPath,
+  synthesizeLegacyRegistry,
   tokenFingerprint,
   type VesselConfig,
 } from '../../../packages/config/src/index';
@@ -555,6 +559,130 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
         : `missing at ${staticDir} — run "bun run build:web" (fresh clone has no assets), ` +
           'or set gateway.web_dist / VESSEL_STATIC_DIR to an existing build',
     });
+  }
+
+  // model-registry 两面重构 §7.5：迁移完成 / 悬空 pin / 疑似旧 ref / dangling 凭证。
+  {
+    const report = await readMigrationReport(dataDir);
+    const modelsRaw = config.models as Record<string, unknown> | undefined;
+    if (modelsRaw?.vendors !== undefined || modelsRaw?.aliases !== undefined) {
+      checks.push({
+        name: 'model_migration',
+        status: 'fail',
+        message:
+          'models.vendors/aliases still present (project layer is not auto-migrated); ' +
+          'migrate to models.credentials + models.entries (two-face design §7)',
+      });
+    } else if (report !== undefined) {
+      const problems = [
+        ...report.needsReRecord.map((id) => `credential "${id}" needs re-recording`),
+        ...report.pinsFailed.map((file) => `pin rewrite failed: ${file}`),
+        ...report.errors,
+      ];
+      checks.push({
+        name: 'model_migration',
+        status: problems.length > 0 ? 'warn' : 'info',
+        message:
+          problems.length > 0
+            ? problems.join('; ')
+            : `migrated at ${report.migratedAt} (${report.entriesCreated.length} entries, ` +
+              `${report.credentialsSplit.length} credential splits, ${report.droppedAliases.length} dropped aliases, ` +
+              `${report.pinsRewritten.length} pins rewritten)`,
+      });
+    } else {
+      checks.push({ name: 'model_migration', status: 'ok', message: 'no migration pending' });
+    }
+
+    // 悬空 pin / 疑似旧 ref（只读交叉检查 agent store；不修改）。
+    const snapshot = synthesizeLegacyRegistry(config);
+    // 严格面（legacyPresent=false）：未命中即 ModelRefError，用于悬空判定。
+    const strictSnapshot = synthesizeLegacyRegistry(config, false);
+    const registered = new Set([
+      ...Object.keys(snapshot.entries),
+      ...Object.keys(snapshot.aliases),
+    ]);
+    const dangling: string[] = [];
+    const suspected: string[] = [];
+    const agentsDir = path.join(dataDir, 'agents');
+    let agentFiles: string[] = [];
+    try {
+      agentFiles = fs.readdirSync(agentsDir).filter((name) => name.endsWith('.json'));
+    } catch {
+      // 无 agent store
+    }
+    for (const name of agentFiles) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(path.join(agentsDir, name), 'utf-8')) as {
+          version?: unknown;
+          members?: Array<{ id?: unknown; model?: unknown }>;
+        };
+        if (parsed.version !== 5 || !Array.isArray(parsed.members)) continue;
+        for (const member of parsed.members) {
+          const pin = typeof member.model === 'string' ? member.model : undefined;
+          if (pin === undefined || pin === '' || registered.has(pin)) continue;
+          const id = typeof member.id === 'string' ? member.id : '(unknown)';
+          // 疑似旧 vid/wire ref（首段不是 legacy 保留前缀）：落入 legacy 透传会把整串当 wire 名。
+          if (/^[a-z0-9][a-z0-9-]*\//.test(pin) && !pin.startsWith('legacy:')) {
+            suspected.push(`${name}:${id}=${pin}`);
+          } else {
+            try {
+              resolveModelRef(strictSnapshot, pin);
+            } catch (error) {
+              if (error instanceof ModelRefError) dangling.push(`${name}:${id}=${pin}`);
+            }
+          }
+        }
+      } catch {
+        // 损坏快照由 agent store 自身报错，这里不重复
+      }
+    }
+    if (dangling.length > 0 || suspected.length > 0) {
+      checks.push({
+        name: 'model_pins',
+        status: 'warn',
+        message: [
+          ...dangling.map((p) => `unregistered pin ${p}`),
+          ...suspected.map((p) => `suspected old vendor ref ${p} (rewrite to an entry key/alias)`),
+        ].join('; '),
+      });
+    } else {
+      checks.push({ name: 'model_pins', status: 'ok', message: 'all explicit pins registered' });
+    }
+
+    // dangling 凭证：注册条目引用但无库值且无 env 值（解析期 fail-fast 提示录值）。
+    const credentials = config.models?.credentials ?? {};
+    let envelopeIds = new Set<string>();
+    try {
+      const envelope = JSON.parse(
+        fs.readFileSync(path.join(dataDir, 'credentials.json'), 'utf-8'),
+      ) as { entries?: Record<string, unknown> };
+      envelopeIds = new Set(Object.keys(envelope.entries ?? {}));
+    } catch {
+      // 无库 / 损坏：全部按缺值处理
+    }
+    const missing = Object.entries(credentials)
+      .filter(([id, cred]) => {
+        const referenced = Object.values(config.models?.entries ?? {}).some(
+          (entry) => entry.credential === id,
+        );
+        if (!referenced) return false;
+        const envSet = cred.apiKeyEnv !== undefined && nonEmpty(env[cred.apiKeyEnv]) !== undefined;
+        return !envelopeIds.has(id) && !envSet;
+      })
+      .map(([id]) => id);
+    if (missing.length > 0) {
+      checks.push({
+        name: 'model_credentials',
+        status: 'warn',
+        message: `referenced credentials without a value: ${missing.join(', ')} (record via "vessel model credential-set")`,
+      });
+    } else {
+      checks.push({
+        name: 'model_credentials',
+        status: 'ok',
+        message: 'referenced credentials have values',
+      });
+    }
   }
 
   checks.push({

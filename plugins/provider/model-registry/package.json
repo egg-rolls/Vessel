@@ -1,7 +1,7 @@
 {
   "name": "@vessel-agent/model-registry",
   "version": "0.56.1",
-  "description": "Model registry management — vendors, aliases, encrypted credentials and connectivity tests",
+  "description": "Model registry management — credentials, model entries, encrypted values and connectivity tests",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -47,7 +47,7 @@
     "id": "model-registry",
     "name": "Model Registry",
     "version": "0.1.0",
-    "description": "模型管理：厂商 / 别名 / 默认模型注册表 + 加密凭证库 + 连通性测试（管理 API + vendors/credentials 管理页）",
+    "description": "模型管理：凭证面 + 模型面注册表 + 加密凭证库 + 连通性测试（管理 API + credentials/models 管理页）",
     "side": "both",
     "ui": {
       "dir": "web",
@@ -61,20 +61,20 @@
       }
     },
     "activationEvents": [
-      "onPage:vendors",
-      "onPage:credentials"
+      "onPage:credentials",
+      "onPage:models"
     ],
     "contributes": {
       "i18n": {
         "en": {
           "nav.group": "Model Registry",
-          "nav.vendors": "Vendors",
-          "nav.credentials": "Credentials"
+          "nav.credentials": "Credentials",
+          "nav.models": "Models"
         },
         "zh-CN": {
           "nav.group": "模型管理",
-          "nav.vendors": "厂商与模型",
-          "nav.credentials": "凭证"
+          "nav.credentials": "凭证",
+          "nav.models": "模型"
         }
       },
       "navGroups": [
@@ -88,75 +88,65 @@
       ],
       "pages": [
         {
-          "id": "vendors",
-          "title": "Vendors",
-          "titleKey": "nav.vendors",
-          "nav": "plugin:model-registry",
-          "icon": "hub",
-          "order": 10,
-          "entry": "vendors.html",
-          "component": "VendorsView"
-        },
-        {
           "id": "credentials",
           "title": "Credentials",
           "titleKey": "nav.credentials",
           "nav": "plugin:model-registry",
           "icon": "settings",
-          "order": 11,
+          "order": 10,
           "entry": "credentials.html",
           "component": "CredentialsView"
+        },
+        {
+          "id": "models",
+          "title": "Models",
+          "titleKey": "nav.models",
+          "nav": "plugin:model-registry",
+          "icon": "hub",
+          "order": 11,
+          "entry": "models.html",
+          "component": "ModelsView"
         }
       ],
       "rpc": [
         {
           "name": "list",
-          "description": "Registry snapshot: vendors / aliases / default / effective / legacy",
+          "description": "Registry snapshot: credentials / entries / default / effective / legacyPresent",
           "permission": "read"
         },
         {
-          "name": "vendor_set",
-          "description": "Create or replace a vendor entry (whole-entry replace)",
+          "name": "model_set",
+          "description": "Create or replace a model entry (whole-entry replace; alias/pricing/param/info are entry fields)",
           "permission": "write"
         },
         {
-          "name": "vendor_remove",
-          "description": "Remove a vendor; refuses while aliases / default reference it",
-          "permission": "write"
-        },
-        {
-          "name": "alias_set",
-          "description": "Create or replace a flat alias (alias -> vendor/model)",
-          "permission": "write"
-        },
-        {
-          "name": "alias_remove",
-          "description": "Remove an alias",
+          "name": "model_remove",
+          "description": "Remove a model entry; refuses while models.default references it",
           "permission": "write"
         },
         {
           "name": "default_set",
-          "description": "Set models.default ref; returns the effective model",
+          "description": "Set models.default ref (alias or entry key); returns the effective model",
           "permission": "write"
         },
         {
           "name": "credential_set",
-          "description": "Store or rotate an encrypted credential (value is write-only, never echoed)",
+          "description": "Write credential metadata (baseUrl/apiKeyEnv) and optionally the encrypted value in one transaction (value is write-only, never echoed)",
           "permission": "write"
         },
         {
           "name": "credential_remove",
-          "description": "Remove a credential; refuses while vendors reference it",
+          "description": "Remove a credential (yaml metadata + stored value); refuses while entries reference it",
           "permission": "write"
         },
         {
           "name": "credentials_list",
-          "description": "Credential metadata only: id / createdAt / updatedAt / usedBy (no values)",
+          "description": "Credential metadata only: id / baseUrl / apiKeyEnv / hasValue / timestamps / usedBy (no values)",
           "permission": "read"
         },
         {
           "name": "test",
-          "description": "User-triggered connectivity test against a saved vendor (sends a real minimal request)",
+          "description": "User-triggered connectivity test against a saved entry or credential (sends a real minimal request)",
           "permission": "write"
         }
       ]
