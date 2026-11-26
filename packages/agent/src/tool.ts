@@ -459,7 +459,8 @@ export function createAgentTool(
       'rotate: move an agent into a fresh body (new session, epoch + 1) with startup_prompt first, ' +
       'plus an optional title that AI naming will not overwrite; ' +
       'a body may only rotate itself. ' +
-      'rotate always asks a human first; context_ratio is informational, not a gate. ' +
+      'rotate at/above the context threshold auto-allows; below threshold (or unknown ' +
+      'context) asks a human first. ' +
       'On failure read reason (approval_timeout / denied_by_human / no_human_channel / ' +
       'approval_unavailable), not code — the legacy code rotate_not_needed covers every ' +
       'non-approval and does not mean the ratio was too low. ' +
@@ -661,8 +662,10 @@ export function createAgentTool(
             throw invalid('rotate requires startup_prompt');
           }
           const rotateTitle = readRotateTitle(record.title);
-          // 0.31：模型发起的 rotate 一律先问人类。CLI / 人工 RPC 直接走
-          // service.createSession，不经过这里，因此不会被询问。
+          // 0.31：模型发起的 rotate 须先经人类权限确认；用户裁定（q-rotate-threshold）
+          // 加一档：**达到/超过阈值（percent >= warningLine）自动允许，不发批准卡**；
+          // 低于阈值 / 未知仍走人工批准。CLI / 人工 RPC 直接走 service.createSession，
+          // 不经过这里，因此不会被询问。
           const ratio = service.contextRatio(callerSession);
           // 0.52：取整口径必须与界面一致 —— TUI 状态栏 / 会话列表 / core 的
           // `context.pressure` 全是 `Math.round(ratio * 100)`；这里若用 floor，就会出现
@@ -681,12 +684,41 @@ export function createAgentTool(
 
           let approved = false;
           let denial = 'no_human_channel';
+          /** 只在自动允许档有值（'threshold'）：进结果与审计事件，区分「人批准的」与「阈值放行的」。 */
+          let autoAllowReason: 'threshold' | undefined;
           /** 只在超时档有值：写进结果让调用方知道等了多少（不是「人拒绝了」）。 */
           let approvalTimeoutMs: number | undefined;
-          // 入口有人类 + 该 body 真有 bridge，两个条件都成立才发请求；否则
-          // fail-closed。只检查入口标志会在 permissionMode=allow 的无 team body
-          // 上把请求发进无人订阅的事件流并永久等待。
-          if (options.humanApproval === true && service.canConfirm(callerSession)) {
+          // 用户裁定（q-rotate-threshold）：达到/超过阈值自动允许，不需 permission、
+          // 不发批准卡。判据与 warning 文案 / 界面同一个整数（percent >= warningLine）；
+          // 未知（percent === undefined）不能证明到线，fail-closed 走下面的人工分支。
+          if (percent !== undefined && percent >= warningLine) {
+            approved = true;
+            autoAllowReason = 'threshold';
+            // 审计事实：与批准卡同通道（emitFact → journal → 时间线，同下方 P-A
+            // 先例）；事实端口缺省（旧装配 / harness）退回裸流。runtime.notice 是
+            // 已知可渲染类型（scope=permission），时间线可见「rotate 自动允许 N%≥50%」。
+            const publishAutoAllow: (event: RunEvent) => void =
+              ctx.emitFact ?? ((event) => ctx.events.publish(event));
+            publishAutoAllow({
+              type: 'runtime.notice',
+              run_id: ctx.run_id,
+              data: {
+                scope: 'permission',
+                summary:
+                  `rotate auto-allowed: context at ${percent}% (>= ${warningLine}% threshold); ` +
+                  'no human approval required',
+                ok: true,
+                tool: 'agent.rotate',
+                session_id: callerSession,
+                context_percent: percent,
+                auto_allow_reason: autoAllowReason,
+              },
+              ts: Date.now(),
+            });
+          } else if (options.humanApproval === true && service.canConfirm(callerSession)) {
+            // 入口有人类 + 该 body 真有 bridge，两个条件都成立才发请求；否则
+            // fail-closed。只检查入口标志会在 permissionMode=allow 的无 team body
+            // 上把请求发进无人订阅的事件流并永久等待。
             const requestId = randomUUID();
             const waitLimitMs = options.rotateApprovalTimeoutMs ?? ROTATE_APPROVAL_TIMEOUT_MS;
             // q-card-robust P-A：审批请求 / 超时收卡信号改走**事实通道**（装配方
@@ -774,10 +806,11 @@ export function createAgentTool(
             return JSON.stringify({
               status: 'failed',
               // 码名是历史遗留（冻结契约，不改）：它装的是「未获批准」的全部档位
-              // （超时 / 人拒绝 / 无人类通道 / 审批不可用），**与 ratio 高低无关** ——
-              // rotate 没有 ratio 闸，ratio 只进 warning 文案与批准卡。调用方必须看
-              // `reason` 分辨档位，不能把 `rotate_not_needed` 读成「工具认为不需要
-              // rotate」（口径统一审查 §2.4 的误读实锤）。工具描述里已同步澄清。
+              // （超时 / 人拒绝 / 无人类通道 / 审批不可用）。q-rotate-threshold 起
+              // 达到/超过阈值自动允许、不会走到这里；此码只出现在低于阈值 / 未知的
+              // 人工批准档，且**不代表「ratio 太低」**（未知 ratio 也走这条路）。
+              // 调用方必须看 `reason` 分辨档位，不能把 `rotate_not_needed` 读成
+              // 「工具认为不需要 rotate」（口径统一审查 §2.4 的误读实锤）。工具描述里已同步澄清。
               code: 'rotate_not_needed',
               reason: denial,
               // 超时档把等过的时限写结果里：调用方据此分辨「人点了拒绝」与「根本没人答」。
@@ -790,7 +823,12 @@ export function createAgentTool(
           if (caller === undefined) {
             throw invalid('rotate requires a known calling body');
           }
-          service.noteAgentEvent('agent.rotate.approved', callerSession, decisionData);
+          service.noteAgentEvent('agent.rotate.approved', callerSession, {
+            ...decisionData,
+            ...(autoAllowReason !== undefined
+              ? { auto_allowed: true, auto_allow_reason: autoAllowReason }
+              : {}),
+          });
           // CREATE-0.39：rotate 下沉到 sessions.create（无来源 + startup_prompt）。
           const result = await service.createSession(
             {
@@ -809,6 +847,11 @@ export function createAgentTool(
             to_session_id: result.session_id,
             epoch: created?.epoch,
             ...(result.title !== undefined ? { title: result.title } : {}),
+            // 自动允许档（用户裁定 q-rotate-threshold）：结果里报 context_percent +
+            // auto_allowed:true，让调用方 / 父级知道这具新 body 是阈值放行、非人批准。
+            ...(autoAllowReason !== undefined
+              ? { auto_allowed: true, auto_allow_reason: autoAllowReason, context_percent: percent }
+              : {}),
           };
           // 文案必须是真的（0.52 B′）：交棒的那一轮**正常记账**——agent 终态、
           // 父级通知、正文采用都照常走，只有 failed / 正文为空时才补一条 notice。
