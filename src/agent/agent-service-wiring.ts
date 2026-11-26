@@ -177,6 +177,11 @@ export interface AgentServiceWiringOptions {
    */
   inboxMaxMessages?: number;
   /**
+   * q-team-limit-config：Team present 成员上限；缺省 100（AgentService 兜底）。
+   * 装配层传 `config.agent.teamMemberLimit`；构造期读取，改后需重启。
+   */
+  teamMemberLimit?: number;
+  /**
    * CREATE-0.39 §2.5：seeded create 失败时清理新 session 的事件日志 / 元数据。
    * 装配层注入 core 的 session-data 删除路径；缺省时只记录
    * `agent.create_cleanup_skipped`，会留下孤儿 session。
@@ -487,6 +492,7 @@ export async function createAgentServiceWiring(
     ...(options.inboxMaxMessages !== undefined
       ? { inboxMaxMessages: options.inboxMaxMessages }
       : {}),
+    ...(options.teamMemberLimit !== undefined ? { teamMemberLimit: options.teamMemberLimit } : {}),
     // 0.56：附件入池（上传即落 blob）。缺省不入池（图不内联，但不报错）。
     ...(options.attachIngest !== undefined ? { attachIngest: options.attachIngest } : {}),
     ...(options.leaseService !== undefined ? { leaseService: options.leaseService } : {}),
