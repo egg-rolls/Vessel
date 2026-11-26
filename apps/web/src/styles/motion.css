@@ -144,6 +144,12 @@
 .motion-collapse {
   display: grid;
   grid-template-rows: 0fr;
+  /* 列轨道必须显式钉死：缺省时隐式 auto 列按 min-content 取宽，子项里 nowrap 的
+     整行文本（inbox 预览 .event-block-preview）会把内在宽度一路传上来，把整条
+     条带撑出容器右边界（实测 22610px vs 860px 列）。minmax(0,1fr) 让轨道只认
+     容器宽，子项的 ellipsis 恢复生效。百分比 max-width 在内在 sizing 期被忽略，
+     治不了这一层，所以修在轨道上。 */
+  grid-template-columns: minmax(0, 1fr);
   transition: grid-template-rows var(--motion-slow) var(--motion-ease);
 }
 
