@@ -248,6 +248,12 @@ export function buildMemberExecutionOptions(
    * 由 `createAgentServiceWiring` 用 `teamStore` 构造；纯选项构造场景可缺省。
    */
   cwdFor?: MemberExecutionHostOptions['cwdFor'],
+  /**
+   * depth-color D1：per-member 树深度解析（self-card 与卡片颜色同口径）。
+   * 由 `createAgentServiceWiring` 用 `AgentService.memberDepth` 晚绑定构造；
+   * 纯选项构造场景可缺省（执行内核回落 host depth 兜底）。
+   */
+  depthFor?: MemberExecutionHostOptions['depthFor'],
 ): MemberExecutionHostOptions {
   // 成员 ExecutionUnit 只能通过 `agent` 工具 rotate 自己（tool handler 收紧），
   // 因此 member runtime 免确认该工具；owner 侧权限不变。
@@ -292,6 +298,7 @@ export function buildMemberExecutionOptions(
     ...(options.leaseService !== undefined ? { leaseService: options.leaseService } : {}),
     ...(options.wireInboxTool !== undefined ? { wireInboxTool: options.wireInboxTool } : {}),
     ...(cwdFor !== undefined ? { cwdFor } : {}),
+    ...(depthFor !== undefined ? { depthFor } : {}),
     tenantId: options.tenantId,
     // 来源行的 node 段：与 federation 端口同源（bootstrap 的 nodeIdentity），
     // 只在装配期传一次，执行内核不自己解析。
@@ -427,6 +434,9 @@ export async function createAgentServiceWiring(
       (memberId, sessionId, event) => serviceRef?.noteMemberEvent(memberId, sessionId, event),
       (teamId) => (teamId === undefined ? undefined : teamStore.policy(teamId)?.permission),
       memberCwdFor,
+      // depth-color D1：self-card 树深度 = parent 链服务端真值（与卡片颜色同一
+      // resolver）；service 晚绑定，spawn 期（ready 之后）才解析。
+      (member) => serviceRef?.memberDepth(member.id),
     ),
   );
 

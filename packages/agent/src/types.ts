@@ -1883,6 +1883,11 @@ export interface AgentService {
   close(input: CloseBatchInput): Promise<BatchResult<CloseResult>>;
   list(filter?: ListFilter): Promise<MemberStatus[]>;
   /**
+   * 成员树深度（depth-color D1）：parent 链单一事实源（根 = 0），与 `list` 投影同口径。
+   * 供装配层注入执行内核 self-card 的 `depthFor`；未知成员 → undefined。同步只读。
+   */
+  memberDepth(memberId: string): number | undefined;
+  /**
    * 历史视图（0.53）：**只读**列出已释放成员（`membership='left'` 或 `state='closed'`）。
    *
    * 单独立一个方法而不是给 `list` 加开关，是因为两条路线的语义正相反：`list` 是

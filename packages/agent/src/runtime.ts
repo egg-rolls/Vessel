@@ -452,8 +452,17 @@ export interface MemberExecutionHostOptions {
    * 实现方**必须自己排除锚点 Team**（装配层传 `anchorWorkspaces` 给 AgentService 的那份）。
    */
   cwdFor?: (member: MemberExecutionMember) => string | undefined;
-  /** 成员深度（Self Card） */
+  /**
+   * 成员深度（Self Card **兜底**）：`depthFor` 解析不出真值时才用（缺省 1）。
+   * depth-color D1 起 per-member 真值由 `depthFor` 提供（host 标量不再是唯一来源）。
+   */
   depth?: number;
+  /**
+   * 按成员解析树深度（depth-color D1）：装配层注入 `AgentService.memberDepth`
+   * （parent 链单一事实源，与卡片颜色同口径）。缺省 / 返回 undefined ⇒ 回落
+   * host `depth` 兜底（纯内存构造 / 老装配零回归）。与 `cwdFor` 同款运行期解析钩子。
+   */
+  depthFor?: (member: MemberExecutionMember) => number | undefined;
   logger?: Logger;
   tenantId?: string;
   /**
@@ -1019,6 +1028,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
   private readonly summarizer: ContextSummarizer | undefined;
   private readonly summarizerForSession: ((sessionId: string) => ContextSummarizer) | undefined;
   private readonly depth: number;
+  /** depth-color D1：per-member 树深度解析（装配层注入；缺省回落 host depth 兜底） */
+  private readonly depthFor: ((member: MemberExecutionMember) => number | undefined) | undefined;
   /** 0.51：记录里没有 cwd 时的运行期兜底（装配层按 team_id 查 Team 基础路径） */
   private readonly cwdFor: ((member: MemberExecutionMember) => string | undefined) | undefined;
   private readonly logger: Logger;
@@ -1061,6 +1072,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
     this.summarizer = options.summarizer;
     this.summarizerForSession = options.summarizerForSession;
     this.depth = options.depth ?? 1;
+    this.depthFor = options.depthFor;
     this.cwdFor = options.cwdFor;
     this.logger = options.logger ?? noopLogger;
     this.tenantId = options.tenantId;
@@ -2339,7 +2351,9 @@ export class MemberExecutionHost implements MemberExecutionPort {
       ...(member.parent_id !== undefined ? { parent_id: member.parent_id } : {}),
       // 只有绑定 Team 的成员才带该字段；unbound 不伪造。
       ...(teamId !== undefined ? { team_id: teamId } : {}),
-      depth: this.depth,
+      // depth-color D1：per-member parent 链真值（与卡片颜色同口径）；
+      // 解析不出（老装配 / 未知成员）才回落 host 标量兜底。
+      depth: this.depthFor?.(member) ?? this.depth,
       model,
       tools: toolNames,
       limits: {
