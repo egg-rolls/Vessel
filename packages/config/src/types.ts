@@ -399,6 +399,8 @@ export interface FeishuConfig {
   domain?: 'feishu' | 'lark';
   /** 空 = 机器人所在全部会话 */
   allowedChatIds?: string[];
+  /** 发言人 open_id 白名单（P1-A5，D3=a）；空 = 不限（向后兼容），非空仅列表内 open_id 可驱动 agent */
+  allowedUserIds?: string[];
   /** 群聊 @ 策略（P1-A3，D6 breaking）：mention-only 只响应 @ 机器人（默认）；all 响应全部群消息（需 im:message.group_msg） */
   mentionPolicy?: 'mention-only' | 'all';
   /** 收到消息点 👀 reaction 回执（P1-A4，D4；默认 true；无权限静默降级） */

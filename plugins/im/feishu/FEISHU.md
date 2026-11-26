@@ -113,9 +113,9 @@ vessel start --feishu  # 启动飞书渠道（可与 --serve / REPL 同用）
 ## 7. 安全警告（生产必读）
 
 - **机器人 = 带工具的 agent**：任何能给机器人发消息的人都能驱动你的 agent（执行工具、读取上下文）。默认不限发言人——**强烈建议配置白名单**：
-  - `allowed_user_ids`：只响应指定 open_id（P1 新增）；
+  - `allowed_user_ids`：只响应指定 open_id（P1 新增）；非空时列表外发言人**静默拒绝**（不回复、不驱动 agent）；事件缺 `sender_id` 无法核验时也拒绝。空 = 不限（向后兼容）。
   - `allowed_chat_ids`：只响应指定 chat；
-  - 两者可叠加，过滤链：chat 白名单 → 发言人白名单 → 群聊 @ 策略。
+  - 两者可叠加，过滤链：chat 白名单 → 群聊 @ 策略 → 发言人白名单（任一不满足即静默丢弃）。
 - **凭据红线**：App Secret 只走环境变量（`app_secret_env` / `VESSEL_FEISHU_APP_SECRET`），不入项目 `vessel.yaml` / 仓库；错误输出统一掩码。
 - **群暴露面**：`mention_policy: all` + `im:message.group_msg` 意味着机器人读取群内全部消息——只在可信群开启，并叠加白名单。
 - **一 app 一连接**：同 app 多连接不仅随机分消息，也扩大凭据暴露面（见 §4 / §9）。

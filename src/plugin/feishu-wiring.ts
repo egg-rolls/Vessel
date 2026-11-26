@@ -23,6 +23,7 @@ export interface ResolvedFeishuOptions {
   appSecret: string;
   domain: 'feishu' | 'lark';
   allowedChatIds: string[];
+  allowedUserIds: string[];
   mentionPolicy: 'mention-only' | 'all';
   ackReaction: boolean;
   sessionPrefix: string;
@@ -58,6 +59,7 @@ export function resolveFeishuOptions(
     appSecret,
     domain: feishu?.domain ?? DEFAULT_FEISHU_OPTIONS.domain,
     allowedChatIds: [...(feishu?.allowedChatIds ?? DEFAULT_FEISHU_OPTIONS.allowedChatIds)],
+    allowedUserIds: [...(feishu?.allowedUserIds ?? DEFAULT_FEISHU_OPTIONS.allowedUserIds)],
     mentionPolicy: feishu?.mentionPolicy ?? DEFAULT_FEISHU_OPTIONS.mentionPolicy,
     ackReaction: feishu?.ackReaction ?? DEFAULT_FEISHU_OPTIONS.ackReaction,
     sessionPrefix: feishu?.sessionPrefix ?? DEFAULT_FEISHU_OPTIONS.sessionPrefix,
@@ -204,6 +206,7 @@ export async function createFeishuFromConfig(
       appSecret: resolved.appSecret,
       domain: resolved.domain,
       allowedChatIds: resolved.allowedChatIds,
+      allowedUserIds: resolved.allowedUserIds,
       mentionPolicy: resolved.mentionPolicy,
       ackReaction: resolved.ackReaction,
       sessionPrefix: resolved.sessionPrefix,

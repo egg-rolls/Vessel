@@ -149,6 +149,7 @@ export const DEFAULT_FEISHU_OPTIONS: Required<FeishuConfig> = {
   appSecretEnv: '',
   domain: 'feishu',
   allowedChatIds: [],
+  allowedUserIds: [],
   mentionPolicy: 'mention-only',
   ackReaction: true,
   sessionPrefix: 'feishu',

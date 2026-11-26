@@ -837,6 +837,7 @@ function validateFeishu(feishu: FeishuConfig, errors: ConfigValidationError[]): 
     appSecret,
     domain,
     allowedChatIds,
+    allowedUserIds,
     mentionPolicy,
     ackReaction,
     sessionPrefix,
@@ -876,6 +877,17 @@ function validateFeishu(feishu: FeishuConfig, errors: ConfigValidationError[]): 
       path: 'feishu.allowedChatIds',
       message: 'feishu.allowedChatIds must be an array of non-empty strings',
       value: allowedChatIds,
+    });
+  }
+  if (
+    allowedUserIds !== undefined &&
+    (!Array.isArray(allowedUserIds) ||
+      allowedUserIds.some((id) => typeof id !== 'string' || id.trim() === ''))
+  ) {
+    errors.push({
+      path: 'feishu.allowedUserIds',
+      message: 'feishu.allowedUserIds must be an array of non-empty strings',
+      value: allowedUserIds,
     });
   }
   if (mentionPolicy !== undefined && mentionPolicy !== 'mention-only' && mentionPolicy !== 'all') {
@@ -4084,6 +4096,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'appSecretEnv',
     'domain',
     'allowedChatIds',
+    'allowedUserIds',
     'mentionPolicy',
     'ackReaction',
     'sessionPrefix',

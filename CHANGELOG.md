@@ -24,6 +24,7 @@
 
 - 飞书群聊可用性（A3）：`mapSdkMessage` 增映射 `mentions` / `senderId`（additive）；`@_user_N` 占位符按 mentions 清洗（bot 自身 @ 移除、他人 @ 还原为 `@名字`）；群聊消息喂 agent 前加发言人前缀 `[<open_id>]`（事件无姓名，离线不引通讯录 API）；`message.received` 事件 additive `sender_id`。新配置键 `feishu.mention_policy`（`mention-only` | `all`，默认 `mention-only`）。
 - 飞书即时反馈与文案语言（A4，D4）：收到消息即点 👀 reaction 回执（`im.messageReaction.create`，emoji_type `EYES`），无权限/失败**静默降级**不影响回复；新配置键 `feishu.ack_reaction`（布尔，默认 `true`）。busy/超时/错误三态文案双语化（zh-CN/en），语言随节点 i18n（`VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`）由装配注入插件，不新增用户语言配置；busy 文案说明排队上限（10）。
+- 飞书发言人白名单（A5，D3=a）：新配置键 `feishu.allowed_user_ids`（open_id 数组，默认 `[]` = 不限，向后兼容）；非空时仅列表内 open_id 可驱动 agent，列表外/缺 `sender_id` **静默拒绝**。过滤链：chat 白名单 → 群聊 @ 策略 → 发言人白名单。FEISHU.md §7 安全警告强调「IM 驱动带工具 agent」真实暴露面，建议生产配白名单。
 
 ## [2.1.0] - 2026-11-25
 

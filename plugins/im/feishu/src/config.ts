@@ -78,6 +78,7 @@ export function resolveFeishuConfig(
     appSecret: fromEnvOrConfig(env, APP_SECRET_ENV, config.appSecret),
     domain,
     allowedChatIds: stringArray(config.allowedChatIds, 'allowed_chat_ids'),
+    allowedUserIds: stringArray(config.allowedUserIds, 'allowed_user_ids'),
     mentionPolicy,
     ackReaction: config.ackReaction !== false,
     sessionPrefix,

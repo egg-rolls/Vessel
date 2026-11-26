@@ -222,6 +222,15 @@ class FeishuChannelImpl implements FeishuPlugin {
       return;
     }
 
+    // P1-A5（D3=a）：可选发言人白名单（open_id）。空 = 不限（向后兼容）；
+    // 非空时仅列表内 open_id 可驱动 agent，其余静默拒绝（含 senderId 缺失——无法核验即拒）。
+    if (
+      this.config.allowedUserIds.length > 0 &&
+      (message.senderId === undefined || !this.config.allowedUserIds.includes(message.senderId))
+    ) {
+      return;
+    }
+
     const text = extractText(message.messageType, message.content);
     if (text === null) return;
 

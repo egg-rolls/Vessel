@@ -111,6 +111,7 @@ export interface FeishuChannelOptionsLike {
     appSecret?: string;
     domain?: 'feishu' | 'lark';
     allowedChatIds?: string[];
+    allowedUserIds?: string[];
     mentionPolicy?: 'mention-only' | 'all';
     ackReaction?: boolean;
     sessionPrefix?: string;
