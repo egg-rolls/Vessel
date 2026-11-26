@@ -813,7 +813,7 @@ gateway:
 empty_response:
   enabled: true       # 缺省 true；false = 空响应直接当终稿（修复前行为，零回归开关）
   seamless: true      # 缺省 true；无感重试（丢弃空轮、原样重调，零注入零疤痕）；false = 一期 nudge 注入路径
-  max_retries: 2      # 重试上限（不含首次响应；seamless 重调 / nudge 共用）；缺省 2，范围 0–10；0 = 不重试只落日志
+  max_retries: 2      # 重试上限（不含首次响应；seamless 重调 / nudge 共用）；缺省 2，范围 0–10；0 = 不重试（首个空响应即耗尽标 failed）
   # nudge: '继续你的任务……'   # 自定义提示文案（user 消息注入）；缺省用 core 内置文案
 ```
 
@@ -825,7 +825,11 @@ empty_response:
   （`action: 'seamless'`，internal 层，不进 transcript）。
 - **混合兜底**：seamless 重调限次（`max_retries`）；连续空耗尽后升级**一次** nudge
   （`action: 'nudge', escalated: true`，注入继续消息打破空模式——纯重调可能采样再吐空）；
-  再空则 `action: 'exhausted'` 回落原始终止行为——不再静默。`max_retries: 0` 不升级。
+  再空则 `action: 'exhausted'` 留痕后 **run 标 failed**（`empty_response_exhausted`，
+  q-empty-exhaust 用户裁定）——空串不再当终稿 completed 早退；agent 层既有 peer 通知
+  链路（peerStops → peer-notices）自动把 failed + 错误码报给 parent，parent 可催续。
+  错误 category=internal，不触发 0.55 provider 硬错误闸（催续消息可直接接单）。
+  `max_retries: 0` 不升级 nudge，首个空响应即耗尽标 failed。
 - **seamless: false**：一期路径——空轮落盘 + 注入「继续你的任务」nudge 重新轮询，
   限次 `max_retries`，耗尽同上。**enabled: false**：修复前行为。两开关各自零回归。
 - **缺省即启用**：整段可缺省（= enabled=true、seamless=true、max_retries=2、内置文案）。
