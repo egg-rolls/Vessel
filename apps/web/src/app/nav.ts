@@ -35,13 +35,15 @@ export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
 
 /**
  * 桌面侧栏分组；只影响导航展示，不改变路由。
- * Chat 组承载会话、待批与团队；编排组只剩 Agents → Nodes。
+ * 会话组 = 沟通协作（会话 / 收件箱 / 团队）；事项组 = 待我行动（待批 / 看板），
+ * 紧随会话之后（用户裁定，sidebar-restructure 设计 §4）。编排组只剩 Agents → Nodes。
  */
 export const NAV_GROUPS: readonly {
   id: string;
   domains: readonly PrimaryDomain[];
 }[] = [
-  { id: 'chat', domains: ['chat', 'pending', 'inbox', 'teams', 'kanban'] },
+  { id: 'chat', domains: ['chat', 'inbox', 'teams'] },
+  { id: 'items', domains: ['pending', 'kanban'] },
   { id: 'network', domains: ['agents', 'nodes'] },
   { id: 'runs', domains: ['runs'] },
   { id: 'integrations', domains: ['capabilities', 'tools', 'mcp', 'channels'] },

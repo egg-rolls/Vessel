@@ -25,6 +25,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.domain.settings': 'Settings',
   'nav.domain.designLab': 'Design Lab',
   'nav.group.chat': 'Chat',
+  'nav.group.items': 'Items',
   'nav.group.runs': 'RUNS',
   'nav.group.plugins': 'PLUGINS',
   'nav.group.observe': 'OBSERVE',

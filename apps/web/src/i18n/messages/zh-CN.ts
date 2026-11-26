@@ -25,6 +25,7 @@ export const messages = {
   'nav.domain.settings': '设置',
   'nav.domain.designLab': '设计实验室',
   'nav.group.chat': '会话',
+  'nav.group.items': '事项',
   'nav.group.runs': '运行',
   'nav.group.plugins': '插件',
   'nav.group.observe': 'OBSERVE',

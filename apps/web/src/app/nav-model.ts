@@ -44,6 +44,7 @@ export interface NavGroupModel {
 /** 核心分组图标（标题仍走 i18n）。 */
 const CORE_GROUP_ICONS: Record<string, Domain> = {
   chat: 'chat',
+  items: 'pending',
   network: 'agents',
   runs: 'runs',
   integrations: 'tools',
