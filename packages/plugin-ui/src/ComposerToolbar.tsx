@@ -1,6 +1,7 @@
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Button } from './Button';
 import { cn } from './cn';
+import { Select } from './Field';
 
 /**
  * 输入框卡片底部的横向工具栏（会话 / 团队共用）。
@@ -103,109 +104,50 @@ export function ComposerToolbar({
 }
 
 /**
- * 声明式菜单按钮（additive，P3）：点击展开档位表，方向键移动 / Enter 执行 /
- * Esc 与点击外部关闭并把焦点还给触发按钮（与 web ActionMenu 同一套无障碍语义）。
+ * 工具栏选择器 pill 样式：与宿主模型选择 pill（memberModelPillClass + quiet 色调）
+ * 同构。plugin-ui 不 import 宿主模块，这里复刻同一套设计 token；cn=twMerge 保证
+ * 这些类可靠覆盖 Select 的表单触发器基类。
+ */
+const TOOLBAR_PILL_CLASS =
+  'h-control w-auto max-w-36 flex-none justify-center gap-1 rounded-full border border-line-strong bg-sunken px-2.5 py-0 text-xs text-muted shadow-none enabled:hover:text-ink disabled:text-faint disabled:opacity-100';
+
+/**
+ * 声明式菜单按钮（additive，P3；D5 同构裁定）：复用通用 Select（combobox +
+ * portal listbox）——与模型选择器同一套弹层交互 / 样式 / 无障碍语义。
  * 工具栏不认识具体插件：档位 / 当前值 / 说明都由宿主经 {@link ComposerToolbarMenuState} 传入。
  */
 function ToolbarMenuButton({ action }: { action: ComposerToolbarAction }) {
   const menu = action.menu;
-  const [open, setOpen] = useState(false);
-  const anchorRef = useRef<HTMLSpanElement | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const menuId = useId();
-
-  useEffect(() => {
-    if (!open) return;
-    const menuEl = menuRef.current;
-    const buttons = () => [
-      ...(menuEl?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') ?? []),
-    ];
-    buttons()[0]?.focus();
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (menuEl?.contains(target) || anchorRef.current?.contains(target)) return;
-      setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setOpen(false);
-        anchorRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
-        return;
-      }
-      const list = buttons();
-      if (list.length === 0) return;
-      const index = list.indexOf(document.activeElement as HTMLButtonElement);
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        list[(index + 1 + list.length) % list.length]?.focus();
-      } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        list[(index - 1 + list.length) % list.length]?.focus();
-      }
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open]);
-
   if (menu === undefined) return null;
-  const currentLabel =
-    menu.items.find((item) => item.value === menu.current)?.label ?? menu.current;
-  const text = currentLabel !== undefined ? `${action.label}: ${currentLabel}` : action.label;
-
+  // current 缺失（read 未回）或不在档位表（如不支持模型上的会话 override）时合成
+  // 显示项，保证触发器非空；缺失态用 action.label 占位并禁用防误选。
+  const current = menu.current ?? '';
+  const items = menu.items.some((item) => item.value === current)
+    ? menu.items
+    : [
+        ...menu.items,
+        {
+          value: current,
+          label: menu.current ?? action.label,
+          disabled: menu.current === undefined,
+        },
+      ];
   return (
-    <span ref={anchorRef} className="relative inline-flex flex-none">
-      <Button
-        type="button"
-        variant="plain"
-        size="small"
-        aria-label={action.label}
-        title={action.label}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        disabled={action.disabled}
-        onClick={() => setOpen((value) => !value)}
-      >
-        {text}
-      </Button>
-      {open && (
-        <div
-          ref={menuRef}
-          id={menuId}
-          role="menu"
-          aria-label={action.label}
-          className="absolute bottom-full left-0 z-20 mb-1 flex min-w-36 flex-col rounded-lg bg-raised p-1 shadow-elev-3"
-        >
-          {menu.items.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              role="menuitemradio"
-              aria-checked={item.value === menu.current}
-              disabled={item.disabled}
-              className={cn(
-                'rounded-md bg-transparent px-2.5 py-1.5 text-left text-sm text-ink transition-colors hover:bg-hover disabled:opacity-45',
-                item.value === menu.current && 'bg-hover font-medium',
-              )}
-              onClick={() => {
-                setOpen(false);
-                menu.onSelect(item.value);
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
-          {menu.hint !== undefined && menu.hint !== '' && (
-            <p className="px-2.5 py-1 text-2xs text-faint">{menu.hint}</p>
-          )}
-        </div>
-      )}
-    </span>
+    <Select
+      className={TOOLBAR_PILL_CLASS}
+      aria-label={action.label}
+      title={action.label}
+      disabled={action.disabled}
+      value={current}
+      popupMinWidth={144}
+      onChange={(event) => menu.onSelect(event.target.value)}
+      footer={menu.hint !== undefined && menu.hint !== '' ? menu.hint : undefined}
+    >
+      {items.map((item) => (
+        <option key={item.value} value={item.value} disabled={item.disabled}>
+          {item.label}
+        </option>
+      ))}
+    </Select>
   );
 }
