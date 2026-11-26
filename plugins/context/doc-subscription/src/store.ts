@@ -292,20 +292,27 @@ export class SubscriptionStore {
    * （基线 / reads / last_writer）。
    *
    * fn 拿到的是链内最新磁盘状态（前序写完成后才读），返回值即写回的新状态；
+   * 返回 undefined ⇒ 无变化不写盘（保留调用方既有优化）；
    * 错误原样抛给调用方（与 save 同语义），失败任务不阻断后续链。
    */
   async mutate(
     sessionId: string,
     fn: (
       state: SessionSubscriptionState,
-    ) => SessionSubscriptionState | Promise<SessionSubscriptionState>,
+    ) => SessionSubscriptionState | undefined | Promise<SessionSubscriptionState | undefined>,
   ): Promise<SessionSubscriptionState> {
     const previous = this.chains.get(sessionId) ?? Promise.resolve();
     let updated: SessionSubscriptionState = emptyState(sessionId);
     const next = previous
       .catch(() => {})
       .then(async () => {
-        updated = await fn(await this.load(sessionId));
+        const current = await this.load(sessionId);
+        const result = await fn(current);
+        if (result === undefined) {
+          updated = current;
+          return;
+        }
+        updated = result;
         await this.write(updated);
       });
     this.chains.set(sessionId, next);

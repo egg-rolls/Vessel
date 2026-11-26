@@ -28,6 +28,7 @@ import { type DocSubscriptionConfig, resolveInput } from './config.js';
 import { unifiedDiff } from './diff.js';
 import { observeEntry } from './hook.js';
 import {
+  type ChangeOrigin,
   type ReadRef,
   type SessionSubscriptionState,
   type SubscriptionEntry,
@@ -140,6 +141,8 @@ async function prepareEntry(
       origin: existing?.origin ?? 'manual',
       reads: existing?.reads ?? [],
       ...(existing?.snapshot !== undefined ? { snapshot: existing.snapshot } : {}),
+      // last_writer 像 snapshot 一样携带 existing：重复订阅 / read 追加不丢来源归因。
+      ...(existing?.last_writer !== undefined ? { last_writer: existing.last_writer } : {}),
     },
   };
 }
@@ -573,48 +576,90 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
  * seen_rev 保持 ''（模型尚未 inspect）。任何拒绝（deny / 越界 / 不存在 / 过大 / 敏感）静默跳过。
  * 返回是否写入了状态（无变化不写盘）。
  */
+/**
+ * edit/write 来源事实（AfterTool hook 从 HookContext 取，设计 §2.2）。
+ * 缺省（旧 caller / 装配未填）⇒ 不标 last_writer、cwd 回退 config.cwd（现状基线，零回归）。
+ */
+export interface WriteOrigin {
+  tool: 'edit' | 'write';
+  /** 成员 id（HookContext.agent_id）；缺省 ⇒ last_writer.member_id 缺省，抑制回退 session_id 判等 */
+  member_id?: string;
+  /** 成员实际 cwd（HookContext.cwd）；缺省回退 config.cwd（现状） */
+  cwd?: string;
+}
+
+/** last_writer 实质判等：ts 只作诊断不参与（同 rev/成员/工具/session ⇒ 抑制语义相同） */
+function sameOrigin(a: ChangeOrigin | undefined, b: ChangeOrigin | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.rev === b.rev &&
+    a.member_id === b.member_id &&
+    a.tool === b.tool &&
+    a.session_id === b.session_id
+  );
+}
+
 export async function autoSubscribePath(
   deps: SubscribeToolDeps,
   sessionId: string,
   rawPath: string,
+  origin?: WriteOrigin,
 ): Promise<boolean> {
   const trimmed = rawPath.trim();
   if (trimmed === '') return false;
-  const canonical = canonicalPath(resolveInput(deps.config, trimmed));
-  const state = await deps.store.load(sessionId);
-  const existing = state.subscriptions[canonical] ?? undefined;
-  const outcome = await prepareEntry(trimmed, deps, existing);
-  if (outcome.entry === undefined) return false;
-  const entry = outcome.entry;
-  // 升级梯 manual > edit > read：manual 不降级；read 条目被 edit/write 触碰升为 'edit'
-  // （清除后不再自过期）；新建置 'edit'。
-  entry.origin = existing?.origin === 'manual' ? 'manual' : 'edit';
+  // 洞1 修复：成员实际 cwd 优先（HookContext.cwd），缺省回退 config.cwd（现状基线）。
+  const config = origin?.cwd !== undefined ? { ...deps.config, cwd: origin.cwd } : deps.config;
+  const canonical = canonicalPath(resolveInput(config, trimmed));
+  let wrote = false;
+  // 原子读改写（设计 §2.2 修洞 3）：load→改→save 整段在 per-session 串行链内，并发批不丢更新。
+  await deps.store.mutate(sessionId, async (state) => {
+    const existing = state.subscriptions[canonical] ?? undefined;
+    const outcome = await prepareEntry(trimmed, { ...deps, config }, existing);
+    if (outcome.entry === undefined) return undefined;
+    const entry = outcome.entry;
+    // 升级梯 manual > edit > read：manual 不降级；read 条目被 edit/write 触碰升为 'edit'
+    // （清除后不再自过期）；新建置 'edit'。
+    entry.origin = existing?.origin === 'manual' ? 'manual' : 'edit';
 
-  const observation = await observeEntry(entry, deps);
-  if (observation !== undefined) {
-    entry.rev = observation.rev;
-    entry.size = observation.size;
-    entry.mtime_ms = observation.mtime_ms;
-    // 基线抑制：该 rev 视为「已通知」，自己刚做的改动不出卡；他人再改时 BeforeLlm 才通知。
-    entry.notified_rev = observation.rev;
-    entry.notified_at = Date.now();
-  }
+    const observation = await observeEntry(entry, deps);
+    if (observation !== undefined) {
+      entry.rev = observation.rev;
+      entry.size = observation.size;
+      entry.mtime_ms = observation.mtime_ms;
+      // 基线抑制：该 rev 视为「已通知」，自己刚做的改动不出卡；他人再改时 BeforeLlm 才通知。
+      entry.notified_rev = observation.rev;
+      entry.notified_at = Date.now();
+      // 来源标记（设计 §2.2）：基线化同时记 last_writer；origin 缺省（旧 caller）不标。
+      if (origin !== undefined) {
+        entry.last_writer = {
+          session_id: sessionId,
+          ...(origin.member_id !== undefined ? { member_id: origin.member_id } : {}),
+          tool: origin.tool,
+          ts: Date.now(),
+          rev: observation.rev,
+        };
+      }
+    }
 
-  if (
-    existing !== undefined &&
-    existing.rev === entry.rev &&
-    existing.notified_rev === entry.notified_rev &&
-    existing.seen_rev === entry.seen_rev &&
-    existing.size === entry.size &&
-    existing.mtime_ms === entry.mtime_ms &&
-    // origin 升级（read → edit）也算变化；reads 原样携带不改，无需比较。
-    existing.origin === entry.origin
-  ) {
-    return false;
-  }
-  state.subscriptions[entry.path] = entry;
-  await deps.store.save(state);
-  return true;
+    if (
+      existing !== undefined &&
+      existing.rev === entry.rev &&
+      existing.notified_rev === entry.notified_rev &&
+      existing.seen_rev === entry.seen_rev &&
+      existing.size === entry.size &&
+      existing.mtime_ms === entry.mtime_ms &&
+      // origin 升级（read → edit）也算变化；reads 原样携带不改，无需比较。
+      existing.origin === entry.origin &&
+      // last_writer 实质判等（ts 除外）：同来源同内容重触不写盘。
+      sameOrigin(existing.last_writer, entry.last_writer)
+    ) {
+      return undefined; // 无变化不写盘
+    }
+    state.subscriptions[entry.path] = entry;
+    wrote = true;
+    return state;
+  });
+  return wrote;
 }
 
 /** 从记录读取有限数字（镜像 basic-tools readNumber：非有限数字 ⇒ undefined ⇒ 走缺省） */
@@ -638,13 +683,14 @@ function readRequestNumber(record: Record<string, unknown>, key: string): number
  * - 新条目：prepareEntry 全套边界/敏感校验 + origin='read' + 基线抑制（notified_rev=当前
  *   观察 rev，autoSubscribePath 同款）；seen_rev=''。
  * - best-effort：任何失败静默跳过；无变化不写盘。
- * - 已知局限：相对路径按 config.cwd 解析（AfterTool 无成员 cwd），成员 cwd 相对路径可能漏订。
+ * - 相对路径按成员实际 cwd 归一化（HookContext.cwd，P1 修洞1）；装配未填时回退 config.cwd（现状）。
  * 返回是否写入了状态。
  */
 export async function readSubscribePath(
   deps: SubscribeToolDeps,
   sessionId: string,
   args: Record<string, unknown>,
+  cwd?: string,
 ): Promise<boolean> {
   const rawPath = typeof args.path === 'string' ? args.path.trim() : '';
   if (rawPath === '') return false;
@@ -655,7 +701,9 @@ export async function readSubscribePath(
   const limit = readRequestNumber(args, 'limit') ?? DEFAULT_READ_LIMIT;
   if (!Number.isInteger(limit) || limit < 1) return false;
 
-  const canonical = canonicalPath(resolveInput(deps.config, rawPath));
+  // 洞1 修复：成员实际 cwd 优先（HookContext.cwd），缺省回退 config.cwd（现状基线）。
+  const config = cwd !== undefined ? { ...deps.config, cwd } : deps.config;
+  const canonical = canonicalPath(resolveInput(config, rawPath));
   // 边界前置（observeEntry / prepareEntry 同口径）：deny/ask 的 read 本身已失败，不订阅；
   // 也避免热应用收紧边界后仍把已拒路径的字节读进引用。
   if (evaluatePath(canonical, deps.boundary) !== 'allow') return false;
@@ -685,27 +733,31 @@ export async function readSubscribePath(
   // 仅当字节数 ≤ maxFullBytes 才存 text；存不下 ⇒ 无 text 的 ref（仍计引用，观察时整文件兜底）。
   if (Buffer.byteLength(rangeText, 'utf-8') <= deps.config.maxFullBytes) ref.text = rangeText;
 
-  const state = await deps.store.load(sessionId);
-  const existing = state.subscriptions[canonical];
-  if (existing !== undefined) {
-    existing.reads.push(ref);
-    await deps.store.save(state);
-    return true;
-  }
+  // 原子读改写（设计 §2.2 修洞 3）：read 只追加引用 / 新建条目，不记 last_writer（read 非编辑）。
+  let wrote = false;
+  await deps.store.mutate(sessionId, async (state) => {
+    const existing = state.subscriptions[canonical];
+    if (existing !== undefined) {
+      existing.reads.push(ref);
+      wrote = true;
+      return state;
+    }
 
-  const outcome = await prepareEntry(rawPath, deps, undefined);
-  if (outcome.entry === undefined) return false;
-  const entry = outcome.entry;
-  entry.origin = 'read';
-  entry.reads = [ref];
-  // 基线抑制：订阅时的观察视为「已通知」，read 本身不出卡；他人再改才通知。
-  // rev 直接用刚读 buffer 的 hash（与 observeEntry 同口径），避免二次整文件读。
-  entry.rev = sha256Hex(buffer);
-  entry.notified_rev = entry.rev;
-  entry.notified_at = Date.now();
-  entry.size = buffer.byteLength;
-  entry.mtime_ms = info.mtimeMs;
-  state.subscriptions[entry.path] = entry;
-  await deps.store.save(state);
-  return true;
+    const outcome = await prepareEntry(rawPath, { ...deps, config }, undefined);
+    if (outcome.entry === undefined) return undefined;
+    const entry = outcome.entry;
+    entry.origin = 'read';
+    entry.reads = [ref];
+    // 基线抑制：订阅时的观察视为「已通知」，read 本身不出卡；他人再改才通知。
+    // rev 直接用刚读 buffer 的 hash（与 observeEntry 同口径），避免二次整文件读。
+    entry.rev = sha256Hex(buffer);
+    entry.notified_rev = entry.rev;
+    entry.notified_at = Date.now();
+    entry.size = buffer.byteLength;
+    entry.mtime_ms = info.mtimeMs;
+    state.subscriptions[entry.path] = entry;
+    wrote = true;
+    return state;
+  });
+  return wrote;
 }
