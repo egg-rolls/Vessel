@@ -107,7 +107,7 @@ export function DataTable<Row>({
                     : undefined
                 }
                 className={cn(
-                  'h-9 bg-sunken px-2.5 py-1.5 text-left align-middle font-mono text-xs font-medium tracking-wide text-faint uppercase wrap-anywhere dark:bg-raised max-compact:px-1.5 first:rounded-tl-md last:rounded-tr-md',
+                  'h-10 bg-sunken px-2.5 py-2 text-left align-middle font-mono text-xs font-medium tracking-wide text-faint uppercase wrap-anywhere dark:bg-raised max-compact:px-1.5 first:rounded-tl-md last:rounded-tr-md',
                   stickyHeader && 'sticky top-0 z-1',
                   column.hide && HIDE_CLASS[column.hide],
                 )}
@@ -148,7 +148,7 @@ export function DataTable<Row>({
                 <td
                   key={column.key}
                   className={cn(
-                    'h-9 bg-raised px-2.5 py-1.5 align-middle wrap-anywhere group-hover:bg-hover group-data-[active=true]:bg-accent-soft dark:bg-sunken max-compact:px-1.5',
+                    'h-10 bg-raised px-2.5 py-2 align-middle wrap-anywhere group-hover:bg-hover group-data-[active=true]:bg-accent-soft dark:bg-sunken max-compact:px-1.5',
                     index === 0 && isLastRow && 'rounded-bl-md',
                     index === columns.length - 1 && isLastRow && 'rounded-br-md',
                     index === columns.length - 1 && 'whitespace-nowrap max-wide:whitespace-normal',
