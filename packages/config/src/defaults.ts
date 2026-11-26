@@ -28,6 +28,10 @@ import type {
  */
 export const PROVIDER_DEFAULT_MODELS: Readonly<Record<string, string>> = {
   openai: 'gpt-4',
+  // 规范协议集（model-registry 两面重构 §5）：openai-compatible 与 openai 传输等价；
+  // gemini = generativelanguage openai 兼容端点别名（同 google）。
+  'openai-compatible': 'gpt-4',
+  gemini: 'gemini-pro',
 };
 
 /** 取 provider 的默认 model；未知 provider 返回 undefined */

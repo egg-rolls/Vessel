@@ -57,6 +57,7 @@ const plugin: Plugin = {
         model,
         temperature: c.temperature as number | undefined,
         max_tokens: c.max_tokens as number | undefined,
+        top_p: c.top_p as number | undefined,
         prompt_cache: readPromptCache(c) ?? true,
       });
       const retryOptions: RetryOptions = { ...resolveRetryOptions(c), provider: 'anthropic' };

@@ -24,12 +24,16 @@ export interface ConnectivityResult {
 }
 
 /**
- * 协议工厂默认 baseUrl：openai 系五名与 plugins/provider/openai 的 PROVIDERS 表同值，
- * anthropic 与 core AnthropicProvider 默认同值。vendor.baseUrl 缺省时兜底；
+ * 协议工厂默认 baseUrl：openai 系与 plugins/provider/openai 的 PROVIDERS 表同值
+ * （含规范协议集 openai-compatible / gemini），anthropic 与 core AnthropicProvider
+ * 默认同值。legacy 合成与 test 兜底用；注册模型端点恒来自凭证 baseURL。
  * 自定义 provider 插件协议不在此表（wire 未知）→ unsupported_protocol。
  */
 const DEFAULT_BASE_URLS: Readonly<Record<string, string>> = {
   openai: 'https://api.openai.com/v1',
+  // 规范协议集（model-registry 两面重构 §5）：与 openai 插件 PROVIDERS 表同值。
+  'openai-compatible': 'https://api.openai.com/v1',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
   google: 'https://generativelanguage.googleapis.com/v1beta/openai',
   mistral: 'https://api.mistral.ai/v1',
   ollama: 'http://localhost:11434/v1',
