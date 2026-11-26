@@ -2841,8 +2841,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       });
       applyAutoPruneConfig = (next) => {
         autoPruneConfigRef.current = next;
+        // O4：热改即重排 —— 只换引用不重排的话，挂定的缺省 24h 定时器要明天才按新
+        // interval 走。reschedule 清挂起 timer 按当前 interval 立即重排（在飞趟不动）。
+        autoPrune?.reschedule();
         return [
-          `autoPrune: hot-applied (live resolver; enabled=${next.autoPrune?.enabled !== false}, next pass uses new values)`,
+          `autoPrune: hot-applied (live resolver; enabled=${next.autoPrune?.enabled !== false}, next pass rescheduled to new interval)`,
         ];
       };
     }

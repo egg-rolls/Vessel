@@ -1522,8 +1522,8 @@ async function runWithConfig(result: BootstrapResult) {
       },
       // auto-gc P1：autoPrune 热应用——调度器自启动起读 live resolver 闭包（每趟求值
       // 最新 enabled / interval / olderThan / dryRun，cadence 不冻结启动值）；这里把
-      // 重载配置喂进调度器持有的活引用，下一趟即生效。无本地调度器（connectMode）
-      // 时如实报 requires restart（同 applyFederation 口径）。
+      // 重载配置喂进调度器持有的活引用并 reschedule 立即重排挂起定时器（O4：热改即
+      // 重排）。无本地调度器（connectMode）时如实报 requires restart（同 applyFederation 口径）。
       applyAutoPrune: (next) => {
         if (result.applyAutoPruneConfig === undefined) {
           return ['autoPrune: requires restart (no local auto-prune scheduler)'];
