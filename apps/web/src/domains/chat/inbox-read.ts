@@ -29,7 +29,9 @@ export interface InboxReadMessage {
  * 从 inbox 工具项解析「这次 read 取走了哪些消息」。
  *
  * 判据（层层设防，任何一层不成形都返回空）：
- * - 工具名必须是 `inbox`；
+ * - 工具名必须是 `inbox`，或兜底值 `tool`（`history-tools.ts` 对「不知名」的填空，
+ *   不是真实工具名）：窗口首条恰为孤立 tool result 时调用侧不在窗口里，名字只能
+ *   落到兜底值 —— 放行到下面的结果形状判定，由形状（inbox-read 专属）认亲；
  * - args 在场时 action 必须是 `read`（或 0.55 前的 legacy `claim`，同形结果）——
  *   list / delete / insert 不消费消息，不产承接卡；args 缺席（历史孤立结果）时
  *   退回结果形状判定；
@@ -44,7 +46,10 @@ export function inboxReadMessagesOf(
   args: unknown,
   output: unknown,
 ): InboxReadMessage[] {
-  if (name !== 'inbox') return [];
+  // `tool` = history-tools 的不知名兜底值（孤立结果 / 调用被截断），不是真实工具名：
+  // 放行到结果形状判定。形状是 inbox-read 专属（read 计数 + messages[].text），
+  // list 的结果只有 preview 没有 text，天然仍被拒 —— 不会把别的工具误认成 inbox。
+  if (name !== 'inbox' && name !== 'tool') return [];
   if (args !== null && typeof args === 'object') {
     const action = (args as Record<string, unknown>).action;
     if (typeof action === 'string' && action !== 'read' && action !== 'claim') return [];
