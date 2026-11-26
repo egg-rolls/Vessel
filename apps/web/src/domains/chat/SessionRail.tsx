@@ -20,6 +20,7 @@ export function SessionRail({
   onOpenPending,
   agentAddresses,
   agentAddressesById,
+  agentDepths,
   agentLabels,
   agentRetiredLabels,
   defaultSession,
@@ -58,6 +59,8 @@ export function SessionRail({
   onOpenPending?: () => void;
   agentAddresses: ReadonlyMap<string, string>;
   agentAddressesById: ReadonlyMap<string, { node: string; team?: string }>;
+  /** 会话 → 树深度（depth-color D1：roster 反查档；主路径是 session.agent.depth）。 */
+  agentDepths: ReadonlyMap<string, number>;
   /** 非 team 成员 primary 会话的第二行：`名字@primary`（拿不到节点地址时才有值）。 */
   agentLabels: ReadonlyMap<string, string>;
   agentRetiredLabels: ReadonlyMap<string, string>;
@@ -110,6 +113,7 @@ export function SessionRail({
           {...(onOpenPending !== undefined ? { onOpenPending } : {})}
           agentAddresses={agentAddresses}
           agentAddressesById={agentAddressesById}
+          agentDepths={agentDepths}
           agentLabels={agentLabels}
           agentRetiredLabels={agentRetiredLabels}
           defaultSession={defaultSession}

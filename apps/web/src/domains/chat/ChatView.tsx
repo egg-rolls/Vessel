@@ -467,6 +467,7 @@ export function ChatView({
           }
           agentAddresses={sessionsApi.agentAddresses}
           agentAddressesById={sessionsApi.agentAddressesById}
+          agentDepths={sessionsApi.agentDepths}
           agentLabels={sessionsApi.agentLabels}
           agentRetiredLabels={sessionsApi.agentRetiredLabels}
           defaultSession={sessionsApi.defaultSessionEntry}

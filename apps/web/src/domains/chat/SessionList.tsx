@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { type CSSProperties, Fragment, useEffect, useRef, useState } from 'react';
 import { ActionMenu } from '../../components/ActionMenu';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { StatusGlyph } from '../../components/StatusChip';
@@ -9,6 +9,7 @@ import type { NodeRoster } from '../../gateway/team-roster';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { closedAgentSessionIds } from '../../state/archive-visibility';
+import { useDepthColor } from '../../state/depth-color';
 import { groupSessionsByDay, normalizeSessionTitle, sessionTitle } from '../../state/sessions';
 import { SESSION_REF_MIME, sessionRefAddressOf, sessionRefPayloadOf } from './session-ref';
 
@@ -62,6 +63,7 @@ export function SessionList({
   onOpenPending,
   agentAddresses,
   agentAddressesById,
+  agentDepths,
   agentLabels,
   agentRetiredLabels,
   defaultSession,
@@ -107,6 +109,11 @@ export function SessionList({
   /** agent id -> { node, team? }：第二行给「地址」而不是  占位（0.52）。 */
   agentAddressesById?: ReadonlyMap<string, { node: string; team?: string }>;
   /**
+   * session_id → 树深度（depth-color D1：roster 反查档）。主路径是 session.agent.depth
+   * （服务端绑定）；老 gateway 无 agent 字段时回落到这里。都没有 ⇒ 不着色（accent-ink）。
+   */
+  agentDepths?: ReadonlyMap<string, number>;
+  /**
    * session_id → `名字@primary`：非 team 成员（临时成员 / 未加入 Team / 不在本 team 的
    * agent）的 primary body 会话。只在拿不到节点地址时顶上，团队成员一个都没有。
    */
@@ -144,6 +151,9 @@ export function SessionList({
 }) {
   useLocale();
   const toast = useToast();
+  // 树深度配色（depth-color）：configStore 快照驱动，保存即生效；enabled=false /
+  // depth 缺省 ⇒ hueOf 返回 undefined ⇒ 不加变量，CSS 回落 accent-ink（零回归）。
+  const { hueOf } = useDepthColor();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -361,6 +371,19 @@ export function SessionList({
                   !agentLabel &&
                   !agentRetiredLabel &&
                   primarySessionIds?.has(session.session_id) === true;
+                // 树深度着色（depth-color D1/D3/D5）：主路径 session.agent.depth，
+                // 回落 roster 反查；仅三个**现役地址档** span 消费（退役/徽标灰档不加
+                // 变量——状态语义优先）。hueOf 在 enabled=false / depth 缺省时返回
+                // undefined ⇒ 无 data-depth / --depth-h ⇒ CSS 保持 accent-ink。
+                const depth = session.agent?.depth ?? agentDepths?.get(session.session_id);
+                const depthHue = hueOf(depth);
+                const depthProps =
+                  depthHue === undefined
+                    ? {}
+                    : {
+                        'data-depth': depth,
+                        style: { '--depth-h': String(depthHue) } as CSSProperties,
+                      };
                 const snippet = query.trim() ? searchSnippets?.get(session.session_id) : undefined;
                 const preview =
                   snippet ??
@@ -461,7 +484,7 @@ export function SessionList({
                             )}
                           </span>
                           {agentAddress && (
-                            <span className="session-agent session-agent-address">
+                            <span className="session-agent session-agent-address" {...depthProps}>
                               {agentAddress}
                             </span>
                           )}
@@ -472,6 +495,7 @@ export function SessionList({
                                   ? 'session-agent session-agent-address'
                                   : 'session-agent session-agent-primary'
                               }
+                              {...(ownAgentLive ? depthProps : {})}
                             >
                               {ownAgentTitle}
                             </span>
@@ -481,7 +505,7 @@ export function SessionList({
                             // 拿不到节点地址，但用户得看得出卡片是谁的 —— primary 一词仍复用
                             // t('team.member.primaryBadge')，不新增 i18n key。
                             // 现役 ⇒ 主题色（与节点地址同一抹），表达「还活着、可派活」。
-                            <span className="session-agent session-agent-address">
+                            <span className="session-agent session-agent-address" {...depthProps}>
                               {agentLabel}
                             </span>
                           )}
