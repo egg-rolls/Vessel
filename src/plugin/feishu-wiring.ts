@@ -15,6 +15,7 @@ import type {
   FeishuChannelOptionsLike,
   FeishuModuleLike,
 } from '../cli/control-plane-types';
+import { resolveLocale } from '../i18n/index';
 import type { PluginLoader } from './plugin-loader';
 
 export interface ResolvedFeishuOptions {
@@ -22,20 +23,46 @@ export interface ResolvedFeishuOptions {
   appSecret: string;
   domain: 'feishu' | 'lark';
   allowedChatIds: string[];
+  allowedUserIds: string[];
+  mentionPolicy: 'mention-only' | 'all';
+  ackReaction: boolean;
+  /** @deprecated P1-A6（D2=b）：无运行时消费，仅保留兼容，下个大版本删除。 */
   sessionPrefix: string;
   replyTimeoutMs: number;
   maxReplyChars: number;
   maxMembers: number;
 }
 
-/** config → 渠道选项（凭据已由 loader 合并 env；此处不再读 env） */
-export function resolveFeishuOptions(config: VesselConfig): ResolvedFeishuOptions {
+/** 非空字符串（与 doctor feishu_credentials 的 nonEmpty 同语义）。 */
+function nonEmpty(value: string | undefined): string | undefined {
+  return value !== undefined && value.trim() !== '' ? value : undefined;
+}
+
+/**
+ * config → 渠道选项。
+ * P1-A1：appSecret 与 doctor 同口径 —— VESSEL_FEISHU_APP_SECRET > env[appSecretEnv] > 显式 appSecret。
+ * loader 已在校验前把 appSecretEnv 解析进 config.appSecret（loadConfig 第 7.5 步）；
+ * 这里按同口径再兜底，保证未经 loader 的直接调用（嵌入/测试）也能解析。
+ * env 缺省 process.env；tenant 装配显式传 {}，不读 ambient。
+ */
+export function resolveFeishuOptions(
+  config: VesselConfig,
+  env: Record<string, string | undefined> = process.env,
+): ResolvedFeishuOptions {
   const feishu = config.feishu;
+  const appSecret =
+    nonEmpty(env.VESSEL_FEISHU_APP_SECRET) ??
+    nonEmpty(feishu?.appSecretEnv ? env[feishu.appSecretEnv] : undefined) ??
+    nonEmpty(feishu?.appSecret) ??
+    DEFAULT_FEISHU_OPTIONS.appSecret;
   return {
     appId: feishu?.appId ?? DEFAULT_FEISHU_OPTIONS.appId,
-    appSecret: feishu?.appSecret ?? DEFAULT_FEISHU_OPTIONS.appSecret,
+    appSecret,
     domain: feishu?.domain ?? DEFAULT_FEISHU_OPTIONS.domain,
     allowedChatIds: [...(feishu?.allowedChatIds ?? DEFAULT_FEISHU_OPTIONS.allowedChatIds)],
+    allowedUserIds: [...(feishu?.allowedUserIds ?? DEFAULT_FEISHU_OPTIONS.allowedUserIds)],
+    mentionPolicy: feishu?.mentionPolicy ?? DEFAULT_FEISHU_OPTIONS.mentionPolicy,
+    ackReaction: feishu?.ackReaction ?? DEFAULT_FEISHU_OPTIONS.ackReaction,
     sessionPrefix: feishu?.sessionPrefix ?? DEFAULT_FEISHU_OPTIONS.sessionPrefix,
     replyTimeoutMs: feishu?.replyTimeoutMs ?? DEFAULT_FEISHU_OPTIONS.replyTimeoutMs,
     maxReplyChars: feishu?.maxReplyChars ?? DEFAULT_FEISHU_OPTIONS.maxReplyChars,
@@ -56,12 +83,15 @@ export function feishuError(code: string, message: string): Error & { code: stri
   return Object.assign(new Error(`${code}: ${message}`), { code });
 }
 
-/** `--feishu` 的配置门控；不满足时 exit 2 */
-export function assertFeishuStartable(config: VesselConfig): void {
+/** `--feishu` 的配置门控；不满足时 exit 2。env 缺省 process.env（P1-A1 同口径解析 appSecretEnv）。 */
+export function assertFeishuStartable(
+  config: VesselConfig,
+  env: Record<string, string | undefined> = process.env,
+): void {
   if (config.feishu?.enabled !== true) {
     throw feishuError('channel_disabled', 'feishu.enabled is false');
   }
-  const { appId, appSecret } = resolveFeishuOptions(config);
+  const { appId, appSecret } = resolveFeishuOptions(config, env);
   if (appId.trim() === '' || appSecret.trim() === '') {
     throw feishuError(
       'feishu_invalid',
@@ -152,7 +182,7 @@ export async function createFeishuFromConfig(
 ): Promise<FeishuChannelLike | undefined> {
   if (options.config.feishu?.enabled !== true) return undefined;
 
-  const resolved = resolveFeishuOptions(options.config);
+  const resolved = resolveFeishuOptions(options.config, options.env ?? process.env);
   if (resolved.appId.trim() === '' || resolved.appSecret.trim() === '') {
     throw feishuError(
       'feishu_invalid',
@@ -177,6 +207,9 @@ export async function createFeishuFromConfig(
       appSecret: resolved.appSecret,
       domain: resolved.domain,
       allowedChatIds: resolved.allowedChatIds,
+      allowedUserIds: resolved.allowedUserIds,
+      mentionPolicy: resolved.mentionPolicy,
+      ackReaction: resolved.ackReaction,
       sessionPrefix: resolved.sessionPrefix,
       replyTimeoutMs: resolved.replyTimeoutMs,
       maxReplyChars: resolved.maxReplyChars,
@@ -192,6 +225,11 @@ export async function createFeishuFromConfig(
     ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
     // tenant 实例显式 `{}`：凭据已由 config loader 合并，禁止插件再读 ambient env。
     env: options.env ?? {},
+    // P1-A4（D4）：三态文案语言随节点 i18n（VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN）。
+    locale: resolveLocale({
+      env: options.env ?? process.env,
+      configLanguage: options.config.ui?.language,
+    }),
   };
 
   return mod.createFeishuPlugin(channelOptions);

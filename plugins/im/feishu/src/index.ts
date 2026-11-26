@@ -11,6 +11,7 @@ export {
   createFeishuPlugin,
   createFeishuPlugin as default,
   ERROR_REPLY_TEXT,
+  FEISHU_ACK_EMOJI,
   FEISHU_DEDUPE_SIZE,
   FEISHU_DEFAULT_MAX_MEMBERS,
   FEISHU_QUEUE_LIMIT,
@@ -25,16 +26,18 @@ export {
 } from './config.js';
 export { LruSet } from './dedupe.js';
 export { FeishuError } from './errors.js';
+export { type FeishuLocale, type FeishuReplyTexts, feishuReplyTexts } from './messages.js';
 export { PerChatQueues } from './queue.js';
 export { ChatMemberRunner, MemberLimitError } from './runner.js';
 export { createSdkTransport, mapSdkMessage } from './sdk-transport.js';
-export { extractText, TRUNCATED_SUFFIX, truncateReply } from './text.js';
+export { cleanMentionPlaceholders, extractText, TRUNCATED_SUFFIX, truncateReply } from './text.js';
 export type {
   FeishuChannel,
   FeishuConfig,
   FeishuErrorCode,
   FeishuErrorPhase,
   FeishuIncomingMessage,
+  FeishuMention,
   FeishuPlugin,
   FeishuPluginOptions,
   FeishuStatus,

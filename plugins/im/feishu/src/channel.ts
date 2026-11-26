@@ -6,10 +6,11 @@ import type { PluginHost } from '@vessel-agent/core';
 import { maskAppId, maskSecrets, resolveFeishuConfig } from './config.js';
 import { LruSet } from './dedupe.js';
 import { FeishuError } from './errors.js';
+import { type FeishuLocale, type FeishuReplyTexts, feishuReplyTexts } from './messages.js';
 import { PerChatQueues } from './queue.js';
 import { ChatMemberRunner, MemberLimitError } from './runner.js';
 import { createSdkTransport } from './sdk-transport.js';
-import { extractText, truncateReply } from './text.js';
+import { cleanMentionPlaceholders, extractText, truncateReply } from './text.js';
 import type {
   FeishuIncomingMessage,
   FeishuPlugin,
@@ -23,9 +24,13 @@ export const FEISHU_QUEUE_LIMIT = 10;
 export const FEISHU_DEDUPE_SIZE = 1000;
 export const FEISHU_DEFAULT_MAX_MEMBERS = 8;
 
-export const BUSY_REPLY_TEXT = 'busy';
-export const TIMEOUT_REPLY_TEXT = 'Request timed out.';
-export const ERROR_REPLY_TEXT = 'Request failed.';
+/** 👀 收到回执的飞书 emoji_type（P1-A4；无权限静默降级）。 */
+export const FEISHU_ACK_EMOJI = 'EYES';
+
+/** 兼容导出：zh-CN 默认文案；渠道实际按注入 locale 取 this.texts（P1-A4）。 */
+export const BUSY_REPLY_TEXT = feishuReplyTexts('zh-CN', FEISHU_QUEUE_LIMIT).busy;
+export const TIMEOUT_REPLY_TEXT = feishuReplyTexts('zh-CN', FEISHU_QUEUE_LIMIT).timeout;
+export const ERROR_REPLY_TEXT = feishuReplyTexts('zh-CN', FEISHU_QUEUE_LIMIT).error;
 
 const TENANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -43,6 +48,8 @@ class FeishuChannelImpl implements FeishuPlugin {
   readonly description = 'Feishu WebSocket channel (text only, per-chat sessions)';
 
   private readonly config: ResolvedFeishuConfig;
+  private readonly locale: FeishuLocale;
+  private readonly texts: FeishuReplyTexts;
   private readonly options: FeishuPluginOptions;
   private readonly tenantId?: string;
   private readonly transport: FeishuTransport;
@@ -69,6 +76,8 @@ class FeishuChannelImpl implements FeishuPlugin {
       this.tenantId = options.tenantId;
     }
     this.config = resolveFeishuConfig(options.config, options.env);
+    this.locale = options.locale ?? 'zh-CN';
+    this.texts = feishuReplyTexts(this.locale, FEISHU_QUEUE_LIMIT);
     this.transport =
       options.transport ??
       createSdkTransport({
@@ -202,18 +211,53 @@ class FeishuChannelImpl implements FeishuPlugin {
       return;
     }
 
+    // P1-A3（D6）：群聊默认 mention-only —— 只响应 @ 机器人的消息。
+    // 依据事件 mentions[].mentioned_type === 'bot'（离线可判，无需 bot 身份/额外权限）；
+    // mentionPolicy: all 退回旧行为（响应全部群消息，需 im:message.group_msg 权限）。
+    if (
+      message.chatType === 'group' &&
+      this.config.mentionPolicy === 'mention-only' &&
+      !(message.mentions ?? []).some((mention) => mention.mentionedType === 'bot')
+    ) {
+      return;
+    }
+
+    // P1-A5（D3=a）：可选发言人白名单（open_id）。空 = 不限（向后兼容）；
+    // 非空时仅列表内 open_id 可驱动 agent，其余静默拒绝（含 senderId 缺失——无法核验即拒）。
+    if (
+      this.config.allowedUserIds.length > 0 &&
+      (message.senderId === undefined || !this.config.allowedUserIds.includes(message.senderId))
+    ) {
+      return;
+    }
+
     const text = extractText(message.messageType, message.content);
     if (text === null) return;
+
+    // P1-A3：清洗 @ 占位符；群聊加发言人前缀（open_id，事件无姓名），让 agent 区分谁在说话。
+    const cleaned = cleanMentionPlaceholders(text, message.mentions ?? []);
+    const agentText =
+      message.chatType === 'group' && message.senderId !== undefined && message.senderId !== ''
+        ? `[${message.senderId}] ${cleaned}`
+        : cleaned;
+
+    // P1-A4（D4）：收到即点 👀 回执；fire-and-forget，无权限/失败静默降级，不影响回复。
+    if (this.config.ackReaction) {
+      void this.transport
+        .react?.({ messageId: message.messageId, emojiType: FEISHU_ACK_EMOJI })
+        .catch(() => undefined);
+    }
 
     this.publish('channel.feishu.message.received', message.chatId, {
       chat_id: message.chatId,
       message_id: message.messageId,
       message_type: message.messageType,
+      ...(message.senderId !== undefined ? { sender_id: message.senderId } : {}),
     });
 
-    const accepted = this.queues.enqueue(message.chatId, () => this.process(message, text));
+    const accepted = this.queues.enqueue(message.chatId, () => this.process(message, agentText));
     if (!accepted) {
-      void this.reply(message, BUSY_REPLY_TEXT).catch(() => undefined);
+      void this.reply(message, this.texts.busy).catch(() => undefined);
     }
   }
 
@@ -237,14 +281,14 @@ class FeishuChannelImpl implements FeishuPlugin {
       await this.reply(message, output);
     } catch (error) {
       if (timedOut) {
-        await this.safeReply(message, TIMEOUT_REPLY_TEXT);
+        await this.safeReply(message, this.texts.timeout);
       } else if (controller.signal.aborted) {
         // stop()/interrupt 导致的取消：不回复。
       } else if (error instanceof MemberLimitError) {
-        await this.safeReply(message, BUSY_REPLY_TEXT);
+        await this.safeReply(message, this.texts.busy);
       } else {
         this.recordError(error);
-        await this.safeReply(message, ERROR_REPLY_TEXT);
+        await this.safeReply(message, this.texts.error);
       }
     } finally {
       clearTimeout(timer);

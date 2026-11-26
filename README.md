@@ -211,7 +211,7 @@ vessel --resume-run <run_id>
 
 - **MCP**：插件（`@vessel-agent/mcp-client`）。server 的工具经 `PluginHost` 注册，默认名 `mcp__<server>__<tool>`，权限默认 `ask`。密钥用 `<NAME>_env` 引用环境变量，配置层不做 `${VAR}` 插值。
 - **evals**：插件 + 运行器，默认完全离线；真实 provider 需 `evals.allowNetwork: true` 与 CLI `--allow-network` 双门控。
-- **飞书**：插件，官方 SDK WebSocket 长连接，只做文本；session 固定 `feishu:<chat_id>`。
+- **飞书**：插件，官方 SDK WebSocket 长连接，文本回复；每个 chat 一个独立临时成员（id `feishu_<chat_id>`，run_id `feishu:<chat_id>`）。连接指南见 [FEISHU.md](plugins/im/feishu/FEISHU.md)。
 - **skills**：就是 Markdown 文件，放 `skills/`（项目级）或 `~/.vessel/skills/`（用户级）；`skills` 插件提供 list / search / load（TOFU 信任门控）与管理 UI。
 
 ```yaml

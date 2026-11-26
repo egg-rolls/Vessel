@@ -36,6 +36,7 @@ import {
   resolveEffectiveTenantId,
   resolveSingleTenantPaths,
 } from '../../data/data-paths';
+import { loadNodeRegistry } from '../../gateway/node-registry';
 import { resolveGatewayToken } from '../../gateway/transport-factory';
 // 0.56.1：Web 控制台产物缺失要在 doctor 就能看见（`gateway start` 的硬前置）。
 // 0.57：产物「落后于源码」同理 —— 它是「界面一直是旧的」最常见的真实原因。
@@ -53,6 +54,7 @@ import {
   loadRootSecret,
   readKnownNodeId,
 } from '../../node/token-derive';
+import { assertUniqueFeishuAppIds, type FeishuTenantConfig } from '../../plugin/feishu-wiring';
 import { declarativePluginEntries } from '../../plugin/plugin-config';
 import { PluginLoader } from '../../plugin/plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from '../../plugin/plugin-selection';
@@ -703,6 +705,43 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
       status: appId && appSecret ? 'ok' : 'fail',
       message: `app id ${appId ? '<set>' : '<unset>'}, app secret ${appSecret ? '<set>' : '<unset>'}`,
     });
+  }
+
+  // P1-A7：同 app_id 多 feishu 实例检查（防 WS 长连接随机分消息「时灵时不灵」）。
+  // 离线扫描本舰队 registry 各节点 config（隐式节点用本地 config）；重复 → fail（已掩码）。
+  {
+    const feishuEntries: FeishuTenantConfig[] = [];
+    const registry = await loadNodeRegistry(dataDir).catch(() => undefined);
+    if (registry?.kind === 'ready') {
+      for (const node of registry.registry.nodes) {
+        if (node.config_path === undefined) {
+          feishuEntries.push({ tenantId: node.node_id ?? node.name, config });
+          continue;
+        }
+        try {
+          const nodeLoaded = await loadConfig({
+            configPath: node.config_path,
+            env: { ...env, VESSEL_DATA_DIR: node.data_dir },
+          });
+          feishuEntries.push({ tenantId: node.node_id ?? node.name, config: nodeLoaded.config });
+        } catch {
+          // 节点 config 不可读：doctor 尽力而为，跳过（不在此报节点加载错）。
+        }
+      }
+    } else {
+      feishuEntries.push({ tenantId, config });
+    }
+    if (feishuEntries.some((entry) => entry.config.feishu?.enabled === true)) {
+      let status: 'ok' | 'fail' = 'ok';
+      let message = 'no duplicate feishu app_id across local fleet configs';
+      try {
+        assertUniqueFeishuAppIds(feishuEntries);
+      } catch (error) {
+        status = 'fail';
+        message = error instanceof Error ? error.message : String(error);
+      }
+      checks.push({ name: 'feishu_unique_app_id', status, message });
+    }
   }
 
   const summary = {

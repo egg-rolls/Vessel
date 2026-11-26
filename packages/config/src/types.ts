@@ -462,13 +462,19 @@ export interface FeishuConfig {
   appId?: string;
   /** 环境变量 VESSEL_FEISHU_APP_SECRET 优先；永不打印 */
   appSecret?: string;
-  /** 从该环境变量读取 appSecret（同层显式 appSecret 优先） */
+  /** 从该环境变量读取 appSecret；优先序 VESSEL_FEISHU_APP_SECRET > 本变量 > 显式 appSecret（与 doctor 同口径，P1-A1） */
   appSecretEnv?: string;
   /** 仅切换域名，不改变语义（默认 feishu） */
   domain?: 'feishu' | 'lark';
   /** 空 = 机器人所在全部会话 */
   allowedChatIds?: string[];
-  /** session = <prefix>:<chat_id>（默认 feishu） */
+  /** 发言人 open_id 白名单（P1-A5，D3=a）；空 = 不限（向后兼容），非空仅列表内 open_id 可驱动 agent */
+  allowedUserIds?: string[];
+  /** 群聊 @ 策略（P1-A3，D6 breaking）：mention-only 只响应 @ 机器人（默认）；all 响应全部群消息（需 im:message.group_msg） */
+  mentionPolicy?: 'mention-only' | 'all';
+  /** 收到消息点 👀 reaction 回执（P1-A4，D4；默认 true；无权限静默降级） */
+  ackReaction?: boolean;
+  /** @deprecated P1-A6（D2=b）：无运行时消费（成员寻址由 id feishu_<chat_id> 承担）；保留校验兼容旧 yaml，下个大版本删除。 */
   sessionPrefix?: string;
   /** 单次回复超时毫秒（默认 300000；1..86400000） */
   replyTimeoutMs?: number;

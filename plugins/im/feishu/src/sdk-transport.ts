@@ -21,6 +21,12 @@ interface SdkClient {
         data: { content: string; msg_type: string };
       }): Promise<SdkReplyResponse>;
     };
+    messageReaction: {
+      create(input: {
+        path: { message_id: string };
+        data: { reaction_type: { emoji_type: string } };
+      }): Promise<SdkReplyResponse>;
+    };
   };
 }
 
@@ -96,6 +102,28 @@ export function mapSdkMessage(data: unknown): FeishuIncomingMessage | null {
       ? Number(createTimeRaw)
       : undefined;
 
+  // P1-A3：发言人 open_id（additive）。
+  const senderIdRaw = isRecord(sender.sender_id) ? sender.sender_id.open_id : undefined;
+  const senderId = typeof senderIdRaw === 'string' && senderIdRaw !== '' ? senderIdRaw : undefined;
+
+  // P1-A3：@ 提及数组（additive）；key 为文本占位符，mentioned_type 区分 user/bot。
+  const mentions: FeishuIncomingMessage['mentions'] = [];
+  if (Array.isArray(message.mentions)) {
+    for (const entry of message.mentions) {
+      if (!isRecord(entry) || typeof entry.key !== 'string' || entry.key === '') continue;
+      const id = isRecord(entry.id) ? entry.id : undefined;
+      const openId = id !== undefined && typeof id.open_id === 'string' ? id.open_id : undefined;
+      mentions.push({
+        key: entry.key,
+        ...(typeof entry.name === 'string' && entry.name !== '' ? { name: entry.name } : {}),
+        ...(openId !== undefined && openId !== '' ? { openId } : {}),
+        ...(typeof entry.mentioned_type === 'string'
+          ? { mentionedType: entry.mentioned_type }
+          : {}),
+      });
+    }
+  }
+
   return {
     messageId,
     chatId,
@@ -105,6 +133,8 @@ export function mapSdkMessage(data: unknown): FeishuIncomingMessage | null {
     messageType,
     content,
     ...(createTime !== undefined && Number.isFinite(createTime) ? { createTime } : {}),
+    ...(senderId !== undefined ? { senderId } : {}),
+    ...(mentions.length > 0 ? { mentions } : {}),
   };
 }
 
@@ -167,6 +197,23 @@ export function createSdkTransport(options: SdkTransportOptions): FeishuTranspor
       });
       if (typeof response.code === 'number' && response.code !== 0) {
         throw new Error(`feishu reply failed: ${response.msg ?? response.code}`);
+      }
+    },
+
+    async react(input): Promise<void> {
+      if (!client) {
+        throw new FeishuError(
+          'channel_not_connected',
+          'feishu transport is not started',
+          'runtime',
+        );
+      }
+      const response = await client.im.messageReaction.create({
+        path: { message_id: input.messageId },
+        data: { reaction_type: { emoji_type: input.emojiType } },
+      });
+      if (typeof response.code === 'number' && response.code !== 0) {
+        throw new Error(`feishu reaction failed: ${response.msg ?? response.code}`);
       }
     },
   };
