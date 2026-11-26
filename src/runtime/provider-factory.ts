@@ -26,6 +26,12 @@ export interface ResolvedProvider {
   provider: LLMProvider;
   providerName: string;
   providerModel: string;
+  /**
+   * 缺省模型身份 ref（第 6 修 SPAWN-02）：宿主缺省 / spawn 继承存它而非 wire——
+   * 注册条目 = 条目键，legacy = wire 透传或显式 legacy ref（defaultModelRefOf）。
+   * 展示面（selfCard / REPL / summary）仍用 providerModel（wire），两者分离。
+   */
+  providerModelRef: string;
   providerBaseUrl: string;
   /**
    * P1-w2d：多厂商 wiring 句柄（mock 模式缺省）。装配层据此注入
@@ -48,6 +54,8 @@ export async function createProvider(
       provider: scenario ? createScenarioProvider(scenario) : new MemoryLLMProvider(),
       providerName: 'mock',
       providerModel: 'mock-model',
+      // mock 无 registry：EU 直接把 model 字符串当 wire 用，ref 与 wire 同值。
+      providerModelRef: 'mock-model',
       providerBaseUrl: 'memory',
     };
   }
@@ -61,6 +69,7 @@ export async function createProvider(
     provider: resolved.provider,
     providerName: config.provider?.name ?? 'openai',
     providerModel: resolved.model,
+    providerModelRef: resolved.ref,
     providerBaseUrl: config.provider?.baseUrl ?? '',
     registry,
   };

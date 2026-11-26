@@ -1631,6 +1631,14 @@ export interface AgentServiceOptions {
    * 缺省 undefined = 不报（纯内存测试 / 未挂通知总线的入口）。
    */
   peerStops?: PeerStopSink;
+  /**
+   * 第 6 修（CHAIN-11/SPAWN-05）：显式 model pin 的注册 ref 校验口（与 gateway
+   * `agents.create|update` 参数闸同一注入面）。create/hire（单条与 batch 逐条）与
+   * seeded create 的**显式 input.model** 落盘前过闸；未命中 → invalid_input，
+   * 不再持久化毒 pin。缺省不校验（mock / 纯内存零回归）；源记录 pin 拷贝不重验
+   * （存量 legacy pin 不因派生被误杀）。
+   */
+  modelRefError?: (ref: string) => string | undefined;
 }
 
 /** 稳定错误码（入口层据此映射 RPC / CLI 错误） */

@@ -961,6 +961,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly noticeDirty = new Set<string>();
   /** 成员停下通知端口（装配层注入；缺省不报）。 */
   private readonly peerStops: AgentServiceOptions['peerStops'];
+  /** 显式 model pin 的注册 ref 校验口（第 6 修；装配层注入，缺省不校验）。 */
+  private readonly modelRefError: AgentServiceOptions['modelRefError'];
   /**
    * 成员停下判定的待发定时器（agentId → timer）。
    *
@@ -1082,6 +1084,7 @@ export class AgentServiceImpl implements AgentService {
         : undefined;
     if (this.inbox !== undefined) this.runtime.attachInbox?.(this.inbox);
     this.peerStops = options.peerStops;
+    this.modelRefError = options.modelRefError;
     this.ready = this.loadSnapshot();
   }
 
@@ -1299,6 +1302,18 @@ export class AgentServiceImpl implements AgentService {
     return armProjectionDeclaration(options.sessionId, declaration);
   }
 
+  /**
+   * 第 6 修（CHAIN-11/SPAWN-05）：显式 model pin 落盘前的注册 ref 闸。
+   * 与 gateway `agents.create|update` 参数闸同一校验口（装配层注入 validateModelRef）；
+   * 缺省不校验（mock / 纯内存零回归）。错误码 invalid_input 与 RPC 闸同形。
+   */
+  private assertModelRef(model: string): void {
+    const error = this.modelRefError?.(model);
+    if (error !== undefined) {
+      throw new AgentError('invalid_input', `model: ${error}`);
+    }
+  }
+
   private async createOne(input: Record<string, unknown>): Promise<MemberStatus> {
     // CREATE-0.39：有来源走独立的 seeded 分支；公共路径不再受「每源一个派生」限制。
     const fromSessionId =
@@ -1514,7 +1529,12 @@ export class AgentServiceImpl implements AgentService {
     // 只存显式 pin；缺省跟随当前 config（宿主 model），不把默认值烧进记录 ——
     // 烧死默认值会让 config 换模型后旧记录永远优先。
     const model = optionalString(input.model);
-    if (model !== undefined) record.model = model;
+    if (model !== undefined) {
+      // 第 6 修（CHAIN-11/SPAWN-05）：tool 层 create/hire 与 RPC 同闸——显式 pin
+      // 必须是可解析 ref，落盘前拒绝毒 pin（batch 经 createOne 逐条拒绝，不整批抛错）。
+      this.assertModelRef(model);
+      record.model = model;
+    }
     const systemPrompt = optionalString(input.systemPrompt);
     if (systemPrompt !== undefined) record.systemPrompt = systemPrompt;
 
@@ -1766,7 +1786,10 @@ export class AgentServiceImpl implements AgentService {
           : resolveVisibility(input.visibility, source.visibility);
     }
     // 只存显式 pin：input 显式 > 源的显式 pin（派生 = 身份拷贝，pin 随源）；缺省跟随 config。
-    const model = optionalString(input.model) ?? source.model;
+    // 第 6 修：只校验**显式 input**；源记录 pin 拷贝不重验（存量 legacy pin 不因派生被误杀）。
+    const inputModel = optionalString(input.model);
+    if (inputModel !== undefined) this.assertModelRef(inputModel);
+    const model = inputModel ?? source.model;
     const systemPrompt = optionalString(input.systemPrompt) ?? source.systemPrompt;
     const spawnedBy = optionalString(input.spawnedBy);
 

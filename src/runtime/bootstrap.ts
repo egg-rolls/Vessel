@@ -337,8 +337,9 @@ export interface BootstrapResult {
     /**
      * `provider.model` 热应用（P0-1 D4）：替换成员宿主缺省 model，只影响此后 spawn
      * 的 body（live body 构造期只读，下一具才生效）。透传 wiring 的同名入口。
+     * 第 6 修：`model` = 缺省 ref，`wireModel` = 配套展示 wire。
      */
-    applyDefaultModel: (model: string) => void;
+    applyDefaultModel: (model: string, wireModel?: string) => void;
     dispose: () => Promise<void>;
   };
   /**
@@ -1388,6 +1389,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const {
     providerName,
     providerModel,
+    providerModelRef,
     providerBaseUrl,
     session,
     sessionControl,
@@ -1588,7 +1590,16 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       runtime: executionRuntime,
       // 成员 run durable：RunRecord 与 tenant run 同一条 journal 写路径。
       ...(runStore !== undefined ? { runStore } : {}),
-      model: agentPlan.model ?? providerModel,
+      // 第 6 修（SPAWN-02）：宿主缺省存**ref**（条目键 / legacy 透传 ref）而非 wire——
+      // spawn 继承 member.model ?? this.model 经 resolveModelRef 解析，裸 wire 名在
+      // legacyPresent=false（纯 registry / provider 块已删）时无命中 → spawn_failed，
+      // 全新 dataDir 的 main 创建（createOrRestoreOwner 不带 model）即 boot 死。
+      // 展示面（selfCard / REPL / summary）仍用 wire：modelWire 与缺省 ref 分离。
+      // config.agent.model 是用户显式值，原样作 ref（与旧语义字节等价）。
+      model: agentPlan.model ?? providerModelRef,
+      modelWire: agentPlan.model ?? providerModel,
+      // 第 6 修（CHAIN-11/SPAWN-05）：tool 层 create/hire 显式 pin 与 RPC 同闸。
+      ...(bundle.validateModelRef !== undefined ? { modelRefError: bundle.validateModelRef } : {}),
       limits: agentPlan.limits ?? limits,
       termination: memberTermination,
       ...(agentPlan.readOnlyTools !== undefined ? { readOnlyTools: agentPlan.readOnlyTools } : {}),
