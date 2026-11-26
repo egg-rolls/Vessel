@@ -183,6 +183,7 @@ import type { McpEngineShell } from '../tools-engine/mcp-engine-wiring';
 import { createEngineSupervisor, type EngineSupervisor } from '../tools-engine/supervisor';
 import { callbackRoute } from '../tools-engine/wiring';
 import { registerBashJobDelivery } from './bash-job-delivery';
+import { hasBootRegistryKey } from './model-registry-wiring';
 import { createRuntimeNoticeBus, type RuntimeNoticeBus } from './runtime-notice';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
 import { sanitizeToolOutputEnv } from './tool-output-env';
@@ -1134,7 +1135,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     });
   }
 
-  if (!useMock && !interactive && !resolveEffectiveApiKey(config)) {
+  // 启动闸两条腿：legacy provider.*/apiKey 链路（DECISION-020）或 registry 注册条目
+  // 凭证已配置（纯 models.entries + credentials.json 形态，无 legacy 块）。
+  if (
+    !useMock &&
+    !interactive &&
+    !resolveEffectiveApiKey(config) &&
+    !hasBootRegistryKey(config, dataDir)
+  ) {
     console.error(t('common.noApiKey'));
     process.exit(configErrorExitCode);
   }
