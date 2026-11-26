@@ -135,6 +135,16 @@ export {
   synthesizeLegacyRegistry,
 } from './model-registry.js';
 export {
+  CREDENTIAL_ID_RE,
+  ENTRY_KEY_RE,
+  hitsEntryRef,
+  OPENAI_FAMILY_PROVIDERS,
+  REQUEST_MODES,
+  reservedBodyKeysFor,
+  validateCredentialsBlock,
+  validateEntriesBlock,
+} from './models-validation.js';
+export {
   addressKey,
   classifyHost,
   classifyOrigin,

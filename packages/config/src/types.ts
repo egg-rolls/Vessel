@@ -24,18 +24,18 @@ export interface ProviderConfig {
 }
 
 /**
- * models 注册表里的每模型配置（model-registry §2.1）。
- * 唯一可选字段是 promptCache 三态；不加 temperature/maxTokens（请求参数沿用全局 provider.*）。
+ * models.vendors.<id>.models 的每模型配置（旧 vendor 形状，迁移期保留）。
+ * 唯一可选字段是 promptCache 三态；两面重构后移入 ModelEntry.param.promptCache。
+ * @deprecated 过渡期：一次性迁移（§7）后随 vendors 块删除。
  */
-export interface ModelEntry {
+export interface VendorModelEntry {
   /** true 强开 / false 强关 / 缺省 auto（openai 兼容按模型名含 claude；anthropic 默认 true） */
   promptCache?: boolean;
 }
 
 /**
- * models.vendors.<id> 条目：protocol + 端点 + 凭证引用 + 模型清单。
- * id 即名称（kebab-case，同插件 id 形状），不加 display-name；鉴权由 protocol 蕴含，
- * 不另设 auth 字段；不给 vendor 新增明文 api_key（legacy provider.apiKey 原样保留）。
+ * models.vendors.<id> 条目（旧 vendor 形状，迁移期保留）：protocol + 端点 + 凭证引用 + 模型清单。
+ * @deprecated 过渡期：两面重构（凭证面 + 模型面）取代；一次性迁移（§7）后删除。
  */
 export interface VendorEntry {
   /** 已注册的 provider 工厂名（openai / anthropic / google / ... 或自定义 provider 插件名） */
@@ -47,20 +47,93 @@ export interface VendorEntry {
   /** 环境变量间接引用（ADR-050 §4）；与 credential 互斥 */
   apiKeyEnv?: string;
   /** wire model id（可含 `/`）→ 每模型配置；至少 1 条 */
-  models: Record<string, ModelEntry>;
+  models: Record<string, VendorModelEntry>;
 }
 
 /**
- * models 块：模型 / 厂商 / 别名元数据（无密钥值，user/project 层可叠）。
+ * 模型请求模式（两面重构 §6）：协议内的 wire 请求形状，与流式/思考正交。
+ * - openai 系（openai / openai-compatible / gemini）：chat | responses；缺省 chat。
+ * - anthropic：messages；缺省 messages。
+ * `responses` 为保留枚举（本期校验报 unsupported_mode，待 Responses API 适配器另批）。
+ */
+export type RequestMode = 'chat' | 'responses' | 'messages';
+
+/**
+ * 凭证面实体（两面重构 §3）：认证端点，一等实体，可被任意多个模型共享。
+ * 存储两处分裂：yaml 元数据（本类型，无密钥值）+ 加密库值（credentials.json 同 id，
+ * AES-256-GCM 信封 v1 不变）。APIKEY 值只经 credential_set 写入加密库。
+ */
+export interface CredentialEntry {
+  /** 请求地址*：必填 http(s) URL；写入时去尾斜杠。注册模型端点恒取此值（不回落协议默认）。 */
+  baseUrl: string;
+  /** 可选 env 间接来源（ADR-050 §4）；与加密库值并存时库值优先。 */
+  apiKeyEnv?: string;
+}
+
+/** 模型级缺省请求参数（两面重构 §10.2）；优先级链 = 请求显式 > hook requestExtras > param > 全局 provider.*。 */
+export interface ModelParamConfig {
+  /** ∈ [0,2]；provider 构造缺省，请求显式覆盖 */
+  temperature?: number;
+  /** 正整数；provider 构造缺省，请求显式覆盖 */
+  maxTokens?: number;
+  /** ∈ (0,1]；构造缺省 + 请求体 top_p（hook 经 extra_params.top_p 覆盖） */
+  topP?: number;
+  /** true 强开 / false 强关 / 缺省 auto（语义继承旧 ModelEntry.promptCache） */
+  promptCache?: boolean;
+  /** 请求期经 mergeExtraParams 并入请求体（RESERVED_BODY_KEYS 保护）；绝不触碰 messages */
+  extra?: Record<string, unknown>;
+}
+
+/** 模型元数据（两面重构 §10.3）：只展示/规划，永不进 wire 请求体。未知键读容忍（session-attrs D4 先例）。 */
+export interface ModelInfoConfig {
+  displayName?: string;
+  description?: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  capabilities?: { vision?: boolean; thinking?: boolean; tools?: boolean };
+  [key: string]: unknown;
+}
+
+/**
+ * 模型面实体（两面重构 §4）：models.entries.<id> = 一个扁平模型条目。
+ * id = 注册表内唯一键（ref 的主处理柄）；wire 模型名是条目字段而非命名空间。
+ * 端点定位公式：provider（协议适配）+ credential → 凭证.baseUrl（端点）+ 凭证值（认证）。
+ */
+export interface ModelEntry {
+  /** 模型名称 = wire model id（请求体 model 字段）；缺省 = 条目键；可含 '/' */
+  name?: string;
+  /** 模型别称：扁平唯一 ref（不含 '/'；不得与任何条目键重合）；单值（H3 裁定） */
+  alias?: string;
+  /** 协议/SDK 适配类型（非品牌）；缺省 'openai'；取值 = 已注册 provider 工厂名（§5） */
+  provider?: string;
+  /** 模型请求模式（§6）；缺省按 provider 推导 */
+  mode?: RequestMode;
+  /** 访问凭证 ref → models.credentials.<id>（必填；legacy 合成条目除外） */
+  credential: string;
+  /** 价格四元组（可选；§10.1；出现时 input/output 必填） */
+  pricing?: ModelPricingConfig;
+  /** 缺省请求参数（可选；§10.2） */
+  param?: ModelParamConfig;
+  /** 元数据（可选；§10.3） */
+  info?: ModelInfoConfig;
+}
+
+/**
+ * models 块（两面重构）：凭证面 + 模型面元数据（无密钥值，user/project 层可叠）。
  * 缺省 = 纯 legacy provider.* 行为；旧配置由 synthesizeLegacyRegistry 折成
- * `legacy:<provider.name>` 隐式条目，不改也能跑。
+ * `legacy:<provider.name>` 合成凭证+条目，不改也能跑。
+ * vendors/aliases 为迁移期保留块（§7 一次性迁移后删除）。
  */
 export interface ModelsConfig {
-  /** 有效默认 ref（别名或 vendor/model）；必须命中注册条目（P0 起严格） */
+  /** 有效默认 ref（别称或条目键）；必须命中注册条目（P0 起严格） */
   default?: string;
-  /** vendor id（^[a-z0-9][a-z0-9-]{0,63}$；`legacy:` 前缀保留）→ 厂商条目 */
+  /** 凭证名称（^[a-z0-9][a-z0-9-]{0,63}$；`legacy:` 前缀保留）→ 凭证元数据 */
+  credentials?: Record<string, CredentialEntry>;
+  /** 条目键（^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$；`legacy:` 前缀保留）→ 模型条目 */
+  entries?: Record<string, ModelEntry>;
+  /** @deprecated 迁移期保留：vendor id → 厂商条目（§7 一次性迁移后删除） */
   vendors?: Record<string, VendorEntry>;
-  /** 扁平别名：alias → vendor/model；别名 key 不含 `/`，不允许别名 → 别名 */
+  /** @deprecated 迁移期保留：扁平别名 alias → vendor/model（迁移折入条目 alias 字段） */
   aliases?: Record<string, string>;
 }
 

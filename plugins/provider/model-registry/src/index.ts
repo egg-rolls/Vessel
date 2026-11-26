@@ -12,7 +12,7 @@
  * 明文纪律：credential value 只在 credential_set 写入瞬间存在；RPC 结果永不回显。
  */
 
-import type { ModelEntry, ModelRegistrySnapshot, VendorEntry } from '@vessel-agent/config';
+import type { ModelRegistrySnapshot, VendorEntry, VendorModelEntry } from '@vessel-agent/config';
 import { resolveEffectiveApiKey, resolveModelRef } from '@vessel-agent/config';
 import type { Plugin } from '@vessel-agent/core';
 import { defaultBaseUrlFor, testConnectivity } from './connectivity';
@@ -93,7 +93,7 @@ function parseVendorEntry(raw: unknown): VendorEntry {
     if (promptCache !== undefined && typeof promptCache !== 'boolean') {
       throw invalidParams(`entry.models.${modelId}.promptCache must be a boolean when set`);
     }
-    const modelEntry: ModelEntry = promptCache !== undefined ? { promptCache } : {};
+    const modelEntry: VendorModelEntry = promptCache !== undefined ? { promptCache } : {};
     entry.models[modelId] = modelEntry;
   }
   return entry;

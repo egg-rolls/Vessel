@@ -14,6 +14,11 @@ import {
   requiresPublicOrigin,
 } from './auth-strategies/index.js';
 import { DEFAULT_ENV_CADENCE, PINNED_REQUEST_SCOPES } from './env-injection.js';
+import {
+  hitsEntryRef,
+  validateCredentialsBlock,
+  validateEntriesBlock,
+} from './models-validation.js';
 import { validateTeamPolicy } from './team-policy.js';
 import type {
   AttentionConfig,
@@ -211,7 +216,27 @@ export function validateModels(
   models: Record<string, unknown>,
   provider: ProviderConfig | undefined,
   errors: ConfigValidationError[],
+  warnings: ConfigValidationWarning[] = [],
 ): void {
+  // 两面形状（§3.3 / §4.4）：凭证面 + 模型面；与旧 vendors/aliases 并存于迁移期。
+  const credentials = isPlainObject(models.credentials) ? models.credentials : undefined;
+  const entries = isPlainObject(models.entries) ? models.entries : undefined;
+  if (models.credentials !== undefined && credentials === undefined) {
+    errors.push({
+      path: 'models.credentials',
+      message: 'models.credentials must be an object (credential id -> { baseUrl, apiKeyEnv? })',
+    });
+  }
+  if (credentials !== undefined) validateCredentialsBlock(credentials, errors);
+  if (models.entries !== undefined && entries === undefined) {
+    errors.push({
+      path: 'models.entries',
+      message: 'models.entries must be an object (entry key -> model entry)',
+    });
+  }
+  if (entries !== undefined) {
+    validateEntriesBlock(entries, credentials, errors, warnings);
+  }
   const vendors = isPlainObject(models.vendors) ? models.vendors : undefined;
   const aliases = isPlainObject(models.aliases) ? models.aliases : undefined;
   if (models.vendors !== undefined && vendors === undefined) {
@@ -338,17 +363,21 @@ export function validateModels(
         });
         continue;
       }
-      checkRegisteredRef(target, path, vendors, aliases, provider, errors);
+      // 迁移期：旧别名目标也允许命中新形状条目键/别称。
+      if (!hitsEntryRef(target, entries, provider)) {
+        checkRegisteredRef(target, path, vendors, aliases, provider, errors);
+      }
     }
   }
   if (models.default !== undefined) {
     if (typeof models.default !== 'string' || models.default === '') {
       errors.push({
         path: 'models.default',
-        message: 'models.default must be a non-empty ref string (alias or vendor/model)',
+        message: 'models.default must be a non-empty ref string (alias or entry key)',
         value: models.default,
       });
-    } else {
+    } else if (!hitsEntryRef(models.default, entries, provider)) {
+      // 迁移期：未命中新形状时仍认旧 vendor/model ref（一次性迁移后旧块删除）。
       checkRegisteredRef(models.default, 'models.default', vendors, aliases, provider, errors);
     }
   }
@@ -3247,7 +3276,12 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     if (!isPlainObject(config.models)) {
       errors.push({ path: 'models', message: 'models must be an object' });
     } else {
-      validateModels(config.models as unknown as Record<string, unknown>, config.provider, errors);
+      validateModels(
+        config.models as unknown as Record<string, unknown>,
+        config.provider,
+        errors,
+        warnings,
+      );
     }
   }
 
@@ -3963,9 +3997,20 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'timeoutMs',
     'promptCache',
   ],
-  // model-registry P0：models 块。vendors / aliases 是用户自定义 map（键是 vendor id /
-  // 别名 / wire model id，属数据不属配置键），未知键检查在 findUnknownNestedKeys 逐层做。
-  models: ['default', 'vendors', 'aliases'],
+  // model-registry：models 块。两面形状 credentials / entries（§3/§4）+ 迁移期保留的
+  // vendors / aliases。map 键（凭证 id / 条目键 / vendor id / 别名 / wire model id）属数据
+  // 不属配置键，未知键检查在 findUnknownNestedKeys 逐层做。
+  models: ['default', 'credentials', 'entries', 'vendors', 'aliases'],
+  'models.credentials': ['baseUrl', 'apiKeyEnv'],
+  'models.entries': ['name', 'alias', 'provider', 'mode', 'credential', 'pricing', 'param', 'info'],
+  'models.entries.pricing': [
+    'inputPerMillion',
+    'outputPerMillion',
+    'cacheReadPerMillion',
+    'cacheWritePerMillion',
+  ],
+  'models.entries.param': ['temperature', 'maxTokens', 'topP', 'promptCache', 'extra'],
+  // info 子树不做已知键收口（§10.3 未知键读容忍）；param.extra 是自由请求参数 map，同不收口。
   'models.vendors': ['protocol', 'baseUrl', 'credential', 'apiKeyEnv', 'models'],
   'models.vendors.models': ['promptCache'],
   agent: [
@@ -4239,6 +4284,69 @@ export function findUnknownNestedKeys(config: Record<string, unknown>): UnknownN
               path: `models.vendors.${vendorId}.models.${modelId}.${key}`,
               key,
               block: 'models.vendors.models',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // models.credentials.<id>（两面重构 §3.3：键是凭证 id，属数据；只查条目内字段名）。
+  const modelCredentials =
+    modelsBlock !== undefined && isPlainObject(modelsBlock.credentials)
+      ? modelsBlock.credentials
+      : undefined;
+  if (modelCredentials !== undefined) {
+    const knownCredential = KNOWN_BLOCK_KEYS['models.credentials'] ?? [];
+    for (const [credId, entry] of Object.entries(modelCredentials)) {
+      if (!isPlainObject(entry)) continue;
+      for (const key of Object.keys(entry)) {
+        if (!knownCredential.includes(key)) {
+          unknown.push({
+            path: `models.credentials.${credId}.${key}`,
+            key,
+            block: 'models.credentials',
+          });
+        }
+      }
+    }
+  }
+
+  // models.entries.<id>（两面重构 §4.4）：条目字段 + pricing / param 子块收口；
+  // info 与 param.extra 是自由 map（未知键读容忍 / 请求参数），不收口。
+  const modelEntries =
+    modelsBlock !== undefined && isPlainObject(modelsBlock.entries)
+      ? modelsBlock.entries
+      : undefined;
+  if (modelEntries !== undefined) {
+    const knownEntry = KNOWN_BLOCK_KEYS['models.entries'] ?? [];
+    const knownPricing = KNOWN_BLOCK_KEYS['models.entries.pricing'] ?? [];
+    const knownParam = KNOWN_BLOCK_KEYS['models.entries.param'] ?? [];
+    for (const [entryKey, entry] of Object.entries(modelEntries)) {
+      if (!isPlainObject(entry)) continue;
+      for (const key of Object.keys(entry)) {
+        if (!knownEntry.includes(key)) {
+          unknown.push({ path: `models.entries.${entryKey}.${key}`, key, block: 'models.entries' });
+        }
+      }
+      if (isPlainObject(entry.pricing)) {
+        for (const key of Object.keys(entry.pricing)) {
+          if (!knownPricing.includes(key)) {
+            unknown.push({
+              path: `models.entries.${entryKey}.pricing.${key}`,
+              key,
+              block: 'models.entries.pricing',
+            });
+          }
+        }
+      }
+      if (isPlainObject(entry.param)) {
+        for (const key of Object.keys(entry.param)) {
+          if (!knownParam.includes(key)) {
+            unknown.push({
+              path: `models.entries.${entryKey}.param.${key}`,
+              key,
+              block: 'models.entries.param',
             });
           }
         }

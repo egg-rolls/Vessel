@@ -21,7 +21,7 @@
  */
 
 import { defaultModelForProvider } from './defaults.js';
-import type { ModelEntry, ModelsConfig, VesselConfig } from './types.js';
+import type { ModelsConfig, VendorModelEntry, VesselConfig } from './types.js';
 
 /** 快照内的厂商条目（models 块注册条目或 legacy 合成条目）。 */
 export interface RegistryVendor {
@@ -31,7 +31,7 @@ export interface RegistryVendor {
   credentialRef?: string;
   apiKeyEnv?: string;
   /** wire model id → 每模型配置 */
-  models: Record<string, ModelEntry>;
+  models: Record<string, VendorModelEntry>;
   /** legacy 合成条目（provider.* 兼容）：model 字符串透传，不受注册清单约束 */
   legacy: boolean;
 }
@@ -138,7 +138,7 @@ export function synthesizeLegacyRegistry(config: VesselConfig): ModelRegistrySna
   const providerName = config.provider?.name ?? 'openai';
   const legacyVendorId = `legacy:${providerName}`;
   const legacyModel = config.provider?.model;
-  const legacyModels: Record<string, ModelEntry> = {};
+  const legacyModels: Record<string, VendorModelEntry> = {};
   if (legacyModel !== undefined && legacyModel !== '') {
     legacyModels[legacyModel] =
       config.provider?.promptCache !== undefined

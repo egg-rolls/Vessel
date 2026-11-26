@@ -133,14 +133,17 @@ function convertKeys(
  * - node.tokens：token 原文
  * - pricing.models：模型名（常含 `/`、`.`，不能按 snake_case 改写）
  * - observability.log.modules：事件名前缀（`bash_job` 这类下划线是名字的一部分）
- * - models.vendors / models.aliases：vendor id / 别名（用户自定义 id，原样保留）
+ * - models.vendors / models.aliases：vendor id / 别名（用户自定义 id，原样保留；迁移期）
  * - models.vendors.<id>.models：wire model id（可含 `/`、`.`、`_`，同 pricing.models）
+ * - models.credentials / models.entries：凭证 id / 条目键（两面重构 §3/§4，原样保留）
+ * - models.entries.<id>.param.extra 子树：自由请求参数 map 键（原样保留）；
+ *   .info 已知键走 snake→camel，未知键读容忍原样保留（§10.3）
  * - plugins[].config 子树（含嵌套）：插件 settings 键 = manifest settings 字段名
  *   （snake_case，如 thinking-intensity 的 default_level / budget_high），同属
  *   用户自定义 map 键。注意 convertKeys 数组递归不追加索引，故 plugins[] 元素内
  *   的 path 形如 ['plugins', 'config', …]（path[1] 即 'config'，无索引段）。
  */
-export function preserveConfigMapKeys(path: string[], _key: string): boolean {
+export function preserveConfigMapKeys(path: string[], key: string): boolean {
   if (path[0] === 'mcpServers') {
     if (path.length === 1) return true;
     return path.length === 3 && (path[2] === 'env' || path[2] === 'headers');
@@ -149,8 +152,26 @@ export function preserveConfigMapKeys(path: string[], _key: string): boolean {
   if (path[0] === 'node' && path.length === 2 && path[1] === 'tokens') return true;
   if (path[0] === 'pricing' && path.length === 2 && path[1] === 'models') return true;
   if (path[0] === 'models') {
-    if (path.length === 2 && (path[1] === 'vendors' || path[1] === 'aliases')) return true;
+    if (
+      path.length === 2 &&
+      (path[1] === 'vendors' ||
+        path[1] === 'aliases' ||
+        path[1] === 'credentials' ||
+        path[1] === 'entries')
+    ) {
+      return true;
+    }
     if (path.length === 4 && path[1] === 'vendors' && path[3] === 'models') return true;
+    // 两面重构：entries.<id>.param.extra 子树 map 键原样保留（自由请求参数）。
+    if (path.length >= 5 && path[1] === 'entries' && path[3] === 'param' && path[4] === 'extra') {
+      return true;
+    }
+    // entries.<id>.info：已知键走 snake→camel（display_name/context_window/max_output_tokens），
+    // 未知键读容忍原样保留（§10.3）；更深层（capabilities 内未知键等）一律保留。
+    if (path.length >= 4 && path[1] === 'entries' && path[3] === 'info') {
+      if (path.length > 4) return true;
+      return key !== 'display_name' && key !== 'context_window' && key !== 'max_output_tokens';
+    }
   }
   if (
     path[0] === 'observability' &&
