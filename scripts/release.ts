@@ -177,14 +177,20 @@ function printUsage(): void {
 minor/major=全量重收口（+版本文档+INDEX 登记；CHANGELOG 完整节缺则报错候补）。
 --auto-tag：打 annotated tag vX.Y.Z（不 push；push 触发 release.yml）。
 显式版本：重跑/修复漂移（与根版本相同=只同步不 bump）。`);
-} /** 显式版本 → bump 类型（与根版本相同 = 漂移修复，按轻收口只同步不 bump）。 */
+}
+
+/** 显式版本 → bump 类型（与根版本相同 = 漂移修复，按轻收口只同步不 bump）。 */
 function deriveKind(current: string, target: string): BumpKind {
-  const c = (current.split('-')[0] as string).split('.').map(Number);
-  const t = (target.split('-')[0] as string).split('.').map(Number);
-  if (c[0] === t[0] && c[1] === t[1] && c[2] === t[2]) return 'patch';
-  if (t[0] === c[0] + 1 && t[1] === 0 && t[2] === 0) return 'major';
-  if (t[0] === c[0] && t[1] === c[1] + 1 && t[2] === 0) return 'minor';
-  if (t[0] === c[0] && t[1] === c[1] && t[2] === c[2] + 1) return 'patch';
+  const parts = (version: string): [number, number, number] => {
+    const [major = 0, minor = 0, patch = 0] = (version.split('-')[0] ?? '').split('.').map(Number);
+    return [major, minor, patch];
+  };
+  const [cM, cm, cp] = parts(current);
+  const [tM, tm, tp] = parts(target);
+  if (cM === tM && cm === tm && cp === tp) return 'patch';
+  if (tM === cM + 1 && tm === 0 && tp === 0) return 'major';
+  if (tM === cM && tm === cm + 1 && tp === 0) return 'minor';
+  if (tM === cM && tm === cm && tp === cp + 1) return 'patch';
   die(
     `显式版本 ${target} 不是根版本 ${current} 的 patch/minor/major 增量（或等于根版本做漂移修复）`,
   );
@@ -298,15 +304,9 @@ async function main(): Promise<void> {
   }
 
   // ── CURRENT.md 同步 ─────────────────────────────────────────
+  // tag 状态写命令不写死读数（gov.md）：保证收口幂等重跑零噪声 commit。
   const tagExists = hasGit && git(['rev-parse', '-q', '--verify', `refs/tags/v${version}`]).ok;
-  const latestTag = hasGit ? git(['describe', '--tags', '--abbrev=0']).stdout : '';
-  const tagLine = !hasGit
-    ? 'tag 状态未知（git 不可用）。'
-    : tagExists
-      ? `tag \`v${version}\` 已存在。`
-      : autoTag
-        ? `将打 tag \`v${version}\`（--auto-tag；push 触发 release.yml）。`
-        : `最新 tag \`${latestTag || '无'}\`；本版未 tag。`;
+  const tagLine = "tag 状态见 `git tag -l 'v*'`（tag push 触发 release.yml）。";
   const currentChanged = await syncCurrent(version, date, tagLine, dryRun);
   console.log(
     `[CURRENT.md] ${currentChanged ? `${dryRun ? 'would sync' : 'synced'} 版本节 + 入口链接` : '已是目标态'}`,
