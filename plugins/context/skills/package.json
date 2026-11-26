@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/plugin-skills",
-  "version": "0.56.1",
+  "version": "2.1.2",
   "description": "Managed skill library: scan / index / trust-gated load + library UI",
   "type": "module",
   "main": "src/index.ts",
@@ -46,7 +46,7 @@
   "vessel": {
     "id": "skills",
     "name": "Skills",
-    "version": "0.1.0",
+    "version": "2.1.2",
     "description": "Managed skill library: scan / index / trust-gated load + library UI",
     "side": "both",
     "ui": {

@@ -10,6 +10,14 @@
 > 版本 = 代码契约身份，不绑发版节奏。major=2（单一真相源架构 breaking）。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
+## [2.1.2] - 2026-11-26
+
+> 修复批（轻收口自动立节；变更明细候补，见 git log 与 docs/versions/CURRENT.md）。
+
+## [2.1.1] - 2026-11-26
+
+> 修复批（轻收口自动立节；变更明细候补，见 git log 与 docs/versions/CURRENT.md）。
+
 ## [Unreleased]
 
 > 飞书完善 P1（fix/q-feishu-p1）。含 D6 breaking：按 SemVer「breaking→major」，发版时主版本号递增。
