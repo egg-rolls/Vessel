@@ -69,6 +69,10 @@ export interface LoopContext {
   readonly model: string;
   /** provider 身份（additive，q-thinking-plugin；来自 provider 实例事实）；缺省 = 身份未知。 */
   readonly providerName?: string;
+  /** 成员实际 cwd（additive，P1 origin 填充；EU member-cwd 事实 toolCwd）；缺省 = 装配未填。 */
+  readonly cwd?: string;
+  /** 成员 id（additive，P1 origin 填充；EU 身份事实 boundAgentId，跨 body 稳定）；缺省 = 装配未填。 */
+  readonly agent_id?: string;
   /** opt-in 计价；缺省不累计 `totalCost`。 */
   readonly pricing?: UsagePricing;
   /**
@@ -408,6 +412,8 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       request_index: round - 1,
       model: ctx.model,
       ...(ctx.providerName !== undefined ? { providerName: ctx.providerName } : {}),
+      ...(ctx.cwd !== undefined ? { cwd: ctx.cwd } : {}),
+      ...(ctx.agent_id !== undefined ? { agent_id: ctx.agent_id } : {}),
       ...(inputRefs !== undefined && inputRefs.length > 0 ? { refs: inputRefs } : {}),
     };
     const baseSystemPrompt = ctx.controls.getBaseSystemPrompt();

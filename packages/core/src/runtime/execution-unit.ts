@@ -3649,6 +3649,9 @@ export class ExecutionUnit {
       ...(this.provider.providerName !== undefined
         ? { providerName: this.provider.providerName }
         : {}),
+      // P1 origin 填充（设计 §2.2）：成员 cwd / 身份事实透传给 loop → HookContext；消费方下步。
+      ...(this.toolCwd !== undefined ? { cwd: this.toolCwd } : {}),
+      ...(this.boundAgentId !== undefined ? { agent_id: this.boundAgentId } : {}),
       ...(this.pricing !== undefined ? { pricing: this.pricing } : {}),
       ...(inputRefs !== undefined && inputRefs.length > 0 ? { inputRefs } : {}),
       window: {
