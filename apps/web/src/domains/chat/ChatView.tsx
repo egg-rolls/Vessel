@@ -591,11 +591,12 @@ export function ChatView({
             {/* 待处理条带与转录区**同一个容器**（`.content-stage`），但不在滚动区里：
               条带只负责「还有几条在等」，跟着输入区一起常驻。宽度 / 内边距由它自己
               对齐消息列（见 PendingStrip.tsx）。数据源是服务端持久真相
-              （`agents.inbox{ sessionId }`），刷新 / 切会话都不丢；`refreshKey` 只是
-              「再读一次盘」的触发器（本会话新受理一次发送 / run 数变化 / inbox 变更
-              live 事件：`inbox read/delete` 消费、新条目入队，见 useInboxRefresh.ts）。 */}
+              （`agents.inbox{ agent_id }`，agent 级全量，I-1），刷新 / 切会话都不丢；
+              `refreshKey` 只是「再读一次盘」的触发器（本会话新受理一次发送 / run 数变化 /
+              inbox 变更 live 事件：`inbox read/delete` 消费、新条目入队）。 */}
             <PendingStrip
               sessionId={selectedId}
+              agentId={catalogAgentId}
               client={client}
               epoch={epoch}
               refreshKey={

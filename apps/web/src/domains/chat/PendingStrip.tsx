@@ -3,14 +3,14 @@
  *
  * 它回答的是「我这一轮还压着几条输入」，不是队列编辑器。
  *
- * **数据源是服务端持久真相（0.53）**：`agents.inbox{ session_id }`（服务端按归属等值过滤，
- * 前端再用 `ownedBySession` 断一次）。不再读客户端内存里的 `queuedRuns` —— 那是「一份内存、
- * 两处渲染」，刷新 / 切会话就消失；也不再读 agent 维度的全量 inbox —— 那会把「父 agent
- * 发给子成员的消息」串进这条带子。
+ * **数据源是服务端持久真相（0.53 / inbox 统一批 I-1）**：`agents.inbox{ agent_id,
+ * include_held: true }` —— agent 级全量（跨会话，含无 `session_id` 的 wake/quiet 投递）。
+ * 不再读客户端内存里的 `queuedRuns` —— 那是「一份内存、两处渲染」，刷新 / 切会话就消失。
  *
  * 三条硬口径：
- * - **没有 `session_id` 的条目一律不显示**（老条目 / `wake`·`quiet` 投递）：宁可隐藏，
- *   也不把别人的消息串到这条会话上；
+ * - **agent 级全量可见**（用户裁定：inbox 挂载提到 agent 层）：会话等值从「显示闸门」
+ *   降级为「写操作判据」——「收回编辑」仍只对当前会话条目开放（peek 的 `session_id`
+ *   等值断言保留）；逐行归属标注随面板演化补上；
  * - **数据永远来自那次 RPC 读**，事件只当触发器（切会话 / 重连 / 本会话新受理一次发送 /
  *   inbox 变更 live 事件：`inbox read/delete` 消费、新条目入队，见 `useInboxRefresh.ts`），
  *   非空时 2s 兜底轮询（空态零流量）；取数前 250ms debounce，让「发完立刻开跑」的条目
@@ -29,8 +29,8 @@
  *   body 处理掉别人给它的输入），所以 `agents.claim` 在前端**只对 human 源开放**。
  *
  * 这就是 0.53 那条 `from === 'human'` 等值过滤的去向：它当时兼任两件事 ——「别串台」
- * 和「只收人的字」。「别串台」的真判据是 `session_id`（保留，见 `ownedBySession`），
- * 「只收人的字」这一半按上面的分档放开了。
+ * 和「只收人的字」。「别串台」的真判据是 `session_id`（降级为写操作判据，见
+ * `handleTakeBack` 的 peek 等值断言），「只收人的字」这一半按上面的分档放开了。
  *
  * 视觉零改动：卡片仍是 `QueuedNotice`（amber / 满宽 / 单圆点 / actions 槽位 / `onBand`
  * 胶囊），卡头文案是「等待中」（`chat.pending.waiting`）—— 条目没有 run，落盘后也没有
@@ -81,7 +81,6 @@ import {
   canUnhold,
   groupSenderName,
   HUMAN_SOURCE,
-  ownedBySession,
   type PendingStripEntry,
   type PendingStripGroup,
   type PendingStripMode,
@@ -124,11 +123,9 @@ const DEBOUNCE_MS = 250;
 /** 非空时的兜底轮询（空态零流量）：事件只当触发器，数据永远来自这次读。 */
 const POLL_MS = 2000;
 
-/** 一次读到的会话内待处理条目（连同它属于哪个会话，切会话时不串台）。 */
+/** 一次读到的 agent 级待处理条目（连同它属于哪个 agent，换 agent 时旧响应不串台）。 */
 interface PendingInbox {
-  sessionId: string;
-  /** 取消要用它（条目没有 run id，recall 按 agent + message id 定位）。 */
-  agentId?: string;
+  agentId: string;
   entries: AgentInboxEntry[];
 }
 
@@ -343,6 +340,7 @@ function rowsOf(group: PendingStripGroup, byId: ReadonlyMap<string, StripRow>): 
 
 export function PendingStrip({
   sessionId,
+  agentId,
   client,
   epoch,
   refreshKey,
@@ -356,8 +354,14 @@ export function PendingStrip({
   onAttachMessage,
   previewCount = PREVIEW_COUNT,
 }: {
-  /** 当前会话（`selectedId`）：条带只显示归属它的待处理输入。 */
+  /** 当前会话（`selectedId`）：写操作判据与客户端 pending 对账的归属（取数已是 agent 级）。 */
   sessionId: string | null;
+  /**
+   * 面板归属 agent（I-1 唯一数据源）：取数 `agents.inbox{agent_id}` 的目标。
+   * 由宿主派生（当前会话所属 agent；子 agent 详情视图跟 activeAgent）。
+   * 缺省 = 归属未知 ⇒ 不发 RPC（不猜 id）。
+   */
+  agentId?: string;
   client: GatewayClient;
   /** 连接代际：重连后重新读一次（断线期间落盘的条目要补上）。 */
   epoch: number;
@@ -453,58 +457,56 @@ export function PendingStrip({
   /**
    * 读一次盘。失败保留上一份读数（条带是提示，不把网络抖动升级成全局错误）。
    *
-   * `session_id` 过滤在服务端做（等值比较，缺 `session_id` 的老条目永不命中），这里再走
-   * 一遍同一个纯函数（`ownedBySession`）：防旧响应串台，也防「服务端哪天不再过滤」这个
-   * 假设 —— 缺 `session_id` 一律不认，是这条带子的第一条硬口径。
+   * agent 级全量（I-1）：不带 `session_id` ⇒ 服务端归属过滤短路，返回该 agent 全部
+   * unread（held + unread，含无 session_id 的 wake/quiet）。会话等值不再做显示闸门，
+   * 降级为写操作判据（`handleTakeBack` 的 peek 断言）与对账归属。
    * **不再按来源过滤**：agent 源照常上带子，只在渲染时不给写操作。
    */
   const load = useCallback(
-    async (targetSessionId: string) => {
+    async (targetAgentId: string) => {
       // 读发起时刻：对账只认「挂 messageId 之后才发起」的读数（入队前发起、响应晚到的
       // 旧读数没有资格宣判 pending 已被消费，见 pending-sends.ts#reconcileWithServer）。
       const readStartedAt = Date.now();
       try {
         const body = await client.rpc<AgentInboxResponse>('agents.inbox', {
-          session_id: targetSessionId,
+          agent_id: targetAgentId,
+          include_held: true,
         });
-        const entries = ownedBySession(
-          Array.isArray(body?.entries) ? body.entries : [],
-          targetSessionId,
-        );
-        setPending({
-          sessionId: targetSessionId,
-          ...(typeof body?.agent_id === 'string' ? { agentId: body.agent_id } : {}),
-          entries,
-        });
+        const entries = Array.isArray(body?.entries) ? body.entries : [];
+        setPending({ agentId: targetAgentId, entries });
         // 真相源对账（P0-A）：服务端读数落定后，把「inbox 里已经没有、又等不到回显」的
         // 客户端 pending 摘掉 —— main `inbox read` 消费排队消息取消 queued run，那条
         // 消息永无 user.message/run.started 回显，不对账就常驻「等待中」直到刷新。
-        onReconcile?.({
-          sessionId: targetSessionId,
-          presentIds: new Set(entries.map((entry) => entry.message_id)),
-          readStartedAt,
-        });
+        // agent 级 presentIds ⊇ 会话级：「不在 presentIds」仍蕴含「已被消费」，无误删
+        // （reconcile 按 item.sessionId 等值 + messageIdAt ≤ readStartedAt 护栏不动）。
+        if (sessionId !== null) {
+          onReconcile?.({
+            sessionId,
+            presentIds: new Set(entries.map((entry) => entry.message_id)),
+            readStartedAt,
+          });
+        }
       } catch {
         // 读失败：保留上一份（下次轮询 / 触发器再试），不弹 toast。
       }
     },
-    [client, onReconcile],
+    [client, sessionId, onReconcile],
   );
 
-  // 触发读：切会话 / 重连（epoch）/ 本会话新受理一次发送（refreshKey）/ 取消后对齐
+  // 触发读：换 agent / 重连（epoch）/ 本会话新受理一次发送（refreshKey）/ 取消后对齐
   // （reloadTick）。后三个只是「再读一次盘」的触发器，不参与读数本身 —— 条带的数据源
   // 永远是那次 RPC，不拿事件拼条目。
   // biome-ignore lint/correctness/useExhaustiveDependencies: epoch / refreshKey / reloadTick 是有意的触发器
   useEffect(() => {
-    if (sessionId === null) {
+    if (agentId === undefined) {
       setPending(null);
       return;
     }
-    const timer = window.setTimeout(() => void load(sessionId), DEBOUNCE_MS);
+    const timer = window.setTimeout(() => void load(agentId), DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [sessionId, epoch, refreshKey, reloadTick, load]);
+  }, [agentId, epoch, refreshKey, reloadTick, load]);
 
-  const current = sessionId !== null && pending?.sessionId === sessionId ? pending : null;
+  const current = agentId !== undefined && pending?.agentId === agentId ? pending : null;
   const entries = current?.entries ?? [];
   const hasPending = entries.length > 0;
 
@@ -548,10 +550,10 @@ export function PendingStrip({
 
   // 非空时才轮询：空态零流量（条带绝大多数时间是空的）。
   useEffect(() => {
-    if (sessionId === null || !hasPending) return;
-    const id = window.setInterval(() => void load(sessionId), POLL_MS);
+    if (agentId === undefined || !hasPending) return;
+    const id = window.setInterval(() => void load(agentId), POLL_MS);
     return () => window.clearInterval(id);
-  }, [sessionId, hasPending, load]);
+  }, [agentId, hasPending, load]);
 
   // 展开态给全部组（slice 上界取 MAX_SAFE_INTEGER = 不裁）；默认态按 previewCount 裁。
   const view = useMemo(
@@ -698,8 +700,10 @@ export function PendingStrip({
   const handleTakeBack = useCallback(
     async (messageId: string) => {
       const agentId = current?.agentId;
-      const targetSessionId = current?.sessionId;
-      if (agentId === undefined || targetSessionId === undefined) return;
+      // 写操作判据（I-5c）：收回编辑只对**当前会话**的 human 条目开放 —— 草稿槽属于
+      // 当前会话，把别会话的字回填进来是串台。agent 级读数下这条断言是防串台闸门。
+      const targetSessionId = sessionId;
+      if (agentId === undefined || targetSessionId === null) return;
       if (onRefillDraft === undefined) return;
       setCancelling((prev) => new Set(prev).add(messageId));
       // 草稿是否已经写进去：决定 recall 失败时报哪一句（「已放回输入框，但…」vs 原样报错）。
@@ -766,7 +770,7 @@ export function PendingStrip({
         });
       }
     },
-    [client, current?.agentId, current?.sessionId, onRefillDraft, toast],
+    [client, current?.agentId, sessionId, onRefillDraft, toast],
   );
 
   /**
