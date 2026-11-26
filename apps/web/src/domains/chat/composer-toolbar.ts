@@ -190,11 +190,13 @@ export function useComposerToolbarMenuActions(sessionId?: string): ComposerToolb
         item.label,
         item.id,
       );
-      // 能力过滤：options 存在时只渲染其中的档位；options 为空数组 ⇒ 不支持 ⇒ 置灰。
+      // 能力过滤：options 存在时只渲染其中的具体档位；auto 项恒保留——auto=清 override /
+      // 跟随全局默认，对任何模型都合法（含不支持思考的模型，此时菜单仅 auto 可选）。
+      // 豁免在宿主归一层，插件 getState 的 options 语义不变（设计 §6.3，插件零改）。
       const options = readState?.options;
       const filtered =
         options !== undefined
-          ? menu.items.filter((entry) => options.includes(entry.value))
+          ? menu.items.filter((entry) => entry.value === 'auto' || options.includes(entry.value))
           : menu.items;
       const items = filtered.map((entry) => ({
         value: entry.value,
@@ -207,10 +209,12 @@ export function useComposerToolbarMenuActions(sessionId?: string): ComposerToolb
           entry.value,
         ),
       }));
+      // 置灰只看过滤后是否还有可选项：不支持的模型仍可经 auto 清 override；
+      // 无 auto 项的菜单在 options 为空时照旧整体置灰。
       const disabled =
         !connected ||
         readState?.enabled === false ||
-        (readState?.options !== undefined && readState.options.length === 0);
+        (options !== undefined && filtered.length === 0);
       actions.push({
         id: key,
         label,
