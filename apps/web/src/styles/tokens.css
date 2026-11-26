@@ -22,6 +22,12 @@
   --accent: #0b7f66;
   --accent-ink: #086b56;
   --accent-soft: rgba(11, 127, 102, 0.1);
+  /* depth-color：会话卡地址子标题树深度着色的 OKLCH L/C（结构 token，只增不换皮）。
+     --depth-l-light/-c-light/-l-dark/-c-dark 由配置 applier 写入（state/depth-color.ts
+     唯一写者）；未配置时这里的 CSS 缺省 = 品牌锚点（light depth0 逐字节 = accent-ink）。
+     色相 --depth-h 由会话卡 per-card 内联；主题切换自动换 L/C（CSS 级联）。 */
+  --depth-l: var(--depth-l-light, 0.4714);
+  --depth-c: var(--depth-c-light, 0.0887);
   --ok: #0b7f66;
   --ok-soft: rgba(11, 127, 102, 0.1);
   --warn: #4a4a4e;
@@ -202,6 +208,9 @@
     --accent: #1effc7;
     --accent-ink: #6bffd8;
     --accent-soft: rgba(30, 255, 199, 0.12);
+    /* depth-color dark 档（media 与显式 data-theme 双档同值）：L0.85/C0.13 区分度优先（D2）。 */
+    --depth-l: var(--depth-l-dark, 0.85);
+    --depth-c: var(--depth-c-dark, 0.13);
     --ok: #1effc7;
     --ok-soft: rgba(30, 255, 199, 0.12);
     --warn: #d6d6da;
@@ -242,6 +251,9 @@
   --accent: #1effc7;
   --accent-ink: #6bffd8;
   --accent-soft: rgba(30, 255, 199, 0.12);
+  /* depth-color 显式暗色档：与上面 media 档同值（L0.85/C0.13，D2）。 */
+  --depth-l: var(--depth-l-dark, 0.85);
+  --depth-c: var(--depth-c-dark, 0.13);
   --ok: #1effc7;
   --ok-soft: rgba(30, 255, 199, 0.12);
   --warn: #d6d6da;
