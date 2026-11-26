@@ -26,6 +26,11 @@
  * 仍然保留的两道守卫（宁可留，不可错删）：会话写锁 / 租约 live 或 unparseable、或该会话还有
  * 能 resume 的 running / interrupted run 时，这个会话不删，连带着它的 agent 记录也不删。
  *
+ * auto-gc P1（D3）：可选 `online?: OnlinePrunePort` 只替换「第 2 步 agent 记录删除」的
+ * 执行器与快照事实源（活 registry），其余扫描 / 守卫 / 级联 / team / trace 全部原样复用。
+ * gateway 存活时**绝不**直接改快照文件（整份 registry 定时重写会把已删记录复活）；
+ * CLI 离线模式不传 online，行为逐字节不变。
+ *
  * 技术性说明：
  *
  * - 体积都是「删掉会释放多少」：会话壳 + 事件目录、run 记录文件、trace 文件、team 目录树。
@@ -44,7 +49,13 @@
 import { copyFile, link, lstat, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import * as os from 'node:os';
 import { join } from 'node:path';
-import { FileTeamStore, inboxPath, snapshotPath, teamDirPath } from '@vessel-agent/agent';
+import {
+  FileTeamStore,
+  inboxPath,
+  type PersistedAgentRecord,
+  snapshotPath,
+  teamDirPath,
+} from '@vessel-agent/agent';
 import type { VesselConfig } from '../../packages/config/src/index';
 import {
   atomicWrite,
@@ -147,7 +158,7 @@ export interface PruneContext {
 }
 
 /** 快照里一条成员记录（只取判定要用的字段 + 原始条目） */
-interface AgentFacts {
+export interface AgentFacts {
   id: string;
   /** 原始成员条目：删记录时按 id 过滤后原样回写，不猜字段 */
   raw: Record<string, unknown>;
@@ -159,6 +170,58 @@ interface AgentFacts {
   closed_at: number | undefined;
   /** 记录里能看到的所有 body session（会话壳 / 事件目录 / run 记录各自独立存在） */
   sessions: string[];
+}
+
+/**
+ * 在线执行适配层（auto-gc P1，D3 核心裁定）。
+ *
+ * gateway 内 `AgentService` 的快照是「整份 registry 定时重写」；离线 CLI 的
+ * `writeSnapshotWithout` 直接改文件，在 gateway 存活时会被下一次 flush **整份覆盖
+ * 复活**。在线模式只替换「第 2 步 agent 记录删除」的执行器与快照事实源，扫描 /
+ * 守卫 / 会话级联 / team 删除 / trace 桶全部原样复用（离线行为逐字节不变）。
+ */
+export interface OnlinePrunePort {
+  /**
+   * 从活 registry 摘除记录并落盘（service 内部：registry.remove + flushSnapshot）。
+   * 返回 false = 摘除失败（对应 note `agents_snapshot_write_failed` 语义）。
+   */
+  removeAgentRecords(ids: string[]): Promise<boolean>;
+  /**
+   * 在线快照事实以活 registry 为准（避免读到 flush 前的旧文件）；
+   * undefined = 事实源不可读（调用方按「读不出=不删」空手返回）。
+   */
+  snapshotFacts(): AgentFacts[] | undefined;
+}
+
+/** 在线适配需要的最小 service 面（additive 可选方法；旧内核缺方法 ⇒ 不建端口） */
+export interface OnlinePruneService {
+  removeClosedMembers?(ids: readonly string[]): Promise<boolean>;
+  snapshotRecords?(): PersistedAgentRecord[];
+}
+
+/**
+ * 由活 service 建在线端口；任一方法缺失返回 undefined（调用方据此决定不启动
+ * 在线调度 —— 有活 registry 却走离线文件写 = 复活竞态，宁可不做）。
+ * 事实映射与离线 `readAgentSnapshot` 共用 `agentFactsOf`（同一份判老口径：
+ * closed_at 取 last_seen），并按 id 排序保证两个模式同序。
+ */
+export function createOnlinePrunePort(service: OnlinePruneService): OnlinePrunePort | undefined {
+  const remove = service.removeClosedMembers;
+  const records = service.snapshotRecords;
+  if (typeof remove !== 'function' || typeof records !== 'function') return undefined;
+  return {
+    removeAgentRecords: (ids) => remove.call(service, ids),
+    snapshotFacts: () => {
+      const persisted = records.call(service);
+      const facts: AgentFacts[] = [];
+      for (const entry of persisted) {
+        const fact = agentFactsOf(entry as unknown as Record<string, unknown>);
+        if (fact !== undefined) facts.push(fact);
+      }
+      facts.sort((left, right) => left.id.localeCompare(right.id));
+      return facts;
+    },
+  };
 }
 
 /** 快照扫描结果：missing 与 unreadable 必须分开 —— 读不出来时一个记录都不许删 */
@@ -549,6 +612,18 @@ async function inspectSession(
 }
 
 /**
+ * 在线快照事实源（auto-gc P1）：以活 registry 为准，不读可能滞后于 flush 的文件。
+ * `file` / `entries` 只被离线的 `writeSnapshotWithout` 消费；在线模式的记录摘除走
+ * `OnlinePrunePort.removeAgentRecords`，这两个字段不参与执行。
+ */
+function onlineSnapshotScan(ctx: PruneContext, online: OnlinePrunePort): SnapshotScan {
+  const path = snapshotPath(ctx.tenantPaths.root, ctx.tenantId);
+  const facts = online.snapshotFacts();
+  if (facts === undefined) return { kind: 'unreadable', path };
+  return { kind: 'ok', path, file: {}, entries: facts.map((fact) => fact.raw), members: facts };
+}
+
+/**
  * 算出本次的目标集合（纯读，不删任何东西）。
  *
  * 快照读不出来时直接空手返回：连「哪些 agent 已停用」都不知道，就不敢删 agent / team 记录。
@@ -558,6 +633,7 @@ async function buildPlan(
   sessionStore: SessionStore | undefined,
   runStore: RunRecordStore | undefined,
   notes: PruneNote[],
+  online?: OnlinePrunePort,
 ): Promise<PrunePlan> {
   const skipped: PruneReport['skipped'] = {
     active_sessions: 0,
@@ -566,7 +642,8 @@ async function buildPlan(
     kept_teams: 0,
     unknown_time: 0,
   };
-  const snapshot = await readAgentSnapshot(ctx);
+  const snapshot =
+    online !== undefined ? onlineSnapshotScan(ctx, online) : await readAgentSnapshot(ctx);
   if (snapshot.kind === 'unreadable') {
     notes.push('agents_snapshot_unreadable');
     return { snapshot, agents: [], teams: [], skipped };
@@ -768,9 +845,10 @@ async function pruneTraceBucket(
  */
 export async function pruneTenantData(
   ctx: PruneContext,
-  options: { dryRun: boolean },
+  options: { dryRun: boolean; online?: OnlinePrunePort },
 ): Promise<PruneReport> {
   const dryRun = options.dryRun;
+  const online = options.online;
   const notes: PruneNote[] = [];
 
   const opened = openSessionStore(ctx, dryRun);
@@ -796,8 +874,8 @@ export async function pruneTenantData(
   };
 
   try {
-    // ── 扫描（两个模式共用；dry-run 只读） ──
-    const plan = await buildPlan(ctx, sessionStore, runStore, notes);
+    // ── 扫描（两个模式共用；dry-run 只读；在线模式事实源 = 活 registry） ──
+    const plan = await buildPlan(ctx, sessionStore, runStore, notes, online);
     const skipped = plan.skipped;
 
     // ── 1. 会话（级联 runs 与这份会话的 trace） ──
@@ -838,8 +916,14 @@ export async function pruneTenantData(
     }
 
     // ── 2. agent 记录（快照里那条 + inbox） ──
+    // 在线模式经活 registry 摘除（D3：直接改文件会被 gateway 的整份 flush 复活）；
+    // 离线模式原样回写快照文件。dry-run 两个模式都不碰记录（在线不碰 registry）。
     if (cleared.size > 0 && plan.snapshot.kind === 'ok') {
-      const written = dryRun ? true : await writeSnapshotWithout(plan.snapshot, cleared);
+      const written = dryRun
+        ? true
+        : online !== undefined
+          ? await online.removeAgentRecords([...cleared])
+          : await writeSnapshotWithout(plan.snapshot, cleared);
       if (!written) {
         // 记录没写掉就不算清完：不能报「已删」，也不能接着删 team（否则记的是没发生的事）
         notes.push('agents_snapshot_write_failed');
