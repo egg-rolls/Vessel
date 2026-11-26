@@ -11,9 +11,9 @@
  *   平台据此立刻监听；`settle()` 在后台并发等待就绪。每个节点是独立状态机
  *   （`starting` / `ready` / `failed` / `adopted` / `external`），一个节点慢、
  *   起不来或崩溃**只标它自己**（状态 + 原因 + 时刻），不回滚平台、不阻塞别人；
- * - Windows 无 POSIX 信号语义：`process.kill(pid)` 后 `taskkill /PID <pid> /T /F`
- *   兜底；`gateway stop`（另一进程）通过平台写下的 runtime manifest 找到这些
- *   PID，逐条复核 `gateway.pid` 归属后才终止。
+ * - Windows 无 POSIX 信号语义：`taskkill /PID <pid> /T /F` 无条件整棵子树
+ *   （TP-1，对齐 web-dist killBuildTreeByPid）；`gateway stop`（另一进程）通过
+ *   平台写下的 runtime manifest 找到这些 PID，逐条复核 `gateway.pid` 归属后才终止。
  *
  * Manifest 是运行时状态（不是 registry、不含 token），平台退出时删除。
  *
@@ -589,11 +589,17 @@ async function waitUntilDead(
 }
 
 /**
- * 终止一个子进程。POSIX `SIGTERM`；Windows `process.kill` 后
- * `taskkill /PID <pid> /T /F` 兜底（不做按端口/进程名的批量杀）。
+ * 终止一个子进程。POSIX `SIGTERM`；Windows **无条件** `taskkill /PID <pid> /T /F`
+ * 整棵子树（对齐 web-dist `killBuildTreeByPid` 同仓口径；不做按端口/进程名批量杀）。
+ *
+ * TP-1：Windows `process.kill` 是无条件 TerminateProcess，只杀主进程 —— 旧实现
+ * 「先 process.kill 再 waitUntilDead(500) 兜底 taskkill /T」里主进程必死、等待必
+ * 提前 return，taskkill /T 永不执行（死代码，注释宣称的树杀与实际不符），
+ * tools-engine/codegraph 子进程成孤儿持 SQLite 锁。故 win32 直接树杀。
  *
  * 0.58：`force: true` = 僵死路径 —— 主线程停摆的进程收不到、也不会处理 SIGTERM，
- * 所以 POSIX 直接 `SIGKILL`（Windows 上 `process.kill` 本身就是强制终止）。
+ * 所以 POSIX 直接 `SIGKILL`（Windows 上 taskkill /F 本身就是强制终止，force 与
+ * 非 force 同口径）。
  */
 async function terminateChild(
   pid: number,
@@ -605,18 +611,17 @@ async function terminateChild(
     force?: boolean;
   },
 ): Promise<boolean> {
+  if (options.platform === 'win32') {
+    // TP-1：无条件 taskkill /T /F 整棵子树（runCommand 不抛错；进程已不在时
+    // taskkill 非零退出，由下面的等死确认兜底 —— 与旧 ESRCH 语义同效）。
+    await options.runCommand(['taskkill', '/PID', String(pid), '/T', '/F']);
+    return waitUntilDead(pid, options.timeoutMs, options.sleep);
+  }
   try {
-    if (options.platform === 'win32') process.kill(pid);
-    else process.kill(pid, options.force === true ? 'SIGKILL' : 'SIGTERM');
+    process.kill(pid, options.force === true ? 'SIGKILL' : 'SIGTERM');
   } catch (error) {
     if (!isErrno(error, 'ESRCH')) return false;
     return true;
-  }
-
-  if (options.platform === 'win32') {
-    // process.kill 已发出终止；短暂等待后用 taskkill 兜底整棵子树。
-    if (await waitUntilDead(pid, 500, options.sleep)) return true;
-    await options.runCommand(['taskkill', '/PID', String(pid), '/T', '/F']);
   }
   return waitUntilDead(pid, options.timeoutMs, options.sleep);
 }
