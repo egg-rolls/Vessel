@@ -92,7 +92,6 @@ export const messages = {
   'breadcrumb.mcp': 'MCP 服务',
   'breadcrumb.channels': '渠道',
   'breadcrumb.kanban': '看板',
-  'breadcrumb.inbox': '收件箱',
   'breadcrumb.plugins': '插件',
 
   // Plugin Host (E10)
@@ -334,7 +333,6 @@ export const messages = {
   'chat.session.pending': '有 {count} 个待处理请求',
   'chat.session.copyId': '复制会话 ID',
   'chat.session.copiedId': '已复制会话 ID',
-  'chat.session.openInbox': '收件箱',
   'chat.session.copyIdTitle': '复制会话 ID：{title}',
   // 成员模型切换入口（model-registry P2）：成员级 pin，下一具 body / 续接 run 生效
   'chat.memberModel.button': '模型',

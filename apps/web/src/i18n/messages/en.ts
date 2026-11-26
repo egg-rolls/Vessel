@@ -92,7 +92,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'breadcrumb.mcp': 'MCP servers',
   'breadcrumb.channels': 'Channels',
   'breadcrumb.kanban': 'Kanban',
-  'breadcrumb.inbox': 'Inbox',
   'breadcrumb.plugins': 'Plugins',
 
   // Plugin Host (E10)
@@ -343,7 +342,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.session.pending': '{count} pending request(s)',
   'chat.session.copyId': 'Copy session ID',
   'chat.session.copiedId': 'Session ID copied',
-  'chat.session.openInbox': 'Inbox',
   'chat.session.copyIdTitle': 'Copy session ID: {title}',
   // Member model switch entry (model-registry P2): member-level pin, next body / resumed run
   'chat.memberModel.button': 'Model',

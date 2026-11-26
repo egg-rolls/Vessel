@@ -58,7 +58,9 @@ import { orderPendingEntries, pendingIdentityOf, shortSenderId } from '../chat/p
 import { useAgentInboxRefreshTick } from './agent-inbox-refresh';
 import { InboxRow } from './InboxRow';
 
-type InboxRoute = Extract<Route, { domain: 'inbox' }>;
+// #/inbox 独立路由已删（用户裁定：收件箱统一进会话页面板，深链回落 chat）。
+// 本组件暂留待数据源改造步复用或废弃；route 形状本地保留，不再来自全局 Route 联合。
+type InboxRoute = { domain: 'inbox'; agentId?: string };
 
 /** live 触发 → 重读的去抖（条带同款）：事件 burst 只换一次读。 */
 const REFRESH_DEBOUNCE_MS = 250;
@@ -333,7 +335,7 @@ export function InboxView({
           <Select
             value={agentId}
             aria-label={t('inbox.agentLabel')}
-            onChange={(event) => navigate({ domain: 'inbox', agentId: event.target.value })}
+            onChange={() => navigate({ domain: 'chat' })}
           >
             {options.map((option) => (
               <option key={option.id} value={option.id}>

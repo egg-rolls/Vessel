@@ -31,12 +31,6 @@ export type Route =
   | { domain: 'teams'; nodeKey: string; teamId: string; agentId?: string; bodyId?: string }
   /** 任务看板查看器（q-kanban-view）：`#/kanban`，读 kanban.get / 验收 kanban.archive。 */
   | { domain: 'kanban' }
-  /**
-   * agent 级收件箱（P1-B，q-inbox-agent-view）：`#/inbox[?agent=<id>]`，缺省 main。
-   * 读 `agents.inbox{agent_id}` 全量（跨会话，含无 session_id 的 wake/quiet）；
-   * 会话级 run-queue 提示仍是 chat 页的 PendingStrip，两者口径不同（设计审计 §0）。
-   */
-  | { domain: 'inbox'; agentId?: string }
   | { domain: 'agents'; nodeKey?: string; teamId?: string; state?: string; presence?: string }
   | { domain: 'capabilities' }
   /**
@@ -140,11 +134,6 @@ export function parseRoute(hash: string): Route {
       return { domain: 'channels' };
     case 'kanban':
       return { domain: 'kanban' };
-    case 'inbox': {
-      // 只接受 `?agent=<id>`；缺省由视图落 main。不校验 id，找不到时 RPC 如实报错。
-      const agentId = queryText(query, 'agent');
-      return { domain: 'inbox', ...(agentId ? { agentId } : {}) };
-    }
     case 'observe': {
       const tab = pick<'metrics' | 'evals' | 'diagnostics' | 'attention'>(
         segments[1] ?? query.get('tab'),
@@ -275,10 +264,6 @@ export function formatRoute(route: Route): string {
       return '#/channels';
     case 'kanban':
       return '#/kanban';
-    case 'inbox': {
-      if (!route.agentId) return '#/inbox';
-      return `#/inbox?${new URLSearchParams({ agent: route.agentId }).toString()}`;
-    }
     case 'observe':
       return `#/observe/${route.tab}`;
     case 'plugins': {
