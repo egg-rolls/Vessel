@@ -6,8 +6,15 @@
  * 用法：
  *   bun run scripts/version.ts 0.1.0            # 写入所有 manifest
  *   bun run scripts/version.ts 0.1.0 --dry-run  # 只显示将要改的文件
+ *   bun run scripts/version.ts --bump patch     # 从根版本算下一 SemVer 并写入
+ *   bun run scripts/version.ts --bump minor --dry-run  # 只算 + 显示，不落盘
  *   bun run scripts/version.ts --check 0.1.0    # 校验一致性 + CHANGELOG 有该版本
  *   bun run scripts/version.ts --check          # 只校验仓库内一致性
+ *
+ * `--bump patch|minor|major`：以根 `package.json` 当前版本为基线算下一版本
+ * （patch=Z+1 / minor=Y+1,Z=0 / major=X+1,Y=0,Z=0；预发布后缀丢弃后按稳定版 bump），
+ * 与写模式 / `--dry-run` 组合；不与显式版本或 `--check` 组合。
+ * 发布收口编排（CHANGELOG / CURRENT.md / 版本文档 / commit / tag）见 scripts/release.ts。
  *
  * manifest 里的 `@vessel-agent/*` 依赖**恒为 `workspace:*`**：本地解析由 workspace 负责，
  * 发布 tarball 里的精确版本由 `bun pm pack` 打包时自己改写（实测 bun 1.3.9 对
@@ -53,6 +60,49 @@ export interface Manifest {
 
 export function validateVersion(version: string): boolean {
   return SEMVER.test(version);
+}
+
+export type BumpKind = 'patch' | 'minor' | 'major';
+
+export const BUMP_KINDS: readonly BumpKind[] = ['patch', 'minor', 'major'];
+
+/**
+ * 从当前版本算下一 SemVer（标准 SemVer，RELEASE §1：fix→patch / feat→minor / breaking→major）。
+ * 预发布后缀（`-beta.1` 等）丢弃后按稳定版核心 bump；结果再过 validateVersion。
+ * 当前版本非法时抛错（不猜基线）。
+ */
+export function nextVersion(current: string, kind: BumpKind): string {
+  if (!validateVersion(current)) {
+    throw new Error(`invalid current semver: ${current}`);
+  }
+  const core = current.split('-')[0] as string;
+  const [major, minor, patch] = core.split('.').map(Number) as [number, number, number];
+  let next: string;
+  switch (kind) {
+    case 'major':
+      next = `${major + 1}.0.0`;
+      break;
+    case 'minor':
+      next = `${major}.${minor + 1}.0`;
+      break;
+    case 'patch':
+      next = `${major}.${minor}.${patch + 1}`;
+      break;
+  }
+  if (!validateVersion(next)) {
+    throw new Error(`bump produced invalid semver: ${next}`);
+  }
+  return next;
+}
+
+/** 读根 package.json 的 version（唯一版本源）；缺失 / 非字符串时抛错。 */
+export async function readRootVersion(root: string): Promise<string> {
+  const raw = await readFile(join(root, 'package.json'), 'utf8');
+  const pkg = JSON.parse(raw) as { version?: unknown };
+  if (typeof pkg.version !== 'string' || !validateVersion(pkg.version)) {
+    throw new Error('root package.json: missing valid "version"（--bump 需要根版本作基线）');
+  }
+  return pkg.version;
 }
 
 export async function collectManifests(root = ROOT): Promise<Manifest[]> {
@@ -291,11 +341,15 @@ function escapeRegExp(value: string): string {
 function printUsage(): void {
   console.log(`Usage:
   bun run scripts/version.ts <version> [--dry-run]
+  bun run scripts/version.ts --bump patch|minor|major [--dry-run]
   bun run scripts/version.ts --check [version]
 
 Examples:
   bun run scripts/version.ts 0.1.0
-  bun run scripts/version.ts --check 0.1.0`);
+  bun run scripts/version.ts --bump patch --dry-run
+  bun run scripts/version.ts --check 0.1.0
+
+发布收口编排（manifest + CHANGELOG + CURRENT.md + commit/tag）: scripts/release.ts`);
 }
 
 async function main(): Promise<void> {
@@ -308,9 +362,25 @@ async function main(): Promise<void> {
 
   const check = args.includes('--check');
   const dryRun = args.includes('--dry-run');
-  const positional = args.filter((arg) => !arg.startsWith('-'));
+
+  let bump: BumpKind | undefined;
+  const bumpIndex = args.indexOf('--bump');
+  if (bumpIndex >= 0) {
+    const value = args[bumpIndex + 1];
+    if (!value || !BUMP_KINDS.includes(value as BumpKind)) {
+      console.error(`--bump 需要 patch|minor|major（得到 ${value ?? '空'}）`);
+      process.exit(1);
+    }
+    bump = value as BumpKind;
+  }
+  const bumpValueIndex = bumpIndex >= 0 ? bumpIndex + 1 : -1;
+  const positional = args.filter((arg, index) => !arg.startsWith('-') && index !== bumpValueIndex);
 
   if (check) {
+    if (bump) {
+      console.error('--bump 不与 --check 组合（--check 只校验，不算下一版本）');
+      process.exit(1);
+    }
     const expected = positional[0];
     const errors = await checkVersions(ROOT, expected);
     if (errors.length > 0) {
@@ -325,7 +395,16 @@ async function main(): Promise<void> {
     return;
   }
 
-  const version = positional[0];
+  let version = positional[0];
+  if (bump) {
+    if (version) {
+      console.error('--bump 不与显式版本组合（二选一）');
+      process.exit(1);
+    }
+    const current = await readRootVersion(ROOT);
+    version = nextVersion(current, bump);
+    console.log(`bump ${bump}: ${current} -> ${version}`);
+  }
   if (!version) {
     printUsage();
     process.exit(1);
