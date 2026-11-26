@@ -15,6 +15,8 @@
  *   `applyFederation` 热应用（原地更新入站 / 出站 peer，未注入则进 `requires_restart`）；
  *   `kanban` 块经注入的 `applyKanban` 热应用（q-kanban-proxy：重解析 boardPath
  *   原地更新 kanban deps，未注入则进 `requires_restart`）；
+ *   `autoPrune` 块经注入的 `applyAutoPrune` 热应用（auto-gc P1：调度器读 live
+ *   resolver，applier 喂活配置引用，未注入则进 `requires_restart`）；
  *   其余字段一律进 `requires_restart`；
  * - `permission` / `tools` / `mcp`：由 `src/cli.ts` 注入 applier（见下）。
  *
@@ -95,6 +97,14 @@ export interface GatewayReloadWiringOptions {
    * （并入 summaries.config）。未注入 ⇒ 变化域进 requires_restart，不假装生效。
    */
   applyKanban?: (next: VesselConfig) => Promise<string[]> | string[];
+  /**
+   * auto-gc P1：autoPrune 热应用（config scope 内部，与 applyKanban 同形，不新增
+   * reload scope）。调度器自启动起就读 live resolver 闭包（每趟求值最新配置：
+   * enabled / interval / olderThan / dryRun 全部活生效，cadence 不冻结启动值）；
+   * 本 applier 只把重载配置喂给调度器持有的活配置引用并产差异摘要行。
+   * 未注入（无本地调度器，如 connectMode）⇒ 变化域进 requires_restart，不假装生效。
+   */
+  applyAutoPrune?: (next: VesselConfig) => Promise<string[]> | string[];
 }
 
 /** 需要重启才能生效的配置域（DECISION-023 §2.3；`permission` 已可热应用）。 */
@@ -275,6 +285,18 @@ export function createGatewayReloadRunner(
               restartFields.push('kanban');
             }
           }
+          // auto-gc P1：autoPrune 热应用——调度器读 live resolver，applier 把重载配置
+          // 喂进活配置引用即下一趟生效（enabled=false 只跳过趟，链不断，再开即活）。
+          const autoPruneChanged = stableValue(current.autoPrune) !== stableValue(next.autoPrune);
+          const autoPruneLines: string[] = [];
+          if (autoPruneChanged) {
+            if (options.applyAutoPrune !== undefined) {
+              const lines = await options.applyAutoPrune(next);
+              if (Array.isArray(lines)) autoPruneLines.push(...lines);
+            } else {
+              restartFields.push('autoPrune');
+            }
+          }
           if (allowedOriginsChanged(current, next)) {
             const target = options.gateway();
             const reconfigure = target?.reconfigure;
@@ -296,6 +318,7 @@ export function createGatewayReloadRunner(
             ...modelLines,
             ...federationLines,
             ...kanbanLines,
+            ...autoPruneLines,
           ];
           continue;
         }
