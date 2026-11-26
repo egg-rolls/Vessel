@@ -362,12 +362,26 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
   // 优雅（默认）：进程内 drain-to-quiesce（fence + 不限时等活跃 run 自然跑完）
   // + 停止方不限时等死 + 5s 进度。Windows 上外部 process.kill 是无条件终止，
   // 不先走这一步，在跑 run 会被直接切断（只能靠启动 sweep 对账）。
-  const graceful = await shutdownGateway({
+  let graceful = await shutdownGateway({
     record,
     token: token ?? '',
     tls: context.config.node?.tls !== undefined,
     requestTimeoutMs: 3_000,
   });
+  // F1/SD-2：凭据错配（401）回退强杀前先试一次匿名优雅（零配置 node 回环匿名可能仍开着）。
+  let samplerToken = token ?? '';
+  if (!graceful.ok && graceful.code === 'unauthorized' && (token ?? '') !== '') {
+    const anonymous = await shutdownGateway({
+      record,
+      token: '',
+      tls: context.config.node?.tls !== undefined,
+      requestTimeoutMs: 3_000,
+    });
+    if (anonymous.ok) {
+      graceful = anonymous;
+      samplerToken = '';
+    }
+  }
   if (graceful.ok) {
     // 默认不限时等死（用户裁定 #5，去掉硬编码 10s）+ 进度（哪些 run/session 还在跑）。
     // DR15-1：等死段有界兜底 —— quiesce 后 30s 未自死 → force + stop.forced 审计；
@@ -377,7 +391,7 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
       postQuiesceTimeoutMs: POST_QUIESCE_EXIT_TIMEOUT_MS,
       onProgress: (info) =>
         print(ui.info(formatDrainProgressLine(`node ${DEFAULT_GATEWAY_INSTANCE}`, info))),
-      sampleRuns: nodeRunSampler(record, token ?? '', context.config.node?.tls !== undefined),
+      sampleRuns: nodeRunSampler(record, samplerToken, context.config.node?.tls !== undefined),
     });
     if (wait.dead) {
       if (entry !== undefined) {
@@ -393,7 +407,7 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
       try {
         runs = await snapshotActiveRuns(
           record,
-          token ?? '',
+          samplerToken,
           context.config.node?.tls !== undefined,
         );
       } catch {
@@ -444,13 +458,19 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
     }
   }
   // 优雅受理失败（老版本无该方法 / 网络）→ 回退既有强杀，代打 node.drain.skipped。
+  const skippedReason = graceful.ok ? 'error' : (graceful.code ?? 'error');
   printErr(
     ui.warn(
       formatEventLine('node.drain.skipped', {
         pid: record.pid,
-        reason: graceful.ok ? 'error' : (graceful.code ?? 'error'),
+        reason: skippedReason,
       }),
     ),
+  );
+  // F1/SD-2：drain.skipped 证据持久化到 node 实例日志（对齐 stop.forced 先例，O7）。
+  await persistStopAuditLine(
+    gatewayLogPath(context.dataDir, DEFAULT_GATEWAY_INSTANCE),
+    formatEventLine('node.drain.skipped', { pid: record.pid, reason: skippedReason }),
   );
   try {
     if (context.platform === 'win32') process.kill(record.pid);
