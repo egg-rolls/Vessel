@@ -8,13 +8,13 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { CredentialsView } from './CredentialsView';
 import { type MessageKey, translator } from './i18n';
-import { VendorsView } from './VendorsView';
+import { ModelsView } from './ModelsView';
 
-export type PluginView = 'vendors' | 'credentials';
+export type PluginView = 'credentials' | 'models';
 
 const TITLE_KEYS: Record<PluginView, MessageKey> = {
-  vendors: 'vendors.title',
   credentials: 'credentials.title',
+  models: 'models.title',
 };
 
 export function App({ view }: { view: PluginView }) {
@@ -49,7 +49,6 @@ export function App({ view }: { view: PluginView }) {
     };
   }, [client]);
 
-  if (view === 'credentials')
-    return <CredentialsView client={client} refreshKey={refreshKey} t={t} />;
-  return <VendorsView client={client} refreshKey={refreshKey} t={t} />;
+  if (view === 'models') return <ModelsView client={client} refreshKey={refreshKey} t={t} />;
+  return <CredentialsView client={client} refreshKey={refreshKey} t={t} />;
 }

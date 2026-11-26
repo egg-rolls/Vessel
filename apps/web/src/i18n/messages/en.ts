@@ -1196,6 +1196,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'modelPicker.emptyWithCurrent': '{label} (current: {model})',
   'modelPicker.unregistered': 'unregistered',
   'modelPicker.groupAliases': 'Aliases',
+  'modelPicker.groupEntries': 'Model entries',
   'modelPicker.unavailable':
     'Model registry unavailable (plugin not loaded or request failed); selection is disabled.',
   'agents.detail.title': 'Agent',

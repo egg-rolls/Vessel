@@ -114,8 +114,8 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       input: {
-        vendors: resolve(root, 'vendors.html'),
         credentials: resolve(root, 'credentials.html'),
+        models: resolve(root, 'models.html'),
       },
     },
   },

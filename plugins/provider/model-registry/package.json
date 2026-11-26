@@ -61,20 +61,20 @@
       }
     },
     "activationEvents": [
-      "onPage:vendors",
-      "onPage:credentials"
+      "onPage:credentials",
+      "onPage:models"
     ],
     "contributes": {
       "i18n": {
         "en": {
           "nav.group": "Model Registry",
-          "nav.vendors": "Vendors",
-          "nav.credentials": "Credentials"
+          "nav.credentials": "Credentials",
+          "nav.models": "Models"
         },
         "zh-CN": {
           "nav.group": "模型管理",
-          "nav.vendors": "厂商与模型",
-          "nav.credentials": "凭证"
+          "nav.credentials": "凭证",
+          "nav.models": "模型"
         }
       },
       "navGroups": [
@@ -88,24 +88,24 @@
       ],
       "pages": [
         {
-          "id": "vendors",
-          "title": "Vendors",
-          "titleKey": "nav.vendors",
-          "nav": "plugin:model-registry",
-          "icon": "hub",
-          "order": 10,
-          "entry": "vendors.html",
-          "component": "VendorsView"
-        },
-        {
           "id": "credentials",
           "title": "Credentials",
           "titleKey": "nav.credentials",
           "nav": "plugin:model-registry",
           "icon": "settings",
-          "order": 11,
+          "order": 10,
           "entry": "credentials.html",
           "component": "CredentialsView"
+        },
+        {
+          "id": "models",
+          "title": "Models",
+          "titleKey": "nav.models",
+          "nav": "plugin:model-registry",
+          "icon": "hub",
+          "order": 11,
+          "entry": "models.html",
+          "component": "ModelsView"
         }
       ],
       "rpc": [
