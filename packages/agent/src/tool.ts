@@ -531,7 +531,10 @@ export function createAgentTool(
         limit: {
           type: 'integer',
           minimum: 1,
-          maximum: RELEASED_MEMBER_LIMIT_MAX,
+          // 不设字段级 maximum：read 封顶 50（readMessageLimit）、list+includeReleases
+          // 封顶 200（服务层 releasedLimit）——两个动作上限不同，单一 maximum 必谎报其一
+          // （旧值 200 让模型以为 read 能拿 200 条）。真实上限按动作写在 description，
+          // clamp 各只一处实现（形状校验只收形状，见 readReleasedQuery 注释）。
           description:
             `read: how many trailing messages to return (default ${READ_MESSAGE_LIMIT_DEFAULT}, max ${READ_MESSAGE_LIMIT_MAX}); ` +
             `list + includeReleases: how many released members to return (default ${RELEASED_MEMBER_LIMIT_DEFAULT}, max ${RELEASED_MEMBER_LIMIT_MAX})`,
