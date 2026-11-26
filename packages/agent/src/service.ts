@@ -303,6 +303,29 @@ function rotateHandoffInputName(epoch: number): string {
 }
 
 /**
+ * restart --self 跨进程续作嘱托在会话里的身份（`Message.name`）。
+ *
+ * 续作嘱托是上一具身体重启前写好的交接书（rotate 交接的跨进程版，见
+ * `deliverContinuationPrompt`），由 system principal 投递。`input_name` 留空时
+ * `inputNameOf` 对 system 来源返回 undefined ⇒ 那条 user 消息不带 `name`，Web 把它
+ * 画成用户气泡（用户反馈的正是这条：续作嘱托看起来像人坐在键盘前打的字）。
+ *
+ * 复用 `tool:` 卡族（与 `tool:bash` 同形，见 `runtime.ts` 的 `BASH_JOB_INPUT_NAME`）：
+ * Web 的 `senderOfName` 已认这个前缀，渲成「来自 system」卡（`chat.toolMessage.from`），
+ * 渲染层不新增前缀 / 判定；与 inbox-read 的 system 源承接卡同一口径
+ * （`TranscriptWindow` 的 `fixedSourceLabel`：SYSTEM_SOURCE → senderKind='tool'）。
+ *
+ * 不能用 `vessel:*`：`isRuntimeSeedMessage()` 把它当运行时种子消息，TUI 的人类可读
+ * 投影也整体跳过 —— 这条消息是该轮真实的用户输入（turn 锚点）、新进程首轮唯一的
+ * 指令，必须可见。
+ *
+ * create / hire 路径的 startup_prompt 不标身份（那是调用方写的开场任务，按正文
+ * 渲染，见 `deliverStartupPrompt`）：谁写的这句话只能由生产者声明，不能从
+ * system 来源统一推断（types.ts 的 `input_name` 裁定）。
+ */
+export const CONTINUATION_INPUT_NAME = 'tool:system';
+
+/**
  * 成员名合法形状：1-64 位字母 / 数字 / `_` / `-`。
  *
  * **与 `src/federation-address.ts` 的 `FEDERATION_PRINCIPAL_RE` 同源同义**（那边是
@@ -1621,7 +1644,9 @@ export class AgentServiceImpl implements AgentService {
    * 新进程启动扫到 continuation 标记且触发者 run 已 completed 时，把嘱托以
    * `admitInternal {startup:true}` 投递（deliverStartupPrompt 同款通道：直接作
    * 首轮 run input、不进 inbox）→ 新 run 发起 → 续作开始。这是 rotate 交接嘱托
-   * 的跨进程版——机制已存在，这里只补持久化触发源的公开入口。
+   * 的跨进程版——机制已存在，这里只补持久化触发源的公开入口。嘱托标
+   * `tool:system` 身份（`CONTINUATION_INPUT_NAME`）：Web 渲成「来自 system」卡，
+   * 不再画成用户气泡。
    *
    * 判据与 announceEnvironmentCard 同口径：no_member / left / closed / retired
    * 不投递（装配层据此清僵尸标记或降级）。失败如实回报，不抛错。
@@ -1640,6 +1665,8 @@ export class AgentServiceImpl implements AgentService {
     if (record.state === 'closed') return { delivered: false, reason: 'closed' };
     if (this.registry.isRetiredSession(sessionId)) return { delivered: false, reason: 'retired' };
     try {
+      // 声明会话身份：嘱托是上一具身体写的交接书，不是人打的字（见
+      // `CONTINUATION_INPUT_NAME`）。不声明时 system 来源落不到 name ⇒ Web 画成用户气泡。
       const outcome = await this.admitInternal(
         {
           content: prompt,
@@ -1650,7 +1677,7 @@ export class AgentServiceImpl implements AgentService {
           conversation_id: generateConversationId(this.newId),
           strict: false,
         },
-        { startup: true },
+        { startup: true, inputName: CONTINUATION_INPUT_NAME },
       );
       if (outcome.result.status === 'deferred') {
         return { delivered: false, reason: outcome.result.reason ?? 'deferred' };
@@ -2907,10 +2934,11 @@ export class AgentServiceImpl implements AgentService {
   /**
    * 统一准入主链路：resolve → membership/visibility → body → budget → mailbox → scheduler。
    *
-   * `internal.startup` 只由 rotate 使用：启动嘱托直接作为 run input，不进 inbox，
-   * 也不受 rotate 窗口守卫影响（否则新 body 的首轮会被当成旧队列）。
-   * `internal.inputName` 是内部调用方**声明**的会话身份（标 `Message.name`）：只有
-   * rotate 交接嘱托用它（见 `ROTATE_HANDOFF_INPUT_NAME`）。不走 `AdmitInput` 是因为
+   * `internal.startup` 由 rotate / create / hire / 跨进程续作使用：启动嘱托直接作为
+   * run input，不进 inbox，也不受 rotate 窗口守卫影响（否则新 body 的首轮会被当成旧队列）。
+   * `internal.inputName` 是内部调用方**声明**的会话身份（标 `Message.name`）：rotate
+   * 交接嘱托（`ROTATE_HANDOFF_INPUT_NAME`）与跨进程续作嘱托（`CONTINUATION_INPUT_NAME`）
+   * 用它。不走 `AdmitInput` 是因为
    * 那是投递侧（含 RPC）的公共形状，谁说的这句话只能由生产者说清楚，不能开成一个
    * 可以被外部填的字段。
    *
@@ -3088,8 +3116,9 @@ export class AgentServiceImpl implements AgentService {
       // 名字随消息带上：执行内核不持有 registry，渲染时无处可查。
       ...(senderName !== undefined ? { from_name: senderName } : {}),
       ...(input.origin !== undefined ? { origin: input.origin } : {}),
-      // 会话身份（`Message.name`）：目前只有 rotate 交接嘱托声明（见
-      // `ROTATE_HANDOFF_INPUT_NAME`）。缺省不写 —— 人类正文的载荷与今天逐字节一致。
+      // 会话身份（`Message.name`）：rotate 交接嘱托（`ROTATE_HANDOFF_INPUT_NAME`）与
+      // 跨进程续作嘱托（`CONTINUATION_INPUT_NAME`）声明。缺省不写 —— 人类正文的载荷
+      // 与今天逐字节一致。
       ...(internal?.inputName !== undefined ? { input_name: internal.inputName } : {}),
       // 附件引用：只有路径，随消息进执行内核 → core Message.refs（不落 inbox 副本）。
       ...(refs.length > 0 ? { refs } : {}),

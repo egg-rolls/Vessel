@@ -797,7 +797,8 @@ function agentIdOf(from: string): string {
  *
  * - `message.input_name`：投递方**显式声明**的身份，只用于运行时合成输入与交接嘱托
  *   （idle 唤醒 = `vessel:notice`，见 `AgentService.INBOX_WAKE_NAME`；rotate 交接 =
- *   `rotate:handoff:<epoch>`，见 `AgentService.ROTATE_HANDOFF_INPUT_NAME`）。上下文
+ *   `rotate:handoff:<epoch>`，见 `AgentService.ROTATE_HANDOFF_INPUT_NAME`；restart --self
+ *   跨进程续作 = `tool:system`，见 `AgentService.CONTINUATION_INPUT_NAME`）。上下文
  *   身份不只能从 `source` 推理出来：`startup_prompt` 与唤醒同为 system principal
  *   投递，前者在 rotate 路径上是 agent 写的交接书、在 create / restart / activate
  *   路径上是人的开场白，只能由生产者说清楚。
@@ -1377,7 +1378,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
     // 输入本身可能带结构化身份：A2A 是 agent:<alias>（Web 渲染成 agent 消息卡），
     // 运行时合成输入（idle 唤醒）是 vessel:notice（环境信息卡），async ask 的答案
     // （human 来源）是 ask:answer（待批答复卡），异步 bash 作业完成是 tool:bash
-    // （「来自 bash」卡），rotate 交接嘱托是 rotate:handoff:<epoch>（交接卡）。
+    // （「来自 bash」卡），rotate 交接嘱托是 rotate:handoff:<epoch>（交接卡），
+    // restart --self 跨进程续作嘱托是 tool:system（「来自 system」卡）。
     // 人类 / 系统正文来源保持 nil。
     const inputName =
       message.origin === 'ask_answer'

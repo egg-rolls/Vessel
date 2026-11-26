@@ -291,7 +291,9 @@ export interface AgentMessage {
    * TUI 的人类可读投影跳过它；`rotate:handoff:<epoch>`（rotate 交接）是**发起 rotate
    * 的 agent 写的交接书**（通常是上一具身体；`service.ts` 的
    * `ROTATE_HANDOFF_INPUT_NAME`），Web 渲成交接卡、TUI 渲成可读标题，两边都不再把它
-   * 画成「坐在键盘前的人打的字」。
+   * 画成「坐在键盘前的人打的字」；`tool:system`（restart --self 跨进程续作，
+   * `service.ts` 的 `CONTINUATION_INPUT_NAME`）是上一具身体写的嘱托，Web 渲成
+   * 「来自 system」卡（`tool:` 卡族，与 `tool:bash` 同形）。
    * A2A 投递不走这里（`agent:<alias>` 由 `source` + `from_name` 推导，见
    * `runtime.ts` 的 `agentInputName`）。
    *
