@@ -99,26 +99,28 @@ export function DomainIcon({ domain }: { domain: Domain }) {
         </svg>
       );
     case 'pluginHost':
+      // 宿主容器：机箱盒 + 分隔线 + 插槽线（与 plugins 的拼图区分）。
       return (
         <svg {...common}>
-          <path d="M7.5 3.5h5v2.2a1.8 1.8 0 1 0 0 3.6v2.2h-5z" />
-          <path d="M3.5 7.5v5h2.2a1.8 1.8 0 1 1 3.6 0h2.2v-5" />
-          <path d="M11.5 16.5v-2.2h2.2a1.8 1.8 0 1 0 0-3.6h-2.2" />
+          <rect x="3.5" y="4.5" width="13" height="11" rx="1.2" />
+          <path d="M3.5 10h13" />
+          <path d="M6 7.2h3M6 12.8h3" />
+          <path d="M13.5 7.2h.01M13.5 12.8h.01" />
         </svg>
       );
     case 'capabilities':
+      // 闪电：能力 = 能量（与 tools 的扳手区分）。
       return (
         <svg {...common}>
-          <path d="M12.2 3.2a3.8 3.8 0 0 0-4.9 4.9L3.6 11.8a1.6 1.6 0 0 0 2.2 2.2l3.7-3.7a3.8 3.8 0 0 0 4.9-4.9l-2 2-1.9-.5-.5-1.9z" />
+          <path d="M11 2.5 4.5 11h4.5l-1 6.5 6.5-8.5h-4.5z" />
         </svg>
       );
     case 'visual':
+      // 眼睛：视觉 = 观看（与 settings 的滑块区分）。
       return (
         <svg {...common}>
-          <path d="M4 6h12" />
-          <path d="M4 14h12" />
-          <circle cx="8" cy="6" r="1.8" fill="var(--surface)" />
-          <circle cx="13" cy="14" r="1.8" fill="var(--surface)" />
+          <path d="M2.8 10C4.6 6.8 7 5.2 10 5.2s5.4 1.6 7.2 4.8c-1.8 3.2-4.2 4.8-7.2 4.8S4.6 13.2 2.8 10Z" />
+          <circle cx="10" cy="10" r="2.4" />
         </svg>
       );
     case 'designLab':
