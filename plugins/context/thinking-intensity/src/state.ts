@@ -42,7 +42,6 @@ export const DEFAULT_SETTINGS: ThinkingSettings = {
 };
 
 const BUDGET_MIN = 1024;
-const BUDGET_MAX = 65536;
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
@@ -50,7 +49,8 @@ function readBoolean(value: unknown, fallback: boolean): boolean {
 
 function readBudget(value: unknown, fallback: number): number {
   if (typeof value !== 'number' || !Number.isInteger(value)) return fallback;
-  if (value < BUDGET_MIN || value > BUDGET_MAX) return fallback;
+  // 只保留协议地板（D2）；不设上限——超出模型限额由 provider 报错（P1 裁定）。
+  if (value < BUDGET_MIN) return fallback;
   return value;
 }
 
