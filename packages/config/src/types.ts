@@ -100,7 +100,7 @@ export interface ModelEntry {
 export interface ModelsConfig {
   /** 有效默认 ref（别称或条目键）；必须命中注册条目（P0 起严格） */
   default?: string;
-  /** 凭证名称（^[a-z0-9][a-z0-9-]{0,63}$；`legacy:` 前缀保留）→ 凭证元数据 */
+  /** 凭证名称（^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$；`legacy:` 前缀保留）→ 凭证元数据 */
   credentials?: Record<string, CredentialEntry>;
   /** 条目键（^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$；`legacy:` 前缀保留）→ 模型条目 */
   entries?: Record<string, ModelEntry>;

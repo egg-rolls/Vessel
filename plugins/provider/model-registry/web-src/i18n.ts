@@ -134,7 +134,8 @@ const EN = {
   'credentials.form.addTitle': 'Add credential',
   'credentials.form.editTitle': 'Edit credential "{id}"',
   'credentials.form.id': 'Credential name',
-  'credentials.form.idHint': 'kebab-case (a-z0-9-, up to 64 chars); cannot be renamed after save',
+  'credentials.form.idHint':
+    'Letters, digits and hyphens (a-zA-Z0-9-, up to 64 chars); cannot be renamed after save',
   'credentials.form.baseUrl': 'Request URL (baseUrl)',
   'credentials.form.baseUrlHint':
     'Required http(s) endpoint; models referencing this credential use it',
@@ -277,7 +278,7 @@ const ZH: Record<MessageKey, string> = {
   'credentials.form.addTitle': '添加凭证',
   'credentials.form.editTitle': '编辑凭证「{id}」',
   'credentials.form.id': '凭证名称',
-  'credentials.form.idHint': 'kebab-case（a-z0-9-，≤64 字符）；保存后不可改名',
+  'credentials.form.idHint': '字母、数字、连字符（a-zA-Z0-9-，≤64 字符）；保存后不可改名',
   'credentials.form.baseUrl': '请求地址（baseUrl）',
   'credentials.form.baseUrlHint': '必填 http(s) 端点；引用此凭证的模型都用它',
   'credentials.form.value': 'API key',

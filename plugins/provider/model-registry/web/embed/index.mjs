@@ -338,7 +338,7 @@ const dt = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, ct = yt, k
   // For example, `hsl(0 0% 0%)` would be classified as a length without this check.
   // I could also use lookbehind assertion in `lengthUnitRegex` but that isn't supported widely enough.
   Mo.test(e) && !Ro.test(e)
-), Ye = () => !1, Vo = (e) => Eo.test(e), Ho = (e) => Oo.test(e), Uo = (e) => !f(e) && !p(e), Do = (e) => e.startsWith("@container") && (e[10] === "/" && e[11] !== void 0 || e[11] === "s" && e[16] !== void 0 && e.startsWith("-size/", 10) || e[11] === "n" && e[18] !== void 0 && e.startsWith("-normal/", 10)), jo = (e) => ge(e, Mt, Ye), f = (e) => St.test(e), ve = (e) => ge(e, Rt, Lo), pt = (e) => ge(e, Jo, C), Wo = (e) => ge(e, Ot, zt), Fo = (e) => ge(e, Et, Ye), ht = (e) => ge(e, Tt, Ye), Go = (e) => ge(e, It, Ho), Ee = (e) => ge(e, Lt, Vo), p = (e) => Pt.test(e), Te = (e) => ke(e, Rt), _o = (e) => ke(e, Et), gt = (e) => ke(e, Tt), Bo = (e) => ke(e, Mt), qo = (e) => ke(e, It), Oe = (e) => ke(e, Lt, !0), Ko = (e) => ke(e, Ot, !0), ge = (e, n, t) => {
+), Ze = () => !1, Vo = (e) => Eo.test(e), Ho = (e) => Oo.test(e), Uo = (e) => !f(e) && !p(e), Do = (e) => e.startsWith("@container") && (e[10] === "/" && e[11] !== void 0 || e[11] === "s" && e[16] !== void 0 && e.startsWith("-size/", 10) || e[11] === "n" && e[18] !== void 0 && e.startsWith("-normal/", 10)), jo = (e) => ge(e, Mt, Ze), f = (e) => St.test(e), ve = (e) => ge(e, Rt, Lo), pt = (e) => ge(e, Jo, C), Wo = (e) => ge(e, Ot, zt), Fo = (e) => ge(e, Et, Ze), ht = (e) => ge(e, Tt, Ze), Go = (e) => ge(e, It, Ho), Ee = (e) => ge(e, Lt, Vo), p = (e) => Pt.test(e), Te = (e) => ke(e, Rt), _o = (e) => ke(e, Et), gt = (e) => ke(e, Tt), Bo = (e) => ke(e, Mt), qo = (e) => ke(e, It), Oe = (e) => ke(e, Lt, !0), Ko = (e) => ke(e, Ot, !0), ge = (e, n, t) => {
   const o = St.exec(e);
   return o ? o[1] ? n(o[1]) : t(o[2]) : !1;
 }, ke = (e, n, t = !1) => {
@@ -365,7 +365,7 @@ const dt = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, ct = yt, k
     "left-bottom"
   ], g = () => [...j(), p, f], P = () => ["auto", "hidden", "clip", "visible", "scroll"], z = () => ["auto", "contain", "none"], u = () => [p, f, h], R = () => [he, "full", "auto", ...u()], J = () => [ne, "none", "subgrid", p, f], K = () => ["auto", {
     span: ["full", ne, p, f]
-  }, ne, p, f], D = () => [ne, "auto", p, f], Z = () => ["auto", "min", "max", "fr", p, f], _ = () => ["start", "end", "center", "between", "around", "evenly", "stretch", "baseline", "center-safe", "end-safe"], d = () => ["start", "end", "center", "stretch", "center-safe", "end-safe"], E = () => ["auto", ...u()], $ = () => [he, "auto", "full", "dvw", "dvh", "lvw", "lvh", "svw", "svh", "min", "max", "fit", ...u()], ee = () => [i, he, "screen", "full", "dvw", "lvw", "svw", "min", "max", "fit", ...u()], le = () => [he, "screen", "full", "lh", "dvh", "lvh", "svh", "min", "max", "fit", ...u()], b = () => [e, p, f], se = () => [...j(), gt, ht, {
+  }, ne, p, f], D = () => [ne, "auto", p, f], Y = () => ["auto", "min", "max", "fr", p, f], _ = () => ["start", "end", "center", "between", "around", "evenly", "stretch", "baseline", "center-safe", "end-safe"], d = () => ["start", "end", "center", "stretch", "center-safe", "end-safe"], E = () => ["auto", ...u()], $ = () => [he, "auto", "full", "dvw", "dvh", "lvw", "lvh", "svw", "svh", "min", "max", "fit", ...u()], ee = () => [i, he, "screen", "full", "dvw", "lvw", "svw", "min", "max", "fit", ...u()], le = () => [he, "screen", "full", "lh", "dvh", "lvh", "svh", "min", "max", "fit", ...u()], b = () => [e, p, f], se = () => [...j(), gt, ht, {
     position: [p, f]
   }], we = () => ["no-repeat", {
     repeat: ["", "x", "y", "space", "round"]
@@ -792,14 +792,14 @@ const dt = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, ct = yt, k
        * @see https://tailwindcss.com/docs/grid-auto-columns
        */
       "auto-cols": [{
-        "auto-cols": Z()
+        "auto-cols": Y()
       }],
       /**
        * Grid Auto Rows
        * @see https://tailwindcss.com/docs/grid-auto-rows
        */
       "auto-rows": [{
-        "auto-rows": Z()
+        "auto-rows": Y()
       }],
       /**
        * Gap
@@ -3032,11 +3032,11 @@ const dt = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, ct = yt, k
     postfixLookupClassGroups: ["container-type"],
     orderSensitiveModifiers: ["*", "**", "after", "backdrop", "before", "details-content", "file", "first-letter", "first-line", "marker", "placeholder", "selection"]
   };
-}, Yo = /* @__PURE__ */ Po($o);
-function Y(...e) {
-  return Yo(yt(e));
+}, Zo = /* @__PURE__ */ Po($o);
+function Z(...e) {
+  return Zo(yt(e));
 }
-const Zo = {
+const Yo = {
   neutral: "",
   accent: "bg-accent-soft text-accent-ink",
   info: "bg-info-soft text-info",
@@ -3046,12 +3046,12 @@ const Zo = {
 }, Qo = kt(
   "inline-flex max-w-full items-center whitespace-nowrap rounded-full bg-sunken px-2 py-0.5 font-mono text-xs text-faint",
   {
-    variants: { tone: Zo },
+    variants: { tone: Yo },
     defaultVariants: { tone: "neutral" }
   }
 );
 function ye({ tone: e, className: n, ...t }) {
-  return /* @__PURE__ */ r("span", { ...t, className: Y(Qo({ tone: e }), n) });
+  return /* @__PURE__ */ r("span", { ...t, className: Z(Qo({ tone: e }), n) });
 }
 const Xo = {
   plain: "bg-sunken text-ink tint-hover tint-press",
@@ -3075,8 +3075,8 @@ const Xo = {
     defaultVariants: { variant: "plain", size: "normal" }
   }
 ), q = Ae(function({ variant: n, size: t, type: o = "button", className: l, children: c, ...s }, i) {
-  return /* @__PURE__ */ r("button", { ...s, ref: i, type: o, className: Y(tr({ variant: n, size: t }), l), children: c });
-}), Ze = "w-full min-w-0 rounded-sm border-0 bg-sunken px-2.75 py-2 text-md text-ink shadow-elev-inset transition-colors placeholder:text-faint focus:outline-none focus:shadow-focus pointer-coarse:min-h-touch disabled:cursor-not-allowed disabled:opacity-45 forced-colors:border", Qe = "bg-danger-soft text-danger";
+  return /* @__PURE__ */ r("button", { ...s, ref: i, type: o, className: Z(tr({ variant: n, size: t }), l), children: c });
+}), Ye = "w-full min-w-0 rounded-sm border-0 bg-sunken px-2.75 py-2 text-md text-ink shadow-elev-inset transition-colors placeholder:text-faint focus:outline-none focus:shadow-focus pointer-coarse:min-h-touch disabled:cursor-not-allowed disabled:opacity-45 forced-colors:border", Qe = "bg-danger-soft text-danger";
 function U({
   label: e,
   htmlFor: n,
@@ -3087,7 +3087,7 @@ function U({
   children: s,
   ...i
 }) {
-  return /* @__PURE__ */ x("div", { ...i, className: Y("flex min-w-0 flex-col gap-1.25", c), children: [
+  return /* @__PURE__ */ x("div", { ...i, className: Z("flex min-w-0 flex-col gap-1.25", c), children: [
     e != null ? /* @__PURE__ */ x(
       "label",
       {
@@ -3111,7 +3111,7 @@ const B = Ae(function({ invalid: n, className: t, "aria-invalid": o, ...l }, c) 
       ...l,
       ref: c,
       "aria-invalid": n ? !0 : o,
-      className: Y(Ze, n && Qe, t)
+      className: Z(Ye, n && Qe, t)
     }
   );
 });
@@ -3173,17 +3173,17 @@ const bt = typeof window > "u" ? Ne : to, Ie = Ae(function({
 }, L) {
   const T = or(c), [F, j] = y(
     () => i != null ? String(i) : ""
-  ), g = s !== void 0 ? String(s) : F, P = T.find((w) => w.value === g), [z, u] = y(!1), [R, J] = y(-1), [K, D] = y(null), Z = Be(null), _ = Be(null), d = Be([]), E = Xt(), $ = (w) => `${E}-option-${w}`;
-  eo(L, () => Z.current, []);
+  ), g = s !== void 0 ? String(s) : F, P = T.find((w) => w.value === g), [z, u] = y(!1), [R, J] = y(-1), [K, D] = y(null), Y = Be(null), _ = Be(null), d = Be([]), E = Xt(), $ = (w) => `${E}-option-${w}`;
+  eo(L, () => Y.current, []);
   const ee = Ve((w) => {
-    u(!1), J(-1), w && Z.current?.focus();
+    u(!1), J(-1), w && Y.current?.focus();
   }, []), le = (w) => {
-    w.disabled || (s === void 0 && j(w.value), u(!1), J(-1), Z.current?.focus(), w.value !== g && h?.({
+    w.disabled || (s === void 0 && j(w.value), u(!1), J(-1), Y.current?.focus(), w.value !== g && h?.({
       target: { value: w.value, name: A },
       currentTarget: { value: w.value, name: A }
     }));
   }, b = Ve(() => {
-    const w = Z.current;
+    const w = Y.current;
     if (!w) return;
     const I = w.getBoundingClientRect(), k = window.innerWidth, V = window.innerHeight, re = Math.min(Math.max(I.width, W ?? 0), k - 16), ae = Math.max(8, Math.min(I.left, k - re - 8)), H = _.current, me = H ? H.scrollHeight + (H.offsetHeight - H.clientHeight) : T.length * 34 + 8, ue = Math.min(240, me), te = V - I.bottom - 8, fe = I.top - 8, Q = te < ue && fe > te, Se = Math.max(96, Math.min(240, Q ? fe : te)), Pe = Math.min(me, Se), Re = Q ? Math.max(8, I.top - 4 - Pe) : I.bottom + 4;
     D(
@@ -3206,7 +3206,7 @@ const bt = typeof window > "u" ? Ne : to, Ie = Ae(function({
     if (!z) return;
     const w = (I) => {
       const k = I.target;
-      k instanceof Node && (Z.current?.contains(k) || _.current?.contains(k) || ee(!1));
+      k instanceof Node && (Y.current?.contains(k) || _.current?.contains(k) || ee(!1));
     };
     return document.addEventListener("mousedown", w), () => document.removeEventListener("mousedown", w);
   }, [z, ee]);
@@ -3250,7 +3250,7 @@ const bt = typeof window > "u" ? Ne : to, Ie = Ae(function({
       "button",
       {
         ...O,
-        ref: Z,
+        ref: Y,
         id: N,
         type: "button",
         role: "combobox",
@@ -3262,8 +3262,8 @@ const bt = typeof window > "u" ? Ne : to, Ie = Ae(function({
         "aria-required": v || void 0,
         "aria-label": l,
         disabled: a,
-        className: Y(
-          Ze,
+        className: Z(
+          Ye,
           "flex items-center justify-between gap-2 text-left",
           n && Qe,
           t
@@ -3280,7 +3280,7 @@ const bt = typeof window > "u" ? Ne : to, Ie = Ae(function({
             {
               "aria-hidden": "true",
               viewBox: "0 0 12 12",
-              className: Y("size-3 flex-none text-faint transition-transform", z && "rotate-180"),
+              className: Z("size-3 flex-none text-faint transition-transform", z && "rotate-180"),
               fill: "none",
               stroke: "currentColor",
               strokeWidth: "1.5",
@@ -3329,7 +3329,7 @@ const bt = typeof window > "u" ? Ne : to, Ie = Ae(function({
                         role: "option",
                         "aria-selected": k,
                         "aria-disabled": w.disabled || void 0,
-                        className: Y(
+                        className: Z(
                           "flex min-h-8 cursor-pointer items-center rounded-sm px-2.5 py-1.75 text-left text-md text-ink transition-colors pointer-coarse:min-h-touch",
                           I === R && "bg-hover",
                           k && "bg-accent-soft text-accent-ink",
@@ -3363,7 +3363,7 @@ Ae(function({ invalid: n, className: t, "aria-invalid": o, ...l }, c) {
       ...l,
       ref: c,
       "aria-invalid": n ? !0 : o,
-      className: Y(Ze, n && Qe, t)
+      className: Z(Ye, n && Qe, t)
     }
   );
 });
@@ -3384,7 +3384,7 @@ function Ht({
   return /* @__PURE__ */ x(
     "table",
     {
-      className: Y(
+      className: Z(
         "w-full rounded-md border-separate border-spacing-y-px bg-bg text-md dark:bg-deep",
         l
       ),
@@ -3396,7 +3396,7 @@ function Ht({
             {
               scope: "col",
               "aria-sort": h.sortable ? a ? "ascending" : v ? "descending" : "none" : void 0,
-              className: Y(
+              className: Z(
                 "h-10 bg-sunken px-2.5 py-2 text-left align-middle font-mono text-xs font-medium tracking-wide text-faint uppercase wrap-anywhere dark:bg-raised max-compact:px-1.5 first:rounded-tl-md last:rounded-tr-md",
                 c && "sticky top-0 z-1",
                 h.hide && xt[h.hide]
@@ -3430,7 +3430,7 @@ function Ht({
               children: e.map((A, M) => /* @__PURE__ */ r(
                 "td",
                 {
-                  className: Y(
+                  className: Z(
                     "h-10 bg-raised px-2.5 py-2 align-middle wrap-anywhere group-hover:bg-hover group-data-[active=true]:bg-accent-soft dark:bg-sunken max-compact:px-1.5",
                     M === 0 && N && "rounded-bl-md",
                     M === e.length - 1 && N && "rounded-br-md",
@@ -3454,7 +3454,7 @@ function Ce({ title: e, subtitle: n, children: t, className: o }) {
   return /* @__PURE__ */ x(
     "div",
     {
-      className: Y(
+      className: Z(
         "mx-auto flex w-full max-w-[var(--content-max)] flex-col p-6 pb-10 max-compact:px-3 max-compact:pt-4 max-compact:pb-7",
         o
       ),
@@ -3473,7 +3473,7 @@ Ae(function({ value: n, onChange: t, placeholder: o, ariaLabel: l, className: c 
     "input",
     {
       ref: s,
-      className: Y(
+      className: Z(
         "h-control w-full min-w-0 rounded-sm border-0 bg-sunken px-3 text-sm text-ink shadow-elev-inset transition-colors placeholder:text-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface",
         c
       ),
@@ -3493,7 +3493,7 @@ const ce = Ae(function({ title: n, description: t, actions: o, titleAs: l = "h2"
     {
       ref: h,
       ...i,
-      className: Y(
+      className: Z(
         "rounded-md bg-raised px-4.5 py-4 shadow-elev-1 max-compact:px-4 forced-colors:border",
         c
       ),
@@ -3926,7 +3926,7 @@ const Gt = {
   "credentials.form.addTitle": "Add credential",
   "credentials.form.editTitle": 'Edit credential "{id}"',
   "credentials.form.id": "Credential name",
-  "credentials.form.idHint": "kebab-case (a-z0-9-, up to 64 chars); cannot be renamed after save",
+  "credentials.form.idHint": "Letters, digits and hyphens (a-zA-Z0-9-, up to 64 chars); cannot be renamed after save",
   "credentials.form.baseUrl": "Request URL (baseUrl)",
   "credentials.form.baseUrlHint": "Required http(s) endpoint; models referencing this credential use it",
   "credentials.form.value": "API key",
@@ -4052,7 +4052,7 @@ const Gt = {
   "credentials.form.addTitle": "添加凭证",
   "credentials.form.editTitle": "编辑凭证「{id}」",
   "credentials.form.id": "凭证名称",
-  "credentials.form.idHint": "kebab-case（a-z0-9-，≤64 字符）；保存后不可改名",
+  "credentials.form.idHint": "字母、数字、连字符（a-zA-Z0-9-，≤64 字符）；保存后不可改名",
   "credentials.form.baseUrl": "请求地址（baseUrl）",
   "credentials.form.baseUrlHint": "必填 http(s) 端点；引用此凭证的模型都用它",
   "credentials.form.value": "API key",
@@ -4098,7 +4098,7 @@ function de(e) {
 function mr({ initial: e, credentials: n, busy: t, t: o, onSave: l, onCancel: c }) {
   const s = e !== void 0, [i, h] = y(e?.id ?? ""), [a, v] = y(e?.provider ?? "openai"), [N, A] = y(
     e !== void 0 && e.name !== e.id ? e.name : ""
-  ), [M, W] = y(e?.alias ?? ""), [S, O] = y(e?.mode ?? Ke(e?.provider ?? "openai")), [L, T] = y(e?.credential ?? ""), [F, j] = y(null), g = e?.pricing, [P, z] = y(g?.inputPerMillion?.toString() ?? ""), [u, R] = y(g?.outputPerMillion?.toString() ?? ""), [J, K] = y(g?.cacheReadPerMillion?.toString() ?? ""), [D, Z] = y(g?.cacheWritePerMillion?.toString() ?? ""), _ = e?.param, [d, E] = y(_?.temperature?.toString() ?? ""), [$, ee] = y(_?.maxTokens?.toString() ?? ""), [le, b] = y(_?.topP?.toString() ?? ""), [se, we] = y(
+  ), [M, W] = y(e?.alias ?? ""), [S, O] = y(e?.mode ?? Ke(e?.provider ?? "openai")), [L, T] = y(e?.credential ?? ""), [F, j] = y(null), g = e?.pricing, [P, z] = y(g?.inputPerMillion?.toString() ?? ""), [u, R] = y(g?.outputPerMillion?.toString() ?? ""), [J, K] = y(g?.cacheReadPerMillion?.toString() ?? ""), [D, Y] = y(g?.cacheWritePerMillion?.toString() ?? ""), _ = e?.param, [d, E] = y(_?.temperature?.toString() ?? ""), [$, ee] = y(_?.maxTokens?.toString() ?? ""), [le, b] = y(_?.topP?.toString() ?? ""), [se, we] = y(
     _?.promptCache === void 0 ? "auto" : _.promptCache ? "on" : "off"
   ), [w, I] = y(
     _?.extra !== void 0 ? JSON.stringify(_.extra, null, 2) : ""
@@ -4119,7 +4119,7 @@ function mr({ initial: e, credentials: n, busy: t, t: o, onSave: l, onCancel: c 
     Object.keys(De).length > 0 ? JSON.stringify(De, null, 2) : ""
   ), je = [...dr];
   je.includes(a) || je.push(a);
-  function Yt(m) {
+  function Zt(m) {
     v(m), O(Ke(m));
   }
   function et(m, pe) {
@@ -4132,7 +4132,7 @@ function mr({ initial: e, credentials: n, busy: t, t: o, onSave: l, onCancel: c 
         return j(o("models.form.badJson", { field: pe })), null;
       }
   }
-  function Zt() {
+  function Yt() {
     j(null);
     const m = i.trim();
     if (m === "") {
@@ -4180,7 +4180,7 @@ function mr({ initial: e, credentials: n, busy: t, t: o, onSave: l, onCancel: c 
         {
           className: "flex flex-col gap-4",
           onSubmit: (m) => {
-            m.preventDefault(), Zt();
+            m.preventDefault(), Yt();
           },
           children: [
             F !== null ? /* @__PURE__ */ r("p", { role: "alert", className: "text-sm text-danger wrap-anywhere", children: F }) : null,
@@ -4200,7 +4200,7 @@ function mr({ initial: e, credentials: n, busy: t, t: o, onSave: l, onCancel: c 
                 Ie,
                 {
                   value: a,
-                  onChange: (m) => Yt(m.target.value),
+                  onChange: (m) => Zt(m.target.value),
                   disabled: t,
                   children: je.map((m) => /* @__PURE__ */ r("option", { value: m, children: m }, m))
                 }
@@ -4298,7 +4298,7 @@ function mr({ initial: e, credentials: n, busy: t, t: o, onSave: l, onCancel: c 
                   B,
                   {
                     value: D,
-                    onChange: (m) => Z(m.target.value),
+                    onChange: (m) => Y(m.target.value),
                     disabled: t,
                     placeholder: "2.5",
                     autoComplete: "off"
@@ -4543,7 +4543,7 @@ function ur({ client: e, refreshKey: n, t }) {
         retryLabel: t("common.retry")
       }
     ) });
-  const { entries: R, credentials: J, effective: K, migration: D } = o.data, Z = [
+  const { entries: R, credentials: J, effective: K, migration: D } = o.data, Y = [
     ...R.filter((d) => !d.legacy).map((d) => d.id),
     ...R.flatMap((d) => d.alias !== void 0 ? [d.alias] : [])
   ], _ = [
@@ -4681,7 +4681,7 @@ function ur({ client: e, refreshKey: n, t }) {
           disabled: i,
           children: [
             /* @__PURE__ */ r("option", { value: "", children: t("default.choose") }),
-            Z.map((d) => /* @__PURE__ */ r("option", { value: d, children: d }, d))
+            Y.map((d) => /* @__PURE__ */ r("option", { value: d, children: d }, d))
           ]
         }
       ) }),
