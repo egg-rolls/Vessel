@@ -86,6 +86,12 @@ import { createReplSettings, type ReplSettingsControlLike } from '../config/ui-s
 import { visionSurfaceOf } from '../config/vision-settings';
 import { createConfigAttachmentIngest } from '../data/attachment-ingest';
 import { createConfigAttachmentLister } from '../data/attachments-list';
+import {
+  type AutoPrunePassReport,
+  type AutoPruneRunner,
+  formatAutoPruneReport,
+  startAutoPrune,
+} from '../data/auto-prune';
 import { withDataLock } from '../data/data-lock';
 import {
   resolveDataDir,
@@ -104,6 +110,7 @@ import {
   listAutoApproveRules,
   removeAutoApproveRule,
 } from '../data/permission-store';
+import { createOnlinePrunePort } from '../data/prune-wiring';
 import type { FederationRuntimeOptions } from '../federation/federation-config';
 import { loadFederationPeerSecrets } from '../federation/federation-secrets';
 import { createFederationSendPort } from '../federation/federation-send-port';
@@ -349,6 +356,12 @@ export interface BootstrapResult {
    * applyFederation 用）。启动时 `federation.enabled: false` ⇒ 端口未构造 ⇒ 缺省。
    */
   federationApply?: (next: FederationRuntimeOptions) => void;
+  /**
+   * auto-gc P1 热应用：把重载配置喂进调度器持有的活配置引用（live resolver 闭包
+   * 每趟求值，下一趟即按新 enabled / interval / olderThan / dryRun 执行）。
+   * connectMode / 无本地调度器时缺省（cli 的 applyAutoPrune 据此如实报 requires restart）。
+   */
+  applyAutoPruneConfig?: (next: VesselConfig) => string[];
   /** nodeId 唯一来源：config.host.nodeId > node.json > 首次生成 */
   nodeId: string;
   /** 节点展示名：config.host.nodeName > node.json > hostname 派生 */
@@ -1455,6 +1468,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
    */
   let imageBlobGc: ImageBlobGcRunner | undefined;
   /**
+   * auto-gc P1：closed / 归档数据自动回收调度器。缺省开（用户裁定：系统应自清洁；
+   * 保护不变量保安全）。第一趟固定 dry-run；配置经 live resolver 活生效。
+   */
+  let autoPrune: AutoPruneRunner | undefined;
+  /** auto-gc P1 热应用入口（return 处透传给 CLI 的 applyAutoPrune）。 */
+  let applyAutoPruneConfig: ((next: VesselConfig) => string[]) | undefined;
+  /**
    * 0.53 notice-rotate：成员停下通知要按**投递那一刻**父成员当前的 session 定向，而
    * router 建在 `createAgentServiceWiring` 之前 —— 同样晚绑定（与 `feishuAgentService`
    * 同口径），闭包在 flush 时求值；装配前为 undefined 时通知退回报告时刻的 session。
@@ -2498,6 +2518,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.56 P1：blob GC 定时器（在飞的那一趟照旧跑完，不阻塞退出）。
     imageBlobGc?.stop();
     imageBlobGc = undefined;
+    // auto-gc P1：先停调度并**等在飞趟收口**再拆 agent 执行面 —— 在线趟会调
+    // service.flushSnapshot，若 agent dispose 的终态 flush 先跑，已摘记录会被复活。
+    autoPrune?.stop();
+    await autoPrune?.idle();
+    autoPrune = undefined;
     // 0.53 notice-rotate：重解析口的宿主一并摘掉（router 已停，flush 不会再发生）。
     noticeAgentService = undefined;
 
@@ -2759,6 +2784,70 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     });
   }
 
+  // ── auto-gc P1：closed / 归档 team 数据自动回收（环3）────────────────────────
+  // 闸与 blob GC 同口径：connectMode（远程网关的本地进程）绝不跑本地 prune。
+  // enabled 缺省 true（用户裁定：系统应自清洁），显式 false 只跳过趟、链不断
+  // （live resolver 每趟求值，热重载再开即活）。headless 一次性进程天然不触发
+  // （unref + 首趟 setTimeout 0），与 blob GC 同形态，不另设闸。
+  if (localWrites) {
+    // D3：有活 AgentService 就必须经 registry 摘除（直接改文件会被整份 flush 复活）；
+    // 端口建不起来（旧内核缺方法）宁可不做。无 AgentService 时无活 registry，
+    // 离线文件模式安全（与 CLI 同路）。
+    const onlinePrune =
+      agentControl !== undefined ? createOnlinePrunePort(agentControl.service) : undefined;
+    if (agentControl !== undefined && onlinePrune === undefined) {
+      logger.warn('auto prune skipped: agent service lacks online prune port', {
+        data_dir: tenantPaths.root,
+      });
+    } else {
+      // 活配置引用：调度器闭包每趟求值；applyAutoPruneConfig 热应用时原地替换。
+      const autoPruneConfigRef: { current: VesselConfig } = { current: config };
+      autoPrune = startAutoPrune({
+        resolveConfig: () => autoPruneConfigRef.current,
+        tenantPaths,
+        tenantId,
+        ...(onlinePrune !== undefined ? { online: onlinePrune } : {}),
+        onReport: (report: AutoPrunePassReport) => {
+          const line = formatAutoPruneReport(report);
+          if (report.aborted !== undefined) {
+            logger.warn('auto prune aborted', { reason: report.aborted.reason });
+          } else if (report.skipped_pass !== undefined) {
+            logger.info('auto prune pass skipped', { reason: report.skipped_pass });
+          } else {
+            logger.info('auto prune pass', {
+              line,
+              dry_run: report.dry_run,
+              totals: report.totals,
+            });
+          }
+          // 报告进事件流：人（Web/TUI）能看到「将删 / 已删」，不必翻日志。
+          runtimeEvents.publish({
+            type: 'gc.agents',
+            run_id: 'gc',
+            data: { line, ...report },
+            ts: Date.now(),
+          });
+          // 异常 / 拒删（记录摘除失败）不静默：一张通知卡（同 blob GC overLimit 三路）。
+          const refused = report.notes.includes('agents_snapshot_write_failed');
+          if (report.aborted !== undefined || refused) {
+            const summary =
+              report.aborted !== undefined
+                ? `Auto prune aborted: ${report.aborted.reason}`
+                : 'Auto prune: agent snapshot write failed (records kept)';
+            console.warn(`⚠ ${summary}`);
+            noticeBus?.publish({ scope: 'config', summary, details: [line], ok: false });
+          }
+        },
+      });
+      applyAutoPruneConfig = (next) => {
+        autoPruneConfigRef.current = next;
+        return [
+          `autoPrune: hot-applied (live resolver; enabled=${next.autoPrune?.enabled !== false}, next pass uses new values)`,
+        ];
+      };
+    }
+  }
+
   return {
     runtime: resumableRuntime,
     executionRuntime,
@@ -2775,6 +2864,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     sessionControl,
     // S7 热应用：出站端口存在时透传其原地更新入口（入站面由 cli 的 controlPlane 持有）。
     ...(federationApply !== undefined ? { federationApply } : {}),
+    // auto-gc P1 热应用：调度器活配置引用的原地更新入口（cli 的 applyAutoPrune 用）。
+    ...(applyAutoPruneConfig !== undefined ? { applyAutoPruneConfig } : {}),
     nodeId,
     nodeName,
     mcp: mcpControl,
