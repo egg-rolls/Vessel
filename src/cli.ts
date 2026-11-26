@@ -931,7 +931,13 @@ async function runWithConfig(result: BootstrapResult) {
     const authResult = resolveGatewayAuth(config, {
       hostname: resolved.options.hostname,
       allowRemote: resolved.options.allowRemote,
-      ...(nodeToken.source === 'derived' && nodeToken.token !== undefined
+      // F1/SD-2 链B：injected（平台 spawn 注入的 VESSEL_NODE_TOKEN）与 derived 一样
+      // 注册为**追加**鉴权候选。注入值就是 gateway 代算的该 node 生效 token，停止方
+      // （gateway stop / node stop）发的正是它；只认 derived 时 spawned node 只认匿名，
+      // stop 发派生值必 401 → 静默强杀。与 derived 同口径：不进 `configured` 计数，
+      // 回环匿名语义不变（显式配置仍然优先并关闭匿名）。
+      ...((nodeToken.source === 'derived' || nodeToken.source === 'injected') &&
+      nodeToken.token !== undefined
         ? {
             derivedToken: nodeToken.token,
             ...(nodeToken.detail !== undefined ? { derivedDetail: nodeToken.detail } : {}),
