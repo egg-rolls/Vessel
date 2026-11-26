@@ -54,7 +54,7 @@ export {
   registeredAuthKinds,
   requiresPublicOrigin,
 } from './auth-strategies/index.js';
-export { type ConfigLockOptions, withConfigLock } from './config-lock.js';
+export { type ConfigLockOptions, isConfigLockHeld, withConfigLock } from './config-lock.js';
 export {
   DEFAULT_CONFIG,
   DEFAULT_DATA_DIR,
@@ -73,7 +73,9 @@ export {
   DEFAULT_TIMELINE_OPTIONS,
   DEFAULT_TRACE_OPTIONS,
   DEFAULT_TRANSPORT_OPTIONS,
+  defaultBaseUrlFor,
   defaultModelForProvider,
+  PROTOCOL_DEFAULT_BASE_URLS,
   PROVIDER_DEFAULT_MODELS,
 } from './defaults.js';
 export {
@@ -126,6 +128,14 @@ export {
   snakeToCamel,
 } from './loader.js';
 export {
+  hasLegacyModelsBlock,
+  type MigrationReport,
+  migrateUserConfigModels,
+  migrationReportPath,
+  readMigrationReport,
+  transformLegacyModels,
+} from './model-migration.js';
+export {
   defaultModeFor,
   ModelRefError,
   type ModelRefErrorCode,
@@ -136,6 +146,7 @@ export {
   resolveModelRef,
   synthesizeLegacyRegistry,
 } from './model-registry.js';
+export { credentialToYaml, entryToYaml, pricingToYaml } from './models-disk.js';
 export {
   CREDENTIAL_ID_RE,
   ENTRY_KEY_RE,

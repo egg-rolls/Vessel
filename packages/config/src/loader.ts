@@ -26,6 +26,7 @@ import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { DEFAULT_CONFIG, DEFAULT_TENANT_ID, defaultModelForProvider } from './defaults.js';
 import { type EnvFileLoadInfo, loadEnvFiles } from './env-file.js';
+import { hasLegacyModelsBlock, migrateUserConfigModels } from './model-migration.js';
 import { resolveEnvRefsInLayer } from './secrets.js';
 import type {
   ConfigLayers,
@@ -673,7 +674,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   captureLayer('default', DEFAULT_CONFIG);
 
   // 2. 用户层：legacy 映射 + 完整 config 键（source=user）
-  const userFile = await loadRawConfig(userPath);
+  let userFile = await loadRawConfig(userPath);
   if (userFile.error) preErrors.push(userFile.error);
   if (explicitUserPath !== undefined && !(await pathExists(explicitUserPath))) {
     preErrors.push({
@@ -686,7 +687,23 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
         'drop the flag.',
     });
   }
-  const rawUser = userFile.raw;
+  let rawUser = userFile.raw;
+  // §7 一次性迁移钩子（H7 首载自动）：models.vendors/aliases → credentials+entries。
+  // withConfigLock 内执行（已在锁内则原地免嵌套）；幂等（无旧块 no-op）；失败 fail-fast
+  // （.bak 完好）。迁移后重读用户层，后续层叠/校验都走新形状。
+  if (hasLegacyModelsBlock(rawUser)) {
+    const report = await migrateUserConfigModels({ configPath: userPath, env });
+    if (report !== undefined) {
+      preWarnings.push({
+        path: 'models',
+        message:
+          'model registry migrated: vendors/aliases -> credentials + entries (one-shot; ' +
+          'report: <dataDir>/model-registry-migration.json; backup: config.yaml.pre-model-registry.bak)',
+      });
+      userFile = await loadRawConfig(userPath);
+      rawUser = userFile.raw;
+    }
+  }
   // 同层出现新版 `provider:` 时 legacy 键整体忽略（DECISION-020 §R1.4）。
   const hasNewProvider = isRecord(rawUser.provider);
   const legacyKeys = legacyProviderKeys(rawUser);
@@ -718,6 +735,16 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   const projectFile = await loadRawConfig(projectPath);
   if (projectFile.error) preErrors.push(projectFile.error);
   const rawProject = projectFile.raw;
+  // 项目层旧块不自动迁移（config 写路径只落用户层）：fail-loud + 手动迁移指引。
+  if (hasLegacyModelsBlock(rawProject)) {
+    preErrors.push({
+      path: 'models.vendors',
+      message:
+        'project-layer models.vendors/aliases are not auto-migrated (config writes go to the user layer); ' +
+        'migrate this file manually to models.credentials + models.entries ' +
+        '(see docs/dev/design/model-registry-two-face-design.md §7)',
+    });
+  }
   const projectLayer = rejectServeBlock(rawProject, 'project config');
   if (projectLayer.error !== undefined) preErrors.push(projectLayer.error);
   const resolvedProject = resolveEnvRefsInLayer(projectLayer.layer as Partial<VesselConfig>, env);

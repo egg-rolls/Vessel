@@ -40,6 +40,30 @@ export function defaultModelForProvider(name: string | undefined): string | unde
 }
 
 /**
+ * 协议工厂默认 baseUrl（两面重构 §3.1）：与 plugins/provider/openai 的 PROVIDERS 表
+ * 及 core AnthropicProvider 默认同值。**仅供 legacy 合成、迁移物化与 test 兜底**——
+ * 注册模型端点恒来自凭证 baseUrl（必填）。自定义 provider 插件协议不在此表（wire 未知）。
+ */
+export const PROTOCOL_DEFAULT_BASE_URLS: Readonly<Record<string, string>> = {
+  openai: 'https://api.openai.com/v1',
+  'openai-compatible': 'https://api.openai.com/v1',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  google: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  mistral: 'https://api.mistral.ai/v1',
+  ollama: 'http://localhost:11434/v1',
+  // Cohere 的 OpenAI 兼容端点在 /compatibility/v1（同 openai 插件注释）
+  cohere: 'https://api.cohere.ai/compatibility/v1',
+  anthropic: 'https://api.anthropic.com',
+};
+
+/** 协议默认端点；未知协议返回 undefined。 */
+export function defaultBaseUrlFor(protocol: string): string | undefined {
+  return Object.hasOwn(PROTOCOL_DEFAULT_BASE_URLS, protocol)
+    ? PROTOCOL_DEFAULT_BASE_URLS[protocol]
+    : undefined;
+}
+
+/**
  * Scheduler 默认值（0.2 起；0.27 起所有 agent/body 都经同一 scheduler）。
  * 不写入 DEFAULT_CONFIG：缺省即按 body 串行。
  */

@@ -17,7 +17,7 @@
  */
 
 import type { ModelEntry, ModelRegistrySnapshot } from '@vessel-agent/config';
-import { resolveEffectiveApiKey, resolveModelRef } from '@vessel-agent/config';
+import { readMigrationReport, resolveEffectiveApiKey, resolveModelRef } from '@vessel-agent/config';
 import type { Plugin } from '@vessel-agent/core';
 import { defaultBaseUrlFor, testConnectivity } from './connectivity';
 import { CredentialStore, resolveDataDir } from './credential-store';
@@ -213,12 +213,15 @@ async function handleList(): Promise<Record<string, unknown>> {
     legacy: entry.legacy,
   }));
   const effective = effectiveOf(snapshot);
+  // §7.5：一次性迁移报告（迁移完成后为空 = 无报告文件）。
+  const migration = await readMigrationReport(resolveDataDir(config));
   return {
     credentials: await credentialDtos(config, snapshot),
     entries,
     ...(snapshot.defaultRef !== undefined ? { default: snapshot.defaultRef } : {}),
     ...(effective !== undefined ? { effective } : {}),
     legacyPresent,
+    ...(migration !== undefined ? { migration } : {}),
   };
 }
 

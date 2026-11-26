@@ -273,6 +273,12 @@ async function releaseLock(lockPath: string, token: string): Promise<void> {
   }
 }
 
+/** 当前异步上下文是否正持有 `configPath` 的写锁（迁移钩子在锁内调用时免嵌套）。 */
+export function isConfigLockHeld(configPath: string): boolean {
+  const lockPath = path.resolve(`${configPath}.lock`);
+  return activePaths.getStore()?.has(lockPath) === true;
+}
+
 /**
  * 在 `configPath` 的跨进程写锁内执行 `fn`（只应包住「读 → 改 → 写」）。
  *
