@@ -150,7 +150,12 @@ export type SettableConfigKey =
   | 'emptyResponse.maxRetries'
   | 'emptyResponse.nudge'
   // q-kanban-proxy：看板 board.json 路径（YAML kanban.board_path）。
-  | 'kanban.boardPath';
+  | 'kanban.boardPath'
+  // auto-gc P1：自动回收四键（YAML `auto_prune`；WebUI 设置面 P3 消费同一白名单）。
+  | 'autoPrune.enabled'
+  | 'autoPrune.intervalHours'
+  | 'autoPrune.olderThanHours'
+  | 'autoPrune.dryRun';
 
 interface ConfigSetTarget {
   /** YAML 根下的块名 */
@@ -199,6 +204,10 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
   'emptyResponse.maxRetries': { block: 'empty_response', yamlKey: 'max_retries' },
   'emptyResponse.nudge': { block: 'empty_response', yamlKey: 'nudge' },
   'kanban.boardPath': { block: 'kanban', yamlKey: 'board_path' },
+  'autoPrune.enabled': { block: 'auto_prune', yamlKey: 'enabled' },
+  'autoPrune.intervalHours': { block: 'auto_prune', yamlKey: 'interval_hours' },
+  'autoPrune.olderThanHours': { block: 'auto_prune', yamlKey: 'older_than_hours' },
+  'autoPrune.dryRun': { block: 'auto_prune', yamlKey: 'dry_run' },
 };
 
 /** 是否为支持的 `config set` 键 */
@@ -277,6 +286,22 @@ export async function setUserConfigValue(
   }
   if (key === 'emptyResponse.nudge' && (typeof value !== 'string' || value.trim() === '')) {
     throw new Error(`invalid_nudge: ${JSON.stringify(value)}`);
+  }
+  // auto-gc P1：与 config validator / 未来设置面（§6.1）同形状同界。
+  if ((key === 'autoPrune.enabled' || key === 'autoPrune.dryRun') && typeof value !== 'boolean') {
+    throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
+  }
+  if (
+    key === 'autoPrune.intervalHours' &&
+    (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 168)
+  ) {
+    throw new Error(`invalid_number: ${key}=${JSON.stringify(value)} (integer in [1, 168])`);
+  }
+  if (
+    key === 'autoPrune.olderThanHours' &&
+    (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 8760)
+  ) {
+    throw new Error(`invalid_number: ${key}=${JSON.stringify(value)} (integer in [0, 8760])`);
   }
 
   const configPath = options.configPath ?? getUserConfigPath();

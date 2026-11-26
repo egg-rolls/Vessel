@@ -1947,6 +1947,22 @@ export interface AgentService {
   /** 立即落盘待写快照；无 snapshot 或写入成功返回 true，写入失败返回 false */
   flushSnapshot(): Promise<boolean>;
   /**
+   * auto-gc P1（D3，additive 可选）：在线 prune 的 agent 记录摘除入口。
+   *
+   * **只接受 `state==='closed' && membership==='left'` 的 id**（扫描判据之外再加一道
+   * 执行期校验，活成员一律拒绝）；任一 id 不合格整批拒绝（不 partial）。摘除走活
+   * registry（`registry.remove`）+ 同步 `flushSnapshot` —— gateway 的快照是整份
+   * registry 定时重写，直接改快照文件会被下一次 flush 复活（本方法存在的理由）。
+   * 已不存在的 id 幂等跳过。返回 false = 摘除/落盘失败（调用方记 kept_agents）。
+   */
+  removeClosedMembers?(ids: readonly string[]): Promise<boolean>;
+  /**
+   * auto-gc P1（additive 可选）：以持久化形状读**全部** registry 记录（含 closed/left），
+   * 与 `scheduleSnapshot` 同一份 `toPersistedRecord` 映射。在线 prune 的快照事实以活
+   * registry 为准（避免读到 flush 前的旧文件）；离线 CLI 仍只读快照文件。
+   */
+  snapshotRecords?(): PersistedAgentRecord[];
+  /**
    * CONTRACT-hot-apply §4：把新的权限规则热应用到**所有存活的成员 ExecutionUnit**。
    *
    * 装配层只需暴露这一条转发入口（执行内核自己知道哪些 ExecutionUnit 还活着）；

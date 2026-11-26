@@ -131,6 +131,7 @@ import {
   createGatewayReloadRunner,
   type GatewayReconfigureTarget,
   type GatewayReloadApplier,
+  stableValue,
 } from './gateway/gateway-reload-wiring';
 import { buildGatewayControlPlane } from './gateway/gateway-wiring';
 import type { GatewayInstanceLock } from './gateway/instance-lock';
@@ -1520,6 +1521,16 @@ async function runWithConfig(result: BootstrapResult) {
         kanbanDeps.boardPath = to;
         return from === to ? [] : [`kanban: board path ${from} → ${to} (hot-applied)`];
       },
+      // auto-gc P1：autoPrune 热应用——调度器自启动起读 live resolver 闭包（每趟求值
+      // 最新 enabled / interval / olderThan / dryRun，cadence 不冻结启动值）；这里把
+      // 重载配置喂进调度器持有的活引用并 reschedule 立即重排挂起定时器（O4：热改即
+      // 重排）。无本地调度器（connectMode）时如实报 requires restart（同 applyFederation 口径）。
+      applyAutoPrune: (next) => {
+        if (result.applyAutoPruneConfig === undefined) {
+          return ['autoPrune: requires restart (no local auto-prune scheduler)'];
+        }
+        return result.applyAutoPruneConfig(next);
+      },
     });
 
     // 配置监听（CONTRACT-hot-apply §2）：校验通过才应用，失败只记日志 + 发失败 notice。
@@ -1528,10 +1539,14 @@ async function runWithConfig(result: BootstrapResult) {
       configPath: nodeConfigPath ?? hotApplyConfigPath,
       debounceMs: hotApplyDebounceMs,
       logger,
-      validate: async () =>
-        toConfigReloadOutcome(
-          await loadConfig(nodeConfigPath !== undefined ? { configPath: nodeConfigPath } : {}),
-        ),
+      validate: async () => {
+        const loaded = await loadConfig(
+          nodeConfigPath !== undefined ? { configPath: nodeConfigPath } : {},
+        );
+        // O6：内容指纹供 config-watch 同内容去重 —— 写后 trigger 已应用的那笔写入，
+        // 其迟到 fs.watch 回声不再跑第二遍管线 / 发空 diff notice 盖掉 hot-applied 摘要。
+        return { ...toConfigReloadOutcome(loaded), fingerprint: stableValue(loaded.config) };
+      },
       apply: async () => {
         // 只请求已注册的 applier：没有 MCP 的部署不该因为 mcp scope 失败。
         const registered = new Set(reloadRunner.registeredScopes());

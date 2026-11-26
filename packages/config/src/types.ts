@@ -262,6 +262,33 @@ export interface VisionConfig {
 }
 
 /**
+ * auto-gc P1（环3）：closed / 归档 team 数据的定时自动回收（YAML `auto_prune`）。
+ *
+ * 判据与 CLI `vessel prune` 完全同源（状态判据：归档 team ∪ closed；`olderThanHours`
+ * 只是可选时间叠加，与 `--older-than` 同一个 `olderThanMs` 入口）。缺省**开启**
+ * （用户裁定：系统应自清洁；安全性由保护不变量保证——状态判据硬前提 / live 守卫 /
+ * main 与活成员零触碰 / 首趟 dry-run）；显式 `false` 才关。自动模式比 CLI 保守，
+ * 缺省叠加 7d 判老（D2），保住 closed 成员的 reinstate 复活窗口。缺省不写入
+ * DEFAULT_CONFIG（trace 先例），由消费方 `startAutoPrune` 解析缺省。
+ */
+export interface AutoPruneConfig {
+  /** 自动回收总开关；缺省 true（系统自清洁；保护不变量保安全）。显式 false 才关。 */
+  enabled?: boolean;
+  /** 调度间隔（小时）；缺省 24，消费方夹取 [1, 168]（同 blob GC 夹取风格）。 */
+  intervalHours?: number;
+  /**
+   * 时间叠加（小时）：只清归档 / 停用时刻早于它的对象；缺省 168（7d）。
+   * 0 = 纯状态判据（与 CLI 缺省同口径；closed 即删，复活窗口消失）。
+   */
+  olderThanHours?: number;
+  /**
+   * true = 永久 dry-run（只报不删，观察模式）；缺省 false。
+   * 无论此键如何，**进程启动后的第一趟永远 dry-run**（同 blob GC）。
+   */
+  dryRun?: boolean;
+}
+
+/**
  * 0.48 M4：外部插件扩展面授权（CONTRACT-0.48 §5）。
  * 只做 allow/deny；路由 / 命令定义仍只来自 manifest。
  */
@@ -1230,6 +1257,8 @@ export interface VesselConfig {
   envInjection?: EnvInjectionConfig;
   /** 0.56：视觉（kill switch / 预算 / 精度 / 预处理 / blob 生命周期）；缺省全部走默认值。 */
   vision?: VisionConfig;
+  /** auto-gc P1：closed / 归档数据定时回收（YAML `auto_prune`）；缺省开启，显式 false 关。 */
+  autoPrune?: AutoPruneConfig;
   /** 空响应兜底（q-empty-response）；缺省 = 启用、nudge 重试 2 次。 */
   emptyResponse?: EmptyResponseConfig;
   /** 0.6.1：工具权限免确认规则 */
