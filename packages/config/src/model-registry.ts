@@ -10,6 +10,7 @@
  * ref = 别称 | 条目键（不再有 vendor/model 两段式）。解析顺序（§4.3）：
  * ① 空 ref → 有效默认（models.default ?? legacy 合成条目 ?? 协议默认模型）；
  * ② 别称精确命中（唯一索引）→ 条目；③ 条目键精确命中 → 条目；
+ * 显式 legacy:<name>/<model> ref → 严格面剥前缀（name 必须命中合成凭证，model 段作 wire）；
  * ④ 未命中且 legacyPresent → ref 原样作 wire model 走 legacy 合成凭证（P0-1 字节等价）；
  * ⑤ 未命中且无 legacy → ModelRefError fail-loud + 候选（vendor 过渡兜底已删，P3 兑现）。
  *
@@ -178,7 +179,10 @@ function legacyPassthrough(snapshot: ModelRegistrySnapshot, wireModel: string): 
  *
  * provider.*（含 env 层覆盖后的值）折成合成凭证 `legacy:<provider.name>` + 合成条目
  * （键 = provider.model 原值）；值留原 config 路径不搬家。loader 的 legacyUserLayer
- * 与 env 层不改——合成发生在合并之后。
+ * 与 env 层不改——合成发生在合并之后。合成凭证恒存在；合成条目只在 legacyPresent=true
+ * 时建——纯 default 层填充的 provider.model（loader 后处理默认值）不是用户配置，
+ * 不建幻影条目（legacyPresent=false 时未命中 ref 按 P3 走 ModelRefError）。
+ * snapshot.legacyModel 字段照旧保留：空 ref 默认链仍透传该值（字节等价）。
  *
  * @param legacyPresent provider.* 是否有非 default 层来源（缺省 true = 保守透传）
  */
@@ -209,7 +213,8 @@ export function synthesizeLegacyRegistry(
   const aliases: Record<string, string> = {};
 
   // legacy 合成条目（键 = provider.model 原值；空串不建条目，默认链仍透传原值）。
-  if (legacyModel !== undefined && legacyModel !== '') {
+  // 仅 legacyPresent=true 时建：default 层填充的 provider.model 不进注册表（无幻影条目）。
+  if (legacyPresent && legacyModel !== undefined && legacyModel !== '') {
     entries[legacyModel] = {
       id: legacyModel,
       wireModel: legacyModel,
@@ -267,8 +272,24 @@ function resolveRegistered(snapshot: ModelRegistrySnapshot, ref: string): Resolv
   const target = hasOwn(snapshot.aliases, ref) ? (snapshot.aliases[ref] as string) : ref;
   const entry = hasOwn(snapshot.entries, target) ? snapshot.entries[target] : undefined;
   if (entry !== undefined) return toResolved(entry);
-  // 显式 legacy:<name>/<model> ref：合成凭证透传（旧 strict 面同口径）。
-  if (target.startsWith('legacy:')) return legacyPassthrough(snapshot, target);
+  // 显式 legacy:<name>/<model> ref：按首个 '/' 切分（model 自身可含 '/'），name 段必须
+  // 命中 legacy 合成凭证（旧 lookupVendor 语义），model 段原样作 wire model 透传。
+  // 裸 legacy:<name>（无 '/'）/ name 不匹配 / model 段为空 → unknown_ref（旧无 slash 即报错）。
+  if (target.startsWith('legacy:')) {
+    const slash = target.indexOf('/');
+    const name = slash === -1 ? target : target.slice(0, slash);
+    const wireModel = slash === -1 ? '' : target.slice(slash + 1);
+    if (name === snapshot.legacyCredentialId && wireModel !== '') {
+      return legacyPassthrough(snapshot, wireModel);
+    }
+    throw new ModelRefError(
+      'unknown_ref',
+      ref,
+      `"${ref}" is not a valid legacy ref; expected "${snapshot.legacyCredentialId}/<model>" ` +
+        '(the synthesized legacy credential followed by a non-empty wire model).',
+      registeredRefs(snapshot),
+    );
+  }
   throw new ModelRefError(
     'unknown_ref',
     ref,
@@ -279,7 +300,8 @@ function resolveRegistered(snapshot: ModelRegistrySnapshot, ref: string): Resolv
 
 /**
  * 解析 ModelRef（§4.3 顺序）。ref 为空（undefined/''）→ 有效默认；无任何默认时返回
- * undefined（调用方沿用既有 fail-fast）。非空 ref 未命中：legacyPresent → 原样透传
+ * undefined（调用方沿用既有 fail-fast）。显式 legacy:<name>/<model> ref 走严格面
+ * （剥前缀 + name 命中检查，不整串透传）。其余非空 ref 未命中：legacyPresent → 原样透传
  * legacy 合成凭证（P0-1 字节等价）；否则 ModelRefError + 候选（P3 收紧，无 vendor 兜底）。
  */
 export function resolveModelRef(
@@ -306,6 +328,11 @@ export function resolveModelRef(
   // ③ 条目键精确命中。
   if (hasOwn(snapshot.entries, ref)) {
     return toResolved(snapshot.entries[ref] as RegistryEntry);
+  }
+  // 显式 legacy:<name>/<model> ref：走严格面剥前缀 + name 命中检查（旧 vendor 命中语义：
+  // wire = 首个 '/' 之后部分）。'legacy:' 前缀保留、条目键构造上不可命中，不得落 ④ 整串透传。
+  if (ref.startsWith('legacy:')) {
+    return resolveRegistered(snapshot, ref);
   }
   // ④ legacy 透传（provider.* 兼容面；不是 vendor 双源）。
   if (snapshot.legacyPresent) {

@@ -12,8 +12,8 @@
 import { RESERVED_BODY_KEYS_ANTHROPIC, RESERVED_BODY_KEYS_OPENAI } from '@vessel-agent/core';
 import type { ConfigValidationError, ConfigValidationWarning, ProviderConfig } from './types.js';
 
-/** 凭证 id 字符集（§3.1：同 vendor id 形状；`legacy:` 前缀保留给合成凭证） */
-export const CREDENTIAL_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+/** 凭证 id 字符集（§3.1：字母/数字/连字符，大小写均可；`legacy:` 前缀保留给合成凭证） */
+export const CREDENTIAL_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$/;
 
 /** 模型条目键字符集（§4.1：wire 名可直接作键，允许 `/` `.` `_` `-`；`legacy:` 前缀保留） */
 export const ENTRY_KEY_RE = /^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$/;
@@ -292,7 +292,7 @@ export function validateCredentialsBlock(
     if (!CREDENTIAL_ID_RE.test(id)) {
       errors.push({
         path: prefix,
-        message: `Credential id "${id}" must match ^[a-z0-9][a-z0-9-]{0,63}$ (kebab-case).`,
+        message: `Credential id "${id}" must match ^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$ (letters, digits, hyphens).`,
       });
     }
     if (!isPlainObject(raw)) {
