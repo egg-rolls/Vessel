@@ -179,7 +179,10 @@ function legacyPassthrough(snapshot: ModelRegistrySnapshot, wireModel: string): 
  *
  * provider.*（含 env 层覆盖后的值）折成合成凭证 `legacy:<provider.name>` + 合成条目
  * （键 = provider.model 原值）；值留原 config 路径不搬家。loader 的 legacyUserLayer
- * 与 env 层不改——合成发生在合并之后。
+ * 与 env 层不改——合成发生在合并之后。合成凭证恒存在；合成条目只在 legacyPresent=true
+ * 时建——纯 default 层填充的 provider.model（loader 后处理默认值）不是用户配置，
+ * 不建幻影条目（legacyPresent=false 时未命中 ref 按 P3 走 ModelRefError）。
+ * snapshot.legacyModel 字段照旧保留：空 ref 默认链仍透传该值（字节等价）。
  *
  * @param legacyPresent provider.* 是否有非 default 层来源（缺省 true = 保守透传）
  */
@@ -210,7 +213,8 @@ export function synthesizeLegacyRegistry(
   const aliases: Record<string, string> = {};
 
   // legacy 合成条目（键 = provider.model 原值；空串不建条目，默认链仍透传原值）。
-  if (legacyModel !== undefined && legacyModel !== '') {
+  // 仅 legacyPresent=true 时建：default 层填充的 provider.model 不进注册表（无幻影条目）。
+  if (legacyPresent && legacyModel !== undefined && legacyModel !== '') {
     entries[legacyModel] = {
       id: legacyModel,
       wireModel: legacyModel,
