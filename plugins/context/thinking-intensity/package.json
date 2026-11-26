@@ -68,7 +68,6 @@
           "type": "integer",
           "default": 2048,
           "minimum": 1024,
-          "maximum": 65536,
           "titleKey": "thinking-intensity.settings.budget_low",
           "order": 30
         },
@@ -76,7 +75,6 @@
           "type": "integer",
           "default": 8192,
           "minimum": 1024,
-          "maximum": 65536,
           "titleKey": "thinking-intensity.settings.budget_medium",
           "order": 40
         },
@@ -84,7 +82,6 @@
           "type": "integer",
           "default": 16384,
           "minimum": 1024,
-          "maximum": 65536,
           "titleKey": "thinking-intensity.settings.budget_high",
           "order": 50
         },
