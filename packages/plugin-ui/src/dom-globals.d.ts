@@ -30,6 +30,9 @@ interface Element extends Node {
   /** 菜单焦点管理用（additive，q-thinking-plugin P3）。 */
   querySelector<E extends Element = Element>(selectors: string): E | null;
   querySelectorAll<E extends Element = Element>(selectors: string): NodeListOf<E>;
+  /** Select 浮层实测高度定位用（additive，用户验收②）。 */
+  readonly scrollHeight: number;
+  readonly clientHeight: number;
 }
 
 /** querySelectorAll 返回值的最小数组_like 形状（可迭代 / 可索引）。 */
@@ -42,6 +45,8 @@ interface NodeListOf<TNode extends Node> {
 
 interface HTMLElement extends Element {
   focus(): void;
+  /** Select 浮层实测高度定位用（additive，用户验收②）。 */
+  readonly offsetHeight: number;
 }
 
 interface HTMLButtonElement extends HTMLElement {

@@ -1183,8 +1183,9 @@
   box-shadow: var(--elev-2);
 }
 
-/* 焦点环不在卡片上出：由 `.composer-field` 的 `:focus-within` 承担（一层环，
-   标出「输入 + 工具栏」整块）。卡片同时再出一层就和容器环叠成双层。 */
+/* 焦点环不在卡片上出：由 `.composer-field` 的 `:has(.composer-input:focus)` 承担
+   （一层环，标出「正在输入」整块；工具栏按钮聚焦不点亮，用户验收③）。卡片同时
+   再出一层就和容器环叠成双层。 */
 
 .composer-target {
   min-width: 0;
@@ -1242,8 +1243,11 @@
    输入区与工具栏读成同一块区域，而不是「卡片里一张小卡 + 一条独立工具栏」。
    扩展槽按钮（插件 UI 的 `bg-sunken`）与圆形发送键保留各自的灰底，不被这一层抹平；
    圆键还有 `--line-strong` 描边，那是它在同色凹槽上的轮廓。
-   焦点环由这一层出（`:focus-within` + `--focus-ring`）：一层环标出整块「输入 +
-   工具栏」，textarea 自身不出环（见 `.composer-input:focus`）。 */
+   焦点环由这一层出（`:has(.composer-input:focus)` + `--focus-ring`）：一层环标出
+   「正在输入」整块，textarea 自身不出环（见 `.composer-input:focus`）。工具栏按钮
+   （thinking / 模型 pill 等）点击/聚焦不点亮整块（用户验收③）——浮窗本身就是点击
+   响应，键盘焦点由 pill 自己的低调灰环承担；否则选档后焦点回 pill，主题色环会
+   常驻输入框外沿。 */
 .composer-field {
   display: flex;
   flex-direction: column;
@@ -1273,13 +1277,17 @@
    对比（sunken 底 vs line-strong 边）：浅色 #f1f1f2 / #d0d0d5（约 1.28:1，一条
    克制的内框），深色 #0e0e10 / #34343a（约 1.9:1，同样克制）—— 是「描出来」而不是
    「染色」，不会和按钮自己的 hover 抢注意力。
-   焦点态让位：`:focus-within` 的 `--focus-ring` 画在边框外，若同时再描一圈灰边就是
-   双框；所以 hover 只在「未聚焦」时描边（`:not(:focus-within)`），聚焦后整块只留环。 */
-.composer-field:hover:not(:focus-within) {
+   焦点态让位：输入聚焦的 `--focus-ring` 画在边框外，若同时再描一圈灰边就是
+   双框；所以 hover 只在「未输入聚焦」时描边（`:not(:has(.composer-input:focus))`），
+   输入聚焦后整块只留环。工具栏按钮聚焦不算输入聚焦：hover 灰边照常（低调）。 */
+.composer-field:hover:not(:has(.composer-input:focus)) {
   border-color: var(--line-strong);
 }
 
-.composer-field:focus-within {
+/* 用户验收③：主题色环只由「文本输入聚焦」点亮（:has 而非 :focus-within）。
+   旧 :focus-within 下点击 pill → 按钮聚焦即点亮整块主题色 border，且 Select
+   关浮窗后焦点回触发器，环常驻不退——浮窗已是点击响应，不需这层额外 border。 */
+.composer-field:has(.composer-input:focus) {
   box-shadow: var(--focus-ring);
 }
 

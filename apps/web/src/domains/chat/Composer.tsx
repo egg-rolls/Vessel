@@ -186,8 +186,9 @@ export function Composer({
 
   return (
     <ChatDock>
-      {/* 焦点环由 `.composer-field` 的 `:focus-within` 出（一层，标出「输入 + 工具栏」），
-          卡片自己不再叠加第二层环。点卡片留白（标题行 / 引用区 / 内衬）也进输入框，
+      {/* 焦点环由 `.composer-field` 的 `:has(.composer-input:focus)` 出（一层，标出
+          「正在输入」整块；工具栏按钮聚焦不点亮，用户验收③），卡片自己不再叠加第二层环。
+          点卡片留白（标题行 / 引用区 / 内衬）也进输入框，
           按钮与输入框自己的点击不被接管（见 `focusComposerInputOnBlankClick`）。 */}
       {/* biome-ignore lint/a11y/noStaticElementInteractions: 点卡片留白聚焦 textarea 是鼠标便捷入口（卡片不是可点控件） */}
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: 键盘流不变：Tab 直接到输入框 / 按钮，留白处不需要键盘等价键 */}

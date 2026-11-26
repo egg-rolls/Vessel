@@ -359,6 +359,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Picking a registered model pins it for this member: the live body and current run stay unchanged; it applies to the next body / resumed run, when an environment notice is appended to the session. Empty = no change.',
   'chat.memberModel.saved': 'Model updated for {name}; applies to the next body / resumed run',
   'chat.memberModel.failed': 'Model switch failed',
+  // Prefix label for the thinking-intensity menu pill (user acceptance ①): "Thinking: <level>"
+  'chat.thinking.label': 'Thinking:',
   // 0.18 UX3: relative time + context length
   'time.today': 'Today',
   'time.yesterday': 'Yesterday',
