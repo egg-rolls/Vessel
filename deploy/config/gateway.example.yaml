@@ -1,0 +1,18 @@
+# gateway 角色用户配置示例（不含密钥；复制到 config/gateway/config.yaml）
+# 设计：docs/dev/design/docker-cd-design.md v2 §5.4。YAML 用 snake_case，加载器自动映射 camelCase（ADR-019）。
+#
+# 两种用法：
+#  - 主形态（docker-compose.yml）：纯平台薄壳。首启创建空注册表 nodes.json（nodes:[]）⇒ 零 spawn；
+#    G4（P2）后 `gateway nodes add node-1 --remote ...` 注册远程 node。
+#  - split-hub（docker-compose.split-hub.yml）：★不要创建 nodes.json ⇒ 保留隐式 node（与平台共用 /data），
+#    下面的 hub 段让隐式 node 出站 join 独立 hub 容器。
+gateway:
+  hostname: 0.0.0.0        # CMD 已 --host 0.0.0.0，双保险
+  proxy_nodes: true        # 0.58 默认开（平台 /nodes/* 代理 node 数据面），显式写出
+hub:
+  auto_start: false        # 不拉本地 hub（独立 hub 容器）
+  direction: node          # 出站 join 远程 hub
+  url: https://hub:8643    # compose DNS 服务名 = 证书 SAN
+  ca_file: /certs/ca.crt
+  join_code_env: HUB_JOIN_CODE
+# 平台 token 从 /data/root-secret 派生（vessel:platform），卷在则稳定；WebUI 用 `vessel token show --purpose platform` 导入。

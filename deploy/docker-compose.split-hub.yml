@@ -1,0 +1,54 @@
+# Vessel split-hub 过渡 profile（★今天零开发可跑的多容器实证形态）
+# 设计：docs/dev/design/docker-cd-design.md v2 §5.5。
+# gateway 容器（含隐式 node）+ 独立 hub 容器。证明「独立打包/部署/卷分离」在 hub 维度今天成立；
+# gateway/node 维度待 G4（P2）。验证点：跨容器 join（配对码）、federation discover、node↔node 直连。
+#
+# 起法：
+#   cp .env.example .env                      # 填 HUB_TOKEN（openssl rand -hex 32）+ HUB_JOIN_CODE + provider keys
+#   bash certs/gen.sh                         # 内部 CA + hub 证书（node-1 证书此 profile 用不到，可忽略）
+#   mkdir -p config/gateway config/hub
+#   cp config/gateway.example.yaml config/gateway/config.yaml   # 保留隐式 node：★不要创建 nodes.json
+#   cp config/hub.example.yaml config/hub/config.yaml
+#   docker compose -f docker-compose.split-hub.yml up -d
+#   docker compose -f docker-compose.split-hub.yml exec gateway vessel hub join https://hub:8643 --code $HUB_JOIN_CODE
+#   docker compose -f docker-compose.split-hub.yml exec gateway vessel federation discover
+name: vessel-split-hub
+networks:
+  vessel-net:
+    driver: bridge
+volumes:
+  gateway-data:
+  hub-data:
+services:
+  gateway:
+    image: ghcr.io/egg-rolls/vessel-gateway:${VESSEL_VERSION:-latest}
+    restart: unless-stopped
+    stop_grace_period: 15s
+    ports:
+      - "127.0.0.1:8642:8642"
+    volumes:
+      - gateway-data:/data        # 隐式 node 与平台共用 /data（会话/身份/root-secret/hub-node.json join 状态）
+      - ./config/gateway:/home/bun/.vessel
+      - ./certs/ca.crt:/certs/ca.crt:ro
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      HUB_JOIN_CODE: ${HUB_JOIN_CODE:-}
+      NODE_EXTRA_CA_CERTS: /certs/ca.crt
+      VESSEL_LOG_LEVEL: ${VESSEL_LOG_LEVEL:-info}
+    networks: [vessel-net]
+    # ★不创建 nodes.json ⇒ 隐式 node（gateway-command.ts:1500）；config/gateway 设 hub.auto_start:false
+    #   + hub.direction:node + hub.url:https://hub:8643 ⇒ 不拉本地 hub，隐式 node 出站 join 远程 hub 容器。
+    #   隐式 node 监听回环 8644（容器内），无非回环 TLS 门禁；出站 join 走 https + 配对码 + ca_file。
+  hub:
+    image: ghcr.io/egg-rolls/vessel-hub:${VESSEL_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - hub-data:/data            # registry.json + join-store + hub secrets
+      - ./config/hub:/home/bun/.vessel
+      - ./certs:/certs:ro
+    environment:
+      HUB_TOKEN: ${HUB_TOKEN:?在 .env 设置（openssl rand -hex 32）}
+      NODE_EXTRA_CA_CERTS: /certs/ca.crt
+    networks: [vessel-net]
+    # hub 非回环三重门禁（allow_remote+TLS+token）由 config/hub 配齐（§5.4）；单 compose 内不发布 8643。

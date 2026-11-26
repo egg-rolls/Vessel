@@ -1,0 +1,47 @@
+# Vessel 构建上下文裁剪（设计 docker-cd-design.md v2 §4）
+# 原则：只留 Dockerfile 实际 COPY 的路径（apps/web、packages、plugins、src、skills、
+# package.json、bun.lock、tsconfig.json），其余全排。node_modules 必须排（宿主 Windows 侧含平台二进制/符号链接）；
+# .env / 密钥 / 数据目录绝不进镜像（RELEASE.md §2.1 检查项 5 同口径）。
+
+# 依赖与产物（镜像内重新安装/构建）
+**/node_modules
+apps/web/dist
+**/*.tsbuildinfo
+
+# git 与开发设施
+.git
+.github
+worktrees
+docs
+examples
+assets
+fleets
+
+# 开发工具配置（runtime 不需要；tsconfig.json 例外保留）
+biome.json
+.editorconfig
+CLAUDE.md
+AGENTS.md
+CHANGELOG.md
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+SECURITY.md
+AUTHORS.md
+
+# 项目层配置与本地状态（部署配置走挂载，不进镜像 = D10）
+vessel.yaml
+.vessel
+.env
+.env.*
+*.log
+
+# 测试与临时文件
+**/__tests__
+**/*.test.ts
+**/*.test.tsx
+scripts
+
+# Docker 部署设施自身（compose/certs/config 走挂载，不进构建上下文）
+deploy
+Dockerfile
+.dockerignore

@@ -1,0 +1,31 @@
+# Vessel quick-start profile（单容器三角色，保留 v1 形态；演示/试用/开发入口）
+# 设计：docs/dev/design/docker-cd-design.md v2 §5.6 / §8.4。
+# 一个 vessel-gateway 容器：隐式 node（不写 nodes.json）+ hub 默认自动拉起，全回环 ⇒ 零证书零注册。
+# ★生产请用主形态多容器（docker-compose.yml）或 split-hub 过渡形态（docker-compose.split-hub.yml）。
+#
+# 起法：
+#   docker compose -f docker-compose.quickstart.yml up -d
+#   docker compose -f docker-compose.quickstart.yml exec gateway vessel token show --purpose platform  # WebUI 导入
+# 或一键 docker run（§8.4）：
+#   docker run -d --name vessel -p 127.0.0.1:8642:8642 -v vessel-data:/data \
+#     -e OPENAI_API_KEY=sk-... ghcr.io/egg-rolls/vessel-gateway:latest
+name: vessel-quickstart
+volumes:
+  vessel-data:
+services:
+  gateway:
+    image: ghcr.io/egg-rolls/vessel-gateway:${VESSEL_VERSION:-latest}
+    restart: unless-stopped
+    stop_grace_period: 15s
+    ports:
+      - "127.0.0.1:8642:8642"
+    volumes:
+      - vessel-data:/data         # 隐式 node 与平台共用 dataDir（会话/身份/root-secret/本地 hub 都在此卷）
+      # 可选用户配置（默认全回环即可起，无需 config init）：
+      # - ./config:/home/bun/.vessel
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      VESSEL_LOG_LEVEL: ${VESSEL_LOG_LEVEL:-info}
+    # 全回环：platform 127.0.0.1:8642（容器内 0.0.0.0 由 CMD --host），隐式 node 8644 / 本地 hub 8643 均回环，
+    # 无非回环 TLS 门禁 ⇒ 不需要 certs。down/up 后 token 不变（root-secret 在 vessel-data 卷）。
