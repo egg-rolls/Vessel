@@ -92,6 +92,12 @@ export interface UseResourceOptions<T> {
   pollMs?: number;
   /** 页面隐藏时暂停轮询（默认 true）。 */
   pauseWhenHidden?: boolean;
+  /**
+   * opt-in：无轮询时页面回可见也重读一次（inbox 统一批 §6.5 R2；缺省 false ⇒
+   * 存量消费点零影响）。去 interval 的配套改动 —— 现状把 visibility 刷新绑死在
+   * pollMs 上，零轮询的面板靠这一条承接「事件丢了但用户回到标签页」的静默缺口。
+   */
+  resyncOnVisible?: boolean;
   /** 依赖变化触发重新加载；必须是可 JSON 序列化的原始值。 */
   deps?: readonly (string | number | boolean | null | undefined)[];
   /** 首帧即视为已加载的数据（例如从列表带过来的摘要）。 */
@@ -106,13 +112,15 @@ export interface UseResourceResult<T> {
 
 /**
  * 单个请求的异步状态：首次 loading、刷新保留旧数据、错误保留旧数据、
- * generation guard 保证旧请求不覆盖新结果；可选轮询并在页面隐藏时暂停。
+ * generation guard 保证旧请求不覆盖新结果；可选轮询并在页面隐藏时暂停；
+ * opt-in `resyncOnVisible` 让零轮询消费点回可见时也重读一次（§6.5 R2）。
  */
 export function useResource<T>({
   load,
   enabled = true,
   pollMs,
   pauseWhenHidden = true,
+  resyncOnVisible = false,
   deps = [],
   initialData,
 }: UseResourceOptions<T>): UseResourceResult<T> {
@@ -172,7 +180,9 @@ export function useResource<T>({
     if (shouldPoll(pollMs, pauseWhenHidden, visibility)) {
       timerRef.current = window.setInterval(run, pollMs);
     }
-    if (!pauseWhenHidden || !pollMs) return;
+    // visibility 监听的两条理由：轮询暂停/恢复（pauseWhenHidden && pollMs），或
+    // 零轮询消费点的回可见重读（resyncOnVisible，§6.5 R2）。都没有 ⇒ 不挂监听。
+    if (!(pauseWhenHidden && pollMs) && !resyncOnVisible) return;
     const onVisibility = () => {
       window.clearInterval(timerRef.current);
       timerRef.current = undefined;
@@ -188,7 +198,7 @@ export function useResource<T>({
       window.clearInterval(timerRef.current);
       timerRef.current = undefined;
     };
-  }, [enabled, pollMs, pauseWhenHidden, depKey, run]);
+  }, [enabled, pollMs, pauseWhenHidden, resyncOnVisible, depKey, run]);
 
   return {
     state,

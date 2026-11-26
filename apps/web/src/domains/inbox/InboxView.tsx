@@ -12,18 +12,18 @@
  * **防串台**：agent 级全量天然含所有会话的条目 ⇒ 每行标注归属（有 `session_id` ⇒
  * 短 id + 去会话链接；缺省 ⇒ 「无归属（wake/quiet）」），agent 选择器显式切换。
  *
- * **SWR（红线：事件触发重读 + 兜底轮询）**：
- * - live 触发器 `useAgentInboxRefreshTick`（agent 级匹配：入队事件按 `data.agent_id`，
- *   inbox 工具终态帧按 agent_id / 会话归属 ∈ body sessions），250ms 去抖后重读；
- * - 兜底轮询：非空 2s（条带同款）；空态 10s —— 这是用户主动打开的专页，旧 gateway
- *   事件面可能缺，空态也要能看见新消息进来（与条带「空态零流量」不同，设计审计 §3）；
- *   `pauseWhenHidden`（useResource 内建）。
+ * **SWR（红线：事件触发重读，零 interval）**：
+ * - live 触发器 `useAgentInboxRefreshTick`（agent 级匹配：主判据 `agent.inbox.changed`
+ *   按 `data.agent_id`；补充词汇入队帧 / inbox 工具终态帧，§6.4），250ms 去抖后重读；
+ * - 零 interval（§6.5 用户理想裁定）：兜底面 = resync 点 R1-R7 —— epoch 重读（R1）、
+ *   回可见 `resyncOnVisible`（R2）、全局刷新信号（R3）、写后重读（R5）、切 agent（R6）、
+ *   live 事件（R7）。事件丢失的静默缺口由 R2/R3 承接（已知代价，设计 §10 如实记录）。
  * - **数据永远来自那次 RPC**，事件只当触发器（条带三条硬口径逐字继承）。
  *
  * **写操作**复用现有 RPC、与条带同一套来源分档：human 源「取消」（recall 真删）/
  * 「我已处理」（claim，不可逆）；非 human 源 held「留档」（recall → unhold）。
  * 与条带的差别：写成功后**立即重读对齐**（不做乐观本地减法）—— 本页没有条带那套
- * 「2s 轮询缓存 + 客户端 pending 对账」的包袱，一次 RPC 往返就是真相，数据永远
+ * 「读数缓存 + 客户端 pending 对账」的包袱，一次 RPC 往返就是真相，数据永远
  * 来自读。不给「收回编辑」：本页没有草稿槽（设计审计 §1）。
  *
  * **消费后消失是真相不是缺陷**：inbox read 消费后条目不再回（`inbox.ts` consumed
@@ -64,12 +64,6 @@ type InboxRoute = { domain: 'inbox'; agentId?: string };
 
 /** live 触发 → 重读的去抖（条带同款）：事件 burst 只换一次读。 */
 const REFRESH_DEBOUNCE_MS = 250;
-/** 非空兜底轮询（条带同款）。 */
-const POLL_MS = 2000;
-/** 空态兜底轮询：专页要能看见新消息进来，但空态不必 2s 一趟。 */
-const EMPTY_POLL_MS = 10000;
-/** roster 慢轮询：只为选择器跟上 agent 增删，不是 inbox 数据通道。 */
-const ROSTER_POLL_MS = 30000;
 
 /** roster 条目的 canonical id（`id` 优先，`agent_id` 兜底 —— 与 main-session 同款）。 */
 function agentIdOf(summary: AgentSummary): string {
@@ -100,11 +94,12 @@ export function InboxView({
   const agentId = route.agentId ?? MAIN_AGENT_ID;
 
   // ── roster：agent 选择器 + 工具帧归属用的 body sessions ──
+  // 零 interval（§6.5）：roster 增删靠 epoch 重读 + 回可见 resync + 全局刷新承接。
   const roster = useResource<readonly AgentSummary[]>({
     load: () => client.listAgents(),
     enabled: hasToken,
     deps: [epoch],
-    pollMs: ROSTER_POLL_MS,
+    resyncOnVisible: true,
   });
   const agents = resourceData(roster.state) ?? [];
   const selected = agents.find((entry) => agentIdOf(entry) === agentId);
@@ -119,12 +114,13 @@ export function InboxView({
   }, [selected]);
 
   // ── inbox 真相：agent 级全量（不带 session_id）──
-  const [pollMs, setPollMs] = useState(EMPTY_POLL_MS);
+  // 零 interval（§6.5 用户理想裁定）：live 触发（R7）+ epoch/agent 切换（R1/R6）+
+  // 回可见 resync（R2）+ 全局刷新（R3）+ 写后重读（R5）承接全部兜底，不留定时器。
   const inbox = useResource<AgentInboxResponse>({
     load: () => client.inbox({ agent_id: agentId, include_held: true }),
     enabled: hasToken,
     deps: [agentId, epoch],
-    pollMs,
+    resyncOnVisible: true,
   });
   const data = resourceData(inbox.state);
   // 排序复用条带纯函数（held 在前、ts 升序）；sort 只重排不改元素，
@@ -133,10 +129,6 @@ export function InboxView({
     () => orderPendingEntries(data?.entries ?? []) as AgentInboxEntry[],
     [data],
   );
-  useEffect(() => {
-    const next = entries.length > 0 ? POLL_MS : EMPTY_POLL_MS;
-    setPollMs((prev) => (prev === next ? prev : next));
-  }, [entries.length]);
 
   // ── SWR：live 触发（agent 级）→ 去抖重读；数据永远来自 RPC ──
   const tick = useAgentInboxRefreshTick(snapshot.entries, agentId, agentSessions);

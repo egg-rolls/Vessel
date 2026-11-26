@@ -14,7 +14,8 @@
  * - **数据永远来自那次 RPC 读**，事件只当触发器（切会话 / 重连 / 本会话新受理一次发送 /
  *   inbox 变更 live 事件：`inbox read/delete` 消费、新条目入队，**agent 级**判据见
  *   `../inbox/agent-inbox-refresh.ts`；面板展开也重读一次，D-5/R4），
- *   非空时 2s 兜底轮询（空态零流量）；取数前 250ms debounce，让「发完立刻开跑」的条目
+ *   零 interval（§6.5 用户理想裁定），兜底面 = resync 点 R1-R7（重连/回可见/全局刷新/
+ *   展开/写后/切换/live 事件）；取数前 250ms debounce，让「发完立刻开跑」的条目
  *   不在条带上闪一下；
  * - 条带只做「还有几条在等」，写入口按来源分档（见下）。
  *
@@ -61,6 +62,7 @@
  * 主动要看真相，展开是有意义读）。同源折叠组（「N 条」）与三态无关，各自独立开合。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRefreshSignal } from '../../app/refresh';
 import { useToast } from '../../components/ToastProvider';
 import { Icon } from '../../components/ui';
 import type { GatewayClient } from '../../gateway/client';
@@ -122,8 +124,6 @@ function identityOf(entry: PendingStripEntry, fallbackName?: string): string | u
 
 /** 取数前的去抖：`agent.message.queued` 先于 run 开跑到达，空闲会话里那条毫秒级就被消费。 */
 const DEBOUNCE_MS = 250;
-/** 非空时的兜底轮询（空态零流量）：事件只当触发器，数据永远来自这次读。 */
-const POLL_MS = 2000;
 
 /** 一次读到的 agent 级待处理条目（连同它属于哪个 agent，换 agent 时旧响应不串台）。 */
 interface PendingInbox {
@@ -147,7 +147,7 @@ function toEntry(entry: AgentInboxEntry): PendingStripEntry {
 /**
  * 就地改一条条目的 `status`：乐观更新与回滚共用这一份（不动顺序、不动别的条目）。
  *
- * 为什么不整体快照回退：unhold 只来回翻一条 `held ↔ unread`，轮询可能同时在更新别的
+ * 为什么不整体快照回退：unhold 只来回翻一条 `held ↔ unread`，重读可能同时在更新别的
  * 条目 —— 回滚整摞会把别人的更新一起抹掉。
  */
 function withEntryStatus(
@@ -379,9 +379,9 @@ export function PendingStrip({
   /**
    * 已经**发出去**（服务端取用、回显到达）的 `message_id`。
    *
-   * 条带的 `agents.inbox` 读数是**上一次轮询的缓存**（非空时每 2 s 一次）：那条消息被取用
-   * 之后，缓存里还留着它，最长 2 s 内会与「会话里那条正常气泡」同时出现在屏上 ——
-   * 又是同一条消息两份。这份名单让条带立刻把旧读数滤掉（不等下一次轮询，也不用猜）。
+   * 条带的 `agents.inbox` 读数是**上一次读的缓存**（live 触发 / resync 才重读）：那条消息
+   * 被取用之后，缓存里还留着它，下一次重读前会与「会话里那条正常气泡」同时出现在屏上 ——
+   * 又是同一条消息两份。这份名单让条带立刻把旧读数滤掉（不等下一次重读，也不用猜）。
    */
   sentMessageIds?: readonly string[];
   /**
@@ -413,7 +413,7 @@ export function PendingStrip({
    *
    * 为什么需要：main `inbox read` 消费排队消息会取消对应 queued run —— 它从未开跑，
    * 永不发 `user.message` / `run.started` 回显，客户端 pending 只认回显摘除 ⇒ 那行
-   * 「等待中 human」常驻到刷新。live 触发器 / 2s 轮询只重读服务端条目，碰不到客户端行；
+   * 「等待中 human」常驻到刷新。live 触发器 / resync 重读只重读服务端条目，碰不到客户端行；
    * 这一步把客户端行钉回服务端真相。`readStartedAt` 是本次读**发起**的时刻（防旧读数
    * 误删刚入队的 pending，判据见 store）。缺省 = 宿主没有 pending store（设计预览），
    * 只对账不了，不影响服务端条目那一半。
@@ -446,7 +446,7 @@ export function PendingStrip({
   const [pending, setPending] = useState<PendingInbox | null>(null);
   /** 在途的写操作（取消 / 收回编辑 / 我已处理）：同一条消息同时只允许一次，三颗键一起禁用。 */
   const [cancelling, setCancelling] = useState<ReadonlySet<string>>(new Set());
-  /** 本地重读（写操作被拒 / 出错后与服务端对齐）。 */
+  /** 本地重读触发器：写操作后（成功/失败都重读对齐，R5/§4.5）+ 展开（R4）+ 回可见（R2）+ 全局刷新（R3）。 */
   const [reloadTick, setReloadTick] = useState(0);
   /** 同源折叠组的展开状态（只影响展示：组内条目各自仍是真实的待处理条目）。 */
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set());
@@ -490,7 +490,7 @@ export function PendingStrip({
           });
         }
       } catch {
-        // 读失败：保留上一份（下次轮询 / 触发器再试），不弹 toast。
+        // 读失败：保留上一份（下次触发器 / resync 再试），不弹 toast。
       }
     },
     [client, sessionId, onReconcile],
@@ -511,7 +511,6 @@ export function PendingStrip({
 
   const current = agentId !== undefined && pending?.agentId === agentId ? pending : null;
   const entries = current?.entries ?? [];
-  const hasPending = entries.length > 0;
 
   // 兜底认领升级（P0-A 配套）：没挂 messageId 的 pending 若按摘要认领到这次读数里的
   // 条目，把服务端 id 挂上（与渲染顶替同一份贪心配对）。升级之后消费对账才能按 id
@@ -551,12 +550,19 @@ export function PendingStrip({
     return [...serverRows, ...clientRows];
   }, [entries, pendings, sentMessageIds, cancelling]);
 
-  // 非空时才轮询：空态零流量（条带绝大多数时间是空的）。
+  // 零 interval（用户理想裁定，§6.5）：轮询已删，兜底面全部事件/用户驱动 ——
+  // R2 页面回可见重读一次（承接「连接活着但事件丢了」的静默缺口；条带不是 useResource
+  // 消费点，visibility 监听自己挂，与 useResource.resyncOnVisible 同口径）；
+  // R3 全局刷新信号（命令面板「刷新当前视图」，InboxView 同款）。
   useEffect(() => {
-    if (agentId === undefined || !hasPending) return;
-    const id = window.setInterval(() => void load(agentId), POLL_MS);
-    return () => window.clearInterval(id);
-  }, [agentId, hasPending, load]);
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      setReloadTick((value) => value + 1);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+  useRefreshSignal(useCallback(() => setReloadTick((value) => value + 1), []));
 
   // 展开态给全部组（slice 上界取 MAX_SAFE_INTEGER = 不裁）；默认态按 previewCount 裁。
   const view = useMemo(
@@ -583,8 +589,8 @@ export function PendingStrip({
   /**
    * 取消一条待处理输入：`agents.recall`（human 源 = 真删）。
    *
-   * 成功后**直接从条带里去掉**（不重读）：条目已经不在待处理集合里，下一次轮询也会得到
-   * 同样的结果；失败 / 未受理则重读一次与服务端对齐，并给出提示，不本地假装成功。
+   * 成功后**直接从条带里去掉**（即时反馈）+ 立即重读对齐（R5/§4.5）：条目已经不在待处理
+   * 集合里，重读确认同一份真相；失败 / 未受理则重读一次与服务端对齐，并给出提示，不本地假装成功。
    */
   const handleCancel = useCallback(
     async (messageId: string) => {
@@ -607,6 +613,8 @@ export function PendingStrip({
                 },
           );
           toast.success(t('chat.toast.queueCancelled'));
+          // R5（§4.5）：成功也立即重读对齐 —— 本地减法是即时反馈，真相以读为准。
+          setReloadTick((value) => value + 1);
         } else {
           toast.error(t('chat.toast.cancelNotAccepted'));
           setReloadTick((value) => value + 1);
@@ -634,7 +642,7 @@ export function PendingStrip({
    *
    * 于是这里做**乐观更新 + 按 id 回滚**：先把这一条就地翻成 `unread`（那颗键随之消失、
    * 排序把它排到还 held 的后面），RPC 被拒 / 抛错时按 id 翻回 `held` 再重读对齐。只回滚
-   * 自己动过的那一条，不整体快照回退 —— 轮询可能同时在更新别的条目。
+   * 自己动过的那一条，不整体快照回退 —— 重读可能同时在更新别的条目。
    */
   const handleUnhold = useCallback(
     async (messageId: string) => {
@@ -654,6 +662,8 @@ export function PendingStrip({
         const deleted = Array.isArray(result?.deleted) ? result.deleted : [];
         if (deleted.includes(messageId)) {
           toast.success(t('chat.pending.unheld'));
+          // R5（§4.5）：乐观翻 unread 是即时反馈，成功也重读一次与服务端对齐。
+          setReloadTick((value) => value + 1);
         } else {
           // 服务端没受理（条目已经被别处处理掉了）：翻回去，再重读一次对齐。
           setPending((prev) =>
@@ -753,6 +763,8 @@ export function PendingStrip({
                 },
           );
           toast.success(t('chat.pending.editTaken'));
+          // R5（§4.5）：成功也立即重读对齐（本地减法只是即时反馈）。
+          setReloadTick((value) => value + 1);
         } else {
           toast.error(t('chat.pending.editRecallRejected'));
           setReloadTick((value) => value + 1);
@@ -809,6 +821,8 @@ export function PendingStrip({
                 },
           );
           toast.success(t('chat.pending.claimTaken'));
+          // R5（§4.5）：成功也立即重读对齐（本地减法只是即时反馈）。
+          setReloadTick((value) => value + 1);
         } else {
           // 没拿成就别猜「为什么」：reason 由服务端给，翻成人话再说。
           const skip = (result?.skipped ?? []).find((entry) => entry.message_id === messageId);
@@ -866,6 +880,8 @@ export function PendingStrip({
                 entries: prev.entries.filter((entry) => entry.message_id !== messageId),
               },
         );
+        // R5（§4.5）：撤成功也重读对齐（调用方随后做本地编辑/重试，真相以读为准）。
+        setReloadTick((value) => value + 1);
         return true;
       } catch (error) {
         toast.error(errorMessage(error));

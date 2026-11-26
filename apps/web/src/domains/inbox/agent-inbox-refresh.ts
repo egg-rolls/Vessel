@@ -6,16 +6,21 @@
  * InboxView（真相视图）与 ChatView → PendingStrip（条带，I-1 agent 级取数后触发器同口径；
  * 会话级 `useInboxRefresh.ts` 已退役删除，不留两套触发器）。
  *
- * 认两类事件：
- * - `agent.message.queued` 且 `data.agent_id === agentId`：服务端一条事件覆盖三种
- *   投递（input / wake / quiet，`service.ts#emitMessageQueued` 头注），`agent_id`
- *   由 `emitForSession` 恒带 —— 所以无 `session_id` 的 wake/quiet 投递也能触发
- *   （这正是会话级触发器看不见的那一半）。
- * - `tool.call.completed` / `tool.call.failed` 且 `tool_name === 'inbox'`：模型的
- *   read / delete 在 handler 里已改完 inbox 状态，完成帧到达即重读。工具帧不带
- *   `agent_id`，归属两条路：`data.agent_id` 命中（新 gateway 若带），或事件的会话
- *   归属（EventStore 按 run 记的 `sessionId`，缺省读 `data.session_id`）落在该
- *   agent 的 body sessions 集合里（roster `bodies` 派生，body_id ≡ session_id）。
+ * 认三类事件（§6.4 完整词汇，主判据 + 补充）：
+ * - `agent.inbox.changed` 且 `data.agent_id === agentId`：**主判据**（新 gateway）。
+ *   store 状态机每个 mutation 口（append/hold/unhold/release/consume/claim/discard）
+ *   落状态后一条，recall/claim/跨会话/wake-quiet 全覆盖 —— 事件只当触发器（I-2）。
+ * - `agent.message.queued` 且 `data.agent_id === agentId`：补充词汇（旧 gateway 降级
+ *   保活，§6.6）。服务端一条事件覆盖三种投递（input / wake / quiet），`agent_id`
+ *   由 `emitForSession` 恒带 —— 无 `session_id` 的 wake/quiet 投递也能触发。
+ * - `tool.call.completed` / `tool.call.failed` 且 `tool_name === 'inbox'`：补充词汇
+ *   （同②）。模型的 read / delete 在 handler 里已改完 inbox 状态，完成帧到达即重读。
+ *   工具帧不带 `agent_id`，归属两条路：`data.agent_id` 命中（新 gateway 若带），或
+ *   事件的会话归属（EventStore 按 run 记的 `sessionId`，缺省读 `data.session_id`）
+ *   落在该 agent 的 body sessions 集合里（roster `bodies` 派生，body_id ≡ session_id）。
+ *
+ * ②③不是过渡态双系统：新 gateway 下①覆盖全部，②③冗余但经去抖无害；旧 gateway 下
+ * ②③是会话内唯一信号。事件丢失的静默缺口由 resync 点承接（R1-R6，§6.5，零 interval）。
  *
  * 水位用 `seq` 单调递增（与 `usePendingSends` 同款）：重连回放 / 回填重放不会
  * 把同一条事件吃两次；换 agent / seq 纪元回退时水位重置重扫 —— 重扫最多多触发一次
@@ -36,6 +41,9 @@ const TOOL_TERMINAL_TYPES: readonly string[] = ['tool.call.completed', 'tool.cal
 /** 入队事件（与 `pending-placement.ts` 同一个字面）。 */
 const QUEUED_EVENT_TYPE = 'agent.message.queued';
 
+/** inbox 状态机变更帧（§6.2，store onChange 钩子唯一来源）——触发器主判据。 */
+const INBOX_CHANGED_EVENT_TYPE = 'agent.inbox.changed';
+
 /**
  * 这条事件是否意味着「`agentId` 这个 agent 的 inbox 可能变了」（纯函数）。
  *
@@ -43,7 +51,7 @@ const QUEUED_EVENT_TYPE = 'agent.message.queued';
  * 门禁 / 驱动也可以拿一条事件直接喂进来 —— 两处走同一份判据。
  *
  * `agentSessions` = 该 agent 的 body session 集合（含 primary；body_id ≡ session_id）。
- * 空集时工具帧无从归属 ⇒ 不触发（入队事件仍按 `agent_id` 触发，兜底轮询覆盖其余）。
+ * 空集时工具帧无从归属 ⇒ 不触发（①②仍按 `agent_id` 触发，其余由 resync 点承接）。
  */
 export function agentInboxChangeOf(
   entry: {
@@ -55,6 +63,9 @@ export function agentInboxChangeOf(
 ): boolean {
   const event = entry.event;
   const data = event.data ?? {};
+  // ① 主判据：store 状态机变更帧（全 mutation 口，§6.2）。
+  if (event.type === INBOX_CHANGED_EVENT_TYPE) return data.agent_id === agentId;
+  // ② 补充：入队帧（旧 gateway 降级保活）。
   if (event.type === QUEUED_EVENT_TYPE) return data.agent_id === agentId;
   if (!TOOL_TERMINAL_TYPES.includes(event.type) || data.tool_name !== INBOX_TOOL_NAME) {
     return false;
