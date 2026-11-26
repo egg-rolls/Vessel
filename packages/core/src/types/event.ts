@@ -118,8 +118,10 @@ export interface LlmRetryPayload extends BaseEventPayload {
  * 模型返回「无工具调用 + content 纯空白」时一条：`action: 'seamless'` = 无感重调
  * （丢弃空轮、零注入，用已有 transcript 原样重调）；`action: 'nudge'` = 已追加继续提示
  * 并重新轮询（`escalated: true` = 无感重试耗尽后的升级兜底）；`action: 'exhausted'` =
- * 重试上限耗尽（或 maxRetries=0），回落原始终止行为。
- * 归内部事件层（默认隐藏）：它是过程信号不是失败——终稿仍由 `run.completed` 承担。
+ * 重试上限耗尽（或 maxRetries=0），run 标 failed（`empty_response_exhausted`，
+ * q-empty-exhaust）并经既有 peer 链路通知 parent，不再回落空终稿。
+ * seamless/nudge 归内部事件层（默认隐藏）：它们是过程信号不是失败；exhausted 是
+ * 终态失败的留痕，随后由 `run.failed` 承担终稿。
  * seamless 动作**不伴随 llm.response**：被丢弃的空轮不进 durable transcript（零疤痕）。
  */
 export interface LlmEmptyResponsePayload extends BaseEventPayload {
@@ -133,7 +135,7 @@ export interface LlmEmptyResponsePayload extends BaseEventPayload {
   finish_reason: string;
   /**
    * seamless = 无感重调（丢弃空轮、零注入）；nudge = 注入继续提示重新轮询；
-   * exhausted = 限次耗尽，回落原始终止行为。
+   * exhausted = 限次耗尽，run 标 failed（empty_response_exhausted）并通知 parent。
    */
   action: 'seamless' | 'nudge' | 'exhausted';
   /** nudge 是否为无感重试耗尽后的升级兜底（true = 打破空模式的最后一击） */

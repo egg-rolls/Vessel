@@ -57,6 +57,10 @@ const CODE_META: Readonly<
   atomic_write_failed: { category: 'internal', retryable: true, phase: 'checkpoint' },
   conflict: { category: 'internal', retryable: false, phase: 'input' },
   limit_blocked: { category: 'internal', retryable: false, phase: 'run' },
+  // q-empty-exhaust：空响应兜底耗尽（seamless + nudge 仍空）。category=internal 而非
+  // provider ⇒ 不触发 0.55 硬错误闸（parent 催续可直接接单）；retryable=false：
+  // 同一份请求重发大概率再空，下一步靠 parent 催续 / 人介入。
+  empty_response_exhausted: { category: 'internal', retryable: false, phase: 'llm' },
   // 0.52 PII 句柄：三档失败原因 + 未审批的 reveal。都是**动作错误**：
   // 同一个占位符重试必然再失败 ⇒ retryable 一律 false，下一步靠错误文本给。
   pii_unknown_handle: { category: 'tool', retryable: false, phase: 'tool' },

@@ -5,7 +5,8 @@
  * 缺省走**无感重试**（seamless）——丢弃空轮、用已有 transcript 原样重调（零注入
  * 零疤痕），连续空耗尽 maxRetries 后升级一次 nudge 打破空模式；seamless=false
  * 走一期 nudge 注入路径。限次防死循环，耗尽落 `llm.empty_response`(exhausted)
- * 后回落原始终止行为。
+ * 后抛 `EmptyResponseExhaustedError` ⇒ run 标 failed，既有 peer 链路通知 parent
+ * （q-empty-exhaust，防静默早退）。
  *
  * ## 缺省 = 不注入 = core 内置缺省（启用、无感重试 2 次 + 升级一次 nudge）
  *
