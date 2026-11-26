@@ -134,7 +134,7 @@ const RESTART_FIELDS: readonly RestartField[] = [
 ];
 
 /** 稳定序列化（对象键排序；undefined 也参与比较） */
-function stableValue(value: unknown): string {
+export function stableValue(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableValue).join(',')}]`;
   if (typeof value === 'object' && value !== null) {
     const record = value as Record<string, unknown>;

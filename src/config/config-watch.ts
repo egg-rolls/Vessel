@@ -28,6 +28,14 @@ export interface ConfigReloadOutcome {
   valid: boolean;
   /** 校验错误的可读描述；`valid === true` 时为空 */
   errors: string[];
+  /**
+   * O6 additive：本次读到的配置内容指纹（装配层用 stableValue 一类稳定序列化）。
+   * 提供时启用「同内容去重」：与上一次**成功应用**的内容相同 ⇒ 跳过 apply 与 notice。
+   * 治的是写后双应用：config.set 写盘 → 同步 trigger 已应用一遍，同一次写入迟到的
+   * fs.watch 事件又排第二趟 —— 第二趟 diff 必空，其「reloaded」notice 反而盖掉第一趟
+   * 的 hot-applied 摘要（观测面谎报 fallback）。缺省（旧装配层）行为逐字不变。
+   */
+  fingerprint?: string;
 }
 
 export interface ConfigWatchOptions {
@@ -126,6 +134,8 @@ export function startConfigWatch(options: ConfigWatchOptions): ConfigWatchHandle
   let chain: Promise<void> = Promise.resolve();
   const scope = options.scope ?? 'config';
   const target = path.resolve(options.configPath);
+  /** O6：上一次成功应用的配置内容指纹（同内容去重，见 ConfigReloadOutcome.fingerprint）。 */
+  let lastAppliedFingerprint: string | undefined;
 
   const runOnce = async (): Promise<void> => {
     if (closed) return;
@@ -161,6 +171,15 @@ export function startConfigWatch(options: ConfigWatchOptions): ConfigWatchHandle
       return;
     }
 
+    // O6 同内容去重：本次读到的内容与上一次成功应用的一致 ⇒ 这趟是同一笔写入的
+    // 迟到回声（写后 trigger 已应用过），跳过 apply 与 notice —— 不跑第二遍管线，
+    // 也不让空 diff 的「reloaded」notice 盖掉真正的 hot-applied 摘要。
+    // 真变更内容指纹必不同，绝不会被吞；apply 失败不推进指纹，下一趟照常重试。
+    if (outcome.fingerprint !== undefined && outcome.fingerprint === lastAppliedFingerprint) {
+      options.logger?.debug('config.watch.unchanged', { path: target });
+      return;
+    }
+
     let summaries: string[];
     try {
       summaries = await options.apply();
@@ -171,6 +190,7 @@ export function startConfigWatch(options: ConfigWatchOptions): ConfigWatchHandle
       return;
     }
     if (closed) return;
+    if (outcome.fingerprint !== undefined) lastAppliedFingerprint = outcome.fingerprint;
     options.logger?.info('config.watch.applied', {
       path: target,
       scopes: summaries.length,
