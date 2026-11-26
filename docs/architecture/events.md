@@ -65,6 +65,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/obser
 | `session.saved` / `session.deleted` / `session.titled` | core / 装配层 → 观测 | 会话持久化（0.5）；`session.titled` payload `{ session_id, title }`，写前重读保留人工标题 |
 | `agent.restarting` / `agent.restarted` / `agent.retired`；`agent.spawned`（带来源）/ `session.created` / `session.activated` / `agent.session.activated` / `agent.create.failed` | AgentService → 观测 | binding 生命周期（restart 0.34；有来源 create 0.39）；payload 带 agent / session / epoch；`agent.retired` payload `{ body_id, epoch, reason }`（rotate / restart / close / 回收共用）。**rotate 只发两条**：旧 body 退役的 `agent.retired`（在 rotate 工具内、旧 run 未结束时即发）与新 primary 的 `agent.session.activated`（切换与快照之后发），启动嘱托在其后 admit；ADR-092 设想的 `agent.rotating` / `agent.rotated` / `agent.rotate.failed` 从未实现，0.51 删除（见该 ADR 的 Errata）。旧 `agent.forked` / `agent.compact_forked` / `session.forked` 只读渲染 |
 | `agent.message.queued` | AgentService → 观测 | 收件箱投递，一条事件三种模式：payload `{ delivery, message_id, from, state?, to?, wake?, conversation_id? }`；`delivery: 'input'` 会进 run 队列，也只有它带 `state`；`'wake'` 落盘时只追加 inbox（目标忙就到此为止，不打断在跑的那轮），空闲时 service 再把**队头**那条的正文直投成下一轮 run input（带 `to` / `wake`，`wake=false` 表示这一步什么都没做，`true` 表示真的投了：直投或退回摘要唤醒）；`'quiet'` 只落 inbox。从 `'wake'` 升级成直投时同一条消息会再发一次 `delivery: 'input'`（同 `message_id`），这才是它真的入队的那一刻；唤醒 / 只落盘都不写 `state`，观测面不得把这两类当成入队。旧 `agent.message.notified` 不再发布，落盘历史只读 |
+| `agent.inbox.changed` | AgentInboxStore onChange → AgentService → 观测 | agent 级 inbox 状态机变更信号（inbox 统一批 §6.2）：payload `{ reason: appended/held/unheld/released/consumed/claimed/discarded, message_ids, delivery? }` + emitForSession 恒带的 agent/session/visibility/name/ts。store 每个 mutation 口落状态后一条（no-op 不发；纯读不发），补齐 recall/claim 无事件与跨会话投递的触发缺口；**只是触发器**，面板数据仍来自 `agents.inbox` RPC。会话订阅按服务端派生的归属 agent 放行（§6.3，fail-closed）；`agent.message.queued` 保留不动 |
 | `config.loaded` | asm → 观测 | 只记来源与键名，不记密钥值（0.5） |
 | `plugin.loaded` / `plugin.failed` | asm / core → 观测 | 插件加载（0.5） |
 | `trace.write.failed` / `trace.overflow` | core trace → 观测 | 写失败/队列溢出，标记 trace 不完整（0.5） |
@@ -182,6 +183,7 @@ paths: [packages/core/src/types/event.ts, packages/core/src/events/**, src/obser
 | `agent.spawned` | observe | team-log | system | live |
 | `agent.closed` | observe | team-log | system | live |
 | `agent.message.queued` | observe | — | none | live |
+| `agent.inbox.changed` | observe | — | none | live |
 | `agent.message.notified` | observe | — | none | legacy |
 | `agent.message.sent` | observe | — | none | legacy |
 | `agent.stale` | observe | — | none | live |
