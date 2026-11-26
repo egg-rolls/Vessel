@@ -13,12 +13,16 @@
  */
 
 import * as path from 'node:path';
-import { loadConfig, type VesselConfig } from '../../../packages/config/src/index';
+import {
+  DATA_DIR_CLI_MARKER_ENV,
+  loadConfig,
+  type VesselConfig,
+} from '../../../packages/config/src/index';
 import { formatEventLine } from '../../../packages/serve/src/index';
 import { expandHome, resolveDataDir } from '../../data/data-paths';
 import { gatewayLogPath, startGatewayDaemon } from '../../gateway/daemon';
 import { loadNodeRegistry } from '../../gateway/node-registry';
-import { readSpawnedChildren } from '../../gateway/node-supervisor';
+import { readSpawnedChildren, resolveNodeStopToken } from '../../gateway/node-supervisor';
 import {
   cleanupGatewayStateEntry,
   collectGatewayState,
@@ -38,7 +42,7 @@ import {
   waitForProcessExit,
 } from '../../gateway/stop-drain';
 import { t } from '../../i18n';
-import { effectiveNodeTokenAuto } from '../../node/token-derive';
+import { effectiveNodeTokenAuto, readKnownNodeId } from '../../node/token-derive';
 import { createHttpRpcClient } from '../../rpc/http-client';
 import type { NodeCommand } from '../args';
 import type { ControlPlaneTarget } from '../control-plane-target';
@@ -246,6 +250,57 @@ function sameDataDir(a: string, b: string): boolean {
   return path.relative(path.resolve(a), path.resolve(b)) === '';
 }
 
+function nonEmptyStr(value: string | undefined): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/**
+ * F1/SD-2 链A：stop 侧凭据以**目标 node 自己的 config/dataDir** 为权威。
+ *
+ * 用户 config 的显式 `node.token` 只属于缺省 node：`--data-dir` / 名称解析指向
+ * dataDir 不同的舰队 node 时，把它发过去必 401（该 node 只认自己的显式 / 注入 /
+ * 派生值）→ 静默强杀。判定：
+ * - 目标 dataDir == config 自身数据根 → config 就是目标自己的 config，旧链不动
+ *   （effectiveNodeTokenAuto：显式 > 注入 > 派生 > 匿名）；
+ * - 否则 → resolveNodeStopToken：舰队 registry 查目标 config_path 加载其自身
+ *   config，查不到则按目标 dataDir 的 root-secret + node.json 纯派生。
+ *
+ * 「config 自身数据根」= 去掉 CLI targeting 覆盖（`--data-dir` 镜像，伴生标记
+ * VESSEL_DATA_DIR_CLI=1）后重新加载的 config 数据根；无标记的继承 VESSEL_DATA_DIR
+ * 是 config 自身根的一部分（旧语义不动）。
+ */
+async function resolveStopTokenForTarget(
+  context: ResolvedNodeContext,
+): Promise<string | undefined> {
+  const env = context.env;
+  const cliDataDir =
+    env[DATA_DIR_CLI_MARKER_ENV] === '1' ? nonEmptyStr(env.VESSEL_DATA_DIR) : undefined;
+  let configOwnDataDir = resolveDataDir(context.config, env);
+  if (cliDataDir !== undefined) {
+    const envOwn = { ...env, VESSEL_DATA_DIR: undefined, [DATA_DIR_CLI_MARKER_ENV]: undefined };
+    const ownLoaded = await loadConfig({ env: envOwn }).catch(() => undefined);
+    configOwnDataDir =
+      ownLoaded !== undefined
+        ? resolveDataDir(ownLoaded.config, envOwn)
+        : resolveDataDir(context.config, envOwn);
+  }
+  if (sameDataDir(configOwnDataDir, context.dataDir)) {
+    const resolution = effectiveNodeTokenAuto({
+      config: context.config,
+      dataDir: context.dataDir,
+      env,
+    });
+    return resolution.ok ? resolution.value.token : undefined;
+  }
+  const token = await resolveNodeStopToken({
+    nodeId: readKnownNodeId(context.dataDir) ?? '',
+    dataDir: context.dataDir,
+    registryDataDir: configOwnDataDir,
+    env,
+  });
+  return token === '' ? undefined : token;
+}
+
 /**
  * G3b：平台进程 spawn 的本地 node 记录在 `<gatewayDataDir>/platform-children[-<instance>].json`
  * 里。隐式节点的 dataDir == gatewayDataDir，所以 `node stop` 能读到 manifest 并
@@ -284,12 +339,8 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
   const print = deps.print ?? console.log;
   const printErr = deps.printErr ?? console.error;
   const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const stopToken = effectiveNodeTokenAuto({
-    config: context.config,
-    dataDir: context.dataDir,
-    env: context.env,
-  });
-  const token = stopToken.ok ? stopToken.value.token : undefined;
+  // F1/SD-2 链A：凭据以目标 node 自己的 config/dataDir 为权威（舰队 node 不发用户 config token）。
+  const token = await resolveStopTokenForTarget(context);
   const snapshot = await collectGatewayState(context.dataDir, {
     ...(token !== undefined ? { token } : {}),
   });
@@ -539,12 +590,8 @@ export async function nodeRestartCommand(
       return 1;
     }
   }
-  const stopToken = effectiveNodeTokenAuto({
-    config: context.config,
-    dataDir: context.dataDir,
-    env: context.env,
-  });
-  const token = stopToken.ok ? stopToken.value.token : undefined;
+  // F1/SD-2 链A：与 nodeStopCommand 同口径 —— 目标 node 自己的 config/dataDir 为权威。
+  const token = await resolveStopTokenForTarget(context);
   const snapshot = await collectGatewayState(context.dataDir, {
     ...(token !== undefined ? { token } : {}),
   });
