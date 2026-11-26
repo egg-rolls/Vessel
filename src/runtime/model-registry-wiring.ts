@@ -108,6 +108,58 @@ interface CredentialEnvelopeEntry {
   updatedAt: string;
 }
 
+/** 读信封条目（只读元数据路径；不存在 / 损坏 → undefined）。启动闸与请求侧共用。 */
+function readCredentialEnvelope(dataDir: string, id: string): CredentialEnvelopeEntry | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(path.join(dataDir, 'credentials.json'), 'utf-8');
+  } catch {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { v?: unknown; entries?: Record<string, unknown> };
+    if (parsed.v !== 1 || typeof parsed.entries !== 'object' || parsed.entries === null) {
+      return undefined;
+    }
+    const entry = parsed.entries[id] as CredentialEnvelopeEntry | undefined;
+    return entry !== undefined && typeof entry.updatedAt === 'string' ? entry : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 启动闸的 registry 侧判定：有效默认解析到注册条目时，其凭证是否「已配置」
+ * （信封在库，或 env 间接值非空）。与请求侧 apiKeyFor 同源选路：legacy 链路由
+ * resolveEffectiveApiKey 判定，此处只看注册条目；只查存在性、不解密——解密失败
+ * 仍由请求侧 D10 fail-loud 负责。纯 registry 配置（无 legacy provider.* 块）
+ * 由此通过启动闸，不再被误判「未配置 API Key」。
+ */
+export function hasBootRegistryKey(config: VesselConfig, dataDir: string): boolean {
+  const snapshot = synthesizeLegacyRegistry(config);
+  let resolved: ResolvedModel | undefined;
+  try {
+    resolved = resolveModelRef(snapshot, undefined);
+  } catch {
+    return false;
+  }
+  if (
+    resolved === undefined ||
+    resolved.legacy ||
+    resolved.credentialRef?.startsWith('legacy:') === true
+  ) {
+    return false;
+  }
+  if (resolved.credentialRef !== undefined) {
+    return readCredentialEnvelope(dataDir, resolved.credentialRef) !== undefined;
+  }
+  if (resolved.apiKeyEnv !== undefined) {
+    const value = process.env[resolved.apiKeyEnv];
+    return typeof value === 'string' && value.trim() !== '';
+  }
+  return false;
+}
+
 /** install 后待登记 RPC / 贡献面的 in-process 能力插件（descriptor + 原始 plugin）。 */
 export interface InProcessPluginEntry {
   descriptor: PluginDescriptor;
@@ -170,22 +222,7 @@ export async function createModelRegistryWiring(options: {
 
   /** 读信封条目（只读元数据路径；不存在 / 损坏 → undefined，请求侧按缺凭证处理）。 */
   function readCredentialEntry(id: string): CredentialEnvelopeEntry | undefined {
-    let raw: string;
-    try {
-      raw = readFileSync(path.join(dataDir, 'credentials.json'), 'utf-8');
-    } catch {
-      return undefined;
-    }
-    try {
-      const parsed = JSON.parse(raw) as { v?: unknown; entries?: Record<string, unknown> };
-      if (parsed.v !== 1 || typeof parsed.entries !== 'object' || parsed.entries === null) {
-        return undefined;
-      }
-      const entry = parsed.entries[id] as CredentialEnvelopeEntry | undefined;
-      return entry !== undefined && typeof entry.updatedAt === 'string' ? entry : undefined;
-    } catch {
-      return undefined;
-    }
+    return readCredentialEnvelope(dataDir, id);
   }
 
   /** 解密取明文：只在实例构造瞬间存在；失败（root-secret 轮换，D10 需重录）→ undefined。 */
