@@ -1,0 +1,43 @@
+name: Version Check
+
+# main push（无 tag）的版本一致性门禁（用户裁定：CI 时自动更新/校验，不靠人记得）：
+# manifest 全线同版本 + 内部依赖恒 workspace:* + CHANGELOG 含当前版本 + 内置插件 engines 兼容。
+# tag push 走 release.yml（verify 用目标版本复跑 --check）；本 workflow 只看分支 push。
+# 收口工具：scripts/release.ts（bump + manifest + CHANGELOG + CURRENT.md + commit/tag）。
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  version-check:
+    name: Version Consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Cache Bun install
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check versions and changelog
+        run: bun run scripts/version.ts --check
