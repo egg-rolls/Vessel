@@ -5,13 +5,9 @@
 
 ## 版本
 
-**2.1.0 已晋升、未 tag** — 第四轮批次晋升（基线 `main @ d5c7d3f1`，2026-11-25；
-红蓝金丝雀 14–22 全闭环，SS2-1/CR22-1/DR15-1/DR15-2 四 ISSUE CLOSED）。
-标准 SemVer（RELEASE §1：breaking→major / feature→minor / fix→patch）；major=2（单一真相源架构 breaking）。
-manifest 根 `package.json` = `2.1.0`；**workspace manifests 仍在 `0.56.1`（漂移，`version.ts --check` 现红），
-候发布收口 `bun run scripts/release.ts 2.1.0` 统一修复**；`packages/plugin-sdk` 独立版本线 `1.0.0`
-（仅 SDK 契约变更时 bump）。版本号以根 `package.json` 为唯一来源。
-最新 tag `v2.0.0`；`v2.1.0` 未打（tag 触发 release.yml 发布，由 main 收口时决定）。
+**2.1.1**（2026-11-26 收口）— manifest 根 `package.json` = `2.1.1`（workspace manifests 同线；
+`packages/plugin-sdk` 独立版本线 `1.0.0`，仅 SDK 契约变更时 bump）。
+版本号以根 `package.json` 为唯一来源。tag 状态见 `git tag -l 'v*'`（tag push 触发 release.yml）。
 当前变更摘要见 [CHANGELOG](../../CHANGELOG.md)；版本记录见 [INDEX.md](INDEX.md)。
 
 ## 已合入（现态，均在 main）
@@ -51,5 +47,5 @@ manifest 根 `package.json` = `2.1.0`；**workspace manifests 仍在 `0.56.1`（
 
 - 版本历史：[INDEX.md](INDEX.md)
 - 变更摘要：[../../CHANGELOG.md](../../CHANGELOG.md)
-- 版本记录：[2.1.0](2.1.0.md)、[2.0.0](2.0.0.md)、[0.56.0](0.56.0.md)、[0.54.0](0.54.0.md)
+- 版本记录：[2.1.1](2.1.1.md)、[2.1.0](2.1.0.md)、[2.0.0](2.0.0.md)、[0.56.0](0.56.0.md)
 - 发布手册：[../operations/RELEASE.md](../operations/RELEASE.md)

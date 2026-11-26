@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/agent",
-  "version": "0.56.1",
+  "version": "2.1.1",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
