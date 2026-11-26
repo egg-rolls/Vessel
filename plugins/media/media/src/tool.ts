@@ -3,6 +3,7 @@
  * @module @vessel-agent/media/tool
  *
  * action = read | view | ocr | describe，path 必填，page / frames 可选。
+ * action 可缺省：按 path 扩展名派生（图片→view，PDF/文本→read）；ocr / describe 仍须显式。
  * - read：文本直读；PDF 走 pdftotext（按页取，缺 CLI 时明确报错）；
  * - view：图片入 blob 池 + 登记附件回执，loop 以带 refs 的 user 消息 surfaced，
  *   多模态主模型**直接看图**（复用 0.56 视觉基座；无需任何外部 CLI）；
@@ -540,6 +541,7 @@ export function createMediaTool(deps: MediaToolDeps): ToolDefinition {
       'Actions: ' +
       describeActions(actions, deps) +
       '. For images prefer action=view: the image is attached to the model context and you see it directly. ' +
+      'When action is omitted it defaults to view for images and read for PDF/text; ocr/describe must be explicit. ' +
       'PDF text is paged via page/frames; output is truncated at ' +
       String(deps.config.maxOutputBytes) +
       ' bytes (marked truncated). Prefer this over bash cat on binary files.',
@@ -549,7 +551,8 @@ export function createMediaTool(deps: MediaToolDeps): ToolDefinition {
         action: {
           type: 'string',
           enum: actions,
-          description: 'read | view | ocr | describe',
+          description:
+            'read | view | ocr | describe (default: derived from path extension — image→view, pdf/text→read; ocr/describe must be explicit)',
         },
         path: {
           type: 'string',
@@ -567,7 +570,7 @@ export function createMediaTool(deps: MediaToolDeps): ToolDefinition {
             '; read=PDF pages, ocr=multi-page TIFF pages)',
         },
       },
-      required: ['action', 'path'],
+      required: ['path'],
     },
     display: { label: 'Media', kind: 'file' },
     // 只读解析；deny 目录硬拒，配置 allowed_roots 后越界 ask
@@ -581,13 +584,20 @@ export function createMediaTool(deps: MediaToolDeps): ToolDefinition {
     handler: async (args: unknown, ctx: ToolContext): Promise<string> => {
       const signal = ctx.signal;
       if (isAborted(signal)) return CANCELLED_TEXT;
-      if (!isRecord(args)) return '错误：media 需要 { action, path }。';
+      if (!isRecord(args)) return '错误：media 需要 { path }。';
 
+      // action 可缺省（按扩展名派生，见 checkPath 之后）；显式给值时仍按原样校验。
       const action = args.action;
-      if (action !== 'read' && action !== 'view' && action !== 'ocr' && action !== 'describe') {
+      if (
+        action !== undefined &&
+        action !== 'read' &&
+        action !== 'view' &&
+        action !== 'ocr' &&
+        action !== 'describe'
+      ) {
         return '错误：action 必须是 read / view / ocr / describe。';
       }
-      if (!actions.includes(action)) {
+      if (action !== undefined && !actions.includes(action)) {
         if (action === 'ocr') {
           return (
             '错误：action=ocr 不可用（本机未探测到 tesseract）。' +
@@ -611,14 +621,17 @@ export function createMediaTool(deps: MediaToolDeps): ToolDefinition {
       if (!checked.ok) return checked.message;
       if (isAborted(signal)) return CANCELLED_TEXT;
 
-      if (action === 'read') {
+      // 缺省派生：图片→view（模型直接看图），PDF/文本→read。read/view 恒可用，
+      // 派生结果不会落到需要外部后端的 ocr/describe（那两个必须显式给）。
+      const resolved: MediaAction = action ?? (VIEW_EXTS.has(checked.ext) ? 'view' : 'read');
+      if (resolved === 'read') {
         if (checked.ext === '.pdf') return readPdf(checked.target, args, deps, signal);
         return readText(checked.target, checked.bytes, deps);
       }
-      if (action === 'view') {
+      if (resolved === 'view') {
         return runView(checked.target, checked.ext, deps, ctx);
       }
-      if (action === 'ocr') {
+      if (resolved === 'ocr') {
         return runOcr(checked.target, checked.ext, args, deps, signal);
       }
       return runDescribe(checked.target, checked.ext, checked.bytes, deps, signal);
