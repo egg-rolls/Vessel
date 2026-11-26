@@ -29,6 +29,7 @@ import { ChatHeader } from './ChatHeader';
 import { ComposerSlot } from './ComposerSlot';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
 import { errorMessage } from './errors';
+import { sessionBodyOwners } from './main-session';
 import { NodeNamesProvider } from './node-name-context';
 import { PendingStrip } from './PendingStrip';
 import type { PendingSend } from './pending-sends';
@@ -53,24 +54,28 @@ const EMPTY_ANSWERED_ASKS: readonly AnsweredAsk[] = [];
 const EMPTY_PENDING_SENDS: readonly PendingSend[] = [];
 
 /**
- * 当前会话 body 的成员 id（工具描述目录按它拉 `tools.list{agent_id}`）。
+ * 当前会话 body 的成员 id（工具描述目录 / inbox 面板按它拉 agent 级数据）。
  *
- * 判据来自**已有的事件派生 agent 树**（`agentsForSession` 的同一份数据），不新增 RPC：
- * 显式选中的子 agent 优先；否则取「`sessionId` 恰好是本会话」且深度最小的节点 ——
- * 那正是拥有这具 body 的成员。历史会话 / 进程重启后事件树可能为空，此时返回
- * `undefined`，目录退回节点插件面（与今天一致）。
+ * 派生链（inbox 统一批 §4.1，全部已有数据，不新增 RPC）：
+ * 1. 显式选中的子 agent（`?agent=` 深链详情态）优先；
+ * 2. 事件派生 agent 树（`agentsForSession` 的同一份数据）：取「`sessionId` 恰好是
+ *    本会话」且深度最小的节点 —— 那正是拥有这具 body 的成员；
+ * 3. roster 反查兜底（`sessionBodyOwners`）：历史会话 / 进程重启后事件树为空，
+ *    但 roster 的 `session_id` / `bodies` / `body_history` 仍认得这具 body 归谁。
+ * 都命中不了返回 `undefined`（不猜 id）：目录退回节点插件面，面板不发 RPC。
  */
 function catalogAgentOfSession(
   activeAgentId: string | undefined,
   nodes: readonly { id: string; depth: number; sessionId?: string }[],
   sessionId: string | null,
+  bodyOwners: ReadonlyMap<string, string>,
 ): string | undefined {
   if (activeAgentId !== undefined) return activeAgentId;
   if (sessionId === null) return undefined;
   const owners = nodes
     .filter((node) => node.sessionId === sessionId)
     .sort((a, b) => a.depth - b.depth);
-  return owners[0]?.id;
+  return owners[0]?.id ?? bodyOwners.get(sessionId);
 }
 
 /** 待确认的历史消息分支操作：keepMessages 是 `sessions.get` 的 session.messages 下标。 */
@@ -414,11 +419,17 @@ export function ChatView({
     }
   };
 
-  // 工具描述目录：知道属于哪个成员就按成员拉（`inbox` 这类成员内置工具才有描述）。
+  // 工具描述目录 / inbox 面板：知道属于哪个成员就按成员拉（`inbox` 这类成员内置工具才有描述）。
+  // roster 反查表与 attribution 同源（同一份 rosterState，不新增轮询 / RPC）。
+  const bodyOwners = useMemo(
+    () => sessionBodyOwners(resourceData(rosterState) ?? []),
+    [rosterState],
+  );
   const catalogAgentId = catalogAgentOfSession(
     transcriptApi.activeAgent?.id,
     transcriptApi.sessionAgents,
     selectedId,
+    bodyOwners,
   );
 
   return (

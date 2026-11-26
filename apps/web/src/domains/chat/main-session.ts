@@ -3,8 +3,8 @@
  *
  * - `findMainSession`：从 `agents.list` 结果（`AgentSummary[]`）解析 `main` 的
  *   primary body，即 Web 默认会话的 `session_id`；
- * - `sessionBodyOwners`：从同一份 roster 的 `bodies` 反查会话的 agent / primary 归属，
- *   供会话列表加 primary 标记；`bodies` 缺省时**不产出任何条目**（完全退化为现状）。
+ * - `sessionBodyOwners`：从同一份 roster 反查会话的 agent 归属（session_id → agent id），
+ *   事件树为空（历史会话 / 进程重启后）时 catalogAgentId 的 roster 兜底（inbox 统一批 §4.1）。
  */
 import type { NodeRoster } from '../../gateway/team-roster';
 import type { AgentSummary, ExecutionUnitStatus } from '../../gateway/types';
@@ -80,4 +80,47 @@ export function primaryBodySessions(rosters: readonly NodeRoster[]): ReadonlySet
     }
   }
   return primaryIds;
+}
+
+/**
+ * roster → `session_id` 到归属 agent id 的反查表（inbox 统一批 §4.1 的 roster 兜底）。
+ *
+ * 事件树（`agents.tree`）只有活着的 run 才有节点：历史会话 / 进程重启后事件树为空，
+ * catalogAgentId 就取不到 agent。roster 是盘上事实的另一份投影 —— `body_id ≡ session_id`，
+ * 每个条目的 `session_id`（primary）与 `bodies[]`（live）都是它拥有的会话；
+ * `body_history[]`（已退役 body，≤20）再兜住 rotate 之前的历史会话。
+ *
+ * 两轮扫描：live body 先入表，退役 body 后入且**不覆盖** —— 迟到的 `body_history`
+ * 不许把现役会话的归属改写成旧身体时代的 agent（与 sessionAgentRetiredLabels 同口径）。
+ * 同一会话多节点重复时先到先得；缺 agent id 的条目跳过（不可寻址，不猜）。
+ */
+export function sessionBodyOwners(rosters: readonly NodeRoster[]): ReadonlyMap<string, string> {
+  const owners = new Map<string, string>();
+  const put = (sessionId: string | undefined, agentId: string | undefined) => {
+    const session = sessionId?.trim() ?? '';
+    const agent = agentId?.trim() ?? '';
+    if (!session || !agent || owners.has(session)) return;
+    owners.set(session, agent);
+  };
+  for (const roster of rosters) {
+    for (const agent of roster.agents ?? []) {
+      const agentId = agent.agent_id ?? agent.id;
+      put(agent.session_id, agentId);
+      for (const body of agent.bodies ?? []) put(bodySessionId(body), agentId);
+    }
+    for (const entry of roster.rosters) {
+      for (const member of entry.members) {
+        put(member.session_id, member.agent_id);
+        for (const body of member.bodies ?? []) put(bodySessionId(body), member.agent_id);
+      }
+    }
+  }
+  for (const roster of rosters) {
+    for (const entry of roster.rosters) {
+      for (const member of entry.members) {
+        for (const body of member.body_history ?? []) put(body.session_id, member.agent_id);
+      }
+    }
+  }
+  return owners;
 }
