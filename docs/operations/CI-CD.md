@@ -24,7 +24,7 @@ paths: [.github/workflows/**, .github/actions/quality/action.yml, package.json, 
 而真正拦住问题的从来是**本地门禁**（0.50 收口期间 CI 报的错没有一条影响功能或产物）。
 **发布链路不依赖 CI**：`release.yml` 在 tag 时自己跑一遍 `quality`，所以「发布前一定验过」这条保证没有丢。
 
-保留的两个 workflow：`release.yml`（tag → CD）、`sync-labels.yml`（PR 标签同步）。
+保留的三个 workflow：`release.yml`（tag → CD）、`version-check.yml`（main push → 版本一致性门禁）、`sync-labels.yml`（PR 标签同步）。
 
 ### 1.2 本地检查（唯一权威）
 
@@ -103,13 +103,15 @@ PR 没有 required checks，把关靠人 + 构建输出 + verifier 线程的读�
 - 行为变更（权限、持久化、远程、Web 交互）**没有自动回归**，合并前必须人工验证并给出 `file:line` 证据；不要因为「构建绿」就认为行为正确。
 - 两条不变量仍必须人工守：诊断只走 Logger / stderr，不 `console.log` 到 stdout；新增用户可见文案同时改 zh-CN / en 两份 catalog。
 
-### 1.2 发布前校验（已随脚本删除而失效）
+### 1.2 发布前校验（脚本已删，workflow 死步骤已移除）
 
 - 原来的 `scripts/release-dry-run.ts` 与 `scripts/smoke-install.ts` **已按宪法删除**：
   tarball 内容 / 包名 / 内部版本 / 安装解析这些检查**不再有自动入口**。
-- `.github/workflows/release.yml` 里仍留着调用这两者的两步，tag 时会红；恢复方式只有两种 ——
-  把这两步删掉（发布改为人工核对），或由 1 决定重写它们的替代物。**在这之前不要靠 release workflow 判定可发布。**
-- 发布前现在必须人工核对的项目见 [RELEASE.md](RELEASE.md) 的发布清单：
+- `release.yml` 里调用这两者的死步骤**已移除**（q-release-script）：verify 现在可绿，
+  tag 触发链路恢复可用；tarball 侧检查改为发布前人工核对。
+- `version-check.yml`：main push（无 tag）自动跑 `bun run scripts/version.ts --check`
+  （manifest 一致性 + 内部依赖 `workspace:*` + CHANGELOG 门禁），不靠人记得。
+- 发布前必须人工核对的项目见 [RELEASE.md](RELEASE.md) 的发布清单：
   `bun run scripts/version.ts --check`（版本一致性 + CHANGELOG）、`bun run build`、
   `apps/web` 构建产物含 `dist/index.html`、可发布包名与内部依赖恒为 `workspace:*`。
 
@@ -153,8 +155,8 @@ PR 没有 required checks，把关靠人 + 构建输出 + verifier 线程的读�
    - 从 tag 提取版本（去掉 `v`）。
    - `bun run scripts/version.ts --check <version>`：所有可发布包版本一致，且 `CHANGELOG.md` 含 `## [<version>]`。
    - Node 22 + `apps/web` 的 `npm ci` / `npm run build`：根 tarball 的 `files` 含 `apps/web/dist`，而 `dist/` 被忽略，必须先构建。
-   - **tarball 内容与安装解析：原来的 `release-dry-run` / `smoke-install` 脚本已按宪法删除，
-     这两步现在没有执行体** —— 要么由 1 决定重写替代物，要么从 workflow 里删掉、改为人工核对。
+   - **tarball 内容与安装解析：原 `release-dry-run` / `smoke-install` 脚本已按宪法删除，
+     对应死步骤已从 workflow 移除**（q-release-script）——发布前按 RELEASE.md §2.1 / §2.2 人工核对。
    - **任一步失败即停止，`publish-npm` 不会执行。**
 2. `quality`：复用 `.github/actions/quality`，发布前再验一次。
 3. `publish-npm`
