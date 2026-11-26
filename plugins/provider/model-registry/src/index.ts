@@ -1,32 +1,36 @@
 /**
- * @vessel-agent/model-registry — 官方 in-process 模型管理插件（P1）。
+ * @vessel-agent/model-registry — 官方 in-process 模型管理插件（两面重构 §8）。
  *
- * 契约：docs/dev/plans/model-registry.md §3 + CONTRACT-model-registry-internal.md。
+ * 契约：docs/dev/design/model-registry-two-face-design.md §3/§4/§8（取代上位契约 §3）。
  * 管理 API（models 块读改写）+ 加密凭证库 + 连通性测试。机制在 harness：装配层经
  * registerInProcessPlugin 把本插件的 `rpc` 注册进同一个 PluginRpcRegistry
  * （canonical `plugin.model-registry.<name>`，同一 DTO 校验）；这里只实现 handler 语义，
- * 不自造注册路径。P1 只声明 contributes.rpc；pages/navGroups/ui 属 P2。
+ * 不自造注册路径。
+ *
+ * RPC 8 方法：list / model_set / model_remove / default_set / credential_set /
+ * credential_remove / credentials_list / test（vendor_set/remove、alias_set/remove 已删；
+ * 别称随 model_set 写入）。
  *
  * 生效语义：写路径只落盘（config.yaml models 块 / credentials.json），热应用由
- * config-watch + applier 完成（M1d 接缝）——「已保存，下一具 body/run 生效」。
+ * config-watch + applier 完成——「已保存，下一具 body/run 生效」。
  * 明文纪律：credential value 只在 credential_set 写入瞬间存在；RPC 结果永不回显。
  */
 
-import type { ModelRegistrySnapshot, VendorEntry, VendorModelEntry } from '@vessel-agent/config';
+import type { ModelEntry, ModelRegistrySnapshot } from '@vessel-agent/config';
 import { resolveEffectiveApiKey, resolveModelRef } from '@vessel-agent/config';
 import type { Plugin } from '@vessel-agent/core';
 import { defaultBaseUrlFor, testConnectivity } from './connectivity';
 import { CredentialStore, resolveDataDir } from './credential-store';
 import {
-  aliasRemove,
-  aliasSet,
   credentialReferences,
+  credentialRemoveMeta,
+  credentialSetMeta,
   defaultSet,
+  entryReferences,
+  modelRemove,
+  modelSet,
   modelsToCamel,
   readRegistry,
-  vendorReferences,
-  vendorRemove,
-  vendorSet,
 } from './registry-store';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -54,20 +58,31 @@ function optionalString(params: Record<string, unknown>, key: string): string | 
   return value;
 }
 
-/** vendor DTO 形状收敛（未知键拒绝，对齐 KNOWN_BLOCK_KEYS['models.vendors']）；语义校验 = validateModels。 */
-function parseVendorEntry(raw: unknown): VendorEntry {
+/**
+ * model DTO 形状收敛（未知键拒绝，对齐 KNOWN_BLOCK_KEYS['models.entries']）；
+ * 语义校验（credential 命中 / alias 唯一 / mode 相容 / pricing / param / info）= validateModels。
+ */
+function parseModelEntry(raw: unknown): ModelEntry {
   if (!isRecord(raw)) throw invalidParams('entry must be an object');
-  const knownKeys = new Set(['protocol', 'baseUrl', 'credential', 'apiKeyEnv', 'models']);
+  const knownKeys = new Set([
+    'name',
+    'alias',
+    'provider',
+    'mode',
+    'credential',
+    'pricing',
+    'param',
+    'info',
+  ]);
   for (const key of Object.keys(raw)) {
-    if (!knownKeys.has(key)) throw invalidParams(`entry.${key} is not a known vendor field`);
+    if (!knownKeys.has(key)) throw invalidParams(`entry.${key} is not a known model field`);
   }
-  const protocol = raw.protocol;
-  if (typeof protocol !== 'string' || protocol.trim() === '') {
-    throw invalidParams('entry.protocol must be a non-empty string');
+  const credential = raw.credential;
+  if (typeof credential !== 'string' || credential.trim() === '') {
+    throw invalidParams('entry.credential is required (a models.credentials.<id> reference)');
   }
-  const optionalFields = ['baseUrl', 'credential', 'apiKeyEnv'] as const;
-  const entry: VendorEntry = { protocol, models: {} };
-  for (const field of optionalFields) {
+  const entry: ModelEntry = { credential };
+  for (const field of ['name', 'alias', 'provider'] as const) {
     const value = raw[field];
     if (value === undefined) continue;
     if (typeof value !== 'string' || value.trim() === '') {
@@ -75,85 +90,147 @@ function parseVendorEntry(raw: unknown): VendorEntry {
     }
     entry[field] = value;
   }
-  const models = raw.models;
-  if (!isRecord(models) || Object.keys(models).length === 0) {
-    throw invalidParams('entry.models must register at least one model (models: { <id>: {} })');
+  if (raw.mode !== undefined) {
+    if (typeof raw.mode !== 'string' || raw.mode.trim() === '') {
+      throw invalidParams('entry.mode must be a non-empty string when set');
+    }
+    // 枚举相容性（chat/responses/messages × provider）在 validateModels 语义校验。
+    entry.mode = raw.mode as ModelEntry['mode'];
   }
-  for (const [modelId, modelRaw] of Object.entries(models)) {
-    if (modelId.trim() === '') throw invalidParams('entry.models keys must be non-empty');
-    if (!isRecord(modelRaw)) {
-      throw invalidParams(`entry.models.${modelId} must be an object (use {} for defaults)`);
-    }
-    for (const key of Object.keys(modelRaw)) {
-      if (key !== 'promptCache') {
-        throw invalidParams(`entry.models.${modelId}.${key} is not a known model field`);
+  if (raw.pricing !== undefined) {
+    if (!isRecord(raw.pricing)) throw invalidParams('entry.pricing must be an object');
+    const pricing: Record<string, unknown> = {};
+    for (const key of [
+      'inputPerMillion',
+      'outputPerMillion',
+      'cacheReadPerMillion',
+      'cacheWritePerMillion',
+    ]) {
+      const value = raw.pricing[key];
+      if (value === undefined) continue;
+      if (typeof value !== 'number') {
+        throw invalidParams(`entry.pricing.${key} must be a number when set`);
       }
+      pricing[key] = value;
     }
-    const promptCache = modelRaw.promptCache;
-    if (promptCache !== undefined && typeof promptCache !== 'boolean') {
-      throw invalidParams(`entry.models.${modelId}.promptCache must be a boolean when set`);
+    for (const key of Object.keys(raw.pricing)) {
+      if (!(key in pricing)) throw invalidParams(`entry.pricing.${key} is not a known price field`);
     }
-    const modelEntry: VendorModelEntry = promptCache !== undefined ? { promptCache } : {};
-    entry.models[modelId] = modelEntry;
+    entry.pricing = pricing as unknown as ModelEntry['pricing'];
+  }
+  if (raw.param !== undefined) {
+    if (!isRecord(raw.param)) throw invalidParams('entry.param must be an object');
+    const param: Record<string, unknown> = {};
+    for (const key of ['temperature', 'maxTokens', 'topP']) {
+      const value = raw.param[key];
+      if (value === undefined) continue;
+      if (typeof value !== 'number') throw invalidParams(`entry.param.${key} must be a number`);
+      param[key] = value;
+    }
+    if (raw.param.promptCache !== undefined) {
+      if (typeof raw.param.promptCache !== 'boolean') {
+        throw invalidParams('entry.param.promptCache must be a boolean');
+      }
+      param.promptCache = raw.param.promptCache;
+    }
+    if (raw.param.extra !== undefined) {
+      if (!isRecord(raw.param.extra)) throw invalidParams('entry.param.extra must be an object');
+      param.extra = raw.param.extra;
+    }
+    for (const key of Object.keys(raw.param)) {
+      if (!(key in param)) throw invalidParams(`entry.param.${key} is not a known param field`);
+    }
+    entry.param = param as ModelEntry['param'];
+  }
+  if (raw.info !== undefined) {
+    if (!isRecord(raw.info)) throw invalidParams('entry.info must be an object');
+    entry.info = raw.info as ModelEntry['info'];
   }
   return entry;
 }
 
 /**
  * 有效默认（与装配 resolveModel 同口径，§2.6 冻结）：VESSEL_MODEL 非空则以其为 ref
- * （env 赢 models.default），否则走默认链。无效配置（default/别名未命中）时返回
+ * （env 赢 models.default），否则走默认链。无效配置（default/别称未命中）时返回
  * undefined——list 仍回 registry 本身供 UI 修复，不整体报错。
  */
 function effectiveOf(
   snapshot: ModelRegistrySnapshot,
-): { vendorId: string; wireModel: string } | undefined {
+): { entryId: string; wireModel: string } | undefined {
   const envModel = process.env.VESSEL_MODEL;
   const ref = envModel !== undefined && envModel.trim() !== '' ? envModel : undefined;
   try {
     const resolved = resolveModelRef(snapshot, ref);
     if (resolved === undefined) return undefined;
-    return { vendorId: resolved.vendorId, wireModel: resolved.wireModel };
+    return { entryId: resolved.entryId, wireModel: resolved.wireModel };
   } catch {
     return undefined;
   }
 }
 
+/** 凭证 DTO（§3.3）：yaml 元数据 ∪ 加密库元数据；值永不回显。 */
+async function credentialDtos(
+  config: Parameters<typeof resolveDataDir>[0],
+  snapshot: ModelRegistrySnapshot,
+): Promise<Record<string, unknown>[]> {
+  const store = new CredentialStore(resolveDataDir(config));
+  const metas = await store.list();
+  const metaById = new Map(metas.map((meta) => [meta.id, meta]));
+  const ids = new Set<string>([
+    ...Object.values(snapshot.credentials)
+      .filter((cred) => !cred.legacy)
+      .map((cred) => cred.id),
+    ...metas.map((meta) => meta.id),
+  ]);
+  return [...ids].sort().map((id) => {
+    const cred = snapshot.credentials[id];
+    const meta = metaById.get(id);
+    return {
+      id,
+      ...(cred?.baseUrl !== undefined ? { baseUrl: cred.baseUrl } : {}),
+      ...(cred?.apiKeyEnv !== undefined ? { apiKeyEnv: cred.apiKeyEnv } : {}),
+      hasValue: meta !== undefined,
+      ...(meta !== undefined ? { createdAt: meta.createdAt, updatedAt: meta.updatedAt } : {}),
+      usedBy: credentialReferences(snapshot, id),
+    };
+  });
+}
+
 async function handleList(): Promise<Record<string, unknown>> {
   const { config, snapshot, legacyPresent } = await readRegistry();
-  const vendors = Object.values(snapshot.vendors).map((vendor) => ({
-    id: vendor.id,
-    protocol: vendor.protocol,
-    ...(vendor.baseUrl !== undefined ? { baseUrl: vendor.baseUrl } : {}),
-    ...(vendor.credentialRef !== undefined ? { credentialRef: vendor.credentialRef } : {}),
-    // apiKeyEnv 是环境变量名（非密钥值），只读回显供编辑表单预填（A+B 用户批准）。
-    ...(vendor.apiKeyEnv !== undefined ? { apiKeyEnv: vendor.apiKeyEnv } : {}),
-    models: vendor.models,
-    inUse: vendorReferences(snapshot, vendor.id).length > 0,
+  const entries = Object.values(snapshot.entries).map((entry) => ({
+    id: entry.id,
+    name: entry.wireModel,
+    ...(entry.alias !== undefined ? { alias: entry.alias } : {}),
+    provider: entry.provider,
+    mode: entry.mode,
+    ...(entry.credentialRef !== undefined ? { credential: entry.credentialRef } : {}),
+    ...(entry.baseUrl !== undefined ? { baseUrl: entry.baseUrl } : {}),
+    ...(entry.pricing !== undefined ? { pricing: entry.pricing } : {}),
+    ...(entry.param !== undefined ? { param: entry.param } : {}),
+    ...(entry.info !== undefined ? { info: entry.info } : {}),
+    inUse: entryReferences(snapshot, entry.id).length > 0,
+    legacy: entry.legacy,
   }));
-  const provider = config.provider;
-  const legacyRef =
-    provider?.model !== undefined && provider.model !== ''
-      ? `legacy:${provider.name ?? 'openai'}/${provider.model}`
-      : undefined;
   const effective = effectiveOf(snapshot);
   return {
-    vendors,
-    aliases: snapshot.aliases,
+    credentials: await credentialDtos(config, snapshot),
+    entries,
     ...(snapshot.defaultRef !== undefined ? { default: snapshot.defaultRef } : {}),
     ...(effective !== undefined ? { effective } : {}),
-    legacy: { present: legacyPresent, ...(legacyRef !== undefined ? { ref: legacyRef } : {}) },
+    legacyPresent,
   };
 }
 
-async function handleVendorSet(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function handleModelSet(params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const id = requireString(params, 'id');
-  const entry = parseVendorEntry(params.entry);
-  const readBack = await vendorSet(id, entry);
-  const vendor = modelsToCamel(readBack).vendors?.[id];
-  if (vendor === undefined) {
-    throw new Error(`vendor_set_readback_missing: "${id}" not found after write`);
+  const entry = parseModelEntry(params.entry);
+  const { models: readBack, warnings } = await modelSet(id, entry);
+  const written = modelsToCamel(readBack).entries?.[id];
+  if (written === undefined) {
+    throw new Error(`model_set_readback_missing: "${id}" not found after write`);
   }
-  return { ok: true, vendor };
+  return { ok: true, entry: written, ...(warnings.length > 0 ? { warnings } : {}) };
 }
 
 async function handleDefaultSet(params: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -165,15 +242,27 @@ async function handleDefaultSet(params: Record<string, unknown>): Promise<Record
   return { ok: true, ...(effective !== undefined ? { effective } : {}) };
 }
 
+/**
+ * credential_set：一次写两处（§3.3）——先加密库值、后 yaml 元数据（withConfigLock 内）。
+ * 值失败不写 yaml；yaml 失败留孤儿值（无害，credentials_list 可见未引用条目）。
+ * apiKey 缺省 = 不改值（编辑态）；baseUrl 必填。明文纪律：值永不回显。
+ */
 async function handleCredentialSet(
   params: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const id = requireString(params, 'id');
-  const value = requireString(params, 'value');
+  const baseUrl = requireString(params, 'baseUrl');
+  const apiKeyEnv = optionalString(params, 'apiKeyEnv');
+  // 迁移期兼容：旧 UI/CLI 的 value 参数 = apiKey（C6 UI 收敛后删除）。
+  const apiKey = optionalString(params, 'apiKey') ?? optionalString(params, 'value');
   const { config } = await readRegistry();
-  const store = new CredentialStore(resolveDataDir(config));
-  const { updatedAt } = await store.set(id, value);
-  return { ok: true, updatedAt };
+  let updatedAt: string | undefined;
+  if (apiKey !== undefined) {
+    const store = new CredentialStore(resolveDataDir(config));
+    updatedAt = (await store.set(id, apiKey)).updatedAt;
+  }
+  await credentialSetMeta(id, { baseUrl, ...(apiKeyEnv !== undefined ? { apiKeyEnv } : {}) });
+  return { ok: true, ...(updatedAt !== undefined ? { updatedAt } : {}) };
 }
 
 async function handleCredentialRemove(
@@ -184,81 +273,117 @@ async function handleCredentialRemove(
   const refs = credentialReferences(snapshot, id);
   if (refs.length > 0) {
     throw new Error(
-      `credential_in_use: "${id}" is referenced by vendors: ${refs.join(', ')}; ` +
+      `credential_in_use: "${id}" is referenced by entries: ${refs.join(', ')}; ` +
         'remove those references first',
     );
   }
+  // 先删 yaml 元数据，再删库值（库值缺失 = env-only 凭证，容忍）。
+  await credentialRemoveMeta(id);
   const store = new CredentialStore(resolveDataDir(config));
-  await store.remove(id);
+  try {
+    await store.remove(id);
+  } catch (error) {
+    if (!(error instanceof Error && error.message.startsWith('unknown_credential'))) throw error;
+  }
   return { ok: true };
 }
 
 async function handleCredentialsList(): Promise<Record<string, unknown>[]> {
   const { config, snapshot } = await readRegistry();
-  const store = new CredentialStore(resolveDataDir(config));
-  const metas = await store.list();
-  return metas.map((meta) => ({ ...meta, usedBy: credentialReferences(snapshot, meta.id) }));
+  return credentialDtos(config, snapshot);
 }
 
-/** test：只接受已保存 vendor；未保存草稿 = 先保存再测（明文 key 不出现在 test 参数）。 */
+/** 凭证值解析：库值优先（D10 解密失败 fail-loud）；缺值回落 env 间接；legacy 走 provider.*。 */
+async function apiKeyForCredential(
+  config: Parameters<typeof resolveDataDir>[0],
+  credentialId: string,
+  apiKeyEnv: string | undefined,
+  legacy: boolean,
+): Promise<string> {
+  if (legacy) return resolveEffectiveApiKey(config) ?? '';
+  const store = new CredentialStore(resolveDataDir(config));
+  try {
+    return await store.reveal(credentialId);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('unknown_credential')) {
+      if (apiKeyEnv !== undefined) {
+        const value = process.env[apiKeyEnv];
+        if (typeof value === 'string' && value.trim() !== '') return value;
+      }
+      return '';
+    }
+    throw error;
+  }
+}
+
+/**
+ * test（§8.1 换形）：{ entry }（注册模型：provider+凭证+name 齐备）或
+ * { credential, provider?, model? }（凭证级 ping；无 model → GET /models 探测）。
+ * 端点恒取凭证 baseUrl（defaultBaseUrlFor 仅 test 兜底）；明文 key 不出现在 test 参数。
+ */
 async function handleTest(params: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const vendorId = requireString(params, 'vendor');
-  const requestedModel = optionalString(params, 'model');
+  const entryId = optionalString(params, 'entry');
+  const credentialId = optionalString(params, 'credential');
   const { config, snapshot } = await readRegistry();
-  const vendor = Object.hasOwn(snapshot.vendors, vendorId) ? snapshot.vendors[vendorId] : undefined;
-  if (vendor === undefined) {
-    throw new Error(`unknown_vendor: "${vendorId}" is not registered; save the vendor first`);
+
+  let protocol: string;
+  let baseUrl: string | undefined;
+  let model: string | undefined;
+  let apiKey: string;
+
+  if (entryId !== undefined) {
+    const entry = Object.hasOwn(snapshot.entries, entryId) ? snapshot.entries[entryId] : undefined;
+    if (entry === undefined) {
+      throw new Error(`unknown_entry: "${entryId}" is not registered; save the model first`);
+    }
+    protocol = entry.provider;
+    baseUrl = entry.baseUrl ?? defaultBaseUrlFor(protocol);
+    model = entry.legacy ? (optionalString(params, 'model') ?? entry.wireModel) : entry.wireModel;
+    const cred =
+      entry.credentialRef !== undefined ? snapshot.credentials[entry.credentialRef] : undefined;
+    apiKey = await apiKeyForCredential(
+      config,
+      entry.credentialRef ?? '',
+      entry.apiKeyEnv ?? cred?.apiKeyEnv,
+      entry.legacy || (entry.credentialRef?.startsWith('legacy:') ?? false),
+    );
+  } else if (credentialId !== undefined) {
+    const cred = Object.hasOwn(snapshot.credentials, credentialId)
+      ? snapshot.credentials[credentialId]
+      : undefined;
+    if (cred === undefined) {
+      throw new Error(`unknown_credential: "${credentialId}" is not registered; save it first`);
+    }
+    protocol = optionalString(params, 'provider') ?? 'openai';
+    baseUrl = cred.baseUrl ?? defaultBaseUrlFor(protocol);
+    model = optionalString(params, 'model');
+    apiKey = await apiKeyForCredential(config, credentialId, cred.apiKeyEnv, cred.legacy);
+  } else {
+    throw invalidParams('test requires { entry } or { credential, provider?, model? }');
   }
 
-  // model 校验：注册 vendor 必须命中清单（legacy 条目透传）；anthropic 无 /models 端点，
-  // 未指定 model 时取清单首个（确定性选择）。
-  let model = requestedModel;
-  if (model !== undefined) {
-    if (!vendor.legacy && !Object.hasOwn(vendor.models, model)) {
-      throw new Error(
-        `unknown_model: "${model}" is not registered under vendor "${vendorId}" ` +
-          `(registered: ${Object.keys(vendor.models).join(', ') || '<none>'})`,
-      );
-    }
-  } else if (vendor.protocol === 'anthropic') {
-    model = Object.keys(vendor.models)[0];
-    if (model === undefined) {
-      throw new Error(`no_model: vendor "${vendorId}" has no registered model to test`);
-    }
-  }
-
-  const baseUrl = vendor.baseUrl ?? defaultBaseUrlFor(vendor.protocol);
   if (baseUrl === undefined) {
     throw new Error(
       `unsupported_protocol: connectivity test supports openai-compatible ` +
-        `(openai/google/mistral/ollama/cohere) and anthropic protocols; ` +
-        `"${vendor.protocol}" is a custom provider plugin protocol`,
+        `(openai/openai-compatible/gemini/google/mistral/ollama/cohere) and anthropic protocols; ` +
+        `"${protocol}" is a custom provider plugin protocol`,
     );
   }
-
-  // 凭证解析（已存凭证）：credential 引用 → 解密；apiKeyEnv → env；legacy → provider.*。
-  let apiKey: string | undefined;
-  if (vendor.credentialRef !== undefined) {
-    const store = new CredentialStore(resolveDataDir(config));
-    apiKey = await store.reveal(vendor.credentialRef);
-  } else if (vendor.apiKeyEnv !== undefined) {
-    apiKey = process.env[vendor.apiKeyEnv];
-  } else if (vendor.legacy) {
-    // 与请求路径同口径（wiring apiKeyFor legacy 分支）：provider.apiKey / *_env / 顶层。
-    apiKey = resolveEffectiveApiKey(config) ?? undefined;
-  }
-  if (apiKey === undefined || apiKey.trim() === '') {
+  if (apiKey.trim() === '') {
     throw new Error(
-      `no_credential: vendor "${vendorId}" has no usable credential; ` +
-        'set a credential (credential_set) or an apiKeyEnv first',
+      `no_credential: "${entryId ?? credentialId}" has no usable credential value; ` +
+        'record it via credential_set or set an api_key_env first',
     );
+  }
+  if (protocol === 'anthropic' && (model === undefined || model === '')) {
+    throw new Error('no_model: anthropic connectivity test requires a model (no /models endpoint)');
   }
 
   const result = await testConnectivity({
-    protocol: vendor.protocol,
+    protocol,
     baseUrl,
     apiKey,
-    ...(model !== undefined ? { model } : {}),
+    ...(model !== undefined && model !== '' ? { model } : {}),
   });
   return { ...result };
 }
@@ -272,16 +397,10 @@ const plugin: Plugin = {
     switch (name) {
       case 'list':
         return handleList();
-      case 'vendor_set':
-        return handleVendorSet(params);
-      case 'vendor_remove':
-        await vendorRemove(requireString(params, 'id'));
-        return { ok: true };
-      case 'alias_set':
-        await aliasSet(requireString(params, 'alias'), requireString(params, 'ref'));
-        return { ok: true };
-      case 'alias_remove':
-        await aliasRemove(requireString(params, 'alias'));
+      case 'model_set':
+        return handleModelSet(params);
+      case 'model_remove':
+        await modelRemove(requireString(params, 'id'));
         return { ok: true };
       case 'default_set':
         return handleDefaultSet(params);

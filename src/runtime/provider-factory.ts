@@ -40,6 +40,8 @@ export async function createProvider(
   loader: Pick<PluginLoader, 'getProviders' | 'load' | 'list'>,
   useMock: boolean,
   scenario?: MockScenarioName,
+  /** provider.* 非 default 层来源（§7.4 legacyPresent；缺省 true = 保守透传） */
+  legacyPresent?: boolean,
 ): Promise<ResolvedProvider> {
   if (useMock) {
     return {
@@ -50,7 +52,7 @@ export async function createProvider(
     };
   }
 
-  const registry = await createModelRegistryWiring({ config, loader });
+  const registry = await createModelRegistryWiring({ config, loader, legacyPresent });
   // 默认解析经 resolver（P0 接缝）：legacy 合成 → 同实例同 model。env 优先级（契约 §2.6
   // 冻结）：VESSEL_MODEL 与 models.default 并存时 env 赢——wiring.resolveModel 把 env
   // model 值作为 ref 解析即实现该优先级。无 model 时抛 ProviderConfigError（fail-fast）。

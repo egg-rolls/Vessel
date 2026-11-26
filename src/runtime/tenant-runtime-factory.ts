@@ -739,13 +739,17 @@ export async function buildTenantRuntime(
     tenantRunsDir: tenantPaths.runs_dir,
     tenantId,
   });
+  // §7.4 legacyPresent：provider.* 有非 default 层来源（与 registry-store 同口径）。
+  const legacyPresent = Object.entries(options.configSources ?? {}).some(
+    ([key, source]) => (key === 'provider' || key.startsWith('provider.')) && source !== 'default',
+  );
   const resolvedProvider = await timeStartup(
     'runtime.provider',
-    createProvider(config, loader, useMock, options.mockScenario),
+    createProvider(config, loader, useMock, options.mockScenario, legacyPresent),
   );
   const { provider, providerName, providerModel, providerBaseUrl, registry } = resolvedProvider;
-  // 0.51：opt-in 计价；无配置时为 undefined，total_cost 保持 0。
-  const pricing = createUsagePricing(config.pricing);
+  // 0.51：opt-in 计价；两面重构 §10.1 合并视图（entry.pricing 按 wire 名覆盖 pricing.models）。
+  const pricing = createUsagePricing(config.pricing, config.models?.entries);
 
   // P1-w2d：summarizer 与 EU 消费同一 resolveModel（默认热应用后压缩跟随）；
   // mock 无 registry → 常量闭包，与今天逐字等价。

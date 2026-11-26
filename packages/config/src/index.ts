@@ -126,10 +126,12 @@ export {
   snakeToCamel,
 } from './loader.js';
 export {
+  defaultModeFor,
   ModelRefError,
   type ModelRefErrorCode,
   type ModelRegistrySnapshot,
-  type RegistryVendor,
+  type RegistryCredential,
+  type RegistryEntry,
   type ResolvedModel,
   resolveModelRef,
   synthesizeLegacyRegistry,

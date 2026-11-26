@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import {
   DERIVED_TOKEN_PREFIX,
+  defaultModelForProvider,
   derivePurposeToken,
   type ResolvedModel,
   ROOT_SECRET_BYTES,
@@ -80,6 +81,23 @@ function notifyBareFallback(providerName: string, baseUrl: string): void {
   );
 }
 
+/**
+ * provider.* 显式值判定（legacyPresent 热应用近似口径）：默认层只给
+ * name='openai' / temperature=0.7 / maxTokens=4096；其余键出现或值偏离默认即视为
+ * legacy 兼容面存在（保守方向：宁可透传，不误杀存量 pin）。
+ */
+function hasExplicitProvider(config: VesselConfig): boolean {
+  const p = config.provider;
+  if (p === undefined) return false;
+  if (p.apiKey !== undefined || p.apiKeyEnv !== undefined || p.baseUrl !== undefined) return true;
+  if (p.promptCache !== undefined || p.timeoutMs !== undefined) return true;
+  if (p.name !== undefined && p.name !== 'openai') return true;
+  if (p.temperature !== undefined && p.temperature !== 0.7) return true;
+  if (p.maxTokens !== undefined && p.maxTokens !== 4096) return true;
+  const fallback = defaultModelForProvider(p.name ?? 'openai');
+  return p.model !== undefined && p.model !== '' && p.model !== fallback;
+}
+
 /** 凭证信封条目（形状冻结于上位契约 §2.2；与插件写侧同形）。 */
 interface CredentialEnvelopeEntry {
   iv: string;
@@ -117,9 +135,15 @@ export interface ModelRegistryWiring {
 export async function createModelRegistryWiring(options: {
   config: VesselConfig;
   loader: Pick<PluginLoader, 'getProviders' | 'load' | 'list'>;
+  /**
+   * provider.* 是否有非 default 层来源（装配层按 configSources 精确判定，§7.4）。
+   * 缺省 true = 保守透传（与今天字节等价）；false 时未命中 ref 走 ModelRefError。
+   */
+  legacyPresent?: boolean;
 }): Promise<ModelRegistryWiring> {
   let config = options.config;
   let dataDir = resolveDataDir(config);
+  let legacyPresent = options.legacyPresent ?? true;
 
   // provider 类插件单独装配（不进 plugins 列表）：它们只 registerProvider，贡献工厂。
   const providerHost = new MemoryPluginHost();
@@ -134,8 +158,8 @@ export async function createModelRegistryWiring(options: {
     }
   }
 
-  let snapshot = synthesizeLegacyRegistry(config);
-  /** 实例缓存：键 = vendorId + 凭证 updatedAt + promptCache flag（不含 model：req.model 逐请求透传）。 */
+  let snapshot = synthesizeLegacyRegistry(config, legacyPresent);
+  /** 实例缓存：键 = entryId + baseUrl + 凭证 updatedAt + promptCache + param 构造缺省。 */
   const cache = new Map<string, LLMProvider>();
 
   /** 读信封条目（只读元数据路径；不存在 / 损坏 → undefined，请求侧按缺凭证处理）。 */
@@ -177,11 +201,11 @@ export async function createModelRegistryWiring(options: {
     }
   }
 
-  /** 凭证解析：legacy 走 resolveEffectiveApiKey（今天口径）；注册 vendor 走信封 / env 间接。 */
+  /** 凭证解析：legacy 走 resolveEffectiveApiKey（今天口径）；注册条目走信封 / env 间接。 */
   function apiKeyFor(resolved: ResolvedModel, entry: CredentialEnvelopeEntry | undefined): string {
-    // 用保留前缀判定而非当前快照 legacyVendorId：provider.name 热切换后，live EU 的
-    // wrapper 仍持旧 legacy vendorId，凭证来源仍是全局 provider.*（live 凭证语义）。
-    if (resolved.vendorId.startsWith('legacy:')) {
+    // 用保留前缀判定而非当前快照 legacyCredentialId：provider.name 热切换后，live EU 的
+    // wrapper 仍持旧 legacy 凭证 ref，凭证来源仍是全局 provider.*（live 凭证语义）。
+    if (resolved.legacy || resolved.credentialRef?.startsWith('legacy:') === true) {
       return resolveEffectiveApiKey(config) ?? '';
     }
     if (resolved.credentialRef !== undefined) {
@@ -211,11 +235,19 @@ export async function createModelRegistryWiring(options: {
   function cacheKeyOf(resolved: ResolvedModel, updatedAt: string | undefined): string {
     const promptCache =
       resolved.promptCache === undefined ? 'auto' : resolved.promptCache ? 'on' : 'off';
-    // 分隔符 '|' 安全：vendorId 限 kebab-case / legacy: 前缀，updatedAt 是 ISO 字符串。
-    return `${resolved.vendorId}|${updatedAt ?? ''}|${promptCache}`;
+    // param 构造缺省（temperature/maxTokens/topP）进缓存键：热应用改 param → 键变 → 重建。
+    // extra 是请求期注入（不进构造），不参与键。分隔符 '|' 安全：entryId 限形状字符 /
+    // legacy: 前缀，updatedAt 是 ISO 字符串，数值无 '|'。
+    const p = resolved.param;
+    const paramKey = `${p?.temperature ?? ''}|${p?.maxTokens ?? ''}|${p?.topP ?? ''}`;
+    return `${resolved.entryId}|${resolved.baseUrl ?? ''}|${updatedAt ?? ''}|${promptCache}|${paramKey}`;
   }
 
-  /** 唯一构造路径：工厂 → 未注册 + baseUrl 复用 openai → 裸 fallback（P0 兜底保留）。 */
+  /**
+   * 唯一构造路径：工厂 → legacy 未注册 + baseUrl 复用 openai → 裸 fallback。
+   * 注册条目未知 provider 严格 fail-fast + 候选（§5.1；宽容复用只保留给 legacy 路径）。
+   * param 缺省注入（§10.2）：temperature/maxTokens/topP → 构造缺省（请求显式覆盖）。
+   */
   function buildInstance(
     resolved: ResolvedModel,
     entry: CredentialEnvelopeEntry | undefined,
@@ -226,35 +258,47 @@ export async function createModelRegistryWiring(options: {
       api_key: apiKey,
       base_url: baseUrl,
       model: resolved.wireModel,
-      temperature: config.provider?.temperature,
-      max_tokens: config.provider?.maxTokens,
+      temperature: resolved.param?.temperature ?? config.provider?.temperature,
+      max_tokens: resolved.param?.maxTokens ?? config.provider?.maxTokens,
+      top_p: resolved.param?.topP,
       timeout_ms: config.provider?.timeoutMs,
       prompt_cache: resolved.promptCache,
     };
-    const factory = providerHost.getProvider(resolved.protocol);
+    const factory = providerHost.getProvider(resolved.provider);
     if (factory) return factory(params);
 
-    // 未注册 + 无显式端点：不能猜厂商默认（DECISION-020 §R1.5）。
+    // 注册条目：未知 provider 不猜兼容复用（比 legacy 路径更严，§5.1）。
+    if (!resolved.legacy) {
+      const candidates = providerHost.listProviders().join(', ');
+      throw new ProviderConfigError(
+        `Provider "${resolved.provider}" of model entry "${resolved.entryId}" is not registered ` +
+          `(registered: ${candidates || '<none>'}). Use a registered protocol factory name ` +
+          '(openai / openai-compatible / anthropic / gemini) or install the provider plugin.',
+      );
+    }
+
+    // legacy 未注册 + 无显式端点：不能猜厂商默认（DECISION-020 §R1.5）。
     if (baseUrl.trim() === '') {
       throw new ProviderConfigError(
-        `Provider "${resolved.protocol}" is not registered and has no provider.baseUrl. ` +
+        `Provider "${resolved.provider}" is not registered and has no provider.baseUrl. ` +
           'Use a registered provider or set provider.base_url for an OpenAI-compatible endpoint.',
       );
     }
 
-    notifyUnknownProvider(resolved.protocol, baseUrl, resolved.wireModel);
+    notifyUnknownProvider(resolved.provider, baseUrl, resolved.wireModel);
     // 复用 openai 工厂，让未知 provider 与已知 provider 走同一层 withRetry/withTimeout。
     const openaiFactory = providerHost.getProvider('openai');
     if (openaiFactory) return openaiFactory(params);
 
     // 损坏安装（provider-openai 缺失）：保留裸构造，但没有 retry/timeout。
-    notifyBareFallback(resolved.protocol, baseUrl);
+    notifyBareFallback(resolved.provider, baseUrl);
     return new OpenAICompatibleProvider({
       api_key: apiKey,
       base_url: baseUrl,
       model: resolved.wireModel,
-      temperature: config.provider?.temperature,
-      max_tokens: config.provider?.maxTokens,
+      temperature: resolved.param?.temperature ?? config.provider?.temperature,
+      max_tokens: resolved.param?.maxTokens ?? config.provider?.maxTokens,
+      top_p: resolved.param?.topP,
       prompt_cache: resolved.promptCache,
     });
   }
@@ -274,19 +318,28 @@ export async function createModelRegistryWiring(options: {
   }
 
   /**
-   * delegating wrapper：chat 逐请求转发到当前键实例（req 原样透传，messages 一个字节
-   * 不改——前缀不变量）；vision 读当前实例能力。model 由 EU 构造期快照经 req.model 传入。
+   * delegating wrapper：chat 逐请求转发到当前键实例。param.extra 在请求期并入
+   * req.extra_params（§10.2：hook requestExtras 已在 req 里 → 会话级赢静态缺省；
+   * adapter 的 mergeExtraParams 做 RESERVED 保护）。messages 一个字节不改——前缀不变量。
+   * vision 读当前实例能力。model 由 EU 构造期快照经 req.model 传入。
    */
   function delegatingProvider(resolved: ResolvedModel): LLMProvider {
+    const extra = resolved.param?.extra;
+    const hasExtra = extra !== undefined && Object.keys(extra).length > 0;
     return {
-      chat: (req) => currentInstance(resolved).chat(req),
+      chat: (req) => {
+        const effective = hasExtra
+          ? { ...req, extra_params: { ...extra, ...req.extra_params } }
+          : req;
+        return currentInstance(resolved).chat(effective);
+      },
       get vision() {
         return currentInstance(resolved).vision;
       },
-      // q-thinking-plugin：身份是路由事实（resolved.protocol），挂 wrapper 级，不随实例
-      // 缓存键（凭证 updatedAt）变——轮换凭证不换身份。未知 protocol 复用 openai 工厂时
-      // 仍挂原 protocol（dashscope 走 openai 传输但身份可以是 'dashscope'）。
-      providerName: resolved.protocol,
+      // q-thinking-plugin：身份是路由事实（resolved.provider），挂 wrapper 级，不随实例
+      // 缓存键（凭证 updatedAt）变——轮换凭证不换身份。legacy 未知 protocol 复用 openai
+      // 工厂时仍挂原 protocol（dashscope 走 openai 传输但身份可以是 'dashscope'）。
+      providerName: resolved.provider,
     };
   }
 
@@ -313,7 +366,10 @@ export async function createModelRegistryWiring(options: {
   const applyConfig = (next: VesselConfig): void => {
     config = next;
     dataDir = resolveDataDir(next);
-    snapshot = synthesizeLegacyRegistry(next);
+    // legacyPresent 单向闸：一旦 provider.* 出现过就保持透传（保守，字节等价）；
+    // 初始 false 时按新 config 显式值重判（热应用 sources 不经过这里，近似判定）。
+    legacyPresent = legacyPresent || hasExplicitProvider(next);
+    snapshot = synthesizeLegacyRegistry(next, legacyPresent);
     cache.clear();
   };
 
