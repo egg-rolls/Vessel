@@ -5,6 +5,8 @@
  * （缺省 300ms，可注入 0 供测试），之后用 `loadConfig()` 重新读取：
  *
  * - **只有 `validation.valid === true` 且无 errors 才应用**：调 `gateway.reload(...)`；
+ * - 成功 notice 按差异行行首 scope token 拆组、每组独立一条（§3.3 单 scope 不变量，
+ *   无前缀行归 config 兜底组不丢行）；
  * - 语法 / 语义错误 → **不应用**，只记日志 + 广播一条失败 notice；
  * - 连续失败后一旦校验通过必须能正常应用（每次变更独立判定，不锁死）；
  * - `close()` 取消监听与未到期的 debounce，不泄漏句柄 / 定时器。
@@ -74,16 +76,17 @@ export interface ConfigWatchOptions {
    */
   validate: () => Promise<ConfigReloadOutcome>;
   /**
-   * 校验通过后应用。返回值用于生成成功 notice（逐条差异摘要）。
+   * 校验通过后应用。返回值 = 差异行（线格式 `scope: <detail>`），按行首 scope token
+   * 分组、每组各自发一条成功 notice（§3.3 单 scope 不变量）；无前缀行归 config 组。
    * 抛错时视为应用失败（发失败 notice，不吞掉日志）。
    */
   apply: () => Promise<string[]>;
-  /** 失败 / 成功的通知出口（形状见契约 §3） */
+  /** 失败 / 成功的通知出口（形状见契约 §3）；成功时按 scope 组逐条调用 */
   notify: (notice: RuntimeNotice) => void;
   logger?: Logger;
   /** debounce 毫秒；缺省 300，测试可传 0 */
   debounceMs?: number;
-  /** 每个 scope 的失败 notice 里 scope 字段；缺省 'config' */
+  /** 失败 notice 的 scope 字段 + 成功时无前缀差异行的兜底组；缺省 'config' */
   scope?: string;
   /** 测试注入：替代 `fs.watch` */
   watchFactory?: (
@@ -136,6 +139,37 @@ function closeWatcher(watcher: { close(): void } | undefined): void {
   } catch {
     // 关闭失败不影响进程退出
   }
+}
+
+/**
+ * 差异行的行首 scope token：applier 的线格式是 `scope: <detail>`
+ * （`permission: …` / `tools: …` / `config: …`，见 `hot-apply-appliers.ts`）。
+ * 只认字母起头的词 + `: `——不带该前缀的行不是 scope 行，归兜底组。
+ */
+const SUMMARY_SCOPE_TOKEN = /^([a-z][a-z0-9_-]*): /i;
+
+/**
+ * 差异行按行首 scope token 分组（设计 §3.3，D4 裁定：P1，混 scope 消息即刻消灭）。
+ *
+ * - `permission: …` → permission 组，`tools: …` → tools 组……组键 = token 小写；
+ * - 无 scope 前缀的行归 `fallbackScope` 组（缺省 config）——兜底不丢行；
+ * - 组序 = 行首次出现序（Map 插入序），组内保持原序。注入侧还会按
+ *   `NOTICE_SCOPE_PRIORITY` 重排，这里只保证稳定、不丢。
+ *
+ * 纯函数，导出是为了让「组怎么拆」可被单独读到（与 `formatNotices` 同口径）。
+ */
+export function splitSummariesByScope(
+  summaries: readonly string[],
+  fallbackScope: string,
+): Map<string, string[]> {
+  const groups = new Map<string, string[]>();
+  for (const line of summaries) {
+    const token = SUMMARY_SCOPE_TOKEN.exec(line)?.[1]?.toLowerCase() ?? fallbackScope;
+    const bucket = groups.get(token);
+    if (bucket === undefined) groups.set(token, [line]);
+    else bucket.push(line);
+  }
+  return groups;
 }
 
 /**
@@ -306,12 +340,22 @@ export function startConfigWatch(options: ConfigWatchOptions): ConfigWatchHandle
         path: target,
         scopes: summaries.length,
       });
-      options.notify({
-        scope,
-        summary: summaries[0] ?? 'config applied',
-        ...(summaries.length > 1 ? { details: summaries } : {}),
-        ok: true,
-      });
+      // 单 scope 不变量（env-info P1，设计 §3.3）：差异行按行首 scope token 分组，每组各自
+      // publish 一条 notice（summary = 组首行，details = 组余行）——混合消息在产地消灭。
+      const groups = splitSummariesByScope(summaries, scope);
+      if (groups.size === 0) {
+        // apply 返回空（无差异行）：保留旧兜底，仍发一条 config notice。
+        options.notify({ scope, summary: 'config applied', ok: true });
+      } else {
+        for (const [groupScope, lines] of groups) {
+          options.notify({
+            scope: groupScope,
+            summary: lines[0] ?? 'config applied',
+            ...(lines.length > 1 ? { details: lines.slice(1) } : {}),
+            ok: true,
+          });
+        }
+      }
     } finally {
       // 成功 / 校验失败 / 应用失败都排验证：写盘可能还在进行，终值必须有人收口。
       scheduleVerification();

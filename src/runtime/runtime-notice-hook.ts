@@ -2,7 +2,8 @@
  * `runtime.notice` → BeforeLlm 注入（CONTRACT-hot-apply §3）。
  *
  * 热应用结果要进模型上下文：hook 读取 notice 总线里该 session **尚未消费**的通知，
- * 拼成一条 `[runtime] <summary>` 消息追加到上下文尾部并持久化。
+ * **按 scope 分组**、每个 scope 一条 `[runtime] <summary>` 消息追加到上下文尾部并持久化
+ * （单 scope 不变量：一条 `vessel:notice` 只承载一个 scope，Web 卡头 = 首行 scope）。
  *
  * 每条通知的 `details`（例如 `peer-notices.ts` 的 `名字: kind (error_code)`）**跟着注入**，
  * 一条一行（`  · ` 前缀）：只给 summary 的话，模型看到「1 finished」却不知道是哪个成员。
@@ -86,8 +87,11 @@ export interface RuntimeNoticeHookOptions {
    * 'run' ⇒ 每 run 只在首次请求取通知（`request_index > 0` 早退）。gate 在
    * `takeStored` **之前**：游标不推进，通知留在总线，下一 run 首请求照常取（不丢）。
    * 整 hook 取最细：装配层传 `finestCadence(['config','permission','tools','mcp','update','peer'], …)`。
+   *
+   * live resolver（P1）：可传 `() => EnvCadence` 闭包，每次发射实时求值⇒热改 cadence
+   * 即时生效（装配层捕获 live 配置 getter，非注册时快照）；静态值仍兼容（旧 caller 零回归）。
    */
-  cadence?: EnvCadence;
+  cadence?: EnvCadence | (() => EnvCadence);
 }
 
 /** 注入落盘的事件类型（`runtime.*` 命名风格，与 `runtime.notice` 同族）。 */
@@ -117,11 +121,16 @@ export function formatNoticeLine(notice: FormattableNotice): string {
 }
 
 /**
- * 多条通知 → 一条注入正文（总行数受 `NOTICE_LINES_MAX` 约束）。
+ * 多条通知 → 一段注入正文（总行数受 `maxLines` 约束，缺省 `NOTICE_LINES_MAX`）。
  *
  * 只在 hook 里用；导出是为了让「预算怎么花」可被单独读到（纯函数，无状态）。
+ * `maxLines` 让调用方把**跨 scope 组共享的剩余预算**传进来：首行永远保留，details
+ * 按剩余预算截断（与单卡同口径），于是按 scope 拆出的多条消息合计仍受 24 行约束。
  */
-export function formatNotices(notices: readonly FormattableNotice[]): string {
+export function formatNotices(
+  notices: readonly FormattableNotice[],
+  maxLines: number = NOTICE_LINES_MAX,
+): string {
   const lines: string[] = [];
   let dropped = 0;
   for (const notice of notices) {
@@ -129,7 +138,7 @@ export function formatNotices(notices: readonly FormattableNotice[]): string {
     // 首行永远保留（见 NOTICE_LINES_MAX）。
     lines.push(head);
     for (const detail of details) {
-      if (lines.length >= NOTICE_LINES_MAX) {
+      if (lines.length >= maxLines) {
         dropped += 1;
         continue;
       }
@@ -141,11 +150,7 @@ export function formatNotices(notices: readonly FormattableNotice[]): string {
     // 预算已满且最后一行就是 details：用省略行顶替它（行数不超上限，被顶掉的那一行
     // 也算「没显示出来的明细」，所以计数 +1）；否则（首行把预算吃满的极端场景）直接
     // 追加一行，宁可超一行也不静默丢。
-    if (
-      lines.length >= NOTICE_LINES_MAX &&
-      last !== undefined &&
-      last.startsWith(NOTICE_DETAIL_MARK)
-    ) {
+    if (lines.length >= maxLines && last !== undefined && last.startsWith(NOTICE_DETAIL_MARK)) {
       lines[lines.length - 1] = `${NOTICE_DETAIL_MARK}+${dropped + 1} more`;
     } else {
       lines.push(`${NOTICE_DETAIL_MARK}+${dropped} more`);
@@ -206,7 +211,9 @@ export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook
     async run(ctx): Promise<void> {
       // 节奏 gate 在 takeStored 之前：游标不推进 ⇒ 通知不丢，下一 run 首请求照常取。
       // request_index 缺省 0（旧 caller）⇒ 恒放行，零回归。
-      if (options.cadence === 'run' && (ctx.request_index ?? 0) > 0) return;
+      // live resolver：cadence 是闭包则每次发射实时求值（热改即时生效）；静态值原样用。
+      const cadence = typeof options.cadence === 'function' ? options.cadence() : options.cadence;
+      if (cadence === 'run' && (ctx.request_index ?? 0) > 0) return;
       const stored = options.bus.takeStored(ctx.session_id, limit);
       if (stored.length === 0) return;
       const runId = typeof ctx.run_id === 'string' ? ctx.run_id : '';
@@ -232,20 +239,43 @@ export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook
         kept.push(entry);
       }
       if (kept.length === 0) return;
-      // 只对**已取出的那批**按 scope 优先级稳定排序（同 rank 保持游标序），再合并。
-      // takeStored 的 FIFO 选择与游标推进不动：低优先级通知不丢，只是在合并卡里排后。
+      // 只对**已取出的那批**按 scope 优先级稳定排序（同 rank 保持游标序）。
+      // takeStored 的 FIFO 选择与游标推进不动：低优先级通知不丢，只是排后。
       kept.sort((a, b) => noticeScopeRank(a.notice.scope) - noticeScopeRank(b.notice.scope));
-      const text = formatNotices(kept.map((entry) => entry.notice));
-      if (text === '') return;
-      const message: Message = {
-        role: 'user',
-        name: 'vessel:notice',
-        content: text,
-        timestamp: Date.now(),
-      };
-      ctx.messages = [...(ctx.messages ?? []), message];
-      // 顺序固定：先挂消息（模型的输入已经在手），再 best-effort 落事件。
-      await recordInjection(options.eventLog, ctx, kept);
+      // 单 scope 不变量（P1）：按 scope 分组，每个 scope 一条 vessel:notice。
+      // kept 已按优先级排序 ⇒ Map 插入序 = 组优先级序；组内保持游标序。
+      const groups = new Map<string, StoredNotice[]>();
+      for (const entry of kept) {
+        const bucket = groups.get(entry.notice.scope);
+        if (bucket === undefined) groups.set(entry.notice.scope, [entry]);
+        else bucket.push(entry);
+      }
+      // 24 行预算跨组共享：首行永远保留（不丢通知），details 按剩余预算截断
+      // （与单卡同口径，被省的行用 `· +N more` 报出）。高优先级组先花预算。
+      let budget = NOTICE_LINES_MAX;
+      const messages: Message[] = [];
+      const injected: StoredNotice[][] = [];
+      for (const entries of groups.values()) {
+        const text = formatNotices(
+          entries.map((entry) => entry.notice),
+          Math.max(0, budget),
+        );
+        if (text === '') continue;
+        budget -= text.split('\n').length;
+        messages.push({
+          role: 'user',
+          name: 'vessel:notice',
+          content: text,
+          timestamp: Date.now(),
+        });
+        injected.push(entries);
+      }
+      if (messages.length === 0) return;
+      ctx.messages = [...(ctx.messages ?? []), ...messages];
+      // 顺序固定：先挂消息（模型的输入已经在手），再 best-effort 逐组落事件。
+      for (const entries of injected) {
+        await recordInjection(options.eventLog, ctx, entries);
+      }
     },
   };
 }
@@ -254,8 +284,8 @@ export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook
  * 注入事件：`{scope, count, members, notice_ids}` 进 `data`，`session_id` / `run_id`
  * 落在事件信封（`events.ndjson` 的顶层字段，与其它事件同口径）。
  *
- * `scope` 取本次注入涉及的 scope；多条不同就记 `mixed`（注入正文本来就是多条拼一条）。
- * 事件日志任何异常都吞掉：诊断信息不该反过来打断用户这一轮。
+ * P1 起按 scope 拆消息，每次调用只承载**一个** scope 组 ⇒ `scope` 即该组 scope
+ * （不再出现 `mixed`）。事件日志任何异常都吞掉：诊断信息不该反过来打断用户这一轮。
  */
 async function recordInjection(
   eventLog: SessionEventLogPort | undefined,
@@ -265,7 +295,7 @@ async function recordInjection(
   if (eventLog === undefined) return;
   const sessionId = ctx.session_id;
   if (sessionId === undefined || sessionId === '') return;
-  const scopes = [...new Set(stored.map((entry) => entry.notice.scope))];
+  const scope = stored[0]?.notice.scope ?? 'context';
   const members = stored.flatMap((entry) => entry.meta?.members ?? []);
   try {
     await eventLog.append({
@@ -274,7 +304,7 @@ async function recordInjection(
       type: NOTICE_INJECTED_EVENT,
       ts: Date.now(),
       data: {
-        scope: scopes.length === 1 ? scopes[0] : 'mixed',
+        scope,
         count: stored.length,
         members,
         notice_ids: stored.map((entry) => entry.id),

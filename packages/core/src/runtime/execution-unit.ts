@@ -1209,6 +1209,21 @@ export class ExecutionUnit {
   }
 
   /**
+   * 装配层事实发射端口（q-card-robust P-A 同构，additive）：把一条事件经
+   * `publishEvent`（journal.appendFact → 时间线双写）发射，从而进会话时间线——
+   * 时间线订阅的 Web 连接 live 可见、刷新可回放重建。与工具侧 `ToolContext.emitFact`
+   * （构造期接 `this.publishEvent`）同一先例，供装配层（packages/agent runtime）把
+   * 人类可见提示卡（如 inbox `runtime.notice`）改走事实通道，而非直发裸流。
+   *
+   * `publishEvent` 内部 `publishRaw` 仍发裸事件流⇒旧订阅（父流并入 / bridge）兼容保留，
+   * 事实通道为主。`runtime.notice` 是事实类型（不在 isNonFactEventType 表）⇒派发时间线；
+   * 裸流观察侧 appendObserved 只认 tool.permission.response / ask.*，不会二次派发。
+   */
+  emitFact(event: RunEvent): void {
+    this.publishEvent(event);
+  }
+
+  /**
    * 0.52 V2：压缩只在**段边界**发生（run 起点 / 用户显式压缩），run 内绝不改写历史。
    *
    * 调用点：`run()` 与 resume 的 seed 之后、本段第一条请求之前。压缩成功 ⇒ 本段的基准
@@ -3649,6 +3664,9 @@ export class ExecutionUnit {
       ...(this.provider.providerName !== undefined
         ? { providerName: this.provider.providerName }
         : {}),
+      // P1 origin 填充（设计 §2.2）：成员 cwd / 身份事实透传给 loop → HookContext；消费方下步。
+      ...(this.toolCwd !== undefined ? { cwd: this.toolCwd } : {}),
+      ...(this.boundAgentId !== undefined ? { agent_id: this.boundAgentId } : {}),
       ...(this.pricing !== undefined ? { pricing: this.pricing } : {}),
       ...(inputRefs !== undefined && inputRefs.length > 0 ? { inputRefs } : {}),
       window: {

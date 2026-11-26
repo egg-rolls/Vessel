@@ -244,7 +244,7 @@ export function registerRuntimeNoticeHook(
   host: PluginHost,
   bus: RuntimeNoticeBus,
   eventLog?: SessionEventLogPort,
-  envInjection?: EnvInjectionConfig,
+  envInjection?: () => EnvInjectionConfig | undefined,
 ): void {
   const existing = host.getHooks().some((hook) => hook.name === RUNTIME_NOTICE_HOOK);
   if (existing) return;
@@ -254,10 +254,10 @@ export function registerRuntimeNoticeHook(
       ...(eventLog !== undefined ? { eventLog } : {}),
       // bus 整体取最细（不做 per-scope 分裂）：任一 request ⇒ request；
       // 缺省配置全 request = 今天行为。要整体推迟须六个词全配 run。
-      cadence: finestCadence(
-        ['config', 'permission', 'tools', 'mcp', 'update', 'peer'],
-        envInjection,
-      ),
+      // live resolver（P1）：每次发射实时求值 finestCadence，入参是 live 配置 getter
+      // （非注册时快照）⇒热改 env_injection 节奏即时生效（注册幂等，不靠重注册刷新）。
+      cadence: () =>
+        finestCadence(['config', 'permission', 'tools', 'mcp', 'update', 'peer'], envInjection?.()),
     }),
   );
 }
