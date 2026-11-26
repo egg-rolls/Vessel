@@ -248,6 +248,27 @@ export async function observeEntry(
 }
 
 /**
+ * 观察侧自改抑制判定（设计 §2.3，sameOrigin 跳过）。
+ *
+ * 即将通知的变更恰是本 session/agent 最近一次写入的内容（观察 rev === last_writer.rev）
+ * 且写入者与自身同源 ⇒ 跳过通知、静默推进 notified_rev（自改不提示，用户裁定）。
+ * 身份以 member_id 为主键（跨 body 稳定）、缺省回退 session_id —— 与 tool.ts sameOrigin
+ * 的「同源」语义一致；观察侧没有第二个写入事件可逐字段比 tool/session，故按身份标量判等。
+ * 无 last_writer（旧状态 / bash 等旁路写）⇒ false ⇒ 照常通知（外部改动）。
+ */
+function isSelfWrite(
+  entry: SubscriptionEntry,
+  observedRev: string,
+  agentId: string | undefined,
+  sessionId: string,
+): boolean {
+  const writer = entry.last_writer;
+  if (writer === undefined) return false;
+  if (observedRev !== writer.rev) return false;
+  return (writer.member_id ?? writer.session_id) === (agentId ?? sessionId);
+}
+
+/**
  * 创建 BeforeLlm hook。
  * 每个插件实例持有自己的 run 去重集合（每 run 只检查一次）。
  */
@@ -325,6 +346,22 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
             };
             dirty = true;
           }
+          continue;
+        }
+
+        // 自改抑制（设计 §2.3，sameOrigin 跳过）：即将通知的变更恰是本 session/agent
+        // 最近一次写入 ⇒ 静默推进 notified_rev，不出卡、不出 diff；外部改动（无 last_writer /
+        // 异源 / rev 不符）落到下面照常通知。reads 不动（下次外部变更观察时重定位锚）。
+        if (isSelfWrite(entry, observation.rev, ctx.agent_id, sessionId)) {
+          state.subscriptions[entry.path] = {
+            ...entry,
+            rev: observation.rev,
+            size: observation.size,
+            mtime_ms: observation.mtime_ms,
+            notified_rev: observation.rev,
+            notified_at: now,
+          };
+          dirty = true;
           continue;
         }
 
