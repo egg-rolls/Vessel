@@ -16,6 +16,7 @@ import { useRuntimeVisibility } from '../../state/runtime-visibility';
 import { sessionTitle } from '../../state/sessions';
 import { resourceData } from '../../state/useResource';
 import { useAgentStore } from '../../stores/agentStore';
+import { useAgentInboxRefreshTick } from '../inbox/agent-inbox-refresh';
 import { useNodeNames } from '../nodes/useNodeNames';
 import { useAskCursorPrune } from '../pending/ask-cursor-store';
 import { useAskDraftPrune } from '../pending/ask-draft-store';
@@ -42,7 +43,6 @@ import { useAnsweredAsks } from './useAnsweredAsks';
 import { useChatSessions } from './useChatSessions';
 import { useChatSubmit } from './useChatSubmit';
 import { useChatTranscript } from './useChatTranscript';
-import { useInboxRefreshTick } from './useInboxRefresh';
 import { usePendingSends } from './usePendingSends';
 
 type ChatRoute = Extract<Route, { domain: 'chat' }>;
@@ -276,11 +276,6 @@ export function ChatView({
     },
   });
 
-  // inbox 变更的 live 触发器：agent 用 `inbox read/delete` 消费条目、或新条目入队时，
-  // 条带立刻重读一次（不等 2s 兜底轮询，更不等页面刷新）。数据源仍是那次 RPC，
-  // 事件只当触发器（判据见 useInboxRefresh.ts）。
-  const inboxRefreshTick = useInboxRefreshTick(snapshot.entries, selectedId);
-
   // 已答提问的取数：数据来自服务端 answered 记录（落盘的真相），刷新 / 重连靠它重建。
   // 子 agent 详情态不读（那一屏讲的是另一个 run），草稿态没有会话 id 也不读。
   const answeredAsks = useAnsweredAsks({
@@ -430,6 +425,25 @@ export function ChatView({
     transcriptApi.sessionAgents,
     selectedId,
     bodyOwners,
+  );
+
+  // inbox 变更的 live 触发器（agent 级，与取数同口径 I-1）：该 agent 的条目被
+  // `inbox read/delete` 消费、或新条目入队（含跨会话 / wake-quiet 投递）时，条带立刻
+  // 重读一次（不等 2s 兜底轮询，更不等页面刷新）。数据源仍是那次 RPC，事件只当触发器
+  // （判据见 ../inbox/agent-inbox-refresh.ts；会话级 useInboxRefresh 已退役删除）。
+  // 工具帧归属用的 body sessions 由 roster 反查表反转而来（同一份数据，不新增 RPC）。
+  const agentSessions = useMemo(() => {
+    const sessions = new Set<string>();
+    if (catalogAgentId === undefined) return sessions;
+    for (const [session, agent] of bodyOwners) {
+      if (agent === catalogAgentId) sessions.add(session);
+    }
+    return sessions;
+  }, [bodyOwners, catalogAgentId]);
+  const inboxRefreshTick = useAgentInboxRefreshTick(
+    snapshot.entries,
+    catalogAgentId,
+    agentSessions,
   );
 
   return (
@@ -604,7 +618,8 @@ export function ChatView({
               对齐消息列（见 PendingStrip.tsx）。数据源是服务端持久真相
               （`agents.inbox{ agent_id }`，agent 级全量，I-1），刷新 / 切会话都不丢；
               `refreshKey` 只是「再读一次盘」的触发器（本会话新受理一次发送 / run 数变化 /
-              inbox 变更 live 事件：`inbox read/delete` 消费、新条目入队）。 */}
+              inbox 变更 live 事件：`inbox read/delete` 消费、新条目入队，**agent 级**判据，
+              含跨会话 / wake-quiet 投递；面板展开重读在条带内部，D-5）。 */}
             <PendingStrip
               sessionId={selectedId}
               agentId={catalogAgentId}

@@ -1274,7 +1274,7 @@ export const messages = {
   'chat.toBottom': '回到底部 ↓',
   'chat.index.label': '会话索引',
   'chat.index.jump': '跳到第 {index} 条',
-  'chat.pending.title': '待处理 · {count}',
+  'chat.pending.title': '收件箱 · {count}',
   'chat.pending.identity.human': 'human',
   'chat.pending.identity.ask': 'ask 答复',
   // 固定 runtime 标签（服务端 InboxSourceLabel）：不是「谁说的话」，不走显示名分支

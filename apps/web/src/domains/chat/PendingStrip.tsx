@@ -12,7 +12,8 @@
  *   降级为「写操作判据」——「收回编辑」仍只对当前会话条目开放（peek 的 `session_id`
  *   等值断言保留）；逐行归属标注随面板演化补上；
  * - **数据永远来自那次 RPC 读**，事件只当触发器（切会话 / 重连 / 本会话新受理一次发送 /
- *   inbox 变更 live 事件：`inbox read/delete` 消费、新条目入队，见 `useInboxRefresh.ts`），
+ *   inbox 变更 live 事件：`inbox read/delete` 消费、新条目入队，**agent 级**判据见
+ *   `../inbox/agent-inbox-refresh.ts`；面板展开也重读一次，D-5/R4），
  *   非空时 2s 兜底轮询（空态零流量）；取数前 250ms debounce，让「发完立刻开跑」的条目
  *   不在条带上闪一下；
  * - 条带只做「还有几条在等」，写入口按来源分档（见下）。
@@ -55,8 +56,9 @@
  * **三态展示（用户裁定）**：`collapsed` 只留 badge 计数（卡头那行按钮），不画卡片；
  * `default`（缺省）显示前 `previewCount` 组（缺省 3，数量可配置），其余折叠成
  * 「展开全部（还有 N 条）」；`expanded` 给完整列表，高度上限 + 滚动。卡头按钮在
- * 「badge ↔ 卡片」之间开合，footer 按钮在「默认 ↔ 全部」之间开合；都是纯展示状态，
- * 不触发 RPC。同源折叠组（「N 条」）与三态无关，各自独立开合。
+ * 「badge ↔ 卡片」之间开合，footer 按钮在「默认 ↔ 全部」之间开合。开合本身是纯展示
+ * 状态，唯一的附加触发：**展开（collapsed→非 collapsed）重读一次盘**（D-5/R4：用户
+ * 主动要看真相，展开是有意义读）。同源折叠组（「N 条」）与三态无关，各自独立开合。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useToast } from '../../components/ToastProvider';
@@ -450,7 +452,8 @@ export function PendingStrip({
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set());
   /**
    * 条带三态（用户裁定）：收起 = 只 badge；默认 = 前 previewCount 组；展开 = 全部 + 限高滚动。
-   * 纯本地展示状态，不触发 RPC；切会话不重置（它是用户的查看偏好，不是会话数据）。
+   * 本地展示状态；切会话不重置（它是用户的查看偏好，不是会话数据）。
+   * collapsed→非 collapsed 附加一次重读（D-5/R4，见卡头按钮），其余开合不触发 RPC。
    */
   const [mode, setMode] = useState<PendingStripMode>('default');
 
@@ -1009,11 +1012,16 @@ export function PendingStrip({
       <div className="px-[var(--content-pad-inline)]">
         <div className="mx-auto flex max-w-[var(--chat-content-w,860px)] flex-col gap-1.5">
           {/* 卡头 = badge + 三态开关：点击在「只 badge ↔ 卡片」之间开合（用户裁定）。
-              chevron 与 StreamCard 同形：收起指右，展开旋转 90° 指下。 */}
+              chevron 与 StreamCard 同形：收起指右，展开旋转 90° 指下。
+              展开（collapsed→非 collapsed）附加一次重读（D-5/R4：用户主动要看真相）；
+              收起仍是纯展示。reloadTick 并入读 effect，250ms debounce 不变。 */}
           <button
             type="button"
             className="bg-transparent m-0 flex items-center gap-1 self-start font-mono text-2xs tracking-wide text-faint hover:text-ink"
-            onClick={() => setMode((prev) => (prev === 'collapsed' ? 'default' : 'collapsed'))}
+            onClick={() => {
+              if (mode === 'collapsed') setReloadTick((value) => value + 1);
+              setMode((prev) => (prev === 'collapsed' ? 'default' : 'collapsed'));
+            }}
             aria-expanded={mode !== 'collapsed'}
           >
             <Icon

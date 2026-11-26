@@ -1,10 +1,10 @@
 /**
- * agent 级 inbox 变更的 live 触发器（P1-B，q-inbox-agent-view）。
+ * agent 级 inbox 变更的 live 触发器（P1-B 起；inbox 统一批后是**唯一**一套 inbox 触发器）。
  *
- * 与 `domains/chat/useInboxRefresh.ts`（会话级，条带用）同一条硬口径：**事件只当
- * 触发器，数据永远来自那次 `agents.inbox` RPC 读**。差别只在归属判据 —— 条带按
- * `session_id` 等值匹配（防串台），这里按 **agent** 匹配（用户裁定：inbox 是 agent
- * 级的消息，收件箱真相视图不做会话过滤）。
+ * 硬口径：**事件只当触发器，数据永远来自那次 `agents.inbox` RPC 读**。归属按 **agent**
+ * 匹配（用户裁定：inbox 是 agent 级的消息，收件箱真相视图不做会话过滤）。消费点：
+ * InboxView（真相视图）与 ChatView → PendingStrip（条带，I-1 agent 级取数后触发器同口径；
+ * 会话级 `useInboxRefresh.ts` 已退役删除，不留两套触发器）。
  *
  * 认两类事件：
  * - `agent.message.queued` 且 `data.agent_id === agentId`：服务端一条事件覆盖三种
@@ -17,7 +17,7 @@
  *   归属（EventStore 按 run 记的 `sessionId`，缺省读 `data.session_id`）落在该
  *   agent 的 body sessions 集合里（roster `bodies` 派生，body_id ≡ session_id）。
  *
- * 水位用 `seq` 单调递增（与 `useInboxRefreshTick` 同款）：重连回放 / 回填重放不会
+ * 水位用 `seq` 单调递增（与 `usePendingSends` 同款）：重连回放 / 回填重放不会
  * 把同一条事件吃两次；换 agent / seq 纪元回退时水位重置重扫 —— 重扫最多多触发一次
  * 重读，视图本来就要在切 agent 时读一次盘，无副作用。
  *
@@ -33,7 +33,7 @@ const INBOX_TOOL_NAME = 'inbox';
 /** 工具终态帧：handler 已执行完，inbox 状态（若被改）此刻已落定。 */
 const TOOL_TERMINAL_TYPES: readonly string[] = ['tool.call.completed', 'tool.call.failed'];
 
-/** 入队事件（与 `useInboxRefresh.ts` / `pending-placement.ts` 同一个字面）。 */
+/** 入队事件（与 `pending-placement.ts` 同一个字面）。 */
 const QUEUED_EVENT_TYPE = 'agent.message.queued';
 
 /**
@@ -66,14 +66,17 @@ export function agentInboxChangeOf(
 }
 
 /**
- * 数「该 agent inbox 变更」的触发器：每见到一条新事件 +1，供视图并入重读信号。
+ * 数「该 agent inbox 变更」的触发器：每见到一条新事件 +1，供视图 / 条带并入重读信号。
  *
- * 返回的 tick 只是触发器，不携带任何条目数据 —— 视图拿到变化后仍然走那次
- * `agents.inbox{agent_id}` RPC（去抖由视图自己做）。
+ * 返回的 tick 只是触发器，不携带任何条目数据 —— 消费点拿到变化后仍然走那次
+ * `agents.inbox{agent_id}` RPC（去抖由消费点自己做）。
+ *
+ * `agentId` 缺省 = 归属未知（条带的 catalogAgentId 派生链可能落空）⇒ 不触发，
+ * 与「缺省不发 RPC」同一条不猜 id 的规矩。
  */
 export function useAgentInboxRefreshTick(
   entries: readonly StoredEvent[],
-  agentId: string,
+  agentId: string | undefined,
   agentSessions: ReadonlySet<string>,
 ): number {
   const [tick, setTick] = useState(0);
@@ -81,6 +84,7 @@ export function useAgentInboxRefreshTick(
   const scannedAgent = useRef<string | null>(null);
 
   useEffect(() => {
+    if (agentId === undefined) return;
     if (scannedAgent.current !== agentId) {
       scannedAgent.current = agentId;
       watermark.current = -1;

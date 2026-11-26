@@ -221,11 +221,12 @@ export const PREVIEW_COUNT = 3;
 /**
  * 条带的三态展示（用户裁定）：
  *
- * - `collapsed`：只留 badge 计数（「待处理 · N」那一行），不画任何卡片；
+ * - `collapsed`：只留 badge 计数（「收件箱 · N」那一行），不画任何卡片；
  * - `default`（缺省）：展示前 `previewCount` 组，其余折叠成「展开全部（还有 N 条）」；
  * - `expanded`：完整列表，高度上限 + 滚动（条带不该把输入区挤出屏幕）。
  *
- * 纯展示状态：不触发 RPC、不改条目；同源折叠组（「N 条」）在三态里各自独立开合。
+ * 展示状态本身不改条目；collapsed→非 collapsed 由宿主附加一次重读（D-5/R4）。
+ * 同源折叠组（「N 条」）在三态里各自独立开合。
  */
 export type PendingStripMode = 'collapsed' | 'default' | 'expanded';
 
@@ -247,7 +248,7 @@ export interface PendingStripView {
   preview: PendingStripGroup[];
   /** 折叠掉的条数（按**条目**计，不含预览里的那些）。 */
   hidden: number;
-  /** 总条数（= ordered.length，供「待处理 · N」）。 */
+  /** 总条数（= ordered.length，供「收件箱 · N」，D-2：held+unread+客户端行同口径）。 */
   total: number;
 }
 

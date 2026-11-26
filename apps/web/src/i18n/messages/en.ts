@@ -1337,7 +1337,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.toBottom': 'Back to bottom ↓',
   'chat.index.label': 'Conversation index',
   'chat.index.jump': 'Jump to item {index}',
-  'chat.pending.title': 'Pending · {count}',
+  'chat.pending.title': 'Inbox · {count}',
   'chat.pending.identity.human': 'human',
   'chat.pending.identity.ask': 'ask answer',
   // Fixed runtime labels (server InboxSourceLabel): not "who said it" — never the
