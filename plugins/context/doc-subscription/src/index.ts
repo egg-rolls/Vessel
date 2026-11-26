@@ -41,6 +41,7 @@ export {
   type SubscriptionNoticeContent,
 } from './notice.js';
 export {
+  type ChangeOrigin,
   emptyState,
   type ReadRef,
   type SessionSubscriptionState,

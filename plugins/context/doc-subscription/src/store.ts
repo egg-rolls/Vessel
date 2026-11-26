@@ -16,6 +16,12 @@
  *   匹配删一条（相同请求的多次 read 记录可互换，删任一条语义等价）。
  * - `cleared_consumed`：单调增长的已消费清除 id ledger（段重置/pop 后同 id 再现不重复释放）。
  * 过期只由清除驱动：origin='read' 且 reads 归零才过期；压缩/pop 导致输出离开窗口不触发过期。
+ *
+ * 来源标记（P1 origin 存储层，additive，设计 §2）：
+ * - `last_writer`（ChangeOrigin）：最近一次可归因写入；旧状态文件无此字段 ⇒ undefined，
+ *   行为退回现状基线（零回归）。`origin`（订阅来源/过期策略）语义不动。
+ * - `mutate(sessionId, fn)`：原子读改写，与 save 共用同一条 per-session 串行链，
+ *   并发批不丢更新。
  */
 
 import { createHash } from 'node:crypto';
@@ -37,6 +43,25 @@ export interface ReadRef {
   end?: number;
   /** 订阅时该范围内容（仅字节数 ≤ maxFullBytes 才存；缺省 ⇒ 观察时整文件兜底） */
   text?: string;
+}
+
+/**
+ * 一次可归因写入的来源标记（设计 §2.1，P1 origin 存储层，additive）。
+ *
+ * 抑制主键 = `member_id`（跨 body 稳定）；缺省回退 `session_id` 判等。
+ * `session_id` 只作诊断字段。bash/构建/git 等旁路写不可归因，不产生此标记。
+ */
+export interface ChangeOrigin {
+  /** 写入时的 session（诊断用） */
+  session_id: string;
+  /** 写入者的成员 id（跨 body 稳定，抑制主键）；缺省 ⇒ 回退 session_id 判等 */
+  member_id?: string;
+  /** 产生该写入的工具 */
+  tool: 'edit' | 'write' | 'read';
+  /** 写入时间（Unix ms） */
+  ts: number;
+  /** 该次写入后的内容哈希（与 SubscriptionEntry.rev 同口径） */
+  rev: string;
 }
 
 /** 一个订阅条目 */
@@ -67,6 +92,11 @@ export interface SubscriptionEntry {
   origin: 'manual' | 'read' | 'edit';
   /** read 引用记录（缺省 []）；origin='read' 且归零时条目过期 */
   reads: ReadRef[];
+  /**
+   * 最近一次可归因写入（设计 §2.1）。旧状态文件无此字段 ⇒ undefined，
+   * 行为退回现状基线抑制（零回归）。与 `origin`（订阅来源/过期策略）语义无关。
+   */
+  last_writer?: ChangeOrigin;
 }
 
 /** 一个 session 的订阅状态 */
@@ -143,6 +173,30 @@ function normalizeConsumedIds(value: unknown): string[] {
   return [...new Set(ids)];
 }
 
+/**
+ * last_writer 防御解析：缺失 / 结构非法 ⇒ undefined（旧状态退回现状基线，零回归）。
+ * 必需字段：非空 session_id、合法 tool、非空 rev；ts 非法回落 0；member_id 可选。
+ */
+function normalizeChangeOrigin(value: unknown): ChangeOrigin | undefined {
+  if (!isRecord(value)) return undefined;
+  const sessionId = readString(value, 'session_id', '');
+  const rev = readString(value, 'rev', '');
+  const tool = value.tool;
+  if (sessionId === '' || rev === '' || (tool !== 'edit' && tool !== 'write' && tool !== 'read')) {
+    return undefined;
+  }
+  const origin: ChangeOrigin = {
+    session_id: sessionId,
+    tool,
+    ts: readNumber(value, 'ts', 0),
+    rev,
+  };
+  if (typeof value.member_id === 'string' && value.member_id !== '') {
+    origin.member_id = value.member_id;
+  }
+  return origin;
+}
+
 /** 把磁盘上的 JSON 规整成状态；任何结构问题都降级为空状态 */
 function normalizeState(sessionId: string, parsed: unknown): SessionSubscriptionState {
   if (!isRecord(parsed) || parsed.v !== 1 || !isRecord(parsed.subscriptions)) {
@@ -171,6 +225,8 @@ function normalizeState(sessionId: string, parsed: unknown): SessionSubscription
       reads: normalizeReads(value.reads),
     };
     if (typeof value.snapshot === 'string') entry.snapshot = value.snapshot;
+    const lastWriter = normalizeChangeOrigin(value.last_writer);
+    if (lastWriter !== undefined) entry.last_writer = lastWriter;
     // 以 canonical path 为唯一键，避免手改/旧文件里的键与 path 漂移造成重复条目。
     subscriptions[canonical] = entry;
   }
@@ -185,7 +241,7 @@ function normalizeState(sessionId: string, parsed: unknown): SessionSubscription
 /** per-session JSON 状态存储 */
 export class SubscriptionStore {
   private readonly stateDir: string;
-  /** 每个 session 串行写，避免同进程内并发 save 交错 */
+  /** 每个 session 串行：save 的写与 mutate 的读改写共用同一条链，避免同进程内并发批交错 */
   private readonly chains = new Map<string, Promise<void>>();
 
   constructor(stateDir: string) {
@@ -227,6 +283,37 @@ export class SubscriptionStore {
       await next;
     } finally {
       if (this.chains.get(key) === next) this.chains.delete(key);
+    }
+  }
+
+  /**
+   * 原子读改写（设计 §2.2，修洞 3）：load→fn→save 整段挂进与 save 同一条
+   * per-session 串行链——并发工具批不再 load-modify-save 交错丢更新
+   * （基线 / reads / last_writer）。
+   *
+   * fn 拿到的是链内最新磁盘状态（前序写完成后才读），返回值即写回的新状态；
+   * 错误原样抛给调用方（与 save 同语义），失败任务不阻断后续链。
+   */
+  async mutate(
+    sessionId: string,
+    fn: (
+      state: SessionSubscriptionState,
+    ) => SessionSubscriptionState | Promise<SessionSubscriptionState>,
+  ): Promise<SessionSubscriptionState> {
+    const previous = this.chains.get(sessionId) ?? Promise.resolve();
+    let updated: SessionSubscriptionState = emptyState(sessionId);
+    const next = previous
+      .catch(() => {})
+      .then(async () => {
+        updated = await fn(await this.load(sessionId));
+        await this.write(updated);
+      });
+    this.chains.set(sessionId, next);
+    try {
+      await next;
+      return updated;
+    } finally {
+      if (this.chains.get(sessionId) === next) this.chains.delete(sessionId);
     }
   }
 
