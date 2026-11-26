@@ -197,6 +197,14 @@ export interface AgentConfig {
    */
   inboxMaxMessages?: number;
   /**
+   * Team 内 present 成员上限（q-team-limit-config；默认 100，正整数 ≥1）。
+   *
+   * peer + contractor 都计入；计数口径 = `membership === 'present'`（含已 closed
+   * 但未离册的成员——closed 计数语义另议，本键只放开上限）。装配层在构造
+   * AgentService 时注入（与 temporaryTtlHours 同口径），修改后需重启生效。
+   */
+  teamMemberLimit?: number;
+  /**
    * 默认工作目录（0.11.1，DECISION-022 §2.4）。
    * 支持 `~`；相对路径按进程 cwd 解析为绝对路径（由装配层解析，validator 只校验类型）。
    * 优先级：工具参数 `cwd` > `agent.cwd` > `process.cwd()`。
