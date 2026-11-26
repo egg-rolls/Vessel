@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/plugin-ui",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Shared presentational React UI primitives for Vessel host and plugins",
   "type": "module",
   "license": "MIT",
