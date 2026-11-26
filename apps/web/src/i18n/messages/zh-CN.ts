@@ -1309,7 +1309,6 @@ export const messages = {
   'chat.pendingSend.echoTimeout': '等待回显超时',
   'chat.pendingSend.recallUnknown': '还不知道这条属于哪个成员，没能撤回',
   'chat.pendingSend.recallRejected': '没能撤回服务端那条，条带已重读',
-  'chat.pending.waiting': '等待中',
   'chat.pending.edit': '收回编辑',
   'chat.pending.editTaken': '已收回，内容放回输入框',
   'chat.pending.editPeekFailed': '没能读到这条的原文，条带保持原样',

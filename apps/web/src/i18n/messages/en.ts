@@ -1373,7 +1373,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.pendingSend.recallUnknown':
     'Not sure which member owns this one yet — nothing was recalled',
   'chat.pendingSend.recallRejected': 'Could not recall the queued copy; the strip was reloaded',
-  'chat.pending.waiting': 'Waiting',
   'chat.pending.edit': 'Take back to edit',
   'chat.pending.editTaken': 'Taken back into the input box',
   'chat.pending.editPeekFailed': 'Could not read the full text of that item; nothing was changed',
