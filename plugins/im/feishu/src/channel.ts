@@ -9,7 +9,7 @@ import { FeishuError } from './errors.js';
 import { PerChatQueues } from './queue.js';
 import { ChatMemberRunner, MemberLimitError } from './runner.js';
 import { createSdkTransport } from './sdk-transport.js';
-import { extractText, truncateReply } from './text.js';
+import { cleanMentionPlaceholders, extractText, truncateReply } from './text.js';
 import type {
   FeishuIncomingMessage,
   FeishuPlugin,
@@ -202,16 +202,35 @@ class FeishuChannelImpl implements FeishuPlugin {
       return;
     }
 
+    // P1-A3（D6）：群聊默认 mention-only —— 只响应 @ 机器人的消息。
+    // 依据事件 mentions[].mentioned_type === 'bot'（离线可判，无需 bot 身份/额外权限）；
+    // mentionPolicy: all 退回旧行为（响应全部群消息，需 im:message.group_msg 权限）。
+    if (
+      message.chatType === 'group' &&
+      this.config.mentionPolicy === 'mention-only' &&
+      !(message.mentions ?? []).some((mention) => mention.mentionedType === 'bot')
+    ) {
+      return;
+    }
+
     const text = extractText(message.messageType, message.content);
     if (text === null) return;
+
+    // P1-A3：清洗 @ 占位符；群聊加发言人前缀（open_id，事件无姓名），让 agent 区分谁在说话。
+    const cleaned = cleanMentionPlaceholders(text, message.mentions ?? []);
+    const agentText =
+      message.chatType === 'group' && message.senderId !== undefined && message.senderId !== ''
+        ? `[${message.senderId}] ${cleaned}`
+        : cleaned;
 
     this.publish('channel.feishu.message.received', message.chatId, {
       chat_id: message.chatId,
       message_id: message.messageId,
       message_type: message.messageType,
+      ...(message.senderId !== undefined ? { sender_id: message.senderId } : {}),
     });
 
-    const accepted = this.queues.enqueue(message.chatId, () => this.process(message, text));
+    const accepted = this.queues.enqueue(message.chatId, () => this.process(message, agentText));
     if (!accepted) {
       void this.reply(message, BUSY_REPLY_TEXT).catch(() => undefined);
     }

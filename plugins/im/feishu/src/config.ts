@@ -55,6 +55,11 @@ export function resolveFeishuConfig(
     throw configError('feishu.domain must be "feishu" or "lark"');
   }
 
+  const mentionPolicy = config.mentionPolicy ?? 'mention-only';
+  if (mentionPolicy !== 'mention-only' && mentionPolicy !== 'all') {
+    throw configError('feishu.mention_policy must be "mention-only" or "all"');
+  }
+
   const sessionPrefix = config.sessionPrefix ?? 'feishu';
   if (
     sessionPrefix === '' ||
@@ -73,6 +78,7 @@ export function resolveFeishuConfig(
     appSecret: fromEnvOrConfig(env, APP_SECRET_ENV, config.appSecret),
     domain,
     allowedChatIds: stringArray(config.allowedChatIds, 'allowed_chat_ids'),
+    mentionPolicy,
     sessionPrefix,
     replyTimeoutMs: integerInRange(
       config.replyTimeoutMs,

@@ -13,6 +13,8 @@ export interface FeishuConfig {
   domain?: 'feishu' | 'lark';
   /** 空 = 机器人所在的所有群/单聊。 */
   allowedChatIds?: string[];
+  /** 群聊 @ 策略（P1-A3，D6）：mention-only 只响应 @ 机器人（默认）；all 响应全部群消息。 */
+  mentionPolicy?: 'mention-only' | 'all';
   sessionPrefix?: string;
   replyTimeoutMs?: number;
   maxReplyChars?: number;
@@ -26,6 +28,7 @@ export interface ResolvedFeishuConfig {
   appSecret: string;
   domain: 'feishu' | 'lark';
   allowedChatIds: string[];
+  mentionPolicy: 'mention-only' | 'all';
   sessionPrefix: string;
   replyTimeoutMs: number;
   maxReplyChars: number;
@@ -48,6 +51,14 @@ export interface FeishuChannel {
   status(): FeishuStatus;
 }
 
+/** 群聊 @ 提及（P1-A3）：key 为文本占位符（如 @_user_1），mentionedType 区分 user/bot。 */
+export interface FeishuMention {
+  key: string;
+  name?: string;
+  openId?: string;
+  mentionedType?: string;
+}
+
 export interface FeishuIncomingMessage {
   messageId: string;
   chatId: string;
@@ -59,6 +70,10 @@ export interface FeishuIncomingMessage {
   /** 原始 content JSON。 */
   content: string;
   createTime?: number;
+  /** 发言人 open_id（P1-A3 additive；群聊发言人前缀与白名单用）。 */
+  senderId?: string;
+  /** @ 提及数组（P1-A3 additive；占位符清洗与 mention-only 判定用）。 */
+  mentions?: FeishuMention[];
 }
 
 export interface FeishuTransportHandlers {

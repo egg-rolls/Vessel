@@ -96,6 +96,28 @@ export function mapSdkMessage(data: unknown): FeishuIncomingMessage | null {
       ? Number(createTimeRaw)
       : undefined;
 
+  // P1-A3：发言人 open_id（additive）。
+  const senderIdRaw = isRecord(sender.sender_id) ? sender.sender_id.open_id : undefined;
+  const senderId = typeof senderIdRaw === 'string' && senderIdRaw !== '' ? senderIdRaw : undefined;
+
+  // P1-A3：@ 提及数组（additive）；key 为文本占位符，mentioned_type 区分 user/bot。
+  const mentions: FeishuIncomingMessage['mentions'] = [];
+  if (Array.isArray(message.mentions)) {
+    for (const entry of message.mentions) {
+      if (!isRecord(entry) || typeof entry.key !== 'string' || entry.key === '') continue;
+      const id = isRecord(entry.id) ? entry.id : undefined;
+      const openId = id !== undefined && typeof id.open_id === 'string' ? id.open_id : undefined;
+      mentions.push({
+        key: entry.key,
+        ...(typeof entry.name === 'string' && entry.name !== '' ? { name: entry.name } : {}),
+        ...(openId !== undefined && openId !== '' ? { openId } : {}),
+        ...(typeof entry.mentioned_type === 'string'
+          ? { mentionedType: entry.mentioned_type }
+          : {}),
+      });
+    }
+  }
+
   return {
     messageId,
     chatId,
@@ -105,6 +127,8 @@ export function mapSdkMessage(data: unknown): FeishuIncomingMessage | null {
     messageType,
     content,
     ...(createTime !== undefined && Number.isFinite(createTime) ? { createTime } : {}),
+    ...(senderId !== undefined ? { senderId } : {}),
+    ...(mentions.length > 0 ? { mentions } : {}),
   };
 }
 

@@ -10,6 +10,20 @@
 > 版本 = 代码契约身份，不绑发版节奏。major=2（单一真相源架构 breaking）。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
+## [Unreleased]
+
+> 飞书完善 P1（fix/q-feishu-p1）。含 D6 breaking：按 SemVer「breaking→major」，发版时主版本号递增。
+
+### 变更（breaking）
+
+- **飞书群聊默认 mention-only（D6）**：旧版本开通「全量群消息」权限（`im:message.group_msg`）后，机器人会响应群内任意消息；P1 起默认**只响应 @ 机器人的消息**（依据事件 `mentions[].mentioned_type === 'bot'` 判定）。
+  - **兜底配置**：`feishu.mention_policy: all` 恢复旧行为（仍需 `im:message.group_msg` 权限）。
+  - **升级提示**：升级后「群里 bot 不说话」先确认是否 @ 了机器人；确需旧行为再设 `mention_policy: all`。详见 [FEISHU.md §8](plugins/im/feishu/FEISHU.md)。
+
+### 新增
+
+- 飞书群聊可用性（A3）：`mapSdkMessage` 增映射 `mentions` / `senderId`（additive）；`@_user_N` 占位符按 mentions 清洗（bot 自身 @ 移除、他人 @ 还原为 `@名字`）；群聊消息喂 agent 前加发言人前缀 `[<open_id>]`（事件无姓名，离线不引通讯录 API）；`message.received` 事件 additive `sender_id`。新配置键 `feishu.mention_policy`（`mention-only` | `all`，默认 `mention-only`）。
+
 ## [2.1.0] - 2026-11-25
 
 > 第四轮批次晋升（红蓝金丝雀验收 14–22 全闭环，ISSUE-CR22-1 / ISSUE-SS2-1 CLOSED）。
