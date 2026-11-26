@@ -1542,6 +1542,20 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
             nodeName,
             localHuman: () => localHuman,
             localMember: () => localMember,
+            // 4.1：durable outbox —— peer down 的出站消息持久化待投递（bounded
+            // retry + 重连补投 + 幂等），进程重启续投；事件进结构日志（不含 token）。
+            outboxDir: dataDir,
+            onOutboxEvent: (event) => {
+              if (
+                event.kind === 'exhausted' ||
+                event.kind === 'full' ||
+                event.kind === 'load_failed'
+              ) {
+                logger.warn(`federation.outbox.${event.kind}`, { ...event });
+              } else {
+                logger.info(`federation.outbox.${event.kind}`, { ...event });
+              }
+            },
           })
         : undefined;
     if (federation !== undefined) {
