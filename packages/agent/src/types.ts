@@ -127,6 +127,11 @@ export interface MemberStatus {
   session_id: string;
   name?: string;
   parent_id?: string;
+  /**
+   * 树深度（depth-color D1 additive）：parent 链解析的服务端真值（根 = 0）。
+   * 单一事实源 = `registry.ts#memberDepths`；旧快照 / 老 gateway 缺省时消费方回落。
+   */
+  depth?: number;
   /** 成员角色（v3；由持久化记录派生） */
   role: AgentRole;
   /**
@@ -2120,6 +2125,11 @@ export interface TeamMemberSummary {
   session_id: string;
   /** 所属 Team（unbound 时缺省） */
   team_id?: string;
+  /**
+   * 树深度（depth-color D1 additive）：与 `MemberStatus.depth` 同值透传
+   * （parent 链服务端真值，根 = 0）；roster 反查档的 depth 源。
+   */
+  depth?: number;
   membership: MemberMembership;
   presence: MemberPresence;
   /** 成员角色（roster 只展示 member / temporary） */
