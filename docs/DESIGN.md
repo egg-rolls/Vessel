@@ -2,7 +2,7 @@
 
 > 适用于 Web 主控制台、插件宿主页与插件 iframe 页面。这里只写**规则与路径**，
 > 不写版本状态、实现读数或单页特例；组件行为以代码为准，契约见
-> `CONTRACT-0.46-ui-shell`（个人侧 `docs/dev/plans/`，不在此仓库）。
+> `CONTRACT-0.46-ui-shell`（个人侧外层仓 `docs/dev/plans/`，不在此仓库）。
 
 ## 1. 页面骨架
 

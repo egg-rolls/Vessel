@@ -29,7 +29,7 @@
 - 开工先 `bun run scripts/docs-find.ts --goal "<目标>" --paths <路径>` 取 top 3 模块；退出码 1（无命中）回落本文件硬规则。
 - 历史决策查 ADR，当前版本查 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)；实现事实以代码为准，文档冲突时顺手改文档。
 - 读代码先 grep 定位再读片段，不整读超过 300 行的文件；一次只加载当前任务需要的文档。
-- 过程产物（计划、报告、临时脚本）不进本仓库；文档只写已实现的能力。
+- 过程产物（计划、报告、临时脚本）不进本仓库；文档只写已实现的能力。**dev 文档（plans/reports/research/design/specs/审计/kanban）一律写个人侧外层仓 `D:/Application/APP/Vessel/docs/dev/`**（个人侧 git，只本地提交、不 push 上云）；代码仓无 `docs/dev/`，不要创建。今后派单任务书须注明此红线。
 - 文档 / handoff 不写死读数（写命令；确需写值带 `sha` + 时间戳）见 [gov](docs/agents/gov.md)。
 - 事件重放等价（replay 作 oracle，含 SSE `since` 续传 / 重复 / 缺口）见 [events](docs/architecture/events.md)。
 
@@ -40,7 +40,7 @@
 - **能力工具是 `bash` / `read` / `edit` / `write`**（`write`：建文件 / 整体替换 / 追加，**逐字节落盘、不经 shell**）。加第五个之前先证明它不能被现有四个表达出来。
   - 按用途选：**建文件 / 追加 / 整体替换 ⇒ `write`**；**局部改代码 ⇒ `edit`**（逐字符唯一匹配，改不中会报错）；**执行命令 ⇒ `bash`**（不要用它写文件：heredoc 与重定向会把内容交给 shell，反引号和 `$(` 会被先展开）。
   - 不提供 `grep` / 文件操作 / 注册型 meta-tools。插件工具 `subscribe`（显式文件订阅 + edit/write 自动订阅所改文件 + read 自动订阅所读行范围（line-level），`subscribe:false` 可 opt-out 该次调用的自动订阅；订阅变更只发短通知，按需 `inspect`）/ `agent` / `ask` 按入口注册，MCP 工具经插件注册；装配层常驻 `vessel` 控制面桥（单工具面，不注册工具，只桥接既有注册表与 RPC，见 [tools.md](docs/architecture/tools.md#vessel-bridge)）。工具口径与动作表见 [docs/architecture/tools.md](docs/architecture/tools.md#tools)。
-  - **写协调（蜂群 Phase 1）**：`write` mode=overwrite 可选 `expected_content`（写前逐字节比对当前内容，不符报错不写；不传 = 旧行为）；edit/write 写临界区前持 `<baseCwd>/.vessel/write.lock` 工作区单锁（跨进程串行化写动作，合作式协议；bash/IDE/git 非合作写入者不受约束）。设计依据见个人侧 `docs/dev/research/swarm-shared-workspace-collaboration.md`。
+  - **写协调（蜂群 Phase 1）**：`write` mode=overwrite 可选 `expected_content`（写前逐字节比对当前内容，不符报错不写；不传 = 旧行为）；edit/write 写临界区前持 `<baseCwd>/.vessel/write.lock` 工作区单锁（跨进程串行化写动作，合作式协议；bash/IDE/git 非合作写入者不受约束）。设计依据见个人侧外层仓 `docs/dev/research/swarm-shared-workspace-collaboration.md`。
   - **工具名一律 snake_case**（`^[a-z][a-z0-9_]*$`，≤64）：`web_search` / `pii_reveal` / `bash`，不要 `webSearch` / `piiReveal`。判据唯一真源是 `packages/core/src/runtime/tool-name.ts`，注册期不合规直接抛错（带 `badName → bad_name` 建议），装配期还有一道全量审计；MCP 等**外部名字原样透传**、只告警不阻断。改名必须登记进 `TOOL_NAME_ALIASES`（旧名保留一版别名，命中时结果里附一行弃用提示，不静默）。规则见 [docs/architecture/tools.md](docs/architecture/tools.md#tool-name-rule)。
 
 ## 硬安全规则（不可协商）
@@ -114,8 +114,8 @@ bun run scripts/docs-find.ts --goal "add RPC method"      # 按目标检索文�
 **本仓没有 gate / test / probe，也不要再造。** 宪法第三、四条：废除全部 gate / test / probe；
 `*.test.*` / `*.spec.*` / `__tests__/` / 测试夹具一律不进仓库，存量随触碰删除、不补等价物；
 🔴 **「不写测试」= 任何位置都不写测试文件**（2026-11-18 用户裁定）：仓库外、盘符根目录、
-`D:/tmp` 等临时目录同样禁止，「不进仓库」不是「放仓库外」的许可证；诊断用临时脚本只放个人侧
-`docs/dev/tmp/<slice>/` 且收尾即删，数据处理优先内联命令；
+`D:/tmp` 等临时目录同样禁止，「不进仓库」不是「放仓库外」的许可证；诊断用临时脚本只放个人侧外层仓
+`D:/Application/APP/Vessel/docs/dev/tmp/<slice>/`（代码仓无 docs/dev/）且收尾即删，数据处理优先内联命令；
 AI 自写的验证脚本不作为正确性依据。**「把某条命令跑一遍、全绿」不构成验收**；也不要往仓库里加
 测试、探针或静态断言脚本 —— 别照旧文档重建（旧文档里那些条目已经作废）。
 上面清单里 `bun run build` 是**唯一**的构建期检查（`typecheck` 覆盖根 + `examples/`，`lint` 是
@@ -126,7 +126,7 @@ AI 自写的验证脚本不作为正确性依据。**「把某条命令跑一遍
 
 **静态门禁由实施切片的 N 跑，1 / main 不亲自跑。** N 收尾逐条跑 typecheck / lint / build
 （各自独立看 exit code，不 `&&` 串联后只看 tail），回报只留 **exit code + 失败摘要**
-（摘要必须含首个错误的原文，不许只说「红了」）；日志落个人侧 `docs/dev/tmp/<slice>/gates.log`，
+（摘要必须含首个错误的原文，不许只说「红了」）；日志落个人侧外层仓 `docs/dev/tmp/<slice>/gates.log`，
 成功不贴日志。
 
 🔴 **行为验证由用户本人做**（宪法第四条；2026-11-08 裁定，2026-11-18 重申）：不派 verifier / QA
