@@ -25,6 +25,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.domain.settings': 'Settings',
   'nav.domain.designLab': 'Design Lab',
   'nav.group.chat': 'Chat',
+  'nav.group.items': 'Items',
+  'nav.group.current': 'Current page is in this group',
   'nav.group.runs': 'RUNS',
   'nav.group.plugins': 'PLUGINS',
   'nav.group.observe': 'OBSERVE',
@@ -145,9 +147,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.local.navCollapsed.title': 'Collapse sidebar by default',
   'settings.item.local.navCollapsed.desc':
     'Default collapsed state of the left nav when the WebUI opens; the sidebar toggle writes the same storage key.',
-  'settings.item.local.navGroups.title': 'Group collapse state',
+  'settings.item.local.navGroups.title': 'Group expansion state',
   'settings.item.local.navGroups.desc':
-    'Collapsed state of left-nav groups (read-only); reset = expand all.',
+    'Expanded state of left-nav groups (read-only); reset = collapse all.',
   'settings.item.local.settingsTree.title': 'Settings tree collapse state',
   'settings.item.local.settingsTree.desc':
     'Collapsed categories of the settings dialog tree (JSON array, this browser only).',
@@ -2314,7 +2316,11 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.preview.navItem.collapsed':
     'Collapsed shows only the icon; hover for 300 ms to see the tooltip (title, status, count, version).',
   'designLab.preview.navItem.desc':
-    'Menu buttons: group header, the four status dots (accent / amber / danger / muted) and the collapsed form.',
+    'Menu buttons: group header, the four status dots (accent / amber / danger / muted), the collapsed form, and the group open/close animation.',
+  'designLab.preview.navItem.groupCollapsed':
+    'Collapsed group header: the aggregated count badge (the pending backlog stays visible) plus an accent dot when the current page is inside; not duplicated while expanded.',
+  'designLab.preview.navItem.groupToggle':
+    'Click the header to toggle the group: grid 0fr↔1fr transition at 200 ms (--motion-base); collapsed content ends inert, so Tab never lands on hidden items.',
   'designLab.preview.navItem.plain':
     'An item with no status signal: no dot, and no placeholder version.',
   'designLab.preview.navStatus.colStatus': 'Status',

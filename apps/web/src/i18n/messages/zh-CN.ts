@@ -25,6 +25,8 @@ export const messages = {
   'nav.domain.settings': '设置',
   'nav.domain.designLab': '设计实验室',
   'nav.group.chat': '会话',
+  'nav.group.items': '事项',
+  'nav.group.current': '当前页在此分组',
   'nav.group.runs': '运行',
   'nav.group.plugins': '插件',
   'nav.group.observe': 'OBSERVE',
@@ -145,8 +147,8 @@ export const messages = {
   'settings.item.local.navCollapsed.title': '侧栏默认折叠',
   'settings.item.local.navCollapsed.desc':
     '打开 WebUI 时左侧导航栏的默认折叠态；左栏折叠按钮即时写同一存储键。',
-  'settings.item.local.navGroups.title': '分组折叠状态',
-  'settings.item.local.navGroups.desc': '左侧导航各分组的折叠态（只读展示）；重置 = 全部展开。',
+  'settings.item.local.navGroups.title': '分组展开状态',
+  'settings.item.local.navGroups.desc': '左侧导航各分组的展开态（只读展示）；重置 = 全部收起。',
   'settings.item.local.settingsTree.title': '设置分类树折叠态',
   'settings.item.local.settingsTree.desc': '设置弹窗分类树的折叠状态（JSON 数组，本浏览器）。',
   'settings.item.local.settingsTab.title': '设置默认层级',
@@ -2186,7 +2188,11 @@ export const messages = {
   'designLab.preview.navItem.collapsed':
     '折叠态只留图标；悬停 300ms 出 Tooltip（标题 + 状态 + 计数 + 版本）。',
   'designLab.preview.navItem.desc':
-    '菜单按钮：分组头 + 四档状态点（accent / amber / danger / muted）+ 折叠态。',
+    '菜单按钮：分组头 + 四档状态点（accent / amber / danger / muted）+ 折叠态 + 分区开合动画。',
+  'designLab.preview.navItem.groupCollapsed':
+    '收起态组头：聚合计数徽标（待批积压不因收起隐藏）+ 当前页所在组的 accent 圆点；展开时不重复显示。',
+  'designLab.preview.navItem.groupToggle':
+    '点击组头开合分区：grid 0fr↔1fr 过渡 200ms（--motion-base），收起终态内容 inert，Tab 不落入隐藏项。',
   'designLab.preview.navItem.plain': '没有状态信号的项：不渲染状态点，也不留占位版本号。',
   'designLab.preview.navStatus.colStatus': '状态',
   'designLab.preview.navStatus.colValue': '当前主题下的值',

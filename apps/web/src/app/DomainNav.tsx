@@ -1,4 +1,4 @@
-import { type Ref, useState } from 'react';
+import { type Ref, useEffect, useState } from 'react';
 import { ResizeHandle } from '../components/ResizeHandle';
 import { IconButton } from '../components/Tooltip';
 import { cn } from '../components/ui/cn';
@@ -13,25 +13,31 @@ import type { Route } from './router';
 import { useNavStatus } from './useNavStatus';
 import type { PaneResizeApi } from './usePaneResize';
 
-const COLLAPSED_GROUPS_KEY = 'vessel.nav.collapsed-groups';
+const EXPANDED_GROUPS_KEY = 'vessel.nav.expanded-groups';
+const LEGACY_COLLAPSED_GROUPS_KEY = 'vessel.nav.collapsed-groups';
 
-function readCollapsedGroups(): Set<string> {
+/**
+ * 分区开合缓存（sidebar-restructure 设计 D1）：存**展开集**，语义反转。
+ * 无值 / 非法值 → 空集 = 全收起（含 core）——插件组异步到达、自定义组随插件
+ * 增删，展开集语义下新组自动收起，与「默认全收起」裁定恒一致。
+ * 不做旧值迁移（老用户一次性重置）；首次写入时顺手清旧 key。
+ */
+function readExpandedGroups(): Set<string> {
   try {
-    const raw = localStorage.getItem(COLLAPSED_GROUPS_KEY);
-    // 用户裁决：状态信息组（core = 枢纽 / 网关 / 插件宿主）默认折叠置底；
-    // 用户手动展开过（有持久化值）则尊重用户选择。
-    if (raw === null) return new Set(['core']);
+    const raw = localStorage.getItem(EXPANDED_GROUPS_KEY);
+    if (raw === null) return new Set();
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return new Set(['core']);
+    if (!Array.isArray(parsed)) return new Set();
     return new Set(parsed.filter((value): value is string => typeof value === 'string'));
   } catch {
-    return new Set(['core']);
+    return new Set();
   }
 }
 
-function writeCollapsedGroups(ids: ReadonlySet<string>): void {
+function writeExpandedGroups(ids: ReadonlySet<string>): void {
   try {
-    localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify([...ids]));
+    localStorage.setItem(EXPANDED_GROUPS_KEY, JSON.stringify([...ids]));
+    localStorage.removeItem(LEGACY_COLLAPSED_GROUPS_KEY);
   } catch {
     // 隐私模式 / 配额满：本次会话内仍然生效。
   }
@@ -41,7 +47,8 @@ function writeCollapsedGroups(ids: ReadonlySet<string>): void {
  * 主导航：数据驱动的 NavModel + 单一滚动区。
  *
  * 顶部品牌 / 收起展开 / 抽屉关闭固定；分组、条目、插件面板统一放进一个
- * `overflow-y-auto` 滚动容器。分组头可折叠，默认展开并持久化折叠 key。
+ * `overflow-y-auto` 滚动容器。分区默认全收起，点击组头展开，开合状态持久化
+ * 到展开集 key（vessel.nav.expanded-groups）；多分区可同开，不互斥。
  */
 export function DomainNav({
   route,
@@ -77,7 +84,7 @@ export function DomainNav({
   } = usePluginContributions();
   // 插件宿主的点还要「读取中 / 无条目」的区分，所以把 plugins.list 的读取态一起传下去。
   const statuses = useNavStatus(plugins, pluginsState);
-  const [collapsedGroups, setCollapsedGroups] = useState(readCollapsedGroups);
+  const [expandedGroups, setExpandedGroups] = useState(readExpandedGroups);
   const navPanels = panelsForSlot(pluginPanels, 'nav');
   const groups = buildNavModel({
     route,
@@ -89,6 +96,22 @@ export function DomainNav({
     ...(counts !== undefined ? { counts } : {}),
   });
 
+  // D2：路由命中收起组（深链 / 命令面板跳转）自动展开该组并持久化——视同用户
+  // 意图，保证当前页在导航可见。只在 active 组变化时触发；用户手动收起当前页
+  // 所在组不强行 reopen（组头 active 圆点提示）。插件组晚到时 active 组从
+  // undefined 变为有值，同样命中。
+  const activeGroupId = groups.find((group) => group.items.some((item) => item.active))?.id;
+  useEffect(() => {
+    if (activeGroupId === undefined) return;
+    setExpandedGroups((previous) => {
+      if (previous.has(activeGroupId)) return previous;
+      const next = new Set(previous);
+      next.add(activeGroupId);
+      writeExpandedGroups(next);
+      return next;
+    });
+  }, [activeGroupId]);
+
   const drawer = mode === 'drawer';
   const collapsed = mode === 'collapsed' || mode === 'rail';
   const showLabels = !collapsed;
@@ -96,12 +119,13 @@ export function DomainNav({
   const collapseLabel = collapsed ? t('nav.expandNav') : t('nav.collapseNav');
   const drawerA11y = drawer ? { role: 'dialog' as const, 'aria-modal': open } : {};
 
+  // 一次只动被点的分区，不做手风琴互斥（多分区可同时展开，习惯由缓存沉淀）。
   const toggleGroup = (id: string) => {
-    setCollapsedGroups((previous) => {
+    setExpandedGroups((previous) => {
       const next = new Set(previous);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      writeCollapsedGroups(next);
+      writeExpandedGroups(next);
       return next;
     });
   };
@@ -188,7 +212,7 @@ export function DomainNav({
             key={group.id}
             group={group}
             collapsed={collapsed}
-            expanded={!collapsedGroups.has(group.id)}
+            expanded={expandedGroups.has(group.id)}
             onToggle={() => toggleGroup(group.id)}
             onNavigate={navigate}
             {...(index > 0 ? { className: 'mt-3' } : {})}

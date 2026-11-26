@@ -39,11 +39,14 @@ export interface NavGroupModel {
   order: number;
   collapsible: boolean;
   items: NavItemModel[];
+  /** 组内 item.count 聚合（当前只有待批有计数）；组收起时组头显聚合徽标。 */
+  count?: number;
 }
 
 /** 核心分组图标（标题仍走 i18n）。 */
 const CORE_GROUP_ICONS: Record<string, Domain> = {
   chat: 'chat',
+  items: 'pending',
   network: 'agents',
   runs: 'runs',
   integrations: 'tools',
@@ -129,7 +132,11 @@ export function buildNavModel({
 }): NavGroupModel[] {
   const groups: NavGroupModel[] = [];
   const push = (group: NavGroupModel) => {
-    if (group.items.length > 0) groups.push(group);
+    if (group.items.length === 0) return;
+    // 组级聚合计数（设计 §5.5）：对组内 item.count 求和，收起态组头徽标用；
+    // 全组无计数时不落 count 字段（与项级「缺省不渲染徽标」同口径）。
+    const count = group.items.reduce((sum, item) => sum + (item.count ?? 0), 0);
+    groups.push(count > 0 ? { ...group, count } : group);
   };
 
   /** 内置组 → 模型（core 组单独置底，见下方用户裁决注释）。 */
@@ -191,7 +198,7 @@ export function buildNavModel({
   for (const group of customGroups) push(group);
 
   // 状态信息组置底（用户裁决）：工作面板（请求日志 / 用量 / 模型管理等插件组）在上，
-  // 枢纽 / 网关 / 插件宿主在最下；默认折叠见 DomainNav.readCollapsedGroups。
+  // 枢纽 / 网关 / 插件宿主在最下；分区默认全收起见 DomainNav.readExpandedGroups。
   const coreGroup = NAV_GROUPS.find((group) => group.id === 'core');
   if (coreGroup) push(coreGroupModel(coreGroup, NAV_GROUPS.length + 1));
 
