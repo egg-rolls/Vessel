@@ -17,12 +17,13 @@
       所以不要为了动画把 `<details>` 拆成 div + aria-expanded。
       浏览器不支持 `::details-content` 时直接开合（就是今天的行为），不做假动画。
 
-      **还没有**「非 `<details>` 的自管开合面板」，因此本文件不放那套 class（无使用点的
-      代码不预留）。真有第一个使用点时照这个写，别用 max-height 猜值（内容一长就抖，
-      猜小了裁掉、猜大了拖沓）——容器 display: grid + grid-template-rows: 0fr（收起）→
-      1fr（展开，行高跟着内容长，不用量高度），状态放 data-motion-open，子项 min-height: 0
-      + overflow: clip 防止把父级重新撑开，两个方向的时长都用 --motion-slow。
-      收起时**调用方**负责给 `inert` / `hidden` —— 动画 class 不管可访问性。
+      **非 `<details>` 的自管开合面板**：配方 class 是 ② 里的 `.motion-collapse`
+      （第一个使用点：inbox 条带三态卡列，inbox 统一批 §7）。照这个写，别用
+      max-height 猜值（内容一长就抖，猜小了裁掉、猜大了拖沓）——容器 display: grid +
+      grid-template-rows: 0fr（收起）→ 1fr（展开，行高跟着内容长，不用量高度），状态放
+      data-motion-open，子项 min-height: 0 + overflow: clip 防止把父级重新撑开，两个
+      方向的时长都用 --motion-slow。收起时**调用方**负责给 `inert` / `hidden` ——
+      动画 class 不管可访问性。
 
    3. 流式类 —— `.motion-stream`
       挂在**流式正文的外层容器**上（就是 `AssistantText` 的 `div.msg-assistant`，
@@ -114,6 +115,27 @@
   }
 }
 
+/* 自管开合（非 `<details>`，文件头 ② 的配方；第一个使用点 = inbox 条带三态卡列）：
+   grid 行高 0fr ↔ 1fr 跟着内容长，不量高度、不猜 max-height。状态在 data-motion-open
+   （调用方写），收起时的 inert / hidden 也由调用方给 —— 本类只动尺寸。
+   子项的 overflow: clip 防止内容把 0fr 的行重新撑开；clip-margin 留 4px 让内部
+   控件的焦点环不被切掉（与 ::details-content 同一理由）。 */
+.motion-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--motion-slow) var(--motion-ease);
+}
+
+.motion-collapse[data-motion-open="true"] {
+  grid-template-rows: 1fr;
+}
+
+.motion-collapse > * {
+  min-height: 0;
+  overflow: clip;
+  overflow-clip-margin: 4px;
+}
+
 /* ── ③ 流式类 ─────────────────────────────────────────────── */
 
 /* 正文块「先占位、再出现」：块的高度 / 位置在挂载那一帧就按最终排版落位，
@@ -151,5 +173,11 @@
     transition: none;
     block-size: auto;
     opacity: 1;
+  }
+
+  /* 自管开合的 grid 行过渡挂在真实元素上（base.css 的 `*` 压得住），
+     这里同样把「没有动画」钉死：开合直接落到终态行高。 */
+  .motion-collapse {
+    transition: none;
   }
 }

@@ -738,6 +738,7 @@ export function QueuedNotice({
   label,
   identity,
   defaultOpen = false,
+  entering = false,
 }: {
   item: QueuedSubmission;
   /**
@@ -797,6 +798,12 @@ export function QueuedNotice({
   identity?: string;
   /** 默认展开（ui.expandCards || verbosity === 'debug'）；排队卡是纯信息卡。 */
   defaultOpen?: boolean;
+  /**
+   * 入场动画（inbox 统一批 §7）：live 追加的新条目才播 `.motion-appear`（只动透明度）。
+   * 判定在调用方（`useEnteringItemKeys`：首屏整批 = 历史不播，之后新 key 才播）；
+   * 本组件只透传给 StreamCard，不自己判「新不新」。
+   */
+  entering?: boolean;
 }) {
   // 在 inbox 即等待：不画状态胶囊（用户裁定）。取消成功 ⇒ 条目消失 ⇒ 整张卡消失，没有残留态。
   const stateClass = 'stream-card-queued-waiting';
@@ -899,6 +906,7 @@ export function QueuedNotice({
       // 卡宽跟列一致（w-full + min-w-0 + max-w-full）：短输入不缩水、长输入不撑宽。
       className={`notice-block stream-card-queued w-full min-w-0 max-w-full ${stateClass}`.trim()}
       defaultOpen={defaultOpen}
+      entering={entering}
       // 无结论句覆盖时标题位为空（在 inbox 即等待，不画状态胶囊）；空标题由 CSS
       // `.stream-card-queued … .stream-card-title:empty` 隐藏，身份 meta 就是卡头第一格。
       title={label ?? null}

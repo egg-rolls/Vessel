@@ -57,14 +57,15 @@
  * **三态展示（用户裁定）**：`collapsed` 只留 badge 计数（卡头那行按钮），不画卡片；
  * `default`（缺省）显示前 `previewCount` 组（缺省 3，数量可配置），其余折叠成
  * 「展开全部（还有 N 条）」；`expanded` 给完整列表，高度上限 + 滚动。卡头按钮在
- * 「badge ↔ 卡片」之间开合，footer 按钮在「默认 ↔ 全部」之间开合。开合本身是纯展示
- * 状态，唯一的附加触发：**展开（collapsed→非 collapsed）重读一次盘**（D-5/R4：用户
- * 主动要看真相，展开是有意义读）。同源折叠组（「N 条」）与三态无关，各自独立开合。
+ * 「badge ↔ 卡片」之间开合，footer 按钮在「默认 ↔ 全部」之间开合。开合走 `.motion-collapse`
+ * grid 过渡（§7，防突兀），本身是纯展示状态，唯一的附加触发：**展开（collapsed→非 collapsed）
+ * 重读一次盘**（D-5/R4：用户主动要看真相，展开是有意义读）。同源折叠组（「N 条」）与三态
+ * 无关，各自独立开合。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRefreshSignal } from '../../app/refresh';
 import { useToast } from '../../components/ToastProvider';
-import { Icon } from '../../components/ui';
+import { Icon, useEnteringItemKeys } from '../../components/ui';
 import type { GatewayClient } from '../../gateway/client';
 import type {
   AgentClaimResponse,
@@ -182,6 +183,7 @@ function PendingRow({
   onUnhold,
   onRetry,
   fold,
+  entering = false,
 }: {
   item: QueuedSubmission;
   /** 卡头身份（`human` / agent 名或 id）；`undefined` = 不渲染身份槽。 */
@@ -214,6 +216,8 @@ function PendingRow({
   onRetry?: (id: string) => void;
   /** 组头才传：组内条数、开合状态与切换。 */
   fold?: { count: number; open: boolean; onToggle: () => void };
+  /** 入场动画（§7）：调用方按 `useEnteringItemKeys` 判定，透传 QueuedNotice → StreamCard。 */
+  entering?: boolean;
 }) {
   // 写操作按来源分档：human 源三颗，非 human 源只有 unhold 那一颗（它的 recall 不是删除，
   // 而是把消息退回可读 unread）。`undefined` = 没给（`QueuedNotice` 把缺省当成「不给这颗
@@ -223,6 +227,7 @@ function PendingRow({
       <QueuedNotice
         item={item}
         identity={identity}
+        entering={entering}
         onCancel={human ? onCancel : undefined}
         onEdit={human ? onEdit : undefined}
         onClaim={human ? onClaim : undefined}
@@ -511,6 +516,10 @@ export function PendingStrip({
 
   const current = agentId !== undefined && pending?.agentId === agentId ? pending : null;
   const entries = current?.entries ?? [];
+  // 入场判定（§7）：首屏整批 = 历史不播（面板首屏常非空，整批渐显 = 闪屏），之后 live
+  // 追加的新 message_id 才播 `.motion-appear`；换 agent 重置重认首屏（Team 页同款语义）。
+  // 不用会话页那套「空→1-2 条」门。客户端行的 key 不在服务端首屏集里 ⇒ 挂载即播（它本就新）。
+  const isEntering = useEnteringItemKeys(entries, (entry) => entry.message_id, agentId ?? null);
 
   // 兜底认领升级（P0-A 配套）：没挂 messageId 的 pending 若按摘要认领到这次读数里的
   // 条目，把服务端 id 挂上（与渲染顶替同一份贪心配对）。升级之后消费对账才能按 id
@@ -1026,7 +1035,7 @@ export function PendingStrip({
       {/* 与消息列同宽同内边距：外层是 `.conversation-scroll` 的内衬，内层是
           `.conversation-scroll > *` 的 `--chat-content-w` 列宽 + 居中。 */}
       <div className="px-[var(--content-pad-inline)]">
-        <div className="mx-auto flex max-w-[var(--chat-content-w,860px)] flex-col gap-1.5">
+        <div className="mx-auto flex max-w-[var(--chat-content-w,860px)] flex-col">
           {/* 卡头 = badge + 三态开关：点击在「只 badge ↔ 卡片」之间开合（用户裁定）。
               chevron 与 StreamCard 同形：收起指右，展开旋转 90° 指下。
               展开（collapsed→非 collapsed）附加一次重读（D-5/R4：用户主动要看真相）；
@@ -1047,76 +1056,93 @@ export function PendingStrip({
             {label}
           </button>
 
-          {mode !== 'collapsed' && (
-            <div className={mode === 'expanded' ? 'max-h-[40vh] overflow-y-auto' : undefined}>
-              <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
-                {view.preview.map((group) => {
-                  // 组头 + 其余：`head` 取不到就整组跳过（不渲染半张卡）。
-                  const [head, ...rest] = rowsOf(group, byId);
-                  if (head === undefined) return null;
-                  const folded = group.entries.length > 1;
-                  const open = folded && expandedGroups.has(group.key);
-                  const fold = folded
-                    ? { count: group.entries.length, open, onToggle: () => toggleGroup(group.key) }
-                    : undefined;
-                  // 组内条目同源（`from` 相同），所以显示名只需算一次：组里任一条有名字，
-                  // 组头与展开后的每一条都用它 —— 同一张卡的不同行不该出现两种身份写法。
-                  const senderName = groupSenderName(group);
-                  return (
-                    <li key={group.key} className="flex flex-col gap-1.5">
-                      <PendingRow
-                        item={head.item}
-                        identity={identityOf(head.entry, senderName)}
-                        human={head.entry.from === HUMAN_SOURCE}
-                        {...(labelOf(head) !== undefined ? { label: labelOf(head) } : {})}
-                        onCancel={cancelRow}
-                        onEdit={editOf(head)}
-                        onClaim={claimOf(head)}
-                        onUnhold={
-                          head.pending === undefined && canUnhold(head.entry)
-                            ? unholdRow
-                            : undefined
+          {/* 三态开合（§7）：`.motion-collapse` grid 0fr→1fr 自管过渡（motion.css ②，
+              本批是第一个使用点），替代条件渲染瞬切。卡节点常驻不重建 —— 开合不重播
+              entering。收起时 inert 摘掉焦点 / 交互（调用方责任，motion 契约）。
+              卡列上间距放在被裁的子项里（pt-1.5）：0fr 时连 padding 一起裁掉，收起态
+              不占 phantom gap，与旧条件渲染像素一致；展开 / 收起时间距随行高平滑过渡。 */}
+          <div
+            className="motion-collapse"
+            data-motion-open={mode !== 'collapsed'}
+            inert={mode === 'collapsed' ? true : undefined}
+          >
+            <div className="pt-1.5">
+              <div className={mode === 'expanded' ? 'max-h-[40vh] overflow-y-auto' : undefined}>
+                <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+                  {view.preview.map((group) => {
+                    // 组头 + 其余：`head` 取不到就整组跳过（不渲染半张卡）。
+                    const [head, ...rest] = rowsOf(group, byId);
+                    if (head === undefined) return null;
+                    const folded = group.entries.length > 1;
+                    const open = folded && expandedGroups.has(group.key);
+                    const fold = folded
+                      ? {
+                          count: group.entries.length,
+                          open,
+                          onToggle: () => toggleGroup(group.key),
                         }
-                        onRetry={retryOf(head)}
-                        fold={fold}
-                      />
-                      {/* 展开后逐条列出：仍是那些待处理条目，写操作按各自的条目 id 与来源判定。 */}
-                      {open && (
-                        <ul className="m-0 flex list-none flex-col gap-1.5 border-l border-line pl-2">
-                          {rest.map((row) => (
-                            <li key={row.entry.message_id}>
-                              <PendingRow
-                                item={row.item}
-                                identity={identityOf(row.entry, senderName)}
-                                human={row.entry.from === HUMAN_SOURCE}
-                                {...(labelOf(row) !== undefined ? { label: labelOf(row) } : {})}
-                                onCancel={cancelRow}
-                                onEdit={editOf(row)}
-                                onClaim={claimOf(row)}
-                                onUnhold={
-                                  row.pending === undefined && canUnhold(row.entry)
-                                    ? unholdRow
-                                    : undefined
-                                }
-                                onRetry={retryOf(row)}
-                              />
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+                      : undefined;
+                    // 组内条目同源（`from` 相同），所以显示名只需算一次：组里任一条有名字，
+                    // 组头与展开后的每一条都用它 —— 同一张卡的不同行不该出现两种身份写法。
+                    const senderName = groupSenderName(group);
+                    return (
+                      <li key={group.key} className="flex flex-col gap-1.5">
+                        <PendingRow
+                          item={head.item}
+                          identity={identityOf(head.entry, senderName)}
+                          entering={isEntering(head.entry.message_id)}
+                          human={head.entry.from === HUMAN_SOURCE}
+                          {...(labelOf(head) !== undefined ? { label: labelOf(head) } : {})}
+                          onCancel={cancelRow}
+                          onEdit={editOf(head)}
+                          onClaim={claimOf(head)}
+                          onUnhold={
+                            head.pending === undefined && canUnhold(head.entry)
+                              ? unholdRow
+                              : undefined
+                          }
+                          onRetry={retryOf(head)}
+                          fold={fold}
+                        />
+                        {/* 展开后逐条列出：仍是那些待处理条目，写操作按各自的条目 id 与来源判定。 */}
+                        {open && (
+                          <ul className="m-0 flex list-none flex-col gap-1.5 border-l border-line pl-2">
+                            {rest.map((row) => (
+                              <li key={row.entry.message_id}>
+                                <PendingRow
+                                  item={row.item}
+                                  identity={identityOf(row.entry, senderName)}
+                                  entering={isEntering(row.entry.message_id)}
+                                  human={row.entry.from === HUMAN_SOURCE}
+                                  {...(labelOf(row) !== undefined ? { label: labelOf(row) } : {})}
+                                  onCancel={cancelRow}
+                                  onEdit={editOf(row)}
+                                  onClaim={claimOf(row)}
+                                  onUnhold={
+                                    row.pending === undefined && canUnhold(row.entry)
+                                      ? unholdRow
+                                      : undefined
+                                  }
+                                  onRetry={retryOf(row)}
+                                />
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             </div>
-          )}
+          </div>
 
           {/* 默认态：其余条目折叠成一颗「展开全部」；展开态：一颗「收起」回到默认。
-              都是纯展示切换，不触发 RPC。 */}
+              都是纯展示切换，不触发 RPC。mt-1.5 补回列间距（列 gap 已让位给 grid 开合）。 */}
           {mode === 'default' && view.hidden > 0 && (
             <button
               type="button"
-              className="bg-transparent m-0 self-start font-mono text-2xs text-faint hover:text-ink"
+              className="bg-transparent m-0 mt-1.5 self-start font-mono text-2xs text-faint hover:text-ink"
               onClick={() => setMode('expanded')}
             >
               {t('chat.pending.expandAll', { count: view.hidden })}
@@ -1125,7 +1151,7 @@ export function PendingStrip({
           {mode === 'expanded' && (
             <button
               type="button"
-              className="bg-transparent m-0 self-start font-mono text-2xs text-faint hover:text-ink"
+              className="bg-transparent m-0 mt-1.5 self-start font-mono text-2xs text-faint hover:text-ink"
               onClick={() => setMode('default')}
             >
               {t('chat.pending.collapseList')}
