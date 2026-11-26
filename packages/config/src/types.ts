@@ -401,6 +401,8 @@ export interface FeishuConfig {
   allowedChatIds?: string[];
   /** 群聊 @ 策略（P1-A3，D6 breaking）：mention-only 只响应 @ 机器人（默认）；all 响应全部群消息（需 im:message.group_msg） */
   mentionPolicy?: 'mention-only' | 'all';
+  /** 收到消息点 👀 reaction 回执（P1-A4，D4；默认 true；无权限静默降级） */
+  ackReaction?: boolean;
   /** session = <prefix>:<chat_id>（默认 feishu） */
   sessionPrefix?: string;
   /** 单次回复超时毫秒（默认 300000；1..86400000） */

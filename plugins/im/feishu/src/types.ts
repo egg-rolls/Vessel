@@ -15,6 +15,8 @@ export interface FeishuConfig {
   allowedChatIds?: string[];
   /** 群聊 @ 策略（P1-A3，D6）：mention-only 只响应 @ 机器人（默认）；all 响应全部群消息。 */
   mentionPolicy?: 'mention-only' | 'all';
+  /** 收到消息是否点 👀 reaction 回执（P1-A4，D4；默认 true；无权限静默降级）。 */
+  ackReaction?: boolean;
   sessionPrefix?: string;
   replyTimeoutMs?: number;
   maxReplyChars?: number;
@@ -29,6 +31,7 @@ export interface ResolvedFeishuConfig {
   domain: 'feishu' | 'lark';
   allowedChatIds: string[];
   mentionPolicy: 'mention-only' | 'all';
+  ackReaction: boolean;
   sessionPrefix: string;
   replyTimeoutMs: number;
   maxReplyChars: number;
@@ -90,6 +93,11 @@ export interface FeishuTransport {
   stop(): Promise<void>;
   /** im.message.reply 到原消息。 */
   reply(input: { messageId: string; chatId: string; text: string }): Promise<void>;
+  /**
+   * im.messageReaction.create 表情回执（P1-A4，可选）。
+   * 无权限/失败由渠道静默降级；mock transport 可不实现。
+   */
+  react?(input: { messageId: string; emojiType: string }): Promise<void>;
 }
 
 export interface FeishuPluginOptions {
@@ -123,6 +131,8 @@ export interface FeishuPluginOptions {
   transport?: FeishuTransport;
   /** 环境变量覆盖（默认 process.env；测试注入）。 */
   env?: Record<string, string | undefined>;
+  /** 三态文案语言（P1-A4，D4）；装配层按节点 i18n 注入，缺省 zh-CN。 */
+  locale?: 'zh-CN' | 'en';
 }
 
 export interface FeishuPlugin extends Plugin, FeishuChannel {

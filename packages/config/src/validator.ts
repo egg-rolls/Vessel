@@ -838,6 +838,7 @@ function validateFeishu(feishu: FeishuConfig, errors: ConfigValidationError[]): 
     domain,
     allowedChatIds,
     mentionPolicy,
+    ackReaction,
     sessionPrefix,
     replyTimeoutMs,
     maxReplyChars,
@@ -882,6 +883,13 @@ function validateFeishu(feishu: FeishuConfig, errors: ConfigValidationError[]): 
       path: 'feishu.mentionPolicy',
       message: 'feishu.mentionPolicy must be "mention-only" or "all"',
       value: mentionPolicy,
+    });
+  }
+  if (ackReaction !== undefined && typeof ackReaction !== 'boolean') {
+    errors.push({
+      path: 'feishu.ackReaction',
+      message: 'feishu.ackReaction must be a boolean',
+      value: ackReaction,
     });
   }
   if (
@@ -4077,6 +4085,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'domain',
     'allowedChatIds',
     'mentionPolicy',
+    'ackReaction',
     'sessionPrefix',
     'replyTimeoutMs',
     'maxReplyChars',

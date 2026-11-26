@@ -150,6 +150,7 @@ export const DEFAULT_FEISHU_OPTIONS: Required<FeishuConfig> = {
   domain: 'feishu',
   allowedChatIds: [],
   mentionPolicy: 'mention-only',
+  ackReaction: true,
   sessionPrefix: 'feishu',
   replyTimeoutMs: 300000,
   maxReplyChars: 4000,

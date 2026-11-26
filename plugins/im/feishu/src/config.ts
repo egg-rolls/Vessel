@@ -79,6 +79,7 @@ export function resolveFeishuConfig(
     domain,
     allowedChatIds: stringArray(config.allowedChatIds, 'allowed_chat_ids'),
     mentionPolicy,
+    ackReaction: config.ackReaction !== false,
     sessionPrefix,
     replyTimeoutMs: integerInRange(
       config.replyTimeoutMs,

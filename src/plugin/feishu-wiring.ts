@@ -15,6 +15,7 @@ import type {
   FeishuChannelOptionsLike,
   FeishuModuleLike,
 } from '../cli/control-plane-types';
+import { resolveLocale } from '../i18n/index';
 import type { PluginLoader } from './plugin-loader';
 
 export interface ResolvedFeishuOptions {
@@ -23,6 +24,7 @@ export interface ResolvedFeishuOptions {
   domain: 'feishu' | 'lark';
   allowedChatIds: string[];
   mentionPolicy: 'mention-only' | 'all';
+  ackReaction: boolean;
   sessionPrefix: string;
   replyTimeoutMs: number;
   maxReplyChars: number;
@@ -57,6 +59,7 @@ export function resolveFeishuOptions(
     domain: feishu?.domain ?? DEFAULT_FEISHU_OPTIONS.domain,
     allowedChatIds: [...(feishu?.allowedChatIds ?? DEFAULT_FEISHU_OPTIONS.allowedChatIds)],
     mentionPolicy: feishu?.mentionPolicy ?? DEFAULT_FEISHU_OPTIONS.mentionPolicy,
+    ackReaction: feishu?.ackReaction ?? DEFAULT_FEISHU_OPTIONS.ackReaction,
     sessionPrefix: feishu?.sessionPrefix ?? DEFAULT_FEISHU_OPTIONS.sessionPrefix,
     replyTimeoutMs: feishu?.replyTimeoutMs ?? DEFAULT_FEISHU_OPTIONS.replyTimeoutMs,
     maxReplyChars: feishu?.maxReplyChars ?? DEFAULT_FEISHU_OPTIONS.maxReplyChars,
@@ -202,6 +205,7 @@ export async function createFeishuFromConfig(
       domain: resolved.domain,
       allowedChatIds: resolved.allowedChatIds,
       mentionPolicy: resolved.mentionPolicy,
+      ackReaction: resolved.ackReaction,
       sessionPrefix: resolved.sessionPrefix,
       replyTimeoutMs: resolved.replyTimeoutMs,
       maxReplyChars: resolved.maxReplyChars,
@@ -217,6 +221,11 @@ export async function createFeishuFromConfig(
     ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
     // tenant 实例显式 `{}`：凭据已由 config loader 合并，禁止插件再读 ambient env。
     env: options.env ?? {},
+    // P1-A4（D4）：三态文案语言随节点 i18n（VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN）。
+    locale: resolveLocale({
+      env: options.env ?? process.env,
+      configLanguage: options.config.ui?.language,
+    }),
   };
 
   return mod.createFeishuPlugin(channelOptions);

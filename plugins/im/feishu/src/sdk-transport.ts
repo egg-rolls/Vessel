@@ -21,6 +21,12 @@ interface SdkClient {
         data: { content: string; msg_type: string };
       }): Promise<SdkReplyResponse>;
     };
+    messageReaction: {
+      create(input: {
+        path: { message_id: string };
+        data: { reaction_type: { emoji_type: string } };
+      }): Promise<SdkReplyResponse>;
+    };
   };
 }
 
@@ -191,6 +197,23 @@ export function createSdkTransport(options: SdkTransportOptions): FeishuTranspor
       });
       if (typeof response.code === 'number' && response.code !== 0) {
         throw new Error(`feishu reply failed: ${response.msg ?? response.code}`);
+      }
+    },
+
+    async react(input): Promise<void> {
+      if (!client) {
+        throw new FeishuError(
+          'channel_not_connected',
+          'feishu transport is not started',
+          'runtime',
+        );
+      }
+      const response = await client.im.messageReaction.create({
+        path: { message_id: input.messageId },
+        data: { reaction_type: { emoji_type: input.emojiType } },
+      });
+      if (typeof response.code === 'number' && response.code !== 0) {
+        throw new Error(`feishu reaction failed: ${response.msg ?? response.code}`);
       }
     },
   };

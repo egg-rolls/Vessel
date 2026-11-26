@@ -112,6 +112,7 @@ export interface FeishuChannelOptionsLike {
     domain?: 'feishu' | 'lark';
     allowedChatIds?: string[];
     mentionPolicy?: 'mention-only' | 'all';
+    ackReaction?: boolean;
     sessionPrefix?: string;
     replyTimeoutMs?: number;
     maxReplyChars?: number;
@@ -157,6 +158,8 @@ export interface FeishuChannelOptionsLike {
   tenantId?: string;
   /** 0.5：tenant 实例显式 `{}`，避免 ambient VESSEL_FEISHU_* 串用。 */
   env?: Record<string, string | undefined>;
+  /** P1-A4（D4）：三态文案语言；装配层按节点 i18n 注入，缺省 zh-CN。 */
+  locale?: 'zh-CN' | 'en';
 }
 
 export interface FeishuPluginLike extends Plugin, FeishuChannelLike {
