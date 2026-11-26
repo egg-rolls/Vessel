@@ -181,6 +181,7 @@ import { FACTORY_PLUGINS } from './plugin/plugin-loader';
 import { type PluginWatchHandle, startPluginWatch } from './plugin/plugin-watch';
 import { createRunControl } from './run/run-control';
 import { type BootstrapResult, bootstrap } from './runtime/bootstrap';
+import { hasBootRegistryKey } from './runtime/model-registry-wiring';
 import { installProcessErrorHandlers } from './runtime/process-handlers';
 import { createRuntimeNoticeBus } from './runtime/runtime-notice';
 import { RUNTIME_NOTICE_HOOK } from './runtime/runtime-notice-hook';
@@ -707,7 +708,13 @@ activeEvents = initialResult.ctx.events;
 applyLocale((config.ui as { language?: string } | undefined)?.language);
 
 // 首启向导（仅真正交互的 REPL；serve-only / 管道无 TTY 时已由 bootstrap 快速失败）
-if (!useMock && interactive && !resolveEffectiveApiKey(config)) {
+// registry 注册凭证已配置时同样不触向导（与 bootstrap 启动闸同口径）。
+if (
+  !useMock &&
+  interactive &&
+  !resolveEffectiveApiKey(config) &&
+  !hasBootRegistryKey(config, resolveDataDir(config))
+) {
   // 首启分支内 dynamic import：常规启动不加载 wizard（S4 §2.3）。
   const { runSetupWizard } = await import('../packages/tui/src/wizard/setup-wizard');
   const userConfig = await runSetupWizard();
