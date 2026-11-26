@@ -95,7 +95,11 @@ function shortRev(rev: string): string {
   return `sha256:${rev.slice(0, 12)}`;
 }
 
-/** 单文件通知行：元数据；line-level 变化条目 additive 带 `lines="a-b"`（变化 ref 重定位范围并集） */
+/**
+ * 单文件通知行：元数据；line-level 变化条目 additive 带 `lines="a-b"`（变化 ref 重定位范围并集）。
+ * 来源可见（P1 origin）：last_writer 存在时附 `by="<短名>"`——member_id 优先、session_id 回退，
+ * 取前 8 位（roster 全名解析候 Web 侧）；无 last_writer（旧状态 / 旁路写）不带 by=（零回归）。
+ */
 function noticeLine(entry: SubscriptionEntry, observation: Observation, lines?: string): string {
   const attrs = [
     `path="${escapeXmlAttr(entry.path)}"`,
@@ -107,6 +111,10 @@ function noticeLine(entry: SubscriptionEntry, observation: Observation, lines?: 
   if (observation.rev === 'deleted') attrs.push('status="deleted"');
   else if (observation.rev.startsWith('too_large:')) attrs.push('status="too_large"');
   else if (observation.rev.startsWith('binary:')) attrs.push('status="binary"');
+  if (entry.last_writer !== undefined) {
+    const writer = entry.last_writer;
+    attrs.push(`by="${escapeXmlAttr((writer.member_id ?? writer.session_id).slice(0, 8))}"`);
+  }
   return `<file ${attrs.join(' ')} />`;
 }
 
