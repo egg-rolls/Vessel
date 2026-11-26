@@ -226,14 +226,11 @@ export function ComposerToolbarBar({
 }) {
   const hostToolbarActions = useComposerToolbarActions(hostActions);
   const menuActions = useComposerToolbarMenuActions(sessionId);
-  const actions = useMemo(
-    () => [...hostToolbarActions, ...menuActions],
-    [hostToolbarActions, menuActions],
-  );
   return (
     <ComposerToolbar
       label={composerToolbarLabel()}
-      actions={actions}
+      actions={hostToolbarActions}
+      trailingActions={menuActions}
       meta={<ComposerUsageMeter usage={contextUsage} />}
       primary={primary}
       className={cn('composer-toolbar mt-0', className)}

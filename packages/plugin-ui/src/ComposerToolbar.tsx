@@ -45,6 +45,11 @@ export interface ComposerToolbarProps {
   actions?: readonly ComposerToolbarAction[];
   /** 扩展槽里的额外内容（宿主自绘控件），排在 `actions` 之后。 */
   children?: ReactNode;
+  /**
+   * 扩展槽后置动作（additive）：排在 `children` 之后，与 `actions` 同一渲染器。
+   * 用于把插件选择器放到宿主自绘控件（如模型选择 pill）右侧。
+   */
+  trailingActions?: readonly ComposerToolbarAction[];
   /** 右侧主按钮左侧的元信息（上下文用量等）；缺省不渲染。 */
   meta?: ReactNode;
   /** 右侧主按钮（发送 / 配置连接）；必填。 */
@@ -57,6 +62,7 @@ export interface ComposerToolbarProps {
 export function ComposerToolbar({
   actions = [],
   children,
+  trailingActions = [],
   meta,
   primary,
   label,
@@ -70,36 +76,40 @@ export function ComposerToolbar({
       className={cn('mt-1.5 flex items-center gap-2', className)}
     >
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-        {actions.map((action) =>
-          action.menu !== undefined ? (
-            <ToolbarMenuButton key={action.id} action={action} />
-          ) : (
-            <Button
-              key={action.id}
-              type="button"
-              variant="plain"
-              size="small"
-              aria-label={action.label}
-              title={action.label}
-              disabled={action.disabled}
-              onClick={action.onSelect}
-            >
-              {action.glyph !== undefined && (
-                <span aria-hidden="true" className="font-mono text-2xs text-faint">
-                  {action.glyph}
-                </span>
-              )}
-              {action.text ?? action.label}
-            </Button>
-          ),
-        )}
+        {actions.map(renderToolbarAction)}
         {children}
+        {trailingActions.map(renderToolbarAction)}
       </div>
       <div className="flex flex-none items-center gap-2">
         {meta}
         {primary}
       </div>
     </div>
+  );
+}
+
+/** actions / trailingActions 共用的渲染器：有菜单走菜单按钮，否则普通按钮。 */
+function renderToolbarAction(action: ComposerToolbarAction) {
+  return action.menu !== undefined ? (
+    <ToolbarMenuButton key={action.id} action={action} />
+  ) : (
+    <Button
+      key={action.id}
+      type="button"
+      variant="plain"
+      size="small"
+      aria-label={action.label}
+      title={action.label}
+      disabled={action.disabled}
+      onClick={action.onSelect}
+    >
+      {action.glyph !== undefined && (
+        <span aria-hidden="true" className="font-mono text-2xs text-faint">
+          {action.glyph}
+        </span>
+      )}
+      {action.text ?? action.label}
+    </Button>
   );
 }
 
