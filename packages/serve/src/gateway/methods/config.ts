@@ -43,6 +43,9 @@ const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
   'emptyResponse.enabled',
   // q-empty-response 二期：无感重试开关（缺省 true；false = 一期 nudge 注入路径）。
   'emptyResponse.seamless',
+  // auto-gc P1（O8）：自动回收开关 / 观察模式（与 src/config/ui-settings 白名单同口径）。
+  'autoPrune.enabled',
+  'autoPrune.dryRun',
 ]);
 
 /**
@@ -51,6 +54,9 @@ const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
  */
 const NUMBER_KEYS: Readonly<Record<string, { min: number; max: number }>> = {
   'emptyResponse.maxRetries': { min: 0, max: 10 },
+  // auto-gc P1（O8）：值域与 ui-settings / config validator 同界。
+  'autoPrune.intervalHours': { min: 1, max: 168 },
+  'autoPrune.olderThanHours': { min: 0, max: 8760 },
 };
 
 const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
