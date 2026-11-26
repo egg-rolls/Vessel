@@ -24,7 +24,9 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import {
   DERIVED_TOKEN_PREFIX,
+  type DefaultModelIdentity,
   defaultModelForProvider,
+  defaultModelRefOf,
   derivePurposeToken,
   ModelRefError,
   type ResolvedModel,
@@ -172,8 +174,18 @@ export interface ModelRegistryWiring {
    * ModelRef → provider + wire model（w1a 接缝 `TenantRuntimeProfile.resolveModel`）。
    * ref 非空 = 成员 pin；ref 空 → env `VESSEL_MODEL` 赢 models.default（§2.6 冻结），
    * 再走默认链。返回的 provider 是 delegating wrapper（凭证轮换下一请求生效）。
+   * `ref` = 本次解析的规范化可重解析 ref（第 6 修：注册条目 → 条目键；legacy →
+   * wire 透传或显式 legacy ref，见 defaultModelRefOf）——宿主缺省身份存它而非 wire，
+   * spawn 继承才不会在 legacyPresent=false 时 ModelRefError。
    */
-  resolveModel: (ref: string | undefined) => { provider: LLMProvider; model: string };
+  resolveModel: (ref: string | undefined) => { provider: LLMProvider; model: string; ref: string };
+  /**
+   * 热应用预览（第 6 修 SPAWN-03）：按 next 配置解析缺省身份，口径与 applyConfig 后的
+   * 运行期一致（legacyPresent 单向闸 `legacyPresent || hasExplicitProvider(next)`）。
+   * 解析不出 / ModelRefError → undefined（调用方落 requires_restart，不假装生效、
+   * 不把不可重解析的 wire 名装进宿主缺省）。只读解析、不构造 provider、不改快照。
+   */
+  previewDefaultModel: (next: VesselConfig) => DefaultModelIdentity | undefined;
   /**
    * 纯校验（P3 收紧，§11.1）：ref 未命中注册表且无 legacy 透传 → 错误文案 + 候选；
    * 命中 / 透传 → undefined。不构造 provider、不解密凭证（gateway 参数闸用）。
@@ -386,7 +398,9 @@ export async function createModelRegistryWiring(options: {
     };
   }
 
-  const resolveModel = (ref: string | undefined): { provider: LLMProvider; model: string } => {
+  const resolveModel = (
+    ref: string | undefined,
+  ): { provider: LLMProvider; model: string; ref: string } => {
     // env 优先级（§2.6 冻结）：ref 空时 VESSEL_MODEL 非空以其为 ref，否则 undefined
     // → 默认链（models.default ?? legacy model ?? defaultModelForProvider）。
     const envModel = process.env.VESSEL_MODEL;
@@ -403,7 +417,30 @@ export async function createModelRegistryWiring(options: {
           'Set provider.model in vessel.yaml or ~/.vessel/config.yaml.',
       );
     }
-    return { provider: delegatingProvider(resolved), model: resolved.wireModel };
+    return {
+      provider: delegatingProvider(resolved),
+      model: resolved.wireModel,
+      ref: defaultModelRefOf(resolved, legacyPresent),
+    };
+  };
+
+  const previewDefaultModel = (next: VesselConfig): DefaultModelIdentity | undefined => {
+    // 与 applyConfig 同一单向闸口径：预览结果 = 应用后运行期能解析出的缺省身份。
+    const present = legacyPresent || hasExplicitProvider(next);
+    const snap = synthesizeLegacyRegistry(next, present);
+    const envModel = process.env.VESSEL_MODEL;
+    let resolved: ResolvedModel | undefined;
+    try {
+      resolved = resolveModelRef(
+        snap,
+        envModel !== undefined && envModel !== '' ? envModel : undefined,
+      );
+    } catch {
+      // models.default 指向已删条目等：fail-loud 交调用方落 requires_restart。
+      return undefined;
+    }
+    if (!resolved?.wireModel) return undefined;
+    return { ref: defaultModelRefOf(resolved, present), wireModel: resolved.wireModel };
   };
 
   const validateModelRef = (ref: string): string | undefined => {
@@ -428,5 +465,5 @@ export async function createModelRegistryWiring(options: {
     cache.clear();
   };
 
-  return { resolveModel, validateModelRef, applyConfig, inProcessPlugins };
+  return { resolveModel, previewDefaultModel, validateModelRef, applyConfig, inProcessPlugins };
 }

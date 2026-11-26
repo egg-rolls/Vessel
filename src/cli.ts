@@ -1459,25 +1459,39 @@ async function runWithConfig(result: BootstrapResult) {
         gatewayBundle.pluginLoader.refresh();
       },
       appliers: reloadAppliers,
+      // 第 6 修（SPAWN-03）：缺省身份预览走 registry 运行期同口径（legacyPresent
+      // 单向闸）；mock 无 registry 时缺省，runner 回落只读保守口径。
+      ...(gatewayBundle.previewDefaultModel !== undefined
+        ? { previewDefaultModel: gatewayBundle.previewDefaultModel }
+        : {}),
       // provider.model 热应用（P0-1 D4）：只替换节点缺省模型 —— owner profile（新 EU
       // 创建时读）+ 成员宿主缺省（此后 spawn 的 body 读）。live EU / body 的 model 是
       // 构造期只读快照（前缀不变量），本具仍旧值、下一具才生效；live 会话换模型须
       // rotate / 重启。config.agent.model 仍属 agent 域需重启，不在这里处理。
-      // to 的口径对照 provider-factory：config.provider?.model ?? 厂商缺省；next 无显式
-      // model 时 runner 已走 requires_restart 兜底，这里不猜。
+      // 第 6 修：from/to 是缺省身份（ref + wire）。宿主缺省写 ref（spawn 继承可重解析），
+      // owner profile / 展示面写 wire；比较语义在 ref 级，摘要展示保留 wire。
       applyProviderModel: (from, to, next) => {
-        if (to === undefined || to === '') {
-          // runner 只在非空字符串时调用；兜底失败进 scope 摘要，不假装生效。
+        if (to === undefined || to.ref === '') {
+          // runner 只在解析出身份时调用；兜底失败进 scope 摘要，不假装生效。
           throw new Error('provider.model is empty');
         }
         // P1-w2d 泛化（D5）：next 转发 → 重建 registry 快照 + 清 provider 缓存；
-        // 缺 next 的旧调用点只改 profile.model（兼容）。
-        gatewayBundle.applyProviderModel(to, next);
-        result.agent?.applyDefaultModel(to);
+        // 缺 next 的旧调用点只改 profile.model（兼容）。profile.model 是展示 / mock
+        // 回落口径，保持 wire。
+        gatewayBundle.applyProviderModel(to.wireModel, next);
+        result.agent?.applyDefaultModel(to.ref, to.wireModel);
+        if (from?.ref === to.ref) {
+          // 缺省 ref 未变：同 wire = 真 unchanged；异 wire = 条目改名（缺省身份未变，
+          // 只报 wire 改名，不误报节点缺省 changed）。
+          return [
+            from?.wireModel === to.wireModel
+              ? `provider/models: hot-applied (node default unchanged: ${to.wireModel}; registry snapshot rebuilt + provider cache cleared; live bodies keep old routing until next body)`
+              : `provider/models: hot-applied (node default unchanged: ${to.ref}; wire model ${from?.wireModel ?? '(unset)'} → ${to.wireModel}; registry snapshot rebuilt + provider cache cleared; live bodies keep old routing until next body)`,
+          ];
+        }
+        // 缺省 ref 变了（含异键同 wire：路由 / 凭证已变，不得误报 unchanged）。
         return [
-          from === to
-            ? `provider/models: hot-applied (node default unchanged: ${to}; registry snapshot rebuilt + provider cache cleared; live bodies keep old routing until next body)`
-            : `model: ${from ?? '(unset)'} → ${to} (node default; registry snapshot rebuilt + provider cache cleared; live bodies keep the old model until next body)`,
+          `model: ${from?.wireModel ?? '(unset)'} → ${to.wireModel} (node default ${from?.ref ?? '(unset)'} → ${to.ref}; registry snapshot rebuilt + provider cache cleared; live bodies keep the old model until next body)`,
         ];
       },
       // S7 federation 热应用：重新解析 peer（env token + SecretStore token 只进内存），

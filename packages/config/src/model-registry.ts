@@ -105,6 +105,32 @@ export interface ResolvedModel {
   legacy: boolean;
 }
 
+/**
+ * 节点缺省模型身份（第 6 修 SPAWN-02/03）：ref 与展示 wire 分离。
+ * - `ref`：宿主缺省 / spawn 继承 / 热应用比较用的**可重解析** ref（严格 ref 契约：
+ *   `resolveModelRef(snapshot, ref)` 必须命中，不得是裸 wire 名）；
+ * - `wireModel`：请求体 model 字段与展示面（selfCard / REPL / summary）用的 wire 名。
+ */
+export interface DefaultModelIdentity {
+  ref: string;
+  wireModel: string;
+}
+
+/**
+ * 缺省身份 ref 公式（方案 A）：注册条目 → 条目键（alias 解析后规范化为条目键）；
+ * legacy 合成 / 透传 → entryId 是 `legacy:<name>` 凭证 id（非合法 ref），不能存：
+ * - legacyPresent=true：存 wire 原值，保留 legacy 透传语义（④ 原样透传 / 合成条目命中，
+ *   与 P0-1 字节等价）；
+ * - legacyPresent=false：裸 wire 无命中会 ModelRefError（幻影条目已删，第 5 修），
+ *   存显式 `legacy:<name>/<wire>` 严格 ref（resolveRegistered 剥前缀分支恒可重解析，
+ *   请求侧 wire 与凭证选路不变）。
+ */
+export function defaultModelRefOf(resolved: ResolvedModel, legacyPresent: boolean): string {
+  if (!resolved.legacy) return resolved.entryId;
+  if (legacyPresent) return resolved.wireModel;
+  return `${resolved.credentialRef ?? `legacy:${resolved.provider}`}/${resolved.wireModel}`;
+}
+
 export type ModelRefErrorCode = 'unknown_ref';
 
 /** 注册 ref 解析错误：带注册 ref 候选，便于改错与迁移。 */

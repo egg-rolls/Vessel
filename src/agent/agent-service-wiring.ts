@@ -89,7 +89,18 @@ export interface AgentServiceWiringOptions {
    * `getOrCreateExecutionUnit` 取得；host 不再自己构造 provider / EU。
    */
   runtime: Runtime;
+  /**
+   * 宿主缺省 model **ref**（第 6 修：条目键 / legacy 透传 ref，spawn 继承经
+   * resolveModelRef 解析）；展示 wire 走 modelWire。
+   */
   model: string;
+  /** 宿主缺省的展示 wire 名（selfCard / delta 真值盒）；缺省回落 model 原值。 */
+  modelWire?: string;
+  /**
+   * 第 6 修（CHAIN-11/SPAWN-05）：显式 model pin 校验口（透传 AgentService，
+   * 与 gateway 参数闸同源）；缺省不校验（mock）。
+   */
+  modelRefError?: (ref: string) => string | undefined;
   limits?: UsageLimits;
   termination?: TerminationPolicy;
   contextMaxTokens?: number;
@@ -221,8 +232,9 @@ export interface AgentServiceWiring {
    * `provider.model` 热应用（P0-1 D4 批准）：替换成员宿主的缺省 model。
    * 只影响此后 spawn 的 body；live body 构造期只读，本具仍旧值、下一具才用新值
    * （前缀不变量）。装配内部入口，不上 wire。
+   * 第 6 修：`model` = 缺省 ref（spawn 继承），`wireModel` = 配套展示 wire。
    */
-  applyDefaultModel: (model: string) => void;
+  applyDefaultModel: (model: string, wireModel?: string) => void;
 }
 
 /** 构造成员 runtime 选项（导出便于测试选项传递，不直接构造 runtime） */
@@ -249,6 +261,7 @@ export function buildMemberExecutionOptions(
   return {
     runtime: options.runtime,
     model: options.model,
+    ...(options.modelWire !== undefined ? { modelWire: options.modelWire } : {}),
     pluginHost: options.pluginHost,
     ...(options.limits !== undefined ? { limits: options.limits } : {}),
     ...(options.termination !== undefined ? { termination: options.termination } : {}),
@@ -490,6 +503,7 @@ export async function createAgentServiceWiring(
       : {}),
     snapshot: { enabled: true },
     ...(options.peerStops !== undefined ? { peerStops: options.peerStops } : {}),
+    ...(options.modelRefError !== undefined ? { modelRefError: options.modelRefError } : {}),
   });
   serviceRef = service;
 
@@ -585,6 +599,6 @@ export async function createAgentServiceWiring(
     ...(conversationStore !== undefined ? { conversationStore } : {}),
     stopSweep,
     // provider.model 热应用的配套管线：只替换宿主缺省，不动 live body（见接口注释）。
-    applyDefaultModel: (model) => innerRuntime.updateDefaultModel(model),
+    applyDefaultModel: (model, wireModel) => innerRuntime.updateDefaultModel(model, wireModel),
   };
 }

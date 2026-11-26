@@ -136,7 +136,9 @@ export {
   transformLegacyModels,
 } from './model-migration.js';
 export {
+  type DefaultModelIdentity,
   defaultModeFor,
+  defaultModelRefOf,
   ModelRefError,
   type ModelRefErrorCode,
   type ModelRegistrySnapshot,
