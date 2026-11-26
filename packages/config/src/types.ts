@@ -393,7 +393,7 @@ export interface FeishuConfig {
   appId?: string;
   /** 环境变量 VESSEL_FEISHU_APP_SECRET 优先；永不打印 */
   appSecret?: string;
-  /** 从该环境变量读取 appSecret（同层显式 appSecret 优先） */
+  /** 从该环境变量读取 appSecret；优先序 VESSEL_FEISHU_APP_SECRET > 本变量 > 显式 appSecret（与 doctor 同口径，P1-A1） */
   appSecretEnv?: string;
   /** 仅切换域名，不改变语义（默认 feishu） */
   domain?: 'feishu' | 'lark';

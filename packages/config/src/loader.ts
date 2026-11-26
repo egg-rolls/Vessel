@@ -774,6 +774,24 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
     }
   }
 
+  // 7.5 feishu appSecretEnv 启动接线（P1-A1，与 doctor feishu_credentials 同口径）：
+  //     env 层（第 5 步）只合并 VESSEL_FEISHU_*；appSecretEnv 指向的变量必须在此
+  //     解析进 appSecret，否则「doctor 全绿但启动必败」——validator 的启用必填校验
+  //     与 resolveFeishuOptions 都只看 appSecret。
+  //     优先序：VESSEL_FEISHU_APP_SECRET > env[appSecretEnv] > 显式 appSecret。
+  {
+    const feishu = config.feishu;
+    const secretEnvName = nonEmptyStr(feishu?.appSecretEnv);
+    if (feishu !== undefined && secretEnvName !== undefined) {
+      const vesselSecret = nonEmptyStr(getEnvVar(env, `${envPrefix}FEISHU_APP_SECRET`));
+      const namedSecret = nonEmptyStr(getEnvVar(env, secretEnvName));
+      if (vesselSecret === undefined && namedSecret !== undefined) {
+        config.feishu = { ...feishu, appSecret: namedSecret };
+        sources['feishu.appSecret'] = 'env';
+      }
+    }
+  }
+
   // 8. 校验配置（含未知键、项目密钥、已删除的 tenant 键 fail-fast）
   const validation = validateConfig(config);
   if (preErrors.length > 0) {
