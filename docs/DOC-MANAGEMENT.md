@@ -151,8 +151,9 @@ docs/
 
 ## 5. 临时产物（TTL）
 
-- 探针、截图、草稿、一次性脚本放**个人侧**（仓库之外）或系统临时目录；
-  禁止写进仓库根、`docs/` 或提交到 git。
+- 探针、截图、草稿、一次性脚本放**个人侧**（外层仓 `docs/dev/tmp/`，已 gitignore）或系统临时目录；
+  禁止写进仓库根、`docs/` 或提交到 git。dev 文档（plans/reports/research/design/specs/审计）一律写个人侧
+  外层仓 `D:/Application/APP/Vessel/docs/dev/`；代码仓无 `docs/dev/`（见 [FILE-MANAGEMENT.md](FILE-MANAGEMENT.md) §2）。
 - 不跨检查点保留。收口时删除；需要留证的，先转成 `docs/versions/<version>.md`
   里的结论或一条 ADR。
 - 删除前列清单；临时目录不是知识库。

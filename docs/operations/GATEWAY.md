@@ -124,7 +124,7 @@ vessel gateway uninstall-service
   请它进程内 drain（写在跑 run 的 resume 标记 + interrupt('shutdown')），等它自死 ≤10s；
   超时/失败回退强杀 + 补偿清理，并打一行 `node.drain.skipped`（pid + 原因）。
   Windows 上外部 `process.kill` 是无条件终止——没有这一步，重启后在跑 run 的恢复标记
-  一条都写不出来（事故复盘见个人侧 `docs/dev/issues/P0-run-stops.md`）。hub 没有 run 面，
+  一条都写不出来（事故复盘见个人侧外层仓 `docs/dev/issues/P0-run-stops.md`）。hub 没有 run 面，
   不走优雅关闭。
 - **Q4-C：平台层同样 graceful-first**。终止平台 entry 前先经平台自己的 `/platform/rpc`
   `gateway.shutdown`（params `{}`，回包 `{stopping:true}` 只受理）请进程跑**与 SIGTERM 完全相同**

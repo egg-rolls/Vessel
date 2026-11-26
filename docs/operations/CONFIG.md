@@ -631,7 +631,7 @@ gateway:
     recovery_probes: 5       # 连续成功多少次退出退避
 ```
 
-- **为什么在父进程**：`runs.start` 之后出现的整段僵死（`docs/dev/research/run-start-stall.md`）会让子进程**进程内所有定时器一起停摆**、`/health` 超时、日志无新行 —— 这个状态下进程内部没有任何自救手段，只能由父进程（gateway）强杀重起。
+- **为什么在父进程**：`runs.start` 之后出现的整段僵死（个人侧外层仓 `docs/dev/research/run-start-stall.md`）会让子进程**进程内所有定时器一起停摆**、`/health` 超时、日志无新行 —— 这个状态下进程内部没有任何自救手段，只能由父进程（gateway）强杀重起。
 - **判定纪律（宁可漏杀，不许误杀）**：单次探活 2s 超时；**连续** 3 次失败才判定（≈6–8s 窗口，跨过一次 GC / 慢磁盘抖动），成功一次立刻清零。处置 = 强制终止（POSIX `SIGKILL`）→ 重新 spawn → 记一条 `event=supervisor.stall_restart` 日志（带 `consecutive_failures` / `last_ok_ms` / `probe_timeout_ms`）。
 - **防抖与上界**：重启后进入退避 1s→2s→4s…（上限 60s），连续 5 次探活成功才退出退避；一小时内重启超过 5 次就**停手**并打一行 `event=supervisor.stall_restart_gave_up`（不无限重启、不刷日志），等人工 `gateway restart`。
 - **不误伤**：`gateway stop` / `gateway restart` 的关停期间看门狗先停（不探活、不重启）；子进程已退出、节点不是 `ready`/`adopted`（含 `external`）时也不动 —— 正常退出路径不变。
@@ -847,7 +847,8 @@ kanban:
 
 - **`kanban.board_path`**：`kanban.get` / `kanban.archive` 读的 board.json 路径。
   支持 `~` 展开；相对路径按进程 cwd（repo 根 / 舰队 worktree 根）解析为绝对路径。
-  缺省 `docs/dev/kanban/board.json`。archive.json 恒取板同目录（serve 侧派生）。
+  缺省 `docs/dev/kanban/board.json`（仅代码缺省；代码仓无 `docs/dev/`，本工作区生产板经 `board_path`
+  指个人侧外层仓 `D:/Application/APP/Vessel/docs/dev/kanban/board.json`）。archive.json 恒取板同目录（serve 侧派生）。
   校验与 validator 同界：非空字符串；不做存在性校验（板不存在时 `kanban.get`
   返回 `not_found`）。
 - **可写面**：`kanban.boardPath` 进 `config.set` 白名单（RPC 键 camelCase，落盘

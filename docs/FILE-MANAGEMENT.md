@@ -16,7 +16,7 @@
 |               | 个人侧（personal）                                                  | 共享侧（shared）                       |
 | ------------- | ------------------------------------------------------------------- | -------------------------------------- |
 | 物理路径      | 工作区根（本仓库的上一级，非 git）                                  | 本仓库根（`Vessel/`）                  |
-| 是否 git 仓库 | 否                                                                  | 是                                     |
+| 是否 git 仓库 | 是（个人侧本地仓，只本地提交、不 push 上云）                          | 是                                     |
 | 放什么        | handoff / plan / report / decision / worktree / 临时文件 / 私有笔记 | 源码 / 公开文档 / CI / 发布配置 |
 | 谁能写        | 1 与各 N 均可                                                       | 各 N 只能写自己独占路径，经 1 合并     |
 | 审查          | 不需要                                                              | 必须：typecheck + biome + 路径归属 + 内容审查 |
@@ -27,25 +27,17 @@
 ## 2. 个人侧目录结构
 
 ```text
-<workspace>\                               # 个人侧根（本仓库的上一级，非 git）
+<workspace>\                               # 个人侧根（本仓库的上一级；个人侧 git 仓，只本地提交、不 push 上云）
 ├── CLAUDE.md                              # 个人侧工作区说明（Claude 会话入口）
 ├── docs\
-│   ├── roles\
-│   │   └── HANDOFF-SPEC.md                # N 领域 handoff 手册规范
-│   ├── handoff\
-│   │   ├── HANDOFF-main.md                # 1（总协调）的接续状态
-│   │   ├── HANDOFF-core.md                # D1 内核
-│   │   ├── HANDOFF-ext.md                 # D2 能力生态
-│   │   ├── HANDOFF-asm.md                 # D3 装配与配置
-│   │   ├── HANDOFF-tui.md                 # D4 终端产品
-│   │   ├── HANDOFF-web.md                 # D5 远程控制面
-│   │   └── HANDOFF-gov.md                 # D6 工程治理
-│   ├── plans\
-│   │   └── PLAN-<version>-<role>.md       # 待审批/执行中的方案
-│   ├── reports\
-│   │   └── REPORT-<version>-<role>-<slug>.md   # N 的完整回报（消息里只放摘要）
-│   └── decisions\
-│       └── DECISION-<seq>-<slug>.md       # 1 的裁决与跨部门协商记录
+│   ├── constitution\ lessons\ roles\      # 个人侧宪法 / 教训 / 角色手册
+│   └── dev\                               # ★dev 文档全归这里（代码仓无 docs/dev/）
+│       ├── kanban\                        # board.json + archive.json（生产板，kanban.board_path 指这里）
+│       ├── plans\                         # 待审批/执行中的方案
+│       ├── reports\                       # N 的完整回报（消息里只放摘要）
+│       ├── research\ design\ specs\       # 研究 / 设计 / 定稿规格
+│       ├── handoff\ issues\ decisions\    # 交接 / 事故复盘 / 裁决记录
+│       └── tmp\                           # 临时脚本（gitignore，收尾即删）
 ├── worktrees\
 │   ├── 0.3.0-core\                        # git worktree，对应分支 0.3.0-core
 │   ├── 0.3.0-ext\
@@ -57,6 +49,7 @@
 ```
 
 约定：
+- **dev 文档红线（用户裁定，方案 B）**：kanban / plans / reports / research / design / specs / 审计等 dev 文档一律写个人侧外层仓 `docs/dev/`（即 `D:/Application/APP/Vessel/docs/dev/`）；代码仓无 `docs/dev/`（已移出跟踪 + .gitignore），不创建、不写入。看板 board = 外层仓 `docs/dev/kanban/board.json`（`kanban.board_path` 已指）。今后派单任务书须注明此红线。
 - **一个角色一个 worktree**，worktree 路径固定为 `worktrees/<version>-<role>`，分支同名。
 - **个人产物永不提交到共享侧**。共享侧 `.gitignore` 已忽略 `.claude/`、`.vessel/`、`.codegraph/`、`.env`、`node_modules/`、`dist/`。
 - 临时脚本放个人侧 `docs/tmp/`（需要时自建），不要放共享侧 `scripts/`。
@@ -281,6 +274,7 @@ N 在自己的分支提交（只含共享侧成品）
 个人侧产物（handoff / plan / report / 临时脚本）与 worktree 已从共享侧移出；
 `.codegraph/`、`.vessel/`、`.env`、`node_modules/`、`dist/` 保持忽略，只属本地运行数据。
 `git ls-files` 不应再出现过程产物。
+代码仓 `docs/dev/` 已整体迁至个人侧外层仓 `docs/dev/` 并移出跟踪（redblue-dev `3fc69489`，用户裁定方案 B）；代码仓不再有该目录。
 
 ## 9. CI / CD 与发布
 

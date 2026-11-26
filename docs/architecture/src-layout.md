@@ -474,7 +474,7 @@ import 网全平铺。本方案把 136 个文件按**语义**归入 **14 个领�
 **文档同步（C5）**：活文档 49 个 258 处机械同步（docs/architecture、docs/agents、docs/operations、
 docs/specs、AGENTS.md）+ INDEX glob 收拢 + tui 角色路径收拢为 src/cli/** + AGENTS.md 加归类规则指针 +
 cli-conventions §8 翻〔已落地〕（迁移箭头保留为设计史）。**历史文档有意不动**：docs/adr（决策时点快照）、
-docs/versions（发布记录）、docs/dev（ dated 研究/计划）——改写历史反而失真，留 gov 知悉。
+docs/versions（发布记录）、docs/dev（ dated 研究/计划；已整体迁个人侧外层仓，代码仓无此目录）——改写历史反而失真，留 gov 知悉。
 
 **遗留**：
 - cli-conventions §8 的 errors.ts / exit-codes.ts / commands/tools-engine/（start/status/restart 包装）

@@ -175,8 +175,8 @@ class 与同一个阈值，不要给某一页复制第二份。
 
 设置统一为一个路由驱动的弹窗（`domains/settings/dialog/SettingsDialog.tsx`）；
 旧整页（Appearance / Display / Visual / Settings）已在 S6 删除。设计基线：
-`docs/dev/plans/vscode-settings-design.md`；默认视觉契约：
-`docs/dev/specs/default-visual-contract.md`。
+个人侧外层仓 `docs/dev/plans/vscode-settings-design.md`；默认视觉契约：
+个人侧外层仓 `docs/dev/specs/default-visual-contract.md`。
 
 ### 单一事实源：注册表
 
