@@ -1,0 +1,21 @@
+# node 角色用户配置示例（不含密钥；复制到 config/node-1/config.yaml）
+# 设计：docs/dev/design/docker-cd-design.md v2 §5.4。独立 node 容器绑 0.0.0.0 = 非回环 ⇒
+# 三重硬门禁缺一不可：allow_remote:true + TLS 证书对 + 显式非空 token（serve/gateway.ts:1183-1206，DECISION-014 无明文逃生口）。
+node:
+  hostname: 0.0.0.0
+  port: 8644
+  allow_remote: true
+  token_env: NODE_1_TOKEN      # 显式 token（与 gateway 共享同一 env 值；compose 双注入）
+  tls:
+    cert_file: /certs/node-1.crt   # SAN 须含 node-1 + 127.0.0.1（容器内 HEALTHCHECK）
+    key_file: /certs/node-1.key
+provider:
+  name: openai
+  api_key_env: OPENAI_API_KEY
+hub:
+  direction: node
+  url: https://hub:8643
+  ca_file: /certs/ca.crt
+  join_code_env: HUB_JOIN_CODE
+# node 身份/node.json 与 root-secret 在 node-1-data 卷；卷在则身份/token 稳定。
+# 水平扩展 node-2：复制本文件改 cert/key 为 node-2.*、token_env 为 NODE_2_TOKEN（证书 SAN=node-2）。

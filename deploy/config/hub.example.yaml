@@ -1,0 +1,14 @@
+# hub 角色用户配置示例（不含密钥；复制到 config/hub/config.yaml）
+# 设计：docs/dev/design/docker-cd-design.md v2 §5.4。独立 hub 容器绑 0.0.0.0 = 非回环 ⇒
+# 三重硬门禁缺一不可：hub.allow_remote:true + hub.tls 证书对 + 非空 token_env（hub/server.ts:306-320）。
+hub:
+  listen:
+    hostname: 0.0.0.0
+    port: 8643
+  allow_remote: true
+  token_env: HUB_TOKEN
+  tls:
+    cert_file: /certs/hub.crt      # SAN 须含 hub + 127.0.0.1（容器内 HEALTHCHECK）
+    key_file: /certs/hub.key
+# registry.json / join-store / hub secrets 在 hub-data 卷。
+# node→hub 出站 join 需配对码（HUB_JOIN_CODE）；跨主机联邦时 compose 发布 8643 + 用正式 CA/ACME。

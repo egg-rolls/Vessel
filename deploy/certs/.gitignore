@@ -1,0 +1,9 @@
+# 本目录由 certs/gen.sh 生成的密钥/证书材料一律不进 git（设计 §10：ca.key 离线保管）。
+# 仅 README.md / gen.sh / .gitignore 本身受版本控制。
+ca.key
+ca.crt
+ca.srl
+*.key
+*.csr
+*.crt
+*.srl
