@@ -174,6 +174,32 @@ function statusToCode(status: number): RpcClientError['code'] {
   }
 }
 
+/**
+ * SD-4：连接拒绝（ECONNREFUSED / Bun `ConnectionRefused`）识别。
+ * Node fetch 包在 `cause.code`；Bun 1.3.9 直接放 `error.code`；消息兜底。
+ * 这是唯一可作 quiesce 阳性证据的传输失败（监听已闭）；401/超时/其它不算。
+ */
+function isConnectionRefused(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const err = error as { code?: unknown; message?: unknown; cause?: { code?: unknown } };
+  if (err.code === 'ECONNREFUSED' || err.code === 'ConnectionRefused') return true;
+  if (err.cause?.code === 'ECONNREFUSED' || err.cause?.code === 'ConnectionRefused') return true;
+  const message = typeof err.message === 'string' ? err.message : '';
+  return message.includes('ECONNREFUSED') || message.includes('ConnectionRefused');
+}
+
+/**
+ * SD-4：RPC 错误是否为连接拒绝（监听已闭）。停止方 quiesce 阳性证据专用；
+ * 401 / 超时 / 其它传输失败一律返回 false（不计入强杀时钟）。
+ */
+export function isRpcConnectionRefused(error: unknown): boolean {
+  return (
+    error instanceof RpcClientError &&
+    isRecord(error.details) &&
+    (error.details as { transport?: unknown }).transport === 'refused'
+  );
+}
+
 /** 从错误响应体提取 message / details（不包含 token） */
 function extractErrorBody(body: unknown): { message?: string; details?: unknown } {
   if (!isRecord(body)) return {};
@@ -459,11 +485,22 @@ export function createHttpRpcClient(options: HttpRpcClientOptions): HttpRpcClien
         response = await fetchImpl(rpcUrl, init as RequestInit);
       } catch (error) {
         if (controller.signal.aborted) {
-          throw new RpcClientError('internal', `RPC request timed out after ${requestTimeoutMs}ms`);
+          // SD-4：传输失败分类 —— 超时不是「监听已闭」，不得作 quiesce 阳性证据。
+          throw new RpcClientError(
+            'internal',
+            `RPC request timed out after ${requestTimeoutMs}ms`,
+            {
+              details: { transport: 'timeout' },
+            },
+          );
         }
         throw new RpcClientError(
           'internal',
           error instanceof Error ? error.message : String(error),
+          {
+            // SD-4：连接拒绝（监听已闭）专属标记，供停止方 quiesce 阳性判定。
+            ...(isConnectionRefused(error) ? { details: { transport: 'refused' } } : {}),
+          },
         );
       } finally {
         clearTimeout(timer);

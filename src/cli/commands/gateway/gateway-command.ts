@@ -64,6 +64,7 @@ import {
   synthesizeImplicitNode,
 } from '../../../gateway/node-registry';
 import {
+  type DrainSkippedInfo,
   type ForcedStopInfo,
   type HubSupervisorBeginResult,
   type LocalNodeSpec,
@@ -279,6 +280,21 @@ function persistChildForcedAudit(dataDir: string, info: ForcedStopInfo): Promise
       info.snapshotUnavailable,
       info.reason,
     ),
+  );
+}
+
+/**
+ * F1/SD-2：node.drain.skipped 证据持久化到 node 子进程日志（对齐 stop.forced
+ * 先例，O7）。停止方 stdout 不进子进程日志 —— 不写盘审计就随终端丢失。
+ */
+function persistChildDrainSkippedAudit(dataDir: string, info: DrainSkippedInfo): Promise<void> {
+  return persistStopAuditLine(
+    nodeLogPath(dataDir, info.name),
+    formatEventLine('node.drain.skipped', {
+      name: info.name,
+      pid: info.pid,
+      reason: info.reason,
+    }),
   );
 }
 
@@ -1095,13 +1111,18 @@ export async function stopGateway(
           ? { allInstances: true }
           : { instance }),
         platform: context.platform,
+        // F1/SD-2 链C：凭据解析以目标 node 自己的 config/dataDir 为权威；
+        // 平台 config 供隐式 node（dataDir == gatewayDataDir）使用。
+        env: context.env,
+        config: context.config,
         ...(keepForHandoff ? { keep: true } : {}),
         ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
         ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
         ...(force ? { force: true } : {}),
         // P0-run-stops P4：node 没 drain 成被强杀时，停止方代打一行结构化日志。
-        onDrainSkipped: (info) =>
+        // F1/SD-2：同时持久化到 node 子进程日志（对齐 stop.forced 先例，O7）。
+        onDrainSkipped: (info) => {
           printErr(
             ui.warn(
               formatEventLine('node.drain.skipped', {
@@ -1110,7 +1131,9 @@ export async function stopGateway(
                 reason: info.reason,
               }),
             ),
-          ),
+          );
+          void persistChildDrainSkippedAudit(context.dataDir, info);
+        },
         // 用户裁定 #5：force 非正常退出审计（停止方代打 stop.forced）。
         // DR15-1/O7：同时持久化到 node 子进程日志（best-effort，不阻断停止）。
         onForced: (info) => {
@@ -1302,6 +1325,20 @@ export async function stopGateway(
                   requestTimeoutMs: 3_000,
                 })
               : { ok: false, error: resolution.message, code: resolution.code };
+            // F1/SD-2：凭据错配（401）回退强杀前先试一次匿名优雅（回环匿名可能仍开着）。
+            if (!graceful.ok && graceful.code === 'unauthorized' && samplerToken !== '') {
+              const anonymous = await shutdownGateway({
+                record,
+                token: '',
+                tls: false,
+                rpcPath: '/platform/rpc',
+                requestTimeoutMs: 3_000,
+              });
+              if (anonymous.ok) {
+                graceful = anonymous;
+                samplerToken = '';
+              }
+            }
           } else {
             graceful = await shutdownGateway({
               record,
@@ -1309,6 +1346,19 @@ export async function stopGateway(
               tls: samplerTls,
               requestTimeoutMs: 3_000,
             });
+            // F1/SD-2：同上 —— 401 不直接强杀，先试匿名优雅。
+            if (!graceful.ok && graceful.code === 'unauthorized' && (token ?? '') !== '') {
+              const anonymous = await shutdownGateway({
+                record,
+                token: '',
+                tls: samplerTls,
+                requestTimeoutMs: 3_000,
+              });
+              if (anonymous.ok) {
+                graceful = anonymous;
+                samplerToken = '';
+              }
+            }
           }
           if (graceful.ok) {
             // 默认不限时等死（K5：等待预算在停止方）；显式 --timeout 才是可选上限。
@@ -1381,13 +1431,14 @@ export async function stopGateway(
         }
         if (!drained) {
           // 优雅受理失败（老版本/网络/token）→ 强杀回退，代打 drain.skipped（宿主来不及自己说）。
-          printErr(
-            ui.warn(
-              formatEventLine(
-                stateKind === 'platform' ? 'platform.drain.skipped' : 'node.drain.skipped',
-                { pid, reason: graceful.ok ? 'error' : (graceful.code ?? 'error') },
-              ),
-            ),
+          const skippedEvent =
+            stateKind === 'platform' ? 'platform.drain.skipped' : 'node.drain.skipped';
+          const skippedReason = graceful.ok ? 'error' : (graceful.code ?? 'error');
+          printErr(ui.warn(formatEventLine(skippedEvent, { pid, reason: skippedReason })));
+          // F1/SD-2：drain.skipped 证据持久化到目标实例日志（对齐 stop.forced 先例，O7）。
+          await persistStopAuditLine(
+            gatewayLogPath(context.dataDir, entry.instance),
+            formatEventLine(skippedEvent, { pid, reason: skippedReason }),
           );
           terminateProcess(pid, context.platform);
         }
@@ -3280,7 +3331,8 @@ export async function runPlatformGatewayForeground(
       // 这一行是僵死时间线的唯一外部证据：子进程僵死时自己的日志一条都不会落地。
       onWatchdogEvent: (event) => printWatchdogEvent(event, print, printErr),
       // P0-run-stops P4：node 优雅关闭失败回退强杀 → 代打 node.drain.skipped。
-      onDrainSkipped: (info) =>
+      // F1/SD-2：同时持久化到 node 子进程日志（对齐 stop.forced 先例，O7）。
+      onDrainSkipped: (info) => {
         printErr(
           ui.warn(
             formatEventLine('node.drain.skipped', {
@@ -3289,7 +3341,9 @@ export async function runPlatformGatewayForeground(
               reason: info.reason,
             }),
           ),
-        ),
+        );
+        void persistChildDrainSkippedAudit(dataDir, info);
+      },
       // DR15-1：quiesce 兜底强杀（drain 完成但退出链挂死）→ 代打 stop.forced 审计
       // （reason=quiesce_exit_timeout）+ 持久化到 node 子进程日志（O7）。
       onForced: (info) => {

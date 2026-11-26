@@ -27,6 +27,8 @@ import {
   resolveAddress,
 } from './federation-address';
 import {
+  buildFederationMessage,
+  deliverFederationMessage,
   FEDERATION_TEAM_INFO_MAX_LIMIT,
   FederationClientError,
   type FederationClientIo,
@@ -39,6 +41,12 @@ import {
   type FederationRuntimeOptions,
   resolveFederationOptions,
 } from './federation-config';
+import {
+  createFederationOutbox,
+  type FederationOutbox,
+  type FederationOutboxEvent,
+  isPolicyRejection,
+} from './federation-outbox';
 
 export interface FederationSendPortOptions {
   federation: FederationConfig;
@@ -75,6 +83,14 @@ export interface FederationSendPortOptions {
    * 别的节点。缺省时不认展示名别名，只认 `nodeId`。
    */
   nodeName?: string;
+  /**
+   * 4.1：durable outbox 持久化目录（node dataDir）。提供时 peer down 的出站
+   * 消息入队待投递（bounded retry + 重连补投 + 幂等），不再即丢；缺省 = 旧口径
+   * （单次投递，不可达即 rejected）。一次性 CLI 不提供（无续投宿主）。
+   */
+  outboxDir?: string;
+  /** 4.1：outbox 事件（结构化日志；不含 token / 正文）。缺省 = 不打。 */
+  onOutboxEvent?: (event: FederationOutboxEvent) => void;
 }
 
 /** 从全形 `from` 地址取发送者所属 Team（本机人类地址省略 team 段时的兜底）。 */
@@ -112,7 +128,7 @@ export interface FederationSendPortHotApply {
  */
 export function createFederationSendPort(
   options: FederationSendPortOptions,
-): FederationSendPort & FederationSendPortHotApply {
+): FederationSendPort & FederationSendPortHotApply & { closeOutbox(): void } {
   const { options: runtime } = resolveFederationOptions({
     federation: options.federation,
     nodeId: options.nodeId,
@@ -127,10 +143,26 @@ export function createFederationSendPort(
     ...(options.generateId !== undefined ? { generateId: options.generateId } : {}),
   };
 
+  // 4.1：durable outbox（提供 outboxDir 才建）。deliver 闭包读同一 runtime 对象：
+  // 热应用（applyFederationOptions）后的 peers / token 立即生效；token 不落盘。
+  const outbox: FederationOutbox | undefined =
+    options.outboxDir !== undefined
+      ? createFederationOutbox({
+          dir: options.outboxDir,
+          deliver: (message) => deliverFederationMessage(runtime, message, io),
+          ...(options.now !== undefined ? { now: options.now } : {}),
+          ...(options.onOutboxEvent !== undefined ? { onEvent: options.onOutboxEvent } : {}),
+        })
+      : undefined;
+
   return {
     nodeId: options.nodeId,
     applyFederationOptions(next: FederationRuntimeOptions): void {
       applyRuntimeOptions(runtime, next);
+    },
+    /** 4.1：停 outbox 定时器（盘上条目不受影响，下次启动续投）。 */
+    closeOutbox(): void {
+      outbox?.close();
     },
     resolve(to: string): FederationAddressPlacement {
       const placement = resolveAddress(to, {
@@ -349,9 +381,40 @@ export function createFederationSendPort(
       };
 
       try {
-        const result = await postFederation(runtime, request, io);
+        if (outbox === undefined) {
+          // 旧路径（无 outbox 部署）：单次投递，不可达即 rejected，语义不动。
+          const result = await postFederation(runtime, request, io);
+          if (result.status !== 'rejected') {
+            return { status: 'queued', message_id: result.message_id };
+          }
+          return {
+            status: 'rejected',
+            code: result.remote_code ?? result.code,
+            reason: result.reason,
+          };
+        }
+        // 4.1：先构造 wire 消息（message_id 一次生成），再投递 —— 失败入队的是
+        // **同一条**消息：补投恒用同一 message_id，对端幂等去重（首次「超时但
+        // 对端其实已收到」也不会重复投递）。
+        const message = buildFederationMessage(runtime, request, io);
+        const result = await deliverFederationMessage(runtime, message, io);
         if (result.status !== 'rejected') {
+          // 投递成功 = 该 peer 可达 → 顺手补投其积压（重连补投）。
+          void outbox.flushPeer(message.to).catch(() => undefined);
           return { status: 'queued', message_id: result.message_id };
+        }
+        // 策略类拒绝（disabled / unknown_node / not_allowed）重试无意义 → 旧口径。
+        if (!isPolicyRejection(result)) {
+          const enqueued = await outbox.enqueue(message);
+          if (enqueued) {
+            // 已受理待投递（bounded retry）：对 agent 层是 queued，不再即丢。
+            return { status: 'queued', message_id: message.message_id };
+          }
+          return {
+            status: 'rejected',
+            code: 'federation_outbox_full',
+            reason: 'federation outbox is full; message not queued',
+          };
         }
         return {
           status: 'rejected',
