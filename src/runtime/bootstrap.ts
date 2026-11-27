@@ -95,6 +95,7 @@ import {
 } from '../data/auto-prune';
 import { withDataLock } from '../data/data-lock';
 import {
+  expandHome,
   resolveDataDir,
   resolveEffectiveTenantId,
   resolveSingleTenantPaths,
@@ -365,6 +366,12 @@ export interface BootstrapResult {
    * connectMode / 无本地调度器时缺省（cli 的 applyAutoPrune 据此如实报 requires restart）。
    */
   applyAutoPruneConfig?: (next: VesselConfig) => string[];
+  /**
+   * R-6：localDispatcher（vessel op=rpc 路）注入的 kanban deps（可变对象）。
+   * cli 的 applyKanban 热应用原地更新 boardPath，与网络面 kanbanDeps 同一语义；
+   * 缺省 = 无本地 dispatcher 装配（connect 模式等）。
+   */
+  kanbanDeps?: { boardPath: string };
   /** nodeId 唯一来源：config.host.nodeId > node.json > 首次生成 */
   nodeId: string;
   /** 节点展示名：config.host.nodeName > node.json > hostname 派生 */
@@ -1022,6 +1029,15 @@ export function resolveDefaultTeamAnchor(dataDir: string): string {
 /**
  * 引导应用启动
  */
+/**
+ * kanban boardPath 解析（R-6 提为共享唯一真相；原 q-kanban-proxy 在 cli.ts 本地定义）：
+ * ~ 展开、相对进程 cwd → 缺省 <cwd>/docs/dev/kanban/board.json。
+ * 启动装配（cli 网络面 + bootstrap localDispatcher 面）与热应用共用同一表达式。
+ */
+export function resolveKanbanBoardPath(kanban: VesselConfig['kanban']): string {
+  return path.resolve(expandHome(kanban?.boardPath?.trim() || 'docs/dev/kanban/board.json'));
+}
+
 export async function bootstrap(options: BootstrapOptions = {}): Promise<BootstrapResult> {
   const {
     useMock = false,
@@ -2118,6 +2134,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     },
   });
 
+  // R-6：kanban deps（可变对象，同一引用进 localDispatcher opts.kanban 与 result.kanbanDeps）。
+  // 解析走共享 resolveKanbanBoardPath（cli 网络面同源）；热应用由 cli applyKanban 原地改。
+  const kanbanDeps: { boardPath: string } = { boardPath: resolveKanbanBoardPath(config.kanban) };
+
   const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
     hub: localEventHub,
     session,
@@ -2309,6 +2329,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.52：attachments.list 的列举器（节点侧只读目录浏览）。与读文件工具同一份
     // basic-tools 配置（allowed_roots / deny_paths）—— 面板列出来的路径必须与读侧判定同源。
     listAttachments: createConfigAttachmentLister({ getConfig: () => config }),
+    // R-6（q-tooling-cosmetic，同 R-1 模式）：vessel op=rpc 走的是本 localDispatcher
+    // （vesselRpcPort），kanban.* 必须在这里同样注入 deps，否则设计主入口
+    // not_found「board path is not configured」——cli.ts 的网络 gatewayOptions 只是另一路。
+    // 可变对象：cli 的 applyKanban 热应用经 result.kanbanDeps 原地更新（handler 每次调用读）。
+    kanban: kanbanDeps,
   });
   // vessel 元工具的 RPC 端口回填：与 gateway 同一方法表 / 同一权限语义（本地 principal）。
   vesselRpcPort = localDispatcher;
@@ -2913,6 +2938,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(federationApply !== undefined ? { federationApply } : {}),
     // auto-gc P1 热应用：调度器活配置引用的原地更新入口（cli 的 applyAutoPrune 用）。
     ...(applyAutoPruneConfig !== undefined ? { applyAutoPruneConfig } : {}),
+    // R-6：localDispatcher 的 kanban deps 透传（cli applyKanban 热应用原地更新）。
+    kanbanDeps,
     nodeId,
     nodeName,
     mcp: mcpControl,
