@@ -151,8 +151,9 @@ function useEnteringItems(
     }
   }
 
-  const entering = gate.entering;
-  return (key: string) => entering.has(key);
+  // 稳定身份（行级 memo 的依赖）：读 ref 里的 gate，不每渲染造新闭包。
+  // entering 集只增不改，渲染期读到的就是最新判定。
+  return useCallback((key: string) => store.current?.entering.has(key) ?? false, []);
 }
 
 /**
@@ -457,15 +458,24 @@ export function TranscriptWindow({
   // `hasReasoningCard`（非空白文本才算一张卡），只是这边要先把 item 归到 run 上。
   // 用途只有一件：这一轮**有**思考卡 ⇒ 时间已经上移到卡头，正文下方的
   // `MessageActions` 不再重复渲染时间；没有卡的那一轮才把时间放回工具栏。
+  const reasoningRunsRef = useRef<Set<string>>(new Set());
   const reasoningRuns = useMemo(() => {
     const runs = new Set<string>();
     // 思考被藏（minimal / toggle 关）时不算「有思考卡」：时间留在正文工具栏。
-    if (!showReasoning) return runs;
-    for (const item of items) {
-      if (item.kind !== 'run-reasoning') continue;
-      if (!hasReasoningCard(item.text)) continue;
-      runs.add(item.runId);
+    if (showReasoning) {
+      for (const item of items) {
+        if (item.kind !== 'run-reasoning') continue;
+        if (!hasReasoningCard(item.text)) continue;
+        runs.add(item.runId);
+      }
     }
+    // 内容不变时保留旧 Set 引用：流式期 items 每帧新引用，但「哪些 run 有思考卡」
+    // 几乎从不变 —— 引用稳定才能让读它的行级 memo 命中（st-F1）。
+    const previous = reasoningRunsRef.current;
+    if (previous.size === runs.size && [...runs].every((id) => previous.has(id))) {
+      return previous;
+    }
+    reasoningRunsRef.current = runs;
     return runs;
   }, [items, showReasoning]);
 
@@ -522,241 +532,258 @@ export function TranscriptWindow({
     (pending) => pending.state === 'queued' || pending.state === 'deferred',
   );
 
-  const renderItem = (item: TranscriptItem): ReactNode => {
-    switch (item.kind) {
-      case 'run-input':
-        // 身份在 item 建好时就定了（`sender` 来自 run.started.input_name / user.message.name）：
-        // agent 投递直接用同一张 AgentMessageCard，不会先出一帧用户气泡。
-        // `entering`：事件流里追加进来的新项才播入场（历史 / 回放不播）。
-        return item.sender !== undefined ? (
-          <AgentMessageCard
-            sender={item.sender}
-            {...(item.senderKind !== undefined ? { senderKind: item.senderKind } : {})}
-            content={item.text}
-            ts={item.ts}
-            defaultOpen={cardsDefaultOpen}
-            entering={isEntering(item.key)}
-          />
-        ) : (
-          <UserBubble
-            text={item.text}
-            ts={item.ts}
-            entering={isEntering(item.key)}
-            refs={item.refs}
-          />
-        );
-      case 'inbox-read': {
-        // P1-A 症状②承接：被 inbox read 消费的消息（不成为 run input、无回显）在这里
-        // 可见。卡片复用（inbox 统一批 §5，平行承接卡已废弃并入）：
-        // - human 源 = 人自己说的话 → 用户气泡（与 run-input 同口径）；
-        // - 固定标签 ask / bash / system → 工具来源卡（「来自 X」，标签人话与条带同一组 i18n）；
-        // - principal 地址（成员 UUID / federation 地址，含老数据 source=成员 id）→
-        //   AgentMessageCard：roster 查表解析名字，解析不到退短 id（绝不摆完整 UUID）；
-        //   原始地址吸入展开体首行（formatAddress 按 ui.addressStyle，A2A 卡同款）。
-        // 「收件箱取走」框定彻底消失 —— inbox 本身就是收件箱，消息卡只报「谁说的」。
-        if (item.source === HUMAN_SOURCE) {
-          return <UserBubble text={item.text} ts={item.ts} entering={isEntering(item.key)} />;
-        }
-        const fixedLabel = fixedSourceLabel(item.source);
-        if (fixedLabel !== undefined) {
-          return (
+  // 渲染器身份稳定（行级 memo 的依赖）：捕获的全部是稳定引用 / 原始值
+  // （isEntering 读 ref、reasoningRuns 内容不变时同引用、copy useCallback、
+  // agentNames / messageVisibility / projectionSummary 各自 memo）。
+  const renderItem = useCallback(
+    (item: TranscriptItem): ReactNode => {
+      switch (item.kind) {
+        case 'run-input':
+          // 身份在 item 建好时就定了（`sender` 来自 run.started.input_name / user.message.name）：
+          // agent 投递直接用同一张 AgentMessageCard，不会先出一帧用户气泡。
+          // `entering`：事件流里追加进来的新项才播入场（历史 / 回放不播）。
+          return item.sender !== undefined ? (
             <AgentMessageCard
-              sender={fixedLabel}
-              senderKind="tool"
+              sender={item.sender}
+              {...(item.senderKind !== undefined ? { senderKind: item.senderKind } : {})}
               content={item.text}
               ts={item.ts}
               defaultOpen={cardsDefaultOpen}
               entering={isEntering(item.key)}
             />
+          ) : (
+            <UserBubble
+              text={item.text}
+              ts={item.ts}
+              entering={isEntering(item.key)}
+              refs={item.refs}
+            />
+          );
+        case 'inbox-read': {
+          // P1-A 症状②承接：被 inbox read 消费的消息（不成为 run input、无回显）在这里
+          // 可见。卡片复用（inbox 统一批 §5，平行承接卡已废弃并入）：
+          // - human 源 = 人自己说的话 → 用户气泡（与 run-input 同口径）；
+          // - 固定标签 ask / bash / system → 工具来源卡（「来自 X」，标签人话与条带同一组 i18n）；
+          // - principal 地址（成员 UUID / federation 地址，含老数据 source=成员 id）→
+          //   AgentMessageCard：roster 查表解析名字，解析不到退短 id（绝不摆完整 UUID）；
+          //   原始地址吸入展开体首行（formatAddress 按 ui.addressStyle，A2A 卡同款）。
+          // 「收件箱取走」框定彻底消失 —— inbox 本身就是收件箱，消息卡只报「谁说的」。
+          if (item.source === HUMAN_SOURCE) {
+            return <UserBubble text={item.text} ts={item.ts} entering={isEntering(item.key)} />;
+          }
+          const fixedLabel = fixedSourceLabel(item.source);
+          if (fixedLabel !== undefined) {
+            return (
+              <AgentMessageCard
+                sender={fixedLabel}
+                senderKind="tool"
+                content={item.text}
+                ts={item.ts}
+                defaultOpen={cardsDefaultOpen}
+                entering={isEntering(item.key)}
+              />
+            );
+          }
+          const principal = parseSourceAddress(item.source)?.principal ?? item.source;
+          return (
+            <AgentMessageCard
+              sender={agentNames?.get(principal) ?? shortSenderId(principal)}
+              content={item.text}
+              ts={item.ts}
+              source={item.source}
+              defaultOpen={cardsDefaultOpen}
+              entering={isEntering(item.key)}
+            />
           );
         }
-        const principal = parseSourceAddress(item.source)?.principal ?? item.source;
-        return (
-          <AgentMessageCard
-            sender={agentNames?.get(principal) ?? shortSenderId(principal)}
-            content={item.text}
-            ts={item.ts}
-            source={item.source}
-            defaultOpen={cardsDefaultOpen}
-            entering={isEntering(item.key)}
-          />
-        );
-      }
-      case 'ask-answer':
-        // 「待批答复」：数据仍是那条 user 消息，呈现是一张卡（人是在待批页回答的）。
-        return <AskAnswerCard card={item.card} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
-      case 'ask-answered':
-        // 「提问答复」：sync 提问答完之后的服务端记录（不是消息，没有绝对下标）。
-        // 卡与 async 那条共用 AskAnswerCard，只覆写卡头 / 来源文案 —— 数据来源不同
-        // （服务端 answered 记录 vs 那条 ask:answer 消息），所以别让人误以为是从待批页提交的。
-        //
-        // 默认展开交给 cardsDefaultOpen：它现在只是时间线上的普通一员，没有「最新那条」
-        // 这个特殊位置（旧的底部区块里最新一条被强制展开，那是那个形态的产物）。
-        return (
-          <AskAnswerCard
-            card={item.card}
-            ts={item.ts}
-            defaultOpen={cardsDefaultOpen}
-            titleLabel={t('chat.askAnswered.title')}
-            sourceLabel={t('chat.askAnswered.source')}
-            ariaLabel={t('chat.askAnswered.aria')}
-          />
-        );
-      case 'rotate-handoff':
-        // 「rotate 交接」：新身体的第一条启动嘱托是发起 rotate 的 agent 写的交接书。
-        // **默认展开**（不是 cardsDefaultOpen）：正文就是新身体这一轮唯一的工作指令，
-        // 默认折起等于让人看不到新身体在干什么。
-        return (
-          <RotateHandoffCard
-            handoff={item}
-            content={item.text}
-            ts={item.ts}
-            defaultOpen
-            entering={isEntering(item.key)}
-          />
-        );
-      case 'run-text': {
-        // 正文只有一个形态：流式（`streaming`）与落盘都走 AssistantText → Markdown，
-        // 外层 class / 内层块结构完全相同；run 结束时只是 streaming 翻成 false
-        // （key 在 flush 前后不变，见 check-transcript-items 的 F2），DOM 原地复用。
-        // 折叠与入场也收在 AssistantText 里（`entering` = 事件流追加的新 item；
-        // 容器在 streaming 翻转前后不变，所以 `.msg-enter` 只播挂载那一次）。
-        //
-        // `actions`：这一段的工具栏（复制正文），落在正文**下方一行、左对齐**
-        // （`mt-1`）；显隐（hover / focus-within / 触屏常显）由
-        // `MessageActions` 自己负责，这里不写。思考卡上不挂工具栏。
-        //
-        // 时间：这一轮**有**思考卡 ⇒ 时间只在卡头（见 `reasoningRuns`），正文下方
-        // 不重复；没有思考卡的那一轮才把时间放回工具栏的 meta。
-        const clock = reasoningRuns.has(item.runId) ? '' : formatClock(item.ts);
-        return (
-          <AssistantText
-            text={item.text}
-            streaming={item.streaming}
-            entering={isEntering(item.key)}
-            actions={
-              item.text.trim().length > 0 ? (
-                <MessageActions
-                  className="mt-1"
-                  actions={[
-                    {
-                      id: 'copy',
-                      label: t('chat.message.copy'),
-                      onSelect: () => copy(item.text),
-                    },
-                  ]}
-                  meta={
-                    clock === '' ? undefined : (
-                      <time dateTime={new Date(item.ts ?? 0).toISOString()}>{clock}</time>
-                    )
-                  }
-                />
-              ) : undefined
-            }
-          />
-        );
-      }
-      case 'run-reasoning':
-        // q-msg-visibility：思考过程 toggle（与历史侧 Transcript 同一判定）。
-        if (!showReasoning) return null;
-        // 思考卡：首次出现走 `.motion-appear`（只动透明度），展开 / 收起由
-        // ReasoningBlock 内部的 `.motion-disclosure` 负责（见 styles/motion.css）。
-        // 卡上没有消息工具栏（用户要的），只有一个卡头自带的「复制思考」小按钮，
-        // 由组件自己渲染 —— 这里不需要传任何 actions。
-        // `time`：这一段自己的时刻（`startedAt`，也是排序依据，只读），渲染在卡头最右。
-        return (
-          <ReasoningBlock
-            text={item.text}
-            streaming={item.streaming}
-            entering={isEntering(item.key)}
-            {...(item.startedAt !== undefined ? { time: item.startedAt } : {})}
-          />
-        );
-      case 'tool':
-        // q-msg-visibility：工具卡片 toggle（失败卡永不静默，与 live 同一判定）。
-        if (!toolVisible(item.status, verbosity, messageVisibility.tools)) return null;
-        return (
-          <ToolCard
-            card={{
-              kind: 'tool',
-              key: item.key,
-              ...(item.callId !== undefined ? { callId: item.callId } : {}),
-              name: item.name,
-              status: item.status,
-              ...(item.args !== undefined ? { args: item.args } : {}),
-              ...(item.output !== undefined ? { result: item.output } : {}),
-              ...(item.error !== undefined ? { error: item.error } : {}),
-              ...(item.durationMs !== undefined ? { durationMs: item.durationMs } : {}),
-              ...(item.truncated === true ? { truncated: true } : {}),
-              ...(item.truncatedLimitBytes !== undefined
-                ? { truncatedLimitBytes: item.truncatedLimitBytes }
-                : {}),
-              // 0.54 投影：item 上的那份已经按 `tool_call_id` 合并好（见 transcript-items.ts），
-              // 这里只搬运，不再按下标找。
-              ...(item.projection !== undefined ? { projection: item.projection } : {}),
-              startedAt: item.startedAt,
-            }}
-            verbosity={verbosity}
-            defaultOpen={cardsDefaultOpen}
-            entering={isEntering(item.key)}
-            {...(projectionSummary !== undefined ? { projectionSummary } : {})}
-          />
-        );
-      case 'notice':
-        return <NoticeRow event={item.event} defaultOpen={cardsDefaultOpen} />;
-      case 'prompt-context':
-        // 环境快照卡（环境信息 · 上下文）：模型这一轮真正看到的系统消息
-        // （基底 system prompt + Self Card）。
-        // 默认折叠（用户口径：默认可见但折叠），展开是两段原文；卡语言与 EnvCard 一致
-        // （见 StreamItems.tsx 的 PromptContextCard 头注释）。
-        return (
-          <PromptContextCard
-            context={item}
-            defaultOpen={cardsDefaultOpen}
-            entering={isEntering(item.key)}
-          />
-        );
-      case 'run-failure':
-        // 失败卡：文案 / 数据在 RunFailureCard（与子 agent transcript 共用同一组件）。
-        return <RunFailureCard failure={item} defaultOpen={cardsDefaultOpen} />;
-      case 'runtime-notice': {
-        const env = item.env;
-        if (env !== undefined) {
-          // 0.55.1 的抑制收窄（q-inbox-notice-visibility-fix）：纯 pending 的 `[inbox] N pending`
-          // 只在**条带真覆盖**时不出卡 —— 本会话 human 源排队、条带此刻正画着那条未消费条目
-          // （stripCoversInboxPending，判据与理由见其定义处）。agent 投递的纯 pending 通知
-          // （wake/quiet / 成员 send，无客户端 pending）与消费后的历史一律照常渲染：
-          // 条带消费即消失，抑制若不看覆盖就是永久吞卡（probe-inbox-notice 实锤）。
-          // 形态判据（只认纯 pending、含 unread 的行仍必出卡）见 env-notice.ts#isStripCoveredInboxNotice。
-          if (stripCoversInboxPending && isStripCoveredInboxNotice(env)) return null;
-          // 环境信息卡（vessel:notice）：与「来自 agent X」卡同一张卡、同一套展开机制。
-          // 卡头 scope 标签 + 条数、summary 首行、展开看全部原文（见 EnvCard.tsx）。
-          return <EnvCard env={env} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
+        case 'ask-answer':
+          // 「待批答复」：数据仍是那条 user 消息，呈现是一张卡（人是在待批页回答的）。
+          return <AskAnswerCard card={item.card} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
+        case 'ask-answered':
+          // 「提问答复」：sync 提问答完之后的服务端记录（不是消息，没有绝对下标）。
+          // 卡与 async 那条共用 AskAnswerCard，只覆写卡头 / 来源文案 —— 数据来源不同
+          // （服务端 answered 记录 vs 那条 ask:answer 消息），所以别让人误以为是从待批页提交的。
+          //
+          // 默认展开交给 cardsDefaultOpen：它现在只是时间线上的普通一员，没有「最新那条」
+          // 这个特殊位置（旧的底部区块里最新一条被强制展开，那是那个形态的产物）。
+          return (
+            <AskAnswerCard
+              card={item.card}
+              ts={item.ts}
+              defaultOpen={cardsDefaultOpen}
+              titleLabel={t('chat.askAnswered.title')}
+              sourceLabel={t('chat.askAnswered.source')}
+              ariaLabel={t('chat.askAnswered.aria')}
+            />
+          );
+        case 'rotate-handoff':
+          // 「rotate 交接」：新身体的第一条启动嘱托是发起 rotate 的 agent 写的交接书。
+          // **默认展开**（不是 cardsDefaultOpen）：正文就是新身体这一轮唯一的工作指令，
+          // 默认折起等于让人看不到新身体在干什么。
+          return (
+            <RotateHandoffCard
+              handoff={item}
+              content={item.text}
+              ts={item.ts}
+              defaultOpen
+              entering={isEntering(item.key)}
+            />
+          );
+        case 'run-text': {
+          // 正文只有一个形态：流式（`streaming`）与落盘都走 AssistantText → Markdown，
+          // 外层 class / 内层块结构完全相同；run 结束时只是 streaming 翻成 false
+          // （key 在 flush 前后不变，见 check-transcript-items 的 F2），DOM 原地复用。
+          // 折叠与入场也收在 AssistantText 里（`entering` = 事件流追加的新 item；
+          // 容器在 streaming 翻转前后不变，所以 `.msg-enter` 只播挂载那一次）。
+          //
+          // `actions`：这一段的工具栏（复制正文），落在正文**下方一行、左对齐**
+          // （`mt-1`）；显隐（hover / focus-within / 触屏常显）由
+          // `MessageActions` 自己负责，这里不写。思考卡上不挂工具栏。
+          //
+          // 时间：这一轮**有**思考卡 ⇒ 时间只在卡头（见 `reasoningRuns`），正文下方
+          // 不重复；没有思考卡的那一轮才把时间放回工具栏的 meta。
+          const clock = reasoningRuns.has(item.runId) ? '' : formatClock(item.ts);
+          return (
+            <AssistantText
+              text={item.text}
+              streaming={item.streaming}
+              entering={isEntering(item.key)}
+              actions={
+                item.text.trim().length > 0 ? (
+                  <MessageActions
+                    className="mt-1"
+                    actions={[
+                      {
+                        id: 'copy',
+                        label: t('chat.message.copy'),
+                        onSelect: () => copy(item.text),
+                      },
+                    ]}
+                    meta={
+                      clock === '' ? undefined : (
+                        <time dateTime={new Date(item.ts ?? 0).toISOString()}>{clock}</time>
+                      )
+                    }
+                  />
+                ) : undefined
+              }
+            />
+          );
         }
-        // 其它运行时提示（vessel:subscription / limit …）：沿用整段文本的 notice 卡。
-        // （vessel:source 已改走上面的 EnvCard：scope「来源」，见 env-notice.ts。）
-        return (
-          <StreamCard
-            className="runtime-notice-card w-full min-w-0 max-w-full"
-            tone="info"
-            defaultOpen={cardsDefaultOpen}
-            title={
-              <span className="font-mono text-2xs tracking-wider text-accent">
-                {t('chat.notice.runtime', { kind: item.noticeKind })}
-              </span>
-            }
-            summary={item.text}
-          >
-            <p className="m-0 min-w-0 px-2.5 pb-2 break-words whitespace-pre-wrap wrap-anywhere text-sm text-muted">
-              {item.text}
-            </p>
-          </StreamCard>
-        );
+        case 'run-reasoning':
+          // q-msg-visibility：思考过程 toggle（与历史侧 Transcript 同一判定）。
+          if (!showReasoning) return null;
+          // 思考卡：首次出现走 `.motion-appear`（只动透明度），展开 / 收起由
+          // ReasoningBlock 内部的 `.motion-disclosure` 负责（见 styles/motion.css）。
+          // 卡上没有消息工具栏（用户要的），只有一个卡头自带的「复制思考」小按钮，
+          // 由组件自己渲染 —— 这里不需要传任何 actions。
+          // `time`：这一段自己的时刻（`startedAt`，也是排序依据，只读），渲染在卡头最右。
+          return (
+            <ReasoningBlock
+              text={item.text}
+              streaming={item.streaming}
+              entering={isEntering(item.key)}
+              {...(item.startedAt !== undefined ? { time: item.startedAt } : {})}
+            />
+          );
+        case 'tool':
+          // q-msg-visibility：工具卡片 toggle（失败卡永不静默，与 live 同一判定）。
+          if (!toolVisible(item.status, verbosity, messageVisibility.tools)) return null;
+          return (
+            <ToolCard
+              card={{
+                kind: 'tool',
+                key: item.key,
+                ...(item.callId !== undefined ? { callId: item.callId } : {}),
+                name: item.name,
+                status: item.status,
+                ...(item.args !== undefined ? { args: item.args } : {}),
+                ...(item.output !== undefined ? { result: item.output } : {}),
+                ...(item.error !== undefined ? { error: item.error } : {}),
+                ...(item.durationMs !== undefined ? { durationMs: item.durationMs } : {}),
+                ...(item.truncated === true ? { truncated: true } : {}),
+                ...(item.truncatedLimitBytes !== undefined
+                  ? { truncatedLimitBytes: item.truncatedLimitBytes }
+                  : {}),
+                // 0.54 投影：item 上的那份已经按 `tool_call_id` 合并好（见 transcript-items.ts），
+                // 这里只搬运，不再按下标找。
+                ...(item.projection !== undefined ? { projection: item.projection } : {}),
+                startedAt: item.startedAt,
+              }}
+              verbosity={verbosity}
+              defaultOpen={cardsDefaultOpen}
+              entering={isEntering(item.key)}
+              {...(projectionSummary !== undefined ? { projectionSummary } : {})}
+            />
+          );
+        case 'notice':
+          return <NoticeRow event={item.event} defaultOpen={cardsDefaultOpen} />;
+        case 'prompt-context':
+          // 环境快照卡（环境信息 · 上下文）：模型这一轮真正看到的系统消息
+          // （基底 system prompt + Self Card）。
+          // 默认折叠（用户口径：默认可见但折叠），展开是两段原文；卡语言与 EnvCard 一致
+          // （见 StreamItems.tsx 的 PromptContextCard 头注释）。
+          return (
+            <PromptContextCard
+              context={item}
+              defaultOpen={cardsDefaultOpen}
+              entering={isEntering(item.key)}
+            />
+          );
+        case 'run-failure':
+          // 失败卡：文案 / 数据在 RunFailureCard（与子 agent transcript 共用同一组件）。
+          return <RunFailureCard failure={item} defaultOpen={cardsDefaultOpen} />;
+        case 'runtime-notice': {
+          const env = item.env;
+          if (env !== undefined) {
+            // 0.55.1 的抑制收窄（q-inbox-notice-visibility-fix）：纯 pending 的 `[inbox] N pending`
+            // 只在**条带真覆盖**时不出卡 —— 本会话 human 源排队、条带此刻正画着那条未消费条目
+            // （stripCoversInboxPending，判据与理由见其定义处）。agent 投递的纯 pending 通知
+            // （wake/quiet / 成员 send，无客户端 pending）与消费后的历史一律照常渲染：
+            // 条带消费即消失，抑制若不看覆盖就是永久吞卡（probe-inbox-notice 实锤）。
+            // 形态判据（只认纯 pending、含 unread 的行仍必出卡）见 env-notice.ts#isStripCoveredInboxNotice。
+            if (stripCoversInboxPending && isStripCoveredInboxNotice(env)) return null;
+            // 环境信息卡（vessel:notice）：与「来自 agent X」卡同一张卡、同一套展开机制。
+            // 卡头 scope 标签 + 条数、summary 首行、展开看全部原文（见 EnvCard.tsx）。
+            return <EnvCard env={env} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
+          }
+          // 其它运行时提示（vessel:subscription / limit …）：沿用整段文本的 notice 卡。
+          // （vessel:source 已改走上面的 EnvCard：scope「来源」，见 env-notice.ts。）
+          return (
+            <StreamCard
+              className="runtime-notice-card w-full min-w-0 max-w-full"
+              tone="info"
+              defaultOpen={cardsDefaultOpen}
+              title={
+                <span className="font-mono text-2xs tracking-wider text-accent">
+                  {t('chat.notice.runtime', { kind: item.noticeKind })}
+                </span>
+              }
+              summary={item.text}
+            >
+              <p className="m-0 min-w-0 px-2.5 pb-2 break-words whitespace-pre-wrap wrap-anywhere text-sm text-muted">
+                {item.text}
+              </p>
+            </StreamCard>
+          );
+        }
+        default:
+          return null;
       }
-      default:
-        return null;
-    }
-  };
+    },
+    [
+      cardsDefaultOpen,
+      isEntering,
+      copy,
+      reasoningRuns,
+      agentNames,
+      verbosity,
+      messageVisibility,
+      showReasoning,
+      stripCoversInboxPending,
+      projectionSummary,
+    ],
+  );
 
   // 滚到顶部阈值内自动前插一页。用户手势产生的 scroll 才会触发，程序化回填不会
   // （回填把 scrollTop 推高，远离阈值）。

@@ -206,6 +206,23 @@
   color: var(--ink);
 }
 
+/* ── 时间线行的视口虚拟化（st-F1，q-perf-render）──────────────────
+   长会话 ~2500 行每帧全量 layout/paint 是体感卡顿主因。content-visibility: auto
+   让浏览器**跳过视口外行的 style/layout/paint**（渲染成本降到 O(视口)），配合
+   Transcript 的行级 React.memo（重渲染成本降到 O(变化行)）构成完整的增量化。
+
+   为什么是 content-visibility 而不是卸载式虚拟列表（react-window 形态）：
+   滚动契约的全部机制都依赖真实 DOM —— 会话索引竖条按 [data-index-entry-key]
+   锚点追踪/跳转、前插锚点按 scrollHeight 差值回填、吸附贴底按 scrollHeight、
+   卡片展开态是行内局部 state、浏览器 Ctrl+F 要能搜到历史正文。保留轻量 wrapper
+   （行内容仍在 DOM，只是视口外不渲染）让这些契约一字不动；卸载式虚拟化会同时
+   破坏它们。contain-intrinsic-size 的 `auto` 关键字记住上次真实渲染尺寸，
+   未渲染过的行用 120px 估高（首屏贴底 settle 会随真实尺寸收敛）。 */
+.transcript-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+
 .msg-user {
   display: flex;
   justify-content: flex-end;

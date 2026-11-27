@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo } from 'react';
+import { memo, type ReactNode, useMemo } from 'react';
 import { Markdown } from '../../components/Markdown';
 import {
   type MessageAction,
@@ -66,12 +66,16 @@ function previousUserMessage(
 }
 
 /**
- * 历史消息渲染（item 流里的  一类）。
+ * 历史消息渲染（item 流里的 `message` 一类）。
  *
- * 工具消息不再走这里：它们在建 item 时就被  配对成  item，
+ * 工具消息不再走这里：它们在建 item 时就被配对成 `tool` item，
  * 与运行态共用同一张卡（见 transcript-items.ts）。
+ *
+ * **行级 memo**（st-F1）：props 全是稳定引用 / 原始值（message 是不可变快照、
+ * previousUser 按消息缓存、回调 useCallback 稳定），流式期未变化的历史行整行
+ * 跳过重渲染 —— 每帧只重渲染真正变化的那一行。
  */
-function TranscriptMessage({
+const TranscriptMessage = memo(function TranscriptMessage({
   message,
   messageIndex,
   previousUser,
@@ -192,10 +196,40 @@ function TranscriptMessage({
       ) : null}
     </div>
   );
-}
+});
 
 /** 一条 item → 渲染节点。非消息类由调用方给（复用各自的组件）。 */
 export type TranscriptItemRenderer = (item: TranscriptItem) => ReactNode;
+
+/**
+ * 非消息 item 的行容器（**行级 memo**，st-F1）：item 引用与渲染器引用都不变时
+ * 整行跳过。渲染器（TranscriptWindow 的 renderItem）是 useCallback 稳定身份，
+ * 其捕获的可见性 / 名字表等经渲染上下文 memo 稳定；item 引用由装配面的增量
+ * 缓存保证（未变化 run 的 item 跨帧同对象）。渲染不出节点的 item 不留空 wrapper。
+ */
+const TranscriptItemRow = memo(function TranscriptItemRow({
+  item,
+  render,
+}: {
+  item: TranscriptItem;
+  render: TranscriptItemRenderer;
+}) {
+  const node = render(item);
+  if (node === null || node === undefined) return null;
+  return <div className="transcript-row">{node}</div>;
+});
+
+/** item.ts → 本地日历日 key（按 item 对象缓存：item 不可变，ts 恒定）。 */
+const DAY_KEY_CACHE = new WeakMap<TranscriptItem, string | null>();
+
+function dayKeyOf(item: TranscriptItem): string | null {
+  if (item.ts === undefined) return null;
+  const cached = DAY_KEY_CACHE.get(item);
+  if (cached !== undefined) return cached;
+  const key = localDayKey(item.ts);
+  DAY_KEY_CACHE.set(item, key);
+  return key;
+}
 
 /**
  * item 流 → 消息区。
@@ -242,12 +276,24 @@ export function Transcript({
     }
     return map;
   }, [allMessages]);
+  // 「前一条真实用户输入」按消息对象缓存（allMessages 引用不变时跨帧复用）：
+  // 回溯查找只在历史窗口变化时跑一遍，不再每渲染对每条 assistant 消息重走。
+  // 消息是不可变快照，previousUser 只依赖窗口内容 ⇒ 按对象 memo  sound。
+  const previousUserOf = useMemo(() => {
+    const map = new Map<Message, { text: string; index: number } | undefined>();
+    const list = allMessages ?? [];
+    for (const message of list) {
+      if (message.role !== 'assistant') continue;
+      map.set(message, previousUserMessage(message, allMessages, messageIndexOffset, indexOf));
+    }
+    return map;
+  }, [allMessages, messageIndexOffset, indexOf]);
   if (items.length === 0) return null;
 
   const nodes: ReactNode[] = [];
   let lastDay: string | null = null;
   for (const item of items) {
-    const day = item.ts !== undefined ? localDayKey(item.ts) : null;
+    const day = dayKeyOf(item);
     if (day && day !== lastDay) {
       nodes.push(
         <div
@@ -269,18 +315,21 @@ export function Transcript({
         sourceIndex !== undefined && sourceIndex >= 0
           ? sourceIndex + messageIndexOffset
           : undefined;
+      const previousUser = previousUserOf.get(message);
       nodes.push(
         // data-index-entry-key：会话索引竖条的跳转锚点（见 useConversationIndex.ts）。
         // 只给「人打的字」挂（与索引映射同一判据 isIndexUserMessage）：AI 回复 / 卡
         // 不带锚点，视口追踪天然只认 user 消息。wrapper 保留（flex 子项布局不变）。
+        // transcript-row：视口外行跳过 layout/paint（content-visibility，见 chat.css）。
         <div
           key={item.key}
+          className="transcript-row"
           data-index-entry-key={isIndexUserMessage(message) ? item.key : undefined}
         >
           <TranscriptMessage
             message={message}
             messageIndex={messageIndex}
-            previousUser={previousUserMessage(message, allMessages, messageIndexOffset, indexOf)}
+            {...(previousUser !== undefined ? { previousUser } : {})}
             {...(item.sourceText !== undefined ? { source: item.sourceText } : {})}
             cardsDefaultOpen={cardsDefaultOpen}
             showReasoning={showReasoning}
@@ -292,11 +341,9 @@ export function Transcript({
       );
       continue;
     }
-    const node = renderItem(item);
-    // 渲染不出节点的 item（如被条带覆盖的 inbox notice）不留空 wrapper，同上。
-    if (node === null || node === undefined) continue;
     // 非消息 item（正文 / 思考 / 工具 / notice / 排队）不给索引锚点：索引只认 user 消息。
-    nodes.push(<div key={item.key}>{node}</div>);
+    // 行级 memo：item / render 引用不变 ⇒ 整行跳过（流式期每帧只动脏行）。
+    nodes.push(<TranscriptItemRow key={item.key} item={item} render={renderItem} />);
   }
   return <div className="flex flex-col gap-4 py-1.5 pb-2.5">{nodes}</div>;
 }
