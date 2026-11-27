@@ -370,4 +370,12 @@ export interface ExecutionUnitOptions {
    * 装配层从 `context.tool_result_whitelist` 映射；构造期注入，重启生效。
    */
   toolResultWhitelist?: readonly import('./context.js').ToolResultWhitelistRule[];
+  /**
+   * 请求组成快照开关（q-context-composition；additive）。
+   *
+   * `true`/缺省 = 每次真实请求落一条 `context.composition` 事实事件（各成分
+   * token/条数/占比，供上下文优化分析）；`false` = 关闭（不算、不发）。
+   * 装配层从 `context.composition_record` 映射；构造期注入，重启生效。
+   */
+  compositionRecord?: boolean;
 }

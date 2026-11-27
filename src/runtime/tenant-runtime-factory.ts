@@ -1129,6 +1129,10 @@ export async function buildTenantRuntime(
       ...(config.context?.toolResultWhitelist !== undefined
         ? { toolResultWhitelist: config.context.toolResultWhitelist }
         : {}),
+      // q-context-composition：构造期注入（重启生效）；缺省 ⇒ EU 默认开。
+      ...(config.context?.compositionRecord !== undefined
+        ? { compositionRecord: config.context.compositionRecord }
+        : {}),
       summarizer,
     },
     systemPrompt,

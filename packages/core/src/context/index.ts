@@ -60,6 +60,14 @@ export {
   summaryFingerprint,
 } from './compaction-index.js';
 export {
+  buildRequestComposition,
+  COMPOSITION_COMPONENT_KEYS,
+  type CompositionComponent,
+  type CompositionComponentKey,
+  type RequestComposition,
+  type RequestCompositionInput,
+} from './composition.js';
+export {
   auditChainOf,
   type ClearedToolResultPlannerStats,
   compactMessagesForSeed,

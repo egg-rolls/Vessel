@@ -80,6 +80,11 @@ export interface TenantRuntimeProfile {
      * 构造期注入，重启生效（同 agent.teamMemberLimit 先例）。
      */
     toolResultWhitelist?: readonly import('../types/context.js').ToolResultWhitelistRule[];
+    /**
+     * 请求组成快照开关（q-context-composition；additive）。
+     * 缺省/true = 每请求落 `context.composition`；false = 关闭。构造期注入，重启生效。
+     */
+    compositionRecord?: boolean;
   };
   systemPrompt?: string;
   permission?: RuntimePermissionConfig;
@@ -293,6 +298,10 @@ export class Runtime {
       // q-tool-result-whitelist：构造期注入（重启生效）；缺省不注入 ⇒ core 内置默认。
       ...(profile.context.toolResultWhitelist !== undefined
         ? { toolResultWhitelist: [...profile.context.toolResultWhitelist] }
+        : {}),
+      // q-context-composition：构造期注入（重启生效）；缺省不注入 ⇒ EU 默认开。
+      ...(profile.context.compositionRecord !== undefined
+        ? { compositionRecord: profile.context.compositionRecord }
         : {}),
       ...(overrides?.selfCard !== undefined ? { selfCard: overrides.selfCard } : {}),
       ...(overrides?.contextPressureHint !== undefined
