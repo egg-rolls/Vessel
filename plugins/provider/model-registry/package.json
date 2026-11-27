@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/model-registry",
-  "version": "2.1.15",
+  "version": "2.1.16",
   "description": "Model registry management — credentials, model entries, encrypted values and connectivity tests",
   "type": "module",
   "main": "src/index.ts",
@@ -46,7 +46,7 @@
   "vessel": {
     "id": "model-registry",
     "name": "Model Registry",
-    "version": "2.1.15",
+    "version": "2.1.16",
     "description": "模型管理：凭证面 + 模型面注册表 + 加密凭证库 + 连通性测试（管理 API + credentials/models 管理页）",
     "side": "both",
     "ui": {

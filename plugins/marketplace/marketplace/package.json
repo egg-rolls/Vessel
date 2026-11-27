@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/plugin-marketplace",
-  "version": "2.1.15",
+  "version": "2.1.16",
   "description": "Plugin marketplace for Vessel: browse, install and update plugins from a static GitHub registry",
   "type": "module",
   "types": "./src/index.ts",
@@ -43,7 +43,7 @@
   "vessel": {
     "id": "marketplace",
     "name": "Marketplace",
-    "version": "2.1.15",
+    "version": "2.1.16",
     "description": "Browse, install and update Vessel plugins from a static registry",
     "side": "both",
     "entry": "src/index.ts",
