@@ -11,7 +11,9 @@
   grid-template-columns: var(--team-list-w) minmax(0, 1fr);
 }
 
-/* ── Team 卡片 ───────────────────────────────────────── */
+/* ── Team 卡片 ─────────────────────────────────────────
+   q-shadow-elevation：静止态 = elev-1 卡片（raised 表面 + 柔和阴影，阴影代替
+   border）；hover 抬起一档（elev-2）+ 换底色，不再描边。透明 border 只保几何。 */
 
 .teams-card {
   position: relative;
@@ -21,15 +23,15 @@
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: var(--surface-raised);
+  box-shadow: var(--elev-1);
   transition:
     box-shadow 120ms var(--ease),
     border-color 120ms var(--ease);
 }
 
 .teams-card:hover {
-  border-color: var(--line);
   background: var(--surface-hover);
-  box-shadow: var(--elev-1);
+  box-shadow: var(--elev-2);
 }
 
 .teams-card-open {
@@ -50,7 +52,7 @@
 
 /* 选中（当前详情路由就是这张卡）：`--accent-soft` 是仓库里「选中 / 激活」的专用
    信号，与会话侧 `.session-row.active` 同一套。写在 `:hover` / `.teams-card-open`
-   之后：选中卡悬停时底色不被 `--surface-hover` 盖掉，hover 仍靠 border + shadow
+   之后：选中卡悬停时底色不被 `--surface-hover` 盖掉，hover 仍靠阴影抬起（elev-2）
    与选中区分；标题跟着换 `--accent-ink`（同会话侧 `.session-row.active`）。 */
 .teams-card.active {
   background: var(--accent-soft);

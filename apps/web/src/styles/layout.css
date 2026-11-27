@@ -24,6 +24,8 @@
   display: flex;
   flex-direction: column;
   background: var(--surface);
+  /* 会话列面板静止态挂 elev-1（抽屉档由下方媒体查询的 elev-3 覆盖）。 */
+  box-shadow: var(--elev-1);
 }
 
 .column-header {

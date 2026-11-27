@@ -50,10 +50,22 @@
   --danger-soft: rgba(192, 54, 44, 0.09);
   --info: #5c5c60;
   --info-soft: rgba(92, 92, 96, 0.1);
-  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.05);
-  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.05), 0 10px 28px rgba(0, 0, 0, 0.08);
-  --elev-3: 0 4px 8px rgba(0, 0, 0, 0.06), 0 18px 48px rgba(0, 0, 0, 0.12);
-  --elev-4: 0 8px 16px rgba(0, 0, 0, 0.08), 0 28px 72px rgba(0, 0, 0, 0.16);
+  /* ── Elevation 分级（q-shadow-elevation）──────────────────
+     统一阴影层次：阴影代替硬 border 展现层次（必要分隔线保留）。
+     - elev-0  平贴：背景层 / 凹槽内的次级表面，不画阴影；
+     - elev-1  卡片：会话卡 / 工具卡 / Section / notice / 列表项（静止态）；
+     - elev-2  浮起面板：composer / prompt 槽位 / 悬浮小件 / 卡片 hover 抬起；
+     - elev-3  弹窗层：抽屉 / popover / dropdown；
+     - elev-4  最高层：ModalShell / 命令面板。
+     亮色档阴影是主要层次信号（白底之间靠柔和扩散阴影分开），各级明显可辨；
+     暗色档（用户裁 B）无阴影无 border：elev token 全置零阴影，层次纯靠表面
+     亮度差（--surface-raised 略亮于 --surface / --bg）承担。静态阴影，无动画。
+     forced-colors 高对比模式例外：兜底描边保留。 */
+  --elev-0: 0 0 #0000;
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.05), 0 4px 12px rgba(0, 0, 0, 0.07);
+  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.06), 0 10px 28px rgba(0, 0, 0, 0.1);
+  --elev-3: 0 4px 8px rgba(0, 0, 0, 0.07), 0 18px 48px rgba(0, 0, 0, 0.14);
+  --elev-4: 0 8px 16px rgba(0, 0, 0, 0.09), 0 28px 72px rgba(0, 0, 0, 0.18);
   --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.05);
   --hover-tint: rgba(0, 0, 0, 0.04);
   --press-tint: rgba(0, 0, 0, 0.08);
@@ -223,11 +235,13 @@
     --danger-soft: rgba(255, 110, 110, 0.12);
     --info: #a1a1a6;
     --info-soft: rgba(161, 161, 166, 0.12);
-    --elev-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.22);
-    --elev-2: 0 2px 4px rgba(0, 0, 0, 0.36), 0 10px 28px rgba(0, 0, 0, 0.3);
-    --elev-3: 0 4px 8px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.42);
-    --elev-4: 0 8px 16px rgba(0, 0, 0, 0.45), 0 28px 72px rgba(0, 0, 0, 0.55);
-    --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+    /* 暗色档（用户裁 B）：无阴影无 border，纯表面亮度差（raised > surface > bg）
+       区分层次——box-shadow 在暗底显脏，全部置零阴影；亮色档保留阴影。 */
+    --elev-1: 0 0 #0000;
+    --elev-2: 0 0 #0000;
+    --elev-3: 0 0 #0000;
+    --elev-4: 0 0 #0000;
+    --elev-inset: inset 0 0 #0000;
     --hover-tint: rgba(255, 255, 255, 0.06);
     --press-tint: rgba(255, 255, 255, 0.09);
     --scrim: rgba(0, 0, 0, 0.7);
@@ -266,11 +280,12 @@
   --danger-soft: rgba(255, 110, 110, 0.12);
   --info: #a1a1a6;
   --info-soft: rgba(161, 161, 166, 0.12);
-  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.22);
-  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.36), 0 10px 28px rgba(0, 0, 0, 0.3);
-  --elev-3: 0 4px 8px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.42);
-  --elev-4: 0 8px 16px rgba(0, 0, 0, 0.45), 0 28px 72px rgba(0, 0, 0, 0.55);
-  --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  /* 暗色档（用户裁 B）：与上面 media 档同值——无阴影，纯亮度差。 */
+  --elev-1: 0 0 #0000;
+  --elev-2: 0 0 #0000;
+  --elev-3: 0 0 #0000;
+  --elev-4: 0 0 #0000;
+  --elev-inset: inset 0 0 #0000;
   --hover-tint: rgba(255, 255, 255, 0.06);
   --press-tint: rgba(255, 255, 255, 0.09);
   --scrim: rgba(0, 0, 0, 0.7);

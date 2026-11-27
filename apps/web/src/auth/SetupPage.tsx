@@ -110,7 +110,7 @@ export function SetupPage({ username, passwordSet, onDone }: SetupPageProps) {
 
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center bg-bg px-6 text-ink">
-      <div className="w-full max-w-md rounded-xl border border-line bg-surface p-8 shadow-sm">
+      <div className="w-full max-w-md rounded-xl bg-surface p-8 shadow-elev-1 forced-colors:border">
         <h1 className="font-serif text-2xl font-semibold">{t('auth.setup.title')}</h1>
         <p className="mt-2 text-sm text-muted">{t('auth.setup.subtitle', { user: username })}</p>
         {error !== null && (

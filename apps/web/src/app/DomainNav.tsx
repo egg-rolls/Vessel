@@ -142,7 +142,7 @@ export function DomainNav({
   // transition 列表必须显式含 translate，否则开合都是单帧瞬移；open 态的
   // transition-[transform,translate] 覆盖只是去掉 visibility（开抽屉要立即可见）。
   const navClass = cn(
-    'flex flex-none flex-col overflow-hidden bg-surface',
+    'flex flex-none flex-col overflow-hidden bg-surface shadow-elev-1',
     drawer
       ? 'fixed inset-y-0 left-0 z-[var(--z-drawer)] min-h-0 w-[min(86vw,var(--drawer-w))] shadow-elev-3 transition-[transform,translate,visibility] duration-[var(--motion-ui)] ease-[var(--ease)]'
       : 'relative min-h-0 transition-[width] duration-[var(--motion-base)] ease-[var(--ease)] has-[[data-dragging]]:transition-none motion-reduce:transition-none',

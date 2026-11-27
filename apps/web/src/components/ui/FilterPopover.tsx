@@ -277,7 +277,7 @@ export function FilterPopover({
               ref={panelRef}
               role="dialog"
               aria-label={label}
-              className="fixed z-tooltip flex flex-col overflow-hidden rounded-md border border-line bg-raised shadow-elev-3"
+              className="fixed z-tooltip flex flex-col overflow-hidden rounded-md bg-raised shadow-elev-3 forced-colors:border"
               style={{
                 left: position.left,
                 top: position.top,

@@ -25,7 +25,7 @@ export function MentionPopover({
   onHover,
 }: MentionPopoverProps) {
   return (
-    <div className="mb-1.5 overflow-hidden rounded-md border border-line-strong bg-surface shadow-elev-2">
+    <div className="mb-1.5 overflow-hidden rounded-md bg-surface shadow-elev-2 forced-colors:border">
       <p className="m-0 px-2.5 pt-2 pb-1 font-mono text-2xs uppercase tracking-wider text-faint">
         {t('team.mention.title')}
       </p>
