@@ -1059,80 +1059,86 @@ export function PendingStrip({
           {/* 三态开合（§7）：`.motion-collapse` grid 0fr→1fr 自管过渡（motion.css ②，
               本批是第一个使用点），替代条件渲染瞬切。卡节点常驻不重建 —— 开合不重播
               entering。收起时 inert 摘掉焦点 / 交互（调用方责任，motion 契约）。
-              卡列上间距放在被裁的子项里（pt-1.5）：0fr 时连 padding 一起裁掉，收起态
-              不占 phantom gap，与旧条件渲染像素一致；展开 / 收起时间距随行高平滑过渡。 */}
+              q-inbox-ux-fix：grid 直接子项（被裁的那层）**自身不能带 padding** ——
+              `overflow:clip` 裁的是内容溢出，不裁元素自己的 padding，`min-height:0`
+              也压不掉 padding；旧写法把 pt-1.5 放在这一层，收起时 0fr 行仍被 padding
+              撑出 6px，再经 overflow-clip-margin:4px 漏出卡面琥珀底，形成 phantom 横条。
+              现在 grid 子项无 padding（收起真正 0 高），pt-1.5 下沉到被裁内容里：
+              展开态间距不变，收起态 clip-margin 只漏透明 padding、不漏卡面。 */}
           <div
             className="motion-collapse"
             data-motion-open={mode !== 'collapsed'}
             inert={mode === 'collapsed' ? true : undefined}
           >
-            <div className="pt-1.5">
-              <div className={mode === 'expanded' ? 'max-h-[40vh] overflow-y-auto' : undefined}>
-                <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
-                  {view.preview.map((group) => {
-                    // 组头 + 其余：`head` 取不到就整组跳过（不渲染半张卡）。
-                    const [head, ...rest] = rowsOf(group, byId);
-                    if (head === undefined) return null;
-                    const folded = group.entries.length > 1;
-                    const open = folded && expandedGroups.has(group.key);
-                    const fold = folded
-                      ? {
-                          count: group.entries.length,
-                          open,
-                          onToggle: () => toggleGroup(group.key),
-                        }
-                      : undefined;
-                    // 组内条目同源（`from` 相同），所以显示名只需算一次：组里任一条有名字，
-                    // 组头与展开后的每一条都用它 —— 同一张卡的不同行不该出现两种身份写法。
-                    const senderName = groupSenderName(group);
-                    return (
-                      <li key={group.key} className="flex flex-col gap-1.5">
-                        <PendingRow
-                          item={head.item}
-                          identity={identityOf(head.entry, senderName)}
-                          entering={isEntering(head.entry.message_id)}
-                          human={head.entry.from === HUMAN_SOURCE}
-                          {...(labelOf(head) !== undefined ? { label: labelOf(head) } : {})}
-                          onCancel={cancelRow}
-                          onEdit={editOf(head)}
-                          onClaim={claimOf(head)}
-                          onUnhold={
-                            head.pending === undefined && canUnhold(head.entry)
-                              ? unholdRow
-                              : undefined
+            <div>
+              <div className="pt-1.5">
+                <div className={mode === 'expanded' ? 'max-h-[40vh] overflow-y-auto' : undefined}>
+                  <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+                    {view.preview.map((group) => {
+                      // 组头 + 其余：`head` 取不到就整组跳过（不渲染半张卡）。
+                      const [head, ...rest] = rowsOf(group, byId);
+                      if (head === undefined) return null;
+                      const folded = group.entries.length > 1;
+                      const open = folded && expandedGroups.has(group.key);
+                      const fold = folded
+                        ? {
+                            count: group.entries.length,
+                            open,
+                            onToggle: () => toggleGroup(group.key),
                           }
-                          onRetry={retryOf(head)}
-                          fold={fold}
-                        />
-                        {/* 展开后逐条列出：仍是那些待处理条目，写操作按各自的条目 id 与来源判定。 */}
-                        {open && (
-                          <ul className="m-0 flex list-none flex-col gap-1.5 border-l border-line pl-2">
-                            {rest.map((row) => (
-                              <li key={row.entry.message_id}>
-                                <PendingRow
-                                  item={row.item}
-                                  identity={identityOf(row.entry, senderName)}
-                                  entering={isEntering(row.entry.message_id)}
-                                  human={row.entry.from === HUMAN_SOURCE}
-                                  {...(labelOf(row) !== undefined ? { label: labelOf(row) } : {})}
-                                  onCancel={cancelRow}
-                                  onEdit={editOf(row)}
-                                  onClaim={claimOf(row)}
-                                  onUnhold={
-                                    row.pending === undefined && canUnhold(row.entry)
-                                      ? unholdRow
-                                      : undefined
-                                  }
-                                  onRetry={retryOf(row)}
-                                />
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
+                        : undefined;
+                      // 组内条目同源（`from` 相同），所以显示名只需算一次：组里任一条有名字，
+                      // 组头与展开后的每一条都用它 —— 同一张卡的不同行不该出现两种身份写法。
+                      const senderName = groupSenderName(group);
+                      return (
+                        <li key={group.key} className="flex flex-col gap-1.5">
+                          <PendingRow
+                            item={head.item}
+                            identity={identityOf(head.entry, senderName)}
+                            entering={isEntering(head.entry.message_id)}
+                            human={head.entry.from === HUMAN_SOURCE}
+                            {...(labelOf(head) !== undefined ? { label: labelOf(head) } : {})}
+                            onCancel={cancelRow}
+                            onEdit={editOf(head)}
+                            onClaim={claimOf(head)}
+                            onUnhold={
+                              head.pending === undefined && canUnhold(head.entry)
+                                ? unholdRow
+                                : undefined
+                            }
+                            onRetry={retryOf(head)}
+                            fold={fold}
+                          />
+                          {/* 展开后逐条列出：仍是那些待处理条目，写操作按各自的条目 id 与来源判定。 */}
+                          {open && (
+                            <ul className="m-0 flex list-none flex-col gap-1.5 border-l border-line pl-2">
+                              {rest.map((row) => (
+                                <li key={row.entry.message_id}>
+                                  <PendingRow
+                                    item={row.item}
+                                    identity={identityOf(row.entry, senderName)}
+                                    entering={isEntering(row.entry.message_id)}
+                                    human={row.entry.from === HUMAN_SOURCE}
+                                    {...(labelOf(row) !== undefined ? { label: labelOf(row) } : {})}
+                                    onCancel={cancelRow}
+                                    onEdit={editOf(row)}
+                                    onClaim={claimOf(row)}
+                                    onUnhold={
+                                      row.pending === undefined && canUnhold(row.entry)
+                                        ? unholdRow
+                                        : undefined
+                                    }
+                                    onRetry={retryOf(row)}
+                                  />
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
               </div>
             </div>
           </div>
