@@ -5,7 +5,7 @@
  * 所有字段使用 camelCase（ADR-019）。config loader 自动将 YAML 的 snake_case 映射过来。
  */
 
-import type { EnvCadence } from '@vessel-agent/core';
+import type { EnvCadence, EnvChannel } from '@vessel-agent/core';
 
 /** Provider 配置 */
 export interface ProviderConfig {
@@ -242,16 +242,22 @@ export interface ContextConfig {
 /**
  * 环境信息注入节奏框架（YAML 键 `env_injection`，loader 自动映射为 camelCase）。
  *
- * 轴 A 检测节奏：`request` = 每 LLM 请求前检测；`run` = 每 run 首次请求前检测。
- * 抑制去重（轴 B）恒开，与本配置无关。缺省 = 内置默认表（`DEFAULT_ENV_CADENCE`，
- * = 今天节奏，零回归）。`trim` / `model` 由前缀不变量 / EU 生命周期钉死为 run，
- * 配 `request` 会被校验拒绝（不静默钳制）。
+ * 轴 A 检测节奏：`request` = 每 LLM 请求前检测；`run` = 每 run 首次请求前检测；
+ * `off` = 整段静默（不产事件、不注入；P2）。抑制去重（轴 B）恒开，与本配置无关。
+ * 缺省 = 内置默认表（`DEFAULT_ENV_CADENCE`，= 今天节奏，零回归）。`trim` / `model`
+ * 由前缀不变量 / EU 生命周期钉死为 run，配 `request` 会被校验拒绝（不静默钳制）；
+ * `off` 允许（D6：静默不破坏前缀，只是模型不知情，UI 文案警示）。
+ *
+ * 轴 C 投递通道（P2，D5 完整交付全 16 词）：`model+ui`（缺省 = 现状）/ `ui-only`
+ * （UI 可见 = 事件广播，模型不注入）。`off` 时通道被忽略。
  */
 export interface EnvInjectionConfig {
   /** 内置默认表未收录的 scope 的兜底节奏；都缺省时回落 'run'。 */
   default?: EnvCadence;
   /** 按 scope 覆盖节奏；键必须在 DEFAULT_ENV_CADENCE 里（拒未知词，防 typo）。 */
   scopes?: Partial<Record<string, EnvCadence>>;
+  /** 按 scope 覆盖投递通道（轴 C）；键必须在 DEFAULT_ENV_CADENCE 里；缺省 model+ui。 */
+  channels?: Partial<Record<string, EnvChannel>>;
 }
 
 /**

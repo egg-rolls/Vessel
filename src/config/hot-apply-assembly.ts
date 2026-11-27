@@ -16,6 +16,7 @@
 import {
   type EnvInjectionConfig,
   finestCadence,
+  resolveEnvChannel,
   type VesselConfig,
 } from '../../packages/config/src/index';
 import type {
@@ -258,6 +259,8 @@ export function registerRuntimeNoticeHook(
       // （非注册时快照）⇒热改 env_injection 节奏即时生效（注册幂等，不靠重注册刷新）。
       cadence: () =>
         finestCadence(['config', 'permission', 'tools', 'mcp', 'update', 'peer'], envInjection?.()),
+      // P2 轴 C：per-scope 通道 live resolver（ui-only ⇒ hook 只落 UI 卡事实，不注入）。
+      channel: (scope) => resolveEnvChannel(scope, envInjection?.()),
     }),
   );
 }

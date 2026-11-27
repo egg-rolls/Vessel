@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/tui",
-  "version": "2.1.12",
+  "version": "2.1.13",
   "license": "MIT",
   "type": "module",
   "main": "src/index.ts",

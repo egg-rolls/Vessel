@@ -25,12 +25,13 @@
 
 import type {
   EnvCadence,
+  EnvChannel,
   Hook,
   HookContext,
   Message,
   SessionEventLogPort,
 } from '../../packages/core/src/index';
-import { HookType } from '../../packages/core/src/index';
+import { HookType, noticeMessageIdOf } from '../../packages/core/src/index';
 import {
   NOTICE_DETAILS_MAX,
   type RuntimeNotice,
@@ -92,6 +93,13 @@ export interface RuntimeNoticeHookOptions {
    * 即时生效（装配层捕获 live 配置 getter，非注册时快照）；静态值仍兼容（旧 caller 零回归）。
    */
   cadence?: EnvCadence | (() => EnvCadence);
+  /**
+   * 投递通道 resolver（P2 轴 C）：按 scope 判 `ui-only` ⇒ 该 scope 的通知**只落 UI 卡
+   * 事实**（message.injected，经 ctx.emitFact），不写 ctx.messages（模型不收）。
+   * 游标已由 takeStored 推进 ⇒ 不阻塞后续通知。live 闭包 ⇒ 热改即时生效。
+   * 缺省不注入 ⇒ 全 model+ui（零回归）。off 的通知已在 publish 入口丢弃，这里再防御性过滤。
+   */
+  channel?: (scope: string) => EnvChannel;
 }
 
 /** 注入落盘的事件类型（`runtime.*` 命名风格，与 `runtime.notice` 同族）。 */
@@ -213,6 +221,8 @@ export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook
       // request_index 缺省 0（旧 caller）⇒ 恒放行，零回归。
       // live resolver：cadence 是闭包则每次发射实时求值（热改即时生效）；静态值原样用。
       const cadence = typeof options.cadence === 'function' ? options.cadence() : options.cadence;
+      // off（P2）：整 hook 静默（finestCadence 全 off ⇒ 'off'）。不取通知、不推游标。
+      if (cadence === 'off') return;
       if (cadence === 'run' && (ctx.request_index ?? 0) > 0) return;
       const stored = options.bus.takeStored(ctx.session_id, limit);
       if (stored.length === 0) return;
@@ -229,6 +239,7 @@ export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook
         }
       }
       const kept: StoredNotice[] = [];
+      const uiOnly: StoredNotice[] = [];
       for (const entry of stored) {
         // 正文就是身份：同一次 run 里同样的块只注入一次（多行 details 全等才算同一条）。
         const block = formatNoticeLine(entry.notice);
@@ -236,7 +247,39 @@ export function createRuntimeNoticeHook(options: RuntimeNoticeHookOptions): Hook
           if (seen.has(block)) continue;
           seen.add(block);
         }
-        kept.push(entry);
+        // P2 轴 C：ui-only ⇒ 只落 UI 卡事实（下方 emit），不进模型上下文。游标已推进。
+        if (options.channel?.(entry.notice.scope) === 'ui-only') uiOnly.push(entry);
+        else kept.push(entry);
+      }
+      // ui-only 卡：按 scope 分组（与注入同口径，单 scope 一条），经 ctx.emitFact 落
+      // message.injected 事实 ⇒ Web 既有投影渲染 EnvCard（live + 回放）。缺省 emitFact
+      // （旧 core / 裸宿主）⇒ 回退注入（model+ui 现状，additive 兼容）。
+      if (uiOnly.length > 0 && ctx.emitFact !== undefined) {
+        const uiGroups = new Map<string, StoredNotice[]>();
+        for (const entry of uiOnly) {
+          const bucket = uiGroups.get(entry.notice.scope);
+          if (bucket === undefined) uiGroups.set(entry.notice.scope, [entry]);
+          else bucket.push(entry);
+        }
+        const uiRunId = typeof ctx.run_id === 'string' ? ctx.run_id : '';
+        for (const entries of uiGroups.values()) {
+          const text = formatNotices(entries.map((entry) => entry.notice));
+          if (text === '') continue;
+          const timestamp = Date.now();
+          const message: Message = {
+            role: 'user',
+            name: 'vessel:notice',
+            content: text,
+            timestamp,
+            message_id: noticeMessageIdOf(uiRunId === '' ? 'notice' : uiRunId, timestamp),
+          };
+          ctx.emitFact({
+            type: 'message.injected',
+            run_id: uiRunId,
+            data: { run_id: uiRunId, session_id: ctx.session_id, message },
+            ts: timestamp,
+          });
+        }
       }
       if (kept.length === 0) return;
       // 只对**已取出的那批**按 scope 优先级稳定排序（同 rank 保持游标序）。

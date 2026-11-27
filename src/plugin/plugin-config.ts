@@ -18,12 +18,14 @@ import {
   type PluginConfig,
   readUserConfigRoot,
   resolveEnvCadence,
+  resolveEnvChannel,
   type VesselConfig,
   withConfigLock,
   writeUserConfigRoot,
 } from '../../packages/config/src/index';
 import type {
   EnvCadence,
+  EnvChannel,
   Plugin,
   PluginHost,
   PluginInitContext,
@@ -327,7 +329,11 @@ function applyEnvGranularity(
     if (config.envGranularity !== undefined) continue;
     const granularity: Record<string, EnvCadence> = {};
     for (const scope of scopes) granularity[scope] = resolveEnvCadence(scope, envInjection);
-    map[name] = { ...config, envGranularity: granularity };
+    // P2 轴 C：per-scope 投递通道（缺省 model+ui）。与 envGranularity 同一注入点，
+    // 插件 install 读 envChannels.<scope> 决定 ui-only 事件出口。
+    const channels: Record<string, EnvChannel> = {};
+    for (const scope of scopes) channels[scope] = resolveEnvChannel(scope, envInjection);
+    map[name] = { ...config, envGranularity: granularity, envChannels: channels };
   }
 }
 

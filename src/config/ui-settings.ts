@@ -18,11 +18,13 @@
 
 import {
   getUserConfigPath,
+  PINNED_REQUEST_SCOPES,
   readUserConfigRoot,
   type UiStatusBars,
   withConfigLock,
   writeUserConfigRoot,
 } from '../../packages/config/src/index';
+import { ENV_CADENCE_VALUES, ENV_CHANNEL_VALUES } from '../../packages/core/src/index';
 import { type Locale, resolveLocale } from '../i18n';
 
 /** 支持的 UI 语言（与 CLI / TUI catalog 一致） */
@@ -182,7 +184,42 @@ export type SettableConfigKey =
   | 'ui.depthColor.lightnessLight'
   | 'ui.depthColor.chromaLight'
   | 'ui.depthColor.lightnessDark'
-  | 'ui.depthColor.chromaDark';
+  | 'ui.depthColor.chromaDark'
+  // q-env-granularity（P2 §4.3）：环境信息粒度两轴（YAML `env_injection`）。
+  // default + scopes.<16 词> + channels.<16 词>（D5 完整交付）；三层键先例 observability.log.*。
+  | 'envInjection.default'
+  | 'envInjection.scopes.restart'
+  | 'envInjection.scopes.identity'
+  | 'envInjection.scopes.fields'
+  | 'envInjection.scopes.model'
+  | 'envInjection.scopes.tools'
+  | 'envInjection.scopes.lock'
+  | 'envInjection.scopes.conflict'
+  | 'envInjection.scopes.files'
+  | 'envInjection.scopes.context'
+  | 'envInjection.scopes.trim'
+  | 'envInjection.scopes.pii'
+  | 'envInjection.scopes.config'
+  | 'envInjection.scopes.permission'
+  | 'envInjection.scopes.mcp'
+  | 'envInjection.scopes.update'
+  | 'envInjection.scopes.peer'
+  | 'envInjection.channels.restart'
+  | 'envInjection.channels.identity'
+  | 'envInjection.channels.fields'
+  | 'envInjection.channels.model'
+  | 'envInjection.channels.tools'
+  | 'envInjection.channels.lock'
+  | 'envInjection.channels.conflict'
+  | 'envInjection.channels.files'
+  | 'envInjection.channels.context'
+  | 'envInjection.channels.trim'
+  | 'envInjection.channels.pii'
+  | 'envInjection.channels.config'
+  | 'envInjection.channels.permission'
+  | 'envInjection.channels.mcp'
+  | 'envInjection.channels.update'
+  | 'envInjection.channels.peer';
 
 interface ConfigSetTarget {
   /** YAML 根下的块名 */
@@ -193,7 +230,42 @@ interface ConfigSetTarget {
   subBlock?: string;
 }
 
-const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> = {
+/**
+ * q-env-granularity（P2 §4.3）：env_injection 的 16 个 scope 词（与 DEFAULT_ENV_CADENCE 对拍）。
+ * scopes / channels 两子块各 16 键，三层键（block=env_injection, subBlock=scopes|channels）。
+ */
+const ENV_GRANULARITY_SCOPES = [
+  'restart',
+  'identity',
+  'fields',
+  'model',
+  'tools',
+  'lock',
+  'conflict',
+  'files',
+  'context',
+  'trim',
+  'pii',
+  'config',
+  'permission',
+  'mcp',
+  'update',
+  'peer',
+] as const;
+
+const ENV_INJECTION_SET_TARGETS: Readonly<Record<string, ConfigSetTarget>> = Object.fromEntries([
+  ['envInjection.default', { block: 'env_injection', yamlKey: 'default' }],
+  ...ENV_GRANULARITY_SCOPES.map((scope) => [
+    `envInjection.scopes.${scope}`,
+    { block: 'env_injection', subBlock: 'scopes', yamlKey: scope },
+  ]),
+  ...ENV_GRANULARITY_SCOPES.map((scope) => [
+    `envInjection.channels.${scope}`,
+    { block: 'env_injection', subBlock: 'channels', yamlKey: scope },
+  ]),
+]);
+
+const CONFIG_SET_TARGETS: Readonly<Record<string, ConfigSetTarget>> = {
   'ui.language': { block: 'ui', yamlKey: 'language' },
   'ui.showReasoning': { block: 'ui', yamlKey: 'show_reasoning' },
   'ui.statusBars': { block: 'ui', yamlKey: 'status_bars' },
@@ -253,6 +325,8 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
     yamlKey: 'lightness_dark',
   },
   'ui.depthColor.chromaDark': { block: 'ui', subBlock: 'depth_color', yamlKey: 'chroma_dark' },
+  // q-env-granularity：env_injection default + scopes/channels 各 16 词（生成表展开）。
+  ...ENV_INJECTION_SET_TARGETS,
 };
 
 /** 是否为支持的 `config set` 键 */
@@ -270,6 +344,9 @@ export async function setUserConfigValue(
   options: UiSettingsStoreOptions = {},
 ): Promise<void> {
   const target = CONFIG_SET_TARGETS[key];
+  if (target === undefined) {
+    throw new Error(`invalid_key: ${key}`);
+  }
   if (key === 'ui.language' && !isUiLanguage(value)) {
     throw new Error(`invalid_language: ${JSON.stringify(value)}`);
   }
@@ -384,6 +461,30 @@ export async function setUserConfigValue(
       throw new Error(
         `invalid_number: ${key}=${JSON.stringify(value)} (number in [${depthColorRange.min}, ${depthColorRange.max}${upper})`,
       );
+    }
+  }
+
+  // q-env-granularity（P2 §4.3）：env_injection 两轴枚举校验（与 config validator 同口径）。
+  // scopes/default ∈ request|run|off；pinned（trim/model）拒 request（前缀不变量），off 允许（D6）。
+  // channels ∈ model+ui|ui-only。
+  if (key === 'envInjection.default' || key.startsWith('envInjection.scopes.')) {
+    if (typeof value !== 'string' || !(ENV_CADENCE_VALUES as readonly string[]).includes(value)) {
+      throw new Error(`invalid_enum: ${key}=${JSON.stringify(value)} (request|run|off)`);
+    }
+    const scope = key.startsWith('envInjection.scopes.')
+      ? key.slice('envInjection.scopes.'.length)
+      : undefined;
+    if (
+      value === 'request' &&
+      scope !== undefined &&
+      (PINNED_REQUEST_SCOPES as readonly string[]).includes(scope)
+    ) {
+      throw new Error(`invalid_pinned: ${key}=request (pinned to run; off is allowed)`);
+    }
+  }
+  if (key.startsWith('envInjection.channels.')) {
+    if (typeof value !== 'string' || !(ENV_CHANNEL_VALUES as readonly string[]).includes(value)) {
+      throw new Error(`invalid_enum: ${key}=${JSON.stringify(value)} (model+ui|ui-only)`);
     }
   }
 

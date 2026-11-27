@@ -12,9 +12,24 @@
 /**
  * 检测节奏：
  * - `request`：每 LLM 请求前检测；
- * - `run`：每 run 首次请求前检测（run 级 gate 用 `HookContext.request_index` 判定）。
+ * - `run`：每 run 首次请求前检测（run 级 gate 用 `HookContext.request_index` 判定）；
+ * - `off`：完全静默——gate 整段跳过，不产事件、不注入（P2 粒度配置，设计 §4.1）。
+ *   缺省表不含 off（缺省行为逐字节兼容）；只有用户显式配置才进入本档。
  */
-export type EnvCadence = 'request' | 'run';
+export type EnvCadence = 'request' | 'run' | 'off';
 
 /** `EnvCadence` 的枚举值（配置校验等运行时消费方用）。 */
-export const ENV_CADENCE_VALUES = ['request', 'run'] as const;
+export const ENV_CADENCE_VALUES = ['request', 'run', 'off'] as const;
+
+/**
+ * 投递通道（注入粒度框架的轴 C，P2 粒度配置，设计 §4.1）：
+ * - `model+ui`：事件广播（UI 卡）+ 模型注入（缺省 = 现状，零回归）；
+ * - `ui-only`：只广播事件（UI 可见），模型不注入。
+ *
+ * 与轴 A 正交：`off` 时通道被忽略（整段静默）；`request`/`run` 时通道决定
+ * 「产出的通知给谁看」。领域无关叶类型，core 不认识 scope 业务词。
+ */
+export type EnvChannel = 'model+ui' | 'ui-only';
+
+/** `EnvChannel` 的枚举值（配置校验等运行时消费方用）。 */
+export const ENV_CHANNEL_VALUES = ['model+ui', 'ui-only'] as const;

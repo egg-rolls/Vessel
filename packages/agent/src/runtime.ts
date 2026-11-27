@@ -15,6 +15,8 @@ import { randomUUID } from 'node:crypto';
 import {
   type EnvInjectionConfig,
   finestCadence,
+  resolveEnvCadence,
+  resolveEnvChannel,
   type TeamPermissionPolicy,
 } from '@vessel-agent/config';
 import {
@@ -459,6 +461,12 @@ export interface MemberExecutionHostOptions {
    * 缺省 ⇒ 内置默认表（全 request）= 今天行为，零回归。
    */
   envInjection?: EnvInjectionConfig;
+  /**
+   * 活配置 env_injection getter（P2 热加载）：self-card-delta hook 的 cadence / channel /
+   * scopeOff resolver 每请求求值 ⇒ 热改 env_injection 下一请求生效（live body 无需重 spawn）。
+   * 缺省 ⇒ 读 envInjection 快照（旧 caller 零回归）。
+   */
+  getEnvInjection?: () => EnvInjectionConfig | undefined;
   /** 成员上下文的真实摘要器；缺省时压缩退回占位摘要。 */
   summarizer?: ContextSummarizer;
   /**
@@ -1052,6 +1060,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
   /** q-tool-result-whitelist：原样存注入值（undefined ⇒ 内层窗口走 core 内置默认）。 */
   private readonly contextToolResultWhitelist: readonly ToolResultWhitelistRule[] | undefined;
   private readonly envInjection: EnvInjectionConfig | undefined;
+  private readonly getEnvInjection: (() => EnvInjectionConfig | undefined) | undefined;
   private readonly summarizer: ContextSummarizer | undefined;
   private readonly summarizerForSession: ((sessionId: string) => ContextSummarizer) | undefined;
   private readonly depth: number;
@@ -1097,6 +1106,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
     this.contextCompactThreshold = options.contextCompactThreshold;
     this.contextToolResultWhitelist = options.contextToolResultWhitelist;
     this.envInjection = options.envInjection;
+    this.getEnvInjection = options.getEnvInjection;
     this.summarizer = options.summarizer;
     this.summarizerForSession = options.summarizerForSession;
     this.depth = options.depth ?? 1;
@@ -1186,10 +1196,16 @@ export class MemberExecutionHost implements MemberExecutionPort {
           ),
         // 整 hook 取最细（不做 per-kind 分裂，见 SelfCardDeltaHookOptions.cadence）：
         // 五个 scope 任一 request ⇒ request；缺省配置全 request = 今天行为。
-        cadence: finestCadence(
-          ['identity', 'fields', 'model', 'tools', 'context'],
-          this.envInjection,
-        ),
+        // P2：live resolver 每请求求值（热改即时生效）；finestCadence 忽略 off 组（全 off ⇒ off）。
+        cadence: () =>
+          finestCadence(
+            ['identity', 'fields', 'model', 'tools', 'context'],
+            this.getEnvInjection?.() ?? this.envInjection,
+          ),
+        // P2 轴 C / per-scope off：同源 live 配置。
+        channel: (scope) => resolveEnvChannel(scope, this.getEnvInjection?.() ?? this.envInjection),
+        scopeOff: (scope) =>
+          resolveEnvCadence(scope, this.getEnvInjection?.() ?? this.envInjection) === 'off',
       }),
     );
     // tools-body-snapshot：工具面变更卡改由 core EU 生产（ExecutionUnit.appendToolSurfaceNotice，

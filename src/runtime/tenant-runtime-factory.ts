@@ -25,7 +25,9 @@ import {
   type ConfigSources,
   DEFAULT_TIMELINE_OPTIONS,
   type DefaultModelIdentity,
+  type EnvInjectionConfig,
   resolveEnvCadence,
+  resolveEnvChannel,
   type VesselConfig,
 } from '../../packages/config/src/index';
 import {
@@ -140,6 +142,12 @@ export interface BuildTenantRuntimeOptions {
   runtime: Runtime;
   /** 已合并 tenant overlay 的配置 */
   config: VesselConfig;
+  /**
+   * 活配置 env_injection getter（P2 热加载）：EU 的 envCadence / envChannel 端口每请求
+   * 求值 ⇒ 热改 env_injection 下一请求生效（修启动快照冻结）。缺省 ⇒ 读 options.config
+   * 快照（旧 caller 零回归）。
+   */
+  getEnvInjection?: () => EnvInjectionConfig | undefined;
   tenantPaths: TenantPaths;
   /** config.loaded 事件的来源（缺省空） */
   configSources?: ConfigSources;
@@ -1103,9 +1111,13 @@ export async function buildTenantRuntime(
     ...(emptyResponsePolicyOf(config) !== undefined
       ? { emptyResponse: emptyResponsePolicyOf(config) }
       : {}),
-    // 注入粒度框架：EU notice producer（tools / pii）的检测节奏端口。缺省配置走
-    // 内置默认表（全 request）⇒ gate 恒放行，零回归；model / trim 钉死不经此端口。
-    envCadence: (scope) => resolveEnvCadence(scope, config.envInjection),
+    // 注入粒度框架：EU notice producer 的检测节奏 / 投递通道端口。P2：读 live getter
+    // （缺省回退 config 快照）⇒ 热改 env_injection 下一请求生效。缺省配置走内置默认表
+    // （全 request / model+ui）⇒ gate 恒放行、通道恒 model+ui，零回归。
+    envCadence: (scope) =>
+      resolveEnvCadence(scope, options.getEnvInjection?.() ?? config.envInjection),
+    envChannel: (scope) =>
+      resolveEnvChannel(scope, options.getEnvInjection?.() ?? config.envInjection),
     // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
     includeReasoning: includeReasoningFor(config),
     context: {
