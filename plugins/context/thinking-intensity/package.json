@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/thinking-intensity",
-  "version": "2.1.6",
+  "version": "2.1.7",
   "description": "Model thinking-intensity control: hot config settings + BeforeLlm requestExtras injection (per-provider effort/budget/toggle mapping)",
   "type": "module",
   "main": "src/index.ts",
@@ -32,7 +32,7 @@
   "vessel": {
     "id": "thinking-intensity",
     "name": "Thinking Intensity",
-    "version": "2.1.6",
+    "version": "2.1.7",
     "description": "Control model thinking intensity (effort/budget/toggle per provider) as hot config; auto = no injection (zero regression)",
     "side": "both",
     "contributes": {

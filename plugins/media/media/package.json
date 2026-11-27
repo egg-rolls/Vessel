@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/media",
-  "version": "2.1.6",
+  "version": "2.1.7",
   "description": "Multimodal parser plugin: single media tool (read / view / ocr / describe) for attachment refs; view surfaces images to the calling model context",
   "type": "module",
   "main": "src/index.ts",
