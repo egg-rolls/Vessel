@@ -93,11 +93,32 @@ export interface MarkdownParseOptions {
   streaming?: boolean;
 }
 
-/** 解析块级 Markdown；容忍未闭合的 fenced code（流式尾部）。 */
-export function parseMarkdown(source: string, options?: MarkdownParseOptions): MarkdownBlock[] {
+/**
+ * 解析块级 Markdown；容忍未闭合的 fenced code（流式尾部）。
+ *
+ * `blockStarts`（可选，流式增量解析用）：与返回 blocks 一一对应的**块起始字符偏移**
+ * （相对规范化后的 source）。只有顶层调用传；列表子块的递归解析不传。
+ * 增量解析据此只重解析尾块（见 parseMarkdownStreaming）。
+ */
+export function parseMarkdown(
+  source: string,
+  options?: MarkdownParseOptions,
+  blockStarts?: number[],
+): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/g, '\n').split('\n');
   const blocks: MarkdownBlock[] = [];
   let index = 0;
+
+  // 行首字符偏移表（只在需要块偏移时算，历史渲染零开销）。
+  let lineStarts: number[] | undefined;
+  if (blockStarts) {
+    lineStarts = [];
+    let acc = 0;
+    for (const line of lines) {
+      lineStarts.push(acc);
+      acc += line.length + 1;
+    }
+  }
 
   while (index < lines.length) {
     const line = lines[index] ?? '';
@@ -105,6 +126,13 @@ export function parseMarkdown(source: string, options?: MarkdownParseOptions): M
       index += 1;
       continue;
     }
+
+    // 本块起始偏移 + 统一 push（块与偏移一一对应）。
+    const blockStart = lineStarts?.[index] ?? 0;
+    const push = (block: MarkdownBlock): void => {
+      blocks.push(block);
+      blockStarts?.push(blockStart);
+    };
 
     const fence = FENCE.exec(line);
     if (fence) {
@@ -124,7 +152,7 @@ export function parseMarkdown(source: string, options?: MarkdownParseOptions): M
         body.push(current);
         index += 1;
       }
-      blocks.push({
+      push({
         type: 'code',
         ...(lang ? { lang } : {}),
         text: body.join('\n'),
@@ -134,7 +162,7 @@ export function parseMarkdown(source: string, options?: MarkdownParseOptions): M
 
     const heading = HEADING.exec(line);
     if (heading) {
-      blocks.push({
+      push({
         type: 'heading',
         level: (heading[1] ?? '#').length,
         text: (heading[2] ?? '').trim(),
@@ -144,7 +172,7 @@ export function parseMarkdown(source: string, options?: MarkdownParseOptions): M
     }
 
     if (HR.test(line)) {
-      blocks.push({ type: 'hr' });
+      push({ type: 'hr' });
       index += 1;
       continue;
     }
@@ -173,11 +201,11 @@ export function parseMarkdown(source: string, options?: MarkdownParseOptions): M
       let rest = index;
       while (rest < lines.length && (lines[rest] ?? '').trim() === '') rest += 1;
       if (options?.streaming === true && rest >= lines.length) {
-        blocks.push({ type: 'paragraph', text: lines.slice(tableStart, rest).join('\n') });
+        push({ type: 'paragraph', text: lines.slice(tableStart, rest).join('\n') });
         index = rest;
         continue;
       }
-      blocks.push({ type: 'table', header, rows });
+      push({ type: 'table', header, rows });
       continue;
     }
 
@@ -190,7 +218,7 @@ export function parseMarkdown(source: string, options?: MarkdownParseOptions): M
         parts.push(current[1] ?? '');
         index += 1;
       }
-      blocks.push({ type: 'blockquote', text: parts.join('\n') });
+      push({ type: 'blockquote', text: parts.join('\n') });
       continue;
     }
 
@@ -284,7 +312,7 @@ export function parseMarkdown(source: string, options?: MarkdownParseOptions): M
       }
       flushItem();
 
-      blocks.push({
+      push({
         type: 'list',
         ordered,
         ...(ordered && start !== 1 ? { start } : {}),
@@ -299,7 +327,7 @@ export function parseMarkdown(source: string, options?: MarkdownParseOptions): M
       index += 1;
     }
     if (paragraph.length > 0) {
-      blocks.push({ type: 'paragraph', text: paragraph.join('\n') });
+      push({ type: 'paragraph', text: paragraph.join('\n') });
     } else {
       // 防御：startsBlock 判定为 true 但没有分支消费时，至少前进一行。
       index += 1;
@@ -307,6 +335,51 @@ export function parseMarkdown(source: string, options?: MarkdownParseOptions): M
   }
 
   return blocks;
+}
+
+/** 流式增量解析缓存（每个 Markdown 实例一份，挂在组件 ref 上，不跨实例共享）。 */
+export interface StreamingParseCache {
+  /** 已解析的规范化全文（上次提交的前缀）。 */
+  source: string;
+  /** 上次的块结果（前缀块对象引用稳定 ⇒ memo(Block) 跳过重渲染）。 */
+  blocks: MarkdownBlock[];
+  /** 与 blocks 一一对应的块起始字符偏移（重解析锚点取倒数第二块）。 */
+  starts: number[];
+}
+
+/**
+ * 流式增量解析（流式平滑化 A 正文配套，豆包式 typewriter 的成本约束）。
+ *
+ * 正文只在尾部追加 ⇒ 只有尾块的源码会增长。但**不能只重解析尾块**：尾块可能是
+ * 退化形态（裸 `-` 行按段落降级 / 半张表降级段），追加会改变它首行的语法类型，
+ * 从而**并入前块**（裸 `-` 长成列表项并入前面的 list；半张表闭合改变降级判定）。
+ * 受影响的边界只有「倒数第二块 / 尾块」这一条：更前的块，其末行由后继块的首行
+ * 钉死，追加够不到。所以从**倒数第二块起点**重解析（末两块），前缀块对象原样
+ * 复用（引用相等 ⇒ memo(Block) 整棵子树跳过）。每帧成本 O(末两块) 而非 O(全文)，
+ * 这是「逐帧 reveal 不逐帧全量 parse」的关键。
+ *
+ * 正确性边界：缓存只在 `新文本.startsWith(旧文本)` 时命中；换文 / 缩短 / 非流式
+ * 一律全量解析。尾段重解析若意外为空（防御），回落全量。
+ */
+export function parseMarkdownStreaming(
+  source: string,
+  cache: StreamingParseCache | null,
+): { blocks: MarkdownBlock[]; cache: StreamingParseCache } {
+  const normalized = source.replace(/\r\n?/g, '\n');
+  if (cache && cache.blocks.length > 0 && normalized.startsWith(cache.source)) {
+    const anchor = cache.starts[cache.starts.length - 2] ?? 0;
+    const tailStarts: number[] = [];
+    const tailBlocks = parseMarkdown(normalized.slice(anchor), { streaming: true }, tailStarts);
+    if (tailBlocks.length > 0) {
+      const keep = Math.max(0, cache.blocks.length - 2);
+      const blocks = [...cache.blocks.slice(0, keep), ...tailBlocks];
+      const starts = [...cache.starts.slice(0, keep), ...tailStarts.map((off) => anchor + off)];
+      return { blocks, cache: { source: normalized, blocks, starts } };
+    }
+  }
+  const starts: number[] = [];
+  const blocks = parseMarkdown(normalized, { streaming: true }, starts);
+  return { blocks, cache: { source: normalized, blocks, starts } };
 }
 
 /**

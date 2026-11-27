@@ -25,8 +25,9 @@
  * - 动画（`styles/motion.css` 是唯一来源，本组件只挂 class）：
  *   入场 = `.motion-appear`（`entering`，只动透明度，只播挂载那一次），
  *   展开 / 收起 = `.motion-disclosure`（`<details>` 的尺寸过渡，原生可访问性不变）。
- *   流式期间思考文本每 flush 增长一次，但这两种动画都按「节点首次挂载 / open 变化」跑，
- *   不会跟着 delta 重播。
+ *   流式期间思考文本经 `useTypewriterText` 缓冲 reveal（豆包式 rAF 匀速吐字，A）：
+ *   到达节奏（50ms 合批）与渲染节拍解耦；入场 / 开合两种动画仍按「节点首次挂载 /
+ *   open 变化」跑，不会跟着 delta 重播。
  *
  * 卡外没有别的东西（「助手」发言人名已按用户要求移除：它不提供信息）。
  *
@@ -42,7 +43,7 @@
  */
 import { useEffect, useState } from 'react';
 import { IconButton } from '../../components/Tooltip';
-import { Button, Icon, useMessageCopy } from '../../components/ui';
+import { Button, Icon, useMessageCopy, useTypewriterText } from '../../components/ui';
 import { formatClock } from '../../format';
 import { t } from '../../i18n';
 
@@ -91,7 +92,11 @@ export function ReasoningBlock({
     if (!userToggled) setOpen(streaming);
   }, [streaming, userToggled]);
 
-  const lines = text.split('\n');
+  // 打字机 reveal（流式平滑化 A，豆包式缓冲 + rAF 匀速吐字）：思考卡是纯文本，
+  // 无 markdown parse 成本，先行逐字释放；上游 50ms 合批的到达节奏与渲染节拍解耦。
+  // 非流式 / reduced-motion 直通全文；复制按钮复制的仍是完整原文（不是 reveal 前缀）。
+  const revealed = useTypewriterText(text, streaming);
+  const lines = revealed.split('\n');
   const clamped = lines.slice(0, PREVIEW_LINES).join('\n');
   const clampedVisible = !showAll && lines.length > PREVIEW_LINES;
   const copyable = hasReasoningCard(text);
@@ -158,6 +163,9 @@ export function ReasoningBlock({
       </summary>
       <div className="px-2.5 py-2 text-md leading-relaxed whitespace-pre-wrap wrap-anywhere">
         {clampedVisible ? clamped : text}
+        {/* 流式光标（D，motion.css `.stream-caret` + pulse-soft）：纯文本尾部内联挂载，
+            收字结束 streaming=false 即移除；reduced-motion 下静止常亮（base.css 防线）。 */}
+        {streaming && <span className="stream-caret pulse-soft" aria-hidden="true" />}
       </div>
       {lines.length > PREVIEW_LINES && (
         <Button

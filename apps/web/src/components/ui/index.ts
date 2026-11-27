@@ -53,3 +53,4 @@ export {
 } from './SidebarShell';
 export { Stat, type StatProps } from './Stat';
 export { useEnteringItemKeys } from './useEnteringItemKeys';
+export { useTypewriterText } from './useTypewriterText';
