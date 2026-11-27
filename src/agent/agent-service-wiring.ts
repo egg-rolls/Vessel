@@ -51,6 +51,7 @@ import type {
   SessionEventLogPort,
   TerminationPolicy,
   ToolDefinition,
+  ToolResultWhitelistRule,
   UsageLimits,
 } from '@vessel-agent/core';
 import { createContextRatioSource, withLiveContextRatio } from '../session/context-ratio-source';
@@ -106,6 +107,11 @@ export interface AgentServiceWiringOptions {
   contextMaxTokens?: number;
   /** 0.34 S2 / C5：成员上下文的压缩阈值；装配层传 `config.context.compactThreshold`。 */
   contextCompactThreshold?: number;
+  /**
+   * q-tool-result-whitelist：成员窗口的工具结果压缩白名单；装配层传
+   * `config.context.toolResultWhitelist`（缺省不传 ⇒ core 内置默认）。
+   */
+  contextToolResultWhitelist?: readonly ToolResultWhitelistRule[];
   /** 注入粒度框架：装配层传 `config.envInjection`；self-card hook 取最细节奏。 */
   envInjection?: EnvInjectionConfig;
   /**
@@ -281,6 +287,9 @@ export function buildMemberExecutionOptions(
       : {}),
     ...(options.contextCompactThreshold !== undefined
       ? { contextCompactThreshold: options.contextCompactThreshold }
+      : {}),
+    ...(options.contextToolResultWhitelist !== undefined
+      ? { contextToolResultWhitelist: options.contextToolResultWhitelist }
       : {}),
     ...(options.envInjection !== undefined ? { envInjection: options.envInjection } : {}),
     ...(options.summarizer !== undefined ? { summarizer: options.summarizer } : {}),

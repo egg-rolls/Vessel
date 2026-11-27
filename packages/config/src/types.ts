@@ -228,6 +228,15 @@ export interface ContextConfig {
   maxMessages?: number;
   autoCompact?: boolean;
   compactThreshold?: number;
+  /**
+   * 工具结果压缩白名单（q-tool-result-whitelist；YAML `context.tool_result_whitelist`）。
+   *
+   * 命中的工具结果抗 trim 不抗 compaction：请求视图保持原文，段边界 compaction 照常收尾。
+   * 缺省语义：键缺省 ⇒ core 内置默认（inbox read + agent read）；显式 [] ⇒ 关闭；
+   * 显式列表 ⇒ 整体替换（不合并）。一期 YAML-only（照 modules 先例）：不走 config.set /
+   * CLI set，WebUI 只读展示；构造期注入，重启生效。
+   */
+  toolResultWhitelist?: { tool: string; action?: string }[];
 }
 
 /**

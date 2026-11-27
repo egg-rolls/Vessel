@@ -201,3 +201,12 @@ export {
   UPPER_BOUND_RATE_WIDE,
 } from './request-view.js';
 export { createSessionBreaker } from './session-breaker.js';
+export {
+  DEFAULT_TOOL_RESULT_WHITELIST,
+  effectiveToolResultWhitelist,
+  filterWhitelistedToolResults,
+  filterWhitelistedWithLookup,
+  isWhitelistedToolCall,
+  normalizeToolResultWhitelist,
+  type ToolResultWhitelistRule,
+} from './tool-result-whitelist.js';

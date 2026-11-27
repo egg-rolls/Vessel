@@ -245,6 +245,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.teamMemberLimit.title': 'Team member limit',
   'settings.item.teamMemberLimit.desc':
     'Max present members (peers + contractors, including closed-but-not-departed) per team; positive integer ≥ 1, default 100. Spawns beyond the limit fail with team_full. Requires a node restart to apply.',
+  'settings.item.toolResultWhitelist.title': 'Tool result trim whitelist',
+  'settings.item.toolResultWhitelist.desc':
+    'Tool results matching a rule ({tool, action?}) keep their original text in the request view instead of being turned into placeholders (trim-exempt). Segment-boundary compaction still summarizes them as usual. Unset = built-in default (inbox read + agent read); explicit [] = disabled; an explicit list replaces the default. YAML-only (context.tool_result_whitelist); read-only here. Requires a node restart to apply.',
   'settings.dialog.searchPlaceholder':
     'Search settings… (@modified / @plugin:<id> / @local / @user)',
   'settings.dialog.tabUser': 'User',

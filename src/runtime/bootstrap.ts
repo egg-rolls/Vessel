@@ -664,6 +664,10 @@ async function bootstrapConnect(input: {
     maxMessages: input.config.context?.maxMessages,
     autoCompact: input.config.context?.autoCompact,
     compactThreshold: input.config.context?.compactThreshold,
+    // q-tool-result-whitelist：与执行内核同一口径（缺省 ⇒ core 内置默认）。
+    ...(input.config.context?.toolResultWhitelist !== undefined
+      ? { toolResultWhitelist: input.config.context.toolResultWhitelist }
+      : {}),
   });
 
   // ── 会话续接（0.6.1 E8）：remote 端是唯一数据源 ──
@@ -1416,6 +1420,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     maxMessages: config.context?.maxMessages,
     autoCompact: config.context?.autoCompact,
     compactThreshold: config.context?.compactThreshold,
+    // q-tool-result-whitelist：与执行内核同一口径（缺省 ⇒ core 内置默认）。
+    ...(config.context?.toolResultWhitelist !== undefined
+      ? { toolResultWhitelist: config.context.toolResultWhitelist }
+      : {}),
   });
 
   // 成员 wiring 的构造参数（与 bundle 内保持一致）。
@@ -1627,6 +1635,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         : {}),
       ...(config.context?.compactThreshold !== undefined
         ? { contextCompactThreshold: config.context.compactThreshold }
+        : {}),
+      // q-tool-result-whitelist：成员窗口与 owner 同一口径（缺省 ⇒ core 内置默认）。
+      ...(config.context?.toolResultWhitelist !== undefined
+        ? { contextToolResultWhitelist: config.context.toolResultWhitelist }
         : {}),
       // 注入粒度框架：self-card hook 的检测节奏（缺省不传 ⇒ 内置默认表，零回归）。
       ...(config.envInjection !== undefined ? { envInjection: config.envInjection } : {}),

@@ -238,6 +238,9 @@ export const messages = {
   'settings.item.teamMemberLimit.title': 'Team 成员上限',
   'settings.item.teamMemberLimit.desc':
     '单个 Team 内 present 成员（peer + contractor，含已关闭未离册）的数量上限；正整数 ≥1，缺省 100。超限 spawn 报 team_full。修改后需重启节点生效。',
+  'settings.item.toolResultWhitelist.title': '工具结果压缩白名单',
+  'settings.item.toolResultWhitelist.desc':
+    '命中规则（{tool, action?}）的工具结果在请求视图中保持原文，不被换成占位符（抗 trim）；段边界 compaction 仍照常摘要收尾。缺省 = 内置默认（inbox read + agent read）；显式 [] = 关闭；显式列表整体替换默认。一期仅 YAML 编辑（context.tool_result_whitelist），此处只读展示。修改后需重启节点生效。',
   'settings.dialog.searchPlaceholder': '搜索设置…（@modified / @plugin:<id> / @local / @user）',
   'settings.dialog.tabUser': '用户',
   'settings.dialog.tabProject': '工作区',

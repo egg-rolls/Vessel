@@ -162,6 +162,27 @@ export interface WorkingContext {
   readonly contextAnchor?: ContextAnchor;
 }
 
+/**
+ * 工具结果压缩白名单的一条规则（q-tool-result-whitelist；additive）。
+ *
+ * 命中规则的工具结果**抗 trim 不抗 compaction**：请求视图的占位规划
+ * （`planClearedToolResults` 的消费侧）把它豁免出冻结集合，原文在段内保持可见；
+ * 段边界 compaction 仍照常摘要清理（recall 保全原文）。落盘永远原文，白名单
+ * 只影响请求视图投影。
+ *
+ * 匹配粒度 = 工具名 + 使用方式：
+ * - 只给 `tool` ⇒ 该工具的全部调用豁免（tool 级）；
+ * - 给 `tool` + `action` ⇒ 仅当调用参数的**顶层** `action` 字符串字段精确相等时豁免
+ *   （如 `{tool:'inbox', action:'read'}`）。参数解析失败 / 无顶层 action ⇒ 不命中
+ *   action 级规则。一期不支持嵌套 op（如 `vessel` 的 `op=call_tool`）。
+ */
+export interface ToolResultWhitelistRule {
+  /** 工具名（精确匹配 `tool_call.function.name`）。 */
+  readonly tool: string;
+  /** 可选：调用参数顶层 `action` 字段的精确匹配值。 */
+  readonly action?: string;
+}
+
 /** 上下文配置 */
 export interface ContextConfig {
   maxTokens?: number;
@@ -178,6 +199,17 @@ export interface ContextConfig {
    * 只是**多一个触发维度**，不放宽 token 主阈值，也不改清除集合的算法。
    */
   toolResultVolumeRatio?: number;
+  /**
+   * 工具结果压缩白名单（q-tool-result-whitelist；YAML `context.tool_result_whitelist`）。
+   *
+   * 缺省语义：键缺省（`undefined`）⇒ 内置默认 `DEFAULT_TOOL_RESULT_WHITELIST`
+   * （inbox read + agent read）；显式 `[]` ⇒ 关闭白名单（回到无豁免行为）；
+   * 显式列表 ⇒ **整体替换**内置默认（不合并）。
+   *
+   * 消费侧纯后过滤：`planClearedToolResults` / 增量规划器一字不动，白名单只在
+   * 冻结集合（请求视图）与压缩审计集合上过滤命中的 tool_call_id。
+   */
+  toolResultWhitelist?: ToolResultWhitelistRule[];
   /** 压缩完成回调（removedCount, remainingCount），供 TUI 显示提示 */
   onCompact?: (removed: number, remaining: number) => void;
   /**
