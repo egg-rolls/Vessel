@@ -69,6 +69,8 @@ async function defaultRunCommand(argv: string[]): Promise<{
       stdin: 'inherit',
       stdout: 'inherit',
       stderr: 'inherit',
+      // Windows：不新建可见控制台窗；stdio 继承父终端句柄，交互不受影响。
+      windowsHide: true,
     });
     return { exitCode: await proc.exited, stdout: '', stderr: '' };
   } catch (error) {
@@ -90,6 +92,8 @@ async function captureRunCommand(argv: string[]): Promise<{
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
+      // Windows：捕获式子命令不弹可见控制台窗。
+      windowsHide: true,
     });
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),

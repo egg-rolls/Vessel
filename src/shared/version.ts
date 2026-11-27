@@ -28,6 +28,8 @@ export function readGitCommit(): string | undefined {
       cwd: new URL('../..', import.meta.url),
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      // Windows：git 是控制台程序，后台比对时不弹可见窗。
+      windowsHide: true,
     }).trim();
     return out.length > 0 ? out : undefined;
   } catch {
