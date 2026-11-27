@@ -538,6 +538,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
           '--column',
           '--owner',
           '--status',
+          '--data-dir',
           '--node',
           '--connect',
           '--connect-token',
@@ -547,7 +548,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       },
       {
         name: 'view',
-        flags: ['--json', '--node', '--connect', '--connect-token', '--ca', '--help'],
+        flags: ['--json', '--data-dir', '--node', '--connect', '--connect-token', '--ca', '--help'],
       },
     ],
   },
