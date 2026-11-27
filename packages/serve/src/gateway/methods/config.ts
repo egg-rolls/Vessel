@@ -72,6 +72,9 @@ const NUMBER_KEYS: Readonly<
   'ui.depthColor.chromaLight': { min: 0, max: 0.37, integer: false },
   'ui.depthColor.lightnessDark': { min: 0.73, max: 0.95, integer: false },
   'ui.depthColor.chromaDark': { min: 0, max: 0.37, integer: false },
+  // q-team-limit-config：Team present 成员上限。与 config validator 同界
+  // （正整数 ≥1，不设人为上限）；构造期注入 AgentService，写后需重启生效。
+  'agent.teamMemberLimit': { min: 1, max: Number.MAX_SAFE_INTEGER },
 };
 
 const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {

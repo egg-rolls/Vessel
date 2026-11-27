@@ -177,8 +177,13 @@ const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
  */
 const duplicateNameWarned = new Set<string>();
 
-/** Team 内 present 成员上限（peer + contractor 都计入；后续可配置） */
-const TEAM_MEMBER_LIMIT = 20;
+/**
+ * Team 内 present 成员上限的缺省值（peer + contractor 都计入）。
+ * q-team-limit-config：20 → 100（用户裁定），可经 `agent.teamMemberLimit` 配置
+ * （装配层注入 `AgentServiceOptions.teamMemberLimit`，构造期读取，改后需重启）。
+ * 计数口径不变：`presentTeamCount` 仍数 `membership === 'present'`（含 closed）。
+ */
+const DEFAULT_TEAM_MEMBER_LIMIT = 100;
 
 /**
  * 人类 principal：消息的**缺省发送者**。
@@ -913,6 +918,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly snapshot: AgentSnapshotStore | undefined;
   /** 临时 agent 空闲回收 TTL（毫秒）；0 = 关闭 */
   private readonly temporaryTtlMs: number;
+  /** Team 内 present 成员上限（缺省 100；config agent.teamMemberLimit 注入） */
+  private readonly teamMemberLimit: number;
   private readonly leaseService: LeaseServicePort | undefined;
   private readonly summarizer: ContextSummarizer | undefined;
   private readonly contextMaxTokens: number | undefined;
@@ -1066,6 +1073,13 @@ export class AgentServiceImpl implements AgentService {
         ? options.temporaryTtlHours
         : DEFAULT_TEMPORARY_TTL_HOURS;
     this.temporaryTtlMs = ttlHours * 60 * 60 * 1000;
+    // 非法注入值防御性回落缺省（config validator 已在加载期拒绝非法值）。
+    this.teamMemberLimit =
+      typeof options.teamMemberLimit === 'number' &&
+      Number.isSafeInteger(options.teamMemberLimit) &&
+      options.teamMemberLimit >= 1
+        ? options.teamMemberLimit
+        : DEFAULT_TEAM_MEMBER_LIMIT;
     this.leaseService = options.leaseService;
     this.summarizer = options.summarizer;
     this.contextMaxTokens = options.contextMaxTokens;
@@ -1523,7 +1537,7 @@ export class AgentServiceImpl implements AgentService {
     if (teamId !== undefined && this.teamBinder?.get(teamId)?.spawn_frozen === true) {
       throw new AgentError('team_frozen', `team_frozen: ${teamId}`);
     }
-    if (teamId !== undefined && this.presentTeamCount(teamId) >= TEAM_MEMBER_LIMIT) {
+    if (teamId !== undefined && this.presentTeamCount(teamId) >= this.teamMemberLimit) {
       throw new AgentError('team_full', `team_full: ${teamId}`);
     }
     const resolvedName = name !== undefined ? name : this.autoNameFor(spawnedBy, teamId);
@@ -1771,7 +1785,7 @@ export class AgentServiceImpl implements AgentService {
     if (team.spawn_frozen === true) {
       throw new AgentError('team_frozen', `team_frozen: ${teamId}`);
     }
-    if (this.presentTeamCount(teamId) >= TEAM_MEMBER_LIMIT) {
+    if (this.presentTeamCount(teamId) >= this.teamMemberLimit) {
       throw new AgentError('team_full', `team_full: ${teamId}`);
     }
 
@@ -2405,7 +2419,7 @@ export class AgentServiceImpl implements AgentService {
     if (team.spawn_frozen === true) {
       return { ok: false, code: 'team_frozen', reason: `team_frozen: ${teamId}` };
     }
-    if (this.presentTeamCount(teamId) >= TEAM_MEMBER_LIMIT) {
+    if (this.presentTeamCount(teamId) >= this.teamMemberLimit) {
       return { ok: false, code: 'team_full', reason: `team_full: ${teamId}` };
     }
 
@@ -7177,7 +7191,7 @@ export class AgentServiceImpl implements AgentService {
     if (team?.spawn_frozen === true) {
       throw new AgentError('team_frozen', `team_frozen: ${teamId}`);
     }
-    if (team !== undefined && this.presentTeamCount(teamId) >= TEAM_MEMBER_LIMIT) {
+    if (team !== undefined && this.presentTeamCount(teamId) >= this.teamMemberLimit) {
       throw new AgentError('team_full', `team_full: ${teamId}`);
     }
 

@@ -235,6 +235,9 @@ export const messages = {
   'settings.item.depthColorChromaDark.title': '暗色色度（OKLCH C）',
   'settings.item.depthColorChromaDark.desc':
     '暗色档色度 [0, 0.37]；默认 0.13。色度越高轮转色越鲜艳，超 gamut 色相自动降色度。',
+  'settings.item.teamMemberLimit.title': 'Team 成员上限',
+  'settings.item.teamMemberLimit.desc':
+    '单个 Team 内 present 成员（peer + contractor，含已关闭未离册）的数量上限；正整数 ≥1，缺省 100。超限 spawn 报 team_full。修改后需重启节点生效。',
   'settings.dialog.searchPlaceholder': '搜索设置…（@modified / @plugin:<id> / @local / @user）',
   'settings.dialog.tabUser': '用户',
   'settings.dialog.tabProject': '工作区',

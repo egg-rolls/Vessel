@@ -242,6 +242,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.depthColorChromaDark.title': 'Dark chroma (OKLCH C)',
   'settings.item.depthColorChromaDark.desc':
     'Dark-theme chroma [0, 0.37]; default 0.13. Higher chroma = more vivid rotation; out-of-gamut hues are automatically desaturated.',
+  'settings.item.teamMemberLimit.title': 'Team member limit',
+  'settings.item.teamMemberLimit.desc':
+    'Max present members (peers + contractors, including closed-but-not-departed) per team; positive integer ≥ 1, default 100. Spawns beyond the limit fail with team_full. Requires a node restart to apply.',
   'settings.dialog.searchPlaceholder':
     'Search settings… (@modified / @plugin:<id> / @local / @user)',
   'settings.dialog.tabUser': 'User',
