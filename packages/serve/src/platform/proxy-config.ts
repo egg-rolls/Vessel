@@ -81,6 +81,12 @@ const ALLOWED_RPC_NAMESPACES: ReadonlySet<string> = new Set([
   'gateway',
   'health',
   'interactions',
+  // q-inbox-ux-fix（jobs proxy 白名单缺口，lead 双员发现 / 用户裁示 approve）：
+  // 异步 bash 作业可视化（jobs.log 读 log tail / jobs.list badge 初始读）经平台代理
+  // 时缺命名空间 ⇒ proxy_method_not_allowed（fail-closed；直连 node 正常）。
+  // jobs.* 只读作业产物，不涉及进程生死 / 服务安装，无需进 DENIED_RPC_METHODS；
+  // 与 kanban 先例同口径，后续 jobs.* 新方法同命名空间自动覆盖。
+  'jobs',
   // q-kanban-proxy：任务看板（kanban.get 读板 / kanban.archive 用户验收归档）。
   // node 侧方法已就位（gateway/methods/kanban.ts），平台侧缺命名空间导致
   // proxy_method_not_allowed（fail-closed）。两者都不涉及进程生死 / 服务安装，
