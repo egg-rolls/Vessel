@@ -1,15 +1,14 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: parsed markdown is immutable per render; index keys are stable
+import { Fragment, memo, type ReactNode, useMemo, useRef } from 'react';
 import {
-  Fragment,
-  memo,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
-import { type InlineNode, type MarkdownBlock, parseInline, parseMarkdown } from './markdown-parse';
+  type InlineNode,
+  type MarkdownBlock,
+  parseInline,
+  parseMarkdown,
+  parseMarkdownStreaming,
+  type StreamingParseCache,
+} from './markdown-parse';
+import { useTypewriterText } from './ui/useTypewriterText';
 
 function Inline({ nodes }: { nodes: InlineNode[] }): ReactNode {
   return nodes.map((node, index) => {
@@ -41,11 +40,30 @@ function Inline({ nodes }: { nodes: InlineNode[] }): ReactNode {
   });
 }
 
-function Block({ block }: { block: MarkdownBlock }): ReactNode {
+/** 流式光标（motion.css `.stream-caret` + 既有 pulse-soft 脉冲）：纯装饰，aria-hidden。
+ *  只挂在尾块内联尾部（流式平滑化 D）；收字结束 streaming=false 即不再渲染。 */
+function StreamCaret(): ReactNode {
+  return <span className="stream-caret pulse-soft" aria-hidden="true" />;
+}
+
+/** memo：增量解析下前缀块对象引用稳定（parseMarkdownStreaming 缓存复用），
+ *  逐帧 reveal 时前缀块整棵子树跳过重渲染 —— 每帧只渲染真正变化的尾块。 */
+const Block = memo(function Block({
+  block,
+  caret = false,
+}: {
+  block: MarkdownBlock;
+  caret?: boolean;
+}): ReactNode {
   switch (block.type) {
     case 'heading': {
       const Tag = `h${Math.min(6, Math.max(1, block.level))}` as 'h1';
-      return <Tag>{renderText(block.text)}</Tag>;
+      return (
+        <Tag>
+          {renderText(block.text)}
+          {caret && <StreamCaret />}
+        </Tag>
+      );
     }
     case 'code':
       return (
@@ -56,7 +74,10 @@ function Block({ block }: { block: MarkdownBlock }): ReactNode {
             </span>
           )}
           <pre className="m-0 max-h-95 overflow-auto px-3 py-2.5 font-mono text-sm leading-normal whitespace-pre">
-            <code>{block.text}</code>
+            <code>
+              {block.text}
+              {caret && <StreamCaret />}
+            </code>
           </pre>
         </div>
       );
@@ -72,13 +93,19 @@ function Block({ block }: { block: MarkdownBlock }): ReactNode {
               {item.children?.map((child, childIndex) => (
                 <Block key={childIndex} block={child} />
               ))}
+              {caret && index === block.items.length - 1 && <StreamCaret />}
             </li>
           ))}
         </Tag>
       );
     }
     case 'blockquote':
-      return <blockquote className="py-0.5 pl-2.5 text-muted">{renderText(block.text)}</blockquote>;
+      return (
+        <blockquote className="py-0.5 pl-2.5 text-muted">
+          {renderText(block.text)}
+          {caret && <StreamCaret />}
+        </blockquote>
+      );
     case 'table':
       return (
         <div className="max-w-full overflow-x-auto">
@@ -101,6 +128,9 @@ function Block({ block }: { block: MarkdownBlock }): ReactNode {
                   {row.map((cell, cellIndex) => (
                     <td className="px-2.25 py-1.25 text-left align-top" key={cellIndex}>
                       {renderText(cell)}
+                      {caret &&
+                        rowIndex === block.rows.length - 1 &&
+                        cellIndex === row.length - 1 && <StreamCaret />}
                     </td>
                   ))}
                 </tr>
@@ -112,9 +142,14 @@ function Block({ block }: { block: MarkdownBlock }): ReactNode {
     case 'hr':
       return <hr className="my-3 h-px border-0 bg-line" />;
     default:
-      return <p>{renderText(block.text)}</p>;
+      return (
+        <p>
+          {renderText(block.text)}
+          {caret && <StreamCaret />}
+        </p>
+      );
   }
-}
+});
 
 /** 文本 → 内联节点；`\n` 渲染为换行。 */
 function renderText(text: string): ReactNode {
@@ -141,11 +176,13 @@ function renderText(text: string): ReactNode {
  *
  * 两处代价与对应的处理：
  *
- * 1. **成本**：每帧全量 parse + 重建元素，长会话（几千字）很贵。分档节流见
- *    `useStreamingText`（<2k 逐帧 / 2k–20k 120ms / >20k 200ms）；逐帧档与非流式走
- *    **渲染期直通**（不落状态、不给陈旧帧）。节流命中时 `MarkdownBlocks` 的 props
- *    原样相等 → memo 直接跳过整棵子树，省的是 parse + 元素重建 + reconciliation
- *    （不只是省一次 setState）。
+ * 1. **成本**：逐帧 reveal 若每帧全量 parse，长会话（几千字）很贵。配套两件事
+ *    （流式平滑化 A，用户裁定参考豆包破例修订 motion.css「禁逐 delta setState」契约）：
+ *    - `useTypewriterText`：上游 50ms 合批的前缀进缓冲，rAF 按积压自适应速率匀速
+ *      吐字（**不是**逐 delta setState —— 渲染节拍与到达节拍解耦）；
+ *    - `parseMarkdownStreaming` 增量解析：追加只改尾块 ⇒ 每帧只重解析尾块，前缀块
+ *      对象引用复用 + `memo(Block)` 跳过整棵子树。每帧成本 O(尾块) 而非 O(全文)。
+ *    非流式不节流、渲染期直通（历史 / 落盘态一帧陈旧文本都不给）。
  * 2. **不完整语法**：`parseMarkdown(text, { streaming })` 容忍未闭合围栏 /
  *    强调 / 链接（正文一行不丢、不抛错）；吃在正文末尾的**半张表格**先按纯文本
  *    渲染，闭合后一次变成 <table>（见 markdown-parse.ts 的注释）。
@@ -163,7 +200,7 @@ export function Markdown({
    */
   streaming?: boolean;
 }) {
-  const settled = useStreamingText(text, streaming);
+  const settled = useTypewriterText(text, streaming);
   return <MarkdownBlocks text={settled} className={className} streaming={streaming} />;
 }
 
@@ -182,92 +219,32 @@ const MarkdownBlocks = memo(function MarkdownBlocks({
   className?: string;
   streaming: boolean;
 }) {
-  const blocks = useMemo(() => parseMarkdown(text, { streaming }), [text, streaming]);
+  // 流式增量解析缓存（每实例一份）：追加只改末两块 ⇒ 只重解析末两块，前缀块引用复用。
+  const cacheRef = useRef<StreamingParseCache | null>(null);
+  const blocks = useMemo(() => {
+    if (!streaming) {
+      cacheRef.current = null;
+      return parseMarkdown(text);
+    }
+    const result = parseMarkdownStreaming(text, cacheRef.current);
+    cacheRef.current = result.cache;
+    return result.blocks;
+  }, [text, streaming]);
   return (
     <div className={`markdown${className ? ` ${className}` : ''}`}>
       {blocks.map((block, index) => (
-        <Block key={index} block={block} />
+        // 流式光标只给尾块（D）：内联尾部挂载，收字（streaming=false）即移除。
+        <Block key={index} block={block} caret={streaming && index === blocks.length - 1} />
       ))}
     </div>
   );
 });
 
-/** 短消息逐帧（0ms）：单帧成本可忽略，逐字出现才有「正在生成」的感觉。 */
-const STREAM_EVERY_FRAME_BELOW = 2_000;
-/** 2k–20k：120ms（≈8fps）。 */
-const STREAM_FAST_MS = 120;
-/** 20k 以上：200ms（≈5fps）；越长的文本单帧越贵，档位越稀。 */
-const STREAM_SLOW_FROM = 20_000;
-const STREAM_SLOW_MS = 200;
-
-function streamInterval(length: number): number {
-  if (length < STREAM_EVERY_FRAME_BELOW) return 0;
-  if (length < STREAM_SLOW_FROM) return STREAM_FAST_MS;
-  return STREAM_SLOW_MS;
-}
-
-/**
- * 流式文本节流：返回「这一帧该渲染的文本」。
+/* 旧的分档节流（useStreamingText：<2k 逐帧 / 2k–20k 120ms / >20k 200ms）已由
+ * 「useTypewriterText 缓冲 reveal + parseMarkdownStreaming 增量解析」取代（A）。
  *
- * 语义是**落后不丢字**：只提交前缀（文本永远在尾部追加），因此延迟表现为尾部稍晚
- * 出现，而不是内容跳动；没有补帧队列，一个待执行计时器就够 —— 它落地时取最新值。
- *
- * 非流式（`streaming=false`：历史、落盘态、取消后的终态）不节流，并且**渲染期**
- * 直接返回 `text`（effect 在 paint 之后才跑，只靠 effect 补齐会让终态先闪一帧旧文本）。
- *
- * 已知代价（无法在组件内部消除，说清楚免得以后当成 bug 查）：吸附滚动
- * （`useStickyBottom`）的跟随触发器是上游的 `followKey`（事件版本 / 渲染项数），
- * 而节流把「DOM 长高」推迟到计时器落地：连续流式时下一批事件会把视图再贴一次底，
- * 但**流停下来的那一次**提交之后没有任何新事件，多出来的 1–2 行可能停在视口下方，
- * 直到下一个事件（下一批 chunk / `run.completed` 的终态刷新）才贴底。量级与既有的
- * ~100ms 跟随节流同阶；如果以后觉得扎眼，正确做法是让跟随也认「可见文本长度」，
- * 而不是把这里的节流去掉。
- */
-function useStreamingText(text: string, streaming: boolean): string {
-  const [settled, setSettled] = useState(text);
-  const committedRef = useRef(text);
-  const latestRef = useRef(text);
-  const timerRef = useRef<number | undefined>(undefined);
-  const committedAtRef = useRef(0);
-  // 逐帧档（短文本）与非流式都不需要节流：渲染期直接返回最新文本，一个陈旧帧都不给。
-  const passThrough = !streaming || streamInterval(text.length) === 0;
-
-  const commit = useCallback((next: string) => {
-    committedAtRef.current = Date.now();
-    if (next === committedRef.current) return;
-    committedRef.current = next;
-    setSettled(next);
-  }, []);
-
-  useEffect(() => {
-    latestRef.current = text;
-    const stopTimer = () => {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = undefined;
-    };
-    if (passThrough) {
-      // 渲染期已经是最新文本；这里只把提交基线跟上，好让「跨进节流档」之后
-      // 的第一次提交按真实时间算（否则会立刻超时提交，等于没节流）。
-      stopTimer();
-      commit(text);
-      return;
-    }
-    const interval = streamInterval(text.length);
-    const elapsed = Date.now() - committedAtRef.current;
-    if (elapsed >= interval) {
-      stopTimer();
-      commit(text);
-      return;
-    }
-    // 已有一帧在排队：它会取 latestRef 里的最新文本，不需要再排一个。
-    if (timerRef.current !== undefined) return;
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = undefined;
-      commit(latestRef.current);
-    }, interval - elapsed);
-  }, [text, passThrough, commit]);
-
-  useEffect(() => () => window.clearTimeout(timerRef.current), []);
-
-  return passThrough ? text : settled;
-}
+ * 已知代价（沿袭旧节流，说清楚免得以后当成 bug 查）：吸附滚动（useStickyBottom）
+ * 的跟随触发器是上游 followKey（事件版本 / 渲染项数），而 reveal 把「DOM 长高」
+ * 推迟到 rAF 落地：连续流式时下一批事件会把视图再贴一次底，但流停下来的那一次
+ * 提交之后没有新事件，尾部几行可能短暂停在视口下方，直到终态刷新才贴底。
+ * 正确做法是让跟随也认「可见文本长度」（probe 报告提案 E，未立项），不是去掉 reveal。 */

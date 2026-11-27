@@ -469,6 +469,7 @@ export function ChatView({
         <SessionRail
           sessions={sessionsApi.sessionWindow.shown}
           hiddenCount={sessionsApi.sessionWindow.hiddenCount}
+          listReset={`${epoch}:${sessionsApi.renderLimit}:${sessionsApi.query}`}
           selectedId={selectedId}
           draftActive={draftActive}
           pendingBySession={sessionsApi.pendingBySession}

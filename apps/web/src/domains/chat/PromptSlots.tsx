@@ -64,7 +64,7 @@ function PromptShell({
       <section
         ref={sectionRef}
         tabIndex={-1}
-        className="prompt-slot mx-auto flex w-full max-w-[var(--chat-content-w,860px)] flex-col gap-2 overflow-y-auto overscroll-contain rounded-lg bg-raised px-3.5 py-3"
+        className="prompt-slot motion-appear mx-auto flex w-full max-w-[var(--chat-content-w,860px)] flex-col gap-2 overflow-y-auto overscroll-contain rounded-lg bg-raised px-3.5 py-3"
         aria-label={t('chat.prompt.label')}
       >
         <div className="prompt-slot-head sticky top-0 z-1 flex flex-wrap items-baseline gap-2.5 bg-raised py-0.5 text-sm">

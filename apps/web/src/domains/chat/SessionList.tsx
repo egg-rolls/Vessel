@@ -4,7 +4,15 @@ import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../compone
 import { StatusGlyph } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { IconButton, Tooltip } from '../../components/Tooltip';
-import { Button, CountBadge, Icon, Input, SearchInput, SidebarShell } from '../../components/ui';
+import {
+  Button,
+  CountBadge,
+  Icon,
+  Input,
+  SearchInput,
+  SidebarShell,
+  useEnteringItemKeys,
+} from '../../components/ui';
 import type { NodeRoster } from '../../gateway/team-roster';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -54,6 +62,7 @@ export function sessionAgentAddresses(rosters: readonly NodeRoster[]): ReadonlyM
 export function SessionList({
   sessions,
   hiddenCount,
+  listReset,
   selectedId,
   draftActive,
   pendingBySession,
@@ -89,6 +98,9 @@ export function SessionList({
 }: {
   sessions: readonly SessionInfo[];
   hiddenCount: number;
+  /** 入场判定 reset 身份（epoch:渲染窗口:查询）：重连 / 显示更多 / 搜索换屏
+   *  都重认「首屏」，只有之后 live 追加的会话才播入场（防整屏闪）。 */
+  listReset: string;
   selectedId: string | null;
   draftActive: boolean;
   /** 每个会话的待处理权限/提问数量；其他会话只显示徽标，不渲染卡片。 */
@@ -162,6 +174,11 @@ export function SessionList({
   // 搜索中不插入默认会话行，避免“无匹配”被一条非搜索结果掩盖；
   // 是否已在列表里出现由调用方判断（它拿得到完整列表，这里只有窗口化的行）。
   const showDefault = defaultSession !== undefined && !query.trim();
+
+  // 入场判定（motion.css 契约 ①）：首屏整批 = 历史不播，之后 live 追加的会话才挂
+  // `.motion-appear`。reset 身份含渲染窗口与查询：showMore 翻出的历史页、搜索换屏
+  // 都重认首屏；排序 / 置顶重排不改 key，天然不重播（useStableSessionOrder 冻结位置）。
+  const isEntering = useEnteringItemKeys(sessions, (session) => session.session_id, listReset);
 
   useEffect(() => {
     if (!editingId) return;
@@ -319,7 +336,7 @@ export function SessionList({
             </div>
           )}
           {draftActive && (
-            <div className="session-row draft active">
+            <div className="session-row draft active motion-appear">
               <div className="session-main">
                 <span className="session-title">{t('chat.draft.title')}</span>
                 <span className="session-preview">{t('chat.draft.meta')}</span>
@@ -393,7 +410,9 @@ export function SessionList({
                 return (
                   // biome-ignore lint/a11y/noStaticElementInteractions: 拖拽会话卡到输入框是鼠标便捷入口（点击选中仍在内部 button 上，键盘流不变）
                   <div
-                    className={`session-row group ${active ? 'active' : ''}`.trim()}
+                    className={`session-row group ${active ? 'active' : ''} ${
+                      isEntering(session.session_id) ? 'motion-appear' : ''
+                    }`.trim()}
                     key={session.session_id}
                     // 会话卡可拖拽到输入框成为引用 chip（session-ref.ts）。重命名编辑中
                     // 禁用拖拽：那时拖的是选中文本，不是会话。点击选中行为不变。

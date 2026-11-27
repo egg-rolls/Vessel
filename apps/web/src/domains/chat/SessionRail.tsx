@@ -12,6 +12,7 @@ import { SessionList } from './SessionList';
 export function SessionRail({
   sessions,
   hiddenCount,
+  listReset,
   selectedId,
   draftActive,
   pendingBySession,
@@ -49,6 +50,9 @@ export function SessionRail({
 }: {
   sessions: readonly SessionInfo[];
   hiddenCount: number;
+  /** 会话卡入场判定的 reset 身份（epoch:渲染窗口:查询）：变了重认「首屏」，
+   *  重连 / 显示更多 / 搜索换屏都不算追加（motion.css 契约，防整屏闪）。 */
+  listReset: string;
   selectedId: string | null;
   draftActive: boolean;
   pendingBySession: ReadonlyMap<string, number>;
@@ -105,6 +109,7 @@ export function SessionRail({
         <SessionList
           sessions={sessions}
           hiddenCount={hiddenCount}
+          listReset={listReset}
           selectedId={selectedId}
           draftActive={draftActive}
           pendingBySession={pendingBySession}

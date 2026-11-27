@@ -505,6 +505,9 @@ export function useChatSessions({
     sessionDetailLoading,
     sessionDetailError,
     sessionWindow,
+    /** 当前渲染窗口上限（showMore 递增）。会话卡入场判定用它做 reset 身份的一部分：
+     *  「显示更多」翻出来的是历史不是追加，整批不播入场（motion.css 契约）。 */
+    renderLimit,
     /**
      * 0.56：`session_id → 在飞状态`（权威：`health.get.runtime.scheduler`）。
      * 只给卡片上的「运行中」徽标用 —— 排序已被 `useStableSessionOrder` 冻结，
